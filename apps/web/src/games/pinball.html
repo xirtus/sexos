@@ -1,0 +1,358 @@
+<!doctype html>
+<title>XIRTUS Pinball</title>
+<body style="margin:0;background:#0a0710">
+<canvas id="table" width="410" height="300" style="display:block"></canvas>
+<!-- Pinball on a haunted night table, played from the keyboard. Original SexOS game,
+     GPL-3.0-only. Its theme follows Anderson Mancini's Graveyard Pinball (with his
+     permission): coffin slingshots, a skull crypt, a dot-matrix display, a chrome ball
+     and glowing flippers under a purple moon. No code or art is taken from it.
+     Left or Z flips left, Right or / flips right, Space launches, N starts again. -->
+<script>
+'use strict';
+const screen = document.getElementById('table'), g = screen.getContext('2d');
+const TW = 230, H = 300, CX = 107, R = 5;
+const STEP = 1 / 120, GRAVITY = 420, MAX_V = 760;
+// Drawing is slow here, so the table is drawn once into `base` (what never changes) and
+// `lit` (base plus the lights as they are now), and each frame only copies back the few
+// rectangles the ball and flippers left, then draws them again.
+const layer = () => { const c = document.createElement('canvas'); c.width = TW; c.height = H; return c; };
+const baseCanvas = layer(), litCanvas = layer(), base = baseCanvas.getContext('2d'), lit = litCanvas.getContext('2d');
+
+// ---- the table: walls are segments the ball bounces off ----
+const walls = [];
+// A wall segment, with 1 / its length squared kept for the nearest-point test.
+function segment([ax, ay], [bx, by], e, kick, tag) { return { ax, ay, bx, by, inv: 1 / ((bx - ax) * (bx - ax) + (by - ay) * (by - ay)), e, kick: kick || 0, tag }; }
+function wall(points, e, kick, tag) {
+  for (let i = 1; i < points.length; i++) walls.push(segment(points[i - 1], points[i], e, kick, tag));
+}
+const mirror = pts => pts.map(([x, y]) => [2 * CX - x, y]).reverse();
+// The top is half an ellipse from the left wall over to the plunger lane.
+const arch = [];
+for (let i = 0; i <= 18; i++) { const a = Math.PI + Math.PI * i / 18; arch.push([115 + 107 * Math.cos(a), 74 + 64 * Math.sin(a)]); }
+const OUTLINE = [[8, 300], ...arch, [222, 300]];
+wall(OUTLINE, 0.5);
+const LANE = [[206, 300], [206, 92]];
+wall(LANE, 0.4);
+const GUIDE_L = [[8, 205.6], [70.1, 254.2]], GUIDE_R = mirror(GUIDE_L);
+wall(GUIDE_L, 0.3); wall(GUIDE_R, 0.3);
+// Coffins: the face towards the middle kicks.
+const COFFIN_L = [[25, 168], [31, 162], [64, 216], [61, 223], [32, 201], [24, 182], [25, 168]];
+const COFFIN_R = mirror(COFFIN_L);
+wall(COFFIN_L.slice(0, 2), 0.5); wall(COFFIN_L.slice(1, 3), 0.6, 210, 'slingL'); wall(COFFIN_L.slice(2), 0.5);
+wall(COFFIN_R.slice(0, 5), 0.5); wall(COFFIN_R.slice(4, 6), 0.6, 210, 'slingR'); wall(COFFIN_R.slice(5), 0.5);
+const PLUNGER_Y = 295, REST_Y = PLUNGER_Y - R;
+const GATE = segment([206, 92], [222, 80], 0.4);
+const BUMPERS = [{ x: 76, y: 104 }, { x: 138, y: 104 }, { x: 107, y: 140 }].map(b => Object.assign(b, { r: 12, until: 0 }));
+const CRYPT = { x: 107, y: 52 };
+const LETTERS = 'XIRTUS';
+const SPOTS = [[30, 122], [40, 94], [58, 72], [156, 72], [174, 94], [184, 122]].map(([x, y], i) => ({ x, y, ch: LETTERS[i], on: false, inside: false }));
+const FL = 32;
+const flippers = [
+  { px: 68, py: 257, rest: 0.5, up: -0.45, box: [60, 234, 48, 48] },
+  { px: 146, py: 257, rest: Math.PI - 0.5, up: Math.PI + 0.45, box: [106, 234, 48, 48] },
+].map(f => Object.assign(f, { a: f.rest, w: 0, until: -1, drawn: null }));
+
+// Which walls and things are near each 16-pixel cell, so a step tests only those.
+const CELL = 16, COLS = Math.ceil(TW / CELL), ROWS = Math.ceil((H + 32) / CELL);
+const grid = [];
+for (let i = 0; i < COLS * ROWS; i++) grid.push({ walls: [], bumpers: [], spots: [] });
+function near(x0, y0, x1, y1, list, thing) {
+  const pad = R + 8;
+  for (let cy = Math.max(0, Math.floor((y0 - pad) / CELL)); cy <= Math.min(ROWS - 1, Math.floor((y1 + pad) / CELL)); cy++)
+    for (let cx = Math.max(0, Math.floor((x0 - pad) / CELL)); cx <= Math.min(COLS - 1, Math.floor((x1 + pad) / CELL)); cx++) grid[cy * COLS + cx][list].push(thing);
+}
+for (const s of walls) near(Math.min(s.ax, s.bx), Math.min(s.ay, s.by), Math.max(s.ax, s.bx), Math.max(s.ay, s.by), 'walls', s);
+for (const b of BUMPERS) near(b.x - b.r, b.y - b.r, b.x + b.r, b.y + b.r, 'bumpers', b);
+for (const s of SPOTS) near(s.x - 8, s.y - 8, s.x + 8, s.y + 8, 'spots', s);
+
+// ---- the game ----
+let ball, score, balls, mult, held, gateOn, time, message, messageUntil, frames, played, slings, cryptUntil, portal, stillFor, over;
+let running = false, last = 0, shown = '', shownAt = -1e9;
+function newBall() { ball = { x: 214, y: REST_Y, vx: 0, vy: 0, inLane: true }; gateOn = false; held = 0; stillFor = 0; }
+function newGame() {
+  score = 0; played = 0; balls = 1; mult = 1; time = 0; frames = 0; slings = { slingL: 0, slingR: 0 }; cryptUntil = 0; portal = false; over = false;
+  for (const s of SPOTS) s.on = false;
+  for (const b of BUMPERS) b.until = 0;
+  for (const f of flippers) { f.until = -1; f.a = f.rest; f.w = 0; }
+  message = ''; messageUntil = 0;
+  newBall();
+}
+// A message shows for a while; otherwise the display shows the lit letters, or what to do.
+function say(text, seconds) { message = text; messageUntil = time + seconds; }
+const idle = () => over ? 'GAME OVER' : resting() ? 'PRESS SPACE' : SPOTS.map(s => s.on ? s.ch : '-').join('');
+function award(points) { score += points * mult; }
+const resting = () => ball.inLane && ball.y === REST_Y && ball.vy === 0;
+
+// Pushes the ball out of something; (vx, vy) is that thing's own speed where they touch.
+function bounce(nx, ny, depth, e, kick, vx, vy) {
+  ball.x += nx * depth; ball.y += ny * depth;
+  const rx = ball.vx - vx, ry = ball.vy - vy, vn = rx * nx + ry * ny;
+  if (vn >= 0) return false;
+  ball.vx -= (1 + e) * vn * nx; ball.vy -= (1 + e) * vn * ny;
+  if (kick) { ball.vx += nx * kick; ball.vy += ny * kick; }
+  return true;
+}
+function hitSegment(s) {
+  const dx = s.bx - s.ax, dy = s.by - s.ay;
+  let t = ((ball.x - s.ax) * dx + (ball.y - s.ay) * dy) * s.inv;
+  t = t < 0 ? 0 : t > 1 ? 1 : t;
+  const ex = ball.x - s.ax - t * dx, ey = ball.y - s.ay - t * dy, d2 = ex * ex + ey * ey, reach = R + 1.5;
+  if (d2 >= reach * reach) return false;
+  const d = Math.sqrt(d2) || 1e-6;
+  return bounce(ex / d, ey / d, reach - d, s.e, s.kick, 0, 0);
+}
+function move(dt) {
+  time += dt;
+  for (let i = 0; i < 2; i++) {
+    const f = flippers[i], upward = time < f.until, target = upward ? f.up : f.rest, speed = upward ? 30 : 14, prev = f.a, diff = target - f.a;
+    f.a = Math.abs(diff) <= speed * dt ? target : f.a + Math.sign(diff) * speed * dt;
+    f.w = (f.a - prev) / dt;
+  }
+  if (held > 0) {
+    held -= dt;
+    if (held <= 0) { ball.vx = (Math.random() - 0.5) * 140; ball.vy = 230; ball.y = CRYPT.y + 10; }
+    return;
+  }
+  if (resting()) return;
+  if (ball.inLane && ball.y >= REST_Y - 0.5 && Math.abs(ball.vy) < 30) { ball.y = REST_Y; ball.vx = ball.vy = 0; return; }
+  ball.vy += GRAVITY * dt;
+  const v2 = ball.vx * ball.vx + ball.vy * ball.vy;
+  if (v2 > MAX_V * MAX_V) { const k = MAX_V / Math.sqrt(v2); ball.vx *= k; ball.vy *= k; }
+  ball.x += ball.vx * dt; ball.y += ball.vy * dt;
+  if (ball.inLane && ball.x < 200) { ball.inLane = false; gateOn = true; }
+  if (ball.inLane && ball.y > REST_Y) { ball.y = REST_Y; ball.vy = -ball.vy * 0.3; }
+  const cx = Math.floor(ball.x / CELL), cy = Math.floor(ball.y / CELL);
+  const cell = cx >= 0 && cx < COLS && cy >= 0 && cy < ROWS ? grid[cy * COLS + cx] : null;
+  if (cell) {
+    for (let i = 0; i < cell.walls.length; i++) { const s = cell.walls[i]; if (hitSegment(s) && s.tag) { award(10); slings[s.tag] = time + 0.12; } }
+    for (let i = 0; i < cell.bumpers.length; i++) {
+      const b = cell.bumpers[i];
+      const ex = ball.x - b.x, ey = ball.y - b.y, d2 = ex * ex + ey * ey, reach = b.r + R;
+      if (d2 < reach * reach) { const d = Math.sqrt(d2); if (bounce(ex / d, ey / d, reach - d, 0.6, 230, 0, 0)) { award(100); b.until = time + 0.15; } }
+    }
+    for (let i = 0; i < cell.spots.length; i++) {
+      const s = cell.spots[i];
+      const ex = ball.x - s.x, ey = ball.y - s.y, inside = ex * ex + ey * ey < 64;
+      if (inside && !s.inside) {
+        if (!s.on) { s.on = true; award(500); if (SPOTS.every(p => p.on)) { portal = true; say('PORTAL OPEN', 3); } }
+        else award(50);
+      }
+      s.inside = inside;
+    }
+  }
+  if (gateOn) hitSegment(GATE);
+  if (ball.y >= 228) for (let i = 0; i < 2; i++) {
+    const f = flippers[i];
+    const dx = FL * Math.cos(f.a), dy = FL * Math.sin(f.a);
+    let t = ((ball.x - f.px) * dx + (ball.y - f.py) * dy) / (FL * FL);
+    t = t < 0 ? 0 : t > 1 ? 1 : t;
+    const px = f.px + t * dx, py = f.py + t * dy, ex = ball.x - px, ey = ball.y - py, d2 = ex * ex + ey * ey, reach = R + 5 - 2 * t;
+    if (d2 < reach * reach) { const d = Math.sqrt(d2) || 1e-6; bounce(ex / d, ey / d, reach - d, 0.25, 0, -f.w * (py - f.py), f.w * (px - f.px)); }
+  }
+  const qx = ball.x - CRYPT.x, qy = ball.y - CRYPT.y;
+  if (qx * qx + qy * qy < 49 && ball.vx * ball.vx + ball.vy * ball.vy < 420 * 420 && time > cryptUntil) {
+    ball.x = CRYPT.x; ball.y = CRYPT.y; ball.vx = ball.vy = 0; held = 1; cryptUntil = time + 1.6;
+    if (portal) {
+      portal = false; mult = Math.min(mult + 1, 5); award(10000);
+      for (const s of SPOTS) s.on = false;
+      say('PORTAL X' + mult, 2);
+    } else { award(2500); say('CRYPT', 1.5); }
+  }
+  // A ball that comes to rest on the table gets a nudge.
+  if (!ball.inLane && ball.vx * ball.vx + ball.vy * ball.vy < 9) {
+    stillFor += dt;
+    if (stillFor > 2) { ball.vy = -160; ball.vx = (Math.random() - 0.5) * 120; stillFor = 0; }
+  } else stillFor = 0;
+  if (ball.y > H + 12) lose();
+}
+// One step of 1/120 s; near the flippers, two of 1/240 s, so a fast flipper can't pass the ball.
+function step() {
+  if (ball.y > 222) { move(STEP / 2); move(STEP / 2); } else move(STEP);
+}
+function lose() {
+  console.log('pinball ball ' + balls + ' lost score ' + score + ' frames ' + frames + ' fps ' + Math.round(frames * 1000 / Math.max(1, played)) + ' game seconds ' + Math.round(time));
+  if (balls >= 3) { over = true; return; }
+  balls++; mult = 1;
+  newBall();
+}
+
+// Frames run while something moves, and stop when the ball rests on the plunger with the flippers down.
+const moving = () => !over && (!resting() || held > 0) || flippers.some(f => f.a !== f.rest || time < f.until);
+function frame() {
+  const now = performance.now(), elapsed = Math.min(150, now - last);
+  played += now - last; last = now;
+  const t0 = performance.now();
+  let steps = Math.max(1, Math.round(elapsed / 1000 / STEP));
+  for (let n = steps; n > 0; n--) if (!over) step(); else { time += STEP; for (const f of flippers) f.a = f.rest; }
+  const t1 = performance.now();
+  frames++;
+  const calls = drawTable();
+  display(false);
+  if (frames % 50 === 0) console.log('pinball fps ' + Math.round(frames * 1000 / Math.max(1, played)) + ' steps ' + steps + ' physics ms ' + Math.round(t1 - t0) + ' draw ms ' + Math.round(performance.now() - t1) + ' rects ' + calls);
+  if (moving()) requestAnimationFrame(frame);
+  else { running = false; display(true); console.log('pinball resting'); }
+}
+function wake() {
+  if (running) return;
+  running = true; last = performance.now();
+  requestAnimationFrame(frame);
+}
+function key(e) {
+  const k = e.key;
+  if (k === 'ArrowLeft' || k === 'z' || k === 'Z') flippers[0].until = time + 0.22;
+  else if (k === 'ArrowRight' || k === '/' || k === 'm' || k === 'M') flippers[1].until = time + 0.22;
+  else if (k === ' ' || k === 'ArrowDown' || k === 'Enter') {
+    if (over) { newGame(); drawTable(); display(true); return true; }
+    if (resting()) { ball.vy = -(560 + Math.random() * 70); console.log('pinball launched ball ' + balls); }
+  } else if (k === 'n' || k === 'N') { newGame(); drawTable(); display(true); return true; }
+  else return false;
+  wake();
+  return true;
+}
+document.addEventListener('keydown', e => { if (key(e)) e.preventDefault(); });
+
+// ---- drawing ----
+function circle(c, x, y, r) { c.beginPath(); c.arc(x, y, r, 0, 7); }
+function poly(c, pts) { c.beginPath(); c.moveTo(pts[0][0], pts[0][1]); for (let i = 1; i < pts.length; i++) c.lineTo(pts[i][0], pts[i][1]); }
+function drawBase(c) {
+  c.fillStyle = '#120c1e'; c.fillRect(0, 0, TW, H);
+  // The moon, and graves on the hill under it.
+  c.fillStyle = 'rgba(150,90,230,0.18)'; circle(c, 170, 40, 24); c.fill();
+  c.fillStyle = '#b892f2'; circle(c, 170, 40, 15); c.fill();
+  c.fillStyle = '#1c1430'; poly(c, [[8, 188], [40, 176], [80, 182], [107, 172], [140, 182], [176, 176], [206, 188], [206, 300], [8, 300]]); c.fill();
+  c.fillStyle = '#2b2142';
+  for (const [x, y] of [[70, 196], [100, 190], [140, 196]]) { c.beginPath(); c.moveTo(x - 6, y + 14); c.lineTo(x - 6, y + 4); c.arc(x, y + 4, 6, Math.PI, 0); c.lineTo(x + 6, y + 14); c.fill(); }
+  // A bony hand reaching up out of the drain.
+  c.strokeStyle = '#d9d2c2'; c.lineWidth = 2; c.lineCap = 'round';
+  c.beginPath(); c.moveTo(107, 300); c.lineTo(107, 288);
+  for (const [x, y] of [[100, 279], [104, 277], [108, 277], [112, 279]]) { c.moveTo(107, 288); c.lineTo(x, y); }
+  c.moveTo(107, 290); c.lineTo(115, 285); c.stroke();
+  c.strokeStyle = '#7a5fc0'; c.lineWidth = 3; c.lineJoin = 'round';
+  for (const pts of [OUTLINE, LANE, GUIDE_L, GUIDE_R]) { poly(c, pts); c.stroke(); }
+  // The crypt's doorway.
+  c.fillStyle = '#2a2236'; c.beginPath(); c.moveTo(93, 66); c.lineTo(93, 50); c.arc(107, 50, 14, Math.PI, 0); c.lineTo(121, 66); c.fill();
+  c.fillStyle = '#8a8a96'; c.fillRect(209, PLUNGER_Y, 10, H - PLUNGER_Y);
+}
+const box = pts => { const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]); return [Math.min(...xs) - 3, Math.min(...ys) - 3, Math.max(...xs) - Math.min(...xs) + 6, Math.max(...ys) - Math.min(...ys) + 6]; };
+// The lights: each has a box, a state, and draws itself into `lit` when its state changes.
+const LIGHTS = [
+  { box: [203, 77, 22, 19], state: () => gateOn, draw: (c, on) => { if (on) { c.strokeStyle = '#5a4890'; c.lineWidth = 2; c.beginPath(); c.moveTo(GATE.ax, GATE.ay); c.lineTo(GATE.bx, GATE.by); c.stroke(); } } },
+  { box: [97, 42, 20, 20], state: () => held > 0 || portal, draw: (c, on) => { c.fillStyle = on ? '#3cff9a' : '#06040a'; circle(c, CRYPT.x, CRYPT.y, 8); c.fill(); } },
+  ...[[COFFIN_L, 'slingL'], [COFFIN_R, 'slingR']].map(([pts, tag]) => ({ box: box(pts), state: () => slings[tag] > time,
+    draw: (c, on) => { c.fillStyle = '#4a2f1c'; poly(c, pts); c.fill(); c.strokeStyle = on ? '#ffe08a' : '#c07a3a'; c.lineWidth = 2; c.stroke(); } })),
+  ...BUMPERS.map(b => ({ box: [b.x - 14, b.y - 14, 28, 28], state: () => b.until > time, draw: (c, on) => {
+    c.fillStyle = on ? '#fff6c0' : '#e2dccd'; circle(c, b.x, b.y, b.r); c.fill();
+    c.fillStyle = '#120c1e'; circle(c, b.x - 4, b.y - 1, 3); c.fill(); circle(c, b.x + 4, b.y - 1, 3); c.fill();
+    c.fillRect(b.x - 1, b.y + 4, 2, 4);
+  } })),
+  ...SPOTS.map(s => ({ box: [s.x - 9, s.y - 9, 18, 18], state: () => s.on, draw: (c, on) => {
+    c.fillStyle = on ? '#ff9a2e' : '#3a2c50'; circle(c, s.x, s.y, 7); c.fill();
+    c.font = 'bold 9px sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle';
+    c.fillStyle = on ? '#1a0e06' : '#9a88c0'; c.fillText(s.ch, s.x, s.y + 1);
+  } })),
+].map(l => Object.assign(l, { shown: null }));
+// The chrome ball, drawn once and copied.
+const ballCanvas = document.createElement('canvas');
+ballCanvas.width = ballCanvas.height = 12;
+(c => {
+  c.fillStyle = '#9aa0ac'; circle(c, 6, 6, R); c.fill();
+  c.fillStyle = '#ffffff'; circle(c, 4.5, 4.5, 1.8); c.fill();
+})(ballCanvas.getContext('2d'));
+const touch = (a, b) => a[0] < b[0] + b[2] && b[0] < a[0] + a[2] && a[1] < b[1] + b[3] && b[1] < a[1] + a[3];
+let ballBox = null, first = true;
+// Draws what changed since the last frame. Returns how many rectangles it copied.
+function drawTable() {
+  const dirty = [];
+  if (first) { drawBase(base); lit.drawImage(baseCanvas, 0, 0); }
+  for (const l of LIGHTS) {
+    const on = l.state();
+    if (on === l.shown) continue;
+    if (!first) lit.drawImage(baseCanvas, l.box[0], l.box[1], l.box[2], l.box[3], l.box[0], l.box[1], l.box[2], l.box[3]);
+    l.draw(lit, on); l.shown = on; dirty.push(l.box);
+  }
+  if (first) dirty.length = 0, dirty.push([0, 0, TW, H]);
+  first = false;
+  if (ballBox) dirty.push(ballBox);
+  const x = Math.floor(ball.x - R - 2), y = Math.floor(ball.y - R - 2);
+  ballBox = over ? null : [x, y, 2 * R + 5, 2 * R + 5];
+  if (ballBox) dirty.push(ballBox);
+  const redraw = flippers.filter(f => f.a !== f.drawn || dirty.some(d => touch(d, f.box)));
+  for (const f of redraw) dirty.push(f.box);
+  for (const [x, y, w, h] of dirty) g.drawImage(litCanvas, x, y, w, h, x, y, w, h);
+  g.strokeStyle = '#5ef0c4'; g.lineWidth = 8; g.lineCap = 'round';
+  for (const f of redraw) { g.beginPath(); g.moveTo(f.px, f.py); g.lineTo(f.px + FL * Math.cos(f.a), f.py + FL * Math.sin(f.a)); g.stroke(); f.drawn = f.a; }
+  if (ballBox) g.drawImage(ballCanvas, Math.round(ball.x) - 6, Math.round(ball.y) - 6);
+  return dirty.length;
+}
+
+// ---- the dot-matrix display: letters are drawn dot by dot once, then copied ----
+const GLYPHS = {
+  '0': '0e11131519110e', '1': '040c040404040e', '2': '0e11010204081f', '3': '1f02040201110e', '4': '02060a121f0202',
+  '5': '1f101e0101110e', '6': '0608101e11110e', '7': '1f010204080808', '8': '0e11110e11110e', '9': '0e11110f01020c',
+  A: '0e11111f111111', B: '1e11111e11111e', C: '0e11101010110e', D: '1c12111111121c', E: '1f10101e10101f',
+  F: '1f10101e101010', G: '0e11101711110f', H: '1111111f111111', I: '0e04040404040e', J: '0702020202120c',
+  K: '11121418141211', L: '1010101010101f', M: '111b1515111111', N: '11111915131111', O: '0e11111111110e',
+  P: '1e11111e101010', Q: '0e11111115120d', R: '1e11111e141211', S: '0f10100e01011e', T: '1f040404040404',
+  U: '1111111111110e', V: '11111111110a04', W: '1111111515150a', X: '11110a040a1111', Y: '1111110a040404',
+  Z: '1f01020408101f', '!': '04040404040004', '-': '0000001f000000',
+};
+const atlasCanvas = document.createElement('canvas');
+atlasCanvas.width = 400; atlasCanvas.height = 160;
+const atlas = atlasCanvas.getContext('2d'), cached = new Map();
+let atlasX = 0, atlasY = 0, atlasRow = 0;
+function glyph(ch, pitch, color) {
+  const id = ch + pitch + color;
+  let at = cached.get(id);
+  if (at) return at;
+  const w = 5 * pitch, h = 7 * pitch;
+  if (atlasX + w > 400) { atlasX = 0; atlasY += atlasRow + 1; atlasRow = 0; }
+  at = [atlasX, atlasY, w, h];
+  atlasX += w + 1; atlasRow = Math.max(atlasRow, h);
+  atlas.fillStyle = color;
+  const size = pitch > 2 ? pitch - 1 : pitch;
+  for (let row = 0; row < 7; row++) {
+    const bits = parseInt(GLYPHS[ch].substr(row * 2, 2), 16);
+    for (let col = 0; col < 5; col++) if (bits & (16 >> col)) atlas.fillRect(at[0] + col * pitch, at[1] + row * pitch, size, size);
+  }
+  cached.set(id, at);
+  return at;
+}
+const PX = 236, PW = 168;
+function dots(text, y, pitch, color) {
+  let x = PX + Math.round((PW - (text.length * 6 - 1) * pitch) / 2);
+  for (const ch of text) {
+    if (GLYPHS[ch]) { const [ax, ay, w, h] = glyph(ch, pitch, color); g.drawImage(atlasCanvas, ax, ay, w, h, x, y, w, h); }
+    x += 6 * pitch;
+  }
+}
+// Shows the score and message when they change, at most four times a second while playing.
+function display(now) {
+  const status = (over ? '' : 'BALL ' + balls) + (mult > 1 ? '  X' + mult : '');
+  const text = score + '|' + status + '|' + (messageUntil > time ? message : idle());
+  const at = performance.now();
+  if (text === shown || (!now && at - shownAt < 250)) return;
+  shown = text; shownAt = at;
+  g.fillStyle = '#1a0d05'; g.fillRect(PX, 8, PW, 98);
+  g.strokeStyle = '#5a3418'; g.lineWidth = 2; g.strokeRect(PX + 1, 9, PW - 2, 96);
+  dots('XIRTUS', 15, 2, '#ff8a1e');
+  dots(String(score), 34, 3, '#ffb040');
+  dots(status, 66, 2, '#ff8a1e');
+  dots(messageUntil > time ? message : idle(), 86, 2, '#ffd27a');
+}
+function panel() {
+  g.fillStyle = '#0a0710'; g.fillRect(TW, 0, 410 - TW, H);
+  g.fillStyle = '#b892f2'; g.font = 'bold 14px sans-serif'; g.textAlign = 'left'; g.textBaseline = 'alphabetic';
+  g.fillText('XIRTUS Pinball', PX, 128);
+  g.font = '10px sans-serif'; g.fillStyle = '#a89fbe';
+  let y = 148;
+  for (const line of ['Left or Z: left flipper', 'Right or /: right flipper', 'Space: launch the ball', 'N: new game', '', 'Roll over X I R T U S to open', 'the portal, then sink the', 'ball in the skull crypt.']) { g.fillText(line, PX, y); y += 14; }
+}
+
+newGame();
+// Drawn on timer ticks, so setting up and each drawing get the page's full script time.
+setTimeout(() => {
+  drawTable(); panel();
+  setTimeout(() => { display(true); console.log('pinball ready'); }, 0);
+}, 0);
+</script>
+</body>

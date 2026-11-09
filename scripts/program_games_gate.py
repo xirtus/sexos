@@ -5,7 +5,8 @@ JavaScript on Canvas 2D played from the keyboard. Solitaire must match the host 
 set up and after picking a pawn, and the computer must answer a move within the page's
 script time limit. 3D Chess (three.js) must match the host render when set up and after picking a pawn,
 and answer a move. Maze (WebGL) must match the host render when it starts and after
-walking one cell, and its walk is timed."""
+walking one cell, and its walk is timed. Pinball must match the host render when set up, play a
+launched ball until it drains, and report its frame rate."""
 import argparse,re,shutil,subprocess,time
 from pathlib import Path
 from PIL import Image
@@ -24,7 +25,7 @@ def reference(out,page,bar,name,actions=''):
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
- progs=[(n,(ROOT/'iso_root/programs'/n).read_bytes()) for n in ('solitaire','chess','maze','chess3d')]
+ progs=[(n,(ROOT/'iso_root/programs'/n).read_bytes()) for n in ('solitaire','chess','maze','chess3d','pinball')]
  assert all(e[:4]==b'\x7fELF' for _,e in progs)
  install(disk,progs)
  sol_bar='Solitaire — about:solitaire';chess_bar='Chess — about:chess'
@@ -35,7 +36,8 @@ def main():
   'maze':reference(a.out,GAMES/'maze.html','Maze — about:maze','maze'),
   'maze-walked':reference(a.out,GAMES/'maze.html','Maze — about:maze','maze-walked','keyArrowUp'),
   'chess3d':reference(a.out,GAMES/'chess3d.html','3D Chess — about:chess3d','chess3d'),
-  'chess3d-picked':reference(a.out,GAMES/'chess3d.html','3D Chess — about:chess3d','chess3d-picked','keyEnter')}
+  'chess3d-picked':reference(a.out,GAMES/'chess3d.html','3D Chess — about:chess3d','chess3d-picked','keyEnter'),
+  'pinball':reference(a.out,GAMES/'pinball.html','XIRTUS Pinball — about:pinball','pinball')}
  g=boot(a.iso,disk,a.out,'games',a.resolution);t=g['text'];q=g['q']
  def run(line):
   g['focus'](153);time.sleep(.5)
@@ -68,7 +70,7 @@ def main():
   s=len(t());q.key('f11');g['wait'](rf'\[web.closed\] target={target} task={task}',s,300)
   g['wait'](rf'\[app.private.retired\] target={target} task={task} ',s,90)
  # SEXOS_GAMES=chess3d,maze runs only those (all by default).
- want=os.environ.get('SEXOS_GAMES','solitaire,chess,maze,chess3d').split(',')
+ want=os.environ.get('SEXOS_GAMES','solitaire,chess,maze,chess3d,pinball').split(',')
  checked=[];result={'ok':True}
  def solitaire():
   target,task,surface,tile,ticks=start('solitaire')
@@ -118,9 +120,25 @@ def main():
   g['wait'](r'chess move [^\n]*\n(?:.*\n)*?\[web.console\] level=0 chess3d drawn[^\n]*\n(?:.*\n)*?\[web.shown\]',s,300);reply_s=round(time.time()-began,1)
   close(target,task)
   result['chess3d']={'load_ticks':ticks,'shader_ms':shaders,'pick_seconds':pick_s,'reply':reply[1],'move_and_reply_seconds':reply_s}
+ def pinball():
+  s=len(t());target,task,surface,tile,ticks=start('pinball')
+  g['wait'](r'\[web.console\] level=0 pinball ready',s,120);time.sleep(3)
+  checked.append(compare('pinball',tile))
+  g['focus'](surface);time.sleep(.3)
+  # Launch, flip now and then, and play until the ball drains (or a minute of play).
+  s=len(t());began=time.time();q.key('spc')
+  g['wait'](r'pinball launched ball 1',s,60)
+  while time.time()-began<240 and not re.search(r'pinball ball 1 lost',t()[s:]):
+   q.key('left');time.sleep(1.5);q.key('right');time.sleep(1.5)
+  lost=g['wait'](r'pinball ball 1 lost score (\d+) frames (\d+) fps (\d+) game seconds (\d+)',s,600)
+  g['wait'](r'pinball resting',s,120)
+  rates=[int(m) for m in re.findall(r'pinball fps (\d+)',t()[s:])]
+  close(target,task)
+  result['pinball']={'load_ticks':ticks,'score':int(lost[1]),'frames':int(lost[2]),'fps':int(lost[3]),'game_seconds':int(lost[4]),'play_seconds':round(time.time()-began,1)}
+  assert int(lost[2])>5,lost[0]
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120)
-  for name,play in (('solitaire',solitaire),('chess',chess),('maze',maze),('chess3d',chess3d)):
+  for name,play in (('solitaire',solitaire),('chess',chess),('maze',maze),('chess3d',chess3d),('pinball',pinball)):
    if name in want:play()
   text=t();assert '[web.script] trapped' not in text and 'InternalError: interrupted' not in text,'a game ran past the script time limit'
   assert 'KERNEL PANIC' not in text and '[web.fatal]' not in text and 'panicked' not in text

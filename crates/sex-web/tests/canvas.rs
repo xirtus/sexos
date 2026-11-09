@@ -48,3 +48,24 @@ fn resizing_clears_the_canvas() {
     c.run(&mut fonts, 1, 20, 10, &format!("lw{FS}5\u{1e}sz{FS}20{FS}10"));
     assert_eq!(ink(&c).0, 0);
 }
+
+#[test]
+fn draw_image_copies_another_canvas() {
+    let mut fonts = Fonts::new().unwrap();
+    let mut c = Canvases::new();
+    // Canvas 1: red left half, green right half.
+    c.run(&mut fonts, 1, 20, 10, &format!("fs{FS}c{FS}#ff0000\u{1e}fr{FS}0{FS}0{FS}10{FS}10\u{1e}fs{FS}c{FS}#00ff00\u{1e}fr{FS}10{FS}0{FS}10{FS}10"));
+    // Canvas 2 copies the green half to its left edge, at the same size, then the whole
+    // of canvas 1 stretched over its lower half.
+    c.run(&mut fonts, 2, 20, 20, &format!("di{FS}canvas:1{FS}10{FS}0{FS}10{FS}10{FS}0{FS}0{FS}10{FS}10\u{1e}di{FS}canvas:1{FS}0{FS}0{FS}20{FS}10{FS}0{FS}10{FS}20{FS}10"));
+    let s = &c.surfaces[1].1;
+    let at = |x: u32, y: u32| s.pixels[(y * s.width + x) as usize];
+    assert_eq!(at(0, 0), 0xFF00_FF00, "copied green");
+    assert_eq!(at(9, 9), 0xFF00_FF00);
+    assert_eq!(at(10, 0) >> 24, 0, "nothing drawn beside the copy");
+    assert_eq!(at(2, 15), 0xFFFF_0000, "red on the left of the stretched copy");
+    assert_eq!(at(17, 15), 0xFF00_FF00);
+    // A missing picture draws nothing.
+    c.run(&mut fonts, 3, 4, 4, &format!("di{FS}canvas:9{FS}0{FS}0{FS}4{FS}4{FS}0{FS}0{FS}4{FS}4"));
+    assert!(c.surfaces[2].1.pixels.iter().all(|&p| p == 0));
+}

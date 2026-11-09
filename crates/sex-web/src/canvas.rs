@@ -260,6 +260,79 @@ impl Surface {
         if let Some(mut pm) = self.pixmap() { pm.draw_pixmap(0, 0, src, &paint, map, None); }
     }
 
+    /// Draws the part `sx, sy, sw, sh` of a picture into `dx, dy, dw, dh` (a negative source
+    /// size means the whole picture, a zero target size the source size).
+    fn draw_image(&mut self, img: &Image, [sx, sy, sw, sh, dx, dy, dw, dh]: [f32; 8]) {
+        let (iw, ih) = (img.width as f32, img.height as f32);
+        let (sw, sh) = if sw < 0.0 || sh < 0.0 { (iw, ih) } else { (sw, sh) };
+        let (dw, dh) = if dw == 0.0 && dh == 0.0 { (sw, sh) } else { (dw, dh) };
+        // The part of the picture that exists, in whole pixels.
+        let (x0, y0) = (libm::floorf(sx.max(0.0)), libm::floorf(sy.max(0.0)));
+        let (x1, y1) = (libm::ceilf((sx + sw).min(iw)), libm::ceilf((sy + sh).min(ih)));
+        if !(x1 > x0 && y1 > y0 && sw > 0.0 && sh > 0.0 && dw != 0.0 && dh != 0.0) { return; }
+        let (cw, ch) = ((x1 - x0) as u32, (y1 - y0) as u32);
+        if cw > MAX_SIDE || ch > MAX_SIDE { return; }
+        let (kx, ky) = (dw / sw, dh / sh);
+        let map = self.state.ctm.pre_translate(dx, dy).pre_scale(kx, ky).pre_translate(x0 - sx, y0 - sy);
+        // A copy at the same size onto whole pixels is exact.
+        let whole = |v: f32| (v - libm::roundf(v)).abs() < 1e-3;
+        let exact = map.sx == 1.0 && map.sy == 1.0 && map.kx == 0.0 && map.ky == 0.0 && whole(map.tx) && whole(map.ty);
+        // The common case, an opaque-or-not picture laid over the canvas: whole pixels, no
+        // floating point, so games can copy rectangles every frame.
+        if exact && self.state.blend == BlendMode::SourceOver && self.state.alpha >= 1.0 {
+            let (tx, ty) = (libm::roundf(map.tx) as i32, libm::roundf(map.ty) as i32);
+            let (w, h) = (self.width as i32, self.height as i32);
+            for y in 0..ch as i32 {
+                let (py, sy) = (ty + y, y0 as usize + y as usize);
+                if py < 0 || py >= h { continue; }
+                for x in 0..cw as i32 {
+                    let px = tx + x;
+                    if px < 0 || px >= w { continue; }
+                    let p = img.pixels[sy * img.width + x0 as usize + x as usize];
+                    let a = p >> 24;
+                    let d = &mut self.pixels[(py * w + px) as usize];
+                    *d = match a {
+                        0 => continue,
+                        255 => p,
+                        _ => {
+                            // Source over, premultiplied: d = s * a + d * (1 - a).
+                            let mix = |s: u32| { let sv = ((p >> s) & 0xFF) * a; let dv = ((*d >> s) & 0xFF) * (255 - a); ((sv + dv + 127) / 255).min(255) << s };
+                            let da = (*d >> 24) * (255 - a) / 255 + a;
+                            da.min(255) << 24 | mix(16) | mix(8) | mix(0)
+                        }
+                    };
+                }
+            }
+            return;
+        }
+        let mut part = alloc::vec![0u32; (cw * ch) as usize];
+        for y in 0..ch as usize {
+            let row = &img.pixels[(y0 as usize + y) * img.width + x0 as usize..][..cw as usize];
+            for (o, &p) in part[y * cw as usize..][..cw as usize].iter_mut().zip(row) {
+                let a = p >> 24;
+                *o = match a {
+                    0 => 0,
+                    255 => p,
+                    _ => { let m = |s: u32| (((p >> s) & 0xFF) * a + 127) / 255; a << 24 | m(16) << 16 | m(8) << 8 | m(0) }
+                };
+            }
+        }
+        let quality = if exact { sk::FilterQuality::Nearest } else { sk::FilterQuality::Bilinear };
+        let Some(src) = sk::PixmapRef::from_bytes(as_bytes(&mut part), cw, ch) else { return };
+        let paint = sk::PixmapPaint { opacity: self.state.alpha.clamp(0.0, 1.0), blend_mode: self.state.blend, quality };
+        // Only the source rectangle shows, even when it starts inside a pixel.
+        let clip = self.rect_path(dx, dy, dw, dh);
+        let Some(mut pm) = self.pixmap() else { return };
+        if exact {
+            pm.draw_pixmap(0, 0, src, &paint, map, None);
+        } else if let Some(clip) = clip {
+            let pat = sk::Pattern::new(src, sk::SpreadMode::Pad, quality, paint.opacity, map);
+            let mut p = Paint::default();
+            p.shader = pat; p.anti_alias = true; p.blend_mode = paint.blend_mode;
+            pm.fill_path(&clip, &p, FillRule::Winding, Transform::identity(), None);
+        }
+    }
+
     /// Runs one command.
     fn command(&mut self, fonts: &mut Fonts, cmd: &str) -> Option<()> {
         let fields: Vec<&str> = cmd.split('\u{1f}').collect();
@@ -346,6 +419,11 @@ impl Surface {
                 }
             }
             "ft" => self.text(fonts, a.first()?, f(a, 1)?, f(a, 2)?),
+            "di" => {
+                let name = *a.first()?;
+                let img = fonts.images.iter().find(|(s, _)| s == name).map(|(_, i)| i.clone())?;
+                self.draw_image(&img, [f(a, 1)?, f(a, 2)?, f(a, 3)?, f(a, 4)?, f(a, 5)?, f(a, 6)?, f(a, 7)?, f(a, 8)?]);
+            }
             _ => {}
         }
         Some(())
