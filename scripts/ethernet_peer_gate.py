@@ -41,7 +41,7 @@ def validate(text,exchanges,mac):
              scope='Actual selected QEMU NIC and held BOOT DMA queues exchange exact real Ethernet/ARP bytes. Host-generated peer packets are explicit fixtures. No IP/DNS/TCP/HTTP/TLS, IRQ idle-wait, physical-hardware or hostile-DMA containment proof.')
 
 def main():
- p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--model',choices=['e1000','e1000e'],required=True);a=p.parse_args()
+ p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--model',choices=['e1000','e1000e','igb'],required=True);a=p.parse_args()
  iso=a.iso.resolve(strict=True);src=a.source_disk.resolve(strict=True);out=a.out.resolve();out.mkdir(parents=True,exist_ok=True)
  if any(out.iterdir()):raise RuntimeError('fresh output required')
  disk=out/'nvme.img';shutil.copyfile(src,disk);serial=out/'serial.log';captures=[];exchanges=[]

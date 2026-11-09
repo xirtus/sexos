@@ -34,13 +34,13 @@ python3 - "$ROOT_DIR" "$TEST_DIR/boot_memory.rs" <<'PYMEM'
 from pathlib import Path
 import sys
 root=Path(sys.argv[1]);s=(root/'kernel/src/boot_memory.rs').read_text();parts=[]
-for name in ['nic_bar0','pci_view']:
+for name in ['nic_bar0','nic_lease','bar_lease','pci_view']:
  a=s.index('fn '+name+'(');i=s.index('{',a)+1;depth=1
  while depth:depth+=(s[i]=='{')-(s[i]=='}');i+=1
  parts.append(s[a:i])
 Path(sys.argv[2]).write_text('\n'.join(parts))
 s=(root/'kernel/src/devmgr.rs').read_text();a=s.index('(0x02, 0x00)');part=s[a:s.index('            _ => {}',a)]
-assert part.index('pd.find_capability(sex_pdx::SLOT_NIC as u32).is_some()')<part.index('crate::boot_memory::nic_bar0(')<part.index('pd.grant_capability(')
+assert part.index('pd.find_capability(sex_pdx::SLOT_NIC as u32).is_some()')<part.index('crate::boot_memory::nic_lease(')<part.index('pd.grant_capability(')
 assert 'bar0_view: Some(view)'in part
 PYMEM
 NIC_BOOT_MEMORY_SOURCE="$TEST_DIR/boot_memory.rs" rustc --edition=2021 --extern sex_net_config="$TEST_DIR/libsex_net_config.rlib" --test "$ROOT_DIR/tests/nic_boot_memory.rs" -o "$TEST_DIR/boot-memory"
@@ -52,6 +52,9 @@ echo '[sexnet.nic.prepare.host] PASS scope=actual_bounded_state_machine_with_exp
 rustc --edition=2021 --extern sex_net_config="$TEST_DIR/libsex_net_config.rlib" --test "$ROOT_DIR/tests/sexnet_ethernet.rs" -o "$TEST_DIR/ethernet"
 "$TEST_DIR/ethernet" --test-threads=1
 echo '[sexnet.ethernet.host] PASS scope=actual_fixed_queue_driver_with_explicit_device_dma_clock_doubles_not_live_wire_or_hostile_dma_containment'
+rustc --edition=2021 --test "$ROOT_DIR/tests/sexnet_realtek.rs" -o "$TEST_DIR/realtek"
+"$TEST_DIR/realtek" --test-threads=1
+echo '[sexnet.realtek.host] PASS scope=actual_r8169_r8125_device_and_driver_with_width_aware_register_dma_clock_doubles_not_hardware'
 bash "$ROOT_DIR/scripts/sexnet_transport_host_gate.sh"
 
 bash "$ROOT_DIR/scripts/sexnet_jobs_host_gate.sh"
