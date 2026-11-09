@@ -97,6 +97,13 @@ fn hot_log() -> bool {
 static mut FB_PTR: u64 = FALLBACK_PTR;
 static mut FB_W: u32 = FALLBACK_W;
 static mut FB_H: u32 = FALLBACK_H;
+/// Scanout row length in pixels; at least FB_W. GOP modes on real GPUs pad rows.
+static mut FB_PITCH: u32 = FALLBACK_W;
+/// Pixels written to the scanout since boot, and by the last publication.
+static mut PUBLISHED_PIXELS: u64 = 0;
+static mut LAST_WRITTEN: u64 = 0;
+/// The scale BOOT chose for this screen; Ctrl+Alt+0 returns to it.
+static mut BOOT_UI_SCALE: u32 = 1;
 static mut BAR_BG_BUF: [u32; BAR_BG_H * BAR_BG_W_CAP] = [0u32; BAR_BG_H * BAR_BG_W_CAP];
 static mut BAR_BLUR_BUF: [u32; BAR_BG_H * BAR_BG_W_CAP] = [0u32; BAR_BG_H * BAR_BG_W_CAP];
 
@@ -1509,7 +1516,9 @@ fn surface_text_scale(surf: &Surface) -> usize {
     };
     // The window's own text size: whole steps from its width's default, Geist
     // drawn fresh for each.
-    (base as i32 + surf.text_zoom as i32).clamp(1, sex_pdx::desktop_style::MAX_TEXT_SCALE as i32) as usize
+    // HiDPI: the screen's scale multiplies the width's default and the range.
+    let ui=sex_pdx::desktop_style::ui_scale() as i32;
+    (base as i32 * ui + surf.text_zoom as i32).clamp(1, sex_pdx::desktop_style::MAX_TEXT_SCALE as i32 * ui) as usize
 }
 /// A zoom step on a surface: +1 larger, -1 smaller, 0 the default. The stored step
 /// stays within what the scale can show, so the opposite key acts at once.
@@ -1520,7 +1529,8 @@ fn apply_text_zoom(surf: &mut Surface, step: i64) -> bool {
     let base = surface_text_scale(surf) as i32;
     surf.text_zoom = zoom;
     let wanted = if step == 0 { 0 } else { surf.text_zoom as i32 + step.signum() as i32 };
-    surf.text_zoom = ((base + wanted).clamp(1, sex_pdx::desktop_style::MAX_TEXT_SCALE as i32) - base) as i8;
+    let most = sex_pdx::desktop_style::MAX_TEXT_SCALE as i32 * sex_pdx::desktop_style::ui_scale() as i32;
+    surf.text_zoom = ((base + wanted).clamp(1, most) - base) as i8;
     let changed = surface_text_scale(surf) != before;
     if changed { recompute_text_lines(surf); }
     changed
@@ -1950,7 +1960,7 @@ struct PublishedFrame{plan:Plan,present_bits:u64,canon_ss:u8,
 
 // Small output bookkeeping is tentative until the prepared frame is published.
 // Its retained pixel copy is erased before this invocation returns to cleanup.
-struct OutputBackup{saved:[u32;CURSOR_ARROW_W*CURSOR_ARROW_H],x:usize,y:usize,valid:bool,bits:u64,frame:u64,pending:Option<PreparedCursor>}
+struct OutputBackup{saved:[u32;CURSOR_ARROW_W*CURSOR_ARROW_H*9],x:usize,y:usize,valid:bool,bits:u64,frame:u64,pending:Option<PreparedCursor>}
 impl OutputBackup{
     fn capture()->Self{unsafe{Self{saved:CURSOR_UNDER_SAVED,x:CURSOR_UNDER_X,y:CURSOR_UNDER_Y,valid:CURSOR_UNDER_VALID,bits:APP_PRESENT_BITS,
         frame:RENDER_FRAME_COUNTER.load(core::sync::atomic::Ordering::Relaxed),pending:PREPARED_CURSOR}}}
@@ -1968,10 +1978,27 @@ fn valid_scanout(fb:*mut u32,w:usize,h:usize)->bool{
 }
 
 // Sole Display scanout writer. Preparation writes only the held private target.
-// This complete CPU copy is not an atomic hardware flip or vblank completion.
-fn publish_frame(fb:*mut u32,w:usize,h:usize,pixels:&[u32])->bool{
+// This CPU copy is not an atomic hardware flip or vblank completion. Only the
+// spans that differ from the frame the output already shows are written, each
+// row at the scanout's own pitch (real GPUs pad rows).
+fn publish_frame(fb:*mut u32,w:usize,h:usize,frame:frame_output::Publication<'_>)->bool{
+    let pixels=frame.pixels;
     if !valid_scanout(fb,w,h)||w.checked_mul(h)!=Some(pixels.len()){return false;}
-    for(index,pixel)in pixels.iter().enumerate(){unsafe{core::ptr::write_volatile(fb.add(index),*pixel);}}
+    if frame.previous.is_some_and(|old|old.len()!=pixels.len())||frame.rows.end>h{return false;}
+    let pitch=unsafe{FB_PITCH} as usize;
+    let mut written=0usize;
+    for y in frame.rows.first..frame.rows.end{
+        let row=&pixels[y*w..(y+1)*w];
+        let (first,end)=match frame.previous{
+            Some(old)=>{let old=&old[y*w..(y+1)*w];
+                let Some(first)=(0..w).find(|&x|row[x]!=old[x])else{continue};
+                (first,(first..w).rev().find(|&x|row[x]!=old[x]).unwrap_or(first)+1)}
+            None=>(0,w)};
+        let out=unsafe{fb.add(y*pitch)};
+        for(index,pixel)in row[first..end].iter().enumerate(){unsafe{core::ptr::write_volatile(out.add(first+index),*pixel);}}
+        written+=end-first;
+    }
+    unsafe{PUBLISHED_PIXELS=PUBLISHED_PIXELS.wrapping_add(written as u64);LAST_WRITTEN=written as u64;}
     // Order posted/write-combining CPU stores before releasing presentation
     // effects. This does not signal GPU scanout/latch or atomic visibility.
     #[cfg(target_arch="x86_64")]
@@ -2023,7 +2050,7 @@ fn render_prepared(fb:*mut u32,w:usize,h:usize,bar:&SilkBar,requested:Plan)->Opt
     if !settle_only{unsafe{APP_PRESENT_BITS=0;PREPARED_CURSOR=None;}}
     let prepared={let target=preparation.target();raster_batch(&target,scene,plan)};
     if !prepared{drop(preparation);backup.restore();return None;}
-    if !preparation.commit(|pixels|publish_frame(fb,w,h,pixels)){backup.restore();return None;}
+    if !preparation.commit(|frame|publish_frame(fb,w,h,frame)){backup.restore();return None;}
     let present_bits=if settle_only{0}else{unsafe{APP_PRESENT_BITS}};
     if !settle_only{
         record_cursor_presented();
@@ -2034,8 +2061,8 @@ fn render_prepared(fb:*mut u32,w:usize,h:usize,bar:&SilkBar,requested:Plan)->Opt
     unsafe{
         static mut BATCH_LOG_BUDGET:u32=64;
         if BATCH_LOG_BUDGET>0{BATCH_LOG_BUDGET-=1;
-            sex_pdx::serial_record!("[display.batch.published] generation={} content={} strip={} scene=1 prepare=1 publication=1",
-                store.generation(),match plan.content{Content::Full=>"full",Content::Area=>"area",Content::Damage(_)=>"damage",Content::Cursor=>"cursor",Content::Settle=>"settle",Content::None=>"none"},plan.strip as u8);}
+            sex_pdx::serial_record!("[display.batch.published] generation={} content={} strip={} scene=1 prepare=1 publication=1 written={} total_written={}",
+                store.generation(),match plan.content{Content::Full=>"full",Content::Area=>"area",Content::Damage(_)=>"damage",Content::Cursor=>"cursor",Content::Settle=>"settle",Content::None=>"none"},plan.strip as u8,LAST_WRITTEN,PUBLISHED_PIXELS);}
     }
     // Copy only descriptive transaction identities. The payload remains owned
     // by this scene, which ordinary scope Drop scrubs before Main commits text.
@@ -2406,8 +2433,9 @@ const CURSOR_ARROW_BITMAP: [u8; 16] = [
 /// a cursor-only move can restore + redraw the 8x16 rect instead of running
 /// a full redraw_surface_area() composite. Local sexdisplay state — no
 /// shared memory, no backing-buffer redesign, no ABI change.
-static mut CURSOR_UNDER_SAVED: [u32; CURSOR_ARROW_W * CURSOR_ARROW_H] =
-    [0; CURSOR_ARROW_W * CURSOR_ARROW_H];
+// Room for the arrow at the largest screen scale (3x3 pixels per bit).
+static mut CURSOR_UNDER_SAVED: [u32; CURSOR_ARROW_W * CURSOR_ARROW_H * 9] =
+    [0; CURSOR_ARROW_W * CURSOR_ARROW_H * 9];
 static mut CURSOR_UNDER_X: usize = 0;
 static mut CURSOR_UNDER_Y: usize = 0;
 static mut CURSOR_UNDER_VALID: bool = false;
@@ -2432,18 +2460,19 @@ fn restore_cursor_under(fb: *mut u32, w: usize, h: usize, total_pixels: usize) {
         if !CURSOR_UNDER_VALID { return; }
         let ox = CURSOR_UNDER_X;
         let oy = CURSOR_UNDER_Y;
-        for row in 0..CURSOR_ARROW_H {
+        let cs = sex_pdx::desktop_style::ui_scale() as usize;
+        for row in 0..CURSOR_ARROW_H * cs {
             let py = oy + row;
             if py >= h { break; }
             if py < 51 { continue; } // never write into SilkBar zone (y<51)
-            for col in 0..CURSOR_ARROW_W {
+            for col in 0..CURSOR_ARROW_W * cs {
                 let px = ox + col;
                 if px >= w { continue; }
                 let idx = py * w + px;
                 if idx < total_pixels {
                     core::ptr::write_volatile(
                         fb.add(idx),
-                        CURSOR_UNDER_SAVED[row * CURSOR_ARROW_W + col],
+                        CURSOR_UNDER_SAVED[row * CURSOR_ARROW_W * cs + col],
                     );
                 }
             }
@@ -2705,32 +2734,34 @@ fn draw_cursor_z_top(fb: *mut u32, w: usize, h: usize, total_pixels: usize, save
             let oy = surf.y.max(0) as usize; // origin y
             // Save-under capture: full 8x16 rect, same clip rules as the
             // arrow write loop below, read-only against the framebuffer.
+            // HiDPI: each arrow bit covers cs x cs pixels.
+            let cs = sex_pdx::desktop_style::ui_scale() as usize;
             if save_under {
                 CURSOR_UNDER_X = ox;
                 CURSOR_UNDER_Y = oy;
-                for row in 0..CURSOR_ARROW_H {
+                for row in 0..CURSOR_ARROW_H * cs {
                     let py = oy + row;
                     if py >= h { break; }
                     if py < 51 { continue; }
-                    for col in 0..CURSOR_ARROW_W {
+                    for col in 0..CURSOR_ARROW_W * cs {
                         let px = ox + col;
                         if px >= w { continue; }
                         let idx = py * w + px;
                         if idx < total_pixels {
-                            CURSOR_UNDER_SAVED[row * CURSOR_ARROW_W + col] =
+                            CURSOR_UNDER_SAVED[row * CURSOR_ARROW_W * cs + col] =
                                 core::ptr::read_volatile(fb.add(idx));
                         }
                     }
                 }
                 CURSOR_UNDER_VALID = true;
             }
-            for row in 0..CURSOR_ARROW_H {
+            for row in 0..CURSOR_ARROW_H * cs {
                 let py = oy + row;
                 if py >= h { break; }
                 if py < 51 { continue; } // never write into SilkBar zone (y<51)
-                let bits = CURSOR_ARROW_BITMAP[row];
-                for col in 0..CURSOR_ARROW_W {
-                    if bits & (0x80u8 >> col) == 0 { continue; }
+                let bits = CURSOR_ARROW_BITMAP[row / cs];
+                for col in 0..CURSOR_ARROW_W * cs {
+                    if bits & (0x80u8 >> (col / cs)) == 0 { continue; }
                     let px = ox + col;
                     if px >= w { continue; }
                     let idx = py * w + px;
@@ -3466,10 +3497,11 @@ pub extern "C" fn _start() -> ! {
     // Resolve BOOT metadata before the first pixel write, including compact modes.
     let geometry=sex_pdx::display_boot::geometry().expect("BOOT_DISPLAY_GEOMETRY");
     let address=sex_pdx::display_boot::framebuffer().expect("BOOT_DISPLAY_FRAMEBUFFER");
-    assert!(geometry.pitch==geometry.width*4,"DISPLAY_PADDED_PITCH_UNSUPPORTED");
+    assert!(geometry.pitch>=geometry.width*4&&geometry.pitch%4==0,"DISPLAY_PITCH");
     assert!(address>=HIGH_HALF_BASE,"BOOT_DISPLAY_ADDRESS");
-    unsafe{FB_PTR=address;FB_W=geometry.width;FB_H=geometry.height;}
-    let frame_layout=sex_pdx::display_frames::Layout::new(geometry.width as u64,geometry.height as u64,geometry.pitch as u64)
+    unsafe{FB_PTR=address;FB_W=geometry.width;FB_H=geometry.height;FB_PITCH=geometry.pitch/4;}
+    // Private frames are packed; publication steps rows at the scanout pitch.
+    let frame_layout=sex_pdx::display_frames::Layout::new(geometry.width as u64,geometry.height as u64,geometry.width as u64*4)
         .expect("DISPLAY_FRAME_LAYOUT");
     let frame_backing=sex_pdx::display_frame_backing(frame_layout).expect("DISPLAY_FRAME_HELD_BACKING");
     unsafe{assert!(FRAME_OUTPUT.is_none(),"DISPLAY_FRAME_ALREADY_INITIALIZED");
@@ -3478,6 +3510,10 @@ pub extern "C" fn _start() -> ! {
         sex_pdx::display_frames::SLOT,sex_pdx::display_frames::REGION_ID,frame_layout.width(),frame_layout.height(),
         frame_layout.frame_bytes(),frame_layout.span_bytes(),frame_layout.total_bytes());
     sex_pdx::serial_record!("[display.boot.geometry] width={} height={} pitch={} boot=1",geometry.width,geometry.height,geometry.pitch);
+    let physical=sex_pdx::display_boot::physical().unwrap_or(sex_pdx::display_boot::Physical{scale:1,width_mm:0,height_mm:0});
+    sex_pdx::desktop_style::set_ui_scale(physical.scale);
+    unsafe{BOOT_UI_SCALE=physical.scale;}
+    sex_pdx::serial_record!("[display.scale] scale={} width_mm={} height_mm={} reason=boot",physical.scale,physical.width_mm,physical.height_mm);
     serial_println!("[sexdisplay.init.start]");
     serial_println!("[silk.contract.validate.start]");
     let contract_err = validate_silkbar_contract();
@@ -3980,6 +4016,24 @@ pub extern "C" fn _start() -> ! {
                             sex_pdx::serial_record!("[display.text.zoom] surface={} step={} zoom={} scale={}", msg.arg0, step, slot.text_zoom, surface_text_scale(slot));
                         }
                     }
+                }
+                sex_pdx::desktop_style::OP_DISPLAY_SCALE => {
+                    // Shell, as window manager, steps the whole screen's scale.
+                    let wm_pd = DISPLAY_WM_PD.load(core::sync::atomic::Ordering::Acquire);
+                    if wm_pd == 0 || msg.caller_pd != wm_pd { continue; }
+                    let step = msg.arg0 as i64;
+                    let before = sex_pdx::desktop_style::ui_scale();
+                    let wanted = if step == 0 { unsafe { BOOT_UI_SCALE } } else { (before as i64 + step.signum()).clamp(1, sex_pdx::display_boot::MAX_SCALE as i64) as u32 };
+                    sex_pdx::desktop_style::set_ui_scale(wanted);
+                    if wanted != before {
+                        unsafe {
+                            for slot in SURFACES.iter_mut().filter(|s| s.active) { recompute_text_lines(slot); }
+                            // The cursor's saved underlay has the old size.
+                            CURSOR_UNDER_VALID = false;
+                        }
+                        needs_full_redraw = true;
+                    }
+                    sex_pdx::serial_record!("[display.scale] scale={} step={} reason=keys", wanted, step);
                 }
                 sex_pdx::pixel_region::OP => {
                     // Only the program row that owns this surface shows pixels in it.

@@ -10,6 +10,7 @@ fn info() -> Info {
         width: 1024,
         height: 768,
         pitch: 4096,
+        physical: 2 | (286 << 8) | (179 << 24),
     }
 }
 #[test]
@@ -18,6 +19,7 @@ fn exact_boot_roles_only_with_zero_reserved_args() {
     for pd in [1, 3, 4] {
         assert_eq!(i.query(pd, 0, [0, 0]), Some(1024 | (768 << 32)));
         assert_eq!(i.query(pd, 2, [0, 0]), Some(4096));
+        assert_eq!(i.query(pd, 3, [0, 0]), Some(2 | (286 << 8) | (179 << 24)));
         assert_eq!(i.query(pd, 0, [1, 0]), None);
         assert_eq!(i.query(pd, 0, [0, 1]), None);
     }

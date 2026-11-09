@@ -21,11 +21,11 @@ const fn shared_rows() -> usize {
     n
 }
 /// Regions the row shares with services are mapped on its key too, so they take turns
-/// with its own pages. They stay for every run; `pages` is one run's.
-const FIXED: usize = 1400;
-struct Row { target: u32, pages: Vec<PrivatePage>, count: usize, fixed: [PrivatePage; FIXED], fixed_count: usize }
+/// with its own pages. They stay for every run; `pages` is one run's. A row's pixel
+/// region grows with the screen (16 MiB at 2560x1600), so the list is not fixed.
+struct Row { target: u32, pages: Vec<PrivatePage>, count: usize, fixed: Vec<PrivatePage>, fixed_count: usize }
 struct Pool { rows: [Row; ROWS], tenant: u32 }
-static POOL: Mutex<Pool> = Mutex::new(Pool { rows: [const { Row { target: 0, pages: Vec::new(), count: 0, fixed: [PrivatePage::EMPTY; FIXED], fixed_count: 0 } }; ROWS], tenant: 0 });
+static POOL: Mutex<Pool> = Mutex::new(Pool { rows: [const { Row { target: 0, pages: Vec::new(), count: 0, fixed: Vec::new(), fixed_count: 0 } }; ROWS], tenant: 0 });
 pub static SWITCHES: AtomicU64 = AtomicU64::new(0);
 
 pub fn shared(target: u32) -> bool {
@@ -69,8 +69,7 @@ pub fn claim_regions() {
             let Some(crate::capability::CapabilityData::Region(region)) = pd.find_capability(slot).map(|c| c.data) else { continue };
             for va in (region.virtual_base..region.virtual_base + region.length).step_by(4096) {
                 let leaf = crate::boot_memory::existing_leaf_address(va).expect("PROGRAM_POOL_REGION_LEAF");
-                assert!(entry.fixed_count < FIXED, "PROGRAM_POOL_REGION_CAPACITY");
-                entry.fixed[entry.fixed_count] = PrivatePage { va, leaf, expected: 0 };
+                entry.fixed.push(PrivatePage { va, leaf, expected: 0 });
                 entry.fixed_count += 1;
             }
         }

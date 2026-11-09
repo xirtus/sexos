@@ -130,7 +130,7 @@ def compile_test(name,text,pipeline=production_path,case=None,expect_failure=Fal
         if count is not None:assert int(match[1])==count,(name,match[1],count)
         return int(match[1])
 counts={}
-for name,file,expected in [('layout','tests/display_frames.rs',7),('store','tests/display_frame_output.rs',8),('va','kernel/src/memory/va_allocator.rs',6),('paint_batch','tests/display_paint_batch.rs',13)]:
+for name,file,expected in [('layout','tests/display_frames.rs',7),('store','tests/display_frame_output.rs',9),('va','kernel/src/memory/va_allocator.rs',6),('paint_batch','tests/display_paint_batch.rs',13)]:
     counts[name]=compile_test(name,(root/file).read_text(),count=expected)
 fixture_text=fixture.read_text();counts['pipeline']=compile_test('pipeline',fixture_text,count=13)
 # Unforgeable ownership discipline is a type property, not a native authority
@@ -142,7 +142,8 @@ for trait in ['Copy','Clone','Send','Sync']:
     assert r.returncode!=0 and 'error[E0277]' in r.stderr and trait in r.stderr and 'FrameBacking' in r.stderr,'unexpected trait diagnostic: '+r.stderr
 controls=[
  ('early-presentation','if !prepared{drop(preparation);backup.restore();return None;}','report_app_presented();\n    if !prepared{drop(preparation);backup.restore();return None;}','actual_combined_batches_publish_once_with_one_immutable_scene'),
- ('skip-cpu-copy','for(index,pixel)in pixels.iter().enumerate(){unsafe{core::ptr::write_volatile(fb.add(index),*pixel);}}','/* omitted CPU copy */','actual_combined_batches_publish_once_with_one_immutable_scene'),
+ ('stale-unchanged-rows','let Some(first)=(0..w).find(|&x|row[x]!=old[x])else{continue};','let Some(first)=(0..w).find(|&x|row[x]!=old[x])else{continue};let first=first.max(1);','actual_combined_batches_publish_once_with_one_immutable_scene'),
+ ('skip-cpu-copy','for(index,pixel)in row[first..end].iter().enumerate(){unsafe{core::ptr::write_volatile(out.add(first+index),*pixel);}}','/* omitted CPU copy */','actual_combined_batches_publish_once_with_one_immutable_scene'),
  ('omit-raster-rollback','if !prepared{drop(preparation);backup.restore();return None;}','if !prepared{drop(preparation);return None;}','every_body_failure_restores_bookkeeping_and_retains_front'),
  ('recapture','let scene=lease.view();','drop(lease);let lease=SceneLease::capture(w,h,bar).unwrap();let scene=lease.view();','actual_combined_batches_publish_once_with_one_immutable_scene'),
  ('drop-strip-pass','if !body||plan.strip&&!raster_strip(target,scene){return false;}','if !body{return false;}','actual_combined_batches_publish_once_with_one_immutable_scene'),
