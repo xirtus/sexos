@@ -89,6 +89,8 @@ struct Browser {
     editing: Option<String>,
     status: Option<&'static str>,
     buf: Vec<u8>,
+    /// The window shows no full frame of the page yet, so pictures alone can't update it.
+    full_redraw: bool,
 }
 
 /// Text from bytes: UTF-8 when valid, otherwise read as Latin-1.
@@ -128,6 +130,7 @@ impl Browser {
         };
         sex_web::frame(&self.page, &mut self.fonts, pixels, W, H, self.scroll, self.focus, &bar, self.editing.is_some());
         self.window.show_pixels(W as usize, H as usize);
+        self.full_redraw = false;
         sex_pdx::serial_record!("[web.shown] w={} h={} scroll={} focus={} items={} ticks={}", W, H, self.scroll, self.focus.map_or(-1, |f| f as i64), self.page.items.len(), sex_pdx::get_ticks() - start);
     }
 
@@ -317,10 +320,24 @@ impl Browser {
         let queue = core::mem::take(&mut doc.canvas_queue);
         let dirty = core::mem::take(&mut doc.dirty);
         let doc = match &mut self.doc { Doc::Plain(d) => d, Doc::Scripted(s) => s.page_mut() };
-        let painted = self.canvases.run_queue(&mut self.fonts, &doc.dom, queue) | sex_web::canvas::present_gl(&mut self.fonts, &mut doc.gl);
+        self.canvases.run_queue(&mut self.fonts, &doc.dom, queue);
+        let mut changed: Vec<usize> = core::mem::take(&mut self.canvases.drew);
+        changed.extend(sex_web::canvas::present_gl_nodes(&mut self.fonts, &mut doc.gl));
         if dirty { self.relayout(); }
-        if draw && (dirty || painted) { self.draw(); return true; }
-        false
+        if !draw || (!dirty && changed.is_empty()) { return false; }
+        // Only canvases drew: put just them over the last frame when that is enough.
+        if !dirty && !self.full_redraw {
+            let names: Vec<String> = changed.iter().map(|n| alloc::format!("canvas:{n}")).collect();
+            let start = sex_pdx::get_ticks();
+            let pixels = &mut self.window.pixels()[..(W * H) as usize];
+            if sex_web::repaint_pictures(&self.page, &mut self.fonts, pixels, W, H, self.scroll, &names) {
+                self.window.show_pixels(W as usize, H as usize);
+                sex_pdx::serial_record!("[web.shown] w={} h={} scroll={} focus={} items={} ticks={} canvases={}", W, H, self.scroll, self.focus.map_or(-1, |f| f as i64), self.page.items.len(), sex_pdx::get_ticks() - start, names.len());
+                return true;
+            }
+        }
+        self.draw();
+        true
     }
 
     /// Styles and lays the page out again from the tree.
@@ -533,7 +550,7 @@ pub extern "C" fn _start() -> ! {
     let Some(fonts) = Fonts::new() else { window.show(b"Web: the fonts could not be loaded."); loop { if let Event::Close = window.next() { window.close() } } };
     let page = sex_html::render("", W, H, &fonts as &dyn Host);
     let doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", (W, H - BAR), clock));
-    let mut b = Browser { window, fonts, page, doc, sheets: Vec::new(), timer: None, canvases: sex_web::canvas::Canvases::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new() };
+    let mut b = Browser { window, fonts, page, doc, sheets: Vec::new(), timer: None, canvases: sex_web::canvas::Canvases::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true };
     let first = given.split_ascii_whitespace().next().unwrap_or(first_page()).to_string();
     b.open(&first, false);
     sex_pdx::serial_record!("[web.ready] target={} task={}", b.window.target, b.window.task);
