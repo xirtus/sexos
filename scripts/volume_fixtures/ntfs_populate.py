@@ -1,0 +1,26 @@
+import os,sys,subprocess
+m=sys.argv[1]
+def gen(seed,n):
+    return bytes(((((i*2654435761)&0xffffffff)^seed)>>13)&0xff for i in range(n))
+def w(p,data):
+    os.makedirs(os.path.dirname(os.path.join(m,p)) or m,exist_ok=True)
+    open(os.path.join(m,p),'wb').write(data)
+w('hello.txt',b'Hello from Windows!\r\n')
+w('empty.txt',b'')
+w('Documents/Reports/2026/q3.txt',b'Q3 revenue: up and to the right\n')
+w('Documents/big.bin',gen(1,200*1024+123))
+for i in range(100): w('Many/file%03d.txt'%i,b'entry %d\n'%i)
+w('MixedCase.TXT',b'case\n')
+w('Grüße-日本.txt',b'unicode\n')
+w('Long name file.txt',b'long\n')
+os.setxattr(os.path.join(m,'Long name file.txt'),'system.ntfs_dos_name',b'LONGNA~1.TXT')
+f=open(os.path.join(m,'sparse.bin'),'wb')
+f.write(gen(2,4096)); f.seek(768*1024); f.write(gen(3,4096)); f.truncate(1024*1024); f.close()
+os.mkdir(os.path.join(m,'Packed'))
+os.setxattr(os.path.join(m,'Packed'),'system.ntfs_attrib_be',bytes([0,0,8,0]))
+w('Packed/squash.txt',b'squash me '*2000)
+os.symlink('hello.txt',os.path.join(m,'link'))
+os.mkdir(os.path.join(m,'Links'))
+w('Links/linked.bin',gen(4,10000))
+for i in range(16): os.link(os.path.join(m,'Links/linked.bin'),os.path.join(m,'Links','hard link number %02d '%i+'x'*90))
+os.utime(os.path.join(m,'hello.txt'),(1767323045,1767323045))
