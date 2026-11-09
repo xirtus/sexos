@@ -300,12 +300,72 @@ else
   row_set usb_boot_mouse "SKIP"
 fi
 
+# ── LANE 5: a hub, two keyboards, a mouse and a tablet at once; hot-plug ─
+# The desktop on a real PC: keyboard and mouse together, often behind a hub
+# (a monitor's, a keyboard's own). Keys held together (rollover) all arrive,
+# unplugging a hub forgets everything behind it, a new device works at once.
+L5="$GATE_DIR/lane_many.log"
+if [[ "$(row_get build)" != "FAIL" ]]; then
+  boot_lane many "$L5" "$GATE_DIR/qmp5.sock" \
+    -device qemu-xhci,id=xhci -device usb-hub,bus=xhci.0,port=1,id=hub \
+    -device usb-kbd,bus=xhci.0,port=1.1 -device usb-mouse,bus=xhci.0,port=1.2 \
+    -device usb-tablet,bus=xhci.0,port=2 -device usb-kbd,bus=xhci.0,port=3,id=k2
+  if wait_marker '\[sexusb\.enum\.summary\]' "$L5" "$READY_TIMEOUT"; then
+    sleep "$SETTLE_SECONDS"
+    python3 - "$GATE_DIR/qmp5.sock" <<'PY' || true
+import json, socket, sys, time
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.settimeout(5)
+s.connect(sys.argv[1])
+def rd():
+    buf = b""
+    while b"\n" not in buf:
+        buf += s.recv(4096)
+    return buf
+rd()
+def cmd(c):
+    s.sendall((json.dumps(c) + "\n").encode())
+    return rd()
+cmd({"execute": "qmp_capabilities"})
+def key(k, down):
+    cmd({"execute": "input-send-event", "arguments": {"events": [
+        {"type": "key", "data": {"down": down, "key": {"type": "qcode", "data": k}}}]}})
+    time.sleep(0.15)
+# Rollover: a held while s is pressed, then both released.
+key("a", True); key("s", True); key("a", False); key("s", False)
+cmd({"execute": "device_del", "arguments": {"id": "hub"}})
+time.sleep(2)
+cmd({"execute": "device_add", "arguments": {"driver": "usb-mouse", "bus": "xhci.0", "port": "4", "id": "m2"}})
+time.sleep(3)
+for i in range(4):
+    cmd({"execute": "input-send-event", "arguments": {"events": [
+        {"type": "rel", "data": {"axis": "x", "value": 6}}]}})
+    time.sleep(0.1)
+PY
+    sleep 3
+  fi
+  stop_lane
+  if has '\[sexusb\.enum\.summary\] ports_connected=3 slots_enabled=5 hid_devices=4 pointer_devices=2 keyboards=2 hubs=1 failed=0' "$L5" \
+     && has '\[sexusb\.kbd\.forward\] key=0x4 keys=0x1604 ' "$L5" \
+     && has '\[sexusb\.device\.gone\] slot=[0-9]+ port=[0-9]+ route=0x1' "$L5" \
+     && has '\[sexusb\.device\.gone\] slot=[0-9]+ port=[0-9]+ route=0x2' "$L5" \
+     && [[ "$(grep -c '\[sexusb\.hid\.bind\.summary\] .*pointer_role=mouse' "$L5")" -ge 2 ]] \
+     && has '\[sexinput\.usb_mouse\.decode\.ok\] buttons=0x0 dx=6 dy=0 wheel=0 is_abs=false' "$L5" \
+     && ! has_fault "$L5"; then
+    row_set usb_many_devices "PASS"
+  else
+    row_set usb_many_devices "FAIL"
+  fi
+else
+  row_set usb_many_devices "SKIP"
+fi
+
 # ── SUMMARY ──────────────────────────────────────────────────────────────
 echo ""
 echo "=== USB_PATH_GATE SUMMARY ==="
 EXIT=0
 for r in build usb_discovery usb_enum usb_pointer_producer touch_contact \
-         lane1_fault_free usb_discovery_negative usb_kbd_lane usb_boot_mouse; do
+         lane1_fault_free usb_discovery_negative usb_kbd_lane usb_boot_mouse usb_many_devices; do
   printf '%-26s %s\n' "$r" "$(row_get "$r")"
   [[ "$(row_get "$r")" == "FAIL" ]] && EXIT=1
 done
