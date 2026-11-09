@@ -462,3 +462,38 @@ fn animations_start_when_they_first_apply() {
     sex_html::styles_at(&plain, &[], 400, 300, 6000, &mut timeline);
     assert_eq!(sex_html::styles_at(&on, &[], 400, 300, 9000, &mut timeline).0[a].as_ref().unwrap().margin[3], style::Len::Px(0));
 }
+
+#[test]
+fn transitions_animate_changed_values() {
+    let sheet = "#a { width: 100px; background: #000000; transform: none; transition: background 1s linear, transform 1s linear 500ms }
+        #a.on { background: #ff0000; transform: translateX(40px); width: 300px }
+        #b { opacity: 1; transition: all 200ms linear } #b.on { opacity: 0 }";
+    let off = parse::parse(&format!("<style>{sheet}</style><div id=a>a</div><div id=b>b</div>"));
+    let on = parse::parse(&format!("<style>{sheet}</style><div id=a class=on>a</div><div id=b class=on>b</div>"));
+    let id = |n: &str| off.descendants(0).into_iter().find(|&i| off.attr(i, "id") == Some(n)).unwrap();
+    let (a, b) = (id("a"), id("b"));
+    let mut tl = sex_html::Timeline::default();
+    // Nothing moves on the first styling.
+    assert!(!sex_html::styles_at(&off, &[], 400, 300, 1000, &mut tl).1);
+    // The class arrives at 2 s.
+    let (s, running) = sex_html::styles_at(&on, &[], 400, 300, 2000, &mut tl);
+    assert!(running);
+    assert_eq!(s[a].as_ref().unwrap().background & 0xFFFFFF, 0);
+    let (s, _) = sex_html::styles_at(&on, &[], 400, 300, 2500, &mut tl);
+    let st = s[a].as_ref().unwrap();
+    assert_eq!(st.background & 0xFFFFFF, 0x800000);
+    // Width is not transitioned; transform waits for its delay.
+    assert_eq!(st.width, style::Len::Px(300));
+    assert_eq!(st.translate, None);
+    assert_eq!(s[b].as_ref().unwrap().opacity, 0, "all: 200 ms, done");
+    let (s, _) = sex_html::styles_at(&on, &[], 400, 300, 3000, &mut tl);
+    assert_eq!(s[a].as_ref().unwrap().translate, Some((style::Len::Px(20), style::Len::Px(0))));
+    // Back off half-way through: it returns from where it was.
+    let (s, _) = sex_html::styles_at(&off, &[], 400, 300, 3000, &mut tl);
+    assert_eq!(s[a].as_ref().unwrap().translate, Some((style::Len::Px(20), style::Len::Px(0))));
+    let (s, _) = sex_html::styles_at(&off, &[], 400, 300, 4000, &mut tl);
+    assert_eq!(s[a].as_ref().unwrap().translate, Some((style::Len::Px(10), style::Len::Px(0))));
+    let (s, running) = sex_html::styles_at(&off, &[], 400, 300, 9000, &mut tl);
+    assert!(!running);
+    assert_eq!(s[a].as_ref().unwrap().background & 0xFFFFFF, 0);
+}

@@ -74,6 +74,34 @@ impl Default for Animation {
     fn default() -> Self { Animation { name: String::new(), duration_ms: 0, delay_ms: 0, iterations: 100, alternate: false, reverse: false, timing: 1, fill_forwards: false, fill_backwards: false } }
 }
 
+/// One entry of `transition`: a property (or `all`) and its timing.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Transition {
+    pub property: String,
+    pub duration_ms: u32,
+    pub delay_ms: i32,
+    /// As [`Animation::timing`].
+    pub timing: u32,
+}
+
+/// A running transition of one property of one element.
+#[derive(Clone, Debug)]
+pub struct Running {
+    pub from: String,
+    pub to: String,
+    pub start: u64,
+    pub duration_ms: u32,
+    pub timing: u32,
+}
+
+/// What transitions remember between stylings: each property's last value and the
+/// transitions under way, by element and property.
+#[derive(Clone, Debug, Default)]
+pub struct TransitionState {
+    pub last: BTreeMap<(NodeId, String), String>,
+    pub running: BTreeMap<(NodeId, String), Running>,
+}
+
 /// Colours are 0xAARRGGBB (straight alpha).
 #[derive(Clone, Debug)]
 pub struct Style {
@@ -138,6 +166,8 @@ pub struct Style {
     pub shadow: Option<(i32, i32, i32, i32, u32)>,
     /// The first of `animation`.
     pub animation: Option<Animation>,
+    /// `transition`, entry by entry.
+    pub transitions: Vec<Transition>,
     /// `opacity`, 0 to 255.
     pub opacity: u8,
     /// Custom properties (`--name: value`), inherited; shared until an element sets one.
@@ -201,6 +231,7 @@ impl Style {
             vars: Default::default(),
             opacity: 255,
             animation: None,
+            transitions: Vec::new(),
             shadow: None,
             translate: None,
             vertical_super: 0,
@@ -310,6 +341,9 @@ pub struct Cascade<'a> {
     pub start_default: u64,
     /// The animations styled in this pass, with their starts.
     pub seen: core::cell::RefCell<BTreeMap<(NodeId, String), u64>>,
+    /// Transitions as the last styling left them, and as this one leaves them.
+    pub transitions_before: core::cell::RefCell<TransitionState>,
+    pub transitions_after: core::cell::RefCell<TransitionState>,
     /// Set when some element is animating (the page should be styled again soon).
     pub animating: core::cell::Cell<bool>,
 }
@@ -317,7 +351,7 @@ pub struct Cascade<'a> {
 impl<'a> Cascade<'a> {
     /// `sheets[0]` is the user-agent sheet; the rest are the page's, in document order.
     pub fn new(sheets: Vec<&'a Sheet>) -> Self {
-        let mut c = Cascade { sheets, by_id: BTreeMap::new(), by_class: BTreeMap::new(), by_tag: BTreeMap::new(), universal: Vec::new(), now_ms: 0, starts: Default::default(), start_default: 0, seen: Default::default(), animating: core::cell::Cell::new(false) };
+        let mut c = Cascade { sheets, by_id: BTreeMap::new(), by_class: BTreeMap::new(), by_tag: BTreeMap::new(), universal: Vec::new(), now_ms: 0, starts: Default::default(), start_default: 0, seen: Default::default(), transitions_before: Default::default(), transitions_after: Default::default(), animating: core::cell::Cell::new(false) };
         for (si, sheet) in c.sheets.iter().enumerate() {
             for (ri, rule) in sheet.rules.iter().enumerate() {
                 for (xi, sel) in rule.selectors.iter().enumerate() {
@@ -406,33 +440,41 @@ pub fn compute(dom: &Dom, cascade: &Cascade, node: NodeId, parent: &Style, root_
     // font-size first: other `em` lengths depend on it.
     for d in &ordered { if d.name == "font-size" || d.name == "font" { apply(&mut style, d, &ctx, true); } }
     for d in &ordered { apply(&mut style, d, &ctx, false); }
-    if let Some(a) = style.animation.clone() {
-        if let Some(frames) = cascade.sheets.iter().rev().find_map(|sh| sh.keyframes.iter().rev().find(|(n, _)| *n == a.name)).map(|(_, f)| f) {
-            let key = (node, a.name.clone());
-            let start = cascade.starts.borrow().get(&key).copied().unwrap_or(cascade.start_default);
-            cascade.seen.borrow_mut().insert(key, start);
-            // A frame that leaves a property out takes it from the element's own style.
-            let underlying = |name: &str, other: &str| -> String {
-                if let Some(d) = ordered.iter().rev().find(|d| d.name == name) { return d.value.clone(); }
-                match name {
-                    "color" => hex(style.color),
-                    "background" | "background-color" => hex(style.background),
-                    "opacity" => alloc::format!("{}", style.opacity as f32 / 255.0),
-                    _ if name.starts_with("margin-") || name.starts_with("padding-") => {
-                        let side = ["top", "right", "bottom", "left"].iter().position(|s| name.ends_with(s));
-                        let lens = if name.starts_with("margin-") { &style.margin } else { &style.padding };
-                        match side.map(|i| lens[i]) { Some(Len::Px(px)) => alloc::format!("{px}px"), _ => zeroed(other) }
-                    }
-                    // Lengths and transforms start from zero.
-                    _ => zeroed(other),
+    if style.animation.is_some() || !style.transitions.is_empty() {
+        let own = style.clone();
+        // A property's value as the element's own style has it (a keyframe or
+        // transition endpoint that the element does not declare).
+        let underlying = |name: &str, other: &str| -> String {
+            if let Some(d) = ordered.iter().rev().find(|d| d.name == name) { return d.value.clone(); }
+            match name {
+                "color" => hex(own.color),
+                "background" | "background-color" => hex(own.background),
+                "opacity" => alloc::format!("{}", own.opacity as f32 / 255.0),
+                _ if name.starts_with("margin-") || name.starts_with("padding-") => {
+                    let side = ["top", "right", "bottom", "left"].iter().position(|s| name.ends_with(s));
+                    let lens = if name.starts_with("margin-") { &own.margin } else { &own.padding };
+                    match side.map(|i| lens[i]) { Some(Len::Px(px)) => alloc::format!("{px}px"), _ => zeroed(other) }
                 }
-            };
-            if let Some(decls) = animate(&a, frames, cascade.now_ms.saturating_sub(start), &cascade.animating, &underlying) {
-                for d in &decls { if d.name == "font-size" { apply(&mut style, d, &ctx, true); } }
-                for d in &decls { apply(&mut style, d, &ctx, false); }
-                // Animations sit below !important declarations.
-                for d in ordered.iter().filter(|d| d.important) { apply(&mut style, d, &ctx, false); }
+                // Lengths and transforms start from zero.
+                _ => zeroed(other),
             }
+        };
+        let mut over: Vec<Declaration> = Vec::new();
+        if !own.transitions.is_empty() { over = transition(cascade, node, &own.transitions, &ordered, &underlying); }
+        if let Some(a) = &own.animation {
+            if let Some(frames) = cascade.sheets.iter().rev().find_map(|sh| sh.keyframes.iter().rev().find(|(n, _)| *n == a.name)).map(|(_, f)| f) {
+                let key = (node, a.name.clone());
+                let start = cascade.starts.borrow().get(&key).copied().unwrap_or(cascade.start_default);
+                cascade.seen.borrow_mut().insert(key, start);
+                // Animations sit above transitions.
+                if let Some(decls) = animate(a, frames, cascade.now_ms.saturating_sub(start), &cascade.animating, &underlying) { over.extend(decls); }
+            }
+        }
+        if !over.is_empty() {
+            for d in &over { if d.name == "font-size" { apply(&mut style, d, &ctx, true); } }
+            for d in &over { apply(&mut style, d, &ctx, false); }
+            // Both sit below !important declarations.
+            for d in ordered.iter().filter(|d| d.important) { apply(&mut style, d, &ctx, false); }
         }
     }
     if style.position == Position::Absolute || style.position == Position::Fixed {
@@ -678,6 +720,73 @@ fn substitute_with(v: &str, lookup: &mut dyn FnMut(&str) -> Option<String>, dept
     Some(out)
 }
 
+/// Properties whose values transitions do not animate.
+fn untransitioned(name: &str) -> bool {
+    name.starts_with("--") || name.starts_with("transition") || name.starts_with("animation") || name == "display" || name == "content"
+}
+
+/// The values running transitions give the element's properties now. A property whose
+/// value changed since the last styling starts a transition from what was shown.
+fn transition(cascade: &Cascade, node: NodeId, list: &[Transition], ordered: &[&Declaration], underlying: &dyn Fn(&str, &str) -> String) -> Vec<Declaration> {
+    let now = cascade.now_ms;
+    let before = cascade.transitions_before.borrow();
+    let mut after = cascade.transitions_after.borrow_mut();
+    let mut out = Vec::new();
+    // Each property once, with the last entry that names it (or `all`).
+    let mut props: Vec<(String, &Transition)> = Vec::new();
+    for t in list {
+        let names: Vec<String> = if t.property == "all" {
+            let mut n: Vec<String> = ordered.iter().filter(|d| !untransitioned(&d.name)).map(|d| d.name.clone()).collect();
+            n.extend(before.last.range((node, String::new())..).take_while(|((n, _), _)| *n == node).map(|((_, p), _)| p.clone()));
+            n
+        } else { alloc::vec![t.property.clone()] };
+        for name in names {
+            match props.iter_mut().find(|(p, _)| *p == name) { Some(e) => e.1 = t, None => props.push((name, t)) }
+        }
+    }
+    for (name, t) in props {
+        let key = (node, name.clone());
+        let value = underlying(&name, before.last.get(&key).map_or("", |v| v.as_str()));
+        let mut run = before.running.get(&key).cloned();
+        if let Some(prev) = before.last.get(&key) {
+            if *prev != value && t.duration_ms > 0 {
+                // From what is on screen now (mid-way through a running one).
+                let from = run.as_ref().and_then(|r| progress(r, now).map(|p| interpolate(&r.from, &r.to, p))).unwrap_or_else(|| prev.clone());
+                run = Some(Running { from, to: value.clone(), start: (now as i64 + t.delay_ms as i64).max(0) as u64, duration_ms: t.duration_ms, timing: t.timing });
+            }
+        }
+        if let Some(r) = run.filter(|r| r.to == value) {
+            if now < r.start + r.duration_ms as u64 {
+                cascade.animating.set(true);
+                let p = progress(&r, now).unwrap_or(0.0);
+                out.push(Declaration { name: name.clone(), value: interpolate(&r.from, &r.to, p), important: false });
+                after.running.insert(key.clone(), r);
+            }
+        }
+        after.last.insert(key, value);
+    }
+    out
+}
+
+/// How far (eased, 0..1) running transition `r` is at `now`; None before it starts.
+fn progress(r: &Running, now: u64) -> Option<f32> {
+    if now < r.start { return Some(0.0); }
+    let x = ((now - r.start) as f32 / r.duration_ms.max(1) as f32).min(1.0);
+    Some(ease(r.timing, x))
+}
+
+/// Timing function `timing` (see [`Animation::timing`]) at `x` in 0..1.
+fn ease(timing: u32, x: f32) -> f32 {
+    match timing {
+        0 => x,
+        2 => x * x,
+        3 => 1.0 - (1.0 - x) * (1.0 - x),
+        1 | 4 => x * x * (3.0 - 2.0 * x),
+        n if n > 100 => { let k = (n - 100) as f32; ((x * k) as i32) as f32 / k }
+        _ => x,
+    }
+}
+
 /// A CSS time in milliseconds.
 fn parse_time(v: &str) -> Option<i32> {
     if let Some(ms) = v.strip_suffix("ms") { return css::parse_number(ms).map(|n| n / 100); }
@@ -718,14 +827,7 @@ fn animate(a: &Animation, frames: &[(i32, Vec<Declaration>)], now_ms: u64, anima
     let mut p = frac as i32;
     if (a.alternate && iter % 2 == 1) != a.reverse { p = 1000 - p; }
     // Timing applies within each pair of keyframes.
-    let ease = |x: f32| match a.timing {
-        0 => x,
-        2 => x * x,
-        3 => 1.0 - (1.0 - x) * (1.0 - x),
-        1 | 4 => x * x * (3.0 - 2.0 * x),
-        n if n > 100 => { let k = (n - 100) as f32; ((x * k) as i32) as f32 / k }
-        _ => x,
-    };
+    let ease = |x: f32| ease(a.timing, x);
     // Each property between the frames around p that set it; 0% and 100% default to
     // the element's own value.
     let mut names: Vec<&str> = Vec::new();
@@ -752,6 +854,14 @@ fn animate(a: &Animation, frames: &[(i32, Vec<Declaration>)], now_ms: u64, anima
 /// `a` to `b` at `t` (0..1): colours channel by channel, otherwise every number in two
 /// values of the same shape (`translateX(0px)` .. `translateX(40px)`); else a step.
 fn interpolate(a: &str, b: &str, t: f32) -> String {
+    // `none` or nothing against a value: from that value's zero (`translateY(0px)`).
+    let blank = |v: &str| v.is_empty() || v.eq_ignore_ascii_case("none");
+    let (za, zb);
+    let (a, b) = match (blank(a), blank(b)) {
+        (true, false) if parse_color(b).is_none() => { za = zeroed(b); (za.as_str(), b) }
+        (false, true) if parse_color(a).is_none() => { zb = zeroed(a); (a, zb.as_str()) }
+        _ => (a, b),
+    };
     let mix = |x: f32, y: f32| x + (y - x) * t;
     if let (Some(ca), Some(cb)) = (parse_color(a), parse_color(b)) {
         let ch = |c: u32, s: u32| ((c >> s) & 0xFF) as f32;
@@ -1097,6 +1207,42 @@ fn apply(s: &mut Style, d: &Declaration, ctx: &Ctx, font_only: bool) {
             }
             // Kept while incomplete: a later longhand may finish it.
             s.animation = Some(a);
+        }
+        "transition" => {
+            s.transitions = css::split_top(v, ',').into_iter().filter_map(|item| {
+                let mut t = Transition { property: String::from("all"), duration_ms: 0, delay_ms: 0, timing: 1 };
+                let mut times = 0;
+                for w in words(item.trim()) {
+                    let lw = w.to_ascii_lowercase();
+                    if let Some(ms) = parse_time(&lw) { if times == 0 { t.duration_ms = ms.max(0) as u32 } else { t.delay_ms = ms } times += 1; continue; }
+                    if let Some(code) = timing(&lw) { t.timing = code; continue; }
+                    if lw == "none" { return None; }
+                    t.property = lw;
+                }
+                Some(t)
+            }).collect();
+        }
+        "transition-property" | "transition-duration" | "transition-delay" | "transition-timing-function" => {
+            let items: Vec<String> = css::split_top(v, ',').into_iter().map(|i| i.trim().to_ascii_lowercase()).collect();
+            if d.name == "transition-property" {
+                let old = core::mem::take(&mut s.transitions);
+                s.transitions = items.iter().filter(|p| p.as_str() != "none").enumerate().map(|(i, p)| {
+                    let mut t = old.get(i).or(old.last()).cloned().unwrap_or(Transition { property: String::new(), duration_ms: 0, delay_ms: 0, timing: 1 });
+                    t.property = p.clone();
+                    t
+                }).collect();
+            } else {
+                if s.transitions.is_empty() { s.transitions.push(Transition { property: String::from("all"), duration_ms: 0, delay_ms: 0, timing: 1 }); }
+                for (i, t) in s.transitions.iter_mut().enumerate() {
+                    // Lists shorter than the properties repeat.
+                    let item = &items[i % items.len().max(1)];
+                    match d.name.as_str() {
+                        "transition-duration" => t.duration_ms = parse_time(item).unwrap_or(0).max(0) as u32,
+                        "transition-delay" => t.delay_ms = parse_time(item).unwrap_or(0),
+                        _ => t.timing = timing(item).unwrap_or(1),
+                    }
+                }
+            }
         }
         "opacity" => {
             let n = match lv.strip_suffix('%') { Some(p) => css::parse_number(p).map(|p| p / 100), None => css::parse_number(&lv) };

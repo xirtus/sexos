@@ -32,13 +32,14 @@ pub fn styles(dom: &Dom, extra_css: &[&str], width: i32, height: i32) -> Vec<Opt
 #[derive(Default)]
 pub struct Timeline {
     starts: alloc::collections::BTreeMap<(dom::NodeId, alloc::string::String), u64>,
+    transitions: style::TransitionState,
     /// When animations found by the first styling start; the time of that styling if None.
     pub begun: Option<u64>,
 }
 
 impl Timeline {
     /// Animations that apply when first styled count from `ms`.
-    pub fn starting_at(ms: u64) -> Self { Timeline { starts: Default::default(), begun: Some(ms) } }
+    pub fn starting_at(ms: u64) -> Self { Timeline { starts: Default::default(), transitions: Default::default(), begun: Some(ms) } }
 }
 
 /// [`styles`] at `now_ms`, with CSS animations at that moment: each runs from when it
@@ -57,6 +58,7 @@ pub fn styles_at(dom: &Dom, extra_css: &[&str], width: i32, height: i32, now_ms:
     cascade.now_ms = now_ms;
     cascade.start_default = timeline.begun.take().unwrap_or(now_ms);
     cascade.starts = core::cell::RefCell::new(core::mem::take(&mut timeline.starts));
+    cascade.transitions_before = core::cell::RefCell::new(core::mem::take(&mut timeline.transitions));
     let mut out: Vec<Option<Style>> = alloc::vec![None; dom.nodes.len()];
     let root = Style::initial();
     let mut root_font = 16;
@@ -78,6 +80,7 @@ pub fn styles_at(dom: &Dom, extra_css: &[&str], width: i32, height: i32, now_ms:
         }
     }
     timeline.starts = cascade.seen.take();
+    timeline.transitions = cascade.transitions_after.take();
     (out, cascade.animating.get())
 }
 

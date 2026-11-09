@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """CSS animations run on their own: a page with a `@keyframes` animation and no script
 is drawn again and again while it runs (passing through in-between colours and
-positions), ends on its last frame (fill-mode forwards),
-and then stops drawing."""
+positions), ends on its last frame (fill-mode forwards), and then stops drawing.
+Hovering a box with a `transition` fades its background through in-between colours."""
 import argparse,http.server,os,re,shutil,threading,time
 from PIL import Image
 from pathlib import Path
@@ -62,8 +62,20 @@ def main():
   moved,left=img.getpixel((ox+260,oy+40)),img.getpixel((ox+60,oy+40))
   assert moved[2]>200 and moved[0]<60,('the box ends blue at 200 px',moved)
   assert min(left)>200,('nothing left behind',left)
+  # Hover the second box: green fades to magenta over 2 s.
+  rw,rh=map(int,a.resolution.split('x'))
+  q.cmd('input-send-event',{'events':[{'type':'abs','data':{'axis':'x','value':round((ox+60)*32767/(rw-1))}},{'type':'abs','data':{'axis':'y','value':round((oy+110)*32767/(rh-1))}}]})
+  faded=0;deadline=time.time()+4
+  while time.time()<deadline:
+   shot=a.out/'hover.ppm';q.cmd('screendump',{'filename':str(shot)});time.sleep(.3)
+   faded+=all(40<c<215 for c in Image.open(shot).convert('RGB').getpixel((ox+20,oy+110)))
+  time.sleep(1)
+  shot=a.out/'hovered.ppm';q.cmd('screendump',{'filename':str(shot)});time.sleep(.5)
+  end=Image.open(shot).convert('RGB').getpixel((ox+20,oy+110))
+  assert faded>=1,'the hover never showed an in-between colour'
+  assert end[0]>200 and end[1]<60 and end[2]>200,('the hover ends magenta',end)
   s3=len(t());q.key('f11');g['wait'](rf'\[web.closed\] target={target} task={task}',s3,60)
   text=t();assert 'KERNEL PANIC' not in text and '[web.fatal]' not in text and 'panicked' not in text
-  print({'ok':True,'frames':ran,'between':mixed})
+  print({'ok':True,'frames':ran,'between':mixed,'hover_between':faded})
  finally:g['stop']()
 if __name__=='__main__':main()
