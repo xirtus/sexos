@@ -134,8 +134,7 @@ impl App {
             let label = match kind { Input::Rename(_) => "Rename to", Input::NewFolder => "New folder", Input::SaveAs => "Save as" };
             t.push_str(&format!("{}: {}|   (Enter confirms, Esc cancels)\n", label, shown(text)));
         } else if !self.status.is_empty() { t.push_str(&self.status); t.push('\n'); }
-        t.push_str("Enter open  Backspace up  F2 rename  Ctrl+N folder  Ctrl+C/X/V copy, cut, paste\n");
-        t.push_str("Del to trash  Ctrl+T trash  Ctrl+R restore  Ctrl+Z undo  Ctrl+D disks  Ctrl+H home\n");
+        t.push_str("Enter open  Backspace up  F2 rename\nCtrl+C/X/V copy, cut, paste  Ctrl+N folder\nDel trash  Ctrl+T show trash  Ctrl+R restore\nCtrl+Z undo  Ctrl+D disks  Ctrl+H home\n");
         window.show(t.as_bytes());
     }
 

@@ -1090,7 +1090,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             serial_println!("[spindle.bell.audit] slot=12 safe=1 reason=fire_and_forget_async_enqueue");
             true
         }
-        b"files" => {
+        b"files-status" => {
             sb.push(b"SexFiles storage bridge: active.");
             sb.push(b"SexFiles server is PD 11, RamFS backend active.");
             sb.push(b"Capability: SLOT_STORAGE granted (8ce251e).");
@@ -3115,7 +3115,7 @@ fn run_files_commands_proof(sb: &mut Scrollback, hist: &mut History, ev: &mut Ev
 
     // ── Stage 4: files command — status report ──
     let lines_before = sb.total_lines;
-    let files_ok = dispatch(b"files", sb, hist, ev);
+    let files_ok = dispatch(b"files-status", sb, hist, ev);
     let lines_after = sb.total_lines;
     let output_lines = lines_after.saturating_sub(lines_before);
     let output_bytes = (output_lines as u32).saturating_mul(84);
