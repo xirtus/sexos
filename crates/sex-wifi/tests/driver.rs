@@ -216,7 +216,7 @@ fn power_up_reaches_firmware_start_then_alive() {
     // Context info and image loader addresses, then the CPU kick.
     assert!(hw.writes.contains(&(csr::CTXT_INFO_ADDR, (base + layout.context.offset) as u32)));
     assert!(hw.writes.contains(&(csr::IML_SIZE_ADDR, 1234)));
-    assert!(hw.prph_writes.contains(&(csr::UREG_CPU_INIT_RUN, 1)));
+    assert!(hw.prph_writes.contains(&(csr::UREG_CPU_INIT_RUN + 0x30_0000, 1)), "AX210 UMAC registers are offset");
     assert!(hw.writes.contains(&(csr::LTR_LONG_VAL_AD, csr::boot_ltr())), "discrete card gets the boot LTR");
     assert_eq!(boot.hw_rev, 0x421);
     // The firmware reports in: interrupt, then the ALIVE packet on the RX ring.
@@ -256,6 +256,7 @@ fn power_up_stops_on_radio_switch_and_on_silence() {
     while { let t = hw.now; boot.advance(&mut hw, t, &layout, 0, 0) } { hw.now += 10_000; assert!(hw.now < 5_000_000); }
     assert_eq!(boot.step, csr::Step::Failed(csr::Failure::AliveTimeout));
     assert!(hw.writes.contains(&(csr::CTXT_INFO_BA, 0)), "22000 series uses the old context register");
+    assert!(hw.prph_writes.is_empty() || !hw.prph_writes.iter().any(|w| w.0 == csr::UREG_CPU_INIT_RUN + 0x30_0000));
     // A device that fell off the bus reads all ones.
     let mut hw = Chip::new();
     hw.regs.insert(csr::HW_IF_CONFIG, u32::MAX);
@@ -356,6 +357,12 @@ fn run_handshake(akm: eapol::Akm, pmk: [u8; 32], with_igtk: bool) -> eapol::Inst
     assert_eq!(keys.igtk, with_igtk.then_some(igtk));
     // A replayed message 3 is dropped.
     assert_eq!(sta.receive(&frame[..len], &mut reply).err(), Some(eapol::Error::Replay));
+    // The AP lost message 4 and retransmits message 3 with a new counter: we
+    // answer again but install nothing twice (KRACK).
+    let len = eapol::authenticator::message3(&mut frame, akm, &ptk, 3, &anonce, rsn, &gtk, with_igtk.then_some(&igtk));
+    let (r, again) = sta.receive(&frame[..len], &mut reply).unwrap();
+    eapol::authenticator::check_message4(&reply[..r], akm, &ptk).unwrap();
+    assert!(again.pairwise.is_none() && again.group.is_none() && again.igtk.is_none());
     keys
 }
 

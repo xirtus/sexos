@@ -128,14 +128,36 @@ pub struct Supplicant<'a> {
     ap_rsn: &'a [u8],
     ptk: Option<Ptk>,
     replay: Option<u64>,
+    /// Keys already handed to the driver. A retransmitted message 3 or group
+    /// message (lost reply) is answered again but never reinstalls a key: that
+    /// would reset packet numbers and replay counters (the KRACK attacks).
+    installed_tk: Option<[u8; 16]>,
+    installed_gtk: Option<[u8; 16]>,
+    installed_igtk: Option<[u8; 16]>,
     pub state: State,
 }
 
 impl<'a> Supplicant<'a> {
     pub fn new(akm: Akm, pmk: [u8; 32], aa: [u8; 6], spa: [u8; 6], snonce: [u8; 32], own_rsn: &'a [u8], ap_rsn: &'a [u8]) -> Self {
-        Self { akm, pmk, aa, spa, snonce, own_rsn, ap_rsn, ptk: None, replay: None, state: State::WaitMessage1 }
+        Self { akm, pmk, aa, spa, snonce, own_rsn, ap_rsn, ptk: None, replay: None, installed_tk: None, installed_gtk: None, installed_igtk: None, state: State::WaitMessage1 }
     }
     pub fn ptk(&self) -> Option<&Ptk> { self.ptk.as_ref() }
+
+    fn fresh_tk(&mut self, tk: [u8; 16]) -> Option<[u8; 16]> {
+        if self.installed_tk.is_some_and(|k| ct_eq(&k, &tk)) { return None; }
+        self.installed_tk = Some(tk);
+        Some(tk)
+    }
+    fn fresh_gtk(&mut self, g: GroupKey) -> Option<GroupKey> {
+        if self.installed_gtk.is_some_and(|k| ct_eq(&k, &g.key)) { return None; }
+        self.installed_gtk = Some(g.key);
+        Some(g)
+    }
+    fn fresh_igtk(&mut self, i: IntegrityGroupKey) -> Option<IntegrityGroupKey> {
+        if self.installed_igtk.is_some_and(|k| ct_eq(&k, &i.key)) { return None; }
+        self.installed_igtk = Some(i.key);
+        Some(i)
+    }
 
     fn check_replay(&mut self, replay: u64) -> Result<(), Error> {
         if let Some(last) = self.replay { if replay <= last { return Err(Error::Replay); } }
@@ -192,17 +214,18 @@ impl<'a> Supplicant<'a> {
             if key.info & KEY_INFO_INSTALL == 0 { return Err(Error::Unexpected); }
             let rsn = find_element(kdes, 48).ok_or(Error::RsnMismatch)?;
             if rsn != self.ap_rsn { return Err(Error::RsnMismatch); }
-            install.pairwise = Some(ptk.tk);
-            install.group = Some(find_gtk(kdes, key.rsc).ok_or(Error::NoGtk)?);
-            install.igtk = find_igtk(kdes);
+            let gtk = find_gtk(kdes, key.rsc).ok_or(Error::NoGtk)?;
+            install.pairwise = self.fresh_tk(ptk.tk);
+            install.group = self.fresh_gtk(gtk);
+            install.igtk = find_igtk(kdes).and_then(|i| self.fresh_igtk(i));
             let len = build(reply, self.akm, KEY_INFO_PAIRWISE | KEY_INFO_MIC | KEY_INFO_SECURE, key.replay, &[0; 32], &[], Some(&ptk.kck));
             self.state = State::Done;
             return Ok((len, install));
         }
         // Group key message 1 (rekey).
         if self.state != State::Done { return Err(Error::Unexpected); }
-        install.group = Some(find_gtk(kdes, key.rsc).ok_or(Error::NoGtk)?);
-        install.igtk = find_igtk(kdes);
+        install.group = self.fresh_gtk(find_gtk(kdes, key.rsc).ok_or(Error::NoGtk)?);
+        install.igtk = find_igtk(kdes).and_then(|i| self.fresh_igtk(i));
         let len = build(reply, self.akm, KEY_INFO_MIC | KEY_INFO_SECURE, key.replay, &[0; 32], &[], Some(&ptk.kck));
         Ok((len, install))
     }

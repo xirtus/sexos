@@ -90,6 +90,9 @@ pub fn write_prph(r: &mut impl Registers, family: Family, addr: u32, value: u32)
     r.write(PRPH_WDAT, value);
 }
 
+/// Address of a UMAC peripheral register for this family.
+pub fn umac_prph(family: Family, addr: u32) -> u32 { if family == Family::Ax210 { addr + 0x30_0000 } else { addr } }
+
 /// The LTR value written before boot (~250 us), from `iwx_set_ltr`.
 pub fn boot_ltr() -> u32 {
     const NO_SNOOP_REQ: u32 = 0x8000_0000;
@@ -234,7 +237,8 @@ impl Boot {
                 let v = r.read(GP_CNTRL);
                 if v & (GP_MAC_CLOCK_READY | GP_GOING_TO_SLEEP) == GP_MAC_CLOCK_READY {
                     self.set_ltr(r);
-                    write_prph(r, family, UREG_CPU_INIT_RUN, 1);
+                    // UMAC registers sit 0x300000 higher on AX210-class chips (iwx_write_umac_prph).
+                    write_prph(r, family, umac_prph(family, UREG_CPU_INIT_RUN), 1);
                     r.clear(GP_CNTRL, GP_MAC_ACCESS_REQ);
                     // Unmask ALIVE (and errors) so the firmware can report in.
                     r.write(INT_MASK, INT_ALIVE | INT_SW_ERR | INT_HW_ERR | INT_FH_RX | INT_RF_KILL);
