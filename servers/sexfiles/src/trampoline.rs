@@ -287,8 +287,13 @@ pub extern "C" fn trampoline_main() {
 
         // The kernel is about to shut down or restart: put every write on the disk first.
         if msg.type_id==sex_pdx::power::OP_PREPARE&&caller==0{
-            let flushed=crate::fs_service::flush_for_power();
-            sex_pdx::serial_record!("[files.power.flush] op={} flushed={}",msg.arg0,flushed as u8);
+            // Finish document saves already under way before the disk flush; the kernel
+            // goes ahead after power::FLUSH_TICKS anyway, so stop a little before that.
+            let until=sex_pdx::get_ticks().saturating_add(sex_pdx::power::FLUSH_TICKS*4/5);
+            while documents.committing()&&sex_pdx::get_ticks()<until{documents.progress(&mut vfs::DocumentBackend);}
+            let saves_done=!documents.committing();
+            let flushed=crate::fs_service::flush_for_power()&&saves_done;
+            sex_pdx::serial_record!("[files.power.flush] op={} flushed={} document_saves_done={}",msg.arg0,flushed as u8,saves_done as u8);
             sex_pdx::power::ready(flushed);
             continue;
         }

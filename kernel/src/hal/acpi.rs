@@ -69,9 +69,24 @@ fn pci_write(address: PciAddress, offset: u16, bytes: u8, value: u32) {
     }
 }
 /// About a microsecond: a write to the POST port is an ISA bus cycle.
-fn stall_us(us: u64) { for _ in 0..us { unsafe { Port::<u8>::new(0x80).write(0) } } }
+pub(crate) fn stall_us(us: u64) { for _ in 0..us { unsafe { Port::<u8>::new(0x80).write(0) } } }
 
 static MUTEXES: AtomicU64 = AtomicU64::new(1);
+
+/// Work AML may still do in a bounded call (`with_aml`): one unit per register access,
+/// one per microsecond stalled. The interpreter has no loop limit, so a firmware loop
+/// waiting on hardware that never answers would hang the caller; running out panics
+/// instead, the quarantine returns to the caller and AML is set aside. u64::MAX: no call running.
+static AML_BUDGET: AtomicU64 = AtomicU64::new(u64::MAX);
+/// The bound for any AML call that does not set its own, boot `_INI` included: about ten
+/// seconds of register access and stalls.
+const DEFAULT_BUDGET: u64 = 10_000_000;
+fn spend(units: u64) {
+    let left = AML_BUDGET.load(Ordering::Relaxed);
+    if left == u64::MAX { return; }
+    if left < units { AML_BUDGET.store(u64::MAX, Ordering::Relaxed); panic!("AML time budget spent"); }
+    AML_BUDGET.store(left - units, Ordering::Relaxed);
+}
 
 impl acpi::Handler for Hw {
     unsafe fn map_physical_region<T>(&self, physical_address: usize, size: usize) -> PhysicalMapping<Self, T> {
@@ -84,29 +99,29 @@ impl acpi::Handler for Hw {
         }
     }
     fn unmap_physical_region<T>(_region: &PhysicalMapping<Self, T>) {}
-    fn read_u8(&self, a: usize) -> u8 { unsafe { phys::<u8>(a).read_volatile() } }
-    fn read_u16(&self, a: usize) -> u16 { unsafe { phys::<u16>(a).read_volatile() } }
-    fn read_u32(&self, a: usize) -> u32 { unsafe { phys::<u32>(a).read_volatile() } }
-    fn read_u64(&self, a: usize) -> u64 { unsafe { phys::<u64>(a).read_volatile() } }
-    fn write_u8(&self, a: usize, v: u8) { unsafe { phys::<u8>(a).write_volatile(v) } }
-    fn write_u16(&self, a: usize, v: u16) { unsafe { phys::<u16>(a).write_volatile(v) } }
-    fn write_u32(&self, a: usize, v: u32) { unsafe { phys::<u32>(a).write_volatile(v) } }
-    fn write_u64(&self, a: usize, v: u64) { unsafe { phys::<u64>(a).write_volatile(v) } }
-    fn read_io_u8(&self, p: u16) -> u8 { unsafe { Port::new(p).read() } }
-    fn read_io_u16(&self, p: u16) -> u16 { unsafe { Port::new(p).read() } }
-    fn read_io_u32(&self, p: u16) -> u32 { unsafe { Port::new(p).read() } }
-    fn write_io_u8(&self, p: u16, v: u8) { unsafe { Port::new(p).write(v) } }
-    fn write_io_u16(&self, p: u16, v: u16) { unsafe { Port::new(p).write(v) } }
-    fn write_io_u32(&self, p: u16, v: u32) { unsafe { Port::new(p).write(v) } }
-    fn read_pci_u8(&self, a: PciAddress, o: u16) -> u8 { pci_read(a, o, 1) as u8 }
-    fn read_pci_u16(&self, a: PciAddress, o: u16) -> u16 { pci_read(a, o, 2) as u16 }
-    fn read_pci_u32(&self, a: PciAddress, o: u16) -> u32 { pci_read(a, o, 4) }
-    fn write_pci_u8(&self, a: PciAddress, o: u16, v: u8) { pci_write(a, o, 1, v as u32) }
-    fn write_pci_u16(&self, a: PciAddress, o: u16, v: u16) { pci_write(a, o, 2, v as u32) }
-    fn write_pci_u32(&self, a: PciAddress, o: u16, v: u32) { pci_write(a, o, 4, v) }
+    fn read_u8(&self, a: usize) -> u8 { spend(1); unsafe { phys::<u8>(a).read_volatile() } }
+    fn read_u16(&self, a: usize) -> u16 { spend(1); unsafe { phys::<u16>(a).read_volatile() } }
+    fn read_u32(&self, a: usize) -> u32 { spend(1); unsafe { phys::<u32>(a).read_volatile() } }
+    fn read_u64(&self, a: usize) -> u64 { spend(1); unsafe { phys::<u64>(a).read_volatile() } }
+    fn write_u8(&self, a: usize, v: u8) { spend(1); unsafe { phys::<u8>(a).write_volatile(v) } }
+    fn write_u16(&self, a: usize, v: u16) { spend(1); unsafe { phys::<u16>(a).write_volatile(v) } }
+    fn write_u32(&self, a: usize, v: u32) { spend(1); unsafe { phys::<u32>(a).write_volatile(v) } }
+    fn write_u64(&self, a: usize, v: u64) { spend(1); unsafe { phys::<u64>(a).write_volatile(v) } }
+    fn read_io_u8(&self, p: u16) -> u8 { spend(1); unsafe { Port::new(p).read() } }
+    fn read_io_u16(&self, p: u16) -> u16 { spend(1); unsafe { Port::new(p).read() } }
+    fn read_io_u32(&self, p: u16) -> u32 { spend(1); unsafe { Port::new(p).read() } }
+    fn write_io_u8(&self, p: u16, v: u8) { spend(1); unsafe { Port::new(p).write(v) } }
+    fn write_io_u16(&self, p: u16, v: u16) { spend(1); unsafe { Port::new(p).write(v) } }
+    fn write_io_u32(&self, p: u16, v: u32) { spend(1); unsafe { Port::new(p).write(v) } }
+    fn read_pci_u8(&self, a: PciAddress, o: u16) -> u8 { spend(1); pci_read(a, o, 1) as u8 }
+    fn read_pci_u16(&self, a: PciAddress, o: u16) -> u16 { spend(1); pci_read(a, o, 2) as u16 }
+    fn read_pci_u32(&self, a: PciAddress, o: u16) -> u32 { spend(1); pci_read(a, o, 4) }
+    fn write_pci_u8(&self, a: PciAddress, o: u16, v: u8) { spend(1); pci_write(a, o, 1, v as u32) }
+    fn write_pci_u16(&self, a: PciAddress, o: u16, v: u16) { spend(1); pci_write(a, o, 2, v as u32) }
+    fn write_pci_u32(&self, a: PciAddress, o: u16, v: u32) { spend(1); pci_write(a, o, 4, v) }
     fn nanos_since_boot(&self) -> u64 { crate::interrupts::TICKS.load(Ordering::Relaxed).saturating_mul(1_000_000) }
-    fn stall(&self, us: u64) { stall_us(us.min(100_000)) }
-    fn sleep(&self, ms: u64) { stall_us(ms.min(2_000) * 1000) }
+    fn stall(&self, us: u64) { let us = us.min(100_000); spend(us); stall_us(us) }
+    fn sleep(&self, ms: u64) { let us = ms.min(2_000) * 1000; spend(us); stall_us(us) }
     // AML only ever runs under `AML`'s lock, on one core at a time.
     fn create_mutex(&self) -> Handle { Handle(MUTEXES.fetch_add(1, Ordering::Relaxed) as u32) }
     fn acquire(&self, _: Handle, _: u16) -> Result<(), acpi::aml::AmlError> { Ok(()) }
@@ -263,9 +278,13 @@ fn this_core() -> u32 {
 
 /// Runs `f` on the AML stack. None if it panicked; AML is then set aside for good.
 /// The caller holds `AML`'s lock, so only one core is ever here.
+/// Every AML call is bounded: `DEFAULT_BUDGET` unless the caller set a smaller one (`with_aml`).
 fn quarantined<R, F: FnOnce() -> R>(f: F) -> Option<R> {
     if AML_QUARANTINED.load(Ordering::Acquire) { return None; }
+    let own = AML_BUDGET.load(Ordering::Relaxed) == u64::MAX;
+    if own { AML_BUDGET.store(DEFAULT_BUDGET, Ordering::Relaxed); }
     let (escaped, r) = on_aml_stack(f);
+    if own { AML_BUDGET.store(u64::MAX, Ordering::Relaxed); }
     if escaped {
         AML_QUARANTINED.store(true, Ordering::Release);
         INFO.lock().flags |= w::AML_QUARANTINED;
@@ -274,6 +293,17 @@ fn quarantined<R, F: FnOnce() -> R>(f: F) -> Option<R> {
     }
     r
 }
+/// Runs `f` with the interpreter, quarantined and with at most `budget` units of work
+/// (see `AML_BUDGET`). None if AML is absent, set aside, or `f` panicked or overran.
+pub(crate) fn with_aml<R>(budget: u64, f: impl FnOnce(&Interpreter<Hw>) -> R) -> Option<R> {
+    let slot = AML.lock();
+    let interp = slot.as_ref()?;
+    AML_BUDGET.store(budget, Ordering::Relaxed);
+    let r = quarantined(|| f(interp));
+    AML_BUDGET.store(u64::MAX, Ordering::Relaxed);
+    r
+}
+
 /// Proves at boot that a panic on the AML stack returns here, before any firmware AML runs.
 static SELF_TEST: AtomicBool = AtomicBool::new(false);
 fn quarantine_self_test() -> bool {
@@ -313,13 +343,13 @@ pub fn panic_escape(info: &core::panic::PanicInfo) {
     }
 }
 
-fn name(path: &str) -> Option<AmlName> { AmlName::from_str(path).ok() }
-fn int_of(o: &WrappedObject) -> Option<u64> { if let Object::Integer(v) = **o { Some(v) } else { None } }
-fn eval(aml: &Interpreter<Hw>, path: &AmlName, method: &str, args: Vec<WrappedObject>) -> Option<WrappedObject> {
+pub(crate) fn name(path: &str) -> Option<AmlName> { AmlName::from_str(path).ok() }
+pub(crate) fn int_of(o: &WrappedObject) -> Option<u64> { if let Object::Integer(v) = **o { Some(v) } else { None } }
+pub(crate) fn eval(aml: &Interpreter<Hw>, path: &AmlName, method: &str, args: Vec<WrappedObject>) -> Option<WrappedObject> {
     let full = name(method)?.resolve(path).ok()?;
     aml.evaluate_if_present(full, args).ok().flatten()
 }
-fn eval_int(aml: &Interpreter<Hw>, path: &AmlName, method: &str) -> Option<u64> { eval(aml, path, method, Vec::new()).and_then(|o| int_of(&o)) }
+pub(crate) fn eval_int(aml: &Interpreter<Hw>, path: &AmlName, method: &str) -> Option<u64> { eval(aml, path, method, Vec::new()).and_then(|o| int_of(&o)) }
 fn id_string(o: &WrappedObject) -> Option<String> {
     match &**o {
         Object::Integer(v) => Some(String::from_utf8_lossy(&w::eisa_id(*v as u32)).into_owned()),
@@ -327,7 +357,7 @@ fn id_string(o: &WrappedObject) -> Option<String> {
         _ => None,
     }
 }
-fn ids_of(aml: &Interpreter<Hw>, path: &AmlName) -> Vec<String> {
+pub(crate) fn ids_of(aml: &Interpreter<Hw>, path: &AmlName) -> Vec<String> {
     let mut ids = Vec::new();
     if let Some(h) = eval(aml, path, "_HID", Vec::new()).and_then(|o| id_string(&o)) { ids.push(h); }
     if let Some(c) = eval(aml, path, "_CID", Vec::new()) {

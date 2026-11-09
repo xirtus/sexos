@@ -63,7 +63,7 @@ def main():
   s=len(g['text']());t0=time.monotonic();g['q'].cmd('system_powerdown')
   g['wait'](r'\[acpi\.power_button\] pressed=1',s,30)
   g['wait'](r'\[acpi\.power\.begin\] kind=off by=power_button files=\d+ told=1',s,30)
-  g['wait'](r'\[files\.power\.flush\] op=2 flushed=\d',s,30)
+  g['wait'](r'\[files\.power\.flush\] op=2 flushed=\d document_saves_done=1',s,30)
   g['wait'](r'\[acpi\.power\.flush\] files=(flushed|failed) late=0',s,30,exited_ok=True)
   g['wait'](r'\[acpi\.power\.off\] s5=0x[0-9a-f]+ entering=1',s,30,exited_ok=True)
   code=g['ended']();result['button']=dict(exit=code,seconds=round(time.monotonic()-t0,2))
@@ -78,7 +78,7 @@ def main():
   boots=len(re.findall(r'\[acpi\.power\] s5=1 ',g['text']()))
   s=len(g['text']());palette_select(key,'Restart',commands);g['q'].key('ret')
   g['wait'](r'\[shell\.power\.request\] op=restart ok=1',s,30)
-  g['wait'](r'\[files\.power\.flush\] op=3 flushed=\d',s,30)
+  g['wait'](r'\[files\.power\.flush\] op=3 flushed=\d document_saves_done=1',s,30)
   g['wait'](r'\[acpi\.power\.restart\] method=fadt_reset_register',s,30)
   # The same QEMU process boots again.
   again=g['wait'](r'\[acpi\.power\] s5=1 ',s+1,180).start()+s+1
