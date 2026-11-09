@@ -71,7 +71,7 @@ def main():
   assert frames==50,f'{frames} pictures'
   assert 90000<=heard<=100000 and played>=heard-2048,ended[0]
   console(r'video ended at (\S+)',s,60)
-  console(r'audio ended',s,300)
+  ends=console(r'audio ended (\d+)',s,300);assert ends[1]=='1',f'onended ran {ends[1]} times'
   assert 'play.sound.stalled' not in t()[s:] and 'web.media.failed' not in t()[s:]
   time.sleep(1)
   found=segments(wav,split=True)

@@ -86,6 +86,8 @@ struct Browser {
     canvases: sex_web::canvas::Canvases,
     /// The page's video and audio elements, each with its player once loaded.
     media: Vec<media::Media>,
+    /// The page asked its media for something since the last tick.
+    media_asked: bool,
     url: String,
     history: Vec<String>,
     scroll: i32,
@@ -376,8 +378,11 @@ impl Browser {
         }
         // A script may have asked for media just now (an `ended` handler starting the
         // next sound, say): load it on the next pass.
+        // A request carried out during this tick (from a media event handler, or the
+        // tick's own script) is played from the next pass.
+        let asked = core::mem::take(&mut self.media_asked);
         let waiting = self.media.iter().any(|m| m.state == media::State::Waiting);
-        if let Some(ms) = if waiting { Some(0) } else { media_next } {
+        if let Some(ms) = if waiting || asked { Some(0) } else { media_next } {
             let due = sex_pdx::get_ticks() + ms;
             self.timer = Some(self.timer.map_or(due, |t| t.min(due)));
         }
@@ -412,8 +417,11 @@ impl Browser {
                 Some(i) => i,
                 None => { self.media.push(media::Media::new(dom, node)); self.media.len() - 1 }
             };
+            if verb == "play" { self.hush_media(i); }
+            let dom = &self.doc.get().dom;
             self.media[i].request(dom, &verb, &arg);
         }
+        self.media_asked = true;
         self.timer = Some(sex_pdx::get_ticks());
     }
 
@@ -430,6 +438,7 @@ impl Browser {
             let (status, body) = self.load(&src);
             sex_pdx::serial_record!("[web.media.load] node={} status={} bytes={} ticks={} src={}", self.media[i].node, status, body.len(), sex_pdx::get_ticks() - begun, src);
             if (200..300).contains(&status) && !body.is_empty() {
+                if self.media[i].want_play { self.hush_media(i); }
                 relayout |= self.media[i].open(body);
             } else {
                 self.media[i].state = media::State::Failed;
@@ -467,11 +476,21 @@ impl Browser {
         next
     }
 
+    /// Element `i` is about to play: every other one gives up the sound ring first,
+    /// since a program has one.
+    fn hush_media(&mut self, i: usize) {
+        for (j, m) in self.media.iter_mut().enumerate() {
+            if j != i { m.hush(); }
+        }
+    }
+
     /// K plays or pauses the page's first video or audio, J and L go back and forward
     /// 5 s. True if there was one.
     fn media_key(&mut self, code: u8) -> bool {
-        let Some(m) = self.media.iter_mut().find(|m| m.state == media::State::Ready) else { return false };
+        let Some(i) = self.media.iter().position(|m| m.state == media::State::Ready) else { return false };
+        if code == 0x25 && self.media[i].stopped() { self.hush_media(i); }
         let dom = &self.doc.get().dom;
+        let m = &mut self.media[i];
         match code {
             0x25 => m.toggle(dom),
             0x24 => m.seek_by(dom, -5000),
@@ -670,7 +689,7 @@ pub extern "C" fn _start() -> ! {
     let Some(fonts) = Fonts::new() else { window.show(b"Web: the fonts could not be loaded."); loop { if let Event::Close = window.next() { window.close() } } };
     let page = sex_html::render("", W, H, &fonts as &dyn Host);
     let doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", (W, H - BAR), clock));
-    let mut b = Browser { window, fonts, page, doc, sheets: Vec::new(), timer: None, canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true };
+    let mut b = Browser { window, fonts, page, doc, sheets: Vec::new(), timer: None, canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), media_asked: false, url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true };
     let first = given.split_ascii_whitespace().next().unwrap_or(first_page()).to_string();
     b.open(&first, false);
     sex_pdx::serial_record!("[web.ready] target={} task={}", b.window.target, b.window.task);

@@ -2,6 +2,8 @@
 <html><head><title>media test</title></head>
 <body style="margin:0;background:#fff">
 <video id="v" src="clip-av.mp4" controls autoplay></video>
+<!-- Loads but waits: it must not take the video's sound. -->
+<audio id="later" src="tone.mp3"></audio>
 <script>
 const v = document.getElementById('v');
 const log = m => console.log(m);
@@ -18,7 +20,8 @@ v.addEventListener('timeupdate', () => {
 v.addEventListener('ended', () => {
   log('video ended at ' + v.currentTime.toFixed(1));
   const a = new Audio('tone.mp3');
-  a.addEventListener('ended', () => log('audio ended'));
+  let ends = 0;
+  a.onended = () => { ends++; setTimeout(() => log('audio ended ' + ends), 300); };
   a.play();
 });
 </script>

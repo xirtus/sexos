@@ -200,6 +200,24 @@ impl Media {
     }
 
     /// Space/K: play or pause.
+    /// Whether a toggle would start it playing.
+    pub fn stopped(&self) -> bool {
+        self.player.as_ref().map_or(true, |p| p.paused() || p.ended())
+    }
+
+    /// Another element is about to play: give up the program's one sound ring, and
+    /// pause if playing (only one element plays sound at a time).
+    pub fn hush(&mut self) {
+        let Some(p) = self.player.as_mut() else { return };
+        if !p.has_sound() { return; }
+        p.release_sound();
+        if !p.paused() && !p.ended() {
+            p.pause();
+            self.events.push("pause");
+        }
+        self.want_play = false;
+    }
+
     pub fn toggle(&mut self, dom: &Dom) {
         let playing = self.player.as_ref().is_some_and(|p| !p.paused() && !p.ended());
         self.request(dom, if playing { "pause" } else { "play" }, "");

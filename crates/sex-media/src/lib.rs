@@ -475,6 +475,9 @@ pub struct Player {
     priming: bool,
     /// The ring's WRITTEN count when priming began: sound before it was skipped.
     prime_from: u64,
+    /// Whether this player plays sound: it takes the ring when it first plays, and
+    /// can give it up (`release_sound`) for another player in the same program.
+    wants_sound: bool,
 }
 
 /// Sound queued before it starts: half a second.
@@ -491,14 +494,12 @@ impl Player {
         let mut p = Player {
             dec, w, h, sound: None, clock: Clock::new(), queue: VecDeque::new(), free: Vec::new(), cap,
             current: Vec::new(), pcm: Vec::new(), left: (0, 0), pad: 0, decoded: 0, eof: false, ended: false,
-            skip_until: i64::MIN, error: None, silence: None, shown: 0, heard: 0, late_ms: 0, volume: 100, muted: false, priming: false, prime_from: 0,
+            skip_until: i64::MIN, error: None, silence: None, shown: 0, heard: 0, late_ms: 0, volume: 100, muted: false, priming: false, prime_from: 0, wants_sound,
         };
-        if wants_sound {
-            p.sound = Sound::open();
-            p.prime();
-        }
         if paused {
-            p.pause();
+            p.clock.paused = true;
+        } else {
+            p.claim_sound();
         }
         p
     }
@@ -508,7 +509,8 @@ impl Player {
     pub fn size(&self) -> (usize, usize) { (self.w, self.h) }
     /// The picture shown now, `w * h` pixels, empty before the first.
     pub fn picture(&self) -> &[u32] { &self.current }
-    /// Whether sound reaches the card: false with no ring, or after it stalled.
+    /// Whether this player holds the program's sound ring: false before it first
+    /// plays, after `release_sound`, with no ring, or after the sound stalled.
     pub fn has_sound(&self) -> bool { self.sound.is_some() }
     pub fn silence(&self) -> Option<Silence> { self.silence }
     /// FFmpeg's error, if decoding stopped on one.
@@ -534,9 +536,15 @@ impl Player {
     }
 
     pub fn play(&mut self) {
+        let claimed = self.claim_sound();
         if self.ended {
             // Playing an ended stream starts it again, as a browser does.
             self.seek(0);
+        } else if claimed && self.decoded > 0 {
+            // Sound decoded while the ring was elsewhere was dropped: decode again
+            // from here so sound and pictures line up.
+            let at = self.clock.last_ms.max(0) as u64;
+            self.seek(at);
         }
         if !self.clock.paused { return; }
         self.clock.paused = false;
@@ -545,6 +553,32 @@ impl Player {
         self.clock.moved = t;
         if self.priming { return; }
         if let Some(s) = self.sound.as_mut() { s.pause(false); }
+    }
+
+    /// Takes this program's sound ring if this player wants sound and has none.
+    /// True when it did. A program has one ring: before this, every other player
+    /// in the program must have called `release_sound`.
+    fn claim_sound(&mut self) -> bool {
+        if !self.wants_sound || self.sound.is_some() { return false; }
+        self.sound = Sound::open();
+        if self.sound.is_none() { self.wants_sound = false; return false; }
+        self.apply_volume();
+        self.clock.started = false;
+        self.prime();
+        true
+    }
+
+    /// Gives up the sound ring without touching it, so another player in this
+    /// program can take it. Sound decoded meanwhile is dropped; `play` takes the
+    /// ring back. Pause the player too, or it plays on silent, paced by ticks.
+    pub fn release_sound(&mut self) {
+        if let Some(s) = self.sound.take() {
+            // The ring is the next owner's now: closing or pausing it would be theirs.
+            core::mem::forget(s);
+        }
+        self.priming = false;
+        self.left = (0, 0);
+        self.pad = 0;
     }
 
     /// Hold the sound ring until PRIME_FRAMES are queued (see `step`).
