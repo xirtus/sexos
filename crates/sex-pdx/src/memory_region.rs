@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! Pure authorization for immutable, already-mapped boot region capabilities.
 //!
 //! The kernel must obtain `RegionGrant` from the caller's capability table.

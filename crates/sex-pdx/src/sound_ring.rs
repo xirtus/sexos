@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! A sound ring for each program row: a BOOT region the program fills with sound and
 //! Bell plays, mixed with every other program's and with Bell's own notes. Holding it
 //! grants only that row's sound; Bell takes a stream only from the row that owns it.

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! Capability-backed paging ABI. Addresses describe a fault; only the kernel's
 //! pending token and the invoked mapping/pool capabilities authorize a commit.
 

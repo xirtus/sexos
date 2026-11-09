@@ -1,5 +1,5 @@
 #![no_std]
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! Bounded immutable BOOT network configuration data, never a capability.
 //! Reading or copying these words grants no route, device, memory or endpoint
 //! authority. sex-pdx must attest the held BOOT grant independently. A validated

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! One bounded text handoff over an existing BOOT-held Shell route.
 //!
 //! This client owns scratch bytes, not clipboard authority. The caller sends

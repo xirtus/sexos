@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! Immutable BOOT policy data for a PUBLIC controlled TLS lab profile.
 //! These public bytes are not capabilities, endpoint grants or a trust store.
 //! Only an exact held-source/consumer attestation sanctions their use by an app.
