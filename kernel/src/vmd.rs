@@ -81,7 +81,7 @@ fn domain(vmd: &PciDevice, devices: &mut Vec<PciDevice>) -> usize {
 
     let mut ecam = Ecam { base: va, buses };
     let mut out = [sex_vmd::Device::default(); MAX_DEVICES];
-    let count = match sex_vmd::configure(&mut ecam, buses,
+    let count = match sex_vmd::configure(&mut ecam, start, buses,
         sex_vmd::Window { base: m1, length: m1_len }, sex_vmd::Window { base: m2, length: m2_len }, &mut out) {
         Ok(n) => n,
         Err(e) => { serial_println!("[kernel.vmd.err] {:?}", e); return 0; }

@@ -17,7 +17,8 @@ struct Func {
     header: u8,
 }
 
-struct Sim { funcs: Vec<Func> }
+/// `first`: the domain's first bus; bridges hold absolute bus numbers.
+struct Sim { funcs: Vec<Func>, first: u8 }
 
 impl Sim {
     fn func(id: u32, class: u32, header: u8, multi: bool, dev: u8, func: u8, parent: Option<usize>) -> Func {
@@ -29,16 +30,19 @@ impl Sim {
         Func { dev, func, parent, regs, bars: [(0, 0); 6], header }
     }
     fn secondary(&self, i: usize) -> u8 { (self.funcs[i].regs[6] >> 8) as u8 }
+    /// Absolute bus a function answers on, once the bridges route to it.
     fn reachable(&self, i: usize) -> Option<u8> {
         match self.funcs[i].parent {
-            None => Some(0),
-            Some(p) => { self.reachable(p)?; let s = self.secondary(p); if s == 0 { None } else { Some(s) } }
+            None => Some(self.first),
+            Some(p) => { self.reachable(p)?; let s = self.secondary(p); if s <= self.first { None } else { Some(s) } }
         }
     }
+    /// `bus` is relative, as config accesses through CFGBAR are.
     fn find(&self, bus: u8, dev: u8, func: u8) -> Option<usize> {
+        let abs = self.first.checked_add(bus)?;
         (0..self.funcs.len()).find(|&i| {
             let f = &self.funcs[i];
-            f.dev == dev && f.func == func && self.reachable(i) == Some(bus)
+            f.dev == dev && f.func == func && self.reachable(i) == Some(abs)
         })
     }
 }
@@ -89,7 +93,7 @@ fn laptop() -> Sim {
     let mut funcs = vec![port_a, port_b, other_fn, samsung, wd];
     // A BAR always reads back its type bits.
     for f in &mut funcs { for (slot, &(len, flags)) in f.bars.iter().enumerate() { if len != 0 { f.regs[4 + slot] = flags; } } }
-    Sim { funcs }
+    Sim { funcs, first: 0 }
 }
 
 fn inside(w: Window, address: u64, length: u64) -> bool { address >= w.base && address + length <= w.base + w.length }
@@ -105,7 +109,7 @@ fn finds_both_drives_and_places_their_registers_in_membar1() {
     let membar1 = Window { base: 0x8200_0000, length: 32 << 20 };
     let membar2 = Window { base: 0x40_0000_0000, length: 1 << 20 };
     let mut out = [Device::default(); 16];
-    let n = configure(&mut sim, 32, membar1, membar2, &mut out).unwrap();
+    let n = configure(&mut sim, 0, 32, membar1, membar2, &mut out).unwrap();
     let drives: Vec<&Device> = out[..n].iter().filter(|d| (d.class, d.subclass) == (1, 8)).collect();
     assert_eq!(drives.len(), 2, "{:#?}", &out[..n]);
     assert_eq!(out[..n].iter().filter(|d| d.bridge).count(), 2);
@@ -146,7 +150,7 @@ fn membar1_above_4g_puts_64bit_registers_in_membar2_past_the_msix_table() {
     let membar1 = Window { base: 0x60_0000_0000, length: 32 << 20 };
     let membar2 = Window { base: 0x60_1000_0000, length: 32 << 20 };
     let mut out = [Device::default(); 16];
-    let n = configure(&mut sim, 32, membar1, membar2, &mut out).unwrap();
+    let n = configure(&mut sim, 0, 32, membar1, membar2, &mut out).unwrap();
     for d in out[..n].iter().filter(|d| d.class == 1) {
         let bar = d.bar(0).unwrap();
         assert!(inside(membar2, bar.address, bar.length));
@@ -163,11 +167,11 @@ fn runs_out_cleanly() {
     let mut out = [Device::default(); 16];
     let tiny = Window { base: 0x8200_0000, length: 8 * 1024 };
     let none = Window { base: 0x40_0000_0000, length: 0x2000 };
-    assert!(matches!(configure(&mut laptop(), 32, tiny, none, &mut out), Err(Error::OutOfMemory { length: 16384, .. })));
+    assert!(matches!(configure(&mut laptop(), 0, 32, tiny, none, &mut out), Err(Error::OutOfMemory { length: 16384, .. })));
     let big = Window { base: 0x8200_0000, length: 32 << 20 };
-    assert_eq!(configure(&mut laptop(), 2, big, none, &mut out), Err(Error::OutOfBuses));
+    assert_eq!(configure(&mut laptop(), 0, 2, big, none, &mut out), Err(Error::OutOfBuses));
     let mut few = [Device::default(); 2];
-    assert_eq!(configure(&mut laptop(), 32, big, none, &mut few), Err(Error::TooManyDevices));
+    assert_eq!(configure(&mut laptop(), 0, 32, big, none, &mut few), Err(Error::TooManyDevices));
 }
 
 #[test]
@@ -180,4 +184,24 @@ fn knows_the_controllers_and_the_bus_start() {
     assert_eq!(bus_start(1, 0x000), 0);
     assert_eq!(bus_start(1, 0x100), 128);
     assert_eq!(bus_start(1, 0x200), 224);
+}
+
+#[test]
+fn bridges_hold_absolute_bus_numbers_when_the_domain_starts_at_224() {
+    // Tiger Lake laptops: VMCONFIG puts the domain at bus 224.
+    let mut sim = laptop();
+    sim.first = 224;
+    let membar1 = Window { base: 0x8200_0000, length: 32 << 20 };
+    let membar2 = Window { base: 0x40_0000_0000, length: 1 << 20 };
+    let mut out = [Device::default(); 16];
+    let n = configure(&mut sim, 224, 32, membar1, membar2, &mut out).unwrap();
+    assert_eq!(out[..n].iter().filter(|d| d.class == 1).count(), 2, "both drives reached through the bridges");
+    let r = sim.funcs[0].regs[6];
+    assert_eq!((r & 0xFF, (r >> 8) & 0xFF), (224, 225), "primary and secondary are absolute");
+    assert!(((r >> 16) & 0xFF) >= 225);
+    // Only 32 buses fit from 224; asking for more is clipped, never wraps past 255.
+    let mut sim = laptop();
+    sim.first = 224;
+    assert!(configure(&mut sim, 224, 64, membar1, membar2, &mut out).is_ok());
+    assert_eq!((sim.funcs[1].regs[6] >> 16) & 0xFF, (sim.funcs[1].regs[6] >> 8) & 0xFF);
 }

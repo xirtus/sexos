@@ -50,8 +50,9 @@ pub fn bus_start(vmcap: u32, vmconfig: u32) -> u8 {
 /// MEMBAR2 begins with VMD's own MSI-X table.
 pub const MEMBAR2_RESERVED: u64 = 0x2000;
 
-/// Config space of the VMD domain, addressed by bus number inside the domain
-/// (already offset by `bus_start`).
+/// Config space of the VMD domain, addressed by bus number relative to the
+/// domain's first bus (the CFGBAR offset). Bridge registers, on the other hand,
+/// hold absolute bus numbers (first bus + relative); `configure` writes those.
 pub trait ConfigSpace {
     fn read(&mut self, bus: u8, dev: u8, func: u8, offset: u16) -> u32;
     fn write(&mut self, bus: u8, dev: u8, func: u8, offset: u16, value: u32);
@@ -107,6 +108,8 @@ struct Walk<'a, C: ConfigSpace> {
     cfg: &'a mut C,
     buses: u16,
     next_bus: u16,
+    /// Absolute number of relative bus 0 (VMD's bus start: 0, 128 or 224).
+    first: u16,
     mem: Cursor,
     pref: Cursor,
     /// Non-prefetchable bridge windows are 32-bit; if MEMBAR1 lies above 4 GiB
@@ -117,13 +120,14 @@ struct Walk<'a, C: ConfigSpace> {
 }
 
 /// Set up everything behind the VMD controller and list what is there.
-/// `buses` is how many buses the CFGBAR covers (its length / 1 MiB, at most
-/// 256 minus the start bus). Returns how many entries of `out` were filled;
-/// bridges are listed too (with `bridge` set).
-pub fn configure<C: ConfigSpace>(cfg: &mut C, buses: u16, membar1: Window, membar2: Window, out: &mut [Device]) -> Result<usize, Error> {
+/// `first_bus` is the domain's first bus number (`bus_start`); `buses` is how
+/// many buses the CFGBAR covers (its length / 1 MiB). Returns how many entries
+/// of `out` were filled; bridges are listed too (with `bridge` set). Device
+/// bus numbers in `out` are relative, like `ConfigSpace`'s.
+pub fn configure<C: ConfigSpace>(cfg: &mut C, first_bus: u8, buses: u16, membar1: Window, membar2: Window, out: &mut [Device]) -> Result<usize, Error> {
     let pref_base = membar2.base + MEMBAR2_RESERVED.min(membar2.length);
     let mut walk = Walk {
-        cfg, buses: buses.min(256), next_bus: 1,
+        cfg, buses: buses.min(256 - first_bus as u16), next_bus: 1, first: first_bus as u16,
         mem: Cursor { next: membar1.base, end: membar1.base + membar1.length },
         pref: Cursor { next: pref_base, end: membar2.base + membar2.length },
         mem_32bit: membar1.base + membar1.length <= 1 << 32,
@@ -219,7 +223,8 @@ impl<C: ConfigSpace> Walk<'_, C> {
         self.next_bus += 1;
         // Primary, secondary, subordinate (open to the end while we walk).
         let reg = self.cfg.read(bus, dev, func, 0x18) & 0xFF00_0000;
-        self.cfg.write(bus, dev, func, 0x18, reg | bus as u32 | (secondary as u32) << 8 | ((self.buses - 1) as u32) << 16);
+        let abs = |b: u16| (self.first + b) as u32;
+        self.cfg.write(bus, dev, func, 0x18, reg | abs(bus as u16) | abs(secondary as u16) << 8 | abs(self.buses - 1) << 16);
         self.mem.align(BRIDGE_ALIGN);
         self.pref.align(BRIDGE_ALIGN);
         let (mem_start, pref_start) = (self.mem.next, self.pref.next);
@@ -227,7 +232,8 @@ impl<C: ConfigSpace> Walk<'_, C> {
         self.mem.align(BRIDGE_ALIGN);
         self.pref.align(BRIDGE_ALIGN);
         let subordinate = (self.next_bus - 1) as u8;
-        self.cfg.write(bus, dev, func, 0x18, reg | bus as u32 | (secondary as u32) << 8 | (subordinate as u32) << 16);
+        let abs = |b: u16| (self.first + b) as u32;
+        self.cfg.write(bus, dev, func, 0x18, reg | abs(bus as u16) | abs(secondary as u16) << 8 | abs(subordinate as u16) << 16);
         // I/O window closed (base above limit).
         let io = self.cfg.read(bus, dev, func, 0x1C) & 0xFFFF_0000;
         self.cfg.write(bus, dev, func, 0x1C, io | 0x00F0);
