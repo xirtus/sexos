@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! BOOT-held CPU seed-source ABI and pure authorization/provider mechanism.
 //! This module executes no CPU instruction and creates no capabilities. The
 //! kernel supplies feature detection and one carry-checked sample operation;

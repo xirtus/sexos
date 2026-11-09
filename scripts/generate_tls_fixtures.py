@@ -56,7 +56,7 @@ def main():
  materials['TRANSCRIPT']=transcript
  materials['CERTIFICATE_VERIFY_DER']=leaf.sign(message,ec.ECDSA(hashes.SHA256(),deterministic_signing=True))
  config=ROOT/'crates/sex-trust-config/src';config.mkdir(parents=True,exist_ok=True)
- (config/'lib.rs').write_text('''// SPDX-License-Identifier: GPL-3.0-only
+ (config/'lib.rs').write_text('''// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! Immutable BOOT policy data for a PUBLIC controlled TLS lab profile.
 //! These public bytes are not capabilities, endpoint grants or a trust store.
 //! Only an exact held-source/consumer attestation sanctions their use by an app.
