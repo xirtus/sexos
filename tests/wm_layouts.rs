@@ -108,7 +108,7 @@ fn tiling_order_swaps_without_touching_ids() {
     let mut frames = [10, 11, 12];
     o.sort(&mut frames);
     assert_eq!(frames, [11, 10, 12]);
-    o.remove(10);
+    o.retain(|id| id != 10);
     let mut frames = [12, 11, 13];
     o.sort(&mut frames);
     assert_eq!(frames, [11, 12, 13]);

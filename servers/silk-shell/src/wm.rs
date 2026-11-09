@@ -342,6 +342,12 @@ impl<const N: usize> Order<N> {
     pub fn remove(&mut self, id: u32) {
         if let Some(p) = self.position(id) { self.ids.copy_within(p + 1..self.len, p); self.len -= 1; }
     }
+    /// Keeps only the ids `live` accepts, in order.
+    pub fn retain(&mut self, mut live: impl FnMut(u32) -> bool) {
+        let mut n = 0;
+        for i in 0..self.len { if live(self.ids[i]) { self.ids[n] = self.ids[i]; n += 1; } }
+        self.len = n;
+    }
     pub fn swap(&mut self, a: u32, b: u32) -> bool {
         match (self.position(a), self.position(b)) {
             (Some(i), Some(j)) if i != j => { self.ids.swap(i, j); true }

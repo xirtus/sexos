@@ -365,7 +365,7 @@ unsafe fn shell_retire_app_surface(sid: u64) -> usize {
         if HOVERED_FRAME_ID == fid { HOVERED_FRAME_ID = 0; HOVER_KIND = HOVER_NONE; HOVERED_FRAME_LIGHT = FRAME_LIGHT_NONE; }
         if TAB_DRAG_PENDING_FRAME_ID == fid { TAB_DRAG_PENDING_FRAME_ID = 0; DRAG_PENDING_ACTIVE = false; }
         if matches!(INTERACTION, InteractionState::TabDragging { frame_id, .. } if frame_id == fid) { INTERACTION = InteractionState::Idle; }
-        if count == 0 { *slot = None; WM_ORDER.remove(fid); }
+        if count == 0 { *slot = None; }
     }
     if DRAG_PENDING_TARGET == sid { DRAG_PENDING_TARGET = 0; DRAG_PENDING_ACTIVE = false; DRAG_PENDING_KIND = 0; }
     if matches!(INTERACTION, InteractionState::Dragging {surface_id, ..} | InteractionState::Resizing {surface_id, ..} if surface_id == sid)
@@ -8656,6 +8656,8 @@ unsafe fn tile_active_scene_frames() {
 
     // Hyprland/river style: the workspace's layout, master ratio and gaps,
     // over the windows in their tiling order (Super+Shift+HJKL swaps it).
+    // Closed frames leave the order, so a reused frame id starts last.
+    WM_ORDER.retain(|id| FRAMES.iter().flatten().any(|f| f.frame_id == id));
     let mut order = tile_frames;
     WM_ORDER.sort(&mut order[..count]);
     let mut ordered = [0u64; MAX_FRAMES];
@@ -20305,7 +20307,6 @@ unsafe fn close_surface_from_frame_light(surface_id: u64) -> bool {
             if let Some(frame) = frame_slot {
                 if frame.frame_id == fid {
                     *frame_slot = None;
-                    WM_ORDER.remove(fid);
                     break;
                 }
             }
