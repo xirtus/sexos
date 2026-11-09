@@ -86,6 +86,28 @@ impl PciDevice {
         crate::pci_bar_bounds::decode_bar0(low, high, mask_low, mask_high)
     }
 
+    /// Like `probe_boot_bar`, but a BAR shorter than a page is accepted too.
+    pub fn probe_boot_bar_any(&self, index: u8) -> Option<(u64, u64)> {
+        if let Some(found) = self.probe_boot_bar(index) { return Some(found); }
+        if index > 5 { return None; }
+        let at = 0x10 + index * 4;
+        let low = self.read_u32(at);
+        if low & 1 != 0 || !matches!((low >> 1) & 3, 0 | 2) { return None; }
+        let wide = ((low >> 1) & 3) == 2;
+        if wide && index == 5 { return None; }
+        let high = if wide { self.read_u32(at + 4) } else { 0 };
+        let command = self.read_u32(0x04) & 0xffff;
+        self.write_u32(0x04, command & !7);
+        self.write_u32(at, u32::MAX);
+        if wide { self.write_u32(at + 4, u32::MAX); }
+        let mask_low = self.read_u32(at);
+        let mask_high = if wide { self.read_u32(at + 4) } else { 0 };
+        self.write_u32(at, low);
+        if wide { self.write_u32(at + 4, high); }
+        self.write_u32(0x04, command);
+        crate::pci_bar_bounds::decode_subpage(low, high, mask_low, mask_high)
+    }
+
     pub fn read_u32(&self, offset: u8) -> u32 {
         unsafe { pci_config_read(self.bus, self.dev, self.func, offset) }
     }
@@ -3627,4 +3649,35 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
     }
 
     devices
+}
+
+/// True when no memory BAR of any PCI function other than `(bus,dev,func,index)`
+/// starts inside the 4 KiB page at `page`. BARs are naturally aligned powers of
+/// two, so another window overlapping that page must start inside it. Reads BAR
+/// registers only; nothing is probed or written.
+pub fn page_exclusive(page: u64, bus: u8, dev: u8, func: u8, index: u8) -> bool {
+    for b in 0..256u16 {
+        for d in 0..32u8 {
+            for f in 0..8u8 {
+                let id = unsafe { pci_config_read(b as u8, d, f, 0) };
+                if id & 0xffff == 0xffff { if f == 0 { break; } continue; }
+                // Bridges (header type 1) have two BARs, ordinary functions six.
+                let header = (unsafe { pci_config_read(b as u8, d, f, 0x0c) } >> 16) as u8;
+                let bars = match header & 0x7f { 0 => 6u8, 1 => 2, _ => 0 };
+                let mut i = 0u8;
+                while i < bars {
+                    let low = unsafe { pci_config_read(b as u8, d, f, 0x10 + i * 4) };
+                    let wide = low & 1 == 0 && (low >> 1) & 3 == 2 && i + 1 < bars;
+                    let base = if low & 1 != 0 { 0 } else {
+                        (low & !15) as u64 | if wide { (unsafe { pci_config_read(b as u8, d, f, 0x14 + i * 4) } as u64) << 32 } else { 0 }
+                    };
+                    let own = (b as u8, d, f, i) == (bus, dev, func, index);
+                    if !own && base != 0 && base >= page && base < page + 4096 { return false; }
+                    i += if wide { 2 } else { 1 };
+                }
+                if f == 0 && header & 0x80 == 0 { break; }
+            }
+        }
+    }
+    true
 }

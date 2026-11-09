@@ -55,6 +55,9 @@ pub struct PciCapData { pub bus: u8, pub dev: u8, pub func: u8, pub vendor_id: u
     /// leased controller whose register prefix is set by its class (sound, SATA);
     /// 0 for leases sized another way.
     pub class: u32,
+    /// Offset and length of the device's registers inside `bar0_view`; (0, 0)
+    /// means the whole view. Non-zero only for a BAR smaller than a page.
+    pub window: (u32, u32),
 }
 
 pub struct DisplayHardwareLease {

@@ -28,6 +28,14 @@ Kernel: `kernel/src/nic_boot.rs` (models, BAR choice, register prefix),
 - Kernel `PciCapData` gains `class: u32`; the command syscall checks a class lease's
   register prefix and DMA pool by its class.
 - Bell's `[bell.sound.ready]` record now starts with `card=virtio|hda`.
+- `SYS_IDENTITY` with first argument `QUERY_WINDOW` (1) returns where the registers sit
+  inside the leased view (`sex_pdx::device_window`); kernel `PciCapData.window`. A BAR
+  smaller than a page (Intel's 2 KiB AHCI ABAR, old RTL8169's 256 bytes) is leased as
+  its whole page only when no other BAR on any PCI function starts in that page
+  (`hal::pci::page_exclusive`); otherwise it is refused (`[boot.memory.mmio.shared_page]`).
+- HD Audio on a graphics card (function 1+ beside a display controller, or Intel's
+  Haswell/Broadwell HDMI controller) is not leased, so the chipset's analog controller
+  gets Bell's one sound slot (`[kernel.cap.class.skip] kind=Hda reason=display_audio`).
 
 ## Sound: Intel HD Audio in Bell
 

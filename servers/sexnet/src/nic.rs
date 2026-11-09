@@ -40,7 +40,9 @@ pub trait Hardware {
 }
 
 /// Private view, obtained only by the current subject's capability invocation.
-pub struct Live { view: m::RegionView, model: c::Model, dma: Option<m::RegionView> }
+/// `base`/`length`: the register window inside the view. A BAR smaller than a page
+/// (old RTL8169 parts have 256 bytes) is leased as its page, at an offset in it.
+pub struct Live { view: m::RegionView, base: u64, length: u64, model: c::Model, dma: Option<m::RegionView> }
 impl Live {
     pub fn open() -> Result<Self, u64> {
         // The identity names the register layout, so it decides the prefix the
@@ -50,11 +52,15 @@ impl Live {
         if !valid_info(info, model) { return Err(c::DENIED); }
         let view = sex_pdx::memory_region_full_view(sex_pdx::SLOT_NIC, m::QUERY_VIEW | m::READ | m::WRITE)?;
         if !valid_view(info, view, model) { return Err(c::DENIED); }
-        Ok(Self { view, model, dma: None })
+        let (offset, length) = sex_pdx::device_window(sex_pdx::SLOT_NIC)?;
+        if offset.checked_add(length).is_none_or(|end| end > view.length) || length < model.registers_end().min(view.length) {
+            return Err(c::DENIED);
+        }
+        Ok(Self { view, base: view.virtual_address + offset, length, model, dma: None })
     }
     fn at(&self, offset: u32, bytes: u32) -> u64 {
-        assert!(offset % bytes == 0 && offset as u64 + bytes as u64 <= self.view.length);
-        self.view.virtual_address + offset as u64
+        assert!(offset % bytes == 0 && offset as u64 + bytes as u64 <= self.length);
+        self.base + offset as u64
     }
     fn address(&self, offset: u32) -> *mut u32 { self.at(offset, 4) as *mut u32 }
 }
@@ -89,7 +95,7 @@ impl Live {
     }
 }
 impl crate::ethernet::Hardware for Live {
-    fn mmio_length(&self)->u64{self.view.length}
+    fn mmio_length(&self)->u64{self.length}
     fn dma_region(&mut self)->Result<m::RegionView,u64>{
         // A single permanent pool per normal driver. No reset/reopen/reclaim.
         if self.dma.is_some(){return Err(c::DENIED);}

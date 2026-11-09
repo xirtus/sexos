@@ -18,6 +18,7 @@ static IDENTITY:Mutex<u16>=Mutex::new(0x8168);
 static BAR_INFO:Mutex<m::MemoryRegionInfo>=Mutex::new(m::MemoryRegionInfo{region_id:78867,length:256,rights:7,peer_pd:None});
 fn memory_region_info(slot:u64)->Result<m::MemoryRegionInfo,u64>{Ok(if slot==19{*BAR_INFO.lock().unwrap()}else{m::MemoryRegionInfo{region_id:2,length:c::DMA_BYTES,rights:15,peer_pd:None}})}
 fn memory_region_full_view(slot:u64,_:u8)->Result<m::RegionView,u64>{Ok(if slot==19{let i=*BAR_INFO.lock().unwrap();m::RegionView{region_id:i.region_id,length:i.length,virtual_address:0x200000,dma_address:None}}else{view()})}
+fn device_window(slot:u64)->Result<(u64,u64),u64>{memory_region_full_view(slot,0).map(|v|(0,v.length))}
 fn device_identity(_:u64)->Result<c::Identity,u64>{Ok(c::Identity{vendor:0x10ec,product:*IDENTITY.lock().unwrap()})}
 fn device_command(_:u64,_:u64,_:u64)->Result<c::Reply,u64>{panic!("Live command not mocked")}
 fn view()->m::RegionView{m::RegionView{region_id:2,length:c::DMA_BYTES,virtual_address:0x50000000,dma_address:Some(PHYSICAL)}}

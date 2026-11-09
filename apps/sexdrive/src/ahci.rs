@@ -133,10 +133,21 @@ pub fn stop_io() { unsafe { PORT.ready = false; } }
 /// Find and start the first SATA disk. `reserve` hands out one page of the
 /// service's own DMA pool as (virtual, physical); it is called at most once.
 pub fn probe(reserve: impl FnOnce() -> Option<(u64, u64)>) -> bool {
-    let view = match sex_pdx::memory_region_full_view(SLOT_AHCI_HOST, QUERY_VIEW | READ | WRITE) {
-        Ok(view) if view.length >= PORT_BASE + PORT_STRIDE => view,
+    let mut view = match sex_pdx::memory_region_full_view(SLOT_AHCI_HOST, QUERY_VIEW | READ | WRITE) {
+        Ok(view) => view,
         _ => { sex_pdx::serial_record!("[sexdrive.ahci.absent] slot={}", SLOT_AHCI_HOST); return false; }
     };
+    // Intel chipsets often have a 2 KiB ABAR, leased as its page at an offset.
+    match sex_pdx::device_window(SLOT_AHCI_HOST) {
+        Ok((offset, length)) if offset.checked_add(length).is_some_and(|end| end <= view.length) => {
+            view.virtual_address += offset;
+            view.length = length;
+        }
+        _ => { sex_pdx::serial_record!("[sexdrive.ahci.absent] slot={} reason=window", SLOT_AHCI_HOST); return false; }
+    }
+    if view.length < PORT_BASE + PORT_STRIDE {
+        sex_pdx::serial_record!("[sexdrive.ahci.absent] slot={} reason=short_window", SLOT_AHCI_HOST); return false;
+    }
     let abar = view.virtual_address;
     if abar == 0 || abar == u64::MAX { return false; }
     // Memory decode + bus master for this controller only; BOOT checked our pool.
