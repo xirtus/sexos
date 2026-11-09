@@ -8,8 +8,9 @@
   delete globalThis.__host;
   const OP = { LOG: 1, BY_ID: 2, QUERY: 3, INFO: 4, GET_ATTR: 5, SET_ATTR: 6, REMOVE_ATTR: 7, GET_TEXT: 8, SET_TEXT: 9,
     GET_HTML: 10, SET_HTML: 11, CREATE_ELEMENT: 12, CREATE_TEXT: 13, INSERT: 14, DETACH: 15, PARENT: 16, CHILDREN: 17,
-    ATTR_NAMES: 18, VIEWPORT: 19, NAVIGATE: 20, CLICKABLE: 21, RECT: 22, LOCATION: 23, CANVAS: 24, MEASURE: 25, GL: 64, GL_QUERY: 65, FETCH: 66, FETCH_BODY: 67 };
+    ATTR_NAMES: 18, VIEWPORT: 19, NAVIGATE: 20, CLICKABLE: 21, RECT: 22, LOCATION: 23, CANVAS: 24, MEASURE: 25, HIT: 26, VALUE: 27, CARET: 28, GL: 64, GL_QUERY: 65, FETCH: 66, FETCH_BODY: 67, FETCH_HEAD: 68, COOKIE: 69 };
   const nodes = new Map();
+  const defaultChecked = new WeakMap();
 
   function fmt(v) {
     if (typeof v === 'string') return v;
@@ -58,8 +59,42 @@
   }
   class UIEvent extends Event {}
   class MouseEvent extends UIEvent {
-    constructor(type, init) { super(type, init); init = init || {}; this.button = init.button || 0; this.clientX = init.clientX || 0; this.clientY = init.clientY || 0; }
+    constructor(type, init) {
+      super(type, init); init = init || {};
+      this.button = init.button || 0; this.buttons = init.buttons || 0;
+      this.clientX = init.clientX || 0; this.clientY = init.clientY || 0;
+      this.screenX = this.clientX; this.screenY = this.clientY;
+      this.movementX = init.movementX || 0; this.movementY = init.movementY || 0;
+      this.ctrlKey = !!init.ctrlKey; this.shiftKey = !!init.shiftKey; this.altKey = !!init.altKey; this.metaKey = !!init.metaKey;
+      this.relatedTarget = init.relatedTarget || null;
+      this.detail = init.detail || 0;
+      this.view = window;
+    }
+    get x() { return this.clientX; }
+    get y() { return this.clientY; }
+    get pageX() { return this.clientX + window.scrollX; }
+    get pageY() { return this.clientY + window.scrollY; }
+    // Relative to the target's box, as games with a canvas use them.
+    get offsetX() { const t = this.target; return t && t.getBoundingClientRect ? this.clientX - t.getBoundingClientRect().left : this.clientX; }
+    get offsetY() { const t = this.target; return t && t.getBoundingClientRect ? this.clientY - t.getBoundingClientRect().top : this.clientY; }
+    getModifierState() { return false; }
   }
+  class PointerEvent extends MouseEvent {
+    constructor(type, init) {
+      super(type, init); init = init || {};
+      this.pointerId = init.pointerId || 1; this.pointerType = init.pointerType || 'mouse'; this.isPrimary = init.isPrimary !== false;
+      this.width = 1; this.height = 1; this.pressure = this.buttons ? 0.5 : 0; this.tiltX = 0; this.tiltY = 0;
+    }
+    getCoalescedEvents() { return [this]; }
+    getPredictedEvents() { return []; }
+  }
+  class WheelEvent extends MouseEvent {
+    constructor(type, init) { super(type, init); init = init || {}; this.deltaX = init.deltaX || 0; this.deltaY = init.deltaY || 0; this.deltaZ = 0; this.deltaMode = init.deltaMode || 0; }
+  }
+  WheelEvent.DOM_DELTA_PIXEL = 0; WheelEvent.DOM_DELTA_LINE = 1; WheelEvent.DOM_DELTA_PAGE = 2;
+  class InputEvent extends UIEvent { constructor(type, init) { super(type, init); init = init || {}; this.data = init.data === undefined ? null : init.data; this.inputType = init.inputType || ''; this.isComposing = false; } }
+  class SubmitEvent extends Event { constructor(type, init) { super(type, init); this.submitter = (init && init.submitter) || null; } }
+  class FocusEvent extends UIEvent { constructor(type, init) { super(type, init); this.relatedTarget = (init && init.relatedTarget) || null; } }
   class KeyboardEvent extends UIEvent {
     constructor(type, init) {
       super(type, init); init = init || {};
@@ -84,6 +119,11 @@
       if (arr) { const i = arr.findIndex(x => x.fn === fn); if (i >= 0) arr.splice(i, 1); }
     }
     dispatchEvent(ev) {
+      // A click runs its target's activation behaviour (checkboxes, submit buttons, labels).
+      if (ev.type === 'click' && this.nodeType === 1 && !ev._activating) { ev._activating = true; return activate(this, ev); }
+      return this._dispatch(ev);
+    }
+    _dispatch(ev) {
       ev.target = this;
       const path = [];
       for (let n = this; n; n = n === document ? window : n === window ? null : n.parentNode) path.push(n);
@@ -325,9 +365,13 @@
     get scrollTop() { return 0; }
     set scrollTop(v) {}
     scrollIntoView() {}
-    focus() { document._active = this; }
-    blur() { if (document._active === this) document._active = null; }
-    click() { this.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); }
+    focus() { setFocus(this); }
+    blur() { if (document._active === this) setFocus(null); }
+    click() { this.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 })); }
+    setPointerCapture() { mouse.capture = this; }
+    releasePointerCapture() { if (mouse.capture === this) mouse.capture = null; }
+    hasPointerCapture() { return mouse.capture === this; }
+    requestPointerLock() { mouse.lock = this; document.pointerLockElement = this; document.dispatchEvent(new Event('pointerlockchange')); }
   }
   mix(Element, ParentMixin);
   // el.onclick = fn makes the element clickable, as addEventListener does.
@@ -363,17 +407,293 @@
     get naturalHeight() { return this.offsetHeight; }
   }
   reflect(HTMLImageElement, ['alt', 'width', 'height']);
+  // ---- Forms ----
+  const TEXT_TYPES = new Set(['text', 'search', 'email', 'url', 'tel', 'password', 'number']);
+  function isText(el) {
+    if (!el || el.nodeType !== 1) return false;
+    if (el.localName === 'textarea') return true;
+    return el.localName === 'input' && TEXT_TYPES.has((el.getAttribute('type') || 'text').toLowerCase());
+  }
+  function focusable(el) {
+    for (let n = el; n && n.nodeType === 1; n = n.parentNode) {
+      const t = n.localName;
+      if (t === 'input' || t === 'textarea' || t === 'select' || t === 'button' || (t === 'a' && n.hasAttribute('href')) || n.hasAttribute('tabindex'))
+        return n.hasAttribute('disabled') ? null : n;
+    }
+    return null;
+  }
+  // The text control being edited: its caret (in code points) and its value at focus.
+  const edit = { el: null, caret: 0, start: '' };
+  function showCaret() { if (edit.el && document._active === edit.el) H(OP.CARET, edit.el._id, String(edit.caret)); else H(OP.CARET); }
+  function setFocus(el) {
+    const prev = document._active;
+    if (prev === el) return;
+    if (prev && edit.el === prev && prev.value !== edit.start) prev.dispatchEvent(new Event('change', { bubbles: true }));
+    document._active = el;
+    edit.el = null;
+    if (prev && prev.dispatchEvent) { prev.dispatchEvent(new FocusEvent('blur', { relatedTarget: el })); prev.dispatchEvent(new FocusEvent('focusout', { bubbles: true, relatedTarget: el })); }
+    if (el && document._active === el) {
+      el.dispatchEvent(new FocusEvent('focus', { relatedTarget: prev })); el.dispatchEvent(new FocusEvent('focusin', { bubbles: true, relatedTarget: prev }));
+    }
+    if (isText(document._active)) { edit.el = document._active; edit.start = edit.el.value; edit.caret = Array.from(edit.start).length; }
+    showCaret();
+  }
+  function fire(el, type, Kind, init) { const ev = new (Kind || Event)(type, Object.assign({ bubbles: true }, init)); el.dispatchEvent(ev); return ev; }
+  function formOf(el) {
+    const id = el.getAttribute('form');
+    if (id) { const f = document.getElementById(id); if (f && f.localName === 'form') return f; }
+    return el.closest('form');
+  }
+  // Typing into the focused text control. Answers true when the key was used.
+  function editKey(el, key, ctrl) {
+    const chars = Array.from(el.value);
+    let c = Math.min(edit.caret, chars.length), insert = null, removed = null, type = '';
+    const multi = el.localName === 'textarea';
+    const lineStart = i => { while (i > 0 && chars[i - 1] !== '\n') i--; return i; };
+    const lineEnd = i => { while (i < chars.length && chars[i] !== '\n') i++; return i; };
+    switch (key) {
+      case 'ArrowLeft': c = Math.max(0, c - 1); break;
+      case 'ArrowRight': c = Math.min(chars.length, c + 1); break;
+      case 'Home': c = multi ? lineStart(c) : 0; break;
+      case 'End': c = multi ? lineEnd(c) : chars.length; break;
+      case 'ArrowUp': case 'ArrowDown': {
+        if (!multi) { c = key === 'ArrowUp' ? 0 : chars.length; break; }
+        const s0 = lineStart(c), col = c - s0;
+        if (key === 'ArrowUp') { if (s0 === 0) { c = 0; break; } const p0 = lineStart(s0 - 1); c = Math.min(p0 + col, s0 - 1); }
+        else { const e0 = lineEnd(c); if (e0 >= chars.length) { c = chars.length; break; } const n0 = e0 + 1; c = Math.min(n0 + col, lineEnd(n0)); }
+        break;
+      }
+      case 'Backspace': if (c > 0) { removed = [c - 1, 1]; type = 'deleteContentBackward'; } break;
+      case 'Delete': if (c < chars.length) { removed = [c, 1]; type = 'deleteContentForward'; } break;
+      case 'Enter':
+        if (multi) { insert = '\n'; type = 'insertLineBreak'; break; }
+        // Enter commits the value (change), then submits the form.
+        if (el.value !== edit.start) { edit.start = el.value; fire(el, 'change'); }
+        { const f = formOf(el); if (f) submitForm(f, null, true); }
+        return true;
+      default:
+        if (ctrl || Array.from(key).length !== 1) return false;
+        insert = key; type = 'insertText';
+    }
+    if (insert !== null || removed) {
+      const max = el.hasAttribute('maxlength') ? +el.getAttribute('maxlength') : -1;
+      if (insert !== null && max >= 0 && chars.length >= max) { edit.caret = c; showCaret(); return true; }
+      if (el.hasAttribute('readonly')) return true;
+      if (!fire(el, 'beforeinput', InputEvent, { cancelable: true, data: insert, inputType: type }).defaultPrevented) {
+        if (removed) { chars.splice(removed[0], removed[1]); c = removed[0]; }
+        if (insert !== null) { chars.splice(c, 0, insert); c += 1; }
+        H(OP.VALUE, el._id, chars.join(''));
+        edit.caret = c;
+        fire(el, 'input', InputEvent, { data: insert, inputType: type });
+      }
+    }
+    edit.caret = c;
+    showCaret();
+    return true;
+  }
+  // What a successful submission of `form` sends: [name, value] pairs.
+  function formEntries(form, submitter) {
+    const out = [];
+    for (const el of form.elements) {
+      const name = el.getAttribute('name');
+      if (!name || disabledControl(el)) continue;
+      const t = el.localName === 'input' ? el.type : el.localName;
+      if ((t === 'checkbox' || t === 'radio') && !el.checked) continue;
+      if (t === 'submit' || t === 'image' || t === 'reset' || t === 'button' || (el.localName === 'button' && el !== submitter)) { if (el !== submitter) continue; }
+      if (t === 'file') continue;
+      if ((t === 'checkbox' || t === 'radio') && !el.hasAttribute('value')) { out.push([name, 'on']); continue; }
+      out.push([name, el.value]);
+    }
+    return out;
+  }
+  function submitForm(form, submitter, events) {
+    if (events) {
+      if (!form.checkValidity()) return;
+      const ev = new SubmitEvent('submit', { bubbles: true, cancelable: true, submitter });
+      form.dispatchEvent(ev);
+      if (ev.defaultPrevented) return;
+    }
+    const attr = (n, f) => (submitter && submitter.getAttribute(f)) || form.getAttribute(n);
+    const method = (attr('method', 'formmethod') || 'get').toLowerCase();
+    if (method === 'dialog') return;
+    const action = resolveUrl(attr('action', 'formaction') || H(OP.LOCATION) || '');
+    const enc = v => encodeURIComponent(String(v).replace(/\r?\n|\r/g, '\r\n')).replace(/[!'()~]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase()).replace(/%20/g, '+');
+    const query = formEntries(form, submitter).map(([k, v]) => enc(k) + '=' + enc(v)).join('&');
+    if (method === 'post') { H(OP.NAVIGATE, action, 'POST', query); return; }
+    H(OP.NAVIGATE, action.replace(/[?#].*$/, '') + '?' + query);
+  }
+  // A click on `el`: checkboxes and radios change before the click and change back if
+  // it is cancelled; submit and reset buttons, selects and labels act after it.
+  function activate(target, ev) {
+    // A click inside a button (on its text, say) activates the button; the event still
+    // goes to what was clicked.
+    const inner = target.localName;
+    const el = (inner !== 'input' && inner !== 'button' && inner !== 'select' && inner !== 'textarea' && target.closest('button')) || target;
+    const t = el.localName, type = t === 'input' ? el.type : '';
+    if (el.hasAttribute('disabled') && (t === 'input' || t === 'button' || t === 'select' || t === 'textarea')) return true;
+    let undo = null, changed = true;
+    if (type === 'checkbox') { const was = el.checked; el.checked = !was; undo = () => { el.checked = was; }; }
+    else if (type === 'radio' && !el.checked) {
+      const group = el.name ? radios(el) : [];
+      const was = group.find(r => r.checked);
+      for (const r of group) r.checked = false;
+      el.checked = true;
+      undo = () => { el.checked = false; if (was) was.checked = true; };
+    } else if (type === 'radio') { undo = () => {}; changed = false; }
+    const ok = target._dispatch(ev);
+    if (undo) {
+      if (!ok) { undo(); return ok; }
+      if (changed) { fire(el, 'input', InputEvent); fire(el, 'change'); }
+      return ok;
+    }
+    if (!ok) return ok;
+    const button = t === 'button' ? (el.getAttribute('type') || 'submit').toLowerCase() : type;
+    if (button === 'submit' || button === 'image') { const f = formOf(el); if (f) submitForm(f, el, true); }
+    else if (button === 'reset') { const f = formOf(el); if (f) f.reset(); }
+    else if (t === 'select') {
+      const opts = el.options;
+      if (opts.length) { el.selectedIndex = (el.selectedIndex + 1) % opts.length; fire(el, 'input', InputEvent); fire(el, 'change'); }
+    } else if (t !== 'input' && t !== 'textarea' && t !== 'a') {
+      const label = el.closest('label');
+      if (label) {
+        const control = label.control;
+        if (control && control !== el && !control.contains(el)) { if (isText(control) || control.localName === 'select') control.focus(); else control.click(); }
+      }
+    }
+    return ok;
+  }
+  function disabledControl(el) { for (let n = el; n && n.nodeType === 1; n = n.parentNode) if (n.hasAttribute('disabled') && (n === el || n.localName === 'fieldset')) return true; return false; }
+  function radios(el) { return (formOf(el) || document).querySelectorAll('input').filter(r => r.type === 'radio' && r.name === el.name && formOf(r) === formOf(el)); }
+  function controlValidity(el) {
+    if (el.hasAttribute('disabled') || !el.hasAttribute('required')) return true;
+    const t = el.localName === 'input' ? el.type : el.localName;
+    if (t === 'checkbox') return el.checked;
+    if (t === 'radio') return radios(el).some(r => r.checked);
+    return el.value !== '';
+  }
   class HTMLInputElement extends HTMLElement {
-    get value() { return this._value !== undefined ? this._value : this.getAttribute('value') || ''; }
-    set value(v) { this._value = String(v); this.setAttribute('value', v); }
+    get value() { return H(OP.VALUE, this._id) || ''; }
+    set value(v) { v = v === null || v === undefined ? '' : String(v); H(OP.VALUE, this._id, v); if (edit.el === this) { edit.caret = Array.from(v).length; showCaret(); } }
+    get defaultValue() { return this.getAttribute('value') || ''; }
+    set defaultValue(v) { this.setAttribute('value', v); }
+    get valueAsNumber() { const n = parseFloat(this.value); return isNaN(n) ? NaN : n; }
+    set valueAsNumber(n) { this.value = String(n); }
+    get form() { return formOf(this); }
+    // The page shows (and CSS matches) the live state through the checked attribute, so
+    // the default is kept here once the state first changes.
+    get defaultChecked() { return defaultChecked.has(this) ? defaultChecked.get(this) : this.hasAttribute('checked'); }
+    set defaultChecked(v) { if (defaultChecked.has(this)) defaultChecked.set(this, !!v); else this.toggleAttribute('checked', !!v); }
+    get selectionStart() { return edit.el === this ? edit.caret : this.value.length; }
+    get selectionEnd() { return this.selectionStart; }
+    setSelectionRange(a) { if (edit.el === this) { edit.caret = Math.max(0, Math.min(+a || 0, Array.from(this.value).length)); showCaret(); } }
+    select() {}
+    get validity() { const valid = controlValidity(this); return { valid, valueMissing: !valid }; }
+    checkValidity() { return controlValidity(this); }
+    reportValidity() { return controlValidity(this); }
+    setCustomValidity() {}
+    get labels() { return this.id ? document.querySelectorAll('label').filter(l => l.control === this) : []; }
     get checked() { return this.hasAttribute('checked'); }
-    set checked(v) { this.toggleAttribute('checked', !!v); }
+    set checked(v) { if (!defaultChecked.has(this)) defaultChecked.set(this, this.hasAttribute('checked')); this.toggleAttribute('checked', !!v); }
     get disabled() { return this.hasAttribute('disabled'); }
     set disabled(v) { this.toggleAttribute('disabled', !!v); }
     get type() { return (this.getAttribute('type') || 'text').toLowerCase(); }
   }
-  reflect(HTMLInputElement, ['name', 'placeholder']);
+  reflect(HTMLInputElement, ['name', 'placeholder', 'min', 'max', 'step', 'pattern', 'autocomplete']);
+  for (const p of ['required', 'readOnly', 'multiple', 'autofocus']) Object.defineProperty(HTMLInputElement.prototype, p, { get() { return this.hasAttribute(p.toLowerCase()); }, set(v) { this.toggleAttribute(p.toLowerCase(), !!v); }, configurable: true });
+  Object.defineProperty(HTMLInputElement.prototype, 'maxLength', { get() { return this.hasAttribute('maxlength') ? +this.getAttribute('maxlength') : -1; }, set(v) { this.setAttribute('maxlength', v); }, configurable: true });
+  class HTMLTextAreaElement extends HTMLInputElement {
+    get type() { return 'textarea'; }
+    get defaultValue() { return this.textContent; }
+    set defaultValue(v) { this.textContent = v; }
+    get rows() { return +(this.getAttribute('rows') || 2); }
+    get cols() { return +(this.getAttribute('cols') || 20); }
+  }
+  class HTMLOptionElement extends HTMLElement {
+    get value() { const v = this.getAttribute('value'); return v === null ? this.text : v; }
+    set value(v) { this.setAttribute('value', v); }
+    get text() { return this.textContent.replace(/\s+/g, ' ').trim(); }
+    set text(v) { this.textContent = v; }
+    get label() { return this.getAttribute('label') || this.text; }
+    get selected() { const s = this.closest('select'); return s ? s.selectedIndex === s.options.indexOf(this) : this.hasAttribute('selected'); }
+    set selected(v) { const s = this.closest('select'); if (s && v) s.selectedIndex = s.options.indexOf(this); else this.toggleAttribute('selected', !!v); }
+    get defaultSelected() { return this.hasAttribute('selected'); }
+    get index() { const s = this.closest('select'); return s ? s.options.indexOf(this) : 0; }
+    get disabled() { return this.hasAttribute('disabled'); }
+    get form() { const s = this.closest('select'); return s ? s.form : null; }
+  }
+  class HTMLSelectElement extends HTMLElement {
+    get options() { const o = this.querySelectorAll('option'); o.item = i => o[i] || null; o.namedItem = n => o.find(x => x.id === n) || null; return o; }
+    get length() { return this.options.length; }
+    get selectedIndex() { const o = this.options; const i = o.findIndex(x => x.hasAttribute('selected')); return i >= 0 ? i : o.length ? 0 : -1; }
+    set selectedIndex(i) { const o = this.options; o.forEach((x, k) => x.toggleAttribute('selected', k === +i)); }
+    get selectedOptions() { const i = this.selectedIndex; return i >= 0 ? [this.options[i]] : []; }
+    get value() { const i = this.selectedIndex; return i >= 0 ? this.options[i].value : ''; }
+    set value(v) { this.selectedIndex = this.options.findIndex(x => x.value === String(v)); }
+    get type() { return this.hasAttribute('multiple') ? 'select-multiple' : 'select-one'; }
+    get form() { return formOf(this); }
+    get disabled() { return this.hasAttribute('disabled'); }
+    set disabled(v) { this.toggleAttribute('disabled', !!v); }
+    item(i) { return this.options[i] || null; }
+    add(opt, before) { this.insertBefore(opt, typeof before === 'number' ? this.options[before] || null : before || null); }
+    checkValidity() { return !this.hasAttribute('required') || this.value !== ''; }
+    reportValidity() { return this.checkValidity(); }
+    setCustomValidity() {}
+    get validity() { const valid = this.checkValidity(); return { valid, valueMissing: !valid }; }
+  }
+  reflect(HTMLSelectElement, ['name']);
+  class HTMLFormElement extends HTMLElement {
+    get elements() {
+      const out = document.querySelectorAll('input, select, textarea, button').filter(el => formOf(el) === this);
+      for (const el of out) { const n = el.getAttribute('name') || el.id; if (n && isNaN(n) && !(n in out)) out[n] = el; }
+      out.namedItem = n => out.find(el => el.getAttribute('name') === n || el.id === n) || null;
+      return out;
+    }
+    get length() { return this.elements.length; }
+    get action() { return resolveUrl(this.getAttribute('action') || H(OP.LOCATION) || ''); }
+    set action(v) { this.setAttribute('action', v); }
+    get method() { const m = (this.getAttribute('method') || 'get').toLowerCase(); return m === 'post' || m === 'dialog' ? m : 'get'; }
+    set method(v) { this.setAttribute('method', v); }
+    submit() { submitForm(this, null, false); }
+    requestSubmit(submitter) { submitForm(this, submitter || null, true); }
+    reset() {
+      if (fire(this, 'reset', Event, { cancelable: true }).defaultPrevented) return;
+      for (const el of this.elements) {
+        if (el.localName === 'select') { const o = el.options; const i = o.findIndex(x => x.defaultSelected); el.selectedIndex = i; }
+        else if (el.localName === 'input' && (el.type === 'checkbox' || el.type === 'radio')) el.checked = el.defaultChecked;
+        else if (el.localName === 'textarea' || el.localName === 'input') el.value = el.defaultValue;
+      }
+    }
+    checkValidity() { return this.elements.every(el => !el.checkValidity || el.checkValidity()); }
+    reportValidity() { return this.checkValidity(); }
+  }
+  reflect(HTMLFormElement, ['name', 'target', 'enctype']);
+  class HTMLLabelElement extends HTMLElement {
+    get htmlFor() { return this.getAttribute('for') || ''; }
+    set htmlFor(v) { this.setAttribute('for', v); }
+    get control() {
+      const f = this.getAttribute('for');
+      if (f) { const c = document.getElementById(f); return c && /^(input|select|textarea|button)$/.test(c.localName) ? c : null; }
+      return this.querySelector('input, select, textarea, button');
+    }
+    get form() { const c = this.control; return c ? c.form : null; }
+  }
+  class FormData {
+    constructor(form, submitter) { this._l = form ? formEntries(form, submitter || null) : []; }
+    append(k, v) { this._l.push([String(k), String(v)]); }
+    set(k, v) { this.delete(k); this.append(k, v); }
+    delete(k) { this._l = this._l.filter(p => p[0] !== String(k)); }
+    get(k) { const p = this._l.find(p => p[0] === String(k)); return p ? p[1] : null; }
+    getAll(k) { return this._l.filter(p => p[0] === String(k)).map(p => p[1]); }
+    has(k) { return this._l.some(p => p[0] === String(k)); }
+    entries() { return this._l.map(p => p.slice())[Symbol.iterator](); }
+    keys() { return this._l.map(p => p[0])[Symbol.iterator](); }
+    values() { return this._l.map(p => p[1])[Symbol.iterator](); }
+    forEach(fn, self) { for (const [k, v] of this._l) fn.call(self, v, k, this); }
+    [Symbol.iterator]() { return this.entries(); }
+  }
   class HTMLButtonElement extends HTMLElement {
+    get form() { return formOf(this); }
+    checkValidity() { return true; }
     get disabled() { return this.hasAttribute('disabled'); }
     set disabled(v) { this.toggleAttribute('disabled', !!v); }
     get type() { return (this.getAttribute('type') || 'submit').toLowerCase(); }
@@ -545,7 +865,8 @@
     putImageData() {}
   }
   const ELEMENT_CLASSES = { A: HTMLAnchorElement, IMG: HTMLImageElement, INPUT: HTMLInputElement, BUTTON: HTMLButtonElement,
-    TEMPLATE: HTMLTemplateElement, CANVAS: HTMLCanvasElement, TEXTAREA: HTMLInputElement, SELECT: HTMLInputElement };
+    TEMPLATE: HTMLTemplateElement, CANVAS: HTMLCanvasElement, TEXTAREA: HTMLTextAreaElement, SELECT: HTMLSelectElement,
+    OPTION: HTMLOptionElement, FORM: HTMLFormElement, LABEL: HTMLLabelElement };
 
   // A fragment is a detached holder element; inserting it moves its children.
   class DocumentFragment extends Node {
@@ -559,8 +880,11 @@
   mix(DocumentFragment, ParentMixin);
 
   class Document extends Node {
-    constructor() { super(0); this._active = null; this.readyState = 'loading'; }
+    constructor() { super(0); this._active = null; this.readyState = 'loading'; this.pointerLockElement = null; }
     get nodeType() { return 9; }
+    elementFromPoint(x, y) { const id = H(OP.HIT, String(Math.floor(x)), String(Math.floor(y + window.scrollY))); return id ? wrap(id) : null; }
+    elementsFromPoint(x, y) { const e = this.elementFromPoint(x, y); return e ? chain(e) : []; }
+    exitPointerLock() { if (mouse.lock) { mouse.lock = null; this.pointerLockElement = null; this.dispatchEvent(new Event('pointerlockchange')); } }
     get nodeName() { return '#document'; }
     get documentElement() { return this.querySelector('html'); }
     get head() { return this.querySelector('head'); }
@@ -575,8 +899,8 @@
     get URL() { return location.href; }
     get location() { return location; }
     get defaultView() { return window; }
-    get cookie() { return ''; }
-    set cookie(v) {}
+    get cookie() { const v = H(OP.COOKIE); return v === null ? '' : v; }
+    set cookie(v) { H(OP.COOKIE, String(v)); }
     getElementById(id) { return wrap(H(OP.BY_ID, String(id))); }
     createElement(tag) {
       const id = +check(H(OP.CREATE_ELEMENT, String(tag)));
@@ -713,7 +1037,7 @@
       this._s = { program: null, array: null, vao: null, unit: 0, tex: [], clear: [0, 0, 0, 0], depthClear: 1, viewport: [0, 0, canvas.width, canvas.height],
         scissor: [0, 0, canvas.width, canvas.height], enabled: {}, depthFunc: 0x201, depthMask: true, colorMask: [true, true, true, true],
         blend: [1, 0, 1, 0], blendEq: [0x8006, 0x8006], cullFace: 0x405, frontFace: 0x901, flipY: false, premul: false, align: 4,
-        lineWidth: 1, elem: new Map(), fb: null, rb: null };
+        lineWidth: 1, elem: new Map(), fb: null, readFb: null, rb: null };
       this._progInfo = new Map();
       H(OP.GL_QUERY, canvas._id, 'init', canvas.width, canvas.height, this._attrs.alpha === false ? 0 : 1);
     }
@@ -806,7 +1130,8 @@
         case 0x84E0: return 0x84C0 + s.unit;
         case 0x8069: return (s.tex[s.unit] || {})[0xDE1] || null;
         case 0x8514: return (s.tex[s.unit] || {})[0x8513] || null;
-        case 0x8CA6: case 0x8CAA: return s.fb;
+        case 0x8CA6: return s.fb;
+        case 0x8CAA: return s.readFb || null;
         case 0x8CA7: return s.rb;
         case 0xB45: return s.cullFace;
         case 0xB46: return s.frontFace;
@@ -1113,29 +1438,54 @@
     drawArraysInstanced(mode, first, count, n) { this._c('dai', mode, first | 0, count | 0, n | 0); }
     drawElementsInstanced(mode, count, type, offset, n) { this._c('dei', mode, count | 0, type, offset | 0, n | 0); }
     drawRangeElements(mode, start, end, count, type, offset) { this.drawElements(mode, count, type, offset); }
-    drawBuffers() {} readBuffer() {} invalidateFramebuffer() {} blitFramebuffer() {} clearBufferfv() {} clearBufferiv() {}
+    drawBuffers() {} readBuffer() {} invalidateFramebuffer() {} clearBufferfv() {} clearBufferiv() {}
+    blitFramebuffer(sx0, sy0, sx1, sy1, dx0, dy0, dx1, dy1, mask) {
+      if (!(mask & 0x4000)) return;
+      const r = this._s.readFb, d = this._s.fb;
+      this._c('blt', r ? r._id : 0, d ? d._id : 0, sx0 | 0, sy0 | 0, sx1 | 0, sy1 | 0, dx0 | 0, dy0 | 0, dx1 | 0, dy1 | 0);
+    }
     clearBufferuiv() {} clearBufferfi() {}
     readPixels(x, y, w, h, format, type, out) {
       if (!out) return;
+      const r = this._s.readFb, d = this._s.fb, other = (r || null) !== (d || null);
+      if (other) this._c('fb', r ? r._id : 0);
       this._flush();
       const buf = H(OP.GL_QUERY | 0x10000, this.canvas._id, 'read', String(x | 0), String(y | 0), String(w | 0), String(h | 0));
+      if (other) this._c('fb', d ? d._id : 0);
       if (buf instanceof ArrayBuffer) {
         const src = new Uint8Array(buf);
         const dst = bytesOf(out);
         dst.set(src.subarray(0, Math.min(src.length, dst.length)));
       }
     }
-    // Framebuffers and renderbuffers: drawing goes to the canvas for now.
+    // Framebuffers: draws land in the attached texture (render to texture) or colour
+    // renderbuffer; each framebuffer has its own depth buffer.
     createFramebuffer() { return new WebGLFramebuffer(); }
-    bindFramebuffer(t, f) { this._s.fb = f || null; }
-    deleteFramebuffer() {} isFramebuffer(f) { return f instanceof WebGLFramebuffer; }
-    framebufferTexture2D() {} framebufferRenderbuffer() {} framebufferTextureLayer() {}
+    bindFramebuffer(t, f) {
+      f = f || null;
+      if (t !== 0x8CA9) this._s.readFb = f;   // READ_FRAMEBUFFER or FRAMEBUFFER
+      if (t === 0x8CA8) return;
+      if (this._s.fb !== f) { this._s.fb = f; this._c('fb', f ? f._id : 0); }
+    }
+    deleteFramebuffer(f) {
+      if (!f) return;
+      if (this._s.fb === f) this._s.fb = null;
+      if (this._s.readFb === f) this._s.readFb = null;
+      this._c('dfb', f._id);
+    }
+    isFramebuffer(f) { return f instanceof WebGLFramebuffer; }
+    framebufferTexture2D(t, attachment, textarget, tex) { if (t !== 0x8CA8) this._c('ft', attachment, textarget, tex ? tex._id : 0); }
+    framebufferTextureLayer() {}
+    framebufferRenderbuffer(t, attachment, rt, rb) { if (t !== 0x8CA8) this._c('fr', attachment, rb ? rb._id : 0); }
     checkFramebufferStatus() { return 0x8CD5; }
     getFramebufferAttachmentParameter() { return null; }
     createRenderbuffer() { return new WebGLRenderbuffer(); }
-    bindRenderbuffer(t, r) { this._s.rb = r || null; }
-    deleteRenderbuffer() {} isRenderbuffer(r) { return r instanceof WebGLRenderbuffer; }
-    renderbufferStorage() {} renderbufferStorageMultisample() {} getRenderbufferParameter() { return 0; }
+    bindRenderbuffer(t, r) { this._s.rb = r || null; this._c('rb', r ? r._id : 0); }
+    deleteRenderbuffer(r) { if (r) this._c('drb', r._id); }
+    isRenderbuffer(r) { return r instanceof WebGLRenderbuffer; }
+    renderbufferStorage(t, fmt, w, h) { if (this._s.rb) { this._s.rb._w = w; this._s.rb._h = h; } this._c('rs', w | 0, h | 0); }
+    renderbufferStorageMultisample(t, samples, fmt, w, h) { this.renderbufferStorage(t, fmt, w, h); }
+    getRenderbufferParameter(t, p) { const r = this._s.rb; return !r ? 0 : p === 0x8D42 ? r._w | 0 : p === 0x8D43 ? r._h | 0 : 0; }
     // WebGL 2 odds and ends
     createQuery() { return new WebGLQuery(); } deleteQuery() {} beginQuery() {} endQuery() {} getQueryParameter() { return 0; }
     createSampler() { return new WebGLSampler(); } deleteSampler() {} bindSampler() {} samplerParameteri() {} samplerParameterf() {}
@@ -1591,17 +1941,44 @@
   // pages come from: built-in, @files, http) and answers with a 'fetched' message.
   const fetches = new Map();
   class Headers {
-    constructor(init) { this._m = new Map(); if (init) for (const [k, v] of (init instanceof Headers ? init._m : Object.entries(init))) this._m.set(String(k).toLowerCase(), String(v)); }
+    constructor(init) {
+      this._m = new Map();
+      if (!init) return;
+      if (init instanceof Headers) init._m.forEach((v, k) => this._m.set(k, v));
+      else if (Array.isArray(init) || typeof init[Symbol.iterator] === 'function') for (const [k, v] of init) this.append(k, v);
+      else for (const k of Object.keys(init)) this.append(k, init[k]);
+    }
     get(k) { const v = this._m.get(String(k).toLowerCase()); return v === undefined ? null : v; }
     has(k) { return this._m.has(String(k).toLowerCase()); }
     set(k, v) { this._m.set(String(k).toLowerCase(), String(v)); }
-    forEach(fn) { this._m.forEach((v, k) => fn(v, k, this)); }
+    append(k, v) { k = String(k).toLowerCase(); const o = this._m.get(k); this._m.set(k, o === undefined ? String(v) : o + ', ' + v); }
+    delete(k) { this._m.delete(String(k).toLowerCase()); }
+    forEach(fn, self) { this._m.forEach((v, k) => fn.call(self, v, k, this)); }
+    keys() { return this._m.keys(); }
+    values() { return this._m.values(); }
+    entries() { return this._m.entries(); }
+    [Symbol.iterator]() { return this._m.entries(); }
+    _lines() { let s = ''; this._m.forEach((v, k) => { s += k + ': ' + v + '\r\n'; }); return s; }
   }
+  // Header lines from the browser ("name: value\r\n"...) as Headers.
+  function parseHeaders(text) {
+    const h = new Headers();
+    for (const line of String(text || '').split(/\r?\n/)) { const i = line.indexOf(':'); if (i > 0) h.append(line.slice(0, i).trim(), line.slice(i + 1).trim()); }
+    return h;
+  }
+  // The reply's final address and headers, from the browser.
+  function replyHead(id, url) {
+    const v = H(OP.FETCH_HEAD, '' + id);
+    if (v === null) return { url, headers: new Headers() };
+    const nl = v.indexOf('\n');
+    return { url: v.slice(0, nl) || url, headers: parseHeaders(v.slice(nl + 1)) };
+  }
+  const STATUS_TEXT = { 200: 'OK', 201: 'Created', 204: 'No Content', 206: 'Partial Content', 301: 'Moved Permanently', 302: 'Found', 304: 'Not Modified', 400: 'Bad Request', 401: 'Unauthorized', 403: 'Forbidden', 404: 'Not Found', 500: 'Internal Server Error', 503: 'Service Unavailable' };
   class Response {
-    constructor(id, status, url, length) {
+    constructor(id, status, url, length, headers) {
       this._id = id; this.status = status; this.ok = status >= 200 && status < 300; this.url = url;
-      this.statusText = this.ok ? 'OK' : status === 404 ? 'Not Found' : 'Error'; this.redirected = false; this.type = 'basic';
-      this.headers = new Headers({ 'content-length': String(length) }); this.bodyUsed = false; this.body = null;
+      this.statusText = STATUS_TEXT[status] || ''; this.redirected = false; this.type = 'basic';
+      this.headers = headers || new Headers({ 'content-length': String(length) }); this.bodyUsed = false; this.body = null;
     }
     // The body comes over once, as bytes or as text.
     _take(binary) {
@@ -1613,24 +1990,104 @@
     arrayBuffer() { return this._take(true); }
     text() { return this._take(false); }
     json() { return this._take(false).then(JSON.parse); }
-    blob() { return this._take(true).then(b => ({ size: b.byteLength, type: '', arrayBuffer: () => Promise.resolve(b) })); }
+    blob() { const type = this.headers.get('content-type') || ''; return this._take(true).then(b => ({ size: b.byteLength, type, arrayBuffer: () => Promise.resolve(b) })); }
     clone() { return this; }
   }
+  // A request body as the browser takes it: text, or bytes.
+  function bodyBytes(body, headers) {
+    if (body === undefined || body === null) return '';
+    if (typeof body === 'string') { if (!headers.has('content-type')) headers.set('content-type', 'text/plain;charset=UTF-8'); return body; }
+    if (body instanceof URLSearchParams) { if (!headers.has('content-type')) headers.set('content-type', 'application/x-www-form-urlencoded;charset=UTF-8'); return body.toString(); }
+    if (body instanceof ArrayBuffer) return body;
+    if (ArrayBuffer.isView(body)) return body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength);
+    return String(body);
+  }
+  // One request to the browser; `done(status, length)` runs when it is loaded.
+  function ask(url, method, headers, body, done) {
+    // The body first: it may add a Content-Type the header lines must carry.
+    const bytes = bodyBytes(body, headers) || '';
+    const id = H(OP.FETCH, url, method, headers._lines(), bytes);
+    if (id === null) return null;
+    fetches.set(+id, done);
+    return +id;
+  }
   function fetch(input, init) {
-    const url = String(input && typeof input === 'object' && 'url' in input ? input.url : input);
+    init = init || {};
+    const isReq = input && typeof input === 'object' && 'url' in input;
+    const url = String(isReq ? input.url : input);
+    const method = String(init.method || (isReq && input.method) || 'GET').toUpperCase();
+    const headers = new Headers(init.headers || (isReq && input.headers) || undefined);
+    const body = init.body !== undefined ? init.body : (isReq ? input.body : undefined);
     return new Promise((resolve, reject) => {
-      const id = H(OP.FETCH, url);
-      if (id === null) { reject(new TypeError('Failed to fetch ' + url)); return; }
-      fetches.set(id, { resolve, reject, url });
+      const id = ask(url, method, headers, body, (id, status, length) => {
+        if (status === 0) { reject(new TypeError('Failed to fetch ' + url)); return; }
+        const head = replyHead(id, url);
+        const r = new Response(id, status, head.url, length, head.headers);
+        r.redirected = head.url !== url && !url.startsWith('/') && url.indexOf('://') > 0;
+        resolve(r);
+      });
+      if (id === null) reject(new TypeError('Failed to fetch ' + url));
     });
   }
-  function fetched(id, status, length) {
-    const f = fetches.get(id);
-    if (!f) return;
-    fetches.delete(id);
-    if (status === 0) f.reject(new TypeError('Failed to fetch ' + f.url));
-    else f.resolve(new Response(id, status, f.url, length));
+  class Request {
+    constructor(input, init) {
+      init = init || {};
+      this.url = String(input && input.url || input); this.method = String(init.method || 'GET').toUpperCase();
+      this.headers = new Headers(init.headers); this.body = init.body === undefined ? null : init.body;
+    }
   }
+  function fetched(id, status, length) {
+    const f = fetches.get(+id);
+    if (!f) return;
+    fetches.delete(+id);
+    f(+id, status, length);
+  }
+
+  // XMLHttpRequest on the same loads as fetch. `async=false` is treated as async: the
+  // browser loads between script turns, so a blocking load cannot be had.
+  class XMLHttpRequest extends EventTarget {
+    constructor() {
+      super();
+      this.readyState = 0; this.status = 0; this.statusText = ''; this.responseType = ''; this.response = null;
+      this.responseURL = ''; this.timeout = 0; this.withCredentials = false; this.upload = new EventTarget();
+      this._h = new Headers(); this._rh = new Headers(); this._id = null; this._text = '';
+      this.onreadystatechange = this.onload = this.onerror = this.onloadend = this.onabort = this.ontimeout = this.onprogress = this.onloadstart = null;
+    }
+    get responseText() { if (this.responseType !== '' && this.responseType !== 'text') throw domError('responseText needs responseType text'); return this._text; }
+    get responseXML() { return null; }
+    // dispatchEvent also runs the `on<type>` property.
+    _fire(type) { this.dispatchEvent(new Event(type)); }
+    _state(n) { this.readyState = n; this._fire('readystatechange'); }
+    open(method, url) { this._m = String(method || 'GET').toUpperCase(); this._u = String(url); this._h = new Headers(); this._id = null; this.status = 0; this._text = ''; this.response = null; this._state(1); }
+    setRequestHeader(k, v) { if (this.readyState !== 1) throw domError('InvalidStateError'); this._h.append(k, v); }
+    overrideMimeType() {}
+    getResponseHeader(k) { return this._rh.get(k); }
+    getAllResponseHeaders() { return this.readyState >= 2 ? this._rh._lines() : ''; }
+    abort() { if (this._id !== null) fetches.delete(this._id); this._id = null; this.readyState = 0; this._fire('abort'); this._fire('loadend'); }
+    send(body) {
+      if (this.readyState !== 1) throw domError('InvalidStateError');
+      this._fire('loadstart');
+      this._id = ask(this._u, this._m, this._h, this._m === 'GET' || this._m === 'HEAD' ? null : body, (id, status, length) => {
+        if (this._id !== id) return;
+        this._id = null;
+        if (status === 0) { this.readyState = 4; this._fire('readystatechange'); this._fire('error'); this._fire('loadend'); return; }
+        const head = replyHead(id, this._u);
+        this.status = status; this.statusText = STATUS_TEXT[status] || ''; this.responseURL = head.url; this._rh = head.headers;
+        this._state(2); this._state(3);
+        const t = this.responseType;
+        const v = H(t === 'arraybuffer' || t === 'blob' ? OP.FETCH_BODY | 0x10000 : OP.FETCH_BODY, '' + id);
+        if (t === 'arraybuffer') this.response = v || new ArrayBuffer(0);
+        else if (t === 'blob') { const b = v || new ArrayBuffer(0); this.response = { size: b.byteLength, type: head.headers.get('content-type') || '', arrayBuffer: () => Promise.resolve(b) }; }
+        else if (t === 'json') { try { this.response = JSON.parse(v || ''); } catch (e) { this.response = null; } }
+        else { this._text = v || ''; this.response = this._text; }
+        this._fire('progress');
+        this._state(4);
+        this._fire('load'); this._fire('loadend');
+      });
+      if (this._id === null) { const x = this; Promise.resolve().then(() => { x.readyState = 4; x._fire('readystatechange'); x._fire('error'); x._fire('loadend'); }); }
+    }
+  }
+  Object.assign(XMLHttpRequest, { UNSENT: 0, OPENED: 1, HEADERS_RECEIVED: 2, LOADING: 3, DONE: 4 });
 
   // Query strings.
   class URLSearchParams {
@@ -1743,8 +2200,9 @@
     getComputedStyle: el => el.style,
     matchMedia: q => ({ matches: false, media: q, addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {} }),
     scrollTo() {}, scrollBy() {}, scroll() {}, focus() {}, blur() {},
-    Event, UIEvent, MouseEvent, KeyboardEvent, CustomEvent, EventTarget, Node, Text, CharacterData, Element, HTMLElement,
+    Event, UIEvent, MouseEvent, PointerEvent, WheelEvent, FocusEvent, KeyboardEvent, CustomEvent, EventTarget, Node, Text, CharacterData, Element, HTMLElement,
     HTMLAnchorElement, HTMLImageElement, HTMLInputElement, HTMLButtonElement, HTMLCanvasElement, HTMLTemplateElement,
+    HTMLTextAreaElement, HTMLSelectElement, HTMLOptionElement, HTMLFormElement, HTMLLabelElement, FormData, InputEvent, SubmitEvent,
     Document, DocumentFragment, DOMTokenList, CanvasRenderingContext2D, CanvasGradient, CanvasPattern,
     WebGLRenderingContext, WebGL2RenderingContext, WebGLBuffer, WebGLTexture, WebGLProgram, WebGLShader, WebGLFramebuffer,
     WebGLRenderbuffer, WebGLVertexArrayObject, WebGLUniformLocation, WebGLActiveInfo, WebGLShaderPrecisionFormat,
@@ -1753,7 +2211,7 @@
     GPUBindGroupLayout, GPUPipelineLayout, GPURenderPipeline, GPUCommandEncoder, GPUCommandBuffer, GPURenderPassEncoder,
     GPUQueue, GPUCanvasContext, GPUBufferUsage, GPUTextureUsage, GPUShaderStage, GPUMapMode, GPUColorWrite,
     createImageBitmap: src => Promise.resolve(src),
-    fetch, Response, Headers, URL, URLSearchParams,
+    fetch, Request, Response, Headers, URL, URLSearchParams, XMLHttpRequest,
     devicePixelRatio: 1, scrollX: 0, scrollY: 0, pageXOffset: 0, pageYOffset: 0, name: '',
   };
   for (const k of Object.keys(globals)) {
@@ -1769,9 +2227,81 @@
   Object.defineProperty(window, '__sx_dispatch', { value: function (msg) {
     try { return dispatch(msg); } finally { flushCanvases(); }
   }, configurable: false, writable: false, enumerable: false });
+  // Mouse input: `mouse\tKIND\tNODE\tX\tY\tBUTTON\tBUTTONS\tSTEPS`, X and Y in
+  // viewport pixels, NODE the element under the pointer (empty for none). Answers 1
+  // when the page cancelled the default action (a click's link, a wheel's scroll).
+  const mouse = { over: null, down: null, capture: null, lock: null, x: 0, y: 0, last: 0, lastAt: null, count: 0 };
+  function fireMouse(el, type, Kind, init, bubbles) {
+    const ev = new Kind(type, Object.assign({}, init, { bubbles: bubbles !== false, cancelable: bubbles !== false }));
+    el.dispatchEvent(ev);
+    return ev;
+  }
+  function chain(n) { const out = []; for (; n && n.nodeType === 1; n = n.parentNode) out.push(n); return out; }
+  function mouseInput(f) {
+    const kind = f[1], x = +f[3], y = +f[4], button = +f[5], buttons = +f[6], steps = +f[7];
+    const hit = (f[2] && wrap(f[2])) || document.body || document.documentElement;
+    if (!hit) return 0;
+    const el = mouse.capture || mouse.lock || hit;
+    const init = { clientX: x, clientY: y, button: kind === 'move' ? -1 : button, buttons, movementX: x - mouse.x, movementY: y - mouse.y, pointerId: 1, pointerType: 'mouse', isPrimary: true };
+    if (kind !== 'leave') { mouse.x = x; mouse.y = y; }
+    if (kind !== 'leave' && hit !== mouse.over) {
+      const old = mouse.over, before = chain(old), after = chain(hit);
+      if (old) { fireMouse(old, 'pointerout', PointerEvent, Object.assign({}, init, { relatedTarget: hit })); fireMouse(old, 'mouseout', MouseEvent, Object.assign({}, init, { relatedTarget: hit })); }
+      for (const n of before) if (!after.includes(n)) { fireMouse(n, 'pointerleave', PointerEvent, init, false); fireMouse(n, 'mouseleave', MouseEvent, init, false); }
+      mouse.over = hit;
+      fireMouse(hit, 'pointerover', PointerEvent, Object.assign({}, init, { relatedTarget: old })); fireMouse(hit, 'mouseover', MouseEvent, Object.assign({}, init, { relatedTarget: old }));
+      for (const n of after.reverse()) if (!before.includes(n)) { fireMouse(n, 'pointerenter', PointerEvent, init, false); fireMouse(n, 'mouseenter', MouseEvent, init, false); }
+    }
+    switch (kind) {
+      case 'move': {
+        const p = fireMouse(el, 'pointermove', PointerEvent, init);
+        if (!p.defaultPrevented) fireMouse(el, 'mousemove', MouseEvent, init);
+        return 0;
+      }
+      case 'down': {
+        mouse.down = el;
+        const p = fireMouse(el, 'pointerdown', PointerEvent, init);
+        if (p.defaultPrevented) return 1;
+        if (fireMouse(el, 'mousedown', MouseEvent, init).defaultPrevented) return 1;
+        // Focus moves to the control (or link) pressed, and leaves when it is elsewhere.
+        if (button === 0) setFocus(focusable(el));
+        return 0;
+      }
+      case 'up': {
+        const p = fireMouse(el, 'pointerup', PointerEvent, init);
+        let kept = p.defaultPrevented;
+        if (!kept) kept = fireMouse(el, 'mouseup', MouseEvent, init).defaultPrevented;
+        const down = mouse.down; mouse.down = null;
+        if (!buttons) mouse.capture = null;
+        if (!down) return kept ? 1 : 0;
+        // A click goes to the nearest element both the press and release were in.
+        const target = chain(el).find(n => chain(down).includes(n));
+        if (!target) return kept ? 1 : 0;
+        if (button === 2) return fireMouse(target, 'contextmenu', MouseEvent, init).defaultPrevented ? 1 : 0;
+        if (button !== 0) return fireMouse(target, 'auxclick', MouseEvent, init).defaultPrevented ? 1 : 0;
+        const now = performance.now();
+        mouse.count = mouse.lastAt === target && now - mouse.last < 500 ? mouse.count + 1 : 1;
+        mouse.last = now; mouse.lastAt = target;
+        const click = fireMouse(target, 'click', MouseEvent, Object.assign({}, init, { detail: mouse.count }));
+        if (mouse.count === 2) fireMouse(target, 'dblclick', MouseEvent, Object.assign({}, init, { detail: 2 }));
+        return click.defaultPrevented || kept ? 1 : 0;
+      }
+      case 'wheel': {
+        const w = fireMouse(el, 'wheel', WheelEvent, Object.assign({}, init, { button: 0, deltaY: -steps * 100, deltaMode: 0 }));
+        return w.defaultPrevented ? 1 : 0;
+      }
+      case 'leave': {
+        const old = mouse.over; mouse.over = null;
+        if (old) { fireMouse(old, 'pointerout', PointerEvent, init); fireMouse(old, 'mouseout', MouseEvent, init); for (const n of chain(old)) { fireMouse(n, 'pointerleave', PointerEvent, init, false); fireMouse(n, 'mouseleave', MouseEvent, init, false); } }
+        return 0;
+      }
+    }
+    return 0;
+  }
   function dispatch(msg) {
     const f = String(msg).split('\t');
     switch (f[0]) {
+      case 'mouse': return mouseInput(f);
       case 'flush': return 0;
       case 'tick': return runTimers(performance.now());
       case 'fetched': fetched(f[1], +f[2], +f[3]); return 0;
@@ -1786,8 +2316,20 @@
       case 'key': {
         if (!KEY_TYPES.has(f[1])) return 0;
         const ev = new KeyboardEvent(f[1], { key: f[2] || '', code: f[3] || '', bubbles: true, cancelable: true, ctrlKey: f[4] === '1' });
-        (document._active || document.body || document).dispatchEvent(ev);
-        return ev.defaultPrevented ? 1 : 0;
+        const target = document._active || document.body || document;
+        target.dispatchEvent(ev);
+        if (ev.defaultPrevented) return 1;
+        if (f[1] !== 'keydown') return edit.el && edit.el === document._active ? 1 : 0;
+        if (edit.el && edit.el === document._active) return editKey(edit.el, ev.key, ev.ctrlKey) ? 1 : 0;
+        const a = document._active;
+        if (a && a.localName === 'select' && (ev.key === 'ArrowUp' || ev.key === 'ArrowDown')) {
+          const n = a.options.length;
+          if (n) { a.selectedIndex = Math.max(0, Math.min(n - 1, a.selectedIndex + (ev.key === 'ArrowUp' ? -1 : 1))); fire(a, 'input', InputEvent); fire(a, 'change'); }
+          return 1;
+        }
+        if (a && (ev.key === ' ' || ev.key === 'Enter') && a.localName === 'input' && /^(checkbox|radio|submit|button|reset|image)$/.test(a.type)) { a.click(); return 1; }
+        if (a && (ev.key === ' ' || ev.key === 'Enter') && a.localName === 'button') { a.click(); return 1; }
+        return 0;
       }
       case 'ready': {
         document.readyState = 'interactive';

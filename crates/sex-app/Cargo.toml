@@ -10,6 +10,7 @@ heap = []
 
 [dependencies]
 sex-pdx = { path = "../sex-pdx" }
+sex-fetch = { path = "../sex-fetch" }
 # The program's heap allocator (MIT, no_std). Its memory comes from the kernel's
 # per-run program window: see sex_app::heap.
 talc = { version = "5.1.1", default-features = false }

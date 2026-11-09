@@ -40,7 +40,7 @@ impl Host for AppHost {
                     return Event::Key(key.code as u16);
                 }
                 // Wasm programs draw text only, so a new window size needs nothing.
-                sex_app::Event::Resize { .. } => {}
+                sex_app::Event::Resize { .. } | sex_app::Event::Pointer(_) => {}
             }
         }
     }

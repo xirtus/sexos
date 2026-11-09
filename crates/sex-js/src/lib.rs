@@ -14,7 +14,7 @@ extern crate alloc;
 
 pub mod document;
 pub mod webgl;
-pub use document::Document;
+pub use document::{Document, FetchAsk};
 
 use alloc::{format, string::String, vec::Vec};
 use wasmi::{Caller, Config, Engine, Extern, Linker, Memory, Module, Store, StoreLimits, StoreLimitsBuilder, TypedFunc};
@@ -64,6 +64,13 @@ pub mod op {
     pub const CANVAS: u32 = 24;
     /// (css font, text): width in pixels.
     pub const MEASURE: u32 = 25;
+    /// (x, y in page pixels): the deepest laid-out element there, or nothing.
+    pub const HIT: u32 = 26;
+    /// (control): its current value; (control, text): sets it.
+    pub const VALUE: u32 = 27;
+    /// (control, caret in characters): focuses a text control and places its caret;
+    /// (): no text control has focus.
+    pub const CARET: u32 = 28;
     /// WebGL batch for canvas NODE: commands, then the batch's bytes (an ArrayBuffer).
     pub const GL: u32 = 64;
     /// WebGL query for canvas NODE: what, then its arguments; answers text or bytes.
@@ -71,9 +78,16 @@ pub mod op {
     /// (url): asks the browser to load it; answers the request's id. The browser loads it
     /// once the script returns and dispatches `fetched\tID\tSTATUS\tLENGTH` (status 0:
     /// it could not be loaded).
+    /// Arguments after the url (all optional): method, request headers as
+    /// `name: value` lines, and the body's bytes.
     pub const FETCH: u32 = 66;
     /// (id): the loaded bytes, once (text or, with bit 16, an ArrayBuffer).
     pub const FETCH_BODY: u32 = 67;
+    /// (id): the reply's final address, a newline, then its headers as `name: value`
+    /// lines (Set-Cookie left out).
+    pub const FETCH_HEAD: u32 = 68;
+    /// (): what `document.cookie` reads; (text): a `document.cookie = text` assignment.
+    pub const COOKIE: u32 = 69;
 }
 
 /// What scripts act on. A `None` result is JavaScript `null`.
@@ -100,8 +114,10 @@ pub struct Limits {
 }
 impl Default for Limits {
     // Libraries like three.js take about a second to load on a fast host and need room
-    // for their scenes; browsers let a script run for about ten seconds before they ask.
-    fn default() -> Self { Self { memory_bytes: 160 << 20, heap_bytes: 128 << 20, budget_ms: 10_000, load_budget_ms: 120_000 } }
+    // for their scenes (a whole game, such as a Quake port with its data, needs most of a
+    // gigabyte); memory grows only as it is used. Browsers let a script run for about
+    // ten seconds before they ask.
+    fn default() -> Self { Self { memory_bytes: 1 << 30, heap_bytes: 960 << 20, budget_ms: 10_000, load_budget_ms: 120_000 } }
 }
 
 /// The first op whose arguments are bytes rather than text.

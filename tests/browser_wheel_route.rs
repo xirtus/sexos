@@ -7,6 +7,7 @@ extern crate self as sex_pdx;
 #[path="../crates/sex-pdx/src/app_catalog.rs"] pub mod real_app_catalog;
 #[path="../crates/sex-pdx/src/app_lifecycle.rs"]mod lifecycle_abi;
 #[path="../crates/sex-pdx/src/app_scroll.rs"]pub mod app_scroll;
+#[path="../crates/sex-pdx/src/app_pointer.rs"]pub mod app_pointer;
 #[path="../crates/sex-pdx/src/app_key.rs"]pub mod app_key;
 #[path="../crates/sex-pdx/src/text_encoding.rs"]pub mod text_encoding;
 #[path="../crates/sex-pdx/src/text_selection.rs"]pub mod text_selection;
@@ -94,6 +95,9 @@ unsafe fn is_tombstoned(_:u64)->bool{TOMBSTONED}
 unsafe fn clipboard_live(subject:Subject)->Option<bool>{LIVE_QUERIES.push(subject);if REAL_LIVE{actual_liveness::check(subject)}else{LIVE}}
 unsafe fn clipboard_poll(){}
 unsafe fn pdx_call(route:u64,opcode:u64,a:u64,b:u64,c:u64)->(u64,u64){SENT.push((route,opcode,[a,b,c]));(STATUS,0)}
+// No program window takes the wheel in these cases.
+unsafe fn program_pointer_wheel(_steps:i8)->bool{false}
+fn is_pointer_move(word:u64)->bool{matches!(app_pointer::Pointer::decode(word,0,app_pointer::CLASS),Some(app_pointer::Pointer{kind:app_pointer::Kind::Move,..}))}
 include!(env!("BROWSER_WHEEL_PRODUCTION"));
 fn browser()->Participant{Participant::from_catalog(lifecycle_abi::CatalogInfo{target_pd:15,task_id:15,surface_id:300,coordinator_pd:3}).unwrap()}
 fn wheel(vertical:i8)->Item{Item{destination:browser(),input:Input::Scroll(Scroll::new(vertical).unwrap())}}

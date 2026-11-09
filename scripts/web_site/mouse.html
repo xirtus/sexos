@@ -1,0 +1,23 @@
+<!doctype html>
+<html><head><title>Mouse test</title>
+<style>
+body { margin: 0; }
+canvas { display: block; }
+p { margin: 8px; }
+</style></head>
+<body>
+<canvas id="c" width="200" height="100"></canvas>
+<p><a id="next" href="mouse2.html">Next page</a></p>
+<script>
+const c = document.getElementById('c'), g = c.getContext('2d');
+g.fillStyle = '#1a73e8'; g.fillRect(0, 0, 200, 100);
+let moved = false;
+c.addEventListener('mousemove', e => { if (!moved) { moved = true; console.log('mouse move ' + e.offsetX + ',' + e.offsetY); } });
+c.addEventListener('mousedown', e => { console.log('mouse down ' + e.offsetX + ',' + e.offsetY + ' button ' + e.button + ' buttons ' + e.buttons); g.fillStyle = '#188038'; g.fillRect(e.offsetX - 5, e.offsetY - 5, 10, 10); });
+c.addEventListener('click', e => console.log('mouse click ' + e.offsetX + ',' + e.offsetY));
+c.addEventListener('contextmenu', e => console.log('mouse menu ' + e.button));
+c.addEventListener('wheel', e => { e.preventDefault(); console.log('mouse wheel ' + e.deltaY); });
+document.getElementById('next').addEventListener('click', () => console.log('mouse link'));
+console.log('mouse ready');
+</script>
+</body></html>

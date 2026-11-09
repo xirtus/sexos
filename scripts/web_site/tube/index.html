@@ -1,0 +1,59 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Tube test</title>
+<style>body{margin:16px;font-size:14px} #out{color:#1a73e8}</style></head>
+<body>
+<h2>Tube test</h2>
+<p>This page arrives chunked and gzip-compressed over HTTP/1.1, like youtube.com pages do.</p>
+<p id="out">waiting</p>
+<p id="other" data-base="{{OTHER}}"></p>
+<script>
+// What the YouTube player does, in miniature: cookies, a JSON POST to an API with its
+// own headers, then media bytes fetched by Range.
+const out = document.getElementById('out');
+const seen = [];
+function done(line) { seen.push(line); console.log('tube ' + line); out.textContent = seen.join(' | '); }
+done('cookie ' + document.cookie);
+document.cookie = 'script_pref=f1; path=/';
+fetch('/tube/api/player?prettyPrint=false', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json', 'X-Tube-Client': 'web' },
+  body: JSON.stringify({ videoId: 'sexos-demo', context: { client: { hl: 'en' } } }),
+}).then(r => r.json().then(j => {
+  done('post ' + r.status + ' ' + r.headers.get('content-type') + ' video=' + j.videoId + ' client=' + j.client + ' cookie=' + j.cookie);
+  const x = new XMLHttpRequest();
+  x.open('GET', j.media);
+  x.responseType = 'arraybuffer';
+  x.setRequestHeader('Range', 'bytes=1000-1015');
+  x.onload = () => {
+    const b = new Uint8Array(x.response);
+    done('range ' + x.status + ' ' + x.getResponseHeader('Content-Range') + ' ' + b.length + ' first=' + b[0] + ' last=' + b[b.length - 1]);
+  };
+  x.onerror = () => done('range failed');
+  x.onloadend = () => {
+    // Another origin: it sees where the request came from, never this site's cookies,
+    // and its reply reaches the page only if it allows that.
+    const other = document.getElementById('other').getAttribute('data-base');
+    fetch(other + '/open').then(r => r.json()).then(j => {
+      done('cross open origin=' + j.origin + ' cookie=' + (j.cookie || 'none'));
+      return fetch(other + '/closed').then(() => done('cross closed read'), () => done('cross closed blocked'));
+    }, e => done('cross open failed ' + e)).then(() => {
+      // Several slow requests at once, as a player fetches segments and thumbnails:
+      // they travel side by side, not one after another.
+      const began = Date.now();
+      const many = Array.from({ length: 12 }, (_, i) => i + 1);
+      return Promise.all(many.map(n => fetch('/tube/slow/' + n).then(r => r.text()))).then(t => done('parallel ' + t.join(',') + ' ms=' + (Date.now() - began)));
+    }).catch(e => done('parallel failed ' + e)).then(() => {
+      // A request to a place that never answers must not hold up one that does.
+      fetch('http://10.0.2.123:9/never').then(() => done('stuck answered'), () => done('stuck gave up'));
+      const began = Date.now();
+      return fetch('/tube/slow/0').then(r => r.text()).then(t => done('beside stuck ' + t + ' ms=' + (Date.now() - began)));
+    }).then(() => fetch('/tube/drop')).then(r => r.text()).then(() => new Promise(go => setTimeout(go, 300))).then(() => {
+      // The site closed the kept connection without saying so: the next request
+      // finds it closed and goes again on a new one.
+      return fetch('/tube/after').then(r => r.text()).then(t => done('after drop ' + t), e => done('after drop failed ' + e));
+    });
+  };
+  x.send();
+})).catch(e => done('post failed ' + e));
+</script>
+</body></html>

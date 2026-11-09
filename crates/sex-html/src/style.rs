@@ -9,7 +9,18 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Display { None, Block, Inline, InlineBlock, ListItem, Table, TableRow, TableCell, Flex, Contents }
+pub enum Display { None, Block, Inline, InlineBlock, ListItem, Table, TableRow, TableCell, Flex, Grid, Contents }
+
+/// One `grid-template-columns` track.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Track { Len(Len), /// hundredths of an `fr`
+    Fr(i32), Auto, /// `minmax(min, max)` whose max is a flexible (`fr`, hundredths) or, with 0, `auto` size
+    MinMax(Len, i32) }
+
+/// Where a grid item goes along the columns: lines are 1-based, negative ones count from
+/// the end, 0 is `auto`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct GridPlace { pub start: i32, pub end: i32, pub span: i32 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Len { Auto, Px(i32), /// hundredths of a percent
@@ -43,6 +54,26 @@ pub enum Justify { Start, Center, End, SpaceBetween, SpaceAround, SpaceEvenly }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Float { None, Left, Right }
 
+/// A CSS animation: `@keyframes` name and timing.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Animation {
+    pub name: String,
+    pub duration_ms: u32,
+    pub delay_ms: i32,
+    /// Iterations in hundredths; `u32::MAX` is infinite.
+    pub iterations: u32,
+    pub alternate: bool,
+    pub reverse: bool,
+    /// 0 linear, 1 ease, 2 ease-in, 3 ease-out, 4 ease-in-out, 100+n steps(n).
+    pub timing: u32,
+    pub fill_forwards: bool,
+    pub fill_backwards: bool,
+}
+
+impl Default for Animation {
+    fn default() -> Self { Animation { name: String::new(), duration_ms: 0, delay_ms: 0, iterations: 100, alternate: false, reverse: false, timing: 1, fill_forwards: false, fill_backwards: false } }
+}
+
 /// Colours are 0xAARRGGBB (straight alpha).
 #[derive(Clone, Debug)]
 pub struct Style {
@@ -73,7 +104,15 @@ pub struct Style {
     pub max_width: Len,
     pub min_height: Len,
     pub position: Position,
+    /// `top`, `right`, `bottom`, `left` for positioned boxes.
+    pub inset: [Len; 4],
+    /// `z-index`; `None` is `auto`.
+    pub z_index: Option<i32>,
     pub float: Float,
+    /// `clear`: bit 0 left, bit 1 right.
+    pub clear: u8,
+    /// `overflow` other than `visible`: the box contains its floats.
+    pub overflow_clip: bool,
     pub flex_column: bool,
     pub flex_wrap: bool,
     pub flex_grow: i32,
@@ -85,9 +124,24 @@ pub struct Style {
     pub justify: Justify,
     pub align_center: bool,
     pub gap: i32,
+    pub row_gap: i32,
+    pub grid_columns: Vec<Track>,
+    /// `repeat(auto-fill | auto-fit, track)`: the track, and whether empty tracks collapse.
+    pub grid_auto: Option<(Track, bool)>,
+    pub grid_column: GridPlace,
     pub box_sizing_border: bool,
     pub letter_spacing: i32,
     pub vertical_super: i8,
+    /// `transform: translate(..)` (percentages are of the box's own size).
+    pub translate: Option<(Len, Len)>,
+    /// The first outer `box-shadow`: x, y, blur, spread and colour.
+    pub shadow: Option<(i32, i32, i32, i32, u32)>,
+    /// The first of `animation`.
+    pub animation: Option<Animation>,
+    /// `opacity`, 0 to 255.
+    pub opacity: u8,
+    /// Custom properties (`--name: value`), inherited; shared until an element sets one.
+    pub vars: alloc::rc::Rc<BTreeMap<String, String>>,
 }
 
 pub const TOP: usize = 0;
@@ -124,7 +178,11 @@ impl Style {
             max_width: Len::Auto,
             min_height: Len::Auto,
             position: Position::Static,
+            inset: [Len::Auto; 4],
+            z_index: None,
             float: Float::None,
+            clear: 0,
+            overflow_clip: false,
             flex_column: false,
             flex_wrap: false,
             flex_grow: 0,
@@ -134,8 +192,17 @@ impl Style {
             justify: Justify::Start,
             align_center: false,
             gap: 0,
+            row_gap: 0,
+            grid_columns: Vec::new(),
+            grid_auto: None,
+            grid_column: GridPlace::default(),
             box_sizing_border: false,
             letter_spacing: 0,
+            vars: Default::default(),
+            opacity: 255,
+            animation: None,
+            shadow: None,
+            translate: None,
             vertical_super: 0,
         }
     }
@@ -159,6 +226,7 @@ impl Style {
         s.letter_spacing = parent.letter_spacing;
         s.border_collapse = parent.border_collapse;
         s.border_spacing = parent.border_spacing;
+        s.vars = parent.vars.clone();
         s
     }
 
@@ -167,7 +235,7 @@ impl Style {
     }
 
     pub fn is_block_level(&self) -> bool {
-        matches!(self.display, Display::Block | Display::ListItem | Display::Table | Display::TableRow | Display::TableCell | Display::Flex)
+        matches!(self.display, Display::Block | Display::ListItem | Display::Table | Display::TableRow | Display::TableCell | Display::Flex | Display::Grid)
     }
 }
 
@@ -234,12 +302,22 @@ pub struct Cascade<'a> {
     by_class: BTreeMap<&'a str, Vec<(u16, u32, u16)>>,
     by_tag: BTreeMap<&'a str, Vec<(u16, u32, u16)>>,
     universal: Vec<(u16, u32, u16)>,
+    /// The time now in milliseconds, for animations.
+    pub now_ms: u64,
+    /// When each element's animation started (by element and animation name); an
+    /// animation not in the map starts at `start_default`.
+    pub starts: core::cell::RefCell<BTreeMap<(NodeId, String), u64>>,
+    pub start_default: u64,
+    /// The animations styled in this pass, with their starts.
+    pub seen: core::cell::RefCell<BTreeMap<(NodeId, String), u64>>,
+    /// Set when some element is animating (the page should be styled again soon).
+    pub animating: core::cell::Cell<bool>,
 }
 
 impl<'a> Cascade<'a> {
     /// `sheets[0]` is the user-agent sheet; the rest are the page's, in document order.
     pub fn new(sheets: Vec<&'a Sheet>) -> Self {
-        let mut c = Cascade { sheets, by_id: BTreeMap::new(), by_class: BTreeMap::new(), by_tag: BTreeMap::new(), universal: Vec::new() };
+        let mut c = Cascade { sheets, by_id: BTreeMap::new(), by_class: BTreeMap::new(), by_tag: BTreeMap::new(), universal: Vec::new(), now_ms: 0, starts: Default::default(), start_default: 0, seen: Default::default(), animating: core::cell::Cell::new(false) };
         for (si, sheet) in c.sheets.iter().enumerate() {
             for (ri, rule) in sheet.rules.iter().enumerate() {
                 for (xi, sel) in rule.selectors.iter().enumerate() {
@@ -304,9 +382,59 @@ pub fn compute(dom: &Dom, cascade: &Cascade, node: NodeId, parent: &Style, root_
         .chain(important.iter().copied())
         .chain(inline.iter().filter(|d| d.important))
         .collect();
+    // Custom properties first, then var() references in every other value.
+    if ordered.iter().any(|d| d.name.starts_with("--")) {
+        // The cascade's winners first, then each resolved against the others (and what
+        // the parent passed down), so order does not matter and cycles drop out.
+        let mut own: BTreeMap<String, String> = BTreeMap::new();
+        for d in &ordered { if let Some(name) = d.name.strip_prefix("--") { own.insert(String::from(name), d.value.clone()); } }
+        let mut done: BTreeMap<String, Option<String>> = BTreeMap::new();
+        let names: Vec<String> = own.keys().cloned().collect();
+        for name in &names { resolve_var(name, &own, &style.vars, &mut done, &mut Vec::new()); }
+        let mut vars = (*style.vars).clone();
+        for (name, v) in done { match v { Some(v) => { vars.insert(name, v); } None => { vars.remove(&name); } } }
+        style.vars = alloc::rc::Rc::new(vars);
+    }
+    let substituted: Vec<Declaration>;
+    let ordered: Vec<&Declaration> = if ordered.iter().any(|d| d.value.contains("var(")) {
+        substituted = ordered.iter().filter(|d| !d.name.starts_with("--")).filter_map(|d| {
+            if !d.value.contains("var(") { return Some((*d).clone()); }
+            substitute_vars(&d.value, &style.vars, 0).map(|value| Declaration { name: d.name.clone(), value, important: d.important })
+        }).collect();
+        substituted.iter().collect()
+    } else { ordered };
     // font-size first: other `em` lengths depend on it.
     for d in &ordered { if d.name == "font-size" || d.name == "font" { apply(&mut style, d, &ctx, true); } }
     for d in &ordered { apply(&mut style, d, &ctx, false); }
+    if let Some(a) = style.animation.clone() {
+        if let Some(frames) = cascade.sheets.iter().rev().find_map(|sh| sh.keyframes.iter().rev().find(|(n, _)| *n == a.name)).map(|(_, f)| f) {
+            let key = (node, a.name.clone());
+            let start = cascade.starts.borrow().get(&key).copied().unwrap_or(cascade.start_default);
+            cascade.seen.borrow_mut().insert(key, start);
+            // A frame that leaves a property out takes it from the element's own style.
+            let underlying = |name: &str, other: &str| -> String {
+                if let Some(d) = ordered.iter().rev().find(|d| d.name == name) { return d.value.clone(); }
+                match name {
+                    "color" => hex(style.color),
+                    "background" | "background-color" => hex(style.background),
+                    "opacity" => alloc::format!("{}", style.opacity as f32 / 255.0),
+                    _ if name.starts_with("margin-") || name.starts_with("padding-") => {
+                        let side = ["top", "right", "bottom", "left"].iter().position(|s| name.ends_with(s));
+                        let lens = if name.starts_with("margin-") { &style.margin } else { &style.padding };
+                        match side.map(|i| lens[i]) { Some(Len::Px(px)) => alloc::format!("{px}px"), _ => zeroed(other) }
+                    }
+                    // Lengths and transforms start from zero.
+                    _ => zeroed(other),
+                }
+            };
+            if let Some(decls) = animate(&a, frames, cascade.now_ms.saturating_sub(start), &cascade.animating, &underlying) {
+                for d in &decls { if d.name == "font-size" { apply(&mut style, d, &ctx, true); } }
+                for d in &decls { apply(&mut style, d, &ctx, false); }
+                // Animations sit below !important declarations.
+                for d in ordered.iter().filter(|d| d.important) { apply(&mut style, d, &ctx, false); }
+            }
+        }
+    }
     if style.position == Position::Absolute || style.position == Position::Fixed {
         if style.display == Display::Inline { style.display = Display::Block; }
     }
@@ -320,7 +448,7 @@ struct Ctx<'p> { parent: &'p Style, root_font: i32, viewport: (i32, i32) }
 fn presentational_hints(dom: &Dom, node: NodeId, s: &mut Style, ctx: &Ctx) {
     let tag = dom.tag(node).unwrap_or("");
     if let Some(c) = dom.attr(node, "bgcolor").and_then(parse_color) { s.background = c; }
-    if matches!(tag, "td" | "th" | "table" | "img" | "hr" | "div" | "col" | "iframe" | "canvas" | "video") {
+    if matches!(tag, "td" | "th" | "table" | "img" | "hr" | "div" | "col" | "iframe" | "canvas" | "video" | "svg") {
         if let Some(w) = dom.attr(node, "width").and_then(|v| parse_len(v, s, ctx)) { s.width = w; }
         if let Some(h) = dom.attr(node, "height").and_then(|v| parse_len(v, s, ctx)) { s.height = h; }
     }
@@ -462,6 +590,223 @@ fn sides<T: Copy>(values: &[T]) -> Option<[T; 4]> {
 }
 
 /// Splits a value on top-level whitespace (keeping `rgb(1, 2, 3)` whole).
+/// `grid-column-start`/`-end` value: a line number or `span N`.
+fn grid_line(v: &str, g: &mut GridPlace, start: bool) {
+    let v = v.trim();
+    if let Some(n) = v.strip_prefix("span").and_then(|n| n.trim().parse::<i32>().ok()) { g.span = n.clamp(1, 1000); return; }
+    if let Ok(n) = v.parse::<i32>() { if n != 0 { if start { g.start = n } else { g.end = n } } }
+}
+
+/// `grid-template-columns`: explicit tracks, and an auto-repeated one.
+fn grid_tracks(v: &str, s: &Style, ctx: &Ctx) -> (Vec<Track>, Option<(Track, bool)>) {
+    fn one(w: &str, s: &Style, ctx: &Ctx) -> Option<Track> {
+        let w = w.trim();
+        if let Some(f) = w.strip_suffix("fr") { return css::parse_number(f).map(|f| Track::Fr(f.max(0))); }
+        if let Some(inner) = w.strip_prefix("minmax(").and_then(|r| r.strip_suffix(')')) {
+            let (a, b) = inner.split_once(',')?;
+            let min = parse_len(a, s, ctx).unwrap_or(Len::Auto);
+            let b = b.trim();
+            return Some(match b.strip_suffix("fr").and_then(css::parse_number) {
+                Some(f) => Track::MinMax(min, f.max(1)),
+                None => match parse_len(b, s, ctx) { Some(Len::Auto) | None => Track::MinMax(min, 0), Some(l) => Track::Len(l) },
+            });
+        }
+        if w.starts_with("fit-content(") { return Some(Track::Auto); }
+        match parse_len(w, s, ctx)? { Len::Auto => Some(Track::Auto), l => Some(Track::Len(l)) }
+    }
+    let mut tracks = Vec::new();
+    let mut auto = None;
+    for w in words(v) {
+        if w.starts_with('[') { continue; }
+        if let Some(inner) = w.strip_prefix("repeat(").and_then(|r| r.strip_suffix(')')) {
+            let Some((count, rest)) = inner.split_once(',') else { continue };
+            let inner: Vec<Track> = words(rest).into_iter().filter(|w| !w.starts_with('[')).filter_map(|w| one(w, s, ctx)).collect();
+            match count.trim() {
+                "auto-fill" | "auto-fit" => if let Some(t) = inner.first() { auto = Some((*t, count.trim() == "auto-fit")) },
+                n => if let Ok(n) = n.parse::<usize>() { for _ in 0..n.min(1000) { tracks.extend_from_slice(&inner); } },
+            }
+            continue;
+        }
+        if let Some(t) = one(w, s, ctx) { tracks.push(t); }
+    }
+    (tracks, auto)
+}
+
+/// One of an element's own custom properties, with its references resolved; None when
+/// it is invalid (a cycle, or a reference with no value and no fallback).
+fn resolve_var(name: &str, own: &BTreeMap<String, String>, inherited: &BTreeMap<String, String>, done: &mut BTreeMap<String, Option<String>>, stack: &mut Vec<String>) -> Option<String> {
+    if let Some(v) = done.get(name) { return v.clone(); }
+    if stack.iter().any(|s| s == name) || stack.len() > 32 { return None; }
+    let raw = own.get(name)?.clone();
+    stack.push(String::from(name));
+    let v = substitute_with(&raw, &mut |n: &str| if own.contains_key(n) { resolve_var(n, own, inherited, done, stack) } else { inherited.get(n).cloned() }, 0);
+    stack.pop();
+    done.insert(String::from(name), v.clone());
+    v
+}
+
+/// Replaces each `var(--name, fallback)` in `v`; None when one has no value and no
+/// fallback (the declaration then does not apply).
+fn substitute_vars(v: &str, vars: &BTreeMap<String, String>, depth: u32) -> Option<String> {
+    substitute_with(v, &mut |n: &str| vars.get(n).cloned(), depth)
+}
+
+fn substitute_with(v: &str, lookup: &mut dyn FnMut(&str) -> Option<String>, depth: u32) -> Option<String> {
+    if !v.contains("var(") { return Some(String::from(v)); }
+    if depth > 16 { return None; }
+    let mut out = String::new();
+    let mut rest = v;
+    while let Some(at) = rest.find("var(") {
+        out.push_str(&rest[..at]);
+        let body = &rest[at + 4..];
+        let mut level = 1;
+        let mut end = None;
+        for (i, c) in body.char_indices() {
+            match c { '(' => level += 1, ')' => { level -= 1; if level == 0 { end = Some(i); break; } } _ => {} }
+        }
+        let end = end?;
+        let inner = &body[..end];
+        let (name, fallback) = match inner.split_once(',') { Some((n, f)) => (n.trim(), Some(f.trim())), None => (inner.trim(), None) };
+        let value = match lookup(name.strip_prefix("--").unwrap_or(name).to_ascii_lowercase().as_str()) {
+            Some(v) => v,
+            None => substitute_with(fallback?, lookup, depth + 1)?,
+        };
+        out.push_str(&substitute_with(&value, lookup, depth + 1)?);
+        rest = &body[end + 1..];
+    }
+    out.push_str(rest);
+    Some(out)
+}
+
+/// A CSS time in milliseconds.
+fn parse_time(v: &str) -> Option<i32> {
+    if let Some(ms) = v.strip_suffix("ms") { return css::parse_number(ms).map(|n| n / 100); }
+    v.strip_suffix('s').and_then(css::parse_number).map(|n| n * 10)
+}
+
+/// A timing function's code (see [`Animation::timing`]).
+fn timing(v: &str) -> Option<u32> {
+    Some(match v {
+        "linear" => 0, "ease" => 1, "ease-in" => 2, "ease-out" => 3, "ease-in-out" => 4, "step-start" => 101, "step-end" => 101,
+        _ if v.starts_with("cubic-bezier(") => 1,
+        _ if v.starts_with("steps(") => 100 + v[6..].split(|c: char| c == ',' || c == ')').next()?.trim().parse::<u32>().ok()?.clamp(1, 1000),
+        _ => return None,
+    })
+}
+
+/// The declarations animation `a` contributes at `now_ms`, or None when it is not
+/// in effect. Sets `animating` while it is still running.
+fn animate(a: &Animation, frames: &[(i32, Vec<Declaration>)], now_ms: u64, animating: &core::cell::Cell<bool>, underlying: &dyn Fn(&str, &str) -> String) -> Option<Vec<Declaration>> {
+    if frames.is_empty() || a.duration_ms == 0 { return None; }
+    let t = now_ms as i64 - a.delay_ms as i64;
+    let dur = a.duration_ms as i64;
+    let total = if a.iterations == u32::MAX { i64::MAX } else { dur * a.iterations as i64 / 100 };
+    let (iter, frac) = if t < 0 {
+        animating.set(true);
+        if !a.fill_backwards { return None; }
+        (0, 0)
+    } else if t >= total {
+        if !a.fill_forwards { return None; }
+        // The end of the last iteration.
+        let n = (a.iterations as i64 + 99) / 100;
+        let part = (a.iterations as i64 % 100) * 10;
+        (n.max(1) - 1, if part == 0 { 1000 } else { part })
+    } else {
+        animating.set(true);
+        (t / dur, (t % dur) * 1000 / dur)
+    };
+    let mut p = frac as i32;
+    if (a.alternate && iter % 2 == 1) != a.reverse { p = 1000 - p; }
+    // Timing applies within each pair of keyframes.
+    let ease = |x: f32| match a.timing {
+        0 => x,
+        2 => x * x,
+        3 => 1.0 - (1.0 - x) * (1.0 - x),
+        1 | 4 => x * x * (3.0 - 2.0 * x),
+        n if n > 100 => { let k = (n - 100) as f32; ((x * k) as i32) as f32 / k }
+        _ => x,
+    };
+    // Each property between the frames around p that set it; 0% and 100% default to
+    // the element's own value.
+    let mut names: Vec<&str> = Vec::new();
+    for (_, ds) in frames { for d in ds { if !names.contains(&d.name.as_str()) { names.push(&d.name); } } }
+    let mut out = Vec::new();
+    for name in names {
+        fn at<'a>(f: &'a (i32, Vec<Declaration>), name: &str) -> Option<(i32, &'a Declaration)> {
+            f.1.iter().rev().find(|d| d.name == name).map(|d| (f.0, d))
+        }
+        let before = frames.iter().rev().filter(|f| f.0 <= p).find_map(|f| at(f, name));
+        let after = frames.iter().filter(|f| f.0 >= p).find_map(|f| at(f, name));
+        let (a0, v0, a1, v1) = match (before, after) {
+            (Some((a0, d0)), Some((a1, d1))) => (a0, d0.value.clone(), a1, d1.value.clone()),
+            (None, Some((a1, d1))) => (0, underlying(name, &d1.value), a1, d1.value.clone()),
+            (Some((a0, d0)), None) => (a0, d0.value.clone(), 1000, underlying(name, &d0.value)),
+            (None, None) => continue,
+        };
+        let value = if a1 > a0 { interpolate(&v0, &v1, ease((p - a0) as f32 / (a1 - a0) as f32)) } else { v0 };
+        out.push(Declaration { name: String::from(name), value, important: false });
+    }
+    Some(out)
+}
+
+/// `a` to `b` at `t` (0..1): colours channel by channel, otherwise every number in two
+/// values of the same shape (`translateX(0px)` .. `translateX(40px)`); else a step.
+fn interpolate(a: &str, b: &str, t: f32) -> String {
+    let mix = |x: f32, y: f32| x + (y - x) * t;
+    if let (Some(ca), Some(cb)) = (parse_color(a), parse_color(b)) {
+        let ch = |c: u32, s: u32| ((c >> s) & 0xFF) as f32;
+        let m = |s: u32| (mix(ch(ca, s), ch(cb, s)) + 0.5) as u32;
+        return alloc::format!("rgba({}, {}, {}, {})", m(16), m(8), m(0), mix(ch(ca, 24), ch(cb, 24)) / 255.0);
+    }
+    fn split(v: &str) -> (Vec<&str>, Vec<f32>) {
+        let (mut text, mut nums) = (Vec::new(), Vec::new());
+        let b = v.as_bytes();
+        let (mut i, mut start) = (0, 0);
+        while i < b.len() {
+            let num_start = (b[i].is_ascii_digit() || (b[i] == b'.' && b.get(i + 1).is_some_and(u8::is_ascii_digit)) || (b[i] == b'-' && b.get(i + 1).is_some_and(|c| c.is_ascii_digit() || *c == b'.')))
+                && (i == 0 || !(b[i - 1].is_ascii_alphabetic() || b[i - 1] == b'#'));
+            if num_start {
+                let mut j = i + 1;
+                while j < b.len() && (b[j].is_ascii_digit() || b[j] == b'.') { j += 1; }
+                if let Ok(n) = v[i..j].parse::<f32>() { text.push(&v[start..i]); nums.push(n); start = j; i = j; continue; }
+            }
+            i += 1;
+        }
+        text.push(&v[start..]);
+        (text, nums)
+    }
+    let (ta, na) = split(a);
+    let (tb, nb) = split(b);
+    if ta == tb && na.len() == nb.len() {
+        let mut out = String::new();
+        for (k, s) in ta.iter().enumerate() {
+            out.push_str(s);
+            if k < na.len() { let v = mix(na[k], nb[k]); out.push_str(&alloc::format!("{}", round(v * 1000.0) / 1000.0)); }
+        }
+        return out;
+    }
+    String::from(if t < 0.5 { a } else { b })
+}
+
+/// `#rrggbbaa` for a 0xAARRGGBB colour.
+fn hex(c: u32) -> String { alloc::format!("#{:06x}{:02x}", c & 0xFFFFFF, c >> 24) }
+
+/// `v` with every number zero: the start of `translateX(40px)` is `translateX(0px)`.
+fn zeroed(v: &str) -> String {
+    if parse_color(v).is_some() { return String::from("transparent"); }
+    let mut out = String::new();
+    let mut digits = false;
+    let b = v.as_bytes();
+    for (i, &c) in b.iter().enumerate() {
+        let num = c.is_ascii_digit() || c == b'.' || (c == b'-' && b.get(i + 1).is_some_and(|n| n.is_ascii_digit() || *n == b'.'));
+        let in_word = i > 0 && !digits && (b[i - 1].is_ascii_alphabetic() || b[i - 1] == b'#');
+        if num && !in_word { if !digits { out.push('0'); } digits = true; } else { digits = false; out.push(c as char); }
+    }
+    out
+}
+
+fn round(x: f32) -> f32 { if x >= 0.0 { (x + 0.5) as i64 as f32 } else { (x - 0.5) as i64 as f32 } }
+
 fn words(v: &str) -> Vec<&str> {
     let mut out = Vec::new();
     let mut depth = 0;
@@ -517,9 +862,12 @@ fn apply(s: &mut Style, d: &Declaration, ctx: &Ctx, font_only: bool) {
     match d.name.as_str() {
         "display" => {
             let first = lv.split_ascii_whitespace().next().unwrap_or("");
+            // flow-root contains its floats, as overflow other than visible does.
+            if first == "flow-root" { s.overflow_clip = true; }
             s.display = match first {
                 "none" => Display::None,
-                "block" | "flow-root" | "table-caption" | "table-header-group" | "table-row-group" | "table-footer-group" | "grid" | "-webkit-box" => Display::Block,
+                "block" | "flow-root" | "table-caption" | "table-header-group" | "table-row-group" | "table-footer-group" | "-webkit-box" => Display::Block,
+                "grid" => Display::Grid,
                 "inline" | "ruby" => Display::Inline,
                 "inline-block" | "inline-flex" | "inline-grid" | "inline-table" => Display::InlineBlock,
                 "list-item" => Display::ListItem,
@@ -631,6 +979,18 @@ fn apply(s: &mut Style, d: &Declaration, ctx: &Ctx, font_only: bool) {
         "max-width" => if let Some(l) = len(s) { s.max_width = l },
         "min-height" => if let Some(l) = len(s) { s.min_height = l },
         "position" => s.position = match lv.as_str() { "relative" => Position::Relative, "absolute" => Position::Absolute, "fixed" => Position::Fixed, "sticky" | "-webkit-sticky" => Position::Sticky, _ => Position::Static },
+        "top" | "right" | "bottom" | "left" => if let Some(l) = len(s) { s.inset[side_index(&d.name)] = l },
+        "inset" => {
+            let ls: Vec<Len> = words(v).iter().filter_map(|w| if w.eq_ignore_ascii_case("auto") { Some(Len::Auto) } else { parse_len(w, s, ctx) }).collect();
+            let get = |i: usize| ls.get(i).copied();
+            if let Some(t) = get(0) {
+                let r = get(1).unwrap_or(t);
+                s.inset = [t, r, get(2).unwrap_or(t), get(3).unwrap_or(r)];
+            }
+        }
+        "z-index" => s.z_index = lv.trim().parse().ok(),
+        "clear" => s.clear = match lv.as_str() { "left" | "inline-start" => 1, "right" | "inline-end" => 2, "both" => 3, _ => 0 },
+        "overflow" | "overflow-x" | "overflow-y" => s.overflow_clip = lv.split_ascii_whitespace().any(|w| matches!(w, "hidden" | "auto" | "scroll" | "clip")),
         "float" => s.float = match lv.as_str() { "left" => Float::Left, "right" => Float::Right, _ => Float::None },
         "flex-direction" => s.flex_column = lv.starts_with("column"),
         "flex-wrap" => s.flex_wrap = lv == "wrap" || lv == "wrap-reverse",
@@ -659,7 +1019,103 @@ fn apply(s: &mut Style, d: &Declaration, ctx: &Ctx, font_only: bool) {
             "space-around" => Justify::SpaceAround, "space-evenly" => Justify::SpaceEvenly, _ => Justify::Start,
         },
         "align-items" => s.align_center = lv == "center",
-        "gap" | "column-gap" | "grid-gap" | "grid-column-gap" => if let Some(Len::Px(p)) = words(v).last().and_then(|w| parse_len(w, s, ctx)) { s.gap = p },
+        "gap" | "column-gap" | "grid-gap" | "grid-column-gap" => {
+            let w = words(v);
+            if let Some(Len::Px(p)) = w.last().and_then(|w| parse_len(w, s, ctx)) { s.gap = p }
+            if matches!(d.name.as_str(), "gap" | "grid-gap") { if let Some(Len::Px(p)) = w.first().and_then(|w| parse_len(w, s, ctx)) { s.row_gap = p } }
+        }
+        "transform" | "translate" => {
+            // Translations add up; other transforms are not drawn.
+            let (mut x, mut y) = (Len::Px(0), Len::Px(0));
+            let add = |a: Len, b: Option<Len>| match (a, b) { (Len::Px(p), Some(Len::Px(q))) => Len::Px(p + q), (a, Some(Len::Px(0))) => a, (Len::Px(0), Some(b)) => b, (Len::Pct(p), Some(Len::Pct(q))) => Len::Pct(p + q), (a, _) => a };
+            if d.name == "translate" {
+                let w = words(v);
+                x = w.first().and_then(|w| parse_len(w, s, ctx)).unwrap_or(Len::Px(0));
+                y = w.get(1).and_then(|w| parse_len(w, s, ctx)).unwrap_or(Len::Px(0));
+            } else {
+                for f in words(&lv) {
+                    let Some((name, args)) = f.strip_suffix(')').and_then(|f| f.split_once('(')) else { continue };
+                    let a: Vec<Option<Len>> = args.split(',').map(|a| parse_len(a.trim(), s, ctx)).collect();
+                    match name {
+                        "translate" | "translate3d" => { x = add(x, a.first().copied().flatten()); y = add(y, a.get(1).copied().flatten()); }
+                        "translatex" => x = add(x, a.first().copied().flatten()),
+                        "translatey" => y = add(y, a.first().copied().flatten()),
+                        _ => {}
+                    }
+                }
+            }
+            s.translate = (x != Len::Px(0) || y != Len::Px(0)).then_some((x, y));
+        }
+        "box-shadow" => {
+            s.shadow = None;
+            if let Some(first) = css::split_top(&lv, ',').into_iter().find(|p| !p.contains("inset")) {
+                let mut lens = Vec::new();
+                let mut color = s.color;
+                for w in words(first) {
+                    match parse_len(w, s, ctx) { Some(Len::Px(p)) => lens.push(p), _ => if let Some(c) = parse_color_with(w, s.color) { color = c } }
+                }
+                if lens.len() >= 2 && color >> 24 != 0 {
+                    s.shadow = Some((lens[0], lens[1], lens.get(2).copied().unwrap_or(0).clamp(0, 200), lens.get(3).copied().unwrap_or(0).clamp(-200, 200), color));
+                }
+            }
+        }
+        "animation" => {
+            let first = css::split_top(v, ',').into_iter().next().unwrap_or("");
+            let mut a = Animation::default();
+            let mut times = 0;
+            for w in words(first) {
+                let lw = w.to_ascii_lowercase();
+                if let Some(ms) = parse_time(&lw) { if times == 0 { a.duration_ms = ms.max(0) as u32 } else { a.delay_ms = ms } times += 1; continue; }
+                if lw == "infinite" { a.iterations = u32::MAX; continue; }
+                if let Some(n) = css::parse_number(&lw) { a.iterations = n.max(0) as u32; continue; }
+                match lw.as_str() {
+                    "alternate" => a.alternate = true,
+                    "reverse" => a.reverse = true,
+                    "alternate-reverse" => { a.alternate = true; a.reverse = true; }
+                    "normal" | "running" | "paused" | "none" => {}
+                    "forwards" => a.fill_forwards = true,
+                    "backwards" => a.fill_backwards = true,
+                    "both" => { a.fill_forwards = true; a.fill_backwards = true; }
+                    t if timing(t).is_some() => a.timing = timing(t).unwrap(),
+                    _ => a.name = String::from(w.trim_matches(|c| c == '"' || c == '\'')),
+                }
+            }
+            s.animation = (!a.name.is_empty() && a.duration_ms > 0).then_some(a);
+        }
+        "animation-name" | "animation-duration" | "animation-delay" | "animation-iteration-count" | "animation-direction" | "animation-timing-function" | "animation-fill-mode" => {
+            let first = css::split_top(v, ',').into_iter().next().unwrap_or("").trim();
+            let lf = first.to_ascii_lowercase();
+            let mut a = s.animation.take().unwrap_or_default();
+            match d.name.as_str() {
+                "animation-name" => a.name = if lf == "none" { String::new() } else { String::from(first) },
+                "animation-duration" => a.duration_ms = parse_time(&lf).unwrap_or(0).max(0) as u32,
+                "animation-delay" => a.delay_ms = parse_time(&lf).unwrap_or(0),
+                "animation-iteration-count" => a.iterations = if lf == "infinite" { u32::MAX } else { css::parse_number(&lf).unwrap_or(100).max(0) as u32 },
+                "animation-direction" => { a.alternate = lf.starts_with("alternate"); a.reverse = lf.ends_with("reverse"); }
+                "animation-timing-function" => a.timing = timing(&lf).unwrap_or(1),
+                _ => { a.fill_forwards = lf == "forwards" || lf == "both"; a.fill_backwards = lf == "backwards" || lf == "both"; }
+            }
+            // Kept while incomplete: a later longhand may finish it.
+            s.animation = Some(a);
+        }
+        "opacity" => {
+            let n = match lv.strip_suffix('%') { Some(p) => css::parse_number(p).map(|p| p / 100), None => css::parse_number(&lv) };
+            if let Some(n) = n { s.opacity = (n.clamp(0, 100) * 255 / 100) as u8; }
+        }
+        "row-gap" | "grid-row-gap" => if let Some(Len::Px(p)) = parse_len(v, s, ctx) { s.row_gap = p },
+        "grid-template-columns" => { let (t, a) = grid_tracks(v, s, ctx); s.grid_columns = t; s.grid_auto = a; }
+        "grid-template" => if let Some((_, cols)) = v.split_once('/') { let (t, a) = grid_tracks(cols, s, ctx); s.grid_columns = t; s.grid_auto = a; },
+        "grid-column" | "grid-area" => {
+            // grid-area is row-start / column-start / row-end / column-end.
+            let parts: Vec<&str> = v.split('/').map(str::trim).collect();
+            let (a, b) = if d.name == "grid-area" { (parts.get(1).copied().unwrap_or(""), parts.get(3).copied().unwrap_or("")) } else { (parts[0], parts.get(1).copied().unwrap_or("")) };
+            let mut g = GridPlace::default();
+            grid_line(a, &mut g, true);
+            grid_line(b, &mut g, false);
+            s.grid_column = g;
+        }
+        "grid-column-start" => grid_line(&lv, &mut s.grid_column, true),
+        "grid-column-end" => grid_line(&lv, &mut s.grid_column, false),
         "box-sizing" => s.box_sizing_border = lv == "border-box",
         "letter-spacing" => s.letter_spacing = match len(s) { Some(Len::Px(p)) => p, _ => 0 },
         "vertical-align" => s.vertical_super = match lv.as_str() { "super" | "text-top" => 1, "sub" | "text-bottom" => -1, _ => 0 },

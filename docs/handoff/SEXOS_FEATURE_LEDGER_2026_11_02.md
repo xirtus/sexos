@@ -3156,6 +3156,43 @@ row no longer waits for the row before it to end.
   - L seeks from about 1.4 s to 6.4 s, and the next picture is at 6.6 s.
 - **Known issue** (reported, not media): PS/2 extended keys (arrows, E0 prefix) don't reach apps, which is why Play also takes J/K/L.
 
+## Web speaks HTTP/1.1: POST, chunked, gzip, cookies, XHR (2026-11-09)
+
+First step toward YouTube (plan: docs/handoff/YOUTUBE_GAP_REPORT_2026_11_09.md).
+- **New crate `sex-fetch`** (no_std + alloc, no I/O, host-tested): addresses, HTTP/1.1 requests with any method, headers and body (header injection refused, browser-owned headers like Host and Cookie can't be set by pages), reply heads, Content-Length / chunked / until-close framing (conflicting lengths refused), gzip and deflate (zune-inflate, capped so a gzip bomb stops at the limit), redirects joined per RFC 3986, and an RFC 6265 cookie jar (Domain/Path/Secure/HttpOnly/Max-Age/Expires, `__Host-`/`__Secure-`, per-domain and total caps).
+- **`sex_app::net::request`**: sends a `sex_fetch::Request` over the existing flow and returns the decoded reply. The download timeout is now sixty seconds without a byte rather than sixty seconds in all, so long downloads that keep moving finish.
+- **Browser**: pages, style sheets, pictures and script loads go through it with the window's cookie jar; `fetch(url, {method, headers, body})`, real `Response.headers`/`url`, `Request`, `Headers` iteration, `XMLHttpRequest` (text, json, arraybuffer, blob; Range works), and `document.cookie` (HttpOnly cookies stay hidden from scripts). New host ops FETCH_HEAD 68 and COOKIE 69; FETCH 66 takes method, headers and body.
+- **Gate** `scripts/program_web_http11_gate.py`: a local server sends a chunked + gzip page with Set-Cookie, the page POSTs JSON with its own headers (the server sees all three cookies), then reads 16 bytes by XHR Range (206). Passes in QEMU, along with the web net, fetch and JS gates.
+- Seen while testing: a 1.3 MB body takes about 11.7 s in QEMU (about 110 KB/s). That is roughly 360p video speed, so bigger windows and several flows (stage Y3) come next.
+
+## Net: flows made on demand; the browser fetches side by side (2026-11-09)
+
+YouTube stage Y3b (plan: `docs/handoff/YOUTUBE_GAP_REPORT_2026_11_09.md`).
+- **sexnet** used to have one open-internet TCP flow for the whole machine. It now makes flows as programs ask for them, each with its own 64 KiB receive window, 16 KiB send queue and TLS session (about 100 KiB), and keeps them for the next caller. The ceiling is 4096 flows, against one runaway program; running out of memory answers `BUSY`, never a fall (allocations use `try_reserve`).
+- **Kernel**: BOOT gives sexnet a growing memory arena (`service_memory::reserve(net)`), as Files already had, so its heap follows the flows.
+- **smoltcp** gets its `alloc` feature; `Engine::new` no longer takes a fixed socket table, and `open_add_flow` makes a flow.
+- A caller numbers its flows itself (0 to 254, in bits 24..31 of the request word, so callers that never name one use flow 0 as before). `CONNECT` takes a free flow or makes one; every other call reaches only the caller's own flow. A program that ends lets go of all of its flows.
+- **DNS** is still one question at a time; another caller's question gets `BUSY` until the first is answered (at most 5 s), and the client retries.
+- **`sex_app::net::Exchange`**: one request on a flow of its own, read a step at a time (`start`, `poll`, `finish`, `cancel`). `request` and the old `fetch` are built on it.
+- **Browser**: script `fetch`/XHR requests run side by side, up to 16 at once, each reported as it lands. Requests made by a script on hearing of one join in.
+- **ABI**: `sex_pdx::web` gains `request_on`, `flow_of` and `CLIENT_FLOWS`; the ABI hash is recomputed.
+- **Gate** `program_web_http11_gate`: twelve requests that each take 1.5 s finish together in about 1.7 s; the server saw all twelve at once and sexnet made twelve flows.
+
+## Net: connection setup a step at a time (2026-11-09)
+
+- `sex_app::net::Exchange::start` now returns at once with a flow number; each `poll` makes one call to the network service: look up the name, connect, start TLS, wait for the handshake, send, then read. A site whose name, connection or handshake is slow no longer holds up the other requests a program has going (Codex review on #56).
+- A program asks the resolver one question at a time (the service answers one per caller); names it looked up are remembered for five minutes (up to 256).
+- The old blocking `open`/`send_all` path is gone; `request` and the HTTP/1.0 `fetch` run on `Exchange`.
+- Gate `program_web_http11_gate`: a request beside one to an unreachable address (10.0.2.123) lands in about 1.2 s; the unreachable one gives up after 30 s.
+
+## Net: keep-alive, connections reused across requests (2026-11-09)
+
+YouTube stage Y3d.
+- **sex-fetch**: requests no longer send `Connection: close`. `Head::keeps_connection(http10)` reads the reply's `Connection` header (HTTP/1.1 keeps unless `close`; HTTP/1.0 only on `keep-alive`).
+- **sex_app::net**: when a reply's framing (chunked, `Content-Length` or no body) ends exactly at the received bytes and the server keeps the connection, the flow goes into a per-program idle pool (host, port, TLS; up to 32, dropped after 30 s). The next request to the same site takes the newest kept flow and sends at once, with no connect or TLS handshake. A kept flow that turns out closed before the first reply byte is retried on a new flow. `[net.receive.stats]` shows `reused=` and `kept=`.
+- **sex-tls (open web)**: the session is full duplex (`split()` into reader and writer), so one TLS session carries any number of requests. A host test against an OpenSSL server with a test root sends 3 requests on 1 connection (`[sexnet.tls.open.host]`, in `sexnet_jobs_host_gate.sh`).
+- **Gate** `program_web_http11_gate`: the page's own server sees 17 requests over 13 connections, and the log shows a reused flow.
+
 ## Programs make their own machine code: the base for a JIT engine (2026-11-09)
 
 - **Why.** Andreas approved porting a JIT engine (V8 recommended) and aiming the browser at Chromium-class speed. Report and plan: `docs/handoff/JIT_AND_BROWSER_ENGINE_PLAN_2026_11_09.md` (stages J1-J8).

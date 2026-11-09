@@ -21,13 +21,28 @@ pub struct Dom {
     pub nodes: Vec<Node>,
     /// Elements a script listens to for clicks, so the person can reach them.
     pub clickable: alloc::collections::BTreeSet<NodeId>,
+    /// Form controls' current values once typed into or set by a script (the `value`
+    /// attribute is only the default).
+    pub values: alloc::collections::BTreeMap<NodeId, String>,
+    /// The focused text control and its caret, in characters.
+    pub caret: Option<(NodeId, usize)>,
+    /// The element under the pointer, for `:hover`.
+    pub hover: Option<NodeId>,
 }
 
 impl Dom {
     pub const ROOT: NodeId = 0;
 
+    /// Whether `a` is `n` or one of its ancestors.
+    pub fn is_inclusive_ancestor(&self, a: NodeId, mut n: NodeId) -> bool {
+        loop {
+            if n == a { return true; }
+            match self.nodes.get(n).and_then(|x| x.parent) { Some(p) => n = p, None => return false }
+        }
+    }
+
     pub fn new() -> Self {
-        Self { nodes: alloc::vec![Node { kind: Kind::Document, parent: None, children: Vec::new() }], clickable: Default::default() }
+        Self { nodes: alloc::vec![Node { kind: Kind::Document, parent: None, children: Vec::new() }], clickable: Default::default(), values: Default::default(), caret: None, hover: None }
     }
 
     pub fn add(&mut self, parent: NodeId, kind: Kind) -> NodeId {
@@ -68,6 +83,13 @@ impl Dom {
             Some(_) => self.attr(id, "onclick").is_some() || self.clickable.contains(&id),
             None => false,
         }
+    }
+
+    /// A form control's current value: what was typed or set, else its default.
+    pub fn control_value(&self, n: NodeId) -> String {
+        if let Some(v) = self.values.get(&n) { return v.clone(); }
+        if self.tag(n) == Some("textarea") { return self.text_content(n); }
+        String::from(self.attr(n, "value").unwrap_or(""))
     }
 
     pub fn has_class(&self, id: NodeId, class: &str) -> bool {

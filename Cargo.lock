@@ -315,6 +315,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "defmt"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e4a0795ac740cb54d7b3775c9c17345f6aaecf884c01733b39d6017738e0e3e1"
+dependencies = [
+ "bitflags 1.3.2",
+ "defmt-macros",
+]
+
+[[package]]
+name = "defmt-macros"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "840bb056bd99c495c9188198a258ab787c79f306d864db3e6e8451442d6d8366"
+dependencies = [
+ "defmt-parser",
+ "proc-macro2",
+ "quote",
+ "syn 3.0.3",
+]
+
+[[package]]
+name = "defmt-parser"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "71958f69fb2de856c5dd51ac9377e986ca1aa5919f931bf5395a807277f889a0"
+dependencies = [
+ "thiserror",
+]
+
+[[package]]
 name = "der"
 version = "0.7.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -931,6 +962,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "psl"
+version = "2.1.249"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d5a4e068733aa4f2ef06083331e02678699f997128ad66e57a8adc7e3f654ba0"
+dependencies = [
+ "psl-types",
+]
+
+[[package]]
+name = "psl-types"
+version = "2.0.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "33cb294fe86a74cbcf50d4445b37da762029549ebeea341421c7c70370f86cac"
+
+[[package]]
 name = "purple-scanout"
 version = "0.1.0"
 dependencies = [
@@ -1145,6 +1191,7 @@ dependencies = [
 name = "sex-app"
 version = "0.1.0"
 dependencies = [
+ "sex-fetch",
  "sex-pdx",
  "talc",
 ]
@@ -1155,6 +1202,14 @@ version = "0.1.0"
 dependencies = [
  "libm",
  "tiny-skia",
+]
+
+[[package]]
+name = "sex-fetch"
+version = "0.1.0"
+dependencies = [
+ "psl",
+ "zune-inflate",
 ]
 
 [[package]]
@@ -1204,6 +1259,7 @@ dependencies = [
 name = "sex-js"
 version = "0.1.0"
 dependencies = [
+ "sex-fetch",
  "sex-gl",
  "sex-html",
  "sex-image",
@@ -1537,6 +1593,7 @@ dependencies = [
  "bitflags 1.3.2",
  "byteorder",
  "cfg-if",
+ "defmt",
  "heapless",
  "managed",
 ]
@@ -1896,6 +1953,7 @@ name = "web"
 version = "0.1.0"
 dependencies = [
  "sex-app",
+ "sex-fetch",
  "sex-js",
  "sex-pdx",
  "sex-web",

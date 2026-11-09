@@ -16,8 +16,12 @@ pub struct Document {
     pub log: Vec<(u8, String)>,
     /// Where a script asked to go, once it returns.
     pub navigate: Option<String>,
+    /// The body of a form POST that `navigate` loads (form-urlencoded).
+    pub navigate_post: Option<String>,
     /// Element boxes from the last layout, by node: (x, y, w, h).
     pub rects: Vec<Option<(i32, i32, i32, i32)>>,
+    /// Each node's paint layer (higher paints on top), from `Page::layers`.
+    pub layers: Vec<u32>,
     /// Supplies the monotonic clock.
     pub clock: fn() -> u64,
     /// Canvas 2D command batches not yet drawn, by canvas element.
@@ -29,11 +33,36 @@ pub struct Document {
     /// The page's decoded pictures by `src`, shared with the browser, so WebGL can
     /// upload one the moment a script asks.
     pub pictures: Vec<(String, alloc::rc::Rc<sex_image::Image>)>,
-    /// `fetch` requests the browser has not loaded yet: (id, url as the script gave it).
-    pub fetches: Vec<(u32, String)>,
+    /// `fetch`/XHR requests the browser has not loaded yet.
+    pub fetches: Vec<FetchAsk>,
     /// Loaded bodies the script has not taken yet, by request id.
     pub bodies: Vec<(u32, Vec<u8>)>,
+    /// Loaded replies' final address and headers, by request id.
+    pub heads: Vec<(u32, String)>,
     next_fetch: u32,
+    /// The window's cookies, shared with the browser's own requests.
+    pub cookies: Option<alloc::rc::Rc<core::cell::RefCell<sex_fetch::Jar>>>,
+    /// Seconds since 1970, for cookie expiry.
+    pub wall: fn() -> u64,
+}
+
+/// One request a script made with `fetch` or `XMLHttpRequest`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FetchAsk {
+    pub id: u32,
+    /// As the script gave it (relative addresses are the browser's to resolve).
+    pub url: String,
+    /// Uppercase; empty means GET.
+    pub method: String,
+    /// `name: value` lines.
+    pub headers: String,
+    pub body: Vec<u8>,
+}
+impl FetchAsk {
+    /// The request headers as pairs, skipping malformed lines.
+    pub fn header_pairs(&self) -> Vec<(&str, &str)> {
+        self.headers.lines().filter_map(|l| { let i = l.find(':')?; Some((l[..i].trim(), l[i + 1..].trim())) }).filter(|(k, _)| !k.is_empty()).collect()
+    }
 }
 
 impl Document {
@@ -45,6 +74,12 @@ impl Document {
         if self.bodies.len() >= 64 { self.bodies.remove(0); }
         self.bodies.push((id, body));
     }
+    /// Keeps a reply's final address and header lines until the script asks.
+    pub fn keep_head(&mut self, id: u32, url: &str, headers: &str) {
+        if self.heads.len() >= 64 { self.heads.remove(0); }
+        self.heads.push((id, format!("{}\n{}", url, headers)));
+    }
+    fn page_url(&self) -> Option<sex_fetch::Url> { sex_fetch::Url::parse(crate::document::strip_fragment(&self.url)).ok() }
 }
 
 /// A rough width when the browser gives no measure: 0.55 em per character.
@@ -55,9 +90,35 @@ fn rough_measure(font: &str, text: &str) -> i32 {
 
 impl Document {
     pub fn new(dom: Dom, url: &str, viewport: (i32, i32), clock: fn() -> u64) -> Self {
-        Self { dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, rects: Vec::new(), clock, canvas_queue: Vec::new(), measure: rough_measure, gl: Default::default(), pictures: Vec::new(), fetches: Vec::new(), bodies: Vec::new(), next_fetch: 0 }
+        Self { dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, navigate_post: None, rects: Vec::new(), layers: Vec::new(), clock, canvas_queue: Vec::new(), measure: rough_measure, gl: Default::default(), pictures: Vec::new(), fetches: Vec::new(), bodies: Vec::new(), heads: Vec::new(), next_fetch: 0, cookies: None, wall: || 0 }
     }
 
+    /// Takes each element's laid-out box from the browser's layout, for
+    /// `getBoundingClientRect` and hit testing.
+    pub fn set_boxes(&mut self, boxes: &[Option<[i32; 4]>]) {
+        self.rects.clear();
+        self.rects.extend(boxes.iter().map(|b| b.map(|r| (r[0], r[1], r[2], r[3]))));
+    }
+    pub fn set_layers(&mut self, layers: &[u32]) {
+        self.layers.clear();
+        self.layers.extend_from_slice(layers);
+    }
+    /// The topmost, then deepest, element whose laid-out box holds the page point
+    /// (`x`, `y`): what a click there lands on. Later elements win ties, as they paint on top.
+    pub fn node_at(&self, x: i32, y: i32) -> Option<NodeId> {
+        let mut best: Option<((u32, usize), NodeId)> = None;
+        for (n, rect) in self.rects.iter().enumerate() {
+            let Some((rx, ry, rw, rh)) = *rect else { continue };
+            if x < rx || y < ry || x >= rx + rw || y >= ry + rh { continue; }
+            if self.dom.tag(n).is_none() { continue; }
+            let mut depth = 0;
+            let mut p = self.dom.nodes[n].parent;
+            while let Some(q) = p { depth += 1; p = self.dom.nodes[q].parent; }
+            let key = (self.layers.get(n).copied().unwrap_or(0), depth);
+            if best.map_or(true, |(d, _)| key >= d) { best = Some((key, n)); }
+        }
+        best.map(|(_, n)| n)
+    }
     fn node(&self, s: Option<&&str>) -> Option<NodeId> {
         let id: NodeId = s?.parse().ok()?;
         (id < self.dom.nodes.len()).then_some(id)
@@ -91,8 +152,21 @@ impl Page for Document {
                 // A page may not have more than 64 requests waiting at once.
                 if self.fetches.len() >= 64 { return None; }
                 self.next_fetch += 1;
-                self.fetches.push((self.next_fetch, String::from(text(0))));
+                let method = text(1).trim().to_ascii_uppercase();
+                self.fetches.push(FetchAsk { id: self.next_fetch, url: String::from(text(0)), method, headers: String::from(text(2)), body: a.get(3).map(|b| b.to_vec()).unwrap_or_default() });
                 return Some(format!("{}", self.next_fetch).into_bytes());
+            }
+            op::FETCH_HEAD => {
+                let id: u32 = text(0).parse().ok()?;
+                let i = self.heads.iter().position(|(n, _)| *n == id)?;
+                return Some(self.heads.swap_remove(i).1.into_bytes());
+            }
+            op::COOKIE => {
+                let jar = self.cookies.clone()?;
+                let url = self.page_url()?;
+                let now = (self.wall)();
+                if let Some(v) = a.first() { jar.borrow_mut().store_from_script(&url, core::str::from_utf8(v).ok()?, now); return Some(Vec::new()); }
+                return Some(jar.borrow().script_view(&url, now).into_bytes());
             }
             op::FETCH_BODY => {
                 let id: u32 = text(0).parse().ok()?;
@@ -129,6 +203,8 @@ impl Page for Document {
             op::LOG => {
                 let level = a.first().and_then(|l| l.parse().ok()).unwrap_or(0u8).min(2);
                 let text = a.get(1).copied().unwrap_or("");
+                // QuickJS throws null when it has no memory left even for the error.
+                let text = if level == 2 && text == "null" { "InternalError: out of memory (the page filled its script heap)" } else { text };
                 // Keep the log bounded: a page that logs in a loop must not fill memory.
                 if self.log.len() < 256 { self.log.push((level, String::from(&text[..floor(text, 1024)]))); }
                 None
@@ -219,7 +295,7 @@ impl Page for Document {
                 Some(attrs.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>().join("\n"))
             }
             op::VIEWPORT => Some(format!("{},{}", self.viewport.0, self.viewport.1)),
-            op::NAVIGATE => { self.navigate = Some(String::from(*a.first()?)); None }
+            op::NAVIGATE => { self.navigate = Some(String::from(*a.first()?)); self.navigate_post = a.get(1).filter(|m| m.eq_ignore_ascii_case("post")).map(|_| String::from(a.get(2).copied().unwrap_or(""))); None }
             op::CLICKABLE => {
                 let n = self.element(a.first())?;
                 if self.dom.clickable.insert(n) { self.dirty = true; }
@@ -229,6 +305,26 @@ impl Page for Document {
                 let n = self.node(a.first())?;
                 let (x, y, w, h) = self.rects.get(n).copied().flatten().unwrap_or((0, 0, 0, 0));
                 Some(format!("{x},{y},{w},{h}"))
+            }
+            op::HIT => {
+                let x = a.first()?.parse().ok()?;
+                let y = a.get(1)?.parse().ok()?;
+                self.node_at(x, y).map(|n| format!("{n}"))
+            }
+            op::VALUE => {
+                let n = self.element(a.first())?;
+                match a.get(1) {
+                    Some(v) => { self.dom.values.insert(n, String::from(*v)); self.dirty = true; None }
+                    None => Some(self.dom.control_value(n)),
+                }
+            }
+            op::CARET => {
+                let caret = match a.first().filter(|s| !s.is_empty()) {
+                    Some(_) => Some((self.element(a.first())?, a.get(1).and_then(|p| p.parse().ok()).unwrap_or(0))),
+                    None => None,
+                };
+                if caret != self.dom.caret { self.dom.caret = caret; self.dirty = true; }
+                None
             }
             op::LOCATION => Some(self.url.clone()),
             op::CANVAS => {
@@ -256,3 +352,6 @@ fn floor(s: &str, max: usize) -> usize {
     while !s.is_char_boundary(i) { i -= 1; }
     i
 }
+
+/// An address without its `#fragment`.
+pub(crate) fn strip_fragment(url: &str) -> &str { url.split('#').next().unwrap_or("") }

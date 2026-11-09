@@ -276,3 +276,171 @@ fn webgl_page_picture_is_in_the_texture_before_the_next_draw() {
     "#, "t.js").unwrap();
     assert_eq!(logs(&mut s), ["0:32,64,96,255"]);
 }
+
+#[test]
+fn mouse_events_reach_the_element_under_the_pointer() {
+    let mut s = page("<body><div id=a><canvas id=c></canvas></div><p id=p>x</p></body>");
+    s.eval(r#"
+        const c = document.getElementById('c'), log = [];
+        for (const t of ['pointerdown', 'mousedown', 'mouseup', 'click', 'dblclick', 'mouseover', 'mouseenter', 'mousemove', 'wheel', 'contextmenu', 'mouseleave'])
+          c.addEventListener(t, e => log.push(t + ':' + e.clientX + ',' + e.clientY + ',' + e.button + ',' + e.buttons + (t === 'wheel' ? ',' + e.deltaY : '') + (t === 'click' ? ',' + e.offsetX + ',' + e.offsetY : '')));
+        document.getElementById('a').addEventListener('click', e => log.push('bubbled'));
+        document.getElementById('p').addEventListener('click', e => e.preventDefault());
+        window.done = () => console.log(log.join(' '));
+    "#, "t.js").unwrap();
+    let id = |s: &mut Script<Document>, q: &str| { s.eval(&format!("console.log(document.getElementById('{q}')._id)"), "id.js").unwrap(); logs(s).pop().unwrap()[2..].to_string() };
+    let (c, p) = (id(&mut s, "c"), id(&mut s, "p"));
+    // The canvas is laid out at (10, 20) 100 by 50: hit testing finds it, not its parent.
+    let (cn, pn): (usize, usize) = (c.parse().unwrap(), p.parse().unwrap());
+    let doc = s.page_mut();
+    doc.rects = vec![None; doc.dom.nodes.len()];
+    let parent = doc.dom.nodes[cn].parent.unwrap();
+    doc.rects[parent] = Some((0, 0, 410, 80));
+    doc.rects[cn] = Some((10, 20, 100, 50));
+    doc.rects[pn] = Some((0, 80, 410, 20));
+    assert_eq!(doc.node_at(15, 25), Some(cn));
+    assert_eq!(doc.node_at(5, 5), Some(parent));
+    assert_eq!(doc.node_at(5, 90), Some(pn));
+    assert_eq!(doc.node_at(500, 500), None);
+    for m in ["move\t{c}\t15\t25\t0\t0\t0", "down\t{c}\t15\t25\t0\t1\t0", "up\t{c}\t15\t25\t0\t0\t0", "down\t{c}\t15\t25\t0\t1\t0", "up\t{c}\t16\t25\t0\t0\t0",
+              "wheel\t{c}\t15\t25\t0\t0\t-2", "down\t{c}\t15\t25\t2\t2\t0", "up\t{c}\t15\t25\t2\t0\t0", "leave\t\t-1\t-1\t0\t0\t0"] {
+        assert_eq!(s.dispatch(&format!("mouse\t{}", m.replace("{c}", &c))).unwrap(), 0, "{m}");
+    }
+    // A cancelled click answers 1, so the browser won't follow a link there.
+    assert_eq!(s.dispatch(&format!("mouse\tdown\t{p}\t5\t90\t0\t1\t0")).unwrap(), 0);
+    assert_eq!(s.dispatch(&format!("mouse\tup\t{p}\t5\t90\t0\t0\t0")).unwrap(), 1);
+    s.eval("done(); console.log(document.elementFromPoint(15, 25) === document.getElementById('c'))", "t.js").unwrap();
+    let l = logs(&mut s);
+    assert_eq!(l[0], "0:mouseover:15,25,-1,0 mouseenter:15,25,-1,0 mousemove:15,25,-1,0 pointerdown:15,25,0,1 mousedown:15,25,0,1 mouseup:15,25,0,0 click:15,25,0,0,5,5 bubbled \
+pointerdown:15,25,0,1 mousedown:15,25,0,1 mouseup:16,25,0,0 click:16,25,0,0,6,5 bubbled dblclick:16,25,0,0 wheel:15,25,0,0,200 \
+pointerdown:15,25,2,2 mousedown:15,25,2,2 mouseup:15,25,2,0 contextmenu:15,25,2,0 mouseleave:-1,-1,0,0");
+    assert_eq!(l[1], "0:true");
+}
+
+#[test]
+fn fetch_init_xhr_and_cookies() {
+    let mut s = page("<p>x</p>");
+    // The page is http://example.test/dir/page.html; cookies are shared with the browser.
+    let jar = std::rc::Rc::new(std::cell::RefCell::new(sex_fetch::Jar::new()));
+    let url = sex_fetch::Url::parse("http://example.test/dir/page.html").unwrap();
+    jar.borrow_mut().store(&url, "sid=1; Path=/; HttpOnly", 100);
+    jar.borrow_mut().store(&url, "pref=dark; Path=/", 100);
+    s.page_mut().cookies = Some(jar.clone());
+    s.page_mut().wall = || 200;
+    s.eval(r#"
+        console.log(document.cookie);
+        document.cookie = 'seen=yes; path=/';
+        document.cookie = 'sid=stolen; path=/';
+        console.log(document.cookie);
+        fetch('/youtubei/v1/player', { method: 'post', headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Format-Version': '2' }, body: JSON.stringify({ videoId: 'abc' }) })
+          .then(r => r.json().then(j => console.log('fetch', r.status, r.headers.get('content-type'), r.url, j.ok)));
+        const x = new XMLHttpRequest();
+        x.open('GET', 'data.bin');
+        x.responseType = 'arraybuffer';
+        x.setRequestHeader('Range', 'bytes=0-3');
+        const states = [];
+        x.onreadystatechange = () => states.push(x.readyState);
+        x.onload = () => console.log('xhr', x.status, x.getResponseHeader('Content-Range'), new Uint8Array(x.response).join(','), states.join(''));
+        x.send();
+    "#, "t.js").unwrap();
+    assert_eq!(logs(&mut s), ["0:pref=dark", "0:pref=dark; seen=yes"]);
+    assert_eq!(jar.borrow().header(&url, 200).unwrap(), "sid=1; pref=dark; seen=yes", "scripts can't replace HttpOnly cookies");
+    let asked = std::mem::take(&mut s.page_mut().fetches);
+    assert_eq!(asked.len(), 2);
+    assert_eq!((asked[0].url.as_str(), asked[0].method.as_str()), ("/youtubei/v1/player", "POST"));
+    assert_eq!(asked[0].header_pairs(), [("content-type", "application/json"), ("x-goog-api-format-version", "2")]);
+    assert_eq!(asked[0].body, br#"{"videoId":"abc"}"#);
+    assert_eq!((asked[1].url.as_str(), asked[1].method.as_str(), asked[1].header_pairs()), ("data.bin", "GET", vec![("range", "bytes=0-3")]));
+    s.page_mut().keep_head(asked[0].id, "http://example.test/youtubei/v1/player", "content-type: application/json\r\n");
+    s.page_mut().keep_body(asked[0].id, 200, br#"{"ok":true}"#.to_vec());
+    s.dispatch(&format!("fetched\t{}\t200\t11", asked[0].id)).unwrap();
+    s.page_mut().keep_head(asked[1].id, "http://example.test/dir/data.bin", "content-range: bytes 0-3/10\r\n");
+    s.page_mut().keep_body(asked[1].id, 206, vec![1, 2, 3, 4]);
+    s.dispatch(&format!("fetched\t{}\t206\t4", asked[1].id)).unwrap();
+    s.dispatch("flush").unwrap();
+    assert_eq!(logs(&mut s), ["0:fetch 200 application/json http://example.test/youtubei/v1/player true", "0:xhr 206 bytes 0-3/10 1,2,3,4 234"]);
+}
+
+#[test]
+fn forms_take_typing_clicks_and_submit() {
+    let mut s = page("<body><form id=f action=search><label id=l>Find <input id=q name=q value=old></label>\
+        <input type=checkbox id=c name=c><input type=radio name=r value=a id=ra checked><input type=radio name=r value=b id=rb>\
+        <select id=s name=s><option>x</option><option value=yy>y</option></select><textarea id=t name=t>hi</textarea>\
+        <button id=b>Go</button></form></body>");
+    s.eval(r#"
+        const $ = id => document.getElementById(id), log = [];
+        $('q').addEventListener('input', e => log.push('input:' + e.data));
+        $('q').addEventListener('change', () => log.push('change'));
+        $('c').addEventListener('change', () => log.push('c:' + $('c').checked));
+        $('f').addEventListener('submit', e => log.push('submit:' + (e.submitter ? e.submitter.id : '-')));
+        window.id = el => el._id;
+    "#, "t.js").unwrap();
+    let id = |s: &mut Script<Document>, q: &str| { s.eval(&format!("console.log(id(document.getElementById('{q}')))"), "id.js").unwrap(); logs(s).pop().unwrap()[2..].to_string() };
+    let q = id(&mut s, "q");
+    // Pressing the field focuses it with the caret at the end; typing edits the value.
+    s.dispatch(&format!("mouse\tdown\t{q}\t5\t5\t0\t1\t0")).unwrap();
+    s.dispatch(&format!("mouse\tup\t{q}\t5\t5\t0\t0\t0")).unwrap();
+    let qn: usize = q.parse().unwrap();
+    assert_eq!(s.page_mut().dom.caret, Some((qn, 3)));
+    for k in ["Backspace", "ArrowLeft", "X", "End", "!"] {
+        assert_eq!(s.dispatch(&format!("key\tkeydown\t{k}\t\t0")).unwrap(), 1, "{k}");
+    }
+    assert_eq!(s.page_mut().dom.control_value(qn), "oXl!");
+    assert_eq!(s.page_mut().dom.caret, Some((qn, 4)));
+    // The value attribute stays the default.
+    s.eval("console.log($('q').value, $('q').defaultValue, $('q').getAttribute('value'))", "t.js").unwrap();
+    assert_eq!(logs(&mut s), ["0:oXl! old old"]);
+    // Checkbox, radio, select and label clicks.
+    s.eval("$('c').click(); $('rb').click(); $('s').click(); console.log($('c').checked, $('ra').checked, $('rb').checked, $('s').value)", "t.js").unwrap();
+    assert_eq!(logs(&mut s), ["0:true false true yy"]);
+    // Enter in a text field submits the form as a GET to its action.
+    s.eval("$('q').focus()", "t.js").unwrap();
+    assert_eq!(s.dispatch("key\tkeydown\tEnter\t\t0").unwrap(), 1);
+    assert_eq!(s.page_mut().navigate.take().as_deref(), Some("http://example.test/dir/search?q=oXl%21&c=on&r=b&s=yy&t=hi"));
+    // So does the submit button, which is sent too when it has a name; FormData sees the same.
+    s.eval("$('b').setAttribute('name', 'go'); $('b').click(); console.log([...new FormData($('f'))].length, log.join(' '))", "t.js").unwrap();
+    assert_eq!(s.page_mut().navigate.take().as_deref(), Some("http://example.test/dir/search?q=oXl%21&c=on&r=b&s=yy&t=hi&go="));
+    assert_eq!(logs(&mut s), ["0:5 input:null input:X input:! c:true change submit:- submit:b"]);
+    // Blurring clears the caret; reset restores defaults.
+    s.eval("$('q').blur(); $('f').reset(); console.log($('q').value, $('t').value)", "t.js").unwrap();
+    assert_eq!(s.page_mut().dom.caret, None);
+    assert_eq!(logs(&mut s), ["0:old hi"]);
+}
+
+#[test]
+fn running_out_of_script_heap_says_so() {
+    let dom = sex_html::parse::parse("<p>x</p>");
+    let limits = Limits { memory_bytes: 64 << 20, heap_bytes: 8 << 20, ..Limits::default() };
+    let mut s = Script::new(Document::new(dom, "http://example.test/", (410, 330), clock), limits).expect("engine");
+    let _ = s.eval("const keep = []; for (;;) keep.push(new Array(100000).fill(1.5));", "big.js");
+    let l = logs(&mut s);
+    assert!(l.iter().any(|m| m.contains("out of memory")), "{l:?}");
+    // The engine still works afterwards.
+    s.eval("keep.length = 0; console.log('ok')", "t.js").unwrap();
+}
+
+#[test]
+fn form_reset_restores_checkboxes_and_radios() {
+    let mut s = page("<form id=f><input type=checkbox id=c checked><input type=radio name=r id=a checked><input type=radio name=r id=b></form>");
+    s.eval("const $ = id => document.getElementById(id); $('c').click(); $('b').click(); \
+console.log($('c').checked, $('a').checked, $('b').checked, $('c').defaultChecked); $('f').reset(); \
+console.log($('c').checked, $('a').checked, $('b').checked)", "t.js").unwrap();
+    assert_eq!(logs(&mut s), ["0:false false true true", "0:true true false"]);
+}
+
+#[test]
+fn clicking_inside_a_button_submits() {
+    let mut s = page("<form id=f action=go><input name=q value=x><button><span id=s>Go</span></button></form>");
+    s.eval("let t; document.getElementById('f').addEventListener('submit', e => { t = e.submitter.localName; e.preventDefault(); }); \
+document.getElementById('s').click(); console.log(t)", "t.js").unwrap();
+    assert_eq!(logs(&mut s), ["0:button"]);
+}
+
+#[test]
+fn form_post_navigates_with_its_body() {
+    let mut s = page("<form id=f method=post action='/login#done'><input name=user value='a b'><input name=pw value='x&y'></form>");
+    s.eval("document.getElementById('f').submit()", "t.js").unwrap();
+    let d = s.page_mut();
+    assert_eq!(d.navigate.as_deref(), Some("http://example.test/login#done"));
+    assert_eq!(d.navigate_post.as_deref(), Some("user=a+b&pw=x%26y"));
+}

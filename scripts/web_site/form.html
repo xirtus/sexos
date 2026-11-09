@@ -1,0 +1,25 @@
+<!doctype html>
+<html><head><title>Form test</title>
+<style>
+body { margin: 0; }
+input { display: block; margin: 0; }
+#q { width: 200px; height: 20px; }
+</style></head>
+<body>
+<form action="form.html">
+<input id="q" name="q" placeholder="Search">
+<input type="checkbox" id="c" name="c">
+<textarea name="t" rows="2">two
+lines</textarea>
+</form>
+<form id="p" method="post" action="posted"><input type="hidden" name="a" value="1 2"><input type="hidden" name="b" value="x&amp;y"></form>
+<script>
+const q = document.getElementById('q');
+if (location.search) { console.log('form got ' + location.search); document.getElementById('p').submit(); }
+let typed = false;
+q.addEventListener('input', () => { if (!typed) { typed = true; console.log('form typing'); } });
+q.addEventListener('focus', () => console.log('form focus'));
+document.getElementById('c').addEventListener('change', e => console.log('form check ' + e.target.checked));
+console.log('form ready');
+</script>
+</body></html>

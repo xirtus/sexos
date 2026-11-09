@@ -13,10 +13,11 @@ fn clock() -> u64 {
 /// Answers the page's `fetch` requests from files beside it.
 fn serve(script: &mut sex_js::Script<sex_js::Document>, base: &std::path::Path) -> bool {
     let asked = std::mem::take(&mut script.page_mut().fetches);
-    for (id, url) in &asked {
+    for ask in &asked {
+        let (id, url) = (ask.id, &ask.url);
         let (status, body) = match std::fs::read(base.join(url.trim_start_matches("./"))) { Ok(b) => (200, b), Err(_) => (404, Vec::new()) };
         let n = body.len();
-        script.page_mut().keep_body(*id, status, body);
+        script.page_mut().keep_body(id, status, body);
         script.dispatch(&format!("fetched\t{id}\t{status}\t{n}")).unwrap();
     }
     !asked.is_empty()
@@ -51,7 +52,7 @@ fn main() {
     let dom = sex_html::parse::parse(&html);
     for src in sex_html::image_sources(&dom) {
         if let Ok(bytes) = std::fs::read(base.join(src)) {
-            if let Some(img) = sex_web::decode_image(&bytes, (w - 16) as usize, 2000) { fonts.images.push((src.to_string(), std::rc::Rc::new(img))); }
+            fonts.add_picture(src, &bytes, (w - 16) as usize, 2000);
         }
     }
     // Style sheets and pictures come from files beside the page, as the program fetches them.
@@ -64,11 +65,15 @@ fn main() {
     doc.measure = sex_web::canvas::measure_css;
     doc.pictures = fonts.images.clone();
     let mut canvases = sex_web::canvas::Canvases::new();
-    let lay = |doc: &sex_js::Document, fonts: &Fonts| {
-        let styles = sex_html::styles(&doc.dom, &sheet_refs, w, h - bar_h);
-        sex_html::layout::layout(&doc.dom, &styles, w, fonts)
+    let lay = |doc: &sex_js::Document, fonts: &mut Fonts| {
+        let at_ms = std::env::var("PAGE_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+        let styles = sex_html::styles_at(&doc.dom, &sheet_refs, w, h - bar_h, at_ms, &mut sex_html::Timeline::starting_at(0)).0;
+        let page = sex_html::layout::layout_in(&doc.dom, &styles, w, h - bar_h, fonts);
+        sex_web::svg::draw_inline(&page, &doc.dom, &styles, fonts);
+        page
     };
-    let mut page = lay(&doc, &fonts);
+    let mut page = lay(&doc, &mut fonts);
+    doc.set_boxes(&page.boxes); doc.set_layers(&page.layers);
     if !scripts.is_empty() {
         let mut limits = sex_js::Limits::default();
         if let Ok(ms) = std::env::var("SEX_WEB_BUDGET_MS") { limits.budget_ms = ms.parse().unwrap(); }
@@ -76,7 +81,8 @@ fn main() {
         for (i, s) in scripts.iter().enumerate() { let _ = script.eval(s, &format!("script{i}")); }
         script.dispatch("ready").unwrap();
         settle(&mut script, &mut canvases, &mut fonts, &base);
-        page = lay(script.page(), &fonts);
+        page = lay(script.page(), &mut fonts);
+        script.page_mut().set_boxes(&page.boxes); script.page_mut().set_layers(&page.layers);
         for action in args.get(7).map(|a| a.split(',').filter(|x| !x.is_empty()).collect::<Vec<_>>()).unwrap_or_default() {
             if let Some(i) = action.strip_prefix("click") {
                 let node = page.links[i.parse::<usize>().unwrap()].node;
@@ -86,7 +92,8 @@ fn main() {
                 script.dispatch(&format!("key\tkeyup\t{k}\t\t0")).unwrap();
             }
             settle(&mut script, &mut canvases, &mut fonts, &base);
-            page = lay(script.page(), &fonts);
+            page = lay(script.page(), &mut fonts);
+            script.page_mut().set_boxes(&page.boxes); script.page_mut().set_layers(&page.layers);
         }
         for (l, t) in script.page_mut().log.drain(..) { eprintln!("console {l}: {t}"); }
     }
@@ -94,7 +101,7 @@ fn main() {
     let focus = args.get(5).and_then(|v| v.parse::<i64>().ok()).filter(|f| *f >= 0).map(|f| f as usize);
     match args.get(6) {
         Some(bar) => sex_web::frame(&page, &mut fonts, &mut buf, w, h, scroll, focus, bar, false),
-        None => paint(&page, &mut fonts, &mut Target { pixels: &mut buf, width: w, height: h, scroll, top: 0, premul: false }, focus),
+        None => paint(&page, &mut fonts, &mut Target { pixels: &mut buf, width: w, height: h, scroll, top: 0, premul: false, clip: None }, focus),
     }
     let mut bytes = format!("P6 {w} {h} 255\n").into_bytes();
     for p in &buf { bytes.extend_from_slice(&[(p >> 16) as u8, (p >> 8) as u8, *p as u8]); }

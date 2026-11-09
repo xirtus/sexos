@@ -172,6 +172,7 @@ def _wheel_shell_contract(source,root):
   sex_pdx::serial_record!("[shell.browser.wheel.rejected] reason=malformed effects=0");return;
  };
  let Some(destination)=browser_wheel_destination()else{
+  if program_pointer_wheel(scroll.vertical()){return}
   sex_pdx::serial_record!("[shell.browser.wheel.rejected] reason=target wheel={} x={} y={} effects=0",scroll.vertical(),POINTER_X,POINTER_Y);return;
  };
  let accepted=APP_INPUT.push(app_input::Item{destination,input:app_input::Input::Scroll(scroll)});

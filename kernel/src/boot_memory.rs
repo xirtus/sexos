@@ -500,6 +500,9 @@ pub fn init(drive: u32, display: u32, usb: u32, net: u32, files: u32) {
     paired(files, drive, sex_pdx::SLOT_BLOCK_BUFFER, 4, sex_pdx::BLOCK_MAX_RUN, true);
     // Files' caches and free-space maps are sized by the disk it finds.
     crate::service_memory::reserve(files);
+    // The network service makes a flow (window, queue, TLS buffers) for each connection
+    // programs open, so its memory grows with them.
+    crate::service_memory::reserve(net);
     paired(drive, display, sex_pdx::SLOT_FRAME_REGION, 5, 3 * 1024 * 1024, false);
     if drive != 0 && files != 0 {
         negative_selftest(DOMAIN_REGISTRY.get(drive).unwrap(), DOMAIN_REGISTRY.get(files).unwrap());

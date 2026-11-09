@@ -25,6 +25,26 @@ use style::Style;
 /// Computed style for every element (text nodes and the document get `None`).
 /// `extra_css` are external sheets fetched for the page, applied before its `<style>`s.
 pub fn styles(dom: &Dom, extra_css: &[&str], width: i32, height: i32) -> Vec<Option<Style>> {
+    styles_at(dom, extra_css, width, height, 0, &mut Timeline::default()).0
+}
+
+/// When each element's CSS animation started, kept from one styling to the next.
+#[derive(Default)]
+pub struct Timeline {
+    starts: alloc::collections::BTreeMap<(dom::NodeId, alloc::string::String), u64>,
+    /// When animations found by the first styling start; the time of that styling if None.
+    pub begun: Option<u64>,
+}
+
+impl Timeline {
+    /// Animations that apply when first styled count from `ms`.
+    pub fn starting_at(ms: u64) -> Self { Timeline { starts: Default::default(), begun: Some(ms) } }
+}
+
+/// [`styles`] at `now_ms`, with CSS animations at that moment: each runs from when it
+/// first applied to its element (as `timeline` remembers). The flag is true while an
+/// animation is still running (style again soon).
+pub fn styles_at(dom: &Dom, extra_css: &[&str], width: i32, height: i32, now_ms: u64, timeline: &mut Timeline) -> (Vec<Option<Style>>, bool) {
     let ua = css::parse_sheet(style::USER_AGENT_CSS, width);
     let mut author: Vec<css::Sheet> = extra_css.iter().map(|c| css::parse_sheet(c, width)).collect();
     for (text, media) in page_styles(dom) {
@@ -33,7 +53,10 @@ pub fn styles(dom: &Dom, extra_css: &[&str], width: i32, height: i32) -> Vec<Opt
     let mut sheets: Vec<&css::Sheet> = Vec::with_capacity(author.len() + 1);
     sheets.push(&ua);
     sheets.extend(author.iter());
-    let cascade = style::Cascade::new(sheets);
+    let mut cascade = style::Cascade::new(sheets);
+    cascade.now_ms = now_ms;
+    cascade.start_default = timeline.begun.take().unwrap_or(now_ms);
+    cascade.starts = core::cell::RefCell::new(core::mem::take(&mut timeline.starts));
     let mut out: Vec<Option<Style>> = alloc::vec![None; dom.nodes.len()];
     let root = Style::initial();
     let mut root_font = 16;
@@ -54,7 +77,8 @@ pub fn styles(dom: &Dom, extra_css: &[&str], width: i32, height: i32) -> Vec<Opt
             }
         }
     }
-    out
+    timeline.starts = cascade.seen.take();
+    (out, cascade.animating.get())
 }
 
 /// `<style>` contents with their `media` attribute.
