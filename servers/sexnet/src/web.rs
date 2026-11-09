@@ -44,10 +44,12 @@ impl Slot {
         for _ in 0..4 {
             let mut chunk = [0u8; 1400];
             let room = tls.wire_room().min(chunk.len());
+            let mut drained = false;
             if room > 0 {
-                if let Ok(n) = engine.open_receive(i, &mut chunk[..room]) { if n > 0 { tls.offer_wire(&chunk[..n]); } }
+                match engine.open_receive(i, &mut chunk[..room]) { Ok(0) | Err(_) => drained = true, Ok(n) => tls.offer_wire(&chunk[..n]) }
             }
-            if matches!(engine.open_state(i), OpenState::PeerClosed | OpenState::Closed) { tls.peer_closed(); }
+            // Closed only once the flow holds nothing more for the session.
+            if drained && matches!(engine.open_state(i), OpenState::PeerClosed | OpenState::Closed) { tls.peer_closed(); }
             tls.poll();
             if self.out_at == self.out_len { self.out_len = tls.take_wire(&mut self.out); self.out_at = 0; }
             if self.out_at < self.out_len {

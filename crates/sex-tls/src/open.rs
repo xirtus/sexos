@@ -233,7 +233,8 @@ impl Session {
                 Ok(ConnectionState::TransmitTlsData(transmit)) => transmit.done(),
                 Ok(ConnectionState::BlockedHandshake) => {
                     more = false;
-                    if self.peer_closed && self.wire_in.len() == discard { self.fail(Some(Failure::Handshake)); return self.stage; }
+                    // Nothing more will come: a partial record left now can never complete.
+                    if self.peer_closed { self.fail(Some(Failure::Handshake)); return self.stage; }
                 }
                 Ok(ConnectionState::WriteTraffic(mut write)) => {
                     self.stage = Stage::Ready;
@@ -247,7 +248,8 @@ impl Session {
                             Ok(n) => { self.wire_out.truncate(at + n); self.plain_out.drain(..take); more = true; }
                             Err(_) => { self.wire_out.truncate(at); drop(write); self.fail(Some(Failure::Application)); return self.stage; }
                         }
-                    } else if self.peer_closed && self.wire_in.len() == discard {
+                    } else if self.peer_closed {
+                        // The site closed; any partial record left behind is cut short.
                         drop(write);
                         self.conn = None;
                         self.stage = Stage::Finished;
@@ -270,6 +272,7 @@ impl Session {
         let n = bytes.len().min(WIRE_IN.saturating_sub(self.wire_in.len()));
         self.wire_in.extend_from_slice(&bytes[..n]);
     }
+    /// The site will send nothing more: every byte it sent has been offered.
     pub fn peer_closed(&mut self) { self.peer_closed = true; }
     pub fn take_wire(&mut self, out: &mut [u8]) -> usize {
         let n = out.len().min(self.wire_out.len());
@@ -440,6 +443,38 @@ print('connections=%d requests=%d'%(conns,reqs),flush=True)
         let _ = server.kill();
         let _ = server.wait();
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A site that sends part of a record and hangs up ends the session, never leaves
+    /// it waiting for bytes that can't come.
+    #[test]
+    fn a_record_cut_short_by_the_close_ends_the_session() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let peer = std::thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            let mut hello = [0u8; 2048];
+            let _ = s.read(&mut hello);
+            // A handshake record header promising 512 bytes, then three of them.
+            s.write_all(&[22, 3, 3, 2, 0, 2, 0, 0]).unwrap();
+        });
+        let mut socket = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        socket.set_nonblocking(true).unwrap();
+        let seconds = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as u32;
+        chain(&std::env::temp_dir().join(format!("sexos-tls-cut-{}", std::process::id())), "cut.sexos.test", "ec:P-256");
+        let mut session = Session::start("cut.sexos.test", &mut [5; 32], seconds, Box::leak(vec![0u8; 0].into_boxed_slice()), Box::leak(vec![0u8; 0].into_boxed_slice())).unwrap();
+        let began = Instant::now();
+        while !matches!(session.stage(), Stage::Failed(_)) {
+            let mut chunk = [0u8; 4096];
+            match socket.read(&mut chunk) { Ok(0) => session.peer_closed(), Ok(k) => session.offer_wire(&chunk[..k]), Err(_) => {} }
+            session.poll();
+            let k = session.take_wire(&mut chunk);
+            if k > 0 { let _ = socket.write_all(&chunk[..k]); }
+            assert!(began.elapsed() < Duration::from_secs(10), "stuck at {:?}", session.stage());
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(session.drained());
+        peer.join().unwrap();
     }
 
     #[test]
