@@ -7,6 +7,7 @@
 <p id="big">big: waiting</p>
 <p id="missing">missing: waiting</p>
 <p id="url">url: waiting</p>
+<p id="query">query: waiting</p>
 <script>
 // Loads a JSON file, a picture's bytes, a large script's bytes, and something that isn't there.
 const show = (id, text) => { document.getElementById(id).textContent = id + ': ' + text; console.log('fetch ' + id + ' ' + text); };
@@ -24,6 +25,8 @@ const show = (id, text) => { document.getElementById(id).textContent = id + ': '
   show('missing', missing);
   const u = new URL('../a/b.html?x=1&y=two+words#top', 'http://example.org/one/two/page.html');
   show('url', u.href + ' ' + u.searchParams.get('y'));
+  u.searchParams.set('x', '2');
+  show('query', new URL('?q=1', u).href + ' ' + u.search);
   console.log('fetch done');
 })();
 </script>

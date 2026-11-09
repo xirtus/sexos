@@ -16,7 +16,7 @@ fn serve(script: &mut sex_js::Script<sex_js::Document>, base: &std::path::Path) 
     for (id, url) in &asked {
         let (status, body) = match std::fs::read(base.join(url.trim_start_matches("./"))) { Ok(b) => (200, b), Err(_) => (404, Vec::new()) };
         let n = body.len();
-        script.page_mut().bodies.push((*id, body));
+        script.page_mut().keep_body(*id, status, body);
         script.dispatch(&format!("fetched\t{id}\t{status}\t{n}")).unwrap();
     }
     !asked.is_empty()

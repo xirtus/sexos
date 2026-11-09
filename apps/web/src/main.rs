@@ -357,7 +357,7 @@ impl Browser {
             let n = body.len();
             sex_pdx::serial_record!("[web.fetch] id={} status={} bytes={} ticks={} url={}", id, status, n, sex_pdx::get_ticks() - begun, url);
             let Doc::Scripted(s) = &mut self.doc else { return };
-            s.page_mut().bodies.push((id, body));
+            s.page_mut().keep_body(id, status, body);
             if let Err(sex_js::Error::Trapped(why)) = s.dispatch(&alloc::format!("fetched\t{}\t{}\t{}", id, status, n)) {
                 sex_pdx::serial_record!("[web.script] trapped={}", why);
                 self.doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", (W, H - BAR), clock));

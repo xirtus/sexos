@@ -69,6 +69,7 @@ def main():
   tile=list(map(int,re.findall(rf'\[shell.tile.apply\] sid={surface} x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)',t())[-1]))
   checked=compare('web-fetched',refs['fetched'],tile)
   results=re.findall(r'\[web.console\] level=0 (fetch [a-z]+ [^\n]*)',t()[s:])
+  assert 'fetch query http://example.org/one/a/b.html?q=1 ?x=2&y=two+words' in results,results
   s=len(t());q.key('f11');g['wait'](rf'\[web.closed\] target={target} task={task}',s,60)
   text=t();assert 'KERNEL PANIC' not in text and '[web.fatal]' not in text and 'panicked' not in text
   print({'ok':True,'fetches':fetches,'results':results,'checked':checked})

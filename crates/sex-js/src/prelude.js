@@ -1650,15 +1650,25 @@
     get(k) { const p = this._l.find(p => p[0] === String(k)); return p ? p[1] : null; }
     getAll(k) { return this._l.filter(p => p[0] === String(k)).map(p => p[1]); }
     has(k) { return this._l.some(p => p[0] === String(k)); }
-    set(k, v) { this.delete(k); this._l.push([String(k), String(v)]); }
-    append(k, v) { this._l.push([String(k), String(v)]); }
-    delete(k) { this._l = this._l.filter(p => p[0] !== String(k)); }
+    set(k, v) {
+      k = String(k); v = String(v);
+      const i = this._l.findIndex(p => p[0] === k);
+      if (i < 0) this._l.push([k, v]);
+      else { this._l[i][1] = v; this._l = this._l.filter((p, j) => j <= i || p[0] !== k); }
+      this._sync();
+    }
+    append(k, v) { this._l.push([String(k), String(v)]); this._sync(); }
+    delete(k) { this._l = this._l.filter(p => p[0] !== String(k)); this._sync(); }
     forEach(fn) { for (const [k, v] of this._l) fn(v, k, this); }
     entries() { return this._l.map(p => p.slice())[Symbol.iterator](); }
     keys() { return this._l.map(p => p[0])[Symbol.iterator](); }
     values() { return this._l.map(p => p[1])[Symbol.iterator](); }
     [Symbol.iterator]() { return this.entries(); }
-    toString() { return this._l.map(([k, v]) => encodeURIComponent(k) + '=' + encodeURIComponent(v)).join('&'); }
+    sort() { this._l.sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0); this._sync(); }
+    get size() { return this._l.length; }
+    // A URL's own parameters write themselves back into its query.
+    _sync() { if (this._u) { const q = this.toString(); this._u._q = q ? '?' + q : ''; } }
+    toString() { const e = t => encodeURIComponent(t).replace(/%20/g, '+'); return this._l.map(([k, v]) => e(k) + '=' + e(v)).join('&'); }
   }
   // Addresses, split into their parts.
   class URL {
@@ -1668,7 +1678,11 @@
         if (base === undefined) throw new TypeError('Invalid URL: ' + href);
         const b = String(base instanceof URL ? base.href : base);
         const origin = (/^[a-z]+:\/\/[^/?#]*/i.exec(b) || [''])[0];
-        href = href.startsWith('//') ? b.replace(/:.*/, ':') + href : href.startsWith('/') ? origin + href : b.replace(/[?#].*$/, '').replace(/[^/]*$/, '') + href;
+        href = href.startsWith('//') ? b.replace(/:.*/, ':') + href : href.startsWith('/') ? origin + href
+          // An empty, query-only or fragment-only reference keeps the base's path (and query).
+          : href === '' || href.startsWith('#') ? b.replace(/#.*$/, '') + href
+          : href.startsWith('?') ? b.replace(/[?#].*$/, '') + href
+          : b.replace(/[?#].*$/, '').replace(/[^/]*$/, '') + href;
       }
       const m = /^([a-z][a-z0-9+.-]*:)(?:\/\/([^/?#]*))?([^?#]*)(\?[^#]*)?(#.*)?$/i.exec(href) || [];
       this.protocol = (m[1] || '').toLowerCase(); this.host = m[2] || ''; this.pathname = m[3] || (this.host ? '/' : '');
@@ -1679,8 +1693,17 @@
         parts.forEach((p, i) => { if (p === '..') { if (out.length > 1) out.pop(); } else if (p !== '.' || i === parts.length - 1) out.push(p === '.' ? '' : p); });
         this.pathname = out.join('/') || '/';
       }
-      this.search = m[4] && m[4] !== '?' ? m[4] : ''; this.hash = m[5] && m[5] !== '#' ? m[5] : '';
-      this.searchParams = new URLSearchParams(this.search);
+      this.hash = m[5] && m[5] !== '#' ? m[5] : '';
+      // searchParams and search are one query: changing either changes the other.
+      this.searchParams = new URLSearchParams();
+      this.searchParams._u = this;
+      this.search = m[4] || '';
+    }
+    get search() { return this._q; }
+    set search(v) {
+      v = String(v);
+      this._q = v && v !== '?' ? (v[0] === '?' ? v : '?' + v) : '';
+      this.searchParams._l = new URLSearchParams(this._q)._l;
     }
     get hostname() { return this.host.replace(/:\d+$/, ''); }
     get port() { const m = /:(\d+)$/.exec(this.host); return m ? m[1] : ''; }

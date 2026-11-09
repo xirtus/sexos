@@ -36,6 +36,17 @@ pub struct Document {
     next_fetch: u32,
 }
 
+impl Document {
+    /// Keeps a loaded body until the script takes it. Bodies nobody reads (a failed
+    /// request, or a response whose body was never asked for) give way to newer ones
+    /// once 64 are waiting.
+    pub fn keep_body(&mut self, id: u32, status: u16, body: Vec<u8>) {
+        if status == 0 { return; }
+        if self.bodies.len() >= 64 { self.bodies.remove(0); }
+        self.bodies.push((id, body));
+    }
+}
+
 /// A rough width when the browser gives no measure: 0.55 em per character.
 fn rough_measure(font: &str, text: &str) -> i32 {
     let size = font.split_ascii_whitespace().find_map(|t| t.strip_suffix("px")?.parse::<i32>().ok()).unwrap_or(10);
@@ -77,8 +88,8 @@ impl Page for Document {
         let text = |i: usize| a.get(i).and_then(|b| core::str::from_utf8(b).ok()).unwrap_or("");
         match operation {
             op::FETCH => {
-                // A page may not ask for more than it could hold.
-                if self.fetches.len() + self.bodies.len() >= 64 { return None; }
+                // A page may not have more than 64 requests waiting at once.
+                if self.fetches.len() >= 64 { return None; }
                 self.next_fetch += 1;
                 self.fetches.push((self.next_fetch, String::from(text(0))));
                 return Some(format!("{}", self.next_fetch).into_bytes());
