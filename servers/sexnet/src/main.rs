@@ -15,7 +15,7 @@ static mut DNS_RX:[u8;sex_net::DNS_BYTES]=[0;sex_net::DNS_BYTES];
 static mut DNS_TX:[u8;sex_net::DNS_BYTES]=[0;sex_net::DNS_BYTES];
 static mut DNS_RX_META:[sex_net::DnsMetadata;1]=[sex_net::DnsMetadata::EMPTY];
 static mut DNS_TX_META:[sex_net::DnsMetadata;1]=[sex_net::DnsMetadata::EMPTY];
-static mut TRANSPORT_STORAGE:[sex_net::Storage<'static>;6]=[sex_net::Storage::EMPTY;6];
+static mut TRANSPORT_STORAGE:[sex_net::Storage<'static>;sex_net::STORAGE]=[sex_net::Storage::EMPTY;sex_net::STORAGE];
 mod nic;
 mod ethernet;
 mod arp;

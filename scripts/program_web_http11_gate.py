@@ -5,13 +5,15 @@ document.cookie, POSTs JSON with its own headers to an API (the cookies go along
 HttpOnly one too, which the script itself can't see), then loads media bytes with an
 XMLHttpRequest Range request (206 Partial Content). Requests to another origin carry
 an Origin header and no cookies, and their replies reach the page only when that site
-allows it (Access-Control-Allow-Origin)."""
+allows it (Access-Control-Allow-Origin). Three slow requests made together are
+served side by side, on flows of their own."""
 import argparse,gzip,http.server,json,os,re,shutil,threading,time
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 SITE=ROOT/'scripts/web_site/tube'
 MEDIA=bytes(i%251 for i in range(64*1024))
 SEEN={}
+LOCK=threading.Lock();LIVE=[0,0] # requests in /tube/slow now, and the most at once
 class Handler(http.server.BaseHTTPRequestHandler):
  protocol_version='HTTP/1.1'
  def chunked(self,body,ctype,extra=()):
@@ -29,6 +31,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
   if self.path=='/tube/':
    SEEN['accept-encoding']=self.headers.get('Accept-Encoding','');SEEN['ua']=self.headers.get('User-Agent','')
    return self.chunked((SITE/'index.html').read_bytes().replace(b'{{OTHER}}',f'http://10.0.2.2:{OTHER_PORT}'.encode()),'text/html; charset=utf-8',[('Set-Cookie','sid=s3cret; Path=/; HttpOnly'),('Set-Cookie','visitor=v1; Path=/; Max-Age=3600')])
+  m=re.fullmatch(r'/tube/slow/(\d)',self.path)
+  if m:
+   with LOCK:LIVE[0]+=1;LIVE[1]=max(LIVE)
+   time.sleep(1.5)
+   with LOCK:LIVE[0]-=1
+   return self.plain(200,b'slow'+m[1].encode(),'text/plain')
   if self.path=='/tube/media.bin':
    m=re.fullmatch(r'bytes=(\d+)-(\d+)',self.headers.get('Range',''))
    if not m:return self.plain(200,MEDIA,'application/octet-stream')
@@ -87,8 +95,12 @@ def main():
   assert cross[1]==f'origin={base} cookie=none',cross[1]
   closed=g['wait'](r'\[web.console\] level=0 tube cross closed ([^\n]*)\n',s,300)
   assert closed[1]=='blocked',closed[1]
+  par=g['wait'](r'\[web.console\] level=0 tube parallel ([^\n]*)\n',s,300)
+  assert par[1].startswith('slow1,slow2,slow3 ms='),par[1]
+  # Three 1.5 s replies one after another take 4.5 s; side by side they overlap.
+  assert LIVE[1]==3,('requests at once',LIVE[1])
   assert 'gzip' in SEEN.get('accept-encoding',''),SEEN
   text=t();assert 'KERNEL PANIC' not in text and '[web.fatal]' not in text and 'panicked' not in text
-  print({'ok':True,'page':page[0].strip(),'post':post[1],'range':rng[1],'cross':cross[1],'closed':closed[1]})
+  print({'ok':True,'page':page[0].strip(),'post':post[1],'range':rng[1],'cross':cross[1],'closed':closed[1],'parallel':par[1],'at_once':LIVE[1]})
  finally:g['stop']()
 if __name__=='__main__':main()

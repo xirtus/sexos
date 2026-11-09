@@ -6,7 +6,7 @@ const BASELINE:sex_net_config::Config=sex_net_config::Config::CONTROLLED;
 const OUR:[u8;6]=[0x52,0x54,0,0x12,0x34,0x56];const PEER:[u8;6]=[2,0,0,0,0,1];const PEER_IP:[u8;4]=[10,0,2,2];
 fn sum(bytes:&[u8])->u16{let mut s=0u32;for c in bytes.chunks(2){s+=u16::from_be_bytes([c[0],*c.get(1).unwrap_or(&0)])as u32;}while s>>16!=0{s=(s&0xffff)+(s>>16);}!(s as u16)}
 fn engine()->Engine<'static>{engine_with(BASELINE)}
-fn engine_with(config:sex_net_config::Config)->Engine<'static>{Engine::new(config,OUR,0,0x7365786f735f3736,Box::leak(Box::new([0;FLOW_BYTES])),Box::leak(Box::new([0;FLOW_BYTES])),Box::leak(Box::new([0;FLOW_BYTES])),Box::leak(Box::new([0;FLOW_BYTES])),Box::leak(Box::new([DnsMetadata::EMPTY])),Box::leak(Box::new([0;DNS_BYTES])),Box::leak(Box::new([DnsMetadata::EMPTY])),Box::leak(Box::new([0;DNS_BYTES])),Box::leak(Box::new([Storage::EMPTY;6]))).unwrap()}
+fn engine_with(config:sex_net_config::Config)->Engine<'static>{Engine::new(config,OUR,0,0x7365786f735f3736,Box::leak(Box::new([0;FLOW_BYTES])),Box::leak(Box::new([0;FLOW_BYTES])),Box::leak(Box::new([0;FLOW_BYTES])),Box::leak(Box::new([0;FLOW_BYTES])),Box::leak(Box::new([DnsMetadata::EMPTY])),Box::leak(Box::new([0;DNS_BYTES])),Box::leak(Box::new([DnsMetadata::EMPTY])),Box::leak(Box::new([0;DNS_BYTES])),Box::leak(Box::new([Storage::EMPTY;STORAGE]))).unwrap()}
 fn arp()->Vec<u8>{arp_for(PEER_IP,LOCAL)}
 fn arp_for(peer:[u8;4],local:[u8;4])->Vec<u8>{let mut v=vec![0u8;60];v[..6].fill(255);v[6..12].copy_from_slice(&PEER);v[12..22].copy_from_slice(&[8,6,0,1,8,0,6,4,0,1]);v[22..28].copy_from_slice(&PEER);v[28..32].copy_from_slice(&peer);v[38..42].copy_from_slice(&local);v}
 fn tcp(seq:u32,ack:u32,flags:u8,body:&[u8])->Vec<u8>{
@@ -287,7 +287,7 @@ fn configured_ready(config:sex_net_config::Config)->(Engine<'static>,u64){
   sex_net_config::Config{http:[224,0,0,2],..ALTERNATE},sex_net_config::Config{dns_port:0,..ALTERNATE},
   sex_net_config::Config{source_base:47999,..ALTERNATE},sex_net_config::Config{listen_port:48000,..ALTERNATE}]{
   let(mut rx,mut tx,mut client_rx,mut client_tx)=([0xA1;FLOW_BYTES],[0xA2;FLOW_BYTES],[0xA3;FLOW_BYTES],[0xA4;FLOW_BYTES]);
-  let(mut dns_rx,mut dns_tx)=([0xA5;DNS_BYTES],[0xA6;DNS_BYTES]);let mut rxmeta=[DnsMetadata::EMPTY];let mut txmeta=[DnsMetadata::EMPTY];let mut storage=[Storage::EMPTY;6];
+  let(mut dns_rx,mut dns_tx)=([0xA5;DNS_BYTES],[0xA6;DNS_BYTES]);let mut rxmeta=[DnsMetadata::EMPTY];let mut txmeta=[DnsMetadata::EMPTY];let mut storage=[Storage::EMPTY;STORAGE];
   assert_eq!(Engine::new(config,[0;6],u64::MAX,0,&mut rx,&mut tx,&mut client_rx,&mut client_tx,&mut rxmeta,&mut dns_rx,&mut txmeta,&mut dns_tx,&mut storage).err(),Some(Error::Config));
   assert_eq!(rx,[0xA1;FLOW_BYTES]);assert_eq!(tx,[0xA2;FLOW_BYTES]);assert_eq!(client_rx,[0xA3;FLOW_BYTES]);assert_eq!(client_tx,[0xA4;FLOW_BYTES]);assert_eq!(dns_rx,[0xA5;DNS_BYTES]);assert_eq!(dns_tx,[0xA6;DNS_BYTES]);
   let(mut e,mut now)=configured_ready(ALTERNATE);e.begin_client(1).unwrap();let tcp=tick(&mut e,&mut now).unwrap();assert_eq!(tcp.client_ticket(&config),None);
