@@ -29,13 +29,38 @@ pub struct Document {
     /// The page's decoded pictures by `src`, shared with the browser, so WebGL can
     /// upload one the moment a script asks.
     pub pictures: Vec<(String, alloc::rc::Rc<sex_image::Image>)>,
-    /// `fetch` requests the browser has not loaded yet: (id, url as the script gave it).
-    pub fetches: Vec<(u32, String)>,
+    /// `fetch`/XHR requests the browser has not loaded yet.
+    pub fetches: Vec<FetchAsk>,
     /// Loaded bodies the script has not taken yet, by request id.
     pub bodies: Vec<(u32, Vec<u8>)>,
     /// Video and audio requests not yet taken by the browser: (element, verb, argument).
     pub media: Vec<(NodeId, String, String)>,
+    /// Loaded replies' final address and headers, by request id.
+    pub heads: Vec<(u32, String)>,
     next_fetch: u32,
+    /// The window's cookies, shared with the browser's own requests.
+    pub cookies: Option<alloc::rc::Rc<core::cell::RefCell<sex_fetch::Jar>>>,
+    /// Seconds since 1970, for cookie expiry.
+    pub wall: fn() -> u64,
+}
+
+/// One request a script made with `fetch` or `XMLHttpRequest`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FetchAsk {
+    pub id: u32,
+    /// As the script gave it (relative addresses are the browser's to resolve).
+    pub url: String,
+    /// Uppercase; empty means GET.
+    pub method: String,
+    /// `name: value` lines.
+    pub headers: String,
+    pub body: Vec<u8>,
+}
+impl FetchAsk {
+    /// The request headers as pairs, skipping malformed lines.
+    pub fn header_pairs(&self) -> Vec<(&str, &str)> {
+        self.headers.lines().filter_map(|l| { let i = l.find(':')?; Some((l[..i].trim(), l[i + 1..].trim())) }).filter(|(k, _)| !k.is_empty()).collect()
+    }
 }
 
 impl Document {
@@ -47,6 +72,12 @@ impl Document {
         if self.bodies.len() >= 64 { self.bodies.remove(0); }
         self.bodies.push((id, body));
     }
+    /// Keeps a reply's final address and header lines until the script asks.
+    pub fn keep_head(&mut self, id: u32, url: &str, headers: &str) {
+        if self.heads.len() >= 64 { self.heads.remove(0); }
+        self.heads.push((id, format!("{}\n{}", url, headers)));
+    }
+    fn page_url(&self) -> Option<sex_fetch::Url> { sex_fetch::Url::parse(crate::document::strip_fragment(&self.url)).ok() }
 }
 
 /// A rough width when the browser gives no measure: 0.55 em per character.
@@ -57,7 +88,7 @@ fn rough_measure(font: &str, text: &str) -> i32 {
 
 impl Document {
     pub fn new(dom: Dom, url: &str, viewport: (i32, i32), clock: fn() -> u64) -> Self {
-        Self { dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, rects: Vec::new(), clock, canvas_queue: Vec::new(), measure: rough_measure, gl: Default::default(), pictures: Vec::new(), fetches: Vec::new(), bodies: Vec::new(), media: Vec::new(), next_fetch: 0 }
+        Self { dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, rects: Vec::new(), clock, canvas_queue: Vec::new(), measure: rough_measure, gl: Default::default(), pictures: Vec::new(), fetches: Vec::new(), bodies: Vec::new(), media: Vec::new(), heads: Vec::new(), next_fetch: 0, cookies: None, wall: || 0 }
     }
 
     fn node(&self, s: Option<&&str>) -> Option<NodeId> {
@@ -93,8 +124,21 @@ impl Page for Document {
                 // A page may not have more than 64 requests waiting at once.
                 if self.fetches.len() >= 64 { return None; }
                 self.next_fetch += 1;
-                self.fetches.push((self.next_fetch, String::from(text(0))));
+                let method = text(1).trim().to_ascii_uppercase();
+                self.fetches.push(FetchAsk { id: self.next_fetch, url: String::from(text(0)), method, headers: String::from(text(2)), body: a.get(3).map(|b| b.to_vec()).unwrap_or_default() });
                 return Some(format!("{}", self.next_fetch).into_bytes());
+            }
+            op::FETCH_HEAD => {
+                let id: u32 = text(0).parse().ok()?;
+                let i = self.heads.iter().position(|(n, _)| *n == id)?;
+                return Some(self.heads.swap_remove(i).1.into_bytes());
+            }
+            op::COOKIE => {
+                let jar = self.cookies.clone()?;
+                let url = self.page_url()?;
+                let now = (self.wall)();
+                if let Some(v) = a.first() { jar.borrow_mut().store_from_script(&url, core::str::from_utf8(v).ok()?, now); return Some(Vec::new()); }
+                return Some(jar.borrow().script_view(&url, now).into_bytes());
             }
             op::FETCH_BODY => {
                 let id: u32 = text(0).parse().ok()?;
@@ -266,3 +310,6 @@ fn floor(s: &str, max: usize) -> usize {
     while !s.is_char_boundary(i) { i -= 1; }
     i
 }
+
+/// An address without its `#fragment`.
+pub(crate) fn strip_fragment(url: &str) -> &str { url.split('#').next().unwrap_or("") }

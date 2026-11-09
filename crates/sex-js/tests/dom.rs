@@ -276,3 +276,47 @@ fn webgl_page_picture_is_in_the_texture_before_the_next_draw() {
     "#, "t.js").unwrap();
     assert_eq!(logs(&mut s), ["0:32,64,96,255"]);
 }
+
+#[test]
+fn fetch_init_xhr_and_cookies() {
+    let mut s = page("<p>x</p>");
+    // The page is http://example.test/dir/page.html; cookies are shared with the browser.
+    let jar = std::rc::Rc::new(std::cell::RefCell::new(sex_fetch::Jar::new()));
+    let url = sex_fetch::Url::parse("http://example.test/dir/page.html").unwrap();
+    jar.borrow_mut().store(&url, "sid=1; Path=/; HttpOnly", 100);
+    jar.borrow_mut().store(&url, "pref=dark; Path=/", 100);
+    s.page_mut().cookies = Some(jar.clone());
+    s.page_mut().wall = || 200;
+    s.eval(r#"
+        console.log(document.cookie);
+        document.cookie = 'seen=yes; path=/';
+        document.cookie = 'sid=stolen; path=/';
+        console.log(document.cookie);
+        fetch('/youtubei/v1/player', { method: 'post', headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Format-Version': '2' }, body: JSON.stringify({ videoId: 'abc' }) })
+          .then(r => r.json().then(j => console.log('fetch', r.status, r.headers.get('content-type'), r.url, j.ok)));
+        const x = new XMLHttpRequest();
+        x.open('GET', 'data.bin');
+        x.responseType = 'arraybuffer';
+        x.setRequestHeader('Range', 'bytes=0-3');
+        const states = [];
+        x.onreadystatechange = () => states.push(x.readyState);
+        x.onload = () => console.log('xhr', x.status, x.getResponseHeader('Content-Range'), new Uint8Array(x.response).join(','), states.join(''));
+        x.send();
+    "#, "t.js").unwrap();
+    assert_eq!(logs(&mut s), ["0:pref=dark", "0:pref=dark; seen=yes"]);
+    assert_eq!(jar.borrow().header(&url, 200).unwrap(), "sid=1; pref=dark; seen=yes", "scripts can't replace HttpOnly cookies");
+    let asked = std::mem::take(&mut s.page_mut().fetches);
+    assert_eq!(asked.len(), 2);
+    assert_eq!((asked[0].url.as_str(), asked[0].method.as_str()), ("/youtubei/v1/player", "POST"));
+    assert_eq!(asked[0].header_pairs(), [("content-type", "application/json"), ("x-goog-api-format-version", "2")]);
+    assert_eq!(asked[0].body, br#"{"videoId":"abc"}"#);
+    assert_eq!((asked[1].url.as_str(), asked[1].method.as_str(), asked[1].header_pairs()), ("data.bin", "GET", vec![("range", "bytes=0-3")]));
+    s.page_mut().keep_head(asked[0].id, "http://example.test/youtubei/v1/player", "content-type: application/json\r\n");
+    s.page_mut().keep_body(asked[0].id, 200, br#"{"ok":true}"#.to_vec());
+    s.dispatch(&format!("fetched\t{}\t200\t11", asked[0].id)).unwrap();
+    s.page_mut().keep_head(asked[1].id, "http://example.test/dir/data.bin", "content-range: bytes 0-3/10\r\n");
+    s.page_mut().keep_body(asked[1].id, 206, vec![1, 2, 3, 4]);
+    s.dispatch(&format!("fetched\t{}\t206\t4", asked[1].id)).unwrap();
+    s.dispatch("flush").unwrap();
+    assert_eq!(logs(&mut s), ["0:fetch 200 application/json http://example.test/youtubei/v1/player true", "0:xhr 206 bytes 0-3/10 1,2,3,4 234"]);
+}

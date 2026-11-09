@@ -62,6 +62,12 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 }
 
 fn clock() -> u64 { sex_pdx::get_ticks().saturating_mul(1_000_000) }
+/// Seconds since 1970, for cookie expiry. Programs have no civil clock yet, so this
+/// counts from the day this was written; cookies only need it to move forward.
+fn wall() -> u64 { 1_794_182_400 + sex_pdx::get_ticks() / 1000 }
+
+/// A loaded reply: final address, status, header lines for scripts, body.
+struct Loaded { url: String, status: u16, headers: String, body: Vec<u8> }
 
 /// The page's tree, with the script engine that owns it when the page has scripts.
 enum Doc {
@@ -95,6 +101,8 @@ struct Browser {
     editing: Option<String>,
     status: Option<&'static str>,
     buf: Vec<u8>,
+    /// The window's cookies, shared with page scripts (`document.cookie`).
+    jar: alloc::rc::Rc<core::cell::RefCell<sex_fetch::Jar>>,
     /// The window shows no full frame of the page yet, so pictures alone can't update it.
     full_redraw: bool,
 }
@@ -152,17 +160,54 @@ impl Browser {
 
     /// Like `fetch`, also giving the status, and taking an error answer as an answer.
     fn fetch_status(&mut self, url: &str, max: usize) -> Result<(String, u16, core::ops::Range<usize>), &'static [u8]> {
+        let r = self.http("GET", url, &[], &[], max, None)?;
+        self.buf = r.body;
+        Ok((r.url, r.status, 0..self.buf.len()))
+    }
+
+    /// One HTTP/1.1 exchange, following redirects, with the window's cookies.
+    ///
+    /// `script` is the requesting page's origin for a script's request. Then cookies
+    /// go only to (and come only from) that same origin, a request elsewhere says
+    /// where it comes from (`Origin`), and its reply reaches the script only if the
+    /// site allows that origin (`Access-Control-Allow-Origin`). So a page can't read
+    /// another site's private pages with the person's cookies.
+    fn http(&mut self, method: &str, url: &str, headers: &[(&str, &str)], body: &[u8], max: usize, script: Option<&str>) -> Result<Loaded, &'static [u8]> {
         let mut url = String::from(sex_html::url::fragment(url).0);
+        let mut method = String::from(if method.is_empty() { "GET" } else { method });
+        let mut body = body;
         for _ in 0..MAX_REDIRECTS {
-            self.buf.resize(max, 0);
-            let r = net::fetch(&mut self.window, url.as_bytes(), &mut self.buf).map_err(net::message)?;
-            if (300..400).contains(&r.status) {
-                if let Some(next) = r.header(&self.buf, b"location").and_then(|l| core::str::from_utf8(l).ok()).and_then(|l| sex_html::url::resolve(&url, l)) {
+            let target = sex_fetch::Url::parse(&url).map_err(|_| net::message(net::Error::Address))?;
+            let cross = script.filter(|o| *o != target.origin());
+            let cookie = if cross.is_some() { None } else { self.jar.borrow().header(&target, wall()) };
+            let mut sent: Vec<(&str, &str)> = headers.iter().filter(|(k, _)| !sex_fetch::forbidden_header(k)).copied().collect();
+            if let Some(o) = cross { sent.push(("Origin", o)); }
+            let req = sex_fetch::Request { method: &method, url: &url, headers: &sent, body, trusted_origin: cross.is_some() };
+            let begun = sex_pdx::get_ticks();
+            let r = net::request(&mut self.window, &req, cookie.as_deref(), max).map_err(net::message)?;
+            if cross.is_none() {
+                let mut jar = self.jar.borrow_mut();
+                for c in r.head.all("set-cookie") { jar.store(&target, c, wall()); }
+            }
+            sex_pdx::serial_record!("[web.http] method={} status={} bytes={} encoding={} chunked={} cookies={} ticks={} url={}", method, r.head.status, r.body.len(),
+                r.head.get("content-encoding").unwrap_or("none"), r.head.get("transfer-encoding").is_some_and(|t| t.contains("chunked")) as u8, self.jar.borrow().len(), sex_pdx::get_ticks() - begun, url);
+            if r.head.is_redirect() {
+                if let Some(next) = r.head.get("location").and_then(|l| sex_fetch::join(&url, l)) {
+                    // 303, and 301/302 after a POST, continue as a GET without the body.
+                    if r.head.status == 303 || (matches!(r.head.status, 301 | 302) && method == "POST") { method = String::from("GET"); body = &[]; }
                     url = String::from(sex_html::url::fragment(&next).0);
                     continue;
                 }
             }
-            return Ok((url, r.status as u16, r.body..r.end));
+            if let Some(o) = cross {
+                let allowed = r.head.get("access-control-allow-origin").map(str::trim);
+                if allowed != Some("*") && allowed != Some(o) {
+                    sex_pdx::serial_record!("[web.cors] blocked origin={} url={}", o, url);
+                    return Err(b"The site doesn't let this page read it.");
+                }
+            }
+            let lines = r.head.lines(true);
+            return Ok(Loaded { url, status: r.head.status, headers: lines, body: r.body });
         }
         Err(b"Too many redirects.")
     }
@@ -237,6 +282,8 @@ impl Browser {
         self.timer = None;
         let mut doc = Document::new(dom, &base, (W, H - BAR), clock);
         doc.measure = sex_web::canvas::measure_css;
+        doc.cookies = Some(self.jar.clone());
+        doc.wall = wall;
         doc.pictures = self.fonts.images.clone();
         self.doc = Doc::Plain(doc);
         self.canvases = sex_web::canvas::Canvases::new();
@@ -397,7 +444,7 @@ impl Browser {
             let m = media::Media::new(&self.doc.get().dom, node);
             let poster = if m.audio { None } else { self.doc.get().dom.attr(node, "poster").map(String::from) };
             if let Some(poster) = poster.filter(|p| !p.trim().is_empty()) {
-                let (status, body) = self.load(poster.trim());
+                let (status, body) = self.load_get(poster.trim());
                 if (200..300).contains(&status) {
                     if let Some(img) = sex_web::decode_image(&body, media::MAX_W, media::MAX_H) { media::Media::poster(&mut self.fonts, &m.picture_name(), img); }
                 }
@@ -435,7 +482,7 @@ impl Browser {
             if self.media[i].state != media::State::Waiting { continue; }
             let src = self.media[i].src.clone();
             let begun = sex_pdx::get_ticks();
-            let (status, body) = self.load(&src);
+            let (status, body) = self.load_get(&src);
             sex_pdx::serial_record!("[web.media.load] node={} status={} bytes={} ticks={} src={}", self.media[i].node, status, body.len(), sex_pdx::get_ticks() - begun, src);
             if (200..300).contains(&status) && !body.is_empty() {
                 if self.media[i].want_play { self.hush_media(i); }
@@ -502,18 +549,19 @@ impl Browser {
         true
     }
 
-    /// Loads what the page's scripts asked `fetch` for, and tells each script.
+    /// Loads what the page's scripts asked `fetch` and XHR for, and tells each script.
     #[inline(never)]
     fn serve_fetches(&mut self) {
         let asked = match &mut self.doc { Doc::Scripted(s) => core::mem::take(&mut s.page_mut().fetches), _ => return };
-        for (id, url) in asked {
+        for ask in asked {
             let begun = sex_pdx::get_ticks();
-            let (status, body) = self.load(&url);
-            let n = body.len();
-            sex_pdx::serial_record!("[web.fetch] id={} status={} bytes={} ticks={} url={}", id, status, n, sex_pdx::get_ticks() - begun, url);
+            let r = self.load(&ask);
+            let n = r.body.len();
+            sex_pdx::serial_record!("[web.fetch] id={} status={} bytes={} ticks={} method={} url={}", ask.id, r.status, n, sex_pdx::get_ticks() - begun, if ask.method.is_empty() { "GET" } else { &ask.method }, ask.url);
             let Doc::Scripted(s) = &mut self.doc else { return };
-            s.page_mut().keep_body(id, status, body);
-            if let Err(sex_js::Error::Trapped(why)) = s.dispatch(&alloc::format!("fetched\t{}\t{}\t{}", id, status, n)) {
+            s.page_mut().keep_head(ask.id, &r.url, &r.headers);
+            s.page_mut().keep_body(ask.id, r.status, r.body);
+            if let Err(sex_js::Error::Trapped(why)) = s.dispatch(&alloc::format!("fetched\t{}\t{}\t{}", ask.id, r.status, n)) {
                 sex_pdx::serial_record!("[web.script] trapped={}", why);
                 self.doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", (W, H - BAR), clock));
                 return;
@@ -521,30 +569,43 @@ impl Browser {
         }
     }
 
-    /// A script's `fetch`: the body and its status (0 when it could not be loaded). Pages
-    /// fetch from where they came from: built in, a file (`@`), or the network.
-    fn load(&mut self, url: &str) -> (u16, Vec<u8>) {
+    /// A script's request: the reply (status 0 when it could not be loaded). Pages fetch
+    /// from where they came from: built in, a file (`@`), or the network.
+    /// A plain GET of a page's resource (a video, a poster): status and body. Like
+    /// an element's load, it may come from another site without CORS, since the
+    /// page's scripts never read the bytes.
+    fn load_get(&mut self, url: &str) -> (u16, Vec<u8>) {
+        let ask = sex_js::FetchAsk { id: 0, url: String::from(url), method: String::new(), headers: String::new(), body: Vec::new() };
+        let r = self.load_as(&ask, false);
+        (r.status, r.body)
+    }
+
+    /// A script's request: another site must allow it (CORS).
+    fn load(&mut self, ask: &sex_js::FetchAsk) -> Loaded { self.load_as(ask, true) }
+
+    fn load_as(&mut self, ask: &sex_js::FetchAsk, cors: bool) -> Loaded {
+        let url = ask.url.as_str();
         let base = String::from(sex_html::url::fragment(&self.url).0);
-        let none = (0, Vec::new());
+        let done = |status: u16, body: Vec<u8>| Loaded { url: String::from(url), status, headers: String::new(), body };
         if url.starts_with("about:") || (base.starts_with("about:") && !url.contains(':')) {
             let name = if url.starts_with("about:") { String::from(url) } else { alloc::format!("about:{}", url.trim_start_matches("./")) };
-            return match built_in(&name) { Some(text) => (200, Vec::from(text.as_bytes())), None => (404, Vec::new()) };
+            return match built_in(&name) { Some(text) => done(200, Vec::from(text.as_bytes())), None => done(404, Vec::new()) };
         }
         if let Some(path) = local_path(&base, url) {
             return match files::size(&mut self.window, path.as_bytes()) {
                 Ok(n) if n as usize <= FETCH_MAX => {
                     let mut body = alloc::vec![0u8; n as usize];
-                    match files::read(&mut self.window, path.as_bytes(), &mut body) { Ok(got) => { body.truncate(got); (200, body) } Err(_) => none }
+                    match files::read(&mut self.window, path.as_bytes(), &mut body) { Ok(got) => { body.truncate(got); done(200, body) } Err(_) => done(0, Vec::new()) }
                 }
-                Err(files::NOT_FOUND) => (404, Vec::new()),
-                _ => none,
+                Err(files::NOT_FOUND) => done(404, Vec::new()),
+                _ => done(0, Vec::new()),
             };
         }
-        let Some(abs) = sex_html::url::resolve(&base, url) else { return none };
-        if !abs.starts_with("http") { return none; }
-        let r = match self.fetch_status(&abs, FETCH_MAX) { Ok((_, status, body)) => (status, Vec::from(&self.buf[body])), Err(_) => none };
-        self.buf = Vec::new();
-        r
+        let Some(abs) = sex_html::url::resolve(&base, url) else { return done(0, Vec::new()) };
+        if !abs.starts_with("http") { return done(0, Vec::new()); }
+        let headers = ask.header_pairs();
+        let origin = sex_fetch::Url::parse(&base).map(|u| u.origin()).unwrap_or_else(|_| String::from("null"));
+        match self.http(&ask.method, &abs, &headers, &ask.body, FETCH_MAX, if cors { Some(&origin) } else { None }) { Ok(r) => r, Err(_) => done(0, Vec::new()) }
     }
 
     /// Gives the page a key first. True if a handler kept it.
@@ -689,7 +750,7 @@ pub extern "C" fn _start() -> ! {
     let Some(fonts) = Fonts::new() else { window.show(b"Web: the fonts could not be loaded."); loop { if let Event::Close = window.next() { window.close() } } };
     let page = sex_html::render("", W, H, &fonts as &dyn Host);
     let doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", (W, H - BAR), clock));
-    let mut b = Browser { window, fonts, page, doc, sheets: Vec::new(), timer: None, canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), media_asked: false, url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true };
+    let mut b = Browser { window, fonts, page, doc, sheets: Vec::new(), timer: None, canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), media_asked: false, url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default() };
     let first = given.split_ascii_whitespace().next().unwrap_or(first_page()).to_string();
     b.open(&first, false);
     sex_pdx::serial_record!("[web.ready] target={} task={}", b.window.target, b.window.task);

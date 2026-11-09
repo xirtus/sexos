@@ -44,6 +44,7 @@ members = [
     "crates/sex-net-config",
     "crates/sex-tls",
     "crates/sex-http",
+    "crates/sex-fetch",
     "crates/sex-trust-config",
     "crates/sex-graphics",
     "crates/sex-canvas",
