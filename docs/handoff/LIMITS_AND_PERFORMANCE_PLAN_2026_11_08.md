@@ -306,6 +306,28 @@ Each stage is a PR, merged when its gates pass at 1 and 4 cores.
   - Files in `/bin` already had no count limit; the store is for programs installed
     with the system.
 
+- Stage 5, first part (switching between programs on the shared key):
+  - Program rows from the fourth on share one PKU key and take turns on one core.
+    A switch used to clear and set the present bit of every page both programs held
+    (1,100+ region pages each, plus their memory), so it grew with program size.
+    Worse, the region pages went into a fixed 1,400-entry table: once stage 4 sized
+    pixel surfaces to the screen, a screen above about 1400x1000 overflowed it and
+    BOOT panicked as soon as these rows existed. Andreas's PC would have hit this.
+  - Now every page such a row holds lies on whole 2 MiB spans nobody else maps into:
+    its arena already did, and BOOT now places its regions on span boundaries. A
+    switch flips the user bit of the spans' page-directory entries (6 spans for a
+    row's regions at 1920x1080, plus one per 2 MiB of program memory) and flushes
+    this core's TLB. BOOT's 64 KiB first stack for the row is outside any span and
+    still takes turns page by page.
+  - Kernel checks of user pointers now honour the user and write bits at every
+    paging level, as the CPU does, so a closed span is closed to system calls too.
+  - Measured: ~190,000-310,000 cycles per switch under TCG, almost all of it the
+    full TLB flush (QEMU drops its whole software TLB); constant in program size.
+    On hardware this is a few page-directory writes plus a TLB refill; PCID
+    (stage 7) can remove the flush.
+  - No ABI change. Gate: `scripts/program_pool_gate.py` (six programs side by
+    side at 1920x1080, four on the shared key, all drawn, switches counted).
+
 Where SexOS can exceed Linux: allocation is already faster (batched grants, no
 fault per page); one address space makes zero-copy sharing a capability grant
 instead of a copy, so with stages 3 and 6 file and IPC data should never be
