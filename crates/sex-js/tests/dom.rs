@@ -406,3 +406,15 @@ fn forms_take_typing_clicks_and_submit() {
     assert_eq!(s.page_mut().dom.caret, None);
     assert_eq!(logs(&mut s), ["0:old hi"]);
 }
+
+#[test]
+fn running_out_of_script_heap_says_so() {
+    let dom = sex_html::parse::parse("<p>x</p>");
+    let limits = Limits { memory_bytes: 64 << 20, heap_bytes: 8 << 20, ..Limits::default() };
+    let mut s = Script::new(Document::new(dom, "http://example.test/", (410, 330), clock), limits).expect("engine");
+    let _ = s.eval("const keep = []; for (;;) keep.push(new Array(100000).fill(1.5));", "big.js");
+    let l = logs(&mut s);
+    assert!(l.iter().any(|m| m.contains("out of memory")), "{l:?}");
+    // The engine still works afterwards.
+    s.eval("keep.length = 0; console.log('ok')", "t.js").unwrap();
+}

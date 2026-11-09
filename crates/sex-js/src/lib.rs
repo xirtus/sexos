@@ -114,8 +114,10 @@ pub struct Limits {
 }
 impl Default for Limits {
     // Libraries like three.js take about a second to load on a fast host and need room
-    // for their scenes; browsers let a script run for about ten seconds before they ask.
-    fn default() -> Self { Self { memory_bytes: 160 << 20, heap_bytes: 128 << 20, budget_ms: 10_000, load_budget_ms: 120_000 } }
+    // for their scenes (a whole game, such as a Quake port with its data, needs most of a
+    // gigabyte); memory grows only as it is used. Browsers let a script run for about
+    // ten seconds before they ask.
+    fn default() -> Self { Self { memory_bytes: 1 << 30, heap_bytes: 960 << 20, budget_ms: 10_000, load_budget_ms: 120_000 } }
 }
 
 /// The first op whose arguments are bytes rather than text.

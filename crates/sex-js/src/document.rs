@@ -201,6 +201,8 @@ impl Page for Document {
             op::LOG => {
                 let level = a.first().and_then(|l| l.parse().ok()).unwrap_or(0u8).min(2);
                 let text = a.get(1).copied().unwrap_or("");
+                // QuickJS throws null when it has no memory left even for the error.
+                let text = if level == 2 && text == "null" { "InternalError: out of memory (the page filled its script heap)" } else { text };
                 // Keep the log bounded: a page that logs in a loop must not fill memory.
                 if self.log.len() < 256 { self.log.push((level, String::from(&text[..floor(text, 1024)]))); }
                 None
