@@ -391,7 +391,7 @@ Boot log: `[wifi.assoc.start] security=…`, then `[wifi.assoc] step=…` lines,
 the phases ASSOCIATING (7) and ASSOCIATED (8).
 
 Not yet:
-- WPA3-only networks are refused (`wpa3_sae`). SAE authentication is W5d.
+- WPA3-only networks use SAE (W5d, section 17); `Assoc::new` alone still refuses them (`wpa3_sae`).
 - WPA2's 4-way handshake follows association (section 13).
 - No HT/VHT capabilities are sent, so association is legacy-rate only (W6).
 - `iwx_run`'s smart-fifo, multicast and power commands, and TLC, come with the data
@@ -508,3 +508,32 @@ basic ones. The station still associates as a legacy station, so the top rate is
 HT rates in this command) is the next step for speed.
 
 Boot log: `[wifi.rate] control=… rate=…`.
+
+## 17. Stage W5d: WPA3-Personal with SAE (2026-11-10)
+
+On a WPA3-only network, sexnet builds SAE's password element for the AP and the x17.
+It uses hash-to-element when the AP advertises it (RSNXE), and hunting and pecking
+otherwise. Random values come from the entropy service. `Assoc::with_sae` then
+authenticates with SAE instead of open system:
+
+- **Commit** (algorithm 3, transaction 1): group 19, scalar and element. Status 126
+  is used with hash-to-element, 0 otherwise.
+- **Anti-clogging token.** If the AP asks for one (status 76), the commit goes again
+  at once with the token: bare after the group, or in its container element (255/93)
+  at the end with hash-to-element.
+- **AP commit.** The AP's commit gives the KCK, PMK and PMKID (`sae::Sae`), and our
+  confirm goes at once.
+- **Confirm.** The AP's confirm (transaction 2) must check out, else
+  `Refusal::Sae(BadConfirm)`. With a wrong password the AP drops our confirm, so the
+  failure shows as `NoAnswer("sae_confirm")`.
+
+The association request then carries our SAE RSN element: AKM 00-0f-ac-8, MFPC and
+MFPR (management frame protection required), and BIP-CMAC as the group management
+cipher. With hash-to-element it also carries the RSNXE. The 4-way handshake runs with
+`Akm::Sae` and the PMK from SAE (the passphrase is wiped then). The IGTK is installed
+with SEC_KEY_CMD.
+
+Transition networks (WPA2/WPA3) keep using WPA2 for now. Only group 19 is offered.
+
+Boot log: `[wifi.assoc.start] security=Wpa3Personal step=SaeCommit`,
+`[wifi.handshake.start] akm=Sae …`.

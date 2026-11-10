@@ -3948,3 +3948,14 @@ Roadmap workstream B, part 1 (report: `docs/handoff/LINUX_AND_DESKTOP_PARITY_REP
   command's layout in both versions, data frames without a fixed rate once rate control
   is on, and the firmware's rate report.
 - **ABI / kernel:** none.
+
+## Intel Wi-Fi, stage W5d: WPA3-Personal (SAE) (2026-11-10)
+- **What:** WPA3-only networks now connect. SAE commit and confirm run in
+  authentication frames, with hunting-and-pecking or hash-to-element and anti-clogging
+  tokens. The association request uses the SAE RSN element (management frame
+  protection required), and the 4-way handshake runs with SAE's PMK.
+  INTEL_WIFI section 17.
+- **Evidence:** `scripts/wifi_host_gate.sh` (50 driver tests). The AP model runs SAE
+  with a token request in both methods, and both sides agree on the PMK. A wrong
+  password gets no confirm.
+- **ABI / kernel:** none.

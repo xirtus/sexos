@@ -190,12 +190,13 @@ pub struct Rekey { pub sup: Supplicant, pub keys: Keys }
 impl Rsna {
     /// After association with a WPA2 network: `own_rsn` is what our association
     /// request carried, `ap_rsn` the AP's element from its beacon. `tx` is the
-    /// association's queue (frames may still be in it).
+    /// association's queue (frames may still be in it). `akm` is PSK (WPA2) or
+    /// SAE (WPA3, with SAE's PMK).
     #[allow(clippy::too_many_arguments)]
     pub fn new(pmk: [u8; 32], snonce: [u8; 32], own_rsn: &[u8], ap_rsn: &[u8], ap: &w::Rsn, target: Target, me: [u8; 6],
-        family: Family, tx: TxQueue, sec_key_cmd: bool, now: u64) -> Self
+        family: Family, tx: TxQueue, sec_key_cmd: bool, now: u64, akm: Akm) -> Self
     {
-        let sup = Supplicant::new(Akm::Psk, pmk, target.bssid, me, snonce, own_rsn, ap_rsn);
+        let sup = Supplicant::new(akm, pmk, target.bssid, me, snonce, own_rsn, ap_rsn);
         Self { step: Step::Handshake, sup, tx, target, me, family, keys: Keys::new(sec_key_cmd, ap.mfpc),
             installed: (false, false, false), messages: 0, seq: 0x100, started: now }
     }
