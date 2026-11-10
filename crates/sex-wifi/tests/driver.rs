@@ -1,7 +1,7 @@
 //! Driver-level behaviour: chip table, firmware files, DMA layout, the power-up
 //! sequence against a register model, the 4-way handshake against an access
 //! point played by the authenticator helpers, and frames end to end.
-use sex_wifi::{bringup, ccmp, cmdq, context, csr, devices, eapol, hcmd, ieee80211 as w, init, pack, rx, ucode};
+use sex_wifi::{bringup, ccmp, cmdq, context, csr, devices, eapol, hcmd, ieee80211 as w, init, pack, rx, scan, ucode};
 use std::collections::HashMap;
 
 const AP: [u8; 6] = [0x02, 0x11, 0x22, 0x33, 0x44, 0x55];
@@ -766,11 +766,28 @@ struct Firmware {
     error_on: Option<(u8, u8)>,
     silent_on: Option<(u8, u8)>,
     pnvm_rung: bool,
+    /// Frames the radio "hears" during a scan: (frame, energy, channel, padded).
+    air: Vec<(Vec<u8>, u8, u8, bool)>,
+    scan_status: u8,
+}
+
+/// An RX MPDU notification as the firmware writes it (descriptor, then frame).
+fn mpdu(family: devices::Family, frame: &[u8], energy: u8, channel: u8, pad: bool) -> Vec<u8> {
+    let desc = if family == devices::Family::Ax210 { 64 } else { 48 };
+    let mut d = vec![0u8; desc];
+    d[0..2].copy_from_slice(&(frame.len() as u16 + if pad { 2 } else { 0 }).to_le_bytes());
+    if pad { d[3] = 0x20; }
+    d[12..16].copy_from_slice(&3u32.to_le_bytes());
+    let e = if family == devices::Family::Ax210 { 40 } else { 32 };
+    d[e] = energy; d[e + 1] = 0; d[e + 2] = channel;
+    if pad { d.extend_from_slice(&frame[..24]); d.extend_from_slice(&[0, 0]); d.extend_from_slice(&frame[24..]); }
+    else { d.extend_from_slice(frame); }
+    packet(0xc1, 0, 0, 0x80, &d)
 }
 
 impl Firmware {
     fn new(family: devices::Family, base: u64, slot: usize) -> Self {
-        Self { family, base, slot, read: 0, commands: vec![], lar: true, refuse: None, error_on: None, silent_on: None, pnvm_rung: false }
+        Self { family, base, slot, read: 0, commands: vec![], lar: true, refuse: None, error_on: None, silent_on: None, pnvm_rung: false, air: vec![], scan_status: 1 }
     }
     fn deliver(&mut self, m: &mut Memory, layout: &context::Layout, p: &[u8]) {
         firmware_delivers(m, layout, self.family, self.base, self.slot, p);
@@ -805,6 +822,7 @@ impl Firmware {
                 (hcmd::LONG_GROUP, hcmd::REPLY_BEACON_FILTERING_CMD) => Some(60),
                 (hcmd::PHY_OPS_GROUP, hcmd::TEMP_REPORTING_THRESHOLDS_CMD) => Some(20),
                 (hcmd::LONG_GROUP, hcmd::BT_CONFIG) | (hcmd::SYSTEM_GROUP, hcmd::SOC_CONFIGURATION_CMD) => Some(8),
+                (hcmd::LONG_GROUP, hcmd::SCAN_REQ_UMAC) => Some(scan::REQUEST_V14_BYTES),
                 _ => Some(4),
             };
             assert_eq!(Some(len), want, "payload size of {group:#x}/{opcode:#x}");
@@ -839,11 +857,20 @@ impl Firmware {
                     a[4..6].copy_from_slice(&((b'D' as u16) << 8 | b'E' as u16).to_le_bytes());
                     a[12] = 0x10;
                     a[16..20].copy_from_slice(&37u32.to_le_bytes());
+                    // Channels 1-13 and the first 23 at 5 GHz allowed; 14 not.
+                    for c in (0..13).chain(14..37) { a[20 + c * 4] = 1; }
                     a
                 }
                 _ => vec![0u8; 4],
             };
             self.deliver(m, layout, &packet(opcode, group | failed, index, qid, &answer));
+            if (group, opcode) == (hcmd::LONG_GROUP, hcmd::SCAN_REQ_UMAC) && failed == 0 {
+                for (frame, energy, channel, pad) in self.air.clone() { let p = mpdu(self.family, &frame, energy, channel, pad); self.deliver(m, layout, &p); }
+                let mut it = vec![0u8; 16]; it[4] = 40;
+                self.deliver(m, layout, &packet(scan::SCAN_ITERATION_COMPLETE_UMAC, 1, 0, 0x80, &it));
+                let mut done = vec![0u8; 16]; done[6] = self.scan_status;
+                self.deliver(m, layout, &packet(scan::SCAN_COMPLETE_UMAC, 1, 0, 0x80, &done));
+            }
             if (group, opcode) == (hcmd::REGULATORY_AND_NVM_GROUP, hcmd::NVM_ACCESS_COMPLETE) {
                 self.deliver(m, layout, &packet(hcmd::INIT_COMPLETE_NOTIF, 0, 0, 0x80, &[0; 4]));
             }
@@ -1106,4 +1133,120 @@ fn mac_address_comes_from_the_fuses() {
     assert_eq!(init::mac_from_words(0x0211_2233, 0x0000_4455), [0x02, 0x11, 0x22, 0x33, 0x44, 0x55]);
     assert!(init::valid_mac(&[0x02, 0x11, 0x22, 0x33, 0x44, 0x55]));
     for bad in [[0; 6], [0xff; 6], [0x02, 0xcc, 0xaa, 0xff, 0xee, 0x00], [0x01, 0, 0, 0, 0, 1]] { assert!(!init::valid_mac(&bad)); }
+}
+
+// ---- Stage W4: scanning ----
+
+fn beacon_from(bssid: [u8; 6], ssid: &[u8], channel: u8, rsn: Option<&[u8]>) -> Vec<u8> {
+    let mut f = beacon(ssid, channel, rsn, false);
+    f[10..16].copy_from_slice(&bssid);
+    f[16..22].copy_from_slice(&bssid);
+    f
+}
+
+#[test]
+fn scan_request_lists_allowed_channels_passively() {
+    // 2.4 GHz 1-13 valid (14 not), 5 GHz 36-48 valid; channel 1 active.
+    let mut flags = [0u32; 51];
+    for f in flags.iter_mut().take(13) { *f = scan::CHANNEL_VALID; }
+    flags[0] |= scan::CHANNEL_ACTIVE;
+    for f in flags.iter_mut().skip(14).take(4) { *f = scan::CHANNEL_VALID; }
+    let mut list = [scan::Channel::default(); 51];
+    assert_eq!(scan::channels(&flags, true, &mut list), 17);
+    assert_eq!((list[0], list[13]), (scan::Channel { number: 1, five_ghz: false, active: true }, scan::Channel { number: 36, five_ghz: true, active: false }));
+    assert_eq!(scan::channels(&flags, false, &mut list), 13, "no 5 GHz without the band in the SKU");
+    let n = scan::channels(&flags, true, &mut list);
+    let mut req = [0u8; scan::REQUEST_V14_BYTES];
+    let o = scan::Options { mac: STA, ext_channel: true, ds_param: true, has_5ghz: true, max_channels: 67 };
+    assert_eq!(scan::request_v14(&mut req, &list[..n], &o), 1940);
+    let flags16 = u16::from_le_bytes([req[8], req[9]]);
+    assert_eq!(flags16, (1 << 11) | (1 << 1) | (1 << 2) | (1 << 7), "passive, pass all, iteration notice, adaptive dwell");
+    assert_eq!((req[44], req[45]), (1 << 5, 17));
+    // Channel entries: flags u32, number, band (1 = 2.4 GHz, 0 = 5 GHz), iterations.
+    assert_eq!(&req[48 + 4..48 + 7], &[1, 1, 1]);
+    assert_eq!(&req[48 + 13 * 8 + 4..48 + 13 * 8 + 7], &[36, 0, 1]);
+    // Probe template: probe request from our address, broadcast, rates per band.
+    let buf = 596 + 20;
+    assert_eq!(req[buf], 0x40);
+    assert_eq!(&req[buf + 10..buf + 16], &STA);
+    assert_eq!(&req[buf + 26..buf + 28], &[1, 8]);
+    assert_eq!(u16::from_le_bytes([req[596 + 6], req[596 + 7]]), 19, "2.4 GHz: rates, extended rates, DS parameter");
+    // The firmware's channel limit is honoured.
+    let o = scan::Options { max_channels: 5, ..o };
+    scan::request_v14(&mut req, &list[..n], &o);
+    assert_eq!(req[45], 5);
+}
+
+#[test]
+fn mpdu_frames_with_and_without_header_padding() {
+    let b = beacon_from(AP, b"Cafe", 6, None);
+    for family in [devices::Family::Gen22000, devices::Family::Ax210] {
+        for pad in [false, true] {
+            let p = mpdu(family, &b, 45, 6, pad);
+            let pk = hcmd::packets(&p).next().unwrap();
+            let mut scratch = [0u8; 4096];
+            let r = scan::parse_mpdu(&pk, family, &mut scratch).unwrap();
+            assert_eq!((r.frame, r.rssi, r.channel), (&b[..], -45, 6));
+        }
+    }
+    // A frame with a bad CRC is dropped.
+    let mut p = mpdu(devices::Family::Ax210, &b, 45, 6, false);
+    p[8 + 12] = 0;
+    assert!(scan::parse_mpdu(&hcmd::packets(&p).next().unwrap(), devices::Family::Ax210, &mut [0; 4096]).is_none());
+}
+
+#[test]
+fn x17_scan_finds_networks_after_ready() {
+    let pnvm = pnvm_file(&[(X17_SKU, 0x10d, 0x30)]);
+    let file = init_firmware(false, None);
+    let fw = ucode::Firmware::parse(&file).unwrap();
+    let (mut b, mut m, mut hw, base) = alive_x17(&fw, X17_SKU);
+    let alive = b.alive.unwrap();
+    let mut i = init::Init::new(b.boot.chip, &fw, &alive, Some(&pnvm), &b.layout, base, &mut m, 0x420, X17_RF_ID, hw.now);
+    let mut sim = Firmware::new(b.boot.chip.family, base, 1);
+    run_init(&mut i, &mut b, &mut m, &mut hw, &mut sim);
+    assert_eq!(i.step, init::Step::Ready);
+    let wpa2 = [48u8, 20, 1, 0, 0, 0x0f, 0xac, 4, 1, 0, 0, 0x0f, 0xac, 4, 1, 0, 0, 0x0f, 0xac, 2, 0, 0];
+    let home = [0x02, 0x10, 0, 0, 0, 1];
+    sim.air = vec![
+        (beacon_from(home, b"Home", 6, Some(&wpa2)), 60, 6, true),
+        (beacon_from(home, b"Home", 6, Some(&wpa2)), 48, 6, true),
+        (beacon_from([0x02, 0x10, 0, 0, 0, 2], b"Cafe", 36, None), 70, 36, false),
+    ];
+    // The regulatory answer's channel list replaced the NVM's: 13 + 23 channels.
+    let mut s = i.scan(hw.now);
+    assert_eq!(s.channels, 36);
+    for _ in 0..1000 {
+        let t = hw.now;
+        if !s.advance(&mut b, &mut i.cmdq, &mut hw, &mut m, t) { break; }
+        sim.serve(&mut m, &b.layout, &mut hw);
+        hw.now += 1000;
+    }
+    assert_eq!(s.step, scan::Step::Done);
+    assert_eq!(s.count, 2);
+    let home_net = s.networks().find(|n| n.bss.ssid() == b"Home").unwrap();
+    assert_eq!((home_net.rssi, home_net.frames, home_net.bss.security), (-48, 2, w::Security::Wpa2Personal), "strongest kept");
+    let cafe = s.networks().find(|n| n.bss.ssid() == b"Cafe").unwrap();
+    assert_eq!((cafe.bss.channel, cafe.bss.security), (36, w::Security::Open));
+    assert_eq!(s.channels, 40, "from the iteration notice");
+    // An aborted scan is reported as such.
+    sim.scan_status = 2;
+    let mut s = i.scan(hw.now);
+    for _ in 0..1000 {
+        let t = hw.now;
+        if !s.advance(&mut b, &mut i.cmdq, &mut hw, &mut m, t) { break; }
+        sim.serve(&mut m, &b.layout, &mut hw);
+        hw.now += 1000;
+    }
+    assert_eq!(s.step, scan::Step::Failed(scan::Failure::Status(2)));
+}
+
+#[test]
+fn scan_keeps_the_strongest_networks_when_full() {
+    let mut s = scan::Scan::new(devices::Family::Ax210, &[], &scan::Options { mac: STA, ext_channel: true, ds_param: false, has_5ghz: true, max_channels: 67 }, 0);
+    for i in 0..(scan::MAX_NETWORKS as u8 + 4) {
+        s.heard(&beacon_from([2, 0, 0, 0, 0, i], b"n", 1, None), -90 + i as i16, 1);
+    }
+    assert_eq!((s.count, s.dropped), (scan::MAX_NETWORKS, 4));
+    assert!(s.networks().all(|n| n.rssi >= -90 + 4), "the four weakest gave way");
 }
