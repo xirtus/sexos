@@ -18,3 +18,19 @@
 - Kernel growth: 11 source lines for an opt-in logging macro. This is kernel-internal
   diagnostic mechanism and cannot move to a server; no driver/policy/ABI addition.
   The 21,500 nonblank-line budget remains unchanged and passes.
+
+### Fresh guest comparison
+
+Clean sealed builds of candidate `1b905a59` were booted in QEMU 11.0.2 TCG, one
+core, 1280x800, identical blank NVMe disks. Only `SEXOS_VERBOSE_BOOT` differed.
+Before `[silkshell.ready]`, normal output was **183,515 UTF-8 bytes / 2,602 lines**;
+verbose output was **341,139 bytes / 5,461 lines**: **157,624 fewer bytes (46.2%)**.
+The selected loader-detail families emitted zero lines normally and 2,030 with verbose
+logging. Both boots reached Shell/app registration and Linen disk publication.
+
+ISO SHA-256: normal `6dffd4a4f222b32a33133ea83b89f3398d73d5a00f64704a265c53bc1b4eb974`;
+verbose `0a2671b78d654b5328cf0ca7b8ba8822e1513bd45af8120d6e472fadfdf0e99d`.
+Raw serial, source/ISO hashes, QEMU version, desktop dumps and the replay helper are in
+`/Users/xmacbookm5/Projects/sexos-evidence/quiet-boot/{normal,verbose}/` and
+`quiet-boot/measure_boot.py`. Builds without local FFmpeg/libc++ qualify this log comparison
+only. Concurrent host builds invalidate a latency comparison; **no boot-speed claim**.
