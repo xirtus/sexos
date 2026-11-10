@@ -52,9 +52,11 @@ PROGRAMS=[
 ]
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
- a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
  elfs=[(n,(ROOT/'iso_root/programs'/n).read_bytes()) for n in [p[0] for p in PROGRAMS]+['pdf','stdnet']]
  assert all(e[:4]==b'\x7fELF' for _,e in elfs)
+ if b'This build has no C compiler output (musl headers were missing).' in dict(elfs)['chello']:
+  raise SystemExit('chello is the no-compiler fallback: install musl headers or set MUSL_INCLUDE, then rebuild before running this gate')
+ a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
  install(disk,elfs)
  g=boot(a.iso,disk,a.out,'std',a.resolution);t=g['text'];q=g['q']
  def run(line):
