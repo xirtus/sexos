@@ -180,12 +180,23 @@ const FRAME_BYTES: usize = 4; // S16 stereo
 /// 8 KiB = 2048 frames ≈ 43 ms. Two descriptors each, so 16 fit the 32-entry ring.
 const PERIOD_BYTES: usize = 8192;
 const IN_FLIGHT: usize = 12;
+/// Periods kept queued while open streams have nothing to give.
+const MIN_AHEAD: usize = 3;
 const NOTES: usize = 16;
 pub const MAX_MS: u64 = 5000;
 const PERIOD_FRAMES: usize = PERIOD_BYTES / FRAME_BYTES;
 /// One stream per program row: the sound ring BOOT shares with that row.
 const STREAMS: usize = 16;
 use sex_pdx::sound_ring as ring;
+use sex_pdx::sound_mixer as mixer;
+
+/// The person's settings: master volume and mute, and each row's volume and mute.
+struct Mixer { master: u8, muted: bool, rows: [u8; STREAMS], rows_muted: [bool; STREAMS] }
+static mut MIXER: Mixer = Mixer { master: 100, muted: false, rows: [100; STREAMS], rows_muted: [false; STREAMS] };
+fn settings() -> &'static mut Mixer { unsafe { &mut *core::ptr::addr_of_mut!(MIXER) } }
+
+/// Master gain in 1/65536, 0 while muted.
+fn master_gain() -> u32 { let m = settings(); if m.muted { 0 } else { mixer::master_gain(m.master) } }
 
 #[derive(Clone, Copy)]
 struct Stream { ring: ring::Ring, active: bool, pd: u32 }
@@ -264,17 +275,21 @@ impl Player {
 
     /// Mixes the next period of notes and streams into `period`, noting how many
     /// frames each stream gave in `took[slot]`. False when there is nothing to play.
-    fn render(&mut self, slot: usize) -> bool {
+    /// With `hold`, an open stream with less than a period queued gives nothing yet,
+    /// so a stream that is behind waits for a whole period instead of playing in
+    /// crumbs between silences.
+    fn render(&mut self, slot: usize, hold: bool) -> bool {
         if self.len == 0 && !self.streaming() { return false; }
         let mix = mix();
         *mix = [[0; 2]; PERIOD_FRAMES];
+        let master = master_gain();
         for frame in 0..PERIOD_FRAMES {
             if self.len == 0 { break; }
             let note = self.notes[self.head];
             // 5 ms ramps at both ends keep notes from clicking.
             let ramp = (RATE / 200).min(note.frames / 2).max(1);
             let edge = self.done.min(note.frames - 1 - self.done.min(note.frames - 1)).min(ramp);
-            let gain = note.volume as f32 / 100.0 * 0.5 * 32767.0 * edge as f32 / ramp as f32;
+            let gain = note.volume as f32 / 100.0 * 0.5 * 32767.0 * edge as f32 / ramp as f32 * master as f32 / 65536.0;
             let s = if note.hz == 0 { 0.0 } else { sine(self.phase) * gain };
             self.phase = self.phase.wrapping_add(((note.hz as u64) << 32).wrapping_div(RATE as u64) as u32);
             self.done += 1;
@@ -299,16 +314,22 @@ impl Player {
             if r.load(ring::PAUSED) != 0 { continue; }
             // A program owns only its own ring: a counter it bent is clamped, not trusted.
             let have = written.saturating_sub(taken).min(ring::FRAMES) as usize;
+            if hold && have < PERIOD_FRAMES && r.load(ring::OPEN) != 0 { continue; }
             let n = have.min(PERIOD_FRAMES);
             // A muted program's sound is taken and counted as played, so its clock
             // runs on, but not heard.
-            let volume = if crate::sound_muted(st.pd) { 0 } else { r.load(ring::VOLUME).min(100) as i32 };
+            // Its gain in 1/65536: what the program asks, times the person's row
+            // volume and master volume.
+            let m = settings();
+            let gain = if crate::sound_muted(st.pd) || m.rows_muted[i] { 0 } else {
+                (r.load(ring::VOLUME).min(100) * m.rows[i] as u64 * master as u64 / 10_000) as i64
+            };
             let frames = r.frames();
             for f in 0..n {
                 let at = ((taken + f as u64) % ring::FRAMES) as usize;
                 let [l, rr] = unsafe { core::ptr::read_volatile(frames.add(at)) };
-                mix[f][0] += l as i32 * volume / 100;
-                mix[f][1] += rr as i32 * volume / 100;
+                mix[f][0] += (l as i64 * gain >> 16) as i32;
+                mix[f][1] += (rr as i64 * gain >> 16) as i32;
             }
             r.store(ring::TAKEN, taken + n as u64);
             self.took[slot][i] = n as u16;
@@ -336,7 +357,15 @@ impl Player {
             }
             self.first = (self.first + 1) % IN_FLIGHT; self.flying -= 1; self.played += 1;
         }
-        while self.flying < IN_FLIGHT && self.card.room() && self.render((self.first + self.flying) % IN_FLIGHT) {
+        while self.flying < IN_FLIGHT && self.card.room() {
+            let slot = (self.first + self.flying) % IN_FLIGHT;
+            let notes = self.len > 0;
+            if !self.render(slot, self.flying >= MIN_AHEAD) { break; }
+            // A stream that is open but has nothing queued yet (it is starting, or
+            // its program is busy) gets a few periods of silence, not the whole
+            // window: what it writes next then plays within ~130 ms instead of
+            // after half a second of silence already handed to the card.
+            if !notes && self.took[slot].iter().all(|&n| n == 0) && self.flying >= MIN_AHEAD { break; }
             let period = self.period;
             match self.card.submit(&period) {
                 Ok(token) => { self.tokens[(self.first + self.flying) % IN_FLIGHT] = token; self.flying += 1; }
@@ -470,3 +499,39 @@ pub fn pump() {
         }
     }
 }
+
+/// Carries out a mixer request (`sound_mixer`) from a caller Bell has already let ask.
+/// `write` is false for readers such as SilkBar.
+pub fn mixer_request(action: u64, a: u64, b: u64, write: bool) -> u64 {
+    let m = settings();
+    let state = |m: &Mixer| mixer::state(m.master, m.muted, present());
+    let row = |m: &Mixer, k: usize| {
+        let (playing, asked, pd) = player().and_then(|p| p.streams[k].as_ref())
+            .map_or((false, 0, 0), |st| (st.active, st.ring.load(ring::VOLUME).min(100) as u8, st.pd));
+        mixer::Stream { volume: m.rows[k], muted: m.rows_muted[k], playing, asked, pd }.word()
+    };
+    let reply = match action {
+        mixer::STATE => state(m),
+        mixer::STREAM if (a as usize) < STREAMS => row(m, a as usize),
+        _ if !write => return mixer::REFUSED,
+        mixer::SET_MASTER if a <= 100 => { m.master = a as u8; state(m) }
+        mixer::MUTE_MASTER if a <= 2 => { m.muted = if a == 2 { !m.muted } else { a == 1 }; state(m) }
+        mixer::STEP_MASTER => {
+            m.master = (m.master as i64 + a as i64).clamp(0, 100) as u8;
+            m.muted = false;
+            state(m)
+        }
+        mixer::SET_STREAM if (a as usize) < STREAMS && b & 0xFF <= 100 => {
+            m.rows[a as usize] = b as u8;
+            m.rows_muted[a as usize] = b & mixer::MUTED != 0;
+            row(m, a as usize)
+        }
+        _ => return mixer::REFUSED,
+    };
+    sex_pdx::serial_record!("[bell.mixer] action={} master={} muted={} reply={:#x}", action, m.master, m.muted as u8, reply);
+    reply
+}
+
+/// A short tick at the current loudness, so the person hears where a volume key put it.
+/// Played after the reply, so the card's work never comes between request and answer.
+pub fn tick() { tone(988, 45, 40); }

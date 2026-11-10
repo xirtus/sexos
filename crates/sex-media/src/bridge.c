@@ -122,7 +122,7 @@ static int picture(struct sx *s, uint32_t *out, int out_w, int out_h) {
     if (!s->scale || s->scale_w != out_w || s->scale_h != out_h || s->scale_from_w != f->width ||
         s->scale_from_h != f->height || s->scale_fmt != f->format) {
         sws_freeContext(s->scale);
-        s->scale = sws_getContext(f->width, f->height, f->format, out_w, out_h, AV_PIX_FMT_BGR0,
+        s->scale = sws_getContext(f->width, f->height, f->format, out_w, out_h, AV_PIX_FMT_BGRA,
                                   SWS_BILINEAR, NULL, NULL, NULL);
         if (!s->scale) return AVERROR(EINVAL);
         s->scale_w = out_w; s->scale_h = out_h;
