@@ -1,6 +1,7 @@
 //! Shell-owned Alt shortcuts: Alt+Tab, and Alt+= / Alt+- / Alt+0 for the focused
-//! window's text size. App-local Tab and editor modifiers stay local. The volume and
-//! mute keys always belong to Shell.
+//! window's text size, and Ctrl+Alt+= / Ctrl+Alt+- / Ctrl+Alt+0 for the whole
+//! screen's scale (HiDPI). App-local Tab and editor modifiers stay local. The volume
+//! and mute keys always belong to Shell.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Action {
     Pass,
@@ -8,6 +9,8 @@ pub enum Action {
     NextFrame,
     /// +1 larger, -1 smaller, 0 back to the default size.
     TextZoom(i8),
+    /// The whole desktop's scale: +1 larger, -1 smaller, 0 the screen's own.
+    DisplayScale(i8),
     /// Master volume by this many percent; 0 toggles mute.
     Volume(i8),
 }
@@ -21,6 +24,7 @@ pub const KEY_VOLUME_UP: u8 = 0x77;
 pub const VOLUME_STEP: i8 = 5;
 pub struct Keys {
     alt: bool,
+    ctrl: bool,
     /// A key pressed with Alt, whose repeat and release Shell keeps from the app.
     captured: Option<u8>,
 }
@@ -28,6 +32,7 @@ impl Keys {
     pub const fn new() -> Self {
         Self {
             alt: false,
+            ctrl: false,
             captured: None,
         }
     }
@@ -54,6 +59,11 @@ impl Keys {
             self.alt = value == 1;
             return Action::Consume;
         }
+        // Ctrl stays the app's too; Shell only notes it for Ctrl+Alt shortcuts.
+        if code == 0x1D {
+            self.ctrl = value != 0;
+            return Action::Pass;
+        }
         let zoom = match code {
             0x0D => Some(1),  // =
             0x0C => Some(-1), // -
@@ -69,13 +79,15 @@ impl Keys {
                 return Action::Consume;
             }
             // Holding Alt+= keeps growing; Tab repeats stay consumed.
-            return match zoom { Some(step) if step != 0 && self.alt => Action::TextZoom(step), _ => Action::Consume };
+            // Scale steps are big; only text zoom repeats.
+            return match zoom { Some(step) if step != 0 && self.alt && !self.ctrl => Action::TextZoom(step), _ => Action::Consume };
         }
         if value != 1 || !self.alt {
             return Action::Pass;
         }
         self.captured = Some(code);
         match zoom {
+            Some(step) if self.ctrl => Action::DisplayScale(step),
             Some(step) => Action::TextZoom(step),
             None => Action::NextFrame,
         }
@@ -110,5 +122,20 @@ mod tests {
         assert_eq!(k.event(0x0F, 1), Action::NextFrame);
         assert_eq!(k.event(0x0F, 0), Action::Consume);
         assert_eq!(k.event(0x1E, 1), Action::Pass);
+    }
+    #[test]
+    fn ctrl_alt_steps_the_screen_scale_once_per_press() {
+        let mut k = Keys::new();
+        assert_eq!(k.event(0x1D, 1), Action::Pass);
+        assert_eq!(k.event(0x38, 1), Action::Consume);
+        assert_eq!(k.event(0x0D, 1), Action::DisplayScale(1));
+        assert_eq!(k.event(0x0D, 2), Action::Consume);
+        assert_eq!(k.event(0x0D, 0), Action::Consume);
+        assert_eq!(k.event(0x0C, 1), Action::DisplayScale(-1));
+        assert_eq!(k.event(0x0C, 0), Action::Consume);
+        assert_eq!(k.event(0x0B, 1), Action::DisplayScale(0));
+        assert_eq!(k.event(0x0B, 0), Action::Consume);
+        assert_eq!(k.event(0x1D, 0), Action::Pass);
+        assert_eq!(k.event(0x0D, 1), Action::TextZoom(1));
     }
 }

@@ -55,7 +55,7 @@ impl OutputBoundary{
    }
    draw_cursor_z_top(fb,W,H,target.len(),true,&captured);
   }
-  let output=&mut self.visible;assert!(preparation.commit(|pixels|{output.copy_from_slice(pixels);true}));
+  let output=&mut self.visible;assert!(preparation.commit(|frame|{output.copy_from_slice(frame.pixels);true}));
   assert_eq!(self.store.front_pixels().unwrap(),self.visible.as_slice());
  }
  fn padding_is_zero(&self){unsafe{
@@ -80,7 +80,7 @@ fn reset(){scrub_cursor_under();unsafe{PREPARED_CURSOR=None;INPUT_TRACE_LAST_SEQ
 fn fresh_full(cursor:(i32,i32),menu:u32)->Vec<u32>{
  let mut output=OutputBoundary::new();let captured=capture(cursor);let mut p=output.store.prepare(true).unwrap();
  unsafe{let pending=PREPARED_CURSOR;{let target=p.target();shade(&target,0,H);menu_rect(&target,menu);draw_cursor_z_top(target.pointer(),W,H,target.len(),false,&captured);}PREPARED_CURSOR=pending;}
- assert!(p.commit(|pixels|{output.visible.copy_from_slice(pixels);true}));output.visible.clone()
+ assert!(p.commit(|frame|{output.visible.copy_from_slice(frame.pixels);true}));output.visible.clone()
 }
 #[test]fn full_overlap_is_visible_and_move_restores_exact_menu_without_arrow_trail(){
  reset();let mut output=OutputBoundary::new();output.paint(Mode::Full,(40,70),MENU_OLD);
@@ -113,5 +113,5 @@ fn fresh_full(cursor:(i32,i32),menu:u32)->Vec<u32>{
 }
 #[test]fn cleanup_scrubs_all_saved_words_and_coordinates(){unsafe{
  reset();CURSOR_UNDER_SAVED.fill(0xaabbccdd);CURSOR_UNDER_X=23;CURSOR_UNDER_Y=82;CURSOR_UNDER_VALID=true;
- scrub_cursor_under();assert!(CURSOR_UNDER_SAVED.iter().all(|&p|p==0));assert_eq!(CURSOR_UNDER_SAVED.len(),128);assert_eq!((CURSOR_UNDER_X,CURSOR_UNDER_Y,CURSOR_UNDER_VALID),(0,0,false));
+ scrub_cursor_under();assert!(CURSOR_UNDER_SAVED.iter().all(|&p|p==0));assert_eq!(CURSOR_UNDER_SAVED.len(),128*9);assert_eq!((CURSOR_UNDER_X,CURSOR_UNDER_Y,CURSOR_UNDER_VALID),(0,0,false));
 }}

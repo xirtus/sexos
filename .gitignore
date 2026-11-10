@@ -112,3 +112,6 @@ tools/qemu/
 
 # Generated Python bytecode
 __pycache__/
+
+# The one public key builds trust for signed updates.
+!keys/release.pub

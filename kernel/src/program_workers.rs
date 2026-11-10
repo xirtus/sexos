@@ -92,6 +92,9 @@ pub fn spawn(pd: &crate::capability::ProtectionDomain, run: u32, id: u32, entry:
     Ok(id as u64)
 }
 
+/// Whether `task` is one of a program's workers.
+pub fn is_worker(task: *mut Task) -> bool { worker_row(task).is_some() }
+
 /// Whether `task` is a worker; if so, its row.
 fn worker_row(task: *mut Task) -> Option<u32> {
     table().workers.iter().find(|w| w.task == task).map(|w| w.target)

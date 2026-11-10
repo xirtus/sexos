@@ -49,3 +49,25 @@ pub fn invoke(pd:&ProtectionDomain,slot:u64,kind:u64,a:u64,b:u64,c:u64)->[u64;5]
     }
     result
 }
+
+/// Civil time for every task ([`w::civil`]): the last CMOS reading plus the ticks
+/// since it, read again once a minute. `(reading ms, tick at reading)`, 0 when none.
+static CIVIL:spin::Mutex<(u64,u64)>=spin::Mutex::new((0,0));
+pub fn civil_ms()->Result<u64,u64>{
+    let now=crate::interrupts::TICKS.load(Ordering::Relaxed);
+    let mut held=CIVIL.lock();
+    if held.0==0||now.saturating_sub(held.1)>=w::civil::RESAMPLE_MS{
+        let fresh={
+            let Some(_guard)=CMOS.try_lock()else{
+                return if held.0!=0{Ok(held.0+now.saturating_sub(held.1))}else{Err(w::BUSY)};
+            };
+            w::sample(||Some(unsafe{(snapshot(),snapshot())}))
+        };
+        match fresh{
+            Ok(s)=>*held=(s.seconds*1000,now),
+            Err(e) if held.0==0=>return Err(e),
+            Err(_)=>{}
+        }
+    }
+    Ok(held.0+now.saturating_sub(held.1))
+}

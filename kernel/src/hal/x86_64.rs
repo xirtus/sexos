@@ -31,6 +31,8 @@ impl X86Hal {
 impl HardwareAbstractionLayer for X86Hal {
     fn init(&self) {
         if !self.is_paging_ready() {
+            // Cycles since power-on at kernel entry: boot time without the loader.
+            serial_println!("[boot.kernel_entry] tsc={}", unsafe { core::arch::x86_64::_rdtsc() });
             serial_println!("X86Hal: Initializing foundation (BSP)...");
             
             // SAS Page Table Sync

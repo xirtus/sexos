@@ -137,6 +137,9 @@ pub struct Bss {
     /// Mb/s in bits 0..4, OFDM 6..54 Mb/s in bits 0..8 (`join::ack_rates` reads them).
     pub basic_cck: u8,
     pub basic_ofdm: u8,
+    /// Every rate the AP named, basic or not: CCK in bits 0..4, OFDM in bits 4..12
+    /// (the firmware's legacy rate order, `iwx_rs_rval2idx`).
+    pub rates: u16,
     /// DTIM period from the TIM element (0 when the frame had none).
     pub dtim_period: u8,
 }
@@ -157,15 +160,19 @@ pub fn parse_bss(frame: &[u8]) -> Option<Bss> {
         security: Security::Open, rsn: Rsn::default(), rsn_element: [0; 64], rsn_element_len: 0,
         beacon_interval: u16::from_le_bytes([frame[32], frame[33]]),
         capability: u16::from_le_bytes([frame[34], frame[35]]), h2e: false,
-        basic_cck: 0, basic_ofdm: 0, dtim_period: 0 };
+        basic_cck: 0, basic_ofdm: 0, rates: 0, dtim_period: 0 };
     let privacy = bss.capability & 0x0010 != 0;
     let mut has_rsn = false;
     for (id, body) in elements(&frame[MGMT_HEADER + 12..]) {
         match id {
             0 if body.len() <= 32 => { bss.ssid[..body.len()].copy_from_slice(body); bss.ssid_len = body.len() as u8; }
             3 if body.len() == 1 => bss.channel = body[0],
-            1 | 50 => for &r in body.iter().filter(|r| *r & 0x80 != 0) {
+            1 | 50 => for &r in body.iter() {
+                let basic = r & 0x80 != 0;
                 let r = r & 0x7f;
+                if let Some(i) = CCK_RATES.iter().position(|&c| c == r) { bss.rates |= 1 << i; }
+                if let Some(i) = OFDM_RATES.iter().position(|&c| c == r) { bss.rates |= 1 << (4 + i); }
+                if !basic { continue; }
                 if let Some(i) = CCK_RATES.iter().position(|&c| c == r) { bss.basic_cck |= 1 << i; }
                 if let Some(i) = OFDM_RATES.iter().position(|&c| c == r) { bss.basic_ofdm |= 1 << i; }
             },
