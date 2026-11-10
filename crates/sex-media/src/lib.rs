@@ -38,6 +38,12 @@ pub trait Source {
     fn read_at(&mut self, at: u64, out: &mut [u8]) -> Option<usize>;
     /// Bytes readable from `at` without waiting; `u64::MAX` once every byte is here.
     fn available(&self, _at: u64) -> u64 { u64::MAX }
+    /// How much must lie ahead before decoding goes on ([`AHEAD`] unless the source
+    /// knows better, as a Media Source feed made of small segments does).
+    fn ahead(&self) -> u64 { AHEAD }
+    /// Whether bytes are still arriving at open: such a stream is read in order, as
+    /// from a pipe, and not probed ahead (FFmpeg would run into bytes not here yet).
+    fn growing(&self) -> bool { false }
 }
 
 /// Bytes a growing source must have ahead of the read position before decoding goes
@@ -153,7 +159,7 @@ mod ffi {
     pub type ReadFn = unsafe extern "C" fn(*mut c_void, *mut u8, c_int) -> c_int;
     pub type SeekFn = unsafe extern "C" fn(*mut c_void, i64, c_int) -> i64;
     extern "C" {
-        pub fn sx_open(opaque: *mut c_void, read: ReadFn, seek: SeekFn, info: *mut RawInfo, err: *mut c_int) -> *mut c_void;
+        pub fn sx_open(opaque: *mut c_void, read: ReadFn, seek: SeekFn, info: *mut RawInfo, err: *mut c_int, growing: c_int) -> *mut c_void;
         pub fn sx_next(s: *mut c_void, out: *mut u32, w: c_int, h: c_int, pcm: *mut i16, cap: c_int,
                        frames: *mut c_int, at_ms: *mut i64) -> c_int;
         pub fn sx_seek(s: *mut c_void, ms: i64) -> c_int;
@@ -240,7 +246,7 @@ impl Decoder {
     pub fn ready(&self) -> bool {
         let at = self.io.at;
         let have = self.io.src.available(at);
-        have >= AHEAD || self.io.src.len().is_some_and(|len| have >= len.saturating_sub(at))
+        have >= self.io.src.ahead() || self.io.src.len().is_some_and(|len| have >= len.saturating_sub(at))
     }
 
     #[cfg(not(ffmpeg))]
@@ -252,7 +258,8 @@ impl Decoder {
         let mut raw: ffi::RawInfo = unsafe { core::mem::zeroed() };
         let mut err = 0;
         let opaque: *mut Io = &mut *io;
-        let s = unsafe { ffi::sx_open(opaque.cast(), io_read, io_seek, &mut raw, &mut err) };
+        let growing = io.src.growing() as c_int;
+        let s = unsafe { ffi::sx_open(opaque.cast(), io_read, io_seek, &mut raw, &mut err, growing) };
         if s.is_null() {
             return Err(Error(err));
         }
@@ -480,6 +487,12 @@ const LOW_BUDGET_MS: u64 = 40;
 /// ahead into a short queue and each becomes current at its time.
 pub struct Player {
     dec: Decoder,
+    /// Sound from a stream of its own (Media Source: separate video and audio
+    /// SourceBuffers). Decoding pulls from whichever ready stream is behind.
+    audio: Option<Decoder>,
+    /// Which streams reached their end, and the last time each gave (ms).
+    ended_parts: (bool, bool),
+    last_at: (i64, i64),
     w: usize,
     h: usize,
     sound: Option<Sound>,
@@ -527,7 +540,7 @@ impl Player {
         let cap = (QUEUE_BYTES / (w * h * 4).max(1)).clamp(2, QUEUE_MAX);
         let wants_sound = sound && dec.info.sample_rate > 0;
         let mut p = Player {
-            dec, w, h, sound: None, clock: Clock::new(), queue: VecDeque::new(), free: Vec::new(), cap,
+            dec, audio: None, ended_parts: (false, false), last_at: (i64::MIN, i64::MIN), w, h, sound: None, clock: Clock::new(), queue: VecDeque::new(), free: Vec::new(), cap,
             current: Vec::new(), pcm: Vec::new(), left: (0, 0), pad: 0, decoded: 0, eof: false, ended: false,
             skip_until: i64::MIN, error: None, silence: None, shown: 0, heard: 0, late_ms: 0, volume: 100, muted: false, priming: false, prime_from: 0, wants_sound,
         };
@@ -536,6 +549,20 @@ impl Player {
         } else {
             p.claim_sound();
         }
+        p
+    }
+
+    /// Play pictures from `video` and sound from `audio`, two streams of one
+    /// presentation on the same clock (Media Source's separate SourceBuffers).
+    pub fn pair(mut video: Decoder, audio: Decoder, w: usize, h: usize, sound: bool, paused: bool) -> Player {
+        video.info.sample_rate = audio.info.sample_rate;
+        video.info.channels = audio.info.channels;
+        video.info.audio_codec = audio.info.audio_codec;
+        video.info.duration_ms = video.info.duration_ms.max(audio.info.duration_ms);
+        let mut p = Player::new(video, w, h, sound, true);
+        p.audio = Some(audio);
+        p.wants_sound = sound && p.dec.info.sample_rate > 0;
+        if !paused { p.play(); }
         p
     }
 
@@ -671,6 +698,11 @@ impl Player {
             sex_pdx::serial_record!("[media.seek.failed] ms={} err={}", ms, e.0);
             return;
         }
+        if let Some(a) = self.audio.as_mut() {
+            if let Err(e) = a.seek(ms) { sex_pdx::serial_record!("[media.seek.failed] ms={} err={} part=audio", ms, e.0); }
+        }
+        self.ended_parts = (false, false);
+        self.last_at = (i64::MIN, i64::MIN);
         while let Some(p) = self.queue.pop_front() { self.free.push(p.px); }
         self.left = (0, 0);
         self.pad = 0;
@@ -720,7 +752,7 @@ impl Player {
                 }
                 return Step::Wait { ms: 10 };
             }
-            let starved = !self.dec.ready();
+            let starved = self.next_part().is_none();
             // Sound running low gets a longer turn: a gap is worse than a late picture.
             let low = self.sound.as_ref().is_some_and(|s| s.written_total().saturating_sub(s.played_total()) < LOW_FRAMES);
             let budget = if low && !self.priming { LOW_BUDGET_MS } else { STEP_BUDGET_MS };
@@ -769,7 +801,23 @@ impl Player {
         if self.pcm.is_empty() {
             self.pcm = alloc::vec![[0; 2]; PCM_CAP];
         }
-        match self.dec.next(&mut px, w, h, &mut self.pcm) {
+        let Some(second) = self.next_part() else { self.free.push(px); return false };
+        let dec = if second { self.audio.as_mut().unwrap() } else { &mut self.dec };
+        let got = dec.next(&mut px, w, h, &mut self.pcm);
+        match &got {
+            Ok(Next::Picture { at_ms }) | Ok(Next::Sound { at_ms, .. }) if *at_ms >= 0 => {
+                if second { self.last_at.1 = *at_ms } else { self.last_at.0 = *at_ms }
+            }
+            Ok(Next::End) => {
+                if second { self.ended_parts.1 = true } else { self.ended_parts.0 = true }
+                if self.audio.is_some() && !(self.ended_parts.0 && self.ended_parts.1) {
+                    self.free.push(px);
+                    return true;
+                }
+            }
+            _ => {}
+        }
+        match got {
             Err(e) => {
                 self.free.push(px);
                 self.fail(e);
@@ -813,6 +861,20 @@ impl Player {
                 self.left = (0, frames.min(self.pcm.len()));
                 false
             }
+        }
+    }
+
+    /// Which stream to decode from next: Some(false) the main one, Some(true) the
+    /// separate sound, None when neither has enough here to go on.
+    fn next_part(&self) -> Option<bool> {
+        let main = !self.ended_parts.0 && self.dec.ready();
+        let Some(a) = self.audio.as_ref() else { return main.then_some(false) };
+        let second = !self.ended_parts.1 && a.ready();
+        match (main, second) {
+            (true, true) => Some(self.last_at.1 < self.last_at.0),
+            (true, false) => Some(false),
+            (false, true) => Some(true),
+            (false, false) => None,
         }
     }
 
