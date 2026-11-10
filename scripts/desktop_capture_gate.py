@@ -25,14 +25,17 @@ def main():
   ready=g['wait'](r'\[display.capture.ready\] target=12 task=(\d+) sequence=(\d+) epoch=(\d+) generation=(\d+) width=(\d+) height=(\d+) native=1 night=(\d+) bytes=(\d+)',start,120)
   assert tuple(map(int,(ready[5],ready[6])))==(width,height),ready[0]
   ref=g['wait'](rf'\[display.capture.reference\] generation={ready[4]} frame=153 x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+) bar_h=(\d+) source=published_scene',start,60)
-  x,y,w,h,bar=map(int,ref.groups());assert x>=0 and y>=0 and w>0 and h>0 and x+w<=width and y+h<=height and 0<bar<=64,ref[0]
+  x,y,w,h,bar=map(int,ref.groups());assert x>=0 and y>=0 and w>0 and h>0 and x+w<=width and y+h<=height,ref[0]
+  slim='[display.chrome.metrics]'in text()
+  assert bar in(28,56,84)if slim else 0<bar<=64,ref[0]
+  padding=8*(bar//28)if slim else 8
   # This later live scanout is not the captured generation. Only explicitly
   # validated stable regions will be compared; the desktop keeps publishing.
   q.cmd('screendump',{'filename':str(a.out/'published.ppm')})
   saved=g['wait'](rf'\[spindle.capture.saved\] task={ready[1]} sequence={ready[2]} epoch={ready[3]} bytes=(\d+) path_prefix=/shot.png path_bytes=9 synced=1 released=1',start,240)
   g['wait'](rf'\[display.capture.released\] target=12 task={ready[1]} sequence={ready[2]} scrubbed=1',start,60)
   assert 'KERNEL PANIC'not in text()and 'serial.record.overflow'not in text()
-  proof=dict(ok=True,mode=a.resolution,epoch=int(ready[3]),generation=int(ready[4]),png_bytes=int(saved[1]),iso_sha256=sha(a.iso),capture_runner_sha256=sha(Path(__file__)),helper_sha256=sha(ROOT/'scripts/quil_autosave_gate.py'),extractor_source_sha256=sha(ROOT/'scripts/sexfs_extract.rs'),fs_source_sha256=sha(ROOT/'crates/sexfs/src/lib.rs'),dynamic_reference=dict(frame=153,x=x,y=y,w=w,h=h,bar_h=bar,padding=8))
+  proof=dict(ok=True,mode=a.resolution,epoch=int(ready[3]),generation=int(ready[4]),png_bytes=int(saved[1]),iso_sha256=sha(a.iso),capture_runner_sha256=sha(Path(__file__)),helper_sha256=sha(ROOT/'scripts/quil_autosave_gate.py'),extractor_source_sha256=sha(ROOT/'scripts/sexfs_extract.rs'),fs_source_sha256=sha(ROOT/'crates/sexfs/src/lib.rs'),dynamic_reference=dict(frame=153,x=x,y=y,w=w,h=h,bar_h=bar,padding=padding))
  except Exception as e:failure=repr(e);proof=dict(ok=False,error=failure,iso_sha256=sha(a.iso))
  finally:g['stop']()
  if failure:

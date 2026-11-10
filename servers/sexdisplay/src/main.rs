@@ -2029,7 +2029,7 @@ fn render_prepared(fb:*mut u32,w:usize,h:usize,bar:&SilkBar,requested:Plan)->Opt
             let frame=app_catalog::by_target(sex_pdx::screen_capture::CLIENT).map(|row|row.frame());
             if let Some(surface)=scene.surfaces.iter().find(|s|s.active&&Some(s.surface_id)==frame){
                 sex_pdx::serial_record!("[display.capture.reference] generation={} frame={} x={} y={} w={} h={} bar_h={} source=published_scene",
-                    store.generation(),surface.surface_id,surface.x,surface.y,surface.w,surface.h,BAR_BG_H);
+                    store.generation(),surface.surface_id,surface.x,surface.y,surface.w,surface.h,scene.metrics.bar());
             }
         }
     }}
