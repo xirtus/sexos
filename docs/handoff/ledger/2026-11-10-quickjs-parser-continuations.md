@@ -108,3 +108,32 @@ retains bounded runtime recursion. Negative and positive logs:
 candidate/control inputs `/Users/xmacbookm5/Projects/sexos-evidence/parser-wasm-controls/`.
 No old binary remains in the branch. Coherent current-source native and genuine
 HTTPS acceptance remains pending.
+
+## Exact-head CI and current-master refresh
+
+Initial head `72df6913a4652776dda0134bbff2877a8586e415` passed all 13 substantive
+checks plus aggregate build in run 42894533850. Its x86 host proof passed all 4
+compiler tests, 63 DOM tests and 3 parser tests under both wasmi and native AOT;
+the CI paired qjsc gate passed 20 repository-only fixtures. The separately pinned
+external TH capture is local diagnostic evidence only.
+
+Native guest JIT gates passed at both 1 and 4 cores: forced-interpreter and enabled
+results matched; enabled counters compiled 4/executed 10,068/bailouts 3/refused 0.
+Generic CodeBuf W^X/revocation gates passed three lifetimes per core setting,
+each with 4 seals and 69 blocked key-changing instructions. These gates are
+functional; varying cold script timings are not a page-performance claim.
+Exact CI opt-in Web SHA256
+`adba74a60c2a746f64d67a4da80ae8d014b468dd988a4f1d04f9a49f7fba9b89`;
+the 1-core boot ISO is `f00c71d3bf3f2b1bf2ece06b05bb14e1ee429863d7eb96fefb69c76a957bb007`,
+the 4-core ISO `8117e59448a2e59c8dc748fb5a2852714d9409d33e7de7622a2219cb914b7b23`.
+Decoded logs/results are retained under `parser-wasm-controls/` in local evidence.
+
+The branch then merged current master including slim 146, Promise 150, CSS 153,
+heap 154 and live viewport 152 (master merge `5f946c333fd1e019760c8edb341d4b7149350e05`).
+The CI conflict was adjacent host steps; both parser and viewport gates remain.
+Merged-source ABI-manifest SHA256
+`db44069993f91da0430c8ddc29d3f8e23ce84612a1e1e86b0e10ba27e91225d2`.
+Parser Wasm remains `cfe27438…`; the embedded prelude now includes the genuine
+viewport-resize event case. Initial 72-head results do not qualify this refreshed
+source automatically. Fresh exact-head CI and coherent native/HTTPS image proof
+are pending after the coordinated UX window; the PR remains draft.
