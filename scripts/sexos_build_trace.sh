@@ -83,9 +83,11 @@ run_stage() {
       extra_rustflags="$(rg -n '^rustflags\s*=\s*"[^"]+"' "$stage" | sed -E 's/.*"([^"]+)".*/\1/' || true)"
       # A stage may name its own target (programs use SSE; kernel and servers don't).
       stage_target="$(rg -n '^target\s*=\s*"[^"]+"' "$stage" | sed -E 's/.*"([^"]+)".*/\1/' || true)"
+      # Ordinary programs (x86_64-sex-std.json) build the whole standard library.
+      stage_std="$(rg -n '^build_std\s*=\s*"[^"]+"' "$stage" | sed -E 's/.*"([^"]+)".*/\1/' || true)"
       is_allowed_crate "$manifest" || { echo "[FAIL] manifest not in whitelist: $manifest"; exit 1; }
       RUSTFLAGS="-C relocation-model=pic -C link-arg=-pie ${extra_rustflags:-}" cargo build --locked \
-        -Z build-std=core,compiler_builtins,alloc \
+        -Z build-std="${stage_std:-core,compiler_builtins,alloc}" \
         -Z build-std-features=compiler-builtins-mem \
         --manifest-path "$manifest" \
         --target "${stage_target:-$TARGET}" \
