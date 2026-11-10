@@ -120,7 +120,8 @@ external TH capture is local diagnostic evidence only.
 Native guest JIT gates passed at both 1 and 4 cores: forced-interpreter and enabled
 results matched; enabled counters compiled 4/executed 10,068/bailouts 3/refused 0.
 Generic CodeBuf W^X/revocation gates passed three lifetimes per core setting,
-each with 4 seals and 69 blocked key-changing instructions. These gates are
+each with 4 seals and a WRPKRU-containing constant refused at byte offset 69.
+The legacy result field `blocked:69` is that offset, not a refusal count. These gates are
 functional; varying cold script timings are not a page-performance claim.
 Exact CI opt-in Web SHA256
 `adba74a60c2a746f64d67a4da80ae8d014b468dd988a4f1d04f9a49f7fba9b89`;
