@@ -534,9 +534,9 @@ fn old_dom_apis_are_there() {
         console.log(d.body.childNodes.length, document.querySelectorAll('form').length);
         const u = new URL('/x.js', document.baseURI); u.hash = 'r=1'; console.log(u.href, URL.canParse('nope'));
         const c = document.createComment('hidden'); document.body.appendChild(c);
-        console.log(c.nodeType, c.data, document.body.textContent.includes('hidden'), typeof Comment, document.fonts.status);
+        console.log(c.nodeType, c.data, document.body.textContent.includes('hidden'), typeof Comment, document.fonts.status, window instanceof Window && window instanceof EventTarget);
     "#, "t").unwrap();
-    assert_eq!(logs(&mut s), ["0:P,P", "0:hey 5 true", "0:2 0", "0:http://example.test/x.js#r=1 false", "0:8 hidden false function loaded"]);
+    assert_eq!(logs(&mut s), ["0:P,P", "0:hey 5 true", "0:2 0", "0:http://example.test/x.js#r=1 false", "0:8 hidden false function loaded true"]);
 }
 
 #[test]

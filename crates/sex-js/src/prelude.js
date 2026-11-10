@@ -2666,9 +2666,11 @@
 
   const window = globalThis;
   const view = () => H(OP.VIEWPORT).split(',').map(Number);
-  Object.setPrototypeOf(window, EventTarget.prototype);
+  // `window instanceof Window`, and Window.prototype for polyfills that patch it.
+  class Window extends EventTarget {}
+  Object.setPrototypeOf(window, Window.prototype);
   const globals = {
-    window, self: window, globalThis: window, document, location, console, performance,
+    window, self: window, Window, globalThis: window, document, location, console, performance,
     navigator: { userAgent: 'Mozilla/5.0 (SexOS) Web/0.2', language: 'en', languages: ['en'], platform: 'SexOS', onLine: true, gpu: new GPU() },
     screen: { get width() { return view()[0]; }, get height() { return view()[1]; } },
     history: { length: 1, state: null, pushState() {}, replaceState() {}, back() {}, forward() {}, go() {} },

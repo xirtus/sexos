@@ -54,6 +54,9 @@ const MAX_SCRIPTS: usize = 64;
 const MAX_MODULES: usize = 256;
 /// Largest body a script's `fetch` may load (a game's data file, say).
 const FETCH_MAX: usize = 32 << 20;
+/// Most bytes one script or module may have: app bundles (YouTube's is about 10 MB) run
+/// past what an HTML page or style sheet needs.
+const SCRIPT_MAX: usize = 32 << 20;
 /// How often a running CSS animation is drawn (about 30 a second).
 const ANIMATION_FRAME_MS: u64 = 33;
 
@@ -397,7 +400,7 @@ impl Browser {
                     let Some(abs) = sex_html::url::resolve(base, src) else { continue };
                     if !abs.starts_with("http") { continue; }
                     self.status = Some("Loading scripts…");
-                    let r = self.fetch(&abs).ok().map(|(url, body)| (text_of(&self.buf[body]), url));
+                    let r = self.fetch_up_to(&abs, SCRIPT_MAX).ok().map(|(url, body)| (text_of(&self.buf[body]), url));
                     self.buf = Vec::new();
                     r
                 }
@@ -450,7 +453,7 @@ impl Browser {
             for url in need {
                 if script.page().modules.len() >= MAX_MODULES { return; }
                 self.status = Some("Loading scripts…");
-                let body = if url.starts_with("http") { self.fetch(&url).ok().map(|(_, b)| text_of(&self.buf[b])) } else { None };
+                let body = if url.starts_with("http") { self.fetch_up_to(&url, SCRIPT_MAX).ok().map(|(_, b)| text_of(&self.buf[b])) } else { None };
                 self.buf = Vec::new();
                 sex_pdx::serial_record!("[web.module] ok={} bytes={} url={}", body.is_some() as u8, body.as_ref().map_or(0, |b| b.len()), url);
                 // A failed one is still recorded, so it is not asked for again.
@@ -555,7 +558,7 @@ impl Browser {
             if wanted.is_empty() { return; }
             for url in wanted {
                 let full = matches!(&self.doc, Doc::Scripted(s) if s.page().modules.len() >= MAX_MODULES);
-                let body = if url.starts_with("http") && !full { self.fetch(&url).ok().map(|(_, b)| text_of(&self.buf[b])) } else { None };
+                let body = if url.starts_with("http") && !full { self.fetch_up_to(&url, SCRIPT_MAX).ok().map(|(_, b)| text_of(&self.buf[b])) } else { None };
                 self.buf = Vec::new();
                 sex_pdx::serial_record!("[web.module] import=1 ok={} bytes={} url={}", body.is_some() as u8, body.as_ref().map_or(0, |b| b.len()), url);
                 let Doc::Scripted(s) = &mut self.doc else { return };
