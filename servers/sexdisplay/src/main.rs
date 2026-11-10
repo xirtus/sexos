@@ -4043,12 +4043,15 @@ pub extern "C" fn _start() -> ! {
                     // Shell, as window manager, steps the whole screen's scale.
                     let wm_pd = DISPLAY_WM_PD.load(core::sync::atomic::Ordering::Acquire);
                     if wm_pd == 0 || msg.caller_pd != wm_pd { continue; }
+                    // Includes legacy arg1=0: no later scale can invalidate
+                    // the value retained for an outstanding publication reply.
+                    if !scale_receipts.allows_change(msg.caller_pd,msg.caller_task,msg.arg1){continue;}
                     let step = msg.arg0 as i64;
                     let before = sex_pdx::desktop_style::ui_scale();
                     let wanted = sex_pdx::desktop_style::chrome::step_scale(before, unsafe { BOOT_UI_SCALE }, step);
                     // arg1 is a nonzero Shell request sequence. One accepted
                     // request stays retained through full publication + reply.
-                    if msg.arg1!=0 && !scale_receipts.admit(msg.caller_pd,msg.arg1,wanted) {continue;}
+                    if msg.arg1!=0 && !scale_receipts.admit(msg.caller_pd,msg.caller_task,msg.arg1,wanted) {continue;}
                     sex_pdx::desktop_style::set_ui_scale(wanted);
                     if wanted != before {
                         unsafe {
@@ -4555,7 +4558,17 @@ pub extern "C" fn _start() -> ! {
                 0xF5 => {
                     // OP_REGISTER_WM: immutable catalog coordinator only; idempotent.
                     let caller = msg.caller_pd;
-                    if !lifecycle.is_coordinator(caller) { continue; }
+                    // Genesis binds the coordinator's main task to its PD;
+                    // restart rearms that same task. The kernel-owned own-
+                    // restart count in arg0 supplies the incarnation fence.
+                    if !lifecycle.is_coordinator(caller)||msg.caller_task!=caller { continue; }
+                    let Some(changed)=scale_receipts.register(caller,msg.caller_task,msg.arg0)else{continue;};
+                    if changed {
+                        let boot=unsafe{BOOT_UI_SCALE};
+                        sex_pdx::desktop_style::set_ui_scale(boot);
+                        unsafe{for slot in SURFACES.iter_mut().filter(|s|s.active){recompute_text_lines(slot);}CURSOR_UNDER_VALID=false;}
+                        needs_full_redraw=true;
+                    }
                     match DISPLAY_WM_PD.compare_exchange(
                         0, caller,
                         core::sync::atomic::Ordering::AcqRel,

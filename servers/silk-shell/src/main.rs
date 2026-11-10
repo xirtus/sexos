@@ -5698,7 +5698,7 @@ unsafe fn display_came_back() {
     if let Ok(physical)=sex_pdx::display_boot::physical(){sex_pdx::desktop_style::set_ui_scale(physical.scale);}
     static mut COMEBACKS: u32 = 0;
     COMEBACKS += 1;
-    let _ = raw_pdx_call(SLOT_DISPLAY, OP_REGISTER_WM, 0, 0, 0);
+    let _ = raw_pdx_call(SLOT_DISPLAY, OP_REGISTER_WM, sex_pdx::crash_log::restarts(), 0, 0);
     let (cx, cy) = (desktop_width() / 2, desktop_height() / 2);
     let _ = raw_pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_CURSOR, (cy as u64) << 32 | cx as u64, (18u64 << 32) | 12u64);
     send_scene_render_tokens();
@@ -24732,6 +24732,7 @@ pub extern "C" fn _start() -> ! {
     DESKTOP_WIDTH.store(geometry.width,core::sync::atomic::Ordering::Release);DESKTOP_HEIGHT.store(geometry.height,core::sync::atomic::Ordering::Release);
     let physical=sex_pdx::display_boot::physical().expect("BOOT_SHELL_DISPLAY_SCALE");
     sex_pdx::desktop_style::set_ui_scale(physical.scale);
+    unsafe{DISPLAY_SCALE=sex_pdx::desktop_style::chrome::ScaleClient::for_incarnation(sex_pdx::crash_log::restarts());}
 
     serial_println!("[silkshell.init.start]");
     // Wait before any helper or OP_REGISTER_WM can send ordinary display work.
@@ -24845,7 +24846,7 @@ pub extern "C" fn _start() -> ! {
     serial_println!("[silk-shell] AUTHORITATIVE WM LISTENING (PDX SLOT 6)");
 
     // Register as window manager with sexdisplay (first-caller-wins; kernel-verified identity).
-    sex_pdx::display_ready::send_startup_display(OP_REGISTER_WM, 0, 0, 0)
+    sex_pdx::display_ready::send_startup_display(OP_REGISTER_WM, sex_pdx::crash_log::restarts(), 0, 0)
         .expect("shell startup display registration failed");
 
     // Stage 2B: advertise workspace 0 active to SilkBar
