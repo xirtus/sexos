@@ -68,6 +68,7 @@ lazy_static! {
         for (i, handler) in crate::device_irq::HANDLERS.iter().enumerate() {
             idt[crate::device_irq::FIRST_VECTOR + i as u8].set_handler_fn(*handler);
         }
+        idt[crate::hal::acpi::SCI_VECTOR].set_handler_fn(sci_handler);
         idt[crate::smp::tlb::VECTOR].set_handler_fn(tlb_shootdown_handler);
         idt[crate::smp::WAKE_VECTOR].set_handler_fn(wake_handler);
         idt
@@ -883,6 +884,11 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
     if eoi_n <= 16 {
         serial_println!("[ps2.eoi] n={}", eoi_n);
     }
+    unsafe { send_eoi(); }
+}
+/// ACPI SCI: the power button. Status is cleared before EOI (the line is level triggered).
+extern "x86-interrupt" fn sci_handler(_stack_frame: InterruptStackFrame) {
+    crate::hal::acpi::sci();
     unsafe { send_eoi(); }
 }
 extern "x86-interrupt" fn generic_irq_handler(_stack_frame: InterruptStackFrame) { route_interrupt(0x22); }

@@ -44,7 +44,7 @@ pub const AGAIN: u64 = 8;
 /// Live workers a run may have at once.
 pub const MAX_WORKERS: usize = 63;
 
-#[cfg(all(target_arch = "x86_64", target_os = "none"))]
+#[cfg(all(target_arch = "x86_64", any(target_os = "none", target_os = "hermit")))]
 #[inline]
 pub fn call(op: u64, a: u64, b: u64, c: u64) -> (u64, u64) {
     let (status, out): (u64, u64);
@@ -58,7 +58,7 @@ pub fn call(op: u64, a: u64, b: u64, c: u64) -> (u64, u64) {
     }
     (status, out)
 }
-#[cfg(not(all(target_arch = "x86_64", target_os = "none")))]
+#[cfg(not(all(target_arch = "x86_64", any(target_os = "none", target_os = "hermit"))))]
 pub fn call(_op: u64, _a: u64, _b: u64, _c: u64) -> (u64, u64) { (u64::MAX, 0) }
 
 /// Starts a worker at `entry` on the stack ending at `stack_top`, with `arg` in rdi.

@@ -56,7 +56,10 @@ impl Rng { fn next(&mut self) -> u64 { self.0 ^= self.0 << 13; self.0 ^= self.0 
 fn fresh(format: &str, mib: u64) -> MemDisk {
     match tool("mkfs.vfat") {
         Some(mkfs) => {
-            let path = temp(&format!("fresh-{format}.img"));
+            // Tests run in parallel: each image gets its own name.
+            static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+            let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let path = temp(&format!("fresh-{format}-{n}.img"));
             let _ = std::fs::remove_file(&path);
             std::fs::File::create(&path).unwrap().set_len(mib << 20).unwrap();
             let mut args = vec!["-n", "FRESH"];

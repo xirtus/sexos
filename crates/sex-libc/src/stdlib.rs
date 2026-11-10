@@ -108,20 +108,20 @@ fn clamp(v: i128, lo: i128, hi: i128) -> i128 {
     v.clamp(lo, hi)
 }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn strtoll(s: *const c_char, endp: *mut *mut c_char, base: c_int) -> i64 {
     let (v, used) = parse_int(unsafe { bytes(s) }, base as u32);
     unsafe { end(s, used, endp) };
     clamp(v, i64::MIN as i128, i64::MAX as i128) as i64
 }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn strtol(s: *const c_char, endp: *mut *mut c_char, base: c_int) -> c_long {
     unsafe { strtoll(s, endp, base) as c_long }
 }
 
 /// C's unsigned parse: a leading minus negates in the unsigned type.
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn strtoull(s: *const c_char, endp: *mut *mut c_char, base: c_int) -> u64 {
     let (v, used) = parse_int(unsafe { bytes(s) }, base as u32);
     unsafe { end(s, used, endp) };
@@ -132,49 +132,49 @@ pub unsafe extern "C" fn strtoull(s: *const c_char, endp: *mut *mut c_char, base
     if v < 0 { (v.unsigned_abs() as u64).wrapping_neg() } else { v as u64 }
 }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn strtoul(s: *const c_char, endp: *mut *mut c_char, base: c_int) -> u64 {
     unsafe { strtoull(s, endp, base) }
 }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn strtod(s: *const c_char, endp: *mut *mut c_char) -> f64 {
     let (v, used) = parse_float(unsafe { bytes(s) });
     unsafe { end(s, used, endp) };
     v
 }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn strtof(s: *const c_char, endp: *mut *mut c_char) -> f32 {
     unsafe { strtod(s, endp) as f32 }
 }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn atoi(s: *const c_char) -> c_int {
     unsafe { strtol(s, core::ptr::null_mut(), 10) as c_int }
 }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn atol(s: *const c_char) -> c_long {
     unsafe { strtol(s, core::ptr::null_mut(), 10) }
 }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn atof(s: *const c_char) -> f64 {
     unsafe { strtod(s, core::ptr::null_mut()) }
 }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub extern "C" fn abs(v: c_int) -> c_int {
     v.wrapping_abs()
 }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub extern "C" fn labs(v: c_long) -> c_long {
     v.wrapping_abs()
 }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub extern "C" fn llabs(v: i64) -> i64 {
     v.wrapping_abs()
 }
@@ -186,7 +186,7 @@ unsafe fn swap(a: *mut u8, b: *mut u8, size: usize) {
 }
 
 /// Heapsort: no recursion, no allocation, O(n log n) whatever the input.
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn qsort(base: *mut c_void, count: usize, size: usize, cmp: Compare) {
     if count < 2 || size == 0 {
         return;
@@ -216,7 +216,7 @@ pub unsafe extern "C" fn qsort(base: *mut c_void, count: usize, size: usize, cmp
     }
 }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn bsearch(key: *const c_void, base: *const c_void, count: usize, size: usize, cmp: Compare) -> *mut c_void {
     let (mut lo, mut hi) = (0usize, count);
     while lo < hi {
@@ -233,12 +233,12 @@ pub unsafe extern "C" fn bsearch(key: *const c_void, base: *const c_void, count:
 
 static mut SEED: u64 = 1;
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn srand(seed: core::ffi::c_uint) {
     unsafe { SEED = seed as u64 };
 }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn rand() -> c_int {
     unsafe {
         SEED = SEED.wrapping_mul(6364136223846793005).wrapping_add(1);
