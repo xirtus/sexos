@@ -508,6 +508,8 @@ pub const SLOT_BELL: u64 = 12;   // Bell attention/event service (domain 10, nam
 pub const SLOT_LINEN: u64 = 13;  // Linen app surface server
 pub const SLOT_SPINDLE: u64 = 14; // Spindle command console (domain 12)
 pub const SLOT_BLOCK:   u64 = 15; // sexdrive block/DMA service (sexfiles→sexdrive route)
+pub const SLOT_NVME_HOST: u64 = 16; // first NVMe controller BAR0 lease (sexdrive)
+pub const SLOT_NVME_HOST_2: u64 = device::EXTRA_SLOT_BASE; // second NVMe (other half of an Intel RAID 0): first extra drive slot
 pub const SLOT_BUF_LEND: u64 = 17; // kernel-allocated MemLend buffer cap (sexfiles→sexdrive, Phase A)
 pub const SLOT_NET:     u64 = 18; // sexnet network manager route
 pub const SLOT_NIC:     u64 = 19; // e1000e NIC hardware capability (sexnet driver)
@@ -561,6 +563,19 @@ pub fn device_window(slot:u64)->Result<(u64,u64),u64> {
     if status!=0 { return Err(status) }
     if reserved0|reserved1!=0 || length==0 || offset.checked_add(length).is_none_or(|end|end>65536) {return Err(pci_command::IO)}
     Ok((offset,length))
+}
+
+/// The held device's PCI subsystem vendor and device ids.
+pub fn device_subsystem(slot:u64)->Result<(u16,u16),u64> {
+    let(status,vendor,device,reserved0,reserved1):(u64,u64,u64,u64,u64);
+    unsafe { core::arch::asm!("syscall",
+        inlateout("rax") pci_command::SYS_IDENTITY=>status,in("rdi")slot,
+        inlateout("rsi")pci_command::QUERY_SUBSYSTEM=>vendor,inlateout("rdx")0u64=>device,
+        inlateout("r10")0u64=>reserved0,inlateout("r8")0u64=>reserved1,
+        out("rcx")_,out("r11")_,options(nostack)); }
+    if status!=0 { return Err(status) }
+    if reserved0|reserved1!=0 || vendor>u16::MAX as u64 || device>u16::MAX as u64 {return Err(pci_command::IO)}
+    Ok((vendor as u16,device as u16))
 }
 
 /// Checked immutable BOOT data through this subject's held NIC lease.
@@ -900,6 +915,22 @@ pub const BLOCK_READ:  u64 = 1; // Read sectors from block device
 pub const BLOCK_WRITE: u64 = 2; // Write sectors to block device
 pub const BLOCK_SYNC:  u64 = 3; // Flush/barrier (no data transfer)
 pub const BLOCK_CAPACITY: u64 = 4; // Replies with the device's size in sectors
+/// The installer's whole-disk view, untranslated by the disk layout (Files only, for
+/// `install`). The first raw write stops the running system's own writes until restart.
+pub const BLOCK_RAW_READ: u64 = 5;
+pub const BLOCK_RAW_WRITE: u64 = 6;
+/// Replies with how this system may use the disk: a BLOCK_LAYOUT_* kind in the low byte
+/// and the whole disk's sectors above it.
+pub const BLOCK_LAYOUT: u64 = 7;
+pub const BLOCK_LAYOUT_UNKNOWN: u64 = 0;
+/// Blank or SexOS's legacy whole-disk install: the whole disk is SexOS's.
+pub const BLOCK_LAYOUT_WHOLE: u64 = 1;
+/// A GPT shared with other systems: SexOS reads and writes only its store partition.
+pub const BLOCK_LAYOUT_STORE: u64 = 2;
+/// Another system's disk: ordinary reads and writes are refused.
+pub const BLOCK_LAYOUT_FOREIGN: u64 = 3;
+/// The installer changed the layout: no writes until restart.
+pub const BLOCK_LAYOUT_LOCKED: u64 = 4;
 
 // Block protocol status codes — returned as pdx_reply value.
 pub const BLOCK_OK:           u64 = 0; // Success
@@ -1209,6 +1240,7 @@ pub mod document;
 pub mod document_buffer;
 pub mod document_snapshot;
 pub mod pci_command;
+pub mod dma_lend;
 pub mod virtio;
 pub mod device;
 pub mod network_config;
@@ -1217,6 +1249,7 @@ pub mod desktop_style;
 pub mod pixel_region;
 pub mod sound_ring;
 pub mod sound_mixer;
+pub mod wifi_status;
 pub mod document_view;
 
 pub mod display_boot;
@@ -1225,6 +1258,7 @@ pub mod display_frames;
 pub mod text_batch;
 pub mod text_region;
 pub mod program_store;
+pub mod crash_log;
 pub mod program_memory;
 pub mod program_code;
 pub mod power;

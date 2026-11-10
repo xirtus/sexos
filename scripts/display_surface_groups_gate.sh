@@ -10,13 +10,13 @@ root,out=map(Path,sys.argv[1:]);s=(root/'servers/sexdisplay/src/main.rs').read_t
 a=s.index('const FONT_ASCII_5X7:');parts=[s[a:s.index('];',s.index('= [',a))+2]]
 for name in ['FONT_UNICODE_5X7','FONT_UNSUPPORTED_5X7']:
  a=s.index('const '+name+':');parts.append(s[a:s.index('];',a)+2])
-parts+=re.findall(r'^const (?:FRAME_|SURFACE_CHROME_|TAB_STRIP_|BAR_BG_H|BAR_BG_W_CAP|FOCUS_SURFACE_COLOR|TAB_ACTIVE_COLOR|TAB_INACTIVE_COLOR)[^\n]+',s,re.M)
+parts+=re.findall(r'^const (?:FRAME_|SURFACE_CHROME_|TAB_STRIP_|BAR_BG_H|BAR_BG_W_CAP|FOCUS_SURFACE_COLOR|TAB_ACTIVE_COLOR|TAB_INACTIVE_COLOR|PANEL_TITLE_)[^\n]+',s,re.M)
 a=s.index('#[derive(Clone, Copy)]\n#[repr(C)]\nstruct RenderTokensV1');b=s.index('\nstatic mut DISPLAY_TOKENS:',a)
 parts.append(s[a:b])
 a=s.index('static mut PROGRAM_TITLES:');parts.append(s[a:s.index('\n',a)])
 for k in ('const PROGRAM_ROWS:','static mut PIXEL_REGIONS:','static mut PIXEL_SIZE:'):
     a=s.index(k);parts.append(s[a:s.index('\n',a)])
-for name in ['program_title','program_pixel_at','program_pixel_row','coverage_blend','scene_bar_blur_rows','bg','vertical_gradient_xrgb','lerp_color_xrgb','clamp_surface','composite_pixel','composite_pixel_selected','composite_pixel_source','bitmap_viewport','bitmap_color','bitmap_surface_damage','fill_rect_color','ascii_glyph_index','scalar_glyph','toolbar_title_fg_at','surface_text_scale','recompute_text_lines','apply_pending_text','text_projection_requirement','changed_text_rows','legacy_text_clear','legacy_text_draw','surface_text_fg_at','raster_batch','raster_full','raster_strip','raster_area','raster_row','fast_content_run','text_run','raster_damage','fill_bar_bg_buffer','blur_bar_bg_buffer_radius1','clock_total_seconds','clock_visible_monotonic_ok','text_surface_damage','app_indicator_color','phase5_active_app_at','top_strip_pixel']:
+for name in ['program_title','surface_title','panel_title_fg_at','program_pixel_at','program_pixel_row','coverage_blend','scene_bar_blur_rows','bg','vertical_gradient_xrgb','lerp_color_xrgb','clamp_surface','composite_pixel','composite_pixel_selected','composite_pixel_source','bitmap_viewport','bitmap_color','bitmap_surface_damage','fill_rect_color','ascii_glyph_index','scalar_glyph','toolbar_title_fg_at','surface_text_scale','recompute_text_lines','apply_pending_text','text_projection_requirement','changed_text_rows','legacy_text_clear','legacy_text_draw','surface_text_fg_at','raster_batch','raster_full','raster_strip','raster_area','raster_row','fast_content_run','text_run','raster_damage','fill_bar_bg_buffer','blur_bar_bg_buffer_radius1','clock_total_seconds','clock_visible_monotonic_ok','text_surface_damage','app_indicator_color','phase5_active_app_at','top_strip_pixel']:
  a=s.index('fn '+name+'(');i=s.index('{',a)+1;depth=1
  while depth: depth+=(s[i]=='{')-(s[i]=='}');i+=1
  part=s[a:i]

@@ -10,6 +10,11 @@ mod dma_transfer;
 pub fn get_ticks()->u64{driver_read::mock_ticks()}
 pub fn sys_wait_self_ticks(ticks:u64)->Result<(),u64>{driver_read::mock_wait(ticks)}
 pub fn sys_yield(){}
+/// Loans end through the kernel; the test records which device address came back.
+pub mod dma_lend {
+    pub static mut RETURNED: u64 = 0;
+    pub fn give_back(address: u64) -> Result<u64, u64> { unsafe { RETURNED = address; } Ok(32) }
+}
 /// The interrupt bits a completion's MSI-X vector would set (syscall 86 double).
 pub mod device{
     pub static PENDING:std::sync::atomic::AtomicU64=std::sync::atomic::AtomicU64::new(0);
@@ -114,6 +119,7 @@ fn completion_without_submission_does_not_release_as_completed() {
 const SLOT_BLOCK_BUFFER: u64 = 17;
 pub const DISKFS_V4_POOL_BASE_LBA:u64=400;
 pub const DISKFS_V4_POOL_SECTORS:u64=1408;
+pub mod crash_log { pub const DISK_BASE_LBA: u64 = 64; pub const DISK_SECTORS: u64 = 64; }
 fn grant() -> memory_region::RegionGrant {
     memory_region::RegionGrant { region_id: 5, virtual_base: 0x400000,
         dma_base: None, length: 4096,
@@ -174,6 +180,8 @@ mod driver_read {
     static NVME_IRQ_WAITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     static mut READ_LEASE: Option<DmaLease> = None;
     static mut WRITE_LEASE: Option<DmaLease> = None;
+    static mut BLOCK_LOAN: u64 = 0;
+    static mut ZERO_COPY_SEEN: bool = false;
     static mut NOW:u64=0;static mut WAITS:u32=0;static mut DELAY:u32=0;
     static mut CLOCK_MODE:u8=0;static mut COMPLETION:u32=0;static mut CQ_PTR:*mut u32=core::ptr::null_mut();
     static mut DEST_PTR:*const u8=core::ptr::null();static mut DEST_LEN:usize=0;
@@ -188,6 +196,10 @@ mod driver_read {
         if DELAY!=0&&WAITS==DELAY{core::ptr::write_volatile(CQ_PTR.add(3),COMPLETION);crate::device::PENDING.store(1,Ordering::SeqCst);}
         Ok(())
     }}
+    // The plain NVMe path under test: no Intel RAID volume is served here.
+    mod raid { pub fn serving() -> bool { false } pub fn raw() -> bool { false }
+        pub fn writes_refused() -> bool { false } pub fn sectors() -> u64 { 0 }
+        pub fn read(_: u64, _: u64, _: u64) -> u64 { unreachable!() } }
     // The NVMe path under test: no AHCI disk ever serves in this harness.
     mod ahci { pub fn stop_io() {} pub fn sectors() -> u64 { 0 } }
     fn serving_ahci() -> bool { false }
@@ -214,7 +226,7 @@ mod driver_read {
         let mut destination = vec![0xa5u8; size];
         cq[3] = cqe;
         unsafe {
-            NOW=10;WAITS=0;DELAY=delay;CLOCK_MODE=clock_mode;COMPLETION=completion;CQ_PTR=cq.as_mut_ptr();
+            LENS=Lens::Whole;NOW=10;WAITS=0;DELAY=delay;CLOCK_MODE=clock_mode;COMPLETION=completion;CQ_PTR=cq.as_mut_ptr();
             DEST_PTR=destination.as_ptr();DEST_LEN=size;DOORBELLS=doorbells.as_ptr();
             let lease = Some(DmaLease::new(dma_pool::DmaBuffer {
                 virtual_address: buffer.as_mut_ptr() as u64,
@@ -265,7 +277,7 @@ mod driver_read {
             if quarantined{
                 assert_eq!(NVME_IO_STATE.cq_head,0);assert_eq!(doorbells[1],0);
                 let lease=if write{WRITE_LEASE.as_mut()}else{READ_LEASE.as_mut()}.unwrap();assert_eq!(lease.prepare(99),Err(DmaError::Busy));
-                let before=sq;let result=if write{nvme_write_one_block(0,size as u64,destination.as_ptr()as u64)}else{nvme_read_into_mapped_va(0,size as u64,destination.as_mut_ptr()as u64)};
+                let before=sq;let result=if write{nvme_write_one_block(0,size as u64,destination.as_ptr()as u64)}else{nvme_read_into_mapped_va(0,size as u64,destination.as_mut_ptr()as u64,0)};
                 assert_eq!(result,BLOCK_ERR_NO_DEVICE);assert_eq!(NVME_IO_STATE.next_cid,43);assert_eq!(sq,before);assert_eq!(doorbells[0],1);
             }
             if delay!=0&&expected==0{assert_eq!(WAITS,delay);}
@@ -329,6 +341,64 @@ mod driver_read {
     #[test]
     fn production_write_error_completes_dma_but_stops_queue() {
         exercise(true, 42 | (1 << 16) | (2 << 17), BLOCK_ERR_NO_DEVICE, false, false);
+    }
+
+    /// With the block buffer on loan, PRPs name the loan's device addresses
+    /// (the list stays in the pool page), and nothing is copied: the device wrote
+    /// the destination itself.
+    fn zero_copy_read(size: usize, cqe: u32) -> (u64, Vec<u64>, Vec<u8>, bool) {
+        let _lock = LOCK.lock().unwrap();
+        let (mut sq, mut cq, mut db) = ([0u64; 128], [0u32; 64], [0u32; 2]);
+        let mut buffer = vec![0u64; ((BLOCK_MAX_RUN + PAGE_SIZE) / 8) as usize];
+        let mut destination = vec![0xa5u8; size];
+        cq[3] = cqe;
+        let loan = 0x4000_0000u64;
+        unsafe {
+            NOW=10;WAITS=0;DELAY=0;CLOCK_MODE=0;CQ_PTR=cq.as_mut_ptr();DEST_PTR=destination.as_ptr();DEST_LEN=size;DOORBELLS=db.as_ptr();
+            BLOCK_LOAN = loan; dma_lend::RETURNED = 0;
+            READ_LEASE = Some(DmaLease::new(dma_pool::DmaBuffer { virtual_address: buffer.as_mut_ptr() as u64,
+                physical_address: 0x200000, length: BLOCK_MAX_RUN + PAGE_SIZE }));
+            NVME_IO_STATE = NvmeState { sectors: 0, ready: true, map_va: db.as_mut_ptr() as u64, io_sq_va: sq.as_mut_ptr() as u64,
+                io_cq_va: cq.as_ptr() as u64, sq1tdbl: 0, cq1hdbl: 4, sq_tail: 0, cq_head: 0, cq_phase: 1, next_cid: 42 };
+        }
+        let result = typed_read_handoff(0, size as u64, SLOT_BLOCK_BUFFER, Some(RegionView { region_id: 4,
+            virtual_address: destination.as_mut_ptr() as u64, dma_address: None, length: BLOCK_MAX_RUN }));
+        let dw = |i: usize| unsafe { *((sq.as_ptr() as *const u32).add(i)) as u64 };
+        let pages = (size as u64).div_ceil(PAGE_SIZE);
+        let mut prps = vec![dw(6) | dw(7) << 32, dw(8) | dw(9) << 32];
+        if pages > 2 { for i in 1..pages { prps.push(buffer[(BLOCK_MAX_RUN / 8 + i - 1) as usize]); } }
+        let loan_left = unsafe { BLOCK_LOAN != 0 };
+        unsafe { READ_LEASE = None; BLOCK_LOAN = 0; NVME_IO_STATE.ready = false; CQ_PTR = core::ptr::null_mut(); DOORBELLS = core::ptr::null(); DEST_PTR = core::ptr::null(); }
+        assert_eq!(result == 0, cqe == 42 | (1 << 16));
+        (result, prps, destination, loan_left)
+    }
+
+    #[test]
+    fn zero_copy_read_points_the_device_at_the_loan_and_copies_nothing() {
+        for size in [512usize, 8192, 128 * 1024] {
+            let (_, prps, destination, loan_left) = zero_copy_read(size, 42 | (1 << 16));
+            assert_eq!(prps[0], 0x4000_0000);
+            let pages = (size as u64).div_ceil(PAGE_SIZE);
+            match pages {
+                1 => assert_eq!(prps[1], 0),
+                2 => assert_eq!(prps[1], 0x4000_0000 + PAGE_SIZE),
+                _ => {
+                    assert_eq!(prps[1], 0x200000 + BLOCK_MAX_RUN, "the PRP list stays in the pool");
+                    for i in 1..pages { assert_eq!(prps[(i + 1) as usize], 0x4000_0000 + i * PAGE_SIZE); }
+                }
+            }
+            assert!(destination.iter().all(|b| *b == 0xa5), "no bounce copy over the device's data");
+            assert!(loan_left);
+        }
+    }
+
+    #[test]
+    fn zero_copy_timeout_ends_the_loan_before_anything_else() {
+        let (result, _, destination, loan_left) = zero_copy_read(4096, 0);
+        assert_eq!(result, BLOCK_ERR_NO_DEVICE);
+        assert!(!loan_left, "a command that may still finish must not keep the loan");
+        assert_eq!(unsafe { dma_lend::RETURNED }, 0x4000_0000);
+        assert!(destination.iter().all(|b| *b == 0xa5));
     }
 
     #[test]

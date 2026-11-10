@@ -172,12 +172,12 @@ fn exact(vendor: u16, device: u16) -> Option<Device> {
         (0x8086, 0x9a1b) | (0x8086, 0x9a1d) => known("Tiger Lake Thunderbolt 4 NHI", Usb, Planned),
         (0x8086, 0x1137) => known("Maple Ridge Thunderbolt 4 NHI", Usb, Planned),
         // Intel Wi-Fi (iwlwifi family). Killer AX1675 is an AX210 or AX211 module.
-        (0x8086, 0x2725) => known("Wi-Fi 6E AX210 / Killer AX1675x", Net, Planned),
-        (0x8086, 0x2723) => known("Wi-Fi 6 AX200 / Killer AX1650x", Net, Planned),
-        (0x8086, 0x43f0) => known("Wi-Fi 6 AX201 (Tiger Lake-H CNVi) / Killer AX1650i", Net, Planned),
-        (0x8086, 0xa0f0) => known("Wi-Fi 6 AX201 (Tiger Lake CNVi)", Net, Planned),
-        (0x8086, 0x51f0) | (0x8086, 0x51f1) => known("Wi-Fi 6E AX211 (Alder Lake CNVi) / Killer AX1675i", Net, Planned),
-        (0x8086, 0x7af0) => known("Wi-Fi 6E AX211 (Alder Lake-S CNVi)", Net, Planned),
+        (0x8086, 0x2725) => known("Wi-Fi 6E AX210 / Killer AX1675x", Net, InProgress),
+        (0x8086, 0x2723) => known("Wi-Fi 6 AX200 / Killer AX1650x", Net, InProgress),
+        (0x8086, 0x43f0) => known("Wi-Fi 6 AX201 (Tiger Lake-H CNVi) / Killer AX1650i", Net, InProgress),
+        (0x8086, 0xa0f0) => known("Wi-Fi 6 AX201 (Tiger Lake CNVi)", Net, InProgress),
+        (0x8086, 0x51f0) | (0x8086, 0x51f1) => known("Wi-Fi 6E AX211 (Alder Lake CNVi) / Killer AX1675i", Net, InProgress),
+        (0x8086, 0x7af0) => known("Wi-Fi 6E AX211 (Alder Lake-S CNVi)", Net, InProgress),
         (0x8086, 0x272b) => known("Wi-Fi 7 BE200", Net, Planned),
         // Intel Ethernet (e1000, e1000e/I219, igb, igc families are driven by sexnet).
         (0x8086, 0x100e) => known("82540EM Gigabit (e1000)", Net, Driven),
@@ -276,7 +276,8 @@ pub fn advice(id: Id) -> Option<&'static str> {
     match (id.class, id.subclass) {
         (0x01, 0x04) => Some("RAID controller without a driver: disks behind it are hidden"),
         (0x03, _) if id.vendor == 0x10de => Some("NVIDIA GPU has no native driver yet: the picture comes from the firmware framebuffer. On a laptop, Hybrid mode lets the Intel GPU drive the panel"),
-        (0x02, 0x80) => Some("no Wi-Fi driver yet: use Ethernet"),
+        (0x02, 0x80) if id.vendor == 0x8086 => Some("Intel Wi-Fi driver in progress: the chip starts its firmware but cannot join a network yet; use Ethernet"),
+        (0x02, 0x80) => Some("no Wi-Fi driver for this maker yet: use Ethernet"),
         _ => None,
     }
 }

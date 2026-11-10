@@ -13,6 +13,9 @@ mod linen_text_delivery;
 mod launcher;
 mod clipboard;
 mod app_input;
+mod wm;
+mod launcher_search;
+mod session;
 use alloc::vec::Vec;
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -228,6 +231,8 @@ unsafe fn shell_catalog_init() {
             Err(_) => panic!("shell lifecycle catalog unavailable"),
         }
     }
+    // A Shell started again after a crash finds the routes already open.
+    if sex_pdx::crash_log::restarts() > 0 { return; }
     assert_eq!(sex_pdx::app_lifecycle::activation(sex_pdx::app_lifecycle::ACTIVATION_SLOT,true),Err(sex_pdx::app_lifecycle::RETRY));
     let blocked=raw_pdx_call(sex_pdx::app_lifecycle::SUCCESSOR_ROUTE_SLOT,OP_QUIL_PING,0,0,0).0;
     assert_eq!(blocked,sex_pdx::ERR_SERVICE_NOT_READY);
@@ -5620,6 +5625,79 @@ unsafe fn desktop_state_poll() {
     }
 }
 
+/// Each window of the active scene: its geometry, terminals and documents lay out
+/// again, panes come back, and programs get a resize so they draw again.
+unsafe fn lay_out_windows_again() -> u32 {
+    let mut shown = 0u32;
+    for frame in FRAMES.iter().flatten().filter(|f| f.scene_id == ACTIVE_SCENE_IDX && f.flags & FRAME_FLAG_MINIMIZED == 0) {
+        for tab in frame.tabs.iter().flatten() {
+            let sid = tab.surface_id;
+            let Some((x, y, w, h)) = get_surface_bounds(sid).filter(|_| surface_is_alive(sid)) else { continue };
+            apply_window_geometry(sid, x, y, w, h);
+            native_child_geometry(sid, x, y, w, h);
+            program_resize_note(sid, w, h);
+            shown += 1;
+        }
+    }
+    shown
+}
+
+/// Apps this Shell took over after a restart (by custody index).
+static mut ADOPTED: [bool; sex_pdx::app_lifecycle::SLOTS.len()] = [false; sex_pdx::app_lifecycle::SLOTS.len()];
+
+/// A Shell started again finds the catalog's running apps (the kernel's catalog is
+/// the authority): each gets a frame and a visible window as registration gives it.
+unsafe fn adopt_running_apps() {
+    let mut adopted = 0u32;
+    for index in 0..APP_CUSTODY.len() {
+        let Some(entry) = APP_CUSTODY[index].as_ref() else { continue };
+        if entry.dead || entry.close_pending { continue; }
+        if sex_pdx::app_lifecycle::info(entry.slot) != Err(sex_pdx::app_lifecycle::LIVE) { continue; }
+        // A row the person never opened is running but has no window: leave it be.
+        let Some(row) = app_catalog::by_target(entry.target) else { continue };
+        let activation = row.activation_slot.map(|slot| sex_pdx::app_lifecycle::activation(slot, false).map_or(u64::MAX, |a| a.state));
+        if activation.is_some_and(|state| state != sex_pdx::app_lifecycle::ACTIVATION_ACTIVE) { continue; }
+        let frame_surface = entry.shell_surface().unwrap_or(entry.surface);
+        if lifecycle_state(frame_surface).is_some() { continue; }
+        let Some(slot_idx) = FRAMES.iter().position(|f| f.is_none()) else { break };
+        let mut tabs: [Option<ShellTab>; MAX_TABS_PER_FRAME as usize] = [None; MAX_TABS_PER_FRAME as usize];
+        tabs[0] = Some(ShellTab { surface_id: frame_surface, title_id: entry.surface, flags: 0 });
+        FRAMES[slot_idx] = Some(ShellFrame { frame_id: (slot_idx + 10) as u32, active_tab: 0, tab_count: 1, tabs,
+            scene_id: ACTIVE_SCENE_IDX, flags: FRAME_FLAG_TOP_BAR, normal_x: 200, normal_y: 100, normal_w: 600, normal_h: 400 });
+        if let Some(e) = APP_CUSTODY[index].as_mut() { e.bounds = Some((200, 100, 600, 400)); }
+        lifecycle_register(frame_surface, LifecycleState::Visible);
+        pdx_call(SLOT_DISPLAY, 0xEC, frame_surface, (100u64) << 32 | 200u64, (400u64) << 32 | 600u64);
+        ADOPTED[index] = true;
+        adopted += 1;
+        sex_pdx::serial_record!("[shell.app.adopted] target={} surface={} frame={}", APP_CUSTODY[index].as_ref().map_or(0, |e| e.target), frame_surface, slot_idx + 10);
+    }
+    tile_active_scene_frames();
+    let shown = lay_out_windows_again();
+    sex_pdx::serial_record!("[shell.restarted] restarts={} adopted={} windows={}", sex_pdx::crash_log::restarts(), adopted, shown);
+}
+
+/// Display was started again (it announces itself ready a second time). Its scene is
+/// empty: register as window manager again, put the cursor and the active scene's
+/// windows back, and send every view's content and the focus again.
+unsafe fn display_came_back() {
+    static mut COMEBACKS: u32 = 0;
+    COMEBACKS += 1;
+    let _ = raw_pdx_call(SLOT_DISPLAY, OP_REGISTER_WM, 0, 0, 0);
+    let (cx, cy) = (desktop_width() / 2, desktop_height() / 2);
+    let _ = raw_pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_CURSOR, (cy as u64) << 32 | cx as u64, (18u64 << 32) | 12u64);
+    send_scene_render_tokens();
+    // SilkBar draws the bar from what it is told: tell it the workspace and focus again.
+    pdx_call(SLOT_SILKBAR, OP_SILKBAR_WORKSPACE_ACTIVE, ACTIVE_SCENE_IDX as u64, 0, 0);
+    pdx_call(SLOT_SILKBAR, OP_SILKBAR_FOCUS_STATE, 1, selected_window_options_mask() as u64, 0);
+    sync_scene_visibility();
+    for view in SPINDLE_VIEWS.iter_mut() { view.refresh(); }
+    for view in DOCUMENT_VIEWS.iter_mut() { view.refresh(); }
+    let shown = lay_out_windows_again();
+    linen_paint_surface();
+    if FOCUSED_SURFACE_ID != 0 { pdx_call(SLOT_DISPLAY, 0xED, FOCUSED_SURFACE_ID, 0, 0); }
+    sex_pdx::serial_record!("[shell.display.back] times={} windows={} focus={}", COMEBACKS, shown, FOCUSED_SURFACE_ID);
+}
+
 unsafe fn spindle_view_poll(){
     for (i,(target,frame,slot)) in app_catalog::spindle_views().map(|s|(s.target,s.frame(),s.route_slot)).enumerate(){
         let live=APP_CUSTODY.iter().flatten().any(|e|e.target==target && !e.dead && !e.close_pending);
@@ -8586,6 +8664,7 @@ unsafe fn tile_active_scene_frames() {
 
     // Collect tiling candidates from the active scene.
     let mut tiles: [u64; MAX_FRAMES] = [0; MAX_FRAMES];
+    let mut tile_frames: [u32; MAX_FRAMES] = [0; MAX_FRAMES];
     let mut count: usize = 0;
 
     for frame_slot in FRAMES.iter() {
@@ -8633,6 +8712,7 @@ unsafe fn tile_active_scene_frames() {
 
                 if count < MAX_FRAMES {
                     tiles[count] = sid;
+                    tile_frames[count] = frame.frame_id;
                     count += 1;
                 }
             }
@@ -8651,50 +8731,31 @@ unsafe fn tile_active_scene_frames() {
         return;
     }
 
-    let cw: u32 = desktop_width() as u32;
-    let ch: u32 = (desktop_height() - P.bar_height) as u32;
+    // Hyprland/river style: the workspace's layout, master ratio and gaps,
+    // over the windows in their tiling order (Super+Shift+HJKL swaps it).
+    // Closed frames leave the order, so a reused frame id starts last.
+    WM_ORDER.retain(|id| FRAMES.iter().flatten().any(|f| f.frame_id == id));
+    let mut order = tile_frames;
+    WM_ORDER.sort(&mut order[..count]);
+    let mut ordered = [0u64; MAX_FRAMES];
+    for i in 0..count {
+        let at = tile_frames[..count].iter().position(|&f| f == order[i]).unwrap_or(i);
+        ordered[i] = tiles[at];
+    }
+    tiles = ordered;
+    let tiling = wm_tiling();
+    let mut rects = [wm::Rect::default(); MAX_FRAMES];
+    wm::tile(&tiling, wm_work_area(), &mut rects[..count]);
+    static mut WM_LAYOUT_RECORD_BUDGET: u32 = 256;
+    if WM_LAYOUT_RECORD_BUDGET > 0 {
+        WM_LAYOUT_RECORD_BUDGET -= 1;
+        sex_pdx::serial_record!("[shell.wm.layout] scene={} layout={} windows={} master_pct={} gap_in={} gap_out={}",
+            ACTIVE_SCENE_IDX, tiling.layout.name(), count, tiling.master_pct, tiling.gap_inner, tiling.gap_outer);
+    }
 
     for i in 0..count {
         let sid = tiles[i];
-
-        let (rx, ry, rw, rh) = if count == 1 {
-            (0i32, P.bar_height, cw, ch)
-        } else if count == 2 {
-            let half_w = cw / 2;
-            if i == 0 {
-                (0i32, P.bar_height, half_w, ch)
-            } else {
-                (half_w as i32, P.bar_height, cw - half_w, ch)
-            }
-        } else if count == 3 {
-            let half_w = cw / 2;
-            let half_h = ch / 2;
-            match i {
-                0 => (0i32, P.bar_height, half_w, ch),
-                1 => (half_w as i32, P.bar_height, cw - half_w, half_h),
-                2 => (half_w as i32, P.bar_height + half_h as i32, cw - half_w, ch - half_h),
-                _ => (0i32, P.bar_height, cw, ch),
-            }
-        } else if count == 4 {
-            let half_w = cw / 2;
-            let half_h = ch / 2;
-            match i {
-                0 => (0i32, P.bar_height, half_w, half_h),
-                1 => (half_w as i32, P.bar_height, cw - half_w, half_h),
-                2 => (0i32, P.bar_height + half_h as i32, half_w, ch - half_h),
-                3 => (half_w as i32, P.bar_height + half_h as i32, cw - half_w, ch - half_h),
-                _ => (0i32, P.bar_height, cw, ch),
-            }
-        } else {
-            // A grid as square as the count allows; the last row may be short.
-            let mut cols = 1u32; while cols * cols < count as u32 { cols += 1; }
-            let rows = (count as u32).div_ceil(cols);
-            let (col, row) = (i as u32 % cols, i as u32 / cols);
-            let (cell_w, cell_h) = (cw / cols, ch / rows);
-            let w = if col + 1 == cols { cw - cell_w * col } else { cell_w };
-            let h = if row + 1 == rows { ch - cell_h * row } else { cell_h };
-            ((cell_w * col) as i32, P.bar_height + (cell_h * row) as i32, w, h)
-        };
+        let wm::Rect { x: rx, y: ry, w: rw, h: rh } = rects[i];
 
         // [shell.tile.apply]: budgeted tiled geometry application proof.
         static mut SHELL_TILE_APPLY_BUDGET: u32 = 4096;
@@ -9530,7 +9591,7 @@ unsafe fn access_describe_focus() {
 /// Future phases add Atlas toggle action, card rendering, scene select, previews.
 
 /// Maximum scenes tracked by Atlas (equals WORKSPACE_COUNT).
-const ATLAS_MAX_SCENES: usize = 5;
+const ATLAS_MAX_SCENES: usize = SILKBAR_WORKSPACE_COUNT;
 /// Maximum frames tracked per scene descriptor (equals MAX_FRAMES).
 const ATLAS_MAX_FRAMES_PER_SCENE: usize = 9;
 /// Length of fixed-size scene label byte array (no heap strings).
@@ -9564,10 +9625,8 @@ const ATLAS_CARD_W: u32 = 220;
 const ATLAS_CARD_H: u32 = 150;
 /// Gap between adjacent cards.
 const ATLAS_CARD_GAP: i32 = 24;
-/// Number of cards in first row (3 for 5 total).
-const ATLAS_CARDS_ROW0: usize = 3;
-/// Number of cards in second row (2 for 5 total).
-const ATLAS_CARDS_ROW1: usize = 2;
+/// Overview cards per row: nine workspaces make a 3x3 grid.
+const ATLAS_CARDS_PER_ROW: usize = 3;
 /// Small frame indicator block width.
 const ATLAS_FRAME_BLOCK_W: u32 = 36;
 /// Small frame indicator block height.
@@ -10287,9 +10346,152 @@ unsafe fn browser_wheel_input(word:u64,reserved:u64){
     sex_pdx::serial_record!("[shell.browser.wheel.queued] pd={} task={} route={} wheel={} x={} y={} accepted={} capacity=32",destination.subject.pd,destination.subject.task,destination.route,scroll.vertical(),POINTER_X,POINTER_Y,accepted as u8);
     app_input_poll();
 }
+// ── Window manager: Super chords, layouts, scratchpad (Hyprland/river/KDE) ──
+// Policy and arithmetic live in wm.rs (host-tested); this is the glue to the
+// shell's frames, scenes and focus.
+static mut WM_CHORDS: wm::Chords = wm::Chords::new();
+static mut WM_TILING: [wm::Tiling; ATLAS_MAX_SCENES] = [wm::Tiling::DEFAULT; ATLAS_MAX_SCENES];
+static mut WM_ORDER: wm::Order<MAX_FRAMES> = wm::Order::new();
+static mut WM_SCENE_FOCUS: [u64; ATLAS_MAX_SCENES] = [0; ATLAS_MAX_SCENES];
+/// After a workspace switch: the window last focused there, else the first one.
+unsafe fn wm_restore_scene_focus() {
+    // The remembered window wins over the fallback the scene switch picked.
+    let saved = WM_SCENE_FOCUS[(ACTIVE_SCENE_IDX as usize).min(ATLAS_MAX_SCENES - 1)];
+    if saved != 0 && saved == FOCUSED_SURFACE_ID { return; }
+    if saved != 0 && surface_is_alive(saved) && surface_in_active_scene(saved) && try_set_focus(saved) { return; }
+    if FOCUSED_SURFACE_ID != 0 && surface_in_active_scene(FOCUSED_SURFACE_ID) { return; }
+    let mut frames = [(0u32, 0u64, wm::Rect::default()); MAX_FRAMES];
+    let n = wm_visible_frames(&mut frames, false);
+    for f in &frames[..n] { if try_set_focus(f.1) { return; } }
+}
+unsafe fn wm_tiling() -> wm::Tiling { WM_TILING[(ACTIVE_SCENE_IDX as usize).min(ATLAS_MAX_SCENES - 1)] }
+unsafe fn wm_tiling_mut() -> &'static mut wm::Tiling { &mut WM_TILING[(ACTIVE_SCENE_IDX as usize).min(ATLAS_MAX_SCENES - 1)] }
+/// The desktop below the panel.
+fn wm_work_area() -> wm::Rect {
+    wm::Rect::new(0, P.bar_height, desktop_width() as u32, (desktop_height() - P.bar_height).max(1) as u32)
+}
+/// Visible, live frames of the active scene with their bounds; floating ones too.
+unsafe fn wm_visible_frames(out: &mut [(u32, u64, wm::Rect); MAX_FRAMES], tiled_only: bool) -> usize {
+    let mut n = 0;
+    for f in FRAMES.iter().flatten() {
+        if f.scene_id != ACTIVE_SCENE_IDX || f.flags & FRAME_FLAG_MINIMIZED != 0 { continue; }
+        if tiled_only && f.flags & (FRAME_FLAG_FLOATING | FRAME_FLAG_ZOOMED) != 0 { continue; }
+        let Some(tab) = &f.tabs[f.active_tab as usize] else { continue };
+        let sid = tab.surface_id;
+        if !surface_is_alive(sid) || is_tombstoned(sid) || !surface_is_lifecycle_focusable(sid) { continue; }
+        let Some((x, y, w, h)) = get_surface_bounds(sid) else { continue };
+        if n < MAX_FRAMES { out[n] = (f.frame_id, sid, wm::Rect::new(x, y, w, h)); n += 1; }
+    }
+    n
+}
+unsafe fn wm_neighbour(dir: wm::Dir, tiled_only: bool) -> Option<(u32, u32, u64)> {
+    let current = selected_frame_id()?;
+    let mut frames = [(0u32, 0u64, wm::Rect::default()); MAX_FRAMES];
+    let n = wm_visible_frames(&mut frames, tiled_only);
+    let from = frames[..n].iter().position(|f| f.0 == current)?;
+    let mut rects = [wm::Rect::default(); MAX_FRAMES];
+    for i in 0..n { rects[i] = frames[i].2; }
+    let to = wm::neighbour(&rects[..n], from, dir)?;
+    Some((current, frames[to].0, frames[to].1))
+}
+/// The frame Super+S shows and hides.
+const FRAME_FLAG_SCRATCH: u32 = 1 << 4;
+unsafe fn wm_frame_flags(fid: u32) -> Option<u32> { FRAMES.iter().flatten().find(|f| f.frame_id == fid).map(|f| f.flags) }
+unsafe fn wm_set_flag(fid: u32, flag: u32, on: bool) {
+    for f in FRAMES.iter_mut().flatten() {
+        if f.frame_id == fid { if on { f.flags |= flag; } else { f.flags &= !flag; } }
+    }
+}
+unsafe fn wm_place_floating(fid: u32, pct: u32) {
+    if let Some(sid) = active_surface_for_frame(fid) {
+        let r = wm::centred(wm_work_area(), pct);
+        apply_window_geometry(sid, r.x, r.y, r.w, r.h);
+    }
+}
+unsafe fn wm_scratchpad_toggle() -> bool {
+    let Some((fid, scene, flags)) = FRAMES.iter().flatten().find(|f| f.flags & FRAME_FLAG_SCRATCH != 0)
+        .map(|f| (f.frame_id, f.scene_id, f.flags)) else { return false };
+    if scene == ACTIVE_SCENE_IDX && flags & FRAME_FLAG_MINIMIZED == 0 {
+        return minimize_frame(fid);
+    }
+    if scene != ACTIVE_SCENE_IDX && !reparent_frame_to_scene(fid, ACTIVE_SCENE_IDX, "scratchpad") { return false; }
+    wm_set_flag(fid, FRAME_FLAG_FLOATING, true);
+    if frame_is_minimized(fid) { restore_minimized_frame(fid); }
+    wm_place_floating(fid, 70);
+    if let Some(sid) = active_surface_for_frame(fid) { try_set_focus(sid); }
+    true
+}
+unsafe fn wm_action(action: wm::WmAction) -> bool {
+    use wm::WmAction as A;
+    let before = (ACTIVE_SCENE_IDX, FOCUSED_SURFACE_ID);
+    let done = match action {
+        A::Launcher => toggle_command_palette(),
+        A::Terminal => toggle_spindle(),
+        A::Workspace(n) => { if n < WORKSPACE_COUNT { switch_scene(n); } n < WORKSPACE_COUNT }
+        A::MoveToWorkspace(n) => match selected_frame_id() {
+            Some(fid) if n < WORKSPACE_COUNT => reparent_frame_to_scene(fid, n, "super_shift_digit"),
+            _ => false,
+        },
+        A::NextWorkspace => atlas_cycle_scene(1, "super_next"),
+        A::PrevWorkspace => atlas_cycle_scene(-1, "super_prev"),
+        A::Focus(dir) => match wm_neighbour(dir, false) {
+            Some((_, _, sid)) => try_set_focus(sid),
+            // Monocle: every window has the same place, so walk the order.
+            None if wm_tiling().layout == wm::Layout::Monocle => {
+                if matches!(dir, wm::Dir::Left | wm::Dir::Up) { focus_prev_frame(); } else { focus_next_frame(); }
+                true
+            }
+            None => false,
+        },
+        A::Swap(dir) => match wm_neighbour(dir, true) {
+            Some((a, b, _)) if WM_ORDER.swap(a, b) => { tile_active_scene_frames(); true }
+            _ => false,
+        },
+        A::Close => close_focused_tab_or_frame_safe(),
+        A::Fullscreen => toggle_zoom_focused_frame(),
+        A::ToggleFloating => match selected_frame_id() {
+            Some(fid) => {
+                let floating = wm_frame_flags(fid).map_or(false, |f| f & FRAME_FLAG_FLOATING != 0);
+                if frame_is_zoomed(fid) { toggle_zoom_frame(fid); }
+                set_frame_floating(fid, !floating);
+                if !floating { wm_place_floating(fid, 60); }
+                tile_active_scene_frames();
+                true
+            }
+            None => false,
+        },
+        A::CycleLayout => { wm_tiling_mut().cycle(); tile_active_scene_frames(); true }
+        A::ToggleMonocle => { wm_tiling_mut().toggle_monocle(); tile_active_scene_frames(); true }
+        A::GrowMaster => { let c = wm_tiling_mut().grow_master(wm::MASTER_STEP as i8); if c { tile_active_scene_frames(); } c }
+        A::ShrinkMaster => { let c = wm_tiling_mut().grow_master(-(wm::MASTER_STEP as i8)); if c { tile_active_scene_frames(); } c }
+        A::ToScratchpad => match selected_frame_id() {
+            Some(fid) => {
+                // One scratchpad window at a time: the previous one goes back to tiling.
+                for f in FRAMES.iter_mut().flatten() { if f.frame_id != fid { f.flags &= !FRAME_FLAG_SCRATCH; } }
+                wm_set_flag(fid, FRAME_FLAG_SCRATCH | FRAME_FLAG_FLOATING, true);
+                minimize_frame(fid)
+            }
+            None => false,
+        },
+        A::Scratchpad => wm_scratchpad_toggle(),
+        A::Overview => { atlas_toggle(); true }
+        A::Lock => false,
+    };
+    sex_pdx::serial_record!("[shell.wm.action] action={:?} done={} scene={}->{} focus={}->{} layout={}",
+        action, done as u8, before.0, ACTIVE_SCENE_IDX, before.1, FOCUSED_SURFACE_ID, wm_tiling().layout.name());
+    done
+}
 /// Runs before native text routing in both HID paths. Alt remains owned by
 /// the desktop, so changing focus cannot leave a modifier held in the old app.
 unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
+    match WM_CHORDS.event(code,value) {
+        wm::Chord::Pass=>{}
+        wm::Chord::Consume=>return true,
+        wm::Chord::Act(action)=>{
+            if COMMAND_PALETTE_OPEN && action!=wm::WmAction::Launcher {toggle_command_palette();}
+            wm_action(action);return true;
+        }
+    }
     let modifier=APP_MODIFIERS.observe(code,value);
     match DESKTOP_KEYS.event(code,value) {
         desktop_keys::Action::Pass=>{
@@ -10396,6 +10598,7 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
             // When the palette is open, intercept Enter/Escape/Backtick/J/K
             // before the reserved_ui_action check so palette navigation and
             // execution work in synthetic proof sequences (handle_hid_event).
+            if COMMAND_PALETTE_OPEN && !COMMAND_PALETTE_DAILY_PROOF_ACTIVE && palette_search_intercept(scancode) {return;}
             if COMMAND_PALETTE_OPEN
                 && (scancode == 0x1C || scancode == 0x01
                     || scancode == 0x29 || scancode == 0x24 || scancode == 0x25)
@@ -11947,6 +12150,7 @@ unsafe fn scene_init_all() {
         ACCENT_COOL,    // Scene 2: Cool icy blue
         ACCENT_CORAL,   // Scene 3: Coral pink
         ACCENT_GOLD,    // Scene 4: Gold
+        ACCENT_DEFAULT, ACCENT_WARM, ACCENT_COOL, ACCENT_CORAL, // Scenes 5..8 repeat
     ];
 
     for si in 0..ATLAS_MAX_SCENES {
@@ -12241,18 +12445,29 @@ fn atlas_card_pos(scene_idx: usize, cw: u32) -> (i32, i32, u32, u32) {
     let card_w = ATLAS_CARD_W;
     let card_h = ATLAS_CARD_H;
     let gap = ATLAS_CARD_GAP;
-    // Y offset from overlay top: row 0 at 30px, row 1 below with gap.
-    let (row, col) = if scene_idx < ATLAS_CARDS_ROW0 {
-        (0i32, scene_idx as i32)
-    } else {
-        (1i32, (scene_idx - ATLAS_CARDS_ROW0) as i32)
-    };
-    let cards_in_row = if row == 0 { ATLAS_CARDS_ROW0 as i32 } else { ATLAS_CARDS_ROW1 as i32 };
+    // Rows of ATLAS_CARDS_PER_ROW, each centred; the last row may be short.
+    let row = (scene_idx / ATLAS_CARDS_PER_ROW) as i32;
+    let col = (scene_idx % ATLAS_CARDS_PER_ROW) as i32;
+    let cards_in_row = (ATLAS_MAX_SCENES - row as usize * ATLAS_CARDS_PER_ROW).min(ATLAS_CARDS_PER_ROW) as i32;
     let total_w = (card_w * cards_in_row as u32) + (gap as u32 * (cards_in_row as u32 - 1));
     let start_x = ((cw as i32 - total_w as i32) / 2).max(0);
     let x = start_x + col * (card_w as i32 + gap);
     let y = 30 + row * (card_h as i32 + gap);
     (x, y, card_w, card_h)
+}
+/// The card next to `sel` in the overview grid, wrapping within a row.
+fn atlas_nav(sel: u8, dir: wm::Dir) -> u8 {
+    let (n, per) = (ATLAS_MAX_SCENES, ATLAS_CARDS_PER_ROW);
+    let i = (sel as usize).min(n - 1);
+    let row_start = i / per * per;
+    let row_len = (n - row_start).min(per);
+    let to = match dir {
+        wm::Dir::Left => row_start + (i - row_start + row_len - 1) % row_len,
+        wm::Dir::Right => row_start + (i - row_start + 1) % row_len,
+        wm::Dir::Up => if i >= per { i - per } else { i },
+        wm::Dir::Down => if row_start + per < n { (i + per).min(n - 1) } else { i },
+    };
+    to as u8
 }
 
 /// Hit-test Atlas scene cards at screen position (px, py).
@@ -12283,7 +12498,7 @@ fn atlas_scene_at_point(px: i32, py: i32) -> Option<u8> {
 /// Number keys 1-5: switch directly to scene (N-1).
 unsafe fn handle_atlas_keyboard(scancode: u8) -> bool {
     // ── Number keys 1-5: direct scene select ──
-    if scancode >= 0x02 && scancode <= 0x06 {
+    if scancode >= 0x02 && scancode <= 0x0A {
         let scene_idx = (scancode - 0x02) as u8;
         if scene_idx < ATLAS_MAX_SCENES as u8 {
             serial_println!("[atlas.nav.activate] scene={} keys=number", scene_idx);
@@ -12317,11 +12532,7 @@ unsafe fn handle_atlas_keyboard(scancode: u8) -> bool {
     match scancode {
         0x4B => { // Left arrow
             let sel = ATLAS_SELECTED_SCENE;
-            ATLAS_SELECTED_SCENE = match sel {
-                0 => 2, 1 => 0, 2 => 1,
-                3 => 4, 4 => 3,
-                _ => sel,
-            };
+            ATLAS_SELECTED_SCENE = atlas_nav(sel, wm::Dir::Left);
             if ATLAS_SELECTED_SCENE != sel {
                 serial_println!("[atlas.nav.move] dir=left from={} to={}", sel, ATLAS_SELECTED_SCENE);
                 serial_println!("[atlas.scene.nav] old={} new={} count={}", sel, ATLAS_SELECTED_SCENE, ATLAS_MAX_SCENES);
@@ -12333,11 +12544,7 @@ unsafe fn handle_atlas_keyboard(scancode: u8) -> bool {
         }
         0x4D => { // Right arrow
             let sel = ATLAS_SELECTED_SCENE;
-            ATLAS_SELECTED_SCENE = match sel {
-                0 => 1, 1 => 2, 2 => 0,
-                3 => 4, 4 => 3,
-                _ => sel,
-            };
+            ATLAS_SELECTED_SCENE = atlas_nav(sel, wm::Dir::Right);
             if ATLAS_SELECTED_SCENE != sel {
                 serial_println!("[atlas.nav.move] dir=right from={} to={}", sel, ATLAS_SELECTED_SCENE);
                 serial_println!("[atlas.scene.nav] old={} new={} count={}", sel, ATLAS_SELECTED_SCENE, ATLAS_MAX_SCENES);
@@ -12349,10 +12556,7 @@ unsafe fn handle_atlas_keyboard(scancode: u8) -> bool {
         }
         0x48 => { // Up arrow
             let sel = ATLAS_SELECTED_SCENE;
-            ATLAS_SELECTED_SCENE = match sel {
-                3 => 0, 4 => 1,
-                _ => sel,
-            };
+            ATLAS_SELECTED_SCENE = atlas_nav(sel, wm::Dir::Up);
             if ATLAS_SELECTED_SCENE != sel {
                 serial_println!("[atlas.nav.move] dir=up from={} to={}", sel, ATLAS_SELECTED_SCENE);
                 serial_println!("[atlas.scene.nav] old={} new={} count={}", sel, ATLAS_SELECTED_SCENE, ATLAS_MAX_SCENES);
@@ -12364,10 +12568,7 @@ unsafe fn handle_atlas_keyboard(scancode: u8) -> bool {
         }
         0x50 => { // Down arrow
             let sel = ATLAS_SELECTED_SCENE;
-            ATLAS_SELECTED_SCENE = match sel {
-                0 => 3, 1 => 4, 2 => 4,
-                _ => sel,
-            };
+            ATLAS_SELECTED_SCENE = atlas_nav(sel, wm::Dir::Down);
             if ATLAS_SELECTED_SCENE != sel {
                 serial_println!("[atlas.nav.move] dir=down from={} to={}", sel, ATLAS_SELECTED_SCENE);
                 serial_println!("[atlas.scene.nav] old={} new={} count={}", sel, ATLAS_SELECTED_SCENE, ATLAS_MAX_SCENES);
@@ -12778,6 +12979,8 @@ unsafe fn switch_scene(scene_idx: u8) {
     let idx = scene_idx.min(WORKSPACE_COUNT - 1);
     if idx == ACTIVE_SCENE_IDX { return; }
     let prev = ACTIVE_SCENE_IDX;
+    // Each workspace remembers the window that had focus there.
+    WM_SCENE_FOCUS[(prev as usize).min(ATLAS_MAX_SCENES - 1)] = FOCUSED_SURFACE_ID;
     ACTIVE_SCENE_IDX = idx;
     sync_scene_visibility();
     clear_focus_if_wrong_scene();
@@ -12786,6 +12989,7 @@ unsafe fn switch_scene(scene_idx: u8) {
     clear_hover_if_wrong_scene();
     tile_active_scene_frames();
     serial_println!("[shell.interact.tile.return] source=scene.switch");
+    wm_restore_scene_focus();
     snap_capture_layout();
     // B2: Update scene flags for the previous scene before switching.
     scene_update_flags(prev);
@@ -13122,6 +13326,12 @@ unsafe fn handle_app_surface_req(surface_id: u64, title_id: u64, arg2: u64, call
     if manifest.title_id == 0 {
         serial_println!("[shell.app_surface.reject] reason=zero_title_id sid={} caller={}", manifest.surface_id, caller_pd);
         return false;
+    }
+    // An app this Shell took over after a restart may register again: answer it.
+    if lifecycle_state(frame_surface).is_some() && APP_CUSTODY.iter().position(|e|e.as_ref().is_some_and(|e|e.target==caller_pd && e.surface==manifest.surface_id)).is_some_and(|i|ADOPTED[i]) {
+        if let Some(entry) = APP_CUSTODY.iter_mut().flatten().find(|e|e.target==caller_pd && e.surface==manifest.surface_id) { entry.registration_reply=true; }
+        shell_registration_reply_poll();
+        return true;
     }
     // Validate: not already registered in lifecycle
     if lifecycle_state(frame_surface).is_some() {
@@ -14328,6 +14538,73 @@ const COMMAND_LIST: [CommandDef; 14] = [
 static mut COMMAND_PALETTE_OPEN: bool = false;
 /// Index into COMMAND_LIST of the currently selected command.
 static mut COMMAND_PALETTE_SELECTED: u8 = 0;
+/// What the user has typed into the open launcher; empty shows every row.
+static mut PALETTE_QUERY: launcher_search::Query = launcher_search::Query::new();
+/// Words a launcher row is also found by, so "terminal" finds Spindle.
+fn command_words(cmd: Command) -> &'static str {
+    match cmd {
+        Command::FocusSpindle => "terminal shell console command",
+        Command::FocusQuil => "editor text notes write",
+        Command::FocusLinen => "files folders documents",
+        Command::FocusAtlas => "overview workspaces desktops",
+        Command::FocusBell => "notifications alerts",
+        Command::FocusCollar => "permissions privacy security",
+        Command::FocusMesh => "system monitor tasks",
+        Command::RestoreMinimized => "unhide show window",
+        Command::ZoomToggle => "maximize fullscreen resize",
+        Command::MinimizeFocused => "hide window",
+        Command::FocusBrowser => "web internet html",
+        Command::FocusProgram => "hello app program",
+        Command::ShutDown => "power off halt",
+        Command::Restart => "reboot",
+    }
+}
+/// COMMAND_LIST indexes that match the query, best first.
+unsafe fn palette_order() -> ([usize; COMMAND_LIST.len()], usize) {
+    let mut rows = [("", ""); COMMAND_LIST.len()];
+    for (row, item) in rows.iter_mut().zip(COMMAND_LIST.iter()) {
+        *row = (launcher_row_title(item.command, item.name), command_words(item.command));
+    }
+    let mut order = [0usize; COMMAND_LIST.len()];
+    let n = launcher_search::rank(PALETTE_QUERY.as_str(), &rows, &mut order);
+    (order, n)
+}
+/// Type-to-search keys while the launcher is open: letters, digits, space and
+/// Backspace edit the query; J and K still choose rows until a search has
+/// begun, the arrows always do; Esc clears a search before it closes; Enter
+/// with no match does nothing. Returns true when the key was taken.
+unsafe fn palette_search_intercept(scancode: u8) -> bool {
+    // Enter with nothing matching does nothing, with or without Ctrl: the
+    // hidden earlier selection must never run.
+    if scancode==0x1C && !PALETTE_QUERY.is_empty() && palette_order().1==0 {return true;}
+    if APP_MODIFIERS.key(scancode).control {return false;}
+    let nav=matches!(scancode,0x24|0x25) && PALETTE_QUERY.is_empty();
+    if !nav && palette_search_key(scancode) {return true;}
+    if matches!(scancode,0x48|0x50) {
+        if scancode==0x50 {palette_select_next();} else {palette_select_prev();}
+        return true;
+    }
+    if scancode==0x01 && !PALETTE_QUERY.is_empty() {
+        PALETTE_QUERY.clear();
+        sex_pdx::serial_record!("[shell.launcher.search] query= matches={} top=- changed=1",COMMAND_LIST.len());
+        palette_render_list();
+        return true;
+    }
+    false
+}
+/// A typed character or Backspace while the launcher is open: refilter and
+/// select the best match. Returns false for keys search does not take.
+unsafe fn palette_search_key(code: u8) -> bool {
+    let changed = if code == 0x0E { PALETTE_QUERY.pop() }
+        else if let Some(c) = launcher_search::key_char(code) { PALETTE_QUERY.push(c) }
+        else { return false };
+    let (order, n) = palette_order();
+    if n > 0 { COMMAND_PALETTE_SELECTED = order[0] as u8; }
+    sex_pdx::serial_record!("[shell.launcher.search] query={} matches={} top={} changed={}",
+        PALETTE_QUERY.as_str(), n, if n > 0 { COMMAND_LIST[order[0]].name } else { "-" }, changed as u8);
+    palette_render_list();
+    true
+}
 
 // ── Spindle Surface Control Helpers ─────────────────────────────────────────
 // Spindle = native SexOS terminal/command console (0.2: shell-local).
@@ -15886,7 +16163,18 @@ unsafe fn palette_render_list() {
         rows[i]=launcher::Row{name:launcher_row_title(item.command,item.name),status:visible_status};
         serial_println!("[shell.palette.item] idx={} action={} available={} status={} reason={}",i,item.name,available as u8,status,reason);
     }
-    let v=launcher::text(&rows[..COMMAND_LIST.len()],COMMAND_PALETTE_SELECTED as usize,w,h);
+    // Type-to-search: only matching rows, best first, under the query.
+    let (order,matches)=palette_order();
+    let mut shown=[launcher::Row{name:"",status:""};COMMAND_LIST.len()];
+    for (slot,&index) in shown.iter_mut().zip(order[..matches].iter()) {*slot=rows[index];}
+    let selected=order[..matches].iter().position(|&i|i==COMMAND_PALETTE_SELECTED as usize).unwrap_or(0);
+    let mut head=[0u8;40];let mut head_len=0;
+    for &b in b"SEARCH: ".iter().chain(PALETTE_QUERY.as_str().as_bytes()).chain(b"_") {head[head_len]=b;head_len+=1;}
+    let none=[launcher::Row{name:"No match",status:"BACKSPACE TO EDIT"}];
+    let v=if PALETTE_QUERY.is_empty() {launcher::text(&rows[..COMMAND_LIST.len()],COMMAND_PALETTE_SELECTED as usize,w,h)}
+        else if matches==0 {launcher::text_with(&none,0,w,h,[core::str::from_utf8(&head[..head_len]).unwrap_or(""),"ESC CLEARS THE SEARCH"])}
+        else {launcher::text_with(&shown[..matches],selected,w,h,[core::str::from_utf8(&head[..head_len]).unwrap_or(""),"ARROWS CHOOSE  ENTER OPEN  ESC CLEAR"])};
+    let rows=if PALETTE_QUERY.is_empty() {rows} else {let mut r=shown;if matches==0 {r[0]=none[0];} r};
     for index in 0..8 {pdx_call(SLOT_DISPLAY,0xEF,SURFACE_ID_COMMAND_PALETTE,0,(index as u64)<<56);}
     pdx_call(SLOT_DISPLAY,0xEF,SURFACE_ID_COMMAND_PALETTE,28u64<<32,
         (0x0022384Au64<<32)|((v.row_y.saturating_sub(28) as u64)<<16)|w as u64);
@@ -15894,7 +16182,7 @@ unsafe fn palette_render_list() {
         (1u64<<56)|(0x000C1420u64<<32)|(((v.rows as u32*v.row_h)as u64)<<16)|w as u64);
     for row in 0..v.rows {
         let index=v.first+row;let y=v.row_y+row as u32*v.row_h;
-        if index==COMMAND_PALETTE_SELECTED as usize {
+        if index==(if PALETTE_QUERY.is_empty() {COMMAND_PALETTE_SELECTED as usize} else {selected}) {
             pdx_call(SLOT_DISPLAY,0xEF,SURFACE_ID_COMMAND_PALETTE,(y as u64)<<32,
                 (2u64<<56)|(0x002A4960u64<<32)|((v.row_h as u64)<<16)|w as u64);
         }
@@ -15902,7 +16190,8 @@ unsafe fn palette_render_list() {
             (((row+3)as u64)<<56)|(0x005ED9C3u64<<32)|((v.row_h as u64)<<16)|3);
     }
     PALETTE_TEXT.queue(&v.bytes[..v.len],0x00F0F8FF,linen_text_delivery::Metadata{
-        count:COMMAND_LIST.len(),first:v.first,rows:v.rows,selected:COMMAND_PALETTE_SELECTED as u64});
+        count:if PALETTE_QUERY.is_empty() {COMMAND_LIST.len()} else {matches.max(1)},first:v.first,rows:v.rows,
+        selected:if PALETTE_QUERY.is_empty() {COMMAND_PALETTE_SELECTED as u64} else {selected as u64}});
     sex_pdx::serial_record!("[launcher.text.view] x={} y={} w={} h={} scale={} selected={} first={} rows={}",
         COMMAND_PALETTE_BOOT_X,COMMAND_PALETTE_BOOT_Y,w,h,v.scale,COMMAND_PALETTE_SELECTED,v.first,v.rows);
     for row in 0..v.rows {let index=v.first+row;
@@ -15926,6 +16215,7 @@ unsafe fn toggle_command_palette() -> bool {
     if COMMAND_PALETTE_OPEN {
         // Close palette — minimize the frame.
         COMMAND_PALETTE_OPEN = false;
+        PALETTE_QUERY.clear();
         PALETTE_TEXT.cancel();
         serial_println!("[launcher.close] ok=1 reason=palette_closed");
         serial_println!("[shell.palette.statusbar] open=0 selected=0 available=0");
@@ -15943,6 +16233,7 @@ unsafe fn toggle_command_palette() -> bool {
     } else {
         // Open palette — show the frame and render.
         COMMAND_PALETTE_OPEN = true;
+        PALETTE_QUERY.clear();
         COMMAND_PALETTE_SELECTED = 0;
         palette_show();
         // Count available palette items for statusbar marker.
@@ -16011,6 +16302,13 @@ unsafe fn palette_select_next() {
     let count = COMMAND_LIST.len() as u8;
     if count <= 1 { return; }
     let old = COMMAND_PALETTE_SELECTED;
+    if !PALETTE_QUERY.is_empty() {
+        let (order,n)=palette_order();
+        if let Some(to)=launcher_search::step(&order[..n],old as usize,1) {COMMAND_PALETTE_SELECTED=to as u8;}
+        sex_pdx::serial_record!("[shell.palette.select] old={} new={}", old, COMMAND_PALETTE_SELECTED);
+        palette_render_list();
+        return;
+    }
     let next = if COMMAND_PALETTE_SELECTED + 1 >= count { 0 } else { COMMAND_PALETTE_SELECTED + 1 };
     COMMAND_PALETTE_SELECTED = next;
     sex_pdx::serial_record!("[shell.palette.select] old={} new={}", old, next);
@@ -16029,6 +16327,13 @@ unsafe fn palette_select_prev() {
     let count = COMMAND_LIST.len() as u8;
     if count <= 1 { return; }
     let old = COMMAND_PALETTE_SELECTED;
+    if !PALETTE_QUERY.is_empty() {
+        let (order,n)=palette_order();
+        if let Some(to)=launcher_search::step(&order[..n],old as usize,-1) {COMMAND_PALETTE_SELECTED=to as u8;}
+        sex_pdx::serial_record!("[shell.palette.select] old={} new={}", old, COMMAND_PALETTE_SELECTED);
+        palette_render_list();
+        return;
+    }
     let prev = if COMMAND_PALETTE_SELECTED == 0 { count - 1 } else { COMMAND_PALETTE_SELECTED - 1 };
     COMMAND_PALETTE_SELECTED = prev;
     sex_pdx::serial_record!("[shell.palette.select] old={} new={}", old, prev);
@@ -23990,7 +24295,7 @@ fn handle_silkbar_click(px: i32, py: i32) -> bool {
     match action {
         Action::None => false,
         Action::SwitchWorkspace(n) => {
-            let ws_idx = n.saturating_sub(1).min(4);
+            let ws_idx = n.saturating_sub(1).min(WORKSPACE_COUNT as u8 - 1);
             serial_println!("[shell.silkbar.click] target=workspace index={} x={} y={}", n, ux, uy);
             pdx_call(SLOT_SILKBAR, OP_SILKBAR_WORKSPACE_ACTIVE, ws_idx as u64, 0, 0);
             unsafe {
@@ -24180,7 +24485,7 @@ fn snap_validate(snap: &SceneLayoutSnapshot) -> bool {
         if fs.tab_count as usize > MAX_TABS_PER_FRAME as usize { return false; }
         if fs.active_tab as usize >= fs.tab_count as usize { return false; }
         // Flags must not contain reserved bits (only MINIMIZED | ZOOMED | TOP_BAR).
-        let known_flags = FRAME_FLAG_MINIMIZED | FRAME_FLAG_ZOOMED | FRAME_FLAG_TOP_BAR | FRAME_FLAG_FLOATING;
+        let known_flags = FRAME_FLAG_MINIMIZED | FRAME_FLAG_ZOOMED | FRAME_FLAG_TOP_BAR | FRAME_FLAG_FLOATING | FRAME_FLAG_SCRATCH;
         if fs.flags & !known_flags != 0 { return false; }
     }
     // Verify checksum.
@@ -24295,6 +24600,17 @@ pub extern "C" fn _start() -> ! {
         .expect("shell display-ready inbox full");
     serial_println!("[display.ready.accepted] client=silk-shell caller=1 version=1");
     sex_rt::heap_init();
+    // Started again after a crash: notices to apps carry sequence numbers the apps
+    // check, so number them after every earlier run's.
+    let restarts = sex_pdx::crash_log::restarts() as u64;
+    if restarts > 0 {
+        unsafe {
+            for view in SPINDLE_VIEWS.iter_mut() { view.continue_after(restarts << 40); }
+            for view in DOCUMENT_VIEWS.iter_mut() { view.continue_after(restarts << 40); }
+            // Quil keeps the last toolbar action number it accepted, too.
+            DOCUMENT_POINTER_SEQUENCE = DOCUMENT_POINTER_SEQUENCE.max(restarts << 40);
+        }
+    }
     serial_println!("[silk-shell] Authority Starting...");
 
     unsafe {
@@ -24632,6 +24948,11 @@ pub extern "C" fn _start() -> ! {
         Err(e) => {sex_pdx::serial_record!("[uiir.shell.attached] peer={} ok=0 error={:#x}",sex_pdx::uiir::DISPLAY_PD,e);None},
     };
     let mut uiir_focus = 0u64;
+    // Started again after a crash: the apps that were running still are. Give each
+    // its window back, as if it had just registered, and let it draw again.
+    if sex_pdx::crash_log::restarts() > 0 { unsafe { adopt_running_apps(); } }
+    // Windows, workspaces and layouts as the last run left them.
+    unsafe { session::keep_and_restore(sex_pdx::crash_log::restarts() > 0); }
 
     loop {
         if let Some(stream)=uiir.as_mut() {
@@ -24645,6 +24966,7 @@ pub extern "C" fn _start() -> ! {
             }
         }
         unsafe { program_rebirth_poll(); }
+        unsafe { session::save(); }
         unsafe { record_spawn_poll(); }
         unsafe { program_resize_flush(); }
         unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); shell_close_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); }
@@ -25333,6 +25655,8 @@ pub extern "C" fn _start() -> ! {
                 pdx_listen_raw(0)
             }
         };
+        // Display started again after a crash: it knows nothing of the desktop, so show it again.
+        if sex_pdx::display_ready::is_display_ready(&msg) { unsafe { display_came_back(); } continue; }
         unsafe {
             if shell_lifecycle_hint(&msg) { continue; }
             if shell_program_message(&msg) { continue; }
@@ -25753,6 +26077,9 @@ pub extern "C" fn _start() -> ! {
                                 }
                             }
                             // ── Command palette keyboard intercept: consume keys when palette open ──
+                            if !panel_consumed && COMMAND_PALETTE_OPEN && palette_search_intercept(scancode) {
+                                mutated = true; panel_consumed = true;
+                            }
                             if !panel_consumed && COMMAND_PALETTE_OPEN {
                                 match scancode {
                                     0x24 => { palette_select_next(); mutated = true; } // J - next
