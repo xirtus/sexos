@@ -283,6 +283,9 @@ pub fn syscall(regs: &mut crate::interrupts::SyscallRegs) -> u64 {
             regs.rsi = crate::service_restart::restarts_of(caller) as u64;
             wire::OK
         }
+        wire::OP_KEEP => {
+            if crate::service_restart::keep(caller, arg, buf) { wire::OK } else { wire::INVALID }
+        }
         wire::OP_PROBE_FAULT => {
             if option_env!("SEXOS_CRASH_PROBE").is_none() || !is_spindle(caller) { return wire::DENIED; }
             if arg == 0 {

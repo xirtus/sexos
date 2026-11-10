@@ -841,6 +841,10 @@ pub fn init() {
     crate::service_restart::capture(sexinput_id, 4);
     // Bell's sound state is rebuilt by its own start; its paging check runs once.
     crate::service_restart::capture(sexbell_id, 10);
+    // Display: the screen comes back from BOOT's handoff; Shell shows its windows again.
+    crate::service_restart::capture(sexdisp_id, 1);
+    // Shell: a new run rebuilds its windows from the app catalog.
+    crate::service_restart::capture(silkshell_id, 3);
     crate::program_records::init(silkshell_id);
     {
         let shell=crate::ipc::DOMAIN_REGISTRY.get(silkshell_id).expect("BOOT_SHELL_MISSING");

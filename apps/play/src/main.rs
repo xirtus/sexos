@@ -209,6 +209,54 @@ fn tone(window: &mut Window, hz: u32, rate: u32) {
     say(window, b"Tone played.");
 }
 
+/// `play --listen SECONDS`: asks for the microphone, waits for the person's leave, then
+/// counts what it hears for SECONDS and reports frames, loudest sample and losses.
+fn listen(window: &mut Window, seconds: u32) {
+    use sex_pdx::sound_ring as ring;
+    let Some(mut sound) = sex_app::sound::Sound::open() else { return fail(window, b"No sound for this program.") };
+    let row = ring::index_of(window.target).map_or(-1, |r| r as i64);
+    sound.listen(true);
+    sex_pdx::serial_record!("[play.listen.asked] row={}", row);
+    say(window, b"Asking for the microphone. Allow it with: volume ROW mic on");
+    let mut last = u64::MAX;
+    let begun = sex_pdx::get_ticks();
+    loop {
+        let mic = sound.mic();
+        if mic != last { sex_pdx::serial_record!("[play.listen.state] row={} mic={}", row, mic); last = mic; }
+        if mic == ring::MIC_ON { break; }
+        if mic == ring::MIC_NONE { return fail(window, b"There is no microphone."); }
+        if sex_pdx::get_ticks() - begun > 120_000 { return fail(window, b"The microphone was not allowed."); }
+        if let Some(Event::Close) = window.poll() { sound.listen(false); return; }
+        let _ = sex_pdx::sys_wait_self_ticks(20);
+    }
+    say(window, b"Listening.");
+    let (mut frames, mut peak, mut buf) = (0u64, 0i32, [[0i16; 2]; 1024]);
+    let start = sex_pdx::get_ticks();
+    // Frames before the first period arrive are not counted: time runs from it.
+    let mut first = None;
+    while first.map_or(true, |t| sex_pdx::get_ticks() - t < seconds as u64 * 1000) {
+        let n = sound.hear(&mut buf);
+        if n > 0 && first.is_none() { first = Some(sex_pdx::get_ticks()); }
+        frames += n as u64;
+        peak = buf[..n].iter().fold(peak, |p, f| p.max((f[0] as i32).abs()).max((f[1] as i32).abs()));
+        if sound.mic() != ring::MIC_ON { break; }
+        if first.is_none() && sex_pdx::get_ticks() - start > 10_000 { break; }
+        if n == 0 { let _ = sex_pdx::sys_wait_self_ticks(10); }
+    }
+    let ms = first.map_or(0, |t| sex_pdx::get_ticks() - t);
+    sex_pdx::serial_record!("[play.listen] row={} frames={} ms={} peak={} lost={} mic={}", row, frames, ms, peak, sound.lost(), sound.mic());
+    // Stay, still asking, until the person takes the leave back or closes the window.
+    say(window, b"Heard the microphone.");
+    while sound.mic() == ring::MIC_ON {
+        if let Some(Event::Close) = window.poll() { break; }
+        let mut buf = [[0i16; 2]; 1024];
+        sound.hear(&mut buf);
+        let _ = sex_pdx::sys_wait_self_ticks(20);
+    }
+    sex_pdx::serial_record!("[play.listen.end] row={} mic={}", row, sound.mic());
+    sound.listen(false);
+}
+
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     let mut window = Window::open();
@@ -217,12 +265,15 @@ pub extern "C" fn _start() -> ! {
     let given = files::args(&mut window, &mut args);
     let words: Vec<&[u8]> = given.split(|b| *b == b' ').filter(|w| !w.is_empty()).collect();
     let number = |w: Option<&&[u8]>| w.and_then(|w| core::str::from_utf8(w).ok()).and_then(|t| t.parse::<u32>().ok());
-    let file = if words.first() == Some(&&b"--tone"[..]) {
+    let file = if words.first() == Some(&&b"--listen"[..]) {
+        listen(&mut window, number(words.get(1)).unwrap_or(2));
+        None
+    } else if words.first() == Some(&&b"--tone"[..]) {
         tone(&mut window, number(words.get(1)).unwrap_or(440), number(words.get(2)).unwrap_or(sex_app::sound::RATE));
         None
     } else { words.first().map(|f| f.to_vec()) };
     match file {
-        None if words.first() == Some(&&b"--tone"[..]) => {}
+        None if words.first().is_some_and(|w| w.starts_with(b"--")) => {}
         None => fail(&mut window, b"Usage: run play @VIDEO.mp4"),
         Some(path) => match files::size(&mut window, &path) {
             Err(e) => fail(&mut window, files::message(e)),
