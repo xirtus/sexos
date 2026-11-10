@@ -7,7 +7,7 @@ extern crate alloc;
 
 use smoltcp::{iface::{Config as InterfaceConfig,Interface,SocketHandle,SocketSet,SocketStorage},
     phy::{self,Device,DeviceCapabilities,Medium},socket::{dhcpv4,tcp,udp},
-    time::{Duration,Instant},wire::{EthernetAddress,IpAddress,IpCidr,Ipv4Address}};
+    time::{Duration,Instant},wire::{EthernetAddress,HardwareAddress,IpAddress,IpCidr,IpListenEndpoint,Ipv4Address,Ipv6Address}};
 pub use smoltcp::socket::tcp::State;
 pub use smoltcp::iface::SocketStorage as Storage;
 pub use smoltcp::socket::udp::PacketMetadata as DnsMetadata;
@@ -88,15 +88,45 @@ impl Statistics{fn new()->Self{Self{received:0,queued:0,receive_hash:BASIS,queue
 fn hash(mut value:u64,bytes:&[u8])->u64{for b in bytes{value=(value^*b as u64).wrapping_mul(0x100000001b3);}value}
 /// One private listener, one outbound TCP flow and one fixed DNS UDP socket. The stack's
 /// handle is internal data, never an app-visible capability or file descriptor.
-pub struct Engine<'a>{network:sex_net_config::Config,iface:Interface,flows:SocketSet<'a>,handle:SocketHandle,client_handle:SocketHandle,dns_handle:SocketHandle,adapter:Adapter,last:u64,
+pub struct Engine<'a>{network:sex_net_config::Config,seed:u64,iface:Interface,flows:SocketSet<'a>,handle:SocketHandle,client_handle:SocketHandle,dns_handle:SocketHandle,adapter:Adapter,last:u64,
     stopped:bool,failed:Option<Error>,pending:[u8;TURN_BYTES],pending_length:usize,pending_offset:usize,
     active_flow:bool,stats:Statistics,open:Option<Open>}
 /// The open-internet side: its own TCP flow, DNS socket and DHCP client, attached the
 /// first time something asks for them, so nothing else ever sees their traffic.
-struct Open{tcp:alloc::vec::Vec<SocketHandle>,dns:SocketHandle,dhcp:SocketHandle,lease:Option<Lease>,next_port:u16,query_id:u16,query_name:[u8;255],query_len:usize,resolver:[u8;4]}
+struct Open{tcp:alloc::vec::Vec<SocketHandle>,udp:alloc::vec::Vec<SocketHandle>,dns:SocketHandle,dhcp:SocketHandle,lease:Option<Lease>,next_port:u16,next_udp_port:u16,query:Question}
+/// The name being looked up: its A question (`id`) and, when IPv6 can be used, its AAAA
+/// question (`id+1`), and what came back for each.
+struct Question{id:u16,name:[u8;255],len:usize,resolver:[u8;4],six:bool,v4:Option<[u8;4]>,v6:Option<[u8;16]>,done4:bool,done6:bool,first_at:u64}
+/// An address of either family. Data, never authority.
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]pub enum Address{V4([u8;4]),V6([u8;16])}
+impl Address{
+    fn ip(self)->IpAddress{match self{Address::V4(a)=>IpAddress::v4(a[0],a[1],a[2],a[3]),Address::V6(a)=>IpAddress::Ipv6(Ipv6Address::from(a))}}
+    fn of(ip:IpAddress)->Self{match ip{IpAddress::Ipv4(a)=>Address::V4(a.octets()),IpAddress::Ipv6(a)=>Address::V6(a.octets())}}
+}
+/// What a lookup in both families found.
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]pub struct Answers{pub v6:Option<[u8;16]>,pub v4:Option<[u8;4]>}
+/// After the first family's answer, how long to wait for the other's (RFC 8305's
+/// resolution delay).
+pub const RESOLUTION_DELAY_MS:u64=50;
+fn link_local(mac:[u8;6])->[u8;16]{[0xfe,0x80,0,0,0,0,0,0,mac[0]^2,mac[1],mac[2],0xff,0xfe,mac[3],mac[4],mac[5]]}
+fn is_link_local(a:&[u8;16])->bool{a[0]==0xfe&&a[1]&0xc0==0x80}
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]pub struct Lease{pub address:[u8;4],pub prefix:u8,pub gateway:Option<[u8;4]>,pub dns:Option<[u8;4]>}
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]pub enum OpenState{Opening,Open,PeerClosed,Closed}
 pub const OPEN_PORT_BASE:u16=40000;
+/// Ports a program may bind or listen on: 1 to this, except 68 (the DHCP client's).
+/// The ports above are the service's own: its resolver, its outbound flows and jobs.
+pub const PROGRAM_PORT_MAX:u16=OPEN_PORT_BASE-2;
+/// Ports a UDP socket bound to "any" gets, after the outbound TCP flows' and below the
+/// job tickets'.
+pub const UDP_PORT_BASE:u16=OPEN_PORT_BASE+7001;
+pub const UDP_PORT_LAST:u16=OPEN_PORT_BASE+7999;
+/// Each program UDP socket's queues: datagrams and bytes each way.
+pub const UDP_PACKETS:usize=16;
+pub const UDP_BYTES:usize=16*1024;
+/// The largest datagram payload sent, so it fits one Ethernet frame unfragmented.
+pub const UDP_PAYLOAD_V4:usize=1472;
+pub const UDP_PAYLOAD_V6:usize=1452;
+pub fn program_port(port:u16)->bool{(1..=PROGRAM_PORT_MAX).contains(&port)&&port!=68}
 /// Each open-internet flow's receive window and send queue. Flows are made as they are
 /// asked for (`open_add_flow`), so their number is bounded by memory, not a table.
 pub const OPEN_RX_BYTES:usize=64*1024;
@@ -128,7 +158,7 @@ impl<'a> Engine<'a>{
         let dns=udp::Socket::new(udp::PacketBuffer::new(&mut dns_rxmeta[..],&mut dns_rx[..]),
             udp::PacketBuffer::new(&mut dns_txmeta[..],&mut dns_tx[..]));
         let dns_handle=flows.add(dns);
-        Ok(Self{network,iface,flows,handle,client_handle,dns_handle,open:None,adapter,last:now,stopped:false,failed:None,pending:[0;TURN_BYTES],pending_length:0,pending_offset:0,active_flow:false,stats:Statistics::new()})
+        Ok(Self{network,seed,iface,flows,handle,client_handle,dns_handle,open:None,adapter,last:now,stopped:false,failed:None,pending:[0;TURN_BYTES],pending_length:0,pending_offset:0,active_flow:false,stats:Statistics::new()})
     }
     pub fn state(&self)->State{self.flows.get::<tcp::Socket>(self.handle).state()}
     /// Start the open-internet side. Asks for an address on the local network.
@@ -138,8 +168,38 @@ impl<'a> Engine<'a>{
         let tcp=alloc::vec::Vec::new();
         let dns=udp::Socket::new(udp::PacketBuffer::new(dns_rx_meta,dns_rx),udp::PacketBuffer::new(dns_tx_meta,dns_tx));
         let dns=self.flows.add(dns);let dhcp=self.flows.add(dhcpv4::Socket::new());
-        self.open=Some(Open{tcp,dns,dhcp,lease:None,next_port:OPEN_PORT_BASE,query_id:1,query_name:[0;255],query_len:0,resolver:[0;4]});
+        // IPv6 starts with the open side, so nothing else ever sees its traffic: the
+        // interface is made again with a link-local address from the MAC and SLAAC on,
+        // which asks the routers for a prefix and a default route.
+        #[allow(irrefutable_let_patterns)]
+        let HardwareAddress::Ethernet(mac)=self.iface.hardware_addr() else{return Err(Error::Mac)};
+        let mut config=InterfaceConfig::new(mac.into());config.random_seed=self.seed;config.slaac=true;
+        let addresses:alloc::vec::Vec<IpCidr>=self.iface.ip_addrs().to_vec();
+        let mut iface=Interface::new(config,&mut self.adapter,Instant::from_millis(self.last as i64));
+        iface.update_ip_addrs(|ips|{for a in addresses{let _=ips.push(a);}let _=ips.push(IpCidr::new(IpAddress::Ipv6(Ipv6Address::from(link_local(mac.0))),64));});
+        let g=self.network.gateway;iface.routes_mut().add_default_ipv4_route(Ipv4Address::new(g[0],g[1],g[2],g[3])).map_err(|_|Error::Config)?;
+        self.iface=iface;
+        let query=Question{id:1,name:[0;255],len:0,resolver:[0;4],six:false,v4:None,v6:None,done4:true,done6:true,first_at:0};
+        self.open=Some(Open{tcp,udp:alloc::vec::Vec::new(),dns,dhcp,lease:None,next_port:OPEN_PORT_BASE,next_udp_port:UDP_PORT_BASE,query});
         Ok(())
+    }
+    /// The global IPv6 address SLAAC gave, if any.
+    pub fn open_global6(&self)->Option<[u8;16]>{
+        self.open.as_ref()?;
+        self.iface.ip_addrs().iter().find_map(|c|match c{IpCidr::Ipv6(c)=>Some(c.address().octets()).filter(|a|!is_link_local(a)&&a[0]!=0xff&&*a!=[0;16]),_=>None})
+    }
+    /// The IPv6 default router, if one advertised itself.
+    pub fn open_router6(&self)->Option<[u8;16]>{
+        self.open.as_ref()?;
+        match self.iface.routes().get_default_ipv6_route()?.via_router{IpAddress::Ipv6(v)=>Some(v.octets()),_=>None}
+    }
+    /// The open side can reach the internet: it has a DHCP lease or a global IPv6 address.
+    pub fn open_ready(&self)->bool{self.open_lease().is_some()||self.open_global6().is_some()}
+    /// The machine's addresses on the open side, with their prefix lengths: the leased
+    /// IPv4 address and every IPv6 address.
+    pub fn open_addresses(&self)->alloc::vec::Vec<(Address,u8)>{
+        let leased=self.open_lease().is_some();
+        self.iface.ip_addrs().iter().filter(|c|leased||matches!(c,IpCidr::Ipv6(_))).map(|c|(Address::of(c.address()),c.prefix_len())).collect()
     }
     pub fn open_lease(&self)->Option<Lease>{self.open.as_ref()?.lease}
     /// Open-internet flows made so far.
@@ -165,7 +225,8 @@ impl<'a> Engine<'a>{
             Some(dhcpv4::Event::Configured(config))=>{
                 let address=config.address.address().octets();
                 let lease=Lease{address,prefix:config.address.prefix_len(),gateway:config.router.map(|r|r.octets()),dns:config.dns_servers.first().map(|d|d.octets())};
-                self.iface.update_ip_addrs(|ips|{ips.clear();let _=ips.push(IpCidr::Ipv4(config.address));});
+                // The lease replaces the IPv4 address; the IPv6 ones stay.
+                self.iface.update_ip_addrs(|ips|{ips.retain(|c|!matches!(c,IpCidr::Ipv4(_)));let _=ips.push(IpCidr::Ipv4(config.address));});
                 if let Some(router)=config.router{let _=self.iface.routes_mut().add_default_ipv4_route(router);}
                 self.network.local=address;
                 open.lease=Some(lease);
@@ -174,77 +235,203 @@ impl<'a> Engine<'a>{
             None=>{}
         }
     }
-    /// Ask the leased resolver about `host`. `open_resolved` gives the answer.
-    pub fn open_resolve(&mut self,host:&[u8])->Result<(),Error>{
+    /// Ask the leased resolver about `host`, IPv4 only. `open_resolved` gives the answer.
+    pub fn open_resolve(&mut self,host:&[u8])->Result<(),Error>{self.open_ask(host,false)}
+    /// Ask about `host` in both families: AAAA too when the machine has a global IPv6
+    /// address to use one from. `open_resolved_all` gives the answers.
+    pub fn open_resolve_all(&mut self,host:&[u8])->Result<(),Error>{let six=self.open_global6().is_some();self.open_ask(host,six)}
+    fn open_ask(&mut self,host:&[u8],six:bool)->Result<(),Error>{
         let local=self.network.local;
         let open=self.open.as_mut().ok_or(Error::Config)?;
         let lease=open.lease.ok_or(Error::Config)?;
         let resolver=lease.dns.ok_or(Error::Config)?;
-        open.query_len=dns_wire::encode_name(host,&mut open.query_name).ok_or(Error::Length)?;
-        open.query_id=open.query_id.wrapping_add(1).max(1);open.resolver=resolver;
-        let mut query=[0u8;DNS_BYTES];
-        let length=dns_wire::query_name(open.query_id,&open.query_name[..open.query_len],&mut query).map_err(|_|Error::Protocol)?;
+        let q=&mut open.query;
+        q.len=dns_wire::encode_name(host,&mut q.name).ok_or(Error::Length)?;
+        // The A question takes an odd id and the AAAA question the next, neither zero.
+        q.id=match q.id.wrapping_add(2){n if n>=0xFFFE=>1,n=>n|1};
+        q.resolver=resolver;q.six=six;q.v4=None;q.v6=None;q.done4=false;q.done6=!six;q.first_at=0;
         let port=OPEN_PORT_BASE-1;
         let socket=self.flows.get_mut::<udp::Socket>(open.dns);
         socket.close();
         socket.bind((IpAddress::v4(local[0],local[1],local[2],local[3]),port)).map_err(|_|Error::Protocol)?;
-        socket.send_slice(&query[..length],(IpAddress::v4(resolver[0],resolver[1],resolver[2],resolver[3]),53)).map_err(|_|Error::Protocol)
-    }
-    /// The next answer to the current question, if one arrived. Err for a final failure.
-    pub fn open_resolved(&mut self)->Result<Option<[u8;4]>,Error>{
-        let open=self.open.as_mut().ok_or(Error::Config)?;
-        let socket=self.flows.get_mut::<udp::Socket>(open.dns);
-        while socket.can_recv(){
-            let (bytes,meta)=socket.recv().map_err(|_|Error::Protocol)?;
-            if meta.endpoint.addr!=IpAddress::v4(open.resolver[0],open.resolver[1],open.resolver[2],open.resolver[3])||meta.endpoint.port!=53{continue;}
-            match dns_wire::parse_name(open.query_id,&open.query_name[..open.query_len],bytes){
-                Ok(Some(answer))=>return Ok(Some(answer.address)),
-                Ok(None)=>continue,
-                Err(_)=>return Err(Error::Protocol),
-            }
+        let to=(IpAddress::v4(resolver[0],resolver[1],resolver[2],resolver[3]),53);
+        for (id,kind) in [(q.id,dns_wire::A),(q.id+1,dns_wire::AAAA)]{
+            if kind==dns_wire::AAAA&&!six{continue;}
+            let mut query=[0u8;DNS_BYTES];
+            let length=dns_wire::query_type(id,&q.name[..q.len],kind,&mut query).map_err(|_|Error::Protocol)?;
+            socket.send_slice(&query[..length],to).map_err(|_|Error::Protocol)?;
         }
+        Ok(())
+    }
+    /// Takes the replies that came for the current question.
+    fn open_collect(&mut self){
+        let now=self.last;
+        let Some(open)=self.open.as_mut() else{return};
+        let socket=self.flows.get_mut::<udp::Socket>(open.dns);
+        let q=&mut open.query;
+        while let Ok((bytes,meta))=socket.recv(){
+            if meta.endpoint.addr!=IpAddress::v4(q.resolver[0],q.resolver[1],q.resolver[2],q.resolver[3])||meta.endpoint.port!=53||bytes.len()<2{continue;}
+            let id=u16::from_be_bytes([bytes[0],bytes[1]]);
+            let kind=if id==q.id&&!q.done4{dns_wire::A}else if id==q.id+1&&q.six&&!q.done6{dns_wire::AAAA}else{continue};
+            let found=match dns_wire::parse_type(id,&q.name[..q.len],kind,bytes){
+                Ok(None)=>continue,
+                Ok(Some(f))=>Some(f.address),
+                // A family with no usable answer is done with none; the other may still have one.
+                Err(_)=>None,
+            };
+            if kind==dns_wire::A{q.done4=true;q.v4=found.map(|a|[a[0],a[1],a[2],a[3]]);}else{q.done6=true;q.v6=found;}
+            if found.is_some()&&q.first_at==0{q.first_at=now.max(1);}
+        }
+    }
+    /// The IPv4 answer to the current question, if it arrived. Err for a final failure.
+    pub fn open_resolved(&mut self)->Result<Option<[u8;4]>,Error>{
+        self.open_collect();
+        let q=&self.open.as_ref().ok_or(Error::Config)?.query;
+        match (q.v4,q.done4){(Some(a),_)=>Ok(Some(a)),(None,true)=>Err(Error::Protocol),_=>Ok(None)}
+    }
+    /// The answers to the current question in both families, once both came or one
+    /// came and the other has had `RESOLUTION_DELAY_MS` more. Err when neither has any.
+    pub fn open_resolved_all(&mut self)->Result<Option<Answers>,Error>{
+        self.open_collect();
+        let now=self.last;
+        let q=&self.open.as_ref().ok_or(Error::Config)?.query;
+        let answers=Answers{v6:q.v6,v4:q.v4};
+        let any=q.v4.is_some()||q.v6.is_some();
+        if q.done4&&q.done6{return if any{Ok(Some(answers))}else{Err(Error::Protocol)};}
+        if any&&now.saturating_sub(q.first_at)>=RESOLUTION_DELAY_MS{return Ok(Some(answers));}
         Ok(None)
     }
-    pub fn open_connect(&mut self,flow:usize,address:[u8;4],remote:u16)->Result<(),Error>{
+    fn tcp_handle(&self,flow:usize)->Result<SocketHandle,Error>{self.open.as_ref().ok_or(Error::Config)?.tcp.get(flow).copied().ok_or(Error::Length)}
+    /// Connects flow `flow` to `address`. IPv4 needs the lease; IPv6 takes its source
+    /// address by RFC 6724 from the ones SLAAC gave.
+    pub fn open_connect(&mut self,flow:usize,address:Address,remote:u16)->Result<(),Error>{
         let local=self.network.local;
+        let six=self.open_global6().is_some();
         let open=self.open.as_mut().ok_or(Error::Config)?;
-        if open.lease.is_none(){return Err(Error::Config);}
+        match address{
+            Address::V4(_) if open.lease.is_none()=>return Err(Error::Config),
+            Address::V6(a) if !six&&!is_link_local(&a)=>return Err(Error::Config),
+            _=>{}
+        }
         open.next_port=if open.next_port>=OPEN_PORT_BASE+7000{OPEN_PORT_BASE}else{open.next_port+1};
         let port=open.next_port;
-        let flow=self.flows.get_mut::<tcp::Socket>(*open.tcp.get(flow).ok_or(Error::Length)?);
+        let handle=*open.tcp.get(flow).ok_or(Error::Length)?;
+        let flow=self.flows.get_mut::<tcp::Socket>(handle);
         flow.abort();
-        flow.connect(self.iface.context(),(IpAddress::v4(address[0],address[1],address[2],address[3]),remote),
-            (IpAddress::v4(local[0],local[1],local[2],local[3]),port)).map_err(|_|Error::Protocol)
+        let local=match address{Address::V4(_)=>IpListenEndpoint{addr:Some(IpAddress::v4(local[0],local[1],local[2],local[3])),port},Address::V6(_)=>IpListenEndpoint{addr:None,port}};
+        flow.connect(self.iface.context(),(address.ip(),remote),local).map_err(|_|Error::Protocol)
     }
+    /// Makes flow `flow` listen on `port`, for either family. Another flow listening there
+    /// already, or a port that is not a program's, is `Error::Busy`.
+    pub fn open_listen(&mut self,flow:usize,port:u16)->Result<(),Error>{
+        if !program_port(port){return Err(Error::Busy);}
+        let handle=self.tcp_handle(flow)?;
+        let open=self.open.as_ref().ok_or(Error::Config)?;
+        if open.tcp.iter().any(|h|*h!=handle&&{let s=self.flows.get::<tcp::Socket>(*h);s.state()==State::Listen&&s.listen_endpoint().port==port}){return Err(Error::Busy);}
+        let flow=self.flows.get_mut::<tcp::Socket>(handle);
+        flow.abort();
+        flow.listen(IpListenEndpoint{addr:None,port}).map_err(|_|Error::Protocol)
+    }
+    /// A listening flow a peer has connected to.
+    pub fn open_connected(&self,flow:usize)->bool{
+        self.tcp_handle(flow).is_ok_and(|h|!matches!(self.flows.get::<tcp::Socket>(h).state(),State::Listen|State::SynReceived|State::SynSent|State::Closed))
+    }
+    /// The far end of flow `flow`.
+    pub fn open_peer(&self,flow:usize)->Option<(Address,u16)>{
+        let e=self.flows.get::<tcp::Socket>(self.tcp_handle(flow).ok()?).remote_endpoint()?;
+        Some((Address::of(e.addr),e.port))
+    }
+    /// A flow nothing is using in the stack, so a new caller can take it without cutting
+    /// off a connection still finishing.
+    pub fn open_idle(&self,flow:usize)->bool{self.tcp_handle(flow).is_ok_and(|h|self.flows.get::<tcp::Socket>(h).state()==State::Closed)}
     pub fn open_state(&self,flow:usize)->OpenState{
-        let Some(open)=self.open.as_ref() else{return OpenState::Closed};
-        let Some(&handle)=open.tcp.get(flow) else{return OpenState::Closed};
+        let Ok(handle)=self.tcp_handle(flow) else{return OpenState::Closed};
         let flow=self.flows.get::<tcp::Socket>(handle);
         match flow.state(){
-            State::SynSent|State::SynReceived=>OpenState::Opening,
-            State::Established=>OpenState::Open,
+            State::SynSent|State::SynReceived|State::Listen=>OpenState::Opening,
+            // After our own FIN the peer may still send.
+            State::Established|State::FinWait1|State::FinWait2=>OpenState::Open,
             _ if flow.can_recv()=>OpenState::PeerClosed,
-            State::CloseWait|State::FinWait1|State::FinWait2|State::Closing|State::LastAck|State::TimeWait=>OpenState::PeerClosed,
+            State::CloseWait|State::Closing|State::LastAck|State::TimeWait=>OpenState::PeerClosed,
             _=>OpenState::Closed,
         }
     }
     pub fn open_send(&mut self,flow:usize,bytes:&[u8])->Result<usize,Error>{
-        let open=self.open.as_ref().ok_or(Error::Config)?;
-        let flow=self.flows.get_mut::<tcp::Socket>(*open.tcp.get(flow).ok_or(Error::Length)?);
+        let flow=self.flows.get_mut::<tcp::Socket>(self.tcp_handle(flow)?);
         // A flow the peer or we closed takes nothing more: say so, rather than 0 forever.
         if !flow.may_send(){return Err(Error::Protocol);}
         if !flow.can_send(){return Ok(0);}
         flow.send_slice(bytes).map_err(|_|Error::Protocol)
     }
     pub fn open_receive(&mut self,flow:usize,out:&mut[u8])->Result<usize,Error>{
-        let open=self.open.as_ref().ok_or(Error::Config)?;
-        let flow=self.flows.get_mut::<tcp::Socket>(*open.tcp.get(flow).ok_or(Error::Length)?);
+        let flow=self.flows.get_mut::<tcp::Socket>(self.tcp_handle(flow)?);
         if !flow.can_recv(){return Ok(0);}
         flow.recv_slice(out).map_err(|_|Error::Protocol)
     }
-    pub fn open_close(&mut self,flow:usize){
-        if let Some(&handle)=self.open.as_ref().and_then(|o|o.tcp.get(flow)){self.flows.get_mut::<tcp::Socket>(handle).abort();}
+    /// Sends the flow's FIN after what is queued.
+    pub fn open_shutdown(&mut self,flow:usize){
+        if let Ok(h)=self.tcp_handle(flow){self.flows.get_mut::<tcp::Socket>(h).close();}
     }
+    /// Lets the flow go: reset, unless it was shut down and is finishing on its own.
+    pub fn open_close(&mut self,flow:usize){
+        if let Ok(h)=self.tcp_handle(flow){
+            let s=self.flows.get_mut::<tcp::Socket>(h);
+            if !matches!(s.state(),State::FinWait1|State::FinWait2|State::Closing|State::TimeWait|State::LastAck){s.abort();}
+        }
+    }
+    /// Makes one more program UDP socket and gives its number.
+    pub fn open_add_udp(&mut self)->Result<usize,Error>{
+        let open=self.open.as_mut().ok_or(Error::Config)?;
+        let zeroed=|n:usize|->Result<alloc::vec::Vec<u8>,Error>{let mut v=alloc::vec::Vec::new();v.try_reserve_exact(n).map_err(|_|Error::Length)?;v.resize(n,0);Ok(v)};
+        let meta=||->Result<alloc::vec::Vec<udp::PacketMetadata>,Error>{let mut v=alloc::vec::Vec::new();v.try_reserve_exact(UDP_PACKETS).map_err(|_|Error::Length)?;v.resize(UDP_PACKETS,udp::PacketMetadata::EMPTY);Ok(v)};
+        let socket=udp::Socket::new(udp::PacketBuffer::new(meta()?,zeroed(UDP_BYTES)?),udp::PacketBuffer::new(meta()?,zeroed(UDP_BYTES)?));
+        open.udp.try_reserve(1).map_err(|_|Error::Length)?;
+        open.udp.push(self.flows.add(socket));
+        Ok(open.udp.len()-1)
+    }
+    fn udp_handle(&self,i:usize)->Result<SocketHandle,Error>{self.open.as_ref().ok_or(Error::Config)?.udp.get(i).copied().ok_or(Error::Length)}
+    /// Binds UDP socket `i` to `port`, or to a free one of the service's when 0, for
+    /// either family. Gives the port. A port in use or not a program's is `Error::Busy`.
+    pub fn open_udp_bind(&mut self,i:usize,port:u16)->Result<u16,Error>{
+        let handle=self.udp_handle(i)?;
+        let open=self.open.as_mut().ok_or(Error::Config)?;
+        let flows=&self.flows;
+        let udp=&open.udp;
+        let taken=|p:u16|udp.iter().any(|h|*h!=handle&&{let s=flows.get::<udp::Socket>(*h);s.is_open()&&s.endpoint().port==p});
+        let port=if port==0{
+            let mut found=None;
+            for _ in UDP_PORT_BASE..=UDP_PORT_LAST{
+                let p=open.next_udp_port;open.next_udp_port=if p>=UDP_PORT_LAST{UDP_PORT_BASE}else{p+1};
+                if !taken(p){found=Some(p);break;}
+            }
+            found.ok_or(Error::Busy)?
+        }else if !program_port(port)||taken(port){return Err(Error::Busy)}else{port};
+        let s=self.flows.get_mut::<udp::Socket>(handle);
+        s.close();
+        s.bind(IpListenEndpoint{addr:None,port}).map_err(|_|Error::Protocol)?;
+        Ok(port)
+    }
+    /// Queues one datagram. False when the queue has no room for it yet.
+    pub fn open_udp_send(&mut self,i:usize,to:Address,port:u16,payload:&[u8])->Result<bool,Error>{
+        let most=match to{Address::V4(_)=>UDP_PAYLOAD_V4,Address::V6(_)=>UDP_PAYLOAD_V6};
+        if payload.len()>most||port==0{return Err(Error::Length);}
+        let s=self.flows.get_mut::<udp::Socket>(self.udp_handle(i)?);
+        if !s.is_open(){return Err(Error::Config);}
+        match s.send_slice(payload,(to.ip(),port)){
+            Ok(())=>Ok(true),
+            Err(udp::SendError::BufferFull)=>Ok(false),
+            Err(_)=>Err(Error::Protocol),
+        }
+    }
+    /// Takes one datagram that came, if any: its sender, port and length copied (cut at
+    /// `out.len()`).
+    pub fn open_udp_receive(&mut self,i:usize,out:&mut[u8])->Result<Option<(Address,u16,usize)>,Error>{
+        let s=self.flows.get_mut::<udp::Socket>(self.udp_handle(i)?);
+        let Ok((bytes,meta))=s.recv() else{return Ok(None)};
+        let n=bytes.len().min(out.len());out[..n].copy_from_slice(&bytes[..n]);
+        Ok(Some((Address::of(meta.endpoint.addr),meta.endpoint.port,n)))
+    }
+    pub fn open_udp_close(&mut self,i:usize){if let Ok(h)=self.udp_handle(i){self.flows.get_mut::<udp::Socket>(h).close();}}
     pub fn statistics(&self)->Statistics{self.stats}
     pub fn failure(&self)->Option<Error>{self.failed}
     pub fn can_receive(&self)->bool{!self.stopped&&self.adapter.rx.is_none()}
@@ -343,7 +530,14 @@ impl<'a> Engine<'a>{
     /// retransmission timers. No DMA submission occurs in this library.
     pub fn advance(&mut self,now:u64){
         if self.stopped{return;}if now<self.last||now>i64::MAX as u64{self.stop(Error::Clock);return;}self.last=now;
-        let time=Instant::from_millis(now as i64);self.iface.poll_maintenance(time);
+        let time=Instant::from_millis(now as i64);
+        if self.open.is_some(){
+            // smoltcp 0.14's SLAAC adds its IPv6 default route only to a table holding no
+            // route of another family: the IPv4 one steps aside while SLAAC catches up.
+            let v4=self.iface.routes_mut().remove_default_ipv4_route();
+            self.iface.poll_maintenance(time);
+            if let Some(IpAddress::Ipv4(g))=v4.map(|r|r.via_router){let _=self.iface.routes_mut().add_default_ipv4_route(g);}
+        }else{self.iface.poll_maintenance(time);}
         let had_rx=self.adapter.rx.is_some();self.iface.poll_ingress_single(time,&mut self.adapter,&mut self.flows);
         if had_rx&&self.adapter.rx.is_none(){self.stats.packets=self.stats.packets.saturating_add(1);}
         let connection=self.flows.get_mut::<tcp::Socket>(self.handle);

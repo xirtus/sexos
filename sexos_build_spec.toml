@@ -8,7 +8,7 @@
 
 [spec]
 version = "1.0.0"
-abi_version_hash = "c0ed0fcabfe5bc9589ba226a453549d22dcaf38cfe82c96b62449105e024be9d"
+abi_version_hash = "659a35b765f88916d8dd806dd1afaed65a91be6f7633a86d537b129fe406be88"
 contract_sha256 = "093f260760273d6f40a0bab6330ea7f9d95f744a4d8a7464fb92241e10740df4"
 target = "x86_64-sex.json"
 
@@ -50,6 +50,7 @@ crates = [
   "apps/jot/Cargo.toml",
   "apps/files/Cargo.toml",
   "apps/peek/Cargo.toml",
+  "apps/talk/Cargo.toml",
   "apps/view/Cargo.toml",
   "apps/heaptest/Cargo.toml",
   "apps/bench/Cargo.toml",
@@ -197,7 +198,7 @@ action = "cargo_manifest"
 manifest = "servers/sexnet/Cargo.toml"
 source_artifact = "target/x86_64-sex/release/sexnet"
 dest_artifact = "iso_root/servers/sexnet"
-rustflags = "--cfg aes_force_soft --cfg polyval_force_soft"
+rustflags = "--cfg aes_force_soft --cfg polyval_force_soft --cfg chacha20_force_soft --cfg poly1305_force_soft"
 
 [[stage]]
 id = "build_kaleidoscope"
@@ -245,6 +246,14 @@ target = "x86_64-sex-app.json"
 manifest = "apps/peek/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/peek"
 dest_artifact = "iso_root/programs/peek"
+
+[[stage]]
+id = "build_talk"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/talk/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/talk"
+dest_artifact = "iso_root/programs/talk"
 
 [[stage]]
 id = "build_view"
