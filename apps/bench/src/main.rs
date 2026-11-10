@@ -83,6 +83,10 @@ fn run(window: &mut Window, r: &mut Report) -> Result<(), &'static str> {
     let t = tsc();
     for _ in 0..n { if files::size(window, FILE) != Ok(4 * MIB as u64) { return Err("wrong size"); } }
     r.add("file_stat", n, tsc() - t, "call");
+    // Answers come from Files' cache in this run's region until the file changes: a
+    // change must never leave an old answer behind.
+    files::write(window, FILE, &data[..4096]).map_err(|_| "rewrite failed")?;
+    if files::size(window, FILE) != Ok(4096) { return Err("stale size after a write"); }
 
     // A call to a service and its reply (Files answers PING at once): the IPC round
     // trip, against a Linux pipe round trip between two processes. After the file

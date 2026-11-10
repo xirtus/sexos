@@ -3929,3 +3929,13 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
 - **Keys**: Files trusts `SEXOS_RELEASE_KEY` (64 hex digits) or `keys/release.pub` at build time. A build with neither takes no updates. `tools/sexos-release` (host, not in the workspace) does `keygen`, `sign`, `public` and `verify`. Its `test` key is for gates only; only builds that set `SEXOS_RELEASE_KEY` to its public half trust it.
 - **Tests**: `sex_disk::update` host tests: state steps, signature and tampering, a full update on a Windows-like disk (slot B written, menu entries, FAT intact per mtools, rollback refused, a second update back to A). `scripts/update_gate.py` (QEMU + OVMF): install; a tampered index is refused; update over a 302 redirect into slot B; B starts, the trial starts and passes; the same release is "up to date"; version 3 into A, power cut right after Files starts; the next start falls back to B with `trial=failed`.
 - **Also fixed: no network on UEFI PCs.** OVMF (and likely real UEFI firmware) leaves network controllers bus-mastering after boot, and sexnet quarantines a NIC it finds mastering (`UnknownMaster`). The kernel now quiesces sexnet's leased controllers at BOOT, as it already did for a restarted run, so sexnet proves custody from idle.
+## Intel Wi-Fi, stage W5e: traffic over Wi-Fi (2026-11-10)
+- **What:** new `sex_wifi::link` carries Ethernet frames over the connection. Outgoing
+  frames are encrypted by the firmware on WPA2. Incoming frames are checked for the
+  firmware's decrypt status and for PN replay. sexnet moves its IP stack onto Wi-Fi
+  while the link is up, then back to the wired port. RX MPDU padding is now removed
+  for data frames too.
+- **Evidence:** `scripts/wifi_host_gate.sh` (45 driver tests). A test sends ARP over
+  WPA2 on the firmware model and receives decrypted frames, a replay, an undecrypted
+  frame, a relayed own broadcast and a deauthentication.
+- **ABI / kernel:** none.
