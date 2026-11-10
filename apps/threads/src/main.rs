@@ -76,6 +76,8 @@ fn split(out: &mut [u32], bands: usize) {
     });
 }
 
+/// The last timed wait: ticks waited << 8 | status, printed if the check fails.
+static TIMED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 static SPIN: AtomicBool = AtomicBool::new(true);
 
 /// Each task's own: one with a starting value (.tdata), one zeroed (.tbss).
@@ -139,15 +141,18 @@ fn pthread_check() -> Result<u64, &'static str> {
         pthread_condattr_setclock(&mut attr, 1);
         let mut quiet: pthread_cond_t = core::mem::zeroed();
         pthread_cond_init(&mut quiet, &attr);
+        // The start is read before the clock, so a tick between the two cannot make
+        // an on-time wake look one tick early.
+        let start = sex_pdx::get_ticks();
         let mut now = sex_libc::time::timespec { tv_sec: 0, tv_nsec: 0 };
         sex_libc::time::clock_gettime(1, &mut now);
-        let start = sex_pdx::get_ticks();
         let mut until = sex_libc::time::timespec { tv_sec: now.tv_sec, tv_nsec: now.tv_nsec + 150_000_000 };
         if until.tv_nsec >= 1_000_000_000 { until.tv_sec += 1; until.tv_nsec -= 1_000_000_000; }
         pthread_mutex_lock(core::ptr::addr_of_mut!(LOCK));
         let timed = pthread_cond_timedwait(&mut quiet, core::ptr::addr_of_mut!(LOCK), &until);
         pthread_mutex_unlock(core::ptr::addr_of_mut!(LOCK));
         let waited = sex_pdx::get_ticks() - start;
+        crate::TIMED.store((waited << 8) | (timed as u64 & 0xFF), Ordering::Relaxed);
         if timed != ETIMEDOUT || !(150..2000).contains(&waited) { return Err("timed wait"); }
         if ONCES.load(Ordering::Relaxed) != 1 { return Err("once"); }
         if DTORS.load(Ordering::Relaxed) != 4 { return Err("destructor"); }
@@ -205,8 +210,32 @@ pub extern "C" fn _start() -> ! {
         sex_pdx::serial_record!("[threads.fail] target={} task={} why=thread-locals shared good={} of {}", target, task, good, bands);
     }
     match pthread_check() {
-        Ok(count) => sex_pdx::serial_record!("[threads.pthread] target={} task={} threads=4 count={}", target, task, count),
-        Err(why) => sex_pdx::serial_record!("[threads.fail] target={} task={} why=pthread {}", target, task, why),
+        Ok(count) => {
+            sex_pdx::serial_record!("[threads.pthread] target={} task={} threads=4 count={}", target, task, count);
+            sex_pdx::serial_record!("[threads.timed] target={} task={} waited_ticks={}", target, task, TIMED.load(Ordering::Relaxed) >> 8);
+        }
+        Err(why) => {
+            let timed = TIMED.load(Ordering::Relaxed);
+            sex_pdx::serial_record!("[threads.fail] target={} task={} why=pthread {} waited_ticks={} status={}", target, task, why, timed >> 8, timed & 0xFF)
+        }
+    }
+    // A worker uses Files too: create, write, stat and read a file, then the main task
+    // checks what it saw. A worker's call must not sleep waiting for a reply that only
+    // wakes the main task.
+    static FILE_STEP: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+    if let Ok(h) = thread::spawn(|| {
+        use sex_app::files::direct;
+        let step = |n: u32| FILE_STEP.store(n, Ordering::Release);
+        let _ = direct::create(b"worker.txt");
+        step(1); if direct::write_at(b"worker.txt", 0, b"from a worker") != Ok(13) { return; }
+        step(2); if !direct::stat(b"worker.txt").is_ok_and(|st| st.size == 13) { return; }
+        let mut back = [0u8; 13];
+        step(3); if direct::read_at(b"worker.txt", 0, &mut back) != Ok(13) || &back != b"from a worker" { return; }
+        step(4);
+    }) { h.join(); }
+    match FILE_STEP.load(Ordering::Acquire) {
+        4 => sex_pdx::serial_record!("[threads.files] target={} task={} worker=1 ok=1", target, task),
+        n => sex_pdx::serial_record!("[threads.fail] target={} task={} why=worker file request failed at step {}", target, task, n),
     }
     let pixels = window.pixels();
     pixels[..W * H].copy_from_slice(&many);

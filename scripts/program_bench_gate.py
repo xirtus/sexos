@@ -21,7 +21,7 @@ def main():
   q.key('ret')
   m=g['wait'](r'\[bench\.(done|fail)\][^\n]*\n',s,900);assert m[1]=='done',m[0]
   results={n:int(c) for n,c in re.findall(r'\[bench\] name=(\w+) ops=\d+ cycles=(\d+)',t()[s:])}
-  assert len(results)==9,results
+  assert len(results)==10,results
   (a.out/'bench.json').write_text(json.dumps(results));print({'ok':True,'cores':os.environ.get('SEXOS_GATE_CORES','1'),**results})
  finally:g['stop']()
 if __name__=='__main__':main()

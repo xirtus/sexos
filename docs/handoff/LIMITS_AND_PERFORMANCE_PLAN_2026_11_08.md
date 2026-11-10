@@ -382,3 +382,99 @@ when free memory is a quarter above the mark, so nothing flaps. Transitions log
   Close the kernel logs level 0 and the next run starts at normal. Green at 1 and 4 cores.
 - Next: consumers. The browser drops decoded images and caches on LOW, Play shrinks
   buffers, and Desk shows a warning on CRITICAL.
+
+### Stage 7a: latency classes and wake preemption (2026-11-10)
+
+Each core now has two run queues. Interactive tasks (sexdisplay, silk-shell, sexinput,
+sexusb, silkbar) that are woken go to an urgent queue, taken ahead of the normal one,
+at most 16 times in a row while a normal task waits. A task switched out still runnable
+(its time ran out, or it yielded) always waits in the normal queue, so a desktop
+service that polls cannot starve the rest of its core. When an interactive wake lands
+on a core running a normal task in user code, the waker sends that core (itself
+included) the new `PREEMPT_VECTOR` (0xF2); its handler shares the timer's switching
+stub, so the normal task gives way at once instead of at its tick. Sound (sexbell)
+stays normal: its device ring covers a scheduling delay, and it needs a deadline class.
+
+The kernel counts wake-to-run latency per class (TSC cycles, a power-of-two histogram)
+and logs `[sched.latency] class= wakes= avg_cycles= max_cycles= preemptions= hist=`
+every 2048 ticks. New gate `latency_classes`: `run bench spin` computes for ~20 G
+cycles with no system call while the pointer moves, then the normal bench runs.
+
+| 1 core, spinner on the desktop's core (TCG) | before | after |
+|---|---|---|
+| interactive wake, average | 359k cycles | 130k cycles |
+| interactive wake, p50 | <131k | <66k |
+| interactive wake, p90 | <1.05M | <262k |
+| interactive wake, p99 | <4.2M | <2.1M |
+
+At 4 cores programs run on cores 2 and up, away from the desktop's core 0, so the
+classes matter less there; the gate still checks the counters. Normal tasks wait a bit
+longer on a shared core, which is the trade Linux's wakeup preemption makes too.
+
+- ABI: none for programs. Kernel-internal: vector 0xF2; `interrupts.rs` is an ABI
+  input, so `abi_version_hash` is recomputed.
+- Gates green at 1 and 4 cores: latency_classes, program_bench, program_file,
+  program_disk, program_store, filesystem, program_pool, program_heap, program_launch,
+  program_threads, program_view.
+- Next (7b): a deadline class for sound and video frames; latency classes for programs
+  that own the focused window; PCID so a switch keeps the TLB.
+
+### Head-to-head with Linux (2026-11-10)
+
+Same emulated machine for both (QEMU TCG, q35, `-cpu max`, NVMe, 512 MiB). Linux is
+the Ubuntu 6.8 kernel with `tools/bench/linux/bench.c` as `/init`
+(`tools/bench/linux/run.sh vmlinuz CORES mods/`); SexOS is `run bench`
+(`scripts/program_bench_gate.py`). Cycles per operation, lower is better.
+
+Under TCG every `wrpkru` costs ~3,000 cycles (Linux measures 2.7k–3.7k) because the
+emulator flushes its TLB; on a real PKU CPU it is ~20–30 cycles. A SexOS system call does
+two or three, so "SexOS, PKU emulated" is dominated by the emulator. "SexOS, no PKU"
+boots with `SEXOS_GATE_CPU=max,-pku,+rdseed`: the same kernel and services without
+the key writes, which is close to what real hardware pays (add ~75 cycles a call).
+
+| 1 core | Linux 6.8 | SexOS, no PKU | SexOS, PKU emulated |
+|---|---|---|---|
+| null system call | 1,175 | **721** | 29,348 |
+| IPC round trip (Linux: pipe) | 218,249 | **33,511** | 350,547 |
+| Linux futex round trip (threads) | 73,975 | | |
+| Linux Unix socket round trip | 451,970 | | |
+| allocate + touch, per MiB | 9,890,972 | **2,641,614** | 2,735,243 |
+| memcpy, per MiB | 2,772,307 | **242,118** | 290,736 |
+| write 4 MiB + sync, per MiB | 27,173,658 | **15,511,307** | 26,995,628 |
+| read 4 MiB, per MiB | 24,303,475 | **6,998,589** | 14,503,695 |
+| one 4 KiB read | 626,300 | **385,774** | 905,564 |
+| file stat | **39,866** | 53,128 | 302,878 |
+| power-on to first program (TSC) | **7.46 G** | 10.18 G | 10.62 G |
+
+| 4 cores | Linux 6.8 | SexOS, no PKU | SexOS, PKU emulated |
+|---|---|---|---|
+| null system call | 1,251 | **866** | 43,994 |
+| IPC round trip (Linux: pipe) | 757,905 | **166,617** | 339,748 |
+| Linux futex / Unix socket | 408,103 / 821,835 | | |
+| read 4 MiB, per MiB | 49,902,067 | **22,503,351** | 27,685,289 |
+| one 4 KiB read | 627,768 | 1,005,053 | 1,499,044 |
+| file stat | **23,018** | 240,723 | 285,853 |
+
+Caveats, plainly:
+- Linux's disk tests use the raw block device (O_DIRECT for 4 KiB); SexOS's go through
+  its filesystem and may hit Files' cache for the 4 KiB reads.
+- Linux's memcpy is glibc's AVX path, slow under TCG; SexOS uses `rep movsb`.
+- Linux boots with `-kernel` (no bootloader); SexOS boots Limine from the ISO, so its
+  power-on number includes a bootloader Linux skips.
+- `yield` is not compared: Linux's initramfs has nothing else to run, SexOS's desktop does.
+
+Where SexOS is behind, and the plan:
+1. **file stat (1.3x slower on 1 core, 10x on 4):** a stat is a call to Files on
+   another core; Linux answers from its own dentry cache in the caller's system call.
+   Plan: Files publishes a read-only metadata map (sizes, times, generation) that
+   programs read without a call, the way Linux's vDSO serves the clock; a call only on a
+   miss. Also stage 6b (reply in registers on wake) and services per core.
+2. **one 4 KiB read at 4 cores (1.6x slower):** same cross-core trip to Files and
+   sexdrive. Plan: per-core NVMe submission queues (stage 8) and the same
+   services-per-core work.
+3. **boot (36% more cycles to the first program):** part is Limine + ISO. Plan: measure
+   from kernel entry, start services in parallel on all cores, and defer probes that
+   aren't needed for the first frame.
+4. **PKU switch cost on real hardware:** three `wrpkru` per call; stage 6b drops the
+   exit write when a call returns to the same domain, and the PKU PC will give real
+   numbers.

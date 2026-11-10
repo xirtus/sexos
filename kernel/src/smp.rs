@@ -19,6 +19,8 @@ static GUEST: AtomicU32 = AtomicU32::new(0);
 /// Where records run: core 1, or core 0 on a machine with only one.
 pub fn guest_core() -> u32 { GUEST.load(Ordering::Acquire) }
 pub const WAKE_VECTOR: u8 = 0xF1;
+/// Asks a core to let a just-woken interactive task run now (scheduler latency classes).
+pub const PREEMPT_VECTOR: u8 = 0xF2;
 /// Services proven to run away from core 0, as domain ids. Shell and Display stay:
 /// the kernel's lifecycle paths and the desktop's hot path still assume core 0.
 const MOVED: [u64; 4] = [13, 11, 8, 2];
