@@ -5621,6 +5621,40 @@ unsafe fn desktop_state_poll() {
     }
 }
 
+/// Display was started again (it announces itself ready a second time). Its scene is
+/// empty: register as window manager again, put the cursor and the active scene's
+/// windows back, and send every view's content and the focus again.
+unsafe fn display_came_back() {
+    static mut COMEBACKS: u32 = 0;
+    COMEBACKS += 1;
+    let _ = raw_pdx_call(SLOT_DISPLAY, OP_REGISTER_WM, 0, 0, 0);
+    let (cx, cy) = (desktop_width() / 2, desktop_height() / 2);
+    let _ = raw_pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_CURSOR, (cy as u64) << 32 | cx as u64, (18u64 << 32) | 12u64);
+    send_scene_render_tokens();
+    // SilkBar draws the bar from what it is told: tell it the workspace and focus again.
+    pdx_call(SLOT_SILKBAR, OP_SILKBAR_WORKSPACE_ACTIVE, ACTIVE_SCENE_IDX as u64, 0, 0);
+    pdx_call(SLOT_SILKBAR, OP_SILKBAR_FOCUS_STATE, 1, selected_window_options_mask() as u64, 0);
+    sync_scene_visibility();
+    for view in SPINDLE_VIEWS.iter_mut() { view.refresh(); }
+    for view in DOCUMENT_VIEWS.iter_mut() { view.refresh(); }
+    // Each window's own content: terminals and documents lay out again, panes come
+    // back, and programs get a resize so they draw again.
+    let mut shown = 0u32;
+    for frame in FRAMES.iter().flatten().filter(|f| f.scene_id == ACTIVE_SCENE_IDX && f.flags & FRAME_FLAG_MINIMIZED == 0) {
+        for tab in frame.tabs.iter().flatten() {
+            let sid = tab.surface_id;
+            let Some((x, y, w, h)) = get_surface_bounds(sid).filter(|_| surface_is_alive(sid)) else { continue };
+            apply_window_geometry(sid, x, y, w, h);
+            native_child_geometry(sid, x, y, w, h);
+            program_resize_note(sid, w, h);
+            shown += 1;
+        }
+    }
+    linen_paint_surface();
+    if FOCUSED_SURFACE_ID != 0 { pdx_call(SLOT_DISPLAY, 0xED, FOCUSED_SURFACE_ID, 0, 0); }
+    sex_pdx::serial_record!("[shell.display.back] times={} windows={} focus={}", COMEBACKS, shown, FOCUSED_SURFACE_ID);
+}
+
 unsafe fn spindle_view_poll(){
     for (i,(target,frame,slot)) in app_catalog::spindle_views().map(|s|(s.target,s.frame(),s.route_slot)).enumerate(){
         let live=APP_CUSTODY.iter().flatten().any(|e|e.target==target && !e.dead && !e.close_pending);
@@ -25453,6 +25487,8 @@ pub extern "C" fn _start() -> ! {
                 pdx_listen_raw(0)
             }
         };
+        // Display started again after a crash: it knows nothing of the desktop, so show it again.
+        if sex_pdx::display_ready::is_display_ready(&msg) { unsafe { display_came_back(); } continue; }
         unsafe {
             if shell_lifecycle_hint(&msg) { continue; }
             if shell_program_message(&msg) { continue; }

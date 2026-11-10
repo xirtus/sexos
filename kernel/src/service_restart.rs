@@ -18,7 +18,7 @@ const PTE_FRAME: u64 = 0x000f_ffff_ffff_f000;
 #[derive(Clone, Copy)]
 struct Page { frame: u64, pristine: u64 }
 struct Service { pd: u32, entry: u64, stack_top: u64, pages: [Page; MAX_PAGES], count: usize }
-const SERVICES: usize = 4;
+const SERVICES: usize = 5;
 static SERVICE: [Mutex<Service>; SERVICES] = [const { Mutex::new(Service { pd: 0, entry: 0, stack_top: 0, pages: [Page { frame: 0, pristine: 0 }; MAX_PAGES], count: 0 }) }; SERVICES];
 static RESTARTS: [AtomicU32; SERVICES] = [const { AtomicU32::new(0) }; SERVICES];
 static GAVE_UP: [core::sync::atomic::AtomicBool; SERVICES] = [const { core::sync::atomic::AtomicBool::new(false) }; SERVICES];
@@ -68,7 +68,7 @@ pub fn restarts_of(pd: u32) -> u32 {
 
 /// Display and Shell hold the whole desktop's state and cannot yet start again in place.
 /// If either ends, the machine stops (screen, record, restart) instead of freezing.
-const DESKTOP: [u32; 2] = [1, 3];
+const DESKTOP: [u32; 1] = [3];
 static DESKTOP_STOPPED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 /// From the timer, IF masked: a service whose task has ended starts again.
