@@ -6,7 +6,8 @@ Hovering a box with a `transition` fades its background through in-between colou
 import argparse,http.server,os,re,shutil,threading,time
 from PIL import Image
 from pathlib import Path
-from browser_gate_viewport import full_viewport
+from browser_gate_viewport import live_viewport,painted_viewport
+from web_surface_geometry import canvas_box
 ROOT=Path(__file__).resolve().parents[1]
 SITE=ROOT/'scripts/web_site'
 BAR=30
@@ -36,7 +37,7 @@ def main():
    elif k=='+':q.cmd('send-key',{'keys':[{'type':'qcode','data':'shift'},{'type':'qcode','data':'equal'}],'hold-time':80})
    else:q.key(KEYS.get(k,k))
    time.sleep(.06)
- def frames(s,target):return len(re.findall(r'\[web.shown\] w=410 h=330 ',t()[s:]))
+ def frames(s,target):return len(re.findall(r'\[web.shown\] w=\d+ h=\d+ ',t()[s:]))
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
   g['focus'](153);time.sleep(.5);s=len(t());keys(f'fetch {base}/web /bin/web');q.key('ret')
@@ -45,8 +46,9 @@ def main():
   m=g['wait'](r'\[web.ready\] target=(\d+) task=(\d+)',s,300);target,task=m[1],m[2]
   launch=g['wait'](rf'\[shell.program.launch\] target={target} task={task} surface=(\d+)',s,60);surface=int(launch[1])
   g['wait'](rf'\[display.app.pixels\] target={target} surface={surface} ',s,60);time.sleep(.5)
-  x,y,w,h=map(int,re.findall(rf'\[shell.tile.apply\] sid={surface} x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)',t())[-1])
-  ox,oy=x+8,y+36+BAR  # the page's top-left on screen
+  tile,pw,ph=painted_viewport(g,ROOT,surface)
+  bx,by,_,_=canvas_box(ROOT,tile,pw,ph)
+  ox,oy=bx,by+BAR  # the page's top-left on screen
   # Four seconds of animation: on the way the box is part red, part blue, and moving.
   mixed=0;deadline=time.time()+7
   while time.time()<deadline:
@@ -58,11 +60,12 @@ def main():
   ran=frames(s,target);assert ran>=30,f'only {ran} frames drawn while animating'
   s2=len(t());time.sleep(3);after=frames(s2,target);assert after==0,f'{after} frames drawn after the animation ended'
   # Keep the initial animation timing intact; reveal the full page before the hover check.
-  x,y,w,h=full_viewport(g,ROOT,surface)
-  ox,oy=x+8,y+36+BAR
+  tile,pw,ph=live_viewport(g,ROOT,surface)
+  bx,by,_,_=canvas_box(ROOT,tile,pw,ph)
+  ox,oy=bx,by+BAR
   shot=a.out/'animate.ppm';q.cmd('screendump',{'filename':str(shot)});time.sleep(.5)
   img=Image.open(shot).convert('RGB')
-  img.crop((x+8,y+36,x+8+410,y+36+330)).save(a.out/'animate.png')
+  img.crop((bx,by,bx+pw,by+ph)).save(a.out/'animate.png')
   moved,left=img.getpixel((ox+260,oy+40)),img.getpixel((ox+60,oy+40))
   assert moved[2]>200 and moved[0]<60,('the box ends blue at 200 px',moved)
   assert min(left)>200,('nothing left behind',left)

@@ -106,7 +106,7 @@ pub(super) fn publication(b: &mut Browser) {
     // This is a client request receipt, not an invented Display generation.
     // Correlate [display.app.pixels] and actual screenshots for admission/visibility.
     sex_pdx::serial_record!("[web.private.publication] local_seq={} target={} task={} window={}x{} requested={}x{} view={}x{} frame_count={} items={} full_redraw={} pixel_generation=unavailable",
-        seq, b.window.target, b.window.task, window.0, window.1, super::W, super::H, b.view.0, b.view.1, b.frames.len(), b.page.items.len(), b.full_redraw as u8);
+        seq, b.window.target, b.window.task, window.0, window.1, b.surface.w, b.surface.h, b.view.0, b.view.1, b.frames.len(), b.page.items.len(), b.full_redraw as u8);
 }
 
 static MESSAGES: AtomicU32 = AtomicU32::new(0);

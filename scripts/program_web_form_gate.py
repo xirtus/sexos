@@ -4,6 +4,8 @@ click toggles a checkbox, and Enter submits the form as a GET with every field; 
 page then submits a POST form, whose answer is the next page."""
 import argparse,http.server,json,os,re,shutil,threading,time
 from pathlib import Path
+from browser_gate_viewport import live_viewport
+from web_surface_geometry import canvas_box
 ROOT=Path(__file__).resolve().parents[1]
 SITE=ROOT/'scripts/web_site'
 BAR=30
@@ -52,8 +54,10 @@ def main():
   m=g['wait'](r'\[web.ready\] target=(\d+) task=(\d+)',s,120);target,task=m[1],m[2]
   launch=g['wait'](rf'\[shell.program.launch\] target={target} task={task} surface=(\d+)',s,60);surface=int(launch[1])
   time.sleep(3)
-  x,y,w,h=map(int,re.findall(rf'\[shell.tile.apply\] sid={surface} x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)',t())[-1])
-  ox,oy=x+8,y+36+BAR  # the page's top-left on screen
+  tile,pw,ph=live_viewport(g,ROOT,surface)
+  x,y,w,h=tile
+  bx,by,_,_=canvas_box(ROOT,tile,pw,ph)
+  ox,oy=bx,by+BAR  # the page's top-left on screen
   def click(px,py):move(ox+px,oy+py);button('left',True);button('left',False)
   s=len(t());click(20,10)
   g['wait'](r'\[web.console\] level=0 form focus',s,60)

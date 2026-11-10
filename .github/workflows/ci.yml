@@ -55,6 +55,11 @@ jobs:
       run: |
         SEXJS_NATIVE=0 cargo test --release -p sex-js --features baseline-jit -- --test-threads=1 --nocapture
         SEXJS_NATIVE=1 cargo test --release -p sex-js --features baseline-jit -- --test-threads=1 --nocapture
+    - name: Actual Web viewport bounds and tiny toolbar rendering
+      run: |
+        rustc --edition=2021 -O -C overflow-checks=on --test tests/web_viewport.rs -o "$RUNNER_TEMP/web-viewport"
+        "$RUNNER_TEMP/web-viewport"
+        cargo test --locked -p sex-web --test viewport
     - name: Intel Wi-Fi driver core (crypto vectors, handshakes, firmware files, power-up)
       run: bash scripts/wifi_host_gate.sh
     - name: Power off and restart through ACPI (host half)
@@ -117,6 +122,8 @@ jobs:
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends python3-pil
         truncate -s 1G "$RUNNER_TEMP/blank-webjs.img"
         python3 scripts/program_web_js_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-webjs.img" --out "$RUNNER_TEMP/sexos-runtime/web-js"
+    - name: Actual Web maximize and restore with full viewport pixels
+      run: python3 scripts/program_web_viewport_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-webjs.img" --out "$RUNNER_TEMP/sexos-runtime/web-viewport"
     - name: Classic script resources and fetch CORS isolation
       run: |
         truncate -s 1G "$RUNNER_TEMP/blank-classic.img"
