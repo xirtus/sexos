@@ -3750,7 +3750,7 @@ Follow-up to the boot log and crash records work (`BOOT_LOG_AND_CRASH_RECORDS_20
   session protection. Versions checked against the x17's real firmware.
 - **Spindle:** `wifi` numbers the networks; `wifi join N` joins one (boot log
   `[wifi.joined]` or `[wifi.failed] step=join`).
-- **Evidence:** `scripts/wifi_host_gate.sh` (34 driver tests): command order, bytes and
+- **Evidence:** `scripts/wifi_host_gate.sh` (35 driver tests): command order, bytes and
   sizes on the firmware model, failure paths, real firmware versions.
 - **ABI / kernel:** none. W5 is split into W5a-W5e (INTEL_WIFI section 11).
 

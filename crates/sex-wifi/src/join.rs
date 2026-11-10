@@ -43,6 +43,7 @@ const PHY_RX_CHAIN_VALID_POS: u32 = 1;
 const PHY_RX_CHAIN_CNT_POS: u32 = 10;
 const PHY_RX_CHAIN_MIMO_CNT_POS: u32 = 12;
 const LMAC_24G_INDEX: u32 = 0;
+const LMAC_5G_INDEX: u32 = 1;
 const FW_CTXT_INVALID: u32 = 0xffff_ffff;
 const STA_FLG_FAT_EN_MSK: u32 = 3 << 26;
 const STA_FLG_MIMO_EN_MSK: u32 = 3 << 28;
@@ -117,10 +118,16 @@ pub fn rx_chain_info(rx_antennas: u8) -> u32 {
     (rx_antennas as u32) << PHY_RX_CHAIN_VALID_POS | 1 << PHY_RX_CHAIN_CNT_POS | 1 << PHY_RX_CHAIN_MIMO_CNT_POS
 }
 
+/// The LMAC a context runs on: the 5 GHz one only on dual-band (CDB) firmware
+/// for a 5 GHz channel, as iwx's PHY and binding commands choose it.
+pub fn lmac(channel: u8, cdb: bool) -> u32 {
+    if channel <= 14 || !cdb { LMAC_24G_INDEX } else { LMAC_5G_INDEX }
+}
+
 /// PHY_CONTEXT_CMD v3/v4 for a 20 MHz channel. `uhb`: the firmware has the 6 GHz
 /// channel numbering (capa 48), which widens the channel field to 32 bits.
 /// `rx_chain`: only when RLC_CONFIG_CMD is not version 2 (it then carries it).
-pub fn phy_context(out: &mut [u8; PHY_CONTEXT_BYTES], action: u32, channel: u8, uhb: bool, rx_chain: Option<u32>) -> usize {
+pub fn phy_context(out: &mut [u8; PHY_CONTEXT_BYTES], action: u32, channel: u8, uhb: bool, cdb: bool, rx_chain: Option<u32>) -> usize {
     out.fill(0);
     put32(out, 0, PHY_ID);
     put32(out, 4, action);
@@ -135,7 +142,7 @@ pub fn phy_context(out: &mut [u8; PHY_CONTEXT_BYTES], action: u32, channel: u8, 
         out[9] = channel;
         12
     };
-    put32(out, after, LMAC_24G_INDEX);
+    put32(out, after, lmac(channel, cdb));
     if let Some(info) = rx_chain { put32(out, after + 4, info); }
     if uhb { PHY_CONTEXT_BYTES } else { PHY_CONTEXT_V1_BYTES }
 }
@@ -193,8 +200,8 @@ pub fn mac_context(out: &mut [u8; MAC_CONTEXT_BYTES], action: u32, me: &[u8; 6],
     put32(out, sta + 36, aid.map_or(0, |a| (a & 0x3fff) as u32));
 }
 
-/// BINDING_CONTEXT_CMD v2: our MAC context on PHY context 0.
-pub fn binding(out: &mut [u8; BINDING_BYTES], action: u32) {
+/// BINDING_CONTEXT_CMD v2: our MAC context on PHY context 0, on the same LMAC.
+pub fn binding(out: &mut [u8; BINDING_BYTES], action: u32, channel: u8, cdb: bool) {
     out.fill(0);
     put32(out, 0, PHY_ID);
     put32(out, 4, action);
@@ -202,7 +209,7 @@ pub fn binding(out: &mut [u8; BINDING_BYTES], action: u32) {
     put32(out, 12, FW_CTXT_INVALID);
     put32(out, 16, FW_CTXT_INVALID);
     put32(out, 20, PHY_ID);
-    put32(out, 24, LMAC_24G_INDEX);
+    put32(out, 24, lmac(channel, cdb));
 }
 
 /// ADD_STA for the AP (`iwx_add_sta_cmd`, no HT yet). `update` modifies the
@@ -255,7 +262,7 @@ pub enum Step { Phy, Rlc, Mac, Binding, Station, Queue, Protect, Joined, Failed(
 
 /// Firmware facts for joining.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Versions { pub phy: u8, pub rlc: u8, pub scd_queue: u8, pub uhb: bool, pub mld: bool }
+pub struct Versions { pub phy: u8, pub rlc: u8, pub scd_queue: u8, pub uhb: bool, pub cdb: bool, pub mld: bool }
 impl Versions {
     pub fn of(fw: &Firmware<'_>, features: &Features, hw_rev: u32) -> Self {
         let v = |g, c| fw.command_version(g, c).map_or(0, |v| v.version);
@@ -266,6 +273,7 @@ impl Versions {
             phy: v(h::LONG_GROUP, h::PHY_CONTEXT_CMD), rlc: v(h::DATA_PATH_GROUP, h::RLC_CONFIG_CMD),
             scd_queue: v(h::DATA_PATH_GROUP, h::SCD_QUEUE_CONFIG_CMD),
             uhb: features.capa(u::CAPA_ULTRA_HB_CHANNELS),
+            cdb: features.capa(u::CAPA_CDB_SUPPORT),
             mld: features.capa(u::CAPA_MLD_API_SUPPORT) && ma,
         }
     }
@@ -313,13 +321,13 @@ impl Join {
         match step {
             Step::Phy => {
                 let mut c = [0u8; PHY_CONTEXT_BYTES];
-                let n = phy_context(&mut c, ACTION_ADD, self.target.channel, self.versions.uhb, (self.versions.rlc != 2).then_some(rx));
+                let n = phy_context(&mut c, ACTION_ADD, self.target.channel, self.versions.uhb, self.versions.cdb, (self.versions.rlc != 2).then_some(rx));
                 p[..n].copy_from_slice(&c[..n]);
                 (h::LONG_GROUP, h::PHY_CONTEXT_CMD, n)
             }
             Step::Rlc => { let mut c = [0u8; RLC_BYTES]; rlc(&mut c, rx); p[..RLC_BYTES].copy_from_slice(&c); (h::DATA_PATH_GROUP, h::RLC_CONFIG_CMD, RLC_BYTES) }
             Step::Mac => { mac_context(p, ACTION_ADD, &self.me, &self.target, None); (h::LONG_GROUP, h::MAC_CONTEXT_CMD, MAC_CONTEXT_BYTES) }
-            Step::Binding => { let mut c = [0u8; BINDING_BYTES]; binding(&mut c, ACTION_ADD); p[..BINDING_BYTES].copy_from_slice(&c); (h::LONG_GROUP, h::BINDING_CONTEXT_CMD, BINDING_BYTES) }
+            Step::Binding => { let mut c = [0u8; BINDING_BYTES]; binding(&mut c, ACTION_ADD, self.target.channel, self.versions.cdb); p[..BINDING_BYTES].copy_from_slice(&c); (h::LONG_GROUP, h::BINDING_CONTEXT_CMD, BINDING_BYTES) }
             Step::Station => { let mut c = [0u8; ADD_STA_BYTES]; add_station(&mut c, &self.target.bssid, false); p[..ADD_STA_BYTES].copy_from_slice(&c); (h::LONG_GROUP, h::ADD_STA, ADD_STA_BYTES) }
             Step::Queue => {
                 let (ring, counts) = (b.base + b.layout.tx_ring.offset, b.base + b.layout.tx_byte_counts.offset);

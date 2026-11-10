@@ -113,7 +113,7 @@ fn real_ax210_firmware_when_present() {
     assert!(layout.end < 4 << 20, "firmware plus rings fit in 4 MiB: {}", layout.end);
     // W5: the x17's firmware takes the join commands this driver sends.
     let v = join::Versions::of(&fw, &init::Features::of(&fw), 0x420);
-    assert_eq!(v, join::Versions { phy: 4, rlc: 2, scd_queue: 3, uhb: true, mld: false });
+    assert_eq!(v, join::Versions { phy: 4, rlc: 2, scd_queue: 3, uhb: true, cdb: false, mld: false });
     // The AX211-type MAC (0x44) would need the MLD API instead.
     assert!(join::Versions::of(&fw, &init::Features::of(&fw), 0x440).mld);
 }
@@ -1305,9 +1305,9 @@ fn run_join(j: &mut join::Join, i: &mut init::Init, b: &mut bringup::Bringup, m:
 #[test]
 fn x17_joins_the_channel_like_iwx_auth() {
     let (mut i, mut b, mut m, mut hw, mut sim, bss, v) = x17_ready();
-    assert_eq!(v, join::Versions { phy: 4, rlc: 2, scd_queue: 3, uhb: true, mld: false });
+    assert_eq!(v, join::Versions { phy: 4, rlc: 2, scd_queue: 3, uhb: true, cdb: false, mld: false });
     let target = join::Target::of(&bss, 6);
-    let mut j = join::Join::new(target, v, i.mac, i.features.rx_antennas(), hw.now);
+    let mut j = join::Join::new(target, v, i.mac, i.valid_rx_antennas(), hw.now);
     let before = sim.commands.len();
     run_join(&mut j, &mut i, &mut b, &mut m, &mut hw, &mut sim);
     assert_eq!(j.step, join::Step::Joined);
@@ -1359,6 +1359,20 @@ fn join_fails_on_a_refused_station_or_a_wrong_queue() {
 }
 
 #[test]
+fn join_uses_only_the_antennas_the_nvm_allows() {
+    let (mut i, mut b, mut m, mut hw, mut sim, bss, v) = x17_ready();
+    assert_eq!(i.valid_rx_antennas(), 3);
+    i.nvm.as_mut().unwrap().rx_chains = 0b10;
+    assert_eq!(i.valid_rx_antennas(), 0b10, "firmware A+B narrowed to the NVM's B");
+    let mut j = join::Join::new(join::Target::of(&bss, 6), v, i.mac, i.valid_rx_antennas(), hw.now);
+    let before = sim.commands.len();
+    run_join(&mut j, &mut i, &mut b, &mut m, &mut hw, &mut sim);
+    let rlc = &sim.commands[before + 1];
+    assert_eq!((rlc.0, rlc.1), (hcmd::DATA_PATH_GROUP, hcmd::RLC_CONFIG_CMD));
+    assert_eq!(u32::from_le_bytes(rlc.2[4..8].try_into().unwrap()), 0b10 << 1 | 1 << 10 | 1 << 12);
+}
+
+#[test]
 fn join_command_layouts() {
     // ACK rates (iwx_ack_rates): basic 1/2 Mb/s and 6 Mb/s on 2.4 GHz.
     let mut t = join::Target { bssid: [2, 0, 0, 0, 0, 1], channel: 1, beacon_interval: 100, dtim_period: 1,
@@ -1372,8 +1386,16 @@ fn join_command_layouts() {
     assert_eq!(join::ack_rates(&t).0, 1);
     // PHY context without the 6 GHz numbering: 28 bytes, band then channel in one word.
     let mut p = [0u8; join::PHY_CONTEXT_BYTES];
-    assert_eq!(join::phy_context(&mut p, join::ACTION_ADD, 36, false, Some(0x1406)), join::PHY_CONTEXT_V1_BYTES);
-    assert_eq!((p[8], p[9], u32::from_le_bytes(p[16..20].try_into().unwrap())), (0, 36, 0x1406));
+    assert_eq!(join::phy_context(&mut p, join::ACTION_ADD, 36, false, false, Some(0x1406)), join::PHY_CONTEXT_V1_BYTES);
+    assert_eq!((p[8], p[9], u32::from_le_bytes(p[12..16].try_into().unwrap()), u32::from_le_bytes(p[16..20].try_into().unwrap())), (0, 36, 0, 0x1406));
+    // Dual-band (CDB) firmware runs a 5 GHz channel on LMAC 1, in the PHY context and the binding alike.
+    join::phy_context(&mut p, join::ACTION_ADD, 36, true, true, None);
+    assert_eq!(u32::from_le_bytes(p[16..20].try_into().unwrap()), 1);
+    let mut bind = [0u8; join::BINDING_BYTES];
+    join::binding(&mut bind, join::ACTION_ADD, 36, true);
+    assert_eq!(u32::from_le_bytes(bind[24..28].try_into().unwrap()), 1);
+    join::binding(&mut bind, join::ACTION_ADD, 6, true);
+    assert_eq!(u32::from_le_bytes(bind[24..28].try_into().unwrap()), 0, "2.4 GHz stays on LMAC 0");
     // MAC context after association: the AID, no beacons, EDCA per FIFO.
     let mut mac = [0u8; join::MAC_CONTEXT_BYTES];
     join::mac_context(&mut mac, join::ACTION_MODIFY, &STA, &t, Some(0xc005));

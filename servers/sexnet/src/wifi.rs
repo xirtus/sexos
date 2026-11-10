@@ -270,7 +270,7 @@ impl Wifi {
         let target = join::Target::of(&n.bss, n.heard_on);
         self.joined_ssid = [0; 32];
         self.joined_ssid[..n.bss.ssid().len()].copy_from_slice(n.bss.ssid());
-        let j = Join::new(target, versions, i.mac, i.features.rx_antennas(), now_ticks * 1000);
+        let j = Join::new(target, versions, i.mac, i.valid_rx_antennas(), now_ticks * 1000);
         sex_pdx::serial_record!("[wifi.join.start] index={} channel={} step={:?} ticks={}", index, target.channel, j.step, now_ticks);
         self.join = Some(j);
         self.finished = false;

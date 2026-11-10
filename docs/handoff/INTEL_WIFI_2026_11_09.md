@@ -335,8 +335,11 @@ commands above. MA chips are refused for now with `Unsupported("mld_api")`.
 
 W5a (`sex_wifi::join`), in iwx_auth's order:
 
-1. PHY context 0 on the AP's channel, 20 MHz (wider channels are W6).
-2. RLC: both antennas valid, one idle and one active chain.
+1. PHY context 0 on the AP's channel, 20 MHz (wider channels are W6), on LMAC 0, or
+   LMAC 1 for a 5 GHz channel when the firmware is dual-band (CDB, capa 40; the binding
+   names the same LMAC).
+2. RLC: the receive antennas the firmware allows, narrowed by the NVM's mask
+   (`Init::valid_rx_antennas`), one idle and one active chain.
 3. MAC context 0: our address, the AP's, ACK rates from the AP's basic rates
    (`iwx_ack_rates`, now read from the beacon's rate elements), 802.11 default EDCA per
    FIFO, beacons let through until associated.
