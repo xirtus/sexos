@@ -45,6 +45,8 @@ jobs:
       run: bash scripts/hwdb_host_gate.sh
     - name: Bell sound rate conversion on the host
       run: bash scripts/sound_host_gate.sh
+    - name: Native screenshot custody and PNG output on the host
+      run: bash scripts/desktop_capture_host_gate.sh
     - name: Disk layouts (GPT, FAT, install beside other systems)
       run: cargo test --locked -p sex-disk --lib
     - name: Crash record format host regressions
@@ -119,6 +121,10 @@ jobs:
       run: |
         truncate -s 1G "$RUNNER_TEMP/blank-classic.img"
         python3 scripts/program_web_classic_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-classic.img" --out "$RUNNER_TEMP/sexos-runtime/web-classic"
+    - name: Native screenshot saved as a real PNG file
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/capture-source.img"
+        python3 scripts/desktop_capture_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/capture-source.img" --out "$RUNNER_TEMP/sexos-runtime/capture"
     - name: USB input paths
       run: GATE_DIR="$RUNNER_TEMP/sexos-usb" SKIP_BUILD=1 bash scripts/usb_path_gate.sh
     - name: Preserve runtime evidence
