@@ -1,54 +1,38 @@
 name: Rust CI
 
+# Gates run as parallel jobs. Each job sets up from shared caches (rustup,
+# cargo + target, FFmpeg, libc++); jobs that boot SexOS build their own ISO,
+# so no job waits on another. Every gate of the former single job still runs.
+
 on:
   push:
     branches: [ master ]
   pull_request:
     branches: [ master ]
+  merge_group:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
+  host:
+    name: Host regressions
     runs-on: ubuntu-latest
-    timeout-minutes: 45
-
+    timeout-minutes: 30
     steps:
     - uses: actions/checkout@v4
-    - name: Install build tools
-      run: sudo apt-get update && sudo apt-get install -y ripgrep xorriso qemu-system-x86 mtools gdisk dosfstools clang lld llvm nasm musl-dev cmake ninja-build meson acpica-tools
-    - name: Cache FFmpeg
-      uses: actions/cache@v4
+    - uses: ./.github/actions/setup
       with:
-        path: |
-          target/ffmpeg/lib
-          target/ffmpeg/include
-          target/ffmpeg/include-c
-        key: ffmpeg-${{ hashFiles('scripts/build_ffmpeg.sh') }}
-    - name: Build FFmpeg for programs
-      run: test -f target/ffmpeg/lib/libavcodec.a || bash scripts/build_ffmpeg.sh
-    - name: Cache libc++
-      uses: actions/cache@v4
-      with:
-        path: |
-          target/libcxx/lib
-          target/libcxx/include
-          target/libcxx/include-c
-        key: libcxx-${{ hashFiles('scripts/build_libcxx.sh') }}
-    - name: Build libc++ for programs
-      run: test -f target/libcxx/lib/libc++.a || bash scripts/build_libcxx.sh
-    - name: Prepare Limine
-      run: |
-        git init limine
-        git -C limine remote add origin https://github.com/limine-bootloader/limine.git
-        git -C limine fetch --depth=1 origin ca3a5b20d2501e3819983c5cf838c70c30ee532a
-        git -C limine checkout --detach FETCH_HEAD
-        make -C limine limine
+        qemu: "false"
     - name: Enforce root allowlist
       run: bash scripts/dev/check_root_allowlist.sh --strict
     - name: Host proof regressions
-      run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts/tests -p 'test_*.py' -v
+      run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts/tests -p 'test_*.py'
     - name: Other systems' filesystems (FAT, exFAT, ext4, NTFS) on the host
       run: bash scripts/volumes_host_gate.sh
     - name: IOMMU tables, page tables and lending window on the host
@@ -61,23 +45,49 @@ jobs:
       run: bash scripts/hwdb_host_gate.sh
     - name: Bell sound rate conversion on the host
       run: bash scripts/sound_host_gate.sh
-    - name: Fetch crates for offline host gates
-      run: cargo fetch --locked
     - name: Disk layouts (GPT, FAT, install beside other systems)
       run: cargo test --locked -p sex-disk --lib
     - name: Crash record format host regressions
       run: bash scripts/crash_log_host_gate.sh
     - name: Intel Wi-Fi driver core (crypto vectors, handshakes, firmware files, power-up)
       run: bash scripts/wifi_host_gate.sh
+    - name: Power off and restart through ACPI (host half)
+      run: bash scripts/power_host_gate.sh
+
+  truth:
+    name: Host kernel-model regressions (${{ matrix.shard }}/3)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2]
+    steps:
+    - uses: actions/checkout@v4
+    - uses: ./.github/actions/setup
+      with:
+        qemu: "false"
     - name: Host kernel-model regressions
-      run: |
-        python3 scripts/check_architectural_truth.py --run-host --evidence-dir "$RUNNER_TEMP/sexos-truth"
+      run: python3 scripts/check_architectural_truth.py --run-host --shard ${{ matrix.shard }}/3 --evidence-dir "$RUNNER_TEMP/sexos-truth"
+    - name: Preserve evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sexos-truth-${{ matrix.shard }}
+        path: ${{ runner.temp }}/sexos-truth
+        if-no-files-found: ignore
+
+  boot:
+    name: Build, boot and runtime gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+    - uses: actions/checkout@v4
+    - uses: ./.github/actions/setup
+      with:
+        save-cache: "true"
     - name: Build and boot via single entrypoint (mandatory)
       run: GATE_DIR="$RUNNER_TEMP/sexos-runtime" bash scripts/master_runtime_gate.sh --probe 60 --keep-log
-    - name: Ordinary Rust and C programs
-      run: |
-        truncate -s 1G "$RUNNER_TEMP/blank-programs.img"
-        python3 scripts/program_std_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/programs-std"
     - name: Compiled scheduler stack-release boundary
       run: SWITCH_EVIDENCE="$RUNNER_TEMP/sexos-runtime/scheduler-switch.txt" bash scripts/scheduler_switch_boundary_gate.sh
     - name: Timer PKRU save and restore boundary
@@ -90,44 +100,92 @@ jobs:
       run: MEMORY_AUTHORITY_LOG="$RUNNER_TEMP/sexos-runtime/serial.log" bash scripts/memory_authority_runtime_gate.sh
     - name: Guest sext paging and fault recovery
       run: PAGING_LOG="$RUNNER_TEMP/sexos-runtime/serial.log" bash scripts/paging_recovery_runtime_gate.sh
+    - name: Ordinary Rust and C programs
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/blank-programs.img"
+        python3 scripts/program_std_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/programs-std"
     - name: USB input paths
       run: GATE_DIR="$RUNNER_TEMP/sexos-usb" SKIP_BUILD=1 bash scripts/usb_path_gate.sh
-    - name: Intel RAID 0 on two NVMe drives, read only
-      run: sudo apt-get install -y gdisk && python3 scripts/raid_gate.py --out "$RUNNER_TEMP/sexos-raid"
-    - name: Power off and restart through ACPI
-      run: |
-        bash scripts/power_host_gate.sh
-        python3 scripts/power_acpi_gate.py --iso sexos-v1.0.0.iso --out "$RUNNER_TEMP/sexos-power"
-    - name: Discrete GPU powered off through ACPI
-      run: python3 scripts/dgpu_power_gate.py --iso sexos-v1.0.0.iso --out "$RUNNER_TEMP/sexos-dgpu"
-    - name: Reboot persistence and rendering
-      run: GATE_DIR="$RUNNER_TEMP/sexos-persistence" SKIP_BUILD=1 bash scripts/disk_persistence_gate.sh
-    - name: Task finish and quota cleanup with surviving client
-      run: GATE_DIR="$RUNNER_TEMP/sexos-cleanup-profiles" bash scripts/paging_cleanup_profiles_gate.sh
-    - name: App resource retirement and normal desktop close
-      run: GATE_DIR="$RUNNER_TEMP/sexos-app-resource-profiles" bash scripts/app_resource_profiles_gate.sh
-    - name: Syscall and IPC fuzzing
-      run: |
-        truncate -s 1G "$RUNNER_TEMP/fuzz-source.img"
-        python3 scripts/syscall_fuzz_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/fuzz-source.img" --out "$RUNNER_TEMP/sexos-fuzz"
-    - name: Boot log, stop screen, crash records and service restarts (probe build, last)
-      run: |
-        SEXOS_CRASH_PROBE=1 SEXOS_STOP_RESTART_SECONDS=8 ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/crash-probe-build.log" 2>&1 || (tail -50 "$RUNNER_TEMP/crash-probe-build.log"; exit 1)
-        truncate -s 1G "$RUNNER_TEMP/crash-source.img"
-        python3 scripts/crash_screen_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/crash-source.img" --out "$RUNNER_TEMP/sexos-crash"
     - name: Preserve runtime evidence
       if: always()
       uses: actions/upload-artifact@v4
       with:
         name: sexos-runtime-proof
         path: |
-          ${{ runner.temp }}/sexos-truth
           ${{ runner.temp }}/sexos-runtime
           ${{ runner.temp }}/sexos-usb
-          ${{ runner.temp }}/sexos-persistence
-          ${{ runner.temp }}/sexos-cleanup-profiles
-          ${{ runner.temp }}/sexos-app-resource-profiles
-          ${{ runner.temp }}/sexos-fuzz
-          ${{ runner.temp }}/sexos-crash
-          ${{ runner.temp }}/sexos-dgpu
         if-no-files-found: ignore
+
+  devices:
+    name: Disks, power and fuzzing
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+    - uses: actions/checkout@v4
+    - uses: ./.github/actions/setup
+    - name: Build the image
+      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/build.log"; exit 1)
+    - name: Intel RAID 0 on two NVMe drives, read only
+      run: python3 scripts/raid_gate.py --out "$RUNNER_TEMP/sexos-raid"
+    - name: Power off and restart through ACPI
+      run: python3 scripts/power_acpi_gate.py --iso sexos-v1.0.0.iso --out "$RUNNER_TEMP/sexos-power"
+    - name: Discrete GPU powered off through ACPI
+      run: python3 scripts/dgpu_power_gate.py --iso sexos-v1.0.0.iso --out "$RUNNER_TEMP/sexos-dgpu"
+    - name: Reboot persistence and rendering
+      run: GATE_DIR="$RUNNER_TEMP/sexos-persistence" SKIP_BUILD=1 bash scripts/disk_persistence_gate.sh
+    - name: Syscall and IPC fuzzing
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/fuzz-source.img"
+        python3 scripts/syscall_fuzz_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/fuzz-source.img" --out "$RUNNER_TEMP/sexos-fuzz"
+    - name: Preserve evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sexos-devices-proof
+        path: |
+          ${{ runner.temp }}/sexos-raid
+          ${{ runner.temp }}/sexos-power
+          ${{ runner.temp }}/sexos-dgpu
+          ${{ runner.temp }}/sexos-persistence
+          ${{ runner.temp }}/sexos-fuzz
+        if-no-files-found: ignore
+
+  profiles:
+    name: Proof builds (${{ matrix.gate }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        gate: [cleanup, app-resource, crash]
+    steps:
+    - uses: actions/checkout@v4
+    - uses: ./.github/actions/setup
+    - name: Task finish and quota cleanup with surviving client
+      if: matrix.gate == 'cleanup'
+      run: GATE_DIR="$RUNNER_TEMP/sexos-proof" bash scripts/paging_cleanup_profiles_gate.sh
+    - name: App resource retirement and normal desktop close
+      if: matrix.gate == 'app-resource'
+      run: GATE_DIR="$RUNNER_TEMP/sexos-proof" bash scripts/app_resource_profiles_gate.sh
+    - name: Boot log, stop screen, crash records and service restarts (probe build)
+      if: matrix.gate == 'crash'
+      run: |
+        SEXOS_CRASH_PROBE=1 SEXOS_STOP_RESTART_SECONDS=8 ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/crash-probe-build.log" 2>&1 || (tail -50 "$RUNNER_TEMP/crash-probe-build.log"; exit 1)
+        truncate -s 1G "$RUNNER_TEMP/crash-source.img"
+        python3 scripts/crash_screen_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/crash-source.img" --out "$RUNNER_TEMP/sexos-proof"
+    - name: Preserve evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sexos-proof-${{ matrix.gate }}
+        path: ${{ runner.temp }}/sexos-proof
+        if-no-files-found: ignore
+
+  # Single required check: keeps the old "build" check name for branch rules.
+  build:
+    if: always()
+    needs: [host, truth, boot, devices, profiles]
+    runs-on: ubuntu-latest
+    steps:
+    - run: |
+        echo '${{ toJSON(needs) }}' | python3 -c "import json,sys; r={k:v['result'] for k,v in json.load(sys.stdin).items()}; print(r); sys.exit(any(v!='success' for v in r.values()))"
