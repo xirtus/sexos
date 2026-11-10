@@ -64,6 +64,7 @@ pub fn init(sexdrive_pd_id: u32, sexdisplay_pd_id: u32, sexusb_pd_id: u32, sexne
             }
             Lease::Hda => class_lease(&dev, crate::device_lease::Kind::Hda, pd, slot, first),
             Lease::Ahci => class_lease(&dev, crate::device_lease::Kind::Ahci, pd, slot, first),
+            Lease::Wifi => class_lease(&dev, crate::device_lease::Kind::Wifi, pd, slot, first),
             Lease::Virtio => virtio(&dev, pd, slot, first),
             Lease::Display => display_lease(&dev, pd),
         };
@@ -200,8 +201,9 @@ fn virtio(dev: &crate::hal::pci::PciDevice, pd: &ProtectionDomain, slot: u64, fi
     true
 }
 
-/// HD Audio goes to the Bell service, AHCI to the drive service: one BAR view,
-/// memory and bus-master command bits, and (for the first device) a DMA pool.
+/// HD Audio goes to the Bell service, AHCI to the drive service, Intel Wi-Fi to
+/// the network service: one BAR view, memory and bus-master command bits, and
+/// (for the first device) a DMA pool.
 fn class_lease(dev: &crate::hal::pci::PciDevice, kind: crate::device_lease::Kind, pd: &ProtectionDomain, slot: u64, first: bool) -> bool {
     serial_println!("[kernel.pci.class.found] {:02x}:{:02x}.{} kind={:?} vendor={:04x} device={:04x}",
         dev.bus, dev.dev, dev.func, kind, dev.vendor_id, dev.device_id);

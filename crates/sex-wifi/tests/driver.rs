@@ -1,7 +1,7 @@
 //! Driver-level behaviour: chip table, firmware files, DMA layout, the power-up
 //! sequence against a register model, the 4-way handshake against an access
 //! point played by the authenticator helpers, and frames end to end.
-use sex_wifi::{ccmp, context, csr, devices, eapol, hcmd, ieee80211 as w, ucode};
+use sex_wifi::{bringup, ccmp, context, csr, devices, eapol, hcmd, ieee80211 as w, pack, rx, ucode};
 use std::collections::HashMap;
 
 const AP: [u8; 6] = [0x02, 0x11, 0x22, 0x33, 0x44, 0x55];
@@ -475,4 +475,180 @@ fn authentication_and_association_frames() {
     deauth[0] = 0xc0;
     deauth[24] = 3;
     assert_eq!(w::parse_disconnect(&deauth), Some(3));
+}
+
+impl context::DmaRead for Memory {
+    fn read(&self, offset: u64, out: &mut [u8]) { out.copy_from_slice(&self.0[offset as usize..offset as usize + out.len()]); }
+}
+
+/// What the firmware does with the receive ring: take the next posted page, write
+/// one notification into it, and report it on the used ring and the status word.
+fn firmware_delivers(m: &mut Memory, layout: &context::Layout, family: devices::Family, base: u64, slot: usize, packet: &[u8]) -> u16 {
+    let (addr, id) = if family == devices::Family::Ax210 {
+        let d = layout.rx_free.offset as usize + slot * 16;
+        (u64_at(&m.0, d as u64 + 8), u16::from_le_bytes([m.0[d], m.0[d + 1]]))
+    } else {
+        let v = u64_at(&m.0, layout.rx_free.offset + slot as u64 * 8);
+        (v & !0xfff, (v & 0xfff) as u16)
+    };
+    let page = (addr - base) as usize;
+    m.0[page..page + packet.len()].copy_from_slice(packet);
+    if family == devices::Family::Ax210 {
+        let u = layout.rx_used.offset as usize + slot * 32;
+        m.0[u + 4..u + 6].copy_from_slice(&id.to_le_bytes());
+    } else {
+        let u = layout.rx_used.offset as usize + slot * 4;
+        m.0[u..u + 4].copy_from_slice(&(id as u32).to_le_bytes());
+    }
+    let s = layout.rx_status.offset as usize;
+    m.0[s..s + 2].copy_from_slice(&((slot + 1) as u16).to_le_bytes());
+    id
+}
+
+fn alive_packet(ok: bool) -> Vec<u8> {
+    let mut b = vec![0u8; 128];
+    let len = 4 + 4 + 2 * 48 + 16;
+    b[0..4].copy_from_slice(&(len as u32).to_le_bytes());
+    b[4] = hcmd::ALIVE;
+    b[7] = 0x80;
+    b[8..10].copy_from_slice(&(if ok { hcmd::ALIVE_STATUS_OK } else { 0xdead }).to_le_bytes());
+    b[12..16].copy_from_slice(&83u32.to_le_bytes());
+    b
+}
+
+#[test]
+fn receive_ring_posts_pages_and_recycles_them_on_both_families() {
+    let file = synthetic_firmware();
+    let fw = ucode::Firmware::parse(&file).unwrap();
+    let image = fw.image();
+    const BASE: u64 = 0x2_0000_0000;
+    for family in [devices::Family::Gen22000, devices::Family::Ax210] {
+        let layout = context::Layout::plan(family, &image, 1234, 1 << 20).unwrap();
+        assert_eq!(layout.rx_buffers.len, context::RX_BUFFERS as u64 * 4096);
+        assert!(layout.rx_buffers.offset >= layout.paging[0].offset + 4096 && layout.end <= 1 << 20);
+        let mut m = Memory(vec![0; 1 << 20]);
+        layout.write(&mut m, BASE, &image, &[0xee; 1234], 0x420, false);
+        let mut ring = rx::Rx::new(family);
+        ring.fill(&mut m, &layout, BASE);
+        assert_eq!(ring.write_index(), 64);
+        assert!(ring.next(&m, &layout).is_none(), "nothing closed yet");
+        let mut hw = Chip::new();
+        ring.kick(&mut hw);
+        assert!(hw.writes.contains(&(rx::RFH_Q0_FRBDCB_WIDX_TRG, 64)));
+        // Two notifications: pages 0 and 1, in order.
+        firmware_delivers(&mut m, &layout, family, BASE, 0, &alive_packet(true));
+        firmware_delivers(&mut m, &layout, family, BASE, 1, &alive_packet(true));
+        assert_eq!(ring.next(&m, &layout), Some(Ok(0)));
+        assert_eq!(ring.next(&m, &layout), Some(Ok(1)));
+        assert_eq!(ring.next(&m, &layout), None);
+        // Page 0 goes back at entry 64, pointing at the same memory.
+        ring.post(&mut m, &layout, BASE, 0);
+        let page0 = BASE + rx::Rx::buffer(&layout, 0).offset;
+        if family == devices::Family::Ax210 {
+            assert_eq!(u64_at(&m.0, layout.rx_free.offset + 64 * 16 + 8), page0);
+        } else {
+            assert_eq!(u64_at(&m.0, layout.rx_free.offset + 64 * 8), page0);
+        }
+        // A used entry naming a page that was never posted is refused.
+        let u = if family == devices::Family::Ax210 { layout.rx_used.offset as usize + 2 * 32 + 4 } else { layout.rx_used.offset as usize + 2 * 4 };
+        m.0[u..u + 2].copy_from_slice(&900u16.to_le_bytes());
+        let s = layout.rx_status.offset as usize;
+        m.0[s..s + 2].copy_from_slice(&3u16.to_le_bytes());
+        assert_eq!(ring.next(&m, &layout), Some(Err(rx::Error::BadBuffer(900))));
+    }
+}
+
+#[test]
+fn bringup_reaches_alive_through_the_receive_ring() {
+    let file = synthetic_firmware();
+    let fw = ucode::Firmware::parse(&file).unwrap();
+    for (ok, want) in [(true, csr::Step::Alive), (false, csr::Step::Failed(csr::Failure::AliveTimeout))] {
+        let chip = devices::identify(0x2725, 0x1674, 0x420, 0).unwrap();
+        let base = 0x8000_0000u64;
+        let mut m = Memory(vec![0; 1 << 20]);
+        let mut b = bringup::Bringup::prepare(chip, &fw, &mut m, base, 1 << 20, 0x420, 0).unwrap();
+        // The image loader went into the region, and the free ring is full.
+        assert_eq!(m.0[b.layout.iml.offset as usize], 0xee);
+        let mut hw = Chip::new();
+        let mut started_at = None;
+        let mut delivered = false;
+        for _ in 0..2000 {
+            let t = hw.now;
+            if !b.advance(&mut hw, &mut m, t) { break; }
+            if started_at.is_none() && hw.prph_writes.contains(&(csr::UREG_CPU_INIT_RUN + 0x30_0000, 1)) {
+                // The free ring index was written before the CPU was started.
+                let kick = hw.writes.iter().position(|w| *w == (rx::RFH_Q0_FRBDCB_WIDX_TRG, 64)).expect("free ring kicked");
+                let start = hw.writes.iter().position(|w| w.0 == csr::PRPH_WDAT && w.1 == 1).unwrap();
+                assert!(kick < start, "free ring visible before CPU start");
+                started_at = Some(hw.now);
+            }
+            if let Some(s) = started_at { if !delivered && hw.now >= s + 3000 {
+                firmware_delivers(&mut m, &b.layout, chip.family, base, 0, &alive_packet(ok));
+                hw.alive_at = Some(hw.now);
+                delivered = true;
+            } }
+            hw.now += 1000;
+        }
+        assert_eq!(b.boot.step, want);
+        let alive = b.alive.expect("ALIVE parsed");
+        assert_eq!((alive.ok, alive.lmac_major), (ok, 83));
+        assert_eq!(b.notifications, 1);
+        assert_eq!(b.rx.write, 65, "page recycled");
+    }
+}
+
+#[test]
+fn firmware_pack_finds_checked_files() {
+    use sha2::Digest;
+    let files: [(&str, Vec<u8>); 2] = [("iwlwifi-ty-a0-gf-a0-77.ucode", vec![7u8; 5000]), ("iwlwifi-ty-a0-gf-a0.pnvm", vec![9u8; 100])];
+    let mut pack = Vec::new();
+    pack.extend_from_slice(pack::MAGIC);
+    pack.extend_from_slice(&(files.len() as u32).to_le_bytes());
+    pack.extend_from_slice(&0u32.to_le_bytes());
+    let mut at = 4096usize;
+    let mut data = vec![0u8; 0];
+    for (name, bytes) in &files {
+        let mut e = [0u8; pack::ENTRY];
+        e[..name.len()].copy_from_slice(name.as_bytes());
+        e[48..52].copy_from_slice(&(at as u32).to_le_bytes());
+        e[52..56].copy_from_slice(&(bytes.len() as u32).to_le_bytes());
+        e[56..88].copy_from_slice(&sha2::Sha256::digest(bytes));
+        pack.extend_from_slice(&e);
+        data.resize(at - 4096, 0);
+        data.extend_from_slice(bytes);
+        at = (4096 + data.len()).next_multiple_of(4096);
+    }
+    pack.resize(4096, 0);
+    pack.extend_from_slice(&data);
+    let p = pack::Pack::parse(&pack).unwrap();
+    assert_eq!(p.len(), 2);
+    assert_eq!(p.file("iwlwifi-ty-a0-gf-a0-77.ucode").unwrap(), &[7u8; 5000][..]);
+    assert_eq!(p.file("iwlwifi-ty-a0-gf-a0.pnvm").unwrap().len(), 100);
+    assert_eq!(p.file("iwlwifi-cc-a0-77.ucode").err(), Some(pack::Error::Missing));
+    let mut bad = pack.clone();
+    bad[4096] ^= 1;
+    assert_eq!(pack::Pack::parse(&bad).unwrap().file("iwlwifi-ty-a0-gf-a0-77.ucode").err(), Some(pack::Error::Damaged));
+    assert_eq!(pack::Pack::parse(&pack[..20]).err(), Some(pack::Error::Truncated));
+    assert_eq!(pack::Pack::parse(b"NOTAPACK0000000000").err(), Some(pack::Error::Magic));
+    // An empty pack (a build without firmware) parses and finds nothing.
+    let mut empty = pack::MAGIC.to_vec(); empty.extend_from_slice(&[0u8; 8]);
+    assert!(pack::Pack::parse(&empty).unwrap().is_empty());
+}
+
+#[test]
+fn real_firmware_pack_starts_the_x17_chip_in_a_4_mib_pool() {
+    // Set by scripts/wifi_host_gate.sh after packing the fetched linux-firmware files.
+    let Some(path) = std::env::var_os("SEXOS_WIFI_PACK") else { return };
+    let bytes = std::fs::read(&path).unwrap();
+    let p = pack::Pack::parse(&bytes).unwrap();
+    for name in devices::FIRMWARE_FILES {
+        let file = p.file(name).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        if name.ends_with(".ucode") { assert!(ucode::Firmware::parse(file).is_ok(), "{name}"); }
+    }
+    let chip = devices::identify(0x2725, 0x1674, 0x420, 0x0010d000).unwrap();
+    let fw = ucode::Firmware::parse(p.file(chip.firmware).unwrap()).unwrap();
+    let mut m = Memory(vec![0; 4 << 20]);
+    let b = bringup::Bringup::prepare(chip, &fw, &mut m, 0x1_0000_0000, 4 << 20, 0x420, 0).unwrap();
+    assert!(b.layout.end <= 4 << 20 && b.iml_len > 0);
+    assert_eq!(b.rx.write, context::RX_BUFFERS as u16);
 }

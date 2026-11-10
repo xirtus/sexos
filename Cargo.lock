@@ -2101,6 +2101,7 @@ dependencies = [
  "sex-pdx",
  "sex-rt",
  "sex-tls",
+ "sex-wifi",
  "spin",
 ]
 
