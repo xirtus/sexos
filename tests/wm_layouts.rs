@@ -170,6 +170,8 @@ fn bindings_cover_the_hyprland_and_kde_basics() {
     assert_eq!(binding(code::DIGIT_9, m), Some(WmAction::Workspace(8)));
     assert_eq!(binding(code::DOWN_USB, m), Some(WmAction::Focus(Dir::Down)));
     assert_eq!(binding(code::N, m), Some(WmAction::Notifications));
+    assert_eq!(binding(code::N, s), Some(WmAction::NightLight));
+    assert_eq!(binding(code::B, m), Some(WmAction::Wallpaper));
 }
 
 #[test]

@@ -30,6 +30,7 @@ pub mod code {
     pub const K: u8 = 0x25;
     pub const L: u8 = 0x26;
     pub const V: u8 = 0x2F;
+    pub const B: u8 = 0x30;
     pub const N: u8 = 0x31;
     pub const M: u8 = 0x32;
     pub const SPACE: u8 = 0x39;
@@ -122,6 +123,10 @@ pub enum WmAction {
     Lock,
     /// Super+N: the notification history.
     Notifications,
+    /// Super+B: the next wallpaper.
+    Wallpaper,
+    /// Super+Shift+N: night light off, low, medium, high.
+    NightLight,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -169,7 +174,9 @@ pub fn binding(key: u8, m: Mods) -> Option<WmAction> {
         (code::S, false) => WmAction::Scratchpad,
         (code::S, true) => WmAction::ToScratchpad,
         (code::W, _) => WmAction::Overview,
-        (code::N, _) => WmAction::Notifications,
+        (code::N, false) => WmAction::Notifications,
+        (code::N, true) => WmAction::NightLight,
+        (code::B, _) => WmAction::Wallpaper,
         (code::ESC, _) => WmAction::Lock,
         _ => return None,
     })

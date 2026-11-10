@@ -3938,3 +3938,11 @@ Roadmap workstream B, part 1 (report: `docs/handoff/LINUX_AND_DESKTOP_PARITY_REP
   WPA2 on the firmware model and receives decrypted frames, a replay, an undecrypted
   frame, a relayed own broadcast and a deauthentication.
 - **ABI / kernel:** none.
+
+## Desktop, stage E4: wallpaper and night light (2026-11-10)
+
+- **Super+B** steps the wallpaper through Theme, Dusk, Forest, Ocean and Slate gradients. **Super+Shift+N** steps night light off, low, medium, high (about 4500 K, 3700 K, 2900 K).
+- The Shell chooses; Display keeps the look in `sex_pdx::desktop_look` and paints with it. The wallpaper replaces the background gradient; night light warms the finished frame as Display publishes it (red kept, green and blue scaled), like redshift or Plasma Night Color, so programs need not know.
+- **ABI change (named):** `OP_DESKTOP_LOOK` 0x2DA (Shell -> Display; arg0 wallpaper, arg1 night level). Display accepts it from the Shell's domain only and refuses out-of-range values.
+- Tests: `tests/desktop_look.rs` (service custody), `tests/wm_layouts.rs` (bindings), `scripts/desktop_look_gate.py` (QEMU: checks the desktop pixel changes with each step and comes back exactly when night light is off).
+- Not yet: remembering the choice across boots (needs the Settings stage), images as wallpaper, a schedule for night light.

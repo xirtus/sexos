@@ -10476,6 +10476,8 @@ unsafe fn wm_action(action: wm::WmAction) -> bool {
         A::Scratchpad => wm_scratchpad_toggle(),
         A::Overview => { atlas_toggle(); true }
         A::Notifications => toggle_bell(),
+        A::Wallpaper => desktop_look_step(1, 0),
+        A::NightLight => desktop_look_step(0, 1),
         A::Lock => false,
     };
     sex_pdx::serial_record!("[shell.wm.action] action={:?} done={} scene={}->{} focus={}->{} layout={}",
@@ -16015,6 +16017,18 @@ unsafe fn notify_history() -> impl Iterator<Item = &'static sex_pdx::notify::Tex
 unsafe fn notify_panel(text: &[u8]) -> bool {
     sex_pdx::notify::chunks(text, 0, 0, 0)
         .all(|(w, a, b)| pdx_call(SLOT_DISPLAY, sex_pdx::notify::OP_PANEL_NOTICE, w, a, b).0 == 0)
+}
+// ── Wallpaper and night light: the Shell chooses, Display paints. ──
+static mut DESKTOP_LOOK: (u8, u8) = (0, 0);
+/// Steps the wallpaper and the night light level, each wrapping around.
+unsafe fn desktop_look_step(wallpaper: u8, night: u8) -> bool {
+    use sex_pdx::desktop_look as look;
+    let (w, n) = DESKTOP_LOOK;
+    let next = ((w + wallpaper) % look::WALLPAPERS.len() as u8, (n + night) % look::NIGHT_LEVELS);
+    let ok = pdx_call(SLOT_DISPLAY, look::OP_DESKTOP_LOOK, next.0 as u64, next.1 as u64, 0).0 == 0;
+    if ok { DESKTOP_LOOK = next; }
+    sex_pdx::serial_record!("[shell.look] wallpaper={} name={} night={} ok={}", next.0, look::WALLPAPERS[next.0 as usize].0, next.1, ok as u8);
+    ok
 }
 unsafe fn notification_receive(msg: &sex_pdx::PdxMessage) -> bool {
     if msg.type_id != sex_pdx::notify::OP_NOTIFICATION { return false; }

@@ -776,7 +776,8 @@ fn vertical_gradient_xrgb(y: usize, h: usize, top: u32, bottom: u32) -> u32 {
 /// Desktop background: smooth gradient from bg_top (at y=0) to bg_bottom (at bottom).
 /// Replaces the old 4-band hard gradient.  Endpoint colors preserved from Theme.
 fn bg(y: usize, h: usize) -> u32 {
-    vertical_gradient_xrgb(y, h, DEFAULT_THEME.bg_top, DEFAULT_THEME.bg_bottom)
+    let (top, bottom) = sex_pdx::desktop_look::wallpaper().unwrap_or((DEFAULT_THEME.bg_top, DEFAULT_THEME.bg_bottom));
+    vertical_gradient_xrgb(y, h, top, bottom)
 }
 
 fn fill_bar_bg_buffer(fb_w: u32, fb_h: u32) -> bool {
@@ -2001,7 +2002,13 @@ fn valid_scanout(fb:*mut u32,w:usize,h:usize)->bool{
 // This complete CPU copy is not an atomic hardware flip or vblank completion.
 fn publish_frame(fb:*mut u32,w:usize,h:usize,pixels:&[u32])->bool{
     if !valid_scanout(fb,w,h)||w.checked_mul(h)!=Some(pixels.len()){return false;}
+    let night=sex_pdx::desktop_look::night_level();
+    if night==0{
     for(index,pixel)in pixels.iter().enumerate(){unsafe{core::ptr::write_volatile(fb.add(index),*pixel);}}
+    }else{
+        // Night light warms the whole finished frame on its way out.
+        for(index,pixel)in pixels.iter().enumerate(){unsafe{core::ptr::write_volatile(fb.add(index),sex_pdx::desktop_look::night(*pixel,night));}}
+    }
     // Order posted/write-combining CPU stores before releasing presentation
     // effects. This does not signal GPU scanout/latch or atomic visibility.
     #[cfg(target_arch="x86_64")]
@@ -3997,6 +4004,13 @@ pub extern "C" fn _start() -> ! {
                             needs_top_strip_redraw = true;
                             sex_pdx::serial_record!("[display.panel.notice] len={}", text.len);
                         }
+                    }
+                }
+                sex_pdx::desktop_look::OP_DESKTOP_LOOK => {
+                    // Only the Shell picks the wallpaper and night light.
+                    if msg.caller_pd == 3 && sex_pdx::desktop_look::set(msg.arg0, msg.arg1) {
+                        needs_full_redraw = true;
+                        sex_pdx::serial_record!("[display.look] wallpaper={} night={}", msg.arg0, msg.arg1);
                     }
                 }
                 sex_pdx::app_lifecycle::OP_APP_TITLE => {
