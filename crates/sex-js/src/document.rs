@@ -18,6 +18,14 @@ pub struct Document {
     pub navigate: Option<String>,
     /// The body of a form POST that `navigate` loads (form-urlencoded).
     pub navigate_post: Option<String>,
+    /// `document.referrer`: the page this one was opened from, as its request said.
+    pub referrer: String,
+    /// For a page in an iframe, the origin of the page around it (`window.parent`).
+    pub parent_origin: Option<String>,
+    /// `postMessage` calls for other pages, once the script returns: (to: -1 for the
+    /// page around this one, else an iframe element of this page; data as JSON;
+    /// target origin, `*` for any).
+    pub outbox: Vec<(i64, String, String)>,
     /// Element boxes from the last layout, by node: (x, y, w, h).
     pub rects: Vec<Option<(i32, i32, i32, i32)>>,
     /// Each node's paint layer (higher paints on top), from `Page::layers`.
@@ -100,7 +108,7 @@ fn rough_measure(font: &str, text: &str) -> i32 {
 
 impl Document {
     pub fn new(dom: Dom, url: &str, viewport: (i32, i32), clock: fn() -> u64) -> Self {
-        Self { dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, navigate_post: None, rects: Vec::new(), layers: Vec::new(), clock, canvas_queue: Vec::new(), measure: rough_measure, gl: Default::default(), pictures: Vec::new(), fetches: Vec::new(), bodies: Vec::new(), media: Vec::new(), media_bytes: Vec::new(), heads: Vec::new(), next_fetch: 0, cookies: None, wall: || 0, modules: Default::default(), modules_wanted: Vec::new(), import_map: Vec::new() }
+        Self { dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, navigate_post: None, referrer: String::new(), parent_origin: None, outbox: Vec::new(), rects: Vec::new(), layers: Vec::new(), clock, canvas_queue: Vec::new(), measure: rough_measure, gl: Default::default(), pictures: Vec::new(), fetches: Vec::new(), bodies: Vec::new(), media: Vec::new(), media_bytes: Vec::new(), heads: Vec::new(), next_fetch: 0, cookies: None, wall: || 0, modules: Default::default(), modules_wanted: Vec::new(), import_map: Vec::new() }
     }
 
     /// Takes each element's laid-out box from the browser's layout, for
@@ -373,6 +381,13 @@ impl Page for Document {
                 None
             }
             op::LOCATION => Some(self.url.clone()),
+            op::FRAME => Some(alloc::format!("{}\t{}", self.referrer, self.parent_origin.as_deref().unwrap_or(""))),
+            op::POST_MESSAGE => {
+                let to: i64 = a.first()?.parse().ok()?;
+                // A page can't flood the browser with messages it never lets go of.
+                if self.outbox.len() < 1024 { self.outbox.push((to, String::from(*a.get(1)?), String::from(a.get(2).copied().unwrap_or("*")))); }
+                None
+            }
             op::CANVAS => {
                 let n = self.element(a.first())?;
                 if self.dom.tag(n) != Some("canvas") { return None; }

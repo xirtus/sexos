@@ -8,7 +8,7 @@
   delete globalThis.__host;
   const OP = { LOG: 1, BY_ID: 2, QUERY: 3, INFO: 4, GET_ATTR: 5, SET_ATTR: 6, REMOVE_ATTR: 7, GET_TEXT: 8, SET_TEXT: 9,
     GET_HTML: 10, SET_HTML: 11, CREATE_ELEMENT: 12, CREATE_TEXT: 13, INSERT: 14, DETACH: 15, PARENT: 16, CHILDREN: 17,
-    ATTR_NAMES: 18, VIEWPORT: 19, NAVIGATE: 20, CLICKABLE: 21, RECT: 22, LOCATION: 23, CANVAS: 24, MEASURE: 25, HIT: 26, VALUE: 27, CARET: 28, MEDIA: 48, GL: 64, GL_QUERY: 65, FETCH: 66, FETCH_BODY: 67, FETCH_HEAD: 68, COOKIE: 69, MEDIA_APPEND: 70 };
+    ATTR_NAMES: 18, VIEWPORT: 19, NAVIGATE: 20, CLICKABLE: 21, RECT: 22, LOCATION: 23, CANVAS: 24, MEASURE: 25, HIT: 26, VALUE: 27, CARET: 28, MEDIA: 48, GL: 64, GL_QUERY: 65, FETCH: 66, FETCH_BODY: 67, FETCH_HEAD: 68, COOKIE: 69, MEDIA_APPEND: 70, FRAME: 31, POST_MESSAGE: 32 };
   const nodes = new Map();
   const defaultChecked = new WeakMap();
 
@@ -1420,8 +1420,37 @@
     set href(v) { this.setAttribute('href', v); }
   }
   reflect(HTMLLinkElement, ['rel', 'as', 'type', 'media', 'crossOrigin']);
+  // Pages in frames run in an engine of their own; another page's window is a
+  // stand-in that carries `postMessage` there through the browser (`to`: -1 for the
+  // page around this one, else the iframe element's node).
+  class RemoteWindow {
+    constructor(to) { this._to = to; }
+    postMessage(data, target) {
+      const origin = typeof target === 'object' && target !== null ? target.targetOrigin || '/' : target === undefined ? '/' : String(target);
+      let json;
+      try { json = JSON.stringify(data === undefined ? null : data); } catch (e) { throw domError('The message could not be cloned.', 'DataCloneError'); }
+      H(OP.POST_MESSAGE, String(this._to), json === undefined ? 'null' : json, origin === '/' ? location.origin : origin);
+    }
+    get closed() { return false; }
+    get window() { return this; }
+    get self() { return this; }
+    get frames() { return this; }
+    get length() { return 0; }
+    get top() { return this._to < 0 ? window.top : window; }
+    get parent() { return this._to < 0 ? this : window; }
+    get opener() { return null; }
+    get location() { const to = this._to; return { set href(v) { if (to < 0) H(OP.NAVIGATE, resolveUrl(v)); }, replace() {}, assign() {} }; }
+    focus() {}
+    blur() {}
+    close() {}
+  }
+  const remoteWindows = new Map();
+  function remoteWindow(to) { let w = remoteWindows.get(to); if (!w) remoteWindows.set(to, w = new RemoteWindow(to)); return w; }
+  function frameInfo() { const v = (H(OP.FRAME) || '\t').split('\t'); return { referrer: v[0] || '', parent: v[1] || '' }; }
   class HTMLIFrameElement extends HTMLElement {
-    get contentWindow() { return null; }
+    get contentWindow() { return this.isConnected ? remoteWindow(+this._id) : null; }
+    // Another origin's document is never reachable from here; same-origin frames
+    // also run apart for now.
     get contentDocument() { return null; }
     get src() { const h = this.getAttribute('src'); return h === null ? '' : resolveUrl(h); }
     set src(v) { this.setAttribute('src', v); }
@@ -1553,7 +1582,7 @@
     get visibilityState() { return 'visible'; }
     get hidden() { return false; }
     get scrollingElement() { return this.documentElement; }
-    get referrer() { return ''; }
+    get referrer() { return frameInfo().referrer; }
     get forms() { return this.querySelectorAll('form'); }
     get images() { return this.querySelectorAll('img'); }
     get links() { return this.querySelectorAll('a[href]'); }
@@ -2276,6 +2305,7 @@
     get search() { const m = /\?[^#]*/.exec(this.href); return m ? m[0] : ''; },
     get hash() { const m = /#.*/.exec(this.href); return m ? m[0] : ''; },
     get origin() { const m = /^[a-z]+:\/\/[^/?#]*/i.exec(this.href); return m ? m[0] : 'null'; },
+    get ancestorOrigins() { const p = frameInfo().parent; const l = p ? [p] : []; l.item = i => l[i] || null; l.contains = o => l.includes(o); return l; },
     toString() { return this.href; },
   };
 
@@ -3673,8 +3703,9 @@
   }
   Object.defineProperty(window, 'innerWidth', { get: () => view()[0], configurable: true });
   Object.defineProperty(window, 'innerHeight', { get: () => view()[1], configurable: true });
-  Object.defineProperty(window, 'top', { get: () => window, configurable: true });
-  Object.defineProperty(window, 'parent', { get: () => window, configurable: true });
+  // In a frame, the page around this one is another engine's: a stand-in window.
+  Object.defineProperty(window, 'top', { get: () => frameInfo().parent ? remoteWindow(-1) : window, configurable: true });
+  Object.defineProperty(window, 'parent', { get: () => frameInfo().parent ? remoteWindow(-1) : window, configurable: true });
 
   const KEY_TYPES = new Set(['keydown', 'keyup', 'keypress']);
   // The browser's entry point: one string, fields split by tabs.
@@ -3762,6 +3793,17 @@
       case 'media': mediaState(f); return 0;
       case 'mse': mseState(f); return 0;
       // A classic script is about to run (its node), or finished (empty).
+      // A message from another page: `message\tFROM\tORIGIN\tDATA`, FROM `parent`
+      // or the iframe element whose page sent it, DATA as JSON.
+      case 'message': {
+        const source = f[1] === 'parent' ? remoteWindow(-1) : (wrap(f[1]) && wrap(f[1]).contentWindow);
+        let data = null;
+        try { data = JSON.parse(f.slice(3).join('\t')); } catch (e) { return 0; }
+        window.dispatchEvent(new MessageEvent('message', { data, origin: f[2], source }));
+        return 0;
+      }
+      // An iframe's page loaded (or failed to): its element hears `load`.
+      case 'frameload': { const el = wrap(f[1]); if (el) el.dispatchEvent(new Event('load')); return 0; }
       case 'script': document.currentScript = f[1] ? wrap(f[1]) : null; return 0;
       case 'scroll': window.scrollY = window.pageYOffset = +f[1] || 0; return 0;
       case 'click': {
