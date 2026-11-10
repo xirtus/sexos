@@ -33,3 +33,25 @@ successful key reply without guest readiness. Existing Bash3 row/fault helper
 checks remain. These tests are not native input evidence; exact-head CI must
 still run all five real USB lanes before integration. Preserve any later
 failure rather than interpreting boot selection as an outcome.
+
+## Bounded QMP acknowledgement reader
+
+Review of the new boot-key path found an existing helper bug: its `recv()` loop
+never handled EOF, so a disconnected QMP peer could spin forever instead of
+respecting the readiness bound. A preserved negative control using the unchanged
+prior helper reproduces that spin until an external three-second fixture timeout
+(`sexos-evidence/usb-qmp-reader-control/old-reader-eof-negative.log`).
+
+The key helper now fails on EOF/error, preserves coalesced JSON records, skips
+asynchronous events and accepts only the matching command ID's acknowledgement.
+One monotonic deadline covers connect, greeting, both commands and settling;
+the boot waiter passes its remaining readiness budget. Keyboard-lane callers
+retain the five-second helper maximum. A bounded response buffer rejects malformed
+oversized records. This changes no guest or device assertion.
+
+Four actual local Unix-socket fixture cases cover EOF, coalesced events/replies,
+command rejection and a missing ACK. Together with the six boot-wait and two
+existing Bash helper cases, all 12 pass in 25.986 seconds. These fixtures are not
+native device evidence. The earlier controlled native menu and full five-lane
+proofs remain scoped to the earlier helper; fresh native acknowledgement-path
+validation and exact-head CI are required for this refinement.

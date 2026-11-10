@@ -54,7 +54,7 @@ wait_marker() { # pattern log timeout [qmp_sock]
       if (( SECONDS >= menu_since + 3 )); then
         boot_requested=1
         printf '[usb_path_gate.boot] action=select_default key=ret\n' >> "$2.boot-actions.log"
-        qmp_sendkey "$4" ret || return 1
+        qmp_sendkey "$4" ret "$((deadline - SECONDS))" || return 1
       fi
     else
       menu_since=-1
@@ -129,26 +129,53 @@ time.sleep(0.3)
 PY
 }
 
-qmp_sendkey() { # sock key
-  python3 - "$1" "$2" <<'PY'
+qmp_sendkey() { # sock key [remaining_seconds]
+  python3 - "$1" "$2" "${3:-5}" <<'PY'
 import json, socket, sys, time
-sock_path, key = sys.argv[1], sys.argv[2]
+sock_path, key = sys.argv[1:3]
+deadline = time.monotonic() + min(5.0, float(sys.argv[3]))
 s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-s.settimeout(5)
+def remaining():
+    left = deadline - time.monotonic()
+    if left <= 0:
+        raise TimeoutError("QMP key deadline")
+    return left
+s.settimeout(remaining())
 s.connect(sock_path)
+pending = b""
 def rd():
-    buf = b""
-    while b"\n" not in buf:
-        buf += s.recv(4096)
-    return buf
-rd()
+    global pending
+    remaining()
+    while b"\n" not in pending:
+        s.settimeout(remaining())
+        part = s.recv(4096)
+        if not part:
+            raise ConnectionError("QMP closed before key acknowledgement")
+        pending += part
+        if len(pending) > 65536:
+            raise ValueError("QMP response exceeds bound")
+    line, pending = pending.split(b"\n", 1)
+    return json.loads(line)
+if "QMP" not in rd():
+    raise ValueError("missing QMP greeting")
+next_id = 0
 def cmd(c):
+    global next_id
+    next_id += 1
+    c["id"] = next_id
+    s.settimeout(remaining())
     s.sendall((json.dumps(c) + "\n").encode())
-    rd()
+    while True:
+        reply = rd()
+        if reply.get("id") == next_id:
+            if "error" in reply or "return" not in reply:
+                raise ValueError("QMP key command rejected")
+            return
 cmd({"execute": "qmp_capabilities"})
 cmd({"execute": "send-key", "arguments": {"keys": [
     {"type": "qcode", "data": key}]}})
-time.sleep(0.5)
+time.sleep(min(0.5, max(0.0, deadline - time.monotonic())))
+s.close()
 PY
 }
 
