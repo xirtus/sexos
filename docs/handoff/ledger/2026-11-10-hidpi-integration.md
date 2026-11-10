@@ -5,9 +5,10 @@
 - **Failed proof:** the first crash proof captured the boot-log header and background
   with zero body ink. The console scroll path cleared the full body before redrawing
   retained lines, exposing a blank intermediate frame. PR #119 replaces this with
-  batched, row-by-row background-and-text drawing. Refresh #77 after #119 merges;
-  do not weaken the crash proof's requirement for visible log text.
-- **Host validation after the master refresh:** kernel release cross-build;
+  batched, row-by-row background-and-text drawing. This refresh includes merged
+  PR #119 and retains the crash proof's requirement for visible log text.
+- **Host validation (the first master refresh; guardrails and all 79 ABI pins
+  rechecked after merging #94, #111, #119 and #120):** kernel release cross-build;
   display-frame-output host gate (48 cases, 14 runtime mutation controls and four
   compiler trait controls); display-scene host gate (23 cases and 15 runtime mutation
   controls); EDID/scale tests (three); BOOT display-role tests (two); architecture
