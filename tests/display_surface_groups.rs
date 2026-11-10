@@ -148,7 +148,7 @@ unsafe fn publish_bitmap(sequence:u32,g:bitmap_batch::Geometry,pixels:&[u32])->b
  for sequence in 2..=3{
   let change=if sequence==2{let b=bitmap_batch::Geometry{x:120,y:40,width:20,height:30,scale:2};publish_bitmap(sequence,b,&vec![0xffaa0011;b.len()])}
    else{BITMAP_STORES.receive(15,15,300,bitmap_batch::Request::Clear{sequence}).unwrap()};
-  let mut d=damage::Damage::new();d.add(bitmap_surface_damage(&SURFACES[0],change.old,w,h),w,h);d.add(bitmap_surface_damage(&SURFACES[0],change.new,w,h),w,h);
+  let mut d=damage::Damage::new(28);d.add(bitmap_surface_damage(&SURFACES[0],change.old,w,h),w,h);d.add(bitmap_surface_damage(&SURFACES[0],change.new,w,h),w,h);
   FOCUSED_SURFACE_ID=0;DAMAGE_ORDER.clear();redraw_surface_damage(framebuffer.as_mut_ptr(),w,h,d.rect().unwrap());
   assert_eq!(DAMAGE_ORDER,["restore","launcher","cursor","presented"]);
   let pixel_scene_2=capture_scene(w,h,0);
@@ -197,7 +197,7 @@ unsafe fn legacy_reference_pixel(x:usize,y:usize,w:usize,h:usize,focus:u64)->u32
   let mut actual=vec![0;w*h];for y in 0..h{for px in 0..w{actual[y*w+px]=legacy_reference_pixel(px,y,w,h,focus);}}
   let ops=[None,Some((u64::from_le_bytes(*b"A\nlonger"),legacy_args(0,8,0xabcdef))),Some((u64::from_le_bytes(*b" words!!"),legacy_args(8,8,0xabcdef))),Some((u64::from_le_bytes(*b"A\nlonger"),legacy_args(0,8,0x345678))),None,Some((b'Z' as u64,legacy_args(0,1,0xabcdef)))];
   for batch in ops.chunks(drain){
-   let mut d=damage::Damage::new();
+   let mut d=damage::Damage::new(28);
    for &op in batch{
     let old=text_surface_damage(&SURFACES[1],w,h);
     let changed=match op{None=>legacy_text_clear(&mut SURFACES[1]),Some((packed,args))=>legacy_text_draw(&mut SURFACES[1],packed,args)};
@@ -328,11 +328,11 @@ fn scanline_cache_matches_winner_at_every_pixel_with_focus_clipping_and_minimize
 mod damage;
 #[test]
 fn damage_union_clips_overflow_and_never_touches_silkbar() {
- let mut d=damage::Damage::new();d.add((usize::MAX,0,usize::MAX,usize::MAX),1000,800);assert_eq!(d.rect(),None);
+ let mut d=damage::Damage::new(28);d.add((usize::MAX,0,usize::MAX,usize::MAX),1000,800);assert_eq!(d.rect(),None);
  d.add((10,0,30,30),1000,800);assert_eq!(d.rect(),None);
  d.add((10,40,30,30),1000,800);d.add((900,750,usize::MAX,usize::MAX),1000,800);
  assert_eq!(d.rect(),Some(damage::Rect{x:10,y:51,right:1000,bottom:800}));
- let mut empty=damage::Damage::new();empty.add((0,0,1000,800),0,0);assert_eq!(empty.rect(),None);
+ let mut empty=damage::Damage::new(28);empty.add((0,0,1000,800),0,0);assert_eq!(empty.rect(),None);
 }
 #[test]
 fn text_damage_matches_full_compositor_with_focus_clipping_overlay_and_hidden_parent(){unsafe{
@@ -351,7 +351,7 @@ fn text_damage_matches_full_compositor_with_focus_clipping_overlay_and_hidden_pa
   for py in 0..h {for px in 0..w {actual.push(composite_pixel(px,py,w,h,0x123,focus, &pixel_scene_4));}}
   let old_damage=text_surface_damage(&SURFACES[1],w,h);
   SURFACES[1].text_buf=[0;TEXT_BUF_CAP];SURFACES[1].text_buf[..1].copy_from_slice(b"Z");SURFACES[1].text_len=1;recompute_text_lines(&mut SURFACES[1]);
-  let mut d=damage::Damage::new();d.add(old_damage,w,h);d.add(text_surface_damage(&SURFACES[1],w,h),w,h);
+  let mut d=damage::Damage::new(28);d.add(old_damage,w,h);d.add(text_surface_damage(&SURFACES[1],w,h),w,h);
   FOCUSED_SURFACE_ID=focus;DAMAGE_ORDER.clear();
   if let Some(r)=d.rect(){redraw_surface_damage(actual.as_mut_ptr(),w,h,r);assert_eq!(DAMAGE_ORDER,["restore","launcher","cursor","presented"]);}
   let pixel_scene_4=capture_scene(w,h,focus);
@@ -389,7 +389,7 @@ fn glyph_footprint_covers_all_actual_ink_and_erases_empty_or_shorter_replacement
   for chrome in [0,SURFACE_CHROME_TOP_BAR] {
    let mut s=Surface{x,y,w,h,chrome_flags:chrome,text_len:512,text_buf:[b'A';TEXT_BUF_CAP],..SURFACE_EMPTY};
    for i in (12..512).step_by(13){s.text_buf[i]=b'\n';}recompute_text_lines(&mut s);
-   let r=text_surface_damage(&s,1000,800);let mut d=damage::Damage::new();d.add(r,1000,800);
+   let r=text_surface_damage(&s,1000,800);let mut d=damage::Damage::new(28);d.add(r,1000,800);
    let bounds=surface_groups::rect(&s,1000,800);
    for py in 51..800 {for px in bounds.0..bounds.0+bounds.2 {
     if surface_groups::contains(bounds,px,py) && surface_text_fg_at(px,py,&s).is_some(){
@@ -429,7 +429,7 @@ fn glyph_footprint_covers_all_actual_ink_and_erases_empty_or_shorter_replacement
   for py in 0..h {for px in 0..w {actual.push(composite_pixel(px,py,w,h,0x123,focus, &pixel_scene_5));}}
   for (sx,sy,sw,sh,color) in [(0,0,80,40,0x333333),(30,50,120,120,0xabcdef),(-100,-100,60,80,0x123456),(0,0,0,0,0)]{
    let(old,new)=fill_damage::update(&mut SURFACES[1],0,sx,sy,sw,sh,color).unwrap().unwrap();
-   let mut d=damage::Damage::new();d.add(old.screen(&SURFACES[1],w,h),w,h);d.add(new.screen(&SURFACES[1],w,h),w,h);
+   let mut d=damage::Damage::new(28);d.add(old.screen(&SURFACES[1],w,h),w,h);d.add(new.screen(&SURFACES[1],w,h),w,h);
    FOCUSED_SURFACE_ID=focus;DAMAGE_ORDER.clear();
    if let Some(r)=d.rect(){redraw_surface_damage(actual.as_mut_ptr(),w,h,r);assert_eq!(DAMAGE_ORDER,["restore","launcher","cursor","presented"]);}
   let pixel_scene_5=capture_scene(w,h,focus);
@@ -601,7 +601,7 @@ unsafe fn span_text_fill(index:usize) {
  for y in 0..h{for x in 0..w{actual[y*w+x]=composite_pixel(x,y,w,h,bg(y,h),focus, &pixel_scene_9);}}
  for(start,end)in[(0,16),(3,8),(0,0)]{
   SURFACES[0].selection_start=start;SURFACES[0].selection_end=end;
-  let mut d=damage::Damage::new();d.add(text_surface_damage(&SURFACES[0],w,h),w,h);
+  let mut d=damage::Damage::new(28);d.add(text_surface_damage(&SURFACES[0],w,h),w,h);
   FOCUSED_SURFACE_ID=focus;DAMAGE_ORDER.clear();redraw_surface_damage(actual.as_mut_ptr(),w,h,d.rect().unwrap());
   assert_eq!(DAMAGE_ORDER,["restore","launcher","cursor","presented"]);
   let pixel_scene_10=capture_scene(w,h,focus);

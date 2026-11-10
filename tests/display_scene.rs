@@ -170,7 +170,7 @@ fn rendered_receipt(plan:Plan,present_bits:u64,bar:&SilkBar)->Option<PublishedFr
   let lease=SceneLease::capture(1024,768,bar)?;assert!(lease.view().is_valid());if fail{return None;}
   lease.view().text_projections
  };
- scene_scrubbed();Some(PublishedFrame{plan,present_bits,canon_ss:0,text_projections})
+ scene_scrubbed();Some(PublishedFrame{plan,bar_height:28,present_bits,canon_ss:0,text_projections})
 }
 
 fn reset_host_inputs(){
@@ -270,7 +270,7 @@ fn typed_bitmap_clear(sequence:u32){unsafe{assert!(BITMAP_STORES.receive(15,150,
  unsafe{SURFACES[0]=Surface{owner_pd:9,surface_id:156,active:true,w:200,h:100,..SURFACE_EMPTY};}
  for(sequence,bytes)in[(1u32,&b""[..]),(2,&b""[..]),(3,&b"hidden"[..])]{
   assert!(!typed_completion_needs_publication());typed_text(0,9,90,156,sequence,bytes);
-  assert!(damage::Damage::new().rect().is_none());assert!(typed_completion_needs_publication());no_applied();
+  assert!(damage::Damage::new(28).rect().is_none());assert!(typed_completion_needs_publication());no_applied();
   let receipt=rendered_receipt(Plan::full(),0,&bar).unwrap();finish_display_transactions(&mut lifecycle,Some(&receipt));assert!(!typed_completion_needs_publication());
   let mut got=Vec::new();typed_poll(|owner,word|{got.push((owner,word));0});assert_eq!(got,[(9,text_batch::Applied{surface:156,sequence}.encode().unwrap())]);no_applied();
  }

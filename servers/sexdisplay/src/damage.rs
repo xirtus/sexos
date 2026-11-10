@@ -6,19 +6,20 @@ pub struct Rect {
     pub right: usize,
     pub bottom: usize,
 }
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy)]
 pub struct Damage {
     rect: Option<Rect>,
+    bar: usize,
 }
 impl Damage {
-    pub const fn new() -> Self {
-        Self { rect: None }
+    pub const fn new(bar: usize) -> Self {
+        Self { rect: None, bar }
     }
     pub fn add(&mut self, (x, y, w, h): (usize, usize, usize, usize), width: usize, height: usize) {
         let right = x.saturating_add(w).min(width);
         let bottom = y.saturating_add(h).min(height);
         let x = x.min(width);
-        let y = y.max(crate::bar_height()).min(height);
+        let y = y.max(self.bar).min(height);
         if x >= right || y >= bottom {
             return;
         }

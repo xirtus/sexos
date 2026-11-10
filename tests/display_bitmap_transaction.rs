@@ -231,7 +231,7 @@ fn movement_resize_and_clear_damage_cover_every_changed_pixel() {
     let mut before=Vec::new();for y in 0..180 {for x in 0..180 {before.push(paint(&stage,x,y));}}
     let b=Geometry{x:60,y:70,..geometry(12,12,3)};begin(&mut stage,2,b);chunks(&mut stage,2,&vec![0xffaa0011;b.len()]);
     let change=receive(&mut stage,Request::Commit{sequence:2,hash:hash(&vec![0xffaa0011;b.len()])}).unwrap();
-    let mut damage=damage::Damage::new();damage.add(view.screen(change.old,180,180),180,180);damage.add(view.screen(change.new,180,180),180,180);
+    let mut damage=damage::Damage::new(28);damage.add(view.screen(change.old,180,180),180,180);damage.add(view.screen(change.new,180,180),180,180);
     let rect=damage.rect().unwrap();for y in 0..180 {for x in 0..180 {if before[y*180+x]!=paint(&stage,x,y){assert!(x>=rect.x&&x<rect.right&&y>=rect.y&&y<rect.bottom);}}}
     stage.release_after_publication();ack(&mut stage,2);let change=receive(&mut stage,Request::Clear{sequence:3}).unwrap();assert_eq!(change.old,Some(b));assert_eq!(change.new,None);assert_eq!(stage.geometry(),None);
     // Current viewport clips a retained bitmap after resize, without reinterpreting its pixels.

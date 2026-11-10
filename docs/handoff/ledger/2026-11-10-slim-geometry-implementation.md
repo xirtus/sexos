@@ -21,7 +21,8 @@ button with the same keyboard workspace routes. Status, Bell and real UTC/date r
 reachable. The narrowest complete model is 320 logical pixels. Shared fit policy
 reduces a requested/manual/EDID scale that cannot fit, rather than crashing Display
 or hiding offscreen targets. Smaller unsupported modes log that limit and preserve
-keyboard access. Independent overlap sweeps cover logical widths 320..4096 at 1-3x.
+keyboard access with the existing bounded model; fitted/visible pointer targets are
+not claimed below that supported minimum. Independent overlap sweeps cover logical widths 320..4096 at 1-3x.
 
 Shell derives workarea, frame controls, drag exclusion, minimum sizes, tiling gaps,
 child bounds and pointer/caret origins from the applied contract. It waits for the
@@ -72,3 +73,13 @@ not its fallback stub. The known headers are in the integration worktree's
 23.1.5 with the separate unused-flag fix), ISO/source hashes and build flags. The UI
 build may omit FFmpeg/libc++ only if its evidence explicitly excludes media proof.
 Kernel growth target remains zero under the 21,500-line guardrail.
+
+Review corrections: Damage captures its bar clipping boundary explicitly and a
+completed PublishedFrame retains the Scene bar boundary for transaction coverage.
+The 14-case plan suite includes a captured 1x boundary followed by live 3x mutation;
+coverage stays bound to the snapshot. Published geometry readers discard incomplete
+serial records, with truncated-prefix/CR-only and independent scaled-golden controls.
+The separate 13px Sans atlas supports an exact initial-gradient clock oracle; this
+is pending native qualification and does not assert arbitrary wallpaper/night-light
+pixel coverage. Clock draw stamps now include target geometry so an unchanged civil
+sample repainted after scale adoption still produces a descriptive draw observation.

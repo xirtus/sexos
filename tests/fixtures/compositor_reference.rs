@@ -94,18 +94,18 @@ fn reference_composite_pixel_selected(x: usize, y: usize, w: usize, h: usize, bg
                             c = glass_over_bg(DISPLAY_TOKENS.frame_top_bar_color, x, y, toolbar_alpha);
                         }
                         // Divider: bright opaque line at bottom edge.
-                        if ly == FRAME_TOP_BAR_HEIGHT_PX - 1 {
+                        if ly == 25 {
                             c = FRAME_TOP_BAR_DIVIDER_COLOR;
                         }
                         // Tab strip: glass background with tab color overlay.
                         if surf.tab_count > 0
-                            && lx >= FRAME_TOP_BAR_LIGHT_EXCLUSION_PX
+                            && lx >= 74
                             && lx < rim_right
                         {
-                            let available = rim_right - FRAME_TOP_BAR_LIGHT_EXCLUSION_PX;
+                            let available = rim_right.saturating_sub(74);
                             let slot_w = available / surf.tab_count as usize;
                             if slot_w > 0 {
-                                let tab_idx = (lx - FRAME_TOP_BAR_LIGHT_EXCLUSION_PX) / slot_w;
+                                let tab_idx = (lx - 74) / slot_w;
                                 let tab_color = if tab_idx == surf.active_tab as usize {
                                     DISPLAY_TOKENS.active_tab_color
                                 } else {
@@ -118,60 +118,21 @@ fn reference_composite_pixel_selected(x: usize, y: usize, w: usize, h: usize, bg
                         }
                         // Round104 intentionally changes only title foreground: use final glass/tab contrast.
                         if let Some(fg)=toolbar_title_fg_at(lx,ly,surf.surface_id,c){c=fg;}
-                        // Frame lights: glass background with light color overlay.
-                        // Dimmed for single-tab non-hover; full bright for hovered light.
-                        if ly >= FRAME_TOP_BAR_LIGHT_TOP && ly < FRAME_TOP_BAR_LIGHT_BOTTOM {
-                            unsafe {
-                                static mut FRAME_LIGHT_STARTUP_RENDER_BUDGET: u32 = 32;
-                                if FRAME_LIGHT_STARTUP_RENDER_BUDGET > 0 && lx == FRAME_TOP_BAR_LIGHT_GAP_PX && ly == FRAME_TOP_BAR_LIGHT_TOP {
-                                    FRAME_LIGHT_STARTUP_RENDER_BUDGET -= 1;
-                                    if hot_log() { serial_println!(
-                                        "[sexdisplay.frame.light.startup.render] sid={} red={} close_allowed={} reason={}",
-                                        surf.surface_id,
-                                        if close_allowed { "enabled" } else { "disabled" },
-                                        close_allowed as u8,
-                                        if close_allowed { "close_allowed" } else { "default_disabled_or_protected" }
-                                    ); }
-                                }
-                                // Phase 6 draw.ok: one-shot proof emitted from real render path.
-                                static mut PHASE6_DRAW_OK_PROOF: u32 = 1;
-                                if PHASE6_DRAW_OK_PROOF > 0 && lx == FRAME_TOP_BAR_LIGHT_GAP_PX && ly == FRAME_TOP_BAR_LIGHT_TOP {
-                                    PHASE6_DRAW_OK_PROOF -= 1;
-                                    serial_println!("[sexdisplay.frame_lights.draw.ok] rendered=1 red=disabled yellow=available green=available ok=1 reason=render_path");
-                                }
-                            }
-                            let l1_end = FRAME_TOP_BAR_LIGHT_GAP_PX + FRAME_TOP_BAR_LIGHT_SIZE_PX;
-                            let l1_hovered = light_hovered && hovered_light_kind == 0;
-                            let l1_close_base: u8 = if close_allowed {
-                                if l1_hovered { 255 } else { 224 }
-                            } else if l1_hovered {
-                                255
-                            } else {
-                                FRAME_LIGHT_CLOSE_DISABLED_BASE_ALPHA
-                            };
-                            let light_alpha: u8 = scale_alpha(l1_close_base, chrome_dim);
-                            if lx >= FRAME_TOP_BAR_LIGHT_GAP_PX && lx < l1_end {
-                                if light_alpha > 0 { c = glass_over_bg(DISPLAY_TOKENS.close_light_color, x, y, light_alpha); }
-                            } else {
-                                let l2_start = l1_end + FRAME_TOP_BAR_LIGHT_GAP_PX;
-                                let l2_end = l2_start + FRAME_TOP_BAR_LIGHT_SIZE_PX;
-                                let l2_hovered = light_hovered && hovered_light_kind == 1;
-                                let l2_alpha = scale_alpha(if l2_hovered { 255 } else { 224 }, chrome_dim);
-                                if lx >= l2_start && lx < l2_end {
-                                    if l2_alpha > 0 { c = glass_over_bg(DISPLAY_TOKENS.minimize_light_color, x, y, l2_alpha); }
-                                } else {
-                                    let l3_start = l2_end + FRAME_TOP_BAR_LIGHT_GAP_PX;
-                                    let l3_end = l3_start + FRAME_TOP_BAR_LIGHT_SIZE_PX;
-                                    let l3_hovered = light_hovered && hovered_light_kind == 2;
-                                    let l3_alpha = scale_alpha(if l3_hovered { 255 } else { 224 }, chrome_dim);
-                                    if lx >= l3_start && lx < l3_end {
-                                        if l3_alpha > 0 { c = glass_over_bg(DISPLAY_TOKENS.zoom_light_color, x, y, l3_alpha); }
-                                    }
-                                }
-                            }
-                        }
+                        // New accepted default controls, independent literal1x
+                    // circle centers/radii. Keep the two-pass reference search.
+                    for (kind,cx) in [(0u8,13i32),(1,37),(2,61)] {
+                        let dx=2*lx as i32+1-2*cx;let dy=2*ly as i32+1-26;
+                        let distance=dx*dx+dy*dy;
+                        if distance>=100 {continue;}
+                        let fill=match kind {0=>DISPLAY_TOKENS.close_light_color,1=>DISPLAY_TOKENS.minimize_light_color,_=>DISPLAY_TOKENS.zoom_light_color};
+                        let ink=if distance>=64{desktop_style::contrast_ink(c)}else{fill};
+                        let alpha=if kind==0&&!close_allowed{80u32}else if light_hovered&&hovered_light_kind==kind{255}else{224};
+                        let mut mixed=ink&0xff00_0000;
+                        for shift in [16,8,0]{mixed|=((((ink>>shift)&255)*alpha+((c>>shift)&255)*(255-alpha))/255)<<shift;}
+                        c=mixed;
                     }
-                    // ── RIM BAND (minimal mode top edge, or left/right/bottom edges always) ──
+                }
+                // ── RIM BAND (minimal mode top edge, or left/right/bottom edges always) ──
                     else if ly < FRAME_RIM_PX || lx < FRAME_RIM_PX
                         || lx >= rim_right || ly >= rim_bottom
                     {

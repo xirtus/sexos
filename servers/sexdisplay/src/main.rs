@@ -1587,7 +1587,7 @@ fn text_projection_requirement(old:&Surface,new:&Surface,w:usize,h:usize)->scene
     // Old bounds are essential when shortening/clearing text or selection.
     // Do not optimize hidden parents/occlusion: these clipped geometric bounds
     // conservatively include every possible changed body text pixel.
-    let mut required=damage::Damage::new();
+    let mut required=damage::Damage::new(bar_height());
     required.add(text_surface_damage(old,w,h),w,h);
     required.add(text_surface_damage(new,w,h),w,h);
     match required.rect(){Some(rect)=>scene::TextCoverage::Body(changed_text_rows(old,new,rect)),None=>scene::TextCoverage::NoPixels}
@@ -1639,7 +1639,7 @@ fn join_pending_text(paint:&mut paint_batch::Dirty,w:usize,h:usize){
             if !apply_pending_text(&mut candidate,&pending){paint.request_full();continue;}
             match text_projection_requirement(original,&candidate,w,h){
                 scene::TextCoverage::NoPixels=>paint.request_settle(),
-                scene::TextCoverage::Body(rect)=>paint.request_damage(rect,w,h),
+                scene::TextCoverage::Body(rect)=>paint.request_damage(rect,w,h,bar_height()),
             }
         }
     }
@@ -1874,8 +1874,8 @@ fn civil_clock_drawn(bar:&SilkBar,w:usize,h:usize,path:&str){
     let(x,y,cw,ch)=module_rect(bar,ModuleSlot::Clock);
     if x.checked_add(cw).map_or(true,|right|right>w)||y.checked_add(ch).map_or(true,|bottom|bottom>h){return;}
     let clock=&bar.civil_clock;
-    let stamp=(clock.sequence(),clock.state(),clock.seconds(),clock.is_stale(),w,h);
-    static mut LAST_CIVIL_DRAW:Option<(u32,State,u32,bool,usize,usize)>=None;
+    let stamp=(clock.sequence(),clock.state(),clock.seconds(),clock.is_stale(),w,h,x,y,cw,ch);
+    static mut LAST_CIVIL_DRAW:Option<(u32,State,u32,bool,usize,usize,usize,usize,usize,usize)>=None;
     unsafe{
         if LAST_CIVIL_DRAW==Some(stamp){return;}
         LAST_CIVIL_DRAW=Some(stamp);
@@ -1917,7 +1917,7 @@ fn bell_badge_at_scaled(x: usize, y: usize, bar: &SilkBar, background: u32, ui_s
 use paint_batch::{Content,Plan};
 // Descriptive completion of this publication, not authority or a whole-system
 // epoch receipt. Lifecycle may consume only a successfully published Full.
-struct PublishedFrame{plan:Plan,present_bits:u64,canon_ss:u8,
+struct PublishedFrame{plan:Plan,bar_height:usize,present_bits:u64,canon_ss:u8,
     text_projections:[Option<scene::TextProjection>;MAX_SURFACES]}
 
 // Small output bookkeeping is tentative until the prepared frame is published.
@@ -2028,7 +2028,6 @@ fn render_prepared(fb:*mut u32,w:usize,h:usize,bar:&SilkBar,requested:Plan)->Opt
         report_app_presented();
         if !plan.cursor_only(){repaint_end(plan.label(),started);}
     }
-    if plan.clock_dirty(){civil_clock_drawn(&scene.bar,w,h,plan.label());}
     unsafe{
         static mut BATCH_LOG_BUDGET:u32=64;
         if BATCH_LOG_BUDGET>0{BATCH_LOG_BUDGET-=1;
@@ -2043,10 +2042,11 @@ fn render_prepared(fb:*mut u32,w:usize,h:usize,bar:&SilkBar,requested:Plan)->Opt
             sex_pdx::serial_record!("[display.chrome.metrics] scale={} bar={} title={} inset={} body_top={} target={} width={} height={} publication=1",m.scale(),m.bar(),m.title(),m.px(8),m.title()+m.px(8),m.px(24),w,h);
         }}
     }
+    if plan.clock_dirty(){civil_clock_drawn(&scene.bar,w,h,plan.label());}
     // Copy only descriptive transaction identities. The payload remains owned
     // by this scene, which ordinary scope Drop scrubs before Main commits text.
     let text_projections=scene.text_projections;
-    Some(PublishedFrame{plan,present_bits,canon_ss,text_projections})
+    Some(PublishedFrame{plan,bar_height:scene.metrics.bar()as usize,present_bits,canon_ss,text_projections})
 }
 fn render(fb:*mut u32,w:usize,h:usize,bar:&SilkBar)->bool{
     render_prepared(fb,w,h,bar,Plan::full()).is_some()
@@ -3404,7 +3404,7 @@ fn commit_published_text(published:&PublishedFrame)->usize{
     for(index,projection)in published.text_projections.iter().copied().enumerate(){
         let Some(projection)=projection else{continue;};
         if let scene::TextCoverage::Body(required)=projection.coverage{
-            if !published.plan.covers_body(required){continue;}
+            if !published.plan.covers_body(required,published.bar_height){continue;}
         }
         let context=projection.context;
         unsafe{
@@ -3642,7 +3642,7 @@ pub extern "C" fn _start() -> ! {
         // ── Per-cycle flags ──
         unsafe { REPAINT_SEEN=0; REPAINT_DRAINED=0; REPAINT_UPSERTS=0; REPAINT_FITTED_NOOPS=0; }
         let mut needs_surface_redraw = false;
-        let mut text_damage = damage::Damage::new();
+        let mut text_damage = damage::Damage::new(bar_height());
         let mut needs_top_strip_redraw = false;
         // Cursor moved this cycle but nothing else did: eligible for the
         // save-under fast path instead of a full surface composite.
@@ -4877,7 +4877,7 @@ pub extern "C" fn _start() -> ! {
         let (w,h)=unsafe{(FB_W as usize,FB_H as usize)};
         if needs_full_redraw||transaction_full_render||scale_receipts.needs_publication(){pending_paint.request_full();}
         if needs_surface_redraw{pending_paint.request_area();}
-        if let Some(rect)=text_damage.rect(){pending_paint.request_damage(rect,w,h);}
+        if let Some(rect)=text_damage.rect(){pending_paint.request_damage(rect,w,h,bar_height());}
         if cursor_only_moved{pending_paint.request_cursor();}
         if needs_top_strip_redraw{pending_paint.request_strip();}
         if typed_completion_needs_publication(){join_pending_text(&mut pending_paint,w,h);}

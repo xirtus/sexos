@@ -38,7 +38,7 @@ def wiring(s):
     assert 'letbitmap=ifpublished.plan.is_full(){unsafe{BITMAP_STORES.release_after_publication()}}else{0};'in finish,'bitmap remains Full only'
     assert finish.index('BITMAP_STORES.release_after_publication()')<finish.index('lifecycle.pixels_presented('),'bitmap eligibility must follow same Full'
     commit=compact(function(s,'commit_published_text'))
-    assert commit.index('if!published.plan.covers_body(required){continue;}')<commit.index('pending.context()!=context'),'coverage precedes context settlement'
+    assert commit.index('if!published.plan.covers_body(required,published.bar_height){continue;}')<commit.index('pending.context()!=context'),'coverage precedes context settlement'
     assert commit.index('pending.context()!=context')<commit.index('apply_pending_text(slot,&pending)')<commit.index('stage.release_matching(context)')<commit.index('[display.text.committed]'),'exact captured context precedes canonical commit, eligibility and diagnostics'
     assert render=='fnrender(fb:*mutu32,w:usize,h:usize,bar:&SilkBar)->bool{render_prepared(fb,w,h,bar,Plan::full()).is_some()}','bootstrap full uses prepared publication'
     prepared=compact(function(s,'render_prepared'));batch=compact(function(s,'raster_batch'))
@@ -46,7 +46,7 @@ def wiring(s):
     assert prepared.count('SceneLease::capture(')==1 and prepared.count('raster_batch(')==1 and prepared.count('preparation.commit(')==1,'one scene/preparation/publication per batch'
     assert prepared.index('store.prepare(')<prepared.index('SceneLease::capture(')<prepared.index('letscene=lease.view();')<prepared.index('raster_batch(&target,scene,plan)')<prepared.index('preparation.commit(|frame|publish_frame(fb,w,h,frame))')<prepared.index('letpresent_bits=ifsettle_only{0}else{unsafe{APP_PRESENT_BITS}};')<prepared.index('record_cursor_presented();')<prepared.index('report_app_presented();')<prepared.index('civil_clock_drawn('),'one owned scene covers raster/publish/posteffects'
     assert prepared.index('preparation.commit(')<prepared.index('lettext_projections=scene.text_projections;')
-    assert prepared.endswith('Some(PublishedFrame{plan,present_bits,canon_ss,text_projections})}') and not any(x in prepared for x in('mem::forget','ManuallyDrop','drop(lease)')),'lease stays ordinary scoped ownership through receipt construction'
+    assert prepared.endswith('Some(PublishedFrame{plan,bar_height:scene.metrics.bar()as usize,present_bits,canon_ss,text_projections})}') and not any(x in prepared for x in('mem::forget','ManuallyDrop','drop(lease)')),'lease stays ordinary scoped ownership through receipt construction'
     assert 'requested.is_empty()||!valid_scanout('in prepared and 'if!prepared{drop(preparation);backup.restore();returnNone;}'in prepared
     assert 'if!preparation.commit(|frame|publish_frame(fb,w,h,frame)){backup.restore();returnNone;}'in prepared
     assert batch.index('ifplan.settle_only(){returntrue;}')<batch.index('restore_cursor_under('),'pure Settle leaves cursor and overlays untouched'
@@ -115,7 +115,7 @@ controls +=[
  ('typed-helper-text-omitted','lease','TEXT_STAGES.iter().any(text_transaction::Stage::needs_publication)','false','actual_typed_text_noop_empty_and_hidden_completion_force_publication'),
  ('typed-helper-bitmap-omitted','lease','BITMAP_STORES.needs_publication()','false','actual_typed_bitmap_empty_and_hidden_completion_force_publication'),
  ('typed-crossed-context','lease','if pending.context()!=context{continue;}','/* unchecked captured context */','actual_finish_rejects_crossed_or_cancelled_captured_text_contexts'),
- ('coverage-ignored','lease','if !published.plan.covers_body(required){continue;}','/* unchecked coverage */','actual_partial_text_publication_covers_shortened_old_bounds_before_commit'),
+ ('coverage-ignored','lease','if !published.plan.covers_body(required,published.bar_height){continue;}','/* unchecked coverage */','actual_partial_text_publication_covers_shortened_old_bounds_before_commit'),
  ('lost-old-text-bounds','lease','required.add(text_surface_damage(old,w,h),w,h);','/* old bounds omitted */','actual_partial_text_publication_covers_shortened_old_bounds_before_commit'),
  ('lost-new-text-bounds','lease','required.add(text_surface_damage(new,w,h),w,h);','/* new bounds omitted */','actual_partial_text_publication_covers_shortened_old_bounds_before_commit'),
 ]

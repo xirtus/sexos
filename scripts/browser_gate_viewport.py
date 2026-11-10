@@ -5,7 +5,9 @@ from quil_workflow_gate import palette_commands, palette_select
 
 
 def chrome_metrics(text):
-    records = re.findall(r'\[display.chrome.metrics\] ([^\r\n]+)', text)
+    # A serial tail may stop halfway through an otherwise valid-looking record.
+    complete = text[:text.rfind('\n') + 1]
+    records = re.findall(r'^\[display.chrome.metrics\] ([^\r\n]+)\r?$', complete, re.MULTILINE)
     assert records, 'missing completed chrome geometry publication'
     fields = dict(re.findall(r'(\w+)=(\d+)', records[-1]))
     required = ('scale', 'bar', 'title', 'inset', 'body_top', 'target', 'width', 'height', 'publication')

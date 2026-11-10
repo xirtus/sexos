@@ -168,7 +168,7 @@ fn rollback_restored(){unsafe{
 fn partial_plans()->[Plan;7]{[Plan{content:Content::Area,strip:false},Plan{content:Content::Damage(rect()),strip:false},Plan{content:Content::Cursor,strip:false},Plan{content:Content::None,strip:true},Plan{content:Content::Area,strip:true},Plan{content:Content::Damage(rect()),strip:true},Plan{content:Content::Cursor,strip:true}]}
 fn no_effects(){unsafe{assert_eq!(PUBLICATIONS,0);assert!(!EVENTS.iter().any(|v|v.ends_with("-effect")||v.starts_with("civil:")||v.starts_with("timing:")||v=="receipt"));assert!(!RENDER_SCENE.is_valid());}}
 #[test]fn actual_combined_batches_publish_once_with_one_immutable_scene(){let _l=LOCK.lock().unwrap();let mut h=Harness::new();h.prime();
- let mut plans=partial_plans().to_vec();let mut dirty=Dirty::new(W,H);dirty.request_area();dirty.request_strip();dirty.request_damage(rect(),W,H);dirty.request_cursor();dirty.request_full();plans.push(dirty.plan(W,H));
+ let mut plans=partial_plans().to_vec();let mut dirty=Dirty::new(W,H);dirty.request_area();dirty.request_strip();dirty.request_damage(rect(),W,H,28);dirty.request_cursor();dirty.request_full();plans.push(dirty.plan(W,H));
  for p in plans{let gen=h.generation();h.setup(p,0);let receipt=h.call(p).unwrap();assert_eq!(receipt.plan,p);assert_eq!((receipt.present_bits,receipt.canon_ss),(0x55,7));assert_eq!(h.generation(),gen+1);
   unsafe{assert_eq!(h.scanout,AFTER);assert_eq!(h.front(),Some(AFTER.clone()));assert_eq!((CAPTURES,CURSORS,COPY_ATTEMPTS,PUBLICATIONS),(1,1,1,1));assert!(!RENDER_SCENE.is_valid());assert_eq!(RENDER_FRAME_COUNTER.load(Ordering::Relaxed),if p.is_full(){43}else{42});
    for label in["cursor-effect","app-effect","receipt"]{assert_eq!(EVENTS.iter().filter(|v|*v==label).count(),1);}
@@ -180,7 +180,7 @@ fn no_effects(){unsafe{assert_eq!(PUBLICATIONS,0);assert!(!EVENTS.iter().any(|v|
 #[test]fn every_body_failure_restores_bookkeeping_and_retains_front(){let _l=LOCK.lock().unwrap();let mut h=Harness::new();h.prime();let old=h.front();let device=h.scanout.clone();
  for p in [Plan::full(),Plan{content:Content::Area,strip:true},Plan{content:Content::Damage(rect()),strip:true},Plan{content:Content::None,strip:true}]{h.setup(p,1);assert!(h.call(p).is_none());rollback_restored();no_effects();assert_eq!(h.front(),old);assert_eq!(h.scanout,device);assert_eq!(h.generation(),1);assert!(h.span(1).iter().all(|&v|v==0));}
 }
-#[test]fn failed_second_pass_preserves_dirty_and_retry_merges_exact_work(){let _l=LOCK.lock().unwrap();let mut h=Harness::new();h.prime();let mut d=Dirty::new(W,H);d.request_damage(rect(),W,H);d.request_strip();let plan=d.plan(W,H);let saved=d;
+#[test]fn failed_second_pass_preserves_dirty_and_retry_merges_exact_work(){let _l=LOCK.lock().unwrap();let mut h=Harness::new();h.prime();let mut d=Dirty::new(W,H);d.request_damage(rect(),W,H,28);d.request_strip();let plan=d.plan(W,H);let saved=d;
  h.setup(plan,3);assert!(h.attempt(&mut d).is_none());assert_eq!(d,saved);rollback_restored();no_effects();assert_eq!(h.generation(),1);unsafe{assert!(EVENTS.iter().any(|e|e=="damage"));assert!(EVENTS.iter().any(|e|e=="strip"));assert_eq!(h.scanout,BEFORE);}
  d.request_area();d.request_cursor();let merged=d.plan(W,H);assert_eq!(merged,Plan{content:Content::Area,strip:true});h.setup(merged,0);assert!(h.attempt(&mut d).is_some());assert!(d.plan(W,H).is_empty());assert_eq!(h.generation(),2);
 }
