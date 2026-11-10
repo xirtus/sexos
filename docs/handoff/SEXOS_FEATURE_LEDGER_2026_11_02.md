@@ -3372,3 +3372,22 @@ Workstream D of the parity report. Handoff and bare-metal checklist: `docs/hando
   sexdrive DMA host gate, master runtime gate GREEN.
 - **Limits.** One NVMe controller; no VMD driver, MSI-X or IOMMU yet. On a laptop the
   census is read from the framebuffer boot log (PR #78).
+## Design guardrails: SexOS stays a microkernel SASOS, not a slow Linux (2026-11-09)
+
+- **What changed.** An audit of master and PRs #68 to #84 against the sex-manual
+  (`docs/handoff/LINUX_DRIFT_AUDIT_2026_11_09.md`). New binding rules in
+  `docs/DESIGN_GUARDRAILS.md`: the kernel keeps mechanism only, no Linux-shaped kernel
+  API, compatibility layers are libraries, Linux drivers are temporary Tuxedo bridges with
+  a tracked native (REA) replacement. `docs/BRIDGE_LEDGER.md` lists every bridge (none
+  today), every native driver that used Linux/BSD as reference, device firmware and
+  third-party ring-0 code.
+- **Removed from the kernel.** Unreachable `sys_fork`/`sys_execve`/`sys_pipe`/
+  `sys_translate_driver` ("load Linux driver")/VFS stubs, unused `benchmark.rs`, seven
+  uncompiled directories (desktop, input, network, ...), backup files, and nine `std`
+  phase tests that never compiled. Kernel builds; 18,383 non-blank lines.
+- **Gate.** `scripts/tests/test_kernel_design_guardrails.py` (host unit tests in CI):
+  kernel deps exclude compat crates, no fork/pipe/socket-named kernel files, no backups in
+  `kernel/src`, kernel line budget 21,500, and a ledger row for any GPL-2.0-only or
+  Tuxedo-using component.
+- **Open decision.** #70/#82 run firmware AML in ring 0; the audit recommends a ring-3
+  `sexacpi` server.
