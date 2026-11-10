@@ -3566,11 +3566,31 @@ Stages D2 and D3 of `DRIVERS_AND_X17_R1_PLAN_2026_11_09.md`. Handoff: `docs/hand
   proves isolation by data only. No interrupt remapping, one PCI segment, whole-domain
   flushes on loan return.
 
+## Firmware AML leaves the kernel: the sexacpi server (2026-11-10)
+
+- **What changed.** The ACPI AML interpreter (batteries, lid, thermal, `_CST`, I2C HID
+  inventory, `\_S5`, `_PTS`) now runs in `servers/sexacpi`, a ring-3 service in the Senses
+  organ (pd 50, key 4). A firmware bug or interpreter hang stops sexacpi, not the system.
+- **Kernel.** Keeps FADT reset/S5, the SCI and power button, the `Power` check and a
+  filtered firmware window (`sex_pdx::power` ops 16-22, right `FIRMWARE`). It refuses RAM,
+  kernel/bootloader memory, the framebuffer, PIC/PIT/PS2/COM1/CF8 ports and PCI BAR/ROM
+  writes. `kernel/src/hal/acpi.rs` 804 -> ~650 lines.
+- **ABI.** `SYS_POWER` (84) now takes a fourth and fifth argument (r10, r8) for the firmware
+  ops. Shell/SilkBar sensor reads are unchanged.
+- **Gates.** `power_acpi_gate.py` waits for `[sexacpi.ready] aml=1`, the kernel's
+  `[acpi.firmware.inventory] aml=1`, `firmware_told=1` on power-off, and fails if any
+  `[acpi.aml` line appears. `test_kernel_never_runs_firmware_aml` keeps AML out of
+  `kernel/src`. Host window-policy tests in `power_host_gate.sh`.
+- **dGPU (#82).** `_PS3`, `_PRx` `_OFF`/`_ON` and the gate's power cycle run in sexacpi. The kernel parks
+  the GPU in D3hot at boot (`[gpu.power] ... acpi=pending`) and offers `FW_DGPU` (op 23): info, root
+  port D3hot, done, restore headers, prepare again. It acts only on GPUs it listed itself.
+- **Open decision closed.** Audit item A is done.
+
 ## Discrete GPU off at boot (NVIDIA N1, 2026-11-09)
 
 Plan: `docs/handoff/NVIDIA_GPU_PLAN_2026_11_09.md` (stages N1-N6).
 - **Kernel** `kernel/src/hal/dgpu.rs`: every display controller is named at boot (`[gpu.found]`), NVIDIA chips from their own `PMC_BOOT_0` register (GA104, GA106, ...). A GPU behind a root port that does not hold the boot framebuffer is powered off like Linux runtime PM: D3hot for each function, the GPU's `_PS3` and `_PR0`..`_PR3` resources off, then the root port's when the GPU is alone behind it (D3cold). Shared resources stay on. `power_on` restores power and each configuration header for the later driver.
-- **AML work budget**: `acpi::with_aml(budget, f)` runs firmware AML quarantined with a limit on register accesses and stalls, so a firmware loop cannot hang the boot.
+- **AML work budget**: `acpi::with_aml(budget, f)` runs firmware AML quarantined with a limit on register accesses and stalls, so a firmware loop cannot hang the boot. _(2026-11-10, #88: the ACPI half now runs in `servers/sexacpi`; the kernel keeps D3hot, header save/restore and `PMC_BOOT_0`, and exposes them only through `FW_DGPU`.)_
 - **Gate** `scripts/dgpu_power_gate.py` in CI: QEMU root port + display controller + SSDT power resource (`tests/acpi/dgpu_gate_ssdt.asl`); checks the method order off/on/off on the debug console, the restored header, the boot GPU kept and the desktop up.
 - ABI: none.
 ## Net: ALPN http/1.1 (2026-11-09)
@@ -3690,6 +3710,11 @@ Details: `docs/handoff/BOOT_LOG_AND_CRASH_RECORDS_2026_11_09.md`.
 - **ABI**: syscall 85 `SYS_CRASH_LOG` (84 is `SYS_POWER` from the ACPI work), message `OP_NOTICE` to Files, `sex_pdx::crash_log` (in `ABI_INPUTS`); hash recomputed.
 - **Fuzzer** `run fuzz [CALLS] [SEED]` and `scripts/syscall_fuzz_gate.py` (3 x 20000 seeded syscalls and pdx calls, in CI).
 - **Gates**: `scripts/crash_screen_gate.py` (three starts: warm restart then cold; probe build, last in CI), `scripts/crash_log_host_gate.sh`.
+- **Kernel budget fix (2026-11-10).** Master went red at 22,121 kernel lines after #78/#86.
+  #88 also removed the in-kernel e1000/ARP/UDP/DNS boot probe from `hal/pci.rs` (3,266
+  lines, off by default; SexNet owns NICs). The kernel is now about 18,600 lines and the
+  budget stays 21,500. `sexnet_service_host_gate.sh` now asserts that the kernel only
+  discovers NICs.
 
 ## Programs hear the microphone, with the person's leave (2026-11-10)
 - Each program's sound ring is now 512 KiB: the second half holds what Bell hears from

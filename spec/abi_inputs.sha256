@@ -148,7 +148,7 @@ dcc491154df5f4182c1cec5f13498ff9081b030e90d894af41b09163e8cbe029  kernel/src/ipc
 
 a8ee7bdb9f9a22a8314232c1bcc7d8d7ed6115656e40fd741d865caa680cea59  kernel/src/pci_command.rs
 
-c20f686f10fb57bae58c3e45a3c4f8d2c16c2b76abb9545fb3943623c87bb959  kernel/src/syscalls/mod.rs
+92a9e0fb658059e8af989d8801881547ee3475271d7b61d8f7e89bb376bf48f7  kernel/src/syscalls/mod.rs
 
 d96aa774f2c9ddf72f5fca8c9aa31e6127d182038f9bff826faa5e55ef8083eb  kernel/src/trust_source.rs
 

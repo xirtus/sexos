@@ -3,27 +3,23 @@
 //! performance states.
 //!
 //! Fixed hardware comes straight from the FADT and is driven by small, bounds-checked code
-//! here, so shutting down and restarting never depend on AML. AML (the `acpi` crate's
-//! interpreter) is used for what only it can tell: `\_S5` when it differs from the table
-//! bytes, `\_PTS`, batteries, lids, thermal zones, `_CST` and I2C HID devices. Firmware AML
-//! is untrusted input, so it runs on its own stack: if the interpreter panics on a firmware
-//! bug, the panic handler returns to the caller here, AML is set aside for the rest of the
-//! boot, and everything that does not need it keeps working.
+//! here, so shutting down and restarting never depend on AML. The kernel never runs AML:
+//! the ACPI service (`servers/sexacpi`, ring 3) runs the interpreter for what only AML can
+//! tell (`\_S5` when it differs from the table bytes, `\_PTS`, batteries, lids, thermal
+//! zones, `_CST`, I2C HID devices). It reads the tables and reaches the hardware the
+//! firmware names through the firmware window below, which refuses RAM, the kernel's own
+//! ports and PCI BARs, and it reports back what it found. If it crashes or hangs, only it
+//! stops; shutting down, restarting and the power button keep working.
 //!
 //! The authority to shut down is a `Power` capability (`sex_pdx::power`); see `invoke`.
 
 use crate::serial_println;
 use acpi::address::{AddressSpace, GenericAddress};
-use acpi::aml::namespace::{AmlName, NamespaceLevelKind};
-use acpi::aml::object::{Object, WrappedObject};
-use acpi::aml::Interpreter;
 use acpi::sdt::fadt::Fadt;
 use acpi::{AcpiTables, Handle, PciAddress, PhysicalMapping};
-use alloc::string::String;
 use alloc::vec::Vec;
 use core::ptr::NonNull;
-use core::str::FromStr;
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
 use sex_pdx::power as w;
 use x86_64::instructions::port::Port;
 
@@ -32,7 +28,7 @@ pub const SCI_VECTOR: u8 = 0x29;
 
 static HHDM: AtomicU64 = AtomicU64::new(0);
 
-// ── Hardware access for the tables and the interpreter ──────────────────────
+// ── Hardware access for the tables ──────────────────────────────────────────
 
 #[derive(Clone, Copy)]
 pub struct Hw;
@@ -71,22 +67,6 @@ fn pci_write(address: PciAddress, offset: u16, bytes: u8, value: u32) {
 /// About a microsecond: a write to the POST port is an ISA bus cycle.
 pub(crate) fn stall_us(us: u64) { for _ in 0..us { unsafe { Port::<u8>::new(0x80).write(0) } } }
 
-static MUTEXES: AtomicU64 = AtomicU64::new(1);
-
-/// Work AML may still do in a bounded call (`with_aml`): one unit per register access,
-/// one per microsecond stalled. The interpreter has no loop limit, so a firmware loop
-/// waiting on hardware that never answers would hang the caller; running out panics
-/// instead, the quarantine returns to the caller and AML is set aside. u64::MAX: no call running.
-static AML_BUDGET: AtomicU64 = AtomicU64::new(u64::MAX);
-/// The bound for any AML call that does not set its own, boot `_INI` included: about ten
-/// seconds of register access and stalls.
-const DEFAULT_BUDGET: u64 = 10_000_000;
-fn spend(units: u64) {
-    let left = AML_BUDGET.load(Ordering::Relaxed);
-    if left == u64::MAX { return; }
-    if left < units { AML_BUDGET.store(u64::MAX, Ordering::Relaxed); panic!("AML time budget spent"); }
-    AML_BUDGET.store(left - units, Ordering::Relaxed);
-}
 
 impl acpi::Handler for Hw {
     unsafe fn map_physical_region<T>(&self, physical_address: usize, size: usize) -> PhysicalMapping<Self, T> {
@@ -99,36 +79,34 @@ impl acpi::Handler for Hw {
         }
     }
     fn unmap_physical_region<T>(_region: &PhysicalMapping<Self, T>) {}
-    fn read_u8(&self, a: usize) -> u8 { spend(1); unsafe { phys::<u8>(a).read_volatile() } }
-    fn read_u16(&self, a: usize) -> u16 { spend(1); unsafe { phys::<u16>(a).read_volatile() } }
-    fn read_u32(&self, a: usize) -> u32 { spend(1); unsafe { phys::<u32>(a).read_volatile() } }
-    fn read_u64(&self, a: usize) -> u64 { spend(1); unsafe { phys::<u64>(a).read_volatile() } }
-    fn write_u8(&self, a: usize, v: u8) { spend(1); unsafe { phys::<u8>(a).write_volatile(v) } }
-    fn write_u16(&self, a: usize, v: u16) { spend(1); unsafe { phys::<u16>(a).write_volatile(v) } }
-    fn write_u32(&self, a: usize, v: u32) { spend(1); unsafe { phys::<u32>(a).write_volatile(v) } }
-    fn write_u64(&self, a: usize, v: u64) { spend(1); unsafe { phys::<u64>(a).write_volatile(v) } }
-    fn read_io_u8(&self, p: u16) -> u8 { spend(1); unsafe { Port::new(p).read() } }
-    fn read_io_u16(&self, p: u16) -> u16 { spend(1); unsafe { Port::new(p).read() } }
-    fn read_io_u32(&self, p: u16) -> u32 { spend(1); unsafe { Port::new(p).read() } }
-    fn write_io_u8(&self, p: u16, v: u8) { spend(1); unsafe { Port::new(p).write(v) } }
-    fn write_io_u16(&self, p: u16, v: u16) { spend(1); unsafe { Port::new(p).write(v) } }
-    fn write_io_u32(&self, p: u16, v: u32) { spend(1); unsafe { Port::new(p).write(v) } }
-    fn read_pci_u8(&self, a: PciAddress, o: u16) -> u8 { spend(1); pci_read(a, o, 1) as u8 }
-    fn read_pci_u16(&self, a: PciAddress, o: u16) -> u16 { spend(1); pci_read(a, o, 2) as u16 }
-    fn read_pci_u32(&self, a: PciAddress, o: u16) -> u32 { spend(1); pci_read(a, o, 4) }
-    fn write_pci_u8(&self, a: PciAddress, o: u16, v: u8) { spend(1); pci_write(a, o, 1, v as u32) }
-    fn write_pci_u16(&self, a: PciAddress, o: u16, v: u16) { spend(1); pci_write(a, o, 2, v as u32) }
-    fn write_pci_u32(&self, a: PciAddress, o: u16, v: u32) { spend(1); pci_write(a, o, 4, v) }
+    fn read_u8(&self, a: usize) -> u8 { unsafe { phys::<u8>(a).read_volatile() } }
+    fn read_u16(&self, a: usize) -> u16 { unsafe { phys::<u16>(a).read_volatile() } }
+    fn read_u32(&self, a: usize) -> u32 { unsafe { phys::<u32>(a).read_volatile() } }
+    fn read_u64(&self, a: usize) -> u64 { unsafe { phys::<u64>(a).read_volatile() } }
+    fn write_u8(&self, a: usize, v: u8) { unsafe { phys::<u8>(a).write_volatile(v) } }
+    fn write_u16(&self, a: usize, v: u16) { unsafe { phys::<u16>(a).write_volatile(v) } }
+    fn write_u32(&self, a: usize, v: u32) { unsafe { phys::<u32>(a).write_volatile(v) } }
+    fn write_u64(&self, a: usize, v: u64) { unsafe { phys::<u64>(a).write_volatile(v) } }
+    fn read_io_u8(&self, p: u16) -> u8 { unsafe { Port::new(p).read() } }
+    fn read_io_u16(&self, p: u16) -> u16 { unsafe { Port::new(p).read() } }
+    fn read_io_u32(&self, p: u16) -> u32 { unsafe { Port::new(p).read() } }
+    fn write_io_u8(&self, p: u16, v: u8) { unsafe { Port::new(p).write(v) } }
+    fn write_io_u16(&self, p: u16, v: u16) { unsafe { Port::new(p).write(v) } }
+    fn write_io_u32(&self, p: u16, v: u32) { unsafe { Port::new(p).write(v) } }
+    fn read_pci_u8(&self, a: PciAddress, o: u16) -> u8 { pci_read(a, o, 1) as u8 }
+    fn read_pci_u16(&self, a: PciAddress, o: u16) -> u16 { pci_read(a, o, 2) as u16 }
+    fn read_pci_u32(&self, a: PciAddress, o: u16) -> u32 { pci_read(a, o, 4) }
+    fn write_pci_u8(&self, a: PciAddress, o: u16, v: u8) { pci_write(a, o, 1, v as u32) }
+    fn write_pci_u16(&self, a: PciAddress, o: u16, v: u16) { pci_write(a, o, 2, v as u32) }
+    fn write_pci_u32(&self, a: PciAddress, o: u16, v: u32) { pci_write(a, o, 4, v) }
     fn nanos_since_boot(&self) -> u64 { crate::interrupts::TICKS.load(Ordering::Relaxed).saturating_mul(1_000_000) }
-    fn stall(&self, us: u64) { let us = us.min(100_000); spend(us); stall_us(us) }
-    fn sleep(&self, ms: u64) { let us = ms.min(2_000) * 1000; spend(us); stall_us(us) }
-    // AML only ever runs under `AML`'s lock, on one core at a time.
-    fn create_mutex(&self) -> Handle { Handle(MUTEXES.fetch_add(1, Ordering::Relaxed) as u32) }
+    fn stall(&self, us: u64) { stall_us(us.min(100_000)) }
+    fn sleep(&self, ms: u64) { stall_us(ms.min(2_000) * 1000) }
+    // Table parsing only. acpi 6.1.1 needs its "aml" feature to build with "alloc", so these
+    // exist, but the kernel never constructs an interpreter: sexacpi runs AML in ring 3.
+    fn create_mutex(&self) -> Handle { Handle(0) }
     fn acquire(&self, _: Handle, _: u16) -> Result<(), acpi::aml::AmlError> { Ok(()) }
     fn release(&self, _: Handle) {}
-    fn handle_fatal_error(&self, kind: u8, code: u32, arg: u64) {
-        serial_println!("[acpi.aml.fatal] type={} code={:#x} arg={:#x}", kind, code, arg);
-    }
 }
 
 // ── Generic address registers ───────────────────────────────────────────────
@@ -195,7 +173,7 @@ struct Fixed {
     power_button_fixed: bool,
 }
 static FIXED: spin::Once<Fixed> = spin::Once::new();
-/// SLP_TYPa / SLP_TYPb for S5; from AML when it runs, else from the DSDT bytes.
+/// SLP_TYPa / SLP_TYPb for S5: from the DSDT bytes, or as the ACPI service read `\_S5`.
 static S5: AtomicU32 = AtomicU32::new(u32::MAX);
 static INFO: spin::Mutex<w::Info> = spin::Mutex::new(w::Info { flags: 0, idle_state: 1, idle_latency_us: 1, batteries: 0, lids: 0, thermal_zones: 0, i2c_hid: 0 });
 
@@ -220,214 +198,143 @@ fn pm1_enable(f: &Fixed, bits: u64) {
     }
 }
 
-// ── AML on its own stack ───────────────────────────────────────────────────
+// ── The firmware window (the ACPI service) ─────────────────────────────────
 
-core::arch::global_asm!(r#"
-.global sex_aml_enter
-sex_aml_enter:
-    push rbp
-    push rbx
-    push r12
-    push r13
-    push r14
-    push r15
-    mov [rcx], rsp
-    mov r12, rcx
-    mov rsp, rdx
-    mov rax, rdi
-    mov rdi, rsi
-    call rax
-    mov rsp, [r12]
-    xor eax, eax
-    pop r15
-    pop r14
-    pop r13
-    pop r12
-    pop rbx
-    pop rbp
-    ret
-.global sex_aml_escape
-sex_aml_escape:
-    mov rsp, rdi
-    mov eax, 1
-    pop r15
-    pop r14
-    pop r13
-    pop r12
-    pop rbx
-    pop rbp
-    ret
-"#);
-extern "C" {
-    fn sex_aml_enter(f: extern "C" fn(*mut u8), arg: *mut u8, stack_top: u64, saved: *mut u64) -> u64;
-    fn sex_aml_escape(saved: u64) -> !;
+/// The domain holding the `FIRMWARE` right; told `OP_PREPARE` so it can run `\_PTS`.
+static FIRMWARE_PD: AtomicU32 = AtomicU32::new(0);
+pub fn set_firmware(pd: u32) { FIRMWARE_PD.store(pd, Ordering::Release); }
+/// FADT, DSDT, then each SSDT: (physical address, length, signature).
+static TABLES: spin::Once<Vec<(u64, u32, u32)>> = spin::Once::new();
+/// Words 1..=3 of the last `Sensors` the service reported.
+static SENSOR_WORDS: spin::Mutex<Option<[u64; 3]>> = spin::Mutex::new(None);
+
+/// Limine memory map types the window never touches: usable RAM, bootloader-reclaimable,
+/// kernel and modules, framebuffer. ACPI-reclaimable (the tables) is read only.
+fn memory_refused(address: u64, length: u64, write: bool) -> bool {
+    let Some(map) = crate::MEMMAP_REQUEST.response() else { return true };
+    let end = match address.checked_add(length) { Some(e) => e, None => return true };
+    map.entries().iter().any(|e| {
+        let t = e.type_ as u64;
+        let refused = matches!(t, 0 | 5 | 6 | 7) || (write && t == 2);
+        refused && address < e.base + e.length && end > e.base
+    })
 }
-const AML_STACK_BYTES: usize = 256 * 1024;
-#[repr(C, align(16))]
-struct AmlStack([u8; AML_STACK_BYTES]);
-static mut AML_STACK: AmlStack = AmlStack([0; AML_STACK_BYTES]);
-static mut AML_SAVED: u64 = 0;
-/// Core running AML, plus one; 0 when none is.
-static AML_CORE: AtomicU32 = AtomicU32::new(0);
-static AML_QUARANTINED: AtomicBool = AtomicBool::new(false);
-static AML: spin::Mutex<Option<Interpreter<Hw>>> = spin::Mutex::new(None);
+/// Whether the HHDM maps `address` (4 KiB, 2 MiB or 1 GiB leaf).
+/// Whether HHDM + `address` is mapped *to physical `address`*. The HHDM is a fixed offset,
+/// so any other result means `address` aliases a non-HHDM kernel mapping (code, heap,
+/// stacks) and must be refused.
+fn mapped(address: u64) -> bool {
+    use x86_64::registers::control::Cr3;
+    if address >= 1 << 52 { return false; }
+    let hhdm = HHDM.load(Ordering::Relaxed);
+    let Some(va) = hhdm.checked_add(address) else { return false };
+    let mut table = Cr3::read().0.start_address().as_u64();
+    for shift in [39u64, 30, 21, 12] {
+        let entry = unsafe { core::ptr::read_volatile((hhdm + table + ((va >> shift) & 511) * 8) as *const u64) };
+        if entry & 1 == 0 { return false; }
+        if shift == 12 || (shift != 39 && entry & (1 << 7) != 0) {
+            let size = 1u64 << shift;
+            let frame = entry & 0x000f_ffff_ffff_f000 & !(size - 1);
+            return frame + (va & (size - 1)) == address;
+        }
+        table = entry & 0x000f_ffff_ffff_f000;
+    }
+    false
+}
+fn width_ok(width: u64) -> Option<u8> { matches!(width, 1 | 2 | 4 | 8).then_some(width as u8) }
+
+fn fw_table(index: u64, offset: u64) -> [u64; 5] {
+    let Some(&(address, length, signature)) = TABLES.get().and_then(|t| t.get(index as usize)) else { return [w::INVALID, 0, 0, 0, 0] };
+    let mut words = [0u64; 3];
+    for (i, word) in words.iter_mut().enumerate() {
+        let mut bytes = [0u8; 8];
+        for (j, b) in bytes.iter_mut().enumerate() {
+            let at = offset + (i * 8 + j) as u64;
+            if at < length as u64 { *b = unsafe { phys::<u8>((address + at) as usize).read_volatile() }; }
+        }
+        *word = u64::from_le_bytes(bytes);
+    }
+    [w::OK, length as u64 | (signature as u64) << 32, words[0], words[1], words[2]]
+}
+fn fw_io(arg: u64, value: u64) -> [u64; 5] {
+    let (port, write) = (arg as u16, (arg >> 24) & 1 != 0);
+    let Some(width) = width_ok((arg >> 16) & 0xFF).filter(|w| *w <= 4) else { return [w::INVALID, 0, 0, 0, 0] };
+    if w::port_reserved(port, width) { return [w::DENIED, 0, 0, 0, 0]; }
+    let v = unsafe {
+        match (width, write) {
+            (1, false) => Port::<u8>::new(port).read() as u64,
+            (2, false) => Port::<u16>::new(port).read() as u64,
+            (4, false) => Port::<u32>::new(port).read() as u64,
+            (1, true) => { Port::<u8>::new(port).write(value as u8); 0 }
+            (2, true) => { Port::<u16>::new(port).write(value as u16); 0 }
+            _ => { Port::<u32>::new(port).write(value as u32); 0 }
+        }
+    };
+    [w::OK, v, 0, 0, 0]
+}
+fn fw_mem(address: u64, mode: u64, value: u64) -> [u64; 5] {
+    let write = (mode >> 8) & 1 != 0;
+    let Some(width) = width_ok(mode & 0xFF) else { return [w::INVALID, 0, 0, 0, 0] };
+    if address % width as u64 != 0 { return [w::INVALID, 0, 0, 0, 0]; }
+    if memory_refused(address, width as u64, write) || !mapped(address) || !mapped(address + width as u64 - 1) { return [w::DENIED, 0, 0, 0, 0]; }
+    let a = address as usize;
+    let v = unsafe {
+        match (width, write) {
+            (1, false) => phys::<u8>(a).read_volatile() as u64,
+            (2, false) => phys::<u16>(a).read_volatile() as u64,
+            (4, false) => phys::<u32>(a).read_volatile() as u64,
+            (8, false) => phys::<u64>(a).read_volatile(),
+            (1, true) => { phys::<u8>(a).write_volatile(value as u8); 0 }
+            (2, true) => { phys::<u16>(a).write_volatile(value as u16); 0 }
+            (4, true) => { phys::<u32>(a).write_volatile(value as u32); 0 }
+            _ => { phys::<u64>(a).write_volatile(value); 0 }
+        }
+    };
+    [w::OK, v, 0, 0, 0]
+}
+fn fw_pci(arg: u64, mode: u64, value: u64) -> [u64; 5] {
+    let write = (mode >> 8) & 1 != 0;
+    let Some(width) = width_ok(mode & 0xFF).filter(|w| *w <= 4) else { return [w::INVALID, 0, 0, 0, 0] };
+    let offset = (arg & 0xFFF) as u16;
+    if offset as u32 + width as u32 > 4096 || offset % width as u16 != 0 { return [w::INVALID, 0, 0, 0, 0]; }
+    if write && w::pci_write_reserved(offset, width) { return [w::DENIED, 0, 0, 0, 0]; }
+    let a = PciAddress::new((arg >> 32) as u16, (arg >> 24) as u8, ((arg >> 19) & 31) as u8, ((arg >> 16) & 7) as u8);
+    if write { pci_write(a, offset, width, value as u32); [w::OK, 0, 0, 0, 0] } else { [w::OK, pci_read(a, offset, width) as u64, 0, 0, 0] }
+}
+/// The service's inventory: counts for `INFO`, `\_S5` as AML reads it.
+fn fw_inventory(counts: u64, s5: u64, failed: u64) -> [u64; 5] {
+    let mut info = INFO.lock();
+    if failed != 0 {
+        info.flags = (info.flags & !w::AML) | w::AML_QUARANTINED;
+        serial_println!("[acpi.firmware.inventory] aml=0 quarantined=1");
+        return [w::OK, 0, 0, 0, 0];
+    }
+    info.batteries = counts as u8; info.lids = (counts >> 8) as u8;
+    info.thermal_zones = (counts >> 16) as u8; info.i2c_hid = (counts >> 24) as u8;
+    if (counts >> 32) & 1 != 0 { info.flags |= w::AML; }
+    if s5 != u64::MAX { S5.store((s5 & 7) as u32 | (((s5 >> 8) & 7) as u32) << 8, Ordering::Release); }
+    let can_off = S5.load(Ordering::Acquire) != u32::MAX && FIXED.get().map_or(false, |f| f.pm1a_cnt.is_some() || f.sleep_cnt.is_some());
+    if can_off { info.flags |= w::CAN_OFF; }
+    serial_println!("[acpi.firmware.inventory] aml={} batteries={} lids={} thermal={} i2c_hid={} s5={:#x}",
+        (info.flags & w::AML != 0) as u8, info.batteries, info.lids, info.thermal_zones, info.i2c_hid, S5.load(Ordering::Acquire));
+    [w::OK, 0, 0, 0, 0]
+}
+/// The C-state the service chose from `_CST`: used only where MONITOR/MWAIT exist and the
+/// local APIC timer keeps running in deep states (ARAT), and only C2 and deeper.
+fn fw_idle(arg: u64) -> [u64; 5] {
+    let (kind, latency, hint) = (arg as u8, (arg >> 8) as u16, (arg >> 32) as u32);
+    let monitor = cpuid(1, 0).ecx & (1 << 3) != 0;
+    let arat = max_leaf() >= 6 && cpuid(6, 0).eax & (1 << 2) != 0;
+    if !(monitor && arat && kind >= 2 && latency <= 200 && hint <= 0xFF) { return [w::INVALID, 0, 0, 0, 0]; }
+    MWAIT_HINT.store(hint, Ordering::Release);
+    let mut info = INFO.lock();
+    info.idle_state = kind; info.idle_latency_us = latency; info.flags |= w::MWAIT_IDLE;
+    serial_println!("[acpi.firmware.idle] c={} latency_us={} hint={:#x}", kind, latency, hint);
+    [w::OK, 0, 0, 0, 0]
+}
 
 fn this_core() -> u32 {
     if crate::core_local::INITIALIZED.load(Ordering::Acquire) { crate::core_local::CoreLocal::get().core_id } else { 0 }
-}
-
-/// Runs `f` on the AML stack. None if it panicked; AML is then set aside for good.
-/// The caller holds `AML`'s lock, so only one core is ever here.
-/// Every AML call is bounded: `DEFAULT_BUDGET` unless the caller set a smaller one (`with_aml`).
-fn quarantined<R, F: FnOnce() -> R>(f: F) -> Option<R> {
-    if AML_QUARANTINED.load(Ordering::Acquire) { return None; }
-    let own = AML_BUDGET.load(Ordering::Relaxed) == u64::MAX;
-    if own { AML_BUDGET.store(DEFAULT_BUDGET, Ordering::Relaxed); }
-    let (escaped, r) = on_aml_stack(f);
-    if own { AML_BUDGET.store(u64::MAX, Ordering::Relaxed); }
-    if escaped {
-        AML_QUARANTINED.store(true, Ordering::Release);
-        INFO.lock().flags |= w::AML_QUARANTINED;
-        serial_println!("[acpi.aml.quarantined] reason=interpreter_panic tables_only=1");
-        return None;
-    }
-    r
-}
-/// Runs `f` with the interpreter, quarantined and with at most `budget` units of work
-/// (see `AML_BUDGET`). None if AML is absent, set aside, or `f` panicked or overran.
-pub(crate) fn with_aml<R>(budget: u64, f: impl FnOnce(&Interpreter<Hw>) -> R) -> Option<R> {
-    let slot = AML.lock();
-    let interp = slot.as_ref()?;
-    AML_BUDGET.store(budget, Ordering::Relaxed);
-    let r = quarantined(|| f(interp));
-    AML_BUDGET.store(u64::MAX, Ordering::Relaxed);
-    r
-}
-
-/// Proves at boot that a panic on the AML stack returns here, before any firmware AML runs.
-static SELF_TEST: AtomicBool = AtomicBool::new(false);
-fn quarantine_self_test() -> bool {
-    SELF_TEST.store(true, Ordering::Release);
-    let (escaped, r) = on_aml_stack(|| -> u32 { if SELF_TEST.load(Ordering::Acquire) { panic!("quarantine self-test") } 7 });
-    SELF_TEST.store(false, Ordering::Release);
-    let (_, normal) = on_aml_stack(|| 7u32);
-    escaped && r.is_none() && normal == Some(7)
-}
-fn on_aml_stack<R, F: FnOnce() -> R>(f: F) -> (bool, Option<R>) {
-    struct Call<F, R> { f: Option<F>, r: Option<R> }
-    extern "C" fn trampoline<F: FnOnce() -> R, R>(p: *mut u8) {
-        let call = unsafe { &mut *(p as *mut Call<F, R>) };
-        if let Some(f) = call.f.take() { call.r = Some(f()); }
-    }
-    let mut call = Call { f: Some(f), r: None };
-    let top = unsafe { (core::ptr::addr_of_mut!(AML_STACK.0) as *mut u8).add(AML_STACK_BYTES) as u64 } & !15;
-    AML_CORE.store(this_core() + 1, Ordering::Release);
-    let escaped = unsafe { sex_aml_enter(trampoline::<F, R>, &mut call as *mut _ as *mut u8, top, core::ptr::addr_of_mut!(AML_SAVED)) };
-    AML_CORE.store(0, Ordering::Release);
-    if escaped != 0 {
-        // `call` may hold half-built values from the abandoned frames; never drop them.
-        core::mem::forget(call);
-        return (true, None);
-    }
-    (false, call.r)
-}
-
-/// From the panic handler: if this core is running AML, return to its caller instead of
-/// halting the machine.
-pub fn panic_escape(info: &core::panic::PanicInfo) {
-    let core = AML_CORE.load(Ordering::Acquire);
-    if core != 0 && core == this_core() + 1 {
-        if !SELF_TEST.load(Ordering::Acquire) { serial_println!("[acpi.aml.panic] {}", info); }
-        AML_CORE.store(0, Ordering::Release);
-        unsafe { sex_aml_escape(AML_SAVED) }
-    }
-}
-
-pub(crate) fn name(path: &str) -> Option<AmlName> { AmlName::from_str(path).ok() }
-pub(crate) fn int_of(o: &WrappedObject) -> Option<u64> { if let Object::Integer(v) = **o { Some(v) } else { None } }
-pub(crate) fn eval(aml: &Interpreter<Hw>, path: &AmlName, method: &str, args: Vec<WrappedObject>) -> Option<WrappedObject> {
-    let full = name(method)?.resolve(path).ok()?;
-    aml.evaluate_if_present(full, args).ok().flatten()
-}
-pub(crate) fn eval_int(aml: &Interpreter<Hw>, path: &AmlName, method: &str) -> Option<u64> { eval(aml, path, method, Vec::new()).and_then(|o| int_of(&o)) }
-fn id_string(o: &WrappedObject) -> Option<String> {
-    match &**o {
-        Object::Integer(v) => Some(String::from_utf8_lossy(&w::eisa_id(*v as u32)).into_owned()),
-        Object::String(s) => Some(s.clone()),
-        _ => None,
-    }
-}
-pub(crate) fn ids_of(aml: &Interpreter<Hw>, path: &AmlName) -> Vec<String> {
-    let mut ids = Vec::new();
-    if let Some(h) = eval(aml, path, "_HID", Vec::new()).and_then(|o| id_string(&o)) { ids.push(h); }
-    if let Some(c) = eval(aml, path, "_CID", Vec::new()) {
-        match &*c { Object::Package(items) => ids.extend(items.iter().filter_map(id_string)), _ => ids.extend(id_string(&c)) }
-    }
-    ids
-}
-fn present(aml: &Interpreter<Hw>, path: &AmlName) -> bool { eval_int(aml, path, "_STA").map_or(true, |s| s & 1 != 0) }
-
-#[derive(Default)]
-struct Devices {
-    batteries: Vec<AmlName>,
-    ac: Vec<AmlName>,
-    lids: Vec<AmlName>,
-    thermal: Vec<AmlName>,
-    processors: Vec<AmlName>,
-    i2c_hid: Vec<AmlName>,
-}
-static DEVICES: spin::Mutex<Option<Devices>> = spin::Mutex::new(None);
-
-fn inventory(aml: &Interpreter<Hw>) -> Devices {
-    let mut found: Vec<(AmlName, NamespaceLevelKind)> = Vec::new();
-    let mut ns = aml.namespace.lock().clone();
-    let _ = ns.traverse(|path, level| {
-        match level.kind {
-            NamespaceLevelKind::Device | NamespaceLevelKind::Processor | NamespaceLevelKind::ThermalZone => found.push((path.clone(), level.kind)),
-            _ => {}
-        }
-        Ok(true)
-    });
-    drop(ns);
-    let mut d = Devices::default();
-    for (path, kind) in found.into_iter().take(1024) {
-        match kind {
-            NamespaceLevelKind::ThermalZone => d.thermal.push(path),
-            NamespaceLevelKind::Processor => d.processors.push(path),
-            _ => {
-                let ids = ids_of(aml, &path);
-                let has = |x: &str| ids.iter().any(|i| i == x);
-                if has("ACPI0007") { d.processors.push(path.clone()); }
-                if !present(aml, &path) { continue; }
-                if has("PNP0C0A") { d.batteries.push(path); }
-                else if has("ACPI0003") { d.ac.push(path); }
-                else if has("PNP0C0D") { d.lids.push(path); }
-                else if has("PNP0C50") || has("ACPI0C50") {
-                    serial_println!("[acpi.i2c_hid] path={} ids={:?} driver=later", path, ids);
-                    d.i2c_hid.push(path);
-                }
-            }
-        }
-    }
-    d
-}
-
-/// The deepest `_CST` state entered with MWAIT whose exit latency stays under 200 us.
-fn choose_cstate(aml: &Interpreter<Hw>, cpu: &AmlName) -> Option<(u8, u16, u32)> {
-    let cst = eval(aml, cpu, "_CST", Vec::new())?;
-    let Object::Package(items) = &*cst else { return None };
-    let mut best: Option<(u8, u16, u32)> = None;
-    for item in items.iter().skip(1) {
-        let Object::Package(state) = &**item else { continue };
-        if state.len() < 4 { continue; }
-        let Object::Buffer(reg) = &*state[0] else { continue };
-        let (Some(kind), Some(latency)) = (int_of(&state[1]), int_of(&state[2])) else { continue };
-        // Generic register descriptor: 0x82, len(2), space, width, offset, access, address(8).
-        if reg.len() < 12 || reg[0] != 0x82 || reg[3] != 0x7F || reg[4] != 1 || reg[5] != 2 { continue; }
-        let hint = u32::from_le_bytes([reg[7], reg[8], reg[9], reg[10]]);
-        if latency <= 200 && best.map_or(true, |(k, _, _)| kind as u8 > k) { best = Some((kind as u8, latency as u16, hint)); }
-    }
-    best
 }
 
 // ── CPU performance and idle ───────────────────────────────────────────────
@@ -558,53 +465,14 @@ pub fn init(rsdp: u64, hhdm: u64) {
     let (ck, ca) = gas_label(&fixed.pm1a_cnt);
     FIXED.call_once(|| fixed);
 
-    // AML: the interpreter, then what only AML knows.
-    let mut aml_ok = false;
-    let guarded = quarantine_self_test();
-    serial_println!("[acpi.aml.quarantine] self_test={}", guarded as u8);
-    if !guarded { AML_QUARANTINED.store(true, Ordering::Release); }
-    let mut cpu_flags = cpu_init_local();
-    if let Ok(platform) = acpi::platform::AcpiPlatform::new(tables, Hw) {
-        let mut slot = AML.lock();
-        if let Some(Ok(interp)) = quarantined(|| Interpreter::new_from_platform(&platform)) {
-            *slot = Some(interp);
-            let interp = slot.as_ref().unwrap();
-            let ready = quarantined(|| {
-                // Interrupts go through the APIC: tell the firmware before _INI runs.
-                if let Some(pic) = name("\\_PIC") { let _ = interp.evaluate_if_present(pic, alloc::vec![WrappedObject::new(Object::Integer(1))]); }
-                interp.initialize_namespace();
-                if let Some(s5) = eval(interp, &AmlName::root(), "\\_S5", Vec::new()) {
-                    if let Object::Package(items) = &*s5 {
-                        if let (Some(a), Some(b)) = (items.first().and_then(int_of), items.get(1).and_then(int_of)) {
-                            S5.store((a & 7) as u32 | ((b & 7) as u32) << 8, Ordering::Release);
-                        }
-                    }
-                }
-                let devices = inventory(interp);
-                let cstate = devices.processors.first().and_then(|cpu| choose_cstate(interp, cpu));
-                (devices, cstate)
-            });
-            if let Some((devices, cstate)) = ready {
-                aml_ok = true;
-                let mut info = INFO.lock();
-                info.batteries = devices.batteries.len().min(255) as u8;
-                info.lids = devices.lids.len().min(255) as u8;
-                info.thermal_zones = devices.thermal.len().min(255) as u8;
-                info.i2c_hid = devices.i2c_hid.len().min(255) as u8;
-                // Deeper than C1 only where the local APIC timer keeps running (ARAT).
-                let monitor = cpuid(1, 0).ecx & (1 << 3) != 0;
-                let arat = max_leaf() >= 6 && cpuid(6, 0).eax & (1 << 2) != 0;
-                if let Some((kind, latency, hint)) = cstate {
-                    if monitor && arat && kind >= 2 {
-                        MWAIT_HINT.store(hint, Ordering::Release);
-                        info.idle_state = kind; info.idle_latency_us = latency;
-                        cpu_flags |= w::MWAIT_IDLE;
-                    }
-                }
-                *DEVICES.lock() = Some(devices);
-            }
-        }
-    }
+    // The AML tables, for the ACPI service: FADT, DSDT, then the SSDTs.
+    let mut list = Vec::new();
+    if let Some(fadt) = tables.find_table::<Fadt>() { list.push((fadt.physical_start as u64, fadt.region_length as u32, u32::from_le_bytes(*b"FACP"))); }
+    if let Ok(dsdt) = tables.dsdt() { list.push((dsdt.phys_address as u64, dsdt.length, u32::from_le_bytes(*b"DSDT"))); }
+    for ssdt in tables.ssdts().take(64) { list.push((ssdt.phys_address as u64, ssdt.length, u32::from_le_bytes(*b"SSDT"))); }
+    let table_count = list.len();
+    TABLES.call_once(|| list);
+    let cpu_flags = cpu_init_local();
     let s5 = S5.load(Ordering::Acquire);
     let f = FIXED.get().unwrap();
     let mut info = INFO.lock();
@@ -612,12 +480,10 @@ pub fn init(rsdp: u64, hhdm: u64) {
         | if s5 != u32::MAX && (f.pm1a_cnt.is_some() || f.sleep_cnt.is_some()) { w::CAN_OFF } else { 0 }
         | w::CAN_RESTART
         | if f.power_button_fixed && !f.hw_reduced { w::POWER_BUTTON } else { 0 }
-        | if f.hw_reduced { w::HW_REDUCED } else { 0 }
-        | if aml_ok { w::AML } else { 0 };
-    serial_println!("[acpi.power] s5={} slp_typ_a={} slp_typ_b={} pm1_cnt={}:{:#x} reset={}:{:#x} sci={} sci_en={} power_button={} hw_reduced={} aml={} quarantined={} batteries={} lids={} thermal={} i2c_hid={} idle=C{} hwp={} cppc={}",
+        | if f.hw_reduced { w::HW_REDUCED } else { 0 };
+    serial_println!("[acpi.power] s5={} slp_typ_a={} slp_typ_b={} pm1_cnt={}:{:#x} reset={}:{:#x} sci={} sci_en={} power_button={} hw_reduced={} aml_tables={} aml_in_kernel=0 hwp={} cppc={}",
         (info.flags & w::CAN_OFF != 0) as u8, s5 & 0xFF, (s5 >> 8) & 0xFF, ck, ca, rk, ra, f.sci, sci_en,
-        (info.flags & w::POWER_BUTTON != 0) as u8, f.hw_reduced as u8, aml_ok as u8, AML_QUARANTINED.load(Ordering::Relaxed) as u8,
-        info.batteries, info.lids, info.thermal_zones, info.i2c_hid, info.idle_state,
+        (info.flags & w::POWER_BUTTON != 0) as u8, f.hw_reduced as u8, table_count,
         (cpu_flags & w::HWP != 0) as u8, (cpu_flags & w::CPPC != 0) as u8);
 }
 
@@ -650,7 +516,14 @@ pub fn begin(kind: u64, why: &str) -> bool {
         if ok { crate::scheduler::unpark_thread(pd.main_task.load(Ordering::Acquire)); }
         ok
     });
-    serial_println!("[acpi.power.begin] kind={} by={} files={} told={}", what, why, files, told as u8);
+    let firmware = FIRMWARE_PD.load(Ordering::Acquire);
+    let pts = firmware != 0 && crate::ipc::DOMAIN_REGISTRY.get(firmware).map_or(false, |pd| {
+        let msg = crate::ipc::messages::MessageType::IpcCall { func_id: w::OP_PREPARE, arg0: kind, arg1: 0, arg2: 0, caller_pd: 0, caller_task: 0 };
+        let ok = unsafe { (*pd.message_ring).enqueue(msg) }.is_ok();
+        if ok { crate::scheduler::unpark_thread(pd.main_task.load(Ordering::Acquire)); }
+        ok
+    });
+    serial_println!("[acpi.power.begin] kind={} by={} files={} told={} firmware_told={}", what, why, files, told as u8, pts as u8);
     if !told { FLUSHED.store(2, Ordering::Release); }
     true
 }
@@ -685,13 +558,7 @@ fn stop_everything() {
 pub fn power_off() -> ! {
     let f = FIXED.get();
     let s5 = S5.load(Ordering::Acquire);
-    // \_PTS(5) lets the firmware prepare; skipped if AML is unavailable or busy.
-    if let Some(mut aml) = AML.try_lock() {
-        if let Some(interp) = aml.as_ref() {
-            let _ = quarantined(|| { if let Some(p) = name("\\_PTS") { let _ = interp.evaluate_if_present(p, alloc::vec![WrappedObject::new(Object::Integer(5))]); } });
-        }
-        if AML_QUARANTINED.load(Ordering::Acquire) { core::mem::forget(aml.take()); }
-    }
+    // \_PTS ran in the ACPI service when it was told OP_PREPARE.
     serial_println!("[acpi.power.off] s5={:#x} entering=1", s5);
     stop_everything();
     if let (Some(f), true) = (f, s5 != u32::MAX) {
@@ -745,40 +612,16 @@ pub fn restart() -> ! {
 
 // ── Sensors ────────────────────────────────────────────────────────────────
 
-fn read_sensors() -> Result<w::Sensors, u64> {
-    let Some(mut aml) = AML.try_lock() else { return Err(w::BUSY) };
-    let devices = DEVICES.lock();
-    let (Some(interp), Some(d)) = (aml.as_ref(), devices.as_ref()) else { return Ok(w::Sensors::default()) };
-    let out = quarantined(|| {
-        let mut s = w::Sensors::default();
-        let (mut now, mut full, mut charging) = (0u64, 0u64, false);
-        for b in d.batteries.iter() {
-            if eval_int(interp, b, "_STA").map_or(true, |v| v & 0x10 == 0) { continue; }
-            let bst = eval(interp, b, "_BST", Vec::new());
-            let (bix, shift) = match eval(interp, b, "_BIX", Vec::new()) { Some(o) => (Some(o), 1), None => (eval(interp, b, "_BIF", Vec::new()), 0) };
-            if let (Some(bst), Some(bix)) = (bst, bix) {
-                if let (Object::Package(st), Object::Package(info)) = (&*bst, &*bix) {
-                    let remaining = st.get(2).and_then(int_of).unwrap_or(0);
-                    let last_full = info.get(2 + shift).and_then(int_of).filter(|v| *v != 0 && *v != 0xFFFF_FFFF)
-                        .or_else(|| info.get(1 + shift).and_then(int_of)).unwrap_or(0);
-                    if remaining != 0xFFFF_FFFF && last_full != 0 && last_full != 0xFFFF_FFFF { now += remaining; full += last_full; }
-                    charging |= st.first().and_then(int_of).map_or(false, |v| v & 2 != 0);
-                }
-            }
-        }
-        if full != 0 { s.battery_percent = Some(((now * 100) / full).min(100) as u8); s.charging = charging; }
-        if let Some(ac) = d.ac.first() { s.on_ac = eval_int(interp, ac, "_PSR").map(|v| v != 0); }
-        if let Some(lid) = d.lids.first() { s.lid_open = eval_int(interp, lid, "_LID").map(|v| v != 0); }
-        s.hottest_decikelvin = d.thermal.iter().filter_map(|t| eval_int(interp, t, "_TMP")).filter(|v| *v > 0 && *v < 6000).max().map(|v| v as u32);
-        s
-    });
-    if AML_QUARANTINED.load(Ordering::Acquire) { drop(devices); core::mem::forget(aml.take()); }
-    out.ok_or(w::UNAVAILABLE)
+fn read_sensors() -> [u64; 5] {
+    match *SENSOR_WORDS.lock() {
+        Some(words) => [w::OK, words[0], words[1], words[2], 0],
+        None => w::Sensors::default().encode(),
+    }
 }
 
 // ── The Power capability (syscall 84) ──────────────────────────────────────
 
-pub fn invoke(pd: &crate::capability::ProtectionDomain, slot: u64, op: u64, arg: u64) -> [u64; 5] {
+pub fn invoke(pd: &crate::capability::ProtectionDomain, slot: u64, op: u64, arg: u64, arg2: u64, arg3: u64) -> [u64; 5] {
     let denied = [w::DENIED, 0, 0, 0, 0];
     let Some(slot) = crate::capability_slot::decode_capability_slot(slot) else { return denied };
     let Some(crate::capability::CapabilityData::Power(grant)) = pd.find_capability(slot).map(|c| c.data) else { return denied };
@@ -797,8 +640,21 @@ pub fn invoke(pd: &crate::capability::ProtectionDomain, slot: u64, op: u64, arg:
             poll();
             [w::OK, 0, 0, 0, 0]
         }
-        w::SENSORS if has(w::SENSE) || has(w::REQUEST) => match read_sensors() { Ok(s) => s.encode(), Err(e) => [e, 0, 0, 0, 0] },
+        w::SENSORS if has(w::SENSE) || has(w::REQUEST) => read_sensors(),
+        w::FW_TABLE if has(w::FIRMWARE) => fw_table(arg, arg2),
+        w::FW_IO if has(w::FIRMWARE) => fw_io(arg, arg2),
+        w::FW_MEM if has(w::FIRMWARE) => fw_mem(arg, arg2, arg3),
+        w::FW_PCI if has(w::FIRMWARE) => fw_pci(arg, arg2, arg3),
+        w::FW_INVENTORY if has(w::FIRMWARE) => fw_inventory(arg, arg2, arg3),
+        w::FW_IDLE if has(w::FIRMWARE) => fw_idle(arg),
+        w::FW_DGPU if has(w::FIRMWARE) => super::dgpu::firmware_op(arg, arg2, arg3),
+        w::FW_SENSORS if has(w::FIRMWARE) => {
+            let first = SENSOR_WORDS.lock().replace([arg, arg2, arg3]).is_none();
+            if first { serial_println!("[acpi.firmware.sensors] first=1 words={:#x},{:#x},{:#x}", arg, arg2, arg3); }
+            [w::OK, 0, 0, 0, 0]
+        }
         w::OFF | w::RESTART | w::READY | w::SENSORS => denied,
+        w::FW_TABLE | w::FW_IO | w::FW_MEM | w::FW_PCI | w::FW_INVENTORY | w::FW_IDLE | w::FW_SENSORS | w::FW_DGPU => denied,
         _ => [w::INVALID, 0, 0, 0, 0],
     }
 }
