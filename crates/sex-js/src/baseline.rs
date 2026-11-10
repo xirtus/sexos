@@ -20,6 +20,13 @@ pub struct Stats {
     pub bailouts: u64,
     pub refused: u64,
 }
+/// PRIVATE diagnostic copy of existing cache state; not a function identity.
+pub struct DiagnosticCandidate {
+    pub bytecode: Vec<u8>,
+    pub argc: usize,
+    pub calls: u16,
+    pub compiled: bool,
+}
 
 pub(crate) struct Jit {
     pub enabled: bool,
@@ -43,6 +50,11 @@ impl Default for Jit {
 }
 
 impl Jit {
+    pub fn diagnostic_candidates(&self) -> Vec<DiagnosticCandidate> {
+        self.entries.iter().take(CACHE).map(|e| DiagnosticCandidate {
+            bytecode: e.bytecode.clone(), argc: e.argc, calls: e.calls, compiled: e.code.is_some(),
+        }).collect()
+    }
     /// All offsets and JSValue tags are validated before compiling or calling code.
     /// The copied arguments are the only memory generated code may read.
     pub fn run(

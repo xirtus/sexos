@@ -393,6 +393,13 @@ impl<P: Page + 'static> Script<P> {
             #[cfg(sexjs_native)] Vm::Native(v) => v.jit_stats(),
         }
     }
+    #[cfg(feature = "baseline-jit")]
+    pub fn diagnostic_jit_candidates(&self) -> Vec<baseline::DiagnosticCandidate> {
+        match &self.vm {
+            Vm::Wasmi(w) => w.store.data().jit.diagnostic_candidates(),
+            #[cfg(sexjs_native)] Vm::Native(v) => v.diagnostic_jit_candidates(),
+        }
+    }
 
     /// Bytes of linear memory the engine holds.
     pub fn memory_bytes(&self) -> usize { self.vm.memory_bytes() }

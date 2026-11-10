@@ -21,6 +21,9 @@ static mut CACHES: [Option<Cache>; SLOTS] = [const { None }; SLOTS];
 struct Evals { owner: u64, frame: i64, total: u32, ok: u32, thrown: u32, trapped: u32, other: u32, lines: Vec<String> }
 static mut EVALS: [Option<Evals>; SLOTS] = [const { None }; SLOTS];
 
+fn document(doc: &Doc) -> &super::Document {
+    match doc { Doc::Plain(d) => d, Doc::Scripted(s) => s.page() }
+}
 fn text(s: &str) -> String {
     s.chars().take(80).map(|c| if c.is_ascii_graphic() || c == ' ' { c } else { '?' }).collect()
 }
@@ -78,7 +81,7 @@ pub(super) fn outcome(context: Option<(usize,i64)>, owner: u64, source: &str, re
 pub(super) fn record_layout(b: &Browser, styles: &[Option<Style>]) {
     let Some(at) = slot(b) else { return };
     if at >= SLOTS { return; }
-    let d = b.doc.get();
+    let d = document(&b.doc);
     let owner = d.diagnostic_owner();
     let frame = b.in_frame.map_or(-1, |n| n as i64);
     let seq = SEQ.fetch_add(1, Ordering::Relaxed) + 1;
@@ -114,7 +117,7 @@ pub(super) fn snapshot(b: &Browser) {
 #[allow(clippy::too_many_arguments)]
 fn raw(doc: &Doc, page: &Page, media: &[super::media::Media], at: usize, frame: i64,
     view: (i32,i32), scroll: i32, script_scroll: i32, timer: Option<u64>, loads: usize) {
-    let d = doc.get();
+    let d = document(doc);
     let owner = d.diagnostic_owner();
     let mut count = 0; let mut unknown = 0;
     for n in 0..d.dom.nodes.len().min(SCAN) {
@@ -141,7 +144,16 @@ fn raw(doc: &Doc, page: &Page, media: &[super::media::Media], at: usize, frame: 
     #[cfg(feature="baseline-jit")]
     if let Doc::Scripted(s) = doc {
         let stats = s.jit_stats();
-        sex_pdx::serial_record!("[web.live.jit] owner={} frame={} compiled={} executed={} bailouts={} refused={} scope=host-jit-cache c_guard_skips=unavailable",owner,frame,stats.compiled,stats.executed,stats.bailouts,stats.refused);
+        sex_pdx::serial_record!("[web.live.jit] owner={} frame={} compiled={} executed={} bailouts={} seal_refused={} scope=host-jit-cache c_guard_skips=unavailable",owner,frame,stats.compiled,stats.executed,stats.bailouts,stats.refused);
+        let candidates=s.diagnostic_jit_candidates();
+        sex_pdx::serial_record!("[web.live.candidates] owner={} frame={} entries={} capacity=64 hot_threshold=32 key=bytecode-plus-arity functions=unavailable preguard_calls=unavailable",owner,frame,candidates.len());
+        for (i,c) in candidates.iter().take(64).enumerate() {
+            sex_pdx::serial_record!("[web.live.candidate] owner={} frame={} entry={} argc={} calls={} saturated={} compiled={} byte_len={} uncompiled_reason=unavailable",owner,frame,i,c.argc,c.calls,(c.calls==u16::MAX)as u8,c.compiled as u8,c.bytecode.len());
+            for (part,bytes) in c.bytecode.chunks(64).enumerate() {
+                let mut hex=String::new();for byte in bytes {use core::fmt::Write;let _=write!(hex,"{:02x}",byte);}
+                sex_pdx::serial_record!("[web.live.bytecode] owner={} frame={} entry={} part={} hex={}",owner,frame,i,part,hex);
+            }
+        }
     } else {
         sex_pdx::serial_record!("[web.live.jit] owner={} frame={} status=unavailable-not-scripted",owner,frame);
     }

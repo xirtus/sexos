@@ -159,6 +159,10 @@ impl<P: Page + 'static> Native<P> {
     pub fn set_jit_enabled(&mut self, enabled: bool) { unsafe { (*self.ctx).jit.enabled = enabled; } }
     #[cfg(feature = "baseline-jit")]
     pub fn jit_stats(&self) -> super::baseline::Stats { unsafe { (*self.ctx).jit.stats } }
+    #[cfg(feature = "baseline-jit")]
+    pub fn diagnostic_jit_candidates(&self) -> Vec<super::baseline::DiagnosticCandidate> {
+        unsafe { (*self.ctx).jit.diagnostic_candidates() }
+    }
     pub fn page(&self) -> &P { unsafe { &*self.page } }
     pub fn page_mut(&mut self) -> &mut P { unsafe { &mut *self.page } }
 
