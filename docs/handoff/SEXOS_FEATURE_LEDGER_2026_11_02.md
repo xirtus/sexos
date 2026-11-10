@@ -3566,6 +3566,10 @@ Plan: `docs/handoff/NVIDIA_GPU_PLAN_2026_11_09.md` (stages N1-N6).
 - **AML work budget**: `acpi::with_aml(budget, f)` runs firmware AML quarantined with a limit on register accesses and stalls, so a firmware loop cannot hang the boot.
 - **Gate** `scripts/dgpu_power_gate.py` in CI: QEMU root port + display controller + SSDT power resource (`tests/acpi/dgpu_gate_ssdt.asl`); checks the method order off/on/off on the debug console, the restored header, the boot GPU kept and the desktop up.
 - ABI: none.
+## Net: ALPN http/1.1 (2026-11-09)
+
+- The open-web TLS session names `http/1.1` in its handshake (ALPN), as browsers do (the rustls move set `alpn_protocols`). Host test `[sexnet.tls.open.host]` now proves it on the wire: an OpenSSL server offering `h2` and `http/1.1` must pick `http/1.1`. YouTube stage Y3e.
+
 
 ## Intel Wi-Fi, stage W1: driver core with WPA2 and WPA3 (2026-11-09)
 
@@ -3576,6 +3580,20 @@ Plan: `docs/handoff/NVIDIA_GPU_PLAN_2026_11_09.md` (stages N1-N6).
 - **Evidence:** `scripts/wifi_host_gate.sh` (CI): 24 tests incl. IEEE 802.11 annex vectors (PSK, PRF, CCMP, SAE J.10), RFC 3394/3610/4493, full WPA2 and WPA3 handshakes against a test access point, and the real linux-firmware AX210 image (fetched pinned and SHA-256 checked by `scripts/fetch_wifi_firmware.sh`).
 - **No ABI change.** New dependency `sha1` 0.10 (RustCrypto).
 - **Limits:** not wired into the running system yet; QEMU has no Intel Wi-Fi model, so the radio is proven only on hardware. Next (W2): lease the chip to sexnet, ship its firmware, and log `[wifi.alive]` on the x17.
+
+## Media Source Extensions for video and audio (YouTube Y5, 2026-11-10)
+
+- **Scripts:** `MediaSource` (`isTypeSupported`, `addSourceBuffer`, `removeSourceBuffer`, `duration`, `endOfStream`, `sourceopen`/`sourceended`), `SourceBuffer` (`appendBuffer`, `remove`, `abort`, `buffered`, `updating` with `updatestart`/`update`/`updateend`), `SourceBufferList`; `URL.createObjectURL(mediaSource)` as an element's `src`.
+- **Types:** fragmented MP4 with H.264, AV1, AAC or MP3. WebM is refused for now (`isTypeSupported` says false, so players fall back to MP4).
+- **sex-web:** `mse::Stream` parses appended bytes as they come: init segment (track ids, timescales, kinds, trex defaults) and moof/trun times give `buffered`. Host tests use synthetic boxes and FFmpeg-made fixtures.
+- **Web:** each SourceBuffer is a growing `sex_media::Source`; bytes long read are let go. Separate video and audio buffers play on one clock.
+- **sex-media:** `Source::ahead()` and `Source::growing()`; `Player::pair(video, audio, ...)`. A growing stream is opened non-seekable and without `find_stream_info`, so FFmpeg's MP4 parser takes one fragment at a time.
+- **sex-fetch:** `pieces` module (Content-Range parsing, Range piece bookkeeping) for seekable network `src`.
+- **ABI:** sex-js host op `MEDIA_APPEND` = 70 (bytes). No kernel ABI change.
+- **Gate:** `scripts/program_web_mse_gate.py` (QEMU, sound recorded to WAV).
+- **Then (same day):** WebM SourceBuffers (VP9, AV1, Opus, Vorbis; Clusters of known or unknown size), `timestampOffset` (written into `tfdt` / the Cluster `Timecode`), `abort`, `changeType`, seeking (waits until the target's segments are appended), quality switches (a new init segment mid-stream), `remove()` that frees segments, and a 160 MiB per-buffer quota that lets go of played segments first.
+- **How:** `sex_web::mse::Stream` keeps segments by time with the init segment each follows. Web's feed hands the decoder an init segment and then segments in time order. `sex_media::Source` gains `restart(ms)` (seek by starting a new stream) and `next_stream()` (at a switch, or where a feed ran dry, the decoder opens again on what follows, keeping the player's queue and clock; `Next::Later` while it waits). A growing stream keeps its own presentation times (no start-time shift) and reads in 16 KiB steps.
+- **Limits:** `appendWindowStart/End` and `mode = 'sequence'` are accepted but not applied; a `remove()` that cuts a segment in two keeps the whole segment for the decoder (only `buffered` shows the cut).
 
 ## Video and sound play while they download (2026-11-10)
 
@@ -3704,3 +3722,16 @@ Follow-up to the boot log and crash records work (`BOOT_LOG_AND_CRASH_RECORDS_20
   `volume list` asks row by row the same way and needs checking.
 - Next: follow the headphone jack (speaker off while headphones are in) by pin sense
   and unsolicited responses; HDMI and DisplayPort audio.
+## Shell keeps windows, workspaces and layouts across its own restart (2026-11-10)
+
+- **What:** after a Shell crash, every window comes back where it was, on its workspace,
+  minimized, floating or zoomed as before; each workspace keeps its layout; Spindle's
+  window opens again if it was open; focus returns.
+- **How:** `servers/silk-shell/src/session.rs` writes a checksummed one-page snapshot that
+  the kernel leaves alone on restart; a new Shell restores it after adopting apps.
+- **ABI:** `SYS_CRASH_LOG` op 5 `OP_KEEP` (`sex_pdx::crash_log::keep`); `abi_version_hash`
+  recomputed. **Kernel:** `service_restart::keep` (~20 lines, mechanism only: skip
+  restoring up to 4 of the caller's own BOOT pages).
+- **Evidence:** `scripts/crash_screen_gate.py` start 3 switches the layout to dwindle,
+  crashes Shell, and checks 4 windows restored, the dwindle layout, and 96% identical
+  pixels before and after.

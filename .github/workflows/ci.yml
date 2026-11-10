@@ -12,7 +12,9 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # Runs take 35-45 min and grow with each gate; two runs hit 45 while
+    # uploading the proof after every step had passed.
+    timeout-minutes: 75
 
     steps:
     - uses: actions/checkout@v4

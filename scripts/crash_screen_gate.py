@@ -12,7 +12,8 @@ Start 2 (warm restart, same RAM): the kernel finds the kept stop, pins it at the
 the boot log, and Files writes it to disk next to the two earlier records.
 Start 3 (cold, QEMU started again, RAM gone): Files reads all three back from disk and
 `crashes` in Spindle lists them as from an earlier start. Then Shell ends: Shell and
-Display start again in place, the running apps keep their windows, and Spindle works.
+Display start again in place, the running apps keep their windows, the layout and
+every window's place come back, and Spindle works.
 Start 1 also ends Display alone: Shell puts the same desktop back on the screen.
 """
 import argparse,os,re,shutil,subprocess,time
@@ -68,6 +69,14 @@ def same(a,b):
 def desktop(g,s=0):
  g['wait'](r'\[shell.app.registered.reply\] target=15 .*committed=1',s,240);g['wait'](r'\[linen.disk.publish.done\]',s,240)
  g['wait'](r'\[app.private.retired\] target=41 ',s,240);time.sleep(2)
+
+def chord(g,keys,action):
+ # Press in order, release in reverse; the Shell records the action it took.
+ send=lambda down,k:g['q'].cmd('input-send-event',{'events':[{'type':'key','data':{'down':down,'key':{'type':'qcode','data':k}}}]})
+ s=len(g['text']())
+ for k in keys:send(True,k);time.sleep(.08)
+ for k in reversed(keys):send(False,k);time.sleep(.08)
+ return g['wait'](r'\[shell.wm.action\] action='+re.escape(action)+r' done=1 scene=\d->\d focus=\d+->\d+ layout=(\w+)',s,30)
 
 def spindle(g,command,pattern,timeout=60):
  g['focus'](SPINDLE);time.sleep(.5);s=len(g['text']())
@@ -135,14 +144,20 @@ def main():
   evidence['cold_kept']=int(m[1])
   # Shell starts again in place: Display starts with it, the running apps keep their
   # windows, and Spindle (which kept running) still takes commands.
+  # Shell keeps the desktop across its own restart: change the layout first.
+  m=chord(g,['meta_l','spc'],'CycleLayout');layout=m[1];assert layout!='master',m[0]
+  time.sleep(2);shot(g,a.out/'before-shell.ppm')
   s=len(g['text']());spindle(g,'crash shell',r'\[crash.probe.service\] pd=3')
   g['wait'](r'\[service.restarted\] pd=3 ',s,60);g['wait'](r'\[service.restarted\] pd=1 ',s,60)
   m=g['wait'](r'\[shell.restarted\] restarts=1 adopted=(\d+) windows=(\d+)',s,60);assert int(m[1])>=1 and int(m[2])>=3,m[0]
   time.sleep(4);_,_,px=shot(g,a.out/'after-shell.ppm');assert frac(px,STOP_BG)<.01
+  r=g['wait'](r'\[shell.session.restored\] windows=(\d+) minimized=\d+ shown=(\d+) scene=0 ',s,60);assert int(r[1])>=3,r[0]
+  g['wait'](r'\[shell.wm.layout\] scene=0 layout='+re.escape(layout)+' ',s,30)
+  kept=round(same(a.out/'before-shell.ppm',a.out/'after-shell.ppm'),3);assert kept>.9,kept
   # Focus as the new Shell reports it, not the old run's last record.
   g['focus']=lambda sid:focus_surface(sid,lambda:g['text']()[s:],g['key'])
   spindle(g,'crashes',r'\[spindle.crashes.row\] seq=\d+ kind=4 pd=3 earlier=0')
-  evidence['shell_restart']=dict(adopted=int(m[1]),windows=int(m[2]))
+  evidence['shell_restart']=dict(adopted=int(m[1]),windows=int(m[2]),restored=int(r[1]),layout=layout,same_pixels=kept)
   assert 'KERNEL PANIC' not in g['text']()[s:]
  finally:g['stop']()
  print({'ok':True,**evidence})
