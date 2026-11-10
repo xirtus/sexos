@@ -5541,6 +5541,11 @@ pub extern "C" fn _start() -> ! {
         }
         if req.type_id==sex_pdx::program_store::OP_BIND&&req.caller_pd==3{web.bind(req.arg0 as u32,req.arg1 as u32);continue}
         if app_custody.is_retired(req.caller_pd) {continue}
+        if req.type_id==sex_pdx::wifi_status::OP{
+            // The desktop's view of Wi-Fi (Spindle's `wifi`): one word, answered at once.
+            pdx_reply(req.caller_pd,wifi::request(wifi.as_mut(),req.caller_pd as u32,req.arg0,req.arg1,req.arg2,sex_pdx::get_ticks()));
+            continue;
+        }
         if req.type_id==sex_pdx::web::OP{
             web_reply=Some((req.caller_pd,match network_request_owner(req.caller_pd,req.caller_task){
                 Some(owner)=>web.handle(owner,req.arg0,req.arg1,transport.as_mut()),

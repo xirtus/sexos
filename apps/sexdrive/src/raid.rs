@@ -45,9 +45,10 @@ static mut RAW: bool = false;
 /// True while this layer reads the first drive's own sectors.
 pub fn raw() -> bool { unsafe { RAW } }
 fn first_read(offset: u64, size: u64, dst_va: u64) -> u64 {
-    unsafe { RAW = true; }
+    // The member's own sectors, metadata at its end included: past the disk lens too.
+    unsafe { RAW = true; super::RAW = true; }
     let status = super::nvme_read_into_mapped_va(offset, size, dst_va, 0);
-    unsafe { RAW = false; }
+    unsafe { RAW = false; super::RAW = false; }
     status
 }
 pub fn sectors() -> u64 { unsafe { VOLUME.sectors } }

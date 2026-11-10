@@ -915,6 +915,22 @@ pub const BLOCK_READ:  u64 = 1; // Read sectors from block device
 pub const BLOCK_WRITE: u64 = 2; // Write sectors to block device
 pub const BLOCK_SYNC:  u64 = 3; // Flush/barrier (no data transfer)
 pub const BLOCK_CAPACITY: u64 = 4; // Replies with the device's size in sectors
+/// The installer's whole-disk view, untranslated by the disk layout (Files only, for
+/// `install`). The first raw write stops the running system's own writes until restart.
+pub const BLOCK_RAW_READ: u64 = 5;
+pub const BLOCK_RAW_WRITE: u64 = 6;
+/// Replies with how this system may use the disk: a BLOCK_LAYOUT_* kind in the low byte
+/// and the whole disk's sectors above it.
+pub const BLOCK_LAYOUT: u64 = 7;
+pub const BLOCK_LAYOUT_UNKNOWN: u64 = 0;
+/// Blank or SexOS's legacy whole-disk install: the whole disk is SexOS's.
+pub const BLOCK_LAYOUT_WHOLE: u64 = 1;
+/// A GPT shared with other systems: SexOS reads and writes only its store partition.
+pub const BLOCK_LAYOUT_STORE: u64 = 2;
+/// Another system's disk: ordinary reads and writes are refused.
+pub const BLOCK_LAYOUT_FOREIGN: u64 = 3;
+/// The installer changed the layout: no writes until restart.
+pub const BLOCK_LAYOUT_LOCKED: u64 = 4;
 
 // Block protocol status codes — returned as pdx_reply value.
 pub const BLOCK_OK:           u64 = 0; // Success
@@ -1233,6 +1249,7 @@ pub mod desktop_style;
 pub mod pixel_region;
 pub mod sound_ring;
 pub mod sound_mixer;
+pub mod wifi_status;
 pub mod document_view;
 
 pub mod display_boot;
