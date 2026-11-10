@@ -15,6 +15,7 @@ ABI_INPUTS=(
   kernel/src/boot_network.rs
   kernel/src/pci_command.rs
   crates/sex-pdx/src/virtio.rs
+  crates/sex-pdx/src/dma_lend.rs
   crates/sex-pdx/src/device.rs
   kernel/src/entropy_source.rs
   kernel/src/clock_source.rs

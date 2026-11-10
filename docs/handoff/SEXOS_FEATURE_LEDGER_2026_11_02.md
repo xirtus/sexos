@@ -3379,6 +3379,32 @@ Workstream D of the parity report. Handoff and bare-metal checklist: `docs/hando
 - **Sound.** Bell drives HD Audio (`servers/sexbell/src/hda.rs`): CORB/RIRB, analog pin to converter routing (speaker, headphones, line out; never HDMI), one always-running 48 kHz stereo stream over 16 periods. Gate `sound_gate.py --card hda`: 440 Hz/400 ms and 1000 Hz/310 ms recorded.
 - **Network.** igb/igc advanced descriptors and queue registers, igc DEV_RST, PHY autonegotiation restart, I219 ich8lan bits, DRV_LOAD; Realtek in `servers/sexnet/src/realtek.rs`. Gates `program_net_gate.py --nic igb|e1000e` (DHCP, HTTP download), `ethernet_peer_gate.py --model igb`; Realtek and igc host-tested only (QEMU lacks them).
 - **SATA.** `apps/sexdrive/src/ahci.rs` serves the block interface when no NVMe is present. `SEXOS_GATE_DISK_BUS=ahci` for gates; filesystem and disk persistence gates pass on SATA and NVMe.
+## IOMMU: a DMA domain for every driver, and the first zero-copy loan (2026-11-09)
+
+- **What runs now.** On machines with Intel VT-d (and in QEMU with `-device intel-iommu`),
+  each driver service's devices can reach only that service's DMA pool, their own
+  firmware-reserved memory, and memory the service lends them. Devices nobody leased
+  (dGPU, Wi-Fi, Thunderbolt, ...) reach nothing. Stray DMA is blocked and logged as
+  `[iommu.fault]` with the device and its owner. sexdrive lends Files' block buffer to
+  the NVMe controller, so disk reads land in Files' memory with no copy; a read that
+  times out ends the loan first, so a late completion faults instead of corrupting it.
+- **Design.** `crates/sex-iommu` (DMAR/IVRS parsing, VT-d fields, I/O page tables,
+  lending window; host-tested) and `kernel/src/iommu.rs`, which runs at BOOT after all
+  leases exist and before the seal, walking capabilities rather than devmgr, so new
+  leasing code gets domains for free. Pools are identity-mapped, so no driver had to
+  change. All tables, including each service's 128 MiB lending window, are built at
+  BOOT; lending only fills prepared leaves. The graphics-only unit stays off so the
+  firmware framebuffer keeps working; firmware DMA protection (PMR/TE) is replaced.
+- **ABI** (hash recomputed): syscall **90** `SYS_DMA` (`sex_pdx::dma_lend`): `OP_INFO`,
+  `OP_LEND` (region slot, offset, bytes, DEVICE_READ/DEVICE_WRITE -> device address),
+  `OP_RETURN`; statuses `DENIED`, `NO_IOMMU`, `EXHAUSTED`, `UNCERTAIN`; 64 loans, 128 MiB window.
+- **Limits.** AMD-Vi is detected and reported but not yet programmed (next step).
+  Interrupt remapping is off. Register-based invalidation (no queued invalidation yet).
+  Only sexdrive's reads use a loan so far; network and sound still bounce.
+- **Gates.** `scripts/iommu_host_gate.sh` (CI), `scripts/sexdrive_dma_host_gate.sh` (now
+  in CI, two zero-copy tests), `scripts/iommu_gate.py` (QEMU with VT-d: BOOT self-test
+  with QEMU's edu DMA device, then `filesystem_gate` and `sound_gate` behind VT-d with no
+  driver faults). Report: `docs/handoff/IOMMU_DMA_DOMAINS_2026_11_09.md`.
 
 ## WebP and GIF pictures, animated (2026-11-09)
 
@@ -3512,6 +3538,26 @@ Stages D2 and D3 of `DRIVERS_AND_X17_R1_PLAN_2026_11_09.md`. Handoff: `docs/hand
   VMD path is proven only against the simulation until the x17 R1 test. A third NVMe is logged
   and not leased. 4 KiB-sector (4Kn) drives are not sized yet.
 
+
+## AMD-Vi: AMD machines get per-driver DMA domains too (2026-11-10)
+
+- **What runs now.** On AMD machines (and QEMU with `-device amd-iommu`) every driver
+  service's devices reach only its DMA pool, its firmware-reserved memory and what it
+  lends, exactly as on Intel VT-d. Devices nobody leased point at an empty page table, so
+  their DMA faults. sexdrive's zero-copy reads now work on AMD too.
+- **Design.** `sex_iommu::ivrs` reads device id ranges, aliases (devices behind
+  PCIe-to-PCI bridges) and IVMD reserved memory, using only the newest IVHD type.
+  `sex_iommu::amdvi` encodes device table entries, commands and events.
+  `kernel/src/iommu.rs` now drives either vendor: the domain, pool, reserved-memory,
+  lending and revoke code is shared, and only attach, flush, enable and fault reading
+  differ per unit. Firmware that left AMD-Vi on is taken over.
+- **ABI.** None. Syscall 90 is unchanged; `abi_version_hash` unchanged.
+- **Gates.** `scripts/iommu_host_gate.sh` (12 tests, CI; found a wrong next-level field
+  in AMD page-table entries), `scripts/iommu_gate.py --vendor amd` (QEMU AMD-Vi: BOOT
+  self-test, files with zero-copy reads, sound) and the same gate on VT-d.
+- **Limits.** QEMU's AMD-Vi model does not log events for blocked DMA, so its self-test
+  proves isolation by data only. No interrupt remapping, one PCI segment, whole-domain
+  flushes on loan return.
 
 ## Discrete GPU off at boot (NVIDIA N1, 2026-11-09)
 

@@ -1030,6 +1030,8 @@ pub fn init() {
         let info=verify_browser_source_grants(seed_holder,plan);
         serial_println!("[boot.browser.sources.readback] holder={} target={} entropy={} clock={} trust={} late_before_seal=1 typed_info=1 runtime_context=0 trust_profile={} trust_root_bytes={} trust_version={}",sexnet_id,plan.target(),plan.entropy_slot(),plan.clock_slot(),plan.trust_slot(),info.profile,info.root_bytes,info.version);
     }
+    // Every device lease and DMA pool exists now: give each driver its DMA domain.
+    crate::iommu::init_boot();
     crate::boot_memory::seal_all();
 
     // Snapshot the actual kernel heap after all reserved images/grants exist.
