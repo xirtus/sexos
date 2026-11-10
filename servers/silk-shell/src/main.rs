@@ -14486,6 +14486,9 @@ unsafe fn palette_order() -> ([usize; COMMAND_LIST.len()], usize) {
 /// begun, the arrows always do; Esc clears a search before it closes; Enter
 /// with no match does nothing. Returns true when the key was taken.
 unsafe fn palette_search_intercept(scancode: u8) -> bool {
+    // Enter with nothing matching does nothing, with or without Ctrl: the
+    // hidden earlier selection must never run.
+    if scancode==0x1C && !PALETTE_QUERY.is_empty() && palette_order().1==0 {return true;}
     if APP_MODIFIERS.key(scancode).control {return false;}
     let nav=matches!(scancode,0x24|0x25) && PALETTE_QUERY.is_empty();
     if !nav && palette_search_key(scancode) {return true;}
@@ -14499,7 +14502,7 @@ unsafe fn palette_search_intercept(scancode: u8) -> bool {
         palette_render_list();
         return true;
     }
-    scancode==0x1C && !PALETTE_QUERY.is_empty() && palette_order().1==0
+    false
 }
 /// A typed character or Backspace while the launcher is open: refilter and
 /// select the best match. Returns false for keys search does not take.
