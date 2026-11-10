@@ -15,8 +15,9 @@ class SerialReceiptTests(unittest.TestCase):
   def text():
    state['text']+=next(chunks,'');state['reads']+=1;return state['text']
   def health():check_serial_health(state['text'],'test')
-  with patch('quil_autosave_gate.time.sleep'):
-   match=wait_serial(text,health,pattern,timeout=.01,tag='test',**kwargs)
+  ticks=iter(range(10000))
+  with patch('quil_autosave_gate.time.sleep'),patch('quil_autosave_gate.time.monotonic',side_effect=lambda:next(ticks)/1000):
+   match=wait_serial(text,health,pattern,timeout=2,tag='test',**kwargs)
   return match,state
  def test_actual_ci_partial_result_waits_for_rest_and_newline(self):
   partial='[web.console] level=0 jit-result 124929280|2147483648|-2147'
