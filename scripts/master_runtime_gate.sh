@@ -520,6 +520,9 @@ if [ ! -x "$BOOTGRAPH_CHECKER" ]; then
 else
     CHECKER_STATUS=0
     BOOTGRAPH_OUT="$("$BOOTGRAPH_CHECKER" "$LOG" --allow-fault 2>&1)" || CHECKER_STATUS=$?
+    # Preserve the checker's complete receipt/capture diagnostics beside the raw log.
+    printf '%s\n' "$BOOTGRAPH_OUT" > "$GATE_DIR/bootgraph.log"
+    printf '%s\n' "$BOOTGRAPH_OUT" | sed -n '/^SERIAL_CAPTURE: /p'
     BOOTGRAPH_FAIL_LINE="$(printf '%s\n' "$BOOTGRAPH_OUT" | sed -n '/^BOOTGRAPH FAIL:/{p;}' || true)"
     BOOTGRAPH_GATE="$(printf '%s\n' "$BOOTGRAPH_OUT" | awk '/^BOOTGRAPH_GATE:/ {print $2}')"
     CAP_GRANT_GATE="$(printf '%s\n' "$BOOTGRAPH_OUT" | awk '/^CAP_GRANT_GATE:/ {print $2}')"
@@ -650,6 +653,7 @@ cat > "$REPORT_PATH" << MDEOF
 - qemu diagnostics: $GATE_DIR/qemu.log
 - elapsed_seconds: $((SECONDS - RUN_STARTED_SECONDS))
 - log_path: $LOG
+- bootgraph diagnostics: $GATE_DIR/bootgraph.log (raw serial retained unchanged)
 - probe_seconds: $PROBE_SECONDS
 - nvme_enabled: $ENABLE_NVME
 - nvme_img: $NVME_IMG
