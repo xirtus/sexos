@@ -87,9 +87,9 @@ sample repainted after scale adoption still produces a descriptive draw observat
 First native checkpoint at source `97d433ce` built successfully from a fresh Rust
 target (only bootloader artifacts copied). Actual 1280×800 and1024×768 captures and
 provenance are in `docs/handoff/assets/slim-desktop-first97d/`. Both exact3456-pixel
-13px Geist clock oracles passed; native2560 scale1→2→1 receipts/ink passed, and a
-separate2x clock/geometry capture passed13824pixels. ISO `fd75e3415c457806d87e956be04d5e3e4a84b5f3824877ab37ec506ec93f963f`.
-Display ELF sections were text639306/data1269220/bss2461619bytes (4370145total);
+13px Geist clock oracles passed; native 2560 scale 1→2→1 receipts/ink passed, and a
+separate2x clock/geometry capture passed13824 pixels. ISO `fd75e3415c457806d87e956be04d5e3e4a84b5f3824877ab37ec506ec93f963f`.
+Display ELF sections were text639306/data1269220/bss2461619 bytes (4370145 total);
 BOOT reached and rendered the native desktop. This is a source-bound correctness
 checkpoint, not final input/browser/CI/performance acceptance. All guests stopped.
 The civil-clock source/health/authority suite retains26passing cases with the
@@ -97,26 +97,26 @@ single-line target and adds unchanged-sample/new-target draw-stamp coverage.
 
 Host migration and remaining geometry corrections:
 
-- All55 compositor cases,22 bitmap cases, binding/store controls and compiled
+- All 55 compositor cases, 22 bitmap cases, binding/store controls and compiled
   ownership/snapshot mutants passed after independent reference fixtures pinned
-  the visible28px boundary instead of confusing it with the84px backing capacity.
-  The first41/55failure log is retained in local evidence. No timing claim follows
+  the visible 28px boundary instead of confusing it with the 84px backing capacity.
+  The first 41/55 failure log is retained in local evidence. No timing claim follows
   from the correctness run (it overlapped another correctness build).
-- Scene23cases/15runtime mutants/source fences and the output pipeline with all
+- Scene 23 cases/15 runtime mutants/source fences and the output pipeline with all
   existing acquisition/publication/dirty-plan/source mutants passed. The additional
-  captured-boundary paint case is counted explicitly (14cases, not13).
-- Toolbar contrast checks cover the actual new title region after the24px controls,
+  captured-boundary paint case is counted explicitly (14 cases, not 13).
+- Toolbar contrast checks cover the actual new title region after the 24px controls,
   keep nominal ink contrast>=4.5 and compare AA pixels in all rendering paths.
-  A natural13px lowercase glyph need not contain a fully opaque pixel; the
+  A natural 13px lowercase glyph need not contain a fully opaque pixel; the
   independent title stem/TTF and real native readability evidence remains required.
-- The command palette previously used old36/44 offsets and unscaled row metrics.
-  Its logical480x280 box now fits/centers within the shared scaled workarea with
-  an8px logical gap; its view receives explicit scale/top/inset data. Independent
+- The command palette previously used old 36/44 offsets and unscaled row metrics.
+  Its logical 480x280 box now fits/centers within the shared scaled workarea with
+  an 8px logical gap; its view receives explicit scale/top/inset data. Independent
  1x/2x/3x rectangle and visible-selection cases pass. This preserves its existing
   keyboard workflow; the next panel/input stage remains separate.
 - Browser TLS/calendar/import/image panel builders also still used28+8 and base
   font scale. They now derive geometry from the authenticated applied scale and
-  shared26px title. Image1:1 remains physical pixel1:1; UI scaling affects chrome
+  shared 26px title. Image 1:1 remains physical pixel 1:1; UI scaling affects chrome
   reservation and Fit space. Reader source-byte anchors remain unchanged.
 - Linen's public scale field now reports actual text scale (base times UI), matching
   its already scaled layout. Current-source native refresh is required to qualify
@@ -126,7 +126,7 @@ Host migration and remaining geometry corrections:
   compiled main-prefix controls retain pending-scale and foreign-sender refusals.
 - The TLS pixel oracle now uses the actual source-selected Geist Mono AA atlas
   instead of assuming a scaled ROM grid. Full canvas/erasure checks and adverse
-  receipt/hash controls remain. DEMO9px clock evidence is explicitly archival and
+  receipt/hash controls remain. DEMO 9px clock evidence is explicitly archival and
   cannot qualify a current slim-metric native trace.
 
 Source-bound first97d captures remain first-checkpoint evidence, not qualification
@@ -134,10 +134,16 @@ of the later palette/panel corrections or the final merged capture integration.
 Whole-panel masks and natural Sans app-body labels are still the next topic.
 
 Further host checks passed before the capture-master refresh: the full Python
-suite1163cases, Browser view21cases, image32cases, calendar19cases with its existing
-measure/epoch controls, plus isolated-process actual panel layouts at UI scales1/2/3.
+suite 1163 cases, Browser view 21 cases, image 32 cases, calendar 19 cases with its existing
+measure/epoch controls, plus isolated-process actual panel layouts at UI scales 1/2/3.
 Clipboard, cursor, activation and civil host wrappers passed with negative controls.
 The Linen delivery fixture was repaired with independent literal origins/heights,
-an explicit scale1 reset, and scale2/3 retry/readiness checks; its full gate passed
-56outbox cases and20production-wrapper cases. These are scoped host results; the
+an explicit scale 1 reset, and scale 2/3 retry/readiness checks; its full gate passed
+56 outbox cases and 20 production-wrapper cases. These are scoped host results; the
 final combined source still needs its fresh native and CI qualification.
+
+The ff0 host CI run exposed one remaining stale Quil clipboard fixture: its
+explicit document layout omitted the new UI scale. It now pins scale 1; the
+actual editor clipboard/undo gate passes with all previous assertions intact.
+The palette frame metadata also tracks its submitted centered rectangle directly,
+because the protected keyboard overlay has no app-custody bounds entry.

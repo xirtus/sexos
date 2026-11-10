@@ -101,6 +101,7 @@ static mut DOCUMENT_VIEW: document_view::Layout = document_view::Layout {
     w: 640,
     h: 480,
     scale: 2,
+    ui_scale: 1,
     cols: 51,
     rows: 25,
     top: 12,

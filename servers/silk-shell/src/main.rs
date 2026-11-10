@@ -16370,7 +16370,11 @@ unsafe fn palette_show() {
     set_frame_minimized(COMMAND_PALETTE_FRAME_ID,false);
     set_lifecycle_state(SURFACE_ID_COMMAND_PALETTE,LifecycleState::Visible);
     let r=command_palette_geometry();
-    update_local_geometry(SURFACE_ID_COMMAND_PALETTE,r.x as i32,r.y as i32,r.w,r.h);
+    // This protected keyboard overlay has no app-custody bounds entry.
+    // Keep its descriptive frame bounds aligned with the submitted rectangle.
+    for frame in FRAMES.iter_mut().flatten(){if frame.frame_id==COMMAND_PALETTE_FRAME_ID {
+        frame.normal_x=r.x as i32;frame.normal_y=r.y as i32;frame.normal_w=r.w;frame.normal_h=r.h;
+    }}
     PALETTE_VISIBILITY.set(linen_text_delivery::Operation { opcode:0xEC, surface:SURFACE_ID_COMMAND_PALETTE,
         packed:((r.y as u64)<<32)|r.x as u64,control:((r.h as u64)<<32)|r.w as u64 });
 }
