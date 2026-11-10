@@ -154,6 +154,11 @@ pub(super) fn final_snapshot(b: &mut Browser) {
         );
         raw(f.doc.get(), &f.page, f.node as i64);
     }
+    sex_pdx::serial_record!(
+        "[web.private.final.done] target={} task={}",
+        b.window.target,
+        b.window.task
+    );
 }
 fn raw(doc: &sex_js::Document, page: &super::sex_html::layout::Page, frame: i64) {
     sex_pdx::serial_record!("[web.private.final.dom] frame={} nodes={} dirty={} viewport={}x{} items={} width={} height={} background={:x} styles_recomputed=0 js_evaluated=0",frame,doc.dom.nodes.len(),doc.dirty as u8,doc.viewport.0,doc.viewport.1,page.items.len(),page.width,page.height,page.background);

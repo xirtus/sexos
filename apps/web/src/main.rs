@@ -1660,7 +1660,7 @@ pub extern "C" fn _start() -> ! {
         } };
         match event {
             Event::Close => { sex_pdx::serial_record!("[web.closed] target={} task={}", b.window.target, b.window.task); b.window.close() }
-            Event::Key(key) if key.code == 0x58 => layout_diagnostic::final_snapshot(&mut b),
+            Event::Key(key) if key.code == 0x15 && key.control && key.shift => layout_diagnostic::final_snapshot(&mut b),
             Event::Key(key) => b.key(key),
             Event::Resize { .. } => {
                 let (width, height) = b.window.size();
