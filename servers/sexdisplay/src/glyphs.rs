@@ -13,12 +13,18 @@ const MONO: u8 = 1;
 const SANS: u8 = 2;
 /// Largest bitmap drawn; a Key holds sizes up to 255.
 const MAX_W: usize = 128;
-const MAX_H: usize = 96;
+// UI scale 3 times maximum text zoom 5 needs a 90x135 cell.
+const MAX_H: usize = 144;
 
-static mut CACHE: GlyphCache<2048, { 512 * 1024 }> = GlyphCache::new();
+// Holds all 95 printable glyphs at the supported 90x135 maximum cell, plus
+// ordinary UI text. Fixed service-private backing, never a thread-stack value.
+const CACHE_BYTES: usize = 2 * 1024 * 1024;
+static mut CACHE: GlyphCache<2048, CACHE_BYTES> = GlyphCache::new();
 static mut ACC: [i32; scratch_len(MAX_W, MAX_H)] = [0; scratch_len(MAX_W, MAX_H)];
 
-fn cache() -> &'static mut GlyphCache<2048, { 512 * 1024 }> { unsafe { &mut *core::ptr::addr_of_mut!(CACHE) } }
+fn cache() -> &'static mut GlyphCache<2048, CACHE_BYTES> { unsafe { &mut *core::ptr::addr_of_mut!(CACHE) } }
+#[cfg(test)]
+pub fn cache_resets() -> u32 { cache().resets }
 fn acc() -> &'static mut [i32] { unsafe { &mut *core::ptr::addr_of_mut!(ACC) } }
 
 static mut FONTS: Option<(Font<'static>, Font<'static>)> = None;
@@ -54,28 +60,29 @@ const TITLE_MAX: usize = 48;
 /// 1/256 pixel and bitmap width in pixels. Recent titles are kept, as titles are
 /// drawn a pixel at a time.
 #[derive(Clone, Copy)]
-struct TitleLayout { len: usize, text: [u8; TITLE_MAX], glyph: [u16; TITLE_MAX], pen: [i32; TITLE_MAX], width: [u8; TITLE_MAX] }
-const NO_LAYOUT: TitleLayout = TitleLayout { len: usize::MAX, text: [0; TITLE_MAX], glyph: [0; TITLE_MAX], pen: [0; TITLE_MAX], width: [0; TITLE_MAX] };
+struct TitleLayout { size: u32, len: usize, text: [u8; TITLE_MAX], glyph: [u16; TITLE_MAX], pen: [i32; TITLE_MAX], width: [u8; TITLE_MAX] }
+const NO_LAYOUT: TitleLayout = TitleLayout { size: 0, len: usize::MAX, text: [0; TITLE_MAX], glyph: [0; TITLE_MAX], pen: [0; TITLE_MAX], width: [0; TITLE_MAX] };
 static mut LAYOUTS: [TitleLayout; 8] = [NO_LAYOUT; 8];
 static mut NEXT_LAYOUT: usize = 0;
 
-fn title_layout(title: &[u8]) -> Option<&'static TitleLayout> {
+fn text_layout(title: &[u8], size: u32) -> Option<&'static TitleLayout> {
     let title = &title[..title.len().min(TITLE_MAX)];
     let layouts = unsafe { &mut *core::ptr::addr_of_mut!(LAYOUTS) };
-    if let Some(i) = layouts.iter().position(|l| l.len == title.len() && &l.text[..l.len] == title) { return Some(&layouts[i]); }
+    if let Some(i) = layouts.iter().position(|l| l.size == size && l.len == title.len() && &l.text[..l.len] == title) { return Some(&layouts[i]); }
     let font = sans()?;
     let mut l = NO_LAYOUT;
+    l.size = size;
     l.len = title.len();
     l.text[..title.len()].copy_from_slice(title);
     let (mut pen, mut prev) = (0, None);
     for (i, &byte) in title.iter().enumerate() {
         let glyph = font.glyph(byte as u32);
-        if let (Some(p), Some(g)) = (prev, glyph) { pen += font.kerning(p, g, TITLE_SIZE); }
+        if let (Some(p), Some(g)) = (prev, glyph) { pen += font.kerning(p, g, size); }
         l.pen[i] = pen;
         if let Some(g) = glyph {
-            let width = ((font.advance(g, TITLE_SIZE) + 255) >> 8) + 2 * TITLE_LEFT;
+            let width = ((font.advance(g, size) + 255) >> 8) + 2 * TITLE_LEFT;
             if width as usize <= MAX_W { l.glyph[i] = g.0; l.width[i] = width as u8; }
-            pen += font.advance(g, TITLE_SIZE);
+            pen += font.advance(g, size);
             prev = Some(g);
         }
     }
@@ -88,29 +95,53 @@ fn title_layout(title: &[u8]) -> Option<&'static TitleLayout> {
 
 /// Where each character of `title` begins, in whole pixels from the title's left.
 pub fn title_starts(title: &[u8], out: &mut [usize]) -> usize {
-    let Some(l) = title_layout(title) else { return 0 };
+    let Some(l) = text_layout(title, TITLE_SIZE) else { return 0 };
     for (slot, pen) in out.iter_mut().zip(&l.pen[..l.len]) { *slot = (*pen >> 8) as usize; }
     l.len
 }
 
+/// Compact UI captions: proportional Geist Sans, 9 px on a 9 px row.
+pub const CAPTION_SIZE: u32 = 9 * 64;
+pub const CAPTION_H: usize = 9;
+const CAPTION_BASELINE: i32 = 7 * 256;
+
+/// Natural advance for a compact caption, used to bound the existing status boxes.
+pub fn caption_width(text: &[u8]) -> Option<usize> {
+    let layout = text_layout(text, CAPTION_SIZE)?;
+    if layout.len == 0 { return Some(0); }
+    let last = layout.len - 1;
+    let font = sans()?;
+    let advance = font.advance(sex_font::GlyphId(layout.glyph[last]), CAPTION_SIZE);
+    Some(((layout.pen[last] + advance + 255).max(0) >> 8) as usize)
+}
+
 /// Title coverage at (`x`, `y`) pixels from the title's top left.
 pub fn title_coverage(title: &[u8], x: i32, y: usize) -> u8 {
-    if y >= TITLE_H { return 0; }
-    let (Some(l), Some(font)) = (title_layout(title), sans()) else { return 0 };
+    sans_coverage(title, x, y, TITLE_SIZE, TITLE_H, TITLE_BASELINE).unwrap_or(0)
+}
+
+/// Coverage of a compact caption, or None on unavailable font/glyph/cache backing.
+pub fn caption_coverage(text: &[u8], x: i32, y: usize) -> Option<u8> {
+    sans_coverage(text, x, y, CAPTION_SIZE, CAPTION_H, CAPTION_BASELINE)
+}
+
+fn sans_coverage(title: &[u8], x: i32, y: usize, size: u32, height: usize, baseline: i32) -> Option<u8> {
+    if y >= height { return Some(0); }
+    let l = text_layout(title, size)?;
+    let font = sans()?;
     let mut cover = 0u32;
     for i in 0..l.len {
         let left = (l.pen[i] >> 8) - TITLE_LEFT;
         if x < left { break; }
         let width = l.width[i] as i32;
-        if l.glyph[i] == 0 || x >= left + width { continue; }
-        // Quarter-pixel phases keep spacing true without a bitmap per position.
+        if l.glyph[i] == 0 { return None; }
+        if x >= left + width { continue; }
         let phase = ((l.pen[i] & 255) >> 6) as u8;
         let glyph = sex_font::GlyphId(l.glyph[i]);
-        let key = Key { font: SANS, scalar: glyph.0 as u32, size: (TITLE_SIZE / 64) as u16, phase, w: width as u8, h: TITLE_H as u8 };
+        let key = Key { font: SANS, scalar: glyph.0 as u32, size: (size / 64) as u16, phase, w: width as u8, h: height as u8 };
         let origin = TITLE_LEFT * 256 + phase as i32 * 64;
-        if let Some(bitmap) = cache().get(key, |out| font.draw(glyph, TITLE_SIZE, origin, TITLE_BASELINE, width as usize, TITLE_H, acc(), out)) {
-            cover += bitmap[y * width as usize + (x - left) as usize] as u32;
-        }
+        let bitmap = cache().get(key, |out| font.draw(glyph, size, origin, baseline, width as usize, height, acc(), out))?;
+        cover += bitmap[y * width as usize + (x - left) as usize] as u32;
     }
-    cover.min(255) as u8
+    Some(cover.min(255) as u8)
 }
