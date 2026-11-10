@@ -3932,3 +3932,13 @@ Workstream F, stage F1 (`docs/handoff/LINUX_AND_DESKTOP_PARITY_REPORT_2026_11_09
 - **Gate.** `scripts/display_native_gate.py` (QEMU VGA 2560x1600 with 64 MiB VGA memory): boots at 2560x1600 with 35 firmware modes listed, the desktop reaches the bottom-right corner, small updates write a few pixels, Ctrl+Alt+= grows the text ink 8x, Ctrl+Alt+0 restores it exactly. `text_zoom_gate` still passes at 1280x800. Host: `tests/display_boot_scale.rs` (EDID and scale), `tests/display_frame_output.rs` (buffer age).
 - **Faster composition.** A program's picture is copied straight from its pixel region a row at a time (`program_pixel_row`), not looked up pixel by pixel, and solid runs are plain slice fills in the private frame (not volatile stores). A full 2560x1600 frame went from about 1.7 s to 0.74 s under TCG; `program_shapes_gate` still matches the host rendering exactly.
 - **Next (F2).** Bar, title bars and window borders still draw at 1x; scaling them moves Shell's work area (desktop thread owns silk-shell). Window chrome and text still go through per-pixel `composite_pixel`; then KMS for i915/amdgpu and multi-monitor.
+## Intel Wi-Fi, stage W5e: traffic over Wi-Fi (2026-11-10)
+- **What:** new `sex_wifi::link` carries Ethernet frames over the connection. Outgoing
+  frames are encrypted by the firmware on WPA2. Incoming frames are checked for the
+  firmware's decrypt status and for PN replay. sexnet moves its IP stack onto Wi-Fi
+  while the link is up, then back to the wired port. RX MPDU padding is now removed
+  for data frames too.
+- **Evidence:** `scripts/wifi_host_gate.sh` (45 driver tests). A test sends ARP over
+  WPA2 on the firmware model and receives decrypted frames, a replay, an undecrypted
+  frame, a relayed own broadcast and a deauthentication.
+- **ABI / kernel:** none.
