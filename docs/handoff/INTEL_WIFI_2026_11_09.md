@@ -84,7 +84,7 @@ The driver speaks firmware API 77 (89 for the 0x7e40 "Ma" parts), the same as Op
 | **W4** (section 9) | scanning: one UMAC scan of every allowed channel right after `[wifi.ready]`, beacons and probe responses read into a network list, `[wifi.network]` lines in the boot log | host gate on the firmware model; **x17 lists nearby networks** |
 | **W4b** (section 10) | the network list for people: `wifi` and `wifi scan` in Spindle (a desktop query to sexnet, `sex_pdx::wifi_status`), rescans; the status bar indicator follows | host test of the words; **x17: `wifi` lists networks** |
 | **W5a** (section 11) | join: PHY context, RLC, MAC context, binding, station, management TX queue, session protection (`iwx_auth`); `wifi join N` in Spindle | host gate on the firmware model and the real x17 file's command versions; **x17: `[wifi.joined]`** |
-| W5b | authentication and association frames over the management queue (TX command, TX responses), association answer, MAC/station update to associated, rate control (TLC) | x17 associates with an open network |
+| **W5b** (section 12) | open-system auth and association frames on TX queue 1 (`iwx_tx`, TX command v10/gen3 or gen2), then ADD_STA update and MAC context with the AID (`iwx_run`) | host gate: TFD, TX command, byte counts and frames on the firmware model, retries and refusals; **x17: `[wifi.associated]`** |
 | W5c | WPA2: the 4-way handshake from this crate over EAPOL data frames, pairwise and group keys installed (ADD_STA_KEY v3) | x17 completes a WPA2 handshake |
 | W5d | WPA3: SAE commit/confirm in authentication frames, PMF | x17 joins a WPA3 network |
 | W5e | data queues into sexnet's Ethernet path; password prompt; saved networks | x17 browses the web over Wi-Fi |
@@ -367,3 +367,33 @@ No ABI change: the `wifi_status` words gain `JOIN` and the phases `JOINING`/`JOI
 
 Next: W5b, the first frames on the air.
 
+## 12. Stage W5b: authentication and association (2026-11-10)
+
+`wifi join N` now goes on after the join (section 11): `sex_wifi::assoc` sends an
+open-system authentication frame, then an association request (SSID, rates, and our
+RSN element on a WPA2 network), and waits 300 ms for each answer, three tries each.
+Once the AP accepts, the station entry is updated and the MAC context is modified
+with the AP's association ID, as `iwx_run` does. Beacons keep passing the filter until
+a DTIM period is known, as in iwx.
+
+Frames go out through `sex_wifi::tx` (iwx's `iwx_tx`) on the management queue the join
+created. The 4-byte command header, the TX command and the 802.11 header sit in one of
+32 frame buffers. On the AX210 family (the x17) the command is `iwx_tx_cmd_gen3`
+(TX_CMD v10); before that family it is gen2. The body follows the header in the same
+buffer. TB0 is the first 20 bytes, TB1 is the rest of the command, and TB2 is the body.
+The byte-count table entry counts bytes on AX210 and dwords before it. Management frames
+use a fixed rate: the AP's lowest basic rate, on antenna A, in rate_n_flags v2 (both
+firmwares report TX_CMD notification v7). The TX response's SSN frees the ring.
+
+Boot log: `[wifi.assoc.start] security=…`, then `[wifi.assoc] step=…` lines, then
+`[wifi.associated] ssid=… aid=…`, or `[wifi.failed] step=assoc reason=Refused(Status
+{ frame: "auth", status: N })` (NoAnswer, NotSent, Disconnected). The desktop sees
+the phases ASSOCIATING (7) and ASSOCIATED (8).
+
+Not yet:
+- WPA3-only networks are refused (`wpa3_sae`). SAE authentication is W5d.
+- WPA2 networks associate, but the 4-way handshake (W5c) is not started yet, so the
+  AP drops us after its EAPOL timeout.
+- No HT/VHT capabilities are sent, so association is legacy-rate only (W6).
+- `iwx_run`'s smart-fifo, multicast and power commands, and TLC, come with the data
+  path (W5e).

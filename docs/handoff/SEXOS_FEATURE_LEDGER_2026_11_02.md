@@ -3754,3 +3754,12 @@ Follow-up to the boot log and crash records work (`BOOT_LOG_AND_CRASH_RECORDS_20
   sizes on the firmware model, failure paths, real firmware versions.
 - **ABI / kernel:** none. W5 is split into W5a-W5e (INTEL_WIFI section 11).
 
+## Intel Wi-Fi, stage W5b: authentication and association (2026-11-10)
+- **What:** after the join, `wifi join N` authenticates (open system) and associates,
+  then updates the station and MAC context with the AID (`iwx_run`). New
+  `sex_wifi::tx` sends 802.11 frames on TX queue 1 (gen3/gen2 TX command, TFD,
+  byte counts, TX responses). New phases ASSOCIATING/ASSOCIATED in `wifi_status`.
+- **Evidence:** `scripts/wifi_host_gate.sh` (39 driver tests): the firmware model reads
+  each TFD and checks the TX command and byte count, then plays the AP. Retries,
+  refusals, TX failure and deauthentication are covered.
+- **ABI / kernel:** none (`wifi_status.rs` is not an ABI input).

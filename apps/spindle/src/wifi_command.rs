@@ -82,10 +82,13 @@ fn state_line(s: ws::State, scan: bool, join: bool, out: &mut [u8]) -> usize {
             put(out, &mut at, b").");
             if scan || join { put(out, &mut at, b" That is not possible right now."); }
         }
-        ws::JOINING => put(out, &mut at, b"Wi-Fi: joining the network's channel; type wifi to see how it went."),
-        ws::JOINED => put(out, &mut at, if scan || join {
-            b"Wi-Fi: already on a network's channel; leaving it comes with connecting (W5b)." as &[u8]
-        } else { b"Wi-Fi: on the network's channel (not connected yet: authentication is the next stage)." }),
+        ws::JOINING => put(out, &mut at, b"Wi-Fi: connecting to the network; type wifi to see how it went."),
+        ws::JOINED | ws::ASSOCIATING => put(out, &mut at, if scan || join {
+            b"Wi-Fi: already joining a network." as &[u8]
+        } else { b"Wi-Fi: connecting to the network; type wifi to see how it went." }),
+        ws::ASSOCIATED => put(out, &mut at, if scan || join {
+            b"Wi-Fi: already associated with a network; leaving it comes later." as &[u8]
+        } else { b"Wi-Fi: associated with the network (WPA2 keys and data come next)." }),
         _ => put(out, &mut at, b"Wi-Fi: the chip stopped; the boot log's [wifi.failed] line says where."),
     }
     at

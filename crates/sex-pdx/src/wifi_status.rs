@@ -21,8 +21,8 @@ pub const SCAN: u64 = 2;
 /// Network `a` of the last (or current) scan, part `b`: `PART_INFO`, `PART_BSSID`,
 /// or `PART_SSID + k` for SSID bytes 7k..7k+7. Replies `MISSING` past the end.
 pub const NETWORK: u64 = 3;
-/// Joins network `a` of the last finished scan (stage W5a: onto its channel, no
-/// authentication yet). Shell and Spindle only. Replies with the state word
+/// Joins network `a` of the last finished scan: onto its channel (W5a), then
+/// authentication and association (W5b). Shell and Spindle only. Replies with the state word
 /// (phase `JOINING` when it started).
 pub const JOIN: u64 = 4;
 
@@ -46,6 +46,8 @@ pub const READY: u8 = 3; // the last scan finished
 pub const FAILED: u8 = 4; // start-up, the last scan or the last join failed
 pub const JOINING: u8 = 5;
 pub const JOINED: u8 = 6; // on the network's channel, not yet authenticated
+pub const ASSOCIATING: u8 = 7; // authentication and association frames
+pub const ASSOCIATED: u8 = 8; // associated; WPA2 keys come next (W5c)
 
 /// The state word: phase (bits 0..8), networks heard (8..16), scans started (16..32),
 /// channels in a scan (32..40).

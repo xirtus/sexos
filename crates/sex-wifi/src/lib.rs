@@ -26,6 +26,8 @@ pub mod hcmd;
 pub mod ieee80211;
 pub mod init;
 pub mod join;
+pub mod tx;
+pub mod assoc;
 pub mod pack;
 pub mod rx;
 pub mod sae;

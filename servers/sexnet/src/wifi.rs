@@ -7,7 +7,7 @@
 //! only maps the lease, the DMA pool and the firmware pack onto its traits.
 use sex_pdx::wifi_status as ws;
 use sex_pdx::{memory_region as m, pci_command as c};
-use sex_wifi::{bringup::Bringup, context, csr, devices, ieee80211::Security, init::{self, Init}, join::{self, Join}, pack::Pack, scan::{self, Scan}, ucode::Firmware};
+use sex_wifi::{bringup::Bringup, context, csr, devices, ieee80211::Security, init::{self, Init}, join::{self, Join}, assoc::{self, Assoc}, ieee80211::Bss, pack::Pack, scan::{self, Scan}, ucode::Firmware};
 
 /// The chip's register window (BAR0 view).
 struct Mmio { base: u64, length: u64 }
@@ -67,6 +67,9 @@ pub struct Wifi {
     /// Stage W5a: joining a network heard in the last scan.
     join: Option<Join>,
     joined_ssid: [u8; 32],
+    joined_bss: Option<Bss>,
+    /// Stage W5b: authentication and association once joined.
+    assoc: Option<Assoc>,
     finished: bool,
 }
 
@@ -137,7 +140,7 @@ impl Wifi {
         }
         sex_pdx::serial_record!("[wifi.prepared] pool={} used={} rx_pages={} bus={:#x}",
             dma.length, bringup.layout.end, context::RX_BUFFERS, bus);
-        Some(Wifi { mmio, pool, bringup, last: csr::Step::Ready, file, pnvm, hw_rev, rf_id, init: None, last_init: None, scan: None, scans: 0, join: None, joined_ssid: [0; 32], finished: false })
+        Some(Wifi { mmio, pool, bringup, last: csr::Step::Ready, file, pnvm, hw_rev, rf_id, init: None, last_init: None, scan: None, scans: 0, join: None, joined_ssid: [0; 32], joined_bss: None, assoc: None, finished: false })
     }
 
     /// True until the first scan has finished or the chip has failed.
@@ -145,6 +148,7 @@ impl Wifi {
 
     pub fn advance(&mut self, now_ticks: u64) {
         if self.finished { return; }
+        if self.assoc.is_some() { return self.advance_assoc(now_ticks); }
         if self.join.is_some() { return self.advance_join(now_ticks); }
         if self.scan.is_some() { return self.advance_scan(now_ticks); }
         if self.init.is_some() { return self.advance_init(now_ticks); }
@@ -253,9 +257,33 @@ impl Wifi {
             sex_pdx::serial_record!("[wifi.joined] ssid=\"{}\" bssid={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} channel={} phy={} rlc={} queue={} ticks={}",
                 ssid, t.bssid[0], t.bssid[1], t.bssid[2], t.bssid[3], t.bssid[4], t.bssid[5], t.channel,
                 j.versions.phy, j.versions.rlc, j.versions.scd_queue, now_ticks);
+            if let Some(bss) = self.joined_bss {
+                let a = Assoc::new(bss, t, i.mac, self.bringup.boot.chip.family, now_ticks * 1000);
+                sex_pdx::serial_record!("[wifi.assoc.start] security={:?} step={:?} ticks={}", bss.security, a.step, now_ticks);
+                self.assoc = Some(a);
+                self.finished = false;
+            }
         } else {
             use csr::Registers;
             sex_pdx::serial_record!("[wifi.failed] step=join reason={:?} ssid=\"{}\" int={:#x}", j.step, ssid, self.mmio.read(csr::INT));
+        }
+    }
+
+    fn advance_assoc(&mut self, now_ticks: u64) {
+        let (Some(a), Some(i)) = (self.assoc.as_mut(), self.init.as_mut()) else { return };
+        let before = a.step;
+        let more = a.advance(&mut self.bringup, &mut i.cmdq, &mut self.mmio, &mut self.pool, now_ticks * 1000);
+        if a.step != before {
+            sex_pdx::serial_record!("[wifi.assoc] step={:?} tries={} frames={} ticks={}", a.step, a.attempts, a.tx.sent, now_ticks);
+        }
+        if more { return; }
+        self.finished = true;
+        let ssid = core::str::from_utf8(&self.joined_ssid).unwrap_or("?").trim_end_matches('\0');
+        if a.step == assoc::Step::Associated {
+            sex_pdx::serial_record!("[wifi.associated] ssid=\"{}\" aid={} frames={} ticks={}", ssid, a.aid, a.tx.sent, now_ticks);
+        } else {
+            use csr::Registers;
+            sex_pdx::serial_record!("[wifi.failed] step=assoc reason={:?} ssid=\"{}\" int={:#x}", a.step, ssid, self.mmio.read(csr::INT));
         }
     }
 
@@ -270,6 +298,7 @@ impl Wifi {
         let target = join::Target::of(&n.bss, n.heard_on);
         self.joined_ssid = [0; 32];
         self.joined_ssid[..n.bss.ssid().len()].copy_from_slice(n.bss.ssid());
+        self.joined_bss = Some(n.bss);
         let j = Join::new(target, versions, i.mac, i.valid_rx_antennas(), now_ticks * 1000);
         sex_pdx::serial_record!("[wifi.join.start] index={} channel={} step={:?} ticks={}", index, target.channel, j.step, now_ticks);
         self.join = Some(j);
@@ -279,6 +308,11 @@ impl Wifi {
 
     /// What the desktop sees (`sex_pdx::wifi_status`).
     fn state(&self) -> ws::State {
+        if let Some(a) = &self.assoc {
+            let phase = match a.step { assoc::Step::Associated => ws::ASSOCIATED, assoc::Step::Auth | assoc::Step::Assoc | assoc::Step::Station | assoc::Step::Mac => ws::ASSOCIATING, _ => ws::FAILED };
+            let (networks, channels) = self.scan.as_ref().map_or((0, 0), |sc| (sc.count.min(255) as u8, sc.channels));
+            return ws::State { phase, networks, scans: self.scans, channels };
+        }
         if let Some(j) = &self.join {
             let phase = match j.step { join::Step::Joined => ws::JOINED, join::Step::Failed(_) => ws::FAILED, _ => ws::JOINING };
             let (networks, channels) = self.scan.as_ref().map_or((0, 0), |sc| (sc.count.min(255) as u8, sc.channels));
