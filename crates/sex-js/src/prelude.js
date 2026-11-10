@@ -182,6 +182,27 @@
     }
   }
   let reporting = false;
+  // Scripts a page makes (createElement) run when they join the document, as in other
+  // browsers: inline text at once, `src` once fetched (then 'load' or 'error'). Scripts
+  // that arrive as markup (innerHTML) do not run.
+  let freshScripts = 0;
+  function runCode(el, code) {
+    const prev = document.currentScript;
+    document.currentScript = el;
+    try { (0, eval)(code); } catch (e) { report(e); } finally { document.currentScript = prev; }
+  }
+  function runScript(el) {
+    el._sxFresh = false; freshScripts--;
+    const type = (el.getAttribute('type') || '').trim().toLowerCase(), module = type === 'module';
+    if ((type && !module && !/javascript|ecmascript/.test(type)) || el.hasAttribute('nomodule')) return;
+    const src = el.getAttribute('src');
+    if (src === null) { if (!module) runCode(el, el.textContent); return; }
+    const url = resolveUrl(src);
+    const done = ok => setTimeout(() => el.dispatchEvent(new Event(ok ? 'load' : 'error')), 0);
+    if (module) { import(url).then(() => done(true), e => { report(e); done(false); }); return; }
+    fetch(url).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
+      .then(t => { runCode(el, t); done(true); }, e => { log(1, ['script did not load:', url, String(e && e.message || e)]); done(false); });
+  }
   function report(e) {
     log(2, [e && e.stack ? e.name + ': ' + e.message + '\n' + e.stack : e]);
     // window.onerror and 'error' listeners hear about it too (not about their own errors).
@@ -301,6 +322,7 @@
       check(H(OP.INSERT, this._id, c._id, ref ? ref._id : ''));
       if (customByName.size && c.nodeType === 1 && c.isConnected) connected(c);
       mutation('childList', this, { addedNodes: [c], previousSibling: prev, nextSibling: ref });
+      if (freshScripts && c.nodeType === 1 && c.isConnected) for (const sc of c.localName === 'script' ? [c] : c.querySelectorAll('script')) if (sc._sxFresh) runScript(sc);
       return c;
     }
     removeChild(c) {
@@ -1513,7 +1535,9 @@
     getElementById(id) { return wrap(H(OP.BY_ID, String(id))); }
     createElement(tag) {
       const id = +check(H(OP.CREATE_ELEMENT, String(tag)));
-      return wrap(id);
+      const el = wrap(id);
+      if (el.localName === 'script') { el._sxFresh = true; freshScripts++; }
+      return el;
     }
     createElementNS(ns, tag) { return this.createElement(tag); }
     createTextNode(t) { return new Text(t); }

@@ -820,3 +820,43 @@ fn review_fixes_cycles_bound_formatters_shadow_lifecycle() {
     "#, "t.js").unwrap();
     assert_eq!(logs(&mut s), ["0:HierarchyRequestError true true", "0:1,000 2,000 1/1/1970", "0:kid in", "0:kid out"]);
 }
+
+#[test]
+fn scripts_the_page_inserts_run() {
+    let mut s = page("<head></head><body><div id=a></div></body>");
+    s.eval(r#"
+        window.ran = [];
+        const inline = document.createElement('script');
+        inline.textContent = 'ran.push("inline " + (document.currentScript && document.currentScript.id)); var fromInline = 1;';
+        inline.id = 'i';
+        document.head.appendChild(inline);
+        console.log(ran.join(), typeof fromInline);
+        const ext = document.createElement('script');
+        ext.src = 'player.js';
+        ext.onload = () => console.log('loaded', ran.join('|'), window.player);
+        document.head.appendChild(ext);
+        const bad = document.createElement('script');
+        bad.src = 'missing.js';
+        bad.addEventListener('error', () => console.log('error event'));
+        document.body.appendChild(bad);
+        document.getElementById('a').innerHTML = '<script>ran.push("markup")<\/script>';
+        const wrapper = document.createElement('div'), nested = document.createElement('script');
+        nested.text = 'ran.push("nested")';
+        wrapper.appendChild(nested);
+        document.body.appendChild(wrapper);
+        document.body.appendChild(inline);
+    "#, "t.js").unwrap();
+    assert_eq!(logs(&mut s), ["0:inline i number"]);
+    let asked = std::mem::take(&mut s.page_mut().fetches);
+    let urls: Vec<&str> = asked.iter().map(|f| f.url.as_str()).collect();
+    assert_eq!(urls, ["http://example.test/dir/player.js", "http://example.test/dir/missing.js"]);
+    s.page_mut().keep_head(asked[0].id, "http://example.test/dir/player.js", "content-type: text/javascript\r\n");
+    s.page_mut().keep_body(asked[0].id, 200, b"ran.push('ext ' + document.currentScript.src.split('/').pop()); var player = 'ok';".to_vec());
+    s.dispatch(&format!("fetched\t{}\t200\t70", asked[0].id)).unwrap();
+    s.page_mut().keep_head(asked[1].id, "http://example.test/dir/missing.js", "");
+    s.page_mut().keep_body(asked[1].id, 404, Vec::new());
+    s.dispatch(&format!("fetched\t{}\t404\t0", asked[1].id)).unwrap();
+    s.dispatch("tick").unwrap();
+    let l: Vec<String> = logs(&mut s).into_iter().filter(|x| !x.starts_with("1:")).collect();
+    assert_eq!(l, ["0:loaded inline i|nested|ext player.js ok", "0:error event"]);
+}
