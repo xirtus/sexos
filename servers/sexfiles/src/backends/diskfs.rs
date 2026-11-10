@@ -4,7 +4,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use sex_pdx::{
     pdx_call, pdx_listen_raw, sys_yield, serial_println, SLOT_BLOCK,
     SLOT_BUF_LEND,
-    BLOCK_READ, BLOCK_WRITE, BLOCK_SYNC, BLOCK_SECTOR_SIZE, BLOCK_MAX_XFER, BLOCK_ERR_BAD_LEN, BLOCK_ERR_NO_DEVICE,
+    BLOCK_READ, BLOCK_WRITE, BLOCK_SYNC, BLOCK_SHUTDOWN, BLOCK_SECTOR_SIZE, BLOCK_MAX_XFER, BLOCK_ERR_BAD_LEN, BLOCK_ERR_NO_DEVICE,
 };
 use spin::RwLock;
 
@@ -415,6 +415,10 @@ impl DiskFs {
         ); }
         reply
     }
+
+    /// Power off or restart: flush, then tell the drive it is about to lose power so it
+    /// parks its own cache and mapping tables. Every later block call fails.
+    pub fn diskfs_block_shutdown() -> u64 { Self::diskfs_block_call(BLOCK_SHUTDOWN, 0, 0, 0) }
 
     /// [sexfiles.diskfs.typed.call] [sexfiles.diskfs.typed.reply]
     /// Typed block sync: send BLOCK_SYNC command to sexdrive (flush/barrier).
