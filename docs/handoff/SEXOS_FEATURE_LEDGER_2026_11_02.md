@@ -3378,6 +3378,15 @@ Stage E2 of the parity report, section 6.
 - **Panel title.** sexdisplay draws the focused window's title in the SilkBar strip between the focus dot and the workspace dots (`panel_title_fg_at`), with the same names as the title bars (`surface_title`). A program renaming its focused window redraws the strip.
 - No ABI change.
 
+## Desktop: notifications with text, a panel notice and history (2026-11-10)
+
+Stage E3 of the parity report, section 6 (mako/dunst/Plasma notifications).
+- **Programs** holding the Bell capability post with `sex_pdx::notify::post(summary, body, urgency)`: the text ("summary\nbody", up to 128 printable ASCII bytes, anything else becomes '?') goes in 16-byte chunks. Spindle: `notify Build done | 3 warnings`.
+- **Bell** puts each sender's chunks together by the kernel's caller PD, applies mute, per-program policy and the spam budget, queues it (critical goes to lane NOW and chimes), then hands it to the Shell with Bell's id and the true sender. A program cannot name another sender.
+- **Shell** takes notifications only from Bell's domain, shows "App: summary" in the SilkBar panel for 5 s (sexdisplay draws it in place of the window title, in amber), and keeps the last 32 in the Bell window, newest first. **Super+N** opens or hides it.
+- **ABI change (named):** new opcodes `OP_BELL_POST` 0xCC (program -> Bell), `OP_NOTIFICATION` 0x2D8 (Bell -> Shell), `OP_PANEL_NOTICE` 0x2D9 (Shell -> Display), one chunk form for all three (`crates/sex-pdx/src/notify.rs`). Kernel grants Bell `SLOT_SHELL` (to the Shell) for the hand-over. `abi_version_hash` recomputed. Display title layouts hold 48 bytes (titles are still 16).
+- **Tests:** `tests/notify.rs` (chunking, forged and out-of-order chunks, control bytes, the client), in `service_custody_host_gate.sh`; `tests/wm_layouts.rs` covers Super+N; QEMU gate `scripts/notifications_gate.py` (Spindle posts twice, the panel shows and hides, Super+N lists both).
+
 ## Real PCs: wired network, HD Audio and SATA (2026-11-09)
 
 Workstream D of the parity report. Handoff and bare-metal checklist: `docs/handoff/REAL_PC_DRIVERS_2026_11_09.md`.
@@ -3918,3 +3927,14 @@ Roadmap workstream B, part 1 (report: `docs/handoff/LINUX_AND_DESKTOP_PARITY_REP
 - **`install [go] [GIB] [IMAGE]`** in Spindle. Without `go` Files only plans and prints it. On a GPT disk it adds three partitions in free space (SexOS system A and B, 256 MiB each, and the SexOS store: GIB or all the largest free run, at least 1 GiB) and never moves or resizes anything; on a blank disk it makes a new GPT and a 260 MiB FAT32 ESP. Limine goes to `\EFI\SEXOS\BOOTX64.EFI` on the shared ESP, and to `\EFI\BOOT\BOOTX64.EFI` only when no fallback loader exists. Its menu `\EFI\BOOT\LIMINE.CFG` (16 KiB, contiguous, for in-place rewrites by A/B updates) points the image's entries at slot A by partition GUID and adds a chainload entry per system found on the ESP (Windows boot manager, shim/GRUB, systemd-boot, others). Refuses when another `limine.cfg` would win. The partition table is written last, so a failed install leaves every system starting as before.
 - **Not yet**: no UEFI boot entry is registered (the kernel has no runtime services), so on a PC whose ESP already has a fallback loader (Windows) the person picks `\EFI\SEXOS\BOOTX64.EFI` once in the firmware's boot menu; Install says so. Slot B, signed updates and try-once fallback are part 2.
 - **Gates**: `scripts/install_gate.py` (QEMU + OVMF with its own variable store): a Linux-like GPT disk is hashed before and after a live session (unchanged), `install` plans, `install go` installs, sgdisk/fsck/mtools check the disk and the Linux partition's bytes, then the PC starts from the disk with no ISO and a file survives a restart; a blank disk becomes SexOS's alone. `scripts/usb_stick_gate.py`: the ISO written to a USB stick (usb-storage on xHCI, no CD) reaches the desktop under UEFI and under BIOS.
+
+## Intel Wi-Fi, stage W5e: traffic over Wi-Fi (2026-11-10)
+- **What:** new `sex_wifi::link` carries Ethernet frames over the connection. Outgoing
+  frames are encrypted by the firmware on WPA2. Incoming frames are checked for the
+  firmware's decrypt status and for PN replay. sexnet moves its IP stack onto Wi-Fi
+  while the link is up, then back to the wired port. RX MPDU padding is now removed
+  for data frames too.
+- **Evidence:** `scripts/wifi_host_gate.sh` (45 driver tests). A test sends ARP over
+  WPA2 on the firmware model and receives decrypted frames, a replay, an undecrypted
+  frame, a relayed own broadcast and a deauthentication.
+- **ABI / kernel:** none.

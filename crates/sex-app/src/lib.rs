@@ -196,6 +196,16 @@ pub mod files {
         let view = sex_pdx::memory_region_view(w::CLIENT_SLOT, 0, w::REGION_BYTES as u64, QUERY_VIEW | READ | WRITE).map_err(|_| w::UNAVAILABLE)?;
         Ok(unsafe { core::slice::from_raw_parts_mut(view.virtual_address as *mut u8, w::REGION_BYTES) })
     }
+    /// The region's address, asked once: it is this run's for the run's whole life.
+    static REGION_AT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+    /// What Files last said about `path`, if nothing has changed since: no call at all.
+    fn cached(path: &[u8]) -> Option<direct::Stat> {
+        let mut at = REGION_AT.load(Ordering::Relaxed);
+        if at == 0 { at = region().ok()?.as_ptr() as u64; REGION_AT.store(at, Ordering::Relaxed); }
+        let cache = unsafe { core::slice::from_raw_parts((at as usize + w::CACHE_AT) as *const u8, w::CACHE_BYTES) };
+        let (dir, size, modified, id) = w::stat_cache::read(cache, path)?;
+        Some(direct::Stat { dir, size, modified, id })
+    }
     /// Held while a request owns the shared region, from writing the path to reading the
     /// answer.
     static BUSY: AtomicBool = AtomicBool::new(false);
@@ -301,6 +311,7 @@ pub mod files {
     }
     /// The file's size, or why there is none.
     pub fn size(window: &mut Window, path: &[u8]) -> Result<u64, Error> {
+        if let Some(st) = cached(path) { return Ok(st.size); }
         exchange(Some(&mut *window), w::STAT, path, 0, 0, |_| {}, |_, d| direct::Stat::decode(d).size)
     }
     /// One call to Files and its answer, carrying nothing: what a round trip costs.
@@ -376,7 +387,10 @@ pub mod files {
         /// Writes `data` at byte `offset`, growing the file as needed. Returns how much
         /// was written: less than all only when the disk is full.
         pub fn write_at(path: &[u8], offset: u64, data: &[u8]) -> Result<usize, Error> { write_at_held(None, path, offset, data) }
-        pub fn stat(path: &[u8]) -> Result<Stat, Error> { exchange(None, w::STAT, path, 0, 0, |_| {}, |_, d| Stat::decode(d)) }
+        pub fn stat(path: &[u8]) -> Result<Stat, Error> {
+            if let Some(st) = super::cached(path) { return Ok(st); }
+            exchange(None, w::STAT, path, 0, 0, |_| {}, |_, d| Stat::decode(d))
+        }
         /// Makes an empty file; `EXISTS` if there is one.
         pub fn create(path: &[u8]) -> Result<(), Error> { simple(w::CREATE, path, 0) }
         /// Cuts or extends the file to `size` bytes.
@@ -426,6 +440,7 @@ pub mod files {
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub struct Stat { pub dir: bool, pub size: u64, pub mtime: u64 }
     pub fn stat(window: &mut Window, path: &[u8]) -> Result<Stat, Error> {
+        if let Some(st) = cached(path) { return Ok(Stat { dir: st.dir, size: st.size, mtime: st.modified }); }
         exchange(Some(window), w::STAT, path, 0, 0, |_| {}, |_, d| Stat { dir: word(d, 0) != 0, size: word(d, 1), mtime: word(d, 2) })
     }
     /// One entry of a folder.

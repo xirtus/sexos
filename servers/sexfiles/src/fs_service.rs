@@ -41,7 +41,31 @@ pub fn commit_when_idle() {
 }
 fn commit_writes(fs: &mut Fs<'static, Disk>) {
     let bytes = unsafe { core::mem::replace(&mut *core::ptr::addr_of_mut!(UNCOMMITTED), 0) };
-    if let Err(e) = fs.commit() { sex_pdx::serial_record!("[files.fs.commit.failed] bytes={} error={:?}", bytes, e); }
+    if let Err(e) = fs.commit() { forget_stats(None); sex_pdx::serial_record!("[files.fs.commit.failed] bytes={} error={:?}", bytes, e); }
+}
+/// Clients' regions, found once: (address, 0 until looked up, u64::MAX if absent).
+static mut REGIONS: [u64; 64] = [0; 64];
+fn client_cache(index: usize) -> Option<&'static [u8]> {
+    let regions = unsafe { &mut *core::ptr::addr_of_mut!(REGIONS) };
+    let slot = regions.get_mut(index)?;
+    if *slot == 0 {
+        *slot = sex_pdx::memory_region_view(w::PROVIDER_SLOT_BASE + index as u64, 0, w::REGION_BYTES as u64, QUERY_VIEW | READ | WRITE)
+            .map(|v| v.virtual_address).unwrap_or(u64::MAX);
+    }
+    if *slot == u64::MAX { return None; }
+    Some(unsafe { core::slice::from_raw_parts((*slot as usize + w::CACHE_AT) as *const u8, w::CACHE_BYTES) })
+}
+/// Clears what clients were told about `file` (a file id), or about
+/// everything, before the change can be seen. Only Files' own answers are touched,
+/// never a client's data.
+fn forget_stats(file: Option<u64>) {
+    static mut CLEARED: u64 = 0;
+    for index in 0..w::PROGRAM_INDEX_BASE + PROGRAM_ROWS {
+        if let Some(cache) = client_cache(index) {
+            let n = w::stat_cache::forget(cache, file) as u64;
+            unsafe { CLEARED += n; if n != 0 && CLEARED.is_power_of_two() { sex_pdx::serial_record!("[files.stat_cache.forget] cleared={}", CLEARED); } }
+        }
+    }
 }
 /// Before power goes: commits waiting writes and flushes the disk's own cache.
 pub fn flush_for_power() -> bool {
@@ -243,6 +267,7 @@ pub fn bind(target: u32, task: u32) {
         }
     }
     let args = unsafe { &mut *core::ptr::addr_of_mut!(LOADED_ARGS) };
+    if let Some(cache) = client_cache(w::PROGRAM_INDEX_BASE + index) { w::stat_cache::forget(cache, None); }
     bindings[index] = Some(Binding { task, root, len, args: args.0, args_len: core::mem::take(&mut args.1), picked: [0; PICKED_MAX], picked_len: 0 });
     unsafe { (*core::ptr::addr_of_mut!(PICKS))[index] = None; }
     sex_pdx::serial_record!("[files.program.bound] target={} task={} root={}", target, task, core::str::from_utf8(&root[..len]).unwrap_or("?"));
@@ -381,8 +406,15 @@ pub fn handle(caller: u32, a: u64, offset: u64, length: u64) -> u64 {
     if r.kind == w::PING { return w::reply(r.seq, w::OK, 0); }
     let Ok(view) = sex_pdx::memory_region_view(w::PROVIDER_SLOT_BASE + index as u64, 0, w::REGION_BYTES as u64, QUERY_VIEW | READ | WRITE) else { return w::reply(r.seq, w::IO, 0) };
     let region = unsafe { core::slice::from_raw_parts_mut(view.virtual_address as *mut u8, w::REGION_BYTES) };
+    // A client found now may have been absent when Files last looked: keep it, so its
+    // cache is cleared with the others.
+    if let Some(slot) = unsafe { (*core::ptr::addr_of_mut!(REGIONS)).get_mut(index) } { *slot = view.virtual_address; }
     let state = unsafe { &mut *core::ptr::addr_of_mut!(STATE) };
-    if matches!(state, State::Untried) { *state = bring_up(); }
+    if matches!(state, State::Untried) {
+        *state = bring_up();
+        // A restarted Files may have lost writes its clients' caches still describe.
+        if matches!(state, State::Ready(_)) { forget_stats(None); }
+    }
     if r.kind == w::INSTALL {
         // Works without a filesystem: a live system on another OS's disk has none.
         let path_len = (r.path_len as usize).min(w::PATH_BYTES);
@@ -428,7 +460,12 @@ pub fn handle(caller: u32, a: u64, offset: u64, length: u64) -> u64 {
         };
         path = own; path_len = n;
     }
-    let data = &mut region[w::PATH_BYTES..];
+    // The client's spelling, for its cache; `path` is what it resolves to.
+    let mut spelled = [0u8; w::PATH_BYTES];
+    let spelled_len = (r.path_len as usize).min(w::PATH_BYTES);
+    spelled[..spelled_len].copy_from_slice(&region[..spelled_len]);
+    let (head, cache) = region.split_at_mut(w::CACHE_AT);
+    let data = &mut head[w::PATH_BYTES..];
     let Some(fs) = fs else {
         // No SexOS filesystem on this disk: only its own volumes under /media, read only.
         let path = &path[..path_len];
@@ -446,6 +483,13 @@ pub fn handle(caller: u32, a: u64, offset: u64, length: u64) -> u64 {
         if fs.has_changes() { return w::reply(r.seq, w::IO, 0); }
     }
     let path = &path[..path_len];
+    // Before anything changes: forget what clients were told about it.
+    match r.kind {
+        w::STAT | w::LIST | w::READ | w::STATFS | w::SYNC | w::PREPARE => {}
+        // By file id, so every spelling of the path (`a//b`, `a/b/`) is cleared.
+        w::WRITE | w::TRUNCATE | w::CREATE | w::MKDIR => { if let Ok(st) = fs.open(path) { forget_stats(Some(st.id)); } }
+        _ => forget_stats(None),
+    }
     // Other systems' volumes, under /media.
     let rename_halves = (r.kind == w::RENAME).then(|| path.iter().position(|b| *b == 0)).flatten().map(|i| (&path[..i], &path[i + 1..]));
     let media = match (r.kind, rename_halves) {
@@ -465,6 +509,10 @@ pub fn handle(caller: u32, a: u64, offset: u64, length: u64) -> u64 {
     }
     if r.kind == w::SYNC { crate::volumes::sync_all(fs); }
     let result = run(fs, r, path, data);
+    if r.kind == w::STAT && result.is_ok() {
+        let word = |i: usize| u64::from_le_bytes(data[i * 8..i * 8 + 8].try_into().unwrap());
+        w::stat_cache::fill(cache, &spelled[..spelled_len], word(3), word(0) != 0, word(1), word(2), word(3));
+    }
     match result {
         Ok(value) => {
             if batched && value != 0 {
@@ -476,7 +524,7 @@ pub fn handle(caller: u32, a: u64, offset: u64, length: u64) -> u64 {
         }
         Err(e) => {
             // Nothing half done becomes durable: back to the last commit.
-            if !read_only && !batched && !matches!(e, Error::Io | Error::Corrupt | Error::Poisoned) { let _ = fs.rollback(); }
+            if !read_only && !batched && !matches!(e, Error::Io | Error::Corrupt | Error::Poisoned) { let _ = fs.rollback(); forget_stats(None); }
             w::reply(r.seq, status(e), 0)
         }
     }

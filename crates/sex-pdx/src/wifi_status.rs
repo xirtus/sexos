@@ -57,9 +57,9 @@ pub const FAILED: u8 = 4; // start-up, the last scan or the last join failed
 pub const JOINING: u8 = 5;
 pub const JOINED: u8 = 6; // on the network's channel, not yet authenticated
 pub const ASSOCIATING: u8 = 7; // authentication and association frames
-pub const ASSOCIATED: u8 = 8; // associated with an open network (data path: W5e)
+pub const ASSOCIATED: u8 = 8; // associated with an open network; sexnet's traffic goes over it
 pub const HANDSHAKE: u8 = 9; // WPA2 4-way handshake and key install
-pub const CONNECTED: u8 = 10; // keys installed (data path: W5e)
+pub const CONNECTED: u8 = 10; // keys installed; sexnet's traffic goes over it
 
 /// The state word: phase (bits 0..8), networks heard (8..16), scans started (16..32),
 /// channels in a scan (32..40).

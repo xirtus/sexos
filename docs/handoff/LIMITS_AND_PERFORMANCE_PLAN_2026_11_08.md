@@ -464,7 +464,7 @@ Caveats, plainly:
 - `yield` is not compared: Linux's initramfs has nothing else to run, SexOS's desktop does.
 
 Where SexOS is behind, and the plan:
-1. **file stat (1.3x slower on 1 core, 10x on 4):** a stat is a call to Files on
+1. **file stat (1.3x slower on 1 core, 10x on 4) [fixed: stat cache, below]:** a stat is a call to Files on
    another core; Linux answers from its own dentry cache in the caller's system call.
    Plan: Files publishes a read-only metadata map (sizes, times, generation) that
    programs read without a call, the way Linux's vDSO serves the clock; a call only on a
@@ -478,3 +478,28 @@ Where SexOS is behind, and the plan:
 4. **PKU switch cost on real hardware:** three `wrpkru` per call; stage 6b drops the
    exit write when a call returns to the same domain, and the PKU PC will give real
    numbers.
+
+### Stat cache: a stat without a call (2026-11-10)
+
+Each client's 256 KiB Files region now ends in a 4 KiB `stat_cache` (64 entries of
+64 bytes; `sex_pdx::fs::stat_cache`). Files fills an entry when it answers a STAT,
+keyed by the path as the client spelled it, and clears entries in every client's
+region before a change can be seen: by file for WRITE / TRUNCATE / CREATE / MKDIR, all of
+them for REMOVE, RENAME, MOUNT, UNMOUNT, a rollback or a failed commit, and a client's
+own entries when it binds. Each entry is seqlocked (odd while Files writes it), so a
+reader never takes a half-written answer. `sex_app` (`size`, `stat`, `direct::stat`)
+reads the cache first and calls Files only on a miss. The bench checks that a size read
+after a write is the new one.
+
+| file stat, cycles | Linux 6.8 | SexOS before | SexOS now |
+|---|---|---|---|
+| 1 core, no PKU | 39,866 | 53,128 | **2,700** |
+| 4 cores, no PKU | 23,018 | 240,723 | **4,049** |
+| 1 core, PKU emulated | | 302,878 | 4,169 |
+
+Stat is now 15x faster than Linux on 1 core and 5.7x on 4 cores (TCG).
+
+**ABI:** `fs::DATA_MAX` and `fs::IO_MAX` shrink by 4 KiB (CACHE_BYTES); the region's
+last 4 KiB (`CACHE_AT`) belong to Files. Programs built against the old sizes would
+send requests that overlap the cache; all in-tree clients use the constants.
+

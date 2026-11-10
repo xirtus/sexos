@@ -15,6 +15,9 @@ static mut TEXT_STAGES:[text_transaction::Stage;MAX_SURFACES]=[text_transaction:
 static mut BITMAP_STORES:bitmap_stores::Stores<{app_catalog::count(app_catalog::App::Browser)}>=bitmap_stores::Stores::UNBOUND;
 pub const ERR_SERVICE_NOT_READY:u64=u64::MAX-1;
 #[path="../crates/sex-pdx/src/desktop_style.rs"]pub mod desktop_style;
+#[path="../crates/sex-pdx/src/notify.rs"]pub mod notify;
+pub const SLOT_BELL:u64=12;
+pub fn pdx_call(_:u64,_:u64,_:u64,_:u64,_:u64)->(u64,u64){unreachable!("display never posts")}
 #[path="../servers/sexdisplay/src/glyphs.rs"]mod glyphs;
 #[path="../crates/sex-pdx/src/pixel_region.rs"]pub mod pixel_region;
 #[path="../crates/sex-pdx/src/spindle_view.rs"]pub mod spindle_view;
