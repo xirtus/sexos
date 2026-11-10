@@ -6,8 +6,35 @@
 
 pub const LEGACY_GROUP: u8 = 0;
 pub const LONG_GROUP: u8 = 1;
+pub const SYSTEM_GROUP: u8 = 0x2;
+pub const PHY_OPS_GROUP: u8 = 0x4;
+pub const DATA_PATH_GROUP: u8 = 0x5;
+pub const REGULATORY_AND_NVM_GROUP: u8 = 0xc;
+
 pub const ALIVE: u8 = 0x1;
 pub const ALIVE_STATUS_OK: u16 = 0xcafe;
+pub const REPLY_ERROR: u8 = 0x2;
+pub const INIT_COMPLETE_NOTIF: u8 = 0x4;
+pub const SCAN_CFG_CMD: u8 = 0xc;
+pub const SCAN_REQ_UMAC: u8 = 0xd;
+pub const POWER_TABLE_CMD: u8 = 0x77;
+pub const TX_ANT_CONFIGURATION_CMD: u8 = 0x98;
+pub const BT_CONFIG: u8 = 0x9b;
+pub const MCC_UPDATE_CMD: u8 = 0xc8;
+pub const REPLY_BEACON_FILTERING_CMD: u8 = 0xd2;
+/// SYSTEM_GROUP
+pub const SOC_CONFIGURATION_CMD: u8 = 0x01;
+pub const INIT_EXTENDED_CFG_CMD: u8 = 0x03;
+/// PHY_OPS_GROUP
+pub const TEMP_REPORTING_THRESHOLDS_CMD: u8 = 0x04;
+/// DATA_PATH_GROUP
+pub const DQA_ENABLE_CMD: u8 = 0x00;
+/// REGULATORY_AND_NVM_GROUP
+pub const NVM_ACCESS_COMPLETE: u8 = 0x00;
+pub const NVM_GET_INFO: u8 = 0x02;
+pub const PNVM_INIT_COMPLETE: u8 = 0xfe;
+/// Set in a response's group byte when the firmware refused the command.
+pub const CMD_FAILED: u8 = 0x40;
 pub const FIRST_TB_SIZE: usize = 20;
 pub const WIDE_HEADER: usize = 8;
 pub const TFD_BYTES: usize = 256;
@@ -21,15 +48,15 @@ const FRAME_ALIGN: usize = 0x40;
 pub fn encode(out: &mut [u8], group: u8, opcode: u8, version: u8, qid: u8, index: u8, payload: &[u8]) -> Option<usize> {
     let total = WIDE_HEADER + payload.len();
     if out.len() < total || payload.len() > u16::MAX as usize { return None; }
-    out[0] = opcode;
-    out[1] = if group == LEGACY_GROUP { LONG_GROUP } else { group };
-    out[2] = index;
-    out[3] = qid;
-    out[4..6].copy_from_slice(&(payload.len() as u16).to_le_bytes());
-    out[6] = 0;
-    out[7] = version;
+    out[..WIDE_HEADER].copy_from_slice(&header(group, opcode, version, qid, index, payload.len() as u16));
     out[8..total].copy_from_slice(payload);
     Some(total)
+}
+
+/// The wide command header alone (see `encode`).
+pub fn header(group: u8, opcode: u8, version: u8, qid: u8, index: u8, len: u16) -> [u8; WIDE_HEADER] {
+    let l = len.to_le_bytes();
+    [opcode, if group == LEGACY_GROUP { LONG_GROUP } else { group }, index, qid, l[0], l[1], 0, version]
 }
 
 /// A TFD for a buffer at bus address `addr` of `len` bytes: the first 20 bytes
@@ -57,6 +84,26 @@ pub struct Packet<'a> { pub code: u8, pub group: u8, pub index: u8, pub qid: u8,
 impl Packet<'_> {
     /// Responses to our commands carry the queue id without the "unsolicited" bit.
     pub fn is_response(&self) -> bool { self.qid & 0x80 == 0 }
+    /// The group without the "command failed" flag. Commands of group 0 are sent
+    /// as LONG_GROUP and answered there; both are the same command space.
+    pub fn group_id(&self) -> u8 { self.group & !CMD_FAILED }
+    pub fn failed(&self) -> bool { self.group & CMD_FAILED != 0 }
+    /// True for (group, code), counting group 0 and LONG_GROUP as one.
+    pub fn is(&self, group: u8, code: u8) -> bool {
+        let g = self.group_id();
+        self.code == code && (g == group || (g <= LONG_GROUP && group <= LONG_GROUP))
+    }
+}
+
+/// A REPLY_ERROR notification: the firmware could not run a command.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FirmwareError { pub kind: u32, pub command: u8, pub sequence: u16, pub service: u32 }
+
+pub fn parse_error(p: &Packet<'_>) -> Option<FirmwareError> {
+    if !p.is(LEGACY_GROUP, REPLY_ERROR) || p.data.len() < 12 { return None; }
+    let d = p.data;
+    Some(FirmwareError { kind: u32::from_le_bytes(d[0..4].try_into().unwrap()), command: d[4],
+        sequence: u16::from_le_bytes([d[6], d[7]]), service: u32::from_le_bytes(d[8..12].try_into().unwrap()) })
 }
 
 /// Splits one RX buffer into packets (a 4 KiB buffer may hold several).
@@ -75,9 +122,11 @@ pub fn packets(buffer: &[u8]) -> impl Iterator<Item = Packet<'_>> {
     })
 }
 
-/// Firmware versions and status from the ALIVE notification (v4/v5 layouts).
+/// Firmware versions and status from the ALIVE notification. Layouts v4 (116
+/// bytes), v5 (128, adds the SKU id) and v6/v7 (144, adds the IMR region) share
+/// their first 116 bytes; the SKU id picks the platform NVM section on AX210.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Alive { pub ok: bool, pub lmac_major: u32, pub lmac_minor: u32, pub umac_major: u32, pub umac_minor: u32, pub error_table: u32, pub umac_error_table: u32 }
+pub struct Alive { pub ok: bool, pub lmac_major: u32, pub lmac_minor: u32, pub umac_major: u32, pub umac_minor: u32, pub error_table: u32, pub umac_error_table: u32, pub sku: [u32; 3] }
 
 pub fn parse_alive(p: &Packet<'_>) -> Option<Alive> {
     if p.code != ALIVE || (p.group != LEGACY_GROUP && p.group != LONG_GROUP) || p.data.len() < 4 + 2 * 48 + 16 { return None; }
@@ -88,5 +137,6 @@ pub fn parse_alive(p: &Packet<'_>) -> Option<Alive> {
         ok: u16::from_le_bytes([d[0], d[1]]) == ALIVE_STATUS_OK,
         lmac_major: u(4), lmac_minor: u(8), error_table: u(4 + 16),
         umac_major: u(umac), umac_minor: u(umac + 4), umac_error_table: u(umac + 8),
+        sku: if d.len() >= 128 { [u(116), u(120), u(124)] } else { [0; 3] },
     })
 }

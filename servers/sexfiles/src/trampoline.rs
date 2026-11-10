@@ -234,6 +234,11 @@ pub extern "C" fn trampoline_main() {
     let mut probes=crate::spindle_probe::Service::new();
     let mut history=crate::spindle_history::Service::new();
     let mut durable_history=crate::history_disk::Durable::new();
+    // What stopped on earlier starts, back into the kernel's list; this start's so far, to disk.
+    static mut CRASH_KEEPER:crate::crash_keeper::Keeper=crate::crash_keeper::Keeper::new();
+    let crash_keeper=unsafe{&mut *core::ptr::addr_of_mut!(CRASH_KEEPER)};
+    crash_keeper.load(&mut crate::history_disk::DiskIo);
+    crash_keeper.sync(&mut crate::history_disk::DiskIo);
     loop {
         history.poll(pdx_reply);probes.poll(pdx_reply);documents.poll(pdx_reply);crate::fs_service::poll_replies();
         static mut SEXFILES_TRAMP_LISTEN_BUDGET: u32 = 8;
@@ -272,6 +277,10 @@ pub extern "C" fn trampoline_main() {
                 }) {
                 sex_pdx::serial_record!("[files.app.cleanup.ack] target={} task={} ok={}",notice.target_pd,notice.task_id,acked as u8);
             }
+            continue;
+        }
+        if msg.type_id==sex_pdx::crash_log::OP_NOTICE && caller==0 {
+            crash_keeper.sync(&mut crate::history_disk::DiskIo);
             continue;
         }
         if app_custody.is_retired(caller) { continue; }

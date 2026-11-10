@@ -247,11 +247,15 @@ fn grant(pd: &ProtectionDomain, slot: u64, region: RegionGrant) {
 }
 
 fn dma(pd_id: u32, region_id: u32, length: u64) {
+    dma_at(pd_id, sex_pdx::SLOT_DMA_REGION, region_id, length);
+}
+
+fn dma_at(pd_id: u32, slot: u64, region_id: u32, length: u64) {
     if pd_id == 0 { return; }
     let pd = DOMAIN_REGISTRY.get(pd_id).expect("BOOT_DMA_PD_MISSING");
     let physical = backing(length);
     let virtual_base = alias(pd, physical, length, true, false);
-    grant(pd, sex_pdx::SLOT_DMA_REGION, RegionGrant { region_id, virtual_base, length,
+    grant(pd, slot, RegionGrant { region_id, virtual_base, length,
         rights: QUERY_VIEW | READ | WRITE | DMA_ADDRESS, dma_base: Some(physical), peer_pd: None });
 }
 
@@ -714,7 +718,28 @@ pub fn class_dma(pd_id:u32,kind:crate::device_lease::Kind){
     require_boot();
     if kind==crate::device_lease::Kind::Ahci { return; }
     let (region,bytes)=kind.dma();
-    dma(pd_id,region,bytes);
+    dma_at(pd_id,kind.dma_slot(),region,bytes);
+    if kind==crate::device_lease::Kind::Wifi { wifi_firmware(pd_id); }
+}
+
+/// The Wi-Fi firmware pack (a boot module) as a read-only region of the service
+/// that holds the chip. The kernel never looks inside; the driver checks each file.
+fn wifi_firmware(pd_id:u32){
+    use sex_pdx::pci_command as w;
+    require_boot();
+    let Some(module) = crate::MODULE_REQUEST.response().and_then(|m| m.modules().iter().find(|m| m.path().ends_with(w::WIFI_FIRMWARE_MODULE))) else {
+        crate::serial_println!("[boot.wifi.firmware.absent] pd={}", pd_id); return
+    };
+    let hhdm = crate::HHDM_REQUEST.response().expect("BOOT_WIFI_FIRMWARE_NO_HHDM").offset;
+    let data = module.data();
+    let virt = data.as_ptr() as u64;
+    let length = (data.len() as u64).next_multiple_of(4096);
+    if virt % 4096 != 0 || length == 0 { return; }
+    let pd = DOMAIN_REGISTRY.get(pd_id).expect("BOOT_WIFI_FIRMWARE_PD");
+    let virtual_base = alias(pd, virt - hhdm, length, false, false);
+    grant(pd, w::SLOT_WIFI_FIRMWARE, RegionGrant { region_id: w::WIFI_FIRMWARE_REGION_ID, virtual_base, length,
+        rights: QUERY_VIEW | READ, dma_base: None, peer_pd: None });
+    crate::serial_println!("[boot.wifi.firmware.region] pd={} bytes={}", pd_id, data.len());
 }
 
 fn pci_view(pd:&ProtectionDomain,slot:u64,physical:u64,actual_length:u64,length:u64)->RegionGrant{

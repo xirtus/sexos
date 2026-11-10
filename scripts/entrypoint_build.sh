@@ -15,6 +15,7 @@ ABI_INPUTS=(
   kernel/src/boot_network.rs
   kernel/src/pci_command.rs
   crates/sex-pdx/src/virtio.rs
+  crates/sex-pdx/src/dma_lend.rs
   crates/sex-pdx/src/device.rs
   crates/sex-pdx/src/usb_disk.rs
   kernel/src/entropy_source.rs
@@ -55,6 +56,7 @@ ABI_INPUTS=(
   crates/sex-pdx/src/text_region.rs
   crates/sex-pdx/src/organs.rs
   crates/sex-pdx/src/program_store.rs
+  crates/sex-pdx/src/crash_log.rs
   crates/sex-pdx/src/program_memory.rs
   crates/sex-pdx/src/fs.rs
   crates/sex-pdx/src/web.rs
