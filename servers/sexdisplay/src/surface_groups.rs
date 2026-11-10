@@ -152,29 +152,45 @@ pub struct PixelSource<'a> {
     pub chrome: bool,
 }
 #[derive(Clone, Copy)]
-struct RowRun<'a> { end: usize, source: Option<PixelSource<'a>> }
-pub struct RowWinners<'a> { runs: [RowRun<'a>; MAX_ROW_RUNS], count: usize, cursor: usize }
+struct RowSource { surface: usize, content: usize, chrome: bool }
+#[derive(Clone, Copy)]
+struct RowRun { end: usize, source: Option<RowSource> }
+/// Scene-owned storage contains indices, never references into an older scene.
+/// Fill it in place: no large row aggregate is returned or copied on the stack.
+pub struct RowScratch { edges: [usize; MAX_ROW_RUNS + 1], runs: [RowRun; MAX_ROW_RUNS] }
 const MAX_ROW_RUNS: usize = crate::surface_lifecycle::MAX_SURFACES * 6 + 1;
-impl<'a> RowWinners<'a> {
+impl RowScratch {
+    pub const fn new() -> Self { Self { edges: [0; MAX_ROW_RUNS + 1], runs: [RowRun { end: 0, source: None }; MAX_ROW_RUNS] } }
+    pub fn clear(&mut self) { self.edges.fill(0); self.runs.fill(RowRun { end: 0, source: None }); }
+}
+/// Both borrows are tied to this preparation. A caller cannot reuse scratch
+/// while the view exists, or resolve its indices against a different scene.
+pub struct RowWinners<'a, 's> { surfaces: &'a [Surface], runs: &'s [RowRun], count: usize, cursor: usize }
+impl<'a> RowWinners<'a, '_> {
+    #[inline(always)]
+    fn pixel_source(&self, source: Option<RowSource>) -> Option<PixelSource<'a>> {
+        source.map(|s| PixelSource { surface: &self.surfaces[s.surface], content: &self.surfaces[s.content], chrome: s.chrome })
+    }
     #[inline(always)]
     pub fn source(&mut self, x: usize) -> Option<PixelSource<'a>> {
         while self.cursor + 1 < self.count && x >= self.runs[self.cursor].end { self.cursor += 1; }
-        if self.cursor < self.count && x < self.runs[self.cursor].end { self.runs[self.cursor].source } else { None }
+        if self.cursor < self.count && x < self.runs[self.cursor].end { self.pixel_source(self.runs[self.cursor].source) } else { None }
     }
     /// End and source of the run holding `x`: every pixel to `end` has this source.
     #[inline(always)]
     pub fn run(&mut self, x: usize) -> (usize, Option<PixelSource<'a>>) {
         while self.cursor + 1 < self.count && x >= self.runs[self.cursor].end { self.cursor += 1; }
         if self.cursor < self.count && x < self.runs[self.cursor].end {
-            (self.runs[self.cursor].end, self.runs[self.cursor].source)
+            (self.runs[self.cursor].end, self.pixel_source(self.runs[self.cursor].source))
         } else { (usize::MAX, None) }
     }
     pub fn selected(&mut self, x: usize) -> Option<u64> { self.source(x).map(|s| s.surface.surface_id) }
 }
 impl FrameGroups {
-    pub fn row_winners<'a>(&self, surfaces: &'a [Surface], focused: u64, y: usize, w: usize, h: usize) -> Option<RowWinners<'a>> {
+    pub fn row_winners<'a, 's>(&self, surfaces: &'a [Surface], focused: u64, y: usize, w: usize, h: usize,
+        scratch: &'s mut RowScratch) -> Option<RowWinners<'a, 's>> {
         if surfaces.len() > crate::surface_lifecycle::MAX_SURFACES || w == 0 || y >= h { return None; }
-        let mut edges = [0usize; MAX_ROW_RUNS + 1]; edges[1] = w; let mut n = 2;
+        let edges = &mut scratch.edges; edges[0] = 0; edges[1] = w; let mut n = 2;
         for s in surfaces.iter().filter(|s| s.active) {
             let (_sx,sy,sw,sh) = self.rect(s,w,h);
             if sw != 0 && sh != 0 && y >= sy && y-sy < sh {
@@ -197,15 +213,21 @@ impl FrameGroups {
             }
         }
         for i in 1..n { let value=edges[i]; let mut j=i; while j>0 && edges[j-1]>value { edges[j]=edges[j-1]; j-=1; } edges[j]=value; }
-        let mut result = RowWinners { runs: [RowRun { end: 0, source: None }; MAX_ROW_RUNS], count: 0, cursor: 0 };
+        let mut count = 0;
         for i in 1..n { if edges[i] > edges[i-1] {
             let x = edges[i-1];
-            let source = self.winner(surfaces,focused,x,y,w,h).map(|surface| PixelSource {
-                surface, content: self.content(surface,surfaces,x,y,w,h),
-                chrome: surface.surface_id == focused || self.is_frame(surface) || self.is_program_frame(surface),
+            let source = self.winner(surfaces,focused,x,y,w,h).map(|surface| {
+                let content = self.content(surface,surfaces,x,y,w,h);
+                // winner/content return members of this exact slice. Keep the
+                // conversion checked; no raw pointers enter reusable storage.
+                RowSource {
+                    surface: surfaces.iter().position(|s| core::ptr::eq(s,surface)).unwrap(),
+                    content: surfaces.iter().position(|s| core::ptr::eq(s,content)).unwrap(),
+                    chrome: surface.surface_id == focused || self.is_frame(surface) || self.is_program_frame(surface),
+                }
             });
-            result.runs[result.count] = RowRun { end: edges[i], source }; result.count += 1;
+            scratch.runs[count] = RowRun { end: edges[i], source }; count += 1;
         } }
-        Some(result)
+        Some(RowWinners { surfaces, runs: &scratch.runs[..count], count, cursor: 0 })
     }
 }
