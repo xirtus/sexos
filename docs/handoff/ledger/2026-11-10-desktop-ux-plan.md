@@ -11,7 +11,8 @@ Keep the dark navy, lavender, blue and teal family. Borrow the reference's quiet
 panels, thin separators, generous internal spacing, clear title/body hierarchy and
 rounded controls. A focused window should be obvious without filling all its chrome
 with saturated blue. Text and everyday actions get more attention than decoration.
-Use existing Geist Sans titles and Geist Mono content. The reference's typography and
+Geist Sans is the default UI font; Geist Mono is the default for console/editor grid
+content. Never replace either with the legacy bitmap face as a design choice. The reference's typography and
 spacing matter more than matching its large web-dialog dimensions on a 1024px desktop.
 
 Existing source, read for this plan:
@@ -21,7 +22,8 @@ Existing source, read for this plan:
 - `servers/sexdisplay/src/main.rs`: 28px toolbar, 8px frame rim, 10px control lights,
   saturated divider, hover dimming, pulsing glass rim, bar and launcher painting.
 - `servers/sexdisplay/src/glyphs.rs`: cached Geist Mono grid text and 17px Geist Sans
-  titles on an 18px line; bitmap fallback remains for small/missing glyphs.
+  titles on an 18px line. Existing bitmap fallbacks for small/missing glyphs are
+  implementation gaps to audit; they are not an alternative default UI font.
 - `crates/silkbar-model/src/lib.rs`: shared panel geometry/hit boxes, nine workspaces,
   status chips, title area and civil clock; layout contract version 6.
 - `servers/silk-shell/src/main.rs`: corresponding chrome hit zones and input capture;
@@ -29,9 +31,9 @@ Existing source, read for this plan:
 - `servers/sexdisplay/src/scene.rs`, `damage.rs`, `frame_output.rs`: owned snapshots,
   damage and publication paths that visual changes must preserve.
 - Main feature ledger's latest desktop entries: E1 workspace/layout controls, E2 search
-  and panel title, E3 notifications. The November 1 screenshot in
-  `assets/sexos-display-scene-2026-11-01.png` is historical and was inspected only for
-  context; it does not represent today's Geist/WM implementation.
+  and panel title, E3 notifications. Historical pre-Geist captures are excluded from
+  the visual comparison set. Only fresh source-bound captures from the current Geist
+  implementation may establish the before/after baseline.
 
 ## Palette and geometry proposal
 
@@ -64,7 +66,11 @@ holes and wasted content area. Initial visual refinement can keep rectangular fr
 and introduce rounded **inner tabs/control lights**, where the existing hit box remains
 valid. Do not subtract content area or narrow resize targets merely to make borders thin.
 
-Text roles: keep title 17px/18px, readable native grid at existing per-window zoom, and
+Text roles: Geist Sans for titles, launcher, status/control labels and settings; Geist
+Mono for terminal/editor grid content. Audit hard-coded bitmap call sites before claiming
+the default font is consistent, including scale-1 text and clock/status glyphs. Missing
+font/glyph fallback may remain a bounded recovery path, never the ordinary default. Keep
+title 17px/18px, readable native grid at existing per-window zoom, and
 bar title via the existing Geist cache. App surfaces using `sex-font` can later share
 14px/20px body, 12px/16px secondary and 24px/30px section headings after measuring fit.
 Those app-body roles are proposals, not a reason to rewrite console cell metrics.
