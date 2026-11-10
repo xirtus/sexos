@@ -144,7 +144,8 @@ impl Capture {
         self.revoke_sent = false;
         self.cancelled = false;
         self.saved = false;
-        sb.push(b"Capturing the whole desktop at native size. Escape cancels.");
+        sb.push(b"Capturing the whole desktop.");
+        sb.push(b"Native resolution. Escape cancels.");
         sex_pdx::serial_record!("[spindle.capture.intent] target={} task={} sequence={} epoch={} path_prefix={} path_bytes={} whole_desktop=1 native=1",c::CLIENT,self.task,sequence,self.epoch,core::str::from_utf8(&self.path[..n.min(72)]).unwrap_or("?"),n);
     }
     fn fail(&mut self, sb: &mut Scrollback, why: &[u8]) {
