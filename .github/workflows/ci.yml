@@ -55,6 +55,8 @@ jobs:
       run: bash scripts/hwdb_host_gate.sh
     - name: Fetch crates for offline host gates
       run: cargo fetch --locked
+    - name: Crash record format host regressions
+      run: bash scripts/crash_log_host_gate.sh
     - name: Host kernel-model regressions
       run: |
         python3 scripts/check_architectural_truth.py --run-host --evidence-dir "$RUNNER_TEMP/sexos-truth"
@@ -88,6 +90,15 @@ jobs:
       run: GATE_DIR="$RUNNER_TEMP/sexos-cleanup-profiles" bash scripts/paging_cleanup_profiles_gate.sh
     - name: App resource retirement and normal desktop close
       run: GATE_DIR="$RUNNER_TEMP/sexos-app-resource-profiles" bash scripts/app_resource_profiles_gate.sh
+    - name: Syscall and IPC fuzzing
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/fuzz-source.img"
+        python3 scripts/syscall_fuzz_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/fuzz-source.img" --out "$RUNNER_TEMP/sexos-fuzz"
+    - name: Boot log, stop screen, crash records and service restarts (probe build, last)
+      run: |
+        SEXOS_CRASH_PROBE=1 SEXOS_STOP_RESTART_SECONDS=8 ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/crash-probe-build.log" 2>&1 || (tail -50 "$RUNNER_TEMP/crash-probe-build.log"; exit 1)
+        truncate -s 1G "$RUNNER_TEMP/crash-source.img"
+        python3 scripts/crash_screen_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/crash-source.img" --out "$RUNNER_TEMP/sexos-crash"
     - name: Preserve runtime evidence
       if: always()
       uses: actions/upload-artifact@v4
@@ -100,4 +111,6 @@ jobs:
           ${{ runner.temp }}/sexos-persistence
           ${{ runner.temp }}/sexos-cleanup-profiles
           ${{ runner.temp }}/sexos-app-resource-profiles
+          ${{ runner.temp }}/sexos-fuzz
+          ${{ runner.temp }}/sexos-crash
         if-no-files-found: ignore

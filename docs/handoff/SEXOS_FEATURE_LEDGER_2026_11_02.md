@@ -3343,3 +3343,16 @@ Stages D2 and D3 of `DRIVERS_AND_X17_R1_PLAN_2026_11_09.md`. Handoff: `docs/hand
   Tuxedo-using component.
 - **Open decision.** #70/#82 run firmware AML in ring 0; the audit recommends a ring-3
   `sexacpi` server.
+
+
+## Boot log on screen, stop screen, crash records, restartable services, fuzzing (2026-11-09)
+
+Workstream C of the Linux/desktop parity report: bare metal without a serial port.
+Details: `docs/handoff/BOOT_LOG_AND_CRASH_RECORDS_2026_11_09.md`.
+- **Boot log on the framebuffer** (`kernel/src/console.rs`) from the first instruction until Display takes the screen; every kernel line and service record also goes to a 64 KiB log ring.
+- **Stop screen**: a panic, kernel page fault or double fault, or Display/Shell ending, halts the other cores by NMI and paints the reason, core, domain and the newest log lines, then restarts the machine after 30 s or a key.
+- **Crash records** (`sex_pdx::crash_log`, `kernel/src/crash_log.rs`): faults, restarts and stops. A stop is kept in 8 KiB of RAM at 48 MiB across the restart and shown at the top of the next boot log; Files keeps all records in a reserved disk ring (LBA 64..127) and gives earlier starts' records back to the kernel; Spindle `crashes` lists them.
+- **Restart in place** now covers Input and Bell as well as Network and Files (`OP_RESTARTS` lets a service skip its once-only start steps).
+- **ABI**: syscall 85 `SYS_CRASH_LOG` (84 is `SYS_POWER` from the ACPI work), message `OP_NOTICE` to Files, `sex_pdx::crash_log` (in `ABI_INPUTS`); hash recomputed.
+- **Fuzzer** `run fuzz [CALLS] [SEED]` and `scripts/syscall_fuzz_gate.py` (3 x 20000 seeded syscalls and pdx calls, in CI).
+- **Gates**: `scripts/crash_screen_gate.py` (three starts: warm restart then cold; probe build, last in CI), `scripts/crash_log_host_gate.sh`.
