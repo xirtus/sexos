@@ -28,3 +28,26 @@ crash, damage and data-read tests pass; two strict wire/reset cases pass; bench 
 Files cross-target checks pass. Guest qualification and exact-head CI are pending.
 This is driver-submission evidence, not physical-media cache misses, a Linux
 comparison, or evidence that per-core NVMe queues improve throughput.
+
+## Qualified local guest runs
+
+A clean sealed normal entrypoint build of `bf660ce4` passes the new gate on
+one and four QEMU TCG cores, PKU enabled, 1280x800. Every one of the six passes
+verifies all 16,777,216 bytes and records 256 READ requests, 256 successful payload
+device commands and exactly 16,777,216 device bytes. Every run begins with zero
+private counters after file creation/sync. Both guests were stopped and reaped.
+
+One-core read cycles: 189,677,000 / 187,301,000 / 210,269,000; four-core read cycles:
+146,882,000 / 122,328,000 / 121,567,000. These are raw sequential-program baseline
+observations, not an isolated queue comparison or a hardware throughput claim.
+
+Immutable ISO SHA-256:
+`85e8d1a10f848c8622b403ccffaa7df0983e41afb02e0699e053a704bb2d65ff`;
+benchmark SHA-256 `044e563a1fa9f69d5f2c80ee81b92d2932df131bd5fa46f4b755365b1eeb0f9a`;
+Files SHA-256 `851e1da457050689e15615242bea4dceb67b698f2eb6ddf8c4771104ed08ecca`.
+ABI, runner and bootloader hashes, raw serial, JSON results, disk inputs and build
+log are in `Projects/sexos-evidence/pr142-device-read-bench/`. The runner uses the
+already-qualified #135 boot cleanup helper, pinned separately in provenance;
+benchmark assertions are unchanged. This isolated normal build has no FFmpeg
+archives installed and is not presented as a media release image. Exact-head CI
+remains required before merge. The full recording/UX candidate will be separate.
