@@ -99,6 +99,13 @@ pub mod op {
     pub const FETCH_HEAD: u32 = 68;
     /// (): what `document.cookie` reads; (text): a `document.cookie = text` assignment.
     pub const COOKIE: u32 = 69;
+    /// (): `document.referrer`, a tab, then the origin of the page around this one
+    /// (empty for a top-level page).
+    pub const FRAME: u32 = 31;
+    /// (to, data as JSON, target origin): a `postMessage` to the page around this one
+    /// (to -1) or into iframe element `to`. The browser delivers it as
+    /// `message\tFROM\tORIGIN\tDATA` (FROM `parent`, or the iframe element it came from).
+    pub const POST_MESSAGE: u32 = 32;
 }
 
 /// What scripts act on. A `None` result is JavaScript `null`.

@@ -180,6 +180,59 @@ struct Browser {
     import_map: Vec<(String, String)>,
     /// The scroll offset the page script last heard (`window.scrollY`).
     script_scroll: i32,
+    /// The current page's viewport: the window below the bar, or an iframe's box.
+    view: (i32, i32),
+    /// The page around the current one when it is in an iframe (its address).
+    parent: Option<String>,
+    /// The shown page's iframes, each a page of its own (see [`Frame`]).
+    frames: Vec<Frame>,
+    /// The iframe element whose page is the current one, while the browser works on it.
+    in_frame: Option<usize>,
+    /// A page in a frame changed: draw the window again once back at the top.
+    frame_dirty: bool,
+    /// The page the next `open` comes from (its `Referer`).
+    referrer_next: Option<String>,
+    /// While a page loads (`Some`): the page it was opened from, for its requests'
+    /// `Referer`, or `None` when it has none (a typed address, `no-referrer`).
+    nav_from: Option<Option<String>>,
+    /// The shown page was laid out again: its iframes may have come, gone or moved.
+    frames_check: bool,
+}
+
+/// Most iframes a page loads; more show as empty boxes.
+const MAX_FRAMES: usize = 4;
+
+/// A page in an iframe. It has everything a page has (tree, scripts, timers, fetches,
+/// media, pictures), kept here while the browser works on another page; to work on it,
+/// the browser swaps it in as its current page (`enter`) and back (`leave`). Its
+/// requests carry the page around it as `Referer`, and the two talk by `postMessage`.
+struct Frame {
+    node: usize,
+    src: String,
+    /// The iframe's box on the page around it (x, y, w, h).
+    rect: [i32; 4],
+    page: Page,
+    doc: Doc,
+    sheets: Vec<String>,
+    timer: Option<u64>,
+    timeline: sex_html::Timeline,
+    animating: bool,
+    canvases: sex_web::canvas::Canvases,
+    media: Vec<media::Media>,
+    media_asked: bool,
+    media_loads: Vec<MediaLoad>,
+    url: String,
+    scroll: i32,
+    focus: Option<usize>,
+    hover_css: bool,
+    import_map: Vec<(String, String)>,
+    script_scroll: i32,
+    view: (i32, i32),
+    parent: Option<String>,
+    images: Vec<(String, alloc::rc::Rc<sex_web::Image>)>,
+    svgs: Vec<(String, alloc::rc::Rc<str>, (i32, i32))>,
+    moving: Vec<sex_web::Moving>,
+    frames_shown: u64,
 }
 
 /// Text from bytes: UTF-8 when valid, otherwise read as Latin-1.
@@ -208,8 +261,192 @@ fn message_page(title: &str, text: &str, url: &str) -> String {
     )
 }
 
+/// The origin of an http(s) address, as `postMessage` and `ancestorOrigins` name it.
+fn origin_of(url: &str) -> Option<String> { sex_fetch::Url::parse(url).ok().map(|u| u.origin()) }
+
 impl Browser {
+    /// Swaps frame `i`'s page with the current one.
+    fn swap_frame(&mut self, i: usize) {
+        use core::mem::swap;
+        let f = &mut self.frames[i];
+        swap(&mut self.page, &mut f.page); swap(&mut self.doc, &mut f.doc); swap(&mut self.sheets, &mut f.sheets);
+        swap(&mut self.timer, &mut f.timer); swap(&mut self.timeline, &mut f.timeline); swap(&mut self.animating, &mut f.animating);
+        swap(&mut self.canvases, &mut f.canvases); swap(&mut self.media, &mut f.media); swap(&mut self.media_asked, &mut f.media_asked);
+        swap(&mut self.media_loads, &mut f.media_loads); swap(&mut self.url, &mut f.url); swap(&mut self.scroll, &mut f.scroll);
+        swap(&mut self.focus, &mut f.focus); swap(&mut self.hover_css, &mut f.hover_css); swap(&mut self.import_map, &mut f.import_map);
+        swap(&mut self.script_scroll, &mut f.script_scroll); swap(&mut self.view, &mut f.view); swap(&mut self.parent, &mut f.parent);
+        swap(&mut self.fonts.images, &mut f.images); swap(&mut self.fonts.svgs, &mut f.svgs); swap(&mut self.fonts.moving, &mut f.moving);
+        swap(&mut self.fonts.frames_shown, &mut f.frames_shown);
+    }
+
+    /// Makes frame `i`'s page the current one, until `leave`. Only the shown page has
+    /// frames: frames inside frames are not loaded.
+    fn enter(&mut self, i: usize) { self.swap_frame(i); self.in_frame = Some(self.frames[i].node); }
+    fn leave(&mut self, i: usize) { self.swap_frame(i); self.in_frame = None; }
+
+    /// Stops a frame's downloads as it goes.
+    fn close_frame(&mut self, mut f: Frame) {
+        for mut l in core::mem::take(&mut f.media_loads) { l.ex.cancel(&mut self.window); }
+        sex_pdx::serial_record!("[web.frame.closed] node={}", f.node);
+    }
+
+    fn drop_frames(&mut self) {
+        if self.in_frame.is_some() { return; }
+        for f in core::mem::take(&mut self.frames) { self.close_frame(f); }
+    }
+
+    /// Brings the shown page's frames in line with its iframes: loads new ones (an
+    /// iframe with an http(s) `src`, up to `MAX_FRAMES`), closes those whose element
+    /// left or changed address, and follows their boxes.
+    #[inline(never)]
+    fn sync_frames(&mut self) {
+        if self.in_frame.is_some() { return; }
+        let base = self.url.clone();
+        let doc = self.doc.get();
+        let wanted: Vec<(usize, String, bool)> = doc.dom.descendants(sex_html::dom::Dom::ROOT).into_iter()
+            .filter(|&n| doc.dom.tag(n) == Some("iframe"))
+            .filter_map(|n| {
+                let src = sex_html::url::resolve(&base, doc.dom.attr(n, "src")?.trim())?;
+                src.starts_with("http").then(|| (n, src, doc.dom.attr(n, "referrerpolicy").is_some_and(|p| p.trim().eq_ignore_ascii_case("no-referrer"))))
+            })
+            .take(MAX_FRAMES).collect();
+        let mut i = 0;
+        while i < self.frames.len() {
+            if wanted.iter().any(|(n, src, _)| *n == self.frames[i].node && *src == self.frames[i].src) { i += 1; continue; }
+            let f = self.frames.remove(i);
+            self.close_frame(f);
+            self.frame_dirty = true;
+        }
+        for i in 0..self.frames.len() {
+            // No box (hidden, `display: none`): nothing drawn, no pointer, until it has one.
+            let b = self.page.boxes.get(self.frames[i].node).copied().flatten().unwrap_or([0; 4]);
+            if b == self.frames[i].rect { continue; }
+            self.frames[i].rect = b;
+            self.frame_dirty = true;
+            if (b[2], b[3]) != self.frames[i].view && b[2] > 0 && b[3] > 0 {
+                self.enter(i);
+                self.view = (b[2], b[3]);
+                if let Doc::Scripted(s) = &mut self.doc { s.page_mut().viewport = (b[2], b[3]); }
+                self.relayout();
+                self.leave(i);
+            }
+        }
+        for (node, src, no_referrer) in wanted {
+            if self.frames.iter().any(|f| f.node == node) { continue; }
+            let Some(Some(b)) = self.page.boxes.get(node).copied() else { continue };
+            if b[2] <= 0 || b[3] <= 0 { continue; }
+            let page = sex_html::render("", b[2], b[3], &self.fonts as &dyn Host);
+            self.frames.push(Frame {
+                node, src: src.clone(), rect: b, page, doc: Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", (b[2], b[3]), clock)),
+                sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(),
+                media: Vec::new(), media_asked: false, media_loads: Vec::new(), url: String::new(), scroll: 0, focus: None, hover_css: false,
+                import_map: Vec::new(), script_scroll: 0, view: (b[2], b[3]), parent: Some(base.clone()),
+                images: Vec::new(), svgs: Vec::new(), moving: Vec::new(), frames_shown: 0,
+            });
+            let i = self.frames.len() - 1;
+            sex_pdx::serial_record!("[web.frame] node={} w={} h={} url={}", node, b[2], b[3], src);
+            self.enter(i);
+            // The iframe's request comes from the page around it.
+            self.referrer_next = if no_referrer { None } else { Some(base.clone()) };
+            self.open(&src, false);
+            let (items, scripted, referrer) = (self.page.items.len(), matches!(self.doc, Doc::Scripted(_)), self.doc.get().referrer.clone());
+            self.leave(i);
+            sex_pdx::serial_record!("[web.frame.loaded] node={} items={} scripted={} referrer={}", node, items, scripted as u8, if referrer.is_empty() { "-" } else { &referrer });
+            self.frame_dirty = true;
+            if let Some(script) = self.doc.script() { let _ = script.dispatch(&alloc::format!("frameload\t{node}")); }
+            // Its handler may have sent the page elsewhere, taking its frames.
+            if self.after_script(true) && self.url != base { return; }
+        }
+    }
+
+    /// Carries `postMessage` calls between the shown page and its frames. A message
+    /// goes only to the origin its sender named (or any, for `*`).
+    #[inline(never)]
+    fn deliver(&mut self) {
+        let top_url = self.url.clone();
+        let top_origin = origin_of(&top_url).unwrap_or_else(|| String::from("null"));
+        let fits = |target: &str, origin: &str| target == "*" || origin_of(target).as_deref() == Some(origin);
+        for _ in 0..16 {
+            let mut any = false;
+            let out = core::mem::take(&mut self.doc.get().outbox);
+            for (to, data, target) in out {
+                let Some(i) = self.frames.iter().position(|f| f.node as i64 == to) else { continue };
+                let origin = origin_of(&self.frames[i].url).unwrap_or_else(|| String::from("null"));
+                if !fits(&target, &origin) { sex_pdx::serial_record!("[web.message] dropped to={} target={}", origin, target); continue; }
+                self.enter(i);
+                if let Some(script) = self.doc.script() { let _ = script.dispatch(&alloc::format!("message\tparent\t{top_origin}\t{data}")); }
+                self.after_script(true);
+                self.leave(i);
+                sex_pdx::serial_record!("[web.message] down node={} bytes={}", to, data.len());
+                any = true;
+            }
+            let mut i = 0;
+            while i < self.frames.len() {
+                let out = core::mem::take(&mut self.frames[i].doc.get().outbox);
+                let (node, origin) = (self.frames[i].node, origin_of(&self.frames[i].url).unwrap_or_else(|| String::from("null")));
+                i += 1;
+                for (to, data, target) in out {
+                    if to != -1 || !fits(&target, &top_origin) { continue; }
+                    if let Some(script) = self.doc.script() { let _ = script.dispatch(&alloc::format!("message\t{node}\t{origin}\t{data}")); }
+                    sex_pdx::serial_record!("[web.message] up node={} bytes={}", node, data.len());
+                    any = true;
+                    // The page may have gone elsewhere, taking its frames.
+                    if self.after_script(true) && self.url != top_url { return; }
+                }
+            }
+            if !any { break; }
+        }
+    }
+
+    /// Paints the frames' pages over their iframes' boxes on the window.
+    fn paint_frames(&mut self) {
+        for i in 0..self.frames.len() {
+            let [x, y, w, h] = self.frames[i].rect;
+            let top = y - self.scroll + BAR;
+            if w <= 0 || h <= 0 || top >= H || top + h <= BAR || x >= W || x + w <= 0 { continue; }
+            let mut tmp = alloc::vec![0xFFFF_FFFFu32; (w * h) as usize];
+            self.enter(i);
+            sex_web::paint(&self.page, &mut self.fonts, &mut sex_web::Target { pixels: &mut tmp, width: w, height: h, scroll: self.scroll, top: 0, premul: false, clip: None }, self.focus);
+            self.leave(i);
+            let pixels = &mut self.window.pixels()[..(W * H) as usize];
+            for row in 0..h {
+                let sy = top + row;
+                if sy < BAR || sy >= H { continue; }
+                let (a, b) = (x.max(0), (x + w).min(W));
+                let src = (row * w + a - x) as usize;
+                pixels[(sy * W + a) as usize..(sy * W + b) as usize].copy_from_slice(&tmp[src..src + (b - a) as usize]);
+            }
+        }
+    }
+
+    /// When the next timer of any page (shown or framed) is due.
+    fn next_due(&self) -> Option<u64> {
+        self.frames.iter().filter_map(|f| f.timer).chain(self.timer).min()
+    }
+
+    /// Runs the timers that are due, on every page.
+    fn tick_all(&mut self) {
+        let now = sex_pdx::get_ticks();
+        if self.timer.is_some_and(|t| t <= now) { self.tick(); }
+        let mut i = 0;
+        while i < self.frames.len() {
+            if self.frames[i].timer.is_some_and(|t| t <= now) { self.enter(i); self.tick(); self.leave(i); }
+            i += 1;
+        }
+        self.settle();
+    }
+
+    /// After any work: frames follow the page, messages are delivered, and a frame's
+    /// change shows.
+    fn settle(&mut self) {
+        if core::mem::take(&mut self.frames_check) { self.sync_frames(); }
+        if !self.frames.is_empty() { self.deliver(); }
+        if core::mem::take(&mut self.frame_dirty) { self.draw(); }
+    }
+
     fn draw(&mut self) {
+        // A page in a frame is drawn as part of the page around it.
+        if self.in_frame.is_some() { self.frame_dirty = true; return; }
         let start = sex_pdx::get_ticks();
         let pixels = &mut self.window.pixels()[..(W * H) as usize];
         let bar = match (&self.editing, self.status) {
@@ -218,6 +455,7 @@ impl Browser {
             (None, None) => if self.page.title.is_empty() { self.url.clone() } else { alloc::format!("{} — {}", self.page.title, self.url) },
         };
         sex_web::frame(&self.page, &mut self.fonts, pixels, W, H, self.scroll, self.focus, &bar, self.editing.is_some());
+        self.paint_frames();
         self.window.show_pixels(W as usize, H as usize);
         self.full_redraw = false;
         sex_pdx::serial_record!("[web.shown] w={} h={} scroll={} focus={} items={} ticks={}", W, H, self.scroll, self.focus.map_or(-1, |f| f as i64), self.page.items.len(), sex_pdx::get_ticks() - start);
@@ -265,7 +503,10 @@ impl Browser {
         let cookie = if cross.is_some() { None } else { self.jar.borrow().header(&target, wall()) };
         let mut sent: Vec<(&str, &str)> = p.headers.iter().map(|(k, v)| (k.as_str(), v.as_str())).filter(|(k, _)| !sex_fetch::forbidden_header(k)).collect();
         if let Some(o) = cross { sent.push(("Origin", o)); }
-        let req = sex_fetch::Request { method: &p.method, url: &p.url, headers: &sent, body: &p.body, trusted_origin: cross.is_some() };
+        // The page's own address, or while a page loads the one it was opened from.
+        let from = match &self.nav_from { Some(loading) => loading.as_deref(), None => Some(self.url.as_str()) };
+        let referrer = from.and_then(|f| sex_fetch::referrer(f, &target));
+        let req = sex_fetch::Request { method: &p.method, url: &p.url, headers: &sent, body: &p.body, trusted_origin: cross.is_some(), referrer: referrer.as_deref() };
         p.begun = sex_pdx::get_ticks();
         let started = if patient { net::Exchange::start_patiently(&mut self.window, &req, cookie.as_deref(), p.max) } else { net::Exchange::start(&mut self.window, &req, cookie.as_deref(), p.max) };
         started.map_err(|e| if e == net::Error::Busy { BUSY } else { net::message(e) })
@@ -304,7 +545,10 @@ impl Browser {
 
     fn open(&mut self, url: &str, remember: bool) {
         let post = self.post.take();
-        if remember && !self.url.is_empty() { self.history.push(self.url.clone()); }
+        // The page this one is opened from, for its `Referer`: a link or script on it,
+        // or the page around an iframe. A typed address has none.
+        let from = self.referrer_next.take();
+        if remember && !self.url.is_empty() && self.in_frame.is_none() { self.history.push(self.url.clone()); }
         // Same page, other fragment: just scroll.
         let (here, _) = sex_html::url::fragment(&self.url);
         let (there, frag) = sex_html::url::fragment(url);
@@ -313,13 +557,16 @@ impl Browser {
             self.scroll_to(frag);
             return;
         }
-        self.status = Some("Loading…");
+        if self.in_frame.is_none() { self.status = Some("Loading…"); }
         self.url = String::from(url);
-        // Leaving the page stops its sound and pictures, and their downloads.
+        // Leaving the page stops its sound and pictures, and their downloads, and its frames.
+        self.drop_frames();
         self.media.clear();
         for mut l in core::mem::take(&mut self.media_loads) { l.ex.cancel(&mut self.window); }
         self.draw();
         let begun = sex_pdx::get_ticks();
+        let referrer = from.as_deref().zip(sex_fetch::Url::parse(url).ok()).and_then(|(f, t)| sex_fetch::referrer(f, &t)).unwrap_or_default();
+        self.nav_from = Some(from);
         let (html, base) = if let Some(page) = built_in(if url.is_empty() { "about:welcome" } else { url }) {
             (String::from(page), String::from(if url.is_empty() { "about:welcome" } else { url }))
         } else if let Some(file) = url.strip_prefix('@') {
@@ -343,6 +590,7 @@ impl Browser {
             (message_page("Can't open that address", "Addresses start with https://, http://, or @ for a file.", url), String::from(url))
         };
         self.buf = Vec::new();
+        self.nav_from = None;
         if base.starts_with("http") { self.url = base.clone() + frag.map(|f| alloc::format!("#{}", f)).as_deref().unwrap_or(""); }
         let dom = sex_html::parse::parse(&html);
         drop(html);
@@ -385,10 +633,12 @@ impl Browser {
         self.sheets = sheets;
         self.timer = None;
         self.timeline = sex_html::Timeline::default();
-        let mut doc = Document::new(dom, &base, (W, H - BAR), clock);
+        let mut doc = Document::new(dom, &base, self.view, clock);
         doc.measure = sex_web::canvas::measure_css;
         doc.cookies = Some(self.jar.clone());
         doc.wall = wall;
+        doc.referrer = referrer;
+        doc.parent_origin = self.parent.as_deref().and_then(|p| sex_fetch::Url::parse(p).ok()).map(|u| u.origin());
         doc.pictures = self.fonts.images.clone();
         self.doc = Doc::Plain(doc);
         self.canvases = sex_web::canvas::Canvases::new();
@@ -403,12 +653,14 @@ impl Browser {
             self.page.items.len(), self.page.links.len(), self.page.height, self.sheets.len(), self.fonts.images.len(), script_begun - begun,
             sex_pdx::get_ticks() - laid, laid - script_begun, matches!(self.doc, Doc::Scripted(_)) as u8);
         let _ = fetched;
-        self.status = None;
         self.scroll = 0;
         self.focus = None;
+        if self.in_frame.is_some() { return; }
+        self.status = None;
         let title: Vec<u8> = self.page.title.bytes().take(16).collect();
         self.window.title(if title.is_empty() { b"Web" } else { &title });
         self.scroll_to(frag);
+        self.sync_frames();
     }
 
     /// The page's scripts in the order they run: classic scripts as they appear, then
@@ -457,7 +709,7 @@ impl Browser {
 
     #[inline(never)]
     fn run_scripts(&mut self, scripts: Vec<PageScript>) {
-        let Doc::Plain(mut doc) = core::mem::replace(&mut self.doc, Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", (W, H - BAR), clock))) else { return };
+        let Doc::Plain(mut doc) = core::mem::replace(&mut self.doc, Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", self.view, clock))) else { return };
         doc.import_map = core::mem::take(&mut self.import_map);
         let started = sex_pdx::get_ticks();
         let mut script = match Script::new(doc, sex_js::Limits::default()) {
@@ -517,6 +769,7 @@ impl Browser {
         }
         if let Some(url) = doc.navigate.take() {
             self.post = doc.navigate_post.take();
+            self.referrer_next = Some(self.url.clone());
             self.open(&url, true);
             return true;
         }
@@ -532,7 +785,7 @@ impl Browser {
         if dirty { self.relayout(); }
         if !draw || (!dirty && changed.is_empty()) { return false; }
         // Only canvases drew: put just them over the last frame when that is enough.
-        if !dirty && !self.full_redraw {
+        if !dirty && !self.full_redraw && self.in_frame.is_none() {
             let names: Vec<String> = changed.iter().map(|n| alloc::format!("canvas:{n}")).collect();
             let start = sex_pdx::get_ticks();
             let pixels = &mut self.window.pixels()[..(W * H) as usize];
@@ -551,14 +804,15 @@ impl Browser {
     fn relayout(&mut self) {
         let sheet_refs: Vec<&str> = self.sheets.iter().map(|s| s.as_str()).collect();
         let doc = match &mut self.doc { Doc::Plain(d) => d, Doc::Scripted(s) => s.page_mut() };
-        let (styles, animating) = sex_html::styles_at(&doc.dom, &sheet_refs, W, H - BAR, sex_pdx::get_ticks(), &mut self.timeline);
+        let (styles, animating) = sex_html::styles_at(&doc.dom, &sheet_refs, self.view.0, self.view.1, sex_pdx::get_ticks(), &mut self.timeline);
         self.animating = animating;
         self.hover_css = sheet_refs.iter().any(|s| s.contains(":hover"))
             || doc.dom.descendants(sex_html::dom::Dom::ROOT).into_iter().any(|i| doc.dom.tag(i) == Some("style") && doc.dom.text_content(i).contains(":hover"));
-        self.page = sex_html::layout::layout_in(&doc.dom, &styles, W, H - BAR, &self.fonts);
+        self.page = sex_html::layout::layout_in(&doc.dom, &styles, self.view.0, self.view.1, &self.fonts);
         sex_web::svg::draw_inline(&self.page, &doc.dom, &styles, &mut self.fonts);
         doc.set_boxes(&self.page.boxes);
         doc.set_layers(&self.page.layers);
+        if self.in_frame.is_none() { self.frames_check = true; }
         self.scroll = self.scroll.min(self.max_scroll());
         if self.focus.map_or(false, |f| f >= self.page.links.len()) { self.focus = None; }
         // Ask for the next tick soon: the change may have started timers.
@@ -593,7 +847,7 @@ impl Browser {
             let next = script.dispatch("tick");
             self.timer = match next { Ok(ms) if ms >= 0 => Some(sex_pdx::get_ticks() + ms as u64), _ => None };
             self.next_frame();
-            if let Err(sex_js::Error::Trapped(why)) = next { sex_pdx::serial_record!("[web.script] trapped={}", why); self.doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", (W, H - BAR), clock)); }
+            if let Err(sex_js::Error::Trapped(why)) = next { sex_pdx::serial_record!("[web.script] trapped={}", why); self.doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", self.view, clock)); }
             self.after_script(true);
         } else {
             self.timer = None;
@@ -709,7 +963,7 @@ impl Browser {
             self.draw();
         } else if !changed.is_empty() {
             let pixels = &mut self.window.pixels()[..(W * H) as usize];
-            if !self.full_redraw && sex_web::repaint_pictures(&self.page, &mut self.fonts, pixels, W, H, self.scroll, &changed) {
+            if !self.full_redraw && self.in_frame.is_none() && sex_web::repaint_pictures(&self.page, &mut self.fonts, pixels, W, H, self.scroll, &changed) {
                 self.window.show_pixels(W as usize, H as usize);
             } else {
                 self.draw();
@@ -777,7 +1031,7 @@ impl Browser {
             let Doc::Scripted(s) = &mut self.doc else { return };
             if let Err(sex_js::Error::Trapped(why)) = s.modules_ready() {
                 sex_pdx::serial_record!("[web.script] trapped={}", why);
-                self.doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", (W, H - BAR), clock));
+                self.doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", self.view, clock));
                 return;
             }
         }
@@ -1009,7 +1263,7 @@ impl Browser {
         s.page_mut().keep_body(*id, r.status, r.body);
         if let Err(sex_js::Error::Trapped(why)) = s.dispatch(&alloc::format!("fetched\t{}\t{}\t{}", id, r.status, n)) {
             sex_pdx::serial_record!("[web.script] trapped={}", why);
-            self.doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", (W, H - BAR), clock));
+            self.doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", self.view, clock));
             return false;
         }
         true
@@ -1086,7 +1340,7 @@ impl Browser {
         self.draw();
     }
 
-    fn max_scroll(&self) -> i32 { (self.page.height - (H - BAR)).max(0) }
+    fn max_scroll(&self) -> i32 { (self.page.height - self.view.1).max(0) }
 
     fn scroll_by(&mut self, dy: i32) {
         let next = (self.scroll + dy).clamp(0, self.max_scroll());
@@ -1130,6 +1384,17 @@ impl Browser {
             return;
         }
         let (px, py) = (x, y + self.scroll);
+        // Over a frame: the frame's page has the pointer, in its own coordinates.
+        if y >= 0 && self.in_frame.is_none() {
+            if let Some(i) = self.frames.iter().position(|f| px >= f.rect[0] && px < f.rect[0] + f.rect[2] && py >= f.rect[1] && py < f.rect[1] + f.rect[3]) {
+                let [fx, fy, _, _] = self.frames[i].rect;
+                let q = sex_pdx::app_pointer::Pointer { x: (px - fx) as i16, y: (py - fy + BAR) as i16, buttons: p.buttons, kind: p.kind };
+                self.enter(i);
+                self.pointer(q);
+                self.leave(i);
+                return;
+            }
+        }
         // Links are named by node: a script's relayout rebuilds the list.
         let link = if y >= 0 { self.page.links.iter().find(|l| px >= l.x && px < l.x + l.w && py >= l.y && py < l.y + l.h).map(|l| l.node) } else { None };
         let pressed = match p.kind {
@@ -1201,7 +1466,7 @@ impl Browser {
         } else { sex_html::url::resolve(&self.url, &href) };
         match target {
             Some(t) if t.starts_with('#') => { let frag = t[1..].to_string(); self.scroll_to(Some(&frag)); }
-            Some(t) => self.open(&t, true),
+            Some(t) => { self.referrer_next = Some(self.url.clone()); self.open(&t, true) }
             None => {}
         }
     }
@@ -1257,7 +1522,7 @@ pub extern "C" fn _start() -> ! {
     let Some(fonts) = Fonts::new() else { window.show(b"Web: the fonts could not be loaded."); loop { if let Event::Close = window.next() { window.close() } } };
     let page = sex_html::render("", W, H, &fonts as &dyn Host);
     let doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", (W, H - BAR), clock));
-    let mut b = Browser { window, fonts, page, doc, sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), media_asked: false, media_loads: Vec::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None, import_map: Vec::new() };
+    let mut b = Browser { window, fonts, page, doc, sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), media_asked: false, media_loads: Vec::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None, import_map: Vec::new(), view: (W, H - BAR), parent: None, frames: Vec::new(), in_frame: None, frame_dirty: false, referrer_next: None, nav_from: None, frames_check: false };
     // Big WebGL draws spread over the cores, a band of rows each.
     let cores = sex_app::thread::cores();
     sex_gl::set_parallel(sex_app::thread::parallel, cores);
@@ -1267,12 +1532,13 @@ pub extern "C" fn _start() -> ! {
     sex_pdx::serial_record!("[web.ready] target={} task={}", b.window.target, b.window.task);
     let mut queued: Option<Event> = None;
     loop {
-        let event = if let Some(e) = queued.take() { e } else { match b.timer {
+        b.settle();
+        let event = if let Some(e) = queued.take() { e } else { match b.next_due() {
             Some(due) => {
                 let now = sex_pdx::get_ticks();
                 match if due > now { b.window.next_within(due - now) } else { b.window.poll() } {
                     Some(e) => e,
-                    None => { b.tick(); continue; }
+                    None => { b.tick_all(); continue; }
                 }
             }
             None => b.window.next(),
