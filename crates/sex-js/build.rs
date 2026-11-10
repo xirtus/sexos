@@ -52,13 +52,15 @@ fn main() {
         if custom_pages { cc.arg("-DSEXJS_WASM_CUSTOM_PAGES=1"); }
         if sex {
             // C99: no thread-locals (a page's engine runs on one thread).
-            cc.args(["--target=x86_64-unknown-none-elf", "-msse2", "-mno-avx", "-mno-red-zone", "-std=gnu99"]);
+            cc.args(["-nostdinc", "--target=x86_64-unknown-none-elf", "-msse2", "-mno-avx", "-mno-red-zone", "-std=gnu99"]);
         } else {
             // C11: the trap state is thread-local, for tests that run engines side by side.
             cc.arg("-std=gnu11");
         }
-        // Only our own headers (native/include) and clang's: no libc is linked.
-        cc.args(["-c", "-O2", "-fPIC", "-nostdinc", "-fno-stack-protector", "-ffunction-sections", "-fdata-sections", "-w"])
+        // SexOS sees only private headers and clang's. Host C11 wabt headers
+        // may include threads.h/pthread.h, so retain the host system includes;
+        // private headers remain first and the runtime still uses Rust allocation.
+        cc.args(["-c", "-O2", "-fPIC", "-fno-stack-protector", "-ffunction-sections", "-fdata-sections", "-w"])
             .arg("-isystem").arg(format!("{}/include", resource.trim()))
             .arg("-Inative/include").arg("-I").arg(&out)
             // Explicit bounds checks keep scripts inside linear memory; deep JS recursion
