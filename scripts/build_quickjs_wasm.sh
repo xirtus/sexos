@@ -2,7 +2,7 @@
 # Builds crates/sex-js/quickjs.wasm: QuickJS-NG (MIT) with the sex-js glue, for wasm32-wasip1.
 # Needs wasi-sdk 25 (WASI_SDK=path), patch(1) and a QuickJS-NG v0.10.1 checkout (QJS=path, commit
 # 3c9afc9943323ee9c7dbd123c0cd991448f4b6c2). The output is reproducible:
-# sha256 3afda0812e29fdbdebff716a8192c4e5a0fdd9310c4df60f235eaef88d1b29bb.
+# sha256 8634d86f5dd6d30d9a16731f39cf1407f8c0fcd587b743139a623c2f11b704d6.
 # -O2, not -Oz: page scripts run about 1.25x faster for 0.4 MB more.
 # CC=clang (18 or newer, with the wasm32 target) builds with that compiler and wasi-sdk's
 # sysroot and builtins instead of wasi-sdk's own clang; the output then differs in bytes.

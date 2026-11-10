@@ -579,13 +579,15 @@ fn composite_pixel_source(x: usize, y: usize, w: usize, h: usize, bg: u32, sourc
                     c = glass_over_bg(scene.tokens.frame_rim_color, x, y, 196, scene);
                 }
             } else {
-                // Left, right, or bottom rim edge — pulsing neon glass.
-                let frame = scene.frame;
-                const RIM_BASE_ALPHA: u8 = 196;
-                const RIM_AMP: u8 = 12;
-                const RIM_PERIOD: u64 = 128;
-                let rim_alpha = pulse_alpha(RIM_BASE_ALPHA, RIM_AMP, frame, RIM_PERIOD);
-                c = glass_over_bg(scene.tokens.frame_rim_color, x, y, rim_alpha, scene);
+                // Keep the full resize band, but give it a quiet inset surface
+                // and a steady one-pixel outline. Changing frame time must not
+                // animate an idle window's edge or hide its resize affordance.
+                let outer_edge = lx == 0 || ly == 0 || lx + 1 == sw || ly + 1 == sh;
+                c = if outer_edge {
+                    glass_over_bg(scene.tokens.frame_rim_color, x, y, 112, scene)
+                } else {
+                    glass_over_bg(sex_pdx::desktop_style::NATIVE_CANVAS, x, y, 224, scene)
+                };
             }
         } else {
             // ── SURFACE CONTENT AREA ──
