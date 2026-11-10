@@ -1,0 +1,9 @@
+{
+  "ok": true,
+  "source": "054c40bd CI desktop-close artifact",
+  "status": "quil-object-v1 * DRAFT KEPT",
+  "errors": [],
+  "serial_sha256": "a70415be6947d8213db351d3ffa8bb85adbf63a7c46468a2f09d68911914afaf",
+  "screenshot_sha256": "fe2134f323b062efbe1596ef3085ec24af888d6c54fa57aaf9a44a4afd740fc5",
+  "scope": "Untouched successor image; actual published28/34 geometry and exact current dirty-document status"
+}

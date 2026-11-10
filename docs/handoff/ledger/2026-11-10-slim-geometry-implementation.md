@@ -273,3 +273,18 @@ including late-local acceptance and missing/premature/foreign actual-ACK refusal
 The original CI trace passes the corrected causal check; no production lifecycle
 or transport code changed. Compact replay hashes/results are retained separately
 from the local 17c image cohort in the adjacent ci261 JSON evidence files.
+
+
+The refreshed master151 CI passes the resource ACK check, then exposes separate
+successor pixel helpers still assuming50/36. Quil successor bounds/font placement
+and modern Spindle viewport layout now consume completed shared metrics, with
+independent1/2/3x fixtures and archived legacy defaults. Current traces cannot use
+the historical four-grid fallback when authenticated viewport text is absent.
+The untouched054 successor screenshot matches the actual complete dirty status
+`quil-object-v1 * DRAFT KEPT` exactly. Auto-draft had superseded READY while the old
+bounds check retried; the close gate now follows only a complete newer status of
+the exact same dirty document, with all status glyph checks retained. Partial or
+console-prefixed intents, a different filename and a clean status cannot retarget
+that expectation. Fresh combined artifact/complete native close-chain proof is
+required before the next acceptance claim. Master151 merged cleanly; GNU-sed ABI
+regeneration verifies82 inputs. The original failure artifacts remain intact.

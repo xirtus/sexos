@@ -6,17 +6,20 @@ from history_boot_fixture import boot
 from check_desktop_pixels import font_from_source,glyph,draw_cell
 FONT=font_from_source((Path(__file__).resolve().parents[2]/'servers/sexdisplay/src/main.rs').read_text())
 ROOT=Path(__file__).resolve().parents[2]
-def fixture_layout(w,h,threshold=128):
+def fixture_layout(w,h,threshold=128,ui=None):
     # Independent fixture policy, never reads the oracle or production scale.
-    body_w=max(0,w-16);body_h=max(0,h-44);scale=2 if body_w>=threshold else 1
-    cols=min(110,max(0,max(0,body_w-16)//(6*scale)-1))
-    rows=min(48,1+(body_h-12-7*scale)//(9*scale))if body_h>=12+7*scale and cols else 0
-    empty=(8,36,body_w,0)
-    return [(8,36,body_w,body_h),empty,empty,empty],cols,[rows,0]
-def fixture(w=1280,h=134,target=12,task=None,caption=None,threshold=128,glyph_threshold=None):
+    factor=1 if ui is None else ui
+    inset=8*factor;top=36 if ui is None else 34*factor
+    body_w=max(0,w-2*inset);body_h=max(0,h-top-inset);scale=(2 if body_w>=threshold else 1)*factor
+    cols=min(110,max(0,max(0,body_w-2*inset)//(6*scale)-1))
+    rows=min(48,1+(body_h-12*factor-7*scale)//(9*scale))if body_h>=12*factor+7*scale and cols else 0
+    empty=(inset,top,body_w,0)
+    return [(inset,top,body_w,body_h),empty,empty,empty],cols,[rows,0]
+def fixture(w=1280,h=134,target=12,task=None,caption=None,threshold=128,glyph_threshold=None,ui=None):
     task=target if task is None else task
-    width,height=1280,800;data=bytearray(width*height*3);x,y=0,50;panes,cols,rows=fixture_layout(w,h,threshold);sids={12:[154,160,161,162],17:[302,303,304,305],24:[313,315,316,317],25:[318,320,321,322],26:[323,325,326,327],27:[328,330,331,332],28:[333,335,336,337],29:[338,340,341,342],40:[353,355,356,357]}[target]
+    width,height=1280,800;data=bytearray(width*height*3);x,y=0,50 if ui is None else 28*ui;factor=1 if ui is None else ui;panes,cols,rows=fixture_layout(w,h,threshold,ui);sids={12:[154,160,161,162],17:[302,303,304,305],24:[313,315,316,317],25:[318,320,321,322],26:[323,325,326,327],27:[328,330,331,332],28:[333,335,336,337],29:[338,340,341,342],40:[353,355,356,357]}[target]
     text=boot({target:task})+f'[spindle.view.accepted] target={target} task={task} sequence=2 w={w} h={h} cols={cols} top_rows={rows[0]} bottom_rows={rows[1]} sender=3\n'
+    if ui is not None:text=f'[display.chrome.metrics] scale={ui} bar={28*ui} title={26*ui} inset={8*ui} body_top={34*ui} target={24*ui} width=1280 height=800 publication=1\n'+text
     prompt=b'> echo spindle17'.ljust(cols)
     for sid,(px,py,pw,ph)in zip(sids,panes):text+=f'[shell.app.viewport] target={target} sid={sid} x={x+px} y={y+py} w={pw} h={ph}\n'
     for i,(sid,(px,py,pw,ph))in enumerate(zip(sids[:1],panes)):
@@ -26,10 +29,10 @@ def fixture(w=1280,h=134,target=12,task=None,caption=None,threshold=128,glyph_th
         payload=b''.join(line+b'\n'for line in lines);c=cols if r else 0
         text+=f'[spindle.view.text] target={target} sid={sid} sequence=2 paint={i+1} cols={c} rows={r} bytes={len(payload)}\n'
         for off in range(0,len(payload),48):text+=f'[spindle.view.bytes] target={target} sid={sid} seq=2 paint={i+1} off={off} hex={payload[off:off+48].hex()}\n'
-        scale=2 if pw>=(threshold if glyph_threshold is None else glyph_threshold)else 1
+        scale=(2 if pw>=(threshold if glyph_threshold is None else glyph_threshold)else 1)*factor
         for row,line in enumerate(lines):
             for col,char in enumerate(line):
-                draw_cell(data,width,x+px+8+col*6*scale,y+py+12+row*9*scale,chr(char),scale,b'\xe8\xff\xff',FONT)
+                draw_cell(data,width,x+px+8*factor+col*6*scale,y+py+12*factor+row*9*scale,chr(char),scale,b'\xe8\xff\xff',FONT)
     return text,b'P6\n1280 800\n255\n'+data
 class Check(unittest.TestCase):
     def source_root(self,scale_source):
@@ -38,6 +41,14 @@ class Check(unittest.TestCase):
         shutil.copyfile(ROOT/'crates/sex-pdx/src/app_catalog.rs',sdk/'app_catalog.rs')
         if scale_source is not None:(root/SCALE_SOURCE).write_text(scale_source)
         return root
+    def test_current_shared_geometry_and_actual_font_scale_at_all_three_levels(self):
+        for ui,w,h,expected in [(1,512,134,((8,34,496,92),39,[4,0])),(2,1280,700,((16,68,1248,616),49,[16,0])),(3,1280,700,((24,102,1232,574),31,[10,0]))]:
+            m=dict(inset=8*ui,body_top=34*ui,scale=ui)
+            panes,cols,rows=layout(w,h,metrics=m);self.assertEqual((panes[0],cols,rows),expected)
+            text,ppm=fixture(w,h,ui=ui)
+            self.assertEqual(verify(text,ppm,FONT,12,'> echo spindle17',True,False),[])
+            self.assertTrue(verify(text.replace(f'body_top={34*ui} ',f'body_top={36*ui} '),ppm,FONT,12,'> echo spindle17',True,False))
+
     def test_independent_128_threshold_layout_goldens(self):
         self.assertEqual(_scale_threshold(),128)
         self.assertEqual(layout(512,134),([(8,36,496,90),(8,36,496,0),(8,36,496,0),(8,36,496,0)],39,[4,0]))
