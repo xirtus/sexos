@@ -10,6 +10,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 : "${WASI_SDK:?set WASI_SDK to a wasi-sdk-25.0 directory}"
 : "${QJS:?set QJS to a quickjs-ng v0.10.1 checkout}"
+[[ "$(git -C "$QJS" rev-parse HEAD)" == 3c9afc9943323ee9c7dbd123c0cd991448f4b6c2 ]] || { echo "[FAIL] QuickJS source must match the pinned bytecode ABI" >&2; exit 1; }
 OUT="${OUT:-$ROOT/crates/sex-js/quickjs.wasm}"
 CC="${CC:-$WASI_SDK/bin/clang}"
 # quickjs.c gets SexOS hooks for the baseline tier and dynamic import() (held until the

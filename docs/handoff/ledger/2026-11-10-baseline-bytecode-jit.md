@@ -39,7 +39,8 @@ Gates:
 - `scripts/program_web_jit_gate.py --iso EXACT_HEAD.iso --source-disk BLANK.img
   --program OUTPUT --out EVIDENCE`: same real page with JIT forced off/on, exact
   result, actual compilation/execution counters, domain-specific kernel seal,
-  graceful close/relaunch. Hashes bind ISO and program. Wired into boot CI.
+  graceful close/relaunch. Hashes bind ISO and program. Dedicated CI jobs run
+  this and the kernel JIT gate on both one and four cores.
 - Existing `scripts/program_jit_gate.py` tests kernel write-to-code/execute-data
   faults, blocked code and per-run crash isolation. This new tier does not
   weaken those mechanisms.
