@@ -101,6 +101,8 @@ pub mod op {
     pub const CLASSIC_SCRIPT: u32 = 71;
     /// (source URL): trusted host provenance, "1" for opaque/unknown, else "0".
     pub const SOURCE_MUTED: u32 = 72;
+    /// Private read-only diagnostic context, absent from production.
+    pub const PRIVATE_STATE: u32 = 73;
     /// (id): the loaded bytes, once (text or, with bit 16, an ArrayBuffer).
     pub const FETCH_BODY: u32 = 67;
     /// (id): the reply's final address, a newline, then its headers as `name: value`

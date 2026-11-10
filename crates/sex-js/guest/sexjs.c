@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <stdio.h>
 #include "quickjs.h"
 
 #define IMPORT(name) __attribute__((import_module("dom"), import_name(name)))
@@ -310,13 +311,32 @@ static void report(void) {
     JS_FreeValue(ctx, e);
 }
 
+extern uint32_t sexos_debug_job_count(JSRuntime *rt);
+static uint64_t private_jobs_total;
+static unsigned private_cap_reports;
+static void private_job_snapshot(const char *phase, unsigned jobs, int status) {
+    size_t cn = 0, n = 0;
+    char *context = host_text(73, "", 0, NULL, 0, &cn);
+    char msg[512];
+    snprintf(msg, sizeof(msg), "microtask.%s jobs=%u pending=%u pending_limit=65536 total=%llu status=%d context=%.*s",
+        phase, jobs, sexos_debug_job_count(rt), (unsigned long long)private_jobs_total, status,
+        (int)(cn < 300 ? cn : 300), context ? context : "");
+    free(context);
+    char *reply = host_text(1, "0", 1, msg, strlen(msg), &n);
+    free(reply);
+}
 static void run_jobs(void) {
     JSContext *c;
+    unsigned done = 0;
     for (int i = 0; i < 10000; i++) {
         int r = JS_ExecutePendingJob(rt, &c);
         if (r == 0) break;
+        done++;
         if (r < 0) report();
     }
+    private_jobs_total += done;
+    if (done == 10000 && JS_IsJobPending(rt) && private_cap_reports++ < 8)
+        private_job_snapshot("cap", done, 0);
 }
 
 // Deliver a classic resource's exception without passing its source through a
@@ -427,6 +447,7 @@ EXPORT("sx_dispatch") int sx_dispatch(const char *arg, int len, int budget_ms) {
         JS_FreeValue(ctx, r);
         JS_FreeValue(ctx, a);
         run_jobs();
+        if (len == 5 && !memcmp(arg, "ready", 5)) private_job_snapshot("host-ready", 0, out);
         if (len == 4 && !memcmp(arg, "tick", 4)) {
             JSValue query = JS_NewString(ctx, "next-timer");
             JSValue next = JS_Call(ctx, fn, global, 1, &query);

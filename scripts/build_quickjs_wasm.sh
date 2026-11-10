@@ -21,6 +21,15 @@ cp "$QJS/quickjs.c" "$PATCHED/quickjs.c"
 patch -s -d "$PATCHED" -p1 < "$ROOT/crates/sex-js/guest/quickjs-dynamic-import.patch"
 patch -s -d "$PATCHED" -p1 < "$ROOT/crates/sex-js/guest/quickjs-baseline-jit.patch"
 patch -s -d "$PATCHED" -p1 < "$ROOT/crates/sex-js/guest/quickjs-promise-events.patch"
+# Private bounded queue diagnostic; never change the execution cap/order.
+cat >> "$PATCHED/quickjs.c" <<'SEXOS_DIAG'
+uint32_t sexos_debug_job_count(JSRuntime *rt) {
+    struct list_head *el;
+    uint32_t count = 0;
+    list_for_each(el, &rt->job_list) { if (++count >= 65536) break; }
+    return count;
+}
+SEXOS_DIAG
 RESOURCE="$(ls -d "$WASI_SDK"/lib/clang/* | head -1)"
 "$CC" -resource-dir "$RESOURCE" --target=wasm32-wasip1 --sysroot="$WASI_SDK/share/wasi-sysroot" \
   -O2 -flto -mexec-model=reactor -D_GNU_SOURCE -DNDEBUG -I"$QJS" \

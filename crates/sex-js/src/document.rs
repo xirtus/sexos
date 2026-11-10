@@ -240,6 +240,10 @@ impl Page for Document {
     fn call_bytes(&mut self, operation: u32, a: &[&[u8]]) -> Option<Vec<u8>> {
         let text = |i: usize| a.get(i).and_then(|b| core::str::from_utf8(b).ok()).unwrap_or("");
         match operation {
+            op::PRIVATE_STATE => {
+                let url: String = self.url.chars().take(192).map(|c| if c.is_ascii_graphic() { c } else { '?' }).collect();
+                return Some(format!("owner={} nodes={} dirty={} view={}x{} url={}", self.resource_owner, self.dom.nodes.len(), self.dirty as u8, self.viewport.0, self.viewport.1, url).into_bytes());
+            }
             op::SOURCE_MUTED => return Some(if self.source_muted(text(0)) { b"1".to_vec() } else { b"0".to_vec() }),
             op::CLASSIC_SCRIPT => {
                 if self.classic_scripts.len() >= 64 { return None; }

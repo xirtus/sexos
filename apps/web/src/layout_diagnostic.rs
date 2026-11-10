@@ -88,3 +88,19 @@ pub(super) fn publication(b: &mut Browser) {
     sex_pdx::serial_record!("[web.private.publication] local_seq={} target={} task={} window={}x{} requested={}x{} view={}x{} frame_count={} items={} full_redraw={} pixel_generation=unavailable",
         seq, b.window.target, b.window.task, window.0, window.1, super::W, super::H, b.view.0, b.view.1, b.frames.len(), b.page.items.len(), b.full_redraw as u8);
 }
+
+static MESSAGES: AtomicU32 = AtomicU32::new(0);
+pub(super) fn message(direction: &str, node: usize, payload: &str) {
+    let seq = MESSAGES.fetch_add(1, Ordering::Relaxed) + 1;
+    if seq > 96 {
+        return;
+    }
+    sex_pdx::serial_record!(
+        "[web.private.message] local_seq={} direction={} node={} bytes={} payload_prefix={:?}",
+        seq,
+        direction,
+        node,
+        payload.len(),
+        text(payload)
+    );
+}

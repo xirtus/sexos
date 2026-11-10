@@ -377,6 +377,7 @@ impl Browser {
                 let Some(i) = self.frames.iter().position(|f| f.node as i64 == to) else { continue };
                 let origin = origin_of(&self.frames[i].url).unwrap_or_else(|| String::from("null"));
                 if !fits(&target, &origin) { sex_pdx::serial_record!("[web.message] dropped to={} target={}", origin, target); continue; }
+                layout_diagnostic::message("down", self.frames[i].node, &data);
                 self.enter(i);
                 if let Some(script) = self.doc.script() { let _ = script.dispatch(&alloc::format!("message\tparent\t{top_origin}\t{data}")); }
                 self.after_script(true);
@@ -391,6 +392,7 @@ impl Browser {
                 i += 1;
                 for (to, data, target) in out {
                     if to != -1 || !fits(&target, &top_origin) { continue; }
+                    layout_diagnostic::message("up", node, &data);
                     if let Some(script) = self.doc.script() { let _ = script.dispatch(&alloc::format!("message\t{node}\t{origin}\t{data}")); }
                     sex_pdx::serial_record!("[web.message] up node={} bytes={}", node, data.len());
                     any = true;
