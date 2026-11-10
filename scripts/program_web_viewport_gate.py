@@ -61,8 +61,8 @@ def main():
    checked=0
    # Independent RGB oracle across the entire document, including right/bottom
    # pixels beyond the old 410x330 limit. Toolbar rendering has its own oracle.
-   for py in range(0,ph-BAR,3):
-    for px in range(0,pw,5):
+   for py in range(ph-BAR):
+    for px in range(pw):
      want=(147,132,200) if px<48 and py<48 else (113,201,176) if px>=pw-48 and py>=ph-BAR-48 else (23,58,94)
      got=img.getpixel((bx+px,by+BAR+py))
      assert max(abs(g-w)for g,w in zip(got,want))<=2,(name,px,py,got,want)
@@ -72,7 +72,7 @@ def main():
    item=dict(name=name,width=pw,height=ph,resize_count=int(matches[-1][2]),checked=checked)
    samples.append(item);return item
   first=inspect('initial',s)
-  assert first['width']>410 and first['height']>330,first
+  assert first['width']>0 and first['height']>BAR,first
   # Real Shell input, repeated both ways. Every resize must run page handlers,
   # fit the actual program area and repaint the newly visible right/bottom edge.
   for turn in range(3):
@@ -83,7 +83,9 @@ def main():
     g['wait'](r'\[web.viewport\].* applied=1',before,120)
     item=inspect(f"{turn}-{'max' if zoomed else 'restore'}",before)
     assert item['resize_count']>samples[-2]['resize_count'],samples[-2:]
-    if zoomed:assert item['width']>first['width'] and item['height']>first['height'],item
+    if zoomed:
+     assert item['width']>first['width'] and item['height']>first['height'],item
+     assert item['width']>410 and item['height']>330,item
     else:assert (item['width'],item['height'])==(first['width'],first['height']),item
   s=len(t());q.key('f11');g['wait'](rf'\[web.closed\] target={target} task={task}',s,60)
   text=t();assert 'KERNEL PANIC' not in text and '[web.fatal]' not in text and 'panicked' not in text
