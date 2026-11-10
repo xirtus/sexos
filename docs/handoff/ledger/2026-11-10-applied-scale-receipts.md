@@ -26,3 +26,14 @@ the next slice wires the shared 28/26 metrics through paint, hit/input and clien
 Host validation: six Rust cases and the Python wrapper pass; 31 focused Python
 cases pass; ABI pins regenerated. Clean target build/native guest qualification
 is required before acceptance. Kernel growth zero; retained states are fixed-size.
+
+Review correction: all new scale changes, including sequence-zero legacy calls,
+are rejected while a publication receipt is pending. Shell service restarts rearm
+the same task id (kernel service_restart.rs), so caller_task alone cannot fence an
+old reply. Shell seeds disjoint sequence blocks from its kernel-owned own-service
+restart count. An authenticated new WM registration carries that count; Display
+checks the exact coordinator main task, rejects epoch rollback, clears an old run's
+pending receipt only on a newer registration, and resets scale to BOOT for that run.
+Idempotent registration cannot drop an outstanding reply. Sequence exhaustion fails
+closed instead of wrapping. Production-state controls cover legacy interference,
+old reply replay into a new Shell, task mismatch and registration rollback.

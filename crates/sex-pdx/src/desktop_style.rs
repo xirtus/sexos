@@ -54,10 +54,17 @@ pub mod chrome {
     /// applied geometry. A stale, forged or unrelated reply cannot commit it.
     pub struct ScaleClient { sequence:u64, pending:Option<(u64,i64,bool)> }
     impl ScaleClient {
-        pub const fn new()->Self {Self{sequence:0,pending:None}}
+        pub const fn new()->Self {Self::for_incarnation(0)}
+        /// Kernel-owned own-service restart count. A restart keeps task id 3,
+        /// so caller_task alone cannot fence an old run's delayed reply.
+        pub const fn for_incarnation(restarts:u64)->Self {
+            Self{sequence:if restarts<(1<<14){restarts<<32}else{SEQUENCE_MASK},pending:None}
+        }
         pub fn begin(&mut self,step:i64)->bool {
             if self.pending.is_some(){return false;}
-            self.sequence=(self.sequence%SEQUENCE_MASK)+1;
+            // Never wrap a sequence into another incarnation or reuse one.
+            if self.sequence&0xffff_ffff==0xffff_ffff{return false;}
+            self.sequence+=1;
             self.pending=Some((self.sequence,step,false));true
         }
         pub fn request(&self)->Option<(u64,i64)> {
@@ -76,11 +83,27 @@ pub mod chrome {
     }
     /// Display retains the admitted reply until a complete CPU publication and
     /// successful transport. Failure/retry never turns admission into visibility.
-    pub struct ScalePublisher { pending:Option<(u32,u64,bool)> }
+    pub struct ScalePublisher { subject:Option<(u32,u32,u64)>, pending:Option<(u32,u64,bool)> }
     impl ScalePublisher {
-        pub const fn new()->Self {Self{pending:None}}
-        pub fn admit(&mut self,target:u32,sequence:u64,scale:u32)->bool {
-            if self.pending.is_some(){return false;}
+        pub const fn new()->Self {Self{subject:None,pending:None}}
+        /// Register only after the held catalog authorized the exact Shell
+        /// main task. Idempotence preserves a pending receipt; a newer own-
+        /// service restart count fences the old run and its pending reply.
+        pub fn register(&mut self,target:u32,task:u32,epoch:u64)->Option<bool>{
+            if target==0||task==0||epoch>=(1<<14){return None;}
+            if let Some((pd,old_task,old_epoch))=self.subject {
+                if pd!=target||old_task!=task||epoch<old_epoch{return None;}
+                if epoch==old_epoch{return Some(false);}
+            }
+            self.subject=Some((target,task,epoch));self.pending=None;Some(true)
+        }
+        pub fn allows_change(&self,target:u32,task:u32,sequence:u64)->bool {
+            let Some((pd,main,epoch))=self.subject else{return false;};
+            !self.pending()&&pd==target&&main==task
+                &&(sequence==0||sequence>>32==epoch)
+        }
+        pub fn admit(&mut self,target:u32,task:u32,sequence:u64,scale:u32)->bool {
+            if !self.allows_change(target,task,sequence){return false;}
             let Some(value)=scale_receipt(sequence,scale)else{return false;};
             self.pending=Some((target,value,false));true
         }
