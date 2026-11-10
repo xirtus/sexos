@@ -3769,3 +3769,29 @@ Follow-up to the boot log and crash records work (`BOOT_LOG_AND_CRASH_RECORDS_20
   `wifi` on the x17 R1.
 - **ABI:** new PDX op `0x2E8` and module `sex_pdx::wifi_status`; `abi_version_hash`
   recomputed (sex-pdx lib.rs). No kernel change. Next: status bar indicator, then W5.
+
+## USB Ethernet adapters (CDC Ethernet, 2026-11-10)
+
+- **What runs now.** A PC with no network card of its own gets online through a USB
+  Ethernet adapter, plugged in before or after boot: phone tethering, most USB dongles,
+  and Realtek RTL8152/8153 adapters through their CDC Ethernet configuration. Pulling it
+  out drops its connections; plugging it back in brings the network back.
+- **Design.** SexUSB drives the adapter (`servers/sexusb/src/ether.rs`: every
+  configuration is searched for an ECM function, its MAC string is read, the data
+  interface's alternate setting is selected, 24 receive transfers stay queued, frames
+  that fill whole packets end with a zero-length packet). Frames cross to SexNet through
+  two single-producer rings in one shared region (`sex_pdx::usb_net`); neither side
+  calls the other. SexNet's `link::Link` is either its own PCI card or the USB rings,
+  with the same events and send path, so TCP/IP, DNS, TLS and the web service do not
+  know which. When the card is absent SexNet checks for an adapter every 100 ticks.
+- **ABI.** New `sex_pdx::usb_net`: one 128 KiB region (id 0x4401) at slot 1002 in SexNet
+  and SexUSB (header with link state, MAC and generation; 30-frame receive and send
+  rings). The kernel gives the network owner its BOOT network settings through that
+  exact region when it holds no PCI lease. `abi_version_hash` recomputed.
+- **Limits.** One adapter at a time, and only when there is no PCI network card. No NCM
+  (some 2.5G adapters and newer phones), no RNDIS, no Realtek vendor mode, no link
+  state notifications (a cable pulled out is not seen until traffic fails).
+- **Gates.** New `scripts/usb_net_gate.py` (in CI): adapter plugged in after boot, a
+  128 KiB fetch, unplug, replug, a second fetch. `tests/pci_command.rs` covers the
+  settings through the region. program_net_gate (igb, e1000e), master runtime gate,
+  sexnet_service_host_gate, usb_path_gate, usb_storage_gate.

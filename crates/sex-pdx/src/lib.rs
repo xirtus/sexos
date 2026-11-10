@@ -1228,6 +1228,7 @@ pub mod dma_lend;
 pub mod virtio;
 pub mod device;
 pub mod usb_disk;
+pub mod usb_net;
 pub mod network_config;
 
 pub mod desktop_style;

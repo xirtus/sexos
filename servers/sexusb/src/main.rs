@@ -335,6 +335,15 @@ pub extern "C" fn _start() -> ! {
     // The first report to Input is the first real one: a report sent here could reach
     // Input before it is ready (the boot order check counts that as a failure).
     let mut usb = usb::Usb::new(controller);
+    // USB network adapters: frames to and from SexNet through this region (sex_pdx::usb_net).
+    let net_view = sex_pdx::memory_region_full_view(sex_pdx::usb_net::SLOT, sex_pdx::memory_region::QUERY_VIEW | sex_pdx::memory_region::READ | sex_pdx::memory_region::WRITE).ok()
+        .filter(|v| v.length >= sex_pdx::usb_net::BYTES && v.virtual_address != 0);
+    if let Some(v) = net_view {
+        let shared = unsafe { sex_pdx::usb_net::Shared::at(v.virtual_address as *mut u8) };
+        shared.set_link(None);
+        usb.net_region = v.virtual_address;
+    }
+    serial_println!("[sexusb.ether.route] region={}", net_view.is_some() as u8);
     let ports = usb.x.ports;
     let (connected, first) = usb.scan();
     if connected == 0 {
@@ -363,6 +372,7 @@ pub extern "C" fn _start() -> ! {
             busy = true;
         }
         usb.service();
+        busy |= usb.ether_pump();
         if usb.changed && files != 0 {
             usb.changed = false;
             let (status, _) = sex_pdx::pdx_call(sex_pdx::usb_disk::SLOT, sex_pdx::usb_disk::OP_CHANGED, usb.generation, 0, 0);

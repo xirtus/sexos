@@ -14,6 +14,7 @@ mod device_lease{pub struct Kind;impl Kind{pub fn of_class(_:u32)->Option<Kind>{
 #[path="../kernel/src/capability_slot.rs"]mod capability_slot;
 #[path="../kernel/src/nic_boot.rs"]mod nic_boot;
 #[path="../crates/sex-pdx/src/virtio.rs"]pub mod virtio;
+#[path="../crates/sex-pdx/src/usb_net.rs"]pub mod usb_net;
 mod virtio_boot{pub fn supported(vendor:u16,device:u16)->bool{vendor==crate::virtio::VENDOR&&device==crate::virtio::SOUND}}
 #[path="../kernel/src/pci_command.rs"]mod mechanism;
 mod ipc{pub const MAX_DOMAINS:usize=1024;}
@@ -140,6 +141,20 @@ fn mutate_pci(pd:&mut ProtectionDomain,f:impl FnOnce(&mut PciCapData)){let Capab
   assert_eq!(mechanism::network_config(&p,slot,a,b,c,d),[w::DENIED,0,0,0,0]);untouched();
  }
  for which in 0..5{let mut p=pd();mutate_pci(&mut p,|d|match which{0=>d.command=None,1=>d.command.as_mut().unwrap().subject=12,2=>d.device_id=0x100e,3=>d.bar0_view.as_mut().unwrap().rights=3,_=>d.bar0_view.as_mut().unwrap().peer_pd=Some(9)});assert_eq!(mechanism::network_config(&p,19,0,0,0,0),[w::DENIED,0,0,0,0]);untouched();}
+}
+#[test]fn boot_network_data_through_the_usb_adapter_region_only(){
+ // No PCI lease: the exact BOOT region shared with SexUSB at usb_net::SLOT stands in for it.
+ let words=network_config::Config::CONTROLLED.to_words();
+ let region=|id:u32,length:u64|m::RegionGrant{region_id:id,virtual_base:0x60000000,length,rights:7,dma_base:None,peer_pd:Some(5)};
+ let with=|slot:u64,g:m::RegionGrant|ProtectionDomain{id:13,lookups:Cell::new(0),entries:vec![(slot as u32,CapabilityData::Region(g))]};
+ setup(0);
+ assert_eq!(mechanism::network_config(&with(usb_net::SLOT,region(usb_net::REGION_ID,usb_net::BYTES)),usb_net::SLOT,0,0,0,0),[0,words[0],words[1],words[2],words[3]]);untouched();
+ for p in[with(usb_net::SLOT,region(usb_net::REGION_ID+1,usb_net::BYTES)),with(usb_net::SLOT,region(usb_net::REGION_ID,4096)),with(usb_net::SLOT+1,region(usb_net::REGION_ID,usb_net::BYTES))]{
+  assert_eq!(mechanism::network_config(&p,usb_net::SLOT,0,0,0,0),[w::DENIED,0,0,0,0]);untouched();
+ }
+ // Only the network owner: another domain holding the same region learns nothing.
+ let mut other=with(usb_net::SLOT,region(usb_net::REGION_ID,usb_net::BYTES));other.id=12;
+ assert_eq!(mechanism::network_config(&other,usb_net::SLOT,0,0,0,0),[w::DENIED,0,0,0,0]);untouched();
 }
 #[test]fn boot_network_snapshot_rejects_invalid_seed_and_foreign_role(){
  use boot_network_state::Info;let cfg=network_config::Config::CONTROLLED;
