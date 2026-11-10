@@ -13,6 +13,7 @@ pub mod fat;
 pub mod gpt;
 pub mod install;
 pub mod probe;
+pub mod update;
 
 pub const SECTOR: usize = 512;
 
@@ -30,6 +31,13 @@ pub enum Error {
     Exists,
     /// A name or argument that cannot be represented.
     Invalid,
+    /// An update whose signature does not check out with the release key, or whose
+    /// image is not the one its signed index names.
+    BadSignature,
+    /// An update already waits in the other slot for its first start.
+    Pending,
+    /// An update no newer than the system that is running.
+    Older,
 }
 
 /// A run of 512-byte sectors. `read`/`write` take whole sectors (`buf.len()` a multiple of 512).

@@ -35,6 +35,8 @@ pub mod cxx;
 pub mod locale;
 #[cfg(target_os = "hermit")]
 pub mod posix;
+#[cfg(target_os = "hermit")]
+pub mod posix_net;
 
 pub use core::ffi::{c_char, c_int, c_long, c_uint, c_ulong, c_void};
 

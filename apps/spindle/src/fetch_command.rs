@@ -13,8 +13,12 @@ pub struct Fetch {
     phase: Phase, seq: u32, sent: bool, to_files: bool, next_at: u64, deadline: u64, host: [u8; 256], host_len: usize, port: u16, address: [u8; 4],
     request: [u8; 900], request_len: usize, request_sent: usize, path_len: usize, head: [u8; HEAD_MAX], head_len: usize, in_body: bool,
     written: u64, chunk: usize, fs_seq: u32, peer_done: bool, status: u32, tls: bool,
+    /// Where a redirect said to go next ("URL FILE"), and how many were followed.
+    redirect: [u8; 1024], redirect_len: usize, hops: u8,
+    /// How the last download ended, for `update`: Some(true) saved, Some(false) failed.
+    pub result: Option<bool>,
 }
-pub static mut FETCH: Fetch = Fetch { phase: Phase::Idle, seq: 0, sent: false, to_files: false, next_at: 0, deadline: 0, host: [0; 256], host_len: 0, port: 80, address: [0; 4], request: [0; 900], request_len: 0, request_sent: 0, path_len: 0, head: [0; HEAD_MAX], head_len: 0, in_body: false, written: 0, chunk: 0, fs_seq: 0x80_0000, peer_done: false, status: 0, tls: false };
+pub static mut FETCH: Fetch = Fetch { phase: Phase::Idle, seq: 0, sent: false, to_files: false, next_at: 0, deadline: 0, host: [0; 256], host_len: 0, port: 80, address: [0; 4], request: [0; 900], request_len: 0, request_sent: 0, path_len: 0, head: [0; HEAD_MAX], head_len: 0, in_body: false, written: 0, chunk: 0, fs_seq: 0x80_0000, peer_done: false, status: 0, tls: false, redirect: [0; 1024], redirect_len: 0, hops: 0, result: None };
 
 fn net() -> Option<&'static mut [u8]> {
     let view = sex_pdx::memory_region_view(w::CLIENT_SLOT, 0, w::REGION_BYTES as u64, QUERY_VIEW | READ | WRITE).ok()?;
@@ -57,18 +61,24 @@ fn find(hay: &[u8], needle: &[u8]) -> Option<usize> { hay.windows(needle.len()).
 impl Fetch {
     pub fn busy(&self) -> bool { self.phase != Phase::Idle }
     fn end(&mut self) { self.phase = Phase::Close; self.sent = false; self.to_files = false; }
-    fn fail(&mut self, sb: &mut Scrollback, why: &str) { say!(sb, "fetch: {}", why); self.written = 0; self.end(); }
+    fn fail(&mut self, sb: &mut Scrollback, why: &str) { say!(sb, "fetch: {}", why); self.written = 0; self.redirect_len = 0; self.result = Some(false); self.end(); }
 
     pub fn start(&mut self, args: &[u8], sb: &mut Scrollback, join: impl Fn(&[u8], &mut [u8]) -> Option<usize>) {
         if self.busy() { sb.push(b"A download is already running."); return; }
+        self.hops = 0;
+        self.result = None;
+        self.begin(args, sb, join);
+    }
+    fn begin(&mut self, args: &[u8], sb: &mut Scrollback, join: impl Fn(&[u8], &mut [u8]) -> Option<usize>) {
+        self.redirect_len = 0;
         let mut words = args.splitn(2, |b| *b == b' ');
         let (url, file) = (words.next().unwrap_or(&[]), words.next().unwrap_or(&[]));
         let (rest, tls) = match (url.strip_prefix(b"https://"), url.strip_prefix(b"http://")) {
             (Some(rest), _) => (rest, true),
             (_, Some(rest)) => (rest, false),
-            _ => { sb.push(b"Usage: fetch URL FILE"); return; }
+            _ => { sb.push(b"Usage: fetch URL FILE"); self.result = Some(false); return; }
         };
-        if file.is_empty() { sb.push(b"Usage: fetch URL FILE"); return; }
+        if file.is_empty() { sb.push(b"Usage: fetch URL FILE"); self.result = Some(false); return; }
         let split = rest.iter().position(|b| *b == b'/').unwrap_or(rest.len());
         let (authority, path) = (&rest[..split], if split == rest.len() { &b"/"[..] } else { &rest[split..] });
         let (host, port) = match authority.iter().position(|b| *b == b':') {
@@ -154,6 +164,32 @@ impl Fetch {
         let code = line.split(|b| *b == b' ').nth(1).map_or(0, |c| c.iter().fold(0u32, |v, b| v.wrapping_mul(10).wrapping_add((*b as u32).wrapping_sub(48))));
         self.status = code;
         sex_pdx::serial_record!("[spindle.fetch.status] code={}", code);
+        if matches!(code, 301 | 302 | 303 | 307 | 308) && self.hops < 8 {
+            // Follow it (GitHub release downloads redirect to their storage): same file.
+            let location = find(&self.head[..end], b"ocation: ").map(|at| { let v = &self.head[at + 9..end]; &v[..find(v, b"\r\n").unwrap_or(v.len())] });
+            if let (Some(loc), Some(region)) = (location, files()) {
+                let mut at = 0;
+                let mut put = |bytes: &[u8], buf: &mut [u8; 1024]| { let ok = at + bytes.len() <= buf.len(); if ok { buf[at..at + bytes.len()].copy_from_slice(bytes); at += bytes.len(); } ok };
+                let mut port = [0u8; 6];
+                let port_len = { let mut t = Text { buf: [0; 160], len: 0 }; let _ = core::fmt::Write::write_fmt(&mut t, format_args!(":{}", self.port)); port[..t.len.min(6)].copy_from_slice(&t.buf[..t.len.min(6)]); t.len.min(6) };
+                let mut ok = true;
+                if loc.starts_with(b"/") {
+                    ok &= put(if self.tls { b"https://" } else { b"http://" }, &mut self.redirect);
+                    ok &= put(&self.host[..self.host_len], &mut self.redirect);
+                    ok &= put(&port[..port_len], &mut self.redirect);
+                }
+                ok &= put(loc, &mut self.redirect);
+                ok &= put(b" ", &mut self.redirect);
+                ok &= put(&region[..self.path_len], &mut self.redirect);
+                if ok && (loc.starts_with(b"/") || loc.starts_with(b"http://") || loc.starts_with(b"https://")) {
+                    self.redirect_len = at;
+                    self.hops += 1;
+                    sex_pdx::serial_record!("[spindle.fetch.redirect] code={} hop={}", code, self.hops);
+                    self.end();
+                    return false;
+                }
+            }
+        }
         if !(200..300).contains(&code) {
             let location = find(&self.head[..end], b"ocation: ").map(|at| { let v = &self.head[at + 9..end]; &v[..find(v, b"\r\n").unwrap_or(v.len())] });
             let mut t = Text { buf: [0; 160], len: 0 };
@@ -193,7 +229,22 @@ impl Fetch {
         if caller != 13 || seq != self.seq { return false; }
         self.sent = false;
         let now = sex_pdx::get_ticks();
-        if self.phase == Phase::Close { self.phase = Phase::Idle; if self.status != 0 && (200..300).contains(&self.status) { say!(sb, "Saved {} bytes", self.written); sex_pdx::serial_record!("[spindle.fetch.done] bytes={}", self.written); } return true; }
+        if self.phase == Phase::Close {
+            self.phase = Phase::Idle;
+            if self.redirect_len > 0 {
+                let line = self.redirect;
+                let n = self.redirect_len;
+                self.begin(&line[..n], sb, |p, o| { let k = p.len(); if k > o.len() { return None; } o[..k].copy_from_slice(p); Some(k) });
+                if self.phase == Phase::Idle && self.result.is_none() { self.result = Some(false); }
+                return true;
+            }
+            if self.status != 0 && (200..300).contains(&self.status) {
+                say!(sb, "Saved {} bytes", self.written);
+                sex_pdx::serial_record!("[spindle.fetch.done] bytes={}", self.written);
+                self.result = Some(true);
+            } else if self.result.is_none() { self.result = Some(false); }
+            return true;
+        }
         if !matches!(status, w::OK | w::WAIT) { self.fail(sb, match status { w::OFFLINE => "no network", w::NO_NAME => "name not found", w::BUSY => "the network is busy", w::DENIED => "not allowed", _ => "network error" }); return true; }
         let Some(region) = net() else { self.phase = Phase::Idle; return true };
         match self.phase {

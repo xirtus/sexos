@@ -33,6 +33,7 @@ fn nvme_flush()->u64{EFFECTS.lock().unwrap().device.push((BLOCK_SYNC,0,0));0}
 fn device_sectors()->u64{2048}
 fn layout_word()->u64{0}
 fn serving_ahci()->bool{false}
+fn disk_sectors()->u64{0}
 static POWERED_DOWN:std::sync::atomic::AtomicBool=std::sync::atomic::AtomicBool::new(false);
 fn powered_down()->bool{POWERED_DOWN.load(std::sync::atomic::Ordering::SeqCst)}
 fn block_shutdown()->u64{EFFECTS.lock().unwrap().device.push((BLOCK_SHUTDOWN,0,0));POWERED_DOWN.store(true,std::sync::atomic::Ordering::SeqCst);0}

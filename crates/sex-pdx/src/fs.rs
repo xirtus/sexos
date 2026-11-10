@@ -55,6 +55,19 @@ pub const BOOT_SECTORS: u64 = 65536;
 pub const BOOT_IMAGE_SLOT: u64 = 101;
 pub const BOOT_IMAGE_REGION_ID: u32 = 0x4100;
 pub const BOOT_IMAGE_MODULE: &str = "boot.img";
+/// What the boot loader told the kernel about where it started, read-only in Files so
+/// updates know which system slot is running. Bytes 0..16: the GPT partition GUID the
+/// kernel was loaded from, as stored on disk (all zero when it did not come from a GPT
+/// partition, as from a CD or USB stick image). Bytes 16..96: Limine's file record from
+/// its media type on, raw, whose layout differs between Limine versions; a partition GUID
+/// found in it at any 4-byte offset also names the partition.
+pub const BOOT_FACTS_SLOT: u64 = 102;
+pub const BOOT_FACTS_REGION_ID: u32 = 0x4101;
+/// Verifies a signed update (index and signature files, then the image the index names)
+/// and writes it into the system slot that is not running, for one try. The path holds
+/// the three file paths separated by NUL bytes. The reply's value is the length of a
+/// report in the data area. Spindle only.
+pub const UPDATE: u8 = 22;
 /// Mounts the volumes a disk image holds (FAT, exFAT, ext4, NTFS) under `/media/NAME`.
 /// The data area gets one line per volume: name, format, size. Spindle only.
 pub const MOUNT: u8 = 15;
