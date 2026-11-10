@@ -10,7 +10,9 @@ use sex_hwdb::manifest::Lease;
 pub fn init(sexdrive_pd_id: u32, sexdisplay_pd_id: u32, sexusb_pd_id: u32, sexnet_pd_id: u32, sexbell_pd_id: u32) {
     serial_println!("DevMgr: Starting hardware discovery...");
 
-    let devices = HAL.enumerate_pci();
+    let mut devices = HAL.enumerate_pci();
+    // Drives behind Intel VMD (RST "RAID On") join the list as ordinary devices.
+    crate::vmd::expand(&mut devices);
     serial_println!("DevMgr: Enumerated {} PCI devices.", devices.len());
 
     let mut census = sex_hwdb::Census::default();
@@ -106,7 +108,7 @@ impl Services {
 /// NVMe: BAR0 view; firmware may leave the controller cold with DMA off, so BOOT
 /// turns memory space and bus mastering on (the status half is write-one-to-clear).
 fn nvme_lease(dev: &crate::hal::pci::PciDevice, pd: &ProtectionDomain, slot: u64) -> bool {
-    serial_println!("[kernel.pci.nvme.found] {:02x}:{:02x}.{} vendor={:04x} device={:04x}", dev.bus, dev.dev, dev.func, dev.vendor_id, dev.device_id);
+    serial_println!("[kernel.pci.nvme.found] {:02x}:{:02x}.{} vendor={:04x} device={:04x} behind_vmd={}", dev.bus, dev.dev, dev.func, dev.vendor_id, dev.device_id, (dev.ecam != 0) as u8);
     dev.write_u32(0x04, (dev.read_u32(0x04) & 0xFFFF) | 0x0006);
     pd.grant_capability(slot, CapabilityData::Pci(PciCapData {
         bus: dev.bus, dev: dev.dev, func: dev.func, vendor_id: dev.vendor_id, device_id: dev.device_id,

@@ -13,6 +13,9 @@ pub struct PciDevice {
     pub class_id: u8,
     pub subclass_id: u8,
     pub prog_if: u8,
+    /// 0: reached through the legacy config ports. Otherwise the kernel address
+    /// of this function's 4 KiB ECAM page (a device behind Intel VMD).
+    pub ecam: u64,
 }
 
 static NET_DIAG_HTTP_STATUS: AtomicU32 = AtomicU32::new(0);
@@ -109,10 +112,16 @@ impl PciDevice {
     }
 
     pub fn read_u32(&self, offset: u8) -> u32 {
+        if self.ecam != 0 {
+            return unsafe { core::ptr::read_volatile((self.ecam + (offset as u64 & 0xFC)) as *const u32) };
+        }
         unsafe { pci_config_read(self.bus, self.dev, self.func, offset) }
     }
 
     pub fn write_u32(&self, offset: u8, value: u32) {
+        if self.ecam != 0 {
+            return unsafe { core::ptr::write_volatile((self.ecam + (offset as u64 & 0xFC)) as *mut u32, value) };
+        }
         unsafe { pci_config_write(self.bus, self.dev, self.func, offset, value) }
     }
 
@@ -213,6 +222,7 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                         class_id,
                         subclass_id,
                         prog_if,
+                        ecam: 0,
                     });
                 }
             }
