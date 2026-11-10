@@ -31,6 +31,32 @@ pub const STREAM: u64 = 6;
 /// once. Only the person decides; it lapses when the program ends. Replies with that
 /// row's `stream` word.
 pub const MICROPHONE: u64 = 7;
+/// Replies with the `outputs` word: how many outputs the card has, of what kind,
+/// and which play. One word holds them all.
+pub const OUTPUTS: u64 = 8;
+/// Play to the outputs in mask `a` (bit k is output k) and silence the rest.
+/// Replies with the `outputs` word, or `REFUSED` when `a` names none.
+pub const SET_OUTPUTS: u64 = 10;
+
+/// An output's kind.
+pub const LINE_OUT: u8 = 0;
+pub const SPEAKER: u8 = 1;
+pub const HEADPHONES: u8 = 2;
+pub const OTHER: u8 = 14;
+/// The one output of a virtual sound card.
+pub const VIRTUAL: u8 = 15;
+pub const MAX_OUTPUTS: usize = 8;
+/// The outputs word: which play (bits 0..8), how many there are (bits 8..12), and
+/// output k's kind in bits 16+4k..20+4k.
+pub const fn outputs(on: u8, kinds: &[u8]) -> u64 {
+    let mut w = TAG | on as u64 | ((kinds.len() & 0xF) as u64) << 8;
+    let mut k = 0;
+    while k < kinds.len() && k < MAX_OUTPUTS { w |= ((kinds[k] & 0xF) as u64) << (16 + 4 * k); k += 1; }
+    w
+}
+pub const fn outputs_on(word: u64) -> u8 { word as u8 }
+pub const fn outputs_count(word: u64) -> u8 { (word >> 8 & 0xF) as u8 }
+pub const fn output_kind(word: u64, k: usize) -> u8 { (word >> (16 + 4 * k) & 0xF) as u8 }
 
 pub const MUTED: u64 = 1 << 8;
 /// Every mixer reply carries this in its top byte, so a caller can tell it from

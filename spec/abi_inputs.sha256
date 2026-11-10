@@ -1,0 +1,154 @@
+6a4e23e3d56f1a718841266e907341d2f0c3551d392c003403ad6d93545fbd3a  crates/sex-net-config/src/lib.rs
+
+07b846017c83b1662fc66dbdffd14dd09374b7a58454ebf0cbbc06954757e0f3  crates/sex-pdx/src/app_catalog.rs
+
+51392ac11144d6f43427d400053d0c6d8ec4b0c2605eb0c33a53c525374bc602  crates/sex-pdx/src/app_key.rs
+
+0f88d10b629503599986dda2140158ae6d3637f4f8f3a885132a99d6d4d9cfbd  crates/sex-pdx/src/app_lifecycle.rs
+
+4918d7d03ca42713f932e7e5c66172044b848ff4e8b13f59d1395c18e7cbe7f8  crates/sex-pdx/src/app_scroll.rs
+
+7c9d30efb3618edebc483d9eae64275c4f8ccb77d6aaf2f810d31d88c142e14c  crates/sex-pdx/src/bitmap_batch.rs
+
+6f2eb55b2138052fc43c9f40c4026cb1129ac88b285938359491ce23ff61f3b7  crates/sex-pdx/src/browser_sources.rs
+
+0b0c410eb65c4fe713bcca1f57e1f63407bbdfb13dcb6012da9b723ba6de7405  crates/sex-pdx/src/certificate_time.rs
+
+e45f86d95f464bcbefe222acdb7ea565dda7f35301c54dd22ca1a71ba3e86f04  crates/sex-pdx/src/clipboard.rs
+
+23573f8a270bca79c28095dc8c176699739817e247b1ef7804d15adacbc03def  crates/sex-pdx/src/clipboard_client.rs
+
+788f62299fcb0ffb062a7d1d563b4abf22210fb9b3db00347bc6e7ac3ae8d57c  crates/sex-pdx/src/clock_source.rs
+
+e7dfb4de37122f0f53279e067deed3b39c9e9f3f369b3d91c9e659484dcf59c5  crates/sex-pdx/src/crash_log.rs
+
+f79d18999f376eb017e6ad88da406bad9dbc276f1dec4c90382d0b0e617506de  crates/sex-pdx/src/desktop_style.rs
+
+4519de04eef091b40d15e00f40bc2ec7911f916a9ac3e28ebf4fd05613f1beca  crates/sex-pdx/src/device.rs
+
+dcd08005c9fd346bf5e08ee43ddf4a32f33cb8a86b61bf1acf2b1ba41927e261  crates/sex-pdx/src/display_boot.rs
+
+a78b5a4da67e59033953a3947f2bb64111e1202dde9767aa8f3c00442bb8caf9  crates/sex-pdx/src/display_frames.rs
+
+164249ea4f01c7ffed97bec436f261a03c4a9a12834862eecc52a464dd4ca8ee  crates/sex-pdx/src/display_ready.rs
+
+9f8ed1fe431f31a63087f1b0778edddf97c27343c3befc3333e958f0e5148bd4  crates/sex-pdx/src/dma_lend.rs
+
+b16768a8983ba57d17b51949bede4bdb4b6dcfd3981d47d64420680edd45f655  crates/sex-pdx/src/document.rs
+
+e1a8e5b73c48cfd4cc079510a2c51eacd7f371f00dffabb5968962ca9f462e30  crates/sex-pdx/src/document_buffer.rs
+
+16cc8c0f33513beaf2ce175a5cff53949627b41b243ca62ae57afe8faf68e408  crates/sex-pdx/src/document_snapshot.rs
+
+159f2f203e9a45c383147a3d390e4dc8c60573de0078dc079b57857f86fddf05  crates/sex-pdx/src/document_view.rs
+
+7ffe2339486c6b0f3fea6291dac86b9fcb75dc5260d8e944fa267e4758280f82  crates/sex-pdx/src/entropy_seed.rs
+
+3f377a4a91b79e25d50737cd939c37ec76f0a9d6ee7d2cd282901a014c7c05f4  crates/sex-pdx/src/entropy_source.rs
+
+3b61259083bdf4abe53254e0ed0bb46827d4471470a11b35d7278232a0bdbd7f  crates/sex-pdx/src/fs.rs
+
+a0f555cd3af59954d4dce9ae913d16ac90089c8fa1dd61ecfda1a25a85de899d  crates/sex-pdx/src/history_recovery.rs
+
+0a311150f6f4d1477ffbbe237c68c0086e84eb0152a84fe85d2569565b03d7e5  crates/sex-pdx/src/lib.rs
+
+b02d602feb5f239687f1a450e8c0ec2b932c366df85ae4f2a5dc67df3f5edcef  crates/sex-pdx/src/memory_region.rs
+
+ea82d42449a115ad8086776a4f7a51d0494d508eccaae0f5ff4f2c7525ff62e9  crates/sex-pdx/src/network_config.rs
+
+ca3473e0758dc253100249326f0e9cb31d48d6bdfa341076f6282b62e29315a8  crates/sex-pdx/src/network_job.rs
+
+917d19dc312a4d189ed18d6a4cd6476bb6d501e0ab307937278ae063f9b5e904  crates/sex-pdx/src/organs.rs
+
+abdd8e52815f29c8d67e409906f4ddf0e1d5f9c5446d1a314a306da29bf50f26  crates/sex-pdx/src/pagefault.rs
+
+eac0c2eb5f726f3cfac35fc4ce3f4d3d8eb64fedb7879de9d2f9620ab2a48994  crates/sex-pdx/src/paging.rs
+
+7bb87aa1010d27d5e0315eb214ea71b7bfa338e3187f2e7f55fa93b350f883ac  crates/sex-pdx/src/program_memory.rs
+
+6bd4ad2eb2698b66af680e02978aa1a853755a396b067bac844d3a26200475c0  crates/sex-pdx/src/program_store.rs
+
+a85e05125e915a7610427b185ee00972ec8a4ff3b888b442119147f550760c9b  crates/sex-pdx/src/shell_ready.rs
+
+5be9952eafdd333f8b74b67a15268ab5686ff26a7ad6e9d148770f24944bac8d  crates/sex-pdx/src/spindle_history.rs
+
+30fbe05ac325b1066ba035d7b6c1be075c4f3236a4cbec09bde96c8d44690f7f  crates/sex-pdx/src/spindle_probe.rs
+
+3b2307aebab4213e4b3e78687a6017e2b1f8b858531e0f16fec457b90db31de7  crates/sex-pdx/src/spindle_status.rs
+
+a641934992196e0f765b31e6b8ec3a3432bb072336c6009b094cf2a9c5881adf  crates/sex-pdx/src/spindle_view.rs
+
+8cfae435e8cfdafe9ccca145e3031a76b21fea23bd6867952ebee99fda73a47c  crates/sex-pdx/src/text_batch.rs
+
+89e66abfe30c397ba4dd6d86b39d22a211363144e717d03bd17cfadced250ecb  crates/sex-pdx/src/text_encoding.rs
+
+dac6c303922c9abe8dc1ccdf25ae44bf5cde10efed0ddca9a5f2c374da5651f7  crates/sex-pdx/src/text_region.rs
+
+4873d5820488135640ed4be6f25dd10ff76118df36f88cbdd087a2bd7908abf2  crates/sex-pdx/src/text_selection.rs
+
+96d2f732ef49396ad82cb9a7827585993fec97931e218c2e954de3f978f9dba7  crates/sex-pdx/src/trust_policy.rs
+
+4042c312b26a16eab7a82e04b9a922f9479ff289fffc1c5e421fca10f6fd8730  crates/sex-pdx/src/trust_source.rs
+
+b31453fe0f2ad75a6efda46aa19bd69ff0d925bc4a313a0334f849bd6a4f7967  crates/sex-pdx/src/uiir.rs
+
+e68fd50ea4e53eb090d6aa5e93211f4431da49eb76940188886c991be7730a8a  crates/sex-pdx/src/virtio.rs
+
+2cd0cedd8bf837aca965d45a147d5251006d0d14521179b1d6c1496a8cffeccd  crates/sex-pdx/src/web.rs
+
+2963fba2a249fd38b22040c7ff1f3bac51c4231ae57ee259a17ce4b54f1c61e2  crates/sex-trust-config/src/lib.rs
+
+3fb02c27844d6eba050d40ec9fbf8b87b45155d098c07fc7b83dac591e8c769a  crates/silkbar-model/src/civil_clock.rs
+
+c4ff9a47ae4f906f2094282f1a0d075c1c82f8116e0a9847d7e9b08925682f64  crates/silkbar-model/src/lib.rs
+
+a947e57a405316312fe334d17fdfdb2d3e6b59e708b4d61f416a4db6275ee4cb  kernel/src/app_catalog_state.rs
+
+46394f9fcc0d6f624417c2294b72a96be7da76e009f5ecc846d54f4885d45b80  kernel/src/app_resource_state.rs
+
+e13c2573dadd9fc2725da96cabc1a562fb04c7b20a1e5d0ac32425a07d20d113  kernel/src/app_resources.rs
+
+3164978117938fd88d27396c9cc403f95f2f95c30c421c4f13e91fbb5e97cd32  kernel/src/boot_display_state.rs
+
+7b70e0bd437ed15f92654b2f186a1eadee9d342250ae1cc650cb4ea33517795a  kernel/src/boot_memory.rs
+
+2fd25f89091106c70503869c40f52cfeb6662fab8ddfcd2c6202d2e04550fe69  kernel/src/boot_network.rs
+
+07e1a4d79cd121594f04d44c9ed15edd5b12873dca4304389591531401156ff7  kernel/src/boot_network_state.rs
+
+52d6fd37adaeb96c0518713445f6c483226b99c7b7db04b085493ee41bdf682e  kernel/src/capability.rs
+
+0df43cf6345d3b1088a540fbacff7745038673597ee5b456294e60b110976949  kernel/src/capability_slot.rs
+
+d4ded4cf20061e5ea54c59e2b026972c09a0924b08eff6a07c8fc1b2a4e7765c  kernel/src/capability_table.rs
+
+4ac714fe630fedd0bdd83e5df0249fcd948d4ce1c713bde5e9ef70af5ab06ddd  kernel/src/clock_source.rs
+
+3d4409ab3f2238999dbad3988e56cb19e66cd3fae1d78de035617ca4d0cfafe0  kernel/src/entropy_source.rs
+
+0b5914ff61ea39a942f544e75afa4e11d7516d2c80c57572abc3fcf2a7c460ab  kernel/src/fault_transaction.rs
+
+cf020f742459f6862a152fbed48da11da00a0b3a12c95e2f755c84ff6441be74  kernel/src/history_recovery.rs
+
+20c70edfc2da9b94d553e7c0d0dc0d1638c1caecdec1674da31ded1f9c6dd472  kernel/src/interrupts.rs
+
+c7d42c2df1965a3b94bce554e10d5047c4269994c942f524b60b9de7b94a470a  kernel/src/ipc.rs
+
+c8ce764c793dd50836578efc7991b2c966b6a10021dde94cf452a8cfcd09b864  kernel/src/ipc/messages.rs
+
+dcc491154df5f4182c1cec5f13498ff9081b030e90d894af41b09163e8cbe029  kernel/src/ipc/reply_credit.rs
+
+5fd9d7d28138623172ea565d6a7d0ddb74a07baca2cd3f29079ccddac8fff0f0  kernel/src/ipc/router.rs
+
+495164f494355bc24f22dc7150f7f84fb53316db69f3b6c277e09becef056c76  kernel/src/ipc/sender.rs
+
+90a8d17a6bcefec6e6de8cf0644e179e807903fc379a8189b2baca9ed4b0ffaa  kernel/src/ipc_ring.rs
+
+61c23d34744793d69bcfde0d6e0b4044a2867134754204cd58759ee5ab37164b  kernel/src/paging_state.rs
+
+a8ee7bdb9f9a22a8314232c1bcc7d8d7ed6115656e40fd741d865caa680cea59  kernel/src/pci_command.rs
+
+92a9e0fb658059e8af989d8801881547ee3475271d7b61d8f7e89bb376bf48f7  kernel/src/syscalls/mod.rs
+
+d96aa774f2c9ddf72f5fca8c9aa31e6127d182038f9bff826faa5e55ef8083eb  kernel/src/trust_source.rs
+

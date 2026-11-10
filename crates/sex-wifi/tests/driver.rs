@@ -1,7 +1,7 @@
 //! Driver-level behaviour: chip table, firmware files, DMA layout, the power-up
 //! sequence against a register model, the 4-way handshake against an access
 //! point played by the authenticator helpers, and frames end to end.
-use sex_wifi::{bringup, ccmp, cmdq, context, csr, devices, eapol, hcmd, ieee80211 as w, init, pack, rx, scan, ucode};
+use sex_wifi::{assoc, rsna, bringup, ccmp, cmdq, context, csr, devices, eapol, hcmd, ieee80211 as w, init, join, pack, rx, scan, tx, ucode};
 use std::collections::HashMap;
 
 const AP: [u8; 6] = [0x02, 0x11, 0x22, 0x33, 0x44, 0x55];
@@ -111,6 +111,11 @@ fn real_ax210_firmware_when_present() {
     assert_eq!(image.lmac.len() + image.umac.len() + image.paging.len() + 2, fw.sections().len());
     let layout = context::Layout::plan(devices::Family::Ax210, &image, fw.iml.unwrap().len(), 8 << 20).unwrap();
     assert!(layout.end < 4 << 20, "firmware plus rings fit in 4 MiB: {}", layout.end);
+    // W5: the x17's firmware takes the join commands this driver sends.
+    let v = join::Versions::of(&fw, &init::Features::of(&fw), 0x420);
+    assert_eq!(v, join::Versions { phy: 4, rlc: 2, scd_queue: 3, uhb: true, cdb: false, mld: false });
+    // The AX211-type MAC (0x44) would need the MLD API instead.
+    assert!(join::Versions::of(&fw, &init::Features::of(&fw), 0x440).mld);
 }
 
 struct Memory(Vec<u8>);
@@ -695,8 +700,12 @@ fn init_firmware(dqa: bool, embedded_pnvm: Option<Vec<u8>>) -> Vec<u8> {
         (29, bits(0, 1 << ucode::API_WIFI_MCC_UPDATE)),
         (29, bits(1, 1 << (ucode::API_REGULATORY_NVM_INFO - 32) | 1 << (ucode::API_REDUCED_SCAN_CONFIG - 32))),
         (30, bits(0, 1 << ucode::CAPA_LAR_SUPPORT | if dqa { 1 << ucode::CAPA_DQA_SUPPORT } else { 0 })),
+        (30, bits(1, 1 << (ucode::CAPA_ULTRA_HB_CHANNELS - 32))),
         (30, bits(2, 1 << (ucode::CAPA_CT_KILL_BY_FW - 64) | 1 << (ucode::CAPA_MCC_UPDATE_11AX_SUPPORT - 64))),
-        (48, vec![0x01, 0x00, 99, 6, 0x0c, 0x01, 5, 0, 0x0d, 0x01, 15, 0, 0xc8, 0x01, 1, 6, 0x02, 0x0c, 1, 4]),
+        // Command versions as the x17's firmware (-77) lists them, W5's included:
+        // PHY_CONTEXT v4, RLC_CONFIG v2, SCD_QUEUE_CONFIG v3.
+        (48, vec![0x01, 0x00, 99, 6, 0x0c, 0x01, 5, 0, 0x0d, 0x01, 15, 0, 0xc8, 0x01, 1, 6, 0x02, 0x0c, 1, 4,
+            0x08, 0x01, 4, 0, 0x08, 0x05, 2, 0, 0x17, 0x05, 3, 2]),
     ];
     if let Some(p) = embedded_pnvm { extra.push((74, p)); }
     firmware_with(&extra)
@@ -769,6 +778,44 @@ struct Firmware {
     /// Frames the radio "hears" during a scan: (frame, energy, channel, padded).
     air: Vec<(Vec<u8>, u8, u8, bool)>,
     scan_status: u8,
+    /// ADD_STA's status word, and the queue number SCD_QUEUE_CONFIG answers with.
+    station_status: u32,
+    queue_answer: u16,
+    /// The station TX queue (W5b): entries read, frames sent (TX command, 802.11
+    /// frame), and how the AP answers.
+    tx_read: u32,
+    frames: Vec<(Vec<u8>, Vec<u8>)>,
+    ap: Ap,
+}
+
+/// The AP's side of authentication and association.
+#[derive(Clone)]
+struct Ap { auth_status: u16, assoc_status: u16, aid: u16, ignore: u8, tx_status: u16, deauth_after_assoc: Option<u16>, wpa: Option<ApWpa> }
+impl Default for Ap { fn default() -> Self { Ap { auth_status: 0, assoc_status: 0, aid: 5, ignore: 0, tx_status: 1, deauth_after_assoc: None, wpa: None } } }
+
+/// The AP's half of the 4-way handshake (W5c).
+#[derive(Clone)]
+struct ApWpa { pmk: [u8; 32], rsn: Vec<u8>, anonce: [u8; 32], ptk: Option<eapol::Ptk>, message4: bool, gtk: eapol::GroupKey }
+
+/// An EAPOL frame from the AP as a from-DS data frame.
+fn eapol_from_ap(me: &[u8], bssid: &[u8], e: &[u8]) -> Vec<u8> {
+    let mut f = vec![0u8; 24];
+    f[0..2].copy_from_slice(&(w::FC_DATA | w::FC_FROM_DS).to_le_bytes());
+    f[4..10].copy_from_slice(me); f[10..16].copy_from_slice(bssid); f[16..22].copy_from_slice(bssid);
+    f.extend_from_slice(&[0xaa, 0xaa, 3, 0, 0, 0, 0x88, 0x8e]);
+    f.extend_from_slice(e);
+    f
+}
+
+fn bssid_of(frame: &[u8]) -> [u8; 6] { frame[4..10].try_into().unwrap() }
+
+/// A management frame from the AP (`bssid`) to `da`.
+fn from_ap(fc: u16, da: &[u8], bssid: &[u8], body: &[u8]) -> Vec<u8> {
+    let mut f = vec![0u8; 24];
+    f[0..2].copy_from_slice(&fc.to_le_bytes());
+    f[4..10].copy_from_slice(da); f[10..16].copy_from_slice(bssid); f[16..22].copy_from_slice(bssid);
+    f.extend_from_slice(body);
+    f
 }
 
 /// An RX MPDU notification as the firmware writes it (descriptor, then frame).
@@ -786,8 +833,96 @@ fn mpdu(family: devices::Family, frame: &[u8], energy: u8, channel: u8, pad: boo
 }
 
 impl Firmware {
+    /// Frames the driver queued on TX queue 1: checks the TFD, TX command and
+    /// byte count, answers with a TX response, then lets the AP answer.
+    fn serve_tx(&mut self, m: &mut Memory, layout: &context::Layout, hw: &mut Chip) {
+        let Some(wp) = hw.writes.iter().rev().find(|w| w.0 == csr::TARG_WRPTR && w.1 >> 16 == 1).map(|w| w.1 & 0xffff) else { return };
+        while self.tx_read != wp {
+            let entry = self.tx_read as u64 % context::TX_RING_COUNT as u64;
+            let tfd = m.0[(layout.tx_ring.offset + entry * 256) as usize..][..256].to_vec();
+            let n = u16::from_le_bytes([tfd[0], tfd[1]]) as usize;
+            assert!(n == 2 || n == 3, "TB0, TB1 and the body");
+            let mut tbs = vec![];
+            for i in 0..n {
+                let at = 2 + i * 10;
+                let len = u16::from_le_bytes([tfd[at], tfd[at + 1]]) as usize;
+                let off = (u64::from_le_bytes(tfd[at + 2..at + 10].try_into().unwrap()) - self.base) as usize;
+                tbs.push(m.0[off..off + len].to_vec());
+            }
+            assert_eq!(tbs[0].len(), hcmd::FIRST_TB_SIZE);
+            let cmd: Vec<u8> = tbs[0].iter().chain(tbs[1].iter()).copied().collect();
+            assert_eq!((cmd[0], cmd[2] as u32, cmd[3]), (hcmd::TX_CMD, self.tx_read % 256, 1));
+            let tx = &cmd[4..];
+            let size = if self.family == devices::Family::Ax210 { tx::GEN3_BYTES } else { tx::GEN2_BYTES };
+            let len = u16::from_le_bytes([tx[0], tx[1]]) as usize;
+            let offload = if self.family == devices::Family::Ax210 { u32::from_le_bytes(tx[4..8].try_into().unwrap()) } else { u16::from_le_bytes([tx[2], tx[3]]) as u32 };
+            let hdr = ((offload >> 8) & 0x1f) as usize * 2;
+            let pad = if offload & 1 << 13 != 0 { 4 - hdr % 4 } else { 0 };
+            assert_eq!(tx.len(), size + hdr + pad, "TB1 ends after the header and pad");
+            let mut frame = tx[size..size + hdr].to_vec();
+            if n == 3 { frame.extend_from_slice(&tbs[2]); }
+            assert_eq!(frame.len(), len, "TX command length is the whole frame");
+            let bc = u16::from_le_bytes(m.0[(layout.tx_byte_counts.offset + entry * 2) as usize..][..2].try_into().unwrap());
+            assert_eq!(bc, if self.family == devices::Family::Ax210 { len as u16 } else { len.div_ceil(4) as u16 });
+            self.frames.push((tx[..size].to_vec(), frame.clone()));
+            self.tx_read = (self.tx_read + 1) % if self.family == devices::Family::Ax210 { 65536 } else { 256 };
+            let mut resp = vec![0u8; 48];
+            resp[0] = 1;
+            resp[40..42].copy_from_slice(&self.ap.tx_status.to_le_bytes());
+            resp[44..48].copy_from_slice(&self.tx_read.to_le_bytes());
+            self.deliver(m, layout, &packet(hcmd::TX_CMD, 0, cmd[2], 1, &resp));
+            if self.ap.tx_status != 1 { continue; }
+            if self.ap.ignore > 0 { self.ap.ignore -= 1; continue; }
+            let (me, bssid) = (frame[10..16].to_vec(), frame[4..10].to_vec());
+            if u16::from_le_bytes([frame[0], frame[1]]) == w::FC_DATA | w::FC_TO_DS {
+                assert_eq!(&frame[24..32], &[0xaa, 0xaa, 3, 0, 0, 0, 0x88, 0x8e], "EAPOL over LLC/SNAP");
+                assert_eq!(u16::from_le_bytes([tx[2], tx[3]]), tx::FLAG_CMD_RATE | tx::FLAG_ENCRYPT_DIS | tx::FLAG_HIGH_PRI);
+                let Some(wpa) = self.ap.wpa.as_mut() else { continue };
+                let e = &frame[32..];
+                let mut out = [0u8; eapol::MAX_FRAME];
+                if let Some(ptk) = wpa.ptk.clone() {
+                    eapol::authenticator::check_message4(e, eapol::Akm::Psk, &ptk).unwrap();
+                    wpa.message4 = true;
+                    continue;
+                }
+                // A wrong password fails message 2's MIC: the AP stays silent.
+                let Ok((ptk, _)) = eapol::authenticator::check_message2(e, eapol::Akm::Psk, &wpa.pmk, &bssid_of(&frame), &frame[10..16].try_into().unwrap(), &wpa.anonce) else { continue };
+                let n = eapol::authenticator::message3(&mut out, eapol::Akm::Psk, &ptk, 2, &wpa.anonce, &wpa.rsn, &wpa.gtk, None);
+                wpa.ptk = Some(ptk);
+                let f = eapol_from_ap(&frame[10..16], &frame[4..10], &out[..n]);
+                self.deliver(m, layout, &mpdu(self.family, &f, 40, 6, false));
+                continue;
+            }
+            let reply = match u16::from_le_bytes([frame[0], frame[1]]) {
+                w::FC_MGMT_AUTH => {
+                    let mut b = vec![0, 0, 2, 0]; b.extend_from_slice(&self.ap.auth_status.to_le_bytes());
+                    from_ap(w::FC_MGMT_AUTH, &me, &bssid, &b)
+                }
+                w::FC_MGMT_ASSOC_REQ => {
+                    let mut b = vec![0x01, 0x04]; b.extend_from_slice(&self.ap.assoc_status.to_le_bytes());
+                    b.extend_from_slice(&(self.ap.aid | 0xc000).to_le_bytes());
+                    from_ap(w::FC_MGMT_ASSOC_RESP, &me, &bssid, &b)
+                }
+                _ => continue,
+            };
+            // Another station's answer first: it must be ignored.
+            let other = from_ap(w::FC_MGMT_AUTH, &[2, 2, 2, 2, 2, 2], &bssid, &[0, 0, 2, 0, 1, 0]);
+            self.deliver(m, layout, &mpdu(self.family, &other, 40, 6, true));
+            self.deliver(m, layout, &mpdu(self.family, &reply, 40, 6, true));
+            if let (Some(wpa), w::FC_MGMT_ASSOC_REQ) = (self.ap.wpa.as_ref(), u16::from_le_bytes([frame[0], frame[1]])) {
+                // Message 1 right behind the association response.
+                let mut out = [0u8; eapol::MAX_FRAME];
+                let n = eapol::authenticator::message1(&mut out, eapol::Akm::Psk, 1, &wpa.anonce);
+                self.deliver(m, layout, &mpdu(self.family, &eapol_from_ap(&me, &bssid, &out[..n]), 40, 6, false));
+            }
+            if let (Some(r), w::FC_MGMT_ASSOC_REQ) = (self.ap.deauth_after_assoc, u16::from_le_bytes([frame[0], frame[1]])) {
+                self.deliver(m, layout, &mpdu(self.family, &from_ap(w::FC_MGMT_DEAUTH, &me, &bssid, &r.to_le_bytes()), 40, 6, true));
+            }
+        }
+    }
+
     fn new(family: devices::Family, base: u64, slot: usize) -> Self {
-        Self { family, base, slot, read: 0, commands: vec![], lar: true, refuse: None, error_on: None, silent_on: None, pnvm_rung: false, air: vec![], scan_status: 1 }
+        Self { family, base, slot, read: 0, commands: vec![], lar: true, refuse: None, error_on: None, silent_on: None, pnvm_rung: false, air: vec![], scan_status: 1, station_status: 1, queue_answer: 1, tx_read: 0, frames: vec![], ap: Ap::default() }
     }
     fn deliver(&mut self, m: &mut Memory, layout: &context::Layout, p: &[u8]) {
         firmware_delivers(m, layout, self.family, self.base, self.slot, p);
@@ -799,7 +934,8 @@ impl Firmware {
             self.pnvm_rung = true;
             self.deliver(m, layout, &packet(hcmd::PNVM_INIT_COMPLETE, hcmd::REGULATORY_AND_NVM_GROUP, 0, 0x80, &[0; 4]));
         }
-        let Some(wp) = hw.writes.iter().rev().find(|w| w.0 == csr::TARG_WRPTR).map(|w| w.1 & 0xffff) else { return };
+        self.serve_tx(m, layout, hw);
+        let Some(wp) = hw.writes.iter().rev().find(|w| w.0 == csr::TARG_WRPTR && w.1 >> 16 == 0).map(|w| w.1 & 0xffff) else { return };
         while self.read != wp {
             let entry = self.read as u64 % context::TX_RING_COUNT as u64;
             let tfd = &m.0[(layout.cmd_ring.offset + entry * 256) as usize..][..256];
@@ -823,6 +959,15 @@ impl Firmware {
                 (hcmd::PHY_OPS_GROUP, hcmd::TEMP_REPORTING_THRESHOLDS_CMD) => Some(20),
                 (hcmd::LONG_GROUP, hcmd::BT_CONFIG) | (hcmd::SYSTEM_GROUP, hcmd::SOC_CONFIGURATION_CMD) => Some(8),
                 (hcmd::LONG_GROUP, hcmd::SCAN_REQ_UMAC) => Some(scan::REQUEST_V14_BYTES),
+                (hcmd::LONG_GROUP, hcmd::PHY_CONTEXT_CMD) => Some(join::PHY_CONTEXT_BYTES),
+                (hcmd::DATA_PATH_GROUP, hcmd::RLC_CONFIG_CMD) => Some(32),
+                (hcmd::LONG_GROUP, hcmd::MAC_CONTEXT_CMD) => Some(148),
+                (hcmd::LONG_GROUP, hcmd::BINDING_CONTEXT_CMD) => Some(28),
+                (hcmd::LONG_GROUP, hcmd::ADD_STA) => Some(48),
+                (hcmd::DATA_PATH_GROUP, hcmd::SCD_QUEUE_CONFIG_CMD) => Some(36),
+                (hcmd::MAC_CONF_GROUP, hcmd::SESSION_PROTECTION_CMD) => Some(24),
+                (hcmd::DATA_PATH_GROUP, rsna::SEC_KEY_CMD) => Some(rsna::SEC_KEY_BYTES),
+                (hcmd::LONG_GROUP, hcmd::ADD_STA_KEY) => Some(rsna::ADD_STA_KEY_BYTES),
                 _ => Some(4),
             };
             assert_eq!(Some(len), want, "payload size of {group:#x}/{opcode:#x}");
@@ -859,6 +1004,12 @@ impl Firmware {
                     a[16..20].copy_from_slice(&37u32.to_le_bytes());
                     // Channels 1-13 and the first 23 at 5 GHz allowed; 14 not.
                     for c in (0..13).chain(14..37) { a[20 + c * 4] = 1; }
+                    a
+                }
+                (hcmd::LONG_GROUP, hcmd::ADD_STA) | (hcmd::LONG_GROUP, hcmd::ADD_STA_KEY) => self.station_status.to_le_bytes().to_vec(),
+                (hcmd::DATA_PATH_GROUP, hcmd::SCD_QUEUE_CONFIG_CMD) => {
+                    let mut a = vec![0u8; 8];
+                    a[0..2].copy_from_slice(&self.queue_answer.to_le_bytes());
                     a
                 }
                 _ => vec![0u8; 4],
@@ -1249,4 +1400,330 @@ fn scan_keeps_the_strongest_networks_when_full() {
     }
     assert_eq!((s.count, s.dropped), (scan::MAX_NETWORKS, 4));
     assert!(s.networks().all(|n| n.rssi >= -90 + 4), "the four weakest gave way");
+}
+
+/// The x17 up to `[wifi.ready]` with the scan's Home network heard, ready to join.
+fn x17_ready() -> (init::Init, bringup::Bringup, Memory, Chip, Firmware, w::Bss, join::Versions) {
+    let pnvm = pnvm_file(&[(X17_SKU, 0x10d, 0x30)]);
+    let file = init_firmware(false, None);
+    let fw = ucode::Firmware::parse(&file).unwrap();
+    let (mut b, mut m, mut hw, base) = alive_x17(&fw, X17_SKU);
+    let alive = b.alive.unwrap();
+    let mut i = init::Init::new(b.boot.chip, &fw, &alive, Some(&pnvm), &b.layout, base, &mut m, 0x420, X17_RF_ID, hw.now);
+    let mut sim = Firmware::new(b.boot.chip.family, base, 1);
+    run_init(&mut i, &mut b, &mut m, &mut hw, &mut sim);
+    assert_eq!(i.step, init::Step::Ready);
+    let wpa2 = [48u8, 20, 1, 0, 0, 0x0f, 0xac, 4, 1, 0, 0, 0x0f, 0xac, 4, 1, 0, 0, 0x0f, 0xac, 2, 0, 0];
+    let bss = w::parse_bss(&beacon_from([0x02, 0x10, 0, 0, 0, 1], b"Home", 6, Some(&wpa2))).unwrap();
+    let v = join::Versions::of(&fw, &i.features, 0x420);
+    (i, b, m, hw, sim, bss, v)
+}
+
+fn run_join(j: &mut join::Join, i: &mut init::Init, b: &mut bringup::Bringup, m: &mut Memory, hw: &mut Chip, sim: &mut Firmware) {
+    for _ in 0..1000 {
+        let t = hw.now;
+        if !j.advance(b, &mut i.cmdq, hw, m, t) { break; }
+        sim.serve(m, &b.layout, hw);
+        hw.now += 1000;
+    }
+}
+
+#[test]
+fn x17_joins_the_channel_like_iwx_auth() {
+    let (mut i, mut b, mut m, mut hw, mut sim, bss, v) = x17_ready();
+    assert_eq!(v, join::Versions { phy: 4, rlc: 2, scd_queue: 3, uhb: true, cdb: false, mld: false });
+    let target = join::Target::of(&bss, 6);
+    let mut j = join::Join::new(target, v, i.mac, i.valid_rx_antennas(), hw.now);
+    let before = sim.commands.len();
+    run_join(&mut j, &mut i, &mut b, &mut m, &mut hw, &mut sim);
+    assert_eq!(j.step, join::Step::Joined);
+    let sent: Vec<(u8, u8)> = sim.commands[before..].iter().map(|c| (c.0, c.1)).collect();
+    assert_eq!(sent, vec![
+        (hcmd::LONG_GROUP, hcmd::PHY_CONTEXT_CMD), (hcmd::DATA_PATH_GROUP, hcmd::RLC_CONFIG_CMD),
+        (hcmd::LONG_GROUP, hcmd::MAC_CONTEXT_CMD), (hcmd::LONG_GROUP, hcmd::BINDING_CONTEXT_CMD),
+        (hcmd::LONG_GROUP, hcmd::ADD_STA), (hcmd::DATA_PATH_GROUP, hcmd::SCD_QUEUE_CONFIG_CMD),
+        (hcmd::MAC_CONF_GROUP, hcmd::SESSION_PROTECTION_CMD),
+    ], "iwx_auth's order");
+    let c = |k: usize| &sim.commands[before + k].2;
+    let u32at = |p: &Vec<u8>, at: usize| u32::from_le_bytes(p[at..at + 4].try_into().unwrap());
+    // PHY: add, channel 6 in the wide field, 2.4 GHz band, no RX chain (RLC v2 carries it).
+    assert_eq!((u32at(c(0), 4), u32at(c(0), 8), c(0)[12], u32at(c(0), 20)), (join::ACTION_ADD, 6, 1, 0));
+    // RLC: antennas A+B valid (phy_config 0x330018 → 3), one idle and one active chain.
+    assert_eq!(u32at(c(1), 4), 3 << 1 | 1 << 10 | 1 << 12);
+    // MAC: our address and the AP's, beacons let through until associated.
+    assert_eq!(&c(2)[16..22], &i.mac);
+    assert_eq!(&c(2)[24..30], &bss.bssid);
+    assert_eq!(u32at(c(2), 52), 1 << 2 | 1 << 6);
+    assert_eq!(u32at(c(2), 116), 100, "beacon interval");
+    // ADD_STA: the AP's address, station 0, MAC 0.
+    assert_eq!((&c(4)[8..14], c(4)[16]), (&bss.bssid[..], 0));
+    // Queue: our TFD ring and byte-count table, 256 entries (log2 - 3 = 5), TID 15.
+    assert_eq!((u32at(c(5), 4), c(5)[8], u32at(c(5), 16)), (1, 15, 5));
+    assert_eq!(u64::from_le_bytes(c(5)[20..28].try_into().unwrap()), b.base + b.layout.tx_byte_counts.offset);
+    assert_eq!(u64::from_le_bytes(c(5)[28..36].try_into().unwrap()), b.base + b.layout.tx_ring.offset);
+    // Session protection: nine beacon intervals.
+    assert_eq!(u32at(c(6), 12), 900);
+}
+
+#[test]
+fn join_fails_on_a_refused_station_or_a_wrong_queue() {
+    let (mut i, mut b, mut m, mut hw, mut sim, bss, v) = x17_ready();
+    sim.station_status = 2;
+    let mut j = join::Join::new(join::Target::of(&bss, 6), v, i.mac, 3, hw.now);
+    run_join(&mut j, &mut i, &mut b, &mut m, &mut hw, &mut sim);
+    assert!(matches!(j.step, join::Step::Failed(init::Failure::BadAnswer { opcode: hcmd::ADD_STA, .. })), "{:?}", j.step);
+    let (mut i, mut b, mut m, mut hw, mut sim, bss, v) = x17_ready();
+    sim.queue_answer = 2;
+    let mut j = join::Join::new(join::Target::of(&bss, 6), v, i.mac, 3, hw.now);
+    run_join(&mut j, &mut i, &mut b, &mut m, &mut hw, &mut sim);
+    assert!(matches!(j.step, join::Step::Failed(init::Failure::BadAnswer { opcode: hcmd::SCD_QUEUE_CONFIG_CMD, .. })), "{:?}", j.step);
+    // A chip that only speaks the MLD API is refused up front, as are old PHY commands.
+    let mld = join::Versions { mld: true, ..v };
+    assert_eq!(join::Join::new(join::Target::of(&bss, 6), mld, i.mac, 3, 0).step, join::Step::Failed(init::Failure::Unsupported("mld_api")));
+    let old = join::Versions { phy: 1, ..v };
+    assert!(join::Join::new(join::Target::of(&bss, 6), old, i.mac, 3, 0).done());
+}
+
+#[test]
+fn join_uses_only_the_antennas_the_nvm_allows() {
+    let (mut i, mut b, mut m, mut hw, mut sim, bss, v) = x17_ready();
+    assert_eq!(i.valid_rx_antennas(), 3);
+    i.nvm.as_mut().unwrap().rx_chains = 0b10;
+    assert_eq!(i.valid_rx_antennas(), 0b10, "firmware A+B narrowed to the NVM's B");
+    let mut j = join::Join::new(join::Target::of(&bss, 6), v, i.mac, i.valid_rx_antennas(), hw.now);
+    let before = sim.commands.len();
+    run_join(&mut j, &mut i, &mut b, &mut m, &mut hw, &mut sim);
+    let rlc = &sim.commands[before + 1];
+    assert_eq!((rlc.0, rlc.1), (hcmd::DATA_PATH_GROUP, hcmd::RLC_CONFIG_CMD));
+    assert_eq!(u32::from_le_bytes(rlc.2[4..8].try_into().unwrap()), 0b10 << 1 | 1 << 10 | 1 << 12);
+}
+
+#[test]
+fn join_command_layouts() {
+    // ACK rates (iwx_ack_rates): basic 1/2 Mb/s and 6 Mb/s on 2.4 GHz.
+    let mut t = join::Target { bssid: [2, 0, 0, 0, 0, 1], channel: 1, beacon_interval: 100, dtim_period: 1,
+        basic_cck: 0b0011, basic_ofdm: 0b1, short_slot: true, short_preamble: true };
+    assert_eq!(join::ack_rates(&t), (0b0011, 0b1));
+    // Only 11 Mb/s basic: every lower CCK rate joins; only 24 Mb/s OFDM: 6 and 12 join.
+    t.basic_cck = 0b1000; t.basic_ofdm = 1 << 4;
+    assert_eq!(join::ack_rates(&t), (0b1111, 1 << 4 | 1 << 2 | 1));
+    // 5 GHz: no CCK basic rates, 1 Mb/s stays (the firmware ignores it there).
+    t.channel = 36; t.basic_cck = 0b1111;
+    assert_eq!(join::ack_rates(&t).0, 1);
+    // PHY context without the 6 GHz numbering: 28 bytes, band then channel in one word.
+    let mut p = [0u8; join::PHY_CONTEXT_BYTES];
+    assert_eq!(join::phy_context(&mut p, join::ACTION_ADD, 36, false, false, Some(0x1406)), join::PHY_CONTEXT_V1_BYTES);
+    assert_eq!((p[8], p[9], u32::from_le_bytes(p[12..16].try_into().unwrap()), u32::from_le_bytes(p[16..20].try_into().unwrap())), (0, 36, 0, 0x1406));
+    // Dual-band (CDB) firmware runs a 5 GHz channel on LMAC 1, in the PHY context and the binding alike.
+    join::phy_context(&mut p, join::ACTION_ADD, 36, true, true, None);
+    assert_eq!(u32::from_le_bytes(p[16..20].try_into().unwrap()), 1);
+    let mut bind = [0u8; join::BINDING_BYTES];
+    join::binding(&mut bind, join::ACTION_ADD, 36, true);
+    assert_eq!(u32::from_le_bytes(bind[24..28].try_into().unwrap()), 1);
+    join::binding(&mut bind, join::ACTION_ADD, 6, true);
+    assert_eq!(u32::from_le_bytes(bind[24..28].try_into().unwrap()), 0, "2.4 GHz stays on LMAC 0");
+    // MAC context after association: the AID, no beacons, EDCA per FIFO.
+    let mut mac = [0u8; join::MAC_CONTEXT_BYTES];
+    join::mac_context(&mut mac, join::ACTION_MODIFY, &STA, &t, Some(0xc005));
+    assert_eq!(u32::from_le_bytes(mac[52..56].try_into().unwrap()), 1 << 2);
+    assert_eq!((u32::from_le_bytes(mac[100..104].try_into().unwrap()), u32::from_le_bytes(mac[136..140].try_into().unwrap())), (1, 5));
+    // BE goes to FIFO 2: CWmin 15, CWmax 1023, AIFSN 3; VO to FIFO 4 with TXOP 1504 µs.
+    assert_eq!(&mac[60 + 16..60 + 24], &[15, 0, 0xff, 3, 3, 1 << 2, 0, 0]);
+    assert_eq!(&mac[60 + 32..60 + 40], &[3, 0, 7, 0, 2, 1 << 4, 0xe0, 5]);
+    // Removing a context sends only its id and the action.
+    join::mac_context(&mut mac, join::ACTION_REMOVE, &STA, &t, None);
+    assert!(mac[8..].iter().all(|&b| b == 0));
+}
+
+#[test]
+fn beacons_give_basic_rates_and_dtim() {
+    let mut f = beacon(b"rates", 6, None, false);
+    f.extend_from_slice(&[5, 4, 0, 3, 0, 0]); // TIM: DTIM count 0, period 3
+    f.extend_from_slice(&[50, 4, 0x8c, 0x12, 0x98, 0x24]); // extended rates: 6 and 12 basic
+    let b = w::parse_bss(&f).unwrap();
+    assert_eq!((b.basic_cck, b.basic_ofdm, b.dtim_period), (0b1111, 0b101, 3));
+    let t = join::Target::of(&b, 6);
+    assert_eq!(join::ack_rates(&t), (0b1111, 0b101), "nothing below 6 Mb/s to add");
+}
+
+/// Joins the x17 to "Home" (WPA2, channel 6), then runs association against `ap`.
+fn x17_associate(ap: Ap) -> (assoc::Assoc, Firmware, init::Init, w::Bss, usize) {
+    let (mut i, mut b, mut m, mut hw, mut sim, bss, v) = x17_ready();
+    let target = join::Target::of(&bss, 6);
+    let mut j = join::Join::new(target, v, i.mac, i.valid_rx_antennas(), hw.now);
+    run_join(&mut j, &mut i, &mut b, &mut m, &mut hw, &mut sim);
+    assert_eq!(j.step, join::Step::Joined);
+    sim.ap = ap;
+    let before = sim.commands.len();
+    let mut a = assoc::Assoc::new(bss, target, i.mac, b.boot.chip.family, hw.now);
+    for _ in 0..5000 {
+        let t = hw.now;
+        if !a.advance(&mut b, &mut i.cmdq, &mut hw, &mut m, t) { break; }
+        sim.serve(&mut m, &b.layout, &mut hw);
+        hw.now += 1000;
+    }
+    (a, sim, i, bss, before)
+}
+
+#[test]
+fn x17_authenticates_and_associates_like_net80211() {
+    let (a, sim, i, bss, before) = x17_associate(Ap::default());
+    assert_eq!(a.step, assoc::Step::Associated);
+    assert_eq!(a.aid, 5);
+    assert_eq!(sim.frames.len(), 2, "one auth, one assoc request");
+    let (cmd, auth) = &sim.frames[0];
+    assert_eq!(&auth[..2], &[0xb0, 0]);
+    assert_eq!((&auth[4..10], &auth[10..16], &auth[16..22]), (&bss.bssid[..], &i.mac[..], &bss.bssid[..]));
+    assert_eq!(&auth[24..30], &[0, 0, 1, 0, 0, 0], "open system, transaction 1");
+    // TX command v10 (gen3): fixed rate, no encryption, a 24-byte header (12 words), no pad.
+    assert_eq!(u16::from_le_bytes([cmd[2], cmd[3]]), tx::FLAG_CMD_RATE | tx::FLAG_ENCRYPT_DIS);
+    assert_eq!(u32::from_le_bytes(cmd[4..8].try_into().unwrap()), 12 << 8);
+    assert_eq!(u32::from_le_bytes(cmd[16..20].try_into().unwrap()), tx::management_rate(&a.target));
+    let (_, req) = &sim.frames[1];
+    assert_eq!(&req[..2], &[0, 0]);
+    let ies: Vec<(u8, Vec<u8>)> = w::elements(&req[28..]).map(|(id, b)| (id, b.to_vec())).collect();
+    assert_eq!(ies[0], (0, b"Home".to_vec()));
+    let rsn = ies.iter().find(|e| e.0 == 48).expect("our RSN element on a WPA2 network");
+    assert_eq!(&rsn.1[8..12], &[0, 0x0f, 0xac, 4], "CCMP pairwise");
+    assert_eq!(&rsn.1[14..18], &[0, 0x0f, 0xac, 2], "PSK");
+    // Then iwx_run: the station entry updated, the MAC context told the AID.
+    let sent: Vec<(u8, u8)> = sim.commands[before..].iter().map(|c| (c.0, c.1)).collect();
+    assert_eq!(sent, vec![(hcmd::LONG_GROUP, hcmd::ADD_STA), (hcmd::LONG_GROUP, hcmd::MAC_CONTEXT_CMD)]);
+    let (sta, mac) = (&sim.commands[before].2, &sim.commands[before + 1].2);
+    assert_eq!(sta[0], 1, "modify");
+    let u32at = |p: &Vec<u8>, at: usize| u32::from_le_bytes(p[at..at + 4].try_into().unwrap());
+    // The test beacon has no TIM, so beacons keep coming through (as in iwx) until a DTIM period is known.
+    assert_eq!((u32at(mac, 4), u32at(mac, 52), u32at(mac, 100), u32at(mac, 136)), (join::ACTION_MODIFY, 1 << 2 | 1 << 6, 1, 5));
+}
+
+#[test]
+fn association_retries_and_reports_refusals() {
+    // The AP misses the first auth frame: the driver sends it again.
+    let (a, sim, ..) = x17_associate(Ap { ignore: 1, ..Ap::default() });
+    assert_eq!(a.step, assoc::Step::Associated);
+    assert_eq!(sim.frames.iter().map(|f| f.1[0]).collect::<Vec<_>>(), vec![0xb0, 0xb0, 0x00]);
+    let (a, sim, ..) = x17_associate(Ap { ignore: 9, ..Ap::default() });
+    assert_eq!(a.step, assoc::Step::Refused(assoc::Refusal::NoAnswer("auth")));
+    assert_eq!(sim.frames.len(), assoc::ATTEMPTS as usize);
+    let (a, ..) = x17_associate(Ap { auth_status: 17, ..Ap::default() });
+    assert_eq!(a.step, assoc::Step::Refused(assoc::Refusal::Status { frame: "auth", status: 17 }));
+    let (a, ..) = x17_associate(Ap { assoc_status: 18, ..Ap::default() });
+    assert_eq!(a.step, assoc::Step::Refused(assoc::Refusal::Status { frame: "assoc", status: 18 }));
+    let (a, ..) = x17_associate(Ap { tx_status: 0x83, ..Ap::default() });
+    assert_eq!(a.step, assoc::Step::Refused(assoc::Refusal::NotSent { frame: "auth", status: 0x83 }));
+    let (a, ..) = x17_associate(Ap { deauth_after_assoc: Some(3), ..Ap::default() });
+    assert_eq!(a.step, assoc::Step::Refused(assoc::Refusal::Disconnected(3)));
+}
+
+#[test]
+fn tx_command_layouts_and_rates() {
+    let hdr = [0x88u8; 26]; // a QoS data header: 13 words, padded by 2
+    let mut out = [0u8; 64];
+    let n = tx::command(&mut out, devices::Family::Ax210, 100, &hdr, 3, 7);
+    assert_eq!(n, tx::GEN3_BYTES + 28);
+    assert_eq!(u32::from_le_bytes(out[4..8].try_into().unwrap()), 13 << 8 | 1 << 13);
+    let n = tx::command(&mut out, devices::Family::Gen22000, 100, &hdr, 3, 7);
+    assert_eq!(n, tx::GEN2_BYTES + 28);
+    assert_eq!((u16::from_le_bytes([out[2], out[3]]), u32::from_le_bytes(out[4..8].try_into().unwrap())), (13 << 8 | 1 << 13, 3));
+    assert_eq!(u32::from_le_bytes(out[16..20].try_into().unwrap()), 7);
+    assert_eq!(tx::byte_count(devices::Family::Ax210, 30, 3), 30);
+    assert_eq!(tx::byte_count(devices::Family::Gen22000, 30, 3), 8);
+    assert_eq!(tx::byte_count(devices::Family::Ax210, 30, 7), 30 | 1 << 14);
+    let mut t = join::Target { bssid: AP, channel: 36, beacon_interval: 100, dtim_period: 1, basic_cck: 0, basic_ofdm: 0b101, short_slot: true, short_preamble: false };
+    assert_eq!(tx::management_rate(&t), 1 << 14 | 1 << 8, "OFDM 6 Mb/s");
+    t.channel = 1; t.basic_cck = 0b1100;
+    assert_eq!(tx::management_rate(&t), 1 << 14 | 2, "CCK 5.5 Mb/s");
+    t.basic_cck = 0; t.basic_ofdm = 0b100;
+    assert_eq!(tx::management_rate(&t), 1 << 14 | 1 << 8 | 2, "OFDM-only 2.4 GHz network: 12 Mb/s");
+}
+
+#[test]
+fn wpa3_only_networks_wait_for_sae() {
+    let (_, _, _, _, _, mut bss, _) = x17_ready();
+    bss.security = w::Security::Wpa3Personal;
+    let a = assoc::Assoc::new(bss, join::Target::of(&bss, 6), STA, devices::Family::Ax210, 0);
+    assert_eq!(a.step, assoc::Step::Failed(init::Failure::Unsupported("wpa3_sae")));
+}
+
+/// Associates the x17 with "Home" (WPA2), then runs the 4-way handshake with `password`
+/// against an AP whose passphrase is "correct horse".
+fn x17_connect(password: &[u8], sec_key_cmd: bool) -> (rsna::Rsna, Firmware, w::Bss, usize, [u8; 16]) {
+    let (mut i, mut b, mut m, mut hw, mut sim, bss, v) = x17_ready();
+    let target = join::Target::of(&bss, 6);
+    let mut j = join::Join::new(target, v, i.mac, i.valid_rx_antennas(), hw.now);
+    run_join(&mut j, &mut i, &mut b, &mut m, &mut hw, &mut sim);
+    let gtk = eapol::GroupKey { id: 2, key: [0x77; 16], rsc: 0 };
+    let ap_pmk = sex_wifi::crypto::psk_from_passphrase(b"correct horse", bss.ssid());
+    sim.ap = Ap { wpa: Some(ApWpa { pmk: ap_pmk, rsn: bss.rsn_element().to_vec(), anonce: [0x5a; 32], ptk: None, message4: false, gtk }), ..Ap::default() };
+    let mut a = assoc::Assoc::new(bss, target, i.mac, b.boot.chip.family, hw.now);
+    for _ in 0..5000 {
+        let t = hw.now;
+        if !a.advance(&mut b, &mut i.cmdq, &mut hw, &mut m, t) { break; }
+        sim.serve(&mut m, &b.layout, &mut hw);
+        hw.now += 1000;
+    }
+    assert_eq!(a.step, assoc::Step::Associated);
+    let (early, n) = a.early.expect("message 1 heard during association");
+    let mut own = [0u8; 32];
+    let own_len = w::own_rsn(false, &mut own);
+    let pmk = sex_wifi::crypto::psk_from_passphrase(password, bss.ssid());
+    let before = sim.commands.len();
+    let mut r = rsna::Rsna::new(pmk, [0xa5; 32], &own[..own_len], bss.rsn_element(), &bss.rsn, target, i.mac, b.boot.chip.family, a.tx, sec_key_cmd, hw.now);
+    r.early(&b, &mut hw, &mut m, &early[..n]);
+    sim.serve(&mut m, &b.layout, &mut hw);
+    for _ in 0..20_000 {
+        let t = hw.now;
+        if !r.advance(&mut b, &mut i.cmdq, &mut hw, &mut m, t) { break; }
+        sim.serve(&mut m, &b.layout, &mut hw);
+        hw.now += 1000;
+    }
+    (r, sim, bss, before, gtk.key)
+}
+
+#[test]
+fn x17_completes_the_wpa2_handshake_and_installs_keys() {
+    let (r, sim, _, before, gtk) = x17_connect(b"correct horse", true);
+    assert_eq!(r.step, rsna::Step::Connected);
+    assert!(sim.ap.wpa.as_ref().unwrap().message4, "message 4 reached the AP");
+    let ptk = sim.ap.wpa.as_ref().unwrap().ptk.unwrap();
+    let keys: Vec<&(u8, u8, Vec<u8>)> = sim.commands[before..].iter().collect();
+    assert_eq!(keys.iter().map(|c| (c.0, c.1)).collect::<Vec<_>>(), vec![(hcmd::DATA_PATH_GROUP, rsna::SEC_KEY_CMD); 2]);
+    let u32at = |p: &Vec<u8>, at: usize| u32::from_le_bytes(p[at..at + 4].try_into().unwrap());
+    // Pairwise: add, station 0, key 0, CCMP (with MFP: our RSN offers it, the AP's does not).
+    let p = &keys[0].2;
+    assert_eq!((u32at(p, 0), u32at(p, 4), u32at(p, 8), u32at(p, 12)), (1, 1, 0, 0x02));
+    assert_eq!(&p[16..32], &ptk.tk);
+    // Group: key 2, multicast.
+    let g = &keys[1].2;
+    assert_eq!((u32at(g, 8), u32at(g, 12)), (2, 0x42));
+    assert_eq!(&g[16..32], &gtk);
+}
+
+#[test]
+fn older_firmware_installs_keys_with_add_sta_key() {
+    let (r, sim, _, before, _) = x17_connect(b"correct horse", false);
+    assert_eq!(r.step, rsna::Step::Connected);
+    let keys = &sim.commands[before..];
+    assert_eq!(keys.iter().map(|c| (c.0, c.1)).collect::<Vec<_>>(), vec![(hcmd::LONG_GROUP, hcmd::ADD_STA_KEY); 2]);
+    let flags = |p: &Vec<u8>| u16::from_le_bytes([p[2], p[3]]);
+    assert_eq!((keys[0].2[1], flags(&keys[0].2)), (0, 2 | 1 << 3));
+    assert_eq!((keys[1].2[1], flags(&keys[1].2)), (1, 2 | 1 << 3 | 2 << 8 | 1 << 14));
+}
+
+#[test]
+fn a_wrong_password_times_out_without_keys() {
+    let (r, sim, _, before, _) = x17_connect(b"wrong horse", true);
+    assert_eq!(r.step, rsna::Step::Refused(rsna::Refusal::Timeout { messages: 1 }));
+    assert!(sim.commands[before..].is_empty(), "no key installed");
+}
+
+#[test]
+fn eapol_frames_only_from_our_ap() {
+    let e = [1u8, 3, 0, 0];
+    let f = eapol_from_ap(&STA, &AP, &e);
+    assert_eq!(rsna::eapol_of(&f, &STA, &AP), Some(&e[..]));
+    assert_eq!(rsna::eapol_of(&f, &AP, &AP), None, "not to us");
+    assert_eq!(rsna::eapol_of(&f, &STA, &STA), None, "not from our AP");
+    let mut p = f.clone(); p[1] |= 0x40;
+    assert_eq!(rsna::eapol_of(&p, &STA, &AP), None, "protected frames are the firmware's to decrypt");
 }

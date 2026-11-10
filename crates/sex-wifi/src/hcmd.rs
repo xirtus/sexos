@@ -35,6 +35,22 @@ pub const NVM_GET_INFO: u8 = 0x02;
 pub const PNVM_INIT_COMPLETE: u8 = 0xfe;
 /// Set in a response's group byte when the firmware refused the command.
 pub const CMD_FAILED: u8 = 0x40;
+
+// Stage W5: joining a network (LONG_GROUP unless noted).
+pub const MAC_CONF_GROUP: u8 = 0x3;
+pub const PHY_CONTEXT_CMD: u8 = 0x08;
+pub const ADD_STA_KEY: u8 = 0x17;
+pub const ADD_STA: u8 = 0x18;
+pub const TX_CMD: u8 = 0x1c;
+pub const MAC_CONTEXT_CMD: u8 = 0x28;
+pub const BINDING_CONTEXT_CMD: u8 = 0x2b;
+/// MAC_CONF_GROUP.
+pub const SESSION_PROTECTION_CMD: u8 = 0x05;
+pub const SESSION_PROTECTION_NOTIF: u8 = 0xfb;
+/// DATA_PATH_GROUP.
+pub const RLC_CONFIG_CMD: u8 = 0x08;
+pub const TLC_MNG_CONFIG_CMD: u8 = 0x0f;
+pub const SCD_QUEUE_CONFIG_CMD: u8 = 0x17;
 pub const FIRST_TB_SIZE: usize = 20;
 pub const WIDE_HEADER: usize = 8;
 pub const TFD_BYTES: usize = 256;

@@ -194,6 +194,19 @@ pub fn init() {
         assert_eq!(created,incarnation.target,"BOOT_SUCCESSOR_IDENTITY");
     }
 
+    // The ACPI service: firmware AML in ring 3, in the Senses organ (lid, battery,
+    // thermal). Optional: without it the kernel still shuts down, restarts and hears
+    // the power button from the tables alone.
+    let mut sexacpi_id=0;
+    if let Some(module)=modules.modules().iter().find(|m|m.path().contains("sexacpi")) {
+        let id=sex_pdx::power::ACPI_SERVICE_PD;
+        match crate::pd::create::create_boot_domain(module.path(),Some(id),id as u8,sex_pdx::power::ACPI_SERVICE_KEY) {
+            Ok(created)=>{assert_eq!(created,id,"BOOT_ACPI_IDENTITY");sexacpi_id=created;
+                serial_println!("[kernel.spawn.sexacpi] id={} key={} organ=senses",created,sex_pdx::power::ACPI_SERVICE_KEY);}
+            Err(e)=>{serial_println!("[kernel.spawn.sexacpi] failed={}",e);}
+        }
+    }
+
     // Grant Phase 25 well-known capabilities
     serial_println!("[bootgraph.phase25.begin]");
     // Static BOOT_DAG return edges for authenticated display-ready messages.
@@ -943,11 +956,13 @@ pub fn init() {
     // renderer fallback confers civil-time authority.
     // Power: Shell may ask to shut down or restart, Files flushes first, the bar reads sensors.
     for (holder,rights,role) in [(silkshell_id,sex_pdx::power::REQUEST|sex_pdx::power::SENSE,"shell"),
-        (sexfiles_id,sex_pdx::power::FLUSH,"files"),(silkbar_id,sex_pdx::power::SENSE,"bar")] {
+        (sexfiles_id,sex_pdx::power::FLUSH,"files"),(silkbar_id,sex_pdx::power::SENSE,"bar"),
+        (sexacpi_id,sex_pdx::power::FIRMWARE,"acpi")] {
         let Some(pd)=(holder!=0).then(||crate::ipc::DOMAIN_REGISTRY.get(holder)).flatten() else {continue};
         assert!(pd.find_capability(sex_pdx::power::SLOT as u32).is_none(),"BOOT_POWER_SLOT_COLLISION");
         pd.grant_capability(sex_pdx::power::SLOT,crate::capability::CapabilityData::Power(sex_pdx::power::Grant{holder_pd:holder,rights}));
         if rights&sex_pdx::power::FLUSH!=0 {crate::hal::acpi::set_flusher(holder);}
+        if rights&sex_pdx::power::FIRMWARE!=0 {crate::hal::acpi::set_firmware(holder);}
         serial_println!("[boot.power.grant] holder={} role={} slot={} rights={:#x} runtime_mint=0",holder,role,sex_pdx::power::SLOT,rights);
     }
     let bar_holder=crate::ipc::DOMAIN_REGISTRY.get(silkbar_id).expect("BOOT_BAR_CLOCK_HOLDER");
@@ -1076,6 +1091,7 @@ pub fn init() {
                     13 => "sexnet",
                     14 => "sext",
                     15 => "kaleidoscope",
+                    50 => "sexacpi",
                     _ => "unknown",
                 };
                 let entry = unsafe { (*task_ptr).context.rip };

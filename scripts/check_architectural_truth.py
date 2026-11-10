@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import time
 from pathlib import Path
 import re
 import subprocess
@@ -211,10 +212,16 @@ def main(argv=None):
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--run-host", action="store_true", help="execute registered host/static checks, never runtime gates")
     parser.add_argument("--evidence-dir", type=Path, help="required for --run-host; retained check logs and SHA-256 bindings")
+    parser.add_argument("--shard", default="0/1", help="I/N: run only every Nth host check starting at I (CI splits them across runners)")
     args = parser.parse_args(argv)
     args.root = args.root.resolve()
     if args.run_host and args.evidence_dir is None:
         parser.error("--run-host requires --evidence-dir")
+    try:
+        shard_index, shard_count = (int(x) for x in args.shard.split("/"))
+        assert 0 <= shard_index < shard_count
+    except (ValueError, AssertionError):
+        parser.error("--shard must be I/N with 0 <= I < N")
     evidence = args.evidence_dir.resolve() if args.evidence_dir is not None else None
     report = dict(inventory_valid=False, system_proven=False, checks=[],
                   runtime_checks_executed=False, run_status="started")
@@ -241,13 +248,18 @@ def main(argv=None):
     exit_status = 0
     if args.run_host:
         report["source_sha256"] = source_manifest(args.root,bindings)
+        host_position = -1
         for identity, check in checks.items():
             if check["kind"] == "runtime":
+                continue
+            host_position += 1
+            if host_position % shard_count != shard_index:
                 continue
             report.update(run_status="running", active_check=identity)
             save_report()
             launch_error = None
             try:
+                started = time.monotonic()
                 result = subprocess.run(check["argv"], cwd=args.root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
                 output, returncode = result.stdout, result.returncode
             except OSError as exc:
@@ -261,7 +273,7 @@ def main(argv=None):
                 row["launch_error"] = launch_error
             report["checks"].append(row)
             save_report()
-            print(f"[architectural_truth.check] {identity} {'PASS' if returncode == 0 else 'FAIL'}")
+            print(f"[architectural_truth.check] {identity} {'PASS' if returncode == 0 else 'FAIL'} {time.monotonic() - started:.0f}s")
             if returncode != 0:
                 exit_status = 1
                 print(output.decode(errors="replace")[-6000:], file=sys.stderr)

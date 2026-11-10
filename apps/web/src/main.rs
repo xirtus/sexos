@@ -130,7 +130,8 @@ impl Doc {
 }
 
 /// One script of a page, ready to run.
-struct PageScript { source: String, name: String, module: bool }
+/// A script to run; `node` is its element, for `document.currentScript` (classic scripts only).
+struct PageScript { source: String, name: String, module: bool, node: Option<usize> }
 
 struct Browser {
     window: Window,
@@ -442,7 +443,7 @@ impl Browser {
                 None => Some((dom.text_content(n), alloc::format!("{}#script{}", base.split('#').next().unwrap_or(base), now.len() + later.len() + 1))),
             };
             let Some((source, name)) = got else { continue };
-            let s = PageScript { source, name, module };
+            let s = PageScript { source, name, module, node: (!module).then_some(n) };
             if deferred { later.push(s) } else { now.push(s) }
         }
         now.extend(later);
@@ -467,7 +468,10 @@ impl Browser {
                 self.load_modules(&mut script, s);
                 script.eval_module(&s.source, &s.name)
             } else {
-                script.eval(&s.source, &s.name)
+                if let Some(n) = s.node { let _ = script.dispatch(&alloc::format!("script\t{}", n)); }
+                let r = script.eval(&s.source, &s.name);
+                if s.node.is_some() { let _ = script.dispatch("script\t"); }
+                r
             };
             if let Err(sex_js::Error::Trapped(why)) = &r { sex_pdx::serial_record!("[web.script] trapped={}", why); break; }
         }
