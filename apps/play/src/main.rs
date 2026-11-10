@@ -10,6 +10,7 @@
 #![no_main]
 
 extern crate alloc;
+mod encode_proof;
 
 use alloc::boxed::Box;
 use alloc::vec::Vec;
@@ -265,7 +266,13 @@ pub extern "C" fn _start() -> ! {
     let given = files::args(&mut window, &mut args);
     let words: Vec<&[u8]> = given.split(|b| *b == b' ').filter(|w| !w.is_empty()).collect();
     let number = |w: Option<&&[u8]>| w.and_then(|w| core::str::from_utf8(w).ok()).and_then(|t| t.parse::<u32>().ok());
-    let file = if words.first() == Some(&&b"--listen"[..]) {
+    let file = if words.first() == Some(&&b"--encode-proof"[..]) {
+        match encode_proof::run(&mut window, words.get(1).copied().unwrap_or(b"")) {
+            Ok(()) => say(&mut window, b"Synthetic encoder proof saved. This is not a desktop recording."),
+            Err(why) => fail(&mut window, why),
+        }
+        None
+    } else if words.first() == Some(&&b"--listen"[..]) {
         listen(&mut window, number(words.get(1)).unwrap_or(2));
         None
     } else if words.first() == Some(&&b"--tone"[..]) {
