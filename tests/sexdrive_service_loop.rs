@@ -33,9 +33,12 @@ fn nvme_flush()->u64{EFFECTS.lock().unwrap().device.push((BLOCK_SYNC,0,0));0}
 fn device_sectors()->u64{2048}
 fn layout_word()->u64{0}
 fn serving_ahci()->bool{false}
+static POWERED_DOWN:std::sync::atomic::AtomicBool=std::sync::atomic::AtomicBool::new(false);
+fn powered_down()->bool{POWERED_DOWN.load(std::sync::atomic::Ordering::SeqCst)}
+fn block_shutdown()->u64{EFFECTS.lock().unwrap().device.push((BLOCK_SHUTDOWN,0,0));POWERED_DOWN.store(true,std::sync::atomic::Ordering::SeqCst);0}
 include!(env!("SEXDRIVE_SERVICE_SOURCE"));
 fn setup()->mpsc::Sender<Message>{
- *EFFECTS.lock().unwrap()=Effects::default();unsafe{NVME_IO_STATE.ready=true;}
+ *EFFECTS.lock().unwrap()=Effects::default();unsafe{NVME_IO_STATE.ready=true;}POWERED_DOWN.store(false,std::sync::atomic::Ordering::SeqCst);
  let (tx,rx)=mpsc::channel();*INBOX.lock().unwrap()=Some(rx);tx
 }
 fn msg(op:u64)->Message{Message{type_id:op,caller_pd:27,arg0:400*512,arg1:512,arg2:17}}
@@ -72,4 +75,10 @@ fn msg(op:u64)->Message{Message{type_id:op,caller_pd:27,arg0:400*512,arg1:512,ar
  let _guard=TEST_LOCK.lock().unwrap();let n=1024*768;let mut storage=vec![0xdeadbeefu32;n+2];fill_initial_frame(unsafe{storage.as_mut_ptr().add(1)}as u64);
  assert_eq!(storage[0],0xdeadbeef);assert_eq!(storage[n+1],0xdeadbeef);assert_eq!(storage[1],1);assert_eq!(storage[n],(1023^767)+1);
  assert!(!storage[1..=n].contains(&0xdeadbeef));
+}
+#[test]fn shutdown_powers_the_disk_down_and_later_io_is_refused(){
+ let _guard=TEST_LOCK.lock().unwrap();let tx=setup();
+ for op in [BLOCK_SHUTDOWN,BLOCK_WRITE,BLOCK_SYNC,BLOCK_CAPACITY,BLOCK_SHUTDOWN]{let m=if op==BLOCK_WRITE{msg(op)}else{Message{arg0:0,arg1:0,arg2:0,..msg(op)}};tx.send(m).unwrap();service_next_request();}
+ let e=EFFECTS.lock().unwrap();assert_eq!(e.device,[(BLOCK_SHUTDOWN,0,0)]);
+ assert_eq!(e.replies,[(27,0),(27,BLOCK_ERR_NO_DEVICE),(27,BLOCK_ERR_NO_DEVICE),(27,2048),(27,BLOCK_ERR_NO_DEVICE)]);
 }

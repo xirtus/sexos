@@ -65,6 +65,7 @@ The kernel still builds (`cargo build -p sex-kernel --target x86_64-sex.json --r
 ### Needs a decision (not changed here)
 
 **A. Firmware AML interpreter in ring 0 (#70 ACPI power, #82 dGPU power off).**
+_Decided 2026-11-10 (Andreas): move it. Done in the sexacpi PR: AML runs in the ring-3 `sexacpi` server; see "Outcome of A" below._
 #70 adds ~780 lines to `kernel/src/hal/acpi.rs` that run the `acpi`/`aml` crates'
 interpreter in the kernel for `\_S5`, `_PTS`, batteries, lids, thermal zones, `_CST` and
 I2C HID. #82 adds `kernel/src/hal/dgpu.rs` (~350 lines) that runs `_PS3`/`_PRx`/`_OFF` to
@@ -97,7 +98,7 @@ the screen and has no input or VT. Fine to merge as is; keep it output-only.
 
 ## Recommendations
 
-1. Decide A (ring-3 `sexacpi` server). This is the only real Linux-ward drift found.
+1. ~~Decide A (ring-3 `sexacpi` server).~~ Done 2026-11-10, see "Outcome of A".
 2. Make the bridge rule stick: when the first Tuxedo bridge appears (none exist today;
    `servers/tuxedo` is a 7-line placeholder), it lands with a ledger row and a `REA:`
    tracker. The host test enforces the row.
@@ -108,3 +109,33 @@ the screen and has no input or VT. Fine to merge as is; keep it output-only.
 4. Done in this PR: the user manual (`docs/handoff_html/pages/manual.html`) promised
    "Lin-Sex: run unmodified Linux binaries, the kernel handles the rest". It now says
    POSIX is a library inside the program and Linux drivers are temporary Tuxedo bridges.
+
+## Outcome of A (2026-11-10)
+
+Andreas chose to merge #70 as is for the x17 R1 test and then move AML out. The follow-up:
+
+- `servers/sexacpi` (pd 50, Senses organ key 4) builds the `acpi` crate's interpreter from the
+  DSDT/SSDTs, runs `_PIC(1)` and `_INI`/`_STA`, reads `\_S5`, counts batteries, lids, thermal
+  zones and I2C HID devices, picks the deepest `_CST` idle state, polls sensors, and runs
+  `_PTS(5)` when the kernel announces a shutdown. AML runs on its own 512 KiB stack with a
+  work budget per pass; a panic reports and parks, and only sexacpi stops.
+- The kernel keeps FADT reset and S5 from the table bytes, the SCI and power button, the
+  `Power` capability check and a firmware window (`FIRMWARE` right, `sex_pdx::power` ops
+  16-22). The window refuses usable RAM, kernel/bootloader memory and the framebuffer, the
+  PIC/PIT/PS2/COM1/CF8 ports, and writes to PCI BARs and ROM.
+- Shutdown and restart never wait on sexacpi. The shell and SilkBar sensor ABI is unchanged
+  (the kernel caches what sexacpi publishes).
+- Known limits: MMIO of devices leased to other drivers is not yet refused (needs the IOMMU
+  work, #86); `_PTS` is best-effort and races Files' flush; key 4 is shared with input, USB
+  and Bell. #82 (dGPU `_OFF`) merged first; #88 moved its ACPI half into sexacpi too.
+- Kernel acpi.rs went from 804 to ~650 lines; `test_kernel_never_runs_firmware_aml` keeps it out.
+
+## Follow-up: in-kernel NIC probe removed (2026-11-10)
+
+`kernel/src/hal/pci.rs` still held a historical boot probe that drove an e1000 directly from
+the kernel (rings, DMA, and hand-built ARP, ICMP, UDP, TCP SYN, DNS and HTTP frames), gated
+behind the build-time `SEXOS_BOOT_NIC_DIAGNOSTICS=1`. That is a network stack in ring 0. It
+was removed in #88 (3,266 lines) when #78 and #86 pushed the kernel over its line budget.
+The kernel now only logs `[pci.net.device]`/`[pci.net.passive]` and leaves the NIC to SexNet.
+`SYS_NET_DIAG` (52) stays for SexNet's ABI and now always reports nothing; it can go once
+SexNet stops asking.

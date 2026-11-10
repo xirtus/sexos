@@ -83,7 +83,11 @@ The driver speaks firmware API 77 (89 for the 0x7e40 "Ma" parts), the same as Op
 | **W3** (section 8) | command queue; platform NVM for the reported SKU; firmware init (INIT_COMPLETE); NVM read (MAC address, antennas, bands, channels); antenna, BT coexistence, SoC, DQA, thermal, power, regulatory (MCC), scan and beacon-filter configuration | host gate on a firmware model and the real x17 files; **x17: `[wifi.ready]`** |
 | **W4** (section 9) | scanning: one UMAC scan of every allowed channel right after `[wifi.ready]`, beacons and probe responses read into a network list, `[wifi.network]` lines in the boot log | host gate on the firmware model; **x17 lists nearby networks** |
 | **W4b** (section 10) | the network list for people: `wifi` and `wifi scan` in Spindle (a desktop query to sexnet, `sex_pdx::wifi_status`), rescans; the status bar indicator follows | host test of the words; **x17: `wifi` lists networks** |
-| W5 | connect: open/SAE authentication, association, the handshake from this crate, key install, data queues into sexnet's Ethernet path; passphrase prompt; saved networks | x17 browses the web over Wi-Fi |
+| **W5a** (section 11) | join: PHY context, RLC, MAC context, binding, station, management TX queue, session protection (`iwx_auth`); `wifi join N` in Spindle | host gate on the firmware model and the real x17 file's command versions; **x17: `[wifi.joined]`** |
+| **W5b** (section 12) | open-system auth and association frames on TX queue 1 (`iwx_tx`, TX command v10/gen3 or gen2), then ADD_STA update and MAC context with the AID (`iwx_run`) | host gate: TFD, TX command, byte counts and frames on the firmware model, retries and refusals; **x17: `[wifi.associated]`** |
+| **W5c** (section 13) | WPA2: the 4-way handshake over EAPOL data frames on queue 1, pairwise and group keys installed (SEC_KEY_CMD on the x17, ADD_STA_KEY on older firmware); `wifi join N PASSPHRASE` | host gate: the AP's half of the handshake on the firmware model, key command bytes, wrong passphrase; **x17: `[wifi.connected]`** |
+| W5d | WPA3: SAE commit/confirm in authentication frames, PMF | x17 joins a WPA3 network |
+| W5e | data queues into sexnet's Ethernet path; password prompt; saved networks | x17 browses the web over Wi-Fi |
 | W6 | speed and comfort: HT/VHT/HE capabilities, aggregation, power save, roaming, rekeying, 6 GHz | throughput test against the wired NIC |
 | W7 | MSI-X interrupts and an IOMMU domain (framework D3/D4); Wi-Fi worker in its own organ | fault injection: a wild DMA is stopped |
 | W8 | Bluetooth (Intel USB Bluetooth, firmware over USB) | pair a mouse or headset |
@@ -314,3 +318,114 @@ gains `pub mod wifi_status`, so `abi_version_hash` is recomputed. No kernel chan
 
 Next: the status bar's Wi-Fi indicator (SilkBar reads `STATE`), then W5: connecting.
 
+## 11. Stage W5: connecting, and W5a: joining the channel (2026-11-10)
+
+Connecting is split in five parts (table in section 4), each provable on its own. They
+follow iwx(4)'s state machine (`iwx_newstate`): AUTH runs `iwx_auth` (this stage), the
+authentication and association frames go out on the management queue (W5b), RUN
+(`iwx_run`) marks the MAC and station associated and starts rate control, and the
+4-way handshake (W5c) or SAE (W5d) install the keys (`iwx_add_sta_key`).
+
+The x17's firmware (-77) declares the versions this driver sends: PHY_CONTEXT v4 with
+the 6 GHz-sized channel field (capa 48), RLC_CONFIG v2 (which carries the receive
+chains), MAC_CONTEXT, BINDING v2, ADD_STA (v10 layout), SCD_QUEUE_CONFIG v3,
+SESSION_PROTECTION v1. It also claims the newer "MLD" API (capa 110), which iwx uses only
+on MA-type MACs (AX211 variants) and the BZ family; the x17's TY MAC (0x42) keeps the
+commands above. MA chips are refused for now with `Unsupported("mld_api")`.
+
+W5a (`sex_wifi::join`), in iwx_auth's order:
+
+1. PHY context 0 on the AP's channel, 20 MHz (wider channels are W6), on LMAC 0, or
+   LMAC 1 for a 5 GHz channel when the firmware is dual-band (CDB, capa 40; the binding
+   names the same LMAC).
+2. RLC: the receive antennas the firmware allows, narrowed by the NVM's mask
+   (`Init::valid_rx_antennas`), one idle and one active chain.
+3. MAC context 0: our address, the AP's, ACK rates from the AP's basic rates
+   (`iwx_ack_rates`, now read from the beacon's rate elements), 802.11 default EDCA per
+   FIFO, beacons let through until associated.
+4. Binding of MAC 0 to PHY 0 (status must be 0).
+5. Station 0 for the AP (status must be ADD_STA_SUCCESS).
+6. The management queue: a new 256-entry TFD ring, byte-count table and 32 frame
+   buffers in the DMA region (`Layout::tx_ring`, `tx_byte_counts`, `tx_buffers`); the
+   firmware must answer queue 1, write pointer 0.
+7. Session protection for nine beacon intervals.
+
+In Spindle, `wifi` numbers the networks and `wifi join N` starts the join. The boot log
+shows `[wifi.join.start]`, a `[wifi.join] step=…` line per command, then `[wifi.joined]
+ssid=… bssid=… channel=… phy=4 rlc=2 queue=3`, or `[wifi.failed] step=join reason=…`.
+While joined, `wifi scan` is refused (leaving the channel comes with W5b).
+
+Proof: three host tests on the firmware model (the order and bytes of all seven
+commands after the x17 init; a refused station and a wrong queue number fail cleanly;
+MLD-only and old PHY firmware refused), one on the command layouts (ACK rates, the
+older PHY layout, MAC context after association, EDCA per FIFO), one on beacon rates and
+DTIM, and the real x17 firmware's versions when the files are fetched. The firmware
+model checks every payload size.
+
+No ABI change: the `wifi_status` words gain `JOIN` and the phases `JOINING`/`JOINED`
+(sex-pdx `wifi_status.rs` is not an ABI input; `lib.rs` is unchanged). No kernel change.
+
+Next: W5b, the first frames on the air.
+
+## 12. Stage W5b: authentication and association (2026-11-10)
+
+`wifi join N` now goes on after the join (section 11): `sex_wifi::assoc` sends an
+open-system authentication frame, then an association request (SSID, rates, and our
+RSN element on a WPA2 network), and waits 300 ms for each answer, three tries each.
+Once the AP accepts, the station entry is updated and the MAC context is modified
+with the AP's association ID, as `iwx_run` does. Beacons keep passing the filter until
+a DTIM period is known, as in iwx.
+
+Frames go out through `sex_wifi::tx` (iwx's `iwx_tx`) on the management queue the join
+created. The 4-byte command header, the TX command and the 802.11 header sit in one of
+32 frame buffers. On the AX210 family (the x17) the command is `iwx_tx_cmd_gen3`
+(TX_CMD v10); before that family it is gen2. The body follows the header in the same
+buffer. TB0 is the first 20 bytes, TB1 is the rest of the command, and TB2 is the body.
+The byte-count table entry counts bytes on AX210 and dwords before it. Management frames
+use a fixed rate: the AP's lowest basic rate, on antenna A, in rate_n_flags v2 (both
+firmwares report TX_CMD notification v7). The TX response's SSN frees the ring.
+
+Boot log: `[wifi.assoc.start] security=…`, then `[wifi.assoc] step=…` lines, then
+`[wifi.associated] ssid=… aid=…`, or `[wifi.failed] step=assoc reason=Refused(Status
+{ frame: "auth", status: N })` (NoAnswer, NotSent, Disconnected). The desktop sees
+the phases ASSOCIATING (7) and ASSOCIATED (8).
+
+Not yet:
+- WPA3-only networks are refused (`wpa3_sae`). SAE authentication is W5d.
+- WPA2's 4-way handshake follows association (section 13).
+- No HT/VHT capabilities are sent, so association is legacy-rate only (W6).
+- `iwx_run`'s smart-fifo, multicast and power commands, and TLC, come with the data
+  path (W5e).
+
+## 13. Stage W5c: WPA2 keys (2026-11-10)
+
+`wifi join N PASSPHRASE` (Spindle) sends the passphrase to sexnet in 7-byte parts
+(`wifi_status::PASSWORD`, 8 to 63 characters), then the join. A WPA2 network joined
+without one is answered `NEEDS_PASSWORD`. sexnet derives the PMK (PBKDF2) when the
+association succeeds, then wipes the passphrase. It also wipes it on any failure.
+Spindle keeps no copy, and its saved history drops the passphrase.
+
+`sex_wifi::rsna` runs `eapol::Supplicant` (already tested against the authenticator
+helpers) over the air:
+- EAPOL-Key frames from the AP are from-DS data frames with LLC/SNAP 0x888e. Message 1
+  often comes right behind the association response, so `assoc` keeps the last one
+  it hears (`Assoc::early`).
+- Replies go out on queue 1 as to-DS data frames, unencrypted, with high priority and at
+  the management rate, as `iwx_tx_fill_cmd` sends EAPOL. Message 4 goes out before its
+  keys are installed.
+- Keys are installed with `iwx_mld_set_sta_key_cmd`'s SEC_KEY_CMD (DATA_PATH 0x18, 80
+  bytes) when the firmware lists it, as the x17's -77 firmware does. Otherwise they go
+  with ADD_STA_KEY v2/v3 (76 bytes, status checked). Pairwise is key 0. The group key
+  uses its KDE id with the multicast flag. The MFP flag is set when the AP offers MFP.
+  An IGTK goes in only with SEC_KEY_CMD.
+- The phases are HANDSHAKE (9), then CONNECTED (10) once the pairwise and group keys
+  are in.
+
+Boot log: `[wifi.handshake.start] sec_key_cmd=1 early=1`, then `[wifi.handshake]
+step=… messages=… keys=(pairwise, group, igtk)`, then `[wifi.connected] ssid=…
+security=WPA2`, or `[wifi.failed] step=handshake reason=…`. A wrong passphrase shows
+up as `Refused(Timeout { messages: 1 })`: the AP never sends message 3.
+
+The SNonce comes from sexnet's entropy service (the same source TLS seeds from).
+Next: data frames into sexnet's Ethernet path (W5e, with TLC and the `iwx_run`
+leftovers), and SAE for WPA3 (W5d).
