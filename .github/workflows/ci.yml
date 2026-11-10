@@ -59,6 +59,21 @@ jobs:
       run: |
         SEXJS_NATIVE=0 cargo test --release -p sex-js --features baseline-jit -- --test-threads=1 --nocapture
         SEXJS_NATIVE=1 cargo test --release -p sex-js --features baseline-jit -- --test-threads=1 --nocapture
+    - name: QuickJS parser bytecode and semantic differential
+      run: |
+        git init "$RUNNER_TEMP/quickjs-parser-source"
+        git -C "$RUNNER_TEMP/quickjs-parser-source" remote add origin https://github.com/quickjs-ng/quickjs.git
+        git -C "$RUNNER_TEMP/quickjs-parser-source" fetch --depth 1 origin 3c9afc9943323ee9c7dbd123c0cd991448f4b6c2
+        python3 scripts/quickjs_parser_continuations_gate.py --quickjs "$RUNNER_TEMP/quickjs-parser-source" --out "$RUNNER_TEMP/quickjs-parser-proof"
+    - name: Preserve paired parser proof
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: quickjs-parser-proof
+        path: |
+          ${{ runner.temp }}/quickjs-parser-proof/result.json
+          ${{ runner.temp }}/quickjs-parser-proof/*-build.log
+          ${{ runner.temp }}/quickjs-parser-proof/fixtures
     - name: Actual Web viewport bounds and tiny toolbar rendering
       run: |
         rustc --edition=2021 -O -C overflow-checks=on --test tests/web_viewport.rs -o "$RUNNER_TEMP/web-viewport"
