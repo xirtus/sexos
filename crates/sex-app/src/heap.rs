@@ -35,6 +35,7 @@ unsafe impl talc::lock_api::RawMutex for Lock {
 #[derive(Debug)]
 pub struct Window {
     end: Option<NonNull<u8>>,
+    started: bool,
     limit: Option<Limit>,
 }
 // Only ever touched under the heap's lock.
@@ -59,7 +60,7 @@ impl Window {
         if self.limit.is_some() {
             return Err(LimitError::Configured);
         }
-        if self.end.is_some() {
+        if self.started {
             return Err(LimitError::Started);
         }
         let current = memory::grow(0).map_err(|_| LimitError::Memory)?;
@@ -75,6 +76,7 @@ impl Window {
     pub const fn new() -> Self {
         Self {
             end: None,
+            started: false,
             limit: None,
         }
     }
@@ -130,6 +132,7 @@ impl Limit {
 // The source never allocates, so it never re-enters the heap it feeds.
 unsafe impl talc::source::Source for Window {
     fn acquire<B: Binning>(talc: &mut Talc<Self, B>, layout: Layout) -> Result<(), ()> {
+        talc.source.started = true;
         // Room for the block, its alignment, and talc's own bookkeeping.
         let bytes = layout
             .size()

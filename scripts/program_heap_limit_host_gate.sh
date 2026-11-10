@@ -17,7 +17,7 @@ from pathlib import Path
 import json,os,subprocess,sys
 root,out=map(Path,sys.argv[1:]);module=root/'crates/sex-app/src/heap.rs';source=module.read_text();fixture=root/'tests/program_heap_limit.rs'
 assert 'HEAP.lock().source.set_limit(bytes)' in source
-controls=[('forget-total-charge','self.pages.checked_add(pages)? > self.max_pages','pages > self.max_pages'),('recover-after-invalid','if self.failed { return None; }','if false { return None; }'),('forget-query-anchor','before.base != self.base','false')]
+controls=[('forget-started-attempt','if self.started {','if false {'),('forget-total-charge','self.pages.checked_add(pages)? > self.max_pages','pages > self.max_pages'),('recover-after-invalid','if self.failed { return None; }','if false { return None; }'),('forget-query-anchor','before.base != self.base','false')]
 for name,old,new in controls:
  assert source.count(old)==1,name+': mutation anchor missing';tree=out/name;tree.mkdir();changed=tree/'heap.rs';changed.write_text(source.replace(old,new,1));runner=tree/'runner.rs';runner.write_text(fixture.read_text().replace('../crates/sex-app/src/heap.rs',str(changed)))
  (tree/'Cargo.lock').write_bytes((root/'Cargo.lock').read_bytes());(tree/'Cargo.toml').write_text('[package]\nname="sexos-heap-limit-control"\nversion="0.0.0"\nedition="2021"\n[features]\nheap=[]\n[dependencies]\ntalc={version="=5.1.1",default-features=false}\n[[test]]\nname="heap_limit"\npath='+json.dumps(str(runner))+'\n')

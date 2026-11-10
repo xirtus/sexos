@@ -67,3 +67,10 @@ fn bounded(pages:usize)->heap::Heap{let a=heap::Heap::new(heap::Window::new());a
  program_memory::reset(1024);let a=bounded(64);let live=Layout::from_size_align(1024,8).unwrap();let p=unsafe{a.alloc(live)};assert!(!p.is_null());program_memory::WORLD.with(|w|w.borrow_mut().held+=1);
  let request=Layout::from_size_align(64*1024,8).unwrap();assert!(unsafe{a.alloc(request)}.is_null());assert_eq!(program_memory::WORLD.with(|w|w.borrow().held),17);unsafe{a.dealloc(p,live)};
 }
+
+#[test]fn failed_first_allocation_still_closes_configuration(){
+ program_memory::reset(64);let a=heap::Heap::new(heap::Window::new());program_memory::WORLD.with(|w|w.borrow_mut().reject_after=Some(0));
+ let l=Layout::from_size_align(100,8).unwrap();assert!(unsafe{a.alloc(l)}.is_null());assert_eq!(program_memory::WORLD.with(|w|w.borrow().held),0);
+ assert_eq!(a.lock().source.set_limit(65536),Err(heap::LimitError::Started));
+ program_memory::WORLD.with(|w|w.borrow_mut().reject_after=None);let p=unsafe{a.alloc(l)};assert!(!p.is_null(),"ordinary allocation behavior must remain recoverable after OOM");unsafe{a.dealloc(p,l)};
+}
