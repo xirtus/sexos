@@ -61,6 +61,21 @@ fn cascade_orders_by_specificity_and_importance() {
 }
 
 #[test]
+fn font_shorthand_weight_is_not_a_size() {
+    let dom = parse::parse(r#"<style>p { font: 400 18px/1.5 Lato, sans-serif } b { font: 700 1.5em serif } i { font: 0/0 a }</style><p>t<b>u</b><i>v</i></p>"#);
+    let st = sex_html::styles(&dom, &[], 800, 600);
+    let get = |t: &str| st[dom.find(t).unwrap()].as_ref().unwrap().clone();
+    assert_eq!((get("p").font_size, get("p").bold), (18, false));
+    assert_eq!((get("b").font_size, get("b").bold), (27, true));
+    assert!(get("i").font_size <= 1);
+    // Clipped to the text, a gradient colours the letters, not the box.
+    let dom = parse::parse(r#"<style>em { background: linear-gradient(90deg, #ff0000, blue); -webkit-background-clip: text; background-clip: text; color: transparent }</style><em>hi</em>"#);
+    let st = sex_html::styles(&dom, &[], 800, 600);
+    let em = st[dom.find("em").unwrap()].as_ref().unwrap();
+    assert_eq!((em.color, em.background), (0xFFFF0000, 0));
+}
+
+#[test]
 fn blocks_stack_with_collapsed_margins_and_lines_wrap() {
     let html = "<body style='margin:0'><p style='margin:10px 0'>aaaa bbbb cccc</p><p style='margin:20px 0'>dd</p>";
     // 16px font: 8px per char; width 80 holds "aaaa bbbb" (72) but not "+ cccc".

@@ -71,6 +71,10 @@ pub mod op {
     /// (control, caret in characters): focuses a text control and places its caret;
     /// (): no text control has focus.
     pub const CARET: u32 = 28;
+    /// (base, specifier): the module's address (asked by the engine, not the prelude).
+    pub const MODULE_RESOLVE: u32 = 29;
+    /// (address): the module's source, or nothing when the browser has not loaded it.
+    pub const MODULE_SOURCE: u32 = 30;
     /// WebGL batch for canvas NODE: commands, then the batch's bytes (an ArrayBuffer).
     pub const GL: u32 = 64;
     /// WebGL query for canvas NODE: what, then its arguments; answers text or bytes.
@@ -98,6 +102,9 @@ pub trait Page {
     fn call_bytes(&mut self, op: u32, args: &[&[u8]]) -> Option<Vec<u8>> { let _ = (op, args); None }
     /// Nanoseconds on a monotonic clock, for `Date.now`, timers and the time budget.
     fn now_ns(&mut self) -> u64;
+    /// Module addresses the engine asked for ([`op::MODULE_SOURCE`]) and did not get,
+    /// since the last call.
+    fn take_wanted_modules(&mut self) -> Vec<String> { Vec::new() }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -136,6 +143,8 @@ pub struct Script<P: Page + 'static> {
     alloc: TypedFunc<i32, i32>,
     free: TypedFunc<i32, ()>,
     eval: TypedFunc<(i32, i32, i32, i32, i32), i32>,
+    module: TypedFunc<(i32, i32, i32, i32, i32, i32), i32>,
+    ready: TypedFunc<i32, i32>,
     dispatch: TypedFunc<(i32, i32, i32), i32>,
     budget_ms: i32,
     load_budget_ms: i32,
@@ -188,6 +197,8 @@ impl<P: Page + 'static> Script<P> {
             alloc: instance.get_typed_func(&store, "sx_alloc").map_err(|_| e("sx_alloc"))?,
             free: instance.get_typed_func(&store, "sx_free").map_err(|_| e("sx_free"))?,
             eval: instance.get_typed_func(&store, "sx_eval").map_err(|_| e("sx_eval"))?,
+            module: instance.get_typed_func(&store, "sx_module").map_err(|_| e("sx_module"))?,
+            ready: instance.get_typed_func(&store, "sx_modules_ready").map_err(|_| e("sx_modules_ready"))?,
             dispatch: instance.get_typed_func(&store, "sx_dispatch").map_err(|_| e("sx_dispatch"))?,
             store, memory, budget_ms: 0, load_budget_ms: 0,
         };
@@ -220,6 +231,46 @@ impl<P: Page + 'static> Script<P> {
         // Drawing the script queued reaches the page even if it threw afterwards.
         if !matches!(r, Err(Error::Trapped(_))) { self.dispatch("flush")?; }
         r
+    }
+
+    /// Runs a module script whose address is `name` (the base for its imports). Every
+    /// module it imports must be loaded first: see [`Script::module_needs`].
+    pub fn eval_module(&mut self, source: &str, name: &str) -> Result<(), Error> {
+        let r = self.module_call(source, name, false);
+        if !matches!(r, Err(Error::Trapped(_))) { self.dispatch("flush")?; }
+        r
+    }
+
+    /// The addresses of modules that the module script `source` (at `name`) imports,
+    /// directly or through others, that the page has not been given yet
+    /// ([`Page::module_source`]). Runs none of it. Load these, then ask again, until
+    /// nothing is missing.
+    /// (Modules a held `import()` wants, not yet taken, come along too.)
+    pub fn module_needs(&mut self, source: &str, name: &str) -> Result<Vec<String>, Error> {
+        let r = self.module_call(source, name, true);
+        let wanted = self.store.data_mut().page.take_wanted_modules();
+        match r { Err(Error::Trapped(x)) => Err(Error::Trapped(x)), _ => Ok(wanted) }
+    }
+
+    /// The modules that `import()` calls are waiting for (the page noted them while a
+    /// script ran). Give the page each one's source, then call [`Script::modules_ready`].
+    pub fn modules_wanted(&mut self) -> Vec<String> { self.store.data_mut().page.take_wanted_modules() }
+
+    /// Runs the waiting `import()` calls whose module graphs are now all given (asking
+    /// for more where they import further modules). Returns how many still wait.
+    pub fn modules_ready(&mut self) -> Result<usize, Error> {
+        let r = self.ready.call(&mut self.store, self.budget_ms).map_err(|x| Error::Trapped(format!("{x}")))?;
+        self.dispatch("flush")?;
+        Ok(r.max(0) as usize)
+    }
+
+    fn module_call(&mut self, source: &str, name: &str, discover: bool) -> Result<(), Error> {
+        let src = self.put(source.as_bytes())?;
+        let nm = self.put(name.as_bytes())?;
+        let r = self.module.call(&mut self.store, (src, source.len() as i32, nm, name.len() as i32, self.load_budget_ms, discover as i32));
+        let _ = self.free.call(&mut self.store, src);
+        let _ = self.free.call(&mut self.store, nm);
+        match r { Ok(0) => Ok(()), Ok(_) => Err(Error::Thrown), Err(x) => Err(Error::Trapped(format!("{x}"))) }
     }
 
     /// Calls the prelude's `__sx_dispatch` with `message`: `tick`, `click\tNODE`,
