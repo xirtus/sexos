@@ -5,8 +5,9 @@ the same page rendered on the host by `cargo run -p sex-web --example page`, pix
 pixel, before and after scrolling with Down and after Right focuses a link."""
 import argparse,re,shutil,subprocess,time
 from pathlib import Path
-from browser_gate_viewport import content_rect
 from PIL import Image
+from browser_gate_viewport import live_viewport
+from web_surface_geometry import canvas_box
 from install_program import install
 from quil_autosave_gate import boot
 ROOT=Path(__file__).resolve().parents[1]
@@ -18,6 +19,7 @@ def reference(out,scroll,focus):
  subprocess.run(['cargo','run','-q','-p','sex-web','--example','page','--',str(PAGE),str(path),str(W),str(H),str(scroll),str(focus),BAR_TEXT],cwd=ROOT,check=True)
  return Image.open(path).convert('RGB')
 def main():
+ global W,H
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
  elf=(ROOT/'iso_root/programs/web').read_bytes();assert elf[:4]==b'\x7fELF'
@@ -30,8 +32,8 @@ def main():
  def compare(name,scroll,focus,tile):
   ref=reference(a.out,scroll,focus)
   shot=a.out/f'{name}.ppm';q.cmd('screendump',{'filename':str(shot)});time.sleep(.5)
-  img=Image.open(shot).convert('RGB');bx,by,bw,bh=content_rect(t(),tile)
-  vw,vh=min(W,bw),min(H,bh)
+  img=Image.open(shot).convert('RGB');bx,by,vw,vh=canvas_box(ROOT,tile,W,H)
+  assert bx>=0 and by>=0 and bx+vw<=img.width and by+vh<=img.height,('canvas not visible',tile,W,H)
   checked=bad=worst=0
   for py in range(0,vh,3):
    for px in range(0,vw,5):
@@ -49,8 +51,8 @@ def main():
   m=g['wait'](r'\[web.ready\] target=(\d+) task=(\d+)',s,240);target,task=m[1],m[2]
   loaded=g['wait'](r'\[web.loaded\] .*items=(\d+) links=(\d+) height=(\d+).*layout_ticks=(\d+)',s,60)
   launch=g['wait'](rf'\[shell.program.launch\] target={target} task={task} surface=(\d+)',s,60);surface=int(launch[1])
-  g['wait'](rf'\[display.app.pixels\] target={target} surface={surface} w={W} h={H}',s,60);time.sleep(3)
-  tile=list(map(int,re.findall(rf'\[shell.tile.apply\] sid={surface} x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)',t())[-1]))
+  g['wait'](rf'\[display.app.pixels\] target={target} surface={surface} w=\d+ h=\d+',s,60);time.sleep(3)
+  tile,W,H=live_viewport(g,ROOT,surface)
   first=compare('web',0,-1,tile)
   s2=len(t());g['focus'](surface);time.sleep(.3);q.key('down')
   scroll,focus,ticks=shown(s2);assert scroll==40 and focus==-1,(scroll,focus)

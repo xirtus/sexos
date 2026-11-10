@@ -3,7 +3,10 @@
 <body><div id=b></div>
 <script>
 const parentOrigin = location.ancestorOrigins[0];
-let clicks = 0;
+let clicks = 0, resizes = 0;
+function viewport() { console.log('framed viewport ' + innerWidth + 'x' + innerHeight + ' count=' + resizes); }
+window.addEventListener('resize', () => { resizes++; viewport(); });
+viewport();
 window.addEventListener('message', e => {
   if (e.data.reply === 'leak') { console.log('framed fail leak'); return; }
   if (e.origin === parentOrigin && e.source === window.parent) console.log('framed got ' + e.data.reply);
