@@ -78,7 +78,26 @@ const ATLAS_PREVIEW_VISIBLE_COLOR: u32 = 0x003070A0;
 const ATLAS_PREVIEW_MINIMIZED_COLOR: u32 = 0x00505058;
 
 const BAR_BG_W_CAP: usize = 2560;
-const BAR_BG_H: usize = 50;
+// Bounded backing for the shared 28px bar at the maximum 3x scale.
+const BAR_BG_H: usize = 84;
+fn chrome_metrics()->sex_pdx::desktop_style::chrome::Metrics {
+    sex_pdx::desktop_style::chrome::Metrics::new(sex_pdx::desktop_style::ui_scale())
+}
+fn bar_height()->usize {
+    chrome_metrics().bar() as usize
+}
+fn frame_height()->usize {
+    chrome_metrics().title() as usize
+}
+fn frame_rim()->usize {
+    chrome_metrics().px(sex_pdx::desktop_style::chrome::RESIZE) as usize
+}
+fn reflow_bar(bar:&mut SilkBar,width:usize){
+    let m=chrome_metrics();
+    if !silkbar_model::reflow_chrome(bar,width,m.bar()as usize,m.px(sex_pdx::desktop_style::chrome::TARGET)as usize){
+        sex_pdx::serial_record!("[display.chrome.unsupported] width={} scale={} minimum={}",width,m.scale(),silkbar_model::MIN_CHROME_WIDTH);
+    }
+}
 
 // Runtime FB config — starts as fallback, updated by OP_PRIMARY_FB
 
@@ -177,7 +196,7 @@ fn report_app_presented() {
 }
 const FOCUS_SURFACE_COLOR: u32 = 0x0089B4FA;
 
-// ── Frame Chrome Rim (focused surface, matches shell FRAME_RIM_PX) ──
+// ── Frame Chrome Rim (focused surface, matches shell frame_rim()) ──
 // Minimal mode button/rim size.  Surfaces start in minimal mode (chrome_flags=0)
 // until OP_SURFACE_TAB_INFO arrives with SURFACE_CHROME_TOP_BAR set.  The initial
 // render() call and any clock-tick redraws before the first chrome message must
@@ -216,7 +235,7 @@ const SURFACE_CHROME_LIGHT_KIND_SHIFT: u8 = 3;
 /// chrome_flags bit 5: close action allowed for this frame's active surface.
 const SURFACE_CHROME_CLOSE_ALLOWED: u8 = 1 << 5;
 /// Height of the top bar chrome band in default mode.
-const FRAME_TOP_BAR_HEIGHT_PX: usize = 28;
+const FRAME_TOP_BAR_HEIGHT_PX: usize = 26;
 /// Width and height of each frame light in default mode.
 const FRAME_TOP_BAR_LIGHT_SIZE_PX: usize = 10;
 /// Gap between adjacent frame lights in default mode.
@@ -346,9 +365,9 @@ fn clock_canon_apply_to_bar(bar: &mut SilkBar) {
 fn clamp_surface(surf: &Surface, fb_w: usize, fb_h: usize) -> (usize, usize, usize, usize) {
     // BAR_H covers model PANEL_Y+PANEL_H (10+38=48) plus 2px safety margin.
     // Must remain >= PANEL_Y + PANEL_H from silkbar-model.
-    const BAR_H: usize = 50;
+    let bar_h=bar_height();
     let x = (surf.x.max(0) as usize).min(fb_w.saturating_sub(1));
-    let y = (surf.y.max(BAR_H as i32) as usize).min(fb_h.saturating_sub(1));
+    let y = (surf.y.max(bar_h as i32) as usize).min(fb_h.saturating_sub(1));
     let max_w = fb_w.saturating_sub(x);
     let max_h = fb_h.saturating_sub(y);
     let w = (surf.w as usize).min(max_w);
@@ -378,14 +397,14 @@ fn composite_pixel_selected(x: usize, y: usize, w: usize, h: usize, bg: u32, foc
 fn composite_pixel_source(x: usize, y: usize, w: usize, h: usize, bg: u32, source: Option<surface_groups::PixelSource<'_>>, scene: &scene::SceneSnapshot) -> u32 {
     let Some(source) = source else { return bg; };
     let surf = source.surface;
-    let (sx, sy, sw, sh) = clamp_surface(surf, w, h);
+    let (sx, sy, sw, sh) = scene.groups.rect(surf, w, h);
     if !surf.active || sw == 0 || sh == 0 || x < sx || x >= sx + sw || y < sy || y >= sy + sh { return bg; }
     let mut c = bg;
     let mut winner_mask = surface_lifecycle::native_pixel_bit(surf.owner_pd, surf.surface_id);
     if !source.chrome {
         c = fill_rect_color(surf, x, y, surf.color);
         c = bitmap_color(surf, x, y, c, scene);
-        if let Some(tc) = surface_text_fg_at(x, y, surf) { c = tc; }
+        if let Some(tc) = surface_text_fg_at_scaled(x,y,surf,scene.metrics.scale()) { c = tc; }
     } else { unsafe {
         // ── Phase 6 proof: real render-path markers ──────────────
         // Emit once when the focused-surface pixel path is entered.
@@ -411,8 +430,8 @@ fn composite_pixel_source(x: usize, y: usize, w: usize, h: usize, bg: u32, sourc
 
         // Edge detection with saturating_sub to prevent underflow
         // on tiny surfaces (rim fills entire surface if sw/sh < RIM_PX).
-        let rim_right = sw.saturating_sub(FRAME_RIM_PX);
-        let rim_bottom = sh.saturating_sub(FRAME_RIM_PX);
+        let rim_right = sw.saturating_sub((scene.metrics.px(8)as usize));
+        let rim_bottom = sh.saturating_sub((scene.metrics.px(8)as usize));
         let top_bar_active = (surf.chrome_flags & SURFACE_CHROME_TOP_BAR) != 0;
         let frame_hovered = (surf.chrome_flags & SURFACE_CHROME_FRAME_HOVER) != 0;
         let light_hovered = (surf.chrome_flags & SURFACE_CHROME_LIGHT_HOVER) != 0;
@@ -441,13 +460,13 @@ fn composite_pixel_source(x: usize, y: usize, w: usize, h: usize, bg: u32, sourc
         // ── TOP BAR ZONE (default chrome mode, R6 glass) ──
         // [silk.live_topstrip.v2.clip] Safety: frame chrome must never render
         // above the global SilkBar strip. y is the global framebuffer row;
-        // composite_pixel is only called for y >= 51 (see render/redraw_surface_area),
+        // composite_pixel uses the frozen scene bar boundary (28logical px),
         // but this belt-and-suspenders guard catches any future path that might
-        // call composite_pixel at y < BAR_BG_H+1.
-        if y < (BAR_BG_H + 1) {
+        // call composite_pixel inside that visible strip, independent of backing capacity.
+        if y < (scene.metrics.bar()as usize) {
             // y is in or above the SilkBar glow row — skip frame chrome entirely.
             // This pixel will get bar_color or panel_glow from the top strip pass.
-        } else if top_bar_active && ly < FRAME_TOP_BAR_HEIGHT_PX {
+        } else if top_bar_active && ly < (scene.metrics.title()as usize) {
             // Frosted glass toolbar background.
             let base_alpha: u8 = if frame_hovered { 220 } else { 200 };
             let toolbar_alpha = scale_alpha(base_alpha, chrome_dim);
@@ -455,18 +474,19 @@ fn composite_pixel_source(x: usize, y: usize, w: usize, h: usize, bg: u32, sourc
                 c = glass_over_bg(scene.tokens.frame_top_bar_color, x, y, toolbar_alpha, scene);
             }
             // Divider: bright opaque line at bottom edge.
-            if ly == FRAME_TOP_BAR_HEIGHT_PX - 1 {
+            if ly >= (scene.metrics.title()as usize).saturating_sub(scene.metrics.scale()as usize) {
                 c = FRAME_TOP_BAR_DIVIDER_COLOR;
             }
             // Tab strip: glass background with tab color overlay.
             if surf.tab_count > 0
-                && lx >= FRAME_TOP_BAR_LIGHT_EXCLUSION_PX
+                && lx >= scene.metrics.px(74)as usize
                 && lx < rim_right
             {
-                let available = rim_right - FRAME_TOP_BAR_LIGHT_EXCLUSION_PX;
+                let exclusion=scene.metrics.px(74)as usize;
+                let available = rim_right.saturating_sub(exclusion);
                 let slot_w = available / surf.tab_count as usize;
                 if slot_w > 0 {
-                    let tab_idx = (lx - FRAME_TOP_BAR_LIGHT_EXCLUSION_PX) / slot_w;
+                    let tab_idx = (lx - exclusion) / slot_w;
                     let tab_color = if tab_idx == surf.active_tab as usize {
                         scene.tokens.active_tab_color
                     } else {
@@ -478,68 +498,35 @@ fn composite_pixel_source(x: usize, y: usize, w: usize, h: usize, bg: u32, sourc
                 }
             }
             // Select title ink against the final glass/tab pixel, then paint it.
-            if let Some(fg)=toolbar_title_fg_at(lx,ly,surf.surface_id,c){c=fg;}
-            // Frame lights: glass background with light color overlay.
-            // Dimmed for single-tab non-hover; full bright for hovered light.
-            if ly >= FRAME_TOP_BAR_LIGHT_TOP && ly < FRAME_TOP_BAR_LIGHT_BOTTOM {
-                unsafe {
-                    static mut FRAME_LIGHT_STARTUP_RENDER_BUDGET: u32 = 32;
-                    if FRAME_LIGHT_STARTUP_RENDER_BUDGET > 0 && lx == FRAME_TOP_BAR_LIGHT_GAP_PX && ly == FRAME_TOP_BAR_LIGHT_TOP {
-                        FRAME_LIGHT_STARTUP_RENDER_BUDGET -= 1;
-                        if hot_log() { serial_println!(
-                            "[sexdisplay.frame.light.startup.render] sid={} red={} close_allowed={} reason={}",
-                            surf.surface_id,
-                            if close_allowed { "enabled" } else { "disabled" },
-                            close_allowed as u8,
-                            if close_allowed { "close_allowed" } else { "default_disabled_or_protected" }
-                        ); }
-                    }
-                    // Phase 6 draw.ok: one-shot proof emitted from real render path.
-                    static mut PHASE6_DRAW_OK_PROOF: u32 = 1;
-                    if PHASE6_DRAW_OK_PROOF > 0 && lx == FRAME_TOP_BAR_LIGHT_GAP_PX && ly == FRAME_TOP_BAR_LIGHT_TOP {
-                        PHASE6_DRAW_OK_PROOF -= 1;
-                        serial_println!("[sexdisplay.frame_lights.draw.ok] rendered=1 red=disabled yellow=available green=available ok=1 reason=render_path");
-                    }
-                }
-                let l1_end = FRAME_TOP_BAR_LIGHT_GAP_PX + FRAME_TOP_BAR_LIGHT_SIZE_PX;
-                let l1_hovered = light_hovered && hovered_light_kind == 0;
-                let l1_close_base: u8 = if close_allowed {
-                    if l1_hovered { 255 } else { 224 }
-                } else if l1_hovered {
-                    255
-                } else {
-                    FRAME_LIGHT_CLOSE_DISABLED_BASE_ALPHA
-                };
-                let light_alpha: u8 = scale_alpha(l1_close_base, chrome_dim);
-                if lx >= FRAME_TOP_BAR_LIGHT_GAP_PX && lx < l1_end {
-                    if light_alpha > 0 { c = glass_over_bg(scene.tokens.close_light_color, x, y, light_alpha, scene); }
-                } else {
-                    let l2_start = l1_end + FRAME_TOP_BAR_LIGHT_GAP_PX;
-                    let l2_end = l2_start + FRAME_TOP_BAR_LIGHT_SIZE_PX;
-                    let l2_hovered = light_hovered && hovered_light_kind == 1;
-                    let l2_alpha = scale_alpha(if l2_hovered { 255 } else { 224 }, chrome_dim);
-                    if lx >= l2_start && lx < l2_end {
-                        if l2_alpha > 0 { c = glass_over_bg(scene.tokens.minimize_light_color, x, y, l2_alpha, scene); }
-                    } else {
-                        let l3_start = l2_end + FRAME_TOP_BAR_LIGHT_GAP_PX;
-                        let l3_end = l3_start + FRAME_TOP_BAR_LIGHT_SIZE_PX;
-                        let l3_hovered = light_hovered && hovered_light_kind == 2;
-                        let l3_alpha = scale_alpha(if l3_hovered { 255 } else { 224 }, chrome_dim);
-                        if lx >= l3_start && lx < l3_end {
-                            if l3_alpha > 0 { c = glass_over_bg(scene.tokens.zoom_light_color, x, y, l3_alpha, scene); }
-                        }
-                    }
-                }
+            if let Some(fg)=toolbar_title_fg_at_scaled(lx,ly,surf.surface_id,c,scene.metrics.scale()){c=fg;}
+            // Natural 10px circular marks inside the shared 24px targets.
+            // Painting and pointer targets share the same transformed boxes.
+            for index in 0..3 {
+                let r=scene.metrics.control(index).unwrap();
+                let size=scene.metrics.px(10)as usize;
+                let left=r.x as usize+(r.w as usize-size)/2;
+                let top=r.y as usize+(r.h as usize-size)/2;
+                if !in_rect(lx,ly,left,top,size,size){continue;}
+                let dx=(2*(lx-left)+1)as i32-size as i32;
+                let dy=(2*(ly-top)+1)as i32-size as i32;
+                if dx*dx+dy*dy>=(size*size)as i32 {continue;}
+                let color=match index{0=>scene.tokens.close_light_color,1=>scene.tokens.minimize_light_color,_=>scene.tokens.zoom_light_color};
+                let disabled=index==0&&!close_allowed;
+                let hovered=light_hovered&&hovered_light_kind as u32==index;
+                let alpha=if disabled{80}else if hovered{255}else{224};
+                let inner=size.saturating_sub(2*scene.metrics.scale()as usize);
+                let ink=if dx*dx+dy*dy>=(inner*inner)as i32{sex_pdx::desktop_style::contrast_ink(c)}else{color};
+                c=coverage_blend(ink,c,alpha);
             }
         }
         // ── RIM BAND (minimal mode top edge, or left/right/bottom edges always) ──
-        else if ly < FRAME_RIM_PX || lx < FRAME_RIM_PX
+        else if ly < (scene.metrics.px(8)as usize) || lx < (scene.metrics.px(8)as usize)
             || lx >= rim_right || ly >= rim_bottom
         {
             // In the rim band. Check for Frame Lights in top-left corner.
             // This path is reached in minimal mode (top_bar_active=false) or
             // for left/right/bottom edges when top bar is active.
-            if ly < FRAME_RIM_PX && !top_bar_active {
+            if ly < (scene.metrics.px(8)as usize) && !top_bar_active {
                 // Minimal mode top rim lights — glass version.
                 // Close light dimmed: close_allowed=0, non-interactive.
                 let l1_alpha: u8 = if close_allowed { 224 } else { FRAME_LIGHT_CLOSE_DISABLED_BASE_ALPHA };
@@ -584,7 +571,8 @@ fn composite_pixel_source(x: usize, y: usize, w: usize, h: usize, bg: u32, sourc
                 // Keep the full resize band, but give it a quiet inset surface
                 // and a steady one-pixel outline. Changing frame time must not
                 // animate an idle window's edge or hide its resize affordance.
-                let outer_edge = lx == 0 || ly == 0 || lx + 1 == sw || ly + 1 == sh;
+                let edge=scene.metrics.scale()as usize;
+                let outer_edge = lx<edge||ly<edge||lx>=sw.saturating_sub(edge)||ly>=sh.saturating_sub(edge);
                 c = if outer_edge {
                     glass_over_bg(scene.tokens.frame_rim_color, x, y, 112, scene)
                 } else {
@@ -598,7 +586,7 @@ fn composite_pixel_source(x: usize, y: usize, w: usize, h: usize, bg: u32, sourc
             c = fill_rect_color(content, x, y, content.color);
             c = bitmap_color(content, x, y, c, scene);
             // Child text uses its own origin; the parent alone draws chrome.
-            if let Some(tc) = surface_text_fg_at(x, y, content) { c = tc; }
+            if let Some(tc) = surface_text_fg_at_scaled(x,y,content,scene.metrics.scale()) { c = tc; }
         }
     } }
     if winner_mask != 0 { unsafe { APP_PRESENT_BITS |= winner_mask; } }
@@ -608,15 +596,15 @@ fn composite_pixel_source(x: usize, y: usize, w: usize, h: usize, bg: u32, sourc
 /// Paint one row run of plain surface content without asking pixel by pixel.
 /// False means this run needs composite_pixel_source: chrome, a bitmap, or a
 /// fill rect covering part of it. Must match that function exactly.
-fn fast_content_run(fb:*mut u32,x0:usize,x1:usize,y:usize,w:usize,h:usize,source:surface_groups::PixelSource<'_>,scene:&scene::SceneSnapshot)->bool{
+fn fast_content_run(fb:*mut u32,x0:usize,x1:usize,y:usize,w:usize,h:usize,source:surface_groups::PixelSource<'_>,scene: &scene::SceneSnapshot)->bool{
     let surf=source.surface;
-    let (sx,sy,sw,sh)=clamp_surface(surf,w,h);
+    let (sx,sy,sw,sh)=scene.groups.rect(surf,w,h);
     if !surf.active||sw==0||sh==0||x0<sx||x1>sx+sw||y<sy||y>=sy+sh{return false;}
     let content=if source.chrome{
         let ly=y-sy;
-        let top=if surf.chrome_flags&SURFACE_CHROME_TOP_BAR!=0{FRAME_TOP_BAR_HEIGHT_PX}else{FRAME_RIM_PX};
-        if y<BAR_BG_H+1||ly<top||ly>=sh.saturating_sub(FRAME_RIM_PX)
-            ||x0-sx<FRAME_RIM_PX||x1-sx>sw.saturating_sub(FRAME_RIM_PX){return false;}
+        let top=if surf.chrome_flags&SURFACE_CHROME_TOP_BAR!=0{(scene.metrics.title()as usize)}else{(scene.metrics.px(8)as usize)};
+        if y<(scene.metrics.bar()as usize)||ly<top||ly>=sh.saturating_sub((scene.metrics.px(8)as usize))
+            ||x0-sx<(scene.metrics.px(8)as usize)||x1-sx>sw.saturating_sub((scene.metrics.px(8)as usize)){return false;}
         source.content
     }else{surf};
     if unsafe{scene.bitmaps.matches_surface(content.owner_pd,content.surface_id)}{return false;}
@@ -634,25 +622,25 @@ fn fast_content_run(fb:*mut u32,x0:usize,x1:usize,y:usize,w:usize,h:usize,source
     let row=unsafe{fb.add(y*w)};
     // The private frame is ordinary memory: a plain fill vectorizes.
     unsafe{core::slice::from_raw_parts_mut(row.add(x0),x1-x0).fill(base);}
-    text_run(row,x0,x1,y,content);
+    text_run(row,x0,x1,y,content,scene.metrics);
     true
 }
 
 /// The ink and selection of `surface_text_fg_at` for one row run.
-fn text_run(row:*mut u32,x0:usize,x1:usize,y:usize,surf:&Surface){
-    if let Some((src,from,to))=program_pixel_row(y,x0,x1,surf){
+fn text_run(row:*mut u32,x0:usize,x1:usize,y:usize,surf:&Surface,metrics:sex_pdx::desktop_style::chrome::Metrics){
+    if let Some((src,from,to))=program_pixel_row_for(y,x0,x1,surf,metrics){
         // Straight from the program's own region: one span copy per row.
         let out=unsafe{core::slice::from_raw_parts_mut(row.add(from),to-from)};
         for(i,o)in out.iter_mut().enumerate(){*o=unsafe{core::ptr::read_volatile(src.add(i))}&0x00FF_FFFF;}
         return;
     }
-    if program_pixel_at(0,0,surf).is_some(){return;}
+    if program_pixel_at_for(0,0,surf,metrics).is_some(){return;}
     if surf.text_len==0||surf.line_count==0{return;}
     const GLYPH_W:usize=sex_pdx::desktop_style::GLYPH_WIDTH as usize;
     const GLYPH_H:usize=sex_pdx::desktop_style::GLYPH_HEIGHT as usize;
-    let scale=surface_text_scale(surf);
-    let tx=(surf.x.max(0) as usize).saturating_add(sex_pdx::desktop_style::INSET as usize);
-    let top_inset=if surf.chrome_flags&SURFACE_CHROME_TOP_BAR!=0{FRAME_TOP_BAR_HEIGHT_PX+8}else{sex_pdx::desktop_style::TEXT_TOP as usize};
+    let scale=surface_text_scale_for(surf,metrics.scale());
+    let tx=(surf.x.max(0) as usize).saturating_add(metrics.px(sex_pdx::desktop_style::INSET)as usize);
+    let top_inset=if surf.chrome_flags&SURFACE_CHROME_TOP_BAR!=0{(metrics.title()as usize)+(metrics.px(8)as usize)}else{metrics.px(sex_pdx::desktop_style::TEXT_TOP)as usize};
     let ty=(surf.y.max(0) as usize).saturating_add(top_inset);
     if y<ty{return;}
     let line=(y-ty)/((GLYPH_H+2)*scale);
@@ -700,7 +688,7 @@ fn text_run(row:*mut u32,x0:usize,x1:usize,y:usize,surf:&Surface){
 }
 
 /// One framebuffer row from x0 to x1: fast runs where possible.
-fn raster_row(fb:*mut u32,y:usize,x0:usize,x1:usize,w:usize,h:usize,scene:&scene::SceneSnapshot){
+fn raster_row(fb:*mut u32,y:usize,x0:usize,x1:usize,w:usize,h:usize,scene: &scene::SceneSnapshot){
     let focused=scene.focus;
     let back=bg(y,h);
     let mut row=unsafe{scene.groups.row_winners(&scene.surfaces,focused,y,w,h)};
@@ -745,14 +733,17 @@ fn fill_rect_color(surf: &Surface, x: usize, y: usize, base_color: u32) -> u32 {
     c
 }
 
-fn bitmap_viewport(surf: &Surface) -> bitmap_transaction::Viewport {
+fn bitmap_viewport(surf: &Surface) -> bitmap_transaction::Viewport{
+    bitmap_viewport_for(surf,chrome_metrics())
+}
+fn bitmap_viewport_for(surf: &Surface, metrics:sex_pdx::desktop_style::chrome::Metrics) -> bitmap_transaction::Viewport{
     let chrome = surf.chrome_flags & SURFACE_CHROME_TOP_BAR != 0;
     bitmap_transaction::Viewport { x: surf.x, y: surf.y, width: surf.w, height: surf.h,
-        inset: if chrome { 8 } else { 0 }, top: if chrome { FRAME_TOP_BAR_HEIGHT_PX as u32 + 8 } else { 0 } }
+        inset: if chrome { metrics.px(8) } else { 0 }, top: if chrome { metrics.title() + metrics.px(8) } else { 0 } }
 }
 fn bitmap_color(surf: &Surface, x: usize, y: usize, base: u32, scene: &scene::SceneSnapshot) -> u32 {
     if !surf.active || !(unsafe { scene.bitmaps.matches_surface(surf.owner_pd, surf.surface_id) }) { return base; }
-    let Some((x, y)) = bitmap_viewport(surf).local(x, y) else { return base; };
+    let Some((x, y)) = bitmap_viewport_for(surf,scene.metrics).local(x, y) else { return base; };
     unsafe { scene.bitmaps.sample(surf.owner_pd, surf.surface_id, x, y) }
         .map_or(base, |pixel| bitmap_transaction::blend(pixel, base))
 }
@@ -800,7 +791,7 @@ fn fill_bar_bg_buffer(fb_w: u32, fb_h: u32) -> bool {
     if fill_w > BAR_BG_W_CAP {
         return false;
     }
-    let fill_h = BAR_BG_H.min(fb_h as usize);
+    let fill_h = bar_height().min(fb_h as usize);
     for y in 0..fill_h {
         let c = bg(y, fb_h as usize);
         for x in 0..fill_w {
@@ -815,7 +806,7 @@ fn blur_bar_bg_buffer_radius1(fb_w: u32, fb_h: u32) -> bool {
     if width > BAR_BG_W_CAP {
         return false;
     }
-    let height = BAR_BG_H.min(fb_h as usize);
+    let height = bar_height().min(fb_h as usize);
     for y in 0..height {
         for x in 0..width {
             let mut acc_r: u32 = 0;
@@ -847,7 +838,7 @@ fn blur_bar_bg_buffer_radius1(fb_w: u32, fb_h: u32) -> bool {
 /// equals the average of its two/three distinct source rows. Capture these
 /// colors once; a pixel never reads the mutable legacy blur scratch buffers.
 fn scene_bar_blur_rows(fb_h: usize) -> [u32; BAR_BG_H] {
-    let height=BAR_BG_H.min(fb_h);
+    let height=bar_height().min(fb_h);
     let mut rows=[0;BAR_BG_H];
     for y in 0..height {
         let first=y.saturating_sub(1);
@@ -868,40 +859,6 @@ fn sample_bar_blur_bg_xrgb(x: u32, y: u32, fb_w: u32, fb_h: u32, scene: &scene::
         return bg(y as usize, fb_h as usize);
     }
     scene.blur_rows[y as usize]
-}
-
-#[inline]
-fn triangle_wave_u8(frame: u64, period: u64) -> u8 {
-    if period == 0 {
-        return 0;
-    }
-    let pos = frame % period;
-    let half = period / 2;
-    if half == 0 {
-        return 0;
-    }
-    if pos < half {
-        ((pos * 255) / half) as u8
-    } else {
-        let denom = period - half;
-        if denom == 0 {
-            0
-        } else {
-            (((period - pos) * 255) / denom) as u8
-        }
-    }
-}
-
-#[inline]
-fn pulse_alpha(base: u8, amp: u8, frame: u64, period: u64) -> u8 {
-    if period == 0 {
-        return base;
-    }
-    let wave = triangle_wave_u8(frame, period) as i32; // 0..255
-    let centered = wave - 127; // ~[-127,128]
-    let delta = (centered * amp as i32) / 127;
-    let out = base as i32 + delta;
-    out.clamp(0, 255) as u8
 }
 
 /// Alpha-blend an XRGB foreground over an XRGB background.
@@ -962,59 +919,37 @@ fn module_rect(bar: &SilkBar, slot: ModuleSlot) -> (usize, usize, usize, usize) 
     (lb.x, lb.y, lb.w, lb.h)
 }
 
-fn workspace_color(x: usize, y: usize, bar: &SilkBar, scene: &scene::SceneSnapshot) -> Option<u32> {
-    const WS_SLOTS: [ModuleSlot; 9] = [
-        ModuleSlot::Workspace0, ModuleSlot::Workspace1, ModuleSlot::Workspace2,
-        ModuleSlot::Workspace3, ModuleSlot::Workspace4, ModuleSlot::Workspace5,
-        ModuleSlot::Workspace6, ModuleSlot::Workspace7, ModuleSlot::Workspace8,
-    ];
-    for (idx, slot) in WS_SLOTS.iter().enumerate() {
-        let (wx, wy, ww, wh) = module_rect(bar, *slot);
-        if in_rect(x, y, wx, wy, ww, wh) {
-            let ws = &bar.workspaces[idx];
-            if ws.active {
-                // Active workspace gets a subtle glow tint over bg.
-                const WORKSPACE_GLOW_BASE: u8 = 48;
-                const WORKSPACE_GLOW_AMP: u8 = 32;
-                const WORKSPACE_GLOW_PERIOD: u64 = 96;
-                let frame = scene.frame;
-                let glow_alpha = pulse_alpha(
-                    WORKSPACE_GLOW_BASE,
-                    WORKSPACE_GLOW_AMP,
-                    frame,
-                    WORKSPACE_GLOW_PERIOD,
-                );
-                let active_glow = alpha_blend_xrgb_over_xrgb(
-                    0x00FFFFFF, DEFAULT_THEME.active, glow_alpha);
-                return Some(glass_over_bg(active_glow, x, y, 224, scene));
-            }
-            if ws.urgent { return Some(DEFAULT_THEME.urgent); }
-            return Some(DEFAULT_THEME.muted);
+fn workspace_color(x:usize,y:usize,bar:&SilkBar,scene: &scene::SceneSnapshot)->Option<u32>{
+    for i in 0..silkbar_model::WORKSPACE_COUNT {
+        let b=&bar.layout[1+i];
+        if b.w==0||!in_rect(x,y,b.x,b.y,b.w,b.h){continue;}
+        let scale=scene.metrics.scale()as usize;
+        if i==0&&bar.layout[ModuleSlot::Workspace1 as usize].w==0 {
+            // A recognizable nine-dot overview mark, not a hidden workspace
+            // strip. The whole shared target opens the real Atlas overview.
+            let left=b.x+(b.w-10*scale)/2;let top=b.y+(b.h-10*scale)/2;
+            if in_rect(x,y,left,top,10*scale,10*scale)
+                &&((x-left)/scale)%4<2&&((y-top)/scale)%4<2{return Some(DEFAULT_THEME.active);}
+            return None;
         }
+        let size=if bar.workspaces[i].active{10*scale}else{6*scale};
+        let left=b.x+(b.w-size)/2;let top=b.y+(b.h-size)/2;
+        if !in_rect(x,y,left,top,size,size){return None;}
+        return Some(if bar.workspaces[i].urgent{DEFAULT_THEME.urgent}
+            else if bar.workspaces[i].active{DEFAULT_THEME.active}else{DEFAULT_THEME.muted});
     }
-    None
+    let _=scene;None
 }
-
-fn chip_color(x: usize, y: usize, bar: &SilkBar, scene: &scene::SceneSnapshot) -> Option<u32> {
-    const R6_CHIP_ALPHA: u8 = 212;
-    const CHIP_SLOTS: [ModuleSlot; 4] = [
-        ModuleSlot::Chip0,
-        ModuleSlot::Chip1,
-        ModuleSlot::Chip2,
-        ModuleSlot::Clock,
-    ];
-    for (idx, slot) in CHIP_SLOTS.iter().enumerate() {
-        let (cx, cy, cw, ch) = module_rect(bar, *slot);
-        if in_rect(x, y, cx, cy, cw, ch) {
-            let chip = &bar.chips[idx];
-            if !chip.visible { return Some(0x00102038); }
-            match chip.kind {
-                ChipKind::Net     => return Some(glass_over_bg(DEFAULT_THEME.chip_fill, x, y, R6_CHIP_ALPHA, scene)),
-                ChipKind::Wifi    => return Some(0x0038D6C8),
-                ChipKind::Battery => return Some(0x00FFB84D),
-                ChipKind::Clock   => return Some(DEFAULT_THEME.chip_border),
-            }
-        }
+fn chip_color(x:usize,y:usize,bar:&SilkBar,scene: &scene::SceneSnapshot)->Option<u32>{
+    for (idx,slot) in [ModuleSlot::Chip0,ModuleSlot::Chip1,ModuleSlot::Chip2].iter().enumerate(){
+        let(cx,cy,cw,ch)=module_rect(bar,*slot);
+        let size=scene.metrics.px(12)as usize;
+        let left=cx+cw.saturating_sub(size)/2;let top=cy+ch.saturating_sub(size)/2;
+        if !in_rect(x,y,left,top,size,size){continue;}
+        let chip=&bar.chips[idx];
+        if !chip.visible{return Some(DEFAULT_THEME.muted);}
+        return Some(match chip.kind{ChipKind::Net=>glass_over_bg(DEFAULT_THEME.chip_fill,x,y,212,scene),
+            ChipKind::Wifi=>0x0038D6C8,ChipKind::Battery=>0x00FFB84D,ChipKind::Clock=>DEFAULT_THEME.chip_border});
     }
     None
 }
@@ -1053,19 +988,10 @@ const fn accent_swatch_color(idx: u8) -> u32 {
 
 /// Phase 5: active app indicator — 4x4 colored dot near launcher.
 /// Position: x=155..159, y=22..25 (right of options dots at x=135).
-fn phase5_active_app_at(x: usize, y: usize, _bar: &SilkBar, scene: &scene::SceneSnapshot) -> Option<u32> {
-    // The admitted compositor focus is live in normal builds; the separate
-    // phase1 field is updated only by the optional protocol proof path.
-    let focused = unsafe { scene.focus };
-    if focused == 0 { return None; }
-    const DOT_X: usize = 155;
-    const DOT_Y: usize = 22;
-    const DOT_SZ: usize = 4;
-    if x >= DOT_X && x < DOT_X + DOT_SZ && y >= DOT_Y && y < DOT_Y + DOT_SZ {
-        app_indicator_color(focused as u32)
-    } else {
-        None
-    }
+fn phase5_active_app_at(x:usize,y:usize,bar:&SilkBar,scene: &scene::SceneSnapshot)->Option<u32>{
+    if bar.layout[ModuleSlot::Workspace1 as usize].w==0{return None;}
+    let scale=scene.metrics.scale()as usize;
+    if in_rect(x,y,40*scale,12*scale,4*scale,4*scale){app_indicator_color(scene.focus as u32)}else{None}
 }
 
 /// A new notification, shown in the panel in place of the title for a few seconds.
@@ -1076,26 +1002,22 @@ const PANEL_NOTICE_INK: u32 = 0x00F9E2AF;
 /// workspace dots, like a Waybar or Plasma window title.
 const PANEL_TITLE_X: usize = 166;
 const PANEL_TITLE_END: usize = silkbar_model::WS_X0 - 16;
-fn panel_title_fg_at(x: usize, y: usize, bar: &SilkBar, scene: &scene::SceneSnapshot, background: u32) -> Option<u32> {
-    let y0 = (BAR_BG_H - glyphs::TITLE_H) / 2;
-    if x + 2 < PANEL_TITLE_X || x >= PANEL_TITLE_END || y < y0 || y >= y0 + glyphs::TITLE_H { return None; }
-    let notice = unsafe { &*core::ptr::addr_of!(PANEL_NOTICE) };
-    let (title, notice) = if notice.len > 0 { (notice.as_bytes(), true) } else {
-        let focused = scene.focus;
-        if focused == 0 { return None; }
-        (surface_title(focused)?, false)
-    };
-    let alpha = glyphs::title_coverage(title, x as i32 - PANEL_TITLE_X as i32, y - y0);
-    if alpha == 0 { return None; }
-    let ink = if notice { PANEL_NOTICE_INK } else { sex_pdx::desktop_style::contrast_ink(background) };
-    Some(coverage_blend(ink, background, alpha))
+fn panel_title_fg_at(x:usize,y:usize,bar:&SilkBar,scene: &scene::SceneSnapshot,background:u32)->Option<u32>{
+    let scale=scene.metrics.scale()as usize;
+    if bar.layout[ModuleSlot::Workspace1 as usize].w==0{return None;}
+    let left=52*scale;let end=bar.layout[ModuleSlot::Workspace0 as usize].x.saturating_sub(12*scale);
+    let line_h=glyphs::UI_H*scale;let top=(scene.metrics.bar()as usize).saturating_sub(line_h)/2;
+    if x<left||x>=end||y<top||y>=top+line_h{return None;}
+    let notice=unsafe{&*core::ptr::addr_of!(PANEL_NOTICE)};
+    let text=if notice.len>0{notice.as_bytes()}else{surface_title(scene.focus)?};
+    ui_label_at_scaled(text,x-left,y-top,background,scene.metrics.scale())
 }
 
 /// Same visible top-strip content for full and incremental redraws.
-fn top_strip_pixel(x: usize, y: usize, bar: &SilkBar, lines: &[[u8;13];2], scene: &scene::SceneSnapshot) -> u32 {
+fn top_strip_pixel(x: usize, y: usize, bar: &SilkBar, lines: &[u8;20], scene: &scene::SceneSnapshot) -> u32 {
     let background = bar_color(x, y, bar, scene);
-    if let Some(fg) = clock_fg_at(x, y, bar, lines, background) { fg }
-    else if let Some(fg) = bell_badge_at(x, y, bar, background) { fg }
+    if let Some(fg) = clock_fg_at_scaled(x,y,bar,lines,background,scene.metrics.scale()) { fg }
+    else if let Some(fg) = bell_badge_at_scaled(x,y,bar,background,scene.metrics.scale()) { fg }
     else if let Some(fg) = phase5_active_app_at(x, y, bar, scene) { fg }
     else if let Some(fg) = panel_title_fg_at(x, y, bar, scene, background) { fg }
     else if let Some(fg) = phase5_tint_swatch_at(x, y, bar) { fg }
@@ -1186,7 +1108,7 @@ fn bar_color(x: usize, y: usize, bar: &SilkBar, scene: &scene::SceneSnapshot) ->
     // elements render correctly at the same y range (y=19..22).
     // An early return for the full y-range overrides those modules and creates
     // a visible horizontal strip of wrong color across the bar.
-    if bar.selected_options_mask != 0 {
+    if SILKBAR_PHASE5_PIXEL_PROOF_ENABLED && bar.selected_options_mask != 0 {
         const OPTIONS_X: usize = 135;
         const OPTIONS_Y: usize = 19;
         const DOT_W: usize = 3;
@@ -1217,7 +1139,7 @@ fn bar_color(x: usize, y: usize, bar: &SilkBar, scene: &scene::SceneSnapshot) ->
     if let Some(c) = chip_color(x, y, bar, scene) { return c; }
     // Bell indicator (privacy-safe presence dot between Battery and Clock)
     let (bx, by, bw, bh) = module_rect(bar, ModuleSlot::Bell);
-    if in_rect(x, y, bx, by, bw, bh) {
+    if in_rect(x, y, bx+scene.metrics.px(2)as usize, by+scene.metrics.px(2)as usize, bw.saturating_sub(scene.metrics.px(4)as usize), bh.saturating_sub(scene.metrics.px(4)as usize)) {
         let s = &bar.bell_state;
         if s.flags & 1 == 0 {
             // Bell unavailable (no SLOT_BELL grant or server not running) → dim dot
@@ -1249,19 +1171,19 @@ fn bar_color(x: usize, y: usize, bar: &SilkBar, scene: &scene::SceneSnapshot) ->
     }
     // Bar body: glass translucency over desktop background,
     // with subtle bottom-edge glow falloff.
-    const BAR_BOTTOM: usize = 50;
+    let bar_bottom=(scene.metrics.bar()as usize);
     const GLOW_SPREAD: usize = 4;
     if y == 0 {
         let body = glass_over_bg(DEFAULT_THEME.panel_fill, x, y, R6_BAR_ALPHA, scene);
         return alpha_blend_xrgb_over_xrgb(BAR_TOP_HIGHLIGHT, body, 64);
     }
-    if y == BAR_BOTTOM - 1 {
+    if y == bar_bottom - 1 {
         let body = glass_over_bg(DEFAULT_THEME.panel_fill, x, y, R6_BAR_ALPHA, scene);
         let darkened = alpha_blend_xrgb_over_xrgb(BAR_BOTTOM_DARK_EDGE, body, 88);
         return alpha_blend_xrgb_over_xrgb(DEFAULT_THEME.panel_glow, darkened, 48);
     }
-    if y + GLOW_SPREAD >= BAR_BOTTOM && y < BAR_BOTTOM {
-        let dist = (BAR_BOTTOM - 1 - y) as u32;
+    if y + GLOW_SPREAD >= bar_bottom && y < bar_bottom {
+        let dist = (bar_bottom - 1 - y) as u32;
         let glow_a = glow_edge_alpha(dist, GLOW_SPREAD as u32, R6_EDGE_ALPHA);
         if glow_a > 0 {
             let base = glass_over_bg(DEFAULT_THEME.panel_fill, x, y, R6_BAR_ALPHA, scene);
@@ -1531,23 +1453,30 @@ fn surface_title(surface_id: u64) -> Option<&'static [u8]> {
     match surface_id{200=>Some(b"Linen"),100=>Some(b"App"),_=>None}
 }
 
-fn toolbar_title_fg_at(lx: usize, ly: usize, surface_id: u64, background: u32) -> Option<u32> {
-    let title_x = FRAME_TOP_BAR_LIGHT_EXCLUSION_PX + 12;
-    let title_y = (FRAME_TOP_BAR_HEIGHT_PX - glyphs::TITLE_H) / 2;
-    if lx + 2 < title_x || ly < title_y || ly >= title_y + glyphs::TITLE_H { return None; }
+fn toolbar_title_fg_at(lx: usize, ly: usize, surface_id: u64, background: u32) -> Option<u32>{
+    toolbar_title_fg_at_scaled(lx,ly,surface_id,background,sex_pdx::desktop_style::ui_scale())
+}
+fn toolbar_title_fg_at_scaled(lx: usize, ly: usize, surface_id: u64, background: u32, ui_scale:u32) -> Option<u32>{
+    let title_x = sex_pdx::desktop_style::chrome::Metrics::new(ui_scale).px(85)as usize;
+    let line_h=glyphs::UI_H*ui_scale as usize;
+    let title_y = (sex_pdx::desktop_style::chrome::Metrics::new(ui_scale).title()as usize).saturating_sub(line_h) / 2;
+    if lx + 2 < title_x || ly < title_y || ly >= title_y + line_h { return None; }
     let title = surface_title(surface_id)?;
     // Geist Sans, kerned, each glyph at its quarter-pixel position; two pixels of
     // margin left of the first letter catch an overhang.
-    let alpha = glyphs::title_coverage(title, lx as i32 - title_x as i32, ly - title_y);
+    let alpha = glyphs::ui_coverage(title, lx as i32 - title_x as i32, ly - title_y, ui_scale).unwrap_or(0);
     (alpha != 0).then(|| coverage_blend(sex_pdx::desktop_style::contrast_ink(background), background, alpha))
 }
 
 /// Scale by whole pixels so glyph edges remain crisp. A legacy 20-column
 /// row needs 240px plus two 8px insets at 2x; narrow overlays retain 1x.
 /// Exact Spindle panes share the terminal layout scale for their narrower tiles.
-fn surface_text_scale(surf: &Surface) -> usize {
-    // Spindle lays out its own grid from spindle_view metrics, so its exact
-    // panes keep that scale until Spindle is told the screen's scale (F2).
+fn surface_text_scale(surf: &Surface) -> usize{
+    surface_text_scale_for(surf,sex_pdx::desktop_style::ui_scale())
+}
+fn surface_text_scale_for(surf: &Surface, ui_scale:u32) -> usize{
+    // Exact Spindle panes share the terminal's base width threshold; both
+    // renderer and terminal apply the same authenticated screen scale.
     let spindle = sex_pdx::app_catalog::is_spindle(surf.owner_pd)
         && sex_pdx::app_catalog::native_pixel_bit(surf.owner_pd, surf.surface_id) != 0;
     let base = if spindle {
@@ -1558,7 +1487,7 @@ fn surface_text_scale(surf: &Surface) -> usize {
     // The window's own text size: whole steps from its width's default, Geist
     // drawn fresh for each.
     // HiDPI: the screen's scale multiplies the width's default and the range.
-    let ui=if spindle{1}else{sex_pdx::desktop_style::ui_scale() as i32};
+    let ui=ui_scale as i32;
     (base as i32 * ui + surf.text_zoom as i32).clamp(1, sex_pdx::desktop_style::MAX_TEXT_SCALE as i32 * ui) as usize
 }
 /// A zoom step on a surface: +1 larger, -1 smaller, 0 the default. The stored step
@@ -1570,7 +1499,7 @@ fn apply_text_zoom(surf: &mut Surface, step: i64) -> bool {
     let base = surface_text_scale(surf) as i32;
     surf.text_zoom = zoom;
     let wanted = if step == 0 { 0 } else { surf.text_zoom as i32 + step.signum() as i32 };
-    let ui = if sex_pdx::app_catalog::is_spindle(surf.owner_pd) && sex_pdx::app_catalog::native_pixel_bit(surf.owner_pd, surf.surface_id) != 0 { 1 } else { sex_pdx::desktop_style::ui_scale() as i32 };
+    let ui = sex_pdx::desktop_style::ui_scale() as i32;
     let most = sex_pdx::desktop_style::MAX_TEXT_SCALE as i32 * ui;
     surf.text_zoom = ((base + wanted).clamp(1, most) - base) as i8;
     let changed = surface_text_scale(surf) != before;
@@ -1598,7 +1527,7 @@ fn recompute_text_lines(surf: &mut Surface) {
     let has_newline = surf.text_buf[..len].iter().any(|&b| b == b'\n');
     surf.wrap_cols = if has_newline {
         let advance = 6 * surface_text_scale(surf) as u32;
-        (surf.w.saturating_sub(16) / advance).clamp(1, 160) as u8
+        (surf.w.saturating_sub(chrome_metrics().px(16)) / advance).clamp(1, 160) as u8
     } else {
         TEXT_LEGACY_COLS
     };
@@ -1660,7 +1589,7 @@ fn text_projection_requirement(old:&Surface,new:&Surface,w:usize,h:usize)->scene
     // Old bounds are essential when shortening/clearing text or selection.
     // Do not optimize hidden parents/occlusion: these clipped geometric bounds
     // conservatively include every possible changed body text pixel.
-    let mut required=damage::Damage::new();
+    let mut required=damage::Damage::new(bar_height());
     required.add(text_surface_damage(old,w,h),w,h);
     required.add(text_surface_damage(new,w,h),w,h);
     match required.rect(){Some(rect)=>scene::TextCoverage::Body(changed_text_rows(old,new,rect)),None=>scene::TextCoverage::NoPixels}
@@ -1689,7 +1618,7 @@ fn changed_text_rows(old:&Surface,new:&Surface,rect:damage::Rect)->damage::Rect{
         }
     }
     if first==usize::MAX{return rect;}
-    let top=if new.chrome_flags & SURFACE_CHROME_TOP_BAR != 0 {FRAME_TOP_BAR_HEIGHT_PX+8} else {sex_pdx::desktop_style::TEXT_TOP as usize};
+    let top=if new.chrome_flags & SURFACE_CHROME_TOP_BAR != 0 {frame_height()+frame_rim()} else {chrome_metrics().px(sex_pdx::desktop_style::TEXT_TOP)as usize};
     let line=9*surface_text_scale(new);
     let origin=(new.y.max(0) as usize).saturating_add(top);
     let y=origin.saturating_add(first*line).max(rect.y).min(rect.bottom);
@@ -1704,7 +1633,7 @@ fn join_pending_text(paint:&mut paint_batch::Dirty,w:usize,h:usize){
             let Some(pending)=stage.pending()else{continue;};
             // Existing preview modes can display a second view of these bytes.
             // Keep their broader body obligation rather than infer occlusion.
-            if h<51{paint.request_full();continue;}
+            if h<bar_height(){paint.request_full();continue;}
             if ATLAS_PHASE_C_RENDER_STUB_PROOF_ENABLED||ATLAS_PHASE_D_FRAME_PREVIEW_STUB_PROOF_ENABLED{
                 paint.request_area();continue;
             }
@@ -1712,7 +1641,7 @@ fn join_pending_text(paint:&mut paint_batch::Dirty,w:usize,h:usize){
             if !apply_pending_text(&mut candidate,&pending){paint.request_full();continue;}
             match text_projection_requirement(original,&candidate,w,h){
                 scene::TextCoverage::NoPixels=>paint.request_settle(),
-                scene::TextCoverage::Body(rect)=>paint.request_damage(rect,w,h),
+                scene::TextCoverage::Body(rect)=>paint.request_damage(rect,w,h,bar_height()),
             }
         }
     }
@@ -1726,16 +1655,19 @@ static mut PIXEL_BYTES:[u64;PROGRAM_ROWS]=[0;PROGRAM_ROWS];
 static mut PIXEL_SIZE:[(usize,usize);PROGRAM_ROWS]=[(0,0);PROGRAM_ROWS];
 /// The program row's picture under this pixel, when the surface shows one.
 fn program_pixel_at(x:usize,y:usize,surf:&Surface)->Option<Option<u32>>{
+    program_pixel_at_for(x,y,surf,chrome_metrics())
+}
+fn program_pixel_at_for(x:usize,y:usize,surf:&Surface,metrics:sex_pdx::desktop_style::chrome::Metrics)->Option<Option<u32>>{
     let k=sex_pdx::pixel_region::index_of(surf.owner_pd)?;
     if !app_catalog::by_surface(surf.owner_pd,surf.surface_id).is_some_and(|r|r.app==app_catalog::App::Program){return None;}
     let (w,h)=unsafe{PIXEL_SIZE[k]};let base=unsafe{PIXEL_REGIONS[k]};
     if w==0||h==0||base==0{return None;}
-    let bx=(surf.x.max(0) as usize).saturating_add(sex_pdx::desktop_style::INSET as usize);
-    let top=if surf.chrome_flags&SURFACE_CHROME_TOP_BAR!=0{FRAME_TOP_BAR_HEIGHT_PX+8}else{sex_pdx::desktop_style::TEXT_TOP as usize};
+    let bx=(surf.x.max(0) as usize).saturating_add(metrics.px(sex_pdx::desktop_style::INSET)as usize);
+    let top=if surf.chrome_flags&SURFACE_CHROME_TOP_BAR!=0{(metrics.title()as usize)+(metrics.px(8)as usize)}else{metrics.px(sex_pdx::desktop_style::TEXT_TOP)as usize};
     let by=(surf.y.max(0) as usize).saturating_add(top);
     // Inside the frame's border, whatever size the program asked for.
-    let right=(surf.x.max(0) as usize+surf.w as usize).saturating_sub(sex_pdx::desktop_style::INSET as usize);
-    let bottom=(surf.y.max(0) as usize+surf.h as usize).saturating_sub(sex_pdx::desktop_style::INSET as usize);
+    let right=(surf.x.max(0) as usize+surf.w as usize).saturating_sub(metrics.px(sex_pdx::desktop_style::INSET)as usize);
+    let bottom=(surf.y.max(0) as usize+surf.h as usize).saturating_sub(metrics.px(sex_pdx::desktop_style::INSET)as usize);
     if x<bx||y<by||x>=bx+w||y>=by+h||x>=right||y>=bottom{return Some(None);}
     Some(Some(unsafe{core::ptr::read_volatile((base as *const u32).add((y-by)*w+(x-bx)))}&0x00FF_FFFF))
 }
@@ -1743,15 +1675,18 @@ fn program_pixel_at(x:usize,y:usize,surf:&Surface)->Option<Option<u32>>{
 /// starts in the region, and the screen columns it covers. Same bounds as
 /// `program_pixel_at`, computed once per row.
 fn program_pixel_row(y:usize,x0:usize,x1:usize,surf:&Surface)->Option<(*const u32,usize,usize)>{
+    program_pixel_row_for(y,x0,x1,surf,chrome_metrics())
+}
+fn program_pixel_row_for(y:usize,x0:usize,x1:usize,surf:&Surface,metrics:sex_pdx::desktop_style::chrome::Metrics)->Option<(*const u32,usize,usize)>{
     let k=sex_pdx::pixel_region::index_of(surf.owner_pd)?;
     if !app_catalog::by_surface(surf.owner_pd,surf.surface_id).is_some_and(|r|r.app==app_catalog::App::Program){return None;}
     let (w,h)=unsafe{PIXEL_SIZE[k]};let base=unsafe{PIXEL_REGIONS[k]};
     if w==0||h==0||base==0{return None;}
-    let bx=(surf.x.max(0) as usize).saturating_add(sex_pdx::desktop_style::INSET as usize);
-    let top=if surf.chrome_flags&SURFACE_CHROME_TOP_BAR!=0{FRAME_TOP_BAR_HEIGHT_PX+8}else{sex_pdx::desktop_style::TEXT_TOP as usize};
+    let bx=(surf.x.max(0) as usize).saturating_add(metrics.px(sex_pdx::desktop_style::INSET)as usize);
+    let top=if surf.chrome_flags&SURFACE_CHROME_TOP_BAR!=0{(metrics.title()as usize)+(metrics.px(8)as usize)}else{metrics.px(sex_pdx::desktop_style::TEXT_TOP)as usize};
     let by=(surf.y.max(0) as usize).saturating_add(top);
-    let right=(surf.x.max(0) as usize+surf.w as usize).saturating_sub(sex_pdx::desktop_style::INSET as usize).min(bx+w).min(x1);
-    let bottom=(surf.y.max(0) as usize+surf.h as usize).saturating_sub(sex_pdx::desktop_style::INSET as usize).min(by+h);
+    let right=(surf.x.max(0) as usize+surf.w as usize).saturating_sub(metrics.px(sex_pdx::desktop_style::INSET)as usize).min(bx+w).min(x1);
+    let bottom=(surf.y.max(0) as usize+surf.h as usize).saturating_sub(metrics.px(sex_pdx::desktop_style::INSET)as usize).min(by+h);
     let from=x0.max(bx);
     if y<by||y>=bottom||from>=right{return None;}
     Some((unsafe{(base as *const u32).add((y-by)*w+(from-bx))},from,right))
@@ -1790,17 +1725,20 @@ fn legacy_text_draw(slot:&mut Surface,packed:u64,arg2:u64)->bool{
     recompute_text_lines(slot);changed
 }
 
-fn surface_text_fg_at(x: usize, y: usize, surf: &Surface) -> Option<u32> {
+fn surface_text_fg_at(x: usize, y: usize, surf: &Surface) -> Option<u32>{
+    surface_text_fg_at_scaled(x,y,surf,sex_pdx::desktop_style::ui_scale())
+}
+fn surface_text_fg_at_scaled(x: usize, y: usize, surf: &Surface, ui_scale:u32) -> Option<u32>{
     // A program showing pixels shows only them.
-    if let Some(pixel) = program_pixel_at(x, y, surf) { return pixel; }
+    if let Some(pixel) = program_pixel_at_for(x,y,surf,sex_pdx::desktop_style::chrome::Metrics::new(ui_scale)) { return pixel; }
     if surf.text_len == 0 || surf.line_count == 0 { return None; }
     const GLYPH_W: usize = sex_pdx::desktop_style::GLYPH_WIDTH as usize;
     const GLYPH_H: usize = sex_pdx::desktop_style::GLYPH_HEIGHT as usize;
     const CHAR_SPACING: usize = 1;
-    let scale = surface_text_scale(surf);
+    let scale = surface_text_scale_for(surf,ui_scale);
     let line_h = (GLYPH_H + 2) * scale;
-    let tx = (surf.x.max(0) as usize).saturating_add(sex_pdx::desktop_style::INSET as usize);
-    let top_inset = if surf.chrome_flags & SURFACE_CHROME_TOP_BAR != 0 { FRAME_TOP_BAR_HEIGHT_PX + 8 } else { sex_pdx::desktop_style::TEXT_TOP as usize };
+    let tx = (surf.x.max(0) as usize).saturating_add(sex_pdx::desktop_style::chrome::Metrics::new(ui_scale).px(sex_pdx::desktop_style::INSET)as usize);
+    let top_inset = if surf.chrome_flags & SURFACE_CHROME_TOP_BAR != 0 { (sex_pdx::desktop_style::chrome::Metrics::new(ui_scale).title()as usize) + (sex_pdx::desktop_style::chrome::Metrics::new(ui_scale).px(8)as usize) } else { sex_pdx::desktop_style::chrome::Metrics::new(ui_scale).px(sex_pdx::desktop_style::TEXT_TOP)as usize };
     let ty = (surf.y.max(0) as usize).saturating_add(top_inset);
 
     if x < tx || y < ty { return None; }
@@ -1883,6 +1821,27 @@ fn civil_clock_lines(clock:&silkbar_model::civil_clock::CivilClock)->[[u8;13];2]
     }
     lines
 }
+/// One real single-line UTC/date caption per paint pass. State remains the
+/// admitted civil-clock state; the legacy two-row data formatter is unchanged.
+fn civil_clock_caption(clock:&silkbar_model::civil_clock::CivilClock)->[u8;20]{
+    let lines=civil_clock_lines(clock);let mut text=[b' ';20];
+    if clock.state()==silkbar_model::civil_clock::State::Snapshot {
+        text[..5].copy_from_slice(&lines[0][4..9]);
+        text[6..9].copy_from_slice(b"UTC");text[10]=b'|';
+        text[12..18].copy_from_slice(&lines[1][..6]);
+    }else if clock.state()==silkbar_model::civil_clock::State::Unavailable {
+        text[..15].copy_from_slice(b"UTC unavailable");
+    }else{text[..13].copy_from_slice(&lines[0]);}
+    text
+}
+fn ui_label_at(text:&[u8],x:usize,y:usize,background:u32)->Option<u32>{
+    ui_label_at_scaled(text,x,y,background,sex_pdx::desktop_style::ui_scale())
+}
+fn ui_label_at_scaled(text:&[u8],x:usize,y:usize,background:u32,ui_scale:u32)->Option<u32>{
+    let scale=ui_scale;
+    let alpha=glyphs::ui_coverage(text,x as i32,y,scale)?;
+    (alpha!=0).then(||coverage_blend(sex_pdx::desktop_style::contrast_ink(background),background,alpha))
+}
 /// Proportional Geist Sans captions in the existing status boxes. The legacy
 /// cell renderer is recovery only; ordinary labels keep natural glyph advances.
 fn panel_caption_at(text:&[u8],x:usize,y:usize,background:u32)->Option<u32>{
@@ -1898,12 +1857,15 @@ fn panel_caption_at(text:&[u8],x:usize,y:usize,background:u32)->Option<u32>{
     };
     (alpha!=0).then(||coverage_blend(sex_pdx::desktop_style::contrast_ink(background),background,alpha))
 }
-fn civil_clock_fg_at(x:usize,y:usize,bar:&SilkBar,lines:&[[u8;13];2],background:u32)->Option<u32>{
+fn civil_clock_fg_at(x:usize,y:usize,bar:&SilkBar,text:&[u8;20],background:u32)->Option<u32>{
+    civil_clock_fg_at_scaled(x,y,bar,text,background,sex_pdx::desktop_style::ui_scale())
+}
+fn civil_clock_fg_at_scaled(x:usize,y:usize,bar:&SilkBar,text:&[u8;20],background:u32,ui_scale:u32)->Option<u32>{
     let(cx,cy,cw,ch)=module_rect(bar,ModuleSlot::Clock);
-    if x<cx+2||x>=cx+cw||y<cy||y>=cy+ch{return None;}
-    let row=if(cy+1..cy+1+glyphs::CAPTION_H).contains(&y){0}
-        else if(cy+11..cy+11+glyphs::CAPTION_H).contains(&y){1}else{return None;};
-    panel_caption_at(&lines[row],x-cx-2,y-(cy+1+row*10),background)
+    let pad=sex_pdx::desktop_style::chrome::Metrics::new(ui_scale).px(4)as usize;
+    let top=cy+ch.saturating_sub(glyphs::UI_H*ui_scale as usize)/2;
+    if x<cx+pad||x>=cx+cw||y<top||y>=cy+ch{return None;}
+    ui_label_at_scaled(text,x-cx-pad,y-top,background,ui_scale)
 }
 /// One completed-frame observation per changed clock stamp. This is called
 /// only after the full/strip framebuffer writes and overlays finish. Accepted
@@ -1914,16 +1876,19 @@ fn civil_clock_drawn(bar:&SilkBar,w:usize,h:usize,path:&str){
     let(x,y,cw,ch)=module_rect(bar,ModuleSlot::Clock);
     if x.checked_add(cw).map_or(true,|right|right>w)||y.checked_add(ch).map_or(true,|bottom|bottom>h){return;}
     let clock=&bar.civil_clock;
-    let stamp=(clock.sequence(),clock.state(),clock.seconds(),clock.is_stale(),w,h);
-    static mut LAST_CIVIL_DRAW:Option<(u32,State,u32,bool,usize,usize)>=None;
+    let stamp=(clock.sequence(),clock.state(),clock.seconds(),clock.is_stale(),w,h,x,y,cw,ch);
+    static mut LAST_CIVIL_DRAW:Option<(u32,State,u32,bool,usize,usize,usize,usize,usize,usize)>=None;
     unsafe{
         if LAST_CIVIL_DRAW==Some(stamp){return;}
         LAST_CIVIL_DRAW=Some(stamp);
     }
     sex_pdx::serial_record!("[display.civil.draw] sequence={} state={:?} seconds={} stale={} pixels=written path={} x={} y={} w={} h={}",clock.sequence(),clock.state(),clock.seconds(),clock.is_stale()as u8,path,x,y,cw,ch);
 }
-fn clock_fg_at(x: usize, y: usize, bar: &SilkBar, lines: &[[u8;13];2], background: u32) -> Option<u32> {
-    if bar.civil_enabled {return civil_clock_fg_at(x,y,bar,lines,background);}
+fn clock_fg_at(x: usize, y: usize, bar: &SilkBar, lines: &[u8;20], background: u32) -> Option<u32>{
+    clock_fg_at_scaled(x,y,bar,lines,background,sex_pdx::desktop_style::ui_scale())
+}
+fn clock_fg_at_scaled(x: usize, y: usize, bar: &SilkBar, lines: &[u8;20], background: u32, ui_scale:u32) -> Option<u32>{
+    if bar.civil_enabled {return civil_clock_fg_at_scaled(x,y,bar,lines,background,ui_scale);}
     let(cx,cy,cw,ch)=module_rect(bar,ModuleSlot::Clock);
     if x<cx+2||x>=cx+cw||y<cy+1||y>=cy+ch{return None;}
     let mut label=*b"DEMO 00:00:00";
@@ -1934,24 +1899,27 @@ fn clock_fg_at(x: usize, y: usize, bar: &SilkBar, lines: &[[u8;13];2], backgroun
 }
 
 /// Bell count in the existing module: natural 9px Sans digits, centered and clipped.
-fn bell_badge_at(x: usize, y: usize, bar: &SilkBar, background: u32) -> Option<u32> {
+fn bell_badge_at(x: usize, y: usize, bar: &SilkBar, background: u32) -> Option<u32>{
+    bell_badge_at_scaled(x,y,bar,background,sex_pdx::desktop_style::ui_scale())
+}
+fn bell_badge_at_scaled(x: usize, y: usize, bar: &SilkBar, background: u32, ui_scale:u32) -> Option<u32>{
     let n=bar.bell_state.total_visible;
     if n==0||bar.bell_state.flags&1==0{return None;}
     let n=n.min(99);let digits=[b'0'+n/10,b'0'+n%10];
     let label=if n>=10{&digits[..]}else{&digits[1..]};
     let(bx,by,bw,bh)=module_rect(bar,ModuleSlot::Bell);
     if x<bx||x>=bx+bw||y<by||y>=by+bh{return None;}
-    let width=glyphs::caption_width(label).unwrap_or(label.len()*6).min(bw);
-    let left=bx+(bw-width)/2;let top=by+bh.saturating_sub(glyphs::CAPTION_H)/2;
+    let width=glyphs::ui_width(label,ui_scale).unwrap_or(label.len()*6).min(bw);
+    let left=bx+(bw-width)/2;let top=by+bh.saturating_sub(glyphs::UI_H*ui_scale as usize)/2;
     if x<left||y<top{return None;}
-    panel_caption_at(label,x-left,y-top,background)
+    ui_label_at_scaled(label,x-left,y-top,background,ui_scale)
 }
 
 
 use paint_batch::{Content,Plan};
 // Descriptive completion of this publication, not authority or a whole-system
 // epoch receipt. Lifecycle may consume only a successfully published Full.
-struct PublishedFrame{plan:Plan,present_bits:u64,canon_ss:u8,
+struct PublishedFrame{plan:Plan,bar_height:usize,present_bits:u64,canon_ss:u8,
     text_projections:[Option<scene::TextProjection>;MAX_SURFACES]}
 
 // Small output bookkeeping is tentative until the prepared frame is published.
@@ -2013,13 +1981,13 @@ fn publish_frame(fb:*mut u32,w:usize,h:usize,frame:frame_output::Publication<'_>
     true
 }
 
-fn raster_batch(target:&frame_output::Target<'_>,scene:&scene::SceneSnapshot,plan:Plan)->bool{
+fn raster_batch(target:&frame_output::Target<'_>,scene: &scene::SceneSnapshot,plan:Plan)->bool{
     if !scene.is_valid()||scene.width!=target.width()||scene.height!=target.height()||plan.is_empty(){return false;}
     // Verified no-pixel text work republishes the committed baseline. Do not
     // disturb cursor underlay or infer any app/cursor/clock presentation effect.
     if plan.settle_only(){return true;}
     let (fb,w,h,total)=(target.pointer(),target.width(),target.height(),target.len());
-    if !plan.is_full(){restore_cursor_under(fb,w,h,total);}
+    if !plan.is_full(){restore_cursor_under(fb,w,h,total,scene.metrics);}
     let body=match plan.content{
         Content::Full=>raster_full(target,scene),Content::Area=>raster_area(target,scene),
         Content::Damage(rect)=>raster_damage(target,rect,scene),Content::None|Content::Settle|Content::Cursor=>true};
@@ -2040,7 +2008,7 @@ fn render_prepared(fb:*mut u32,w:usize,h:usize,bar:&SilkBar,requested:Plan)->Opt
     // Reject reentry before creating another exclusive frame-store reference.
     if unsafe{(*core::ptr::addr_of!(RENDER_SCENE)).is_valid()}{return None;}
     let mut plan=requested.with_atlas(ATLAS_PHASE_C_RENDER_STUB_PROOF_ENABLED||ATLAS_PHASE_D_FRAME_PREVIEW_STUB_PROOF_ENABLED);
-    if !plan.is_full()&&h<51{plan=Plan::full();}
+    if !plan.is_full()&&h<bar_height(){plan=Plan::full();}
     let backup=OutputBackup::capture();
     let Some(store)=(unsafe{FRAME_OUTPUT.as_mut()})else{return None;};
     if store.layout().width()!=w||store.layout().height()!=h{return None;}
@@ -2061,7 +2029,7 @@ fn render_prepared(fb:*mut u32,w:usize,h:usize,bar:&SilkBar,requested:Plan)->Opt
             let frame=app_catalog::by_target(sex_pdx::screen_capture::CLIENT).map(|row|row.frame());
             if let Some(surface)=scene.surfaces.iter().find(|s|s.active&&Some(s.surface_id)==frame){
                 sex_pdx::serial_record!("[display.capture.reference] generation={} frame={} x={} y={} w={} h={} bar_h={} source=published_scene",
-                    store.generation(),surface.surface_id,surface.x,surface.y,surface.w,surface.h,BAR_BG_H);
+                    store.generation(),surface.surface_id,surface.x,surface.y,surface.w,surface.h,scene.metrics.bar());
             }
         }
     }}
@@ -2071,19 +2039,29 @@ fn render_prepared(fb:*mut u32,w:usize,h:usize,bar:&SilkBar,requested:Plan)->Opt
         report_app_presented();
         if !plan.cursor_only(){repaint_end(plan.label(),started);}
     }
-    if plan.clock_dirty(){civil_clock_drawn(&scene.bar,w,h,plan.label());}
     unsafe{
         static mut BATCH_LOG_BUDGET:u32=64;
         if BATCH_LOG_BUDGET>0{BATCH_LOG_BUDGET-=1;
             sex_pdx::serial_record!("[display.batch.published] generation={} content={} strip={} scene=1 prepare=1 publication=1 written={} total_written={}",
                 store.generation(),match plan.content{Content::Full=>"full",Content::Area=>"area",Content::Damage(_)=>"damage",Content::Cursor=>"cursor",Content::Settle=>"settle",Content::None=>"none"},plan.strip as u8,LAST_WRITTEN,PUBLISHED_PIXELS);}
     }
+    if plan.is_full(){
+        static mut LAST_CHROME_METRICS:Option<(u32,usize,usize)>=None;
+        let m=scene.metrics;let stamp=(m.scale(),w,h);
+        unsafe{if LAST_CHROME_METRICS!=Some(stamp){
+            LAST_CHROME_METRICS=Some(stamp);
+            sex_pdx::serial_record!("[display.chrome.metrics] scale={} bar={} title={} inset={} body_top={} target={} width={} height={} publication=1",m.scale(),m.bar(),m.title(),m.px(8),m.title()+m.px(8),m.px(24),w,h);
+        }}
+    }
+    if plan.clock_dirty(){civil_clock_drawn(&scene.bar,w,h,plan.label());}
     // Copy only descriptive transaction identities. The payload remains owned
     // by this scene, which ordinary scope Drop scrubs before Main commits text.
     let text_projections=scene.text_projections;
-    Some(PublishedFrame{plan,present_bits,canon_ss,text_projections})
+    Some(PublishedFrame{plan,bar_height:scene.metrics.bar()as usize,present_bits,canon_ss,text_projections})
 }
-fn render(fb:*mut u32,w:usize,h:usize,bar:&SilkBar)->bool{render_prepared(fb,w,h,bar,Plan::full()).is_some()}
+fn render(fb:*mut u32,w:usize,h:usize,bar:&SilkBar)->bool{
+    render_prepared(fb,w,h,bar,Plan::full()).is_some()
+}
 
 fn raster_full(target: &frame_output::Target<'_>, scene: &scene::SceneSnapshot) -> bool {
     let fb=target.pointer();
@@ -2123,22 +2101,22 @@ fn raster_full(target: &frame_output::Target<'_>, scene: &scene::SceneSnapshot) 
     }
     if !ANIM_PROOF_LOGGED.swap(true, core::sync::atomic::Ordering::Relaxed) {
         let _ = frame;
-        serial_println!("[sexdisplay.render.anim] period=96 base=48 amp=32");
+        serial_println!("[sexdisplay.render.anim] enabled=0 reason=quiet_chrome");
     }
     if !R6_GLASS_PROOF_LOGGED.swap(true, core::sync::atomic::Ordering::Relaxed) {
-        serial_println!("[sexdisplay.render.glass.r6] bar_alpha=196 chip_alpha=212 blur=1 pulse=1");
+        serial_println!("[sexdisplay.render.glass.r6] bar_alpha=196 chip_alpha=212 blur=1 pulse=0");
     }
 
     let bar=&scene.bar;
     let focused_id=scene.focus;
     // Top strip boundary: BAR_H = 50. Keep in sync with BAR_H constant.
     // Rows 0..49 = SilkBar panel background, 50 = glow edge.
-    let clock_lines=civil_clock_lines(&bar.civil_clock);
+    let clock_lines=civil_clock_caption(&bar.civil_clock);
     let _=focused_id;
     if total_pixels<w*h{return false;}
-    for y in 0..h.min(51) {
+    for y in 0..h.min((scene.metrics.bar()as usize)) {
         for x in 0..w {
-            let c: u32 = if y < 50 {
+            let c: u32 = if y < (scene.metrics.bar()as usize).saturating_sub(scene.metrics.scale()as usize) {
                 top_strip_pixel(x, y, bar, &clock_lines, scene)
             } else {
                 DEFAULT_THEME.panel_glow // low-contrast bar edge
@@ -2146,7 +2124,7 @@ fn raster_full(target: &frame_output::Target<'_>, scene: &scene::SceneSnapshot) 
             unsafe { core::ptr::write_volatile(fb.add(y*w+x), c); }
         }
     }
-    for y in 51..h{raster_row(fb,y,0,w,w,h,scene);}
+    for y in (scene.metrics.bar()as usize)..h{raster_row(fb,y,0,w,w,h,scene);}
     true
 }
 
@@ -2160,7 +2138,7 @@ fn raster_strip(target: &frame_output::Target<'_>, scene: &scene::SceneSnapshot)
     if w == 0 || h == 0 || w > MAX_FB_W || h > MAX_FB_H {
         return false;
     }
-    if h < 51 {
+    if h < (scene.metrics.bar()as usize) {
         return false;
     }
     let total_pixels = match w.checked_mul(h) {
@@ -2334,10 +2312,10 @@ fn raster_strip(target: &frame_output::Target<'_>, scene: &scene::SceneSnapshot)
     }
     // Top strip boundary: rows 0..50. Keep in sync with BAR_H constant.
     // Row 50 = glow edge; rows 0..49 = SilkBar panel fill + modules.
-    let clock_lines=civil_clock_lines(&bar.civil_clock);
-    for y in 0..51 {
+    let clock_lines=civil_clock_caption(&bar.civil_clock);
+    for y in 0..(scene.metrics.bar()as usize).min(h) {
         for x in 0..w {
-            let c: u32 = if y < 50 {
+            let c: u32 = if y < (scene.metrics.bar()as usize).saturating_sub(scene.metrics.scale()as usize) {
                 top_strip_pixel(x, y, bar, &clock_lines, scene)
             } else {
                 DEFAULT_THEME.panel_glow
@@ -2366,7 +2344,7 @@ fn raster_area(target: &frame_output::Target<'_>, scene: &scene::SceneSnapshot) 
     let (w,h)=(target.width(),target.height());
 
     if w == 0 || h == 0 || w > MAX_FB_W || h > MAX_FB_H { return false; }
-    if h < 51 { return false; }
+    if h < (scene.metrics.bar()as usize) { return false; }
     let total_pixels = match w.checked_mul(h) {
         Some(v) => v,
         None => return false,
@@ -2381,8 +2359,8 @@ fn raster_area(target: &frame_output::Target<'_>, scene: &scene::SceneSnapshot) 
         }
     }
     if total_pixels<w*h{return false;}
-    for x in 0..w{unsafe{core::ptr::write_volatile(fb.add(50*w+x),DEFAULT_THEME.panel_glow);}} // low-contrast bar edge
-    for y in 51..h{raster_row(fb,y,0,w,w,h,scene);}
+    for x in 0..w{unsafe{core::ptr::write_volatile(fb.add(((scene.metrics.bar()as usize)-1)*w+x),DEFAULT_THEME.panel_glow);}} // low-contrast bar edge
+    for y in (scene.metrics.bar()as usize)..h{raster_row(fb,y,0,w,w,h,scene);}
     true
 }
 
@@ -2391,7 +2369,7 @@ fn raster_area(target: &frame_output::Target<'_>, scene: &scene::SceneSnapshot) 
 fn text_surface_damage(surf: &Surface, w: usize, h: usize) -> (usize,usize,usize,usize) {
     if surf.text_len == 0 || surf.line_count == 0 {return (0,0,0,0);}
     let (x,y,sw,sh)=surface_groups::rect(surf,w,h);
-    let top=if surf.chrome_flags & SURFACE_CHROME_TOP_BAR != 0 {FRAME_TOP_BAR_HEIGHT_PX+8} else {sex_pdx::desktop_style::TEXT_TOP as usize};
+    let top=if surf.chrome_flags & SURFACE_CHROME_TOP_BAR != 0 {frame_height()+frame_rim()} else {chrome_metrics().px(sex_pdx::desktop_style::TEXT_TOP)as usize};
     let text_y=(surf.y.max(0) as usize).saturating_add(top).max(y);
     let bottom=(surf.y.max(0) as usize).saturating_add(top)
         .saturating_add(surf.line_count as usize * 9 * surface_text_scale(surf))
@@ -2405,8 +2383,8 @@ fn raster_damage(target: &frame_output::Target<'_>, rect: damage::Rect, scene: &
     let fb=target.pointer();
     let (w,h)=(target.width(),target.height());
 
-    if w == 0 || h < 51 || w > MAX_FB_W || h > MAX_FB_H { return false; }
-    if rect.x >= rect.right || rect.y < 51 || rect.y >= rect.bottom || rect.right > w || rect.bottom > h { return false; }
+    if w == 0 || h < (scene.metrics.bar()as usize) || w > MAX_FB_W || h > MAX_FB_H { return false; }
+    if rect.x >= rect.right || rect.y < (scene.metrics.bar()as usize) || rect.y >= rect.bottom || rect.right > w || rect.bottom > h { return false; }
     if ATLAS_PHASE_C_RENDER_STUB_PROOF_ENABLED || ATLAS_PHASE_D_FRAME_PREVIEW_STUB_PROOF_ENABLED {
         return raster_area(target,scene);
     }
@@ -2469,16 +2447,16 @@ fn scrub_cursor_under(){
     }
 }
 
-fn restore_cursor_under(fb: *mut u32, w: usize, h: usize, total_pixels: usize) {
+fn restore_cursor_under(fb: *mut u32, w: usize, h: usize, total_pixels: usize, metrics:sex_pdx::desktop_style::chrome::Metrics) {
     unsafe {
         if !CURSOR_UNDER_VALID { return; }
         let ox = CURSOR_UNDER_X;
         let oy = CURSOR_UNDER_Y;
-        let cs = sex_pdx::desktop_style::ui_scale() as usize;
+        let cs = metrics.scale() as usize;
         for row in 0..CURSOR_ARROW_H * cs {
             let py = oy + row;
             if py >= h { break; }
-            if py < 51 { continue; } // never write into SilkBar zone (y<51)
+            if py < metrics.bar()as usize { continue; } // never write into SilkBar zone (y<51)
             for col in 0..CURSOR_ARROW_W * cs {
                 let px = ox + col;
                 if px >= w { continue; }
@@ -2535,11 +2513,11 @@ unsafe fn top_strip_render_proof(_fb: *const u32, _w: usize, _h: usize) {
     let Some(lease)=SceneLease::capture(PROOF_W,PROOF_H,&proof_bar) else{return;};
     let scene=lease.view();
     let proof_bar=&scene.bar;
-    let clock_lines=civil_clock_lines(&proof_bar.civil_clock);
+    let clock_lines=civil_clock_caption(&proof_bar.civil_clock);
     let mut any_nonzero = false;
     for y in 0..PROOF_H {
         for x in 0..PROOF_W {
-            let c = if y < 50 {
+            let c = if y+1 < bar_height() {
                 let background=bar_color(x,y,&proof_bar,scene);
                 if let Some(fg) = clock_fg_at(x, y, &proof_bar, &clock_lines, background) {
                     fg
@@ -2750,14 +2728,14 @@ fn draw_cursor_z_top(fb: *mut u32, w: usize, h: usize, total_pixels: usize, save
             // Save-under capture: full 8x16 rect, same clip rules as the
             // arrow write loop below, read-only against the framebuffer.
             // HiDPI: each arrow bit covers cs x cs pixels.
-            let cs = sex_pdx::desktop_style::ui_scale() as usize;
+            let cs = scene.metrics.scale() as usize;
             if save_under {
                 CURSOR_UNDER_X = ox;
                 CURSOR_UNDER_Y = oy;
                 for row in 0..CURSOR_ARROW_H * cs {
                     let py = oy + row;
                     if py >= h { break; }
-                    if py < 51 { continue; }
+                    if py < (scene.metrics.bar()as usize) { continue; }
                     for col in 0..CURSOR_ARROW_W * cs {
                         let px = ox + col;
                         if px >= w { continue; }
@@ -2773,7 +2751,7 @@ fn draw_cursor_z_top(fb: *mut u32, w: usize, h: usize, total_pixels: usize, save
             for row in 0..CURSOR_ARROW_H * cs {
                 let py = oy + row;
                 if py >= h { break; }
-                if py < 51 { continue; } // never write into SilkBar zone (y<51)
+                if py < (scene.metrics.bar()as usize) { continue; } // never write into SilkBar zone (y<51)
                 let bits = CURSOR_ARROW_BITMAP[row / cs];
                 for col in 0..CURSOR_ARROW_W * cs {
                     if bits & (0x80u8 >> (col / cs)) == 0 { continue; }
@@ -2800,7 +2778,7 @@ fn draw_launcher_panel(fb: *mut u32, w: usize, h: usize, total_pixels: usize, sc
     unsafe {
         for surf in scene.surfaces.iter() {
             if !surf.active || surf.surface_id != LAUNCHER_PANEL_SURFACE_ID { continue; }
-            let (sx, sy, sw, sh) = clamp_surface(surf, w, h);
+            let (sx, sy, sw, sh) = scene.groups.rect(surf, w, h);
             if sw == 0 || sh == 0 { break; }
             const LAUNCHER_PANEL_COLOR: u32 = 0x00203058;
             const LAUNCHER_BORDER_COLOR: u32 = 0x00405880;
@@ -2892,7 +2870,7 @@ fn draw_atlas_cards_pass(fb: *mut u32, w: usize, h: usize, total_pixels: usize, 
                 continue;
             }
 
-            let (sx, sy, sw, sh) = clamp_surface(surf, w, h);
+            let (sx, sy, sw, sh) = scene.groups.rect(surf, w, h);
             if sw == 0 || sh == 0 {
                 unsafe {
                     static mut ATLAS_CARD_SKIP_BUDGET: u32 = 8;
@@ -2908,7 +2886,7 @@ fn draw_atlas_cards_pass(fb: *mut u32, w: usize, h: usize, total_pixels: usize, 
                 continue;
             }
             // Card must be entirely below the SilkBar (y >= 51).
-            if sy < 51 {
+            if sy < scene.metrics.bar()as usize {
                 unsafe {
                     static mut ATLAS_CARD_SKIP_BUDGET: u32 = 8;
                     let b = &mut ATLAS_CARD_SKIP_BUDGET;
@@ -2949,7 +2927,7 @@ fn draw_atlas_cards_pass(fb: *mut u32, w: usize, h: usize, total_pixels: usize, 
             for edge_row in 0..ATLAS_CARD_BORDER_PX {
                 // Top edge
                 let ty = sy.saturating_add(edge_row);
-                if ty < h && ty >= 51 {
+                if ty < h && ty >= scene.metrics.bar()as usize {
                     for px in sx..right {
                         if px < w {
                             let idx = ty * w + px;
@@ -2961,7 +2939,7 @@ fn draw_atlas_cards_pass(fb: *mut u32, w: usize, h: usize, total_pixels: usize, 
                 }
                 // Bottom edge
                 let by = bottom.saturating_sub(edge_row + 1);
-                if by < h && by >= 51 {
+                if by < h && by >= scene.metrics.bar()as usize {
                     for px in sx..right {
                         if px < w {
                             let idx = by * w + px;
@@ -2977,7 +2955,7 @@ fn draw_atlas_cards_pass(fb: *mut u32, w: usize, h: usize, total_pixels: usize, 
                 let lx = sx.saturating_add(edge_col);
                 if lx < w {
                     for py in sy..bottom {
-                        if py < h && py >= 51 {
+                        if py < h && py >= scene.metrics.bar()as usize {
                             let idx = py * w + lx;
                             if idx < total_pixels {
                                 core::ptr::write_volatile(fb.add(idx), ATLAS_CARD_BORDER_COLOR);
@@ -2989,7 +2967,7 @@ fn draw_atlas_cards_pass(fb: *mut u32, w: usize, h: usize, total_pixels: usize, 
                 let rx = right.saturating_sub(edge_col + 1);
                 if rx < w {
                     for py in sy..bottom {
-                        if py < h && py >= 51 {
+                        if py < h && py >= scene.metrics.bar()as usize {
                             let idx = py * w + rx;
                             if idx < total_pixels {
                                 core::ptr::write_volatile(fb.add(idx), ATLAS_CARD_BORDER_COLOR);
@@ -3069,8 +3047,8 @@ fn draw_atlas_frame_previews_pass(fb: *mut u32, w: usize, h: usize, total_pixels
                 let surf = &scene.surfaces[si];
                 if !surf.active { continue; }
                 if surf.surface_id == CURSOR_SURFACE_ID || surf.surface_id == LAUNCHER_PANEL_SURFACE_ID { continue; }
-                let (_, sy, sw, sh) = clamp_surface(surf, w, h);
-                if sw == 0 || sh == 0 || sy < 51 { continue; }
+                let (_, sy, sw, sh) = scene.groups.rect(surf, w, h);
+                if sw == 0 || sh == 0 || sy < scene.metrics.bar()as usize { continue; }
                 let inner_w = sw.saturating_sub(2 * ATLAS_PREVIEW_INNER_MARGIN);
                 let inner_h = sh.saturating_sub(2 * ATLAS_PREVIEW_INNER_MARGIN);
                 if inner_w < 4 || inner_h < 4 { continue; }
@@ -3096,7 +3074,7 @@ fn draw_atlas_frame_previews_pass(fb: *mut u32, w: usize, h: usize, total_pixels
                 continue;
             }
 
-            let (sx, sy, sw, sh) = clamp_surface(surf, w, h);
+            let (sx, sy, sw, sh) = scene.groups.rect(surf, w, h);
             if sw == 0 || sh == 0 {
                 unsafe {
                     static mut ATLAS_PREVIEW_SKIP_BUDGET: u32 = 8;
@@ -3111,7 +3089,7 @@ fn draw_atlas_frame_previews_pass(fb: *mut u32, w: usize, h: usize, total_pixels
                 }
                 continue;
             }
-            if sy < 51 {
+            if sy < scene.metrics.bar()as usize {
                 unsafe {
                     static mut ATLAS_PREVIEW_SKIP_BUDGET: u32 = 8;
                     let b = &mut ATLAS_PREVIEW_SKIP_BUDGET;
@@ -3178,7 +3156,7 @@ fn draw_atlas_frame_previews_pass(fb: *mut u32, w: usize, h: usize, total_pixels
 
             // Draw interior fill — flat ARGB, per-pixel bounds-checked.
             for py in inner_y..inner_bottom {
-                if py >= 51 {
+                if py >= scene.metrics.bar()as usize {
                     for px in inner_x..inner_right {
                         if px < w {
                             let idx = py * w + px;
@@ -3437,7 +3415,7 @@ fn commit_published_text(published:&PublishedFrame)->usize{
     for(index,projection)in published.text_projections.iter().copied().enumerate(){
         let Some(projection)=projection else{continue;};
         if let scene::TextCoverage::Body(required)=projection.coverage{
-            if !published.plan.covers_body(required){continue;}
+            if !published.plan.covers_body(required,published.bar_height){continue;}
         }
         let context=projection.context;
         unsafe{
@@ -3527,9 +3505,11 @@ pub extern "C" fn _start() -> ! {
         frame_layout.frame_bytes(),frame_layout.span_bytes(),frame_layout.total_bytes());
     sex_pdx::serial_record!("[display.boot.geometry] width={} height={} pitch={} boot=1",geometry.width,geometry.height,geometry.pitch);
     let physical=sex_pdx::display_boot::physical().unwrap_or(sex_pdx::display_boot::Physical{scale:1,width_mm:0,height_mm:0});
-    sex_pdx::desktop_style::set_ui_scale(physical.scale);
-    unsafe{BOOT_UI_SCALE=physical.scale;}
-    sex_pdx::serial_record!("[display.scale] scale={} width_mm={} height_mm={} reason=boot",physical.scale,physical.width_mm,physical.height_mm);
+    let boot_scale=sex_pdx::desktop_style::chrome::fit_scale(geometry.width,physical.scale,silkbar_model::MIN_CHROME_WIDTH);
+    sex_pdx::desktop_style::set_ui_scale(boot_scale);
+    unsafe{FRAME_GROUPS.set_scale(boot_scale);}
+    unsafe{BOOT_UI_SCALE=boot_scale;}
+    sex_pdx::serial_record!("[display.scale] scale={} width_mm={} height_mm={} reason=boot",boot_scale,physical.width_mm,physical.height_mm);
     serial_println!("[sexdisplay.init.start]");
     serial_println!("[silk.contract.validate.start]");
     let contract_err = validate_silkbar_contract();
@@ -3547,7 +3527,8 @@ pub extern "C" fn _start() -> ! {
     emit_renderer_conformance_marker(true);
 
     // Local SilkBar model — initialized from DEFAULT_SILK_BAR, mutated by OP_SILKBAR_UPDATE
-    let mut bar = silkbar_model::for_desktop_width(unsafe{FB_W}as usize).unwrap_or(DEFAULT_SILK_BAR);
+    let mut bar = DEFAULT_SILK_BAR;
+    reflow_bar(&mut bar,unsafe{FB_W}as usize);
     // Legacy software counters are available only through an explicit legacy
     // build profile; normal pixels start Unknown before the first source read.
     bar.civil_enabled=option_env!("SEXOS_LEGACY_DEMO_CLOCK").is_none();
@@ -3673,7 +3654,7 @@ pub extern "C" fn _start() -> ! {
         // ── Per-cycle flags ──
         unsafe { REPAINT_SEEN=0; REPAINT_DRAINED=0; REPAINT_UPSERTS=0; REPAINT_FITTED_NOOPS=0; }
         let mut needs_surface_redraw = false;
-        let mut text_damage = damage::Damage::new();
+        let mut text_damage = damage::Damage::new(bar_height());
         let mut needs_top_strip_redraw = false;
         // Cursor moved this cycle but nothing else did: eligible for the
         // save-under fast path instead of a full surface composite.
@@ -4067,11 +4048,14 @@ pub extern "C" fn _start() -> ! {
                     if !scale_receipts.allows_change(msg.caller_pd,msg.caller_task,msg.arg1){continue;}
                     let step = msg.arg0 as i64;
                     let before = sex_pdx::desktop_style::ui_scale();
-                    let wanted = sex_pdx::desktop_style::chrome::step_scale(before, unsafe { BOOT_UI_SCALE }, step);
+                    let requested = sex_pdx::desktop_style::chrome::step_scale(before, unsafe { BOOT_UI_SCALE }, step);
+                    let wanted=sex_pdx::desktop_style::chrome::fit_scale(unsafe{FB_W},requested,silkbar_model::MIN_CHROME_WIDTH);
                     // arg1 is a nonzero Shell request sequence. One accepted
                     // request stays retained through full publication + reply.
                     if msg.arg1!=0 && !scale_receipts.admit(msg.caller_pd,msg.caller_task,msg.arg1,wanted) {continue;}
                     sex_pdx::desktop_style::set_ui_scale(wanted);
+                    unsafe{FRAME_GROUPS.set_scale(wanted);FRAME_GROUPS.fit_children(&mut SURFACES);}
+                    reflow_bar(&mut bar,unsafe{FB_W}as usize);
                     if wanted != before {
                         unsafe {
                             for slot in SURFACES.iter_mut().filter(|s| s.active) { recompute_text_lines(slot); }
@@ -4585,6 +4569,8 @@ pub extern "C" fn _start() -> ! {
                     if changed {
                         let boot=unsafe{BOOT_UI_SCALE};
                         sex_pdx::desktop_style::set_ui_scale(boot);
+                        reflow_bar(&mut bar,unsafe{FB_W}as usize);
+                        unsafe{FRAME_GROUPS.set_scale(boot);FRAME_GROUPS.fit_children(&mut SURFACES);}
                         unsafe{for slot in SURFACES.iter_mut().filter(|s|s.active){recompute_text_lines(slot);}CURSOR_UNDER_VALID=false;}
                         needs_full_redraw=true;
                     }
@@ -4908,7 +4894,7 @@ pub extern "C" fn _start() -> ! {
         let (w,h)=unsafe{(FB_W as usize,FB_H as usize)};
         if needs_full_redraw||transaction_full_render||scale_receipts.needs_publication(){pending_paint.request_full();}
         if needs_surface_redraw{pending_paint.request_area();}
-        if let Some(rect)=text_damage.rect(){pending_paint.request_damage(rect,w,h);}
+        if let Some(rect)=text_damage.rect(){pending_paint.request_damage(rect,w,h,bar_height());}
         if cursor_only_moved{pending_paint.request_cursor();}
         if needs_top_strip_redraw{pending_paint.request_strip();}
         if typed_completion_needs_publication(){join_pending_text(&mut pending_paint,w,h);}

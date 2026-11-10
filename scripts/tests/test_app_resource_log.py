@@ -21,8 +21,8 @@ SYNTHETIC_VALID = """[boot.app.resources] target=15 task=32783 surface=300 slot=
 [app.service.ack] target=15 task=32783 holder=3 role=1 acked=1 required=31
 [display.app.cleanup.prepared] target=15 task=32783 removed=1 focus=0 tombstone=1
 [display.app.cleanup.committed] target=15 task=32783 scene=1
-[display.app.cleanup.ack] target=15 task=32783 role=display
 [app.service.ack] target=15 task=32783 holder=1 role=2 acked=3 required=31
+[display.app.cleanup.ack] target=15 task=32783 role=display
 [files.app.cleanup] target=15 task=32783 handles=1 removed=1
 [files.app.cleanup.ack] target=15 task=32783 ok=1
 [app.service.ack] target=15 task=32783 holder=11 role=4 acked=7 required=31
@@ -111,6 +111,27 @@ class AppResourceLogTests(unittest.TestCase):
 
     def test_display_ack_cannot_precede_scene_commit(self):
         self.reject(moved_before(SYNTHETIC_VALID, "display.app.cleanup.ack", "display.app.cleanup.committed"))
+
+    def test_display_local_return_may_follow_retirement_after_real_consumer_ack(self):
+        ack=line(SYNTHETIC_VALID,"display.app.cleanup.ack")
+        value=without(SYNTHETIC_VALID,"display.app.cleanup.ack")
+        value=value.replace(line(value,"sext.app.pool.ready"),ack+"\n"+line(value,"sext.app.pool.ready"),1)
+        self.assertEqual(checker.validate(value),[])
+        self.reject(without(value,"display.app.cleanup.ack"))
+        # A late producer log cannot supply a missing or premature kernel ACK.
+        consumer=next(r for r in value.splitlines()if r.startswith("[app.service.ack]")and" role=2 "in r)
+        self.reject(value.replace(consumer+"\n","",1))
+        early=value.replace(consumer+"\n","",1)
+        early=early.replace(line(early,"display.app.cleanup.committed"),consumer+"\n"+line(early,"display.app.cleanup.committed"),1)
+        self.reject(early)
+        self.reject(value.replace(consumer,consumer.replace("holder=1","holder=3")))
+        self.reject(value.replace(consumer,consumer.replace("task=32783","task=15")))
+
+    def test_display_local_return_cannot_precede_accepted_kernel_ack(self):
+        consumer=next(r for r in SYNTHETIC_VALID.splitlines()if r.startswith("[app.service.ack]")and" role=2 "in r)
+        ack=line(SYNTHETIC_VALID,"display.app.cleanup.ack")
+        value=without(SYNTHETIC_VALID,"display.app.cleanup.ack").replace(consumer,ack+"\n"+consumer,1)
+        self.reject(value)
 
     def test_display_commit_cannot_precede_prepare(self):
         self.reject(moved_before(SYNTHETIC_VALID, "display.app.cleanup.committed", "display.app.cleanup.prepared"))

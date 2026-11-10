@@ -5,7 +5,7 @@ page DOM mouse events at the element under the pointer (offsetX/Y on a canvas,
 click, contextmenu, wheel), and follows a link a click lands on."""
 import argparse,http.server,os,re,shutil,threading,time
 from pathlib import Path
-from browser_gate_viewport import full_viewport
+from browser_gate_viewport import full_viewport, content_rect
 ROOT=Path(__file__).resolve().parents[1]
 SITE=ROOT/'scripts/web_site'
 BAR=30
@@ -49,7 +49,7 @@ def main():
   launch=g['wait'](rf'\[shell.program.launch\] target={target} task={task} surface=(\d+)',s,60);surface=int(launch[1])
   time.sleep(3)
   x,y,w,h=full_viewport(g,ROOT,surface)
-  ox,oy=x+8,y+36+BAR  # the page's top-left on screen
+  ox,oy,_,_=content_rect(t(),(x,y,w,h));oy+=BAR  # page origin after browser toolbar
   s=len(t());move(ox+50,oy+40)
   near(g['wait'](r'\[web.console\] level=0 mouse move (-?\d+),(-?\d+)',s,60),50,40)
   s=len(t());button('left',True);button('left',False)

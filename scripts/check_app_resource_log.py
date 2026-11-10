@@ -40,13 +40,21 @@ def validate(text):
     try:
         if int(retired['pages'])*4096!=int(retired['bytes']) or int(retired['pages'])<16:errors.append('private page accounting')
     except (KeyError,ValueError):errors.append('invalid private page totals')
-    for name in ['shell.app.cleanup','shell.app.cleanup.ack','display.app.cleanup.prepared','display.app.cleanup.committed','display.app.cleanup.ack','files.app.cleanup','files.app.cleanup.ack','net.app.cleanup.ack','bell.app.cleanup','bell.app.cleanup.ack']:
+    for name in ['shell.app.cleanup','shell.app.cleanup.ack','display.app.cleanup.prepared','display.app.cleanup.committed','files.app.cleanup','files.app.cleanup.ack','net.app.cleanup.ack','bell.app.cleanup','bell.app.cleanup.ack']:
         row=one(name)
         if row.get('task')!=task:errors.append(name+': wrong task')
         if not terminal_pos<row.get('_pos',-1)<retired.get('_pos',-1):errors.append(name+': retirement ordering')
     if any(r.get('task')!=task or not terminal_pos<r['_pos']<retired.get('_pos',-1) for r in role_rows):errors.append('role ACK identity/order')
     prepared=one('display.app.cleanup.prepared');committed=one('display.app.cleanup.committed');display_ack=one('display.app.cleanup.ack')
-    if not prepared.get('_pos',10**9)<committed.get('_pos',-1)<display_ack.get('_pos',-1):errors.append('display prepare/scene commit/ACK order')
+    # The ACK syscall may hand off immediately: the coordinator can retire the
+    # app before Display resumes to print its local return marker. The kernel's
+    # accepted role-2 ACK is the actual custody-transfer observation.
+    consumed=[r for r in role_rows if r.get('role')=='2']
+    consume_pos=consumed[0]['_pos'] if len(consumed)==1 else -1
+    if display_ack.get('task')!=task:errors.append('display.app.cleanup.ack: wrong task')
+    if not (prepared.get('_pos',10**9)<committed.get('_pos',-1)<consume_pos<retired.get('_pos',-1)
+            and consume_pos<display_ack.get('_pos',-1)):
+        errors.append('display prepare/scene commit/consumer ACK/local return order')
     for row in role_rows:
         if row.get('holder')!={'1':'3','2':'1','4':'11','8':'13','16':'10'}.get(row.get('role')):errors.append('wrong service ACK holder')
     closed=one('paging.target.cleanup');eq(closed,task=task,leaves=4,closed=1,all_flushed=1)

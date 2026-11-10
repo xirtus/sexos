@@ -52,6 +52,11 @@ pub const TITLE_H: usize = 18;
 const TITLE_BASELINE: i32 = 14 * 256;
 /// Pixels a glyph's bitmap reaches left of its pen position, for overhangs.
 const TITLE_LEFT: i32 = 2;
+fn sans_padding(size:u32)->i32{
+    let base=sex_pdx::desktop_style::chrome::UI_FONT*64;
+    let scale=size/base;
+    if size%base==0&&scale>=1&&scale<=3{TITLE_LEFT*scale as i32}else{TITLE_LEFT}
+}
 
 /// Window titles are at most 16 bytes; panel notices use up to 48.
 const TITLE_MAX: usize = 48;
@@ -80,7 +85,7 @@ fn text_layout(title: &[u8], size: u32) -> Option<&'static TitleLayout> {
         if let (Some(p), Some(g)) = (prev, glyph) { pen += font.kerning(p, g, size); }
         l.pen[i] = pen;
         if let Some(g) = glyph {
-            let width = ((font.advance(g, size) + 255) >> 8) + 2 * TITLE_LEFT;
+            let width = ((font.advance(g, size) + 255) >> 8) + 2 * sans_padding(size);
             if width as usize <= MAX_W { l.glyph[i] = g.0; l.width[i] = width as u8; }
             pen += font.advance(g, size);
             prev = Some(g);
@@ -115,6 +120,22 @@ pub fn caption_width(text: &[u8]) -> Option<usize> {
     Some(((layout.pen[last] + advance + 255).max(0) >> 8) as usize)
 }
 
+/// Default UI role: natural Geist Sans at 13 logical pixels on a 16px line.
+/// Device scale changes size and baseline together; Mono document grids remain
+/// separate. The fixed glyph/layout caches retain the same bounded backing.
+pub const UI_H:usize=sex_pdx::desktop_style::chrome::UI_LINE as usize;
+pub fn ui_width(text:&[u8],scale:u32)->Option<usize>{
+    let size=sex_pdx::desktop_style::chrome::UI_FONT*64*scale.clamp(1,3);
+    let l=text_layout(text,size)?;
+    if l.len==0{return Some(0);}
+    let last=l.len-1;
+    Some(((l.pen[last]+sans()?.advance(sex_font::GlyphId(l.glyph[last]),size)+255).max(0)>>8)as usize)
+}
+pub fn ui_coverage(text:&[u8],x:i32,y:usize,scale:u32)->Option<u8>{
+    let scale=scale.clamp(1,3);
+    sans_coverage(text,x,y,sex_pdx::desktop_style::chrome::UI_FONT*64*scale,UI_H*scale as usize,sex_pdx::desktop_style::chrome::UI_FONT as i32*256*scale as i32)
+}
+
 /// Title coverage at (`x`, `y`) pixels from the title's top left.
 pub fn title_coverage(title: &[u8], x: i32, y: usize) -> u8 {
     sans_coverage(title, x, y, TITLE_SIZE, TITLE_H, TITLE_BASELINE).unwrap_or(0)
@@ -131,7 +152,7 @@ fn sans_coverage(title: &[u8], x: i32, y: usize, size: u32, height: usize, basel
     let font = sans()?;
     let mut cover = 0u32;
     for i in 0..l.len {
-        let left = (l.pen[i] >> 8) - TITLE_LEFT;
+        let left = (l.pen[i] >> 8) - sans_padding(size);
         if x < left { break; }
         let width = l.width[i] as i32;
         if l.glyph[i] == 0 { return None; }
@@ -139,7 +160,7 @@ fn sans_coverage(title: &[u8], x: i32, y: usize, size: u32, height: usize, basel
         let phase = ((l.pen[i] & 255) >> 6) as u8;
         let glyph = sex_font::GlyphId(l.glyph[i]);
         let key = Key { font: SANS, scalar: glyph.0 as u32, size: (size / 64) as u16, phase, w: width as u8, h: height as u8 };
-        let origin = TITLE_LEFT * 256 + phase as i32 * 64;
+        let origin = sans_padding(size) * 256 + phase as i32 * 64;
         let bitmap = cache().get(key, |out| font.draw(glyph, size, origin, baseline, width as usize, height, acc(), out))?;
         cover += bitmap[y * width as usize + (x - left) as usize] as u32;
     }

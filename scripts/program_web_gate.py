@@ -5,6 +5,7 @@ the same page rendered on the host by `cargo run -p sex-web --example page`, pix
 pixel, before and after scrolling with Down and after Right focuses a link."""
 import argparse,re,shutil,subprocess,time
 from pathlib import Path
+from browser_gate_viewport import content_rect
 from PIL import Image
 from install_program import install
 from quil_autosave_gate import boot
@@ -29,8 +30,8 @@ def main():
  def compare(name,scroll,focus,tile):
   ref=reference(a.out,scroll,focus)
   shot=a.out/f'{name}.ppm';q.cmd('screendump',{'filename':str(shot)});time.sleep(.5)
-  x,y,w,h=tile;img=Image.open(shot).convert('RGB');bx,by=x+8,y+36
-  vw,vh=min(W,w-16),min(H,h-44)
+  img=Image.open(shot).convert('RGB');bx,by,bw,bh=content_rect(t(),tile)
+  vw,vh=min(W,bw),min(H,bh)
   checked=bad=worst=0
   for py in range(0,vh,3):
    for px in range(0,vw,5):

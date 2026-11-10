@@ -21,10 +21,15 @@ pub const fn bytes_for_screen(width: u64, height: u64) -> u64 {
 /// Where a program's pixels start inside its framed window: below the title bar,
 /// inside the border. Display draws there and Shell reports the size left.
 pub const LEFT: u32 = crate::desktop_style::INSET;
-pub const TOP: u32 = 28 + 8;
+pub const TOP: u32 = crate::desktop_style::chrome::TITLE+crate::desktop_style::chrome::RESIZE;
 /// The pixel area of a framed window `width` by `height`.
 pub const fn area(width: u32, height: u32) -> (u32, u32) {
     (width.saturating_sub(2 * LEFT), height.saturating_sub(TOP + LEFT))
+}
+/// Applied device-pixel viewport. Programs receive the resulting dimensions
+/// over their held resize route; they need no ambient monitor/scale access.
+pub const fn area_scaled(width:u32,height:u32,ui_scale:u32)->(u32,u32){
+    let b=crate::desktop_style::chrome::Metrics::new(ui_scale).body(width,height);(b.w,b.h)
 }
 /// Shell to program, as an input event (`app_key` opcode 0x202): the window's pixel
 /// area is now `word >> 32` by `word & 0xFFFF_FFFF`.

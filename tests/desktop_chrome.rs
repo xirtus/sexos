@@ -112,3 +112,24 @@ fn pending_receipt_blocks_legacy_and_incarnation_reset_fences_delayed_old_reply(
     assert_eq!(fresh.receive(1,1,display.reply().unwrap().1),Some(1));
     let mut exhausted=ScaleClient::for_incarnation(1<<14);assert!(!exhausted.begin(1));
 }
+
+#[test]fn narrow_framebuffers_refuse_an_unfittable_scale_without_overflow(){
+ use desktop_style::chrome::fit_scale;
+ for (w,requested,want) in [(640,3,2),(800,3,2),(960,3,3),(1024,3,3),(1280,2,2),(1,3,1),(8192,99,3)]{
+  assert_eq!(fit_scale(w,requested,320),want);
+ }
+ assert_eq!(fit_scale(8192,3,u32::MAX),1);
+}
+
+#[test]fn scaled_overlay_fits_workarea_with_independent_centered_goldens(){
+ for(ui,w,h,expected)in[(1,1280,800,Rect{x:400,y:274,w:480,h:280}),
+ (2,1280,800,Rect{x:160,y:148,w:960,h:560}),
+ (3,1024,768,Rect{x:24,y:108,w:976,h:636})]{
+  let m=Metrics::new(ui);let r=m.centered_panel(w,h,480,280);assert_eq!(r,expected);
+  assert!(r.y>=m.bar());assert!(r.x+r.w<=w&&r.y+r.h<=h);
+ }
+ for ui in[0,1,2,3,u32::MAX]{for(w,h)in[(0,0),(1,1),(15,27),(320,240),(u32::MAX,u32::MAX)]{
+  let r=Metrics::new(ui).centered_panel(w,h,u32::MAX,u32::MAX);
+  assert!(r.x<=w&&r.y<=h&&r.w<=w-r.x&&r.h<=h-r.y);
+ }}
+}

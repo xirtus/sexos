@@ -49,6 +49,8 @@ jobs:
       run: bash scripts/program_heap_limit_host_gate.sh
     - name: Native screenshot custody and PNG output on the host
       run: bash scripts/desktop_capture_host_gate.sh
+    - name: HTML containing-block and replaced sizing
+      run: cargo test --locked -p sex-html
     - name: Disk layouts (GPT, FAT, install beside other systems)
       run: cargo test --locked -p sex-disk --lib
     - name: Crash record format host regressions
@@ -123,6 +125,10 @@ jobs:
       run: |
         truncate -s 1G "$RUNNER_TEMP/blank-classic.img"
         python3 scripts/program_web_classic_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-classic.img" --out "$RUNNER_TEMP/sexos-runtime/web-classic"
+    - name: Native Promise rejection events and source isolation
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/blank-promise.img"
+        python3 scripts/program_web_promise_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-promise.img" --out "$RUNNER_TEMP/sexos-runtime/web-promise"
     - name: Native screenshot saved as a real PNG file
       run: |
         truncate -s 1G "$RUNNER_TEMP/capture-source.img"

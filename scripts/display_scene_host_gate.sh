@@ -38,7 +38,7 @@ def wiring(s):
     assert 'letbitmap=ifpublished.plan.is_full(){unsafe{BITMAP_STORES.release_after_publication()}}else{0};'in finish,'bitmap remains Full only'
     assert finish.index('BITMAP_STORES.release_after_publication()')<finish.index('lifecycle.pixels_presented('),'bitmap eligibility must follow same Full'
     commit=compact(function(s,'commit_published_text'))
-    assert commit.index('if!published.plan.covers_body(required){continue;}')<commit.index('pending.context()!=context'),'coverage precedes context settlement'
+    assert commit.index('if!published.plan.covers_body(required,published.bar_height){continue;}')<commit.index('pending.context()!=context'),'coverage precedes context settlement'
     assert commit.index('pending.context()!=context')<commit.index('apply_pending_text(slot,&pending)')<commit.index('stage.release_matching(context)')<commit.index('[display.text.committed]'),'exact captured context precedes canonical commit, eligibility and diagnostics'
     assert render=='fnrender(fb:*mutu32,w:usize,h:usize,bar:&SilkBar)->bool{render_prepared(fb,w,h,bar,Plan::full()).is_some()}','bootstrap full uses prepared publication'
     prepared=compact(function(s,'render_prepared'));batch=compact(function(s,'raster_batch'))
@@ -46,7 +46,7 @@ def wiring(s):
     assert prepared.count('SceneLease::capture(')==1 and prepared.count('raster_batch(')==1 and prepared.count('preparation.commit(')==1,'one scene/preparation/publication per batch'
     assert prepared.index('store.prepare(')<prepared.index('SceneLease::capture(')<prepared.index('letscene=lease.view();')<prepared.index('raster_batch(&target,scene,plan)')<prepared.index('preparation.commit(|frame|publish_frame(fb,w,h,frame))')<prepared.index('letpresent_bits=ifsettle_only{0}else{unsafe{APP_PRESENT_BITS}};')<prepared.index('record_cursor_presented();')<prepared.index('report_app_presented();')<prepared.index('civil_clock_drawn('),'one owned scene covers raster/publish/posteffects'
     assert prepared.index('preparation.commit(')<prepared.index('lettext_projections=scene.text_projections;')
-    assert prepared.endswith('Some(PublishedFrame{plan,present_bits,canon_ss,text_projections})}') and not any(x in prepared for x in('mem::forget','ManuallyDrop','drop(lease)')),'lease stays ordinary scoped ownership through receipt construction'
+    assert prepared.endswith('Some(PublishedFrame{plan,bar_height:scene.metrics.bar()asusize,present_bits,canon_ss,text_projections})}') and not any(x in prepared for x in('mem::forget','ManuallyDrop','drop(lease)')),'lease stays ordinary scoped ownership through receipt construction'
     assert 'requested.is_empty()||!valid_scanout('in prepared and 'if!prepared{drop(preparation);backup.restore();returnNone;}'in prepared
     assert 'if!preparation.commit(|frame|publish_frame(fb,w,h,frame)){backup.restore();returnNone;}'in prepared
     assert batch.index('ifplan.settle_only(){returntrue;}')<batch.index('restore_cursor_under('),'pure Settle leaves cursor and overlays untouched'
@@ -80,7 +80,7 @@ parent=[]
 for name in ['MAX_FB_W','MAX_FB_H','BAR_BG_H','BAR_BG_W_CAP','BAR_BG_BUF','BAR_BLUR_BUF','FOCUS_SURFACE_COLOR','FRAME_RIM_COLOR','FRAME_TOP_BAR_COLOR','TAB_ACTIVE_COLOR','TAB_INACTIVE_COLOR','FRAME_LIGHT_CLOSE_COLOR','FRAME_LIGHT_MINIMIZE_COLOR','FRAME_LIGHT_ZOOM_COLOR','DEFAULT_RENDER_TOKENS','SURFACE_CHROME_TOP_BAR','FRAME_TOP_BAR_HEIGHT_PX']:parent.append(item(source,name))
 parent.append('#[derive(Clone, Copy)]\n#[repr(C)]\n'+block(source,'struct RenderTokensV1 {'))
 parent+=['use silkbar_model::{SilkBar,DEFAULT_THEME};','use surface_lifecycle::{TEXT_BUF_CAP,TEXT_MAX_ROWS,TEXT_LEGACY_COLS};']
-for name in ['lerp_color_xrgb','vertical_gradient_xrgb','bg','scene_bar_blur_rows','fill_bar_bg_buffer','blur_bar_bg_buffer_radius1','surface_text_scale','recompute_text_lines','apply_pending_text','text_surface_damage']:parent.append(function(source,name))
+for name in ['chrome_metrics','frame_height','frame_rim','surface_text_scale_for','lerp_color_xrgb','vertical_gradient_xrgb','bg','scene_bar_blur_rows','fill_bar_bg_buffer','blur_bar_bg_buffer_radius1','surface_text_scale','recompute_text_lines','apply_pending_text','text_surface_damage']:parent.append(function(source,name))
 parent_path=out/'parent.rs';parent_path.write_text('\n'.join(parent))
 lease=[]
 for name in ['RENDER_SCENE','SURFACES','FRAME_GROUPS','BITMAP_STORES','DISPLAY_TOKENS','FOCUSED_SURFACE_ID','RENDER_FRAME_COUNTER','TEXT_STAGES','TOKEN_BUF_CALL1_RECEIVED','TOKEN_BUF_OWNER','TOKEN_BUF_ARG0','TOKEN_BUF_ARG1','TOKEN_BUF_ARG2','CURSOR_UNDER_VALID','APP_PRESENT_BITS','CLOCK_CANON_SS','FRAME_OUTPUT','PREPARED_CURSOR']:lease.append(item(source,name))
@@ -115,7 +115,7 @@ controls +=[
  ('typed-helper-text-omitted','lease','TEXT_STAGES.iter().any(text_transaction::Stage::needs_publication)','false','actual_typed_text_noop_empty_and_hidden_completion_force_publication'),
  ('typed-helper-bitmap-omitted','lease','BITMAP_STORES.needs_publication()','false','actual_typed_bitmap_empty_and_hidden_completion_force_publication'),
  ('typed-crossed-context','lease','if pending.context()!=context{continue;}','/* unchecked captured context */','actual_finish_rejects_crossed_or_cancelled_captured_text_contexts'),
- ('coverage-ignored','lease','if !published.plan.covers_body(required){continue;}','/* unchecked coverage */','actual_partial_text_publication_covers_shortened_old_bounds_before_commit'),
+ ('coverage-ignored','lease','if !published.plan.covers_body(required,published.bar_height){continue;}','/* unchecked coverage */','actual_partial_text_publication_covers_shortened_old_bounds_before_commit'),
  ('lost-old-text-bounds','lease','required.add(text_surface_damage(old,w,h),w,h);','/* old bounds omitted */','actual_partial_text_publication_covers_shortened_old_bounds_before_commit'),
  ('lost-new-text-bounds','lease','required.add(text_surface_damage(new,w,h),w,h);','/* new bounds omitted */','actual_partial_text_publication_covers_shortened_old_bounds_before_commit'),
 ]

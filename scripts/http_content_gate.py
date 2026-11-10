@@ -25,7 +25,7 @@ STREAM_BODY=(b''.join((b' '*48 if n%11==10 else(f'{n:03d} SEXOS STREAM LINE / SO
 assert len(STREAM_BODY)==12288
 
 def load_pixel_contract(root):
- paths={'renderer':'servers/sexdisplay/src/main.rs','preview':'apps/kaleidoscope/src/body_text.rs','compose':'apps/kaleidoscope/src/browser_view.rs','app':'apps/kaleidoscope/src/main.rs','style':'crates/sex-pdx/src/desktop_style.rs','surface':'servers/sexdisplay/src/surface_lifecycle.rs','wire':'crates/sex-http/src/codec.rs','wire_facade':'apps/kaleidoscope/src/http_wire.rs','wire_lib':'crates/sex-http/src/lib.rs','wire_manifest':'crates/sex-http/Cargo.toml','wire_config':'crates/sex-net-config/src/lib.rs','client':'apps/kaleidoscope/src/http_probe.rs','reader':'apps/kaleidoscope/src/document_reader.rs','network_abi':'crates/sex-pdx/src/network_job.rs','text_encoding':'crates/sex-pdx/src/text_encoding.rs','palette_navigation':'scripts/quil_workflow_gate.py','palette_catalog':'servers/silk-shell/src/main.rs'}
+ paths={'chrome_geometry':'scripts/browser_gate_viewport.py','renderer':'servers/sexdisplay/src/main.rs','preview':'apps/kaleidoscope/src/body_text.rs','compose':'apps/kaleidoscope/src/browser_view.rs','app':'apps/kaleidoscope/src/main.rs','style':'crates/sex-pdx/src/desktop_style.rs','surface':'servers/sexdisplay/src/surface_lifecycle.rs','wire':'crates/sex-http/src/codec.rs','wire_facade':'apps/kaleidoscope/src/http_wire.rs','wire_lib':'crates/sex-http/src/lib.rs','wire_manifest':'crates/sex-http/Cargo.toml','wire_config':'crates/sex-net-config/src/lib.rs','client':'apps/kaleidoscope/src/http_probe.rs','reader':'apps/kaleidoscope/src/document_reader.rs','network_abi':'crates/sex-pdx/src/network_job.rs','text_encoding':'crates/sex-pdx/src/text_encoding.rs','palette_navigation':'scripts/quil_workflow_gate.py','palette_catalog':'servers/silk-shell/src/main.rs'}
  sources={key:(root/path).read_text()for key,path in paths.items()}
  if not re.fullmatch(r'(?s)\s*//[^\n]*\n//! Source-path facade:[^#]*#\[path="\.\./\.\./\.\./crates/sex-http/src/codec\.rs"\]\s*mod codec;\s*pub use self::codec::\*;\s*',sources['wire_facade']):raise ValueError('production HTTP facade no longer uses the single shared codec')
  if '#![no_std]'not in sources['wire_lib']or 'pub use codec::*;'not in sources['wire_lib']or 'mod codec;'not in sources['wire_lib']:raise ValueError('shared HTTP no_std library binding changed')
@@ -44,7 +44,12 @@ def load_pixel_contract(root):
  http={view:ast.literal_eval(value)for view,value in re.findall(r'http_probe::View::(\w+)=>\s*(b"[^"\n]*")',compose)}
  if not any(call in sources['app']for call in('self.ui.queue(&text.bytes[..text.len]','self.ui.queue_selected(&text.bytes[..text.len]'))or 'browser_view::compose('not in sources['app']:raise ValueError('Browser no longer publishes composed atomic snapshots')
  if 'self.ui.queue_selected(&text.bytes[..text.len]'in sources['app']and ('metadata,visible_selection)'not in sources['app']or 'visible_selection=f.selection'not in sources['app']):raise ValueError('Browser selected snapshot metadata binding changed')
- if 'FRAME_TOP_BAR_HEIGHT_PX + 8'not in sources['renderer']:raise ValueError('renderer text origin changed')
+ slim='fn surface_text_fg_at_scaled('in sources['renderer']
+ if slim:
+  compact=re.sub(r'\s+','',sources['renderer'])
+  if '(sex_pdx::desktop_style::chrome::Metrics::new(ui_scale).title()asusize)+(sex_pdx::desktop_style::chrome::Metrics::new(ui_scale).px(8)asusize)'not in compact:raise ValueError('renderer shared text origin changed')
+ else:
+  if 'FRAME_TOP_BAR_HEIGHT_PX + 8'not in sources['renderer']:raise ValueError('renderer text origin changed')
  if 'let dns_start=preview.len()+64'not in compose or 'let http_start=dns_start+64'not in compose or 'let body_start=http_start+64'not in compose:raise ValueError('production status extent layout changed')
  reader=sources['reader'].split('#[cfg(test)]',1)[0]
  dynamic_path=any(call in sources['app']for call in('self.reader.render_path(self.http.document(),self.http.document_path())','self.reader.render_path_selected(self.http.document(),self.http.document_path(),self.selection.range())'))
@@ -131,6 +136,11 @@ def _wheel_shell_contract(source,root):
  geometry="""let fid=frame_for_surface(sid)?; if !frame_accepts_input(fid){return None}
  let(x,y,w,h)=get_surface_bounds(sid)?; let px=POINTER_X as i64;let py=POINTER_Y as i64;
  if px<x as i64+8 || py<y as i64+36 || px>=x as i64+w as i64-8 || py>=y as i64+h as i64-8{return None}"""
+ if 'let body=chrome_metrics().body(w,h);'in shell:
+  geometry="""let fid=frame_for_surface(sid)?; if !frame_accepts_input(fid){return None}
+   let(x,y,w,h)=get_surface_bounds(sid)?; let px=POINTER_X as i64;let py=POINTER_Y as i64;
+   let body=chrome_metrics().body(w,h);
+   if px<x as i64+body.x as i64 || py<y as i64+body.y as i64 || px>=x as i64+body.x as i64+body.w as i64 || py>=y as i64+body.y as i64+body.h as i64{return None}"""
  held=any(re.search(r'\bfn\s+'+name+r'\b',shell)for name in ('app_input_association','browser_input_participant','app_input_participant'))
  if held:
   expect(shell,'browser_wheel_destination',common+geometry+"""
@@ -209,7 +219,7 @@ def load_wheel_contract(root):
  root=Path(root);contract=load_pixel_contract(root)
  files=('servers/sexusb/src/main.rs','servers/sexinput/src/main.rs','servers/silk-shell/src/main.rs','servers/silk-shell/src/app_input.rs','crates/sex-pdx/src/app_scroll.rs','crates/sex-pdx/src/lib.rs','servers/sexusb/src/usb.rs')
  source={name:(root/name).read_text()for name in files}
- requirements={files[0]:('wheel: if len >= 6 { buf[5] as i8 } else { 0 }','((report.wheel as u8 as u64) << 40)'),files[6]:('record_device_wheel(slot, r.len() as u32, true, wheel, packed)','((wheel as u8 as u64) << 40)'),files[1]:('req.caller_pd == 5 && req.caller_task == 5','emit(scroll.wire(), 0, EV_WHEEL)','0x0000_ff01_ffff_ffff'),files[2]:('COMMAND_PALETTE_OPEN || ATLAS_MODE_ENABLED','px<x as i64+8 || py<y as i64+36','item.destination.route,OP_HID_EVENT,scroll.wire(),0,EV_WHEEL','msg.caller_task!=sex_pdx::shell_ready::INPUT_PD_ID'),files[4]:('CLASS: u64 = 5','reserved != 0 || class != CLASS','event.wire() == word')}
+ requirements={files[0]:('wheel: if len >= 6 { buf[5] as i8 } else { 0 }','((report.wheel as u8 as u64) << 40)'),files[6]:('record_device_wheel(slot, r.len() as u32, true, wheel, packed)','((wheel as u8 as u64) << 40)'),files[1]:('req.caller_pd == 5 && req.caller_task == 5','emit(scroll.wire(), 0, EV_WHEEL)','0x0000_ff01_ffff_ffff'),files[2]:('COMMAND_PALETTE_OPEN || ATLAS_MODE_ENABLED','let body=chrome_metrics().body(w,h);'if 'let body=chrome_metrics().body(w,h);'in source[files[2]]else'px<x as i64+8 || py<y as i64+36','item.destination.route,OP_HID_EVENT,scroll.wire(),0,EV_WHEEL','msg.caller_task!=sex_pdx::shell_ready::INPUT_PD_ID'),files[4]:('CLASS: u64 = 5','reserved != 0 || class != CLASS','event.wire() == word')}
  for name,tokens in requirements.items():
   for token in tokens:
    if token not in source[name]:raise ValueError('wheel source contract changed: '+token)

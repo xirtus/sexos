@@ -22,11 +22,12 @@ pub fn tls_panel(w:u32,h:u32,label:Option<&[u8]>)->Option<TlsFrame>{
  use sex_pdx::desktop_style::{scale,ADVANCE,GLYPH_HEIGHT,INSET,LINE};
  let label=label?;
  if !matches!(label,b"preparing"|b"hello pending; no peer"|b"unavailable"|b"cancelled"|b"rejected"|b"timed out"|b"waiting receipt"){return None;}
- let factor=scale(w);let top=28+INSET;
- let cols=(w.saturating_sub(2*INSET)/(ADVANCE*factor)).saturating_sub(1).min(63)as usize;
+ let m=sex_pdx::desktop_style::chrome::Metrics::new(sex_pdx::desktop_style::ui_scale());
+ let factor=scale(w)*m.scale();let inset=m.px(INSET);let top=m.title()+inset;
+ let cols=(w.saturating_sub(2*inset)/(ADVANCE*factor)).saturating_sub(1).min(63)as usize;
  // The compositor paints the bottom INSET-pixel frame rim after its canvas.
  // Count only rows whose complete seven-pixel glyph remains above that rim.
- let rows=if cols==0||h<top+GLYPH_HEIGHT*factor+INSET{0}else{1+(h-top-GLYPH_HEIGHT*factor-INSET)/(LINE*factor)}as usize;
+ let rows=if cols==0||h<top+GLYPH_HEIGHT*factor+inset{0}else{1+(h-top-GLYPH_HEIGHT*factor-inset)/(LINE*factor)}as usize;
  let rows=rows.min(24).min(if cols==0{0}else{512/(cols+1)});
  let mut frame=TlsFrame{bytes:[0;512],len:0,cols,rows,complete:false};
  if rows==0{return Some(frame);}

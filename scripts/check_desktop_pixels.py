@@ -82,7 +82,7 @@ def final_view(text):
         labels.append((int(row[1]),int(row[2]),row[3]))
     if fields.get('committed_view')!='1':raise ValueError('view was not committed')
     values={key:int(fields[key],0) for key in ['x','y','w','h','scale','text_color','rows','selected','row_y','row_h']}
-    if not 1<=values['rows']<=5 or values['scale'] not in (1,2):raise ValueError('invalid view bounds')
+    if not 1<=values['rows']<=5 or values['scale'] not in (1,2,3,4,6):raise ValueError('invalid view bounds')
     if len(labels)!=values['rows'] or {r for _,r,_ in labels}!=set(range(values['rows'])):raise ValueError('incomplete name intents')
     if len({i for i,_,_ in labels})!=len(labels) or not all(i>0 and name for i,_,name in labels):raise ValueError('invalid name identities')
     if values['selected'] not in {i for i,_,_ in labels}:raise ValueError('selected object is not visible')
@@ -135,28 +135,32 @@ def cell_errors(pixels,width,x0,y0,char,scale,color,font,clip=None):
     return mismatch,ink
 
 
-def draw_cell(pixels,width,x0,y0,char,scale,color,font,clip=None):
-    """Test fixtures: paint one cell as Display draws it (full-coverage Geist pixels,
-    or the scaled 5x7 font), the shape cell_errors expects. `clip` (x0, y0, x1, y1)."""
-    def put(x,y):
-        if clip is None or (clip[0]<=x<clip[2] and clip[1]<=y<clip[3]):pixels[(y*width+x)*3:(y*width+x)*3+3]=color
+def cell_coverage(font,char,scale):
+    """Independent source-selected Mono raster, or the finite recovery bitmap."""
     minimum=font.get('geist_min_scale',2)if isinstance(font,dict)else 2
+    w,h=6*scale,9*scale
     if scale>=minimum and 32<=ord(char)<=126:
         import geist_cells
-        if scale==1:
-            for i,a in enumerate(geist_cells.cells(6,9)[ord(char)-32]):
-                x=x0+i%6;y=y0+i//6
-                if clip is not None and not(clip[0]<=x<clip[2] and clip[1]<=y<clip[3]):continue
-                at=(y*width+x)*3;back=pixels[at:at+3]
-                pixels[at:at+3]=bytes((fg*a+bg*(255-a))//255 for fg,bg in zip(color,back))
-        else:
-            for gx,gy in geist_cells.solid(char,6*scale,9*scale):put(x0+gx,y0+gy)
-        return
-    for gy,bits in enumerate(glyph(font,char) if char!=' ' else (0,)*7):
-        for gx in range(5):
-            if bits&(1<<(4-gx)):
-                for dy in range(scale):
-                    for dx in range(scale):put(x0+gx*scale+dx,y0+gy*scale+dy)
+        return geist_cells.cells(w,h)[ord(char)-32]
+    bitmap=glyph(font,char)if char!=' 'else(0,)*7
+    return bytes(255 if y//scale<7 and x//scale<5 and bitmap[y//scale]&(1<<(4-x//scale))else 0 for y in range(h)for x in range(w))
+
+def draw_cell(pixels,width,x0,y0,char,scale,color,font,clip=None):
+    """Synthetic fixtures paint complete AA cells from the pinned font atlas."""
+    cell=cell_coverage(font,char,scale);w=6*scale
+    for i,alpha in enumerate(cell):
+        x=x0+i%w;y=y0+i//w
+        if clip is not None and not(clip[0]<=x<clip[2]and clip[1]<=y<clip[3]):continue
+        at=(y*width+x)*3;back=pixels[at:at+3]
+        pixels[at:at+3]=bytes((fg*alpha+bg*(255-alpha))//255 for fg,bg in zip(color,back))
+
+
+def chrome_geometry(text):
+    """Archived traces retain their original 50/36/8 geometry contract."""
+    if '[display.chrome.metrics]' not in text:
+        return dict(scale=1,bar=50,body_top=36,inset=8)
+    from browser_gate_viewport import chrome_metrics
+    return chrome_metrics(text)
 
 
 def verify(text,ppm,font,resolution=None):
@@ -165,14 +169,15 @@ def verify(text,ppm,font,resolution=None):
         view,labels=final_view(text)
         width,height,pixels=ppm_rgb(ppm,**({'min_width':1,'min_height':1}if resolution else{}))
         if resolution and (width,height)!=tuple(resolution):raise ValueError('wrong actual framebuffer resolution')
-        if view['x']<0 or view['y']<50 or view['w']<=0 or view['h']<=0 or view['x']+view['w']>width or view['y']+view['h']>height:raise ValueError('view outside framebuffer')
+        metric=chrome_geometry(text)
+        if view['x']<0 or view['y']<metric['bar'] or view['w']<=0 or view['h']<=0 or view['x']+view['w']>width or view['y']+view['h']>height:raise ValueError('view outside framebuffer')
         color=view['text_color'].to_bytes(3,'big');scale=view['scale']
         # Match the renderer's width-derived wrap bound. A correct prefix is
         # insufficient: an older, longer filename must not survive to its right.
-        columns=min(80,(view['w']-16)//(6*scale))
+        columns=min(80,(view['w']-2*metric['inset'])//(6*scale))
         for identity,row,name in labels:
             rendered=('> ' if identity==view['selected'] else '  ')+name
-            x0=view['x']+8;y0=view['y']+view['row_y']+row*view['row_h']
+            x0=view['x']+metric['inset'];y0=view['y']+view['row_y']+row*view['row_h']
             if len(rendered)>columns or y0<view['y'] or y0+7*scale>view['y']+view['h']:raise ValueError('label outside view')
             mismatch=0;ink=0
             for column in range(columns):
@@ -190,7 +195,8 @@ def verify_hidden(previous_view_text,ppm):
         view,_=final_view(previous_view_text)
         width,height,pixels=ppm_rgb(ppm)
         x,y,w,h=(view[k] for k in ('x','y','w','h'))
-        if x<0 or y<50 or w<=0 or h<=0 or x+w>width or y+h>height:
+        metric=chrome_geometry(previous_view_text)
+        if x<0 or y<metric['bar'] or w<=0 or h<=0 or x+w>width or y+h>height:
             raise ValueError('view outside framebuffer')
         color=view['text_color'].to_bytes(3,'big')
         ink=sum(pixels[(row*width+col)*3:(row*width+col)*3+3]==color
@@ -216,19 +222,20 @@ def verify_kaleido_layout(text,ppm,font,resolution=None):
         x,y,w,h=(int(views[-1][k],0) for k in ('x','y','w','h'))
         width,height,pixels=ppm_rgb(ppm,**({'min_width':1,'min_height':1}if resolution else{}))
         if resolution and (width,height)!=tuple(resolution):raise ValueError('wrong actual framebuffer resolution')
-        if x<0 or y<50 or w<=0 or h<=0 or x+w>width or y+h>height:
+        metric=chrome_geometry(text)
+        if x<0 or y<metric['bar'] or w<=0 or h<=0 or x+w>width or y+h>height:
             raise ValueError('Kaleido tile outside framebuffer')
-        scale=2 if w>=256 else 1
-        columns=min(80,(w-16)//(6*scale))
+        scale=(2 if w>=256 else 1)*metric['scale']
+        columns=min(80,(w-2*metric['inset'])//(6*scale))
         lines=('Kaleidoscope','Cached / sample network text')
         errors=[]
         for row,line in enumerate(lines):
-            y0=y+36+row*9*scale
+            y0=y+metric['body_top']+row*9*scale
             if len(line)>columns or y0+7*scale>y+h:
                 raise ValueError('Kaleido title/status outside tile')
             mismatch=0
             for column in range(columns):
-                m,_=cell_errors(pixels,width,x+8+column*6*scale,y0,line[column] if column<len(line) else ' ',scale,b'\xcd\xd6\xf4',font)
+                m,_=cell_errors(pixels,width,x+metric['inset']+column*6*scale,y0,line[column] if column<len(line) else ' ',scale,b'\xcd\xd6\xf4',font)
                 mismatch+=m
             if mismatch:errors.append(f'Kaleido line={row} glyph_mismatches={mismatch}')
         return errors

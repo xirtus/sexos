@@ -14,6 +14,8 @@ fi
 rustc --edition=2021 --crate-type rlib --crate-name sex_time "$CALENDAR_ROOT/crates/sex-time/src/lib.rs" -o "$CALENDAR_DIR/libsex_time.rlib"
 rustc --edition=2021 --extern sex_time="$CALENDAR_DIR/libsex_time.rlib" --test "$CALENDAR_ROOT/tests/browser_calendar.rs" -o "$CALENDAR_DIR/positive"
 "$CALENDAR_DIR/positive"
+rustc --edition=2021 --extern sex_time="$CALENDAR_DIR/libsex_time.rlib" "$CALENDAR_ROOT/tests/browser_panel_scales.rs" -o "$CALENDAR_DIR/panel-scales"
+for PANEL_SCALE in 1 2 3; do "$CALENDAR_DIR/panel-scales" "$PANEL_SCALE"; done
 python3 - "$CALENDAR_ROOT" "$CALENDAR_DIR" <<'PY'
 from pathlib import Path
 import hashlib,json,sys
@@ -28,7 +30,7 @@ for name,old,new,test in controls:
  mutant=out/(name+'.rs');mutant.write_text(source.replace(old,new))
  path=target/(name+'.rs');path.write_text(tests.replace('#[path="../apps/kaleidoscope/src/clock_view.rs"]mod clock_view;','#[path='+json.dumps(str(mutant))+']mod clock_view;'))
  (out/(name+'.test')).write_text(test+'\n')
-(out/'sources.json').write_text(json.dumps({name:hashlib.sha256((root/name).read_bytes()).hexdigest()for name in ('apps/kaleidoscope/src/clock_view.rs','tests/browser_calendar.rs','crates/sex-time/src/lib.rs','crates/sex-pdx/src/clock_source.rs','crates/sex-pdx/src/desktop_style.rs','crates/sex-pdx/src/app_catalog.rs')},indent=2)+'\n')
+(out/'sources.json').write_text(json.dumps({name:hashlib.sha256((root/name).read_bytes()).hexdigest()for name in ('apps/kaleidoscope/src/clock_view.rs','apps/kaleidoscope/src/browser_view.rs','apps/kaleidoscope/src/asset_view.rs','apps/kaleidoscope/src/import_view.rs','tests/browser_panel_scales.rs','tests/browser_calendar.rs','crates/sex-time/src/lib.rs','crates/sex-pdx/src/clock_source.rs','crates/sex-pdx/src/desktop_style.rs','crates/sex-pdx/src/app_catalog.rs')},indent=2)+'\n')
 PY
 for CALENDAR_CONTROL in measure epoch; do
     rustc --edition=2021 --extern sex_time="$CALENDAR_DIR/libsex_time.rlib" --test "$CALENDAR_DIR/tests/$CALENDAR_CONTROL.rs" -o "$CALENDAR_DIR/$CALENDAR_CONTROL"

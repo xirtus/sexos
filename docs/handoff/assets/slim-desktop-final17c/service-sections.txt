@@ -1,0 +1,4 @@
+   text	   data	    bss	    dec	    hex	filename
+ 646202	1273252	2463051	4382505	 42df29	target/x86_64-sex/release/sexdisplay
+ 639412	 225720	 174673	1039805	  fddbd	target/x86_64-sex/release/silk-shell
+  32156	    952	  15625	  48733	   be5d	target/x86_64-sex/release/silkbar

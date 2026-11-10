@@ -3,6 +3,8 @@
 //! model queries are mocked. No guest rendering is claimed by this harness.
 #![allow(dead_code,static_mut_refs)]
 extern crate self as sex_pdx;
+#[path="../crates/sex-pdx/src/desktop_style.rs"]pub mod desktop_style;
+
 #[path="../crates/sex-pdx/src/app_catalog.rs"] pub mod app_catalog;
 #[path="../crates/sex-pdx/src/text_encoding.rs"]pub mod text_encoding;
 #[path="../crates/sex-pdx/src/text_batch.rs"]pub mod text_batch;
@@ -49,7 +51,7 @@ unsafe fn frame_chrome_operation(frame:u32)->Option<linen_text_delivery::Operati
 fn raw_pdx_call(slot:u64,op:u64,sid:u64,a:u64,b:u64)->(u64,u64){CALLS.lock().unwrap().push((slot,op,sid,a,b));RESULTS.lock().unwrap().pop_front().unwrap_or((0,0))}
 unsafe fn linen_paint_surface_fast(){linen_queue_text(b"latest complete view",0xabcdef,linen_text_delivery::Metadata{count:2,first:0,rows:2,selected:SELECTION});}
 include!(env!("DESKTOP_DELIVERY_PRODUCTION"));
-unsafe fn reset(){FOCUSED_SURFACE_ID=0;LAST_DISPLAY_FOCUS_RESULT=None;DISPLAY_FOCUS=linen_text_delivery::FocusDelivery::new();DESKTOP_STATES=linen_text_delivery::DesktopStates::new();LINEN_TEXT=linen_text_delivery::Outbox::new(200);LINEN_REPAINT_AFTER_CREATE=false;PALETTE_TEXT=linen_text_delivery::Outbox::atomic(152);APP_CUSTODY=[None;28];STATE=LifecycleState::Visible;ALIVE=true;MINIMIZED=false;FRAME=true;BOUNDS=Some((10,50,640,400));SELECTION=3;CALLS.lock().unwrap().clear();RESULTS.lock().unwrap().clear();LOG.lock().unwrap().clear();}
+unsafe fn reset(){desktop_style::set_ui_scale(1);FOCUSED_SURFACE_ID=0;LAST_DISPLAY_FOCUS_RESULT=None;DISPLAY_FOCUS=linen_text_delivery::FocusDelivery::new();DESKTOP_STATES=linen_text_delivery::DesktopStates::new();LINEN_TEXT=linen_text_delivery::Outbox::new(200);LINEN_REPAINT_AFTER_CREATE=false;PALETTE_TEXT=linen_text_delivery::Outbox::atomic(152);APP_CUSTODY=[None;28];STATE=LifecycleState::Visible;ALIVE=true;MINIMIZED=false;FRAME=true;BOUNDS=Some((10,50,640,400));SELECTION=3;CALLS.lock().unwrap().clear();RESULTS.lock().unwrap().clear();LOG.lock().unwrap().clear();}
 fn op(code:u64,sid:u64)->linen_text_delivery::Operation{linen_text_delivery::Operation{opcode:code,surface:sid,packed:0,control:0}}
 #[test]fn actual_wrapper_preserves_status_and_retains_only_selected_display_states(){let _l=LOCK.lock().unwrap();unsafe{reset();}
  RESULTS.lock().unwrap().push_back((sex_pdx::ERR_SERVICE_NOT_READY,77));assert_eq!(pdx_call(5,0xEC,201,1,2),(sex_pdx::ERR_SERVICE_NOT_READY,77));assert!(unsafe{DESKTOP_STATES.pending_surface(201)});
@@ -119,8 +121,19 @@ fn op(code:u64,sid:u64)->linen_text_delivery::Operation{linen_text_delivery::Ope
  reset();APP_CUSTODY[0]=Some(app_custody::Entry::new(38,9,90,156));
  RESULTS.lock().unwrap().push_back((ERR_SERVICE_NOT_READY,0));pdx_call(SLOT_DISPLAY,0xEC,156,0,0);
  assert!(!desktop_content_ready(201));BOUNDS=Some((20,60,800,600));
- let op=desktop_state_validate(op(0xEC,156)).unwrap();assert_eq!((op.packed,op.control),((96<<32)|28,(556<<32)|784));
+ let op=desktop_state_validate(op(0xEC,156)).unwrap();assert_eq!((op.packed,op.control),((94<<32)|28,(558<<32)|784));
  desktop_state_poll();desktop_state_poll();assert!(desktop_content_ready(201));
+ // Literal approved title26 + side8 geometry, independent of the helper used by
+ // production. A retained child create must adopt current scale before retry.
+ for (scale,x,y,w,h) in [(2,36u64,128u64,768u64,516u64),(3,44,162,752,474)] {
+  DESKTOP_STATES.observe(op,linen_text_delivery::Admission::Full);
+  desktop_style::set_ui_scale(scale);assert!(!desktop_content_ready(201));
+  let fresh=desktop_state_validate(op).unwrap();
+  assert_eq!((fresh.packed,fresh.control),((y<<32)|x,(h<<32)|w));
+  desktop_state_poll();desktop_state_poll();assert!(desktop_content_ready(201));
+  assert!(CALLS.lock().unwrap().iter().any(|call|*call==(SLOT_DISPLAY,0xEC,156,(y<<32)|x,(h<<32)|w)));
+ }
+ desktop_style::set_ui_scale(1);
  APP_CUSTODY[0].as_mut().unwrap().close_pending=true;assert!(desktop_state_validate(op).is_none());
  APP_CUSTODY[0].as_mut().unwrap().close_pending=false;STATE=LifecycleState::Minimized;assert!(desktop_state_validate(op).is_none());assert!(!desktop_content_ready(201));
  reset();assert!(desktop_state_validate(op).is_none());
@@ -202,9 +215,9 @@ fn op(code:u64,sid:u64)->linen_text_delivery::Operation{linen_text_delivery::Ope
  let _l=LOCK.lock().unwrap();unsafe{
  reset();APP_CUSTODY[0]=Some(app_custody::Entry::new(130,24,240,313));
  for sid in [315,316,317]{assert!(desktop_state_validate(op(0xEC,sid)).is_none());} // zero-height panes carry no text
- for (sid,x,y) in [(313,18,86)] {
+ for (sid,x,y) in [(313,18,84)] {
   let create=desktop_state_validate(op(0xEC,sid)).unwrap();
-  assert_eq!(create,linen_text_delivery::Operation{opcode:0xEC,surface:sid,packed:(y<<32)|x,control:(356<<32)|624});
+  assert_eq!(create,linen_text_delivery::Operation{opcode:0xEC,surface:sid,packed:(y<<32)|x,control:(358<<32)|624});
   assert!(desktop_state_validate(op(0xFD,sid)).is_none()); // panes have no Shell chrome
   DESKTOP_STATES.observe(op(0xEC,sid),linen_text_delivery::Admission::Full);
  }
@@ -238,9 +251,9 @@ fn op(code:u64,sid:u64)->linen_text_delivery::Operation{linen_text_delivery::Ope
  let _l=LOCK.lock().unwrap();unsafe{
  reset();APP_CUSTODY[0]=Some(app_custody::Entry::new(150,29,290,338));
  for sid in [340,341,342]{assert!(desktop_state_validate(op(0xEC,sid)).is_none());} // zero-height panes carry no text
- for (sid,x,y) in [(338,18,86)] {
+ for (sid,x,y) in [(338,18,84)] {
   let create=desktop_state_validate(op(0xEC,sid)).unwrap();
-  assert_eq!(create,linen_text_delivery::Operation{opcode:0xEC,surface:sid,packed:(y<<32)|x,control:(356<<32)|624});
+  assert_eq!(create,linen_text_delivery::Operation{opcode:0xEC,surface:sid,packed:(y<<32)|x,control:(358<<32)|624});
   assert!(desktop_state_validate(op(0xFD,sid)).is_none()); // panes have no Shell chrome
   DESKTOP_STATES.observe(op(0xEC,sid),linen_text_delivery::Admission::Full);
  }
@@ -274,9 +287,9 @@ fn op(code:u64,sid:u64)->linen_text_delivery::Operation{linen_text_delivery::Ope
  let _l=LOCK.lock().unwrap();unsafe{
  reset();APP_CUSTODY[0]=Some(app_custody::Entry::new(194,40,400,353));
  for sid in [355,356,357]{assert!(desktop_state_validate(op(0xEC,sid)).is_none());} // zero-height panes carry no text
- for (sid,x,y) in [(353,18,86)] {
+ for (sid,x,y) in [(353,18,84)] {
   let create=desktop_state_validate(op(0xEC,sid)).unwrap();
-  assert_eq!(create,linen_text_delivery::Operation{opcode:0xEC,surface:sid,packed:(y<<32)|x,control:(356<<32)|624});
+  assert_eq!(create,linen_text_delivery::Operation{opcode:0xEC,surface:sid,packed:(y<<32)|x,control:(358<<32)|624});
   assert!(desktop_state_validate(op(0xFD,sid)).is_none()); // panes have no Shell chrome
   DESKTOP_STATES.observe(op(0xEC,sid),linen_text_delivery::Admission::Full);
  }

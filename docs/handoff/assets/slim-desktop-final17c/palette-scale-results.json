@@ -1,0 +1,132 @@
+[
+  {
+    "ui": 1,
+    "geometry": {
+      "x": 400,
+      "y": 274,
+      "w": 480,
+      "h": 280,
+      "scale": 2,
+      "selected": 13,
+      "first": 9,
+      "rows": 5
+    },
+    "chrome": {
+      "scale": 1,
+      "bar": 28,
+      "title": 26,
+      "inset": 8,
+      "body_top": 34,
+      "target": 24,
+      "width": 1280,
+      "height": 800,
+      "publication": 1
+    },
+    "errors": [],
+    "iso_sha256": "213007e199bb3cda516abe5ad08c7b8ed54bc99e4153a073e74c3bdc86cde34b"
+  },
+  {
+    "ui": 2,
+    "geometry": {
+      "x": 160,
+      "y": 148,
+      "w": 960,
+      "h": 560,
+      "scale": 4,
+      "selected": 13,
+      "first": 9,
+      "rows": 5
+    },
+    "chrome": {
+      "scale": 2,
+      "bar": 56,
+      "title": 52,
+      "inset": 16,
+      "body_top": 68,
+      "target": 48,
+      "width": 1280,
+      "height": 800,
+      "publication": 1
+    },
+    "errors": [],
+    "iso_sha256": "213007e199bb3cda516abe5ad08c7b8ed54bc99e4153a073e74c3bdc86cde34b"
+  },
+  {
+    "ui": 3,
+    "geometry": {
+      "x": 24,
+      "y": 108,
+      "w": 1232,
+      "h": 668,
+      "scale": 6,
+      "selected": 13,
+      "first": 10,
+      "rows": 4
+    },
+    "chrome": {
+      "scale": 3,
+      "bar": 84,
+      "title": 78,
+      "inset": 24,
+      "body_top": 102,
+      "target": 72,
+      "width": 1280,
+      "height": 800,
+      "publication": 1
+    },
+    "errors": [],
+    "iso_sha256": "213007e199bb3cda516abe5ad08c7b8ed54bc99e4153a073e74c3bdc86cde34b"
+  },
+  {
+    "ui": 2,
+    "geometry": {
+      "x": 160,
+      "y": 148,
+      "w": 960,
+      "h": 560,
+      "scale": 4,
+      "selected": 13,
+      "first": 9,
+      "rows": 5
+    },
+    "chrome": {
+      "scale": 2,
+      "bar": 56,
+      "title": 52,
+      "inset": 16,
+      "body_top": 68,
+      "target": 48,
+      "width": 1280,
+      "height": 800,
+      "publication": 1
+    },
+    "errors": [],
+    "iso_sha256": "213007e199bb3cda516abe5ad08c7b8ed54bc99e4153a073e74c3bdc86cde34b"
+  },
+  {
+    "ui": 1,
+    "geometry": {
+      "x": 400,
+      "y": 274,
+      "w": 480,
+      "h": 280,
+      "scale": 2,
+      "selected": 13,
+      "first": 9,
+      "rows": 5
+    },
+    "chrome": {
+      "scale": 1,
+      "bar": 28,
+      "title": 26,
+      "inset": 8,
+      "body_top": 34,
+      "target": 24,
+      "width": 1280,
+      "height": 800,
+      "publication": 1
+    },
+    "errors": [],
+    "iso_sha256": "213007e199bb3cda516abe5ad08c7b8ed54bc99e4153a073e74c3bdc86cde34b"
+  }
+]

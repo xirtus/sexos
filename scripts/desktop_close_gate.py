@@ -4,7 +4,7 @@ import argparse,hashlib,json,pathlib,re,socket,subprocess,time,os
 from check_desktop_close_log import check,responsiveness
 from check_desktop_pixels import verify as verify_pixels, verify_hidden, verify_kaleido_layout, final_view, font_from_source
 from check_launcher_pixels import verify as verify_launcher
-from check_relaunch_pixels import verify as successor_pixels
+from check_relaunch_pixels import verify as successor_pixels,current_dirty_status
 from check_app_activation_log import validate as activation_errors
 from check_spindle_relaunch_pixels import verify as spindle_pixels
 from check_spindle_history_log import validate as history_errors
@@ -117,8 +117,19 @@ def main():
         expected_status=status_match[1]
         pixel_errors=['not rendered'];deadline=time.monotonic()+60
         while time.monotonic()<deadline:
+            # Automatic draft retention can change READY to DRAFT KEPT while a
+            # frame is pending. Keep the exact dirty document identity, then
+            # verify its latest real status instead of waiting forever for an
+            # already superseded status. Complete glyph checks remain mandatory.
+            snapshot=text()
+            current_status=current_dirty_status(snapshot,status_match[1])
+            if current_status is None:
+                pixel_errors=['no complete current intent for the exact dirty successor document']
+                time.sleep(.2)
+                continue
+            expected_status=current_status
             q.cmd('screendump',{'filename':str(out/'successor-input.ppm')})
-            pixel_errors=successor_pixels(text(),(out/'successor-input.ppm').read_bytes(),font,expected_status)
+            pixel_errors=successor_pixels(snapshot,(out/'successor-input.ppm').read_bytes(),font,expected_status)
             if not pixel_errors:break
             time.sleep(.2)
         if pixel_errors:raise RuntimeError('successor glyph pixels: '+'; '.join(pixel_errors))

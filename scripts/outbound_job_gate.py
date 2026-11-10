@@ -66,7 +66,10 @@ def load_pixel_contract(root):
  labels={view:ast.literal_eval(re.search(r'network_probe::View::'+view+r'=>\s*(b"[^"\n]*")',sources['probe']).group(1))for view in ('Verified','Unavailable')}
  if 'browser_view::compose(self.preview.as_bytes()'not in sources['app']:raise ValueError('missing actual atomic composed Browser publication')
  browser_publication_binding(root,paths,sources)
- if 'FRAME_TOP_BAR_HEIGHT_PX + 8'not in sources['renderer']:raise ValueError('renderer text origin changed')
+ if 'fn surface_text_fg_at_scaled('in sources['renderer']:
+  compact=re.sub(r'\s+','',sources['renderer'])
+  if '(sex_pdx::desktop_style::chrome::Metrics::new(ui_scale).title()asusize)+(sex_pdx::desktop_style::chrome::Metrics::new(ui_scale).px(8)asusize)'not in compact:raise ValueError('renderer shared text origin changed')
+ elif 'FRAME_TOP_BAR_HEIGHT_PX + 8'not in sources['renderer']:raise ValueError('renderer text origin changed')
  return dict(font=font_from_source(sources['renderer']),prefix=ast.literal_eval(prefix[1]),labels=labels,
   status_bytes=number(sources['probe'],r'dns_start=preview\.len\(\)\+(\d+)'),capacity=number(sources['probe'],r'bytes:\[u8;(\d+)\]'),
   inset=number(sources['style'],r'INSET: u32 = (\d+)'),advance=number(sources['style'],r'ADVANCE: u32 = (\d+)'),line=number(sources['style'],r'LINE: u32 = (\d+)'),

@@ -90,9 +90,11 @@ fn state(view: View, valid: bool) -> &'static [u8] {
 /// Smaller tiles show a nonnumeric state instead of a clipped date or a date
 /// without its snapshot/source labels. No heap, polling, cache, or clock writes.
 pub fn render(w: u32, h: u32, view: View) -> Frame {
-    let factor = scale(w);
-    let cols = (w.saturating_sub(2 * INSET) / (ADVANCE * factor)).saturating_sub(1).min(63) as usize;
-    let top = 28 + INSET;
+    let m=sex_pdx::desktop_style::chrome::Metrics::new(sex_pdx::desktop_style::ui_scale());
+    let factor = scale(w)*m.scale();
+    let inset=m.px(INSET);
+    let cols = (w.saturating_sub(2 * inset) / (ADVANCE * factor)).saturating_sub(1).min(63) as usize;
+    let top = m.title() + inset;
     let rows = if cols == 0 || h < top + GLYPH_HEIGHT * factor { 0 } else {
         (1 + (h - top - GLYPH_HEIGHT * factor) / (LINE * factor)) as usize
     }.min(24).min(if cols == 0 { 0 } else { 512 / (cols + 1) });
