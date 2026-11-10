@@ -12,9 +12,12 @@ const NOTIFY: u8 = 2;
 const ISR: u8 = 3;
 const DEVICE: u8 = 4;
 
-/// Modern (virtio 1.0+) devices only: transitional ids need the legacy I/O BAR.
+/// Virtio devices some driver manifest claims by id. Modern (virtio 1.0+) ids only:
+/// transitional ids need the legacy I/O BAR.
 pub fn supported(vendor: u16, device: u16) -> bool {
-    vendor == v::VENDOR && device == v::SOUND
+    use sex_hwdb::manifest::{ALL, Lease};
+    vendor == v::VENDOR && ALL.iter().flat_map(|m| m.matches.iter())
+        .any(|e| e.lease == Lease::Virtio && e.vendor == vendor && e.device == device)
 }
 
 fn byte(dev: &PciDevice, at: u8) -> u8 { (dev.read_u32(at & !3) >> ((at & 3) * 8)) as u8 }
