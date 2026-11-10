@@ -28,6 +28,17 @@ pub(crate) fn backing(length: u64) -> u64 {
     physical
 }
 
+/// Retained source authority: private BOOT frames, no user/DMA grant or runtime free.
+pub fn retain_image_source(bytes:&[u8])->crate::app_resource_state::ImageSource{
+    require_boot();
+    assert!(!bytes.is_empty() && bytes.len()<=sex_pdx::program_store::IMAGE_BYTES,"BOOT_IMAGE_SOURCE_SIZE");
+    let physical=backing(bytes.len().next_multiple_of(4096) as u64);
+    let hhdm=crate::HHDM_REQUEST.response().expect("BOOT_IMAGE_SOURCE_HHDM").offset;
+    let address=(physical+hhdm) as usize;
+    unsafe{core::ptr::copy_nonoverlapping(bytes.as_ptr(),address as *mut u8,bytes.len());
+        crate::app_resource_state::ImageSource::boot_private(address,bytes.len())}
+}
+
 /// The screen BOOT found, so program pixel surfaces can cover all of it.
 static SCREEN_PIXELS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 static PROGRAM_IMAGE_PHYSICAL: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);

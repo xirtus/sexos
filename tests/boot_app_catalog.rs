@@ -70,6 +70,7 @@ fn observed(target: u32) -> Observed {
         },
         close_target: target, route_target: target,
         activation: (predecessor != 0).then_some(ActivationGrant {
+            image_source: None,
             holder: 3, logical_app, incarnation, predecessor, predecessor_task: predecessor,
             successor: target, successor_task: target,
         }),
@@ -296,7 +297,7 @@ fn third_spindle_actual_grants_require_exact_lineage_task_routes_and_no_high_bit
  assert_eq!(actual.shell_lifecycle,LifecycleGrant{target_pd:24,task_id:24,holder_pd:3,rights:QUERY|ACK,ack_bit:1});
  assert_eq!(actual.self_catalog,LifecycleGrant{target_pd:24,task_id:24,holder_pd:24,rights:QUERY,ack_bit:0});
  assert_eq!((actual.close_target,actual.route_target),(24,24));
- assert_eq!(actual.activation,Some(ActivationGrant{holder:3,logical_app:12,incarnation:3,predecessor:17,predecessor_task:17,successor:24,successor_task:24}));
+ assert_eq!(actual.activation,Some(ActivationGrant{image_source:None,holder:3,logical_app:12,incarnation:3,predecessor:17,predecessor_task:17,successor:24,successor_task:24}));
  assert_eq!(validate(row(24),&actual,3),Ok(()));
  let changes:[(fn(&mut Observed),Error);20]=[
   (|o|o.target=24|(1u32<<31),Error::Target),
@@ -338,7 +339,7 @@ fn all_added_spindle_boot_observations_and_held_tuples_are_exact() {
             (target,target,content,12,incarnation,parent,true));
         assert_eq!(actual.shell_lifecycle,LifecycleGrant{target_pd:target,task_id:target,holder_pd:3,rights:QUERY|ACK,ack_bit:1});
         assert_eq!(actual.self_catalog,LifecycleGrant{target_pd:target,task_id:target,holder_pd:target,rights:QUERY,ack_bit:0});
-        assert_eq!(actual.activation,Some(ActivationGrant{holder:3,logical_app:12,incarnation,predecessor:parent,predecessor_task:parent,successor:target,successor_task:target}));
+        assert_eq!(actual.activation,Some(ActivationGrant{image_source:None,holder:3,logical_app:12,incarnation,predecessor:parent,predecessor_task:parent,successor:target,successor_task:target}));
         assert_eq!(validate(row(target),&actual,3),Ok(()));
         let changes:[(fn(&mut Observed),Error);12]=[
             (|o|o.target|=1<<31,Error::Target),
