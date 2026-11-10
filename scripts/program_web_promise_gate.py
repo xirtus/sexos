@@ -34,7 +34,7 @@ def main():
                     if(e.reason===reason)console.log('promise initializer',e.promise===initializer,e.isTrusted,e.cancelable);
                     else if(e.reason==='gate-late'){console.log('promise late',e.promise===late);setTimeout(()=>late.catch(()=>{}),0);}
                     else if(e.reason==='gate-default'){console.log('promise default',e.defaultPrevented);return;}
-                    else if(e.reason==='owned timer'||e.reason==='owned async'||e.reason==='readable resource')console.log('promise owned',e.reason);
+                    else if(e.reason==='owned timer'||e.reason==='owned async'||e.reason==='readable resource'||e.reason==='owned thenable'||e.reason==='owned getter')console.log('promise owned',e.reason);
                     else console.log('FAIL parent rejection',e.reason);
                     e.preventDefault();
                   };
@@ -46,11 +46,11 @@ def main():
                 </script><script>
                   console.log('promise following',initialized);
                   window.addEventListener('message',e=>{if(e.data==='frame isolated'){console.log('promise frame message',e.origin===''' + json.dumps(bbase) + ''');document.getElementById('owner-frame').remove();console.log('promise frame removed');}});
-                  function resource(path,cors){const s=document.createElement('script');s.src=''' + json.dumps(bbase) + '''+path;if(cors)s.crossOrigin='anonymous';s.onload=()=>console.log('promise resource loaded',path);s.onerror=()=>console.log('FAIL resource',path);document.head.appendChild(s);}
+                  function resource(path,cors){const s=document.createElement('script');s.src=''' + json.dumps(bbase) + '''+path;if(cors)s.crossOrigin='anonymous';s.onload=()=>{console.log('promise resource loaded',path);if(path==='/opaque.js'){for(const v of [opaqueThenable,opaqueGetter,opaqueProxy]){Promise.resolve(v);new Promise(r=>r(v));(async()=>{await v})();(async function*(){await v})().next();}queueMicrotask(opaqueBoundNative);setTimeout(opaqueBoundNative,0);Promise.resolve().finally(opaqueFinally);new Promise(opaqueExecutor);(async()=>{await opaqueCtorPromise})();(async function*(){await opaqueCtorPromise})().next();(async function*(){})().return(opaqueCtorPromise);const pending=Promise.resolve(opaqueThenable);pending.then();pending.then().then();Promise.resolve({then(){throw 'owned thenable'}});Promise.resolve({get then(){throw 'owned getter'}});}};s.onerror=()=>console.log('FAIL resource',path);document.head.appendChild(s);}
                   resource('/opaque.js',false);resource('/readable.js',true);
                 </script><iframe id="owner-frame" src="''' + bbase + '''/frame"></iframe>''').encode()
             elif self.path == '/opaque.js':
-                body, mime = b"Promise.reject('opaque immediate');setTimeout(()=>Promise.reject('opaque timer'),0);(async()=>{await 0;throw 'opaque async'})();", 'application/javascript'
+                body, mime = b"Promise.reject('opaque immediate');setTimeout(()=>Promise.reject('opaque timer'),0);(async()=>{await 0;throw 'opaque async'})();globalThis.opaqueThenable={then(){throw 'opaque thenable'}};globalThis.opaqueGetter={get then(){throw 'opaque getter'}};globalThis.opaqueProxy=new Proxy({}, {get(){throw 'opaque proxy'}});globalThis.opaqueBoundNative=Promise.reject.bind(Promise,'opaque native bound');globalThis.opaqueFinally=()=>{throw 'opaque finally'};globalThis.opaqueExecutor=()=>{throw 'opaque executor'};globalThis.opaqueCtorPromise=Promise.resolve(1);Object.defineProperty(opaqueCtorPromise,'constructor',{get(){throw 'opaque constructor'}});", 'application/javascript'
             elif self.path == '/readable.js':
                 body, mime = b"Promise.reject('readable resource');", 'application/javascript'
                 extra = [('Access-Control-Allow-Origin', abase)]
@@ -118,7 +118,7 @@ def main():
                      'promise initializer true true true', 'promise late true',
                      'promise handled true true false true', 'promise default false',
                      'promise owned owned timer', 'promise owned owned async',
-                     'promise owned readable resource', 'promise frame isolated true true',
+                     'promise owned readable resource', 'promise owned owned thenable', 'promise owned owned getter', 'promise frame isolated true true',
                      'promise frame message true', 'promise frame removed', 'promise resource loaded /opaque.js',
                      'promise resource loaded /readable.js'):
             g['wait'](r'\[web.console\] level=0 ' + re.escape(mark) + r'\r?\n', start, 300)

@@ -24,6 +24,9 @@ static int64_t deadline_ns;
 /* Per-Wasm-instance source policy, inherited by compiled function metadata. */
 int sexos_compile_origin = -1;
 int sexos_opaque_source_seen;
+/* Per-VM ambient callback/job provenance: -1 unknown, 0 owned, 1 muted.
+   Every native callback/job scope restores its previous value before returning. */
+int sexos_job_muted = -1;
 extern int sexos_promise_flags(JSValueConst promise);
 static JSValue rejection_handler = JS_UNDEFINED;
 static void report(void);
