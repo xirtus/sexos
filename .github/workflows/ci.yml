@@ -45,6 +45,8 @@ jobs:
       run: bash scripts/hwdb_host_gate.sh
     - name: Bell sound rate conversion on the host
       run: bash scripts/sound_host_gate.sh
+    - name: Explicit program heap limits with actual Talc
+      run: bash scripts/program_heap_limit_host_gate.sh
     - name: Native screenshot custody and PNG output on the host
       run: bash scripts/desktop_capture_host_gate.sh
     - name: Disk layouts (GPT, FAT, install beside other systems)
