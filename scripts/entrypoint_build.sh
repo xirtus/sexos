@@ -21,6 +21,8 @@ ABI_INPUTS=(
   crates/sex-pdx/src/usb_net.rs
   kernel/src/entropy_source.rs
   kernel/src/clock_source.rs
+  kernel/src/crash_log.rs
+  kernel/src/service_restart.rs
   kernel/src/trust_source.rs
   kernel/src/ipc_ring.rs
   crates/sex-net-config/src/lib.rs
