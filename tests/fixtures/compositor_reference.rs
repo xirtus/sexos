@@ -220,13 +220,14 @@ fn reference_composite_pixel_selected(x: usize, y: usize, w: usize, h: usize, bg
                                 c = glass_over_bg(DISPLAY_TOKENS.frame_rim_color, x, y, 196);
                             }
                         } else {
-                            // Left, right, or bottom rim edge — pulsing neon glass.
-                            let frame = RENDER_FRAME_COUNTER.load(core::sync::atomic::Ordering::Relaxed);
-                            const RIM_BASE_ALPHA: u8 = 196;
-                            const RIM_AMP: u8 = 12;
-                            const RIM_PERIOD: u64 = 128;
-                            let rim_alpha = pulse_alpha(RIM_BASE_ALPHA, RIM_AMP, frame, RIM_PERIOD);
-                            c = glass_over_bg(DISPLAY_TOKENS.frame_rim_color, x, y, rim_alpha);
+                            // Quiet resize band: only the outside pixel carries
+                            // the lavender outline; geometry and selection stay fixed.
+                            let edge = x == sx || y == sy || x == sx + sw - 1 || y == sy + sh - 1;
+                            c = if edge {
+                                glass_over_bg(DISPLAY_TOKENS.frame_rim_color, x, y, 112)
+                            } else {
+                                glass_over_bg(DISPLAY_TOKENS.frame_top_bar_color, x, y, 224)
+                            };
                         }
                     } else {
                         // ── SURFACE CONTENT AREA ──
