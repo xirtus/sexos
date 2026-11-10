@@ -36,6 +36,8 @@ SEXDRIVE_BLOCK_VIEW_SOURCE="$TEST_DIR/block_view.rs" SEXDRIVE_READ_PATH_SOURCE="
 "$TEST_DIR/tests" --nocapture
 rustc --edition=2021 --test "$ROOT_DIR/tests/sexdrive_completion_wait.rs" -o "$TEST_DIR/completion-tests"
 rustc --edition=2021 --test "$ROOT_DIR/tests/sexdrive_controller_ready.rs" -o "$TEST_DIR/ready-tests"
+rustc --edition=2021 --test "$ROOT_DIR/tests/sexdrive_apst.rs" -o "$TEST_DIR/apst-tests"
+"$TEST_DIR/apst-tests"
 "$TEST_DIR/ready-tests"
 "$TEST_DIR/completion-tests"
 echo '[gate.sexdrive_dma_host.result] PASS scope=production_lifetime_peer_check_not_device_DMA_containment'
@@ -53,7 +55,7 @@ assert 'loop { service_next_request(); }' in entry
 assert 'pdx_try_listen_raw'not in s and '0..2_000_000'not in entry
 Path(sys.argv[2]).write_text('\n'.join(parts))
 abi=(Path(sys.argv[1])/'crates/sex-pdx/src/lib.rs').read_text()
-names=['BLOCK_READ','BLOCK_WRITE','BLOCK_SYNC','BLOCK_CAPACITY','BLOCK_MAX_XFER','BLOCK_MAX_RUN','BLOCK_SECTOR_SIZE','BLOCK_ERR_BAD_LEN','BLOCK_ERR_NO_DEVICE','BLOCK_ERR_BAD_CMD','SLOT_BLOCK_BUFFER']
+names=['BLOCK_READ','BLOCK_WRITE','BLOCK_SYNC','BLOCK_CAPACITY','BLOCK_SHUTDOWN','BLOCK_MAX_XFER','BLOCK_MAX_RUN','BLOCK_SECTOR_SIZE','BLOCK_ERR_BAD_LEN','BLOCK_ERR_NO_DEVICE','BLOCK_ERR_BAD_CMD','SLOT_BLOCK_BUFFER']
 constants=[]
 for name in names:
  match=re.search(r'pub const '+name+r'\s*:\s*u64\s*=\s*[^;]+;',abi)

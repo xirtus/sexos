@@ -900,6 +900,9 @@ pub const BLOCK_READ:  u64 = 1; // Read sectors from block device
 pub const BLOCK_WRITE: u64 = 2; // Write sectors to block device
 pub const BLOCK_SYNC:  u64 = 3; // Flush/barrier (no data transfer)
 pub const BLOCK_CAPACITY: u64 = 4; // Replies with the device's size in sectors
+/// Power is going: flush, then tell the disk (NVMe shutdown notification) so it can park
+/// safely; every later read or write is refused. Files sends it during power off/restart.
+pub const BLOCK_SHUTDOWN: u64 = 5;
 
 // Block protocol status codes — returned as pdx_reply value.
 pub const BLOCK_OK:           u64 = 0; // Success

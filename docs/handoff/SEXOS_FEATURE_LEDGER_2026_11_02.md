@@ -3373,3 +3373,11 @@ Plan: `docs/handoff/NVIDIA_GPU_PLAN_2026_11_09.md` (stages N1-N6).
 - **AML work budget**: `acpi::with_aml(budget, f)` runs firmware AML quarantined with a limit on register accesses and stalls, so a firmware loop cannot hang the boot.
 - **Gate** `scripts/dgpu_power_gate.py` in CI: QEMU root port + display controller + SSDT power resource (`tests/acpi/dgpu_gate_ssdt.asl`); checks the method order off/on/off on the debug console, the restored header, the boot GPU kept and the desktop up.
 - ABI: none.
+
+## NVMe power saving and clean shutdown (sexdrive, 2026-11-10)
+
+- **Clean shutdown.** At power off or restart Files now sends `BLOCK_SHUTDOWN` instead of `BLOCK_SYNC`. sexdrive flushes, then sets NVMe `CC.SHN=01` and waits for `CSTS.SHST=10`, bounded by the drive's RTD3 entry latency (1-4 s, inside the kernel's 5 s `FLUSH_TICKS`). The drive parks its cache and mapping tables, so its unsafe-shutdown counter stops climbing. Every later block request answers `BLOCK_ERR_NO_DEVICE`. AHCI gets the flush only. Checked in QEMU with `system_powerdown`: `[sexdrive.shutdown] flush=0 notify=1 outcome=Ready csts=0x9`, then `[acpi.power.off]`.
+- **APST** (`apps/sexdrive/src/apst.rs`). When Identify says APSTA, sexdrive writes the Autonomous Power State Transition table (Set Features 0x0C) with Linux's policy: non-operational states with entry+exit at most 15 ms after 100 ms idle, at most 100 ms after 2 s idle, exit latency above 100 ms never. Deepest state skipped on the laptop parts Linux quirks (Samsung PM951 0xa802 and two others). Log `[sexdrive.nvme.apst]`. QEMU's NVMe has no APST, so it logs `enabled=0 reason=unsupported`; the x17 R1's Samsung drive is the real test.
+- **Reads.** The 128 KiB zero fill of the bounce buffer before every read is gone (the device writes it all, and it is copied out only on success). Deeper and per-core queues need Files to send concurrent requests; tracked as D6 in the drivers plan.
+- **Tests.** `tests/sexdrive_apst.rs`, shutdown waits in `tests/sexdrive_controller_ready.rs`, shutdown dispatch in `tests/sexdrive_service_loop.rs`, all in `scripts/sexdrive_dma_host_gate.sh`.
+- **ABI.** `sex_pdx::BLOCK_SHUTDOWN = 5` (new block command); `abi_version_hash` recomputed.

@@ -7,7 +7,7 @@ use sex_pdx::{
     pdx_call, pdx_reply, pdx_listen_raw, serial_println,
     SLOT_SHELL, SLOT_USB_HOST,
     SLOT_DMA_REGION, SLOT_FRAME_REGION, SLOT_BLOCK_BUFFER,
-    BLOCK_READ, BLOCK_WRITE, BLOCK_SYNC, BLOCK_CAPACITY,
+    BLOCK_READ, BLOCK_WRITE, BLOCK_SYNC, BLOCK_CAPACITY, BLOCK_SHUTDOWN,
     BLOCK_ERR_BAD_CMD, BLOCK_ERR_BAD_LEN, BLOCK_ERR_NO_DEVICE,
     BLOCK_SECTOR_SIZE, BLOCK_MAX_XFER, BLOCK_MAX_RUN,
 };
@@ -17,6 +17,7 @@ mod dma_transfer;
 mod completion_wait;
 mod ahci;
 mod controller_ready;
+mod apst;
 use dma_transfer::DmaTransfer;
 use sex_pdx::dma_pool::{DmaLease, DmaRegionPool};
 use sex_pdx::memory_region::{RegionView, QUERY_VIEW, READ, WRITE, DMA_ADDRESS};
@@ -543,7 +544,8 @@ fn nvme_read_into_mapped_va(offset: u64, size: u64, dst_va: u64) -> u64 {
         return BLOCK_ERR_NO_DEVICE;
     }
     if transfer.buffer.length < size { return BLOCK_ERR_NO_DEVICE; }
-    unsafe { core::ptr::write_bytes(data_va as *mut u8, 0, size as usize); }
+    // No zero fill: the device writes all `size` bytes, and they are copied out only
+    // after a successful completion, so stale bounce contents never reach the caller.
     let Some(prp2) = prp2_for(&transfer.buffer, size) else { return BLOCK_ERR_BAD_LEN; };
 
     let slba = offset / NVME_LBA_BYTES;
@@ -2556,6 +2558,7 @@ fn nvme_probe_bar() {
     let sn0 = unsafe { core::ptr::read_volatile((id_va + 4) as *const u64) };
     let mn0 = unsafe { core::ptr::read_volatile((id_va + 24) as *const u64) };
     let nn = unsafe { core::ptr::read_volatile((id_va + 516) as *const u32) };
+    NVME_RTD3E_US.store(unsafe { core::ptr::read_volatile((id_va + 88) as *const u32) }, Ordering::Relaxed);
     serial_println!(
         "[sexdrive.nvme.admin.identify.v2.ok] cid={} sc={} sct={} sqhd={} cqh={} cqp={} sn0={:#x} mn0={:#x} nn={}",
         cid as u64,
@@ -2832,6 +2835,49 @@ fn nvme_probe_bar() {
         }
     }
 
+    // Battery: let the idle SSD drop into its low-power states by itself (APST),
+    // from the Identify Controller data still in id_va. The table goes in the
+    // namespace page, which is ours and no longer needed.
+    if ns_phys != 0 && ns_phys != u64::MAX && ns_va != 0 && ns_va != u64::MAX {
+        let id = unsafe { core::slice::from_raw_parts(id_va as *const u8, PAGE_SIZE as usize) };
+        let lease = sex_pdx::device::at_slot(SLOT_NVME_HOST);
+        let quirk = lease.is_some_and(|l| apst::skip_deepest(l.vendor, l.device));
+        match apst::parse(id).and_then(|(states, npss)| apst::plan(&states, npss, quirk).map(|p| (p, npss))) {
+            None => sex_pdx::serial_record!("[sexdrive.nvme.apst] enabled=0 reason={}", if id[apst::ID_APSTA] & 1 == 0 { "unsupported" } else { "no_usable_state" }),
+            Some((plan, npss)) => {
+                unsafe { for (i, e) in plan.table.iter().enumerate() { core::ptr::write_volatile((ns_va as *mut u64).add(i), *e); } }
+                let cid: u16 = 0x0046;
+                let sqe = (asq_owned_va as *mut u8).wrapping_add((admin_sq_tail as usize) * 64) as *mut u32;
+                unsafe {
+                    for i in 0..16usize { core::ptr::write_volatile(sqe.add(i), 0); }
+                    core::ptr::write_volatile(sqe.add(0), 0x09u32 | ((cid as u32) << 16)); // Set Features
+                    core::ptr::write_volatile(sqe.add(6), (ns_phys & 0xFFFF_FFFF) as u32);
+                    core::ptr::write_volatile(sqe.add(7), (ns_phys >> 32) as u32);
+                    core::ptr::write_volatile(sqe.add(10), apst::FID_APST);
+                    core::ptr::write_volatile(sqe.add(11), 1u32); // APSTE
+                }
+                compiler_fence(Ordering::SeqCst);
+                admin_sq_tail = (admin_sq_tail + 1) % q_entries;
+                unsafe { core::ptr::write_volatile((map_va + NVME_SQ0TDBL) as *mut u32, admin_sq_tail); }
+                let mut status = u32::MAX;
+                for poll in 0..ADMIN_POLLS {
+                    if poll&0xFFFF==0xFFFF{sex_pdx::sys_yield();}
+                    let cqe = (acq_owned_va as *const u8).wrapping_add((admin_cq_head as usize) * 16) as *const u32;
+                    let dw3 = unsafe { core::ptr::read_volatile(cqe.add(3)) };
+                    if dw3 & 0xFFFF == cid as u32 && (dw3 >> 16) & 1 == admin_cq_phase {
+                        admin_cq_head = (admin_cq_head + 1) % q_entries;
+                        if admin_cq_head == 0 { admin_cq_phase ^= 1; }
+                        unsafe { core::ptr::write_volatile((map_va + cq0hdbl) as *mut u32, admin_cq_head); }
+                        status = (dw3 >> 17) & 0x7FFF;
+                        break;
+                    }
+                }
+                sex_pdx::serial_record!("[sexdrive.nvme.apst] enabled={} npss={} deepest=ps{} worst_latency_us={} status={:#x} skip_deepest={}",
+                    (status == 0) as u8, npss, plan.deepest, plan.worst_latency_us, status, quirk as u8);
+            }
+        }
+    }
+
     let sq1tdbl = 0x1000u64 + ((2u64 * 1u64) << (2 + cap_dstrd));
     let cq1hdbl = 0x1000u64 + ((2u64 * 1u64 + 1u64) << (2 + cap_dstrd));
     serial_println!(
@@ -3090,6 +3136,35 @@ fn xhci_probe_mmio() {
 
 // Device commands finish or quarantine their DMA synchronously. There is no
 // periodic storage work; the kernel wake owner resumes this task on IPC.
+static DISK_POWERED_DOWN: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+fn powered_down() -> bool { DISK_POWERED_DOWN.load(Ordering::Acquire) }
+/// RTD3 entry latency from Identify Controller (microseconds), 0 when unreported.
+static NVME_RTD3E_US: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+/// Flush, then NVMe shutdown notification (CC.SHN = normal) and wait for CSTS.SHST =
+/// complete, so the drive saves its mapping tables and does not count an unsafe
+/// shutdown. AHCI disks are flushed only. Every later read or write is refused.
+fn block_shutdown() -> u64 {
+    let status = nvme_flush();
+    DISK_POWERED_DOWN.store(true, Ordering::Release);
+    if serving_ahci() || !unsafe { NVME_IO_STATE.ready } {
+        sex_pdx::serial_record!("[sexdrive.shutdown] flush={} notify=0 reason={}", status, if serving_ahci() { "ahci" } else { "no_nvme" });
+        return status;
+    }
+    let map_va = unsafe { NVME_IO_STATE.map_va };
+    let cc = unsafe { core::ptr::read_volatile((map_va + 0x14) as *const u32) };
+    unsafe { core::ptr::write_volatile((map_va + 0x14) as *mut u32, (cc & !(3 << 14)) | (1 << 14)); }
+    let limit = controller_ready::shutdown_ticks(NVME_RTD3E_US.load(Ordering::Relaxed));
+    let r = controller_ready::wait_shutdown(limit,
+        || unsafe { core::ptr::read_volatile((map_va + 0x1C) as *const u32) },
+        sex_pdx::get_ticks, || sex_pdx::sys_yield());
+    sex_pdx::serial_record!("[sexdrive.shutdown] flush={} notify=1 outcome={:?} elapsed_ticks={} limit_ticks={} csts={:#x}",
+        status, r.outcome, r.elapsed, limit, r.csts);
+    // The data is already flushed; a drive slow to report SHST only costs its own
+    // housekeeping (an unsafe-shutdown count), so the flush status stands.
+    status
+}
+
 fn service_next_request(){
     let msg=pdx_listen_raw(0);
     // BLOCK_READ is numeric 1 in the public ABI, not a receipt kind.
@@ -3132,6 +3207,9 @@ fn service_next_request(){
     let reply_val: u64 = if (cmd == BLOCK_READ || cmd == BLOCK_WRITE)
         && (size == 0 || size > BLOCK_MAX_RUN || offset % BLOCK_SECTOR_SIZE != 0) {
         BLOCK_ERR_BAD_LEN
+    } else if powered_down() && cmd != BLOCK_CAPACITY {
+        // The disk was told power is going; it must not be woken for more I/O.
+        BLOCK_ERR_NO_DEVICE
     } else if (cmd == BLOCK_READ || cmd == BLOCK_WRITE) && block_view.is_none() {
         serial_println!("[sexdrive.block.region.reject] caller={} slot={} bytes={}", msg.caller_pd, _buf_cap, size);
         BLOCK_ERR_NO_DEVICE
@@ -3176,6 +3254,7 @@ fn service_next_request(){
             }
         }
         BLOCK_CAPACITY => device_sectors(),
+        BLOCK_SHUTDOWN => block_shutdown(),
         BLOCK_SYNC => {
             let status=nvme_flush();
             if serving_ahci(){sex_pdx::serial_record!("[sexdrive.sync.result] status={} actual_ahci_flush=1",status);}
