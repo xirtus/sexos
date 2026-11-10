@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# PRIVATE diagnostic: production SHA below is the parent artifact only.
+# Actual diagnostic bytes must be pinned separately in evidence.
 # Builds crates/sex-js/quickjs.wasm: QuickJS-NG (MIT) with the sex-js glue, for wasm32-wasip1.
 # Needs wasi-sdk 25 (WASI_SDK=path), patch(1) and a QuickJS-NG v0.10.1 checkout (QJS=path, commit
 # 3c9afc9943323ee9c7dbd123c0cd991448f4b6c2). The output is reproducible:
