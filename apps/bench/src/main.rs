@@ -92,6 +92,17 @@ fn run(window: &mut Window, r: &mut Report) -> Result<(), &'static str> {
 pub extern "C" fn _start() -> ! {
     let mut window = Window::open();
     window.title(b"Bench");
+    // `run bench spin`: keep the CPU busy without a system call for a while, to
+    // show that input and display still get to run (scheduler latency classes).
+    let mut args = [0u8; sex_pdx::fs::ARGS_MAX];
+    if files::args(&mut window, &mut args) == b"spin" {
+        sex_pdx::serial_record!("[bench.spin.start] target={} task={}", window.target, window.task);
+        let (t, mut x) = (tsc(), 1u64);
+        while tsc() - t < 20_000_000_000 { for _ in 0..1000 { x = core::hint::black_box(x.wrapping_mul(6364136223846793005).wrapping_add(1)); } }
+        sex_pdx::serial_record!("[bench.spin.done] target={} task={} x={}", window.target, window.task, x & 1);
+        window.show(b"Spun. F11 closes.\n");
+        loop { if let Event::Close = window.next() { window.close() } }
+    }
     let mut report = Report { text: alloc::string::String::new() };
     let _ = writeln!(report.text, "Bench. F11 closes.\n");
     match run(&mut window, &mut report) {

@@ -85,6 +85,8 @@ pub struct Task {
     /// The core this task runs on, when not its domain's (a program's workers);
     /// u32::MAX means `smp::home_core` of its domain.
     pub home: AtomicU32,
+    /// When the task was last made runnable (TSC), for wake-to-run latency.
+    woken_at: AtomicU64,
 }
 
 impl Task {
@@ -149,6 +151,7 @@ impl Task {
             wait_deadline:self_wait::Deadline::new(),
             fpu: crate::fpu::FpuState::INIT,
             home: AtomicU32::new(u32::MAX),
+            woken_at: AtomicU64::new(0),
         }
     }
 }
@@ -200,9 +203,56 @@ pub const QUEUE_SIZE: usize = 512;
 #[path = "scheduler_queue.rs"]
 pub mod scheduler_queue;
 pub type WorkStealingQueue = scheduler_queue::BoundedQueue<Task, QUEUE_SIZE>;
+/// Latency classes. Interactive tasks (input, display, the desktop) run ahead of
+/// everything else queued on their core, so a key press or a frame never waits behind
+/// disk work or a busy program. A streak limit keeps them from starving the rest.
+pub const CLASS_INTERACTIVE: usize = 0;
+pub const CLASS_NORMAL: usize = 1;
+/// sexdisplay, silk-shell, sexinput, sexusb, silkbar. Sound (sexbell) stays normal:
+/// its device ring covers a scheduling delay, and it needs a deadline class instead.
+const INTERACTIVE_DOMAINS: [u64; 5] = [1, 3, 4, 5, 6];
+pub fn class_of(pd: u64) -> usize {
+    if INTERACTIVE_DOMAINS.contains(&pd) { CLASS_INTERACTIVE } else { CLASS_NORMAL }
+}
+/// Interactive tasks may run this many times in a row ahead of a waiting normal one.
+const URGENT_STREAK: u32 = 16;
+pub type UrgentQueue = scheduler_queue::BoundedQueue<Task, 64>;
+/// Wake-to-run latency per class: wakes, total and worst TSC cycles, and a histogram
+/// by powers of two from 1024 cycles (bucket i holds waits below 1024 << i).
+static LATENCY: [[AtomicU64; 3]; 2] = [const { [const { AtomicU64::new(0) }; 3] }; 2];
+const BUCKETS: usize = 24;
+static HISTOGRAM: [[AtomicU64; BUCKETS]; 2] = [const { [const { AtomicU64::new(0) }; BUCKETS] }; 2];
+fn note_latency(task: &Task) {
+    let woken = task.woken_at.swap(0, Ordering::Relaxed);
+    if woken == 0 { return; }
+    let cycles = unsafe { core::arch::x86_64::_rdtsc() }.wrapping_sub(woken);
+    if cycles > 1 << 40 { return; }
+    let class = class_of(task.context.pd_id);
+    let [count, total, worst] = &LATENCY[class];
+    let bucket = ((64 - (cycles >> 10).leading_zeros()) as usize).min(BUCKETS - 1);
+    HISTOGRAM[class][bucket].fetch_add(1, Ordering::Relaxed);
+    count.fetch_add(1, Ordering::Relaxed);
+    total.fetch_add(cycles, Ordering::Relaxed);
+    worst.fetch_max(cycles, Ordering::Relaxed);
+}
+/// Logs the latency counters; the timekeeper calls it every couple of seconds.
+pub fn report_latency() {
+    for class in [CLASS_INTERACTIVE, CLASS_NORMAL] {
+        let [count, total, worst] = &LATENCY[class];
+        let n = count.load(Ordering::Relaxed);
+        if n == 0 { continue; }
+        let mut hist = [0u64; BUCKETS];
+        for (i, b) in HISTOGRAM[class].iter().enumerate() { hist[i] = b.load(Ordering::Relaxed); }
+        serial_println!("[sched.latency] class={} wakes={} avg_cycles={} max_cycles={} preemptions={} hist={:?}",
+            ["interactive", "normal"][class], n, total.load(Ordering::Relaxed) / n, worst.load(Ordering::Relaxed), PREEMPTIONS.load(Ordering::Relaxed), hist);
+    }
+}
 
 pub struct Scheduler {
     pub runqueue: WorkStealingQueue,
+    /// Interactive tasks, taken ahead of `runqueue` (see `class_of`).
+    pub urgent: UrgentQueue,
+    urgent_streak: AtomicU32,
     pub current_task: AtomicPtr<Task>,
     pending_outgoing: AtomicPtr<Task>,
     retry_cursor: AtomicU32,
@@ -219,6 +269,8 @@ pub struct Scheduler {
 /// everything queued gets its turn first.
 const HANDOFF_STREAK: u32 = 8;
 pub static HANDOFFS: AtomicU64 = AtomicU64::new(0);
+/// Normal tasks that gave way early to a woken interactive one.
+pub static PREEMPTIONS: AtomicU64 = AtomicU64::new(0);
 /// Wakes that had to reach a parked task's own core.
 pub static REMOTE_RESUMES: AtomicU64 = AtomicU64::new(0);
 
@@ -249,6 +301,8 @@ impl Scheduler {
     pub const fn new(core_id: u32) -> Self {
         Self {
             runqueue: WorkStealingQueue::new(),
+            urgent: UrgentQueue::new(),
+            urgent_streak: AtomicU32::new(0),
             current_task: AtomicPtr::new(ptr::null_mut()),
             pending_outgoing: AtomicPtr::new(ptr::null_mut()),
             retry_cursor: AtomicU32::new(0),
@@ -291,7 +345,7 @@ impl Scheduler {
         // bounded slice of the existing task inventory; Constructed never enters.
         self.retry_admission();
         let next_task = self.take_handoff();
-        let next_task = if next_task.is_null() { self.runqueue.steal() } else { next_task };
+        let next_task = if next_task.is_null() { self.take_queued() } else { next_task };
         let next_task = if next_task.is_null() { self.attempt_steal() } else { next_task };
         // SCHEDULER_TICK_PD8_PF_FLAKE_V1: reject corrupt steal results before
         // they reach set_pd/switch_to. A clobbered Task (heap overwrite of a
@@ -342,7 +396,7 @@ impl Scheduler {
                 next_task = ptr::null_mut();
                 break;
             }
-            next_task = self.runqueue.steal();
+            next_task = self.take_queued();
             if next_task.is_null() {
                 next_task = self.attempt_steal();
             }
@@ -373,6 +427,7 @@ impl Scheduler {
             return ScheduleDecision::NoRunnable;
         }
 
+        note_latency(unsafe { &*next_task });
         // A concrete next task has exclusive dispatch custody. Outgoing custody
         // remains SwitchingOut until the assembly's post-stack-release callback.
         let old_task = self.current_task.load(Ordering::Acquire);
@@ -435,6 +490,18 @@ impl Scheduler {
     }
 
 
+    /// Interactive first, unless they've had `URGENT_STREAK` turns in a row while a
+    /// normal task waited.
+    fn take_queued(&self) -> *mut Task {
+        if self.urgent_streak.load(Ordering::Relaxed) < URGENT_STREAK {
+            let task = self.urgent.steal();
+            if !task.is_null() { self.urgent_streak.fetch_add(1, Ordering::Relaxed); return task; }
+        }
+        self.urgent_streak.store(0, Ordering::Relaxed);
+        let task = self.runqueue.steal();
+        if task.is_null() { self.urgent.steal() } else { task }
+    }
+
     /// The waiting partner's turn, unless partners have had too many in a row: then it
     /// joins the back of the queue like any wake.
     fn take_handoff(&self) -> *mut Task {
@@ -451,7 +518,12 @@ impl Scheduler {
     /// The next wake this core causes is a handoff: see `handoff`.
     pub fn arm_handoff(&self, on: bool) { self.handoff_armed.store(on, Ordering::Relaxed); }
 
-    pub fn admit_task(&self, task: *mut Task) -> Admission {
+    pub fn admit_task(&self, task: *mut Task) -> Admission { self.admit(task, true) }
+
+    /// `woken` is false for a task that was switched out still runnable (its time
+    /// ran out, or it yielded): it waits in the normal queue whatever its class, so an
+    /// interactive task that polls cannot keep the rest of its core from running.
+    fn admit(&self, task: *mut Task, woken: bool) -> Admission {
         if task.is_null() { return Admission::NotRunnable; }
         // A task's queue is decided by the task, not by the core that woke it.
         let home_core = match unsafe { (*task).home.load(Ordering::Acquire) } {
@@ -460,13 +532,29 @@ impl Scheduler {
         };
         let home = &SCHEDULERS[home_core as usize];
         let handoff = home_core == self.core_id && self.handoff_armed.swap(false, Ordering::Relaxed);
+        let mut urgent = false;
         let admitted = unsafe { (*task).state.try_admit(|| {
+            // Wake latency counts real wakes, not a turn given up by yielding.
+            if woken { unsafe { (*task).woken_at.store(core::arch::x86_64::_rdtsc(), Ordering::Relaxed) }; }
             if handoff && self.handoff.compare_exchange(ptr::null_mut(), task, Ordering::AcqRel, Ordering::Acquire).is_ok() { return Ok(()); }
+            if woken && class_of(unsafe { (*task).context.pd_id }) == CLASS_INTERACTIVE && home.urgent.try_push(task).is_ok() { urgent = true; return Ok(()); }
             home.runqueue.try_push(task)
         }) };
         // That core may be halted, and its next tick is up to a millisecond away.
-        if admitted == Admission::Published && home_core != self.core_id { crate::apic::send_to_core(home_core, crate::smp::WAKE_VECTOR); }
+        // An interactive wake asks a core running a normal task to switch now, this
+        // core included: the interrupt arrives once it is back in user code.
+        if admitted == Admission::Published && urgent && home.running_normal() { crate::apic::send_to_core(home_core, crate::smp::PREEMPT_VECTOR); }
+        else if admitted == Admission::Published && home_core != self.core_id { crate::apic::send_to_core(home_core, crate::smp::WAKE_VECTOR); }
         admitted
+    }
+
+    fn running_normal(&self) -> bool {
+        let current = self.current_task.load(Ordering::Acquire);
+        !current.is_null() && class_of(unsafe { (*current).context.pd_id }) == CLASS_NORMAL
+    }
+    /// An interactive task waits while a normal one runs.
+    pub fn should_preempt(&self) -> bool {
+        self.running_normal() && self.urgent.bottom.load(Ordering::Acquire) != self.urgent.top.load(Ordering::Acquire)
     }
 
     /// First admission is explicit; wake cannot activate unfinished trampolines.
@@ -638,7 +726,8 @@ fn begin_last_runnable_proof(sched: &Scheduler, current: *mut Task) {
     let mut count = 0;
     for source in &SCHEDULERS {
         loop {
-            let token = source.runqueue.steal();
+            let token = source.urgent.steal();
+            let token = if token.is_null() { source.runqueue.steal() } else { token };
             if token.is_null() { break; }
             assert!(count < QUEUE_SIZE, "PROOF_QUEUE_CUSTODY_OVERFLOW");
             assert_eq!(unsafe { (*token).state.snapshot().phase }, task_ownership::Phase::Queued);
@@ -732,7 +821,7 @@ pub extern "C" fn scheduler_finish_switch() {
         assert!((*old).state.release_after_stack_switch(core), "OUTGOING_CUSTODY_MISMATCH");
         // After release, access only immutable fields or the atomic protocol.
         // Another lane may immediately acquire and rewrite the saved context.
-        sched.admit_task(old);
+        sched.admit(old, false);
         poll_paging_exit_notifications();
     }
 }

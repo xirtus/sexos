@@ -382,3 +382,39 @@ when free memory is a quarter above the mark, so nothing flaps. Transitions log
   Close the kernel logs level 0 and the next run starts at normal. Green at 1 and 4 cores.
 - Next: consumers. The browser drops decoded images and caches on LOW, Play shrinks
   buffers, and Desk shows a warning on CRITICAL.
+
+### Stage 7a: latency classes and wake preemption (2026-11-10)
+
+Each core now has two run queues. Interactive tasks (sexdisplay, silk-shell, sexinput,
+sexusb, silkbar) that are woken go to an urgent queue, taken ahead of the normal one,
+at most 16 times in a row while a normal task waits. A task switched out still runnable
+(its time ran out, or it yielded) always waits in the normal queue, so a desktop
+service that polls cannot starve the rest of its core. When an interactive wake lands
+on a core running a normal task in user code, the waker sends that core (itself
+included) the new `PREEMPT_VECTOR` (0xF2); its handler shares the timer's switching
+stub, so the normal task gives way at once instead of at its tick. Sound (sexbell)
+stays normal: its device ring covers a scheduling delay, and it needs a deadline class.
+
+The kernel counts wake-to-run latency per class (TSC cycles, a power-of-two histogram)
+and logs `[sched.latency] class= wakes= avg_cycles= max_cycles= preemptions= hist=`
+every 2048 ticks. New gate `latency_classes`: `run bench spin` computes for ~20 G
+cycles with no system call while the pointer moves, then the normal bench runs.
+
+| 1 core, spinner on the desktop's core (TCG) | before | after |
+|---|---|---|
+| interactive wake, average | 359k cycles | 130k cycles |
+| interactive wake, p50 | <131k | <66k |
+| interactive wake, p90 | <1.05M | <262k |
+| interactive wake, p99 | <4.2M | <2.1M |
+
+At 4 cores programs run on cores 2 and up, away from the desktop's core 0, so the
+classes matter less there; the gate still checks the counters. Normal tasks wait a bit
+longer on a shared core, which is the trade Linux's wakeup preemption makes too.
+
+- ABI: none for programs. Kernel-internal: vector 0xF2; `interrupts.rs` is an ABI
+  input, so `abi_version_hash` is recomputed.
+- Gates green at 1 and 4 cores: latency_classes, program_bench, program_file,
+  program_disk, program_store, filesystem, program_pool, program_heap, program_launch,
+  program_threads, program_view.
+- Next (7b): a deadline class for sound and video frames; latency classes for programs
+  that own the focused window; PCID so a switch keeps the TLB.
