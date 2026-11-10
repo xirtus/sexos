@@ -30,7 +30,7 @@ def main():
  for f in(serial,debug):f.unlink(missing_ok=True)
  cmd=['qemu-system-x86_64','-M','q35','-cpu','max,+pku,+rdseed','-smp',os.environ.get('SEXOS_GATE_CORES','1'),'-m','512M','-vga','none','-device','VGA,xres=1280,yres=800',
       '-device','pcie-root-port,id=rp5,bus=pcie.0,addr=1c.0,chassis=5','-device','bochs-display,bus=rp5,addr=0.0',
-      '-acpitable',f'file={ssdt(a.out)}','-debugcon',f'file:{debug}',
+      '-acpitable',f'file={ssdt(a.out)}','-chardev',f'file,id=sxdbg,path={debug}','-device','isa-debugcon,iobase=0x402,chardev=sxdbg',
       '-device','nec-usb-xhci,id=xhci','-device','usb-tablet,bus=xhci.0','-cdrom',str(a.iso),'-drive',f'if=none,id=nvm,file={disk},format=raw','-device','nvme,serial=sexos01,drive=nvm',
       '-serial',f'file:{serial}','-display','none','-nic','none','-no-reboot']
  proc=subprocess.Popen(cmd,stdout=(a.out/'qemu.log').open('w'),stderr=subprocess.STDOUT)
