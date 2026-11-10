@@ -54,22 +54,33 @@ def main():
    assert matches and tuple(map(int,matches[-1][:2]))==(pw,ph-BAR),('JS viewport mismatch',matches,pw,ph)
    # Move actual cursor out of the canvas; no pixel masks or clipped references.
    q.cmd('input-send-event',{'events':[{'type':'abs','data':{'axis':'x','value':100}},{'type':'abs','data':{'axis':'y','value':100}}]})
-   time.sleep(.3)
-   shot=a.out/f'{name}.ppm';q.cmd('screendump',{'filename':str(shot)});time.sleep(.3)
-   img=Image.open(shot).convert('RGB')
-   assert bx>=0 and by>=0 and bx+pw<=img.width and by+ph<=img.height
-   checked=0
-   # Independent RGB oracle across the entire document, including right/bottom
-   # pixels beyond the old 410x330 limit. Toolbar rendering has its own oracle.
-   for py in range(ph-BAR):
-    for px in range(pw):
-     want=(147,132,200) if px<48 and py<48 else (113,201,176) if px>=pw-48 and py>=ph-BAR-48 else (23,58,94)
-     got=img.getpixel((bx+px,by+BAR+py))
-     assert max(abs(g-w)for g,w in zip(got,want))<=2,(name,px,py,got,want)
-     checked+=1
+   # Client paint/resize receipts precede Display's actual scanout commit.
+   # Wait for the complete independent pixel oracle, never just a log or a
+   # fixed sleep. Keep every prior mismatch image and fail within 12 seconds.
+   began=time.monotonic();deadline=began+12;attempts=[]
+   while True:
+    shot=a.out/f'{name}-attempt-{len(attempts)+1:02}.ppm'
+    q.cmd('screendump',{'filename':str(shot)})
+    img=Image.open(shot).convert('RGB')
+    assert bx>=0 and by>=0 and bx+pw<=img.width and by+ph<=img.height
+    checked=0;mismatch=None
+    # Full document pixels, including right/bottom beyond old410x330.
+    for py in range(ph-BAR):
+     for px in range(pw):
+      want=(147,132,200) if px<48 and py<48 else (113,201,176) if px>=pw-48 and py>=ph-BAR-48 else (23,58,94)
+      got=img.getpixel((bx+px,by+BAR+py))
+      if max(abs(g-w)for g,w in zip(got,want))>2:
+       mismatch=dict(x=px,y=py,got=got,want=want);break
+      checked+=1
+     if mismatch is not None:break
+    attempts.append(dict(image=shot.name,checked=checked,mismatch=mismatch,observed_ms=round((time.monotonic()-began)*1000)))
+    (a.out/f'{name}-attempts.json').write_text(json.dumps(attempts,indent=2)+'\n')
+    if mismatch is None:break
+    assert time.monotonic()<deadline and len(attempts)<32,('scanout did not settle',name,attempts)
+    time.sleep(.25)
    assert checked>5000
    img.crop((bx,by,bx+pw,by+ph)).save(a.out/f'{name}.png')
-   item=dict(name=name,width=pw,height=ph,resize_count=int(matches[-1][2]),checked=checked)
+   item=dict(name=name,width=pw,height=ph,resize_count=int(matches[-1][2]),checked=checked,scanout_attempts=len(attempts))
    samples.append(item);return item
   first=inspect('initial',s)
   assert first['width']>0 and first['height']>BAR,first
