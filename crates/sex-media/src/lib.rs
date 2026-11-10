@@ -11,7 +11,7 @@
 //!   waits: call [`Player::step`] often, from a program's own loop or a browser's.
 //!
 //! Formats: MP4/MOV, Matroska/WebM, Ogg, MP3, AAC, FLAC and WAV, with H.264, HEVC,
-//! VP8, VP9 and MPEG-4 video and AAC, MP3, Opus, Vorbis, FLAC and PCM sound. A build
+//! VP8, VP9, MPEG-4 and AV1 (dav1d) video and AAC, MP3, Opus, Vorbis, FLAC and PCM sound. A build
 //! without FFmpeg (see build.rs) refuses every file as unsupported.
 #![no_std]
 
@@ -328,6 +328,37 @@ fn init_libc() {
     sex_libc::time::set_clock_default(clock);
 }
 
+/// The most pixels [`decode_picture`] takes in a source picture.
+pub const MAX_PICTURE_PIXELS: usize = 16 << 20;
+
+/// Decodes one still picture, such as an AVIF image, or the first picture of any video
+/// FFmpeg reads: `(width, height, pixels)` fitted within `max_w` x `max_h`, as opaque
+/// 0xFFRRGGBB. An AVIF's alpha plane (a separate item) is not read.
+pub fn decode_picture(bytes: &[u8], max_w: usize, max_h: usize) -> Result<(usize, usize, Vec<u32>), Error> {
+    let mut owned = Vec::new();
+    owned.try_reserve_exact(bytes.len()).map_err(|_| Error::NO_MEMORY)?;
+    owned.extend_from_slice(bytes);
+    let mut d = Decoder::open(Box::new(owned))?;
+    let (sw, sh) = (d.info.width as usize, d.info.height as usize);
+    if sw == 0 || sh == 0 || sw.saturating_mul(sh) > MAX_PICTURE_PIXELS {
+        return Err(Error::UNSUPPORTED);
+    }
+    let (w, h) = fit(sw, sh, max_w.max(1), max_h.max(1));
+    let mut out = Vec::new();
+    out.try_reserve_exact(w * h).map_err(|_| Error::NO_MEMORY)?;
+    out.resize(w * h, 0);
+    let mut pcm = [[0i16; 2]; 1024];
+    loop {
+        match d.next(&mut out, w, h, &mut pcm)? {
+            Next::Picture { .. } => break,
+            Next::Sound { .. } => continue,
+            Next::End => return Err(Error::UNSUPPORTED),
+        }
+    }
+    for p in out.iter_mut() { *p |= 0xFF00_0000; }
+    Ok((w, h, out))
+}
+
 /// The largest size with the stream's aspect ratio that fits in `max_w` x `max_h`.
 pub fn fit(w: usize, h: usize, max_w: usize, max_h: usize) -> (usize, usize) {
     if w == 0 || h == 0 {
@@ -431,14 +462,19 @@ pub enum Step {
 }
 
 const PCM_CAP: usize = 16384;
-/// Pictures decoded ahead: about half a second, within a memory budget.
+/// Pictures decoded ahead: up to about two seconds, within a memory budget, so sound
+/// keeps flowing while the program is busy with other work.
 const QUEUE_BYTES: usize = 32 * 1024 * 1024;
-const QUEUE_MAX: usize = 16;
+const QUEUE_MAX: usize = 48;
 /// Silence that goes before sound starting later than the pictures; at most this long.
 const PAD_MAX_MS: i64 = 30_000;
 static SILENCE: [[i16; 2]; 1024] = [[0; 2]; 1024];
 /// How long one step may decode before it gives the caller its loop back.
 const STEP_BUDGET_MS: u64 = 12;
+/// With less than this much sound queued (a quarter second), a step may decode for
+/// up to LOW_BUDGET_MS.
+const LOW_FRAMES: u64 = RATE as u64 / 4;
+const LOW_BUDGET_MS: u64 = 40;
 
 /// Plays one stream. Sound goes to this program's sound ring; pictures are decoded
 /// ahead into a short queue and each becomes current at its time.
@@ -469,7 +505,18 @@ pub struct Player {
     pub late_ms: i64,
     volume: u8,
     muted: bool,
+    /// Sound is held back, and the clock with it, until this much is queued, so a
+    /// slow start (FFmpeg warming up, a busy page) doesn't open with a gap.
+    priming: bool,
+    /// The ring's WRITTEN count when priming began: sound before it was skipped.
+    prime_from: u64,
+    /// Whether this player plays sound: it takes the ring when it first plays, and
+    /// can give it up (`release_sound`) for another player in the same program.
+    wants_sound: bool,
 }
+
+/// Sound queued before it starts: half a second.
+const PRIME_FRAMES: u64 = RATE as u64 / 2;
 
 impl Player {
     /// Play `dec` with pictures scaled to `w` x `h` (see [`fit`]). With `sound` false
@@ -482,13 +529,12 @@ impl Player {
         let mut p = Player {
             dec, w, h, sound: None, clock: Clock::new(), queue: VecDeque::new(), free: Vec::new(), cap,
             current: Vec::new(), pcm: Vec::new(), left: (0, 0), pad: 0, decoded: 0, eof: false, ended: false,
-            skip_until: i64::MIN, error: None, silence: None, shown: 0, heard: 0, late_ms: 0, volume: 100, muted: false,
+            skip_until: i64::MIN, error: None, silence: None, shown: 0, heard: 0, late_ms: 0, volume: 100, muted: false, priming: false, prime_from: 0, wants_sound,
         };
-        if wants_sound {
-            p.sound = Sound::open();
-        }
         if paused {
-            p.pause();
+            p.clock.paused = true;
+        } else {
+            p.claim_sound();
         }
         p
     }
@@ -498,7 +544,8 @@ impl Player {
     pub fn size(&self) -> (usize, usize) { (self.w, self.h) }
     /// The picture shown now, `w * h` pixels, empty before the first.
     pub fn picture(&self) -> &[u32] { &self.current }
-    /// Whether sound reaches the card: false with no ring, or after it stalled.
+    /// Whether this player holds the program's sound ring: false before it first
+    /// plays, after `release_sound`, with no ring, or after the sound stalled.
     pub fn has_sound(&self) -> bool { self.sound.is_some() }
     pub fn silence(&self) -> Option<Silence> { self.silence }
     /// FFmpeg's error, if decoding stopped on one.
@@ -524,16 +571,83 @@ impl Player {
     }
 
     pub fn play(&mut self) {
+        let claimed = self.claim_sound();
         if self.ended {
             // Playing an ended stream starts it again, as a browser does.
             self.seek(0);
+        } else if claimed && self.decoded > 0 {
+            // Sound decoded while the ring was elsewhere was dropped: decode again
+            // from here so sound and pictures line up.
+            let at = self.clock.last_ms.max(0) as u64;
+            self.seek(at);
         }
         if !self.clock.paused { return; }
         self.clock.paused = false;
         let t = sex_pdx::get_ticks();
         self.clock.last_tick = t;
         self.clock.moved = t;
+        if self.priming { return; }
         if let Some(s) = self.sound.as_mut() { s.pause(false); }
+    }
+
+    /// Takes this program's sound ring if this player wants sound and has none.
+    /// True when it did. A program has one ring: before this, every other player
+    /// in the program must have called `release_sound`.
+    fn claim_sound(&mut self) -> bool {
+        if !self.wants_sound || self.sound.is_some() { return false; }
+        self.sound = Sound::open();
+        if self.sound.is_none() { self.wants_sound = false; return false; }
+        self.apply_volume();
+        self.clock.started = false;
+        self.prime();
+        true
+    }
+
+    /// Gives up the sound ring without touching it, so another player in this
+    /// program can take it. Sound decoded meanwhile is dropped; `play` takes the
+    /// ring back. Pause the player too, or it plays on silent, paced by ticks.
+    pub fn release_sound(&mut self) {
+        if let Some(s) = self.sound.take() {
+            // The ring is the next owner's now: closing or pausing it would be theirs.
+            core::mem::forget(s);
+        }
+        self.priming = false;
+        self.left = (0, 0);
+        self.pad = 0;
+    }
+
+    /// Hold the sound ring until PRIME_FRAMES are queued (see `step`).
+    fn prime(&mut self) {
+        if let Some(s) = self.sound.as_mut() {
+            s.pause(true);
+            self.prime_from = s.written_total();
+            self.priming = true;
+        }
+    }
+
+    /// Whether priming is still under way; ends it once enough sound is queued.
+    fn priming(&mut self) -> bool {
+        if !self.priming { return false; }
+        let lead = self.sound.as_ref().map_or(u64::MAX, |s| s.written_total().saturating_sub(s.played_total().max(self.prime_from)));
+        // A ring with no room ends it too: Bell applies a seek's skip only while
+        // the ring plays, so a held ring can stay full of the skipped sound.
+        let blocked = self.left.0 < self.left.1 || self.pad > 0;
+        let full = self.queue.len() >= self.cap;
+        if lead < PRIME_FRAMES && !self.eof && !full && !blocked && self.error.is_none() {
+            // Time stands still meanwhile, as when paused.
+            let t = sex_pdx::get_ticks();
+            self.clock.last_tick = t;
+            self.clock.moved = t;
+            return true;
+        }
+        self.priming = false;
+        let t = sex_pdx::get_ticks();
+        self.clock.last_tick = t;
+        self.clock.moved = t;
+        if !self.clock.paused {
+            if let Some(s) = self.sound.as_mut() { s.pause(false); }
+        }
+        false
     }
 
     /// 0..=100.
@@ -567,6 +681,7 @@ impl Player {
         // drops the stream the moment the skip empties it.
         if let Some(s) = self.sound.as_mut() { s.reopen(); s.skip(); }
         self.clock.set(ms as i64);
+        self.prime();
     }
 
     /// Do the work there is now without waiting: decode ahead, keep the sound ring
@@ -581,6 +696,7 @@ impl Player {
         let begun = sex_pdx::get_ticks();
         loop {
             self.feed();
+            self.priming();
             let now = self.time_ms();
             // The oldest picture whose time has come becomes current. A caller that
             // only draws now and then calls again until it gets no picture, then
@@ -605,7 +721,10 @@ impl Player {
                 return Step::Wait { ms: 10 };
             }
             let starved = !self.dec.ready();
-            if self.eof || full || sound_waits || starved || sex_pdx::get_ticks() - begun >= STEP_BUDGET_MS {
+            // Sound running low gets a longer turn: a gap is worse than a late picture.
+            let low = self.sound.as_ref().is_some_and(|s| s.written_total().saturating_sub(s.played_total()) < LOW_FRAMES);
+            let budget = if low && !self.priming { LOW_BUDGET_MS } else { STEP_BUDGET_MS };
+            if self.eof || full || sound_waits || starved || sex_pdx::get_ticks() - begun >= budget {
                 let until = self.queue.front().map_or(10, |p| (p.due - now).clamp(1, 16) as u64);
                 return Step::Wait { ms: if sound_waits || starved { until.min(5) } else { until } };
             }
