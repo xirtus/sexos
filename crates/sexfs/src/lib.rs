@@ -39,6 +39,14 @@ pub type Result<T> = core::result::Result<T, Error>;
 pub trait Device {
     fn blocks(&self) -> u64;
     fn read(&mut self, block: u64, out: &mut [u8; BLOCK]) -> core::result::Result<(), ()>;
+    /// File payload reads, distinguished from tree/metadata reads for device
+    /// accounting. Defaults preserve existing device behavior and authority.
+    fn read_data(&mut self, block: u64, out: &mut [u8; BLOCK]) -> core::result::Result<(), ()> {
+        self.read(block, out)
+    }
+    fn read_data_run(&mut self, first: u64, out: &mut [u8]) -> core::result::Result<(), ()> {
+        self.read_run(first, out)
+    }
     fn write(&mut self, block: u64, data: &[u8; BLOCK]) -> core::result::Result<(), ()>;
     fn flush(&mut self) -> core::result::Result<(), ()>;
     /// Most blocks one `read_run` or `write_run` should carry. A device whose commands
@@ -737,7 +745,7 @@ impl<'a, D: Device> Fs<'a, D> {
     fn read_block(&mut self, id: u64, index: u64) -> Result<bool> {
         if !self.get(Key { id, kind: K_BLOCK, off: index })? { return Ok(false); }
         let (block, sum) = (get_u64(&self.value, 0), get_u64(&self.value, 8));
-        self.dev.read(block, self.mem.scratch).map_err(|_| Error::Io)?;
+        self.dev.read_data(block, self.mem.scratch).map_err(|_| Error::Io)?;
         if checksum(&self.mem.scratch[..]) != sum { return Err(Error::Corrupt); }
         Ok(true)
     }
@@ -783,7 +791,7 @@ impl<'a, D: Device> Fs<'a, D> {
         }
         if n < 2 { return Ok(0); }
         let run = &mut out[..n * BLOCK];
-        self.dev.read_run(first, run).map_err(|_| Error::Io)?;
+        self.dev.read_data_run(first, run).map_err(|_| Error::Io)?;
         for j in 0..n {
             if checksum(&run[j * BLOCK..(j + 1) * BLOCK]) != sums[j] { return Err(Error::Corrupt); }
         }

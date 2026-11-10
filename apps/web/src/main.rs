@@ -137,7 +137,7 @@ impl Doc {
 
 /// One script of a page, ready to run.
 /// A script to run; `node` is its element, for `document.currentScript` (classic scripts only).
-struct PageScript { source: String, name: String, module: bool, node: Option<usize> }
+struct PageScript { source: String, name: String, module: bool, node: Option<usize>, external: bool }
 
 struct Browser {
     #[cfg(feature = "baseline-jit")]
@@ -707,7 +707,7 @@ impl Browser {
                 None => Some((dom.text_content(n), alloc::format!("{}#script{}", base.split('#').next().unwrap_or(base), now.len() + later.len() + 1))),
             };
             let Some((source, name)) = got else { continue };
-            let s = PageScript { source, name, module, node: (!module).then_some(n) };
+            let s = PageScript { source, name, module, node: (!module).then_some(n), external: dom.attr(n, "src").is_some() };
             if deferred { later.push(s) } else { now.push(s) }
         }
         now.extend(later);
@@ -738,7 +738,12 @@ impl Browser {
             } else {
                 if let Some(n) = s.node { let _ = script.dispatch(&alloc::format!("script\t{}", n)); }
                 let r = script.eval(&s.source, &s.name);
-                if s.node.is_some() { let _ = script.dispatch("script\t"); }
+                if let Some(n) = s.node {
+                    let _ = script.dispatch("script\t");
+                    // A fetched resource loads even when executing it throws.
+                    // Restore currentScript before delivering its load event.
+                    if s.external && !matches!(&r, Err(sex_js::Error::Trapped(_))) { let _ = script.dispatch(&alloc::format!("scriptload\t{}", n)); }
+                }
                 r
             };
             if let Err(sex_js::Error::Trapped(why)) = &r { sex_pdx::serial_record!("[web.script] trapped={}", why); break; }

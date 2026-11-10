@@ -415,7 +415,11 @@
     get lastElementChild() { const c = this.children; return c[c.length - 1] || null; },
     querySelector(s) { return wrap(check(H(OP.QUERY, this._id, String(s), '0'))); },
     querySelectorAll(s) { return list(check(H(OP.QUERY, this._id, String(s), '1'))); },
-    getElementsByTagName(t) { return this.querySelectorAll(t === '*' ? '*' : String(t).toLowerCase()); },
+    getElementsByTagName(t) {
+      const tag = String(t).toLowerCase();
+      const descendants = this.querySelectorAll('*');
+      return tag === '*' ? descendants : descendants.filter(n => n.localName === tag);
+    },
     getElementsByClassName(c) { return this.querySelectorAll(String(c).trim().split(/\s+/).map(x => '.' + x).join('')); },
     append(...xs) { for (const x of xs) this.appendChild(toNode(x)); },
     prepend(...xs) { const f = this.firstChild; for (const x of xs) this.insertBefore(toNode(x), f); },
@@ -3811,6 +3815,7 @@
       // An iframe's page loaded (or failed to): its element hears `load`.
       case 'frameload': { const el = wrap(f[1]); if (el) el.dispatchEvent(new Event('load')); return 0; }
       case 'script': document.currentScript = f[1] ? wrap(f[1]) : null; return 0;
+      case 'scriptload': { const el = wrap(f[1]); if (el) el.dispatchEvent(new Event('load')); return 0; }
       case 'scriptend': { const el = wrap(f[1]); if (el) setTimeout(() => el.dispatchEvent(new Event(f[2] === '1' ? 'load' : 'error')), 0); return 0; }
       case 'scroll': window.scrollY = window.pageYOffset = +f[1] || 0; return 0;
       case 'click': {
