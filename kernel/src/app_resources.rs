@@ -131,7 +131,9 @@ pub fn init(pager:u32,coordinator:u32,catalog:&[(u32,u64)],services:[u32;5]){
 }
 /// Genesis reserves a fresh image and permanently binds the one activation
 /// grant. Clear successor leaves before any predecessor user execution.
-pub fn reserve_successor(predecessor:u32,successor:u32,holder:u32,slot:usize){
+pub fn reserve_successor(predecessor:u32,successor:u32,holder:u32,slot:usize){reserve_successor_from(predecessor,successor,holder,slot,None);}
+/// BOOT may narrow an activation to one retained immutable image source.
+pub fn reserve_successor_from(predecessor:u32,successor:u32,holder:u32,slot:usize,image_source:Option<ImageSource>){
     boot();let mut apps=APPS.lock();
     let old=apps.iter().find(|a|a.ready&&a.target==predecessor).expect("SUCCESSOR_NO_PREDECESSOR");
     let old_task=old.task;let old_key=old.pkey;
@@ -169,7 +171,7 @@ pub fn reserve_successor(predecessor:u32,successor:u32,holder:u32,slot:usize){
     let coordinator=crate::ipc::DOMAIN_REGISTRY.get(holder).expect("SUCCESSOR_NO_HOLDER");
     assert!(coordinator.find_capability(slot as u32).is_none());
     coordinator.grant_capability(slot as u64,CapabilityData::AppActivation(ActivationGrant{
-        holder,logical_app:next.logical_app,incarnation:next.number,predecessor,predecessor_task:old_task,
+        image_source,holder,logical_app:next.logical_app,incarnation:next.number,predecessor,predecessor_task:old_task,
         successor,successor_task:app.task}));
     crate::serial_println!("[boot.app.successor] logical={} incarnation={} predecessor={} successor={} task={} surface={} key={} dormant=1 leaves={} runtime_mint=0",next.logical_app,next.number,predecessor,successor,app.task,app.surface,app.pkey,app.count);
 }
@@ -283,20 +285,22 @@ pub fn activation(pd:&ProtectionDomain,slot:u64,kind:u64,len:u64)->[u64;5]{
         if kind==3{
             // A program from disk, on a row that has not started or has fully ended.
             if !new.reusable{return Err(DENIED)}
+            if new.rebirthing{return Err(RETRY)}
             let len=usize::try_from(len).map_err(|_|INVALID)?;
             if !new.activated{
                 let ready=if old.reusable{old.activated}else{old.retired&&old.acked==REQUIRED&&dead(old).is_ok()};
                 if !ready{return Err(RETRY)}
                 let task=apps[ni].boot_task;
-                load_program(&mut apps[ni],len,task)?;
+                let copy=checked_program_image(len,g.image_source)?;
+                load_program(&mut apps[ni],&copy,task)?;
                 return Ok(reply_of(&apps[ni],1));
             }
-            return rebirth(&mut apps,ni,Some(len)).map(|state|reply_of(&apps[ni],state));
+            return rebirth(&mut apps,ni,Some(len),g.image_source).map(|state|reply_of(&apps[ni],state));
         }
         if new.reusable&&new.activated{
             if new.rebirthing&&kind!=2{return Ok(reply_of(new,5))}
             if new.retired&&!new.rebirthing&&kind!=2{return Ok(reply_of(new,4))}
-            if kind==2{return rebirth(&mut apps,ni,None).map(|state|reply_of(&apps[ni],state))}
+            if kind==2{return rebirth(&mut apps,ni,None,g.image_source).map(|state|reply_of(&apps[ni],state))}
         }
         // Once consumed, replay never revalidates or restores retired leaves.
         if new.activated{return Ok([0,new.target as u64,new.task as u64,new.surface,
@@ -345,11 +349,15 @@ pub fn activation(pd:&ProtectionDomain,slot:u64,kind:u64,len:u64)->[u64;5]{
 /// A run's stack when its file names none, and the most one may ask for.
 const STACK_DEFAULT:u64=1<<20;
 const STACK_MAX:u64=256<<20;
-fn load_program(app:&mut App,len:usize,task:u32)->Result<(),u64>{
+pub(crate) fn checked_program_image(len:usize,source:Option<ImageSource>)->Result<crate::boot_memory::ImageCopy,u64>{
+    let copy=crate::boot_memory::program_image(len).ok_or(INVALID)?;
+    if source.is_some_and(|approved|!approved.matches(&copy)){return Err(DENIED)}
+    Ok(copy)
+}
+fn load_program(app:&mut App,elf:&[u8],task:u32)->Result<(),u64>{
     use crate::program_image as image;
     if app.arena==0{return Err(DENIED)}
-    let copy=crate::boot_memory::program_image(len).ok_or(INVALID)?;
-    let elf:&[u8]=&copy;
+    let len=elf.len();
     let parsed=image::parse(elf,(app.arena_pages*4096) as u64).map_err(|reason|{
         crate::serial_println!("[app.program.rejected] target={} bytes={} reason={:?}",app.target,len,reason);DENIED})?;
     let stack_low=app.stack_top.checked_sub(65536).ok_or(DENIED)?;
@@ -570,18 +578,19 @@ pub fn code(pd:&ProtectionDomain,op:u64,va:u64,want:u64)->[u64;3]{
         Ok([0,0,want as u64])
     })();result.unwrap_or_else(|(e,o)|[e,o,0])
 }
-fn rebirth(apps:&mut [App;MAX_APPS],index:usize,image:Option<usize>)->Result<u64,u64>{
+fn rebirth(apps:&mut [App;MAX_APPS],index:usize,image:Option<usize>,source:Option<ImageSource>)->Result<u64,u64>{
     let app=&mut apps[index];
     if !app.rebirthing {
         if !app.retired || app.acked!=REQUIRED {return Err(RETRY)}
         dead(app)?;
         if !crate::smp::shootdown_covers_all()
             || crate::core_local::CoreLocal::get().core_id!=0{return Err(DENIED)}
+        let copy=image.map(|len|checked_program_image(len,source)).transpose()?;
         app.generation=app.generation.checked_add(1).ok_or(DENIED)?;
         // Distinct from every boot task and every earlier run of any row, for good.
         let task=NEXT_RUN_TASK.fetch_add(1,Ordering::Relaxed);
         if task==u32::MAX{return Err(DENIED)}
-        if let Some(len)=image{load_program(app,len,task)?;}
+        if let Some(copy)=copy{load_program(app,&copy,task)?;}
         else{
             let count=app.boot_count;app.pages.clear();app.pages.extend_from_slice(&app.boot_pages[..count]);app.count=count;
             app.image_pages=0;app.grown=0;
