@@ -15,8 +15,9 @@ const MAX_WINDOWS: usize = 40;
 const EMPTY: u64 = 0;
 const SAVED: u64 = 1;
 const APPLYING: u64 = 2;
-/// Window states a session keeps (minimized is applied with its lifecycle).
-const KEPT_FLAGS: u32 = FRAME_FLAG_MINIMIZED | FRAME_FLAG_ZOOMED | FRAME_FLAG_FLOATING;
+/// Window states a session keeps (minimized is applied with its lifecycle; scratchpad
+/// windows keep their mark so Super+S still finds them).
+const KEPT_FLAGS: u32 = FRAME_FLAG_MINIMIZED | FRAME_FLAG_ZOOMED | FRAME_FLAG_FLOATING | FRAME_FLAG_SCRATCH;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
@@ -145,7 +146,7 @@ unsafe fn apply(snap: &Snapshot) {
         let Some(fid) = frame_for_surface(w.surface) else { continue };
         let Some(frame) = FRAMES.iter_mut().flatten().find(|f| f.frame_id == fid) else { continue };
         frame.scene_id = (w.scene.min(last_scene as u32)) as u8;
-        frame.flags = (frame.flags & !KEPT_FLAGS) | (w.flags & (FRAME_FLAG_ZOOMED | FRAME_FLAG_FLOATING));
+        frame.flags = (frame.flags & !KEPT_FLAGS) | (w.flags & KEPT_FLAGS & !FRAME_FLAG_MINIMIZED);
         frame.normal_x = w.normal[0]; frame.normal_y = w.normal[1];
         frame.normal_w = w.normal[2].max(1) as u32; frame.normal_h = w.normal[3].max(1) as u32;
         let (x, y) = clamp_position(w.x, w.y, w.w, w.h);
