@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! The open-internet streams: TCP flows and UDP sockets made as programs ask for them, over
 //! IPv4 or IPv6, reached by name through whatever
 //! the network's DHCP and DNS say. Holding the BOOT route to the network service and

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! Finite register-only text transfer on existing BOOT Shell Domain routes.
 //! Subjects and tickets are correlation data, never capability handles. The
 //! broker requires a held lifecycle catalog, live exact sender PD/task and a

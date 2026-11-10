@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! Byte allocation inside an ELF-owned arena, then, once that is full, inside pages the
 //! kernel grants a service with a growable arena (SYS_PROGRAM_MEMORY). A domain without
 //! one keeps the fixed arena alone; asking costs one denied call, once.
