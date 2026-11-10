@@ -17,6 +17,11 @@ const QUESTION: &[u8] = sex_net_config::DNS_QUESTION;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Answer { pub address: [u8; 4], pub ttl: u32 }
+/// An answer of either kind: an IPv4 address fills the first four bytes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Found { pub kind: u16, pub address: [u8; 16], pub ttl: u32 }
+pub const A: u16 = 1;
+pub const AAAA: u16 = 28;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
@@ -56,8 +61,11 @@ pub fn encode_name(host: &[u8], out: &mut [u8; MAX_NAME]) -> Option<usize> {
     Some(at + 1)
 }
 /// The same question as `query`, for any name already in wire form.
-pub fn query_name(id: u16, name: &[u8], out: &mut [u8; MAX_BYTES]) -> Result<usize, Error> {
+pub fn query_name(id: u16, name: &[u8], out: &mut [u8; MAX_BYTES]) -> Result<usize, Error> { query_type(id, name, A, out) }
+/// A question of `kind` (`A` or `AAAA`) for a name in wire form.
+pub fn query_type(id: u16, name: &[u8], kind: u16, out: &mut [u8; MAX_BYTES]) -> Result<usize, Error> {
     if id == 0 { return Err(Error::InvalidId); }
+    if kind != A && kind != AAAA { return Err(Error::Unsupported); }
     let length = 12 + name.len() + 4;
     if length > MAX_BYTES { return Err(Error::Oversized); }
     out[..length].fill(0);
@@ -65,7 +73,8 @@ pub fn query_name(id: u16, name: &[u8], out: &mut [u8; MAX_BYTES]) -> Result<usi
     out[2] = 1;
     out[5] = 1;
     out[12..12 + name.len()].copy_from_slice(name);
-    out[length - 4..length].copy_from_slice(&[0, 1, 0, 1]);
+    out[length - 4..length - 2].copy_from_slice(&kind.to_be_bytes());
+    out[length - 2..length].copy_from_slice(&[0, 1]);
     Ok(length)
 }
 
@@ -162,7 +171,8 @@ fn ttl(bytes: &[u8]) -> u32 {
     let value = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
     if value & 0x8000_0000 != 0 { 0 } else { value }
 }
-fn read_record(bytes: &[u8], cursor: &mut usize, known: &mut Boundaries, answer: bool, scratch: &mut Name) -> Result<Record, Error> {
+/// `wanted` is the question's type: an AAAA question takes AAAA answers.
+fn read_record(bytes: &[u8], cursor: &mut usize, known: &mut Boundaries, answer: bool, wanted: u16, scratch: &mut Name) -> Result<Record, Error> {
     let owner = *cursor;
     *cursor = name(bytes, owner, known, true, scratch)?;
     let fields = take(bytes, cursor, 10)?;
@@ -171,7 +181,7 @@ fn read_record(bytes: &[u8], cursor: &mut usize, known: &mut Boundaries, answer:
     let length = u16::from_be_bytes([fields[8], fields[9]]) as usize;
     let data = *cursor;
     let end = data.checked_add(length).ok_or(Error::Malformed)?;
-    if kind == 1 && length != 4 || kind == 28 && !answer && length != 16 { return Err(Error::Malformed); }
+    if kind == 1 && length != 4 || kind == 28 && (!answer || wanted == AAAA) && length != 16 { return Err(Error::Malformed); }
     if end > bytes.len() { return Err(Error::Truncated); }
     match kind {
         1 => if length != 4 { return Err(Error::Malformed); },
@@ -183,7 +193,7 @@ fn read_record(bytes: &[u8], cursor: &mut usize, known: &mut Boundaries, answer:
             let next = name(bytes, next, known, true, scratch)?;
             if next.checked_add(20) != Some(end) { return Err(Error::Malformed); }
         },
-        28 if !answer => if length != 16 { return Err(Error::Malformed); },
+        28 if !answer || wanted == AAAA => if length != 16 { return Err(Error::Malformed); },
         _ => return Err(Error::Unsupported),
     }
     *cursor = end;
@@ -238,6 +248,11 @@ fn validate_aliases(bytes: &[u8], records: &[Record], known: &mut Boundaries, le
 pub fn parse(expected_id: u16, response: &[u8]) -> Result<Option<Answer>, Error> { parse_name(expected_id, NAME, response) }
 /// The same strict parse, for the name a `query_name` asked about.
 pub fn parse_name(expected_id: u16, wanted: &[u8], response: &[u8]) -> Result<Option<Answer>, Error> {
+    Ok(parse_type(expected_id, wanted, A, response)?.map(|f| Answer { address: [f.address[0], f.address[1], f.address[2], f.address[3]], ttl: f.ttl }))
+}
+/// The same strict parse for a `query_type` question of `kind`: its answer's address.
+pub fn parse_type(expected_id: u16, wanted: &[u8], kind: u16, response: &[u8]) -> Result<Option<Found>, Error> {
+    if kind != A && kind != AAAA { return Err(Error::Unsupported); }
     if expected_id == 0 { return Err(Error::InvalidId); }
     if response.len() > MAX_BYTES { return Err(Error::Oversized); }
     if response.len() < 12 { return Err(Error::Truncated); }
@@ -250,7 +265,7 @@ pub fn parse_name(expected_id: u16, wanted: &[u8], response: &[u8]) -> Result<Op
     let mut scratch = Name::new();
     let mut cursor = name(response, 12, &mut known, true, &mut current)?;
     let question_tail = take(response, &mut cursor, 4)?;
-    if !current.bytes[..current.length].eq_ignore_ascii_case(wanted) || question_tail != [0, 1, 0, 1] { return Ok(None); }
+    if !current.bytes[..current.length].eq_ignore_ascii_case(wanted) || question_tail[..2] != kind.to_be_bytes() || question_tail[2..] != [0, 1] { return Ok(None); }
     let flags = u16_at(response, 2)?;
     if flags & 0x8000 == 0 { return Err(Error::Malformed); }
     if flags & 0x7840 != 0 { return Err(Error::Unsupported); }
@@ -263,7 +278,7 @@ pub fn parse_name(expected_id: u16, wanted: &[u8], response: &[u8]) -> Result<Op
     let count = answers + authority + additional;
     let mut records = [Record::EMPTY; MAX_RECORDS];
     for (index, record) in records[..count].iter_mut().enumerate() {
-        *record = read_record(response, &mut cursor, &mut known, index < answers, &mut scratch)?;
+        *record = read_record(response, &mut cursor, &mut known, index < answers, kind, &mut scratch)?;
     }
     if cursor != response.len() { return Err(Error::Malformed); }
     validate_aliases(response, &records[..count], &mut known, &mut current, &mut scratch)?;
@@ -277,12 +292,14 @@ pub fn parse_name(expected_id: u16, wanted: &[u8], response: &[u8]) -> Result<Op
             name(response, record.owner as usize, &mut known, false, &mut scratch)?;
             if !current.same(&scratch) { continue; }
             minimum = minimum.min(record.ttl);
-            if record.kind == 1 && address.is_none() {
-                let data = &response[record.data as usize..record.data as usize+4];
-                address = Some([data[0], data[1], data[2], data[3]]);
+            if record.kind == kind && address.is_none() {
+                let n = if kind == A { 4 } else { 16 };
+                let mut a = [0u8; 16];
+                a[..n].copy_from_slice(&response[record.data as usize..record.data as usize + n]);
+                address = Some(a);
             } else if record.kind == 5 { alias = Some(record.data); }
         }
-        if let Some(address) = address { return Ok(Some(Answer { address, ttl: minimum })); }
+        if let Some(address) = address { return Ok(Some(Found { kind, address, ttl: minimum })); }
         let Some(alias) = alias else { return Err(Error::NoAnswer); };
         if depth == MAX_CHAIN { return Err(Error::Unsupported); }
         name(response, alias as usize, &mut known, false, &mut scratch)?;
@@ -538,4 +555,29 @@ mod tests {
         let mut packet=valid(true);rr(&mut packet,0,&[0x40],1,&ADDRESS,60);assert_eq!(parse(ID,&packet),Err(Error::Malformed));
     }
 
+    fn aaaa_response(name: &[u8]) -> Vec<u8> {
+        let mut out = [0; MAX_BYTES]; let n = query_type(ID, name, AAAA, &mut out).unwrap();
+        let mut packet = out[..n].to_vec(); packet[2] = 0x81; packet[3] = 0x80; packet
+    }
+    #[test] fn aaaa_questions_take_aaaa_answers_through_aliases() {
+        let six = [0xfd, 0, 0, 0x5e, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1];
+        let mut out = [0; MAX_BYTES];
+        let n = query_type(ID, NAME, AAAA, &mut out).unwrap();
+        assert_eq!(&out[n - 4..n], &[0, 28, 0, 1]);
+        assert_eq!(query_type(ID, NAME, 5, &mut out), Err(Error::Unsupported));
+        let mut packet = aaaa_response(NAME);
+        let alias = wire("alias.sexos.test");
+        rr(&mut packet, 0, NAME, 5, &alias, 90); rr(&mut packet, 0, &alias, 28, &six, 70);
+        let found = parse_type(ID, NAME, AAAA, &packet).unwrap().unwrap();
+        assert_eq!((found.kind, found.address, found.ttl), (AAAA, six, 70));
+        // The same reply does not answer an A question, and an A parse of it finds no question.
+        assert_eq!(parse_type(ID, NAME, A, &packet), Ok(None));
+        // A short AAAA record is malformed; one with no answer has none.
+        let mut packet = aaaa_response(NAME); rr(&mut packet, 0, NAME, 28, &six[..15], 70);
+        assert_eq!(parse_type(ID, NAME, AAAA, &packet), Err(Error::Malformed));
+        assert_eq!(parse_type(ID, NAME, AAAA, &aaaa_response(NAME)), Err(Error::NoAnswer));
+        // An A question still refuses an AAAA record among its answers.
+        let mut packet = response(); rr(&mut packet, 0, NAME, 28, &six, 60);
+        assert_eq!(parse(ID, &packet), Err(Error::Unsupported));
+    }
 }

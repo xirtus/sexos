@@ -168,11 +168,13 @@ HOST_TARGET="$(rustc -vV | sed -n 's/^host: //p')"
 CARGO_TARGET_DIR="$TEST_DIR/cargo-target" RUSTFLAGS='--cfg aes_force_soft --cfg polyval_force_soft' cargo test --locked \
   --manifest-path "$ROOT_DIR/Cargo.toml" -p sex-tls --target "$HOST_TARGET"
 echo '[sexnet.tls.host] PASS scope=actual_private_TLS_backend_clients_brokers_not_live_entropy_time_network_or_peer_authentication'
-# The open-web session (public roots in the program; a test root here) against a real
-# OpenSSL peer: one session carries several HTTP requests.
-CARGO_TARGET_DIR="$TEST_DIR/cargo-target" RUSTFLAGS='--cfg aes_force_soft --cfg polyval_force_soft' cargo test --locked \
+# The open-web session (public roots in the program; test roots here) against real
+# OpenSSL peers: one session carries several HTTP requests; every TLS 1.2 and 1.3 suite
+# and every group meets a server held to it; an untrusted server is refused. Built with
+# the same scalar crypto cfgs as the network service.
+CARGO_TARGET_DIR="$TEST_DIR/cargo-target" RUSTFLAGS='--cfg aes_force_soft --cfg polyval_force_soft --cfg chacha20_force_soft --cfg poly1305_force_soft' cargo test --locked \
   --manifest-path "$ROOT_DIR/Cargo.toml" -p sex-tls --features open-web --target "$HOST_TARGET" --lib
-echo '[sexnet.tls.open.host] PASS scope=actual_open_web_session_keep_alive_with_test_root_not_public_peer'
+echo '[sexnet.tls.open.host] PASS scope=actual_open_web_session_keep_alive_suite_matrix_and_refusal_with_test_roots_not_public_peer'
 
 # Compile the identical actual vendored library with its pinned provider-free
 # test manifest. Published host integration/OpenSSL dependencies stay excluded.
