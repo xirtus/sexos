@@ -3572,6 +3572,7 @@ pub extern "C" fn _start() -> ! {
 
     let mut pending_paint=paint_batch::Dirty::new(geometry.width as usize,geometry.height as usize);
     let mut primary_receipt_pending=false;
+    let mut scale_receipts=sex_pdx::desktop_style::chrome::ScalePublisher::new();
 
     // Publish the BOOT-owned prepared frame before declaring first paint.
     assert!(unsafe { render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar) },
@@ -4045,6 +4046,9 @@ pub extern "C" fn _start() -> ! {
                     let step = msg.arg0 as i64;
                     let before = sex_pdx::desktop_style::ui_scale();
                     let wanted = sex_pdx::desktop_style::chrome::step_scale(before, unsafe { BOOT_UI_SCALE }, step);
+                    // arg1 is a nonzero Shell request sequence. One accepted
+                    // request stays retained through full publication + reply.
+                    if msg.arg1!=0 && !scale_receipts.admit(msg.caller_pd,msg.arg1,wanted) {continue;}
                     sex_pdx::desktop_style::set_ui_scale(wanted);
                     if wanted != before {
                         unsafe {
@@ -4870,7 +4874,7 @@ pub extern "C" fn _start() -> ! {
         let transaction_full_render=unsafe{BITMAP_STORES.needs_publication()}||lifecycle.needs_presentation()
             ||(0..surface_lifecycle::CATALOG_CAPACITY).any(|i|lifecycle.phase(i)==Some(surface_lifecycle::Phase::Prepared));
         let (w,h)=unsafe{(FB_W as usize,FB_H as usize)};
-        if needs_full_redraw||transaction_full_render{pending_paint.request_full();}
+        if needs_full_redraw||transaction_full_render||scale_receipts.needs_publication(){pending_paint.request_full();}
         if needs_surface_redraw{pending_paint.request_area();}
         if let Some(rect)=text_damage.rect(){pending_paint.request_damage(rect,w,h);}
         if cursor_only_moved{pending_paint.request_cursor();}
@@ -4889,6 +4893,13 @@ pub extern "C" fn _start() -> ! {
             if primary_receipt_pending&&frame.plan.is_full(){
                 primary_receipt_pending=false;
                 serial_println!("[sexdisplay.render.live.ok] fb_w={} fb_h={}",w,h);
+            }
+        }
+        if published.as_ref().is_some_and(|frame|frame.plan.is_full()){scale_receipts.published();}
+        if let Some((target,value))=scale_receipts.reply(){
+            if sex_pdx::pdx_reply(target,value)==0 {
+                scale_receipts.sent();
+                sex_pdx::serial_record!("[display.scale.published] target={} receipt={:#x} cpu_publication=1",target,value);
             }
         }
         finish_display_transactions(&mut lifecycle,published.as_ref());

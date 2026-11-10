@@ -26,13 +26,19 @@ def main():
  def chord(key,pattern):
   s=len(t())
   q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':dn,'key':{'type':'qcode','data':x}}}for dn,ks in((True,('ctrl','alt',key)),(False,(key,'alt','ctrl')))for x in ks]})
-  m=g['wait'](pattern,s,30);full_after(s);time.sleep(3);return m
+  m=g['wait'](pattern,s,30);full_after(s)
+  receipt=g['wait'](rf'\[display\.scale\.published\] target={wm_pd} receipt=(0x[0-9a-f]+) cpu_publication=1',s,30)
+  applied=g['wait'](r'\[shell\.display\.scale\.applied\] scale=(\d+) receipt=(0x[0-9a-f]+) cpu_publication=1',s,30)
+  assert receipt[1]==applied[2],('wrong scale receipt',receipt[1],applied[2])
+  trace=t()[s:];assert trace.index('[display.batch.published]')<trace.index('[display.scale.published]')<trace.index('[shell.display.scale.applied]'),'scale receipt preceded CPU publication'
+  time.sleep(3);return m
  try:
   m=g['wait'](r'\[display\.mode\] width=(\d+) height=(\d+) modes=(\d+) largest=(\d+)x(\d+) width_mm=(\d+) height_mm=(\d+) scale=(\d)',0,60)
   assert (int(m[1]),int(m[2]))==(width,height),f'booted at {m[1]}x{m[2]}, not the monitor\'s {width}x{height}'
   assert int(m[3])>1,'firmware listed no other modes'
   g['wait'](rf'\[display\.boot\.geometry\] width={width} height={height} pitch=(\d+) boot=1',0,60)
   g['wait'](r'\[display\.scale\] scale=1 width_mm=\d+ height_mm=\d+ reason=boot',0,60)
+  wm_pd=int(g['wait'](r'\[sexdisplay.auth.wm.register\] caller=(\d+) ok=1',0,60)[1])
   g['wait'](r'\[app.private.retired\] target=41 ',0,180);time.sleep(3)
   w,h,px,ink1=shot('scale1')
   # The desktop reaches the far corner: not left black past the old 1280x800.
