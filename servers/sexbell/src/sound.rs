@@ -595,15 +595,28 @@ pub fn listen(caller: u32) -> bool {
 
 /// A program ended, closed or crashed: stop its stream, whatever its ring says.
 pub fn retire(pd: u32) -> bool {
+    // Leave to hear the microphone lapses with the program, whether or not it ever
+    // used its ring: the row is the program's PD's, and the next program there asks anew.
+    let row = ring::index_of(pd).filter(|k| *k < STREAMS);
+    if let Some(k) = row {
+        if settings().mic[k] { sex_pdx::serial_record!("[bell.mic.lapsed] row={} pd={}", k, pd); }
+        settings().mic[k] = false;
+    }
     let Some(p) = player() else { return false };
-    // Leave to hear the microphone lapses with the program.
-    for (k, st) in p.streams.iter().enumerate() {
-        if st.is_some_and(|st| st.pd == pd) && settings().mic[k] {
-            settings().mic[k] = false;
-            sex_pdx::serial_record!("[bell.mic.lapsed] row={} pd={}", k, pd);
+    p.listen_pump();
+    // What the microphone put in the ring is the program's alone: wipe it before the
+    // row runs another program.
+    if let Some(k) = row {
+        if let Some(r) = p.streams[k].map(|st| st.ring).or_else(|| sex_pdx::sound_ring_bell(k).ok()) {
+            if r.load(ring::HEARD) != 0 {
+                unsafe { core::ptr::write_bytes(r.heard(), 0, ring::CAPTURE_FRAMES as usize) };
+                sex_pdx::serial_record!("[bell.mic.wiped] row={} heard={}", k, r.load(ring::HEARD));
+            }
+            r.store(ring::HEARD, 0);
+            r.store(ring::LISTEN, 0);
+            r.store(ring::MIC, ring::MIC_OFF);
         }
     }
-    p.listen_pump();
     let Some(st) = p.streams.iter_mut().flatten().find(|st| st.active && st.pd == pd) else { return false };
     st.active = false;
     sex_pdx::serial_record!("[bell.sound.stream.retired] pd={} taken={}", pd, st.ring.load(ring::TAKEN));
