@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! Register-only fixed-name DNS operation over an existing held network route.
 //! The finite ticket is service data, never a capability or Unix descriptor.
 pub use crate::network_job::{MAX_SEQ,MAX_TICKET,INVALID,DENIED,STALE,BUSY,OFFLINE,TIMEOUT,IO,EXHAUSTED};

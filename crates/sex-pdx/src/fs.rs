@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! The file protocol. Paths and data travel through a BOOT region a client shares with
 //! Files alone; holding that region and a route to Files is the whole right to use it.
 

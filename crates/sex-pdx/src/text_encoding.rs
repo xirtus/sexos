@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! Allocation-free UTF-8 data helpers. Offsets and limits always count bytes;
 //! presentation uses one cell per scalar, without normalization or shaping.
 //! These functions convey no authority and retain no document state.
