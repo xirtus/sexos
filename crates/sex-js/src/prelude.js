@@ -6,6 +6,18 @@
   'use strict';
   const H = globalThis.__host;
   const intrinsicEval = globalThis.eval;
+  const defineOwn = Object.defineProperty;
+  const nativeString = String;
+  const promiseSetup = globalThis.__sx_promise_setup;
+  const promiseFlags = globalThis.__sx_promise_flags;
+  const checkpointEmpty = globalThis.__sx_checkpoint_empty;
+  delete globalThis.__sx_promise_setup;
+  delete globalThis.__sx_promise_flags;
+  delete globalThis.__sx_checkpoint_empty;
+  const trustedEvents = new WeakSet();
+  const markTrusted = WeakSet.prototype.add.bind(trustedEvents);
+  const untrust = WeakSet.prototype.delete.bind(trustedEvents);
+  const wasTrusted = WeakSet.prototype.has.bind(trustedEvents);
   delete globalThis.__host;
   const OP = { LOG: 1, BY_ID: 2, QUERY: 3, INFO: 4, GET_ATTR: 5, SET_ATTR: 6, REMOVE_ATTR: 7, GET_TEXT: 8, SET_TEXT: 9,
     GET_HTML: 10, SET_HTML: 11, CREATE_ELEMENT: 12, CREATE_TEXT: 13, INSERT: 14, DETACH: 15, PARENT: 16, CHILDREN: 17,
@@ -55,6 +67,7 @@
   class Event {
     constructor(type, init) {
       init = init || {};
+      defineOwn(this, "isTrusted", { get: () => wasTrusted(this), enumerable: true });
       this.type = String(type);
       this.bubbles = !!init.bubbles;
       this.cancelable = !!init.cancelable;
@@ -77,6 +90,29 @@
     composedPath() { const p = []; for (let n = this.target; n; n = n instanceof ShadowRoot ? n.host : n.parentNode) p.push(n); if (p.length && p[p.length - 1] === document) p.push(window); return p; }
     get composed() { return true; }
   }
+  class PromiseRejectionEvent extends Event {
+    #promise; #reason; #composed;
+    constructor(type, init) {
+      if (arguments.length < 2 || typeof type === 'symbol') throw new TypeError('PromiseRejectionEvent requires type and eventInitDict');
+      const eventType = nativeString(type);
+      if (init != null && typeof init !== 'object' && typeof init !== 'function') throw new TypeError('PromiseRejectionEventInit must be a dictionary');
+      const dict = init == null ? {} : init;
+      const bubbles = !!dict.bubbles, cancelable = !!dict.cancelable, composed = !!dict.composed;
+      const promise = dict.promise;
+      if (promise === null || (typeof promise !== 'object' && typeof promise !== 'function')) throw new TypeError('PromiseRejectionEvent.promise must be an object');
+      const reason = dict.reason;
+      super(eventType, { bubbles, cancelable });
+      this.#promise = promise; this.#reason = reason; this.#composed = composed;
+    }
+    get promise() { return this.#promise; }
+    get reason() { return this.#reason; }
+    get composed() { return this.#composed; }
+  }
+  for (const key of ['promise', 'reason']) {
+    const d = Object.getOwnPropertyDescriptor(PromiseRejectionEvent.prototype, key);
+    defineOwn(PromiseRejectionEvent.prototype, key, { ...d, enumerable: true });
+  }
+  defineOwn(PromiseRejectionEvent.prototype, Symbol.toStringTag, { value: 'PromiseRejectionEvent', configurable: true });
   class UIEvent extends Event {}
   class MouseEvent extends UIEvent {
     constructor(type, init) {
@@ -141,6 +177,7 @@
       if (arr) { const i = arr.findIndex(x => x.fn === fn); if (i >= 0) arr.splice(i, 1); }
     }
     dispatchEvent(ev) {
+      untrust(ev);
       if (this == null) return globalThis.dispatchEvent(ev);
       // A click runs its target's activation behaviour (checkboxes, submit buttons, labels).
       if (ev.type === 'click' && this.nodeType === 1 && !ev._activating) { ev._activating = true; return activate(this, ev); }
@@ -2339,6 +2376,9 @@
       const run = frames; frames = [];
       for (const f of run) if (f.fn) { try { f.fn(now); } catch (e) { report(e); } }
     }
+    return nextTimer();
+  }
+  function nextTimer() {
     let next = -1;
     for (const t of timers.values()) { const w = Math.max(0, Math.ceil(t.due - performance.now())); if (next < 0 || w < next) next = w; }
     if (frames.length) next = next < 0 ? 16 : Math.min(next, 16);
@@ -3679,7 +3719,7 @@
     getComputedStyle: el => el.style,
     matchMedia: q => ({ matches: false, media: q, addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {} }),
     scrollTo() {}, scrollBy() {}, scroll() {}, focus() {}, blur() {},
-    Event, UIEvent, MouseEvent, PointerEvent, WheelEvent, FocusEvent, KeyboardEvent, CustomEvent, EventTarget, Node, Text, Comment, CDATASection, ProcessingInstruction, CharacterData, Element, HTMLElement,
+    Event, UIEvent, MouseEvent, PointerEvent, WheelEvent, FocusEvent, KeyboardEvent, CustomEvent, PromiseRejectionEvent, EventTarget, Node, Text, Comment, CDATASection, ProcessingInstruction, CharacterData, Element, HTMLElement,
     HTMLAnchorElement, HTMLImageElement, HTMLInputElement, HTMLButtonElement, HTMLCanvasElement, HTMLTemplateElement,
     HTMLMediaElement, HTMLVideoElement, HTMLAudioElement, Audio, MediaSource, SourceBuffer, SourceBufferList,
     HTMLTextAreaElement, HTMLSelectElement, HTMLOptionElement, HTMLFormElement, HTMLLabelElement, FormData, InputEvent, SubmitEvent,
@@ -3716,6 +3756,39 @@
   Object.defineProperty(window, 'parent', { get: () => frameInfo().parent ? remoteWindow(-1) : window, configurable: true });
 
   const KEY_TYPES = new Set(['keydown', 'keyup', 'keypress']);
+  // Rejection notifications are DOM tasks after a complete microtask checkpoint.
+  // Only the C-held callback can add records; pending/outstanding state is per VM.
+  const pendingRejections = new Map(), outstandingRejections = new WeakMap();
+  const pendingGet = Map.prototype.get.bind(pendingRejections), pendingSet = Map.prototype.set.bind(pendingRejections), pendingDelete = Map.prototype.delete.bind(pendingRejections);
+  const outstandingHas = WeakMap.prototype.has.bind(outstandingRejections), outstandingSet = WeakMap.prototype.set.bind(outstandingRejections), outstandingDelete = WeakMap.prototype.delete.bind(outstandingRejections);
+  const fireNative = EventTarget.prototype._dispatch;
+  function rejectionTask(fn) {
+    addTimer(function deliver() { if (!checkpointEmpty()) { addTimer(deliver, 0, [], false); return; } fn(); }, 0, [], false);
+  }
+  promiseSetup(function (promise, reason, handled) {
+    if (handled) {
+      if (pendingGet(promise)) { pendingDelete(promise); return; }
+      if (!outstandingHas(promise)) return;
+      outstandingDelete(promise);
+      rejectionTask(() => { const e = new PromiseRejectionEvent('rejectionhandled', { promise, reason }); markTrusted(e); fireNative.call(window, e); });
+      return;
+    }
+    if (pendingGet(promise) || outstandingHas(promise) || (promiseFlags(promise) & 3)) return;
+    const record = { reason }; pendingSet(promise, record);
+    rejectionTask(() => {
+      if (pendingGet(promise) !== record) return;
+      pendingDelete(promise);
+      if (promiseFlags(promise) & 3) return;
+      const e = new PromiseRejectionEvent('unhandledrejection', { promise, reason, cancelable: true });
+      markTrusted(e); const notCanceled = fireNative.call(window, e);
+      // A catch attached inside the notification prevents a later handled event.
+      if (!(promiseFlags(promise) & 1)) outstandingSet(promise, record);
+      if (notCanceled) {
+        let text; try { text = reason && reason.stack || nativeString(reason); } catch (_) { text = '<unprintable reason>'; }
+        log(2, ['Unhandled promise rejection:', text]);
+      }
+    });
+  });
   // The browser's entry point: one string, fields split by tabs.
   Object.defineProperty(window, '__sx_dispatch', { value: function (msg, detail) {
     try { return dispatch(msg, detail); } finally { flushCanvases(); }
@@ -3797,6 +3870,7 @@
       case 'mouse': return mouseInput(f);
       case 'flush': return 0;
       case 'tick': return runTimers(performance.now());
+      case 'next-timer': return nextTimer();
       case 'script-error': report(detail); return 0;
       case 'script-error-muted': log(2, ['Script error.']); notifyError(null, 'Script error.'); return 0;
       case 'fetched': fetched(f[1], +f[2], +f[3]); return 0;

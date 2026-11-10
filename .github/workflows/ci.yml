@@ -119,6 +119,10 @@ jobs:
       run: |
         truncate -s 1G "$RUNNER_TEMP/blank-classic.img"
         python3 scripts/program_web_classic_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-classic.img" --out "$RUNNER_TEMP/sexos-runtime/web-classic"
+    - name: Native Promise rejection events and source isolation
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/blank-promise.img"
+        python3 scripts/program_web_promise_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-promise.img" --out "$RUNNER_TEMP/sexos-runtime/web-promise"
     - name: USB input paths
       run: GATE_DIR="$RUNNER_TEMP/sexos-usb" SKIP_BUILD=1 bash scripts/usb_path_gate.sh
     - name: Preserve runtime evidence

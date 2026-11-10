@@ -1041,3 +1041,170 @@ fn classic_resource_errors_preserve_values_and_mute_cross_origin_details() {
     assert_eq!(out,["2:Script error.","0:handler Script error. true","0:listener Script error. true"]);
     assert!(s.page().bodies.is_empty());
 }
+
+#[test]
+fn promise_rejection_event_constructor_preserves_native_identity() {
+    let mut s=page("");
+    s.eval(r#"
+      const native=Promise, p=Promise.resolve(4), reason={code:7};
+      const e=new PromiseRejectionEvent('test',{promise:p,reason,cancelable:true});
+      console.log(Promise===native,e instanceof Event,e.promise===p,e.reason===reason,e.cancelable,e.defaultPrevented,e.composed,e.isTrusted);
+      e.preventDefault();console.log(e.defaultPrevented,Object.prototype.toString.call(e));
+      const d=Object.getOwnPropertyDescriptor(PromiseRejectionEvent.prototype,'promise');
+      let brand=false;try{d.get.call({})}catch(x){brand=x instanceof TypeError}
+      let readonly=false;try{(()=>{'use strict';e.promise={}})()}catch(x){readonly=x instanceof TypeError}
+      console.log(d.enumerable,d.configurable,d.set===undefined,brand,readonly);
+      let invalid=0;for(const init of [undefined,{}, {promise:null},{promise:4}]){try{new PromiseRejectionEvent('x',init)}catch(x){if(x instanceof TypeError)invalid++}}
+      const object={};console.log(invalid,new PromiseRejectionEvent('x',{promise:object}).promise===object);
+      // The SDK's real native-Promise retention condition, without changing Promise.
+      const retained=Promise&&(typeof PromiseRejectionEvent!=='undefined'||!globalThis.Promise||Promise.toString().indexOf('[native code]')===-1);
+      console.log(!!retained,Promise.toString().includes('[native code]'));
+    "#,"construct.js").unwrap();
+    assert_eq!(logs(&mut s),["0:true true true true true false false false","0:true [object PromiseRejectionEvent]","0:true true true true true","0:4 true","0:true true"]);
+}
+
+#[test]
+fn native_rejection_tasks_support_cancel_late_handle_and_same_checkpoint_catch() {
+    let mut s=page("");
+    s.eval(r#"
+      var reason={identity:1}, p=Promise.reject(reason), phases=[];
+      onunhandledrejection=e=>{phases.push('unhandled');console.log('unhandled',e.promise===p,e.reason===reason,e.cancelable,e.isTrusted);e.preventDefault();};
+      onrejectionhandled=e=>{phases.push('handled');console.log('handled',e.promise===p,e.reason===reason,e.cancelable,e.isTrusted);};
+      console.log('body',phases.length);
+    "#,"reject.js").unwrap();
+    assert_eq!(logs(&mut s),["0:body 0"]);
+    s.dispatch("tick").unwrap();assert_eq!(logs(&mut s),["0:unhandled true true true true"]);
+    s.eval("p.catch(()=>{});console.log('late',phases.join(','));","catch.js").unwrap();
+    assert_eq!(logs(&mut s),["0:late unhandled"]);
+    s.dispatch("tick").unwrap();assert_eq!(logs(&mut s),["0:handled true true false true"]);
+    s.eval("Promise.reject('sync').catch(()=>{});let q=Promise.reject('microtask');queueMicrotask(()=>q.catch(()=>{}));","caught.js").unwrap();
+    s.dispatch("tick").unwrap();assert!(logs(&mut s).is_empty());
+}
+
+#[test]
+fn rejection_default_logging_and_catch_during_notification() {
+    let mut s=page("");
+    s.eval("var p=Promise.reject('default reason'); onunhandledrejection=e=>console.log('default',e.defaultPrevented);","reject.js").unwrap();
+    s.dispatch("tick").unwrap();assert_eq!(logs(&mut s),["0:default false","2:Unhandled promise rejection: default reason"]);
+    s.eval("onrejectionhandled=()=>console.log('FAIL handled during notification');onunhandledrejection=e=>{e.preventDefault();e.promise.catch(()=>{});console.log('caught in event')};Promise.reject('inside');","inside.js").unwrap();
+    s.dispatch("tick").unwrap();s.dispatch("tick").unwrap();assert_eq!(logs(&mut s),["0:caught in event"]);
+}
+
+#[test]
+fn rejection_waits_for_pending_jobs_and_tick_reports_new_notifications() {
+    let mut s=page("");
+    s.eval("var p=Promise.reject('pending');onunhandledrejection=e=>console.log('FAIL early event');setTimeout(()=>queueMicrotask(()=>p.catch(()=>console.log('caught before notify'))),0);","pending.js").unwrap();
+    s.dispatch("tick").unwrap();s.dispatch("tick").unwrap();assert_eq!(logs(&mut s),["0:caught before notify"]);
+    s.eval("onunhandledrejection=e=>{e.preventDefault();console.log('after tick')};setTimeout(()=>queueMicrotask(()=>Promise.reject('new')),0);","new.js").unwrap();
+    let next=s.dispatch("tick").unwrap();assert!(next>=0,"new rejection notification lost its wakeup: {next}");
+    s.dispatch("tick").unwrap();assert_eq!(logs(&mut s),["0:after tick"]);
+}
+
+#[test]
+fn rejection_source_muting_is_per_function_and_script_lifetime() {
+    let mut s=page("");
+    s.eval("onunhandledrejection=e=>{e.preventDefault();console.log('event',e.reason)};","handler.js").unwrap();
+    s.eval_resource("Promise.reject('opaque immediate');setTimeout(()=>Promise.reject('opaque delayed'),0);globalThis.opaque=()=>{throw 'opaque callback'};globalThis.opaqueAsync=async()=>{await 0;throw 'opaque async'};", "https://remote.test/opaque.js",true).unwrap();
+    s.eval("Promise.resolve().then(opaque);opaqueAsync();","caller.js").unwrap();
+    for _ in 0..4{s.dispatch("tick").unwrap();}assert!(logs(&mut s).is_empty());
+    s.eval("Promise.reject('owned');(async()=>{await 0;throw 'owned async'})();setTimeout(()=>Promise.reject('owned delayed'),0);","owned.js").unwrap();
+    for _ in 0..4{s.dispatch("tick").unwrap();}
+    let got=logs(&mut s);assert!(got.contains(&"0:event owned".into()),"{got:?}");assert!(got.contains(&"0:event owned async".into()),"{got:?}");assert!(got.contains(&"0:event owned delayed".into()),"{got:?}");assert_eq!(got.len(),3,"{got:?}");
+    s.eval_resource("Promise.reject('readable cross origin')","https://remote.test/readable.js",false).unwrap();s.dispatch("tick").unwrap();assert_eq!(logs(&mut s),["0:event readable cross origin"]);
+    drop(s);
+    let mut fresh=page("");fresh.eval("onunhandledrejection=e=>{e.preventDefault();console.log('fresh',e.reason)};Promise.reject('new document');","fresh.js").unwrap();fresh.dispatch("tick").unwrap();assert_eq!(logs(&mut fresh),["0:fresh new document"]);
+}
+
+#[test]
+fn rejection_provenance_survives_bound_generated_and_async_generator_callbacks() {
+    let mut s = page("");
+    s.eval("onunhandledrejection=e=>{e.preventDefault();console.log('event',e.reason)}", "handler.js").unwrap();
+    s.eval_resource(r#"
+      globalThis.boundOpaque=(()=>{throw 'bound opaque'}).bind(null);
+      globalThis.proxyOpaque=new Proxy(()=>{throw 'proxy opaque'},{});
+      globalThis.evalOpaque=(0,eval)('(()=>{throw "eval opaque"})');
+      globalThis.functionOpaque=new Function('throw "function opaque"');
+      globalThis.generatorOpaque=async function*(){await 0;throw 'generator opaque'};
+    "#, "https://remote.test/opaque.js", true).unwrap();
+    s.eval(r#"
+      Promise.resolve().then(boundOpaque);Promise.resolve().then(proxyOpaque);
+      Promise.resolve().then(evalOpaque);Promise.resolve().then(functionOpaque);
+      generatorOpaque().next();
+      // Generated code has no independent fetch policy after an opaque script.
+      Promise.resolve().then(new Function('throw "unknown generated"'));
+      globalThis.generatorOwned=async function*(){await 0;throw 'generator owned'};
+      generatorOwned().next();
+    "#, "owned.js").unwrap();
+    for _ in 0..4 { s.dispatch("tick").unwrap(); }
+    assert_eq!(logs(&mut s), ["0:event generator owned"]);
+}
+
+#[test]
+fn rejection_source_policy_tracks_redirects_and_fails_closed_at_its_bound() {
+    let mut s = page("");
+    s.eval("onunhandledrejection=e=>{e.preventDefault();console.log('event',e.reason)}", "handler.js").unwrap();
+    s.page_mut().keep_source_policy("http://example.test/redirect.js", "https://remote.test/final.js");
+    s.eval("Promise.reject('redirected opaque')", "http://example.test/redirect.js#module").unwrap();
+    s.page_mut().keep_source_policy("http://example.test/owned.js", "http://example.test/final.js");
+    s.eval("Promise.reject('redirected owned')", "http://example.test/owned.js").unwrap();
+    s.dispatch("tick").unwrap();
+    assert_eq!(logs(&mut s), ["0:event redirected owned"]);
+    for n in 0..130 { s.page_mut().keep_source_policy(&format!("http://example.test/{n}.js"), "http://example.test/final.js"); }
+    s.eval("Promise.reject('unknown overflow')", "new.js").unwrap();
+    s.eval("Promise.reject('retained known')", "http://example.test/owned.js").unwrap();
+    s.dispatch("tick").unwrap();
+    assert_eq!(logs(&mut s), ["0:event retained known"]);
+}
+
+#[test]
+fn rejection_initializer_retains_native_checkpoint_and_reports_its_actual_promise() {
+    let mut s = page("");
+    s.eval(r#"
+      const NativePromise=Promise;
+      // This is the captured SDK's actual native-Promise selection condition.
+      function select(a){if(a&&(typeof PromiseRejectionEvent!=='undefined'||!globalThis.Promise||Promise.toString().indexOf('[native code]')===-1))return a;throw Error('polyfill selected')}
+      globalThis.selected=select(Promise);globalThis.initialized=false;
+      var reason={initializer:true}, initializer=Promise.resolve().then(()=>{initialized=true;throw reason});
+      onunhandledrejection=e=>{e.preventDefault();console.log('initializer',e.promise===initializer,e.reason===reason)};
+      console.log('body',initialized,selected===NativePromise);
+    "#, "sdk.js").unwrap();
+    s.eval("console.log('following script',initialized)", "inline.js").unwrap();
+    assert_eq!(logs(&mut s), ["0:body false true", "0:following script true"]);
+    s.dispatch("tick").unwrap();
+    assert_eq!(logs(&mut s), ["0:initializer true true"]);
+}
+
+#[test]
+fn rejection_queues_are_isolated_and_destroyed_with_the_document_vm() {
+    let mut parent = page("");
+    let mut frame = page("");
+    frame.page_mut().parent_origin=Some("http://parent.test".into());
+    parent.eval("onunhandledrejection=e=>{e.preventDefault();console.log('parent',e.reason)};Promise.reject('parent reason')", "parent.js").unwrap();
+    frame.eval("onunhandledrejection=e=>{e.preventDefault();console.log('frame',e.reason)};Promise.reject('frame reason')", "frame.js").unwrap();
+    frame.dispatch("tick").unwrap();
+    assert_eq!(logs(&mut frame), ["0:frame frame reason"]);
+    assert!(logs(&mut parent).is_empty());
+    parent.dispatch("tick").unwrap();
+    assert_eq!(logs(&mut parent), ["0:parent parent reason"]);
+    frame.eval("Promise.reject('destroyed frame');setTimeout(()=>Promise.reject('destroyed timer'),0)", "old.js").unwrap();
+    drop(frame); // Frame navigation/destruction drops its entire wasm heap and timers.
+    let mut replacement = page("");
+    replacement.eval("onunhandledrejection=e=>{e.preventDefault();console.log('replacement',e.reason)};Promise.reject('new reason')", "new.js").unwrap();
+    replacement.dispatch("tick").unwrap();parent.dispatch("tick").unwrap();
+    assert_eq!(logs(&mut replacement), ["0:replacement new reason"]);
+    assert!(logs(&mut parent).is_empty());
+}
+
+#[test]
+fn rejection_event_dictionary_converts_once_in_webidl_member_order() {
+    let mut s = page("");
+    s.eval(r"
+      const order=[], p={};const init={};
+      for(const [k,v] of [['bubbles',true],['cancelable',true],['composed',true],['promise',p],['reason',7]])Object.defineProperty(init,k,{get(){order.push(k);return v}});
+      const e=new PromiseRejectionEvent({toString(){order.push('type');return 'test'}},init);
+      console.log(order.join(','),e.promise===p,e.reason,e.bubbles,e.cancelable,e.composed);
+      Number.prototype.promise=p;let rejected=false;try{new PromiseRejectionEvent('x',7)}catch(e){rejected=e instanceof TypeError}delete Number.prototype.promise;console.log(rejected);
+      const fn=()=>{};console.log(new PromiseRejectionEvent('x',{promise:fn}).promise===fn);
+    ", "dictionary.js").unwrap();
+    assert_eq!(logs(&mut s),["0:type,bubbles,cancelable,composed,promise,reason true 7 true true true","0:true","0:true"]);
+}
