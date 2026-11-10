@@ -3361,6 +3361,16 @@ Parity report workstream A (`LINUX_AND_DESKTOP_PARITY_REPORT_2026_11_09.md` sect
 - **Gates**: `scripts/power_acpi_gate.py` (QEMU `system_powerdown` ends the VM with exit 0 after Files flushed; launcher Restart resets through the FADT register and the machine boots again; launcher Shut Down ends it; 1 and 4 cores) and `scripts/power_host_gate.sh` (ABI encodings, EISA ids, `\_S5` reader). Both run in CI.
 - **Bare metal next week**: check `[acpi.power]` on the PKU PC: s5=1, reset method, power_button=1, aml=1 quarantined=0, idle state and hwp/cppc.
 
+## Desktop: tiling window manager with Super keys, nine workspaces (2026-11-09)
+
+Hyprland/river/KDE-style window management, stage E1 of the parity report (`docs/handoff/LINUX_AND_DESKTOP_PARITY_REPORT_2026_11_09.md` section 6).
+- **`servers/silk-shell/src/wm.rs`**: pure policy, host-tested by `tests/wm_layouts.rs`. Layouts per workspace: master/stack (default, 55% master), dwindle (Hyprland's halving), monocle, grid. Gaps: 6 px between windows, 8 px to the screen edge. Focus by direction, tiling order kept apart from the frame table so swapping never renumbers frames.
+- **Super chords** (Super is 0x5B/0x5C on PS/2 and USB; Super and every key pressed with it stay with the desktop, repeats and releases too):
+  Super tap or Super+D launcher; Super+Enter terminal; Super+1..9 workspace; Super+Shift+1..9 send window there; Super+Tab / Super+Shift+Tab and Super+Ctrl+Left/Right next/previous workspace; Super+H/J/K/L or arrows focus; with Shift, swap; Super+Q close; Super+F fullscreen; Super+V or Super+Shift+Space float (centred, 60%); Super+Space next layout; Super+M monocle on/off; Super+[ / ] master width -/+5% (15..85); Super+S scratchpad show/hide (centred, 70%, follows you to the current workspace); Super+Shift+S send to scratchpad; Super+W overview.
+- **Nine workspaces.** ABI change (named): SilkBar layout ABI v5 -> v6 in `silkbar-model`: `WORKSPACE_COUNT` 5 -> 9, `LAYOUT_COUNT` 11 -> 15, `ModuleSlot` Chip0..Bell renumbered 10..14, dots 16 px wide, 19 px apart from x=583 (still fits a 1024 px desktop). `abi_version_hash` recomputed. The Atlas overview lays its cards out 3x3 and takes 1..9.
+- **Records**: `[shell.wm.action] action=… done=… scene=a->b focus=a->b layout=…` and `[shell.wm.layout] scene=… layout=… windows=… master_pct=… gap_in=… gap_out=…`.
+- **Gate** `scripts/window_manager_gate.py` boots QEMU and drives every chord over real PS/2 key events, saving screens.
+
 ## Real PCs: wired network, HD Audio and SATA (2026-11-09)
 
 Workstream D of the parity report. Handoff and bare-metal checklist: `docs/handoff/REAL_PC_DRIVERS_2026_11_09.md`.
@@ -3369,6 +3379,32 @@ Workstream D of the parity report. Handoff and bare-metal checklist: `docs/hando
 - **Sound.** Bell drives HD Audio (`servers/sexbell/src/hda.rs`): CORB/RIRB, analog pin to converter routing (speaker, headphones, line out; never HDMI), one always-running 48 kHz stereo stream over 16 periods. Gate `sound_gate.py --card hda`: 440 Hz/400 ms and 1000 Hz/310 ms recorded.
 - **Network.** igb/igc advanced descriptors and queue registers, igc DEV_RST, PHY autonegotiation restart, I219 ich8lan bits, DRV_LOAD; Realtek in `servers/sexnet/src/realtek.rs`. Gates `program_net_gate.py --nic igb|e1000e` (DHCP, HTTP download), `ethernet_peer_gate.py --model igb`; Realtek and igc host-tested only (QEMU lacks them).
 - **SATA.** `apps/sexdrive/src/ahci.rs` serves the block interface when no NVMe is present. `SEXOS_GATE_DISK_BUS=ahci` for gates; filesystem and disk persistence gates pass on SATA and NVMe.
+## IOMMU: a DMA domain for every driver, and the first zero-copy loan (2026-11-09)
+
+- **What runs now.** On machines with Intel VT-d (and in QEMU with `-device intel-iommu`),
+  each driver service's devices can reach only that service's DMA pool, their own
+  firmware-reserved memory, and memory the service lends them. Devices nobody leased
+  (dGPU, Wi-Fi, Thunderbolt, ...) reach nothing. Stray DMA is blocked and logged as
+  `[iommu.fault]` with the device and its owner. sexdrive lends Files' block buffer to
+  the NVMe controller, so disk reads land in Files' memory with no copy; a read that
+  times out ends the loan first, so a late completion faults instead of corrupting it.
+- **Design.** `crates/sex-iommu` (DMAR/IVRS parsing, VT-d fields, I/O page tables,
+  lending window; host-tested) and `kernel/src/iommu.rs`, which runs at BOOT after all
+  leases exist and before the seal, walking capabilities rather than devmgr, so new
+  leasing code gets domains for free. Pools are identity-mapped, so no driver had to
+  change. All tables, including each service's 128 MiB lending window, are built at
+  BOOT; lending only fills prepared leaves. The graphics-only unit stays off so the
+  firmware framebuffer keeps working; firmware DMA protection (PMR/TE) is replaced.
+- **ABI** (hash recomputed): syscall **90** `SYS_DMA` (`sex_pdx::dma_lend`): `OP_INFO`,
+  `OP_LEND` (region slot, offset, bytes, DEVICE_READ/DEVICE_WRITE -> device address),
+  `OP_RETURN`; statuses `DENIED`, `NO_IOMMU`, `EXHAUSTED`, `UNCERTAIN`; 64 loans, 128 MiB window.
+- **Limits.** AMD-Vi is detected and reported but not yet programmed (next step).
+  Interrupt remapping is off. Register-based invalidation (no queued invalidation yet).
+  Only sexdrive's reads use a loan so far; network and sound still bounce.
+- **Gates.** `scripts/iommu_host_gate.sh` (CI), `scripts/sexdrive_dma_host_gate.sh` (now
+  in CI, two zero-copy tests), `scripts/iommu_gate.py` (QEMU with VT-d: BOOT self-test
+  with QEMU's edu DMA device, then `filesystem_gate` and `sound_gate` behind VT-d with no
+  driver faults). Report: `docs/handoff/IOMMU_DMA_DOMAINS_2026_11_09.md`.
 
 ## WebP and GIF pictures, animated (2026-11-09)
 
@@ -3491,11 +3527,37 @@ Stages D2 and D3 of `DRIVERS_AND_X17_R1_PLAN_2026_11_09.md`. Handoff: `docs/hand
   in reverse member order; sexdrive serves the volume, lists both GPT partitions (one entry
   lies on the second drive), finds the backup GPT in the volume's last sector, and both drive
   images are byte-identical afterwards.
-- **Limits.** Read only: Files does not yet mount partitions of the served volume (next: hand
-  the volume's partitions to sex-volumes, where NTFS/FAT readers exist). No VMD in QEMU, so the
+- **Files opens the volume (2026-11-10).** When the served disk holds no SexOS filesystem
+  (Files' mount fails and its format is refused), `servers/sexfiles/src/volumes.rs` scans the
+  disk itself with sex-volumes and mounts each FAT/exFAT/NTFS/ext4 partition read only under
+  `/media/LABEL` (`Source::Device`, `[files.media.device]`, `[files.media.mounted] ... read_only=1`).
+  `/media` requests are served even with no SexOS filesystem; every change there answers
+  "read-only disk". `scripts/raid_gate.py` now puts a FAT16 partition with HELLO.TXT on the RAID
+  volume and, from Spindle, lists `/media`, prints the file and sees a write refused.
+- **Limits.** Read only (writes to a RAID volume would need parity/mirror care). No VMD in QEMU, so the
   VMD path is proven only against the simulation until the x17 R1 test. A third NVMe is logged
   and not leased. 4 KiB-sector (4Kn) drives are not sized yet.
 
+
+## AMD-Vi: AMD machines get per-driver DMA domains too (2026-11-10)
+
+- **What runs now.** On AMD machines (and QEMU with `-device amd-iommu`) every driver
+  service's devices reach only its DMA pool, its firmware-reserved memory and what it
+  lends, exactly as on Intel VT-d. Devices nobody leased point at an empty page table, so
+  their DMA faults. sexdrive's zero-copy reads now work on AMD too.
+- **Design.** `sex_iommu::ivrs` reads device id ranges, aliases (devices behind
+  PCIe-to-PCI bridges) and IVMD reserved memory, using only the newest IVHD type.
+  `sex_iommu::amdvi` encodes device table entries, commands and events.
+  `kernel/src/iommu.rs` now drives either vendor: the domain, pool, reserved-memory,
+  lending and revoke code is shared, and only attach, flush, enable and fault reading
+  differ per unit. Firmware that left AMD-Vi on is taken over.
+- **ABI.** None. Syscall 90 is unchanged; `abi_version_hash` unchanged.
+- **Gates.** `scripts/iommu_host_gate.sh` (12 tests, CI; found a wrong next-level field
+  in AMD page-table entries), `scripts/iommu_gate.py --vendor amd` (QEMU AMD-Vi: BOOT
+  self-test, files with zero-copy reads, sound) and the same gate on VT-d.
+- **Limits.** QEMU's AMD-Vi model does not log events for blocked DMA, so its self-test
+  proves isolation by data only. No interrupt remapping, one PCI segment, whole-domain
+  flushes on loan return.
 
 ## Discrete GPU off at boot (NVIDIA N1, 2026-11-09)
 
@@ -3514,6 +3576,28 @@ Plan: `docs/handoff/NVIDIA_GPU_PLAN_2026_11_09.md` (stages N1-N6).
 - **Evidence:** `scripts/wifi_host_gate.sh` (CI): 24 tests incl. IEEE 802.11 annex vectors (PSK, PRF, CCMP, SAE J.10), RFC 3394/3610/4493, full WPA2 and WPA3 handshakes against a test access point, and the real linux-firmware AX210 image (fetched pinned and SHA-256 checked by `scripts/fetch_wifi_firmware.sh`).
 - **No ABI change.** New dependency `sha1` 0.10 (RustCrypto).
 - **Limits:** not wired into the running system yet; QEMU has no Intel Wi-Fi model, so the radio is proven only on hardware. Next (W2): lease the chip to sexnet, ship its firmware, and log `[wifi.alive]` on the x17.
+
+## Video and sound play while they download (2026-11-10)
+
+- Web loads a `<video>`/`<audio>` source from the network without waiting for it: the
+  element is `Loading` (event `loadstart`) while `media_loads` takes in its bytes for at
+  most 4 ms a tick, and it opens as soon as `sex_media::AHEAD` + 64 KiB has arrived
+  (`[web.media.early] node= have= done=0`). The player already waits whenever too little
+  lies ahead of where it reads.
+- `sex_app::net::Exchange::stream(into)`: for a reply with a length or until-close body
+  that is not compressed, moves body bytes out as they arrive (`head()` gives the head);
+  chunked or compressed replies, redirects and error pages are read whole as before.
+- `sex_media::Growing` (shared through `Rc<RefCell<..>>`) is a `Source` for a download in
+  progress: length from Content-Length, `available` counts what has come, and a read
+  past it is an error, never a false end.
+- An MP4 whose index sits at its end cannot open early: the first try fails
+  (`[web.media.failed] ... last=0`) and it opens once all of it is here.
+- Media sources may be up to 256 MiB (`MEDIA_MAX`). Seeking past what has arrived waits
+  for it; Range reads for seeking ahead come next (sex_fetch pieces, YouTube thread).
+- Gates: `program_web_stream_gate.py` (host ffmpeg makes a 1.5 MB clip and an end-indexed
+  one, served at 300 KB/s: opens at ~600 KB, 250 pictures, 10 s of 440 Hz).
+  `quil_autosave_gate.boot` now deletes the old serial log first: QEMU's `-serial file:`
+  does not truncate, and a reused output directory let an older log show through.
 
 
 ## Boot log on screen, stop screen, crash records, restartable services, fuzzing (2026-11-09)

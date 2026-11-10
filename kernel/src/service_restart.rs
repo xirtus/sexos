@@ -102,6 +102,7 @@ fn poll_one(index: usize) {
         return;
     }
     crate::pci_command::quiesce(pd);
+    crate::iommu::revoke(s.pd);
     for page in &s.pages[..s.count] { crate::boot_memory::copy_frame(page.pristine, page.frame); }
     // Requests to the dead run, and answers it was owed, belong to that run.
     let mut dropped = 0;

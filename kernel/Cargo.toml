@@ -52,5 +52,6 @@ x86 = "0.52.0"
 # which implicitly uses rdrand. Exclude 'std' feature.
 rand_hc = { version = "0.5.0", default-features = false }
 sex-pdx = { path = "../crates/sex-pdx" }
+sex-iommu = { path = "../crates/sex-iommu" }
 sex-vmd = { path = "../crates/sex-vmd" }
 sex-hwdb = { path = "../crates/sex-hwdb" }

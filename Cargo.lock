@@ -1870,6 +1870,10 @@ name = "sex-imsm"
 version = "0.1.0"
 
 [[package]]
+name = "sex-iommu"
+version = "0.1.0"
+
+[[package]]
 name = "sex-js"
 version = "0.1.0"
 dependencies = [
@@ -1899,6 +1903,7 @@ dependencies = [
  "raw-cpuid 11.6.0",
  "scopeguard",
  "sex-hwdb",
+ "sex-iommu",
  "sex-pdx",
  "sex-vmd",
  "spin",
