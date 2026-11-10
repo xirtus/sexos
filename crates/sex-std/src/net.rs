@@ -60,6 +60,24 @@ fn errno_of(e: NetError) -> i32 {
     }
 }
 
+/// Waits (thirty seconds at most) until the network service says the network is up:
+/// a program may open a socket before the lease arrives, as one started at boot does.
+fn network_up() -> Result<(), i32> {
+    static SEEN: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+    if SEEN.load(core::sync::atomic::Ordering::Acquire) { return Ok(()); }
+    let began = sex_pdx::get_ticks();
+    let mut round = 0;
+    loop {
+        match direct::up() {
+            Ok(true) => { SEEN.store(true, core::sync::atomic::Ordering::Release); return Ok(()); }
+            Ok(false) | Err(NetError::Busy) => {}
+            Err(e) => return Err(errno_of(e)),
+        }
+        if sex_pdx::get_ticks().saturating_sub(began) > 30_000 { return Err(-errno::ENETUNREACH); }
+        pause(&mut round);
+    }
+}
+
 /// Waits a little between steps; `round` counts the steps that found nothing.
 fn pause(round: &mut u32) { *round += 1; sex_app::thread::pause(*round); }
 
@@ -129,6 +147,7 @@ pub(crate) fn socket(domain: i32, kind: i32, _protocol: i32) -> Result<Sock, i32
 
 pub(crate) unsafe fn bind(sock: &Sock, addr: *const abi::sockaddr, len: abi::socklen_t) -> i32 {
     let (_, port) = match unsafe { read_address(addr, len) } { Ok(a) => a, Err(e) => return e };
+    if sock.kind == abi::SOCK_DGRAM { if let Err(e) = network_up() { return e; } }
     let mut st = sock.state();
     if st.role != Role::Fresh || st.local_port != 0 { return -errno::EINVAL; }
     if sock.kind == abi::SOCK_DGRAM {
@@ -141,6 +160,7 @@ pub(crate) unsafe fn bind(sock: &Sock, addr: *const abi::sockaddr, len: abi::soc
 
 pub(crate) fn listen(sock: &Sock) -> i32 {
     if sock.kind != abi::SOCK_STREAM { return -errno::EOPNOTSUPP; }
+    if let Err(e) = network_up() { return e; }
     let mut st = sock.state();
     match st.role {
         Role::Listening => return 0,
@@ -158,6 +178,7 @@ pub(crate) fn listen(sock: &Sock) -> i32 {
 
 pub(crate) unsafe fn connect(sock: &Sock, addr: *const abi::sockaddr, len: abi::socklen_t) -> i32 {
     let to = match unsafe { read_address(addr, len) } { Ok(a) => a, Err(e) => return e };
+    if let Err(e) = network_up() { return e; }
     if sock.kind == abi::SOCK_DGRAM {
         let mut st = sock.state();
         if st.socket.is_none() {
@@ -276,6 +297,7 @@ pub(crate) fn send(sock: &Sock, bytes: &[u8]) -> isize {
 }
 
 fn ensure_udp(sock: &Sock) -> Result<(), i32> {
+    if sock.state().socket.is_none() { network_up()?; }
     let mut st = sock.state();
     if st.socket.is_none() {
         let (s, got) = direct::Socket::udp(0).map_err(errno_of)?;
@@ -453,15 +475,10 @@ pub(crate) fn lookup(host: &[u8]) -> Result<Vec<IpAddr>, i32> {
     let began = sex_pdx::get_ticks();
     let mut round = 0;
     // The network must be up before a name can be asked.
-    loop {
-        match direct::up() {
-            Ok(true) => break,
-            Ok(false) => {}
-            Err(NetError::NotAllowed) => return Err(abi::EAI_FAIL),
-            Err(_) => return Err(abi::EAI_AGAIN),
-        }
-        if sex_pdx::get_ticks().saturating_sub(began) > 30_000 { return Err(abi::EAI_AGAIN); }
-        pause(&mut round);
+    match network_up() {
+        Ok(()) => {}
+        Err(e) if e == -errno::EACCES => return Err(abi::EAI_FAIL),
+        Err(_) => return Err(abi::EAI_AGAIN),
     }
     let mut asked = false;
     loop {

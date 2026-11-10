@@ -34,6 +34,7 @@ fn main() {
 
     // TCP: connect, write, read the echo back, then the peer's close.
     let mut stream = TcpStream::connect(&*target);
+    if let Err(e) = &stream { println!("connect {target}: {e}"); }
     check("TcpStream::connect", stream.is_ok());
     if let Ok(s) = stream.as_mut() {
         let _ = s.set_read_timeout(Some(Duration::from_secs(20)));
