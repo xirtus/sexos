@@ -3459,3 +3459,25 @@ Plan: `docs/handoff/NVIDIA_GPU_PLAN_2026_11_09.md` (stages N1-N6).
 - **AML work budget**: `acpi::with_aml(budget, f)` runs firmware AML quarantined with a limit on register accesses and stalls, so a firmware loop cannot hang the boot.
 - **Gate** `scripts/dgpu_power_gate.py` in CI: QEMU root port + display controller + SSDT power resource (`tests/acpi/dgpu_gate_ssdt.asl`); checks the method order off/on/off on the debug console, the restored header, the boot GPU kept and the desktop up.
 - ABI: none.
+
+## Video and sound play while they download (2026-11-10)
+
+- Web loads a `<video>`/`<audio>` source from the network without waiting for it: the
+  element is `Loading` (event `loadstart`) while `media_loads` takes in its bytes for at
+  most 4 ms a tick, and it opens as soon as `sex_media::AHEAD` + 64 KiB has arrived
+  (`[web.media.early] node= have= done=0`). The player already waits whenever too little
+  lies ahead of where it reads.
+- `sex_app::net::Exchange::stream(into)`: for a reply with a length or until-close body
+  that is not compressed, moves body bytes out as they arrive (`head()` gives the head);
+  chunked or compressed replies, redirects and error pages are read whole as before.
+- `sex_media::Growing` (shared through `Rc<RefCell<..>>`) is a `Source` for a download in
+  progress: length from Content-Length, `available` counts what has come, and a read
+  past it is an error, never a false end.
+- An MP4 whose index sits at its end cannot open early: the first try fails
+  (`[web.media.failed] ... last=0`) and it opens once all of it is here.
+- Media sources may be up to 256 MiB (`MEDIA_MAX`). Seeking past what has arrived waits
+  for it; Range reads for seeking ahead come next (sex_fetch pieces, YouTube thread).
+- Gates: `program_web_stream_gate.py` (host ffmpeg makes a 1.5 MB clip and an end-indexed
+  one, served at 300 KB/s: opens at ~600 KB, 250 pictures, 10 s of 440 Hz).
+  `quil_autosave_gate.boot` now deletes the old serial log first: QEMU's `-serial file:`
+  does not truncate, and a reused output directory let an older log show through.
