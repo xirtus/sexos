@@ -1,11 +1,15 @@
 """Boot log receipts only; synthetic fixtures do not establish clock pixels."""
 import sys
+import hashlib
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from check_bootgraph_log import clock_gate
 from test_silkbar_clock_gate import fixture, T
+from test_runtime_proof import good_log
 
 PRESENTATION = '[sexdisplay.clock.presentation] label=UTC state=Unknown snapshot_only=1 x=1090 y=18 w=80 h=22 width=1280\n'
 LIVE = '[sexdisplay.render.live.ok] fb_w=1280 fb_h=800\n'
@@ -65,6 +69,48 @@ class BootCivilClock(unittest.TestCase):
         self.assertTrue(self.check(LEGACY).passed)
         self.assertTrue(self.check('[sexdisplay.clock.presentation] label=DEMO wall_time=0\n'+LEGACY).passed)
         self.assertFalse(self.check(LEGACY.replace('[sexdisplay.clock.recv]', '')).passed)
+
+
+class BoundedClockCapture(unittest.TestCase):
+    def run_capture(self, raw):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "serial.log"
+            path.write_bytes(raw)
+            result = subprocess.run([sys.executable, str(Path(__file__).resolve().parents[1] / "check_bootgraph_log.py"),
+                                     str(path), "--strict-clock"], capture_output=True, text=True)
+            self.assertEqual(path.read_bytes(), raw, "the raw artifact must stay unchanged")
+        self.assertIn(f"raw_sha256={hashlib.sha256(raw).hexdigest()}", result.stdout)
+        return result
+
+    def full_trace(self):
+        return ("\n".join(good_log()) + "\n" + civil()).encode()
+
+    def test_actual_unfinished_sample_tail_is_not_a_clock_receipt(self):
+        tail = b"[silkbar.civil.sample] seque"
+        result = self.run_capture(self.full_trace() + tail)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(f"ignored_clock_tail_bytes={len(tail)} ", result.stdout)
+        self.assertIn("CLOCK_GATE: PASS", result.stdout)
+
+    def test_complete_malformed_tail_or_interior_still_fails(self):
+        bad = b"[silkbar.civil.sample] seque\n"
+        for raw in [self.full_trace() + bad, bad + self.full_trace()]:
+            with self.subTest(raw=raw):
+                result = self.run_capture(raw)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("CLOCK_GATE: FAIL CIVIL: malformed civil sample", result.stdout)
+                self.assertIn("ignored_clock_tail_bytes=0 ", result.stdout)
+
+    def test_only_unfinished_clock_evidence_cannot_pass(self):
+        raw = ("\n".join(good_log()) + "\n").encode() + b"[silkbar.civil.sample] seque"
+        result = self.run_capture(raw)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("CLOCK_GATE: FAIL", result.stdout)
+
+    def test_unfinished_fault_still_reaches_fault_gate(self):
+        result = self.run_capture(self.full_trace() + b"KERNEL PAGE FAULT HALT:")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("FAULT_GATE: FAIL", result.stdout)
 
 
 if __name__ == '__main__':
