@@ -55,6 +55,8 @@ jobs:
       run: bash scripts/iommu_host_gate.sh
     - name: sexdrive DMA lifetime and zero-copy reads on the host
       run: bash scripts/sexdrive_dma_host_gate.sh
+    - name: Hardware census table (names, owners, VMD warning) on the host
+      run: bash scripts/hwdb_host_gate.sh
     - name: Fetch crates for offline host gates
       run: cargo fetch --locked
     - name: Host kernel-model regressions

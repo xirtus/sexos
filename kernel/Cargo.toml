@@ -53,3 +53,4 @@ x86 = "0.52.0"
 rand_hc = { version = "0.5.0", default-features = false }
 sex-pdx = { path = "../crates/sex-pdx" }
 sex-iommu = { path = "../crates/sex-iommu" }
+sex-hwdb = { path = "../crates/sex-hwdb" }

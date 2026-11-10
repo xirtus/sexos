@@ -35,6 +35,8 @@ SEXDRIVE_BLOCK_VIEW_SOURCE="$TEST_DIR/block_view.rs" SEXDRIVE_READ_PATH_SOURCE="
   "$ROOT_DIR/tests/sexdrive_dma_transfer.rs" -o "$TEST_DIR/tests"
 "$TEST_DIR/tests" --nocapture
 rustc --edition=2021 --test "$ROOT_DIR/tests/sexdrive_completion_wait.rs" -o "$TEST_DIR/completion-tests"
+rustc --edition=2021 --test "$ROOT_DIR/tests/sexdrive_controller_ready.rs" -o "$TEST_DIR/ready-tests"
+"$TEST_DIR/ready-tests"
 "$TEST_DIR/completion-tests"
 echo '[gate.sexdrive_dma_host.result] PASS scope=production_lifetime_peer_check_not_device_DMA_containment'
 python3 - "$ROOT_DIR" "$TEST_DIR/service.rs" "$TEST_DIR/service_abi.rs" <<'PY'

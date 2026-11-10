@@ -1264,6 +1264,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-hwdb"
+version = "0.1.0"
+
+[[package]]
 name = "sex-image"
 version = "0.1.0"
 dependencies = [
@@ -1305,6 +1309,7 @@ dependencies = [
  "rand_hc",
  "raw-cpuid 11.6.0",
  "scopeguard",
+ "sex-hwdb",
  "sex-iommu",
  "sex-pdx",
  "spin",

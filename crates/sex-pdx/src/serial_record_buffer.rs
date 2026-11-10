@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! Format a bounded diagnostic completely before one transport invocation.
 use core::fmt::{self, Write};
 

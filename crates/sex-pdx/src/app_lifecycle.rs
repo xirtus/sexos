@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! Immutable BOOT_DAG app lifecycle grants. Exit notifications are hints;
 //! every service attests custody through its own capability before retirement.
 pub const SLOTS: [usize; crate::app_catalog::COUNT] = crate::app_catalog::LIFECYCLE_SLOTS;

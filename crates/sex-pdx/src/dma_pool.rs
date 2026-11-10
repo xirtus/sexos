@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! Userland byte suballocation inside an already-assigned boot DMA region.
 //! This owns no physical frame allocator and cannot extend its original region.
 
