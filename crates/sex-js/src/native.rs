@@ -7,6 +7,9 @@ use alloc::{alloc::{alloc_zeroed, dealloc, realloc, Layout}, format, string::Str
 use core::ffi::c_void;
 
 extern "C" {
+    fn sxn_diag_value(key: u32) -> u32;
+    fn sxn_diag_name(depth: u32) -> *const core::ffi::c_char;
+    fn sxn_diag_distance(depth: u32) -> usize;
     fn sxn_size() -> usize;
     fn sxn_instantiate(i: *mut c_void, ctx: *mut c_void, max_bytes: u64) -> i32;
     fn sxn_free(i: *mut c_void);
@@ -167,7 +170,23 @@ impl<P: Page + 'static> Native<P> {
         let mut out = 0u32;
         match f(self.instance, &mut out) {
             0 => Ok(out as i32),
-            code => { self.dead = true; Err(trap(code)) }
+            code => {
+                self.dead = true;
+                // PRIVATE bounded host diagnostic: no guest callbacks/evaluation.
+                let depth = unsafe { sxn_diag_value(1) };
+                let summary = format!("private.native-trap code={code} depth={depth} entry={} highwater={} unbalanced={} limit=1024 frame_address_probe=1",
+                    unsafe { sxn_diag_value(0) }, unsafe { sxn_diag_value(3) }, unsafe { sxn_diag_value(2) });
+                let _ = self.page_mut().call(super::op::LOG, &["0", &summary]);
+                let last = depth.min(1024);
+                for at in (1..=8.min(last)).chain(last.saturating_sub(63).max(9)..=last) {
+                    let p = unsafe { sxn_diag_name(at) };
+                    if p.is_null() { continue; }
+                    let name = unsafe { core::ffi::CStr::from_ptr(p) }.to_str().unwrap_or("invalid");
+                    let line = format!("private.native-frame depth={at} function={name} native_distance={}", unsafe { sxn_diag_distance(at) });
+                    let _ = self.page_mut().call(super::op::LOG, &["0", &line]);
+                }
+                Err(trap(code))
+            }
         }
     }
     pub fn init(&mut self, heap: i32) -> Result<i32, Error> { self.run(|i, o| unsafe { sxn_init(i, heap as u32, o) }) }

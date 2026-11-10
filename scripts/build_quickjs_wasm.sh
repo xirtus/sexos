@@ -38,6 +38,6 @@ RESOURCE="$(ls -d "$WASI_SDK"/lib/clang/* | head -1)"
   -Wno-implicit-const-int-float-conversion -Wno-unknown-warning-option \
   "$PATCHED/quickjs.c" "$QJS/libregexp.c" "$QJS/libunicode.c" "$QJS/cutils.c" "$QJS/xsum.c" \
   "$ROOT/crates/sex-js/guest/sexjs.c" \
-  -Wl,--strip-all -Wl,--gc-sections -Wl,-z,stack-size=1048576 -Wl,--initial-memory=4194304 \
+  -Wl,-Map,"$OUT.map" -Wl,--strip-all -Wl,--gc-sections -Wl,-z,stack-size=1048576 -Wl,--initial-memory=4194304 \
   -o "$OUT"
 ls -l "$OUT"

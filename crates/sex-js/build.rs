@@ -27,6 +27,23 @@ fn main() {
             return;
         }
     }
+    // PRIVATE readonly exhaustion trace. Keep the actual depth guard/budget;
+    // collect native function IDs and frame addresses without invoking JS.
+    let generated = std::fs::read_to_string(&c).unwrap();
+    let needle = "  if (++wasm_rt_call_stack_depth > WASM_RT_MAX_CALL_STACK_DEPTH) \\\n    TRAP(EXHAUSTION);";
+    assert_eq!(generated.matches(needle).count(), 1, "private depth trace guard drift");
+    let replacement = r#"  ++wasm_rt_call_stack_depth; \
+  if (wasm_rt_call_stack_depth > sexjs_debug_highwater) sexjs_debug_highwater = wasm_rt_call_stack_depth; \
+  if (wasm_rt_call_stack_depth <= 1024) { \
+    sexjs_debug_frames[wasm_rt_call_stack_depth] = __func__; \
+    sexjs_debug_sp[wasm_rt_call_stack_depth] = (uintptr_t)__builtin_frame_address(0); \
+  } \
+  if (wasm_rt_call_stack_depth > WASM_RT_MAX_CALL_STACK_DEPTH) \
+    TRAP(EXHAUSTION);"#;
+    let generated = generated.replace(needle, replacement).replace(
+        "#define TRAP(x)",
+        "extern const char *sexjs_debug_frames[1025];\nextern uintptr_t sexjs_debug_sp[1025];\nextern uint32_t sexjs_debug_highwater;\n#define TRAP(x)");
+    std::fs::write(&c, generated).unwrap();
     let rt_h = String::from_utf8(Command::new("wasm2c").arg("--version").output().unwrap().stdout).unwrap();
     let rt_dir = ["/usr/include", "/usr/local/include", "/opt/homebrew/include", "/usr/src/wasm2c"].iter().map(PathBuf::from)
         .find(|d| d.join("wasm-rt.h").exists()).unwrap_or_else(|| panic!("wasm-rt.h for wasm2c {} not found", rt_h.trim()));

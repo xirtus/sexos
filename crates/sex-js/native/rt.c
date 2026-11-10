@@ -12,10 +12,37 @@ void *sexjs_rt_realloc(void *ptr, size_t old_size, size_t new_size); /* zeroes g
 WASM_RT_THREAD_LOCAL uint32_t wasm_rt_call_stack_depth;
 static WASM_RT_THREAD_LOCAL void **catcher; /* the innermost entry point's jump buffer */
 static WASM_RT_THREAD_LOCAL int trap_code;
+/* PRIVATE bounded diagnostic, read only after the trap has unwound. */
+const char *sexjs_debug_frames[1025];
+uintptr_t sexjs_debug_sp[1025];
+static uint32_t debug_entry_depth, debug_trap_depth, debug_unbalanced;
+static uintptr_t debug_entry_sp;
+static uint32_t debug_trap_entry;
+static uintptr_t debug_trap_entry_sp;
+uint32_t sexjs_debug_highwater;
+static uint32_t debug_trap_highwater;
+uint32_t sxn_diag_value(uint32_t key) {
+  switch (key) {
+    case 0: return debug_trap_entry;
+    case 1: return debug_trap_depth;
+    case 2: return debug_unbalanced;
+    case 3: return debug_trap_highwater;
+    default: return 0;
+  }
+}
+const char *sxn_diag_name(uint32_t depth) { return depth <= 1024 ? sexjs_debug_frames[depth] : 0; }
+uintptr_t sxn_diag_distance(uint32_t depth) {
+  uintptr_t at = depth <= 1024 ? sexjs_debug_sp[depth] : 0;
+  return !at ? 0 : at > debug_trap_entry_sp ? at - debug_trap_entry_sp : debug_trap_entry_sp - at;
+}
 
 bool wasm_rt_is_initialized(void) { return true; }
 
 void wasm_rt_trap(wasm_rt_trap_t code) {
+  debug_trap_depth = wasm_rt_call_stack_depth;
+  debug_trap_entry = debug_entry_depth;
+  debug_trap_entry_sp = debug_entry_sp;
+  debug_trap_highwater = sexjs_debug_highwater;
   trap_code = (int)code == 0 ? 1 : (int)code;
   __builtin_longjmp(catcher, 1);
 }
@@ -63,9 +90,16 @@ void wasm_rt_free_funcref_table(wasm_rt_funcref_table_t *t) {
  * outer catcher. */
 #define ENTER                                                   \
   void *jb[5]; void **outer = catcher; uint32_t depth = wasm_rt_call_stack_depth; \
+  uint32_t old_debug_depth = debug_entry_depth, old_highwater = sexjs_debug_highwater; \
+  uintptr_t old_debug_sp = debug_entry_sp;                       \
+  debug_entry_depth = depth; debug_entry_sp = (uintptr_t)__builtin_frame_address(0); \
+  debug_trap_depth = 0;                                         \
+  sexjs_debug_highwater = depth;                                \
   catcher = jb;                                                 \
-  if (__builtin_setjmp(jb)) { catcher = outer; wasm_rt_call_stack_depth = depth; return trap_code; }
-#define LEAVE catcher = outer; return 0;
+  if (__builtin_setjmp(jb)) { catcher = outer; wasm_rt_call_stack_depth = depth; \
+    debug_entry_depth = old_debug_depth; debug_entry_sp = old_debug_sp; sexjs_debug_highwater = old_highwater; return trap_code; }
+#define LEAVE if (wasm_rt_call_stack_depth != depth) ++debug_unbalanced; \
+  debug_entry_depth = old_debug_depth; debug_entry_sp = old_debug_sp; sexjs_debug_highwater = old_highwater; catcher = outer; return 0;
 
 size_t sxn_size(void) { return sizeof(w2c_sexjs); }
 
