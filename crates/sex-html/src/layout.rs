@@ -508,7 +508,7 @@ impl<'a> Layout<'a> {
             let mt = s.margin[TOP].or_zero(cw);
             let mb = s.margin[BOTTOM].or_zero(cw);
             let pushed = self.push_link(n);
-            let piece = self.atomic(n, s, tag);
+            let piece = self.atomic(n, s, tag, cw);
             if pushed { self.link_stack.pop(); }
             if let Some(Piece::Atomic { mut items, links, boxes, width, height, link }) = piece {
                 for it in &mut items { it.offset(x, y - mt); }
@@ -772,7 +772,7 @@ impl<'a> Layout<'a> {
         let cs = self.style(container).unwrap();
         let mut pieces = Vec::new();
         let mut space_before = true;
-        for &n in run { self.collect(n, cs, &mut pieces, &mut space_before); }
+        for &n in run { self.collect(n, cs, &mut pieces, &mut space_before, w); }
         while matches!(pieces.last(), Some(Piece::Space { breakable: true, .. })) { pieces.pop(); }
         if pieces.iter().all(|p| matches!(p, Piece::Space { .. } | Piece::Anchor(_) | Piece::Open(_) | Piece::Close(_) | Piece::Abs(_))) {
             for p in pieces { match p { Piece::Anchor(id) => self.anchors.push((id, y)), Piece::Abs(n) => self.abs.push((n, x, y)), _ => {} } }
@@ -781,7 +781,7 @@ impl<'a> Layout<'a> {
         Some(self.lines(cs, pieces, x, y, w))
     }
 
-    fn collect(&mut self, n: NodeId, parent: &Style, out: &mut Vec<Piece>, space_before: &mut bool) {
+    fn collect(&mut self, n: NodeId, parent: &Style, out: &mut Vec<Piece>, space_before: &mut bool, cw: i32) {
         match &self.dom.nodes[n].kind {
             Kind::Text(t) => { let s = parent; self.text_pieces(t, s, out, space_before); }
             Kind::Document => {}
@@ -807,7 +807,7 @@ impl<'a> Layout<'a> {
                             return;
                         }
                     }
-                    if let Some(p) = self.atomic(n, s, tag) { out.push(p); *space_before = false; }
+                    if let Some(p) = self.atomic(n, s, tag, cw) { out.push(p); *space_before = false; }
                     return;
                 }
                 for name in ["id", "name"] {
@@ -819,7 +819,7 @@ impl<'a> Layout<'a> {
                 if boxed { out.push(Piece::Open(n)); }
                 let left = s.margin[LEFT].or_zero(0) + s.padding[LEFT].or_zero(0) + s.border[LEFT];
                 if left > 0 { out.push(Piece::Gap(left)); }
-                for &c in &self.dom.nodes[n].children { self.collect(c, s, out, space_before); }
+                for &c in &self.dom.nodes[n].children { self.collect(c, s, out, space_before, cw); }
                 let right = s.margin[RIGHT].or_zero(0) + s.padding[RIGHT].or_zero(0) + s.border[RIGHT];
                 if right > 0 { out.push(Piece::Gap(right)); }
                 if boxed { out.push(Piece::Close(n)); }
@@ -893,7 +893,7 @@ impl<'a> Layout<'a> {
     }
 
     /// An atomic inline box (image, control, inline-block), laid out at the origin.
-    fn atomic(&mut self, n: NodeId, s: &Style, tag: &str) -> Option<Piece> {
+    fn atomic(&mut self, n: NodeId, s: &Style, tag: &str, cw: i32) -> Option<Piece> {
         let link = self.link_stack.last().copied();
         let (m_l, m_r) = (s.margin[LEFT].or_zero(0), s.margin[RIGHT].or_zero(0));
         let (m_t, m_b) = (s.margin[TOP].or_zero(0), s.margin[BOTTOM].or_zero(0));
@@ -905,7 +905,14 @@ impl<'a> Layout<'a> {
                 let inline_svg = tag == "svg" && self.dom.attr(n, "src").is_none();
                 let src = if inline_svg { alloc::format!("svg:{n}") } else { self.picture_src(n, tag) };
                 let natural = if tag == "canvas" { Some(self.canvas_size(n)) } else if inline_svg { self.svg_size(n) } else if tag == "audio" { Some((300, 32)) } else { self.host.image_size(&src) };
-                let (w, h) = match (s.width.resolve(0), s.height.resolve(0), natural) {
+                // Percentages use the containing block, not the origin used to
+                // prepare this atomic piece. An indefinite percentage height is
+                // auto, so intrinsic aspect/default sizing still applies.
+                let height = match s.height {
+                    Len::Pct(_) => self.def_h.and_then(|h| s.height.resolve(h)),
+                    _ => s.height.resolve(0),
+                };
+                let (w, h) = match (s.width.resolve(cw), height, natural) {
                     (Some(w), Some(h), _) => (w, h),
                     (Some(w), None, Some((nw, nh))) if nw > 0 => (w, w * nh / nw),
                     (None, Some(h), Some((nw, nh))) if nh > 0 => (h * nw / nh, h),
@@ -1637,7 +1644,9 @@ impl<'a> Layout<'a> {
                 if matches!(tag, "img" | "svg" | "canvas" | "video" | "audio" | "iframe" | "object" | "embed") {
                     let src = self.picture_src(n, tag);
                     let natural = if tag == "canvas" { Some(self.canvas_size(n)) } else if tag == "svg" && self.dom.attr(n, "src").is_none() { self.svg_size(n) } else if tag == "audio" { Some((300, 32)) } else { self.host.image_size(&src) };
-                    let w = match (s.height.resolve(0), natural) {
+                    // A percentage is indefinite during intrinsic contribution sizing.
+                    let height = s.height.resolve(0).filter(|_| matches!(s.height, Len::Px(_)));
+                    let w = match (height, natural) {
                         (Some(h), Some((nw, nh))) if nh > 0 => h * nw / nh,
                         (_, Some((nw, _))) => nw,
                         _ => if tag == "img" { 0 } else { 300 },
