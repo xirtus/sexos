@@ -6,6 +6,7 @@ Hovering a box with a `transition` fades its background through in-between colou
 import argparse,http.server,os,re,shutil,threading,time
 from PIL import Image
 from pathlib import Path
+from browser_gate_viewport import full_viewport
 ROOT=Path(__file__).resolve().parents[1]
 SITE=ROOT/'scripts/web_site'
 BAR=30
@@ -56,6 +57,9 @@ def main():
   time.sleep(2)
   ran=frames(s,target);assert ran>=30,f'only {ran} frames drawn while animating'
   s2=len(t());time.sleep(3);after=frames(s2,target);assert after==0,f'{after} frames drawn after the animation ended'
+  # Keep the initial animation timing intact; reveal the full page before the hover check.
+  x,y,w,h=full_viewport(g,ROOT,surface)
+  ox,oy=x+8,y+36+BAR
   shot=a.out/'animate.ppm';q.cmd('screendump',{'filename':str(shot)});time.sleep(.5)
   img=Image.open(shot).convert('RGB')
   img.crop((x+8,y+36,x+8+410,y+36+330)).save(a.out/'animate.png')
