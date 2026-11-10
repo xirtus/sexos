@@ -129,6 +129,8 @@ pub struct Usb {
     disks: [u8; sex_pdx::usb_disk::MAX_DISKS as usize],
     pub generation: u64,
     pub changed: bool,
+    /// Disk numbers freed since Files last asked for the disks (`OP_DISKS`).
+    freed: u8,
 }
 
 const BOUNCE: u64 = sex_pdx::usb_disk::BUFFER_BYTES + 8192;
@@ -145,7 +147,7 @@ impl Usb {
     pub fn new(x: Xhci) -> Usb {
         Usb { x, dev: [Device::empty(); MAX_DEVICES], slot_dev: [0; 256], root_pending: 0, sent_keys: 0,
             sent_modifiers: 0, stats: Stats::default(), bounce: (0, 0), disks: [0; sex_pdx::usb_disk::MAX_DISKS as usize],
-            generation: 0, changed: false }
+            generation: 0, changed: false, freed: 0 }
     }
 
     fn ctx(&self, base: u64, index: u64) -> *mut u32 { (base + index * self.x.csz) as *mut u32 }
@@ -567,7 +569,7 @@ impl Usb {
         if keys_changed { self.send_keys(); }
         if self.dev[i].storage.active {
             let disk = self.dev[i].storage.disk as usize;
-            if self.disks[disk] == i as u8 + 1 { self.disks[disk] = 0; }
+            if self.disks[disk] == i as u8 + 1 { self.disks[disk] = 0; self.freed |= 1 << disk; }
             self.dev[i].storage.active = false;
             self.generation += 1;
             self.changed = true;
@@ -804,7 +806,10 @@ impl Usb {
             Ok(n) if n >= 3 => (unsafe { core::ptr::read_volatile((b + 2) as *const u8) } & 0x80) != 0,
             _ => false,
         };
-        let Some(disk) = self.disks.iter().position(|d| *d == 0) else { log!("[sexusb.storage.skip] slot={} reason=disks_full", slot); return Ok(()); };
+        // A number freed since Files last asked stays unused, so Files always sees a stick
+        // leave before another can take its number.
+        let freed = self.freed;
+        let Some(disk) = self.disks.iter().enumerate().position(|(k, d)| *d == 0 && freed & (1 << k) == 0) else { log!("[sexusb.storage.skip] slot={} reason=disks_full", slot); return Ok(()); };
         self.disks[disk] = i as u8 + 1;
         let s = &mut self.dev[i].storage;
         s.block = block; s.blocks = last + 1; s.disk = disk as u8; s.read_only = read_only; s.name = name; s.name_len = n;
@@ -931,6 +936,8 @@ impl Usb {
         match op {
             ud::OP_DISKS => {
                 let mask = self.disks.iter().enumerate().fold(0u64, |m, (k, d)| if *d != 0 { m | 1 << k } else { m });
+                // Files now knows which numbers are free; they may be given out again.
+                self.freed = 0;
                 (self.generation << 8) | mask
             }
             ud::OP_INFO => {
@@ -947,7 +954,22 @@ impl Usb {
             ud::OP_SYNC => {
                 let Some(i) = self.disks.get(a0 as usize).and_then(|d| (*d as usize).checked_sub(1)) else { return ud::GONE };
                 // SYNCHRONIZE CACHE(10); devices without a cache refuse it, which is fine.
-                match self.scsi(i, &[0x35, 0, 0, 0, 0, 0, 0, 0, 0, 0], false, 0) { Err(Scsi::Usb(_)) | Err(Scsi::Phase) => ud::IO, _ => ud::OK }
+                match self.scsi(i, &[0x35, 0, 0, 0, 0, 0, 0, 0, 0, 0], false, 0) {
+                    Ok(_) => ud::OK,
+                    // Only "no such command" is fine; any other refusal is a flush that failed.
+                    Err(Scsi::Check) => match self.scsi(i, &[0x03, 0, 0, 0, 18, 0], true, 18) {
+                        Ok(n) if n >= 13 => {
+                            let sense = unsafe { core::slice::from_raw_parts(self.bounce.1 as *const u8, 13) };
+                            let (key, asc) = (sense[2] & 0xf, sense[12]);
+                            if key == 5 && (asc == 0x20 || asc == 0x24) { ud::OK } else {
+                                log!("[sexusb.storage.sync.fail] disk={} key={:#x} asc={:#x}", a0, key, asc);
+                                ud::IO
+                            }
+                        }
+                        _ => ud::IO,
+                    },
+                    Err(_) => ud::IO,
+                }
             }
             _ => ud::INVALID,
         }
