@@ -29,14 +29,15 @@ fn alpha(s:&Surface,scale:u32,x:usize,y:usize)->u8{
  ((on*255+8)/16)as u8
 }
 #[test]fn actual_group_scalar_and_row_owners_match_independent_visible_shape(){
- assert!(core::mem::size_of::<surface_groups::RowWinners<'_>>()<=8192);
+ assert!(core::mem::size_of::<surface_groups::RowWinners<'_, '_>>()<=64);
+ assert!(core::mem::size_of::<surface_groups::RowScratch>()<=12*1024);
  for scale in 1..=3{for (x,y,w,h)in [(-20,45,120,100),(20,45,120,100),(-80,-30,120,160),(145,145,90,80),(i32::MIN,45,u32::MAX,100),(5,60,7,5),(5,60,0,0)]{
   let mut g=FrameGroups::new();g.set_scale(scale);
   let surfaces=[surface(800,x,y,w,h),surface(801,0,28,180,160)];
   for point in [(-1,100),(180,100),(20,-1),(20,180),(20,27),(20,(28*scale-1)as i32)]{
    assert!(!desktop_style::chrome::Metrics::new(scale).panel_hit((x,y,w,h),point,(180,180)),"outside workarea {point:?}");
   }
-  for py in 0..180{let mut row=g.row_winners(&surfaces,800,py,180,180).unwrap();
+  for py in 0..180{let mut row_scratch=surface_groups::RowScratch::new();let mut row=g.row_winners(&surfaces,800,py,180,180,&mut row_scratch).unwrap();
    for px in 0..180{
     let expected=surfaces.iter().find(|s|alpha(s,scale,px,py)!=0).map(|s|s.surface_id);
     assert_eq!(g.winner(&surfaces,800,px,py,180,180).map(|s|s.surface_id),expected,"s={scale} at{px},{py}");
@@ -48,6 +49,32 @@ fn alpha(s:&Surface,scale:u32,x:usize,y:usize)->u8{
    }
   }
  }}
+}
+
+#[test]fn row_scratch_reuse_resolves_only_the_current_slice_and_current_prefix(){
+ let g=FrameGroups::new();let mut scratch=surface_groups::RowScratch::new();
+ let old=[surface(800,20,50,80,80),surface(801,0,28,180,160)];
+ {
+  let mut row=g.row_winners(&old,800,70,180,180,&mut scratch).unwrap();
+  let selected=row.source(40).unwrap();
+  assert!(core::ptr::eq(selected.surface,&old[0]));
+  assert!(core::ptr::eq(selected.content,&old[0]));
+ }
+ // Same IDs and changed slot order cannot reuse a pointer into the old slice.
+ let new=[surface(801,0,28,180,160),surface(800,80,50,80,80)];
+ {
+  let mut row=g.row_winners(&new,800,70,180,180,&mut scratch).unwrap();
+  assert!(core::ptr::eq(row.source(40).unwrap().surface,&new[0]));
+  assert!(core::ptr::eq(row.source(100).unwrap().surface,&new[1]));
+ }
+ assert!(g.row_winners(&new,800,180,180,180,&mut scratch).is_none());
+ // A shorter next row must not read old runs left beyond its initialized prefix.
+ let empty:[Surface;0]=[];
+ let mut row=g.row_winners(&empty,0,70,180,180,&mut scratch).unwrap();
+ assert_eq!(row.run(0).0,180);assert!(row.source(40).is_none());
+ drop(row);scratch.clear();
+ let mut row=g.row_winners(&new,800,70,180,180,&mut scratch).unwrap();
+ assert!(core::ptr::eq(row.source(100).unwrap().surface,&new[1]));
 }
 #[test]fn next_owner_requires_same_scene_reference_and_stops_at_last_layer(){
  let g=FrameGroups::new();let surfaces=[surface(800,20,50,80,80),surface(801,0,28,180,160)];
@@ -83,7 +110,7 @@ fn alpha(s:&Surface,scale:u32,x:usize,y:usize)->u8{
   assert_eq!(g.winner(&reordered,156,40,140,180,200).unwrap().surface_id,201);
   let top=g.winner(&reordered,201,40,140,180,200).unwrap();
   assert_eq!(g.winner_below(&reordered,201,Some(top),40,140,180,200).unwrap().surface_id,200);
-  let mut row=g.row_winners(&reordered,201,100,180,200).unwrap();assert_eq!(row.selected(20),Some(200));
+  let mut row_scratch=surface_groups::RowScratch::new();let mut row=g.row_winners(&reordered,201,100,180,200,&mut row_scratch).unwrap();assert_eq!(row.selected(20),Some(200));
  }
  // Clearing/reusing the earlier slot cannot raise Mesh over Linen.
  surfaces[0]=SURFACE_EMPTY;surfaces[0]=mesh;

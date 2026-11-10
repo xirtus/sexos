@@ -732,7 +732,11 @@ fn text_run(row:*mut u32,x0:usize,x1:usize,y:usize,surf:&Surface,metrics:sex_pdx
 fn raster_row(fb:*mut u32,y:usize,x0:usize,x1:usize,w:usize,h:usize,scene: &scene::SceneSnapshot){
     let focused=scene.focus;
     let back=bg(y,h);
-    let mut row=unsafe{scene.groups.row_winners(&scene.surfaces,focused,y,w,h)};
+    // The scene owns bounded index-only workspace. Reentry falls back to the
+    // scalar compositor instead of aliasing another row's mutable scratch.
+    let mut scratch=scene.row_scratch.try_borrow_mut().ok();
+    let mut row=scratch.as_deref_mut().and_then(|scratch|
+        scene.groups.row_winners(&scene.surfaces,focused,y,w,h,scratch));
     let mut x=x0;
     while x<x1{
         let (end,source)=match row.as_mut(){Some(row)=>row.run(x),None=>(x1,None)};
