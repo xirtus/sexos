@@ -432,7 +432,10 @@ impl Decoder {
             0 => self.go_on(out, w, h, pcm),
             1 => { self.sought = None; Ok(Next::Picture { at_ms: at }) }
             2 => { self.sought = None; Ok(Next::Sound { frames: frames.max(0) as usize, at_ms: at }) }
-            3 => { self.stalled = true; Ok(Next::Later) }
+            // Bytes still to come: wait for them. A source that says they are here
+            // (a file) failed for good: the stream ends there, as before.
+            3 if self.io.src.available(self.io.at) == 0 => { self.stalled = true; Ok(Next::Later) }
+            3 => Ok(Next::End),
             e => Err(Error(e)),
         }
     }
