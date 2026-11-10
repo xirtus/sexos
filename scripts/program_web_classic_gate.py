@@ -18,7 +18,8 @@ def main():
    seen.append(dict(port=self.server.server_address[1],path=self.path,origin=self.headers.get('Origin'),referer=self.headers.get('Referer')))
    if self.path=='/web':body=a.program.read_bytes();mime='application/octet-stream';extra=[]
    elif self.path=='/page':
-    body=('''<!doctype html><title>Classic resources</title><h1>Classic resources</h1><script>
+    body=('''<!doctype html><title>Classic resources</title><h1>Classic resources</h1><script src="/initial.js"></script><script>
+     console.log('static before following',staticLoaded);document.currentScript.onload=()=>console.log('FAIL inline load');
      const readableFetch=fetch;let done=0;
      function finish(){if(++done===8)console.log('classic cases done');}
      globalThis.fetch=()=>{console.log('FAIL fetch hook');throw Error('fetch hook');};
@@ -38,6 +39,7 @@ def main():
    elif self.path=='/cancel':body=('''<!doctype html><script>const s=document.createElement('script');s.src='''+json.dumps(bbase)+'''+'/old-page.js';document.head.appendChild(s);location.href='/next';</script>''').encode();mime='text/html';extra=[]
    elif self.path=='/next':body=b"<!doctype html><h1>New page</h1><script>console.log('navigation clean',typeof classicRuns);</script>";mime='text/html';extra=[]
    elif self.path=='/good.js':body=b"globalThis.classicRuns=(globalThis.classicRuns||0)+1; document.body.setAttribute('data-classic','ran'); console.log('classic body',document.currentScript.id);";mime='application/javascript';extra=[('X-Content-Type-Options','nosniff')]
+   elif self.path=='/initial.js':body=b"globalThis.staticLoaded=false;document.currentScript.onload=()=>{staticLoaded=true;console.log('static load currentScript null',document.currentScript===null);};throw new Error('expected static exception');";mime='application/javascript';extra=[]
    elif self.path=='/same-error.js':body=b"globalThis.sameError=new TypeError('same error');throw sameError;";mime='application/javascript';extra=[]
    elif self.path=='/opaque-error.js':body=b"throw new TypeError('private cross-origin detail');";mime='application/javascript';extra=[]
    elif self.path in ('/html.js','/nosniff.js','/corp.js','/cors.js'):
@@ -72,7 +74,7 @@ def main():
   saved=g['wait'](r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',start,240);assert saved[1].startswith('Saved'),saved[1]
   start=len(t());command(f'run +net web {abase}/page')
   g['wait'](r'\[web.console\] level=0 classic cases done\r?\n',start,300)
-  for mark in ('classic body good','classic loaded 1 true','fetch blocked','html blocked','nosniff blocked','corp blocked','cors blocked','inline intrinsic','same error callback true true','opaque error callback true','error event same error true','error event Script error. true','same error resource loaded','opaque error resource loaded'):
+  for mark in ('static before following true','static load currentScript null true','classic body good','classic loaded 1 true','fetch blocked','html blocked','nosniff blocked','corp blocked','cors blocked','inline intrinsic','same error callback true true','opaque error callback true','error event same error true','error event Script error. true','same error resource loaded','opaque error resource loaded'):
    assert '[web.console] level=0 '+mark in t()[start:],mark
   assert '[web.console] level=0 FAIL' not in t()[start:]
   good=[r for r in seen if r['path']=='/good.js'];assert len(good)==2,good
