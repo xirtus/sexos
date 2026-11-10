@@ -1,0 +1,13 @@
+{
+  "ok": true,
+  "mode": "2560x1600",
+  "modes": 71,
+  "largest": "5120x2160",
+  "ink": [
+    2280,
+    18616,
+    2280
+  ],
+  "smallest_update": 0,
+  "screen": 4096000
+}

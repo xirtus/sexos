@@ -122,7 +122,12 @@ def main():
             # verify its latest real status instead of waiting forever for an
             # already superseded status. Complete glyph checks remain mandatory.
             snapshot=text()
-            expected_status=current_dirty_status(snapshot,status_match[1])
+            current_status=current_dirty_status(snapshot,status_match[1])
+            if current_status is None:
+                pixel_errors=['no complete current intent for the exact dirty successor document']
+                time.sleep(.2)
+                continue
+            expected_status=current_status
             q.cmd('screendump',{'filename':str(out/'successor-input.ppm')})
             pixel_errors=successor_pixels(snapshot,(out/'successor-input.ppm').read_bytes(),font,expected_status)
             if not pixel_errors:break

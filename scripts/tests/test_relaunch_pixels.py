@@ -18,9 +18,9 @@ class Check(unittest.TestCase):
         def intent(value):return '[quil.text.view] target=16 surface=301 status='+value+'\n'
         self.assertEqual(current_dirty_status(intent('my * document * DRAFT KEPT'),old),'my * document * DRAFT KEPT')
         for value in ('other * document * DRAFT KEPT','my * document READY'):
-            self.assertEqual(current_dirty_status(intent(value),old),old)
-        self.assertEqual(current_dirty_status(intent('my * document * DRAFT KEPT').rstrip(),old),old)
-        self.assertEqual(current_dirty_status('[web.console] '+intent('my * document * DRAFT KEPT'),old),old)
+            self.assertIsNone(current_dirty_status(intent(value),old))
+        self.assertIsNone(current_dirty_status(intent('my * document * DRAFT KEPT').rstrip(),old))
+        self.assertIsNone(current_dirty_status('[web.console] '+intent('my * document * DRAFT KEPT'),old))
 
     def test_current_captured_scale_and_body_origin(self):
         for ui in (1,2,3):

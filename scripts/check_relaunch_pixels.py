@@ -10,7 +10,7 @@ def current_dirty_status(text,original):
     if statuses and separator:
         current_name,current_separator,_=statuses[-1].rpartition(' * ')
         if current_separator and current_name==name:return statuses[-1]
-    return original
+    return None
 
 def verify(text,ppm,font,status):
     try:

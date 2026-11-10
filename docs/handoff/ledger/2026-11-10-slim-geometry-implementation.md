@@ -288,3 +288,23 @@ console-prefixed intents, a different filename and a clean status cannot retarge
 that expectation. Fresh combined artifact/complete native close-chain proof is
 required before the next acceptance claim. Master151 merged cleanly; GNU-sed ABI
 regeneration verifies82 inputs. The original failure artifacts remain intact.
+
+
+## Fresh integrated 151 qualification
+
+Clean source a427b95c includes master 151/d92091cb and 82 ABI inputs. The newly built
+immutable ISO is 817e08083f5a72f9614c094f3e4294c3339ed961f6b0d8541056d45261469249.
+The full native desktop-close gate passes its complete original/successor document,
+Spindle/history/observer/Bell/prompt, reserve-exhausted launcher, survivor filename
+and minimize/absent/restored glyph chain. The new 1280 capture passes all 3,456 clock
+pixels; native 2560 1→2→1 publication/applied receipts and ink 2,280/18,616/2,280 pass.
+All guests/builds stopped before the resource-window handoff. Exact new source,
+image hashes and actual native capture are in assets/slim-desktop-integrated 151/.
+This remains a musl/Apple 21 UI-only profile without FFmpeg/libc++, and does not
+relabel the earlier matched 3e/17c performance result as a new 151 benchmark.
+
+The final helper tightening refuses missing/partial/console-prefixed or different/
+clean document intents rather than qualifying stale dirty pixels. The successful
+native pre-close prefix and exact status pixels replay under this stricter check.
+The full refreshed Python suite now passes 1,170 cases. Current-head CI remains the
+last merge requirement; subsequent whole-panel/Sans app migrations stay separate.
