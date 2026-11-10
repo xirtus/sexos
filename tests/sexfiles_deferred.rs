@@ -128,3 +128,41 @@ fn last_quil_and_browser_keep_independent_abort_slots_at_absolute_capacity(){
  assert_eq!(q.pop(),None);
  for pd in owners{let m=abort(pd,9);assert!(q.push(m));assert_eq!(q.pop(),Some(m));}
 }
+
+#[test]
+fn deferred_stamps_survive_priority_and_cannot_be_relabelled_as_a_new_run() {
+    let mut q = queue::Deferred::new();
+    let request = (0x2c0, 42, 17, 0, 32);
+    let old = queue::Stamped { message: request, caller_task: 0x4000_0001 };
+    let next = queue::Stamped { message: request, caller_task: 0x4000_0002 };
+    assert!(q.push_stamped(old));
+    let exit = queue::Stamped { message: (OP_APP_EXIT, 0, 42, old.caller_task as u64, 0), caller_task: 0 };
+    assert!(q.push_stamped(exit));
+    assert!(q.push_stamped(next));
+    assert_eq!(q.pop_stamped(), Some(exit));
+    let replay = q.pop_stamped().unwrap();
+    assert_eq!(replay, old);
+    assert_ne!(replay.caller_task, next.caller_task, "current task cannot replace an old request's stamped owner");
+    assert_eq!(q.pop_stamped(), Some(next));
+    assert_eq!(q.pop_stamped(), None);
+}
+#[test]
+fn cancellation_replacement_moves_its_own_stamped_envelope_with_the_payload() {
+    let mut q = queue::Deferred::new();
+    let abort = |seq, task| queue::Stamped {
+        message: (document::OP, 9, document::Request { seq, kind: document::ABORT, object: 0, offset: 0, a: 0, b: 0 }.header(), 0, 0),
+        caller_task: task,
+    };
+    assert!(q.push_stamped(abort(5, 91)));
+    let other = queue::Stamped { message: (0x99, 12, 0, 0, 0), caller_task: 109 };
+    assert!(q.push_stamped(other));
+    assert!(q.push_stamped(abort(6, 92)));
+    assert_eq!(q.pop_stamped(), Some(other));
+    assert_eq!(q.pop_stamped(), Some(abort(6, 92)));
+    assert_eq!(q.pop_stamped(), None);
+}
+#[test]
+fn stamped_queue_memory_is_bounded_without_changing_wire_payload() {
+    assert_eq!(core::mem::size_of::<queue::Message>(), 40);
+    assert_eq!(core::mem::size_of::<queue::Stamped>(), 48);
+}

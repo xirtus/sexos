@@ -136,7 +136,7 @@ fn usb_call(op: u64, a0: u64, a1: u64, a2: u64) -> Option<u64> {
         let msg = sex_pdx::pdx_listen_raw(0);
         if msg.type_id == 0x1 && msg.caller_pd == usb { return Some(msg.arg0); }
         if msg.type_id != 0 && msg.type_id != 1 {
-            crate::pdx::defer_stash(msg.type_id, msg.caller_pd, msg.arg0, msg.arg1, msg.arg2);
+            crate::pdx::defer_stash(msg.type_id, msg.caller_pd, msg.caller_task, msg.arg0, msg.arg1, msg.arg2);
         }
     }
     None

@@ -15,9 +15,9 @@ pub use sex_pdx::{
 /// Single-threaded PD — plain statics, no atomics needed.
 static mut DEFERRED: crate::defer_queue::Deferred = crate::defer_queue::Deferred::new();
 
-pub fn defer_stash(type_id: u64, caller_pd: u32, a0: u64, a1: u64, a2: u64) -> bool {
+pub fn defer_stash(type_id: u64, caller_pd: u32, caller_task: u32, a0: u64, a1: u64, a2: u64) -> bool {
     unsafe {
-        if !DEFERRED.push((type_id, caller_pd, a0, a1, a2)) {
+        if !DEFERRED.push_stamped(crate::defer_queue::Stamped { message: (type_id, caller_pd, a0, a1, a2), caller_task }) {
             serial_println!(
                 "[sexfiles.defer.drop] type={:#x} caller={} reason=stash_full",
                 type_id,
@@ -40,6 +40,7 @@ pub fn defer_stash(type_id: u64, caller_pd: u32, a0: u64, a1: u64, a2: u64) -> b
 pub struct ReplayMsg {
     pub type_id: u64,
     pub caller_pd: u32,
+    pub caller_task: u32,
     pub arg0: u64,
     pub arg1: u64,
     pub arg2: u64,
@@ -47,13 +48,13 @@ pub struct ReplayMsg {
 
 pub fn defer_empty() -> bool { unsafe { (*core::ptr::addr_of!(DEFERRED)).len() == 0 } }
 
-pub fn defer_pop() -> Option<(u64, u32, u64, u64, u64)> {
+pub fn defer_pop() -> Option<crate::defer_queue::Stamped> {
     unsafe {
-        let msg = DEFERRED.pop()?;
+        let msg = DEFERRED.pop_stamped()?;
         serial_println!(
             "[sexfiles.defer.replay] type={:#x} caller={} depth={}",
-            msg.0,
-            msg.1,
+            msg.message.0,
+            msg.message.1,
             DEFERRED.len()
         );
         Some(msg)
