@@ -5,6 +5,7 @@ page, which must match, pixel for pixel, what the host renders from the same fil
 (sex-web's page example)."""
 import argparse,http.server,os,re,shutil,subprocess,threading,time
 from pathlib import Path
+from browser_gate_viewport import content_rect
 from PIL import Image
 ROOT=Path(__file__).resolve().parents[1]
 SITE=ROOT/'scripts/web_site'
@@ -42,8 +43,8 @@ def main():
    time.sleep(.06)
  def compare(name,ref,tile):
   shot=a.out/f'{name}.ppm';q.cmd('screendump',{'filename':str(shot)});time.sleep(.5)
-  x,y,w,h=tile;img=Image.open(shot).convert('RGB');bx,by=x+8,y+36
-  vw,vh=min(W,w-16),min(H,h-44)
+  img=Image.open(shot).convert('RGB');bx,by,bw,bh=content_rect(t(),tile)
+  vw,vh=min(W,bw),min(H,bh)
   checked=bad=worst=0
   for py in range(0,vh,3):
    for px in range(0,vw,5):

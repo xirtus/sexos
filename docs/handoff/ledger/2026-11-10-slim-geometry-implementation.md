@@ -251,3 +251,25 @@ negative controls, passes. Final current-head CI is still required before merge.
 No further production changes follow runtime source 17c7f700 in these evidence-only
 and checker-fix commits. Whole-panel rounded masks and natural Sans app-body labels
 remain the next approved, separate topic.
+
+
+## Current-head CI oracle corrections
+
+CI 26133ad9 exposed two remaining checker assumptions; both original artifacts are
+retained. Runtime's legacy fixed 410x330 Web JS checker still sampled y+36, as did
+six related legacy program helpers. They now use the completed independent shared
+content rectangle while retaining each original visible extent, sample count and
+error threshold. Replaying the untouched CI JS screenshot/reference/serial gives
+zero mismatches (worst 0) across the same 3,936 pixels at the actual (714,640) origin.
+This does not adopt the separate dynamic Web viewport behavior from PR #152.
+
+App-resource's producer-local Display ACK marker follows the syscall return. The
+untouched failure trace shows scene committed→kernel accepted role-2 ACK→private
+retirement→Display local return marker. Immediate PDX handoff permits this order.
+The checker now requires prepared<committed<actual kernel role-2 ACK<retirement and
+local return after that kernel ACK, while preserving all other role, identity,
+flush, pool-zeroing and ordering requirements. Twenty adverse checker cases pass,
+including late-local acceptance and missing/premature/foreign actual-ACK refusals.
+The original CI trace passes the corrected causal check; no production lifecycle
+or transport code changed. Compact replay hashes/results are retained separately
+from the local 17c image cohort in the adjacent ci261 JSON evidence files.
