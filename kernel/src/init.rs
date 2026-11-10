@@ -837,6 +837,10 @@ pub fn init() {
     crate::service_restart::capture(sexnet_id, 13);
     // Files holds the disk, but its filesystem commits atomically, so a fresh run remounts it.
     crate::service_restart::capture(sexfiles_id, 11);
+    // Input keeps nothing but what is in flight; a new run picks up the next key.
+    crate::service_restart::capture(sexinput_id, 4);
+    // Bell's sound state is rebuilt by its own start; its paging check runs once.
+    crate::service_restart::capture(sexbell_id, 10);
     crate::program_records::init(silkshell_id);
     {
         let shell=crate::ipc::DOMAIN_REGISTRY.get(silkshell_id).expect("BOOT_SHELL_MISSING");
@@ -1030,6 +1034,8 @@ pub fn init() {
         let info=verify_browser_source_grants(seed_holder,plan);
         serial_println!("[boot.browser.sources.readback] holder={} target={} entropy={} clock={} trust={} late_before_seal=1 typed_info=1 runtime_context=0 trust_profile={} trust_root_bytes={} trust_version={}",sexnet_id,plan.target(),plan.entropy_slot(),plan.clock_slot(),plan.trust_slot(),info.profile,info.root_bytes,info.version);
     }
+    // Every device lease and DMA pool exists now: give each driver its DMA domain.
+    crate::iommu::init_boot();
     crate::boot_memory::seal_all();
 
     // Snapshot the actual kernel heap after all reserved images/grants exist.

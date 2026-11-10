@@ -560,7 +560,11 @@ pub extern "C" fn _start() -> ! {
     // No synthetic, PS/2, or USB producer may send shell work until the
     // authenticated shell has completed initialization. Retain received USB
     // payloads unchanged and drain this FIFO before new ordinary ring messages.
-    if unsafe { (*core::ptr::addr_of_mut!(STARTUP_INBOX)).wait_for_shell() }.is_err() {
+    // Shell says it is ready once, at the first start; a run started again finds it up.
+    let restarts = sex_pdx::crash_log::restarts();
+    if restarts > 0 {
+        serial_println!("[sexinput.restarted] restarts={}", restarts);
+    } else if unsafe { (*core::ptr::addr_of_mut!(STARTUP_INBOX)).wait_for_shell() }.is_err() {
         serial_println!("[shell.ready.wait.failed] reason=inbox_full");
         panic!("sexinput shell-ready inbox full");
     }
