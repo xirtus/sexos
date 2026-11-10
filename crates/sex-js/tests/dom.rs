@@ -498,9 +498,25 @@ fn dynamic_import_waits_for_its_module() {
     assert_eq!(logs(&mut s), ["0:again XY"]);
     s.eval("import('/gone.js').then(m => console.log('ok'), e => console.log('failed', e.name));", "http://example.test/dir/page.html#script3").unwrap();
     assert_eq!(s.modules_wanted(), ["http://example.test/gone.js"]);
-    s.page_mut().modules.insert("http://example.test/gone.js".into(), "throw new Error('404')".into());
+    s.page_mut().modules.insert("http://example.test/gone.js".into(), sex_js::document::failed_module("http://example.test/gone.js"));
     s.modules_ready().unwrap();
-    assert_eq!(logs(&mut s), ["0:failed Error"]);
+    assert_eq!(logs(&mut s), ["0:failed TypeError"]);
+    // An entry module knows its own address.
+    s.eval_module("console.log(import.meta.url, new URL('./img.png', import.meta.url).href);", "http://example.test/dir/app.js").unwrap();
+    assert_eq!(logs(&mut s), ["0:http://example.test/dir/app.js http://example.test/dir/img.png"]);
+}
+
+#[test]
+fn defining_a_custom_element_upgrades_the_same_object() {
+    let mut s = page("<x-late id=x></x-late>");
+    s.eval(r#"
+        const el = document.getElementById('x'); el.mine = 1;
+        el.addEventListener('ping', () => console.log('heard'));
+        customElements.define('x-late', class extends HTMLElement { constructor() { super(); this.made = true; } hi() { return 'hi'; } });
+        console.log(document.getElementById('x') === el, el.mine, el.made, el.hi());
+        el.dispatchEvent(new Event('ping'));
+    "#, "t").unwrap();
+    assert_eq!(logs(&mut s), ["0:true 1 true hi", "0:heard"]);
 }
 
 #[test]

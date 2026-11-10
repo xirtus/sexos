@@ -316,7 +316,14 @@ EXPORT("sx_module") int sx_module(const char *src, int len, const char *name, in
             JS_FreeContext(t);
         }
     } else {
-        JSValue v = JS_Eval(ctx, code, (size_t)len, file, JS_EVAL_TYPE_MODULE);
+        // Compiled first, so the entry module's import.meta.url is set before it runs.
+        JSValue v = JS_Eval(ctx, code, (size_t)len, file, JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
+        if (!JS_IsException(v)) {
+            JSValue meta = JS_GetImportMeta(ctx, JS_VALUE_GET_PTR(v));
+            if (!JS_IsException(meta)) JS_DefinePropertyValueStr(ctx, meta, "url", JS_NewString(ctx, file), JS_PROP_C_W_E);
+            JS_FreeValue(ctx, meta);
+            v = JS_EvalFunction(ctx, v);
+        }
         if (JS_IsException(v)) { report(); ok = -1; }
         else {
             run_jobs();

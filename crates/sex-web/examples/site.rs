@@ -73,7 +73,8 @@ fn main() {
                 for u in need {
                     let body = load(&root, &u);
                     eprintln!("module {} {u}", if body.is_some() { "ok" } else { "MISSING" });
-                    script.page_mut().modules.insert(u, body.map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default());
+                    let failed = sex_js::document::failed_module(&u);
+                    script.page_mut().modules.insert(u, body.map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or(failed));
                 }
             }
             script.eval_module(src, name)
@@ -98,7 +99,8 @@ fn main() {
             for u in wanted {
                 let body = load(&root, &u);
                 eprintln!("import() module {} {u}", if body.is_some() { "ok" } else { "MISSING" });
-                script.page_mut().modules.insert(u, body.map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default());
+                let failed = sex_js::document::failed_module(&u);
+                    script.page_mut().modules.insert(u, body.map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or(failed));
             }
             script.modules_ready().unwrap();
         }

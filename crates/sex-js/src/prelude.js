@@ -334,6 +334,7 @@
       if (id === undefined) {
         const def = upgrading || (customByClass.get(new.target) && { id: +check(H(OP.CREATE_ELEMENT, customByClass.get(new.target))), tag: customByClass.get(new.target).toUpperCase() });
         upgrading = null;
+        if (def && def.existing) return def.existing;
         if (def) { id = def.id; tag = def.tag; }
       }
       super(id); this._tag = tag;
@@ -2417,9 +2418,14 @@
       if (customByName.has(name)) throw domError('"' + name + '" has already been defined as a custom element');
       customByName.set(name, cls); customByClass.set(cls, name);
       // Elements already in the page become instances of the new class.
-      for (const el of document.querySelectorAll(name)) {
-        nodes.delete(el._id);
-        const up = wrap(el._id);
+      for (const up of document.querySelectorAll(name)) {
+        // Upgraded in place: references the page holds keep their listeners and state.
+        // (One the page never touched was just made as the class, by wrap.)
+        if (!(up instanceof cls)) {
+          Object.setPrototypeOf(up, cls.prototype);
+          upgrading = { id: up._id, tag: up._tag, existing: up };
+          try { new cls(); } catch (e) { log(2, [e]); } finally { upgrading = null; }
+        }
         const attrs = cls.observedAttributes || [];
         if (typeof up.attributeChangedCallback === 'function') for (const a of attrs) if (up.hasAttribute(a)) { try { up.attributeChangedCallback(a, null, up.getAttribute(a)); } catch (e) { log(2, [e]); } }
         if (up.isConnected) connected(up);

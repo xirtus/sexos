@@ -388,6 +388,16 @@ fn floor(s: &str, max: usize) -> usize {
 /// An address without its `#fragment`.
 /// The `imports` of an import map (`<script type="importmap">`), addresses resolved
 /// against the page: (specifier or prefix ending in `/`, address).
+/// The source the page gets for a module that could not be loaded: importing it fails,
+/// as a failed fetch does in browsers, instead of giving an empty module.
+pub fn failed_module(url: &str) -> String {
+    let mut quoted = String::new();
+    for c in url.chars() {
+        match c { '\\' | '\'' => { quoted.push('\\'); quoted.push(c) } '\n' | '\r' => quoted.push(' '), c => quoted.push(c) }
+    }
+    format!("throw new TypeError('Failed to fetch module: {quoted}');")
+}
+
 pub fn import_map(base: &str, json: &str) -> Vec<(String, String)> {
     let mut out = Vec::new();
     let Some(at) = json.find("\"imports\"") else { return out };

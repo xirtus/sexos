@@ -454,7 +454,7 @@ impl Browser {
                 self.buf = Vec::new();
                 sex_pdx::serial_record!("[web.module] ok={} bytes={} url={}", body.is_some() as u8, body.as_ref().map_or(0, |b| b.len()), url);
                 // A failed one is still recorded, so it is not asked for again.
-                script.page_mut().modules.insert(url, body.unwrap_or_default());
+                script.page_mut().modules.insert(url.clone(), body.unwrap_or_else(|| sex_js::document::failed_module(&url)));
             }
         }
     }
@@ -559,7 +559,7 @@ impl Browser {
                 self.buf = Vec::new();
                 sex_pdx::serial_record!("[web.module] import=1 ok={} bytes={} url={}", body.is_some() as u8, body.as_ref().map_or(0, |b| b.len()), url);
                 let Doc::Scripted(s) = &mut self.doc else { return };
-                s.page_mut().modules.insert(url, body.unwrap_or_default());
+                s.page_mut().modules.insert(url.clone(), body.unwrap_or_else(|| sex_js::document::failed_module(&url)));
             }
             let Doc::Scripted(s) = &mut self.doc else { return };
             if let Err(sex_js::Error::Trapped(why)) = s.modules_ready() {
