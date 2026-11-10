@@ -341,8 +341,6 @@ impl History {
     /// Push a command line into history. Clamps to HIST_LINE_BYTES.
     fn push(&mut self, line: &[u8]) -> usize {
         let idx = self.write_pos;
-        // A Wi-Fi passphrase is never kept (history is saved to disk).
-        let line = wifi_command::without_passphrase(line);
         let n = line.len().min(HIST_LINE_BYTES);
         self.ring[self.write_pos][..n].copy_from_slice(&line[..n]);
         for i in n..HIST_LINE_BYTES { self.ring[self.write_pos][i] = 0; }
@@ -2823,7 +2821,7 @@ pub extern "C" fn _start() -> ! {
                 serial_println!("[spindle.cmd.recv] line_len={}", line.len);
                 let cmd_name = tokenize(line.as_bytes()).0;
                 let control=matches!(cmd_name,b"save"|b"load"|b"history-status"|b"history-cancel"|b"history-retry"|b"probe-status"|b"probe-cancel"|b"probe-retry");
-                if !control{let idx=hist.push(line.as_bytes());serial_println!("[spindle.history.push] idx={} len={}",idx,line.len);}
+                if !control{let idx=hist.push(wifi_command::without_passphrase(line.as_bytes()));serial_println!("[spindle.history.push] idx={} len={}",idx,line.len);}
                 let lines_before = sb.total_lines;
                 let recognized = dispatch(line.as_bytes(), sb, hist, &mut ev);
                 if !control{unsafe{HISTORY_IO.mark_dirty();}}
