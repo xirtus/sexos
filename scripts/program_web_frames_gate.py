@@ -6,8 +6,9 @@ message reaching only the origin it names. The frame is drawn over its box, and 
 click there reaches the frame's page."""
 import argparse,http.server,os,re,shutil,threading,time
 from pathlib import Path
-from browser_gate_viewport import live_viewport
+from browser_gate_viewport import live_viewport,painted_viewport
 from web_surface_geometry import canvas_box
+from quil_workflow_gate import palette_commands,palette_select
 from PIL import Image
 ROOT=Path(__file__).resolve().parents[1]
 SITE=ROOT/'scripts/web_site'
@@ -65,16 +66,32 @@ def main():
   m=g['wait'](r'\[web.ready\] target=(\d+) task=(\d+)',s,120);target,task=m[1],m[2]
   surface=int(g['wait'](rf'\[shell.program.launch\] target={target} task={task} surface=(\d+)',s,60)[1])
   time.sleep(3)
+  initial,iw,ih=painted_viewport(g,ROOT,surface)
   tile,pw,ph=live_viewport(g,ROOT,surface)
+  assert pw>iw and ph>ih,('fixture must actually resize',initial,tile)
+  def child_view(start):
+   m=g['wait'](rf'\n\[web.console\] level=0 framed viewport {pw//2}x120 count=(\d+)\n',start,60)
+   return int(m[1])
+  maximum_count=child_view(s)
+  assert maximum_count>0
   bx,by,_,_=canvas_box(ROOT,tile,pw,ph)
   green=shot('frames-loaded',tile,60,90);assert green[1]>150 and green[0]<80 and green[2]<110,('frame not drawn',green)
   # A click on the frame reaches its page, which turns blue and tells the page.
   s=len(t());move(bx+120,by+100);button(True);button(False)
   g['wait'](r'\[web.console\] level=0 frame clicked 1',s,60);time.sleep(1.5)
   blue=shot('frames-clicked',tile,60,90);assert blue[2]>150 and blue[1]<110,('click not shown',blue)
+  # Restore through real WM input; the responsive child gets the smaller
+  # viewport and another resize event, and still paints its clicked blue state.
+  g['focus'](surface);palette_select(g['key'],'ZoomToggle',palette_commands(ROOT))
+  before=len(t());g['key']('ret',rf'\[shell.window.action\] action=ZoomToggle frame=\d+ sid={surface} ok=1')
+  g['wait'](r'\[web.viewport\].* applied=1',before,60)
+  tile,pw,ph=painted_viewport(g,ROOT,surface)
+  assert (pw,ph)==(iw,ih),('restore mismatch',tile,pw,ph,iw,ih)
+  restored_count=child_view(before);assert restored_count>maximum_count
+  restored=shot('frames-restored',tile,60,90);assert restored[2]>150 and restored[1]<110,('restored child lost state',restored)
   text=t();assert 'framed fail' not in text and 'frames fail' not in text
   s=len(t());g['focus'](surface);time.sleep(.3);q.key('f11');g['wait'](rf'\[web.closed\] target={target} task={task}',s,60)
   text=t();assert 'KERNEL PANIC' not in text and '[web.fatal]' not in text and 'panicked' not in text
-  print({'ok':True,'frame':frame[0],'referer':asked[0][2],'green':green,'blue':blue})
+  print({'ok':True,'frame':frame[0],'referer':asked[0][2],'green':green,'blue':blue,'child_resizes':[maximum_count,restored_count]})
  finally:g['stop']()
 if __name__=='__main__':main()
