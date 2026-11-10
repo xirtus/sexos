@@ -109,7 +109,7 @@ def source_contract(root,text_profile='ascii'):
  bg=re.search(r'let background = if selected \{ Some\((0x[0-9a-f]+)\)',renderer)
  if not bg:raise ValueError('actual scalar selection background changed')
  c['selection_color']=int(bg[1],16)&0xffffff
- boundary=re.search(r'^const BAR_BG_H: usize = (\d+);$',renderer,re.M)
+ boundary=(re.search(r'pub const BAR: u32 = (\d+);',(root/'crates/sex-pdx/src/desktop_style.rs').read_text())if 'fn surface_text_fg_at_scaled('in renderer else re.search(r'^const BAR_BG_H: usize = (\d+);$',renderer,re.M))
  if not boundary:raise ValueError('canonical display desktop boundary changed')
  c['desktop_top']=int(boundary[1])
  reader=source['apps/kaleidoscope/src/document_reader.rs']

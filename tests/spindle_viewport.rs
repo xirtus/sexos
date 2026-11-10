@@ -2,16 +2,17 @@
 extern crate self as sex_pdx;
 pub const ERR_SERVICE_NOT_READY:u64=u64::MAX-1;
 #[path="../crates/sex-pdx/src/app_catalog.rs"] #[allow(dead_code)] pub mod app_catalog;
+#[path="../crates/sex-pdx/src/desktop_style.rs"]pub mod desktop_style;
 #[path="../crates/sex-pdx/src/spindle_view.rs"]pub mod spindle_view;
 #[path="../apps/spindle/src/viewport.rs"]mod viewport;
 use spindle_view::*;
 fn row(t:&viewport::Text,index:usize)->&[u8]{let start=index*(t.cols+1);&t.bytes[start..start+t.cols]}
 fn bottom_prompt(t:&viewport::Text)->Vec<u8>{assert!(t.rows>0);row(t,t.rows-1).to_vec()}
 #[test]fn startup_tile_keeps_full_prompt_in_one_visible_bottom_row(){let v=Layout::new(1280,134);assert_eq!(v.rows,[4,0]);assert_eq!(v.cols,103);let t=viewport::render(v,b"echo spindle17",2,0,|_|b"old output");assert!(bottom_prompt(&t).starts_with(b"> echo spindle17|"));assert!(row(&t,t.rows-2).starts_with(b"old output"));}
-#[test]fn minimum_height_keeps_the_prompt_in_the_body(){let v=Layout::new(120,80);assert_eq!(v.rows,[2,0]);let t=viewport::render(v,b"a long command",0,0,|_|panic!());assert_eq!(&bottom_prompt(&t)[..3],b"> <");}
-#[test]fn terminal_pane_fills_the_body_and_other_surfaces_stay_empty(){for w in 120..=1280{for h in [80,90,100,133,134,180,335,670]{let v=Layout::new(w,h);let t=viewport::render(v,&[b'x';256],128,0,|_|b"some output longer than a tile");let p=v.panes[0];assert_eq!((p.x,p.y,p.w,p.h),(8,36,w-16,h-44));assert!(v.panes[1..].iter().all(|q|q.h==0));assert!(p.x+p.w<=w-8);assert!(p.y+p.h<=h-8);let s=scale(p.w);if t.len==0{continue}assert!(8+v.cols as u32*6*s<=p.w);assert!(12+(v.rows[0]-1)as u32*9*s+7*s<=p.h);assert!(t.len<=MAX_TEXT);}}}
+#[test]fn minimum_height_keeps_the_prompt_in_the_body(){let v=Layout::new(120,80);assert_eq!(v.rows,[3,0]);let t=viewport::render(v,b"a long command",0,0,|_|panic!());assert_eq!(&bottom_prompt(&t)[..3],b"> <");}
+#[test]fn terminal_pane_fills_the_body_and_other_surfaces_stay_empty(){for w in 120..=1280{for h in [80,90,100,133,134,180,335,670]{let v=Layout::new(w,h);let t=viewport::render(v,&[b'x';256],128,0,|_|b"some output longer than a tile");let p=v.panes[0];assert_eq!((p.x,p.y,p.w,p.h),(8,34,w-16,h-42));assert!(v.panes[1..].iter().all(|q|q.h==0));assert!(p.x+p.w<=w-8);assert!(p.y+p.h<=h-8);let s=scale(p.w);if t.len==0{continue}assert!(8+v.cols as u32*6*s<=p.w);assert!(12+(v.rows[0]-1)as u32*9*s+7*s<=p.h);assert!(t.len<=MAX_TEXT);}}}
 #[test]fn shrinking_and_expanding_reconstructs_original_scrollback_and_input(){let command=b"echo unchanged";let small=viewport::render(Layout::new(120,80),command,20,0,|_|b"line retained");let large=viewport::render(Layout::new(1280,670),command,20,0,|_|b"line retained");assert!(small.rows<large.rows);assert!(core::str::from_utf8(&large.bytes[..large.len]).unwrap().contains("> echo unchanged"));assert_eq!(command,b"echo unchanged");}
-#[test]fn only_exact_shell_and_incarnation_accept_newer_layout(){let n=Notice{target:17,task:17,w:640,h:134,sequence:8};assert_eq!(Notice::decode(3,17,17,n.args(),7),Some(n));for(c,p,t,last)in[(7,17,17,7),(3,12,12,7),(3,17,12,7),(3,17,17,8)]{assert!(Notice::decode(c,p,t,n.args(),last).is_none())}assert!(Notice::decode(3,17,17,[n.args()[0],0,8],0).is_none());}
+#[test]fn only_exact_shell_and_incarnation_accept_newer_layout(){let n=Notice{target:17,task:17,w:640,h:134,ui_scale:1,sequence:8};assert_eq!(Notice::decode(3,17,17,n.args(),7),Some(n));for(c,p,t,last)in[(7,17,17,7),(3,12,12,7),(3,17,12,7),(3,17,17,8)]{assert!(Notice::decode(c,p,t,n.args(),last).is_none())}assert!(Notice::decode(3,17,17,[n.args()[0],0,8],0).is_none());}
 #[test]fn full_retains_exact_notice_and_coalesces_newest_geometry(){let mut d=Delivery::new();d.queue(17,17,640,134);let mut first=None;d.poll(true,true,|n|{first=Some(n);Err(ERR_SERVICE_NOT_READY)});d.poll(true,true,|n|{assert_eq!(Some(n),first);Err(ERR_SERVICE_NOT_READY)});d.queue(17,17,640,335);d.poll(true,true,|n|{assert_eq!(n.h,335);assert!(n.sequence>first.unwrap().sequence);Ok(())});d.poll(true,true,|_|panic!());}
 #[test]fn reserve_can_wait_without_being_retired_and_death_fences_pending(){let mut d=Delivery::new();d.poll(false,false,|_|panic!());d.queue(17,17,640,134);d.poll(true,false,|_|panic!());d.poll(false,true,|_|panic!());d.queue(17,17,640,335);d.poll(true,true,|_|panic!());}
 #[test]fn bounded_formatter_suppresses_all_text_below_physical_glyph_limit(){let t=viewport::render(Layout::new(16,44),b"must not clip",2,0,|_|b"line");assert_eq!(t.len,0);}
@@ -45,7 +46,7 @@ fn bottom_prompt(t:&viewport::Text)->Vec<u8>{assert!(t.rows>0);row(t,t.rows-1).t
  assert_eq!(scale(0),1);assert_eq!(scale(127),1);assert_eq!(scale(128),2);
  assert_eq!(scale(244),2);assert_eq!(scale(255),2);assert_eq!(scale(256),2);
  let v=Layout::new(512,718);
- assert_eq!(v.panes[0],Rect{x:8,y:36,w:496,h:674});
+ assert_eq!(v.panes[0],Rect{x:8,y:34,w:496,h:676});
  assert_eq!((v.cols,v.columns(),v.rows),(39,39,[37,0]));
  let text=viewport::render(v,b"echo readable",0,0,|_|panic!());
  assert_eq!((text.len,text.cols,text.rows),(1480,39,37));
@@ -87,7 +88,7 @@ fn bottom_prompt(t:&viewport::Text)->Vec<u8>{assert!(t.rows>0);row(t,t.rows-1).t
 #[test]fn short_tiles_keep_the_prompt_visible(){
  let command=b"echo keep the complete command while the view becomes short";let original=*command;
  for w in [279,280,512]{for h in 90..=103{
-  let v=Layout::new(w,h);assert_eq!(v.rows,[2,0]);assert_eq!(v.panes[0].h,h-44);
+  let v=Layout::new(w,h);assert_eq!(v.rows,[2,0]);assert_eq!(v.panes[0].h,h-42);
   let text=viewport::render_at(v,command,command.len(),0,0,|_|panic!());
   let prompt=bottom_prompt(&text);assert_eq!(&prompt[..3],b"> <");assert_eq!(prompt.last(),Some(&b'|'));
   let p=v.panes[0];let s=scale(p.w);assert!(8+v.cols as u32*6*s<=p.w);
@@ -106,4 +107,14 @@ fn bottom_prompt(t:&viewport::Text)->Vec<u8>{assert!(t.rows>0);row(t,t.rows-1).t
  }
  let largest=viewport::render(Layout::new(4096,4096),b"",0,0,|_|panic!());
  assert_eq!(largest.len,MAX_ROWS*(MAX_COLUMNS+1));assert!(largest.len<=MAX_TEXT);
+}
+
+#[test]fn scaled_terminal_layout_keeps_its_frame_and_grid_in_one_coordinate_space(){
+ for (ui,x,y,bw,bh) in [(1,8,34,1008,726),(2,16,68,992,684),(3,24,102,976,642)] {
+  let v=Layout::with_scale(1024,768,ui);let p=v.panes[0];
+  assert_eq!(p,Rect{x,y,w:bw,h:bh});
+  let cell=scale(bw)*ui;
+  assert!(16*ui+v.cols as u32*6*cell<bw);
+  assert!(12*ui+(v.rows[0]-1)as u32*9*cell+7*cell<=bh);
+ }
 }

@@ -1184,7 +1184,7 @@ unsafe fn quil_cursor_vertical(dir: i32) {
 /// Publish one bounded immutable text transaction; partial chunks remain private to display.
 /// Text color: bright cyan (0x00E0F0FF) over the dark slate background.
 static mut DOCUMENT_DISPLAY:display_delivery::Outbox=display_delivery::Outbox::new();
-static mut DOCUMENT_VIEW:sex_pdx::document_view::Layout=sex_pdx::document_view::Layout{w:640,h:480,scale:2,cols:51,rows:25,top:12,toolbar_rows:1};
+static mut DOCUMENT_VIEW:sex_pdx::document_view::Layout=sex_pdx::document_view::Layout{w:640,h:480,scale:2,ui_scale:1,cols:51,rows:25,top:12,toolbar_rows:1};
 static mut DOCUMENT_OPEN:bool=false;
 static mut DOCUMENT_WORKSPACE:sex_pdx::document_view::WorkspaceRefresh=sex_pdx::document_view::WorkspaceRefresh::new(0,0);
 static mut DOCUMENT_VIEW_SEQUENCE:u64=0;static mut DOCUMENT_PAINT:u64=0;static mut DOCUMENT_ACTION_SEQUENCE:u64=0;
@@ -4499,7 +4499,7 @@ pub extern "C" fn _start() -> ! {
             unsafe{QUIL_CLIPBOARD.receive(sex_pdx::clipboard::Subject{pd:msg.caller_pd,task:msg.caller_task},msg.type_id,[msg.arg0,msg.arg1,msg.arg2],sex_pdx::get_ticks());}
             quil_clipboard_events(palette_active);continue;
         }
-        if msg.type_id==sex_pdx::document_view::OP{if msg.caller_task!=3{continue;}unsafe{if let Some(n)=sex_pdx::document_view::Notice::decode(msg.caller_pd,catalog.target_pd,catalog.task_id,[msg.arg0,msg.arg1,msg.arg2],DOCUMENT_VIEW_SEQUENCE){DOCUMENT_VIEW_SEQUENCE=n.sequence;DOCUMENT_DISPLAY.rebind();DOCUMENT_VIEW=sex_pdx::document_view::Layout::new(n.target,n.w,n.h);draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);}}continue;}
+        if msg.type_id==sex_pdx::document_view::OP{if msg.caller_task!=3{continue;}unsafe{if let Some(n)=sex_pdx::document_view::Notice::decode(msg.caller_pd,catalog.target_pd,catalog.task_id,[msg.arg0,msg.arg1,msg.arg2],DOCUMENT_VIEW_SEQUENCE){DOCUMENT_VIEW_SEQUENCE=n.sequence;sex_pdx::desktop_style::set_ui_scale(n.ui_scale);DOCUMENT_DISPLAY.rebind();DOCUMENT_VIEW=sex_pdx::document_view::Layout::new(n.target,n.w,n.h);draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);}}continue;}
         if msg.type_id==sex_pdx::document_view::ACTION{unsafe{if msg.caller_pd==3&&msg.caller_task==3&&msg.arg0==((catalog.task_id as u64)<<32|catalog.target_pd as u64)&&msg.arg2>DOCUMENT_ACTION_SEQUENCE&&(1..=5).contains(&msg.arg1){DOCUMENT_ACTION_SEQUENCE=msg.arg2;sex_pdx::serial_record!("[quil.ui.pointer] action={} sequence={}",msg.arg1,msg.arg2);document_action(msg.arg1 as u8,&mut palette_active,&mut selected_row);}}continue;}
         if msg.type_id==1 && msg.caller_pd==1 {
             unsafe { if let Some((paint,bytes))=DOCUMENT_DISPLAY.receive(msg.caller_pd,msg.arg0) {sex_pdx::serial_record!("[quil.ui.applied] paint={} bytes={} pixels=unconfirmed",paint,bytes);continue;} }

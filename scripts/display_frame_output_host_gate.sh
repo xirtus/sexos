@@ -33,7 +33,7 @@ def source_contract(text):
     assert c.index('preparation.commit(')<c.index('record_cursor_presented();')<c.index('report_app_presented();')<c.index('civil_clock_drawn(')
     assert 'ifplan.clock_dirty(){civil_clock_drawn(&scene.bar,w,h,plan.label());}'in c
     assert not any(x in c for x in ['drop(lease)','mem::forget','ManuallyDrop'])
-    assert 'Some(PublishedFrame{plan,present_bits,canon_ss,text_projections})'in c
+    assert 'Some(PublishedFrame{plan,bar_height:scene.metrics.bar()asusize,present_bits,canon_ss,text_projections})'in c
     assert 'lettext_projections=scene.text_projections;'in c and c.index('preparation.commit(')<c.index('lettext_projections=scene.text_projections;'),'receipt copies captured metadata only after successful output'
     for name in ['raster_full','raster_strip','raster_area','raster_damage']:
         b=fn(text,name)
@@ -64,7 +64,7 @@ def source_contract(text):
     assert 'ifpublished.plan.is_full(){lifecycle.pixels_presented(published.present_bits);'in finish and finish.index('lifecycle.pixels_presented(published.present_bits)')<finish.index('lifecycle.scene_committed(')<finish.index('sex_pdx::app_lifecycle::ack(')
     assert 'ifunsafe{(*core::ptr::addr_of!(RENDER_SCENE)).is_valid()}{return;}'in finish
     assert 'commit_published_text(published)'in finish and 'letbitmap=ifpublished.plan.is_full(){unsafe{BITMAP_STORES.release_after_publication()}}else{0};'in finish,'covered text and Full-only bitmap under scene fence'
-    assert 'if!published.plan.covers_body(required){continue;}'in compact(fn(text,'commit_published_text'))
+    assert 'if!published.plan.covers_body(required,published.bar_height){continue;}'in compact(fn(text,'commit_published_text'))
     assert 'if!settle_only{unsafe{APP_PRESENT_BITS=0;PREPARED_CURSOR=None;}}'in c and 'if!settle_only{record_cursor_presented();report_app_presented();'in c,'Settle withholds cursor/app effects'
     assert batch.index('ifplan.settle_only(){returntrue;}')<batch.index('restore_cursor_under('),'Settle identity before overlays'
     # All physical FB_PTR conversions must be the startup wrapper, single batch
@@ -98,7 +98,7 @@ production='\n\n'.join(parts)+'\n';production_path=out/'actual-main-pipeline.rs'
 parent=[item(n)for n in ['MAX_FB_W','MAX_FB_H','BAR_BG_H','FOCUS_SURFACE_COLOR','FRAME_RIM_COLOR','FRAME_TOP_BAR_COLOR','TAB_ACTIVE_COLOR','TAB_INACTIVE_COLOR','FRAME_LIGHT_CLOSE_COLOR','FRAME_LIGHT_MINIMIZE_COLOR','FRAME_LIGHT_ZOOM_COLOR','DEFAULT_RENDER_TOKENS','SURFACE_CHROME_TOP_BAR','FRAME_TOP_BAR_HEIGHT_PX']]
 parent+=['#[derive(Clone, Copy)]\n#[repr(C)]\n'+block(main,'struct RenderTokensV1 {')]
 parent+=['use surface_lifecycle::{TEXT_BUF_CAP,TEXT_MAX_ROWS,TEXT_LEGACY_COLS};']
-parent+=[fn(main,n)for n in ['lerp_color_xrgb','vertical_gradient_xrgb','bg','surface_text_scale','recompute_text_lines','apply_pending_text','text_surface_damage','text_projection_requirement','changed_text_rows']]
+parent+=[fn(main,n)for n in ['chrome_metrics','frame_height','frame_rim','surface_text_scale_for','lerp_color_xrgb','vertical_gradient_xrgb','bg','surface_text_scale','recompute_text_lines','apply_pending_text','text_surface_damage','text_projection_requirement','changed_text_rows']]
 parent+=[fn(main,'scene_bar_blur_rows').replace('fn scene_bar_blur_rows(', 'fn actual_scene_bar_blur_rows(',1)]
 parent_path=out/'actual-scene-parent.rs';parent_path.write_text('\n\n'.join(parent))
 acquire_path=out/'actual-sdk-acquisition.rs';acquire_path.write_text('pub '+fn(sdk,'display_frame_backing')+'\n');(out/'main-source.rs').write_text(main)
@@ -131,7 +131,7 @@ def compile_test(name,text,pipeline=production_path,case=None,expect_failure=Fal
         if count is not None:assert int(match[1])==count,(name,match[1],count)
         return int(match[1])
 counts={}
-for name,file,expected in [('layout','tests/display_frames.rs',7),('store','tests/display_frame_output.rs',9),('va','kernel/src/memory/va_allocator.rs',6),('paint_batch','tests/display_paint_batch.rs',13)]:
+for name,file,expected in [('layout','tests/display_frames.rs',7),('store','tests/display_frame_output.rs',9),('va','kernel/src/memory/va_allocator.rs',6),('paint_batch','tests/display_paint_batch.rs',14)]:
     counts[name]=compile_test(name,(root/file).read_text(),count=expected)
 fixture_text=fixture.read_text();counts['pipeline']=compile_test('pipeline',fixture_text,count=13)
 # Unforgeable ownership discipline is a type property, not a native authority

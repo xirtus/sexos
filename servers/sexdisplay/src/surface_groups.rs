@@ -9,9 +9,12 @@ impl Group {
     }
 }
 #[derive(Clone, Copy)]
-pub struct FrameGroups { groups: [Option<Group>; CATALOG_CAPACITY] }
+pub struct FrameGroups { metrics:sex_pdx::desktop_style::chrome::Metrics, groups: [Option<Group>; CATALOG_CAPACITY] }
 impl FrameGroups {
-    pub const fn new() -> Self { Self { groups: [None; CATALOG_CAPACITY] } }
+    pub const fn new() -> Self { Self { metrics:sex_pdx::desktop_style::chrome::Metrics::new(1), groups: [None; CATALOG_CAPACITY] } }
+    pub fn set_scale(&mut self,scale:u32){self.metrics=sex_pdx::desktop_style::chrome::Metrics::new(scale);}
+    pub fn metrics(&self)->sex_pdx::desktop_style::chrome::Metrics{self.metrics}
+    pub fn rect(&self,s:&Surface,w:usize,h:usize)->(usize,usize,usize,usize){rect_below(s,w,h,self.metrics.bar()as usize)}
     pub fn register(&mut self, catalog: Catalog) {
         if catalog.frame_surface_id().is_none() { return; }
         if self.groups.iter().flatten().any(|g| g.catalog == catalog) { return; }
@@ -33,12 +36,13 @@ impl FrameGroups {
         for g in self.groups.iter().flatten().filter(|g| g.frame_seen) {
             let Some(frame) = surfaces.iter().find(|s| s.active && s.owner_pd == g.catalog.coordinator_pd
                 && Some(s.surface_id) == g.catalog.frame_surface_id()).copied() else { continue; };
-            let bx=frame.x.saturating_add(8); let by=frame.y.saturating_add(36);
-            let bw=frame.w.saturating_sub(16); let bh=frame.h.saturating_sub(44);
+            let body=self.metrics.body(frame.w,frame.h);
+            let bx=frame.x.saturating_add(body.x as i32);let by=frame.y.saturating_add(body.y as i32);
+            let(bw,bh)=(body.w,body.h);
             for child in surfaces.iter_mut().filter(|s| s.active && s.owner_pd == g.catalog.target_pd && g.catalog.is_content(s.surface_id)) {
                 if let Some(app)=crate::app_catalog::by_surface(g.catalog.target_pd,g.catalog.surface_id).filter(|i|!i.children.is_empty()) {
                     let index=if child.surface_id==app.surface{0}else{app.children.iter().position(|c|*c==child.surface_id).map_or(3,|p|p+1)};
-                    let p=sex_pdx::spindle_view::Layout::new(frame.w,frame.h).panes[index];
+                    let p=sex_pdx::spindle_view::Layout::with_scale(frame.w,frame.h,self.metrics.scale()).panes[index];
                     child.x=frame.x.saturating_add(p.x as i32);child.y=frame.y.saturating_add(p.y as i32);child.w=p.w;child.h=p.h;
                 } else { child.x=bx;child.y=by;child.w=bw;child.h=bh; }
             }
@@ -75,12 +79,12 @@ impl FrameGroups {
         // The shell's modal launcher must remain above app focus without
         // stealing that focus (its actions still target the previous window).
         if let Some(overlay)=surfaces.iter().find(|s|s.active && s.owner_pd==3
-            && s.surface_id==152 && contains(rect(s,w,h),x,y)) {return Some(overlay);}
+            && s.surface_id==152 && contains(self.rect(s,w,h),x,y)) {return Some(overlay);}
         // A focus reference to a bound child raises its actual frame, never a ghost child.
         let focused = surfaces.iter().find(|s| s.active && s.surface_id == focused)
             .and_then(|s| self.child_group(s)).filter(|g| g.frame_seen)
             .and_then(|g| g.catalog.frame_surface_id()).unwrap_or(focused);
-        let hit = |s: &&Surface| self.independent(s) && contains(rect(s,w,h),x,y);
+        let hit = |s: &&Surface| self.independent(s) && contains(self.rect(s,w,h),x,y);
         surfaces.iter().filter(|s| s.surface_id == focused).find(hit)
             .or_else(|| surfaces.iter().filter(|s| s.surface_id != focused).find(hit))
     }
@@ -90,16 +94,18 @@ impl FrameGroups {
         x: usize, y: usize, w: usize, h: usize) -> &'a Surface {
         let Some(g) = self.groups.iter().flatten().find(|g| g.frame_seen
             && frame.owner_pd == g.catalog.coordinator_pd && Some(frame.surface_id) == g.catalog.frame_surface_id()) else { return frame; };
-        let (sx,sy,sw,sh) = rect(frame,w,h);
-        let body = (sx.saturating_add(8),sy.saturating_add(36),sw.saturating_sub(16),sh.saturating_sub(44));
+        let (sx,sy,sw,sh) = self.rect(frame,w,h);
+        let b=self.metrics.body(sw as u32,sh as u32);
+        let body = (sx.saturating_add(b.x as usize),sy.saturating_add(b.y as usize),b.w as usize,b.h as usize);
         if !contains(body,x,y) { return frame; }
         surfaces.iter().find(|s| s.active && s.owner_pd == g.catalog.target_pd && g.catalog.is_content(s.surface_id)
-            && contains(rect(s,w,h),x,y)).unwrap_or(frame)
+            && contains(self.rect(s,w,h),x,y)).unwrap_or(frame)
     }
 }
-pub fn rect(s: &Surface,w: usize,h: usize) -> (usize,usize,usize,usize) {
+pub fn rect(s:&Surface,w:usize,h:usize)->(usize,usize,usize,usize){rect_below(s,w,h,crate::bar_height())}
+fn rect_below(s: &Surface,w: usize,h: usize,bar:usize) -> (usize,usize,usize,usize) {
     let x=(s.x.max(0) as usize).min(w.saturating_sub(1));
-    let y=(s.y.max(50) as usize).min(h.saturating_sub(1));
+    let y=(s.y.max(bar as i32) as usize).min(h.saturating_sub(1));
     (x,y,(s.w as usize).min(w.saturating_sub(x)),(s.h as usize).min(h.saturating_sub(y)))
 }
 pub fn contains((x,y,w,h):(usize,usize,usize,usize),px:usize,py:usize)->bool {
@@ -139,17 +145,18 @@ impl FrameGroups {
         if surfaces.len() > crate::surface_lifecycle::MAX_SURFACES || w == 0 || y >= h { return None; }
         let mut edges = [0usize; MAX_ROW_RUNS + 1]; edges[1] = w; let mut n = 2;
         for s in surfaces.iter().filter(|s| s.active) {
-            let (sx,sy,sw,sh) = rect(s,w,h);
+            let (sx,sy,sw,sh) = self.rect(s,w,h);
             if sw != 0 && sh != 0 && y >= sy && y-sy < sh {
                 edges[n] = sx; edges[n+1] = sx+sw; n += 2;
                 // Even an unfitted child cannot replace pixels outside the
                 // parent's body. Splitting here also preserves tiny/clipped frames.
                 if self.is_frame(s) {
-                    let body_y = sy.saturating_add(36);
-                    if y >= body_y && y-body_y < sh.saturating_sub(44) {
-                        let left = sx.saturating_add(8).min(w);
+                    let b=self.metrics.body(sw as u32,sh as u32);
+                    let body_y = sy.saturating_add(b.y as usize);
+                    if y >= body_y && y-body_y < b.h as usize {
+                        let left = sx.saturating_add(b.x as usize).min(w);
                         edges[n] = left;
-                        edges[n+1] = left.saturating_add(sw.saturating_sub(16)).min(w);
+                        edges[n+1] = left.saturating_add(b.w as usize).min(w);
                         n += 2;
                     }
                 }

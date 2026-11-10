@@ -3,6 +3,7 @@
 // relaxation of the actual guest constant or proof of framebuffer authority.
 #![allow(dead_code,static_mut_refs)]
 extern crate self as sex_pdx;
+fn bar_height()->usize{28}
 #[path="../crates/sex-pdx/src/memory_region.rs"]pub mod memory_region;
 pub use memory_region::MemoryRegionInfo;
 // This compositor fixture grants no capture authority. Compile/run the real
@@ -116,8 +117,8 @@ fn primitive(target:&frame_output::Target<'_>,scene:&scene::SceneSnapshot,kind:&
  assert_eq!(device(),BEFORE,"device modified before batch completion");event(kind);
  match kind{
  "full"=>for i in 0..target.len(){target.pointer().add(i).write(0x22);},
- "area"=>for i in 50*W..target.len(){target.pointer().add(i).write(0x33);},
- "strip"=>for i in 0..51*W{target.pointer().add(i).write(0x66);},
+ "area"=>for i in 28*W..target.len(){target.pointer().add(i).write(0x33);},
+ "strip"=>for i in 0..28*W{target.pointer().add(i).write(0x66);},
  "damage"=>{let r=rect();for y in r.y..r.bottom{for x in r.x..r.right{target.pointer().add(y*W+x).write(0x44);}}},_=>panic!()}
  mutate_bookkeeping();SURFACES[0].color=0xabcd; // retained Scene must not follow live state.
  if MODE==2{FB_W+=1;}
@@ -128,17 +129,17 @@ fn raster_full(t:&frame_output::Target<'_>,s:&scene::SceneSnapshot)->bool{primit
 fn raster_strip(t:&frame_output::Target<'_>,s:&scene::SceneSnapshot)->bool{primitive(t,s,"strip")}
 fn raster_area(t:&frame_output::Target<'_>,s:&scene::SceneSnapshot)->bool{primitive(t,s,"area")}
 fn raster_damage(t:&frame_output::Target<'_>,r:damage::Rect,s:&scene::SceneSnapshot)->bool{assert_eq!(r,rect());primitive(t,s,"damage")}
-fn restore_cursor_under(_fb:*mut u32,_w:usize,_h:usize,_len:usize){event("restore");}
+fn restore_cursor_under(_fb:*mut u32,_w:usize,_h:usize,_len:usize,_:desktop_style::chrome::Metrics){event("restore");}
 fn draw_atlas_cards_pass(_fb:*mut u32,_w:usize,_h:usize,_len:usize,s:&scene::SceneSnapshot){observe_scene(s);event("atlas");}
 fn draw_atlas_frame_previews_pass(_fb:*mut u32,_w:usize,_h:usize,_len:usize,s:&scene::SceneSnapshot){observe_scene(s);event("preview");}
 fn draw_launcher_panel(fb:*mut u32,_w:usize,_h:usize,len:usize,s:&scene::SceneSnapshot){observe_scene(s);unsafe{fb.add(len-2).write(0xdd);}event("launcher");}
 fn draw_cursor_z_top(fb:*mut u32,_w:usize,_h:usize,len:usize,save:bool,s:&scene::SceneSnapshot){observe_scene(s);assert!(save);unsafe{
  CURSORS+=1;assert_eq!(device(),BEFORE);fb.add(len-1).write(0xee);mutate_bookkeeping();}event("cursor-raster");}
-fn rect()->damage::Rect{damage::Rect{x:1,y:51,right:4,bottom:53}}
+fn rect()->damage::Rect{damage::Rect{x:1,y:28,right:4,bottom:30}}
 fn expected_pixels(mut base:Vec<u32>,p:Plan)->Vec<u32>{
  if p.settle_only(){return base;}
- match p.content{Content::Full=>base.fill(0x22),Content::Area=>base[50*W..].fill(0x33),Content::Damage(r)=>for y in r.y..r.bottom{for x in r.x..r.right{base[y*W+x]=0x44;}},_=>{}}
- if p.strip{base[..51*W].fill(0x66);}if !p.cursor_only(){base[W*H-2]=0xdd;}base[W*H-1]=0xee;base
+ match p.content{Content::Full=>base.fill(0x22),Content::Area=>base[28*W..].fill(0x33),Content::Damage(r)=>for y in r.y..r.bottom{for x in r.x..r.right{base[y*W+x]=0x44;}},_=>{}}
+ if p.strip{base[..28*W].fill(0x66);}if !p.cursor_only(){base[W*H-2]=0xdd;}base[W*H-1]=0xee;base
 }
 struct Harness{allocation:std::alloc::Layout,private:*mut u8,scanout:Vec<u32>,layout:Layout}
 impl Harness{
@@ -176,7 +177,7 @@ fn rollback_restored(){unsafe{
 fn partial_plans()->[Plan;7]{[Plan{content:Content::Area,strip:false},Plan{content:Content::Damage(rect()),strip:false},Plan{content:Content::Cursor,strip:false},Plan{content:Content::None,strip:true},Plan{content:Content::Area,strip:true},Plan{content:Content::Damage(rect()),strip:true},Plan{content:Content::Cursor,strip:true}]}
 fn no_effects(){unsafe{assert_eq!(PUBLICATIONS,0);assert!(!EVENTS.iter().any(|v|v.ends_with("-effect")||v.starts_with("civil:")||v.starts_with("timing:")||v=="receipt"));assert!(!RENDER_SCENE.is_valid());}}
 #[test]fn actual_combined_batches_publish_once_with_one_immutable_scene(){let _l=LOCK.lock().unwrap();let mut h=Harness::new();h.prime();
- let mut plans=partial_plans().to_vec();let mut dirty=Dirty::new(W,H);dirty.request_area();dirty.request_strip();dirty.request_damage(rect(),W,H);dirty.request_cursor();dirty.request_full();plans.push(dirty.plan(W,H));
+ let mut plans=partial_plans().to_vec();let mut dirty=Dirty::new(W,H);dirty.request_area();dirty.request_strip();dirty.request_damage(rect(),W,H,28);dirty.request_cursor();dirty.request_full();plans.push(dirty.plan(W,H));
  for p in plans{let gen=h.generation();h.setup(p,0);let receipt=h.call(p).unwrap();assert_eq!(receipt.plan,p);assert_eq!((receipt.present_bits,receipt.canon_ss),(0x55,7));assert_eq!(h.generation(),gen+1);
   unsafe{assert_eq!(h.scanout,AFTER);assert_eq!(h.front(),Some(AFTER.clone()));assert_eq!((CAPTURES,CURSORS,COPY_ATTEMPTS,PUBLICATIONS),(1,1,1,1));assert!(!RENDER_SCENE.is_valid());assert_eq!(RENDER_FRAME_COUNTER.load(Ordering::Relaxed),if p.is_full(){43}else{42});
    for label in["cursor-effect","app-effect","receipt"]{assert_eq!(EVENTS.iter().filter(|v|*v==label).count(),1);}
@@ -188,7 +189,7 @@ fn no_effects(){unsafe{assert_eq!(PUBLICATIONS,0);assert!(!EVENTS.iter().any(|v|
 #[test]fn every_body_failure_restores_bookkeeping_and_retains_front(){let _l=LOCK.lock().unwrap();let mut h=Harness::new();h.prime();let old=h.front();let device=h.scanout.clone();
  for p in [Plan::full(),Plan{content:Content::Area,strip:true},Plan{content:Content::Damage(rect()),strip:true},Plan{content:Content::None,strip:true}]{h.setup(p,1);assert!(h.call(p).is_none());rollback_restored();no_effects();assert_eq!(h.front(),old);assert_eq!(h.scanout,device);assert_eq!(h.generation(),1);assert!(h.span(1).iter().all(|&v|v==0));}
 }
-#[test]fn failed_second_pass_preserves_dirty_and_retry_merges_exact_work(){let _l=LOCK.lock().unwrap();let mut h=Harness::new();h.prime();let mut d=Dirty::new(W,H);d.request_damage(rect(),W,H);d.request_strip();let plan=d.plan(W,H);let saved=d;
+#[test]fn failed_second_pass_preserves_dirty_and_retry_merges_exact_work(){let _l=LOCK.lock().unwrap();let mut h=Harness::new();h.prime();let mut d=Dirty::new(W,H);d.request_damage(rect(),W,H,28);d.request_strip();let plan=d.plan(W,H);let saved=d;
  h.setup(plan,3);assert!(h.attempt(&mut d).is_none());assert_eq!(d,saved);rollback_restored();no_effects();assert_eq!(h.generation(),1);unsafe{assert!(EVENTS.iter().any(|e|e=="damage"));assert!(EVENTS.iter().any(|e|e=="strip"));assert_eq!(h.scanout,BEFORE);}
  d.request_area();d.request_cursor();let merged=d.plan(W,H);assert_eq!(merged,Plan{content:Content::Area,strip:true});h.setup(merged,0);assert!(h.attempt(&mut d).is_some());assert!(d.plan(W,H).is_empty());assert_eq!(h.generation(),2);
 }
@@ -279,6 +280,6 @@ fn no_effects(){unsafe{assert_eq!(PUBLICATIONS,0);assert!(!EVENTS.iter().any(|v|
  let mut visible=Dirty::new(W,H);join_pending_text(&mut visible,W,H);assert_eq!(visible.plan(W,H),Plan{content:Content::Damage(damage::Rect{x:0,y:52,right:19,bottom:53}),strip:false});
  unsafe{SURFACES[0].x=1000;SURFACES[0].y=1000;}
  let mut hidden=Dirty::new(W,H);join_pending_text(&mut hidden,W,H);assert!(hidden.plan(W,H).settle_only());
- let mut tiny=Dirty::new(W,50);join_pending_text(&mut tiny,W,50);assert!(tiny.plan(W,50).is_full());
+ let mut tiny=Dirty::new(W,27);join_pending_text(&mut tiny,W,27);assert!(tiny.plan(W,27).is_full());
  unsafe{assert_eq!(SURFACES[0].text_len,0);assert!(TEXT_STAGES[0].needs_publication());}
 }

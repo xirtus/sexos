@@ -1,0 +1,106 @@
+{
+  "ok": true,
+  "scale": 2,
+  "actions": [
+    {
+      "x": 90,
+      "y": 98,
+      "pattern": "\\[silk.lifecycle.minimize.hidden\\] sid=201 frame=\\d+",
+      "serial_start": 286169
+    },
+    {
+      "x": 1120,
+      "y": 28,
+      "pattern": "\\[shell.clock.open.ok\\] id=0x94",
+      "serial_start": 321145
+    },
+    {
+      "x": 1120,
+      "y": 28,
+      "pattern": "\\[shell.clock.close.ok\\] id=0x94",
+      "serial_start": 333600
+    }
+  ],
+  "palette_erasure": {
+    "checked_ink_pixels": 17135,
+    "linen_overlap_skipped": 1001,
+    "remaining_launcher_ink": 0,
+    "lines": [
+      {
+        "row": 0,
+        "checked_ink_pixels": 1441,
+        "linen_overlap_skipped": 0,
+        "remaining_ink": 0
+      },
+      {
+        "row": 1,
+        "checked_ink_pixels": 2302,
+        "linen_overlap_skipped": 1001,
+        "remaining_ink": 0
+      },
+      {
+        "row": 2,
+        "checked_ink_pixels": 1354,
+        "linen_overlap_skipped": 0,
+        "remaining_ink": 0
+      },
+      {
+        "row": 3,
+        "checked_ink_pixels": 1506,
+        "linen_overlap_skipped": 0,
+        "remaining_ink": 0
+      },
+      {
+        "row": 4,
+        "checked_ink_pixels": 936,
+        "linen_overlap_skipped": 0,
+        "remaining_ink": 0
+      },
+      {
+        "row": 5,
+        "checked_ink_pixels": 1587,
+        "linen_overlap_skipped": 0,
+        "remaining_ink": 0
+      },
+      {
+        "row": 6,
+        "checked_ink_pixels": 949,
+        "linen_overlap_skipped": 0,
+        "remaining_ink": 0
+      },
+      {
+        "row": 7,
+        "checked_ink_pixels": 1526,
+        "linen_overlap_skipped": 0,
+        "remaining_ink": 0
+      },
+      {
+        "row": 8,
+        "checked_ink_pixels": 1023,
+        "linen_overlap_skipped": 0,
+        "remaining_ink": 0
+      },
+      {
+        "row": 9,
+        "checked_ink_pixels": 1964,
+        "linen_overlap_skipped": 0,
+        "remaining_ink": 0
+      },
+      {
+        "row": 10,
+        "checked_ink_pixels": 984,
+        "linen_overlap_skipped": 0,
+        "remaining_ink": 0
+      },
+      {
+        "row": 11,
+        "checked_ink_pixels": 1563,
+        "linen_overlap_skipped": 0,
+        "remaining_ink": 0
+      }
+    ],
+    "scope": "controlled source-bound text ink erasure"
+  },
+  "iso_sha256": "213007e199bb3cda516abe5ad08c7b8ed54bc99e4153a073e74c3bdc86cde34b",
+  "scope": "Actual scaled minimize/restore, clock open/close and palette glyph/erasure; no timer or hardware-latch guarantee"
+}

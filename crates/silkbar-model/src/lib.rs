@@ -354,12 +354,9 @@ impl Theme {
 
 /// Returns the Action for the module at (x, y) in the panel, or `Action::None`.
 pub fn hit_test_action(bar: &SilkBar, x: usize, y: usize) -> Action {
-    if y < PANEL_Y || y >= PANEL_Y + PANEL_H || x < PANEL_X || x >= PANEL_X + PANEL_W {
-        return Action::None;
-    }
     for i in 0..LAYOUT_COUNT {
         let lb = &bar.layout[i];
-        if x >= lb.x && x < lb.x + lb.w && y >= lb.y && y < lb.y + lb.h {
+        if x >= lb.x && x-lb.x < lb.w && y >= lb.y && y-lb.y < lb.h {
             return lb.action;
         }
     }
@@ -377,6 +374,43 @@ pub fn for_desktop_width(width:usize)->Option<SilkBar>{
     if CHIP_X0.checked_sub(shift)?<left_end.checked_add(16)?{return None;}
     for item in &mut bar.layout[1 + WORKSPACE_COUNT..]{item.x=item.x.checked_sub(shift)?;}
     Some(bar)
+}
+
+/// Reflow module boxes from the shared SDK's applied device-pixel metrics.
+/// No SDK dependency: this model carries data; its consumers supply the one
+/// geometry contract. Narrow desktops expose a real workspace overview target.
+pub const MIN_CHROME_WIDTH:u32=320;
+pub fn reflow_chrome(bar:&mut SilkBar,width:usize,height:usize,target:usize)->bool {
+    if !matches!(target,24|48|72) || height<target {return false;}
+    let unit=target/24;
+    if width<MIN_CHROME_WIDTH as usize*unit {return false;}
+    let pad=(height-target)/2;
+    let margin=8*unit;
+    let clock=144*unit;
+    let right=width-margin;
+    let clock_x=right-clock;
+    let bell_x=clock_x-4*unit-target;
+    let status_x=bell_x-3*target-4*unit;
+    let full=width>=600*unit;
+    for b in &mut bar.layout {b.x=0;b.y=pad;b.w=0;b.h=target;}
+    bar.layout[ModuleSlot::Launcher as usize].x=margin;
+    bar.layout[ModuleSlot::Launcher as usize].w=target;
+    if full {
+        let start=((width-9*target)/2).min(status_x-9*target-16*unit);
+        for i in 0..WORKSPACE_COUNT {
+            let b=&mut bar.layout[1+i];b.x=start+i*target;b.w=target;
+            b.action=Action::SwitchWorkspace((i+1)as u8);
+        }
+    } else {
+        // ToggleModule's existing Workspaces identity opens Atlas in Shell.
+        let b=&mut bar.layout[ModuleSlot::Workspace0 as usize];
+        b.x=margin+target+8*unit;b.w=target;
+        b.action=Action::ToggleModule(Module::Workspaces(0));
+    }
+    for i in 0..3 {bar.layout[1+WORKSPACE_COUNT+i].x=status_x+i*target;bar.layout[1+WORKSPACE_COUNT+i].w=target;}
+    bar.layout[ModuleSlot::Bell as usize].x=bell_x;bar.layout[ModuleSlot::Bell as usize].w=target;
+    bar.layout[ModuleSlot::Clock as usize].x=clock_x;bar.layout[ModuleSlot::Clock as usize].w=clock;
+    true
 }
 
 // ── Update ABI (v4: stable PDX message types) ──────────────────────────────

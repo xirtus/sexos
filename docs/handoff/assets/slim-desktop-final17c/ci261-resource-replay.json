@@ -1,0 +1,9 @@
+{
+  "ok": true,
+  "run": 42877473277,
+  "job": 130044519147,
+  "serial_sha256": "e677db0a1c210074fbbabcac2a56a20aafbdfdaaa5813215405ea7ea5950f974",
+  "checker_sha256": "b453017aedab60684ea0575630396b5c4cd730b81ae13a1c041ef4a82f083e1f",
+  "errors": [],
+  "scope": "Untouched failed CI trace; real kernel role2 ACK precedes retirement, local producer return can follow it"
+}

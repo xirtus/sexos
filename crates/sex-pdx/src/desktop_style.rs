@@ -118,6 +118,7 @@ pub mod chrome {
     pub const TITLE: u32 = 26;
     pub const TARGET: u32 = 24;
     pub const UI_FONT: u32 = 13;
+    pub const UI_LINE:u32=16;
     pub const RESIZE: u32 = 8;
     pub const OUTER_GAP: u32 = 8;
     pub const INNER_GAP: u32 = 6;
@@ -132,6 +133,13 @@ pub mod chrome {
         if step == 0 { return clamp_scale(boot); }
         let before=clamp_scale(before);
         if step > 0 { clamp_scale(before+1) } else { clamp_scale(before-1) }
+    }
+    /// Fit policy supplied by the data model; an excessive manual/EDID scale
+    /// never panics the renderer or hides module targets outside the screen.
+    pub const fn fit_scale(width:u32,requested:u32,min_logical:u32)->u32{
+        let mut scale=clamp_scale(requested);
+        while scale>1&&width<min_logical.saturating_mul(scale){scale-=1;}
+        scale
     }
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub struct Rect { pub x: u32, pub y: u32, pub w: u32, pub h: u32 }
@@ -151,6 +159,19 @@ pub mod chrome {
         pub const fn workarea(self, width: u32, height: u32) -> Rect {
             let y=if self.bar()<height {self.bar()} else {height};
             Rect { x:0, y, w:width, h:height-y }
+        }
+        /// Center a logical overlay inside the workarea with a scaled gap.
+        /// Empty/tiny screens yield empty clipped rectangles, never overflow.
+        pub const fn centered_panel(self,width:u32,height:u32,logical_w:u32,logical_h:u32)->Rect{
+            let area=self.workarea(width,height);let gap=self.px(8);
+            let x=if gap<area.w {gap}else{area.w};
+            let y=if gap<area.h {gap}else{area.h};
+            let aw=area.w.saturating_sub(gap.saturating_mul(2));
+            let ah=area.h.saturating_sub(gap.saturating_mul(2));
+            let wanted_w=self.px(logical_w);let wanted_h=self.px(logical_h);
+            let w=if wanted_w<aw {wanted_w}else{aw};
+            let h=if wanted_h<ah {wanted_h}else{ah};
+            Rect{x:area.x+x+(aw-w)/2,y:area.y+y+(ah-h)/2,w,h}
         }
         /// Content and pointer mapping share the same bounded inset. Tiny
         /// frames have an empty body rather than wrapped/overlapping content.

@@ -26,7 +26,7 @@ use sex_pdx::{
     OP_SURFACE_TAB_INFO, OP_APPEARANCE_TOKENS, OP_BELL_NOTIFY,
     SVC_STATE_LISTENING, ERR_CAP_INVALID, EV_KEY, EV_REL, EV_ABS, EV_BTN, EV_WHEEL,
 };
-use silkbar_model::{DEFAULT_SILK_BAR, hit_test_action, Action, PANEL_X, PANEL_Y, PANEL_W, PANEL_H,
+use silkbar_model::{DEFAULT_SILK_BAR, hit_test_action, Action, Module, PANEL_X, PANEL_Y, PANEL_W, PANEL_H,
     OPTION_CLOSE, OPTION_ZOOM, OPTION_MINIMIZE, OPTION_MOVE, SILKBAR_WORKSPACE_COUNT,
     APPEARANCE_TOKEN_FOCUS_SURFACE, APPEARANCE_TOKEN_FRAME_RIM, APPEARANCE_TOKEN_FRAME_TOP_BAR,
     APPEARANCE_TOKEN_ACTIVE_TAB, APPEARANCE_TOKEN_INACTIVE_TAB,
@@ -169,7 +169,7 @@ unsafe fn program_resize_flush() {
     for entry in pending.iter_mut() {
         let Some((sid, w, h)) = *entry else { continue };
         let Some(destination) = program_participant(sid) else { *entry = None; continue };
-        let (aw, ah) = sex_pdx::pixel_region::area(w, h);
+        let (aw, ah) = sex_pdx::pixel_region::area_scaled(w,h,sex_pdx::desktop_style::ui_scale());
         let input = app_input::Input::Resize(sex_pdx::pixel_region::resize_wire(aw, ah));
         if APP_INPUT.push(app_input::Item { destination, input }) { *entry = None; }
     }
@@ -5351,7 +5351,7 @@ unsafe fn linen_render_object_list() {
     }
     linen_queue_text(&view.text[..view.len],0x00F0F8FF,
         linen_text_delivery::Metadata { count, first:view.first, rows:view.rows, selected:SELECTED_LINEN_OBJECT_ID });
-    sex_pdx::serial_record!("[linen.list.text] x={} y={} w={} h={} scale={} text_color=0xf0f8ff rows={} selected={} row_y={} row_h={} first={} committed_view=1",SURFACE_200_X,SURFACE_200_Y,SURFACE_200_W,SURFACE_200_H,if SURFACE_200_W>=256 {2}else{1},view.rows,SELECTED_LINEN_OBJECT_ID,view.row_y,view.row_h,view.first);
+    sex_pdx::serial_record!("[linen.list.text] x={} y={} w={} h={} scale={} text_color=0xf0f8ff rows={} selected={} row_y={} row_h={} first={} committed_view=1",SURFACE_200_X,SURFACE_200_Y,SURFACE_200_W,SURFACE_200_H,(if SURFACE_200_W>=256 {2}else{1})*sex_pdx::desktop_style::ui_scale(),view.rows,SELECTED_LINEN_OBJECT_ID,view.row_y,view.row_h,view.first);
     for row in 0..view.rows {
         let line=view.text[..view.len].split(|b|*b==b'\n').nth(2+row*2).unwrap_or(b"");
         let label=core::str::from_utf8(line.get(2..).unwrap_or(b"")).unwrap_or("?");
@@ -5520,6 +5520,13 @@ unsafe fn display_scale_receive(msg:&sex_pdx::PdxMessage)->bool {
     if msg.type_id!=1{return false;}
     let Some(scale)=DISPLAY_SCALE.receive(msg.caller_pd,sex_pdx::display_ready::DISPLAY_PD_ID,msg.arg0)else{return false;};
     sex_pdx::desktop_style::set_ui_scale(scale);
+    for delivery in &mut SPINDLE_VIEWS {delivery.refresh();}
+    for delivery in &mut DOCUMENT_VIEWS {delivery.refresh();}
+    tile_active_scene_frames();
+    if COMMAND_PALETTE_OPEN {palette_show();palette_render_list();}
+    for row in app_catalog::INCARNATIONS {
+        if let Some((x,y,w,h))=get_surface_bounds(row.frame()){native_child_geometry(row.frame(),x,y,w,h);program_resize_note(row.frame(),w,h);}
+    }
     sex_pdx::serial_record!("[shell.display.scale.applied] scale={} receipt={:#x} cpu_publication=1",scale,msg.arg0);
     true
 }
@@ -5695,7 +5702,7 @@ unsafe fn adopt_running_apps() {
 /// windows back, and send every view's content and the focus again.
 unsafe fn display_came_back() {
     DISPLAY_SCALE.cancel();
-    if let Ok(physical)=sex_pdx::display_boot::physical(){sex_pdx::desktop_style::set_ui_scale(physical.scale);}
+    if let Ok(physical)=sex_pdx::display_boot::physical(){sex_pdx::desktop_style::set_ui_scale(sex_pdx::desktop_style::chrome::fit_scale(desktop_width()as u32,physical.scale,silkbar_model::MIN_CHROME_WIDTH));}
     static mut COMEBACKS: u32 = 0;
     COMEBACKS += 1;
     let _ = raw_pdx_call(SLOT_DISPLAY, OP_REGISTER_WM, sex_pdx::crash_log::restarts(), 0, 0);
@@ -8452,13 +8459,20 @@ static DESKTOP_HEIGHT:core::sync::atomic::AtomicU32=core::sync::atomic::AtomicU3
 fn desktop_width() -> i32 {
     DESKTOP_WIDTH.load(core::sync::atomic::Ordering::Acquire) as i32
 }
+fn chrome_metrics()->sex_pdx::desktop_style::chrome::Metrics {
+    sex_pdx::desktop_style::chrome::Metrics::new(sex_pdx::desktop_style::ui_scale())
+}
+fn desktop_bar_height()->i32 {chrome_metrics().bar()as i32}
+fn frame_height()->i32 {chrome_metrics().title()as i32}
+fn frame_rim()->i32 {chrome_metrics().px(sex_pdx::desktop_style::chrome::RESIZE)as i32}
+fn frame_controls_end()->i32 {chrome_metrics().px(74)as i32}
 fn desktop_height() -> i32 {
     DESKTOP_HEIGHT.load(core::sync::atomic::Ordering::Acquire) as i32
 }
 const P: DesktopPolicy = DesktopPolicy {
     width: 1280,
     height: 720,
-    bar_height: 50,
+    bar_height: 28,
     move_step: 10,
     resize_step: 20,
     min_width: 120,
@@ -8543,23 +8557,23 @@ fn action_name(action: SurfaceAction) -> &'static str {
 }
 
 fn layout_left() -> (i32, i32, u32, u32) {
-    (0, P.bar_height, (desktop_width() as u32) / 2, (desktop_height() - P.bar_height) as u32)
+    (0, desktop_bar_height(), (desktop_width() as u32) / 2, (desktop_height() - desktop_bar_height()) as u32)
 }
 
 fn layout_right() -> (i32, i32, u32, u32) {
-    (desktop_width() / 2, P.bar_height, (desktop_width() as u32) / 2, (desktop_height() - P.bar_height) as u32)
+    (desktop_width() / 2, desktop_bar_height(), (desktop_width() as u32) / 2, (desktop_height() - desktop_bar_height()) as u32)
 }
 
 fn layout_maximize() -> (i32, i32, u32, u32) {
-    (0, P.bar_height, desktop_width() as u32, (desktop_height() - P.bar_height) as u32)
+    (0, desktop_bar_height(), desktop_width() as u32, (desktop_height() - desktop_bar_height()) as u32)
 }
 
 /// Clamp surface position to stay within content area.
 /// Uses saturating arithmetic so policy drift never panics.
 fn clamp_position(x: i32, y: i32, w: u32, h: u32) -> (i32, i32) {
     let max_x = (desktop_width() as u32).saturating_sub(w) as i32;
-    let max_y = (desktop_height() as u32).saturating_sub(h).max(P.bar_height as u32) as i32;
-    (x.clamp(0, max_x), y.clamp(P.bar_height, max_y))
+    let max_y = (desktop_height() as u32).saturating_sub(h).max(desktop_bar_height() as u32) as i32;
+    (x.clamp(0, max_x), y.clamp(desktop_bar_height(), max_y))
 }
 
 /// Bottom-right edge position for SnapEnd.
@@ -8567,7 +8581,7 @@ fn clamp_position(x: i32, y: i32, w: u32, h: u32) -> (i32, i32) {
 fn snap_end_pos(w: u32, h: u32) -> (i32, i32) {
     let x = (desktop_width() as u32).saturating_sub(w) as i32;
     let y = (desktop_height() as u32).saturating_sub(h) as i32;
-    (x.max(0), y.max(P.bar_height))
+    (x.max(0), y.max(desktop_bar_height()))
 }
 
 /// Deterministic tiling for visible frames in the active scene.
@@ -10277,7 +10291,8 @@ unsafe fn browser_wheel_destination()->Option<sex_pdx::clipboard::Participant>{
     if !frame_accepts_input(fid){return None}
     let(x,y,w,h)=get_surface_bounds(sid)?;
     let px=POINTER_X as i64;let py=POINTER_Y as i64;
-    if px<x as i64+8 || py<y as i64+36 || px>=x as i64+w as i64-8 || py>=y as i64+h as i64-8{return None}
+    let body=chrome_metrics().body(w,h);
+    if px<x as i64+body.x as i64 || py<y as i64+body.y as i64 || px>=x as i64+body.x as i64+body.w as i64 || py>=y as i64+body.y as i64+body.h as i64{return None}
     let e=APP_CUSTODY.iter().flatten().find(|e|e.surface==sid&&!e.dead&&!e.retired&&!e.close_pending)?;
     let c=sex_pdx::app_lifecycle::catalog(e.slot).ok()?;
     let p=app_input_participant(e,c)?;
@@ -10304,9 +10319,9 @@ unsafe fn program_pointer_target()->Option<(u64,sex_pdx::clipboard::Participant,
     let fid=frame_for_surface(sid)?;
     if !frame_accepts_input(fid){return None}
     let(x,y,w,h)=get_surface_bounds(sid)?;
-    let(aw,ah)=sex_pdx::pixel_region::area(w,h);
-    let lx=POINTER_X-(x+sex_pdx::pixel_region::LEFT as i32);
-    let ly=POINTER_Y-(y+sex_pdx::pixel_region::TOP as i32);
+    let body=chrome_metrics().body(w,h);let(aw,ah)=(body.w,body.h);
+    let lx=POINTER_X-(x+body.x as i32);
+    let ly=POINTER_Y-(y+body.y as i32);
     let inside=lx>=0&&ly>=0&&lx<aw as i32&&ly<ah as i32;
     Some((sid,p,lx.clamp(i16::MIN as i32,i16::MAX as i32) as i16,ly.clamp(i16::MIN as i32,i16::MAX as i32) as i16,inside))
 }
@@ -10380,11 +10395,14 @@ unsafe fn wm_restore_scene_focus() {
     let n = wm_visible_frames(&mut frames, false);
     for f in &frames[..n] { if try_set_focus(f.1) { return; } }
 }
-unsafe fn wm_tiling() -> wm::Tiling { WM_TILING[(ACTIVE_SCENE_IDX as usize).min(ATLAS_MAX_SCENES - 1)] }
+unsafe fn wm_tiling() -> wm::Tiling {
+    let mut t=WM_TILING[(ACTIVE_SCENE_IDX as usize).min(ATLAS_MAX_SCENES - 1)];
+    t.gap_inner=chrome_metrics().px(t.gap_inner);t.gap_outer=chrome_metrics().px(t.gap_outer);t
+}
 unsafe fn wm_tiling_mut() -> &'static mut wm::Tiling { &mut WM_TILING[(ACTIVE_SCENE_IDX as usize).min(ATLAS_MAX_SCENES - 1)] }
 /// The desktop below the panel.
 fn wm_work_area() -> wm::Rect {
-    wm::Rect::new(0, P.bar_height, desktop_width() as u32, (desktop_height() - P.bar_height).max(1) as u32)
+    wm::Rect::new(0, desktop_bar_height(), desktop_width() as u32, (desktop_height() - desktop_bar_height()).max(1) as u32)
 }
 /// Visible, live frames of the active scene with their bounds; floating ones too.
 unsafe fn wm_visible_frames(out: &mut [(u32, u64, wm::Rect); MAX_FRAMES], tiled_only: bool) -> usize {
@@ -10558,7 +10576,7 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
         }
         desktop_keys::Action::DisplayScale(step)=>{
             // Retain one request; delivery is not an applied geometry receipt.
-            let queued=DISPLAY_SCALE.begin(step as i64);
+            let queued=POINTER_BUTTONS==0&&matches!(INTERACTION,InteractionState::Idle)&&DISPLAY_SCALE.begin(step as i64);
             display_scale_poll();
             sex_pdx::serial_record!("[shell.display.scale] step={} queued={}",step,queued as u8);
             true
@@ -10578,6 +10596,10 @@ unsafe fn volume_key(step:i8) {
 /// main OP_HID_EVENT dispatch.  Used by linen_sync_reply and before-linen
 /// drain so button click/focus works even during blocking Linen fetch.
 unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
+    // A scale starts only with no held buttons/drag. Consume pointer events
+    // during its bounded publication handshake, so old hit geometry cannot
+    // target newly painted controls; unrelated keyboard input remains live.
+    if DISPLAY_SCALE.pending()&&matches!(event_class,EV_ABS|EV_REL|EV_BTN|EV_WHEEL){return;}
     shell_interaction_contract_begin_once();
     input_negative_begin_once();
     let scancode = arg0 as u8;
@@ -11481,9 +11503,9 @@ static mut SURFACE_0x99_W: u32 = SPINDLE_BOOT_W;
 static mut SURFACE_0x99_H: u32 = SPINDLE_BOOT_H;
 
 fn clamp_surface_size(x: i32, y: i32, w: u32, h: u32) -> (u32, u32) {
-    let max_w = (desktop_width() - x).max(P.min_width as i32) as u32;
-    let max_h = (desktop_height() - y).max(P.min_height as i32) as u32;
-    (w.min(max_w).max(P.min_width), h.min(max_h).max(P.min_height))
+    let max_w = (desktop_width() - x).max(chrome_metrics().px(P.min_width) as i32) as u32;
+    let max_h = (desktop_height() - y).max(chrome_metrics().px(P.min_height) as i32) as u32;
+    (w.min(max_w).max(chrome_metrics().px(P.min_width)), h.min(max_h).max(chrome_metrics().px(P.min_height)))
 }
 
 fn emit_snapshot() {
@@ -12493,11 +12515,11 @@ fn atlas_nav(sel: u8, dir: wm::Dir) -> u8 {
 /// Hit-test Atlas scene cards at screen position (px, py).
 /// Returns the scene index (0..4) if the point is within a card,
 /// or None if the click misses all cards.
-/// Coordinate conversion: overlay surface starts at y=P.bar_height,
+/// Coordinate conversion: overlay surface starts at y=desktop_bar_height(),
 /// and atlas_card_pos() returns positions relative to the overlay.
 fn atlas_scene_at_point(px: i32, py: i32) -> Option<u8> {
     let cw = desktop_width() as u32;
-    let local_y = py - P.bar_height;
+    let local_y = py - desktop_bar_height();
     if cw == 0 || local_y < 0 { return None; }
     for scene_idx in 0..ATLAS_MAX_SCENES {
         let (cx, cy, card_w, card_h) = atlas_card_pos(scene_idx, cw);
@@ -12729,12 +12751,12 @@ unsafe fn atlas_render_stub() {
     atlas_capture_snapshot();
 
     let cw = desktop_width() as u32;
-    let ch = (desktop_height() - P.bar_height) as u32;
+    let ch = (desktop_height() - desktop_bar_height()) as u32;
     if cw == 0 || ch == 0 { return; }
 
     // Create Atlas overlay surface (full content area, below SilkBar).
     pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_ATLAS_OVERLAY,
-        (P.bar_height as u64) << 32 | 0u64,
+        (desktop_bar_height() as u64) << 32 | 0u64,
         (ch as u64) << 32 | cw as u64);
     // A3: Track Atlas overlay lifecycle: Allocated -> Mapped.
     set_lifecycle_state(SURFACE_ID_ATLAS_OVERLAY, LifecycleState::Mapped);
@@ -16260,8 +16282,13 @@ fn command_palette_selected_accent() -> u32 {
 ///   1: shared list background (neutral dark slate)
 ///   2: selected row highlight (full-width bright accent)
 ///   3-7: per-row left accent bars for the first five rows only
+fn command_palette_geometry()->sex_pdx::desktop_style::chrome::Rect{
+    chrome_metrics().centered_panel(desktop_width().max(0)as u32,desktop_height().max(0)as u32,COMMAND_PALETTE_BOOT_W,COMMAND_PALETTE_BOOT_H)
+}
 unsafe fn palette_render_list() {
-    let (w,h)=(COMMAND_PALETTE_BOOT_W,COMMAND_PALETTE_BOOT_H);
+    let r=command_palette_geometry();let(w,h)=(r.w,r.h);
+    let m=chrome_metrics();let body=m.body(w,h);
+    let metrics=launcher::ViewMetrics{ui:m.scale(),top:body.y,inset:body.x};
     // Each row borrows its own owned label until text() copies the bytes into
     // the Display outbox. No mutable scratch buffer is shared between rows.
     let mut reserve_labels=[None;COMMAND_LIST.len()];
@@ -16308,13 +16335,13 @@ unsafe fn palette_render_list() {
     let mut head=[0u8;40];let mut head_len=0;
     for &b in b"SEARCH: ".iter().chain(PALETTE_QUERY.as_str().as_bytes()).chain(b"_") {head[head_len]=b;head_len+=1;}
     let none=[launcher::Row{name:"No match",status:"BACKSPACE TO EDIT"}];
-    let v=if PALETTE_QUERY.is_empty() {launcher::text(&rows[..COMMAND_LIST.len()],COMMAND_PALETTE_SELECTED as usize,w,h)}
-        else if matches==0 {launcher::text_with(&none,0,w,h,[core::str::from_utf8(&head[..head_len]).unwrap_or(""),"ESC CLEARS THE SEARCH"])}
-        else {launcher::text_with(&shown[..matches],selected,w,h,[core::str::from_utf8(&head[..head_len]).unwrap_or(""),"ARROWS CHOOSE  ENTER OPEN  ESC CLEAR"])};
+    let v=if PALETTE_QUERY.is_empty() {launcher::text_with_metrics(&rows[..COMMAND_LIST.len()],COMMAND_PALETTE_SELECTED as usize,w,h,launcher::DEFAULT_HEAD,metrics)}
+        else if matches==0 {launcher::text_with_metrics(&none,0,w,h,[core::str::from_utf8(&head[..head_len]).unwrap_or(""),"ESC CLEARS THE SEARCH"],metrics)}
+        else {launcher::text_with_metrics(&shown[..matches],selected,w,h,[core::str::from_utf8(&head[..head_len]).unwrap_or(""),"ARROWS CHOOSE  ENTER OPEN  ESC CLEAR"],metrics)};
     let rows=if PALETTE_QUERY.is_empty() {rows} else {let mut r=shown;if matches==0 {r[0]=none[0];} r};
     for index in 0..8 {pdx_call(SLOT_DISPLAY,0xEF,SURFACE_ID_COMMAND_PALETTE,0,(index as u64)<<56);}
-    pdx_call(SLOT_DISPLAY,0xEF,SURFACE_ID_COMMAND_PALETTE,28u64<<32,
-        (0x0022384Au64<<32)|((v.row_y.saturating_sub(28) as u64)<<16)|w as u64);
+    pdx_call(SLOT_DISPLAY,0xEF,SURFACE_ID_COMMAND_PALETTE,(m.title()as u64)<<32,
+        (0x0022384Au64<<32)|((v.row_y.saturating_sub(m.title()) as u64)<<16)|w as u64);
     pdx_call(SLOT_DISPLAY,0xEF,SURFACE_ID_COMMAND_PALETTE,(v.row_y as u64)<<32,
         (1u64<<56)|(0x000C1420u64<<32)|(((v.rows as u32*v.row_h)as u64)<<16)|w as u64);
     for row in 0..v.rows {
@@ -16330,7 +16357,7 @@ unsafe fn palette_render_list() {
         count:if PALETTE_QUERY.is_empty() {COMMAND_LIST.len()} else {matches.max(1)},first:v.first,rows:v.rows,
         selected:if PALETTE_QUERY.is_empty() {COMMAND_PALETTE_SELECTED as u64} else {selected as u64}});
     sex_pdx::serial_record!("[launcher.text.view] x={} y={} w={} h={} scale={} selected={} first={} rows={}",
-        COMMAND_PALETTE_BOOT_X,COMMAND_PALETTE_BOOT_Y,w,h,v.scale,COMMAND_PALETTE_SELECTED,v.first,v.rows);
+        r.x,r.y,w,h,v.scale,COMMAND_PALETTE_SELECTED,v.first,v.rows);
     for row in 0..v.rows {let index=v.first+row;
         sex_pdx::serial_record!("[launcher.text.row] index={} row={} name={} status={}",index,row,rows[index].name,rows[index].status);
     }
@@ -16342,9 +16369,14 @@ unsafe fn palette_show() {
     if ensure_command_palette_frame().is_none() { return; }
     set_frame_minimized(COMMAND_PALETTE_FRAME_ID,false);
     set_lifecycle_state(SURFACE_ID_COMMAND_PALETTE,LifecycleState::Visible);
+    let r=command_palette_geometry();
+    // This protected keyboard overlay has no app-custody bounds entry.
+    // Keep its descriptive frame bounds aligned with the submitted rectangle.
+    for frame in FRAMES.iter_mut().flatten(){if frame.frame_id==COMMAND_PALETTE_FRAME_ID {
+        frame.normal_x=r.x as i32;frame.normal_y=r.y as i32;frame.normal_w=r.w;frame.normal_h=r.h;
+    }}
     PALETTE_VISIBILITY.set(linen_text_delivery::Operation { opcode:0xEC, surface:SURFACE_ID_COMMAND_PALETTE,
-        packed:((COMMAND_PALETTE_BOOT_Y as u64)<<32)|(COMMAND_PALETTE_BOOT_X as u32 as u64),
-        control:((COMMAND_PALETTE_BOOT_H as u64)<<32)|COMMAND_PALETTE_BOOT_W as u64 });
+        packed:((r.y as u64)<<32)|r.x as u64,control:((r.h as u64)<<32)|r.w as u64 });
 }
 
 /// Toggle the command palette open/closed.
@@ -18222,7 +18254,7 @@ unsafe fn maybe_run_atlas_phase_e1_click_scene_switch_proof() {
                         let cw = desktop_width() as u32;
                         let (cx, cy, card_w, card_h) = atlas_card_pos(si as usize, cw);
                         let hit_x = cx + (card_w as i32 / 2);
-                        let hit_y = P.bar_height + cy + (card_h as i32 / 2);
+                        let hit_y = desktop_bar_height() + cy + (card_h as i32 / 2);
                         // Verify hit-test returns the expected scene.
                         if let Some(hit_si) = atlas_scene_at_point(hit_x, hit_y) {
                             if hit_si == si {
@@ -18450,7 +18482,7 @@ unsafe fn maybe_run_atlas_phase_e3_drag_begin_marker_proof() {
                 let cw = desktop_width() as u32;
                 let (cx, cy, _card_w, _card_h) = atlas_card_pos(active as usize, cw);
                 let hit_x = cx + (ATLAS_CARD_W as i32 / 2);
-                let hit_y = P.bar_height + cy + (ATLAS_CARD_H as i32 / 2);
+                let hit_y = desktop_bar_height() + cy + (ATLAS_CARD_H as i32 / 2);
                 // Find a frame in the active scene for the frame_id field.
                 let mut found_frame: Option<u32> = None;
                 for slot in FRAMES.iter() {
@@ -19664,12 +19696,12 @@ unsafe fn maybe_run_atlas_phase_e4d_real_pointer_drop_proof() {
                 let cw = desktop_width() as u32;
                 let (src_cx, src_cy, src_w, src_h) = atlas_card_pos(source as usize, cw);
                 let src_x = src_cx + (src_w as i32 / 2);
-                let src_y = P.bar_height + src_cy + (src_h as i32 / 2);
+                let src_y = desktop_bar_height() + src_cy + (src_h as i32 / 2);
 
                 // Compute card center for target scene (drop point).
                 let (tgt_cx, tgt_cy, tgt_w, tgt_h) = atlas_card_pos(target as usize, cw);
                 let tgt_x = tgt_cx + (tgt_w as i32 / 2);
-                let tgt_y = P.bar_height + tgt_cy + (tgt_h as i32 / 2);
+                let tgt_y = desktop_bar_height() + tgt_cy + (tgt_h as i32 / 2);
 
                 serial_println!(
                     "[silk.atlas.phase_e4d.setup] frame={} source={} target={} src_x={} src_y={} tgt_x={} tgt_y={} ok=1",
@@ -21000,7 +21032,7 @@ unsafe fn set_frame_zoomed(frame_id: u32, zoomed: bool) {
 }
 
 /// Returns true if the given frame has the top bar enabled (default mode).
-/// When true, hit targets use FRAME_TOP_BAR_HEIGHT_PX for the top chrome band.
+/// When true, hit targets use frame_height() for the top chrome band.
 /// When false, hit targets use the 4px rim model (minimal mode).
 unsafe fn frame_has_top_bar(frame_id: u32) -> bool {
     for f in FRAMES.iter() {
@@ -21026,9 +21058,9 @@ unsafe fn emit_chrome_diagnostics(frame_id: u32, reason: &str) {
     let minimized = frame_is_minimized(frame_id);
     let focused = FOCUSED_SURFACE_ID == surface_id;
     let top_bar = frame_has_top_bar(frame_id);
-    let topbar_h = if top_bar { FRAME_TOP_BAR_HEIGHT_PX } else { FRAME_RIM_PX };
+    let topbar_h = if top_bar { frame_height() } else { frame_rim() };
     let tab_h = FRAME_TAB_STRIP_PX;
-    let toolbar_h = if top_bar { FRAME_TOP_BAR_HEIGHT_PX } else { 0 };
+    let toolbar_h = if top_bar { frame_height() } else { 0 };
     serial_println!("[shell.frame.chrome.size] frame={} sid={} topbar_h={} tab_h={} toolbar_h={} zoomed={} minimized={} focused={} reason={}",
         frame_id, surface_id, topbar_h, tab_h, toolbar_h, zoomed as u8, minimized as u8, focused as u8, reason);
     if let Some((sx, sy, sw, sh)) = get_surface_bounds(surface_id) {
@@ -21066,7 +21098,7 @@ unsafe fn native_child_geometry(frame:u64,x:i32,y:i32,w:u32,h:u32) {
             SPINDLE_VIEWS[index].queue(e.target,e.task,w,h);
         }
     }
-    if let Some((index,view))=app_catalog::document_view_frame(frame){if let Some(e)=APP_CUSTODY.iter().flatten().find(|e|!e.dead&&!e.close_pending&&e.owns_surface(frame)){let(vw,vh)=if view.shell_surface.is_some(){(w.saturating_sub(16),h.saturating_sub(44))}else{(w,h)};DOCUMENT_VIEWS[index].queue(e.target,e.task,vw,vh);}}
+    if let Some((index,view))=app_catalog::document_view_frame(frame){if let Some(e)=APP_CUSTODY.iter().flatten().find(|e|!e.dead&&!e.close_pending&&e.owns_surface(frame)){let(vw,vh)=if view.shell_surface.is_some(){{let b=chrome_metrics().body(w,h);(b.w,b.h)}}else{(w,h)};DOCUMENT_VIEWS[index].queue(e.target,e.task,vw,vh);}}
     for child in desktop_content::children(frame,x,y,w,h).iter().flatten() {
         if child.w>0 && child.h>0 {pdx_call(SLOT_DISPLAY,0xEC,child.sid,
             ((child.y as u32 as u64)<<32)|(child.x as u32 as u64),
@@ -21349,36 +21381,23 @@ unsafe fn frame_light_at(frame_id: u32, x: i32, y: i32) -> u32 {
             let sz = FRAME_TOP_BAR_LIGHT_SIZE_PX;
             serial_println!("[shell.frame.light.hitbox] frame={} sx={} sy={} close=({},{})-({},{}) min=({},{})-({},{}) zoom=({},{})-({},{})",
                 frame_id, sx, sy,
-                sx + gap, sy, sx + gap + sz, sy + FRAME_TOP_BAR_HEIGHT_PX,
-                sx + gap + sz + gap, sy, sx + gap + sz + gap + sz, sy + FRAME_TOP_BAR_HEIGHT_PX,
-                sx + gap + sz + gap + sz + gap, sy, sx + gap + sz + gap + sz + gap + sz, sy + FRAME_TOP_BAR_HEIGHT_PX);
+                sx + gap, sy, sx + gap + sz, sy + frame_height(),
+                sx + gap + sz + gap, sy, sx + gap + sz + gap + sz, sy + frame_height(),
+                sx + gap + sz + gap + sz + gap, sy, sx + gap + sz + gap + sz + gap + sz, sy + frame_height());
         }
     }
 
     // Dispatch on chrome mode: top bar (default) vs minimal (4px rim).
     if frame_has_top_bar(frame_id) {
-        // Default mode: lights in top bar band.
-        // Expanded hitboxes for usability (20px each vs visual 10px).
-        // Hitboxes are contiguous: close 0..20, minimize 20..40, zoom 40..60.
-        let band_bottom = sy + FRAME_TOP_BAR_HEIGHT_PX;
-        if y < sy || y >= band_bottom {
-            return FRAME_LIGHT_NONE;
-        }
-        let lx = x - sx;
-        const LIGHT_HIT_W: i32 = 20;
-        if lx >= 0 && lx < LIGHT_HIT_W {
-            return FRAME_LIGHT_CLOSE;
-        }
-        if lx >= LIGHT_HIT_W && lx < LIGHT_HIT_W * 2 {
-            return FRAME_LIGHT_MINIMIZE;
-        }
-        if lx >= LIGHT_HIT_W * 2 && lx < LIGHT_HIT_W * 3 {
-            return FRAME_LIGHT_ZOOM;
+        let (lx,ly)=(x-sx,y-sy);
+        if lx<0||ly<0||lx>=_sw as i32||ly>=_sh as i32{return FRAME_LIGHT_NONE;}
+        for index in 0..3 {
+            if chrome_metrics().control(index).unwrap().contains(lx as u32,ly as u32){return index+1;}
         }
         FRAME_LIGHT_NONE
     } else {
         // Minimal mode: lights in 4px rim band (existing behavior).
-        let top_rim_bottom = sy + FRAME_RIM_PX;
+        let top_rim_bottom = sy + frame_rim();
         if y < sy || y >= top_rim_bottom {
             return FRAME_LIGHT_NONE;
         }
@@ -21456,7 +21475,7 @@ unsafe fn synthetic_window_drag_target() -> Option<(u32, u64, i32, i32, u32, u32
     }
     // Use left rim below topbar to avoid frame lights and tab-strip.
     let x0 = (sx + 1).clamp(sx, sx + sw as i32 - 1);
-    let y0 = (sy + FRAME_TOP_BAR_HEIGHT_PX + 8).clamp(sy, sy + sh as i32 - 1);
+    let y0 = (sy + frame_height() + 8).clamp(sy, sy + sh as i32 - 1);
     // Move within bounds.
     let x1 = (x0 + 120).clamp(sx, sx + sw as i32 - 1);
     let y1 = (y0 + 20).clamp(sy, sy + sh as i32 - 1);
@@ -21559,7 +21578,7 @@ unsafe fn maybe_run_silk_de_integrated_interaction_proof() {
         }
     };
     let drag_x = sx + sw as i32 / 2;
-    let drag_y = sy + FRAME_TOP_BAR_HEIGHT_PX + 20;
+    let drag_y = sy + frame_height() + 20;
     handle_hid_event(EV_ABS, abs_screen_to_raw(drag_x, desktop_width()), abs_screen_to_raw(drag_y, desktop_height()));
     handle_hid_event(EV_BTN, 1, 1); // pointer.recv + drag.begin (shell surface content area)
     handle_hid_event(EV_BTN, 1, 0); // drag.end + snap.none (interior position, not near edge)
@@ -22403,9 +22422,9 @@ unsafe fn synthetic_prove_frame_light_zoom_click(frame_id: u32) -> bool {
     let hit_x0 = sx + 40;
     let hit_y0 = sy;
     let hit_x1 = sx + 60;
-    let hit_y1 = sy + FRAME_TOP_BAR_HEIGHT_PX; // 28
+    let hit_y1 = sy + frame_height(); // 28
     let px = sx + 50;
-    let py = sy + (FRAME_TOP_BAR_HEIGHT_PX / 2); // 14
+    let py = sy + (frame_height() / 2); // 14
 
     // Emit explicit hitbox and begin markers (owned by this helper).
     serial_println!("[shell.frame.light.hitbox] frame={} light=3 x0={} y0={} x1={} y1={}", frame_id, hit_x0, hit_y0, hit_x1, hit_y1);
@@ -22580,7 +22599,7 @@ unsafe fn frame_tab_at(frame_id: u32, x: i32, y: i32) -> Option<u32> {
 
     // Determine chrome band height and light exclusion zone based on mode.
     let (band_height, exclusion) = if frame_has_top_bar(frame_id) {
-        (FRAME_TOP_BAR_HEIGHT_PX, FRAME_TOP_BAR_LIGHT_EXCLUSION_PX)
+        (frame_height(), frame_controls_end())
     } else {
         (FRAME_TAB_STRIP_PX, FRAME_TAB_LIGHT_EXCLUSION_PX)
     };
@@ -22597,7 +22616,7 @@ unsafe fn frame_tab_at(frame_id: u32, x: i32, y: i32) -> Option<u32> {
     }
 
     // Must not extend into the right rim edge band.
-    let right_rim_start = sx + sw as i32 - FRAME_RIM_PX;
+    let right_rim_start = sx + sw as i32 - frame_rim();
     if x >= right_rim_start {
         return None;
     }
@@ -22856,7 +22875,7 @@ unsafe fn update_frame_hover_at(x: i32, y: i32) -> bool {
     }
 
     let new_light: u32;
-    let (new_frame_id, new_kind) = if y < P.bar_height {
+    let (new_frame_id, new_kind) = if y < desktop_bar_height() {
         // SilkBar area: no frame hover, no light hover.
         new_light = FRAME_LIGHT_NONE;
         (0u32, HOVER_NONE)
@@ -23451,7 +23470,7 @@ unsafe fn try_snap_on_drag_release(surface_id: u64, px: i32, py: i32) -> bool {
     }
     // Top snap needs the pointer pushed up into the bar: a title bar dragged sideways
     // stays in the top band and must not maximize its window.
-    let near_top   = py < P.bar_height.saturating_sub(SNAP_TOP_PX / 2).max(1);
+    let near_top   = py < desktop_bar_height().saturating_sub(SNAP_TOP_PX / 2).max(1);
     let near_left  = px < SNAP_EDGE_PX;
     let near_right = px >= desktop_width() - SNAP_EDGE_PX;
     if near_top {
@@ -23466,8 +23485,8 @@ unsafe fn try_snap_on_drag_release(surface_id: u64, px: i32, py: i32) -> bool {
     if near_left {
         serial_println!("[silk.snap.hit.left] sid={} frame={} x={} y={}", surface_id, frame_id, px, py);
         let cw = desktop_width() as u32;
-        let ch = (desktop_height() - P.bar_height) as u32;
-        let (nx, ny, nw, nh) = (0i32, P.bar_height, cw / 2, ch);
+        let ch = (desktop_height() - desktop_bar_height()) as u32;
+        let (nx, ny, nw, nh) = (0i32, desktop_bar_height(), cw / 2, ch);
         pdx_call(SLOT_DISPLAY, 0xEC, surface_id,
             (ny as u64) << 32 | nx as u64,
             (nh as u64) << 32 | nw as u64);
@@ -23478,9 +23497,9 @@ unsafe fn try_snap_on_drag_release(surface_id: u64, px: i32, py: i32) -> bool {
     if near_right {
         serial_println!("[silk.snap.hit.right] sid={} frame={} x={} y={}", surface_id, frame_id, px, py);
         let cw = desktop_width() as u32;
-        let ch = (desktop_height() - P.bar_height) as u32;
+        let ch = (desktop_height() - desktop_bar_height()) as u32;
         let half_w = cw / 2;
-        let (nx, ny, nw, nh) = (half_w as i32, P.bar_height, cw - half_w, ch);
+        let (nx, ny, nw, nh) = (half_w as i32, desktop_bar_height(), cw - half_w, ch);
         pdx_call(SLOT_DISPLAY, 0xEC, surface_id,
             (ny as u64) << 32 | nx as u64,
             (nh as u64) << 32 | nw as u64);
@@ -23614,7 +23633,7 @@ unsafe fn hit_test_surface_chrome(x: i32, y: i32, sid: u64) -> Option<HitTarget>
         if CHROME_BOUNDS_BUDGET > 0 {
             CHROME_BOUNDS_BUDGET -= 1;
             serial_println!("[shell.frame.chrome.bounds] sid={} x={} y={} w={} h={} topbar_h={}",
-                sid, sx, sy, sw, sh, FRAME_TOP_BAR_HEIGHT_PX);
+                sid, sx, sy, sw, sh, frame_height());
         }
     }
     // Find the frame that owns this surface — no chrome for unowned surfaces (linen, standalone).
@@ -23628,8 +23647,8 @@ unsafe fn hit_test_surface_chrome(x: i32, y: i32, sid: u64) -> Option<HitTarget>
 
     // Determine chrome mode: top bar (default) vs minimal (4px rim).
     let top_bar = frame_has_top_bar(frame_id);
-    let band_height = if top_bar { FRAME_TOP_BAR_HEIGHT_PX } else { FRAME_RIM_PX };
-    let tab_exclusion = if top_bar { FRAME_TOP_BAR_LIGHT_EXCLUSION_PX } else { FRAME_TAB_LIGHT_EXCLUSION_PX };
+    let band_height = if top_bar { frame_height() } else { frame_rim() };
+    let tab_exclusion = if top_bar { frame_controls_end() } else { FRAME_TAB_LIGHT_EXCLUSION_PX };
     unsafe {
         static mut DRAG_BOUNDS_BUDGET: u32 = 24;
         let b = &mut DRAG_BOUNDS_BUDGET;
@@ -23653,9 +23672,9 @@ unsafe fn hit_test_surface_chrome(x: i32, y: i32, sid: u64) -> Option<HitTarget>
     // The tab strip excludes the Frame Lights zone and the right rim band.
     // Lights are handled separately with higher priority in the click handler.
     if FRAME_TAB_STRIP_PX > 0 || top_bar {
-        let strip_bot = sy + if top_bar { FRAME_TOP_BAR_HEIGHT_PX } else { FRAME_TAB_STRIP_PX };
+        let strip_bot = sy + if top_bar { frame_height() } else { FRAME_TAB_STRIP_PX };
         let tab_strip_start = sx + tab_exclusion;
-        let right_rim_start = sx + sw as i32 - FRAME_RIM_PX;
+        let right_rim_start = sx + sw as i32 - frame_rim();
         if y >= sy && y < strip_bot
             && x >= tab_strip_start
             && x < right_rim_start
@@ -23685,10 +23704,10 @@ unsafe fn hit_test_surface_chrome(x: i32, y: i32, sid: u64) -> Option<HitTarget>
     }
     // Rim (drag band): top bar area is the drag handle after resize zones are intercepted.
     let in_rim =
-        (x >= sx && x < sx + FRAME_RIM_PX)
-        || (x > right - FRAME_RIM_PX && x <= right)
+        (x >= sx && x < sx + frame_rim())
+        || (x > right - frame_rim() && x <= right)
         || (y >= sy && y < sy + band_height)
-        || (y > bottom - FRAME_RIM_PX && y <= bottom);
+        || (y > bottom - frame_rim() && y <= bottom);
     if in_rim {
         return Some(HitTarget::FrameChrome { frame_id, kind: FRAME_CHROME_RIM });
     }
@@ -23853,7 +23872,7 @@ unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTar
     if buttons_val&1!=0{if let HitTarget::Surface(frame)=target{
         if let Some((_,row))=app_catalog::document_view_frame(frame).filter(|(_,row)|row.app==app_catalog::App::Quil){
             if let Some((x,y,w,h))=get_surface_bounds(frame){
-                let(cx,cy,vw,vh)=if row.shell_surface.is_some(){(x+8,y+36,w.saturating_sub(16),h.saturating_sub(44))}else{(x,y,w,h)};
+                let(cx,cy,vw,vh)=if row.shell_surface.is_some(){{let b=chrome_metrics().body(w,h);(x+b.x as i32,y+b.y as i32,b.w,b.h)}}else{(x,y,w,h)};
                 if let Some(action)=sex_pdx::document_view::Layout::new(row.target,vw,vh).hit(px.saturating_sub(cx)as u32,py.saturating_sub(cy)as u32){
                     if let Some(sequence)=DOCUMENT_POINTER_SEQUENCE.checked_add(1){DOCUMENT_POINTER_SEQUENCE=sequence;if DOCUMENT_POINTER.is_none(){DOCUMENT_POINTER=Some((row.route_slot,row.target,action,sequence));}let _=try_set_focus(frame);return(HitTarget::Surface(frame),true);}
                 }
@@ -24229,19 +24248,19 @@ unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTar
             if frame_accepts_input(frame_id) {
                 if let Some((sx, sy, sw, sh)) = get_surface_bounds(sid) {
                     let top_bar = frame_has_top_bar(frame_id);
-                    let band_height = if top_bar { FRAME_TOP_BAR_HEIGHT_PX } else { FRAME_RIM_PX };
-                    let tab_exclusion = if top_bar { FRAME_TOP_BAR_LIGHT_EXCLUSION_PX } else { FRAME_TAB_LIGHT_EXCLUSION_PX };
+                    let band_height = if top_bar { frame_height() } else { frame_rim() };
+                    let tab_exclusion = if top_bar { frame_controls_end() } else { FRAME_TAB_LIGHT_EXCLUSION_PX };
                     let right = sx + sw as i32 - 1;
                     let bottom = sy + sh as i32 - 1;
                     let in_rim =
-                        (px >= sx && px < sx + FRAME_RIM_PX)
-                        || (px > right - FRAME_RIM_PX && px <= right)
+                        (px >= sx && px < sx + frame_rim())
+                        || (px > right - frame_rim() && px <= right)
                         || (py >= sy && py < sy + band_height)
-                        || (py > bottom - FRAME_RIM_PX && py <= bottom);
+                        || (py > bottom - frame_rim() && py <= bottom);
                     let in_tab_strip = if FRAME_TAB_STRIP_PX > 0 || top_bar {
-                        let strip_bot = sy + if top_bar { FRAME_TOP_BAR_HEIGHT_PX } else { FRAME_TAB_STRIP_PX };
+                        let strip_bot = sy + if top_bar { frame_height() } else { FRAME_TAB_STRIP_PX };
                         let tab_strip_start = sx + tab_exclusion;
-                        let right_rim_start = sx + sw as i32 - FRAME_RIM_PX;
+                        let right_rim_start = sx + sw as i32 - frame_rim();
                         py >= sy && py < strip_bot && px >= tab_strip_start && px < right_rim_start
                             && frame_tab_at(frame_id, px, py).is_some()
                     } else {
@@ -24419,15 +24438,13 @@ unsafe fn toggle_scene_settings_panel() {
 /// Uses hit_test_action() from silkbar-model to determine what was clicked,
 /// then dispatches the action (workspace switch, launcher, etc.).
 fn handle_silkbar_click(px: i32, py: i32) -> bool {
-    if py < 0 || py >= 50 || px < 0 {
+    if py < 0 || py >= desktop_bar_height() || px < 0 {
         return false;
     }
     let ux = px as usize;
     let uy = py as usize;
-    if uy < PANEL_Y || uy >= PANEL_Y + PANEL_H || ux < PANEL_X || ux >= PANEL_X + PANEL_W {
-        return false;
-    }
-    let bar=silkbar_model::for_desktop_width(desktop_width()as usize).unwrap_or(DEFAULT_SILK_BAR);
+    let m=chrome_metrics();let mut bar=DEFAULT_SILK_BAR;
+    if !silkbar_model::reflow_chrome(&mut bar,desktop_width()as usize,m.bar()as usize,m.px(sex_pdx::desktop_style::chrome::TARGET)as usize){return false;}
     let action = hit_test_action(&bar, ux, uy);
     match action {
         Action::None => false,
@@ -24462,6 +24479,10 @@ fn handle_silkbar_click(px: i32, py: i32) -> bool {
         Action::OpenClock => {
             sex_pdx::serial_record!("[shell.silkbar.click] target=clock x={} y={}", ux, uy);
             unsafe { toggle_os_panel(&mut CLOCK_ACTIVE, PanelKind::Clock, SURFACE_ID_CLOCK, "clock", 1000, 55, 240, 300); }
+            true
+        }
+        Action::ToggleModule(Module::Workspaces(_)) => {
+            unsafe{atlas_toggle();}
             true
         }
         Action::ToggleModule(_module) => {
@@ -24731,7 +24752,7 @@ pub extern "C" fn _start() -> ! {
     let geometry=sex_pdx::display_boot::geometry().expect("BOOT_SHELL_DISPLAY_GEOMETRY");
     DESKTOP_WIDTH.store(geometry.width,core::sync::atomic::Ordering::Release);DESKTOP_HEIGHT.store(geometry.height,core::sync::atomic::Ordering::Release);
     let physical=sex_pdx::display_boot::physical().expect("BOOT_SHELL_DISPLAY_SCALE");
-    sex_pdx::desktop_style::set_ui_scale(physical.scale);
+    sex_pdx::desktop_style::set_ui_scale(sex_pdx::desktop_style::chrome::fit_scale(desktop_width()as u32,physical.scale,silkbar_model::MIN_CHROME_WIDTH));
     unsafe{DISPLAY_SCALE=sex_pdx::desktop_style::chrome::ScaleClient::for_incarnation(sex_pdx::crash_log::restarts());}
 
     serial_println!("[silkshell.init.start]");
@@ -24895,7 +24916,7 @@ pub extern "C" fn _start() -> ! {
             FRAME_TOPBAR_MODEL_BUDGET -= 1;
             let enabled = frame_has_top_bar(1) as u32;
             serial_println!("[shell.frame.topbar.model] frame=1 enabled={} height={}",
-                enabled, FRAME_TOP_BAR_HEIGHT_PX);
+                enabled, frame_height());
         }
     }
 
@@ -24922,7 +24943,7 @@ pub extern "C" fn _start() -> ! {
 
     // ── UI Readiness: deterministic boot content layout (below SilkBar) ──
     let content_x: i32 = 0;
-    let content_y: i32 = P.bar_height.max(0);
+    let content_y: i32 = desktop_bar_height().max(0);
     let content_w: u32 = (desktop_width().max(0)) as u32;
     let content_h: u32 = (desktop_height() - content_y).max(0) as u32;
     if content_w == 0 || content_h == 0 {
@@ -24946,8 +24967,8 @@ pub extern "C" fn _start() -> ! {
     // Dynamic non-overlapping tiled demo layout for boot:
     // Quil = left/main tile, Linen = right/secondary tile.
     let gutter: u32 = 16;
-    let min_w = P.min_width as u32;
-    let min_h = P.min_height as u32;
+    let min_w = chrome_metrics().px(P.min_width) as u32;
+    let min_h = chrome_metrics().px(P.min_height) as u32;
     let tile_h: u32 = content_h.max(min_h);
     let main_w_target = content_w.saturating_mul(72) / 100;
     let side_w_target = content_w.saturating_sub(main_w_target).saturating_sub(gutter);
@@ -26032,6 +26053,7 @@ pub extern "C" fn _start() -> ! {
                     let scancode = msg.arg0 as u8;
                     let value = msg.arg1; // 1=pressed, 0=released
                     let event_class = msg.arg2; // EV_KEY, EV_REL, EV_ABS, EV_BTN
+                    if unsafe{DISPLAY_SCALE.pending()}&&matches!(event_class,EV_ABS|EV_REL|EV_BTN|EV_WHEEL){continue;}
 
                     if event_class==EV_WHEEL {unsafe{browser_wheel_input(msg.arg0,msg.arg1);}continue;}
 

@@ -1,0 +1,19 @@
+{
+  "ok": true,
+  "predecessor": 9,
+  "successor": 16,
+  "surface": 301,
+  "saved": [
+    "167",
+    "0x3eb82a5d41adcd53",
+    "2"
+  ],
+  "loaded": [
+    "167",
+    "0x3eb82a5d41adcd53",
+    "2"
+  ],
+  "typed_status": "quil-object-v1 * READY",
+  "pixel_errors": [],
+  "scope": "real BOOT activation, native presentation, document identity, input glyphs, successor private cleanup"
+}

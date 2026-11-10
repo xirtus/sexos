@@ -7,6 +7,8 @@ def verify(text,ppm,font,require_echo=True,target=17,require_all_ink=True,requir
     if re.search(rf'\[spindle.view.text\] target={target} ',text):
         from check_spindle_viewport_pixels import verify as viewport_verify
         return viewport_verify(text,ppm,font,target,require_prompt,require_echo,require_all_ink)
+    if '[display.chrome.metrics]'in text:
+        return ['current Spindle requires explicit authenticated viewport text']
     try:
         sids={17:[302,303,304,305],12:[154,160,161,162]}[target]
         a,b,c,d=sids

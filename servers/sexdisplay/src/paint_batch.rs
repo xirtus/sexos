@@ -21,11 +21,11 @@ impl Plan{
     /// Coverage only, not publication or authority. Callers must first clip
     /// required damage to the captured frame geometry. Endpoint comparisons
     /// avoid addition/subtraction overflow, even for adversarial coordinates.
-    pub const fn covers_body(&self,required:Rect)->bool{
-        if required.x>=required.right||required.y<51||required.y>=required.bottom{return false;}
+    pub fn covers_body(&self,required:Rect,bar:usize)->bool{
+        if required.x>=required.right||required.y<bar||required.y>=required.bottom{return false;}
         match self.content{
             Content::Full|Content::Area=>true,
-            Content::Damage(actual)=>actual.x<actual.right&&actual.y>=51&&actual.y<actual.bottom
+            Content::Damage(actual)=>actual.x<actual.right&&actual.y>=bar&&actual.y<actual.bottom
                 &&actual.x<=required.x&&actual.y<=required.y
                 &&actual.right>=required.right&&actual.bottom>=required.bottom,
             Content::None|Content::Settle|Content::Cursor=>false,
@@ -55,11 +55,11 @@ impl Dirty{
             self.width=width;self.height=height;
         }
     }
-    pub fn request_damage(&mut self,rect:Rect,width:usize,height:usize){
+    pub fn request_damage(&mut self,rect:Rect,width:usize,height:usize,bar:usize){
         // Ordered endpoints allow subtraction without wrap. The actual shared
-        // Damage clips saturating extents to the framebuffer and below row50.
+        // Damage clips saturating extents to the framebuffer and below the captured bar boundary.
         if rect.x>=rect.right||rect.y>=rect.bottom{return;}
-        let mut damage=Damage::new();
+        let mut damage=Damage::new(bar);
         damage.add((rect.x,rect.y,rect.right-rect.x,rect.bottom-rect.y),width,height);
         let Some(rect)=damage.rect()else{return;};
         self.geometry(width,height);

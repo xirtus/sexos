@@ -7,7 +7,7 @@ python3 - "$CIVIL_ROOT" "$CIVIL_TEMP" <<'PY'
 from pathlib import Path
 import re,sys
 root=Path(sys.argv[1]);out=Path(sys.argv[2]);source=(root/'servers/sexdisplay/src/main.rs').read_text();parts=[]
-for name in ['module_rect','ascii_glyph_index','civil_clock_date','civil_clock_lines','panel_caption_at','coverage_blend','civil_clock_fg_at','civil_clock_drawn','clock_fg_at','handle_civil_clock_update','clock_canon_apply_to_bar']:
+for name in ['chrome_metrics','ui_label_at_scaled','civil_clock_caption','civil_clock_fg_at_scaled','clock_fg_at_scaled','module_rect','ascii_glyph_index','civil_clock_date','civil_clock_lines','panel_caption_at','coverage_blend','civil_clock_fg_at','civil_clock_drawn','clock_fg_at','handle_civil_clock_update','clock_canon_apply_to_bar']:
     values=re.findall(r'^fn '+name+r'\b.*?^\}',source,re.M|re.S);assert len(values)==1,name;parts+=values
 for name in ['FONT','FONT_ASCII_5X7']:
     values=re.findall(r'^const '+name+r':.*?^\];',source,re.M|re.S);assert len(values)==1,name;parts+=values
@@ -23,18 +23,18 @@ assert 'if bar.civil_enabled && msg.arg0 as u32==UpdateKind::SetClock as u32{con
 assert 'if !bar.civil_enabled && !clock_from_silkbar {'in source
 assert 'bar.civil_enabled=option_env!("SEXOS_LEGACY_DEMO_CLOCK").is_none();'in source
 assert 'bar.civil_clock.health(raw_ticks)'in source
-composer=re.findall(r'^fn top_strip_pixel\b.*?^\}',source,re.M|re.S);assert len(composer)==1 and 'clock_fg_at(x, y, bar, lines, background)'in composer[0]
+composer=re.findall(r'^fn top_strip_pixel\b.*?^\}',source,re.M|re.S);assert len(composer)==1 and 'clock_fg_at_scaled(x,y,bar,lines,background,scene.metrics.scale())'in composer[0]
 # Share the strict source-shape validator with the frozen pixel oracle.
 sys.path.insert(0,str(root/'scripts'))
-from silkbar_clock_gate import _date_render_shape
-_date_render_shape(source)
+from silkbar_clock_gate import _slim_render_shape
+_slim_render_shape(source)
 prepared='fn render_prepared('in source
 for name in [('raster_full'if prepared else'render'),('raster_strip'if prepared else'redraw_top_strip')]:
     actual=re.findall(r'^fn '+name+r'\b.*?^\}',source,re.M|re.S);assert len(actual)==1
-    assert actual[0].count('civil_clock_lines(&bar.civil_clock)')==1
-    assert actual[0].index('let clock_lines=civil_clock_lines(')<actual[0].index('top_strip_pixel(')
-    pixel_loop='for y in 0..h.min(51) {'if name=='raster_full'else'for y in 0..h {'if name=='render'else'for y in 0..51 {'
-    assert actual[0].index('let clock_lines=civil_clock_lines(')<actual[0].index(pixel_loop)
+    assert actual[0].count('civil_clock_caption(&bar.civil_clock)')==1
+    assert actual[0].index('let clock_lines=civil_clock_caption(')<actual[0].index('top_strip_pixel(')
+    pixel_loop='for y in 0..h.min((scene.metrics.bar()as usize)) {'if name=='raster_full'else'for y in 0..(scene.metrics.bar()as usize).min(h) {'
+    assert actual[0].index('let clock_lines=civil_clock_caption(')<actual[0].index(pixel_loop)
     if not prepared:
         assert actual[0].index('core::ptr::write_volatile(')<actual[0].index('civil_clock_drawn(bar,w,h,"'+('full'if name=='render'else'strip')+'")')
         assert actual[0].index('draw_launcher_panel(')<actual[0].index('civil_clock_drawn(bar,w,h,"'+('full'if name=='render'else'strip')+'")')

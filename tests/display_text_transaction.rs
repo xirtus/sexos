@@ -481,8 +481,8 @@ fn production_dispatch_keeps_selection_owned_atomic_damaged_and_terminally_erase
     before(apply,"(slot.selection_start,slot.selection_end)=pending.selection()","recompute_text_lines(slot)");
     let commit=section(source,"fn commit_published_text(","fn finish_display_transactions(");
     before(commit,"published.text_projections.iter().copied().enumerate()","if let scene::TextCoverage::Body(required)=projection.coverage");
-    before(commit,"if let scene::TextCoverage::Body(required)=projection.coverage","if !published.plan.covers_body(required){continue;}");
-    before(commit,"if !published.plan.covers_body(required){continue;}","let context=projection.context;");
+    before(commit,"if let scene::TextCoverage::Body(required)=projection.coverage","if !published.plan.covers_body(required,published.bar_height){continue;}");
+    before(commit,"if !published.plan.covers_body(required,published.bar_height){continue;}","let context=projection.context;");
     before(commit,"let context=projection.context;","stage.pending()");
     before(commit,"stage.pending()","if pending.context()!=context{continue;}");
     before(commit,"if pending.context()!=context{continue;}","if !apply_pending_text(slot,&pending){continue;}");
@@ -498,7 +498,7 @@ fn production_dispatch_keeps_selection_owned_atomic_damaged_and_terminally_erase
     let render=section(source,"fn render_prepared(","fn render(fb:");
     before(render,"SceneLease::capture(w,h,bar)","let scene=lease.view()");
     before(render,"preparation.commit(|frame|publish_frame(fb,w,h,frame))","let text_projections=scene.text_projections;");
-    before(render,"let text_projections=scene.text_projections;","Some(PublishedFrame{plan,present_bits,canon_ss,text_projections})");
+    before(render,"let text_projections=scene.text_projections;","Some(PublishedFrame{plan,bar_height:scene.metrics.bar()as usize,present_bits,canon_ss,text_projections})");
     let finish=section(source,"fn finish_display_transactions(","pub extern \"C\" fn _start()");
     before(finish,"(*core::ptr::addr_of!(RENDER_SCENE)).is_valid()","if let Some(published)=published{");
     before(finish,"if let Some(published)=published{","commit_published_text(published)");

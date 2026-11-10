@@ -5,7 +5,7 @@ button click. Each state must match, pixel for pixel, what the host renders (sex
 import argparse,http.server,os,re,shutil,subprocess,threading,time
 from pathlib import Path
 from PIL import Image
-from browser_gate_viewport import full_viewport
+from browser_gate_viewport import full_viewport, content_rect
 ROOT=Path(__file__).resolve().parents[1]
 SITE=ROOT/'scripts/web_site'
 W,H=410,330
@@ -43,8 +43,8 @@ def main():
    time.sleep(.06)
  def compare(name,ref,tile):
   shot=a.out/f'{name}.ppm';q.cmd('screendump',{'filename':str(shot)});time.sleep(.5)
-  x,y,w,h=tile;img=Image.open(shot).convert('RGB');bx,by=x+8,y+36
-  vw,vh=min(W,w-16),min(H,h-44)
+  x,y,w,h=tile;img=Image.open(shot).convert('RGB');bx,by,bw,bh=content_rect(t(),tile)
+  vw,vh=min(W,bw),min(H,bh)
   checked=bad=worst=0
   for py in range(0,vh,3):
    for px in range(0,vw,5):

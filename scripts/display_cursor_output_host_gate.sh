@@ -34,7 +34,7 @@ guards(source)
 batch=function('raster_batch')
 launcher=re.search(r'\s*draw_launcher_panel\([^;]+;',batch)[0];cursor=re.search(r'\s*draw_cursor_z_top\([^;]+;',batch)[0]
 wrong=batch.replace(launcher,'OVERLAY_SENTINEL',1).replace(cursor,launcher,1).replace('OVERLAY_SENTINEL',cursor,1)
-restore='restore_cursor_under(fb,w,h,total);'
+restore='restore_cursor_under(fb,w,h,total,scene.metrics);'
 assert batch.count(restore)==1
 strip=function('raster_strip');extra=strip.replace('    true\n}',cursor+'\n    true\n}',1);assert extra!=strip
 controls=[source.replace(batch,wrong,1),source.replace(batch,batch.replace(restore,'',1),1),source.replace(batch,batch.replace(cursor,cursor+cursor,1),1),source.replace(strip,extra,1)]
@@ -52,7 +52,7 @@ a=source.index('#[derive(Clone,Copy)]\nstruct PreparedCursor');b=source.index('\
 for name in ['INPUT_TRACE_LAST_SEQ','INPUT_TRACE_LAST_SHELL_TICK']:parts.append(re.search(r'^static mut '+name+r':[^\n]+',source,re.M)[0])
 for name in ['SURFACE_CHROME_TOP_BAR']:
  match=re.search(r'^const '+name+r':[^;]+;',source,re.M);assert match;parts.append(match[0])
-for name in ['scene_bar_blur_rows','surface_text_scale','recompute_text_lines','apply_pending_text','text_surface_damage','text_projection_requirement','changed_text_rows','bg','vertical_gradient_xrgb','lerp_color_xrgb','draw_cursor_z_top','restore_cursor_under','scrub_cursor_under']:parts.append(function(name))
+for name in ['chrome_metrics','frame_height','frame_rim','surface_text_scale_for','scene_bar_blur_rows','surface_text_scale','recompute_text_lines','apply_pending_text','text_surface_damage','text_projection_requirement','changed_text_rows','bg','vertical_gradient_xrgb','lerp_color_xrgb','draw_cursor_z_top','restore_cursor_under','scrub_cursor_under']:parts.append(function(name))
 actual='\n'.join(parts);module=out/'actual.rs';module.write_text(actual)
 rlib=out/'libsilkbar_model.rlib';subprocess.run(['rustc','--edition=2021','--crate-type=rlib','--crate-name','silkbar_model',str(root/'crates/silkbar-model/src/lib.rs'),'-o',str(rlib)],check=True)
 def run(name,code,exact=None):

@@ -161,7 +161,7 @@ HELD_INPUT_FUNCTIONS = {
  'focused_clipboard_participant': 'fdc67ea118bfc1237104f056139cb5de45416b595337c18706c935a6faf32a84',
  'clipboard_live': '1a801645af4f7f94acdc55fec353ffe663a01a12968fbddd403686a63648f275',
  'app_input_poll': '74c04ba18e88e452c29ac3efae76891af173521e5b8bf0b445557d7935e9eea7',
- 'browser_wheel_destination': 'd4a63ab356feebcd3c44b160304ee9e2e6c9e96ddfb2987561a161103179df4d',
+ 'browser_wheel_destination': '66ccbc15c66cbe2bdf13ac916a00e97382c1afd0ae56b222eeb325c2b37fa35f',
  'frame_accepts_input': '6fdf754c25b68e8f13f6d3c71c9ead28b4768d8e5948407e2c9fd638c6e9bd08',
 }
 HELD_INPUT_DEPENDENCIES = ('crates/sex-pdx/src/app_catalog.rs',

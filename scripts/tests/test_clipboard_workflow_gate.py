@@ -216,10 +216,10 @@ class ClipboardWorkflow(unittest.TestCase):
   for bad in(t.replace(marker,''),t.replace('new=201 live=1 shortcut=alt_tab','new=201 live=0 shortcut=alt_tab'),t.replace('shortcut=alt_tab','shortcut=tab'),marker+t.replace(marker,'')):
    with self.assertRaises(ValueError):gate.clipboard_join(bad)
 
- def test_canonical_desktop_boundary_accepts_y50_and_rejects_y49(self):
-  self.assertEqual(self.c['desktop_top'],50);f=self.frame();image=self.screen(f,base_y=50)
-  good=self.check(f,image,trace=self.trace(f,y=50));self.assertTrue(good['ok'],good)
-  bad=self.check(f,self.screen(f,base_y=49),trace=self.trace(f,y=49));self.assertFalse(bad['ok']);self.assertIn('outside framebuffer',bad['errors'][0])
+ def test_canonical_desktop_boundary_accepts_y28_and_rejects_y27(self):
+  self.assertEqual(self.c['desktop_top'],28);f=self.frame();image=self.screen(f,base_y=28)
+  good=self.check(f,image,trace=self.trace(f,y=28));self.assertTrue(good['ok'],good)
+  bad=self.check(f,self.screen(f,base_y=27),trace=self.trace(f,y=27));self.assertFalse(bad['ok']);self.assertIn('outside framebuffer',bad['errors'][0])
  def test_zoom_barrier_requires_strictly_new_geometry_layout_position_and_applied(self):
   f=self.frame();old=self.trace(f);action='[shell.window.action] action=ZoomToggle frame=13 sid=300 ok=1\n'
   fresh=self.trace(f).replace('sequence=1','sequence=2').replace('viewport=1','viewport=2')

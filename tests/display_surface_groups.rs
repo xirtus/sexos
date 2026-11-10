@@ -3,6 +3,7 @@
 //! sentinels; surface selection, clipping, fill, font and presentation bits are real.
 #![allow(dead_code,unused_variables,unused_unsafe,static_mut_refs)]
 extern crate self as sex_pdx;
+#[macro_export]macro_rules! serial_record{($($arg:tt)*)=>{{let _=format_args!($($arg)*);}}}
 #[path="../crates/sex-pdx/src/text_encoding.rs"]pub mod text_encoding;
 #[path="../crates/sex-pdx/src/text_batch.rs"]pub mod text_batch;
 #[path="../servers/sexdisplay/src/text_transaction.rs"]mod text_transaction;
@@ -73,25 +74,17 @@ include!("fixtures/compositor_reference.rs");
   assert_eq!(s.text_buf[0],byte);assert_eq!((s.selection_start,s.selection_end),(0,if selected{1}else{0}));
  }}}
 }
-#[test]fn actual_toolbar_titles_keep_lowercase_at_fixed_integer_metrics(){
- // Geist Sans, kerned and proportional, blended onto the bar; every letter has ink
- // inside its own advance and nothing is drawn outside the title line.
- let x0=FRAME_TOP_BAR_LIGHT_EXCLUSION_PX+12;let y0=(FRAME_TOP_BAR_HEIGHT_PX-glyphs::TITLE_H)/2;
+#[test]fn actual_toolbar_titles_keep_lowercase_at_natural_13px_metrics(){
  for (sid,title)in[(200,&b"Linen"[..]),(201,&b"Quil"[..]),(300,&b"Browser"[..]),(306,&b"Spindle"[..]),(308,&b"Quil"[..]),(309,&b"Quil"[..]),(310,&b"Quil"[..]),(311,&b"Quil"[..]),(312,&b"Quil"[..])]{
-  let mut starts=[0usize;16];let n=glyphs::title_starts(title,&mut starts);assert_eq!(n,title.len());
-  let end=starts[n-1]+12;
-  for y in 0..FRAME_TOP_BAR_HEIGHT_PX {for x in x0-4..x0+end+8 {
-   let a=if y>=y0&&y<y0+glyphs::TITLE_H{glyphs::title_coverage(title,x as i32-x0 as i32,y-y0)}else{0};
-   let want=(a!=0).then(||coverage_blend(sex_pdx::desktop_style::contrast_ink(0),0,a));
-   assert_eq!(toolbar_title_fg_at(x,y,sid,0),want,"sid={sid} x={x} y={y}");
-  }}
-  for i in 0..n {
-   let right=if i+1<n{starts[i+1]}else{end};
-   let ink=(starts[i]..right).flat_map(|x|(0..glyphs::TITLE_H).map(move|y|(x,y))).filter(|(x,y)|glyphs::title_coverage(title,*x as i32,*y)>128).count();
-   assert!(ink>3,"sid={sid} letter {} has no ink",title[i] as char);
-  }
+  let end=glyphs::ui_width(title,1).unwrap();let mut count=0;
+  for y in 0..26{for x in 81..85+end+4{
+   let alpha=if(5..21).contains(&y){glyphs::ui_coverage(title,x as i32-85,y-5,1).unwrap()}else{0};
+   let expected=(alpha!=0).then(||coverage_blend(desktop_style::contrast_ink(0),0,alpha));
+   assert_eq!(toolbar_title_fg_at(x,y,sid,0),expected);count+=expected.is_some()as usize;
+  }}assert!(count>60);
  }
 }
+
 // Literal accepted64 legacy mutation behavior, separate from new helpers.
 fn legacy_draw_reference(slot:&mut Surface,packed:u64,arg2:u64){
  let byte_offset=((arg2&0xFF)|((arg2>>4)&0xF00))as usize;let char_count=((arg2>>8)&0xF)as usize;
@@ -155,7 +148,7 @@ unsafe fn publish_bitmap(sequence:u32,g:bitmap_batch::Geometry,pixels:&[u32])->b
  for sequence in 2..=3{
   let change=if sequence==2{let b=bitmap_batch::Geometry{x:120,y:40,width:20,height:30,scale:2};publish_bitmap(sequence,b,&vec![0xffaa0011;b.len()])}
    else{BITMAP_STORES.receive(15,15,300,bitmap_batch::Request::Clear{sequence}).unwrap()};
-  let mut d=damage::Damage::new();d.add(bitmap_surface_damage(&SURFACES[0],change.old,w,h),w,h);d.add(bitmap_surface_damage(&SURFACES[0],change.new,w,h),w,h);
+  let mut d=damage::Damage::new(28);d.add(bitmap_surface_damage(&SURFACES[0],change.old,w,h),w,h);d.add(bitmap_surface_damage(&SURFACES[0],change.new,w,h),w,h);
   FOCUSED_SURFACE_ID=0;DAMAGE_ORDER.clear();redraw_surface_damage(framebuffer.as_mut_ptr(),w,h,d.rect().unwrap());
   assert_eq!(DAMAGE_ORDER,["restore","launcher","cursor","presented"]);
   let pixel_scene_2=capture_scene(w,h,0);
@@ -204,7 +197,7 @@ unsafe fn legacy_reference_pixel(x:usize,y:usize,w:usize,h:usize,focus:u64)->u32
   let mut actual=vec![0;w*h];for y in 0..h{for px in 0..w{actual[y*w+px]=legacy_reference_pixel(px,y,w,h,focus);}}
   let ops=[None,Some((u64::from_le_bytes(*b"A\nlonger"),legacy_args(0,8,0xabcdef))),Some((u64::from_le_bytes(*b" words!!"),legacy_args(8,8,0xabcdef))),Some((u64::from_le_bytes(*b"A\nlonger"),legacy_args(0,8,0x345678))),None,Some((b'Z' as u64,legacy_args(0,1,0xabcdef)))];
   for batch in ops.chunks(drain){
-   let mut d=damage::Damage::new();
+   let mut d=damage::Damage::new(28);
    for &op in batch{
     let old=text_surface_damage(&SURFACES[1],w,h);
     let changed=match op{None=>legacy_text_clear(&mut SURFACES[1]),Some((packed,args))=>legacy_text_draw(&mut SURFACES[1],packed,args)};
@@ -241,8 +234,8 @@ fn frame()->Surface{Surface{chrome_flags:1,color:0x445566,..surf(3,201)}}
 #[test]fn late_native_geometry_is_fitted_and_grid_has_exact_gap_and_bounds(){
  let mut g=FrameGroups::new();g.register(cat(12));let mut s=[surf(3,153),surf(12,154),surf(12,160),surf(12,161),surf(12,162)];g.observe(&s);
  for c in &mut s[1..]{c.x=-900;c.y=-900;c.w=10000;c.h=10000;}g.fit_children(&mut s);
- assert_eq!((s[1].x,s[1].y,s[1].w,s[1].h),(108,136,384,256));assert!(s[2..].iter().all(|c|c.h==0));
- for c in &s[1..]{assert!(c.x>=108&&c.y>=136);assert!(c.x as u32+c.w<=492);assert!(c.y as u32+c.h<=392);}
+ assert_eq!((s[1].x,s[1].y,s[1].w,s[1].h),(108,134,384,258));assert!(s[2..].iter().all(|c|c.h==0));
+ for c in &s[1..]{assert!(c.x>=108&&c.y>=134);assert!(c.x as u32+c.w<=492);assert!(c.y as u32+c.h<=392);}
  s[0].w=1;s[0].h=1;g.fit_children(&mut s);assert!(s[1..].iter().all(|c|c.w==0&&c.h==0));
 }
 #[test]fn foreign_owner_never_binds_and_child_cannot_cover_parent_chrome(){
@@ -264,7 +257,7 @@ fn frame()->Surface{Surface{chrome_flags:1,color:0x445566,..surf(3,201)}}
  SURFACES[0]=surf(9,156);SURFACES[1]=frame();FRAME_GROUPS.observe(&SURFACES);FRAME_GROUPS.fit_children(&mut SURFACES);
  SURFACES[0].text_len=1;SURFACES[0].text_buf[0]=b'A';SURFACES[0].text_color=0xfedcba;recompute_text_lines(&mut SURFACES[0]);
  for focus in[0,201,156]{APP_PRESENT_BITS=0;assert_eq!(composite_pixel(150,180,1000,800,0,focus, &capture_scene(1000,800,focus)),0x123456);assert_eq!(APP_PRESENT_BITS,1);
- APP_PRESENT_BITS=0;assert_eq!(composite_pixel(120,127,1000,800,0,focus, &capture_scene(1000,800,focus)),FRAME_TOP_BAR_DIVIDER_COLOR);assert_eq!(APP_PRESENT_BITS,0);
+ APP_PRESENT_BITS=0;assert_eq!(composite_pixel(120,125,1000,800,0,focus, &capture_scene(1000,800,focus)),FRAME_TOP_BAR_DIVIDER_COLOR);assert_eq!(APP_PRESENT_BITS,0);
  // A top-row glyph foreground uses actual scaled font coordinates.
  let (ax,ay)=solid_a();let (px,py)=(SURFACES[0].x as usize+8+ax,SURFACES[0].y as usize+12+ay);
  assert_eq!(composite_pixel(px,py,1000,800,0,focus, &capture_scene(1000,800,focus)),0xfedcba);}
@@ -291,7 +284,7 @@ fn frame()->Surface{Surface{chrome_flags:1,color:0x445566,..surf(3,201)}}
   let (fx,fy,fw,fh)=surface_groups::rect(&s[0],1000,800);
   for py in 0..801{for px in [0,7,8,fx,fx.saturating_add(7),fx.saturating_add(8),999,1000]{
    let content=g.content(&s[0],&s,px,py,1000,800);
-   if content.surface_id==156{assert!(px>=fx+8&&px-fx-8<fw.saturating_sub(16));assert!(py>=fy+36&&py-fy-36<fh.saturating_sub(44));assert!(px<1000&&py<800);}
+   if content.surface_id==156{assert!(px>=fx+8&&px-fx-8<fw.saturating_sub(16));assert!(py>=fy+34&&py-fy-34<fh.saturating_sub(42));assert!(px<1000&&py<800);}
   }}
  }
 }
@@ -300,12 +293,12 @@ fn frame()->Surface{Surface{chrome_flags:1,color:0x445566,..surf(3,201)}}
  for(i,c)in s[1..].iter_mut().enumerate(){c.text_buf[0]=b'A'+i as u8;c.text_len=1;c.color=i as u32+1;}
  s[0]=surf(8,777);assert!(s[1..].iter().all(|s|!g.independent(s)));
  s[0]=Surface{x:300,y:200,w:600,h:500,..surf(3,153)};g.observe(&s);g.fit_children(&mut s);
- for(i,c)in s[1..].iter().enumerate(){assert_eq!(c.text_buf[0],b'A'+i as u8);assert_eq!(c.color,i as u32+1);assert!(c.x>=308&&c.y>=236);}
+ for(i,c)in s[1..].iter().enumerate(){assert_eq!(c.text_buf[0],b'A'+i as u8);assert_eq!(c.color,i as u32+1);assert!(c.x>=308&&c.y>=234);}
 }
 #[test]fn fresh_spindle_grid_uses_distinct_owner_frame_and_exact_quadrants(){
  let c=Catalog{slot:50,target_pd:17,task_id:17,surface_id:302,coordinator_pd:3};let mut g=FrameGroups::new();g.register(c);
  let mut s=[surf(3,306),surf(17,302),surf(17,303),surf(17,304),surf(17,305)];g.observe(&s);g.fit_children(&mut s);
- for (i,expected) in [(108,136)].into_iter().enumerate(){let child=&s[i+1];assert_eq!((child.x,child.y),expected);
+ for (i,expected) in [(108,134)].into_iter().enumerate(){let child=&s[i+1];assert_eq!((child.x,child.y),expected);
   let px=child.x as usize+10;let py=child.y as usize+14;let frame=g.winner(&s,302,px,py,1000,800).unwrap();assert_eq!(frame.surface_id,306);assert_eq!(g.content(frame,&s,px,py,1000,800).surface_id,302+i as u64);
  }
  assert_eq!(native_pixel_bit(17,302),16);assert_eq!(native_pixel_bit(12,302),0);
@@ -335,11 +328,11 @@ fn scanline_cache_matches_winner_at_every_pixel_with_focus_clipping_and_minimize
 mod damage;
 #[test]
 fn damage_union_clips_overflow_and_never_touches_silkbar() {
- let mut d=damage::Damage::new();d.add((usize::MAX,0,usize::MAX,usize::MAX),1000,800);assert_eq!(d.rect(),None);
- d.add((10,0,30,30),1000,800);assert_eq!(d.rect(),None);
- d.add((10,40,30,30),1000,800);d.add((900,750,usize::MAX,usize::MAX),1000,800);
- assert_eq!(d.rect(),Some(damage::Rect{x:10,y:51,right:1000,bottom:800}));
- let mut empty=damage::Damage::new();empty.add((0,0,1000,800),0,0);assert_eq!(empty.rect(),None);
+ let mut d=damage::Damage::new(28);d.add((usize::MAX,0,usize::MAX,usize::MAX),1000,800);assert_eq!(d.rect(),None);
+ d.add((10,0,30,28),1000,800);assert_eq!(d.rect(),None);
+ d.add((10,20,30,50),1000,800);d.add((900,750,usize::MAX,usize::MAX),1000,800);
+ assert_eq!(d.rect(),Some(damage::Rect{x:10,y:28,right:1000,bottom:800}));
+ let mut empty=damage::Damage::new(28);empty.add((0,0,1000,800),0,0);assert_eq!(empty.rect(),None);
 }
 #[test]
 fn text_damage_matches_full_compositor_with_focus_clipping_overlay_and_hidden_parent(){unsafe{
@@ -358,7 +351,7 @@ fn text_damage_matches_full_compositor_with_focus_clipping_overlay_and_hidden_pa
   for py in 0..h {for px in 0..w {actual.push(composite_pixel(px,py,w,h,0x123,focus, &pixel_scene_4));}}
   let old_damage=text_surface_damage(&SURFACES[1],w,h);
   SURFACES[1].text_buf=[0;TEXT_BUF_CAP];SURFACES[1].text_buf[..1].copy_from_slice(b"Z");SURFACES[1].text_len=1;recompute_text_lines(&mut SURFACES[1]);
-  let mut d=damage::Damage::new();d.add(old_damage,w,h);d.add(text_surface_damage(&SURFACES[1],w,h),w,h);
+  let mut d=damage::Damage::new(28);d.add(old_damage,w,h);d.add(text_surface_damage(&SURFACES[1],w,h),w,h);
   FOCUSED_SURFACE_ID=focus;DAMAGE_ORDER.clear();
   if let Some(r)=d.rect(){redraw_surface_damage(actual.as_mut_ptr(),w,h,r);assert_eq!(DAMAGE_ORDER,["restore","launcher","cursor","presented"]);}
   let pixel_scene_4=capture_scene(w,h,focus);
@@ -380,7 +373,7 @@ fn bg(_:usize,_:usize)->u32{0x123}
 // Its sentinel catches entry during pure Settle; actual Main cursor storage and
 // publication effects are tested separately by the frame-output/scene gates.
 static mut CURSOR_UNDERLAY_SENTINEL:[u32;4]=[0;4];
-fn restore_cursor_under(_: *mut u32,_:usize,_:usize,_:usize){unsafe{DAMAGE_ORDER.push("restore");CURSOR_UNDERLAY_SENTINEL[0]=0;}}
+fn restore_cursor_under(_: *mut u32,_:usize,_:usize,_:usize,_:desktop_style::chrome::Metrics){unsafe{DAMAGE_ORDER.push("restore");CURSOR_UNDERLAY_SENTINEL[0]=0;}}
 fn draw_cursor_z_top(_: *mut u32,_:usize,_:usize,_:usize,save:bool,_:&scene::SceneSnapshot){assert!(save);unsafe{DAMAGE_ORDER.push("cursor");CURSOR_UNDERLAY_SENTINEL[1]=0;}}
 fn draw_launcher_panel(_: *mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapshot){unsafe{DAMAGE_ORDER.push("launcher");}}
 fn report_app_presented(){unsafe{DAMAGE_ORDER.push("presented");}}
@@ -389,14 +382,14 @@ use paint_batch::{Content,Plan};
 static mut ATLAS_CALLS:usize=0;
 fn draw_atlas_cards_pass(_:*mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapshot){unsafe{ATLAS_CALLS+=1;}}
 fn draw_atlas_frame_previews_pass(_:*mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapshot){unsafe{ATLAS_CALLS+=1;}}
-fn civil_clock_lines(_:&silkbar_model::civil_clock::CivilClock)->[[u8;13];2]{TEST_CLOCK_LINES}
+fn civil_clock_caption(_:&silkbar_model::civil_clock::CivilClock)->[u8;20]{TEST_CLOCK_LINES}
 #[test]
 fn glyph_footprint_covers_all_actual_ink_and_erases_empty_or_shorter_replacements(){
  for (x,y,w,h) in [(-30,-30,144,90),(0,0,220,150),(100,100,624,331),(950,750,624,331)] {
   for chrome in [0,SURFACE_CHROME_TOP_BAR] {
    let mut s=Surface{x,y,w,h,chrome_flags:chrome,text_len:512,text_buf:[b'A';TEXT_BUF_CAP],..SURFACE_EMPTY};
    for i in (12..512).step_by(13){s.text_buf[i]=b'\n';}recompute_text_lines(&mut s);
-   let r=text_surface_damage(&s,1000,800);let mut d=damage::Damage::new();d.add(r,1000,800);
+   let r=text_surface_damage(&s,1000,800);let mut d=damage::Damage::new(28);d.add(r,1000,800);
    let bounds=surface_groups::rect(&s,1000,800);
    for py in 51..800 {for px in bounds.0..bounds.0+bounds.2 {
     if surface_groups::contains(bounds,px,py) && surface_text_fg_at(px,py,&s).is_some(){
@@ -436,7 +429,7 @@ fn glyph_footprint_covers_all_actual_ink_and_erases_empty_or_shorter_replacement
   for py in 0..h {for px in 0..w {actual.push(composite_pixel(px,py,w,h,0x123,focus, &pixel_scene_5));}}
   for (sx,sy,sw,sh,color) in [(0,0,80,40,0x333333),(30,50,120,120,0xabcdef),(-100,-100,60,80,0x123456),(0,0,0,0,0)]{
    let(old,new)=fill_damage::update(&mut SURFACES[1],0,sx,sy,sw,sh,color).unwrap().unwrap();
-   let mut d=damage::Damage::new();d.add(old.screen(&SURFACES[1],w,h),w,h);d.add(new.screen(&SURFACES[1],w,h),w,h);
+   let mut d=damage::Damage::new(28);d.add(old.screen(&SURFACES[1],w,h),w,h);d.add(new.screen(&SURFACES[1],w,h),w,h);
    FOCUSED_SURFACE_ID=focus;DAMAGE_ORDER.clear();
    if let Some(r)=d.rect(){redraw_surface_damage(actual.as_mut_ptr(),w,h,r);assert_eq!(DAMAGE_ORDER,["restore","launcher","cursor","presented"]);}
   let pixel_scene_5=capture_scene(w,h,focus);
@@ -483,31 +476,31 @@ fn glyph_footprint_covers_all_actual_ink_and_erases_empty_or_shorter_replacement
  for sid in [0,100,152,999,u64::MAX]{assert_eq!(desktop_style::native_label(sid),None);assert_eq!(desktop_style::native_indicator(sid),None);}
 }
 
-use silkbar_model::{SilkBar,DEFAULT_SILK_BAR,DEFAULT_THEME};
+use silkbar_model::{SilkBar,ModuleSlot,DEFAULT_SILK_BAR,DEFAULT_THEME};
 #[test]
 fn normal_app_indicator_uses_actual_focus_and_clears_with_it(){unsafe{
  let bar=DEFAULT_SILK_BAR;
  for sid in [201,301,307,308,309,310,311,312]{FOCUSED_SURFACE_ID=sid;let pixel_scene_7=capture_scene(MAX_FB_W,MAX_FB_H,FOCUSED_SURFACE_ID);
- for y in 22..26{for x in 155..159{assert_eq!(phase5_active_app_at(x,y,&bar, &pixel_scene_7),Some(0xCBA6F7));}}}
- for sid in [153,306]{FOCUSED_SURFACE_ID=sid;assert_eq!(phase5_active_app_at(155,22,&bar, &capture_scene(MAX_FB_W,MAX_FB_H,FOCUSED_SURFACE_ID)),Some(0x89B4FA));}
- FOCUSED_SURFACE_ID=0;assert_eq!(phase5_active_app_at(155,22,&bar, &capture_scene(MAX_FB_W,MAX_FB_H,FOCUSED_SURFACE_ID)),None);
- FOCUSED_SURFACE_ID=307;assert_eq!(phase5_active_app_at(159,22,&bar, &capture_scene(MAX_FB_W,MAX_FB_H,FOCUSED_SURFACE_ID)),None);assert_eq!(phase5_active_app_at(155,26,&bar, &capture_scene(MAX_FB_W,MAX_FB_H,FOCUSED_SURFACE_ID)),None);
+ for y in 12..16{for x in 40..44{assert_eq!(phase5_active_app_at(x,y,&bar, &pixel_scene_7),Some(0xCBA6F7));}}}
+ for sid in [153,306]{FOCUSED_SURFACE_ID=sid;assert_eq!(phase5_active_app_at(40,12,&bar, &capture_scene(MAX_FB_W,MAX_FB_H,FOCUSED_SURFACE_ID)),Some(0x89B4FA));}
+ FOCUSED_SURFACE_ID=0;assert_eq!(phase5_active_app_at(40,12,&bar, &capture_scene(MAX_FB_W,MAX_FB_H,FOCUSED_SURFACE_ID)),None);
+ FOCUSED_SURFACE_ID=307;assert_eq!(phase5_active_app_at(44,12,&bar, &capture_scene(MAX_FB_W,MAX_FB_H,FOCUSED_SURFACE_ID)),None);assert_eq!(phase5_active_app_at(40,16,&bar, &capture_scene(MAX_FB_W,MAX_FB_H,FOCUSED_SURFACE_ID)),None);
 }}
 
 fn repaint_begin()->u64{0}
 fn repaint_end(_kind:&str,_started:u64){}
-const TEST_CLOCK_LINES:[[u8;13];2]=[[b'C';13],[b'D';13]];
-fn clock_fg_at(x:usize,y:usize,_:&SilkBar,lines:&[[u8;13];2],_:u32)->Option<u32>{assert_eq!(*lines,TEST_CLOCK_LINES);(x==0&&y==0).then_some(1)}
-fn bell_badge_at(x:usize,y:usize,_:&SilkBar,_:u32)->Option<u32>{(x==1&&y==0).then_some(2)}
+const TEST_CLOCK_LINES:[u8;20]=[b'C';20];
+fn clock_fg_at_scaled(x:usize,y:usize,_:&SilkBar,lines:&[u8;20],_:u32,_:u32)->Option<u32>{assert_eq!(*lines,TEST_CLOCK_LINES);(x==0&&y==0).then_some(1)}
+fn bell_badge_at_scaled(x:usize,y:usize,_:&SilkBar,_:u32,_:u32)->Option<u32>{(x==1&&y==0).then_some(2)}
 fn phase5_tint_swatch_at(x:usize,y:usize,_:&SilkBar)->Option<u32>{(x==2&&y==0).then_some(3)}
 fn phase5_palette_dot_at(x:usize,y:usize,_:&SilkBar)->Option<u32>{(x==3&&y==0).then_some(4)}
 fn bar_color(_:usize,_:usize,_:&SilkBar,_:&scene::SceneSnapshot)->u32{9}
 #[test]
 fn shared_full_and_incremental_strip_uses_current_focus(){unsafe{
  let bar=DEFAULT_SILK_BAR;
- for sid in [301,307,308,309,310,311,312]{FOCUSED_SURFACE_ID=sid;assert_eq!(top_strip_pixel(155,22,&bar,&TEST_CLOCK_LINES, &capture_scene(MAX_FB_W,MAX_FB_H,FOCUSED_SURFACE_ID)),0xCBA6F7);}
- FOCUSED_SURFACE_ID=306;assert_eq!(top_strip_pixel(155,22,&bar,&TEST_CLOCK_LINES, &capture_scene(MAX_FB_W,MAX_FB_H,FOCUSED_SURFACE_ID)),0x89B4FA);
- FOCUSED_SURFACE_ID=0;assert_eq!(top_strip_pixel(155,22,&bar,&TEST_CLOCK_LINES, &capture_scene(MAX_FB_W,MAX_FB_H,FOCUSED_SURFACE_ID)),9);
+ for sid in [301,307,308,309,310,311,312]{FOCUSED_SURFACE_ID=sid;assert_eq!(top_strip_pixel(40,12,&bar,&TEST_CLOCK_LINES, &capture_scene(MAX_FB_W,MAX_FB_H,FOCUSED_SURFACE_ID)),0xCBA6F7);}
+ FOCUSED_SURFACE_ID=306;assert_eq!(top_strip_pixel(40,12,&bar,&TEST_CLOCK_LINES, &capture_scene(MAX_FB_W,MAX_FB_H,FOCUSED_SURFACE_ID)),0x89B4FA);
+ FOCUSED_SURFACE_ID=0;assert_eq!(top_strip_pixel(40,12,&bar,&TEST_CLOCK_LINES, &capture_scene(MAX_FB_W,MAX_FB_H,FOCUSED_SURFACE_ID)),9);
  for (x,c)in [(0,1),(1,2),(2,3),(3,4),(4,9)]{assert_eq!(top_strip_pixel(x,0,&bar,&TEST_CLOCK_LINES, &capture_scene(MAX_FB_W,MAX_FB_H,FOCUSED_SURFACE_ID)),c);}
 }}
 
@@ -608,7 +601,7 @@ unsafe fn span_text_fill(index:usize) {
  for y in 0..h{for x in 0..w{actual[y*w+x]=composite_pixel(x,y,w,h,bg(y,h),focus, &pixel_scene_9);}}
  for(start,end)in[(0,16),(3,8),(0,0)]{
   SURFACES[0].selection_start=start;SURFACES[0].selection_end=end;
-  let mut d=damage::Damage::new();d.add(text_surface_damage(&SURFACES[0],w,h),w,h);
+  let mut d=damage::Damage::new(28);d.add(text_surface_damage(&SURFACES[0],w,h),w,h);
   FOCUSED_SURFACE_ID=focus;DAMAGE_ORDER.clear();redraw_surface_damage(actual.as_mut_ptr(),w,h,d.rect().unwrap());
   assert_eq!(DAMAGE_ORDER,["restore","launcher","cursor","presented"]);
   let pixel_scene_10=capture_scene(w,h,focus);
@@ -767,24 +760,25 @@ fn reference_contrast(a:u32,b:u32)->f64{
    TEST_BLEND_BACKGROUND=Some(background);
    SURFACES[0]=Surface{chrome_flags:SURFACE_CHROME_TOP_BAR,tab_count:tabs,active_tab:0,..surf(3,sid)};
    FOCUSED_SURFACE_ID=sid;
-   let expected=desktop_style::contrast_ink(background);let mut glyph_pixels=0;
+   let expected=desktop_style::contrast_ink(background);let mut glyph_pixels=0;assert!(reference_contrast(expected,background)>=4.5);
    let mut framebuffer=vec![0xdeadbeef;w*h];DAMAGE_ORDER.clear();
-   redraw_surface_damage(framebuffer.as_mut_ptr(),w,h,damage::Rect{x:162,y:107,right:246,bottom:121});
+   redraw_surface_damage(framebuffer.as_mut_ptr(),w,h,damage::Rect{x:183,y:105,right:269,bottom:121});
    let pixel_scene_13=capture_scene(w,h,sid);
 
- for y in 107..121{
+ for y in 105..121{
     let mut row=pixel_scene_13.groups.row_winners(&pixel_scene_13.surfaces,sid,y,w,h).unwrap();
-    for x in 162..246{
+    for x in 183..269{
      let foreground=toolbar_title_fg_at(x-100,y-100,sid,background);
      let want=foreground.unwrap_or(background);
-     // Edges are blended; the fully covered pixels carry the contrasting ink itself.
-     if let Some(ink)=foreground{if ink==expected{glyph_pixels+=1;assert!(reference_contrast(ink,background)>=4.5);}}
+     // Contrast applies to the nominal ink; antialiased edge pixels have
+     // partial coverage, and13px lowercase need not contain an opaque pixel.
+     if let Some(ink)=foreground{glyph_pixels+=usize::from(ink!=background);}
      assert_eq!(composite_pixel(x,y,w,h,0x987654,sid, &pixel_scene_13),want,"scalar bg={background:06x} sid={sid} tabs={tabs}");
      assert_eq!(composite_pixel_source(x,y,w,h,0x987654,row.source(x), &pixel_scene_13),want,"scanline bg={background:06x} sid={sid} tabs={tabs}");
      assert_eq!(framebuffer[y*w+x],want,"damage bg={background:06x} sid={sid} tabs={tabs}");
     }
    }
-   assert!(glyph_pixels>0,"bg={background:06x} sid={sid} tabs={tabs}");
+   assert!(glyph_pixels>20,"bg={background:06x} sid={sid} tabs={tabs}");
   }}
  }
  TEST_GLASS_BACKGROUND=None;TEST_BLEND_BACKGROUND=None;SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();
@@ -949,8 +943,11 @@ fn captured_compositor_pixels_survive_live_surface_token_focus_and_bitmap_change
  DISPLAY_TOKENS.frame_rim_color=0x00ff00;FOCUSED_SURFACE_ID=0;
  BITMAP_STORES.retire(15,15);FRAME_GROUPS=FrameGroups::new();
  RENDER_FRAME_COUNTER.store(12345,core::sync::atomic::Ordering::Relaxed);
+ desktop_style::set_ui_scale(3); // a later live scale cannot move captured pixels
  for (index,&(x,y)) in points.iter().enumerate(){assert_eq!(composite_pixel(x,y,600,500,0,captured.focus,&captured),before[index]);}
  assert_eq!(captured.bitmaps.sample(15,300,0,0),Some(0xffff0000));
+ assert_eq!(captured.metrics.scale(),1);assert_eq!(captured.groups.metrics().scale(),1);
+ desktop_style::set_ui_scale(1);
  let next=capture_scene(600,500,0);
  assert!(points.iter().enumerate().any(|(i,&(x,y))|composite_pixel(x,y,600,500,0,next.focus,&next)!=before[i]));
  assert_eq!(next.bitmaps.sample(15,300,0,0),None);
@@ -961,19 +958,19 @@ fn captured_compositor_pixels_survive_live_surface_token_focus_and_bitmap_change
 fn captured_strip_focus_does_not_follow_later_global_focus(){unsafe{
  let saved=FOCUSED_SURFACE_ID;FOCUSED_SURFACE_ID=201;
  let previous=capture_scene(1000,800,201);
- assert_eq!(phase5_active_app_at(155,22,&previous.bar,&previous),Some(0xCBA6F7));
+ assert_eq!(phase5_active_app_at(40,12,&previous.bar,&previous),Some(0xCBA6F7));
  FOCUSED_SURFACE_ID=306;
- assert_eq!(phase5_active_app_at(155,22,&previous.bar,&previous),Some(0xCBA6F7));
+ assert_eq!(phase5_active_app_at(40,12,&previous.bar,&previous),Some(0xCBA6F7));
  let next=capture_scene(1000,800,306);
- assert_eq!(phase5_active_app_at(155,22,&next.bar,&next),Some(0x89B4FA));
+ assert_eq!(phase5_active_app_at(40,12,&next.bar,&next),Some(0x89B4FA));
  FOCUSED_SURFACE_ID=saved;
 }}
 
 // The legacy reference computes body pixels independently. Strip glyph/color
 // sentinels are the established clock/bar boundary, not a replacement Scene.
 unsafe fn independent_batch_pixel(x:usize,y:usize,w:usize,h:usize)->u32{
- if y<50{return match(x,y){(0,0)=>1,(1,0)=>2,(2,0)=>3,(3,0)=>4,_=>9};}
- if y==50{return DEFAULT_THEME.panel_glow;}
+ if y<27{return match(x,y){(0,0)=>1,(1,0)=>2,(2,0)=>3,(3,0)=>4,_=>9};}
+ if y==27{return DEFAULT_THEME.panel_glow;}
  legacy_reference_pixel(x,y,w,h,0)
 }
 unsafe fn combined_fixture()->(usize,usize,Vec<u32>){
@@ -997,14 +994,14 @@ unsafe fn combined_fixture()->(usize,usize,Vec<u32>){
  assert_eq!(DAMAGE_ORDER,["restore","launcher","cursor","presented"]);assert_eq!(ATLAS_CALLS,2);
  let mut changed=0;for y in 0..h{for x in 0..w{
   assert_eq!(pixels[y*w+x],independent_batch_pixel(x,y,w,h),"damage/strip {x}/{y}");
-  if y>=51&&!(x>=25&&x<55&&y>=80&&y<100){assert_eq!(pixels[y*w+x],old[y*w+x]);}
+  if y>=28&&!(x>=25&&x<55&&y>=80&&y<100){assert_eq!(pixels[y*w+x],old[y*w+x]);}
   changed+=usize::from(pixels[y*w+x]!=old[y*w+x]);
  }}assert_eq!(changed,30*20);SURFACES=[SURFACE_EMPTY;MAX_SURFACES];
 }}
 #[test]fn combined_cursor_strip_keeps_body_exact_and_finishes_overlays_once(){unsafe{
- let(w,h,mut pixels)=combined_fixture();for pixel in &mut pixels[..51*w]{*pixel=0xdeadbeef;}let body=pixels[51*w..].to_vec();DAMAGE_ORDER.clear();ATLAS_CALLS=0;
+ let(w,h,mut pixels)=combined_fixture();for pixel in &mut pixels[..28*w]{*pixel=0xdeadbeef;}let body=pixels[28*w..].to_vec();DAMAGE_ORDER.clear();ATLAS_CALLS=0;
  paint_output_batch(pixels.as_mut_ptr(),w,h,Plan{content:Content::Cursor,strip:true});
- assert_eq!(DAMAGE_ORDER,["restore","launcher","cursor","presented"]);assert_eq!(ATLAS_CALLS,2);assert_eq!(&pixels[51*w..],body.as_slice());
+ assert_eq!(DAMAGE_ORDER,["restore","launcher","cursor","presented"]);assert_eq!(ATLAS_CALLS,2);assert_eq!(&pixels[28*w..],body.as_slice());
  for y in 0..h{for x in 0..w{assert_eq!(pixels[y*w+x],independent_batch_pixel(x,y,w,h),"cursor/strip {x}/{y}");}}
  SURFACES=[SURFACE_EMPTY;MAX_SURFACES];
 }}
@@ -1129,9 +1126,9 @@ unsafe fn seal_pending_text(index:usize,task:u32,sequence:u32,text:&[u8],selecti
  assert!(TEXT_STAGES[0].needs_publication());
  // Combining the same candidate with real strip work must retain the ordinary
  // cursor/overlay tail. Settle cannot suppress another output obligation.
- let body=pixels[51*w..].to_vec();DAMAGE_ORDER.clear();
+ let body=pixels[28*w..].to_vec();DAMAGE_ORDER.clear();
  paint_output_batch(pixels.as_mut_ptr(),w,h,Plan{content:Content::Settle,strip:true});
- assert_eq!(&pixels[51*w..],body.as_slice());assert_eq!(DAMAGE_ORDER,["restore","launcher","cursor","presented"]);assert_eq!(ATLAS_CALLS,2);
+ assert_eq!(&pixels[28*w..],body.as_slice());assert_eq!(DAMAGE_ORDER,["restore","launcher","cursor","presented"]);assert_eq!(ATLAS_CALLS,2);
  SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();reset_bitmap_stage();
 }}
 

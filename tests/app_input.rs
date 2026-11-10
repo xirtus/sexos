@@ -121,6 +121,9 @@ mod shell {
     static mut CLIPBOARD_INTAKE:Intake=Intake::new();
     static mut CLIPBOARD:broker::Broker=broker::Broker::new();
     static mut APP_MODIFIERS:Modifiers=Modifiers::new();
+    enum InteractionState{Idle,Dragging}
+    static mut INTERACTION:InteractionState=InteractionState::Idle;
+    static mut POINTER_BUTTONS:u8=0;
     static mut DISPLAY_SCALE:desktop_style::chrome::ScaleClient=desktop_style::chrome::ScaleClient::new();
     static mut DESKTOP_KEYS:desktop_keys::Keys=desktop_keys::Keys::new();
     static mut WM_CHORDS:wm::Chords=wm::Chords::new();
@@ -150,7 +153,7 @@ mod shell {
     unsafe fn toggle_command_palette(){COMMAND_PALETTE_OPEN=!COMMAND_PALETTE_OPEN;PALETTE_TOGGLES+=1;}
     unsafe fn focus_next_frame(){FOCUSED_SURFACE_ID=if FOCUSED_SURFACE_ID==156{300}else{156};FOCUS_CHANGES+=1;}
     include!(env!("APP_INPUT_PRODUCTION"));
-    unsafe fn reset(){DISPLAY_SCALE=desktop_style::chrome::ScaleClient::new();APP_INPUT=Queue::new();CLIPBOARD_INTAKE=Intake::new();CLIPBOARD=broker::Broker::new();APP_MODIFIERS=Modifiers::new();DESKTOP_KEYS=desktop_keys::Keys::new();WM_CHORDS=wm::Chords::new();WM_ACTIONS.clear();FOCUSED_SURFACE_ID=156;COMMAND_PALETTE_OPEN=false;FOCUS_CHANGES=0;PALETTE_TOGGLES=0;for pd in [9,15,16,18]{CLIPBOARD.register(app_lifecycle::CatalogInfo{target_pd:pd,task_id:pd,surface_id:participant(pd,pd).surface,coordinator_pd:3}).unwrap();}LIVE=Some(true);SOURCE_LIVE=None;LIVE_ONCE=None;STATUS=0;SENT.clear();LIVE_QUERIES.clear();VOLUME_STEPS.clear();}
+    unsafe fn reset(){POINTER_BUTTONS=0;INTERACTION=InteractionState::Idle;DISPLAY_SCALE=desktop_style::chrome::ScaleClient::new();APP_INPUT=Queue::new();CLIPBOARD_INTAKE=Intake::new();CLIPBOARD=broker::Broker::new();APP_MODIFIERS=Modifiers::new();DESKTOP_KEYS=desktop_keys::Keys::new();WM_CHORDS=wm::Chords::new();WM_ACTIONS.clear();FOCUSED_SURFACE_ID=156;COMMAND_PALETTE_OPEN=false;FOCUS_CHANGES=0;PALETTE_TOGGLES=0;for pd in [9,15,16,18]{CLIPBOARD.register(app_lifecycle::CatalogInfo{target_pd:pd,task_id:pd,surface_id:participant(pd,pd).surface,coordinator_pd:3}).unwrap();}LIVE=Some(true);SOURCE_LIVE=None;LIVE_ONCE=None;STATUS=0;SENT.clear();LIVE_QUERIES.clear();VOLUME_STEPS.clear();}
     #[test]fn actual_scale_shortcut_retains_admission_and_never_repeats_an_applied_step(){
         let _guard=LOCK.lock().unwrap();unsafe{reset();
             assert!(desktop_shortcut(0x1d,1));assert!(desktop_shortcut(0x38,1));

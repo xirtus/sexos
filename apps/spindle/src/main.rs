@@ -2793,6 +2793,7 @@ pub extern "C" fn _start() -> ! {
         }
         if msg.type_id==sex_pdx::spindle_view::OP {
             if let Some(n)=sex_pdx::spindle_view::Notice::decode(msg.caller_pd,instance_pd(),catalog.task_id,[msg.arg0,msg.arg1,msg.arg2],unsafe{VIEW_SEQUENCE}) {
+                sex_pdx::desktop_style::set_ui_scale(n.ui_scale);
                 unsafe{VIEW_SIZE=(n.w,n.h);VIEW_SEQUENCE=n.sequence;HISTORY_STATUS.refresh();GRID_PREV=None;}
                 let v=sex_pdx::spindle_view::Layout::new(n.w,n.h);
                 sb.scroll_offset=scroll_view::clamp(sb.scroll_offset,sb.total_lines,v.lines().saturating_sub(1));

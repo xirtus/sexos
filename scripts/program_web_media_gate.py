@@ -10,6 +10,7 @@ its AVIF (AV1 through dav1d) must decode to its colour.
 Build FFmpeg first (scripts/build_ffmpeg.sh), then the ISO."""
 import argparse,http.server,os,re,shutil,sys,threading,time
 from pathlib import Path
+from browser_gate_viewport import content_rect
 from PIL import Image
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 ROOT=Path(__file__).resolve().parents[1]
@@ -62,7 +63,7 @@ def main():
   console(r'resumed',s,60);time.sleep(.5)
   shot=a.out/'playing.ppm';q.cmd('screendump',{'filename':str(shot)});time.sleep(.5)
   x,y,w,h=map(int,re.findall(rf'\[shell.tile.apply\] sid={surface} x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)',t())[-1])
-  img=Image.open(shot).convert('RGB');bx,by=x+8,y+36
+  img=Image.open(shot).convert('RGB');bx,by,_,_=content_rect(t(),(x,y,w,h))
   region=img.crop((bx,by,bx+320,by+240));region.save(a.out/'playing.png')
   colours={region.getpixel((px,py)) for px in range(0,320,8) for py in range(0,220,8)}
   bright=sum(1 for px in range(0,320,8) for py in range(0,220,8) if sum(region.getpixel((px,py)))>150)

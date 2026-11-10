@@ -129,17 +129,17 @@ fn tls_rows(f:&browser_view::TlsFrame)->Vec<&str>{if f.len==0{Vec::new()}else{co
  let lines=tls_rows(&f);assert_eq!(&lines[..9],&["Kaleidoscope / TL","S","TLS preparation:","hello pending; no"," peer","Local only / no p","eer","L prep Q clear Y","peer"]);
 }
 #[test]fn tls_rim_and_height_boundaries_use_explicit_fallback(){
- for h in[58,76,94,112,121,122,129]{let f=browser_view::tls_panel(512,h,Some(b"hello pending; no peer")).unwrap();assert!(!f.complete);assert_eq!(tls_rows(&f)[0],"Enlarge tile");assert!(!core::str::from_utf8(&f.bytes[..f.len]).unwrap().contains("hello pending"));}
- let f=browser_view::tls_panel(512,130,Some(b"hello pending; no peer")).unwrap();assert!(f.complete);assert_eq!(f.rows,5);
- assert_eq!(browser_view::tls_panel(512,57,Some(b"preparing")).unwrap().len,0);
- let f=browser_view::tls_panel(256,130,Some(b"hello pending; no peer")).unwrap();assert!(!f.complete);assert_eq!(f.cols,19);
- assert!(browser_view::tls_panel(256,184,Some(b"hello pending; no peer")).unwrap().complete);
+ for h in[56,74,92,110,119,120,127]{let f=browser_view::tls_panel(512,h,Some(b"hello pending; no peer")).unwrap();assert!(!f.complete);assert_eq!(tls_rows(&f)[0],"Enlarge tile");assert!(!core::str::from_utf8(&f.bytes[..f.len]).unwrap().contains("hello pending"));}
+ let f=browser_view::tls_panel(512,128,Some(b"hello pending; no peer")).unwrap();assert!(f.complete);assert_eq!(f.rows,5);
+ assert_eq!(browser_view::tls_panel(512,55,Some(b"preparing")).unwrap().len,0);
+ let f=browser_view::tls_panel(256,128,Some(b"hello pending; no peer")).unwrap();assert!(!f.complete);assert_eq!(f.cols,19);
+ assert!(browser_view::tls_panel(256,182,Some(b"hello pending; no peer")).unwrap().complete);
 }
 #[test]fn tls_all_measures_stay_inside_physical_canvas_and512_bytes(){
  for w in[0,1,15,16,17,20,40,80,127,128,255,256,512,640,1024,1280,u32::MAX]{for h in[0,1,35,36,49,50,57,58,75,76,121,122,129,130,184,359,375,768,u32::MAX]{
   let f=browser_view::tls_panel(w,h,Some(b"hello pending; no peer")).unwrap();assert!(f.len<=512&&f.cols<=63&&f.rows<=24);
   if f.rows==0{assert_eq!(f.len,0);assert!(!f.complete);continue;}
-  assert_eq!(f.len,f.rows*(f.cols+1)-1);let s=desktop_style::scale(w);assert!(36+(f.rows as u32-1)*9*s+7*s<=h-8);
+  assert_eq!(f.len,f.rows*(f.cols+1)-1);let s=desktop_style::scale(w);assert!(34+(f.rows as u32-1)*9*s+7*s<=h-8);
   for row in 0..f.rows-1{assert_eq!(f.bytes[row*(f.cols+1)+f.cols],b'\n');}assert_ne!(f.bytes[f.len-1],b'\n');assert!(f.bytes[f.len..].iter().all(|b|*b==0));
  }}
 }

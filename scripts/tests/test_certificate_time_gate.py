@@ -118,9 +118,9 @@ class CertificateTimeOracle(unittest.TestCase):
   for bad in[t.replace('positive_ack=1','positive_ack=0'),t.replace('sequence=9','sequence=0'),t.replace('rows=8 viewport=7 sequence','rows=7 viewport=7 sequence'),t.replace('hash=0x','hash=0xf',1)]:
    self.assertFalse(gate.verify_clock_pixels(bad,raw,state,self.c)['ok'])
  def test_final_glyph_row_fits_without_requiring_invisible_line_spacing(self):
-  state=f'Ready({SECONDS})';t=trace(state,self.c,w=640,h=176);self.assertEqual(len(gate.clock_geometry(t,state,self.c)['rows']),8)
+  state=f'Ready({SECONDS})';t=trace(state,self.c,w=640,h=174);self.assertEqual(len(gate.clock_geometry(t,state,self.c)['rows']),8)
   self.assertTrue(gate.verify_clock_pixels(t,pixels(t,state,self.c),state,self.c)['ok'])
-  self.assertFalse(gate.calendar_frame(640,175,state,self.c)['full_calendar'])
+  self.assertFalse(gate.calendar_frame(640,173,state,self.c)['full_calendar'])
  def test_stale_ink_to_right_or_below_capped_calendar_measure_is_rejected(self):
   state=f'Ready({SECONDS})';t=trace(state,self.c);raw=pixels(t,state,self.c);header=len(b'P6\n1280 800\n255\n');color=self.c['color'].to_bytes(3,'big')
   for x,y in[(900,140),(40,700)]:

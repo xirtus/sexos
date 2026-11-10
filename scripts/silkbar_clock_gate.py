@@ -16,6 +16,7 @@ STATES={0:'Unknown',1:'Snapshot',2:'Unavailable',3:'Rollback',4:'Exhausted'}
 MONTHS=('JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC')
 LEGACY_PROFILE='q35-caption-v1'
 DATE_PROFILE='date-caption-v1'
+SLIM_PROFILE='slim-utc-date-v1'
 
 def _function(source,name):
  # These finite renderer helpers contain no braces in strings. Strip comments
@@ -53,8 +54,35 @@ def _caption_profile(display):
  assert re.search(r'fn civil_clock_date\(seconds:u32\)->\[u8;13\]',date),'unsupported finite date signature'
  assert 'sex_time::SexTimestamp::from_unix(seconds as i64,0)'in date and '.and_then(sex_time::Gregorian::from_timestamp)'in date,'date conversion not bound to actual sex-time API'
  assert tuple(re.findall(r'b"([A-Z]{3})"',date))==MONTHS,'unknown/ambiguous English month table'
+ if 'fn civil_clock_caption('in display:
+  _slim_render_shape(display)
+  return SLIM_PROFILE
  _date_render_shape(display)
  return DATE_PROFILE
+
+def _slim_render_shape(display):
+ compact=lambda value:re.sub(r'\s+','',value)
+ caption=compact(_function(display,'civil_clock_caption'))
+ assert caption.split('{',1)[0]=='fncivil_clock_caption(clock:&silkbar_model::civil_clock::CivilClock)->[u8;20]'
+ for binding in ('letlines=civil_clock_lines(clock);','text[..5].copy_from_slice(&lines[0][4..9]);','text[6..9].copy_from_slice(b"UTC");','text[10]=b\'|\';','text[12..18].copy_from_slice(&lines[1][..6]);','text[..15].copy_from_slice(b"UTCunavailable");'):
+  assert binding in caption,('unknown single-line civil binding',binding)
+ assert 'clock.state()==silkbar_model::civil_clock::State::Snapshot'in caption
+ for name in('civil_clock_fg_at_scaled','clock_fg_at_scaled','top_strip_pixel'):
+  helper=compact(_function(display,name))
+  assert all(call not in helper for call in('civil_clock_caption(','civil_clock_lines(','civil_clock_date(')),'calendar recomputed per pixel'
+  if name!='top_strip_pixel':assert ':[u8;20]'in helper.split('{',1)[0].replace('&',''),'clock caption shape changed'
+ assert 'clock_fg_at_scaled(x,y,bar,lines,background,scene.metrics.scale())'in compact(_function(display,'top_strip_pixel'))
+ assert 'civil_clock_fg_at_scaled(x,y,bar,lines,background,ui_scale)'in compact(_function(display,'clock_fg_at_scaled'))
+ helper=compact(_function(display,'civil_clock_fg_at_scaled'))
+ assert 'module_rect(bar,ModuleSlot::Clock)'in helper and 'ui_label_at_scaled(text,x-cx-pad,y-top,background,ui_scale)'in helper
+ for name in('raster_full','raster_strip'):
+  helper=compact(_function(display,name));cache='letclock_lines=civil_clock_caption(&bar.civil_clock);'
+  assert helper.count(cache)==1 and helper.index('letbar=&scene.bar;')<helper.index(cache)<helper.index('foryin0..')
+ writer=compact(_function(display,'render_prepared'))
+ capture='letSome(lease)=SceneLease::capture(w,h,bar)';commit='preparation.commit(|frame|publish_frame(fb,w,h,frame))';drawn='civil_clock_drawn(&scene.bar,w,h,plan.label());'
+ assert writer.count(capture)==1 and writer.index(capture)<writer.index('raster_batch(&target,scene,plan)')<writer.index(commit)<writer.index(drawn)
+ assert 'if!'+commit+'{backup.restore();returnNone;}'in writer and 'ifplan.clock_dirty(){'+drawn+'}'in writer
+
 
 def _date_render_shape(display):
  # Recognize the archived cached-row API and the explicit owned-scene API.
@@ -122,12 +150,12 @@ def _date_render_shape(display):
  return scene_backed
 
 def source_contract(root):
- root=Path(root);names=['crates/silkbar-model/src/lib.rs','crates/silkbar-model/src/civil_clock.rs','crates/sex-pdx/src/clock_source.rs','kernel/src/clock_source.rs','kernel/src/init.rs','servers/silkbar/src/main.rs','servers/silkbar/src/civil_clock.rs','servers/sexdisplay/src/main.rs','scripts/silkbar_clock_gate.py','scripts/clock_source_evidence.py','scripts/browser_source_evidence.py','crates/sex-pdx/src/app_catalog.rs','crates/sex-pdx/src/browser_sources.rs'];texts={n:(root/n).read_text()for n in names};model=texts[names[0]];display=texts['servers/sexdisplay/src/main.rs'];abi=texts['crates/sex-pdx/src/clock_source.rs']
+ root=Path(root);names=['crates/silkbar-model/src/lib.rs','crates/silkbar-model/src/civil_clock.rs','crates/sex-pdx/src/clock_source.rs','kernel/src/clock_source.rs','kernel/src/init.rs','servers/silkbar/src/main.rs','servers/silkbar/src/civil_clock.rs','servers/sexdisplay/src/main.rs','scripts/silkbar_clock_gate.py','scripts/clock_source_evidence.py','scripts/browser_source_evidence.py','scripts/browser_gate_viewport.py','crates/sex-pdx/src/app_catalog.rs','crates/sex-pdx/src/browser_sources.rs'];texts={n:(root/n).read_text()for n in names};model=texts[names[0]];display=texts['servers/sexdisplay/src/main.rs'];abi=texts['crates/sex-pdx/src/clock_source.rs']
  profile=_caption_profile(display)
- if profile==DATE_PROFILE:
+ if profile in(DATE_PROFILE,SLIM_PROFILE):
   for name in('servers/sexdisplay/Cargo.toml','crates/sex-time/Cargo.toml','crates/sex-time/src/lib.rs'):texts[name]=(root/name).read_text()
   assert re.search(r'^sex-time\s*=\s*\{\s*path\s*=\s*"../../crates/sex-time",\s*default-features\s*=\s*false\s*\}',texts['servers/sexdisplay/Cargo.toml'],re.M),'Display calendar dependency not bound to local no_std sex-time'
-  if _date_render_shape(display):
+  if profile==SLIM_PROFILE or _date_render_shape(display):
    for name in('servers/sexdisplay/src/scene.rs','servers/sexdisplay/src/bitmap_binding.rs','servers/sexdisplay/src/bitmap_transaction.rs','servers/sexdisplay/src/bitmap_stores.rs','servers/sexdisplay/src/surface_lifecycle.rs','servers/sexdisplay/src/surface_groups.rs','crates/sex-pdx/src/app_lifecycle.rs','crates/sex-pdx/src/bitmap_batch.rs'):
     texts[name]=(root/name).read_text()
    if 'fn render_prepared('in display:
@@ -148,6 +176,16 @@ def source_contract(root):
   assert 'ifmatches!(paint,Paint::Full|Paint::Strip){civil_clock_drawn(&captured_bar,w,h,paint.label());}'in re.sub(r'\s+','',_function(display,'render_prepared'))
  else:
   assert 'civil_clock_drawn(bar,w,h,"strip")'in display and 'civil_clock_drawn(bar,w,h,"full")'in display
+ if profile==SLIM_PROFILE:
+  for name in('crates/sex-pdx/src/desktop_style.rs','servers/sexdisplay/src/glyphs.rs','crates/sex-font/src/lib.rs','crates/sex-font/src/raster.rs','crates/sex-font/src/cache.rs','crates/sex-font/examples/ui_labels.rs','scripts/geist_cells.py'):
+   texts[name]=(root/name).read_text()
+  glyphs=re.sub(r'\s+','',texts['servers/sexdisplay/src/glyphs.rs'])
+  assert 'sex_pdx::desktop_style::chrome::UI_FONT*64*scale'in glyphs and 'UI_H*scaleasusize'in glyphs
+  helper=re.sub(r'\s+','',_function(display,'ui_label_at_scaled'))
+  assert 'glyphs::ui_coverage(text,xasi32,y,scale)?'in helper and 'sex_pdx::desktop_style::contrast_ink(background)'in helper
+  hashes={n:hashlib.sha256(t.encode()).hexdigest()for n,t in texts.items()}
+  hashes['assets/fonts/geist/Geist-Regular.ttf']=hashlib.sha256((root/'assets/fonts/geist/Geist-Regular.ttf').read_bytes()).hexdigest()
+  return dict(font=font_from_source(display),font_profile='geist-sans-ui13-v1',root=str(root),bounds=bounds,caption_profile=profile,source_sha256=hashes)
  font_profile='legacy-rom-v1';coverage=None;background=None;captions=None
  if 'fn panel_caption_at('in display or 'fn panel_glyph_at('in display:
   proportional='fn panel_caption_at('in display
@@ -201,14 +239,18 @@ def clock_cell_pixels(contract,lines,w=80,h=22):
  return bytes(pixels)
 
 def expected_clock_lines(contract,state,seconds,stale=False):
- profile=contract['caption_profile'];assert profile in(LEGACY_PROFILE,DATE_PROFILE),'unknown civil caption profile'
+ profile=contract['caption_profile'];assert profile in(LEGACY_PROFILE,DATE_PROFILE,SLIM_PROFILE),'unknown civil caption profile'
  if state=='Snapshot':
   assert type(seconds)is int and contract['bounds']['MIN_SECONDS']<=seconds<=contract['bounds']['MAX_SECONDS'],'snapshot outside validated source range'
   date=datetime.datetime.fromtimestamp(seconds,datetime.timezone.utc)
+  if profile==SLIM_PROFILE:return f'{date.hour:02d}:{date.minute:02d} UTC | {date.day:02d} {MONTHS[date.month-1]}  ',''
   first=f'UTC {date.hour:02d}:{date.minute:02d}:{date.second:02d}'
   second='q35 1s snap'if profile==LEGACY_PROFILE else f'{date.day:02d} {MONTHS[date.month-1]} {date.year:04d}'
   return first,second
  assert seconds==0,'unhealthy civil state retained a numeric date'
+ if profile==SLIM_PROFILE:
+  text={'Unavailable':'UTC unavailable','Rollback':'UTC blocked','Exhausted':'UTC ended','Unknown':'UTC stale'if stale else'UTC unknown'}[state]
+  return text.ljust(20),''
  if profile==LEGACY_PROFILE:
   rows={'Unavailable':('UTC unknown','q35 1s fail'),'Rollback':('UTC blocked','q35 1s stop'),'Exhausted':('UTC ended','src? prec?'),'Unknown':('UTC stale','q35 1s old')if stale else('UTC unknown','src? prec?')}
  else:rows={'Unavailable':('UTC unknown','Source error'),'Rollback':('UTC blocked','Time blocked'),'Exhausted':('UTC ended','Updates ended'),'Unknown':('UTC stale','Sample stale')if stale else('UTC unknown','Awaiting UTC')}
@@ -253,7 +295,7 @@ def inspect_publications(trace):
 def repaint_metrics(trace,contract=None):
  """Join repaint decisions to real admissions; a decision is never a draw."""
  if contract is None:contract=source_contract(Path(__file__).resolve().parents[1])
- assert contract['caption_profile']in(LEGACY_PROFILE,DATE_PROFILE),'unknown repaint caption profile'
+ assert contract['caption_profile']in(LEGACY_PROFILE,DATE_PROFILE,SLIM_PROFILE),'unknown repaint caption profile'
  admitted=inspect_publications(trace)
  pattern=r'\[sexdisplay.clock.civil.applied\] pd=6 task=6 sequence=(\d+) state=(Unknown|Snapshot|Unavailable|Rollback|Exhausted) seconds=(\d+) high_water=\d+ stale=0 source_known=[01] source=(?:q35_cmos_utc|unknown) precision=[01] snapshot_only=1 pixels=unconfirmed repaint=([01])(?=\n|$)'
  updates=list(re.finditer(pattern,trace));assert len(updates)==len(admitted),'missing/malformed civil repaint decision'
@@ -264,7 +306,7 @@ def repaint_metrics(trace,contract=None):
  # Ordinary-image startup paints Unknown. Canonical receiver health may later
  # hide Snapshot; merge those transitions before checking both renderer rows.
  state,seconds,is_stale,sequence='Unknown',0,False,0;requested=0
- def visible(s,t,old):return(s,(t if contract['caption_profile']==DATE_PROFILE else t%86400)if s=='Snapshot'else 0,old if s=='Unknown'else False)
+ def visible(s,t,old):return(s,(t if contract['caption_profile']in(DATE_PROFILE,SLIM_PROFILE) else t%86400)if s=='Snapshot'else 0,old if s=='Unknown'else False)
  for _,kind,event in sorted([(m.start(),'update',m)for m in updates]+[(m.start(),'stale',m)for m in stale]+[(m.start(),'draw',m)for m in draws]):
   if kind=='draw':
    assert(int(event[1]),event[2],int(event[3]),bool(int(event[4])))==(sequence,state,seconds,is_stale),'completed draw differs from actual receiver/health state'
@@ -284,8 +326,14 @@ def verify_pixels(trace,ppm,contract,resolution=None,expected_state=None):
  try:
   admitted=inspect_publications(trace);draws=list(re.finditer(r'\[display.civil.draw\] sequence=(\d+) state=(Unknown|Snapshot|Unavailable|Rollback|Exhausted) seconds=(\d+) stale=([01]) pixels=written path=(full|strip) x=(\d+) y=(\d+) w=(\d+) h=(\d+)',trace));assert len(draws)==trace.count('[display.civil.draw]')and draws,'missing/malformed completed civil draw';draw=draws[-1];seq=int(draw[1]);state=draw[2];seconds=int(draw[3]);stale=bool(int(draw[4]));x,y,w,h=map(int,draw.groups()[5:]);width,height,raw=ppm_rgb(ppm,min_width=1,min_height=1)
   assert resolution is None or(width,height)==tuple(resolution),'civil framebuffer resolution differs'
-  d=contract['dimensions'];cx=d['CHIP_X3']-max(0,d['CHIP_X3']+d['CLOCK_W']+16-width)
-  assert(x,y,w,h)==(cx,d['CHIP_Y'],d['CLOCK_W'],d['CHIP_H'])and x+w<=width and y+h<=height,'civil glyph geometry differs'
+  if contract['caption_profile']==SLIM_PROFILE:
+   from browser_gate_viewport import chrome_metrics
+   metric=chrome_metrics(trace[:draw.end()]+'\n');scale=metric['scale']
+   assert(metric['width'],metric['height'])==(width,height),'frame geometry differs'
+   assert(x,y,w,h)==(width-152*scale,2*scale,144*scale,24*scale),'slim civil glyph geometry differs'
+  else:
+   d=contract['dimensions'];cx=d['CHIP_X3']-max(0,d['CHIP_X3']+d['CLOCK_W']+16-width)
+   assert(x,y,w,h)==(cx,d['CHIP_Y'],d['CLOCK_W'],d['CHIP_H'])and x+w<=width and y+h<=height,'civil glyph geometry differs'
   if expected_state:assert state==expected_state and not stale,'civil presentation has not reached expected source state'
   if seq:
    a=admitted.get(seq);assert a and a['offset']<draw.start(),'draw lacks exact admitted source sequence'
@@ -298,8 +346,28 @@ def verify_pixels(trace,ppm,contract,resolution=None,expected_state=None):
     for gy,bits in enumerate(glyph(contract['font'],ch)):
      for gx in range(5):
       if bits&(1<<(4-gx)):wanted.add((col*6+gx,1+row*10+gy))
-  color=contract['color'].to_bytes(3,'big');mismatches=0
-  if contract.get('font_profile')in('geist-sans-cells-v1','geist-sans-caption-v1'):
+  color=contract.get('color',0).to_bytes(3,'big');mismatches=0
+  if contract.get('font_profile')=='geist-sans-ui13-v1':
+   import geist_cells
+   atlas=geist_cells.ui_labels(scale,root=contract['root'])
+   alpha=geist_cells.ui_bitmap(atlas,first,w,h,left=4*scale,top=4*scale)
+   wanted={(xx,yy)for yy in range(h)for xx in range(w)if alpha[yy*w+xx]}
+   # This exact oracle deliberately qualifies the initial no-night, horizontally
+   # uniform bar background. Every zero-coverage pixel must agree per row; a
+   # textured wallpaper requires a separately source-bound background oracle.
+   expected=bytearray(w*h*3)
+   for yy in range(h):
+    row=[raw[((y+yy)*width+x+xx)*3:((y+yy)*width+x+xx)*3+3]for xx in range(w)]
+    clear=[row[xx]for xx in range(w)if not alpha[yy*w+xx]]
+    assert clear and all(pixel==clear[0]for pixel in clear),'nonuniform clock background outside this oracle profile'
+    back=clear[0];values=[v/255 for v in back]
+    linear=[v/12.92 if v<=.04045 else((v+.055)/1.055)**2.4 for v in values]
+    light=sum(v*k for v,k in zip(linear,(.2126,.7152,.0722)))+.05
+    ink=0 if light*light>=1.05*.05 else 255
+    for xx in range(w):
+     a=alpha[yy*w+xx];pixel=bytes((ink*a+bg*(255-a))//255 for bg in back)
+     at=(yy*w+xx)*3;expected[at:at+3]=pixel;mismatches+=row[xx]!=pixel
+  elif contract.get('font_profile')in('geist-sans-cells-v1','geist-sans-caption-v1'):
    # Clock's composed background is the source-bound, opaque chip border.
    # Compare every pixel, including antialiasing and the erased row gaps.
    expected=clock_cell_pixels(contract,(first,second),w,h)

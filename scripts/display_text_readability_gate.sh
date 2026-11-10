@@ -13,7 +13,7 @@ for name in ['FONT_UNICODE_5X7','FONT_UNSUPPORTED_5X7']:
 a=s.index('static mut PROGRAM_TITLES:');parts.append(s[a:s.index('\n',a)])
 for k in ('const PROGRAM_ROWS:','static mut PIXEL_REGIONS:','static mut PIXEL_SIZE:'):
     a=s.index(k);parts.append(s[a:s.index('\n',a)])
-for name in ['program_title','surface_title','program_pixel_at','coverage_blend','ascii_glyph_index','scalar_glyph','toolbar_title_fg_at','surface_text_scale','apply_text_zoom','recompute_text_lines','surface_text_fg_at']:
+for name in ['chrome_metrics','frame_height','frame_rim','program_pixel_at_for','toolbar_title_fg_at_scaled','surface_text_scale_for','surface_text_fg_at_scaled','program_title','surface_title','program_pixel_at','coverage_blend','ascii_glyph_index','scalar_glyph','toolbar_title_fg_at','surface_text_scale','apply_text_zoom','recompute_text_lines','surface_text_fg_at']:
     a=s.index('fn '+name+'(');i=s.index('{',a)+1;depth=1
     while depth:
         depth+=(s[i]=='{')-(s[i]=='}');i+=1
