@@ -39,6 +39,7 @@ struct sx {
     struct SwsContext *scale;
     SwrContext *resample;
     int draining;
+    int absolute;               // times are the stream's own (Media Source), not from its start
     int scale_w, scale_h, scale_from_w, scale_from_h, scale_fmt;
 };
 
@@ -71,8 +72,11 @@ struct sx *sx_open(void *opaque, sx_read_fn rd, sx_seek_fn sk, struct sx_info *i
     struct sx *s = av_mallocz(sizeof *s);
     if (!s) { *err = AVERROR(ENOMEM); return NULL; }
     s->video.stream = s->audio.stream = -1;
-    unsigned char *buf = av_malloc(65536);
-    s->io = buf ? avio_alloc_context(buf, 65536, 0, opaque, rd, NULL, sk) : NULL;
+    // A growing stream reads in small steps, so the read position (which the player
+    // checks against what has arrived) stays close to what the demuxer has taken.
+    int io_size = growing ? 16384 : 65536;
+    unsigned char *buf = av_malloc(io_size);
+    s->io = buf ? avio_alloc_context(buf, io_size, 0, opaque, rd, NULL, sk) : NULL;
     s->format = avformat_alloc_context();
     if (!s->io || !s->format) { *err = AVERROR(ENOMEM); sx_close(s); return NULL; }
     s->format->pb = s->io;
@@ -80,6 +84,9 @@ struct sx *sx_open(void *opaque, sx_read_fn rd, sx_seek_fn sk, struct sx_info *i
     // Read a growing stream in order, as from a pipe: then the MP4 parser takes one
     // fragment at a time instead of indexing every fragment up to the last byte.
     if (growing) s->io->seekable = 0;
+    // A Media Source stream may start anywhere (a seek, a live edge): its times are
+    // presentation times as they stand, not counted from its first packet.
+    s->absolute = growing;
     if ((*err = avformat_open_input(&s->format, NULL, NULL, NULL)) < 0) { s->format = NULL; sx_close(s); return NULL; }
     // A stream still arriving (Media Source, a download: Source::growing) is not probed further: probing
     // reads ahead until it runs into bytes that have not come yet, and the container
@@ -113,13 +120,13 @@ struct sx *sx_open(void *opaque, sx_read_fn rd, sx_seek_fn sk, struct sx_info *i
 }
 
 // Times are measured from the file's start, shared by every stream, so a sound track
-// that begins after the pictures keeps its offset.
+// that begins after the pictures keeps its offset. A growing stream keeps its own times.
 static int64_t pts_ms(struct sx *s, int stream, AVFrame *f) {
     int64_t t = f->best_effort_timestamp;
     if (t == AV_NOPTS_VALUE) return -1;
     AVStream *st = s->format->streams[stream];
     int64_t ms = av_rescale_q(t, st->time_base, (AVRational){1, 1000});
-    if (s->format->start_time != AV_NOPTS_VALUE) ms -= s->format->start_time / 1000;
+    if (!s->absolute && s->format->start_time != AV_NOPTS_VALUE) ms -= s->format->start_time / 1000;
     return ms;
 }
 
@@ -158,6 +165,8 @@ static int sound(struct sx *s, int16_t *pcm, int cap, int *frames) {
 // The next thing to present. Returns 1 for a picture scaled to out_w x out_h into
 // `out`, 2 for `*frames` frames of 48 kHz stereo i16 sound in `pcm` (room for `cap`),
 // 0 at the end, or an AVERROR. `*at_ms` is its time from the stream's start, or -1.
+// A growing stream that ran out of bytes ends here too (its decoders give up every
+// frame they hold); the caller may open again on what follows.
 int sx_next(struct sx *s, uint32_t *out, int out_w, int out_h, int16_t *pcm, int cap, int *frames, int64_t *at_ms) {
     *frames = 0;
     for (;;) {
@@ -179,8 +188,7 @@ int sx_next(struct sx *s, uint32_t *out, int out_w, int out_h, int16_t *pcm, int
         // Both decoders were told the end and neither has a frame left.
         if (s->draining) return 0;
         // A growing source (Media Source) answers EIO for bytes that have not arrived
-        // yet; FFmpeg's probing runs into that at open. The player reads on only once
-        // enough has arrived, so forget it and read again.
+        // yet: forget it and read again, now that more may have come.
         if (s->io->error == AVERROR(EIO) || s->io->eof_reached) { s->io->error = 0; s->io->eof_reached = 0; }
         int r = av_read_frame(s->format, s->packet);
         if (r == AVERROR_EOF || r == AVERROR(EIO)) {

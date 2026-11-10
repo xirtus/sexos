@@ -693,7 +693,7 @@ impl Browser {
             if let Some(w) = wait { next = Some(next.map_or(w, |n| n.min(w))); }
             relayout |= core::mem::take(&mut m.resized);
             // A MediaSource still filling: look again soon.
-            if m.player.is_none() && m.mse.is_some() && m.state != media::State::Failed { next = Some(next.map_or(10, |n| n.min(10))); }
+            if (m.player.is_none() || m.pending.is_some()) && m.mse.is_some() && m.state != media::State::Failed { next = Some(next.map_or(10, |n| n.min(10))); }
         }
         if relayout {
             self.relayout();

@@ -3529,7 +3529,9 @@ Plan: `docs/handoff/NVIDIA_GPU_PLAN_2026_11_09.md` (stages N1-N6).
 - **sex-fetch:** `pieces` module (Content-Range parsing, Range piece bookkeeping) for seekable network `src`.
 - **ABI:** sex-js host op `MEDIA_APPEND` = 70 (bytes). No kernel ABI change.
 - **Gate:** `scripts/program_web_mse_gate.py` (QEMU, sound recorded to WAV).
-- **Limits:** no seeking inside an MSE stream yet, no WebM SourceBuffers, no `timestampOffset`.
+- **Then (same day):** WebM SourceBuffers (VP9, AV1, Opus, Vorbis; Clusters of known or unknown size), `timestampOffset` (written into `tfdt` / the Cluster `Timecode`), `abort`, `changeType`, seeking (waits until the target's segments are appended), quality switches (a new init segment mid-stream), `remove()` that frees segments, and a 160 MiB per-buffer quota that lets go of played segments first.
+- **How:** `sex_web::mse::Stream` keeps segments by time with the init segment each follows. Web's feed hands the decoder an init segment and then segments in time order. `sex_media::Source` gains `restart(ms)` (seek by starting a new stream) and `next_stream()` (at a switch, or where a feed ran dry, the decoder opens again on what follows, keeping the player's queue and clock; `Next::Later` while it waits). A growing stream keeps its own presentation times (no start-time shift) and reads in 16 KiB steps.
+- **Limits:** `appendWindowStart/End` and `mode = 'sequence'` are accepted but not applied; a `remove()` that cuts a segment in two keeps the whole segment for the decoder (only `buffered` shows the cut).
 
 ## Video and sound play while they download (2026-11-10)
 

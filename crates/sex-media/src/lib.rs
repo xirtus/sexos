@@ -44,6 +44,17 @@ pub trait Source {
     /// Whether bytes are still arriving at open: such a stream is read in order, as
     /// from a pipe, and not probed ahead (FFmpeg would run into bytes not here yet).
     fn growing(&self) -> bool { false }
+    /// Seeking a stream read in order: the source starts over as a new stream that
+    /// plays from `ms` (a Media Source feed hands out its init segment, then the
+    /// segment holding `ms`), and the decoder opens again on it. False if the source
+    /// can't (then FFmpeg seeks within the stream as usual).
+    fn restart(&mut self, _ms: u64) -> bool { false }
+    /// At the end of the stream (or where a growing one ran out): whether another
+    /// follows on from here, as a Media Source feed's next segments do. `Some(true)`:
+    /// it starts now, and the decoder opens again on it, keeping the player's pictures
+    /// and clock (times run on); `Some(false)`: not yet, ask again once
+    /// `available` says something is there; `None`: this is the end.
+    fn next_stream(&mut self) -> Option<bool> { None }
 }
 
 /// Bytes a growing source must have ahead of the read position before decoding goes
@@ -175,6 +186,8 @@ pub enum Next {
     Picture { at_ms: i64 },
     /// `frames` frames of sound are in `pcm`.
     Sound { frames: usize, at_ms: i64 },
+    /// Nothing until more of a growing stream arrives (it ran out at a segment's end).
+    Later,
     End,
 }
 
@@ -264,6 +277,8 @@ pub struct Decoder {
     s: *mut c_void,
     io: Box<Io>,
     pub info: Info,
+    /// The stream ended where another will follow (`Source::next_stream`).
+    parked: bool,
 }
 
 #[cfg_attr(not(ffmpeg), allow(dead_code))]
@@ -284,6 +299,7 @@ impl Decoder {
     pub fn ready(&self) -> bool {
         let at = self.io.at;
         let have = self.io.src.available(at);
+        if self.parked { return have > 0; }
         have >= self.io.src.ahead() || self.io.src.len().is_some_and(|len| have >= len.saturating_sub(at))
     }
 
@@ -292,10 +308,17 @@ impl Decoder {
 
     #[cfg(ffmpeg)]
     fn open_io(mut io: Box<Io>) -> Result<Decoder, Error> {
+        let (s, info) = Self::open_raw(&mut io)?;
+        Ok(Decoder { s, io, info, parked: false })
+    }
+
+    /// Opens FFmpeg on `io`, which must stay where it is while the stream is open.
+    #[cfg(ffmpeg)]
+    fn open_raw(io: &mut Io) -> Result<(*mut c_void, Info), Error> {
         init_libc();
         let mut raw: ffi::RawInfo = unsafe { core::mem::zeroed() };
         let mut err = 0;
-        let opaque: *mut Io = &mut *io;
+        let opaque: *mut Io = io;
         let growing = io.src.growing() as c_int;
         let s = unsafe { ffi::sx_open(opaque.cast(), io_read, io_seek, &mut raw, &mut err, growing) };
         if s.is_null() {
@@ -313,7 +336,7 @@ impl Decoder {
             audio_codec: name(&raw.audio_codec),
             format: name(&raw.format),
         };
-        Ok(Decoder { s, io, info })
+        Ok((s, info))
     }
 
     /// The next picture or piece of sound. A picture is scaled to `w` x `h` into `out`
@@ -321,13 +344,15 @@ impl Decoder {
     #[cfg(ffmpeg)]
     pub fn next(&mut self, out: &mut [u32], w: usize, h: usize, pcm: &mut [[i16; 2]]) -> Result<Next, Error> {
         assert!(out.len() >= w * h);
+        if self.parked { return self.go_on(out, w, h, pcm); }
+        if self.s.is_null() { return Err(Error::UNSUPPORTED); }
         let (mut frames, mut at): (c_int, i64) = (0, -1);
         let r = unsafe {
             ffi::sx_next(self.s, out.as_mut_ptr(), w as c_int, h as c_int, pcm.as_mut_ptr().cast(),
                          pcm.len() as c_int, &mut frames, &mut at)
         };
         match r {
-            0 => Ok(Next::End),
+            0 => self.go_on(out, w, h, pcm),
             1 => Ok(Next::Picture { at_ms: at }),
             2 => Ok(Next::Sound { frames: frames.max(0) as usize, at_ms: at }),
             e => Err(Error(e)),
@@ -341,8 +366,36 @@ impl Decoder {
     /// Go to `ms` from the start: decoding restarts at the key frame at or before it.
     #[cfg(ffmpeg)]
     pub fn seek(&mut self, ms: u64) -> Result<(), Error> {
+        if self.io.src.restart(ms) { return self.reopen(); }
+        if self.s.is_null() { return Err(Error::UNSUPPORTED); }
         let r = unsafe { ffi::sx_seek(self.s, ms as i64) };
         if r < 0 { Err(Error(r)) } else { Ok(()) }
+    }
+
+    /// The stream ended: carry on with the one that follows, if any.
+    #[cfg(ffmpeg)]
+    fn go_on(&mut self, out: &mut [u32], w: usize, h: usize, pcm: &mut [[i16; 2]]) -> Result<Next, Error> {
+        match self.io.src.next_stream() {
+            None => { self.parked = false; Ok(Next::End) }
+            Some(false) => { self.parked = true; Ok(Next::Later) }
+            Some(true) => {
+                self.reopen()?;
+                self.next(out, w, h, pcm)
+            }
+        }
+    }
+
+    /// Opens FFmpeg again on the source, which starts over (`restart`, `next_stream`).
+    #[cfg(ffmpeg)]
+    fn reopen(&mut self) -> Result<(), Error> {
+        unsafe { ffi::sx_close(self.s) };
+        self.s = core::ptr::null_mut();
+        self.io.at = 0;
+        self.parked = false;
+        let (s, info) = Self::open_raw(&mut self.io)?;
+        self.s = s;
+        self.info = info;
+        Ok(())
     }
     #[cfg(not(ffmpeg))]
     pub fn seek(&mut self, _: u64) -> Result<(), Error> { Err(Error::UNSUPPORTED) }
@@ -397,7 +450,7 @@ pub fn decode_picture(bytes: &[u8], max_w: usize, max_h: usize) -> Result<(usize
         match d.next(&mut out, w, h, &mut pcm)? {
             Next::Picture { .. } => break,
             Next::Sound { .. } => continue,
-            Next::End => return Err(Error::UNSUPPORTED),
+            Next::End | Next::Later => return Err(Error::UNSUPPORTED),
         }
     }
     for p in out.iter_mut() { *p |= 0xFF00_0000; }
@@ -860,6 +913,10 @@ impl Player {
                 self.free.push(px);
                 self.fail(e);
                 true
+            }
+            Ok(Next::Later) => {
+                self.free.push(px);
+                false
             }
             Ok(Next::End) => {
                 self.free.push(px);

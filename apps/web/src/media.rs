@@ -55,6 +55,10 @@ pub struct Media {
     pub mse: Option<crate::mse::Mse>,
     /// The picture size became known while playing on (lay the page out again).
     pub resized: bool,
+    /// A Media Source element waits to seek here (seconds) until its segments come.
+    pub pending: Option<f64>,
+    /// It was playing when that seek came: play on after it.
+    resume: bool,
 }
 
 impl Media {
@@ -64,7 +68,7 @@ impl Media {
         // A MediaSource's object URL is not loaded: the page attaches it ("mse").
         let waits = !src.is_empty() && !src.starts_with("blob:");
         Media {
-            node, audio, state: if waits { State::Waiting } else { State::Empty }, src, player: None, mse: None, resized: false,
+            node, audio, state: if waits { State::Waiting } else { State::Empty }, src, player: None, mse: None, resized: false, pending: None, resume: false,
             want_play: dom.attr(node, "autoplay").is_some(), looped: dom.attr(node, "loop").is_some(),
             controls: dom.attr(node, "controls").is_some(), muted: dom.attr(node, "muted").is_some(), volume: 100,
             events: Vec::new(), last_report: 0, size: (0, 0), frames: 0,
@@ -137,13 +141,20 @@ impl Media {
             }
             "pause" => {
                 self.want_play = false;
+                self.resume = false;
                 if let Some(p) = self.player.as_mut() {
                     if !p.paused() { p.pause(); self.events.push("pause"); }
                 }
             }
             "seek" => {
                 let s: f64 = arg.parse().unwrap_or(0.0);
-                if let Some(p) = self.player.as_mut() {
+                if self.mse.is_some() {
+                    // Played once the page has appended what holds it; the picture
+                    // holds still meanwhile, as a browser's does.
+                    self.pending = Some(s.max(0.0));
+                    if let Some(p) = self.player.as_mut() { if !p.paused() { p.pause(); self.resume = true; } }
+                    self.events.push("seeking");
+                } else if let Some(p) = self.player.as_mut() {
                     p.seek((s.max(0.0) * 1000.0) as u64);
                     self.events.extend_from_slice(&["seeking", "seeked", "timeupdate"]);
                 }
@@ -162,11 +173,12 @@ impl Media {
             "loop" => self.looped = arg == "1",
             "mse" => {
                 self.player = None;
+                self.pending = None;
                 self.mse = Some(crate::mse::Mse::new());
                 self.state = State::Empty;
                 self.events.push("emptied");
             }
-            "add" | "duration" | "end" | "reopen" | "remove" | "drop" => {
+            "add" | "duration" | "end" | "reopen" | "remove" | "offset" | "abort" | "type" | "drop" => {
                 let node = self.node;
                 let Some(m) = self.mse.as_mut() else { return false };
                 match verb {
@@ -174,7 +186,7 @@ impl Media {
                     "duration" => { m.duration = arg.parse().unwrap_or(f64::NAN); self.events.push("durationchange"); }
                     "end" => m.end(),
                     "reopen" => m.reopen(),
-                    "remove" => m.remove(node, arg),
+                    "remove" | "offset" | "abort" | "type" => m.buffer_request(node, verb, arg),
                     _ => if let Some(b) = arg.parse::<usize>().ok().and_then(|i| m.buffers.get_mut(i)) { b.dropped = true; },
                 }
             }
@@ -194,19 +206,7 @@ impl Media {
     /// Plays on: shows what is due into the page picture. Returns whether the picture
     /// changed and how soon to come back (None: nothing to do until something happens).
     pub fn step(&mut self, fonts: &mut Fonts) -> (bool, Option<u64>) {
-        if self.player.is_none() && self.state != State::Failed && self.mse.as_ref().is_some_and(|m| m.openable()) {
-            match self.mse.as_ref().unwrap().decoders() {
-                Ok((Some(v), a)) => self.resized |= self.start(v, a),
-                Ok((None, Some(a))) => self.resized |= self.start(a, None),
-                Ok((None, None)) => {}
-                Err(e) => {
-                    let mut text = [0u8; 80];
-                    sex_pdx::serial_record!("[web.mse.failed] node={} err={} why={}", self.node, e.0, e.text(&mut text));
-                    self.state = State::Failed;
-                    self.events.push("error");
-                }
-            }
-        }
+        self.mse_step();
         let name = self.picture_name();
         let controls = self.controls;
         let Some(p) = self.player.as_mut() else { return (false, None) };
@@ -226,7 +226,7 @@ impl Media {
                     if self.want_play {
                         self.want_play = false;
                         self.events.extend_from_slice(&["timeupdate", "pause", "ended"]);
-                        sex_pdx::serial_record!("[web.media.ended] node={} frames={} sound_frames={} played={}", self.node, self.frames, p.heard, p.played());
+                        sex_pdx::serial_record!("[web.media.ended] node={} frames={} sound_frames={} played={} err={}", self.node, self.frames, p.heard, p.played(), p.error().map_or(0, |e| e.0));
                     }
                     break;
                 }
@@ -244,6 +244,49 @@ impl Media {
         (false, wait.map(|w| w.min(REPORT_MS)))
     }
 
+    /// A Media Source element: open its decoders once the segments are here, and seek
+    /// once the target's segments are.
+    fn mse_step(&mut self) {
+        let Some(m) = self.mse.as_ref() else { return };
+        if self.state == State::Failed { return; }
+        let ms = |t: f64| (t * 1000.0) as u64;
+        if self.player.is_none() {
+            let t = match self.pending {
+                Some(t) => m.ready_at(t).then_some(t),
+                // A stream that starts later than 0 plays from where it starts.
+                None => if m.ready_at(0.0) { Some(0.0) } else { m.first().filter(|&f| m.ready_at(f)) },
+            };
+            let Some(t) = t else { return };
+            match m.decoders(t) {
+                Ok((Some(v), a)) => self.resized |= self.start(v, a),
+                Ok((None, Some(a))) => self.resized |= self.start(a, None),
+                Ok((None, None)) => return,
+                Err(e) => {
+                    let mut text = [0u8; 80];
+                    sex_pdx::serial_record!("[web.mse.failed] node={} err={} why={}", self.node, e.0, e.text(&mut text));
+                    self.state = State::Failed;
+                    self.events.push("error");
+                    return;
+                }
+            }
+            if t > 0.0 { if let Some(p) = self.player.as_mut() { p.seek(ms(t)); } }
+            if self.pending.take().is_some() { self.events.extend_from_slice(&["seeked", "timeupdate"]); }
+            return;
+        }
+        let p = self.player.as_mut().unwrap();
+        if let Some(t) = self.pending {
+            if m.ready_at(t) {
+                sex_pdx::serial_record!("[web.mse.seek] node={} to={}", self.node, t);
+                p.seek(ms(t));
+                if core::mem::take(&mut self.resume) { p.play(); }
+                self.pending = None;
+                self.events.extend_from_slice(&["seeked", "timeupdate"]);
+            }
+        }
+        let now = p.time_ms().max(0) as f64 / 1000.0;
+        m.playhead(now);
+    }
+
     /// The `media` dispatch for the page: state, then the events since the last one.
     pub fn report(&mut self) -> Option<String> {
         if self.events.is_empty() { return None; }
@@ -252,7 +295,7 @@ impl Media {
         let (t, d, paused, ended, w, h, ready) = match self.player.as_mut() {
             Some(p) => {
                 let d = p.duration_ms();
-                (p.time_ms().max(0) as f64 / 1000.0, if d > 0 { alloc::format!("{}", d as f64 / 1000.0) } else { String::new() },
+                (self.pending.unwrap_or_else(|| p.time_ms().max(0) as f64 / 1000.0), if d > 0 { alloc::format!("{}", d as f64 / 1000.0) } else { String::new() },
                  p.paused() || p.ended(), p.ended(), self.size.0, self.size.1, 4)
             }
             None => (0.0, String::new(), true, false, 0, 0, 0),

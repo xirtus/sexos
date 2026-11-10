@@ -619,10 +619,13 @@ fn media_source_feeds_a_video() {
     s.dispatch(&format!("mse\t{node}\t0\t1\t0-2.5")).unwrap();
     s.dispatch(&format!("mse\t{node}\t1\t1\t0.5-3")).unwrap();
     s.eval("console.log('both', v_ranges()); function v_ranges() { const b = document.getElementById('v').buffered; return b.length + ' ' + b.start(0) + ' ' + b.end(0); }", "u.js").unwrap();
+    s.eval("sb.timestampOffset = 5; sb.abort(); sb.changeType('video/webm; codecs=\"vp9\"'); console.log('offset', sb.timestampOffset);", "o.js").unwrap();
+    let asked: Vec<String> = std::mem::take(&mut s.page_mut().media).into_iter().map(|(_, v, a)| format!("{v} {a}")).collect();
+    assert_eq!(asked, ["offset 0 5", "abort 0", "type 0 video/webm; codecs=\"vp9\""]);
     s.eval("ms.endOfStream(); console.log(ms.readyState, ms.duration, document.getElementById('v').duration);", "w.js").unwrap();
     let l = logs(&mut s);
     assert_eq!(l, [
-        "0:true true false false", "0:closed", "0:open open 2", "0:busy InvalidStateError",
-        "0:updateend false 1 2.5 0", "0:both 1 0.5 2.5", "0:ended 3 3",
+        "0:true true true false", "0:closed", "0:open open 2", "0:busy InvalidStateError",
+        "0:updateend false 1 2.5 0", "0:both 1 0.5 2.5", "0:offset 5", "0:ended 3 3",
     ]);
 }

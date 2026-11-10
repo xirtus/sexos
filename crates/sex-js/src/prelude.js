@@ -999,21 +999,33 @@
   // object URL and appends byte stream segments to its SourceBuffers; the browser
   // reads their times (for `buffered`) and decodes them as they arrive. Fragmented
   // MP4 with H.264, AV1, AAC or MP3 for now.
-  const MSE_TYPE = /^\s*(video|audio)\/mp4\s*(;|$)/i;
-  const MSE_CODEC = /^(avc1|avc3|av01)(\..*)?$|^mp4a(\.40(\.\d+)?|\.6b|\.69)?$|^mp3$/i;
+  // The byte streams sex-web's MSE reads (crates/sex-web/src/mse.rs: format).
+  const MSE_TYPE = /^\s*(video|audio)\/(mp4|webm)\s*(;|$)/i;
+  const MSE_CODEC = {
+    mp4: /^(avc1|avc3|av01)(\..*)?$|^mp4a(\.40(\.\d+)?|\.6b|\.69)?$|^mp3$/i,
+    webm: /^(vp8|vp9|vp09|av01)(\..*)?$|^(opus|vorbis)$/i,
+  };
   function mseSupported(type) {
     type = String(type);
-    if (!MSE_TYPE.test(type)) return false;
+    const t = MSE_TYPE.exec(type);
+    if (!t) return false;
     const m = /codecs\s*=\s*"?([^";]*)"?/i.exec(type);
-    return !m || m[1].split(',').every(c => MSE_CODEC.test(c.trim()));
+    return !m || m[1].split(',').every(c => MSE_CODEC[t[2].toLowerCase()].test(c.trim()));
   }
   class SourceBuffer extends EventTarget {
     constructor(ms, index, type) {
       super(); this._ms = ms; this._i = index; this._type = type; this._ranges = []; this.updating = false;
-      this.mode = 'segments'; this.timestampOffset = 0; this.appendWindowStart = 0; this.appendWindowEnd = Infinity;
+      this.mode = 'segments'; this._off = 0; this.appendWindowStart = 0; this.appendWindowEnd = Infinity;
       this.onupdatestart = this.onupdate = this.onupdateend = this.onerror = this.onabort = null;
     }
     get buffered() { return timeRanges(this._ranges); }
+    get timestampOffset() { return this._off; }
+    set timestampOffset(v) {
+      v = +v;
+      if (!isFinite(v)) throw new TypeError('timestampOffset must be a number of seconds');
+      if (this.updating || !this._ms._el) throw domError('InvalidStateError');
+      this._off = v; this._ms._ask('offset', this._i + ' ' + v);
+    }
     _start() {
       if (this._ms.readyState === 'closed' || !this._ms._el) throw domError('InvalidStateError');
       if (this.updating) throw domError('InvalidStateError');
@@ -1035,9 +1047,14 @@
       this._ms._ask('remove', this._i + ' ' + start + ' ' + end);
     }
     abort() {
+      this._ms._ask('abort', '' + this._i);
       if (this.updating) { this.updating = false; this.dispatchEvent(new Event('abort')); this.dispatchEvent(new Event('updateend')); }
     }
-    changeType(type) { if (!mseSupported(type)) throw domError('NotSupportedError'); this._type = type; }
+    changeType(type) {
+      if (!mseSupported(type)) throw domError('NotSupportedError');
+      if (this.updating) throw domError('InvalidStateError');
+      this._type = type; this._ms._ask('type', this._i + ' ' + type);
+    }
     // 'mse\tNODE\tINDEX\tOK\tA-B,C-D'
     _done(ok, ranges) {
       this._ranges = ranges ? ranges.split(',').map(r => r.split('-').map(Number)) : [];
@@ -1083,7 +1100,7 @@
       if (this.readyState !== 'open') throw domError('InvalidStateError');
       const sb = new SourceBuffer(this, this.sourceBuffers._l.length, String(type));
       this.sourceBuffers._l.push(sb);
-      this._ask('add', type);
+      this._ask('add', String(type));
       this.sourceBuffers.dispatchEvent(new Event('addsourcebuffer'));
       return sb;
     }
