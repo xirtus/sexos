@@ -7,6 +7,9 @@ inputs:
   media:
     description: Restore or build FFmpeg and libc++
     default: "true"
+  recording:
+    description: Build the optional FFV1/Matroska recording profile
+    default: "false"
   save-cache:
     description: Save the cargo cache after this job (one job per run, on master)
     default: "false"
@@ -52,11 +55,17 @@ runs:
         target/ffmpeg/lib
         target/ffmpeg/include
         target/ffmpeg/include-c
-      key: ffmpeg-${{ hashFiles('scripts/build_ffmpeg.sh') }}
+        target/ffmpeg/sexos-recording-v1
+      key: ffmpeg-${{ inputs.recording }}-${{ hashFiles('scripts/build_ffmpeg.sh') }}
   - name: Build FFmpeg for programs
     if: inputs.media == 'true'
     shell: bash
-    run: test -f target/ffmpeg/lib/libavcodec.a || bash scripts/build_ffmpeg.sh
+    run: |
+      profile=0
+      if [[ "${{ inputs.recording }}" == true ]]; then profile=1; fi
+      if [[ ! -f target/ffmpeg/lib/libavcodec.a ]] || [[ "$(cat target/ffmpeg/sexos-recording-v1 2>/dev/null)" != "$profile" ]]; then
+        FFMPEG_RECORDING=$profile bash scripts/build_ffmpeg.sh
+      fi
   - name: Cache libc++
     if: inputs.media == 'true'
     uses: actions/cache@v4

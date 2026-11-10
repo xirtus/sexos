@@ -1,0 +1,53 @@
+# Optional lossless recording encoder
+
+This slice adds an FFV1/BGR0 Matroska encoder inside the calling program's
+existing PKU domain. It adds no capture grant, framebuffer access, kernel code,
+networking, audio capture, or desktop recording UI. Spindle has no allocator and
+must not acquire this encoder implicitly. A recorder needs an explicitly bounded
+heap and narrowly held capture/file routes.
+
+Build `scripts/build_ffmpeg.sh` with `FFMPEG_RECORDING=1` to enable FFV1
+encode/decode and Matroska muxing. Default builds retain the decoder profile and
+return `recording::Error::Unavailable`. A profile marker and separate CI cache
+key prevent the decoder archive being mistaken for an encoder build. The new CI
+job is included in the aggregate `build` requirement.
+
+`Encoder` accepts owned private XRGB pictures and increasing millisecond PTS.
+It copies into an AVFrame, preserves input timestamp gaps, drains delayed packets
+at finish and emits ordered offset writes, including Matroska header patches.
+C callbacks only enqueue bytes or move the prospective output cursor; they never
+perform Files IPC. Before accepting another frame or finish the owner drains all
+output, authenticates each actual Files reply and acknowledges its exact local
+token. Each advertised turn is at most 32 KiB; partial acknowledgements rotate
+tokens. Queue limits: 32 MiB payload, 4,096 chunks, 4 GiB file, 4,194,304 pixels,
+36,000 frames and PTS no greater than 600,000 ms. Codec/frame state is additional
+memory and remains bounded by the program row's heap, not the queue limit.
+Allocation or codec failures poison the encoder; dropping it performs no IPC or
+trailer writes. Durable sync remains the file owner's responsibility.
+
+`run play --encode-proof proof.mkv` is an explicitly synthetic diagnostic in
+Play's existing private Files folder. It refuses an existing final or `.part`
+name, writes four 65x49 pictures at PTS 0/200/600/800 ms, mutates each submitted
+input buffer, drains/finishes, renames and syncs. It is not a desktop recording.
+The guest gate recovers `/data/play/proof.mkv` read-only after stopping QEMU,
+then independently verifies codec, dimensions, every RGB byte and packet PTS.
+
+Validation in progress:
+
+- Three production output-queue host tests pass: ordered backward patches/holes,
+  32 KiB turns, partial/replayed acknowledgements and failure without mutation.
+- Actual Rust/C encoder host smoke passes all four pictures byte for byte and
+  packet timestamps. Boundary: host FFmpeg 8.1.1 and host libc, not guest 7.1.2.
+  Evidence: `sexos-evidence/recording-encoder-host-gate/result.json` outside Git.
+- First host CLI extraction failed because default constant-rate conversion
+  duplicated one picture across the deliberate timestamp gap. This was diagnosed
+  by comparing all five decoded frames and packet PTS; extraction now explicitly
+  uses passthrough timing. No encoder assertion was weakened.
+- SexOS target check for Play and sex-media passed with encoding unavailable.
+  A native ARM host cargo check fails on the repository's x86 syscall registers;
+  it is not a supported target check and is not reported as passing.
+- Private FFmpeg 7.1.2 recording profile built with Clang 23.1.5, musl headers,
+  FFV1 encoder/decoder and Matroska muxer enabled. Existing forbidden-instruction
+  scanning passed, with the existing sha.o frame-pointer recompilation.
+- Guest image and synthetic round trip remain pending. No recording performance,
+  desktop capture integration, physical hardware or daily-driver claim yet.

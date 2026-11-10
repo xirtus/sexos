@@ -18,13 +18,21 @@
 #
 #   MUSL_INCLUDE   musl's include directory (default: found below)
 #   FFMPEG_SRC     an FFmpeg checkout (default: cloned at FFMPEG_TAG)
+#   FFMPEG_RECORDING=1 additionally builds FFV1 encode/decode and Matroska muxing
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT=$PWD
 FFMPEG_TAG=${FFMPEG_TAG:-n7.1.2}
+FFMPEG_RECORDING=${FFMPEG_RECORDING:-0}
+case "$FFMPEG_RECORDING" in 0|1) ;; *) echo 'FFMPEG_RECORDING must be 0 or 1' >&2; exit 1;; esac
 OUT=$ROOT/target/ffmpeg
 WORK=$OUT/work
 mkdir -p "$WORK"
+rm -f "$OUT/sexos-recording-v1"
+RECORDING_FLAGS=()
+if [[ $FFMPEG_RECORDING == 1 ]]; then
+  RECORDING_FLAGS=(--enable-encoder=ffv1 --enable-decoder=ffv1 --enable-muxer=matroska)
+fi
 
 if [[ -z "${MUSL_INCLUDE:-}" ]]; then
   for d in /usr/lib/musl/include /usr/include/x86_64-linux-musl /usr/local/musl/include; do
@@ -74,6 +82,7 @@ PKG_CONFIG_LIBDIR=$DAV1D/lib/pkgconfig PKG_CONFIG_PATH= "$FFMPEG_SRC/configure" 
   --enable-decoder=h264,hevc,vp8,vp9,mpeg4,aac,aac_fixed,mp3,mp3float,opus,vorbis,flac,pcm_s16le,pcm_f32le,libdav1d \
   --enable-parser=h264,hevc,vp8,vp9,mpeg4video,aac,mpegaudio,opus,vorbis,flac,av1 \
   --enable-bsf=vp9_superframe_split \
+  "${RECORDING_FLAGS[@]}" \
   >configure.log
 
 # Link tests always pass with no C library at configure time, so configure believes
@@ -114,4 +123,5 @@ make -j"$(nproc)" >>make.log
 make install >install.log
 # Programs link dav1d from the same directory as FFmpeg.
 cp "$DAV1D/lib/libdav1d.a" "$OUT/lib/"
+printf '%s\n' "$FFMPEG_RECORDING" > "$OUT/sexos-recording-v1"
 echo "[ffmpeg] $(ls "$OUT"/lib/*.a | xargs -n1 basename | tr '\n' ' ')-> $OUT"
