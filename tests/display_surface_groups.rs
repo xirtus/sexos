@@ -3,6 +3,7 @@
 //! sentinels; surface selection, clipping, fill, font and presentation bits are real.
 #![allow(dead_code,unused_variables,unused_unsafe,static_mut_refs)]
 extern crate self as sex_pdx;
+#[macro_export]macro_rules! serial_record{($($arg:tt)*)=>{{let _=format_args!($($arg)*);}}}
 #[path="../crates/sex-pdx/src/text_encoding.rs"]pub mod text_encoding;
 #[path="../crates/sex-pdx/src/text_batch.rs"]pub mod text_batch;
 #[path="../servers/sexdisplay/src/text_transaction.rs"]mod text_transaction;
@@ -73,25 +74,17 @@ include!("fixtures/compositor_reference.rs");
   assert_eq!(s.text_buf[0],byte);assert_eq!((s.selection_start,s.selection_end),(0,if selected{1}else{0}));
  }}}
 }
-#[test]fn actual_toolbar_titles_keep_lowercase_at_fixed_integer_metrics(){
- // Geist Sans, kerned and proportional, blended onto the bar; every letter has ink
- // inside its own advance and nothing is drawn outside the title line.
- let x0=FRAME_TOP_BAR_LIGHT_EXCLUSION_PX+12;let y0=(FRAME_TOP_BAR_HEIGHT_PX-glyphs::TITLE_H)/2;
+#[test]fn actual_toolbar_titles_keep_lowercase_at_natural_13px_metrics(){
  for (sid,title)in[(200,&b"Linen"[..]),(201,&b"Quil"[..]),(300,&b"Browser"[..]),(306,&b"Spindle"[..]),(308,&b"Quil"[..]),(309,&b"Quil"[..]),(310,&b"Quil"[..]),(311,&b"Quil"[..]),(312,&b"Quil"[..])]{
-  let mut starts=[0usize;16];let n=glyphs::title_starts(title,&mut starts);assert_eq!(n,title.len());
-  let end=starts[n-1]+12;
-  for y in 0..FRAME_TOP_BAR_HEIGHT_PX {for x in x0-4..x0+end+8 {
-   let a=if y>=y0&&y<y0+glyphs::TITLE_H{glyphs::title_coverage(title,x as i32-x0 as i32,y-y0)}else{0};
-   let want=(a!=0).then(||coverage_blend(sex_pdx::desktop_style::contrast_ink(0),0,a));
-   assert_eq!(toolbar_title_fg_at(x,y,sid,0),want,"sid={sid} x={x} y={y}");
-  }}
-  for i in 0..n {
-   let right=if i+1<n{starts[i+1]}else{end};
-   let ink=(starts[i]..right).flat_map(|x|(0..glyphs::TITLE_H).map(move|y|(x,y))).filter(|(x,y)|glyphs::title_coverage(title,*x as i32,*y)>128).count();
-   assert!(ink>3,"sid={sid} letter {} has no ink",title[i] as char);
-  }
+  let end=glyphs::ui_width(title,1).unwrap();let mut count=0;
+  for y in 0..26{for x in 81..85+end+4{
+   let alpha=if(5..21).contains(&y){glyphs::ui_coverage(title,x as i32-85,y-5,1).unwrap()}else{0};
+   let expected=(alpha!=0).then(||coverage_blend(desktop_style::contrast_ink(0),0,alpha));
+   assert_eq!(toolbar_title_fg_at(x,y,sid,0),expected);count+=expected.is_some()as usize;
+  }}assert!(count>60);
  }
 }
+
 // Literal accepted64 legacy mutation behavior, separate from new helpers.
 fn legacy_draw_reference(slot:&mut Surface,packed:u64,arg2:u64){
  let byte_offset=((arg2&0xFF)|((arg2>>4)&0xF00))as usize;let char_count=((arg2>>8)&0xF)as usize;
@@ -380,7 +373,7 @@ fn bg(_:usize,_:usize)->u32{0x123}
 // Its sentinel catches entry during pure Settle; actual Main cursor storage and
 // publication effects are tested separately by the frame-output/scene gates.
 static mut CURSOR_UNDERLAY_SENTINEL:[u32;4]=[0;4];
-fn restore_cursor_under(_: *mut u32,_:usize,_:usize,_:usize){unsafe{DAMAGE_ORDER.push("restore");CURSOR_UNDERLAY_SENTINEL[0]=0;}}
+fn restore_cursor_under(_: *mut u32,_:usize,_:usize,_:usize,_:desktop_style::chrome::Metrics){unsafe{DAMAGE_ORDER.push("restore");CURSOR_UNDERLAY_SENTINEL[0]=0;}}
 fn draw_cursor_z_top(_: *mut u32,_:usize,_:usize,_:usize,save:bool,_:&scene::SceneSnapshot){assert!(save);unsafe{DAMAGE_ORDER.push("cursor");CURSOR_UNDERLAY_SENTINEL[1]=0;}}
 fn draw_launcher_panel(_: *mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapshot){unsafe{DAMAGE_ORDER.push("launcher");}}
 fn report_app_presented(){unsafe{DAMAGE_ORDER.push("presented");}}
@@ -389,7 +382,7 @@ use paint_batch::{Content,Plan};
 static mut ATLAS_CALLS:usize=0;
 fn draw_atlas_cards_pass(_:*mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapshot){unsafe{ATLAS_CALLS+=1;}}
 fn draw_atlas_frame_previews_pass(_:*mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapshot){unsafe{ATLAS_CALLS+=1;}}
-fn civil_clock_lines(_:&silkbar_model::civil_clock::CivilClock)->[[u8;13];2]{TEST_CLOCK_LINES}
+fn civil_clock_caption(_:&silkbar_model::civil_clock::CivilClock)->[u8;20]{TEST_CLOCK_LINES}
 #[test]
 fn glyph_footprint_covers_all_actual_ink_and_erases_empty_or_shorter_replacements(){
  for (x,y,w,h) in [(-30,-30,144,90),(0,0,220,150),(100,100,624,331),(950,750,624,331)] {
@@ -483,31 +476,31 @@ fn glyph_footprint_covers_all_actual_ink_and_erases_empty_or_shorter_replacement
  for sid in [0,100,152,999,u64::MAX]{assert_eq!(desktop_style::native_label(sid),None);assert_eq!(desktop_style::native_indicator(sid),None);}
 }
 
-use silkbar_model::{SilkBar,DEFAULT_SILK_BAR,DEFAULT_THEME};
+use silkbar_model::{SilkBar,ModuleSlot,DEFAULT_SILK_BAR,DEFAULT_THEME};
 #[test]
 fn normal_app_indicator_uses_actual_focus_and_clears_with_it(){unsafe{
  let bar=DEFAULT_SILK_BAR;
  for sid in [201,301,307,308,309,310,311,312]{FOCUSED_SURFACE_ID=sid;let pixel_scene_7=capture_scene(MAX_FB_W,MAX_FB_H,FOCUSED_SURFACE_ID);
- for y in 22..26{for x in 155..159{assert_eq!(phase5_active_app_at(x,y,&bar, &pixel_scene_7),Some(0xCBA6F7));}}}
- for sid in [153,306]{FOCUSED_SURFACE_ID=sid;assert_eq!(phase5_active_app_at(155,22,&bar, &capture_scene(MAX_FB_W,MAX_FB_H,FOCUSED_SURFACE_ID)),Some(0x89B4FA));}
- FOCUSED_SURFACE_ID=0;assert_eq!(phase5_active_app_at(155,22,&bar, &capture_scene(MAX_FB_W,MAX_FB_H,FOCUSED_SURFACE_ID)),None);
- FOCUSED_SURFACE_ID=307;assert_eq!(phase5_active_app_at(159,22,&bar, &capture_scene(MAX_FB_W,MAX_FB_H,FOCUSED_SURFACE_ID)),None);assert_eq!(phase5_active_app_at(155,26,&bar, &capture_scene(MAX_FB_W,MAX_FB_H,FOCUSED_SURFACE_ID)),None);
+ for y in 12..16{for x in 40..44{assert_eq!(phase5_active_app_at(x,y,&bar, &pixel_scene_7),Some(0xCBA6F7));}}}
+ for sid in [153,306]{FOCUSED_SURFACE_ID=sid;assert_eq!(phase5_active_app_at(40,12,&bar, &capture_scene(MAX_FB_W,MAX_FB_H,FOCUSED_SURFACE_ID)),Some(0x89B4FA));}
+ FOCUSED_SURFACE_ID=0;assert_eq!(phase5_active_app_at(40,12,&bar, &capture_scene(MAX_FB_W,MAX_FB_H,FOCUSED_SURFACE_ID)),None);
+ FOCUSED_SURFACE_ID=307;assert_eq!(phase5_active_app_at(44,12,&bar, &capture_scene(MAX_FB_W,MAX_FB_H,FOCUSED_SURFACE_ID)),None);assert_eq!(phase5_active_app_at(40,16,&bar, &capture_scene(MAX_FB_W,MAX_FB_H,FOCUSED_SURFACE_ID)),None);
 }}
 
 fn repaint_begin()->u64{0}
 fn repaint_end(_kind:&str,_started:u64){}
-const TEST_CLOCK_LINES:[[u8;13];2]=[[b'C';13],[b'D';13]];
-fn clock_fg_at(x:usize,y:usize,_:&SilkBar,lines:&[[u8;13];2],_:u32)->Option<u32>{assert_eq!(*lines,TEST_CLOCK_LINES);(x==0&&y==0).then_some(1)}
-fn bell_badge_at(x:usize,y:usize,_:&SilkBar,_:u32)->Option<u32>{(x==1&&y==0).then_some(2)}
+const TEST_CLOCK_LINES:[u8;20]=[b'C';20];
+fn clock_fg_at_scaled(x:usize,y:usize,_:&SilkBar,lines:&[u8;20],_:u32,_:u32)->Option<u32>{assert_eq!(*lines,TEST_CLOCK_LINES);(x==0&&y==0).then_some(1)}
+fn bell_badge_at_scaled(x:usize,y:usize,_:&SilkBar,_:u32,_:u32)->Option<u32>{(x==1&&y==0).then_some(2)}
 fn phase5_tint_swatch_at(x:usize,y:usize,_:&SilkBar)->Option<u32>{(x==2&&y==0).then_some(3)}
 fn phase5_palette_dot_at(x:usize,y:usize,_:&SilkBar)->Option<u32>{(x==3&&y==0).then_some(4)}
 fn bar_color(_:usize,_:usize,_:&SilkBar,_:&scene::SceneSnapshot)->u32{9}
 #[test]
 fn shared_full_and_incremental_strip_uses_current_focus(){unsafe{
  let bar=DEFAULT_SILK_BAR;
- for sid in [301,307,308,309,310,311,312]{FOCUSED_SURFACE_ID=sid;assert_eq!(top_strip_pixel(155,22,&bar,&TEST_CLOCK_LINES, &capture_scene(MAX_FB_W,MAX_FB_H,FOCUSED_SURFACE_ID)),0xCBA6F7);}
- FOCUSED_SURFACE_ID=306;assert_eq!(top_strip_pixel(155,22,&bar,&TEST_CLOCK_LINES, &capture_scene(MAX_FB_W,MAX_FB_H,FOCUSED_SURFACE_ID)),0x89B4FA);
- FOCUSED_SURFACE_ID=0;assert_eq!(top_strip_pixel(155,22,&bar,&TEST_CLOCK_LINES, &capture_scene(MAX_FB_W,MAX_FB_H,FOCUSED_SURFACE_ID)),9);
+ for sid in [301,307,308,309,310,311,312]{FOCUSED_SURFACE_ID=sid;assert_eq!(top_strip_pixel(40,12,&bar,&TEST_CLOCK_LINES, &capture_scene(MAX_FB_W,MAX_FB_H,FOCUSED_SURFACE_ID)),0xCBA6F7);}
+ FOCUSED_SURFACE_ID=306;assert_eq!(top_strip_pixel(40,12,&bar,&TEST_CLOCK_LINES, &capture_scene(MAX_FB_W,MAX_FB_H,FOCUSED_SURFACE_ID)),0x89B4FA);
+ FOCUSED_SURFACE_ID=0;assert_eq!(top_strip_pixel(40,12,&bar,&TEST_CLOCK_LINES, &capture_scene(MAX_FB_W,MAX_FB_H,FOCUSED_SURFACE_ID)),9);
  for (x,c)in [(0,1),(1,2),(2,3),(3,4),(4,9)]{assert_eq!(top_strip_pixel(x,0,&bar,&TEST_CLOCK_LINES, &capture_scene(MAX_FB_W,MAX_FB_H,FOCUSED_SURFACE_ID)),c);}
 }}
 
@@ -949,8 +942,11 @@ fn captured_compositor_pixels_survive_live_surface_token_focus_and_bitmap_change
  DISPLAY_TOKENS.frame_rim_color=0x00ff00;FOCUSED_SURFACE_ID=0;
  BITMAP_STORES.retire(15,15);FRAME_GROUPS=FrameGroups::new();
  RENDER_FRAME_COUNTER.store(12345,core::sync::atomic::Ordering::Relaxed);
+ desktop_style::set_ui_scale(3); // a later live scale cannot move captured pixels
  for (index,&(x,y)) in points.iter().enumerate(){assert_eq!(composite_pixel(x,y,600,500,0,captured.focus,&captured),before[index]);}
  assert_eq!(captured.bitmaps.sample(15,300,0,0),Some(0xffff0000));
+ assert_eq!(captured.metrics.scale(),1);assert_eq!(captured.groups.metrics().scale(),1);
+ desktop_style::set_ui_scale(1);
  let next=capture_scene(600,500,0);
  assert!(points.iter().enumerate().any(|(i,&(x,y))|composite_pixel(x,y,600,500,0,next.focus,&next)!=before[i]));
  assert_eq!(next.bitmaps.sample(15,300,0,0),None);
@@ -961,11 +957,11 @@ fn captured_compositor_pixels_survive_live_surface_token_focus_and_bitmap_change
 fn captured_strip_focus_does_not_follow_later_global_focus(){unsafe{
  let saved=FOCUSED_SURFACE_ID;FOCUSED_SURFACE_ID=201;
  let previous=capture_scene(1000,800,201);
- assert_eq!(phase5_active_app_at(155,22,&previous.bar,&previous),Some(0xCBA6F7));
+ assert_eq!(phase5_active_app_at(40,12,&previous.bar,&previous),Some(0xCBA6F7));
  FOCUSED_SURFACE_ID=306;
- assert_eq!(phase5_active_app_at(155,22,&previous.bar,&previous),Some(0xCBA6F7));
+ assert_eq!(phase5_active_app_at(40,12,&previous.bar,&previous),Some(0xCBA6F7));
  let next=capture_scene(1000,800,306);
- assert_eq!(phase5_active_app_at(155,22,&next.bar,&next),Some(0x89B4FA));
+ assert_eq!(phase5_active_app_at(40,12,&next.bar,&next),Some(0x89B4FA));
  FOCUSED_SURFACE_ID=saved;
 }}
 

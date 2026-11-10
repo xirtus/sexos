@@ -112,3 +112,11 @@ fn pending_receipt_blocks_legacy_and_incarnation_reset_fences_delayed_old_reply(
     assert_eq!(fresh.receive(1,1,display.reply().unwrap().1),Some(1));
     let mut exhausted=ScaleClient::for_incarnation(1<<14);assert!(!exhausted.begin(1));
 }
+
+#[test]fn narrow_framebuffers_refuse_an_unfittable_scale_without_overflow(){
+ use desktop_style::chrome::fit_scale;
+ for (w,requested,want) in [(640,3,2),(800,3,2),(960,3,3),(1024,3,3),(1280,2,2),(1,3,1),(8192,99,3)]{
+  assert_eq!(fit_scale(w,requested,320),want);
+ }
+ assert_eq!(fit_scale(8192,3,u32::MAX),1);
+}

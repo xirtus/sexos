@@ -6,7 +6,7 @@ Hovering a box with a `transition` fades its background through in-between colou
 import argparse,http.server,os,re,shutil,threading,time
 from PIL import Image
 from pathlib import Path
-from browser_gate_viewport import full_viewport
+from browser_gate_viewport import full_viewport, content_rect
 ROOT=Path(__file__).resolve().parents[1]
 SITE=ROOT/'scripts/web_site'
 BAR=30
@@ -46,7 +46,7 @@ def main():
   launch=g['wait'](rf'\[shell.program.launch\] target={target} task={task} surface=(\d+)',s,60);surface=int(launch[1])
   g['wait'](rf'\[display.app.pixels\] target={target} surface={surface} ',s,60);time.sleep(.5)
   x,y,w,h=map(int,re.findall(rf'\[shell.tile.apply\] sid={surface} x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)',t())[-1])
-  ox,oy=x+8,y+36+BAR  # the page's top-left on screen
+  ox,oy,_,_=content_rect(t(),(x,y,w,h));oy+=BAR  # page origin after browser toolbar
   # Four seconds of animation: on the way the box is part red, part blue, and moving.
   mixed=0;deadline=time.time()+7
   while time.time()<deadline:
@@ -59,10 +59,10 @@ def main():
   s2=len(t());time.sleep(3);after=frames(s2,target);assert after==0,f'{after} frames drawn after the animation ended'
   # Keep the initial animation timing intact; reveal the full page before the hover check.
   x,y,w,h=full_viewport(g,ROOT,surface)
-  ox,oy=x+8,y+36+BAR
+  ox,oy,_,_=content_rect(t(),(x,y,w,h));oy+=BAR
   shot=a.out/'animate.ppm';q.cmd('screendump',{'filename':str(shot)});time.sleep(.5)
   img=Image.open(shot).convert('RGB')
-  img.crop((x+8,y+36,x+8+410,y+36+330)).save(a.out/'animate.png')
+  bx,by,_,_=content_rect(t(),(x,y,w,h));img.crop((bx,by,bx+410,by+330)).save(a.out/'animate.png')
   moved,left=img.getpixel((ox+260,oy+40)),img.getpixel((ox+60,oy+40))
   assert moved[2]>200 and moved[0]<60,('the box ends blue at 200 px',moved)
   assert min(left)>200,('nothing left behind',left)

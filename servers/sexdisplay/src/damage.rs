@@ -18,7 +18,7 @@ impl Damage {
         let right = x.saturating_add(w).min(width);
         let bottom = y.saturating_add(h).min(height);
         let x = x.min(width);
-        let y = y.max(51).min(height);
+        let y = y.max(crate::bar_height()).min(height);
         if x >= right || y >= bottom {
             return;
         }

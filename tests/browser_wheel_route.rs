@@ -4,6 +4,7 @@
 //! routing/authority/pixel evidence. The real FIFO, ABI and broker are included.
 #![allow(dead_code,static_mut_refs,unused_variables)]
 extern crate self as sex_pdx;
+#[path="../crates/sex-pdx/src/desktop_style.rs"]pub mod desktop_style;
 #[path="../crates/sex-pdx/src/app_catalog.rs"] pub mod real_app_catalog;
 #[path="../crates/sex-pdx/src/app_lifecycle.rs"]mod lifecycle_abi;
 #[path="../crates/sex-pdx/src/app_scroll.rs"]pub mod app_scroll;
@@ -57,6 +58,7 @@ static mut LAUNCHER_ACTIVE:bool=false;static mut CLOCK_ACTIVE:bool=false;static 
 static mut BELL_ACTIVE:bool=false;static mut SCENE_SETTINGS_ACTIVE:bool=false;
 #[derive(Clone,Copy)]enum InteractionState{Idle,ClickPending,Dragging,Resizing,TabDragging,PanelActive}
 static mut INTERACTION:InteractionState=InteractionState::Idle;
+static mut DISPLAY_SCALE:desktop_style::chrome::ScaleClient=desktop_style::chrome::ScaleClient::new();
 static mut POINTER_BUTTONS:u8=0;static mut POINTER_X:i32=100;static mut POINTER_Y:i32=120;
 static mut FOCUSED_SURFACE_ID:u64=201;
 #[derive(Clone,Copy)]enum HitTarget{None,Surface(u64),FrameChrome}

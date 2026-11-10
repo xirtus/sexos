@@ -118,6 +118,7 @@ pub mod chrome {
     pub const TITLE: u32 = 26;
     pub const TARGET: u32 = 24;
     pub const UI_FONT: u32 = 13;
+    pub const UI_LINE:u32=16;
     pub const RESIZE: u32 = 8;
     pub const OUTER_GAP: u32 = 8;
     pub const INNER_GAP: u32 = 6;
@@ -132,6 +133,13 @@ pub mod chrome {
         if step == 0 { return clamp_scale(boot); }
         let before=clamp_scale(before);
         if step > 0 { clamp_scale(before+1) } else { clamp_scale(before-1) }
+    }
+    /// Fit policy supplied by the data model; an excessive manual/EDID scale
+    /// never panics the renderer or hides module targets outside the screen.
+    pub const fn fit_scale(width:u32,requested:u32,min_logical:u32)->u32{
+        let mut scale=clamp_scale(requested);
+        while scale>1&&width<min_logical.saturating_mul(scale){scale-=1;}
+        scale
     }
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub struct Rect { pub x: u32, pub y: u32, pub w: u32, pub h: u32 }

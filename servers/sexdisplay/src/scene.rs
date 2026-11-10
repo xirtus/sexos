@@ -28,6 +28,7 @@ pub struct SceneSnapshot {
     pub(super) groups:FrameGroups,
     pub(super) bitmaps:PublishedStores<BROWSERS>,
     pub(super) bar:SilkBar,
+    pub(super) metrics:sex_pdx::desktop_style::chrome::Metrics,
     pub(super) tokens:RenderTokensV1,
     pub(super) focus:u64,
     pub(super) frame:u64,
@@ -40,7 +41,7 @@ impl SceneSnapshot {
     /// Initialize existing static storage directly; never return a captured
     /// aggregate or construct a second large image on the service stack.
     pub const EMPTY:Self=Self{surfaces:[SURFACE_EMPTY;MAX_SURFACES],text_projections:[None;MAX_SURFACES],groups:FrameGroups::new(),
-        bitmaps:PublishedStores::EMPTY,bar:DEFAULT_SILK_BAR,tokens:DEFAULT_RENDER_TOKENS,
+        bitmaps:PublishedStores::EMPTY,bar:DEFAULT_SILK_BAR,metrics:sex_pdx::desktop_style::chrome::Metrics::new(1),tokens:DEFAULT_RENDER_TOKENS,
         focus:0,frame:0,blur_rows:[0;crate::BAR_BG_H],width:0,height:0,valid:false};
 
     /// Inputs are already committed/admitted Display data; sealed unreleased
@@ -68,7 +69,7 @@ impl SceneSnapshot {
                 self.text_projections[index]=Some(TextProjection{context,coverage});
             }
         }
-        self.groups=*groups;self.bar=*bar;self.tokens=tokens;
+        self.groups=*groups;self.metrics=groups.metrics();self.bar=*bar;self.tokens=tokens;
         self.focus=focus;self.frame=frame;self.width=width;self.height=height;
         self.valid=true;true
     }
@@ -87,7 +88,7 @@ impl SceneSnapshot {
         }
         for context in &mut self.text_projections{unsafe{core::ptr::write_volatile(context,None);}}
         self.bitmaps.scrub();
-        self.groups=FrameGroups::new();self.bar=DEFAULT_SILK_BAR;
+        self.groups=FrameGroups::new();self.metrics=sex_pdx::desktop_style::chrome::Metrics::new(1);self.bar=DEFAULT_SILK_BAR;
         self.tokens=DEFAULT_RENDER_TOKENS;self.focus=0;self.frame=0;self.width=0;self.height=0;
         for row in &mut self.blur_rows{unsafe{core::ptr::write_volatile(row,0);}}
     }

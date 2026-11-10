@@ -3,6 +3,7 @@
 // relaxation of the actual guest constant or proof of framebuffer authority.
 #![allow(dead_code,static_mut_refs)]
 extern crate self as sex_pdx;
+fn bar_height()->usize{28}
 #[path="../crates/sex-pdx/src/memory_region.rs"]pub mod memory_region;
 pub use memory_region::MemoryRegionInfo;
 pub const ERR_CAP_INVALID:u64=0xFFFF_FFFF_FFFF_FFFC;
@@ -119,7 +120,7 @@ fn raster_full(t:&frame_output::Target<'_>,s:&scene::SceneSnapshot)->bool{primit
 fn raster_strip(t:&frame_output::Target<'_>,s:&scene::SceneSnapshot)->bool{primitive(t,s,"strip")}
 fn raster_area(t:&frame_output::Target<'_>,s:&scene::SceneSnapshot)->bool{primitive(t,s,"area")}
 fn raster_damage(t:&frame_output::Target<'_>,r:damage::Rect,s:&scene::SceneSnapshot)->bool{assert_eq!(r,rect());primitive(t,s,"damage")}
-fn restore_cursor_under(_fb:*mut u32,_w:usize,_h:usize,_len:usize){event("restore");}
+fn restore_cursor_under(_fb:*mut u32,_w:usize,_h:usize,_len:usize,_:desktop_style::chrome::Metrics){event("restore");}
 fn draw_atlas_cards_pass(_fb:*mut u32,_w:usize,_h:usize,_len:usize,s:&scene::SceneSnapshot){observe_scene(s);event("atlas");}
 fn draw_atlas_frame_previews_pass(_fb:*mut u32,_w:usize,_h:usize,_len:usize,s:&scene::SceneSnapshot){observe_scene(s);event("preview");}
 fn draw_launcher_panel(fb:*mut u32,_w:usize,_h:usize,len:usize,s:&scene::SceneSnapshot){observe_scene(s);unsafe{fb.add(len-2).write(0xdd);}event("launcher");}

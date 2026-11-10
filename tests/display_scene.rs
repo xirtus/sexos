@@ -4,6 +4,7 @@
 extern crate self as sex_pdx;
 pub const ERR_SERVICE_NOT_READY:u64=u64::MAX-1;
 pub const ERR_CAP_INVALID:u64=u64::MAX-3;
+fn bar_height()->usize{28}
 #[path="../crates/sex-pdx/src/memory_region.rs"]pub mod memory_region;
 pub use memory_region::MemoryRegionInfo;
 #[path="../crates/sex-pdx/src/display_frames.rs"]pub mod display_frames;

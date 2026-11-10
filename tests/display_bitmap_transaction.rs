@@ -2,6 +2,7 @@
 //! bitmap implementation or success inferred from an enqueue result.
 #![allow(dead_code)]
 extern crate self as sex_pdx;
+fn bar_height()->usize{28}
 #[path="../crates/sex-pdx/src/app_catalog.rs"] pub mod app_catalog;
 #[path="../crates/sex-pdx/src/app_lifecycle.rs"] pub mod app_lifecycle;
 #[path="../servers/sexdisplay/src/bitmap_binding.rs"] mod bitmap_binding;

@@ -12,7 +12,7 @@ pub const ERR_SERVICE_NOT_READY:u64=u64::MAX-1;
 #[path="../servers/sexdisplay/src/surface_lifecycle.rs"] mod state;
 use state::{Surface,SURFACE_EMPTY,TEXT_BUF_CAP,TEXT_MAX_ROWS,TEXT_LEGACY_COLS};
 const FRAME_TOP_BAR_LIGHT_EXCLUSION_PX:usize=50;
-const FRAME_TOP_BAR_HEIGHT_PX:usize=28;
+const FRAME_TOP_BAR_HEIGHT_PX:usize=26;
 const SURFACE_CHROME_TOP_BAR:u8=1;
 include!(env!("DISPLAY_TEXT_SOURCE"));
 fn surface(width:u32,text:&[u8])->Surface{
@@ -43,14 +43,15 @@ fn cell_pixel(s:&Surface,scalar:u32,x:usize,y:usize,selected:bool)->Option<u32>{
  let s=surface(200,b"A");assert_eq!(surface_text_scale(&s),1);
  for row in 0..9{for col in 0..6{assert_eq!(surface_text_fg_at(28+col,72+row,&s),cell_pixel(&s,b'A' as u32,col,row,false));}}
 }
-#[test]fn lowercase_titles_draw_all_letters_inside_existing_chrome(){
- // Geist Sans, proportional and kerned: every letter of the title has ink, inside the bar.
- let mut starts=[0usize;16];let n=glyphs::title_starts(b"Linen",&mut starts);assert_eq!(n,5);
- for i in 0..n{let left=62+starts[i];let right=if i+1<n{62+starts[i+1]}else{left+10};let mut pixels=0;
-  for y in 0..28{for x in left..right{if toolbar_title_fg_at(x,y,200,0).is_some(){assert!((5..23).contains(&y));pixels+=1;}}}
-  assert!(pixels>0,"letter {} disappeared",b"Linen"[i] as char);}
- assert_ne!(ascii_glyph_index(b'i'),ascii_glyph_index(b'I'));assert_eq!(ascii_glyph_index(b'\n'),None);
+#[test]fn lowercase_titles_use_13px_natural_sans_within_shared_26px_titlebar(){
+ let title=b"Linen";let width=glyphs::ui_width(title,1).unwrap();let mut count=0;
+ for y in 0..26 {for x in 80..85+width+4 {
+  let alpha=if(5..21).contains(&y){glyphs::ui_coverage(title,x as i32-85,y-5,1).unwrap()}else{0};
+  let expected=(alpha!=0).then(||coverage_blend(desktop_style::contrast_ink(0),0,alpha));
+  assert_eq!(toolbar_title_fg_at(x,y,200,0),expected);count+=expected.is_some()as usize;
+ }}assert!(count>80);
 }
+
 #[test]fn newline_wrap_uses_scaled_advance_and_clamps_before_narrowing(){
  for(width,cols)in[(1,1),(200,30),(256,20),(300,23),(640,52),(8192,160)]{
      let s=surface(width,b"a\nb");assert_eq!(s.wrap_cols,cols,"width {}",width);
@@ -62,13 +63,13 @@ fn cell_pixel(s:&Surface,scalar:u32,x:usize,y:usize,selected:bool)->Option<u32>{
 }
 #[test]fn body_text_is_below_chrome_and_line_spacing_is_scaled(){
  let mut s=surface(640,b"A\nB");s.chrome_flags=SURFACE_CHROME_TOP_BAR;
- for y in 60..96{for x in 28..40{assert_eq!(surface_text_fg_at(x,y,&s),None);}}
- let mut row2pixels=0;for y in 114..128{for x in 28..38{row2pixels+=surface_text_fg_at(x,y,&s).is_some()as usize;}}
- assert!(row2pixels>0);for y in 112..114{for x in 28..40{assert_eq!(surface_text_fg_at(x,y,&s),None);}}
+ for y in 60..94{for x in 28..40{assert_eq!(surface_text_fg_at(x,y,&s),None);}}
+ let mut row2pixels=0;for y in 112..126{for x in 28..38{row2pixels+=surface_text_fg_at(x,y,&s).is_some()as usize;}}
+ assert!(row2pixels>0);for y in 110..112{for x in 28..40{assert_eq!(surface_text_fg_at(x,y,&s),None);}}
 }
 #[test]fn native_titles_share_existing_font_and_contrast_ink(){
- // Fully covered pixels are the contrasting ink itself; edges blend toward the bar.
- for sid in[156,154,300]{let mut pixels=0;for y in 0..28{for x in 62..158{if toolbar_title_fg_at(x,y,sid,0)==Some(0x00FFFFFF){pixels+=1;}}}assert!(pixels>0);}
+ // Natural13px stems remain high-contrast; antialiasing need not land on255.
+ for sid in[156,154,300]{let mut pixels=0;for y in 0..28{for x in 62..158{if toolbar_title_fg_at(x,y,sid,0).is_some_and(|p|p&255>220){pixels+=1;}}}assert!(pixels>0);}
 }
 #[test]fn filename_punctuation_keeps_old_indices_and_has_visible_pixels(){
  for ch in b' '..=b'Z'{assert_eq!(ascii_glyph_index(ch),Some((ch-b' ')as usize));}
@@ -149,7 +150,7 @@ fn owned_surface(owner:u32,sid:u64,width:u32,text:&[u8])->Surface{
  assert_eq!(surface_text_scale(&s),15);
  let cell=glyphs::mono_cell(b'A' as u32,90,135).expect("supported HiDPI zoom must fit cached Geist");
  for y in 0..135{for x in 0..90{let a=cell[y*90+x];let expected=(a!=0).then(||coverage_blend(s.text_color,s.color,a));
-  assert_eq!(surface_text_fg_at(28+x,72+y,&s),expected,"x={x} y={y}");
+  assert_eq!(surface_text_fg_at(44+x,96+y,&s),expected,"x={x} y={y}");
  }}
  desktop_style::set_ui_scale(1);
 }

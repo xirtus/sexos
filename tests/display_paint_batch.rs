@@ -1,5 +1,6 @@
 //! Actual bounded output-plan module and actual damage helper. No renderer,
 //! admission, authority, causal-stream, native-pixel or epoch closure claim.
+fn bar_height()->usize{28}
 #[path="../servers/sexdisplay/src/damage.rs"]mod damage;
 #[path="../servers/sexdisplay/src/paint_batch.rs"]mod paint_batch;
 use damage::Rect;
@@ -26,13 +27,13 @@ fn permutations(values:&mut[u8],at:usize,apply:&mut impl FnMut(&[u8])){
  }
 }
 #[test]fn invalid_empty_offscreen_and_top_strip_damage_never_erase_cursor_work(){
- for r in[rect(4,60,4,70),rect(5,70,4,80),rect(0,70,1,60),rect(0,0,20,51),rect(W,60,W+1,70),rect(0,H,1,H+1),rect(usize::MAX-1,60,usize::MAX,70)]{
+ for r in[rect(4,60,4,70),rect(5,70,4,80),rect(0,70,1,60),rect(0,0,20,28),rect(W,60,W+1,70),rect(0,H,1,H+1),rect(usize::MAX-1,60,usize::MAX,70)]{
   let mut d=Dirty::new(W,H);d.request_cursor();d.request_damage(r,W,H);assert!(d.plan(W,H).cursor_only(),"{r:?}");
  }
- let mut d=Dirty::new(W,H);d.request_damage(rect(10,50,20,52),W,H);assert_eq!(d.plan(W,H).content,Content::Damage(rect(10,51,20,52)));
+ let mut d=Dirty::new(W,H);d.request_damage(rect(10,27,20,52),W,H);assert_eq!(d.plan(W,H).content,Content::Damage(rect(10,28,20,52)));
 }
 #[test]fn huge_extents_clip_without_wrap_and_exact_frame_edges_are_kept(){
- let mut d=Dirty::new(W,H);d.request_damage(rect(0,0,usize::MAX,usize::MAX),W,H);assert_eq!(d.plan(W,H).content,Content::Damage(rect(0,51,W,H)));
+ let mut d=Dirty::new(W,H);d.request_damage(rect(0,0,usize::MAX,usize::MAX),W,H);assert_eq!(d.plan(W,H).content,Content::Damage(rect(0,28,W,H)));
  let mut edge=Dirty::new(W,H);edge.request_damage(rect(W-1,H-1,usize::MAX,usize::MAX),W,H);assert_eq!(edge.plan(W,H).content,Content::Damage(rect(W-1,H-1,W,H)));
 }
 #[test]fn failure_retains_exact_work_new_requests_merge_and_only_success_clears(){
@@ -75,7 +76,7 @@ fn permutations(values:&mut[u8],at:usize,apply:&mut impl FnMut(&[u8])){
 #[test]fn settle_failure_retains_exact_obligation_and_later_work_upgrades_it(){
  let mut d=Dirty::new(W,H);d.request_settle();let before=d;
  d.complete(false);assert_eq!(d,before);assert!(d.plan(W,H).settle_only());
- for invalid in[rect(0,0,20,51),rect(5,60,5,70),rect(W,60,W+1,70)]{d.request_damage(invalid,W,H);assert!(d.plan(W,H).settle_only());}
+ for invalid in[rect(0,0,20,28),rect(5,60,5,70),rect(W,60,W+1,70)]{d.request_damage(invalid,W,H);assert!(d.plan(W,H).settle_only());}
  d.request_cursor();assert!(d.plan(W,H).cursor_only());d.request_settle();assert!(d.plan(W,H).cursor_only());
  d.request_damage(rect(2,60,5,70),W,H);d.complete(false);assert_eq!(d.plan(W,H).content,Content::Damage(rect(2,60,5,70)));
  d.complete(true);assert!(d.plan(W,H).is_empty());assert!(!d.plan(W,H).settle_only());
@@ -92,22 +93,22 @@ fn permutations(values:&mut[u8],at:usize,apply:&mut impl FnMut(&[u8])){
 #[test]fn body_coverage_requires_valid_entire_region_and_never_uses_strip_or_cursor(){
  let required=rect(10,60,30,80);
  for content in[Content::None,Content::Settle,Content::Cursor]{for strip in[false,true]{assert!(!Plan{content,strip}.covers_body(required));}}
- for strip in[false,true]{for content in[Content::Full,Content::Area,Content::Damage(required),Content::Damage(rect(9,51,31,81))]{assert!(Plan{content,strip}.covers_body(required));}}
+ for strip in[false,true]{for content in[Content::Full,Content::Area,Content::Damage(required),Content::Damage(rect(9,28,31,81))]{assert!(Plan{content,strip}.covers_body(required));}}
  // Any missing edge, overlap-only, disjoint region or invalid source Damage
  // refuses. Containing the top-left point alone cannot establish coverage.
  for r in[rect(11,60,30,80),rect(10,61,30,80),rect(10,60,29,80),rect(10,60,30,79),
-          rect(20,70,40,90),rect(31,60,40,80),rect(30,60,30,80),rect(40,60,30,80),rect(0,50,40,90)]{
+          rect(20,70,40,90),rect(31,60,40,80),rect(30,60,30,80),rect(40,60,30,80),rect(0,27,40,90)]{
   assert!(!Plan{content:Content::Damage(r),strip:true}.covers_body(required),"{r:?}");
  }
- for invalid in[rect(0,0,20,60),rect(0,50,20,60),rect(5,60,5,70),rect(6,60,5,70),rect(0,70,20,70),rect(0,71,20,70)]{
-  for content in[Content::Full,Content::Area,Content::Damage(rect(0,51,W,H))]{assert!(!Plan{content,strip:false}.covers_body(invalid),"{invalid:?}");}
+ for invalid in[rect(0,0,20,60),rect(0,27,20,60),rect(5,60,5,70),rect(6,60,5,70),rect(0,70,20,70),rect(0,71,20,70)]{
+  for content in[Content::Full,Content::Area,Content::Damage(rect(0,28,W,H))]{assert!(!Plan{content,strip:false}.covers_body(invalid),"{invalid:?}");}
  }
  let edge=rect(usize::MAX-1,usize::MAX-1,usize::MAX,usize::MAX);
  assert!(Plan{content:Content::Damage(edge),strip:false}.covers_body(edge));
- assert!(!Plan{content:Content::Damage(rect(0,51,W,H)),strip:false}.covers_body(edge));
+ assert!(!Plan{content:Content::Damage(rect(0,28,W,H)),strip:false}.covers_body(edge));
 }
 #[test]fn settle_geometry_change_including_tiny_shapes_promotes_full_and_retains_failure(){
- for(width,height)in[(640,480),(1,1),(W,50),(0,0)]{
+ for(width,height)in[(640,480),(1,1),(W,27),(0,0)]{
   let mut d=Dirty::new(W,H);d.request_settle();assert_eq!(d.plan(width,height),Plan::full());
   d.complete(false);assert_eq!(d.plan(width,height),Plan::full());assert_eq!(d.plan(W,H),Plan::full());
   d.complete(true);assert!(d.plan(W,H).is_empty());

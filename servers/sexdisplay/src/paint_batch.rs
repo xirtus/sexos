@@ -21,11 +21,11 @@ impl Plan{
     /// Coverage only, not publication or authority. Callers must first clip
     /// required damage to the captured frame geometry. Endpoint comparisons
     /// avoid addition/subtraction overflow, even for adversarial coordinates.
-    pub const fn covers_body(&self,required:Rect)->bool{
-        if required.x>=required.right||required.y<51||required.y>=required.bottom{return false;}
+    pub fn covers_body(&self,required:Rect)->bool{
+        if required.x>=required.right||required.y<crate::bar_height()||required.y>=required.bottom{return false;}
         match self.content{
             Content::Full|Content::Area=>true,
-            Content::Damage(actual)=>actual.x<actual.right&&actual.y>=51&&actual.y<actual.bottom
+            Content::Damage(actual)=>actual.x<actual.right&&actual.y>=crate::bar_height()&&actual.y<actual.bottom
                 &&actual.x<=required.x&&actual.y<=required.y
                 &&actual.right>=required.right&&actual.bottom>=required.bottom,
             Content::None|Content::Settle|Content::Cursor=>false,

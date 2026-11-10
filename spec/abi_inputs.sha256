@@ -22,7 +22,7 @@ e45f86d95f464bcbefe222acdb7ea565dda7f35301c54dd22ca1a71ba3e86f04  crates/sex-pdx
 
 e7dfb4de37122f0f53279e067deed3b39c9e9f3f369b3d91c9e659484dcf59c5  crates/sex-pdx/src/crash_log.rs
 
-e87a1419ee9bb24597cb06eaf408ac4fc769a07281786ee9e278793b3617a286  crates/sex-pdx/src/desktop_style.rs
+34cbdad2317e7f8b44a2c3919b40cd0683ed58a9a30df77ed15d0cbcf7b11a8f  crates/sex-pdx/src/desktop_style.rs
 
 4519de04eef091b40d15e00f40bc2ec7911f916a9ac3e28ebf4fd05613f1beca  crates/sex-pdx/src/device.rs
 
@@ -40,7 +40,7 @@ e1a8e5b73c48cfd4cc079510a2c51eacd7f371f00dffabb5968962ca9f462e30  crates/sex-pdx
 
 16cc8c0f33513beaf2ce175a5cff53949627b41b243ca62ae57afe8faf68e408  crates/sex-pdx/src/document_snapshot.rs
 
-159f2f203e9a45c383147a3d390e4dc8c60573de0078dc079b57857f86fddf05  crates/sex-pdx/src/document_view.rs
+8169ed07f21a7d5651ba180775803b79347d3ce9c7a5046d0123911c41606a4e  crates/sex-pdx/src/document_view.rs
 
 7ffe2339486c6b0f3fea6291dac86b9fcb75dc5260d8e944fa267e4758280f82  crates/sex-pdx/src/entropy_seed.rs
 
@@ -76,7 +76,7 @@ a85e05125e915a7610427b185ee00972ec8a4ff3b888b442119147f550760c9b  crates/sex-pdx
 
 3b2307aebab4213e4b3e78687a6017e2b1f8b858531e0f16fec457b90db31de7  crates/sex-pdx/src/spindle_status.rs
 
-a641934992196e0f765b31e6b8ec3a3432bb072336c6009b094cf2a9c5881adf  crates/sex-pdx/src/spindle_view.rs
+37a4f1a194dc43b8d1cfeddf8fa9b1d340704e5aab974f7167c43aa6d028b2dc  crates/sex-pdx/src/spindle_view.rs
 
 8cfae435e8cfdafe9ccca145e3031a76b21fea23bd6867952ebee99fda73a47c  crates/sex-pdx/src/text_batch.rs
 
@@ -104,7 +104,7 @@ e68fd50ea4e53eb090d6aa5e93211f4431da49eb76940188886c991be7730a8a  crates/sex-pdx
 
 3fb02c27844d6eba050d40ec9fbf8b87b45155d098c07fc7b83dac591e8c769a  crates/silkbar-model/src/civil_clock.rs
 
-c4ff9a47ae4f906f2094282f1a0d075c1c82f8116e0a9847d7e9b08925682f64  crates/silkbar-model/src/lib.rs
+122be2b6d0b6f8b8df26189f25561a9ffb41900f06c8f267a564d2a67ba71863  crates/silkbar-model/src/lib.rs
 
 a947e57a405316312fe334d17fdfdb2d3e6b59e708b4d61f416a4db6275ee4cb  kernel/src/app_catalog_state.rs
 
