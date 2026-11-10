@@ -9,7 +9,7 @@ mod boot_network{pub fn query(caller:u32)->Option<[u64;4]>{super::boot_network_s
 pub const SLOT_DMA_REGION:u64=32;
 #[path="../crates/sex-pdx/src/pci_command.rs"]pub mod pci_command;
 /// NICs are leased by product id, never by class; no class lease applies here.
-mod device_lease{pub struct Kind;impl Kind{pub fn of_class(_:u32)->Option<Kind>{None}pub fn registers_end(&self)->u64{u64::MAX}pub fn dma(&self)->(u32,u64){(0,0)}}}
+mod device_lease{pub struct Kind;impl Kind{pub fn of_class(_:u32)->Option<Kind>{None}pub fn registers_end(&self)->u64{u64::MAX}pub fn dma(&self)->(u32,u64){(0,0)}pub fn dma_slot(&self)->u64{sex_pdx::SLOT_DMA_REGION}}}
 #[path="../crates/sex-pdx/src/memory_region.rs"]pub mod memory_region;
 #[path="../kernel/src/capability_slot.rs"]mod capability_slot;
 #[path="../kernel/src/nic_boot.rs"]mod nic_boot;
@@ -124,8 +124,12 @@ fn mutate_pci(pd:&mut ProtectionDomain,f:impl FnOnce(&mut PciCapData)){let Capab
  setup(0);let p=pd();assert_eq!(mechanism::identity(&p,19,0,0,0,0),[0,0x8086,0x10d3,0,0]);untouched();
  let view_length={let CapabilityData::Pci(d)=&p.entries[0].1 else{panic!()};d.bar0_view.unwrap().length};
  assert_eq!(mechanism::identity(&p,19,1,0,0,0),[0,0,view_length,0,0]);untouched();
+ // Subsystem ids come from the held device's own config space (offset 0x2c), nothing else.
+ MODEL.lock().unwrap().as_mut().unwrap().config.insert(address(0x2c),0x1674_1a56);
+ assert_eq!(mechanism::identity(&p,19,2,0,0,0),[0,0x1a56,0x1674,0,0]);
+ {let mut m=MODEL.lock().unwrap();let m=m.as_mut().unwrap();assert!(m.events.iter().all(|e|matches!(e,Op::Address(a)if *a==address(0x2c))||matches!(e,Op::Read32(a)if *a==address(0x2c))));m.events.clear();}
  let mut q=pd();mutate_pci(&mut q,|d|d.window=(0x800,0x800));assert_eq!(mechanism::identity(&q,19,1,0,0,0),[0,0x800,0x800,0,0]);
- for (slot,a,b,c,d)in[(0,0,0,0,0),(19|(1u64<<32),0,0,0,0),(6,0,0,0,0),(32,0,0,0,0),(19,2,0,0,0),(19,1,1,0,0),(19,0,1,0,0),(19,0,0,1,0),(19,0,0,0,1)]{assert_eq!(mechanism::identity(&p,slot,a,b,c,d),[w::DENIED,0,0,0,0]);untouched();}
+ for (slot,a,b,c,d)in[(0,0,0,0,0),(19|(1u64<<32),0,0,0,0),(6,0,0,0,0),(32,0,0,0,0),(19,3,0,0,0),(19,2,1,0,0),(19,1,1,0,0),(19,0,1,0,0),(19,0,0,1,0),(19,0,0,0,1)]{assert_eq!(mechanism::identity(&p,slot,a,b,c,d),[w::DENIED,0,0,0,0]);untouched();}
  for which in 0..5{let mut p=pd();mutate_pci(&mut p,|d|match which{0=>d.command=None,1=>d.command.as_mut().unwrap().subject=12,2=>d.device_id=0x100e,3=>d.bar0_view.as_mut().unwrap().rights=3,_=>d.bar0_view.as_mut().unwrap().peer_pd=Some(9)});assert_eq!(mechanism::identity(&p,19,0,0,0,0),[w::DENIED,0,0,0,0]);untouched();}
 }
 

@@ -14,12 +14,14 @@ fn x17_r1_parts_find_their_services() {
     assert_eq!(claim(id(0x8086, 0x43c8, 4, 3, 0x80)).map(|(m, e)| (m.service, e.lease)), Some((Service::Bell, Lease::Hda)));
     assert_eq!(claim(id(0x8086, 0x9a60, 3, 0, 0)).map(|(m, e)| (m.service, e.lease)), Some((Service::Display, Lease::Display)));
     assert_eq!(claim(id(0x10de, 0x249c, 3, 2, 0)).map(|(m, e)| (m.service, e.lease)), Some((Service::Display, Lease::Display)));
+    // Killer AX1675x (AX210): Intel Wi-Fi goes to the network service beside the wired NIC.
+    assert_eq!(claim(id(0x8086, 0x2725, 2, 0x80, 0)).map(|(m, e)| (m.service, e.lease, e.slot)), Some((Service::Net, Lease::Wifi, 22)));
 }
 
 #[test]
 fn unclaimed_devices_stay_unleased() {
-    // VMD (RAID class 01:04), Intel Wi-Fi, IDE-mode SATA, USB 2 EHCI, virtio-net, bridges.
-    for d in [id(0x8086, 0x9a0b, 1, 4, 0), id(0x8086, 0x2725, 2, 0x80, 0), id(0x8086, 0x2922, 1, 6, 0),
+    // VMD (RAID class 01:04), other makers' Wi-Fi, IDE-mode SATA, USB 2 EHCI, virtio-net, bridges.
+    for d in [id(0x8086, 0x9a0b, 1, 4, 0), id(0x14c3, 0x0616, 2, 0x80, 0), id(0x8086, 0x2922, 1, 6, 0),
               id(0x8086, 0x293a, 0x0c, 3, 0x20), id(0x1af4, 0x1041, 2, 0, 0), id(0x8086, 0x29c0, 6, 0, 0)] {
         assert!(claim(d).is_none(), "{:?}", d);
     }
@@ -39,6 +41,7 @@ fn first_slots_are_the_ones_drivers_read() {
     assert_eq!(slot(id(0x8086, 0x10d3, 2, 0, 0)), Some(19));
     assert_eq!(slot(id(0x8086, 0x293e, 4, 3, 0)), Some(20));
     assert_eq!(slot(id(0x1af4, 0x1059, 4, 1, 0)), Some(20));
+    assert_eq!(slot(id(0x8086, 0x51f0, 2, 0x80, 0)), Some(22));
 }
 
 #[test]

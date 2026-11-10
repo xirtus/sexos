@@ -27,6 +27,10 @@ pub const SET_STREAM: u64 = 4;
 pub const STATE: u64 = 5;
 /// Replies with row `a`'s `stream` word.
 pub const STREAM: u64 = 6;
+/// Whether row `a`'s program may hear the microphone: `b` 1 allows, 0 stops it at
+/// once. Only the person decides; it lapses when the program ends. Replies with that
+/// row's `stream` word.
+pub const MICROPHONE: u64 = 7;
 
 pub const MUTED: u64 = 1 << 8;
 /// Every mixer reply carries this in its top byte, so a caller can tell it from
@@ -43,16 +47,18 @@ pub const fn state_muted(word: u64) -> bool { word & 1 << 8 != 0 }
 pub const fn state_card(word: u64) -> bool { word & 1 << 9 != 0 }
 
 /// One row's stream word: the person's volume (bits 0..8), muted (bit 8), playing
-/// (bit 9), the volume the program asks for (bits 16..24), its PD (bits 32..56), and
+/// (bit 9), may hear the microphone (bit 10), hearing it now (bit 11), the volume the program asks for (bits 16..24), its PD (bits 32..56), and
 /// `TAG`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Stream { pub volume: u8, pub muted: bool, pub playing: bool, pub asked: u8, pub pd: u32 }
+pub struct Stream { pub volume: u8, pub muted: bool, pub playing: bool, pub asked: u8, pub pd: u32, pub mic_allowed: bool, pub listening: bool }
 impl Stream {
     pub const fn word(self) -> u64 {
-        TAG | self.volume as u64 | (self.muted as u64) << 8 | (self.playing as u64) << 9 | (self.asked as u64) << 16 | ((self.pd & 0xFF_FFFF) as u64) << 32
+        TAG | self.volume as u64 | (self.muted as u64) << 8 | (self.playing as u64) << 9
+            | (self.mic_allowed as u64) << 10 | (self.listening as u64) << 11 | (self.asked as u64) << 16 | ((self.pd & 0xFF_FFFF) as u64) << 32
     }
     pub const fn of(word: u64) -> Stream {
-        Stream { volume: word as u8, muted: word & 1 << 8 != 0, playing: word & 1 << 9 != 0, asked: (word >> 16) as u8, pd: ((word >> 32) & 0xFF_FFFF) as u32 }
+        Stream { volume: word as u8, muted: word & 1 << 8 != 0, playing: word & 1 << 9 != 0, asked: (word >> 16) as u8, pd: ((word >> 32) & 0xFF_FFFF) as u32,
+            mic_allowed: word & 1 << 10 != 0, listening: word & 1 << 11 != 0 }
     }
 }
 

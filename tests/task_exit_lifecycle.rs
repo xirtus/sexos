@@ -17,6 +17,7 @@ static WAKES:AtomicUsize=AtomicUsize::new(0);
 struct Domain{main_task:AtomicPtr<scheduler::Task>,trampoline_task:AtomicPtr<scheduler::Task>,message_ring:*mut ring::RingBuffer<messages::MessageType,4>}
 mod app_resources{pub fn poll_exit_notifications(){}}
 mod service_restart{pub fn poll(){}}
+mod iommu{pub fn poll(){}}
 mod hal{pub mod acpi{pub fn poll(){}}}
 mod scheduler{
  pub use super::ownership as task_ownership;

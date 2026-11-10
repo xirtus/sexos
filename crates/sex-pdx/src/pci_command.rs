@@ -5,6 +5,9 @@ pub const SYS_COMMAND: u64 = 68;
 pub const SYS_IDENTITY: u64 = 69;
 /// SYS_IDENTITY with this first argument asks where the registers sit in the view.
 pub const QUERY_WINDOW: u64 = 1;
+/// SYS_IDENTITY with this first argument asks the held device's PCI subsystem ids
+/// (the module maker: Killer, Dell, ...), which pick firmware for some chips.
+pub const QUERY_SUBSYSTEM: u64 = 2;
 pub const MEMORY: u16 = 1 << 1;
 pub const BUS_MASTER: u16 = 1 << 2;
 pub const NIC_BITS: u16 = MEMORY | BUS_MASTER;
@@ -18,6 +21,17 @@ pub const AHCI_DMA_REGION_ID: u32 = 3;
 pub const AHCI_DMA_BYTES: u64 = 512 * 1024;
 /// Where an AHCI controller's lease sits in the drive service (NVMe is slot 16).
 pub const SLOT_AHCI_HOST: u64 = 21;
+/// Intel Wi-Fi in the network service: the chip's lease, its own DMA pool (beside
+/// the wired NIC's at SLOT_DMA_REGION), and the read-only firmware pack.
+pub const SLOT_WIFI: u64 = 22;
+pub const SLOT_WIFI_DMA: u64 = 23;
+pub const SLOT_WIFI_FIRMWARE: u64 = 24;
+pub const WIFI_DMA_REGION_ID: u32 = 0x4400;
+/// Firmware sections (up to 1.75 MB), context tables, rings and receive pages.
+pub const WIFI_DMA_BYTES: u64 = 4 * 1024 * 1024;
+pub const WIFI_FIRMWARE_REGION_ID: u32 = 0x4401;
+/// The boot module holding the firmware pack (`sex_wifi::pack`).
+pub const WIFI_FIRMWARE_MODULE: &str = "wifi.pack";
 pub const DENIED: u64 = u64::MAX;
 /// A hardware write/readback failure is uncertain; do not retry a mutation.
 pub const IO: u64 = u64::MAX - 1;

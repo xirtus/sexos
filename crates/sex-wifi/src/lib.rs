@@ -14,7 +14,9 @@
 //! not a copy, and contains no Linux (GPL-2.0-only) code.
 #![no_std]
 
+pub mod bringup;
 pub mod ccmp;
+pub mod cmdq;
 pub mod context;
 pub mod crypto;
 pub mod csr;
@@ -22,5 +24,8 @@ pub mod devices;
 pub mod eapol;
 pub mod hcmd;
 pub mod ieee80211;
+pub mod init;
+pub mod pack;
+pub mod rx;
 pub mod sae;
 pub mod ucode;

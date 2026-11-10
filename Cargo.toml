@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-exclude = ["vendor/embedded-tls-0.19.0", "vendor/pp-rs-0.2.1", "vendor/image-webp-0.2.4"]
+exclude = ["vendor/embedded-tls-0.19.0", "vendor/pp-rs-0.2.1", "vendor/image-webp-0.2.4", "vendor/virtio-drivers-0.13.0"]
 members = [
     "kernel",
     "servers/sexbell",
@@ -32,6 +32,7 @@ members = [
     "apps/threads",
     "apps/shapes",
     "apps/fputest",
+    "apps/fuzz",
     "apps/play",
     "apps/cpp",
     "apps/web",
@@ -43,6 +44,7 @@ members = [
     "apps/hum",
     "purple-scanout",
     "crates/sex-pdx",
+    "crates/sex-iommu",
     "crates/sex-vmd",
     "crates/sex-imsm",
     "crates/sex-font",
@@ -126,6 +128,8 @@ opt-level = 3
 # naga's GLSL front end runs in programs: its preprocessor, made no_std (vendor/pp-rs-0.2.1).
 [patch.crates-io]
 pp-rs = { path = "vendor/pp-rs-0.2.1" }
+# Bell captures sound: virtio-snd input transfers added (vendor/virtio-drivers-0.13.0/SEXOS_CHANGES.md).
+virtio-drivers = { path = "vendor/virtio-drivers-0.13.0" }
 # The shader interpreter runs per vertex and per pixel; keep it fast in tests too.
 [profile.dev.package.sex-gl]
 opt-level = 3
