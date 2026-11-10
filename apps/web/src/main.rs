@@ -14,6 +14,9 @@
 
 extern crate alloc;
 
+mod media;
+mod mse;
+
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use sex_app::{files, nav, net, Event, Nav, Window};
@@ -57,6 +60,11 @@ const FETCH_MAX: usize = 32 << 20;
 /// Most bytes one script or module may have: app bundles (YouTube's is about 10 MB) run
 /// past what an HTML page or style sheet needs.
 const SCRIPT_MAX: usize = 32 << 20;
+/// Largest video or sound file: it plays while it downloads, but is kept whole so
+/// it can be seeked back through.
+const MEDIA_MAX: usize = 256 << 20;
+/// How long one tick may spend taking in media downloads.
+const MEDIA_LOAD_BUDGET_MS: u64 = 4;
 /// How often a running CSS animation is drawn (about 30 a second).
 const ANIMATION_FRAME_MS: u64 = 33;
 
@@ -83,6 +91,19 @@ fn pause() { let until = sex_pdx::get_ticks() + 5; while sex_pdx::get_ticks() < 
 fn failed(url: &str) -> Loaded { Loaded { url: String::from(url), status: 0, headers: String::new(), body: Vec::new() } }
 
 /// A request on its way: where it is now (after any redirects) and what to send there.
+/// A video or sound source on its way in.
+struct MediaLoad {
+    node: sex_html::dom::NodeId,
+    p: Pending,
+    ex: net::Exchange,
+    body: alloc::rc::Rc<core::cell::RefCell<sex_media::Growing>>,
+    /// The reply is a success that can be used as it comes (else it is read whole).
+    streaming: bool,
+    /// A first try to open before the end failed; try again at the end.
+    retry_at_end: bool,
+    opened: bool,
+}
+
 struct Pending {
     id: u32, asked: String, since: u64, begun: u64, hops: usize,
     method: String, url: String, headers: Vec<(String, String)>, body: Vec<u8>, max: usize, script: Option<String>,
@@ -125,6 +146,12 @@ struct Browser {
     animating: bool,
     /// The page's Canvas 2D surfaces.
     canvases: sex_web::canvas::Canvases,
+    /// The page's video and audio elements, each with its player once loaded.
+    media: Vec<media::Media>,
+    /// The page asked its media for something since the last tick.
+    media_asked: bool,
+    /// Media sources downloading; each plays as soon as enough has come.
+    media_loads: Vec<MediaLoad>,
     url: String,
     history: Vec<String>,
     scroll: i32,
@@ -282,6 +309,9 @@ impl Browser {
         }
         self.status = Some("Loading…");
         self.url = String::from(url);
+        // Leaving the page stops its sound and pictures, and their downloads.
+        self.media.clear();
+        for mut l in core::mem::take(&mut self.media_loads) { l.ex.cancel(&mut self.window); }
         self.draw();
         let begun = sex_pdx::get_ticks();
         let (html, base) = if let Some(page) = built_in(if url.is_empty() { "about:welcome" } else { url }) {
@@ -315,6 +345,8 @@ impl Browser {
         let mut sheets: Vec<String> = Vec::new();
         self.fonts.images.clear();
         self.fonts.svgs.clear();
+        self.fonts.moving.clear();
+        self.fonts.frames_shown = 0;
         if base.starts_with("http") {
             let links: Vec<String> = sex_html::stylesheet_links(&dom).into_iter().take(MAX_SHEETS).filter_map(|h| sex_html::url::resolve(&base, h)).collect();
             for (i, link) in links.iter().enumerate() {
@@ -357,6 +389,9 @@ impl Browser {
         let script_begun = sex_pdx::get_ticks();
         if !scripts.is_empty() || handlers { self.run_scripts(scripts); }
         let laid = sex_pdx::get_ticks();
+        self.media_scan();
+        if !self.fonts.moving.is_empty() { self.timer = Some(sex_pdx::get_ticks()); }
+        sex_pdx::serial_record!("[web.pictures] count={} moving={}", self.fonts.images.len(), self.fonts.moving.len());
         self.relayout();
         sex_pdx::serial_record!("[web.loaded] bytes_ok=1 items={} links={} height={} sheets={} images={} fetch_ticks={} layout_ticks={} script_ticks={} scripted={}",
             self.page.items.len(), self.page.links.len(), self.page.height, self.sheets.len(), self.fonts.images.len(), script_begun - begun,
@@ -466,6 +501,7 @@ impl Browser {
     /// when it changed the page. Returns true if it drew.
     #[inline(never)]
     fn after_script(&mut self, draw: bool) -> bool {
+        self.media_requests();
         let doc = self.doc.get();
         for (level, text) in doc.log.drain(..) {
             for line in text.lines().take(8) { sex_pdx::serial_record!("[web.console] level={} {}", level, line); }
@@ -535,17 +571,182 @@ impl Browser {
         self.serve_imports();
         self.serve_fetches();
         self.sync_scroll();
+        let media_next = self.media_tick();
+        let (moved, pictures_next) = self.fonts.step_pictures(sex_pdx::get_ticks());
+        if moved && !self.animating { self.draw(); }
+        if moved && self.fonts.frames_shown <= 8 { sex_pdx::serial_record!("[web.picture.frames] n={}", self.fonts.frames_shown); }
         if self.animating {
             self.timer = None;
             self.relayout();
             self.draw();
         }
-        let Some(script) = self.doc.script() else { self.timer = None; self.next_frame(); return };
-        let next = script.dispatch("tick");
-        self.timer = match next { Ok(ms) if ms >= 0 => Some(sex_pdx::get_ticks() + ms as u64), _ => None };
-        self.next_frame();
-        if let Err(sex_js::Error::Trapped(why)) = next { sex_pdx::serial_record!("[web.script] trapped={}", why); self.doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", (W, H - BAR), clock)); }
-        self.after_script(true);
+        if let Some(script) = self.doc.script() {
+            let next = script.dispatch("tick");
+            self.timer = match next { Ok(ms) if ms >= 0 => Some(sex_pdx::get_ticks() + ms as u64), _ => None };
+            self.next_frame();
+            if let Err(sex_js::Error::Trapped(why)) = next { sex_pdx::serial_record!("[web.script] trapped={}", why); self.doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", (W, H - BAR), clock)); }
+            self.after_script(true);
+        } else {
+            self.timer = None;
+            self.next_frame();
+        }
+        // A request carried out during this tick (from a media event handler, or the
+        // tick's own script) is played from the next pass.
+        let asked = core::mem::take(&mut self.media_asked);
+        let waiting = self.media.iter().any(|m| m.state == media::State::Waiting);
+        // Downloads still coming are taken in every couple of milliseconds.
+        let loading = !self.media_loads.is_empty();
+        if let Some(ms) = if waiting || asked { Some(0) } else if loading { Some(media_next.map_or(2, |n| n.min(2))) } else { media_next } {
+            let due = sex_pdx::get_ticks() + ms;
+            self.timer = Some(self.timer.map_or(due, |t| t.min(due)));
+        }
+        // Animated GIF and WebP pictures.
+        if let Some(due) = pictures_next { self.timer = Some(self.timer.map_or(due, |t| t.min(due))); }
+    }
+
+    /// Finds the page's video and audio elements and shows their posters.
+    #[inline(never)]
+    fn media_scan(&mut self) {
+        let nodes = media::elements(&self.doc.get().dom);
+        for node in nodes {
+            if self.media.iter().any(|m| m.node == node) { continue; }
+            let m = media::Media::new(&self.doc.get().dom, node);
+            let poster = if m.audio { None } else { self.doc.get().dom.attr(node, "poster").map(String::from) };
+            if let Some(poster) = poster.filter(|p| !p.trim().is_empty()) {
+                let (status, body) = self.load_get(poster.trim());
+                if (200..300).contains(&status) {
+                    if let Some(img) = sex_web::decode_image(&body, media::MAX_W, media::MAX_H) { media::Media::poster(&mut self.fonts, &m.picture_name(), img); }
+                }
+            }
+            self.media.push(m);
+        }
+        if self.media.iter().any(|m| m.state == media::State::Waiting) { self.timer = Some(sex_pdx::get_ticks()); }
+    }
+
+    /// Takes the page's requests to its video and audio elements.
+    fn media_requests(&mut self) {
+        let asked = core::mem::take(&mut self.doc.get().media);
+        let appends = core::mem::take(&mut self.doc.get().media_bytes);
+        if asked.is_empty() && appends.is_empty() { return; }
+        for (node, verb, arg) in asked {
+            let dom = &self.doc.get().dom;
+            let i = match self.media.iter().position(|m| m.node == node) {
+                Some(i) => i,
+                None => { self.media.push(media::Media::new(dom, node)); self.media.len() - 1 }
+            };
+            if verb == "play" { self.hush_media(i); }
+            let dom = &self.doc.get().dom;
+            self.media[i].request(dom, &verb, &arg);
+        }
+        for (node, index, bytes) in appends {
+            let Some(m) = self.media.iter_mut().find(|m| m.node == node) else { continue };
+            let Some(mse) = m.mse.as_mut() else { continue };
+            mse.append(node, index as usize, &bytes);
+        }
+        self.media_asked = true;
+        self.timer = Some(sex_pdx::get_ticks());
+    }
+
+    /// Loads, plays and shows the page's media; tells the page what happened. Returns
+    /// how soon to come back.
+    #[inline(never)]
+    fn media_tick(&mut self) -> Option<u64> {
+        if self.media.is_empty() { return None; }
+        let mut relayout = false;
+        for i in 0..self.media.len() {
+            if self.media[i].state != media::State::Waiting { continue; }
+            let node = self.media[i].node;
+            // A new source replaces one still coming.
+            if let Some(k) = self.media_loads.iter().position(|l| l.node == node) { let mut old = self.media_loads.remove(k); old.ex.cancel(&mut self.window); }
+            let src = self.media[i].src.clone();
+            let begun = sex_pdx::get_ticks();
+            let ask = sex_js::FetchAsk { id: 0, url: src.clone(), method: String::new(), headers: String::new(), body: Vec::new() };
+            match self.local(&ask) {
+                // Built-in pages and files are here at once.
+                Ok(r) => {
+                    sex_pdx::serial_record!("[web.media.load] node={} status={} bytes={} ticks={} src={}", node, r.status, r.body.len(), sex_pdx::get_ticks() - begun, src);
+                    relayout |= self.media_loaded(i, r.status, r.body);
+                }
+                Err(mut p) => {
+                    p.max = MEDIA_MAX;
+                    // An element's load, not a script's: no CORS, and the site's cookies go.
+                    p.script = None;
+                    match self.send(&mut p, false) {
+                        Ok(ex) => {
+                            self.media[i].state = media::State::Loading;
+                            self.media[i].events.push("loadstart");
+                            self.media_loads.push(MediaLoad { node, p, ex, body: sex_media::Growing::shared(), streaming: false, retry_at_end: false, opened: false });
+                        }
+                        // Every flow is busy: try again on a later tick.
+                        Err(e) if e == BUSY => {}
+                        Err(_) => { self.media[i].state = media::State::Failed; self.media[i].events.push("error"); }
+                    }
+                }
+            }
+        }
+        relayout |= self.media_downloads();
+        let mut next: Option<u64> = None;
+        let mut changed: Vec<String> = Vec::new();
+        for m in self.media.iter_mut() {
+            let (drew, wait) = m.step(&mut self.fonts);
+            if drew { changed.push(m.picture_name()); }
+            if let Some(w) = wait { next = Some(next.map_or(w, |n| n.min(w))); }
+            relayout |= core::mem::take(&mut m.resized);
+            // A MediaSource still filling: look again soon.
+            if (m.player.is_none() || m.pending.is_some()) && m.mse.is_some() && m.state != media::State::Failed { next = Some(next.map_or(10, |n| n.min(10))); }
+        }
+        if relayout {
+            self.relayout();
+            self.draw();
+        } else if !changed.is_empty() {
+            let pixels = &mut self.window.pixels()[..(W * H) as usize];
+            if !self.full_redraw && sex_web::repaint_pictures(&self.page, &mut self.fonts, pixels, W, H, self.scroll, &changed) {
+                self.window.show_pixels(W as usize, H as usize);
+            } else {
+                self.draw();
+            }
+        }
+        // Tell the page, which may answer by changing it.
+        let mut reports: Vec<String> = Vec::new();
+        for m in self.media.iter_mut() {
+            if let Some(mse) = m.mse.as_mut() { reports.append(&mut mse.replies); }
+            if let Some(r) = m.report() { reports.push(r); }
+        }
+        if !reports.is_empty() {
+            if let Some(script) = self.doc.script() {
+                for r in &reports {
+                    if let Err(sex_js::Error::Trapped(why)) = script.dispatch(r) { sex_pdx::serial_record!("[web.script] trapped={}", why); break; }
+                }
+                self.after_script(true);
+            }
+        }
+        next
+    }
+
+    /// Element `i` is about to play: every other one gives up the sound ring first,
+    /// since a program has one.
+    fn hush_media(&mut self, i: usize) {
+        for (j, m) in self.media.iter_mut().enumerate() {
+            if j != i { m.hush(); }
+        }
+    }
+
+    /// K plays or pauses the page's first video or audio, J and L go back and forward
+    /// 5 s. True if there was one.
+    fn media_key(&mut self, code: u8) -> bool {
+        let Some(i) = self.media.iter().position(|m| m.state == media::State::Ready) else { return false };
+        if code == 0x25 && self.media[i].stopped() { self.hush_media(i); }
+        let dom = &self.doc.get().dom;
+        let m = &mut self.media[i];
+        match code {
+            0x25 => m.toggle(dom),
+            0x24 => m.seek_by(dom, -5000),
+            0x26 => m.seek_by(dom, 5000),
+            _ => return false,
+        }
+        sex_pdx::serial_record!("[web.media.key] code={} node={}", code, m.node);
+        self.timer = Some(sex_pdx::get_ticks());
+        true
     }
 
     /// Loads the modules that `import()` calls wait for (and what those import), then
@@ -599,6 +800,9 @@ impl Browser {
             }
             if going.is_empty() && waiting.is_empty() { return; }
             let mut quiet = u32::MAX;
+            // Media downloads keep moving too: one may hold the name resolver, which
+            // answers this program one question at a time.
+            for l in self.media_loads.iter_mut() { let _ = l.ex.poll(&mut self.window); }
             let mut i = 0;
             while i < going.len() {
                 let step = going[i].1.poll(&mut self.window);
@@ -620,6 +824,128 @@ impl Browser {
                 quiet = 0;
             }
             if quiet > 64 { pause(); } else if quiet > 0 { sex_pdx::sys_yield(); }
+        }
+    }
+
+    /// A whole body for media element `i`: open it, or fail it.
+    fn media_loaded(&mut self, i: usize, status: u16, body: Vec<u8>) -> bool {
+        if (200..300).contains(&status) && !body.is_empty() {
+            if self.media[i].want_play { self.hush_media(i); }
+            self.media[i].open(body)
+        } else {
+            self.media[i].state = media::State::Failed;
+            self.media[i].events.push("error");
+            false
+        }
+    }
+
+    /// Takes in what the media downloads have brought, for a few milliseconds, and
+    /// opens each element once enough of its source is here. True when a picture size
+    /// became known (lay out again).
+    #[inline(never)]
+    fn media_downloads(&mut self) -> bool {
+        let mut relayout = false;
+        let begun = sex_pdx::get_ticks();
+        let mut k = 0;
+        while k < self.media_loads.len() {
+            // An element gone, failed or given a new source no longer wants this one.
+            let Some(i) = self.media.iter().position(|m| m.node == self.media_loads[k].node && matches!(m.state, media::State::Loading | media::State::Ready)) else {
+                let mut gone = self.media_loads.remove(k); gone.ex.cancel(&mut self.window); continue;
+            };
+            let l = &mut self.media_loads[k];
+            // Read while bytes keep coming, within the budget.
+            let polled = loop {
+                match l.ex.poll(&mut self.window) {
+                    Err(e) => break Err(e),
+                    Ok(true) => break Ok(true),
+                    Ok(false) if l.ex.idle() > 0 || sex_pdx::get_ticks() - begun >= MEDIA_LOAD_BUDGET_MS => break Ok(false),
+                    Ok(false) => {}
+                }
+            };
+            if !l.streaming {
+                if let Some(head) = l.ex.head() {
+                    if (200..300).contains(&head.status) {
+                        let mut g = l.body.borrow_mut();
+                        if let Some(total) = l.ex.stream(&mut g.bytes) {
+                            g.total = total;
+                            l.streaming = true;
+                            drop(g);
+                            sex_pdx::serial_record!("[web.media.stream] node={} total={} url={}", l.node, total.map_or(-1, |t| t as i64), l.p.url);
+                            if let Ok(target) = sex_fetch::Url::parse(&l.p.url) {
+                                let mut jar = self.jar.borrow_mut();
+                                for c in head.all("set-cookie") { jar.store(&target, c, wall()); }
+                            }
+                        }
+                    }
+                }
+            }
+            let l = &mut self.media_loads[k];
+            if l.streaming {
+                let ok = l.ex.stream(&mut l.body.borrow_mut().bytes).is_some();
+                let done = matches!(polled, Ok(true)) || polled.is_err() || !ok;
+                let have = l.body.borrow().bytes.len() as u64;
+                if done {
+                    l.body.borrow_mut().done = true;
+                    sex_pdx::serial_record!("[web.media.load] node={} status=200 bytes={} ticks={} streamed=1 ok={} shown={} src={}", l.node, have, sex_pdx::get_ticks() - l.p.since, (polled.is_ok() && ok) as u8, self.media[i].frames, l.p.url);
+                }
+                let opened = l.opened;
+                let ready = done || have >= sex_media::AHEAD + 64 * 1024 || l.body.borrow().total.is_some_and(|t| have >= t);
+                if !opened && ready && (!l.retry_at_end || done) {
+                    let body = l.body.clone();
+                    let last = done;
+                    if self.media[i].want_play { self.hush_media(i); }
+                    relayout |= self.media[i].open_growing(body, last);
+                    let l = &mut self.media_loads[k];
+                    if self.media[i].state == media::State::Ready {
+                        l.opened = true;
+                        sex_pdx::serial_record!("[web.media.early] node={} have={} done={}", l.node, have, done as u8);
+                    } else if !last {
+                        // Not enough at the front (an MP4 indexed at its end): wait for all.
+                        l.retry_at_end = true;
+                        self.media[i].state = media::State::Loading;
+                    }
+                }
+                if done { self.media_loads.remove(k); } else { k += 1; }
+                continue;
+            }
+            // Read whole: a redirect, an error page, or a body that must be decoded first.
+            match polled {
+                Ok(false) => { k += 1; }
+                Err(e) => {
+                    let l = self.media_loads.remove(k);
+                    sex_pdx::serial_record!("[web.media.load] node={} status=0 bytes=0 ticks={} why={} src={}", l.node, sex_pdx::get_ticks() - l.p.since, core::str::from_utf8(net::message(e)).unwrap_or("?"), l.p.url);
+                    self.media[i].state = media::State::Failed; self.media[i].events.push("error");
+                }
+                Ok(true) => {
+                    let mut l = self.media_loads.remove(k);
+                    let r = match l.ex.finish() { Ok(r) => r, Err(_) => { self.media[i].state = media::State::Failed; self.media[i].events.push("error"); continue; } };
+                    match self.landed(&mut l.p, r) {
+                        // A redirect: on to the next address.
+                        None => match self.send(&mut l.p, false) {
+                            Ok(ex) => { self.media_loads.insert(k, MediaLoad { ex, body: sex_media::Growing::shared(), streaming: false, retry_at_end: false, opened: false, ..l }); k += 1; }
+                            Err(_) => { self.media[i].state = media::State::Failed; self.media[i].events.push("error"); }
+                        },
+                        Some(Ok(done)) => {
+                            sex_pdx::serial_record!("[web.media.load] node={} status={} bytes={} ticks={} streamed=0 src={}", l.node, done.status, done.body.len(), sex_pdx::get_ticks() - l.p.since, l.p.url);
+                            self.media[i].state = media::State::Waiting;
+                            relayout |= self.media_loaded(i, done.status, done.body);
+                        }
+                        Some(Err(_)) => { self.media[i].state = media::State::Failed; self.media[i].events.push("error"); }
+                    }
+                }
+            }
+        }
+        relayout
+    }
+
+    /// A plain GET of a page's resource (a video, a poster): status and body. Like
+    /// an element's load, it may come from another site without CORS, since the
+    /// page's scripts never read the bytes.
+    fn load_get(&mut self, url: &str) -> (u16, Vec<u8>) {
+        let ask = sex_js::FetchAsk { id: 0, url: String::from(url), method: String::new(), headers: String::new(), body: Vec::new() };
+        match self.local(&ask) {
+            Ok(r) => (r.status, r.body),
+            Err(p) => match self.http("GET", &p.url, &[], &[], FETCH_MAX, None) { Ok(r) => (r.status, r.body), Err(_) => (0, Vec::new()) },
         }
     }
 
@@ -856,6 +1182,7 @@ impl Browser {
             0x51 => return self.scroll_by(view - 40),
             0x35 if !key.shift => { self.editing = Some(String::new()); self.draw(); return; }
             0x13 if key.control => { let u = self.url.clone(); self.open(&u, false); return; }
+            0x24..=0x26 if !key.control && self.media_key(key.code) => return,
             _ => {}
         }
         match nav(key) {
@@ -876,12 +1203,13 @@ impl Browser {
 pub extern "C" fn _start() -> ! {
     let mut window = Window::open();
     window.title(b"Web");
+    sex_web::set_avif_decoder(media::decode_avif);
     let mut args = [0u8; sex_pdx::fs::ARGS_MAX];
     let given = String::from(core::str::from_utf8(files::args(&mut window, &mut args)).unwrap_or("").trim());
     let Some(fonts) = Fonts::new() else { window.show(b"Web: the fonts could not be loaded."); loop { if let Event::Close = window.next() { window.close() } } };
     let page = sex_html::render("", W, H, &fonts as &dyn Host);
     let doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", (W, H - BAR), clock));
-    let mut b = Browser { window, fonts, page, doc, sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None, import_map: Vec::new() };
+    let mut b = Browser { window, fonts, page, doc, sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), media_asked: false, media_loads: Vec::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None, import_map: Vec::new() };
     // Big WebGL draws spread over the cores, a band of rows each.
     let cores = sex_app::thread::cores();
     sex_gl::set_parallel(sex_app::thread::parallel, cores);

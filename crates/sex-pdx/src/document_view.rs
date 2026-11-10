@@ -179,6 +179,11 @@ impl Delivery {
             self.last = None;
         }
     }
+    /// A Shell started again numbers its notices after every earlier run's, so the
+    /// view still takes them as new.
+    pub fn continue_after(&mut self, sequence: u64) {
+        self.sequence = self.sequence.max(sequence);
+    }
     pub fn pending(&self) -> bool {
         self.desired.is_some()
     }

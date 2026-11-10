@@ -17,6 +17,10 @@ impl BootstrapPlanner {
     pub fn new(consumed_pages: u64, metadata_bytes: u64) -> Self {
         Self { remaining_consumed: consumed_pages, metadata_bytes, metadata: None }
     }
+    /// Pages the boot allocator walked past but that nobody else may have.
+    pub fn skip(&mut self, length: u64) {
+        self.remaining_consumed -= self.remaining_consumed.min(length / 4096);
+    }
     pub fn region(&mut self, base: u64, length: u64) -> Result<Option<Range>, &'static str> {
         if base % 4096 != 0 || length % 4096 != 0 || self.metadata_bytes == 0 || self.metadata_bytes % 4096 != 0 {
             return Err("BOOT_MEMORY_REGION_ALIGNMENT");

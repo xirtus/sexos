@@ -92,6 +92,23 @@ run_stage() {
         --manifest-path "$manifest" \
         --target "${stage_target:-$TARGET}" \
         --release
+      # Programs: the loader refuses code holding WRPKRU/XRSTOR bytes at any offset.
+      # A displacement that holds them by chance moves when the program links with its
+      # read-only data in another order (programs that read SEX_LAYOUT_SEED).
+      if [[ ${stage_target:-$TARGET} == x86_64-sex-app.json ]]; then
+        local seed=0
+        while ! python3 scripts/key_bytes.py "$src"; do
+          seed=$((seed + 1))
+          [[ $seed -le 24 ]] || { echo "[FAIL] $src holds a refused instruction at every layout tried"; exit 1; }
+          echo "[layout] $src: linking again with SEX_LAYOUT_SEED=$seed"
+          SEX_LAYOUT_SEED=$seed RUSTFLAGS="-C relocation-model=pic -C link-arg=-pie ${extra_rustflags:-}" cargo build --locked \
+            -Z build-std=core,compiler_builtins,alloc \
+            -Z build-std-features=compiler-builtins-mem \
+            --manifest-path "$manifest" \
+            --target "${stage_target:-$TARGET}" \
+            --release
+        done
+      fi
       cp "$src" "$dst"
       ;;
     copy_file)
@@ -99,6 +116,15 @@ run_stage() {
       src="$(rg -n '^src\s*=\s*"[^"]+"' "$stage" | sed -E 's/.*"([^"]+)".*/\1/')"
       dst="$(rg -n '^dst\s*=\s*"[^"]+"' "$stage" | sed -E 's/.*"([^"]+)".*/\1/')"
       cp "$src" "$dst"
+      ;;
+    wifi_firmware)
+      # Intel Wi-Fi firmware files as one pack BOOT gives the network service. The
+      # fetch (pinned, SHA-256 checked) skips files already present and complete, so
+      # an earlier offline or interrupted build is completed; offline builds pack what
+      # they have and a chip without its file says "firmware missing" in the boot log.
+      bash scripts/fetch_wifi_firmware.sh target/wifi-firmware \
+        || echo "[wifi.firmware] note: fetch incomplete; the pack holds only the files present"
+      python3 scripts/make_wifi_firmware_pack.py --out iso_root/firmware/wifi.pack
       ;;
     boot_image)
       # The disk image `install` writes, built from this ISO's own files.
