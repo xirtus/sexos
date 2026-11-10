@@ -291,9 +291,9 @@ mod driver_read {
 
     #[test]fn actual_matching_last_queue_slot_advances_head_and_phase_exactly_once(){
         let _lock=LOCK.lock().unwrap();
-        // Another test may have left interrupt mode, a stalled clock or a delay set.
-        NVME_IRQ.store(false,Ordering::SeqCst);crate::device::PENDING.store(0,Ordering::SeqCst);
-        unsafe{LENS=Lens::Whole;WAITS=0;DELAY=0;CLOCK_MODE=0;COMPLETION=0;}let mut sq=[0u64;128];let mut cq=[0u32;64];let mut db=[0u32;2];let mut buffer=[0u64;512];let source=[0xa5u8;512];
+        // Own setup, not left over from whichever test ran first: whole-disk layout,
+        // polled mode, plain clock.
+        NVME_IRQ.store(false,Ordering::SeqCst);crate::device::PENDING.store(0,Ordering::SeqCst);unsafe{LENS=Lens::Whole;CLOCK_MODE=0;DELAY=0;WAITS=0;}let mut sq=[0u64;128];let mut cq=[0u32;64];let mut db=[0u32;2];let mut buffer=[0u64;512];let source=[0xa5u8;512];
         unsafe{
             NOW=10;cq[15*4+3]=42|(1<<16);WRITE_LEASE=Some(DmaLease::new(dma_pool::DmaBuffer{virtual_address:buffer.as_mut_ptr()as u64,physical_address:0x200000,length:4096}));
             NVME_IO_STATE=NvmeState{sectors:0,ready:true,map_va:db.as_mut_ptr()as u64,io_sq_va:sq.as_mut_ptr()as u64,io_cq_va:cq.as_ptr()as u64,sq1tdbl:0,cq1hdbl:4,sq_tail:15,cq_head:15,cq_phase:1,next_cid:42};
@@ -303,7 +303,9 @@ mod driver_read {
     }
     #[test]fn actual_flush_waits_for_exact_completion_and_fences_on_timeout_without_replay(){
         let _lock=LOCK.lock().unwrap();
-        NVME_IRQ.store(false,Ordering::SeqCst);crate::device::PENDING.store(0,Ordering::SeqCst);
+        // Own setup, not left over from whichever test ran first: whole-disk layout,
+        // polled mode, plain clock.
+        NVME_IRQ.store(false,Ordering::SeqCst);crate::device::PENDING.store(0,Ordering::SeqCst);unsafe{LENS=Lens::Whole;CLOCK_MODE=0;DELAY=0;WAITS=0;}
         for success in [false,true]{
             let mut sq=[0u64;128];let mut cq=[0u32;64];let mut db=[0u32;2];
             unsafe{
@@ -352,6 +354,7 @@ mod driver_read {
     /// the destination itself.
     fn zero_copy_read(size: usize, cqe: u32) -> (u64, Vec<u64>, Vec<u8>, bool) {
         let _lock = LOCK.lock().unwrap();
+        NVME_IRQ.store(false,Ordering::SeqCst);crate::device::PENDING.store(0,Ordering::SeqCst);unsafe{LENS=Lens::Whole;CLOCK_MODE=0;DELAY=0;WAITS=0;}
         let (mut sq, mut cq, mut db) = ([0u64; 128], [0u32; 64], [0u32; 2]);
         let mut buffer = vec![0u64; ((BLOCK_MAX_RUN + PAGE_SIZE) / 8) as usize];
         let mut destination = vec![0xa5u8; size];

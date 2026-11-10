@@ -61,6 +61,7 @@ lazy_static! {
             idt.simd_floating_point.set_handler_addr(x86_64::VirtAddr::new(simd_floating_point_stub as *const () as u64));
             idt.alignment_check.set_handler_addr(x86_64::VirtAddr::new(alignment_check_stub as *const () as u64));
             idt[0x20].set_handler_addr(x86_64::VirtAddr::new(timer_interrupt_stub as *const () as u64));
+            idt[crate::smp::PREEMPT_VECTOR].set_handler_addr(x86_64::VirtAddr::new(preempt_interrupt_stub as *const () as u64));
         }
 
         idt[0x40].set_handler_fn(revoke_key_handler);
@@ -264,8 +265,9 @@ pub extern "C" fn syscall_handler(regs: &mut SyscallRegs) -> u64 {
 
 // ── Assembly Stubs ──────────────────────────────────────────────────────────
 
+macro_rules! switching_stub { ($name:ident, $handler:ident) => {
 #[unsafe(naked)]
-pub unsafe extern "C" fn timer_interrupt_stub() {
+pub unsafe extern "C" fn $name() {
     core::arch::naked_asm!(
         "push 0", // DUMMY ERROR CODE
         "push r15", "push r14", "push r13", "push r12", "push r11", "push r10", "push r9", "push r8",
@@ -295,7 +297,7 @@ pub unsafe extern "C" fn timer_interrupt_stub() {
 
         "sub rsp, 8", // ALIGN STACK TO 16 BYTES
         "lea rdi, [rsp + 136]", // rdi points to InterruptStackFrame (RIP)
-        "call timer_interrupt_handler",
+        "call {handler}",
         "add rsp, 8", // UNDO ALIGNMENT
 
         "cmp byte ptr [rip + {pku_enabled}], 0",
@@ -317,8 +319,13 @@ pub unsafe extern "C" fn timer_interrupt_stub() {
         "add rsp, 8", // DISCARD DUMMY ERROR CODE
         "iretq",
         pku_enabled = sym crate::pku::PKU_ENABLED,
+        handler = sym $handler,
     );
 }
+}}
+// Interrupts that may switch tasks: the frame they push is the one switch_to resumes.
+switching_stub!(timer_interrupt_stub, timer_interrupt_handler);
+switching_stub!(preempt_interrupt_stub, preempt_interrupt_handler);
 
 #[unsafe(naked)]
 pub unsafe extern "C" fn page_fault_stub() {
@@ -541,13 +548,32 @@ pub extern "C" fn timer_interrupt_handler(stack_frame: &mut InterruptStackFrame)
         }
     }
     let core_id = crate::core_local::CoreLocal::get().core_id;
-    let sched = &crate::scheduler::SCHEDULERS[core_id as usize];
     if timekeeper {
         crate::scheduler::poll_paging_exit_notifications();
         crate::scheduler::poll_self_wait_deadlines(TICKS.load(Ordering::Relaxed));
         crate::program_workers::poll(TICKS.load(Ordering::Relaxed));
+        if TICKS.load(Ordering::Relaxed) % 2048 == 0 { crate::scheduler::report_latency(); }
     }
     if core_id == crate::smp::guest_core() { crate::program_records::poll(TICKS.load(Ordering::Relaxed)); }
+    reschedule(stack_frame);
+}
+
+/// An interactive task was woken for this core (see `scheduler::class_of`). If a
+/// normal task is running user code here, it gives way now instead of at its tick.
+#[no_mangle]
+pub extern "C" fn preempt_interrupt_handler(stack_frame: &mut InterruptStackFrame) {
+    unsafe {
+        if (crate::ipc::BOOT_CONTROLLER.phase() as u8) < (crate::ipc::BootPhase::SchedulerRunning as u8) { send_eoi(); return; }
+    }
+    if !crate::scheduler::SCHEDULERS[crate::core_local::CoreLocal::get().core_id as usize].should_preempt() { unsafe { send_eoi(); } return; }
+    crate::scheduler::PREEMPTIONS.fetch_add(1, Ordering::Relaxed);
+    reschedule(stack_frame);
+}
+
+/// Saves the interrupted user task and runs the scheduler's choice.
+fn reschedule(stack_frame: &mut InterruptStackFrame) {
+    let core_id = crate::core_local::CoreLocal::get().core_id;
+    let sched = &crate::scheduler::SCHEDULERS[core_id as usize];
 
     // Timer fired in kernel mode (CS.RPL=0) means a task is mid-syscall on the shared
     // CoreLocal kernel stack. Saving context there is unsafe: other tasks' syscalls reuse

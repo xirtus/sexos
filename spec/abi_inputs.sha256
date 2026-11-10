@@ -50,7 +50,7 @@ e1a8e5b73c48cfd4cc079510a2c51eacd7f371f00dffabb5968962ca9f462e30  crates/sex-pdx
 
 a0f555cd3af59954d4dce9ae913d16ac90089c8fa1dd61ecfda1a25a85de899d  crates/sex-pdx/src/history_recovery.rs
 
-b1f69bafa7e7a0b2b7f51b6754a46623c86a2680f2fdeb900dc70e66756769a7  crates/sex-pdx/src/lib.rs
+32c046133cba95c93d806a9b393d830413994669293aa30268b3853d8a2548b9  crates/sex-pdx/src/lib.rs
 
 b02d602feb5f239687f1a450e8c0ec2b932c366df85ae4f2a5dc67df3f5edcef  crates/sex-pdx/src/memory_region.rs
 
@@ -92,6 +92,10 @@ dac6c303922c9abe8dc1ccdf25ae44bf5cde10efed0ddca9a5f2c374da5651f7  crates/sex-pdx
 
 b31453fe0f2ad75a6efda46aa19bd69ff0d925bc4a313a0334f849bd6a4f7967  crates/sex-pdx/src/uiir.rs
 
+392b5a570f621399204a7ed227911f3a39250a168451ca8e4a2760fde3a6efa7  crates/sex-pdx/src/usb_disk.rs
+
+c7325b30965ac39376c5f7d5be7bb63a3b32fb08f5214bdf7e0d437ff42a52d6  crates/sex-pdx/src/usb_net.rs
+
 e68fd50ea4e53eb090d6aa5e93211f4431da49eb76940188886c991be7730a8a  crates/sex-pdx/src/virtio.rs
 
 2cd0cedd8bf837aca965d45a147d5251006d0d14521179b1d6c1496a8cffeccd  crates/sex-pdx/src/web.rs
@@ -110,7 +114,7 @@ e13c2573dadd9fc2725da96cabc1a562fb04c7b20a1e5d0ac32425a07d20d113  kernel/src/app
 
 3164978117938fd88d27396c9cc403f95f2f95c30c421c4f13e91fbb5e97cd32  kernel/src/boot_display_state.rs
 
-7b70e0bd437ed15f92654b2f186a1eadee9d342250ae1cc650cb4ea33517795a  kernel/src/boot_memory.rs
+88ea0e5f34c199606d173f0ef9a8935379402e429c2bc445bfeb179c719f609f  kernel/src/boot_memory.rs
 
 2fd25f89091106c70503869c40f52cfeb6662fab8ddfcd2c6202d2e04550fe69  kernel/src/boot_network.rs
 
@@ -130,7 +134,7 @@ d4ded4cf20061e5ea54c59e2b026972c09a0924b08eff6a07c8fc1b2a4e7765c  kernel/src/cap
 
 cf020f742459f6862a152fbed48da11da00a0b3a12c95e2f755c84ff6441be74  kernel/src/history_recovery.rs
 
-20c70edfc2da9b94d553e7c0d0dc0d1638c1caecdec1674da31ded1f9c6dd472  kernel/src/interrupts.rs
+780e2b1fbbe01af61b4223651e9c08e726797c17dd38251888b9c52d7253d733  kernel/src/interrupts.rs
 
 c7d42c2df1965a3b94bce554e10d5047c4269994c942f524b60b9de7b94a470a  kernel/src/ipc.rs
 
@@ -146,9 +150,9 @@ dcc491154df5f4182c1cec5f13498ff9081b030e90d894af41b09163e8cbe029  kernel/src/ipc
 
 61c23d34744793d69bcfde0d6e0b4044a2867134754204cd58759ee5ab37164b  kernel/src/paging_state.rs
 
-a8ee7bdb9f9a22a8314232c1bcc7d8d7ed6115656e40fd741d865caa680cea59  kernel/src/pci_command.rs
+a6cec3ea15190f7bbebebca78444a4cf2c190597bc7c1596165b3693dd798b96  kernel/src/pci_command.rs
 
-c20f686f10fb57bae58c3e45a3c4f8d2c16c2b76abb9545fb3943623c87bb959  kernel/src/syscalls/mod.rs
+9a247d08df759a4dfb821fbebf5004fac515d095f1c5e68ceb602aba12dba2ff  kernel/src/syscalls/mod.rs
 
 d96aa774f2c9ddf72f5fca8c9aa31e6127d182038f9bff826faa5e55ef8083eb  kernel/src/trust_source.rs
 

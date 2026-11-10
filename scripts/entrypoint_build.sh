@@ -17,6 +17,8 @@ ABI_INPUTS=(
   crates/sex-pdx/src/virtio.rs
   crates/sex-pdx/src/dma_lend.rs
   crates/sex-pdx/src/device.rs
+  crates/sex-pdx/src/usb_disk.rs
+  crates/sex-pdx/src/usb_net.rs
   kernel/src/entropy_source.rs
   kernel/src/clock_source.rs
   kernel/src/trust_source.rs

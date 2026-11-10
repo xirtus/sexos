@@ -931,6 +931,9 @@ pub const BLOCK_LAYOUT_STORE: u64 = 2;
 pub const BLOCK_LAYOUT_FOREIGN: u64 = 3;
 /// The installer changed the layout: no writes until restart.
 pub const BLOCK_LAYOUT_LOCKED: u64 = 4;
+/// Power is going: flush, then tell the disk (NVMe shutdown notification) so it can park
+/// safely; every later read or write is refused. Files sends it during power off/restart.
+pub const BLOCK_SHUTDOWN: u64 = 8;
 
 // Block protocol status codes — returned as pdx_reply value.
 pub const BLOCK_OK:           u64 = 0; // Success
@@ -1243,6 +1246,8 @@ pub mod pci_command;
 pub mod dma_lend;
 pub mod virtio;
 pub mod device;
+pub mod usb_disk;
+pub mod usb_net;
 pub mod network_config;
 
 pub mod desktop_style;

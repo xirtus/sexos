@@ -45,3 +45,29 @@ pub fn wait(want: bool, cap_to: u32, mut csts: impl FnMut() -> u32, mut ticks: i
     }
     report
 }
+
+/// CSTS.SHST: shutdown processing complete.
+pub const SHST_COMPLETE: u32 = 2 << 2;
+/// The kernel powers off FLUSH_TICKS (5 s) after asking Files, so the disk gets at most 4 s.
+pub const MAX_SHUTDOWN_TICKS: u64 = 4_000;
+
+/// How long to wait for shutdown: the drive's RTD3 entry latency, at least 1 s, at most 4 s.
+pub fn shutdown_ticks(rtd3e_us: u32) -> u64 { (rtd3e_us as u64 / 1000).clamp(1_000, MAX_SHUTDOWN_TICKS) }
+
+/// Polls CSTS until SHST reads complete, within `limit` ticks.
+pub fn wait_shutdown(limit: u64, mut csts: impl FnMut() -> u32, mut ticks: impl FnMut() -> u64, mut pause: impl FnMut()) -> Report {
+    let start = ticks();
+    let mut report = Report { outcome: Outcome::PollLimit, polls: 0, elapsed: 0, csts: 0 };
+    while report.polls < MAX_POLLS {
+        for _ in 0..POLL_QUANTUM {
+            let value = csts();
+            report.polls += 1;
+            report.csts = value;
+            if value != u32::MAX && value & (3 << 2) == SHST_COMPLETE { report.outcome = Outcome::Ready; return report; }
+        }
+        report.elapsed = ticks().saturating_sub(start);
+        if report.elapsed >= limit { report.outcome = Outcome::Deadline; return report; }
+        pause();
+    }
+    report
+}

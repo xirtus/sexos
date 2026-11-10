@@ -102,6 +102,11 @@ struct MediaLoad {
     /// A first try to open before the end failed; try again at the end.
     retry_at_end: bool,
     opened: bool,
+    /// The piece asked for begins here (a `Range` request after a seek).
+    from: Option<u64>,
+    /// Nothing coming, but the server takes Range requests and some bytes are missing:
+    /// kept for the next piece the decoder wants.
+    idle: bool,
 }
 
 struct Pending {
@@ -130,7 +135,8 @@ impl Doc {
 }
 
 /// One script of a page, ready to run.
-struct PageScript { source: String, name: String, module: bool }
+/// A script to run; `node` is its element, for `document.currentScript` (classic scripts only).
+struct PageScript { source: String, name: String, module: bool, node: Option<usize> }
 
 struct Browser {
     window: Window,
@@ -442,7 +448,7 @@ impl Browser {
                 None => Some((dom.text_content(n), alloc::format!("{}#script{}", base.split('#').next().unwrap_or(base), now.len() + later.len() + 1))),
             };
             let Some((source, name)) = got else { continue };
-            let s = PageScript { source, name, module };
+            let s = PageScript { source, name, module, node: (!module).then_some(n) };
             if deferred { later.push(s) } else { now.push(s) }
         }
         now.extend(later);
@@ -467,7 +473,10 @@ impl Browser {
                 self.load_modules(&mut script, s);
                 script.eval_module(&s.source, &s.name)
             } else {
-                script.eval(&s.source, &s.name)
+                if let Some(n) = s.node { let _ = script.dispatch(&alloc::format!("script\t{}", n)); }
+                let r = script.eval(&s.source, &s.name);
+                if s.node.is_some() { let _ = script.dispatch("script\t"); }
+                r
             };
             if let Err(sex_js::Error::Trapped(why)) = &r { sex_pdx::serial_record!("[web.script] trapped={}", why); break; }
         }
@@ -595,7 +604,7 @@ impl Browser {
         let asked = core::mem::take(&mut self.media_asked);
         let waiting = self.media.iter().any(|m| m.state == media::State::Waiting);
         // Downloads still coming are taken in every couple of milliseconds.
-        let loading = !self.media_loads.is_empty();
+        let loading = self.media_loads.iter().any(|l| !l.idle || l.body.borrow().want.is_some());
         if let Some(ms) = if waiting || asked { Some(0) } else if loading { Some(media_next.map_or(2, |n| n.min(2))) } else { media_next } {
             let due = sex_pdx::get_ticks() + ms;
             self.timer = Some(self.timer.map_or(due, |t| t.min(due)));
@@ -675,7 +684,7 @@ impl Browser {
                         Ok(ex) => {
                             self.media[i].state = media::State::Loading;
                             self.media[i].events.push("loadstart");
-                            self.media_loads.push(MediaLoad { node, p, ex, body: sex_media::Growing::shared(), streaming: false, retry_at_end: false, opened: false });
+                            self.media_loads.push(MediaLoad { node, p, ex, body: sex_media::Growing::shared(), streaming: false, retry_at_end: false, opened: false, from: None, idle: false });
                         }
                         // Every flow is busy: try again on a later tick.
                         Err(e) if e == BUSY => {}
@@ -802,7 +811,7 @@ impl Browser {
             let mut quiet = u32::MAX;
             // Media downloads keep moving too: one may hold the name resolver, which
             // answers this program one question at a time.
-            for l in self.media_loads.iter_mut() { let _ = l.ex.poll(&mut self.window); }
+            for l in self.media_loads.iter_mut().filter(|l| !l.idle) { let _ = l.ex.poll(&mut self.window); }
             let mut i = 0;
             while i < going.len() {
                 let step = going[i].1.poll(&mut self.window);
@@ -853,6 +862,27 @@ impl Browser {
                 let mut gone = self.media_loads.remove(k); gone.ex.cancel(&mut self.window); continue;
             };
             let l = &mut self.media_loads[k];
+            // A seek went where nothing is coming: ask for a piece from there.
+            let want = core::mem::take(&mut l.body.borrow_mut().want);
+            if let Some(at) = want.filter(|_| l.opened && l.body.borrow().ranges) {
+                l.ex.cancel(&mut self.window);
+                l.body.borrow_mut().begin(at, MEDIA_MAX);
+                l.p.headers.retain(|(k, _)| !k.eq_ignore_ascii_case("range"));
+                l.p.headers.push((String::from("Range"), alloc::format!("bytes={}-", at)));
+                l.p.since = sex_pdx::get_ticks();
+                sex_pdx::serial_record!("[web.media.range] node={} from={} url={}", l.node, at, l.p.url);
+                let mut p = core::mem::replace(&mut l.p, Pending::new(0, "", "", &[], &[], 0, None));
+                let sent = self.send(&mut p, false);
+                let l = &mut self.media_loads[k];
+                l.p = p;
+                match sent {
+                    Ok(ex) => { (l.ex, l.streaming, l.from, l.idle) = (ex, false, Some(at), false); }
+                    // No flow now: ask again on a later tick.
+                    Err(_) => { l.body.borrow_mut().want = Some(at); l.idle = true; }
+                }
+            }
+            let l = &mut self.media_loads[k];
+            if l.idle { k += 1; continue; }
             // Read while bytes keep coming, within the budget.
             let polled = loop {
                 match l.ex.poll(&mut self.window) {
@@ -864,10 +894,25 @@ impl Browser {
             };
             if !l.streaming {
                 if let Some(head) = l.ex.head() {
+                    // A piece must start where it was asked for; else this server does
+                    // not do pieces after all, and the stream ends where it got.
+                    let piece = head.get("content-range").and_then(sex_fetch::pieces::content_range);
+                    if let Some(at) = l.from.filter(|at| head.status != 206 || piece.is_none_or(|p| p.0 != *at)) {
+                        sex_pdx::serial_record!("[web.media.range.refused] node={} from={} status={}", l.node, at, head.status);
+                        l.ex.cancel(&mut self.window);
+                        let mut g = l.body.borrow_mut();
+                        (g.ranges, g.done) = (false, true);
+                        drop(g);
+                        self.media_loads.remove(k);
+                        continue;
+                    }
                     if (200..300).contains(&head.status) {
                         let mut g = l.body.borrow_mut();
                         if let Some(total) = l.ex.stream(&mut g.bytes) {
-                            g.total = total;
+                            if l.from.is_none() {
+                                g.total = total;
+                                g.ranges = total.is_some() && (head.status == 206 || head.get("accept-ranges").is_some_and(|v| v.trim().eq_ignore_ascii_case("bytes")));
+                            }
                             l.streaming = true;
                             drop(g);
                             sex_pdx::serial_record!("[web.media.stream] node={} total={} url={}", l.node, total.map_or(-1, |t| t as i64), l.p.url);
@@ -884,6 +929,7 @@ impl Browser {
                 let ok = l.ex.stream(&mut l.body.borrow_mut().bytes).is_some();
                 let done = matches!(polled, Ok(true)) || polled.is_err() || !ok;
                 let have = l.body.borrow().bytes.len() as u64;
+                if !l.opened { l.body.borrow_mut().want = None; }
                 if done {
                     l.body.borrow_mut().done = true;
                     sex_pdx::serial_record!("[web.media.load] node={} status=200 bytes={} ticks={} streamed=1 ok={} shown={} src={}", l.node, have, sex_pdx::get_ticks() - l.p.since, (polled.is_ok() && ok) as u8, self.media[i].frames, l.p.url);
@@ -905,7 +951,9 @@ impl Browser {
                         self.media[i].state = media::State::Loading;
                     }
                 }
-                if done { self.media_loads.remove(k); } else { k += 1; }
+                // A whole stream needs nothing more; one with gaps waits for a seek.
+                let l = &mut self.media_loads[k];
+                if done && (l.body.borrow().whole() || !l.body.borrow().ranges) { self.media_loads.remove(k); } else { l.idle = done; k += 1; }
                 continue;
             }
             // Read whole: a redirect, an error page, or a body that must be decoded first.
@@ -922,7 +970,7 @@ impl Browser {
                     match self.landed(&mut l.p, r) {
                         // A redirect: on to the next address.
                         None => match self.send(&mut l.p, false) {
-                            Ok(ex) => { self.media_loads.insert(k, MediaLoad { ex, body: sex_media::Growing::shared(), streaming: false, retry_at_end: false, opened: false, ..l }); k += 1; }
+                            Ok(ex) => { self.media_loads.insert(k, MediaLoad { ex, body: sex_media::Growing::shared(), streaming: false, retry_at_end: false, opened: false, from: None, idle: false, ..l }); k += 1; }
                             Err(_) => { self.media[i].state = media::State::Failed; self.media[i].events.push("error"); }
                         },
                         Some(Ok(done)) => {

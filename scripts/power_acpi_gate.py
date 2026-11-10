@@ -59,10 +59,11 @@ def main():
  # Boot 1: the power button.
  g=launch(a.iso,disk,a.out,'button',reboot=False)
  try:
-  desktop(g);g['wait'](r'\[acpi\.aml\.quarantine\] self_test=1');info=g['wait'](r'\[acpi\.power\] ([^\n]*)\n')[1];result['acpi']=info
+  desktop(g);result['sexacpi']=g['wait'](r'\[sexacpi\.ready\] aml=1 ([^\n]*)\n')[1];g['wait'](r'\[acpi\.firmware\.inventory\] aml=1 ');
+  if re.search(r'\[acpi\.aml',g['text']()):raise RuntimeError('AML ran in the kernel');info=g['wait'](r'\[acpi\.power\] ([^\n]*)\n')[1];result['acpi']=info
   s=len(g['text']());t0=time.monotonic();g['q'].cmd('system_powerdown')
   g['wait'](r'\[acpi\.power_button\] pressed=1',s,30)
-  g['wait'](r'\[acpi\.power\.begin\] kind=off by=power_button files=\d+ told=1',s,30)
+  g['wait'](r'\[acpi\.power\.begin\] kind=off by=power_button files=\d+ told=1 firmware_told=1',s,30)
   g['wait'](r'\[files\.power\.flush\] op=2 flushed=\d document_saves_done=1',s,30)
   g['wait'](r'\[acpi\.power\.flush\] files=(flushed|failed) late=0',s,30,exited_ok=True)
   g['wait'](r'\[acpi\.power\.off\] s5=0x[0-9a-f]+ entering=1',s,30,exited_ok=True)
