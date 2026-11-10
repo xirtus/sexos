@@ -43,6 +43,8 @@ pub const CAPA_MCC_UPDATE_11AX_SUPPORT: usize = 89;
 pub const API_WIFI_MCC_UPDATE: usize = 9;
 pub const API_REGULATORY_NVM_INFO: usize = 48;
 pub const API_REDUCED_SCAN_CONFIG: usize = 56;
+pub const API_SCAN_EXT_CHAN_VER: usize = 58;
+pub const CAPA_DS_PARAM_SET_IE_SUPPORT: usize = 9;
 const MAX_SCAN_CHANNELS: u32 = 67;
 const FW_ADDR_CACHE_CONTROL: u32 = 0xc000_0000;
 

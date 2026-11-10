@@ -81,7 +81,8 @@ The driver speaks firmware API 77 (89 for the 0x7e40 "Ma" parts), the same as Op
 | **W1** (#83) | driver core crate: chips, firmware files, DMA layout, power-up, commands, 802.11, WPA2/WPA3, CCMP | host tests with IEEE/RFC vectors, real firmware images |
 | **W2** (section 7) | kernel leases Intel Wi-Fi (class 02:80, ids from `sex_wifi::devices`) to sexnet with a 4 MiB DMA region; firmware files on the boot image; sexnet powers the chip up and waits for ALIVE; boot log `[wifi.chip]`, `[wifi.alive] fw=…` or the exact failure step | host gate on the lease; **x17 boot log next week** |
 | **W3** (section 8) | command queue; platform NVM for the reported SKU; firmware init (INIT_COMPLETE); NVM read (MAC address, antennas, bands, channels); antenna, BT coexistence, SoC, DQA, thermal, power, regulatory (MCC), scan and beacon-filter configuration | host gate on a firmware model and the real x17 files; **x17: `[wifi.ready]`** |
-| W4 | scanning (UMAC scan; PHY and MAC contexts come with the first scan and association), a network list in the status bar and `wifi scan` in Spindle | x17 lists nearby networks |
+| **W4** (section 9) | scanning: one UMAC scan of every allowed channel right after `[wifi.ready]`, beacons and probe responses read into a network list, `[wifi.network]` lines in the boot log | host gate on the firmware model; **x17 lists nearby networks** |
+| **W4b** (section 10) | the network list for people: `wifi` and `wifi scan` in Spindle (a desktop query to sexnet, `sex_pdx::wifi_status`), rescans; the status bar indicator follows | host test of the words; **x17: `wifi` lists networks** |
 | W5 | connect: open/SAE authentication, association, the handshake from this crate, key install, data queues into sexnet's Ethernet path; passphrase prompt; saved networks | x17 browses the web over Wi-Fi |
 | W6 | speed and comfort: HT/VHT/HE capabilities, aggregation, power save, roaming, rekeying, 6 GHz | throughput test against the wired NIC |
 | W7 | MSI-X interrupts and an IOMMU domain (framework D3/D4); Wi-Fi worker in its own organ | fault injection: a wild DMA is stopped |
@@ -231,5 +232,85 @@ Intel Wi-Fi; the x17 boot log is the real test.
 
 No ABI or kernel change: W3 is all in `sex-wifi` and sexnet.
 
-Next, W4: scanning (UMAC scan request and results, PHY context), a network list in the
-status bar and `wifi scan` in Spindle.
+Next, W4: scanning.
+
+## 9. Stage W4: finding networks (2026-11-10)
+
+Right after `[wifi.ready]` the x17 R1 should print:
+
+```
+[wifi.scan.start] channels=… ticks=…
+[wifi.network] ssid="…" bssid=…:…:…:…:…:… channel=6 rssi=-48 security=wpa2 beacons=3
+…one line per network…
+[wifi.scan.done] networks=… frames=… dropped=0 channels=… ticks=…
+```
+
+or `[wifi.failed] step=scan reason=…` (`Refused`, `NoAnswer`, `Timeout` after 15 s,
+`Status(2)` for an aborted scan, `Crashed { cause }`).
+
+How it works (`sex_wifi::scan`, after iwx(4) `iwx_umac_scan_v14`, `iwx_fill_probe_req`,
+`iwx_rx_mpdu_mq`):
+
+- **Channels.** The NVM's channel flags, replaced by the regulatory answer's when MCC
+  returns a list (as `iwx_init_channel_map` does): every valid 2.4 GHz channel, and the
+  5 GHz ones when the SKU has the band, up to the firmware's limit (67). 6 GHz waits for W6.
+- **Request.** One `SCAN_REQ_UMAC` (version 14; the x17's firmware declares 15, which has
+  the same layout and is what iwx sends it): passive (no probe requests until the user
+  names a network), adaptive dwell, every frame passed up, a notice per iteration. The
+  probe template (our address, rates per band) is filled in for later directed scans.
+- **Results.** Beacons and probe responses arrive as RX MPDU notifications: a 48-byte
+  (22000) or 64-byte (AX210) descriptor, then the frame, with two pad bytes after the
+  header when the firmware says so. Frames with a bad CRC are dropped. The existing
+  `ieee80211::parse_bss` reads SSID, channel and security (open, WPA2, WPA3, transition);
+  each BSSID is kept once with its strongest signal; 32 networks at most, the weakest
+  giving way.
+
+The scan runs on the command queue and receive ring that W3 left running; no PHY or MAC
+context is needed to scan (iwx scans before it adds one).
+
+Proof: four new host tests: the request's bytes (channels, bands, flags, probe template,
+the firmware's channel limit), MPDU parsing with and without padding on both families,
+a whole scan against the firmware model after the init sequence (two networks, the
+strongest beacon kept, security read, an aborted scan reported), and the list when full.
+
+No ABI or kernel change.
+
+Next, W4b: the list on screen (status bar, `wifi scan` in Spindle), then W5: connecting.
+
+## 10. Stage W4b: networks on screen (2026-11-10)
+
+Spindle gains `wifi`:
+
+```
+> wifi
+Wi-Fi: 7 networks heard on 67 channels (scan 1).
+  home-5g  -48 dBm  channel 36  WPA2/WPA3  aa:bb:cc:dd:ee:01
+  …
+> wifi scan
+Wi-Fi: scanning 67 channels (0 networks so far). Type wifi to see them.
+```
+
+Under QEMU (no Intel chip) it says so: `Wi-Fi: no Intel Wi-Fi chip here, or its firmware is
+missing.`
+
+- **Protocol** (`sex_pdx::wifi_status`, op `0x2E8` to sexnet): `STATE`, `SCAN`, and
+  `NETWORK index part`. Every answer is one reply word (top byte `0x57`, or `0x58` for a
+  refusal or no such network), like the sound mixer's. A network takes up to seven words:
+  its facts (channel, signal, security, SSID length, beacons), its BSSID, and the SSID in
+  7-byte parts, asked one after another. No shared memory or new kernel object is needed.
+- **Who may ask:** Shell, SilkBar and Spindle rows read; Shell and Spindle may start a scan.
+  A network list tells where the machine is, so programs are refused (`[wifi.status.denied]`).
+- **Rescans:** `SCAN` starts a fresh scan when the chip is ready and the last scan has
+  ended; the list then fills again as beacons arrive. Each scan logs `[wifi.scan.start]
+  … scan=N` and ends with the same `[wifi.network]` and `[wifi.scan.done]` lines as W4.
+
+Proof: host tests of the words (round trips, a 32-byte SSID through its five parts, other
+sexnet replies never mistaken for Wi-Fi ones), run by `scripts/wifi_host_gate.sh`; sexnet
+and Spindle build for the service target. The list itself needs the chip: on the x17,
+type `wifi`.
+
+**ABI:** a new PDX op and module (`sex_pdx::wifi_status`, op `0x2E8`); `sex-pdx/src/lib.rs`
+gains `pub mod wifi_status`, so `abi_version_hash` is recomputed. No kernel change.
+
+Next: the status bar's Wi-Fi indicator (SilkBar reads `STATE`), then W5: connecting.
+

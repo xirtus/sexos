@@ -3,7 +3,8 @@
 # handshakes, chip table, firmware files and the boot firmware pack (the real
 # linux-firmware images when they can be fetched), DMA layout, the receive ring,
 # the power-up sequence to ALIVE on a register model, and the init commands to
-# "ready" against a firmware model (with the real x17 .pnvm when fetched).
+# "ready" against a firmware model (with the real x17 .pnvm when fetched), a scan,
+# and the desktop's Wi-Fi status words (sex_pdx::wifi_status).
 # No radio here: the chip itself is only proven on hardware.
 set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

@@ -97,6 +97,7 @@ mod text_delivery;
 mod display_delivery;
 mod sextime_command;
 mod volume_command;
+mod wifi_command;
 mod calc_command;
 mod complete;
 static mut HISTORY_STATUS:sex_pdx::spindle_status::Publisher=sex_pdx::spindle_status::Publisher::new(0,0);
@@ -811,7 +812,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  calc ln(2)   exp ln log sin cos tan, 2**0.5");
             sb.push(b"  run [+net] NAME [ARGS]  start a program from /bin or a path");
             sb.push(b"  edit FILE    open a file in Jot; @FILE gives any program that file");
-            sb.push(b"  install [IMG] make this disk start SexOS, from the running system or an image");
+            sb.push(b"  install [go] [GIB] [IMG] put SexOS beside the other systems on this disk; without go, only plans");
             sb.push(b"  spawn N C    start C background copies of program N");
             sb.push(b"  records      count background programs; stopall [force]");
             sb.push(b"  ls cd pwd mkdir rm mv cat write append touch df   files");
@@ -828,6 +829,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  net-status   show diagnostic state");
             sb.push(b"  net-cancel   stop and release the probe");
             sb.push(b"  net-retry    explicit fresh attempt");
+            sb.push(b"  wifi [scan]  Wi-Fi state and networks heard; scan looks again");
             serial_println!("[spindle.help.command] name=help ok=1");
             serial_println!("[spindle.help.command] name=clear ok=1");
             serial_println!("[spindle.help.command] name=echo ok=1");
@@ -1487,6 +1489,10 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
                 }
                 None => sb.push(b"Use: crash kernel | crash Display | Input | Shell | Bell | ..."),
             }
+            true
+        }
+        b"wifi" => {
+            unsafe { (*core::ptr::addr_of_mut!(wifi_command::WIFI)).start(args, sb); }
             true
         }
         b"volume" => {
@@ -2751,6 +2757,7 @@ pub extern "C" fn _start() -> ! {
             continue;
         }
         if msg.type_id==1 && unsafe{(*core::ptr::addr_of_mut!(volume_command::VOLUME)).receive(msg.caller_pd,msg.arg0,sb)} {unsafe{content_render(&line,sb);}continue;}
+        if msg.type_id==1 && unsafe{(*core::ptr::addr_of_mut!(wifi_command::WIFI)).receive(msg.caller_pd,msg.arg0,sb)} {unsafe{content_render(&line,sb);}continue;}
         if msg.type_id==1 && msg.caller_pd==13 {
             sex_pdx::serial_record!("[spindle.net.reply] target={} task={} tag={} seq={} value={} observed=1",instance_pd(),catalog.task_id,msg.arg0>>56,(msg.arg0>>32)&sex_pdx::network_job::MAX_SEQ as u64,msg.arg0 as u32);
             unsafe{NETWORK_PROBE.reply(msg.arg0,sex_pdx::get_ticks());}

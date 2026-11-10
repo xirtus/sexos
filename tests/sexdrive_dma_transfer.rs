@@ -226,7 +226,7 @@ mod driver_read {
         let mut destination = vec![0xa5u8; size];
         cq[3] = cqe;
         unsafe {
-            NOW=10;WAITS=0;DELAY=delay;CLOCK_MODE=clock_mode;COMPLETION=completion;CQ_PTR=cq.as_mut_ptr();
+            LENS=Lens::Whole;NOW=10;WAITS=0;DELAY=delay;CLOCK_MODE=clock_mode;COMPLETION=completion;CQ_PTR=cq.as_mut_ptr();
             DEST_PTR=destination.as_ptr();DEST_LEN=size;DOORBELLS=doorbells.as_ptr();
             let lease = Some(DmaLease::new(dma_pool::DmaBuffer {
                 virtual_address: buffer.as_mut_ptr() as u64,
