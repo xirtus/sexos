@@ -43,6 +43,17 @@ fn commit_writes(fs: &mut Fs<'static, Disk>) {
     let bytes = unsafe { core::mem::replace(&mut *core::ptr::addr_of_mut!(UNCOMMITTED), 0) };
     if let Err(e) = fs.commit() { sex_pdx::serial_record!("[files.fs.commit.failed] bytes={} error={:?}", bytes, e); }
 }
+/// Before power goes: commits waiting writes and flushes the disk's own cache.
+pub fn flush_for_power() -> bool {
+    let committed = match unsafe { &mut *core::ptr::addr_of_mut!(STATE) } {
+        State::Ready(fs) => {
+            if writes_pending() { commit_writes(fs); }
+            !fs.has_changes()
+        }
+        _ => true,
+    };
+    committed && DiskFs::diskfs_block_sync() == 0
+}
 enum State { Untried, Absent, Ready(Fs<'static, Disk>) }
 
 pub struct Disk { blocks: u64 }
@@ -358,6 +369,7 @@ pub fn handle(caller: u32, a: u64, offset: u64, length: u64) -> u64 {
         }
         _ => return w::reply(r.seq, w::DENIED, 0),
     };
+    if r.kind == w::PING { return w::reply(r.seq, w::OK, 0); }
     let Ok(view) = sex_pdx::memory_region_view(w::PROVIDER_SLOT_BASE + index as u64, 0, w::REGION_BYTES as u64, QUERY_VIEW | READ | WRITE) else { return w::reply(r.seq, w::IO, 0) };
     let region = unsafe { core::slice::from_raw_parts_mut(view.virtual_address as *mut u8, w::REGION_BYTES) };
     let state = unsafe { &mut *core::ptr::addr_of_mut!(STATE) };
