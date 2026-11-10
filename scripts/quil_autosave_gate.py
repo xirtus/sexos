@@ -19,9 +19,16 @@ FIRST=['d','r','a','f','t','spc','o','n','e']
 SECOND=['spc','a','n','d','spc','t','w','o']
 SCOPE='Native QEMU power-cut recovery of a Quil idle draft through the held document route and Linen; no claim about physical media flush ordering.'
 
+def disk_args(disk):
+ """The gate disk on NVMe (default) or, with SEXOS_GATE_DISK_BUS=ahci, as a SATA disk on q35's built-in AHCI."""
+ bus=os.environ.get('SEXOS_GATE_DISK_BUS','nvme')
+ if bus=='nvme':return['-drive',f'if=none,id=nvm,file={disk},format=raw','-device','nvme,serial=sexos01,drive=nvm']
+ if bus=='ahci':return['-drive',f'if=none,id=sata,file={disk},format=raw','-device','ide-hd,drive=sata,bus=ide.0']
+ raise ValueError('SEXOS_GATE_DISK_BUS must be nvme or ahci')
+
 def boot(iso,disk,out,tag,resolution):
  serial=out/f'{tag}-serial.log';sock=Path('/tmp')/f'sex-autosave-{os.getpid()}-{tag}.sock'
- cmd=['qemu-system-x86_64','-M','q35','-cpu','max,+pku,+rdseed','-rtc',RTC_NORMAL,'-smp',os.environ.get('SEXOS_GATE_CORES','1'),*(['-accel','tcg,thread=multi']if os.environ.get('SEXOS_GATE_CORES','1')!='1'else[]),'-m',os.environ.get('SEXOS_GATE_MEMORY','512M'),'-vga','none','-device','VGA,xres='+resolution.replace('x',',yres='),'-device','nec-usb-xhci,id=xhci','-device','usb-tablet,bus=xhci.0',*([]if os.environ.get('SEXOS_GATE_NO_CDROM')else['-cdrom',str(iso)]),*(['-drive','if=pflash,format=raw,readonly=on,file='+os.environ['SEXOS_GATE_FIRMWARE']]if os.environ.get('SEXOS_GATE_FIRMWARE')else[]),'-drive',f'if=none,id=nvm,file={disk},format=raw','-device','nvme,serial=sexos01,drive=nvm','-serial',f'file:{serial}','-qmp',f'unix:{sock},server=on,wait=off','-display','none','-no-reboot','-no-shutdown',*os.environ.get('SEXOS_GATE_NIC','-nic none').split(),*os.environ.get('SEXOS_GATE_DEVICES','').split()]
+ cmd=['qemu-system-x86_64','-M','q35','-cpu','max,+pku,+rdseed','-rtc',RTC_NORMAL,'-smp',os.environ.get('SEXOS_GATE_CORES','1'),*(['-accel','tcg,thread=multi']if os.environ.get('SEXOS_GATE_CORES','1')!='1'else[]),'-m',os.environ.get('SEXOS_GATE_MEMORY','512M'),'-vga','none','-device','VGA,xres='+resolution.replace('x',',yres='),'-device','nec-usb-xhci,id=xhci','-device','usb-tablet,bus=xhci.0',*([]if os.environ.get('SEXOS_GATE_NO_CDROM')else['-cdrom',str(iso)]),*(['-drive','if=pflash,format=raw,readonly=on,file='+os.environ['SEXOS_GATE_FIRMWARE']]if os.environ.get('SEXOS_GATE_FIRMWARE')else[]),*disk_args(disk),'-serial',f'file:{serial}','-qmp',f'unix:{sock},server=on,wait=off','-display','none','-no-reboot','-no-shutdown',*os.environ.get('SEXOS_GATE_NIC','-nic none').split(),*os.environ.get('SEXOS_GATE_DEVICES','').split()]
  proc=subprocess.Popen(cmd,stdout=(out/f'{tag}-qemu.log').open('w'),stderr=subprocess.STDOUT);began=time.monotonic()
  # The log only grows: read what is new, so hours-long runs don't reread it on every poll.
  seen={'off':0,'text':'','health':0}

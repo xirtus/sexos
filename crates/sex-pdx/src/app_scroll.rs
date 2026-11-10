@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! Bounded vertical wheel data. Decoding authenticates no sender: Input,
 //! Shell and apps separately check their actual BOOT-sanctioned IPC peer.
 //! Positive steps move toward the document start. Zero is not an event.

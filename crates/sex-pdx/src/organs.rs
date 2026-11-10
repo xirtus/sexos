@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! Organ systems: a PKU hardware key belongs to a group of trusted services, not
 //! to one program. Sharing costs those services isolation from each other, never
 //! authority, which capabilities still decide. It leaves keys for what needs

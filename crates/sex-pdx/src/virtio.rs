@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! Virtio PCI devices. BOOT reads a device's vendor capabilities once and leases
 //! its driver one BAR view plus the offsets of the four register blocks inside it.
 //! A driver never learns a physical register address, and a request can't name one.

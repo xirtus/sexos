@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! BOOT-held immutable trust-policy metadata. No pointer, root mutation, name
 //! selector, transport permission, or ambient certificate authority is exposed.
 pub const SLOT:u64=62;

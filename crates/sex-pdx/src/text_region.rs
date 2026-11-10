@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! Fixed BOOT_DAG text regions, one per app incarnation. The app writes a whole
 //! text once and Display copies it, instead of 8 bytes per call. These slots name
 //! existing Region capabilities: nothing is minted, and the transaction hash is
