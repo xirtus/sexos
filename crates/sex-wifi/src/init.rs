@@ -347,7 +347,7 @@ impl Init {
                 // "ZZ": the world domain until the firmware learns the country.
                 p[0..2].copy_from_slice(&((b'Z' as u16) << 8 | b'Z' as u16).to_le_bytes());
                 p[2] = if f.api(u::API_WIFI_MCC_UPDATE) || f.capa(u::CAPA_LAR_MULTI_MCC) { MCC_SOURCE_GET_CURRENT } else { MCC_SOURCE_OLD_FW };
-                (h::LONG_GROUP, h::MCC_UPDATE_CMD, 32)
+                (h::LONG_GROUP, h::MCC_UPDATE_CMD, 28)
             }
             Step::ScanConfig => {
                 if !f.api(u::API_REDUCED_SCAN_CONFIG) { return Err(Failure::Unsupported("reduced_scan_config")); }

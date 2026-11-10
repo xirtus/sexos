@@ -798,6 +798,16 @@ impl Firmware {
             let (opcode, group, index, qid) = (bytes[0], bytes[1], bytes[2], bytes[3]);
             let len = u16::from_le_bytes([bytes[4], bytes[5]]) as usize;
             assert_eq!(bytes.len(), 8 + len, "TFD covers the whole command");
+            // Payload sizes the firmware ABI fixes (iwx(4) structs); a wrong size is refused.
+            let want = match (group, opcode) {
+                (hcmd::LONG_GROUP, hcmd::MCC_UPDATE_CMD) => Some(28),
+                (hcmd::LONG_GROUP, hcmd::SCAN_CFG_CMD) => Some(12),
+                (hcmd::LONG_GROUP, hcmd::REPLY_BEACON_FILTERING_CMD) => Some(60),
+                (hcmd::PHY_OPS_GROUP, hcmd::TEMP_REPORTING_THRESHOLDS_CMD) => Some(20),
+                (hcmd::LONG_GROUP, hcmd::BT_CONFIG) | (hcmd::SYSTEM_GROUP, hcmd::SOC_CONFIGURATION_CMD) => Some(8),
+                _ => Some(4),
+            };
+            assert_eq!(Some(len), want, "payload size of {group:#x}/{opcode:#x}");
             assert_eq!((qid, index as u32), (0, self.read % 256));
             let payload = bytes[8..].to_vec();
             self.commands.push((group, opcode, payload));
@@ -1000,7 +1010,7 @@ fn x17_init_sequence_reaches_ready() {
     assert_eq!(payload(SYSTEM_GROUP, SOC_CONFIGURATION_CMD), [1, 0, 0, 0, 0, 0, 0, 0]);
     assert_eq!(payload(PHY_OPS_GROUP, TEMP_REPORTING_THRESHOLDS_CMD), [0; 20]);
     let mcc = payload(LONG_GROUP, MCC_UPDATE_CMD);
-    assert_eq!((mcc.len(), &mcc[..3]), (32, &[b'Z', b'Z', 0x10][..]));
+    assert_eq!((mcc.len(), &mcc[..3]), (28, &[b'Z', b'Z', 0x10][..]));
     // SCAN_CFG v5: no broadcast station id; antennas A+B both ways.
     assert_eq!(payload(LONG_GROUP, SCAN_CFG_CMD), [0, 0, 0, 0, 3, 0, 0, 0, 3, 0, 0, 0]);
     assert_eq!(payload(LONG_GROUP, REPLY_BEACON_FILTERING_CMD), vec![0u8; 60]);
