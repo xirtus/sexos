@@ -20,9 +20,27 @@ pub const OP_ADOPT: u64 = 2;
 /// Test builds only: Spindle asks the kernel to stop (rsi 0) or to end a service (rsi:
 /// its domain id) as if it had faulted.
 pub const OP_PROBE_FAULT: u64 = 3;
-/// How many times the kernel has started the calling service again (rsi). A service
-/// that was started again skips the once-only steps of its first start.
+/// With arg0=0, the caller's legacy restart count. With a nonzero canonical
+/// held Domain capability slot and reserved buf=0, a typed peer snapshot:
+/// rsi=restart_count+1 (first boot epoch 1), rdx=PeerLife. No raw PD query.
 pub const OP_RESTARTS: u64 = 4;
+/// A cap-scoped peer snapshot returns a nonzero epoch and one known state. It is
+/// an admission observation, not a lease: bracket work with matching snapshots.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u64)]
+pub enum PeerLife { Live=1, Starting=2, Ending=3, Exited=4, Dead=5, GaveUp=6, FaultBlocked=7 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PeerState { pub epoch:u64, pub life:PeerLife }
+impl PeerState {
+    pub fn decode(epoch:u64,life:u64)->Result<Self,u64>{
+        if epoch==0{return Err(INVALID)}
+        let life=match life{1=>PeerLife::Live,2=>PeerLife::Starting,3=>PeerLife::Ending,
+            4=>PeerLife::Exited,5=>PeerLife::Dead,6=>PeerLife::GaveUp,7=>PeerLife::FaultBlocked,_=>return Err(INVALID)};
+        Ok(Self{epoch,life})
+    }
+    pub const fn live(self)->bool{matches!(self.life,PeerLife::Live)}
+}
+
 
 /// rsi: a page-aligned address in the calling service's own BOOT image; rdx: 1..=4
 /// pages. Restarts leave those pages as the last run wrote them instead of putting
@@ -38,6 +56,8 @@ pub const NOT_FOUND: u64 = 2;
 pub const INVALID: u64 = 3;
 /// `OP_ADOPT`: the kernel keeps room for this start's records and takes no more history.
 pub const FULL: u64 = 4;
+/// A peer restart snapshot is contended; never substitute epoch zero.
+pub const RETRY: u64 = 5;
 
 pub const RECORD_BYTES: usize = 512;
 pub const MAGIC: [u8; 8] = *b"SEXCRSH1";
@@ -257,4 +277,14 @@ pub fn next_disk_slot(slots: &[Option<u64>]) -> (usize, u64) {
         Some((index, slot)) => ((slot + 1) % slots.len().max(1), index + 1),
         None => (0, 1),
     }
+}
+
+/// State of a restartable peer named only by a held Domain route. Slot 0 remains
+/// the legacy self-count operation and is deliberately refused by this wrapper.
+#[cfg(target_arch="x86_64")]
+pub fn peer_state(slot:u64)->Result<PeerState,u64>{
+    if slot==0{return Err(INVALID)}
+    let (status,epoch,life)=call(OP_RESTARTS,slot,0);
+    if status!=OK{return Err(status)}
+    PeerState::decode(epoch,life)
 }

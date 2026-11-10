@@ -10,30 +10,129 @@
      uint8_t *byte_code_buf; /* (self pointer) */
      int byte_code_len;
      JSAtom func_name;
-@@ -1066,6 +1067,14 @@
+@@ -690,6 +691,7 @@
+     JSValue func_obj;
+     JSValue this_val;
+     int argc;
++    bool sexos_muted_errors;
+     JSValue argv[];
+ } JSBoundFunction;
+
+@@ -1066,6 +1068,22 @@
  static JSValue js_call_bound_function(JSContext *ctx, JSValueConst func_obj,
                                        JSValueConst this_obj,
                                        int argc, JSValueConst *argv, int flags);
 +/* Source policy is supplied by the owning sex-js VM while compiling. */
 +extern int sexos_compile_origin;
 +extern int sexos_opaque_source_seen;
++extern int sexos_job_muted;
 +static bool sexos_compiled_muted(JSContext *ctx);
 +static bool sexos_running_muted(JSContext *ctx);
 +static bool sexos_function_muted(JSValueConst function);
 +static void sexos_promise_inherit(JSValueConst promise, JSValueConst source);
++static bool sexos_promise_muted(JSValueConst promise);
++static void sexos_promise_mark_muted(JSValueConst promise);
++static bool sexos_property_getter_muted(JSValueConst object, JSAtom atom);
++static bool sexos_adoption_lookup_muted(JSValueConst object);
++static void sexos_resolver_mark_muted(JSValueConst resolver);
++struct JSAsyncGeneratorData;
++static void sexos_asyncgen_mark_current(struct JSAsyncGeneratorData *s);
 +
  static JSValue JS_CallInternal(JSContext *ctx, JSValueConst func_obj,
                                 JSValueConst this_obj, JSValueConst new_target,
                                 int argc, JSValueConst *argv, int flags);
-@@ -19562,6 +19571,7 @@
+@@ -5299,6 +5317,7 @@
+     uint8_t length;
+     uint8_t data_len;
+     uint16_t magic;
++    bool sexos_muted_errors;
+     JSValue data[];
+ } JSCFunctionDataRecord;
+
+@@ -5347,7 +5366,11 @@
+         arg_buf = argv;
+     }
+
+-    return s->func(ctx, this_val, argc, arg_buf, s->magic, vc(s->data));
++    int previous_job_muted = sexos_job_muted;
++    if (sexos_function_muted(func_obj)) sexos_job_muted = 1;
++    JSValue result = s->func(ctx, this_val, argc, arg_buf, s->magic, vc(s->data));
++    sexos_job_muted = previous_job_muted;
++    return result;
+ }
+
+ JSValue JS_NewCFunctionData(JSContext *ctx, JSCFunctionData *func,
+@@ -5371,8 +5394,11 @@
+     s->length = length;
+     s->data_len = data_len;
+     s->magic = magic;
+-    for(i = 0; i < data_len; i++)
++    s->sexos_muted_errors = sexos_running_muted(ctx);
++    for(i = 0; i < data_len; i++) {
+         s->data[i] = js_dup(data[i]);
++        s->sexos_muted_errors |= sexos_function_muted(data[i]) || sexos_promise_muted(data[i]);
++    }
+     JS_SetOpaqueInternal(func_obj, s);
+     js_function_set_properties(ctx, func_obj,
+                                JS_ATOM_empty_string, length);
+@@ -16360,16 +16386,21 @@
+     for(i = 0; i < argc; i++) {
+         arg_buf[bf->argc + i] = argv[i];
+     }
++    int previous_job_muted = sexos_job_muted;
++    if (bf->sexos_muted_errors) sexos_job_muted = 1;
++    JSValue result;
+     if (flags & JS_CALL_FLAG_CONSTRUCTOR) {
+         new_target = this_obj;
+         if (js_same_value(ctx, func_obj, new_target))
+             new_target = bf->func_obj;
+-        return JS_CallConstructor2(ctx, bf->func_obj, new_target,
++        result = JS_CallConstructor2(ctx, bf->func_obj, new_target,
+                                    arg_count, arg_buf);
+     } else {
+-        return JS_Call(ctx, bf->func_obj, bf->this_val,
++        result = JS_Call(ctx, bf->func_obj, bf->this_val,
+                        arg_count, arg_buf);
+     }
++    sexos_job_muted = previous_job_muted;
++    return result;
+ }
+
+ /* argument of OP_special_object */
+@@ -19489,6 +19520,8 @@
+
+             /* await */
+             JS_FreeValue(ctx, func_ret); /* not used */
++            if (sexos_adoption_lookup_muted(value))
++                sexos_resolver_mark_muted(s->resolving_funcs[0]);
+             promise = js_promise_resolve(ctx, ctx->promise_ctor,
+                                          1, vc(&value), 0);
+             JS_FreeValue(ctx, value);
+@@ -19562,6 +19595,7 @@
      promise = JS_NewPromiseCapability(ctx, s->resolving_funcs);
      if (JS_IsException(promise))
          goto fail;
 +    sexos_promise_inherit(promise, func_obj);
- 
+
      if (async_func_init(ctx, &s->func_state, func_obj, this_obj, argc, argv)) {
      fail:
-@@ -19967,6 +19977,9 @@
+@@ -19691,6 +19725,7 @@
+     JSValue promise, resolving_funcs[2], resolving_funcs1[2];
+     int i, res;
+
++    if (sexos_adoption_lookup_muted(value)) sexos_asyncgen_mark_current(s);
+     promise = js_promise_resolve(ctx, ctx->promise_ctor,
+                                  1, vc(&value), 0);
+     if (JS_IsException(promise))
+@@ -19775,6 +19810,7 @@
+     int res;
+
+     // Can fail looking up JS_ATOM_constructor when is_reject==0.
++    if (sexos_adoption_lookup_muted(value)) sexos_asyncgen_mark_current(s);
+     promise = js_promise_resolve(ctx, ctx->promise_ctor, 1, vc(&value),
+                                  /*is_reject*/0);
+     // A poisoned .constructor property is observable and the resulting
+@@ -19967,6 +20003,9 @@
          JS_FreeValue(ctx, resolving_funcs[1]);
          return promise;
      }
@@ -43,7 +142,7 @@
      req = js_mallocz(ctx, sizeof(*req));
      if (!req)
          goto fail;
-@@ -33946,6 +33959,7 @@
+@@ -33946,6 +33985,7 @@
      b->has_prototype = fd->has_prototype;
      b->has_simple_parameter_list = fd->has_simple_parameter_list;
      b->is_strict_mode = fd->is_strict_mode;
@@ -51,23 +150,101 @@
      b->is_derived_class_constructor = fd->is_derived_class_constructor;
      b->func_kind = fd->func_kind;
      b->need_home_object = (fd->home_object_var_idx >= 0 ||
-@@ -50109,6 +50123,7 @@
+@@ -39215,6 +39255,7 @@
+     bf->func_obj = js_dup(this_val);
+     bf->this_val = js_dup(argv[0]);
+     bf->argc = arg_count;
++    bf->sexos_muted_errors = sexos_running_muted(ctx) || sexos_function_muted(this_val);
+     for(i = 0; i < arg_count; i++) {
+         bf->argv[i] = js_dup(argv[i + 1]);
+     }
+@@ -50109,6 +50150,7 @@
      /* 0=fulfill, 1=reject, list of JSPromiseReactionData.link */
      struct list_head promise_reactions[2];
      bool is_handled; /* Note: only useful to debug */
 +    bool sexos_muted_errors; /* opaque producers/callbacks remain private */
      JSValue promise_result;
  } JSPromiseData;
- 
-@@ -50286,6 +50301,7 @@
- 
+
+@@ -50181,8 +50223,10 @@
+     JSValueConst arg;
+     bool is_reject;
+
+-    assert(argc == 5);
++    assert(argc == 6);
++    int previous_job_muted = sexos_job_muted;
+     handler = argv[2];
++    sexos_job_muted = (previous_job_muted > 0) || JS_ToBool(ctx, argv[5]) || sexos_function_muted(handler);
+     is_reject = JS_ToBool(ctx, argv[3]);
+     arg = argv[4];
+
+@@ -50199,8 +50243,10 @@
+     }
+     is_reject = JS_IsException(res);
+     if (is_reject) {
+-        if (unlikely(JS_IsUncatchableError(ctx, ctx->rt->current_exception)))
++        if (unlikely(JS_IsUncatchableError(ctx, ctx->rt->current_exception))) {
++            sexos_job_muted = previous_job_muted;
+             return JS_EXCEPTION;
++        }
+         res = JS_GetException(ctx);
+     }
+     func = argv[is_reject];
+@@ -50213,7 +50259,7 @@
+         res2 = JS_UNDEFINED;
+     }
+     JS_FreeValue(ctx, res);
+-
++    sexos_job_muted = previous_job_muted;
+     return res2;
+ }
+
+@@ -50282,10 +50328,11 @@
+     JSPromiseData *s = JS_GetOpaque(promise, JS_CLASS_PROMISE);
+     struct list_head *el, *el1;
+     JSPromiseReactionData *rd;
+-    JSValueConst args[5];
++    JSValueConst args[6];
+
      if (!s || s->promise_state != JS_PROMISE_PENDING)
          return; /* should never happen */
 +    s->sexos_muted_errors |= sexos_running_muted(ctx);
      set_value(ctx, &s->promise_result, js_dup(value));
      s->promise_state = JS_PROMISE_FULFILLED + is_reject;
- 
-@@ -50446,6 +50462,7 @@
+
+@@ -50306,7 +50353,8 @@
+         args[2] = rd->handler;
+         args[3] = js_bool(is_reject);
+         args[4] = value;
+-        JS_EnqueueJob(ctx, promise_reaction_job, 5, args);
++        args[5] = js_bool(s->sexos_muted_errors);
++        JS_EnqueueJob(ctx, promise_reaction_job, 6, args);
+         list_del(&rd->link);
+         promise_reaction_data_free(ctx->rt, rd);
+     }
+@@ -50337,9 +50385,13 @@
+     promise = argv[0];
+     thenable = argv[1];
+     then = argv[2];
++    sexos_promise_inherit(promise, then);
++    if (sexos_adoption_lookup_muted(thenable)) sexos_promise_mark_muted(promise);
+     if (js_create_resolving_functions(ctx, args, promise) < 0)
+         return JS_EXCEPTION;
+     rt = ctx->rt;
++    int previous_job_muted = sexos_job_muted;
++    sexos_job_muted = (previous_job_muted > 0) || sexos_promise_muted(promise);
+     if (rt->promise_hook) {
+         rt->promise_hook(ctx, JS_PROMISE_HOOK_BEFORE, promise, JS_UNDEFINED,
+                          rt->promise_hook_opaque);
+@@ -50356,6 +50408,7 @@
+     }
+     JS_FreeValue(ctx, args[0]);
+     JS_FreeValue(ctx, args[1]);
++    sexos_job_muted = previous_job_muted;
+     return res;
+ }
+
+@@ -50446,6 +50499,7 @@
      if (!s || s->presolved->already_resolved)
          return JS_UNDEFINED;
      s->presolved->already_resolved = true;
@@ -75,7 +252,16 @@
      is_reject = p->class_id - JS_CLASS_PROMISE_RESOLVE_FUNCTION;
      if (argc > 0)
          resolution = argv[0];
-@@ -50545,6 +50562,7 @@
+@@ -50464,6 +50518,8 @@
+         JS_ThrowTypeError(ctx, "promise self resolution");
+         goto fail_reject;
+     }
++    if (sexos_property_getter_muted(resolution, JS_ATOM_then))
++        sexos_promise_mark_muted(s->promise);
+     then = JS_GetProperty(ctx, resolution, JS_ATOM_then);
+     if (JS_IsException(then)) {
+         JSValue error;
+@@ -50545,6 +50601,7 @@
      if (!s)
          goto fail;
      s->promise_state = JS_PROMISE_PENDING;
@@ -83,7 +269,34 @@
      s->is_handled = false;
      for(i = 0; i < 2; i++)
          init_list_head(&s->promise_reactions[i]);
-@@ -51116,6 +51134,9 @@
+@@ -50560,6 +50617,7 @@
+         rt->promise_hook(ctx, JS_PROMISE_HOOK_INIT, obj, parent_promise,
+                          rt->promise_hook_opaque);
+     }
++    sexos_promise_inherit(obj, executor);
+     ret = JS_Call(ctx, executor, JS_UNDEFINED, 2, vc(args));
+     if (JS_IsException(ret)) {
+         JSValue ret2, error;
+@@ -51065,7 +51123,7 @@
+         for(i = 0; i < 2; i++)
+             list_add_tail(&rd_array[i]->link, &s->promise_reactions[i]);
+     } else {
+-        JSValueConst args[5];
++        JSValueConst args[6];
+         if (s->promise_state == JS_PROMISE_REJECTED && !s->is_handled) {
+             JSRuntime *rt = ctx->rt;
+             if (rt->host_promise_rejection_tracker)
+@@ -51078,7 +51136,8 @@
+         args[2] = rd->handler;
+         args[3] = js_bool(i);
+         args[4] = s->promise_result;
+-        JS_EnqueueJob(ctx, promise_reaction_job, 5, args);
++        args[5] = js_bool(s->sexos_muted_errors);
++        JS_EnqueueJob(ctx, promise_reaction_job, 6, args);
+         for(i = 0; i < 2; i++)
+             promise_reaction_data_free(ctx->rt, rd_array[i]);
+     }
+@@ -51116,6 +51175,9 @@
      JS_FreeValue(ctx, ctor);
      if (JS_IsException(result_promise))
          return result_promise;
@@ -93,7 +306,7 @@
      ret = perform_promise_then(ctx, this_val, argv, vc(resolving_funcs));
      for(i = 0; i < 2; i++)
          JS_FreeValue(ctx, resolving_funcs[i]);
-@@ -57740,3 +57761,52 @@
+@@ -57740,3 +57802,112 @@
  #undef malloc
  #undef free
  #undef realloc
@@ -101,18 +314,38 @@
 +/* Host-only provenance helpers. No object property or source-name heuristic is
 +   used to unmute code. Bound functions keep their target's source; proxies and
 +   generated/unknown callbacks fail closed after opaque code entered the VM. */
-+static bool sexos_function_muted(JSValueConst function) {
-+    for (int depth = 0; depth < 16 && JS_IsObject(function); depth++) {
-+        JSObject *p = JS_VALUE_GET_OBJ(function);
-+        if (js_class_has_bytecode(p->class_id))
-+            return p->u.func.function_bytecode->sexos_muted_errors;
-+        if (p->class_id == JS_CLASS_BOUND_FUNCTION) {
-+            function = p->u.bound_function->func_obj;
-+            continue;
-+        }
-+        return p->class_id == JS_CLASS_PROXY && sexos_opaque_source_seen;
++/* Walk only engine metadata; no property access, proxy trap or JS call. The
++   shared budget bounds cycles and repeated captures. Unknown deep graphs fail
++   closed once opaque code has entered the VM. Captures are read at use time. */
++static bool sexos_function_muted_walk(JSValueConst function, unsigned *left) {
++    if (!JS_IsObject(function)) return false;
++    if (!*left) return sexos_opaque_source_seen;
++    --*left;
++    JSObject *p = JS_VALUE_GET_OBJ(function);
++    if (js_class_has_bytecode(p->class_id))
++        return p->u.func.function_bytecode->sexos_muted_errors;
++    if (p->class_id == JS_CLASS_BOUND_FUNCTION) {
++        JSBoundFunction *bound = p->u.bound_function;
++        return bound->sexos_muted_errors || sexos_function_muted_walk(bound->func_obj, left);
 +    }
-+    return JS_IsObject(function) && sexos_opaque_source_seen;
++    if (p->class_id == JS_CLASS_C_FUNCTION_DATA) {
++        JSCFunctionDataRecord *data = p->u.c_function_data_record;
++        if (data->sexos_muted_errors) return true;
++        for (unsigned i = 0; i < data->data_len; i++)
++            if (sexos_function_muted_walk(data->data[i], left)) return true;
++        return false;
++    }
++    if (p->class_id == JS_CLASS_PROMISE) return sexos_promise_muted(function);
++    if (p->class_id == JS_CLASS_PROMISE_RESOLVE_FUNCTION ||
++        p->class_id == JS_CLASS_PROMISE_REJECT_FUNCTION) {
++        JSPromiseFunctionData *resolver = p->u.promise_function_data;
++        return resolver && sexos_promise_muted(resolver->promise);
++    }
++    return p->class_id == JS_CLASS_PROXY && sexos_opaque_source_seen;
++}
++static bool sexos_function_muted(JSValueConst function) {
++    unsigned left = 64;
++    return sexos_function_muted_walk(function, &left);
 +}
 +static JSFunctionBytecode *sexos_running_bytecode(JSContext *ctx) {
 +    for (JSStackFrame *f = ctx->rt->current_stack_frame; f; f = f->prev_frame) {
@@ -124,9 +357,11 @@
 +    return NULL;
 +}
 +static bool sexos_running_muted(JSContext *ctx) {
++    if (sexos_job_muted > 0) return true;
 +    JSFunctionBytecode *b = sexos_running_bytecode(ctx);
 +    if (b) return b->sexos_muted_errors;
-+    return sexos_compile_origin == 1;
++    if (sexos_job_muted == 0) return false;
++    return sexos_compile_origin >= 0 ? sexos_compile_origin == 1 : sexos_opaque_source_seen;
 +}
 +static bool sexos_compiled_muted(JSContext *ctx) {
 +    JSFunctionBytecode *b = sexos_running_bytecode(ctx);
@@ -139,6 +374,44 @@
 +    if (!p) return;
 +    JSPromiseData *other = JS_GetOpaque(source, JS_CLASS_PROMISE);
 +    p->sexos_muted_errors |= other ? other->sexos_muted_errors : sexos_function_muted(source);
++}
++static bool sexos_promise_muted(JSValueConst promise) {
++    JSPromiseData *p = JS_GetOpaque(promise, JS_CLASS_PROMISE);
++    return p && p->sexos_muted_errors;
++}
++static void sexos_promise_mark_muted(JSValueConst promise) {
++    JSPromiseData *p = JS_GetOpaque(promise, JS_CLASS_PROMISE);
++    if (p) p->sexos_muted_errors = true;
++}
++/* Inspect plain descriptors without invoking getters, proxy traps or exotic
++   lookups a second time. Ambiguous lookups fail closed after opaque code. */
++static bool sexos_property_getter_muted(JSValueConst object, JSAtom atom) {
++    JSObject *p = JS_IsObject(object) ? JS_VALUE_GET_OBJ(object) : NULL;
++    for (int depth = 0; p && depth < 32; depth++, p = p->shape->proto) {
++        if (p->is_exotic) return sexos_opaque_source_seen;
++        JSProperty *value;
++        JSShapeProperty *property = find_own_property(&value, p, atom);
++        if (!property) continue;
++        int type = property->flags & JS_PROP_TMASK;
++        if (type == JS_PROP_GETSET)
++            return value->u.getset.getter && sexos_function_muted(JS_MKPTR(JS_TAG_OBJECT, value->u.getset.getter));
++        return type != JS_PROP_NORMAL && sexos_opaque_source_seen;
++    }
++    return p && sexos_opaque_source_seen;
++}
++static bool sexos_adoption_lookup_muted(JSValueConst object) {
++    return sexos_property_getter_muted(object, JS_ATOM_then) ||
++        (JS_IsPromise(object) && sexos_property_getter_muted(object, JS_ATOM_constructor));
++}
++static void sexos_resolver_mark_muted(JSValueConst resolver) {
++    JSPromiseFunctionData *p = JS_GetOpaque(resolver, JS_CLASS_PROMISE_RESOLVE_FUNCTION);
++    if (p) sexos_promise_mark_muted(p->promise);
++}
++static void sexos_asyncgen_mark_current(JSAsyncGeneratorData *s) {
++    if (!list_empty(&s->queue)) {
++        JSAsyncGeneratorRequest *request = list_entry(s->queue.next, JSAsyncGeneratorRequest, link);
++        sexos_promise_mark_muted(request->promise);
++    }
 +}
 +/* Captured native intrinsics use these only for engine-owned notifications. */
 +int sexos_promise_flags(JSValueConst promise) {

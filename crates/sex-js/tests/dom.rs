@@ -1221,3 +1221,105 @@ fn rejection_dom_tasks_cannot_be_canceled_as_page_timer_ids() {
     s.eval("for(let i=0;i<100;i++)clearTimeout(i);","clear.js").unwrap();
     s.dispatch("tick").unwrap();assert_eq!(logs(&mut s),["0:private task kept"]);
 }
+
+#[test]
+fn rejection_from_an_opaque_thenable_callback_stays_muted() {
+    let mut s=page("");
+    s.eval_resource("globalThis.opaqueThenable={then(){throw 'opaque thenable callback'}}", "https://remote.test/thenable.js", true).unwrap();
+    s.eval("onunhandledrejection=e=>{e.preventDefault();console.log('FAIL opaque thenable reason',e.reason)};Promise.resolve(opaqueThenable)", "owned.js").unwrap();
+    for _ in 0..3 {s.dispatch("tick").unwrap();}
+    let got=logs(&mut s);assert!(got.is_empty(),"{got:?}");
+}
+
+#[test]
+fn opaque_adoption_paths_keep_callback_getter_and_pending_chain_provenance() {
+    let mut s=page("");
+    s.eval_resource(r#"
+      globalThis.opaqueThrow={then(){throw 'opaque then throw'}};
+      globalThis.opaqueReject={then(resolve,reject){reject('opaque then reject')}};
+      globalThis.opaqueGetter={get then(){throw 'opaque getter throw'}};
+      globalThis.opaqueBound={then:(function(){throw 'opaque bound throw'}).bind(null)};
+      globalThis.opaqueProxy=new Proxy({}, {get(){throw 'opaque proxy throw'}});
+      globalThis.opaqueExecutor=()=>{throw 'opaque executor throw'};
+      globalThis.opaqueSettled={then(resolve,reject){resolve(17);reject('ignored rejection');throw 'ignored throw'}};
+      globalThis.opaquePromise=Promise.resolve(1);
+      Object.defineProperty(opaquePromise,'constructor',{get(){throw 'opaque constructor throw'}});
+    "#, "https://remote.test/adoption.js", true).unwrap();
+    s.eval(r#"
+      onunhandledrejection=e=>{e.preventDefault();console.log('FAIL opaque adoption',e.reason)};
+      for(const value of [opaqueThrow,opaqueReject,opaqueGetter,opaqueBound,opaqueProxy]){
+        Promise.resolve(value);new Promise(resolve=>resolve(value));
+        (async()=>{await value})();(async function*(){await value})().next();
+      }
+      new Promise(opaqueExecutor);
+      (async()=>{await opaquePromise})();(async function*(){await opaquePromise})().next();
+      const g=(async function*(){})();g.return(opaquePromise);
+      // Reactions were registered while the wrapper was still pending/untainted.
+      const pending=Promise.resolve(opaqueThrow);pending.then();pending.then().then();
+      Promise.resolve(opaqueSettled).then(v=>console.log('settled once',v));
+    "#, "owned.js").unwrap();
+    for _ in 0..5 {s.dispatch("tick").unwrap();}
+    assert_eq!(logs(&mut s),["0:settled once 17"]);
+}
+
+#[test]
+fn ordinary_owned_adoption_stays_observable_after_opaque_jobs() {
+    let mut s=page("");
+    s.eval_resource("globalThis.opaque={then(){throw 'private'}}", "https://remote.test/opaque.js", true).unwrap();
+    s.eval("Promise.resolve(opaque).catch(()=>{});", "drain-opaque.js").unwrap();
+    s.eval(r#"
+      onunhandledrejection=e=>{e.preventDefault();console.log('owned',e.reason)};
+      Promise.resolve({then(){throw 'ordinary then'}});
+      new Promise(resolve=>resolve({then(resolve,reject){reject('ordinary reject')}}));
+      Promise.resolve({get then(){throw 'ordinary getter'}});
+      (async()=>{await {then(){throw 'ordinary await'}}})();
+      new Promise(()=>{throw 'ordinary executor'});
+      const ownPromise=Promise.resolve(1);Object.defineProperty(ownPromise,'constructor',{get(){throw 'ordinary constructor'}});(async()=>{await ownPromise})();
+      // Ignored later resolution must not retroactively taint an owned Promise.
+      const settled=new Promise(resolve=>{resolve(1);resolve(opaque)});
+      settled.then(()=>{throw 'ordinary after ignored'});
+    "#, "owned.js").unwrap();
+    for _ in 0..5 {s.dispatch("tick").unwrap();}
+    let mut got=logs(&mut s);got.sort();
+    let mut want=vec!["0:owned ordinary then","0:owned ordinary reject","0:owned ordinary getter","0:owned ordinary await","0:owned ordinary executor","0:owned ordinary constructor","0:owned ordinary after ignored"];
+    want.sort();assert_eq!(got,want);
+}
+
+#[test]
+fn opaque_native_bound_and_finally_callbacks_keep_their_creation_origin() {
+    let mut s=page("");
+    s.eval_resource(r#"
+      globalThis.boundNative=Promise.reject.bind(Promise,'opaque bound native');
+      globalThis.finallyOpaque=()=>{throw 'opaque finally'};
+    "#, "https://remote.test/native-bind.js", true).unwrap();
+    s.eval(r#"
+      onunhandledrejection=e=>{e.preventDefault();console.log('FAIL native wrapper',e.reason)};
+      queueMicrotask(boundNative);setTimeout(boundNative,0);
+      Promise.resolve().then(boundNative);Promise.resolve().finally(finallyOpaque);
+    "#, "owned.js").unwrap();
+    for _ in 0..5{s.dispatch("tick").unwrap();}
+    let got=logs(&mut s);assert!(got.is_empty(),"{got:?}");
+    s.eval("onunhandledrejection=e=>{e.preventDefault();console.log('owned bound',e.reason)};queueMicrotask(Promise.reject.bind(Promise,'visible'));Promise.resolve().finally(()=>{throw 'visible finally'});", "owned-bound.js").unwrap();
+    for _ in 0..3{s.dispatch("tick").unwrap();}
+    let mut got=logs(&mut s);got.sort();assert_eq!(got,["0:owned bound visible","0:owned bound visible finally"]);
+}
+
+#[test]
+fn adoption_provenance_does_not_invoke_accessors_or_proxy_traps_twice() {
+    let mut s=page("");
+    s.eval_resource("globalThis.getterCalls=0;globalThis.proxyCalls=0;globalThis.onceGetter={get then(){getterCalls++;throw 'private getter'}};globalThis.onceProxy=new Proxy({}, {get(){proxyCalls++;throw 'private proxy'}});", "https://remote.test/once.js", true).unwrap();
+    s.eval("onunhandledrejection=e=>{e.preventDefault();console.log('FAIL lookup',e.reason)};Promise.resolve(onceGetter);Promise.resolve(onceProxy);", "owned.js").unwrap();
+    for _ in 0..3{s.dispatch("tick").unwrap();}
+    s.eval("console.log('lookup counts',getterCalls,proxyCalls)","counts.js").unwrap();
+    assert_eq!(logs(&mut s),["0:lookup counts 1 1"]);
+}
+
+#[test]
+fn a_pending_finally_wrapper_rechecks_captured_proxy_provenance() {
+    let mut s=page("");
+    s.eval("var release,handler={apply(){}};const proxy=new Proxy(()=>{},handler);new Promise(resolve=>release=resolve).finally(proxy);onunhandledrejection=e=>{e.preventDefault();console.log('FAIL captured proxy',e.reason)};", "before-opaque.js").unwrap();
+    s.eval_resource("handler.apply=()=>{throw 'opaque later trap'}", "https://remote.test/later.js", true).unwrap();
+    s.eval("release()", "owned.js").unwrap();
+    for _ in 0..3{s.dispatch("tick").unwrap();}
+    let got=logs(&mut s);assert!(got.is_empty(),"{got:?}");
+}

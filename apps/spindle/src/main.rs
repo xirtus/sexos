@@ -735,6 +735,28 @@ fn spindle_grid_destroy() {
 }
 
 /// Lists crash records newest first: this start's, then those Files kept from earlier ones.
+fn service_state_command(args: &[u8], sb: &mut Scrollback) {
+    use sex_pdx::crash_log as crash;
+    let (name, slot) = if args.eq_ignore_ascii_case(b"shell") { ("shell", sex_pdx::SLOT_SHELL) }
+        else if args.eq_ignore_ascii_case(b"display") { ("display", sex_pdx::SLOT_DISPLAY) }
+        else if args.eq_ignore_ascii_case(b"files") { ("files", sex_pdx::SLOT_STORAGE) }
+        else if args.eq_ignore_ascii_case(b"network") { ("network", sex_pdx::SLOT_NET) }
+        else { sb.push(b"Use: service-state shell | display | files | network"); return; };
+    match crash::peer_state(slot) {
+        Ok(state) => {
+            let mut line = [0u8; 100];
+            let mut out = Cursor { buf: &mut line, len: 0 };
+            let _ = core::fmt::Write::write_fmt(&mut out, format_args!("{}: {:?}, generation {}", name, state.life, state.epoch));
+            let n = out.len; sb.push(&line[..n]);
+            sex_pdx::serial_record!("[spindle.service.state] service={} epoch={} state={}", name, state.epoch, state.life as u64);
+        }
+        Err(status) => {
+            sb.push(b"Service state is unavailable; try again.");
+            sex_pdx::serial_record!("[spindle.service.state] service={} error={}", name, status);
+        }
+    }
+}
+
 fn crashes_command(sb: &mut Scrollback) {
     use sex_pdx::crash_log as crash;
     let Some((count, boot)) = crash::status() else { sb.push(b"Crash records are not available here."); return };
@@ -1493,6 +1515,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             serial_println!("[spindle.bell.command] name=notify ok=1 reason=fire_and_forget");
             true
         }
+        b"service-state" => { service_state_command(args, sb); true }
         b"crashes" => { crashes_command(sb); true }
         b"crash" if option_env!("SEXOS_CRASH_PROBE").is_some() => {
             // Test builds only: stop a service, or the kernel, as a fault would.
