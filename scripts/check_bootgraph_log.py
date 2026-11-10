@@ -8,6 +8,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import re
 import sys
 from dataclasses import dataclass
@@ -277,16 +278,20 @@ def order_gate(lines: List[str], ready_lines: Dict[str, int]) -> Tuple[GateResul
     return GateResult("ORDER_GATE", True), rows
 
 
-def clock_gate(lines: List[str], strict_clock: bool) -> Tuple[GateResult, List[str]]:
-    warnings: List[str] = []
-    trace = "\n".join(line.rstrip("\r\n") for line in lines)
-    # CIVIL evidence always selects the civil lane, including malformed or
-    # incomplete evidence. It must never be rescued by old DEMO receipts.
-    civil = any(prefix in trace for prefix in (
+def has_civil_evidence(trace: str) -> bool:
+    return any(prefix in trace for prefix in (
         "[boot.silkbar.clock.source]", "[silkbar.civil.",
         "[sexdisplay.clock.civil.", "[display.civil.",
     )) or any("[sexdisplay.clock.presentation]" in line and
-              "[sexdisplay.clock.presentation] label=DEMO " not in line for line in lines)
+              "[sexdisplay.clock.presentation] label=DEMO " not in line for line in trace.splitlines())
+
+
+def clock_gate(lines: List[str], strict_clock: bool, *, civil_hint: bool = False) -> Tuple[GateResult, List[str]]:
+    warnings: List[str] = []
+    trace = "\n".join(line.rstrip("\r\n") for line in lines)
+    # Raw partial CIVIL evidence still selects this lane. Only complete records
+    # can establish receipts; old DEMO evidence can never rescue a cut CIVIL record.
+    civil = civil_hint or has_civil_evidence(trace)
     if civil:
         from silkbar_clock_gate import inspect_publications
         try:
@@ -389,6 +394,16 @@ def print_edge_table(rows: List[EdgeRow]) -> None:
         print(f"{r.edge},{rr},{ss},{r.result}")
 
 
+
+def complete_clock_lines(raw: bytes) -> Tuple[List[str], int]:
+    """Bounded captures may stop within one record; only complete clock receipts count.
+
+    Other gates, especially fault detection, still inspect the full raw capture.
+    """
+    end = raw.rfind(b"\n") + 1
+    return raw[:end].decode(errors="replace").splitlines(), len(raw) - end
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="BootGraph serial-log checker")
     ap.add_argument("log_path", help="Serial log path, e.g. /tmp/sexos.log")
@@ -401,12 +416,17 @@ def main() -> int:
         print(f"BOOTGRAPH FAIL: INPUT_GATE log_not_found path={log}")
         return 1
 
-    lines = log.read_text(errors="replace").splitlines()
+    raw = log.read_bytes()
+    text = raw.decode(errors="replace")
+    lines = text.splitlines()
+    clock_lines, ignored = complete_clock_lines(raw)
+    print(f"SERIAL_CAPTURE: ignored_clock_tail_bytes={ignored} raw_bytes={len(raw)} "
+          f"raw_sha256={hashlib.sha256(raw).hexdigest()} raw_log_unchanged=1")
 
     bg_gate, pd_rows, ready_map = bootgraph_gate(lines)
     cap_gate = cap_grant_gate(lines)
     ord_gate, edge_rows = order_gate(lines, ready_map)
-    clk_gate, _ = clock_gate(lines, args.strict_clock)
+    clk_gate, _ = clock_gate(clock_lines, args.strict_clock, civil_hint=has_civil_evidence(text))
     flt_gate = fault_gate(lines, args.allow_fault)
 
     gates = [bg_gate, cap_gate, ord_gate, clk_gate, flt_gate]

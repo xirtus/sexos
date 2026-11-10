@@ -168,7 +168,8 @@ static _LIMINE_BASE: BaseRevision = BaseRevision::new();
 #[cfg(target_arch = "x86_64")]
 #[used]
 #[link_section = ".limine_requests"]
-pub static FB_REQUEST: FramebufferRequest = FramebufferRequest::new();
+// Revision 1: Limine also lists the other modes the firmware offers.
+pub static FB_REQUEST: FramebufferRequest = unsafe { FramebufferRequest::new_raw([0x9d5827dcd881dd75, 0xa3148604f6fab11b], 1, ()) };
 #[cfg(target_arch = "x86_64")]
 #[used]
 #[link_section = ".limine_requests"]

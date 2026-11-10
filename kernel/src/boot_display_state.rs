@@ -8,6 +8,8 @@ pub struct Info {
     pub width: u32,
     pub height: u32,
     pub pitch: u32,
+    /// Packed `sex_pdx::display_boot::Physical` (scale, size in millimetres).
+    pub physical: u64,
 }
 impl Info {
     pub fn query(self, caller: u32, kind: u64, reserved: [u64; 2]) -> Option<u64> {
@@ -21,6 +23,7 @@ impl Info {
             0 => Some(self.width as u64 | ((self.height as u64) << 32)),
             1 if caller == self.display => Some(self.address),
             2 => Some(self.pitch as u64),
+            3 => Some(self.physical),
             _ => None,
         }
     }
