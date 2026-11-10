@@ -39,7 +39,7 @@ unsafe fn wait_unless_pending(regs: &mut crate::interrupts::SyscallRegs) {
     if !has_message && !has_reply { crate::scheduler::wait_for_message(regs as *const _); }
 }
 
-fn validate_user_bytes(start: u64, len: usize, writable: bool) -> bool {
+pub(crate) fn validate_user_bytes(start: u64, len: usize, writable: bool) -> bool {
     if len == 0 {
         return true;
     }
@@ -204,7 +204,18 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
         return error;
     }
 
+    // Test builds only: a domain marked by the crash probe ends here, as a fault would end it.
+    if option_env!("SEXOS_CRASH_PROBE").is_some() {
+        let pd = crate::core_local::CoreLocal::get().current_pd();
+        if crate::crash_log::probe_pending(pd) {
+            crate::crash_log::fault(pd, 0xff, regs.rcx, 0, 0, "crash probe");
+            regs.rdi = 0xff;
+            unsafe { crate::scheduler::finish_current_task(regs as *const _) }
+        }
+    }
+
     let result = match rax {
+        85 => crate::crash_log::syscall(regs),
         0 => { // SYSCALL_PDX_CALL
             let slot = rdi as u32;
             let num = rsi;
@@ -234,11 +245,15 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
                                 let slice = core::slice::from_raw_parts(ptr, len);
                                 // The kernel's own prints hold this lock, so whole lines stay whole.
                                 let _line = crate::serial::SERIAL1.lock();
-                                for &b in slice {
-                                    use x86_64::instructions::port::Port;
-                                    let mut port = Port::new(0x3f8);
-                                    port.write(b);
+                                if crate::serial::is_serial_present() {
+                                    for &b in slice {
+                                        use x86_64::instructions::port::Port;
+                                        let mut port = Port::new(0x3f8);
+                                        port.write(b);
+                                    }
                                 }
+                                // Services' own records are in the log the stop screen shows.
+                                crate::console::write(slice);
                             }
                             (0u64, 0u64)
                         }
