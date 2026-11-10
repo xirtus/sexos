@@ -1060,7 +1060,7 @@ const PANEL_NOTICE_INK: u32 = 0x00F9E2AF;
 /// workspace dots, like a Waybar or Plasma window title.
 const PANEL_TITLE_X: usize = 166;
 const PANEL_TITLE_END: usize = silkbar_model::WS_X0 - 16;
-fn panel_title_fg_at(x: usize, y: usize, bar: &SilkBar, scene: &scene::SceneSnapshot) -> Option<u32> {
+fn panel_title_fg_at(x: usize, y: usize, bar: &SilkBar, scene: &scene::SceneSnapshot, background: u32) -> Option<u32> {
     let y0 = (BAR_BG_H - glyphs::TITLE_H) / 2;
     if x + 2 < PANEL_TITLE_X || x >= PANEL_TITLE_END || y < y0 || y >= y0 + glyphs::TITLE_H { return None; }
     let notice = unsafe { &*core::ptr::addr_of!(PANEL_NOTICE) };
@@ -1071,7 +1071,6 @@ fn panel_title_fg_at(x: usize, y: usize, bar: &SilkBar, scene: &scene::SceneSnap
     };
     let alpha = glyphs::title_coverage(title, x as i32 - PANEL_TITLE_X as i32, y - y0);
     if alpha == 0 { return None; }
-    let background = bar_color(x, y, bar, scene);
     let ink = if notice { PANEL_NOTICE_INK } else { sex_pdx::desktop_style::contrast_ink(background) };
     Some(coverage_blend(ink, background, alpha))
 }
@@ -1082,10 +1081,10 @@ fn top_strip_pixel(x: usize, y: usize, bar: &SilkBar, lines: &[[u8;13];2], scene
     if let Some(fg) = clock_fg_at(x, y, bar, lines, background) { fg }
     else if let Some(fg) = bell_badge_at(x, y, bar, background) { fg }
     else if let Some(fg) = phase5_active_app_at(x, y, bar, scene) { fg }
-    else if let Some(fg) = panel_title_fg_at(x, y, bar, scene) { fg }
+    else if let Some(fg) = panel_title_fg_at(x, y, bar, scene, background) { fg }
     else if let Some(fg) = phase5_tint_swatch_at(x, y, bar) { fg }
     else if let Some(fg) = phase5_palette_dot_at(x, y, bar) { fg }
-    else { bar_color(x, y, bar, scene) }
+    else { background }
 }
 
 // Bounded observation only: no protocol, authority or scheduling decisions.

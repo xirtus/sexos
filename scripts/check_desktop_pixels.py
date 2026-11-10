@@ -37,7 +37,12 @@ def font_from_source(source):
     unsupported=row(fallback[1])
     if not any(unsupported):raise ValueError('invisible unsupported scalar')
     if 'FONT_UNICODE_5X7.iter().find'not in source or 'map_or(FONT_UNSUPPORTED_5X7'not in source:raise ValueError('scalar font not bound to renderer')
-    return dict(ascii=rows,unicode=unicode,fallback=unsupported)
+    # Archive contracts without this field retain the old scale-2 threshold.
+    # Bind the changed default to the actual scalar shader, not today's checker.
+    shader=source.split('fn surface_text_fg_at(',1)[-1].split('fn civil_clock_date(',1)[0]
+    shader=re.sub(r'//[^\n]*','',shader)
+    minimum=1 if 'glyphs::mono_cell'in shader and not re.search(r'if\s+scale\s*>=\s*2\s*\{',shader) else 2
+    return dict(ascii=rows,unicode=unicode,fallback=unsupported,geist_min_scale=minimum)
 
 
 def glyph(font,char):
@@ -87,11 +92,13 @@ def final_view(text):
 def cell_errors(pixels,width,x0,y0,char,scale,color,font,clip=None):
     """(mismatches, ink) for one text cell at (x0, y0). Windows at text scale 2 and up
     draw Geist Mono: fully covered pixels must be the text colour, uncovered ones must
-    not be. Smaller windows draw the 5x7 font, scaled. `clip` (x_end, y_end) skips
+    not be. Compact cells compare their complete antialias coverage; archived contracts
+    retain their source-bound fallback threshold. `clip` (x_end, y_end) skips
     pixels a pane cuts off."""
     inside=lambda x,y:clip is None or (x<clip[0] and y<clip[1])
     mismatch=ink=0
-    if scale>=1 and (char==' ' or 32<=ord(char)<=126):
+    minimum=font.get('geist_min_scale',2)if isinstance(font,dict)else 2
+    if scale>=minimum and (char==' ' or 32<=ord(char)<=126):
         import geist_cells
         w,h=6*scale,9*scale
         cell=geist_cells.cells(w,h)[ord(char)-32]
@@ -133,7 +140,8 @@ def draw_cell(pixels,width,x0,y0,char,scale,color,font,clip=None):
     or the scaled 5x7 font), the shape cell_errors expects. `clip` (x0, y0, x1, y1)."""
     def put(x,y):
         if clip is None or (clip[0]<=x<clip[2] and clip[1]<=y<clip[3]):pixels[(y*width+x)*3:(y*width+x)*3+3]=color
-    if scale>=1 and 32<=ord(char)<=126:
+    minimum=font.get('geist_min_scale',2)if isinstance(font,dict)else 2
+    if scale>=minimum and 32<=ord(char)<=126:
         import geist_cells
         if scale==1:
             for i,a in enumerate(geist_cells.cells(6,9)[ord(char)-32]):
