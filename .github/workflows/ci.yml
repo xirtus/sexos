@@ -166,7 +166,7 @@ jobs:
     - name: Prepare media host checks
       run: |
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg
-        cargo test --locked -p sex-media --lib
+        bash scripts/media_source_host_gate.sh
     - name: Build the FFmpeg-enabled image
       run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/media-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/media-build.log"; exit 1)
     - name: Progressive playback and Range seek

@@ -11,12 +11,22 @@
   wait over ten seconds and covers most of this test clip. Reduce `NEAR` to 128 KiB:
   sequential/small audio-video demuxer gaps still wait, larger missing gaps ask for
   a Range using the existing checked 206/content-range path and kept pieces.
-- Three host tests exercise the actual source implementation: this missing forward
+- Three host tests exercise the actual portable production module: this missing forward
   seek, cached old/new piece reads, sequential/boundary gaps, non-Range servers and
-  exact end-of-stream. They pass in an isolated portable-source harness on ARM; full
-  cargo host tests require x86 because existing sex-pdx inline assembly is x86-only.
+  exact end-of-stream. They pass via `scripts/media_source_host_gate.sh` on ARM. The source module is
+  re-exported unchanged by sex-media and compiled directly by the host gate, avoiding
+  sex-app guest startup/allocator dependencies.
 - A separate parallel CI job builds an FFmpeg-enabled image and runs the unchanged
-  streaming and seek gates plus cargo tests, preserving evidence. Guest validation of the fix remains pending
+  streaming and seek gates plus the portable source tests, preserving evidence. Guest validation of the fix remains pending
   that exact candidate build; no timing threshold was loosened.
 - No kernel, ABI or authority change. The streaming gate supplies interleaved-playback regression evidence on the
   same feature image; its result is pending.
+
+### Host harness correction
+
+The first new Linux media job exposed a harness mistake before guest testing:
+`cargo test -p sex-media` links sex-app's uninitialized guest allocator and aborts on
+its first allocation. Move only portable `Source`/`Growing` definitions and their same
+three tests to `source.rs`, re-exporting the existing API, and compile that production
+module directly in the standalone host gate. All three tests execute; no test or guest
+assertion is skipped. The unchanged FFmpeg streaming/seek gates remain required.
