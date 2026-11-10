@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! Programs kept on disk, and the protocol that loads one into the image region.
 //! A name selects data; it grants nothing. The program runs with exactly what its
 //! BOOT catalog row holds, whatever the file says.
