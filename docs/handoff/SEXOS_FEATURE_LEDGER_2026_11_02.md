@@ -3371,6 +3371,13 @@ Hyprland/river/KDE-style window management, stage E1 of the parity report (`docs
 - **Records**: `[shell.wm.action] action=… done=… scene=a->b focus=a->b layout=…` and `[shell.wm.layout] scene=… layout=… windows=… master_pct=… gap_in=… gap_out=…`.
 - **Gate** `scripts/window_manager_gate.py` boots QEMU and drives every chord over real PS/2 key events, saving screens.
 
+## Desktop: launcher search and the focused window title in the panel (2026-11-10)
+
+Stage E2 of the parity report, section 6.
+- **Type to search.** With the launcher open (Super tap), letters, digits and space filter and rank its rows by name and by search words (`terminal` finds Spindle, `web` finds Browser, `reboot` finds Restart); Backspace edits, Esc clears a search before it closes the launcher, the arrows choose, Enter opens the best match and does nothing when nothing matches. J/K still choose rows until a search begins. Pure scoring in `servers/silk-shell/src/launcher_search.rs`, host tests `tests/launcher_search.rs` (in `service_custody_host_gate.sh`), QEMU gate `scripts/launcher_search_gate.py`. Record: `[shell.launcher.search] query=… matches=… top=… changed=…`.
+- **Panel title.** sexdisplay draws the focused window's title in the SilkBar strip between the focus dot and the workspace dots (`panel_title_fg_at`), with the same names as the title bars (`surface_title`). A program renaming its focused window redraws the strip.
+- No ABI change.
+
 ## Real PCs: wired network, HD Audio and SATA (2026-11-09)
 
 Workstream D of the parity report. Handoff and bare-metal checklist: `docs/handoff/REAL_PC_DRIVERS_2026_11_09.md`.
