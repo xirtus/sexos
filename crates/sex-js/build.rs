@@ -12,6 +12,11 @@ fn main() {
     let target = env::var("TARGET").unwrap_or_default();
     let sex = target.contains("sex");
     let want = env::var("SEXJS_NATIVE").ok();
+    // Trap unwinding uses x86 clang builtins; other hosts retain the wasmi tier.
+    if env::var("CARGO_CFG_TARGET_ARCH").as_deref() != Ok("x86_64") {
+        if want.as_deref() == Some("1") { println!("cargo:warning=native QuickJS requires x86_64; using wasmi on this host"); }
+        return;
+    }
     if want.as_deref() == Some("0") || (!sex && want.as_deref() != Some("1")) { return; }
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
     let c = out.join("qjs.c");
@@ -23,15 +28,18 @@ fn main() {
         }
     }
     let rt_h = String::from_utf8(Command::new("wasm2c").arg("--version").output().unwrap().stdout).unwrap();
-    let rt_dir = ["/usr/include", "/usr/local/include", "/usr/src/wasm2c"].iter().map(PathBuf::from)
+    let rt_dir = ["/usr/include", "/usr/local/include", "/opt/homebrew/include", "/usr/src/wasm2c"].iter().map(PathBuf::from)
         .find(|d| d.join("wasm-rt.h").exists()).unwrap_or_else(|| panic!("wasm-rt.h for wasm2c {} not found", rt_h.trim()));
     // Copied beside qjs.c: its own directory (/usr/include) would bring the host libc.
-    std::fs::copy(rt_dir.join("wasm-rt.h"), out.join("wasm-rt.h")).unwrap();
+    let header = std::fs::read_to_string(rt_dir.join("wasm-rt.h")).unwrap();
+    let custom_pages = header.contains("uint32_t page_size");
+    std::fs::write(out.join("wasm-rt.h"), &header).unwrap();
     let resource = String::from_utf8(Command::new("clang").arg("-print-resource-dir").output().unwrap().stdout).unwrap();
     let mut objs = Vec::new();
     for (src, name) in [(c.clone(), "qjs.o"), (PathBuf::from("native/rt.c"), "rt.o")] {
         let obj = out.join(name);
         let mut cc = Command::new("clang");
+        if custom_pages { cc.arg("-DSEXJS_WASM_CUSTOM_PAGES=1"); }
         if sex {
             // C99: no thread-locals (a page's engine runs on one thread).
             cc.args(["--target=x86_64-unknown-none-elf", "-msse2", "-mno-avx", "-mno-red-zone", "-std=gnu99"]);

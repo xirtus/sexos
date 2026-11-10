@@ -3378,6 +3378,15 @@ Stage E2 of the parity report, section 6.
 - **Panel title.** sexdisplay draws the focused window's title in the SilkBar strip between the focus dot and the workspace dots (`panel_title_fg_at`), with the same names as the title bars (`surface_title`). A program renaming its focused window redraws the strip.
 - No ABI change.
 
+## Desktop: notifications with text, a panel notice and history (2026-11-10)
+
+Stage E3 of the parity report, section 6 (mako/dunst/Plasma notifications).
+- **Programs** holding the Bell capability post with `sex_pdx::notify::post(summary, body, urgency)`: the text ("summary\nbody", up to 128 printable ASCII bytes, anything else becomes '?') goes in 16-byte chunks. Spindle: `notify Build done | 3 warnings`.
+- **Bell** puts each sender's chunks together by the kernel's caller PD, applies mute, per-program policy and the spam budget, queues it (critical goes to lane NOW and chimes), then hands it to the Shell with Bell's id and the true sender. A program cannot name another sender.
+- **Shell** takes notifications only from Bell's domain, shows "App: summary" in the SilkBar panel for 5 s (sexdisplay draws it in place of the window title, in amber), and keeps the last 32 in the Bell window, newest first. **Super+N** opens or hides it.
+- **ABI change (named):** new opcodes `OP_BELL_POST` 0xCC (program -> Bell), `OP_NOTIFICATION` 0x2D8 (Bell -> Shell), `OP_PANEL_NOTICE` 0x2D9 (Shell -> Display), one chunk form for all three (`crates/sex-pdx/src/notify.rs`). Kernel grants Bell `SLOT_SHELL` (to the Shell) for the hand-over. `abi_version_hash` recomputed. Display title layouts hold 48 bytes (titles are still 16).
+- **Tests:** `tests/notify.rs` (chunking, forged and out-of-order chunks, control bytes, the client), in `service_custody_host_gate.sh`; `tests/wm_layouts.rs` covers Super+N; QEMU gate `scripts/notifications_gate.py` (Spindle posts twice, the panel shows and hides, Super+N lists both).
+
 ## Real PCs: wired network, HD Audio and SATA (2026-11-09)
 
 Workstream D of the parity report. Handoff and bare-metal checklist: `docs/handoff/REAL_PC_DRIVERS_2026_11_09.md`.
@@ -3598,6 +3607,33 @@ Plan: `docs/handoff/NVIDIA_GPU_PLAN_2026_11_09.md` (stages N1-N6).
 - The open-web TLS session names `http/1.1` in its handshake (ALPN), as browsers do (the rustls move set `alpn_protocols`). Host test `[sexnet.tls.open.host]` now proves it on the wire: an OpenSSL server offering `h2` and `http/1.1` must pick `http/1.1`. YouTube stage Y3e.
 
 
+## USB sticks in Files (mass storage, 2026-11-10)
+
+- **What runs now.** Plugging in a USB stick or USB disk mounts it under `/media` by its
+  label (FAT12/16/32, exFAT, ext2/3/4 as sex-volumes reads them; GPT and MBR partitions),
+  and Files, Spindle and the open picker use it like any other disk: list, read, write,
+  `df`, `unmount` ("Safe to remove."). Pulling the stick out drops its mount; plugging it
+  back in mounts it again. A stick unmounted while still plugged in stays unmounted until
+  it is replugged. USB 2 and USB 3 sticks, blocks of 512 bytes or more, disks over 2 TiB
+  (16-byte commands); writes to a stick with its write-protect switch on are refused.
+- **Design.** SexUSB speaks bulk-only transport and SCSI (INQUIRY, TEST UNIT READY with
+  sense retries, READ CAPACITY 10/16, MODE SENSE for write protect, READ/WRITE 10/16,
+  SYNCHRONIZE CACHE, reset recovery on stalls). Bulk transfers split at page edges into
+  chained TRBs. Files owns the mounts: SexUSB tells Files when its disks change, and Files
+  asks for disks, their size and name, and reads and writes through a 64 KiB shared region
+  (`UsbDisk` implements `sex_volumes::Disk`). Only Files may ask; anyone else is refused.
+- **ABI.** New `sex_pdx::usb_disk`: Domain caps between Files and SexUSB at slot 1000, a
+  64 KiB region (id 0x4400) at slot 1001, ops 0x5D0 DISKS, 0x5D1 INFO, 0x5D2 READ,
+  0x5D3 WRITE, 0x5D4 SYNC, 0x5D8 CHANGED, statuses OK/GONE/IO/INVALID/READ_ONLY.
+  `abi_version_hash` recomputed.
+- **Limits.** One request at a time (no UAS, no queueing): about USB 2 speed. One LUN per
+  stick. Card readers with several slots show only the first. The stick must be unmounted
+  before pulling it out to be sure writes are on it (Files has no write cache for it, so a
+  finished write is already on the stick).
+- **Gates.** New `scripts/usb_storage_gate.py`: plug in a FAT stick after boot, list, read,
+  write, unmount, unplug, replug and read back, unplug while mounted; mtools reads the file
+  from the stick image afterwards. Plus usb_path_gate, program_files_gate, master runtime
+  gate, host unittests, architectural truth.
 ## Intel Wi-Fi, stage W1: driver core with WPA2 and WPA3 (2026-11-09)
 
 - **New crate `sex-wifi`** (no_std, no allocation), the hardware-independent part of an Intel Wi-Fi 6/6E driver for AX200, AX201, AX210, AX211 and the Killer modules on them (the x17 R1's AX1675). Re-implemented in Rust from OpenBSD `iwx(4)` (ISC); no Linux code. Report and stages W1-W8: `docs/handoff/INTEL_WIFI_2026_11_09.md`.
@@ -3658,6 +3694,14 @@ Plan: `docs/handoff/NVIDIA_GPU_PLAN_2026_11_09.md` (stages N1-N6).
   `scripts/program_web_apis_gate.py` (page built from these APIs, pixel-matched to the
   host render, page reports its own checks).
 - **ABI / kernel:** none.
+
+## Browser: iframes and Referer, YouTube stage Y8 (2026-11-10)
+
+- **Iframes are pages of their own.** An `<iframe>` with an http(s) `src`, in the HTML or added by a script, loads as a nested page with its own tree, script engine, timers, fetches, media and pictures (up to 4 per page; frames inside frames aren't loaded yet). The Web program keeps each frame's state in a `Frame` and swaps it in as the current page to work on it, so loading, scripts, layout and media are the same code as for the shown page. The frame is drawn over its iframe box, pointer events over the box go to the frame's page in its own coordinates, and the frame is relaid out when its box changes size. Keys stay with the shown page.
+- **Referer, the real one.** Requests now carry `Referer` under the default policy, strict-origin-when-cross-origin (`sex_fetch::referrer`): the full page address within its origin, only the origin elsewhere, nothing from https to http, nothing from a typed address or a non-http page. A link, form or script navigation sends the page it came from; an iframe's request sends the page around it (`referrerpolicy="no-referrer"` sends none). Scripts still can't set `Referer` themselves. This is what YouTube's embed checks (`embedder.identity.missing.referrer`); the address is always the real embedding page's, never made up.
+- **postMessage across frames.** `iframe.contentWindow` and, inside a frame, `window.parent`/`top` are stand-in windows whose `postMessage` the browser carries to the other page (`OP.POST_MESSAGE` 32, data as JSON). The message reaches only the origin the sender named (or any, for `*`), arrives as a `MessageEvent` with the right `origin` and `source`, and the iframe element gets `load`. `document.referrer` and `location.ancestorOrigins` come from `OP.FRAME` (31). `contentDocument` stays null: frames run in separate engines, so same-origin frames can't reach into each other yet.
+- Tests: `cargo test -p sex-fetch` (referrer policy, header from the browser only), `cargo test -p sex-js --test dom` (frames talk through postMessage). QEMU gate `scripts/program_web_frames_gate.py`: a page on one origin frames a page on another; the server sees the frame request's Referer as the page's origin, both pages' scripts check `parent`, `referrer`, `ancestorOrigins` and the message origins, a message to the wrong origin is dropped, the frame is drawn green over its box, and a click on it reaches the frame's page (it turns blue and tells the page).
+- Still to do for YouTube: test the real embed in a frame on a real https page (needs a page we host that embeds YouTube), frames inside frames, keyboard focus into frames, cookies partitioned per top site.
 
 ## Video and sound play while they download (2026-11-10)
 
@@ -3824,6 +3868,31 @@ Follow-up to the boot log and crash records work (`BOOT_LOG_AND_CRASH_RECORDS_20
 - **ABI:** new PDX op `0x2E8` and module `sex_pdx::wifi_status`; `abi_version_hash`
   recomputed (sex-pdx lib.rs). No kernel change. Next: status bar indicator, then W5.
 
+## USB Ethernet adapters (CDC Ethernet, 2026-11-10)
+
+- **What runs now.** A PC with no network card of its own gets online through a USB
+  Ethernet adapter, plugged in before or after boot: phone tethering, most USB dongles,
+  and Realtek RTL8152/8153 adapters through their CDC Ethernet configuration. Pulling it
+  out drops its connections; plugging it back in brings the network back.
+- **Design.** SexUSB drives the adapter (`servers/sexusb/src/ether.rs`: every
+  configuration is searched for an ECM function, its MAC string is read, the data
+  interface's alternate setting is selected, 24 receive transfers stay queued, frames
+  that fill whole packets end with a zero-length packet). Frames cross to SexNet through
+  two single-producer rings in one shared region (`sex_pdx::usb_net`); neither side
+  calls the other. SexNet's `link::Link` is either its own PCI card or the USB rings,
+  with the same events and send path, so TCP/IP, DNS, TLS and the web service do not
+  know which. When the card is absent SexNet checks for an adapter every 100 ticks.
+- **ABI.** New `sex_pdx::usb_net`: one 128 KiB region (id 0x4401) at slot 1002 in SexNet
+  and SexUSB (header with link state, MAC and generation; 30-frame receive and send
+  rings). The kernel gives the network owner its BOOT network settings through that
+  exact region when it holds no PCI lease. `abi_version_hash` recomputed.
+- **Limits.** One adapter at a time, and only when there is no PCI network card. No NCM
+  (some 2.5G adapters and newer phones), no RNDIS, no Realtek vendor mode, no link
+  state notifications (a cable pulled out is not seen until traffic fails).
+- **Gates.** New `scripts/usb_net_gate.py` (in CI): adapter plugged in after boot, a
+  128 KiB fetch, unplug, replug, a second fetch. `tests/pci_command.rs` covers the
+  settings through the region. program_net_gate (igb, e1000e), master runtime gate,
+  sexnet_service_host_gate, usb_path_gate, usb_storage_gate.
 ## Intel Wi-Fi, stage W5a: joining a network's channel (2026-11-10)
 
 - **Join:** `sex_wifi::join` sends iwx_auth's commands: PHY context, RLC, MAC context,
@@ -3866,3 +3935,14 @@ Roadmap workstream B, part 1 (report: `docs/handoff/LINUX_AND_DESKTOP_PARITY_REP
 - **`install [go] [GIB] [IMAGE]`** in Spindle. Without `go` Files only plans and prints it. On a GPT disk it adds three partitions in free space (SexOS system A and B, 256 MiB each, and the SexOS store: GIB or all the largest free run, at least 1 GiB) and never moves or resizes anything; on a blank disk it makes a new GPT and a 260 MiB FAT32 ESP. Limine goes to `\EFI\SEXOS\BOOTX64.EFI` on the shared ESP, and to `\EFI\BOOT\BOOTX64.EFI` only when no fallback loader exists. Its menu `\EFI\BOOT\LIMINE.CFG` (16 KiB, contiguous, for in-place rewrites by A/B updates) points the image's entries at slot A by partition GUID and adds a chainload entry per system found on the ESP (Windows boot manager, shim/GRUB, systemd-boot, others). Refuses when another `limine.cfg` would win. The partition table is written last, so a failed install leaves every system starting as before.
 - **Not yet**: no UEFI boot entry is registered (the kernel has no runtime services), so on a PC whose ESP already has a fallback loader (Windows) the person picks `\EFI\SEXOS\BOOTX64.EFI` once in the firmware's boot menu; Install says so. Slot B, signed updates and try-once fallback are part 2.
 - **Gates**: `scripts/install_gate.py` (QEMU + OVMF with its own variable store): a Linux-like GPT disk is hashed before and after a live session (unchanged), `install` plans, `install go` installs, sgdisk/fsck/mtools check the disk and the Linux partition's bytes, then the PC starts from the disk with no ISO and a file survives a restart; a blank disk becomes SexOS's alone. `scripts/usb_stick_gate.py`: the ISO written to a USB stick (usb-storage on xHCI, no CD) reaches the desktop under UEFI and under BIOS.
+
+## Intel Wi-Fi, stage W5e: traffic over Wi-Fi (2026-11-10)
+- **What:** new `sex_wifi::link` carries Ethernet frames over the connection. Outgoing
+  frames are encrypted by the firmware on WPA2. Incoming frames are checked for the
+  firmware's decrypt status and for PN replay. sexnet moves its IP stack onto Wi-Fi
+  while the link is up, then back to the wired port. RX MPDU padding is now removed
+  for data frames too.
+- **Evidence:** `scripts/wifi_host_gate.sh` (45 driver tests). A test sends ARP over
+  WPA2 on the firmware model and receives decrypted frames, a replay, an undecrypted
+  frame, a relayed own broadcast and a deauthentication.
+- **ABI / kernel:** none.

@@ -51,6 +51,7 @@ const FORMAT_48K_S16_STEREO: u16 = 0x0011;
 const GET_PARAMETER: u32 = 0xf00;
 const GET_CONNECTION: u32 = 0xf02;
 const GET_CONFIG_DEFAULT: u32 = 0xf1c;
+const GET_PIN_SENSE: u32 = 0xf09;
 const SET_SELECT: u32 = 0x701;
 const SET_POWER: u32 = 0x705;
 const SET_STREAM: u32 = 0x706;
@@ -110,6 +111,10 @@ pub struct Hda {
     routes: [Option<Route>; MAX_OUTPUTS],
     pub outputs: usize,
     pub on: u32,
+    /// The outputs played by default, and whether Bell follows the headphone jack
+    /// (until the person picks outputs themselves).
+    pub home: u32,
+    pub auto: bool,
 }
 
 pub const MAX_OUTPUTS: usize = 8;
@@ -117,7 +122,7 @@ pub const MAX_OUTPUTS: usize = 8;
 /// `device` is the jack's default-configuration device: 0 line out, 1 speaker,
 /// 2 headphones.
 #[derive(Clone, Copy)]
-struct Route { codec: u32, pin: u32, dac: u32, path: [u32; 6], len: usize, rank: u32, device: u32 }
+struct Route { codec: u32, pin: u32, dac: u32, path: [u32; 6], len: usize, rank: u32, device: u32, sense: bool }
 
 impl Hda {
     fn reg<T>(&self, offset: u32) -> *mut T {
@@ -279,7 +284,7 @@ impl Hda {
             if config >> 30 == 1 { continue; } // nothing is wired to this jack
             let device = config >> 20 & 0xf;
             let rank = match device { 1 => 0, 2 => 1, 0 => 2, 0xf | 5 => continue, _ => 3 };
-            let mut route = Route { codec: self.codec, pin: nid, dac: 0, path: [0; 6], len: 0, rank, device };
+            let mut route = Route { codec: self.codec, pin: nid, dac: 0, path: [0; 6], len: 0, rank, device, sense: pin & 1 << 2 != 0 };
             if self.find_dac(nid, 0, &mut route) && n < out.len() { out[n] = Some(route); n += 1; }
         }
         n
@@ -352,7 +357,7 @@ impl Hda {
         let mut h = Hda { mmio: view.virtual_address as usize, length: view.length as usize,
             dma_va: dma.virtual_address as usize, dma_pa, corb_wp: 0, rirb_rp: 0, codec: 0, sd: 0,
             tail: 0, head: 1, queued: [false; PERIODS], pending: 0, vendor: 0, dac: 0, pins: 0,
-            routes: [None; MAX_OUTPUTS], outputs: 0, on: 0 };
+            routes: [None; MAX_OUTPUTS], outputs: 0, on: 0, home: 0, auto: true };
         if h.length < 0x180 { return Err("short_view"); }
         h.w32(INTCTL, 0);
         let codecs = h.reset()?;
@@ -389,7 +394,9 @@ impl Hda {
         for (k, r) in h.routes[..h.outputs].iter().enumerate() {
             if r.is_some_and(|r| r.codec == best.codec && r.dac == best.dac) { on |= 1 << k; }
         }
+        h.home = on;
         h.select(on);
+        h.follow_jack();
         h.stream()?;
         h.start()?;
         h.tail = h.position();
@@ -427,6 +434,28 @@ impl Hda {
         }
         self.on = mask;
         true
+    }
+
+    /// While Bell follows the jack: speakers in the default set go quiet while
+    /// headphones in it are plugged in, and play again when they come out.
+    pub fn follow_jack(&mut self) {
+        if !self.auto { return; }
+        let routes = self.routes;
+        let mut plugged = false;
+        let mut kinds = [0u32; MAX_OUTPUTS];
+        for (k, r) in routes[..self.outputs].iter().enumerate() {
+            let Some(r) = r else { continue };
+            kinds[k] = r.device;
+            if r.device == crate::jack::HEADPHONES && r.sense && self.home & 1 << k != 0 {
+                self.codec = r.codec;
+                plugged |= self.verb(r.pin, GET_PIN_SENSE, 0).is_some_and(|v| v & 1 << 31 != 0);
+            }
+        }
+        let want = crate::jack::wanted(self.home, &kinds[..self.outputs], plugged);
+        if want != self.on {
+            sex_pdx::serial_record!("[bell.hda.jack] headphones={} on={:#x}", plugged as u8, want);
+            self.select(want);
+        }
     }
 
     /// Output `k`: its jack kind (0 line out, 1 speaker, 2 headphones, else other),

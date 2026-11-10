@@ -22,7 +22,15 @@ void wasm_rt_trap(wasm_rt_trap_t code) {
 
 void sexjs_abort(void) { wasm_rt_trap(WASM_RT_TRAP_UNREACHABLE); }
 
-void wasm_rt_allocate_memory(wasm_rt_memory_t *m, uint64_t pages, uint64_t max_pages, bool is64) {
+void wasm_rt_allocate_memory(wasm_rt_memory_t *m, uint64_t pages, uint64_t max_pages, bool is64
+#ifdef SEXJS_WASM_CUSTOM_PAGES
+                             , uint32_t page_size
+#endif
+                             ) {
+#ifdef SEXJS_WASM_CUSTOM_PAGES
+  if (page_size != 65536) wasm_rt_trap(WASM_RT_TRAP_OOB);
+  m->page_size = page_size;
+#endif
   m->data = sexjs_rt_realloc(0, 0, pages << 16);
   if (!m->data && pages) wasm_rt_trap(WASM_RT_TRAP_OOB);
   m->pages = pages; m->max_pages = max_pages; m->size = pages << 16; m->is64 = is64;

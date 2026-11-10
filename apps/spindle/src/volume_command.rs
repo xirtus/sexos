@@ -7,7 +7,8 @@
 //! mic on` lets that program hear the microphone until it ends; `volume ROW mic off`
 //! stops it at once. `volume outputs` lists the sound card's outputs (speaker,
 //! headphones, line out) and which play; `volume output N` plays to output N alone,
-//! `volume output all` to every one.
+//! `volume output all` to every one, and `volume output auto` back to the default,
+//! which quiets the speakers while headphones are plugged in.
 //! Bell answers each request with a reply message, which `receive` turns into a line.
 use sex_pdx::sound_mixer as mixer;
 
@@ -35,6 +36,7 @@ fn request(args: &[u8]) -> Result<(u64, u64, u64, Waiting), &'static [u8]> {
         (Some(b"list"), None) => (mixer::STREAM, 0, 0, Waiting::List { next: 0, shown: 0 }),
         (Some(b"outputs"), None) => (mixer::OUTPUTS, 0, 0, Waiting::Outputs),
         (Some(b"output"), Some(b"all")) => (mixer::SET_OUTPUTS, 0xFF, 0, Waiting::Outputs),
+        (Some(b"output"), Some(b"auto")) => (mixer::SET_OUTPUTS, mixer::AUTO, 0, Waiting::Outputs),
         (Some(b"output"), Some(w)) => {
             let k = number(w).filter(|n| (0..8).contains(n)).ok_or(USAGE)?;
             (mixer::SET_OUTPUTS, 1 << k, 0, Waiting::Outputs)
@@ -64,7 +66,7 @@ fn request(args: &[u8]) -> Result<(u64, u64, u64, Waiting), &'static [u8]> {
     })
 }
 
-const USAGE: &[u8] = b"Use: volume [0-100 | +N | -N | mute | unmute | list | ROW 0-100 | ROW mute | ROW unmute | ROW mic on|off | outputs | output N|all]";
+const USAGE: &[u8] = b"Use: volume [0-100 | +N | -N | mute | unmute | list | ROW 0-100 | ROW mute | ROW unmute | ROW mic on|off | outputs | output N|all|auto]";
 
 fn ask(action: u64, a: u64, b: u64) -> bool {
     let (status, _) = sex_pdx::pdx_call(sex_pdx::SLOT_BELL, mixer::OP_MIXER, action, a, b);
@@ -115,6 +117,7 @@ impl Volume {
                 put(&mut line, &mut at, b"Sound card outputs: ");
                 percent(&mut line, &mut at, count as u64);
                 if count == 0 { put(&mut line, &mut at, b" (no sound card)"); }
+                if value & mixer::OUTPUTS_AUTO != 0 { put(&mut line, &mut at, b", following the headphone jack"); }
                 sb.push(&line[..at]);
                 for k in 0..count {
                     let mut line = [0u8; 64];

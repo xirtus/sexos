@@ -878,3 +878,37 @@ fn compute_speed() {
     assert_eq!(logs(&mut s), ["0:46368 20000"]);
     eprintln!("{} tier: fib(24) + 20k-string sort in {:?}", if Script::<Document>::NATIVE { "native" } else { "wasmi" }, t.elapsed());
 }
+
+#[test]
+fn frames_talk_through_post_message() {
+    // The page around: its iframe's window is a stand-in that hands messages to the browser.
+    let mut top = page("<iframe id=f src='https://www.youtube.com/embed/x'></iframe>");
+    top.eval(r#"
+        const f = document.getElementById('f');
+        window.addEventListener('message', e => console.log('top got', JSON.stringify(e.data), e.origin, e.source === f.contentWindow));
+        f.addEventListener('load', () => console.log('frame loaded'));
+        f.contentWindow.postMessage({event: 'listening', id: 1}, 'https://www.youtube.com');
+        console.log(window.parent === window, window.top === window, document.referrer === '', f.contentDocument);
+    "#, "t.js").unwrap();
+    let node = top.page().dom.descendants(0).into_iter().find(|&n| top.page().dom.tag(n) == Some("iframe")).unwrap() as i64;
+    assert_eq!(std::mem::take(&mut top.page_mut().outbox), [(node, r#"{"event":"listening","id":1}"#.to_string(), "https://www.youtube.com".to_string())]);
+    top.dispatch(&format!("message\t{node}\thttps://www.youtube.com\t{{\"event\":\"onReady\"}}")).unwrap();
+    top.dispatch(&format!("frameload\t{node}")).unwrap();
+    top.dispatch("tick").unwrap();
+    assert_eq!(logs(&mut top), ["0:true true true null", "0:top got {\"event\":\"onReady\"} https://www.youtube.com true", "0:frame loaded"]);
+
+    // The page inside: parent, top, referrer and ancestorOrigins come from the browser.
+    let dom = sex_html::parse::parse("<p>player</p>");
+    let mut doc = Document::new(dom, "https://www.youtube.com/embed/x", (320, 180), clock);
+    doc.referrer = "https://example.test/".into();
+    doc.parent_origin = Some("https://example.test".into());
+    let mut inner = Script::new(doc, Limits::default()).unwrap();
+    inner.eval(r#"
+        window.onmessage = e => console.log('inner got', e.data.event, e.origin, e.source === window.parent);
+        console.log(window.parent !== window, window.top === window.parent, document.referrer, location.ancestorOrigins[0], location.ancestorOrigins.length);
+        window.parent.postMessage({event: 'onReady'}, '*');
+    "#, "t.js").unwrap();
+    assert_eq!(std::mem::take(&mut inner.page_mut().outbox), [(-1, r#"{"event":"onReady"}"#.to_string(), "*".to_string())]);
+    inner.dispatch("message\tparent\thttps://example.test\t{\"event\":\"listening\"}").unwrap();
+    assert_eq!(logs(&mut inner), ["0:true true https://example.test/ https://example.test 1", "0:inner got listening https://example.test true"]);
+}

@@ -130,6 +130,12 @@ jobs:
     - uses: ./.github/actions/setup
     - name: Build the image
       run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/build.log"; exit 1)
+    - name: USB sticks in Files
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/blank-usb.img"
+        python3 scripts/usb_storage_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-usb-storage"
+    - name: USB network adapter
+      run: python3 scripts/usb_net_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-usb-net"
     - name: Intel RAID 0 on two NVMe drives, read only
       run: python3 scripts/raid_gate.py --out "$RUNNER_TEMP/sexos-raid"
     - name: Power off and restart through ACPI

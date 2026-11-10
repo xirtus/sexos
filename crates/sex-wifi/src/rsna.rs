@@ -132,6 +132,8 @@ impl Rsna {
             installed: (false, false, false), messages: 0, seq: 0x100, started: now, since: now, in_flight: false }
     }
     pub fn done(&self) -> bool { !matches!(self.step, Step::Handshake) }
+    pub fn target(&self) -> Target { self.target }
+    pub fn me(&self) -> [u8; 6] { self.me }
 
     /// Hands a frame heard before this state existed (message 1 often comes with
     /// the association response).

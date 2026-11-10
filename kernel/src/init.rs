@@ -638,6 +638,14 @@ pub fn init() {
         if let Some(pd) = DOMAIN_REGISTRY.get(sexbell_id) {
             pd.grant_capability(sex_pdx::SLOT_BELL, CapabilityData::Domain(sexbell_id));
             serial_println!("[kernel.sexbell.cap] self slot={}", sex_pdx::SLOT_BELL);
+            // Bell hands accepted notifications to the Shell, which shows them.
+            if silkshell_id != 0 {
+                pd.grant_capability(sex_pdx::SLOT_SHELL, CapabilityData::Domain(silkshell_id));
+                serial_println!(
+                    "[bootgraph.cap.grant from=kernel to={} slot=SLOT_SHELL target={} ok=1 optional=1 reason=notifications]",
+                    sexbell_id, silkshell_id
+                );
+            }
             serial_println!(
                 "[bootgraph.cap.grant from=kernel to={} slot=SLOT_BELL target={} ok=1 optional=1]",
                 sexbell_id, sexbell_id
@@ -740,6 +748,18 @@ pub fn init() {
             "[bootgraph.cap.grant from=kernel to=missing slot=SLOT_STORAGE target={} ok=0 optional=1 reason=spindle_absent]",
             sexfiles_id
         );
+    }
+
+    // SexFiles <-> SexUSB: Files asks for USB disks' sectors; SexUSB tells Files when
+    // a disk comes or goes. Both are enqueues; neither side waits on the other's loop.
+    if sexfiles_id != 0 && sexusb_id != 0 {
+        use crate::ipc::DOMAIN_REGISTRY;
+        use crate::capability::CapabilityData;
+        if let (Some(files), Some(usb)) = (DOMAIN_REGISTRY.get(sexfiles_id), DOMAIN_REGISTRY.get(sexusb_id)) {
+            files.grant_capability(sex_pdx::usb_disk::SLOT, CapabilityData::Domain(sexusb_id));
+            usb.grant_capability(sex_pdx::usb_disk::SLOT, CapabilityData::Domain(sexfiles_id));
+            serial_println!("[kernel.cap.usb_disk] files={} usb={} slot={:#x}", sexfiles_id, sexusb_id, sex_pdx::usb_disk::SLOT);
+        }
     }
 
     // SexFiles → SexDrive block/DMA route: grant SLOT_BLOCK so DiskFS

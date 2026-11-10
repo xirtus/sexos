@@ -85,6 +85,9 @@ fn program_index(target: u32) -> Option<usize> {
 }
 impl Service {
     pub const fn new() -> Self { Self { bound: [0; PROGRAM_ROWS], slots: Vec::new(), sockets: Vec::new(), resolving: None, attached: false, announced: false, announced6: false, tls_used: false } }
+    /// The IP stack under the service was replaced (Wi-Fi came up or went down):
+    /// flows, sockets and the lease note belonged to the old one. Run-Shell bindings stay.
+    pub fn reset(&mut self) { let bound = self.bound; *self = Self::new(); self.bound = bound; }
     /// A free flow for a new connection or listener (not `except`): one the stack is done
     /// with first, so a connection still finishing is left to finish; then a new one.
     fn free_slot(&mut self, engine: &mut Engine<'static>, except: Option<usize>) -> Option<usize> {
@@ -113,6 +116,13 @@ impl Service {
         self.slots.push(slot);
         sex_pdx::serial_record!("[net.open.flows] made={}", self.slots.len());
         Some(i)
+    }
+    /// The link went away and its stack with it (a USB adapter pulled out): every flow and
+    /// socket is gone. Programs keep their right to the network for the next link.
+    pub fn reset_link(&mut self) {
+        let bound = self.bound;
+        *self = Self::new();
+        self.bound = bound;
     }
     pub fn busy(&self) -> bool { self.slots.iter().any(|s| s.tls.is_some()) }
     /// Moves encrypted bytes between the flows and their sessions, each turn of the service.

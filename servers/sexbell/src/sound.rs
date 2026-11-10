@@ -248,12 +248,27 @@ impl Card {
                 for (k, kind) in kinds.iter_mut().enumerate().take(n) {
                     *kind = match h.output(k).map(|o| o.0) { Some(d @ 0..=2) => d as u8, _ => mixer::OTHER };
                 }
-                mixer::outputs(h.on as u8, &kinds[..n])
+                mixer::outputs(h.on as u8, &kinds[..n]) | if h.auto { mixer::OUTPUTS_AUTO } else { 0 }
             }
         }
     }
     fn select(&mut self, mask: u64) -> bool {
-        match self { Card::Virtio { .. } => mask & 1 == 1, Card::Hda(h) => mask <= 0xFF && h.select(mask as u32) }
+        match self {
+            Card::Virtio { .. } => mask & 1 == 1 || mask == mixer::AUTO,
+            // The person's own pick stops Bell following the jack; AUTO resumes it.
+            Card::Hda(h) if mask == mixer::AUTO => { h.auto = true; let home = h.home; h.select(home); h.follow_jack(); true }
+            Card::Hda(h) => { let ok = mask <= 0xFF && h.select(mask as u32); if ok { h.auto = false; } ok }
+        }
+    }
+    /// Looks at the headphone jack, at most twice a second.
+    fn follow_jack(&mut self) {
+        if let Card::Hda(h) = self {
+            static mut LAST: u64 = 0;
+            let now = sex_pdx::get_ticks();
+            if now.wrapping_sub(unsafe { LAST }) < 500 { return; }
+            unsafe { LAST = now };
+            h.follow_jack();
+        }
     }
     fn has_input(&self) -> bool { matches!(self, Card::Virtio { input: Some(_), .. }) }
     /// Starts or stops the microphone stream.
@@ -453,6 +468,7 @@ impl Player {
     }
 
     fn pump(&mut self) {
+        self.card.follow_jack();
         self.listen_pump();
         // Reap finished periods in order; the device returns them as it plays.
         while self.flying > 0 {

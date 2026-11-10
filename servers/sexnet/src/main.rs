@@ -17,6 +17,7 @@ static mut DNS_RX_META:[sex_net::DnsMetadata;1]=[sex_net::DnsMetadata::EMPTY];
 static mut DNS_TX_META:[sex_net::DnsMetadata;1]=[sex_net::DnsMetadata::EMPTY];
 mod nic;
 mod ethernet;
+mod link;
 mod realtek;
 mod arp;
 mod jobs;
@@ -36,6 +37,14 @@ static mut SOURCE_DENIALS:source_denial::Outbox=source_denial::Outbox::new();
 /// The held BOOT lifecycle grants establish exact current subject/task, never
 /// the app-supplied ticket. Err(LIVE) is the kernel's live-task attestation;
 /// successful info means terminal cleanup custody and cannot authorize work.
+/// The IP stack over the boot buffers, for whichever port carries it (wired or Wi-Fi).
+/// The caller drops the previous engine first: only one borrows the buffers at a time.
+fn new_engine(config:sex_pdx::network_config::Config,mac:[u8;6],seed:u64)->sex_net::Engine<'static>{
+    // SAFETY: sexnet runs one thread and keeps at most one engine alive.
+    unsafe{sex_net::Engine::new(config,mac,sex_pdx::get_ticks(),seed,
+        &mut *core::ptr::addr_of_mut!(TRANSPORT_RX),&mut *core::ptr::addr_of_mut!(TRANSPORT_TX),&mut *core::ptr::addr_of_mut!(CLIENT_RX),&mut *core::ptr::addr_of_mut!(CLIENT_TX),
+        &mut *core::ptr::addr_of_mut!(DNS_RX_META),&mut *core::ptr::addr_of_mut!(DNS_RX),&mut *core::ptr::addr_of_mut!(DNS_TX_META),&mut *core::ptr::addr_of_mut!(DNS_TX))}.expect("FIXED_TRANSPORT_CONFIG")
+}
 fn network_owner(caller:u32)->Option<jobs::Identity>{
     use sex_pdx::app_lifecycle as a;
     for slot in a::SLOTS{
@@ -5322,7 +5331,9 @@ pub extern "C" fn _start() -> ! {
     }
     sex_pdx::serial_record!("[sexnet.network.config.denied] requests=7 output_zero=1 ok=1");
     let network_config_result=sex_pdx::device_network_config(sex_pdx::SLOT_NIC);
-    let network_config=network_config_result.ok();
+    // No network card of our own: the settings come with the USB adapter region instead.
+    let usb_config=network_config_result.is_err().then(||sex_pdx::device_network_config(sex_pdx::usb_net::SLOT).ok()).flatten();
+    let network_config=network_config_result.ok().or(usb_config);
     if let Some(config)=network_config{let w=config.to_words();sex_pdx::serial_record!("[sexnet.network.config] words={:x},{:x},{:x},{:x} origin=held_boot_nic immutable=1 route=metadata",w[0],w[1],w[2],w[3]);}
     else{sex_pdx::serial_record!("[sexnet.network.config.unavailable] network=0 fallback=0");}
     let source_denials=unsafe { &mut SOURCE_DENIALS };
@@ -5357,9 +5368,11 @@ pub extern "C" fn _start() -> ! {
     };
     // Intel Wi-Fi (stages W2-W3): power up and initialise the firmware beside the wired NIC.
     let mut wifi=wifi::Wifi::open(sex_pdx::get_ticks());
-    let mut ethernet:Option<ethernet::Driver<nic::Live>>=None;
+    let mut ethernet:Option<link::Link<nic::Live>>=None;
+    let mut usb_look=0u64;
     let mut pending_packet:Option<sex_net::Frame>=None;
     let mut transport:Option<sex_net::Engine<'static>>=None;
+    let mut wifi_transport=false;
     let mut transport_changes=0u64;
     let mut transfer_changes=0u64;
     let mut timed_waits=0u64;
@@ -5379,7 +5392,21 @@ pub extern "C" fn _start() -> ! {
         };
         if device.as_ref().is_some_and(|dev|dev.phase()==nic::Phase::Quiescent) {
             let (hardware,mac)=device.take().unwrap().into_quiescent().expect("NIC_PREPARATION_CUSTODY");
-            ethernet=Some(ethernet::Driver::new(hardware,mac,sex_pdx::get_ticks()));
+            ethernet=Some(link::Link::Pci(ethernet::Driver::new(hardware,mac,sex_pdx::get_ticks())));
+        }
+        // The USB adapter was pulled out: forget it and its connections; a new one starts afresh.
+        if ethernet.as_ref().is_some_and(|l|matches!(l,link::Link::Usb(_))&&!l.active()){
+            ethernet=None;transport=None;pending_packet=None;web.reset_link();
+            sex_pdx::serial_record!("[sexnet.usb.link.gone]");
+        }
+        // A USB network adapter, when there is no card of our own: looked for every 100 ticks.
+        if ethernet.is_none()&&device.is_none()&&usb_config.is_some()&&sex_pdx::get_ticks()>=usb_look{
+            usb_look=sex_pdx::get_ticks()+100;
+            if let Some(usb)=link::Usb::open(){
+                let m=usb.mac;
+                sex_pdx::serial_record!("[sexnet.usb.link] mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",m[0],m[1],m[2],m[3],m[4],m[5]);
+                ethernet=Some(link::Link::Usb(usb));
+            }
         }
         let mut polling=false;
         if let Some(owner)=outbound.owner(){
@@ -5393,21 +5420,58 @@ pub extern "C" fn _start() -> ! {
         if pending_packet.as_ref().is_some_and(|f|!packet_owned_live(f,&outbound,&dns,network_config.as_ref())){pending_packet=None;}
         // Several frames each turn, not one: a download needs a frame in and an ACK
         // out for every 1.4 KB, and a turn costs a yield or a timer wait.
+        // Stage W5e: a connected Wi-Fi link takes the IP stack (the wired port is set
+        // aside while it is up); it gives it back when the link goes down.
+        let wifi_up=wifi.as_ref().is_some_and(|w|w.link_up());
+        if wifi_up&&!wifi_transport{
+            if let (Some(config),Some(mac))=(network_config,wifi.as_ref().and_then(|w|w.link_mac())){
+                pending_packet=None;drop(transport.take());web.reset();
+                transport=Some(new_engine(config,mac,0x7365786f735f7769));
+                wifi_transport=true;
+                sex_pdx::serial_record!("[sexnet.wifi.transport] up=1 mac={:02x}{:02x}{:02x}{:02x}{:02x}{:02x} wired_set_aside={}",mac[0],mac[1],mac[2],mac[3],mac[4],mac[5],ethernet.is_some() as u8);
+            } else { sex_pdx::serial_record!("[sexnet.wifi.transport] up=0 reason=no_network_config"); }
+        } else if !wifi_up&&wifi_transport{
+            if let Some(engine)=transport.as_mut(){engine.stop(sex_net::Error::Stopped);}
+            transport=None;pending_packet=None;wifi_transport=false;web.reset();
+            // A running wired port takes the IP stack back at once (its own start
+            // only happens on the move to Running, which is long past).
+            let wired=match (ethernet.as_ref().filter(|d|d.phase()==ethernet::Phase::Running),network_config) {
+                (Some(driver),Some(config))=>{transport=Some(new_engine(config,driver.mac(),0x7365786f735f3736));true}
+                _=>false,
+            };
+            sex_pdx::serial_record!("[sexnet.wifi.transport] up=0 reason=link_down wired={}",wired as u8);
+        }
         let mut burst=0u32;
         loop {
             let mut progressed=false;
-            if let Some(driver)=ethernet.as_mut() {
+            if wifi_transport { if let (Some(w),Some(engine))=(wifi.as_mut(),transport.as_mut()) {
+                // One frame a turn into the stack, the rest wait in the link's queue.
+                let receive=engine.can_receive();
+                progressed|=w.link_receive(|frame|receive&&engine.submit_frame(frame).is_ok());
+                engine.advance(sex_pdx::get_ticks());
+                web.pump(unsafe{&mut *(engine as *mut sex_net::Engine<'static>)});
+                let duplex=outbound.is_duplex();
+                outbound.advance(sex_pdx::get_ticks(),&mut ClientWire(Some(&mut *engine),duplex));
+                dns.advance(sex_pdx::get_ticks(),&mut DnsWire(Some(&mut *engine)));
+                if engine.failure().is_some(){pending_packet=None;}
+                else if pending_packet.is_none(){pending_packet=engine.take_frame();}
+                if pending_packet.as_ref().is_some_and(|f|!packet_owned_live(f,&outbound,&dns,network_config.as_ref())){pending_packet=None;}
+                if w.link_ready(){
+                    if let Some(packet)=pending_packet.take(){progressed|=w.link_send(&packet.bytes[..packet.length]);}
+                }
+                polling=true;
+            }}
+            if let Some(driver)=ethernet.as_mut().filter(|_|!wifi_transport) {
                 let before=driver.phase();
                 let receive=transport.as_ref().is_none_or(|engine|engine.can_receive());
                 let event=driver.advance_with_receive(sex_pdx::get_ticks(),receive);progressed|=event.is_some();
                 if driver.phase()!=before {
                     sex_pdx::serial_record!("[sexnet.ether.phase] from={:?} to={:?} failure={:?}",before,driver.phase(),driver.failure());
                     if driver.phase()==ethernet::Phase::Running {
-                        sex_pdx::serial_record!("[sexnet.ether.ready] model={:?} region=2 budget=262144 used=221184 descriptors=96/8 buffer=2048 polling=cooperative timing_verified={} network=0 dns=0 tcp=0 http=0 tls=0",driver.model(),driver.timing_verified as u8);
+                        sex_pdx::serial_record!("[sexnet.ether.ready] model={:?} region=2 budget=262144 used=221184 descriptors=96/8 buffer=2048 polling=cooperative timing_verified={} network=0 dns=0 tcp=0 http=0 tls=0",driver.model(),driver.timing_verified() as u8);
                         let mut packet=sex_net::Frame{length:60,bytes:[0;sex_net::MAX_FRAME]};
-                        packet.bytes[..60].copy_from_slice(&arp::request_configured(driver.mac,&network_config.expect("BOOT_NETWORK_CONFIG")).expect("BOOT_ARP_CONFIG"));pending_packet=Some(packet);
-                        transport=Some(unsafe{sex_net::Engine::new(network_config.expect("BOOT_NETWORK_CONFIG"),driver.mac,sex_pdx::get_ticks(),0x7365786f735f3736,
-                            &mut TRANSPORT_RX,&mut TRANSPORT_TX,&mut CLIENT_RX,&mut CLIENT_TX,&mut DNS_RX_META,&mut DNS_RX,&mut DNS_TX_META,&mut DNS_TX)}.expect("FIXED_TRANSPORT_CONFIG"));
+                        packet.bytes[..60].copy_from_slice(&arp::request_configured(driver.mac(),&network_config.expect("BOOT_NETWORK_CONFIG")).expect("BOOT_ARP_CONFIG"));pending_packet=Some(packet);
+                        transport=Some(new_engine(network_config.expect("BOOT_NETWORK_CONFIG"),driver.mac(),0x7365786f735f3736));
                         let gateway=network_config.expect("BOOT_NETWORK_CONFIG").gateway;
                         sex_pdx::serial_record!("[sexnet.route.ready] gateway={}.{}.{}.{} default=1 routes=1 route_capacity={} neighbors={} discovery_ms=1000 expiry_ms=60000 heap=0 authority=held_boot_nic",gateway[0],gateway[1],gateway[2],gateway[3],sex_net::ROUTE_CAPACITY,sex_net::NEIGHBOR_CAPACITY);
                         sex_pdx::serial_record!("[sexnet.transport.ready] implementation=smoltcp0.14.0 flows=1 rx=4096 tx=4096 turn=256 port=46076 no_std=1 heap=0 diagnostic_listener=1 predictable_seed=1 app_network=0 dns=0 http=0 tls=0");
@@ -5426,7 +5490,7 @@ pub extern "C" fn _start() -> ! {
                         if sequence<=64||sequence.is_power_of_two(){sex_pdx::serial_record!("[sexnet.ether.tx.done] sequence={} index={} length={} hash={:#x}",sequence,index,length,hash);}
                     },
                     Some(ethernet::Event::Dropped{index,length,status,errors})=>{
-                        if driver.dropped<=64||driver.dropped.is_power_of_two(){sex_pdx::serial_record!("[sexnet.ether.rx.drop] index={} length={} status={} errors={} total={}",index,length,status,errors,driver.dropped);}
+                        if driver.dropped()<=64||driver.dropped().is_power_of_two(){sex_pdx::serial_record!("[sexnet.ether.rx.drop] index={} length={} status={} errors={} total={}",index,length,status,errors,driver.dropped());}
                     },None=>{},
                 }
                 if let Some(engine)=transport.as_mut(){
@@ -5512,6 +5576,13 @@ pub extern "C" fn _start() -> ! {
                     if timed_waits<=8||timed_waits.is_power_of_two(){sex_pdx::serial_record!("[sexnet.receive.wait] before={} after={} ticks=2 count={} kind=timer_assisted_poll irq=0 device={} reply_pending={}",before,after,timed_waits,(preparing||polling)as u8,reply_pending as u8);}
                     continue;
                 },
+            }
+        } else if device.is_none()&&usb_config.is_some() {
+            // Waiting for a USB adapter to be plugged in (or to forget one pulled out):
+            // look again every 100 ticks.
+            match sex_pdx::pdx_try_listen_raw(0) {
+                Some(req) => req,
+                None => { let _ = sex_pdx::sys_wait_self_ticks(100); continue; }
             }
         } else { unsafe { pdx_listen_raw(0) } };
         if let Some((n,acked))=app_custody.reborn(&mut sex_pdx::app_lifecycle::KernelAuthority,req.type_id,req.caller_pd as u64,[req.arg0,req.arg1,req.arg2]){

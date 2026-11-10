@@ -87,7 +87,7 @@ The driver speaks firmware API 77 (89 for the 0x7e40 "Ma" parts), the same as Op
 | **W5b** (section 12) | open-system auth and association frames on TX queue 1 (`iwx_tx`, TX command v10/gen3 or gen2), then ADD_STA update and MAC context with the AID (`iwx_run`) | host gate: TFD, TX command, byte counts and frames on the firmware model, retries and refusals; **x17: `[wifi.associated]`** |
 | **W5c** (section 13) | WPA2: the 4-way handshake over EAPOL data frames on queue 1, pairwise and group keys installed (SEC_KEY_CMD on the x17, ADD_STA_KEY on older firmware); `wifi join N PASSPHRASE` | host gate: the AP's half of the handshake on the firmware model, key command bytes, wrong passphrase; **x17: `[wifi.connected]`** |
 | W5d | WPA3: SAE commit/confirm in authentication frames, PMF | x17 joins a WPA3 network |
-| W5e | data queues into sexnet's Ethernet path; password prompt; saved networks | x17 browses the web over Wi-Fi |
+| **W5e** (section 14) | the connection as sexnet's Ethernet link: data frames out (firmware CCMP) and in (decrypt status, PN replay check), the IP stack moves to Wi-Fi while connected | host gate: frames both ways on the firmware model; **x17: `[sexnet.wifi.transport] up=1`, browser over Wi-Fi** |
 | W6 | speed and comfort: HT/VHT/HE capabilities, aggregation, power save, roaming, rekeying, 6 GHz | throughput test against the wired NIC |
 | W7 | MSI-X interrupts and an IOMMU domain (framework D3/D4); Wi-Fi worker in its own organ | fault injection: a wild DMA is stopped |
 | W8 | Bluetooth (Intel USB Bluetooth, firmware over USB) | pair a mouse or headset |
@@ -429,3 +429,44 @@ up as `Refused(Timeout { messages: 1 })`: the AP never sends message 3.
 The SNonce comes from sexnet's entropy service (the same source TLS seeds from).
 Next: data frames into sexnet's Ethernet path (W5e, with TLC and the `iwx_run`
 leftovers), and SAE for WPA3 (W5d).
+
+## 14. Stage W5e: traffic over Wi-Fi (2026-11-10)
+
+`sex_wifi::link` turns the connection into an Ethernet link:
+- **Out.** An Ethernet II frame becomes a to-DS data frame (LLC/SNAP) on queue 1. On WPA2
+  the Protected bit is set and ENCRYPT_DIS is clear, so the firmware adds the CCMP
+  header and MIC with the pairwise key (`iwx_tx`).
+- **In.** Data frames from our AP are kept only if the firmware decrypted them
+  (CCM, DEC_DONE, MIC_OK: `iwx_rx_hwdecrypt`). Their packet number must be newer
+  than the last for that key and TID (`iwx_ccmp_decap`; the pairwise and group keys
+  count apart). The CCMP header is removed, and the frame is cut to the length its IPv4,
+  IPv6 or ARP packet declares, so a MIC some firmware leaves at the end never reaches
+  the stack (a full 1500-byte packet would otherwise not fit). Plain data on a
+  WPA2 link, our own broadcasts relayed back, and frames from other BSSs are dropped.
+  RX MPDU padding is now removed after any header, as `iwx_rx_mpdu_mq` does, not
+  only after management headers.
+- **Rate.** Fixed at OFDM 12 Mb/s on antenna A until TLC rate control is configured
+  (next step, together with `iwx_run`'s smart-fifo, multicast and power commands).
+  This is slow but dependable for the first hardware test.
+
+sexnet: once the link is up, the IP stack (`sex_net::Engine`) is rebuilt on the Wi-Fi
+MAC and fed from the link, one frame per turn from a 32-frame receive queue (the air
+delivers bursts). The wired port is set aside while Wi-Fi is up, and when the link goes
+down (deauthentication, firmware error) the stack is rebuilt at once on a running wired
+port. Each switch resets the web service's flows and sockets, which belonged to the
+old stack; programs see their flows fail and reconnect. The
+browser's open-internet side gets its DHCP lease on the Wi-Fi network, as it does on a
+wired one.
+
+Boot log: `[wifi.link.up] security=… rate=…`, `[sexnet.wifi.transport] up=1 mac=…`,
+`[wifi.link.tx]` / `[wifi.link.rx] frames=… dropped=… last_drop=…` (sampled),
+`[wifi.link.down] reason=…`.
+
+Not yet:
+- group-key rekeying (EAPOL after the handshake is dropped, so the AP eventually
+  deauthenticates us, typically after an hour);
+- TLC;
+- QoS/WMM queues;
+- power save;
+- roaming;
+- saved networks.

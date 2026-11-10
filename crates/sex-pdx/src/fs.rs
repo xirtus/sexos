@@ -8,7 +8,10 @@ pub const PROVIDER_SLOT_BASE: u64 = 300;
 pub const REGION_ID_BASE: u32 = 0x5000;
 pub const REGION_BYTES: usize = 256 * 1024;
 pub const PATH_BYTES: usize = 1024;
-pub const DATA_MAX: usize = REGION_BYTES - PATH_BYTES;
+/// The region's last 4 KiB hold Files' answers to earlier STATs (`stat_cache`).
+pub const CACHE_BYTES: usize = 4096;
+pub const CACHE_AT: usize = REGION_BYTES - CACHE_BYTES;
+pub const DATA_MAX: usize = CACHE_AT - PATH_BYTES;
 /// The most a READ or WRITE should carry: whole 4 KiB blocks, so a long transfer never
 /// ends a request in the middle of a block (which would cost Files a read-modify-write).
 pub const IO_MAX: usize = DATA_MAX & !4095;
@@ -135,3 +138,64 @@ pub fn decode_reply(word: u64) -> Option<(u32, u8, u32)> {
 /// entry a kind byte (1 for a directory), a name length byte, an 8-byte size and the name.
 pub const LIST_HEAD: usize = 8;
 pub const ENTRY_HEAD: usize = 10;
+
+/// What Files said about paths this client asked about, kept where the client reads it
+/// without a call: the region's last `CACHE_BYTES`. Files fills an entry when it answers
+/// a STAT, and clears it, in every client's region, before any change to that file can
+/// be seen; a rename, removal or mount clears them all. Only Files writes here.
+/// Each entry is guarded by a sequence word (odd while Files writes it).
+pub mod stat_cache {
+    use core::sync::atomic::{fence, AtomicU64, Ordering};
+    pub const ENTRIES: usize = super::CACHE_BYTES / ENTRY;
+    const ENTRY: usize = 64;
+    /// Words: 0 sequence, 1 key (the path as the client spelled it), 2 file (what Files
+    /// clears it by: the file id), 3 size, 4 mtime, 5 directory, 6 file id.
+    const WORDS: usize = 7;
+    /// FNV-1a; 0 means an empty entry, so it never returns 0.
+    pub fn hash(path: &[u8]) -> u64 {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for b in path { h ^= *b as u64; h = h.wrapping_mul(0x0100_0000_01b3); }
+        h | 1
+    }
+    fn words(cache: &[u8], key: u64) -> &[AtomicU64; WORDS] {
+        let at = (key as usize % ENTRIES) * ENTRY;
+        // The region is page aligned, so every entry is 8-byte aligned.
+        unsafe { &*(cache[at..at + ENTRY].as_ptr() as *const [AtomicU64; WORDS]) }
+    }
+    /// (directory, size, mtime, id) if Files answered for this spelling and nothing
+    /// changed since.
+    pub fn read(cache: &[u8], path: &[u8]) -> Option<(bool, u64, u64, u64)> {
+        let key = hash(path);
+        let w = words(cache, key);
+        let seq = w[0].load(Ordering::Acquire);
+        if seq & 1 != 0 || w[1].load(Ordering::Relaxed) != key { return None; }
+        let (size, mtime, dir, id) = (w[3].load(Ordering::Relaxed), w[4].load(Ordering::Relaxed), w[5].load(Ordering::Relaxed), w[6].load(Ordering::Relaxed));
+        fence(Ordering::Acquire);
+        (w[0].load(Ordering::Relaxed) == seq && w[1].load(Ordering::Relaxed) == key).then_some((dir != 0, size, mtime, id))
+    }
+    fn write(w: &[AtomicU64; WORDS], values: [u64; WORDS - 1]) {
+        let seq = w[0].load(Ordering::Relaxed);
+        w[0].store(seq | 1, Ordering::Relaxed);
+        fence(Ordering::Release);
+        for (i, v) in values.iter().enumerate() { w[i + 1].store(*v, Ordering::Relaxed); }
+        w[0].store((seq | 1) + 1, Ordering::Release);
+    }
+    /// Files only: what a STAT just answered.
+    pub fn fill(cache: &[u8], path: &[u8], file: u64, dir: bool, size: u64, mtime: u64, id: u64) {
+        let key = hash(path);
+        write(words(cache, key), [key, file, size, mtime, dir as u64, id]);
+    }
+    /// Files only: forgets every entry for `file`, or every entry at all.
+    pub fn forget(cache: &[u8], file: Option<u64>) -> usize {
+        let mut cleared = 0;
+        for i in 0..ENTRIES {
+            let at = i * ENTRY;
+            let w = unsafe { &*(cache[at..at + ENTRY].as_ptr() as *const [AtomicU64; WORDS]) };
+            if w[1].load(Ordering::Relaxed) == 0 { continue; }
+            if file.is_some_and(|f| w[2].load(Ordering::Relaxed) != f) { continue; }
+            write(w, [0; WORDS - 1]);
+            cleared += 1;
+        }
+        cleared
+    }
+}

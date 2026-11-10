@@ -525,6 +525,10 @@ pub fn init(drive: u32, display: u32, usb: u32, net: u32, files: u32) {
     dma(net, sex_pdx::pci_command::DMA_REGION_ID, sex_pdx::pci_command::DMA_BYTES);
     dma(drive, 3, 512 * 1024);
     paired(files, drive, sex_pdx::SLOT_BLOCK_BUFFER, 4, sex_pdx::BLOCK_MAX_RUN, true);
+    // USB sticks: sectors move between SexUSB and Files through this region.
+    paired(files, usb, sex_pdx::usb_disk::BUFFER_SLOT, sex_pdx::usb_disk::REGION_ID, sex_pdx::usb_disk::BUFFER_BYTES, true);
+    // USB network adapters: frames move between SexUSB and SexNet through this region.
+    paired(net, usb, sex_pdx::usb_net::SLOT, sex_pdx::usb_net::REGION_ID, sex_pdx::usb_net::BYTES, true);
     // Files' caches and free-space maps are sized by the disk it finds.
     crate::service_memory::reserve(files);
     // The network service makes a flow (window, queue, TLS buffers) for each connection
