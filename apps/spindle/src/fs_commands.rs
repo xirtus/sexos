@@ -226,6 +226,7 @@ impl Client {
     pub fn expired(&mut self, now: u64, sb: &mut Scrollback) -> bool {
         if self.cmd.is_none() || !self.sent || now.saturating_sub(self.sent_at) < 15_000 { return false; }
         self.cmd = None;
+        if self.kind == w::UPDATE { unsafe { UPDATE_STATUS = Some(w::DENIED); } }
         sb.push(b"The disk did not answer. Try again.");
         sex_pdx::serial_record!("[spindle.fs.expired] kind={}", self.kind);
         true

@@ -75,6 +75,7 @@ pub(crate) fn why(e: Error) -> &'static str {
         Error::NotFound => "The boot image lacks Limine or its menu.",
         Error::BadSignature => "The update is not signed by this system's release key, or its image is not the one the signature covers.",
         Error::Older => "The update is not newer than the running system.",
+        Error::Pending => "An update already waits for a restart. Restart to try it, then update again.",
     }
 }
 

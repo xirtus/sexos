@@ -97,6 +97,12 @@ fn update_tries_the_other_slot_once() {
     let esp = format!("{}@@{}", file.display(), sys.esp.first * 512);
     assert_eq!(run(Command::new("mtype").args(["-i", &esp, "::/EFI/BOOT/LIMINE.CFG"])).as_bytes(), &menu[..]);
 
+    // Before B has had its try, another update is refused: the menu would start a slot
+    // being rewritten.
+    let idx9 = index_for(&img, 9);
+    let index9 = verify_index(&idx9, &sign(&idx9), &key().pk).unwrap();
+    assert_eq!(apply(&mut d, &sys, p.slot_a_guid, &index9, &mut MemDev(new_img.clone()), &mut |_| {}).unwrap_err(), Error::Pending);
+
     // B starts: the trial begins, and the default falls back to A until B answers.
     let started = st.on_start(Slot::B).unwrap();
     sys.write_menu(&mut d, &restate(&menu, &started).unwrap()).unwrap();

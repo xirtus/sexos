@@ -112,6 +112,10 @@ pub fn run(fs: &mut Fs<'static, crate::fs_service::Disk>, paths: &[u8], out: &mu
         text.push_str(&format!("Up to date: the newest release is version {}, and this system is version {}.\n", index.version, st.version));
         return finish(w::EXISTS, text, out);
     }
+    if st.trial == update::Trial::Pending {
+        text.push_str("Not updated. "); text.push_str(why(sex_disk::Error::Pending)); text.push('\n');
+        return finish(w::DENIED, text, out);
+    }
     if image_path.is_empty() {
         sex_pdx::serial_record!("[files.update.available] version={} from={} bytes={}", index.version, st.version, index.bytes);
         text.push_str(&format!("Version {} is available (this is version {}): {} MiB to download.\n", index.version, st.version, index.bytes >> 20));

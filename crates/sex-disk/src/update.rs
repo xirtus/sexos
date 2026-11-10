@@ -257,6 +257,9 @@ pub fn apply<D: BlockDev + ?Sized, I: BlockDev + ?Sized>(dev: &mut D, sys: &Syst
     let old = sys.read_menu(dev)?;
     let st = State::parse(&old)?;
     if index.version <= st.version { return Err(Error::Older); }
+    // The menu already starts the other slot next: overwriting it now could leave the
+    // default entry on a half-written image that fails before Files can fall back.
+    if st.trial == Trial::Pending { return Err(Error::Pending); }
     let target = running.other();
     let (extent, guid) = sys.slot(target);
     let sectors = index.bytes / SECTOR as u64;
