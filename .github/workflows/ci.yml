@@ -228,6 +228,15 @@ jobs:
       run: |
         bash scripts/build_web_jit.sh "$RUNNER_TEMP/web-jit"
         python3 scripts/program_web_jit_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-jit.img" --program "$RUNNER_TEMP/web-jit" --out "$RUNNER_TEMP/js-jit/browser"
+    - name: Retain exact boot media with the opt-in program (one core)
+      if: always() && matrix.cores == 1
+      run: |
+        if [ -f sexos-v1.0.0.iso ]; then
+          mkdir -p "$RUNNER_TEMP/js-jit"
+          cp sexos-v1.0.0.iso "$RUNNER_TEMP/js-jit/candidate.iso"
+          sha256sum sexos-v1.0.0.iso > "$RUNNER_TEMP/js-jit/inputs.sha256"
+          if [ -f "$RUNNER_TEMP/web-jit" ]; then sha256sum "$RUNNER_TEMP/web-jit" >> "$RUNNER_TEMP/js-jit/inputs.sha256"; fi
+        fi
     - name: Preserve candidate and evidence
       if: always()
       uses: actions/upload-artifact@v4
