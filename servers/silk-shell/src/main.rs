@@ -16011,10 +16011,10 @@ unsafe fn notify_history() -> impl Iterator<Item = &'static sex_pdx::notify::Tex
     let total = NOTIFY_TOTAL;
     (0..total.min(NOTIFY_HISTORY)).map(move |i| &ring[(total - 1 - i) % NOTIFY_HISTORY])
 }
-unsafe fn notify_panel(text: &[u8]) {
-    for (w, a, b) in sex_pdx::notify::chunks(text, 0, 0, 0) {
-        pdx_call(SLOT_DISPLAY, sex_pdx::notify::OP_PANEL_NOTICE, w, a, b);
-    }
+/// True when Display took every chunk.
+unsafe fn notify_panel(text: &[u8]) -> bool {
+    sex_pdx::notify::chunks(text, 0, 0, 0)
+        .all(|(w, a, b)| pdx_call(SLOT_DISPLAY, sex_pdx::notify::OP_PANEL_NOTICE, w, a, b).0 == 0)
 }
 unsafe fn notification_receive(msg: &sex_pdx::PdxMessage) -> bool {
     if msg.type_id != sex_pdx::notify::OP_NOTIFICATION { return false; }
@@ -16044,26 +16044,43 @@ unsafe fn notification_receive(msg: &sex_pdx::PdxMessage) -> bool {
 /// Ends the panel notice when its time is up.
 unsafe fn notification_poll() {
     if NOTIFY_NOTICE_UNTIL == 0 || sex_pdx::get_ticks() < NOTIFY_NOTICE_UNTIL { return; }
+    // Keep the deadline until Display takes the clear, so a busy Display
+    // never leaves a stale notice in the panel.
+    if !notify_panel(&[]) { return; }
     NOTIFY_NOTICE_UNTIL = 0;
-    notify_panel(&[]);
     sex_pdx::serial_record!("[shell.notify.hide] history={}", NOTIFY_TOTAL.min(NOTIFY_HISTORY));
 }
 /// The history as text for the Bell window, newest first, within `out`.
 unsafe fn notify_history_text(out: &mut [u8]) -> usize {
     let mut n = 0;
-    let mut put = |bytes: &[u8], n: &mut usize| for &b in bytes { if *n < out.len() { out[*n] = b; *n += 1; } };
+    let cap = out.len();
+    let mut put = |bytes: &[u8], n: &mut usize| for &b in bytes { if *n < cap { out[*n] = b; *n += 1; } };
     let total = NOTIFY_TOTAL;
     let mut count = [0u8; 3];
     let digits = { let mut v = total.min(NOTIFY_HISTORY); let mut i = 3; loop { i -= 1; count[i] = b'0' + (v % 10) as u8; v /= 10; if v == 0 || i == 0 { break i; } } };
     put(b"NOTIFICATIONS ", &mut n);
     put(&count[digits..], &mut n);
     put(b"\n", &mut n);
+    // Whole entries only; what does not fit is counted in a "+N older" line.
+    const OLDER_LINE: usize = 12;
+    let mut older = 0usize;
     for t in notify_history() {
-        put(notify_sender_name(t.sender).as_bytes(), &mut n);
+        let name = notify_sender_name(t.sender).as_bytes();
+        let body = t.body();
+        let need = name.len() + 2 + t.summary().len() + 1 + if body.is_empty() { 0 } else { body.len() + 3 };
+        if older > 0 || n + need + OLDER_LINE > cap { older += 1; continue; }
+        put(name, &mut n);
         put(b": ", &mut n);
         put(t.summary(), &mut n);
         put(b"\n", &mut n);
-        if !t.body().is_empty() { put(b"  ", &mut n); put(t.body(), &mut n); put(b"\n", &mut n); }
+        if !body.is_empty() { put(b"  ", &mut n); put(body, &mut n); put(b"\n", &mut n); }
+    }
+    if older > 0 {
+        let mut d = [0u8; 3];
+        let at = { let mut v = older; let mut i = 3; loop { i -= 1; d[i] = b'0' + (v % 10) as u8; v /= 10; if v == 0 || i == 0 { break i; } } };
+        put(b"+", &mut n);
+        put(&d[at..], &mut n);
+        put(b" older\n", &mut n);
     }
     n
 }
