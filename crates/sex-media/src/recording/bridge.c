@@ -109,6 +109,7 @@ static int sx_record_packets(struct sx_record *s) {
         if (r < 0) return r;
     }
     if (r != AVERROR(EAGAIN) && r != AVERROR_EOF) return r;
+    if (s->finished && r != AVERROR_EOF) return r; // no trailer before complete drain
     // Matroska advertises AVFMT_ALLOW_FLUSH. Keep one operation's output
     // bounded instead of accumulating an unbounded in-memory cluster.
     r = av_write_frame(s->format, NULL);

@@ -279,6 +279,40 @@ unsafe extern "C" fn seek_bytes(opaque: *mut c_void, offset: i64, whence: c_int)
     }
     match writer.output.seek(offset, whence) {
         Ok(at) => at as i64,
-        Err(_) => -22,
+        Err(error) => {
+            // Some muxers ignore a failed avio_seek. Preserve failure across
+            // their successful return instead of claiming an intact trailer.
+            writer.failure = Some(error.into());
+            -22
+        }
+    }
+}
+
+#[cfg(all(test, ffmpeg_recording))]
+mod tests {
+    use super::*;
+    #[test]
+    fn ignored_seek_failure_is_terminal_and_never_reports_end() {
+        let mut encoder = Encoder::new(Config {
+            width: 65,
+            height: 49,
+            fps: 5,
+        })
+        .unwrap();
+        while let Drain::Write(write) = encoder.output().unwrap() {
+            let (token, bytes) = (write.token, write.bytes.len());
+            encoder.acknowledge(token, bytes).unwrap();
+        }
+        let opaque = (&mut *encoder.writer as *mut Writer).cast();
+        assert_eq!(unsafe { seek_bytes(opaque, -1, 0) }, -22);
+        // Model the documented muxer boundary: avio_seek's negative callback
+        // result can be ignored and the C operation still return success.
+        assert_eq!(encoder.result(0), Err(Error::Invalid));
+        assert!(matches!(encoder.output(), Err(Error::Invalid)));
+        assert_eq!(encoder.finish(), Err(Error::Invalid));
+        assert_eq!(
+            encoder.frame(&alloc::vec![0; 65 * 49], 0),
+            Err(Error::Invalid)
+        );
     }
 }

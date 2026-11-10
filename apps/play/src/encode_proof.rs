@@ -7,9 +7,9 @@ fn drain(window: &mut Window, encoder: &mut Encoder, path: &[u8]) -> Result<bool
     loop {
         if let Some(Event::Close) = window.poll() {
             // No Files request is in flight between drain turns. End the run
-            // after best-effort temporary cleanup; do not consume Close and
-            // leave an apparently closed proof window alive.
-            let _ = files::remove(window, path);
+            // with its named partial retained; do not consume Close and leave
+            // an apparently closed proof window alive.
+            sex_pdx::serial_record!("[play.encode.cancelled] partial_retained=1");
             sex_pdx::task_finish(0);
         }
         match encoder
@@ -43,18 +43,11 @@ pub fn run(window: &mut Window, path: &[u8]) -> Result<(), &'static [u8]> {
     {
         return Err(b"Usage: run play --encode-proof proof.mkv");
     }
-    // Refuse overwrite. Existing names and failures are never removed here.
+    // Friendly early refusal; the exclusive CREATE below is the actual fence.
     match files::size(window, path) {
         Ok(_) => return Err(b"Encoder proof file already exists."),
         Err(sex_pdx::fs::NOT_FOUND) => {}
         Err(_) => return Err(b"Cannot inspect encoder proof destination."),
-    }
-    let mut temp = path.to_vec();
-    temp.extend_from_slice(b".part");
-    match files::size(window, &temp) {
-        Ok(_) => return Err(b"Encoder proof temporary file already exists."),
-        Err(sex_pdx::fs::NOT_FOUND) => {}
-        Err(_) => return Err(b"Cannot inspect encoder proof temporary file."),
     }
     let mut encoder = Encoder::new(Config {
         width: 65,
@@ -62,10 +55,14 @@ pub fn run(window: &mut Window, path: &[u8]) -> Result<(), &'static [u8]> {
         fps: 5,
     })
     .map_err(|_| &b"This build cannot create the encoder proof."[..])?;
-    files::create(window, &temp).map_err(|_| &b"Cannot create encoder proof."[..])?;
+    // CREATE atomically refuses an existing final name. No replacement rename
+    // or deletion can clobber a concurrently created file. Failed output stays
+    // named and partial; only successful sync is reported as saved.
+    files::create(window, path)
+        .map_err(|_| &b"Cannot create encoder proof; destination may exist."[..])?;
     let result = (|| {
         let mut pixels = vec![0u32; 65 * 49];
-        drain(window, &mut encoder, &temp)?;
+        drain(window, &mut encoder, path)?;
         for (frame, timestamp) in [0, 200, 600, 800].into_iter().enumerate() {
             for y in 0..49 {
                 for x in 0..65 {
@@ -79,21 +76,17 @@ pub fn run(window: &mut Window, path: &[u8]) -> Result<(), &'static [u8]> {
                 .frame(&pixels, timestamp)
                 .map_err(|_| &b"Encoder proof frame failed."[..])?;
             pixels.fill(0x00ff_00ff); // Submitted frames must own their pixels.
-            drain(window, &mut encoder, &temp)?;
+            drain(window, &mut encoder, path)?;
         }
         encoder
             .finish()
             .map_err(|_| &b"Encoder proof finish failed."[..])?;
-        if !drain(window, &mut encoder, &temp)? {
+        if !drain(window, &mut encoder, path)? {
             return Err(&b"Encoder proof did not finish."[..]);
         }
-        files::rename(window, &temp, path).map_err(|_| &b"Cannot rename encoder proof."[..])?;
         files::sync(window).map_err(|_| &b"Cannot sync encoder proof."[..])?;
         sex_pdx::serial_record!("[play.encode.proof] synthetic=1 frames={} width=65 height=49 fps=5 pts_ms=0,200,600,800 bytes={} synced=1", encoder.frames(), encoder.length());
         Ok(())
     })();
-    if result.is_err() {
-        let _ = files::remove(window, &temp);
-    }
     result
 }

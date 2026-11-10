@@ -26,9 +26,10 @@ Allocation or codec failures poison the encoder; dropping it performs no IPC or
 trailer writes. Durable sync remains the file owner's responsibility.
 
 `run play --encode-proof proof.mkv` is an explicitly synthetic diagnostic in
-Play's existing private Files folder. It refuses an existing final or `.part`
-name, writes four 65x49 pictures at PTS 0/200/600/800 ms, mutates each submitted
-input buffer, drains/finishes, renames and syncs. It is not a desktop recording.
+Play's existing private Files folder. It atomically reserves the final name
+with exclusive CREATE, writes four 65x49 pictures at PTS 0/200/600/800 ms, mutates
+each submitted input buffer, drains/finishes and syncs. Partial files remain named
+on failure/cancellation. There is no replacement rename or atomic-save claim. It is not a desktop recording.
 The guest gate recovers `/data/play/proof.mkv` read-only after stopping QEMU,
 then independently verifies codec, dimensions, every RGB byte and packet PTS.
 
@@ -68,3 +69,18 @@ Validation:
   successful completion, not an injected mid-write cancellation. Final candidate
   CI remains required. No recording performance, desktop capture integration,
   physical hardware or daily-driver claim yet.
+
+Review follow-up (after both native proofs above):
+
+- Removed the diagnostic's stale STAT → replacement RENAME race. Exclusive final
+  CREATE now fences concurrent creation; failed/closed runs retain their named
+  partial instead of removing paths that could have changed. Existing output is
+  never opened for writing when CREATE fails. The historical proof runtimes used
+  the old temporary+rename policy and are not claimed to cover this change.
+- Final codec draining must reach EOF before a trailer is accepted; EAGAIN after
+  a flush is an error. Seek callback errors are sticky because FFmpeg's AVIO seek
+  path and some Matroska trailer calls can ignore the callback's negative return.
+  A real-encoder host test injects a failing seek and a successful C-operation
+  result, requiring terminal failure across output, finish and frame calls.
+- Host round trip still passes after these review changes. Current guest round
+  trip/CI must pass before this draft can merge.

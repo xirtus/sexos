@@ -56,6 +56,10 @@ def main():
         run(["rustc", "--edition=2021", "--cfg", "ffmpeg_recording", "scripts/recording_host_smoke.rs",
              "-L", "native=" + str(out), "-l", "dylib=sexos_record_bridge",
              "-C", "link-arg=-Wl,-rpath," + str(out), "-o", str(out / "smoke")])
+        run(["rustc", "--edition=2021", "--test", "--cfg", "ffmpeg_recording", "scripts/recording_host_smoke.rs",
+             "-L", "native=" + str(out), "-l", "dylib=sexos_record_bridge",
+             "-C", "link-arg=-Wl,-rpath," + str(out), "-o", str(out / "callback-tests")])
+        run([str(out / "callback-tests"), "--test-threads=1"])
         result["smoke"] = json.loads(run([str(out / "smoke"), str(out)]))
         probe = json.loads(run(["ffprobe", "-v", "error", "-show_entries",
                                "stream=codec_name,width,height,pix_fmt,color_range,color_space,color_transfer:packet=pts_time,duration_time",
