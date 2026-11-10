@@ -132,3 +132,12 @@ Host migration and remaining geometry corrections:
 Source-bound first97d captures remain first-checkpoint evidence, not qualification
 of the later palette/panel corrections or the final merged capture integration.
 Whole-panel masks and natural Sans app-body labels are still the next topic.
+
+Further host checks passed before the capture-master refresh: the full Python
+suite1163cases, Browser view21cases, image32cases, calendar19cases with its existing
+measure/epoch controls, plus isolated-process actual panel layouts at UI scales1/2/3.
+Clipboard, cursor, activation and civil host wrappers passed with negative controls.
+The Linen delivery fixture was repaired with independent literal origins/heights,
+an explicit scale1 reset, and scale2/3 retry/readiness checks; its full gate passed
+56outbox cases and20production-wrapper cases. These are scoped host results; the
+final combined source still needs its fresh native and CI qualification.
