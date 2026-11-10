@@ -141,7 +141,7 @@ pub fn request_v14(out: &mut [u8; REQUEST_V14_BYTES], channels: &[Channel], o: &
 }
 
 /// A frame the firmware passed up, with what the receiver measured.
-pub struct Received<'a> { pub frame: &'a [u8], pub rssi: i16, pub channel: u8 }
+pub struct Received<'a> { pub frame: &'a [u8], pub rssi: i16, pub channel: u8, pub status: u32 }
 
 /// Reads an RX MPDU notification (`iwx_rx_mpdu_mq`): the descriptor, then the
 /// 802.11 frame. A padded header is joined to its body in `scratch`.
@@ -157,14 +157,19 @@ pub fn parse_mpdu<'a>(p: &'a Packet<'_>, family: Family, scratch: &'a mut [u8; 4
     let energy = |e: u8| if e == 0 { -256 } else { -(e as i16) };
     let rssi = energy(ea).max(energy(eb));
     let body = &d[desc..desc + len];
-    let frame: &[u8] = if d[3] & MPDU_PAD != 0 && body[0] & 0x0c == 0 {
-        // Management frames: a 24-byte header, then two pad bytes.
-        if len < 26 { return None; }
-        scratch[..24].copy_from_slice(&body[..24]);
-        scratch[24..len - 2].copy_from_slice(&body[26..]);
-        &scratch[..len - 2]
-    } else { body };
-    Some(Received { frame, rssi, channel })
+    // With the pad flag, two bytes sit between the header and the body
+    // (`iwx_rx_mpdu_mq` removes them for any frame type).
+    let header = match body[0] & 0x0c { 0 => Some(24), 8 => crate::ieee80211::data_header_len(body), _ => None };
+    let frame: &[u8] = match header {
+        Some(h) if d[3] & MPDU_PAD != 0 => {
+            if len < h + 2 { return None; }
+            scratch[..h].copy_from_slice(&body[..h]);
+            scratch[h..len - 2].copy_from_slice(&body[h + 2..]);
+            &scratch[..len - 2]
+        }
+        _ => body,
+    };
+    Some(Received { frame, rssi, channel, status })
 }
 
 /// One network heard, keeping the strongest signal.
