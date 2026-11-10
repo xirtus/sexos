@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! Descriptive Net-local source-slot plans for catalogued Browser incarnations.
 //! These values neither grant capabilities nor identify a task. BOOT must check
 //! actual table vacancy, construct/read back exact typed grants with registered

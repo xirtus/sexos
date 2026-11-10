@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! More tasks for a running program: workers that share its memory, its key and its
 //! authority, and run on other cores. Like `program_memory`, asking mints nothing: a
 //! worker can do only what the program could do itself, and it ends with the run.

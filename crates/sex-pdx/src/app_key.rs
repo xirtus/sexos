@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! Shell-delivered key data with a complete modifier snapshot. A decoded key
 //! does not authenticate its sender; apps check actual Shell PD/task first.
 const TAG: u64 = 1 << 16;

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! The BOOT app incarnation catalog: one table every component reads instead
 //! of hand-wiring each incarnation. It describes what BOOT already grants; it
 //! is data, never authority. Each service still holds and checks its own

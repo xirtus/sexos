@@ -62,10 +62,11 @@
 </table>
 
 <h2 id="lin-sex">🐧 Lin-Sex (Linux Compatibility)</h2>
-<p>SexOS can run unmodified Linux binaries (like <code>bash</code>, <code>gcc</code>, <code>grep</code>).</p>
+<p>SexOS is not Linux and its kernel has no Linux system calls. Programs written for POSIX are rebuilt for SexOS instead:</p>
 <ul>
-  <li>The <strong>Lin-Sex</strong> loader automatically intercepts Linux system calls and translates them into native high-speed <strong>PDX</strong> calls routed through <strong>sexc</strong> (our POSIX emulation layer).</li>
-  <li>Just execute Linux ELF binaries directly from the shell; the kernel handles the rest.</li>
+  <li>C programs link <strong>sex-libc</strong>, whose POSIX functions (files, <code>stdio</code>, folders, threads, sockets) are a library inside the program. Each call becomes a <strong>PDX</strong> call made with the program's own capabilities. There is no fork, exec or process id: a program is a run of its BOOT row.</li>
+  <li>Rust programs build against the <code>x86_64-sex-std</code> target and use the ordinary standard library the same way.</li>
+  <li>Linux drivers may run temporarily through <strong>Tuxedo</strong> in a ring-3 driver server, each with a tracked native replacement (see <code>docs/DESIGN_GUARDRAILS.md</code> and <code>docs/BRIDGE_LEDGER.md</code>).</li>
 </ul>
 
 <h2 id="desktop">🖥 Desktop Environments</h2>

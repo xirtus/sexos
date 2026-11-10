@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! Code a program writes for itself: the base a JIT engine needs. A run turns pages of
 //! its own heap into code and back, and a page is never writable and executable at once.
 //!
