@@ -508,6 +508,8 @@ pub const SLOT_BELL: u64 = 12;   // Bell attention/event service (domain 10, nam
 pub const SLOT_LINEN: u64 = 13;  // Linen app surface server
 pub const SLOT_SPINDLE: u64 = 14; // Spindle command console (domain 12)
 pub const SLOT_BLOCK:   u64 = 15; // sexdrive block/DMA service (sexfiles→sexdrive route)
+pub const SLOT_NVME_HOST: u64 = 16; // first NVMe controller BAR0 lease (sexdrive)
+pub const SLOT_NVME_HOST_2: u64 = device::EXTRA_SLOT_BASE; // second NVMe (other half of an Intel RAID 0): first extra drive slot
 pub const SLOT_BUF_LEND: u64 = 17; // kernel-allocated MemLend buffer cap (sexfiles→sexdrive, Phase A)
 pub const SLOT_NET:     u64 = 18; // sexnet network manager route
 pub const SLOT_NIC:     u64 = 19; // e1000e NIC hardware capability (sexnet driver)
@@ -1209,6 +1211,7 @@ pub mod document;
 pub mod document_buffer;
 pub mod document_snapshot;
 pub mod pci_command;
+pub mod dma_lend;
 pub mod virtio;
 pub mod device;
 pub mod network_config;
@@ -1225,6 +1228,7 @@ pub mod display_frames;
 pub mod text_batch;
 pub mod text_region;
 pub mod program_store;
+pub mod crash_log;
 pub mod program_memory;
 pub mod program_code;
 pub mod power;

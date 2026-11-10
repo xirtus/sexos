@@ -129,3 +129,13 @@ Andreas chose to merge #70 as is for the x17 R1 test and then move AML out. The 
   work, #86); `_PTS` is best-effort and races Files' flush; key 4 is shared with input, USB
   and Bell. #82 (dGPU `_OFF`) merged first; #88 moved its ACPI half into sexacpi too.
 - Kernel acpi.rs went from 804 to ~650 lines; `test_kernel_never_runs_firmware_aml` keeps it out.
+
+## Follow-up: in-kernel NIC probe removed (2026-11-10)
+
+`kernel/src/hal/pci.rs` still held a historical boot probe that drove an e1000 directly from
+the kernel (rings, DMA, and hand-built ARP, ICMP, UDP, TCP SYN, DNS and HTTP frames), gated
+behind the build-time `SEXOS_BOOT_NIC_DIAGNOSTICS=1`. That is a network stack in ring 0. It
+was removed in #88 (3,266 lines) when #78 and #86 pushed the kernel over its line budget.
+The kernel now only logs `[pci.net.device]`/`[pci.net.passive]` and leaves the NIC to SexNet.
+`SYS_NET_DIAG` (52) stays for SexNet's ABI and now always reports nothing; it can go once
+SexNet stops asking.

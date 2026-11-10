@@ -135,6 +135,13 @@ pub fn init(memmap: &'static limine::request::MemmapResponse, hhdm_offset: u64) 
     let level_4_table = unsafe { active_level_4_table(VirtAddr::new(hhdm_offset)) };
     let mut mapper = unsafe { OffsetPageTable::new(level_4_table, VirtAddr::new(hhdm_offset)) };
     let mut frame_allocator = unsafe { BootInfoFrameAllocator::new(memmap) };
+    // The last start's stop record lives in these pages: no allocator may hand them out
+    // before the crash log has read them, nor after.
+    let pstore = crate::crash_log::pstore_usable(memmap).then_some(crate::boot_frame_reservations::Range {
+        start: crate::crash_log::PSTORE_PHYS, end: crate::crash_log::PSTORE_PHYS + crate::crash_log::PSTORE_BYTES });
+    if let Some(r) = pstore {
+        frame_allocator.reserve_boot_region(r.start, r.end - r.start).expect("BOOT_PSTORE_RESERVE");
+    }
 
     // Initialize the Rust heap (linked_list_allocator). Must happen before any Box/Vec.
     // frame_allocator.next advances past the heap pages, so GLOBAL_VAS gets a valid cursor.
@@ -188,8 +195,19 @@ pub fn init(memmap: &'static limine::request::MemmapResponse, hhdm_offset: u64) 
         consumed_by_init, metadata_pages * 4096);
     let mut pending_regions = alloc::vec::Vec::new();
     for entry in entries.iter().filter(|e| e.type_ == 0) {
-        if let Some(free) = plan.region(entry.base, entry.length).expect("BOOT_MEMORY_PLAN_INVALID") {
-            pending_regions.push(free);
+        let whole = crate::boot_frame_reservations::Range { start: entry.base, end: entry.base + entry.length };
+        // The kept-stop pages split their region: neither the buddy nor the metadata
+        // may land on them, though the boot allocator counted them as it walked.
+        let pieces = match pstore {
+            Some(p) if p.overlaps(whole) => [(whole.start, p.start - whole.start, false), (p.start, p.end - p.start, true), (p.end, whole.end - p.end, false)],
+            _ => [(whole.start, whole.end - whole.start, false), (0, 0, false), (0, 0, false)],
+        };
+        for (base, length, kept) in pieces {
+            if length == 0 { continue; }
+            if kept { plan.skip(length); continue; }
+            if let Some(free) = plan.region(base, length).expect("BOOT_MEMORY_PLAN_INVALID") {
+                pending_regions.push(free);
+            }
         }
     }
     let metadata = plan.metadata.expect("BOOT_ALLOCATOR_METADATA_UNAVAILABLE");

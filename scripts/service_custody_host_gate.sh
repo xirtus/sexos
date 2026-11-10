@@ -202,6 +202,8 @@ for start,end in [('unsafe fn handle_hid_event(', '// ── Spindle text key pa
     assert 'desktop_shortcut(scancode,value)' in part
 PYKEYS
 rustc --edition=2021 --test tests/desktop_keys.rs -o "$TEST_DIR/desktop-keys"
+rustc --edition=2021 -A dead_code --test tests/wm_layouts.rs -o "$TEST_DIR/wm-layouts"
+"$TEST_DIR/wm-layouts"
 "$TEST_DIR/desktop-keys"
 python3 - "$TEST_DIR/cursor.rs" "$TEST_DIR/cursor_status.rs" <<'PYCURSOR'
 from pathlib import Path
