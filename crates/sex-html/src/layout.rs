@@ -103,7 +103,7 @@ pub fn layout(dom: &Dom, styles: &[Option<Style>], width: i32, host: &dyn Host) 
 pub fn layout_in(dom: &Dom, styles: &[Option<Style>], width: i32, viewport_height: i32, host: &dyn Host) -> Page {
     let html = dom.find("html");
     let mut l = Layout { dom, styles, host, items: Vec::new(), links: Vec::new(), anchors: Vec::new(), intrinsic: alloc::vec![None; dom.nodes.len()], link_stack: Vec::new(), boxes: Vec::new(),
-        abs: Vec::new(), positioned: Vec::new(), force_height: None, root: html, viewport: (width, viewport_height), floats: Vec::new(), float_base: 0 };
+        abs: Vec::new(), positioned: Vec::new(), force_height: None, def_h: (viewport_height > 0).then_some(viewport_height), root: html, viewport: (width, viewport_height), floats: Vec::new(), float_base: 0 };
     let body = dom.find("body");
     let mut height = 0;
     if let Some(html) = html {
@@ -183,6 +183,9 @@ struct Layout<'a> {
     positioned: Vec<(NodeId, u32)>,
     /// The border-box height the next block takes (an absolute box between top and bottom).
     force_height: Option<i32>,
+    /// The definite height percentage heights resolve against: the containing block's
+    /// content height when it has one (the viewport for the root), else none.
+    def_h: Option<i32>,
     root: Option<NodeId>,
     viewport: (i32, i32),
     /// Floats placed so far (margin boxes); those from `float_base` on belong to the
@@ -471,7 +474,9 @@ impl<'a> Layout<'a> {
         if let (Len::Auto, Some(t), Some(b)) = (s.height, t, b) { self.force_height = Some((ch - t - b - mt - mb).max(0)); }
         let (i0, l0, b0, a0) = (self.items.len(), self.links.len(), self.boxes.len(), self.anchors.len());
         let x0 = l.map_or(sx, |l| cx + l);
+        let saved_h = core::mem::replace(&mut self.def_h, Some(ch));
         let res = self.block(n, x0, 0, cw, width);
+        self.def_h = saved_h;
         self.force_height = None;
         let dx = match (l, r) { (None, Some(r)) => cx + cw - r - res.width - x0, _ => 0 };
         let dy = match (t, b) {
@@ -554,6 +559,16 @@ impl<'a> Layout<'a> {
         let clip_at = (s.overflow_clip && self.root != Some(n)).then(|| { self.items.push(Item::Rect { x: 0, y: 0, w: CLIP_BEGIN, h: 0, color: 0, radius: 0 }); self.items.len() - 1 });
         let cx = bx + s.border[LEFT] + s.padding[LEFT].or_zero(cw);
         let cy = by + s.border[TOP] + s.padding[TOP].or_zero(cw);
+        // This box's own height when it is known before its content: forced, fixed, or a
+        // percentage of a definite containing block. Its children's percentages use it.
+        let vbp = s.border[TOP] + s.border[BOTTOM] + s.padding[TOP].or_zero(cw) + s.padding[BOTTOM].or_zero(cw);
+        let own_h = match (forced_height, s.height, self.def_h) {
+            (Some(h), _, _) => Some(h - vbp),
+            (None, Len::Px(h), _) => Some(if s.box_sizing_border { h - vbp } else { h }),
+            (None, Len::Pct(_), Some(ph)) => s.height.resolve(ph).map(|h| if s.box_sizing_border { h - vbp } else { h }),
+            _ => None,
+        }.map(|h| h.max(0));
+        let saved_def_h = core::mem::replace(&mut self.def_h, own_h);
         let pushed_link = self.push_link(n);
         let (content_h, first_baseline) = match s.display {
             Display::Table => self.table(n, cx, cy, content_w),
@@ -565,11 +580,8 @@ impl<'a> Layout<'a> {
         let content_h = if bfc { self.floats[self.float_base..].iter().map(|f| f.y + f.h - cy).fold(content_h, i32::max) } else { content_h };
         if pushed_link { self.link_stack.pop(); }
         let vertical_bp = s.border[TOP] + s.border[BOTTOM] + s.padding[TOP].or_zero(cw) + s.padding[BOTTOM].or_zero(cw);
-        let mut inner_h = match (forced_height, s.height.resolve(0)) {
-            (Some(h), _) => h - vertical_bp,
-            (None, Some(h)) if !matches!(s.height, Len::Pct(_)) => if s.box_sizing_border { h - vertical_bp } else { h },
-            _ => content_h,
-        };
+        self.def_h = saved_def_h;
+        let mut inner_h = own_h.unwrap_or(content_h);
         if let Some(min) = s.min_height.resolve(0) { inner_h = inner_h.max(min); }
         inner_h = inner_h.max(0);
         let height = inner_h + s.border[TOP] + s.border[BOTTOM] + s.padding[TOP].or_zero(cw) + s.padding[BOTTOM].or_zero(cw);
