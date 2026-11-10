@@ -16,6 +16,7 @@ extern crate alloc;
 
 mod media;
 mod mse;
+mod viewport;
 
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -24,9 +25,6 @@ use sex_web::sex_html::{self, layout::Page, Host};
 use sex_js::{Document, Script};
 use sex_web::{Fonts, BAR};
 
-/// The window's content area as Shell tiles it today (a program can't learn its size yet).
-const W: i32 = 410;
-const H: i32 = 330;
 const WELCOME: &str = include_str!("welcome.html");
 /// Pages built into the program, by `about:` address. The games are plain HTML and
 /// JavaScript on Canvas 2D, so they exercise the same engine as any web page.
@@ -143,6 +141,9 @@ struct Browser {
     #[cfg(feature = "baseline-jit")]
     jit_enabled: bool,
     window: Window,
+    /// Physical pixels within this window's held grant; never swapped into an iframe.
+    surface: viewport::Surface,
+    reported_size: (usize, usize),
     fonts: Fonts,
     page: Page,
     doc: Doc,
@@ -268,6 +269,34 @@ fn message_page(title: &str, text: &str, url: &str) -> String {
 fn origin_of(url: &str) -> Option<String> { sex_fetch::Url::parse(url).ok().map(|u| u.origin()) }
 
 impl Browser {
+    /// Apply only a Window-authenticated notice that fits the actual pixel grant.
+    /// Updating the document before dispatch lets resize handlers observe the
+    /// new innerWidth/innerHeight and the new layout, including iframe boxes.
+    fn resize(&mut self, width: usize, height: usize) {
+        if self.reported_size == (width, height) { return; }
+        self.reported_size = (width, height);
+        let capacity = self.window.pixels().len();
+        let Some(surface) = viewport::Surface::checked(width, height, capacity) else {
+            sex_pdx::serial_record!("[web.viewport.rejected] w={} h={} capacity={}", width, height, capacity);
+            return;
+        };
+        if self.surface == surface { return; }
+        self.surface = surface;
+        self.view = surface.document(BAR);
+        let doc = match &mut self.doc { Doc::Plain(d) => d, Doc::Scripted(s) => s.page_mut() };
+        doc.viewport = self.view;
+        self.full_redraw = true;
+        self.press_link = None;
+        self.focus = None;
+        self.relayout();
+        if let Some(script) = self.doc.script() { let _ = script.dispatch("resize"); }
+        self.after_script(false);
+        self.timers_changed();
+        self.frame_dirty = true;
+        self.settle();
+        sex_pdx::serial_record!("[web.viewport] target={} task={} w={} h={} view_w={} view_h={} capacity={} applied=1",
+            self.window.target, self.window.task, surface.w, surface.h, self.view.0, self.view.1, capacity);
+    }
     /// Swaps frame `i`'s page with the current one.
     fn swap_frame(&mut self, i: usize) {
         use core::mem::swap;
@@ -329,8 +358,12 @@ impl Browser {
             if (b[2], b[3]) != self.frames[i].view && b[2] > 0 && b[3] > 0 {
                 self.enter(i);
                 self.view = (b[2], b[3]);
-                if let Doc::Scripted(s) = &mut self.doc { s.page_mut().viewport = (b[2], b[3]); }
+                let doc = match &mut self.doc { Doc::Plain(d) => d, Doc::Scripted(s) => s.page_mut() };
+                doc.viewport = self.view;
                 self.relayout();
+                if let Some(script) = self.doc.script() { let _ = script.dispatch("resize"); }
+                self.after_script(false);
+                self.timers_changed();
                 self.leave(i);
             }
         }
@@ -401,24 +434,20 @@ impl Browser {
         }
     }
 
-    /// Paints the frames' pages over their iframes' boxes on the window.
+    /// Paint child documents into bounded private scratch and clip them to the
+    /// current physical window, leaving the toolbar and offscreen pixels alone.
     fn paint_frames(&mut self) {
         for i in 0..self.frames.len() {
-            let [x, y, w, h] = self.frames[i].rect;
-            let top = y - self.scroll + BAR;
-            if w <= 0 || h <= 0 || top >= H || top + h <= BAR || x >= W || x + w <= 0 { continue; }
-            let mut tmp = alloc::vec![0xFFFF_FFFFu32; (w * h) as usize];
+            let Some(copy) = viewport::Frame::visible(self.surface, self.frames[i].rect,
+                self.scroll, BAR, self.window.pixels().len()) else { continue; };
+            let mut tmp = alloc::vec![0xFFFF_FFFFu32; copy.source.pixels];
             self.enter(i);
-            sex_web::paint(&self.page, &mut self.fonts, &mut sex_web::Target { pixels: &mut tmp, width: w, height: h, scroll: self.scroll, top: 0, premul: false, clip: None }, self.focus);
+            sex_web::paint(&self.page, &mut self.fonts, &mut sex_web::Target { pixels: &mut tmp,
+                width: copy.source.w, height: copy.source.h, scroll: self.scroll, top: 0,
+                premul: false, clip: None }, self.focus);
             self.leave(i);
-            let pixels = &mut self.window.pixels()[..(W * H) as usize];
-            for row in 0..h {
-                let sy = top + row;
-                if sy < BAR || sy >= H { continue; }
-                let (a, b) = (x.max(0), (x + w).min(W));
-                let src = (row * w + a - x) as usize;
-                pixels[(sy * W + a) as usize..(sy * W + b) as usize].copy_from_slice(&tmp[src..src + (b - a) as usize]);
-            }
+            let destination = &mut self.window.pixels()[..self.surface.pixels];
+            let _ = copy.copy(self.surface, destination, &tmp);
         }
     }
 
@@ -450,18 +479,19 @@ impl Browser {
     fn draw(&mut self) {
         // A page in a frame is drawn as part of the page around it.
         if self.in_frame.is_some() { self.frame_dirty = true; return; }
+        if self.surface.empty() { return; }
         let start = sex_pdx::get_ticks();
-        let pixels = &mut self.window.pixels()[..(W * H) as usize];
+        let pixels = &mut self.window.pixels()[..self.surface.pixels];
         let bar = match (&self.editing, self.status) {
             (Some(t), _) => t.clone(),
             (None, Some(s)) => alloc::format!("{}  {}", s, self.url),
             (None, None) => if self.page.title.is_empty() { self.url.clone() } else { alloc::format!("{} — {}", self.page.title, self.url) },
         };
-        sex_web::frame(&self.page, &mut self.fonts, pixels, W, H, self.scroll, self.focus, &bar, self.editing.is_some());
+        sex_web::frame(&self.page, &mut self.fonts, pixels, self.surface.w, self.surface.h, self.scroll, self.focus, &bar, self.editing.is_some());
         self.paint_frames();
-        self.window.show_pixels(W as usize, H as usize);
+        self.window.show_pixels(self.surface.w as usize, self.surface.h as usize);
         self.full_redraw = false;
-        sex_pdx::serial_record!("[web.shown] w={} h={} scroll={} focus={} items={} ticks={}", W, H, self.scroll, self.focus.map_or(-1, |f| f as i64), self.page.items.len(), sex_pdx::get_ticks() - start);
+        sex_pdx::serial_record!("[web.shown] w={} h={} scroll={} focus={} items={} ticks={}", self.surface.w, self.surface.h, self.scroll, self.focus.map_or(-1, |f| f as i64), self.page.items.len(), sex_pdx::get_ticks() - start);
     }
 
     /// Fetches `url` into `self.buf`, following redirects. Returns the final address
@@ -624,7 +654,7 @@ impl Browser {
                 self.status = Some("Loading pictures…");
                 if let Ok((_, body)) = self.fetch(&abs) {
                     let bytes = core::mem::take(&mut self.buf);
-                    self.fonts.add_picture(src, &bytes[body], (W - 16) as usize, 2000);
+                    self.fonts.add_picture(src, &bytes[body], self.view.0.saturating_sub(16).max(1) as usize, 2000);
                     self.buf = bytes;
                 }
             }
@@ -811,13 +841,13 @@ impl Browser {
         if dirty { self.relayout(); }
         if !draw || (!dirty && changed.is_empty()) { return false; }
         // Only canvases drew: put just them over the last frame when that is enough.
-        if !dirty && !self.full_redraw && self.in_frame.is_none() {
+        if !dirty && !self.full_redraw && self.in_frame.is_none() && !self.surface.empty() {
             let names: Vec<String> = changed.iter().map(|n| alloc::format!("canvas:{n}")).collect();
             let start = sex_pdx::get_ticks();
-            let pixels = &mut self.window.pixels()[..(W * H) as usize];
-            if sex_web::repaint_pictures(&self.page, &mut self.fonts, pixels, W, H, self.scroll, &names) {
-                self.window.show_pixels(W as usize, H as usize);
-                sex_pdx::serial_record!("[web.shown] w={} h={} scroll={} focus={} items={} ticks={} canvases={}", W, H, self.scroll, self.focus.map_or(-1, |f| f as i64), self.page.items.len(), sex_pdx::get_ticks() - start, names.len());
+            let pixels = &mut self.window.pixels()[..self.surface.pixels];
+            if sex_web::repaint_pictures(&self.page, &mut self.fonts, pixels, self.surface.w, self.surface.h, self.scroll, &names) {
+                self.window.show_pixels(self.surface.w as usize, self.surface.h as usize);
+                sex_pdx::serial_record!("[web.shown] w={} h={} scroll={} focus={} items={} ticks={} canvases={}", self.surface.w, self.surface.h, self.scroll, self.focus.map_or(-1, |f| f as i64), self.page.items.len(), sex_pdx::get_ticks() - start, names.len());
                 return true;
             }
         }
@@ -989,9 +1019,9 @@ impl Browser {
             self.relayout();
             self.draw();
         } else if !changed.is_empty() {
-            let pixels = &mut self.window.pixels()[..(W * H) as usize];
-            if !self.full_redraw && self.in_frame.is_none() && sex_web::repaint_pictures(&self.page, &mut self.fonts, pixels, W, H, self.scroll, &changed) {
-                self.window.show_pixels(W as usize, H as usize);
+            let pixels = &mut self.window.pixels()[..self.surface.pixels];
+            if !self.full_redraw && self.in_frame.is_none() && !self.surface.empty() && sex_web::repaint_pictures(&self.page, &mut self.fonts, pixels, self.surface.w, self.surface.h, self.scroll, &changed) {
+                self.window.show_pixels(self.surface.w as usize, self.surface.h as usize);
             } else {
                 self.draw();
             }
@@ -1431,7 +1461,7 @@ impl Browser {
         };
         self.focus = Some(next);
         let l = &self.page.links[next];
-        let view = H - BAR;
+        let view = self.view.1;
         if l.y < self.scroll || l.y + l.h > self.scroll + view { self.scroll = (l.y - view / 3).clamp(0, self.max_scroll()); }
         self.draw();
     }
@@ -1542,7 +1572,7 @@ impl Browser {
     }
 
     fn key(&mut self, key: sex_pdx::app_key::Key) {
-        let view = H - BAR;
+        let view = self.view.1.max(40);
         if self.editing.is_none() && self.page_key(key) { return; }
         if let Some(text) = self.editing.as_mut() {
             match key.code {
@@ -1590,9 +1620,13 @@ pub extern "C" fn _start() -> ! {
     let mut args = [0u8; sex_pdx::fs::ARGS_MAX];
     let given = String::from(core::str::from_utf8(files::args(&mut window, &mut args)).unwrap_or("").trim());
     let Some(fonts) = Fonts::new() else { window.show(b"Web: the fonts could not be loaded."); loop { if let Event::Close = window.next() { window.close() } } };
-    let page = sex_html::render("", W, H, &fonts as &dyn Host);
-    let doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", (W, H - BAR), clock));
-    let mut b = Browser { #[cfg(feature = "baseline-jit")] jit_enabled: !given.split_ascii_whitespace().any(|a| a == "--no-jit"), window, fonts, page, doc, sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), media_asked: false, media_loads: Vec::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None, import_map: Vec::new(), view: (W, H - BAR), parent: None, frames: Vec::new(), in_frame: None, frame_dirty: false, referrer_next: None, nav_from: None, frames_check: false };
+    let (width, height) = window.size();
+    let surface = viewport::Surface::checked(width, height, window.pixels().len())
+        .unwrap_or(viewport::Surface::EMPTY);
+    let view = surface.document(BAR);
+    let page = sex_html::render("", view.0, view.1, &fonts as &dyn Host);
+    let doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", view, clock));
+    let mut b = Browser { #[cfg(feature = "baseline-jit")] jit_enabled: !given.split_ascii_whitespace().any(|a| a == "--no-jit"), window, surface, reported_size: (width, height), fonts, page, doc, sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), media_asked: false, media_loads: Vec::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None, import_map: Vec::new(), view, parent: None, frames: Vec::new(), in_frame: None, frame_dirty: false, referrer_next: None, nav_from: None, frames_check: false };
     // Big WebGL draws spread over the cores, a band of rows each.
     let cores = sex_app::thread::cores();
     sex_gl::set_parallel(sex_app::thread::parallel, cores);
@@ -1603,6 +1637,11 @@ pub extern "C" fn _start() -> ! {
     let mut queued: Option<Event> = None;
     loop {
         b.settle();
+        // Blocking resource calls can fill the bounded held-event queue. Window
+        // still tracks the latest authenticated size even when a resize event
+        // itself was dropped; never replay older held dimensions over it.
+        let (width, height) = b.window.size();
+        b.resize(width, height);
         let event = if let Some(e) = queued.take() { e } else { match b.next_due() {
             Some(due) => {
                 let now = sex_pdx::get_ticks();
@@ -1616,7 +1655,10 @@ pub extern "C" fn _start() -> ! {
         match event {
             Event::Close => { sex_pdx::serial_record!("[web.closed] target={} task={}", b.window.target, b.window.task); b.window.close() }
             Event::Key(key) => b.key(key),
-            Event::Resize { .. } => {}
+            Event::Resize { .. } => {
+                let (width, height) = b.window.size();
+                b.resize(width, height);
+            }
             Event::Pointer(mut p) => {
                 // Only the newest of a run of moves matters: a slow page must not lag
                 // behind the mouse.
