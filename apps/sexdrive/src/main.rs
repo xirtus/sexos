@@ -16,8 +16,8 @@ use sex_pdx::{
 mod dma_transfer;
 mod completion_wait;
 mod raid;
-mod controller_ready;
 mod ahci;
+mod controller_ready;
 use dma_transfer::DmaTransfer;
 use sex_pdx::dma_pool::{DmaLease, DmaRegionPool};
 use sex_pdx::memory_region::{RegionView, QUERY_VIEW, READ, WRITE, DMA_ADDRESS};
@@ -85,7 +85,13 @@ pub unsafe extern "C" fn memmove(dest: *mut u8, src: *const u8, n: usize) -> *mu
 // Local Opcode
 pub const OP_SHELL_BIND_BUFFER: u64 = 0x14;
 
-use sex_pdx::SLOT_NVME_HOST;
+// SLOT_NVME_HOST = 16 — the drive manifest's first slot (sex_hwdb::manifest::DRIVE).
+const SLOT_NVME_HOST: u64 = 16;
+/// MSI-X/MSI vector 0 of the NVMe lease is unmasked: completions wake this task
+/// instead of it polling. Off when BOOT gave the controller no vector.
+static NVME_IRQ: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+static NVME_IRQ_WAKES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static NVME_IRQ_WAITS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 /// The first drive's serial number (Identify Controller bytes 4..24), to find
 /// it in an Intel RAID set's disk table.
 static mut NVME0_SERIAL: [u8; 20] = [0; 20];
@@ -238,11 +244,23 @@ fn nvme_wait_completion(cq_va:u64,head:u32,cid:u16,phase:u32)->completion_wait::
     const QUICK_TURNS:u32=256;
     let mut quick=0u32;
     let cqe=(cq_va as *const u8).wrapping_add(head as usize*16)as *const u32;
+    let irq=NVME_IRQ.load(Ordering::Relaxed);
     let report=completion_wait::wait(cid,phase,||unsafe{
         // Observe the device's phase/status publication before dependent data.
         let dw3=core::ptr::read_volatile(cqe.add(3));compiler_fence(Ordering::Acquire);
         (core::ptr::read_volatile(cqe.add(2)),dw3)
     },sex_pdx::get_ticks,||{
+        if irq{
+            // Interrupt-driven: sleep until the completion's MSI-X vector sets our bit.
+            // The one-tick deadline only bounds a lost interrupt; it is not a poll rate.
+            if sex_pdx::device::irq_take()!=0{
+                let n=NVME_IRQ_WAKES.fetch_add(1,Ordering::Relaxed)+1;
+                if n==1||n==64||n==4096{sex_pdx::serial_record!("[sexdrive.nvme.irq.wake] n={} sleeps={}",n,NVME_IRQ_WAITS.load(Ordering::Relaxed));}
+                return Ok(());
+            }
+            NVME_IRQ_WAITS.fetch_add(1,Ordering::Relaxed);
+            return sex_pdx::sys_wait_self_ticks(1);
+        }
         // A device usually answers within microseconds: give the core away briefly
         // first, and only then sleep whole ticks, so a command does not cost a tick.
         if quick<QUICK_TURNS{quick+=1;sex_pdx::sys_yield();Ok(())}else{sex_pdx::sys_wait_self_ticks(1)}
@@ -2616,7 +2634,10 @@ fn nvme_probe_bar() {
     let mut admin_cq_head = cq_head;
     let mut admin_cq_phase = cq_phase;
 
-    // Create IO Completion Queue (opcode 0x05), QID=1, QSIZE=15, PC=1, IEN=0, IV=0.
+    // Create IO Completion Queue (opcode 0x05), QID=1, QSIZE=15, PC=1, IV=0, and
+    // IEN=1 when BOOT programmed an MSI/MSI-X vector for this controller.
+    let irq_lease = sex_pdx::device::at_slot(SLOT_NVME_HOST).filter(|l| l.vectors > 0);
+    let cq_ien: u32 = if irq_lease.is_some() { 1 << 1 } else { 0 };
     let create_cq_cid: u16 = 0x0043;
     let cq_sqe_ptr = (asq_owned_va as *mut u8).wrapping_add((admin_sq_tail as usize) * 64) as *mut u32;
     unsafe {
@@ -2627,7 +2648,7 @@ fn nvme_probe_bar() {
         core::ptr::write_volatile(cq_sqe_ptr.add(6), (io_cq_phys & 0xFFFF_FFFF) as u32);
         core::ptr::write_volatile(cq_sqe_ptr.add(7), (io_cq_phys >> 32) as u32);
         core::ptr::write_volatile(cq_sqe_ptr.add(10), (1u32) | (15u32 << 16));
-        core::ptr::write_volatile(cq_sqe_ptr.add(11), 1u32); // PC=1, IEN=0, IV=0
+        core::ptr::write_volatile(cq_sqe_ptr.add(11), 1u32 | cq_ien); // PC=1, IEN, IV=0
     }
     serial_println!(
         "[sexdrive.nvme.ioq.create_cq.submit] cid={} opc={:#x} qid={} qsize={} prp1={:#x} cdw11={:#x}",
@@ -2836,6 +2857,18 @@ fn nvme_probe_bar() {
         sq1tdbl,
         cq1hdbl
     );
+    // Admin and I/O completion queues both use vector 0.
+    if let Some(lease) = irq_lease {
+        match sex_pdx::device::irq_unmask(SLOT_NVME_HOST, 0) {
+            Ok(()) => {
+                NVME_IRQ.store(true, Ordering::Relaxed);
+                serial_println!("[sexdrive.nvme.irq] mode={} vectors={} bit={} polling=0", lease.mode.name(), lease.vectors, lease.first_bit);
+            }
+            Err(e) => { serial_println!("[sexdrive.nvme.irq] mode={} unmask_error={:#x} polling=1", lease.mode.name(), e); }
+        }
+    } else {
+        serial_println!("[sexdrive.nvme.irq] mode=none polling=1");
+    }
     unsafe {
         NVME_IO_STATE.ready = true;
         NVME_IO_STATE.sectors = device_size;

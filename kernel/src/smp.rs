@@ -96,6 +96,7 @@ extern "C" fn limine_ap_entry(info: &MpInfo) -> ! {
     }
     crate::apic::enable_local();
     crate::apic::start_local_timer();
+    crate::hal::acpi::cpu_init_local();
     ONLINE.fetch_add(1, Ordering::Release);
     unsafe {
         // The timer wakes this core until BOOT is done; its handler defers until then.

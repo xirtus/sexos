@@ -10,6 +10,11 @@ mod dma_transfer;
 pub fn get_ticks()->u64{driver_read::mock_ticks()}
 pub fn sys_wait_self_ticks(ticks:u64)->Result<(),u64>{driver_read::mock_wait(ticks)}
 pub fn sys_yield(){}
+/// The interrupt bits a completion's MSI-X vector would set (syscall 86 double).
+pub mod device{
+    pub static PENDING:std::sync::atomic::AtomicU64=std::sync::atomic::AtomicU64::new(0);
+    pub fn irq_take()->u64{PENDING.swap(0,std::sync::atomic::Ordering::SeqCst)}
+}
 
 use dma_pool::{DmaError, DmaLease, DmaRegionPool};
 use dma_transfer::DmaTransfer;
@@ -164,6 +169,9 @@ mod driver_read {
     static mut NVME_IO_STATE: NvmeState = NvmeState { sectors: 0, ready: false,
         map_va: 0, io_sq_va: 0, io_cq_va: 0, sq1tdbl: 0, cq1hdbl: 0,
         sq_tail: 0, cq_head: 0, cq_phase: 1, next_cid: 1 };
+    static NVME_IRQ: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    static NVME_IRQ_WAKES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    static NVME_IRQ_WAITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     static mut READ_LEASE: Option<DmaLease> = None;
     static mut WRITE_LEASE: Option<DmaLease> = None;
     static mut NOW:u64=0;static mut WAITS:u32=0;static mut DELAY:u32=0;
@@ -177,7 +185,7 @@ mod driver_read {
         assert_eq!(*DOORBELLS,1,"one submitted SQ doorbell, no replay");assert_eq!(*DOORBELLS.add(1),0,"no CQ doorbell before completion");
         if !DEST_PTR.is_null(){assert!(core::slice::from_raw_parts(DEST_PTR,DEST_LEN).iter().all(|b|*b==0xa5),"no early READ handoff");}
         match CLOCK_MODE{1=>NOW=NOW.saturating_sub(1),2=>{},3=>return Err(9),4=>NOW+=completion_wait::MAX_TICKS,_=>NOW+=1}
-        if DELAY!=0&&WAITS==DELAY{core::ptr::write_volatile(CQ_PTR.add(3),COMPLETION);}
+        if DELAY!=0&&WAITS==DELAY{core::ptr::write_volatile(CQ_PTR.add(3),COMPLETION);crate::device::PENDING.store(1,Ordering::SeqCst);}
         Ok(())
     }}
     // The plain NVMe path under test: no Intel RAID volume is served here.
@@ -199,8 +207,10 @@ mod driver_read {
     fn exercise_size(write:bool,cqe:u32,expected:u64,quarantined:bool,ready:bool,size:usize){
         exercise_wait(write,cqe,expected,quarantined,ready,size,0,0,0);
     }
+    thread_local!{static IRQ_MODE:std::cell::Cell<bool>=std::cell::Cell::new(false);}
     fn exercise_wait(write:bool,cqe:u32,expected:u64,quarantined:bool,ready:bool,size:usize,delay:u32,clock_mode:u8,completion:u32){
         let _lock = LOCK.lock().unwrap();
+        NVME_IRQ.store(IRQ_MODE.with(|m|m.get()),Ordering::SeqCst);crate::device::PENDING.store(0,Ordering::SeqCst);
         let mut sq = [0u64; 128];
         let mut cq = [0u32; 64];
         let mut doorbells = [0u32; 2];
@@ -295,6 +305,11 @@ mod driver_read {
     }
     #[test]fn actual_delayed_read_and_write_complete_after_wait_without_submission_replay(){
         for write in [false,true]{exercise_wait(write,26,0,false,true,512,3,0,42|(1<<16));}
+    }
+    #[test]fn interrupt_driven_wait_sleeps_until_the_completion_bit_then_completes(){
+        IRQ_MODE.with(|m|m.set(true));
+        for write in [false,true]{exercise_wait(write,26,0,false,true,512,3,0,42|(1<<16));}
+        IRQ_MODE.with(|m|m.set(false));
     }
     #[test]fn actual_stale_phase_or_wrong_cid_never_releases_dma_on_foreign_receipt(){
         for cqe in [42,41|(1<<16)]{exercise_wait(false,cqe,BLOCK_ERR_NO_DEVICE,true,false,512,0,0,0);}
