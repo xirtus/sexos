@@ -2,11 +2,13 @@
 use super::sex_html::{dom::Dom, style::Style};
 use super::Browser;
 use alloc::string::String;
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 static STATES: [AtomicU32; 2] = [const { AtomicU32::new(0) }; 2];
 static LAYOUTS: [AtomicU32; 2] = [const { AtomicU32::new(0) }; 2];
 static SHOWS: AtomicU32 = AtomicU32::new(0);
+static LAST_LAYOUT: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
+static LAYOUT_REPORTS: [AtomicU32; 2] = [const { AtomicU32::new(0) }; 2];
 
 fn text(s: &str) -> String {
     s.chars()
@@ -26,7 +28,7 @@ fn ordinal(b: &Browser) -> usize {
 
 pub(super) fn state(b: &mut Browser, phase: &str) {
     let seq = STATES[ordinal(b)].fetch_add(1, Ordering::Relaxed) + 1;
-    if seq > 128 {
+    if seq > 128 && phase != "final" {
         return;
     }
     let view = b.view;
@@ -43,9 +45,15 @@ pub(super) fn state(b: &mut Browser, phase: &str) {
 
 pub(super) fn layout(b: &mut Browser, styles: &[Option<Style>]) {
     let seq = LAYOUTS[ordinal(b)].fetch_add(1, Ordering::Relaxed) + 1;
-    if seq > 48 {
+    let context = ordinal(b);
+    let now = sex_pdx::get_ticks();
+    if seq > 2 && now.saturating_sub(LAST_LAYOUT[context].load(Ordering::Relaxed)) < 30_000 {
         return;
     }
+    if LAYOUT_REPORTS[context].fetch_add(1, Ordering::Relaxed) >= 8 {
+        return;
+    }
+    LAST_LAYOUT[context].store(now, Ordering::Relaxed);
     state(b, "layout");
     let frame = b.in_frame.map_or(-1, |n| n as i64);
     let doc = b.doc.get();
@@ -123,4 +131,44 @@ pub(super) fn message(direction: &str, node: usize, payload: &str) {
         payload.len(),
         text(payload)
     );
+}
+
+static FINAL_REPORTS: AtomicU32 = AtomicU32::new(0);
+/// A native-only diagnostic key reads current fields without evaluating JS,
+/// recomputing CSS/layout, draining jobs or publishing pixels.
+pub(super) fn final_snapshot(b: &mut Browser) {
+    if FINAL_REPORTS.fetch_add(1, Ordering::Relaxed) >= 4 {
+        return;
+    }
+    state(b, "final");
+    raw(b.doc.get(), &b.page, -1);
+    for f in &mut b.frames {
+        sex_pdx::serial_record!(
+            "[web.private.final.frame] node={} rect={:?} view={}x{} items={} height={}",
+            f.node,
+            f.rect,
+            f.view.0,
+            f.view.1,
+            f.page.items.len(),
+            f.page.height
+        );
+        raw(f.doc.get(), &f.page, f.node as i64);
+    }
+}
+fn raw(doc: &sex_js::Document, page: &super::sex_html::layout::Page, frame: i64) {
+    sex_pdx::serial_record!("[web.private.final.dom] frame={} nodes={} dirty={} viewport={}x{} items={} width={} height={} background={:x} styles_recomputed=0 js_evaluated=0",frame,doc.dom.nodes.len(),doc.dirty as u8,doc.viewport.0,doc.viewport.1,page.items.len(),page.width,page.height,page.background);
+    let mut nout = 0;
+    for n in doc.dom.descendants(Dom::ROOT) {
+        let Some(tag) = doc.dom.tag(n) else { continue };
+        let id = doc.dom.attr(n, "id").unwrap_or("");
+        if !matches!(tag, "html" | "body" | "iframe" | "video" | "audio") && !id.contains("player")
+        {
+            continue;
+        }
+        sex_pdx::serial_record!("[web.private.final.node] frame={} node={} tag={} id={:?} class={:?} style={:?} children={} box={:?}",frame,n,tag,text(id),text(doc.dom.attr(n,"class").unwrap_or("")),text(doc.dom.attr(n,"style").unwrap_or("")),doc.dom.nodes[n].children.len(),page.boxes.get(n).copied().flatten());
+        nout += 1;
+        if nout >= 48 {
+            break;
+        }
+    }
 }
