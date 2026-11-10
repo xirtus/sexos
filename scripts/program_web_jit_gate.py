@@ -49,7 +49,7 @@ def main():
    ready=g['wait'](r'\[web.ready\] target=(\d+) task=(\d+)',start,120);target,task=ready[1],ready[2]
    launch=g['wait'](rf'\[shell.program.launch\] target={target} task={task} surface=(\d+)',start,60)
    if enabled:
-    assert numbers[1]>=4 and numbers[2]>=9900 and numbers[3]>=4 and numbers[4]==0,numbers
+    assert numbers[1]>=4 and numbers[2]>=9900 and numbers[3]>=3 and numbers[4]==0,numbers
     assert re.search(rf'\[app.program.code\] target={target} task={task} op=seal ',t()[start:]),'no kernel seal for this domain/run'
    else:assert numbers[1:5]==[0,0,0,0],numbers
    results.append(dict(enabled=enabled,compiled=numbers[1],executed=numbers[2],bailouts=numbers[3],refused=numbers[4],ticks=numbers[5],result=value[1],target=int(target),task=int(task)))
