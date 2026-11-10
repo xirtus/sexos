@@ -1,0 +1,4 @@
+UA: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36
+page	https://pigaloo.com/	200 7224 https://pigaloo.com/
+script	https://pigaloo.com/app.js	200 6806 https://pigaloo.com/app.js
+script	https://pigaloo.com/film/site.js	200 1337 https://pigaloo.com/film/site.js

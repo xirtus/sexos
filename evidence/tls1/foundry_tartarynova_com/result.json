@@ -1,0 +1,18 @@
+{
+ "site": "foundry.tartarynova.com",
+ "elapsed": 8.7,
+ "lines": [
+  "[net.program.bound] target=42 task=42",
+  "[web.cores] cores=1",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=0 ticks=12",
+  "[web.loaded] bytes_ok=1 items=5 links=1 height=222 sheets=0 images=0 fetch_ticks=111 layout_ticks=8 script_ticks=0 scripted=0",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=5 ticks=8",
+  "[web.ready] target=42 task=42"
+ ],
+ "agreed": [],
+ "http": [],
+ "loaded": true,
+ "fatal": [],
+ "guest_error": null,
+ "timed_out": false
+}

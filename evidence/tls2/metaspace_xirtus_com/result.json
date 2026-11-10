@@ -1,0 +1,44 @@
+{
+ "site": "metaspace.xirtus.com",
+ "elapsed": 10.5,
+ "lines": [
+  "[net.program.bound] target=42 task=42",
+  "[web.cores] cores=1",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=0 ticks=8",
+  "[net.tls.agreed] flow=0 version=TLSv1_3 suite=TLS13_AES_128_GCM_SHA256 group=Some(X25519)",
+  "[net.receive.stats] bytes=4091 calls=20 empty=19 ticks=421 flow=0 reused=0 kept=1",
+  "[web.http] method=GET status=200 bytes=8385 encoding=gzip chunked=1 cookies=0 ticks=427 url=https://metaspace.xirtus.com/",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=0 ticks=2",
+  "[net.receive.stats] bytes=7553 calls=19 empty=17 ticks=101 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=24037 encoding=gzip chunked=1 cookies=0 ticks=101 url=https://metaspace.xirtus.com/xmetaspace/metaspace/ui/experience.css",
+  "[web.script] engine_ticks=977 memory=4194304",
+  "[web.console] level=2 SyntaxError: Unexpected token '{'",
+  "[web.console] level=2     at https://metaspace.xirtus.com/#script2:12:1",
+  "[web.loaded] bytes_ok=1 items=23 links=0 height=0 sheets=1 images=1 fetch_ticks=536 layout_ticks=23 script_ticks=990 scripted=1",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=23 ticks=33",
+  "[web.ready] target=42 task=42"
+ ],
+ "agreed": [
+  [
+   "TLSv1_3",
+   "TLS13_AES_128_GCM_SHA256",
+   "Some(X25519)"
+  ]
+ ],
+ "http": [
+  [
+   "200",
+   "8385",
+   "https://metaspace.xirtus.com/"
+  ],
+  [
+   "200",
+   "24037",
+   "https://metaspace.xirtus.com/xmetaspace/metaspace/ui/experience.css"
+  ]
+ ],
+ "loaded": true,
+ "fatal": [],
+ "guest_error": null,
+ "timed_out": false
+}

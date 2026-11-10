@@ -1,0 +1,10 @@
+UA: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36
+page	https://www.youtube.com/	200 259686 https://www.youtube.com/
+script	https://www.youtube.com/s/desktop/a2c91c03/jsbin/web-animations-next-lite.min.vflset/web-animations-next-lite.min.js	200 50867 https://www.youtube.com/s/desktop/a2c91c03/jsbin/web-animations-next-lite.min.vflset/web-animations-next-lite.min.js
+script	https://www.youtube.com/s/desktop/a2c91c03/jsbin/webcomponents-sd.vflset/webcomponents-sd.js	200 24004 https://www.youtube.com/s/desktop/a2c91c03/jsbin/webcomponents-sd.vflset/webcomponents-sd.js
+script	https://www.youtube.com/s/desktop/a2c91c03/jsbin/intersection-observer.min.vflset/intersection-observer.min.js	200 5559 https://www.youtube.com/s/desktop/a2c91c03/jsbin/intersection-observer.min.vflset/intersection-observer.min.js
+script	https://www.youtube.com/s/desktop/a2c91c03/jsbin/scheduler.vflset/scheduler.js	200 3244 https://www.youtube.com/s/desktop/a2c91c03/jsbin/scheduler.vflset/scheduler.js
+script	https://www.youtube.com/s/desktop/a2c91c03/jsbin/www-i18n-constants-en_US.vflset/www-i18n-constants.js	200 1799 https://www.youtube.com/s/desktop/a2c91c03/jsbin/www-i18n-constants-en_US.vflset/www-i18n-constants.js
+script	https://www.youtube.com/s/desktop/a2c91c03/jsbin/spf.vflset/spf.js	200 38482 https://www.youtube.com/s/desktop/a2c91c03/jsbin/spf.vflset/spf.js
+script	https://www.youtube.com/s/desktop/a2c91c03/jsbin/network.vflset/network.js	200 14351 https://www.youtube.com/s/desktop/a2c91c03/jsbin/network.vflset/network.js
+script	https://www.youtube.com/s/_/ytmainappweb/_/js/k=ytmainappweb.kevlar_base.en_US.f21BUoQNmBY.2021.O/am=AAAAAAEAAAQAUgI/d=1/rs=AGKMywE0zGJUhhNqBbtUggym7kvDbPAYlQ/m=kevlar_base_module,kevlar_main_module,kevlar_base_sync_mod_chunk	200 2380622 https://www.youtube.com/s/_/ytmainappweb/_/js/k=ytmainappweb.kevlar_base.en_US.f21BUoQNmBY.2021.O/am=AAAAAAEAAAQAUgI/d=1/rs=AGKMywE0zGJUhhNqBbtUggym7kvDbPAYlQ/m=kevlar_base_module,kevlar_main_module,kevlar_base_sync_mod_chunk

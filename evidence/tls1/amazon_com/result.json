@@ -1,0 +1,47 @@
+{
+ "site": "amazon.com",
+ "elapsed": 8.1,
+ "lines": [
+  "[net.program.bound] target=42 task=42",
+  "[web.cores] cores=1",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=0 ticks=10",
+  "[net.tls.agreed] flow=0 version=TLSv1_3 suite=TLS13_AES_256_GCM_SHA384 group=Some(X25519)",
+  "[net.receive.stats] bytes=422 calls=20 empty=19 ticks=451 flow=0 reused=0 kept=1",
+  "[web.http] method=GET status=301 bytes=163 encoding=none chunked=0 cookies=0 ticks=453 url=https://amazon.com/",
+  "[net.open.flows] made=2",
+  "[net.tls.agreed] flow=1 version=TLSv1_3 suite=TLS13_AES_128_GCM_SHA256 group=Some(X25519)",
+  "[net.receive.stats] bytes=620 calls=3 empty=2 ticks=129 flow=1 reused=0 kept=1",
+  "[web.http] method=GET status=202 bytes=0 encoding=none chunked=0 cookies=0 ticks=129 url=https://www.amazon.com/",
+  "[web.loaded] bytes_ok=1 items=0 links=0 height=16 sheets=0 images=0 fetch_ticks=586 layout_ticks=2 script_ticks=0 scripted=0",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=0 ticks=4",
+  "[web.ready] target=42 task=42"
+ ],
+ "agreed": [
+  [
+   "TLSv1_3",
+   "TLS13_AES_256_GCM_SHA384",
+   "Some(X25519)"
+  ],
+  [
+   "TLSv1_3",
+   "TLS13_AES_128_GCM_SHA256",
+   "Some(X25519)"
+  ]
+ ],
+ "http": [
+  [
+   "301",
+   "163",
+   "https://amazon.com/"
+  ],
+  [
+   "202",
+   "0",
+   "https://www.amazon.com/"
+  ]
+ ],
+ "loaded": true,
+ "fatal": [],
+ "guest_error": null,
+ "timed_out": false
+}

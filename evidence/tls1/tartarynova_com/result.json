@@ -1,0 +1,211 @@
+{
+ "site": "tartarynova.com",
+ "elapsed": 16.0,
+ "lines": [
+  "[net.program.bound] target=42 task=42",
+  "[web.cores] cores=1",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=0 ticks=12",
+  "[net.tls.agreed] flow=0 version=TLSv1_3 suite=TLS13_AES_128_GCM_SHA256 group=Some(X25519)",
+  "[net.receive.stats] bytes=5645 calls=46 empty=45 ticks=719 flow=0 reused=0 kept=1",
+  "[web.http] method=GET status=200 bytes=16081 encoding=gzip chunked=0 cookies=0 ticks=723 url=https://tartarynova.com/",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=0 ticks=1",
+  "[net.receive.stats] bytes=2102 calls=84 empty=83 ticks=411 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=5122 encoding=gzip chunked=0 cookies=0 ticks=411 url=https://tartarynova.com/film/film.css",
+  "[net.receive.stats] bytes=844 calls=69 empty=68 ticks=86 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=872 encoding=gzip chunked=0 cookies=0 ticks=87 url=https://tartarynova.com/film/site.css",
+  "[net.receive.stats] bytes=4837 calls=70 empty=69 ticks=92 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=19273 encoding=gzip chunked=0 cookies=0 ticks=93 url=https://tartarynova.com/_astro/index.BsmATREL.css",
+  "[net.receive.stats] bytes=378688 calls=497 empty=473 ticks=674 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=378298 encoding=none chunked=0 cookies=0 ticks=674 url=https://tartarynova.com/img/bg_1.webp",
+  "[net.receive.stats] bytes=936074 calls=335 empty=277 ticks=516 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=935684 encoding=none chunked=0 cookies=0 ticks=517 url=https://tartarynova.com/img/project-3.webp",
+  "[net.receive.stats] bytes=106850 calls=142 empty=135 ticks=185 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=106460 encoding=none chunked=0 cookies=0 ticks=185 url=https://tartarynova.com/img/project-1.webp",
+  "[net.receive.stats] bytes=146372 calls=127 empty=118 ticks=379 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=145982 encoding=none chunked=0 cookies=0 ticks=379 url=https://tartarynova.com/img/image_2.webp",
+  "[net.receive.stats] bytes=212234 calls=155 empty=142 ticks=240 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=211844 encoding=none chunked=0 cookies=0 ticks=241 url=https://tartarynova.com/img/project-4.webp",
+  "[net.receive.stats] bytes=135258 calls=144 empty=135 ticks=202 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=134868 encoding=none chunked=0 cookies=0 ticks=202 url=https://tartarynova.com/img/about.webp",
+  "[net.receive.stats] bytes=57246 calls=73 empty=69 ticks=101 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=56858 encoding=none chunked=0 cookies=0 ticks=101 url=https://tartarynova.com/img/image_1.webp",
+  "[net.receive.stats] bytes=66659 calls=142 empty=137 ticks=183 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=66270 encoding=none chunked=0 cookies=0 ticks=183 url=https://tartarynova.com/img/image_3.webp",
+  "[net.receive.stats] bytes=32340 calls=72 empty=70 ticks=98 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=31952 encoding=none chunked=0 cookies=0 ticks=99 url=https://tartarynova.com/img/project-5.webp",
+  "[net.receive.stats] bytes=127602 calls=104 empty=96 ticks=249 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=127212 encoding=none chunked=0 cookies=0 ticks=249 url=https://tartarynova.com/img/about-1.webp",
+  "[net.open.flows] made=2",
+  "[net.tls.agreed] flow=1 version=TLSv1_3 suite=TLS13_AES_128_GCM_SHA256 group=Some(X25519)",
+  "[net.receive.stats] bytes=22924 calls=59 empty=57 ticks=162 flow=1 reused=0 kept=1",
+  "[web.http] method=GET status=200 bytes=22270 encoding=none chunked=0 cookies=0 ticks=162 url=https://i.ytimg.com/vi/5ajIQqbMsg4/mqdefault.jpg",
+  "[net.receive.stats] bytes=24106 calls=60 empty=55 ticks=66 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=23460 encoding=none chunked=0 cookies=0 ticks=67 url=https://i.ytimg.com/vi/onMFUHV09nA/mqdefault.jpg",
+  "[net.receive.stats] bytes=16627 calls=41 empty=40 ticks=68 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=15981 encoding=none chunked=0 cookies=0 ticks=68 url=https://i.ytimg.com/vi/oXnNHzDYOW0/mqdefault.jpg",
+  "[net.receive.stats] bytes=15846 calls=68 empty=67 ticks=87 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=15200 encoding=none chunked=0 cookies=0 ticks=87 url=https://i.ytimg.com/vi/DZ3U02V4GSg/mqdefault.jpg",
+  "[net.receive.stats] bytes=18270 calls=70 empty=67 ticks=78 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=17624 encoding=none chunked=0 cookies=0 ticks=79 url=https://i.ytimg.com/vi/wvJfooFEpZo/mqdefault.jpg",
+  "[net.receive.stats] bytes=14791 calls=72 empty=70 ticks=87 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=14145 encoding=none chunked=0 cookies=0 ticks=88 url=https://i.ytimg.com/vi/WflZzg4dHzI/mqdefault.jpg",
+  "[net.receive.stats] bytes=206688 calls=242 empty=228 ticks=346 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=206299 encoding=none chunked=0 cookies=0 ticks=346 url=https://tartarynova.com/img/qrbtc.png",
+  "[net.receive.stats] bytes=4936 calls=68 empty=67 ticks=87 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=12645 encoding=gzip chunked=0 cookies=0 ticks=88 url=https://tartarynova.com/app.js",
+  "[net.receive.stats] bytes=1787 calls=162 empty=161 ticks=585 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=3027 encoding=gzip chunked=0 cookies=0 ticks=586 url=https://tartarynova.com/film/site.js",
+  "[web.script] engine_ticks=1012 memory=4194304",
+  "[web.console] level=2 ReferenceError: IntersectionObserver is not defined",
+  "[web.console] level=2     at artLayers (https://tartarynova.com/app.js:206:18)",
+  "[web.console] level=2     at <eval> (https://tartarynova.com/app.js:210:1)",
+  "[web.console] level=2 SyntaxError: Unexpected token '{'",
+  "[web.console] level=2     at https://tartarynova.com/film/site.js:1:1",
+  "[web.loaded] bytes_ok=1 items=608 links=110 height=161969 sheets=3 images=7 fetch_ticks=5804 layout_ticks=41 script_ticks=1135 scripted=1",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=608 ticks=13",
+  "[web.ready] target=42 task=42",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=608 ticks=12",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=608 ticks=12",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=608 ticks=12",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=608 ticks=12",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=608 ticks=14",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=608 ticks=12",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=608 ticks=12",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=608 ticks=12",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=608 ticks=12",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=608 ticks=12"
+ ],
+ "agreed": [
+  [
+   "TLSv1_3",
+   "TLS13_AES_128_GCM_SHA256",
+   "Some(X25519)"
+  ],
+  [
+   "TLSv1_3",
+   "TLS13_AES_128_GCM_SHA256",
+   "Some(X25519)"
+  ]
+ ],
+ "http": [
+  [
+   "200",
+   "16081",
+   "https://tartarynova.com/"
+  ],
+  [
+   "200",
+   "5122",
+   "https://tartarynova.com/film/film.css"
+  ],
+  [
+   "200",
+   "872",
+   "https://tartarynova.com/film/site.css"
+  ],
+  [
+   "200",
+   "19273",
+   "https://tartarynova.com/_astro/index.BsmATREL.css"
+  ],
+  [
+   "200",
+   "378298",
+   "https://tartarynova.com/img/bg_1.webp"
+  ],
+  [
+   "200",
+   "935684",
+   "https://tartarynova.com/img/project-3.webp"
+  ],
+  [
+   "200",
+   "106460",
+   "https://tartarynova.com/img/project-1.webp"
+  ],
+  [
+   "200",
+   "145982",
+   "https://tartarynova.com/img/image_2.webp"
+  ],
+  [
+   "200",
+   "211844",
+   "https://tartarynova.com/img/project-4.webp"
+  ],
+  [
+   "200",
+   "134868",
+   "https://tartarynova.com/img/about.webp"
+  ],
+  [
+   "200",
+   "56858",
+   "https://tartarynova.com/img/image_1.webp"
+  ],
+  [
+   "200",
+   "66270",
+   "https://tartarynova.com/img/image_3.webp"
+  ],
+  [
+   "200",
+   "31952",
+   "https://tartarynova.com/img/project-5.webp"
+  ],
+  [
+   "200",
+   "127212",
+   "https://tartarynova.com/img/about-1.webp"
+  ],
+  [
+   "200",
+   "22270",
+   "https://i.ytimg.com/vi/5ajIQqbMsg4/mqdefault.jpg"
+  ],
+  [
+   "200",
+   "23460",
+   "https://i.ytimg.com/vi/onMFUHV09nA/mqdefault.jpg"
+  ],
+  [
+   "200",
+   "15981",
+   "https://i.ytimg.com/vi/oXnNHzDYOW0/mqdefault.jpg"
+  ],
+  [
+   "200",
+   "15200",
+   "https://i.ytimg.com/vi/DZ3U02V4GSg/mqdefault.jpg"
+  ],
+  [
+   "200",
+   "17624",
+   "https://i.ytimg.com/vi/wvJfooFEpZo/mqdefault.jpg"
+  ],
+  [
+   "200",
+   "14145",
+   "https://i.ytimg.com/vi/WflZzg4dHzI/mqdefault.jpg"
+  ],
+  [
+   "200",
+   "206299",
+   "https://tartarynova.com/img/qrbtc.png"
+  ],
+  [
+   "200",
+   "12645",
+   "https://tartarynova.com/app.js"
+  ],
+  [
+   "200",
+   "3027",
+   "https://tartarynova.com/film/site.js"
+  ]
+ ],
+ "loaded": true,
+ "fatal": [],
+ "guest_error": null,
+ "timed_out": false
+}

@@ -1,0 +1,126 @@
+{
+ "site": "wikipedia.org",
+ "elapsed": 11.5,
+ "lines": [
+  "[net.program.bound] target=42 task=42",
+  "[web.cores] cores=1",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=0 ticks=10",
+  "[net.tls.agreed] flow=0 version=TLSv1_3 suite=TLS13_AES_128_GCM_SHA256 group=Some(X25519)",
+  "[net.receive.stats] bytes=1750 calls=5 empty=4 ticks=318 flow=0 reused=0 kept=1",
+  "[web.http] method=GET status=301 bytes=274 encoding=none chunked=0 cookies=5 ticks=322 url=https://wikipedia.org/",
+  "[net.open.flows] made=2",
+  "[net.tls.agreed] flow=1 version=TLSv1_3 suite=TLS13_AES_128_GCM_SHA256 group=Some(X25519)",
+  "[net.receive.stats] bytes=30204 calls=8 empty=6 ticks=276 flow=1 reused=0 kept=1",
+  "[web.http] method=GET status=200 bytes=122421 encoding=gzip chunked=0 cookies=7 ticks=282 url=https://www.wikipedia.org/",
+  "[net.receive.stats] bytes=16812 calls=5 empty=4 ticks=36 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=15829 encoding=none chunked=0 cookies=7 ticks=36 url=https://www.wikipedia.org/portal/wikipedia.org/assets/img/Wikipedia-logo-v2.png",
+  "[net.open.flows] made=3",
+  "[net.tls.agreed] flow=2 version=TLSv1_3 suite=TLS13_AES_128_GCM_SHA256 group=Some(X25519)",
+  "[net.receive.stats] bytes=25301 calls=49 empty=47 ticks=267 flow=2 reused=0 kept=1",
+  "[web.http] method=GET status=200 bytes=23190 encoding=none chunked=0 cookies=8 ticks=268 url=https://upload.wikimedia.org/wikipedia/donate/4/43/Badge-one-time.png",
+  "[net.receive.stats] bytes=29460 calls=24 empty=22 ticks=31 flow=2 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=27349 encoding=none chunked=0 cookies=8 ticks=32 url=https://upload.wikimedia.org/wikipedia/donate/4/4f/Badge-monthly.png",
+  "[net.receive.stats] bytes=19072 calls=28 empty=27 ticks=33 flow=2 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=17153 encoding=none chunked=0 cookies=8 ticks=34 url=https://upload.wikimedia.org/wikipedia/donate/d/de/Badge-workplace-giving.png",
+  "[net.receive.stats] bytes=25254 calls=25 empty=23 ticks=31 flow=2 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=23333 encoding=none chunked=0 cookies=8 ticks=32 url=https://upload.wikimedia.org/wikipedia/donate/7/73/Badge-daf.png",
+  "[net.receive.stats] bytes=15316 calls=23 empty=22 ticks=27 flow=2 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=13396 encoding=none chunked=0 cookies=8 ticks=27 url=https://upload.wikimedia.org/wikipedia/donate/6/6a/Badge-cga.png",
+  "[net.receive.stats] bytes=4151 calls=17 empty=16 ticks=25 flow=2 reused=1 kept=1",
+  "[web.http] method=GET status=429 bytes=3223 encoding=none chunked=0 cookies=8 ticks=25 url=https://upload.wikimedia.org/wikipedia/donate/8/81/Badge-endowment.png",
+  "[net.receive.stats] bytes=10280 calls=12 empty=11 ticks=26 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=27735 encoding=gzip chunked=0 cookies=8 ticks=27 url=https://www.wikipedia.org/portal/wikipedia.org/assets/js/index-8dfbdb3a7a.js",
+  "[net.receive.stats] bytes=1568 calls=20 empty=19 ticks=22 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=580 encoding=none chunked=0 cookies=8 ticks=22 url=https://www.wikipedia.org/portal/wikipedia.org/assets/js/gt-ie9-507b16b6be.js",
+  "[web.script] engine_ticks=1004 memory=4194304",
+  "[web.console] level=2 ReferenceError: Image is not defined",
+  "[web.console] level=2     at <anonymous> (https://www.wikipedia.org/portal/wikipedia.org/assets/js/index-8dfbdb3a7a.js:1:19192)",
+  "[web.console] level=2     at t (https://www.wikipedia.org/portal/wikipedia.org/assets/js/index-8dfbdb3a7a.js:1:125)",
+  "[web.console] level=2     at call (native)",
+  "[web.console] level=2     at invoke (prelude.js:147:54)",
+  "[web.console] level=2     at _dispatch (prelude.js:135:16)",
+  "[web.console] level=2     at dispatchEvent (prelude.js:124:29)",
+  "[web.console] level=2     at dispatch (prelude.js:2336:36)",
+  "[web.loaded] bytes_ok=1 items=106 links=478 height=9001 sheets=0 images=6 fetch_ticks=1157 layout_ticks=75 script_ticks=1939 scripted=1",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=106 ticks=11",
+  "[web.ready] target=42 task=42"
+ ],
+ "agreed": [
+  [
+   "TLSv1_3",
+   "TLS13_AES_128_GCM_SHA256",
+   "Some(X25519)"
+  ],
+  [
+   "TLSv1_3",
+   "TLS13_AES_128_GCM_SHA256",
+   "Some(X25519)"
+  ],
+  [
+   "TLSv1_3",
+   "TLS13_AES_128_GCM_SHA256",
+   "Some(X25519)"
+  ]
+ ],
+ "http": [
+  [
+   "301",
+   "274",
+   "https://wikipedia.org/"
+  ],
+  [
+   "200",
+   "122421",
+   "https://www.wikipedia.org/"
+  ],
+  [
+   "200",
+   "15829",
+   "https://www.wikipedia.org/portal/wikipedia.org/assets/img/Wikipedia-logo-v2.png"
+  ],
+  [
+   "200",
+   "23190",
+   "https://upload.wikimedia.org/wikipedia/donate/4/43/Badge-one-time.png"
+  ],
+  [
+   "200",
+   "27349",
+   "https://upload.wikimedia.org/wikipedia/donate/4/4f/Badge-monthly.png"
+  ],
+  [
+   "200",
+   "17153",
+   "https://upload.wikimedia.org/wikipedia/donate/d/de/Badge-workplace-giving.png"
+  ],
+  [
+   "200",
+   "23333",
+   "https://upload.wikimedia.org/wikipedia/donate/7/73/Badge-daf.png"
+  ],
+  [
+   "200",
+   "13396",
+   "https://upload.wikimedia.org/wikipedia/donate/6/6a/Badge-cga.png"
+  ],
+  [
+   "429",
+   "3223",
+   "https://upload.wikimedia.org/wikipedia/donate/8/81/Badge-endowment.png"
+  ],
+  [
+   "200",
+   "27735",
+   "https://www.wikipedia.org/portal/wikipedia.org/assets/js/index-8dfbdb3a7a.js"
+  ],
+  [
+   "200",
+   "580",
+   "https://www.wikipedia.org/portal/wikipedia.org/assets/js/gt-ie9-507b16b6be.js"
+  ]
+ ],
+ "loaded": true,
+ "fatal": [],
+ "guest_error": null,
+ "timed_out": false
+}

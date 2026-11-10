@@ -1,0 +1,295 @@
+{
+ "site": "github.com",
+ "elapsed": 14.8,
+ "lines": [
+  "[net.program.bound] target=42 task=42",
+  "[web.cores] cores=1",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=0 ticks=13",
+  "[net.tls.agreed] flow=0 version=TLSv1_3 suite=TLS13_AES_128_GCM_SHA256 group=Some(X25519)",
+  "[net.receive.stats] bytes=97901 calls=31 empty=24 ticks=389 flow=0 reused=0 kept=1",
+  "[web.http] method=GET status=200 bytes=524959 encoding=gzip chunked=1 cookies=3 ticks=413 url=https://github.com/",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=0 ticks=2",
+  "[net.open.flows] made=2",
+  "[net.tls.agreed] flow=1 version=TLSv1_3 suite=TLS13_AES_128_GCM_SHA256 group=Some(X25519)",
+  "[net.receive.stats] bytes=15263 calls=5 empty=4 ticks=180 flow=1 reused=0 kept=1",
+  "[web.http] method=GET status=200 bytes=87305 encoding=gzip chunked=0 cookies=3 ticks=182 url=https://github.githubassets.com/assets/light-0011b1fed09cb294.css",
+  "[net.receive.stats] bytes=15438 calls=19 empty=18 ticks=100 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=87975 encoding=gzip chunked=0 cookies=3 ticks=102 url=https://github.githubassets.com/assets/light_high_contrast-267ab2e12d3b7ade.css",
+  "[net.receive.stats] bytes=15337 calls=4 empty=3 ticks=39 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=87137 encoding=gzip chunked=0 cookies=3 ticks=41 url=https://github.githubassets.com/assets/dark-37b5e41810563d82.css",
+  "[net.receive.stats] bytes=15485 calls=5 empty=4 ticks=38 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=87869 encoding=gzip chunked=0 cookies=3 ticks=40 url=https://github.githubassets.com/assets/dark_high_contrast-d69295870cb5f203.css",
+  "[net.receive.stats] bytes=3087 calls=4 empty=3 ticks=25 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=11009 encoding=gzip chunked=0 cookies=3 ticks=25 url=https://github.githubassets.com/assets/primer-primitives-bd624c4ec96b42e9.css",
+  "[net.receive.stats] bytes=51913 calls=9 empty=5 ticks=51 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=411517 encoding=gzip chunked=0 cookies=3 ticks=59 url=https://github.githubassets.com/assets/primer-5e94d7f3a59af8da.css",
+  "[net.receive.stats] bytes=44214 calls=6 empty=3 ticks=48 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=288939 encoding=gzip chunked=0 cookies=3 ticks=52 url=https://github.githubassets.com/assets/global-159fb17d033cf67d.css",
+  "[net.receive.stats] bytes=24344 calls=6 empty=4 ticks=43 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=126766 encoding=gzip chunked=0 cookies=3 ticks=45 url=https://github.githubassets.com/assets/github-d4a7053a1b3b1731.css",
+  "[net.receive.stats] bytes=27474 calls=6 empty=4 ticks=33 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=26674 encoding=none chunked=0 cookies=3 ticks=33 url=https://github.githubassets.com/assets/platform-4ce65ae0bf273ce2.png",
+  "[net.receive.stats] bytes=26795 calls=17 empty=15 ticks=91 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=25995 encoding=none chunked=0 cookies=3 ticks=93 url=https://github.githubassets.com/assets/platform-dark-ac89fbf373737ed3.png",
+  "[net.receive.stats] bytes=34576 calls=9 empty=5 ticks=53 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=33776 encoding=none chunked=0 cookies=3 ticks=53 url=https://github.githubassets.com/assets/copilot-e2b89335a66dba00.png",
+  "[net.receive.stats] bytes=26046 calls=6 empty=4 ticks=35 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=25246 encoding=none chunked=0 cookies=3 ticks=35 url=https://github.githubassets.com/assets/copilot-dark-2b28403b6080e898.png",
+  "[net.receive.stats] bytes=57092 calls=9 empty=5 ticks=45 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=56292 encoding=none chunked=0 cookies=3 ticks=46 url=https://github.githubassets.com/assets/changelog-fd687bff072883b0.png",
+  "[net.receive.stats] bytes=63651 calls=23 empty=19 ticks=36 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=62851 encoding=none chunked=0 cookies=3 ticks=37 url=https://github.githubassets.com/assets/changelog-dark-b1c25ae971bd641b.png",
+  "[net.receive.stats] bytes=30504 calls=22 empty=19 ticks=30 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=29704 encoding=none chunked=0 cookies=3 ticks=30 url=https://github.githubassets.com/assets/universe-a98cd54821b27569.png",
+  "[net.open.flows] made=3",
+  "[net.tls.agreed] flow=2 version=TLSv1_3 suite=TLS13_AES_128_GCM_SHA256 group=Some(X25519)",
+  "[net.receive.stats] bytes=16393 calls=12 empty=11 ticks=156 flow=2 reused=0 kept=1",
+  "[web.http] method=GET status=200 bytes=15850 encoding=none chunked=0 cookies=3 ticks=156 url=https://images.ctfassets.net/8aevphvgewt8/home2026-9ccb55275227c79b036824fc/b44aaf40a80735ae613a6db469af23c1/ducky-shadows.png",
+  "[net.receive.stats] bytes=375676 calls=45 empty=22 ticks=105 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=374873 encoding=none chunked=0 cookies=3 ticks=105 url=https://github.githubassets.com/assets/features-platform-1-light-ee1b034c37d9c285.jpg",
+  "[net.receive.stats] bytes=290899 calls=38 empty=20 ticks=83 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=290096 encoding=none chunked=0 cookies=3 ticks=84 url=https://github.githubassets.com/assets/features-platform-2-light-32ce78d3f32a1c26.jpg",
+  "[net.receive.stats] bytes=148842 calls=32 empty=22 ticks=55 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=148040 encoding=none chunked=0 cookies=3 ticks=56 url=https://github.githubassets.com/assets/features-ways-1-light-7f965c4693916b6d.jpg",
+  "[net.receive.stats] bytes=165082 calls=31 empty=22 ticks=57 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=164280 encoding=none chunked=0 cookies=3 ticks=59 url=https://github.githubassets.com/assets/features-ways-2-light-d0c5094831620c40.jpg",
+  "[net.receive.stats] bytes=190079 calls=33 empty=21 ticks=84 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=189278 encoding=none chunked=0 cookies=3 ticks=84 url=https://github.githubassets.com/assets/features-ways-3-light-324179c1f86a8a34.jpg",
+  "[net.receive.stats] bytes=164200 calls=93 empty=82 ticks=127 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=163399 encoding=none chunked=0 cookies=3 ticks=128 url=https://github.githubassets.com/assets/features-ways-4-light-4b636f59d2883991.jpg",
+  "[net.receive.stats] bytes=104490 calls=30 empty=22 ticks=49 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=103688 encoding=none chunked=0 cookies=3 ticks=50 url=https://github.githubassets.com/assets/features-ways-5-light-4af62cd834e104af.jpg",
+  "[net.receive.stats] bytes=8169 calls=12 empty=11 ticks=17 flow=2 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=7626 encoding=none chunked=0 cookies=3 ticks=18 url=https://images.ctfassets.net/8aevphvgewt8/home2026-f899e02bc1ad1a5df31a307f/1a39c6592017b71dd0017b18ea596fec/avatar-5.jpg",
+  "[net.receive.stats] bytes=15705 calls=12 empty=11 ticks=16 flow=2 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=15161 encoding=none chunked=0 cookies=3 ticks=16 url=https://images.ctfassets.net/8aevphvgewt8/home2026-01ac80921a7a68bb3d4ce527/1f45b926a8f449fdfc5df9a433d00d72/avatar-1.jpg",
+  "[net.receive.stats] bytes=22561 calls=14 empty=12 ticks=20 flow=2 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=22017 encoding=none chunked=0 cookies=3 ticks=20 url=https://images.ctfassets.net/8aevphvgewt8/home2026-1bdfd19a362a9b42660488c1/54fa3933bc2b3465b9fea1b0a31ca1f0/avatar-2.jpg",
+  "[net.receive.stats] bytes=11974 calls=13 empty=12 ticks=17 flow=2 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=11430 encoding=none chunked=0 cookies=3 ticks=17 url=https://images.ctfassets.net/8aevphvgewt8/home2026-f6d013dea6d5575cba3b8294/7e729803069fa2f215833ac15c8f2619/avatar-3.jpg",
+  "[net.receive.stats] bytes=10956 calls=11 empty=10 ticks=16 flow=2 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=10412 encoding=none chunked=0 cookies=3 ticks=16 url=https://images.ctfassets.net/8aevphvgewt8/home2026-5de180004bab10ed7bf6174a/576d8702937f4d8a58c5f175eaa98993/avatar-4.jpg",
+  "[net.receive.stats] bytes=11160 calls=19 empty=18 ticks=23 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=10357 encoding=none chunked=0 cookies=3 ticks=24 url=https://github.githubassets.com/assets/ducky-4e03ac3720f4beec.png",
+  "[net.receive.stats] bytes=1477 calls=18 empty=17 ticks=21 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=1097 encoding=gzip chunked=0 cookies=3 ticks=22 url=https://github.githubassets.com/assets/high-contrast-cookie-35ae5dee64dc5768.js",
+  "[net.receive.stats] bytes=116696 calls=26 empty=18 ticks=48 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=431730 encoding=gzip chunked=0 cookies=3 ticks=52 url=https://github.githubassets.com/assets/core-b223ce5bb10c6668.js",
+  "[net.receive.stats] bytes=3027 calls=68 empty=67 ticks=84 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=5226 encoding=gzip chunked=0 cookies=3 ticks=84 url=https://github.githubassets.com/assets/marketing-essentials-fb5c686e09d82619.js",
+  "[net.receive.stats] bytes=764105 calls=73 empty=26 ticks=197 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=2425832 encoding=gzip chunked=0 cookies=3 ticks=226 url=https://github.githubassets.com/assets/landing-pages-c1bec454b3d72036.js",
+  "[net.receive.stats] bytes=1269 calls=22 empty=21 ticks=26 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=596 encoding=gzip chunked=0 cookies=3 ticks=26 url=https://github.githubassets.com/assets/global-banner-disable-63f5ee3e1edbce73.js",
+  "[web.script] engine_ticks=1008 memory=4194304",
+  "[web.console] level=2 SyntaxError: Unexpected token '*'",
+  "[web.console] level=2     at https://github.githubassets.com/assets/core-b223ce5bb10c6668.js:2:1",
+  "[web.console] level=2 SyntaxError: unsupported keyword: export",
+  "[web.console] level=2     at https://github.githubassets.com/assets/marketing-essentials-fb5c686e09d82619.js:2:1",
+  "[web.console] level=2 SyntaxError: Unexpected token '*'",
+  "[web.console] level=2     at https://github.githubassets.com/assets/landing-pages-c1bec454b3d72036.js:2:1",
+  "[web.console] level=2 SyntaxError: redeclaration of 'e'",
+  "[web.console] level=2     at <eval> (https://github.githubassets.com/assets/global-banner-disable-63f5ee3e1edbce73.js:1:1)",
+  "[web.loaded] bytes_ok=1 items=727 links=272 height=11964 sheets=8 images=98 fetch_ticks=3161 layout_ticks=908 script_ticks=2351 scripted=1",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=727 ticks=29",
+  "[web.ready] target=42 task=42"
+ ],
+ "agreed": [
+  [
+   "TLSv1_3",
+   "TLS13_AES_128_GCM_SHA256",
+   "Some(X25519)"
+  ],
+  [
+   "TLSv1_3",
+   "TLS13_AES_128_GCM_SHA256",
+   "Some(X25519)"
+  ],
+  [
+   "TLSv1_3",
+   "TLS13_AES_128_GCM_SHA256",
+   "Some(X25519)"
+  ]
+ ],
+ "http": [
+  [
+   "200",
+   "524959",
+   "https://github.com/"
+  ],
+  [
+   "200",
+   "87305",
+   "https://github.githubassets.com/assets/light-0011b1fed09cb294.css"
+  ],
+  [
+   "200",
+   "87975",
+   "https://github.githubassets.com/assets/light_high_contrast-267ab2e12d3b7ade.css"
+  ],
+  [
+   "200",
+   "87137",
+   "https://github.githubassets.com/assets/dark-37b5e41810563d82.css"
+  ],
+  [
+   "200",
+   "87869",
+   "https://github.githubassets.com/assets/dark_high_contrast-d69295870cb5f203.css"
+  ],
+  [
+   "200",
+   "11009",
+   "https://github.githubassets.com/assets/primer-primitives-bd624c4ec96b42e9.css"
+  ],
+  [
+   "200",
+   "411517",
+   "https://github.githubassets.com/assets/primer-5e94d7f3a59af8da.css"
+  ],
+  [
+   "200",
+   "288939",
+   "https://github.githubassets.com/assets/global-159fb17d033cf67d.css"
+  ],
+  [
+   "200",
+   "126766",
+   "https://github.githubassets.com/assets/github-d4a7053a1b3b1731.css"
+  ],
+  [
+   "200",
+   "26674",
+   "https://github.githubassets.com/assets/platform-4ce65ae0bf273ce2.png"
+  ],
+  [
+   "200",
+   "25995",
+   "https://github.githubassets.com/assets/platform-dark-ac89fbf373737ed3.png"
+  ],
+  [
+   "200",
+   "33776",
+   "https://github.githubassets.com/assets/copilot-e2b89335a66dba00.png"
+  ],
+  [
+   "200",
+   "25246",
+   "https://github.githubassets.com/assets/copilot-dark-2b28403b6080e898.png"
+  ],
+  [
+   "200",
+   "56292",
+   "https://github.githubassets.com/assets/changelog-fd687bff072883b0.png"
+  ],
+  [
+   "200",
+   "62851",
+   "https://github.githubassets.com/assets/changelog-dark-b1c25ae971bd641b.png"
+  ],
+  [
+   "200",
+   "29704",
+   "https://github.githubassets.com/assets/universe-a98cd54821b27569.png"
+  ],
+  [
+   "200",
+   "15850",
+   "https://images.ctfassets.net/8aevphvgewt8/home2026-9ccb55275227c79b036824fc/b44aaf40a80735ae613a6db469af23c1/ducky-shadows.png"
+  ],
+  [
+   "200",
+   "374873",
+   "https://github.githubassets.com/assets/features-platform-1-light-ee1b034c37d9c285.jpg"
+  ],
+  [
+   "200",
+   "290096",
+   "https://github.githubassets.com/assets/features-platform-2-light-32ce78d3f32a1c26.jpg"
+  ],
+  [
+   "200",
+   "148040",
+   "https://github.githubassets.com/assets/features-ways-1-light-7f965c4693916b6d.jpg"
+  ],
+  [
+   "200",
+   "164280",
+   "https://github.githubassets.com/assets/features-ways-2-light-d0c5094831620c40.jpg"
+  ],
+  [
+   "200",
+   "189278",
+   "https://github.githubassets.com/assets/features-ways-3-light-324179c1f86a8a34.jpg"
+  ],
+  [
+   "200",
+   "163399",
+   "https://github.githubassets.com/assets/features-ways-4-light-4b636f59d2883991.jpg"
+  ],
+  [
+   "200",
+   "103688",
+   "https://github.githubassets.com/assets/features-ways-5-light-4af62cd834e104af.jpg"
+  ],
+  [
+   "200",
+   "7626",
+   "https://images.ctfassets.net/8aevphvgewt8/home2026-f899e02bc1ad1a5df31a307f/1a39c6592017b71dd0017b18ea596fec/avatar-5.jpg"
+  ],
+  [
+   "200",
+   "15161",
+   "https://images.ctfassets.net/8aevphvgewt8/home2026-01ac80921a7a68bb3d4ce527/1f45b926a8f449fdfc5df9a433d00d72/avatar-1.jpg"
+  ],
+  [
+   "200",
+   "22017",
+   "https://images.ctfassets.net/8aevphvgewt8/home2026-1bdfd19a362a9b42660488c1/54fa3933bc2b3465b9fea1b0a31ca1f0/avatar-2.jpg"
+  ],
+  [
+   "200",
+   "11430",
+   "https://images.ctfassets.net/8aevphvgewt8/home2026-f6d013dea6d5575cba3b8294/7e729803069fa2f215833ac15c8f2619/avatar-3.jpg"
+  ],
+  [
+   "200",
+   "10412",
+   "https://images.ctfassets.net/8aevphvgewt8/home2026-5de180004bab10ed7bf6174a/576d8702937f4d8a58c5f175eaa98993/avatar-4.jpg"
+  ],
+  [
+   "200",
+   "10357",
+   "https://github.githubassets.com/assets/ducky-4e03ac3720f4beec.png"
+  ],
+  [
+   "200",
+   "1097",
+   "https://github.githubassets.com/assets/high-contrast-cookie-35ae5dee64dc5768.js"
+  ],
+  [
+   "200",
+   "431730",
+   "https://github.githubassets.com/assets/core-b223ce5bb10c6668.js"
+  ],
+  [
+   "200",
+   "5226",
+   "https://github.githubassets.com/assets/marketing-essentials-fb5c686e09d82619.js"
+  ],
+  [
+   "200",
+   "2425832",
+   "https://github.githubassets.com/assets/landing-pages-c1bec454b3d72036.js"
+  ],
+  [
+   "200",
+   "596",
+   "https://github.githubassets.com/assets/global-banner-disable-63f5ee3e1edbce73.js"
+  ]
+ ],
+ "loaded": true,
+ "fatal": [],
+ "guest_error": null,
+ "timed_out": false
+}

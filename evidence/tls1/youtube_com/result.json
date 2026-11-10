@@ -1,0 +1,162 @@
+{
+ "site": "youtube.com",
+ "elapsed": 16.1,
+ "lines": [
+  "[net.program.bound] target=42 task=42",
+  "[web.cores] cores=1",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=0 ticks=8",
+  "[net.tls.agreed] flow=0 version=TLSv1_3 suite=TLS13_AES_128_GCM_SHA256 group=Some(X25519)",
+  "[net.receive.stats] bytes=2511 calls=7 empty=6 ticks=225 flow=0 reused=0 kept=1",
+  "[web.http] method=GET status=301 bytes=0 encoding=none chunked=0 cookies=1 ticks=229 url=https://youtube.com/",
+  "[net.open.flows] made=2",
+  "[net.tls.agreed] flow=1 version=TLSv1_3 suite=TLS13_AES_128_GCM_SHA256 group=Some(X25519)",
+  "[net.receive.stats] bytes=273612 calls=35 empty=17 ticks=356 flow=1 reused=0 kept=1",
+  "[web.http] method=GET status=200 bytes=907741 encoding=gzip chunked=1 cookies=4 ticks=367 url=https://www.youtube.com/",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=0 ticks=1",
+  "[net.open.flows] made=3",
+  "[net.tls.agreed] flow=2 version=TLSv1_3 suite=TLS13_AES_256_GCM_SHA384 group=Some(X25519)",
+  "[net.receive.stats] bytes=1249 calls=6 empty=5 ticks=204 flow=2 reused=0 kept=1",
+  "[web.http] method=GET status=200 bytes=2972 encoding=gzip chunked=1 cookies=4 ticks=204 url=https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&family=YouTube+Sans:wght@300..900&display=swap",
+  "[net.receive.stats] bytes=1745 calls=4 empty=3 ticks=26 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=3922 encoding=gzip chunked=0 cookies=4 ticks=26 url=https://www.youtube.com/s/desktop/a2c91c03/cssbin/www-main-desktop-home-page-skeleton.css",
+  "[net.receive.stats] bytes=1039 calls=21 empty=20 ticks=22 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=828 encoding=gzip chunked=0 cookies=4 ticks=23 url=https://www.youtube.com/s/desktop/a2c91c03/cssbin/www-onepick.css",
+  "[net.receive.stats] bytes=402428 calls=47 empty=22 ticks=111 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=3782672 encoding=gzip chunked=0 cookies=4 ticks=149 url=https://www.youtube.com/s/_/ytmainappweb/_/ss/k=ytmainappweb.kevlar_base.pgY8vhyZLvE.L.W.O/am=AAAAAAIAAwQAewI/d=0/rs=AGKMywG87rNCKlE67F79xpY237mgWgdekw",
+  "[net.receive.stats] bytes=2347 calls=54 empty=53 ticks=52 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=8539 encoding=gzip chunked=0 cookies=4 ticks=52 url=https://www.youtube.com/s/desktop/a2c91c03/cssbin/www-main-desktop-watch-page-skeleton.css",
+  "[net.receive.stats] bytes=16452 calls=20 empty=19 ticks=24 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=50867 encoding=gzip chunked=0 cookies=4 ticks=24 url=https://www.youtube.com/s/desktop/a2c91c03/jsbin/web-animations-next-lite.min.vflset/web-animations-next-lite.min.js",
+  "[net.receive.stats] bytes=32301 calls=21 empty=18 ticks=27 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=109375 encoding=gzip chunked=0 cookies=4 ticks=29 url=https://www.youtube.com/s/desktop/a2c91c03/jsbin/webcomponents-all-noPatch.vflset/webcomponents-all-noPatch.js",
+  "[net.receive.stats] bytes=4987 calls=20 empty=19 ticks=22 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=19400 encoding=gzip chunked=0 cookies=4 ticks=22 url=https://www.youtube.com/s/desktop/a2c91c03/jsbin/fetch-polyfill.vflset/fetch-polyfill.js",
+  "[net.receive.stats] bytes=2947 calls=20 empty=19 ticks=20 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=5559 encoding=gzip chunked=0 cookies=4 ticks=20 url=https://www.youtube.com/s/desktop/a2c91c03/jsbin/intersection-observer.min.vflset/intersection-observer.min.js",
+  "[net.receive.stats] bytes=3935 calls=19 empty=18 ticks=20 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=8197 encoding=gzip chunked=0 cookies=4 ticks=20 url=https://www.youtube.com/s/desktop/a2c91c03/jsbin/scheduler.vflset/scheduler.js",
+  "[net.receive.stats] bytes=2490 calls=21 empty=20 ticks=21 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=5811 encoding=gzip chunked=0 cookies=4 ticks=22 url=https://www.youtube.com/s/desktop/a2c91c03/jsbin/www-i18n-constants-en_US.vflset/www-i18n-constants.js",
+  "[net.receive.stats] bytes=14336 calls=22 empty=21 ticks=22 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=38482 encoding=gzip chunked=0 cookies=4 ticks=23 url=https://www.youtube.com/s/desktop/a2c91c03/jsbin/spf.vflset/spf.js",
+  "[net.receive.stats] bytes=6336 calls=21 empty=20 ticks=22 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=14351 encoding=gzip chunked=0 cookies=4 ticks=22 url=https://www.youtube.com/s/desktop/a2c91c03/jsbin/network.vflset/network.js",
+  "[net.receive.stats] bytes=2580229 calls=179 empty=22 ticks=539 flow=1 reused=1 kept=1",
+  "[web.script] engine_ticks=780 memory=4194304",
+  "[web.console] level=2 TypeError: cannot read property 'responseStart' of undefined",
+  "[web.console] level=2     at <anonymous> (https://www.youtube.com/#script6:4:65)",
+  "[web.console] level=2     at <eval> (https://www.youtube.com/#script6:5:370)",
+  "[web.console] level=2 ReferenceError: Image is not defined",
+  "[web.console] level=2     at ytPrewarmYtimg (https://www.youtube.com/#script7:1:42)",
+  "[web.console] level=2     at <eval> (https://www.youtube.com/#script7:1:56)",
+  "[web.console] level=2 TypeError: not a function",
+  "[web.console] level=2     at <anonymous> (https://www.youtube.com/s/desktop/a2c91c03/jsbin/webcomponents-all-noPatch.vflset/webcomponents-all-noPatch.js:17:292)",
+  "[web.console] level=2     at <eval> (https://www.youtube.com/s/desktop/a2c91c03/jsbin/webcomponents-all-noPatch.vflset/webcomponents-all-noPatch.js:291:433)",
+  "[web.console] level=2 TypeError: not a function",
+  "[web.console] level=2     at n (https://www.youtube.com/s/desktop/a2c91c03/jsbin/spf.vflset/spf.js:10:2072)",
+  "[web.console] level=2     at <anonymous> (https://www.youtube.com/s/desktop/a2c91c03/jsbin/spf.vflset/spf.js:88:266)",
+  "[web.console] level=2     at call (native)",
+  "[web.console] level=2     at <eval> (https://www.youtube.com/s/desktop/a2c91c03/jsbin/spf.vflset/spf.js:88:288)",
+  "[web.loaded] bytes_ok=1 items=102 links=0 height=804 sheets=5 images=0 fetch_ticks=1841 layout_ticks=337 script_ticks=4094 scripted=1",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=102 ticks=5",
+  "[web.ready] target=42 task=42"
+ ],
+ "agreed": [
+  [
+   "TLSv1_3",
+   "TLS13_AES_128_GCM_SHA256",
+   "Some(X25519)"
+  ],
+  [
+   "TLSv1_3",
+   "TLS13_AES_128_GCM_SHA256",
+   "Some(X25519)"
+  ],
+  [
+   "TLSv1_3",
+   "TLS13_AES_256_GCM_SHA384",
+   "Some(X25519)"
+  ]
+ ],
+ "http": [
+  [
+   "301",
+   "0",
+   "https://youtube.com/"
+  ],
+  [
+   "200",
+   "907741",
+   "https://www.youtube.com/"
+  ],
+  [
+   "200",
+   "2972",
+   "https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&family=YouTube+Sans:wght@300..900&display=swap"
+  ],
+  [
+   "200",
+   "3922",
+   "https://www.youtube.com/s/desktop/a2c91c03/cssbin/www-main-desktop-home-page-skeleton.css"
+  ],
+  [
+   "200",
+   "828",
+   "https://www.youtube.com/s/desktop/a2c91c03/cssbin/www-onepick.css"
+  ],
+  [
+   "200",
+   "3782672",
+   "https://www.youtube.com/s/_/ytmainappweb/_/ss/k=ytmainappweb.kevlar_base.pgY8vhyZLvE.L.W.O/am=AAAAAAIAAwQAewI/d=0/rs=AGKMywG87rNCKlE67F79xpY237mgWgdekw"
+  ],
+  [
+   "200",
+   "8539",
+   "https://www.youtube.com/s/desktop/a2c91c03/cssbin/www-main-desktop-watch-page-skeleton.css"
+  ],
+  [
+   "200",
+   "50867",
+   "https://www.youtube.com/s/desktop/a2c91c03/jsbin/web-animations-next-lite.min.vflset/web-animations-next-lite.min.js"
+  ],
+  [
+   "200",
+   "109375",
+   "https://www.youtube.com/s/desktop/a2c91c03/jsbin/webcomponents-all-noPatch.vflset/webcomponents-all-noPatch.js"
+  ],
+  [
+   "200",
+   "19400",
+   "https://www.youtube.com/s/desktop/a2c91c03/jsbin/fetch-polyfill.vflset/fetch-polyfill.js"
+  ],
+  [
+   "200",
+   "5559",
+   "https://www.youtube.com/s/desktop/a2c91c03/jsbin/intersection-observer.min.vflset/intersection-observer.min.js"
+  ],
+  [
+   "200",
+   "8197",
+   "https://www.youtube.com/s/desktop/a2c91c03/jsbin/scheduler.vflset/scheduler.js"
+  ],
+  [
+   "200",
+   "5811",
+   "https://www.youtube.com/s/desktop/a2c91c03/jsbin/www-i18n-constants-en_US.vflset/www-i18n-constants.js"
+  ],
+  [
+   "200",
+   "38482",
+   "https://www.youtube.com/s/desktop/a2c91c03/jsbin/spf.vflset/spf.js"
+  ],
+  [
+   "200",
+   "14351",
+   "https://www.youtube.com/s/desktop/a2c91c03/jsbin/network.vflset/network.js"
+  ]
+ ],
+ "loaded": true,
+ "fatal": [],
+ "guest_error": null,
+ "timed_out": false
+}

@@ -1,0 +1,4 @@
+UA: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36
+page	https://xirtus.com/	200 6278 https://xirtus.com/
+script	https://xirtus.com/app.js	200 5318 https://xirtus.com/app.js
+script	https://xirtus.com/film/site.js	200 1132 https://xirtus.com/film/site.js

@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>@xirt.us</title>
+<meta name="description" content="Kindly feel welcomed to the place of Xirtus. This star is my orchard of thoughts.">
+<link rel="stylesheet" href="site.css">
+<script id="shader-vs" type="x-shader/x-vertex"> 
+  attribute vec3 aPos;
+  attribute vec2 aTexCoord;
+  varying   vec2 uv;
+varying vec2 uv_orig;
+void main(void) {
+   gl_Position = vec4(aPos, 1.);
+   uv = aTexCoord;
+   uv_orig = uv;
+}
+</script>
+<script id="shader-fs-inc" type="x-shader/x-fragment">
+#ifdef GL_ES
+precision mediump float;
+#endif
+
+varying vec2 uv;
+varying vec2 uv_orig;
+
+vec2 encode(float v){
+	vec2 c = vec2(0.);
+
+	int signum = (v >= 0.) ? 128 : 0;
+	v = abs(v);
+	int exponent = 15;
+	float limit = 64.; // considering the bias from 2^-9 to 2^6 (==64)
+	for(int exp = 15; exp > 0; exp--){
+		if( v < limit){
+			limit /= 2.;
+			exponent--;
+		}
+	}
+
+	float rest;
+	if(exponent == 0){
+		rest = v / limit / 2.;		// "subnormalize" implicite preceding 0. 
+	}else{
+		rest = (v - limit)/limit;		// normalize accordingly to implicite preceding 1.
+	}
+
+	int mantissa = int(rest * 2048.);	// 2048 = 2^11 for the (split) 11 bit mantissa
+	int msb = mantissa / 256;			// the most significant 3 bits go into the lower part of the first byte
+	int lsb = mantissa - msb * 256;		// there go the other 8 bit of the lower significance
+
+	c.x = float(signum + exponent * 8 + msb) / 255.;	// yeah, the '+1)/255.' seems a little bit odd, but it turned out necessary on my AMD Radeon HD series
+	c.y = float(lsb) / 255.;							// ^^ ...same weird color normalization for texture2D here
+
+	if(v >= 2048.){
+		//c.x = float( 128. + float(signum)) / 256.;
+		c.y = 1.;
+	}
+
+	return c;
+}
+
+float decode(vec2 c){
+	float v = 0.;
+
+	int ix = int(c.x*255.); // 1st byte: 1 bit signum, 4 bits exponent, 3 bits mantissa (MSB)
+	int iy = int(c.y*255.);	// 2nd byte: 8 bit mantissa (LSB)
+
+	int s = (c.x >= 0.5) ? 1 : -1;
+	ix = (s > 0) ? ix - 128 : ix; // remove the signum bit from exponent
+	int iexp = ix / 8; // cut off the last 3 bits of the mantissa to select the 4 exponent bits
+	int msb = ix - iexp * 8;	// subtract the exponent bits to select the 3 most significant bits of the mantissa
+
+	int norm = (iexp == 0) ? 0 : 2048; // distinguish between normalized and subnormalized numbers
+	int mantissa = norm + msb * 256 + iy; // implicite preceding 1 or 0 added here
+	norm = (iexp == 0) ? 1 : 0; // normalization toggle
+	float exponent = pow( 2., float(iexp + norm) - 20.); // -9 for the the exponent bias from 2^-9 to 2^6 plus another -11 for the normalized 12 bit mantissa 
+	v = float( s * mantissa ) * exponent;
+
+	return v;
+}
+
+vec4 encode2(vec2 v){
+	return vec4( encode(v.x), encode(v.y) );
+}
+		
+vec2 decode2(vec4 c){
+	return vec2( decode(c.rg), decode(c.ba) );
+}
+
+bool is_onscreen(vec2 uv){
+	return (uv.x < 1.) && (uv.x > 0.) && (uv.y < 1.) && (uv.y > 0.);
+}
+
+float border(vec2 uv, float border, vec2 texSize){
+	uv*=texSize;
+	return (uv.x<border || uv.x>texSize.x-border || uv.y<border || uv.y >texSize.y-border) ? 1.:.0;
+}
+</script>
+<script id="shader-fs-copy" type="x-shader/x-fragment"> 
+uniform sampler2D source;
+void main(void) {
+	gl_FragColor = texture2D(source, uv);
+}
+</script>
+<script id="shader-fs-init" type="x-shader/x-fragment"> 
+void main(void){
+	gl_FragColor = encode2(vec2(0.));
+}
+</script>
+<script id="shader-fs-advance" type="x-shader/x-fragment"> 
+	uniform sampler2D sampler_prev;
+	uniform sampler2D sampler_prev_n;
+	uniform sampler2D sampler_blur;
+	uniform sampler2D sampler_blur2;
+	uniform sampler2D sampler_blur3;
+	uniform sampler2D sampler_blur4;
+	uniform sampler2D sampler_blur5;
+	uniform sampler2D sampler_blur6;
+	uniform sampler2D sampler_noise;
+	uniform sampler2D sampler_noise_n;
+	uniform sampler2D sampler_fluid;
+
+	uniform vec4 rnd;
+	uniform vec4 rainbow;
+	uniform vec2 pixelSize;
+	uniform vec2 aspect;
+	uniform vec2 mouse;
+	uniform vec2 mouseV;
+	uniform float fps;
+	uniform float time;
+
+void main(void) {
+  vec2 motion = decode2( texture2D(sampler_fluid, uv))*pixelSize*0.75;
+
+  vec2 uv = uv - motion; // add fluid motion
+  vec4 noise = texture2D(sampler_noise, uv_orig + rnd.xy)-0.5; 
+ 
+  gl_FragColor.y = texture2D(sampler_prev, uv).y + noise.y*1./256.;
+  gl_FragColor.y += (texture2D(sampler_prev, uv).y-texture2D(sampler_blur5, uv).y)*1./64.;
+  
+  vec2 d = pixelSize*8.;
+  vec2 gy; // gradient in green
+  gy.x = texture2D(sampler_blur2, uv_orig-vec2(1.,0.)*d).y - texture2D(sampler_blur2, uv_orig+vec2(1.,0.)*d).y;
+  gy.y = texture2D(sampler_blur2, uv_orig-vec2(0.,1.)*d).y - texture2D(sampler_blur2, uv_orig+vec2(0.,1.)*d).y;
+
+  d = pixelSize*4.;
+  vec2 gz; // gradient in blue
+  gz.x = texture2D(sampler_blur, uv_orig-vec2(1.,0.)*d).z - texture2D(sampler_blur, uv_orig+vec2(1.,0.)*d).z;
+  gz.y = texture2D(sampler_blur, uv_orig-vec2(0.,1.)*d).z - texture2D(sampler_blur, uv_orig+vec2(0.,1.)*d).z;
+
+  uv = uv_orig - motion + gz.yx*vec2(-1.,1.)*pixelSize*2.0;
+
+  gl_FragColor.z = texture2D(sampler_prev, uv).z;
+  gl_FragColor.z += (texture2D(sampler_prev, uv).z-texture2D(sampler_blur3, uv).z)*28./256.;
+
+  gl_FragColor.z +=  - (gl_FragColor.y-0.255)*1./128.;
+
+  vec2 gx; // gradient in blue
+  gx.x = texture2D(sampler_blur, uv_orig-vec2(1.,0.)*d).x - texture2D(sampler_blur, uv_orig+vec2(1.,0.)*d).x;
+  gx.y = texture2D(sampler_blur, uv_orig-vec2(0.,1.)*d).x - texture2D(sampler_blur, uv_orig+vec2(0.,1.)*d).x;
+
+  uv =  uv_orig - motion - gx.yx*vec2(-1.,1.)*pixelSize*2.;
+
+  gl_FragColor.x = texture2D(sampler_prev, uv).x;
+  gl_FragColor.x += (texture2D(sampler_prev, uv).x-texture2D(sampler_blur3, uv).x)*28./256.;
+
+  gl_FragColor.x +=  - (0.745-gl_FragColor.y)*1./128.;
+	gl_FragColor.a = 1.;
+}
+</script>
+<script id="shader-fs-composite" type="x-shader/x-fragment"> 
+	uniform sampler2D sampler_prev;
+	uniform sampler2D sampler_prev_n;
+	uniform sampler2D sampler_blur;
+	uniform sampler2D sampler_blur2;
+	uniform sampler2D sampler_blur3;
+	uniform sampler2D sampler_blur4;
+	uniform sampler2D sampler_blur5;
+	uniform sampler2D sampler_blur6;
+	uniform sampler2D sampler_noise;
+	uniform sampler2D sampler_noise_n;
+	uniform sampler2D sampler_fluid;
+	uniform sampler2D sampler_fluid_p;
+
+	uniform vec4 rnd;
+	uniform vec4 rainbow;
+	uniform vec2 pixelSize;
+	uniform vec2 aspect;
+	uniform vec2 mouse;
+	uniform vec2 mouseV;
+	uniform float fps;
+	uniform float time;
+
+void main(void) {
+  gl_FragColor = vec4(1.-abs(texture2D(sampler_prev, uv).y*2.-1.));
+
+  vec2 d = pixelSize*1.;
+  vec2 gy; // green uv gradient vector
+  gy.x = texture2D(sampler_prev, uv-vec2(1.,0.)*d).y - texture2D(sampler_prev, uv+vec2(1.,0.)*d).y;
+  gy.y = texture2D(sampler_prev, uv-vec2(0.,1.)*d).y - texture2D(sampler_prev, uv+vec2(0.,1.)*d).y;
+
+  d = pixelSize*4.;
+
+  vec2 gz; // blue blur2 gradient vector
+  gz.x += texture2D(sampler_blur2, uv-vec2(1.,0.)*d).z - texture2D(sampler_blur2, uv+vec2(1.,0.)*d).z;
+  gz.y += texture2D(sampler_blur2, uv-vec2(0.,1.)*d).z - texture2D(sampler_blur2, uv+vec2(0.,1.)*d).z;
+
+  gl_FragColor = vec4(0.);
+
+  gl_FragColor.y = texture2D(sampler_prev, uv + gz*pixelSize*64.).y*0.4 - (gz.x + gz.y)*0.4 + 0.4;
+  gl_FragColor.z = texture2D(sampler_blur4, uv + 80.*pixelSize*gy - gz ).z*1.75 -0.0;
+
+  gl_FragColor.yz *= 1.- texture2D(sampler_blur4, uv).x*2.5;
+  gl_FragColor.x = texture2D(sampler_prev, uv).x*1.+0.25;
+  
+  gl_FragColor.y += gl_FragColor.x;
+
+  gl_FragColor.yz *= vec2(0.75,1.)- texture2D(sampler_blur4, uv).z*1.5;
+  gl_FragColor.z += texture2D(sampler_prev, uv).z*1.5;
+  gl_FragColor.y += gl_FragColor.z*0.5 - 0.1;
+  
+
+	gl_FragColor.a = 1.;
+}
+</script>
+<script id="shader-fs-blur-horizontal" type="x-shader/x-fragment">
+// original shader from http://www.gamerendering.com/2008/10/11/gaussian-blur-filter-shader/
+// horizontal blur fragment shader
+uniform sampler2D src_tex;
+uniform vec2 pixelSize;
+
+void main(void) // fragment
+{
+	float h = pixelSize.x;
+	vec4 sum = vec4(0.0);
+	sum += texture2D(src_tex, vec2(uv.x - 4.0*h, uv.y) ) * 0.05;
+	sum += texture2D(src_tex, vec2(uv.x - 3.0*h, uv.y) ) * 0.09;
+	sum += texture2D(src_tex, vec2(uv.x - 2.0*h, uv.y) ) * 0.12;
+	sum += texture2D(src_tex, vec2(uv.x - 1.0*h, uv.y) ) * 0.15;
+	sum += texture2D(src_tex, vec2(uv.x + 0.0*h, uv.y) ) * 0.16;
+	sum += texture2D(src_tex, vec2(uv.x + 1.0*h, uv.y) ) * 0.15;
+	sum += texture2D(src_tex, vec2(uv.x + 2.0*h, uv.y) ) * 0.12;
+	sum += texture2D(src_tex, vec2(uv.x + 3.0*h, uv.y) ) * 0.09;
+	sum += texture2D(src_tex, vec2(uv.x + 4.0*h, uv.y) ) * 0.05;
+    gl_FragColor.xyz = sum.xyz/0.98; // normalize
+	gl_FragColor.a = 1.;
+} 
+</script>
+<script id="shader-fs-blur-vertical" type="x-shader/x-fragment">
+uniform sampler2D src_tex;
+uniform vec2 pixelSize;
+
+void main(void) // fragment
+{
+	float v = pixelSize.y;
+	vec4 sum = vec4(0.0);
+	sum += texture2D(src_tex, vec2(uv.x, - 4.0*v + uv.y) ) * 0.05;
+	sum += texture2D(src_tex, vec2(uv.x, - 3.0*v + uv.y) ) * 0.09;
+	sum += texture2D(src_tex, vec2(uv.x, - 2.0*v + uv.y) ) * 0.12;
+	sum += texture2D(src_tex, vec2(uv.x, - 1.0*v + uv.y) ) * 0.15;
+	sum += texture2D(src_tex, vec2(uv.x, + 0.0*v + uv.y) ) * 0.16;
+	sum += texture2D(src_tex, vec2(uv.x, + 1.0*v + uv.y) ) * 0.15;
+	sum += texture2D(src_tex, vec2(uv.x, + 2.0*v + uv.y) ) * 0.12;
+	sum += texture2D(src_tex, vec2(uv.x, + 3.0*v + uv.y) ) * 0.09;
+	sum += texture2D(src_tex, vec2(uv.x, + 4.0*v + uv.y) ) * 0.05;
+    gl_FragColor.xyz = sum.xyz/0.98;
+	gl_FragColor.a = 1.;
+}
+</script>
+<script id="shader-fs-add-mouse-motion" type="x-shader/x-fragment"> 
+uniform sampler2D sampler_fluid;
+
+uniform vec2 aspect;
+uniform vec2 mouse; // mouse coordinate
+uniform vec2 mouseV; // mouse velocity
+uniform vec2 pixelSize;
+uniform vec2 texSize;
+
+float mouseFilter(vec2 uv){
+	return clamp( 1.-length((uv-mouse)*texSize)/8., 0. , 1.);
+}
+
+void main(void){
+	vec2 v = decode2(texture2D(sampler_fluid, uv));
+
+	if(length(mouseV) > 0.)
+		v = mix(v, mouseV*2., mouseFilter(uv)*0.85);
+
+	gl_FragColor = encode2(v);
+}
+
+</script>
+<script id="shader-fs-advect" type="x-shader/x-fragment"> 
+uniform vec2 texSize;
+uniform vec2 pixelSize;
+
+	uniform sampler2D sampler_fluid;
+
+  const float dt = .001;
+
+void main(void){
+	vec2 v = decode2(texture2D(sampler_fluid, uv));
+
+	vec2 D = -texSize*vec2(v.x, v.y)*dt;
+
+   vec2 Df = floor(D),   Dd = D - Df;
+   vec2 uv = uv + Df*pixelSize;
+
+	vec2 uv0, uv1, uv2, uv3;
+
+	uv0 = uv + pixelSize*vec2(0.,0.);
+	uv1 = uv + pixelSize*vec2(1.,0.);
+	uv2 = uv + pixelSize*vec2(0.,1.);
+	uv3 = uv + pixelSize*vec2(1.,1.);
+
+	vec2 v0 = decode2( texture2D(sampler_fluid, uv0));
+	vec2 v1 = decode2( texture2D(sampler_fluid, uv1));
+	vec2 v2 = decode2( texture2D(sampler_fluid, uv2));
+	vec2 v3 = decode2( texture2D(sampler_fluid, uv3));
+
+	v = mix( mix( v0, v1, Dd.x), mix( v2, v3, Dd.x), Dd.y);
+
+	gl_FragColor = encode2(v*(1.-border(uv, 1., texSize)));
+}
+
+</script>
+<script id="shader-fs-p" type="x-shader/x-fragment"> 
+uniform vec2 pixelSize;
+uniform vec2 texSize;
+uniform sampler2D sampler_v;
+uniform sampler2D sampler_p;
+  const float h = 1./1024.;
+
+void main(void){
+
+	vec2 v = decode2(texture2D(sampler_v, uv));
+	float v_x = decode(texture2D(sampler_v, uv - vec2(1.,0.)*pixelSize).rg);
+	float v_y = decode(texture2D(sampler_v, uv - vec2(0.,1.)*pixelSize).ba);
+
+	float n = decode(texture2D(sampler_p, uv- pixelSize*vec2(0.,1.)).rg);
+	float w = decode(texture2D(sampler_p, uv + pixelSize*vec2(1.,0.)).rg);
+	float s = decode(texture2D(sampler_p, uv + pixelSize*vec2(0.,1.)).rg);
+	float e = decode(texture2D(sampler_p, uv - pixelSize*vec2(1.,0.)).rg);
+
+	float p = ( n + w + s + e - (v.x - v_x + v.y - v_y)*h ) * .25;
+
+	gl_FragColor.rg = encode(p);
+	gl_FragColor.ba = vec2(0.); // unused
+}
+</script>
+<script id="shader-fs-div" type="x-shader/x-fragment"> 
+uniform vec2 texSize;
+uniform vec2 pixelSize;
+uniform sampler2D sampler_v;
+uniform sampler2D sampler_p;
+
+void main(void){
+	float p = decode(texture2D(sampler_p, uv).rg);
+	vec2 v = decode2(texture2D(sampler_v, uv));
+	float p_x = decode(texture2D(sampler_p, uv + vec2(1.,0.)*pixelSize).rg);
+	float p_y = decode(texture2D(sampler_p, uv + vec2(0.,1.)*pixelSize).rg);
+
+	v -= (vec2(p_x, p_y)-p)*512.;
+
+	gl_FragColor = encode2(v);
+}
+</script>
+<script src="plasma.js"></script>
+<link rel="stylesheet" href="film/film.css"><link rel="stylesheet" href="film/site.css">
+</head>
+<body onload="load()" ondblclick="hide()">
+<canvas id="c"></canvas>
+<canvas id="sky" aria-hidden="true"></canvas>
+<div id="desc">
+  <div class="first">
+    <div class="left">
+      <div class="title">
+        <p class="fpsline">Fps: <span id="fps">60</span></p>
+        <h1>kindly feel welcomed to the place of xirtus</h1>
+        <p class="lead">this star is my orchard of thoughts</p>
+      </div>
+      <a class="bigdonate" href="#support">Donate to Tartary Nova</a>
+      <section class="term" aria-label="Terminal">
+        <header><span>xirt.us</span><span id="score">0/7 stars lit</span></header>
+        <div id="out" class="out" role="log" aria-live="polite"></div>
+        <form id="form" autocomplete="off">
+          <label for="cmd">guest@orchard:~$</label>
+          <input id="cmd" autocapitalize="off" spellcheck="false">
+        </form>
+        <div class="keys" aria-label="Quick commands">
+          <button data-run="clue">clue</button><button data-run="help">help</button><button data-run="ls">ls</button><button data-run="signal">signal</button><button data-run="stir">stir</button><button data-run="doors">doors</button><button data-run="donate">donate</button>
+        </div>
+      </section>
+      <nav class="links" aria-label="On this page"><button id="open-launcher" class="pill" type="button">Search /</button><a class="pill" href="#network">Network</a><a class="pill" href="#today">Today</a><a class="pill" href="#work">Work</a><a class="pill" href="#universe">Universe</a><a class="pill" href="#arcade">Arcade</a><a class="pill" href="#support">Support</a><a class="pill" href="#contact">Contact</a><a class="pill" href="https://metaspace.xirtus.com">Metaspace</a></nav>
+      <p class="hint">Move through the plasma. Double-click outside the terminal to clear the words.</p>
+    </div>
+    <div class="orchard">
+      <img id="grastar" src="grastar.png" alt="grastar" width="540" height="540">
+      <ul class="notes">
+        <li>i is an imaginary number</li><li>fnord</li><li>violence never solves anything but solvents are sometimes vile</li><li>love is only one syllable.</li>
+      </ul>
+    </div>
+  </div>
+
+  <section id="network" class="netmap">
+    <canvas id="pixels" aria-hidden="true"></canvas>
+    <ul class="stars" aria-label="The Xirtus network">
+      <li style="--x:14%;--y:60%;--c:#40b8ff"><a href="https://sexos.dev">SexOS</a></li>
+      <li style="--x:34%;--y:82%;--c:#c792ff"><a href="https://www.3jse.com">3JSE</a></li>
+      <li style="--x:48%;--y:66%;--c:#7fe3b5" class="big"><a href="https://metaspace.xirtus.com">Metaspace</a></li>
+      <li style="--x:66%;--y:86%;--c:#ff6a3d"><a href="https://pigaloo.com">Pigaloo</a></li>
+      <li style="--x:78%;--y:60%;--c:#ffd166"><a href="https://xirtus.com">xirtus.com</a></li>
+      <li style="--x:88%;--y:80%;--c:#ff5ea8"><a href="https://andreas.me">andreas.me</a></li>
+      <li style="--x:8%;--y:86%;--c:#ffffff"><a href="https://xchurch.us">xChurch</a></li>
+    </ul>
+  </section>
+
+  <section id="today" class="band">
+    <h2>Today at Xirtus</h2>
+    <p class="sub" id="since">Fresh from the source, every day.</p>
+    <div class="grid today">
+      <article class="glass commits"><h3>Just shipped</h3><ol><li data-date="2026-11-05T08:37:17Z"><a href="https://github.com/xirtus/sexos/commit/e874c670b13aa0a22b9637f091b9dbd2575bcdee"><b>sexos</b> <span class="msg">test(gate): reserve fixtures for the 128 KiB heap; Q batch regression evidence</span></a><time>Nov 5</time></li><li data-date="2026-11-05T08:21:58Z"><a href="https://github.com/xirtus/sexos/commit/b6be1b451a6c21985d00d192674feedf66bb11dd"><b>sexos</b> <span class="msg">feat(browser): script prototypes, comma operator, console, small builtins</span></a><time>Nov 5</time></li><li data-date="2026-11-05T08:17:18Z"><a href="https://github.com/xirtus/sexos/commit/65e2790d8fdb4c724bc90676ac68c29b3462efbc"><b>sexos</b> <span class="msg">feat(browser): script arguments, call, apply, bind</span></a><time>Nov 5</time></li><li data-date="2026-11-05T08:13:06Z"><a href="https://github.com/xirtus/sexos/commit/0efc93c2688e8706eca700dc058ff74e6ececd6b"><b>sexos</b> <span class="msg">fix(quil): Home/End stay on the line; add Ctrl+K and Ctrl+J</span></a><time>Nov 5</time></li><li data-date="2026-11-03T16:10:38Z"><a href="https://github.com/xirtus/sexos/commit/1d459f730edef168030a74015e2433ca9429d22b"><b>sexos</b> <span class="msg">feat(browser): rule under table header rows</span></a><time>Nov 3</time></li><li data-date="2026-11-03T16:06:56Z"><a href="https://github.com/xirtus/sexos/commit/6ef18bec57fbebdd880f4beccf1b2bd6ecffdea6"><b>sexos</b> <span class="msg">feat(browser): toSorted/with/groupBy/structuredClone; re-cut script frames</span></a><time>Nov 3</time></li></ol></article>
+      <article class="glass"><h3>Latest video</h3><a class="thumb" href="https://www.youtube.com/watch?v=5ajIQqbMsg4"><img src="https://i.ytimg.com/vi/5ajIQqbMsg4/hqdefault.jpg" alt="" loading="lazy" width="480" height="360"></a><p class="vtitle">Quantum Esoteric Mormonism with Latterday Chad (Latterwave)</p></article>
+      <article class="glass"><h3>From Andreas, on X</h3><blockquote id="xpost">Follow along at @andreasxirtus.</blockquote><a id="xlink" href="https://x.com/andreasxirtus">Read on X</a><h3 class="gap">Today's signal</h3><p class="signal" id="signal">love is only one syllable</p></article>
+    </div>
+  </section>
+
+  <section id="work" class="band">
+    <h2>The Work</h2>
+    <div class="grid two"><a class="glass tile" href="https://sexos.dev"><img src="img/sexos.webp" alt="" loading="lazy"><div><h3>SexOS</h3><p>SexOS — a ~128 KB Rust microkernel built around a single address space, capability IPC and PKU isolation.</p><small>14 stars · updated Nov 5</small></div></a><a class="glass tile" href="https://www.3jse.com"><img src="img/3jse.webp" alt="" loading="lazy"><div><h3>3JSE</h3><p>3JSE — a WebGPU-native Three.js game engine and editor in TypeScript.</p><small>2 stars · updated Oct 19</small></div></a><a class="glass tile" href="https://metaspace.xirtus.com"><img src="img/metaspace.webp" alt="" loading="lazy"><div><h3>Metaspace</h3><p>A strange internet city where games, tools and stories become places you can walk into.</p><small>Open now</small></div></a><a class="glass tile" href="https://pigaloo.com"><img src="img/pigaloo.webp" alt="" loading="lazy"><div><h3>Pigaloo</h3><p>A product, a media project and a treasure-island tribe, growing together.</p></div></a></div>
+  </section>
+
+  <section id="universe" class="band">
+    <h2>The Xirtus Universe</h2>
+    <p class="sub">Everything that started it, still here.</p>
+    <div class="grid three"><a class="glass tile uni" href="https://xirtus.com/resume.html"><img src="img/pic01.jpg" alt="" loading="lazy"><div><h3>Bio</h3><p>Who is Andreas Xirtus, anyway?</p></div></a><a class="glass tile uni" href="https://andreas.me"><img src="img/pic02.jpg" alt="" loading="lazy"><div><h3>More about Andreas</h3><p>Andreas Disclosure</p></div></a><a class="glass tile uni" href="https://www.youtube.com/watch?v=-WW6bKR5pJ0"><img src="img/pic03.jpg" alt="" loading="lazy"><div><h3>Tartaria</h3><p>History &amp; the Reset: The Way to tell the Truth to people.</p></div></a><a class="glass tile uni" href="https://youtube.com/xirtus"><img src="img/pic05.jpg" alt="" loading="lazy"><div><h3>Videos</h3><p>Watch Xirtus Material</p></div></a><a class="glass tile uni" href="http://tartarynova.com/"><img src="img/pic04.jpg" alt="" loading="lazy"><div><h3>Xirtus Projects</h3><p>Save history and the future today with Tartary Nova</p></div></a><a class="glass tile uni" href="https://www.teepublic.com/xirtus"><img src="img/pic06.jpg" alt="" loading="lazy"><div><h3>Propaganda &amp; Merchandise</h3><p>Clothing, Fanny Packs &amp; Yoga Mats to celebrate your Xirtus spirit.</p></div></a></div>
+  </section>
+
+  <section id="arcade" class="band">
+    <h2>The Arcade</h2>
+    <p class="sub">Original games. A new pick every day.</p>
+    <a class="glass daily" id="daily" href="https://github.com/xirtus/zendrive"><img id="daily-img" src="img/zendrive.webp" alt=""><div><small>Game of the day</small><h3 id="daily-name">ZENDRIVE</h3><p id="daily-blurb">Procedural vaporwave racer</p></div></a>
+    <ul class="games"><li><a href="https://github.com/xirtus/zendrive"><img src="img/zendrive.webp" alt="" loading="lazy"><b>ZENDRIVE</b><span>Procedural vaporwave racer</span></a></li><li><a href="https://github.com/xirtus/mandalpod"><img src="img/mandalpod.webp" alt="" loading="lazy"><b>MANDELPOD</b><span>Psychedelic octopus platformer</span></a></li><li><a href="https://github.com/xirtus/machine-elf"><img src="img/machine-elf.webp" alt="" loading="lazy"><b>MACHINE ELF</b><span>WebGPU fractal rail shooter</span></a></li><li><a href="https://github.com/xirtus/rabbitverse"><img src="img/rabbitverse.webp" alt="" loading="lazy"><b>RABBITVERSE</b><span>Procedural mascot platformer</span></a></li><li><a href="https://github.com/xirtus/tsunami-surf"><img src="img/tsunami-surf.webp" alt="" loading="lazy"><b>TSUNAMI</b><span>Endless giant-wave surf game</span></a></li><li><a href="https://github.com/xirtus/rubber-duckie-river-race"><img src="img/rubber-duckie-river-race.webp" alt="" loading="lazy"><b>Rubber Duckie River Race</b><span>A 100-duck river race</span></a></li><li><a href="https://github.com/xirtus/kriket-3"><img src="img/kriket-3.webp" alt="" loading="lazy"><b>KRIKET</b><span>Cricket sim with a bat-cam</span></a></li><li><a href="https://github.com/xirtus/mandelhop"><img src="img/mandelhop.webp" alt="" loading="lazy"><b>MANDELHOP</b><span>Infinite fractal-garden frogger</span></a></li><li><a href="https://github.com/xirtus/dambeavers"><img src="img/dambeavers.webp" alt="" loading="lazy"><b>Damn Beavers</b><span>Systemic beaver-civilization sim</span></a></li><li><a href="https://github.com/xirtus/narayana-the-hadal-cycle"><img src="img/narayana-the-hadal-cycle.webp" alt="" loading="lazy"><b>NARAYANA</b><span>Procedural underwater adventure</span></a></li></ul>
+  </section>
+
+  <section id="support" class="band">
+    <h2>Support the Xirtus</h2>
+    <p class="sub">Thank you for collaborating with us. We share all our information, and with your help we have more information to share.</p>
+    <div class="ways" role="group" aria-label="Ways to donate">
+        <a class="way give" href="#crowdfund"><span class="sym"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 21s-8.5-5.2-10.4-10.3C.3 7 2.6 3.5 6.3 3.5c2.3 0 4.3 1.2 5.7 3.3 1.4-2.1 3.4-3.3 5.7-3.3 3.7 0 6 3.5 4.7 7.2C20.500 15.800 12 21 12 21z"/></svg></span><span class="txt"><b>GiveForms</b><small>Crowdfund Tartary Nova, once or monthly</small></span><em>Preferred</em></a>
+        <form class="wayform" action="https://www.paypal.com/donate/?hosted_button_id=QT7FJBXW9ACB2" method="post"><input type="hidden" name="cmd" value="_s-xclick"><input type="hidden" name="hosted_button_id" value="JXGPCCF6BV9E8"><button class="way paypal" type="submit"><span class="sym letter">P</span><span class="txt"><b>PayPal</b><small>Give with your PayPal account</small></span></button></form>
+        <a class="way box" href="https://donorbox.org/xirtus-tartary-nova-2"><span class="sym"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M3 8h8v4H3zM13 8h8v4h-8zM4 13.500h7V22H4zM13 13.500h7V22h-7zM12 7C9 7 6 6 6 3.800 6 2.600 7 2 8 2c2 0 3.300 2.200 4 5 .7-2.800 2-5 4-5 1 0 2 .6 2 1.800C18 6 15 7 12 7z"/></svg></span><span class="txt"><b>Donorbox</b><small>Give securely through Donorbox</small></span></a>
+        <a class="way coin" href="#bitcoin"><span class="sym letter">₿</span><span class="txt"><b>Bitcoin</b><small>Scan the QR or copy the address</small></span></a>
+      </div>
+    <div class="grid support">
+      <article id="crowdfund" class="fund"><iframe src="https://app.giveforms.com/campaigns/xirtus/tartary-nova-legacy-for-the-future" id="giveforms-form-embed" name="giveforms" title="Donate through GiveForms" allowpaymentrequest="true" loading="lazy"></iframe></article>
+      <div class="stack">
+        <article class="glass btc"><h3>Scan for Donorbox</h3><img src="qrcode.png" width="160" height="160" alt="QR code for the Donorbox page" loading="lazy"></article>
+        <article id="bitcoin" class="glass btc"><h3>Bitcoin</h3><img src="img/qrbtc.png" width="160" height="160" alt="QR code for the Xirtus Bitcoin address" loading="lazy"><p class="addr">BC1QD7PS4XSZMN679LWUP28GDJV5LD68C860MYPLWN</p><p class="btnrow"><a class="cta alt" href="bitcoin:BC1QD7PS4XSZMN679LWUP28GDJV5LD68C860MYPLWN">Donate BTC</a> <button id="btc" class="cta alt" data-address="BC1QD7PS4XSZMN679LWUP28GDJV5LD68C860MYPLWN">Copy address</button></p></article>
+      </div>
+    </div>
+  </section>
+
+  <section id="contact" class="band">
+    <h2>Get in Touch</h2>
+    <p class="sub">Have a suggestion or a question? Let Xirtus know. Thanks for finding me.</p>
+    <div class="grid two">
+      <article class="glass"><h3>Email</h3><a class="mail" href="mailto:i@xirt.us">i@xirt.us</a><ul class="row"><li><a href="https://matrix.to/#/!cYRyMqlNCvBbYtMuKB:matrix.org?via=matrix.org&amp;via=t2bot.io">Xirtus Master Matrix</a></li><li><a href="https://discord.gg/mt6WnSb8">Discord</a></li><li><a href="https://facebook.com/groups/xirtus">Advanced Philosophy Club</a></li><li><a href="http://foundry.tartarynova.com/">Foundry</a></li></ul></article>
+      <article class="glass"><h3>Phone</h3><p>(831) 216-6292 · <a href="https://wa.me/18313344320">WhatsApp</a> · <a href="https://t.me/+18313344320">Telegram</a></p><h3 class="gap">Location</h3><p>Washington DC, United States of America</p><h3 class="gap">Elsewhere</h3><ul class="row"><li><a href="https://x.com/andreasxirtus">X</a></li><li><a href="https://youtube.com/@andreasxirtus">YouTube</a></li><li><a href="http://instagram.com/xirtus">Instagram</a></li><li><a href="https://github.com/xirtus">GitHub</a></li><li><a href="https://andreas.me">andreas.me</a></li><li><a href="https://xirtus.com">xirtus.com</a></li></ul></article>
+    </div>
+  </section>
+</div>
+<dialog id="launcher" aria-label="Launcher"><input id="launch-q" type="search" placeholder="Go anywhere in Xirtus" aria-label="Search" autocomplete="off"><ul id="launch-list"></ul></dialog>
+<script src="enhance.js"></script>
+<script src="motion.js"></script>
+<script src="film/site.js" type="module"></script>
+</body>
+</html>

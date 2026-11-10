@@ -1,0 +1,65 @@
+{
+ "site": "www.3jse.com",
+ "elapsed": 12.1,
+ "lines": [
+  "[net.program.bound] target=42 task=42",
+  "[web.cores] cores=1",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=0 ticks=10",
+  "[net.tls.agreed] flow=0 version=TLSv1_3 suite=TLS13_AES_128_GCM_SHA256 group=Some(X25519)",
+  "[net.receive.stats] bytes=8219 calls=64 empty=63 ticks=2227 flow=0 reused=0 kept=1",
+  "[web.http] method=GET status=200 bytes=25122 encoding=gzip chunked=0 cookies=0 ticks=2231 url=https://www.3jse.com/",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=0 ticks=2",
+  "[net.receive.stats] bytes=5775 calls=33 empty=32 ticks=174 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=23929 encoding=gzip chunked=0 cookies=0 ticks=176 url=https://www.3jse.com/assets/css/site.css",
+  "[net.receive.stats] bytes=1470 calls=17 empty=16 ticks=86 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=3501 encoding=gzip chunked=0 cookies=0 ticks=86 url=https://www.3jse.com/assets/img/3jse-banner.svg",
+  "[net.receive.stats] bytes=2179 calls=67 empty=66 ticks=87 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=11074 encoding=gzip chunked=0 cookies=0 ticks=88 url=https://www.3jse.com/assets/img/3jse-architecture.svg",
+  "[net.receive.stats] bytes=3037 calls=65 empty=64 ticks=92 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=7075 encoding=gzip chunked=0 cookies=0 ticks=93 url=https://www.3jse.com/assets/js/main.js",
+  "[web.script] engine_ticks=1031 memory=4194304",
+  "[web.console] level=2 SyntaxError: Unexpected token '*'",
+  "[web.console] level=2     at https://www.3jse.com/assets/js/main.js:6:1",
+  "[web.loaded] bytes_ok=1 items=875 links=70 height=15895 sheets=1 images=3 fetch_ticks=2726 layout_ticks=116 script_ticks=1040 scripted=1",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=875 ticks=33",
+  "[web.ready] target=42 task=42"
+ ],
+ "agreed": [
+  [
+   "TLSv1_3",
+   "TLS13_AES_128_GCM_SHA256",
+   "Some(X25519)"
+  ]
+ ],
+ "http": [
+  [
+   "200",
+   "25122",
+   "https://www.3jse.com/"
+  ],
+  [
+   "200",
+   "23929",
+   "https://www.3jse.com/assets/css/site.css"
+  ],
+  [
+   "200",
+   "3501",
+   "https://www.3jse.com/assets/img/3jse-banner.svg"
+  ],
+  [
+   "200",
+   "11074",
+   "https://www.3jse.com/assets/img/3jse-architecture.svg"
+  ],
+  [
+   "200",
+   "7075",
+   "https://www.3jse.com/assets/js/main.js"
+  ]
+ ],
+ "loaded": true,
+ "fatal": [],
+ "guest_error": null,
+ "timed_out": false
+}

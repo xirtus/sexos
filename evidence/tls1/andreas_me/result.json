@@ -1,0 +1,254 @@
+{
+ "site": "andreas.me",
+ "elapsed": 13.8,
+ "lines": [
+  "[net.program.bound] target=42 task=42",
+  "[web.cores] cores=1",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=0 ticks=10",
+  "[net.tls.agreed] flow=0 version=TLSv1_3 suite=TLS13_AES_128_GCM_SHA256 group=Some(X25519)",
+  "[net.receive.stats] bytes=4869 calls=31 empty=30 ticks=657 flow=0 reused=0 kept=1",
+  "[web.http] method=GET status=200 bytes=14964 encoding=gzip chunked=0 cookies=0 ticks=661 url=https://andreas.me/",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=0 ticks=2",
+  "[net.receive.stats] bytes=2101 calls=19 empty=18 ticks=109 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=5122 encoding=gzip chunked=0 cookies=0 ticks=109 url=https://andreas.me/film/film.css",
+  "[net.receive.stats] bytes=596 calls=18 empty=17 ticks=91 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=252 encoding=gzip chunked=0 cookies=0 ticks=91 url=https://andreas.me/film/site.css",
+  "[net.receive.stats] bytes=15221 calls=66 empty=65 ticks=190 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=27408 encoding=gzip chunked=0 cookies=0 ticks=191 url=https://andreas.me/_astro/index.Du-MXi8O.css",
+  "[net.open.flows] made=2",
+  "[net.tls.agreed] flow=1 version=TLSv1_3 suite=TLS13_AES_128_GCM_SHA256 group=Some(X25519)",
+  "[net.receive.stats] bytes=33822 calls=60 empty=52 ticks=168 flow=1 reused=0 kept=1",
+  "[web.http] method=GET status=200 bytes=33176 encoding=none chunked=0 cookies=0 ticks=168 url=https://i.ytimg.com/vi/5ajIQqbMsg4/hqdefault.jpg",
+  "[net.receive.stats] bytes=36744 calls=32 empty=29 ticks=63 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=36098 encoding=none chunked=0 cookies=0 ticks=63 url=https://i.ytimg.com/vi/onMFUHV09nA/hqdefault.jpg",
+  "[net.receive.stats] bytes=25503 calls=39 empty=36 ticks=48 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=24857 encoding=none chunked=0 cookies=0 ticks=48 url=https://i.ytimg.com/vi/oXnNHzDYOW0/hqdefault.jpg",
+  "[net.receive.stats] bytes=23630 calls=69 empty=67 ticks=90 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=22984 encoding=none chunked=0 cookies=0 ticks=90 url=https://i.ytimg.com/vi/DZ3U02V4GSg/hqdefault.jpg",
+  "[net.receive.stats] bytes=28786 calls=41 empty=36 ticks=49 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=28140 encoding=none chunked=0 cookies=0 ticks=49 url=https://i.ytimg.com/vi/wvJfooFEpZo/hqdefault.jpg",
+  "[net.receive.stats] bytes=22116 calls=71 empty=66 ticks=78 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=21470 encoding=none chunked=0 cookies=0 ticks=79 url=https://i.ytimg.com/vi/WflZzg4dHzI/hqdefault.jpg",
+  "[net.receive.stats] bytes=15987 calls=69 empty=66 ticks=74 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=15350 encoding=none chunked=0 cookies=0 ticks=75 url=https://i.ytimg.com/vi/mRIFGVigvzI/hqdefault.jpg",
+  "[net.receive.stats] bytes=32961 calls=57 empty=52 ticks=64 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=32315 encoding=none chunked=0 cookies=0 ticks=64 url=https://i.ytimg.com/vi/w6U-kvhYclw/hqdefault.jpg",
+  "[net.receive.stats] bytes=16199 calls=75 empty=72 ticks=105 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=15553 encoding=none chunked=0 cookies=0 ticks=105 url=https://i.ytimg.com/vi/tifCYNjiqvc/hqdefault.jpg",
+  "[net.receive.stats] bytes=32315 calls=57 empty=53 ticks=66 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=31669 encoding=none chunked=0 cookies=0 ticks=67 url=https://i.ytimg.com/vi/Y9uTS1r0CK8/hqdefault.jpg",
+  "[net.receive.stats] bytes=28704 calls=50 empty=46 ticks=58 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=28058 encoding=none chunked=0 cookies=0 ticks=58 url=https://i.ytimg.com/vi/wuxFYlkiA64/hqdefault.jpg",
+  "[net.receive.stats] bytes=9897 calls=57 empty=55 ticks=61 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=9261 encoding=none chunked=0 cookies=0 ticks=61 url=https://i.ytimg.com/vi/yDFLL4gedAI/hqdefault.jpg",
+  "[net.receive.stats] bytes=22116 calls=75 empty=73 ticks=132 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=21470 encoding=none chunked=0 cookies=0 ticks=132 url=https://i.ytimg.com/vi/Fcg_WJTU-5Y/hqdefault.jpg",
+  "[net.receive.stats] bytes=16282 calls=48 empty=46 ticks=55 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=15636 encoding=none chunked=0 cookies=0 ticks=55 url=https://i.ytimg.com/vi/KG9LuyzIvt8/hqdefault.jpg",
+  "[net.receive.stats] bytes=20599 calls=61 empty=58 ticks=68 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=19953 encoding=none chunked=0 cookies=0 ticks=69 url=https://i.ytimg.com/vi/YbhD8MtRzKw/hqdefault.jpg",
+  "[net.receive.stats] bytes=232964 calls=429 empty=413 ticks=524 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=232574 encoding=none chunked=0 cookies=0 ticks=524 url=https://andreas.me/img/obelisks.webp",
+  "[net.receive.stats] bytes=67657 calls=83 empty=79 ticks=162 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=67268 encoding=none chunked=0 cookies=0 ticks=162 url=https://andreas.me/img/metaspace.webp",
+  "[net.receive.stats] bytes=86858 calls=102 empty=96 ticks=216 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=86469 encoding=none chunked=0 cookies=0 ticks=216 url=https://andreas.me/img/pic02.jpg",
+  "[net.receive.stats] bytes=206688 calls=125 empty=112 ticks=247 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=206299 encoding=none chunked=0 cookies=0 ticks=248 url=https://andreas.me/img/qrbtc.png",
+  "[net.receive.stats] bytes=4229 calls=67 empty=66 ticks=103 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=9643 encoding=gzip chunked=0 cookies=0 ticks=103 url=https://andreas.me/ocean.js",
+  "[net.receive.stats] bytes=3156 calls=75 empty=74 ticks=122 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=6913 encoding=gzip chunked=0 cookies=0 ticks=122 url=https://andreas.me/app.js",
+  "[net.receive.stats] bytes=1251 calls=70 empty=69 ticks=95 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=1737 encoding=gzip chunked=0 cookies=0 ticks=95 url=https://andreas.me/film/site.js",
+  "[web.script] engine_ticks=1006 memory=4194304",
+  "[web.console] level=1 ocean unavailable: cannot read property '_listeners' of undefined",
+  "[web.console] level=2 SyntaxError: expecting ';'",
+  "[web.console] level=2     at https://andreas.me/app.js:10:3",
+  "[web.console] level=2 SyntaxError: Unexpected token '{'",
+  "[web.console] level=2     at https://andreas.me/film/site.js:1:1",
+  "[web.loaded] bytes_ok=1 items=649 links=125 height=171035 sheets=3 images=18 fetch_ticks=4150 layout_ticks=34 script_ticks=1235 scripted=1",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=649 ticks=14",
+  "[web.ready] target=42 task=42",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=649 ticks=12",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=649 ticks=10",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=649 ticks=10",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=649 ticks=10",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=649 ticks=10",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=649 ticks=10",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=649 ticks=10",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=649 ticks=8",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=649 ticks=10",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=649 ticks=10",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=649 ticks=10",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=649 ticks=12",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=649 ticks=12",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=649 ticks=10",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=649 ticks=10",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=649 ticks=10",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=649 ticks=12",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=649 ticks=10",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=649 ticks=10",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=649 ticks=10",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=649 ticks=12",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=649 ticks=12",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=649 ticks=10",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=649 ticks=10",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=649 ticks=10",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=649 ticks=10",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=649 ticks=12",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=649 ticks=10",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=649 ticks=10",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=649 ticks=10",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=649 ticks=10",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=649 ticks=10"
+ ],
+ "agreed": [
+  [
+   "TLSv1_3",
+   "TLS13_AES_128_GCM_SHA256",
+   "Some(X25519)"
+  ],
+  [
+   "TLSv1_3",
+   "TLS13_AES_128_GCM_SHA256",
+   "Some(X25519)"
+  ]
+ ],
+ "http": [
+  [
+   "200",
+   "14964",
+   "https://andreas.me/"
+  ],
+  [
+   "200",
+   "5122",
+   "https://andreas.me/film/film.css"
+  ],
+  [
+   "200",
+   "252",
+   "https://andreas.me/film/site.css"
+  ],
+  [
+   "200",
+   "27408",
+   "https://andreas.me/_astro/index.Du-MXi8O.css"
+  ],
+  [
+   "200",
+   "33176",
+   "https://i.ytimg.com/vi/5ajIQqbMsg4/hqdefault.jpg"
+  ],
+  [
+   "200",
+   "36098",
+   "https://i.ytimg.com/vi/onMFUHV09nA/hqdefault.jpg"
+  ],
+  [
+   "200",
+   "24857",
+   "https://i.ytimg.com/vi/oXnNHzDYOW0/hqdefault.jpg"
+  ],
+  [
+   "200",
+   "22984",
+   "https://i.ytimg.com/vi/DZ3U02V4GSg/hqdefault.jpg"
+  ],
+  [
+   "200",
+   "28140",
+   "https://i.ytimg.com/vi/wvJfooFEpZo/hqdefault.jpg"
+  ],
+  [
+   "200",
+   "21470",
+   "https://i.ytimg.com/vi/WflZzg4dHzI/hqdefault.jpg"
+  ],
+  [
+   "200",
+   "15350",
+   "https://i.ytimg.com/vi/mRIFGVigvzI/hqdefault.jpg"
+  ],
+  [
+   "200",
+   "32315",
+   "https://i.ytimg.com/vi/w6U-kvhYclw/hqdefault.jpg"
+  ],
+  [
+   "200",
+   "15553",
+   "https://i.ytimg.com/vi/tifCYNjiqvc/hqdefault.jpg"
+  ],
+  [
+   "200",
+   "31669",
+   "https://i.ytimg.com/vi/Y9uTS1r0CK8/hqdefault.jpg"
+  ],
+  [
+   "200",
+   "28058",
+   "https://i.ytimg.com/vi/wuxFYlkiA64/hqdefault.jpg"
+  ],
+  [
+   "200",
+   "9261",
+   "https://i.ytimg.com/vi/yDFLL4gedAI/hqdefault.jpg"
+  ],
+  [
+   "200",
+   "21470",
+   "https://i.ytimg.com/vi/Fcg_WJTU-5Y/hqdefault.jpg"
+  ],
+  [
+   "200",
+   "15636",
+   "https://i.ytimg.com/vi/KG9LuyzIvt8/hqdefault.jpg"
+  ],
+  [
+   "200",
+   "19953",
+   "https://i.ytimg.com/vi/YbhD8MtRzKw/hqdefault.jpg"
+  ],
+  [
+   "200",
+   "232574",
+   "https://andreas.me/img/obelisks.webp"
+  ],
+  [
+   "200",
+   "67268",
+   "https://andreas.me/img/metaspace.webp"
+  ],
+  [
+   "200",
+   "86469",
+   "https://andreas.me/img/pic02.jpg"
+  ],
+  [
+   "200",
+   "206299",
+   "https://andreas.me/img/qrbtc.png"
+  ],
+  [
+   "200",
+   "9643",
+   "https://andreas.me/ocean.js"
+  ],
+  [
+   "200",
+   "6913",
+   "https://andreas.me/app.js"
+  ],
+  [
+   "200",
+   "1737",
+   "https://andreas.me/film/site.js"
+  ]
+ ],
+ "loaded": true,
+ "fatal": [],
+ "guest_error": null,
+ "timed_out": false
+}

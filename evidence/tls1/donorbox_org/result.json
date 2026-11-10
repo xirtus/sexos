@@ -1,0 +1,235 @@
+{
+ "site": "donorbox.org",
+ "elapsed": 19.9,
+ "lines": [
+  "[net.program.bound] target=42 task=42",
+  "[web.cores] cores=1",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=0 ticks=10",
+  "[net.tls.agreed] flow=0 version=TLSv1_3 suite=TLS13_AES_128_GCM_SHA256 group=Some(X25519)",
+  "[net.receive.stats] bytes=172549 calls=98 empty=87 ticks=799 flow=0 reused=0 kept=1",
+  "[web.http] method=GET status=200 bytes=1195321 encoding=gzip chunked=1 cookies=1 ticks=814 url=https://donorbox.org/",
+  "[net.receive.stats] bytes=5265 calls=20 empty=19 ticks=22 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=11004 encoding=gzip chunked=0 cookies=1 ticks=23 url=https://donorbox.org/landing_pages_assets/new-landing-pages/top-header/donorbox-pro-logo-e31c33fc7f17b735f6be064ccf2b14e019680d4e8745c5f7352bb3cf53561385.svg",
+  "[net.receive.stats] bytes=6431 calls=18 empty=17 ticks=23 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=13714 encoding=gzip chunked=0 cookies=1 ticks=23 url=https://donorbox.org/landing_pages_assets/new-landing-pages/top-header/donorbox-premium-white-74c6dea45080b13661b8c351a7fb02b1b6f974111e5307ebc38a95d73e7aaa0c.svg",
+  "[net.receive.stats] bytes=45658 calls=22 empty=18 ticks=33 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=44736 encoding=none chunked=0 cookies=1 ticks=33 url=https://donorbox.org/landing_pages_assets/new-landing-pages/top-header/live-kiosk-c446c75a0323106d741e74fca0fe8d249d630acbfbaa357f5ae46fe06326d04a.jpg",
+  "[net.receive.stats] bytes=499415 calls=369 empty=338 ticks=893 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=498204 encoding=gzip chunked=1 cookies=1 ticks=902 url=https://donorbox.org/landing_pages_blobs/images/homepage/hero.png",
+  "[net.receive.stats] bytes=8053 calls=37 empty=36 ticks=38 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=6825 encoding=gzip chunked=1 cookies=1 ticks=40 url=https://donorbox.org/landing_pages_blobs/images/homepage/habitat_for_humanity.png",
+  "[net.receive.stats] bytes=6568 calls=132 empty=131 ticks=429 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=5295 encoding=gzip chunked=1 cookies=1 ticks=430 url=https://donorbox.org/landing_pages_blobs/images/homepage/united_way.png",
+  "[net.receive.stats] bytes=7095 calls=117 empty=116 ticks=343 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=5822 encoding=gzip chunked=1 cookies=1 ticks=343 url=https://donorbox.org/landing_pages_blobs/images/homepage/boys_and_girls_clubs_of_america.png",
+  "[net.receive.stats] bytes=7908 calls=38 empty=37 ticks=39 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=6639 encoding=gzip chunked=1 cookies=1 ticks=39 url=https://donorbox.org/landing_pages_blobs/images/homepage/humane_society.png",
+  "[net.receive.stats] bytes=7574 calls=18 empty=17 ticks=40 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=6305 encoding=gzip chunked=1 cookies=1 ticks=40 url=https://donorbox.org/landing_pages_blobs/images/homepage/big_brothers_big_sisters_of_america.png",
+  "[net.receive.stats] bytes=14341 calls=69 empty=68 ticks=86 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=13056 encoding=gzip chunked=1 cookies=1 ticks=86 url=https://donorbox.org/landing_pages_blobs/images/homepage/basketball_hall_of_fame.png",
+  "[net.receive.stats] bytes=12106 calls=43 empty=42 ticks=45 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=10830 encoding=gzip chunked=1 cookies=1 ticks=46 url=https://donorbox.org/landing_pages_blobs/images/homepage/park_conservancy.png",
+  "[net.receive.stats] bytes=8125 calls=132 empty=131 ticks=421 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=6856 encoding=gzip chunked=1 cookies=1 ticks=421 url=https://donorbox.org/landing_pages_blobs/images/homepage/black_girls_code.png",
+  "[net.receive.stats] bytes=19635 calls=137 empty=135 ticks=454 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=18747 encoding=gzip chunked=1 cookies=1 ticks=455 url=https://donorbox.org/landing_pages_blobs/images/homepage/st_michael_abbey.png",
+  "[net.receive.stats] bytes=2816 calls=42 empty=41 ticks=43 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=1567 encoding=gzip chunked=0 cookies=1 ticks=44 url=https://donorbox.org/landing_pages_blobs/images/homepage/medglobal.png",
+  "[net.receive.stats] bytes=3167 calls=40 empty=39 ticks=42 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=1919 encoding=gzip chunked=0 cookies=1 ticks=42 url=https://donorbox.org/landing_pages_blobs/images/homepage/spca.png",
+  "[net.receive.stats] bytes=35430 calls=143 empty=140 ticks=482 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=34130 encoding=gzip chunked=1 cookies=1 ticks=483 url=https://donorbox.org/landing_pages_blobs/images/homepage/donation-page.png",
+  "[net.receive.stats] bytes=40749 calls=41 empty=38 ticks=50 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=39424 encoding=gzip chunked=1 cookies=1 ticks=50 url=https://donorbox.org/landing_pages_blobs/images/homepage/crm.png",
+  "[net.receive.stats] bytes=28089 calls=71 empty=69 ticks=100 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=26805 encoding=gzip chunked=1 cookies=1 ticks=101 url=https://donorbox.org/landing_pages_blobs/images/homepage/live-kiosk.png",
+  "[net.receive.stats] bytes=17222 calls=128 empty=126 ticks=402 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=15941 encoding=gzip chunked=1 cookies=1 ticks=402 url=https://donorbox.org/landing_pages_blobs/images/homepage/events.png",
+  "[net.receive.stats] bytes=22032 calls=128 empty=127 ticks=416 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=20746 encoding=gzip chunked=1 cookies=1 ticks=417 url=https://donorbox.org/landing_pages_blobs/images/homepage/jay_ai.png",
+  "[net.receive.stats] bytes=51928 calls=53 empty=49 ticks=65 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=50665 encoding=gzip chunked=1 cookies=1 ticks=66 url=https://donorbox.org/landing_pages_blobs/images/homepage/donation-pages.png",
+  "[net.receive.stats] bytes=15259 calls=125 empty=124 ticks=395 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=14014 encoding=gzip chunked=1 cookies=1 ticks=395 url=https://donorbox.org/landing_pages_blobs/images/homepage/donor-portal.png",
+  "[net.receive.stats] bytes=8800 calls=115 empty=114 ticks=339 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=7705 encoding=gzip chunked=1 cookies=1 ticks=339 url=https://donorbox.org/landing_pages_blobs/images/homepage/memberships.png",
+  "[net.receive.stats] bytes=46408 calls=136 empty=132 ticks=459 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=45119 encoding=gzip chunked=1 cookies=1 ticks=460 url=https://donorbox.org/landing_pages_blobs/images/homepage/crowdfunding.png",
+  "[net.receive.stats] bytes=9830 calls=19 empty=18 ticks=23 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=36930 encoding=gzip chunked=0 cookies=1 ticks=24 url=https://donorbox.org/landing_pages_assets/application-9af532f44cb7b642d5197eb2fce57145ba615fdcf9a046d2e4e7f828f7ea0be9.js",
+  "[net.open.flows] made=2",
+  "[net.tls.agreed] flow=1 version=TLSv1_3 suite=TLS13_AES_128_GCM_SHA256 group=Some(X25519)",
+  "[net.receive.stats] bytes=1925 calls=83 empty=82 ticks=403 flow=1 reused=0 kept=1",
+  "[web.http] method=GET status=200 bytes=2617 encoding=gzip chunked=0 cookies=1 ticks=403 url=https://donorbox-www.herokuapp.com/gdpr_consent_window.js",
+  "[web.script] engine_ticks=1056 memory=4194304",
+  "[web.console] level=2 ReferenceError: atob is not defined",
+  "[web.console] level=2     at <eval> (https://donorbox.org/#script8:2:256)",
+  "[web.loaded] bytes_ok=1 items=738 links=77 height=20279 sheets=0 images=26 fetch_ticks=7138 layout_ticks=802 script_ticks=2202 scripted=1",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=738 ticks=27",
+  "[web.ready] target=42 task=42",
+  "[net.receive.stats] bytes=4201 calls=19 empty=18 ticks=100 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=18699 encoding=gzip chunked=1 cookies=1 ticks=100 url=https://donorbox-www.herokuapp.com/gdpr_consent_window.html",
+  "[web.fetch] id=1 status=200 bytes=18699 ticks=102 method=GET url=https://donorbox-www.herokuapp.com/gdpr_consent_window.html",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=1641 ticks=9",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=1641 ticks=9"
+ ],
+ "agreed": [
+  [
+   "TLSv1_3",
+   "TLS13_AES_128_GCM_SHA256",
+   "Some(X25519)"
+  ],
+  [
+   "TLSv1_3",
+   "TLS13_AES_128_GCM_SHA256",
+   "Some(X25519)"
+  ]
+ ],
+ "http": [
+  [
+   "200",
+   "1195321",
+   "https://donorbox.org/"
+  ],
+  [
+   "200",
+   "11004",
+   "https://donorbox.org/landing_pages_assets/new-landing-pages/top-header/donorbox-pro-logo-e31c33fc7f17b735f6be064ccf2b14e019680d4e8745c5f7352bb3cf53561385.svg"
+  ],
+  [
+   "200",
+   "13714",
+   "https://donorbox.org/landing_pages_assets/new-landing-pages/top-header/donorbox-premium-white-74c6dea45080b13661b8c351a7fb02b1b6f974111e5307ebc38a95d73e7aaa0c.svg"
+  ],
+  [
+   "200",
+   "44736",
+   "https://donorbox.org/landing_pages_assets/new-landing-pages/top-header/live-kiosk-c446c75a0323106d741e74fca0fe8d249d630acbfbaa357f5ae46fe06326d04a.jpg"
+  ],
+  [
+   "200",
+   "498204",
+   "https://donorbox.org/landing_pages_blobs/images/homepage/hero.png"
+  ],
+  [
+   "200",
+   "6825",
+   "https://donorbox.org/landing_pages_blobs/images/homepage/habitat_for_humanity.png"
+  ],
+  [
+   "200",
+   "5295",
+   "https://donorbox.org/landing_pages_blobs/images/homepage/united_way.png"
+  ],
+  [
+   "200",
+   "5822",
+   "https://donorbox.org/landing_pages_blobs/images/homepage/boys_and_girls_clubs_of_america.png"
+  ],
+  [
+   "200",
+   "6639",
+   "https://donorbox.org/landing_pages_blobs/images/homepage/humane_society.png"
+  ],
+  [
+   "200",
+   "6305",
+   "https://donorbox.org/landing_pages_blobs/images/homepage/big_brothers_big_sisters_of_america.png"
+  ],
+  [
+   "200",
+   "13056",
+   "https://donorbox.org/landing_pages_blobs/images/homepage/basketball_hall_of_fame.png"
+  ],
+  [
+   "200",
+   "10830",
+   "https://donorbox.org/landing_pages_blobs/images/homepage/park_conservancy.png"
+  ],
+  [
+   "200",
+   "6856",
+   "https://donorbox.org/landing_pages_blobs/images/homepage/black_girls_code.png"
+  ],
+  [
+   "200",
+   "18747",
+   "https://donorbox.org/landing_pages_blobs/images/homepage/st_michael_abbey.png"
+  ],
+  [
+   "200",
+   "1567",
+   "https://donorbox.org/landing_pages_blobs/images/homepage/medglobal.png"
+  ],
+  [
+   "200",
+   "1919",
+   "https://donorbox.org/landing_pages_blobs/images/homepage/spca.png"
+  ],
+  [
+   "200",
+   "34130",
+   "https://donorbox.org/landing_pages_blobs/images/homepage/donation-page.png"
+  ],
+  [
+   "200",
+   "39424",
+   "https://donorbox.org/landing_pages_blobs/images/homepage/crm.png"
+  ],
+  [
+   "200",
+   "26805",
+   "https://donorbox.org/landing_pages_blobs/images/homepage/live-kiosk.png"
+  ],
+  [
+   "200",
+   "15941",
+   "https://donorbox.org/landing_pages_blobs/images/homepage/events.png"
+  ],
+  [
+   "200",
+   "20746",
+   "https://donorbox.org/landing_pages_blobs/images/homepage/jay_ai.png"
+  ],
+  [
+   "200",
+   "50665",
+   "https://donorbox.org/landing_pages_blobs/images/homepage/donation-pages.png"
+  ],
+  [
+   "200",
+   "14014",
+   "https://donorbox.org/landing_pages_blobs/images/homepage/donor-portal.png"
+  ],
+  [
+   "200",
+   "7705",
+   "https://donorbox.org/landing_pages_blobs/images/homepage/memberships.png"
+  ],
+  [
+   "200",
+   "45119",
+   "https://donorbox.org/landing_pages_blobs/images/homepage/crowdfunding.png"
+  ],
+  [
+   "200",
+   "36930",
+   "https://donorbox.org/landing_pages_assets/application-9af532f44cb7b642d5197eb2fce57145ba615fdcf9a046d2e4e7f828f7ea0be9.js"
+  ],
+  [
+   "200",
+   "2617",
+   "https://donorbox-www.herokuapp.com/gdpr_consent_window.js"
+  ],
+  [
+   "200",
+   "18699",
+   "https://donorbox-www.herokuapp.com/gdpr_consent_window.html"
+  ]
+ ],
+ "loaded": true,
+ "fatal": [],
+ "guest_error": null,
+ "timed_out": false
+}

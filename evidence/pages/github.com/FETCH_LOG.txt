@@ -1,0 +1,7 @@
+UA: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36
+page	https://github.com/	200 92079 https://github.com/
+script	https://github.githubassets.com/assets/high-contrast-cookie-35ae5dee64dc5768.js	200 621 https://github.githubassets.com/assets/high-contrast-cookie-35ae5dee64dc5768.js
+script	https://github.githubassets.com/assets/core-b223ce5bb10c6668.js	200 115839 https://github.githubassets.com/assets/core-b223ce5bb10c6668.js
+script	https://github.githubassets.com/assets/marketing-essentials-fb5c686e09d82619.js	200 2172 https://github.githubassets.com/assets/marketing-essentials-fb5c686e09d82619.js
+script	https://github.githubassets.com/assets/landing-pages-c1bec454b3d72036.js	200 763247 https://github.githubassets.com/assets/landing-pages-c1bec454b3d72036.js
+script	https://github.githubassets.com/assets/global-banner-disable-63f5ee3e1edbce73.js	200 413 https://github.githubassets.com/assets/global-banner-disable-63f5ee3e1edbce73.js

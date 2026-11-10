@@ -1,0 +1,304 @@
+{
+ "site": "cloudflare.com",
+ "elapsed": 22.1,
+ "lines": [
+  "[net.program.bound] target=42 task=42",
+  "[web.cores] cores=1",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=0 ticks=12",
+  "[net.tls.agreed] flow=0 version=TLSv1_3 suite=TLS13_AES_128_GCM_SHA256 group=Some(X25519)",
+  "[net.receive.stats] bytes=1201 calls=5 empty=4 ticks=222 flow=0 reused=0 kept=1",
+  "[web.http] method=GET status=301 bytes=167 encoding=none chunked=1 cookies=1 ticks=226 url=https://cloudflare.com/",
+  "[net.open.flows] made=2",
+  "[net.tls.agreed] flow=1 version=TLSv1_3 suite=TLS13_AES_128_GCM_SHA256 group=Some(X25519)",
+  "[net.receive.stats] bytes=305047 calls=63 empty=44 ticks=540 flow=1 reused=0 kept=1",
+  "[web.http] method=GET status=200 bytes=1334526 encoding=gzip chunked=1 cookies=2 ticks=579 url=https://www.cloudflare.com/",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=0 ticks=1",
+  "[net.receive.stats] bytes=86444 calls=14 empty=8 ticks=93 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=656593 encoding=gzip chunked=1 cookies=2 ticks=103 url=https://www.cloudflare.com/_astro/_separator.CtrAARtM.css",
+  "[net.receive.stats] bytes=4931 calls=5 empty=4 ticks=27 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=6865 encoding=gzip chunked=1 cookies=2 ticks=27 url=https://www.cloudflare.com/_astro/index.Cm-titPL.css",
+  "[net.receive.stats] bytes=4938 calls=17 empty=16 ticks=89 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=5982 encoding=gzip chunked=1 cookies=2 ticks=89 url=https://www.cloudflare.com/_astro/index.CN3UJUeJ.css",
+  "[net.receive.stats] bytes=5531 calls=5 empty=4 ticks=26 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=8170 encoding=gzip chunked=1 cookies=2 ticks=26 url=https://www.cloudflare.com/_astro/DomainSearchApp.W_8IODvl.css",
+  "[net.receive.stats] bytes=21521 calls=5 empty=3 ticks=34 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=17836 encoding=none chunked=0 cookies=2 ticks=34 url=https://www.cloudflare.com/static/hero-poster.avif",
+  "[net.receive.stats] bytes=9720 calls=5 empty=4 ticks=26 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=6065 encoding=none chunked=0 cookies=2 ticks=26 url=https://www.cloudflare.com/people/duncan-davidson.png",
+  "[net.receive.stats] bytes=5765 calls=5 empty=4 ticks=25 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=2291 encoding=gzip chunked=1 cookies=2 ticks=25 url=https://www.cloudflare.com/companies/e4ea9663-706f-4411-b25c-539fca52c862.svg",
+  "[net.receive.stats] bytes=5155 calls=14 empty=13 ticks=27 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=3289 encoding=gzip chunked=1 cookies=2 ticks=27 url=https://www.cloudflare.com/companies/3ccce0b1-a008-42d0-a6e3-7c228a78d0c8.svg",
+  "[net.receive.stats] bytes=5599 calls=19 empty=18 ticks=24 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=14790 encoding=gzip chunked=1 cookies=2 ticks=25 url=https://www.cloudflare.com/companies/0c59832d-e3d3-458e-bb88-8894a4f9d18e.svg",
+  "[net.receive.stats] bytes=4277 calls=20 empty=19 ticks=26 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=933 encoding=gzip chunked=1 cookies=2 ticks=26 url=https://www.cloudflare.com/companies/74c5e83e-abc8-49a4-a55b-0ecf972bb849.svg",
+  "[net.receive.stats] bytes=5698 calls=24 empty=23 ticks=28 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=4834 encoding=gzip chunked=1 cookies=2 ticks=28 url=https://www.cloudflare.com/companies/ecbc9f10-50da-4a73-9a27-54a18d00aa9e.svg",
+  "[net.receive.stats] bytes=82703 calls=27 empty=22 ticks=41 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=79042 encoding=none chunked=0 cookies=2 ticks=41 url=https://www.cloudflare.com/companies/21708102-7a68-4230-8ca6-b088879ce262.png",
+  "[net.receive.stats] bytes=4861 calls=22 empty=21 ticks=25 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=2617 encoding=gzip chunked=1 cookies=2 ticks=26 url=https://www.cloudflare.com/companies/47e69d4e-6b6d-46e4-868a-3f22950572f8.svg",
+  "[net.receive.stats] bytes=4443 calls=69 empty=68 ticks=89 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=1586 encoding=gzip chunked=1 cookies=2 ticks=89 url=https://www.cloudflare.com/companies/4b6fd6e4-96c4-4c26-a4e4-d52c75d93cdf.svg",
+  "[net.receive.stats] bytes=4918 calls=25 empty=24 ticks=26 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=2737 encoding=gzip chunked=1 cookies=2 ticks=26 url=https://www.cloudflare.com/companies/02430f10-e1fe-4e48-8400-43adfa3328e2.svg",
+  "[net.receive.stats] bytes=21094 calls=28 empty=26 ticks=33 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=42510 encoding=gzip chunked=1 cookies=2 ticks=33 url=https://www.cloudflare.com/companies/1e9d9fd3-c1e8-47df-a4dc-7c97d9f8b6c8.svg",
+  "[net.receive.stats] bytes=5388 calls=23 empty=22 ticks=25 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=3700 encoding=gzip chunked=1 cookies=2 ticks=25 url=https://www.cloudflare.com/companies/673e6f52-edfd-4d95-81b6-6a523da89374.svg",
+  "[net.receive.stats] bytes=4379 calls=22 empty=21 ticks=24 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=1269 encoding=gzip chunked=1 cookies=2 ticks=24 url=https://www.cloudflare.com/companies/6d07e6ca-12a0-4244-b1dd-327cde491e2f.svg",
+  "[net.receive.stats] bytes=5364 calls=22 empty=21 ticks=23 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=3742 encoding=gzip chunked=1 cookies=2 ticks=23 url=https://www.cloudflare.com/companies/6ad20752-7949-4dc6-9de8-c93d5e33888a.svg",
+  "[net.receive.stats] bytes=4594 calls=23 empty=22 ticks=26 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=2547 encoding=gzip chunked=1 cookies=2 ticks=26 url=https://www.cloudflare.com/companies/ad2cf871-580c-41ba-ac0c-8d2f7be3c8ff.svg",
+  "[net.receive.stats] bytes=4910 calls=20 empty=19 ticks=23 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=2511 encoding=gzip chunked=1 cookies=2 ticks=25 url=https://www.cloudflare.com/companies/1f3ec03d-833c-4b28-b61d-317e3fa0c886.svg",
+  "[net.receive.stats] bytes=5909 calls=22 empty=21 ticks=25 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=5597 encoding=gzip chunked=1 cookies=2 ticks=26 url=https://www.cloudflare.com/companies/c9ead275-76e3-424e-b181-4f410ecb68ce.svg",
+  "[net.receive.stats] bytes=6555 calls=23 empty=22 ticks=26 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=7501 encoding=gzip chunked=1 cookies=2 ticks=28 url=https://www.cloudflare.com/companies/75ef1c21-b669-4199-b229-d6551a7e951d.svg",
+  "[net.receive.stats] bytes=7489 calls=23 empty=22 ticks=25 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=9293 encoding=gzip chunked=1 cookies=2 ticks=26 url=https://www.cloudflare.com/companies/7f0c2889-d3c1-4b33-b205-e1917c22bb53.svg",
+  "[net.receive.stats] bytes=5537 calls=71 empty=70 ticks=96 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=4842 encoding=gzip chunked=1 cookies=2 ticks=96 url=https://www.cloudflare.com/companies/6d985b86-996a-45d4-b004-f8becedf5676.svg",
+  "[net.receive.stats] bytes=5027 calls=23 empty=22 ticks=23 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=3604 encoding=gzip chunked=1 cookies=2 ticks=23 url=https://www.cloudflare.com/companies/7b4629c1-433d-4069-a068-1a227076122c.svg",
+  "[net.receive.stats] bytes=5130 calls=23 empty=22 ticks=25 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=3151 encoding=gzip chunked=1 cookies=2 ticks=26 url=https://www.cloudflare.com/companies/d3e85b73-865f-4017-b29c-5acaf120c0c4.svg",
+  "[net.receive.stats] bytes=5630 calls=42 empty=41 ticks=44 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=4747 encoding=gzip chunked=1 cookies=2 ticks=44 url=https://www.cloudflare.com/companies/d89fbfe9-ff19-4095-9f9d-94e39bc90ecc.svg",
+  "[net.open.flows] made=3",
+  "[net.tls.agreed] flow=2 version=TLSv1_3 suite=TLS13_AES_128_GCM_SHA256 group=Some(X25519)",
+  "[net.receive.stats] bytes=9952 calls=21 empty=20 ticks=135 flow=2 reused=0 kept=1",
+  "[web.http] method=GET status=200 bytes=26819 encoding=gzip chunked=1 cookies=2 ticks=135 url=https://ot.www.cloudflare.com/ot/scripttemplates/otSDKStub.js",
+  "[net.receive.stats] bytes=7152 calls=18 empty=17 ticks=21 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=9881 encoding=gzip chunked=1 cookies=2 ticks=21 url=https://www.cloudflare.com/_astro/_layout.astro_astro_type_script_index_1_lang.MkjUBwT7.js",
+  "[net.receive.stats] bytes=2663 calls=17 empty=16 ticks=20 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=2507 encoding=gzip chunked=1 cookies=2 ticks=21 url=https://www.cloudflare.com/_b/v/latest/entry.js",
+  "[net.receive.stats] bytes=23417 calls=11 empty=9 ticks=37 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=90503 encoding=gzip chunked=1 cookies=2 ticks=38 url=https://www.cloudflare.com/_astro/_ai-search-modal.astro_astro_type_script_index_0_lang.B0TZFBn6.js",
+  "[web.script] engine_ticks=1035 memory=4194304",
+  "[web.console] level=2 SyntaxError: Unexpected token '{'",
+  "[web.console] level=2     at https://www.cloudflare.com/_astro/_layout.astro_astro_type_script_index_1_lang.MkjUBwT7.js:1:1",
+  "[web.console] level=2 SyntaxError: redeclaration of 'u'",
+  "[web.console] level=2     at <eval> (https://www.cloudflare.com/#script8:1:1)",
+  "[web.console] level=2 SyntaxError: import.meta only valid in module code",
+  "[web.console] level=2     at https://www.cloudflare.com/_b/v/latest/entry.js:2:535",
+  "[web.console] level=2 ReferenceError: customElements is not defined",
+  "[web.console] level=2     at <anonymous> (https://www.cloudflare.com/#script16:1:4288)",
+  "[web.console] level=2     at <eval> (https://www.cloudflare.com/#script16:1:4395)",
+  "[web.console] level=2 ReferenceError: HTMLVideoElement is not defined",
+  "[web.console] level=2     at <anonymous> (https://www.cloudflare.com/#script18:119:30)",
+  "[web.console] level=2     at <eval> (https://www.cloudflare.com/#script18:144:3)",
+  "[web.console] level=2 SyntaxError: redeclaration of 'h'",
+  "[web.console] level=2     at <eval> (https://www.cloudflare.com/#script22:1:1)",
+  "[web.console] level=2 ReferenceError: customElements is not defined",
+  "[web.console] level=2     at <eval> (https://www.cloudflare.com/_astro/_ai-search-modal.astro_astro_type_script_index_0_lang.B0TZFBn6.js:970:1134)",
+  "[web.loaded] bytes_ok=1 items=1902 links=128 height=7324 sheets=4 images=103 fetch_ticks=2233 layout_ticks=3560 script_ticks=6027 scripted=1",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=1902 ticks=25",
+  "[web.ready] target=42 task=42",
+  "[net.receive.stats] bytes=3170 calls=9 empty=8 ticks=50 flow=2 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=6050 encoding=gzip chunked=1 cookies=2 ticks=52 url=https://ot.www.cloudflare.com/ot/consent/b1e05d49-f072-4bae-9116-bdb78af15448/b1e05d49-f072-4bae-9116-bdb78af15448.json",
+  "[web.fetch] id=1 status=200 bytes=6050 ticks=54 method=GET url=https://ot.www.cloudflare.com/ot/consent/b1e05d49-f072-4bae-9116-bdb78af15448/b1e05d49-f072-4bae-9116-bdb78af15448.json"
+ ],
+ "agreed": [
+  [
+   "TLSv1_3",
+   "TLS13_AES_128_GCM_SHA256",
+   "Some(X25519)"
+  ],
+  [
+   "TLSv1_3",
+   "TLS13_AES_128_GCM_SHA256",
+   "Some(X25519)"
+  ],
+  [
+   "TLSv1_3",
+   "TLS13_AES_128_GCM_SHA256",
+   "Some(X25519)"
+  ]
+ ],
+ "http": [
+  [
+   "301",
+   "167",
+   "https://cloudflare.com/"
+  ],
+  [
+   "200",
+   "1334526",
+   "https://www.cloudflare.com/"
+  ],
+  [
+   "200",
+   "656593",
+   "https://www.cloudflare.com/_astro/_separator.CtrAARtM.css"
+  ],
+  [
+   "200",
+   "6865",
+   "https://www.cloudflare.com/_astro/index.Cm-titPL.css"
+  ],
+  [
+   "200",
+   "5982",
+   "https://www.cloudflare.com/_astro/index.CN3UJUeJ.css"
+  ],
+  [
+   "200",
+   "8170",
+   "https://www.cloudflare.com/_astro/DomainSearchApp.W_8IODvl.css"
+  ],
+  [
+   "200",
+   "17836",
+   "https://www.cloudflare.com/static/hero-poster.avif"
+  ],
+  [
+   "200",
+   "6065",
+   "https://www.cloudflare.com/people/duncan-davidson.png"
+  ],
+  [
+   "200",
+   "2291",
+   "https://www.cloudflare.com/companies/e4ea9663-706f-4411-b25c-539fca52c862.svg"
+  ],
+  [
+   "200",
+   "3289",
+   "https://www.cloudflare.com/companies/3ccce0b1-a008-42d0-a6e3-7c228a78d0c8.svg"
+  ],
+  [
+   "200",
+   "14790",
+   "https://www.cloudflare.com/companies/0c59832d-e3d3-458e-bb88-8894a4f9d18e.svg"
+  ],
+  [
+   "200",
+   "933",
+   "https://www.cloudflare.com/companies/74c5e83e-abc8-49a4-a55b-0ecf972bb849.svg"
+  ],
+  [
+   "200",
+   "4834",
+   "https://www.cloudflare.com/companies/ecbc9f10-50da-4a73-9a27-54a18d00aa9e.svg"
+  ],
+  [
+   "200",
+   "79042",
+   "https://www.cloudflare.com/companies/21708102-7a68-4230-8ca6-b088879ce262.png"
+  ],
+  [
+   "200",
+   "2617",
+   "https://www.cloudflare.com/companies/47e69d4e-6b6d-46e4-868a-3f22950572f8.svg"
+  ],
+  [
+   "200",
+   "1586",
+   "https://www.cloudflare.com/companies/4b6fd6e4-96c4-4c26-a4e4-d52c75d93cdf.svg"
+  ],
+  [
+   "200",
+   "2737",
+   "https://www.cloudflare.com/companies/02430f10-e1fe-4e48-8400-43adfa3328e2.svg"
+  ],
+  [
+   "200",
+   "42510",
+   "https://www.cloudflare.com/companies/1e9d9fd3-c1e8-47df-a4dc-7c97d9f8b6c8.svg"
+  ],
+  [
+   "200",
+   "3700",
+   "https://www.cloudflare.com/companies/673e6f52-edfd-4d95-81b6-6a523da89374.svg"
+  ],
+  [
+   "200",
+   "1269",
+   "https://www.cloudflare.com/companies/6d07e6ca-12a0-4244-b1dd-327cde491e2f.svg"
+  ],
+  [
+   "200",
+   "3742",
+   "https://www.cloudflare.com/companies/6ad20752-7949-4dc6-9de8-c93d5e33888a.svg"
+  ],
+  [
+   "200",
+   "2547",
+   "https://www.cloudflare.com/companies/ad2cf871-580c-41ba-ac0c-8d2f7be3c8ff.svg"
+  ],
+  [
+   "200",
+   "2511",
+   "https://www.cloudflare.com/companies/1f3ec03d-833c-4b28-b61d-317e3fa0c886.svg"
+  ],
+  [
+   "200",
+   "5597",
+   "https://www.cloudflare.com/companies/c9ead275-76e3-424e-b181-4f410ecb68ce.svg"
+  ],
+  [
+   "200",
+   "7501",
+   "https://www.cloudflare.com/companies/75ef1c21-b669-4199-b229-d6551a7e951d.svg"
+  ],
+  [
+   "200",
+   "9293",
+   "https://www.cloudflare.com/companies/7f0c2889-d3c1-4b33-b205-e1917c22bb53.svg"
+  ],
+  [
+   "200",
+   "4842",
+   "https://www.cloudflare.com/companies/6d985b86-996a-45d4-b004-f8becedf5676.svg"
+  ],
+  [
+   "200",
+   "3604",
+   "https://www.cloudflare.com/companies/7b4629c1-433d-4069-a068-1a227076122c.svg"
+  ],
+  [
+   "200",
+   "3151",
+   "https://www.cloudflare.com/companies/d3e85b73-865f-4017-b29c-5acaf120c0c4.svg"
+  ],
+  [
+   "200",
+   "4747",
+   "https://www.cloudflare.com/companies/d89fbfe9-ff19-4095-9f9d-94e39bc90ecc.svg"
+  ],
+  [
+   "200",
+   "26819",
+   "https://ot.www.cloudflare.com/ot/scripttemplates/otSDKStub.js"
+  ],
+  [
+   "200",
+   "9881",
+   "https://www.cloudflare.com/_astro/_layout.astro_astro_type_script_index_1_lang.MkjUBwT7.js"
+  ],
+  [
+   "200",
+   "2507",
+   "https://www.cloudflare.com/_b/v/latest/entry.js"
+  ],
+  [
+   "200",
+   "90503",
+   "https://www.cloudflare.com/_astro/_ai-search-modal.astro_astro_type_script_index_0_lang.B0TZFBn6.js"
+  ],
+  [
+   "200",
+   "6050",
+   "https://ot.www.cloudflare.com/ot/consent/b1e05d49-f072-4bae-9116-bdb78af15448/b1e05d49-f072-4bae-9116-bdb78af15448.json"
+  ]
+ ],
+ "loaded": true,
+ "fatal": [],
+ "guest_error": null,
+ "timed_out": false
+}

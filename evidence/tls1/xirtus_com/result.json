@@ -1,0 +1,272 @@
+{
+ "site": "xirtus.com",
+ "elapsed": 14.9,
+ "lines": [
+  "[net.program.bound] target=42 task=42",
+  "[web.cores] cores=1",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=0 ticks=10",
+  "[net.tls.agreed] flow=0 version=TLSv1_3 suite=TLS13_AES_128_GCM_SHA256 group=Some(X25519)",
+  "[net.receive.stats] bytes=6683 calls=25 empty=24 ticks=541 flow=0 reused=0 kept=1",
+  "[web.http] method=GET status=200 bytes=18536 encoding=gzip chunked=0 cookies=0 ticks=545 url=https://xirtus.com/",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=0 ticks=2",
+  "[net.receive.stats] bytes=2102 calls=25 empty=24 ticks=127 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=5122 encoding=gzip chunked=0 cookies=0 ticks=127 url=https://xirtus.com/film/film.css",
+  "[net.receive.stats] bytes=966 calls=26 empty=25 ticks=135 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=1130 encoding=gzip chunked=0 cookies=0 ticks=135 url=https://xirtus.com/film/site.css",
+  "[net.receive.stats] bytes=8363 calls=62 empty=61 ticks=147 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=11807 encoding=gzip chunked=0 cookies=0 ticks=147 url=https://xirtus.com/_astro/index.D9NVyVrE.css",
+  "[net.receive.stats] bytes=14836 calls=95 empty=93 ticks=136 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=33732 encoding=gzip chunked=0 cookies=0 ticks=137 url=https://xirtus.com/_astro/_article_.vUwFRo5m.css",
+  "[net.open.flows] made=2",
+  "[net.tls.agreed] flow=1 version=TLSv1_3 suite=TLS13_AES_128_GCM_SHA256 group=Some(X25519)",
+  "[net.receive.stats] bytes=33830 calls=55 empty=51 ticks=158 flow=1 reused=0 kept=1",
+  "[web.http] method=GET status=200 bytes=33176 encoding=none chunked=0 cookies=0 ticks=158 url=https://i.ytimg.com/vi/5ajIQqbMsg4/hqdefault.jpg",
+  "[net.receive.stats] bytes=50690 calls=162 empty=158 ticks=234 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=50302 encoding=none chunked=0 cookies=0 ticks=235 url=https://xirtus.com/img/sexos.webp",
+  "[net.receive.stats] bytes=11270 calls=72 empty=71 ticks=101 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=10882 encoding=none chunked=0 cookies=0 ticks=101 url=https://xirtus.com/img/3jse.webp",
+  "[net.receive.stats] bytes=67657 calls=149 empty=144 ticks=192 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=67268 encoding=none chunked=0 cookies=0 ticks=193 url=https://xirtus.com/img/metaspace.webp",
+  "[net.receive.stats] bytes=9215 calls=73 empty=72 ticks=109 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=8828 encoding=none chunked=0 cookies=0 ticks=110 url=https://xirtus.com/img/pigaloo.webp",
+  "[net.receive.stats] bytes=70776 calls=105 empty=100 ticks=152 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=70387 encoding=none chunked=0 cookies=0 ticks=152 url=https://xirtus.com/img/pic04.jpg",
+  "[net.receive.stats] bytes=462496 calls=223 empty=194 ticks=398 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=462106 encoding=none chunked=0 cookies=0 ticks=398 url=https://xirtus.com/img/pic01.jpg",
+  "[net.receive.stats] bytes=86858 calls=83 empty=77 ticks=143 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=86469 encoding=none chunked=0 cookies=0 ticks=143 url=https://xirtus.com/img/pic02.jpg",
+  "[net.receive.stats] bytes=248628 calls=89 empty=73 ticks=141 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=248238 encoding=none chunked=0 cookies=0 ticks=141 url=https://xirtus.com/img/pic03.jpg",
+  "[net.receive.stats] bytes=52518 calls=140 empty=136 ticks=177 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=52130 encoding=none chunked=0 cookies=0 ticks=178 url=https://xirtus.com/img/pic05.jpg",
+  "[net.receive.stats] bytes=124432 calls=79 empty=71 ticks=119 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=124042 encoding=none chunked=0 cookies=0 ticks=119 url=https://xirtus.com/img/pic06.jpg",
+  "[net.receive.stats] bytes=20574 calls=70 empty=69 ticks=99 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=20186 encoding=none chunked=0 cookies=0 ticks=99 url=https://xirtus.com/img/zendrive.webp",
+  "[net.receive.stats] bytes=23726 calls=70 empty=68 ticks=101 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=23338 encoding=none chunked=0 cookies=0 ticks=101 url=https://xirtus.com/img/mandalpod.webp",
+  "[net.receive.stats] bytes=16676 calls=70 empty=69 ticks=92 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=16288 encoding=none chunked=0 cookies=0 ticks=92 url=https://xirtus.com/img/machine-elf.webp",
+  "[net.receive.stats] bytes=27976 calls=71 empty=69 ticks=96 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=27588 encoding=none chunked=0 cookies=0 ticks=96 url=https://xirtus.com/img/rabbitverse.webp",
+  "[net.receive.stats] bytes=12712 calls=70 empty=69 ticks=94 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=12324 encoding=none chunked=0 cookies=0 ticks=94 url=https://xirtus.com/img/tsunami-surf.webp",
+  "[net.receive.stats] bytes=18945 calls=78 empty=76 ticks=136 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=18558 encoding=none chunked=0 cookies=0 ticks=136 url=https://xirtus.com/img/rubber-duckie-river-race.webp",
+  "[net.receive.stats] bytes=46068 calls=73 empty=70 ticks=108 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=45680 encoding=none chunked=0 cookies=0 ticks=108 url=https://xirtus.com/img/kriket-3.webp",
+  "[net.receive.stats] bytes=51722 calls=74 empty=70 ticks=100 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=51334 encoding=none chunked=0 cookies=0 ticks=100 url=https://xirtus.com/img/mandelhop.webp",
+  "[net.receive.stats] bytes=71193 calls=75 empty=70 ticks=103 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=70804 encoding=none chunked=0 cookies=0 ticks=104 url=https://xirtus.com/img/dambeavers.webp",
+  "[net.receive.stats] bytes=54426 calls=76 empty=72 ticks=114 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=54038 encoding=none chunked=0 cookies=0 ticks=114 url=https://xirtus.com/img/narayana-the-hadal-cycle.webp",
+  "[net.receive.stats] bytes=206687 calls=85 empty=72 ticks=131 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=206299 encoding=none chunked=0 cookies=0 ticks=131 url=https://xirtus.com/img/qrbtc.png",
+  "[net.receive.stats] bytes=5756 calls=70 empty=69 ticks=92 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=14357 encoding=gzip chunked=0 cookies=0 ticks=93 url=https://xirtus.com/app.js",
+  "[net.receive.stats] bytes=1570 calls=82 empty=81 ticks=156 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=2439 encoding=gzip chunked=0 cookies=0 ticks=156 url=https://xirtus.com/film/site.js",
+  "[web.script] engine_ticks=941 memory=4194304",
+  "[web.console] level=2 TypeError: cannot read property '_listeners' of undefined",
+  "[web.console] level=2     at addEventListener (prelude.js:110:73)",
+  "[web.console] level=2     at pixels (https://xirtus.com/app.js:107:3)",
+  "[web.console] level=2     at <eval> (https://xirtus.com/app.js:261:1)",
+  "[web.console] level=2 SyntaxError: Unexpected token '{'",
+  "[web.console] level=2     at https://xirtus.com/film/site.js:1:1",
+  "[web.loaded] bytes_ok=1 items=620 links=293 height=250712 sheets=4 images=9 fetch_ticks=4873 layout_ticks=45 script_ticks=1086 scripted=1",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=620 ticks=17",
+  "[web.ready] target=42 task=42",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=620 ticks=12",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=620 ticks=10",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=620 ticks=12",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=620 ticks=10",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=620 ticks=14",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=620 ticks=10",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=620 ticks=12",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=620 ticks=12",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=620 ticks=12",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=620 ticks=10",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=620 ticks=12",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=620 ticks=12",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=620 ticks=12",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=620 ticks=12",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=620 ticks=12",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=620 ticks=10",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=620 ticks=12",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=620 ticks=12",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=620 ticks=12",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=620 ticks=10",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=620 ticks=12",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=620 ticks=12",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=620 ticks=10",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=620 ticks=8",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=620 ticks=12",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=620 ticks=12",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=620 ticks=12",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=620 ticks=12"
+ ],
+ "agreed": [
+  [
+   "TLSv1_3",
+   "TLS13_AES_128_GCM_SHA256",
+   "Some(X25519)"
+  ],
+  [
+   "TLSv1_3",
+   "TLS13_AES_128_GCM_SHA256",
+   "Some(X25519)"
+  ]
+ ],
+ "http": [
+  [
+   "200",
+   "18536",
+   "https://xirtus.com/"
+  ],
+  [
+   "200",
+   "5122",
+   "https://xirtus.com/film/film.css"
+  ],
+  [
+   "200",
+   "1130",
+   "https://xirtus.com/film/site.css"
+  ],
+  [
+   "200",
+   "11807",
+   "https://xirtus.com/_astro/index.D9NVyVrE.css"
+  ],
+  [
+   "200",
+   "33732",
+   "https://xirtus.com/_astro/_article_.vUwFRo5m.css"
+  ],
+  [
+   "200",
+   "33176",
+   "https://i.ytimg.com/vi/5ajIQqbMsg4/hqdefault.jpg"
+  ],
+  [
+   "200",
+   "50302",
+   "https://xirtus.com/img/sexos.webp"
+  ],
+  [
+   "200",
+   "10882",
+   "https://xirtus.com/img/3jse.webp"
+  ],
+  [
+   "200",
+   "67268",
+   "https://xirtus.com/img/metaspace.webp"
+  ],
+  [
+   "200",
+   "8828",
+   "https://xirtus.com/img/pigaloo.webp"
+  ],
+  [
+   "200",
+   "70387",
+   "https://xirtus.com/img/pic04.jpg"
+  ],
+  [
+   "200",
+   "462106",
+   "https://xirtus.com/img/pic01.jpg"
+  ],
+  [
+   "200",
+   "86469",
+   "https://xirtus.com/img/pic02.jpg"
+  ],
+  [
+   "200",
+   "248238",
+   "https://xirtus.com/img/pic03.jpg"
+  ],
+  [
+   "200",
+   "52130",
+   "https://xirtus.com/img/pic05.jpg"
+  ],
+  [
+   "200",
+   "124042",
+   "https://xirtus.com/img/pic06.jpg"
+  ],
+  [
+   "200",
+   "20186",
+   "https://xirtus.com/img/zendrive.webp"
+  ],
+  [
+   "200",
+   "23338",
+   "https://xirtus.com/img/mandalpod.webp"
+  ],
+  [
+   "200",
+   "16288",
+   "https://xirtus.com/img/machine-elf.webp"
+  ],
+  [
+   "200",
+   "27588",
+   "https://xirtus.com/img/rabbitverse.webp"
+  ],
+  [
+   "200",
+   "12324",
+   "https://xirtus.com/img/tsunami-surf.webp"
+  ],
+  [
+   "200",
+   "18558",
+   "https://xirtus.com/img/rubber-duckie-river-race.webp"
+  ],
+  [
+   "200",
+   "45680",
+   "https://xirtus.com/img/kriket-3.webp"
+  ],
+  [
+   "200",
+   "51334",
+   "https://xirtus.com/img/mandelhop.webp"
+  ],
+  [
+   "200",
+   "70804",
+   "https://xirtus.com/img/dambeavers.webp"
+  ],
+  [
+   "200",
+   "54038",
+   "https://xirtus.com/img/narayana-the-hadal-cycle.webp"
+  ],
+  [
+   "200",
+   "206299",
+   "https://xirtus.com/img/qrbtc.png"
+  ],
+  [
+   "200",
+   "14357",
+   "https://xirtus.com/app.js"
+  ],
+  [
+   "200",
+   "2439",
+   "https://xirtus.com/film/site.js"
+  ]
+ ],
+ "loaded": true,
+ "fatal": [],
+ "guest_error": null,
+ "timed_out": false
+}

@@ -1,0 +1,195 @@
+{
+ "site": "xchurch.us",
+ "elapsed": 14.9,
+ "lines": [
+  "[net.program.bound] target=42 task=42",
+  "[web.cores] cores=1",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=0 ticks=12",
+  "[net.tls.agreed] flow=0 version=TLSv1_3 suite=TLS13_AES_128_GCM_SHA256 group=Some(X25519)",
+  "[net.receive.stats] bytes=4422 calls=18 empty=17 ticks=599 flow=0 reused=0 kept=1",
+  "[web.http] method=GET status=200 bytes=12995 encoding=gzip chunked=0 cookies=0 ticks=607 url=https://xchurch.us/",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=0 ticks=2",
+  "[net.receive.stats] bytes=10336 calls=21 empty=20 ticks=107 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=73447 encoding=gzip chunked=0 cookies=0 ticks=109 url=https://xchurch.us/assets/css/main.css",
+  "[net.receive.stats] bytes=614 calls=81 empty=80 ticks=418 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=256 encoding=gzip chunked=0 cookies=0 ticks=418 url=https://xchurch.us/assets/css/noscript.css",
+  "[net.receive.stats] bytes=1650 calls=69 empty=68 ticks=90 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=3272 encoding=gzip chunked=0 cookies=0 ticks=91 url=https://xchurch.us/assets/css/enhance.css",
+  "[net.receive.stats] bytes=2102 calls=69 empty=68 ticks=90 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=5122 encoding=gzip chunked=0 cookies=0 ticks=91 url=https://xchurch.us/film/film.css",
+  "[net.receive.stats] bytes=665 calls=69 empty=68 ticks=88 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=460 encoding=gzip chunked=0 cookies=0 ticks=89 url=https://xchurch.us/film/site.css",
+  "[net.receive.stats] bytes=250324 calls=329 empty=313 ticks=469 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=249934 encoding=none chunked=0 cookies=0 ticks=470 url=https://xchurch.us/images/pic01.jpeg",
+  "[net.receive.stats] bytes=402956 calls=203 empty=177 ticks=301 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=402566 encoding=none chunked=0 cookies=0 ticks=302 url=https://xchurch.us/images/pic02.jpeg",
+  "[net.receive.stats] bytes=316285 calls=91 empty=71 ticks=180 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=315895 encoding=none chunked=0 cookies=0 ticks=181 url=https://xchurch.us/images/pic03.jpeg",
+  "[net.receive.stats] bytes=374517 calls=92 empty=70 ticks=172 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=374127 encoding=none chunked=0 cookies=0 ticks=173 url=https://xchurch.us/images/pic04.jpeg",
+  "[net.receive.stats] bytes=268553 calls=90 empty=73 ticks=176 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=268163 encoding=none chunked=0 cookies=0 ticks=176 url=https://xchurch.us/images/banner.jpeg",
+  "[net.receive.stats] bytes=31404 calls=71 empty=69 ticks=97 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=89501 encoding=gzip chunked=0 cookies=0 ticks=99 url=https://xchurch.us/assets/js/jquery.min.js",
+  "[net.receive.stats] bytes=976 calls=69 empty=68 ticks=89 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=831 encoding=gzip chunked=0 cookies=0 ticks=89 url=https://xchurch.us/assets/js/jquery.scrolly.min.js",
+  "[net.receive.stats] bytes=2257 calls=82 empty=81 ticks=159 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=5106 encoding=gzip chunked=0 cookies=0 ticks=159 url=https://xchurch.us/assets/js/jquery.dropotron.min.js",
+  "[net.receive.stats] bytes=1350 calls=68 empty=67 ticks=87 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=2257 encoding=gzip chunked=0 cookies=0 ticks=88 url=https://xchurch.us/assets/js/jquery.scrollex.min.js",
+  "[net.receive.stats] bytes=1341 calls=69 empty=68 ticks=89 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=2051 encoding=gzip chunked=0 cookies=0 ticks=90 url=https://xchurch.us/assets/js/browser.min.js",
+  "[net.receive.stats] bytes=1264 calls=82 empty=81 ticks=157 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=2439 encoding=gzip chunked=0 cookies=0 ticks=158 url=https://xchurch.us/assets/js/breakpoints.min.js",
+  "[net.receive.stats] bytes=3698 calls=69 empty=68 ticks=86 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=12433 encoding=gzip chunked=0 cookies=0 ticks=87 url=https://xchurch.us/assets/js/util.js",
+  "[net.receive.stats] bytes=1990 calls=68 empty=67 ticks=87 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=4836 encoding=gzip chunked=0 cookies=0 ticks=87 url=https://xchurch.us/assets/js/main.js",
+  "[net.receive.stats] bytes=3052 calls=68 empty=67 ticks=93 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=6189 encoding=gzip chunked=0 cookies=0 ticks=93 url=https://xchurch.us/assets/js/enhance.js",
+  "[net.receive.stats] bytes=1369 calls=81 empty=80 ticks=148 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=1996 encoding=gzip chunked=0 cookies=0 ticks=148 url=https://xchurch.us/film/site.js",
+  "[web.script] engine_ticks=973 memory=4194304",
+  "[web.console] level=2 TypeError: no setter for property",
+  "[web.console] level=2     at <anonymous> (https://xchurch.us/assets/js/jquery.min.js:2:65087)",
+  "[web.console] level=2     at <anonymous> (https://xchurch.us/assets/js/jquery.min.js:2:222)",
+  "[web.console] level=2     at <eval> (https://xchurch.us/assets/js/jquery.min.js:2:239)",
+  "[web.console] level=2 ReferenceError: jQuery is not defined",
+  "[web.console] level=2     at <eval> (https://xchurch.us/assets/js/jquery.scrolly.min.js:2:763)",
+  "[web.console] level=2 ReferenceError: jQuery is not defined",
+  "[web.console] level=2     at <eval> (https://xchurch.us/assets/js/jquery.dropotron.min.js:2:5000)",
+  "[web.console] level=2 ReferenceError: jQuery is not defined",
+  "[web.console] level=2     at <eval> (https://xchurch.us/assets/js/jquery.scrollex.min.js:2:2157)",
+  "[web.console] level=2 ReferenceError: jQuery is not defined",
+  "[web.console] level=2     at <eval> (https://xchurch.us/assets/js/util.js:587:4)",
+  "[web.console] level=2 ReferenceError: jQuery is not defined",
+  "[web.console] level=2     at <eval> (https://xchurch.us/assets/js/main.js:250:4)",
+  "[web.console] level=2 TypeError: cannot read property '_listeners' of undefined",
+  "[web.console] level=2     at addEventListener (prelude.js:110:73)",
+  "[web.console] level=2     at <anonymous> (https://xchurch.us/assets/js/enhance.js:48:3)",
+  "[web.console] level=2     at <eval> (https://xchurch.us/assets/js/enhance.js:97:1)",
+  "[web.console] level=2 SyntaxError: Unexpected token '{'",
+  "[web.console] level=2     at https://xchurch.us/film/site.js:1:1",
+  "[web.loaded] bytes_ok=1 items=171 links=10 height=6614 sheets=5 images=5 fetch_ticks=4314 layout_ticks=60 script_ticks=2007 scripted=1",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=171 ticks=23",
+  "[web.ready] target=42 task=42"
+ ],
+ "agreed": [
+  [
+   "TLSv1_3",
+   "TLS13_AES_128_GCM_SHA256",
+   "Some(X25519)"
+  ]
+ ],
+ "http": [
+  [
+   "200",
+   "12995",
+   "https://xchurch.us/"
+  ],
+  [
+   "200",
+   "73447",
+   "https://xchurch.us/assets/css/main.css"
+  ],
+  [
+   "200",
+   "256",
+   "https://xchurch.us/assets/css/noscript.css"
+  ],
+  [
+   "200",
+   "3272",
+   "https://xchurch.us/assets/css/enhance.css"
+  ],
+  [
+   "200",
+   "5122",
+   "https://xchurch.us/film/film.css"
+  ],
+  [
+   "200",
+   "460",
+   "https://xchurch.us/film/site.css"
+  ],
+  [
+   "200",
+   "249934",
+   "https://xchurch.us/images/pic01.jpeg"
+  ],
+  [
+   "200",
+   "402566",
+   "https://xchurch.us/images/pic02.jpeg"
+  ],
+  [
+   "200",
+   "315895",
+   "https://xchurch.us/images/pic03.jpeg"
+  ],
+  [
+   "200",
+   "374127",
+   "https://xchurch.us/images/pic04.jpeg"
+  ],
+  [
+   "200",
+   "268163",
+   "https://xchurch.us/images/banner.jpeg"
+  ],
+  [
+   "200",
+   "89501",
+   "https://xchurch.us/assets/js/jquery.min.js"
+  ],
+  [
+   "200",
+   "831",
+   "https://xchurch.us/assets/js/jquery.scrolly.min.js"
+  ],
+  [
+   "200",
+   "5106",
+   "https://xchurch.us/assets/js/jquery.dropotron.min.js"
+  ],
+  [
+   "200",
+   "2257",
+   "https://xchurch.us/assets/js/jquery.scrollex.min.js"
+  ],
+  [
+   "200",
+   "2051",
+   "https://xchurch.us/assets/js/browser.min.js"
+  ],
+  [
+   "200",
+   "2439",
+   "https://xchurch.us/assets/js/breakpoints.min.js"
+  ],
+  [
+   "200",
+   "12433",
+   "https://xchurch.us/assets/js/util.js"
+  ],
+  [
+   "200",
+   "4836",
+   "https://xchurch.us/assets/js/main.js"
+  ],
+  [
+   "200",
+   "6189",
+   "https://xchurch.us/assets/js/enhance.js"
+  ],
+  [
+   "200",
+   "1996",
+   "https://xchurch.us/film/site.js"
+  ]
+ ],
+ "loaded": true,
+ "fatal": [],
+ "guest_error": null,
+ "timed_out": false
+}

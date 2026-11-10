@@ -1,0 +1,244 @@
+{
+ "site": "pigaloo.com",
+ "elapsed": 40.7,
+ "lines": [
+  "[net.program.bound] target=42 task=42",
+  "[web.cores] cores=1",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=0 ticks=8",
+  "[net.tls.agreed] flow=0 version=TLSv1_3 suite=TLS13_AES_128_GCM_SHA256 group=Some(X25519)",
+  "[net.receive.stats] bytes=7794 calls=26 empty=25 ticks=663 flow=0 reused=0 kept=1",
+  "[web.http] method=GET status=200 bytes=23619 encoding=gzip chunked=0 cookies=1 ticks=671 url=https://pigaloo.com/",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=0 ticks=2",
+  "[net.receive.stats] bytes=2102 calls=26 empty=25 ticks=138 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=5122 encoding=gzip chunked=0 cookies=1 ticks=138 url=https://pigaloo.com/film/film.css",
+  "[net.receive.stats] bytes=674 calls=26 empty=25 ticks=134 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=397 encoding=gzip chunked=0 cookies=1 ticks=134 url=https://pigaloo.com/film/site.css",
+  "[net.receive.stats] bytes=8243 calls=116 empty=115 ticks=365 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=23704 encoding=gzip chunked=0 cookies=1 ticks=366 url=https://pigaloo.com/_astro/index.J2t8wL_k.css",
+  "[net.receive.stats] bytes=15349 calls=80 empty=79 ticks=154 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=72501 encoding=gzip chunked=0 cookies=1 ticks=156 url=https://pigaloo.com/pig.svg",
+  "[net.receive.stats] bytes=20502 calls=271 empty=269 ticks=885 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=20114 encoding=none chunked=0 cookies=1 ticks=885 url=https://pigaloo.com/img/zendrive.webp",
+  "[net.receive.stats] bytes=104510 calls=337 empty=330 ticks=678 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=104120 encoding=none chunked=0 cookies=1 ticks=678 url=https://pigaloo.com/img/a-collage-welcome.webp",
+  "[net.receive.stats] bytes=53412 calls=113 empty=108 ticks=167 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=53024 encoding=none chunked=0 cookies=1 ticks=168 url=https://pigaloo.com/img/narayana-the-hadal-cycle.webp",
+  "[net.receive.stats] bytes=12364 calls=78 empty=77 ticks=131 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=11976 encoding=none chunked=0 cookies=1 ticks=131 url=https://pigaloo.com/img/tsunami-surf.webp",
+  "[net.receive.stats] bytes=20196 calls=1873 empty=1870 ticks=9249 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=19808 encoding=none chunked=0 cookies=1 ticks=9250 url=https://pigaloo.com/img/mandalpod.webp",
+  "[net.kept.retry] flow=0 sent=0",
+  "[net.tls.agreed] flow=0 version=TLSv1_3 suite=TLS13_AES_128_GCM_SHA256 group=Some(X25519)",
+  "[net.receive.stats] bytes=16288 calls=83 empty=81 ticks=358 flow=0 reused=0 kept=1",
+  "[web.http] method=GET status=200 bytes=15842 encoding=none chunked=0 cookies=1 ticks=358 url=https://pigaloo.com/img/machine-elf.webp",
+  "[net.receive.stats] bytes=19110 calls=77 empty=75 ticks=114 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=18722 encoding=none chunked=0 cookies=1 ticks=114 url=https://pigaloo.com/img/rubber-duckie-river-race.webp",
+  "[net.receive.stats] bytes=27054 calls=92 empty=90 ticks=133 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=26666 encoding=none chunked=0 cookies=1 ticks=133 url=https://pigaloo.com/img/rabbitverse.webp",
+  "[net.receive.stats] bytes=46244 calls=120 empty=117 ticks=340 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=45856 encoding=none chunked=0 cookies=1 ticks=340 url=https://pigaloo.com/img/kriket-3.webp",
+  "[net.receive.stats] bytes=49326 calls=235 empty=231 ticks=410 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=48938 encoding=none chunked=0 cookies=1 ticks=410 url=https://pigaloo.com/img/mandelhop.webp",
+  "[net.receive.stats] bytes=70441 calls=264 empty=259 ticks=562 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=70052 encoding=none chunked=0 cookies=1 ticks=562 url=https://pigaloo.com/img/dambeavers.webp",
+  "[net.receive.stats] bytes=190350 calls=730 empty=717 ticks=1479 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=189960 encoding=none chunked=0 cookies=1 ticks=1480 url=https://pigaloo.com/img/a-exploration.webp",
+  "[net.receive.stats] bytes=108500 calls=421 empty=413 ticks=821 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=108110 encoding=none chunked=0 cookies=1 ticks=822 url=https://pigaloo.com/img/w-unravelling.webp",
+  "[net.receive.stats] bytes=111705 calls=333 empty=325 ticks=867 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=111316 encoding=none chunked=0 cookies=1 ticks=868 url=https://pigaloo.com/img/w-puffpaint.webp",
+  "[net.receive.stats] bytes=47088 calls=320 empty=316 ticks=599 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=46700 encoding=none chunked=0 cookies=1 ticks=599 url=https://pigaloo.com/img/a-underwater.webp",
+  "[net.receive.stats] bytes=80775 calls=336 empty=330 ticks=643 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=80386 encoding=none chunked=0 cookies=1 ticks=643 url=https://pigaloo.com/img/w-wrongside.webp",
+  "[net.receive.stats] bytes=62090 calls=321 empty=317 ticks=595 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=61702 encoding=none chunked=0 cookies=1 ticks=596 url=https://pigaloo.com/img/a-ramona.webp",
+  "[net.receive.stats] bytes=138292 calls=465 empty=455 ticks=1073 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=137902 encoding=none chunked=0 cookies=1 ticks=1073 url=https://pigaloo.com/img/a-guardian.webp",
+  "[net.receive.stats] bytes=41526 calls=329 empty=326 ticks=930 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=41138 encoding=none chunked=0 cookies=1 ticks=931 url=https://pigaloo.com/img/a-mermaid.webp",
+  "[net.open.flows] made=2",
+  "[net.tls.agreed] flow=1 version=TLSv1_3 suite=TLS13_AES_128_GCM_SHA256 group=Some(X25519)",
+  "[net.receive.stats] bytes=33822 calls=53 empty=47 ticks=143 flow=1 reused=0 kept=1",
+  "[web.http] method=GET status=200 bytes=33176 encoding=none chunked=0 cookies=1 ticks=143 url=https://i.ytimg.com/vi/5ajIQqbMsg4/hqdefault.jpg",
+  "[net.receive.stats] bytes=206688 calls=1002 empty=988 ticks=2180 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=206299 encoding=none chunked=0 cookies=1 ticks=2180 url=https://pigaloo.com/img/qrbtc.png",
+  "[net.receive.stats] bytes=7244 calls=236 empty=234 ticks=714 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=19308 encoding=gzip chunked=0 cookies=1 ticks=714 url=https://pigaloo.com/app.js",
+  "[net.receive.stats] bytes=1775 calls=243 empty=241 ticks=771 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=3509 encoding=gzip chunked=0 cookies=1 ticks=771 url=https://pigaloo.com/film/site.js",
+  "[web.script] engine_ticks=1047 memory=4194304",
+  "[web.console] level=2 TypeError: cannot read property '_listeners' of undefined",
+  "[web.console] level=2     at addEventListener (prelude.js:110:73)",
+  "[web.console] level=2     at sky (https://pigaloo.com/app.js:30:3)",
+  "[web.console] level=2     at <eval> (https://pigaloo.com/app.js:149:18)",
+  "[web.console] level=2 SyntaxError: Unexpected token '{'",
+  "[web.console] level=2     at https://pigaloo.com/film/site.js:1:1",
+  "[web.loaded] bytes_ok=1 items=534 links=154 height=66215 sheets=3 images=3 fetch_ticks=25493 layout_ticks=142 script_ticks=1328 scripted=1",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=534 ticks=22",
+  "[web.ready] target=42 task=42"
+ ],
+ "agreed": [
+  [
+   "TLSv1_3",
+   "TLS13_AES_128_GCM_SHA256",
+   "Some(X25519)"
+  ],
+  [
+   "TLSv1_3",
+   "TLS13_AES_128_GCM_SHA256",
+   "Some(X25519)"
+  ],
+  [
+   "TLSv1_3",
+   "TLS13_AES_128_GCM_SHA256",
+   "Some(X25519)"
+  ]
+ ],
+ "http": [
+  [
+   "200",
+   "23619",
+   "https://pigaloo.com/"
+  ],
+  [
+   "200",
+   "5122",
+   "https://pigaloo.com/film/film.css"
+  ],
+  [
+   "200",
+   "397",
+   "https://pigaloo.com/film/site.css"
+  ],
+  [
+   "200",
+   "23704",
+   "https://pigaloo.com/_astro/index.J2t8wL_k.css"
+  ],
+  [
+   "200",
+   "72501",
+   "https://pigaloo.com/pig.svg"
+  ],
+  [
+   "200",
+   "20114",
+   "https://pigaloo.com/img/zendrive.webp"
+  ],
+  [
+   "200",
+   "104120",
+   "https://pigaloo.com/img/a-collage-welcome.webp"
+  ],
+  [
+   "200",
+   "53024",
+   "https://pigaloo.com/img/narayana-the-hadal-cycle.webp"
+  ],
+  [
+   "200",
+   "11976",
+   "https://pigaloo.com/img/tsunami-surf.webp"
+  ],
+  [
+   "200",
+   "19808",
+   "https://pigaloo.com/img/mandalpod.webp"
+  ],
+  [
+   "200",
+   "15842",
+   "https://pigaloo.com/img/machine-elf.webp"
+  ],
+  [
+   "200",
+   "18722",
+   "https://pigaloo.com/img/rubber-duckie-river-race.webp"
+  ],
+  [
+   "200",
+   "26666",
+   "https://pigaloo.com/img/rabbitverse.webp"
+  ],
+  [
+   "200",
+   "45856",
+   "https://pigaloo.com/img/kriket-3.webp"
+  ],
+  [
+   "200",
+   "48938",
+   "https://pigaloo.com/img/mandelhop.webp"
+  ],
+  [
+   "200",
+   "70052",
+   "https://pigaloo.com/img/dambeavers.webp"
+  ],
+  [
+   "200",
+   "189960",
+   "https://pigaloo.com/img/a-exploration.webp"
+  ],
+  [
+   "200",
+   "108110",
+   "https://pigaloo.com/img/w-unravelling.webp"
+  ],
+  [
+   "200",
+   "111316",
+   "https://pigaloo.com/img/w-puffpaint.webp"
+  ],
+  [
+   "200",
+   "46700",
+   "https://pigaloo.com/img/a-underwater.webp"
+  ],
+  [
+   "200",
+   "80386",
+   "https://pigaloo.com/img/w-wrongside.webp"
+  ],
+  [
+   "200",
+   "61702",
+   "https://pigaloo.com/img/a-ramona.webp"
+  ],
+  [
+   "200",
+   "137902",
+   "https://pigaloo.com/img/a-guardian.webp"
+  ],
+  [
+   "200",
+   "41138",
+   "https://pigaloo.com/img/a-mermaid.webp"
+  ],
+  [
+   "200",
+   "33176",
+   "https://i.ytimg.com/vi/5ajIQqbMsg4/hqdefault.jpg"
+  ],
+  [
+   "200",
+   "206299",
+   "https://pigaloo.com/img/qrbtc.png"
+  ],
+  [
+   "200",
+   "19308",
+   "https://pigaloo.com/app.js"
+  ],
+  [
+   "200",
+   "3509",
+   "https://pigaloo.com/film/site.js"
+  ]
+ ],
+ "loaded": true,
+ "fatal": [],
+ "guest_error": null,
+ "timed_out": false
+}

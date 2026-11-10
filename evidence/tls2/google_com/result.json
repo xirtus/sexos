@@ -1,0 +1,53 @@
+{
+ "site": "google.com",
+ "elapsed": 4.5,
+ "lines": [
+  "[net.program.bound] target=42 task=42",
+  "[web.cores] cores=1",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=0 ticks=8",
+  "[net.tls.agreed] flow=0 version=TLSv1_3 suite=TLS13_AES_128_GCM_SHA256 group=Some(X25519)",
+  "[net.receive.stats] bytes=832 calls=6 empty=5 ticks=275 flow=0 reused=0 kept=1",
+  "[web.http] method=GET status=301 bytes=220 encoding=none chunked=0 cookies=0 ticks=275 url=https://google.com/",
+  "[net.open.flows] made=2",
+  "[net.tls.agreed] flow=1 version=TLSv1_3 suite=TLS13_AES_128_GCM_SHA256 group=Some(X25519)",
+  "[net.receive.stats] bytes=34311 calls=22 empty=17 ticks=199 flow=1 reused=0 kept=1",
+  "[web.http] method=GET status=200 bytes=90231 encoding=gzip chunked=1 cookies=3 ticks=207 url=https://www.google.com/",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=0 ticks=2",
+  "[net.receive.stats] bytes=783 calls=4 empty=3 ticks=21 flow=1 reused=1 kept=1",
+  "[net.receive.stats] bytes=3130 calls=6 empty=4 ticks=30 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=2478 encoding=none chunked=0 cookies=3 ticks=30 url=https://www.google.com/images/branding/google_wordmark/v1/1x/googlelogo_color_white_background_272x92dp.png"
+ ],
+ "agreed": [
+  [
+   "TLSv1_3",
+   "TLS13_AES_128_GCM_SHA256",
+   "Some(X25519)"
+  ],
+  [
+   "TLSv1_3",
+   "TLS13_AES_128_GCM_SHA256",
+   "Some(X25519)"
+  ]
+ ],
+ "http": [
+  [
+   "301",
+   "220",
+   "https://google.com/"
+  ],
+  [
+   "200",
+   "90231",
+   "https://www.google.com/"
+  ],
+  [
+   "200",
+   "2478",
+   "https://www.google.com/images/branding/google_wordmark/v1/1x/googlelogo_color_white_background_272x92dp.png"
+  ]
+ ],
+ "loaded": false,
+ "fatal": [],
+ "guest_error": "t guest failure",
+ "timed_out": false
+}

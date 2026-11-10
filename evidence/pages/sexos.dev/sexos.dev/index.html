@@ -1,0 +1,1347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sex Microkernel — Replace Linux. Pure Rust. Zero Compromise.</title>
+  <meta name="description" content="A pure Rust microkernel OS. 96× smaller than Linux. Hardware PKU isolation. Zero-copy PDX IPC. Single address space. This is what an OS was always meant to be.">
+  <meta property="og:title" content="Sex Microkernel — Replace Linux">
+  <meta property="og:description" content="Pure Rust. 96× smaller. 3.5× faster IPC. Hardware PKU isolation. Single address space.">
+  <meta property="og:url" content="https://sexos.dev">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-sans/style.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-mono/style.css">
+  <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&display=swap" rel="stylesheet">
+
+  <style>
+    /* ── RESET ────────────────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+
+    /* ── TOKENS ───────────────────────────────────────────────────────────── */
+    :root {
+      --bg:        #02020A;
+      --bg2:       #05050F;
+      --bg3:       #08081A;
+      --surface:   rgba(255,255,255,0.035);
+      --border:    rgba(255,255,255,0.07);
+      --border2:   rgba(255,255,255,0.13);
+
+      /* Neons */
+      --cyan:      #00F5E4;
+      --pink:      #FF0066;
+      --purple:    #9400FF;
+      --gold:      #FFD700;
+      --green:     #00FF88;
+
+      --cyan-dim:  rgba(0,245,228,0.12);
+      --pink-dim:  rgba(255,0,102,0.12);
+      --pur-dim:   rgba(148,0,255,0.12);
+      --gold-dim:  rgba(255,215,0,0.10);
+
+      --text:      #EEEEF8;
+      --text2:     #8888AA;
+      --text3:     #44445A;
+
+      --ff:        'Geist', system-ui, sans-serif;
+      --ffm:       'Geist Mono', 'Courier New', monospace;
+
+      --glow-c:    0 0 28px rgba(0,245,228,0.35), 0 0 72px rgba(0,245,228,0.12);
+      --glow-p:    0 0 28px rgba(255,0,102,0.35), 0 0 72px rgba(255,0,102,0.12);
+      --glow-v:    0 0 28px rgba(148,0,255,0.35), 0 0 72px rgba(148,0,255,0.12);
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--ff);
+      line-height: 1.65;
+      overflow-x: hidden;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      font-feature-settings: "ss01", "ss02", "cv01", "cv02";
+    }
+
+    ::-webkit-scrollbar { width: 5px; }
+    ::-webkit-scrollbar-track { background: var(--bg); }
+    ::-webkit-scrollbar-thumb { background: var(--purple); border-radius: 3px; }
+
+    /* ── NAV ──────────────────────────────────────────────────────────────── */
+    #nav {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 200;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 22px 60px;
+      background: rgba(2,2,10,0.75);
+      backdrop-filter: blur(24px) saturate(1.4);
+      border-bottom: 1px solid transparent;
+      transition: padding .3s, border-color .3s;
+    }
+    #nav.scrolled { padding: 14px 60px; border-color: var(--border); }
+
+    .nav-logo {
+      font-family: 'Archivo Black', sans-serif; font-size: 15px; font-weight: 400;
+      letter-spacing: .04em; color: var(--cyan);
+      text-shadow: var(--glow-c); text-decoration: none;
+    }
+
+    .nav-links { display: flex; align-items: center; gap: 36px; }
+    .nav-links a {
+      color: var(--text2); text-decoration: none; font-size: 14px;
+      font-weight: 500; letter-spacing: .02em; transition: color .2s;
+    }
+    .nav-links a:hover { color: var(--text); }
+
+    .btn-outline-sm {
+      padding: 7px 18px; border: 1px solid var(--border2);
+      border-radius: 6px; font-size: 13px; color: var(--text) !important;
+      transition: border-color .2s, box-shadow .2s !important;
+    }
+    .btn-outline-sm:hover { border-color: var(--cyan); box-shadow: var(--glow-c); }
+
+    /* ── HERO ─────────────────────────────────────────────────────────────── */
+    #hero {
+      position: relative; height: 100vh; min-height: 720px;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      overflow: hidden;
+    }
+
+    #hero-canvas {
+      position: absolute; inset: 0; width: 100%; height: 100%;
+      display: block;
+    }
+
+    .hero-content {
+      position: relative; z-index: 10; text-align: center;
+      padding: 0 24px; max-width: 920px;
+    }
+
+    .eyebrow {
+      display: inline-flex; align-items: center; gap: 10px;
+      font-family: var(--ff); font-size: 12px; font-weight: 500; letter-spacing: .12em;
+      text-transform: uppercase; color: var(--cyan);
+      background: var(--cyan-dim); border: 1px solid rgba(0,245,228,.2);
+      border-radius: 100px; padding: 6px 18px; margin-bottom: 36px;
+    }
+    .eyebrow .dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--cyan); box-shadow: var(--glow-c);
+      animation: pulse-dot 2s ease-in-out infinite;
+    }
+    @keyframes pulse-dot {
+      0%,100% { opacity: 1; transform: scale(1); }
+      50%      { opacity: .5; transform: scale(.6); }
+    }
+
+    .hero-h1 {
+      font-size: clamp(54px, 9vw, 116px);
+      font-weight: 800; line-height: .92; letter-spacing: -.04em;
+      margin-bottom: 28px;
+    }
+    .hero-h1 .line1 { display: block; color: var(--text); }
+    .hero-h1 .line2 {
+      display: block;
+      background: linear-gradient(125deg, var(--pink) 0%, var(--purple) 45%, var(--cyan) 100%);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .hero-sub {
+      font-size: clamp(15px, 1.8vw, 19px); color: var(--text2);
+      max-width: 620px; margin: 0 auto 44px; line-height: 1.7;
+    }
+
+    .hero-cta { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
+
+    .btn {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 13px 30px; border-radius: 8px;
+      font-size: 15px; font-weight: 600; font-family: var(--ff);
+      text-decoration: none; transition: transform .2s, box-shadow .2s;
+      cursor: pointer; border: none;
+    }
+    .btn:active { transform: translateY(1px) !important; }
+
+    .btn--fire {
+      background: linear-gradient(135deg, var(--pink) 0%, var(--purple) 100%);
+      color: #fff; box-shadow: 0 4px 24px rgba(255,0,102,.3);
+    }
+    .btn--fire:hover { box-shadow: 0 8px 44px rgba(255,0,102,.5); transform: translateY(-2px); }
+
+    .btn--ghost {
+      background: var(--surface); border: 1px solid var(--border2);
+      color: var(--text); backdrop-filter: blur(8px);
+    }
+    .btn--ghost:hover { border-color: var(--cyan); color: var(--cyan); box-shadow: var(--glow-c); transform: translateY(-2px); }
+
+    .btn--yt {
+      background: rgba(255,0,0,.15); border: 1px solid rgba(255,60,60,.3);
+      color: #FF4444;
+    }
+    .btn--yt:hover { background: rgba(255,0,0,.25); box-shadow: 0 0 24px rgba(255,0,0,.3); transform: translateY(-2px); }
+
+    .scroll-hint {
+      position: absolute; bottom: 36px; left: 50%; transform: translateX(-50%);
+      z-index: 10; display: flex; flex-direction: column; align-items: center; gap: 6px;
+      font-family: var(--ff); font-size: 11px; font-weight: 500; letter-spacing: .12em;
+      text-transform: uppercase; color: var(--text3);
+      animation: bob 2.2s ease-in-out infinite;
+    }
+    .scroll-hint svg { opacity: .4; }
+    @keyframes bob {
+      0%,100% { transform: translateX(-50%) translateY(0); }
+      50%      { transform: translateX(-50%) translateY(10px); }
+    }
+
+    /* ── TICKER ───────────────────────────────────────────────────────────── */
+    .ticker-wrap {
+      overflow: hidden; padding: 14px 0;
+      background: var(--bg3); border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border); white-space: nowrap;
+    }
+    .ticker-inner {
+      display: inline-block;
+      animation: tick-scroll 40s linear infinite;
+      font-family: var(--ff); font-size: 12px; font-weight: 500;
+      color: var(--text3); letter-spacing: .1em;
+    }
+    .ticker-inner span { color: var(--pink); margin: 0 20px; }
+    @keyframes tick-scroll {
+      0%   { transform: translateX(0); }
+      100% { transform: translateX(-50%); }
+    }
+
+    /* ── STATS ────────────────────────────────────────────────────────────── */
+    #stats {
+      display: grid; grid-template-columns: repeat(4,1fr);
+      gap: 1px; background: var(--border);
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+    }
+    .stat-item {
+      background: var(--bg2); padding: 40px 28px; text-align: center;
+      transition: background .3s;
+    }
+    .stat-item:hover { background: var(--bg3); }
+    .stat-val {
+      font-family: var(--ffm); font-size: 56px; font-weight: 700;
+      line-height: 1;
+      background: linear-gradient(135deg, var(--cyan), var(--purple));
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .stat-unit { font-family: var(--ffm); font-size: 30px; color: var(--pink); }
+    .stat-label {
+      font-size: 12px; color: var(--text2); margin-top: 10px;
+      text-transform: uppercase; letter-spacing: .1em;
+    }
+
+    /* ── SECTIONS ─────────────────────────────────────────────────────────── */
+    section { padding: 130px 60px; }
+
+    .slabel {
+      font-family: var(--ffm); font-size: 10px; letter-spacing: .28em;
+      text-transform: uppercase; margin-bottom: 14px;
+    }
+
+    .stitle {
+      font-size: clamp(30px, 3.8vw, 52px); font-weight: 750;
+      line-height: 1.08; letter-spacing: -.025em; margin-bottom: 18px;
+    }
+
+    .sbody {
+      font-size: 16px; color: var(--text2); line-height: 1.75; max-width: 480px;
+    }
+
+    .feat-list { list-style: none; margin-top: 26px; display: flex; flex-direction: column; gap: 11px; }
+    .feat-list li {
+      display: flex; align-items: flex-start; gap: 11px;
+      font-size: 14px; color: var(--text2);
+    }
+    .feat-icon {
+      width: 18px; height: 18px; border-radius: 50%; flex-shrink: 0; margin-top: 2px;
+      display: flex; align-items: center; justify-content: center; font-size: 9px;
+    }
+
+    code {
+      font-family: var(--ffm); font-size: .82em;
+      background: rgba(0,245,228,.1); color: var(--cyan);
+      padding: 2px 6px; border-radius: 4px;
+    }
+
+    /* ── CONCEPT LAYOUT ───────────────────────────────────────────────────── */
+    .concept {
+      display: grid; grid-template-columns: 1fr 1fr;
+      gap: 80px; align-items: center;
+      max-width: 1280px; margin: 0 auto;
+    }
+    .concept.flip { direction: rtl; }
+    .concept.flip > * { direction: ltr; }
+
+    .ccanvas-wrap {
+      position: relative; aspect-ratio: 1;
+      border-radius: 24px; overflow: hidden;
+      border: 1px solid var(--border2); background: var(--bg3);
+    }
+    .ccanvas-wrap canvas { width: 100%; height: 100%; display: block; }
+    .ccanvas-badge {
+      position: absolute; bottom: 14px; right: 14px;
+      font-family: var(--ffm); font-size: 10px; letter-spacing: .16em;
+      color: var(--text3); background: rgba(2,2,10,.85);
+      padding: 4px 10px; border-radius: 4px; text-transform: uppercase;
+    }
+
+    /* ── ARCH STRIP ───────────────────────────────────────────────────────── */
+    #arch-strip {
+      background: var(--bg3); padding: 70px 60px;
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+    }
+    .arch-inner { max-width: 1100px; margin: 0 auto; }
+    .arch-layers {
+      display: flex; gap: 6px; margin-top: 40px;
+      align-items: stretch; border-radius: 12px; overflow: hidden;
+    }
+    .arch-layer {
+      flex: 1; padding: 22px 14px; text-align: center;
+      font-family: var(--ffm); font-size: 11px; font-weight: 700;
+      letter-spacing: .1em; text-transform: uppercase;
+      display: flex; flex-direction: column; gap: 6px;
+    }
+    .arch-layer small { font-size: 9px; opacity: .55; font-weight: 400; letter-spacing: .06em; line-height: 1.4; }
+    .al-user   { background: rgba(0,245,228,.07);  color: var(--cyan);   border: 1px solid rgba(0,245,228,.18);  flex: 3; border-radius: 10px; }
+    .al-server { background: rgba(148,0,255,.07);  color: var(--purple); border: 1px solid rgba(148,0,255,.18);  flex: 2; border-radius: 10px; }
+    .al-kernel { background: rgba(255,0,102,.09);  color: var(--pink);   border: 1px solid rgba(255,0,102,.25);  flex: 1; border-radius: 10px; }
+    .al-hw     { background: rgba(255,215,0,.06);  color: var(--gold);   border: 1px solid rgba(255,215,0,.18);  flex: 2; border-radius: 10px; }
+
+    /* ── VIDEO ────────────────────────────────────────────────────────────── */
+    #videos { background: var(--bg2); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+    .vid-inner { max-width: 1060px; margin: 0 auto; text-align: center; }
+    .vid-frame {
+      margin-top: 48px; position: relative; border-radius: 20px; overflow: hidden;
+      border: 1px solid var(--border2); aspect-ratio: 16/9;
+      box-shadow: 0 0 80px rgba(148,0,255,.18), 0 0 160px rgba(0,245,228,.08);
+    }
+    .vid-frame iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: none; }
+
+    /* ── CONTRIBUTE ───────────────────────────────────────────────────────── */
+    #contribute { text-align: center; }
+    .contrib-inner { max-width: 1080px; margin: 0 auto; }
+    .contrib-cards {
+      display: grid; grid-template-columns: repeat(3,1fr);
+      gap: 16px; margin: 52px auto; max-width: 900px;
+    }
+    .contrib-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 18px; padding: 32px 22px; text-align: center;
+      text-decoration: none; color: inherit;
+      transition: border-color .25s, box-shadow .25s, transform .25s;
+    }
+    .contrib-card:hover { transform: translateY(-5px); }
+    .contrib-card:nth-child(1):hover { border-color: var(--cyan);   box-shadow: var(--glow-c); }
+    .contrib-card:nth-child(2):hover { border-color: var(--purple); box-shadow: var(--glow-v); }
+    .contrib-card:nth-child(3):hover { border-color: var(--pink);   box-shadow: var(--glow-p); }
+    .contrib-card .ci { font-size: 36px; margin-bottom: 14px; }
+    .contrib-card h3 { font-size: 16px; font-weight: 650; margin-bottom: 8px; }
+    .contrib-card p  { font-size: 13px; color: var(--text2); }
+
+    .cta-row { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; margin-top: 8px; }
+
+    /* ── DIVIDER ──────────────────────────────────────────────────────────── */
+    .divider { height: 1px; background: linear-gradient(to right, transparent, var(--purple), transparent); }
+
+    /* ── FOOTER ───────────────────────────────────────────────────────────── */
+    footer {
+      padding: 36px 60px;
+      border-top: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .f-logo { font-family: var(--ffm); font-size: 12px; color: var(--text3); letter-spacing: .18em; }
+    .f-links { display: flex; gap: 28px; }
+    .f-links a { font-size: 13px; color: var(--text3); text-decoration: none; transition: color .2s; }
+    .f-links a:hover { color: var(--text); }
+
+    /* ── REVEAL ───────────────────────────────────────────────────────────── */
+    .reveal { opacity: 0; transform: translateY(28px); transition: opacity .7s cubic-bezier(.16,1,.3,1), transform .7s cubic-bezier(.16,1,.3,1); }
+    .reveal.visible { opacity: 1; transform: none; }
+    .reveal.delay-1 { transition-delay: .1s; }
+    .reveal.delay-2 { transition-delay: .2s; }
+
+    /* ── RESPONSIVE ───────────────────────────────────────────────────────── */
+    @media (max-width: 960px) {
+      #nav { padding: 16px 24px; }
+      #nav.scrolled { padding: 12px 24px; }
+      .nav-links { gap: 18px; }
+      .nav-hide { display: none; }
+      section { padding: 80px 24px; }
+      #stats { grid-template-columns: repeat(2,1fr); }
+      .concept { grid-template-columns: 1fr; gap: 40px; }
+      .concept.flip { direction: ltr; }
+      .contrib-cards { grid-template-columns: 1fr; max-width: 340px; }
+      .arch-layers { flex-direction: column; }
+      .arch-layer { flex: none; }
+      footer { flex-direction: column; gap: 20px; text-align: center; }
+      .f-links { flex-wrap: wrap; justify-content: center; gap: 14px; }
+      #arch-strip { padding: 60px 24px; }
+    }
+    @media (max-width: 600px) {
+      .hero-cta { flex-direction: column; align-items: center; }
+    }
+
+    /* Colour helpers */
+    .tc { color: var(--cyan); }
+    .tp { color: var(--pink); }
+    .tv { color: var(--purple); }
+    .tg { color: var(--gold); }
+  </style>
+<link rel="stylesheet" href="enhance.css">
+<link rel="stylesheet" href="film/film.css"><link rel="stylesheet" href="film/site.css">
+</head>
+<body>
+
+<!-- ═══════════════════════════ NAV ═══════════════════════════════════════ -->
+<nav id="nav">
+  <a href="#" class="nav-logo">Sex Microkernel</a>
+  <div class="nav-links">
+    <a href="#concepts" class="nav-hide">Architecture</a>
+    <a href="#videos"   class="nav-hide">Videos</a>
+    <a href="handoff_html/index.html">Manual</a>
+    <a href="https://github.com/xirtus/Sex" target="_blank" rel="noopener" class="btn-outline-sm">GitHub →</a>
+  </div>
+</nav>
+
+<!-- ═══════════════════════════ HERO ══════════════════════════════════════ -->
+<section id="hero">
+  <canvas id="hero-canvas"></canvas>
+
+  <div class="hero-content">
+    <div class="eyebrow"><span class="dot"></span>Pure Rust · Single Address Space · AI-Ready · Replace Everything</div>
+    <p class="meaning"><b>SEX</b> stands for <b>Single Environment XIPC</b>: one environment, one address space, on one machine or a whole cluster.</p>
+    <h1 class="hero-h1">
+      <span class="line1">The Future</span>
+      <span class="line2">of the Operating System</span>
+    </h1>
+    <p class="hero-sub">
+      Sex Microkernel — 96× smaller than Linux. Hardware-enforced PKU isolation.
+      Zero-copy PDX IPC. Lock-free. Wait-free. Every line pure Rust.
+      This is what every OS should have been.
+    </p>
+    <div class="hero-cta">
+      <a href="#concepts" class="btn btn--fire">Explore Architecture ↓</a>
+      <a href="#videos"   class="btn btn--yt">▶ Watch Videos</a>
+      <a href="handoff_html/index.html" class="btn btn--ghost">📖 Read the Manual</a>
+    </div>
+  </div>
+
+  <div class="scroll-hint">
+    <span>Scroll</span>
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+      <path d="M8 3v10M3 9l5 4 5-4" stroke="#44445A" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+  </div>
+</section>
+
+<!-- ═══════════════════════════ TICKER ════════════════════════════════════ -->
+<div class="ticker-wrap" aria-hidden="true">
+  <div class="ticker-inner" id="ticker-text">
+    SINGLE ADDRESS SPACE <span>◆</span> PKU HARDWARE ISOLATION <span>◆</span> PDX ZERO-COPY IPC <span>◆</span> PURE RUST <span>◆</span> LOCK-FREE WAIT-FREE <span>◆</span> 128K KERNEL <span>◆</span> NO MELTDOWN <span>◆</span> AI-READY <span>◆</span> REPLACE EVERYTHING <span>◆</span> SUB-CYCLE CONTEXT SWITCH <span>◆</span> CAPABILITY SECURITY <span>◆</span> 96× SMALLER <span>◆</span> 3.5× FASTER IPC <span>◆</span> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; SINGLE ADDRESS SPACE <span>◆</span> PKU HARDWARE ISOLATION <span>◆</span> PDX ZERO-COPY IPC <span>◆</span> PURE RUST <span>◆</span> LOCK-FREE WAIT-FREE <span>◆</span> 128K KERNEL <span>◆</span> NO MELTDOWN <span>◆</span> AI-READY <span>◆</span> REPLACE EVERYTHING <span>◆</span> SUB-CYCLE CONTEXT SWITCH <span>◆</span> CAPABILITY SECURITY <span>◆</span> 96× SMALLER <span>◆</span> 3.5× FASTER IPC <span>◆</span>
+  </div>
+</div>
+
+<!-- ═══════════════════════════ STATS ═════════════════════════════════════ -->
+<div id="stats">
+  <div class="stat-item reveal">
+    <div><span class="stat-val" data-target="96">0</span><span class="stat-unit">×</span></div>
+    <div class="stat-label">Smaller than Linux</div>
+  </div>
+  <div class="stat-item reveal delay-1">
+    <div><span class="stat-val" data-target="3.5" data-float="1">0</span><span class="stat-unit">×</span></div>
+    <div class="stat-label">Faster IPC</div>
+  </div>
+  <div class="stat-item reveal delay-2">
+    <div><span class="stat-val" data-target="128" data-suffix="K">0</span></div>
+    <div class="stat-label">Kernel Image Size</div>
+  </div>
+  <div class="stat-item reveal">
+    <div><span class="stat-val" data-target="100">0</span><span class="stat-unit">%</span></div>
+    <div class="stat-label">Pure Rust — No C</div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════ CONCEPTS ══════════════════════════════════ -->
+<section id="buildlog" hidden>
+  <div class="bl-inner">
+    <p class="bl-over"><span class="bl-dot"></span>Being built right now</p>
+    <h2>The latest commits</h2>
+    <ol id="bl-list"></ol>
+    <p class="bl-more"><a href="https://github.com/xirtus/sexos/commits">Every commit on GitHub →</a></p>
+  </div>
+</section>
+
+<div id="concepts">
+
+  <!-- 01 Single Address Space -->
+  <section style="background:var(--bg);" id="concept-sas">
+    <div class="concept reveal">
+      <div class="ccanvas-wrap">
+        <canvas id="canvas-sas"></canvas>
+        <div class="ccanvas-badge">SAS Visualiser</div>
+      </div>
+      <div class="concept-text">
+        <div class="slabel tc">01 — Architecture</div>
+        <h2 class="stitle">One Space.<br><span class="tc">No Walls.</span></h2>
+        <p class="sbody">
+          Traditional OSes fragment the world into isolated address spaces —
+          a context switch, a TLB flush, a kernel crossing on every message.
+          SexOS uses a <strong>single unified virtual address space</strong> for kernel, servers,
+          and every user process. Everything sees everything. PKU enforces who may touch what.
+        </p>
+        <ul class="feat-list">
+          <li>
+            <span class="feat-icon" style="background:var(--cyan-dim);border:1px solid rgba(0,245,228,.3);color:var(--cyan)">✓</span>
+            <span>Zero TLB flush on process switch — no CR3 reload, ever</span>
+          </li>
+          <li>
+            <span class="feat-icon" style="background:var(--cyan-dim);border:1px solid rgba(0,245,228,.3);color:var(--cyan)">✓</span>
+            <span>Pointer passing between domains — no copy, no serialization</span>
+          </li>
+          <li>
+            <span class="feat-icon" style="background:var(--cyan-dim);border:1px solid rgba(0,245,228,.3);color:var(--cyan)">✓</span>
+            <span>Sub-microsecond context switch latency — Linux can't touch it</span>
+          </li>
+          <li>
+            <span class="feat-icon" style="background:var(--cyan-dim);border:1px solid rgba(0,245,228,.3);color:var(--cyan)">✓</span>
+            <span>Linux burns GiB per process VAS. SexOS uses <em>one</em>.</span>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <div class="divider"></div>
+
+  <!-- 02 PKU -->
+  <section style="background:var(--bg2);" id="concept-pku">
+    <div class="concept flip reveal">
+      <div class="ccanvas-wrap">
+        <canvas id="canvas-pku"></canvas>
+        <div class="ccanvas-badge">PKU Domain Rings</div>
+      </div>
+      <div class="concept-text">
+        <div class="slabel tv">02 — Isolation</div>
+        <h2 class="stitle">Hardware Keys.<br><span class="tv">Zero Trust.</span></h2>
+        <p class="sbody">
+          One address space, sixteen hardware protection domains. Intel PKU —
+          Protection Keys for Userspace — enforces memory access rights at the CPU level.
+          No kernel involvement. Switching domains costs <strong>one instruction</strong>: <code>WRPKRU</code>.
+          Not a syscall. Not a context switch. One instruction.
+        </p>
+        <ul class="feat-list">
+          <li>
+            <span class="feat-icon" style="background:var(--pur-dim);border:1px solid rgba(148,0,255,.3);color:var(--purple)">✓</span>
+            <span>16 PKU domains — kernel, display, input, shell, user processes</span>
+          </li>
+          <li>
+            <span class="feat-icon" style="background:var(--pur-dim);border:1px solid rgba(148,0,255,.3);color:var(--purple)">✓</span>
+            <span>Domain switch: <code>WRPKRU</code> in userspace — no syscall overhead</span>
+          </li>
+          <li>
+            <span class="feat-icon" style="background:var(--pur-dim);border:1px solid rgba(148,0,255,.3);color:var(--purple)">✓</span>
+            <span>Isolation enforced by CPU — unforgeable, not bypassable in software</span>
+          </li>
+          <li>
+            <span class="feat-icon" style="background:var(--pur-dim);border:1px solid rgba(148,0,255,.3);color:var(--purple)">✓</span>
+            <span>Meltdown-class attacks eliminated — hardware walls, not kernel walls</span>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <div class="divider"></div>
+
+  <!-- 03 PDX IPC -->
+  <section style="background:var(--bg);" id="concept-pdx">
+    <div class="concept reveal">
+      <div class="ccanvas-wrap">
+        <canvas id="canvas-pdx"></canvas>
+        <div class="ccanvas-badge">PDX Zero-Copy IPC</div>
+      </div>
+      <div class="concept-text">
+        <div class="slabel tp">03 — Communication</div>
+        <h2 class="stitle">3.5× Faster.<br><span class="tp">Zero Copy.</span></h2>
+        <p class="sbody">
+          Linux IPC copies data between isolated address spaces — memcpy at every boundary.
+          PDX (Protection Domain eXchange) passes <strong>raw pointers</strong> inside the single address space,
+          flipping PKU keys atomically. The data never moves. Only the permission changes.
+        </p>
+        <ul class="feat-list">
+          <li>
+            <span class="feat-icon" style="background:var(--pink-dim);border:1px solid rgba(255,0,102,.3);color:var(--pink)">✓</span>
+            <span>3.5× faster than Linux pipe IPC — measured, not theoretical</span>
+          </li>
+          <li>
+            <span class="feat-icon" style="background:var(--pink-dim);border:1px solid rgba(255,0,102,.3);color:var(--pink)">✓</span>
+            <span>Zero copy — pointer + PKU key flip, not <code>memcpy</code></span>
+          </li>
+          <li>
+            <span class="feat-icon" style="background:var(--pink-dim);border:1px solid rgba(255,0,102,.3);color:var(--pink)">✓</span>
+            <span>Lock-free, wait-free — no mutex, no futex, no stall ever</span>
+          </li>
+          <li>
+            <span class="feat-icon" style="background:var(--pink-dim);border:1px solid rgba(255,0,102,.3);color:var(--pink)">✓</span>
+            <span>5-arg ABI: <code>pdx_call(slot, syscall, a0, a1, a2)</code></span>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <div class="divider"></div>
+
+  <!-- 04 Pure Rust -->
+  <section style="background:var(--bg2);" id="concept-rust">
+    <div class="concept flip reveal">
+      <div class="ccanvas-wrap">
+        <canvas id="canvas-rust"></canvas>
+        <div class="ccanvas-badge">Rust Type Crystal</div>
+      </div>
+      <div class="concept-text">
+        <div class="slabel tg">04 — Language</div>
+        <h2 class="stitle">Pure Rust.<br><span class="tg">128K Total.</span></h2>
+        <p class="sbody">
+          Every line is Rust. No C, no C++, no assembly beyond a handful of ISR stubs.
+          The borrow checker eliminates use-after-free, buffer overflows, and data races
+          at compile time — the kernel can't have memory safety bugs by construction.
+          The entire image is <strong>128 kilobytes</strong>. Linux is 30 megabytes.
+        </p>
+        <ul class="feat-list">
+          <li>
+            <span class="feat-icon" style="background:var(--gold-dim);border:1px solid rgba(255,215,0,.3);color:var(--gold)">✓</span>
+            <span>128K kernel — fits entirely in L2 cache on any modern CPU</span>
+          </li>
+          <li>
+            <span class="feat-icon" style="background:var(--gold-dim);border:1px solid rgba(255,215,0,.3);color:var(--gold)">✓</span>
+            <span>Zero memory-safety bugs by construction — compile-time proof</span>
+          </li>
+          <li>
+            <span class="feat-icon" style="background:var(--gold-dim);border:1px solid rgba(255,215,0,.3);color:var(--gold)">✓</span>
+            <span>Custom allocator, ELF loader, scheduler, work-stealing queue</span>
+          </li>
+          <li>
+            <span class="feat-icon" style="background:var(--gold-dim);border:1px solid rgba(255,215,0,.3);color:var(--gold)">✓</span>
+            <span>AI-agent-ready — safe, predictable, formally verifiable surface</span>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<!-- ═══════════════════════════ ARCH STRIP ════════════════════════════════ -->
+<div id="arch-strip">
+  <div class="arch-inner">
+    <div style="text-align:center">
+      <div class="slabel tc" style="text-align:center">System Stack</div>
+      <h2 class="stitle" style="font-size:clamp(24px,3vw,38px);text-align:center">
+        Minimal kernel. Maximum capability.
+      </h2>
+    </div>
+    <div class="arch-layers reveal">
+      <div class="arch-layer al-user">
+        USER PROCESSES
+        <small>silk-shell · apps · AI agents · future services</small>
+      </div>
+      <div class="arch-layer al-server">
+        PDX SERVERS
+        <small>sexdisplay · sexinput · sexusb · silkbar</small>
+      </div>
+      <div class="arch-layer al-kernel">
+        KERNEL
+        <small>128K · PKU · PDX · Sched · ELF</small>
+      </div>
+      <div class="arch-layer al-hw">
+        HARDWARE
+        <small>x86-64 · Intel PKU · xHCI · UEFI</small>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════ VIDEOS ════════════════════════════════════ -->
+<section id="videos">
+  <div class="vid-inner">
+    <div class="slabel" style="text-align:center;color:var(--pink)">Development Videos</div>
+    <h2 class="stitle" style="text-align:center;font-size:clamp(28px,3.5vw,46px)">
+      Watch SexOS being built.
+    </h2>
+    <p style="color:var(--text2);text-align:center;max-width:500px;margin:0 auto;font-size:15px">
+      Deep-dives into the kernel, live demos, architecture breakdowns.
+      Follow the revolution from zero to replacement.
+    </p>
+    <div class="vid-frame reveal">
+      <iframe
+        src="https://www.youtube.com/embed/videoseries?list=PLtv6PF9o7eC59PC5cn49Wia-8ogZ6AxUn&amp;rel=0"
+        title="Sex Microkernel — Development Videos"
+        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+        allowfullscreen>
+      </iframe>
+    </div>
+    <div style="text-align:center;margin-top:24px">
+      <a href="https://youtube.com/playlist?list=PLtv6PF9o7eC59PC5cn49Wia-8ogZ6AxUn" target="_blank" rel="noopener" class="btn btn--yt">
+        ▶ Subscribe on YouTube
+      </a>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════ CONTRIBUTE ════════════════════════════════ -->
+<section id="contribute" style="background:var(--bg2);border-top:1px solid var(--border)">
+  <div class="contrib-inner">
+    <div class="slabel tc" style="text-align:center">Open Development</div>
+    <h2 class="stitle" style="text-align:center;font-size:clamp(28px,3.5vw,48px)">
+      Replace Everything.<br>Together.
+    </h2>
+    <p style="color:var(--text2);max-width:580px;margin:0 auto;text-align:center;font-size:15px">
+      SexOS is an open project. If you know Rust, systems programming, or you just
+      want to build the operating system of the future — we need you.
+    </p>
+
+    <div class="contrib-cards reveal">
+      <div class="contrib-card">
+        <div class="ci tc">⚡</div>
+        <h3>Hack the Kernel</h3>
+        <p>PKU domains, PDX IPC, work-stealing scheduler, ELF loader. Real OS work, pure Rust.</p>
+      </div>
+      <div class="contrib-card">
+        <div class="ci tv">🖥</div>
+        <h3>Build Servers</h3>
+        <p>Display compositor, USB input, shell, window manager. User-space OS components.</p>
+      </div>
+      <div class="contrib-card">
+        <div class="ci tp">📖</div>
+        <h3>Write & Spread</h3>
+        <p>Architecture docs, blog posts, tutorials. Help people understand what's possible.</p>
+      </div>
+    </div>
+
+    <div class="cta-row reveal">
+      <a href="https://github.com/xirtus/Sex" target="_blank" rel="noopener" class="btn btn--fire">
+        View on GitHub →
+      </a>
+      <a href="handoff_html/index.html" class="btn btn--ghost">📖 Read the Manual</a>
+      <a href="https://youtube.com/playlist?list=PLtv6PF9o7eC59PC5cn49Wia-8ogZ6AxUn" target="_blank" rel="noopener" class="btn btn--yt">
+        ▶ YouTube
+      </a>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════ FOOTER ════════════════════════════════════ -->
+<footer>
+  <div class="f-logo">SEX MICROKERNEL © 2026 · SEXOS.DEV</div>
+  <div class="f-links">
+    <a href="handoff_html/index.html">Manual</a>
+    <a href="https://github.com/xirtus/Sex" target="_blank" rel="noopener">GitHub</a>
+    <a href="https://youtube.com/playlist?list=PLtv6PF9o7eC59PC5cn49Wia-8ogZ6AxUn" target="_blank" rel="noopener">YouTube</a>
+    <a href="https://sexos.dev">sexos.dev</a>
+  </div>
+</footer>
+
+<!-- ═══════════════════════════ THREE.JS ══════════════════════════════════ -->
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.164.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.164.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls }   from 'three/addons/controls/OrbitControls.js';
+import { EffectComposer }  from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass }      from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+
+/* ══════════════════════════════════════════════════════════
+   HERO — The Kernel Atom
+   Metaphor: microkernel nucleus surrounded by PKU rings
+   and process electrons, all in one single address space.
+   PDX IPC = photon beams flashing between electrons.
+   ═════════════════════════════════════════════════════════ */
+(function heroScene() {
+  const canvas   = document.getElementById('hero-canvas');
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.1;
+
+  const scene  = new THREE.Scene();
+  scene.background = new THREE.Color(0x02020A);
+  scene.fog = new THREE.FogExp2(0x02020A, 0.018);
+
+  const camera = new THREE.PerspectiveCamera(58, 1, 0.1, 300);
+  camera.position.set(0, 7, 20);
+  camera.lookAt(0, 0, 0);
+
+  const controls = new OrbitControls(camera, canvas);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.05;
+  controls.enableZoom = controls.enablePan = false;
+  controls.autoRotate = true;
+  controls.autoRotateSpeed = 0.35;
+  controls.minPolarAngle = Math.PI * 0.22;
+  controls.maxPolarAngle = Math.PI * 0.72;
+
+  // — Starfield —
+  {
+    const N = 3500, pos = new Float32Array(N * 3);
+    for (let i = 0; i < N; i++) {
+      const r = 50 + Math.random() * 120;
+      const th = Math.random() * Math.PI * 2;
+      const ph = Math.acos(2 * Math.random() - 1);
+      pos[i*3]   = r * Math.sin(ph) * Math.cos(th);
+      pos[i*3+1] = r * Math.sin(ph) * Math.sin(th);
+      pos[i*3+2] = r * Math.cos(ph);
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    scene.add(new THREE.Points(g, new THREE.PointsMaterial({ color: 0x9999BB, size: 0.07, sizeAttenuation: true, transparent: true, opacity: 0.55 })));
+  }
+
+  // — Kernel nucleus (tiny, blindingly bright = 128K vs 30MB) —
+  const kernel = new THREE.Mesh(
+    new THREE.IcosahedronGeometry(0.55, 6),
+    new THREE.MeshStandardMaterial({ color: 0xFF0066, emissive: 0xFF0066, emissiveIntensity: 4, roughness: 0.3, metalness: 0.6 })
+  );
+  scene.add(kernel);
+  const kLight = new THREE.PointLight(0xFF0066, 10, 18); scene.add(kLight);
+  scene.add(new THREE.AmbientLight(0x08081A, 4));
+
+  // — PKU protection rings —
+  const RING_DEFS = [
+    { r: 3.0,  tube: 0.045, col: 0x00F5E4, spd: 0.90, tx: 0.30, tz: 0.15 },
+    { r: 5.0,  tube: 0.040, col: 0x9400FF, spd: 0.55, tx: 1.10, tz: 0.50 },
+    { r: 7.2,  tube: 0.035, col: 0xFF0066, spd: 0.32, tx: 0.18, tz: 0.95 },
+    { r: 9.8,  tube: 0.030, col: 0xFFD700, spd: 0.19, tx: 0.65, tz: 0.30 },
+  ];
+  const ringMeshes = RING_DEFS.map(d => {
+    const m = new THREE.Mesh(
+      new THREE.TorusGeometry(d.r, d.tube, 10, 140),
+      new THREE.MeshStandardMaterial({ color: d.col, emissive: d.col, emissiveIntensity: 3, roughness: 0.2, metalness: 0.4 })
+    );
+    m.rotation.x = d.tx; m.rotation.z = d.tz;
+    scene.add(m);
+    const pl = new THREE.PointLight(d.col, 2, 8); scene.add(pl);
+    m.userData = { ...d, pl };
+    return m;
+  });
+
+  // — Process particles (electrons in their PKU shells) —
+  const PROC_COLORS = [0x00F5E4, 0x9400FF, 0xFF0066, 0xFFD700];
+  const procGroups = RING_DEFS.map((d, ri) => {
+    const g = new THREE.Group();
+    g.rotation.x = d.tx; g.rotation.z = d.tz;
+    const count = 10 + ri * 7;
+    for (let i = 0; i < count; i++) {
+      const ang = (i / count) * Math.PI * 2;
+      const jit = (Math.random() - .5) * 0.5;
+      const radius = d.r + jit;
+      const sz = 0.055 + Math.random() * 0.075;
+      const mesh = new THREE.Mesh(
+        new THREE.IcosahedronGeometry(sz, 1),
+        new THREE.MeshStandardMaterial({ color: PROC_COLORS[ri], emissive: PROC_COLORS[ri], emissiveIntensity: 3 })
+      );
+      mesh.position.set(Math.cos(ang) * radius, 0, Math.sin(ang) * radius);
+      mesh.userData = { ang, radius, phase: Math.random() * Math.PI * 2, spd: 0.3 + Math.random() * 0.4 };
+      g.add(mesh);
+    }
+    g.userData.speed = d.spd * 0.9;
+    scene.add(g);
+    return g;
+  });
+
+  // — PDX IPC beams (photons between processes = zero-copy pointer passing) —
+  const beams = Array.from({ length: 18 }, () => {
+    const pts = new Float32Array(6);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pts, 3));
+    const mat = new THREE.LineBasicMaterial({ color: 0x00F5E4, transparent: true, opacity: 0, linewidth: 1 });
+    const line = new THREE.Line(geo, mat);
+    scene.add(line);
+    return { line, mat, opacity: 0, countdown: Math.random() * 4, life: 0, maxLife: 0.4 + Math.random() * 0.9 };
+  });
+
+  // — Bloom —
+  const composer = new EffectComposer(renderer);
+  composer.addPass(new RenderPass(scene, camera));
+  const bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 1.9, 0.45, 0.55);
+  composer.addPass(bloom);
+
+  function resize() {
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    renderer.setSize(w, h, false);
+    composer.setSize(w, h);
+    bloom.resolution.set(w, h);
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  let t = 0;
+  (function tick() {
+    requestAnimationFrame(tick);
+    const dt = 0.016;
+    t += dt;
+
+    // Kernel throb
+    kernel.scale.setScalar(1 + Math.sin(t * 3.2) * 0.06);
+    kLight.intensity = 10 + Math.sin(t * 5) * 3;
+
+    // Ring rotation + orbiting light
+    ringMeshes.forEach((m, i) => {
+      const d = m.userData;
+      m.rotation.y += d.spd * dt;
+      const a = t * d.spd;
+      d.pl.position.set(Math.cos(a) * d.r, Math.sin(a * 0.7) * 1.2, Math.sin(a) * d.r);
+    });
+
+    // Process orbital motion
+    procGroups.forEach((g, gi) => {
+      g.rotation.y += g.userData.speed * dt;
+      g.children.forEach(p => {
+        p.position.y = Math.sin(t * p.userData.spd + p.userData.phase) * 0.35;
+        p.rotation.y += 0.03;
+      });
+    });
+
+    // PDX IPC beam flashes
+    beams.forEach(b => {
+      b.countdown -= dt;
+      if (b.countdown < 0) {
+        b.countdown = 0.8 + Math.random() * 3.5;
+        b.life = b.maxLife;
+        // pick two random processes from any groups
+        const gi = Math.floor(Math.random() * procGroups.length);
+        const gj = Math.floor(Math.random() * procGroups.length);
+        const pg = procGroups[gi], qg = procGroups[gj];
+        if (pg.children.length && qg.children.length) {
+          const pa = pg.children[Math.floor(Math.random() * pg.children.length)];
+          const pb = qg.children[Math.floor(Math.random() * qg.children.length)];
+          const pv = pa.getWorldPosition(new THREE.Vector3());
+          const qv = pb.getWorldPosition(new THREE.Vector3());
+          const arr = b.line.geometry.attributes.position.array;
+          arr[0] = pv.x; arr[1] = pv.y; arr[2] = pv.z;
+          arr[3] = qv.x; arr[4] = qv.y; arr[5] = qv.z;
+          b.line.geometry.attributes.position.needsUpdate = true;
+          // alternate beam colours for domain variety
+          b.mat.color.setHex([0x00F5E4, 0x9400FF, 0xFFD700, 0xFF0066][gi % 4]);
+        }
+      }
+      if (b.life > 0) {
+        b.life -= dt;
+        b.mat.opacity = Math.max(0, (b.life / b.maxLife) * 0.85);
+      } else {
+        b.mat.opacity = Math.max(0, b.mat.opacity - dt * 1.5);
+      }
+    });
+
+    controls.update();
+    composer.render();
+  })();
+})();
+
+/* ══════════════════════════════════════════════════════════
+   Helper: create a sub-scene renderer with IntersectionObserver
+   lazy-init so we don't burn GPU until the section is visible.
+   ═════════════════════════════════════════════════════════ */
+function lazyScene(canvasId, initFn) {
+  const canvas = document.getElementById(canvasId);
+  const obs = new IntersectionObserver(entries => {
+    if (!entries[0].isIntersecting) return;
+    obs.disconnect();
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    function resize() {
+      const rect = canvas.parentElement.getBoundingClientRect();
+      const s = Math.round(rect.width) || 480;
+      renderer.setSize(s, s, false);
+    }
+    // rAF ensures layout is fully settled before reading dimensions
+    requestAnimationFrame(() => {
+      resize();
+      window.addEventListener('resize', resize);
+      initFn(renderer, canvas);
+    });
+  }, { threshold: 0.25 });
+  obs.observe(canvas);
+}
+
+/* ══════════════════════════════════════════════════════════
+   CONCEPT 1 — Single Address Space
+   One luminous sphere. All processes float inside it.
+   PKU = coloured halos, not walls.
+   ═════════════════════════════════════════════════════════ */
+lazyScene('canvas-sas', (renderer) => {
+  const scene  = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(52, 1, 0.1, 80);
+  camera.position.set(0, 2.5, 13);
+  camera.lookAt(0, 0, 0);
+  scene.add(new THREE.AmbientLight(0x112233, 5));
+  scene.add(new THREE.PointLight(0x00F5E4, 3, 20)).position.set(5, 5, 5);
+
+  // SAS outer shell (the one unified VAS)
+  const shell = new THREE.Mesh(
+    new THREE.SphereGeometry(5, 64, 64),
+    new THREE.MeshStandardMaterial({ color: 0x00F5E4, emissive: 0x00F5E4, emissiveIntensity: 0.08, transparent: true, opacity: 0.06, side: THREE.BackSide })
+  );
+  scene.add(shell);
+  const wireShell = new THREE.Mesh(
+    new THREE.SphereGeometry(5, 22, 22),
+    new THREE.MeshBasicMaterial({ color: 0x00F5E4, wireframe: true, transparent: true, opacity: 0.06 })
+  );
+  scene.add(wireShell);
+
+  // Glowing core (kernel, tiny)
+  const kore = new THREE.Mesh(
+    new THREE.IcosahedronGeometry(0.3, 3),
+    new THREE.MeshStandardMaterial({ color: 0xFF0066, emissive: 0xFF0066, emissiveIntensity: 5 })
+  );
+  scene.add(kore);
+  scene.add(new THREE.PointLight(0xFF0066, 4, 8));
+
+  // Processes scattered in SAS
+  const PAL = [0x00F5E4, 0x9400FF, 0xFF0066, 0xFFD700, 0x00FF88, 0xFF6600, 0x0088FF, 0xFF00CC];
+  const procs = [];
+  const grp = new THREE.Group();
+  for (let i = 0; i < 32; i++) {
+    const phi = Math.acos(2 * Math.random() - 1);
+    const th  = Math.random() * Math.PI * 2;
+    const r   = 0.8 + Math.random() * 3.6;
+    const col = PAL[i % PAL.length];
+    const mesh = new THREE.Mesh(
+      new THREE.SphereGeometry(0.1 + Math.random() * 0.1, 8, 8),
+      new THREE.MeshStandardMaterial({ color: col, emissive: col, emissiveIntensity: 2.5 })
+    );
+    mesh.position.set(r * Math.sin(phi) * Math.cos(th), r * Math.sin(phi) * Math.sin(th), r * Math.cos(phi));
+    mesh.userData = { base: mesh.position.clone(), ph: Math.random() * Math.PI * 2, spd: .2 + Math.random() * .5 };
+    grp.add(mesh);
+    procs.push(mesh);
+  }
+  scene.add(grp);
+
+  // Inter-process pointer lines (SAS lets us do this for free)
+  for (let i = 0; i < 10; i++) {
+    const a = procs[Math.floor(Math.random() * procs.length)];
+    const b = procs[Math.floor(Math.random() * procs.length)];
+    if (a === b) continue;
+    scene.add(new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([a.position, b.position]),
+      new THREE.LineBasicMaterial({ color: 0x00F5E4, transparent: true, opacity: 0.12 })
+    ));
+  }
+
+  let t = 0;
+  (function tick() {
+    requestAnimationFrame(tick);
+    t += 0.016;
+    grp.rotation.y += 0.003;
+    grp.rotation.x += 0.001;
+    procs.forEach(p => { p.position.y = p.userData.base.y + Math.sin(t * p.userData.spd + p.userData.ph) * 0.2; });
+    kore.rotation.y += 0.02;
+    wireShell.rotation.y -= 0.001;
+    renderer.render(scene, camera);
+  })();
+});
+
+/* ══════════════════════════════════════════════════════════
+   CONCEPT 2 — PKU Protection Keys
+   Concentric coloured rings = 16 hardware domains.
+   Octahedra orbit each ring = domain-owned processes.
+   One instruction changes which ring you belong to.
+   ═════════════════════════════════════════════════════════ */
+lazyScene('canvas-pku', (renderer) => {
+  const scene  = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(52, 1, 0.1, 80);
+  camera.position.set(0, 3, 13);
+  camera.lookAt(0, 0, 0);
+  scene.add(new THREE.AmbientLight(0x221133, 6));
+
+  const PKU = [
+    { name: 'KERNEL', r: 1.8, col: 0xFF0066, n: 3  },
+    { name: 'DISPLAY',r: 3.2, col: 0x9400FF, n: 5  },
+    { name: 'INPUT',  r: 4.8, col: 0x00F5E4, n: 6  },
+    { name: 'USER',   r: 6.4, col: 0xFFD700, n: 10 },
+  ];
+
+  // Kernel nucleus
+  const kore = new THREE.Mesh(
+    new THREE.IcosahedronGeometry(0.55, 4),
+    new THREE.MeshStandardMaterial({ color: 0xFF0066, emissive: 0xFF0066, emissiveIntensity: 4 })
+  );
+  scene.add(kore);
+  scene.add(new THREE.PointLight(0xFF0066, 8, 10));
+
+  const domainGroups = PKU.map(d => {
+    // Ring torus
+    const ring = new THREE.Mesh(
+      new THREE.TorusGeometry(d.r, 0.06, 10, 100),
+      new THREE.MeshStandardMaterial({ color: d.col, emissive: d.col, emissiveIntensity: 2.5, transparent: true, opacity: 0.75 })
+    );
+    ring.rotation.x = Math.PI / 2;
+    scene.add(ring);
+    const pl = new THREE.PointLight(d.col, 2, 6); scene.add(pl);
+    // Domain processes as octahedra
+    const g = new THREE.Group();
+    for (let i = 0; i < d.n; i++) {
+      const ang = (i / d.n) * Math.PI * 2;
+      const mesh = new THREE.Mesh(
+        new THREE.OctahedronGeometry(0.18 + Math.random() * 0.1, 0),
+        new THREE.MeshStandardMaterial({ color: d.col, emissive: d.col, emissiveIntensity: 2 })
+      );
+      mesh.position.set(Math.cos(ang) * d.r, 0, Math.sin(ang) * d.r);
+      mesh.userData = { ang, r: d.r };
+      g.add(mesh);
+    }
+    g.userData.speed = 0.35 / d.r;
+    scene.add(g);
+    return { ring, group: g, pl, d };
+  });
+
+  let t = 0;
+  (function tick() {
+    requestAnimationFrame(tick);
+    t += 0.016;
+    kore.rotation.y += 0.015; kore.scale.setScalar(1 + Math.sin(t * 4) * 0.05);
+    domainGroups.forEach(({ ring, group, pl, d }) => {
+      group.rotation.y += group.userData.speed;
+      ring.rotation.z = Math.sin(t * 0.4 + d.r * 0.3) * 0.08;
+      const a = t * group.userData.speed * 3;
+      pl.position.set(Math.cos(a) * d.r, Math.sin(a) * 0.8, Math.sin(a) * d.r);
+    });
+    renderer.render(scene, camera);
+  })();
+});
+
+/* ══════════════════════════════════════════════════════════
+   CONCEPT 3 — PDX Zero-Copy IPC
+   Two process nodes. A glowing beam between them.
+   A photon (the pointer) rides the beam at light-speed.
+   No copy. No cargo. Just a key flip.
+   ═════════════════════════════════════════════════════════ */
+lazyScene('canvas-pdx', (renderer) => {
+  const scene  = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(52, 1, 0.1, 80);
+  camera.position.set(0, 2, 12);
+  camera.lookAt(0, 0, 0);
+  scene.add(new THREE.AmbientLight(0x110022, 5));
+
+  // Process A (sender, pink)
+  const nodeA = new THREE.Mesh(
+    new THREE.IcosahedronGeometry(0.9, 3),
+    new THREE.MeshStandardMaterial({ color: 0xFF0066, emissive: 0xFF0066, emissiveIntensity: 2.5 })
+  );
+  nodeA.position.x = -3.8;
+  scene.add(nodeA);
+  scene.add(new THREE.PointLight(0xFF0066, 4, 8)).position.x = -3.8;
+
+  // Process B (receiver, cyan)
+  const nodeB = new THREE.Mesh(
+    new THREE.IcosahedronGeometry(0.9, 3),
+    new THREE.MeshStandardMaterial({ color: 0x00F5E4, emissive: 0x00F5E4, emissiveIntensity: 2.5 })
+  );
+  nodeB.position.x = 3.8;
+  scene.add(nodeB);
+  scene.add(new THREE.PointLight(0x00F5E4, 4, 8)).position.x = 3.8;
+
+  // Arc path (the PDX channel)
+  const curve = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(-3.8, 0, 0),
+    new THREE.Vector3(-1.5, 2.2, 0),
+    new THREE.Vector3(0, 2.8, 0),
+    new THREE.Vector3(1.5, 2.2, 0),
+    new THREE.Vector3(3.8, 0, 0),
+  ]);
+  const tubeGeo  = new THREE.TubeGeometry(curve, 60, 0.04, 8, false);
+  const tubeMat  = new THREE.MeshStandardMaterial({ color: 0x00F5E4, emissive: 0x00F5E4, emissiveIntensity: 2, transparent: true, opacity: 0 });
+  const tube = new THREE.Mesh(tubeGeo, tubeMat);
+  scene.add(tube);
+
+  // Photon A→B (the pointer, zero-copy)
+  const photon = new THREE.Mesh(
+    new THREE.SphereGeometry(0.18, 12, 12),
+    new THREE.MeshStandardMaterial({ color: 0xFF0066, emissive: 0xFF0066, emissiveIntensity: 6 })
+  );
+  scene.add(photon);
+  scene.add(new THREE.PointLight(0xFF0066, 3, 4)).position.copy(photon.position);
+
+  // Return photon B→A
+  const photon2 = new THREE.Mesh(
+    new THREE.SphereGeometry(0.14, 12, 12),
+    new THREE.MeshStandardMaterial({ color: 0x00F5E4, emissive: 0x00F5E4, emissiveIntensity: 6 })
+  );
+  scene.add(photon2);
+
+  // Particle trail system
+  const trailCount = 30;
+  const trailPos   = new Float32Array(trailCount * 3);
+  const trailGeo   = new THREE.BufferGeometry();
+  trailGeo.setAttribute('position', new THREE.BufferAttribute(trailPos, 3));
+  const trailMat   = new THREE.PointsMaterial({ color: 0xFF0066, size: 0.08, sizeAttenuation: true, transparent: true, opacity: 0.5 });
+  scene.add(new THREE.Points(trailGeo, trailMat));
+
+  let t = 0;
+  (function tick() {
+    requestAnimationFrame(tick);
+    t += 0.016;
+
+    nodeA.rotation.y += 0.012; nodeA.scale.setScalar(1 + Math.sin(t * 3) * 0.06);
+    nodeB.rotation.y -= 0.012; nodeB.scale.setScalar(1 + Math.sin(t * 3 + 1.5) * 0.06);
+
+    const phase = (t * 0.8) % 1;
+    tubeMat.opacity = Math.sin(phase * Math.PI) * 0.6;
+
+    // Photon A→B
+    const pp = curve.getPoint(phase);
+    photon.position.copy(pp);
+    // Trail
+    for (let i = trailCount - 1; i > 0; i--) {
+      trailPos[i*3]   = trailPos[(i-1)*3];
+      trailPos[i*3+1] = trailPos[(i-1)*3+1];
+      trailPos[i*3+2] = trailPos[(i-1)*3+2];
+    }
+    trailPos[0] = pp.x; trailPos[1] = pp.y; trailPos[2] = pp.z;
+    trailGeo.attributes.position.needsUpdate = true;
+
+    // Return photon B→A offset by 0.5 phase
+    const phase2 = ((t * 0.8) + 0.5) % 1;
+    const pp2 = curve.getPoint(1 - phase2);
+    photon2.position.copy(pp2);
+
+    renderer.render(scene, camera);
+  })();
+});
+
+/* ══════════════════════════════════════════════════════════
+   CONCEPT 4 — Pure Rust
+   A crystal lattice: rigid, interconnected, no dangling bonds.
+   Metaphor: borrow checker = every bond accounted for.
+   128K = tiny golden nucleus surrounded by safety guarantees.
+   ═════════════════════════════════════════════════════════ */
+lazyScene('canvas-rust', (renderer) => {
+  const scene  = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(52, 1, 0.1, 80);
+  camera.position.set(0, 2, 13);
+  camera.lookAt(0, 0, 0);
+  scene.add(new THREE.AmbientLight(0x221100, 6));
+  const sun = new THREE.PointLight(0xFFD700, 6, 20);
+  sun.position.set(4, 6, 6); scene.add(sun);
+
+  // Core (the kernel, golden and tiny)
+  const core = new THREE.Mesh(
+    new THREE.IcosahedronGeometry(0.9, 4),
+    new THREE.MeshStandardMaterial({ color: 0xFFD700, emissive: 0xFFD700, emissiveIntensity: 2.5, metalness: 0.8, roughness: 0.2 })
+  );
+  scene.add(core);
+  scene.add(new THREE.PointLight(0xFFD700, 8, 12));
+
+  // Crystal lattice nodes (safety guarantees, type system nodes)
+  const LATTICE = [
+    [2.8,0,0],[-2.8,0,0],[0,2.8,0],[0,-2.8,0],[0,0,2.8],[0,0,-2.8],
+    [2,2,0],[-2,2,0],[2,-2,0],[-2,-2,0],
+    [0,2,2],[0,-2,2],[0,2,-2],[0,-2,-2],
+    [2,0,2],[-2,0,2],[2,0,-2],[-2,0,-2],
+  ];
+
+  const grp = new THREE.Group();
+  const nodeMeshes = LATTICE.map((p, i) => {
+    const col = i % 3 === 0 ? 0xFFD700 : i % 3 === 1 ? 0xFF6600 : 0xFFAA00;
+    const mesh = new THREE.Mesh(
+      new THREE.SphereGeometry(0.22, 14, 14),
+      new THREE.MeshStandardMaterial({ color: col, emissive: col, emissiveIntensity: 1.8, metalness: 0.6 })
+    );
+    mesh.position.set(...p);
+    mesh.userData.ph = Math.random() * Math.PI * 2;
+    grp.add(mesh);
+    // Bond to centre
+    grp.add(new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0,0,0), new THREE.Vector3(...p)]),
+      new THREE.LineBasicMaterial({ color: 0xFFD700, transparent: true, opacity: 0.22 })
+    ));
+    return mesh;
+  });
+
+  // Cross bonds (type constraints)
+  for (let i = 0; i < LATTICE.length; i++) {
+    for (let j = i + 1; j < LATTICE.length; j++) {
+      const a = new THREE.Vector3(...LATTICE[i]);
+      const b = new THREE.Vector3(...LATTICE[j]);
+      if (a.distanceTo(b) < 3.2) {
+        grp.add(new THREE.Line(
+          new THREE.BufferGeometry().setFromPoints([a, b]),
+          new THREE.LineBasicMaterial({ color: 0xFF6600, transparent: true, opacity: 0.1 })
+        ));
+      }
+    }
+  }
+  scene.add(grp);
+
+  let t = 0;
+  (function tick() {
+    requestAnimationFrame(tick);
+    t += 0.016;
+    grp.rotation.y += 0.007;
+    grp.rotation.x += 0.003;
+    core.rotation.y -= 0.005; core.rotation.z += 0.003;
+    nodeMeshes.forEach((n, i) => {
+      n.scale.setScalar(1 + Math.sin(t * 2.2 + n.userData.ph) * 0.18);
+    });
+    renderer.render(scene, camera);
+  })();
+});
+
+/* ══════════════════════════════════════════════════════════
+   STATS COUNT-UP ANIMATION
+   ═════════════════════════════════════════════════════════ */
+const statEls = document.querySelectorAll('.stat-val[data-target]');
+const statsObs = new IntersectionObserver(entries => {
+  if (!entries[0].isIntersecting) return;
+  statsObs.disconnect();
+  statEls.forEach(el => {
+    const target   = parseFloat(el.dataset.target);
+    const isFloat  = 'float' in el.dataset;
+    const suffix   = el.dataset.suffix || '';
+    const t0 = performance.now();
+    const dur = 2200;
+    (function tick(now) {
+      const prog  = Math.min((now - t0) / dur, 1);
+      const eased = 1 - Math.pow(1 - prog, 3);
+      el.textContent = (isFloat ? (target * eased).toFixed(1) : Math.round(target * eased)) + suffix;
+      if (prog < 1) requestAnimationFrame(tick);
+    })(t0);
+  });
+}, { threshold: 0.5 });
+statsObs.observe(document.getElementById('stats'));
+
+/* ══════════════════════════════════════════════════════════
+   REVEAL ON SCROLL
+   ═════════════════════════════════════════════════════════ */
+const reveals = document.querySelectorAll('.reveal');
+const revealObs = new IntersectionObserver(entries => {
+  entries.forEach(e => { if (e.isIntersecting) e.target.classList.add('visible'); });
+}, { threshold: 0.12, rootMargin: '0px 0px -40px 0px' });
+reveals.forEach(r => revealObs.observe(r));
+
+/* ══════════════════════════════════════════════════════════
+   NAV SCROLL SHRINK
+   ═════════════════════════════════════════════════════════ */
+const nav = document.getElementById('nav');
+addEventListener('scroll', () => nav.classList.toggle('scrolled', scrollY > 50));
+
+</script>
+<script src="enhance.js"></script>
+<script src="film/site.js" type="module"></script>
+</body>
+</html>

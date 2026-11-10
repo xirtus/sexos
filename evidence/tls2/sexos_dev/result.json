@@ -1,0 +1,147 @@
+{
+ "site": "sexos.dev",
+ "elapsed": 9.9,
+ "lines": [
+  "[net.program.bound] target=42 task=42",
+  "[web.cores] cores=1",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=0 ticks=8",
+  "[net.tls.agreed] flow=0 version=TLSv1_3 suite=TLS13_AES_128_GCM_SHA256 group=Some(X25519)",
+  "[net.receive.stats] bytes=14630 calls=19 empty=17 ticks=447 flow=0 reused=0 kept=1",
+  "[web.http] method=GET status=200 bytes=61740 encoding=gzip chunked=0 cookies=0 ticks=453 url=https://sexos.dev/",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=0 ticks=2",
+  "[net.open.flows] made=2",
+  "[net.tls.agreed] flow=1 version=TLSv1_3 suite=TLS13_AES_128_GCM_SHA256 group=Some(X25519)",
+  "[net.receive.stats] bytes=1121 calls=8 empty=7 ticks=159 flow=1 reused=0 kept=1",
+  "[web.http] method=GET status=404 bytes=75 encoding=gzip chunked=1 cookies=0 ticks=159 url=https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-sans/style.css",
+  "[net.receive.stats] bytes=1112 calls=4 empty=3 ticks=21 flow=1 reused=1 kept=1",
+  "[web.http] method=GET status=404 bytes=75 encoding=gzip chunked=1 cookies=0 ticks=21 url=https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-mono/style.css",
+  "[net.open.flows] made=3",
+  "[net.tls.agreed] flow=2 version=TLSv1_3 suite=TLS13_AES_256_GCM_SHA384 group=Some(X25519)",
+  "[net.receive.stats] bytes=835 calls=6 empty=5 ticks=128 flow=2 reused=0 kept=1",
+  "[web.http] method=GET status=200 bytes=220 encoding=gzip chunked=1 cookies=0 ticks=128 url=https://fonts.googleapis.com/css2?family=Archivo+Black&display=swap",
+  "[net.receive.stats] bytes=1345 calls=66 empty=65 ticks=105 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=2036 encoding=gzip chunked=0 cookies=0 ticks=106 url=https://sexos.dev/enhance.css",
+  "[net.receive.stats] bytes=2102 calls=72 empty=71 ticks=95 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=5122 encoding=gzip chunked=0 cookies=0 ticks=95 url=https://sexos.dev/film/film.css",
+  "[net.receive.stats] bytes=645 calls=69 empty=68 ticks=76 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=386 encoding=gzip chunked=0 cookies=0 ticks=76 url=https://sexos.dev/film/site.css",
+  "[net.receive.stats] bytes=1224 calls=69 empty=68 ticks=77 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=1749 encoding=gzip chunked=0 cookies=0 ticks=77 url=https://sexos.dev/enhance.js",
+  "[net.receive.stats] bytes=1182 calls=70 empty=69 ticks=83 flow=0 reused=1 kept=1",
+  "[web.http] method=GET status=200 bytes=1492 encoding=gzip chunked=0 cookies=0 ticks=83 url=https://sexos.dev/film/site.js",
+  "[web.script] engine_ticks=821 memory=4194304",
+  "[web.console] level=2 SyntaxError: Unexpected token '*'",
+  "[web.console] level=2     at https://sexos.dev/#script1:2:1",
+  "[web.console] level=2 SyntaxError: Unexpected token '{'",
+  "[web.console] level=2     at https://sexos.dev/film/site.js:1:1",
+  "[web.loaded] bytes_ok=1 items=484 links=14 height=7076 sheets=4 images=1 fetch_ticks=1213 layout_ticks=52 script_ticks=839 scripted=1",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=484 ticks=19",
+  "[web.ready] target=42 task=42",
+  "[net.open.flows] made=4",
+  "[net.tls.agreed] flow=3 version=TLSv1_3 suite=TLS13_AES_128_GCM_SHA256 group=Some(X25519)",
+  "[net.receive.stats] bytes=5329 calls=16 empty=15 ticks=424 flow=3 reused=0 kept=1",
+  "[web.http] method=GET status=200 bytes=5031 encoding=none chunked=0 cookies=0 ticks=424 url=https://data.narwallagram.com/network.json",
+  "[web.fetch] id=1 status=200 bytes=5031 ticks=424 method=GET url=https://data.narwallagram.com/network.json",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=568 ticks=9",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=568 ticks=14",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=568 ticks=14",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=568 ticks=14",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=568 ticks=14",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=568 ticks=14",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=568 ticks=14",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=568 ticks=16",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=568 ticks=16",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=568 ticks=14",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=568 ticks=16",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=568 ticks=15",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=568 ticks=14",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=568 ticks=14",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=568 ticks=14",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=568 ticks=14",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=568 ticks=16",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=568 ticks=14",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=568 ticks=14",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=568 ticks=14",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=568 ticks=16",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=568 ticks=14",
+  "[web.shown] w=410 h=330 scroll=0 focus=-1 items=568 ticks=16"
+ ],
+ "agreed": [
+  [
+   "TLSv1_3",
+   "TLS13_AES_128_GCM_SHA256",
+   "Some(X25519)"
+  ],
+  [
+   "TLSv1_3",
+   "TLS13_AES_128_GCM_SHA256",
+   "Some(X25519)"
+  ],
+  [
+   "TLSv1_3",
+   "TLS13_AES_256_GCM_SHA384",
+   "Some(X25519)"
+  ],
+  [
+   "TLSv1_3",
+   "TLS13_AES_128_GCM_SHA256",
+   "Some(X25519)"
+  ]
+ ],
+ "http": [
+  [
+   "200",
+   "61740",
+   "https://sexos.dev/"
+  ],
+  [
+   "404",
+   "75",
+   "https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-sans/style.css"
+  ],
+  [
+   "404",
+   "75",
+   "https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-mono/style.css"
+  ],
+  [
+   "200",
+   "220",
+   "https://fonts.googleapis.com/css2?family=Archivo+Black&display=swap"
+  ],
+  [
+   "200",
+   "2036",
+   "https://sexos.dev/enhance.css"
+  ],
+  [
+   "200",
+   "5122",
+   "https://sexos.dev/film/film.css"
+  ],
+  [
+   "200",
+   "386",
+   "https://sexos.dev/film/site.css"
+  ],
+  [
+   "200",
+   "1749",
+   "https://sexos.dev/enhance.js"
+  ],
+  [
+   "200",
+   "1492",
+   "https://sexos.dev/film/site.js"
+  ],
+  [
+   "200",
+   "5031",
+   "https://data.narwallagram.com/network.json"
+  ]
+ ],
+ "loaded": true,
+ "fatal": [],
+ "guest_error": null,
+ "timed_out": false
+}
