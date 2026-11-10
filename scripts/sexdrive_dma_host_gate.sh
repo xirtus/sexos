@@ -12,7 +12,7 @@ start = source.index('fn block_buffer_view(')
 end = source.index('\nfn ', start + 1)
 Path(sys.argv[2]).write_text(source[start:end])
 parts = []
-for name in ['device_sectors','prp2_for','prp2_for_loan','block_loan','end_block_loan','nvme_wait_completion', 'stop_uncertain_io', 'prepare_bounce', 'nvme_read_into_bounce', 'typed_read_handoff', 'nvme_read_into_mapped_va', 'nvme_write_one_block', 'nvme_flush', 'write_guard_allows']:
+for name in ['disk_sectors','device_sectors','place','prp2_for','prp2_for_loan','block_loan','end_block_loan','nvme_wait_completion', 'stop_uncertain_io', 'prepare_bounce', 'nvme_read_into_bounce', 'typed_read_handoff', 'nvme_read_into_mapped_va', 'nvme_write_one_block', 'nvme_flush', 'write_guard_allows']:
     start = source.index('fn ' + name + '(')
     end = source.index('\nfn ', start + 1)
     parts.append(source[start:end])
@@ -29,7 +29,8 @@ inventory=scheduler[scheduler.index('pub fn seal_self_wait_inventory()'):schedul
 assert 'pd.main_task.load(Ordering::Acquire)'in inventory and 'SELF_WAIT_TASKS.register(count,task)'in inventory
 assert 'if !SELF_WAIT_TASKS.contains(task)'in scheduler and 'pd.main_task.load(Ordering::Acquire)!=task'in scheduler
 assert 'crate::scheduler::seal_self_wait_inventory();'in (Path(sys.argv[1])/'kernel/src/init.rs').read_text()
-Path(sys.argv[3]).write_text('\n'.join(parts))
+lens=(Path(sys.argv[1])/'apps/sexdrive/src/lens.rs').read_text().replace('pub ','')
+Path(sys.argv[3]).write_text(lens+'\n'+'\n'.join(parts))
 PY
 SEXDRIVE_BLOCK_VIEW_SOURCE="$TEST_DIR/block_view.rs" SEXDRIVE_READ_PATH_SOURCE="$TEST_DIR/read_path.rs" rustc --edition=2021 --test \
   "$ROOT_DIR/tests/sexdrive_dma_transfer.rs" -o "$TEST_DIR/tests"
@@ -53,13 +54,13 @@ assert 'loop { service_next_request(); }' in entry
 assert 'pdx_try_listen_raw'not in s and '0..2_000_000'not in entry
 Path(sys.argv[2]).write_text('\n'.join(parts))
 abi=(Path(sys.argv[1])/'crates/sex-pdx/src/lib.rs').read_text()
-names=['BLOCK_READ','BLOCK_WRITE','BLOCK_SYNC','BLOCK_CAPACITY','BLOCK_MAX_XFER','BLOCK_MAX_RUN','BLOCK_SECTOR_SIZE','BLOCK_ERR_BAD_LEN','BLOCK_ERR_NO_DEVICE','BLOCK_ERR_BAD_CMD','SLOT_BLOCK_BUFFER']
+names=['BLOCK_READ','BLOCK_WRITE','BLOCK_SYNC','BLOCK_CAPACITY','BLOCK_RAW_READ','BLOCK_RAW_WRITE','BLOCK_LAYOUT','BLOCK_MAX_XFER','BLOCK_MAX_RUN','BLOCK_SECTOR_SIZE','BLOCK_ERR_BAD_LEN','BLOCK_ERR_NO_DEVICE','BLOCK_ERR_BAD_CMD','SLOT_BLOCK_BUFFER']
 constants=[]
 for name in names:
  match=re.search(r'pub const '+name+r'\s*:\s*u64\s*=\s*[^;]+;',abi)
  assert match,name
  constants.append(match.group())
-Path(sys.argv[3]).write_text('\n'.join(constants))
+Path(sys.argv[3]).write_text('\n'.join(constants)+'\n'+(Path(sys.argv[1])/'apps/sexdrive/src/lens.rs').read_text().replace('pub ',''))
 PY
 SEXDRIVE_SERVICE_SOURCE="$TEST_DIR/service.rs" SEXDRIVE_SERVICE_ABI_SOURCE="$TEST_DIR/service_abi.rs" rustc --edition=2021 --test "$ROOT_DIR/tests/sexdrive_service_loop.rs" -o "$TEST_DIR/service"
 "$TEST_DIR/service" --test-threads=1

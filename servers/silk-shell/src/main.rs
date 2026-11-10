@@ -14,6 +14,7 @@ mod launcher;
 mod clipboard;
 mod app_input;
 mod wm;
+mod launcher_search;
 mod session;
 use alloc::vec::Vec;
 use core::panic::PanicInfo;
@@ -10591,6 +10592,7 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
             // When the palette is open, intercept Enter/Escape/Backtick/J/K
             // before the reserved_ui_action check so palette navigation and
             // execution work in synthetic proof sequences (handle_hid_event).
+            if COMMAND_PALETTE_OPEN && !COMMAND_PALETTE_DAILY_PROOF_ACTIVE && palette_search_intercept(scancode) {return;}
             if COMMAND_PALETTE_OPEN
                 && (scancode == 0x1C || scancode == 0x01
                     || scancode == 0x29 || scancode == 0x24 || scancode == 0x25)
@@ -14530,6 +14532,73 @@ const COMMAND_LIST: [CommandDef; 14] = [
 static mut COMMAND_PALETTE_OPEN: bool = false;
 /// Index into COMMAND_LIST of the currently selected command.
 static mut COMMAND_PALETTE_SELECTED: u8 = 0;
+/// What the user has typed into the open launcher; empty shows every row.
+static mut PALETTE_QUERY: launcher_search::Query = launcher_search::Query::new();
+/// Words a launcher row is also found by, so "terminal" finds Spindle.
+fn command_words(cmd: Command) -> &'static str {
+    match cmd {
+        Command::FocusSpindle => "terminal shell console command",
+        Command::FocusQuil => "editor text notes write",
+        Command::FocusLinen => "files folders documents",
+        Command::FocusAtlas => "overview workspaces desktops",
+        Command::FocusBell => "notifications alerts",
+        Command::FocusCollar => "permissions privacy security",
+        Command::FocusMesh => "system monitor tasks",
+        Command::RestoreMinimized => "unhide show window",
+        Command::ZoomToggle => "maximize fullscreen resize",
+        Command::MinimizeFocused => "hide window",
+        Command::FocusBrowser => "web internet html",
+        Command::FocusProgram => "hello app program",
+        Command::ShutDown => "power off halt",
+        Command::Restart => "reboot",
+    }
+}
+/// COMMAND_LIST indexes that match the query, best first.
+unsafe fn palette_order() -> ([usize; COMMAND_LIST.len()], usize) {
+    let mut rows = [("", ""); COMMAND_LIST.len()];
+    for (row, item) in rows.iter_mut().zip(COMMAND_LIST.iter()) {
+        *row = (launcher_row_title(item.command, item.name), command_words(item.command));
+    }
+    let mut order = [0usize; COMMAND_LIST.len()];
+    let n = launcher_search::rank(PALETTE_QUERY.as_str(), &rows, &mut order);
+    (order, n)
+}
+/// Type-to-search keys while the launcher is open: letters, digits, space and
+/// Backspace edit the query; J and K still choose rows until a search has
+/// begun, the arrows always do; Esc clears a search before it closes; Enter
+/// with no match does nothing. Returns true when the key was taken.
+unsafe fn palette_search_intercept(scancode: u8) -> bool {
+    // Enter with nothing matching does nothing, with or without Ctrl: the
+    // hidden earlier selection must never run.
+    if scancode==0x1C && !PALETTE_QUERY.is_empty() && palette_order().1==0 {return true;}
+    if APP_MODIFIERS.key(scancode).control {return false;}
+    let nav=matches!(scancode,0x24|0x25) && PALETTE_QUERY.is_empty();
+    if !nav && palette_search_key(scancode) {return true;}
+    if matches!(scancode,0x48|0x50) {
+        if scancode==0x50 {palette_select_next();} else {palette_select_prev();}
+        return true;
+    }
+    if scancode==0x01 && !PALETTE_QUERY.is_empty() {
+        PALETTE_QUERY.clear();
+        sex_pdx::serial_record!("[shell.launcher.search] query= matches={} top=- changed=1",COMMAND_LIST.len());
+        palette_render_list();
+        return true;
+    }
+    false
+}
+/// A typed character or Backspace while the launcher is open: refilter and
+/// select the best match. Returns false for keys search does not take.
+unsafe fn palette_search_key(code: u8) -> bool {
+    let changed = if code == 0x0E { PALETTE_QUERY.pop() }
+        else if let Some(c) = launcher_search::key_char(code) { PALETTE_QUERY.push(c) }
+        else { return false };
+    let (order, n) = palette_order();
+    if n > 0 { COMMAND_PALETTE_SELECTED = order[0] as u8; }
+    sex_pdx::serial_record!("[shell.launcher.search] query={} matches={} top={} changed={}",
+        PALETTE_QUERY.as_str(), n, if n > 0 { COMMAND_LIST[order[0]].name } else { "-" }, changed as u8);
+    palette_render_list();
+    true
+}
 
 // ── Spindle Surface Control Helpers ─────────────────────────────────────────
 // Spindle = native SexOS terminal/command console (0.2: shell-local).
@@ -16088,7 +16157,18 @@ unsafe fn palette_render_list() {
         rows[i]=launcher::Row{name:launcher_row_title(item.command,item.name),status:visible_status};
         serial_println!("[shell.palette.item] idx={} action={} available={} status={} reason={}",i,item.name,available as u8,status,reason);
     }
-    let v=launcher::text(&rows[..COMMAND_LIST.len()],COMMAND_PALETTE_SELECTED as usize,w,h);
+    // Type-to-search: only matching rows, best first, under the query.
+    let (order,matches)=palette_order();
+    let mut shown=[launcher::Row{name:"",status:""};COMMAND_LIST.len()];
+    for (slot,&index) in shown.iter_mut().zip(order[..matches].iter()) {*slot=rows[index];}
+    let selected=order[..matches].iter().position(|&i|i==COMMAND_PALETTE_SELECTED as usize).unwrap_or(0);
+    let mut head=[0u8;40];let mut head_len=0;
+    for &b in b"SEARCH: ".iter().chain(PALETTE_QUERY.as_str().as_bytes()).chain(b"_") {head[head_len]=b;head_len+=1;}
+    let none=[launcher::Row{name:"No match",status:"BACKSPACE TO EDIT"}];
+    let v=if PALETTE_QUERY.is_empty() {launcher::text(&rows[..COMMAND_LIST.len()],COMMAND_PALETTE_SELECTED as usize,w,h)}
+        else if matches==0 {launcher::text_with(&none,0,w,h,[core::str::from_utf8(&head[..head_len]).unwrap_or(""),"ESC CLEARS THE SEARCH"])}
+        else {launcher::text_with(&shown[..matches],selected,w,h,[core::str::from_utf8(&head[..head_len]).unwrap_or(""),"ARROWS CHOOSE  ENTER OPEN  ESC CLEAR"])};
+    let rows=if PALETTE_QUERY.is_empty() {rows} else {let mut r=shown;if matches==0 {r[0]=none[0];} r};
     for index in 0..8 {pdx_call(SLOT_DISPLAY,0xEF,SURFACE_ID_COMMAND_PALETTE,0,(index as u64)<<56);}
     pdx_call(SLOT_DISPLAY,0xEF,SURFACE_ID_COMMAND_PALETTE,28u64<<32,
         (0x0022384Au64<<32)|((v.row_y.saturating_sub(28) as u64)<<16)|w as u64);
@@ -16096,7 +16176,7 @@ unsafe fn palette_render_list() {
         (1u64<<56)|(0x000C1420u64<<32)|(((v.rows as u32*v.row_h)as u64)<<16)|w as u64);
     for row in 0..v.rows {
         let index=v.first+row;let y=v.row_y+row as u32*v.row_h;
-        if index==COMMAND_PALETTE_SELECTED as usize {
+        if index==(if PALETTE_QUERY.is_empty() {COMMAND_PALETTE_SELECTED as usize} else {selected}) {
             pdx_call(SLOT_DISPLAY,0xEF,SURFACE_ID_COMMAND_PALETTE,(y as u64)<<32,
                 (2u64<<56)|(0x002A4960u64<<32)|((v.row_h as u64)<<16)|w as u64);
         }
@@ -16104,7 +16184,8 @@ unsafe fn palette_render_list() {
             (((row+3)as u64)<<56)|(0x005ED9C3u64<<32)|((v.row_h as u64)<<16)|3);
     }
     PALETTE_TEXT.queue(&v.bytes[..v.len],0x00F0F8FF,linen_text_delivery::Metadata{
-        count:COMMAND_LIST.len(),first:v.first,rows:v.rows,selected:COMMAND_PALETTE_SELECTED as u64});
+        count:if PALETTE_QUERY.is_empty() {COMMAND_LIST.len()} else {matches.max(1)},first:v.first,rows:v.rows,
+        selected:if PALETTE_QUERY.is_empty() {COMMAND_PALETTE_SELECTED as u64} else {selected as u64}});
     sex_pdx::serial_record!("[launcher.text.view] x={} y={} w={} h={} scale={} selected={} first={} rows={}",
         COMMAND_PALETTE_BOOT_X,COMMAND_PALETTE_BOOT_Y,w,h,v.scale,COMMAND_PALETTE_SELECTED,v.first,v.rows);
     for row in 0..v.rows {let index=v.first+row;
@@ -16128,6 +16209,7 @@ unsafe fn toggle_command_palette() -> bool {
     if COMMAND_PALETTE_OPEN {
         // Close palette — minimize the frame.
         COMMAND_PALETTE_OPEN = false;
+        PALETTE_QUERY.clear();
         PALETTE_TEXT.cancel();
         serial_println!("[launcher.close] ok=1 reason=palette_closed");
         serial_println!("[shell.palette.statusbar] open=0 selected=0 available=0");
@@ -16145,6 +16227,7 @@ unsafe fn toggle_command_palette() -> bool {
     } else {
         // Open palette — show the frame and render.
         COMMAND_PALETTE_OPEN = true;
+        PALETTE_QUERY.clear();
         COMMAND_PALETTE_SELECTED = 0;
         palette_show();
         // Count available palette items for statusbar marker.
@@ -16213,6 +16296,13 @@ unsafe fn palette_select_next() {
     let count = COMMAND_LIST.len() as u8;
     if count <= 1 { return; }
     let old = COMMAND_PALETTE_SELECTED;
+    if !PALETTE_QUERY.is_empty() {
+        let (order,n)=palette_order();
+        if let Some(to)=launcher_search::step(&order[..n],old as usize,1) {COMMAND_PALETTE_SELECTED=to as u8;}
+        sex_pdx::serial_record!("[shell.palette.select] old={} new={}", old, COMMAND_PALETTE_SELECTED);
+        palette_render_list();
+        return;
+    }
     let next = if COMMAND_PALETTE_SELECTED + 1 >= count { 0 } else { COMMAND_PALETTE_SELECTED + 1 };
     COMMAND_PALETTE_SELECTED = next;
     sex_pdx::serial_record!("[shell.palette.select] old={} new={}", old, next);
@@ -16231,6 +16321,13 @@ unsafe fn palette_select_prev() {
     let count = COMMAND_LIST.len() as u8;
     if count <= 1 { return; }
     let old = COMMAND_PALETTE_SELECTED;
+    if !PALETTE_QUERY.is_empty() {
+        let (order,n)=palette_order();
+        if let Some(to)=launcher_search::step(&order[..n],old as usize,-1) {COMMAND_PALETTE_SELECTED=to as u8;}
+        sex_pdx::serial_record!("[shell.palette.select] old={} new={}", old, COMMAND_PALETTE_SELECTED);
+        palette_render_list();
+        return;
+    }
     let prev = if COMMAND_PALETTE_SELECTED == 0 { count - 1 } else { COMMAND_PALETTE_SELECTED - 1 };
     COMMAND_PALETTE_SELECTED = prev;
     sex_pdx::serial_record!("[shell.palette.select] old={} new={}", old, prev);
@@ -25974,6 +26071,9 @@ pub extern "C" fn _start() -> ! {
                                 }
                             }
                             // ── Command palette keyboard intercept: consume keys when palette open ──
+                            if !panel_consumed && COMMAND_PALETTE_OPEN && palette_search_intercept(scancode) {
+                                mutated = true; panel_consumed = true;
+                            }
                             if !panel_consumed && COMMAND_PALETTE_OPEN {
                                 match scancode {
                                     0x24 => { palette_select_next(); mutated = true; } // J - next
