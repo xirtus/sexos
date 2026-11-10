@@ -1184,6 +1184,7 @@ pub mod text_region;
 pub mod program_store;
 pub mod program_memory;
 pub mod program_code;
+pub mod power;
 pub mod program_threads;
 pub mod fs;
 pub mod web;
