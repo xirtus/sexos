@@ -35,8 +35,12 @@ pub const MICROPHONE: u64 = 7;
 /// and which play. One word holds them all.
 pub const OUTPUTS: u64 = 8;
 /// Play to the outputs in mask `a` (bit k is output k) and silence the rest.
-/// Replies with the `outputs` word, or `REFUSED` when `a` names none.
+/// Replies with the `outputs` word, or `REFUSED` when `a` names none. `a` = `AUTO`
+/// goes back to the default outputs, following the headphone jack.
 pub const SET_OUTPUTS: u64 = 10;
+pub const AUTO: u64 = 1 << 8;
+/// Set in the outputs word while Bell follows the headphone jack.
+pub const OUTPUTS_AUTO: u64 = 1 << 12;
 
 /// An output's kind.
 pub const LINE_OUT: u8 = 0;
