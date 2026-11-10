@@ -787,7 +787,8 @@ fn vertical_gradient_xrgb(y: usize, h: usize, top: u32, bottom: u32) -> u32 {
 /// Desktop background: smooth gradient from bg_top (at y=0) to bg_bottom (at bottom).
 /// Replaces the old 4-band hard gradient.  Endpoint colors preserved from Theme.
 fn bg(y: usize, h: usize) -> u32 {
-    vertical_gradient_xrgb(y, h, DEFAULT_THEME.bg_top, DEFAULT_THEME.bg_bottom)
+    let (top, bottom) = sex_pdx::desktop_look::wallpaper().unwrap_or((DEFAULT_THEME.bg_top, DEFAULT_THEME.bg_bottom));
+    vertical_gradient_xrgb(y, h, top, bottom)
 }
 
 fn fill_bar_bg_buffer(fb_w: u32, fb_h: u32) -> bool {
@@ -1978,15 +1979,24 @@ fn publish_frame(fb:*mut u32,w:usize,h:usize,frame:frame_output::Publication<'_>
     if frame.previous.is_some_and(|old|old.len()!=pixels.len())||frame.rows.end>h{return false;}
     let pitch=unsafe{FB_PITCH} as usize;
     let mut written=0usize;
+    // A new night light level repaints every pixel: what the output shows was
+    // warmed by the old level, so comparing with the old frame is not enough.
+    let night=sex_pdx::desktop_look::night_level();
+    let previous=if sex_pdx::desktop_look::take_night_change(){None}else{frame.previous};
     for y in frame.rows.first..frame.rows.end{
         let row=&pixels[y*w..(y+1)*w];
-        let (first,end)=match frame.previous{
+        let (first,end)=match previous{
             Some(old)=>{let old=&old[y*w..(y+1)*w];
                 let Some(first)=(0..w).find(|&x|row[x]!=old[x])else{continue};
                 (first,(first..w).rev().find(|&x|row[x]!=old[x]).unwrap_or(first)+1)}
             None=>(0,w)};
         let out=unsafe{fb.add(y*pitch)};
+        if night==0{
         for(index,pixel)in row[first..end].iter().enumerate(){unsafe{core::ptr::write_volatile(out.add(first+index),*pixel);}}
+        }else{
+            // Night light warms the finished frame on its way out.
+            for(index,pixel)in row[first..end].iter().enumerate(){unsafe{core::ptr::write_volatile(out.add(first+index),sex_pdx::desktop_look::night(*pixel,night));}}
+        }
         written+=end-first;
     }
     unsafe{PUBLISHED_PIXELS=PUBLISHED_PIXELS.wrapping_add(written as u64);LAST_WRITTEN=written as u64;}
@@ -3995,6 +4005,13 @@ pub extern "C" fn _start() -> ! {
                             needs_top_strip_redraw = true;
                             sex_pdx::serial_record!("[display.panel.notice] len={}", text.len);
                         }
+                    }
+                }
+                sex_pdx::desktop_look::OP_DESKTOP_LOOK => {
+                    // Only the Shell picks the wallpaper and night light.
+                    if msg.caller_pd == 3 && sex_pdx::desktop_look::set(msg.arg0, msg.arg1) {
+                        needs_full_redraw = true;
+                        sex_pdx::serial_record!("[display.look] wallpaper={} night={}", msg.arg0, msg.arg1);
                     }
                 }
                 sex_pdx::app_lifecycle::OP_APP_TITLE => {
