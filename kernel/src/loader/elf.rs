@@ -1,5 +1,5 @@
 use x86_64::VirtAddr;
-use crate::serial_println;
+use crate::{serial_println, boot_trace};
 use crate::ipc::DOMAIN_REGISTRY;
 use x86_64::structures::paging::PageTableFlags;
 
@@ -18,7 +18,7 @@ impl ElfLoader {
     pub fn load_elf(path: &str, pd_id: u32, domain_id: u8, pku_key: u8) -> Result<(VirtAddr, u64), &'static str> {
         let start_ticks = crate::hal::get_monotonic_counter();
         let mut checkpoint = "loader.start";
-        serial_println!("loader: Loading ELF {} (PKU Key {})...", path, pku_key);
+        boot_trace!("loader: Loading ELF {} (PKU Key {})...", path, pku_key);
         let code_base = Self::pd_code_base(domain_id);
         let stack_top = Self::pd_stack_top(domain_id);
         serial_println!(
@@ -43,10 +43,10 @@ impl ElfLoader {
                 };
                 let _sexfiles_pd = DOMAIN_REGISTRY.get(sexfiles_pd_id).ok_or("loader: sexfiles not found")?;
             } else {
-                serial_println!("loader: Bootstrap mode (PD 0). Using internal initrd.");
+                boot_trace!("loader: Bootstrap mode (PD 0). Using internal initrd.");
             }
         } else {
-            serial_println!("loader: Bootstrap mode (no active PD). Using internal initrd.");
+            boot_trace!("loader: Bootstrap mode (no active PD). Using internal initrd.");
         }
 
         // 2. Resolve module bytes
@@ -56,7 +56,7 @@ impl ElfLoader {
             .and_then(|mods| mods.modules().iter().find(|m| m.path() == path))
             .ok_or("loader: module not found in limine list")?;
         let elf_data = module.data();
-        serial_println!(
+        boot_trace!(
             "loader: module resolved path={} bytes={}",
             path,
             elf_data.len()
@@ -64,20 +64,20 @@ impl ElfLoader {
 
         // 3. Map PT_LOAD segments into GLOBAL_VAS with real flags
         checkpoint = "loader.before_elf_header";
-        serial_println!("loader: checkpoint={}", checkpoint);
+        boot_trace!("loader: checkpoint={}", checkpoint);
         let entry = {
             let mut vas_lock = crate::memory::manager::GLOBAL_VAS.lock();
             let vas = vas_lock.as_mut().ok_or("loader: VAS not initialized")?;
             let entry =
                 crate::elf::load_elf_for_pd(elf_data, vas, pku_key, VirtAddr::new(code_base))?;
             checkpoint = "loader.after_memory_mapping";
-            serial_println!("loader: checkpoint={}", checkpoint);
+            boot_trace!("loader: checkpoint={}", checkpoint);
             entry
         };
 
-        serial_println!("loader: ELF header parsed. Entry at {:#x}", entry.as_u64());
+        boot_trace!("loader: ELF header parsed. Entry at {:#x}", entry.as_u64());
         checkpoint = "loader.after_elf_header";
-        serial_println!("loader: checkpoint={}", checkpoint);
+        boot_trace!("loader: checkpoint={}", checkpoint);
 
         // 4. Create Stack with Guard Page (mapped USER|RW|NX)
         {
@@ -93,7 +93,7 @@ impl ElfLoader {
                 pku_key,
             )?;
         }
-        serial_println!("loader: Guard-page stack initialized at {:#x}", stack_top);
+        boot_trace!("loader: Guard-page stack initialized at {:#x}", stack_top);
 
         crate::app_resources::capture_boot_image(pd_id,pku_key,elf_data,code_base,stack_top)?;
 

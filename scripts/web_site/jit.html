@@ -1,0 +1,13 @@
+<!doctype html><title>Baseline bytecode JIT</title><h1>Baseline bytecode JIT</h1><p id=result>Running</p>
+<script>
+function add(a,b) { return a+b; }
+function sub(a,b) { return a-b; }
+function mul(a,b) { return a*b; }
+function mix(a,b) { return ((a+b)*3) ^ (a-b); }
+let total=0;
+for(let i=0;i<10000;i++) total+=mix(i,7);
+for(let i=0;i<64;i++) {add(i,7);sub(i,7);mul(i,7);}
+const result=[total,add(2147483647,1),sub(-2147483648,1),mul(65536,65536),Object.is(mul(-1,0),-0),add('a',1),add(true,1)].join('|');
+document.getElementById('result').textContent=result;
+console.log('jit-result',result);
+</script>

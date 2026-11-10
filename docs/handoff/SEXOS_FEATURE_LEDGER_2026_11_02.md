@@ -3970,6 +3970,13 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   frame, a relayed own broadcast and a deauthentication.
 - **ABI / kernel:** none.
 
+## Desktop, stage E4: wallpaper and night light (2026-11-10)
+
+- **Super+B** steps the wallpaper through Theme, Dusk, Forest, Ocean and Slate gradients. **Super+Shift+N** steps night light off, low, medium, high (about 4500 K, 3700 K, 2900 K).
+- The Shell chooses; Display keeps the look in `sex_pdx::desktop_look` and paints with it. The wallpaper replaces the background gradient; night light warms the finished frame as Display publishes it (red kept, green and blue scaled), like redshift or Plasma Night Color, so programs need not know.
+- **ABI change (named):** `OP_DESKTOP_LOOK` 0x2DA (Shell -> Display; arg0 wallpaper, arg1 night level). Display accepts it from the Shell's domain only and refuses out-of-range values.
+- Tests: `tests/desktop_look.rs` (service custody), `tests/wm_layouts.rs` (bindings), `scripts/desktop_look_gate.py` (QEMU: checks the desktop pixel changes with each step and comes back exactly when night light is off).
+- Not yet: remembering the choice across boots (needs the Settings stage), images as wallpaper, a schedule for night light.
 ## Intel Wi-Fi, stage W5f: group key rekeying (2026-11-10)
 - **What:** the link keeps the WPA2 supplicant. It answers the AP's later key messages
   (group rekey, pairwise rekey) and installs the new keys, so a connection survives

@@ -12,8 +12,12 @@
 #![no_std]
 extern crate alloc;
 
+#[cfg(feature = "baseline-jit")]
+pub mod baseline;
 pub mod document;
 pub mod webgl;
+#[cfg(sexjs_native)]
+mod native;
 pub use document::{Document, FetchAsk};
 
 use alloc::{format, string::String, vec::Vec};
@@ -148,10 +152,26 @@ struct State<P> {
     page: P,
     result: Vec<u8>,
     limits: StoreLimits,
+    #[cfg(feature = "baseline-jit")]
+    jit: baseline::Jit,
 }
 
 /// One page's script engine.
 pub struct Script<P: Page + 'static> {
+    vm: Vm<P>,
+    budget_ms: i32,
+    load_budget_ms: i32,
+}
+
+/// The engine's two tiers: machine code (`cfg(sexjs_native)`, see build.rs) or the
+/// wasmi interpreter. Both run the same quickjs.wasm guest.
+enum Vm<P: Page + 'static> {
+    Wasmi(Wasmi<P>),
+    #[cfg(sexjs_native)]
+    Native(native::Native<P>),
+}
+
+struct Wasmi<P: Page + 'static> {
     store: Store<State<P>>,
     memory: Memory,
     alloc: TypedFunc<i32, i32>,
@@ -160,8 +180,27 @@ pub struct Script<P: Page + 'static> {
     module: TypedFunc<(i32, i32, i32, i32, i32, i32), i32>,
     ready: TypedFunc<i32, i32>,
     dispatch: TypedFunc<(i32, i32, i32), i32>,
-    budget_ms: i32,
-    load_budget_ms: i32,
+}
+
+fn trapped(x: wasmi::Error) -> Error { Error::Trapped(format!("{x}")) }
+
+impl<P: Page + 'static> Vm<P> {
+    fn page(&self) -> &P { match self { Vm::Wasmi(w) => &w.store.data().page, #[cfg(sexjs_native)] Vm::Native(n) => n.page() } }
+    fn page_mut(&mut self) -> &mut P { match self { Vm::Wasmi(w) => &mut w.store.data_mut().page, #[cfg(sexjs_native)] Vm::Native(n) => n.page_mut() } }
+    fn alloc(&mut self, n: i32) -> Result<i32, Error> { match self { Vm::Wasmi(w) => w.alloc.call(&mut w.store, n).map_err(trapped), #[cfg(sexjs_native)] Vm::Native(v) => v.alloc(n) } }
+    fn free(&mut self, p: i32) { match self { Vm::Wasmi(w) => { let _ = w.free.call(&mut w.store, p); } #[cfg(sexjs_native)] Vm::Native(v) => v.free(p) } }
+    fn write(&mut self, at: usize, bytes: &[u8]) -> Result<(), Error> {
+        match self {
+            Vm::Wasmi(w) => w.memory.write(&mut w.store, at, bytes).map_err(|_| Error::Trapped(String::from("write"))),
+            #[cfg(sexjs_native)]
+            Vm::Native(v) => v.write(at, bytes),
+        }
+    }
+    fn eval(&mut self, a: (i32, i32, i32, i32, i32)) -> Result<i32, Error> { match self { Vm::Wasmi(w) => w.eval.call(&mut w.store, a).map_err(trapped), #[cfg(sexjs_native)] Vm::Native(v) => v.eval(a) } }
+    fn module(&mut self, a: (i32, i32, i32, i32, i32, i32)) -> Result<i32, Error> { match self { Vm::Wasmi(w) => w.module.call(&mut w.store, a).map_err(trapped), #[cfg(sexjs_native)] Vm::Native(v) => v.module(a) } }
+    fn ready(&mut self, a: i32) -> Result<i32, Error> { match self { Vm::Wasmi(w) => w.ready.call(&mut w.store, a).map_err(trapped), #[cfg(sexjs_native)] Vm::Native(v) => v.ready(a) } }
+    fn dispatch(&mut self, a: (i32, i32, i32)) -> Result<i32, Error> { match self { Vm::Wasmi(w) => w.dispatch.call(&mut w.store, a).map_err(trapped), #[cfg(sexjs_native)] Vm::Native(v) => v.dispatch(a) } }
+    fn memory_bytes(&self) -> usize { match self { Vm::Wasmi(w) => w.memory.data(&w.store).len(), #[cfg(sexjs_native)] Vm::Native(v) => v.memory_bytes() } }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -189,7 +228,35 @@ fn args_of(data: &[u8], ptr: i32, len: i32) -> Option<Vec<&[u8]>> {
 
 impl<P: Page + 'static> Script<P> {
     /// Loads the engine and runs the prelude.
-    pub fn new(page: P, limits: Limits) -> Result<Self, Error> { Self::with_engine(QUICKJS_WASM, page, limits) }
+    /// Loads the engine (machine code where this build has it) and runs the prelude.
+    pub fn new(page: P, limits: Limits) -> Result<Self, Error> {
+        #[cfg(sexjs_native)]
+        {
+            let mut vm = native::Native::new(page, limits.memory_bytes)?;
+            if vm.init(limits.heap_bytes as i32)? != 0 { return Err(Error::Engine(String::from("init"))); }
+            return Self::start(Vm::Native(vm), limits);
+        }
+        #[allow(unreachable_code)]
+        Self::with_engine(QUICKJS_WASM, page, limits)
+    }
+
+    /// Whether this build runs scripts as machine code rather than on the interpreter.
+    pub const NATIVE: bool = cfg!(sexjs_native);
+
+    fn start(vm: Vm<P>, limits: Limits) -> Result<Self, Error> {
+        let mut script = Self { vm, budget_ms: 0, load_budget_ms: 0 };
+        // The prelude is ours: no time budget, which a slow machine could exceed.
+        #[cfg(feature = "baseline-jit")]
+        script.set_jit_enabled(false);
+        script.eval(PRELUDE, "prelude.js")?;
+        #[cfg(feature = "baseline-jit")]
+        script.set_jit_enabled(true);
+        script.budget_ms = limits.budget_ms as i32;
+        script.load_budget_ms = limits.load_budget_ms as i32;
+        Ok(script)
+    }
+
+    /// Loads `wasm` (a quickjs.wasm build) on the wasmi interpreter.
 
     pub fn with_engine(wasm: &[u8], page: P, limits: Limits) -> Result<Self, Error> {
         let e = |m: &str| Error::Engine(String::from(m));
@@ -199,7 +266,7 @@ impl<P: Page + 'static> Script<P> {
         let engine = Engine::new(&config);
         let module = Module::new(&engine, wasm).map_err(|x| Error::Engine(format!("{x}")))?;
         let store_limits = StoreLimitsBuilder::new().memory_size(limits.memory_bytes).memories(1).tables(4).table_elements(100_000).instances(1).build();
-        let mut store = Store::new(&engine, State { page, result: Vec::new(), limits: store_limits });
+        let mut store = Store::new(&engine, State { page, result: Vec::new(), limits: store_limits, #[cfg(feature = "baseline-jit")] jit: baseline::Jit::default() });
         store.limiter(|s| &mut s.limits);
         let mut linker = Linker::<State<P>>::new(&engine);
         link(&mut linker).map_err(|_| e("link"))?;
@@ -207,30 +274,26 @@ impl<P: Page + 'static> Script<P> {
         let memory = instance.get_memory(&store, "memory").ok_or_else(|| e("no memory"))?;
         if let Ok(init) = instance.get_typed_func::<(), ()>(&store, "_initialize") { init.call(&mut store, ()).map_err(|x| Error::Engine(format!("{x}")))?; }
         let start = instance.get_typed_func::<i32, i32>(&store, "sx_init").map_err(|_| e("sx_init"))?;
-        let mut script = Self {
+        let mut w = Wasmi {
             alloc: instance.get_typed_func(&store, "sx_alloc").map_err(|_| e("sx_alloc"))?,
             free: instance.get_typed_func(&store, "sx_free").map_err(|_| e("sx_free"))?,
             eval: instance.get_typed_func(&store, "sx_eval").map_err(|_| e("sx_eval"))?,
             module: instance.get_typed_func(&store, "sx_module").map_err(|_| e("sx_module"))?,
             ready: instance.get_typed_func(&store, "sx_modules_ready").map_err(|_| e("sx_modules_ready"))?,
             dispatch: instance.get_typed_func(&store, "sx_dispatch").map_err(|_| e("sx_dispatch"))?,
-            store, memory, budget_ms: 0, load_budget_ms: 0,
+            store, memory,
         };
-        if start.call(&mut script.store, limits.heap_bytes as i32).map_err(|x| Error::Engine(format!("{x}")))? != 0 { return Err(e("init")); }
-        // The prelude is ours: no time budget, which a slow machine could exceed.
-        script.eval(PRELUDE, "prelude.js")?;
-        script.budget_ms = limits.budget_ms as i32;
-        script.load_budget_ms = limits.load_budget_ms as i32;
-        Ok(script)
+        if start.call(&mut w.store, limits.heap_bytes as i32).map_err(|x| Error::Engine(format!("{x}")))? != 0 { return Err(e("init")); }
+        Self::start(Vm::Wasmi(w), limits)
     }
 
-    pub fn page(&self) -> &P { &self.store.data().page }
-    pub fn page_mut(&mut self) -> &mut P { &mut self.store.data_mut().page }
+    pub fn page(&self) -> &P { self.vm.page() }
+    pub fn page_mut(&mut self) -> &mut P { self.vm.page_mut() }
 
     fn put(&mut self, bytes: &[u8]) -> Result<i32, Error> {
-        let p = self.alloc.call(&mut self.store, bytes.len().max(1) as i32).map_err(|x| Error::Trapped(format!("{x}")))?;
+        let p = self.vm.alloc(bytes.len().max(1) as i32)?;
         if p == 0 { return Err(Error::Trapped(String::from("out of memory"))); }
-        self.memory.write(&mut self.store, p as u32 as usize, bytes).map_err(|_| Error::Trapped(String::from("write")))?;
+        self.vm.write(p as u32 as usize, bytes)?;
         Ok(p)
     }
 
@@ -238,10 +301,10 @@ impl<P: Page + 'static> Script<P> {
     pub fn eval(&mut self, source: &str, name: &str) -> Result<(), Error> {
         let src = self.put(source.as_bytes())?;
         let nm = self.put(name.as_bytes())?;
-        let r = self.eval.call(&mut self.store, (src, source.len() as i32, nm, name.len() as i32, self.load_budget_ms));
-        let _ = self.free.call(&mut self.store, src);
-        let _ = self.free.call(&mut self.store, nm);
-        let r = match r { Ok(0) => Ok(()), Ok(_) => Err(Error::Thrown), Err(x) => Err(Error::Trapped(format!("{x}"))) };
+        let r = self.vm.eval((src, source.len() as i32, nm, name.len() as i32, self.load_budget_ms));
+        self.vm.free(src);
+        self.vm.free(nm);
+        let r = match r { Ok(0) => Ok(()), Ok(_) => Err(Error::Thrown), Err(x) => Err(x) };
         // Drawing the script queued reaches the page even if it threw afterwards.
         if !matches!(r, Err(Error::Trapped(_))) { self.dispatch("flush")?; }
         r
@@ -262,18 +325,18 @@ impl<P: Page + 'static> Script<P> {
     /// (Modules a held `import()` wants, not yet taken, come along too.)
     pub fn module_needs(&mut self, source: &str, name: &str) -> Result<Vec<String>, Error> {
         let r = self.module_call(source, name, true);
-        let wanted = self.store.data_mut().page.take_wanted_modules();
+        let wanted = self.vm.page_mut().take_wanted_modules();
         match r { Err(Error::Trapped(x)) => Err(Error::Trapped(x)), _ => Ok(wanted) }
     }
 
     /// The modules that `import()` calls are waiting for (the page noted them while a
     /// script ran). Give the page each one's source, then call [`Script::modules_ready`].
-    pub fn modules_wanted(&mut self) -> Vec<String> { self.store.data_mut().page.take_wanted_modules() }
+    pub fn modules_wanted(&mut self) -> Vec<String> { self.vm.page_mut().take_wanted_modules() }
 
     /// Runs the waiting `import()` calls whose module graphs are now all given (asking
     /// for more where they import further modules). Returns how many still wait.
     pub fn modules_ready(&mut self) -> Result<usize, Error> {
-        let r = self.ready.call(&mut self.store, self.budget_ms).map_err(|x| Error::Trapped(format!("{x}")))?;
+        let r = self.vm.ready(self.budget_ms)?;
         self.dispatch("flush")?;
         Ok(r.max(0) as usize)
     }
@@ -281,10 +344,10 @@ impl<P: Page + 'static> Script<P> {
     fn module_call(&mut self, source: &str, name: &str, discover: bool) -> Result<(), Error> {
         let src = self.put(source.as_bytes())?;
         let nm = self.put(name.as_bytes())?;
-        let r = self.module.call(&mut self.store, (src, source.len() as i32, nm, name.len() as i32, self.load_budget_ms, discover as i32));
-        let _ = self.free.call(&mut self.store, src);
-        let _ = self.free.call(&mut self.store, nm);
-        match r { Ok(0) => Ok(()), Ok(_) => Err(Error::Thrown), Err(x) => Err(Error::Trapped(format!("{x}"))) }
+        let r = self.vm.module((src, source.len() as i32, nm, name.len() as i32, self.load_budget_ms, discover as i32));
+        self.vm.free(src);
+        self.vm.free(nm);
+        match r { Ok(0) => Ok(()), Ok(_) => Err(Error::Thrown), Err(x) => Err(x) }
     }
 
     /// Calls the prelude's `__sx_dispatch` with `message`: `tick`, `click\tNODE`,
@@ -294,13 +357,29 @@ impl<P: Page + 'static> Script<P> {
         // A fetch's arrival may run a script the page inserted (a player's multi-megabyte
         // bundle): that gets the load budget, as the page's own scripts do.
         let budget = if message.starts_with("fetched\t") { self.load_budget_ms.max(self.budget_ms) } else { self.budget_ms };
-        let r = self.dispatch.call(&mut self.store, (m, message.len() as i32, budget));
-        let _ = self.free.call(&mut self.store, m);
-        r.map_err(|x| Error::Trapped(format!("{x}")))
+        let r = self.vm.dispatch((m, message.len() as i32, budget));
+        self.vm.free(m);
+        r
+    }
+
+    /// Enables/disables the experimental tier without changing the interpreter.
+    #[cfg(feature = "baseline-jit")]
+    pub fn set_jit_enabled(&mut self, enabled: bool) {
+        match &mut self.vm {
+            Vm::Wasmi(w) => w.store.data_mut().jit.enabled = enabled,
+            #[cfg(sexjs_native)] Vm::Native(v) => v.set_jit_enabled(enabled),
+        }
+    }
+    #[cfg(feature = "baseline-jit")]
+    pub fn jit_stats(&self) -> baseline::Stats {
+        match &self.vm {
+            Vm::Wasmi(w) => w.store.data().jit.stats,
+            #[cfg(sexjs_native)] Vm::Native(v) => v.jit_stats(),
+        }
     }
 
     /// Bytes of linear memory the engine holds.
-    pub fn memory_bytes(&self) -> usize { self.memory.data(&self.store).len() }
+    pub fn memory_bytes(&self) -> usize { self.vm.memory_bytes() }
 }
 
 fn link<P: Page + 'static>(linker: &mut Linker<State<P>>) -> Result<(), wasmi::errors::LinkerError> {
@@ -325,6 +404,17 @@ fn link<P: Page + 'static>(linker: &mut Linker<State<P>>) -> Result<(), wasmi::e
         let r = core::mem::take(&mut state.result);
         let at = out as u32 as usize;
         if let Some(dst) = data.get_mut(at..at + r.len()) { dst.copy_from_slice(&r); }
+    })?;
+    linker.func_wrap("dom", "jit_available", |_: C<'_, P>| -> i32 { cfg!(feature = "baseline-jit") as i32 })?;
+    linker.func_wrap("dom", "jit", |mut c: C<'_, P>, pc: i32, len: i32, argv: i32, argc: i32, out: i32| -> i32 {
+        #[cfg(feature = "baseline-jit")]
+        {
+            let Some(m) = mem(&c) else { return 0 };
+            let (data, state) = m.data_and_store_mut(&mut c);
+            return state.jit.run(data, pc as u32, len as u32, argv as u32, argc as u32, out as u32) as i32;
+        }
+        #[cfg(not(feature = "baseline-jit"))]
+        { let _ = (&mut c, pc, len, argv, argc, out); 0 }
     })?;
     const W: &str = "wasi_snapshot_preview1";
     linker.func_wrap(W, "clock_time_get", |mut c: C<'_, P>, _id: i32, _p: i64, at: i32| -> i32 {

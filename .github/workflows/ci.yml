@@ -49,6 +49,10 @@ jobs:
       run: cargo test --locked -p sex-disk --lib
     - name: Crash record format host regressions
       run: bash scripts/crash_log_host_gate.sh
+    - name: Experimental JS baseline JIT differential and emitted-code gates
+      run: |
+        SEXJS_NATIVE=0 cargo test --release -p sex-js --features baseline-jit -- --test-threads=1 --nocapture
+        SEXJS_NATIVE=1 cargo test --release -p sex-js --features baseline-jit -- --test-threads=1 --nocapture
     - name: Intel Wi-Fi driver core (crypto vectors, handshakes, firmware files, power-up)
       run: bash scripts/wifi_host_gate.sh
     - name: Power off and restart through ACPI (host half)
@@ -104,6 +108,11 @@ jobs:
       run: |
         truncate -s 1G "$RUNNER_TEMP/blank-programs.img"
         python3 scripts/program_std_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/programs-std"
+    - name: Web page JavaScript (native QuickJS tier)
+      run: |
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends python3-pil
+        truncate -s 1G "$RUNNER_TEMP/blank-webjs.img"
+        python3 scripts/program_web_js_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-webjs.img" --out "$RUNNER_TEMP/sexos-runtime/web-js"
     - name: USB input paths
       run: GATE_DIR="$RUNNER_TEMP/sexos-usb" SKIP_BUILD=1 bash scripts/usb_path_gate.sh
     - name: Preserve runtime evidence
@@ -224,3 +233,46 @@ jobs:
     steps:
     - run: |
         echo '${{ toJSON(needs) }}' | python3 -c "import json,sys; r={k:v['result'] for k,v in json.load(sys.stdin).items()}; print(r); sys.exit(any(v!='success' for v in r.values()))"
+
+  js-jit:
+    name: Experimental JS JIT and W^X (${{ matrix.cores }} cores)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        cores: [1, 4]
+    env:
+      SEXOS_GATE_CORES: ${{ matrix.cores }}
+    steps:
+    - uses: actions/checkout@v4
+    - uses: ./.github/actions/setup
+    - name: Build sealed ISO from this candidate
+      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/build.log"; exit 1)
+    - name: Runtime code permissions, blocked instructions and per-run fault isolation
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/blank-jit.img"
+        python3 scripts/program_jit_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-jit.img" --out "$RUNNER_TEMP/js-jit/kernel-code"
+    - name: Browser hot bytecode compared to forced interpreter
+      run: |
+        bash scripts/build_web_jit.sh "$RUNNER_TEMP/web-jit"
+        python3 scripts/program_web_jit_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-jit.img" --program "$RUNNER_TEMP/web-jit" --out "$RUNNER_TEMP/js-jit/browser"
+    - name: Retain exact boot media with the opt-in program (one core)
+      if: always() && matrix.cores == 1
+      run: |
+        if [ -f sexos-v1.0.0.iso ]; then
+          mkdir -p "$RUNNER_TEMP/js-jit"
+          cp sexos-v1.0.0.iso "$RUNNER_TEMP/js-jit/candidate.iso"
+          sha256sum sexos-v1.0.0.iso > "$RUNNER_TEMP/js-jit/inputs.sha256"
+          if [ -f "$RUNNER_TEMP/web-jit" ]; then sha256sum "$RUNNER_TEMP/web-jit" >> "$RUNNER_TEMP/js-jit/inputs.sha256"; fi
+        fi
+    - name: Preserve candidate and evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sexos-js-jit-${{ matrix.cores }}cores
+        path: |
+          ${{ runner.temp }}/js-jit
+          ${{ runner.temp }}/build.log
+          ${{ runner.temp }}/web-jit
+        if-no-files-found: ignore

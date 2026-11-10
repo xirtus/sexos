@@ -671,7 +671,7 @@ fn text_run(row:*mut u32,x0:usize,x1:usize,y:usize,surf:&Surface){
             &&surf.selection_end as usize<=surf.text_len as usize;
         let left=tx+col*advance;
         // Geist Mono drawn for this cell size, as surface_text_fg_at draws it.
-        if scale>=2{
+        {
             let line_h=(GLYPH_H+2)*scale;
             if let Some(cell)=glyphs::mono_cell(scalar,advance,line_h){
                 let gy=(y-ty)%line_h;
@@ -787,7 +787,8 @@ fn vertical_gradient_xrgb(y: usize, h: usize, top: u32, bottom: u32) -> u32 {
 /// Desktop background: smooth gradient from bg_top (at y=0) to bg_bottom (at bottom).
 /// Replaces the old 4-band hard gradient.  Endpoint colors preserved from Theme.
 fn bg(y: usize, h: usize) -> u32 {
-    vertical_gradient_xrgb(y, h, DEFAULT_THEME.bg_top, DEFAULT_THEME.bg_bottom)
+    let (top, bottom) = sex_pdx::desktop_look::wallpaper().unwrap_or((DEFAULT_THEME.bg_top, DEFAULT_THEME.bg_bottom));
+    vertical_gradient_xrgb(y, h, top, bottom)
 }
 
 fn fill_bar_bg_buffer(fb_w: u32, fb_h: u32) -> bool {
@@ -1071,7 +1072,7 @@ const PANEL_NOTICE_INK: u32 = 0x00F9E2AF;
 /// workspace dots, like a Waybar or Plasma window title.
 const PANEL_TITLE_X: usize = 166;
 const PANEL_TITLE_END: usize = silkbar_model::WS_X0 - 16;
-fn panel_title_fg_at(x: usize, y: usize, bar: &SilkBar, scene: &scene::SceneSnapshot) -> Option<u32> {
+fn panel_title_fg_at(x: usize, y: usize, bar: &SilkBar, scene: &scene::SceneSnapshot, background: u32) -> Option<u32> {
     let y0 = (BAR_BG_H - glyphs::TITLE_H) / 2;
     if x + 2 < PANEL_TITLE_X || x >= PANEL_TITLE_END || y < y0 || y >= y0 + glyphs::TITLE_H { return None; }
     let notice = unsafe { &*core::ptr::addr_of!(PANEL_NOTICE) };
@@ -1082,20 +1083,20 @@ fn panel_title_fg_at(x: usize, y: usize, bar: &SilkBar, scene: &scene::SceneSnap
     };
     let alpha = glyphs::title_coverage(title, x as i32 - PANEL_TITLE_X as i32, y - y0);
     if alpha == 0 { return None; }
-    let background = bar_color(x, y, bar, scene);
     let ink = if notice { PANEL_NOTICE_INK } else { sex_pdx::desktop_style::contrast_ink(background) };
     Some(coverage_blend(ink, background, alpha))
 }
 
 /// Same visible top-strip content for full and incremental redraws.
 fn top_strip_pixel(x: usize, y: usize, bar: &SilkBar, lines: &[[u8;13];2], scene: &scene::SceneSnapshot) -> u32 {
-    if let Some(fg) = clock_fg_at(x, y, bar, lines) { fg }
-    else if let Some(fg) = bell_badge_at(x, y, bar) { fg }
+    let background = bar_color(x, y, bar, scene);
+    if let Some(fg) = clock_fg_at(x, y, bar, lines, background) { fg }
+    else if let Some(fg) = bell_badge_at(x, y, bar, background) { fg }
     else if let Some(fg) = phase5_active_app_at(x, y, bar, scene) { fg }
-    else if let Some(fg) = panel_title_fg_at(x, y, bar, scene) { fg }
+    else if let Some(fg) = panel_title_fg_at(x, y, bar, scene, background) { fg }
     else if let Some(fg) = phase5_tint_swatch_at(x, y, bar) { fg }
     else if let Some(fg) = phase5_palette_dot_at(x, y, bar) { fg }
-    else { bar_color(x, y, bar, scene) }
+    else { background }
 }
 
 // Bounded observation only: no protocol, authority or scheduling decisions.
@@ -1575,7 +1576,7 @@ fn apply_text_zoom(surf: &mut Surface, step: i64) -> bool {
 
 /// Returns `Some(fg_color)` if pixel (x, y) is a text glyph foreground pixel
 /// within the given surface, or `None` if background/not in the text area.
-/// Uses FONT_ASCII_5X7 (5×7 glyphs) with 1px spacing between characters.
+/// Uses cached Geist Mono at every scale, with a bounded legacy fallback.
 /// TEXT_MODEL_V2: recompute the per-line index table after a text write.
 /// Lines split on '\n' and wrap at scalar-cell wrap_cols. Legacy behavior preserved:
 /// a buffer with no '\n' wraps at the fixed 20 columns every pre-V2 writer
@@ -1822,11 +1823,10 @@ fn surface_text_fg_at(x: usize, y: usize, surf: &Surface) -> Option<u32> {
         && char_end > surf.selection_start as usize
         && surf.selection_end as usize <= surf.text_len as usize;
     let background = if selected { Some(0xff36577c) } else { None };
-    // From 2x up, Geist Mono drawn at run time to fill exactly this grid's cells,
-    // smoothed onto the surface's own colour. 1x text and letters Geist lacks keep
-    // the 5x7 font, which is crisper at 6x9.
+    // Geist Mono is the default at every scale, including the compact 6x9 grid.
+    // Keep the legacy glyph only for missing font coverage or a cache failure.
     let advance = (GLYPH_W + CHAR_SPACING) * scale;
-    if scale >= 2 {
+    {
         if let Some(cell) = glyphs::mono_cell(scalar, advance, line_h) {
             let (gx, gy) = ((x - tx) % advance, (y - ty) % line_h);
             let alpha = cell[gy * advance + gx];
@@ -1879,14 +1879,27 @@ fn civil_clock_lines(clock:&silkbar_model::civil_clock::CivilClock)->[[u8;13];2]
     }
     lines
 }
-fn civil_clock_fg_at(x:usize,y:usize,bar:&SilkBar,lines:&[[u8;13];2])->Option<u32>{
+/// Proportional Geist Sans captions in the existing status boxes. The legacy
+/// cell renderer is recovery only; ordinary labels keep natural glyph advances.
+fn panel_caption_at(text:&[u8],x:usize,y:usize,background:u32)->Option<u32>{
+    if y>=glyphs::CAPTION_H{return None;}
+    let alpha=match glyphs::caption_coverage(text,x as i32,y){
+        Some(alpha)=>alpha,
+        None=>{
+            let byte=*text.get(x/6)?;let px=x%6;
+            if px>=5||y>=7{return None;}
+            let glyph=ascii_glyph_index(byte)?;
+            if (FONT_ASCII_5X7[glyph][y]>>(4-px))&1!=0{255}else{0}
+        }
+    };
+    (alpha!=0).then(||coverage_blend(sex_pdx::desktop_style::contrast_ink(background),background,alpha))
+}
+fn civil_clock_fg_at(x:usize,y:usize,bar:&SilkBar,lines:&[[u8;13];2],background:u32)->Option<u32>{
     let(cx,cy,cw,ch)=module_rect(bar,ModuleSlot::Clock);
-    if x<cx||x>=cx+cw||y<cy||y>=cy+ch{return None;}
-    let row=if (cy+1..cy+8).contains(&y){0}else if(cy+11..cy+18).contains(&y){1}else{return None;};
-    let col=(x-cx)/6;let px=(x-cx)%6;if col>=13||px>=5{return None;}
-    let glyph=ascii_glyph_index(lines[row][col])?;
-    let py=y-(cy+if row==0{1}else{11});
-    ((FONT_ASCII_5X7[glyph][py]>>(4-px))&1!=0).then_some(DEFAULT_THEME.text)
+    if x<cx+2||x>=cx+cw||y<cy||y>=cy+ch{return None;}
+    let row=if(cy+1..cy+1+glyphs::CAPTION_H).contains(&y){0}
+        else if(cy+11..cy+11+glyphs::CAPTION_H).contains(&y){1}else{return None;};
+    panel_caption_at(&lines[row],x-cx-2,y-(cy+1+row*10),background)
 }
 /// One completed-frame observation per changed clock stamp. This is called
 /// only after the full/strip framebuffer writes and overlays finish. Accepted
@@ -1905,104 +1918,29 @@ fn civil_clock_drawn(bar:&SilkBar,w:usize,h:usize,path:&str){
     }
     sex_pdx::serial_record!("[display.civil.draw] sequence={} state={:?} seconds={} stale={} pixels=written path={} x={} y={} w={} h={}",clock.sequence(),clock.state(),clock.seconds(),clock.is_stale()as u8,path,x,y,cw,ch);
 }
-fn clock_fg_at(x: usize, y: usize, bar: &SilkBar, lines: &[[u8;13];2]) -> Option<u32> {
-    if bar.civil_enabled {return civil_clock_fg_at(x,y,bar,lines);}
-    const CLOCK_FG: u32 = DEFAULT_THEME.text;
-    const CLOCK_PREFIX:&[u8]=b"DEMO ";
-    const CLOCK_DIGIT_OFFSET:usize=30;
-    let (cx, cy, _, _) = module_rect(bar, ModuleSlot::Clock);
-    let cy = cy + 1; // slight inset into chip area
-
-    // Quick bounding-box reject
-    if y < cy || y >= cy + 7 {
-        return None;
+fn clock_fg_at(x: usize, y: usize, bar: &SilkBar, lines: &[[u8;13];2], background: u32) -> Option<u32> {
+    if bar.civil_enabled {return civil_clock_fg_at(x,y,bar,lines,background);}
+    let(cx,cy,cw,ch)=module_rect(bar,ModuleSlot::Clock);
+    if x<cx+2||x>=cx+cw||y<cy+1||y>=cy+ch{return None;}
+    let mut label=*b"DEMO 00:00:00";
+    for(at,value)in[(5,bar.clock_hh),(8,bar.clock_mm),(11,bar.clock_ss)]{
+        label[at]=b'0'+value/10;label[at+1]=b'0'+value%10;
     }
-    if x < cx || x > cx + CLOCK_DIGIT_OFFSET + 45 {
-        return None;
-    }
-    // Both the SilkBar producer and display fallback advance a software
-    // demonstration counter. Neither is wall time or a certificate UTC source.
-    if x<cx+CLOCK_DIGIT_OFFSET{
-        let col=(x-cx)/6;let px=(x-cx)%6;
-        if px>=5{return None;}
-        let glyph=ascii_glyph_index(*CLOCK_PREFIX.get(col)?)?;
-        return ((FONT_ASCII_5X7[glyph][y-cy]>>(4-px))&1!=0).then_some(CLOCK_FG);
-    }
-    let cx=cx+CLOCK_DIGIT_OFFSET;
-
-    // Colon 1 at offset 14, Colon 2 at offset 31
-    if x == cx + 14 || x == cx + 31 {
-        if y == cy + 1 || y == cy + 5 {
-            return Some(CLOCK_FG);
-        }
-        return None;
-    }
-
-    // Digit offsets: 0, 7, 17, 24, 34, 41
-    const DIGITS: [usize; 6] = [0, 7, 17, 24, 34, 41];
-    for (di, &dx) in DIGITS.iter().enumerate() {
-        if x < cx + dx || x >= cx + dx + 5 {
-            continue;
-        }
-        let col = x - (cx + dx);
-        let row = y - cy;
-        let digit: usize = match di {
-            0 => (bar.clock_hh / 10) as usize,
-            1 => (bar.clock_hh % 10) as usize,
-            2 => (bar.clock_mm / 10) as usize,
-            3 => (bar.clock_mm % 10) as usize,
-            4 => (bar.clock_ss / 10) as usize,
-            5 => (bar.clock_ss % 10) as usize,
-            _ => return None,
-        };
-        if (FONT[digit][row] >> (4 - col)) & 1 != 0 {
-            return Some(CLOCK_FG);
-        }
-        return None; // digit background pixel
-    }
-    None
+    panel_caption_at(&label,x-cx-2,y-cy-1,background)
 }
 
-/// Returns `Some(fg)` if pixel (x, y) is a Bell count badge foreground pixel,
-/// or `None` if it is background / not in the badge area.
-/// Uses the same 5×7 FONT as the clock digits.
-/// Badge is positioned at the right side of the Bell module slot.
-fn bell_badge_at(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
-    let n = bar.bell_state.total_visible;
-    if n == 0 || bar.bell_state.flags & 1 == 0 {
-        return None; // no badge when empty or Bell unavailable
-    }
-    // Clamp to 99 (two digits max)
-    let n = n.min(99);
-    let tens = n / 10;
-    let ones = n % 10;
-
-    let (bx, by, _, bh) = module_rect(bar, ModuleSlot::Bell);
-    let badge_y = by + (bh / 2) - 3; // vertically centered, FONT is 7px tall
-    if y < badge_y || y >= badge_y + 7 {
-        return None;
-    }
-    let row = y - badge_y;
-
-    // Two-digit badge: tens at bx+9, ones at bx+14 (within 18px slot)
-    let left = if tens > 0 { bx + 9 } else { bx + 11 }; // single digit offset if <10
-    let right = bx + 14;
-
-    for (di, digit_x) in [(0, left), (1, right)].iter() {
-        let digit = if *di == 0 { tens } else { ones };
-        if *di == 0 && tens == 0 {
-            continue; // skip leading zero
-        }
-        if x < *digit_x || x >= *digit_x + 5 {
-            continue;
-        }
-        let col = x - *digit_x;
-        if (FONT[digit as usize][row] >> (4 - col)) & 1 != 0 {
-            return Some(DEFAULT_THEME.text); // use same color as clock
-        }
-        return None;
-    }
-    None
+/// Bell count in the existing module: natural 9px Sans digits, centered and clipped.
+fn bell_badge_at(x: usize, y: usize, bar: &SilkBar, background: u32) -> Option<u32> {
+    let n=bar.bell_state.total_visible;
+    if n==0||bar.bell_state.flags&1==0{return None;}
+    let n=n.min(99);let digits=[b'0'+n/10,b'0'+n%10];
+    let label=if n>=10{&digits[..]}else{&digits[1..]};
+    let(bx,by,bw,bh)=module_rect(bar,ModuleSlot::Bell);
+    if x<bx||x>=bx+bw||y<by||y>=by+bh{return None;}
+    let width=glyphs::caption_width(label).unwrap_or(label.len()*6).min(bw);
+    let left=bx+(bw-width)/2;let top=by+bh.saturating_sub(glyphs::CAPTION_H)/2;
+    if x<left||y<top{return None;}
+    panel_caption_at(label,x-left,y-top,background)
 }
 
 
@@ -2041,15 +1979,24 @@ fn publish_frame(fb:*mut u32,w:usize,h:usize,frame:frame_output::Publication<'_>
     if frame.previous.is_some_and(|old|old.len()!=pixels.len())||frame.rows.end>h{return false;}
     let pitch=unsafe{FB_PITCH} as usize;
     let mut written=0usize;
+    // A new night light level repaints every pixel: what the output shows was
+    // warmed by the old level, so comparing with the old frame is not enough.
+    let night=sex_pdx::desktop_look::night_level();
+    let previous=if sex_pdx::desktop_look::take_night_change(){None}else{frame.previous};
     for y in frame.rows.first..frame.rows.end{
         let row=&pixels[y*w..(y+1)*w];
-        let (first,end)=match frame.previous{
+        let (first,end)=match previous{
             Some(old)=>{let old=&old[y*w..(y+1)*w];
                 let Some(first)=(0..w).find(|&x|row[x]!=old[x])else{continue};
                 (first,(first..w).rev().find(|&x|row[x]!=old[x]).unwrap_or(first)+1)}
             None=>(0,w)};
         let out=unsafe{fb.add(y*pitch)};
+        if night==0{
         for(index,pixel)in row[first..end].iter().enumerate(){unsafe{core::ptr::write_volatile(out.add(first+index),*pixel);}}
+        }else{
+            // Night light warms the finished frame on its way out.
+            for(index,pixel)in row[first..end].iter().enumerate(){unsafe{core::ptr::write_volatile(out.add(first+index),sex_pdx::desktop_look::night(*pixel,night));}}
+        }
         written+=end-first;
     }
     unsafe{PUBLISHED_PIXELS=PUBLISHED_PIXELS.wrapping_add(written as u64);LAST_WRITTEN=written as u64;}
@@ -2580,9 +2527,10 @@ unsafe fn top_strip_render_proof(_fb: *const u32, _w: usize, _h: usize) {
     for y in 0..PROOF_H {
         for x in 0..PROOF_W {
             let c = if y < 50 {
-                if let Some(fg) = clock_fg_at(x, y, &proof_bar, &clock_lines) {
+                let background=bar_color(x,y,&proof_bar,scene);
+                if let Some(fg) = clock_fg_at(x, y, &proof_bar, &clock_lines, background) {
                     fg
-                } else if let Some(fg) = bell_badge_at(x, y, &proof_bar) {
+                } else if let Some(fg) = bell_badge_at(x, y, &proof_bar, background) {
                     fg
                 } else {
                     bar_color(x, y, &proof_bar, scene)
@@ -3593,7 +3541,7 @@ pub extern "C" fn _start() -> ! {
     if bar.civil_enabled{
         sex_pdx::serial_record!("[sexdisplay.clock.presentation] label=UTC state=Unknown snapshot_only=1 x={} y={} w={} h={} width={}",clock_layout.x,clock_layout.y,clock_layout.w,clock_layout.h,unsafe{FB_W});
     }else{
-        sex_pdx::serial_record!("[sexdisplay.clock.presentation] label=DEMO wall_time=0 x={} y={} w={} h={} digits=30 width={}",clock_layout.x,clock_layout.y,clock_layout.w,clock_layout.h,unsafe{FB_W});
+        sex_pdx::serial_record!("[sexdisplay.clock.presentation] label=DEMO wall_time=0 x={} y={} w={} h={} digits=proportional width={}",clock_layout.x,clock_layout.y,clock_layout.w,clock_layout.h,unsafe{FB_W});
     }
     let mut lifecycle = load_lifecycle_catalog();
     clock_canon_store(bar.clock_hh, bar.clock_mm, bar.clock_ss);
@@ -4057,6 +4005,13 @@ pub extern "C" fn _start() -> ! {
                             needs_top_strip_redraw = true;
                             sex_pdx::serial_record!("[display.panel.notice] len={}", text.len);
                         }
+                    }
+                }
+                sex_pdx::desktop_look::OP_DESKTOP_LOOK => {
+                    // Only the Shell picks the wallpaper and night light.
+                    if msg.caller_pd == 3 && sex_pdx::desktop_look::set(msg.arg0, msg.arg1) {
+                        needs_full_redraw = true;
+                        sex_pdx::serial_record!("[display.look] wallpaper={} night={}", msg.arg0, msg.arg1);
                     }
                 }
                 sex_pdx::app_lifecycle::OP_APP_TITLE => {

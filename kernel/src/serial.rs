@@ -86,3 +86,14 @@ macro_rules! serial_println {
     () => ($crate::serial_print!("\n"));
     ($($arg:tt)*) => ($crate::serial_print!("{}\n", format_args!($($arg)*)));
 }
+
+/// Successful boot internals are opt-in; faults and structured authority records
+/// keep using `serial_println!`. Arguments are not evaluated in normal builds.
+#[macro_export]
+macro_rules! boot_trace {
+    ($($arg:tt)*) => {
+        if option_env!("SEXOS_VERBOSE_BOOT") == Some("1") {
+            $crate::serial_println!($($arg)*);
+        }
+    };
+}
