@@ -77,6 +77,14 @@ fn run(window: &mut Window, r: &mut Report) -> Result<(), &'static str> {
     let t = tsc();
     for _ in 0..n { if files::size(window, FILE) != Ok(4 * MIB as u64) { return Err("wrong size"); } }
     r.add("file_stat", n, tsc() - t, "call");
+
+    // A call to a service and its reply (Files answers PING at once): the IPC round
+    // trip, against a Linux pipe round trip between two processes. After the file
+    // tests, so Files already knows this run.
+    let n = 2_000;
+    let t = tsc();
+    for _ in 0..n { files::ping(window).map_err(|_| "ping failed")?; }
+    r.add("ipc_roundtrip", n, tsc() - t, "trip");
     Ok(())
 }
 
