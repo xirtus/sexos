@@ -25,6 +25,8 @@ const REPORT_MS: u64 = 250;
 pub enum State {
     /// Has a source not loaded yet.
     Waiting,
+    /// Its source is downloading; it opens once enough has come.
+    Loading,
     /// No source.
     Empty,
     Ready,
@@ -76,12 +78,26 @@ impl Media {
     /// Opens a loaded body. True when the picture size became known (lay out again).
     pub fn open(&mut self, body: Vec<u8>) -> bool {
         let bytes: Rc<[u8]> = Rc::from(body);
-        match Decoder::open(Box::new(bytes)) {
+        self.open_source(Box::new(bytes), true)
+    }
+
+    /// Opens a body still downloading, which plays while the rest comes. `last` says
+    /// no more tries will follow: a failure is final then; otherwise the element stays
+    /// loading and is tried again once the whole body is here (an MP4 whose index sits
+    /// at its end opens only then).
+    pub fn open_growing(&mut self, body: Rc<core::cell::RefCell<sex_media::Growing>>, last: bool) -> bool {
+        self.open_source(Box::new(body), last)
+    }
+
+    fn open_source(&mut self, src: Box<dyn sex_media::Source>, last: bool) -> bool {
+        match Decoder::open(src) {
             Err(e) => {
                 let mut text = [0u8; 80];
-                sex_pdx::serial_record!("[web.media.failed] node={} err={} why={}", self.node, e.0, e.text(&mut text));
-                self.state = State::Failed;
-                self.events.push("error");
+                sex_pdx::serial_record!("[web.media.failed] node={} err={} why={} last={}", self.node, e.0, e.text(&mut text), last as u8);
+                if last {
+                    self.state = State::Failed;
+                    self.events.push("error");
+                }
                 false
             }
             Ok(dec) => self.start(dec, None),
