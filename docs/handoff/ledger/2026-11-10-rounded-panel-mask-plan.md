@@ -117,3 +117,40 @@ content. Round panels alone cannot be presented as completion of the whole conce
 - Preserve APP_PRESENT accounting: a fully hidden underlay must not be marked by
   speculative shading; actual blended contributors may be marked. Damage repaint
   still writes the entire old/new bounding obligation, including revealed corners.
+
+## First implementation slice
+
+The shared `Rounded` shape uses 4×4 integer area coverage, with immutable lookup
+bytes for the three normal physical radii (12/24/36). The table is 2,016 bytes;
+clamped tiny frames use the same bounded rule. It adds no font dependency to PDX.
+FrameGroups chooses visible owners and opaque runs against held Metrics and the
+original signed frame rectangle. Exact children retain their single parent mask.
+
+Display retains fast opaque content rows. Its separate partial-edge path shades
+only actual contributing owners, stops at the first opaque layer and folds AA
+front colours over those owners. It uses fixed arrays of 32 colours/coverages
+(160 declared bytes, excluding compiler frame bookkeeping); no recursive layer
+walk or allocation. RowWinners is 6,192 bytes on this 64-bit host, versus the former
+4,144-byte layout: +2,048 bytes. Its local edge array grows by 512 bytes. These
+are bounded declarations, not a claim about final optimized target stack size.
+The existing 2 MiB glyph cache and capture/post-publication hooks are unchanged.
+Final linked footprint and real guest timing remain merge prerequisites.
+
+The legacy launcher146 post-compositor pass also uses the mask. Its AA boundary
+reconstructs the actual underlay while omitting its own retained layer, avoiding
+a second blend over its previously painted colour. The command palette152 keeps
+its existing distinct modal input fence. Shell initial surface/chrome/control
+hits use the same mask; captured drag/up handling stays intact.
+
+Viewport clipping now intersects signed bounds rather than moving an offscreen
+frame's origin. Frame chrome, child-body selection and scalar/row text keep their
+original coordinates; clipping does not invent a fresh corner or shift glyphs.
+The 28px bar, 26px title, control rectangles and palette remain unchanged.
+
+Host validation adds a separately expressed floating-point area oracle, literal
+AA colours for two/three actual overlapping owners and exact APP_PRESENT bits,
+foreign-scene-reference refusal, old-scene scale retention and a whole-frame
+legacy overlay oracle. Existing scalar/row/bitmap/damage coverage stays intact.
+The first sweep retained its eight failures: square-pixel and clipped-origin
+expectations needed explicit migration. Its 47 successful cases were not treated
+as acceptance; the updated full sweep and native qualification are separate.

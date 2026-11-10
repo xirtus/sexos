@@ -11600,7 +11600,7 @@ fn point_in_surface(px: i32, py: i32, sid: u64) -> bool {
             return false;
         }
         if APP_CUSTODY.iter().flatten().any(|e| e.surface == sid || e.is_successor_frame(sid)) {
-            return get_surface_bounds(sid).map_or(false, |(x,y,w,h)| px >= x && py >= y && (px as i64) < x as i64 + w as i64 && (py as i64) < y as i64 + h as i64);
+            return get_surface_bounds(sid).is_some_and(|(x,y,w,h)| chrome_metrics().rounded(w,h).coverage(px as i64-x as i64,py as i64-y as i64)!=0);
         }
         let (x, y, w, h) = match sid {
             SURFACE_ID_APP    => WINDOWS.get(1).map_or((0,0,0,0), |w| (w.desc.x, w.desc.y, w.desc.width, w.desc.height)),
@@ -11629,7 +11629,7 @@ fn point_in_surface(px: i32, py: i32, sid: u64) -> bool {
                 return false;
             }
         };
-        px >= x && px < (x + w as i32) && py >= y && py < (y + h as i32)
+        chrome_metrics().rounded(w,h).coverage(px as i64-x as i64,py as i64-y as i64)!=0
     }
 }
 
@@ -21371,6 +21371,7 @@ unsafe fn frame_light_at(frame_id: u32, x: i32, y: i32) -> u32 {
         None => return FRAME_LIGHT_NONE,
     };
     let (sx, sy, _sw, _sh) = bounds;
+    if chrome_metrics().rounded(_sw,_sh).coverage(x as i64-sx as i64,y as i64-sy as i64)==0{return FRAME_LIGHT_NONE;}
 
     // One-shot light hitbox diagnostic.
     unsafe {
@@ -23627,6 +23628,7 @@ unsafe fn apply_resize_geometry(dx: i32, dy: i32) -> bool {
 unsafe fn hit_test_surface_chrome(x: i32, y: i32, sid: u64) -> Option<HitTarget> {
     let bounds = get_surface_bounds(sid)?;
     let (sx, sy, sw, sh) = bounds;
+    if chrome_metrics().rounded(sw,sh).coverage(x as i64-sx as i64,y as i64-sy as i64)==0{return None;}
     // One-shot frame bounds marker.
     unsafe {
         static mut CHROME_BOUNDS_BUDGET: u32 = 8;

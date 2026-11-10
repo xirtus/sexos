@@ -5,6 +5,56 @@
 use desktop_style::chrome::{Metrics,Rect,step_scale};
 
 #[test]
+fn rounded_panel_literal_corner_coverage_and_row_spans(){
+    let s=Metrics::new(1).rounded(200,100);
+    assert_eq!(s.radius(),12);
+    assert_eq!((0..12).map(|x|s.coverage(x,0)).collect::<Vec<_>>(),
+        vec![0,0,0,0,0,0,0,32,112,191,239,255]);
+    assert_eq!(s.row(0,false),(7,193));
+    assert_eq!(s.row(0,true),(11,189));
+    for (ui,cut,full)in[(1,7,11),(2,17,22),(3,28,33)]{
+        let s=Metrics::new(ui).rounded(200,100);
+        assert_eq!(s.row(0,false),(cut,200-cut));
+        assert_eq!(s.row(0,true),(full,200-full));
+        assert_eq!(s.row(50,false),(0,200));
+    }
+}
+
+#[test]
+fn rounded_spans_exactly_match_visible_and_opaque_pixels_including_tiny_frames(){
+    for ui in 1..=3{for w in[0,1,2,7,23,24,25,80]{for h in[0,1,2,7,23,24,25,80]{
+        let s=Metrics::new(ui).rounded(w,h);
+        assert!(s.radius()<=12*ui&&s.radius()<=w/2&&s.radius()<=h/2);
+        for y in -1..=h as i64{
+            let any=s.row(y,false);let full=s.row(y,true);
+            assert!(any.0<=any.1&&any.1<=w&&full.0<=full.1&&full.1<=w);
+            for x in -1..=w as i64{
+                let a=s.coverage(x,y);
+                assert_eq!(a>0,x>=any.0 as i64&&x<(any.1 as i64));
+                assert_eq!(a==255,x>=full.0 as i64&&x<(full.1 as i64));
+                if x>=0&&y>=0&&x<w as i64&&y<h as i64{
+                    assert_eq!(a,s.coverage(w as i64-1-x,h as i64-1-y));
+                }
+            }
+        }
+    }}}
+}
+
+#[test]
+fn rounded_original_signed_origin_and_captured_scale_do_not_follow_a_clip_edge(){
+    let saved=Metrics::new(1).rounded(200,100);
+    let later=Metrics::new(3).rounded(200,100);
+    assert_eq!((saved.radius(),later.radius()),(12,36));
+    // Original x=-20: visible screen x=0 is inside the straight title span,
+    // not the start of a new rounded corner at the clipping boundary.
+    assert_eq!(saved.coverage(0i64-(-20),0),255);
+    assert_eq!(saved.coverage(0,0),0);
+    for (x,y)in[(i64::MIN,0),(i64::MAX,0),(0,i64::MIN),(0,i64::MAX)]{
+        assert_eq!(saved.coverage(x,y),0);
+    }
+}
+
+#[test]
 fn approved_geometry_has_one_separator_and_contiguous_workarea() {
     for (scale,bar,title,target,body) in [
         (1,28,26,24,Rect{x:8,y:34,w:624,h:438}),

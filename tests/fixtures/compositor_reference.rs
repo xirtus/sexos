@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Independent accepted pixel algorithm from e04fff3a (image 58).
 // Keep the two-pass selection/body search intact as the span-cache oracle.
-fn reference_composite_pixel_selected(x: usize, y: usize, w: usize, h: usize, bg: u32, focused_id: u64, selected:Option<u64>) -> u32 {
+fn reference_composite_pixel_unmasked(x: usize, y: usize, w: usize, h: usize, bg: u32, focused_id: u64, selected:Option<u64>) -> u32 {
     let mut c = bg;
     let mut winner_mask = 0;
     unsafe {
         // Pass 1: non-focused surfaces (slot order, break on first hit)
         for surf in SURFACES.iter() {
             if !surf.active || Some(surf.surface_id) != selected || surf.surface_id == focused_id || FRAME_GROUPS.is_frame(surf) { continue; }
-            let (sx, sy, sw, sh) = clamp_surface(surf, w, h);
+            let (sx, sy, sw, sh) = reference_frame_rect(surf, w, h);
             if sw == 0 || sh == 0 { continue; }
             if x >= sx && x < sx + sw && y >= sy && y < sy + sh {
                 winner_mask = surface_lifecycle::native_pixel_bit(surf.owner_pd, surf.surface_id);
@@ -22,7 +22,7 @@ fn reference_composite_pixel_selected(x: usize, y: usize, w: usize, h: usize, bg
         if selected.is_some() {
             for surf in SURFACES.iter() {
                 if !surf.active || Some(surf.surface_id) != selected || (surf.surface_id != focused_id && !FRAME_GROUPS.is_frame(surf)) { continue; }
-                let (sx, sy, sw, sh) = clamp_surface(surf, w, h);
+                let (sx, sy, sw, sh) = reference_frame_rect(surf, w, h);
                 if sw == 0 || sh == 0 { continue; }
                 if x >= sx && x < sx + sw && y >= sy && y < sy + sh {
                     winner_mask = surface_lifecycle::native_pixel_bit(surf.owner_pd, surf.surface_id);
@@ -45,8 +45,9 @@ fn reference_composite_pixel_selected(x: usize, y: usize, w: usize, h: usize, bg
                         }
                     }
                     // Rim + Frame Light + Top Bar check (focused surface only).
-                    let lx = x - sx;  // local x within clamped surface
-                    let ly = y - sy;  // local y within clamped surface
+                    let lx = (x as i64-surf.x as i64)as usize;
+                    let ly = (y as i64-surf.y as i64)as usize;
+                    let(sw,sh)=(surf.w as usize,surf.h as usize);
 
                     // Edge detection with saturating_sub to prevent underflow
                     // on tiny surfaces (rim fills entire surface if sw/sh < RIM_PX).
@@ -183,7 +184,7 @@ fn reference_composite_pixel_selected(x: usize, y: usize, w: usize, h: usize, bg
                         } else {
                             // Quiet resize band: only the outside pixel carries
                             // the lavender outline; geometry and selection stay fixed.
-                            let edge = x == sx || y == sy || x == sx + sw - 1 || y == sy + sh - 1;
+                            let edge = lx==0||ly==0||lx==sw-1||ly==sh-1;
                             c = if edge {
                                 glass_over_bg(DISPLAY_TOKENS.frame_rim_color, x, y, 112)
                             } else {

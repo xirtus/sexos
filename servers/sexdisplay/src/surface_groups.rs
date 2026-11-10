@@ -67,6 +67,26 @@ impl FrameGroups {
     pub fn independent(&self, s: &Surface) -> bool {
         s.active && !self.child_group(s).map_or(false, |g| g.frame_seen || g.parent_required())
     }
+    /// Only independent windows have a silhouette. Exact fitted children share
+    /// the parent's mask and never acquire four extra sets of rounded corners.
+    pub fn coverage(&self,s:&Surface,x:usize,y:usize)->u8{
+        if !s.active||y<self.metrics.bar()as usize{return 0;}
+        let (lx,ly)=(x as i64-s.x as i64,y as i64-s.y as i64);
+        if lx<0||ly<0||lx>=s.w as i64||ly>=s.h as i64{return 0;}
+        if !self.independent(s){return 255;}
+        self.metrics.rounded(s.w,s.h).coverage(lx,ly)
+    }
+    pub fn row_span(&self,s:&Surface,y:usize,w:usize,h:usize,opaque:bool)->(usize,usize){
+        let(sx,sy,sw,sh)=self.rect(s,w,h);
+        if sw==0||sh==0||y<sy||y-sy>=sh{return(0,0);}
+        if !self.independent(s){return(sx,sx+sw);}
+        let(a,b)=self.metrics.rounded(s.w,s.h).row(y as i64-s.y as i64,opaque);
+        let clip=|v:i64|v.clamp(0,w as i64)as usize;
+        (clip(s.x as i64+a as i64),clip(s.x as i64+b as i64))
+    }
+    pub fn opaque_run(&self,s:&Surface,x0:usize,x1:usize,y:usize,w:usize,h:usize)->bool{
+        let(a,b)=self.row_span(s,y,w,h,true);x0<x1&&x0>=a&&x1<=b
+    }
     /// Admission diagnostic only. No visibility, fitting or PRESENT completion
     /// follows from the existence of a catalog or an awaiting child.
     pub fn awaiting_parent(&self, s: &Surface) -> Option<u64> {
@@ -76,17 +96,28 @@ impl FrameGroups {
     }
     pub fn winner<'a>(&self, surfaces: &'a [Surface], focused: u64,
         x: usize, y: usize, w: usize, h: usize) -> Option<&'a Surface> {
+        self.winner_below(surfaces,focused,None,x,y,w,h)
+    }
+    /// Actual next visible owner, borrowed from this same immutable scene.
+    /// A foreign/stale `above` reference cannot resume another layer traversal.
+    pub fn winner_below<'a>(&self,surfaces:&'a[Surface],focused:u64,above:Option<&Surface>,
+        x:usize,y:usize,w:usize,h:usize)->Option<&'a Surface>{
         // The shell's modal launcher must remain above app focus without
         // stealing that focus (its actions still target the previous window).
-        if let Some(overlay)=surfaces.iter().find(|s|s.active && s.owner_pd==3
-            && s.surface_id==152 && contains(self.rect(s,w,h),x,y)) {return Some(overlay);}
+        let overlay=|s:&&Surface|s.owner_pd==3&&s.surface_id==152;
         // A focus reference to a bound child raises its actual frame, never a ghost child.
         let focused = surfaces.iter().find(|s| s.active && s.surface_id == focused)
             .and_then(|s| self.child_group(s)).filter(|g| g.frame_seen)
             .and_then(|g| g.catalog.frame_surface_id()).unwrap_or(focused);
-        let hit = |s: &&Surface| self.independent(s) && contains(self.rect(s,w,h),x,y);
-        surfaces.iter().filter(|s| s.surface_id == focused).find(hit)
-            .or_else(|| surfaces.iter().filter(|s| s.surface_id != focused).find(hit))
+        let order=surfaces.iter().filter(overlay)
+            .chain(surfaces.iter().filter(|s|!overlay(s)&&s.surface_id==focused))
+            .chain(surfaces.iter().filter(|s|!overlay(s)&&s.surface_id!=focused));
+        let mut passed=above.is_none();
+        for s in order{
+            if above.is_some_and(|a|core::ptr::eq(a,s)){passed=true;continue;}
+            if passed&&self.independent(s)&&contains(self.rect(s,w,h),x,y)&&self.coverage(s,x,y)!=0{return Some(s);}
+        }
+        None
     }
     /// The frame owns z-order/chrome. Only exact app-owned children can replace
     /// its body pixels; clipping never changes the child's text coordinate origin.
@@ -94,19 +125,20 @@ impl FrameGroups {
         x: usize, y: usize, w: usize, h: usize) -> &'a Surface {
         let Some(g) = self.groups.iter().flatten().find(|g| g.frame_seen
             && frame.owner_pd == g.catalog.coordinator_pd && Some(frame.surface_id) == g.catalog.frame_surface_id()) else { return frame; };
-        let (sx,sy,sw,sh) = self.rect(frame,w,h);
-        let b=self.metrics.body(sw as u32,sh as u32);
-        let body = (sx.saturating_add(b.x as usize),sy.saturating_add(b.y as usize),b.w as usize,b.h as usize);
-        if !contains(body,x,y) { return frame; }
+        let b=self.metrics.body(frame.w,frame.h);
+        let(lx,ly)=(x as i64-frame.x as i64,y as i64-frame.y as i64);
+        if lx<0||ly<0||lx>u32::MAX as i64||ly>u32::MAX as i64||!b.contains(lx as u32,ly as u32){return frame;}
         surfaces.iter().find(|s| s.active && s.owner_pd == g.catalog.target_pd && g.catalog.is_content(s.surface_id)
             && contains(self.rect(s,w,h),x,y)).unwrap_or(frame)
     }
 }
 pub fn rect(s:&Surface,w:usize,h:usize)->(usize,usize,usize,usize){rect_below(s,w,h,crate::bar_height())}
 fn rect_below(s: &Surface,w: usize,h: usize,bar:usize) -> (usize,usize,usize,usize) {
-    let x=(s.x.max(0) as usize).min(w.saturating_sub(1));
-    let y=(s.y.max(bar as i32) as usize).min(h.saturating_sub(1));
-    (x,y,(s.w as usize).min(w.saturating_sub(x)),(s.h as usize).min(h.saturating_sub(y)))
+    let left=(s.x as i64).clamp(0,w as i64);
+    let top=(s.y as i64).clamp(bar.min(h)as i64,h as i64);
+    let right=(s.x as i64+s.w as i64).clamp(left,w as i64);
+    let bottom=(s.y as i64+s.h as i64).clamp(top,h as i64);
+    (left as usize,top as usize,(right-left)as usize,(bottom-top)as usize)
 }
 pub fn contains((x,y,w,h):(usize,usize,usize,usize),px:usize,py:usize)->bool {
     px >= x && px-x < w && py >= y && py-y < h
@@ -123,7 +155,7 @@ pub struct PixelSource<'a> {
 #[derive(Clone, Copy)]
 struct RowRun<'a> { end: usize, source: Option<PixelSource<'a>> }
 pub struct RowWinners<'a> { runs: [RowRun<'a>; MAX_ROW_RUNS], count: usize, cursor: usize }
-const MAX_ROW_RUNS: usize = crate::surface_lifecycle::MAX_SURFACES * 4 + 1;
+const MAX_ROW_RUNS: usize = crate::surface_lifecycle::MAX_SURFACES * 6 + 1;
 impl<'a> RowWinners<'a> {
     #[inline(always)]
     pub fn source(&mut self, x: usize) -> Option<PixelSource<'a>> {
@@ -145,18 +177,21 @@ impl FrameGroups {
         if surfaces.len() > crate::surface_lifecycle::MAX_SURFACES || w == 0 || y >= h { return None; }
         let mut edges = [0usize; MAX_ROW_RUNS + 1]; edges[1] = w; let mut n = 2;
         for s in surfaces.iter().filter(|s| s.active) {
-            let (sx,sy,sw,sh) = self.rect(s,w,h);
+            let (_sx,sy,sw,sh) = self.rect(s,w,h);
             if sw != 0 && sh != 0 && y >= sy && y-sy < sh {
-                edges[n] = sx; edges[n+1] = sx+sw; n += 2;
+                let(a,b)=self.row_span(s,y,w,h,false);
+                edges[n] = a; edges[n+1] = b; n += 2;
+                let(oa,ob)=self.row_span(s,y,w,h,true);
+                if(oa,ob)!=(a,b){edges[n]=oa;edges[n+1]=ob;n+=2;}
                 // Even an unfitted child cannot replace pixels outside the
                 // parent's body. Splitting here also preserves tiny/clipped frames.
                 if self.is_frame(s) {
-                    let b=self.metrics.body(sw as u32,sh as u32);
-                    let body_y = sy.saturating_add(b.y as usize);
-                    if y >= body_y && y-body_y < b.h as usize {
-                        let left = sx.saturating_add(b.x as usize).min(w);
+                    let b=self.metrics.body(s.w,s.h);
+                    let body_y=s.y as i64+b.y as i64;
+                    if y as i64>=body_y&&(y as i64)-body_y<(b.h as i64){
+                        let left=(s.x as i64+b.x as i64).clamp(0,w as i64)as usize;
                         edges[n] = left;
-                        edges[n+1] = left.saturating_add(b.w as usize).min(w);
+                        edges[n+1]=(s.x as i64+b.x as i64+b.w as i64).clamp(left as i64,w as i64)as usize;
                         n += 2;
                     }
                 }

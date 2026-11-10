@@ -148,11 +148,74 @@ pub mod chrome {
             x >= self.x && y >= self.y && x-self.x < self.w && y-self.y < self.h
         }
     }
+    /// Shared panel silhouette only; coordinates never confer window authority.
+    /// Original signed geometry is translated by the caller before clipping.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct Rounded { width:u32, height:u32, radius:u32 }
+    pub const PANEL_RADIUS:u32=12;
+    impl Rounded {
+        pub const fn new(width:u32,height:u32,scale:u32)->Self{
+            let mut radius=PANEL_RADIUS*clamp_scale(scale);
+            if width/2<radius{radius=width/2;}
+            if height/2<radius{radius=height/2;}
+            Self{width,height,radius}
+        }
+        pub const fn radius(self)->u32{self.radius}
+        #[inline]
+        pub fn coverage(self,x:i64,y:i64)->u8{
+            if x<0||y<0||x>=self.width as i64||y>=self.height as i64{return 0;}
+            let (x,y)=(x as u32,y as u32);
+            let cx=x.min(self.width-1-x);let cy=y.min(self.height-1-y);
+            if self.radius==0||cx>=self.radius||cy>=self.radius{return 255;}
+            corner_alpha(self.radius,cx,cy)
+        }
+        /// Half-open local span of any visible (or entirely opaque) pixels.
+        /// Straight middle rows need no corner lookup or scratch allocation.
+        pub fn row(self,y:i64,opaque:bool)->(u32,u32){
+            if y<0||y>=self.height as i64||self.width==0{return(0,0);}
+            let cy=(y as u32).min(self.height-1-y as u32);
+            if self.radius==0||cy>=self.radius{return(0,self.width);}
+            let mut cut=0;
+            while cut<self.radius{
+                let a=corner_alpha(self.radius,cut,cy);
+                if (opaque&&a==255)||(!opaque&&a!=0){break;}
+                cut+=1;
+            }
+            (cut,self.width-cut)
+        }
+    }
+    // Four-by-four exact integer coverage. Common UI radii use one immutable
+    // 2,016-byte table, not supersampling work in a per-pixel shader. Tiny
+    // clamped frames retain the same bounded rule without another arena.
+    const fn sample_corner(radius:u32,x:u32,y:u32)->u8{
+        let r=radius as i64*8;let mut on=0u32;let mut sy=1;
+        while sy<8{let mut sx=1;while sx<8{
+            let dx=r-(x as i64*8+sx);let dy=r-(y as i64*8+sy);
+            if dx*dx+dy*dy<=r*r{on+=1;}
+            sx+=2;
+        }sy+=2;}
+        ((on*255+8)/16)as u8
+    }
+    const fn corner_table()->[u8;2016]{
+        let mut result=[0;2016];let mut scale=1;let mut at=0;
+        while scale<=3{let r=PANEL_RADIUS*scale;let mut y=0;
+            while y<r{let mut x=0;while x<r{
+                result[at]=sample_corner(r,x,y);at+=1;x+=1;
+            }y+=1;}scale+=1;
+        }result
+    }
+    static CORNER_ALPHA:[u8;2016]=corner_table();
+    #[inline]
+    fn corner_alpha(radius:u32,x:u32,y:u32)->u8{
+        let offset=match radius{12=>0,24=>144,36=>720,_=>return sample_corner(radius,x,y)};
+        CORNER_ALPHA[offset+(y*radius+x)as usize]
+    }
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub struct Metrics { scale: u32 }
     impl Metrics {
         pub const fn new(scale: u32) -> Self { Self { scale: clamp_scale(scale) } }
         pub const fn scale(self) -> u32 { self.scale }
+        pub const fn rounded(self,width:u32,height:u32)->Rounded{Rounded::new(width,height,self.scale)}
         pub const fn px(self, logical: u32) -> u32 { logical.saturating_mul(self.scale) }
         pub const fn bar(self) -> u32 { self.px(BAR) }
         pub const fn title(self) -> u32 { self.px(TITLE) }

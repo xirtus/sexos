@@ -10,20 +10,21 @@ root,out=map(Path,sys.argv[1:]);s=(root/'servers/sexdisplay/src/main.rs').read_t
 a=s.index('const FONT_ASCII_5X7:');parts=[s[a:s.index('];',s.index('= [',a))+2]]
 for name in ['FONT_UNICODE_5X7','FONT_UNSUPPORTED_5X7']:
  a=s.index('const '+name+':');parts.append(s[a:s.index('];',a)+2])
-parts+=re.findall(r'^const (?:FRAME_|SURFACE_CHROME_|TAB_STRIP_|BAR_BG_H|BAR_BG_W_CAP|FOCUS_SURFACE_COLOR|TAB_ACTIVE_COLOR|TAB_INACTIVE_COLOR|PANEL_)[^\n]+',s,re.M)
+parts+=re.findall(r'^const (?:FRAME_|SURFACE_CHROME_|TAB_STRIP_|BAR_BG_H|BAR_BG_W_CAP|FOCUS_SURFACE_COLOR|TAB_ACTIVE_COLOR|TAB_INACTIVE_COLOR|PANEL_|LAUNCHER_PANEL_SURFACE_ID)[^\n]+',s,re.M)
 a=s.index('#[derive(Clone, Copy)]\n#[repr(C)]\nstruct RenderTokensV1');b=s.index('\nstatic mut DISPLAY_TOKENS:',a)
 parts.append(s[a:b])
 a=s.index('static mut PROGRAM_TITLES:');parts.append(s[a:s.index('\n',a)])
 a=s.index('static mut PANEL_NOTICE:');parts.append(s[a:s.index('\n',a)])
 for k in ('const PROGRAM_ROWS:','static mut PIXEL_REGIONS:','static mut PIXEL_SIZE:'):
     a=s.index(k);parts.append(s[a:s.index('\n',a)])
-for name in ['chrome_metrics','bar_height','frame_height','frame_rim','reflow_bar','in_rect','program_pixel_at_for','program_pixel_row_for','bitmap_viewport_for','toolbar_title_fg_at_scaled','surface_text_scale_for','surface_text_fg_at_scaled','ui_label_at','ui_label_at_scaled','program_title','surface_title','panel_title_fg_at','program_pixel_at','program_pixel_row','coverage_blend','scene_bar_blur_rows','bg','vertical_gradient_xrgb','lerp_color_xrgb','clamp_surface','composite_pixel','composite_pixel_selected','composite_pixel_source','bitmap_viewport','bitmap_color','bitmap_surface_damage','fill_rect_color','ascii_glyph_index','scalar_glyph','toolbar_title_fg_at','surface_text_scale','recompute_text_lines','apply_pending_text','text_projection_requirement','changed_text_rows','legacy_text_clear','legacy_text_draw','surface_text_fg_at','raster_batch','raster_full','raster_strip','raster_area','raster_row','fast_content_run','text_run','raster_damage','fill_bar_bg_buffer','blur_bar_bg_buffer_radius1','clock_total_seconds','clock_visible_monotonic_ok','text_surface_damage','app_indicator_color','phase5_active_app_at','top_strip_pixel']:
+for name in ['chrome_metrics','bar_height','frame_height','frame_rim','reflow_bar','in_rect','program_pixel_at_for','program_pixel_row_for','bitmap_viewport_for','toolbar_title_fg_at_scaled','surface_text_scale_for','surface_text_fg_at_scaled','ui_label_at','ui_label_at_scaled','program_title','surface_title','panel_title_fg_at','program_pixel_at','program_pixel_row','coverage_blend','scene_bar_blur_rows','bg','vertical_gradient_xrgb','lerp_color_xrgb','clamp_surface','composite_pixel','composite_pixel_selected','composite_pixel_source','composite_rounded_edge','composite_pixel_source_unmasked','draw_launcher_panel','bitmap_viewport','bitmap_color','bitmap_surface_damage','fill_rect_color','ascii_glyph_index','scalar_glyph','toolbar_title_fg_at','surface_text_scale','recompute_text_lines','apply_pending_text','text_projection_requirement','changed_text_rows','legacy_text_clear','legacy_text_draw','surface_text_fg_at','raster_batch','raster_full','raster_strip','raster_area','raster_row','fast_content_run','text_run','raster_damage','fill_bar_bg_buffer','blur_bar_bg_buffer_radius1','clock_total_seconds','clock_visible_monotonic_ok','text_surface_damage','app_indicator_color','phase5_active_app_at','top_strip_pixel']:
  a=s.index('fn '+name+'(');i=s.index('{',a)+1;depth=1
  while depth: depth+=(s[i]=='{')-(s[i]=='}');i+=1
  part=s[a:i]
- if name in ['composite_pixel','composite_pixel_selected','composite_pixel_source','bitmap_color','phase5_active_app_at','top_strip_pixel']:
+ if name in ['composite_pixel','composite_pixel_selected','composite_pixel_source','composite_rounded_edge','composite_pixel_source_unmasked','bitmap_color','phase5_active_app_at','top_strip_pixel']:
   assert 'scene: &scene::SceneSnapshot' in part
   assert not re.search(r'\b(?:SURFACES|FRAME_GROUPS|BITMAP_STORES|FOCUSED_SURFACE_ID|DISPLAY_TOKENS|RENDER_FRAME_COUNTER)\b',part),name
+ if name=='draw_launcher_panel':part=part.replace('fn draw_launcher_panel(', 'fn draw_legacy_launcher_pixels(',1)
  if name=='bg':part=part.replace('fn bg(', 'fn scene_bg(',1)
  if name=='scene_bar_blur_rows':part=part.replace('bg(', 'scene_bg(')
  # Declared glass boundary: preserve the reference's old four-argument API.
@@ -79,6 +80,8 @@ assert admit.index('surface_lifecycle::upsert(')<admit.index('FRAME_GROUPS.obser
 assert 'fill_rect_color(surf, x, y, DISPLAY_TOKENS.focus_surface_color)' not in s
 out.write_text('\n'.join(parts))
 PY
+rustc --edition=2021 --test "$ROOT_DIR/tests/display_rounded_groups.rs" -o "$TEST_DIR/rounded-tests"
+"$TEST_DIR/rounded-tests" --test-threads=1
 rustc --edition=2021 --crate-type=rlib --crate-name silkbar_model "$ROOT_DIR/crates/silkbar-model/src/lib.rs" -o "$TEST_DIR/libsilkbar_model.rlib"
 # Display draws text with sex-font (and ttf-parser); build it for the host once.
 cargo build -q --manifest-path "$ROOT_DIR/Cargo.toml" -p sex-font
