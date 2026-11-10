@@ -141,3 +141,29 @@ fn owned_surface(owner:u32,sid:u64,width:u32,text:&[u8])->Surface{
  assert!(apply_text_zoom(&mut s,0));assert_eq!((surface_text_scale(&s),s.text_zoom,s.wrap_cols),(2,0,52));
  assert!(!apply_text_zoom(&mut s,0));
 }
+
+#[test]fn largest_hidpi_zoom_keeps_geist_instead_of_exceeding_scratch_bounds(){
+ desktop_style::set_ui_scale(3);
+ let mut s=surface(640,b"A\n");
+ for _ in 0..20{apply_text_zoom(&mut s,1);}
+ assert_eq!(surface_text_scale(&s),15);
+ let cell=glyphs::mono_cell(b'A' as u32,90,135).expect("supported HiDPI zoom must fit cached Geist");
+ for y in 0..135{for x in 0..90{let a=cell[y*90+x];let expected=(a!=0).then(||coverage_blend(s.text_color,s.color,a));
+  assert_eq!(surface_text_fg_at(28+x,72+y,&s),expected,"x={x} y={y}");
+ }}
+ desktop_style::set_ui_scale(1);
+}
+
+#[test]fn max_zoom_mixed_ascii_repaints_reuse_the_bounded_glyph_cache(){
+ // A complete mixed paragraph must fit warm, rather than reset/rasterize on
+ // every repaint. The actual Display cache is static, not on this test's stack.
+ for c in 32..127{assert!(glyphs::mono_cell(c,90,135).is_some());}
+ let resets=glyphs::cache_resets();
+ for _ in 0..8{for c in 32..127{let cell=glyphs::mono_cell(c,90,135).unwrap();std::hint::black_box(cell[0]);}}
+ assert_eq!(glyphs::cache_resets(),resets,"mixed maximum-zoom paragraph evicted itself");
+ // Ordinary text and UI captions retain bounded, cached behavior too.
+ for c in 32..127{glyphs::mono_cell(c,6,9).unwrap();glyphs::mono_cell(c,12,18).unwrap();}
+ let resets=glyphs::cache_resets();
+ for _ in 0..8{for c in 32..127{glyphs::mono_cell(c,6,9).unwrap();glyphs::mono_cell(c,12,18).unwrap();}}
+ assert_eq!(glyphs::cache_resets(),resets);
+}

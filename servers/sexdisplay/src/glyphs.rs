@@ -13,12 +13,18 @@ const MONO: u8 = 1;
 const SANS: u8 = 2;
 /// Largest bitmap drawn; a Key holds sizes up to 255.
 const MAX_W: usize = 128;
-const MAX_H: usize = 96;
+// UI scale 3 times maximum text zoom 5 needs a 90x135 cell.
+const MAX_H: usize = 144;
 
-static mut CACHE: GlyphCache<2048, { 512 * 1024 }> = GlyphCache::new();
+// Holds all 95 printable glyphs at the supported 90x135 maximum cell, plus
+// ordinary UI text. Fixed service-private backing, never a thread-stack value.
+const CACHE_BYTES: usize = 2 * 1024 * 1024;
+static mut CACHE: GlyphCache<2048, CACHE_BYTES> = GlyphCache::new();
 static mut ACC: [i32; scratch_len(MAX_W, MAX_H)] = [0; scratch_len(MAX_W, MAX_H)];
 
-fn cache() -> &'static mut GlyphCache<2048, { 512 * 1024 }> { unsafe { &mut *core::ptr::addr_of_mut!(CACHE) } }
+fn cache() -> &'static mut GlyphCache<2048, CACHE_BYTES> { unsafe { &mut *core::ptr::addr_of_mut!(CACHE) } }
+#[cfg(test)]
+pub fn cache_resets() -> u32 { cache().resets }
 fn acc() -> &'static mut [i32] { unsafe { &mut *core::ptr::addr_of_mut!(ACC) } }
 
 static mut FONTS: Option<(Font<'static>, Font<'static>)> = None;
