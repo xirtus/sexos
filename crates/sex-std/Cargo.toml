@@ -1,0 +1,11 @@
+[package]
+name = "sex-std"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Rust std for SexOS programs: the system calls std makes, answered by the program's own grants"
+
+[dependencies]
+sex-pdx = { path = "../sex-pdx" }
+# The SDK without its #[global_allocator]: std's allocator comes through sys_malloc here.
+sex-app = { path = "../sex-app", default-features = false }

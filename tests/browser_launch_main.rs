@@ -84,6 +84,9 @@ unsafe fn launcher_focus_discard(){}
 unsafe fn launcher_queue_focus(target:u32,frame:u64,_:launcher::LiveAction,_:u8,_:bool)->bool{let Some(e)=APP_CUSTODY.iter().flatten().find(|e|e.target==target)else{return false};EFFECTS.push(Effect::Queued(target,e.task,frame));true}
 unsafe fn open_program_in_active_scene()->bool{false}
 fn program_launcher_status()->(bool,&'static str,&'static str){(false,"","")}
+fn power_launcher_status(_:Command)->(bool,&'static str,&'static str){(false,"","")}
+fn palette_power(_:Command)->bool{false}
+static mut PALETTE_FROM_KEY:bool=false;
 unsafe fn launcher_action_record(target:u32,frame:u64,_:launcher::LiveAction,_:u8,activated:bool,_:bool){if activated{EFFECTS.push(Effect::Activated(target,frame));}}
 unsafe fn first_minimized_frame_id()->Option<u32>{None}
 unsafe fn open_spindle_in_active_scene()->bool{false}unsafe fn open_quil_in_active_scene()->bool{false}unsafe fn open_linen_in_active_scene()->bool{false}
@@ -96,7 +99,7 @@ fn spindle_launcher_status()->(bool,&'static str,&'static str){(false,"unused","
 fn spindle_active_frame()->Option<(u32,u64)>{None}
 
 #[test]fn browser_row_preserves_existing_indices_and_webstub_identity(){let _l=LOCK.lock().unwrap();unsafe{reset();
- assert_eq!(COMMAND_LIST.len(),12);assert_eq!((COMMAND_LIST[0].command,COMMAND_LIST[1].command),(Command::FocusSpindle,Command::FocusQuil));
+ assert_eq!(COMMAND_LIST.len(),14);assert_eq!((COMMAND_LIST[0].command,COMMAND_LIST[1].command),(Command::FocusSpindle,Command::FocusQuil));
  assert_eq!(COMMAND_LIST[8].command,Command::ZoomToggle);assert_eq!(COMMAND_LIST[9].command,Command::MinimizeFocused);
  assert_eq!((COMMAND_LIST[10].command,COMMAND_LIST[10].name),(Command::FocusBrowser,"Open Browser"));assert_eq!(Command::FocusBrowser as u8,10);
  assert_eq!((SURFACE_ID_BROWSER,BROWSER_FRAME_ID),(205,8));assert!(![300,343,344].contains(&SURFACE_ID_BROWSER));

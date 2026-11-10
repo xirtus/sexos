@@ -49,6 +49,18 @@ pub fn exit() -> ! {
     t::exit(done as *const u32)
 }
 
+/// Whether the calling task is a worker (not the program's main task).
+pub fn is_worker() -> bool {
+    crate::tls::pointer() != 0 && unsafe { *crate::tls::slot(DONE_SLOT) } != 0
+}
+
+/// Lets other tasks run while the caller waits for something it must look for itself:
+/// a few yields first, then short sleeps (`round` counts the looks so far).
+pub fn pause(round: u32) {
+    static NEVER: AtomicU32 = AtomicU32::new(0);
+    if round < 64 { sex_pdx::sys_yield(); } else { t::wait_for(NEVER.as_ptr(), 0, 1); }
+}
+
 /// How many cores workers spread over. `parallel` uses this many tasks by default.
 pub fn cores() -> usize { t::cores() as usize }
 

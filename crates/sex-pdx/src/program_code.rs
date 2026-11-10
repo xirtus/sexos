@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! Code a program writes for itself: the base a JIT engine needs. A run turns pages of
 //! its own heap into code and back, and a page is never writable and executable at once.
 //!
@@ -74,7 +74,7 @@ pub fn check(code: &[u8]) -> Result<(), usize> {
 
 /// Seals or opens `pages` pages from `va`. Retries while another core holds the table.
 /// Returns pages changed, or (status, offset) where offset is set for BLOCKED.
-#[cfg(all(target_arch = "x86_64", target_os = "none"))]
+#[cfg(all(target_arch = "x86_64", any(target_os = "none", target_os = "hermit")))]
 pub fn call(op: u64, va: u64, pages: u64) -> Result<u64, (u64, u64)> {
     loop {
         let (status, offset, changed): (u64, u64, u64);
@@ -93,7 +93,7 @@ pub fn call(op: u64, va: u64, pages: u64) -> Result<u64, (u64, u64)> {
         }
     }
 }
-#[cfg(not(all(target_arch = "x86_64", target_os = "none")))]
+#[cfg(not(all(target_arch = "x86_64", any(target_os = "none", target_os = "hermit"))))]
 pub fn call(_op: u64, _va: u64, _pages: u64) -> Result<u64, (u64, u64)> { Err((u64::MAX, 0)) }
 
 /// Makes the pages code.

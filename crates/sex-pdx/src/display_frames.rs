@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! Typed views of Display's two BOOT-reserved frame buffers.
 //!
 //! Layouts and syscall reply structs are descriptive data, not capabilities.

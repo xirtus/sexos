@@ -11,19 +11,40 @@ fn structured_record_uses_one_transport_invocation() {
 }
 
 #[test]
-fn structured_record_overflow_emits_only_fatal_diagnostic() {
-    let oversized = "x".repeat(256);
+fn structured_record_overflow_is_cut_with_a_marker() {
+    let oversized = "x".repeat(300);
     let mut calls = Vec::new();
-    serial_record_buffer::emit(format_args!("{}", oversized), |line| calls.push(line.to_owned()));
-    assert_eq!(calls, ["[serial.record.overflow] panic diagnostic-too-long\n"]);
+    serial_record_buffer::emit(format_args!("[web.http] url={}", oversized), |line| calls.push(line.to_owned()));
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].len(), 256);
+    assert!(calls[0].starts_with("[web.http] url=xxx"), "{:?}", calls[0]);
+    assert!(calls[0].ends_with("x...\n"), "{:?}", calls[0]);
 }
 
 #[test]
 fn structured_record_preserves_utf8_and_capacity_boundary() {
+    // One byte under the limit with its newline fits whole.
     let exact = "é".repeat(127) + "!";
+    serial_record_buffer::emit(format_args!("{}", &exact[..254]), |line| {
+        assert_eq!(line.len(), 255);
+        assert!(line.ends_with('\n'));
+    });
+    // Exactly the capacity with its newline still fits whole.
     serial_record_buffer::emit(format_args!("{}", exact), |line| {
         assert_eq!(line.len(), 256);
         assert_eq!(line.trim_end(), exact);
+    });
+    // One more byte has no room for its newline: it is cut on a character boundary.
+    serial_record_buffer::emit(format_args!("{}é", "é".repeat(127) + "!"), |line| {
+        assert!(line.len() <= 256);
+        assert!(line.ends_with("...\n"));
+        assert!(line.trim_end_matches("...\n").chars().all(|c| c == 'é' || c == '!'));
+    });
+    // Cut inside a multi-byte character, across several writes.
+    serial_record_buffer::emit(format_args!("{}{}{}", "a".repeat(250), "é", "é".repeat(20)), |line| {
+        assert!(line.len() <= 256);
+        assert!(line.ends_with("...\n"));
+        assert!(core::str::from_utf8(line.as_bytes()).is_ok());
     });
 }
 #[path="../crates/sex-pdx/src/paging.rs"] pub mod paging;

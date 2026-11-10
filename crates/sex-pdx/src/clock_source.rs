@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! Pure BOOT-held q35 CMOS UTC source ABI. No I/O, clock writes, capabilities,
 //! tick fallback, or confidence claim. The kernel supplies bounded locked pairs.
 //! The named profile requires an explicit century and civil years 2020..=2099.

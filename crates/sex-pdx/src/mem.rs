@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! Fast freestanding memory copies for domains that supply their own `memcpy`,
 //! `memset` and `memmove` (the kernel, sex-rt services, drivers). Eight bytes per step
 //! with `rep movsq`/`rep stosq`, then the tail a byte at a time. On CPUs with fast

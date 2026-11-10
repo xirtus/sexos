@@ -111,6 +111,8 @@ impl Service {
                 &&s.name.iter().all(|b|*b==0)&&s.len==0&&s.written==0
         })
     }
+    /// A document COMMIT has been admitted and is still writing.
+    pub fn committing(&self) -> bool { self.sessions.iter().any(|s| s.commit.is_some()) }
     pub fn pending(&self) -> bool {
         self.sessions
             .iter()

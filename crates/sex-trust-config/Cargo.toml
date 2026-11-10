@@ -2,4 +2,4 @@
 name = "sex-trust-config"
 version = "0.1.0"
 edition = "2021"
-license.workspace = true
+license = "GPL-2.0-or-later OR MIT"

@@ -55,13 +55,13 @@ fn atom(word: &u32) -> &AtomicU32 { unsafe { &*(word as *const u32 as *const Ato
 fn wait(word: &AtomicU32, expected: u32) { t::wait(word.as_ptr(), expected); }
 fn wake(word: &AtomicU32, count: u64) { t::wake(word.as_ptr(), count); }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub extern "C" fn pthread_self() -> pthread_t {
     let slot = if sex_app::tls::pointer() == 0 { 0 } else { unsafe { *sex_app::tls::slot(SELF_SLOT) } };
     if slot == 0 { core::ptr::addr_of_mut!(MAIN) } else { slot as pthread_t }
 }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub extern "C" fn pthread_equal(a: pthread_t, b: pthread_t) -> c_int { (a == b) as c_int }
 
 /// Detached threads that have finished: their stacks go back to the heap here.
@@ -80,7 +80,7 @@ fn reap() {
 struct Job(pthread_t, Start, *mut c_void);
 unsafe impl Send for Job {}
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn pthread_create(out: *mut pthread_t, attr: *const pthread_attr_t, start: Start, arg: *mut c_void) -> c_int {
     reap();
     let (stack, detached) = if attr.is_null() { (0, false) } else { unsafe { ((*attr).words[0] as usize, (*attr).words[1] != 0) } };
@@ -124,14 +124,14 @@ unsafe fn finish(th: pthread_t, result: *mut c_void) {
     }
 }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn pthread_exit(result: *mut c_void) -> ! {
     let th = pthread_self();
     unsafe { finish(th, result) };
     thread::exit()
 }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn pthread_join(th: pthread_t, result: *mut *mut c_void) -> c_int {
     if th == pthread_self() { return EDEADLK; }
     if th.is_null() || unsafe { (*th).detached } { return crate::EINVAL; }
@@ -142,7 +142,7 @@ pub unsafe extern "C" fn pthread_join(th: pthread_t, result: *mut *mut c_void) -
     0
 }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn pthread_detach(th: pthread_t) -> c_int {
     if th.is_null() || unsafe { (*th).detached } { return crate::EINVAL; }
     unsafe { (*th).detached = true; }
@@ -151,54 +151,54 @@ pub unsafe extern "C" fn pthread_detach(th: pthread_t) -> c_int {
     0
 }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub extern "C" fn sched_yield() -> c_int { sex_pdx::sys_yield(); 0 }
 
 // ── attributes ──────────────────────────────────────────────────────────────
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn pthread_attr_init(a: *mut pthread_attr_t) -> c_int { unsafe { (*a).words = [0; 7] }; 0 }
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn pthread_attr_destroy(_a: *mut pthread_attr_t) -> c_int { 0 }
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn pthread_attr_setstacksize(a: *mut pthread_attr_t, bytes: usize) -> c_int {
     if bytes < 16 * 1024 { return crate::EINVAL; }
     unsafe { (*a).words[0] = bytes as u64 }; 0
 }
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn pthread_attr_getstacksize(a: *const pthread_attr_t, out: *mut usize) -> c_int {
     let b = unsafe { (*a).words[0] } as usize;
     unsafe { *out = if b == 0 { thread::STACK_BYTES } else { b } }; 0
 }
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn pthread_attr_setdetachstate(a: *mut pthread_attr_t, state: c_int) -> c_int {
     unsafe { (*a).words[1] = (state == PTHREAD_CREATE_DETACHED) as u64 }; 0
 }
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn pthread_attr_getdetachstate(a: *const pthread_attr_t, out: *mut c_int) -> c_int {
     unsafe { *out = (*a).words[1] as c_int }; 0
 }
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn pthread_setname_np(_th: pthread_t, _name: *const crate::c_char) -> c_int { 0 }
 
 // ── mutexes ─────────────────────────────────────────────────────────────────
 // lock word: 0 free, 1 held, 2 held with sleepers.
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn pthread_mutexattr_init(a: *mut pthread_mutexattr_t) -> c_int { unsafe { (*a).kind = 0 }; 0 }
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn pthread_mutexattr_destroy(_a: *mut pthread_mutexattr_t) -> c_int { 0 }
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn pthread_mutexattr_settype(a: *mut pthread_mutexattr_t, kind: c_int) -> c_int {
     if !(0..=2).contains(&kind) { return crate::EINVAL; }
     unsafe { (*a).kind = kind as c_uint }; 0
 }
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn pthread_mutex_init(m: *mut pthread_mutex_t, a: *const pthread_mutexattr_t) -> c_int {
     unsafe { (*m).words = [0; 10]; if !a.is_null() { (*m).words[0] = (*a).kind; } }
     0
 }
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn pthread_mutex_destroy(_m: *mut pthread_mutex_t) -> c_int { 0 }
 
 fn me() -> u32 { unsafe { (*pthread_self()).id } }
@@ -215,7 +215,7 @@ fn unlock_word(lock: &AtomicU32) {
     if lock.swap(0, Ordering::Release) == 2 { wake(lock, 1); }
 }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn pthread_mutex_lock(m: *mut pthread_mutex_t) -> c_int {
     let w = unsafe { &(*m).words };
     let kind = w[0] as c_int;
@@ -229,7 +229,7 @@ pub unsafe extern "C" fn pthread_mutex_lock(m: *mut pthread_mutex_t) -> c_int {
     atom(&w[3]).store(1, Ordering::Relaxed);
     0
 }
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn pthread_mutex_trylock(m: *mut pthread_mutex_t) -> c_int {
     let w = unsafe { &(*m).words };
     if w[0] as c_int == PTHREAD_MUTEX_RECURSIVE && atom(&w[2]).load(Ordering::Relaxed) == me() {
@@ -241,7 +241,7 @@ pub unsafe extern "C" fn pthread_mutex_trylock(m: *mut pthread_mutex_t) -> c_int
     atom(&w[3]).store(1, Ordering::Relaxed);
     0
 }
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn pthread_mutex_unlock(m: *mut pthread_mutex_t) -> c_int {
     let w = unsafe { &(*m).words };
     let kind = w[0] as c_int;
@@ -256,18 +256,18 @@ pub unsafe extern "C" fn pthread_mutex_unlock(m: *mut pthread_mutex_t) -> c_int 
 
 // ── condition variables ─────────────────────────────────────────────────────
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn pthread_condattr_init(a: *mut pthread_condattr_t) -> c_int { unsafe { (*a).value = 0 }; 0 }
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn pthread_condattr_destroy(_a: *mut pthread_condattr_t) -> c_int { 0 }
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn pthread_condattr_setclock(a: *mut pthread_condattr_t, clock: c_int) -> c_int { unsafe { (*a).value = clock as c_uint }; 0 }
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn pthread_cond_init(c: *mut pthread_cond_t, a: *const pthread_condattr_t) -> c_int {
     unsafe { (*c).words = [0; 12]; if !a.is_null() { (*c).words[1] = (*a).value; } }
     0
 }
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn pthread_cond_destroy(_c: *mut pthread_cond_t) -> c_int { 0 }
 
 /// A mutex's recursion depth survives the wait: it is put back on relock.
@@ -287,7 +287,7 @@ unsafe fn reacquire(m: *mut pthread_mutex_t, depth: u32) {
     atom(&w[3]).store(depth, Ordering::Relaxed);
 }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn pthread_cond_wait(c: *mut pthread_cond_t, m: *mut pthread_mutex_t) -> c_int {
     let seq = atom(unsafe { &(*c).words[0] });
     let seen = seq.load(Ordering::Acquire);
@@ -299,7 +299,7 @@ pub unsafe extern "C" fn pthread_cond_wait(c: *mut pthread_cond_t, m: *mut pthre
 
 /// Sleeps in the kernel until signalled or until the deadline, on the condition's
 /// clock (CLOCK_REALTIME unless `pthread_condattr_setclock` chose another).
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn pthread_cond_timedwait(c: *mut pthread_cond_t, m: *mut pthread_mutex_t, at: *const crate::time::timespec) -> c_int {
     let seq = atom(unsafe { &(*c).words[0] });
     let seen = seq.load(Ordering::Acquire);
@@ -318,14 +318,14 @@ pub unsafe extern "C" fn pthread_cond_timedwait(c: *mut pthread_cond_t, m: *mut 
     unsafe { reacquire(m, depth) };
     status
 }
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn pthread_cond_signal(c: *mut pthread_cond_t) -> c_int {
     let seq = atom(unsafe { &(*c).words[0] });
     seq.fetch_add(1, Ordering::Release);
     wake(seq, 1);
     0
 }
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn pthread_cond_broadcast(c: *mut pthread_cond_t) -> c_int {
     let seq = atom(unsafe { &(*c).words[0] });
     seq.fetch_add(1, Ordering::Release);
@@ -338,11 +338,11 @@ pub unsafe extern "C" fn pthread_cond_broadcast(c: *mut pthread_cond_t) -> c_int
 
 const WRITER: u32 = 1 << 31;
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn pthread_rwlock_init(l: *mut pthread_rwlock_t, _a: *const c_void) -> c_int { unsafe { (*l).words = [0; 14] }; 0 }
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn pthread_rwlock_destroy(_l: *mut pthread_rwlock_t) -> c_int { 0 }
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn pthread_rwlock_rdlock(l: *mut pthread_rwlock_t) -> c_int {
     let s = atom(unsafe { &(*l).words[0] });
     loop {
@@ -351,13 +351,13 @@ pub unsafe extern "C" fn pthread_rwlock_rdlock(l: *mut pthread_rwlock_t) -> c_in
         else { wait(s, v); }
     }
 }
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn pthread_rwlock_tryrdlock(l: *mut pthread_rwlock_t) -> c_int {
     let s = atom(unsafe { &(*l).words[0] });
     let v = s.load(Ordering::Relaxed);
     if v & WRITER == 0 && s.compare_exchange(v, v + 1, Ordering::Acquire, Ordering::Relaxed).is_ok() { 0 } else { EBUSY }
 }
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn pthread_rwlock_wrlock(l: *mut pthread_rwlock_t) -> c_int {
     let s = atom(unsafe { &(*l).words[0] });
     loop {
@@ -367,12 +367,12 @@ pub unsafe extern "C" fn pthread_rwlock_wrlock(l: *mut pthread_rwlock_t) -> c_in
         }
     }
 }
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn pthread_rwlock_trywrlock(l: *mut pthread_rwlock_t) -> c_int {
     let s = atom(unsafe { &(*l).words[0] });
     if s.compare_exchange(0, WRITER, Ordering::Acquire, Ordering::Relaxed).is_ok() { 0 } else { EBUSY }
 }
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn pthread_rwlock_unlock(l: *mut pthread_rwlock_t) -> c_int {
     let s = atom(unsafe { &(*l).words[0] });
     let v = s.load(Ordering::Relaxed);
@@ -383,7 +383,7 @@ pub unsafe extern "C" fn pthread_rwlock_unlock(l: *mut pthread_rwlock_t) -> c_in
 
 // ── once and keys ───────────────────────────────────────────────────────────
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn pthread_once(once: *mut pthread_once_t, init: unsafe extern "C" fn()) -> c_int {
     let s = unsafe { &*(once as *const AtomicU32) };
     loop {
@@ -398,7 +398,7 @@ pub unsafe extern "C" fn pthread_once(once: *mut pthread_once_t, init: unsafe ex
 /// 0: free; 1: in use with no destructor; otherwise the destructor's address.
 static DESTRUCTORS: [AtomicUsize; KEYS] = [const { AtomicUsize::new(0) }; KEYS];
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn pthread_key_create(key: *mut pthread_key_t, dtor: Option<unsafe extern "C" fn(*mut c_void)>) -> c_int {
     let value = dtor.map_or(1, |f| f as usize);
     for (i, d) in DESTRUCTORS.iter().enumerate() {
@@ -406,16 +406,16 @@ pub unsafe extern "C" fn pthread_key_create(key: *mut pthread_key_t, dtor: Optio
     }
     EAGAIN
 }
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn pthread_key_delete(key: pthread_key_t) -> c_int {
     match DESTRUCTORS.get(key as usize) { Some(d) => { d.store(0, Ordering::Release); 0 } None => crate::EINVAL }
 }
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn pthread_getspecific(key: pthread_key_t) -> *mut c_void {
     if key as usize >= KEYS { return core::ptr::null_mut(); }
     unsafe { (*pthread_self()).values[key as usize] }
 }
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn pthread_setspecific(key: pthread_key_t, value: *const c_void) -> c_int {
     if key as usize >= KEYS { return crate::EINVAL; }
     unsafe { (*pthread_self()).values[key as usize] = value as *mut c_void };

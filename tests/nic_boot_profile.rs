@@ -1,4 +1,7 @@
 //! Actual guard before the historical NIC register/DMA diagnostics.
+#![allow(dead_code)]
+extern crate self as sex_pdx;
+#[path="../crates/sex-pdx/src/pci_command.rs"]pub mod pci_command;
 #[path="../kernel/src/nic_boot.rs"]mod nic_boot;
 include!(env!("NIC_BOOT_PROFILE_SOURCE"));
 #[test]fn normal_and_nonexplicit_settings_never_activate_controller_diagnostics(){

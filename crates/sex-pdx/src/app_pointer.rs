@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! Pointer input for a program window: Shell to program as an input event (`app_key`
 //! opcode 0x202, class [`CLASS`]). Positions are pixels from the top-left of the
 //! window's pixel area; they may lie outside it while a button held down inside the
