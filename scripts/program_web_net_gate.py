@@ -6,6 +6,8 @@ Backspace comes back."""
 import argparse,http.server,os,re,shutil,subprocess,threading,time
 from pathlib import Path
 from PIL import Image
+from browser_gate_viewport import live_viewport
+from web_surface_geometry import canvas_box
 ROOT=Path(__file__).resolve().parents[1]
 SITE=ROOT/'scripts/web_site'
 W,H=410,330
@@ -28,11 +30,11 @@ def reference(out,page,bar,name):
  subprocess.run(['cargo','run','-q','-p','sex-web','--example','page','--',str(page),str(path),str(W),str(H),'0','-1',bar],cwd=ROOT,check=True)
  return Image.open(path).convert('RGB')
 def main():
+ global W,H
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
  with disk.open('r+b') as f:f.truncate(1024**3)
  base=f'http://10.0.2.2:{PORT}'
- refs={'index':reference(a.out,SITE/'index.html',f'Field notes — {base}/site/index.html','index'),'two':reference(a.out,SITE/'two.html',f'Second page — {base}/site/two.html','two')}
  g=boot(a.iso,disk,a.out,'webnet',a.resolution);t=g['text'];q=g['q']
  def keys(text):
   for k in text:
@@ -42,8 +44,8 @@ def main():
    time.sleep(.06)
  def compare(name,ref,tile):
   shot=a.out/f'{name}.ppm';q.cmd('screendump',{'filename':str(shot)});time.sleep(.5)
-  x,y,w,h=tile;img=Image.open(shot).convert('RGB');bx,by=x+8,y+36
-  vw,vh=min(W,w-16),min(H,h-44)
+  img=Image.open(shot).convert('RGB');bx,by,vw,vh=canvas_box(ROOT,tile,W,H)
+  assert bx>=0 and by>=0 and bx+vw<=img.width and by+vh<=img.height,('canvas not visible',tile,W,H)
   checked=bad=worst=0
   for py in range(0,vh,3):
    for px in range(0,vw,5):
@@ -64,7 +66,8 @@ def main():
   launch=g['wait'](rf'\[shell.program.launch\] target={target} task={task} surface=(\d+)',s,60);surface=int(launch[1])
   assert f'[net.program.bound] target={target} task={task}' in t()[s:],'the run was not bound to the network'
   time.sleep(3)
-  tile=list(map(int,re.findall(rf'\[shell.tile.apply\] sid={surface} x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)',t())[-1]))
+  tile,W,H=live_viewport(g,ROOT,surface)
+  refs={'index':reference(a.out,SITE/'index.html',f'Field notes — {base}/site/index.html','index'),'two':reference(a.out,SITE/'two.html',f'Second page — {base}/site/two.html','two')}
   index=compare('web-index',refs['index'],tile)
   # Right focuses the first link in view ("Home"), twice more reaches "Second page".
   g['focus'](surface);time.sleep(.3)

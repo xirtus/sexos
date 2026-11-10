@@ -7,7 +7,8 @@ pixel, what the host renders (sex-web's page example)."""
 import argparse,http.server,os,re,shutil,subprocess,threading,time
 from pathlib import Path
 from PIL import Image
-from browser_gate_viewport import full_viewport
+from browser_gate_viewport import live_viewport
+from web_surface_geometry import canvas_box
 ROOT=Path(__file__).resolve().parents[1]
 SITE=ROOT/'scripts/web_site'
 W,H=410,330
@@ -30,12 +31,12 @@ def reference(out,page,bar,name,actions='',focus='-1'):
  subprocess.run(['cargo','run','-q','-p','sex-web','--example','page','--',str(page),str(path),str(W),str(H),'0',focus,bar,actions],cwd=ROOT,check=True)
  return Image.open(path).convert('RGB')
 def main():
+ global W,H
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
  with disk.open('r+b') as f:f.truncate(1024**3)
  base=f'http://10.0.2.2:{PORT}';url=f'{base}/site/three.html';bar=f'three.js test — {url}'
  page=SITE/'three.html'
- refs={'loaded':reference(a.out,page,bar,'loaded'),'clicked':reference(a.out,page,bar,'clicked','click0','0')}
  g=boot(a.iso,disk,a.out,'three',a.resolution);t=g['text'];q=g['q']
  def keys(text):
   for k in text:
@@ -45,8 +46,8 @@ def main():
    time.sleep(.06)
  def compare(name,ref,tile):
   shot=a.out/f'{name}.ppm';q.cmd('screendump',{'filename':str(shot)});time.sleep(.5)
-  x,y,w,h=tile;img=Image.open(shot).convert('RGB');bx,by=x+8,y+36
-  vw,vh=min(W,w-16),min(H,h-44)
+  img=Image.open(shot).convert('RGB');bx,by,vw,vh=canvas_box(ROOT,tile,W,H)
+  assert bx>=0 and by>=0 and bx+vw<=img.width and by+vh<=img.height,('canvas not visible',tile,W,H)
   checked=bad=worst=0
   for py in range(0,vh,3):
    for px in range(0,vw,5):
@@ -68,7 +69,8 @@ def main():
   m=g['wait'](r'\[web.ready\] target=(\d+) task=(\d+)',s,600);target,task=m[1],m[2]
   launch=g['wait'](rf'\[shell.program.launch\] target={target} task={task} surface=(\d+)',s,60);surface=int(launch[1])
   time.sleep(3)
-  tile=full_viewport(g,ROOT,surface,W,H)
+  tile,W,H=live_viewport(g,ROOT,surface)
+  refs={'loaded':reference(a.out,page,bar,'loaded'),'clicked':reference(a.out,page,bar,'clicked','click0','0')}
   done=compare('web-three-loaded',refs['loaded'],tile)
   # Right focuses the button; Enter clicks it and six more frames turn the square.
   g['focus'](surface);time.sleep(.3)

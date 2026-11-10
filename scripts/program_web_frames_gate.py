@@ -6,6 +6,8 @@ message reaching only the origin it names. The frame is drawn over its box, and 
 click there reaches the frame's page."""
 import argparse,http.server,os,re,shutil,threading,time
 from pathlib import Path
+from browser_gate_viewport import live_viewport
+from web_surface_geometry import canvas_box
 from PIL import Image
 ROOT=Path(__file__).resolve().parents[1]
 SITE=ROOT/'scripts/web_site'
@@ -45,8 +47,8 @@ def main():
  def button(down):q.cmd('input-send-event',{'events':[{'type':'btn','data':{'down':down,'button':'left'}}]});time.sleep(.2)
  def shot(name,tile,px,py):
   path=a.out/f'{name}.ppm';q.cmd('screendump',{'filename':str(path)});time.sleep(.5)
-  img=Image.open(path).convert('RGB');x,y=tile[0]+8,tile[1]+36
-  img.crop((x,y,x+410,y+294)).save(a.out/f'{name}.png')
+  img=Image.open(path).convert('RGB');x,y,_,_=canvas_box(ROOT,tile,pw,ph)
+  img.crop((x,y,x+pw,y+ph)).save(a.out/f'{name}.png')
   return img.getpixel((x+px,y+py))
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
@@ -63,10 +65,11 @@ def main():
   m=g['wait'](r'\[web.ready\] target=(\d+) task=(\d+)',s,120);target,task=m[1],m[2]
   surface=int(g['wait'](rf'\[shell.program.launch\] target={target} task={task} surface=(\d+)',s,60)[1])
   time.sleep(3)
-  tile=list(map(int,re.findall(rf'\[shell.tile.apply\] sid={surface} x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)',t())[-1]))
+  tile,pw,ph=live_viewport(g,ROOT,surface)
+  bx,by,_,_=canvas_box(ROOT,tile,pw,ph)
   green=shot('frames-loaded',tile,60,90);assert green[1]>150 and green[0]<80 and green[2]<110,('frame not drawn',green)
   # A click on the frame reaches its page, which turns blue and tells the page.
-  s=len(t());move(tile[0]+8+120,tile[1]+36+100);button(True);button(False)
+  s=len(t());move(bx+120,by+100);button(True);button(False)
   g['wait'](r'\[web.console\] level=0 frame clicked 1',s,60);time.sleep(1.5)
   blue=shot('frames-clicked',tile,60,90);assert blue[2]>150 and blue[1]<110,('click not shown',blue)
   text=t();assert 'framed fail' not in text and 'frames fail' not in text

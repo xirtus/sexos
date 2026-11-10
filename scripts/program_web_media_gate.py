@@ -10,6 +10,8 @@ its AVIF (AV1 through dav1d) must decode to its colour.
 Build FFmpeg first (scripts/build_ffmpeg.sh), then the ISO."""
 import argparse,http.server,os,re,shutil,sys,threading,time
 from pathlib import Path
+from browser_gate_viewport import painted_viewport
+from web_surface_geometry import canvas_box
 from PIL import Image
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 ROOT=Path(__file__).resolve().parents[1]
@@ -61,8 +63,10 @@ def main():
   # While it plays: the picture must be on screen, not black or blank.
   console(r'resumed',s,60);time.sleep(.5)
   shot=a.out/'playing.ppm';q.cmd('screendump',{'filename':str(shot)});time.sleep(.5)
-  x,y,w,h=map(int,re.findall(rf'\[shell.tile.apply\] sid={surface} x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)',t())[-1])
-  img=Image.open(shot).convert('RGB');bx,by=x+8,y+36
+  tile,pw,ph=painted_viewport(g,ROOT,surface)
+  bx,by,_,_=canvas_box(ROOT,tile,pw,ph)
+  assert pw>=320 and ph>=240,('video clipped',tile,pw,ph)
+  img=Image.open(shot).convert('RGB')
   region=img.crop((bx,by,bx+320,by+240));region.save(a.out/'playing.png')
   colours={region.getpixel((px,py)) for px in range(0,320,8) for py in range(0,220,8)}
   bright=sum(1 for px in range(0,320,8) for py in range(0,220,8) if sum(region.getpixel((px,py)))>150)
