@@ -45,17 +45,17 @@ def main():
                   console.log('promise body',initialized,Promise===nativePromise,typeof PromiseRejectionEvent);
                 </script><script>
                   console.log('promise following',initialized);
-                  window.addEventListener('message',e=>{if(e.data==='frame isolated')console.log('promise frame message',e.origin===''' + json.dumps(bbase) + ''');});
+                  window.addEventListener('message',e=>{if(e.data==='frame isolated'){console.log('promise frame message',e.origin===''' + json.dumps(bbase) + ''');document.getElementById('owner-frame').remove();console.log('promise frame removed');}});
                   function resource(path,cors){const s=document.createElement('script');s.src=''' + json.dumps(bbase) + '''+path;if(cors)s.crossOrigin='anonymous';s.onload=()=>console.log('promise resource loaded',path);s.onerror=()=>console.log('FAIL resource',path);document.head.appendChild(s);}
                   resource('/opaque.js',false);resource('/readable.js',true);
-                </script><iframe src="''' + bbase + '''/frame"></iframe>''').encode()
+                </script><iframe id="owner-frame" src="''' + bbase + '''/frame"></iframe>''').encode()
             elif self.path == '/opaque.js':
                 body, mime = b"Promise.reject('opaque immediate');setTimeout(()=>Promise.reject('opaque timer'),0);(async()=>{await 0;throw 'opaque async'})();", 'application/javascript'
             elif self.path == '/readable.js':
                 body, mime = b"Promise.reject('readable resource');", 'application/javascript'
                 extra = [('Access-Control-Allow-Origin', abase)]
             elif self.path == '/frame':
-                body = b"""<!doctype html><script>const p=Promise.reject('frame private');onunhandledrejection=e=>{e.preventDefault();console.log('promise frame isolated',e.promise===p,e.reason==='frame private');parent.postMessage('frame isolated','*')};</script>"""
+                body = b"""<!doctype html><script>const p=Promise.reject('frame private');onunhandledrejection=e=>{e.preventDefault();if(e.reason!=='frame private')console.log('FAIL destroyed frame',e.reason);else {console.log('promise frame isolated',e.promise===p,e.reason==='frame private');parent.postMessage('frame isolated','*')}};setTimeout(()=>Promise.reject('destroyed frame timer'),2000);</script>"""
             elif self.path == '/cancel':
                 body = b"""<!doctype html><script>onunhandledrejection=e=>console.log('FAIL old document',e.reason);setTimeout(()=>Promise.reject('old timer'),2000);location.href='/next';</script>"""
             elif self.path == '/next':
@@ -119,10 +119,11 @@ def main():
                      'promise handled true true false true', 'promise default false',
                      'promise owned owned timer', 'promise owned owned async',
                      'promise owned readable resource', 'promise frame isolated true true',
-                     'promise frame message true', 'promise resource loaded /opaque.js',
+                     'promise frame message true', 'promise frame removed', 'promise resource loaded /opaque.js',
                      'promise resource loaded /readable.js'):
             g['wait'](r'\[web.console\] level=0 ' + re.escape(mark) + r'\r?\n', start, 300)
         assert '[web.console] level=2 Unhandled promise rejection: gate-default\n' in t()[start:].replace('\r', '')
+        time.sleep(3)
         assert '[web.console] level=0 FAIL' not in t()[start:]
         assert 'opaque immediate' not in t()[start:] and 'opaque timer' not in t()[start:] and 'opaque async' not in t()[start:]
         readable = [r for r in seen if r['path'] == '/readable.js']
