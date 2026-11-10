@@ -146,9 +146,17 @@ expected_contract_hash="$(spec_get contract_sha256)"
 actual_contract_hash="$(sha256sum sexos_contract.toml | awk '{print $1}')"
 [[ "$expected_contract_hash" = "$actual_contract_hash" ]] || fail "contract hash mismatch vs spec"
 
-expected_abi_hash="$(spec_get abi_version_hash)"
-actual_abi_hash="$(sha256sum "${ABI_INPUTS[@]}" | sha256sum | awk '{print $1}')"
-[[ "$expected_abi_hash" = "$actual_abi_hash" ]] || fail "abi_version_hash mismatch vs spec"
+# One pinned SHA-256 per ABI input (spec/abi_inputs.sha256), so two changes to
+# different ABI files no longer collide on a single hash line. Regenerate with
+# scripts/update_abi_hashes.sh after a deliberate ABI change.
+ABI_MANIFEST="$ROOT_DIR/spec/abi_inputs.sha256"
+[[ -f "$ABI_MANIFEST" ]] || fail "missing spec/abi_inputs.sha256"
+expected_abi="$(grep -v '^$' "$ABI_MANIFEST" | sort -k2)"
+actual_abi="$(sha256sum "${ABI_INPUTS[@]}" | sort -k2)"
+if [[ "$expected_abi" != "$actual_abi" ]]; then
+  diff <(printf '%s\n' "$expected_abi") <(printf '%s\n' "$actual_abi") >&2 || true
+  fail "ABI inputs differ from spec/abi_inputs.sha256 (run scripts/update_abi_hashes.sh if the ABI change is deliberate)"
+fi
 
 SNAP_DIR=".sexos_snapshot"
 mkdir -p "$SNAP_DIR"
