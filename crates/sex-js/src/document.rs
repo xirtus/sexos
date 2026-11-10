@@ -106,13 +106,16 @@ impl Document {
     pub fn keep_source_policy(&mut self, requested: &str, final_url: &str) {
         let requested = strip_fragment(requested);
         if self.source_policies.len() < 128 || self.source_policies.contains_key(requested) {
-            self.source_policies.insert(String::from(requested), self.source_muted(final_url));
+            self.source_policies.insert(String::from(requested), self.source_url_muted(final_url));
         } else { self.source_policy_overflow = true; }
     }
     fn source_muted(&self, source: &str) -> bool {
         let source = strip_fragment(source);
         if let Some(&muted) = self.source_policies.get(source) { return muted; }
         if self.source_policy_overflow { return true; }
+        self.source_url_muted(source)
+    }
+    fn source_url_muted(&self, source: &str) -> bool {
         let Some(resolved) = sex_html::url::resolve(&self.url, source) else {
             return sex_fetch::Url::parse(&self.url).is_ok() || source.contains(':');
         };

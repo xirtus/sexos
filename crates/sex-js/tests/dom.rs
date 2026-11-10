@@ -1145,6 +1145,11 @@ fn rejection_source_policy_tracks_redirects_and_fails_closed_at_its_bound() {
     s.eval("onunhandledrejection=e=>{e.preventDefault();console.log('event',e.reason)}", "handler.js").unwrap();
     s.page_mut().keep_source_policy("http://example.test/redirect.js", "https://remote.test/final.js");
     s.eval("Promise.reject('redirected opaque')", "http://example.test/redirect.js#module").unwrap();
+    // A URL previously used as a requested redirect name must not mask the
+    // origin of a later final response URL with the same spelling.
+    s.page_mut().keep_source_policy("https://remote.test/reused.js", "http://example.test/final.js");
+    s.page_mut().keep_source_policy("http://example.test/second-redirect.js", "https://remote.test/reused.js");
+    s.eval("Promise.reject('redirect alias opaque')", "http://example.test/second-redirect.js").unwrap();
     s.page_mut().keep_source_policy("http://example.test/owned.js", "http://example.test/final.js");
     s.eval("Promise.reject('redirected owned')", "http://example.test/owned.js").unwrap();
     s.dispatch("tick").unwrap();
