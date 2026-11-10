@@ -280,8 +280,11 @@ pub fn syscall(regs: &mut crate::interrupts::SyscallRegs) -> u64 {
             wire::OK
         }
         wire::OP_RESTARTS => {
-            regs.rsi = crate::service_restart::restarts_of(caller) as u64;
-            wire::OK
+            if arg==0{regs.rsi=crate::service_restart::restarts_of(caller) as u64;return wire::OK}
+            if buf!=0{return wire::INVALID}
+            let holder=crate::ipc::DOMAIN_REGISTRY.get(caller).ok_or(wire::DENIED);
+            let state=match holder.and_then(|pd|crate::service_restart::peer_state(pd,arg)){Ok(s)=>s,Err(e)=>return e};
+            regs.rsi=state.epoch;regs.rdx=state.life as u64;wire::OK
         }
         wire::OP_KEEP => {
             if crate::service_restart::keep(caller, arg, buf) { wire::OK } else { wire::INVALID }

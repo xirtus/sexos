@@ -236,6 +236,9 @@ jobs:
         SEXOS_CRASH_PROBE=1 SEXOS_STOP_RESTART_SECONDS=8 ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/crash-probe-build.log" 2>&1 || (tail -50 "$RUNNER_TEMP/crash-probe-build.log"; exit 1)
         truncate -s 1G "$RUNNER_TEMP/crash-source.img"
         python3 scripts/crash_screen_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/crash-source.img" --out "$RUNNER_TEMP/sexos-proof"
+    - name: Cap-scoped peer epochs across same-task service restart
+      if: matrix.gate == 'crash'
+      run: SEXOS_GATE_CORES=4 python3 scripts/service_peer_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/crash-source.img" --out "$RUNNER_TEMP/sexos-proof/service-peer"
     - name: Preserve evidence
       if: always()
       uses: actions/upload-artifact@v4
