@@ -14,6 +14,7 @@ mod launcher;
 mod clipboard;
 mod app_input;
 mod wm;
+mod session;
 use alloc::vec::Vec;
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -24847,6 +24848,8 @@ pub extern "C" fn _start() -> ! {
     // Started again after a crash: the apps that were running still are. Give each
     // its window back, as if it had just registered, and let it draw again.
     if sex_pdx::crash_log::restarts() > 0 { unsafe { adopt_running_apps(); } }
+    // Windows, workspaces and layouts as the last run left them.
+    unsafe { session::keep_and_restore(sex_pdx::crash_log::restarts() > 0); }
 
     loop {
         if let Some(stream)=uiir.as_mut() {
@@ -24860,6 +24863,7 @@ pub extern "C" fn _start() -> ! {
             }
         }
         unsafe { program_rebirth_poll(); }
+        unsafe { session::save(); }
         unsafe { record_spawn_poll(); }
         unsafe { program_resize_flush(); }
         unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); shell_close_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); }

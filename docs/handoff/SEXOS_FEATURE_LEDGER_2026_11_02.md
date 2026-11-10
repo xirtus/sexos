@@ -3669,3 +3669,17 @@ Follow-up to the boot log and crash records work (`BOOT_LOG_AND_CRASH_RECORDS_20
   against a firmware model, its failure paths, and the real x17 firmware and `.pnvm`.
   Real proof is the x17 R1 boot log.
 - **ABI / kernel:** none.
+
+## Shell keeps windows, workspaces and layouts across its own restart (2026-11-10)
+
+- **What:** after a Shell crash, every window comes back where it was, on its workspace,
+  minimized, floating or zoomed as before; each workspace keeps its layout; Spindle's
+  window opens again if it was open; focus returns.
+- **How:** `servers/silk-shell/src/session.rs` writes a checksummed one-page snapshot that
+  the kernel leaves alone on restart; a new Shell restores it after adopting apps.
+- **ABI:** `SYS_CRASH_LOG` op 5 `OP_KEEP` (`sex_pdx::crash_log::keep`); `abi_version_hash`
+  recomputed. **Kernel:** `service_restart::keep` (~20 lines, mechanism only: skip
+  restoring up to 4 of the caller's own BOOT pages).
+- **Evidence:** `scripts/crash_screen_gate.py` start 3 switches the layout to dwindle,
+  crashes Shell, and checks 4 windows restored, the dwindle layout, and 96% identical
+  pixels before and after.
