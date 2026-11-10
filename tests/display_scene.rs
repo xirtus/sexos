@@ -99,7 +99,7 @@ fn assert_scrubbed(scene:&SceneSnapshot){
  let frame=core::sync::atomic::AtomicU64::new(91);let mut tokens=DEFAULT_RENDER_TOKENS;tokens.frame_rim_color=0x123456;let mut scene=SceneSnapshot::EMPTY;
  assert!(scene.capture(&surfaces,&groups,&Set::UNBOUND,&[text_transaction::Stage::EMPTY;MAX_SURFACES],&bar,tokens,153,frame.load(core::sync::atomic::Ordering::Relaxed),1280,800));
  let parent=Surface{owner_pd:3,surface_id:153,active:true,..SURFACE_EMPTY};groups.observe(&[parent]);bar.civil_clock=silkbar_model::civil_clock::CivilClock::new();tokens.frame_rim_color=0;frame.store(92,core::sync::atomic::Ordering::Relaxed);assert_eq!(bar.civil_clock.seconds(),0);assert_eq!(tokens.frame_rim_color,0);
- assert_eq!(groups.awaiting_parent(&child),None);assert_eq!(scene.groups.awaiting_parent(&child),Some(153));assert_eq!(scene.bar.civil_clock.seconds(),1793491200);assert_eq!(scene.tokens.frame_rim_color,0x123456);assert_eq!((scene.width,scene.height,scene.focus,scene.frame),(1280,800,153,91));assert_eq!(frame.load(core::sync::atomic::Ordering::Relaxed),92);let retained=scene.blur_rows;let next=scene_bar_blur_rows(768);assert_eq!(retained,scene_bar_blur_rows(800));assert_ne!(retained,next);
+ assert_eq!(groups.awaiting_parent(&child),None);assert_eq!(scene.groups.awaiting_parent(&child),Some(153));assert_eq!(scene.bar.civil_clock.seconds(),1793491200);assert_eq!(scene.tokens.frame_rim_color,0x123456);assert_eq!((scene.width,scene.height,scene.focus,scene.frame),(1280,800,153,91));assert_eq!(frame.load(core::sync::atomic::Ordering::Relaxed),92);let retained=scene.blur_rows;let next=scene_bar_blur_rows(200);assert_eq!(retained,scene_bar_blur_rows(800));assert_ne!(retained,next);
 }
 #[test]fn pending_bitmap_protocol_is_excluded_and_committed_pixels_are_owned(){
  let mut stores=Set::UNBOUND;let b=bind(15,150);assert!(stores.initialize_once(b));publish(&mut stores,b,1,0xff123456);
@@ -129,10 +129,10 @@ fn assert_scrubbed(scene:&SceneSnapshot){
  for(width,height)in[(1,1),(MAX_FB_W,MAX_FB_H)]{assert!(scene.capture(&source,&FrameGroups::new(),&Set::UNBOUND,&[text_transaction::Stage::EMPTY;MAX_SURFACES],&silkbar_model::DEFAULT_SILK_BAR,DEFAULT_RENDER_TOKENS,153,19,width,height));assert_eq!((scene.width,scene.height),(width,height));}
  // Compare the actual pure capture helper with the actual legacy blur
  // implementation, not a fixture-only copy of its arithmetic.
- for height in [1usize,2,49,50,768,800]{
+ for height in [1usize,2,27,28,49,50,768,800]{
   let rows=scene_bar_blur_rows(height);assert!(fill_bar_bg_buffer(1280,height as u32));assert!(blur_bar_bg_buffer_radius1(1280,height as u32));
-  for y in 0..BAR_BG_H.min(height){for x in [0,1,640,1279]{assert_eq!(rows[y],unsafe{BAR_BLUR_BUF[y*BAR_BG_W_CAP+x]},"height{height} y{y} x{x}");}}
-  assert!(rows[BAR_BG_H.min(height)..].iter().all(|row|*row==0));
+  for y in 0..28usize.min(height){for x in [0,1,640,1279]{assert_eq!(rows[y],unsafe{BAR_BLUR_BUF[y*BAR_BG_W_CAP+x]},"height{height} y{y} x{x}");}}
+  assert!(rows[28usize.min(height)..].iter().all(|row|*row==0));
  }
  scene.scrub();scene.scrub();assert_scrubbed(&scene);
 }

@@ -234,8 +234,8 @@ fn frame()->Surface{Surface{chrome_flags:1,color:0x445566,..surf(3,201)}}
 #[test]fn late_native_geometry_is_fitted_and_grid_has_exact_gap_and_bounds(){
  let mut g=FrameGroups::new();g.register(cat(12));let mut s=[surf(3,153),surf(12,154),surf(12,160),surf(12,161),surf(12,162)];g.observe(&s);
  for c in &mut s[1..]{c.x=-900;c.y=-900;c.w=10000;c.h=10000;}g.fit_children(&mut s);
- assert_eq!((s[1].x,s[1].y,s[1].w,s[1].h),(108,136,384,256));assert!(s[2..].iter().all(|c|c.h==0));
- for c in &s[1..]{assert!(c.x>=108&&c.y>=136);assert!(c.x as u32+c.w<=492);assert!(c.y as u32+c.h<=392);}
+ assert_eq!((s[1].x,s[1].y,s[1].w,s[1].h),(108,134,384,258));assert!(s[2..].iter().all(|c|c.h==0));
+ for c in &s[1..]{assert!(c.x>=108&&c.y>=134);assert!(c.x as u32+c.w<=492);assert!(c.y as u32+c.h<=392);}
  s[0].w=1;s[0].h=1;g.fit_children(&mut s);assert!(s[1..].iter().all(|c|c.w==0&&c.h==0));
 }
 #[test]fn foreign_owner_never_binds_and_child_cannot_cover_parent_chrome(){
@@ -257,7 +257,7 @@ fn frame()->Surface{Surface{chrome_flags:1,color:0x445566,..surf(3,201)}}
  SURFACES[0]=surf(9,156);SURFACES[1]=frame();FRAME_GROUPS.observe(&SURFACES);FRAME_GROUPS.fit_children(&mut SURFACES);
  SURFACES[0].text_len=1;SURFACES[0].text_buf[0]=b'A';SURFACES[0].text_color=0xfedcba;recompute_text_lines(&mut SURFACES[0]);
  for focus in[0,201,156]{APP_PRESENT_BITS=0;assert_eq!(composite_pixel(150,180,1000,800,0,focus, &capture_scene(1000,800,focus)),0x123456);assert_eq!(APP_PRESENT_BITS,1);
- APP_PRESENT_BITS=0;assert_eq!(composite_pixel(120,127,1000,800,0,focus, &capture_scene(1000,800,focus)),FRAME_TOP_BAR_DIVIDER_COLOR);assert_eq!(APP_PRESENT_BITS,0);
+ APP_PRESENT_BITS=0;assert_eq!(composite_pixel(120,125,1000,800,0,focus, &capture_scene(1000,800,focus)),FRAME_TOP_BAR_DIVIDER_COLOR);assert_eq!(APP_PRESENT_BITS,0);
  // A top-row glyph foreground uses actual scaled font coordinates.
  let (ax,ay)=solid_a();let (px,py)=(SURFACES[0].x as usize+8+ax,SURFACES[0].y as usize+12+ay);
  assert_eq!(composite_pixel(px,py,1000,800,0,focus, &capture_scene(1000,800,focus)),0xfedcba);}
@@ -284,7 +284,7 @@ fn frame()->Surface{Surface{chrome_flags:1,color:0x445566,..surf(3,201)}}
   let (fx,fy,fw,fh)=surface_groups::rect(&s[0],1000,800);
   for py in 0..801{for px in [0,7,8,fx,fx.saturating_add(7),fx.saturating_add(8),999,1000]{
    let content=g.content(&s[0],&s,px,py,1000,800);
-   if content.surface_id==156{assert!(px>=fx+8&&px-fx-8<fw.saturating_sub(16));assert!(py>=fy+36&&py-fy-36<fh.saturating_sub(44));assert!(px<1000&&py<800);}
+   if content.surface_id==156{assert!(px>=fx+8&&px-fx-8<fw.saturating_sub(16));assert!(py>=fy+34&&py-fy-34<fh.saturating_sub(42));assert!(px<1000&&py<800);}
   }}
  }
 }
@@ -293,12 +293,12 @@ fn frame()->Surface{Surface{chrome_flags:1,color:0x445566,..surf(3,201)}}
  for(i,c)in s[1..].iter_mut().enumerate(){c.text_buf[0]=b'A'+i as u8;c.text_len=1;c.color=i as u32+1;}
  s[0]=surf(8,777);assert!(s[1..].iter().all(|s|!g.independent(s)));
  s[0]=Surface{x:300,y:200,w:600,h:500,..surf(3,153)};g.observe(&s);g.fit_children(&mut s);
- for(i,c)in s[1..].iter().enumerate(){assert_eq!(c.text_buf[0],b'A'+i as u8);assert_eq!(c.color,i as u32+1);assert!(c.x>=308&&c.y>=236);}
+ for(i,c)in s[1..].iter().enumerate(){assert_eq!(c.text_buf[0],b'A'+i as u8);assert_eq!(c.color,i as u32+1);assert!(c.x>=308&&c.y>=234);}
 }
 #[test]fn fresh_spindle_grid_uses_distinct_owner_frame_and_exact_quadrants(){
  let c=Catalog{slot:50,target_pd:17,task_id:17,surface_id:302,coordinator_pd:3};let mut g=FrameGroups::new();g.register(c);
  let mut s=[surf(3,306),surf(17,302),surf(17,303),surf(17,304),surf(17,305)];g.observe(&s);g.fit_children(&mut s);
- for (i,expected) in [(108,136)].into_iter().enumerate(){let child=&s[i+1];assert_eq!((child.x,child.y),expected);
+ for (i,expected) in [(108,134)].into_iter().enumerate(){let child=&s[i+1];assert_eq!((child.x,child.y),expected);
   let px=child.x as usize+10;let py=child.y as usize+14;let frame=g.winner(&s,302,px,py,1000,800).unwrap();assert_eq!(frame.surface_id,306);assert_eq!(g.content(frame,&s,px,py,1000,800).surface_id,302+i as u64);
  }
  assert_eq!(native_pixel_bit(17,302),16);assert_eq!(native_pixel_bit(12,302),0);
@@ -760,24 +760,25 @@ fn reference_contrast(a:u32,b:u32)->f64{
    TEST_BLEND_BACKGROUND=Some(background);
    SURFACES[0]=Surface{chrome_flags:SURFACE_CHROME_TOP_BAR,tab_count:tabs,active_tab:0,..surf(3,sid)};
    FOCUSED_SURFACE_ID=sid;
-   let expected=desktop_style::contrast_ink(background);let mut glyph_pixels=0;
+   let expected=desktop_style::contrast_ink(background);let mut glyph_pixels=0;assert!(reference_contrast(expected,background)>=4.5);
    let mut framebuffer=vec![0xdeadbeef;w*h];DAMAGE_ORDER.clear();
-   redraw_surface_damage(framebuffer.as_mut_ptr(),w,h,damage::Rect{x:162,y:107,right:246,bottom:121});
+   redraw_surface_damage(framebuffer.as_mut_ptr(),w,h,damage::Rect{x:183,y:105,right:269,bottom:121});
    let pixel_scene_13=capture_scene(w,h,sid);
 
- for y in 107..121{
+ for y in 105..121{
     let mut row=pixel_scene_13.groups.row_winners(&pixel_scene_13.surfaces,sid,y,w,h).unwrap();
-    for x in 162..246{
+    for x in 183..269{
      let foreground=toolbar_title_fg_at(x-100,y-100,sid,background);
      let want=foreground.unwrap_or(background);
-     // Edges are blended; the fully covered pixels carry the contrasting ink itself.
-     if let Some(ink)=foreground{if ink==expected{glyph_pixels+=1;assert!(reference_contrast(ink,background)>=4.5);}}
+     // Contrast applies to the nominal ink; antialiased edge pixels have
+     // partial coverage, and13px lowercase need not contain an opaque pixel.
+     if let Some(ink)=foreground{glyph_pixels+=usize::from(ink!=background);}
      assert_eq!(composite_pixel(x,y,w,h,0x987654,sid, &pixel_scene_13),want,"scalar bg={background:06x} sid={sid} tabs={tabs}");
      assert_eq!(composite_pixel_source(x,y,w,h,0x987654,row.source(x), &pixel_scene_13),want,"scanline bg={background:06x} sid={sid} tabs={tabs}");
      assert_eq!(framebuffer[y*w+x],want,"damage bg={background:06x} sid={sid} tabs={tabs}");
     }
    }
-   assert!(glyph_pixels>0,"bg={background:06x} sid={sid} tabs={tabs}");
+   assert!(glyph_pixels>20,"bg={background:06x} sid={sid} tabs={tabs}");
   }}
  }
  TEST_GLASS_BACKGROUND=None;TEST_BLEND_BACKGROUND=None;SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();
@@ -968,8 +969,8 @@ fn captured_strip_focus_does_not_follow_later_global_focus(){unsafe{
 // The legacy reference computes body pixels independently. Strip glyph/color
 // sentinels are the established clock/bar boundary, not a replacement Scene.
 unsafe fn independent_batch_pixel(x:usize,y:usize,w:usize,h:usize)->u32{
- if y<50{return match(x,y){(0,0)=>1,(1,0)=>2,(2,0)=>3,(3,0)=>4,_=>9};}
- if y==50{return DEFAULT_THEME.panel_glow;}
+ if y<27{return match(x,y){(0,0)=>1,(1,0)=>2,(2,0)=>3,(3,0)=>4,_=>9};}
+ if y==27{return DEFAULT_THEME.panel_glow;}
  legacy_reference_pixel(x,y,w,h,0)
 }
 unsafe fn combined_fixture()->(usize,usize,Vec<u32>){
@@ -993,14 +994,14 @@ unsafe fn combined_fixture()->(usize,usize,Vec<u32>){
  assert_eq!(DAMAGE_ORDER,["restore","launcher","cursor","presented"]);assert_eq!(ATLAS_CALLS,2);
  let mut changed=0;for y in 0..h{for x in 0..w{
   assert_eq!(pixels[y*w+x],independent_batch_pixel(x,y,w,h),"damage/strip {x}/{y}");
-  if y>=51&&!(x>=25&&x<55&&y>=80&&y<100){assert_eq!(pixels[y*w+x],old[y*w+x]);}
+  if y>=28&&!(x>=25&&x<55&&y>=80&&y<100){assert_eq!(pixels[y*w+x],old[y*w+x]);}
   changed+=usize::from(pixels[y*w+x]!=old[y*w+x]);
  }}assert_eq!(changed,30*20);SURFACES=[SURFACE_EMPTY;MAX_SURFACES];
 }}
 #[test]fn combined_cursor_strip_keeps_body_exact_and_finishes_overlays_once(){unsafe{
- let(w,h,mut pixels)=combined_fixture();for pixel in &mut pixels[..51*w]{*pixel=0xdeadbeef;}let body=pixels[51*w..].to_vec();DAMAGE_ORDER.clear();ATLAS_CALLS=0;
+ let(w,h,mut pixels)=combined_fixture();for pixel in &mut pixels[..28*w]{*pixel=0xdeadbeef;}let body=pixels[28*w..].to_vec();DAMAGE_ORDER.clear();ATLAS_CALLS=0;
  paint_output_batch(pixels.as_mut_ptr(),w,h,Plan{content:Content::Cursor,strip:true});
- assert_eq!(DAMAGE_ORDER,["restore","launcher","cursor","presented"]);assert_eq!(ATLAS_CALLS,2);assert_eq!(&pixels[51*w..],body.as_slice());
+ assert_eq!(DAMAGE_ORDER,["restore","launcher","cursor","presented"]);assert_eq!(ATLAS_CALLS,2);assert_eq!(&pixels[28*w..],body.as_slice());
  for y in 0..h{for x in 0..w{assert_eq!(pixels[y*w+x],independent_batch_pixel(x,y,w,h),"cursor/strip {x}/{y}");}}
  SURFACES=[SURFACE_EMPTY;MAX_SURFACES];
 }}
@@ -1125,9 +1126,9 @@ unsafe fn seal_pending_text(index:usize,task:u32,sequence:u32,text:&[u8],selecti
  assert!(TEXT_STAGES[0].needs_publication());
  // Combining the same candidate with real strip work must retain the ordinary
  // cursor/overlay tail. Settle cannot suppress another output obligation.
- let body=pixels[51*w..].to_vec();DAMAGE_ORDER.clear();
+ let body=pixels[28*w..].to_vec();DAMAGE_ORDER.clear();
  paint_output_batch(pixels.as_mut_ptr(),w,h,Plan{content:Content::Settle,strip:true});
- assert_eq!(&pixels[51*w..],body.as_slice());assert_eq!(DAMAGE_ORDER,["restore","launcher","cursor","presented"]);assert_eq!(ATLAS_CALLS,2);
+ assert_eq!(&pixels[28*w..],body.as_slice());assert_eq!(DAMAGE_ORDER,["restore","launcher","cursor","presented"]);assert_eq!(ATLAS_CALLS,2);
  SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();reset_bitmap_stage();
 }}
 

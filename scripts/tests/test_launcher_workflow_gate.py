@@ -45,8 +45,8 @@ class LauncherWorkflow(unittest.TestCase):
   self.assertEqual(self.c['launcher_count'],14);self.assertEqual(self.c['launcher_app_count'],8);self.assertEqual(self.c['exhausted_title'],'Open Spindle')
   self.assertEqual(g.frame_specs(self.c)[-1]['title'],self.c['exhausted_title'])
   self.assertGreater(len(self.c['source_sha256']),20);self.assertEqual(self.c['grid'],[1008,632,264,160]);self.assertEqual(self.c['canvas'],0x0c1420)
-  self.assertEqual(g.minimize_point(12,dict(x=200,y=100),self.c),(225,114))
-  self.assertEqual(g.minimize_point(9,dict(x=208,y=136),self.c),(225,114))
+  self.assertEqual(g.minimize_point(12,dict(x=200,y=100),self.c),(237,113))
+  self.assertEqual(g.minimize_point(9,dict(x=208,y=134),self.c),(237,113))
  def test_exact_finite_actions_cleanup_and_boot_successor_pass(self):
   r=g.lifecycle_joins(trace());self.assertEqual(len(r['actions']),11);self.assertEqual([c['target']for c in r['cleanup']],[12,17])
  def test_actual_task_is_separate_catalog_data_not_domain_alias(self):

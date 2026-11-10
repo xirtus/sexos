@@ -130,7 +130,7 @@ def compile_test(name,text,pipeline=production_path,case=None,expect_failure=Fal
         if count is not None:assert int(match[1])==count,(name,match[1],count)
         return int(match[1])
 counts={}
-for name,file,expected in [('layout','tests/display_frames.rs',7),('store','tests/display_frame_output.rs',9),('va','kernel/src/memory/va_allocator.rs',6),('paint_batch','tests/display_paint_batch.rs',13)]:
+for name,file,expected in [('layout','tests/display_frames.rs',7),('store','tests/display_frame_output.rs',9),('va','kernel/src/memory/va_allocator.rs',6),('paint_batch','tests/display_paint_batch.rs',14)]:
     counts[name]=compile_test(name,(root/file).read_text(),count=expected)
 fixture_text=fixture.read_text();counts['pipeline']=compile_test('pipeline',fixture_text,count=13)
 # Unforgeable ownership discipline is a type property, not a native authority

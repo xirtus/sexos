@@ -108,8 +108,8 @@ fn primitive(target:&frame_output::Target<'_>,scene:&scene::SceneSnapshot,kind:&
  assert_eq!(device(),BEFORE,"device modified before batch completion");event(kind);
  match kind{
  "full"=>for i in 0..target.len(){target.pointer().add(i).write(0x22);},
- "area"=>for i in 50*W..target.len(){target.pointer().add(i).write(0x33);},
- "strip"=>for i in 0..51*W{target.pointer().add(i).write(0x66);},
+ "area"=>for i in 28*W..target.len(){target.pointer().add(i).write(0x33);},
+ "strip"=>for i in 0..28*W{target.pointer().add(i).write(0x66);},
  "damage"=>{let r=rect();for y in r.y..r.bottom{for x in r.x..r.right{target.pointer().add(y*W+x).write(0x44);}}},_=>panic!()}
  mutate_bookkeeping();SURFACES[0].color=0xabcd; // retained Scene must not follow live state.
  if MODE==2{FB_W+=1;}
@@ -126,11 +126,11 @@ fn draw_atlas_frame_previews_pass(_fb:*mut u32,_w:usize,_h:usize,_len:usize,s:&s
 fn draw_launcher_panel(fb:*mut u32,_w:usize,_h:usize,len:usize,s:&scene::SceneSnapshot){observe_scene(s);unsafe{fb.add(len-2).write(0xdd);}event("launcher");}
 fn draw_cursor_z_top(fb:*mut u32,_w:usize,_h:usize,len:usize,save:bool,s:&scene::SceneSnapshot){observe_scene(s);assert!(save);unsafe{
  CURSORS+=1;assert_eq!(device(),BEFORE);fb.add(len-1).write(0xee);mutate_bookkeeping();}event("cursor-raster");}
-fn rect()->damage::Rect{damage::Rect{x:1,y:51,right:4,bottom:53}}
+fn rect()->damage::Rect{damage::Rect{x:1,y:28,right:4,bottom:30}}
 fn expected_pixels(mut base:Vec<u32>,p:Plan)->Vec<u32>{
  if p.settle_only(){return base;}
- match p.content{Content::Full=>base.fill(0x22),Content::Area=>base[50*W..].fill(0x33),Content::Damage(r)=>for y in r.y..r.bottom{for x in r.x..r.right{base[y*W+x]=0x44;}},_=>{}}
- if p.strip{base[..51*W].fill(0x66);}if !p.cursor_only(){base[W*H-2]=0xdd;}base[W*H-1]=0xee;base
+ match p.content{Content::Full=>base.fill(0x22),Content::Area=>base[28*W..].fill(0x33),Content::Damage(r)=>for y in r.y..r.bottom{for x in r.x..r.right{base[y*W+x]=0x44;}},_=>{}}
+ if p.strip{base[..28*W].fill(0x66);}if !p.cursor_only(){base[W*H-2]=0xdd;}base[W*H-1]=0xee;base
 }
 struct Harness{allocation:std::alloc::Layout,private:*mut u8,scanout:Vec<u32>,layout:Layout}
 impl Harness{
@@ -271,6 +271,6 @@ fn no_effects(){unsafe{assert_eq!(PUBLICATIONS,0);assert!(!EVENTS.iter().any(|v|
  let mut visible=Dirty::new(W,H);join_pending_text(&mut visible,W,H);assert_eq!(visible.plan(W,H),Plan{content:Content::Damage(damage::Rect{x:0,y:52,right:19,bottom:53}),strip:false});
  unsafe{SURFACES[0].x=1000;SURFACES[0].y=1000;}
  let mut hidden=Dirty::new(W,H);join_pending_text(&mut hidden,W,H);assert!(hidden.plan(W,H).settle_only());
- let mut tiny=Dirty::new(W,50);join_pending_text(&mut tiny,W,50);assert!(tiny.plan(W,50).is_full());
+ let mut tiny=Dirty::new(W,27);join_pending_text(&mut tiny,W,27);assert!(tiny.plan(W,27).is_full());
  unsafe{assert_eq!(SURFACES[0].text_len,0);assert!(TEXT_STAGES[0].needs_publication());}
 }

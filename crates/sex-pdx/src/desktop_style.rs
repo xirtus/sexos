@@ -160,6 +160,19 @@ pub mod chrome {
             let y=if self.bar()<height {self.bar()} else {height};
             Rect { x:0, y, w:width, h:height-y }
         }
+        /// Center a logical overlay inside the workarea with a scaled gap.
+        /// Empty/tiny screens yield empty clipped rectangles, never overflow.
+        pub const fn centered_panel(self,width:u32,height:u32,logical_w:u32,logical_h:u32)->Rect{
+            let area=self.workarea(width,height);let gap=self.px(8);
+            let x=if gap<area.w {gap}else{area.w};
+            let y=if gap<area.h {gap}else{area.h};
+            let aw=area.w.saturating_sub(gap.saturating_mul(2));
+            let ah=area.h.saturating_sub(gap.saturating_mul(2));
+            let wanted_w=self.px(logical_w);let wanted_h=self.px(logical_h);
+            let w=if wanted_w<aw {wanted_w}else{aw};
+            let h=if wanted_h<ah {wanted_h}else{ah};
+            Rect{x:area.x+x+(aw-w)/2,y:area.y+y+(ah-h)/2,w,h}
+        }
         /// Content and pointer mapping share the same bounded inset. Tiny
         /// frames have an empty body rather than wrapped/overlapping content.
         pub const fn body(self, width: u32, height: u32) -> Rect {

@@ -5351,7 +5351,7 @@ unsafe fn linen_render_object_list() {
     }
     linen_queue_text(&view.text[..view.len],0x00F0F8FF,
         linen_text_delivery::Metadata { count, first:view.first, rows:view.rows, selected:SELECTED_LINEN_OBJECT_ID });
-    sex_pdx::serial_record!("[linen.list.text] x={} y={} w={} h={} scale={} text_color=0xf0f8ff rows={} selected={} row_y={} row_h={} first={} committed_view=1",SURFACE_200_X,SURFACE_200_Y,SURFACE_200_W,SURFACE_200_H,if SURFACE_200_W>=256 {2}else{1},view.rows,SELECTED_LINEN_OBJECT_ID,view.row_y,view.row_h,view.first);
+    sex_pdx::serial_record!("[linen.list.text] x={} y={} w={} h={} scale={} text_color=0xf0f8ff rows={} selected={} row_y={} row_h={} first={} committed_view=1",SURFACE_200_X,SURFACE_200_Y,SURFACE_200_W,SURFACE_200_H,(if SURFACE_200_W>=256 {2}else{1})*sex_pdx::desktop_style::ui_scale(),view.rows,SELECTED_LINEN_OBJECT_ID,view.row_y,view.row_h,view.first);
     for row in 0..view.rows {
         let line=view.text[..view.len].split(|b|*b==b'\n').nth(2+row*2).unwrap_or(b"");
         let label=core::str::from_utf8(line.get(2..).unwrap_or(b"")).unwrap_or("?");
@@ -5523,6 +5523,7 @@ unsafe fn display_scale_receive(msg:&sex_pdx::PdxMessage)->bool {
     for delivery in &mut SPINDLE_VIEWS {delivery.refresh();}
     for delivery in &mut DOCUMENT_VIEWS {delivery.refresh();}
     tile_active_scene_frames();
+    if COMMAND_PALETTE_OPEN {palette_show();palette_render_list();}
     for row in app_catalog::INCARNATIONS {
         if let Some((x,y,w,h))=get_surface_bounds(row.frame()){native_child_geometry(row.frame(),x,y,w,h);program_resize_note(row.frame(),w,h);}
     }
@@ -16281,8 +16282,13 @@ fn command_palette_selected_accent() -> u32 {
 ///   1: shared list background (neutral dark slate)
 ///   2: selected row highlight (full-width bright accent)
 ///   3-7: per-row left accent bars for the first five rows only
+fn command_palette_geometry()->sex_pdx::desktop_style::chrome::Rect{
+    chrome_metrics().centered_panel(desktop_width().max(0)as u32,desktop_height().max(0)as u32,COMMAND_PALETTE_BOOT_W,COMMAND_PALETTE_BOOT_H)
+}
 unsafe fn palette_render_list() {
-    let (w,h)=(COMMAND_PALETTE_BOOT_W,COMMAND_PALETTE_BOOT_H);
+    let r=command_palette_geometry();let(w,h)=(r.w,r.h);
+    let m=chrome_metrics();let body=m.body(w,h);
+    let metrics=launcher::ViewMetrics{ui:m.scale(),top:body.y,inset:body.x};
     // Each row borrows its own owned label until text() copies the bytes into
     // the Display outbox. No mutable scratch buffer is shared between rows.
     let mut reserve_labels=[None;COMMAND_LIST.len()];
@@ -16329,13 +16335,13 @@ unsafe fn palette_render_list() {
     let mut head=[0u8;40];let mut head_len=0;
     for &b in b"SEARCH: ".iter().chain(PALETTE_QUERY.as_str().as_bytes()).chain(b"_") {head[head_len]=b;head_len+=1;}
     let none=[launcher::Row{name:"No match",status:"BACKSPACE TO EDIT"}];
-    let v=if PALETTE_QUERY.is_empty() {launcher::text(&rows[..COMMAND_LIST.len()],COMMAND_PALETTE_SELECTED as usize,w,h)}
-        else if matches==0 {launcher::text_with(&none,0,w,h,[core::str::from_utf8(&head[..head_len]).unwrap_or(""),"ESC CLEARS THE SEARCH"])}
-        else {launcher::text_with(&shown[..matches],selected,w,h,[core::str::from_utf8(&head[..head_len]).unwrap_or(""),"ARROWS CHOOSE  ENTER OPEN  ESC CLEAR"])};
+    let v=if PALETTE_QUERY.is_empty() {launcher::text_with_metrics(&rows[..COMMAND_LIST.len()],COMMAND_PALETTE_SELECTED as usize,w,h,launcher::DEFAULT_HEAD,metrics)}
+        else if matches==0 {launcher::text_with_metrics(&none,0,w,h,[core::str::from_utf8(&head[..head_len]).unwrap_or(""),"ESC CLEARS THE SEARCH"],metrics)}
+        else {launcher::text_with_metrics(&shown[..matches],selected,w,h,[core::str::from_utf8(&head[..head_len]).unwrap_or(""),"ARROWS CHOOSE  ENTER OPEN  ESC CLEAR"],metrics)};
     let rows=if PALETTE_QUERY.is_empty() {rows} else {let mut r=shown;if matches==0 {r[0]=none[0];} r};
     for index in 0..8 {pdx_call(SLOT_DISPLAY,0xEF,SURFACE_ID_COMMAND_PALETTE,0,(index as u64)<<56);}
-    pdx_call(SLOT_DISPLAY,0xEF,SURFACE_ID_COMMAND_PALETTE,28u64<<32,
-        (0x0022384Au64<<32)|((v.row_y.saturating_sub(28) as u64)<<16)|w as u64);
+    pdx_call(SLOT_DISPLAY,0xEF,SURFACE_ID_COMMAND_PALETTE,(m.title()as u64)<<32,
+        (0x0022384Au64<<32)|((v.row_y.saturating_sub(m.title()) as u64)<<16)|w as u64);
     pdx_call(SLOT_DISPLAY,0xEF,SURFACE_ID_COMMAND_PALETTE,(v.row_y as u64)<<32,
         (1u64<<56)|(0x000C1420u64<<32)|(((v.rows as u32*v.row_h)as u64)<<16)|w as u64);
     for row in 0..v.rows {
@@ -16351,7 +16357,7 @@ unsafe fn palette_render_list() {
         count:if PALETTE_QUERY.is_empty() {COMMAND_LIST.len()} else {matches.max(1)},first:v.first,rows:v.rows,
         selected:if PALETTE_QUERY.is_empty() {COMMAND_PALETTE_SELECTED as u64} else {selected as u64}});
     sex_pdx::serial_record!("[launcher.text.view] x={} y={} w={} h={} scale={} selected={} first={} rows={}",
-        COMMAND_PALETTE_BOOT_X,COMMAND_PALETTE_BOOT_Y,w,h,v.scale,COMMAND_PALETTE_SELECTED,v.first,v.rows);
+        r.x,r.y,w,h,v.scale,COMMAND_PALETTE_SELECTED,v.first,v.rows);
     for row in 0..v.rows {let index=v.first+row;
         sex_pdx::serial_record!("[launcher.text.row] index={} row={} name={} status={}",index,row,rows[index].name,rows[index].status);
     }
@@ -16363,9 +16369,10 @@ unsafe fn palette_show() {
     if ensure_command_palette_frame().is_none() { return; }
     set_frame_minimized(COMMAND_PALETTE_FRAME_ID,false);
     set_lifecycle_state(SURFACE_ID_COMMAND_PALETTE,LifecycleState::Visible);
+    let r=command_palette_geometry();
+    update_local_geometry(SURFACE_ID_COMMAND_PALETTE,r.x as i32,r.y as i32,r.w,r.h);
     PALETTE_VISIBILITY.set(linen_text_delivery::Operation { opcode:0xEC, surface:SURFACE_ID_COMMAND_PALETTE,
-        packed:((COMMAND_PALETTE_BOOT_Y as u64)<<32)|(COMMAND_PALETTE_BOOT_X as u32 as u64),
-        control:((COMMAND_PALETTE_BOOT_H as u64)<<32)|COMMAND_PALETTE_BOOT_W as u64 });
+        packed:((r.y as u64)<<32)|r.x as u64,control:((r.h as u64)<<32)|r.w as u64 });
 }
 
 /// Toggle the command palette open/closed.

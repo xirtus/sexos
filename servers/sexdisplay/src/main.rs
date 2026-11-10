@@ -458,9 +458,9 @@ fn composite_pixel_source(x: usize, y: usize, w: usize, h: usize, bg: u32, sourc
         // ── TOP BAR ZONE (default chrome mode, R6 glass) ──
         // [silk.live_topstrip.v2.clip] Safety: frame chrome must never render
         // above the global SilkBar strip. y is the global framebuffer row;
-        // composite_pixel is only called for y >= 51 (see render/redraw_surface_area),
+        // composite_pixel uses the frozen scene bar boundary (28logical px),
         // but this belt-and-suspenders guard catches any future path that might
-        // call composite_pixel at y < BAR_BG_H+1.
+        // call composite_pixel inside that visible strip, independent of backing capacity.
         if y < (scene.metrics.bar()as usize) {
             // y is in or above the SilkBar glow row — skip frame chrome entirely.
             // This pixel will get bar_color or panel_glow from the top strip pass.
@@ -1473,8 +1473,8 @@ fn surface_text_scale(surf: &Surface) -> usize{
     surface_text_scale_for(surf,sex_pdx::desktop_style::ui_scale())
 }
 fn surface_text_scale_for(surf: &Surface, ui_scale:u32) -> usize{
-    // Spindle lays out its own grid from spindle_view metrics, so its exact
-    // panes keep that scale until Spindle is told the screen's scale (F2).
+    // Exact Spindle panes share the terminal's base width threshold; both
+    // renderer and terminal apply the same authenticated screen scale.
     let spindle = sex_pdx::app_catalog::is_spindle(surf.owner_pd)
         && sex_pdx::app_catalog::native_pixel_bit(surf.owner_pd, surf.surface_id) != 0;
     let base = if spindle {

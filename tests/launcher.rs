@@ -9,7 +9,7 @@ fn id()->Identity {Identity{domain:9,task:91,surface:156,coordinator:3}}
 #[test]fn exact_dead_is_closed_even_before_all_service_acks(){for acked in [0,1,31]{assert_eq!(resolve(id(),Some(id()),Evidence::Dead{domain:9,task:91,required:31,acked},false,true),Status::Closed);}}
 #[test]fn malformed_dead_and_errors_never_authorize(){for e in [Evidence::Invalid,Evidence::Dead{domain:9,task:9,required:31,acked:31},Evidence::Dead{domain:9,task:91,required:1,acked:1},Evidence::Dead{domain:9,task:91,required:31,acked:63}]{assert_eq!(resolve(id(),Some(id()),e,false,false),Status::Unavailable);}assert_eq!(resolve(id(),Some(id()),Evidence::Retry,false,false),Status::Closing);}
 #[test]fn only_running_is_enabled_and_closed_explains_missing_restart(){for s in [Status::Closing,Status::Closed,Status::Unavailable]{assert!(!s.presentation().0);}assert!(Status::Running.presentation().0);assert_eq!(Status::Closed.presentation().2,"no_boot_successor");}
-#[test]fn selection_scrolls_every_command_into_visible_window(){let rows=[Row{name:"Quil",status:"RUNNING / FOCUS"};10];for selected in 0..10 {let v=text(&rows,selected,480,280);assert_eq!(v.rows,5);assert!(selected>=v.first&&selected<v.first+v.rows);let s=std::str::from_utf8(&v.bytes[..v.len]).unwrap();assert_eq!(s.matches("> Quil").count(),1);assert_eq!((v.row_y,v.row_h,v.scale),(72,36,2));}}
+#[test]fn selection_scrolls_every_command_into_visible_window(){let rows=[Row{name:"Quil",status:"RUNNING / FOCUS"};10];for selected in 0..10 {let v=text(&rows,selected,480,280);assert_eq!(v.rows,5);assert!(selected>=v.first&&selected<v.first+v.rows);let s=std::str::from_utf8(&v.bytes[..v.len]).unwrap();assert_eq!(s.matches("> Quil").count(),1);assert_eq!((v.row_y,v.row_h,v.scale),(70,36,2));}}
 #[test]fn bounded_sanitized_text_never_double_wraps(){let rows=[Row{name:"very long\nname that must not inject another status line",status:"CLOSED / REBOOT TO REOPEN"};10];let v=text(&rows,9,256,280);assert!(v.len<=512);let s=std::str::from_utf8(&v.bytes[..v.len]).unwrap();assert!(s.lines().all(|l|l.len()<20));assert!(!s.contains("long\nname"));assert_eq!(s.lines().count(),12);}
 #[test]fn tiny_or_empty_view_is_bounded(){for (w,h) in [(0,0),(12,280),(480,40)]{assert_eq!(text(&[Row{name:"Quil",status:"Closed"}],0,w,h).rows,0);}assert_eq!(text(&[],0,480,280).len,0);}
 #[test]fn wide_future_labels_still_emit_every_complete_line(){let value="x".repeat(200);let rows=[Row{name:&value,status:&value};10];let v=text(&rows,9,1920,800);assert!(v.len<=512);assert_eq!(v.bytes[..v.len].iter().filter(|&&b|b==b'\n').count(),12);}
@@ -68,7 +68,7 @@ fn id()->Identity {Identity{domain:9,task:91,surface:156,coordinator:3}}
  let labels=[reserve_count_label(true,"original_incarnation_live",Some(8)).unwrap(),reserve_count_label(true,"original_incarnation_live",Some(15)).unwrap(),reserve_count_label(true,"boot_successor_ready",Some(255)).unwrap(),reserve_count_label(true,"boot_successor_ready",Some(1)).unwrap(),reserve_count_label(true,"original_incarnation_live",Some(1)).unwrap(),reserve_count_label(true,"boot_successor_ready",Some(2)).unwrap(),reserve_count_label(true,"original_incarnation_live",Some(0)).unwrap()];
  let rows:Vec<_>=names.iter().zip(labels.iter()).map(|(name,label)|Row{name,status:label.as_str()}).collect();
  for width in [256,480] {for selected in 0..rows.len(){
-  let view=text(&rows,selected,width,280);assert!(view.len<=512);assert_eq!(view.rows,5);assert_eq!((view.scale,view.row_y,view.row_h),(2,72,36));
+  let view=text(&rows,selected,width,280);assert!(view.len<=512);assert_eq!(view.rows,5);assert_eq!((view.scale,view.row_y,view.row_h),(2,70,36));
   let lines:Vec<_>=core::str::from_utf8(&view.bytes[..view.len]).unwrap().lines().collect();assert_eq!(lines.len(),12);
   for offset in 0..view.rows {let index=view.first+offset;let prefix=if index==selected{"> "}else{"  "};
    assert_eq!(lines[2+offset*2],format!("{prefix}{}",names[index]));assert_eq!(lines[3+offset*2],format!("  {}",labels[index].as_str()));
@@ -80,4 +80,19 @@ fn id()->Identity {Identity{domain:9,task:91,surface:156,coordinator:3}}
  let fallback="CLOSING\n> forged status";let status=reserve_count_label(false,"original_incarnation_live",Some(255));assert!(status.is_none());
  let rows=[Row{name:"Quil",status:status.as_ref().map_or(fallback,ReserveCountLabel::as_str)}];let view=text(&rows,0,256,160);
  let lines:Vec<_>=core::str::from_utf8(&view.bytes[..view.len]).unwrap().lines().collect();assert_eq!(lines.len(),4);assert!(!lines.iter().any(|line|line.starts_with("> forged")));assert!(lines[3].contains('?'));
+}
+
+#[test]fn applied_metrics_keep_each_selection_visible_at_all_supported_scales(){
+ let rows=[Row{name:"Quil",status:"RUNNING / FOCUS"};20];
+ for(ui,w,h,top,inset,count)in[(1,480,280,34,8,5),(2,960,560,68,16,5),(3,976,636,102,24,3)]{
+  for selected in 0..rows.len(){
+   let v=text_with_metrics(&rows,selected,w,h,DEFAULT_HEAD,ViewMetrics{ui,top,inset});
+   assert_eq!(v.rows,count);assert_eq!(v.scale,2*ui);assert_eq!(v.row_y,top+36*ui);assert_eq!(v.row_h,36*ui);
+   assert!(selected>=v.first&&selected<v.first+v.rows);
+   assert!(v.row_y+v.rows as u32*v.row_h<=h-inset);
+   let cols=(w-2*inset)/(12*ui);
+   assert!(v.bytes[..v.len].split(|b|*b==b'\n').all(|line|line.len()<cols as usize));
+   assert_eq!(core::str::from_utf8(&v.bytes[..v.len]).unwrap().matches("> Quil").count(),1);
+  }
+ }
 }

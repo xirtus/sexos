@@ -3,7 +3,7 @@ import sys
 import unittest
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
-from browser_gate_viewport import chrome_metrics, content_rect
+from browser_gate_viewport import chrome_metrics, content_rect, clock_rect, workspace_point
 
 class ChromeMetrics(unittest.TestCase):
     def record(self, scale=1):
@@ -21,6 +21,13 @@ class ChromeMetrics(unittest.TestCase):
         for cut in range(len(self.record())):
             with self.assertRaises(AssertionError):
                 chrome_metrics(self.record()[:cut])
+
+    def test_clock_and_workspace_points_match_literal_supported_shapes(self):
+        self.assertEqual(clock_rect(self.record()+'\n'),(1128,2,144,24))
+        self.assertEqual(workspace_point(self.record()+'\n',0),(544,14))
+        self.assertEqual(workspace_point(self.record()+'\n',1),(568,14))
+        self.assertEqual(clock_rect(self.record(2)+'\n'),(976,4,288,48))
+        with self.assertRaises(AssertionError):workspace_point(self.record(3)+'\n',1)
 
     def test_independent_scaled_contract_and_body(self):
         for scale in (1,2,3):

@@ -63,12 +63,14 @@ def _caption_profile(display):
 def _slim_render_shape(display):
  compact=lambda value:re.sub(r'\s+','',value)
  caption=compact(_function(display,'civil_clock_caption'))
+ assert caption.split('{',1)[0]=='fncivil_clock_caption(clock:&silkbar_model::civil_clock::CivilClock)->[u8;20]'
  for binding in ('letlines=civil_clock_lines(clock);','text[..5].copy_from_slice(&lines[0][4..9]);','text[6..9].copy_from_slice(b"UTC");','text[10]=b\'|\';','text[12..18].copy_from_slice(&lines[1][..6]);','text[..15].copy_from_slice(b"UTCunavailable");'):
   assert binding in caption,('unknown single-line civil binding',binding)
  assert 'clock.state()==silkbar_model::civil_clock::State::Snapshot'in caption
  for name in('civil_clock_fg_at_scaled','clock_fg_at_scaled','top_strip_pixel'):
   helper=compact(_function(display,name))
-  assert 'civil_clock_caption('not in helper and 'civil_clock_lines('not in helper,'calendar recomputed per pixel'
+  assert all(call not in helper for call in('civil_clock_caption(','civil_clock_lines(','civil_clock_date(')),'calendar recomputed per pixel'
+  if name!='top_strip_pixel':assert ':[u8;20]'in helper.split('{',1)[0].replace('&',''),'clock caption shape changed'
  assert 'clock_fg_at_scaled(x,y,bar,lines,background,scene.metrics.scale())'in compact(_function(display,'top_strip_pixel'))
  assert 'civil_clock_fg_at_scaled(x,y,bar,lines,background,ui_scale)'in compact(_function(display,'clock_fg_at_scaled'))
  helper=compact(_function(display,'civil_clock_fg_at_scaled'))
@@ -148,7 +150,7 @@ def _date_render_shape(display):
  return scene_backed
 
 def source_contract(root):
- root=Path(root);names=['crates/silkbar-model/src/lib.rs','crates/silkbar-model/src/civil_clock.rs','crates/sex-pdx/src/clock_source.rs','kernel/src/clock_source.rs','kernel/src/init.rs','servers/silkbar/src/main.rs','servers/silkbar/src/civil_clock.rs','servers/sexdisplay/src/main.rs','scripts/silkbar_clock_gate.py','scripts/clock_source_evidence.py','scripts/browser_source_evidence.py','crates/sex-pdx/src/app_catalog.rs','crates/sex-pdx/src/browser_sources.rs'];texts={n:(root/n).read_text()for n in names};model=texts[names[0]];display=texts['servers/sexdisplay/src/main.rs'];abi=texts['crates/sex-pdx/src/clock_source.rs']
+ root=Path(root);names=['crates/silkbar-model/src/lib.rs','crates/silkbar-model/src/civil_clock.rs','crates/sex-pdx/src/clock_source.rs','kernel/src/clock_source.rs','kernel/src/init.rs','servers/silkbar/src/main.rs','servers/silkbar/src/civil_clock.rs','servers/sexdisplay/src/main.rs','scripts/silkbar_clock_gate.py','scripts/clock_source_evidence.py','scripts/browser_source_evidence.py','scripts/browser_gate_viewport.py','crates/sex-pdx/src/app_catalog.rs','crates/sex-pdx/src/browser_sources.rs'];texts={n:(root/n).read_text()for n in names};model=texts[names[0]];display=texts['servers/sexdisplay/src/main.rs'];abi=texts['crates/sex-pdx/src/clock_source.rs']
  profile=_caption_profile(display)
  if profile in(DATE_PROFILE,SLIM_PROFILE):
   for name in('servers/sexdisplay/Cargo.toml','crates/sex-time/Cargo.toml','crates/sex-time/src/lib.rs'):texts[name]=(root/name).read_text()

@@ -18,8 +18,9 @@ pub enum Mode { Fit, Actual }
 
 pub struct Frame { pub bytes: [u8;512], pub len: usize, pub rows: usize, pub cols: usize }
 
+fn metrics()->sex_pdx::desktop_style::chrome::Metrics {sex_pdx::desktop_style::chrome::Metrics::new(sex_pdx::desktop_style::ui_scale())}
 fn columns(w:u32)->usize {
-    (w.saturating_sub(2*INSET)/(ADVANCE*scale(w))).saturating_sub(1).min(79) as usize
+    (w.saturating_sub(metrics().px(2*INSET))/(ADVANCE*scale(w)*metrics().scale())).saturating_sub(1).min(79) as usize
 }
 /// Fixed chrome rows are shared by text composition and image placement.
 pub fn chrome_rows(w:u32)->usize { if columns(w)>=30 {4} else {5} }
@@ -46,7 +47,7 @@ pub fn render(w:u32,h:u32,status:Status,mode:Mode,width:usize,height:usize)->Fra
 }
 /// Same frame with the format named in the first row.
 pub fn render_titled(w:u32,h:u32,status:Status,mode:Mode,width:usize,height:usize,title:&[u8])->Frame {
-    let factor=scale(w);let cols=columns(w);let top=28+INSET;
+    let m=metrics();let factor=scale(w)*m.scale();let cols=columns(w);let top=m.title()+m.px(INSET);
     let rows=if cols==0||h<top+7*factor {0} else {1+(h-top-7*factor)/(LINE*factor)} as usize;
     // Display has 24 indexed rows and the atomic text frame has 512 bytes.
     let rows=rows.min(24).min(if cols==0 {0} else {512/(cols+1)});
@@ -78,9 +79,10 @@ pub fn render_titled(w:u32,h:u32,status:Status,mode:Mode,width:usize,height:usiz
 /// independently checks the exact live owner and clips to actual surface bounds.
 pub fn geometry(w:u32,h:u32,width:usize,height:usize,mode:Mode)->Option<Geometry> {
     if !(1..=48).contains(&width)||!(1..=48).contains(&height)||columns(w)==0{return None;}
-    let top=28+INSET+(chrome_rows(w)as u32)*LINE*scale(w)+INSET;
-    let available_w=w.checked_sub(2*INSET)?;
-    let available_h=h.checked_sub(top+INSET)?;
+    let m=metrics();let inset=m.px(INSET);
+    let top=m.title()+inset+(chrome_rows(w)as u32)*LINE*scale(w)*m.scale()+inset;
+    let available_w=w.checked_sub(2*inset)?;
+    let available_h=h.checked_sub(top+inset)?;
     let factor=match mode {
         Mode::Fit=>(available_w/width as u32).min(available_h/height as u32).min(4),
         Mode::Actual=>1,
@@ -88,6 +90,6 @@ pub fn geometry(w:u32,h:u32,width:usize,height:usize,mode:Mode)->Option<Geometry
     if factor==0{return None;}
     let image_w=width as u32*factor;let image_h=height as u32*factor;
     if image_w>available_w||image_h>available_h{return None;}
-    let x=INSET+(available_w-image_w)/2;let y=top+(available_h-image_h)/2;
+    let x=inset+(available_w-image_w)/2;let y=top+(available_h-image_h)/2;
     Some(Geometry{x:u16::try_from(x).ok()?,y:u16::try_from(y).ok()?,width:width as u8,height:height as u8,scale:factor as u8})
 }

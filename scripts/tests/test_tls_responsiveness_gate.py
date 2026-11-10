@@ -149,14 +149,14 @@ class DemoClockPixels(unittest.TestCase):
   for changed in(trace.replace('label=DEMO','label=UTC'),trace.replace('x=928','x=1090'),trace.replace('wall_time=0','wall_time=1'),trace+trace):self.assertFalse(gate.verify_demo_clock(changed,image,self.contract,resolution)['ok'])
   self.assertFalse(gate.verify_demo_clock(trace,image,self.contract,(1280,800))['ok'])
  def panel(self,width=1024):
-  d=self.contract['clock']['dimensions'];x=d['CHIP_X3']-max(0,d['CHIP_X3']+d['CLOCK_W']+16-width);height=768 if width==1024 else 800;px=min(1000,width-240)
-  trace=f'[shell.silkbar.click] target=clock x={x+40} y=29\n[shell.panel.geometry] surface=148 x={px} y=55 w=240 h=300 desktop_w={width} desktop_h={height} submitted=1\n[shell.clock.open.ok] id=0x94\n[shell.silkbar.click] target=clock x={x+40} y=29\n[shell.clock.close.ok] id=0x94\n[browser.command.started] kind=TlsPrepare accepted=1\n';return trace,(width,height)
+  x=width-152;height=768 if width==1024 else 800;px=min(1000,width-240)
+  trace=f'[display.chrome.metrics] scale=1 bar=28 title=26 inset=8 body_top=34 target=24 width={width} height={height} publication=1\n[shell.silkbar.click] target=clock x={x+72} y=14\n[shell.panel.geometry] surface=148 x={px} y=55 w=240 h=300 desktop_w={width} desktop_h={height} submitted=1\n[shell.clock.open.ok] id=0x94\n[shell.silkbar.click] target=clock x={x+72} y=14\n[shell.clock.close.ok] id=0x94\n[browser.command.started] kind=TlsPrepare accepted=1\n';return trace,(width,height)
  def test_actual_clock_hit_test_and_submitted_panel_fit_both_desktops(self):
   for width in(1024,1280):
    text,resolution=self.panel(width);result=gate.clock_panel(text,self.contract,resolution);self.assertEqual(result['submitted_geometry']['surface'],148);self.assertEqual(len(result['clicks']),2);self.assertIn('unconfirmed',result['pixels'])
  def test_wrong_click_clipped_panel_or_missing_close_cannot_pass(self):
   text,resolution=self.panel()
-  for a,b in(('x=968 y=29','x=900 y=29'),('x=784 y=55','x=1000 y=55'),('surface=148','surface=149'),('submitted=1','submitted=0'),('[shell.clock.close.ok]','[missing.close]')):
+  for a,b in(('x=944 y=14','x=850 y=14'),('x=784 y=55','x=1000 y=55'),('surface=148','surface=149'),('submitted=1','submitted=0'),('[shell.clock.close.ok]','[missing.close]')):
    with self.assertRaises(AssertionError):gate.clock_panel(text.replace(a,b),self.contract,resolution)
  def test_invalid_counter_cannot_qualify_as_demo_progress(self):
   trace,image,resolution=clock_fixture(self.contract,stamp=(10,99,7));self.assertFalse(gate.verify_demo_clock(trace,image,self.contract,resolution)['ok'])

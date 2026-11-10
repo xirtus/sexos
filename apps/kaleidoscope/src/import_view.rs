@@ -31,8 +31,9 @@ pub struct Frame{pub bytes:[u8;512],pub len:usize,pub cols:usize,pub rows:usize}
 /// Full rows replace prior content; short tiles retain the current state/name
 /// before supplementary instructions. This function never reads the document.
 pub fn render(w:u32,h:u32,status:Status,name:&[u8])->Frame{
- let factor=scale(w);let cols=(w.saturating_sub(2*INSET)/(ADVANCE*factor)).saturating_sub(1).min(79)as usize;
- let top=28+INSET;let rows=if cols==0||h<top+7*factor{0}else{(1+(h-top-7*factor)/(LINE*factor))as usize}.min(32).min(if cols==0{0}else{512/(cols+1)});
+ let m=sex_pdx::desktop_style::chrome::Metrics::new(sex_pdx::desktop_style::ui_scale());
+ let factor=scale(w)*m.scale();let inset=m.px(INSET);let cols=(w.saturating_sub(2*inset)/(ADVANCE*factor)).saturating_sub(1).min(79)as usize;
+ let top=m.title()+inset;let rows=if cols==0||h<top+7*factor{0}else{(1+(h-top-7*factor)/(LINE*factor))as usize}.min(32).min(if cols==0{0}else{512/(cols+1)});
  let mut f=Frame{bytes:[0;512],len:0,cols,rows};if rows==0{return f;}
  f.len=rows*(cols+1)-1;for row in 0..rows{let at=row*(cols+1);f.bytes[at..at+cols].fill(b' ');if row+1<rows{f.bytes[at+cols]=b'\n';}}
  let mut source=[0u8;192];let mut n=0;let mut add=|bytes:&[u8]|{let count=bytes.len().min(source.len()-n);source[n..n+count].copy_from_slice(&bytes[..count]);n+=count;};

@@ -37,7 +37,7 @@ def source_contract(root):
  paths=('servers/silk-shell/src/main.rs','servers/silk-shell/src/launcher.rs','servers/sexdisplay/src/main.rs','servers/sexdisplay/src/surface_groups.rs',
         'servers/sexdisplay/src/surface_lifecycle.rs','apps/spindle/src/main.rs','apps/spindle/src/viewport.rs','apps/spindle/src/display_delivery.rs',
         'crates/sex-pdx/src/spindle_view.rs','crates/silkbar-model/src/lib.rs','crates/sex-pdx/src/app_lifecycle.rs',
-        'scripts/launcher_workflow_gate.py','scripts/tests/test_launcher_workflow_gate.py','scripts/check_launcher_pixels.py',
+        'scripts/browser_gate_viewport.py','scripts/launcher_workflow_gate.py','scripts/tests/test_launcher_workflow_gate.py','scripts/check_launcher_pixels.py',
         'scripts/check_spindle_viewport_pixels.py','scripts/clipboard_workflow_gate.py','scripts/tls_responsiveness_gate.py',
         'scripts/network_contention_gate.py','scripts/check_tcp_capture.py','scripts/check_disk_persistence.py','scripts/check_desktop_pixels.py','crates/sex-pdx/src/desktop_style.rs','servers/quil/src/main.rs','servers/quil/src/view.rs','scripts/check_quil_ui_pixels.py','servers/silk-shell/src/desktop_content.rs','apps/kaleidoscope/src/main.rs')
  sources={name:(root/name).read_text()for name in paths};shell=sources[paths[0]];policy=sources[paths[1]];display=sources[paths[2]];groups=sources[paths[3]];app=sources[paths[5]];bar=sources[paths[9]]
@@ -67,7 +67,16 @@ def source_contract(root):
  palette_ink=re.search(r'PALETTE_TEXT.queue\(&v.bytes\[\.\.v.len\],(0x[\da-fA-F]+),',shell)
  header=re.search(r'v.line\(b"","([^"]+)",cols\)',policy)
  linen=sources['servers/silk-shell/src/desktop_content.rs']
- if not palette_ink or not header or 'row_y:36 + 2*line_h'not in linen or 'out.line(b"",cols)'not in linen or 'let line_h = 9 * scale;'not in linen:raise ValueError('launcher/Linen header erasure source model differs')
+ slim='launcher::text_with_metrics('in shell
+ compact=lambda text:re.sub(r'\s+','',text)
+ layout_ok=('row_y:m.title()+m.px(8)+2*line_h'in compact(linen) and 'letline_h=9*scale;'in compact(linen)
+            and 'ViewMetrics{ui:m.scale(),top:body.y,inset:body.x}'in compact(shell))if slim else 'row_y:36 + 2*line_h'in linen
+ if not palette_ink or not header or not layout_ok or 'out.line(b"",cols)'not in linen:raise ValueError('launcher/Linen header erasure source model differs')
+ if slim:
+  style=sources['crates/sex-pdx/src/desktop_style.rs']
+  for key,value in(('BAR',28),('TITLE',26),('RESIZE',8),('TARGET',24)):
+   if constant(style,key)!=value:raise ValueError('shared chrome logical contract changed: '+key)
+  chrome.update(shared_slim=True,top_bar_height_px=26,top_bar_light_size_px=24,top_bar_light_gap_px=1)
  ink=int(palette_ink[1],0)&0xffffff
  if ink in (fg,constant(style,'TEXT')&0xffffff,0xcdd6f4)or '0x00CDD6F4'not in sources['apps/kaleidoscope/src/main.rs']:raise ValueError('controlled app text color conflicts with launcher erasure')
  return dict(launcher_header=header[1],launcher_foreground=ink,launcher_count=len(command_rows),launcher_app_count=int(app_count[1]),exhausted_title=command_rows[0][1],chrome=chrome,canvas=constant(style,'NATIVE_CANVAS'),quil_foreground=constant(style,'TEXT'),quil_initial=ast.literal_eval(initial[1]),font=font_from_source(display),grid=[grid[0],grid[1],grid[2]*grid[4],grid[3]*grid[5]],foreground=fg,
@@ -293,8 +302,19 @@ def verify_frame(trace,image,frame,contract,resolution):
   return dict(remaining_spindle_ink=ink,launcher_erasure=erasure)
  raise ValueError('unknown captured frame kind')
 
+def workspace_point(trace,index,contract):
+ if contract['chrome'].get('shared_slim'):
+  from browser_gate_viewport import workspace_point as point
+  return point(trace,index)
+ return contract['workspace_x'][index]+10,contract['workspace_y']+10
+
+
 def minimize_point(target,geometry,contract):
  chrome=contract['chrome'];gap=chrome['top_bar_light_gap_px'];size=chrome['top_bar_light_size_px'];height=chrome['top_bar_height_px']
+ if chrome.get('shared_slim'):
+  ui=geometry.get('ui_scale',1);assert ui in(1,2,3)
+  x=geometry['x']-(8*ui if target==9 else 0);y=geometry['y']-(34*ui if target==9 else 0)
+  return x+37*ui,y+13*ui
  x=geometry['x']-(8 if target==9 else 0);y=geometry['y']-(36 if target==9 else 0)
  return x+2*gap+size+size//2,y+height//2
 
@@ -370,7 +390,7 @@ def main():
  contract=source_contract(root);bound=frozen_binding(root,iso,binding_path);target=target_check(root)
  if not target['ok']:raise ValueError('non-Unix scalar target check failed')
  held=json.loads(binding_path.read_text())
- for name in ('scripts/launcher_workflow_gate.py','scripts/tests/test_launcher_workflow_gate.py'):
+ for name in ('scripts/browser_gate_viewport.py','scripts/launcher_workflow_gate.py','scripts/tests/test_launcher_workflow_gate.py'):
   if held['runner_sha256'].get(name)!=contract['source_sha256'][name]:raise ValueError('launcher runner not in exact frozen cohort')
  disk=out/'nvme.img';shutil.copyfile(args.source_disk,disk);serial=out/'serial.log';pcap=out/'wire.pcap';sock=Path('/tmp')/f'sex-launcher-{os.getpid()}.sock';resolution=tuple(map(int,args.resolution.split('x')));command=desktop.native_command(iso,disk,serial,sock,pcap,args.model,args.resolution);profile=command_profile(command)
  if not profile['ok']:raise ValueError('unsupported native RTC/CPU command')
@@ -435,9 +455,9 @@ def main():
   geometry=picture('quil-9-typed','quil',9)['geometry'];start=len(text());click(*minimize_point(9,geometry,contract));wait(r'\[silk.lifecycle.minimize.hidden\] sid=201 frame=\d+',start)
   picture('quil-9-hidden','hidden',9,geometry=geometry)
   launcher(9,'Restore');picture('quil-9-restored','quil',9)
-  start=len(text());click(contract['workspace_x'][1]+10,contract['workspace_y']+10);wait(r'\[shell.scene.switch\] from=0 to=1',start)
+  start=len(text());click(*workspace_point(text(),1,contract));wait(r'\[shell.scene.switch\] from=0 to=1',start)
   launcher(9,'BringHere');picture('quil-9-brought','quil',9)
-  start=len(text());click(contract['workspace_x'][0]+10,contract['workspace_y']+10);wait(r'\[shell.scene.switch\] from=1 to=0',start)
+  start=len(text());click(*workspace_point(text(),0,contract));wait(r'\[shell.scene.switch\] from=1 to=0',start)
   for target in SPINDLES:
    marker=TARGETS[target]['marker'];launcher(target,'Open')
    if target==17:wait(r'\[app.surface.presented\] target=17 surface=302 sequence=1 ok=1')
@@ -448,7 +468,7 @@ def main():
    geometry=spindle_geometry(text(),target);start=len(text());click(*minimize_point(target,geometry,contract));wait(rf'\[silk.lifecycle.minimize.hidden\] sid={TARGETS[target]["frame"]} frame=\d+',start)
    picture(f'spindle-{target}-hidden','hidden',target,geometry=geometry)
    launcher(target,'Restore');picture(f'spindle-{target}-restored','spindle',target,marker,minimum_sequence=geometry['sequence']+1)
-   destination=1 if target==12 else 0;start=len(text());click(contract['workspace_x'][destination]+10,contract['workspace_y']+10);wait(rf'\[shell.scene.switch\] from={1-destination} to={destination}',start)
+   destination=1 if target==12 else 0;start=len(text());click(*workspace_point(text(),destination,contract));wait(rf'\[shell.scene.switch\] from={1-destination} to={destination}',start)
    launcher(target,'BringHere');picture(f'spindle-{target}-brought','spindle',target,marker)
    start=len(text());key('f11');wait(rf'\[sext.app.pool.ready\] target={target} task=\d+ .*ok=1',start)
   launcher(17,'Exhausted')

@@ -1,7 +1,6 @@
 """Use published shared chrome metrics and real Shell input for fixed browser fixtures."""
 import re
 import time
-from quil_workflow_gate import palette_commands, palette_select
 
 
 def chrome_metrics(text):
@@ -32,6 +31,7 @@ def content_rect(text, tile):
 
 
 def full_viewport(guest, root, surface, width=410, height=330):
+    from quil_workflow_gate import palette_commands, palette_select
     pattern = rf'\[shell.tile.apply\] sid={surface} x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)'
     tile = tuple(map(int, re.findall(pattern, guest['text']())[-1]))
     if content_rect(guest['text'](), tile)[2] < width or content_rect(guest['text'](), tile)[3] < height:
@@ -45,3 +45,14 @@ def full_viewport(guest, root, surface, width=410, height=330):
     body = content_rect(guest['text'](), tile)
     assert body[2] >= width and body[3] >= height, ('browser fixture clipped', tile, body, width, height)
     return tile
+
+def clock_rect(text):
+    m=chrome_metrics(text);ui=m['scale']
+    assert m['width']>=320*ui,'unsupported narrow bar'
+    return m['width']-152*ui,2*ui,144*ui,24*ui
+
+def workspace_point(text,index):
+    m=chrome_metrics(text);ui=m['scale'];width=m['width']
+    assert 0<=index<9 and width>=600*ui,'compact mode exposes Atlas, not nine workspace targets'
+    start=min((width-216*ui)//2,width-488*ui)
+    return start+(24*index+12)*ui,14*ui

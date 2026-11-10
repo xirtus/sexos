@@ -44,7 +44,7 @@ pub mod app_lifecycle{
 pub mod shell_ready{pub const INPUT_PD_ID:u32=4;}
 #[derive(Clone,Copy)]pub struct PdxMessage{pub caller_pd:u32,pub caller_task:u32,pub arg0:u64,pub arg1:u64,pub arg2:u64}
 const OP_HID_EVENT:u64=0x202;
-const EV_KEY:u64=1;const EV_WHEEL:u64=app_scroll::CLASS;
+const EV_KEY:u64=1;const EV_REL:u64=2;const EV_ABS:u64=3;const EV_BTN:u64=4;const EV_WHEEL:u64=app_scroll::CLASS;
 pub const ERR_SERVICE_NOT_READY:u64=u64::MAX-1;
 pub const ERR_CAP_INVALID:u64=u64::MAX-2;
 pub fn get_ticks()->u64{1}
@@ -104,6 +104,7 @@ include!(env!("BROWSER_WHEEL_PRODUCTION"));
 fn browser()->Participant{Participant::from_catalog(lifecycle_abi::CatalogInfo{target_pd:15,task_id:15,surface_id:300,coordinator_pd:3}).unwrap()}
 fn wheel(vertical:i8)->Item{Item{destination:browser(),input:Input::Scroll(Scroll::new(vertical).unwrap())}}
 unsafe fn reset(){
+ DISPLAY_SCALE=desktop_style::chrome::ScaleClient::new();
  REAL_LIVE=false;HELD=[None;3];INFO_QUERIES.clear();
  APP_INPUT=Queue::new();CLIPBOARD=broker::Broker::new();CLIPBOARD.register(lifecycle_abi::CatalogInfo{target_pd:15,task_id:15,surface_id:300,coordinator_pd:3}).unwrap();
  COMMAND_PALETTE_OPEN=false;ATLAS_MODE_ENABLED=false;LAUNCHER_ACTIVE=false;CLOCK_ACTIVE=false;STATUS_ACTIVE=false;BELL_ACTIVE=false;SCENE_SETTINGS_ACTIVE=false;
@@ -145,8 +146,8 @@ unsafe fn refused(){browser_wheel_input(1,0);assert!(!APP_INPUT.pending());asser
 #[test]fn actual_scene_minimize_lifecycle_chrome_overlap_and_clipping_guards_refuse(){
  let _lock=LOCK.lock().unwrap();unsafe{
  for winner in[HitTarget::None,HitTarget::FrameChrome,HitTarget::Surface(201),HitTarget::Surface(152)]{reset();WINNER=winner;refused();}
- for point in[(-1,120),(1280,120),(100,-1),(100,800),(7,120),(632,120),(100,85),(100,442)]{reset();POINTER_X=point.0;POINTER_Y=point.1;refused();}
- for point in[(8,86),(631,441)]{reset();POINTER_X=point.0;POINTER_Y=point.1;assert_eq!(browser_wheel_destination(),Some(browser()));}
+ for point in[(-1,120),(1280,120),(100,-1),(100,800),(7,120),(632,120),(100,83),(100,442)]{reset();POINTER_X=point.0;POINTER_Y=point.1;refused();}
+ for point in[(8,84),(631,441)]{reset();POINTER_X=point.0;POINTER_Y=point.1;assert_eq!(browser_wheel_destination(),Some(browser()));}
  reset();FRAMES[0].as_mut().unwrap().scene_id=1;refused();
  reset();FRAMES[0].as_mut().unwrap().flags=FRAME_FLAG_MINIMIZED;refused();
  reset();ALIVE=false;refused();reset();TOMBSTONED=true;refused();
@@ -319,3 +320,14 @@ unsafe fn live_integration()->(Item,Item){
  let(_,second)=live_integration();STATUS=77;app_input_poll();assert_eq!(SENT.len(),1);assert_eq!(SENT[0].0,155);assert_eq!(APP_INPUT.front(),Some(second));
  STATUS=0;app_input_poll();assert_eq!(SENT.len(),2);assert_eq!(SENT[1].0,159);app_input_poll();assert_eq!(SENT.len(),2);
  }}
+
+#[test]fn pending_scale_consumes_pointer_wheel_before_any_target_or_queue_effect(){
+ let _lock=LOCK.lock().unwrap();unsafe{
+  reset();assert!(DISPLAY_SCALE.begin(1));
+  actual_main_wheel_prefix(&PdxMessage{caller_pd:4,caller_task:4,arg0:1,arg1:0,arg2:EV_WHEEL});
+  assert!(SENT.is_empty());assert!(!APP_INPUT.pending());assert!(CATALOG_QUERIES.is_empty());
+  assert!(DISPLAY_SCALE.pending());DISPLAY_SCALE.cancel();
+  actual_main_wheel_prefix(&PdxMessage{caller_pd:4,caller_task:4,arg0:1,arg1:0,arg2:EV_WHEEL});
+  assert_eq!(SENT,[(43,OP_HID_EVENT,[1,0,5])]);
+ }
+}

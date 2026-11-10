@@ -184,13 +184,19 @@ def verify_tls_pixels(trace,ppm,expected,contract,resolution=None,**options):
   # Cover the entire unobscured content canvas, including blank cells, gutters,
   # and the area below the bounded payload. Clip padding at the actual canvas.
   left=tile['x']+contract['inset'];right=tile['x']+tile['w']-contract['inset'];top=tile['y']+contract['top'];bottom=tile['y']+tile['h']-contract['tls_rim']
+  from check_desktop_pixels import cell_coverage
+  atlas={}
   for py in range(top,max(top,bottom)):
    row_index=(py-top)//(contract['line']*scale);gy=((py-top)//scale)%contract['line']
    text=geometry['rows'][row_index]['text']if row_index<len(geometry['rows'])else''
    for px in range(left,max(left,right)):
     column=(px-left)//(contract['advance']*scale);gx=((px-left)//scale)%contract['advance']
-    on=column<len(text)and gy<7 and gx<5 and bool(glyph(contract['font'],text[column])[gy]&(1<<(4-gx)))
-    actual=pixels[(py*width+px)*3:(py*width+px)*3+3];mismatch+=actual!=(foreground if on else background);checked+=1;ink+=on
+    char=text[column]if column<len(text)else' '
+    key=(char,scale)
+    if key not in atlas:atlas[key]=cell_coverage(contract['font'],char,scale)
+    alpha=atlas[key][((py-top)%(contract['line']*scale))*6*scale+(px-left)%(6*scale)]
+    wanted=bytes((fg*alpha+bg*(255-alpha))//255 for fg,bg in zip(foreground,background))
+    actual=pixels[(py*width+px)*3:(py*width+px)*3+3];mismatch+=actual!=wanted;checked+=1;ink+=alpha>0
   errors=[]if not mismatch else[f'full TLS glyph/canvas/erasure mismatches={mismatch}']
   if not ink:errors.append('no visible TLS panel glyph capacity')
   return dict(ok=not errors,errors=errors,expected=expected,geometry=geometry,checked_pixels=checked,expected_ink_pixels=ink,glyph_cells=sum(len(row['text'])for row in geometry['rows']),nonspace_glyphs=sum(char!=' 'for row in geometry['rows']for char in row['text']),status_qualified=not errors and geometry['complete'])

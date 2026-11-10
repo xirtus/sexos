@@ -80,10 +80,10 @@ fn reference_composite_pixel_selected(x: usize, y: usize, w: usize, h: usize, bg
                     // ── TOP BAR ZONE (default chrome mode, R6 glass) ──
                     // [silk.live_topstrip.v2.clip] Safety: frame chrome must never render
                     // above the global SilkBar strip. y is the global framebuffer row;
-                    // composite_pixel is only called for y >= 51 (see render/redraw_surface_area),
+                    // composite_pixel is only called for y >= 28 (see render/redraw_surface_area),
                     // but this belt-and-suspenders guard catches any future path that might
-                    // call composite_pixel at y < BAR_BG_H+1.
-                    if y < (BAR_BG_H + 1) {
+                    // call composite_pixel within the independently pinned28px bar.
+                    if y < 28 {
                         // y is in or above the SilkBar glow row — skip frame chrome entirely.
                         // This pixel will get bar_color or panel_glow from the top strip pass.
                     } else if top_bar_active && ly < FRAME_TOP_BAR_HEIGHT_PX {

@@ -94,3 +94,41 @@ BOOT reached and rendered the native desktop. This is a source-bound correctness
 checkpoint, not final input/browser/CI/performance acceptance. All guests stopped.
 The civil-clock source/health/authority suite retains26passing cases with the
 single-line target and adds unchanged-sample/new-target draw-stamp coverage.
+
+Host migration and remaining geometry corrections:
+
+- All55 compositor cases,22 bitmap cases, binding/store controls and compiled
+  ownership/snapshot mutants passed after independent reference fixtures pinned
+  the visible28px boundary instead of confusing it with the84px backing capacity.
+  The first41/55failure log is retained in local evidence. No timing claim follows
+  from the correctness run (it overlapped another correctness build).
+- Scene23cases/15runtime mutants/source fences and the output pipeline with all
+  existing acquisition/publication/dirty-plan/source mutants passed. The additional
+  captured-boundary paint case is counted explicitly (14cases, not13).
+- Toolbar contrast checks cover the actual new title region after the24px controls,
+  keep nominal ink contrast>=4.5 and compare AA pixels in all rendering paths.
+  A natural13px lowercase glyph need not contain a fully opaque pixel; the
+  independent title stem/TTF and real native readability evidence remains required.
+- The command palette previously used old36/44 offsets and unscaled row metrics.
+  Its logical480x280 box now fits/centers within the shared scaled workarea with
+  an8px logical gap; its view receives explicit scale/top/inset data. Independent
+ 1x/2x/3x rectangle and visible-selection cases pass. This preserves its existing
+  keyboard workflow; the next panel/input stage remains separate.
+- Browser TLS/calendar/import/image panel builders also still used28+8 and base
+  font scale. They now derive geometry from the authenticated applied scale and
+  shared26px title. Image1:1 remains physical pixel1:1; UI scaling affects chrome
+  reservation and Fit space. Reader source-byte anchors remain unchanged.
+- Linen's public scale field now reports actual text scale (base times UI), matching
+  its already scaled layout. Current-source native refresh is required to qualify
+  the corrected metadata, rather than editing old captured traces.
+- Reviewed Browser wheel source lock changes only the body rectangle transform;
+  all exact held association/custody/route locks stay intact. Source-shape and
+  compiled main-prefix controls retain pending-scale and foreign-sender refusals.
+- The TLS pixel oracle now uses the actual source-selected Geist Mono AA atlas
+  instead of assuming a scaled ROM grid. Full canvas/erasure checks and adverse
+  receipt/hash controls remain. DEMO9px clock evidence is explicitly archival and
+  cannot qualify a current slim-metric native trace.
+
+Source-bound first97d captures remain first-checkpoint evidence, not qualification
+of the later palette/panel corrections or the final merged capture integration.
+Whole-panel masks and natural Sans app-body labels are still the next topic.
