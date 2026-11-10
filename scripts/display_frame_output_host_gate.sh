@@ -33,7 +33,7 @@ def source_contract(text):
     assert c.index('preparation.commit(')<c.index('record_cursor_presented();')<c.index('report_app_presented();')<c.index('civil_clock_drawn(')
     assert 'ifplan.clock_dirty(){civil_clock_drawn(&scene.bar,w,h,plan.label());}'in c
     assert not any(x in c for x in ['drop(lease)','mem::forget','ManuallyDrop'])
-    assert 'Some(PublishedFrame{plan,bar_height:scene.metrics.bar()as usize,present_bits,canon_ss,text_projections})'in c
+    assert 'Some(PublishedFrame{plan,bar_height:scene.metrics.bar()asusize,present_bits,canon_ss,text_projections})'in c
     assert 'lettext_projections=scene.text_projections;'in c and c.index('preparation.commit(')<c.index('lettext_projections=scene.text_projections;'),'receipt copies captured metadata only after successful output'
     for name in ['raster_full','raster_strip','raster_area','raster_damage']:
         b=fn(text,name)

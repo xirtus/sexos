@@ -83,3 +83,14 @@ The separate 13px Sans atlas supports an exact initial-gradient clock oracle; th
 is pending native qualification and does not assert arbitrary wallpaper/night-light
 pixel coverage. Clock draw stamps now include target geometry so an unchanged civil
 sample repainted after scale adoption still produces a descriptive draw observation.
+
+First native checkpoint at source `97d433ce` built successfully from a fresh Rust
+target (only bootloader artifacts copied). Actual 1280×800 and1024×768 captures and
+provenance are in `docs/handoff/assets/slim-desktop-first97d/`. Both exact3456-pixel
+13px Geist clock oracles passed; native2560 scale1→2→1 receipts/ink passed, and a
+separate2x clock/geometry capture passed13824pixels. ISO `fd75e3415c457806d87e956be04d5e3e4a84b5f3824877ab37ec506ec93f963f`.
+Display ELF sections were text639306/data1269220/bss2461619bytes (4370145total);
+BOOT reached and rendered the native desktop. This is a source-bound correctness
+checkpoint, not final input/browser/CI/performance acceptance. All guests stopped.
+The civil-clock source/health/authority suite retains26passing cases with the
+single-line target and adds unchanged-sample/new-target draw-stamp coverage.

@@ -166,11 +166,11 @@ fn scrub_cursor_under(){boundary::cursor();}
 // then construct the descriptive receipt. No device write/native success is
 // claimed; the actual prepared-output pipeline has its own registered tests.
 fn rendered_receipt(plan:Plan,present_bits:u64,bar:&SilkBar)->Option<PublishedFrame>{
- let fail=boundary::rendering();let text_projections={
+ let fail=boundary::rendering();let (text_projections,bar_height)={
   let lease=SceneLease::capture(1024,768,bar)?;assert!(lease.view().is_valid());if fail{return None;}
-  lease.view().text_projections
+  (lease.view().text_projections,lease.view().metrics.bar()as usize)
  };
- scene_scrubbed();Some(PublishedFrame{plan,bar_height:28,present_bits,canon_ss:0,text_projections})
+ scene_scrubbed();Some(PublishedFrame{plan,bar_height,present_bits,canon_ss:0,text_projections})
 }
 
 fn reset_host_inputs(){

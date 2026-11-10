@@ -329,9 +329,9 @@ mod damage;
 #[test]
 fn damage_union_clips_overflow_and_never_touches_silkbar() {
  let mut d=damage::Damage::new(28);d.add((usize::MAX,0,usize::MAX,usize::MAX),1000,800);assert_eq!(d.rect(),None);
- d.add((10,0,30,30),1000,800);assert_eq!(d.rect(),None);
- d.add((10,40,30,30),1000,800);d.add((900,750,usize::MAX,usize::MAX),1000,800);
- assert_eq!(d.rect(),Some(damage::Rect{x:10,y:51,right:1000,bottom:800}));
+ d.add((10,0,30,28),1000,800);assert_eq!(d.rect(),None);
+ d.add((10,20,30,50),1000,800);d.add((900,750,usize::MAX,usize::MAX),1000,800);
+ assert_eq!(d.rect(),Some(damage::Rect{x:10,y:28,right:1000,bottom:800}));
  let mut empty=damage::Damage::new(28);empty.add((0,0,1000,800),0,0);assert_eq!(empty.rect(),None);
 }
 #[test]

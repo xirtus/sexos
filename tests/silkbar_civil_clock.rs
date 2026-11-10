@@ -118,17 +118,19 @@ fn text(line:&[u8])->&str{core::str::from_utf8(line).unwrap().trim_end()}
  bar.clock_hh=23;bar.clock_mm=59;bar.clock_ss=59;clock_canon_apply_to_bar(&mut bar);assert_eq!(civil_clock_lines(&bar.civil_clock),lines);assert_eq!(bar.civil_clock.seconds(),MIN+12345);
  let mut legacy=DEFAULT_SILK_BAR;assert!(!legacy.civil_enabled);assert!(silkbar_model::apply_update(&mut legacy,SilkBarUpdate::new(4,0,23,(59<<8)|59)));assert_eq!((legacy.clock_hh,legacy.clock_mm,legacy.clock_ss),(23,59,59));
 }
-#[test]fn both_profile_chips_paint_exact_two_line_source_bound_glyphs_and_erase_prior_digits(){
+#[test]fn both_profile_chips_paint_exact_single_line_source_bound_glyphs_and_erase_prior_digits(){
  for width in[1024,1280]{for state in[State::Unknown,State::Snapshot,State::Unavailable,State::Rollback,State::Exhausted]{
-  let mut bar=silkbar_model::for_desktop_width(width).unwrap();bar.civil_enabled=true;receive(&mut bar.civil_clock,wire(state,if state==State::Snapshot{MIN+12345}else{0},1),0).unwrap();
-  let lines=civil_clock_lines(&bar.civil_clock);let(cx,cy,cw,ch)=module_rect(&bar,ModuleSlot::Clock);assert!(cx+cw<=width);
+  let mut bar=DEFAULT_SILK_BAR;assert!(silkbar_model::reflow_chrome(&mut bar,width,28,24));
+  bar.civil_enabled=true;receive(&mut bar.civil_clock,wire(state,if state==State::Snapshot{MIN+12345}else{0},1),0).unwrap();
+  let text=civil_clock_caption(&bar.civil_clock);let(cx,cy,cw,ch)=module_rect(&bar,ModuleSlot::Clock);assert!(cx+cw<=width);
+  assert_eq!((cx,cy,cw,ch),(width-152,2,144,24));
   for y in cy.saturating_sub(1)..cy+ch+1{for x in cx.saturating_sub(1)..cx+cw+1{
    let mut expected=None;
-   for row in 0..2{let yy=cy+if row==0{1}else{11};if x>=cx+2&&x<cx+cw&&y>=yy&&y<yy+9{
-    let alpha=glyphs::caption_coverage(&lines[row],x as i32-cx as i32-2,y-yy).unwrap();
+   if x>=cx+4&&x<cx+cw&&y>=cy+4&&y<cy+20 {
+    let alpha=glyphs::ui_coverage(&text,x as i32-cx as i32-4,y-cy-4,1).unwrap();
     if alpha!=0{expected=Some(coverage_blend(desktop_style::contrast_ink(0),0,alpha));}
-   }}
-   assert_eq!(clock_fg_at(x,y,&bar,&lines,0),expected,"width{width} state{state:?} x{x} y{y}");
+   }
+   assert_eq!(clock_fg_at(x,y,&bar,&text,0),expected,"width{width} state{state:?} x{x} y{y}");
   }}
  }}
 }
@@ -147,6 +149,10 @@ fn text(line:&[u8])->&str{core::str::from_utf8(line).unwrap().trim_end()}
  assert_eq!(DRAW_LOG.with(|l|l.borrow().len()),3);
  assert!(DRAW_LOG.with(|l|l.borrow()[2].contains("sequence=1 state=Unknown seconds=0 stale=1 pixels=written")));
  bar.civil_enabled=false;civil_clock_drawn(&bar,1280,800,"full");assert_eq!(DRAW_LOG.with(|l|l.borrow().len()),3);
+ bar.civil_enabled=true;assert!(silkbar_model::reflow_chrome(&mut bar,1280,56,48));
+ civil_clock_drawn(&bar,1280,800,"full");assert_eq!(DRAW_LOG.with(|l|l.borrow().len()),4);
+ assert!(DRAW_LOG.with(|l|l.borrow()[3].contains("w=288 h=48")));
+
 }
 
 
