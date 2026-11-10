@@ -973,6 +973,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "image-webp"
+version = "0.2.4"
+
+[[package]]
 name = "indexmap"
 version = "2.14.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1847,6 +1851,7 @@ version = "0.1.0"
 name = "sex-image"
 version = "0.1.0"
 dependencies = [
+ "image-webp",
  "zune-core",
  "zune-jpeg",
  "zune-png",
@@ -2027,6 +2032,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-wifi"
+version = "0.1.0"
+dependencies = [
+ "aes",
+ "hmac",
+ "p256",
+ "sha1",
+ "sha2",
+]
+
+[[package]]
 name = "sexbell"
 version = "0.1.0"
 dependencies = [
@@ -2137,6 +2153,17 @@ version = "0.1.0"
 dependencies = [
  "sex-pdx",
  "sex-rt",
+]
+
+[[package]]
+name = "sha1"
+version = "0.10.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a978451301f4db1d02937a4ab3ccce137717b81826e79b7d49ffe3244a13c3b8"
+dependencies = [
+ "cfg-if",
+ "cpufeatures",
+ "digest",
 ]
 
 [[package]]
@@ -2678,6 +2705,7 @@ dependencies = [
  "sex-fetch",
  "sex-gl",
  "sex-js",
+ "sex-media",
  "sex-pdx",
  "sex-web",
 ]
