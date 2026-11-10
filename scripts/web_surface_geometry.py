@@ -34,7 +34,7 @@ def canvas_box(root,tile,width,height):
 
 def latest_paint(text):
     complete=text[:text.rfind('\n')+1]
-    found=re.findall(r'\[web.shown\] w=(\d+) h=(\d+) scroll=-?\d+ focus=-?\d+ items=\d+ ticks=\d+(?: canvases=\d+)?\n',complete)
+    found=re.findall(r'^\[web.shown\] w=(\d+) h=(\d+) scroll=-?\d+ focus=-?\d+ items=\d+ ticks=\d+(?: canvases=\d+)?\n',complete,re.M)
     if not found:raise ValueError('no complete Web paint receipt')
     w,h=map(int,found[-1])
     assert w>0 and h>0,('empty paint',w,h)
@@ -44,9 +44,9 @@ def latest_paint(text):
 def latest_frame(text,surface):
     """Use the latest real tiling/zoom publication for this surface."""
     complete=text[:text.rfind('\n')+1]
-    patterns=(rf'\[shell.tile.apply\] sid={surface} x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)\n',
-              rf'\[silk.lifecycle.zoom.active\] frame=\d+ sid={surface} zx=(-?\d+) zy=(-?\d+) zw=(\d+) zh=(\d+)\n',
-              rf'\[silk.lifecycle.zoom.restore\] frame=\d+ sid={surface} nx=(-?\d+) ny=(-?\d+) nw=(\d+) nh=(\d+)\n')
-    found=[(m.start(),tuple(map(int,m.groups())))for p in patterns for m in re.finditer(p,complete)]
+    patterns=(rf'^\[shell.tile.apply\] sid={surface} x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)\n',
+              rf'^\[silk.lifecycle.zoom.active\] frame=\d+ sid={surface} zx=(-?\d+) zy=(-?\d+) zw=(\d+) zh=(\d+)\n',
+              rf'^\[silk.lifecycle.zoom.restore\] frame=\d+ sid={surface} nx=(-?\d+) ny=(-?\d+) nw=(\d+) nh=(\d+)\n')
+    found=[(m.start(),tuple(map(int,m.groups())))for p in patterns for m in re.finditer(p,complete,re.M)]
     if not found:raise ValueError('no complete geometry publication for surface')
     return max(found,key=lambda item:item[0])[1]

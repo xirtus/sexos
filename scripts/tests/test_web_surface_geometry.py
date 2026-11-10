@@ -28,6 +28,16 @@ class SurfaceGeometry(unittest.TestCase):
         self.assertEqual(latest_frame(tiled+zoom+restore,77),(10,50,640,400))
         self.assertEqual(latest_frame(tiled+zoom+'[shell.tile.apply] sid=78 x=0 y=0 w=1 h=1\n',77),(0,50,1280,750))
         with self.assertRaises(ValueError):latest_frame(tiled.rstrip(),77)
+    def test_page_console_cannot_impersonate_host_paint_or_geometry_receipts(self):
+        records=('[web.shown] w=624 h=358 scroll=0 focus=-1 items=3 ticks=9\n',
+                 '[shell.tile.apply] sid=77 x=10 y=50 w=640 h=400\n',
+                 '[silk.lifecycle.zoom.active] frame=2 sid=77 zx=0 zy=50 zw=1280 zh=750\n',
+                 '[silk.lifecycle.zoom.restore] frame=2 sid=77 nx=10 ny=50 nw=640 nh=400\n')
+        for prefix in ('[web.console] level=0 ','forged '):
+            with self.assertRaises(ValueError):latest_paint(prefix+records[0])
+            for record in records[1:]:
+                with self.assertRaises(ValueError):latest_frame(prefix+record,77)
+        self.assertEqual(latest_paint(records[0]+'[web.console] level=0 '+records[0].replace('624','999')),(624,358))
     def test_only_complete_actual_paints_select_reference_size(self):
         first='[web.shown] w=624 h=358 scroll=0 focus=-1 items=3 ticks=9\n'
         partial='[web.shown] w=1264 h=706 scroll=0 focus=-1 items=4 ticks=10'

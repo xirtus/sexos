@@ -19,8 +19,7 @@ def full_viewport(guest, root, surface, width=410, height=330):
         palette_select(guest['key'], 'ZoomToggle', palette_commands(root))
         start = len(guest['text']())
         guest['key']('ret', rf'\[shell.window.action\] action=ZoomToggle frame=\d+ sid={surface} ok=1')
-        zoom = rf'\[silk.lifecycle.zoom.active\] frame=\d+ sid={surface} zx=(-?\d+) zy=(-?\d+) zw=(\d+) zh=(\d+)'
-        tile = tuple(map(int, re.findall(zoom, guest['text']()[start:])[-1]))
+        tile=latest_frame(guest['text']()[start:],surface)
         # Publication diagnostics have a finite log budget; the caller checks actual pixels.
         time.sleep(2)
     assert tile[2] >= width + 2*left and tile[3] >= height + top+left, ('browser fixture clipped', tile, width, height)
