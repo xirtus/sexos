@@ -3,6 +3,8 @@
 #[path = "../crates/sex-pdx/src/desktop_look.rs"]
 mod desktop_look;
 use desktop_look::*;
+/// The look is one shared state; tests that change it take turns.
+static LOOK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[test]
 fn night_light_off_keeps_every_pixel() {
@@ -25,10 +27,21 @@ fn night_light_keeps_red_and_warms_more_each_level() {
 
 #[test]
 fn look_takes_only_known_values() {
+    let _turn = LOOK.lock().unwrap();
     assert!(set(0, 0) && wallpaper().is_none() && night_level() == 0);
     assert!(set(2, 3));
     assert_eq!(wallpaper(), Some((WALLPAPERS[2].1, WALLPAPERS[2].2)));
     assert!(!set(WALLPAPERS.len() as u64, 0) && !set(0, NIGHT_LEVELS as u64));
     assert_eq!((wallpaper_index(), night_level()), (2, 3), "a refused look changes nothing");
     assert!(set(0, 0));
+}
+
+#[test]
+fn publisher_sees_each_night_change_once() {
+    let _turn = LOOK.lock().unwrap();
+    assert!(set(0, 0)); take_night_change();
+    assert!(!take_night_change());
+    assert!(set(0, 2));
+    assert!(take_night_change() && !take_night_change());
+    assert!(set(0, 0) && take_night_change());
 }

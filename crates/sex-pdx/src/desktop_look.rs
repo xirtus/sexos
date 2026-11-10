@@ -24,6 +24,7 @@ pub const NIGHT_LEVELS: u8 = 4;
 
 static WALLPAPER: AtomicU8 = AtomicU8::new(0);
 static NIGHT: AtomicU8 = AtomicU8::new(0);
+static PUBLISHED_NIGHT: AtomicU8 = AtomicU8::new(0);
 
 /// Takes a new look; false (and no change) when either value is out of range.
 pub fn set(wallpaper: u64, night: u64) -> bool {
@@ -34,6 +35,12 @@ pub fn set(wallpaper: u64, night: u64) -> bool {
 }
 pub fn wallpaper_index() -> u8 { WALLPAPER.load(Ordering::Relaxed) }
 pub fn night_level() -> u8 { NIGHT.load(Ordering::Relaxed) }
+/// True once after the night light level changes, for the publisher: the
+/// frame on screen was warmed by the old level, so all of it is written again.
+pub fn take_night_change() -> bool {
+    let now = night_level();
+    PUBLISHED_NIGHT.swap(now, Ordering::Relaxed) != now
+}
 
 /// The chosen gradient, or None for the theme's own.
 pub fn wallpaper() -> Option<(u32, u32)> {

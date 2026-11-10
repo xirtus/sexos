@@ -109,12 +109,12 @@ def wiring(source):
     prepared=function(source,'render_prepared');publication=compact(prepared)
     publication_order=['SceneLease::capture(w,h,bar)', 'letscene=lease.view();',
                        'raster_batch(&target,scene,plan)',
-                       'preparation.commit(|pixels|publish_frame(fb,w,h,pixels))',
+                       'preparation.commit(|frame|publish_frame(fb,w,h,frame))',
                        'lettext_projections=scene.text_projections;',
                        'Some(PublishedFrame{plan,present_bits,canon_ss,text_projections})']
     publication_positions=[publication.index(value)for value in publication_order]
     if publication_positions!=sorted(publication_positions):raise ValueError('captured text context/publication flow changed')
-    require(prepared,'if !preparation.commit(|pixels|publish_frame(fb,w,h,pixels)){backup.restore();return None;}','failed CPU publication withholds captured completion')
+    require(prepared,'if !preparation.commit(|frame|publish_frame(fb,w,h,frame)){backup.restore();return None;}','failed CPU publication withholds captured completion')
     require(source,'destination.capture(&SURFACES, &FRAME_GROUPS, &BITMAP_STORES, &TEXT_STAGES, bar,DISPLAY_TOKENS, FOCUSED_SURFACE_ID, frame, w, h)','actual Stage inputs to owned scene')
     finish=function(source,'finish_display_transactions');settlement=compact(finish)
     settlement_order=['ifunsafe{(*core::ptr::addr_of!(RENDER_SCENE)).is_valid()}{return;}',
