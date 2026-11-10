@@ -299,7 +299,7 @@ Spindle/history/observer/Bell/prompt, reserve-exhausted launcher, survivor filen
 and minimize/absent/restored glyph chain. The new 1280 capture passes all 3,456 clock
 pixels; native 2560 1→2→1 publication/applied receipts and ink 2,280/18,616/2,280 pass.
 All guests/builds stopped before the resource-window handoff. Exact new source,
-image hashes and actual native capture are in assets/slim-desktop-integrated 151/.
+image hashes and actual native capture are in assets/slim-desktop-integrated151/.
 This remains a musl/Apple 21 UI-only profile without FFmpeg/libc++, and does not
 relabel the earlier matched 3e/17c performance result as a new 151 benchmark.
 
