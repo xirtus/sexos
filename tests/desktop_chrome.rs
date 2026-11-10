@@ -183,3 +183,18 @@ fn pending_receipt_blocks_legacy_and_incarnation_reset_fences_delayed_old_reply(
   assert!(r.x<=w&&r.y<=h&&r.w<=w-r.x&&r.h<=h-r.y);
  }}
 }
+
+#[test]fn initial_panel_hit_matches_applied_workarea_and_original_signed_mask(){
+ for scale in 1..=3{let m=Metrics::new(scale);
+  let frame=(-20,-20,300,300);
+  for point in [(-1,100),(320,100),(100,-1),(100,200),(100,(28*scale-1)as i32)]{
+   assert!(!m.panel_hit(frame,point,(320,200)),"protected/outside scale{scale} {point:?}");
+  }
+  assert!(m.panel_hit(frame,(0,(28*scale)as i32),(320,200)));
+  assert!(!m.panel_hit(frame,(0,0),(0,200)));
+  assert!(!m.panel_hit(frame,(0,0),(320,0)));
+  assert!(!m.panel_hit(frame,(0,27),(320,27)));
+  assert!(!m.panel_hit((20,100,100,80),(20,100),(320,200))); // transparent corner
+  assert!(m.panel_hit((20,100,100,80),(60,100),(320,200)));
+ }
+}

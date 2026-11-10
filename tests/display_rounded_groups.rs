@@ -32,11 +32,15 @@ fn alpha(s:&Surface,scale:u32,x:usize,y:usize)->u8{
  for scale in 1..=3{for (x,y,w,h)in [(-20,45,120,100),(20,45,120,100),(-80,-30,120,160),(145,145,90,80),(i32::MIN,45,u32::MAX,100),(5,60,7,5),(5,60,0,0)]{
   let mut g=FrameGroups::new();g.set_scale(scale);
   let surfaces=[surface(800,x,y,w,h),surface(801,0,28,180,160)];
+  for point in [(-1,100),(180,100),(20,-1),(20,180),(20,27),(20,(28*scale-1)as i32)]{
+   assert!(!desktop_style::chrome::Metrics::new(scale).panel_hit((x,y,w,h),point,(180,180)),"outside workarea {point:?}");
+  }
   for py in 0..180{let mut row=g.row_winners(&surfaces,800,py,180,180).unwrap();
    for px in 0..180{
     let expected=surfaces.iter().find(|s|alpha(s,scale,px,py)!=0).map(|s|s.surface_id);
     assert_eq!(g.winner(&surfaces,800,px,py,180,180).map(|s|s.surface_id),expected,"s={scale} at{px},{py}");
     assert_eq!(row.selected(px),expected,"row s={scale} at{px},{py}");
+    assert_eq!(desktop_style::chrome::Metrics::new(scale).panel_hit((x,y,w,h),(px as i32,py as i32),(180,180)),expected==Some(800),"hit s={scale} at{px},{py}");
     assert_eq!(g.coverage(&surfaces[0],px,py),alpha(&surfaces[0],scale,px,py));
     let(a,b)=g.row_span(&surfaces[0],py,180,180,true);
     assert_eq!(px>=a&&px<b,alpha(&surfaces[0],scale,px,py)==255);

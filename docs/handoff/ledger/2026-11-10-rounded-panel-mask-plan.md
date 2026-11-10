@@ -154,3 +154,22 @@ legacy overlay oracle. Existing scalar/row/bitmap/damage coverage stays intact.
 The first sweep retained its eight failures: square-pixel and clipped-origin
 expectations needed explicit migration. Its 47 successful cases were not treated
 as acceptance; the updated full sweep and native qualification are separate.
+
+The final signed-origin host sweep passes: 58 actual compositor cases, 22 bitmap
+transaction cases, 3 independent rounded-owner cases, binding guards, 17 current
+and 17 future-catalog bitmap-store cases and all existing compiled negative
+controls. The signed glyph migration exposed a real changed-row damage issue:
+`max(y,0)` could move a clipped-top row's damage below its visible ink. Damage
+now uses the original signed origin too. An independent literal 36..45 row bound
+and a full-frame before/after repaint comparison cover that correction. Separate
+shared geometry validation passes all 12 cases. Initial failures remain retained
+locally; host pixels still do not substitute for native screenshots or timing.
+
+Source review found an initial-hit boundary gap: local corner coverage alone did
+not reject a signed frame extending behind the protected bar or beyond the
+screen. `Metrics::panel_hit` now requires the current applied workarea/screen as
+well as rounded coverage; Shell surface/chrome/light initial selection uses it.
+Captured drag/release routing is untouched. Literal negative/outside/bar-crossing
+controls at all three scales compare this predicate with actual FrameGroups
+selection, and tiny/zero screens fail closed. The shared geometry suite is now
+13 cases; all 3 owner/row controls also pass with this agreement checked.

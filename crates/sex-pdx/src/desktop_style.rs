@@ -216,6 +216,13 @@ pub mod chrome {
         pub const fn new(scale: u32) -> Self { Self { scale: clamp_scale(scale) } }
         pub const fn scale(self) -> u32 { self.scale }
         pub const fn rounded(self,width:u32,height:u32)->Rounded{Rounded::new(width,height,self.scale)}
+        /// Initial pointer selection, clipped to the same applied screen and
+        /// protected bar as rendering. Captured drag/release uses its owner.
+        pub fn panel_hit(self,frame:(i32,i32,u32,u32),point:(i32,i32),screen:(u32,u32))->bool{
+            let(px,py)=point;
+            if px<0||py<0||!self.workarea(screen.0,screen.1).contains(px as u32,py as u32){return false;}
+            self.rounded(frame.2,frame.3).coverage(px as i64-frame.0 as i64,py as i64-frame.1 as i64)!=0
+        }
         pub const fn px(self, logical: u32) -> u32 { logical.saturating_mul(self.scale) }
         pub const fn bar(self) -> u32 { self.px(BAR) }
         pub const fn title(self) -> u32 { self.px(TITLE) }
