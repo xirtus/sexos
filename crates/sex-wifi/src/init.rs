@@ -86,6 +86,8 @@ pub struct Features {
     pub scan_config_version: Option<u8>,
     pub scan_request_version: Option<u8>,
     pub mcc_answer_version: Option<u8>,
+    /// Channels the firmware takes in one scan request.
+    pub scan_channels: u32,
 }
 impl Features {
     pub fn of(fw: &Firmware<'_>) -> Self {
@@ -94,6 +96,7 @@ impl Features {
             scan_config_version: fw.command_version(h::LONG_GROUP, h::SCAN_CFG_CMD).map(|v| v.version),
             scan_request_version: fw.command_version(h::LONG_GROUP, h::SCAN_REQ_UMAC).map(|v| v.version),
             mcc_answer_version: fw.command_version(h::LONG_GROUP, h::MCC_UPDATE_CMD).map(|v| v.notification),
+            scan_channels: fw.scan_channels,
         }
     }
     pub fn capa(&self, bit: usize) -> bool { self.capa.get(bit / 32).is_some_and(|w| w & (1 << (bit % 32)) != 0) }
@@ -124,6 +127,9 @@ pub struct Init {
     pub nvm: Option<Nvm>,
     pub mac: [u8; 6],
     pub regulatory: Option<Regulatory>,
+    /// Flags of the 2.4/5 GHz channels (`scan::NVM_CHANNELS` order): from the NVM,
+    /// then as the regulatory answer (MCC) left them.
+    pub channel_flags: [u32; 51],
     pub pnvm_loaded: bool,
     pub init_complete: bool,
     /// Commands answered so far.
@@ -181,11 +187,25 @@ impl Init {
                 }
             }
         }
-        Self { step, chip, features, cmdq: CommandQueue::new(chip.family), pnvm, nvm: None, mac: [0; 6], regulatory: None,
+        Self { step, chip, features, cmdq: CommandQueue::new(chip.family), pnvm, nvm: None, mac: [0; 6], regulatory: None, channel_flags: [0; 51],
             pnvm_loaded: false, init_complete: false, answered: 0, other: 0, last_error: None, since: now_us, sent: false, locked: false }
     }
 
     pub fn done(&self) -> bool { matches!(self.step, Step::Ready | Step::Failed(_)) }
+
+    /// A scan of every channel the NVM and regulatory domain allow (stage W4).
+    pub fn scan(&self, now_us: u64) -> crate::scan::Scan {
+        use crate::scan;
+        let five = self.nvm.is_some_and(|n| n.sku_flags & SKU_5GHZ != 0);
+        let mut list = [scan::Channel::default(); scan::NVM_CHANNELS.len()];
+        let n = scan::channels(&self.channel_flags, five, &mut list);
+        let options = scan::Options {
+            mac: self.mac, ext_channel: self.features.api(u::API_SCAN_EXT_CHAN_VER),
+            ds_param: self.features.capa(u::CAPA_DS_PARAM_SET_IE_SUPPORT), has_5ghz: five,
+            max_channels: self.features.scan_channels as usize,
+        };
+        scan::Scan::new(self.chip.family, &list[..n], &options, now_us)
+    }
     fn go(&mut self, step: Step, now: u64) { self.step = step; self.since = now; self.sent = false; }
     fn fail(&mut self, f: Failure) { self.step = Step::Failed(f); }
 
@@ -375,6 +395,9 @@ impl Init {
                 let v4 = self.features.api(u::API_REGULATORY_NVM_INFO);
                 let want = if v4 { NVM_INFO_V4 } else { NVM_INFO_V3 };
                 if len != want { return Err(Failure::BadAnswer { group: h::REGULATORY_AND_NVM_GROUP, opcode: h::NVM_GET_INFO, len }); }
+                for (i, f) in self.channel_flags.iter_mut().enumerate() {
+                    *f = if v4 { word(d, 28 + i * 4) } else { u16::from_le_bytes([d[24 + i * 2], d[25 + i * 2]]) as u32 };
+                }
                 let channels = if v4 {
                     (0..110).filter(|i| word(d, 28 + i * 4) & 1 != 0).count()
                 } else {
@@ -389,6 +412,13 @@ impl Init {
             Step::Mcc => {
                 if len < 20 || len != 20 + 4 * word(d, 16) as usize {
                     return Err(Failure::BadAnswer { group: h::LONG_GROUP, opcode: h::MCC_UPDATE_CMD, len });
+                }
+                let n = word(d, 16) as usize;
+                if n > 0 {
+                    // The answer lists the channel flags in NVM order (iwx_init_channel_map).
+                    for (i, f) in self.channel_flags.iter_mut().enumerate() {
+                        *f = if i < n && 20 + i * 4 + 4 <= d.len() { word(d, 20 + i * 4) } else { 0 };
+                    }
                 }
                 let mcc = u16::from_le_bytes([d[4], d[5]]);
                 self.regulatory = Some(Regulatory { status: word(d, 0), mcc: [(mcc >> 8) as u8, mcc as u8], source: d[12], channels: word(d, 16) });

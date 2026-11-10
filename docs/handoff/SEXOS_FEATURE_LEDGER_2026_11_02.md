@@ -3371,6 +3371,13 @@ Hyprland/river/KDE-style window management, stage E1 of the parity report (`docs
 - **Records**: `[shell.wm.action] action=… done=… scene=a->b focus=a->b layout=…` and `[shell.wm.layout] scene=… layout=… windows=… master_pct=… gap_in=… gap_out=…`.
 - **Gate** `scripts/window_manager_gate.py` boots QEMU and drives every chord over real PS/2 key events, saving screens.
 
+## Desktop: launcher search and the focused window title in the panel (2026-11-10)
+
+Stage E2 of the parity report, section 6.
+- **Type to search.** With the launcher open (Super tap), letters, digits and space filter and rank its rows by name and by search words (`terminal` finds Spindle, `web` finds Browser, `reboot` finds Restart); Backspace edits, Esc clears a search before it closes the launcher, the arrows choose, Enter opens the best match and does nothing when nothing matches. J/K still choose rows until a search begins. Pure scoring in `servers/silk-shell/src/launcher_search.rs`, host tests `tests/launcher_search.rs` (in `service_custody_host_gate.sh`), QEMU gate `scripts/launcher_search_gate.py`. Record: `[shell.launcher.search] query=… matches=… top=… changed=…`.
+- **Panel title.** sexdisplay draws the focused window's title in the SilkBar strip between the focus dot and the workspace dots (`panel_title_fg_at`), with the same names as the title bars (`surface_title`). A program renaming its focused window redraws the strip.
+- No ABI change.
+
 ## Real PCs: wired network, HD Audio and SATA (2026-11-09)
 
 Workstream D of the parity report. Handoff and bare-metal checklist: `docs/handoff/REAL_PC_DRIVERS_2026_11_09.md`.
@@ -3617,6 +3624,18 @@ Plan: `docs/handoff/NVIDIA_GPU_PLAN_2026_11_09.md` (stages N1-N6).
   `quil_autosave_gate.boot` now deletes the old serial log first: QEMU's `-serial file:`
   does not truncate, and a reused output directory let an older log show through.
 
+## Boot without DMA protection (2026-11-10)
+
+- **What runs now.** The boot menu has "SexOS without DMA protection": the same system
+  with the IOMMU (VT-d / AMD-Vi) left off, a way out if a machine's firmware tables or
+  IOMMU misbehave during bare-metal testing. The default entry stays protected.
+- **Design.** The entry passes `CMDLINE=iommu=off`; the kernel reads its own command
+  line through Limine's kernel-file request and `iommu::init_boot` stops before touching
+  any unit. Logged as `[iommu.boot_options]` and `[iommu.absent] reason=boot_option_iommu_off`.
+- **ABI.** None.
+- **Gates.** `scripts/tests/test_limine_iommu_entry.py` (the entry boots exactly the main
+  entry's modules); checked in QEMU with both IOMMU models by booting that entry.
+
 ## Programs play sound at any rate (2026-11-10)
 - Bell converts each program's sound to its 48 kHz mix: a program names its rate with
   `Sound::set_rate(hz)` (8 to 192 kHz; ring header word `RATE_HZ`, 0 means 48 kHz) and Bell
@@ -3706,6 +3725,18 @@ Follow-up to the boot log and crash records work (`BOOT_LOG_AND_CRASH_RECORDS_20
   Real proof is the x17 R1 boot log.
 - **ABI / kernel:** none.
 
+## Intel Wi-Fi, stage W4: finding networks (2026-11-10)
+
+- **Scan:** `sex_wifi::scan` sends one passive UMAC scan of every channel the NVM and
+  regulatory domain allow, reads beacons and probe responses from RX MPDU notifications,
+  and keeps each network once at its strongest signal.
+- **Boot log:** sexnet scans right after `[wifi.ready]` and prints `[wifi.network]
+  ssid=… bssid=… channel=… rssi=… security=…` per network, then `[wifi.scan.done]`.
+- **Evidence:** `scripts/wifi_host_gate.sh` (30 driver + 10 vector tests): the request
+  bytes, MPDU parsing on both families, a full scan on the firmware model. Real proof is
+  the x17 R1 boot log.
+- **ABI / kernel:** none. Still to come: the list in the status bar and Spindle (W4b).
+
 ## Shell keeps windows, workspaces and layouts across its own restart (2026-11-10)
 
 - **What:** after a Shell crash, every window comes back where it was, on its workspace,
@@ -3719,6 +3750,17 @@ Follow-up to the boot log and crash records work (`BOOT_LOG_AND_CRASH_RECORDS_20
 - **Evidence:** `scripts/crash_screen_gate.py` start 3 switches the layout to dwindle,
   crashes Shell, and checks 4 windows restored, the dwindle layout, and 96% identical
   pixels before and after.
+
+## Intel Wi-Fi, stage W4b: networks in Spindle (2026-11-10)
+
+- **Spindle `wifi`:** the chip's state and every network the last scan heard (SSID,
+  signal, channel, security, BSSID); `wifi scan` starts a fresh scan.
+- **Protocol:** `sex_pdx::wifi_status` (op `0x2E8`, sexnet answers one word per request;
+  a network in up to seven words). Desktop only: programs are refused.
+- **Evidence:** host tests of the words in `scripts/wifi_host_gate.sh`; real proof is
+  `wifi` on the x17 R1.
+- **ABI:** new PDX op `0x2E8` and module `sex_pdx::wifi_status`; `abi_version_hash`
+  recomputed (sex-pdx lib.rs). No kernel change. Next: status bar indicator, then W5.
 
 ## Browser: web APIs for players and frameworks, YouTube stage Y6 (2026-11-10)
 
@@ -3744,7 +3786,11 @@ Follow-up to the boot log and crash records work (`BOOT_LOG_AND_CRASH_RECORDS_20
   `document.currentScript` (the browser says which `<script>` runs),
   `<style>.sheet.insertRule`, `window.onerror`, fullscreen and picture-in-picture
   refusing, `getVideoPlaybackQuality`.
-- **Evidence:** `cargo test -p sex-js --test dom` (36 tests, 7 new);
+- **Scripts a page inserts run** (Y8's first step): a `createElement('script')` runs when
+  it joins the document: inline text at once, `src` through `fetch` then `load`/`error`,
+  modules through `import()`; markup scripts (innerHTML) do not. A `fetched` dispatch
+  runs with the load budget (120 s), so a player bundle that arrives that way is not cut off.
+- **Evidence:** `cargo test -p sex-js --test dom` (38 tests, 9 new);
   `scripts/program_web_apis_gate.py` (page built from these APIs, pixel-matched to the
   host render, page reports its own checks).
 - **ABI / kernel:** none.

@@ -1233,6 +1233,7 @@ pub mod desktop_style;
 pub mod pixel_region;
 pub mod sound_ring;
 pub mod sound_mixer;
+pub mod wifi_status;
 pub mod document_view;
 
 pub mod display_boot;

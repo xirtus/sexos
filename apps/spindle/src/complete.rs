@@ -117,6 +117,7 @@ pub const COMMANDS: &[&[u8]] = &[
     b"url-status",
     b"volume",
     b"web",
+    b"wifi",
     b"window-keys",
     b"windows",
     b"winreset",

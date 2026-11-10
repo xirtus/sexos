@@ -510,6 +510,14 @@ fn find_units(firmware: &Firmware, hhdm: u64) -> Option<(Vec<Unit>, u8, u32, boo
 
 /// BOOT, after every lease and DMA pool exists and before the seal.
 pub fn init_boot() {
+    // A way out on a machine whose firmware tables or IOMMU misbehave: the
+    // "without DMA protection" boot entry. Drivers then keep their pools.
+    let cmdline = boot_cmdline();
+    if !cmdline.is_empty() { serial_println!("[iommu.boot_options] cmdline=\"{}\"", cmdline); }
+    if boot_option("iommu=off") {
+        serial_println!("[iommu.absent] reason=boot_option_iommu_off translation=off dma=boot_pools");
+        return;
+    }
     let firmware = match Firmware::find() {
         Ok(f) => f,
         Err(reason) => { serial_println!("[iommu.absent] reason={} translation=off dma=boot_pools", reason); return; }
@@ -656,6 +664,12 @@ pub fn init_boot() {
     *STATE.lock() = Some(state);
     if enabled > 0 { crate::iommu_selftest::run(); }
 }
+
+fn boot_cmdline() -> &'static str {
+    crate::KERNEL_FILE_REQUEST.response().map(|r| r.executable_file().cmdline()).unwrap_or("")
+}
+
+fn boot_option(word: &str) -> bool { boot_cmdline().split_ascii_whitespace().any(|w| w == word) }
 
 /// From the timer with IF masked: log and attribute faults, rate-limited.
 pub fn poll() {
