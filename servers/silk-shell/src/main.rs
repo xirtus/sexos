@@ -10538,6 +10538,12 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
             sex_pdx::serial_record!("[shell.text.zoom] sid={} step={} status={:#x}",sid,step,status);
             true
         }
+        desktop_keys::Action::DisplayScale(step)=>{
+            // Display owns the scale: chrome, text and cursor follow it.
+            let (status,_)=pdx_call(SLOT_DISPLAY,sex_pdx::desktop_style::OP_DISPLAY_SCALE,step as i64 as u64,0,0);
+            sex_pdx::serial_record!("[shell.display.scale] step={} status={:#x}",step,status);
+            true
+        }
     }
 }
 

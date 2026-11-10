@@ -102,7 +102,7 @@ def _date_render_shape(display):
  if batched:
   writer=compact(_function(display,'render_prepared'));batch=compact(_function(display,'raster_batch'))
   capture='letSome(lease)=SceneLease::capture(w,h,bar)'
-  commit='preparation.commit(|pixels|publish_frame(fb,w,h,pixels))'
+  commit='preparation.commit(|frame|publish_frame(fb,w,h,frame))'
   drawn='civil_clock_drawn(&scene.bar,w,h,plan.label());'
   assert writer.count(capture)==1 and writer.count('letscene=lease.view();')==1,'one owned clock scene per batch'
   assert writer.index(capture)<writer.index('raster_batch(&target,scene,plan)')<writer.index(commit)<writer.index(drawn),'batch clock custody/publication order'
@@ -111,7 +111,7 @@ def _date_render_shape(display):
   assert batch.count('raster_full(target,scene)')==1 and batch.count('raster_strip(target,scene)')==1,'clock passes do not share the batch scene'
  elif prepared:
   writer=compact(_function(display,'render_prepared'))
-  commit='preparation.commit(|pixels|publish_frame(fb,w,h,pixels))'
+  commit='preparation.commit(|frame|publish_frame(fb,w,h,frame))'
   drawn='civil_clock_drawn(&captured_bar,w,h,paint.label());'
   assert writer.count(commit)==1 and writer.count(drawn)==1 and writer.index(commit)<writer.index(drawn),'clock receipt precedes completed CPU publication'
   assert 'if!'+commit+'{backup.restore();returnfalse;}'in writer,'failed publication releases a clock receipt'

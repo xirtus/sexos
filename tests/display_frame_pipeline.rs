@@ -17,7 +17,7 @@ const HIGH_HALF_BASE:u64=0;
 const W:usize=19;const H:usize=53;
 static LOCK:std::sync::Mutex<()>=std::sync::Mutex::new(());
 static mut FRAME_OUTPUT:Option<frame_output::Store>=None;
-static mut FB_PTR:u64=0;static mut FB_W:u32=0;static mut FB_H:u32=0;
+static mut FB_PTR:u64=0;static mut FB_W:u32=0;static mut FB_H:u32=0;static mut FB_PITCH:u32=W as u32;static mut PUBLISHED_PIXELS:u64=0;static mut LAST_WRITTEN:u64=0;
 static mut APP_PRESENT_BITS:u64=0;
 static RENDER_FRAME_COUNTER:AtomicU64=AtomicU64::new(0);
 static mut EVENTS:Vec<String>=Vec::new();
@@ -76,7 +76,7 @@ fn device()->Vec<u32>{unsafe{core::slice::from_raw_parts(FB_PTR as *const u32,W*
 fn repaint_begin()->u64{event("begin");41}
 // Observer calls the extracted actual CPU-copy function unchanged; counting
 // callback entries/success does not substitute for checking complete device bytes.
-fn publish_frame(fb:*mut u32,w:usize,h:usize,pixels:&[u32])->bool{unsafe{COPY_ATTEMPTS+=1;}unsafe{if MODE==5{FB_W+=1;}}let ok=actual_publish_frame(fb,w,h,pixels);if ok{unsafe{PUBLICATIONS+=1;}event("cpu-copy");}ok}
+fn publish_frame(fb:*mut u32,w:usize,h:usize,frame:frame_output::Publication<'_>)->bool{unsafe{COPY_ATTEMPTS+=1;}unsafe{if MODE==5{FB_W+=1;}}let ok=actual_publish_frame(fb,w,h,frame);if ok{unsafe{PUBLICATIONS+=1;}event("cpu-copy");}ok}
 fn completed_effect(s:&str){unsafe{
  assert_eq!((COPY_ATTEMPTS,PUBLICATIONS),(1,1));assert_eq!(CURSORS,1,"effects before final raster overlay");assert_eq!(CAPTURES,1,"exactly one actual Scene capture");
  assert!(RENDER_SCENE.is_valid(),"lease must remain live through publication effects");

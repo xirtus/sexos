@@ -813,13 +813,17 @@ pub fn init() {
 
         if let Some(fb_res) = crate::FB_REQUEST.response() {
             if let Some(fb) = fb_res.framebuffers().iter().next() {
-                let layout = sex_pdx::display_frames::Layout::new(fb.width, fb.height, fb.pitch)
+                // Display's private frames are packed; the scanout may pad its rows.
+                assert!(fb.pitch >= fb.width * 4 && fb.pitch % 4 == 0, "BOOT_DISPLAY_FRAME_PITCH");
+                let layout = sex_pdx::display_frames::Layout::new(fb.width, fb.height, fb.width * 4)
                     .expect("BOOT_DISPLAY_FRAME_GEOMETRY");
                 assert_eq!(fb.bpp, 32, "BOOT_DISPLAY_FRAME_FORMAT");
                 let fb_addr = fb.address() as u64;
-                let fb_size = layout.frame_bytes();
+                let fb_size = fb.pitch * fb.height;
+                let physical = sex_pdx::display_boot::Physical::from_edid(fb.edid(), fb.width as u32, fb.height as u32);
+                report_display_modes(fb_res, fb.width, fb.height, physical);
                 crate::boot_memory::init_display_frames(sexdisp_id, layout);
-                crate::boot_display::init(crate::boot_display_state::Info{display:sexdisp_id,shell:silkshell_id,input:sexinput_id,address:fb_addr,width:fb.width as u32,height:fb.height as u32,pitch:fb.pitch as u32});
+                crate::boot_display::init(crate::boot_display_state::Info{display:sexdisp_id,shell:silkshell_id,input:sexinput_id,address:fb_addr,width:fb.width as u32,height:fb.height as u32,pitch:fb.pitch as u32,physical:physical.pack()});
 
                 // Remap FB pages USER_ACCESSIBLE — Ring-3 sexdisplay can't write without this.
                 {
@@ -1186,4 +1190,14 @@ pub unsafe fn jump_to_userland(pd_id: u32, entry: u64, pkru: u32, pku_key: u8) -
         target_pkru = in(reg) pkru,
         options(noreturn)
     );
+}
+
+/// Log the mode the firmware set, the monitor's size and the scale chosen, and
+/// the other modes on offer (the boot menu's native entry takes the monitor's
+/// own preferred mode).
+fn report_display_modes(fb_res:&limine::request::FramebufferResponse,width:u64,height:u64,physical:sex_pdx::display_boot::Physical){
+    let modes=fb_res.framebuffers_rev1().and_then(|f|f.first().map(|fb|fb.modes())).unwrap_or(&[]);
+    let largest=modes.iter().filter(|m|m.bpp==32).map(|m|(m.width,m.height)).max_by_key(|&(w,h)|w*h).unwrap_or((width,height));
+    serial_println!("[display.mode] width={} height={} modes={} largest={}x{} width_mm={} height_mm={} scale={}",
+        width,height,modes.len(),largest.0,largest.1,physical.width_mm,physical.height_mm,physical.scale);
 }

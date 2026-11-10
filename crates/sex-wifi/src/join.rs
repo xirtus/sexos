@@ -76,6 +76,8 @@ pub struct Target {
     pub dtim_period: u8,
     pub basic_cck: u8,
     pub basic_ofdm: u8,
+    /// All the AP's legacy rates (`Bss::rates`).
+    pub rates: u16,
     pub short_slot: bool,
     pub short_preamble: bool,
 }
@@ -84,7 +86,7 @@ impl Target {
         Self {
             bssid: bss.bssid, channel: if bss.channel != 0 { bss.channel } else { heard_on },
             beacon_interval: bss.beacon_interval, dtim_period: bss.dtim_period,
-            basic_cck: bss.basic_cck, basic_ofdm: bss.basic_ofdm,
+            basic_cck: bss.basic_cck, basic_ofdm: bss.basic_ofdm, rates: bss.rates,
             short_slot: bss.capability & 0x0400 != 0, short_preamble: bss.capability & 0x0020 != 0,
         }
     }

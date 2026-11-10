@@ -142,6 +142,8 @@ PYWORKSPACE
 WORKSPACE_REFRESH_SOURCE="$TEST_DIR/workspace-refresh.rs" rustc --edition=2021 --test tests/workspace_refresh.rs -o "$TEST_DIR/workspace-refresh"
 "$TEST_DIR/workspace-refresh"
 rustc --edition=2021 --test tests/boot_display.rs -o "$TEST_DIR/boot-display"
+rustc --edition=2021 --test tests/display_boot_scale.rs -o "$TEST_DIR/display-boot-scale"
+"$TEST_DIR/display-boot-scale"
 "$TEST_DIR/boot-display"
 python3 - "$TEST_DIR/absolute.rs" <<'PYABS'
 import re,sys

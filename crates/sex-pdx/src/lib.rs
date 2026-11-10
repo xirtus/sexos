@@ -619,6 +619,17 @@ fn clock_registers(slot:u64,kind:u64)->[u64;5]{
 pub fn clock_info(slot:u64)->Result<clock_source::Info,u64>{clock_source::Info::decode(clock_registers(slot,clock_source::INFO))}
 pub fn clock_snapshot(slot:u64)->Result<clock_source::Snapshot,u64>{clock_source::Snapshot::decode(clock_registers(slot,clock_source::READ))}
 
+/// Civil time, for any task: milliseconds since the Unix epoch (UTC), from the
+/// kernel's CMOS reading carried forward by its tick. No grant; see
+/// [`clock_source::civil`].
+pub fn civil_time_ms()->Result<u64,u64>{
+    let(status,ms):(u64,u64);
+    unsafe{core::arch::asm!("syscall",inlateout("rax")clock_source::civil::SYS=>status,
+        inlateout("rdi")0u64=>_,inlateout("rsi")0u64=>ms,
+        out("rcx")_,out("r11")_,options(nostack));}
+    if status==0{Ok(ms)}else{Err(status)}
+}
+
 /// Inspect only this exact subject's held immutable BOOT trust-policy source.
 pub fn trust_info(slot:u64)->Result<trust_source::Info,u64>{
     let(status,a,b,c,d):(u64,u64,u64,u64,u64);
