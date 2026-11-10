@@ -1,6 +1,6 @@
 use crate::memory::manager::GlobalVas;
 use x86_64::{VirtAddr, structures::paging::PageTableFlags};
-use crate::serial_println;
+use crate::{serial_println, boot_trace};
 
 /// Minimal ELF64 Header structure.
 #[repr(C)]
@@ -113,7 +113,7 @@ pub fn load_elf_for_pd(elf_data: &[u8], vas: &mut GlobalVas, pku_key: u8, load_b
     }
 
     let min_vaddr = load_bias(elf_data)?;
-    serial_println!(
+    boot_trace!(
         "ELF: Valid header. Entry point: {:#x} min_vaddr={:#x}",
         header.entry,
         min_vaddr
@@ -134,7 +134,7 @@ pub fn load_elf_for_pd(elf_data: &[u8], vas: &mut GlobalVas, pku_key: u8, load_b
         if ph.p_type == PT_LOAD {
             let relocated = ph.p_vaddr.saturating_sub(min_vaddr);
             let segment_vaddr = load_base + relocated;
-            serial_println!("ELF: Loading segment: vaddr={:#x}, memsz={:#x} (Key: {})", 
+            boot_trace!("ELF: Loading segment: vaddr={:#x}, memsz={:#x} (Key: {})",
                 segment_vaddr.as_u64(), ph.p_memsz, pku_key);
 
             // Stage-1 mapping for kernel copy path: supervisor writable.
@@ -151,7 +151,7 @@ pub fn load_elf_for_pd(elf_data: &[u8], vas: &mut GlobalVas, pku_key: u8, load_b
                 final_flags |= PageTableFlags::NO_EXECUTE;
             }
             let page_count = (ph.p_memsz + 4095) / 4096;
-            serial_println!(
+            boot_trace!(
                 "ELF: PT_LOAD idx={} vstart={:#x} vend={:#x} filesz={:#x} memsz={:#x} flags=R{}W{}X{} pages={}",
                 i,
                 segment_vaddr.as_u64(),
@@ -163,28 +163,28 @@ pub fn load_elf_for_pd(elf_data: &[u8], vas: &mut GlobalVas, pku_key: u8, load_b
                 if (ph.p_flags & PF_X) != 0 { "+" } else { "-" },
                 page_count
             );
-            serial_println!(
+            boot_trace!(
                 "loader.map relocated old_va={:#x} -> new_va={:#x} flags={:?}",
                 ph.p_vaddr,
                 segment_vaddr.as_u64(),
                 final_flags
             );
-            
-            serial_println!("   → Mapping range...");
+
+            boot_trace!("   → Mapping range...");
             vas.map_pku_range(segment_vaddr, ph.p_memsz, map_flags, pku_key)?;
-            serial_println!("   → Mapping complete. Copying data to {:#x}...", segment_vaddr.as_u64());
+            boot_trace!("   → Mapping complete. Copying data to {:#x}...", segment_vaddr.as_u64());
 
             let dest = segment_vaddr.as_mut_ptr::<u8>();
             let src_offset = ph.p_offset as usize;
             let src = &elf_data[src_offset..src_offset + ph.p_filesz as usize];
-            
+
             unsafe {
                 core::ptr::copy_nonoverlapping(src.as_ptr(), dest, ph.p_filesz as usize);
-                serial_println!("   → Copy complete.");
+                boot_trace!("   → Copy complete.");
                 if ph.p_memsz > ph.p_filesz {
-                    serial_println!("   → Zeroing BSS...");
+                    boot_trace!("   → Zeroing BSS...");
                     core::ptr::write_bytes(dest.add(ph.p_filesz as usize), 0, (ph.p_memsz - ph.p_filesz) as usize);
-                    serial_println!("   → BSS zeroed.");
+                    boot_trace!("   → BSS zeroed.");
                 }
             }
 
@@ -202,7 +202,7 @@ pub fn load_elf_for_pd(elf_data: &[u8], vas: &mut GlobalVas, pku_key: u8, load_b
                             .flush();
                     }
                 }
-                serial_println!("   → Finalized segment flags={:?}", final_flags);
+                boot_trace!("   → Finalized segment flags={:?}", final_flags);
             }
 
             if segment_vaddr.as_u64() <= 0x4000_0000
@@ -210,7 +210,7 @@ pub fn load_elf_for_pd(elf_data: &[u8], vas: &mut GlobalVas, pku_key: u8, load_b
             {
                 match crate::memory::manager::read_pte_flags(VirtAddr::new(0x4000_0000)) {
                     Ok(pte) => {
-                        serial_println!("ELF: final PTE @0x40000000 = {:#x}", pte);
+                        boot_trace!("ELF: final PTE @0x40000000 = {:#x}", pte);
                     }
                     Err(e) => {
                         serial_println!("ELF: final PTE @0x40000000 unavailable: {}", e);
@@ -319,7 +319,7 @@ pub fn load_elf_for_pd(elf_data: &[u8], vas: &mut GlobalVas, pku_key: u8, load_b
                             applied += 1;
                         }
                     }
-                    serial_println!("ELF: applied {} R_X86_64_RELATIVE relocations", applied);
+                    boot_trace!("ELF: applied {} R_X86_64_RELATIVE relocations", applied);
                 } else {
                     serial_println!("ELF: R_X86_64_RELATIVE table not in LOAD segment, skipping");
                 }
