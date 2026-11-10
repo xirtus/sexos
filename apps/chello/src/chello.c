@@ -26,8 +26,7 @@ static void check(const char *name, int ok) {
 }
 
 static int cmp(const void *a, const void *b) { return *(const int *)a - *(const int *)b; }
-static int at_exit_ran;
-static void bye(void) { at_exit_ran = 1; fprintf(stderr, "[chello.atexit]\n"); }
+static void bye(void) { fprintf(stderr, "[chello.atexit]\n"); }
 
 int main(int argc, char **argv) {
     printf("Hello from C on SexOS.\n");

@@ -7,6 +7,14 @@ pub const ERR_CAP_INVALID:u64=u64::MAX-3;
 fn bar_height()->usize{28}
 #[path="../crates/sex-pdx/src/memory_region.rs"]pub mod memory_region;
 pub use memory_region::MemoryRegionInfo;
+// This compositor fixture grants no capture authority. Compile/run the real
+// capture observer inactive; active custody has its dedicated production gate.
+#[path="../crates/sex-pdx/src/screen_capture.rs"]pub mod screen_capture;
+#[path="../servers/sexdisplay/src/screen_capture.rs"]mod capture_server;
+static mut SCREEN_CAPTURE:capture_server::Server=capture_server::Server::new();
+#[derive(Clone,Copy)]pub struct PdxMessage{pub type_id:u64,pub arg0:u64,pub arg1:u64,pub arg2:u64,pub caller_pd:u32,pub caller_task:u32}
+pub fn screen_capture_bank(_:bool)->Result<screen_capture::Bank,u64>{Err(ERR_CAP_INVALID)}
+pub fn get_ticks()->u64{0}
 #[path="../crates/sex-pdx/src/display_frames.rs"]pub mod display_frames;
 #[path="../servers/sexdisplay/src/frame_output.rs"]mod frame_output;
 #[path="../servers/sexdisplay/src/paint_batch.rs"]mod paint_batch;

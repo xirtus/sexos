@@ -305,6 +305,12 @@ fn paired_at(first_id: u32, second_id: u32, first_slot: u64, second_slot: u64,
         dma_base: None, peer_pd: Some(first.id) });
 }
 
+/// One bounded Display-write/first-Spindle-read screenshot bank; BOOT only.
+pub fn init_screen_capture(display:u32){
+    use sex_pdx::screen_capture as c;
+    if DOMAIN_REGISTRY.get(c::CLIENT).is_some(){paired_at(display,c::CLIENT,c::SLOT,c::SLOT,c::REGION_ID,c::BYTES as u64,false);}
+}
+
 /// Immutable Display-only frame storage, reserved at geometry-known genesis.
 /// One buddy reservation contains two page-aligned, disjoint frame spans.
 /// This is PD-held memory authority; tasks within the PD share its access.

@@ -154,6 +154,8 @@ use surface_lifecycle::{Surface, MAX_SURFACES, TEXT_BUF_CAP, TEXT_MAX_ROWS, TEXT
 static mut SURFACES: [Surface; MAX_SURFACES] = [SURFACE_EMPTY; MAX_SURFACES];
 mod scene;
 mod frame_output;
+mod screen_capture;
+static mut SCREEN_CAPTURE:screen_capture::Server=screen_capture::Server::new();
 mod paint_batch;
 static mut FRAME_OUTPUT: Option<frame_output::Store> = None;
 // One Display-owned scratch scene. Intake cannot run concurrently with a
@@ -2022,6 +2024,15 @@ fn render_prepared(fb:*mut u32,w:usize,h:usize,bar:&SilkBar,requested:Plan)->Opt
     let prepared={let target=preparation.target();raster_batch(&target,scene,plan)};
     if !prepared{drop(preparation);backup.restore();return None;}
     if !preparation.commit(|frame|publish_frame(fb,w,h,frame)){backup.restore();return None;}
+    if let Some(front)=store.front_pixels(){unsafe{
+        if SCREEN_CAPTURE.published(store.generation(),w,h,front,sex_pdx::desktop_look::night_level()){
+            let frame=app_catalog::by_target(sex_pdx::screen_capture::CLIENT).map(|row|row.frame());
+            if let Some(surface)=scene.surfaces.iter().find(|s|s.active&&Some(s.surface_id)==frame){
+                sex_pdx::serial_record!("[display.capture.reference] generation={} frame={} x={} y={} w={} h={} bar_h={} source=published_scene",
+                    store.generation(),surface.surface_id,surface.x,surface.y,surface.w,surface.h,BAR_BG_H);
+            }
+        }
+    }}
     let present_bits=if settle_only{0}else{unsafe{APP_PRESENT_BITS}};
     if !settle_only{
         record_cursor_presented();
@@ -3436,6 +3447,7 @@ fn commit_published_text(published:&PublishedFrame)->usize{
 fn finish_display_transactions(lifecycle: &mut surface_lifecycle::Lifecycle, published: Option<&PublishedFrame>) {
     // A retained scene cannot be retired or release cleanup custody.
     if unsafe{(*core::ptr::addr_of!(RENDER_SCENE)).is_valid()}{return;}
+    unsafe{SCREEN_CAPTURE.reconcile(lifecycle,sex_pdx::get_ticks());}
     if let Some(published)=published{
         // This receipt belongs to the just-finished Main drain. No intake runs
         // between its scene capture, CPU publication and completion handling.
@@ -3487,7 +3499,7 @@ pub extern "C" fn _start() -> ! {
         .expect("DISPLAY_FRAME_LAYOUT");
     let frame_backing=sex_pdx::display_frame_backing(frame_layout).expect("DISPLAY_FRAME_HELD_BACKING");
     unsafe{assert!(FRAME_OUTPUT.is_none(),"DISPLAY_FRAME_ALREADY_INITIALIZED");
-        FRAME_OUTPUT=Some(frame_output::Store::new(frame_backing));}
+        FRAME_OUTPUT=Some(frame_output::Store::new(frame_backing));SCREEN_CAPTURE.attach(match sex_pdx::crash_log::call(sex_pdx::crash_log::OP_RESTARTS,0,0){(sex_pdx::crash_log::OK,n,_)=>n.checked_add(1).unwrap_or(0),_=>0});}
     sex_pdx::serial_record!("[display.frames.held] slot={} region={} width={} height={} frame_bytes={} span_bytes={} total_bytes={} buffers=2 private=1 before_render=1",
         sex_pdx::display_frames::SLOT,sex_pdx::display_frames::REGION_ID,frame_layout.width(),frame_layout.height(),
         frame_layout.frame_bytes(),frame_layout.span_bytes(),frame_layout.total_bytes());
@@ -3940,6 +3952,11 @@ pub extern "C" fn _start() -> ! {
                     0x276|0x277|0x278|0x27A|0x27B|0x27C|0x27D|0x28C=>32,0xFA|0xFB=>64,0xFD=>128,
                     silkbar_model::OP_SILKBAR_UPDATE=>256,_=>512,
                 };
+            }
+
+            if msg.type_id==sex_pdx::screen_capture::OP{
+                if unsafe{SCREEN_CAPTURE.request(msg,&lifecycle,sex_pdx::get_ticks(),FB_W as usize,FB_H as usize)}{pending_paint.request_full();}
+                continue;
             }
 
             // A hint cannot authorize cleanup: capability status above is the authority.
@@ -4911,6 +4928,7 @@ pub extern "C" fn _start() -> ! {
             }
         }
         finish_display_transactions(&mut lifecycle,published.as_ref());
+        unsafe{SCREEN_CAPTURE.poll();}
         unsafe { for stage in &mut TEXT_STAGES { stage.poll_reply(sex_pdx::pdx_reply); } }
         unsafe { BITMAP_STORES.poll_reply(sex_pdx::pdx_reply); }
 

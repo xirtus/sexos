@@ -6,6 +6,15 @@ extern crate self as sex_pdx;
 fn bar_height()->usize{28}
 #[path="../crates/sex-pdx/src/memory_region.rs"]pub mod memory_region;
 pub use memory_region::MemoryRegionInfo;
+// This compositor fixture grants no capture authority. Compile/run the real
+// capture observer inactive; active custody has its dedicated production gate.
+#[path="../crates/sex-pdx/src/screen_capture.rs"]pub mod screen_capture;
+#[path="../servers/sexdisplay/src/screen_capture.rs"]mod capture_server;
+static mut SCREEN_CAPTURE:capture_server::Server=capture_server::Server::new();
+#[derive(Clone,Copy)]pub struct PdxMessage{pub type_id:u64,pub arg0:u64,pub arg1:u64,pub arg2:u64,pub caller_pd:u32,pub caller_task:u32}
+pub fn screen_capture_bank(_:bool)->Result<screen_capture::Bank,u64>{Err(ERR_CAP_INVALID)}
+pub fn get_ticks()->u64{0}
+pub fn pdx_reply(_:u32,_:u64)->u64{panic!("inactive capture cannot reply")}
 pub const ERR_CAP_INVALID:u64=0xFFFF_FFFF_FFFF_FFFC;
 #[path="../crates/sex-pdx/src/display_frames.rs"]pub mod display_frames;
 #[path="../servers/sexdisplay/src/frame_output.rs"]mod frame_output;
@@ -54,7 +63,7 @@ use surface_lifecycle::{Surface,SURFACE_EMPTY,MAX_SURFACES};
 // Actual Main pure background conversion, observed without changing its result.
 // Actual SceneSnapshot calls this once for each capture attempt after bounds.
 fn scene_bar_blur_rows(h:usize)->[u32;BAR_BG_H]{unsafe{CAPTURES+=1;}actual_scene_bar_blur_rows(h)}
-#[macro_export]macro_rules! serial_record{($($arg:tt)*)=>{{let _=format_args!($($arg)*);event("receipt");}};}
+#[macro_export]macro_rules! serial_record{($($arg:tt)*)=>{{let _=format_args!($($arg)*);$crate::event("receipt");}};}
 include!(env!("DISPLAY_FRAME_SCENE_PARENT"));
 include!(env!("DISPLAY_FRAME_MAIN"));
 include!(env!("DISPLAY_FRAME_ACQUIRE"));
