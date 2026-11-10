@@ -1,0 +1,167 @@
+// SPDX-License-Identifier: GPL-3.0-only
+//! Stage W5e: the connection as an Ethernet link for sexnet's IP stack. Ethernet
+//! frames out become to-DS data frames on the station's queue; data frames from the
+//! AP become Ethernet frames again (`ieee80211_encap` / `ieee80211_decap`, with
+//! `iwx_tx` and `iwx_rx_mpdu_mq`'s hardware crypto):
+//! - On a WPA2 network a frame goes out with the Protected bit and without
+//!   ENCRYPT_DIS: the firmware adds the CCMP header and MIC with the installed key.
+//! - Frames in were decrypted by the firmware. They are kept only if it says so
+//!   (CCM, DEC_DONE and MIC_OK, as `iwx_rx_hwdecrypt` checks) and their packet
+//!   number is newer than the last one on that TID (`iwx_ccmp_decap`). The 8-byte
+//!   CCMP header is removed. A MIC some firmware leaves at the end stays: IP and
+//!   ARP carry their own lengths.
+//! - Data goes at a fixed legacy rate (OFDM 12 Mb/s), as management frames do, until
+//!   firmware rate control (TLC) is configured.
+//!
+//! A deauthentication or disassociation from the AP ends the link.
+use crate::bringup::Bringup;
+use crate::cmdq::CommandQueue;
+use crate::context::{Dma, DmaRead};
+use crate::csr::{self, Registers};
+use crate::devices::Family;
+use crate::hcmd::{self as h, Packet};
+use crate::ieee80211 as w;
+use crate::init::Failure;
+use crate::join::Target;
+use crate::scan::parse_mpdu;
+use crate::tx::{self, TxQueue};
+
+pub const MAX_ETHERNET: usize = 1514;
+const CCMP_HEADER: usize = 8;
+const STATUS_SEC_MASK: u32 = 7 << 8;
+const STATUS_SEC_CCM: u32 = 2 << 8;
+const STATUS_MIC_OK: u32 = 1 << 6;
+const STATUS_DEC_DONE: u32 = 1 << 11;
+const RATE_ANT_A: u32 = 1 << 14;
+const RATE_LEGACY_OFDM: u32 = 1 << 8;
+/// OFDM rate index 2: 12 Mb/s.
+pub const DATA_RATE: u32 = RATE_ANT_A | RATE_LEGACY_OFDM | 2;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Down { Disconnected(u16), Failed(Failure) }
+
+/// Why a frame from the air was not passed up.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Drop { NotDecrypted, Replay, Malformed }
+
+pub struct Link {
+    pub tx: TxQueue,
+    target: Target,
+    me: [u8; 6],
+    family: Family,
+    protected: bool,
+    seq: u16,
+    /// Last CCMP packet number per TID (non-QoS frames use 0).
+    pn: [Option<u64>; 16],
+    pub sent: u64,
+    pub received: u64,
+    pub dropped: u64,
+    pub last_drop: Option<Drop>,
+    pub down: Option<Down>,
+}
+
+/// Ethernet frame out of a data frame body from the AP: checks and strips CCMP.
+/// Returns the Ethernet length, the TID and the packet number, if any.
+pub fn decap(frame: &[u8], status: u32, protected_link: bool, out: &mut [u8]) -> Result<(usize, usize, Option<u64>), Drop> {
+    let hdr = w::data_header_len(frame).ok_or(Drop::Malformed)?;
+    let fc = u16::from_le_bytes([frame[0], frame[1]]);
+    let tid = if fc & 0x0080 != 0 { (frame[24 + if fc & 0x0300 == 0x0300 { 6 } else { 0 }] & 0x0f) as usize } else { 0 };
+    let (body, pn) = if fc & w::FC_PROTECTED != 0 {
+        if status & STATUS_SEC_MASK != STATUS_SEC_CCM || status & (STATUS_DEC_DONE | STATUS_MIC_OK) != (STATUS_DEC_DONE | STATUS_MIC_OK) {
+            return Err(Drop::NotDecrypted);
+        }
+        let iv = frame.get(hdr..hdr + CCMP_HEADER).ok_or(Drop::Malformed)?;
+        if iv[3] & 0x20 == 0 { return Err(Drop::Malformed); } // ExtIV
+        let pn = iv[0] as u64 | (iv[1] as u64) << 8 | (iv[4] as u64) << 16 | (iv[5] as u64) << 24 | (iv[6] as u64) << 32 | (iv[7] as u64) << 40;
+        (&frame[hdr + CCMP_HEADER..], Some(pn))
+    } else {
+        // Once keys are in, unprotected data is only EAPOL (rekeying), handled elsewhere.
+        if protected_link { return Err(Drop::NotDecrypted); }
+        (&frame[hdr..], None)
+    };
+    let n = w::to_ethernet(&frame[..hdr], body, out).ok_or(Drop::Malformed)?;
+    Ok((n, tid, pn))
+}
+
+impl Link {
+    /// Over the association's (or handshake's) queue, once connected.
+    pub fn new(tx: TxQueue, target: Target, me: [u8; 6], family: Family, protected: bool) -> Self {
+        Self { tx, target, me, family, protected, seq: 0x400, pn: [None; 16], sent: 0, received: 0, dropped: 0, last_drop: None, down: None }
+    }
+    pub fn me(&self) -> [u8; 6] { self.me }
+    pub fn up(&self) -> bool { self.down.is_none() }
+    /// Room for another frame on the queue.
+    pub fn ready(&self) -> bool { self.up() && (self.tx.queued as usize) < crate::context::TX_SLOTS }
+
+    /// Sends one Ethernet II frame to the AP.
+    pub fn send<D: Dma>(&mut self, b: &Bringup, r: &mut impl Registers, dma: &mut D, ethernet: &[u8]) -> Result<(), tx::Error> {
+        if ethernet.len() < 14 || ethernet.len() > MAX_ETHERNET { return Err(tx::Error::TooLong); }
+        let mut out = [0u8; 24 + 8 + MAX_ETHERNET];
+        self.seq = (self.seq + 1) & 0xfff;
+        let (hdr, total) = w::from_ethernet(ethernet, &self.target.bssid, self.seq, &mut out).ok_or(tx::Error::TooLong)?;
+        // Our own address as the source, whatever the stack wrote.
+        out[10..16].copy_from_slice(&self.me);
+        let flags = if self.protected {
+            out[1] |= (w::FC_PROTECTED >> 8) as u8;
+            tx::FLAG_CMD_RATE
+        } else { tx::FLAG_CMD_RATE | tx::FLAG_ENCRYPT_DIS };
+        self.tx.send(dma, r, &b.layout, b.base, &out[..total], hdr, flags, DATA_RATE)?;
+        self.sent += 1;
+        Ok(())
+    }
+
+    /// Reads the receive ring: every Ethernet frame from the AP goes to `deliver`.
+    /// Returns false once the link is down.
+    pub fn poll<D: Dma + DmaRead>(&mut self, b: &mut Bringup, cmdq: &mut CommandQueue, r: &mut impl Registers, dma: &mut D,
+        mut deliver: impl FnMut(&[u8])) -> bool
+    {
+        if self.down.is_some() { return false; }
+        let cause = r.read(csr::INT);
+        if cause == u32::MAX { self.down = Some(Down::Failed(Failure::Gone)); return false; }
+        if cause & (csr::INT_SW_ERR | csr::INT_HW_ERR) != 0 { self.down = Some(Down::Failed(Failure::Crashed { cause })); return false; }
+        if cause != 0 { r.write(csr::INT, cause); }
+        let (family, me, bssid, protected) = (self.family, self.me, self.target.bssid, self.protected);
+        let (mut freed, mut gone, mut error) = (None, None, None);
+        let (mut received, mut dropped, mut last_drop) = (0u64, 0u64, None);
+        let mut pn = self.pn;
+        let mut scratch = [0u8; 4096];
+        let mut eth = [0u8; 4096];
+        let result = b.receive(r, dma, |p: &Packet<'_>| {
+            if cmdq.on_packet(p) { return; }
+            if let Some(s) = tx::parse_response(p) { freed = Some(s); return; }
+            let Some(rx) = parse_mpdu(p, family, &mut scratch) else {
+                if let Some(e) = h::parse_error(p) { error = Some(e); }
+                return;
+            };
+            let f = rx.frame;
+            if f.len() < 24 || f[4..10] != me && f[4] & 1 == 0 { return; }
+            if f[0] & 0x0c == 0 {
+                if f[16..22] == bssid && f[4..10] == me { if let Some(reason) = w::parse_disconnect(f) { gone = Some(reason); } }
+                return;
+            }
+            // Data from our AP only, and not our own broadcasts relayed back.
+            if f[0] & 0x0c != 0x08 || f[10..16] != bssid || f[16..22] == me { return; }
+            match decap(f, rx.status, protected, &mut eth) {
+                Ok((n, tid, number)) => {
+                    if let Some(number) = number {
+                        if pn[tid].is_some_and(|last| number <= last) { dropped += 1; last_drop = Some(Drop::Replay); return; }
+                        pn[tid] = Some(number);
+                    }
+                    if n > 0 { received += 1; deliver(&eth[..n]); }
+                }
+                // A frame with no payload (null data) is not an error.
+                Err(Drop::Malformed) if w::data_header_len(f) == Some(f.len()) => {}
+                Err(d) => { dropped += 1; last_drop = Some(d); }
+            }
+        });
+        self.pn = pn;
+        self.received += received;
+        self.dropped += dropped;
+        if last_drop.is_some() { self.last_drop = last_drop; }
+        if let Some(s) = freed { self.tx.release(dma, &b.layout, s); }
+        if let Err(id) = result { self.down = Some(Down::Failed(Failure::BadRxBuffer(id))); return false; }
+        if let Some(e) = error { self.down = Some(Down::Failed(Failure::Firmware(e))); return false; }
+        if let Some(reason) = gone { self.down = Some(Down::Disconnected(reason)); return false; }
+        true
+    }
+}

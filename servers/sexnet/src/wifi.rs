@@ -7,7 +7,7 @@
 //! only maps the lease, the DMA pool and the firmware pack onto its traits.
 use sex_pdx::wifi_status as ws;
 use sex_pdx::{memory_region as m, pci_command as c};
-use sex_wifi::{bringup::Bringup, context, csr, devices, ieee80211::Security, init::{self, Init}, join::{self, Join}, assoc::{self, Assoc}, rsna::{self, Rsna}, ieee80211::{self, Bss}, crypto, hcmd, pack::Pack, scan::{self, Scan}, ucode::Firmware};
+use sex_wifi::{bringup::Bringup, context, csr, devices, ieee80211::Security, init::{self, Init}, join::{self, Join}, assoc::{self, Assoc}, rsna::{self, Rsna}, link::{self as wlink, Link}, tx::TxQueue, ieee80211::{self, Bss}, crypto, hcmd, pack::Pack, scan::{self, Scan}, ucode::Firmware};
 
 /// The chip's register window (BAR0 view).
 struct Mmio { base: u64, length: u64 }
@@ -75,6 +75,8 @@ pub struct Wifi {
     /// The passphrase for the next join (`wifi_status::PASSWORD`), wiped when used.
     password: [u8; ws::PASSWORD_MAX],
     password_len: usize,
+    /// Stage W5e: the connection as sexnet's Ethernet link.
+    link: Option<Link>,
     finished: bool,
 }
 
@@ -145,7 +147,7 @@ impl Wifi {
         }
         sex_pdx::serial_record!("[wifi.prepared] pool={} used={} rx_pages={} bus={:#x}",
             dma.length, bringup.layout.end, context::RX_BUFFERS, bus);
-        Some(Wifi { mmio, pool, bringup, last: csr::Step::Ready, file, pnvm, hw_rev, rf_id, init: None, last_init: None, scan: None, scans: 0, join: None, joined_ssid: [0; 32], joined_bss: None, assoc: None, rsna: None, password: [0; ws::PASSWORD_MAX], password_len: 0, finished: false })
+        Some(Wifi { mmio, pool, bringup, last: csr::Step::Ready, file, pnvm, hw_rev, rf_id, init: None, last_init: None, scan: None, scans: 0, join: None, joined_ssid: [0; 32], joined_bss: None, assoc: None, rsna: None, password: [0; ws::PASSWORD_MAX], password_len: 0, link: None, finished: false })
     }
 
     /// True until the first scan has finished or the chip has failed.
@@ -290,6 +292,12 @@ impl Wifi {
         if a.step == assoc::Step::Associated {
             sex_pdx::serial_record!("[wifi.associated] ssid=\"{}\" aid={} frames={} security={:?} ticks={}", ssid, a.aid, a.tx.sent, a.bss.security, now_ticks);
             if a.bss.security != ieee80211::Security::Open { self.start_rsna(now_ticks); }
+            else if let Some(a) = self.assoc.as_mut() {
+                let family = self.bringup.boot.chip.family;
+                let tx = core::mem::replace(&mut a.tx, TxQueue::new(family));
+                self.link = Some(Link::new(tx, a.target, a.me(), family, false));
+                sex_pdx::serial_record!("[wifi.link.up] security=open rate={:#x}", wlink::DATA_RATE);
+            }
         } else {
             use csr::Registers;
             self.password = [0; ws::PASSWORD_MAX];
@@ -341,6 +349,11 @@ impl Wifi {
         let ssid = core::str::from_utf8(&self.joined_ssid).unwrap_or("?").trim_end_matches('\0');
         if r.step == rsna::Step::Connected {
             sex_pdx::serial_record!("[wifi.connected] ssid=\"{}\" security=WPA2 ticks={}", ssid, now_ticks);
+            let family = self.bringup.boot.chip.family;
+            let tx = core::mem::replace(&mut r.tx, TxQueue::new(family));
+            let (target, me) = (r.target(), r.me());
+            self.link = Some(Link::new(tx, target, me, family, true));
+            sex_pdx::serial_record!("[wifi.link.up] security=WPA2 rate={:#x}", wlink::DATA_RATE);
         } else {
             use csr::Registers;
             sex_pdx::serial_record!("[wifi.failed] step=handshake reason={:?} ssid=\"{}\" int={:#x}", r.step, ssid, self.mmio.read(csr::INT));
@@ -380,6 +393,31 @@ impl Wifi {
         true
     }
 
+    /// The link is up: sexnet's IP stack may use it.
+    pub fn link_up(&self) -> bool { self.link.as_ref().is_some_and(|l| l.up()) }
+    pub fn link_mac(&self) -> Option<[u8; 6]> { self.link.as_ref().map(|l| l.me()) }
+    pub fn link_ready(&self) -> bool { self.link.as_ref().is_some_and(|l| l.ready()) }
+    /// Sends one Ethernet frame over the air.
+    pub fn link_send(&mut self, ethernet: &[u8]) -> bool {
+        let Some(l) = self.link.as_mut() else { return false };
+        match l.send(&self.bringup, &mut self.mmio, &mut self.pool, ethernet) {
+            Ok(()) => { if l.sent <= 16 || l.sent.is_power_of_two() { sex_pdx::serial_record!("[wifi.link.tx] frames={} length={}", l.sent, ethernet.len()); } true }
+            Err(e) => { sex_pdx::serial_record!("[wifi.link.tx.failed] error={:?}", e); false }
+        }
+    }
+    /// Frames from the air to `deliver`; logs when the link goes down.
+    pub fn link_poll(&mut self, deliver: impl FnMut(&[u8])) {
+        let (Some(l), Some(i)) = (self.link.as_mut(), self.init.as_mut()) else { return };
+        let before = (l.received, l.dropped);
+        if !l.poll(&mut self.bringup, &mut i.cmdq, &mut self.mmio, &mut self.pool, deliver) {
+            sex_pdx::serial_record!("[wifi.link.down] reason={:?} sent={} received={} dropped={}", l.down, l.sent, l.received, l.dropped);
+            return;
+        }
+        if l.received != before.0 && (l.received <= 16 || l.received.is_power_of_two()) {
+            sex_pdx::serial_record!("[wifi.link.rx] frames={} dropped={} last_drop={:?}", l.received, l.dropped, l.last_drop);
+        }
+    }
+
     /// Whether network `index` of the last scan is secured and no passphrase was given.
     fn needs_password(&self, index: u64) -> bool {
         self.password_len == 0 && self.scan.as_ref().and_then(|sc| sc.networks().nth(index as usize))
@@ -389,12 +427,12 @@ impl Wifi {
     /// What the desktop sees (`sex_pdx::wifi_status`).
     fn state(&self) -> ws::State {
         if let Some(r) = &self.rsna {
-            let phase = match r.step { rsna::Step::Connected => ws::CONNECTED, rsna::Step::Handshake => ws::HANDSHAKE, _ => ws::FAILED };
+            let phase = match r.step { rsna::Step::Connected if self.link.as_ref().is_some_and(|l| !l.up()) => ws::FAILED, rsna::Step::Connected => ws::CONNECTED, rsna::Step::Handshake => ws::HANDSHAKE, _ => ws::FAILED };
             let (networks, channels) = self.scan.as_ref().map_or((0, 0), |sc| (sc.count.min(255) as u8, sc.channels));
             return ws::State { phase, networks, scans: self.scans, channels };
         }
         if let Some(a) = &self.assoc {
-            let phase = match a.step { assoc::Step::Associated => ws::ASSOCIATED, assoc::Step::Auth | assoc::Step::Assoc | assoc::Step::Station | assoc::Step::Mac => ws::ASSOCIATING, _ => ws::FAILED };
+            let phase = match a.step { assoc::Step::Associated if self.link.as_ref().is_some_and(|l| !l.up()) => ws::FAILED, assoc::Step::Associated => ws::ASSOCIATED, assoc::Step::Auth | assoc::Step::Assoc | assoc::Step::Station | assoc::Step::Mac => ws::ASSOCIATING, _ => ws::FAILED };
             let (networks, channels) = self.scan.as_ref().map_or((0, 0), |sc| (sc.count.min(255) as u8, sc.channels));
             return ws::State { phase, networks, scans: self.scans, channels };
         }

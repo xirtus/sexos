@@ -1,7 +1,7 @@
 //! Driver-level behaviour: chip table, firmware files, DMA layout, the power-up
 //! sequence against a register model, the 4-way handshake against an access
 //! point played by the authenticator helpers, and frames end to end.
-use sex_wifi::{assoc, rsna, bringup, ccmp, cmdq, context, csr, devices, eapol, hcmd, ieee80211 as w, init, join, pack, rx, scan, tx, ucode};
+use sex_wifi::{assoc, link, rsna, bringup, ccmp, cmdq, context, csr, devices, eapol, hcmd, ieee80211 as w, init, join, pack, rx, scan, tx, ucode};
 use std::collections::HashMap;
 
 const AP: [u8; 6] = [0x02, 0x11, 0x22, 0x33, 0x44, 0x55];
@@ -1647,7 +1647,7 @@ fn wpa3_only_networks_wait_for_sae() {
 
 /// Associates the x17 with "Home" (WPA2), then runs the 4-way handshake with `password`
 /// against an AP whose passphrase is "correct horse".
-fn x17_connect(password: &[u8], sec_key_cmd: bool) -> (rsna::Rsna, Firmware, w::Bss, usize, [u8; 16]) {
+fn x17_connect(password: &[u8], sec_key_cmd: bool) -> (rsna::Rsna, Firmware, w::Bss, usize, [u8; 16], init::Init, bringup::Bringup, Memory, Chip) {
     let (mut i, mut b, mut m, mut hw, mut sim, bss, v) = x17_ready();
     let target = join::Target::of(&bss, 6);
     let mut j = join::Join::new(target, v, i.mac, i.valid_rx_antennas(), hw.now);
@@ -1677,12 +1677,12 @@ fn x17_connect(password: &[u8], sec_key_cmd: bool) -> (rsna::Rsna, Firmware, w::
         sim.serve(&mut m, &b.layout, &mut hw);
         hw.now += 1000;
     }
-    (r, sim, bss, before, gtk.key)
+    (r, sim, bss, before, gtk.key, i, b, m, hw)
 }
 
 #[test]
 fn x17_completes_the_wpa2_handshake_and_installs_keys() {
-    let (r, sim, _, before, gtk) = x17_connect(b"correct horse", true);
+    let (r, sim, _, before, gtk, ..) = x17_connect(b"correct horse", true);
     assert_eq!(r.step, rsna::Step::Connected);
     assert!(sim.ap.wpa.as_ref().unwrap().message4, "message 4 reached the AP");
     let ptk = sim.ap.wpa.as_ref().unwrap().ptk.unwrap();
@@ -1701,7 +1701,7 @@ fn x17_completes_the_wpa2_handshake_and_installs_keys() {
 
 #[test]
 fn older_firmware_installs_keys_with_add_sta_key() {
-    let (r, sim, _, before, _) = x17_connect(b"correct horse", false);
+    let (r, sim, _, before, _, ..) = x17_connect(b"correct horse", false);
     assert_eq!(r.step, rsna::Step::Connected);
     let keys = &sim.commands[before..];
     assert_eq!(keys.iter().map(|c| (c.0, c.1)).collect::<Vec<_>>(), vec![(hcmd::LONG_GROUP, hcmd::ADD_STA_KEY); 2]);
@@ -1712,7 +1712,7 @@ fn older_firmware_installs_keys_with_add_sta_key() {
 
 #[test]
 fn a_wrong_password_times_out_without_keys() {
-    let (r, sim, _, before, _) = x17_connect(b"wrong horse", true);
+    let (r, sim, _, before, _, ..) = x17_connect(b"wrong horse", true);
     assert_eq!(r.step, rsna::Step::Refused(rsna::Refusal::Timeout { messages: 1 }));
     assert!(sim.commands[before..].is_empty(), "no key installed");
 }
@@ -1726,4 +1726,83 @@ fn eapol_frames_only_from_our_ap() {
     assert_eq!(rsna::eapol_of(&f, &STA, &STA), None, "not from our AP");
     let mut p = f.clone(); p[1] |= 0x40;
     assert_eq!(rsna::eapol_of(&p, &STA, &AP), None, "protected frames are the firmware's to decrypt");
+}
+
+/// An RX MPDU with the firmware's status word (decryption bits) set.
+fn mpdu_status(family: devices::Family, frame: &[u8], status: u32, pad: bool) -> Vec<u8> {
+    let mut p = mpdu(family, frame, 40, 6, pad);
+    p[8 + 12..8 + 16].copy_from_slice(&status.to_le_bytes());
+    p
+}
+
+/// A protected QoS data frame from the AP as the firmware passes it up after
+/// decrypting: header, CCMP header with packet number `pn`, LLC/SNAP, IPv4 payload, MIC.
+fn protected_from_ap(me: &[u8], bssid: &[u8], sa: &[u8], pn: u64, payload: &[u8]) -> Vec<u8> {
+    let mut f = vec![0u8; 26];
+    f[0..2].copy_from_slice(&(w::FC_QOS_DATA | w::FC_FROM_DS | w::FC_PROTECTED).to_le_bytes());
+    f[4..10].copy_from_slice(me); f[10..16].copy_from_slice(bssid); f[16..22].copy_from_slice(sa);
+    let b = pn.to_le_bytes();
+    f.extend_from_slice(&[b[0], b[1], 0, 0x20, b[2], b[3], b[4], b[5]]);
+    f.extend_from_slice(&[0xaa, 0xaa, 3, 0, 0, 0, 0x08, 0x00]);
+    f.extend_from_slice(payload);
+    f.extend_from_slice(&[0xee; 8]);
+    f
+}
+
+#[test]
+fn x17_carries_ethernet_over_wpa2() {
+    let (r, mut sim, bss, _, _, mut i, mut b, mut m, mut hw) = x17_connect(b"correct horse", true);
+    assert_eq!(r.step, rsna::Step::Connected);
+    let target = join::Target::of(&bss, 6);
+    let me = i.mac;
+    let mut link = link::Link::new(r.tx, target, me, b.boot.chip.family, true);
+    // Out: an ARP request becomes a protected to-DS data frame at the fixed data rate.
+    let mut eth = vec![0xffu8; 6];
+    eth.extend_from_slice(&me);
+    eth.extend_from_slice(&[0x08, 0x06]);
+    eth.extend_from_slice(&[0x11; 28]);
+    let frames = sim.frames.len();
+    link.send(&b, &mut hw, &mut m, &eth).unwrap();
+    sim.serve(&mut m, &b.layout, &mut hw);
+    let (cmd, f) = &sim.frames[frames];
+    assert_eq!(&f[0..2], &[0x08, 0x41], "data, to-DS, protected");
+    assert_eq!((&f[4..10], &f[10..16], &f[16..22]), (&bss.bssid[..], &me[..], &[0xff; 6][..]));
+    assert_eq!(&f[24..32], &[0xaa, 0xaa, 3, 0, 0, 0, 0x08, 0x06]);
+    assert_eq!(&f[32..], &[0x11; 28]);
+    assert_eq!(u16::from_le_bytes([cmd[2], cmd[3]]), tx::FLAG_CMD_RATE, "the firmware encrypts");
+    assert_eq!(u32::from_le_bytes(cmd[16..20].try_into().unwrap()), link::DATA_RATE);
+    // In: decrypted frames become Ethernet; replays, undecrypted frames and our own
+    // relayed broadcasts are dropped.
+    let ok = 3 | 2 << 8 | 1 << 6 | 1 << 11;
+    let gw = [0x02, 0x99, 0, 0, 0, 1];
+    let fam = b.boot.chip.family;
+    let p = protected_from_ap(&me, &bss.bssid, &gw, 7, &[0x45; 20]);
+    sim.deliver(&mut m, &b.layout, &mpdu_status(fam, &p, ok, true));
+    sim.deliver(&mut m, &b.layout, &mpdu_status(fam, &p, ok, true));
+    sim.deliver(&mut m, &b.layout, &mpdu_status(fam, &protected_from_ap(&me, &bss.bssid, &gw, 8, &[0x46; 20]), 3 | 2 << 8, true));
+    sim.deliver(&mut m, &b.layout, &mpdu_status(fam, &protected_from_ap(&[0xff; 6], &bss.bssid, &me, 9, &[0x47; 20]), ok, true));
+    sim.deliver(&mut m, &b.layout, &mpdu_status(fam, &protected_from_ap(&[0xff; 6], &bss.bssid, &gw, 10, &[0x48; 20]), ok, true));
+    let mut got: Vec<Vec<u8>> = vec![];
+    assert!(link.poll(&mut b, &mut i.cmdq, &mut hw, &mut m, |e| got.push(e.to_vec())));
+    assert_eq!(got.len(), 2);
+    assert_eq!((&got[0][0..6], &got[0][6..12], &got[0][12..14]), (&me[..], &gw[..], &[0x08, 0x00][..]));
+    assert_eq!(&got[0][14..34], &[0x45; 20]);
+    assert_eq!(&got[1][0..6], &[0xff; 6], "broadcast from another station");
+    assert_eq!(link.dropped, 2);
+    assert_eq!(link.tx.queued, 0, "the TX response freed the ring");
+    // The AP leaves: the link goes down.
+    sim.deliver(&mut m, &b.layout, &mpdu(fam, &from_ap(w::FC_MGMT_DEAUTH, &me, &bss.bssid, &7u16.to_le_bytes()), 40, 6, true));
+    assert!(!link.poll(&mut b, &mut i.cmdq, &mut hw, &mut m, |_| {}));
+    assert_eq!(link.down, Some(link::Down::Disconnected(7)));
+}
+
+#[test]
+fn open_networks_pass_plain_data_and_refuse_protected_frames() {
+    let mut out = [0u8; 2048];
+    let mut f = vec![0u8; 24];
+    f[0..2].copy_from_slice(&(w::FC_DATA | w::FC_FROM_DS).to_le_bytes());
+    f[4..10].copy_from_slice(&STA); f[10..16].copy_from_slice(&AP); f[16..22].copy_from_slice(&AP);
+    f.extend_from_slice(&[0xaa, 0xaa, 3, 0, 0, 0, 0x08, 0x06, 1, 2]);
+    assert_eq!(link::decap(&f, 3, false, &mut out), Ok((16, 0, None)));
+    assert_eq!(link::decap(&f, 3, true, &mut out), Err(link::Drop::NotDecrypted), "plain data on a WPA2 link");
 }

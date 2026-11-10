@@ -3862,3 +3862,14 @@ Roadmap workstream B, part 1 (report: `docs/handoff/LINUX_AND_DESKTOP_PARITY_REP
 - **`install [go] [GIB] [IMAGE]`** in Spindle. Without `go` Files only plans and prints it. On a GPT disk it adds three partitions in free space (SexOS system A and B, 256 MiB each, and the SexOS store: GIB or all the largest free run, at least 1 GiB) and never moves or resizes anything; on a blank disk it makes a new GPT and a 260 MiB FAT32 ESP. Limine goes to `\EFI\SEXOS\BOOTX64.EFI` on the shared ESP, and to `\EFI\BOOT\BOOTX64.EFI` only when no fallback loader exists. Its menu `\EFI\BOOT\LIMINE.CFG` (16 KiB, contiguous, for in-place rewrites by A/B updates) points the image's entries at slot A by partition GUID and adds a chainload entry per system found on the ESP (Windows boot manager, shim/GRUB, systemd-boot, others). Refuses when another `limine.cfg` would win. The partition table is written last, so a failed install leaves every system starting as before.
 - **Not yet**: no UEFI boot entry is registered (the kernel has no runtime services), so on a PC whose ESP already has a fallback loader (Windows) the person picks `\EFI\SEXOS\BOOTX64.EFI` once in the firmware's boot menu; Install says so. Slot B, signed updates and try-once fallback are part 2.
 - **Gates**: `scripts/install_gate.py` (QEMU + OVMF with its own variable store): a Linux-like GPT disk is hashed before and after a live session (unchanged), `install` plans, `install go` installs, sgdisk/fsck/mtools check the disk and the Linux partition's bytes, then the PC starts from the disk with no ISO and a file survives a restart; a blank disk becomes SexOS's alone. `scripts/usb_stick_gate.py`: the ISO written to a USB stick (usb-storage on xHCI, no CD) reaches the desktop under UEFI and under BIOS.
+
+## Intel Wi-Fi, stage W5e: traffic over Wi-Fi (2026-11-10)
+- **What:** new `sex_wifi::link` carries Ethernet frames over the connection. Outgoing
+  frames are encrypted by the firmware on WPA2. Incoming frames are checked for the
+  firmware's decrypt status and for PN replay. sexnet moves its IP stack onto Wi-Fi
+  while the link is up, then back to the wired port. RX MPDU padding is now removed
+  for data frames too.
+- **Evidence:** `scripts/wifi_host_gate.sh` (45 driver tests). A test sends ARP over
+  WPA2 on the firmware model and receives decrypted frames, a replay, an undecrypted
+  frame, a relayed own broadcast and a deauthentication.
+- **ABI / kernel:** none.

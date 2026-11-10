@@ -5360,6 +5360,7 @@ pub extern "C" fn _start() -> ! {
     let mut ethernet:Option<ethernet::Driver<nic::Live>>=None;
     let mut pending_packet:Option<sex_net::Frame>=None;
     let mut transport:Option<sex_net::Engine<'static>>=None;
+    let mut wifi_transport=false;
     let mut transport_changes=0u64;
     let mut transfer_changes=0u64;
     let mut timed_waits=0u64;
@@ -5393,10 +5394,45 @@ pub extern "C" fn _start() -> ! {
         if pending_packet.as_ref().is_some_and(|f|!packet_owned_live(f,&outbound,&dns,network_config.as_ref())){pending_packet=None;}
         // Several frames each turn, not one: a download needs a frame in and an ACK
         // out for every 1.4 KB, and a turn costs a yield or a timer wait.
+        // Stage W5e: a connected Wi-Fi link takes the IP stack (the wired port is set
+        // aside while it is up); it gives it back when the link goes down.
+        let wifi_up=wifi.as_ref().is_some_and(|w|w.link_up());
+        if wifi_up&&!wifi_transport{
+            if let (Some(config),Some(mac))=(network_config,wifi.as_ref().and_then(|w|w.link_mac())){
+                pending_packet=None;drop(transport.take());
+                transport=Some(unsafe{sex_net::Engine::new(config,mac,sex_pdx::get_ticks(),0x7365786f735f7769,
+                    &mut TRANSPORT_RX,&mut TRANSPORT_TX,&mut CLIENT_RX,&mut CLIENT_TX,&mut DNS_RX_META,&mut DNS_RX,&mut DNS_TX_META,&mut DNS_TX)}.expect("FIXED_TRANSPORT_CONFIG"));
+                wifi_transport=true;
+                sex_pdx::serial_record!("[sexnet.wifi.transport] up=1 mac={:02x}{:02x}{:02x}{:02x}{:02x}{:02x} wired_set_aside={}",mac[0],mac[1],mac[2],mac[3],mac[4],mac[5],ethernet.is_some() as u8);
+            } else { sex_pdx::serial_record!("[sexnet.wifi.transport] up=0 reason=no_network_config"); }
+        } else if !wifi_up&&wifi_transport{
+            if let Some(engine)=transport.as_mut(){engine.stop(sex_net::Error::Stopped);}
+            transport=None;pending_packet=None;wifi_transport=false;
+            sex_pdx::serial_record!("[sexnet.wifi.transport] up=0 reason=link_down");
+        }
         let mut burst=0u32;
         loop {
             let mut progressed=false;
-            if let Some(driver)=ethernet.as_mut() {
+            if wifi_transport { if let (Some(w),Some(engine))=(wifi.as_mut(),transport.as_mut()) {
+                if engine.can_receive(){
+                    let mut frames=0u32;
+                    w.link_poll(|frame|{if engine.submit_frame(frame).is_ok(){frames+=1;}});
+                    progressed|=frames>0;
+                }
+                engine.advance(sex_pdx::get_ticks());
+                web.pump(unsafe{&mut *(engine as *mut sex_net::Engine<'static>)});
+                let duplex=outbound.is_duplex();
+                outbound.advance(sex_pdx::get_ticks(),&mut ClientWire(Some(&mut *engine),duplex));
+                dns.advance(sex_pdx::get_ticks(),&mut DnsWire(Some(&mut *engine)));
+                if engine.failure().is_some(){pending_packet=None;}
+                else if pending_packet.is_none(){pending_packet=engine.take_frame();}
+                if pending_packet.as_ref().is_some_and(|f|!packet_owned_live(f,&outbound,&dns,network_config.as_ref())){pending_packet=None;}
+                if w.link_ready(){
+                    if let Some(packet)=pending_packet.take(){progressed|=w.link_send(&packet.bytes[..packet.length]);}
+                }
+                polling=true;
+            }}
+            if let Some(driver)=ethernet.as_mut().filter(|_|!wifi_transport) {
                 let before=driver.phase();
                 let receive=transport.as_ref().is_none_or(|engine|engine.can_receive());
                 let event=driver.advance_with_receive(sex_pdx::get_ticks(),receive);progressed|=event.is_some();
