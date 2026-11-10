@@ -65,6 +65,44 @@ impl Source for alloc::rc::Rc<[u8]> {
     }
 }
 
+/// A download still arriving: the loader appends to `bytes` and sets `done` at the
+/// end; the decoder reads what is there. Shared as [`Growing::shared`].
+#[derive(Default)]
+pub struct Growing {
+    pub bytes: Vec<u8>,
+    /// The length the server said, if it said one.
+    pub total: Option<u64>,
+    /// Every byte is here (or the download stopped: the stream ends where it got to).
+    pub done: bool,
+}
+
+impl Growing {
+    pub fn shared() -> alloc::rc::Rc<core::cell::RefCell<Growing>> { Default::default() }
+}
+
+impl Source for alloc::rc::Rc<core::cell::RefCell<Growing>> {
+    fn len(&self) -> Option<u64> {
+        let g = self.borrow();
+        if g.done { Some(g.bytes.len() as u64) } else { g.total }
+    }
+    fn read_at(&mut self, at: u64, out: &mut [u8]) -> Option<usize> {
+        let g = self.borrow();
+        let have = g.bytes.len() as u64;
+        if at >= have {
+            // Past what has come: the end once it is all here, else an error rather
+            // than a 0 FFmpeg would take for the end.
+            return if g.done { Some(0) } else { None };
+        }
+        let n = out.len().min((have - at) as usize);
+        out[..n].copy_from_slice(&g.bytes[at as usize..at as usize + n]);
+        Some(n)
+    }
+    fn available(&self, at: u64) -> u64 {
+        let g = self.borrow();
+        if g.done { u64::MAX } else { (g.bytes.len() as u64).saturating_sub(at) }
+    }
+}
+
 /// FFmpeg's error number, with its text through [`Error::text`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Error(pub i32);

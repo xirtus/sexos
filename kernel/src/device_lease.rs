@@ -60,6 +60,8 @@ impl Kind {
 pub fn display_audio(dev: &PciDevice) -> bool {
     if dev.vendor_id == 0x8086 && matches!(dev.device_id, 0x0a0c | 0x0c0c | 0x0d0c | 0x160c) { return true; }
     if dev.func == 0 { return false; }
-    let class = unsafe { crate::hal::pci::pci_config_read(dev.bus, dev.dev, 0, 0x08) } >> 24;
+    // Function 0 of the same device: through its ECAM page behind VMD, else the ports.
+    let function0 = PciDevice { func: 0, ecam: if dev.ecam != 0 { dev.ecam - ((dev.func as u64) << 12) } else { 0 }, ..*dev };
+    let class = function0.read_u32(0x08) >> 24;
     class == 0x03
 }

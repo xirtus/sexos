@@ -1,0 +1,16 @@
+<!doctype html>
+<html><head><title>stream test</title></head>
+<body style="margin:0;background:#fff">
+<!-- Arrives slowly: it must start playing long before the last byte. -->
+<video id="v" src="stream.mp4" autoplay></video>
+<!-- Indexed at its end: it can open only once all of it is here. -->
+<video id="tail" src="tail.mp4"></video>
+<script>
+const log = m => console.log(m);
+const v = document.getElementById('v');
+v.addEventListener('loadstart', () => log('loadstart'));
+v.addEventListener('playing', () => log('playing'));
+v.addEventListener('ended', () => log('ended at ' + v.currentTime.toFixed(1)));
+document.getElementById('tail').addEventListener('loadedmetadata', e => log('tail meta ' + e.target.duration.toFixed(1)));
+</script>
+</body></html>
