@@ -497,7 +497,7 @@ fn production_dispatch_keeps_selection_owned_atomic_damaged_and_terminally_erase
     assert!(lease.contains("(*core::ptr::addr_of_mut!(RENDER_SCENE)).scrub()"));
     let render=section(source,"fn render_prepared(","fn render(fb:");
     before(render,"SceneLease::capture(w,h,bar)","let scene=lease.view()");
-    before(render,"preparation.commit(|pixels|publish_frame(fb,w,h,pixels))","let text_projections=scene.text_projections;");
+    before(render,"preparation.commit(|frame|publish_frame(fb,w,h,frame))","let text_projections=scene.text_projections;");
     before(render,"let text_projections=scene.text_projections;","Some(PublishedFrame{plan,present_bits,canon_ss,text_projections})");
     let finish=section(source,"fn finish_display_transactions(","pub extern \"C\" fn _start()");
     before(finish,"(*core::ptr::addr_of!(RENDER_SCENE)).is_valid()","if let Some(published)=published{");

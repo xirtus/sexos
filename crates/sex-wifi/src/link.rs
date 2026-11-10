@@ -12,7 +12,14 @@
 //!   the Ethernet frame is cut to the length its IP or ARP packet declares, which
 //!   drops a MIC some firmware leaves at the end.
 //! - Data goes at a fixed legacy rate (OFDM 12 Mb/s), as management frames do, until
-//!   firmware rate control (TLC) is configured.
+//!   firmware rate control (`tlc`) is configured; then the firmware picks each
+//!   frame's rate.
+//!
+//! - EAPOL-Key frames from the AP after the handshake (group rekeying, which APs
+//!   do every hour or so, or a pairwise rekey) come protected like other data. They
+//!   go to the handshake's supplicant, kept in `Rekey`, not to the IP stack; the
+//!   answer goes back protected and the new keys into the firmware. A key's packet
+//!   numbers start over once it is in.
 //!
 //! A deauthentication or disassociation from the AP ends the link.
 use crate::bringup::Bringup;
@@ -25,7 +32,11 @@ use crate::ieee80211 as w;
 use crate::init::Failure;
 use crate::join::Target;
 use crate::scan::parse_mpdu;
+use crate::eapol;
+use crate::rsna::{Key, Rekey};
 use crate::tx::{self, TxQueue};
+use crate::tlc;
+use crate::cmdq;
 
 pub const MAX_ETHERNET: usize = 1514;
 const CCMP_HEADER: usize = 8;
@@ -37,6 +48,12 @@ const RATE_ANT_A: u32 = 1 << 14;
 const RATE_LEGACY_OFDM: u32 = 1 << 8;
 /// OFDM rate index 2: 12 Mb/s.
 pub const DATA_RATE: u32 = RATE_ANT_A | RATE_LEGACY_OFDM | 2;
+
+/// Firmware rate control: off (fixed rate), its command waiting to go (with the
+/// command's version), sent, on, or refused (the fixed rate stays).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RateControl { Off, Wanted(u8), Sent(u64), On, Refused }
+const COMMAND_US: u64 = 1_000_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Down { Disconnected(u16), Failed(Failure) }
@@ -59,6 +76,17 @@ pub struct Link {
     pub dropped: u64,
     pub last_drop: Option<Drop>,
     pub down: Option<Down>,
+    rekey: Option<Rekey>,
+    /// Key messages answered after the handshake, keys installed since, and the
+    /// last key message refused (bad MIC, replay...).
+    pub rekey_messages: u32,
+    pub rekeyed: u32,
+    pub rekey_error: Option<eapol::Error>,
+    /// The answer to a key message, until the TX queue takes it (new keys wait for it).
+    reply: Option<([u8; 14 + eapol::MAX_FRAME], usize)>,
+    pub rate_control: RateControl,
+    /// The data rate the firmware last reported choosing (rate_n_flags).
+    pub rate: u32,
 }
 
 /// Ethernet frame out of a data frame body from the AP: checks and strips CCMP.
@@ -94,6 +122,7 @@ pub fn declared(e: &[u8]) -> Option<usize> {
         0x0800 => 14 + be(16)?,
         0x86dd => 14 + 40 + be(18)?,
         0x0806 => 14 + 28,
+        0x888e => 14 + 4 + be(16)?,
         _ => return Some(e.len()),
     };
     (need <= e.len()).then_some(need)
@@ -102,10 +131,20 @@ pub fn declared(e: &[u8]) -> Option<usize> {
 impl Link {
     /// Over the association's (or handshake's) queue, once connected.
     pub fn new(tx: TxQueue, target: Target, me: [u8; 6], family: Family, protected: bool) -> Self {
-        Self { tx, target, me, family, protected, seq: 0x400, pn: [[None; 16]; 4], sent: 0, received: 0, dropped: 0, last_drop: None, down: None }
+        Self { tx, target, me, family, protected, seq: 0x400, pn: [[None; 16]; 4], sent: 0, received: 0, dropped: 0, last_drop: None, down: None,
+            rekey: None, rekey_messages: 0, rekeyed: 0, rekey_error: None, reply: None, rate_control: RateControl::Off, rate: DATA_RATE }
+    }
+    /// Answers later key messages with the handshake's state.
+    pub fn with_rekey(mut self, r: Rekey) -> Self { self.rekey = Some(r); self }
+    /// Hands data rates to the firmware once the link runs, with this version of
+    /// TLC_MNG_CONFIG_CMD. Nothing changes when no legacy rate is shared.
+    pub fn with_rate_control(mut self, version: u8) -> Self {
+        if tlc::rates(&self.target) != 0 { self.rate_control = RateControl::Wanted(version); }
+        self
     }
     pub fn me(&self) -> [u8; 6] { self.me }
     pub fn up(&self) -> bool { self.down.is_none() }
+    pub fn protected(&self) -> bool { self.protected }
     /// Room for another frame on the queue.
     pub fn ready(&self) -> bool { self.up() && (self.tx.queued as usize) < crate::context::TX_SLOTS }
 
@@ -117,19 +156,20 @@ impl Link {
         let (hdr, total) = w::from_ethernet(ethernet, &self.target.bssid, self.seq, &mut out).ok_or(tx::Error::TooLong)?;
         // Our own address as the source, whatever the stack wrote.
         out[10..16].copy_from_slice(&self.me);
+        let (rate_flag, rate) = if self.rate_control == RateControl::On { (0, 0) } else { (tx::FLAG_CMD_RATE, DATA_RATE) };
         let flags = if self.protected {
             out[1] |= (w::FC_PROTECTED >> 8) as u8;
-            tx::FLAG_CMD_RATE
-        } else { tx::FLAG_CMD_RATE | tx::FLAG_ENCRYPT_DIS };
-        self.tx.send(dma, r, &b.layout, b.base, &out[..total], hdr, flags, DATA_RATE)?;
+            rate_flag
+        } else { rate_flag | tx::FLAG_ENCRYPT_DIS };
+        self.tx.send(dma, r, &b.layout, b.base, &out[..total], hdr, flags, rate)?;
         self.sent += 1;
         Ok(())
     }
 
-    /// Reads the receive ring: every Ethernet frame from the AP goes to `deliver`.
-    /// Returns false once the link is down.
+    /// Reads the receive ring: every Ethernet frame from the AP goes to `deliver`,
+    /// key messages to the supplicant. Returns false once the link is down.
     pub fn poll<D: Dma + DmaRead>(&mut self, b: &mut Bringup, cmdq: &mut CommandQueue, r: &mut impl Registers, dma: &mut D,
-        mut deliver: impl FnMut(&[u8])) -> bool
+        now: u64, mut deliver: impl FnMut(&[u8])) -> bool
     {
         if self.down.is_some() { return false; }
         let cause = r.read(csr::INT);
@@ -137,14 +177,28 @@ impl Link {
         if cause & (csr::INT_SW_ERR | csr::INT_HW_ERR) != 0 { self.down = Some(Down::Failed(Failure::Crashed { cause })); return false; }
         if cause != 0 { r.write(csr::INT, cause); }
         let (family, me, bssid, protected) = (self.family, self.me, self.target.bssid, self.protected);
-        let (mut freed, mut gone, mut error) = (None, None, None);
+        let (mut freed, mut gone, mut error, mut rate) = (None, None, None, None);
         let (mut received, mut dropped, mut last_drop) = (0u64, 0u64, None);
         let mut pn = self.pn;
+        // A key's counters start over when the firmware takes it, in receive order:
+        // frames after its answer are under the new key.
+        let mut installing = self.rekey.as_ref().and_then(|k| k.keys.in_flight()).and_then(|k| match k {
+            Key::Pairwise(_) => Some(0),
+            Key::Group(id, _) => Some(id as usize & 3),
+            Key::Integrity(..) => None,
+        });
         let mut scratch = [0u8; 4096];
         let mut eth = [0u8; 4096];
+        let rekeying = self.rekey.is_some();
+        let mut key_frame = [0u8; eapol::MAX_FRAME];
+        let mut key_len = 0;
         let result = b.receive(r, dma, |p: &Packet<'_>| {
-            if cmdq.on_packet(p) { return; }
+            if cmdq.on_packet(p) {
+                if cmdq.answer.is_some_and(|a| !a.failed) { if let Some(id) = installing.take() { pn[id] = [None; 16]; } }
+                return;
+            }
             if let Some(s) = tx::parse_response(p) { freed = Some(s); return; }
+            if let Some(r) = tlc::parse_update(p) { rate = Some(r); return; }
             let Some(rx) = parse_mpdu(p, family, &mut scratch) else {
                 if let Some(e) = h::parse_error(p) { error = Some(e); }
                 return;
@@ -163,7 +217,11 @@ impl Link {
                         if pn[key][tid].is_some_and(|last| number <= last) { dropped += 1; last_drop = Some(Drop::Replay); return; }
                         pn[key][tid] = Some(number);
                     }
-                    if n > 0 { received += 1; deliver(&eth[..n]); }
+                    let key = n > 14 && eth[12..14] == eapol::ETHERTYPE.to_be_bytes() && eth[6..12] == bssid;
+                    if key && rekeying && n - 14 <= eapol::MAX_FRAME {
+                        key_frame[..n - 14].copy_from_slice(&eth[14..n]);
+                        key_len = n - 14;
+                    } else if n > 0 && !key { received += 1; deliver(&eth[..n]); }
                 }
                 // A frame with no payload (null data) is not an error.
                 Err(Drop::Malformed) if w::data_header_len(f) == Some(f.len()) => {}
@@ -178,6 +236,70 @@ impl Link {
         if let Err(id) = result { self.down = Some(Down::Failed(Failure::BadRxBuffer(id))); return false; }
         if let Some(e) = error { self.down = Some(Down::Failed(Failure::Firmware(e))); return false; }
         if let Some(reason) = gone { self.down = Some(Down::Disconnected(reason)); return false; }
+        if let Some(rate) = rate { self.rate = rate; }
+        if key_len > 0 { self.on_key_message(&key_frame[..key_len]); }
+        // One command at a time: rate control waits for keys, keys for rate control.
+        if !self.rate_control_step(b, cmdq, r, dma, now) { return true; }
+        // The answer to a key message goes out before its keys go in.
+        if let Some((eth, n)) = self.reply {
+            if self.send(b, r, dma, &eth[..n]).is_err() { return true; }
+            self.reply = None;
+        }
+        match self.rekey.as_mut().map(|k| k.keys.install(b, cmdq, r, dma, now)) {
+            Some(Ok(Some(_))) => self.rekeyed += 1,
+            Some(Err(f)) => { self.down = Some(Down::Failed(f)); return false; }
+            _ => {}
+        }
         true
+    }
+
+    /// Sends TLC_MNG_CONFIG_CMD when nothing else is in flight and takes its answer.
+    /// Returns false while it is in flight (the command queue is busy).
+    fn rate_control_step<D: Dma + DmaRead>(&mut self, b: &Bringup, cmdq: &mut CommandQueue, r: &mut impl Registers, dma: &mut D, now: u64) -> bool {
+        match self.rate_control {
+            RateControl::Wanted(version) if cmdq.pending.is_none() && self.rekey.as_ref().is_none_or(|k| k.keys.idle()) => {
+                let mut c = [0u8; tlc::CONFIG_BYTES];
+                tlc::config(&mut c, version, &self.target);
+                match cmdq.send(dma, r, &b.layout, b.base, h::DATA_PATH_GROUP, tlc::TLC_MNG_CONFIG_CMD, 0, &c) {
+                    Ok(_) => { self.rate_control = RateControl::Sent(now); false }
+                    Err(cmdq::Error::Busy) => true,
+                    Err(_) => { self.rate_control = RateControl::Refused; true }
+                }
+            }
+            RateControl::Sent(since) => {
+                if let Some(a) = cmdq.answer.take() {
+                    self.rate_control = if a.failed { RateControl::Refused } else { RateControl::On };
+                    true
+                } else if now.saturating_sub(since) >= COMMAND_US {
+                    cmdq.abandon();
+                    self.rate_control = RateControl::Refused;
+                    true
+                } else { false }
+            }
+            _ => true,
+        }
+    }
+
+    /// A key message from the AP after the handshake: answered, its keys queued.
+    fn on_key_message(&mut self, frame: &[u8]) {
+        let Some(k) = self.rekey.as_mut() else { return };
+        self.rekey_messages += 1;
+        let mut reply = [0u8; eapol::MAX_FRAME];
+        match k.sup.receive(frame, &mut reply) {
+            Ok((n, install)) => {
+                k.keys.queue(install);
+                if n > 0 {
+                    let mut eth = [0u8; 14 + eapol::MAX_FRAME];
+                    eth[..6].copy_from_slice(&self.target.bssid);
+                    eth[6..12].copy_from_slice(&self.me);
+                    eth[12..14].copy_from_slice(&eapol::ETHERTYPE.to_be_bytes());
+                    eth[14..14 + n].copy_from_slice(&reply[..n]);
+                    // Sent under the current keys, before the new ones go in (`poll`
+                    // retries it while the TX queue is full).
+                    self.reply = Some((eth, 14 + n));
+                }
+            }
+            Err(e) => self.rekey_error = Some(e),
+        }
     }
 }

@@ -3936,6 +3936,29 @@ Roadmap workstream B, part 1 (report: `docs/handoff/LINUX_AND_DESKTOP_PARITY_REP
 - **Not yet**: no UEFI boot entry is registered (the kernel has no runtime services), so on a PC whose ESP already has a fallback loader (Windows) the person picks `\EFI\SEXOS\BOOTX64.EFI` once in the firmware's boot menu; Install says so. Slot B, signed updates and try-once fallback are part 2.
 - **Gates**: `scripts/install_gate.py` (QEMU + OVMF with its own variable store): a Linux-like GPT disk is hashed before and after a live session (unchanged), `install` plans, `install go` installs, sgdisk/fsck/mtools check the disk and the Linux partition's bytes, then the PC starts from the disk with no ISO and a file survives a restart; a blank disk becomes SexOS's alone. `scripts/usb_stick_gate.py`: the ISO written to a USB stick (usb-storage on xHCI, no CD) reaches the desktop under UEFI and under BIOS.
 
+
+## Native resolution, HiDPI scale, damage-only scanout (2026-11-09)
+
+Workstream F, stage F1 (`docs/handoff/LINUX_AND_DESKTOP_PARITY_REPORT_2026_11_09.md` section 6).
+- **Native mode.** The default boot entry no longer fixes `RESOLUTION`; Limine sets the monitor's own preferred mode from its EDID. `SexOS compact 1024x768` stays second, and a new last entry `SexOS 1280x800 (if the native mode fails)` keeps the old mode. The kernel asks for framebuffer revision 1 and logs `[display.mode] width= height= modes= largest= width_mm= height_mm= scale=`.
+- **Padded rows.** Real GPUs often pad scanout rows. BOOT no longer requires pitch = width x 4: Display's private frames stay packed, the scanout mapping covers pitch x height, and publication steps rows at the scanout pitch.
+- **Damage-only publication.** Before, every frame copied the whole front frame into the candidate and then the whole candidate to the scanout (two full screens per frame, 32 MB at 2560x1600, even for a clock tick). `frame_output::Store` now tracks buffer age: the other span lags the front only in the rows the last frame changed, so a partial frame copies those rows, and `publish_frame` writes only the spans that differ from what the screen already shows. At 2560x1600 a clock tick now writes 14 to 29 pixels. `[display.batch.published] ... written= total_written=`.
+- **Screen scale (HiDPI).** BOOT reads the monitor's size from its EDID (`sex_pdx::display_boot::edid_size_mm`) and picks a whole-number scale (`default_scale`: 2 from about 150 dpi with at least 1200 rows, 3 from 288 dpi with 1800 rows; with no trustworthy size only 2000+ rows get 2). 13" 2560x1600 and 27" 4K get 2; 24" 1080p and 27" 1440p get 1. Display multiplies text sizes and the pointer by it. Ctrl+Alt+= / Ctrl+Alt+- step it (1 to 3), Ctrl+Alt+0 returns to BOOT's choice; `[display.scale]`.
+- **ABI changes.** `display_boot` query kind 3 = packed `Physical { scale, width_mm, height_mm }` (`display_boot::physical()`, Shell/Display/Input). `desktop_style::OP_DISPLAY_SCALE` 0x2D5 (Shell to Display, window manager only), `desktop_style::ui_scale()`. `boot_display_state::Info.physical`. abi_version_hash recomputed.
+- **Limit removed.** A 2560x1600 pixel region needs 4242 pages, more than the old fixed 1400-page list held (BOOT panicked `PROGRAM_POOL_REGION_CAPACITY`). The span tenancy from #74 removed that list, so native high resolutions boot.
+- **Gate.** `scripts/display_native_gate.py` (QEMU VGA 2560x1600 with 64 MiB VGA memory): boots at 2560x1600 with 35 firmware modes listed, the desktop reaches the bottom-right corner, small updates write a few pixels, Ctrl+Alt+= grows the text ink 8x, Ctrl+Alt+0 restores it exactly. `text_zoom_gate` still passes at 1280x800. Host: `tests/display_boot_scale.rs` (EDID and scale), `tests/display_frame_output.rs` (buffer age).
+- **Faster composition.** A program's picture is copied straight from its pixel region a row at a time (`program_pixel_row`), not looked up pixel by pixel, and solid runs are plain slice fills in the private frame (not volatile stores). A full 2560x1600 frame went from about 1.7 s to 0.74 s under TCG; `program_shapes_gate` still matches the host rendering exactly.
+- **Next (F2).** Bar, title bars and window borders still draw at 1x; scaling them moves Shell's work area (desktop thread owns silk-shell). Window chrome and text still go through per-pixel `composite_pixel`; then KMS for i915/amdgpu and multi-monitor.
+## Signed updates into the other system slot, tried once (2026-11-10)
+
+Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES_2026_11_10.md`.
+- **`update [URL]`** in Spindle. It downloads `sexos-update.txt` (version, size, SHA-256 of the image) and `sexos-update.sig` (Ed25519 over the index) from URL (default: the latest GitHub release, `https://github.com/xirtus/sexos/releases/latest/download/`). Files checks the signature against the release key built into it and the version against the running system's. Only then is `sexos-boot.img` downloaded. Files checks its size and hash, writes it into the system slot that is not running, reads it back, and points the boot menu at it. A bad signature, a different image or an older version is refused, and the menu and the running slot are never touched. `fetch` now follows redirects (up to 8; GitHub's release downloads redirect twice).
+- **Try once.** The boot menu carries `# sexos-state version= candidate= current= trial= prev=` and `DEFAULT_ENTRY`. Files rewrites both in place: the menu file is fixed at 16 KiB and contiguous, so only its own sectors change and the FAT never does. After an update the new slot is the default with `trial=pending`. When Files starts there, it marks `started` and makes "SexOS previous system" the default. When the desktop's terminal first talks to Files, the trial passes: the new slot is the default again and its version counts for rollback protection. A start in the previous slot during a trial marks it `failed`. Limine can't count tries, so a crash before Files starts repeats until someone picks the previous system, which the menu always lists.
+- **ABI changes**: `fs::UPDATE` 22 (paths index NUL sig [NUL image]; reply OK go on / EXISTS nothing newer / DENIED refused, with a text report); `fs::BOOT_FACTS_SLOT` 102 / region 0x4101. The kernel asks Limine where its file came from (`ExecutableFileRequest`) and gives Files that partition GUID read-only, so Files knows which slot is running. `abi_version_hash` recomputed.
+- **Disk driver**: a raw write now locks the running system's view only when it reaches the partition table or the system's own store. Writes to the other slot and the boot menu don't, so an update leaves the system usable.
+- **Keys**: Files trusts `SEXOS_RELEASE_KEY` (64 hex digits) or `keys/release.pub` at build time. A build with neither takes no updates. `tools/sexos-release` (host, not in the workspace) does `keygen`, `sign`, `public` and `verify`. Its `test` key is for gates only; only builds that set `SEXOS_RELEASE_KEY` to its public half trust it.
+- **Tests**: `sex_disk::update` host tests: state steps, signature and tampering, a full update on a Windows-like disk (slot B written, menu entries, FAT intact per mtools, rollback refused, a second update back to A). `scripts/update_gate.py` (QEMU + OVMF): install; a tampered index is refused; update over a 302 redirect into slot B; B starts, the trial starts and passes; the same release is "up to date"; version 3 into A, power cut right after Files starts; the next start falls back to B with `trial=failed`.
+- **Also fixed: no network on UEFI PCs.** OVMF (and likely real UEFI firmware) leaves network controllers bus-mastering after boot, and sexnet quarantines a NIC it finds mastering (`UnknownMaster`). The kernel now quiesces sexnet's leased controllers at BOOT, as it already did for a restarted run, so sexnet proves custody from idle.
 ## Intel Wi-Fi, stage W5e: traffic over Wi-Fi (2026-11-10)
 - **What:** new `sex_wifi::link` carries Ethernet frames over the connection. Outgoing
   frames are encrypted by the firmware on WPA2. Incoming frames are checked for the
@@ -3945,4 +3968,34 @@ Roadmap workstream B, part 1 (report: `docs/handoff/LINUX_AND_DESKTOP_PARITY_REP
 - **Evidence:** `scripts/wifi_host_gate.sh` (45 driver tests). A test sends ARP over
   WPA2 on the firmware model and receives decrypted frames, a replay, an undecrypted
   frame, a relayed own broadcast and a deauthentication.
+- **ABI / kernel:** none.
+
+## Intel Wi-Fi, stage W5f: group key rekeying (2026-11-10)
+- **What:** the link keeps the WPA2 supplicant. It answers the AP's later key messages
+  (group rekey, pairwise rekey) and installs the new keys, so a connection survives
+  the AP's hourly group key change. INTEL_WIFI section 15.
+- **Evidence:** `scripts/wifi_host_gate.sh` (46 driver tests). A test plays a group
+  rekey on the firmware model: the key message is not passed up, the answer goes back
+  protected with a valid MIC, and the new key is installed once. Packet numbers
+  restart under the new key, and repeated frames or key messages change nothing.
+- **ABI / kernel:** none.
+
+## Intel Wi-Fi, stage W5g: firmware rate control (2026-11-10)
+- **What:** new `sex_wifi::tlc`. The link hands the shared legacy rates to the
+  firmware (TLC_MNG_CONFIG_CMD v3/v4), which then picks each data frame's rate. That is
+  up to 54 Mb/s instead of a fixed 12. INTEL_WIFI section 16.
+- **Evidence:** `scripts/wifi_host_gate.sh` (47 driver tests). A test checks the
+  command's layout in both versions, data frames without a fixed rate once rate control
+  is on, and the firmware's rate report.
+- **ABI / kernel:** none.
+
+## Intel Wi-Fi, stage W5d: WPA3-Personal (SAE) (2026-11-10)
+- **What:** WPA3-only networks now connect. SAE commit and confirm run in
+  authentication frames, with hunting-and-pecking or hash-to-element and anti-clogging
+  tokens. The association request uses the SAE RSN element (management frame
+  protection required), and the 4-way handshake runs with SAE's PMK.
+  INTEL_WIFI section 17.
+- **Evidence:** `scripts/wifi_host_gate.sh` (50 driver tests). The AP model runs SAE
+  with a token request in both methods, and both sides agree on the PMK. A wrong
+  password gets no confirm.
 - **ABI / kernel:** none.

@@ -391,7 +391,7 @@ Boot log: `[wifi.assoc.start] security=…`, then `[wifi.assoc] step=…` lines,
 the phases ASSOCIATING (7) and ASSOCIATED (8).
 
 Not yet:
-- WPA3-only networks are refused (`wpa3_sae`). SAE authentication is W5d.
+- WPA3-only networks use SAE (W5d, section 17); `Assoc::new` alone still refuses them (`wpa3_sae`).
 - WPA2's 4-way handshake follows association (section 13).
 - No HT/VHT capabilities are sent, so association is legacy-rate only (W6).
 - `iwx_run`'s smart-fifo, multicast and power commands, and TLC, come with the data
@@ -470,3 +470,70 @@ Not yet:
 - power save;
 - roaming;
 - saved networks.
+
+## 15. Stage W5f: group key rekeying (2026-11-10)
+
+APs replace the group key every hour or so (some daily), and some also renew the
+pairwise key. Without an answer they deauthenticate the station, so the x17 test would
+drop after the first rekey. The handshake's supplicant now lives on in the link
+(`rsna::Rekey`, handed over by `Rsna::into_link`):
+
+- EAPOL-Key frames from the AP after the handshake arrive protected like other data.
+  The link sends them to the supplicant instead of the IP stack. The supplicant
+  checks the MIC and the replay counter, then unwraps the new GTK (and IGTK).
+- The answer (group message 2) goes back protected, under the current keys, before
+  the new key is installed.
+- `rsna::Keys` installs keys, one command at a time, with SEC_KEY_CMD or ADD_STA_KEY.
+  It is now shared by the handshake and the link. Once a key is in, its packet-number
+  counters start over.
+- A key the supplicant already installed is never installed again (KRACK). A repeated
+  frame is dropped as a CCMP replay; a repeated key message as an EAPOL replay.
+
+Boot log: `[wifi.rekey] messages=… installed=… error=…`.
+
+## 16. Stage W5g: firmware rate control (2026-11-10)
+
+Data used to go at a fixed 12 Mb/s. Once the link runs, it now sends
+TLC_MNG_CONFIG_CMD (DATA_PATH 0x0f, v3 or v4 by the firmware's version table, 28 bytes
+either way; `iwx_rs_init`) with the legacy rates both sides have: station 0, 20 MHz,
+non-HT, chain A, max MPDU 2312. After the answer, data frames go without CMD_RATE and
+with rate 0, and the firmware picks each frame's rate (`iwx_tx_fill_cmd`). Management
+and EAPOL-before-keys frames keep the lowest basic rate. TLC_MNG_UPDATE_NOTIF (0xf7)
+reports the chosen rate. If the command is refused or not answered within 1 s, the fixed
+rate stays.
+
+`Bss::rates` (and `Target::rates`) now record every rate the AP names, not only the
+basic ones. The station still associates as a legacy station, so the top rate is
+54 Mb/s. HT/VHT (HT capabilities in the association request, an HT PHY context, and
+HT rates in this command) is the next step for speed.
+
+Boot log: `[wifi.rate] control=… rate=…`.
+
+## 17. Stage W5d: WPA3-Personal with SAE (2026-11-10)
+
+On a WPA3-only network, sexnet builds SAE's password element for the AP and the x17.
+It uses hash-to-element when the AP advertises it (RSNXE), and hunting and pecking
+otherwise. Random values come from the entropy service. `Assoc::with_sae` then
+authenticates with SAE instead of open system:
+
+- **Commit** (algorithm 3, transaction 1): group 19, scalar and element. Status 126
+  is used with hash-to-element, 0 otherwise.
+- **Anti-clogging token.** If the AP asks for one (status 76), the commit goes again
+  at once with the token: bare after the group, or in its container element (255/93)
+  at the end with hash-to-element.
+- **AP commit.** The AP's commit gives the KCK, PMK and PMKID (`sae::Sae`), and our
+  confirm goes at once.
+- **Confirm.** The AP's confirm (transaction 2) must check out, else
+  `Refusal::Sae(BadConfirm)`. With a wrong password the AP drops our confirm, so the
+  failure shows as `NoAnswer("sae_confirm")`.
+
+The association request then carries our SAE RSN element: AKM 00-0f-ac-8, MFPC and
+MFPR (management frame protection required), and BIP-CMAC as the group management
+cipher. With hash-to-element it also carries the RSNXE. The 4-way handshake runs with
+`Akm::Sae` and the PMK from SAE (the passphrase is wiped then). The IGTK is installed
+with SEC_KEY_CMD.
+
+Transition networks (WPA2/WPA3) keep using WPA2 for now. Only group 19 is offered.
+
+Boot log: `[wifi.assoc.start] security=Wpa3Personal step=SaeCommit`,
+`[wifi.handshake.start] akm=Sae …`.

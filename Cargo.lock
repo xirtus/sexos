@@ -519,6 +519,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "ed25519-compact"
+version = "2.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9547879431a90e352a35863a54416d92898a787b9af09e6ae2e09a96bd78be80"
+
+[[package]]
 name = "elliptic-curve"
 version = "0.13.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1812,6 +1818,10 @@ dependencies = [
 [[package]]
 name = "sex-disk"
 version = "0.1.0"
+dependencies = [
+ "ed25519-compact",
+ "sha2",
+]
 
 [[package]]
 name = "sex-fetch"
@@ -2370,6 +2380,13 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "stdhello"
+version = "0.1.0"
+dependencies = [
+ "sex-std",
+]
+
+[[package]]
+name = "stdnet"
 version = "0.1.0"
 dependencies = [
  "sex-std",
