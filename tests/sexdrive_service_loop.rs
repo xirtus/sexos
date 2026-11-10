@@ -31,6 +31,7 @@ fn nvme_write_one_block(offset:u64,size:u64,_src:u64)->u64{EFFECTS.lock().unwrap
 fn nvme_write_readback_proof(_:u64,_:u64,_:u64)->u64{panic!("not a proof request")}
 fn nvme_flush()->u64{EFFECTS.lock().unwrap().device.push((BLOCK_SYNC,0,0));0}
 fn device_sectors()->u64{2048}
+fn layout_word()->u64{0}
 fn serving_ahci()->bool{false}
 static POWERED_DOWN:std::sync::atomic::AtomicBool=std::sync::atomic::AtomicBool::new(false);
 fn powered_down()->bool{POWERED_DOWN.load(std::sync::atomic::Ordering::SeqCst)}

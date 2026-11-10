@@ -1052,11 +1052,28 @@ fn phase5_active_app_at(x: usize, y: usize, _bar: &SilkBar, scene: &scene::Scene
     }
 }
 
+/// Panel: the focused window's title, right of the focus dot and left of the
+/// workspace dots, like a Waybar or Plasma window title.
+const PANEL_TITLE_X: usize = 166;
+const PANEL_TITLE_END: usize = silkbar_model::WS_X0 - 16;
+fn panel_title_fg_at(x: usize, y: usize, bar: &SilkBar, scene: &scene::SceneSnapshot) -> Option<u32> {
+    let y0 = (BAR_BG_H - glyphs::TITLE_H) / 2;
+    if x + 2 < PANEL_TITLE_X || x >= PANEL_TITLE_END || y < y0 || y >= y0 + glyphs::TITLE_H { return None; }
+    let focused = scene.focus;
+    if focused == 0 { return None; }
+    let title = surface_title(focused)?;
+    let alpha = glyphs::title_coverage(title, x as i32 - PANEL_TITLE_X as i32, y - y0);
+    if alpha == 0 { return None; }
+    let background = bar_color(x, y, bar, scene);
+    Some(coverage_blend(sex_pdx::desktop_style::contrast_ink(background), background, alpha))
+}
+
 /// Same visible top-strip content for full and incremental redraws.
 fn top_strip_pixel(x: usize, y: usize, bar: &SilkBar, lines: &[[u8;13];2], scene: &scene::SceneSnapshot) -> u32 {
     if let Some(fg) = clock_fg_at(x, y, bar, lines) { fg }
     else if let Some(fg) = bell_badge_at(x, y, bar) { fg }
     else if let Some(fg) = phase5_active_app_at(x, y, bar, scene) { fg }
+    else if let Some(fg) = panel_title_fg_at(x, y, bar, scene) { fg }
     else if let Some(fg) = phase5_tint_swatch_at(x, y, bar) { fg }
     else if let Some(fg) = phase5_palette_dot_at(x, y, bar) { fg }
     else { bar_color(x, y, bar, scene) }
@@ -1481,13 +1498,20 @@ fn set_program_title(surface_id: u64, title: Option<[u8; 16]>) {
     }
 }
 /// Fixed-position title glyphs choose contrast against the final composed background.
+/// The name a window shows in its title bar and in the panel.
+fn surface_title(surface_id: u64) -> Option<&'static [u8]> {
+    if let Some(own)=program_title(surface_id) { return Some(own); }
+    if let Some(row)=app_catalog::INCARNATIONS.iter().find(|row|row.surface==surface_id||row.shell_surface==Some(surface_id)) {
+        return Some(match row.app {app_catalog::App::Quil=>b"Quil",app_catalog::App::Spindle=>b"Spindle",app_catalog::App::Browser=>b"Browser",app_catalog::App::Program=>b"Program"});
+    }
+    match surface_id{200=>Some(b"Linen"),100=>Some(b"App"),_=>None}
+}
+
 fn toolbar_title_fg_at(lx: usize, ly: usize, surface_id: u64, background: u32) -> Option<u32> {
     let title_x = FRAME_TOP_BAR_LIGHT_EXCLUSION_PX + 12;
     let title_y = (FRAME_TOP_BAR_HEIGHT_PX - glyphs::TITLE_H) / 2;
     if lx + 2 < title_x || ly < title_y || ly >= title_y + glyphs::TITLE_H { return None; }
-    let title: &[u8] = if let Some(own)=program_title(surface_id) { own } else if let Some(row)=app_catalog::INCARNATIONS.iter().find(|row|row.surface==surface_id||row.shell_surface==Some(surface_id)) {
-        match row.app {app_catalog::App::Quil=>b"Quil",app_catalog::App::Spindle=>b"Spindle",app_catalog::App::Browser=>b"Browser",app_catalog::App::Program=>b"Program"}
-    }else{match surface_id{200=>b"Linen",100=>b"App",_=>return None}};
+    let title = surface_title(surface_id)?;
     // Geist Sans, kerned, each glyph at its quarter-pixel position; two pixels of
     // margin left of the first letter catch an overhang.
     let alpha = glyphs::title_coverage(title, lx as i32 - title_x as i32, ly - title_y);
@@ -3963,6 +3987,7 @@ pub extern "C" fn _start() -> ! {
                         bytes[..8].copy_from_slice(&msg.arg1.to_le_bytes());
                         bytes[8..].copy_from_slice(&msg.arg2.to_le_bytes());
                         set_program_title(msg.arg0, Some(bytes));
+                        needs_top_strip_redraw |= unsafe { FOCUSED_SURFACE_ID } == msg.arg0;
                         needs_full_redraw = true;
                         sex_pdx::serial_record!("[display.app.title] target={} surface={}", msg.caller_pd, msg.arg0);
                     }
