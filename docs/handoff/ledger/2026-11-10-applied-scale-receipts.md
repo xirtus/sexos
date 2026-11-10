@@ -37,3 +37,12 @@ pending receipt only on a newer registration, and resets scale to BOOT for that 
 Idempotent registration cannot drop an outstanding reply. Sequence exhaustion fails
 closed instead of wrapping. Production-state controls cover legacy interference,
 old reply replay into a new Shell, task mismatch and registration rollback.
+
+Refreshed `9409b3e7` clean build and 2560x1600 native receipt gate passed. The
+1280x800 run correctly rejected the diagnostic ordering: pdx_reply immediately
+scheduled Shell, so Shell's applied marker could precede Display's post-reply
+publication log even though the completed full-frame log preceded both. Publication
+is now logged once after that full frame and before transport, with a separate sent
+marker only after successful reply. The strict gate assertion is retained unchanged;
+failed evidence remains under local chrome-scale-receipts/fenced9409. Seven production
+state cases pass. Fresh final-source native retries and current-head CI are required.

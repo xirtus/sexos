@@ -4910,11 +4910,18 @@ pub extern "C" fn _start() -> ! {
                 serial_println!("[sexdisplay.render.live.ok] fb_w={} fb_h={}",w,h);
             }
         }
-        if published.as_ref().is_some_and(|frame|frame.plan.is_full()){scale_receipts.published();}
+        if scale_receipts.needs_publication()&&published.as_ref().is_some_and(|frame|frame.plan.is_full()){
+            scale_receipts.published();
+            if let Some((target,value))=scale_receipts.reply(){
+                // Record publication before reply can immediately schedule
+                // Shell. This marker does not claim transport succeeded.
+                sex_pdx::serial_record!("[display.scale.published] target={} receipt={:#x} cpu_publication=1",target,value);
+            }
+        }
         if let Some((target,value))=scale_receipts.reply(){
             if sex_pdx::pdx_reply(target,value)==0 {
                 scale_receipts.sent();
-                sex_pdx::serial_record!("[display.scale.published] target={} receipt={:#x} cpu_publication=1",target,value);
+                sex_pdx::serial_record!("[display.scale.reply.sent] target={} receipt={:#x}",target,value);
             }
         }
         finish_display_transactions(&mut lifecycle,published.as_ref());
