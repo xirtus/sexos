@@ -742,7 +742,7 @@ impl Browser {
                     let _ = script.dispatch("script\t");
                     // A fetched resource loads even when executing it throws.
                     // Restore currentScript before delivering its load event.
-                    if s.external && !matches!(&r, Err(sex_js::Error::Trapped(_))) { let _ = script.dispatch(&alloc::format!("scriptend\t{}\t1", n)); }
+                    if s.external && !matches!(&r, Err(sex_js::Error::Trapped(_))) { let _ = script.dispatch(&alloc::format!("scriptload\t{}", n)); }
                 }
                 r
             };

@@ -2,8 +2,8 @@
 
 The initial page-script runner restored `document.currentScript` but never fired
 an external script element's load event. Dynamically inserted resources already
-had that lifecycle path. Initial external classic scripts now use the same
-`scriptend` dispatch after restoring currentScript and before the next script.
+had a deferred completion event. Initial external classic scripts now use a synchronous
+`scriptload` dispatch after restoring currentScript and before the next script.
 A JavaScript exception still permits load, because the resource loaded; terminal
 VM traps do not dispatch another callback. Inline scripts do not receive load.
 
