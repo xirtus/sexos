@@ -12,7 +12,8 @@ pub const PANEL_GLOW: usize = 2;
 pub const PANEL_RADIUS_STEP: usize = 3;
 pub const PANEL_MARGIN_TOP: usize = 10;
 
-pub const WORKSPACE_COUNT: usize = 5;
+/// Super+1..9: nine workspaces (was 5 before SilkBar layout ABI v6).
+pub const WORKSPACE_COUNT: usize = 9;
 pub const MAX_CHIPS: usize = 4;
 
 // ── Selected Window Option Bits (matches OPTION_* in silk-shell) ──────────
@@ -29,11 +30,21 @@ pub const WS_Y: usize = 18;
 pub const WS_H: usize = 22;
 pub const WS_INACTIVE_W: usize = 20;
 pub const WS_ACTIVE_W: usize = 30;
-pub const WS_X0: usize = 557;
-pub const WS_X1: usize = 589;
-pub const WS_X2: usize = 625;
-pub const WS_X3: usize = 671;
-pub const WS_X4: usize = 707;
+/// Nine workspace dots, WS_DOT_W wide and WS_STEP apart. Dot 2 still covers
+/// x=635 for the synthetic SilkBar click proof, and the group still ends left
+/// of the status chips on a 1024-pixel-wide desktop.
+pub const WS_STEP: usize = 19;
+pub const WS_DOT_W: usize = 16;
+const _: () = assert!(WS_X8 == WS_X0 + 8 * WS_STEP);
+pub const WS_X0: usize = 583;
+pub const WS_X1: usize = 602;
+pub const WS_X2: usize = 621;
+pub const WS_X3: usize = 640;
+pub const WS_X4: usize = 659;
+pub const WS_X5: usize = 678;
+pub const WS_X6: usize = 697;
+pub const WS_X7: usize = 716;
+pub const WS_X8: usize = 735;
 
 pub const LAUNCHER_X: usize = 100;
 pub const LAUNCHER_Y: usize = 19;
@@ -50,19 +61,21 @@ pub const CHIP_X3: usize = 1090;
 pub const CLOCK_W: usize = 80;
 pub const CHIP_X_BELL: usize = 1020; // Bell icon between Battery and Clock
 
-/// Total number of layout boxes: 1 launcher + 5 workspaces + 4 chips + 1 bell
-pub const LAYOUT_COUNT: usize = 11;
+/// Total number of layout boxes: 1 launcher + 9 workspaces + 4 chips + 1 bell
+pub const LAYOUT_COUNT: usize = 15;
 
 /// ABI version for SilkBar model layout (not the PDX wire protocol).
 /// Increment when `SilkBarUpdate` layout or `UpdateKind` discriminants change.
+/// v6: nine workspaces (WORKSPACE_COUNT 5 -> 9), LAYOUT_COUNT 11 -> 15,
+///     ModuleSlot Chip0..Bell renumbered 10..14.
 /// v5: added separate civil snapshot state and SetCivilClock(11).
 /// v4: added SetActiveApp(8), SetTintAccent(9), SetPaletteState(10); SilkBar
 ///     struct extended with active_app_sid, accent_tint_idx, palette_* fields.
 /// Consumers query `SILKBAR_ABI_VERSION` for PDX compatibility, not this value.
-pub const ABI_VERSION: u32 = 5;
+pub const ABI_VERSION: u32 = 6;
 /// Must equal `ABI_VERSION`. Checked by `validate_contract()` at startup.
-pub const SILK_DE_BAR_ABI_V1: u32 = 5;
-pub const SILK_DE_BAR_LAYOUT_V1: u32 = 11;
+pub const SILK_DE_BAR_ABI_V1: u32 = 6;
+pub const SILK_DE_BAR_LAYOUT_V1: u32 = 15;
 pub const SILK_DE_BAR_THEME_V1: u32 = 10;
 pub const SILK_DE_REQUIRED_WORKSPACE_SLOTS: usize = WORKSPACE_COUNT;
 pub const SILK_DE_REQUIRED_CHIP_SLOTS: usize = MAX_CHIPS;
@@ -101,11 +114,15 @@ pub enum ModuleSlot {
     Workspace2 = 3,
     Workspace3 = 4,
     Workspace4 = 5,
-    Chip0 = 6,
-    Chip1 = 7,
-    Chip2 = 8,
-    Clock = 9,
-    Bell = 10,
+    Workspace5 = 6,
+    Workspace6 = 7,
+    Workspace7 = 8,
+    Workspace8 = 9,
+    Chip0 = 10,
+    Chip1 = 11,
+    Chip2 = 12,
+    Clock = 13,
+    Bell = 14,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -356,9 +373,9 @@ pub fn for_desktop_width(width:usize)->Option<SilkBar>{
     let mut bar=DEFAULT_SILK_BAR;
     let edge=CHIP_X3.checked_add(CLOCK_W)?.checked_add(16)?;
     let shift=edge.saturating_sub(width);
-    let left_end=bar.layout[..6].iter().map(|b|b.x+b.w).max()?;
+    let left_end=bar.layout[..1 + WORKSPACE_COUNT].iter().map(|b|b.x+b.w).max()?;
     if CHIP_X0.checked_sub(shift)?<left_end.checked_add(16)?{return None;}
-    for item in &mut bar.layout[6..]{item.x=item.x.checked_sub(shift)?;}
+    for item in &mut bar.layout[1 + WORKSPACE_COUNT..]{item.x=item.x.checked_sub(shift)?;}
     Some(bar)
 }
 
@@ -863,11 +880,15 @@ pub fn validate_deterministic_vectors() -> bool {
 pub const DEFAULT_SILK_BAR: SilkBar = SilkBar {
     layout: [
         LayoutBox { x: LAUNCHER_X, y: LAUNCHER_Y, w: LAUNCHER_W, h: LAUNCHER_H, module: Module::Launcher, action: Action::OpenLauncher },
-        LayoutBox { x: WS_X0, y: WS_Y, w: WS_INACTIVE_W, h: WS_H, module: Module::Workspaces(0), action: Action::SwitchWorkspace(1) },
-        LayoutBox { x: WS_X1, y: WS_Y, w: WS_INACTIVE_W, h: WS_H, module: Module::Workspaces(1), action: Action::SwitchWorkspace(2) },
-        LayoutBox { x: WS_X2, y: WS_Y, w: WS_ACTIVE_W,   h: WS_H, module: Module::Workspaces(2), action: Action::SwitchWorkspace(3) },
-        LayoutBox { x: WS_X3, y: WS_Y, w: WS_INACTIVE_W, h: WS_H, module: Module::Workspaces(3), action: Action::SwitchWorkspace(4) },
-        LayoutBox { x: WS_X4, y: WS_Y, w: WS_INACTIVE_W, h: WS_H, module: Module::Workspaces(4), action: Action::SwitchWorkspace(5) },
+        LayoutBox { x: WS_X0, y: WS_Y, w: WS_DOT_W, h: WS_H, module: Module::Workspaces(0), action: Action::SwitchWorkspace(1) },
+        LayoutBox { x: WS_X1, y: WS_Y, w: WS_DOT_W, h: WS_H, module: Module::Workspaces(1), action: Action::SwitchWorkspace(2) },
+        LayoutBox { x: WS_X2, y: WS_Y, w: WS_DOT_W, h: WS_H, module: Module::Workspaces(2), action: Action::SwitchWorkspace(3) },
+        LayoutBox { x: WS_X3, y: WS_Y, w: WS_DOT_W, h: WS_H, module: Module::Workspaces(3), action: Action::SwitchWorkspace(4) },
+        LayoutBox { x: WS_X4, y: WS_Y, w: WS_DOT_W, h: WS_H, module: Module::Workspaces(4), action: Action::SwitchWorkspace(5) },
+        LayoutBox { x: WS_X5, y: WS_Y, w: WS_DOT_W, h: WS_H, module: Module::Workspaces(5), action: Action::SwitchWorkspace(6) },
+        LayoutBox { x: WS_X6, y: WS_Y, w: WS_DOT_W, h: WS_H, module: Module::Workspaces(6), action: Action::SwitchWorkspace(7) },
+        LayoutBox { x: WS_X7, y: WS_Y, w: WS_DOT_W, h: WS_H, module: Module::Workspaces(7), action: Action::SwitchWorkspace(8) },
+        LayoutBox { x: WS_X8, y: WS_Y, w: WS_DOT_W, h: WS_H, module: Module::Workspaces(8), action: Action::SwitchWorkspace(9) },
         LayoutBox { x: CHIP_X0, y: CHIP_Y, w: CHIP_W, h: CHIP_H, module: Module::StatusChip(0), action: Action::ToggleModule(Module::StatusChip(0)) },
         LayoutBox { x: CHIP_X1, y: CHIP_Y, w: CHIP_W, h: CHIP_H, module: Module::StatusChip(1), action: Action::ToggleModule(Module::StatusChip(1)) },
         LayoutBox { x: CHIP_X2, y: CHIP_Y, w: CHIP_W, h: CHIP_H, module: Module::StatusChip(2), action: Action::ToggleModule(Module::StatusChip(2)) },
@@ -877,9 +898,13 @@ pub const DEFAULT_SILK_BAR: SilkBar = SilkBar {
     workspaces: [
         WorkspaceState { index: 1, active: false, urgent: false },
         WorkspaceState { index: 2, active: false, urgent: false },
-        WorkspaceState { index: 3, active: true,  urgent: false },
+        WorkspaceState { index: 3, active: true , urgent: false },
         WorkspaceState { index: 4, active: false, urgent: false },
         WorkspaceState { index: 5, active: false, urgent: false },
+        WorkspaceState { index: 6, active: false, urgent: false },
+        WorkspaceState { index: 7, active: false, urgent: false },
+        WorkspaceState { index: 8, active: false, urgent: false },
+        WorkspaceState { index: 9, active: false, urgent: false },
     ],
     chips: [
         ChipState { kind: ChipKind::Net,     visible: true },

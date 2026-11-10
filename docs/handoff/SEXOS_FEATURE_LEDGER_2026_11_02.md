@@ -3361,6 +3361,16 @@ Parity report workstream A (`LINUX_AND_DESKTOP_PARITY_REPORT_2026_11_09.md` sect
 - **Gates**: `scripts/power_acpi_gate.py` (QEMU `system_powerdown` ends the VM with exit 0 after Files flushed; launcher Restart resets through the FADT register and the machine boots again; launcher Shut Down ends it; 1 and 4 cores) and `scripts/power_host_gate.sh` (ABI encodings, EISA ids, `\_S5` reader). Both run in CI.
 - **Bare metal next week**: check `[acpi.power]` on the PKU PC: s5=1, reset method, power_button=1, aml=1 quarantined=0, idle state and hwp/cppc.
 
+## Desktop: tiling window manager with Super keys, nine workspaces (2026-11-09)
+
+Hyprland/river/KDE-style window management, stage E1 of the parity report (`docs/handoff/LINUX_AND_DESKTOP_PARITY_REPORT_2026_11_09.md` section 6).
+- **`servers/silk-shell/src/wm.rs`**: pure policy, host-tested by `tests/wm_layouts.rs`. Layouts per workspace: master/stack (default, 55% master), dwindle (Hyprland's halving), monocle, grid. Gaps: 6 px between windows, 8 px to the screen edge. Focus by direction, tiling order kept apart from the frame table so swapping never renumbers frames.
+- **Super chords** (Super is 0x5B/0x5C on PS/2 and USB; Super and every key pressed with it stay with the desktop, repeats and releases too):
+  Super tap or Super+D launcher; Super+Enter terminal; Super+1..9 workspace; Super+Shift+1..9 send window there; Super+Tab / Super+Shift+Tab and Super+Ctrl+Left/Right next/previous workspace; Super+H/J/K/L or arrows focus; with Shift, swap; Super+Q close; Super+F fullscreen; Super+V or Super+Shift+Space float (centred, 60%); Super+Space next layout; Super+M monocle on/off; Super+[ / ] master width -/+5% (15..85); Super+S scratchpad show/hide (centred, 70%, follows you to the current workspace); Super+Shift+S send to scratchpad; Super+W overview.
+- **Nine workspaces.** ABI change (named): SilkBar layout ABI v5 -> v6 in `silkbar-model`: `WORKSPACE_COUNT` 5 -> 9, `LAYOUT_COUNT` 11 -> 15, `ModuleSlot` Chip0..Bell renumbered 10..14, dots 16 px wide, 19 px apart from x=583 (still fits a 1024 px desktop). `abi_version_hash` recomputed. The Atlas overview lays its cards out 3x3 and takes 1..9.
+- **Records**: `[shell.wm.action] action=… done=… scene=a->b focus=a->b layout=…` and `[shell.wm.layout] scene=… layout=… windows=… master_pct=… gap_in=… gap_out=…`.
+- **Gate** `scripts/window_manager_gate.py` boots QEMU and drives every chord over real PS/2 key events, saving screens.
+
 ## Real PCs: wired network, HD Audio and SATA (2026-11-09)
 
 Workstream D of the parity report. Handoff and bare-metal checklist: `docs/handoff/REAL_PC_DRIVERS_2026_11_09.md`.
@@ -3451,6 +3461,57 @@ Stages D2 and D3 of `DRIVERS_AND_X17_R1_PLAN_2026_11_09.md`. Handoff: `docs/hand
   Tuxedo-using component.
 - **Open decision.** #70/#82 run firmware AML in ring 0; the audit recommends a ring-3
   `sexacpi` server.
+## Disks behind Intel RAID: VMD bus driver and Intel RST (IMSM) volumes, read only (2026-11-09)
+
+- **Why.** Many 2020+ laptops (Dell, HP, Lenovo; likely the Alienware x17 R1) ship with the
+  BIOS set to "RAID On": the NVMe drives sit behind Intel VMD and are invisible on PCI, and
+  two drives are often one Intel RST RAID 0 volume (Windows on it). SexOS saw no disk.
+- **VMD bus driver.** `crates/sex-vmd` (host-tested logic) + `kernel/src/vmd.rs` (BOOT only):
+  for every VMD controller (8086:9a0b Tiger Lake, 467f, 4c3d, 7d0b, a77f, ad0b, b60b, b06f,
+  201d, 28c0) map its CFGBAR, find the first bus (VMCAP/VMCONFIG), number the buses behind
+  each root port, place every memory BAR in MEMBAR1/MEMBAR2 (past VMD's own 8 KiB MSI-X
+  table; 64-bit BARs go to MEMBAR2 if MEMBAR1 is above 4 GiB), open bridge windows, enable
+  memory + bus master, INTx off. The devices are added to devmgr's list as ordinary
+  `PciDevice`s with the new `ecam` field (kernel address of their config page; 0 = legacy
+  ports), so the normal NVMe lease applies. Drivers behind VMD poll (MSI-X there is remapped
+  through VMD and not set up).
+- **Second NVMe.** The second NVMe controller is leased to sexdrive at `SLOT_NVME_HOST_2`
+  (160, the first per-service extra slot of the driver-manifest design); the first stays at 16
+  and is the first one found.
+- **IMSM.** `crates/sex-imsm`: assembles the Matrix Partition Block from the disk's last 17
+  sectors (anchor at the second-to-last sector, extra sectors before it), checks signature,
+  size and checksum, lists disks (serials) and volumes, maps volume sectors to member sectors
+  for RAID 0 (any strip size, any member count) and RAID 1 (either mirror; members marked for
+  rebuild are skipped). Migrating/initialising volumes, RAID 5 and RAID 10 are reported, not read.
+- **sexdrive.** After the first drive is ready it reads the drive's tail. A RAID member is
+  never written: the write guard, the single-block write path and the boot write self-tests are
+  off for it. The second drive comes up with a small polled controller (`raid.rs`), drives are
+  matched to members by serial number (mdadm's normalisation: no spaces, ':' -> ';', last 16),
+  and if every member of a RAID 0/1 volume is present, the block service serves the volume:
+  BLOCK_CAPACITY is its size, BLOCK_READ reads it strip by strip from both drives. The boot log
+  lists metadata, members, volumes and the volume's GPT partitions
+  (`[sexdrive.raid.*]`, `[sexdrive.nvme2.*]`, `[kernel.vmd.*]`).
+- **ABI** (hash recomputed): `sex_pdx::SLOT_NVME_HOST` (16, was a local constant) and
+  `SLOT_NVME_HOST_2` (160). `PciDevice` (kernel-internal) gains `ecam`.
+- **Gates.** `scripts/raid_host_gate.sh` (CI): 7 IMSM tests on fixtures that `mdadm --examine`
+  reads as valid (RAID 0, RAID 1, two-volume Matrix RAID with a 2-sector MPB) and an end-to-end
+  read of generated 2- and 3-member sets; 4 VMD tests against a simulated Tiger Lake VMD domain
+  (two root ports, NVMe behind each, MEMBAR1 above/below 4 GiB, running out of buses/memory).
+  `scripts/raid_gate.py` (QEMU): two NVMe drives as an IMSM RAID 0 with 4 KiB strips, attached
+  in reverse member order; sexdrive serves the volume, lists both GPT partitions (one entry
+  lies on the second drive), finds the backup GPT in the volume's last sector, and both drive
+  images are byte-identical afterwards.
+- **Files opens the volume (2026-11-10).** When the served disk holds no SexOS filesystem
+  (Files' mount fails and its format is refused), `servers/sexfiles/src/volumes.rs` scans the
+  disk itself with sex-volumes and mounts each FAT/exFAT/NTFS/ext4 partition read only under
+  `/media/LABEL` (`Source::Device`, `[files.media.device]`, `[files.media.mounted] ... read_only=1`).
+  `/media` requests are served even with no SexOS filesystem; every change there answers
+  "read-only disk". `scripts/raid_gate.py` now puts a FAT16 partition with HELLO.TXT on the RAID
+  volume and, from Spindle, lists `/media`, prints the file and sees a write refused.
+- **Limits.** Read only (writes to a RAID volume would need parity/mirror care). No VMD in QEMU, so the
+  VMD path is proven only against the simulation until the x17 R1 test. A third NVMe is logged
+  and not leased. 4 KiB-sector (4Kn) drives are not sized yet.
+
 
 ## Discrete GPU off at boot (NVIDIA N1, 2026-11-09)
 
@@ -3459,3 +3520,35 @@ Plan: `docs/handoff/NVIDIA_GPU_PLAN_2026_11_09.md` (stages N1-N6).
 - **AML work budget**: `acpi::with_aml(budget, f)` runs firmware AML quarantined with a limit on register accesses and stalls, so a firmware loop cannot hang the boot.
 - **Gate** `scripts/dgpu_power_gate.py` in CI: QEMU root port + display controller + SSDT power resource (`tests/acpi/dgpu_gate_ssdt.asl`); checks the method order off/on/off on the debug console, the restored header, the boot GPU kept and the desktop up.
 - ABI: none.
+
+## Intel Wi-Fi, stage W1: driver core with WPA2 and WPA3 (2026-11-09)
+
+- **New crate `sex-wifi`** (no_std, no allocation), the hardware-independent part of an Intel Wi-Fi 6/6E driver for AX200, AX201, AX210, AX211 and the Killer modules on them (the x17 R1's AX1675). Re-implemented in Rust from OpenBSD `iwx(4)` (ISC); no Linux code. Report and stages W1-W8: `docs/handoff/INTEL_WIFI_2026_11_09.md`.
+- **Driver side:** chip and firmware table, Intel TLV firmware parser, DMA layout and context info (22000 and AX210 layouts), the power-up sequence to "firmware ALIVE" as a step-at-a-time state machine, host command framing and RX packets.
+- **Network side:** scan results with security detection (open, WPA2, WPA3, transition, hash-to-element), open and SAE authentication, association, Ethernet II to and from 802.11 data frames, CCMP.
+- **Security:** WPA2-Personal and WPA3-Personal (SAE on P-256, hunting-and-pecking and hash-to-element), the station side of the 4-way and group-key handshakes, GTK and IGTK, replay/downgrade/tamper checks.
+- **Evidence:** `scripts/wifi_host_gate.sh` (CI): 24 tests incl. IEEE 802.11 annex vectors (PSK, PRF, CCMP, SAE J.10), RFC 3394/3610/4493, full WPA2 and WPA3 handshakes against a test access point, and the real linux-firmware AX210 image (fetched pinned and SHA-256 checked by `scripts/fetch_wifi_firmware.sh`).
+- **No ABI change.** New dependency `sha1` 0.10 (RustCrypto).
+- **Limits:** not wired into the running system yet; QEMU has no Intel Wi-Fi model, so the radio is proven only on hardware. Next (W2): lease the chip to sexnet, ship its firmware, and log `[wifi.alive]` on the x17.
+
+## Video and sound play while they download (2026-11-10)
+
+- Web loads a `<video>`/`<audio>` source from the network without waiting for it: the
+  element is `Loading` (event `loadstart`) while `media_loads` takes in its bytes for at
+  most 4 ms a tick, and it opens as soon as `sex_media::AHEAD` + 64 KiB has arrived
+  (`[web.media.early] node= have= done=0`). The player already waits whenever too little
+  lies ahead of where it reads.
+- `sex_app::net::Exchange::stream(into)`: for a reply with a length or until-close body
+  that is not compressed, moves body bytes out as they arrive (`head()` gives the head);
+  chunked or compressed replies, redirects and error pages are read whole as before.
+- `sex_media::Growing` (shared through `Rc<RefCell<..>>`) is a `Source` for a download in
+  progress: length from Content-Length, `available` counts what has come, and a read
+  past it is an error, never a false end.
+- An MP4 whose index sits at its end cannot open early: the first try fails
+  (`[web.media.failed] ... last=0`) and it opens once all of it is here.
+- Media sources may be up to 256 MiB (`MEDIA_MAX`). Seeking past what has arrived waits
+  for it; Range reads for seeking ahead come next (sex_fetch pieces, YouTube thread).
+- Gates: `program_web_stream_gate.py` (host ffmpeg makes a 1.5 MB clip and an end-indexed
+  one, served at 300 KB/s: opens at ~600 KB, 250 pictures, 10 s of 440 Hz).
+  `quil_autosave_gate.boot` now deletes the old serial log first: QEMU's `-serial file:`
+  does not truncate, and a reused output directory let an older log show through.
