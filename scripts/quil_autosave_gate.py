@@ -50,7 +50,9 @@ def boot(iso,disk,out,tag,resolution):
  # QEMU writes the serial file from its start without cutting it: an older run's
  # longer log would show through after the new one's first lines.
  serial.unlink(missing_ok=True)
- proc=subprocess.Popen(cmd,stdout=(out/f'{tag}-qemu.log').open('w'),stderr=subprocess.STDOUT);began=time.monotonic()
+ with (out/f'{tag}-qemu.log').open('w') as qemu_log:
+  proc=subprocess.Popen(cmd,stdout=qemu_log,stderr=subprocess.STDOUT)
+ began=time.monotonic()
  # The log only grows: read what is new, so hours-long runs don't reread it on every poll.
  seen={'off':0,'text':'','health':0}
  def text():
@@ -69,20 +71,23 @@ def boot(iso,disk,out,tag,resolution):
   check_serial_health(now[start:],tag)
  def wait(pattern,start=0,timeout=120,*,raw=False):
   return wait_serial(text,health,pattern,start,timeout,tag=tag,raw=raw)
- d=time.monotonic()+15
- while not sock.exists():
-  health()
-  if time.monotonic()>d:raise TimeoutError('QMP unavailable')
-  time.sleep(.05)
- q=QMP(sock)
- if resolution=='1024x768':wait(r'SexOS compact 1024x768',timeout=10,raw=True);q.key('down');q.key('ret')
- wait(r'\[shell.app.registered.reply\] target=15 .*committed=1',timeout=180);wait(r'\[linen.disk.publish.done\]',timeout=180)
- def key(name,pattern):s=len(text());q.key(name);return wait(pattern,s)
- def chord(mod,k,pattern):
-  s=len(text());q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':dn,'key':{'type':'qcode','data':x}}}for dn,ks in((True,(mod,k)),(False,(k,mod)))for x in ks]});return wait(pattern,s)
  def stop():
   if proc.poll()is None:proc.kill();proc.wait()
   sock.unlink(missing_ok=True)
+ try:
+  d=time.monotonic()+15
+  while not sock.exists():
+   health()
+   if time.monotonic()>d:raise TimeoutError('QMP unavailable')
+   time.sleep(.05)
+  q=QMP(sock)
+  if resolution=='1024x768':wait(r'SexOS compact 1024x768',timeout=10,raw=True);q.key('down');q.key('ret')
+  wait(r'\[shell.app.registered.reply\] target=15 .*committed=1',timeout=180);wait(r'\[linen.disk.publish.done\]',timeout=180)
+ except BaseException:
+  stop();raise
+ def key(name,pattern):s=len(text());q.key(name);return wait(pattern,s)
+ def chord(mod,k,pattern):
+  s=len(text());q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':dn,'key':{'type':'qcode','data':x}}}for dn,ks in((True,(mod,k)),(False,(k,mod)))for x in ks]});return wait(pattern,s)
  return dict(q=q,proc=proc,text=text,wait=wait,key=key,chord=chord,stop=stop,focus=lambda sid:focus_surface(sid,text,key))
 
 def settle(g,timeout):
