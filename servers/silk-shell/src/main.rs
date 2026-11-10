@@ -24503,6 +24503,8 @@ pub extern "C" fn _start() -> ! {
         unsafe {
             for view in SPINDLE_VIEWS.iter_mut() { view.continue_after(restarts << 40); }
             for view in DOCUMENT_VIEWS.iter_mut() { view.continue_after(restarts << 40); }
+            // Quil keeps the last toolbar action number it accepted, too.
+            DOCUMENT_POINTER_SEQUENCE = DOCUMENT_POINTER_SEQUENCE.max(restarts << 40);
         }
     }
     serial_println!("[silk-shell] Authority Starting...");
