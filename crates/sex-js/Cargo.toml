@@ -3,7 +3,7 @@ name = "sex-js"
 version = "0.1.0"
 edition = "2021"
 license = "GPL-3.0-only"
-description = "JavaScript for SexOS web pages: QuickJS-NG in Wasm on wasmi, with a DOM over sex-html"
+description = "JavaScript for SexOS web pages: QuickJS-NG in Wasm, as machine code (wasm2c) or on wasmi, with a DOM over sex-html"
 
 [dependencies]
 # MIT/Apache-2.0: no_std + alloc, libm for float math. auto-dispatch: tail-call dispatch

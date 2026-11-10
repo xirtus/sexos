@@ -860,3 +860,21 @@ fn scripts_the_page_inserts_run() {
     let l: Vec<String> = logs(&mut s).into_iter().filter(|x| !x.starts_with("1:")).collect();
     assert_eq!(l, ["0:loaded inline i|nested|ext player.js ok", "0:error event"]);
 }
+
+/// Runaway recursion ends the engine with a trap at the same call depth on either tier
+/// (wasmi's limit), without overflowing the native stack.
+#[test]
+fn deep_recursion_traps_cleanly() {
+    let mut s = page("");
+    assert!(matches!(s.eval("function f(n) { return f(n + 1) + 1 } f(0)", "deep.js"), Err(sex_js::Error::Trapped(_))));
+}
+
+/// A small CPU benchmark; prints which tier ran and how long it took.
+#[test]
+fn compute_speed() {
+    let mut s = page("");
+    let t = std::time::Instant::now();
+    s.eval("function fib(n) { return n < 2 ? n : fib(n - 1) + fib(n - 2) } let a = []; for (let i = 0; i < 20000; i++) a.push(String(i * 7)); a.sort(); console.log(fib(24), a.length)", "bench.js").unwrap();
+    assert_eq!(logs(&mut s), ["0:46368 20000"]);
+    eprintln!("{} tier: fib(24) + 20k-string sort in {:?}", if Script::<Document>::NATIVE { "native" } else { "wasmi" }, t.elapsed());
+}
