@@ -44,6 +44,7 @@ lazy_static! {
     static ref IDT: InterruptDescriptorTable = {
         let mut idt = InterruptDescriptorTable::new();
         idt.breakpoint.set_handler_fn(breakpoint_handler);
+        idt.non_maskable_interrupt.set_handler_fn(nmi_handler);
         unsafe {
             idt.double_fault.set_handler_fn(double_fault_handler)
                 .set_stack_index(gdt::DOUBLE_FAULT_IST_INDEX as u16 + 1);
@@ -495,6 +496,7 @@ unsafe fn end_user_fault(stack_frame: &mut InterruptStackFrame, vector: u64, err
     crate::program_workers::faulted(current);
     serial_println!("fault.kill [cpu.fault.terminal] pd={} kind={} rip={:#x} error={:#x}",
         cur_pd, fault_name(vector), stack_frame.instruction_pointer.as_u64(), error_code);
+    crate::crash_log::fault(cur_pd, vector, stack_frame.instruction_pointer.as_u64(), 0, error_code, fault_name(vector));
     let next = match sched.tick() {
         crate::scheduler::ScheduleDecision::Switch { next, .. } => next,
         crate::scheduler::ScheduleDecision::NoRunnable => crate::scheduler::wait_for_local_resume_or_switch(sched),
@@ -694,7 +696,8 @@ pub extern "C" fn page_fault_handler(stack_frame: &mut InterruptStackFrame, erro
     if fault_cs_rpl != 3 {
         serial_println!("KERNEL PAGE FAULT HALT: addr={:#x} rip={:#x} rsp={:#x} err={:#x} pd={}",
             fault_addr, fault_rip, fault_rsp, error_code, cur_pd);
-        loop { x86_64::instructions::hlt(); }
+        crate::console::stop(format_args!("page fault in the kernel touching {:#x} at {:#x} (error {:#x})",
+            fault_addr, fault_rip, error_code));
     }
     let recoverable = crate::scheduler::fault_transaction::eligible_user_fault(
         fault_addr, error_code, fault_cs);
@@ -746,14 +749,17 @@ pub extern "C" fn page_fault_handler(stack_frame: &mut InterruptStackFrame, erro
                 if parked != crate::scheduler::task_ownership::ParkResult::Blocked {
                     (*current_ptr).state.exit();
                     serial_println!("fault.kill [paging.fault.terminal] pd={} reason=owner_not_parkable", cur_pd);
+                    crate::crash_log::fault(cur_pd, 14, fault_rip, fault_addr, error_code, "page fault");
                 } else if let Err(error) = crate::ipc::pagefault::forward_page_fault(fault_addr, error_code, cur_pd as u64) {
                     (*current_ptr).state.exit();
                     serial_println!("fault.kill [paging.fault.terminal] pd={} reason=dispatch_failed status={}", cur_pd, error);
+                    crate::crash_log::fault(cur_pd, 14, fault_rip, fault_addr, error_code, "page fault");
                 }
             } else {
                 (*current_ptr).state.exit();
                 crate::program_workers::faulted(current_ptr);
                 serial_println!("fault.kill [paging.fault.terminal] pd={} reason=ineligible error={:#x}", cur_pd, error_code);
+                crate::crash_log::fault(cur_pd, 14, fault_rip, fault_addr, error_code, "page fault");
             }
         } else {
             panic!("USER_PAGE_FAULT_WITHOUT_TASK");
@@ -856,6 +862,14 @@ pub unsafe fn send_eoi() {
         (lapic_vaddr as *mut u32).offset(0x0B0 / 4).write_volatile(0);
     } else {
         core::arch::asm!("mov al, 0x20", "out 0x20, al", "out 0xa0, al");
+    }
+}
+
+/// Another core is stopping the machine: this one halts for good, so nothing draws over
+/// the stop screen. Any other NMI is left alone.
+extern "x86-interrupt" fn nmi_handler(_frame: InterruptStackFrame) {
+    if crate::console::stopping() {
+        loop { x86_64::instructions::interrupts::disable(); x86_64::instructions::hlt(); }
     }
 }
 
