@@ -19,8 +19,13 @@ PINS = {'embedded-tls': '0.19.0', 'embedded-io': '0.7.1',
         'webpki': '0.103.16', 'rustls-pki-types': '1.14.0'}
 PACKAGE_NAMES = {'webpki': 'rustls-webpki'}
 DIRECT_FEATURES = {'sha2': ['force-soft'], 'p256': ['ecdsa']}
-# Public-web trust, only for the network service, optional so the Browser's graph is unchanged.
-OPEN_WEB = {'rsa': '0.9.8', 'p384': '0.13.1', 'webpki-roots': '1.0.4'}
+# Public-web trust and the public-web session (rustls's TLS 1.2/1.3 on RustCrypto and
+# fiat-crypto), only for the network service, optional so the Browser's graph is unchanged.
+OPEN_WEB = {'rsa': '0.9.8', 'p384': '0.13.1', 'webpki-roots': '1.0.4', 'rustls': '0.23.46',
+            'aes-gcm': '0.10.3', 'chacha20poly1305': '0.10.1', 'hmac': '0.12.1',
+            'fiat-crypto': '0.2.9'}
+# Key exchange on the NIST curves, enabled with the public-web session.
+OPEN_WEB_FEATURES = ['p384/ecdh', 'p256/ecdh']
 LOCAL = {'sex-trust-config': '../sex-trust-config', 'sex-http': '../sex-http'}
 VENDOR = 'vendor/embedded-tls-0.19.0'
 VENDOR_DEP_PATH = '../../' + VENDOR
@@ -37,6 +42,8 @@ EFFECTIVE_FEATURES = {
     'p256': {'arithmetic', 'digest', 'ecdh', 'ecdsa', 'ecdsa-core', 'sha2', 'sha256'},
 }
 FORCE = {'aes_force_soft', 'polyval_force_soft'}
+# The network service also runs ChaCha20-Poly1305, which has vector backends of its own.
+SERVICE_FORCE = FORCE | {'chacha20_force_soft', 'poly1305_force_soft'}
 BLOCKED = {'libc', 'getrandom', 'rand_os', 'rustix', 'nix', 'ring', 'openssl',
            'openssl-sys', 'native-tls', 'rustls-native-certs', 'security-framework',
            'security-framework-sys', 'schannel', 'winapi', 'wasi', 'wasip2', 'wasip3',
@@ -50,7 +57,7 @@ def check_manifests(tls, workspace, app, trust=None):
         dep = deps.pop(name, None)
         if not isinstance(dep, dict) or dep.get('version') != '=' + version or dep.get('optional') is not True or dep.get('default-features') is not False:
             errors.append('noncanonical open-web dependency policy: ' + name)
-    if tls.get('features', {}) != {'open-web': ['dep:' + name for name in OPEN_WEB]}:
+    if tls.get('features', {}) != {'open-web': ['dep:' + name for name in OPEN_WEB] + OPEN_WEB_FEATURES}:
         errors.append('open-web must be the only TLS feature and only add its reviewed dependencies')
     if set(deps) != set(PINS) | set(LOCAL):
         errors.append('TLS direct dependency set changed; review backend policy')
@@ -150,16 +157,24 @@ def check_vendor(root):
 
 def check_flags(spec):
     errors = []
-    stages = [s for s in spec.get('stage', []) if s.get('id') == 'build_kaleidoscope']
-    if len(stages) != 1:
-        return ['missing or duplicate Kaleidoscope build stage']
-    stage = stages[0]
-    if stage.get('action') != 'cargo_manifest' or stage.get('manifest') != 'apps/kaleidoscope/Cargo.toml':
-        errors.append('unexpected Kaleidoscope build action or manifest')
+    for stage_id, manifest, force in [('build_kaleidoscope', 'apps/kaleidoscope/Cargo.toml', FORCE),
+                                      ('build_sexnet', 'servers/sexnet/Cargo.toml', SERVICE_FORCE)]:
+        stages = [s for s in spec.get('stage', []) if s.get('id') == stage_id]
+        if len(stages) != 1:
+            errors.append('missing or duplicate build stage: ' + stage_id)
+            continue
+        errors.extend(check_stage_flags(stages[0], manifest, force))
+    return errors
+
+
+def check_stage_flags(stage, manifest, force):
+    errors = []
+    if stage.get('action') != 'cargo_manifest' or stage.get('manifest') != manifest:
+        errors.append('unexpected build action or manifest: ' + manifest)
     try:
         tokens = shlex.split(stage.get('rustflags', ''))
     except (ValueError, TypeError):
-        return errors + ['malformed Kaleidoscope Rust flags']
+        return errors + ['malformed Rust flags: ' + manifest]
     cfg, codegen = [], []
     i = 0
     while i < len(tokens):
@@ -177,7 +192,7 @@ def check_flags(spec):
         elif token.startswith('--codegen='):
             codegen.append(token[len('--codegen='):])
         i += 1
-    for name in FORCE:
+    for name in force:
         if cfg.count(name) != 1:
             errors.append('missing or duplicate scalar crypto cfg: ' + name)
     for setting in codegen:
