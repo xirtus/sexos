@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! Crash records: what stopped, where, and when. The kernel writes one whenever a
 //! service or program faults, a service is started again or given up on, or the kernel
 //! itself stops. Files keeps them in a reserved ring on disk, so the next start can show

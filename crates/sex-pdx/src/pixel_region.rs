@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! A pixel surface for each program row: a BOOT region the program writes and Display
 //! reads, so a program can show an image or draw. Holding it grants only that window's
 //! pixels; Display takes a size only from the row that owns the surface.

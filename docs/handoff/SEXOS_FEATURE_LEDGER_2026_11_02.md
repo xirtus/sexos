@@ -3264,6 +3264,28 @@ Workstream D of the parity report. Handoff and bare-metal checklist: `docs/hando
 - **SATA.** `apps/sexdrive/src/ahci.rs` serves the block interface when no NVMe is present. `SEXOS_GATE_DISK_BUS=ahci` for gates; filesystem and disk persistence gates pass on SATA and NVMe.
 
 
+## Hardware census, VMD warning, NVMe waits for real SSDs (2026-11-09)
+
+- **What runs now.** Every boot prints one `[hw.device]` line per PCI device with its
+  vendor, model, owning service and support level (driven, firmware, platform,
+  in_progress, planned, none), `[hw.warning]` lines for things a person must act on
+  (Intel VMD/RST RAID hiding the NVMe drives, an NVIDIA GPU with no native driver, Wi-Fi
+  with no driver) and a `[hw.census]` summary. On the QEMU gate machine: 8 devices, all 8
+  working.
+- **NVMe on real SSDs.** Controller disable/enable now waits up to CAP.TO (500 ms units)
+  in timer ticks instead of a fixed poll count (a few ms on bare metal), gives up at once
+  on a fatal status while enabling, and the admin completion doorbell honours the
+  doorbell stride. A namespace with 4 KiB sectors is logged as unsupported. The first
+  NVMe controller is the system disk; later ones are logged, no longer replacing it.
+- **Design.** Device knowledge is data in `crates/sex-hwdb`, shared by BOOT now and by
+  driver manifests later (plan stage D2 in `DRIVERS_AND_X17_R1_PLAN_2026_11_09.md`).
+  The table never leases a device.
+- **ABI.** None; `abi_version_hash` unchanged.
+- **Gates.** `scripts/hwdb_host_gate.sh` (CI), `tests/sexdrive_controller_ready.rs` in the
+  sexdrive DMA host gate, master runtime gate GREEN.
+- **Limits.** One NVMe controller; no VMD driver, MSI-X or IOMMU yet. On a laptop the
+  census is read from the framebuffer boot log (PR #78).
+
 ## Boot log on screen, stop screen, crash records, restartable services, fuzzing (2026-11-09)
 
 Workstream C of the Linux/desktop parity report: bare metal without a serial port.
