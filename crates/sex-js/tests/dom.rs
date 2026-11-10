@@ -1006,6 +1006,28 @@ fn baseline_hot_call_measurement() {
 }
 
 #[test]
+fn tag_lookup_uses_literal_names_not_css() {
+    let mut s = page("<section id=root><yt:player id=a></yt:player><p id=b></p><div><yt:player id=c></yt:player></div></section><yt:player id=outside></yt:player>");
+    s.eval(r#"
+        const root = document.getElementById('root');
+        const ids = nodes => nodes.map(n => n.id).join(',');
+        console.log(ids(root.getElementsByTagName('yt:player')));
+        console.log(ids(document.getElementsByTagName('YT:PLAYER')));
+        console.log(ids(root.getElementsByTagName('P')));
+        console.log(root.getElementsByTagName('*').length,
+                    root.getElementsByTagName('section').length);
+        console.log(root.getElementsByTagName('').length,
+                    root.getElementsByTagName('p,div').length,
+                    root.getElementsByTagName('.yt-player').length);
+        console.log(root.querySelectorAll('p,div').length);
+        let invalidSelector = false;
+        try { root.querySelectorAll('yt:player'); } catch (e) { invalidSelector = true; }
+        console.log(invalidSelector);
+    "#, "tag-lookup.js").unwrap();
+    assert_eq!(logs(&mut s), ["0:a,c", "0:a,c,outside", "0:b", "0:4 0", "0:0 0 0", "0:2", "0:true"]);
+}
+
+#[test]
 fn classic_resource_errors_preserve_values_and_mute_cross_origin_details() {
     let mut s=page("");
     s.eval("var original=new TypeError('same-origin failure'); window.onerror=(message,source,line,column,error)=>console.log('handler',message,error===original,error instanceof TypeError); window.addEventListener('error',e=>console.log('listener',e.message,e.error===original));", "handlers.js").unwrap();
