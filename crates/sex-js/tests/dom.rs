@@ -847,15 +847,20 @@ fn scripts_the_page_inserts_run() {
         document.body.appendChild(inline);
     "#, "t.js").unwrap();
     assert_eq!(logs(&mut s), ["0:inline i number"]);
-    let asked = std::mem::take(&mut s.page_mut().fetches);
+    let asked = std::mem::take(&mut s.page_mut().classic_scripts);
+    assert!(s.page().fetches.is_empty());
     let urls: Vec<&str> = asked.iter().map(|f| f.url.as_str()).collect();
-    assert_eq!(urls, ["http://example.test/dir/player.js", "http://example.test/dir/missing.js"]);
-    s.page_mut().keep_head(asked[0].id, "http://example.test/dir/player.js", "content-type: text/javascript\r\n");
-    s.page_mut().keep_body(asked[0].id, 200, b"ran.push('ext ' + document.currentScript.src.split('/').pop()); var player = 'ok';".to_vec());
-    s.dispatch(&format!("fetched\t{}\t200\t70", asked[0].id)).unwrap();
-    s.page_mut().keep_head(asked[1].id, "http://example.test/dir/missing.js", "");
-    s.page_mut().keep_body(asked[1].id, 404, Vec::new());
-    s.dispatch(&format!("fetched\t{}\t404\t0", asked[1].id)).unwrap();
+    assert_eq!(urls, ["player.js", "missing.js"]);
+    assert!(asked.iter().all(|ask| s.page().classic_script_current(ask)));
+    // The browser evaluates a classic resource without inserting its bytes in
+    // fetch storage or going through the page's replaceable eval/fetch globals.
+    s.eval("globalThis.fetch = () => { throw new Error('fetch hook'); }; globalThis.eval = () => { throw new Error('eval hook'); };", "hooks.js").unwrap();
+    s.dispatch(&format!("script\t{}", asked[0].node)).unwrap();
+    s.eval("ran.push('ext ' + document.currentScript.src.split('/').pop()); var player = 'ok';", "player.js").unwrap();
+    s.dispatch("script\t").unwrap();
+    s.dispatch(&format!("scriptend\t{}\t1", asked[0].node)).unwrap();
+    s.dispatch(&format!("scriptend\t{}\t0", asked[1].node)).unwrap();
+    assert!(s.page().bodies.is_empty());
     s.dispatch("tick").unwrap();
     let l: Vec<String> = logs(&mut s).into_iter().filter(|x| !x.starts_with("1:")).collect();
     assert_eq!(l, ["0:loaded inline i|nested|ext player.js ok", "0:error event"]);
@@ -911,6 +916,26 @@ fn frames_talk_through_post_message() {
     assert_eq!(std::mem::take(&mut inner.page_mut().outbox), [(-1, r#"{"event":"onReady"}"#.to_string(), "*".to_string())]);
     inner.dispatch("message\tparent\thttps://example.test\t{\"event\":\"listening\"}").unwrap();
     assert_eq!(logs(&mut inner), ["0:true true https://example.test/ https://example.test 1", "0:inner got listening https://example.test true"]);
+}
+
+
+#[test]
+fn classic_script_requests_belong_to_connected_unchanged_document_nodes() {
+    let source="var remote=document.createElement('script'); remote.src='https://cdn.test/player.js'; document.head.appendChild(remote);";
+    let mut s=page("");s.eval(source,"create.js").unwrap();
+    let ask=s.page_mut().classic_scripts.remove(0);
+    assert!(s.page().fetches.is_empty());
+    assert!(s.page().classic_script_current(&ask));
+    s.eval("remote.src='https://other.test/changed.js'", "change.js").unwrap();
+    assert!(!s.page().classic_script_current(&ask));
+    s.eval("remote.src='https://cdn.test/player.js'; remote.remove()", "remove.js").unwrap();
+    assert!(!s.page().classic_script_current(&ask));
+    let mut other=page("");other.eval(source,"reload.js").unwrap();
+    assert_eq!(other.page().classic_scripts[0].node,ask.node);
+    assert!(!other.page().classic_script_current(&ask));
+    assert!(other.page().classic_script_current(&other.page().classic_scripts[0]));
+    other.eval("remote.type='module'", "type.js").unwrap();
+    assert!(!other.page().classic_script_current(&other.page().classic_scripts[0]));
 }
 
 #[cfg(feature = "baseline-jit")]
@@ -978,4 +1003,19 @@ fn baseline_hot_call_measurement() {
         eprintln!("baseline-jit enabled={enabled} native={} warm_elapsed={elapsed:?} before={before:?} after={after:?}",Script::<Document>::NATIVE);
     }
     eprintln!("baseline-jit paired_ns interpreter={:?} jit={:?}",samples[0],samples[1]);
+}
+
+#[test]
+fn classic_resource_errors_preserve_values_and_mute_cross_origin_details() {
+    let mut s=page("");
+    s.eval("var original=new TypeError('same-origin failure'); window.onerror=(message,source,line,column,error)=>console.log('handler',message,error===original,error instanceof TypeError); window.addEventListener('error',e=>console.log('listener',e.message,e.error===original));", "handlers.js").unwrap();
+    assert_eq!(s.eval_resource("throw original", "http://example.test/same.js", false),Err(sex_js::Error::Thrown));
+    let out:Vec<String>=logs(&mut s).into_iter().filter(|line|line.starts_with("0:")).collect();
+    assert_eq!(out,["0:handler same-origin failure true true","0:listener same-origin failure true"]);
+    let mut s=page("");
+    s.eval("window.onerror=(message,source,line,column,error)=>console.log('handler',message,error===null); window.addEventListener('error',e=>console.log('listener',e.message,e.error===null));", "handlers.js").unwrap();
+    assert_eq!(s.eval_resource("throw new Error('private cross-origin detail')", "https://remote.test/opaque.js", true),Err(sex_js::Error::Thrown));
+    let out=logs(&mut s);
+    assert_eq!(out,["2:Script error.","0:handler Script error. true","0:listener Script error. true"]);
+    assert!(s.page().bodies.is_empty());
 }

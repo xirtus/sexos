@@ -110,13 +110,14 @@ struct MediaLoad {
 }
 
 struct Pending {
+    secure_only: bool,
     id: u32, asked: String, since: u64, begun: u64, hops: usize,
     method: String, url: String, headers: Vec<(String, String)>, body: Vec<u8>, max: usize, script: Option<String>,
 }
 impl Pending {
     fn new(id: u32, method: &str, url: &str, headers: &[(&str, &str)], body: &[u8], max: usize, script: Option<&str>) -> Pending {
         Pending {
-            id, asked: String::from(url), since: sex_pdx::get_ticks(), begun: 0, hops: 0,
+            id, asked: String::from(url), since: sex_pdx::get_ticks(), begun: 0, hops: 0, secure_only: false,
             method: String::from(if method.is_empty() { "GET" } else { method }), url: String::from(sex_html::url::fragment(url).0),
             headers: headers.iter().map(|(k, v)| (String::from(*k), String::from(*v))).collect(), body: Vec::from(body), max, script: script.map(String::from),
         }
@@ -488,7 +489,10 @@ impl Browser {
     /// site allows that origin (`Access-Control-Allow-Origin`). So a page can't read
     /// another site's private pages with the person's cookies.
     fn http(&mut self, method: &str, url: &str, headers: &[(&str, &str)], body: &[u8], max: usize, script: Option<&str>) -> Result<Loaded, &'static [u8]> {
-        let mut p = Pending::new(0, method, url, headers, body, max, script);
+        self.http_pending(Pending::new(0, method, url, headers, body, max, script))
+    }
+
+    fn http_pending(&mut self, mut p: Pending) -> Result<Loaded, &'static [u8]> {
         loop {
             let mut ex = self.send(&mut p, true)?;
             while !ex.poll(&mut self.window).map_err(net::message)? { if ex.idle() > 64 { pause() } else if ex.idle() > 0 { sex_pdx::sys_yield() } }
@@ -501,6 +505,7 @@ impl Browser {
     fn send(&mut self, p: &mut Pending, patient: bool) -> Result<net::Exchange, &'static [u8]> {
         if p.hops >= MAX_REDIRECTS { return Err(b"Too many redirects."); }
         let target = sex_fetch::Url::parse(&p.url).map_err(|_| net::message(net::Error::Address))?;
+        if p.secure_only && !target.secure { return Err(b"An HTTPS page cannot load an insecure script."); }
         let cross = p.script.as_deref().filter(|o| *o != target.origin());
         let cookie = if cross.is_some() { None } else { self.jar.borrow().header(&target, wall()) };
         let mut sent: Vec<(&str, &str)> = p.headers.iter().map(|(k, v)| (k.as_str(), v.as_str())).filter(|(k, _)| !sex_fetch::forbidden_header(k)).collect();
@@ -785,7 +790,7 @@ impl Browser {
             return true;
         }
         // Fetches are served on the next tick, once this script has returned.
-        if (!doc.fetches.is_empty() || !doc.modules_wanted.is_empty()) && matches!(self.doc, Doc::Scripted(_)) { self.timer = Some(sex_pdx::get_ticks()); }
+        if (!doc.fetches.is_empty() || !doc.modules_wanted.is_empty() || !doc.classic_scripts.is_empty()) && matches!(self.doc, Doc::Scripted(_)) { self.timer = Some(sex_pdx::get_ticks()); }
         let doc = self.doc.get();
         let queue = core::mem::take(&mut doc.canvas_queue);
         let dirty = core::mem::take(&mut doc.dirty);
@@ -844,6 +849,7 @@ impl Browser {
     fn tick(&mut self) {
         self.serve_imports();
         self.serve_fetches();
+        self.serve_classic_scripts();
         self.sync_scroll();
         let media_next = self.media_tick();
         let (moved, pictures_next) = self.fonts.step_pictures(sex_pdx::get_ticks());
@@ -1045,6 +1051,49 @@ impl Browser {
                 self.doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", self.view, clock));
                 return;
             }
+        }
+    }
+
+    /// Loads connected classic script elements as private browser resources.
+    /// Source never enters fetch response storage or a page's global eval hook.
+    #[inline(never)]
+    fn serve_classic_scripts(&mut self) {
+        let asked = match self.doc.script() { Some(s) => core::mem::take(&mut s.page_mut().classic_scripts), None => return };
+        for ask in asked {
+            if !self.doc.get().classic_script_current(&ask) { continue; }
+            let base = self.url.clone();
+            let Some(abs) = sex_html::url::resolve(&base, &ask.url) else { continue };
+            let loaded = if abs.starts_with("http") {
+                let origin = ask.cors.then(|| sex_fetch::Url::parse(&base).map(|u| u.origin()).unwrap_or_else(|_| String::from("null")));
+                let mut p = Pending::new(0, "GET", &abs, &[], &[], SCRIPT_MAX, origin.as_deref());
+                p.secure_only = sex_fetch::Url::parse(&base).is_ok_and(|u| u.secure);
+                self.http_pending(p).ok().filter(|r| {
+                    (200..300).contains(&r.status) && sex_fetch::script::allowed(&base, &r.url, &r.headers, ask.cors)
+                })
+            } else {
+                let req = sex_js::FetchAsk { url: abs.clone(), ..Default::default() };
+                self.local(&req).ok().filter(|r| (200..300).contains(&r.status))
+            };
+            // Navigation, frame switches, removal or src/type changes invalidate
+            // the owning document/node token, even on a same-URL reload.
+            if self.url != base || !self.doc.get().classic_script_current(&ask) { return; }
+            let ok = loaded.is_some();
+            sex_pdx::serial_record!("[web.script.source] node={} ok={} url={}", ask.node, ok as u8, abs);
+            let Some(script) = self.doc.script() else { return };
+            if let Some(r) = loaded {
+                let _ = script.dispatch(&alloc::format!("script\t{}", ask.node));
+                let muted = !ask.cors && sex_fetch::Url::parse(&r.url).is_ok_and(|to| {
+                    sex_fetch::Url::parse(&base).map_or(true, |from| from.origin() != to.origin())
+                });
+                let result = script.eval_resource(&text_of(&r.body), &r.url, muted);
+                let _ = script.dispatch("script\t");
+                if let Err(sex_js::Error::Trapped(why)) = result { sex_pdx::serial_record!("[web.script] trapped={}", why); return; }
+            }
+            let _ = script.dispatch(&alloc::format!("scriptend\t{}\t{}", ask.node, ok as u8));
+            self.after_script(true);
+            // after_script also returns true for a normal repaint. Only a new
+            // document cancels the remaining resources from this batch.
+            if self.url != base || !self.doc.get().classic_script_owner(&ask) { return; }
         }
     }
 
