@@ -3731,3 +3731,14 @@ Follow-up to the boot log and crash records work (`BOOT_LOG_AND_CRASH_RECORDS_20
 - **Evidence:** `scripts/crash_screen_gate.py` start 3 switches the layout to dwindle,
   crashes Shell, and checks 4 windows restored, the dwindle layout, and 96% identical
   pixels before and after.
+
+## Intel Wi-Fi, stage W4b: networks in Spindle (2026-11-10)
+
+- **Spindle `wifi`:** the chip's state and every network the last scan heard (SSID,
+  signal, channel, security, BSSID); `wifi scan` starts a fresh scan.
+- **Protocol:** `sex_pdx::wifi_status` (op `0x2E8`, sexnet answers one word per request;
+  a network in up to seven words). Desktop only: programs are refused.
+- **Evidence:** host tests of the words in `scripts/wifi_host_gate.sh`; real proof is
+  `wifi` on the x17 R1.
+- **ABI:** new PDX op `0x2E8` and module `sex_pdx::wifi_status`; `abi_version_hash`
+  recomputed (sex-pdx lib.rs). No kernel change. Next: status bar indicator, then W5.

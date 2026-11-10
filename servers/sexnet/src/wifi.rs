@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Intel Wi-Fi in the network service, stages W2-W3: from the chip BOOT leased us
+//! Intel Wi-Fi in the network service, stages W2-W4b: from the chip BOOT leased us
 //! to the firmware's ALIVE, then through the firmware's init commands to a chip
 //! ready to scan, with one boot-log line per step so a first boot on real
 //! hardware (the Alienware x17 R1's Killer AX1675x) says exactly how far it got.
 //! Everything that can be checked without the chip lives in `sex_wifi`; this file
 //! only maps the lease, the DMA pool and the firmware pack onto its traits.
+use sex_pdx::wifi_status as ws;
 use sex_pdx::{memory_region as m, pci_command as c};
 use sex_wifi::{bringup::Bringup, context, csr, devices, ieee80211::Security, init::{self, Init}, pack::Pack, scan::{self, Scan}, ucode::Firmware};
 
@@ -61,6 +62,8 @@ pub struct Wifi {
     init: Option<Init>,
     last_init: Option<init::Step>,
     scan: Option<Scan>,
+    /// Scans started, the first one included (the `wifi` command's count).
+    scans: u16,
     finished: bool,
 }
 
@@ -131,7 +134,7 @@ impl Wifi {
         }
         sex_pdx::serial_record!("[wifi.prepared] pool={} used={} rx_pages={} bus={:#x}",
             dma.length, bringup.layout.end, context::RX_BUFFERS, bus);
-        Some(Wifi { mmio, pool, bringup, last: csr::Step::Ready, file, pnvm, hw_rev, rf_id, init: None, last_init: None, scan: None, finished: false })
+        Some(Wifi { mmio, pool, bringup, last: csr::Step::Ready, file, pnvm, hw_rev, rf_id, init: None, last_init: None, scan: None, scans: 0, finished: false })
     }
 
     /// True until the first scan has finished or the chip has failed.
@@ -203,6 +206,7 @@ impl Wifi {
         let sc = i.scan(now_ticks * 1000);
         sex_pdx::serial_record!("[wifi.scan.start] channels={} ticks={}", sc.channels, now_ticks);
         self.scan = Some(sc);
+        self.scans = 1;
     }
 
     /// Stage W4: one passive scan of every allowed channel, then the networks found.
@@ -227,5 +231,62 @@ impl Wifi {
         }
         sex_pdx::serial_record!("[wifi.scan.done] networks={} frames={} dropped={} channels={} ticks={}",
             sc.count, sc.frames, sc.dropped, sc.channels, now_ticks);
+    }
+
+    /// What the desktop sees (`sex_pdx::wifi_status`).
+    fn state(&self) -> ws::State {
+        let phase = match (&self.scan, self.finished) {
+            (None, false) => ws::STARTING,
+            (None, true) => ws::FAILED,
+            (Some(_), false) => ws::SCANNING,
+            (Some(sc), true) => if sc.step == scan::Step::Done { ws::READY } else { ws::FAILED },
+        };
+        let (networks, channels) = self.scan.as_ref().map_or((0, 0), |sc| (sc.count.min(255) as u8, sc.channels));
+        ws::State { phase, networks, scans: self.scans, channels }
+    }
+
+    /// A fresh scan, when the chip is ready and the last scan has ended.
+    fn rescan(&mut self, now_ticks: u64) -> bool {
+        let Some(i) = self.init.as_ref() else { return false };
+        if !self.finished || self.scan.is_none() || i.step != init::Step::Ready { return false; }
+        let sc = i.scan(now_ticks * 1000);
+        self.scans = self.scans.wrapping_add(1);
+        sex_pdx::serial_record!("[wifi.scan.start] channels={} scan={} ticks={}", sc.channels, self.scans, now_ticks);
+        self.scan = Some(sc);
+        self.finished = false;
+        true
+    }
+
+    fn network(&self, index: u64, part: u64) -> u64 {
+        let Some(n) = self.scan.as_ref().and_then(|sc| sc.networks().nth(index as usize)) else { return ws::MISSING };
+        let b = &n.bss;
+        let security = match b.security {
+            Security::Open => ws::OPEN, Security::Wpa2Personal => ws::WPA2, Security::Wpa3Personal => ws::WPA3,
+            Security::Wpa3Transition => ws::WPA2_WPA3, Security::Unsupported => ws::UNSUPPORTED,
+        };
+        let info = ws::Info {
+            channel: if b.channel != 0 { b.channel } else { n.heard_on },
+            rssi: n.rssi.clamp(-128, 127) as i8, security, ssid_len: b.ssid().len() as u8, beacons: n.frames,
+        };
+        ws::network_part(info, &b.bssid, b.ssid(), part)
+    }
+}
+
+/// Answers a desktop request (`sex_pdx::wifi_status::OP`). Shell, SilkBar and Spindle
+/// rows may read; Shell and Spindle may start a scan; programs get `REFUSED`.
+pub fn request(wifi: Option<&mut Wifi>, caller: u32, action: u64, a: u64, b: u64, now_ticks: u64) -> u64 {
+    let spindle = sex_pdx::app_catalog::SPINDLE_TARGETS.contains(&caller);
+    if !(caller == 3 || caller == 6 || spindle) {
+        sex_pdx::serial_record!("[wifi.status.denied] caller_pd={}", caller);
+        return ws::REFUSED;
+    }
+    let none = ws::State { phase: ws::NONE, networks: 0, scans: 0, channels: 0 }.word();
+    match (action, wifi) {
+        (ws::STATE, None) | (ws::SCAN, None) => none,
+        (ws::NETWORK, None) => ws::MISSING,
+        (ws::STATE, Some(w)) => w.state().word(),
+        (ws::SCAN, Some(w)) if caller != 6 => { w.rescan(now_ticks); w.state().word() }
+        (ws::NETWORK, Some(w)) => w.network(a, b),
+        _ => ws::REFUSED,
     }
 }
