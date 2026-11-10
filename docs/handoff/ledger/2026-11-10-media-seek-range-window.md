@@ -17,10 +17,10 @@
   re-exported unchanged by sex-media and compiled directly by the host gate, avoiding
   sex-app guest startup/allocator dependencies.
 - A separate parallel CI job builds an FFmpeg-enabled image and runs the unchanged
-  streaming and seek gates plus the portable source tests, preserving evidence. Guest validation of the fix remains pending
-  that exact candidate build; no timing threshold was loosened.
-- No kernel, ABI or authority change. The streaming gate supplies interleaved-playback regression evidence on the
-  same feature image; its result is pending.
+  streaming and seek gates plus the portable source tests, preserving evidence. Local guest qualification and exact-head CI results are
+  recorded below; no timing threshold was loosened.
+- No kernel, ABI or authority change. The unchanged streaming gate supplies interleaved-playback regression evidence
+  on the same feature image.
 
 ### Host harness correction
 
@@ -45,4 +45,30 @@ If it stalls, normal availability/read-ahead checks resume until the requested b
 arrive; parked Media Source segments retain their existing wait rule. Failed seeks do
 not install a pending target. Two additional production-helper tests cover this full
 probe/stall/Range/refill sequence and parked-source behavior; all five portable tests
-and the Web cross-target check pass. Fixed-image guest validation remains pending.
+and the Web cross-target check pass. The corrected guest run is recorded below.
+
+### Qualified seek and streaming runs
+
+A sealed FFmpeg/dav1d-enabled image of `55ae0526` passed both unchanged gates on
+QEMU TCG, one core, 1280x800 (default wasmi engine at that source revision):
+
+- Seek: opened at 593,920 / 1,482,547 bytes; asked Range from byte 1,094,748;
+  advanced to eight seconds after **3,272 ms**, below the unchanged 6,000 ms bound;
+  50 remaining frames, no full-file wait, Range refusal, decoder error or guest fault.
+- Streaming: opened at 614,400 bytes; 18 pictures shown before download completion;
+  all 250 pictures and 480,256 audio frames, with 10.0 seconds of 440 Hz sound.
+- Five portable source tests and the Web cross-target check pass. All eleven CI
+  checks for `55ae0526`, including the dedicated media job and aggregate build, passed.
+
+Immutable ISO, Web, source hashes, raw serial, WAVs, clips and gate output are in
+`/Users/xmacbookm5/Projects/sexos-evidence/pr124-probe-55ae/`. ISO SHA-256:
+`a47d5294d1810f3626d5a45c1cd2a95a0835a1be0c75e0bb0a433893f2daea16`;
+Web SHA-256 `8b64795b0845d707f132fc5458c99e4343006c7a33163844d26b71dda21a4d13`.
+The boot time bound is 900 seconds to allow cold TCG initialization; the actual seek
+assertion remains six seconds. This is guest qualification, not hardware playback proof.
+
+The final integration refresh includes the native/JIT engine, Geist and later master
+changes. Its CI aggregate now explicitly depends on both `media` and `js-jit`; merely
+running the JIT matrix without including it in `build.needs` would leave the required
+check able to succeed before JIT acceptance finished. All current-head checks remain
+required before merge. New integrated-native evidence will be recorded separately.

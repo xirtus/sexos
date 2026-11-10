@@ -228,7 +228,7 @@ jobs:
   # Single required check: keeps the old "build" check name for branch rules.
   build:
     if: always()
-    needs: [host, truth, boot, devices, media, profiles]
+    needs: [host, truth, boot, devices, media, profiles, js-jit]
     runs-on: ubuntu-latest
     steps:
     - run: |
