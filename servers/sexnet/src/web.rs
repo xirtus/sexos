@@ -114,6 +114,13 @@ impl Service {
         sex_pdx::serial_record!("[net.open.flows] made={}", self.slots.len());
         Some(i)
     }
+    /// The link went away and its stack with it (a USB adapter pulled out): every flow and
+    /// socket is gone. Programs keep their right to the network for the next link.
+    pub fn reset_link(&mut self) {
+        let bound = self.bound;
+        *self = Self::new();
+        self.bound = bound;
+    }
     pub fn busy(&self) -> bool { self.slots.iter().any(|s| s.tls.is_some()) }
     /// Moves encrypted bytes between the flows and their sessions, each turn of the service.
     pub fn pump(&mut self, engine: &mut Engine<'static>) {

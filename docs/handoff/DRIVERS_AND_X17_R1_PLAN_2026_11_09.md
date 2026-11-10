@@ -94,7 +94,7 @@ P3 is the rest. "Owner" is an existing thread unless it says new.
 | P1 | Intel HDA + Realtek codec | sound (headphones first; speakers need the ALC1309 amp path) | driven (#79), amp path open | NIC/sound/SATA thread |
 | P1 | I2C HID touchpad (DesignWare I2C, Tiger Lake GPIO) | touchpad | planned | ACPI thread |
 | P1 | Intel VMD driver (bus driver that exposes the NVMe behind it) | keep RAID mode, or other Dell/HP/Lenovo laptops shipped in RST mode | planned | **new thread** |
-| P1 | NVMe: MSI-X, one queue per core, second controller, APST power states, shutdown notification (CC.SHN) on power off | speed, battery, both M.2 slots, clean unsafe-shutdown counters | planned | this thread's follow-up |
+| P1 | NVMe: MSI-X, one queue per core, second controller, APST power states, shutdown notification (CC.SHN) on power off | speed, battery, both M.2 slots, clean unsafe-shutdown counters | MSI-X done (#87); APST + CC.SHN done (2026-11-10); per-core queues wait for Files to issue concurrent requests (D6); second controller with the VMD thread (#84) | this thread's follow-up |
 | P1 | Intel i915-class modesetting (Tiger Lake Xe display) | native panel, brightness, external monitors on iGPU ports | in progress | display thread |
 | P2 | Intel Wi-Fi AX200/AX201/AX210/AX211 (iwlwifi/iwx class) + WPA2/WPA3 | laptops are on Wi-Fi | planned | **new thread** |
 | P2 | Bluetooth over USB (Intel btusb firmware) | headsets, mice | planned | with Wi-Fi |

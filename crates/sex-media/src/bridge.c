@@ -191,6 +191,9 @@ int sx_next(struct sx *s, uint32_t *out, int out_w, int out_h, int16_t *pcm, int
         // yet: forget it and read again, now that more may have come.
         if (s->io->error == AVERROR(EIO) || s->io->eof_reached) { s->io->error = 0; s->io->eof_reached = 0; }
         int r = av_read_frame(s->format, s->packet);
+        // A download read where its bytes have not come yet (a seek ahead): not the
+        // end; the caller waits for them and asks again.
+        if (r == AVERROR(EIO) && !s->absolute) return 3;
         if (r == AVERROR_EOF || r == AVERROR(EIO)) {
             s->draining = 1;
             if (!s->video.done) avcodec_send_packet(s->video.codec, NULL);

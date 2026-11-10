@@ -3598,6 +3598,33 @@ Plan: `docs/handoff/NVIDIA_GPU_PLAN_2026_11_09.md` (stages N1-N6).
 - The open-web TLS session names `http/1.1` in its handshake (ALPN), as browsers do (the rustls move set `alpn_protocols`). Host test `[sexnet.tls.open.host]` now proves it on the wire: an OpenSSL server offering `h2` and `http/1.1` must pick `http/1.1`. YouTube stage Y3e.
 
 
+## USB sticks in Files (mass storage, 2026-11-10)
+
+- **What runs now.** Plugging in a USB stick or USB disk mounts it under `/media` by its
+  label (FAT12/16/32, exFAT, ext2/3/4 as sex-volumes reads them; GPT and MBR partitions),
+  and Files, Spindle and the open picker use it like any other disk: list, read, write,
+  `df`, `unmount` ("Safe to remove."). Pulling the stick out drops its mount; plugging it
+  back in mounts it again. A stick unmounted while still plugged in stays unmounted until
+  it is replugged. USB 2 and USB 3 sticks, blocks of 512 bytes or more, disks over 2 TiB
+  (16-byte commands); writes to a stick with its write-protect switch on are refused.
+- **Design.** SexUSB speaks bulk-only transport and SCSI (INQUIRY, TEST UNIT READY with
+  sense retries, READ CAPACITY 10/16, MODE SENSE for write protect, READ/WRITE 10/16,
+  SYNCHRONIZE CACHE, reset recovery on stalls). Bulk transfers split at page edges into
+  chained TRBs. Files owns the mounts: SexUSB tells Files when its disks change, and Files
+  asks for disks, their size and name, and reads and writes through a 64 KiB shared region
+  (`UsbDisk` implements `sex_volumes::Disk`). Only Files may ask; anyone else is refused.
+- **ABI.** New `sex_pdx::usb_disk`: Domain caps between Files and SexUSB at slot 1000, a
+  64 KiB region (id 0x4400) at slot 1001, ops 0x5D0 DISKS, 0x5D1 INFO, 0x5D2 READ,
+  0x5D3 WRITE, 0x5D4 SYNC, 0x5D8 CHANGED, statuses OK/GONE/IO/INVALID/READ_ONLY.
+  `abi_version_hash` recomputed.
+- **Limits.** One request at a time (no UAS, no queueing): about USB 2 speed. One LUN per
+  stick. Card readers with several slots show only the first. The stick must be unmounted
+  before pulling it out to be sure writes are on it (Files has no write cache for it, so a
+  finished write is already on the stick).
+- **Gates.** New `scripts/usb_storage_gate.py`: plug in a FAT stick after boot, list, read,
+  write, unmount, unplug, replug and read back, unplug while mounted; mtools reads the file
+  from the stick image afterwards. Plus usb_path_gate, program_files_gate, master runtime
+  gate, host unittests, architectural truth.
 ## Intel Wi-Fi, stage W1: driver core with WPA2 and WPA3 (2026-11-09)
 
 - **New crate `sex-wifi`** (no_std, no allocation), the hardware-independent part of an Intel Wi-Fi 6/6E driver for AX200, AX201, AX210, AX211 and the Killer modules on them (the x17 R1's AX1675). Re-implemented in Rust from OpenBSD `iwx(4)` (ISC); no Linux code. Report and stages W1-W8: `docs/handoff/INTEL_WIFI_2026_11_09.md`.
@@ -3646,6 +3673,10 @@ Plan: `docs/handoff/NVIDIA_GPU_PLAN_2026_11_09.md` (stages N1-N6).
   `document.currentScript` (the browser says which `<script>` runs),
   `<style>.sheet.insertRule`, `window.onerror`, fullscreen and picture-in-picture
   refusing, `getVideoPlaybackQuality`.
+- **Percentage heights** (Y8): `height: N%` resolves against the containing block's
+  definite height (the viewport for the root, the containing block for absolute
+  boxes; auto inside content-sized boxes). YouTube's player page (`html, body,
+  #player { height: 100% }`) had laid out at height 0.
 - **Scripts a page inserts run** (Y8's first step): a `createElement('script')` runs when
   it joins the document: inline text at once, `src` through `fetch` then `load`/`error`,
   modules through `import()`; markup scripts (innerHTML) do not. A `fetched` dispatch
@@ -3820,6 +3851,31 @@ Follow-up to the boot log and crash records work (`BOOT_LOG_AND_CRASH_RECORDS_20
 - **ABI:** new PDX op `0x2E8` and module `sex_pdx::wifi_status`; `abi_version_hash`
   recomputed (sex-pdx lib.rs). No kernel change. Next: status bar indicator, then W5.
 
+## USB Ethernet adapters (CDC Ethernet, 2026-11-10)
+
+- **What runs now.** A PC with no network card of its own gets online through a USB
+  Ethernet adapter, plugged in before or after boot: phone tethering, most USB dongles,
+  and Realtek RTL8152/8153 adapters through their CDC Ethernet configuration. Pulling it
+  out drops its connections; plugging it back in brings the network back.
+- **Design.** SexUSB drives the adapter (`servers/sexusb/src/ether.rs`: every
+  configuration is searched for an ECM function, its MAC string is read, the data
+  interface's alternate setting is selected, 24 receive transfers stay queued, frames
+  that fill whole packets end with a zero-length packet). Frames cross to SexNet through
+  two single-producer rings in one shared region (`sex_pdx::usb_net`); neither side
+  calls the other. SexNet's `link::Link` is either its own PCI card or the USB rings,
+  with the same events and send path, so TCP/IP, DNS, TLS and the web service do not
+  know which. When the card is absent SexNet checks for an adapter every 100 ticks.
+- **ABI.** New `sex_pdx::usb_net`: one 128 KiB region (id 0x4401) at slot 1002 in SexNet
+  and SexUSB (header with link state, MAC and generation; 30-frame receive and send
+  rings). The kernel gives the network owner its BOOT network settings through that
+  exact region when it holds no PCI lease. `abi_version_hash` recomputed.
+- **Limits.** One adapter at a time, and only when there is no PCI network card. No NCM
+  (some 2.5G adapters and newer phones), no RNDIS, no Realtek vendor mode, no link
+  state notifications (a cable pulled out is not seen until traffic fails).
+- **Gates.** New `scripts/usb_net_gate.py` (in CI): adapter plugged in after boot, a
+  128 KiB fetch, unplug, replug, a second fetch. `tests/pci_command.rs` covers the
+  settings through the region. program_net_gate (igb, e1000e), master runtime gate,
+  sexnet_service_host_gate, usb_path_gate, usb_storage_gate.
 ## Intel Wi-Fi, stage W5a: joining a network's channel (2026-11-10)
 
 - **Join:** `sex_wifi::join` sends iwx_auth's commands: PHY context, RLC, MAC context,

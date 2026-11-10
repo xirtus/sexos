@@ -534,3 +534,25 @@ fn transitions_follow_computed_values_lists_and_new_state() {
     let c = s[id("c")].as_ref().unwrap();
     assert_eq!((c.opacity, c.width), (127, style::Len::Px(150)));
 }
+
+#[test]
+fn percentage_heights_resolve_against_definite_heights() {
+    let dom = parse::parse("<html style='height:100%'><body style='margin:0;height:100%'><div id=p style='height:50%'><div id=q style='height:50%'></div></div><div id=auto><div id=r style='height:50%'>x</div></div>\
+        <div id=abs style='position:absolute;top:0;left:0;width:10px;height:100%'><div id=s style='height:25%'></div></div></body></html>");
+    let styles = sex_html::styles(&dom, &[], 400, 300);
+    let page = sex_html::layout::layout_in(&dom, &styles, 400, 300, &Fixed);
+    let by_id = |id: &str| dom.descendants(0).into_iter().find(|&n| dom.attr(n, "id") == Some(id)).unwrap();
+    let h = |id: &str| page.boxes[by_id(id)].unwrap()[3];
+    assert_eq!((h("p"), h("q"), h("abs"), h("s")), (150, 75, 300, 75));
+    // Inside a box whose height depends on its content, a percentage height is auto.
+    assert!(h("r") < 50);
+    // A minimum height counts before children size against it; grid items keep auto.
+    let dom = parse::parse("<body style='margin:0'><div style='height:100px;min-height:200px'><div id=m style='height:100%'></div></div>\
+        <div style='display:grid;height:200px'><div id=g1 style='height:100%'>a</div><div id=g2 style='height:100%'>b</div></div></body>");
+    let styles = sex_html::styles(&dom, &[], 400, 300);
+    let page = sex_html::layout::layout_in(&dom, &styles, 400, 300, &Fixed);
+    let by_id = |id: &str| dom.descendants(0).into_iter().find(|&n| dom.attr(n, "id") == Some(id)).unwrap();
+    let b = |id: &str| page.boxes[by_id(id)].unwrap();
+    assert_eq!(b("m")[3], 200);
+    assert!(b("g1")[3] < 200 && b("g2")[1] + b("g2")[3] <= 200 + 200);
+}
