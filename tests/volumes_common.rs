@@ -45,10 +45,12 @@ pub fn fixture(name: &str) -> MemDisk {
     disk
 }
 
-/// A host tool, if installed (and found in /sbin too).
+/// A host tool on PATH, or in the usual system directories (including /sbin).
 pub fn tool(name: &str) -> Option<PathBuf> {
-    for dir in ["/usr/sbin", "/sbin", "/usr/bin", "/bin", "/usr/local/sbin", "/usr/local/bin"] {
-        let p = Path::new(dir).join(name);
+    let paths = std::env::var_os("PATH").unwrap_or_default();
+    for dir in std::env::split_paths(&paths).chain(
+        ["/usr/sbin", "/sbin", "/usr/bin", "/bin", "/usr/local/sbin", "/usr/local/bin"].into_iter().map(PathBuf::from)) {
+        let p = dir.join(name);
         if p.exists() { return Some(p); }
     }
     None

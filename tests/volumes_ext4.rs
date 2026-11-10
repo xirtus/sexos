@@ -223,18 +223,33 @@ fn ext_refuses_unknown_features_and_garbage() {
 /// With mke2fs on the host: random trees written by Linux, read back byte for byte.
 #[test]
 fn ext_random_trees_from_mke2fs() {
+    check_trees_from_mke2fs(None);
+}
+
+/// Replay the CI seed whose final zero byte was dropped by mke2fs's inline-data
+/// importer. The image's logical size is explicit, so the reader must return that
+/// zero from a sparse final block, both in a whole-file read and across EOF.
+#[test]
+fn ext4_zero_tail_from_mke2fs() {
+    check_trees_from_mke2fs(Some(0x2fa6_92b7));
+}
+
+fn check_trees_from_mke2fs(replay: Option<u32>) {
     let Some(mkfs) = common::tool("mke2fs") else { eprintln!("mke2fs missing, skipped"); return };
+    let Some(debugfs) = common::tool("debugfs") else { eprintln!("debugfs missing, skipped"); return };
+    let tag = if replay.is_some() { "replay" } else { "random" };
     let variants: [&[&str]; 4] = [
         &["-t", "ext4", "-b", "4096"],
         &["-t", "ext2", "-b", "1024"],
         &["-t", "ext3", "-b", "2048"],
         &["-t", "ext4", "-b", "1024", "-I", "256", "-O", "inline_data,^flex_bg"],
     ];
+    let mut saw_zero_tail = false;
     for (k, opts) in variants.iter().enumerate() {
-        let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().subsec_nanos() ^ k as u32;
+        let seed = replay.unwrap_or_else(|| std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().subsec_nanos() ^ k as u32);
         let mut rng = seed | 1;
         let mut next = move |n: u32| { rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5; rng % n };
-        let src = common::temp(&format!("ext-src-{k}"));
+        let src = common::temp(&format!("ext-src-{tag}-{k}"));
         let _ = std::fs::remove_dir_all(&src);
         std::fs::create_dir_all(&src).unwrap();
         let mut files = Vec::new();
@@ -249,7 +264,7 @@ fn ext_random_trees_from_mke2fs() {
             std::fs::write(src.join(&name[1..]), &data).unwrap();
             files.push((name, data));
         }
-        let img = common::temp(&format!("ext-{k}.img"));
+        let img = common::temp(&format!("ext-{tag}-{k}.img"));
         let _ = std::fs::remove_file(&img);
         let mut args: Vec<&str> = vec!["-q", "-F"];
         args.extend_from_slice(opts);
@@ -257,14 +272,36 @@ fn ext_random_trees_from_mke2fs() {
         args.extend_from_slice(&["-d", s, i, "12M"]);
         let out = common::run(&mkfs, &args);
         assert!(out.status.success(), "{opts:?}: {}", String::from_utf8_lossy(&out.stderr));
+        // mke2fs -d with inline_data can lose an all-zero final partial block
+        // in an extent-backed inode (4097 -> 4096 in the replay seed).
+        // debugfs independently confirms the shortened i_size. Declare the intended
+        // logical sizes explicitly; missing tail blocks remain sparse zeros. Keep
+        // comparing every byte with the original source, including the zero tail.
+        let sizes = common::temp(&format!("ext-{tag}-{k}-sizes.txt"));
+        let commands: String = files.iter().map(|(name, data)|
+            format!("set_inode_field {name} size {}\n", data.len())).collect();
+        std::fs::write(&sizes, commands).unwrap();
+        let out = common::run(&debugfs, &["-w", "-f", sizes.to_str().unwrap(), i]);
+        assert!(out.status.success(), "{opts:?}: {}", String::from_utf8_lossy(&out.stderr));
         let mut d = common::MemDisk::from_file(&img);
         let mut v = sv::ext4::Ext4::mount(&mut d).unwrap_or_else(|e| panic!("{opts:?}: {e:?}"));
         for (name, data) in &files {
             same(&read_all(&mut v, &mut d, name), data, &format!("{opts:?} seed {seed:#x} {name}"));
+            if replay.is_some() && k == 3 && name == "/n12-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/n23-xxxxxxxxxxxxxxxxxxxxxxx" {
+                saw_zero_tail = true;
+                assert_eq!(data.len(), 4097);
+                assert_eq!(data[4096], 0, "the regression must keep its sparse zero tail");
+                let mut tail = [0xAA; 4];
+                let n = v.read(&mut d, name.as_bytes(), 4095, &mut tail).unwrap();
+                assert_eq!(n, 2);
+                assert_eq!(&tail[..n], &data[4095..]);
+                assert_eq!(&tail[n..], &[0xAA; 2]);
+            }
         }
         for dir in &dirs {
             let want = std::fs::read_dir(src.join(dir.trim_start_matches('/'))).unwrap().count();
             assert_eq!(v.list(&mut d, dir.as_bytes()).unwrap().len(), want + if dir.is_empty() { 1 } else { 0 }, "{opts:?} {dir}");
         }
     }
+    assert!(replay.is_none() || saw_zero_tail, "replay must exercise the zero tail");
 }
