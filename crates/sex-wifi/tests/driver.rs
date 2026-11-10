@@ -594,6 +594,10 @@ fn bringup_reaches_alive_through_the_receive_ring() {
         assert_eq!((alive.ok, alive.lmac_major), (ok, 83));
         assert_eq!(b.notifications, 1);
         assert_eq!(b.rx.write, 65, "page recycled");
+        // The ALIVE interrupt published the free ring again after the CPU start (iwx_intr).
+        assert_eq!(b.boot.alive_interrupts, 1);
+        let start = hw.writes.iter().position(|w| w.0 == csr::PRPH_WDAT && w.1 == 1).unwrap();
+        assert!(hw.writes[start..].iter().any(|w| *w == (rx::RFH_Q0_FRBDCB_WIDX_TRG, 64)), "free ring republished on ALIVE");
     }
 }
 

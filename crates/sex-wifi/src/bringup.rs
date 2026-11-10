@@ -43,7 +43,10 @@ impl Bringup {
     pub fn advance<D: Dma + DmaRead>(&mut self, r: &mut impl Registers, dma: &mut D, now_us: u64) -> bool {
         // The free ring must be visible before the CPU starts (the NicLock step).
         if self.boot.step == Step::NicLock { self.rx.kick(r); }
+        let interrupts = self.boot.alive_interrupts;
         self.boot.advance(r, now_us, &self.layout, self.base, self.iml_len);
+        // ALIVE interrupt: the firmware has set the receive hardware up; publish again.
+        if self.boot.alive_interrupts != interrupts { self.rx.republish(dma, &self.layout, self.base, r); }
         if self.boot.step == Step::WaitAlive { self.drain(r, dma); }
         !self.boot.done()
     }

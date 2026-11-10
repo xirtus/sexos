@@ -53,6 +53,18 @@ impl Rx {
         for id in 0..RX_BUFFERS as u16 { self.post(dma, layout, base, id); }
     }
 
+    /// Writes every free-ring entry again and kicks the ring, as iwx(4) does on the
+    /// ALIVE interrupt: the firmware configures the receive hardware while it starts,
+    /// so entries and the write index published before that may not have been seen.
+    /// Pages the driver has not taken back yet keep their place.
+    pub fn republish(&mut self, dma: &mut impl Dma, layout: &Layout, base: u64, r: &mut impl Registers) {
+        if self.cur == 0 && self.write as usize == RX_BUFFERS {
+            self.write = 0;
+            self.fill(dma, layout, base);
+        }
+        self.kick(r);
+    }
+
     /// The write index the chip is told: a multiple of 8, as the hardware requires.
     pub fn write_index(&self) -> u32 { self.write as u32 & !7 }
 
