@@ -3,8 +3,8 @@
 Andreas approved the visual concept and shared-F2 plan in this chat on 2026-11-10.
 This implements its geometry stage after shared metrics #139 and applied-scale
 receipts #141. This entry is an implementation checkpoint, **not acceptance**;
-first native build, new pixel oracles, complete host/guest gates and latency/memory
-qualification are outstanding. Never substitute the generated concept for a guest
+initial and combined native correctness evidence is recorded below; final complete
+host/CI checks and isolated latency comparison remain outstanding. Never substitute the generated concept for a guest
 capture, or infer a performance improvement from the smaller bar.
 
 The live bar is 28 logical pixels including its separator; titlebars are 26,
@@ -147,3 +147,42 @@ explicit document layout omitted the new UI scale. It now pins scale 1; the
 actual editor clipboard/undo gate passes with all previous assertions intact.
 The palette frame metadata also tracks its submitted centered rectangle directly,
 because the protected keyboard overlay has no app-custody bounds entry.
+
+## Combined native checkpoint: source 17c7f700
+
+A clean committed build includes master 3e075b59, including native screenshot,
+encoder and dormant image-source-pin integrations. ISO SHA-256 is
+`213007e199bb3cda516abe5ad08c7b8ed54bc99e4153a073e74c3bdc86cde34b`.
+Apple clang 21 and the verified integration musl headers built this UI candidate.
+Its Rust target was initially empty at the first97d build and remains local to this
+worktree; no foreign Cargo outputs were copied. FFmpeg/libc++ libraries are absent,
+so this does not qualify media or the full C capability suite.
+
+Actual captures are in `docs/handoff/assets/slim-desktop-final17c/`. Both 1280x800
+and 1024x768 pass all 3,456 clock pixels. An open palette keeps its selected last
+item visible through scales 1→2→3→2→1; complete glyph/erasure checks pass at every
+step. The real clock also passes all 3,456/13,824/31,104/13,824/3,456 pixels from those
+same paused serial/framebuffer pairs. Native 2560x1600 resolution plus matching
+post-publication applied receipts pass 1→2→1 with text ink 2,280/18,616/2,280.
+
+The actual person-triggered `capture shot.png` route saves, syncs, releases and
+extracts a valid native PNG. Its generation-bound reference reports bar 28 and
+padding 8; all 833,930 stable pixels match the later live scanout exactly. Existing
+window layout, directional focus, swap, floating, workspace, scratchpad and launcher
+keyboard actions pass on this same image.
+
+A maximized native Browser receives its held real viewport. Actual L/Q/L input
+produces HelloPending/Cancelled/HelloPending; each picture passes the complete
+922,720-pixel AA glyph, blank canvas and erasure check. This is UI evidence only,
+not live TLS transport or public network qualification. The first attempt exposed
+a remaining checker-only archived y>=50 bound; the checker now consumes complete
+published bar metrics, with independent y=28 acceptance, y=27 rejection, and partial
+record refusal controls. A following attempt correctly failed on 52 actual cursor
+pixels at x=640..647/y=400..415. The HID zero-init move was rejected; the final test
+waits for an accepted nonzero pointer move into the bar before checking all pixels.
+No content mask or mismatch allowance was introduced. Both failures are retained.
+
+Window-manager gap checks likewise use the published bar plus the unchanged 8px
+logical gap instead of an obsolete 50px bar constant. Final current-head host/CI
+and matched fresh-baseline isolated performance checks remain required. Whole-panel
+rounding and natural Sans app-body labels remain the next separate topic.

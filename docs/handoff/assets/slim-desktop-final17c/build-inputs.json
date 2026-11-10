@@ -1,0 +1,10 @@
+{
+  "source": "17c7f700185635428b0193979bd60cd7b55f2e48",
+  "source_status": "",
+  "iso_sha256": "213007e199bb3cda516abe5ad08c7b8ed54bc99e4153a073e74c3bdc86cde34b",
+  "spec_sha256": "8134f9adbd38ec79f651436ae0e6e5cbd258ef1a60f44e369cf18b7c439bb906",
+  "C": "Apple clang21 /usr/bin/clang via task-owned PATH wrapper",
+  "musl_include": "/Users/xmacbookm5/Projects/sexos-codex-integration/target/musl/include",
+  "scope": "UI candidate; own same-worktree build cache initially empty at97d, no copied Cargo artifacts; FFmpeg/libc++ absent",
+  "abi_manifest_sha256": "0ea341b573b36ddd85d5865adf5f96ab4100f62fd2a887e146c29a2c84364c51"
+}
