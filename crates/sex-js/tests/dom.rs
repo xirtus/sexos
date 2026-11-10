@@ -629,3 +629,177 @@ fn media_source_feeds_a_video() {
         "0:updateend false 1 2.5 0", "0:both 1 0.5 2.5", "0:offset 5", "0:ended 3 3",
     ]);
 }
+
+#[test]
+fn mutation_observers_see_changes() {
+    let mut s = page("<div id=a><p id=p>one</p></div>");
+    s.eval(r#"
+        const a = document.getElementById('a'), p = document.getElementById('p');
+        const seen = [];
+        const mo = new MutationObserver(rs => { for (const r of rs) seen.push(r.type + ':' + (r.attributeName || '') + ':' + r.addedNodes.length + '/' + r.removedNodes.length + ':' + r.oldValue); console.log(seen.join(' ')); });
+        mo.observe(a, { childList: true, subtree: true, attributes: true, attributeOldValue: true, attributeFilter: ['class', 'title'], characterData: true });
+        p.className = 'x';
+        p.setAttribute('data-skip', '1');
+        p.title = 't';
+        const s = document.createElement('span');
+        a.appendChild(s);
+        a.removeChild(s);
+        p.firstChild.data = 'uno';
+        a.innerHTML = '<b>new</b>';
+        console.log('sync', seen.length);
+        new MutationObserver(() => console.log('outside')).observe(document.body, { attributes: true });
+        a.setAttribute('class', 'q');
+        try { new MutationObserver(() => {}).observe(a, {}); } catch (e) { console.log(e.name); }
+    "#, "t.js").unwrap();
+    assert_eq!(logs(&mut s), [
+        "0:sync 0",
+        "0:TypeError",
+        "0:attributes:class:0/0:null attributes:title:0/0:null childList::1/0:null childList::0/1:null characterData::0/0:null childList::1/1:null attributes:class:0/0:null",
+    ]);
+}
+
+#[test]
+fn custom_elements_hear_attributes_and_removal() {
+    let mut s = page("<div id=a></div>");
+    s.eval(r#"
+        class XBox extends HTMLElement {
+            static get observedAttributes() { return ['size']; }
+            connectedCallback() { console.log('in'); }
+            disconnectedCallback() { console.log('out'); }
+            attributeChangedCallback(n, o, v) { console.log('attr', n, o, v); }
+        }
+        customElements.define('x-box', XBox);
+        const b = document.createElement('x-box');
+        document.getElementById('a').appendChild(b);
+        b.setAttribute('size', '2');
+        b.setAttribute('other', '1');
+        b.removeAttribute('size');
+        b.remove();
+    "#, "t.js").unwrap();
+    assert_eq!(logs(&mut s), ["0:in", "0:attr size null 2", "0:attr size 2 null", "0:out"]);
+}
+
+#[test]
+fn shadow_roots_are_flattened_into_the_host() {
+    let mut s = page("<div id=host><span>light</span></div>");
+    s.eval(r#"
+        const host = document.getElementById('host');
+        const root = host.attachShadow({ mode: 'open' });
+        root.innerHTML = '<style>b { color: red }</style><b id=in>shadow</b><slot></slot>';
+        console.log(host.shadowRoot === root, root.host === host, root.nodeType, host.children.length, host.firstElementChild.tagName);
+        console.log(host.innerHTML);
+        const inner = root.getElementById('in');
+        console.log(inner.getRootNode() === root, inner.getRootNode({ composed: true }) === document, inner.isConnected, host.contains(inner));
+        console.log(root.querySelector('slot').assignedNodes().length, root.querySelector('slot').assignedElements()[0].tagName);
+        host.addEventListener('click', e => console.log('host heard', e.composedPath().includes(root)));
+        inner.click();
+        host.textContent = 'plain';
+        console.log(host.shadowRoot.firstElementChild.localName, host.childNodes.length, host.textContent.includes('plain'));
+        try { host.attachShadow({ mode: 'open' }); } catch (e) { console.log(e.name); }
+        const closed = document.createElement('div').attachShadow({ mode: 'closed' });
+        console.log(closed.host.shadowRoot);
+    "#, "t.js").unwrap();
+    assert_eq!(logs(&mut s), [
+        "0:true true 11 1 SPAN",
+        "0:<span>light</span>",
+        "0:true true true false",
+        "0:1 SPAN",
+        "0:host heard true",
+        "0:style 1 true",
+        "0:NotSupportedError",
+        "0:null",
+    ]);
+}
+
+#[test]
+fn messages_reach_ports_and_the_window() {
+    let mut s = page("");
+    s.eval(r#"
+        const ch = new MessageChannel();
+        ch.port1.onmessage = e => console.log('port', JSON.stringify(e.data));
+        ch.port2.postMessage({ a: [1] });
+        window.addEventListener('message', e => console.log('window', e.data, e.origin, e.source === window));
+        window.postMessage('hi', '*');
+        window.postMessage('dropped', 'https://elsewhere.test');
+        const b1 = new BroadcastChannel('c'), b2 = new BroadcastChannel('c');
+        b2.onmessage = e => console.log('broadcast', e.data);
+        b1.postMessage(5);
+        console.log('sync');
+    "#, "t.js").unwrap();
+    s.dispatch("tick").unwrap();
+    assert_eq!(logs(&mut s), ["0:sync", "0:port {\"a\":[1]}", "0:window hi http://example.test true", "0:broadcast 5"]);
+}
+
+#[test]
+fn intl_formats_in_english() {
+    let mut s = page("");
+    let r = s.eval(r#"
+        console.log(new Intl.NumberFormat('en-US').format(1234567.891), (1234.5).toLocaleString(), new Intl.NumberFormat('en', { style: 'percent' }).format(0.256));
+        console.log(new Intl.NumberFormat('en', { notation: 'compact' }).format(1530000), new Intl.NumberFormat('en', { notation: 'compact' }).format(999), new Intl.NumberFormat('en', { style: 'currency', currency: 'USD' }).format(-3.5));
+        console.log(Intl.DateTimeFormat().resolvedOptions().timeZone, new Intl.DateTimeFormat('en-US').format(Date.UTC(2026, 10, 9, 15, 4)));
+        console.log(new Intl.DateTimeFormat('en-US', { dateStyle: 'medium' }).format(Date.UTC(2026, 10, 9)), new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' }).format(Date.UTC(2026, 10, 9, 15, 4)));
+        console.log(new Intl.PluralRules('en').select(1), new Intl.PluralRules('en', { type: 'ordinal' }).select(22), new Intl.RelativeTimeFormat('en', { numeric: 'auto' }).format(-1, 'day'), new Intl.RelativeTimeFormat('en').format(3, 'hours'));
+        console.log(new Intl.ListFormat('en').format(['a', 'b', 'c']), ['b', 'a', 'C'].sort(new Intl.Collator().compare).join(''), 'a'.localeCompare('B'), new Intl.Locale('en-us').baseName);
+    "#, "t.js");
+    assert!(r.is_ok(), "{:?}", logs(&mut s));
+    assert_eq!(logs(&mut s), [
+        "0:1,234,567.891 1,234.5 26%",
+        "0:1.5M 999 -$3.50",
+        "0:UTC 11/9/2026",
+        "0:Nov 9, 2026 3:04 PM",
+        "0:one two yesterday in 3 hours",
+        "0:a, b, and c abC -1 en-US",
+    ]);
+}
+
+#[test]
+fn smaller_platform_pieces() {
+    let mut s = page("<div id=a><p>one</p><p>two</p></div><video id=v></video>");
+    s.eval(r#"
+        const d = new DOMParser().parseFromString('<p class=x>hi <b>there</b></p>', 'text/html');
+        console.log(d.body.querySelector('.x').textContent, d.querySelector('b').tagName);
+        const svg = new DOMParser().parseFromString('<svg viewBox="0 0 2 2"><path d="M0 0"/></svg>', 'image/svg+xml');
+        console.log(svg.documentElement.localName, svg.documentElement.getAttribute('viewBox'));
+        const e = new DOMException('gone', 'NotFoundError');
+        console.log(e instanceof Error, e.name, e.code, DOMException.NOT_FOUND_ERR);
+        const r = document.createRange();
+        r.selectNodeContents(document.getElementById('a'));
+        console.log(r.toString(), r.collapsed, r.createContextualFragment('<i>x</i>').firstChild.tagName);
+        const rect = document.getElementById('a').getBoundingClientRect();
+        console.log(rect instanceof DOMRect, typeof rect.toJSON().bottom);
+        navigator.mediaCapabilities.decodingInfo({ type: 'media-source', video: { contentType: 'video/webm; codecs="vp9"', width: 1280, height: 720, framerate: 30 } })
+            .then(i => console.log('decode', i.supported, i.smooth));
+        navigator.mediaCapabilities.decodingInfo({ type: 'media-source', video: { contentType: 'video/mp4; codecs="hev1.1.6.L93.B0"', width: 1280, height: 720, framerate: 30 } })
+            .then(i => console.log('hevc', i.supported));
+        console.log(navigator.cookieEnabled, typeof navigator.sendBeacon, document.fullscreenEnabled, window.frameElement, document.getElementById('v').getVideoPlaybackQuality().droppedVideoFrames);
+        const st = document.createElement('style');
+        document.head.appendChild(st);
+        st.sheet.insertRule('.y { color: red }', 0);
+        console.log(st.textContent.trim(), document.styleSheets.length, st.sheet.cssRules.length);
+        const an = document.getElementById('a').animate([{ opacity: 0 }, { opacity: 1 }], { duration: 0, fill: 'forwards' });
+        an.finished.then(() => console.log('finished', document.getElementById('a').style.opacity, an.playState));
+        window.onerror = m => console.log('onerror', m);
+        document.getElementById('a').addEventListener('click', () => { throw new Error('boom'); });
+        document.getElementById('a').click();
+    "#, "t.js").unwrap();
+    s.dispatch("tick").unwrap();
+    let l = logs(&mut s);
+    let l: Vec<&String> = l.iter().filter(|x| !x.starts_with("2:")).collect();
+    assert_eq!(l, [
+        "0:hi there B", "0:svg 0 0 2 2", "0:true NotFoundError 8 8", "0:onetwo false I", "0:true number",
+        "0:true function false null 0", "0:.y { color: red } 1 1", "0:onerror boom",
+        "0:decode true true", "0:hevc false", "0:finished 1 finished",
+    ]);
+}
+
+#[test]
+fn current_script_is_set_while_a_script_runs() {
+    let mut s = page("<script id=s>1</script>");
+    s.eval("console.log(document.getElementById('s')._id)", "t.js").unwrap();
+    let id = logs(&mut s)[0].trim_start_matches("0:").to_string();
+    s.dispatch(&format!("script\t{id}")).unwrap();
+    s.eval("console.log(document.currentScript && document.currentScript.id)", "t.js").unwrap();
+    s.dispatch("script\t").unwrap();
+    s.eval("console.log(document.currentScript)", "t.js").unwrap();
+    assert_eq!(logs(&mut s), ["0:s", "0:null"]);
+}

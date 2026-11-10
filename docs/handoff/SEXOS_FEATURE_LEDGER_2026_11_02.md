@@ -3705,3 +3705,32 @@ Follow-up to the boot log and crash records work (`BOOT_LOG_AND_CRASH_RECORDS_20
   against a firmware model, its failure paths, and the real x17 firmware and `.pnvm`.
   Real proof is the x17 R1 boot log.
 - **ABI / kernel:** none.
+
+## Browser: web APIs for players and frameworks, YouTube stage Y6 (2026-11-10)
+
+- **MutationObserver** works: every change a page script makes through the DOM queues
+  records (childList, attributes with `attributeFilter` and old values, characterData,
+  subtree), delivered in a microtask. Changes the browser makes itself are not reported.
+- **Custom elements:** `attributeChangedCallback` for `observedAttributes`, and
+  `disconnectedCallback` (moving an element disconnects and connects it, as specified).
+- **Shadow DOM, flattened:** `attachShadow` makes an `sx-shadow` element
+  (`display: contents` in the UA sheet, as is `slot`) as the host's first child; the
+  page's view of the host hides it. Slots answer `assignedNodes`/`assignedElements`;
+  `getRootNode({composed})`, `composedPath` and event bubbling cross the shadow root.
+  Costs: shadow styles apply page-wide, slotted children draw after the shadow content.
+- **Messaging:** `postMessage`, `MessageEvent`, `MessageChannel`/`MessagePort` (a task
+  per message), `BroadcastChannel`.
+- **Intl** for `en-US` in UTC (QuickJS has none): NumberFormat (grouping, percent,
+  currency, compact), DateTimeFormat (dateStyle/timeStyle and fields, formatToParts),
+  PluralRules, Collator, RelativeTimeFormat, ListFormat, Locale; `toLocaleString` and
+  `localeCompare` use them.
+- **Smaller pieces:** DOMParser, XMLSerializer, DOMException (names, codes), DOMRect,
+  Range, `element.animate` (Web Animations: timing, fill, `finished`),
+  `navigator.mediaCapabilities.decodingInfo`, `sendBeacon`, `cookieEnabled`,
+  `document.currentScript` (the browser says which `<script>` runs),
+  `<style>.sheet.insertRule`, `window.onerror`, fullscreen and picture-in-picture
+  refusing, `getVideoPlaybackQuality`.
+- **Evidence:** `cargo test -p sex-js --test dom` (36 tests, 7 new);
+  `scripts/program_web_apis_gate.py` (page built from these APIs, pixel-matched to the
+  host render, page reports its own checks).
+- **ABI / kernel:** none.
