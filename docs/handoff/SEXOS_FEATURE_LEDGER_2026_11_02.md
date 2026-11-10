@@ -3371,6 +3371,13 @@ Hyprland/river/KDE-style window management, stage E1 of the parity report (`docs
 - **Records**: `[shell.wm.action] action=… done=… scene=a->b focus=a->b layout=…` and `[shell.wm.layout] scene=… layout=… windows=… master_pct=… gap_in=… gap_out=…`.
 - **Gate** `scripts/window_manager_gate.py` boots QEMU and drives every chord over real PS/2 key events, saving screens.
 
+## Desktop: launcher search and the focused window title in the panel (2026-11-10)
+
+Stage E2 of the parity report, section 6.
+- **Type to search.** With the launcher open (Super tap), letters, digits and space filter and rank its rows by name and by search words (`terminal` finds Spindle, `web` finds Browser, `reboot` finds Restart); Backspace edits, Esc clears a search before it closes the launcher, the arrows choose, Enter opens the best match and does nothing when nothing matches. J/K still choose rows until a search begins. Pure scoring in `servers/silk-shell/src/launcher_search.rs`, host tests `tests/launcher_search.rs` (in `service_custody_host_gate.sh`), QEMU gate `scripts/launcher_search_gate.py`. Record: `[shell.launcher.search] query=… matches=… top=… changed=…`.
+- **Panel title.** sexdisplay draws the focused window's title in the SilkBar strip between the focus dot and the workspace dots (`panel_title_fg_at`), with the same names as the title bars (`surface_title`). A program renaming its focused window redraws the strip.
+- No ABI change.
+
 ## Real PCs: wired network, HD Audio and SATA (2026-11-09)
 
 Workstream D of the parity report. Handoff and bare-metal checklist: `docs/handoff/REAL_PC_DRIVERS_2026_11_09.md`.
@@ -3617,6 +3624,18 @@ Plan: `docs/handoff/NVIDIA_GPU_PLAN_2026_11_09.md` (stages N1-N6).
   `quil_autosave_gate.boot` now deletes the old serial log first: QEMU's `-serial file:`
   does not truncate, and a reused output directory let an older log show through.
 
+## Boot without DMA protection (2026-11-10)
+
+- **What runs now.** The boot menu has "SexOS without DMA protection": the same system
+  with the IOMMU (VT-d / AMD-Vi) left off, a way out if a machine's firmware tables or
+  IOMMU misbehave during bare-metal testing. The default entry stays protected.
+- **Design.** The entry passes `CMDLINE=iommu=off`; the kernel reads its own command
+  line through Limine's kernel-file request and `iommu::init_boot` stops before touching
+  any unit. Logged as `[iommu.boot_options]` and `[iommu.absent] reason=boot_option_iommu_off`.
+- **ABI.** None.
+- **Gates.** `scripts/tests/test_limine_iommu_entry.py` (the entry boots exactly the main
+  entry's modules); checked in QEMU with both IOMMU models by booting that entry.
+
 ## Programs play sound at any rate (2026-11-10)
 - Bell converts each program's sound to its 48 kHz mix: a program names its rate with
   `Sound::set_rate(hz)` (8 to 192 kHz; ring header word `RATE_HZ`, 0 means 48 kHz) and Bell
@@ -3742,3 +3761,13 @@ Follow-up to the boot log and crash records work (`BOOT_LOG_AND_CRASH_RECORDS_20
   `wifi` on the x17 R1.
 - **ABI:** new PDX op `0x2E8` and module `sex_pdx::wifi_status`; `abi_version_hash`
   recomputed (sex-pdx lib.rs). No kernel change. Next: status bar indicator, then W5.
+
+## Install beside another system, and a live USB that never touches it (2026-11-09)
+
+Roadmap workstream B, part 1 (report: `docs/handoff/LINUX_AND_DESKTOP_PARITY_REPORT_2026_11_09.md` §6).
+- **The live system leaves other systems' disks alone.** At start the disk driver (`apps/sexdrive`) decides whose disk it is (`sex_disk::probe`, no heap): blank or SexOS's old whole-disk install → SexOS uses the whole disk as before; a GPT with a SexOS store partition → SexOS reads and writes only inside it (every NVMe command is translated by `place`); anything else (GPT, MBR, a bare filesystem, a damaged table) → ordinary reads and writes are refused and the write self-tests are skipped. `[sexdrive.disk.layout] kind=...` says which. Before this, booting the ISO on a PC wrote DiskFS proof sectors and Files' filesystem straight into whatever was on its NVMe.
+- **ABI change: block requests 5-7** (`sex_pdx::BLOCK_RAW_READ`, `BLOCK_RAW_WRITE`, `BLOCK_LAYOUT` + `BLOCK_LAYOUT_*`). Raw requests address the whole disk for the installer (Files only); the first raw write stops the running system's own writes until restart. **`fs::INSTALL` changed**: `offset` = store size in MiB, `length` = `INSTALL_GO`; the reply is a text report. `abi_version_hash` recomputed.
+- **`crates/sex-disk`** (new, no_std): GPT read (primary, else backup), free space, add, write backup-then-primary with a protective MBR; FAT12/16 read and FAT16/32 write (8.3 names, contiguous files, data → FATs → directory entry, FSInfo kept exact), `format_fat32`; the install planner. 14 host tests cross-checked with `sgdisk -v`, mtools and `fsck.vfat`, including a Windows-like disk (ESP with `\EFI\Microsoft\Boot\bootmgfw.efi` and a fallback loader) where not one byte of the Windows partition changes.
+- **`install [go] [GIB] [IMAGE]`** in Spindle. Without `go` Files only plans and prints it. On a GPT disk it adds three partitions in free space (SexOS system A and B, 256 MiB each, and the SexOS store: GIB or all the largest free run, at least 1 GiB) and never moves or resizes anything; on a blank disk it makes a new GPT and a 260 MiB FAT32 ESP. Limine goes to `\EFI\SEXOS\BOOTX64.EFI` on the shared ESP, and to `\EFI\BOOT\BOOTX64.EFI` only when no fallback loader exists. Its menu `\EFI\BOOT\LIMINE.CFG` (16 KiB, contiguous, for in-place rewrites by A/B updates) points the image's entries at slot A by partition GUID and adds a chainload entry per system found on the ESP (Windows boot manager, shim/GRUB, systemd-boot, others). Refuses when another `limine.cfg` would win. The partition table is written last, so a failed install leaves every system starting as before.
+- **Not yet**: no UEFI boot entry is registered (the kernel has no runtime services), so on a PC whose ESP already has a fallback loader (Windows) the person picks `\EFI\SEXOS\BOOTX64.EFI` once in the firmware's boot menu; Install says so. Slot B, signed updates and try-once fallback are part 2.
+- **Gates**: `scripts/install_gate.py` (QEMU + OVMF with its own variable store): a Linux-like GPT disk is hashed before and after a live session (unchanged), `install` plans, `install go` installs, sgdisk/fsck/mtools check the disk and the Linux partition's bytes, then the PC starts from the disk with no ISO and a file survives a restart; a blank disk becomes SexOS's alone. `scripts/usb_stick_gate.py`: the ISO written to a USB stick (usb-storage on xHCI, no CD) reaches the desktop under UEFI and under BIOS.

@@ -17,7 +17,7 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Install build tools
-      run: sudo apt-get update && sudo apt-get install -y ripgrep xorriso qemu-system-x86 mtools clang lld llvm nasm musl-dev cmake ninja-build meson acpica-tools
+      run: sudo apt-get update && sudo apt-get install -y ripgrep xorriso qemu-system-x86 mtools gdisk dosfstools clang lld llvm nasm musl-dev cmake ninja-build meson acpica-tools
     - name: Cache FFmpeg
       uses: actions/cache@v4
       with:
@@ -63,6 +63,8 @@ jobs:
       run: bash scripts/sound_host_gate.sh
     - name: Fetch crates for offline host gates
       run: cargo fetch --locked
+    - name: Disk layouts (GPT, FAT, install beside other systems)
+      run: cargo test --locked -p sex-disk --lib
     - name: Crash record format host regressions
       run: bash scripts/crash_log_host_gate.sh
     - name: Intel Wi-Fi driver core (crypto vectors, handshakes, firmware files, power-up)
