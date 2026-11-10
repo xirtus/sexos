@@ -2376,11 +2376,13 @@
       const run = frames; frames = [];
       for (const f of run) if (f.fn) { try { f.fn(now); } catch (e) { report(e); } }
     }
+    runRejectionTasks();
     return nextTimer();
   }
   function nextTimer() {
     let next = -1;
     for (const t of timers.values()) { const w = Math.max(0, Math.ceil(t.due - performance.now())); if (next < 0 || w < next) next = w; }
+    if (rejectionHead) next = 0;
     if (frames.length) next = next < 0 ? 16 : Math.min(next, 16);
     return next;
   }
@@ -3762,8 +3764,22 @@
   const pendingGet = Map.prototype.get.bind(pendingRejections), pendingSet = Map.prototype.set.bind(pendingRejections), pendingDelete = Map.prototype.delete.bind(pendingRejections);
   const outstandingHas = WeakMap.prototype.has.bind(outstandingRejections), outstandingSet = WeakMap.prototype.set.bind(outstandingRejections), outstandingDelete = WeakMap.prototype.delete.bind(outstandingRejections);
   const fireNative = EventTarget.prototype._dispatch;
+  let rejectionHead = null, rejectionTail = null;
   function rejectionTask(fn) {
-    addTimer(function deliver() { if (!checkpointEmpty()) { addTimer(deliver, 0, [], false); return; } fn(); }, 0, [], false);
+    const task = { fn, next: null };
+    if (rejectionTail) rejectionTail.next = task; else rejectionHead = task;
+    rejectionTail = task;
+  }
+  function runRejectionTasks() {
+    // A separate task source: page clearTimeout IDs cannot erase notifications.
+    // Snapshot the tail so deferred jobs/reentrant events run in a later tick.
+    const stop = rejectionTail;
+    while (rejectionHead) {
+      const task = rejectionHead; rejectionHead = task.next;
+      if (!rejectionHead) rejectionTail = null;
+      if (!checkpointEmpty()) rejectionTask(task.fn); else task.fn();
+      if (task === stop) break;
+    }
   }
   promiseSetup(function (promise, reason, handled) {
     if (handled) {

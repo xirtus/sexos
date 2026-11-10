@@ -16,7 +16,7 @@ events are untrusted; engine notifications are trusted. Public dispatch removes
 trust. Canceling `unhandledrejection` suppresses its default log.
 
 A C-held, one-time private callback owns per-VM pending/outstanding state. After a
-complete microtask checkpoint, notification is a separate DOM task. Synchronous
+complete microtask checkpoint, notification is a separate private FIFO DOM task (page timer IDs cannot cancel it). Synchronous
 and same-checkpoint catches suppress notification. A later catch queues
 `rejectionhandled`; a catch inside notification creates no outstanding record.
 Pending native jobs defer tasks, and a tracker-created task after a tick updates
@@ -51,10 +51,10 @@ exposing opaque reasons. It is not a complete HTML execution-context model.
 - Pinned QuickJS-NG 3c9afc9943323ee9c7dbd123c0cd991448f4b6c2, WASI SDK 25 clang
   19.1.5; rebuilt checked-in Wasm SHA256
   `adbd4f365f8ce50342b616a6144685d333ae08c096f31a403763a9622ae118b6`.
-- `cargo test -p sex-js`: all host tests pass, including 54 DOM tests. New cases
+- `cargo test -p sex-js`: all host tests pass, including 55 DOM tests. New cases
   cover dictionary conversion order/descriptors/brands, actual SDK native retention,
   rejected initializer ordering/identity, cancellation/default logging, late/same
-  checkpoint catch, pending jobs/wakeup, source muting (bound/proxy/eval/Function,
+  checkpoint catch, pending jobs/wakeup and private task cancellation, source muting (bound/proxy/eval/Function,
   async/async generator), redirects/map bounds and separate/replacement VM lifetimes.
 - `scripts/program_web_promise_gate.py`: added to ordinary native runtime CI. Two
   genuine HTTP origins exercise native events, ordered initializers, own/opaque/CORS

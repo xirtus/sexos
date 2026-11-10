@@ -1208,3 +1208,11 @@ fn rejection_event_dictionary_converts_once_in_webidl_member_order() {
     ", "dictionary.js").unwrap();
     assert_eq!(logs(&mut s),["0:type,bubbles,cancelable,composed,promise,reason true 7 true true true","0:true","0:true"]);
 }
+
+#[test]
+fn rejection_dom_tasks_cannot_be_canceled_as_page_timer_ids() {
+    let mut s=page("");
+    s.eval("onunhandledrejection=e=>{e.preventDefault();console.log('private task',e.reason)};Promise.reject('kept');","reject.js").unwrap();
+    s.eval("for(let i=0;i<100;i++)clearTimeout(i);","clear.js").unwrap();
+    s.dispatch("tick").unwrap();assert_eq!(logs(&mut s),["0:private task kept"]);
+}
