@@ -2,6 +2,7 @@
 //! Actual immutable owner selection, with independent geometric expectations.
 #![allow(dead_code)]
 extern crate self as sex_pdx;
+#[path="../crates/sex-pdx/src/desktop_stack.rs"]pub mod desktop_stack;
 pub const ERR_SERVICE_NOT_READY:u64=u64::MAX-1;
 #[path="../crates/sex-pdx/src/desktop_style.rs"]pub mod desktop_style;
 #[path="../crates/sex-pdx/src/spindle_view.rs"]pub mod spindle_view;
@@ -65,4 +66,36 @@ fn alpha(s:&Surface,scale:u32,x:usize,y:usize)->u8{
  assert_eq!(g.content(&surfaces[0],&surfaces,0,83,180,180).surface_id,201);
  let old=g;g.set_scale(3);let floating=surface(800,-20,100,100,100);
  assert_eq!(old.coverage(&floating,0,100),255);assert_eq!(g.coverage(&floating,0,100),0);
+}
+
+#[test]fn shared_order_is_slot_independent_and_covers_programs_and_bound_child_focus(){
+ let mut g=FrameGroups::new();g.register(Catalog{slot:9,target_pd:9,task_id:9,surface_id:156,coordinator_pd:3});
+ let parent=Surface{owner_pd:3,..surface(201,20,100,100,100)};
+ let linen=Surface{owner_pd:3,..surface(200,0,28,180,172)};
+ let mesh=Surface{owner_pd:3,..surface(202,0,28,180,172)};
+ let child=Surface{owner_pd:9,..surface(156,28,134,84,58)};
+ let mut surfaces=[mesh,parent,child,linen];g.observe(&surfaces);
+ // Literal overlapping three real windows: at the parent's cut corner Linen
+ // is the real next owner, regardless of admission/reuse order.
+ for order in [[0,1,2,3],[3,2,1,0],[2,0,3,1]]{
+  let reordered=order.map(|i|surfaces[i]);
+  assert_eq!(g.winner(&reordered,201,20,100,180,200).unwrap().surface_id,200);
+  assert_eq!(g.winner(&reordered,156,40,140,180,200).unwrap().surface_id,201);
+  let top=g.winner(&reordered,201,40,140,180,200).unwrap();
+  assert_eq!(g.winner_below(&reordered,201,Some(top),40,140,180,200).unwrap().surface_id,200);
+  let mut row=g.row_winners(&reordered,201,100,180,200).unwrap();assert_eq!(row.selected(20),Some(200));
+ }
+ // Clearing/reusing the earlier slot cannot raise Mesh over Linen.
+ surfaces[0]=SURFACE_EMPTY;surfaces[0]=mesh;
+ assert_eq!(g.winner(&surfaces,0,40,140,180,200).unwrap().surface_id,200);
+ surfaces[3].active=false;assert_eq!(g.winner(&surfaces,0,40,140,180,200).unwrap().surface_id,201);
+ let program=app_catalog::INCARNATIONS.iter().find(|row|row.app==app_catalog::App::Program).unwrap();
+ assert!(desktop_stack::ORDER.contains(&program.frame()));
+ surfaces[0]=Surface{owner_pd:program.target,..surface(program.frame(),0,28,180,172)};
+ assert_eq!(g.winner(&surfaces,program.frame(),40,140,180,200).unwrap().surface_id,program.frame());
+ // Only the trusted Shell palette has modal precedence.
+ surfaces[3]=Surface{owner_pd:3,..surface(152,0,28,180,172)};
+ assert_eq!(g.winner(&surfaces,program.frame(),40,140,180,200).unwrap().surface_id,152);
+ surfaces[3].owner_pd=8;
+ assert_eq!(g.winner(&surfaces,program.frame(),40,140,180,200).unwrap().surface_id,program.frame());
 }

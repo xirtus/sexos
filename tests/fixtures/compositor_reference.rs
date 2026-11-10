@@ -7,7 +7,7 @@ fn reference_composite_pixel_unmasked(x: usize, y: usize, w: usize, h: usize, bg
     unsafe {
         // Pass 1: non-focused surfaces (slot order, break on first hit)
         for surf in SURFACES.iter() {
-            if !surf.active || Some(surf.surface_id) != selected || surf.surface_id == focused_id || FRAME_GROUPS.is_frame(surf) { continue; }
+            if !surf.active || Some(surf.surface_id) != selected || surf.surface_id == focused_id || FRAME_GROUPS.is_frame(surf) || FRAME_GROUPS.is_program_frame(surf) { continue; }
             let (sx, sy, sw, sh) = reference_frame_rect(surf, w, h);
             if sw == 0 || sh == 0 { continue; }
             if x >= sx && x < sx + sw && y >= sy && y < sy + sh {
@@ -21,7 +21,7 @@ fn reference_composite_pixel_unmasked(x: usize, y: usize, w: usize, h: usize, bg
         // Pass 2: focused surface (always drawn on top)
         if selected.is_some() {
             for surf in SURFACES.iter() {
-                if !surf.active || Some(surf.surface_id) != selected || (surf.surface_id != focused_id && !FRAME_GROUPS.is_frame(surf)) { continue; }
+                if !surf.active || Some(surf.surface_id) != selected || (surf.surface_id != focused_id && !FRAME_GROUPS.is_frame(surf) && !FRAME_GROUPS.is_program_frame(surf)) { continue; }
                 let (sx, sy, sw, sh) = reference_frame_rect(surf, w, h);
                 if sw == 0 || sh == 0 { continue; }
                 if x >= sx && x < sx + sw && y >= sy && y < sy + sh {

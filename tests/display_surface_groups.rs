@@ -3,6 +3,7 @@
 //! sentinels; surface selection, clipping, fill, font and presentation bits are real.
 #![allow(dead_code,unused_variables,unused_unsafe,static_mut_refs)]
 extern crate self as sex_pdx;
+#[path="../crates/sex-pdx/src/desktop_stack.rs"]pub mod desktop_stack;
 #[macro_export]macro_rules! serial_record{($($arg:tt)*)=>{{let _=format_args!($($arg)*);}}}
 #[path="../crates/sex-pdx/src/text_encoding.rs"]pub mod text_encoding;
 #[path="../crates/sex-pdx/src/text_batch.rs"]pub mod text_batch;
@@ -1216,10 +1217,10 @@ unsafe fn seal_pending_text(index:usize,task:u32,sequence:u32,text:&[u8],selecti
 
 #[test]fn rounded_edges_blend_actual_owners_and_only_mark_real_contributors(){unsafe{
  SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();reset_bitmap_stage();
- SURFACES[0]=Surface{x:20,y:70,w:200,h:150,color:0x110000,owner_pd:15,surface_id:300,active:true,..SURFACE_EMPTY};
- SURFACES[1]=Surface{x:0,y:28,w:320,h:230,color:0x000077,owner_pd:9,surface_id:156,active:true,..SURFACE_EMPTY};
+ SURFACES[0]=Surface{x:20,y:70,w:200,h:150,color:0x110000,owner_pd:9,surface_id:156,active:true,..SURFACE_EMPTY};
+ SURFACES[1]=Surface{x:0,y:28,w:320,h:230,color:0x000077,owner_pd:15,surface_id:300,active:true,..SURFACE_EMPTY};
  let old=capture_scene(320,260,0);
- for(x,color,bits)in[(20,0x000077,1),(27,0x020068,5),(31,0x110000,4)]{
+ for(x,color,bits)in[(20,0x000077,4),(27,0x020068,5),(31,0x110000,1)]{
   APP_PRESENT_BITS=0;assert_eq!(composite_pixel(x,70,320,260,0x123,0,&old),color);assert_eq!(APP_PRESENT_BITS,bits);
   let mut row=old.groups.row_winners(&old.surfaces,0,70,320,260).unwrap();
   APP_PRESENT_BITS=0;assert_eq!(composite_pixel_source(x,70,320,260,0x123,row.source(x),&old),color);assert_eq!(APP_PRESENT_BITS,bits);
@@ -1231,14 +1232,14 @@ unsafe fn seal_pending_text(index:usize,task:u32,sequence:u32,text:&[u8],selecti
  // Two translucent corner samples over a third real owner; a fourth opaque
  // owner is hidden and must never gain APP_PRESENT through speculative shading.
  FRAME_GROUPS.set_scale(1);SURFACES[0]=old.surfaces[0];
- SURFACES[1]=Surface{color:0x007700,owner_pd:9,surface_id:156,..SURFACES[0]};
- SURFACES[2]=Surface{x:0,y:28,w:320,h:230,color:0x0000bb,owner_pd:12,surface_id:154,active:true,..SURFACE_EMPTY};
+ SURFACES[1]=Surface{color:0x007700,owner_pd:12,surface_id:154,..SURFACES[0]};
+ SURFACES[2]=Surface{x:0,y:28,w:320,h:230,color:0x0000bb,owner_pd:15,surface_id:300,active:true,..SURFACE_EMPTY};
  SURFACES[3]=Surface{owner_pd:16,surface_id:301,color:0xabcdef,..SURFACES[2]};
  let layered=capture_scene(320,260,0);APP_PRESENT_BITS=0;
  assert_eq!(composite_pixel(27,70,320,260,0x123,0,&layered),0x020c8e);assert_eq!(APP_PRESENT_BITS,7);
  // Legacy overlay underlay reconstruction must skip its own retained layer.
  let source=surface_groups::PixelSource{surface:&layered.surfaces[0],content:&layered.surfaces[0],chrome:false};
- APP_PRESENT_BITS=0;assert_eq!(composite_rounded_edge(27,70,320,260,0x123,source,Some(&layered.surfaces[0]),&layered),0x000ea3);assert_eq!(APP_PRESENT_BITS,3);
+ APP_PRESENT_BITS=0;assert_eq!(composite_rounded_edge(27,70,320,260,0x123,source,Some(&layered.surfaces[0]),&layered),0x000ea3);assert_eq!(APP_PRESENT_BITS,6);
  SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();reset_bitmap_stage();
 }}
 
@@ -1281,11 +1282,16 @@ unsafe fn seal_pending_text(index:usize,task:u32,sequence:u32,text:&[u8],selecti
 }}
 
 #[test]fn rounded_partial_stack_visits_all_32_layers_but_stops_at_opaque_owner(){unsafe{
- FRAME_GROUPS=FrameGroups::new();reset_bitmap_stage();
- for i in 0..MAX_SURFACES{SURFACES[i]=Surface{x:20,y:70,w:200,h:150,color:0xffffff,owner_pd:8,surface_id:800+i as u64,active:true,..SURFACE_EMPTY};}
- SURFACES[31].owner_pd=9;SURFACES[31].surface_id=156;SURFACES[31].color=0xff0000;
+ FRAME_GROUPS=FrameGroups::new();reset_bitmap_stage();let mut expected_mask=0u64;
+ for i in 0..MAX_SURFACES{
+  let sid=desktop_stack::ORDER[i];let row=app_catalog::INCARNATIONS.iter().enumerate().find(|(_,row)|row.frame()==sid);
+  let owner=row.map_or(3,|(_,row)|if row.shell_surface.is_some(){3}else{row.target});
+  if let Some((index,row))=row{if owner==row.target&&sid==row.surface{expected_mask|=1u64<<index;}}
+  SURFACES[i]=Surface{x:20,y:70,w:200,h:150,color:if i==31{0xff0000}else{0xffffff},owner_pd:owner,surface_id:sid,active:true,..SURFACE_EMPTY};
+ }
+ assert_ne!(native_pixel_bit(SURFACES[31].owner_pd,SURFACES[31].surface_id),0);
  let scene=capture_scene(320,260,0);
- APP_PRESENT_BITS=0;assert_eq!(composite_pixel(27,70,320,260,0x123,0,&scene),0xf8f8f8);assert_eq!(APP_PRESENT_BITS,1);
+ APP_PRESENT_BITS=0;assert_eq!(composite_pixel(27,70,320,260,0x123,0,&scene),0xf8f8f8);assert_eq!(APP_PRESENT_BITS,expected_mask);
  APP_PRESENT_BITS=0;assert_eq!(composite_pixel(31,70,320,260,0x123,0,&scene),0xffffff);assert_eq!(APP_PRESENT_BITS,0);
  SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();reset_bitmap_stage();
 }}

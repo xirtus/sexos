@@ -158,6 +158,8 @@ def source_contract(root):
   if profile==SLIM_PROFILE or _date_render_shape(display):
    for name in('servers/sexdisplay/src/scene.rs','servers/sexdisplay/src/bitmap_binding.rs','servers/sexdisplay/src/bitmap_transaction.rs','servers/sexdisplay/src/bitmap_stores.rs','servers/sexdisplay/src/surface_lifecycle.rs','servers/sexdisplay/src/surface_groups.rs','crates/sex-pdx/src/app_lifecycle.rs','crates/sex-pdx/src/bitmap_batch.rs'):
     texts[name]=(root/name).read_text()
+   if 'sex_pdx::desktop_stack' in texts['servers/sexdisplay/src/surface_groups.rs']:
+    texts['crates/sex-pdx/src/desktop_stack.rs']=(root/'crates/sex-pdx/src/desktop_stack.rs').read_text()
    if 'fn render_prepared('in display:
     for name in('servers/sexdisplay/src/frame_output.rs','crates/sex-pdx/src/display_frames.rs','crates/sex-pdx/src/memory_region.rs'):
      texts[name]=(root/name).read_text()

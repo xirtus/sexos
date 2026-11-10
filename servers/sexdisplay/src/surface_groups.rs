@@ -102,22 +102,21 @@ impl FrameGroups {
     /// A foreign/stale `above` reference cannot resume another layer traversal.
     pub fn winner_below<'a>(&self,surfaces:&'a[Surface],focused:u64,above:Option<&Surface>,
         x:usize,y:usize,w:usize,h:usize)->Option<&'a Surface>{
-        // The shell's modal launcher must remain above app focus without
-        // stealing that focus (its actions still target the previous window).
-        let overlay=|s:&&Surface|s.owner_pd==3&&s.surface_id==152;
-        // A focus reference to a bound child raises its actual frame, never a ghost child.
+        // A focus reference raises only its authenticated, observed parent.
         let focused = surfaces.iter().find(|s| s.active && s.surface_id == focused)
             .and_then(|s| self.child_group(s)).filter(|g| g.frame_seen)
             .and_then(|g| g.catalog.frame_surface_id()).unwrap_or(focused);
-        let order=surfaces.iter().filter(overlay)
-            .chain(surfaces.iter().filter(|s|!overlay(s)&&s.surface_id==focused))
-            .chain(surfaces.iter().filter(|s|!overlay(s)&&s.surface_id!=focused));
-        let mut passed=above.is_none();
-        for s in order{
-            if above.is_some_and(|a|core::ptr::eq(a,s)){passed=true;continue;}
-            if passed&&self.independent(s)&&contains(self.rect(s,w,h),x,y)&&self.coverage(s,x,y)!=0{return Some(s);}
-        }
-        None
+        let key = |s: &Surface| sex_pdx::desktop_stack::key(focused,s.owner_pd,s.surface_id);
+        let floor = match above {
+            Some(above) => Some(key(surfaces.iter().find(|s| core::ptr::eq(*s,above))?)),
+            None => None,
+        };
+        // Constant-time shared ranks, independent of allocation/slot reuse.
+        // The fixed scan borrows only this scene; no sorting arena or lookup
+        // based on the latest mutable Shell state enters a prepared frame.
+        surfaces.iter().filter(|s| self.independent(s) && contains(self.rect(s,w,h),x,y)
+            && self.coverage(s,x,y)!=0 && floor.is_none_or(|floor| key(s)>floor))
+            .min_by_key(|s| key(s))
     }
     /// The frame owns z-order/chrome. Only exact app-owned children can replace
     /// its body pixels; clipping never changes the child's text coordinate origin.

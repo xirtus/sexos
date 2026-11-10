@@ -1271,6 +1271,7 @@ pub mod usb_net;
 pub mod network_config;
 
 pub mod desktop_style;
+pub mod desktop_stack;
 pub mod pixel_region;
 pub mod sound_ring;
 pub mod sound_mixer;

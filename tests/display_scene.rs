@@ -2,6 +2,7 @@
 // Controlled held metadata is not a runtime grant or native composition proof.
 #![allow(dead_code,static_mut_refs)]
 extern crate self as sex_pdx;
+#[path="../crates/sex-pdx/src/desktop_stack.rs"]pub mod desktop_stack;
 pub const ERR_SERVICE_NOT_READY:u64=u64::MAX-1;
 pub const ERR_CAP_INVALID:u64=u64::MAX-3;
 fn bar_height()->usize{28}

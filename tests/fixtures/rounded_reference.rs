@@ -22,18 +22,23 @@ fn reference_frame_rect(s:&Surface,w:usize,h:usize)->(usize,usize,usize,usize){
 }
 fn reference_composite_pixel_selected(x:usize,y:usize,w:usize,h:usize,bg:u32,focused:u64,_selected:Option<u64>)->u32{unsafe{
  let focused=SURFACES.iter().find(|s|s.active&&s.surface_id==focused)
-  .and_then(|s|app_catalog::by_surface(s.owner_pd,s.surface_id))
-  .and_then(|i|i.shell_surface).filter(|id|SURFACES.iter().any(|s|s.active&&s.owner_pd==3&&s.surface_id==*id)).unwrap_or(focused);
- // This independent list reconstructs the existing modal/focus/slot order.
- let mut layers=Vec::new();
- for group in 0..3{for s in SURFACES.iter(){
-  let modal=s.owner_pd==3&&s.surface_id==152;
-  if !s.active||!FRAME_GROUPS.independent(s)||match group{0=>!modal,1=>modal||s.surface_id!=focused,_=>modal||s.surface_id==focused}{continue;}
+  .and_then(|s|app_catalog::INCARNATIONS.iter().find(|row|row.target==s.owner_pd&&(row.surface==s.surface_id||row.children.contains(&s.surface_id))))
+  .and_then(|i|i.shell_surface).filter(|id|SURFACES.iter().any(|s|s.active&&s.owner_pd==3&&s.surface_id==*id&&FRAME_GROUPS.is_frame(s))).unwrap_or(focused);
+ // Independent comparison sort over literal builtin precedence and immutable
+ // catalog data; do not use the production lookup table/key/row iterator.
+ let priority=|s:&Surface|{
+  let rank=if s.surface_id==200{0}else if let Some(index)=app_catalog::INCARNATIONS.iter().position(|row|row.frame()==s.surface_id||row.surface==s.surface_id||row.children.contains(&s.surface_id)){1+index}
+   else if let Some(index)=[202,203,204,103,102,101,100].iter().position(|id|*id==s.surface_id){1+app_catalog::COUNT+index}else{usize::MAX};
+  (if s.owner_pd==3&&s.surface_id==152{0}else if s.surface_id==focused{1}else{2},rank,s.surface_id)
+ };
+ let mut owners:Vec<_>=SURFACES.iter().filter(|s|s.active&&FRAME_GROUPS.independent(s)).collect();
+ owners.sort_by_key(|s|priority(s));let mut layers=Vec::new();
+ for s in owners{
   let(l,t,rw,rh)=reference_frame_rect(s,w,h);
   if x<l||x-l>=rw||y<t||y-t>=rh{continue;}
   let a=reference_round_alpha(s,1,x,y);if a==0{continue;}
   layers.push((s.surface_id,a));if a==255{break;}
- }if layers.last().is_some_and(|p|p.1==255){break;}}
+ }
  let mut result=bg;
  // Shade front-to-back for honest contributor accounting, fold colors back-to-front.
  let painted:Vec<_>=layers.iter().map(|&(id,a)|(reference_composite_pixel_unmasked(x,y,w,h,bg,focused,Some(id)),a)).collect();

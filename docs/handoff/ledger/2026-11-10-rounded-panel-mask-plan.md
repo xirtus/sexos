@@ -181,3 +181,67 @@ pass. This proves capacity/stop correctness, not worst-case guest timing or
 optimized target stack size; those remain pending. The focused current-source
 AA/legacy-overlay/signed-row controls pass after the workarea fix and heap154
 master refresh; they are not relabelled as another full 59-case sweep.
+
+## Conditional first native candidate and ordering correction
+
+The first clean optimized build was source441362dd, based on merged Web152 and
+heap154. Its immutable UI-only ISO SHA256 is
+`0c70f79fa97b8365bfbe7b0d2851e54e5f908f1a4d43b400622222eaabc6aa9f`.
+Apple Clang21, verified musl headers, the five pinned Limine files and a fresh
+worktree-owned Rust guest target were used; no FFmpeg/libc++ qualification is
+implied. Native1280x800 and1024x768 captures pass the full3,456-pixel real UTC/
+Geist clock oracle. These are first-candidate observations, not final acceptance.
+
+The independent native corner oracle initially sampled old published geometry
+while Display was preparing a new private frame. Every failed image was retained;
+bounded re-observation keeps the exact coverage/colour checks. The opaque close
+circle also needed its independent circle/contrast calculation. Replaying the
+retained native before/moved images then matches all144 corner pixels:23 zero,
+17 partial and104 opaque. No opaque-control pixels were excluded to get a pass.
+
+Initial pointer qualification exposed a real defect: the normal image's trusted
+`[shell.click.real.target]` reports Mesh202 at normalized(458,264) in a transparent
+Quil corner, where the visible underlay is Linen. Optional proof-profile click
+markers are absent in normal builds and cannot substitute for that event. Shell
+previously tested a private hardcoded order and admitted uncreated placeholders:
+Mesh/Collar/Bell have initially Visible lifecycle labels and alive booleans before
+their frames exist. Display instead selected nonfocused owners by slot order.
+The new holes make this existing discrepancy directly reachable.
+
+`desktop_stack` now supplies one immutable catalog+builtin order and constant-time
+bounded rank table. It covers every program/native incarnation and does not let
+slot reuse/restart change priority. Shell uses the same inventory for initial hits
+and invalid-focus fallback. Eligibility now combines held registration/liveness,
+scene membership, an actual accepting active-tab frame, or the explicitly owned
+mapped standalone100..103 path. A lifecycle label alone cannot make a placeholder
+hittable. Child focus aliases require the exact live custody association and a
+real parent frame; modal152 retains its separate trusted fence/priority. Neither
+ranks nor caller-supplied fact structs establish capability authority.
+
+Independent controls compare three overlapping frame identities under shuffled
+slots, slot clearing/reuse, a bound child focus, every catalog program and trusted
+versus foreign modal ownership. The actual extracted Shell adapters additionally
+refuse uncreated placeholders, inactive tabs, dead/closing/foreign child bindings
+and absent parents, while preserving owned mapped standalone input. The four
+positive Rust cases run serially (`--test-threads=1`); four compiled mutants and
+two source-wiring counterexamples must fail. Initial small suites pass; full
+current-source compositor/font/output and new native three-window proofs remain
+required before merge.
+
+## Cold-font stack qualification
+
+The frozen441 ELF has a64KiB mapped user stack. Independent disassembly audit found
+warm AA/kerning direct chains of57,320 bytes and a conservative cold path of62,968
+for the exact bundled glyf fonts, before small outgoing/indirect allowances. A
+66,840-byte generic CFF branch is unreachable for these two fonts, and first-strip
+font warmup helps, but neither fact is a blanket future-font stack proof. The441
+candidate is therefore not labelled fully stack-qualified.
+
+Cold `Font::new` construction is now an out-of-line non-inlined initializer. Warm
+font calls borrow immutable cached data, avoiding cold parser temporaries inflating
+every glyph/layout frame. Font bytes, glyph output, cache bounds and service stack
+budget are unchanged. Rebuilt target call-chain accounting and exact-font/native
+pixel controls are required. IRQs use TSS RSP0 and syscall entry switches to the
+kernel stack before software pushes; those frames do not use Display's user stack.
+Final matched timing must qualify the ordering+cold-init candidate against fresh
+master5f946c33 with identical build/runtime inputs, not relabel441 or older runs.
