@@ -503,3 +503,28 @@ Stat is now 15x faster than Linux on 1 core and 5.7x on 4 cores (TCG).
 last 4 KiB (`CACHE_AT`) belong to Files. Programs built against the old sizes would
 send requests that overlap the cache; all in-tree clients use the constants.
 
+
+### Boot time, split at kernel entry (2026-11-10)
+
+The kernel logs `[boot.kernel_entry] tsc=` first thing, so the boot number splits into
+firmware + loader and kernel. On 1 core without PKU (TCG):
+
+| | before | now |
+|---|---|---|
+| power-on to kernel entry | ~7.1 G (3 s menu countdown) | 5.76 G (1 s countdown) |
+| kernel entry to first program | ~3.0 G | 3.04 G |
+| power-on to first program | 10.18 G | **8.80 G** (Linux 7.46 G, without a loader) |
+
+- The Limine menu now waits 1 s instead of 3 (`limine.cfg`); its entries can still be
+  picked (a gate choosing the 1024x768 entry was checked).
+- Excluding the loader, SexOS reaches its first program in 3.0 G cycles; Linux's 7.46 G
+  includes firmware and decompressing the kernel, so the kernel part is not behind.
+- The kernel writes 263 KB of log before the first program, and the boot log screen drew
+  every byte as it came. It now updates the text and draws the screen in batches, waiting
+  nine times as long as the last drawing took (and on core 0's timer, so the last line
+  before a hang still shows). Kernel entry to first program: 3.04 G -> **1.15 G**;
+  power-on to first program **6.81 G**, ahead of Linux's 7.46 G. On a large or uncached
+  framebuffer (a 4K laptop panel) the per-byte drawing would have cost far more.
+- Serial: COM1 is probed and skipped when absent (most laptops). With a real UART at
+  115200 baud the 263 KB would still take ~23 s; trimming the bulk of boot lines is the
+  next step if a machine with one is used for testing.

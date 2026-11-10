@@ -13,7 +13,7 @@ use sex_pdx::memory_region::{QUERY_VIEW, READ};
 use sexfs::{Fs, Kind};
 
 /// The whole disk through the driver's raw requests, in runs as long as the shared buffer.
-struct RawDisk { sectors: u64 }
+pub(crate) struct RawDisk { pub(crate) sectors: u64 }
 impl RawDisk {
     fn buffer() -> Result<&'static mut [u8], Error> {
         let va = crate::vfs::diskfs_bridge_get_buf_va();
@@ -45,7 +45,7 @@ impl BlockDev for RawDisk {
 }
 
 /// An image file in Files' own filesystem.
-struct FileDev<'a> { fs: &'a mut Fs<'static, crate::fs_service::Disk>, id: u64, sectors: u64 }
+pub(crate) struct FileDev<'a> { pub(crate) fs: &'a mut Fs<'static, crate::fs_service::Disk>, pub(crate) id: u64, pub(crate) sectors: u64 }
 impl BlockDev for FileDev<'_> {
     fn sectors(&self) -> u64 { self.sectors }
     fn read(&mut self, lba: u64, out: &mut [u8]) -> Result<(), Error> {
@@ -58,13 +58,13 @@ impl BlockDev for FileDev<'_> {
 }
 
 /// GUIDs need to be unique, not secret: the time stamp counter, stirred.
-fn seeds() -> Seeds {
+pub(crate) fn seeds() -> Seeds {
     let mut x = unsafe { core::arch::x86_64::_rdtsc() } ^ sex_pdx::get_ticks().rotate_left(32);
     let mut next = || { x = x.wrapping_add(0x9E37_79B9_7F4A_7C15); let mut z = x; z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9); z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB); z ^ (z >> 31) };
     Seeds(core::array::from_fn(|_| { let mut b = [0u8; 16]; b[..8].copy_from_slice(&next().to_le_bytes()); b[8..].copy_from_slice(&next().to_le_bytes()); b }))
 }
 
-fn why(e: Error) -> &'static str {
+pub(crate) fn why(e: Error) -> &'static str {
     match e {
         Error::NoSpace => "Not enough free space. SexOS needs 1.5 GiB that no partition uses; shrink another system's partition first (in that system's own disk tool).",
         Error::Exists => "Something is in the way: SexOS is already on this disk, or another boot menu (limine.cfg) would hide SexOS's.",
@@ -73,6 +73,9 @@ fn why(e: Error) -> &'static str {
         Error::Io => "A disk error stopped the install.",
         Error::Invalid => "The store must be at least 1 GiB.",
         Error::NotFound => "The boot image lacks Limine or its menu.",
+        Error::BadSignature => "The update is not signed by this system's release key, or its image is not the one the signature covers.",
+        Error::Older => "The update is not newer than the running system.",
+        Error::Pending => "An update already waits for a restart. Restart to try it, then update again.",
     }
 }
 

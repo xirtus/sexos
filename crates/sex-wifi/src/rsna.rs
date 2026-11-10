@@ -107,33 +107,107 @@ pub struct Rsna {
     target: Target,
     me: [u8; 6],
     family: Family,
-    sec_key_cmd: bool,
-    mfp: bool,
-    /// Keys waiting to be installed, in order.
-    keys: [Option<Key>; 3],
+    keys: Keys,
     pub installed: (bool, bool, bool),
     pub messages: u8,
     seq: u16,
     started: u64,
-    since: u64,
-    in_flight: bool,
 }
+
+/// Keys to put in the firmware, one command at a time, in the order given.
+pub struct Keys {
+    sec_key_cmd: bool,
+    mfp: bool,
+    waiting: [Option<Key>; 3],
+    in_flight: bool,
+    since: u64,
+}
+
+impl Keys {
+    pub fn new(sec_key_cmd: bool, mfp: bool) -> Self { Self { sec_key_cmd, mfp, waiting: [None; 3], in_flight: false, since: 0 } }
+    /// Nothing waiting and no command unanswered.
+    pub fn idle(&self) -> bool { !self.in_flight && self.waiting.iter().all(|k| k.is_none()) }
+    /// The key whose command the firmware has not answered yet.
+    pub fn in_flight(&self) -> Option<Key> { if self.in_flight { self.waiting[0] } else { None } }
+
+    pub fn queue(&mut self, i: Install) {
+        let mut put = |k: Key| { if let Some(slot) = self.waiting.iter_mut().find(|s| s.is_none()) { *slot = Some(k); } };
+        if let Some(k) = i.pairwise { put(Key::Pairwise(k)); }
+        if let Some(g) = i.group { put(Key::Group(g.id, g.key)); }
+        // Integrity keys need SEC_KEY_CMD; older firmware leaves management frames unprotected.
+        if let Some(g) = i.igtk.filter(|_| self.sec_key_cmd) { put(Key::Integrity(g.id, g.key)); }
+    }
+
+    /// Takes the answer to the last command and sends the next one. Returns the
+    /// key the firmware just took, if any.
+    pub fn install<D: Dma + DmaRead>(&mut self, b: &Bringup, cmdq: &mut CommandQueue, r: &mut impl Registers, dma: &mut D, now: u64) -> Result<Option<Key>, Failure> {
+        let mut done = None;
+        if self.in_flight {
+            let Some(a) = cmdq.answer else {
+                if now.saturating_sub(self.since) >= COMMAND_US {
+                    let s = cmdq.pending.unwrap_or(cmdq::Sent { group: 0, opcode: 0, index: 0 });
+                    cmdq.abandon();
+                    return Err(Failure::Timeout { group: s.group, opcode: s.opcode });
+                }
+                return Ok(None);
+            };
+            cmdq.answer = None;
+            self.in_flight = false;
+            if a.failed { return Err(Failure::Refused { group: a.sent.group, opcode: a.sent.opcode }); }
+            if !self.sec_key_cmd {
+                let s = cmdq.response[..a.len.min(cmdq::RESPONSE_BYTES)].get(..4).map(|w| u32::from_le_bytes(w.try_into().unwrap()));
+                if s.map_or(true, |s| s & 0xff != ADD_STA_SUCCESS) {
+                    return Err(Failure::BadAnswer { group: a.sent.group, opcode: a.sent.opcode, len: a.len });
+                }
+            }
+            done = self.waiting[0].take();
+            self.waiting.rotate_left(1);
+        }
+        let Some(key) = self.waiting[0] else { return Ok(done) };
+        let mut p = [0u8; SEC_KEY_BYTES];
+        let (group, opcode, len) = if self.sec_key_cmd {
+            sec_key(&mut p, key, self.mfp);
+            (h::DATA_PATH_GROUP, SEC_KEY_CMD, SEC_KEY_BYTES)
+        } else {
+            let mut c = [0u8; ADD_STA_KEY_BYTES];
+            add_sta_key(&mut c, key, self.mfp);
+            p[..ADD_STA_KEY_BYTES].copy_from_slice(&c);
+            (h::LONG_GROUP, h::ADD_STA_KEY, ADD_STA_KEY_BYTES)
+        };
+        match cmdq.send(dma, r, &b.layout, b.base, group, opcode, 0, &p[..len]) {
+            Ok(_) => { self.in_flight = true; self.since = now; Ok(done) }
+            Err(cmdq::Error::Busy) => Ok(done),
+            Err(_) => Err(Failure::Timeout { group, opcode }),
+        }
+    }
+}
+
+/// What stays of the handshake once connected: the supplicant answers the AP's
+/// later key messages (group rekeying every hour or so, a pairwise rekey), and
+/// their keys go into the firmware the same way.
+pub struct Rekey { pub sup: Supplicant, pub keys: Keys }
 
 impl Rsna {
     /// After association with a WPA2 network: `own_rsn` is what our association
     /// request carried, `ap_rsn` the AP's element from its beacon. `tx` is the
-    /// association's queue (frames may still be in it).
+    /// association's queue (frames may still be in it). `akm` is PSK (WPA2) or
+    /// SAE (WPA3, with SAE's PMK).
     #[allow(clippy::too_many_arguments)]
     pub fn new(pmk: [u8; 32], snonce: [u8; 32], own_rsn: &[u8], ap_rsn: &[u8], ap: &w::Rsn, target: Target, me: [u8; 6],
-        family: Family, tx: TxQueue, sec_key_cmd: bool, now: u64) -> Self
+        family: Family, tx: TxQueue, sec_key_cmd: bool, now: u64, akm: Akm) -> Self
     {
-        let sup = Supplicant::new(Akm::Psk, pmk, target.bssid, me, snonce, own_rsn, ap_rsn);
-        Self { step: Step::Handshake, sup, tx, target, me, family, sec_key_cmd, mfp: ap.mfpc, keys: [None; 3],
-            installed: (false, false, false), messages: 0, seq: 0x100, started: now, since: now, in_flight: false }
+        let sup = Supplicant::new(akm, pmk, target.bssid, me, snonce, own_rsn, ap_rsn);
+        Self { step: Step::Handshake, sup, tx, target, me, family, keys: Keys::new(sec_key_cmd, ap.mfpc),
+            installed: (false, false, false), messages: 0, seq: 0x100, started: now }
     }
     pub fn done(&self) -> bool { !matches!(self.step, Step::Handshake) }
     pub fn target(&self) -> Target { self.target }
     pub fn me(&self) -> [u8; 6] { self.me }
+    /// The connection, once `Connected`: data over the handshake's queue, and the
+    /// supplicant kept for rekeying.
+    pub fn into_link(self) -> crate::link::Link {
+        crate::link::Link::new(self.tx, self.target, self.me, self.family, true).with_rekey(Rekey { sup: self.sup, keys: self.keys })
+    }
 
     /// Hands a frame heard before this state existed (message 1 often comes with
     /// the association response).
@@ -147,20 +221,12 @@ impl Rsna {
         match self.sup.receive(frame, &mut reply) {
             Ok((n, install)) => {
                 if n > 0 && !self.send(b, r, dma, &reply[..n]) { self.step = Step::Refused(Refusal::NotSent); return; }
-                self.queue(install);
+                self.keys.queue(install);
             }
             // A replayed or out-of-order frame is dropped; a forged one ends it.
             Err(eapol::Error::Replay | eapol::Error::Unexpected) => {}
             Err(e) => self.step = Step::Refused(Refusal::Handshake(e)),
         }
-    }
-
-    fn queue(&mut self, i: Install) {
-        let mut put = |k: Key| { if let Some(slot) = self.keys.iter_mut().find(|s| s.is_none()) { *slot = Some(k); } };
-        if let Some(k) = i.pairwise { put(Key::Pairwise(k)); }
-        if let Some(g) = i.group { put(Key::Group(g.id, g.key)); }
-        // Integrity keys need SEC_KEY_CMD; older firmware leaves management frames unprotected.
-        if let Some(g) = i.igtk.filter(|_| self.sec_key_cmd) { put(Key::Integrity(g.id, g.key)); }
     }
 
     /// An EAPOL frame to the AP as a data frame (`ieee80211_send_eapol_key`).
@@ -212,58 +278,18 @@ impl Rsna {
         if let Some(reason) = gone { self.step = Step::Refused(Refusal::Disconnected(reason)); return false; }
         if frame_len > 0 { self.on_eapol(b, r, dma, &frame[..frame_len]); }
         if self.done() { return false; }
-        self.install(b, cmdq, r, dma, now);
-        if !self.done() && self.installed.0 && self.installed.1 && self.keys.iter().all(|k| k.is_none()) && !self.in_flight {
+        match self.keys.install(b, cmdq, r, dma, now) {
+            Ok(Some(Key::Pairwise(_))) => self.installed.0 = true,
+            Ok(Some(Key::Group(..))) => self.installed.1 = true,
+            Ok(Some(Key::Integrity(..))) => self.installed.2 = true,
+            Ok(None) => {}
+            Err(f) => { self.step = Step::Failed(f); return false; }
+        }
+        if self.installed.0 && self.installed.1 && self.keys.idle() {
             self.step = Step::Connected;
-        } else if !self.done() && now.saturating_sub(self.started) >= HANDSHAKE_US {
+        } else if now.saturating_sub(self.started) >= HANDSHAKE_US {
             self.step = Step::Refused(Refusal::Timeout { messages: self.messages });
         }
         !self.done()
-    }
-
-    fn install<D: Dma + DmaRead>(&mut self, b: &Bringup, cmdq: &mut CommandQueue, r: &mut impl Registers, dma: &mut D, now: u64) {
-        if self.in_flight {
-            let Some(a) = cmdq.answer else {
-                if now.saturating_sub(self.since) >= COMMAND_US {
-                    let s = cmdq.pending.unwrap_or(cmdq::Sent { group: 0, opcode: 0, index: 0 });
-                    cmdq.abandon();
-                    self.step = Step::Failed(Failure::Timeout { group: s.group, opcode: s.opcode });
-                }
-                return;
-            };
-            cmdq.answer = None;
-            self.in_flight = false;
-            if a.failed { self.step = Step::Failed(Failure::Refused { group: a.sent.group, opcode: a.sent.opcode }); return; }
-            if !self.sec_key_cmd {
-                let s = cmdq.response[..a.len.min(cmdq::RESPONSE_BYTES)].get(..4).map(|w| u32::from_le_bytes(w.try_into().unwrap()));
-                if s.map_or(true, |s| s & 0xff != ADD_STA_SUCCESS) {
-                    self.step = Step::Failed(Failure::BadAnswer { group: a.sent.group, opcode: a.sent.opcode, len: a.len });
-                    return;
-                }
-            }
-            match self.keys[0].take() {
-                Some(Key::Pairwise(_)) => self.installed.0 = true,
-                Some(Key::Group(..)) => self.installed.1 = true,
-                Some(Key::Integrity(..)) => self.installed.2 = true,
-                None => {}
-            }
-            self.keys.rotate_left(1);
-        }
-        let Some(key) = self.keys[0] else { return };
-        let mut p = [0u8; SEC_KEY_BYTES];
-        let (group, opcode, len) = if self.sec_key_cmd {
-            sec_key(&mut p, key, self.mfp);
-            (h::DATA_PATH_GROUP, SEC_KEY_CMD, SEC_KEY_BYTES)
-        } else {
-            let mut c = [0u8; ADD_STA_KEY_BYTES];
-            add_sta_key(&mut c, key, self.mfp);
-            p[..ADD_STA_KEY_BYTES].copy_from_slice(&c);
-            (h::LONG_GROUP, h::ADD_STA_KEY, ADD_STA_KEY_BYTES)
-        };
-        match cmdq.send(dma, r, &b.layout, b.base, group, opcode, 0, &p[..len]) {
-            Ok(_) => { self.in_flight = true; self.since = now; }
-            Err(cmdq::Error::Busy) => {}
-            Err(_) => self.step = Step::Failed(Failure::Timeout { group, opcode }),
-        }
     }
 }

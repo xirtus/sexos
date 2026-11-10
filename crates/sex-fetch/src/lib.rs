@@ -91,6 +91,17 @@ impl Url {
     pub fn origin(&self) -> String { alloc::format!("{}://{}", if self.secure { "https" } else { "http" }, self.authority()) }
 }
 
+/// The `Referer` a request to `to` carries from the page at `from`, under the
+/// default policy (`strict-origin-when-cross-origin`): the page's address without
+/// its fragment within its own origin, only its origin elsewhere, and nothing from
+/// an https page to an http address or from a page that isn't http(s). The address
+/// is the page's real one: the browser never makes one up.
+pub fn referrer(from: &str, to: &Url) -> Option<String> {
+    let page = Url::parse(from).ok()?;
+    if page.secure && !to.secure { return None; }
+    if page.origin() == to.origin() { Some(alloc::format!("{}{}", page.origin(), page.target)) } else { Some(alloc::format!("{}/", page.origin())) }
+}
+
 fn strip_prefix_ci<'a>(s: &'a str, p: &str) -> Option<&'a str> {
     (s.len() >= p.len() && s.as_bytes()[..p.len()].eq_ignore_ascii_case(p.as_bytes())).then(|| &s[p.len()..])
 }
@@ -104,9 +115,11 @@ pub struct Request<'a> {
     pub body: &'a [u8],
     /// The `Origin` among `headers` is the browser's own, not a page's.
     pub trusted_origin: bool,
+    /// The browser's `Referer`: the page this request is for, as [`referrer`] trims it.
+    pub referrer: Option<&'a str>,
 }
 impl<'a> Request<'a> {
-    pub const fn get(url: &'a str) -> Self { Request { method: "GET", url, headers: &[], body: &[], trusted_origin: false } }
+    pub const fn get(url: &'a str) -> Self { Request { method: "GET", url, headers: &[], body: &[], trusted_origin: false, referrer: None } }
 }
 
 fn token(s: &str) -> bool { !s.is_empty() && s.bytes().all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b)) }
@@ -132,6 +145,7 @@ pub fn encode(req: &Request, url: &Url, cookie: Option<&str>) -> Result<Vec<u8>,
     let named = |n: &str| req.headers.iter().any(|(k, _)| k.eq_ignore_ascii_case(n));
     if !named("user-agent") { put("User-Agent: "); put(USER_AGENT); put("\r\n"); }
     if !named("accept") { put("Accept: */*\r\n"); }
+    if let Some(r) = req.referrer.filter(|r| value_ok(r)) { put("Referer: "); put(r); put("\r\n"); }
     if !named("accept-language") { put("Accept-Language: en-US,en;q=0.8\r\n"); }
     put("Accept-Encoding: gzip, deflate\r\n");
     for (k, v) in req.headers {

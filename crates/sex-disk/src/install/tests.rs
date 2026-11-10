@@ -3,21 +3,21 @@ use crate::MemDev;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-fn tool(name: &str) -> bool { Command::new(name).arg("--version").output().is_ok() }
-fn run(cmd: &mut Command) -> String {
+pub(crate) fn tool(name: &str) -> bool { Command::new(name).arg("--version").output().is_ok() }
+pub(crate) fn run(cmd: &mut Command) -> String {
     let out = cmd.output().unwrap();
     assert!(out.status.success(), "{:?}: {}{}", cmd, String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
-fn scratch(tag: &str) -> PathBuf {
+pub(crate) fn scratch(tag: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!("sexdisk-install-{tag}-{}", std::process::id()));
     std::fs::create_dir_all(&d).unwrap();
     d
 }
-fn seeds(n: u8) -> Seeds { Seeds(core::array::from_fn(|i| [n.wrapping_add(i as u8 * 17); 16])) }
+pub(crate) fn seeds(n: u8) -> Seeds { Seeds(core::array::from_fn(|i| [n.wrapping_add(i as u8 * 17); 16])) }
 
 /// A boot image like make_boot_image.py builds: FAT, Limine, its menu, a kernel.
-fn image(dir: &Path) -> Vec<u8> {
+pub(crate) fn image(dir: &Path) -> Vec<u8> {
     let img = dir.join("boot.img");
     std::fs::write(&img, vec![0u8; 24576 * 512]).unwrap();
     run(Command::new("mformat").args(["-i"]).arg(&img).args(["-T", "24576", "-h", "64", "-s", "32", "-v", "SEXOS", "::"]));
@@ -36,7 +36,7 @@ fn image(dir: &Path) -> Vec<u8> {
 
 /// A disk as Windows leaves it: GPT, a FAT32 ESP with the Windows boot manager and a
 /// fallback loader, a "Windows" partition full of data, and free space after it.
-fn windows_disk(dir: &Path) -> (PathBuf, u64, u64) {
+pub(crate) fn windows_disk(dir: &Path) -> (PathBuf, u64, u64) {
     let disk = dir.join("disk.img");
     std::fs::write(&disk, vec![0u8; 4 << 30 >> 1]).unwrap(); // 2 GiB
     run(Command::new("sgdisk").args(["-n1:2048:+100M", "-t1:ef00", "-c1:EFI system partition", "-n2:0:+50M", "-t2:0700", "-c2:Basic data partition"]).arg(&disk));

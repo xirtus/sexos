@@ -18,10 +18,10 @@
 //!   stdin: lines typed into that window.
 //! * threads: the program's workers (`sex_app::thread`), on its own key and cores;
 //!   `Mutex`, `Condvar` and parking: the kernel's wait and wake on an address.
-//! * time: the kernel's tick for `Instant`; see [`sys`] for `SystemTime`.
+//! * time: the kernel's tick for `Instant`, its civil time (UTC) for `SystemTime`.
 //! * memory: the program's heap (`sex_app::heap`), from its own window.
-//! * sockets: not yet (they come with the socket API for programs); calls fail
-//!   with `Unsupported` rather than pretending.
+//! * sockets: the program's network flows (`sex_app::net::direct`), for a run started
+//!   with `run +net`: TCP connections and listeners, UDP, and name lookup.
 //!
 //! A program uses it with `use sex_std as _;` (or calls [`window`] for pixels) and a
 //! normal `fn main`.
@@ -33,6 +33,8 @@ pub mod args;
 mod console;
 #[cfg(target_os = "hermit")]
 pub mod sys;
+#[cfg(target_os = "hermit")]
+mod net;
 
 pub use sex_app;
 pub use sex_pdx;

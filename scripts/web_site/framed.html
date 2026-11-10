@@ -1,0 +1,17 @@
+<!doctype html>
+<html><head><style>html,body{margin:0;height:100%}body{background:#22aa44}#b{height:100%}</style></head>
+<body><div id=b></div>
+<script>
+const parentOrigin = location.ancestorOrigins[0];
+let clicks = 0;
+window.addEventListener('message', e => {
+  if (e.data.reply === 'leak') { console.log('framed fail leak'); return; }
+  if (e.origin === parentOrigin && e.source === window.parent) console.log('framed got ' + e.data.reply);
+});
+document.getElementById('b').addEventListener('click', () => {
+  clicks++;
+  document.body.style.background = '#2244cc';
+  window.parent.postMessage({ clicked: clicks }, parentOrigin);
+});
+window.parent.postMessage({ hello: 1, framed: window.parent !== window, referrer: document.referrer, parentOrigin }, parentOrigin);
+</script></body></html>

@@ -63,6 +63,31 @@ pub fn init_boot_image(files: u32) {
         rights: QUERY_VIEW | READ, dma_base: None, peer_pd: None });
     crate::serial_println!("[boot.image.region] files={} bytes={}", files, data.len());
 }
+/// Where Limine loaded the kernel from, read-only in Files (see `sex_pdx::fs::BOOT_FACTS_SLOT`).
+pub fn init_boot_facts(files: u32) {
+    use sex_pdx::fs as w;
+    require_boot();
+    if files == 0 { return; }
+    let physical = backing(4096);
+    let hhdm = crate::HHDM_REQUEST.response().expect("BOOT_FACTS_NO_HHDM").offset;
+    if let Some(file) = crate::KERNEL_FILE_REQUEST.response().map(|r| r.executable_file()) {
+        let u = file.gpt_part_uuid;
+        let mut guid = [0u8; 16];
+        guid[0..4].copy_from_slice(&u.a.to_le_bytes());
+        guid[4..6].copy_from_slice(&u.b.to_le_bytes());
+        guid[6..8].copy_from_slice(&u.c.to_le_bytes());
+        guid[8..16].copy_from_slice(&u.d);
+        unsafe { core::ptr::copy_nonoverlapping(guid.as_ptr(), (physical + hhdm) as *mut u8, 16); }
+        // The file record as Limine wrote it, from `media_type` on: Limine 7 has a word the
+        // crate's layout lacks before the UUIDs, so Files matches GUIDs in it at any offset.
+        unsafe { core::ptr::copy_nonoverlapping((file as *const limine::file::File as *const u8).add(40), (physical + hhdm + 16) as *mut u8, 80); }
+        crate::serial_println!("[boot.facts] partition={:08x}-{:04x}-{:04x}-{:02x}{:02x} part_index={}", u.a, u.b, u.c, u.d[0], u.d[1], file.partition_index);
+    }
+    let pd = DOMAIN_REGISTRY.get(files).expect("BOOT_FACTS_FILES");
+    let virtual_base = alias(pd, physical, 4096, false, false);
+    grant(pd, w::BOOT_FACTS_SLOT, RegionGrant { region_id: w::BOOT_FACTS_REGION_ID, virtual_base, length: 4096,
+        rights: QUERY_VIEW | READ, dma_base: None, peer_pd: None });
+}
 /// One region per possible Spindle for the open-internet stream, shared with the
 /// network service alone.
 pub fn init_web_regions(net: u32) {

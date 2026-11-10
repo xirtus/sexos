@@ -18,7 +18,7 @@ e45f86d95f464bcbefe222acdb7ea565dda7f35301c54dd22ca1a71ba3e86f04  crates/sex-pdx
 
 23573f8a270bca79c28095dc8c176699739817e247b1ef7804d15adacbc03def  crates/sex-pdx/src/clipboard_client.rs
 
-788f62299fcb0ffb062a7d1d563b4abf22210fb9b3db00347bc6e7ac3ae8d57c  crates/sex-pdx/src/clock_source.rs
+34803d9a2e3144f61b25a3e8ae494e364976f7140e17569e71ecce01435bd404  crates/sex-pdx/src/clock_source.rs
 
 e7dfb4de37122f0f53279e067deed3b39c9e9f3f369b3d91c9e659484dcf59c5  crates/sex-pdx/src/crash_log.rs
 
@@ -46,11 +46,11 @@ e1a8e5b73c48cfd4cc079510a2c51eacd7f371f00dffabb5968962ca9f462e30  crates/sex-pdx
 
 3f377a4a91b79e25d50737cd939c37ec76f0a9d6ee7d2cd282901a014c7c05f4  crates/sex-pdx/src/entropy_source.rs
 
-b021a4eb66caad020285219a1d24f8117486847f3e9c7a1ef310d7b41960cef2  crates/sex-pdx/src/fs.rs
+d062164fd4b47a868139af7ca18ecdd5ba2cd6d53c3a4e6d196f36a4fee480f8  crates/sex-pdx/src/fs.rs
 
 a0f555cd3af59954d4dce9ae913d16ac90089c8fa1dd61ecfda1a25a85de899d  crates/sex-pdx/src/history_recovery.rs
 
-586bd4ba63d5ab498dce194428a32a5d6c86dac884f8a0e720aedda6477408d4  crates/sex-pdx/src/lib.rs
+09a973195e1223eddce27e5ae7248e087c9c0465306dc493ec0c9b24f9cb84fd  crates/sex-pdx/src/lib.rs
 
 b02d602feb5f239687f1a450e8c0ec2b932c366df85ae4f2a5dc67df3f5edcef  crates/sex-pdx/src/memory_region.rs
 
@@ -114,7 +114,7 @@ e13c2573dadd9fc2725da96cabc1a562fb04c7b20a1e5d0ac32425a07d20d113  kernel/src/app
 
 3164978117938fd88d27396c9cc403f95f2f95c30c421c4f13e91fbb5e97cd32  kernel/src/boot_display_state.rs
 
-88ea0e5f34c199606d173f0ef9a8935379402e429c2bc445bfeb179c719f609f  kernel/src/boot_memory.rs
+38271b04c20c93b49a035a3419e2a032c9fe63464e47ccd43f5d592b0bb76500  kernel/src/boot_memory.rs
 
 2fd25f89091106c70503869c40f52cfeb6662fab8ddfcd2c6202d2e04550fe69  kernel/src/boot_network.rs
 
@@ -126,7 +126,7 @@ e13c2573dadd9fc2725da96cabc1a562fb04c7b20a1e5d0ac32425a07d20d113  kernel/src/app
 
 d4ded4cf20061e5ea54c59e2b026972c09a0924b08eff6a07c8fc1b2a4e7765c  kernel/src/capability_table.rs
 
-4ac714fe630fedd0bdd83e5df0249fcd948d4ce1c713bde5e9ef70af5ab06ddd  kernel/src/clock_source.rs
+c872bf5fe493404db7b792fc4150bf50f44d3fa36a8167d2181789eb067421c5  kernel/src/clock_source.rs
 
 3d4409ab3f2238999dbad3988e56cb19e66cd3fae1d78de035617ca4d0cfafe0  kernel/src/entropy_source.rs
 
@@ -134,7 +134,7 @@ d4ded4cf20061e5ea54c59e2b026972c09a0924b08eff6a07c8fc1b2a4e7765c  kernel/src/cap
 
 cf020f742459f6862a152fbed48da11da00a0b3a12c95e2f755c84ff6441be74  kernel/src/history_recovery.rs
 
-780e2b1fbbe01af61b4223651e9c08e726797c17dd38251888b9c52d7253d733  kernel/src/interrupts.rs
+2bdcc8bf9295e622714f65e41221aa598cf017f5508fd2929ba8767f856e389b  kernel/src/interrupts.rs
 
 c7d42c2df1965a3b94bce554e10d5047c4269994c942f524b60b9de7b94a470a  kernel/src/ipc.rs
 
@@ -144,7 +144,7 @@ dcc491154df5f4182c1cec5f13498ff9081b030e90d894af41b09163e8cbe029  kernel/src/ipc
 
 5fd9d7d28138623172ea565d6a7d0ddb74a07baca2cd3f29079ccddac8fff0f0  kernel/src/ipc/router.rs
 
-495164f494355bc24f22dc7150f7f84fb53316db69f3b6c277e09becef056c76  kernel/src/ipc/sender.rs
+cae67c2ff9adc1e53c84114f80246865f1b7dd70b6a2718098d45738ed846fda  kernel/src/ipc/sender.rs
 
 90a8d17a6bcefec6e6de8cf0644e179e807903fc379a8189b2baca9ed4b0ffaa  kernel/src/ipc_ring.rs
 
@@ -152,7 +152,7 @@ dcc491154df5f4182c1cec5f13498ff9081b030e90d894af41b09163e8cbe029  kernel/src/ipc
 
 a6cec3ea15190f7bbebebca78444a4cf2c190597bc7c1596165b3693dd798b96  kernel/src/pci_command.rs
 
-9a247d08df759a4dfb821fbebf5004fac515d095f1c5e68ceb602aba12dba2ff  kernel/src/syscalls/mod.rs
+946ff67684b0957bad3f0dcc348ae6518b7ff01540762e699e85365eab26cd1e  kernel/src/syscalls/mod.rs
 
 d96aa774f2c9ddf72f5fca8c9aa31e6127d182038f9bff826faa5e55ef8083eb  kernel/src/trust_source.rs
 

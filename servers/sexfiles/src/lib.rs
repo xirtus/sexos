@@ -11,6 +11,7 @@ mod spindle_probe;
 mod program_store;
 mod fs_service;
 mod installer;
+mod updater;
 mod volumes;
 mod document;
 mod document_journal;

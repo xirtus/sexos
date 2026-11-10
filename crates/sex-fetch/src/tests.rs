@@ -27,7 +27,7 @@ fn urls() {
 fn requests() {
     let u = Url::parse("https://www.youtube.com/youtubei/v1/next?prettyPrint=false").unwrap();
     let body = br#"{"videoId":"x"}"#;
-    let r = Request { method: "post", url: "", headers: &[("Content-Type", "application/json"), ("Host", "evil"), ("X-Goog-Visitor-Id", "v1"), ("Origin", "https://evil")], body, trusted_origin: false };
+    let r = Request { method: "post", url: "", headers: &[("Content-Type", "application/json"), ("Host", "evil"), ("X-Goog-Visitor-Id", "v1"), ("Origin", "https://evil")], body, trusted_origin: false, referrer: None };
     let bytes = encode(&r, &u, Some("YSC=a; PREF=b")).unwrap();
     let text = core::str::from_utf8(&bytes).unwrap();
     assert!(text.starts_with("POST /youtubei/v1/next?prettyPrint=false HTTP/1.1\r\nHost: www.youtube.com\r\n"), "{}", text);
@@ -163,4 +163,19 @@ fn cookies() {
     // Counts are capped.
     for i in 0..400 { jar.store(&yt, &alloc::format!("c{}=1", i), now); }
     assert!(jar.iter().filter(|c| c.domain == "www.youtube.com").count() <= 180);
+}
+
+#[test]
+fn referrer_policy() {
+    let to = |u: &str| Url::parse(u).unwrap();
+    assert_eq!(referrer("https://a.example/x/y?q=1#f", &to("https://a.example/z")).as_deref(), Some("https://a.example/x/y?q=1"));
+    assert_eq!(referrer("https://a.example/x/y?q=1", &to("https://www.youtube.com/embed/v")).as_deref(), Some("https://a.example/"));
+    assert_eq!(referrer("http://a.example:8080/p", &to("http://b.example/")).as_deref(), Some("http://a.example:8080/"));
+    assert_eq!(referrer("https://a.example/p", &to("http://a.example/")), None);
+    assert_eq!(referrer("about:welcome", &to("https://a.example/")), None);
+    assert_eq!(referrer("https://user:pw@a.example/p", &to("https://a.example/q")).as_deref(), Some("https://a.example/p"));
+    let u = to("https://www.youtube.com/embed/v");
+    let out = encode(&Request { referrer: Some("https://a.example/"), headers: &[("Referer", "https://evil/")], ..Request::get("") }, &u, None).unwrap();
+    let text = core::str::from_utf8(&out).unwrap();
+    assert!(text.contains("Referer: https://a.example/\r\n") && !text.contains("evil"), "{text}");
 }

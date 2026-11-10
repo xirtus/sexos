@@ -113,6 +113,7 @@ pub const COMMANDS: &[&[u8]] = &[
     b"touch",
     b"truncdoc",
     b"unmount",
+    b"update",
     b"url",
     b"url-status",
     b"volume",
