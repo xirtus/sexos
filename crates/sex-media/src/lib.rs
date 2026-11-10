@@ -27,6 +27,7 @@ use sex_app::sound::{Sound, RATE};
 
 mod source;
 pub use source::{Source, Growing, AHEAD, NEAR};
+pub mod recording;
 
 /// FFmpeg's error number, with its text through [`Error::text`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
