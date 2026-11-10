@@ -3929,3 +3929,13 @@ Roadmap workstream B, part 1 (report: `docs/handoff/LINUX_AND_DESKTOP_PARITY_REP
   WPA2 on the firmware model and receives decrypted frames, a replay, an undecrypted
   frame, a relayed own broadcast and a deauthentication.
 - **ABI / kernel:** none.
+
+## Intel Wi-Fi, stage W5f: group key rekeying (2026-11-10)
+- **What:** the link keeps the WPA2 supplicant. It answers the AP's later key messages
+  (group rekey, pairwise rekey) and installs the new keys, so a connection survives
+  the AP's hourly group key change. INTEL_WIFI section 15.
+- **Evidence:** `scripts/wifi_host_gate.sh` (46 driver tests). A test plays a group
+  rekey on the firmware model: the key message is not passed up, the answer goes back
+  protected with a valid MIC, and the new key is installed once. Packet numbers
+  restart under the new key, and repeated frames or key messages change nothing.
+- **ABI / kernel:** none.

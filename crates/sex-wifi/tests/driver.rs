@@ -1796,7 +1796,7 @@ fn x17_carries_ethernet_over_wpa2() {
     sim.deliver(&mut m, &b.layout, &mpdu_status(fam, &group, ok, true));
     sim.deliver(&mut m, &b.layout, &mpdu_status(fam, &group, ok, true));
     let mut got: Vec<Vec<u8>> = vec![];
-    assert!(link.poll(&mut b, &mut i.cmdq, &mut hw, &mut m, |e| got.push(e.to_vec())));
+    assert!(link.poll(&mut b, &mut i.cmdq, &mut hw, &mut m, 0, |e| got.push(e.to_vec())));
     assert_eq!(got.len(), 2);
     assert_eq!((&got[0][0..6], &got[0][6..12], &got[0][12..14]), (&me[..], &gw[..], &[0x08, 0x00][..]));
     assert_eq!(&got[0][14..], &ip(0x45)[..], "the MIC is cut off");
@@ -1807,8 +1807,65 @@ fn x17_carries_ethernet_over_wpa2() {
     assert_eq!(link.tx.queued, 0, "the TX response freed the ring");
     // The AP leaves: the link goes down.
     sim.deliver(&mut m, &b.layout, &mpdu(fam, &from_ap(w::FC_MGMT_DEAUTH, &me, &bss.bssid, &7u16.to_le_bytes()), 40, 6, true));
-    assert!(!link.poll(&mut b, &mut i.cmdq, &mut hw, &mut m, |_| {}));
+    assert!(!link.poll(&mut b, &mut i.cmdq, &mut hw, &mut m, 0, |_| {}));
     assert_eq!(link.down, Some(link::Down::Disconnected(7)));
+}
+
+#[test]
+fn x17_takes_a_new_group_key_while_connected() {
+    let (r, mut sim, bss, _, _, mut i, mut b, mut m, mut hw) = x17_connect(b"correct horse", true);
+    assert_eq!(r.step, rsna::Step::Connected);
+    let me = i.mac;
+    let fam = b.boot.chip.family;
+    let ptk = sim.ap.wpa.as_ref().unwrap().ptk.unwrap();
+    let mut link = r.into_link();
+    let ok = 3 | 2 << 8 | 1 << 6 | 1 << 11;
+    // Group traffic under the first key (id 2) up to packet number 50.
+    let mut group = protected_from_ap(&[0xff; 6], &bss.bssid, &[0x02, 0x99, 0, 0, 0, 1], 50, &ip(0x40));
+    group[29] |= 2 << 6;
+    sim.deliver(&mut m, &b.layout, &mpdu_status(fam, &group, ok, true));
+    // An hour later the AP sends group key message 1, protected like any data.
+    let new = eapol::GroupKey { id: 2, key: [0x88; 16], rsc: 0 };
+    let mut e = [0u8; eapol::MAX_FRAME];
+    let n = eapol::authenticator::group_message1(&mut e, eapol::Akm::Psk, &ptk, 3, &new);
+    let mut f = protected_from_ap(&me, &bss.bssid, &bss.bssid, 9, &e[..n]);
+    f[40..42].copy_from_slice(&[0x88, 0x8e]);
+    sim.deliver(&mut m, &b.layout, &mpdu_status(fam, &f, ok, true));
+    let (frames, commands) = (sim.frames.len(), sim.commands.len());
+    let mut got = 0;
+    assert!(link.poll(&mut b, &mut i.cmdq, &mut hw, &mut m, 0, |_| got += 1));
+    assert_eq!(got, 1, "the key message is not passed up");
+    assert_eq!((link.rekey_messages, link.rekey_error), (1, None));
+    // The answer (group message 2) goes back protected, with a MIC under the KCK.
+    sim.serve(&mut m, &b.layout, &mut hw);
+    let (cmd, out) = &sim.frames[frames];
+    assert_eq!(&out[0..2], &[0x08, 0x41]);
+    assert_eq!(u16::from_le_bytes([cmd[2], cmd[3]]), tx::FLAG_CMD_RATE);
+    assert_eq!(&out[24..32], &[0xaa, 0xaa, 3, 0, 0, 0, 0x88, 0x8e]);
+    eapol::authenticator::check_message4(&out[32..], eapol::Akm::Psk, &ptk).unwrap();
+    // The new key goes into the firmware; its packet numbers start over.
+    for _ in 0..4 { link.poll(&mut b, &mut i.cmdq, &mut hw, &mut m, 0, |_| {}); sim.serve(&mut m, &b.layout, &mut hw); }
+    let keys: Vec<_> = sim.commands[commands..].iter().filter(|c| (c.0, c.1) == (hcmd::DATA_PATH_GROUP, rsna::SEC_KEY_CMD)).collect();
+    assert_eq!(keys.len(), 1);
+    assert_eq!((u32::from_le_bytes(keys[0].2[8..12].try_into().unwrap()), &keys[0].2[16..32]), (2, &[0x88; 16][..]));
+    assert_eq!(link.rekeyed, 1);
+    let mut group = protected_from_ap(&[0xff; 6], &bss.bssid, &[0x02, 0x99, 0, 0, 0, 1], 1, &ip(0x41));
+    group[29] |= 2 << 6;
+    sim.deliver(&mut m, &b.layout, &mpdu_status(fam, &group, ok, true));
+    let mut got = vec![];
+    assert!(link.poll(&mut b, &mut i.cmdq, &mut hw, &mut m, 0, |e| got.push(e.to_vec())));
+    assert_eq!(got.len(), 1, "packet number 1 under the new key is fresh");
+    // The same frame again is a CCMP replay; the same key message in a new frame
+    // is an EAPOL replay. Neither installs anything.
+    sim.deliver(&mut m, &b.layout, &mpdu_status(fam, &f, ok, true));
+    link.poll(&mut b, &mut i.cmdq, &mut hw, &mut m, 0, |_| {});
+    assert_eq!((link.last_drop, link.rekey_messages), (Some(link::Drop::Replay), 1));
+    let mut f = protected_from_ap(&me, &bss.bssid, &bss.bssid, 10, &e[..n]);
+    f[40..42].copy_from_slice(&[0x88, 0x8e]);
+    sim.deliver(&mut m, &b.layout, &mpdu_status(fam, &f, ok, true));
+    link.poll(&mut b, &mut i.cmdq, &mut hw, &mut m, 0, |_| {});
+    assert_eq!(link.rekey_error, Some(eapol::Error::Replay));
+    assert_eq!(link.rekeyed, 1);
 }
 
 #[test]

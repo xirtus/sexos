@@ -359,11 +359,8 @@ impl Wifi {
         let ssid = core::str::from_utf8(&self.joined_ssid).unwrap_or("?").trim_end_matches('\0');
         if r.step == rsna::Step::Connected {
             sex_pdx::serial_record!("[wifi.connected] ssid=\"{}\" security=WPA2 ticks={}", ssid, now_ticks);
-            let family = self.bringup.boot.chip.family;
-            let tx = core::mem::replace(&mut r.tx, TxQueue::new(family));
-            let (target, me) = (r.target(), r.me());
             self.rx = RxQueue::EMPTY;
-            self.link = Some(Link::new(tx, target, me, family, true));
+            self.link = self.rsna.take().map(Rsna::into_link);
             sex_pdx::serial_record!("[wifi.link.up] security=WPA2 rate={:#x}", wlink::DATA_RATE);
         } else {
             use csr::Registers;
@@ -422,8 +419,9 @@ impl Wifi {
     pub fn link_receive(&mut self, submit: impl FnOnce(&[u8]) -> bool) -> bool {
         let (Some(l), Some(i)) = (self.link.as_mut(), self.init.as_mut()) else { return false };
         let before = (l.received, l.dropped);
+        let keys = (l.rekey_messages, l.rekeyed);
         let q = &mut self.rx;
-        let up = l.poll(&mut self.bringup, &mut i.cmdq, &mut self.mmio, &mut self.pool, |frame| {
+        let up = l.poll(&mut self.bringup, &mut i.cmdq, &mut self.mmio, &mut self.pool, sex_pdx::get_ticks() * 1000, |frame| {
             if q.count == RX_FRAMES || frame.len() > wlink::MAX_ETHERNET { q.overflow += 1; return; }
             let at = (q.head + q.count) % RX_FRAMES;
             // SAFETY: sexnet runs one thread, and only this queue touches LINK_RX.
@@ -435,6 +433,9 @@ impl Wifi {
             sex_pdx::serial_record!("[wifi.link.down] reason={:?} sent={} received={} dropped={} overflow={}", l.down, l.sent, l.received, l.dropped, q.overflow);
             *q = RxQueue::EMPTY;
             return false;
+        }
+        if (l.rekey_messages, l.rekeyed) != keys {
+            sex_pdx::serial_record!("[wifi.rekey] messages={} installed={} error={:?}", l.rekey_messages, l.rekeyed, l.rekey_error);
         }
         if l.received != before.0 && (l.received <= 16 || l.received.is_power_of_two()) {
             sex_pdx::serial_record!("[wifi.link.rx] frames={} dropped={} last_drop={:?} overflow={}", l.received, l.dropped, l.last_drop, q.overflow);
@@ -457,6 +458,11 @@ impl Wifi {
 
     /// What the desktop sees (`sex_pdx::wifi_status`).
     fn state(&self) -> ws::State {
+        if let Some(l) = &self.link {
+            let phase = if !l.up() { ws::FAILED } else if l.protected() { ws::CONNECTED } else { ws::ASSOCIATED };
+            let (networks, channels) = self.scan.as_ref().map_or((0, 0), |sc| (sc.count.min(255) as u8, sc.channels));
+            return ws::State { phase, networks, scans: self.scans, channels };
+        }
         if let Some(r) = &self.rsna {
             let phase = match r.step { rsna::Step::Connected if self.link.as_ref().is_some_and(|l| !l.up()) => ws::FAILED, rsna::Step::Connected => ws::CONNECTED, rsna::Step::Handshake => ws::HANDSHAKE, _ => ws::FAILED };
             let (networks, channels) = self.scan.as_ref().map_or((0, 0), |sc| (sc.count.min(255) as u8, sc.channels));

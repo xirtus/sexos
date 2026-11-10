@@ -470,3 +470,23 @@ Not yet:
 - power save;
 - roaming;
 - saved networks.
+
+## 15. Stage W5f: group key rekeying (2026-11-10)
+
+APs replace the group key every hour or so (some daily), and some also renew the
+pairwise key. Without an answer they deauthenticate the station, so the x17 test would
+drop after the first rekey. The handshake's supplicant now lives on in the link
+(`rsna::Rekey`, handed over by `Rsna::into_link`):
+
+- EAPOL-Key frames from the AP after the handshake arrive protected like other data.
+  The link sends them to the supplicant instead of the IP stack. The supplicant
+  checks the MIC and the replay counter, then unwraps the new GTK (and IGTK).
+- The answer (group message 2) goes back protected, under the current keys, before
+  the new key is installed.
+- `rsna::Keys` installs keys, one command at a time, with SEC_KEY_CMD or ADD_STA_KEY.
+  It is now shared by the handshake and the link. Once a key is in, its packet-number
+  counters start over.
+- A key the supplicant already installed is never installed again (KRACK). A repeated
+  frame is dropped as a CCMP replay; a repeated key message as an EAPOL replay.
+
+Boot log: `[wifi.rekey] messages=… installed=… error=…`.
