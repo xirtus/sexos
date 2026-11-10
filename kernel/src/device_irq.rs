@@ -83,6 +83,9 @@ fn allocate(pd: u32, want: u32) -> Option<(usize, u8)> {
 
 /// BOOT: remember a lease devmgr just granted, and give it up to `want` vectors.
 pub fn record(pd: u32, slot: u64, dev: &crate::hal::pci::PciDevice, want: u8) {
+    // Behind Intel VMD, MSI/MSI-X is remapped through VMD's own table, which is
+    // not set up: those devices poll.
+    let want = if dev.ecam != 0 { 0 } else { want };
     assert_eq!(crate::ipc::BOOT_PHASE.load(Ordering::Acquire), crate::ipc::BootPhase::RegistryBuild as u8, "DEVICE_IRQ_AFTER_GENESIS");
     let mut lease = Lease { slot, vendor: dev.vendor_id, device: dev.device_id,
         class: (dev.class_id as u32) << 16 | (dev.subclass_id as u32) << 8 | dev.prog_if as u32,
@@ -166,7 +169,7 @@ fn set_mask(record: &Record, index: u64, masked: bool) -> bool {
         Mode::MsiX => unsafe { ((record.table + index * 16 + 12) as *mut u32).write_volatile(masked as u32); },
         Mode::Msi => {
             let dev = crate::hal::pci::PciDevice { bus: l.bus, dev: l.dev, func: l.func, vendor_id: l.vendor, device_id: l.device,
-                class_id: (l.class >> 16) as u8, subclass_id: (l.class >> 8) as u8, prog_if: l.class as u8 };
+                class_id: (l.class >> 16) as u8, subclass_id: (l.class >> 8) as u8, prog_if: l.class as u8, ecam: 0 };
             let cap = record.msi;
             if record.msi_masking {
                 let at = if record.msi_wide { cap + 16 } else { cap + 12 };
