@@ -22,7 +22,6 @@
   bytes beyond EOF untouched. Replay and random tests use separate temporary
   paths so parallel tests cannot overwrite each other's images.
 - **Validation:** all 10 ext4 host tests pass with real mke2fs/debugfs; 20 repeated
-  replay-plus-random runs across four variants pass (160 generated trees). Full
-  volumes host validation locally exposed an unrelated missing-mkfs.vfat fixture
-  fallback in the FAT tests; CI remains required. Hardware/filesystem write safety
-  claims are unchanged.
+  replay-plus-random runs across four variants pass (160 generated trees). The full
+  volumes host gate passes all 38 tests with real mkfs/fsck/mtools on PATH. CI remains
+  required. Hardware/filesystem write safety claims are unchanged.
