@@ -3599,6 +3599,15 @@ Plan: `docs/handoff/NVIDIA_GPU_PLAN_2026_11_09.md` (stages N1-N6).
   `quil_autosave_gate.boot` now deletes the old serial log first: QEMU's `-serial file:`
   does not truncate, and a reused output directory let an older log show through.
 
+## Programs play sound at any rate (2026-11-10)
+- Bell converts each program's sound to its 48 kHz mix: a program names its rate with
+  `Sound::set_rate(hz)` (8 to 192 kHz; ring header word `RATE_HZ`, 0 means 48 kHz) and Bell
+  resamples by linear interpolation as it mixes (`servers/sexbell/src/resample.rs`). 48 kHz
+  keeps the old direct path. Not an ABI input.
+- `run play --tone HZ RATE` plays a two second test sine written at RATE.
+- Gates: `tests/bell_resample.rs` on the host (`scripts/sound_host_gate.sh`, in CI);
+  `scripts/sound_rate_gate.py` records the virtio sound card: 440 Hz at 44.1 kHz,
+  660 Hz at 22.05 kHz and 880 Hz at 96 kHz each last 2.0 s at their own pitch.
 
 ## Boot log on screen, stop screen, crash records, restartable services, fuzzing (2026-11-09)
 
