@@ -3639,3 +3639,17 @@ Details: `docs/handoff/BOOT_LOG_AND_CRASH_RECORDS_2026_11_09.md`.
   `kernel/src/pci_command.rs` changed; `abi_version_hash` recomputed.
 - **Kernel growth:** ~45 lines (class lease kind, pool slot per kind, firmware region,
   subsystem query); mechanism only, no Wi-Fi logic in the kernel.
+
+## Intel Wi-Fi, stage W3: the firmware is told how to run (2026-11-10)
+
+- **Command queue:** `sex_wifi::cmdq` sends host commands on queue 0 (buffers in the
+  Wi-Fi DMA pool, TFDs, the AX210 write pointer) and matches each answer.
+- **Init sequence:** `sex_wifi::init` loads the platform NVM for the SKU ALIVE reports,
+  runs the firmware's init, reads the NVM (MAC address, bands, antennas, channels) and
+  sends iwx(4)'s configuration through the regulatory domain and scan configuration.
+- **Boot log:** sexnet prints `[wifi.pnvm]`, `[wifi.init] step=…`, `[wifi.nvm]` and
+  `[wifi.ready] mac=… country=… channels=…`, or `[wifi.failed] step=init reason=…`.
+- **Evidence:** `scripts/wifi_host_gate.sh` (26 driver + 10 vector tests): the sequence
+  against a firmware model, its failure paths, and the real x17 firmware and `.pnvm`.
+  Real proof is the x17 R1 boot log.
+- **ABI / kernel:** none.
