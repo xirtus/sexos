@@ -20,7 +20,7 @@ e45f86d95f464bcbefe222acdb7ea565dda7f35301c54dd22ca1a71ba3e86f04  crates/sex-pdx
 
 34803d9a2e3144f61b25a3e8ae494e364976f7140e17569e71ecce01435bd404  crates/sex-pdx/src/clock_source.rs
 
-e7dfb4de37122f0f53279e067deed3b39c9e9f3f369b3d91c9e659484dcf59c5  crates/sex-pdx/src/crash_log.rs
+9e6d9d3afdcc3c4720ab9627e539143d682b057e5325eaace5cc645bb4e62dd1  crates/sex-pdx/src/crash_log.rs
 
 e87a1419ee9bb24597cb06eaf408ac4fc769a07281786ee9e278793b3617a286  crates/sex-pdx/src/desktop_style.rs
 
@@ -130,6 +130,8 @@ d4ded4cf20061e5ea54c59e2b026972c09a0924b08eff6a07c8fc1b2a4e7765c  kernel/src/cap
 
 c872bf5fe493404db7b792fc4150bf50f44d3fa36a8167d2181789eb067421c5  kernel/src/clock_source.rs
 
+4a6a0f5312fdbec23efa0d5497b820105ba244c35cc878f27db04ba98cedc3ae  kernel/src/crash_log.rs
+
 3d4409ab3f2238999dbad3988e56cb19e66cd3fae1d78de035617ca4d0cfafe0  kernel/src/entropy_source.rs
 
 0b5914ff61ea39a942f544e75afa4e11d7516d2c80c57572abc3fcf2a7c460ab  kernel/src/fault_transaction.rs
@@ -153,6 +155,8 @@ cae67c2ff9adc1e53c84114f80246865f1b7dd70b6a2718098d45738ed846fda  kernel/src/ipc
 61c23d34744793d69bcfde0d6e0b4044a2867134754204cd58759ee5ab37164b  kernel/src/paging_state.rs
 
 a6cec3ea15190f7bbebebca78444a4cf2c190597bc7c1596165b3693dd798b96  kernel/src/pci_command.rs
+
+6db1276f5af5a91e7abab7adb85a11350a0ac662ecdf9707a441fcb285535999  kernel/src/service_restart.rs
 
 946ff67684b0957bad3f0dcc348ae6518b7ff01540762e699e85365eab26cd1e  kernel/src/syscalls/mod.rs
 

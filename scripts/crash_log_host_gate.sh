@@ -6,4 +6,5 @@ TEST_DIR="$(mktemp -d "${TMPDIR:-/tmp}/crash-log.XXXXXX")"
 trap 'rm -rf "$TEST_DIR"' EXIT
 rustc --edition=2021 --test "$ROOT_DIR/tests/crash_log_record.rs" -o "$TEST_DIR/tests"
 "$TEST_DIR/tests"
+bash "$ROOT_DIR/scripts/service_peer_host_gate.sh"
 echo '[gate.crash_log_host.result] PASS'
