@@ -34,7 +34,8 @@ def main():
       '-device','nec-usb-xhci,id=xhci','-device','usb-tablet,bus=xhci.0','-cdrom',str(a.iso),'-drive',f'if=none,id=nvm,file={disk},format=raw','-device','nvme,serial=sexos01,drive=nvm',
       '-serial',f'file:{serial}','-display','none','-nic','none','-no-reboot']
  proc=subprocess.Popen(cmd,stdout=(a.out/'qemu.log').open('w'),stderr=subprocess.STDOUT)
- def text():return serial.read_text(errors='replace')if serial.exists()else''
+ # AML names print with their 4-byte padding (\_SB_); compare without it.
+ def text():return serial.read_text(errors='replace').replace('\\_SB_.','\\_SB.')if serial.exists()else''
  def wait(pattern,timeout=240):
   d=time.monotonic()+timeout
   while time.monotonic()<d:
@@ -60,6 +61,8 @@ def main():
   dc=debug.read_bytes().decode(errors='replace') if debug.exists() else ''
   if '3FN03F' not in dc:raise RuntimeError(f'debug console {dc!r}')
   print({'ok':True,'gpu':gpu,'state':first[1],'again':again[1],'firmware':dc[dc.index('3FN03F'):][:6]})
+ except Exception:
+  print('\n'.join(l for l in text().splitlines() if re.search(r'\[(gpu|acpi)',l)),file=sys.stderr);raise
  finally:
   if proc.poll()is None:proc.kill();proc.wait()
 if __name__=='__main__':main()

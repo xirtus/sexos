@@ -102,4 +102,5 @@ jobs:
           ${{ runner.temp }}/sexos-persistence
           ${{ runner.temp }}/sexos-cleanup-profiles
           ${{ runner.temp }}/sexos-app-resource-profiles
+          ${{ runner.temp }}/sexos-dgpu
         if-no-files-found: ignore
