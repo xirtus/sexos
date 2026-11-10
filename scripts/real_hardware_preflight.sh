@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# real_hardware_preflight.sh — SexOS Real-Hardware Boot Preflight Checklist V1.
+# real_hardware_preflight.sh — read-only target inventory, not boot qualification.
 #
 # SAFE: Log-only checks. No kernel edits, no bootloader changes, no structural changes.
 # Run on the TARGET machine BEFORE attempting to boot SexOS from USB/CD.
@@ -13,10 +13,19 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="${SEXOS_PREFLIGHT_REPO_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+PROC_ROOT="${SEXOS_PREFLIGHT_PROC_ROOT:-/proc}"
+SYS_ROOT="${SEXOS_PREFLIGHT_SYS_ROOT:-/sys}"
+
 echo "============================================"
-echo " SEXOS REAL-HARDWARE PREFLIGHT V1"
+echo " SEXOS TARGET INVENTORY"
 echo "============================================"
 echo ""
+echo "Inventory only: verify actual PKU/IOMMU operation in the later SexOS boot log."
+if [ -n "${SEXOS_PREFLIGHT_REPO_ROOT:-}${SEXOS_PREFLIGHT_PROC_ROOT:-}${SEXOS_PREFLIGHT_SYS_ROOT:-}" ]; then
+    echo "FIXTURE/OVERRIDE PATHS: this run is not real-hardware qualification evidence."
+fi
 
 PASS=0
 WARN=0
@@ -32,11 +41,11 @@ skip()  { echo "  [SKIP] $1"; SKIP=$((SKIP + 1)); }
 echo "--- CPU FEATURES ---"
 
 # PKU check via /proc/cpuinfo
-if [ -f /proc/cpuinfo ]; then
-    if grep -q " pku " /proc/cpuinfo 2>/dev/null; then
-        pass "PKU feature flag present in /proc/cpuinfo"
+if [ -r "$PROC_ROOT/cpuinfo" ]; then
+    if grep -Eq '(^|[[:space:]])pku([[:space:]]|$)' "$PROC_ROOT/cpuinfo"; then
+        pass "Host reports CPU PKU support; SexOS PKRU enforcement remains unverified"
     else
-        warn "PKU not detected in /proc/cpuinfo. SexOS will run without MPK isolation."
+        fail "CPU PKU support not reported; this inventory cannot qualify the isolated daily-driver target"
     fi
 else
     skip "Cannot read /proc/cpuinfo (not Linux or no /proc)"
@@ -47,30 +56,23 @@ if [ "$(uname -m 2>/dev/null)" = "x86_64" ]; then
     pass "x86-64 architecture confirmed"
 else
     arch_val=$(uname -m 2>/dev/null || echo "unknown")
-    warn "Architecture is '$arch_val' (expected x86_64). SexOS requires x86-64."
+    fail "Architecture is '$arch_val' (expected x86_64). Run this inventory on the target."
 fi
 
 # ---- 2. Serial Port ----
 echo ""
 echo "--- SERIAL PORT ---"
 
-if [ -d /sys/class/tty/ttyS0 ]; then
-    pass "Serial port ttyS0 (COM1 at 0x3F8) detected by kernel"
-    
-    # Check if it's usable
-    if [ -w /sys/class/tty/ttyS0/device/resources ] 2>/dev/null; then
-        io_range=$(cat /sys/class/tty/ttyS0/port 2>/dev/null || echo "unknown")
-        pass "ttyS0 I/O range: $io_range"
-    fi
+if [ -d "$SYS_ROOT/class/tty/ttyS0" ]; then
+    pass "Host exposes ttyS0; this does not establish its address or usable SexOS serial output"
 else
-    warn "ttyS0 not detected. Connect USB-serial adapter or verify firmware serial settings."
-    warn "SexOS hardcodes COM1 (0x3F8). If serial is absent, kernel may panic on debug output."
+    warn "ttyS0 not detected. Arrange supported boot-log capture; a USB adapter is not proof of COM1 support."
 fi
 
 # Check serial-USB adapter
 for dev in /dev/ttyUSB*; do
     if [ -c "$dev" 2>/dev/null ]; then
-        pass "USB-serial adapter found: $dev"
+        warn "Host USB-serial adapter found: $dev; this is not SexOS USB-serial driver qualification"
         break
     fi
 done 2>/dev/null || true
@@ -79,7 +81,8 @@ done 2>/dev/null || true
 echo ""
 echo "--- MEMORY ---"
 
-total_ram_kb=$(grep MemTotal /proc/meminfo 2>/dev/null | awk '{print $2}' || echo 0)
+total_ram_kb=$(awk '/^MemTotal:/ {print $2; found=1; exit} END {if (!found) print 0}' "$PROC_ROOT/meminfo" 2>/dev/null || echo 0)
+case "$total_ram_kb" in ''|*[!0-9]*) total_ram_kb=0 ;; esac
 if [ "$total_ram_kb" -gt 524288 ]; then
     pass "Sufficient RAM: $((total_ram_kb / 1024)) MB (minimum 512 MB required)"
 else
@@ -90,35 +93,43 @@ fi
 echo ""
 echo "--- FIRMWARE ---"
 
-if [ -d /sys/firmware/efi ]; then
+if [ -d "$SYS_ROOT/firmware/efi" ]; then
     pass "Booted in UEFI mode (Limine supports UEFI)"
 else
     warn "Booted in legacy BIOS/CSM mode (Limine supports both, but verify boot method)"
 fi
 
-if [ -d /sys/firmware/efi ] && command -v mokutil &>/dev/null; then
-    if mokutil --sb-state 2>/dev/null | grep -qi "enabled"; then
+if [ -d "$SYS_ROOT/firmware/efi" ] && command -v mokutil &>/dev/null; then
+    if ! sb_state=$(mokutil --sb-state 2>/dev/null); then
+        warn "Secure Boot state could not be read; verify firmware before boot"
+    elif printf '%s\n' "$sb_state" | grep -qi "enabled"; then
         warn "Secure Boot is ENABLED. SexOS does not support Secure Boot. Disable in firmware."
-    else
+    elif printf '%s\n' "$sb_state" | grep -qi "disabled"; then
         pass "Secure Boot is disabled"
+    else
+        warn "Secure Boot state is unknown; verify firmware before boot"
     fi
 fi
 
 # ---- 5. IOMMU / VT-d / AMD-Vi ----
 echo ""
-echo "--- VIRTUALIZATION ---"
+echo "--- DMA REMAPPING / CPU VIRTUALIZATION ---"
 
-if grep -q "iommu" /proc/cmdline 2>/dev/null; then
-    warn "IOMMU enabled. SexOS does not use IOMMU; pass-through not configured."
+if [ -f "$SYS_ROOT/firmware/acpi/tables/DMAR" ]; then
+    pass "Host exposes Intel DMAR firmware table; SexOS unit/device translation still requires boot evidence"
+elif [ -f "$SYS_ROOT/firmware/acpi/tables/IVRS" ]; then
+    pass "Host exposes AMD IVRS firmware table; SexOS unit/device translation still requires boot evidence"
+else
+    warn "No readable DMAR/IVRS path found; DMA-remapping support is unknown, not disproved"
 fi
 
-if grep -q " svm " /proc/cpuinfo 2>/dev/null; then
-    pass "AMD SVM (IOMMU) available"
-elif grep -q " vmx " /proc/cpuinfo 2>/dev/null; then
-    pass "Intel VT-x (IOMMU) available"
+if grep -Eq '(^|[[:space:]])(svm|vmx)([[:space:]]|$)' "$PROC_ROOT/cpuinfo" 2>/dev/null; then
+    pass "Host reports CPU virtualization; VMX/SVM does not prove IOMMU support or DMA isolation"
 else
     skip "Virtualization not detected (not required for SexOS)"
 fi
+echo "         SexOS implements VT-d/AMD-Vi; retain [iommu.unit.enable] and per-device translation receipts."
+echo "         iommu=off selects an explicitly unprotected diagnostic path, not an isolated release."
 
 # ---- 6. USB Controller ----
 echo ""
@@ -135,8 +146,8 @@ if command -v lspci &>/dev/null; then
     else
         warn "No XHCI controller detected. SexOS requires USB XHCI for USB input."
     fi
-elif [ -d /sys/bus/pci ]; then
-    xhci_count=$(find /sys/bus/pci/devices -name "class" -exec grep -l 0c0330 {} \; 2>/dev/null | wc -l)
+elif [ -d "$SYS_ROOT/bus/pci/devices" ]; then
+    xhci_count=$(find "$SYS_ROOT/bus/pci/devices" -name "class" -exec grep -l 0c0330 {} \; 2>/dev/null | wc -l)
     if [ "$xhci_count" -gt 0 ]; then
         pass "XHCI controller(s) detected: $xhci_count"
     else
@@ -150,8 +161,6 @@ fi
 echo ""
 echo "--- ISO / BOOT MEDIUM ---"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 ISO="$ROOT_DIR/sexos-v1.0.0.iso"
 
 if [ -f "$ISO" ]; then
@@ -165,12 +174,12 @@ if [ -f "$ISO" ]; then
     # Check if limine bios-install has been run (search for Limine MBR signature)
     # Limine BIOS install writes signature bytes at specific offsets.
     # This is a soft check — we look for the string "LIMINE" in the ISO.
-    if strings "$ISO" 2>/dev/null | grep -q "LIMINE" 2>/dev/null || \
+    if strings "$ISO" 2>/dev/null | grep -F "LIMINE" >/dev/null || \
        dd if="$ISO" bs=1 skip=3 count=6 2>/dev/null | grep -q "LIMINE" 2>/dev/null; then
         pass "ISO contains Limine boot signature"
     else
         warn "ISO may be missing 'limine bios-install'. Run: ./limine/limine bios-install sexos-v1.0.0.iso"
-        warn "Real hardware BIOS boot WILL FAIL without this step."
+        warn "Verify bootloader installation on the selected image; this string check is not boot validation."
     fi
 else
     fail "ISO not found: $ISO. Run: ./scripts/entrypoint_build.sh"
@@ -204,20 +213,11 @@ fi
 echo ""
 echo "--- BUILD TARGET ---"
 
-TARGET_JSON="$ROOT_DIR/../x86_64-sex.json"  # relative to ROOT_DIR
-TARGET_JSON2="$HOME/x86_64-sex.json"
+TARGET_JSON="$ROOT_DIR/x86_64-sex.json"
 if [ -f "$TARGET_JSON" ]; then
     pass "Target spec found: $TARGET_JSON"
-elif [ -f "$TARGET_JSON2" ]; then
-    pass "Target spec found: $TARGET_JSON2"
 else
-    # Check in common locations
-    TARGET_JSON3=$(find / -name "x86_64-sex.json" -maxdepth 3 2>/dev/null | head -1 || true)
-    if [ -n "$TARGET_JSON3" ]; then
-        pass "Target spec found: $TARGET_JSON3"
-    else
-        fail "Target spec x86_64-sex.json not found. Build will fail."
-    fi
+    fail "Checked-in target spec missing: $TARGET_JSON"
 fi
 
 # ---- SUMMARY ----
@@ -239,6 +239,6 @@ elif [ "$WARN" -gt 4 ]; then
     echo "[RESULT] Many warnings. Review recommended before hardware boot."
     exit 0
 else
-    echo "[RESULT] Preflight looks OK. Ensure warnings are acceptable for your test scenario."
+    echo "[RESULT] Inventory checks complete. This does not qualify a SexOS boot or daily-driver release."
     exit 0
 fi
