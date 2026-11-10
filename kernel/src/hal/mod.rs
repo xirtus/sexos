@@ -4,6 +4,7 @@ use crate::hal::pci::PciDevice;
 pub mod pci;
 pub mod x86_64;
 pub mod acpi;
+pub mod dgpu;
 
 pub struct Framebuffer {
     pub address: u64,
