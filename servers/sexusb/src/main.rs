@@ -335,6 +335,15 @@ pub extern "C" fn _start() -> ! {
     // The first report to Input is the first real one: a report sent here could reach
     // Input before it is ready (the boot order check counts that as a failure).
     let mut usb = usb::Usb::new(controller);
+    // USB network adapters: frames to and from SexNet through this region (sex_pdx::usb_net).
+    let net_view = sex_pdx::memory_region_full_view(sex_pdx::usb_net::SLOT, sex_pdx::memory_region::QUERY_VIEW | sex_pdx::memory_region::READ | sex_pdx::memory_region::WRITE).ok()
+        .filter(|v| v.length >= sex_pdx::usb_net::BYTES && v.virtual_address != 0);
+    if let Some(v) = net_view {
+        let shared = unsafe { sex_pdx::usb_net::Shared::at(v.virtual_address as *mut u8) };
+        shared.set_link(None);
+        usb.net_region = v.virtual_address;
+    }
+    serial_println!("[sexusb.ether.route] region={}", net_view.is_some() as u8);
     let ports = usb.x.ports;
     let (connected, first) = usb.scan();
     if connected == 0 {
@@ -350,6 +359,11 @@ pub extern "C" fn _start() -> ! {
         serial_println!("[sexusb.enum.summary] ports_connected={} slots_enabled={} hid_devices={} pointer_devices={} keyboards={} hubs={} failed={}",
             connected, s.slots, s.hid, s.pointers, s.keyboards, s.hubs, s.failed);
     }
+    // Files' disk requests arrive in this region and inbox (sex_pdx::usb_disk).
+    use sex_pdx::memory_region::{QUERY_VIEW as Q, READ as R, WRITE as W};
+    let files = sex_pdx::memory_region_info(sex_pdx::usb_disk::BUFFER_SLOT).ok().and_then(|info| info.peer_pd).unwrap_or(0);
+    let region = sex_pdx::memory_region_full_view(sex_pdx::usb_disk::BUFFER_SLOT, Q | R | W).map(|v| v.virtual_address).unwrap_or(0);
+    serial_println!("[sexusb.disks.route] files={} region={} ok={}", files, (region != 0) as u8, (files != 0 && region != 0) as u8);
     loop {
         let mut busy = false;
         for _ in 0..64 {
@@ -358,6 +372,24 @@ pub extern "C" fn _start() -> ! {
             busy = true;
         }
         usb.service();
+        busy |= usb.ether_pump();
+        if usb.changed && files != 0 {
+            usb.changed = false;
+            let (status, _) = sex_pdx::pdx_call(sex_pdx::usb_disk::SLOT, sex_pdx::usb_disk::OP_CHANGED, usb.generation, 0, 0);
+            serial_println!("[sexusb.disks.changed] generation={} sent={}", usb.generation, (status == 0) as u8);
+            if status != 0 { usb.changed = true; }
+        }
+        while let Some(m) = sex_pdx::pdx_try_listen_raw(0) {
+            if m.type_id <= 1 { continue; }
+            busy = true;
+            if m.caller_pd != files || region == 0 {
+                serial_println!("[sexusb.disks.refused] caller={} op={:#x}", m.caller_pd, m.type_id);
+                let _ = sex_pdx::pdx_reply(m.caller_pd, sex_pdx::usb_disk::INVALID);
+                continue;
+            }
+            let value = usb.disk_request(m.type_id, m.arg0, m.arg1, m.arg2, region);
+            let _ = sex_pdx::pdx_reply(m.caller_pd, value);
+        }
         poll_pointer_reports();
         if !busy { let _ = sex_pdx::sys_wait_self_ticks(1); }
     }

@@ -5,7 +5,9 @@ from pathlib import Path
 # A 16 MiB file over the network takes a while under emulation.
 os.environ.setdefault('SEXOS_GATE_BOUND','900')
 ROOT=Path(__file__).resolve().parents[1]
-FILES={'/fortune':(ROOT/'iso_root/programs/fortune').read_bytes(),'/hum':(ROOT/'iso_root/programs/hum').read_bytes(),'/big':bytes(16*1024*1024+4096)}
+# One page past the largest program the store takes (sex_pdx::program_store::IMAGE_BYTES).
+IMAGE_BYTES=__import__('math').prod(int(n) for n in re.search(r'pub const IMAGE_BYTES: usize = ([0-9* ]+);',(ROOT/'crates/sex-pdx/src/program_store.rs').read_text())[1].split('*'))
+FILES={'/fortune':(ROOT/'iso_root/programs/fortune').read_bytes(),'/hum':(ROOT/'iso_root/programs/hum').read_bytes(),'/big':bytes(IMAGE_BYTES+4096)}
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):
   body=FILES.get(self.path)

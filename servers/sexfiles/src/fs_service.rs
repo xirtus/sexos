@@ -52,7 +52,8 @@ pub fn flush_for_power() -> bool {
         }
         _ => true,
     };
-    committed && DiskFs::diskfs_block_sync() == 0
+    // Flushes and notifies the drive of the power loss (NVMe CC.SHN) in one call.
+    committed && DiskFs::diskfs_block_shutdown() == 0
 }
 enum State { Untried, Absent, Ready(Fs<'static, Disk>) }
 

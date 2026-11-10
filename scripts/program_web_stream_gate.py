@@ -13,17 +13,27 @@ SITE=ROOT/'scripts/web_site'
 CLIPS={}
 RATE=300*1024
 class Handler(http.server.BaseHTTPRequestHandler):
+ rate=RATE
  def do_GET(self):
   name=self.path.removeprefix('/site/')
   if self.path=='/web':body=(ROOT/'iso_root/programs/web').read_bytes()
   elif name in CLIPS:body=CLIPS[name]
   elif self.path.startswith('/site/') and (SITE/name).is_file():body=(SITE/name).read_bytes()
   else:self.send_response(404);self.end_headers();return
-  self.send_response(200);self.send_header('Content-Length',str(len(body)));self.end_headers()
+  # Clips come in pieces on asking (Range: bytes=N-), as video sites send them.
+  r=re.fullmatch(r'bytes=(\d+)-',self.headers.get('Range','')) if name in CLIPS else None
+  first=int(r[1]) if r else 0
+  if r and first<len(body):
+   self.send_response(206);self.send_header('Content-Range',f'bytes {first}-{len(body)-1}/{len(body)}');body=body[first:]
+  else:self.send_response(200)
+  if name in CLIPS:self.send_header('Accept-Ranges','bytes')
+  self.send_header('Content-Length',str(len(body)));self.end_headers()
   if name not in CLIPS:self.wfile.write(body);return
   # A slow site: 1/10 s of the rate at a time.
-  step=RATE//10
-  for i in range(0,len(body),step):self.wfile.write(body[i:i+step]);self.wfile.flush();time.sleep(.1)
+  step=Handler.rate//10
+  try:
+   for i in range(0,len(body),step):self.wfile.write(body[i:i+step]);self.wfile.flush();time.sleep(.1)
+  except OSError:pass # Web let go of this piece for another
  def log_message(self,*a):pass
 class Quiet(http.server.ThreadingHTTPServer):daemon_threads=True
 os.environ['SEXOS_GATE_NIC']='-netdev user,id=n0 -device e1000e,netdev=n0'

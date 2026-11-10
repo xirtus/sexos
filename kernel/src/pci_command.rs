@@ -50,10 +50,17 @@ pub fn virtio_layout(pd:&ProtectionDomain,slot:u64,page:u64,a:u64,b:u64,c:u64)->
     [0,words[0],words[1],words[2],words[3]]
 }
 
+/// A USB network adapter's frames come through BOOT's shared region with SexUSB, not a
+/// PCI lease: holding that exact region also lets the network owner read its settings.
+fn usb_link(pd:&ProtectionDomain,slot:u64)->bool{
+    slot==sex_pdx::usb_net::SLOT&&matches!(pd.find_capability(slot as u32).map(|c|c.data),
+        Some(CapabilityData::Region(g)) if g.region_id==sex_pdx::usb_net::REGION_ID&&g.length==sex_pdx::usb_net::BYTES)
+}
+
 /// Read BOOT data only after the exact held device lease passes sex-pdx checks.
 pub fn network_config(pd:&ProtectionDomain,slot:u64,a:u64,b:u64,c:u64,d:u64)->[u64;5]{
     let fail=[w::DENIED,0,0,0,0];
-    if a|b|c|d!=0||held(pd,slot,0,0).is_none(){return fail;}
+    if a|b|c|d!=0||(held(pd,slot,0,0).is_none()&&!usb_link(pd,slot)){return fail;}
     let Some(words)=crate::boot_network::query(pd.id)else{return fail;};
     crate::serial_println!("[pci.network.config] pd={} slot={} origin=boot_descriptor runtime_mint=0",pd.id,slot);
     [0,words[0],words[1],words[2],words[3]]
