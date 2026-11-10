@@ -415,7 +415,11 @@
     get lastElementChild() { const c = this.children; return c[c.length - 1] || null; },
     querySelector(s) { return wrap(check(H(OP.QUERY, this._id, String(s), '0'))); },
     querySelectorAll(s) { return list(check(H(OP.QUERY, this._id, String(s), '1'))); },
-    getElementsByTagName(t) { return this.querySelectorAll(t === '*' ? '*' : String(t).toLowerCase()); },
+    getElementsByTagName(t) {
+      const tag = String(t).toLowerCase();
+      const descendants = this.querySelectorAll('*');
+      return tag === '*' ? descendants : descendants.filter(n => n.localName === tag);
+    },
     getElementsByClassName(c) { return this.querySelectorAll(String(c).trim().split(/\s+/).map(x => '.' + x).join('')); },
     append(...xs) { for (const x of xs) this.appendChild(toNode(x)); },
     prepend(...xs) { const f = this.firstChild; for (const x of xs) this.insertBefore(toNode(x), f); },
