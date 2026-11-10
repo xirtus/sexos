@@ -3,8 +3,8 @@
 //! into its low-power states by itself, which on a laptop is most of the drive's
 //! battery cost. Same policy as Linux's defaults: a non-operational state whose entry
 //! plus exit latency is at most 15 ms is entered after 100 ms idle, one of at most
-//! 100 ms after 2 s idle; deeper ones and states whose exit latency exceeds the
-//! 100 ms ceiling are not used.
+//! 100 ms after 2 s idle; states whose entry plus exit latency exceeds the 100 ms
+//! ceiling are not used.
 
 /// Identify Controller offsets.
 pub const ID_NPSS: usize = 263;
@@ -15,6 +15,7 @@ pub const PSD_BYTES: usize = 32;
 pub const FID_APST: u32 = 0x0C;
 pub const ENTRIES: usize = 32;
 
+/// Linux's default_ps_max_latency_us, on entry plus exit.
 pub const MAX_EXIT_LATENCY_US: u64 = 100_000;
 const LATENCY_TOLERANCE_US: [u64; 2] = [15_000, 100_000];
 const IDLE_TIMEOUT_MS: [u64; 2] = [100, 2_000];
@@ -57,8 +58,10 @@ pub fn plan(states: &[PowerState; ENTRIES], npss: u8, skip_deepest: bool) -> Opt
         if target != 0 { table[state] = target; }
         if state == npss as usize && skip_deepest { continue; }
         let s = states[state];
-        if !s.non_operational || s.exit_us as u64 > MAX_EXIT_LATENCY_US { continue; }
         let total = s.entry_us as u64 + s.exit_us as u64;
+        // Like Linux, a state over the ceiling is passed over before the tier search,
+        // so it cannot use up the tiers and hide shallower states.
+        if !s.non_operational || total > MAX_EXIT_LATENCY_US { continue; }
         while tier < LATENCY_TOLERANCE_US.len() && total > LATENCY_TOLERANCE_US[tier] { tier += 1; }
         if tier == LATENCY_TOLERANCE_US.len() { continue; }
         target = ((state as u64) << 3) | (IDLE_TIMEOUT_MS[tier] << 8);

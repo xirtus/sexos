@@ -50,3 +50,11 @@ fn samsung() -> Vec<u8> { id(4, true, &[(false,0,0),(false,0,0),(false,0,0),(tru
     assert!(plan(&s, n, false).is_none());
     assert!(parse(&[0u8; 100]).is_none());
 }
+#[test]fn expensive_deep_state_does_not_hide_shallow_ones(){
+    // PS4 is 60+60 ms (over the 100 ms ceiling); PS3 is 2 ms and must still be used.
+    let mut s=[PowerState{non_operational:false,entry_us:0,exit_us:0};ENTRIES];
+    s[3]=PowerState{non_operational:true,entry_us:1_000,exit_us:1_000};
+    s[4]=PowerState{non_operational:true,entry_us:60_000,exit_us:60_000};
+    let p=plan(&s,4,false).expect("PS3 is usable");
+    assert_eq!(p.deepest,3);assert_eq!(p.table[0],(3<<3)|(100<<8));assert_eq!(p.table[3],0);assert_eq!(p.table[4],0);
+}
