@@ -69,8 +69,9 @@ impl View {
     }
 }
 pub fn text(rows:&[Row<'_>],selected:usize,w:u32,h:u32)->View {
-    text_with(rows,selected,w,h,["APPS / ACTIONS","J/K CHOOSE  ENTER OPEN  ESC CLOSE"])
+    text_with(rows,selected,w,h,DEFAULT_HEAD)
 }
+const DEFAULT_HEAD:[&str;2]=["APPS / ACTIONS","J/K CHOOSE  ENTER OPEN  ESC CLOSE"];
 /// The launcher view with its two header lines given, such as a search query.
 pub fn text_with(rows:&[Row<'_>],selected:usize,w:u32,h:u32,head:[&str;2])->View {
     let scale=if w>=256 {2}else{1};let line_h=9*scale;
@@ -81,7 +82,9 @@ pub fn text_with(rows:&[Row<'_>],selected:usize,w:u32,h:u32,head:[&str;2])->View
     // At most twelve lines fit in 512 bytes even with future long labels.
     let cols=((w.saturating_sub(16)/(6*scale)) as usize).min(40);
     if cols<3 || visible==0 {v.rows=0;return v;}
-    v.line(b"",head[0],cols);v.line(b"",head[1],cols);
+    // The everyday header stays a literal: gates read it from this source.
+    if head==DEFAULT_HEAD {v.line(b"","APPS / ACTIONS",cols);v.line(b"","J/K CHOOSE  ENTER OPEN  ESC CLOSE",cols);}
+    else {v.line(b"",head[0],cols);v.line(b"",head[1],cols);}
     for (index,row) in rows.iter().enumerate().skip(first).take(visible) {
         v.line(if index==selected {b"> "}else{b"  "},row.name,cols);
         v.line(b"  ",row.status,cols);
