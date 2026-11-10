@@ -60,6 +60,11 @@ Validation:
   and reaped by the harness after sync; no orderly OS-shutdown claim.
 - Subsequent review fixed consumed Close leaving the diagnostic window alive:
   between file turns it now removes the temporary best-effort and finishes the
-  run. Original native proof predates that cancellation-only change; final
-  candidate CI must qualify the current head. No recording performance, desktop
-  capture integration, physical hardware or daily-driver claim yet.
+  run. The corrected Play was rebuilt with `scripts/build_play.sh` at clean
+  commit `436d6cad` and rerun on the same pinned ISO; Play SHA-256
+  `ca78f2ef81e59aee340778c4ce8b437a7fcf83623791b62893e184abece79bd8`.
+  The recovered file and all pixels/timestamps matched again; evidence:
+  `sexos-evidence/recording-encoder-guest-436/result.json`. This rerun exercises
+  successful completion, not an injected mid-write cancellation. Final candidate
+  CI remains required. No recording performance, desktop capture integration,
+  physical hardware or daily-driver claim yet.
