@@ -22,8 +22,12 @@ Follow-up to workstream H (Rust std, POSIX guest library), on the program socket
   every task may read it, it reaches no device on its own. Before, programs saw build time plus
   uptime.
 - **Kernel growth** (named per DESIGN_GUARDRAILS §1): `kernel/src/clock_source.rs` +22 lines,
-  `syscalls/mod.rs` +3. Why not a server: the CMOS is already read in ring 0 for the held source,
+  `syscalls/mod.rs` +3, `ipc/sender.rs` +7, `program_workers.rs` +3. Why not a server: the CMOS is already read in ring 0 for the held source,
   and serving time from a server would give every program a route it otherwise does not hold.
+- **Workers speak as their run.** `kernel/src/ipc/sender.rs` (+7) stamps a program worker's
+  IPC with its run's main task, since a worker already shares the run's domain and authority
+  (`program_workers::is_worker`, +3). Before, a `std::thread` that touched a socket was denied:
+  the network service binds `+net` to the run's main task.
 - **ABI change:** new syscall 76 (`sex_pdx::clock_source::civil::SYS`, `sex_pdx::civil_time_ms`);
   `clock_source::invoke` now shares `clock_source::sample` (same results). pins refreshed in
   `spec/abi_inputs.sha256`.
