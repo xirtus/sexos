@@ -11,6 +11,12 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
+#include <arpa/inet.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <poll.h>
+#include <sys/socket.h>
+#include <sys/time.h>
 
 static int passed, total;
 static void check(const char *name, int ok) {
@@ -86,6 +92,59 @@ int main(int argc, char **argv) {
     free(big);
     check("strtol", strtol("-0x1F", NULL, 16) == -31);
     check("time", time(NULL) > 1767225600);
+
+    /* Sockets: what works without the network, then, in a run given it
+       (`run +net chello net HOST PORT`), a TCP and a UDP echo. */
+    struct in_addr a4; struct in6_addr a6; char back[INET6_ADDRSTRLEN];
+    check("inet_pton and inet_ntop",
+          inet_pton(AF_INET, "10.0.2.2", &a4) == 1 && strcmp(inet_ntop(AF_INET, &a4, back, sizeof back), "10.0.2.2") == 0 &&
+          inet_pton(AF_INET6, "fd00:0:0::1", &a6) == 1 && strcmp(inet_ntop(AF_INET6, &a6, back, sizeof back), "fd00::1") == 0 &&
+          htons(0x1234) == 0x3412);
+    struct addrinfo hints = {0}, *res = NULL;
+    hints.ai_family = AF_INET; hints.ai_socktype = SOCK_STREAM;
+    int gai = getaddrinfo("10.0.2.2", "7", &hints, &res);
+    check("getaddrinfo for an address", gai == 0 && res && res->ai_family == AF_INET &&
+          ntohs(((struct sockaddr_in *)res->ai_addr)->sin_port) == 7);
+    struct timeval tv;
+    check("gettimeofday", gettimeofday(&tv, NULL) == 0 && tv.tv_sec > 1767225600);
+    int net = argc >= 4 && strcmp(argv[1], "net") == 0;
+    if (!net) {
+        int s = socket(AF_INET, SOCK_STREAM, 0);
+        check("no network without +net", s >= 0 && res && connect(s, res->ai_addr, res->ai_addrlen) == -1 && errno == EACCES);
+        close(s);
+    } else {
+        struct addrinfo *peer = NULL;
+        int ok = getaddrinfo(argv[2], argv[3], &hints, &peer) == 0;
+        int s = socket(AF_INET, SOCK_STREAM, 0);
+        ok = ok && s >= 0 && connect(s, peer->ai_addr, peer->ai_addrlen) == 0;
+        const char *msg = "hello from C\n";
+        char got[64] = {0};
+        size_t have = 0;
+        ok = ok && send(s, msg, strlen(msg), 0) == (ssize_t)strlen(msg);
+        while (ok && have < strlen(msg)) {
+            ssize_t n = recv(s, got + have, sizeof got - 1 - have, 0);
+            if (n <= 0) { ok = 0; break; }
+            have += n;
+        }
+        check("C TCP echo", ok && strcmp(got, msg) == 0);
+        struct pollfd pf = { s, POLLOUT, 0 };
+        check("poll", poll(&pf, 1, 1000) == 1 && (pf.revents & POLLOUT));
+        close(s);
+        int u = socket(AF_INET, SOCK_DGRAM, 0);
+        struct timeval wait = { 5, 0 };
+        setsockopt(u, SOL_SOCKET, SO_RCVTIMEO, &wait, sizeof wait);
+        char dgram[32] = {0};
+        struct sockaddr_in from; socklen_t fromlen = sizeof from;
+        ssize_t n = -1;
+        for (int i = 0; i < 5 && n < 0; i++) {
+            sendto(u, "udp from C", 10, 0, peer->ai_addr, peer->ai_addrlen);
+            n = recvfrom(u, dgram, sizeof dgram - 1, 0, (struct sockaddr *)&from, &fromlen);
+        }
+        check("C UDP echo", n == 10 && strcmp(dgram, "udp from C") == 0 && from.sin_family == AF_INET);
+        close(u);
+        freeaddrinfo(peer);
+    }
+    freeaddrinfo(res);
 
     printf("passed %d/%d\n", passed, total);
     fprintf(stderr, "[chello.%s] passed=%d/%d\n", passed == total ? "ok" : "fail", passed, total);

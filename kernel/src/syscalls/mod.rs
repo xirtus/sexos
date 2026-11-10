@@ -551,6 +551,9 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
             let reply=crate::trust_source::invoke(pd,rdi,rsi,rdx,r10,r8);
             regs.rsi=reply[1];regs.rdx=reply[2];regs.r10=reply[3];regs.r8=reply[4];reply[0]
         },
+        76 => { // civil time: ms since the Unix epoch, for any task (sex_pdx::clock_source::civil)
+            match crate::clock_source::civil_ms(){Ok(ms)=>{regs.rsi=ms;0},Err(e)=>{regs.rsi=0;e}}
+        },
         73 => {
             let pd=crate::core_local::CoreLocal::get().current_pd_ref();
             let reply=crate::clock_source::invoke(pd,rdi,rsi,rdx,r10,r8);

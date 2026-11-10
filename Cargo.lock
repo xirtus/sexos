@@ -2309,6 +2309,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "stdnet"
+version = "0.1.0"
+dependencies = [
+ "sex-std",
+]
+
+[[package]]
 name = "strict-num"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -573,6 +573,7 @@ pub fn typed(key: Key) -> Option<u8> {
 /// sockets ([`net::TcpStream`], [`net::TcpListener`], [`net::UdpSocket`]), over IPv4 or IPv6.
 pub mod net {
     use super::Window;
+    use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
     use sex_pdx::memory_region::{QUERY_VIEW, READ, WRITE};
     use sex_pdx::web as w;
 
@@ -593,25 +594,46 @@ pub mod net {
         let view = sex_pdx::memory_region_view(w::CLIENT_SLOT, 0, w::REGION_BYTES as u64, QUERY_VIEW | READ | WRITE).map_err(|_| Error::NotAllowed)?;
         Ok(unsafe { core::slice::from_raw_parts_mut(view.virtual_address as *mut u8, w::REGION_BYTES) })
     }
-    static mut SEQ: u32 = 0;
+    static SEQ: AtomicU32 = AtomicU32::new(0);
     /// This program's flow numbers in use, one bit each.
-    static mut FLOWS_HELD: [u64; 4] = [0; 4];
+    static FLOWS_HELD: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+    /// Held from a request's going out until its answer is read, and by [`direct`]
+    /// calls from filling the shared region until they have read it back.
+    static BUSY: AtomicBool = AtomicBool::new(false);
+    struct Turn;
+    impl Turn {
+        fn take() -> Turn {
+            while BUSY.compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() { sex_pdx::sys_yield(); }
+            Turn
+        }
+    }
+    impl Drop for Turn { fn drop(&mut self) { BUSY.store(false, Ordering::Release); } }
     /// One open flow of this program, by its own number for it.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub struct Flow(u8);
     fn take_flow() -> Result<Flow, Error> {
-        let held = unsafe { &mut *core::ptr::addr_of_mut!(FLOWS_HELD) };
-        let n = (0..w::CLIENT_FLOWS).find(|n| held[*n as usize / 64] & (1 << (n % 64)) == 0).ok_or(Error::Busy)?;
-        held[n as usize / 64] |= 1 << (n % 64);
-        Ok(Flow(n))
+        for n in 0..w::CLIENT_FLOWS {
+            let bit = 1u64 << (n % 64);
+            if FLOWS_HELD[n as usize / 64].fetch_or(bit, Ordering::AcqRel) & bit == 0 { return Ok(Flow(n)); }
+        }
+        Err(Error::Busy)
     }
     fn close(window: &mut Window, flow: Flow) {
         let _ = call_on(window, flow, w::CLOSE, 0);
-        unsafe { (*core::ptr::addr_of_mut!(FLOWS_HELD))[flow.0 as usize / 64] &= !(1 << (flow.0 % 64)); }
+        release(flow);
     }
     fn call(window: &mut Window, kind: u8, value: u64) -> Result<(u8, u32), Error> { call_on(window, Flow(0), kind, value) }
     fn call_on(window: &mut Window, flow: Flow, kind: u8, value: u64) -> Result<(u8, u32), Error> {
-        let seq = unsafe { SEQ = (SEQ + 1) & 0x7F_FFFF; SEQ };
+        let _turn = Turn::take();
+        call_held(Some(window), flow, kind, value)
+    }
+    fn mine(m: &sex_pdx::PdxMessage, seq: u32) -> bool {
+        m.type_id == 1 && m.caller_pd == NET && w::decode_reply(m.arg0).is_some_and(|r| r.0 == seq)
+    }
+    /// One request and its answer, under the turn. What else arrives meanwhile goes to
+    /// the window, or to the mailbox for the task it belongs to.
+    fn call_held(mut hold: Option<&mut Window>, flow: Flow, kind: u8, value: u64) -> Result<(u8, u32), Error> {
+        let seq = SEQ.fetch_add(1, Ordering::Relaxed).wrapping_add(1) & 0x7F_FFFF;
         loop {
             match sex_pdx::pdx_call_checked(sex_pdx::SLOT_NET, w::OP, w::request_on(seq, kind, flow.0), value, 0) {
                 Ok(_) => break,
@@ -620,15 +642,29 @@ pub mod net {
             }
         }
         let began = sex_pdx::get_ticks();
+        let worker = crate::thread::is_worker();
+        let mut idle = 0u32;
         loop {
             if sex_pdx::get_ticks().saturating_sub(began) > 30_000 { return Err(Error::TooSlow); }
-            let Some(m) = sex_pdx::pdx_try_listen_raw(0) else { sex_pdx::sys_yield(); continue };
-            if m.type_id == 1 && m.caller_pd == NET {
-                if let Some((got, status, value)) = w::decode_reply(m.arg0) { if got == seq { return Ok((status, value)); } }
-                continue;
+            let m = match super::mailbox::take(|m| mine(m, seq)) {
+                Some(m) => m,
+                None => match sex_pdx::pdx_try_listen_raw(0) {
+                    Some(m) => { idle = 0; m }
+                    None if worker => { idle += 1; crate::thread::pause(idle); continue; }
+                    None => { sex_pdx::sys_yield(); continue; }
+                },
+            };
+            if mine(&m, seq) {
+                let (_, status, value) = w::decode_reply(m.arg0).unwrap_or((0, w::INVALID, 0));
+                return Ok((status, value));
             }
-            if let Some(event) = window.event(&m) {
-                if let Some(slot) = window.held.iter_mut().find(|e| e.is_none()) { *slot = Some(event); }
+            match hold.as_deref_mut() {
+                Some(window) => if let Some(event) = window.event(&m) {
+                    if let Some(slot) = window.held.iter_mut().find(|e| e.is_none()) { *slot = Some(event); }
+                },
+                // Another task's answer, a key or a close: its owner looks in the mailbox.
+                // A late answer to this program's own earlier question is dropped.
+                None => if (super::is_answer(&m) && m.caller_pd != NET) || super::is_shell(&m) { super::mailbox::put(m) },
             }
         }
     }
@@ -742,7 +778,7 @@ pub mod net {
     }
     fn endpoint(bytes: &[u8]) -> Option<(IpAddr, u16)> { Some((ip_of(bytes)?, u16::from_be_bytes([*bytes.get(17)?, *bytes.get(18)?]))) }
     /// Lets a flow number go without telling the service (it holds nothing under it).
-    fn release(flow: Flow) { unsafe { (*core::ptr::addr_of_mut!(FLOWS_HELD))[flow.0 as usize / 64] &= !(1 << (flow.0 % 64)); } }
+    fn release(flow: Flow) { FLOWS_HELD[flow.0 as usize / 64].fetch_and(!(1u64 << (flow.0 % 64)), Ordering::AcqRel); }
     /// Waits for the network: a DHCP lease or a global IPv6 address. Thirty seconds at most.
     pub fn up(window: &mut Window) -> Result<(), Error> {
         let began = sex_pdx::get_ticks();
@@ -799,6 +835,163 @@ pub mod net {
         for (i, slot) in found.iter_mut().enumerate().take(n) { *slot = ip_of(&region[i * w::ADDRESS_BYTES..]); }
         remember(name, found);
         Ok(found.into_iter().flatten().collect())
+    }
+
+    /// The same sockets with no window, for any task of the program and for libraries
+    /// (Rust `std`, the C library) that have none: each call returns at once, and the
+    /// caller decides how to wait. Keys and closes that arrive meanwhile wait in the
+    /// mailbox for `Window::next`. Flows are this program's, as with the window calls.
+    pub mod direct {
+        use super::{call_held, endpoint, ip_of, ok, ok_status, put_ip, region, release, take_flow, w, Error, Flow, IpAddr, Turn};
+        use core::sync::atomic::{AtomicBool, Ordering};
+
+        /// One request: `fill` writes the shared region before it goes, `take` reads
+        /// the answer from it, all under the turn.
+        fn exchange<R>(flow: Flow, kind: u8, value: u64, fill: impl FnOnce(&mut [u8]), take: impl FnOnce((u8, u32), &[u8]) -> R) -> Result<R, Error> {
+            let _turn = Turn::take();
+            let region = region()?;
+            fill(region);
+            let r = call_held(None, flow, kind, value)?;
+            Ok(take(r, region))
+        }
+        fn simple(flow: Flow, kind: u8, value: u64) -> Result<(u8, u32), Error> { exchange(flow, kind, value, |_| {}, |r, _| r) }
+
+        /// True once the network is up (a DHCP lease or a global IPv6 address).
+        pub fn up() -> Result<bool, Error> { Ok(simple(Flow(0), w::UP, 0).and_then(ok_status)? == w::OK) }
+
+        static RESOLVING: AtomicBool = AtomicBool::new(false);
+        /// Asks for the addresses of `host`: `None` while the answer is on its way (ask
+        /// again), then the addresses, the one to try first first. One question at a
+        /// time per program: a second caller sees `Busy` until the first has its answer.
+        pub fn resolve_step(host: &[u8], asked: &mut bool) -> Result<Option<alloc::vec::Vec<IpAddr>>, Error> {
+            if let Some(a) = IpAddr::parse(host) { return Ok(Some(alloc::vec![a])); }
+            if host.is_empty() || host.len() > 253 || core::str::from_utf8(host).is_err() { return Err(Error::Address); }
+            if !*asked {
+                if RESOLVING.swap(true, Ordering::AcqRel) { return Err(Error::Busy); }
+                let r = exchange(Flow(0), w::RESOLVE_ALL, host.len() as u64, |d| d[..host.len()].copy_from_slice(host), |r, _| r);
+                match r {
+                    Ok((w::BUSY, _)) => { RESOLVING.store(false, Ordering::Release); return Err(Error::Busy); }
+                    Ok(r) => if let Err(e) = ok(r) { RESOLVING.store(false, Ordering::Release); return Err(e); },
+                    Err(e) => { RESOLVING.store(false, Ordering::Release); return Err(e); }
+                }
+                *asked = true;
+                return Ok(None);
+            }
+            let r = exchange(Flow(0), w::RESOLVE_ALL, 0, |_| {}, |r, d| {
+                let n = (r.1 as usize).min(2);
+                (r, (0..n).filter_map(|i| ip_of(&d[i * w::ADDRESS_BYTES..])).collect::<alloc::vec::Vec<_>>())
+            });
+            match r {
+                Ok(((w::WAIT, _), _)) => Ok(None),
+                Ok((r, found)) => {
+                    RESOLVING.store(false, Ordering::Release);
+                    ok(r)?;
+                    if found.is_empty() { Err(Error::NoName) } else { Ok(Some(found)) }
+                }
+                Err(e) => { RESOLVING.store(false, Ordering::Release); Err(e) }
+            }
+        }
+
+        /// Gives up a question `resolve_step` asked, so the next caller may ask.
+        pub fn resolve_cancel(asked: &mut bool) {
+            if core::mem::take(asked) { RESOLVING.store(false, Ordering::Release); }
+        }
+
+        /// A TCP connection, or a listener, or a UDP socket, by its flow.
+        #[derive(Debug)]
+        pub struct Socket { flow: Flow }
+        /// Where a TCP connection is.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub enum State { Opening, Open, PeerClosed, Closed }
+        impl Socket {
+            /// Starts connecting; `state` says when it is open.
+            pub fn connect(address: &IpAddr, port: u16) -> Result<Socket, Error> {
+                let flow = take_flow()?;
+                let address = *address;
+                match exchange(flow, w::CONNECT_TO, port as u64, |d| put_ip(d, &address), |r, _| r).and_then(ok) {
+                    Ok(_) => Ok(Socket { flow }),
+                    Err(e) => { release(flow); Err(e) }
+                }
+            }
+            pub fn listen(port: u16) -> Result<Socket, Error> {
+                let flow = take_flow()?;
+                match simple(flow, w::LISTEN, port as u64).and_then(ok) {
+                    Ok(_) => Ok(Socket { flow }),
+                    Err(e) => { release(flow); Err(e) }
+                }
+            }
+            /// A UDP socket on `port` (0: one the service picks), and the port it got.
+            pub fn udp(port: u16) -> Result<(Socket, u16), Error> {
+                let flow = take_flow()?;
+                match simple(flow, w::UDP_BIND, port as u64).and_then(ok) {
+                    Ok(port) => Ok((Socket { flow }, port as u16)),
+                    Err(e) => { release(flow); Err(e) }
+                }
+            }
+            pub fn state(&self) -> Result<State, Error> {
+                Ok(match ok(simple(self.flow, w::STATE, 0)?)? {
+                    w::STATE_OPENING => State::Opening,
+                    w::STATE_PEER_CLOSED => State::PeerClosed,
+                    w::STATE_CLOSED => State::Closed,
+                    _ => State::Open,
+                })
+            }
+            /// A connection a peer made, and from where, if one is waiting.
+            pub fn accept(&self) -> Result<Option<(Socket, IpAddr, u16)>, Error> {
+                let new = take_flow()?;
+                let r = exchange(self.flow, w::ACCEPT, new.0 as u64, |_| {}, |r, d| (r, endpoint(d)));
+                match r {
+                    Ok((r, peer)) => match ok_status(r) {
+                        Ok(w::OK) => { let (ip, port) = peer.unwrap_or((IpAddr::V4([0; 4]), 0)); Ok(Some((Socket { flow: new }, ip, port))) }
+                        Ok(_) => { release(new); Ok(None) }
+                        Err(e) => { release(new); Err(e) }
+                    },
+                    Err(e) => { release(new); Err(e) }
+                }
+            }
+            /// Sends what fits now: 0 when the send queue is full.
+            pub fn send(&self, bytes: &[u8]) -> Result<usize, Error> {
+                let n = bytes.len().min(w::REGION_BYTES);
+                Ok(ok(exchange(self.flow, w::SEND, n as u64, |d| d[..n].copy_from_slice(&bytes[..n]), |r, _| r)?)? as usize)
+            }
+            /// Reads what has arrived: 0 when nothing has yet (see `state`).
+            pub fn receive(&self, out: &mut [u8]) -> Result<usize, Error> {
+                let room = out.len().min(32 * 1024).max(1);
+                exchange(self.flow, w::RECEIVE, room as u64, |_| {}, |r, d| ok(r).map(|k| {
+                    let k = (k as usize).min(out.len());
+                    out[..k].copy_from_slice(&d[..k]);
+                    k
+                }))?
+            }
+            /// Sends this side's FIN after what is queued.
+            pub fn shutdown(&self) -> Result<(), Error> { ok(simple(self.flow, w::SHUTDOWN, 0)?).map(|_| ()) }
+            /// Queues one datagram: false when there is no room yet.
+            pub fn send_to(&self, bytes: &[u8], to: &IpAddr, port: u16) -> Result<bool, Error> {
+                if bytes.len() > w::REGION_BYTES - w::ENDPOINT_BYTES { return Err(Error::TooLarge); }
+                let to = *to;
+                let r = exchange(self.flow, w::UDP_SEND, bytes.len() as u64, |d| {
+                    put_ip(d, &to);
+                    d[17..19].copy_from_slice(&port.to_be_bytes());
+                    d[w::ENDPOINT_BYTES..w::ENDPOINT_BYTES + bytes.len()].copy_from_slice(bytes);
+                }, |r, _| r)?;
+                if r.0 == w::INVALID { return Err(Error::TooLarge); }
+                Ok(ok_status(r)? == w::OK)
+            }
+            /// One datagram that came, if any: its length (cut at `out.len()`), sender, port.
+            pub fn receive_from(&self, out: &mut [u8]) -> Result<Option<(usize, IpAddr, u16)>, Error> {
+                let len = out.len();
+                exchange(self.flow, w::UDP_RECEIVE, len as u64, |_| {}, |r, d| {
+                    if ok_status(r)? != w::OK { return Ok(None); }
+                    let n = (r.1 as usize).min(len);
+                    out[..n].copy_from_slice(&d[w::ENDPOINT_BYTES..w::ENDPOINT_BYTES + n]);
+                    let (from, port) = endpoint(d).ok_or(Error::Failed)?;
+                    Ok(Some((n, from, port)))
+                })?
+            }
+        }
+        impl Drop for Socket {
+            fn drop(&mut self) { let _ = simple(self.flow, w::CLOSE, 0); release(self.flow); }
+        }
     }
 
     /// A TCP connection of this program, over IPv4 or IPv6. Calls that wait have a
