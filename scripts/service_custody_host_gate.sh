@@ -192,6 +192,29 @@ DISKFS_SECTOR_WRITE_SOURCE="$TEST_DIR/sector_write.rs" DOCUMENT_EXTENT_SOURCE="$
 "$TEST_DIR/document-extent" --test-threads=1
 rustc --edition=2021 --test tests/sexfiles_deferred.rs -o "$TEST_DIR/deferred"
 "$TEST_DIR/deferred"
+python3 - "$TEST_DIR" <<'PYSTAMP'
+from pathlib import Path
+import subprocess,sys
+root=Path.cwd();out=Path(sys.argv[1]);source=(root/'servers/sexfiles/src/defer_queue.rs').read_text()
+for name in ['servers/sexfiles/src/backends/diskfs.rs','servers/sexfiles/src/volumes.rs']:
+ text=(root/name).read_text()
+ assert 'defer_stash(msg.type_id, msg.caller_pd, msg.caller_task, msg.arg0, msg.arg1, msg.arg2)' in text,name
+pdx=(root/'servers/sexfiles/src/pdx.rs').read_text()
+assert 'DEFERRED.push_stamped(' in pdx and 'DEFERRED.pop_stamped()' in pdx
+assert 'message: (type_id, caller_pd, a0, a1, a2), caller_task' in pdx
+tramp=(root/'servers/sexfiles/src/trampoline.rs').read_text()
+assert 'message: (m.type_id, m.caller_pd, m.arg0, m.arg1, m.arg2), caller_task: m.caller_task' in tramp
+assert 'caller_task: stamped.caller_task' in tramp
+anchor='        let m = stamped.message;';assert source.count(anchor)==1
+mutant=out/'deferred_drop_stamp.rs';mutant.write_text(source.replace(anchor,'        let stamped = Stamped { caller_task: 0, ..stamped };\n'+anchor))
+fixture=(root/'tests/sexfiles_deferred.rs').read_text().replace('../',str(root)+'/').replace(str(root)+'/servers/sexfiles/src/defer_queue.rs',str(mutant))
+runner=out/'deferred_drop_stamp_test.rs';runner.write_text(fixture)
+compiled=subprocess.run(['rustc','--edition=2021','--test',str(runner),'-o',str(out/'deferred-drop-stamp')],capture_output=True,text=True)
+assert compiled.returncode==0,'control must compile: '+compiled.stderr
+result=subprocess.run([str(out/'deferred-drop-stamp')],capture_output=True,text=True)
+assert result.returncode!=0,'dropped task stamp unexpectedly passed'
+print('[files.deferred] rejected=drop-caller-task')
+PYSTAMP
 python3 - <<'PYKEYS'
 from pathlib import Path
 s=Path('servers/silk-shell/src/main.rs').read_text()

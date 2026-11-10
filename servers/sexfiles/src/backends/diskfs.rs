@@ -323,7 +323,7 @@ impl DiskFs {
                 return reply_val;
             }
             if msg.type_id != 0 && msg.type_id != 1 {
-                crate::pdx::defer_stash(msg.type_id, msg.caller_pd, msg.arg0, msg.arg1, msg.arg2);
+                crate::pdx::defer_stash(msg.type_id, msg.caller_pd, msg.caller_task, msg.arg0, msg.arg1, msg.arg2);
             }
             sys_yield();
         }
