@@ -10475,6 +10475,7 @@ unsafe fn wm_action(action: wm::WmAction) -> bool {
         },
         A::Scratchpad => wm_scratchpad_toggle(),
         A::Overview => { atlas_toggle(); true }
+        A::Notifications => toggle_bell(),
         A::Lock => false,
     };
     sex_pdx::serial_record!("[shell.wm.action] action={:?} done={} scene={}->{} focus={}->{} layout={}",
@@ -15983,6 +15984,90 @@ unsafe fn bell_render_event_list() {
 /// BIG_APP_SPRINT_V2: event count + latest entry as real text on the
 /// shell-owned Bell surface (sid 204). 3 lines x 20 chars = 60 bytes,
 /// uppercase only. Data from the live BELL_EVENTS ring.
+// ── Notifications: Bell hands accepted ones over; the panel shows each for a
+// few seconds and the Bell window (Super+N) keeps the history. ──────────────
+/// Bell's domain, the only sender the Shell takes notifications from.
+const NOTIFY_BELL_PD: u32 = 10;
+const NOTIFY_HISTORY: usize = 32;
+/// How long the panel shows a new notification, in ticks (ms).
+const NOTIFY_SHOW_TICKS: u64 = 5_000;
+static mut NOTIFY_ASSEMBLER: sex_pdx::notify::Assembler = sex_pdx::notify::Assembler::new();
+static mut NOTIFY_RING: [sex_pdx::notify::Text; NOTIFY_HISTORY] = [sex_pdx::notify::Text::EMPTY; NOTIFY_HISTORY];
+static mut NOTIFY_TOTAL: usize = 0;
+/// Tick at which the panel notice ends; 0 when none is showing.
+static mut NOTIFY_NOTICE_UNTIL: u64 = 0;
+fn notify_sender_name(pd: u16) -> &'static str {
+    match sex_pdx::app_catalog::by_target(pd as u32).map(|r| r.app) {
+        Some(sex_pdx::app_catalog::App::Spindle) => "Spindle",
+        Some(sex_pdx::app_catalog::App::Quil) => "Quil",
+        Some(sex_pdx::app_catalog::App::Browser) => "Browser",
+        Some(sex_pdx::app_catalog::App::Program) => "Program",
+        None => "System",
+    }
+}
+/// Newest first.
+unsafe fn notify_history() -> impl Iterator<Item = &'static sex_pdx::notify::Text> {
+    let ring = &*core::ptr::addr_of!(NOTIFY_RING);
+    let total = NOTIFY_TOTAL;
+    (0..total.min(NOTIFY_HISTORY)).map(move |i| &ring[(total - 1 - i) % NOTIFY_HISTORY])
+}
+unsafe fn notify_panel(text: &[u8]) {
+    for (w, a, b) in sex_pdx::notify::chunks(text, 0, 0, 0) {
+        pdx_call(SLOT_DISPLAY, sex_pdx::notify::OP_PANEL_NOTICE, w, a, b);
+    }
+}
+unsafe fn notification_receive(msg: &sex_pdx::PdxMessage) -> bool {
+    if msg.type_id != sex_pdx::notify::OP_NOTIFICATION { return false; }
+    if msg.caller_pd != NOTIFY_BELL_PD {
+        sex_pdx::serial_record!("[shell.notify.reject] caller_pd={} reason=not_bell", msg.caller_pd);
+        return true;
+    }
+    let assembler = &mut *core::ptr::addr_of_mut!(NOTIFY_ASSEMBLER);
+    let Some(text) = assembler.push(msg.arg0, msg.arg1, msg.arg2) else { return true };
+    NOTIFY_RING[NOTIFY_TOTAL % NOTIFY_HISTORY] = text;
+    NOTIFY_TOTAL += 1;
+    // Panel line: "Sender: summary".
+    let name = notify_sender_name(text.sender);
+    let mut line = [0u8; sex_pdx::notify::TEXT_MAX];
+    let mut n = 0;
+    for &b in name.as_bytes().iter().chain(b": ").chain(text.summary()) {
+        if n < line.len() { line[n] = b; n += 1; }
+    }
+    notify_panel(&line[..n]);
+    NOTIFY_NOTICE_UNTIL = sex_pdx::get_ticks() + NOTIFY_SHOW_TICKS;
+    sex_pdx::serial_record!("[shell.notify.show] id={} sender={} app={} urgency={} summary={} body_len={} history={}",
+        text.id, text.sender, name, text.urgency, core::str::from_utf8(text.summary()).unwrap_or("?"),
+        text.body().len(), NOTIFY_TOTAL.min(NOTIFY_HISTORY));
+    if bell_frame_id().is_some() { bell_render_lane_text(); }
+    true
+}
+/// Ends the panel notice when its time is up.
+unsafe fn notification_poll() {
+    if NOTIFY_NOTICE_UNTIL == 0 || sex_pdx::get_ticks() < NOTIFY_NOTICE_UNTIL { return; }
+    NOTIFY_NOTICE_UNTIL = 0;
+    notify_panel(&[]);
+    sex_pdx::serial_record!("[shell.notify.hide] history={}", NOTIFY_TOTAL.min(NOTIFY_HISTORY));
+}
+/// The history as text for the Bell window, newest first, within `out`.
+unsafe fn notify_history_text(out: &mut [u8]) -> usize {
+    let mut n = 0;
+    let mut put = |bytes: &[u8], n: &mut usize| for &b in bytes { if *n < out.len() { out[*n] = b; *n += 1; } };
+    let total = NOTIFY_TOTAL;
+    let mut count = [0u8; 3];
+    let digits = { let mut v = total.min(NOTIFY_HISTORY); let mut i = 3; loop { i -= 1; count[i] = b'0' + (v % 10) as u8; v /= 10; if v == 0 || i == 0 { break i; } } };
+    put(b"NOTIFICATIONS ", &mut n);
+    put(&count[digits..], &mut n);
+    put(b"\n", &mut n);
+    for t in notify_history() {
+        put(notify_sender_name(t.sender).as_bytes(), &mut n);
+        put(b": ", &mut n);
+        put(t.summary(), &mut n);
+        put(b"\n", &mut n);
+        if !t.body().is_empty() { put(b"  ", &mut n); put(t.body(), &mut n); put(b"\n", &mut n); }
+    }
+    n
+}
+
 unsafe fn bell_render_lane_text() {
     const ROW_W: usize = 20;
     let mut buf = [b' '; ROW_W * 3];
@@ -16013,7 +16098,11 @@ unsafe fn bell_render_lane_text() {
     }
 
     pdx_call(SLOT_DISPLAY, sex_pdx::OP_TEXT_CLEAR, SURFACE_ID_BELL_PLACEHOLDER, 0, 0);
-    let (_drawn, ok) = shell_draw_text(SURFACE_ID_BELL_PLACEHOLDER, &buf, 0x00E8FFFF);
+    let mut history = [0u8; 512];
+    let history_len = if NOTIFY_TOTAL > 0 { notify_history_text(&mut history) } else { 0 };
+    let text: &[u8] = if history_len > 0 { &history[..history_len] } else { &buf };
+    let (_drawn, ok) = shell_draw_text(SURFACE_ID_BELL_PLACEHOLDER, text, 0x00E8FFFF);
+    if history_len > 0 { sex_pdx::serial_record!("[shell.notify.history] count={} bytes={}", NOTIFY_TOTAL.min(NOTIFY_HISTORY), history_len); }
     static mut BELL_LANE_TEXT_BUDGET: u32 = 8;
     if BELL_LANE_TEXT_BUDGET > 0 {
         BELL_LANE_TEXT_BUDGET -= 1;
@@ -24963,7 +25052,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { session::save(); }
         unsafe { record_spawn_poll(); }
         unsafe { program_resize_flush(); }
-        unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); shell_close_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); }
+        unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); shell_close_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); notification_poll(); }
         // Retain failed notification attempts while continuing normal receives.
         // Success means enqueue only; sexinput validates caller and version.
         if shell_ready_publisher.poll() {
@@ -25642,7 +25731,7 @@ pub extern "C" fn _start() -> ! {
                 unsafe { flush_pending_cursor_send(); }
                 // A full input ring may recover while the shell has no work.
                 // Return to the publisher instead of blocking in listen.
-                if shell_ready_publisher.is_pending() || unsafe { RECORD_SPAWN_LEFT != 0 || CURSOR_SEND_PENDING || APP_INPUT.pending() || LAUNCHER_FOCUS.is_some() || CLIPBOARD_INTAKE.pending() || CLIPBOARD.pending() || WORKSPACE_REFRESH_PENDING.iter().any(|p|*p) || linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_POINTER.is_some() || LINEN_ASYNC.can_send() } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
+                if shell_ready_publisher.is_pending() || unsafe { RECORD_SPAWN_LEFT != 0 || CURSOR_SEND_PENDING || APP_INPUT.pending() || LAUNCHER_FOCUS.is_some() || CLIPBOARD_INTAKE.pending() || CLIPBOARD.pending() || WORKSPACE_REFRESH_PENDING.iter().any(|p|*p) || linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_POINTER.is_some() || LINEN_ASYNC.can_send() || NOTIFY_NOTICE_UNTIL != 0 } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
                     sys_yield();
                     continue;
                 }
@@ -25655,6 +25744,7 @@ pub extern "C" fn _start() -> ! {
             if shell_lifecycle_hint(&msg) { continue; }
             if shell_program_message(&msg) { continue; }
             if clipboard_receive(&msg) { continue; }
+            if notification_receive(&msg) { continue; }
             if spindle_history_status_receive(&msg) {continue;}
             if workspace_refresh_receive(&msg) { continue; }
             if shell_close_declined_receive(&msg) { continue; }

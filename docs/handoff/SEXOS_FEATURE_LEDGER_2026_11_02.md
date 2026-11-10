@@ -3378,6 +3378,15 @@ Stage E2 of the parity report, section 6.
 - **Panel title.** sexdisplay draws the focused window's title in the SilkBar strip between the focus dot and the workspace dots (`panel_title_fg_at`), with the same names as the title bars (`surface_title`). A program renaming its focused window redraws the strip.
 - No ABI change.
 
+## Desktop: notifications with text, a panel notice and history (2026-11-10)
+
+Stage E3 of the parity report, section 6 (mako/dunst/Plasma notifications).
+- **Programs** holding the Bell capability post with `sex_pdx::notify::post(summary, body, urgency)`: the text ("summary\nbody", up to 128 printable ASCII bytes, anything else becomes '?') goes in 16-byte chunks. Spindle: `notify Build done | 3 warnings`.
+- **Bell** puts each sender's chunks together by the kernel's caller PD, applies mute, per-program policy and the spam budget, queues it (critical goes to lane NOW and chimes), then hands it to the Shell with Bell's id and the true sender. A program cannot name another sender.
+- **Shell** takes notifications only from Bell's domain, shows "App: summary" in the SilkBar panel for 5 s (sexdisplay draws it in place of the window title, in amber), and keeps the last 32 in the Bell window, newest first. **Super+N** opens or hides it.
+- **ABI change (named):** new opcodes `OP_BELL_POST` 0xCC (program -> Bell), `OP_NOTIFICATION` 0x2D8 (Bell -> Shell), `OP_PANEL_NOTICE` 0x2D9 (Shell -> Display), one chunk form for all three (`crates/sex-pdx/src/notify.rs`). Kernel grants Bell `SLOT_SHELL` (to the Shell) for the hand-over. `abi_version_hash` recomputed. Display title layouts hold 48 bytes (titles are still 16).
+- **Tests:** `tests/notify.rs` (chunking, forged and out-of-order chunks, control bytes, the client), in `service_custody_host_gate.sh`; `tests/wm_layouts.rs` covers Super+N; QEMU gate `scripts/notifications_gate.py` (Spindle posts twice, the panel shows and hides, Super+N lists both).
+
 ## Real PCs: wired network, HD Audio and SATA (2026-11-09)
 
 Workstream D of the parity report. Handoff and bare-metal checklist: `docs/handoff/REAL_PC_DRIVERS_2026_11_09.md`.

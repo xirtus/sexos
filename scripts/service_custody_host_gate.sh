@@ -206,6 +206,8 @@ rustc --edition=2021 -A dead_code --test tests/wm_layouts.rs -o "$TEST_DIR/wm-la
 "$TEST_DIR/wm-layouts"
 rustc --edition=2021 -A dead_code --test tests/launcher_search.rs -o "$TEST_DIR/launcher-search"
 "$TEST_DIR/launcher-search"
+rustc --edition=2021 -A dead_code --test tests/notify.rs -o "$TEST_DIR/notify"
+"$TEST_DIR/notify"
 "$TEST_DIR/desktop-keys"
 python3 - "$TEST_DIR/cursor.rs" "$TEST_DIR/cursor_status.rs" <<'PYCURSOR'
 from pathlib import Path

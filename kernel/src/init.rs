@@ -625,6 +625,14 @@ pub fn init() {
         if let Some(pd) = DOMAIN_REGISTRY.get(sexbell_id) {
             pd.grant_capability(sex_pdx::SLOT_BELL, CapabilityData::Domain(sexbell_id));
             serial_println!("[kernel.sexbell.cap] self slot={}", sex_pdx::SLOT_BELL);
+            // Bell hands accepted notifications to the Shell, which shows them.
+            if silkshell_id != 0 {
+                pd.grant_capability(sex_pdx::SLOT_SHELL, CapabilityData::Domain(silkshell_id));
+                serial_println!(
+                    "[bootgraph.cap.grant from=kernel to={} slot=SLOT_SHELL target={} ok=1 optional=1 reason=notifications]",
+                    sexbell_id, silkshell_id
+                );
+            }
             serial_println!(
                 "[bootgraph.cap.grant from=kernel to={} slot=SLOT_BELL target={} ok=1 optional=1]",
                 sexbell_id, sexbell_id

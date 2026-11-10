@@ -30,6 +30,7 @@ pub mod code {
     pub const K: u8 = 0x25;
     pub const L: u8 = 0x26;
     pub const V: u8 = 0x2F;
+    pub const N: u8 = 0x31;
     pub const M: u8 = 0x32;
     pub const SPACE: u8 = 0x39;
     pub const UP: u8 = 0x48;
@@ -119,6 +120,8 @@ pub enum WmAction {
     Overview,
     /// Super+Escape: the session lock.
     Lock,
+    /// Super+N: the notification history.
+    Notifications,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -166,6 +169,7 @@ pub fn binding(key: u8, m: Mods) -> Option<WmAction> {
         (code::S, false) => WmAction::Scratchpad,
         (code::S, true) => WmAction::ToScratchpad,
         (code::W, _) => WmAction::Overview,
+        (code::N, _) => WmAction::Notifications,
         (code::ESC, _) => WmAction::Lock,
         _ => return None,
     })
