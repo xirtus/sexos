@@ -1,0 +1,81 @@
+name: SexOS build setup
+description: Build tools, Rust cache, FFmpeg/libc++ caches and Limine.
+inputs:
+  qemu:
+    description: Install QEMU and image tools
+    default: "true"
+  media:
+    description: Restore or build FFmpeg and libc++
+    default: "true"
+  save-cache:
+    description: Save the cargo cache after this job (one job per run, on master)
+    default: "false"
+  limine:
+    description: Fetch and build Limine
+    default: "true"
+runs:
+  using: composite
+  steps:
+  - name: Install build tools
+    shell: bash
+    run: |
+      # Skip man-page index rebuilds, the slowest part of apt on the runners.
+      sudo rm -f /var/lib/man-db/auto-update
+      pkgs="ripgrep clang lld llvm nasm musl-dev cmake ninja-build meson acpica-tools mtools gdisk"
+      if [[ "${{ inputs.qemu }}" == true ]]; then pkgs="$pkgs xorriso qemu-system-x86"; fi
+      sudo apt-get update -qq
+      sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends $pkgs
+  - name: Rust toolchain cache
+    uses: actions/cache@v4
+    with:
+      path: |
+        ~/.rustup/toolchains
+        ~/.rustup/update-hashes
+        ~/.rustup/settings.toml
+      key: rustup-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}
+  - name: Cargo cache
+    uses: Swatinem/rust-cache@v2
+    with:
+      shared-key: sexos
+      cache-all-crates: true
+      cache-workspace-crates: true
+      cache-on-failure: true
+      save-if: ${{ inputs.save-cache == 'true' && github.ref == 'refs/heads/master' }}
+  - name: Fetch crates (builds and host gates run offline)
+    shell: bash
+    run: cargo fetch --locked
+  - name: Cache FFmpeg
+    if: inputs.media == 'true'
+    uses: actions/cache@v4
+    with:
+      path: |
+        target/ffmpeg/lib
+        target/ffmpeg/include
+        target/ffmpeg/include-c
+      key: ffmpeg-${{ hashFiles('scripts/build_ffmpeg.sh', 'scripts/build_dav1d.sh') }}
+  - name: Build FFmpeg for programs
+    if: inputs.media == 'true'
+    shell: bash
+    run: test -f target/ffmpeg/lib/libavcodec.a || bash scripts/build_ffmpeg.sh
+  - name: Cache libc++
+    if: inputs.media == 'true'
+    uses: actions/cache@v4
+    with:
+      path: |
+        target/libcxx/lib
+        target/libcxx/include
+        target/libcxx/include-c
+      key: libcxx-${{ hashFiles('scripts/build_libcxx.sh') }}
+  - name: Build libc++ for programs
+    if: inputs.media == 'true'
+    shell: bash
+    run: test -f target/libcxx/lib/libc++.a || bash scripts/build_libcxx.sh
+  - name: Prepare Limine
+    if: inputs.limine == 'true'
+    shell: bash
+    run: |
+      git init -q limine
+      git -C limine remote add origin https://github.com/limine-bootloader/limine.git
+      git -C limine fetch -q --depth=1 origin ca3a5b20d2501e3819983c5cf838c70c30ee532a
+      git -C limine checkout -q --detach FETCH_HEAD
+      make -C limine limine

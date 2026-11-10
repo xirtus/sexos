@@ -18,7 +18,7 @@ done
 allowlist=(
   "AGENTS.md" "ARCHITECTURE.md" "CLAUDE.md" "HANDOFF.md" "HEARTBEAT.md" "IDENTITY.md" "LICENSE"
   "SOUL.md" "TOOLS.md" "USER.md"
-  ".gitignore" ".codex" "Dockerfile"
+  ".gitignore" ".gitattributes" ".codex" "Dockerfile"
   "Cargo.toml" "Cargo.lock" "Makefile" "rust-toolchain.toml" "x86_64-sex.json" "x86_64-sex-app.json" "x86_64-sex-std.json"
   "limine.cfg" "sexos_build_spec.toml" "sexos_contract.toml"
   "BOOTAA64.EFI" "BOOTIA32.EFI" "BOOTRISCV64.EFI" "BOOTX64.EFI"
