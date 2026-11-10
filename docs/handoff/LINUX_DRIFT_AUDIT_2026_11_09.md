@@ -127,5 +127,5 @@ Andreas chose to merge #70 as is for the x17 R1 test and then move AML out. The 
   (the kernel caches what sexacpi publishes).
 - Known limits: MMIO of devices leased to other drivers is not yet refused (needs the IOMMU
   work, #86); `_PTS` is best-effort and races Files' flush; key 4 is shared with input, USB
-  and Bell. #82 (dGPU `_OFF`) must move into sexacpi before it merges.
+  and Bell. #82 (dGPU `_OFF`) merged first; #88 moved its ACPI half into sexacpi too.
 - Kernel acpi.rs went from 804 to ~650 lines; `test_kernel_never_runs_firmware_aml` keeps it out.

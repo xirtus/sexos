@@ -40,7 +40,7 @@ reference and must check on real hardware (or replace with datasheet/REA facts).
 | `crates/sex-vmd`, `kernel/src/vmd.rs` | Intel VMD (RST "RAID On") | PCIe spec; register meanings from Linux `drivers/pci/controller/vmd.c` | bus numbering and BAR windows on the x17 R1 | #84 |
 | `crates/sex-imsm`, `apps/sexdrive` `raid.rs` | Intel IMSM RAID 0/1 metadata | metadata layout as mdadm reads it; fixtures checked with `mdadm --examine` (no mdadm code) | real RST-created volumes | #84 |
 | `crates/sex-wifi` | Intel AX200/AX201/AX210/AX211 | OpenBSD `iwx` (ISC) and Intel firmware interface | firmware load and association on real cards | #83 |
-| `kernel/src/hal/dgpu.rs` | NVIDIA dGPU power off (D3cold) | Linux runtime PM approach (`_PS3`, `_PRx` `_OFF`, root port) | `_OFF` on the x17 R1's PEG port | #82 |
+| `kernel/src/hal/dgpu.rs` (D3hot, headers) + `servers/sexacpi` (`_PS3`/`_OFF`) | NVIDIA dGPU power off (D3cold) | Linux runtime PM approach (`_PS3`, `_PRx` `_OFF`, root port) | `_OFF` on the x17 R1's PEG port | #82 |
 | `servers/sexusb` | xHCI, hubs, HID | xHCI 1.2 and USB HID specs | firmware handoff on real PCs | #76 |
 | `crates/sex-volumes` | FAT, exFAT, ext4 (read), NTFS (read), MBR/GPT | on-disk format documentation | disks made by Windows and Linux | #75 |
 | `servers/sexbell` `sound.rs` | virtio sound | `virtio-drivers` crate (MIT), linked | QEMU only | master |
@@ -58,4 +58,4 @@ reference and must check on real hardware (or replace with datasheet/REA facts).
 | Crate | Licence | What it does in the kernel | Status |
 |-------|---------|----------------------------|--------|
 | `acpi` (table parsing) | MIT/Apache-2.0 | reads MADT and other static tables at boot | master; fine (static data, no firmware code runs) |
-| `acpi` / `aml` AML interpreter | MIT/Apache-2.0 | **no longer in ring 0.** Runs in the ring-3 `sexacpi` server (Senses organ, pd 50) for `\_S5`, `_PTS`, batteries, lids, thermal, `_CST`, I2C HID. The kernel links the crate for table parsing only and never builds an interpreter (guardrail test `test_kernel_never_runs_firmware_aml`). | moved by the sexacpi PR (2026-11-10); dGPU `_PS3`/`_OFF` (#82) must call it through sexacpi too |
+| `acpi` / `aml` AML interpreter | MIT/Apache-2.0 | **no longer in ring 0.** Runs in the ring-3 `sexacpi` server (Senses organ, pd 50) for `\_S5`, `_PTS`, batteries, lids, thermal, `_CST`, I2C HID, and the dGPU's `_PS3`/`_PRx` `_OFF`. The kernel links the crate for table parsing only and never builds an interpreter (guardrail test `test_kernel_never_runs_firmware_aml`). | moved by the sexacpi PR #88 (2026-11-10), dGPU half included |

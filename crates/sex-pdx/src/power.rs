@@ -50,6 +50,36 @@ pub const FW_INVENTORY: u64 = 20;
 pub const FW_IDLE: u64 = 21;
 /// `FW_SENSORS`: arg, arg2, arg3 = words 1..=3 of `Sensors::encode`.
 pub const FW_SENSORS: u64 = 22;
+/// `FW_DGPU`: the discrete GPUs the kernel parked in D3hot at boot, for the ACPI half of
+/// D3cold. arg = sub-op | index << 8 (index into the kernel's own list; never a free BDF).
+/// `DGPU_INFO` -> [OK, gpu bdf | port_alone << 16 | chain_len << 20 | vendor << 32,
+///   chain bdfs 0..4 (16 bits each, root port first), chain bdfs 4..8, device id].
+/// `DGPU_PORT_D3`: the root port above it to D3hot (only when the GPU is all behind it).
+/// `DGPU_DONE`: arg2 = resources turned off, arg3 = 1 if the ACPI node was found.
+/// `DGPU_RESTORE`: back to D0, headers restored -> [OK, on, restored, waited_ms].
+/// `DGPU_PREPARE`: headers saved again and functions to D3hot, for another power-off.
+pub const FW_DGPU: u64 = 23;
+pub const DGPU_INFO: u64 = 0;
+pub const DGPU_PORT_D3: u64 = 1;
+pub const DGPU_DONE: u64 = 2;
+pub const DGPU_RESTORE: u64 = 3;
+pub const DGPU_PREPARE: u64 = 4;
+/// PCI bus/device/function as 16 bits.
+pub const fn bdf(bus: u8, dev: u8, func: u8) -> u16 { (bus as u16) << 8 | ((dev as u16) & 31) << 3 | (func as u16 & 7) }
+/// A GPU's marketing name, for logs.
+pub fn gpu_product(vendor: u16, device: u16) -> &'static str {
+    match (vendor, device) {
+        (0x10DE, 0x2520 | 0x2560 | 0x2563) => "GeForce RTX 3060 Laptop",
+        (0x10DE, 0x249D | 0x24DD) => "GeForce RTX 3070 Laptop",
+        (0x10DE, 0x249C | 0x24DC) => "GeForce RTX 3080 Laptop",
+        (0x10DE, 0x2420 | 0x2460) => "GeForce RTX 3080 Ti Laptop",
+        (0x10DE, 0x2204) => "GeForce RTX 3090",
+        (0x10DE, _) => "NVIDIA GPU",
+        (0x1002, _) => "AMD GPU",
+        (0x8086, _) => "Intel GPU",
+        _ => "display controller",
+    }
+}
 
 /// Rights in a grant.
 pub const REQUEST: u8 = 1;

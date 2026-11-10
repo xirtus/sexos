@@ -647,13 +647,14 @@ pub fn invoke(pd: &crate::capability::ProtectionDomain, slot: u64, op: u64, arg:
         w::FW_PCI if has(w::FIRMWARE) => fw_pci(arg, arg2, arg3),
         w::FW_INVENTORY if has(w::FIRMWARE) => fw_inventory(arg, arg2, arg3),
         w::FW_IDLE if has(w::FIRMWARE) => fw_idle(arg),
+        w::FW_DGPU if has(w::FIRMWARE) => super::dgpu::firmware_op(arg, arg2, arg3),
         w::FW_SENSORS if has(w::FIRMWARE) => {
             let first = SENSOR_WORDS.lock().replace([arg, arg2, arg3]).is_none();
             if first { serial_println!("[acpi.firmware.sensors] first=1 words={:#x},{:#x},{:#x}", arg, arg2, arg3); }
             [w::OK, 0, 0, 0, 0]
         }
         w::OFF | w::RESTART | w::READY | w::SENSORS => denied,
-        w::FW_TABLE | w::FW_IO | w::FW_MEM | w::FW_PCI | w::FW_INVENTORY | w::FW_IDLE | w::FW_SENSORS => denied,
+        w::FW_TABLE | w::FW_IO | w::FW_MEM | w::FW_PCI | w::FW_INVENTORY | w::FW_IDLE | w::FW_SENSORS | w::FW_DGPU => denied,
         _ => [w::INVALID, 0, 0, 0, 0],
     }
 }

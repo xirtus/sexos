@@ -332,6 +332,177 @@ fn read_sensors(aml: &Aml, d: &Devices) -> w::Sensors {
     s
 }
 
+// ── Discrete GPU power (D3cold) ────────────────────────────────────────────
+//
+// The kernel parks a discrete GPU nothing drives in D3hot at boot and lists it under
+// `FW_DGPU`. Here the firmware finishes the job: the GPU's `_PS3`, then `_OFF` for the
+// power resources its `_PR0`..`_PR3` name that no other device needs; then, when the GPU
+// is all that is behind its root port, the port the same way. On Ampere and later laptops
+// the port's resource (`\_SB.PC00.PEG1` with `_PR3 = {PG01}` and the like) is what cuts
+// the power.
+
+/// A firmware name that marks a test GPU: the gate's SSDT defines it on the GPU node, and
+/// then the GPU is powered back on and off again to check the restore path. Real firmware
+/// never defines it.
+const GATE_NAME: &str = "SXGT";
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Bdf { bus: u8, dev: u8, func: u8 }
+impl core::fmt::Display for Bdf {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result { write!(f, "{:02x}:{:02x}.{}", self.bus, self.dev, self.func) }
+}
+fn unpack(v: u64) -> Bdf { Bdf { bus: (v >> 8) as u8, dev: ((v >> 3) & 31) as u8, func: (v & 7) as u8 } }
+fn dgpu(op: u64, index: usize, arg2: u64, arg3: u64) -> [u64; 5] { w::call4(w::FW_DGPU, op | (index as u64) << 8, arg2, arg3) }
+/// Whether a function answers configuration reads (it does not once power is cut).
+fn answers(b: Bdf) -> bool {
+    pci(PciAddress::new(0, b.bus, b.dev, b.func), 0, 4, None) & 0xFFFF != 0xFFFF
+}
+
+/// ACPI `_ADR` of a PCI function: device in the high word, function in the low.
+fn adr_matches(adr: u64, b: Bdf) -> bool {
+    (adr >> 16) as u8 == b.dev && (adr & 0xFFFF == b.func as u64 || adr & 0xFFFF == 0xFFFF)
+}
+/// Every ACPI device.
+fn acpi_devices(aml: &Aml) -> Vec<AmlName> {
+    let mut found = Vec::new();
+    let mut ns = aml.namespace.lock().clone();
+    let _ = ns.traverse(|path, level| { if matches!(level.kind, NamespaceLevelKind::Device) { found.push(path.clone()); } Ok(true) });
+    found.truncate(4096);
+    found
+}
+fn parent_is(path: &AmlName, parent: &AmlName) -> bool { path.parent().map_or(false, |p| &p == parent) }
+
+/// The ACPI nodes for a chain of PCI functions from the root bus down (root port first).
+/// Firmware (and QEMU) may describe one slot twice; the description that reaches the GPU
+/// and names power resources wins.
+fn nodes(aml: &Aml, all: &[AmlName], root_bus: u8, chain: &[Bdf]) -> Option<Vec<AmlName>> {
+    fn walk(aml: &Aml, all: &[AmlName], at: &AmlName, chain: &[Bdf]) -> Option<Vec<AmlName>> {
+        let Some((hop, rest)) = chain.split_first() else { return Some(Vec::new()) };
+        let mut best: Option<Vec<AmlName>> = None;
+        for p in all.iter().filter(|p| parent_is(p, at)) {
+            if !eval_int(aml, p, "_ADR").map_or(false, |a| adr_matches(a, *hop)) { continue; }
+            let Some(tail) = walk(aml, all, p, rest) else { continue };
+            let mut path = alloc::vec![p.clone()];
+            path.extend(tail);
+            if path.iter().any(|n| !resources(aml, n).is_empty()) { return Some(path); }
+            best.get_or_insert(path);
+        }
+        best
+    }
+    all.iter().filter(|p| {
+        let ids = ids_of(aml, p);
+        ids.iter().any(|i| i == "PNP0A08" || i == "PNP0A03") && eval_int(aml, p, "_BBN").unwrap_or(0) as u8 == root_bus
+    }).find_map(|host| walk(aml, all, host, chain))
+}
+
+/// The power resources a device's `_PR0`..`_PR3` name, as full paths, first-listed first.
+fn resources(aml: &Aml, dev: &AmlName) -> Vec<AmlName> {
+    let mut out: Vec<AmlName> = Vec::new();
+    for m in ["_PR0", "_PR1", "_PR2", "_PR3"] {
+        let Some(list) = eval(aml, dev, m, Vec::new()) else { continue };
+        let Object::Package(items) = &*list else { continue };
+        for item in items.iter() {
+            let Object::String(s) = &**item else { continue };
+            let Ok(n) = AmlName::from_str(s) else { continue };
+            let Ok((full, obj)) = aml.namespace.lock().search(&n, dev) else { continue };
+            if matches!(*obj, Object::PowerResource { .. }) && !out.contains(&full) { out.push(full); }
+        }
+    }
+    out
+}
+/// Resources some other device (outside `ours`) needs in D0.
+fn needed_elsewhere(aml: &Aml, all: &[AmlName], ours: &[AmlName], res: &AmlName) -> bool {
+    all.iter().filter(|d| !ours.iter().any(|o| *d == o || d.as_string().starts_with(&(o.as_string() + "."))))
+        .any(|d| {
+            let Some(list) = eval(aml, d, "_PR0", Vec::new()) else { return false };
+            let Object::Package(items) = &*list else { return false };
+            items.iter().any(|i| match &**i {
+                Object::String(s) => AmlName::from_str(s).ok().and_then(|n| aml.namespace.lock().search(&n, d).ok()).map_or(false, |(f, _)| &f == res),
+                _ => false,
+            })
+        })
+}
+fn resource_on(aml: &Aml, r: &AmlName) -> Option<bool> { eval_int(aml, r, "_STA").map(|s| s & 1 != 0) }
+
+/// One device's ACPI part of going to D3cold: `_PS3`, then its unshared resources off.
+fn acpi_off(aml: &Aml, all: &[AmlName], ours: &[AmlName], dev: &AmlName, log: &mut String) -> usize {
+    use core::fmt::Write;
+    if eval(aml, dev, "_PS3", Vec::new()).is_some() { let _ = write!(log, " {}._PS3", dev); }
+    let mut off = 0;
+    for r in resources(aml, dev).iter().rev() {
+        if needed_elsewhere(aml, all, ours, r) { let _ = write!(log, " {}=shared", r); continue; }
+        if resource_on(aml, r) == Some(false) { let _ = write!(log, " {}=already_off", r); off += 1; continue; }
+        eval(aml, r, "_OFF", Vec::new());
+        let sta = resource_on(aml, r);
+        let _ = write!(log, " {}._OFF sta={}", r, match sta { Some(true) => "1", Some(false) => "0", None => "none" });
+        if sta != Some(true) { off += 1; }
+    }
+    off
+}
+fn acpi_on(aml: &Aml, dev: &AmlName) {
+    for r in resources(aml, dev) { if resource_on(aml, &r) != Some(true) { eval(aml, &r, "_ON", Vec::new()); } }
+    eval(aml, dev, "_PS0", Vec::new());
+}
+
+struct Gpu { index: usize, gpu: Bdf, label: &'static str, chain: Vec<Bdf>, port_alone: bool }
+
+/// The ACPI half of one power-off; returns the nodes used, for a later power-on.
+fn gpu_off(aml: &Aml, g: &Gpu) -> (Option<AmlName>, Option<AmlName>, bool) {
+    let mut path = g.chain.clone();
+    path.push(g.gpu);
+    let port = *g.chain.last().expect("DGPU_CHAIN");
+    let found = bounded(|| {
+        let all = acpi_devices(aml);
+        let found = nodes(aml, &all, g.chain[0].bus, &path)?;
+        let gpu_node = found.last().cloned()?;
+        let port_node = found.get(found.len().wrapping_sub(2)).cloned();
+        let ours: Vec<AmlName> = [Some(gpu_node.clone()), if g.port_alone { port_node.clone() } else { None }].into_iter().flatten().collect();
+        let mut log = String::new();
+        let mut off = acpi_off(aml, &all, &ours, &gpu_node, &mut log);
+        if g.port_alone {
+            let _ = dgpu(w::DGPU_PORT_D3, g.index, 0, 0);
+            if let Some(p) = &port_node { off += acpi_off(aml, &all, &ours, p, &mut log); }
+        }
+        let gate = eval_int(aml, &gpu_node, GATE_NAME).unwrap_or(0) != 0;
+        Some((gpu_node, port_node.filter(|_| g.port_alone), off, log, gate))
+    });
+    let Some((gpu_node, port_node, off, log, gate)) = found else {
+        // No ACPI path to the power: the kernel's D3hot stays.
+        let _ = dgpu(w::DGPU_DONE, g.index, 0, 0);
+        serial_println!("[gpu.power] at={} name=\"{}\" action=off state=d3hot acpi=no_node resources_off=0", g.gpu, g.label);
+        return (None, None, false);
+    };
+    let _ = dgpu(w::DGPU_DONE, g.index, off as u64, 1);
+    let gone = !answers(g.gpu);
+    let state = if gone { "d3cold" } else if off > 0 { "d3cold_requested" } else { "d3hot" };
+    serial_println!("[gpu.power] at={} name=\"{}\" action=off state={} gpu_node={} port={} port_node={} resources_off={} config_gone={} steps:{}",
+        g.gpu, g.label, state, gpu_node, port, port_node.as_ref().map_or(String::from("kept_on"), |p| p.as_string()), off, gone as u8, log);
+    (Some(gpu_node), port_node, gate)
+}
+
+/// Every discrete GPU the kernel parked: firmware power off (and, for the gate's test
+/// GPU, back on and off again).
+fn power_off_gpus(aml: &Aml) {
+    for index in 0..16 {
+        let info = dgpu(w::DGPU_INFO, index, 0, 0);
+        if info[0] != w::OK { break; }
+        let len = ((info[1] >> 20) & 15) as usize;
+        if len == 0 { continue; }
+        let chain = (0..len.min(8)).map(|i| unpack(info[2 + i / 4] >> ((i % 4) * 16) & 0xFFFF)).collect();
+        let g = Gpu { index, gpu: unpack(info[1] & 0xFFFF), label: w::gpu_product((info[1] >> 32) as u16, info[4] as u16), chain, port_alone: (info[1] >> 16) & 1 != 0 };
+        let (gpu_node, port_node, gate) = gpu_off(aml, &g);
+        if !gate { continue; }
+        bounded(|| {
+            if let Some(p) = &port_node { acpi_on(aml, p); }
+            if let Some(n) = &gpu_node { acpi_on(aml, n); }
+        });
+        let r = dgpu(w::DGPU_RESTORE, index, 0, 0);
+        let on = r[0] == w::OK && r[1] != 0;
+        serial_println!("[gpu.power.cycle] at={} on={} restored={}", g.gpu, on as u8, (on && r[2] != 0) as u8);
+        if on && dgpu(w::DGPU_PREPARE, index, 0, 0)[0] == w::OK { gpu_off(aml, &g); }
+    }
+}
+
 // ── Bring-up ───────────────────────────────────────────────────────────────
 
 fn load() -> Option<&'static Aml> {
@@ -393,6 +564,8 @@ pub extern "C" fn _start() -> ! {
     serial_println!("[sexacpi.ready] aml=1 batteries={} ac={} lids={} thermal={} processors={} i2c_hid={} s5={:#x} idle={}",
         devices.batteries.len(), devices.ac.len(), devices.lids.len(), devices.thermal.len(), devices.processors.len(), devices.i2c_hid.len(),
         s5, if idle == w::OK { "mwait" } else { "hlt" });
+
+    power_off_gpus(aml);
 
     let mut next_read = 0u64;
     loop {
