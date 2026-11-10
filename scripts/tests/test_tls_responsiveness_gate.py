@@ -34,6 +34,11 @@ def metadata():
 
 def clock_fixture(contract,width=1280,stamp=(10,42,7)):
  d=contract['clock']['dimensions'];x=d['CHIP_X3']-max(0,d['CHIP_X3']+d['CLOCK_W']+16-width);y=d['CHIP_Y'];height=800 if width==1280 else 768;raw=bytearray(width*height*3);color=contract['clock']['color'].to_bytes(3,'big')
+ if contract['clock'].get('font_profile')=='geist-sans-caption-v1':
+  chip=gate.demo_clock_pixels(contract['clock'],stamp)
+  for yy in range(9):
+   at=((y+1+yy)*width+x)*3;raw[at:at+76*3]=chip[yy*76*3:(yy+1)*76*3]
+  trace=f'[sexdisplay.clock.presentation] label=DEMO wall_time=0 x={x} y={y} w=80 h=22 digits=proportional width={width}\n';return trace,f'P6\n{width} {height}\n255\n'.encode()+raw,(width,height)
  if contract['clock'].get('font_profile')=='geist-sans-cells-v1':
   chip=gate.demo_clock_pixels(contract['clock'],stamp)
   for yy in range(7):
@@ -133,7 +138,7 @@ class DemoClockPixels(unittest.TestCase):
   for name in('apps/kaleidoscope/src/tls_probe.rs','apps/kaleidoscope/src/main.rs','servers/sexdisplay/src/main.rs','servers/quil/src/main.rs','crates/silkbar-model/src/lib.rs','scripts/tls_responsiveness_gate.py'):self.assertIn(name,self.contract['source_sha256'])
  def test_full_demo_and_live_digits_wide_and_compact(self):
   for width in(1280,1024):
-   trace,image,resolution=clock_fixture(self.contract,width);result=gate.verify_demo_clock(trace,image,self.contract,resolution);self.assertTrue(result['ok'],result);self.assertEqual(result['software_counter'],'10:42:07');self.assertEqual(result['geometry']['x'],1090 if width==1280 else 928);self.assertEqual(result['checked_pixels'],532)
+   trace,image,resolution=clock_fixture(self.contract,width);result=gate.verify_demo_clock(trace,image,self.contract,resolution);self.assertTrue(result['ok'],result);self.assertEqual(result['software_counter'],'10:42:07');self.assertEqual(result['geometry']['x'],1090 if width==1280 else 928);self.assertEqual(result['checked_pixels'],684 if self.contract['clock'].get('font_profile')=='geist-sans-caption-v1'else 532)
  def test_missing_prefix_stale_digits_and_spacing_fail(self):
   trace,image,resolution=clock_fixture(self.contract);header=image.index(b'255\n')+4;changed=bytearray(image);x=1090;y=19
   for yy in range(7):

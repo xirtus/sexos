@@ -8,23 +8,53 @@ extern crate self as sex_pdx;
 use silkbar_model::{SilkBar,ModuleSlot,DEFAULT_THEME,Action};
 #[path="../servers/sexdisplay/src/glyphs.rs"]mod glyphs;
 include!(env!("DISPLAY_CLOCK_PRODUCTION"));
-const LABEL:[[u8;7];4]=[
-    [30,17,17,17,17,17,30], // D
-    [31,16,16,30,16,16,31], // E
-    [17,27,21,21,17,17,17], // M
-    [14,17,17,17,17,17,14], // O
-];
 #[test]fn full_demo_prefix_is_visible_at_both_actual_widths(){
- for width in [1024,1280]{let bar=silkbar_model::for_desktop_width(width).unwrap();let(cx,cy,_,_)=module_rect(&bar,ModuleSlot::Clock);
-  for y in 0..7{for x in 0..30{let cell=x/6;let px=x%6;let alpha=if cell<5&&px<5{glyphs::ui_cell(b"DEMO "[cell] as u32,5,7).unwrap()[y*5+px]}else{0};
-   assert_eq!(clock_fg_at(cx+x,cy+1+y,&bar,&civil_clock_lines(&bar.civil_clock),0),(alpha!=0).then(||coverage_blend(DEFAULT_THEME.text,0,alpha)),"width={width} x={x} y={y}");}}
+ for width in [1024,1280]{let mut bar=silkbar_model::for_desktop_width(width).unwrap();bar.clock_hh=0;bar.clock_mm=0;bar.clock_ss=0;let(cx,cy,cw,ch)=module_rect(&bar,ModuleSlot::Clock);
+  for y in 0..ch{for x in 0..cw{let alpha=if x>=2&&y>=1{glyphs::caption_coverage(b"DEMO 00:00:00",x as i32-2,y-1).unwrap()}else{0};
+   let expected=(alpha!=0).then(||coverage_blend(desktop_style::contrast_ink(0),0,alpha));
+   assert_eq!(clock_fg_at(cx+x,cy+y,&bar,&civil_clock_lines(&bar.civil_clock),0),expected,"width={width} x={x} y={y}");}}
  }
 }
 #[test]fn whole_clock_stays_inside_chip_and_prefix_survives_counter_updates(){
- for width in [1024,1280]{let mut bar=silkbar_model::for_desktop_width(width).unwrap();let(cx,cy,cw,ch)=module_rect(&bar,ModuleSlot::Clock);assert!(cx+cw<=width&&cw>=76&&ch>=8);
+ for width in [1024,1280]{let mut bar=silkbar_model::for_desktop_width(width).unwrap();let(cx,cy,cw,ch)=module_rect(&bar,ModuleSlot::Clock);
   for value in [0,(23<<16)|(59<<8)|58]{bar.clock_hh=(value>>16)as u8;bar.clock_mm=(value>>8)as u8;bar.clock_ss=value as u8;
-   for y in cy..cy+ch{for x in cx..cx+cw{if y==cy||y>=cy+8||x>=cx+76{assert_eq!(clock_fg_at(x,y,&bar,&civil_clock_lines(&bar.civil_clock),0),None);}}}
-   assert!((0..30).any(|dx|(0..7).any(|dy|clock_fg_at(cx+dx,cy+1+dy,&bar,&civil_clock_lines(&bar.civil_clock),0).is_some())));
+   for y in cy..cy+ch{for x in cx..cx+cw{if y==cy||y>=cy+10||x<cx+2{assert_eq!(clock_fg_at(x,y,&bar,&civil_clock_lines(&bar.civil_clock),0),None);}}}
+   assert!((0..30).any(|dx|(0..9).any(|dy|clock_fg_at(cx+dx,cy+1+dy,&bar,&civil_clock_lines(&bar.civil_clock),0).is_some())));
+  }
+ }
+}
+#[test]fn every_status_caption_fits_existing_boxes_at_natural_size(){
+ for text in [b"UTC 23:59:59".as_slice(),b"DEMO 23:59:59",b"30 MAY 8888",b"UTC unknown",b"Awaiting UTC",b"Sample stale",b"Updates ended",b"Source error",b"Time blocked"]{
+  assert!(glyphs::caption_width(text).unwrap()<=76,"{:?}",text);
+ }
+ for text in [b"1".as_slice(),b"8",b"10",b"99"]{assert!(glyphs::caption_width(text).unwrap()<=18);}
+ // Captions have real near-opaque stems, not barely-visible miniature cells.
+ for text in [b"UTC 23:59:59".as_slice(),b"30 MAY 8888",b"99"]{
+  assert!((0..9).any(|y|(0..78).any(|x|glyphs::caption_coverage(text,x,y).unwrap()>240)));
+ }
+}
+#[test]fn widest_real_clock_and_date_captions_fit_without_shrinking_geist(){
+ let font=sex_font::Font::new(sex_font::GEIST_SANS).unwrap();
+ let glyphs:Vec<_>=(32..127).map(|c|font.glyph(c).unwrap()).collect();
+ let advances:Vec<_>=glyphs.iter().map(|g|font.advance(*g,9*64)).collect();
+ let pairs:Vec<Vec<_>>=glyphs.iter().map(|a|glyphs.iter().map(|b|font.kerning(*a,*b,9*64)).collect()).collect();
+ let width=|text:&str|{let bytes=text.as_bytes();let mut pen=0;
+  for(i,&b)in bytes.iter().enumerate(){let c=(b-32)as usize;if i>0{pen+=pairs[(bytes[i-1]-32)as usize][c];}pen+=advances[c];}
+  ((pen+255)>>8)as usize};
+ let mut widest=(0,String::new());
+ for h in 0..24{for m in 0..60{for sec in 0..60{let text=format!("UTC {h:02}:{m:02}:{sec:02}");let w=width(&text);if w>widest.0{widest=(w,text);}}}}
+ for year in 2020..=2106{for month in ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"]{for day in 1..=31{
+  let text=format!("{day:02} {month} {year:04}");let w=width(&text);if w>widest.0{widest=(w,text);}
+ }}}
+ assert!(widest.0<=76,"widest {:?}",widest);
+ assert_eq!(glyphs::caption_width(widest.1.as_bytes()),Some(widest.0));
+}
+#[test]fn bell_counts_use_natural_sans_inside_the_same_status_hit_box(){
+ for width in[1024,1280]{let mut bar=silkbar_model::for_desktop_width(width).unwrap();let(bx,by,bw,bh)=module_rect(&bar,ModuleSlot::Bell);
+  for count in[1,9,10,99,255]{bar.bell_state.total_visible=count;bar.bell_state.flags=1;let mut ink=0;
+   for y in by-1..by+bh+1{for x in bx-1..bx+bw+1{let pixel=bell_badge_at(x,y,&bar,0xffd700);
+    if x<bx||x>=bx+bw||y<by||y>=by+bh{assert_eq!(pixel,None);}else{ink+=pixel.is_some()as usize;}
+   }}assert!(ink>0);
   }
  }
 }

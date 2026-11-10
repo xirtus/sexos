@@ -19,14 +19,15 @@ fn surface(width:u32,text:&[u8])->Surface{
  let mut s=Surface{active:true,x:20,y:60,w:width,h:400,text_color:0x123456,..SURFACE_EMPTY};
  s.text_buf[..text.len()].copy_from_slice(text);s.text_len=text.len()as u16;recompute_text_lines(&mut s);s
 }
-/// What one pixel of a full-size cell shows: Geist Mono coverage where Geist has the
-/// letter, else the 5x7 font doubled; the selection behind either.
+/// Geist Mono coverage at the unchanged grid's scale, with bounded missing-glyph
+/// fallback and selection behind either.
 fn cell_pixel(s:&Surface,scalar:u32,x:usize,y:usize,selected:bool)->Option<u32>{
  let back=if selected{Some(0xff36577c)}else{None};
- {if let Some(cell)=glyphs::mono_cell(scalar,12,18){
-  let a=cell[y*12+x];return if a==0{back}else{Some(coverage_blend(s.text_color,back.unwrap_or(s.color),a))};
+ let scale=surface_text_scale(s);let advance=6*scale;let line=9*scale;
+ {if let Some(cell)=glyphs::mono_cell(scalar,advance,line){
+  let a=cell[y*advance+x];return if a==0{back}else{Some(coverage_blend(s.text_color,back.unwrap_or(s.color),a))};
  }}
- let glyph=scalar_glyph(scalar);let(row,col)=(y/2,x/2);
+ let glyph=scalar_glyph(scalar);let(row,col)=(y/scale,x/scale);
  if row<7&&col<5&&(glyph[row]>>(4-col))&1!=0{Some(s.text_color)}else{back}
 }
 #[test]fn readable_scale_preserves_narrow_overlay_density(){
@@ -38,9 +39,9 @@ fn cell_pixel(s:&Surface,scalar:u32,x:usize,y:usize,selected:bool)->Option<u32>{
  let s=surface(640,b"A");
  for y in 0..18{for x in 0..12{assert_eq!(surface_text_fg_at(28+x,72+y,&s),cell_pixel(&s,65,x,y,false),"x={x} y={y}");}}
 }
-#[test]fn narrow_glyph_keeps_original_pixel_grid(){
- let s=surface(200,b"A");let glyph=ascii_glyph_index(b'A').unwrap();
- for row in 0..7{for col in 0..5{let want=if(FONT_ASCII_5X7[glyph][row]>>(4-col))&1!=0{Some(s.text_color)}else{None};assert_eq!(surface_text_fg_at(28+col,72+row,&s),want);}}
+#[test]fn narrow_glyph_uses_geist_on_the_original_cell_grid(){
+ let s=surface(200,b"A");assert_eq!(surface_text_scale(&s),1);
+ for row in 0..9{for col in 0..6{assert_eq!(surface_text_fg_at(28+col,72+row,&s),cell_pixel(&s,b'A' as u32,col,row,false));}}
 }
 #[test]fn lowercase_titles_draw_all_letters_inside_existing_chrome(){
  // Geist Sans, proportional and kerned: every letter of the title has ink, inside the bar.
@@ -72,8 +73,8 @@ fn cell_pixel(s:&Surface,scalar:u32,x:usize,y:usize,selected:bool)->Option<u32>{
 #[test]fn filename_punctuation_keeps_old_indices_and_has_visible_pixels(){
  for ch in b' '..=b'Z'{assert_eq!(ascii_glyph_index(ch),Some((ch-b' ')as usize));}
  for ch in b"[\\]^_`{|}~"{let index=ascii_glyph_index(*ch).unwrap();assert!(index<FONT_ASCII_5X7.len());assert!(FONT_ASCII_5X7[index].iter().any(|row|*row!=0));}
- for ch in [b'_',b'~']{let s=surface(200,&[ch]);let glyph=ascii_glyph_index(ch).unwrap();let mut pixels=0;
- for y in 0..7{for x in 0..5{let want=if (FONT_ASCII_5X7[glyph][y]>>(4-x))&1!=0{pixels+=1;Some(s.text_color)}else{None};assert_eq!(surface_text_fg_at(28+x,72+y,&s),want);}}assert!(pixels>0);}
+ for ch in [b'_',b'~']{let s=surface(200,&[ch]);let mut pixels=0;
+ for y in 0..9{for x in 0..6{let want=cell_pixel(&s,ch as u32,x,y,false);pixels+=want.is_some()as usize;assert_eq!(surface_text_fg_at(28+x,72+y,&s),want);}}assert!(pixels>0);}
  for ch in [0,10,31,127,128,255]{assert_eq!(ascii_glyph_index(ch),None);}
 }
 
@@ -135,7 +136,7 @@ fn owned_surface(owner:u32,sid:u64,width:u32,text:&[u8])->Surface{
  // Larger stops at the largest scale, and one step back acts at once.
  for _ in 0..10{apply_text_zoom(&mut s,1);}assert_eq!(surface_text_scale(&s),5);
  assert!(apply_text_zoom(&mut s,-1));assert_eq!(surface_text_scale(&s),4);
- // Smaller reaches the 5x7 font, then reset returns to the width's default.
+ // Smaller keeps Geist in the compact 6x9 cell; reset returns to the width default.
  for _ in 0..10{apply_text_zoom(&mut s,-1);}assert_eq!((surface_text_scale(&s),s.text_zoom),(1,-1));
  assert!(apply_text_zoom(&mut s,0));assert_eq!((surface_text_scale(&s),s.text_zoom,s.wrap_cols),(2,0,52));
  assert!(!apply_text_zoom(&mut s,0));

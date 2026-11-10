@@ -1844,21 +1844,27 @@ fn civil_clock_lines(clock:&silkbar_model::civil_clock::CivilClock)->[[u8;13];2]
     }
     lines
 }
-/// Bounded Geist Sans cell for compact panel labels. Preserve existing cell
-/// positions, and blend coverage over the captured panel's actual composed pixel.
-fn panel_glyph_at(byte:u8,x:usize,y:usize,background:u32)->Option<u32>{
-    if x>=5 || y>=7{return None;}
-    let alpha=if let Some(cell)=glyphs::ui_cell(byte as u32,5,7){cell[y*5+x]}
-        else{let glyph=ascii_glyph_index(byte)?;if (FONT_ASCII_5X7[glyph][y]>>(4-x))&1!=0{255}else{0}};
-    (alpha!=0).then(||coverage_blend(DEFAULT_THEME.text,background,alpha))
+/// Proportional Geist Sans captions in the existing status boxes. The legacy
+/// cell renderer is recovery only; ordinary labels keep natural glyph advances.
+fn panel_caption_at(text:&[u8],x:usize,y:usize,background:u32)->Option<u32>{
+    if y>=glyphs::CAPTION_H{return None;}
+    let alpha=match glyphs::caption_coverage(text,x as i32,y){
+        Some(alpha)=>alpha,
+        None=>{
+            let byte=*text.get(x/6)?;let px=x%6;
+            if px>=5||y>=7{return None;}
+            let glyph=ascii_glyph_index(byte)?;
+            if (FONT_ASCII_5X7[glyph][y]>>(4-px))&1!=0{255}else{0}
+        }
+    };
+    (alpha!=0).then(||coverage_blend(sex_pdx::desktop_style::contrast_ink(background),background,alpha))
 }
 fn civil_clock_fg_at(x:usize,y:usize,bar:&SilkBar,lines:&[[u8;13];2],background:u32)->Option<u32>{
     let(cx,cy,cw,ch)=module_rect(bar,ModuleSlot::Clock);
-    if x<cx||x>=cx+cw||y<cy||y>=cy+ch{return None;}
-    let row=if (cy+1..cy+8).contains(&y){0}else if(cy+11..cy+18).contains(&y){1}else{return None;};
-    let col=(x-cx)/6;let px=(x-cx)%6;if col>=13||px>=5{return None;}
-    let py=y-(cy+if row==0{1}else{11});
-    panel_glyph_at(lines[row][col],px,py,background)
+    if x<cx+2||x>=cx+cw||y<cy||y>=cy+ch{return None;}
+    let row=if(cy+1..cy+1+glyphs::CAPTION_H).contains(&y){0}
+        else if(cy+11..cy+11+glyphs::CAPTION_H).contains(&y){1}else{return None;};
+    panel_caption_at(&lines[row],x-cx-2,y-(cy+1+row*10),background)
 }
 /// One completed-frame observation per changed clock stamp. This is called
 /// only after the full/strip framebuffer writes and overlays finish. Accepted
@@ -1879,93 +1885,27 @@ fn civil_clock_drawn(bar:&SilkBar,w:usize,h:usize,path:&str){
 }
 fn clock_fg_at(x: usize, y: usize, bar: &SilkBar, lines: &[[u8;13];2], background: u32) -> Option<u32> {
     if bar.civil_enabled {return civil_clock_fg_at(x,y,bar,lines,background);}
-    const CLOCK_PREFIX:&[u8]=b"DEMO ";
-    const CLOCK_DIGIT_OFFSET:usize=30;
-    let (cx, cy, _, _) = module_rect(bar, ModuleSlot::Clock);
-    let cy = cy + 1; // slight inset into chip area
-
-    // Quick bounding-box reject
-    if y < cy || y >= cy + 7 {
-        return None;
+    let(cx,cy,cw,ch)=module_rect(bar,ModuleSlot::Clock);
+    if x<cx+2||x>=cx+cw||y<cy+1||y>=cy+ch{return None;}
+    let mut label=*b"DEMO 00:00:00";
+    for(at,value)in[(5,bar.clock_hh),(8,bar.clock_mm),(11,bar.clock_ss)]{
+        label[at]=b'0'+value/10;label[at+1]=b'0'+value%10;
     }
-    if x < cx || x > cx + CLOCK_DIGIT_OFFSET + 45 {
-        return None;
-    }
-    // Both the SilkBar producer and display fallback advance a software
-    // demonstration counter. Neither is wall time or a certificate UTC source.
-    if x<cx+CLOCK_DIGIT_OFFSET{
-        let col=(x-cx)/6;let px=(x-cx)%6;
-        if px>=5{return None;}
-        return panel_glyph_at(*CLOCK_PREFIX.get(col)?,px,y-cy,background);
-    }
-    let cx=cx+CLOCK_DIGIT_OFFSET;
-
-    // Keep the existing digit/colon layout and hit geometry.
-    for dx in [12,29] {
-        if x>=cx+dx && x<cx+dx+5 {
-            return panel_glyph_at(b':',x-(cx+dx),y-cy,background);
-        }
-    }
-
-    // Digit offsets: 0, 7, 17, 24, 34, 41
-    const DIGITS: [usize; 6] = [0, 7, 17, 24, 34, 41];
-    for (di, &dx) in DIGITS.iter().enumerate() {
-        if x < cx + dx || x >= cx + dx + 5 {
-            continue;
-        }
-        let col = x - (cx + dx);
-        let row = y - cy;
-        let digit: usize = match di {
-            0 => (bar.clock_hh / 10) as usize,
-            1 => (bar.clock_hh % 10) as usize,
-            2 => (bar.clock_mm / 10) as usize,
-            3 => (bar.clock_mm % 10) as usize,
-            4 => (bar.clock_ss / 10) as usize,
-            5 => (bar.clock_ss % 10) as usize,
-            _ => return None,
-        };
-        return panel_glyph_at(b'0'+digit as u8,col,row,background);
-    }
-    None
+    panel_caption_at(&label,x-cx-2,y-cy-1,background)
 }
 
-/// Returns `Some(fg)` if pixel (x, y) is a Bell count badge foreground pixel,
-/// or `None` if it is background / not in the badge area.
-/// Uses the same cached Geist Sans glyphs as the clock labels.
-/// Badge is positioned at the right side of the Bell module slot.
+/// Bell count in the existing module: natural 9px Sans digits, centered and clipped.
 fn bell_badge_at(x: usize, y: usize, bar: &SilkBar, background: u32) -> Option<u32> {
-    let n = bar.bell_state.total_visible;
-    if n == 0 || bar.bell_state.flags & 1 == 0 {
-        return None; // no badge when empty or Bell unavailable
-    }
-    // Clamp to 99 (two digits max)
-    let n = n.min(99);
-    let tens = n / 10;
-    let ones = n % 10;
-
-    let (bx, by, _, bh) = module_rect(bar, ModuleSlot::Bell);
-    let badge_y = by + (bh / 2) - 3; // vertically centered, FONT is 7px tall
-    if y < badge_y || y >= badge_y + 7 {
-        return None;
-    }
-    let row = y - badge_y;
-
-    // Two-digit badge: tens at bx+9, ones at bx+14 (within 18px slot)
-    let left = if tens > 0 { bx + 9 } else { bx + 11 }; // single digit offset if <10
-    let right = bx + 14;
-
-    for (di, digit_x) in [(0, left), (1, right)].iter() {
-        let digit = if *di == 0 { tens } else { ones };
-        if *di == 0 && tens == 0 {
-            continue; // skip leading zero
-        }
-        if x < *digit_x || x >= *digit_x + 5 {
-            continue;
-        }
-        let col = x - *digit_x;
-        return panel_glyph_at(b'0'+digit as u8,col,row,background);
-    }
-    None
+    let n=bar.bell_state.total_visible;
+    if n==0||bar.bell_state.flags&1==0{return None;}
+    let n=n.min(99);let digits=[b'0'+n/10,b'0'+n%10];
+    let label=if n>=10{&digits[..]}else{&digits[1..]};
+    let(bx,by,bw,bh)=module_rect(bar,ModuleSlot::Bell);
+    if x<bx||x>=bx+bw||y<by||y>=by+bh{return None;}
+    let width=glyphs::caption_width(label).unwrap_or(label.len()*6).min(bw);
+    let left=bx+(bw-width)/2;let top=by+bh.saturating_sub(glyphs::CAPTION_H)/2;
+    if x<left||y<top{return None;}
+    panel_caption_at(label,x-left,y-top,background)
 }
 
 
@@ -3531,7 +3471,7 @@ pub extern "C" fn _start() -> ! {
     if bar.civil_enabled{
         sex_pdx::serial_record!("[sexdisplay.clock.presentation] label=UTC state=Unknown snapshot_only=1 x={} y={} w={} h={} width={}",clock_layout.x,clock_layout.y,clock_layout.w,clock_layout.h,unsafe{FB_W});
     }else{
-        sex_pdx::serial_record!("[sexdisplay.clock.presentation] label=DEMO wall_time=0 x={} y={} w={} h={} digits=30 width={}",clock_layout.x,clock_layout.y,clock_layout.w,clock_layout.h,unsafe{FB_W});
+        sex_pdx::serial_record!("[sexdisplay.clock.presentation] label=DEMO wall_time=0 x={} y={} w={} h={} digits=proportional width={}",clock_layout.x,clock_layout.y,clock_layout.w,clock_layout.h,unsafe{FB_W});
     }
     let mut lifecycle = load_lifecycle_catalog();
     clock_canon_store(bar.clock_hh, bar.clock_mm, bar.clock_ss);

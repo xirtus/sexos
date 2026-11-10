@@ -66,7 +66,7 @@ def _date_render_shape(display):
  header=top.split('{',1)[0]
  assert header in(old,new),'unknown top-strip clock rendering shape'
  scene_backed=header==new
- geist='fn panel_glyph_at('in display
+ geist='fn panel_glyph_at('in display or 'fn panel_caption_at('in display
  background=',background'if geist else''
  prepared='fn render_prepared('in display
  batched='fn raster_batch('in display
@@ -148,27 +148,47 @@ def source_contract(root):
   assert 'ifmatches!(paint,Paint::Full|Paint::Strip){civil_clock_drawn(&captured_bar,w,h,paint.label());}'in re.sub(r'\s+','',_function(display,'render_prepared'))
  else:
   assert 'civil_clock_drawn(bar,w,h,"strip")'in display and 'civil_clock_drawn(bar,w,h,"full")'in display
- font_profile='legacy-rom-v1';coverage=None;background=None
- if 'fn panel_glyph_at('in display:
-  font_profile='geist-sans-cells-v1'
-  helper=re.sub(r'\s+','',_function(display,'panel_glyph_at'))
-  assert 'glyphs::ui_cell(byteasu32,5,7)'in helper and 'coverage_blend(DEFAULT_THEME.text,background,alpha)'in helper,'panel bypasses cached Geist Sans coverage'
+ font_profile='legacy-rom-v1';coverage=None;background=None;captions=None
+ if 'fn panel_caption_at('in display or 'fn panel_glyph_at('in display:
+  proportional='fn panel_caption_at('in display
+  font_profile='geist-sans-caption-v1'if proportional else'geist-sans-cells-v1'
+  helper=re.sub(r'\s+','',_function(display,'panel_caption_at'if proportional else'panel_glyph_at'))
+  if proportional:
+   assert 'glyphs::caption_coverage(text,xasi32,y)'in helper and 'coverage_blend(sex_pdx::desktop_style::contrast_ink(background),background,alpha)'in helper,'panel bypasses natural cached Sans or contrast ink'
+  else:assert 'glyphs::ui_cell(byteasu32,5,7)'in helper and 'coverage_blend(DEFAULT_THEME.text,background,alpha)'in helper,'panel bypasses cached Geist Sans coverage'
   assert 'ChipKind::Clock   => return Some(DEFAULT_THEME.chip_border)'in display,'unsupported clock background'
   match=re.search(r'pub const DEFAULT_THEME: Theme = Theme \{.*?chip_border:\s*(0x[0-9A-Fa-f]+)',model,re.S);assert match,'missing source-bound clock background'
   background=int(match[1],16)&0xffffff
   import geist_cells
-  coverage=[list(cell)for cell in geist_cells.cells(5,7,'sans',root=root)]
-  for name in('servers/sexdisplay/src/glyphs.rs','crates/sex-font/src/lib.rs','crates/sex-font/src/raster.rs','crates/sex-font/src/cache.rs','crates/sex-font/examples/cells.rs','scripts/geist_cells.py'):
+  if proportional:captions=geist_cells.captions(root=root)
+  else:coverage=[list(cell)for cell in geist_cells.cells(5,7,'sans',root=root)]
+  for name in('servers/sexdisplay/src/glyphs.rs','crates/sex-font/src/lib.rs','crates/sex-font/src/raster.rs','crates/sex-font/src/cache.rs','crates/sex-font/examples/captions.rs'if proportional else'crates/sex-font/examples/cells.rs','scripts/geist_cells.py'):
    texts[name]=(root/name).read_text()
   hashes={n:hashlib.sha256(t.encode()).hexdigest()for n,t in texts.items()}
   hashes['assets/fonts/geist/Geist-Regular.ttf']=hashlib.sha256((root/'assets/fonts/geist/Geist-Regular.ttf').read_bytes()).hexdigest()
  else:hashes={n:hashlib.sha256(t.encode()).hexdigest()for n,t in texts.items()}
- return dict(font=font_from_source(display),font_profile=font_profile,coverage=coverage,background=background,dimensions=dimensions,color=int(color[1],16)&0xffffff,bounds=bounds,caption_profile=profile,source_sha256=hashes)
+ ink=int(color[1],16)&0xffffff
+ if font_profile=='geist-sans-caption-v1':
+  values=[((background>>shift)&255)/255 for shift in(16,8,0)]
+  linear=[v/12.92 if v<=.04045 else((v+.055)/1.055)**2.4 for v in values]
+  light=sum(v*k for v,k in zip(linear,(.2126,.7152,.0722)))+.05
+  ink=0 if light*light>=1.05*.05 else 0xffffff
+ return dict(font=font_from_source(display),font_profile=font_profile,coverage=coverage,captions=captions,background=background,dimensions=dimensions,color=ink,bounds=bounds,caption_profile=profile,source_sha256=hashes)
 
 def clock_cell_pixels(contract,lines,w=80,h=22):
- assert contract.get('font_profile')=='geist-sans-cells-v1','unsupported clock coverage profile'
+ assert contract.get('font_profile')in('geist-sans-cells-v1','geist-sans-caption-v1'),'unsupported clock coverage profile'
  back=contract['background'].to_bytes(3,'big');ink=contract['color'].to_bytes(3,'big')
  pixels=bytearray(back*(w*h))
+ if contract['font_profile']=='geist-sans-caption-v1':
+  import geist_cells
+  for row,text in enumerate(lines):
+   alpha=geist_cells.caption_bitmap(contract['captions'],text,w,9)
+   for gy in range(9):
+    yy=1+row*10+gy
+    if yy>=h:continue
+    for xx in range(w):
+     a=alpha[gy*w+xx];at=(yy*w+xx)*3;pixels[at:at+3]=bytes((fg*a+bg*(255-a))//255 for fg,bg in zip(ink,back))
+  return bytes(pixels)
  for row,text in enumerate(lines):
   for col,ch in enumerate(text):
    assert 32<=ord(ch)<=126,'clock label outside pinned ASCII atlas'
@@ -279,7 +299,7 @@ def verify_pixels(trace,ppm,contract,resolution=None,expected_state=None):
      for gx in range(5):
       if bits&(1<<(4-gx)):wanted.add((col*6+gx,1+row*10+gy))
   color=contract['color'].to_bytes(3,'big');mismatches=0
-  if contract.get('font_profile')=='geist-sans-cells-v1':
+  if contract.get('font_profile')in('geist-sans-cells-v1','geist-sans-caption-v1'):
    # Clock's composed background is the source-bound, opaque chip border.
    # Compare every pixel, including antialiasing and the erased row gaps.
    expected=clock_cell_pixels(contract,(first,second),w,h)

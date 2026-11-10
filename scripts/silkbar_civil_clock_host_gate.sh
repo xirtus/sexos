@@ -7,7 +7,7 @@ python3 - "$CIVIL_ROOT" "$CIVIL_TEMP" <<'PY'
 from pathlib import Path
 import re,sys
 root=Path(sys.argv[1]);out=Path(sys.argv[2]);source=(root/'servers/sexdisplay/src/main.rs').read_text();parts=[]
-for name in ['module_rect','ascii_glyph_index','civil_clock_date','civil_clock_lines','panel_glyph_at','coverage_blend','civil_clock_fg_at','civil_clock_drawn','clock_fg_at','handle_civil_clock_update','clock_canon_apply_to_bar']:
+for name in ['module_rect','ascii_glyph_index','civil_clock_date','civil_clock_lines','panel_caption_at','coverage_blend','civil_clock_fg_at','civil_clock_drawn','clock_fg_at','handle_civil_clock_update','clock_canon_apply_to_bar']:
     values=re.findall(r'^fn '+name+r'\b.*?^\}',source,re.M|re.S);assert len(values)==1,name;parts+=values
 for name in ['FONT','FONT_ASCII_5X7']:
     values=re.findall(r'^const '+name+r':.*?^\];',source,re.M|re.S);assert len(values)==1,name;parts+=values
@@ -55,7 +55,7 @@ cargo build -q --manifest-path "$CIVIL_ROOT/Cargo.toml" -p sex-font
 FONT_LIBS=(--extern sex_font="$CIVIL_ROOT/target/debug/libsex_font.rlib" -L dependency="$CIVIL_ROOT/target/debug/deps")
 rustc --edition=2021 --crate-name sex_time --crate-type rlib "$CIVIL_ROOT/crates/sex-time/src/lib.rs" -o "$CIVIL_TEMP/libsex_time.rlib"
 SILKBAR_CIVIL_DISPLAY="$CIVIL_TEMP/display.rs" rustc "${FONT_LIBS[@]}" --edition=2021 --extern sex_time="$CIVIL_TEMP/libsex_time.rlib" --test "$CIVIL_ROOT/tests/silkbar_civil_clock.rs" -o "$CIVIL_TEMP/tests"
-"$CIVIL_TEMP/tests"
+"$CIVIL_TEMP/tests" --test-threads=1
 rustc --edition=2021 --crate-name silkbar_model --crate-type rlib "$CIVIL_ROOT/crates/silkbar-model/src/lib.rs" -o "$CIVIL_TEMP/libsilkbar_model.rlib"
 rustc --edition=2021 --extern silkbar_model="$CIVIL_TEMP/libsilkbar_model.rlib" --test "$CIVIL_ROOT/tests/silkbar_clock_probe.rs" -o "$CIVIL_TEMP/probe-tests"
 "$CIVIL_TEMP/probe-tests"

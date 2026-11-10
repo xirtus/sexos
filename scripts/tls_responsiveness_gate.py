@@ -26,8 +26,11 @@ def source_contract(root):
  root=Path(root);contract=https.load_contract(root);source=(root/'servers/quil/src/main.rs').read_text();match=re.search(r'const QUIL_TEXT_INIT: &\[u8\] = b"((?:[^"\\]|\\.)*)";',source)
  if not match or 'static mut QUIL_CURSOR_POS: usize = 0;'not in source or 'static mut QUIL_DOC_ID: u64 = 2;'not in source:raise ValueError('source-bound initial Quil document/cursor differs')
  display=(root/'servers/sexdisplay/src/main.rs').read_text();model=(root/'crates/silkbar-model/src/lib.rs').read_text();app=(root/'apps/kaleidoscope/src/main.rs').read_text();probe=(root/'apps/kaleidoscope/src/tls_probe.rs').read_text()
- literals=['const CLOCK_PREFIX:&[u8]=b"DEMO ";','const CLOCK_DIGIT_OFFSET:usize=30;','let cx=cx+CLOCK_DIGIT_OFFSET;']
- literals.append('return panel_glyph_at(*CLOCK_PREFIX.get(col)?,px,y-cy,background);'if 'fn panel_glyph_at('in display else'FONT_ASCII_5X7[glyph][y-cy]')
+ if 'fn panel_caption_at('in display:
+  literals=['let mut label=*b"DEMO 00:00:00";','panel_caption_at(&label,x-cx-2,y-cy-1,background)','digits=proportional width={}']
+ else:
+  literals=['const CLOCK_PREFIX:&[u8]=b"DEMO ";','const CLOCK_DIGIT_OFFSET:usize=30;','let cx=cx+CLOCK_DIGIT_OFFSET;']
+  literals.append('return panel_glyph_at(*CLOCK_PREFIX.get(col)?,px,y-cy,background);'if 'fn panel_glyph_at('in display else'FONT_ASCII_5X7[glyph][y-cy]')
  for literal in literals:
   if literal not in display:raise ValueError('source-bound DEMO clock renderer changed')
  if 'for_desktop_width'not in model or 'let shift=edge.saturating_sub(width);'not in model or 'sequence={} app_turn={} begin_ticks={}'not in app or 'PrepWork::FixtureCheck'not in probe or 'PrepWork::ClientHello'not in probe:raise ValueError('source-bound clock layout/work producer changed')
@@ -44,7 +47,7 @@ def source_contract(root):
  if not color:raise ValueError('clock theme unavailable')
  contract['clock']=dict(dimensions=dimensions,digits=digit_font,color=int(color[1],16)&0xffffff)
  contract['civil_clock']=civil_contract(root);contract['source_sha256'].update(contract['civil_clock']['source_sha256'])
- for field in('font_profile','coverage','background'):contract['clock'][field]=contract['civil_clock'].get(field)
+ for field in('font_profile','coverage','background','captions','color'):contract['clock'][field]=contract['civil_clock'].get(field)
  contract['quil_initial']=bytes(match[1],'ascii').decode('unicode_escape').encode('ascii');contract['font']=font_from_source((root/'servers/sexdisplay/src/main.rs').read_text())
  for name in('scripts/tls_responsiveness_gate.py','servers/quil/src/main.rs','crates/silkbar-model/src/lib.rs','scripts/check_quil_ui_pixels.py','scripts/check_document_disk.py','scripts/tls_lifecycle_gate.py','scripts/desktop_focus.py','scripts/desktop_close_gate.py','servers/silk-shell/src/main.rs'):
   contract['source_sha256'][name]=hashlib.sha256((root/name).read_bytes()).hexdigest()
@@ -141,7 +144,12 @@ def clock_panel(trace,contract,resolution):
 
 def demo_clock_pixels(clock,stamp):
  """Independent fixed-layout oracle from the source/font-bound Sans atlas."""
- back=clock['background'].to_bytes(3,'big');ink=clock['color'].to_bytes(3,'big');raw=bytearray(back*(76*7))
+ back=clock['background'].to_bytes(3,'big');ink=clock['color'].to_bytes(3,'big')
+ if clock.get('font_profile')=='geist-sans-caption-v1':
+  import geist_cells
+  alpha=geist_cells.caption_bitmap(clock['captions'],'DEMO '+':'.join(f'{part:02d}'for part in stamp),76,9)
+  return b''.join(bytes((fg*a+bg*(255-a))//255 for fg,bg in zip(ink,back))for a in alpha)
+ raw=bytearray(back*(76*7))
  def draw(ch,left):
   cell=clock['coverage'][ord(ch)-32]
   for y in range(7):
@@ -154,10 +162,30 @@ def demo_clock_pixels(clock,stamp):
 
 def verify_demo_clock(trace,ppm,contract,resolution=None):
  try:
-  layouts=list(re.finditer(r'\[sexdisplay.clock.presentation\] label=DEMO wall_time=0 x=(\d+) y=(\d+) w=(\d+) h=(\d+) digits=30 width=(\d+)',trace));assert len(layouts)==trace.count('[sexdisplay.clock.presentation]')==1,'missing/foreign DEMO presentation'
+  layouts=list(re.finditer(r'\[sexdisplay.clock.presentation\] label=DEMO wall_time=0 x=(\d+) y=(\d+) w=(\d+) h=(\d+) digits=(?:30|proportional) width=(\d+)',trace));assert len(layouts)==trace.count('[sexdisplay.clock.presentation]')==1,'missing/foreign DEMO presentation'
   x,y,w,h,declared=map(int,layouts[0].groups());width,height,pixels=ppm_rgb(ppm,min_width=1,min_height=1);d=contract['clock']['dimensions'];wanted_x=d['CHIP_X3']-max(0,d['CHIP_X3']+d['CLOCK_W']+16-width)
   assert (width,height)==tuple(resolution)if resolution else True,'wrong framebuffer resolution'
   assert (x,y,w,h,declared)==(wanted_x,d['CHIP_Y'],d['CLOCK_W'],d['CHIP_H'],width)and x>=0 and x+w<=width and y+8<=height and w>=76,'clock geometry differs from source-bound supported width'
+  if contract['clock'].get('font_profile')=='geist-sans-caption-v1':
+   import geist_cells
+   clock=contract['clock'];atlas=clock['captions'];back=clock['background'].to_bytes(3,'big');ink=clock['color'].to_bytes(3,'big')
+   assert 'digits=proportional'in layouts[0][0],'caption profile mismatches actual clock geometry'
+   prefix='DEMO ';values=[]
+   for limit,separator in[(24,':'),(60,':'),(60,'')]:
+    found=[]
+    for value in range(limit):
+     label=prefix+f'{value:02d}'+separator;alpha=geist_cells.caption_bitmap(atlas,label,76,9)
+     pen=0;previous=None
+     for ch in label:
+      c=ord(ch)-32
+      if previous is not None:pen+=atlas['kerning'][previous][c]
+      pen+=atlas['advances'][c];previous=c
+     end=76 if not separator else min(76,2+(pen>>8))
+     if all(pixels[((y+1+gy)*width+x+gx)*3:((y+1+gy)*width+x+gx)*3+3]==bytes((fg*alpha[gy*76+gx]+bg*(255-alpha[gy*76+gx]))//255 for fg,bg in zip(ink,back))for gy in range(9)for gx in range(end)):found.append(value)
+    assert len(found)==1,'natural clock prefix/digit absent/torn/ambiguous'
+    values.append(found[0]);prefix+=f'{found[0]:02d}'+separator
+   expected=demo_clock_pixels(clock,values)
+   return dict(ok=True,errors=[],geometry=dict(x=x,y=y,w=w,h=h,width=width),label='DEMO',wall_time=False,software_counter=':'.join(f'{value:02d}'for value in values),checked_pixels=76*9,expected_ink_pixels=sum(expected[i:i+3]!=back for i in range(0,len(expected),3)))
   if contract['clock'].get('font_profile')=='geist-sans-cells-v1':
    clock=contract['clock'];values=[]
    def region_matches(offset,digit):
