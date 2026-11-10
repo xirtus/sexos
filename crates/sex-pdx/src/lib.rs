@@ -801,7 +801,6 @@ fn uiir_views(producer: bool, peer: u32) -> Result<(u64, u64), u64> {
     }
     Ok((out[0], out[1]))
 }
-/// This app's writable text region, or an error when BOOT granted none.
 /// Resolve the fixed capture grant; a numeric role or pointer is not authority.
 pub fn screen_capture_bank(writer:bool)->Result<screen_capture::Bank,u64>{
     let rights=memory_region::QUERY_VIEW|memory_region::READ|if writer{memory_region::WRITE}else{0};
@@ -810,6 +809,7 @@ pub fn screen_capture_bank(writer:bool)->Result<screen_capture::Bank,u64>{
     unsafe{screen_capture::Bank::from_resolved(info,view,writer)}.ok_or(ERR_CAP_INVALID)
 }
 
+/// This app's writable text region, or an error when BOOT granted none.
 pub fn text_region_client() -> Result<u64, u64> {
     use memory_region::{QUERY_VIEW, READ, WRITE};
     let view = memory_region_view(text_region::CLIENT_SLOT, 0, text_region::BYTES, QUERY_VIEW | READ | WRITE)?;

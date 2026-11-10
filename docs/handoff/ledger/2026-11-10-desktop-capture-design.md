@@ -18,7 +18,11 @@ one thin BOOT wiring function plus its init call; report exact nonblank LOC in t
 PR. This is declared capability/memory mechanism, not kernel screenshot policy.
 
 The one-shot lease is bound to kernel-stamped caller PD/task plus a fresh request
-sequence. Display validates the current live incarnation, bounds, exact Region
+sequence and Display service epoch. Display samples the kernel OP_RESTARTS count
+fail-closed and publishes epoch=count+1; BEGIN/RELEASE must name that exact epoch.
+Same-task service restarts scrub the old bank before installing their new epoch.
+The public epoch remains after release; all sensitive metadata/pixels are scrubbed.
+App rebirth mints a fresh NEXT_RUN_TASK after required retirement ACKs. Display validates the current live incarnation, bounds, exact Region
 identity/rights/peer and single active lease. The command first displays its
 whole-desktop capture intent. Arbitrary programs and other Spindles are denied.
 
@@ -59,3 +63,8 @@ completed desktop frame. Receipt-only or host-only API tests are insufficient.
 Recording remains a later complete feature over this capture custody: explicit
 profile/cadence, visible start/stop, bounded backpressure and a userspace encoder.
 It is not claimed by the screenshot PR.
+
+Host validation now covers 17 production client/server/PNG cases, four compiled
+negative controls, independent CRC/zlib/RGB decoding, and full service custody
+host gates. Native PNG extraction/decode gates remain required before completion.
+Kernel wiring delta: six nonblank lines (seven total added lines), no syscall.
