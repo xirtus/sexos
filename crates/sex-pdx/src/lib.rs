@@ -1211,6 +1211,7 @@ pub mod document_snapshot;
 pub mod pci_command;
 pub mod virtio;
 pub mod device;
+pub mod usb_disk;
 pub mod network_config;
 
 pub mod desktop_style;

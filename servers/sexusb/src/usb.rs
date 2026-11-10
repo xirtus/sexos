@@ -21,6 +21,34 @@ const REPORT: u64 = 64;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Role { None, Keyboard, Pointer, Hub }
 
+/// A USB mass storage device (bulk-only transport, SCSI commands): a stick, a card
+/// reader, an external disk. Files sees it as disk `disk`.
+#[derive(Clone, Copy)]
+struct Storage {
+    active: bool,
+    iface: u8,
+    in_ep: u8,
+    out_ep: u8,
+    in_dci: u32,
+    out_dci: u32,
+    in_ring: Ring,
+    out_ring: Ring,
+    io: (u64, u64),
+    tag: u32,
+    block: u32,
+    blocks: u64,
+    disk: u8,
+    read_only: bool,
+    name: [u8; 40],
+    name_len: usize,
+}
+impl Storage {
+    const fn empty() -> Self {
+        Storage { active: false, iface: 0, in_ep: 0, out_ep: 0, in_dci: 0, out_dci: 0, in_ring: Ring::empty(), out_ring: Ring::empty(),
+            io: (0, 0), tag: 1, block: 512, blocks: 0, disk: 0, read_only: false, name: [0; 40], name_len: 0 }
+    }
+}
+
 #[derive(Clone, Copy)]
 struct Interrupt {
     active: bool,
@@ -75,12 +103,14 @@ struct Device {
     hub_pending: u32,
     vendor: u16,
     product: u16,
+    storage: Storage,
 }
 impl Device {
     const fn empty() -> Self {
         Device { used: false, slot: 0, speed: 0, route: 0, depth: 0, root_port: 0, parent: 0, parent_port: 0,
             tt_slot: 0, tt_port: 0, mps0: 8, ep0: Ring::empty(), mem: None, intr: [Interrupt::empty(); MAX_INTR],
-            hub_ports: 0, hub_ss: false, hub_ttt: 0, hub_mtt: false, hub_pending: 0, vendor: 0, product: 0 }
+            hub_ports: 0, hub_ss: false, hub_ttt: 0, hub_mtt: false, hub_pending: 0, vendor: 0, product: 0,
+            storage: Storage::empty() }
     }
     fn is_hub(&self) -> bool { self.hub_ports > 0 }
 }
@@ -93,10 +123,18 @@ pub struct Usb {
     sent_keys: u64,
     sent_modifiers: u8,
     pub stats: Stats,
+    /// The data buffer every SCSI command moves through (one command at a time).
+    bounce: (u64, u64),
+    /// Disk number -> device index + 1.
+    disks: [u8; sex_pdx::usb_disk::MAX_DISKS as usize],
+    pub generation: u64,
+    pub changed: bool,
 }
 
+const BOUNCE: u64 = sex_pdx::usb_disk::BUFFER_BYTES + 8192;
+
 #[derive(Default, Clone, Copy)]
-pub struct Stats { pub slots: u32, pub hid: u32, pub pointers: u32, pub keyboards: u32, pub hubs: u32, pub failed: u32 }
+pub struct Stats { pub slots: u32, pub hid: u32, pub pointers: u32, pub keyboards: u32, pub hubs: u32, pub disks: u32, pub failed: u32 }
 
 // Speeds as the slot context and PORTSC encode them.
 const FULL: u32 = 1; const LOW: u32 = 2; const HIGH: u32 = 3; const SUPER: u32 = 4;
@@ -106,7 +144,8 @@ fn speed_name(s: u32) -> &'static str { match s { FULL => "full", LOW => "low", 
 impl Usb {
     pub fn new(x: Xhci) -> Usb {
         Usb { x, dev: [Device::empty(); MAX_DEVICES], slot_dev: [0; 256], root_pending: 0, sent_keys: 0,
-            sent_modifiers: 0, stats: Stats::default() }
+            sent_modifiers: 0, stats: Stats::default(), bounce: (0, 0), disks: [0; sex_pdx::usb_disk::MAX_DISKS as usize],
+            generation: 0, changed: false }
     }
 
     fn ctx(&self, base: u64, index: u64) -> *mut u32 { (base + index * self.x.csz) as *mut u32 }
@@ -221,13 +260,30 @@ impl Usb {
         let (mut iface, mut iclass, mut isub, mut iproto, mut alt, mut report_len) = (0u8, 0u8, 0u8, 0u8, 0u8, 0u16);
         let mut at = 0usize;
         let config_value = if cfg.len() > 5 { cfg[5] } else { 1 };
+        // Mass storage: (interface, (IN address, mps, burst), (OUT address, mps, burst)).
+        let mut msc: Option<(u8, (u8, u16, u8), (u8, u16, u8))> = None;
+        let mut last_bulk: Option<bool> = None;
         while at + 2 <= cfg.len() {
             let len = cfg[at] as usize;
             if len < 2 || at + len > cfg.len() { break; }
             match cfg[at + 1] {
                 4 if len >= 9 => { iface = cfg[at + 2]; alt = cfg[at + 3]; iclass = cfg[at + 5]; isub = cfg[at + 6]; iproto = cfg[at + 7]; report_len = 0; }
                 0x21 if len >= 9 => { report_len = u16::from_le_bytes([cfg[at + 7], cfg[at + 8]]); }
+                // SuperSpeed companion: the burst of the endpoint just before it.
+                0x30 if len >= 3 => {
+                    if let (Some(input), Some(m)) = (last_bulk, msc.as_mut()) {
+                        if input { m.1 .2 = cfg[at + 2]; } else { m.2 .2 = cfg[at + 2]; }
+                    }
+                }
+                5 if len >= 7 && alt == 0 && iclass == 8 && isub == 6 && iproto == 0x50 && cfg[at + 3] & 3 == 2 => {
+                    let (addr, mps) = (cfg[at + 2], u16::from_le_bytes([cfg[at + 4], cfg[at + 5]]));
+                    let m = msc.get_or_insert((iface, (0, 0, 0), (0, 0, 0)));
+                    if m.0 == iface {
+                        if addr & 0x80 != 0 { m.1 = (addr, mps, 0); last_bulk = Some(true); } else { m.2 = (addr, mps, 0); last_bulk = Some(false); }
+                    }
+                }
                 5 if len >= 7 && alt == 0 => {
+                    last_bulk = None;
                     let (addr, attr) = (cfg[at + 2], cfg[at + 3]);
                     let mps = u16::from_le_bytes([cfg[at + 4], cfg[at + 5]]);
                     let interval = cfg[at + 6];
@@ -243,6 +299,8 @@ impl Usb {
         }
         let _ = protocol;
         if picks.iter().flatten().any(|p| p.hub) { picks.iter_mut().for_each(|p| if p.as_ref().is_some_and(|p| !p.hub) { *p = None; }); }
+        let msc = msc.filter(|m| m.1 .0 != 0 && m.2 .0 != 0);
+        if msc.is_some() { picks = [None, None, None]; }
 
         // Configure Endpoint for each picked interrupt endpoint.
         let mut add = 1u32;
@@ -262,12 +320,31 @@ impl Usb {
             add |= 1 << dci;
             last_dci = last_dci.max(dci);
         }
+        if let Some((iface, inp, out)) = msc {
+            let (in_dci, out_dci) = ((inp.0 & 0xf) as u32 * 2 + 1, (out.0 & 0xf) as u32 * 2);
+            let mut in_ring = Ring::empty();
+            in_ring.init(mem.rings[0].0, mem.rings[0].1, 256);
+            let mut out_ring = Ring::empty();
+            out_ring.init(mem.rings[1].0, mem.rings[1].1, 256);
+            self.endpoint_context_burst(i, in_dci, 6, inp.1 & 0x7ff, inp.2, in_ring.dequeue_pointer());
+            self.endpoint_context_burst(i, out_dci, 2, out.1 & 0x7ff, out.2, out_ring.dequeue_pointer());
+            self.dev[i].storage = Storage { active: true, iface, in_ep: inp.0, out_ep: out.0, in_dci, out_dci, in_ring, out_ring,
+                io: mem.reports[0], ..Storage::empty() };
+            add |= (1 << in_dci) | (1 << out_dci);
+            last_dci = last_dci.max(in_dci).max(out_dci);
+        }
         if add != 1 {
             self.input_flags(i, add);
             self.slot_context(i, last_dci);
             self.x.command_ok(mem.in_ctx.0 as u32, (mem.in_ctx.0 >> 32) as u32, 0, (trb::CONFIGURE_ENDPOINT << 10) | (slot << 24))?;
         }
         self.set(i, 0x00, 9, config_value as u16, 0)?;
+        if self.dev[i].storage.active {
+            if let Err(e) = self.start_storage(i) {
+                log!("[sexusb.storage.fail] slot={} reason={:?}", slot, e);
+                self.dev[i].storage.active = false;
+            }
+        }
 
         for k in 0..MAX_INTR {
             let Some(p) = &picks[k] else { continue };
@@ -323,6 +400,18 @@ impl Usb {
             core::ptr::write_volatile(e.add(2), deq as u32);
             core::ptr::write_volatile(e.add(3), (deq >> 32) as u32);
             core::ptr::write_volatile(e.add(4), avg | (esit << 16));
+        }
+    }
+
+    fn endpoint_context_burst(&self, i: usize, dci: u32, kind: u32, mps: u16, burst: u8, deq: u64) {
+        let m = self.dev[i].mem.unwrap();
+        let e = self.ctx(m.in_ctx.1, 1 + dci as u64);
+        unsafe {
+            core::ptr::write_volatile(e, 0);
+            core::ptr::write_volatile(e.add(1), (3 << 1) | (kind << 3) | ((burst as u32) << 8) | ((mps as u32) << 16));
+            core::ptr::write_volatile(e.add(2), deq as u32);
+            core::ptr::write_volatile(e.add(3), (deq >> 32) as u32);
+            core::ptr::write_volatile(e.add(4), 3072);
         }
     }
 
@@ -476,6 +565,14 @@ impl Usb {
             e.active = false;
         }
         if keys_changed { self.send_keys(); }
+        if self.dev[i].storage.active {
+            let disk = self.dev[i].storage.disk as usize;
+            if self.disks[disk] == i as u8 + 1 { self.disks[disk] = 0; }
+            self.dev[i].storage.active = false;
+            self.generation += 1;
+            self.changed = true;
+            log!("[sexusb.storage.gone] disk={} generation={}", disk, self.generation);
+        }
         if slot != 0 {
             let _ = self.x.command(0, 0, 0, (trb::DISABLE_SLOT << 10) | (slot << 24));
             unsafe { core::ptr::write_volatile((self.x.dcbaa + slot as u64 * 8) as *mut u64, 0); }
@@ -653,4 +750,206 @@ fn boot_mouse_layout() -> PointerLayout {
         x: Field { bit: 8, size: 8, signed: true, min: -127, max: 127 },
         y: Field { bit: 16, size: 8, signed: true, min: -127, max: 127 },
         wheel: Field { bit: 0, size: 0, signed: true, min: 0, max: 0 }, absolute: false }
+}
+
+// ── Mass storage: bulk-only transport and the SCSI commands a disk needs ──────────
+use sex_pdx::usb_disk as ud;
+
+#[derive(Debug)]
+enum Scsi { Usb(Failure), Check, Phase }
+impl From<Failure> for Scsi { fn from(f: Failure) -> Self { Scsi::Usb(f) } }
+
+impl Usb {
+    fn start_storage(&mut self, i: usize) -> Result<(), Scsi> {
+        if self.bounce.0 == 0 { self.bounce = page(&mut self.x.pool, BOUNCE / xhci::PAGE)?; }
+        let st = self.dev[i].storage;
+        let slot = self.dev[i].slot;
+        // INQUIRY: a direct-access device, and its names.
+        let got = self.scsi(i, &[0x12, 0, 0, 0, 36, 0], true, 36)?;
+        let b = self.bounce.1;
+        let inq = unsafe { core::slice::from_raw_parts(b as *const u8, 36) };
+        if got < 5 || inq[0] & 0x1f != 0 { log!("[sexusb.storage.skip] slot={} type={:#x}", slot, inq[0] & 0x1f); return Ok(()); }
+        let mut name = [0u8; 40];
+        let mut n = 0;
+        for &c in inq[8..16].iter().chain(b" ".iter()).chain(inq[16..32].iter()) {
+            if n < name.len() && (0x20..0x7f).contains(&c) && !(c == b' ' && n > 0 && name[n - 1] == b' ') { name[n] = c; n += 1; }
+        }
+        while n > 0 && name[n - 1] == b' ' { n -= 1; }
+        // TEST UNIT READY until the medium is ready (sticks report a reset first).
+        let mut ready = false;
+        for _ in 0..30 {
+            match self.scsi(i, &[0, 0, 0, 0, 0, 0], false, 0) {
+                Ok(_) => { ready = true; break; }
+                Err(Scsi::Check) => { let _ = self.scsi(i, &[0x03, 0, 0, 0, 18, 0], true, 18); let _ = sex_pdx::sys_wait_self_ticks(5); }
+                Err(e) => return Err(e),
+            }
+        }
+        if !ready { log!("[sexusb.storage.no_medium] slot={}", slot); return Ok(()); }
+        self.scsi(i, &[0x25, 0, 0, 0, 0, 0, 0, 0, 0, 0], true, 8)?;
+        let cap = unsafe { core::slice::from_raw_parts(b as *const u8, 32) };
+        let mut last = u32::from_be_bytes([cap[0], cap[1], cap[2], cap[3]]) as u64;
+        let mut block = u32::from_be_bytes([cap[4], cap[5], cap[6], cap[7]]);
+        if last == 0xffff_ffff {
+            self.scsi(i, &[0x9E, 0x10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 32, 0, 0], true, 32)?;
+            let cap = unsafe { core::slice::from_raw_parts(b as *const u8, 32) };
+            last = u64::from_be_bytes(cap[0..8].try_into().unwrap());
+            block = u32::from_be_bytes([cap[8], cap[9], cap[10], cap[11]]);
+        }
+        if !(512..=4096).contains(&block) || !block.is_power_of_two() {
+            log!("[sexusb.storage.skip] slot={} block={} reason=block_size", slot, block);
+            return Ok(());
+        }
+        // MODE SENSE(6): the write-protect switch.
+        let read_only = match self.scsi(i, &[0x1A, 0, 0x3F, 0, 4, 0], true, 4) {
+            Ok(n) if n >= 3 => (unsafe { core::ptr::read_volatile((b + 2) as *const u8) } & 0x80) != 0,
+            _ => false,
+        };
+        let Some(disk) = self.disks.iter().position(|d| *d == 0) else { log!("[sexusb.storage.skip] slot={} reason=disks_full", slot); return Ok(()); };
+        self.disks[disk] = i as u8 + 1;
+        let s = &mut self.dev[i].storage;
+        s.block = block; s.blocks = last + 1; s.disk = disk as u8; s.read_only = read_only; s.name = name; s.name_len = n;
+        self.generation += 1;
+        self.changed = true;
+        self.stats.disks += 1;
+        log!("[sexusb.storage] slot={} disk={} name=\"{}\" block={} sectors={} mib={} read_only={} iface={}", slot, disk,
+            core::str::from_utf8(&name[..n]).unwrap_or("?"), block, (last + 1) * block as u64 / 512,
+            (last + 1) * block as u64 / (1024 * 1024), read_only as u8, st.iface);
+        Ok(())
+    }
+
+    /// One SCSI command: CBW out, data through the bounce buffer, CSW in.
+    fn scsi(&mut self, i: usize, cdb: &[u8], input: bool, len: u32) -> Result<u32, Scsi> {
+        let slot = self.dev[i].slot;
+        let st = &mut self.dev[i].storage;
+        st.tag = st.tag.wrapping_add(1);
+        let tag = st.tag;
+        let (io_phys, io) = st.io;
+        unsafe {
+            core::ptr::write_bytes(io as *mut u8, 0, 64);
+            core::ptr::write_unaligned(io as *mut u32, 0x4342_5355);
+            core::ptr::write_unaligned((io + 4) as *mut u32, tag);
+            core::ptr::write_unaligned((io + 8) as *mut u32, len);
+            core::ptr::write_volatile((io + 12) as *mut u8, if input { 0x80 } else { 0 });
+            core::ptr::write_volatile((io + 14) as *mut u8, cdb.len() as u8);
+            core::ptr::copy_nonoverlapping(cdb.as_ptr(), (io + 15) as *mut u8, cdb.len().min(16));
+        }
+        let (in_dci, out_dci, in_ep, out_ep) = (st.in_dci, st.out_dci, st.in_ep, st.out_ep);
+        let mut out = st.out_ring;
+        let r = self.x.bulk(slot, out_dci, &mut out, io_phys, 31, 600);
+        self.dev[i].storage.out_ring = out;
+        if r.is_err() { self.reset_recovery(i); return Err(Scsi::Phase); }
+        let mut moved = 0;
+        if len > 0 {
+            let (dci, ep) = if input { (in_dci, in_ep) } else { (out_dci, out_ep) };
+            let mut ring = if input { self.dev[i].storage.in_ring } else { self.dev[i].storage.out_ring };
+            let r = self.x.bulk(slot, dci, &mut ring, self.bounce.0, len, 3000);
+            if input { self.dev[i].storage.in_ring = ring; } else { self.dev[i].storage.out_ring = ring; }
+            match r {
+                Ok(n) => moved = n,
+                Err(Failure::Code(6)) => { let _ = self.set(i, 0x02, 1, 0, ep as u16); }
+                Err(e) => { self.reset_recovery(i); return Err(Scsi::Usb(e)); }
+            }
+        }
+        // CSW, once more after clearing a stall.
+        let mut csw_ok = false;
+        for _ in 0..2 {
+            let mut ring = self.dev[i].storage.in_ring;
+            let r = self.x.bulk(slot, in_dci, &mut ring, io_phys + 64, 13, 3000);
+            self.dev[i].storage.in_ring = ring;
+            match r {
+                Ok(13) => { csw_ok = true; break; }
+                Err(Failure::Code(6)) => { let _ = self.set(i, 0x02, 1, 0, in_ep as u16); }
+                _ => break,
+            }
+        }
+        let (sig, ctag, status) = unsafe {
+            (core::ptr::read_unaligned((io + 64) as *const u32), core::ptr::read_unaligned((io + 68) as *const u32),
+             core::ptr::read_volatile((io + 76) as *const u8))
+        };
+        if !csw_ok || sig != 0x5342_5355 || ctag != tag || status == 2 { self.reset_recovery(i); return Err(Scsi::Phase); }
+        if status == 1 { return Err(Scsi::Check); }
+        Ok(moved)
+    }
+
+    fn reset_recovery(&mut self, i: usize) {
+        let st = self.dev[i].storage;
+        let _ = self.set(i, 0x21, 0xFF, 0, st.iface as u16);
+        let _ = self.set(i, 0x02, 1, 0, st.in_ep as u16);
+        let _ = self.set(i, 0x02, 1, 0, st.out_ep as u16);
+    }
+
+    fn rw10(&mut self, i: usize, write: bool, lba: u64, count: u32) -> Result<u32, Scsi> {
+        let bytes = count * self.dev[i].storage.block;
+        let op = if write { 0x2A } else { 0x28 };
+        if lba + count as u64 > 0xffff_ffff {
+            let mut c = [0u8; 16];
+            c[0] = if write { 0x8A } else { 0x88 };
+            c[2..10].copy_from_slice(&lba.to_be_bytes());
+            c[10..14].copy_from_slice(&count.to_be_bytes());
+            return self.scsi(i, &c, !write, bytes);
+        }
+        let l = (lba as u32).to_be_bytes();
+        let n = (count as u16).to_be_bytes();
+        self.scsi(i, &[op, 0, l[0], l[1], l[2], l[3], 0, n[0], n[1], 0], !write, bytes)
+    }
+
+    /// Move `sectors` 512-byte sectors at `lba` between the disk and `region`.
+    fn disk_io(&mut self, disk: u64, write: bool, lba: u64, sectors: u64, region: u64) -> u64 {
+        let Some(i) = self.disks.get(disk as usize).and_then(|d| (*d as usize).checked_sub(1)) else { return ud::GONE };
+        if sectors == 0 || sectors > ud::MAX_SECTORS { return ud::INVALID; }
+        let st = self.dev[i].storage;
+        if write && st.read_only { return ud::READ_ONLY; }
+        let bs = st.block as u64;
+        let (start, end) = (lba * 512, (lba + sectors) * 512);
+        if end > st.blocks * bs { return ud::INVALID; }
+        let first = start / bs;
+        let count = (end + bs - 1) / bs - first;
+        let skip = (start - first * bs) as usize;
+        let len = (sectors * 512) as usize;
+        let b = self.bounce.1;
+        let aligned = skip == 0 && len as u64 == count * bs;
+        let result = if !write {
+            self.rw10(i, false, first, count as u32).map(|_| unsafe {
+                core::ptr::copy_nonoverlapping((b as *const u8).add(skip), region as *mut u8, len);
+            })
+        } else {
+            // Larger blocks than a sector: read the blocks around the sectors first.
+            let pre = if aligned { Ok(0) } else { self.rw10(i, false, first, count as u32) };
+            pre.and_then(|_| {
+                unsafe { core::ptr::copy_nonoverlapping(region as *const u8, (b as *mut u8).add(skip), len); }
+                self.rw10(i, true, first, count as u32).map(|_| ())
+            })
+        };
+        match result {
+            Ok(()) => ud::OK,
+            Err(e) => { log!("[sexusb.storage.io.fail] disk={} write={} lba={} sectors={} reason={:?}", disk, write as u8, lba, sectors, e); ud::IO }
+        }
+    }
+
+    /// One request from Files.
+    pub fn disk_request(&mut self, op: u64, a0: u64, a1: u64, a2: u64, region: u64) -> u64 {
+        match op {
+            ud::OP_DISKS => {
+                let mask = self.disks.iter().enumerate().fold(0u64, |m, (k, d)| if *d != 0 { m | 1 << k } else { m });
+                (self.generation << 8) | mask
+            }
+            ud::OP_INFO => {
+                let Some(i) = self.disks.get(a0 as usize).and_then(|d| (*d as usize).checked_sub(1)) else { return 0 };
+                let st = self.dev[i].storage;
+                unsafe {
+                    core::ptr::copy_nonoverlapping(st.name.as_ptr(), region as *mut u8, st.name_len);
+                    core::ptr::write_volatile((region + st.name_len as u64) as *mut u8, 0);
+                }
+                (st.blocks * st.block as u64 / 512) | if st.read_only { ud::READ_ONLY_FLAG } else { 0 }
+            }
+            ud::OP_READ => self.disk_io(a0, false, a1, a2, region),
+            ud::OP_WRITE => self.disk_io(a0, true, a1, a2, region),
+            ud::OP_SYNC => {
+                let Some(i) = self.disks.get(a0 as usize).and_then(|d| (*d as usize).checked_sub(1)) else { return ud::GONE };
+                // SYNCHRONIZE CACHE(10); devices without a cache refuse it, which is fine.
+                match self.scsi(i, &[0x35, 0, 0, 0, 0, 0, 0, 0, 0, 0], false, 0) { Err(Scsi::Usb(_)) | Err(Scsi::Phase) => ud::IO, _ => ud::OK }
+            }
+            _ => ud::INVALID,
+        }
+    }
 }

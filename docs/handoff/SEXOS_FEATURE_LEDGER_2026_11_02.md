@@ -3373,3 +3373,31 @@ Plan: `docs/handoff/NVIDIA_GPU_PLAN_2026_11_09.md` (stages N1-N6).
 - **AML work budget**: `acpi::with_aml(budget, f)` runs firmware AML quarantined with a limit on register accesses and stalls, so a firmware loop cannot hang the boot.
 - **Gate** `scripts/dgpu_power_gate.py` in CI: QEMU root port + display controller + SSDT power resource (`tests/acpi/dgpu_gate_ssdt.asl`); checks the method order off/on/off on the debug console, the restored header, the boot GPU kept and the desktop up.
 - ABI: none.
+
+## USB sticks in Files (mass storage, 2026-11-10)
+
+- **What runs now.** Plugging in a USB stick or USB disk mounts it under `/media` by its
+  label (FAT12/16/32, exFAT, ext2/3/4 as sex-volumes reads them; GPT and MBR partitions),
+  and Files, Spindle and the open picker use it like any other disk: list, read, write,
+  `df`, `unmount` ("Safe to remove."). Pulling the stick out drops its mount; plugging it
+  back in mounts it again. A stick unmounted while still plugged in stays unmounted until
+  it is replugged. USB 2 and USB 3 sticks, blocks of 512 bytes or more, disks over 2 TiB
+  (16-byte commands); writes to a stick with its write-protect switch on are refused.
+- **Design.** SexUSB speaks bulk-only transport and SCSI (INQUIRY, TEST UNIT READY with
+  sense retries, READ CAPACITY 10/16, MODE SENSE for write protect, READ/WRITE 10/16,
+  SYNCHRONIZE CACHE, reset recovery on stalls). Bulk transfers split at page edges into
+  chained TRBs. Files owns the mounts: SexUSB tells Files when its disks change, and Files
+  asks for disks, their size and name, and reads and writes through a 64 KiB shared region
+  (`UsbDisk` implements `sex_volumes::Disk`). Only Files may ask; anyone else is refused.
+- **ABI.** New `sex_pdx::usb_disk`: Domain caps between Files and SexUSB at slot 1000, a
+  64 KiB region (id 0x4400) at slot 1001, ops 0x5D0 DISKS, 0x5D1 INFO, 0x5D2 READ,
+  0x5D3 WRITE, 0x5D4 SYNC, 0x5D8 CHANGED, statuses OK/GONE/IO/INVALID/READ_ONLY.
+  `abi_version_hash` recomputed.
+- **Limits.** One request at a time (no UAS, no queueing): about USB 2 speed. One LUN per
+  stick. Card readers with several slots show only the first. The stick must be unmounted
+  before pulling it out to be sure writes are on it (Files has no write cache for it, so a
+  finished write is already on the stick).
+- **Gates.** New `scripts/usb_storage_gate.py`: plug in a FAT stick after boot, list, read,
+  write, unmount, unplug, replug and read back, unplug while mounted; mtools reads the file
+  from the stick image afterwards. Plus usb_path_gate, program_files_gate, master runtime
+  gate, host unittests, architectural truth.

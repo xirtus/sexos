@@ -24,6 +24,8 @@ const MOUNTS_MAX: usize = 16;
 enum Source {
     /// A file of the SexOS filesystem, by inode, `sectors` long.
     Image { id: u64, sectors: u64 },
+    /// A USB stick or disk, by SexUSB's disk number.
+    Usb { disk: u64, sectors: u64 },
 }
 struct Mount { name: String, source: Source, start: u64, len: u64, volume: Box<dyn Volume> }
 static mut MOUNTS: Vec<Mount> = Vec::new();
@@ -63,10 +65,116 @@ impl sv::Disk for ImageDisk<'_> {
 
 /// Runs `op` with a mount's volume and its disk.
 fn with<T>(fs: &mut Fs<'static, FsDisk>, m: &mut Mount, op: impl FnOnce(&mut dyn Volume, &mut dyn sv::Disk) -> sv::Result<T>) -> sv::Result<T> {
-    let Source::Image { id, sectors } = m.source;
-    let mut image = ImageDisk { fs, id, sectors };
-    let mut slice = sv::Slice { disk: &mut image, start: m.start, len: m.len };
-    op(m.volume.as_mut(), &mut slice)
+    match m.source {
+        Source::Image { id, sectors } => {
+            let mut image = ImageDisk { fs, id, sectors };
+            let mut slice = sv::Slice { disk: &mut image, start: m.start, len: m.len };
+            op(m.volume.as_mut(), &mut slice)
+        }
+        Source::Usb { disk, sectors } => {
+            let mut usb = UsbDisk { disk, sectors };
+            let mut slice = sv::Slice { disk: &mut usb, start: m.start, len: m.len };
+            op(m.volume.as_mut(), &mut slice)
+        }
+    }
+}
+
+// ── USB sticks and disks, through SexUSB (`sex_pdx::usb_disk`) ───────────────────
+use sex_pdx::usb_disk as ud;
+
+/// SexUSB's domain, known from the shared region BOOT gave both of us.
+fn usb_pd() -> Option<u32> { sex_pdx::memory_region_info(ud::BUFFER_SLOT).ok().and_then(|i| i.peer_pd) }
+fn usb_region() -> Option<&'static mut [u8]> {
+    use sex_pdx::memory_region::{QUERY_VIEW, READ, WRITE};
+    let v = sex_pdx::memory_region_full_view(ud::BUFFER_SLOT, QUERY_VIEW | READ | WRITE).ok()?;
+    Some(unsafe { core::slice::from_raw_parts_mut(v.virtual_address as *mut u8, v.length as usize) })
+}
+/// Ask SexUSB and wait for its answer; other requests that arrive meanwhile wait their turn.
+fn usb_call(op: u64, a0: u64, a1: u64, a2: u64) -> Option<u64> {
+    let usb = usb_pd()?;
+    let (status, _) = sex_pdx::pdx_call(ud::SLOT, op, a0, a1, a2);
+    if status != 0 { return None; }
+    for _ in 0..2_000_000u32 {
+        let msg = sex_pdx::pdx_listen_raw(0);
+        if msg.type_id == 0x1 && msg.caller_pd == usb { return Some(msg.arg0); }
+        if msg.type_id != 0 && msg.type_id != 1 {
+            crate::pdx::defer_stash(msg.type_id, msg.caller_pd, msg.arg0, msg.arg1, msg.arg2);
+        }
+    }
+    None
+}
+/// A USB disk: sectors through the shared region, up to `MAX_SECTORS` a request.
+struct UsbDisk { disk: u64, sectors: u64 }
+impl sv::Disk for UsbDisk {
+    fn sectors(&self) -> u64 { self.sectors }
+    fn read(&mut self, lba: u64, buf: &mut [u8]) -> sv::Result<()> {
+        let region = usb_region().ok_or(sv::Error::Io)?;
+        for (k, chunk) in buf.chunks_mut((ud::MAX_SECTORS * 512) as usize).enumerate() {
+            let at = lba + k as u64 * ud::MAX_SECTORS;
+            let n = (chunk.len() as u64).div_ceil(512);
+            if usb_call(ud::OP_READ, self.disk, at, n) != Some(ud::OK) { return Err(sv::Error::Io); }
+            chunk.copy_from_slice(&region[..chunk.len()]);
+        }
+        Ok(())
+    }
+    fn write(&mut self, lba: u64, buf: &[u8]) -> sv::Result<()> {
+        let region = usb_region().ok_or(sv::Error::Io)?;
+        for (k, chunk) in buf.chunks((ud::MAX_SECTORS * 512) as usize).enumerate() {
+            let at = lba + k as u64 * ud::MAX_SECTORS;
+            let n = (chunk.len() as u64).div_ceil(512);
+            region[..chunk.len()].copy_from_slice(chunk);
+            match usb_call(ud::OP_WRITE, self.disk, at, n) {
+                Some(ud::OK) => {}
+                Some(ud::READ_ONLY) => return Err(sv::Error::ReadOnly),
+                _ => return Err(sv::Error::Io),
+            }
+        }
+        Ok(())
+    }
+    fn flush(&mut self) -> sv::Result<()> {
+        if usb_call(ud::OP_SYNC, self.disk, 0, 0) == Some(ud::OK) { Ok(()) } else { Err(sv::Error::Io) }
+    }
+}
+
+/// USB disks the person unmounted while still plugged in: not mounted again until they
+/// are pulled out and come back.
+static mut EJECTED: u64 = 0;
+
+/// SexUSB said its disks changed: mount the new ones under `/media`, forget the gone ones.
+pub fn usb_changed(caller: u32) {
+    if Some(caller) != usb_pd() { sex_pdx::serial_record!("[files.media.usb.refused] caller={}", caller); return; }
+    let Some(answer) = usb_call(ud::OP_DISKS, 0, 0, 0) else { sex_pdx::serial_record!("[files.media.usb.unanswered]"); return };
+    sex_pdx::serial_record!("[files.media.usb.disks] generation={} mask={:#x}", answer >> 8, answer & 0xff);
+    let present = answer & 0xff;
+    unsafe { EJECTED &= present; }
+    // A stick pulled out: nothing can be written back any more.
+    mounts().retain(|m| match m.source {
+        Source::Usb { disk, .. } if present & (1 << disk) == 0 => {
+            sex_pdx::serial_record!("[files.media.usb.gone] name={} disk={}", m.name, disk);
+            false
+        }
+        _ => true,
+    });
+    for disk in 0..ud::MAX_DISKS {
+        if present & (1 << disk) == 0 || unsafe { EJECTED } & (1 << disk) != 0 || mounts().iter().any(|m| matches!(m.source, Source::Usb { disk: d, .. } if d == disk)) { continue; }
+        let Some(info) = usb_call(ud::OP_INFO, disk, 0, 0) else { continue };
+        let sectors = info & !ud::READ_ONLY_FLAG;
+        if sectors == 0 { continue; }
+        let product = usb_region().map(|r| {
+            let n = r.iter().take(40).position(|b| *b == 0).unwrap_or(0);
+            String::from_utf8_lossy(&r[..n]).into_owned()
+        }).unwrap_or_default();
+        let mut usb = UsbDisk { disk, sectors };
+        let found = match sv::scan(&mut usb) { Ok(f) => f, Err(e) => { sex_pdx::serial_record!("[files.media.usb.unreadable] disk={} error={:?}", disk, e); continue } };
+        if found.is_empty() { sex_pdx::serial_record!("[files.media.usb.unknown] disk={} product={}", disk, product); }
+        for (part, f) in found.into_iter().enumerate() {
+            if mounts().len() >= MOUNTS_MAX { break; }
+            let name = mount_name(&f.volume.label(), product.as_bytes(), part);
+            sex_pdx::serial_record!("[files.media.mounted] name={} format={} sectors={} start={} read_only={} source=usb disk={}",
+                name, f.volume.format().name(), f.len, f.start, f.volume.read_only() as u8, disk);
+            mounts().push(Mount { name, source: Source::Usb { disk, sectors }, start: f.start, len: f.len, volume: f.volume });
+        }
+    }
 }
 
 pub fn status(e: sv::Error) -> u8 {
@@ -222,6 +330,9 @@ pub fn unmount(fs: &mut Fs<'static, FsDisk>, path: &[u8]) -> Result<u32, u8> {
     if !inner.iter().all(|b| *b == b'/') { return Err(w::INVALID); }
     with(fs, &mut mounts()[index], |v, d| v.sync(d)).map_err(status)?;
     let m = mounts().remove(index);
+    if let Source::Usb { disk, .. } = m.source {
+        if !mounts().iter().any(|o| matches!(o.source, Source::Usb { disk: d, .. } if d == disk)) { unsafe { EJECTED |= 1 << disk; } }
+    }
     sex_pdx::serial_record!("[files.media.unmounted] name={}", m.name);
     Ok(0)
 }
