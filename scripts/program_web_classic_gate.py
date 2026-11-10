@@ -63,15 +63,15 @@ def main():
    time.sleep(.04)
   q.key('ret')
  def close(start):
-  ready=g['wait'](r'\[web.ready\] target=(\d+) task=(\d+)',start,120);target,task=ready[1],ready[2]
-  surface=g['wait'](rf'\[shell.program.launch\] target={target} task={task} surface=(\d+)',start,60)[1]
-  g['focus'](int(surface));q.key('f11');g['wait'](rf'\[web.closed\] target={target} task={task}',start,60)
+  ready=g['wait'](r'\[web.ready\] target=(\d+) task=(\d+)\r?\n',start,120);target,task=ready[1],ready[2]
+  surface=g['wait'](rf'\[shell.program.launch\] target={target} task={task} surface=(\d+)\r?\n',start,60)[1]
+  g['focus'](int(surface));q.key('f11');g['wait'](rf'\[web.closed\] target={target} task={task}\r?\n',start,60)
   g['wait'](rf'\[app.private.retired\] target={target} task={task} ',start,120)
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);start=len(t());command(f'fetch {abase}/web /bin/web')
   saved=g['wait'](r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',start,240);assert saved[1].startswith('Saved'),saved[1]
   start=len(t());command(f'run +net web {abase}/page')
-  g['wait'](r'\[web.console\] level=0 classic cases done',start,300)
+  g['wait'](r'\[web.console\] level=0 classic cases done\r?\n',start,300)
   for mark in ('classic body good','classic loaded 1 true','fetch blocked','html blocked','nosniff blocked','corp blocked','cors blocked','inline intrinsic','same error callback true true','opaque error callback true','error event same error true','error event Script error. true','same error resource loaded','opaque error resource loaded'):
    assert '[web.console] level=0 '+mark in t()[start:],mark
   assert '[web.console] level=0 FAIL' not in t()[start:]
@@ -80,7 +80,7 @@ def main():
   assert all(r['referer']==abase+'/' for r in good),good
   assert not any(r['path'] in ('/removed.js','/stale.js','/changed.js') for r in seen),seen
   close(start);start=len(t());command(f'run +net web {abase}/cancel')
-  g['wait'](r'\[web.console\] level=0 navigation clean undefined',start,300)
+  g['wait'](r'\[web.console\] level=0 navigation clean undefined\r?\n',start,300)
   assert not any(r['path']=='/old-page.js' for r in seen),seen
   close(start)
   proof=dict(ok=True,iso_sha256=hashlib.sha256(a.iso.read_bytes()).hexdigest(),program_sha256=hashlib.sha256(a.program.read_bytes()).hexdigest(),requests=seen)
