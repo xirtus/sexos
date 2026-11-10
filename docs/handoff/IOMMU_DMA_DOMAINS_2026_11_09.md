@@ -122,9 +122,13 @@ IO_PAGE_FAULT events, which `[iommu.fault]` shows with reason `amd_page_not_pres
 ## What comes next
 
 - **Intel VMD / RST** ("RAID On", likely on the x17 R1): drives behind VMD do DMA with
-  the VMD endpoint's requester id. Follow-up agreed with the VMD thread (PR #84): a small
-  table in `kernel/src/vmd.rs` (child -> VMD endpoint) that `iommu.rs` asks at BOOT, so
-  the endpoint's context entry lands in the domain of the service driving those drives.
+  the VMD endpoint's requester id. Handled already, without waiting for the VMD driver
+  (PR #84) to share a table: a leased device that is not on the real PCI bus (legacy
+  config scan does not see it) is behind VMD, so the VMD endpoint (`sex_hwdb::is_vmd`)
+  joins that service's domain (`[iommu.device] ... vmd_endpoint=1`). One requester id
+  can sit in one domain only, so every drive behind one VMD must belong to one service
+  (sexdrive); a second claimant is logged as `[iommu.device.shared]`. Not testable in
+  QEMU (no VMD model); check the boot log on the x17 R1.
 - **More loans**: sexnet receive/transmit buffers straight into connection buffers, Bell
   playing from programs' sound rings, USB mass storage into Files. Each is a driver
   change only; the kernel side is done.

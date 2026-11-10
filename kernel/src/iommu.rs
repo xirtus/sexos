@@ -520,8 +520,12 @@ pub fn init_boot() {
     let format = vendor.format();
     let (leased, pools) = leases();
     let reserved = firmware.reserved();
-    let present: Vec<Bdf> = crate::hal::pci::enumerate_bus().iter().map(|d| Bdf::new(d.bus, d.dev, d.func)).collect();
+    let pci = crate::hal::pci::enumerate_bus();
+    let present: Vec<Bdf> = pci.iter().map(|d| Bdf::new(d.bus, d.dev, d.func)).collect();
     let max_bus = present.iter().map(|b| b.bus).max().unwrap_or(0);
+    let vmd: Vec<Bdf> = pci.iter()
+        .filter(|d| sex_hwdb::is_vmd(sex_hwdb::Id { vendor: d.vendor_id, device: d.device_id, class: d.class_id, subclass: d.subclass_id, prog_if: d.prog_if }))
+        .map(|d| Bdf::new(d.bus, d.dev, d.func)).collect();
     // Per service: its root, pool and reserved-memory tables, and the 64 leaf
     // tables (plus parents) of its 128 MiB window. Then context tables, the
     // firmware domains and the self-test.
@@ -555,7 +559,10 @@ pub fn init_boot() {
     // One domain per service with at least one translated device.
     for &(bdf, pd) in &leased {
         let (b, d, f) = fmt(bdf);
-        let Some(unit) = unit_index(&state.units, &firmware, bdf) else {
+        // A drive behind Intel VMD ("RAID On") is not on the real bus: its DMA
+        // arrives with the VMD endpoint's requester id, so that id joins the domain.
+        let behind_vmd = (!present.contains(&bdf)).then(|| vmd.first().copied()).flatten();
+        let Some(unit) = unit_index(&state.units, &firmware, bdf).or_else(|| unit_index(&state.units, &firmware, behind_vmd?)) else {
             serial_println!("[iommu.device] {:02x}:{:02x}.{} pd={} unit=none translation=off", b, d, f, pd);
             continue;
         };
@@ -587,12 +594,17 @@ pub fn init_boot() {
         }
         let Some(dom) = state.domains.iter().find(|x| x.pd == pd) else { continue };
         let (root, did) = (dom.table.root, dom.did);
-        for source in core::iter::once(bdf).chain(firmware.alias(bdf)) {
+        for (source, how) in [(Some(bdf), ""), (firmware.alias(bdf), " alias=1"), (behind_vmd, " vmd_endpoint=1")] {
+            let Some(source) = source else { continue };
+            if let Some(other) = state.devices.iter().find(|d| d.bdf == source) {
+                if other.pd != pd { let (b, d, f) = fmt(source); serial_println!("[iommu.device.shared] {:02x}:{:02x}.{} pd={} kept_pd={} reason=one_requester_id_one_domain", b, d, f, pd, other.pd); }
+                continue;
+            }
+            let unit = unit_index(&state.units, &firmware, source).unwrap_or(unit);
             assert!(state.units[unit].attach(&mut state.frames, source, Some((root, did)), levels), "IOMMU_CONTEXT");
             state.devices.push(Device { bdf: source, pd, unit });
             let (b, d, f) = fmt(source);
-            serial_println!("[iommu.device] {:02x}:{:02x}.{} pd={} did={} unit={} translation=domain{}", b, d, f, pd, did, unit,
-                if source == bdf { "" } else { " alias=1" });
+            serial_println!("[iommu.device] {:02x}:{:02x}.{} pd={} did={} unit={} translation=domain{}", b, d, f, pd, did, unit, how);
         }
     }
 
