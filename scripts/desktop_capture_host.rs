@@ -410,8 +410,10 @@ fn run_client(
                         }
                     }
                     fs::CREATE => {
-                        if files.insert(path, Vec::new()).is_some() {
+                        if files.contains_key(&path) {
                             status = fs::EXISTS
+                        } else {
+                            files.insert(path, Vec::new());
                         }
                     }
                     fs::WRITE => {
@@ -463,7 +465,10 @@ fn complete_stream_file_and_queue_retry() {
 #[test]
 fn short_write_never_reports_success() {
     let (bytes, sb) = run_client(true, false, false);
-    assert!(bytes.is_empty());
+    assert!(
+        !bytes.is_empty(),
+        "failed direct write retains its named partial"
+    );
     assert!(!sb.lines.iter().any(|s| s.starts_with(b"Screenshot saved")));
 }
 fn client_waiting_for_stat() -> (
@@ -588,7 +593,7 @@ fn file_create_error_invalidates_capture_and_never_saves() {
     assert!(!sb.lines.iter().any(|s| s.starts_with(b"Screenshot saved")));
 }
 #[test]
-fn revoked_frame_at_png_eof_never_reaches_rename() {
+fn revoked_frame_at_png_eof_never_reaches_sync() {
     let (mut client, mut display, mut sb, mut l, stat) = client_waiting_for_stat();
     client.receive(11, fs::reply(stat.seq, fs::NOT_FOUND, 0), &mut sb);
     client.step(&mut sb, true);
@@ -606,7 +611,7 @@ fn revoked_frame_at_png_eof_never_reaches_rename() {
     client.step(&mut sb, true);
     assert!(
         WORLD.with(|w| w.borrow().calls.is_empty()),
-        "EOF should stage rename on the next turn"
+        "EOF should stage sync on the next turn"
     );
     l.phase = surface_lifecycle::Phase::Prepared;
     display.reconcile(&l, 2);
@@ -614,7 +619,7 @@ fn revoked_frame_at_png_eof_never_reaches_rename() {
     client.step(&mut sb, true);
     assert!(
         WORLD.with(|w| w.borrow().calls.is_empty()),
-        "revoked frame reached file rename"
+        "revoked frame reached file sync"
     );
     assert!(!sb.lines.iter().any(|s| s.starts_with(b"Screenshot saved")));
 }
@@ -748,4 +753,40 @@ fn long_valid_capture_path_keeps_diagnostics_bounded() {
     path.extend_from_slice(b".png");
     client.start(&path, &mut sb);
     assert!(client.busy());
+}
+
+#[test]
+fn destination_created_after_stat_is_never_replaced() {
+    let (mut client, mut display, mut sb, l, stat) = client_waiting_for_stat();
+    client.receive(11, fs::reply(stat.seq, fs::NOT_FOUND, 0), &mut sb);
+    client.step(&mut sb, true);
+    let (_, _, a) = WORLD.with(|w| w.borrow_mut().calls.pop_front()).unwrap();
+    let create = fs::Request::decode(a[0], a[1], a[2]).unwrap();
+    assert_eq!(create.kind, fs::CREATE);
+    let path = WORLD.with(|w| {
+        let world = w.borrow();
+        unsafe {
+            std::slice::from_raw_parts(world.files.p as *const u8, create.path_len as usize)
+                .to_vec()
+        }
+    });
+    assert_eq!(
+        path, b"/cancel.png",
+        "CREATE must reserve the final pathname exclusively"
+    );
+    // Another Files client creates this final path after our NOT_FOUND result.
+    client.receive(11, fs::reply(create.seq, fs::EXISTS, 0), &mut sb);
+    client.step(&mut sb, true);
+    let (slot, _, a) = WORLD.with(|w| w.borrow_mut().calls.pop_front()).unwrap();
+    assert_eq!(
+        slot, SLOT_DISPLAY,
+        "collision must not issue WRITE or RENAME"
+    );
+    assert_eq!(a[0], screen_capture::RELEASE);
+    display.request(msg(12, 12, a[0], a[1] as u32), &l, 2, 2, 1);
+    let (caller, word) = WORLD.with(|w| w.borrow_mut().replies.pop_front()).unwrap();
+    client.receive(caller, word, &mut sb);
+    assert!(!client.busy());
+    assert!(!sb.lines.iter().any(|s| s.starts_with(b"Screenshot saved")));
+    erased();
 }

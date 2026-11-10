@@ -11,7 +11,6 @@ enum Phase {
     Stat,
     Create,
     Write,
-    Rename,
     Sync,
     Release,
     Fenced,
@@ -31,8 +30,6 @@ pub struct Capture {
     file_seq: u32,
     path: [u8; 512],
     path_len: usize,
-    temp: [u8; 544],
-    temp_len: usize,
     offset: u64,
     chunk: usize,
     lease: bool,
@@ -58,8 +55,6 @@ impl Capture {
             file_seq: 0x900000,
             path: [0; 512],
             path_len: 0,
-            temp: [0; 544],
-            temp_len: 0,
             offset: 0,
             chunk: 0,
             lease: false,
@@ -106,8 +101,8 @@ impl Capture {
             sb.push(b"Capture path is too long.");
             return;
         };
-        if n * 2 + 15 > f::PATH_BYTES {
-            sb.push(b"Capture path is too long for atomic rename.");
+        if n > f::PATH_BYTES {
+            sb.push(b"Capture path is too long.");
             return;
         }
         let Ok(bank) = sex_pdx::screen_capture_bank(false) else {
@@ -128,12 +123,6 @@ impl Capture {
         self.sequence = sequence;
         self.task = crate::INSTANCE_TASK.load(core::sync::atomic::Ordering::Acquire);
         self.path_len = n;
-        self.temp[..n].copy_from_slice(&self.path[..n]);
-        self.temp[n..n + 6].copy_from_slice(b".part-");
-        for i in 0..8 {
-            self.temp[n + 6 + i] = b"0123456789abcdef"[((sequence >> (28 - i * 4)) & 15) as usize];
-        }
-        self.temp_len = n + 14;
         self.started = sex_pdx::get_ticks();
         self.phase = Phase::Announce;
         self.pending = false;
@@ -165,7 +154,7 @@ impl Capture {
     }
     pub fn cancel(&mut self, sb: &mut Scrollback) {
         if self.busy() {
-            self.fail(sb, b"Capture cancelled. A .part file may remain.");
+            self.fail(sb, b"Capture cancelled. A partial PNG may remain.");
         }
     }
     fn file_region() -> Option<&'static mut [u8]> {
@@ -196,19 +185,8 @@ impl Capture {
     }
     fn file(&mut self, kind: u8, length: u64) -> Result<(), u64> {
         let region = Self::file_region().ok_or(sex_pdx::ERR_CAP_INVALID)?;
-        let n = if self.phase == Phase::Stat {
-            region[..self.path_len].copy_from_slice(&self.path[..self.path_len]);
-            self.path_len
-        } else if self.phase == Phase::Rename {
-            let n = self.temp_len + 1 + self.path_len;
-            region[..self.temp_len].copy_from_slice(&self.temp[..self.temp_len]);
-            region[self.temp_len] = 0;
-            region[self.temp_len + 1..n].copy_from_slice(&self.path[..self.path_len]);
-            n
-        } else {
-            region[..self.temp_len].copy_from_slice(&self.temp[..self.temp_len]);
-            self.temp_len
-        };
+        region[..self.path_len].copy_from_slice(&self.path[..self.path_len]);
+        let n = self.path_len;
         let sequence = (self.file_seq + 1) & 0xff_ffff;
         let r = f::Request {
             seq: sequence,
@@ -232,7 +210,7 @@ impl Capture {
         let now = sex_pdx::get_ticks();
         if matches!(
             self.phase,
-            Phase::Stat | Phase::Create | Phase::Write | Phase::Rename | Phase::Sync
+            Phase::Stat | Phase::Create | Phase::Write | Phase::Sync
         ) {
             if self
                 .header
@@ -318,14 +296,13 @@ impl Capture {
                             self.fail(sb, b"PNG stream ended at the wrong length.");
                             return true;
                         }
-                        self.phase = Phase::Rename;
+                        self.phase = Phase::Sync;
                         return false;
                     }
                     self.chunk = n;
                 }
                 self.file(f::WRITE, self.chunk as u64)
             }
-            Phase::Rename => self.file(f::RENAME, 0),
             Phase::Sync => self.file(f::SYNC, 0),
             Phase::Release => self.display(c::RELEASE),
             _ => return false,
@@ -402,7 +379,7 @@ impl Capture {
                 return true;
             }
             if status != f::OK {
-                self.fail(sb, b"Capture file write failed; a .part file may remain.");
+                self.fail(sb, b"Capture file write failed; a partial PNG may remain.");
                 return true;
             }
             match self.phase {
@@ -415,7 +392,6 @@ impl Capture {
                     self.offset += value as u64;
                     self.chunk = 0;
                 }
-                Phase::Rename => self.phase = Phase::Sync,
                 Phase::Sync => {
                     self.saved = true;
                     self.phase = Phase::Release;
@@ -481,7 +457,7 @@ impl Capture {
                     sb.push(b"Screenshot saved as PNG at native desktop resolution.");
                     sex_pdx::serial_record!("[spindle.capture.saved] task={} sequence={} epoch={} bytes={} path_prefix={} path_bytes={} synced=1 released=1",self.task,self.sequence,self.epoch,self.offset,core::str::from_utf8(&self.path[..self.path_len.min(72)]).unwrap_or("?"),self.path_len);
                 } else {
-                    sb.push(b"Capture ended without confirmed success; inspect any .part file.");
+                    sb.push(b"Capture ended without confirmed success; inspect the partial PNG.");
                 }
                 self.idle();
                 true

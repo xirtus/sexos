@@ -32,16 +32,18 @@ when their old owner retires.
 Spindle streams stored-DEFLATE PNG in 32 KiB turns; it has neither a second native
 frame nor a complete PNG buffer. Files' region has one owner throughout the job.
 Short writes and file errors abort. Cancellation revokes the frame promptly but
-keeps a pending Files request buffer fenced until its real reply. An existing
-output is preserved. New output is written to a named `.part-<sequence>` file,
-then renamed and synced; success requires the matching positive release ACK.
-A failed/cancelled operation may leave its named partial file.
+keeps a pending Files request buffer fenced until its real reply. The final path is
+created exclusively before writing, so a destination appearing after the initial
+STAT is refused without replacement or removal. PNG bytes stream directly into
+that named file, then sync; success requires the matching positive release ACK.
+A failed/cancelled operation may leave a partial PNG at the requested pathname.
+There is no atomic-rename claim.
 
 ## Recorded proof
 
 The clean shipping-code snapshot tested manually was
 `558b6d4b2019c842ef0ad165adaababdc450a344` (before the later short cancellation-hint
-copy and master #141 merge). ISO SHA256
+copy, master #141 merge and final-path exclusive-create correction). ISO SHA256
 `5946e0f4f196fd1a436463c7f0d6bfa878fc6315064122603f76a6a5c3020051`;
 native-AOT/FFmpeg Web SHA256
 `9f1351806ac2b6adc155acfcd2fc6cde1c9b61cb07ceb2378bbabcee33c4b875`;
@@ -66,7 +68,7 @@ Inputs were privately copied and hashed. The qualified local recipe used Homebre
 Clang 23.1.5, then Apple Clang 21.0.0 plus verified musl 1.2.5 headers for Chello;
 Web stayed byte-identical through that second stage. No sibling Rust cache changed.
 
-Twenty production-code host cases cover authority, geometry, publication failure,
+Twenty-one production-code host cases cover authority, geometry, publication failure,
 stale epochs/tasks, restart/retirement, timeout, complete scrub, provider ACK queue
 backpressure, queue retry, EOF revocation, Files buffer fencing and short writes.
 Four compiled negative controls are rejected. Independent CRC/zlib/RGB decoding
