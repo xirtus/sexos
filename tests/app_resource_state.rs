@@ -47,7 +47,7 @@ fn page(va:u64,leaf:u64,pa:u64)->PrivatePage{PrivatePage{va,leaf,expected:pa|5|(
  assert_eq!(grant.authorize(7,12,12,production::RETIRE),Err(production::DENIED));
 }
 #[test]fn activation_grant_binds_holder_logical_incarnation_and_both_tasks(){
- let g=ActivationGrant{holder:3,logical_app:9,incarnation:2,predecessor:9,predecessor_task:91,successor:16,successor_task:161};
+ let g=ActivationGrant{image_source:None,holder:3,logical_app:9,incarnation:2,predecessor:9,predecessor_task:91,successor:16,successor_task:161};
  assert_eq!(g.authorize(3,9,91,16,161,Incarnation::original(9),Incarnation{logical_app:9,number:2}),Ok(()));
  for (h,p,t,n,nt) in [(1,9,91,16,161),(3,12,91,16,161),(3,9,92,16,161),(3,9,91,17,161),(3,9,91,16,162),(3,9,91,9,161)]{
   assert_eq!(g.authorize(h,p,t,n,nt,Incarnation::original(9),Incarnation{logical_app:9,number:2}),Err(DENIED));
@@ -74,7 +74,7 @@ fn page(va:u64,leaf:u64,pa:u64)->PrivatePage{PrivatePage{va,leaf,expected:pa|5|(
 }
 #[test]fn activation_chain_binds_boot_family_ordinal_and_cannot_skip_or_wrap(){
  let old=Incarnation{logical_app:9,number:2};let new=old.next().unwrap();
- let g=ActivationGrant{holder:3,logical_app:9,incarnation:3,predecessor:16,predecessor_task:161,successor:18,successor_task:181};
+ let g=ActivationGrant{image_source:None,holder:3,logical_app:9,incarnation:3,predecessor:16,predecessor_task:161,successor:18,successor_task:181};
  assert_eq!(g.authorize(3,16,161,18,181,old,new),Ok(()));
  for (old,new) in [(Incarnation{logical_app:12,..old},new),(old,Incarnation{logical_app:12,..new}),
   (Incarnation{number:1,..old},new),(old,Incarnation{number:4,..new}),
@@ -87,4 +87,13 @@ fn page(va:u64,leaf:u64,pa:u64)->PrivatePage{PrivatePage{va,leaf,expected:pa|5|(
  }
  assert_eq!(Incarnation{logical_app:9,number:u32::MAX}.next(),None);
  assert_eq!(Incarnation::EMPTY.next(),None);
+}
+
+#[test]fn exact_boot_source_denies_prefix_suffix_and_single_byte_replacement(){
+ static APPROVED:&[u8]=b"one immutable boot source";
+ let source=unsafe{ImageSource::boot_private(APPROVED.as_ptr() as usize,APPROVED.len())};
+ assert!(source.matches(APPROVED));
+ assert!(!source.matches(&APPROVED[..APPROVED.len()-1]));
+ let mut longer=APPROVED.to_vec();longer.push(0);assert!(!source.matches(&longer));
+ for i in 0..APPROVED.len(){let mut changed=APPROVED.to_vec();changed[i]^=1;assert!(!source.matches(&changed));}
 }

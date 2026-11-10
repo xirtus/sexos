@@ -34,7 +34,7 @@ mod scheduler{
  pub use crate::ownership as task_ownership;
  pub struct Context{pub pd_id:u64,pub pd_ptr:*const crate::capability::ProtectionDomain,pub rip:u64,pub rsp:u64}
  pub struct Task{pub id:u32,pub context:Context,pub state:crate::ownership::TaskOwnership}
- impl Task{pub fn rearm(&mut self,_:u32,_:u64,_:u64,_:&crate::capability::ProtectionDomain){}}
+ impl Task{pub fn rearm(&mut self,id:u32,entry:u64,stack:u64,pd:&crate::capability::ProtectionDomain){self.id=id;self.context.rip=entry;self.context.rsp=stack;self.context.pd_id=pd.id as u64;self.context.pd_ptr=pd;self.state=crate::ownership::TaskOwnership::new();}}
  pub struct Scheduler;pub static SCHEDULERS:[Scheduler;1]=[Scheduler];
  impl Scheduler{pub fn activate_task(&self,t:*mut Task)->bool{unsafe{if !crate::app_resources::activation_permitted((*t).context.pd_id as u32){return false}(*t).state.activate()}}}
  pub fn unpark_thread(task:*mut Task){if !task.is_null(){unsafe{(*task).state.wake();}crate::WAKES.fetch_add(1,crate::Ordering::Relaxed);}}
@@ -80,9 +80,12 @@ pub fn sys_yield(){}
 #[path="../kernel/src/program_image.rs"]mod program_image;
 mod program_tenancy{pub fn read(_:u32,leaf:u64)->u64{unsafe{core::ptr::read_volatile(leaf as *const u64)}}pub fn restored(_:u32,_:u64,value:u64)->u64{value}pub fn boot_pages(_:u32,_:&[crate::app_resource_state::PrivatePage]){}pub fn adopt(_:u32,_:&[crate::app_resource_state::PrivatePage]){}pub fn release(_:u32){}pub fn arena(_:u32,_:u64,_:u64){}pub fn grant(_:u32,page:crate::app_resource_state::PrivatePage){unsafe{core::ptr::write_volatile(page.leaf as *mut u64,page.expected)}}}
 mod smp{pub fn shootdown_covers_all()->bool{crate::core_local::INITIALIZED_CORES.load(crate::Ordering::Acquire)==1}pub mod tlb{pub fn service(){}pub fn flush(va:u64){crate::x86_64::instructions::tlb::flush(crate::VirtAddr::new(va))}pub fn flush_pages(_:usize,pages:impl Iterator<Item=u64>){for va in pages{flush(va)}}}}
-mod program_frames{pub fn take()->Option<u64>{None}pub fn give(_:u64){}pub fn available()->u64{0}}
+mod program_frames{pub static FRAMES:crate::Mutex<Vec<u64>>=crate::Mutex::new(Vec::new());pub fn take()->Option<u64>{FRAMES.lock().pop()}pub fn give(frame:u64){FRAMES.lock().push(frame)}pub fn available()->u64{FRAMES.lock().len() as u64}}
 pub static ALLOCATOR:HeapLock=HeapLock;pub struct HeapLock;impl HeapLock{pub fn lock(&self)->Heap{Heap}}pub struct Heap;impl Heap{pub fn used(&self)->usize{0}}
-mod boot_memory{pub fn program_image(_:usize)->Option<&'static [u8]>{None}pub fn reserve_arena(_:u8)->(u64,usize){(0,0)}pub fn write_frames(_:u64,_:&[u8]){}
+mod boot_memory{
+ pub type ImageCopy=Vec<u8>;
+ pub static CANDIDATE:crate::Mutex<Option<Vec<u8>>>=crate::Mutex::new(None);
+ pub fn program_image(length:usize)->Option<ImageCopy>{CANDIDATE.lock().as_ref().filter(|b|b.len()==length).cloned()}pub fn reserve_arena(_:u8)->(u64,usize){(0,0)}pub fn write_frames(address:u64,bytes:&[u8]){unsafe{std::ptr::copy_nonoverlapping(bytes.as_ptr(),address as *mut u8,bytes.len())}}
  pub fn existing_leaf_address(va:u64)->Option<u64>{crate::LEAVES.lock().get(&va).map(|p|*p as u64)}
  pub fn arena_leaf(va:u64,_:u8)->Option<u64>{existing_leaf_address(va)}
  pub fn backing(_:u64)->u64{0}pub fn copy_frame(_:u64,_:u64){}pub fn zero_frame(_:u64){}}
@@ -302,4 +305,21 @@ fn actual_boot_capture_joins_independent_registered_predecessor_tasks(){
   assert!(message.contains(expected),"case {case} failed for an unrelated reason: {message}");
  }
  assert_eq!(owned_leaves.len(),37);
+}
+
+#[test]
+fn source_constraint_checks_the_private_copy_not_a_filename_or_mutable_buffer(){
+    use app_resource_state::{ImageSource,DENIED,INVALID};
+    static APPROVED:&[u8]=b"trusted immutable boot image";
+    let source=unsafe{ImageSource::boot_private(APPROVED.as_ptr() as usize,APPROVED.len())};
+    *boot_memory::CANDIDATE.lock()=Some(APPROVED.to_vec());
+    let copy=app_resources::checked_program_image(APPROVED.len(),Some(source)).unwrap();
+    // Files can change its input only; the approved private copy remains owned.
+    boot_memory::CANDIDATE.lock().as_mut().unwrap()[0]^=1;
+    assert_eq!(&copy[..],APPROVED);
+    assert!(matches!(app_resources::checked_program_image(APPROVED.len(),Some(source)),Err(DENIED)));
+    assert!(matches!(app_resources::checked_program_image(APPROVED.len()-1,Some(source)),Err(INVALID)));
+    let arbitrary=app_resources::checked_program_image(APPROVED.len(),None).unwrap();
+    assert_ne!(&arbitrary[..],APPROVED,"ordinary unrestricted source must remain available");
+    *boot_memory::CANDIDATE.lock()=None;
 }

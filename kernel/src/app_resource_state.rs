@@ -74,8 +74,21 @@ impl Incarnation {
         Some(Self{logical_app:self.logical_app,number:self.number.checked_add(1)?})
     }
 }
+/// Exact immutable BOOT-owned bytes. Never names a user-provided buffer.
+#[derive(Debug,Clone,Copy,PartialEq,Eq)]
+pub struct ImageSource {address:usize,length:usize}
+impl ImageSource {
+    /// Caller owns these private, immutable bytes for the entire boot lifetime.
+    pub(crate) unsafe fn boot_private(address:usize,length:usize)->Self{Self{address,length}}
+    pub fn matches(self,image:&[u8])->bool{
+        if self.address==0 || self.length==0 || image.len()!=self.length{return false}
+        // Only BOOT constructs this descriptor, from retained kernel-private backing.
+        unsafe{core::slice::from_raw_parts(self.address as *const u8,self.length)==image}
+    }
+}
 #[derive(Debug,Clone,Copy,PartialEq,Eq)]
 pub struct ActivationGrant {
+    pub image_source:Option<ImageSource>,
     pub holder:u32,pub logical_app:u32,pub incarnation:u32,
     pub predecessor:u32,pub predecessor_task:u32,pub successor:u32,pub successor_task:u32,
 }
