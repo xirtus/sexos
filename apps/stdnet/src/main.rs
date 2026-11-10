@@ -48,15 +48,24 @@ fn main() {
         // One thread writes while this one reads, on the same connection.
         let mut writer = s.try_clone().expect("clone");
         let sender = std::thread::spawn(move || {
-            for i in 0..50 { if writer.write_all(format!("line {i}\n").as_bytes()).is_err() { return false; } }
-            writer.shutdown(Shutdown::Write).is_ok()
+            for i in 0..50 {
+                if let Err(e) = writer.write_all(format!("line {i}\n").as_bytes()) { return Err(format!("write {i}: {e}")); }
+            }
+            writer.shutdown(Shutdown::Write).map_err(|e| format!("shutdown: {e}"))
         });
         let mut got = 0;
         for i in 0..50 {
             line.clear();
-            if reader.read_line(&mut line).is_ok() && line == format!("line {i}\n") { got += 1; }
+            match reader.read_line(&mut line) {
+                Ok(_) if line == format!("line {i}\n") => got += 1,
+                Ok(_) => println!("line {i} read as {line:?}"),
+                Err(e) => println!("line {i}: {e}"),
+            }
         }
-        check("TCP from two threads", sender.join().unwrap_or(false) && got == 50);
+        let sent = sender.join().unwrap_or_else(|_| Err("writer panicked".into()));
+        if let Err(e) = &sent { println!("writer: {e}"); }
+        println!("lines read back: {got} of 50");
+        check("TCP from two threads", sent.is_ok() && got == 50);
         let mut rest = Vec::new();
         check("end of stream", reader.read_to_end(&mut rest).is_ok() && rest.is_empty());
     }

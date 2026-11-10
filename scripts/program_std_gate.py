@@ -118,7 +118,7 @@ def main():
    assert pong==b'pong',f'the listener answered {pong!r}'
    m=g['wait'](r'\[stdnet\.(ok|fail)\] passed=(\d+)/(\d+)\n',s,600)
    if m[1]!='ok':
-    time.sleep(1);raise AssertionError('stdnet checks failed: '+''.join(re.findall(r'\[std\.out\] FAIL[^\n]*\n',t()[s:])))
+    time.sleep(1);raise AssertionError('stdnet checks failed:\n'+''.join(re.findall(r'\[std\.out\][^\n]*\n',t()[s:])))
    e=g['wait'](r'\[std\.exit\] target=(\d+) task=(\d+) status=0\n',s,60)
    r=dict(name='stdnet',target=int(e[1]),task=int(e[2]),passed=int(m[2]),clock_skew=int(c[1])-int(time.time()))
    if n==0:time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'stdnet.ppm')})
