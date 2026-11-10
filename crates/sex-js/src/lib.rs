@@ -12,6 +12,8 @@
 #![no_std]
 extern crate alloc;
 
+#[cfg(feature = "baseline-jit")]
+pub mod baseline;
 pub mod document;
 pub mod webgl;
 #[cfg(sexjs_native)]
@@ -150,6 +152,8 @@ struct State<P> {
     page: P,
     result: Vec<u8>,
     limits: StoreLimits,
+    #[cfg(feature = "baseline-jit")]
+    jit: baseline::Jit,
 }
 
 /// One page's script engine.
@@ -242,7 +246,11 @@ impl<P: Page + 'static> Script<P> {
     fn start(vm: Vm<P>, limits: Limits) -> Result<Self, Error> {
         let mut script = Self { vm, budget_ms: 0, load_budget_ms: 0 };
         // The prelude is ours: no time budget, which a slow machine could exceed.
+        #[cfg(feature = "baseline-jit")]
+        script.set_jit_enabled(false);
         script.eval(PRELUDE, "prelude.js")?;
+        #[cfg(feature = "baseline-jit")]
+        script.set_jit_enabled(true);
         script.budget_ms = limits.budget_ms as i32;
         script.load_budget_ms = limits.load_budget_ms as i32;
         Ok(script)
@@ -258,7 +266,7 @@ impl<P: Page + 'static> Script<P> {
         let engine = Engine::new(&config);
         let module = Module::new(&engine, wasm).map_err(|x| Error::Engine(format!("{x}")))?;
         let store_limits = StoreLimitsBuilder::new().memory_size(limits.memory_bytes).memories(1).tables(4).table_elements(100_000).instances(1).build();
-        let mut store = Store::new(&engine, State { page, result: Vec::new(), limits: store_limits });
+        let mut store = Store::new(&engine, State { page, result: Vec::new(), limits: store_limits, #[cfg(feature = "baseline-jit")] jit: baseline::Jit::default() });
         store.limiter(|s| &mut s.limits);
         let mut linker = Linker::<State<P>>::new(&engine);
         link(&mut linker).map_err(|_| e("link"))?;
@@ -354,6 +362,22 @@ impl<P: Page + 'static> Script<P> {
         r
     }
 
+    /// Enables/disables the experimental tier without changing the interpreter.
+    #[cfg(feature = "baseline-jit")]
+    pub fn set_jit_enabled(&mut self, enabled: bool) {
+        match &mut self.vm {
+            Vm::Wasmi(w) => w.store.data_mut().jit.enabled = enabled,
+            #[cfg(sexjs_native)] Vm::Native(v) => v.set_jit_enabled(enabled),
+        }
+    }
+    #[cfg(feature = "baseline-jit")]
+    pub fn jit_stats(&self) -> baseline::Stats {
+        match &self.vm {
+            Vm::Wasmi(w) => w.store.data().jit.stats,
+            #[cfg(sexjs_native)] Vm::Native(v) => v.jit_stats(),
+        }
+    }
+
     /// Bytes of linear memory the engine holds.
     pub fn memory_bytes(&self) -> usize { self.vm.memory_bytes() }
 }
@@ -380,6 +404,17 @@ fn link<P: Page + 'static>(linker: &mut Linker<State<P>>) -> Result<(), wasmi::e
         let r = core::mem::take(&mut state.result);
         let at = out as u32 as usize;
         if let Some(dst) = data.get_mut(at..at + r.len()) { dst.copy_from_slice(&r); }
+    })?;
+    linker.func_wrap("dom", "jit_available", |_: C<'_, P>| -> i32 { cfg!(feature = "baseline-jit") as i32 })?;
+    linker.func_wrap("dom", "jit", |mut c: C<'_, P>, pc: i32, len: i32, argv: i32, argc: i32, out: i32| -> i32 {
+        #[cfg(feature = "baseline-jit")]
+        {
+            let Some(m) = mem(&c) else { return 0 };
+            let (data, state) = m.data_and_store_mut(&mut c);
+            return state.jit.run(data, pc as u32, len as u32, argv as u32, argc as u32, out as u32) as i32;
+        }
+        #[cfg(not(feature = "baseline-jit"))]
+        { let _ = (&mut c, pc, len, argv, argc, out); 0 }
     })?;
     const W: &str = "wasi_snapshot_preview1";
     linker.func_wrap(W, "clock_time_get", |mut c: C<'_, P>, _id: i32, _p: i64, at: i32| -> i32 {

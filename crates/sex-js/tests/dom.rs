@@ -912,3 +912,70 @@ fn frames_talk_through_post_message() {
     inner.dispatch("message\tparent\thttps://example.test\t{\"event\":\"listening\"}").unwrap();
     assert_eq!(logs(&mut inner), ["0:true true https://example.test/ https://example.test 1", "0:inner got listening https://example.test true"]);
 }
+
+#[cfg(feature = "baseline-jit")]
+#[test]
+fn baseline_hot_bytecode_matches_forced_interpreter() {
+    let source = r#"
+        function add(a,b) { return a+b; }
+        function sub(a,b) { return a-b; }
+        function mul(a,b) { return a*b; }
+        function mix(a,b) { return ((a+b)*3) ^ (a-b); }
+        let total=0;
+        for(let i=0;i<10000;i++) total+=mix(i,7);
+        console.log(total);
+        for(let i=0;i<64;i++) { add(i,7); sub(i,7); mul(i,7); }
+        console.log(add(2147483647,1),sub(-2147483648,1),mul(65536,65536));
+        console.log(Object.is(mul(-1,0),-0),Object.is(mul(0,-1),-0));
+        console.log(add('a',1),add(true,1),add(undefined,1),add(1.5,2));
+        console.log(add(2n,3n),sub(4n,1n),mul(2n,4n));
+        try { add(1n,2); } catch(e) { console.log(e.name); }
+        let seen=0; console.log(add({valueOf(){seen++;return 40;}},2),seen);
+        try { add({valueOf(){throw new Error('coercion');}},2); } catch(e) { console.log(e.message); }
+        function effects(a) { document.body.id='called'; return a+1; }
+        for(let i=0;i<64;i++) effects(i);
+        console.log(document.body.id);
+    "#;
+    let mut interpreter=page("");interpreter.set_jit_enabled(false);
+    interpreter.eval(source,"differential.js").unwrap();
+    let expected=logs(&mut interpreter);
+    let mut jit=page("");jit.eval(source,"differential.js").unwrap();
+    assert_eq!(logs(&mut jit),expected);
+    assert_eq!(interpreter.jit_stats().executed,0);
+    #[cfg(all(target_arch="x86_64",target_os="linux"))]
+    {
+        let stats=jit.jit_stats();
+        assert!(stats.compiled>=4,"{stats:?}");
+        assert!(stats.executed>9900,"{stats:?}");
+        // A negative boundary literal may be float-tagged by QuickJS and
+        // fall back at argument validation before entering emitted code.
+        assert!(stats.bailouts>=4,"{stats:?}");
+    }
+}
+
+#[cfg(feature = "baseline-jit")]
+#[test]
+fn baseline_hot_call_measurement() {
+    // Several arithmetic terms amortize the sandbox crossing. A short function's
+    // boundary cost is measured separately by the browser smoke fixture.
+    let term="(((a+b)*3)^((a-b)*7))";
+    let function=format!("function mix(a,b) {{ return {}; }}", vec![term;5].join("+"));
+    let workload="let sum=0; for(let i=0;i<100000;i++) sum+=mix(i,17); console.log(sum);";
+    let mut expected=None;
+    let mut samples=[Vec::new(),Vec::new()];
+    for enabled in [false,true,true,false] {
+        let mut s=page("");s.set_jit_enabled(enabled);
+        s.eval(&function,"define.js").unwrap();
+        s.eval("for(let i=0;i<1000;i++) mix(i,17);","warm.js").unwrap();
+        let before=s.jit_stats();
+        let started=std::time::Instant::now();s.eval(workload,"hot.js").unwrap();
+        let elapsed=started.elapsed();let result=logs(&mut s);
+        if let Some(ref want)=expected {assert_eq!(&result,want);} else {expected=Some(result);}
+        let after=s.jit_stats();
+        #[cfg(all(target_arch="x86_64",target_os="linux"))]
+        if enabled {assert!(after.executed-before.executed>=99999,"{after:?}");}
+        samples[enabled as usize].push(elapsed.as_nanos());
+        eprintln!("baseline-jit enabled={enabled} native={} warm_elapsed={elapsed:?} before={before:?} after={after:?}",Script::<Document>::NATIVE);
+    }
+    eprintln!("baseline-jit paired_ns interpreter={:?} jit={:?}",samples[0],samples[1]);
+}

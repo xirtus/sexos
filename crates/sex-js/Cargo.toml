@@ -14,3 +14,10 @@ sex-html = { path = "../sex-html" }
 sex-gl = { path = "../sex-gl" }
 sex-image = { path = "../sex-image" }
 sex-fetch = { path = "../sex-fetch" }
+
+[features]
+# Experimental straight-line int32 QuickJS bytecode compiler; disabled by default.
+baseline-jit = []
+
+[target.'cfg(target_os = "none")'.dependencies]
+sex-app = { path = "../sex-app" }
