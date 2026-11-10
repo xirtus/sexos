@@ -11,7 +11,7 @@
   wait over ten seconds and covers most of this test clip. Reduce `NEAR` to 128 KiB:
   sequential/small audio-video demuxer gaps still wait, larger missing gaps ask for
   a Range using the existing checked 206/content-range path and kept pieces.
-- Three host tests exercise the actual portable production module: this missing forward
+- Five host tests exercise the actual portable production module: this missing forward
   seek, cached old/new piece reads, sequential/boundary gaps, non-Range servers and
   exact end-of-stream. They pass via `scripts/media_source_host_gate.sh` on ARM. The source module is
   re-exported unchanged by sex-media and compiled directly by the host gate, avoiding
@@ -28,5 +28,21 @@ The first new Linux media job exposed a harness mistake before guest testing:
 `cargo test -p sex-media` links sex-app's uninitialized guest allocator and aborts on
 its first allocation. Move only portable `Source`/`Growing` definitions and their same
 three tests to `source.rs`, re-exporting the existing API, and compile that production
-module directly in the standalone host gate. All three tests execute; no test or guest
+module directly in the standalone host gate. All five tests execute; no test or guest
 assertion is skipped. The unchanged FFmpeg streaming/seek gates remain required.
+
+### Let a seek discover its byte position
+
+A fresh FFmpeg-enabled sealed build of the smaller-window change (`b053e23a`)
+still failed the unchanged guest seek gate: no Range and `moved after 6866`.
+The clip is seekable: host ffprobe finds a keyframe at 7.16 s / byte 1,094,999.
+FFmpeg can change its sample index during seek while leaving its byte cursor at the
+old position until its next read. `Decoder::ready` checked read-ahead at that stale
+cursor, preventing the read which would discover the missing target and request Range.
+
+Permit the first decode probe after a successful seek, before that old-cursor preflight.
+If it stalls, normal availability/read-ahead checks resume until the requested bytes
+arrive; parked Media Source segments retain their existing wait rule. Failed seeks do
+not install a pending target. Two additional production-helper tests cover this full
+probe/stall/Range/refill sequence and parked-source behavior; all five portable tests
+and the Web cross-target check pass. Fixed-image guest validation remains pending.

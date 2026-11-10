@@ -212,11 +212,8 @@ impl Decoder {
 
     /// Whether decoding can go on without reading past what has arrived.
     pub fn ready(&self) -> bool {
-        let at = self.io.at;
-        let have = self.io.src.available(at);
-        if self.parked { return have > 0; }
-        if self.stalled && have == 0 { return false; }
-        have >= self.io.src.ahead() || self.io.src.len().is_some_and(|len| have >= len.saturating_sub(at))
+        source::ready_to_decode(self.io.src.as_ref(), self.io.at, self.parked,
+                                self.stalled, self.sought.is_some())
     }
 
     #[cfg(not(ffmpeg))]
@@ -294,9 +291,10 @@ impl Decoder {
     pub fn seek(&mut self, ms: u64) -> Result<(), Error> {
         if self.io.src.restart(ms) { return self.reopen(); }
         if self.s.is_null() { return Err(Error::UNSUPPORTED); }
-        (self.sought, self.stalled) = (Some(ms), false);
         let r = unsafe { ffi::sx_seek(self.s, ms as i64) };
-        if r < 0 { Err(Error(r)) } else { Ok(()) }
+        if r < 0 { return Err(Error(r)); }
+        (self.sought, self.stalled) = (Some(ms), false);
+        Ok(())
     }
 
     /// The stream ended: carry on with the one that follows, if any.

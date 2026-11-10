@@ -162,6 +162,19 @@ impl Source for alloc::rc::Rc<core::cell::RefCell<Growing>> {
     }
 }
 
+/// A successful seek can update only the demuxer's packet index: its I/O cursor
+/// moves on the next read. Permit that first probe even when the old cursor has
+/// insufficient read-ahead. A stalled probe waits for bytes normally, so this
+/// cannot spin on a missing range or mistake it for EOF.
+pub(crate) fn ready_to_decode(src: &dyn Source, at: u64, parked: bool,
+                              stalled: bool, seek_pending: bool) -> bool {
+    if !parked && seek_pending && !stalled { return true; }
+    let have = src.available(at);
+    if parked { return have > 0; }
+    if stalled && have == 0 { return false; }
+    have >= src.ahead() || src.len().is_some_and(|len| have >= len.saturating_sub(at))
+}
+
 #[cfg(test)]
 mod growing_tests {
     use super::*;
@@ -196,6 +209,33 @@ mod growing_tests {
             assert_eq!(s.available(at), 0);
             assert_eq!(s.borrow().want, None);
         }
+    }
+
+    #[test]
+    fn seek_probes_past_stale_read_ahead_then_waits_for_its_range() {
+        let mut s = stream(true);
+        // FFmpeg still reports the old I/O position after changing its sample index.
+        let old = 512 * 1024;
+        assert!(!ready_to_decode(&s, old, false, false, false));
+        assert!(ready_to_decode(&s, old, false, false, true));
+        let target = 1200 * 1024;
+        assert_eq!(s.read_at(target, &mut [0; 16]), None);
+        assert_eq!(s.borrow().want, Some(target));
+        // The first probe stalled: subsequent turns must not spin or declare EOF.
+        assert!(!ready_to_decode(&s, target, false, true, true));
+        s.borrow_mut().begin(target, 2 * 1024 * 1024);
+        s.borrow_mut().bytes.resize(32 * 1024, 3);
+        assert!(!ready_to_decode(&s, target, false, true, true));
+        s.borrow_mut().bytes.resize(300 * 1024, 3);
+        assert!(ready_to_decode(&s, target, false, true, true));
+    }
+
+    #[test]
+    fn parked_segment_still_waits_for_any_bytes() {
+        let s = stream(true);
+        assert!(!ready_to_decode(&s, 600 * 1024, true, false, true));
+        s.borrow_mut().bytes.push(1);
+        assert!(ready_to_decode(&s, 600 * 1024, true, false, true));
     }
 
     #[test]
