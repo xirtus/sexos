@@ -238,6 +238,38 @@ impl Card {
         }
     }
     fn stream(&self) -> u32 { match self { Card::Virtio { stream, .. } => *stream, Card::Hda(_) => 0 } }
+    /// The outputs word: how many, their kinds, and which play.
+    fn outputs(&self) -> u64 {
+        match self {
+            Card::Virtio { .. } => mixer::outputs(1, &[mixer::VIRTUAL]),
+            Card::Hda(h) => {
+                let mut kinds = [0u8; mixer::MAX_OUTPUTS];
+                let n = h.outputs.min(mixer::MAX_OUTPUTS);
+                for (k, kind) in kinds.iter_mut().enumerate().take(n) {
+                    *kind = match h.output(k).map(|o| o.0) { Some(d @ 0..=2) => d as u8, _ => mixer::OTHER };
+                }
+                mixer::outputs(h.on as u8, &kinds[..n]) | if h.auto { mixer::OUTPUTS_AUTO } else { 0 }
+            }
+        }
+    }
+    fn select(&mut self, mask: u64) -> bool {
+        match self {
+            Card::Virtio { .. } => mask & 1 == 1 || mask == mixer::AUTO,
+            // The person's own pick stops Bell following the jack; AUTO resumes it.
+            Card::Hda(h) if mask == mixer::AUTO => { h.auto = true; let home = h.home; h.select(home); h.follow_jack(); true }
+            Card::Hda(h) => { let ok = mask <= 0xFF && h.select(mask as u32); if ok { h.auto = false; } ok }
+        }
+    }
+    /// Looks at the headphone jack, at most twice a second.
+    fn follow_jack(&mut self) {
+        if let Card::Hda(h) = self {
+            static mut LAST: u64 = 0;
+            let now = sex_pdx::get_ticks();
+            if now.wrapping_sub(unsafe { LAST }) < 500 { return; }
+            unsafe { LAST = now };
+            h.follow_jack();
+        }
+    }
     fn has_input(&self) -> bool { matches!(self, Card::Virtio { input: Some(_), .. }) }
     /// Starts or stops the microphone stream.
     fn input_run(&mut self, on: bool) -> bool {
@@ -436,6 +468,7 @@ impl Player {
     }
 
     fn pump(&mut self) {
+        self.card.follow_jack();
         self.listen_pump();
         // Reap finished periods in order; the device returns them as it plays.
         while self.flying > 0 {
@@ -646,6 +679,7 @@ pub fn mixer_request(action: u64, a: u64, b: u64, write: bool) -> u64 {
     let reply = match action {
         mixer::STATE => state(m),
         mixer::STREAM if (a as usize) < STREAMS => row(m, a as usize),
+        mixer::OUTPUTS => match player() { Some(p) => p.card.outputs(), None => mixer::outputs(0, &[]) },
         _ if !write => return mixer::REFUSED,
         mixer::SET_MASTER if a <= 100 => { m.master = a as u8; state(m) }
         mixer::MUTE_MASTER if a <= 2 => { m.muted = if a == 2 { !m.muted } else { a == 1 }; state(m) }
@@ -658,6 +692,12 @@ pub fn mixer_request(action: u64, a: u64, b: u64, write: bool) -> u64 {
             m.rows[a as usize] = b as u8;
             m.rows_muted[a as usize] = b & mixer::MUTED != 0;
             row(m, a as usize)
+        }
+        mixer::SET_OUTPUTS => {
+            let Some(p) = player() else { return mixer::REFUSED };
+            if !p.card.select(a) { return mixer::REFUSED; }
+            sex_pdx::serial_record!("[bell.outputs] on={:#x}", a);
+            p.card.outputs()
         }
         mixer::MICROPHONE if (a as usize) < STREAMS && b <= 1 => {
             m.mic[a as usize] = b == 1;

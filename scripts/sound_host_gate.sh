@@ -6,3 +6,5 @@ TEST_DIR="$(mktemp -d)"
 trap 'rm -rf "$TEST_DIR"' EXIT
 rustc --edition=2021 --test tests/bell_resample.rs -o "$TEST_DIR/bell-resample"
 "$TEST_DIR/bell-resample"
+rustc --edition=2021 --test tests/bell_jack.rs -o "$TEST_DIR/bell-jack"
+"$TEST_DIR/bell-jack"

@@ -306,6 +306,7 @@ pub extern "C" fn trampoline_main() {
             sex_pdx::power::ready(flushed);
             continue;
         }
+        if msg.type_id==sex_pdx::usb_disk::OP_CHANGED{crate::volumes::usb_changed(msg.caller_pd);continue;}
         if msg.type_id==sex_pdx::fs::OP{
             let word=crate::fs_service::handle(caller,msg.arg0,msg.arg1,msg.arg2);
             // Nothing else owed and nothing to commit: answer and wait in one entry, so

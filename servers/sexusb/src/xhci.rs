@@ -30,6 +30,7 @@ pub mod trb {
     pub const CONFIGURE_ENDPOINT: u32 = 12;
     pub const EVALUATE_CONTEXT: u32 = 13;
     pub const RESET_ENDPOINT: u32 = 14;
+    pub const STOP_ENDPOINT: u32 = 15;
     pub const SET_TR_DEQUEUE: u32 = 16;
     pub const TRANSFER_EVENT: u32 = 32;
     pub const COMMAND_COMPLETION: u32 = 33;
@@ -361,8 +362,47 @@ impl Xhci {
         }
     }
 
+    /// One bulk transfer of `len` bytes at `phys` (contiguous), split at page edges so
+    /// no TRB crosses a 64 KiB line. Returns the bytes moved, or the completion code.
+    pub fn bulk(&mut self, slot: u32, dci: u32, ring: &mut Ring, phys: u64, len: u32, polls: u32) -> Result<u32, Failure> {
+        let mut at = [0u64; 24];
+        let mut size = [0u32; 24];
+        let mut n = 0usize;
+        let mut done = 0u32;
+        while done < len && n < at.len() {
+            let addr = phys + done as u64;
+            let room = (PAGE - (addr & (PAGE - 1))) as u32;
+            let chunk = room.min(len - done);
+            let last = done + chunk == len;
+            let flags = (trb::NORMAL << 10) | trb::ISP | if last { trb::IOC } else { 1 << 4 };
+            at[n] = ring.push(addr as u32, (addr >> 32) as u32, chunk, flags);
+            size[n] = chunk;
+            n += 1;
+            done += chunk;
+        }
+        if done != len { return Err(Failure::Code(0)); }
+        self.doorbell(slot, dci);
+        let range = *ring;
+        let Some(e) = self.wait_event(polls, |e| e.kind() == trb::TRANSFER_EVENT && e.slot() == slot
+            && e.endpoint() == dci && range.index_of(e.pointer()).is_some()) else {
+            log!("[sexusb.xhci.bulk.timeout] slot={} dci={} len={}", slot, dci, len);
+            self.recover(slot, dci, ring);
+            return Err(Failure::Timeout);
+        };
+        let code = e.code();
+        if code != CC_SUCCESS && code != CC_SHORT_PACKET {
+            self.recover(slot, dci, ring);
+            return Err(Failure::Code(code));
+        }
+        let which = at[..n].iter().position(|a| *a == e.pointer()).unwrap_or(n - 1);
+        let before: u32 = size[..which].iter().sum();
+        Ok(before + size[which].saturating_sub(e.residual()))
+    }
+
     /// After a stall or error the endpoint halts: reset it and point it past what failed.
     pub fn recover(&mut self, slot: u32, dci: u32, ring: &mut Ring) {
+        // A running endpoint (a timeout) must stop first; a halted one refuses, harmlessly.
+        let _ = self.command(0, 0, 0, (trb::STOP_ENDPOINT << 10) | (dci << 16) | (slot << 24));
         let _ = self.command(0, 0, 0, (trb::RESET_ENDPOINT << 10) | (dci << 16) | (slot << 24));
         let deq = ring.dequeue_pointer();
         let _ = self.command(deq as u32, (deq >> 32) as u32, 0,

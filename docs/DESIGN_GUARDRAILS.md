@@ -32,8 +32,10 @@ do from ring 3. When a feature needs a little ring-0 help, add the smallest mech
 | Date | Budget | Reason |
 |------|--------|--------|
 | 2026-11-09 | 21,500 | Baseline after removing dead POSIX/Linux-shaped stubs (18,383 lines). Headroom covers the open boot-log/stop-screen (#78), VMD enumeration (#84) and lease (#79) work. ACPI AML in ring 0 (#70, #82) is the open question in the audit. |
-| 2026-11-10 | 22,500 | Master already counted 22,121 after the boot log (#78), VMD (#84), IOMMU (#86) and MSI-X (#87) merges, over the old budget. Stage 7a (#89) adds ~115 lines of scheduler latency classes (urgent queue, preempt vector 0xF2, wake latency counters): choosing which task runs next is the scheduler's job and cannot move to a server. |
-| 2026-11-10 | 22,500 | (Same budget; no raise needed after #89.) Display and Shell restarting in place adds about 30 lines of mechanism (keep their BOOT pages, end a domain at its next syscall); the desktop logic for coming back lives in Shell. |
+| 2026-11-10 | 21,500 | Unchanged. AML moved out of ring 0 into `servers/sexacpi` (Andreas, 2026-11-10). The kernel keeps FADT reset/S5, the SCI route, the `Power` check and a filtered firmware window (I/O ports, MMIO and PCI config that refuse RAM, kernel-owned ports and BARs). |
+| 2026-11-10 | 21,500 | Unchanged. #78 (stop screen, which must stay in the kernel) and #86 (IOMMU page tables, mechanism) took the kernel to 22,121 and turned master red. The fix removed the historical in-kernel e1000 bring-up probe from `hal/pci.rs` (3,266 lines: NIC rings, ARP/ICMP/UDP/TCP/DNS/HTTP frames, off unless built with `SEXOS_BOOT_NIC_DIAGNOSTICS=1`). That is a protocol stack in ring 0, and SexNet owns NICs. Kernel now about 18,600 lines. |
+| 2026-11-10 | 21,500 | Unchanged. A 22,500 raise for #89 (scheduler latency classes, ~115 lines, landed with #96) was dropped: after the NIC probe removal the kernel is ~18,700 lines with them included. |
+| 2026-11-10 | 21,500 | Unchanged. Display and Shell restarting in place adds about 30 lines of mechanism (keep their BOOT pages, end a domain at its next syscall); the desktop logic for coming back lives in Shell. |
 
 ## 2. No Linux-shaped kernel API
 
