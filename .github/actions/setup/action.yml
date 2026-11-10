@@ -52,7 +52,7 @@ runs:
         target/ffmpeg/lib
         target/ffmpeg/include
         target/ffmpeg/include-c
-      key: ffmpeg-${{ hashFiles('scripts/build_ffmpeg.sh', 'scripts/build_dav1d.sh') }}
+      key: ffmpeg-${{ hashFiles('scripts/build_ffmpeg.sh') }}
   - name: Build FFmpeg for programs
     if: inputs.media == 'true'
     shell: bash
