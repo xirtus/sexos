@@ -36,6 +36,14 @@ static mut SOURCE_DENIALS:source_denial::Outbox=source_denial::Outbox::new();
 /// The held BOOT lifecycle grants establish exact current subject/task, never
 /// the app-supplied ticket. Err(LIVE) is the kernel's live-task attestation;
 /// successful info means terminal cleanup custody and cannot authorize work.
+/// The IP stack over the boot buffers, for whichever port carries it (wired or Wi-Fi).
+/// The caller drops the previous engine first: only one borrows the buffers at a time.
+fn new_engine(config:sex_pdx::network_config::Config,mac:[u8;6],seed:u64)->sex_net::Engine<'static>{
+    // SAFETY: sexnet runs one thread and keeps at most one engine alive.
+    unsafe{sex_net::Engine::new(config,mac,sex_pdx::get_ticks(),seed,
+        &mut *core::ptr::addr_of_mut!(TRANSPORT_RX),&mut *core::ptr::addr_of_mut!(TRANSPORT_TX),&mut *core::ptr::addr_of_mut!(CLIENT_RX),&mut *core::ptr::addr_of_mut!(CLIENT_TX),
+        &mut *core::ptr::addr_of_mut!(DNS_RX_META),&mut *core::ptr::addr_of_mut!(DNS_RX),&mut *core::ptr::addr_of_mut!(DNS_TX_META),&mut *core::ptr::addr_of_mut!(DNS_TX))}.expect("FIXED_TRANSPORT_CONFIG")
+}
 fn network_owner(caller:u32)->Option<jobs::Identity>{
     use sex_pdx::app_lifecycle as a;
     for slot in a::SLOTS{
@@ -5399,26 +5407,29 @@ pub extern "C" fn _start() -> ! {
         let wifi_up=wifi.as_ref().is_some_and(|w|w.link_up());
         if wifi_up&&!wifi_transport{
             if let (Some(config),Some(mac))=(network_config,wifi.as_ref().and_then(|w|w.link_mac())){
-                pending_packet=None;drop(transport.take());
-                transport=Some(unsafe{sex_net::Engine::new(config,mac,sex_pdx::get_ticks(),0x7365786f735f7769,
-                    &mut TRANSPORT_RX,&mut TRANSPORT_TX,&mut CLIENT_RX,&mut CLIENT_TX,&mut DNS_RX_META,&mut DNS_RX,&mut DNS_TX_META,&mut DNS_TX)}.expect("FIXED_TRANSPORT_CONFIG"));
+                pending_packet=None;drop(transport.take());web.reset();
+                transport=Some(new_engine(config,mac,0x7365786f735f7769));
                 wifi_transport=true;
                 sex_pdx::serial_record!("[sexnet.wifi.transport] up=1 mac={:02x}{:02x}{:02x}{:02x}{:02x}{:02x} wired_set_aside={}",mac[0],mac[1],mac[2],mac[3],mac[4],mac[5],ethernet.is_some() as u8);
             } else { sex_pdx::serial_record!("[sexnet.wifi.transport] up=0 reason=no_network_config"); }
         } else if !wifi_up&&wifi_transport{
             if let Some(engine)=transport.as_mut(){engine.stop(sex_net::Error::Stopped);}
-            transport=None;pending_packet=None;wifi_transport=false;
-            sex_pdx::serial_record!("[sexnet.wifi.transport] up=0 reason=link_down");
+            transport=None;pending_packet=None;wifi_transport=false;web.reset();
+            // A running wired port takes the IP stack back at once (its own start
+            // only happens on the move to Running, which is long past).
+            let wired=match (ethernet.as_ref().filter(|d|d.phase()==ethernet::Phase::Running),network_config) {
+                (Some(driver),Some(config))=>{transport=Some(new_engine(config,driver.mac,0x7365786f735f3736));true}
+                _=>false,
+            };
+            sex_pdx::serial_record!("[sexnet.wifi.transport] up=0 reason=link_down wired={}",wired as u8);
         }
         let mut burst=0u32;
         loop {
             let mut progressed=false;
             if wifi_transport { if let (Some(w),Some(engine))=(wifi.as_mut(),transport.as_mut()) {
-                if engine.can_receive(){
-                    let mut frames=0u32;
-                    w.link_poll(|frame|{if engine.submit_frame(frame).is_ok(){frames+=1;}});
-                    progressed|=frames>0;
-                }
+                // One frame a turn into the stack, the rest wait in the link's queue.
+                let receive=engine.can_receive();
+                progressed|=w.link_receive(|frame|receive&&engine.submit_frame(frame).is_ok());
                 engine.advance(sex_pdx::get_ticks());
                 web.pump(unsafe{&mut *(engine as *mut sex_net::Engine<'static>)});
                 let duplex=outbound.is_duplex();
@@ -5442,8 +5453,7 @@ pub extern "C" fn _start() -> ! {
                         sex_pdx::serial_record!("[sexnet.ether.ready] model={:?} region=2 budget=262144 used=221184 descriptors=96/8 buffer=2048 polling=cooperative timing_verified={} network=0 dns=0 tcp=0 http=0 tls=0",driver.model(),driver.timing_verified as u8);
                         let mut packet=sex_net::Frame{length:60,bytes:[0;sex_net::MAX_FRAME]};
                         packet.bytes[..60].copy_from_slice(&arp::request_configured(driver.mac,&network_config.expect("BOOT_NETWORK_CONFIG")).expect("BOOT_ARP_CONFIG"));pending_packet=Some(packet);
-                        transport=Some(unsafe{sex_net::Engine::new(network_config.expect("BOOT_NETWORK_CONFIG"),driver.mac,sex_pdx::get_ticks(),0x7365786f735f3736,
-                            &mut TRANSPORT_RX,&mut TRANSPORT_TX,&mut CLIENT_RX,&mut CLIENT_TX,&mut DNS_RX_META,&mut DNS_RX,&mut DNS_TX_META,&mut DNS_TX)}.expect("FIXED_TRANSPORT_CONFIG"));
+                        transport=Some(new_engine(network_config.expect("BOOT_NETWORK_CONFIG"),driver.mac,0x7365786f735f3736));
                         let gateway=network_config.expect("BOOT_NETWORK_CONFIG").gateway;
                         sex_pdx::serial_record!("[sexnet.route.ready] gateway={}.{}.{}.{} default=1 routes=1 route_capacity={} neighbors={} discovery_ms=1000 expiry_ms=60000 heap=0 authority=held_boot_nic",gateway[0],gateway[1],gateway[2],gateway[3],sex_net::ROUTE_CAPACITY,sex_net::NEIGHBOR_CAPACITY);
                         sex_pdx::serial_record!("[sexnet.transport.ready] implementation=smoltcp0.14.0 flows=1 rx=4096 tx=4096 turn=256 port=46076 no_std=1 heap=0 diagnostic_listener=1 predictable_seed=1 app_network=0 dns=0 http=0 tls=0");

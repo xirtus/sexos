@@ -438,8 +438,10 @@ leftovers), and SAE for WPA3 (W5d).
   header and MIC with the pairwise key (`iwx_tx`).
 - **In.** Data frames from our AP are kept only if the firmware decrypted them
   (CCM, DEC_DONE, MIC_OK: `iwx_rx_hwdecrypt`). Their packet number must be newer
-  than the last on that TID (`iwx_ccmp_decap`). The CCMP header is removed. A MIC some
-  firmware leaves at the end stays: IP and ARP carry their own lengths. Plain data on a
+  than the last for that key and TID (`iwx_ccmp_decap`; the pairwise and group keys
+  count apart). The CCMP header is removed, and the frame is cut to the length its IPv4,
+  IPv6 or ARP packet declares, so a MIC some firmware leaves at the end never reaches
+  the stack (a full 1500-byte packet would otherwise not fit). Plain data on a
   WPA2 link, our own broadcasts relayed back, and frames from other BSSs are dropped.
   RX MPDU padding is now removed after any header, as `iwx_rx_mpdu_mq` does, not
   only after management headers.
@@ -448,8 +450,11 @@ leftovers), and SAE for WPA3 (W5d).
   This is slow but dependable for the first hardware test.
 
 sexnet: once the link is up, the IP stack (`sex_net::Engine`) is rebuilt on the Wi-Fi
-MAC and fed from the link. The wired port is set aside while Wi-Fi is up, and the stack
-goes back to it when the link goes down (deauthentication, firmware error). The
+MAC and fed from the link, one frame per turn from a 32-frame receive queue (the air
+delivers bursts). The wired port is set aside while Wi-Fi is up, and when the link goes
+down (deauthentication, firmware error) the stack is rebuilt at once on a running wired
+port. Each switch resets the web service's flows and sockets, which belonged to the
+old stack; programs see their flows fail and reconnect. The
 browser's open-internet side gets its DHCP lease on the Wi-Fi network, as it does on a
 wired one.
 

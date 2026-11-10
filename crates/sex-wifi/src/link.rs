@@ -7,9 +7,10 @@
 //!   ENCRYPT_DIS: the firmware adds the CCMP header and MIC with the installed key.
 //! - Frames in were decrypted by the firmware. They are kept only if it says so
 //!   (CCM, DEC_DONE and MIC_OK, as `iwx_rx_hwdecrypt` checks) and their packet
-//!   number is newer than the last one on that TID (`iwx_ccmp_decap`). The 8-byte
-//!   CCMP header is removed. A MIC some firmware leaves at the end stays: IP and
-//!   ARP carry their own lengths.
+//!   number is newer than the last one for that key and TID (`iwx_ccmp_decap`;
+//!   pairwise and group keys count apart). The 8-byte CCMP header is removed, and
+//!   the Ethernet frame is cut to the length its IP or ARP packet declares, which
+//!   drops a MIC some firmware leaves at the end.
 //! - Data goes at a fixed legacy rate (OFDM 12 Mb/s), as management frames do, until
 //!   firmware rate control (TLC) is configured.
 //!
@@ -51,8 +52,8 @@ pub struct Link {
     family: Family,
     protected: bool,
     seq: u16,
-    /// Last CCMP packet number per TID (non-QoS frames use 0).
-    pn: [Option<u64>; 16],
+    /// Last CCMP packet number per key id and TID (non-QoS frames use TID 0).
+    pn: [[Option<u64>; 16]; 4],
     pub sent: u64,
     pub received: u64,
     pub dropped: u64,
@@ -61,8 +62,8 @@ pub struct Link {
 }
 
 /// Ethernet frame out of a data frame body from the AP: checks and strips CCMP.
-/// Returns the Ethernet length, the TID and the packet number, if any.
-pub fn decap(frame: &[u8], status: u32, protected_link: bool, out: &mut [u8]) -> Result<(usize, usize, Option<u64>), Drop> {
+/// Returns the Ethernet length, the TID and the key id with the packet number, if any.
+pub fn decap(frame: &[u8], status: u32, protected_link: bool, out: &mut [u8]) -> Result<(usize, usize, Option<(usize, u64)>), Drop> {
     let hdr = w::data_header_len(frame).ok_or(Drop::Malformed)?;
     let fc = u16::from_le_bytes([frame[0], frame[1]]);
     let tid = if fc & 0x0080 != 0 { (frame[24 + if fc & 0x0300 == 0x0300 { 6 } else { 0 }] & 0x0f) as usize } else { 0 };
@@ -73,20 +74,35 @@ pub fn decap(frame: &[u8], status: u32, protected_link: bool, out: &mut [u8]) ->
         let iv = frame.get(hdr..hdr + CCMP_HEADER).ok_or(Drop::Malformed)?;
         if iv[3] & 0x20 == 0 { return Err(Drop::Malformed); } // ExtIV
         let pn = iv[0] as u64 | (iv[1] as u64) << 8 | (iv[4] as u64) << 16 | (iv[5] as u64) << 24 | (iv[6] as u64) << 32 | (iv[7] as u64) << 40;
-        (&frame[hdr + CCMP_HEADER..], Some(pn))
+        (&frame[hdr + CCMP_HEADER..], Some(((iv[3] >> 6) as usize, pn)))
     } else {
         // Once keys are in, unprotected data is only EAPOL (rekeying), handled elsewhere.
         if protected_link { return Err(Drop::NotDecrypted); }
         (&frame[hdr..], None)
     };
     let n = w::to_ethernet(&frame[..hdr], body, out).ok_or(Drop::Malformed)?;
-    Ok((n, tid, pn))
+    Ok((declared(&out[..n]).ok_or(Drop::Malformed)?, tid, pn))
+}
+
+/// The length of an Ethernet frame by what its packet says it holds: IPv4 total
+/// length, IPv6 payload length plus its header, ARP's 28 bytes. Anything after
+/// (a MIC, padding) is not the packet's. Other types keep their length.
+pub fn declared(e: &[u8]) -> Option<usize> {
+    if e.len() < 14 { return if e.is_empty() { Some(0) } else { None }; }
+    let be = |at: usize| e.get(at..at + 2).map(|b| u16::from_be_bytes([b[0], b[1]]) as usize);
+    let need = match be(12)? {
+        0x0800 => 14 + be(16)?,
+        0x86dd => 14 + 40 + be(18)?,
+        0x0806 => 14 + 28,
+        _ => return Some(e.len()),
+    };
+    (need <= e.len()).then_some(need)
 }
 
 impl Link {
     /// Over the association's (or handshake's) queue, once connected.
     pub fn new(tx: TxQueue, target: Target, me: [u8; 6], family: Family, protected: bool) -> Self {
-        Self { tx, target, me, family, protected, seq: 0x400, pn: [None; 16], sent: 0, received: 0, dropped: 0, last_drop: None, down: None }
+        Self { tx, target, me, family, protected, seq: 0x400, pn: [[None; 16]; 4], sent: 0, received: 0, dropped: 0, last_drop: None, down: None }
     }
     pub fn me(&self) -> [u8; 6] { self.me }
     pub fn up(&self) -> bool { self.down.is_none() }
@@ -143,9 +159,9 @@ impl Link {
             if f[0] & 0x0c != 0x08 || f[10..16] != bssid || f[16..22] == me { return; }
             match decap(f, rx.status, protected, &mut eth) {
                 Ok((n, tid, number)) => {
-                    if let Some(number) = number {
-                        if pn[tid].is_some_and(|last| number <= last) { dropped += 1; last_drop = Some(Drop::Replay); return; }
-                        pn[tid] = Some(number);
+                    if let Some((key, number)) = number {
+                        if pn[key][tid].is_some_and(|last| number <= last) { dropped += 1; last_drop = Some(Drop::Replay); return; }
+                        pn[key][tid] = Some(number);
                     }
                     if n > 0 { received += 1; deliver(&eth[..n]); }
                 }

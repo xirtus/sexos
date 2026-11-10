@@ -85,6 +85,9 @@ fn program_index(target: u32) -> Option<usize> {
 }
 impl Service {
     pub const fn new() -> Self { Self { bound: [0; PROGRAM_ROWS], slots: Vec::new(), sockets: Vec::new(), resolving: None, attached: false, announced: false, announced6: false, tls_used: false } }
+    /// The IP stack under the service was replaced (Wi-Fi came up or went down):
+    /// flows, sockets and the lease note belonged to the old one. Run-Shell bindings stay.
+    pub fn reset(&mut self) { let bound = self.bound; *self = Self::new(); self.bound = bound; }
     /// A free flow for a new connection or listener (not `except`): one the stack is done
     /// with first, so a connection still finishing is left to finish; then a new one.
     fn free_slot(&mut self, engine: &mut Engine<'static>, except: Option<usize>) -> Option<usize> {

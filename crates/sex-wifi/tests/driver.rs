@@ -1749,6 +1749,14 @@ fn protected_from_ap(me: &[u8], bssid: &[u8], sa: &[u8], pn: u64, payload: &[u8]
     f
 }
 
+/// A 28-byte IPv4 packet filled with `fill` past its header's version and length.
+fn ip(fill: u8) -> Vec<u8> {
+    let mut p = vec![fill; 28];
+    p[0] = 0x45;
+    p[2..4].copy_from_slice(&28u16.to_be_bytes());
+    p
+}
+
 #[test]
 fn x17_carries_ethernet_over_wpa2() {
     let (r, mut sim, bss, _, _, mut i, mut b, mut m, mut hw) = x17_connect(b"correct horse", true);
@@ -1776,19 +1784,26 @@ fn x17_carries_ethernet_over_wpa2() {
     let ok = 3 | 2 << 8 | 1 << 6 | 1 << 11;
     let gw = [0x02, 0x99, 0, 0, 0, 1];
     let fam = b.boot.chip.family;
-    let p = protected_from_ap(&me, &bss.bssid, &gw, 7, &[0x45; 20]);
+    let p = protected_from_ap(&me, &bss.bssid, &gw, 7, &ip(0x45));
     sim.deliver(&mut m, &b.layout, &mpdu_status(fam, &p, ok, true));
     sim.deliver(&mut m, &b.layout, &mpdu_status(fam, &p, ok, true));
-    sim.deliver(&mut m, &b.layout, &mpdu_status(fam, &protected_from_ap(&me, &bss.bssid, &gw, 8, &[0x46; 20]), 3 | 2 << 8, true));
-    sim.deliver(&mut m, &b.layout, &mpdu_status(fam, &protected_from_ap(&[0xff; 6], &bss.bssid, &me, 9, &[0x47; 20]), ok, true));
-    sim.deliver(&mut m, &b.layout, &mpdu_status(fam, &protected_from_ap(&[0xff; 6], &bss.bssid, &gw, 10, &[0x48; 20]), ok, true));
+    sim.deliver(&mut m, &b.layout, &mpdu_status(fam, &protected_from_ap(&me, &bss.bssid, &gw, 8, &ip(0x46)), 3 | 2 << 8, true));
+    sim.deliver(&mut m, &b.layout, &mpdu_status(fam, &protected_from_ap(&[0xff; 6], &bss.bssid, &me, 9, &ip(0x47)), ok, true));
+    // Group traffic counts its packet numbers under its own key (id 1): a lower
+    // number than the pairwise key's is not a replay.
+    let mut group = protected_from_ap(&[0xff; 6], &bss.bssid, &gw, 3, &ip(0x48));
+    group[26 + 3] |= 1 << 6;
+    sim.deliver(&mut m, &b.layout, &mpdu_status(fam, &group, ok, true));
+    sim.deliver(&mut m, &b.layout, &mpdu_status(fam, &group, ok, true));
     let mut got: Vec<Vec<u8>> = vec![];
     assert!(link.poll(&mut b, &mut i.cmdq, &mut hw, &mut m, |e| got.push(e.to_vec())));
     assert_eq!(got.len(), 2);
     assert_eq!((&got[0][0..6], &got[0][6..12], &got[0][12..14]), (&me[..], &gw[..], &[0x08, 0x00][..]));
-    assert_eq!(&got[0][14..34], &[0x45; 20]);
+    assert_eq!(&got[0][14..], &ip(0x45)[..], "the MIC is cut off");
     assert_eq!(&got[1][0..6], &[0xff; 6], "broadcast from another station");
-    assert_eq!(link.dropped, 2);
+    assert_eq!(&got[1][14..], &ip(0x48)[..]);
+    assert_eq!(link.dropped, 3);
+    assert_eq!(link.last_drop, Some(link::Drop::Replay));
     assert_eq!(link.tx.queued, 0, "the TX response freed the ring");
     // The AP leaves: the link goes down.
     sim.deliver(&mut m, &b.layout, &mpdu(fam, &from_ap(w::FC_MGMT_DEAUTH, &me, &bss.bssid, &7u16.to_le_bytes()), 40, 6, true));
@@ -1802,7 +1817,10 @@ fn open_networks_pass_plain_data_and_refuse_protected_frames() {
     let mut f = vec![0u8; 24];
     f[0..2].copy_from_slice(&(w::FC_DATA | w::FC_FROM_DS).to_le_bytes());
     f[4..10].copy_from_slice(&STA); f[10..16].copy_from_slice(&AP); f[16..22].copy_from_slice(&AP);
-    f.extend_from_slice(&[0xaa, 0xaa, 3, 0, 0, 0, 0x08, 0x06, 1, 2]);
-    assert_eq!(link::decap(&f, 3, false, &mut out), Ok((16, 0, None)));
+    f.extend_from_slice(&[0xaa, 0xaa, 3, 0, 0, 0, 0x08, 0x06]);
+    f.extend_from_slice(&[1; 28 + 4]);
+    assert_eq!(link::decap(&f, 3, false, &mut out), Ok((42, 0, None)), "cut to ARP's 28 bytes");
+    f.truncate(f.len() - 8);
+    assert_eq!(link::decap(&f, 3, false, &mut out), Err(link::Drop::Malformed), "shorter than ARP");
     assert_eq!(link::decap(&f, 3, true, &mut out), Err(link::Drop::NotDecrypted), "plain data on a WPA2 link");
 }

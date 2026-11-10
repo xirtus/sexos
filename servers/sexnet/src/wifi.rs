@@ -77,8 +77,17 @@ pub struct Wifi {
     password_len: usize,
     /// Stage W5e: the connection as sexnet's Ethernet link.
     link: Option<Link>,
+    /// Frames from the air waiting for the IP stack.
+    rx: RxQueue,
     finished: bool,
 }
+
+/// Received Ethernet frames held for the IP stack, oldest first: the air delivers
+/// a burst at a time, the stack takes one frame per turn. Full means dropped.
+const RX_FRAMES: usize = 32;
+static mut LINK_RX: [[u8; wlink::MAX_ETHERNET]; RX_FRAMES] = [[0; wlink::MAX_ETHERNET]; RX_FRAMES];
+struct RxQueue { head: usize, count: usize, len: [u16; RX_FRAMES], overflow: u64 }
+impl RxQueue { const EMPTY: Self = Self { head: 0, count: 0, len: [0; RX_FRAMES], overflow: 0 }; }
 
 fn view(slot: u64, rights: u8) -> Result<m::RegionView, u64> {
     let info = sex_pdx::memory_region_info(slot)?;
@@ -147,7 +156,7 @@ impl Wifi {
         }
         sex_pdx::serial_record!("[wifi.prepared] pool={} used={} rx_pages={} bus={:#x}",
             dma.length, bringup.layout.end, context::RX_BUFFERS, bus);
-        Some(Wifi { mmio, pool, bringup, last: csr::Step::Ready, file, pnvm, hw_rev, rf_id, init: None, last_init: None, scan: None, scans: 0, join: None, joined_ssid: [0; 32], joined_bss: None, assoc: None, rsna: None, password: [0; ws::PASSWORD_MAX], password_len: 0, link: None, finished: false })
+        Some(Wifi { mmio, pool, bringup, last: csr::Step::Ready, file, pnvm, hw_rev, rf_id, init: None, last_init: None, scan: None, scans: 0, join: None, joined_ssid: [0; 32], joined_bss: None, assoc: None, rsna: None, password: [0; ws::PASSWORD_MAX], password_len: 0, link: None, rx: RxQueue::EMPTY, finished: false })
     }
 
     /// True until the first scan has finished or the chip has failed.
@@ -295,6 +304,7 @@ impl Wifi {
             else if let Some(a) = self.assoc.as_mut() {
                 let family = self.bringup.boot.chip.family;
                 let tx = core::mem::replace(&mut a.tx, TxQueue::new(family));
+                self.rx = RxQueue::EMPTY;
                 self.link = Some(Link::new(tx, a.target, a.me(), family, false));
                 sex_pdx::serial_record!("[wifi.link.up] security=open rate={:#x}", wlink::DATA_RATE);
             }
@@ -352,6 +362,7 @@ impl Wifi {
             let family = self.bringup.boot.chip.family;
             let tx = core::mem::replace(&mut r.tx, TxQueue::new(family));
             let (target, me) = (r.target(), r.me());
+            self.rx = RxQueue::EMPTY;
             self.link = Some(Link::new(tx, target, me, family, true));
             sex_pdx::serial_record!("[wifi.link.up] security=WPA2 rate={:#x}", wlink::DATA_RATE);
         } else {
@@ -405,17 +416,37 @@ impl Wifi {
             Err(e) => { sex_pdx::serial_record!("[wifi.link.tx.failed] error={:?}", e); false }
         }
     }
-    /// Frames from the air to `deliver`; logs when the link goes down.
-    pub fn link_poll(&mut self, deliver: impl FnMut(&[u8])) {
-        let (Some(l), Some(i)) = (self.link.as_mut(), self.init.as_mut()) else { return };
+    /// Reads the air into the receive queue, then offers the oldest queued frame to
+    /// `submit` (the IP stack, which takes one frame per turn); it leaves the queue
+    /// when `submit` takes it. Returns whether a frame was taken. Logs a link loss.
+    pub fn link_receive(&mut self, submit: impl FnOnce(&[u8]) -> bool) -> bool {
+        let (Some(l), Some(i)) = (self.link.as_mut(), self.init.as_mut()) else { return false };
         let before = (l.received, l.dropped);
-        if !l.poll(&mut self.bringup, &mut i.cmdq, &mut self.mmio, &mut self.pool, deliver) {
-            sex_pdx::serial_record!("[wifi.link.down] reason={:?} sent={} received={} dropped={}", l.down, l.sent, l.received, l.dropped);
-            return;
+        let q = &mut self.rx;
+        let up = l.poll(&mut self.bringup, &mut i.cmdq, &mut self.mmio, &mut self.pool, |frame| {
+            if q.count == RX_FRAMES || frame.len() > wlink::MAX_ETHERNET { q.overflow += 1; return; }
+            let at = (q.head + q.count) % RX_FRAMES;
+            // SAFETY: sexnet runs one thread, and only this queue touches LINK_RX.
+            unsafe { (&mut *core::ptr::addr_of_mut!(LINK_RX))[at][..frame.len()].copy_from_slice(frame); }
+            q.len[at] = frame.len() as u16;
+            q.count += 1;
+        });
+        if !up {
+            sex_pdx::serial_record!("[wifi.link.down] reason={:?} sent={} received={} dropped={} overflow={}", l.down, l.sent, l.received, l.dropped, q.overflow);
+            *q = RxQueue::EMPTY;
+            return false;
         }
         if l.received != before.0 && (l.received <= 16 || l.received.is_power_of_two()) {
-            sex_pdx::serial_record!("[wifi.link.rx] frames={} dropped={} last_drop={:?}", l.received, l.dropped, l.last_drop);
+            sex_pdx::serial_record!("[wifi.link.rx] frames={} dropped={} last_drop={:?} overflow={}", l.received, l.dropped, l.last_drop, q.overflow);
         }
+        if q.count == 0 { return false; }
+        let at = q.head;
+        // SAFETY: as above.
+        let frame = unsafe { &(&*core::ptr::addr_of!(LINK_RX))[at][..q.len[at] as usize] };
+        if !submit(frame) { return false; }
+        q.head = (q.head + 1) % RX_FRAMES;
+        q.count -= 1;
+        true
     }
 
     /// Whether network `index` of the last scan is secured and no passphrase was given.
