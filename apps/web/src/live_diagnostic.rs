@@ -122,6 +122,17 @@ fn raw(doc: &Doc, page: &Page, media: &[super::media::Media], at: usize, frame: 
     }
     sex_pdx::serial_record!("[web.live.dom] owner={} frame={} scripted={} nodes={} scan_connected={} scan_unknown={} scan_limit={} dirty={} viewport={}x{} view={}x{} items={} boxes={} page={}x{} bg={:x}",owner,frame,matches!(doc,Doc::Scripted(_))as u8,d.dom.nodes.len(),count,unknown,SCAN,d.dirty as u8,d.viewport.0,d.viewport.1,view.0,view.1,page.items.len(),page.boxes.len(),page.width,page.height,page.background);
     sex_pdx::serial_record!("[web.live.queues] owner={} frame={} scroll={} script_scroll={} timer={} classic={} fetches={} modules={} media_ops={} media_appends={} native_media={} media_loads={} url={}",owner,frame,scroll,script_scroll,timer.is_some()as u8,d.classic_scripts.len(),d.fetches.len(),d.modules_wanted.len(),d.media.len(),d.media_bytes.len(),media.len(),loads,text(&d.url));
+    let mut kinds=[0usize;4];
+    for i in page.items.iter().take(8192) {
+        kinds[match i { super::sex_html::layout::Item::Rect{..}=>0,super::sex_html::layout::Item::Text{..}=>1,super::sex_html::layout::Item::Image{..}=>2,super::sex_html::layout::Item::Bullet{..}=>3 }]+=1;
+    }
+    sex_pdx::serial_record!("[web.live.paint] owner={} frame={} sampled_kinds={:?} item_limit=8192 links={} clips={} item_clips={} sampled_clipped={}",owner,frame,kinds,page.links.len(),page.clips.len(),page.item_clips.len(),page.item_clips.iter().take(8192).filter(|c|**c!=0).count());
+    for (i,rect) in page.clips.iter().take(16).enumerate() {
+        sex_pdx::serial_record!("[web.live.clip] owner={} frame={} clip={} rect={:?}",owner,frame,i,rect);
+    }
+    for (i,link) in page.links.iter().take(16).enumerate() {
+        sex_pdx::serial_record!("[web.live.link] owner={} frame={} link={} node={} rect={:?} href={}",owner,frame,i,link.node,[link.x,link.y,link.w,link.h],text(&link.href));
+    }
     let evals=unsafe{&*core::ptr::addr_of!(EVALS)};
     if let Some(e)=evals.get(at).and_then(Option::as_ref).filter(|e|e.owner==owner&&e.frame==frame) {
         sex_pdx::serial_record!("[web.live.evals] owner={} frame={} total={} ok={} thrown={} trapped={} other={} retained={} scope=initial-and-classic-eval callbacks=unavailable reasons=unavailable",owner,frame,e.total,e.ok,e.thrown,e.trapped,e.other,e.lines.len());
