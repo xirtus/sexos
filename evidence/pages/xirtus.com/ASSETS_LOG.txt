@@ -1,0 +1,7 @@
+css	https://xirtus.com/film/film.css	200 1677
+css	https://xirtus.com/film/site.css	200 543
+css	https://xirtus.com/_astro/index.D9NVyVrE.css	200 7938
+css	https://xirtus.com/_astro/_article_.vUwFRo5m.css	200 14410
+js	https://xirtus.com/app.js	200 5318
+js	https://xirtus.com/film/site.js	200 1132
+film	https://xirtus.com/film/film.js	200 10858

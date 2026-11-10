@@ -1,0 +1,5 @@
+:root { --film-font: "Space Grotesk Variable", "Space Grotesk", sans-serif; --film-weight: 700; --film-accent: #d6f354; --film-ink: #fff0f5; --film-soft: #ffd3e3; }
+.scene-eyebrow { font-family: "JetBrains Mono Variable", monospace; }
+.film-on .sky, .film-on .dock, .film-on .arch, .film-on .control { z-index: 2; }
+.film-on .dock { position: fixed; z-index: 40; }
+.scene { background: #231d28; }

@@ -1,0 +1,23 @@
+/* Added to the original sexos.dev. Keeps the neon, makes the words win over it. */
+.hero-content { position: relative; z-index: 3; }
+.hero-content::before { content: ""; position: absolute; inset: -6% -10%; z-index: -1; background: radial-gradient(closest-side, #000000d9 35%, #00000080 68%, transparent); pointer-events: none; }
+.hero-sub { color: #e8e8f2 !important; text-shadow: 0 1px 8px #000, 0 0 2px #000; }
+.meaning { margin: 14px auto 0; max-width: 620px; font-size: 14px; line-height: 1.5; color: #d5d5e6; text-shadow: 0 1px 6px #000; }
+.meaning b { color: #00f5d4; font-weight: 600; }
+#buildlog { padding: clamp(56px, 8vw, 96px) 20px; background: #05050b; border-top: 1px solid #ffffff14; }
+.bl-inner { max-width: 880px; margin: 0 auto; }
+.bl-over { display: flex; align-items: center; gap: 10px; margin: 0 0 8px; font: 500 12px/1 "Geist Mono", monospace; letter-spacing: .12em; text-transform: uppercase; color: #00f5d4; }
+.bl-dot { width: 8px; height: 8px; border-radius: 50%; background: #00f5d4; box-shadow: 0 0 12px #00f5d4; animation: blp 1.8s infinite; }
+@keyframes blp { 50% { opacity: .35; } }
+#buildlog h2 { margin: 0 0 22px; font-size: clamp(28px, 4vw, 46px); line-height: 1.05; color: #fff; }
+#bl-list { list-style: none; margin: 0; padding: 0; }
+#bl-list li { display: flex; gap: 14px; justify-content: space-between; align-items: baseline; padding: 11px 0; border-top: 1px solid #ffffff14; }
+#bl-list a { color: #e8e8f2; text-decoration: none; min-width: 0; overflow-wrap: anywhere; }
+#bl-list a:hover { color: #ff2d9b; }
+#bl-list code { color: #9b5de5; margin-right: 10px; font: 12px "Geist Mono", monospace; }
+#bl-list time { flex: none; color: #8b8ba6; font: 12px "Geist Mono", monospace; }
+#bl-list li.new a::after { content: " NEW"; color: #ff2d9b; font: 700 10px "Geist Mono", monospace; }
+.bl-more { margin: 16px 0 0; }
+.bl-more a { color: #00f5d4; }
+@media (max-width: 600px) { #bl-list li { flex-direction: column; gap: 3px; } }
+@media (prefers-reduced-motion: reduce) { .bl-dot { animation: none; } }

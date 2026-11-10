@@ -1,0 +1,3 @@
+:root { --film-font: "Archivo Black", system-ui, sans-serif; --film-weight: 400; --film-track: -.01em; --film-accent: #00f5e4; --film-soft: #8888aa; --film-giant: #eeeef8; --film-giant-size: 24vw; --film-giant-weight: 400; --film-ink: #eeeef8; }
+.film-on body > section, .film-on body > footer, .film-on body > div { position: relative; z-index: 1; }
+.film-on .scene { z-index: auto; }

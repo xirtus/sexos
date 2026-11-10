@@ -1,0 +1,5 @@
+:root { --film-font: inherit; --film-weight: 800; --film-accent: #fff; --film-soft: #ffffffd9; --film-giant: #ffffff; --film-giant-size: 21vw; --film-shadow: 0 2px 18px #000a; }
+.film-on #desc > * { position: relative; z-index: 1; }
+.film-on .scene { z-index: auto; }
+.film-on #desc > .scene { z-index: auto; }
+.scene, .film-reel { background: linear-gradient(#0000, #00000094 16%, #00000094 84%, #0000); }

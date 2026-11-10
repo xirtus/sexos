@@ -1,0 +1,52 @@
+/* The film's layers. Each site sets --film-* to match itself. */
+#film { position: fixed; inset: 0; z-index: 0; width: 100%; height: 100%; pointer-events: none; }
+.film-on main > *, .film-on footer { position: relative; z-index: 1; }
+.scene { position: relative; display: grid; align-items: center; min-height: 125vh; padding: 14vh clamp(18px, 5vw, 76px); overflow: clip; }
+.film-on main > .scene { z-index: auto; }
+.scene-copy { position: relative; z-index: 2; max-width: min(660px, 46vw); }
+.scene.right .scene-copy { justify-self: end; }
+.scene.center .scene-copy { justify-self: center; max-width: min(980px, 88vw); text-align: center; }
+.scene-eyebrow { margin: 0 0 14px; font: var(--film-eyebrow, 700 13px/1.3 inherit); letter-spacing: .24em; text-transform: uppercase; color: var(--film-accent, currentColor); }
+.scene-line { margin: 0; font-family: var(--film-font, inherit); font-weight: var(--film-weight, 800); font-size: clamp(30px, 4.3vw, 64px); line-height: 1.1; letter-spacing: var(--film-track, -.02em); color: var(--film-ink, #fff); text-shadow: var(--film-shadow, none); }
+.scene-line .w { opacity: .14; transition: opacity .25s linear; }
+.scene-line .w.lit { opacity: 1; }
+.scene-small { margin: 22px 0 0; max-width: 34em; font-size: 18px; line-height: 1.6; color: var(--film-soft, inherit); text-shadow: var(--film-shadow, none); }
+.scene-link { display: inline-block; margin-top: 18px; padding-bottom: 3px; color: var(--film-ink, #fff); font-weight: 700; text-decoration: none; border-bottom: 2px solid var(--film-accent, currentColor); }
+.scene-giant { position: absolute; z-index: 0; left: 50%; top: 50%; margin: -.5em 0 0; transform: translateX(-50%); white-space: nowrap; font-family: var(--film-font, inherit); font-weight: var(--film-giant-weight, 900); font-size: var(--film-giant-size, 25vw); line-height: 1; letter-spacing: -.035em; color: var(--film-giant, #ffffff); will-change: transform, opacity; }
+.scene.has-giant .scene-copy { align-self: end; }
+
+.finder { position: fixed; z-index: 90; left: 0; top: 0; width: 32px; height: 32px; margin: -16px 0 0 -16px; display: grid; place-items: center; pointer-events: none; opacity: 0; border: 1.5px solid #fff; border-radius: 50%; mix-blend-mode: difference; transition: width .2s, height .2s, margin .2s, opacity .2s, background .2s; }
+.finder span { opacity: 0; color: #000; font: 800 12px/1 system-ui, sans-serif; letter-spacing: .1em; text-transform: uppercase; }
+.finder.on { opacity: 1; }
+.finder.big { width: 82px; height: 82px; margin: -41px 0 0 -41px; background: #fff; }
+.finder.big span { opacity: 1; }
+
+.film-reel { position: relative; z-index: 1; height: 330vh; }
+.film-reel-pin { position: sticky; top: 0; height: 100svh; overflow: hidden; display: flex; flex-direction: column; padding: clamp(74px, 10vh, 104px) clamp(18px, 5vw, 76px) 24px; }
+.film-reel header { position: relative; z-index: 2; }
+.film-reel h2 { margin: 0; font-family: var(--film-font, inherit); font-weight: var(--film-weight, 800); font-size: clamp(38px, 5.2vw, 78px); line-height: 1; color: var(--film-ink, #fff); }
+.film-reel-note { margin: 9px 0 0; color: var(--film-soft, inherit); }
+.film-reel-foot { position: relative; z-index: 2; margin: auto 0 0; text-align: right; }
+.film-stage { position: absolute; inset: 0; perspective: 1500px; display: grid; place-items: center; padding-top: 16vh; pointer-events: none; }
+.film-spin { --card: clamp(220px, 27vw, 410px); position: relative; width: var(--card); height: calc(var(--card) * .72); transform-style: preserve-3d; will-change: transform; }
+.film-card { position: absolute; inset: 0; padding: 0; overflow: hidden; pointer-events: auto; border: 0; border-radius: 13px; background: #111; text-align: left; cursor: pointer; box-shadow: 0 16px 38px #000a; }
+.film-card img { display: block; width: 100%; height: 100%; object-fit: cover; transition: transform .35s; }
+.film-card:hover img { transform: scale(1.06); }
+.film-card span { position: absolute; left: 0; right: 0; bottom: 0; padding: 30px 13px 11px; background: linear-gradient(transparent, #000000d9); color: #fff; font-weight: 700; font-size: clamp(13px, 1.1vw, 15.5px); line-height: 1.25; }
+dialog.film-player { width: min(1120px, 96vw); padding: 0; border: 0; overflow: visible; background: #000; }
+dialog.film-player::backdrop { background: #000000e0; }
+dialog.film-player button { position: absolute; right: 0; top: -56px; min-height: 46px; padding: 8px 20px; border: 1.5px solid #ffffff80; border-radius: 99px; background: #0009; color: #fff; font-weight: 700; cursor: pointer; }
+dialog.film-player div { aspect-ratio: 16 / 9; }
+dialog.film-player iframe { display: block; width: 100%; height: 100%; border: 0; }
+
+@media (max-width: 860px) {
+  .scene { align-items: end; min-height: 118svh; padding: 56svh 18px 8vh; }
+  .scene-copy, .scene.right .scene-copy { justify-self: start; max-width: none; }
+  .scene.has-giant { padding-top: 62svh; }
+  .scene-giant { top: 26svh; }
+  .film-stage { perspective: 900px; padding-top: 26vh; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .scene-line .w { opacity: 1; }
+  .finder { display: none; }
+}

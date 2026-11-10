@@ -1,0 +1,40 @@
+/* xChurch enhancement layer. The original Landed design stays underneath untouched. */
+#banner { overflow: hidden; }
+#banner #stars { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 1; }
+#banner .content, #banner .goto-next { z-index: 2; }
+#banner .content { position: relative; }
+.reflection { font-style: italic; color: #ffffffcc; max-width: 30em; margin: 1em 0 0 auto; min-height: 3.2em; transition: opacity .8s; }
+.orbit { position: relative; display: block; border-radius: 50%; overflow: hidden; aspect-ratio: 1; box-shadow: 0 0 0 1px #e44c6580, 0 0 90px #e44c6555, 0 0 180px #5480f144; animation: halo 7s ease-in-out infinite alternate; }
+.orbit img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transform: scale(1.14); transition: opacity 1.6s, transform 8s linear; }
+.orbit img.on { opacity: 1; transform: scale(1); }
+.orbit img:first-child { position: relative; }
+@keyframes halo { to { box-shadow: 0 0 0 1px #5480f180, 0 0 120px #39c08855, 0 0 220px #e44c6544; } }
+
+.spotlight > .content { transition: opacity .9s, transform .9s; }
+.spotlight.scene-off > .content { opacity: .28; transform: translateY(26px); }
+.spotlight .image.main { transition: filter 1.2s; }
+.spotlight.scene-off .image.main { filter: saturate(.55) brightness(.72); }
+
+#rail { position: fixed; right: 18px; top: 50%; transform: translateY(-50%); z-index: 900; display: flex; flex-direction: column; gap: 14px; }
+#rail a { position: relative; display: block; width: 11px; height: 11px; border-radius: 50%; border: 1px solid #ffffffb0; background: #1c1d2699; transition: background .3s, transform .3s; }
+#rail a.on { background: #e44c65; border-color: #e44c65; transform: scale(1.35); }
+#rail a span { position: absolute; right: 20px; top: 50%; transform: translateY(-50%); white-space: nowrap; font-size: 12px; line-height: 1; padding: 5px 8px; border-radius: 4px; background: #1c1d26; color: #fff; opacity: 0; pointer-events: none; transition: opacity .2s; }
+#rail a:hover span, #rail a:focus-visible span { opacity: 1; }
+
+#four .col-4 section, #four section.col-4 { transition: transform .35s; cursor: pointer; border-radius: 8px; padding-top: 1em; }
+#four section.col-4:hover { transform: translateY(-6px); }
+#four section.col-4.walked .icon.major { box-shadow: 0 0 0 2px #e44c65, 0 0 30px #e44c6588; }
+#four section.col-4:focus-visible { outline: 2px solid #e44c65; outline-offset: 4px; }
+#walk { margin-top: 1.5em; color: #ffffffb0; }
+
+.talk-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 24px; text-align: left; }
+.talk-list a { display: block; border: 0; color: #fff; text-decoration: none; line-height: 1.35; }
+.talk-list img { width: 100%; aspect-ratio: 16/9; object-fit: cover; border-radius: 6px; margin-bottom: 10px; transition: transform .3s, box-shadow .3s; }
+.talk-list a:hover img { transform: scale(1.03); box-shadow: 0 0 40px #e44c6566; }
+@media (max-width: 980px) { #rail { display: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .orbit { animation: none; }
+  .orbit img, .spotlight > .content, .spotlight .image.main { transition: none; }
+  .spotlight.scene-off > .content { opacity: 1; transform: none; }
+  .spotlight.scene-off .image.main { filter: none; }
+}

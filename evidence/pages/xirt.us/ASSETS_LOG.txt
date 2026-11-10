@@ -1,0 +1,5 @@
+css	https://xirt.us/site.css	200 3904
+css	https://xirt.us/film/film.css	200 1677
+css	https://xirt.us/film/site.css	200 233
+js	https://xirt.us/film/site.js	200 780
+film	https://xirt.us/film/film.js	200 10341

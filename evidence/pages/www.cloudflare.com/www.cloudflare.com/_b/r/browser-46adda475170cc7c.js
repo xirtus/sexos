@@ -1,0 +1,1 @@
+function o(){return n=>{const t=new Set;return e=>{const r=i(e);t.has(r)||(t.add(r),console.error("substrate-report",JSON.stringify(c(n,e))))}}}function i(n){return[n.kind,"capability"in n?n.capability:void 0,"point"in n?n.point:void 0].join(" ")}function c(n,t){return{appId:n,...t}}export{o as createReporter};

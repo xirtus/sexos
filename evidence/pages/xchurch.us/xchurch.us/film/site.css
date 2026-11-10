@@ -1,0 +1,6 @@
+:root { --film-font: inherit; --film-weight: 300; --film-track: .01em; --film-accent: #e44c65; --film-soft: #ffffffb3; --film-giant: #ffffff; --film-giant-size: 21vw; --film-giant-weight: 700; }
+.film-on #page-wrapper > section, .film-on #page-wrapper > footer { position: relative; z-index: 1; }
+.film-on .scene { z-index: auto; }
+.film-on #page-wrapper > .scene { z-index: auto; }
+#four, #five { background: #1c1d26eb; }
+.scene-eyebrow { font-weight: 400; }
