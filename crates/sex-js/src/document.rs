@@ -39,6 +39,8 @@ pub struct Document {
     pub bodies: Vec<(u32, Vec<u8>)>,
     /// Video and audio requests not yet taken by the browser: (element, verb, argument).
     pub media: Vec<(NodeId, String, String)>,
+    /// Media Source appends not taken yet: (element, SourceBuffer, bytes).
+    pub media_bytes: Vec<(NodeId, u32, Vec<u8>)>,
     /// Loaded replies' final address and headers, by request id.
     pub heads: Vec<(u32, String)>,
     next_fetch: u32,
@@ -98,7 +100,7 @@ fn rough_measure(font: &str, text: &str) -> i32 {
 
 impl Document {
     pub fn new(dom: Dom, url: &str, viewport: (i32, i32), clock: fn() -> u64) -> Self {
-        Self { dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, navigate_post: None, rects: Vec::new(), layers: Vec::new(), clock, canvas_queue: Vec::new(), measure: rough_measure, gl: Default::default(), pictures: Vec::new(), fetches: Vec::new(), bodies: Vec::new(), media: Vec::new(), heads: Vec::new(), next_fetch: 0, cookies: None, wall: || 0, modules: Default::default(), modules_wanted: Vec::new(), import_map: Vec::new() }
+        Self { dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, navigate_post: None, rects: Vec::new(), layers: Vec::new(), clock, canvas_queue: Vec::new(), measure: rough_measure, gl: Default::default(), pictures: Vec::new(), fetches: Vec::new(), bodies: Vec::new(), media: Vec::new(), media_bytes: Vec::new(), heads: Vec::new(), next_fetch: 0, cookies: None, wall: || 0, modules: Default::default(), modules_wanted: Vec::new(), import_map: Vec::new() }
     }
 
     /// Takes each element's laid-out box from the browser's layout, for
@@ -177,6 +179,16 @@ impl Page for Document {
                 let method = text(1).trim().to_ascii_uppercase();
                 self.fetches.push(FetchAsk { id: self.next_fetch, url: String::from(text(0)), method, headers: String::from(text(2)), body: a.get(3).map(|b| b.to_vec()).unwrap_or_default() });
                 return Some(format!("{}", self.next_fetch).into_bytes());
+            }
+            op::MEDIA_APPEND => {
+                let n = self.element(Some(&text(0)))?;
+                if !matches!(self.dom.tag(n), Some("video" | "audio")) { return None; }
+                // Appends wait here until the browser's next tick: keep that bounded.
+                let queued: usize = self.media_bytes.iter().map(|(_, _, b)| b.len()).sum();
+                let bytes = a.get(2).copied().unwrap_or(&[]);
+                if queued + bytes.len() > 64 << 20 { return None; }
+                self.media_bytes.push((n, text(1).parse().ok()?, bytes.to_vec()));
+                return Some(Vec::new());
             }
             op::FETCH_HEAD => {
                 let id: u32 = text(0).parse().ok()?;

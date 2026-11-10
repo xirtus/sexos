@@ -93,8 +93,10 @@ def check_manifests(tls, workspace, app, trust=None):
     # direct manifest policy; a future provider change needs an explicit review.
     if tls.get('target'):
         errors.append('unreviewed target-specific TLS dependencies')
-    # Reviewed non-TLS replacements: the no_std port of naga's GLSL preprocessor.
-    reviewed_patches = {'crates-io': {'pp-rs': {'path': 'vendor/pp-rs-0.2.1'}}}
+    # Reviewed non-TLS replacements: the no_std port of naga's GLSL preprocessor, and
+    # virtio-drivers with sound capture for Bell.
+    reviewed_patches = {'crates-io': {'pp-rs': {'path': 'vendor/pp-rs-0.2.1'},
+                                      'virtio-drivers': {'path': 'vendor/virtio-drivers-0.13.0'}}}
     if workspace.get('patch') and workspace.get('patch') != reviewed_patches:
         errors.append('workspace dependency replacement needs TLS policy review: patch')
     if workspace.get('replace'):

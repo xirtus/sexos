@@ -204,10 +204,15 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
         return error;
     }
 
-    // Test builds only: a domain marked by the crash probe ends here, as a fault would end it.
-    if option_env!("SEXOS_CRASH_PROBE").is_some() {
+    // A domain asked to end (a desktop restart, or the crash probe in test builds)
+    // ends here, as a fault would end it.
+    {
         let pd = crate::core_local::CoreLocal::get().current_pd();
-        if crate::crash_log::probe_pending(pd) {
+        if crate::service_restart::end_requested(pd) {
+            regs.rdi = 0xfe;
+            unsafe { crate::scheduler::finish_current_task(regs as *const _) }
+        }
+        if option_env!("SEXOS_CRASH_PROBE").is_some() && crate::crash_log::probe_pending(pd) {
             crate::crash_log::fault(pd, 0xff, regs.rcx, 0, 0, "crash probe");
             regs.rdi = 0xff;
             unsafe { crate::scheduler::finish_current_task(regs as *const _) }

@@ -5,7 +5,7 @@
 //! (or an error) arrives. One bounded step per call; the service calls again.
 use crate::context::{Dma, DmaRead, Layout, RX_BUFFER_BYTES};
 use crate::csr::{Boot, Registers, Step};
-use crate::devices::Chip;
+use crate::devices::{Chip, Family};
 use crate::hcmd::{self, Alive};
 use crate::rx::{self, Rx};
 use crate::ucode::Firmware;
@@ -51,26 +51,43 @@ impl Bringup {
         !self.boot.done()
     }
 
-    /// Reads every page the firmware filled, looks for ALIVE, and posts the page again.
-    pub fn drain<D: Dma + DmaRead>(&mut self, r: &mut impl Registers, dma: &mut D) {
+    /// Reads every page the firmware filled, hands each packet to `visit`, and posts
+    /// the page again. AX210-class chips put one packet in a page; whatever follows
+    /// it is left over from an earlier use and is not read. Err names a used-ring
+    /// entry that pointed at a page the driver never posted.
+    pub fn receive<D: Dma + DmaRead>(&mut self, r: &mut impl Registers, dma: &mut D, mut visit: impl FnMut(&hcmd::Packet<'_>)) -> Result<u32, u16> {
+        let one = self.boot.chip.family == Family::Ax210;
         let mut page = [0u8; RX_BUFFER_BYTES as usize];
         let mut took = false;
+        let mut seen = 0u32;
         while let Some(next) = self.rx.next(dma, &self.layout) {
             let id = match next {
                 Ok(id) => id,
-                Err(rx::Error::BadBuffer(id)) => { self.bad_buffer = Some(id); self.boot.alive_received(false); return; }
+                Err(rx::Error::BadBuffer(id)) => { self.bad_buffer = Some(id); if took { self.rx.kick(r); } return Err(id); }
             };
             dma.read(Rx::buffer(&self.layout, id).offset, &mut page);
-            for p in hcmd::packets(&page) {
-                self.notifications = self.notifications.saturating_add(1);
-                if let Some(a) = hcmd::parse_alive(&p) {
-                    self.alive = Some(a);
-                    self.boot.alive_received(a.ok);
-                }
+            for p in hcmd::packets(&page).take(if one { 1 } else { usize::MAX }) {
+                seen += 1;
+                visit(&p);
             }
             self.rx.post(dma, &self.layout, self.base, id);
             took = true;
         }
         if took { self.rx.kick(r); }
+        self.notifications = self.notifications.saturating_add(seen);
+        Ok(seen)
+    }
+
+    /// Reads the receive ring looking for ALIVE.
+    pub fn drain<D: Dma + DmaRead>(&mut self, r: &mut impl Registers, dma: &mut D) {
+        let mut alive = None;
+        if self.receive(r, dma, |p| if let Some(a) = hcmd::parse_alive(p) { alive = Some(a) }).is_err() {
+            self.boot.alive_received(false);
+            return;
+        }
+        if let Some(a) = alive {
+            self.alive = Some(a);
+            self.boot.alive_received(a.ok);
+        }
     }
 }
