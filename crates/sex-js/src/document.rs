@@ -9,6 +9,8 @@ use sex_html::dom::{Dom, Kind, NodeId};
 
 pub struct Document {
     resource_owner: u64,
+    source_policies: alloc::collections::BTreeMap<String, bool>,
+    source_policy_overflow: bool,
     pub dom: Dom,
     /// The page's address, for `location`.
     pub url: String,
@@ -99,6 +101,30 @@ impl FetchAsk {
 }
 
 impl Document {
+    /// Bind requested module names to the fetched final URL, including redirects.
+    /// This records provenance only; it grants no fetch/CORS access.
+    pub fn keep_source_policy(&mut self, requested: &str, final_url: &str) {
+        let requested = strip_fragment(requested);
+        if self.source_policies.len() < 128 || self.source_policies.contains_key(requested) {
+            self.source_policies.insert(String::from(requested), self.source_url_muted(final_url));
+        } else { self.source_policy_overflow = true; }
+    }
+    fn source_muted(&self, source: &str) -> bool {
+        let source = strip_fragment(source);
+        if let Some(&muted) = self.source_policies.get(source) { return muted; }
+        if self.source_policy_overflow { return true; }
+        self.source_url_muted(source)
+    }
+    fn source_url_muted(&self, source: &str) -> bool {
+        let Some(resolved) = sex_html::url::resolve(&self.url, source) else {
+            return sex_fetch::Url::parse(&self.url).is_ok() || source.contains(':');
+        };
+        match (sex_fetch::Url::parse(&self.url), sex_fetch::Url::parse(&resolved)) {
+            (Ok(owner), Ok(src)) => owner.origin() != src.origin(),
+            (_, Ok(_)) | (Ok(_), Err(_)) => true,
+            _ => false, // host-owned local/about sources
+        }
+    }
     /// Whether a completion belongs to this document, independent of repainting
     /// or a script intentionally removing its own node after evaluation.
     pub fn classic_script_owner(&self, ask: &ClassicScript) -> bool { ask.owner == self.resource_owner }
@@ -142,7 +168,7 @@ fn rough_measure(font: &str, text: &str) -> i32 {
 
 impl Document {
     pub fn new(dom: Dom, url: &str, viewport: (i32, i32), clock: fn() -> u64) -> Self {
-        Self { resource_owner: NEXT_RESOURCE_OWNER.fetch_add(1, Ordering::Relaxed), dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, navigate_post: None, referrer: String::new(), parent_origin: None, outbox: Vec::new(), rects: Vec::new(), layers: Vec::new(), clock, canvas_queue: Vec::new(), measure: rough_measure, gl: Default::default(), pictures: Vec::new(), fetches: Vec::new(), classic_scripts: Vec::new(), bodies: Vec::new(), media: Vec::new(), media_bytes: Vec::new(), heads: Vec::new(), next_fetch: 0, cookies: None, wall: || 0, modules: Default::default(), modules_wanted: Vec::new(), import_map: Vec::new() }
+        Self { resource_owner: NEXT_RESOURCE_OWNER.fetch_add(1, Ordering::Relaxed), source_policies: Default::default(), source_policy_overflow: false, dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, navigate_post: None, referrer: String::new(), parent_origin: None, outbox: Vec::new(), rects: Vec::new(), layers: Vec::new(), clock, canvas_queue: Vec::new(), measure: rough_measure, gl: Default::default(), pictures: Vec::new(), fetches: Vec::new(), classic_scripts: Vec::new(), bodies: Vec::new(), media: Vec::new(), media_bytes: Vec::new(), heads: Vec::new(), next_fetch: 0, cookies: None, wall: || 0, modules: Default::default(), modules_wanted: Vec::new(), import_map: Vec::new() }
     }
 
     /// Takes each element's laid-out box from the browser's layout, for
@@ -214,6 +240,7 @@ impl Page for Document {
     fn call_bytes(&mut self, operation: u32, a: &[&[u8]]) -> Option<Vec<u8>> {
         let text = |i: usize| a.get(i).and_then(|b| core::str::from_utf8(b).ok()).unwrap_or("");
         match operation {
+            op::SOURCE_MUTED => return Some(if self.source_muted(text(0)) { b"1".to_vec() } else { b"0".to_vec() }),
             op::CLASSIC_SCRIPT => {
                 if self.classic_scripts.len() >= 64 { return None; }
                 let node = self.element(Some(&text(0)))?;

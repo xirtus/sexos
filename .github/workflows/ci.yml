@@ -121,6 +121,10 @@ jobs:
       run: |
         truncate -s 1G "$RUNNER_TEMP/blank-classic.img"
         python3 scripts/program_web_classic_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-classic.img" --out "$RUNNER_TEMP/sexos-runtime/web-classic"
+    - name: Native Promise rejection events and source isolation
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/blank-promise.img"
+        python3 scripts/program_web_promise_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-promise.img" --out "$RUNNER_TEMP/sexos-runtime/web-promise"
     - name: Native screenshot saved as a real PNG file
       run: |
         truncate -s 1G "$RUNNER_TEMP/capture-source.img"
