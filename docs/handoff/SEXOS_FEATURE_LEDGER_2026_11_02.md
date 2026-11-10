@@ -3820,6 +3820,39 @@ Follow-up to the boot log and crash records work (`BOOT_LOG_AND_CRASH_RECORDS_20
 - **ABI:** new PDX op `0x2E8` and module `sex_pdx::wifi_status`; `abi_version_hash`
   recomputed (sex-pdx lib.rs). No kernel change. Next: status bar indicator, then W5.
 
+## Intel Wi-Fi, stage W5a: joining a network's channel (2026-11-10)
+
+- **Join:** `sex_wifi::join` sends iwx_auth's commands: PHY context, RLC, MAC context,
+  binding, station, management TX queue (new TFD ring and buffers in the DMA region),
+  session protection. Versions checked against the x17's real firmware.
+- **Spindle:** `wifi` numbers the networks; `wifi join N` joins one (boot log
+  `[wifi.joined]` or `[wifi.failed] step=join`).
+- **Evidence:** `scripts/wifi_host_gate.sh` (35 driver tests): command order, bytes and
+  sizes on the firmware model, failure paths, real firmware versions.
+- **ABI / kernel:** none. W5 is split into W5a-W5e (INTEL_WIFI section 11).
+
+## Intel Wi-Fi, stage W5b: authentication and association (2026-11-10)
+- **What:** after the join, `wifi join N` authenticates (open system) and associates,
+  then updates the station and MAC context with the AID (`iwx_run`). New
+  `sex_wifi::tx` sends 802.11 frames on TX queue 1 (gen3/gen2 TX command, TFD,
+  byte counts, TX responses). New phases ASSOCIATING/ASSOCIATED in `wifi_status`.
+- **Evidence:** `scripts/wifi_host_gate.sh` (39 driver tests): the firmware model reads
+  each TFD and checks the TX command and byte count, then plays the AP. Retries,
+  refusals, TX failure and deauthentication are covered.
+- **ABI / kernel:** none (`wifi_status.rs` is not an ABI input).
+
+## Intel Wi-Fi, stage W5c: WPA2 keys (2026-11-10)
+- **What:** `wifi join N PASSPHRASE` connects to a WPA2 network. The passphrase goes
+  over `wifi_status::PASSWORD` and is wiped after the PMK is derived. New
+  `sex_wifi::rsna` runs the 4-way handshake over EAPOL data frames and installs the
+  pairwise and group keys (SEC_KEY_CMD, or ADD_STA_KEY on older firmware). New phases
+  HANDSHAKE and CONNECTED, plus the NEEDS_PASSWORD reply. `eapol::Supplicant` now owns
+  copies of the RSN elements, so it no longer borrows them.
+- **Evidence:** `scripts/wifi_host_gate.sh` (43 driver tests). The firmware model plays
+  the AP's half of the handshake, including message 1 arriving with the association
+  response. Tests cover the key command bytes on both firmware paths and a wrong
+  passphrase.
+- **ABI / kernel:** none (`wifi_status.rs` is not an ABI input).
 ## Install beside another system, and a live USB that never touches it (2026-11-09)
 
 Roadmap workstream B, part 1 (report: `docs/handoff/LINUX_AND_DESKTOP_PARITY_REPORT_2026_11_09.md` §6).

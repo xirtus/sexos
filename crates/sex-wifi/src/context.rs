@@ -23,6 +23,10 @@ pub const CMD_BUFFER_BYTES: u64 = 4096;
 /// the firmware wants a fragmented image) and room for one SKU's sections
 /// (about 14 KiB in today's files).
 pub const PNVM_BYTES: u64 = 64 * 1024;
+/// Frame buffers for the management/data TX queue (stage W5): each holds a TX
+/// command and one frame; reused round the ring like the command buffers.
+pub const TX_SLOTS: usize = 32;
+pub const TX_BUFFER_BYTES: u64 = 4096;
 pub const CONTEXT_INFO_BYTES: usize = 1792;
 pub const CONTEXT_INFO_GEN3_BYTES: usize = 104;
 pub const PRPH_SCRATCH_BYTES: usize = 1660;
@@ -78,6 +82,10 @@ pub struct Layout {
     pub cmd_buffers: Range,
     /// Platform NVM table page and sections (AX210 family; empty otherwise).
     pub pnvm: Range,
+    /// The station's TX queue (W5): its TFD ring, byte-count table and frame buffers.
+    pub tx_ring: Range,
+    pub tx_byte_counts: Range,
+    pub tx_buffers: Range,
     /// First free byte after the RX buffers; the data queues go here.
     pub end: u64,
 }
@@ -112,10 +120,13 @@ impl Layout {
         let rx_buffers = take(RX_BUFFERS as u64 * RX_BUFFER_BYTES);
         let cmd_buffers = take(CMD_SLOTS as u64 * CMD_BUFFER_BYTES);
         let pnvm = if gen3 { take(PAGE + PNVM_BYTES) } else { none };
+        let tx_ring = take(TX_RING_COUNT as u64 * TFD_BYTES);
+        let tx_byte_counts = take(PAGE);
+        let tx_buffers = take(TX_SLOTS as u64 * TX_BUFFER_BYTES);
         let end = at;
         if end > region_bytes { return Err(Error::TooSmall { needed: end }); }
         Ok(Layout { family, context, prph_scratch, prph_info, rx_status, rx_free, rx_used, cmd_ring, iml,
-            lmac, umac, paging, counts: (image.lmac.len(), image.umac.len(), image.paging.len()), rx_buffers, cmd_buffers, pnvm, end })
+            lmac, umac, paging, counts: (image.lmac.len(), image.umac.len(), image.paging.len()), rx_buffers, cmd_buffers, pnvm, tx_ring, tx_byte_counts, tx_buffers, end })
     }
 
     /// Puts one SKU's platform NVM sections in the region and points the
