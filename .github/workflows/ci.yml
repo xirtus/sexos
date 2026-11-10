@@ -17,7 +17,7 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Install build tools
-      run: sudo apt-get update && sudo apt-get install -y ripgrep xorriso qemu-system-x86 mtools clang lld llvm nasm musl-dev cmake ninja-build acpica-tools
+      run: sudo apt-get update && sudo apt-get install -y ripgrep xorriso qemu-system-x86 mtools clang lld llvm nasm musl-dev cmake ninja-build meson acpica-tools
     - name: Cache FFmpeg
       uses: actions/cache@v4
       with:
@@ -51,10 +51,14 @@ jobs:
       run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts/tests -p 'test_*.py' -v
     - name: Other systems' filesystems (FAT, exFAT, ext4, NTFS) on the host
       run: bash scripts/volumes_host_gate.sh
+    - name: Intel RAID (IMSM metadata, VMD bus) on the host
+      run: bash scripts/raid_host_gate.sh
     - name: Hardware census table (names, owners, VMD warning) on the host
       run: bash scripts/hwdb_host_gate.sh
     - name: Fetch crates for offline host gates
       run: cargo fetch --locked
+    - name: Intel Wi-Fi driver core (crypto vectors, handshakes, firmware files, power-up)
+      run: bash scripts/wifi_host_gate.sh
     - name: Host kernel-model regressions
       run: |
         python3 scripts/check_architectural_truth.py --run-host --evidence-dir "$RUNNER_TEMP/sexos-truth"
@@ -78,6 +82,8 @@ jobs:
       run: PAGING_LOG="$RUNNER_TEMP/sexos-runtime/serial.log" bash scripts/paging_recovery_runtime_gate.sh
     - name: USB input paths
       run: GATE_DIR="$RUNNER_TEMP/sexos-usb" SKIP_BUILD=1 bash scripts/usb_path_gate.sh
+    - name: Intel RAID 0 on two NVMe drives, read only
+      run: sudo apt-get install -y gdisk && python3 scripts/raid_gate.py --out "$RUNNER_TEMP/sexos-raid"
     - name: Power off and restart through ACPI
       run: |
         bash scripts/power_host_gate.sh

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-exclude = ["vendor/embedded-tls-0.19.0", "vendor/pp-rs-0.2.1"]
+exclude = ["vendor/embedded-tls-0.19.0", "vendor/pp-rs-0.2.1", "vendor/image-webp-0.2.4"]
 members = [
     "kernel",
     "servers/sexbell",
@@ -43,6 +43,8 @@ members = [
     "apps/hum",
     "purple-scanout",
     "crates/sex-pdx",
+    "crates/sex-vmd",
+    "crates/sex-imsm",
     "crates/sex-font",
     "crates/sexfs",
     "crates/sex-volumes",
@@ -50,6 +52,7 @@ members = [
     "crates/sex-net",
     "crates/sex-net-config",
     "crates/sex-tls",
+    "crates/sex-wifi",
     "crates/sex-http",
     "crates/sex-fetch",
     "crates/sex-trust-config",
