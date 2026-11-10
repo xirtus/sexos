@@ -764,7 +764,8 @@ fn disk_sectors() -> u64 {
 /// The sectors this system works in: the whole disk when it is blank or SexOS's own
 /// pre-GPT layout, else only the SexOS store partition. None of another system's disk.
 fn device_sectors() -> u64 {
-    if unsafe { RAW } { return disk_sectors(); }
+    // An Intel RAID volume is served read only as a whole: its members refuse writes.
+    if unsafe { RAW } || raid::serving() { return disk_sectors(); }
     match unsafe { LENS } {
         Lens::Store { sectors, .. } => sectors,
         Lens::Whole | Lens::Locked { .. } => disk_sectors(),
