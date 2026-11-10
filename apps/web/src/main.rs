@@ -777,6 +777,7 @@ impl Browser {
                 }
                 r
             };
+            live_diagnostic::outcome(live_diagnostic::context(self), script.page().diagnostic_owner(), &s.name, &r);
             if let Err(sex_js::Error::Trapped(why)) = &r { sex_pdx::serial_record!("[web.script] trapped={}", why); break; }
         }
         let _ = script.dispatch("ready");
@@ -1121,6 +1122,7 @@ impl Browser {
             if self.url != base || !self.doc.get().classic_script_current(&ask) { return; }
             let ok = loaded.is_some();
             sex_pdx::serial_record!("[web.script.source] node={} ok={} url={}", ask.node, ok as u8, abs);
+            let diagnostic_context = live_diagnostic::context(self);
             let Some(script) = self.doc.script() else { return };
             if let Some(r) = loaded {
                 let _ = script.dispatch(&alloc::format!("script\t{}", ask.node));
@@ -1128,6 +1130,7 @@ impl Browser {
                     sex_fetch::Url::parse(&base).map_or(true, |from| from.origin() != to.origin())
                 });
                 let result = script.eval_resource(&text_of(&r.body), &r.url, muted);
+                live_diagnostic::outcome(diagnostic_context, script.page().diagnostic_owner(), &r.url, &result);
                 let _ = script.dispatch("script\t");
                 if let Err(sex_js::Error::Trapped(why)) = result { sex_pdx::serial_record!("[web.script] trapped={}", why); return; }
             }

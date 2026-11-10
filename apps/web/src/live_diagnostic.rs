@@ -18,6 +18,8 @@ struct Cache {
 }
 // Browser and all child documents execute on this one browser thread.
 static mut CACHES: [Option<Cache>; SLOTS] = [const { None }; SLOTS];
+struct Evals { owner: u64, frame: i64, total: u32, ok: u32, thrown: u32, trapped: u32, other: u32, lines: Vec<String> }
+static mut EVALS: [Option<Evals>; SLOTS] = [const { None }; SLOTS];
 
 fn text(s: &str) -> String {
     s.chars().take(80).map(|c| if c.is_ascii_graphic() || c == ' ' { c } else { '?' }).collect()
@@ -49,6 +51,27 @@ fn chosen(dom: &Dom) -> Vec<NodeId> {
 }
 fn slot(b: &Browser) -> Option<usize> {
     match b.in_frame { None => Some(0), Some(n) => b.frames.iter().position(|f| f.node == n).map(|i| i + 1) }
+}
+pub(super) fn context(b: &Browser) -> Option<(usize,i64)> {
+    slot(b).filter(|i|*i<SLOTS).map(|i|(i,b.in_frame.map_or(-1,|n|n as i64)))
+}
+/// Classify the existing evaluation's returned status only. No exception reason
+/// lookup and no extra evaluation; opaque/handled exceptions remain opaque.
+pub(super) fn outcome(context: Option<(usize,i64)>, owner: u64, source: &str, result: &Result<(),sex_js::Error>) {
+    let Some((at,frame))=context else{return};
+    if at>=SLOTS{return;}
+    let all=unsafe{&mut *core::ptr::addr_of_mut!(EVALS)};
+    if !all[at].as_ref().is_some_and(|e|e.owner==owner&&e.frame==frame) {
+        all[at]=Some(Evals{owner,frame,total:0,ok:0,thrown:0,trapped:0,other:0,lines:Vec::new()});
+    }
+    let e=all[at].as_mut().unwrap();e.total=e.total.saturating_add(1);
+    let kind=match result {
+        Ok(())=>{e.ok=e.ok.saturating_add(1);"ok"},
+        Err(sex_js::Error::Thrown)=>{e.thrown=e.thrown.saturating_add(1);"thrown"},
+        Err(sex_js::Error::Trapped(_))=>{e.trapped=e.trapped.saturating_add(1);"trapped"},
+        _=>{e.other=e.other.saturating_add(1);"other"},
+    };
+    if e.lines.len()<32 {e.lines.push(format!("[web.live.eval-result] owner={owner} frame={frame} result={kind} reason=unavailable src={}",text(source)));}
 }
 /// Cache only computed values that the real relayout just used. No synthetic
 /// final recomputation: stale/missing owner-bound caches are unavailable.
@@ -99,6 +122,11 @@ fn raw(doc: &Doc, page: &Page, media: &[super::media::Media], at: usize, frame: 
     }
     sex_pdx::serial_record!("[web.live.dom] owner={} frame={} scripted={} nodes={} scan_connected={} scan_unknown={} scan_limit={} dirty={} viewport={}x{} view={}x{} items={} boxes={} page={}x{} bg={:x}",owner,frame,matches!(doc,Doc::Scripted(_))as u8,d.dom.nodes.len(),count,unknown,SCAN,d.dirty as u8,d.viewport.0,d.viewport.1,view.0,view.1,page.items.len(),page.boxes.len(),page.width,page.height,page.background);
     sex_pdx::serial_record!("[web.live.queues] owner={} frame={} scroll={} script_scroll={} timer={} classic={} fetches={} modules={} media_ops={} media_appends={} native_media={} media_loads={} url={}",owner,frame,scroll,script_scroll,timer.is_some()as u8,d.classic_scripts.len(),d.fetches.len(),d.modules_wanted.len(),d.media.len(),d.media_bytes.len(),media.len(),loads,text(&d.url));
+    let evals=unsafe{&*core::ptr::addr_of!(EVALS)};
+    if let Some(e)=evals.get(at).and_then(Option::as_ref).filter(|e|e.owner==owner&&e.frame==frame) {
+        sex_pdx::serial_record!("[web.live.evals] owner={} frame={} total={} ok={} thrown={} trapped={} other={} retained={} scope=initial-and-classic-eval callbacks=unavailable reasons=unavailable",owner,frame,e.total,e.ok,e.thrown,e.trapped,e.other,e.lines.len());
+        for l in &e.lines {sex_pdx::serial_record!("{}",l);}
+    } else {sex_pdx::serial_record!("[web.live.evals] owner={} frame={} status=unavailable-no-record",owner,frame);}
     #[cfg(feature="baseline-jit")]
     if let Doc::Scripted(s) = doc {
         let stats = s.jit_stats();

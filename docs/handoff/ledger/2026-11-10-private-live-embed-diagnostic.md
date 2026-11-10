@@ -29,6 +29,10 @@ It must not be described as the production binary or a coherent release image.
 - Existing per-VM Script::jit_stats reports late host-cache compilation, actual
   entries, bailouts and refusals. C metadata skips/hot-function identities and
   pending-JS-job counts remain unavailable. No guest C change in this phase.
+- Preserve returned initial/classic evaluation statuses after the existing eval
+  calls (at most 32 records per real owner). Aggregate ok/thrown/trapped/other
+  counts saturate; exception reasons, callback outcomes and runtime C provenance
+  flags stay unavailable. This neither invokes eval nor unmutes opaque errors.
 
 No JS evaluation/getters, job drain, forced layout, pixel publication, website
 source replacement, fake headers or guard/budget change. No per-call logging.
