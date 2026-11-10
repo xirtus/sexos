@@ -35,7 +35,12 @@ impl App {
     }
     fn in_arena(&self,va:u64)->bool{self.arena!=0&&va>=self.arena&&va<self.arena+(self.arena_pages*4096) as u64}
 }
+const RUN_TASK_END:u32=0x8000_0000; // Above this are BOOT trampolines and program records.
 static NEXT_RUN_TASK:AtomicU32=AtomicU32::new(0x4000_0000);
+// Reserve an id once; exhaustion remains permanent and never wraps to a boot id.
+fn next_run_task()->Result<u32,u64>{
+    NEXT_RUN_TASK.fetch_update(Ordering::Relaxed,Ordering::Relaxed,|id|id.checked_add(1).filter(|next|id>=0x4000_0000&&*next<=RUN_TASK_END)).map_err(|_|DENIED)
+}
 static APPS:Mutex<[App;MAX_APPS]>=Mutex::new([const{App::new()};MAX_APPS]);
 /// Syscalls run with interrupts off, so a holder on another core finishes soon.
 /// The timer path keeps its plain try_lock: it can wait for the next tick.
@@ -513,8 +518,7 @@ pub fn spawn_worker(pd:&ProtectionDomain,entry:u64,stack:u64,arg:u64)->Result<u6
     let apps=apps_lock!().ok_or(RETRY)?;
     let app=apps.iter().find(|a|a.ready&&a.target==pd.id).ok_or(DENIED)?;
     let run=live(app,pd)?;
-    let id=NEXT_RUN_TASK.fetch_add(1,Ordering::Relaxed);
-    if id==u32::MAX{return Err(DENIED)}
+    let id=next_run_task()?;
     crate::program_workers::spawn(pd,run,id,entry,stack,arg)
 }
 /// Turns heap pages of the caller's current run into code (SEAL) or back into data
@@ -586,10 +590,10 @@ fn rebirth(apps:&mut [App;MAX_APPS],index:usize,image:Option<usize>,source:Optio
         if !crate::smp::shootdown_covers_all()
             || crate::core_local::CoreLocal::get().core_id!=0{return Err(DENIED)}
         let copy=image.map(|len|checked_program_image(len,source)).transpose()?;
-        app.generation=app.generation.checked_add(1).ok_or(DENIED)?;
+        let generation=app.generation.checked_add(1).ok_or(DENIED)?;
         // Distinct from every boot task and every earlier run of any row, for good.
-        let task=NEXT_RUN_TASK.fetch_add(1,Ordering::Relaxed);
-        if task==u32::MAX{return Err(DENIED)}
+        let task=next_run_task()?;
+        app.generation=generation;
         if let Some(copy)=copy{load_program(app,&copy,task)?;}
         else{
             let count=app.boot_count;app.pages.clear();app.pages.extend_from_slice(&app.boot_pages[..count]);app.count=count;

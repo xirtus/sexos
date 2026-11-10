@@ -20,4 +20,5 @@ elf=Path('kernel/src/elf.rs').read_text()
 assert '.update_flags(page, PageTableFlags::from_bits_retain(crate::app_resource_state::final_elf_flags(final_flags.bits(), pku_key)))' in elf
 PY
 bash "$ROOT_DIR/scripts/program_source_pin_host_gate.sh"
+bash "$ROOT_DIR/scripts/program_task_id_host_gate.sh"
 echo '[app.resources.host.gate] PASS scope=production_authority_leaf_transition_runtime_mock_registry_mapper_tlb'
