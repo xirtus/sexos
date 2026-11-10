@@ -46,7 +46,7 @@ static mut RAW: bool = false;
 pub fn raw() -> bool { unsafe { RAW } }
 fn first_read(offset: u64, size: u64, dst_va: u64) -> u64 {
     unsafe { RAW = true; }
-    let status = super::nvme_read_into_mapped_va(offset, size, dst_va);
+    let status = super::nvme_read_into_mapped_va(offset, size, dst_va, 0);
     unsafe { RAW = false; }
     status
 }
