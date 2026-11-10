@@ -23,7 +23,7 @@ pub static mut stderr: *mut FILE = core::ptr::addr_of_mut!(STDERR);
 #[allow(non_upper_case_globals)]
 pub static mut stdout: *mut FILE = core::ptr::addr_of_mut!(STDOUT);
 
-struct Va<'a, 'f>(&'a mut VaList<'f>);
+pub(crate) struct Va<'a, 'f>(pub(crate) &'a mut VaList<'f>);
 
 impl Args for Va<'_, '_> {
     fn int(&mut self) -> i64 {
@@ -42,12 +42,12 @@ impl Args for Va<'_, '_> {
     }
 }
 
-unsafe fn c_str<'a>(s: *const c_char) -> &'a [u8] {
+pub(crate) unsafe fn c_str<'a>(s: *const c_char) -> &'a [u8] {
     let n = unsafe { crate::string::strnlen(s, usize::MAX) };
     unsafe { core::slice::from_raw_parts(s.cast(), n) }
 }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn vsnprintf(buf: *mut c_char, cap: usize, fmt: *const c_char, mut ap: VaList) -> c_int {
     let mut sink = CBuf { ptr: buf.cast(), cap, n: 0 };
     let n = format::format(unsafe { c_str(fmt) }, &mut Va(&mut ap), &mut sink);
@@ -55,17 +55,31 @@ pub unsafe extern "C" fn vsnprintf(buf: *mut c_char, cap: usize, fmt: *const c_c
     n.min(c_int::MAX as usize) as c_int
 }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+/// Formats into a fresh `malloc` buffer, which the caller frees.
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub unsafe extern "C" fn vasprintf(out: *mut *mut c_char, fmt: *const c_char, mut ap: VaList) -> c_int {
+    struct Grow(alloc::vec::Vec<u8>);
+    impl format::Sink for Grow { fn put(&mut self, b: &[u8]) { self.0.extend_from_slice(b) } }
+    let mut text = Grow(alloc::vec::Vec::new());
+    format::format(unsafe { c_str(fmt) }, &mut Va(&mut ap), &mut text);
+    let n = text.0.len();
+    let buf = unsafe { crate::mem::malloc(n + 1) } as *mut u8;
+    if buf.is_null() { return -1; }
+    unsafe { core::ptr::copy_nonoverlapping(text.0.as_ptr(), buf, n); *buf.add(n) = 0; *out = buf.cast(); }
+    n.min(c_int::MAX as usize) as c_int
+}
+
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn snprintf(buf: *mut c_char, cap: usize, fmt: *const c_char, ap: ...) -> c_int {
     unsafe { vsnprintf(buf, cap, fmt, ap) }
 }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn vsprintf(buf: *mut c_char, fmt: *const c_char, ap: VaList) -> c_int {
     unsafe { vsnprintf(buf, usize::MAX, fmt, ap) }
 }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn sprintf(buf: *mut c_char, fmt: *const c_char, ap: ...) -> c_int {
     unsafe { vsnprintf(buf, usize::MAX, fmt, ap) }
 }
@@ -184,7 +198,7 @@ pub unsafe extern "C" fn fread(_p: *mut c_void, _size: usize, _count: usize, _st
 
 /// `sscanf` for the few numeric patterns C libraries parse with it: `%d %i %u %x
 /// %ld %lld %lu %llu %f %lf %s %c %n` and literal text. Returns fields assigned.
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn vsscanf(input: *const c_char, fmt: *const c_char, mut ap: VaList) -> c_int {
     let s = unsafe { c_str(input) };
     let f = unsafe { c_str(fmt) };
@@ -192,7 +206,7 @@ pub unsafe extern "C" fn vsscanf(input: *const c_char, fmt: *const c_char, mut a
     scan(s, f, &mut out)
 }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn sscanf(input: *const c_char, fmt: *const c_char, ap: ...) -> c_int {
     unsafe { vsscanf(input, fmt, ap) }
 }

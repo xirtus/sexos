@@ -162,28 +162,30 @@ pub fn reserve_arena(pkey: u8) -> (u64, usize) {
 /// so no page is ever present while they are made (a temporary mapping would be
 /// visible to a program on another core that shares the key). One lock orders makers,
 /// so two cores cannot both create one table.
-pub fn arena_leaf(va: u64, _pkey: u8) -> Option<u64> {
+pub fn arena_leaf(va: u64, pkey: u8) -> Option<u64> {
     use x86_64::registers::control::Cr3;
     static MAKE: spin::Mutex<()> = spin::Mutex::new(());
     if let Some(leaf) = existing_leaf_address(va) { return Some(leaf); }
     let _held = MAKE.lock();
     let hhdm = crate::HHDM_REQUEST.response()?.offset;
     // Present, writable, user: the leaf alone decides access and carries the key.
-    const LINK: u64 = 0b111;
+    // A row on the shared key takes turns by its spans' user bit, which only
+    // `program_tenancy` sets: a span is made closed.
     let mut table = Cr3::read().0.start_address().as_u64();
     for shift in [39, 30, 21] {
+        let link: u64 = if shift == 21 && pkey == sex_pdx::organs::SHARED_PROGRAM_KEY { 0b011 } else { 0b111 };
         let slot = (hhdm + table + ((va >> shift) & 511) * 8) as *mut u64;
         let mut entry = unsafe { core::ptr::read_volatile(slot) };
         if entry & 1 == 0 {
             let frame = crate::memory::allocator::GLOBAL_ALLOCATOR.alloc(0)?;
             zero_frame(frame);
-            entry = frame | LINK;
+            entry = frame | link;
             unsafe { core::ptr::write_volatile(slot, entry); }
         }
         if entry & (1 << 7) != 0 { return None; }
-        if entry & LINK != LINK {
+        if entry & link != link {
             // A kernel mapping made this table; user and write here only let the leaf decide.
-            entry |= LINK;
+            entry |= link;
             unsafe { core::ptr::write_volatile(slot, entry); }
         }
         table = entry & 0x000f_ffff_ffff_f000;
@@ -207,13 +209,32 @@ pub(crate) fn zero_frame(frame: u64) {
 
 fn alias(pd: &ProtectionDomain, physical: u64, length: u64, writable: bool, mmio: bool) -> u64 {
     require_boot();
-    let va = crate::memory::va_allocator::allocate_va(length as usize).expect("BOOT_REGION_NO_VA");
+    // A row that takes turns on the shared key gets whole 2 MiB spans to itself, so
+    // one page-directory entry can open and close the region (`program_tenancy`).
+    let va = if crate::program_tenancy::shared(pd.id) {
+        let span = crate::program_tenancy::SPAN;
+        let va = crate::memory::va_allocator::allocate_va((length.next_multiple_of(span) + span) as usize).expect("BOOT_REGION_NO_VA");
+        va.next_multiple_of(span)
+    } else { crate::memory::va_allocator::allocate_va(length as usize).expect("BOOT_REGION_NO_VA") };
     let mut flags = PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE | PageTableFlags::NO_EXECUTE;
     if writable { flags |= PageTableFlags::WRITABLE; }
     if mmio { flags |= PageTableFlags::NO_CACHE | PageTableFlags::WRITE_THROUGH; }
     crate::memory::manager::GLOBAL_VAS.lock().as_mut().expect("BOOT_REGION_NO_VAS")
         .map_physical_range(VirtAddr::new(va), physical, length, flags, pd.pku_key)
         .expect("BOOT_REGION_MAP_FAILED");
+    va
+}
+
+/// A supervisor-only, uncached mapping of device registers the kernel itself programs
+/// (MSI-X tables). No domain can reach it: the pages are not user-accessible.
+pub fn kernel_mmio(physical: u64, length: u64) -> u64 {
+    require_boot();
+    let va = crate::memory::va_allocator::allocate_va(length as usize).expect("BOOT_KERNEL_MMIO_NO_VA");
+    let flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::NO_EXECUTE
+        | PageTableFlags::NO_CACHE | PageTableFlags::WRITE_THROUGH;
+    crate::memory::manager::GLOBAL_VAS.lock().as_mut().expect("BOOT_KERNEL_MMIO_NO_VAS")
+        .map_physical_range(VirtAddr::new(va), physical, length, flags, 0)
+        .expect("BOOT_KERNEL_MMIO_MAP_FAILED");
     va
 }
 
@@ -494,7 +515,9 @@ pub fn init(drive: u32, display: u32, usb: u32, net: u32, files: u32) {
     require_boot();
     // Fixed BOOT_DAG budget, not runtime allocation policy. Drivers may reserve
     // byte subregions within these grants; they cannot create frame authority.
-    dma(usb, 1, 256 * 1024);
+    // SexUSB: rings, contexts and report pages for up to 32 devices, plus the
+    // scratchpad pages real xHCI controllers ask for.
+    dma(usb, 1, 2 * 1024 * 1024);
     dma(net, sex_pdx::pci_command::DMA_REGION_ID, sex_pdx::pci_command::DMA_BYTES);
     dma(drive, 3, 512 * 1024);
     paired(files, drive, sex_pdx::SLOT_BLOCK_BUFFER, 4, sex_pdx::BLOCK_MAX_RUN, true);
@@ -572,21 +595,49 @@ pub fn pci_bar0(pd: &ProtectionDomain, dev: &crate::hal::pci::PciDevice, slot: u
 /// Only a supported BOOT-selected controller with a complete register prefix.
 /// Reject before aliasing; probing itself remains guarded by BOOT RegistryBuild.
 pub fn nic_bar0(pd:&ProtectionDomain,dev:&crate::hal::pci::PciDevice,slot:u64)->Option<RegionGrant>{
+    nic_lease(pd,dev,slot).map(|(view,_)|view)
+}
+
+/// The NIC's register view and where its registers sit inside it.
+pub fn nic_lease(pd:&ProtectionDomain,dev:&crate::hal::pci::PciDevice,slot:u64)->Option<(RegionGrant,(u32,u32))>{
     require_boot();
     if !crate::nic_boot::supported(dev.vendor_id,dev.device_id){return None}
-    let(physical,actual_length)=dev.probe_boot_bar0()?;
-    let length=crate::nic_boot::view_length(actual_length)?;
-    Some(pci_view(pd,slot,physical,actual_length,length))
+    // The first memory BAR this controller keeps its registers in.
+    let(bar,physical,actual_length)=crate::nic_boot::bars(dev.vendor_id,dev.device_id).iter()
+        .find_map(|&bar|dev.probe_boot_bar_any(bar).map(|(p,l)|(bar,p,l)))?;
+    let end=crate::nic_boot::registers_end(dev.vendor_id,dev.device_id);
+    bar_lease(pd,dev,slot,bar,physical,actual_length,end)
+}
+
+/// One BAR as a page-granular view. A BAR of a page or more is leased from its
+/// start (at most 64 KiB). A smaller BAR is leased as its whole page only when no
+/// other BAR anywhere decodes in that page; the window says where it sits.
+fn bar_lease(pd:&ProtectionDomain,dev:&crate::hal::pci::PciDevice,slot:u64,bar:u8,physical:u64,actual_length:u64,end:u64)
+    ->Option<(RegionGrant,(u32,u32))>
+{
+    require_boot();
+    if actual_length<end{return None}
+    if actual_length>=4096 {
+        let length=actual_length.min(64*1024);
+        return Some((pci_view(pd,slot,physical,actual_length,length),(0,length as u32)));
+    }
+    let page=physical&!0xfff;
+    if !crate::hal::pci::page_exclusive(page,dev.bus,dev.dev,dev.func,bar){
+        crate::serial_println!("[boot.memory.mmio.shared_page] pd={} slot={} bar={} bytes={}",pd.id,slot,bar,actual_length);
+        return None;
+    }
+    Some((pci_view(pd,slot,page,actual_length,4096),((physical-page) as u32,actual_length as u32)))
 }
 
 pub fn nic_command(pd:&ProtectionDomain,dev:&crate::hal::pci::PciDevice,slot:u64,view:RegionGrant)
     -> sex_pdx::pci_command::Grant
 {
     require_boot();
-    assert!(slot == sex_pdx::SLOT_NIC && crate::nic_boot::supported(dev.vendor_id,dev.device_id), "BOOT_NIC_COMMAND_SUBJECT");
+    let extra=slot>=sex_pdx::device::EXTRA_SLOT_BASE&&slot<sex_pdx::device::EXTRA_SLOT_BASE+sex_pdx::device::EXTRA_SLOTS;
+    assert!((slot == sex_pdx::SLOT_NIC || extra) && crate::nic_boot::supported(dev.vendor_id,dev.device_id), "BOOT_NIC_COMMAND_SUBJECT");
     assert_eq!(view.region_id,0x10000 + pd.id * 1024 + slot as u32,"BOOT_NIC_COMMAND_VIEW_ID");
     assert!(sex_pdx::memory_region::resolve_info(Some(&view)).is_ok()
-        && view.length >= crate::nic_boot::REGISTERS_END && view.length <= 65536
+        && view.length >= crate::nic_boot::registers_end(dev.vendor_id,dev.device_id) && view.length <= 65536
         && view.rights == QUERY_VIEW|READ|WRITE && view.dma_base.is_none() && view.peer_pd.is_none(), "BOOT_NIC_COMMAND_VIEW");
     let g=sex_pdx::pci_command::Grant {subject:pd.id,bus:dev.bus,device:dev.dev,function:dev.func,
         vendor_id:dev.vendor_id,device_id:dev.device_id,allowed:sex_pdx::pci_command::NIC_BITS};
@@ -627,6 +678,41 @@ pub fn virtio_command(pd:&ProtectionDomain,dev:&crate::hal::pci::PciDevice,slot:
 pub fn virtio_dma(pd_id:u32){
     require_boot();
     dma(pd_id,sex_pdx::virtio::DMA_REGION_ID,sex_pdx::virtio::DMA_BYTES);
+}
+
+/// The register BAR of a controller leased by class (HD Audio, AHCI), if its
+/// whole register prefix fits.
+pub fn class_bar(pd:&ProtectionDomain,dev:&crate::hal::pci::PciDevice,slot:u64,kind:crate::device_lease::Kind)->Option<(RegionGrant,(u32,u32))>{
+    require_boot();
+    let(physical,actual_length)=dev.probe_boot_bar_any(kind.bar())?;
+    bar_lease(pd,dev,slot,kind.bar(),physical,actual_length,kind.registers_end())
+}
+
+/// Memory-space and bus-master bits for a class-leased controller, like the NIC's.
+pub fn class_command(pd:&ProtectionDomain,dev:&crate::hal::pci::PciDevice,slot:u64,view:RegionGrant,kind:crate::device_lease::Kind)
+    -> sex_pdx::pci_command::Grant
+{
+    require_boot();
+    assert_eq!(view.region_id,0x10000 + pd.id * 1024 + slot as u32,"BOOT_CLASS_COMMAND_VIEW_ID");
+    assert!(sex_pdx::memory_region::resolve_info(Some(&view)).is_ok()
+        && view.length >= kind.registers_end() && view.length <= 65536
+        && view.rights == QUERY_VIEW|READ|WRITE && view.dma_base.is_none() && view.peer_pd.is_none(), "BOOT_CLASS_COMMAND_VIEW");
+    let g=sex_pdx::pci_command::Grant {subject:pd.id,bus:dev.bus,device:dev.dev,function:dev.func,
+        vendor_id:dev.vendor_id,device_id:dev.device_id,allowed:sex_pdx::pci_command::NIC_BITS};
+    assert!(sex_pdx::pci_command::authorize(Some(&g),pd.id,0,0).is_ok(),"BOOT_CLASS_COMMAND_GRANT");
+    let (region,bytes)=kind.dma();
+    crate::serial_println!("[boot.class.command] pd={} slot={} kind={:?} bus={} device={} function={} vendor={:#x} product={:#x} allowed={} dma_region={:#x} dma_bytes={} runtime_mint=0",
+        pd.id,slot,kind,g.bus,g.device,g.function,g.vendor_id,g.device_id,g.allowed,region,bytes);
+    g
+}
+
+/// The DMA pool a class-leased driver's rings and buffers live in. The drive
+/// service already holds its pool from `init`.
+pub fn class_dma(pd_id:u32,kind:crate::device_lease::Kind){
+    require_boot();
+    if kind==crate::device_lease::Kind::Ahci { return; }
+    let (region,bytes)=kind.dma();
+    dma(pd_id,region,bytes);
 }
 
 fn pci_view(pd:&ProtectionDomain,slot:u64,physical:u64,actual_length:u64,length:u64)->RegionGrant{
@@ -702,6 +788,18 @@ pub fn init_paging(pager_pd: u32, client_pds: [u32; 2]) {
     assert!(pager.find_capability(sex_pdx::paging::SLOT_FRAME_POOL as u32).is_none(),"PAGING_BOOT_SLOT_OCCUPIED");
     pager.grant_capability(sex_pdx::paging::SLOT_FRAME_POOL,CapabilityData::FramePool(pool));
     crate::paging::initialize(pool,mappings,pager_pd,pkeys,physical,leaves);
+}
+
+/// The page-directory entry over `address`'s 2 MiB span, if its page table exists.
+pub(crate) fn span_entry(address: u64) -> Option<u64> {
+    existing_leaf_address(address)?;
+    use x86_64::registers::control::Cr3;
+    let hhdm = crate::HHDM_REQUEST.response()?.offset;
+    let mut table = Cr3::read().0.start_address().as_u64();
+    for shift in [39,30] {
+        table = unsafe { core::ptr::read_volatile((hhdm + table + ((address >> shift)&511)*8) as *const u64) } & 0x000f_ffff_ffff_f000;
+    }
+    Some(hhdm + table + ((address >> 21)&511)*8)
 }
 
 pub(crate) fn existing_leaf_address(address: u64) -> Option<u64> {

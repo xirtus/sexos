@@ -278,7 +278,9 @@ pub fn read_pte_flags(va: VirtAddr) -> Result<u64, &'static str> {
         if (pte & 1) == 0 {
             return Err("pte not present");
         }
-        Ok(pte)
+        // User and write hold only where every level grants them, as the CPU sees it:
+        // a closed span (`program_tenancy`) leaves its leaves set.
+        Ok(pte & (pml4e & pdpte & pde | !0b110))
     }
 }
 

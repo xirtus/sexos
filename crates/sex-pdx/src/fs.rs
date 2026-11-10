@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! The file protocol. Paths and data travel through a BOOT region a client shares with
 //! Files alone; holding that region and a route to Files is the whole right to use it.
 
@@ -47,6 +47,34 @@ pub const BOOT_SECTORS: u64 = 65536;
 pub const BOOT_IMAGE_SLOT: u64 = 101;
 pub const BOOT_IMAGE_REGION_ID: u32 = 0x4100;
 pub const BOOT_IMAGE_MODULE: &str = "boot.img";
+/// Mounts the volumes a disk image holds (FAT, exFAT, ext4, NTFS) under `/media/NAME`.
+/// The data area gets one line per volume: name, format, size. Spindle only.
+pub const MOUNT: u8 = 15;
+/// Writes out and forgets the volume at `/media/NAME`. Spindle only.
+pub const UNMOUNT: u8 = 16;
+/// The open/save picker, a portal: a program asks the person for a file instead of
+/// being given the whole filesystem. PICK starts the question (data: mode byte, then a
+/// suggested name `length` bytes long) and answers with a ticket. PICKED (`offset` the
+/// ticket) answers PENDING until the person chose; then the data area holds the granted
+/// path, `@/absolute/path`, which the run may use from then on, or DENIED if they
+/// cancelled. Programs only.
+pub const PICK: u8 = 17;
+pub const PICKED: u8 = 18;
+/// The questions waiting, for the program showing the picker: one that holds the whole
+/// filesystem (`@/`), which the person gave it. Entries from DATA: row, mode, ticket
+/// (u32 LE), name length, name, suggestion length, suggestion.
+pub const PICKS: u8 = 19;
+/// Answers one question: `offset` the row, `length` the ticket, the path `@/...` the
+/// person chose (empty to cancel). The chosen path must be one the answering run holds.
+pub const ANSWER: u8 = 20;
+/// Answers OK at once and does nothing: what one call and its reply cost.
+pub const PING: u8 = 21;
+pub const PICK_OPEN: u8 = 0;
+pub const PICK_SAVE: u8 = 1;
+pub const PICK_FOLDER: u8 = 2;
+pub const PICK_HINT_MAX: usize = 64;
+/// Where other systems' volumes appear.
+pub const MEDIA: &[u8] = b"/media";
 
 pub const OK: u8 = 0;
 pub const UNAVAILABLE: u8 = 1;
@@ -61,12 +89,20 @@ pub const IO: u8 = 9;
 pub const CORRUPT: u8 = 10;
 pub const DENIED: u8 = 11;
 pub const INVALID: u8 = 12;
+/// A rename between two volumes: copy, then remove.
+pub const OTHER_DISK: u8 = 13;
+pub const READ_ONLY: u8 = 14;
+/// A kind of volume, or a feature of one (compression, encryption), SexOS can't read yet.
+pub const UNSUPPORTED: u8 = 15;
+/// The person hasn't answered yet.
+pub const PENDING: u8 = 16;
 
 pub fn message(status: u8) -> &'static [u8] {
     match status {
         OK => b"ok", UNAVAILABLE => b"no filesystem on this disk", NOT_FOUND => b"not found", EXISTS => b"already exists",
         NOT_DIR => b"not a directory", IS_DIR => b"is a directory", NOT_EMPTY => b"directory not empty", NAME => b"bad name",
-        NO_SPACE => b"disk full", IO => b"disk error", CORRUPT => b"damaged data found", DENIED => b"not allowed", _ => b"invalid request",
+        NO_SPACE => b"disk full", IO => b"disk error", CORRUPT => b"damaged data found", DENIED => b"not allowed",
+        OTHER_DISK => b"on another disk", READ_ONLY => b"read-only disk", UNSUPPORTED => b"not supported on this disk", PENDING => b"waiting for the person", _ => b"invalid request",
     }
 }
 

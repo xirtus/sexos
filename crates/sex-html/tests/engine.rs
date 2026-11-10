@@ -61,6 +61,21 @@ fn cascade_orders_by_specificity_and_importance() {
 }
 
 #[test]
+fn font_shorthand_weight_is_not_a_size() {
+    let dom = parse::parse(r#"<style>p { font: 400 18px/1.5 Lato, sans-serif } b { font: 700 1.5em serif } i { font: 0/0 a }</style><p>t<b>u</b><i>v</i></p>"#);
+    let st = sex_html::styles(&dom, &[], 800, 600);
+    let get = |t: &str| st[dom.find(t).unwrap()].as_ref().unwrap().clone();
+    assert_eq!((get("p").font_size, get("p").bold), (18, false));
+    assert_eq!((get("b").font_size, get("b").bold), (27, true));
+    assert!(get("i").font_size <= 1);
+    // Clipped to the text, a gradient colours the letters, not the box.
+    let dom = parse::parse(r#"<style>em { background: linear-gradient(90deg, #ff0000, blue); -webkit-background-clip: text; background-clip: text; color: transparent }</style><em>hi</em>"#);
+    let st = sex_html::styles(&dom, &[], 800, 600);
+    let em = st[dom.find("em").unwrap()].as_ref().unwrap();
+    assert_eq!((em.color, em.background), (0xFFFF0000, 0));
+}
+
+#[test]
 fn blocks_stack_with_collapsed_margins_and_lines_wrap() {
     let html = "<body style='margin:0'><p style='margin:10px 0'>aaaa bbbb cccc</p><p style='margin:20px 0'>dd</p>";
     // 16px font: 8px per char; width 80 holds "aaaa bbbb" (72) but not "+ cccc".
@@ -461,4 +476,61 @@ fn animations_start_when_they_first_apply() {
     // Removed, then back: it starts over.
     sex_html::styles_at(&plain, &[], 400, 300, 6000, &mut timeline);
     assert_eq!(sex_html::styles_at(&on, &[], 400, 300, 9000, &mut timeline).0[a].as_ref().unwrap().margin[3], style::Len::Px(0));
+}
+
+#[test]
+fn transitions_animate_changed_values() {
+    let sheet = "#a { width: 100px; background: #000000; transform: none; transition: background 1s linear, transform 1s linear 500ms }
+        #a.on { background: #ff0000; transform: translateX(40px); width: 300px }
+        #b { opacity: 1; transition: all 200ms linear } #b.on { opacity: 0 }";
+    let off = parse::parse(&format!("<style>{sheet}</style><div id=a>a</div><div id=b>b</div>"));
+    let on = parse::parse(&format!("<style>{sheet}</style><div id=a class=on>a</div><div id=b class=on>b</div>"));
+    let id = |n: &str| off.descendants(0).into_iter().find(|&i| off.attr(i, "id") == Some(n)).unwrap();
+    let (a, b) = (id("a"), id("b"));
+    let mut tl = sex_html::Timeline::default();
+    // Nothing moves on the first styling.
+    assert!(!sex_html::styles_at(&off, &[], 400, 300, 1000, &mut tl).1);
+    // The class arrives at 2 s.
+    let (s, running) = sex_html::styles_at(&on, &[], 400, 300, 2000, &mut tl);
+    assert!(running);
+    assert_eq!(s[a].as_ref().unwrap().background & 0xFFFFFF, 0);
+    let (s, _) = sex_html::styles_at(&on, &[], 400, 300, 2500, &mut tl);
+    let st = s[a].as_ref().unwrap();
+    assert_eq!(st.background & 0xFFFFFF, 0x800000);
+    // Width is not transitioned; transform waits for its delay.
+    assert_eq!(st.width, style::Len::Px(300));
+    assert_eq!(st.translate, None);
+    assert_eq!(s[b].as_ref().unwrap().opacity, 0, "all: 200 ms, done");
+    let (s, _) = sex_html::styles_at(&on, &[], 400, 300, 3000, &mut tl);
+    assert_eq!(s[a].as_ref().unwrap().translate, Some((style::Len::Px(20), style::Len::Px(0))));
+    // Back off half-way through: it returns from where it was.
+    let (s, _) = sex_html::styles_at(&off, &[], 400, 300, 3000, &mut tl);
+    assert_eq!(s[a].as_ref().unwrap().translate, Some((style::Len::Px(20), style::Len::Px(0))));
+    let (s, _) = sex_html::styles_at(&off, &[], 400, 300, 4000, &mut tl);
+    assert_eq!(s[a].as_ref().unwrap().translate, Some((style::Len::Px(10), style::Len::Px(0))));
+    let (s, running) = sex_html::styles_at(&off, &[], 400, 300, 9000, &mut tl);
+    assert!(!running);
+    assert_eq!(s[a].as_ref().unwrap().background & 0xFFFFFF, 0);
+}
+
+#[test]
+fn transitions_follow_computed_values_lists_and_new_state() {
+    let sheet = "#a { background-color: #000000; transition: background-color 1s linear } #a.on { background: #ff0000 }
+        #b { opacity: 1 } #b.on { opacity: 0; transition: opacity 1s linear }
+        #c { opacity: 1; width: 100px; transition-duration: 1s, 2s; transition-timing-function: linear; transition-property: opacity, width }
+        #c.on { opacity: 0; width: 300px }";
+    let off = parse::parse(&format!("<style>{sheet}</style><div id=a>a</div><div id=b>b</div><div id=c>c</div>"));
+    let on = parse::parse(&format!("<style>{sheet}</style><div id=a class=on>a</div><div id=b class=on>b</div><div id=c class=on>c</div>"));
+    let id = |n: &str| off.descendants(0).into_iter().find(|&i| off.attr(i, "id") == Some(n)).unwrap();
+    let mut tl = sex_html::Timeline::default();
+    sex_html::styles_at(&off, &[], 400, 300, 0, &mut tl);
+    sex_html::styles_at(&on, &[], 400, 300, 1000, &mut tl);
+    let (s, _) = sex_html::styles_at(&on, &[], 400, 300, 1500, &mut tl);
+    // The shorthand's colour is what changed.
+    assert_eq!(s[id("a")].as_ref().unwrap().background & 0xFFFFFF, 0x800000);
+    // The transition came with the new state, from the old opacity.
+    assert_eq!(s[id("b")].as_ref().unwrap().opacity, 127);
+    // Each property keeps its own duration.
+    let c = s[id("c")].as_ref().unwrap();
+    assert_eq!((c.opacity, c.width), (127, style::Len::Px(150)));
 }

@@ -40,6 +40,8 @@ pub fn local_apic_of(core: u32) -> Option<u32> {
     LAPIC_OF.get(core as usize)?.load(Ordering::Acquire).checked_sub(1)
 }
 static COVERED_SPARE: AtomicU32 = AtomicU32::new(0);
+/// Cores programs and their workers run on (2 and up); 0 on machines with two or fewer.
+pub fn program_cores() -> u32 { COVERED_SPARE.load(Ordering::Acquire) }
 
 pub fn boot_aps(smp: &MpResponse) {
     use x86_64::registers::control::{Cr0, Cr3, Cr4};
@@ -94,6 +96,7 @@ extern "C" fn limine_ap_entry(info: &MpInfo) -> ! {
     }
     crate::apic::enable_local();
     crate::apic::start_local_timer();
+    crate::hal::acpi::cpu_init_local();
     ONLINE.fetch_add(1, Ordering::Release);
     unsafe {
         // The timer wakes this core until BOOT is done; its handler defers until then.

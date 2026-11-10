@@ -20,7 +20,7 @@ def validate(text):
     # BOOT mints since; each (domain, slot) holds one grant.
     if len(rows) < 7 or len({(r[0], r[1]) for r in rows}) != len(rows):
         errors.append("missing/duplicate fixed boot region slots")
-    for region, size in ((1, 262144), (2, 262144), (3, 524288)):
+    for region, size in ((1, 2097152), (2, 262144), (3, 524288)):
         matches = [r for r in rows if r[2] == region]
         if len(matches) != 1 or matches[0][1:] != (32, region, size, 15, 0):
             errors.append(f"wrong DMA grant budget or rights for region {region}")
@@ -44,7 +44,7 @@ def validate(text):
     if len(negative) != 1 or (seals and negative[0].start() > seals[0].start()):
         errors.append("missing/duplicate boot region-query denials and idempotent view proof")
     for marker in (
-        r"\[sexusb\.memory\.dma\.ready\] region_id=1 length=262144",
+        r"\[sexusb\.memory\.dma\.ready\] region_id=1 length=2097152",
         r"\[sexdrive\.dma\.region\] slot=32 bytes=524288 reusable_buffers=2",
         r"\[sexfiles\.bridge\.diskfs\.buf\.ready\].*region_id=4 length=131072 peer_pd=\d+",
         r"\[sexfiles\.memory\.authority\.negative\] empty=1 wrong_kind=1 dma_right=1 ok=1",

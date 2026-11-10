@@ -1,9 +1,4 @@
-pub mod spawn;
-pub mod fs;
 pub mod storage;
-pub mod pipe;
-pub mod fork;
-pub mod translator;
 pub mod store;
 
 use crate::interrupts::SyscallRegs;
@@ -28,6 +23,22 @@ fn is_canonical_addr(addr: u64) -> bool {
 ///
 /// Does NOT hold GLOBAL_VAS or any allocator lock; it only reads the existing
 /// page tables via `read_pte_flags`.
+/// The caller may read `[start, start + len)` (see `validate_user_bytes`).
+pub fn user_bytes_readable(start: u64, len: usize) -> bool { validate_user_bytes(start, len, false) }
+/// The caller may write `[start, start + len)`.
+pub fn user_bytes_writable(start: u64, len: usize) -> bool { validate_user_bytes(start, len, true) }
+
+/// Parks the caller until its own inbox or reply slot has something, unless it already
+/// does. The pending-wake handshake covers publication after these observations. No
+/// event is consumed. Returns only if nothing parked; otherwise the task resumes in user
+/// mode with `regs` as they are now.
+unsafe fn wait_unless_pending(regs: &mut crate::interrupts::SyscallRegs) {
+    let pd = crate::core_local::CoreLocal::get().current_pd_ref();
+    let has_message = (*pd.message_ring).len() != 0;
+    let has_reply = !pd.incoming_replies.lock().is_empty();
+    if !has_message && !has_reply { crate::scheduler::wait_for_message(regs as *const _); }
+}
+
 fn validate_user_bytes(start: u64, len: usize, writable: bool) -> bool {
     if len == 0 {
         return true;
@@ -475,7 +486,25 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
             let pd=crate::core_local::CoreLocal::get().current_pd_ref();
             // A BOOT service with an arena grows there; a program row in its window.
             let reply=crate::service_memory::grow(pd.id,rdi).unwrap_or_else(||crate::app_resources::grow(pd,rdi));
+            regs.rsi=reply[1];regs.rdx=reply[2];
+            // Every caller learns the machine's memory pressure, whatever the status.
+            regs.r10=crate::program_frames::pressure();reply[0]
+        },
+
+        83 => { // SYS_PROGRAM_THREAD: workers of the caller's own run.
+            crate::program_workers::call(regs,rdi,rsi,rdx,r10)
+        },
+
+        82 => { // SYS_PROGRAM_CODE: self-only, the run's own heap pages become code or data.
+            let pd=crate::core_local::CoreLocal::get().current_pd_ref();
+            let reply=crate::app_resources::code(pd,rdi,rsi,rdx);
             regs.rsi=reply[1];regs.rdx=reply[2];reply[0]
+        },
+
+        84 => { // SYS_POWER: shut down, restart, Files' flush answer, power sensors.
+            let pd=crate::core_local::CoreLocal::get().current_pd_ref();
+            let reply=crate::hal::acpi::invoke(pd,rdi,rsi,rdx);
+            regs.rsi=reply[1];regs.rdx=reply[2];regs.r10=reply[3];regs.r8=reply[4];reply[0]
         },
 
         79 => {
@@ -586,22 +615,40 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
             }
         },
 
+        86 => crate::device_irq::syscall(regs), // SYS_DEVICE: own leases, own vectors, own bits.
+
+        100 => { // PDX_CALL_WAIT: syscall 0 to a slot, then syscall 53, in one entry.
+            // The callee runs next on this core if it lives here (a handoff).
+            let sched = &crate::scheduler::SCHEDULERS[crate::core_local::CoreLocal::get().core_id as usize];
+            sched.arm_handoff(true);
+            let called = if rdi == 0 { Err(sex_pdx::ERR_CAP_INVALID) } else { crate::ipc::safe_pdx_call(rdi as u32, rsi, rdx, r10, r8) };
+            sched.arm_handoff(false);
+            match called {
+                Ok(value) => {
+                    regs.rsi = value;
+                    regs.rax = 0;
+                    unsafe { wait_unless_pending(regs) };
+                    0
+                }
+                Err(e) => { regs.rsi = 0; e }
+            }
+        },
+
+        101 => { // PDX_REPLY_WAIT: syscall 29, then syscall 53 if it was delivered.
+            let sched = &crate::scheduler::SCHEDULERS[crate::core_local::CoreLocal::get().core_id as usize];
+            sched.arm_handoff(true);
+            let sent = crate::ipc::router::send_reply(rdi as u32, rsi).is_ok();
+            sched.arm_handoff(false);
+            if sent { regs.rax = 0; unsafe { wait_unless_pending(regs) }; 0 } else { 1 }
+        },
+
         53 => { // PDX_WAIT_SELF: only this domain's own inbox/reply events.
             if rdi != 0 {
                 sex_pdx::ERR_CAP_INVALID
             } else {
-                let pd = crate::core_local::CoreLocal::get().current_pd_ref();
-                // The pending-wake handshake covers publication after these
-                // observations. No event is consumed by this syscall.
-                let has_message = unsafe { (*pd.message_ring).len() != 0 };
-                let has_reply = !pd.incoming_replies.lock().is_empty();
-                if has_message || has_reply {
-                    0
-                } else {
-                    regs.rax = 0;
-                    unsafe { crate::scheduler::wait_for_message(regs as *const _) };
-                    0
-                }
+                regs.rax = 0;
+                unsafe { wait_unless_pending(regs) };
+                0
             }
         },
 

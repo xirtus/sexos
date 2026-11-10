@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! Boot-only shell readiness, authenticated by the kernel-supplied caller ID.
 //! BOOT_DAG grants shell's private slot 9 to sexinput before graph completion.
 //! This notification establishes receiver initialization, not new authority.

@@ -17,6 +17,7 @@ static mut DNS_RX_META:[sex_net::DnsMetadata;1]=[sex_net::DnsMetadata::EMPTY];
 static mut DNS_TX_META:[sex_net::DnsMetadata;1]=[sex_net::DnsMetadata::EMPTY];
 mod nic;
 mod ethernet;
+mod realtek;
 mod arp;
 mod jobs;
 mod dns_jobs;

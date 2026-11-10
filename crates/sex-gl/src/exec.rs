@@ -168,6 +168,8 @@ struct Code {
     /// One prepared operation per expression, run in place of `eval` for the common
     /// cases (slots, sizes and shapes resolved once).
     ops: Vec<Op>,
+    /// By expression: where a pointer always points (space, offset), when that is fixed.
+    ptr_at: Vec<Option<(u32, u32)>>,
     /// By expression: the register runs (slot, lanes) `eval` reads.
     uses: Vec<Box<[(u32, u32)]>>,
 }
@@ -187,6 +189,8 @@ enum Step {
     /// An expression `eval` runs: code (0.. functions, then the entry) and expression.
     Eval { code: u32, h: Handle<naga::Expression> },
     Store { ptr: u32, val: u32, n: u32 },
+    /// A `Store` to a private place known when the stage is built, in bounds.
+    StoreAt { off: u32, val: u32, n: u32 },
     /// Copies registers into private memory (a local's initial value).
     ToMem { off: u32, src: u32, n: u32 },
     Zero { off: u32, n: u32 },
@@ -251,20 +255,43 @@ enum Op {
     Mix { dst: u32, a: u32, b: u32, t: u32, n: u32, st: bool },
     /// A texture lookup: `coord` of `cn` lanes, then an optional array layer (`array_f`:
     /// a float), level or bias, and depth reference.
-    Sample { dst: u32, n: u32, image: u32, coord: u32, cn: u32, array: Option<u32>, array_f: bool, lod: Option<u32>, dref: Option<u32> },
+    Sample { dst: u32, n: u32, image: u32, coord: u32, cn: u32, array: Option<u32>, array_f: bool, lod: Option<u32>, lod_exact: bool, dref: Option<u32> },
+    /// `dFdx`/`dFdy`/`fwidth` of `src` across a 2x2 quad of invocations (zero outside one).
+    Deriv { dst: u32, src: u32, n: u32, axis: u8 },
+    /// Any other componentwise binary operator (integers, bools, float `%`).
+    Bin { op: B, k: K, dst: u32, a: u32, b: u32, n: u32, sa: bool, sb: bool },
+    Un { op: UnaryOperator, k: K, dst: u32, a: u32, n: u32 },
+    Conv { from: K, to: K, convert: bool, dst: u32, a: u32, n: u32 },
+    /// A componentwise float function (`fmath_lane`); a missing argument repeats `a`.
+    FMath { fun: M, dst: u32, a: u32, b: u32, c: u32, n: u32, sa: bool, sb: bool, sc: bool },
+    Select { dst: u32, cond: u32, a: u32, r: u32, n: u32, sc: bool },
+    /// A `Load` from a place known when the stage is built (a private one in bounds).
+    LoadAt { dst: u32, space: u32, off: u32, n: u32 },
+}
+
+/// How a texture lookup picks its mip level.
+#[derive(Clone, Copy, Default, Debug)]
+pub struct Lod {
+    /// `textureLod`: this level.
+    pub exact: Option<f32>,
+    /// Added to the level the derivatives give.
+    pub bias: f32,
+    /// Screen derivatives of (s, t): ds/dx, dt/dx, ds/dy, dt/dy, when known.
+    pub grad: Option<[f32; 4]>,
 }
 
 /// The lookup an `Op::Sample` makes, from lane reads `get(slot)`.
 #[inline(always)]
-fn sample_op(op: &Op, get: impl Fn(u32) -> u32, tex: &dyn Textures) -> [f32; 4] {
-    let &Op::Sample { image, coord, cn, array, array_f, lod, dref, .. } = op else { return [0.0; 4] };
+fn sample_op(op: &Op, get: impl Fn(u32) -> u32, tex: &dyn Textures, grad: Option<[f32; 4]>) -> [f32; 4] {
+    let &Op::Sample { image, coord, cn, array, array_f, lod, lod_exact, dref, .. } = op else { return [0.0; 4] };
     let mut c = [0f32; 4];
     for j in 0..cn.min(4) { c[j as usize] = f32::from_bits(get(coord + j)); }
     if let Some(a) = array {
         let v = get(a);
         c[cn.min(3) as usize] = if array_f { f32::from_bits(v) } else { v as i32 as f32 };
     }
-    let lod = lod.map_or(0.0, |s| f32::from_bits(get(s)));
+    let v = lod.map_or(0.0, |s| f32::from_bits(get(s)));
+    let lod = if lod_exact { Lod { exact: Some(v), ..Lod::default() } } else { Lod { exact: None, bias: v, grad } };
     tex.sample(get(image), c, lod, dref.map(|s| f32::from_bits(get(s))))
 }
 #[derive(Clone, Copy, Default)]
@@ -278,7 +305,7 @@ struct Acc {
 pub trait Textures {
     /// Samples texture `unit_of_global` at `coord` (s, t, r/layer); `lod` is an explicit
     /// level or bias; `depth_ref` compares for shadow samplers.
-    fn sample(&self, global: u32, coord: [f32; 4], lod: f32, depth_ref: Option<f32>) -> [f32; 4];
+    fn sample(&self, global: u32, coord: [f32; 4], lod: Lod, depth_ref: Option<f32>) -> [f32; 4];
     /// `texelFetch`: the texel at (x, y, layer) as the shader sees its bits (floats for
     /// normalized and float textures, integers for integer ones).
     fn load(&self, _global: u32, _coord: [i32; 3]) -> [u32; 4] { [0; 4] }
@@ -367,6 +394,14 @@ pub struct Machine {
 
 
 impl StageCode {
+    /// True if the program samples textures or takes derivatives: fragments then run in
+    /// 2x2 quads so neighbours give mip levels and `dFdx`/`dFdy`.
+    pub fn wants_quads(&self) -> bool {
+        self.steps.iter().any(|s| matches!(s, Step::Op(Op::Sample { .. } | Op::Deriv { .. })))
+    }
+}
+
+impl StageCode {
     pub fn new(module: Module, info: ModuleInfo) -> Result<Self, String> {
         let layout = Layout::new(&module);
         let mut regs_len = 0u32;
@@ -437,10 +472,12 @@ impl StageCode {
         for i in 0..st.funcs.len() {
             let (fh, _) = st.module.functions.iter().nth(i).unwrap();
             st.funcs[i].acc = st.access_shapes(&st.funcs[i], &st.module.functions[fh].expressions);
+            st.funcs[i].ptr_at = st.static_ptrs(&st.funcs[i], &st.module.functions[fh].expressions);
             st.funcs[i].ops = st.prepare(&st.funcs[i], &st.module.functions[fh].expressions);
             st.funcs[i].uses = uses_of(&st.funcs[i], &st.module.functions[fh].expressions);
         }
         st.entry.acc = st.access_shapes(&st.entry, &st.module.entry_points[0].function.expressions);
+        st.entry.ptr_at = st.static_ptrs(&st.entry, &st.module.entry_points[0].function.expressions);
         st.entry.ops = st.prepare(&st.entry, &st.module.entry_points[0].function.expressions);
         st.entry.uses = uses_of(&st.entry, &st.module.entry_points[0].function.expressions);
         st.fhandles = st.module.functions.iter().map(|(h, _)| h).collect();
@@ -513,7 +550,7 @@ impl StageCode {
         for h in &once { is_once[h.index()] = true; }
         let mut is_on_entry = vec![false; exprs.len()];
         for h in &on_entry { is_on_entry[h.index()] = true; }
-        Code { src, slot, ty: tys.to_vec(), on_entry, once, local_off, local_init, arg_off, arg_lanes, ret_off, acc: Vec::new(), ops: Vec::new(), uses: Vec::new(), is_once, is_on_entry }
+        Code { src, slot, ty: tys.to_vec(), on_entry, once, local_off, local_init, arg_off, arg_lanes, ret_off, acc: Vec::new(), ops: Vec::new(), ptr_at: Vec::new(), uses: Vec::new(), is_once, is_on_entry }
     }
 
     /// The flat program's steps, for looking at.
@@ -670,7 +707,11 @@ impl StageCode {
                 }
                 S::Kill => lw.steps.push(Step::Kill),
                 S::Store { pointer, value } => {
-                    lw.steps.push(Step::Store { ptr: c.slot[pointer.index()], val: c.slot[value.index()], n: c.ty[value.index()].lanes });
+                    let (val, n) = (c.slot[value.index()], c.ty[value.index()].lanes);
+                    match c.ptr_at[pointer.index()] {
+                        Some((SPACE_PRIVATE, off)) if off + n <= self.private_len => lw.steps.push(Step::StoreAt { off, val, n }),
+                        _ => lw.steps.push(Step::Store { ptr: c.slot[pointer.index()], val, n }),
+                    }
                 }
                 S::Call { function, arguments, result } => {
                     let callee = &self.funcs[function.index()];
@@ -705,7 +746,7 @@ impl StageCode {
                         if n == 1 { m.mem[off] = m.regs[s]; } else { m.mem[off..off + n].copy_from_slice(&m.regs[s..s + n]); }
                     }
                 }
-                &Step::ToMem { off, src, n } => {
+                &Step::ToMem { off, src, n } | &Step::StoreAt { off, val: src, n } => {
                     let (o, s, n) = (off as usize, src as usize, n as usize);
                     m.mem[o..o + n].copy_from_slice(&m.regs[s..s + n]);
                 }
@@ -726,6 +767,25 @@ impl StageCode {
             pc += 1;
         }
         true
+    }
+
+    /// Where each pointer expression of `c` always points, when that is fixed: a local, a
+    /// global, or a constant member or index of one.
+    fn static_ptrs(&self, c: &Code, exprs: &naga::Arena<naga::Expression>) -> Vec<Option<(u32, u32)>> {
+        let mut at: Vec<Option<(u32, u32)>> = Vec::with_capacity(exprs.len());
+        for (h, e) in exprs.iter() {
+            let p = match e {
+                E::LocalVariable(l) => Some((SPACE_PRIVATE, c.local_off[l.index()])),
+                E::GlobalVariable(g) => Some(self.global_off[g.index()]).filter(|&(space, _)| space != u32::MAX),
+                E::AccessIndex { base, .. } if c.ty[base.index()].ptr => match (c.acc[h.index()].fixed, at.get(base.index()).copied().flatten()) {
+                    (Some(off), Some((space, b))) => Some((space, b + off)),
+                    _ => None,
+                },
+                _ => None,
+            };
+            at.push(p);
+        }
+        at
     }
 
     /// Prepares one operation per expression of `c`.
@@ -753,7 +813,10 @@ impl StageCode {
                     if space == u32::MAX { Op::Generic } else { Op::Ptr { dst, space, off } }
                 }
                 E::LocalVariable(l) => Op::Ptr { dst, space: SPACE_PRIVATE, off: c.local_off[l.index()] },
-                E::Load { pointer } => Op::Load { dst, ptr: sl(*pointer), n },
+                E::Load { pointer } => match c.ptr_at[pointer.index()] {
+                    Some((space, off)) if space == SPACE_UNIFORM || (space == SPACE_PRIVATE && off + n <= self.private_len) => Op::LoadAt { dst, space, off, n },
+                    _ => Op::Load { dst, ptr: sl(*pointer), n },
+                },
                 E::AccessIndex { base, .. } => match c.acc[i].fixed {
                     Some(off) => Op::Field { dst, base: sl(*base), off, n, ptr: ty(*base).ptr, base_lanes: ty(*base).lanes },
                     None => Op::Generic,
@@ -765,13 +828,20 @@ impl StageCode {
                         Op::FBin { op: *op, dst, a: sl(*left), b: sl(*right), n, sa: lt.lanes == 1, sb: rt.lanes == 1 }
                     } else if *op == B::Multiply && lt.kind == K::F && lt.cols > 1 && rt.cols == 1 && rt.lanes > 1 {
                         Op::FMatVec { dst, m: sl(*left), v: sl(*right), rows: lt.rows as u32, cols: lt.cols as u32 }
+                    } else if lt.cols == 1 && rt.cols == 1 {
+                        Op::Bin { op: *op, k: lt.kind, dst, a: sl(*left), b: sl(*right), n, sa: lt.lanes == 1, sb: rt.lanes == 1 }
                     } else { Op::Generic }
                 }
                 E::ImageSample { image, coordinate, array_index, level, depth_ref, .. } => Op::Sample {
                     dst, n, image: sl(*image), coord: sl(*coordinate), cn: ty(*coordinate).lanes,
                     array: array_index.map(sl), array_f: array_index.is_some_and(|a| ty(a).kind == K::F),
                     lod: match level { SampleLevel::Exact(e) | SampleLevel::Bias(e) => Some(sl(*e)), _ => None },
+                    lod_exact: matches!(level, SampleLevel::Exact(_) | SampleLevel::Zero),
                     dref: depth_ref.map(sl),
+                },
+                E::Derivative { axis, expr, .. } if ty(*expr).kind == K::F && ty(*expr).cols == 1 => Op::Deriv {
+                    dst, src: sl(*expr), n: ty(*expr).lanes,
+                    axis: match axis { naga::DerivativeAxis::X => 0, naga::DerivativeAxis::Y => 1, naga::DerivativeAxis::Width => 2 },
                 },
                 E::Math { fun, arg, arg1, arg2, .. } if ty(*arg).kind == K::F && ty(*arg).cols == 1 => match (fun, arg1, arg2) {
                     (M::Dot, Some(b), _) => Op::Dot { dst, a: sl(*arg), b: sl(*b), n: ty(*arg).lanes },
@@ -784,8 +854,15 @@ impl StageCode {
                     (M::Mix, Some(b), Some(t)) if ty(*arg).lanes == n && ty(*b).lanes == n => {
                         Op::Mix { dst, a: sl(*arg), b: sl(*b), t: sl(*t), n, st: ty(*t).lanes == 1 && n > 1 }
                     }
+                    (f, b, cc) if fmath_covers(*f) => {
+                        let (b, cc) = (b.unwrap_or(*arg), cc.unwrap_or(*arg));
+                        Op::FMath { fun: *f, dst, a: sl(*arg), b: sl(b), c: sl(cc), n, sa: ty(*arg).lanes == 1, sb: ty(b).lanes == 1, sc: ty(cc).lanes == 1 }
+                    }
                     _ => Op::Generic,
                 },
+                E::Unary { op, expr } => Op::Un { op: *op, k: ty(*expr).kind, dst, a: sl(*expr), n },
+                E::As { expr, kind: to, convert } => Op::Conv { from: ty(*expr).kind, to: kind(*to), convert: convert.is_some(), dst, a: sl(*expr), n },
+                E::Select { condition, accept, reject } if n <= 16 => Op::Select { dst, cond: sl(*condition), a: sl(*accept), r: sl(*reject), n, sc: ty(*condition).lanes == 1 },
                 _ => Op::Generic,
             }
         }).collect()
@@ -798,9 +875,10 @@ impl StageCode {
         let f = |r: &[u32], i: u32| f32::from_bits(r[i as usize]);
         match op {
             &Op::Sample { dst, n, .. } => {
-                let px = sample_op(op, |x| r[x as usize], tex);
+                let px = sample_op(op, |x| r[x as usize], tex, None);
                 for j in 0..n.min(4) { r[(dst + j) as usize] = px[j as usize].to_bits(); }
             }
+            &Op::Deriv { dst, n, .. } => r[dst as usize..(dst + n) as usize].fill(0),
             Op::Generic => {}
             &Op::Copy { dst, src, n } => lanes(r, src as usize, dst as usize, n as usize),
             &Op::Splat { dst, src, n } => { let v = r[src as usize]; r[dst as usize..(dst + n) as usize].fill(v); }
@@ -892,6 +970,32 @@ impl StageCode {
                 let (x, y, w) = (f(r, a + j), f(r, b + j), f(r, if st { t } else { t + j }));
                 r[(dst + j) as usize] = (x * (1.0 - w) + y * w).to_bits();
             },
+            &Op::Bin { op, k, dst, a, b, n, sa, sb } => for j in 0..n {
+                let (x, y) = (r[(if sa { a } else { a + j }) as usize], r[(if sb { b } else { b + j }) as usize]);
+                r[(dst + j) as usize] = bin_lane(k, op, x, y);
+            },
+            &Op::LoadAt { dst, space, off, n } => {
+                let (d, o, n) = (dst as usize, off as usize, n as usize);
+                if space == SPACE_UNIFORM {
+                    if o + n <= u.len() { r[d..d + n].copy_from_slice(&u[o..o + n]); } else { r[d..d + n].fill(0); }
+                } else {
+                    r[d..d + n].copy_from_slice(&m.mem[o..o + n]);
+                }
+            }
+            &Op::Un { op, k, dst, a, n } => for j in 0..n { r[(dst + j) as usize] = un_lane(op, k, r[(a + j) as usize]); },
+            &Op::Conv { from, to, convert, dst, a, n } => for j in 0..n { r[(dst + j) as usize] = as_lane(from, to, convert, r[(a + j) as usize]); },
+            &Op::FMath { fun, dst, a, b, c, n, sa, sb, sc } => for j in 0..n {
+                let (x, y, z) = (f(r, if sa { a } else { a + j }), f(r, if sb { b } else { b + j }), f(r, if sc { c } else { c + j }));
+                r[(dst + j) as usize] = fmath_lane(fun, x, y, z).to_bits();
+            },
+            &Op::Select { dst, cond, a, r: rj, n, sc } => {
+                let mut tmp = [0u32; 16];
+                for j in 0..n.min(16) {
+                    let pick = r[(if sc { cond } else { cond + j }) as usize] != 0;
+                    tmp[j as usize] = r[(if pick { a } else { rj } + j) as usize];
+                }
+                r[dst as usize..(dst + n.min(16)) as usize].copy_from_slice(&tmp[..n.min(16) as usize]);
+            }
         }
     }
 
@@ -965,15 +1069,7 @@ impl StageCode {
             E::Unary { op, expr } => {
                 let s = c.slot[expr.index()] as usize;
                 let k = c.ty[expr.index()].kind;
-                for j in 0..n {
-                    let v = m.regs[s + j];
-                    m.regs[dst + j] = match (op, k) {
-                        (UnaryOperator::Negate, K::F) => (-f32::from_bits(v)).to_bits(),
-                        (UnaryOperator::Negate, _) => (v as i32).wrapping_neg() as u32,
-                        (UnaryOperator::LogicalNot, _) => (v == 0) as u32,
-                        (UnaryOperator::BitwiseNot, _) => !v,
-                    };
-                }
+                for j in 0..n { m.regs[dst + j] = un_lane(*op, k, m.regs[s + j]); }
             }
             E::Binary { op, left, right } => self.binary(m, c, *op, *left, *right, dst, t),
             E::Select { condition, accept, reject } => {
@@ -1000,22 +1096,7 @@ impl StageCode {
                 let s = c.slot[expr.index()] as usize;
                 let from = c.ty[expr.index()].kind;
                 let to = kind(*to);
-                for j in 0..n {
-                    let v = m.regs[s + j];
-                    m.regs[dst + j] = if convert.is_none() { v } else {
-                        match (from, to) {
-                            (K::F, K::I) => { let f = f32::from_bits(v); if f.is_nan() { 0 } else { f as i32 as u32 } }
-                            (K::F, K::U) => { let f = f32::from_bits(v); if f.is_nan() { 0 } else { f as u32 } }
-                            (K::F, K::B) => (f32::from_bits(v) != 0.0) as u32,
-                            (K::I, K::F) => (v as i32 as f32).to_bits(),
-                            (K::U, K::F) => (v as f32).to_bits(),
-                            (K::B, K::F) => if v != 0 { 1.0f32.to_bits() } else { 0 },
-                            (K::I | K::U, K::B) => (v != 0) as u32,
-                            (K::B, _) => (v != 0) as u32,
-                            _ => v,
-                        }
-                    };
-                }
+                for j in 0..n { m.regs[dst + j] = as_lane(from, to, convert.is_some(), m.regs[s + j]); }
             }
             E::ImageSample { image, coordinate, array_index, level, depth_ref, .. } => {
                 let g = m.regs[c.slot[image.index()] as usize];
@@ -1028,8 +1109,10 @@ impl StageCode {
                     coord[cn.min(3)] = if c.ty[ai.index()].kind == K::F { f32::from_bits(a) } else { a as i32 as f32 };
                 }
                 let lod = match level {
-                    SampleLevel::Exact(e) | SampleLevel::Bias(e) => f32::from_bits(m.regs[c.slot[e.index()] as usize]),
-                    _ => 0.0,
+                    SampleLevel::Exact(e) => Lod { exact: Some(f32::from_bits(m.regs[c.slot[e.index()] as usize])), ..Lod::default() },
+                    SampleLevel::Bias(e) => Lod { bias: f32::from_bits(m.regs[c.slot[e.index()] as usize]), ..Lod::default() },
+                    SampleLevel::Zero => Lod { exact: Some(0.0), ..Lod::default() },
+                    _ => Lod::default(),
                 };
                 let dref = depth_ref.map(|d| f32::from_bits(m.regs[c.slot[d.index()] as usize]));
                 let px = tex.sample(g, coord, lod, dref);
@@ -1166,68 +1249,7 @@ impl StageCode {
         for j in 0..n {
             let a = m.regs[ls + if lt.lanes == 1 { 0 } else { j }];
             let b = m.regs[rs + if rt.lanes == 1 { 0 } else { j }];
-            m.regs[dst + j] = match k {
-                K::F => {
-                    let (x, y) = (f32::from_bits(a), f32::from_bits(b));
-                    match op {
-                        B::Add => (x + y).to_bits(),
-                        B::Subtract => (x - y).to_bits(),
-                        B::Multiply => (x * y).to_bits(),
-                        B::Divide => (x / y).to_bits(),
-                        B::Modulo => libm::fmodf(x, y).to_bits(),
-                        B::Equal => (x == y) as u32,
-                        B::NotEqual => (x != y) as u32,
-                        B::Less => (x < y) as u32,
-                        B::LessEqual => (x <= y) as u32,
-                        B::Greater => (x > y) as u32,
-                        B::GreaterEqual => (x >= y) as u32,
-                        _ => 0,
-                    }
-                }
-                K::I => {
-                    let (x, y) = (a as i32, b as i32);
-                    match op {
-                        B::Add => x.wrapping_add(y) as u32,
-                        B::Subtract => x.wrapping_sub(y) as u32,
-                        B::Multiply => x.wrapping_mul(y) as u32,
-                        B::Divide => if y == 0 { 0 } else { x.wrapping_div(y) as u32 },
-                        B::Modulo => if y == 0 { 0 } else { x.wrapping_rem(y) as u32 },
-                        B::Equal => (x == y) as u32,
-                        B::NotEqual => (x != y) as u32,
-                        B::Less => (x < y) as u32,
-                        B::LessEqual => (x <= y) as u32,
-                        B::Greater => (x > y) as u32,
-                        B::GreaterEqual => (x >= y) as u32,
-                        B::And => (x & y) as u32,
-                        B::InclusiveOr => (x | y) as u32,
-                        B::ExclusiveOr => (x ^ y) as u32,
-                        B::ShiftLeft => x.wrapping_shl(b) as u32,
-                        B::ShiftRight => x.wrapping_shr(b) as u32,
-                        B::LogicalAnd => (x != 0 && y != 0) as u32,
-                        B::LogicalOr => (x != 0 || y != 0) as u32,
-                    }
-                }
-                K::U | K::B => match op {
-                    B::Add => a.wrapping_add(b),
-                    B::Subtract => a.wrapping_sub(b),
-                    B::Multiply => a.wrapping_mul(b),
-                    B::Divide => if b == 0 { 0 } else { a / b },
-                    B::Modulo => if b == 0 { 0 } else { a % b },
-                    B::Equal => (a == b) as u32,
-                    B::NotEqual => (a != b) as u32,
-                    B::Less => (a < b) as u32,
-                    B::LessEqual => (a <= b) as u32,
-                    B::Greater => (a > b) as u32,
-                    B::GreaterEqual => (a >= b) as u32,
-                    B::And => a & b,
-                    B::InclusiveOr => a | b,
-                    B::ExclusiveOr => a ^ b,
-                    B::ShiftLeft => a.wrapping_shl(b),
-                    B::ShiftRight => a.wrapping_shr(b),
-                    B::LogicalAnd => (a != 0 && b != 0) as u32,
-                    B::LogicalOr => (a != 0 || b != 0) as u32,
-                },
-            };
+            m.regs[dst + j] = bin_lane(k, op, a, b);
         }
     }
 
@@ -1331,61 +1353,172 @@ impl StageCode {
                     m.regs[dst + j] = v;
                     continue;
                 }
-                M::Abs => libm::fabsf(x),
-                M::Min => x.min(get(m, b, j)),
-                M::Max => x.max(get(m, b, j)),
-                M::Clamp => x.max(get(m, b, j)).min(get(m, cc, j)),
-                M::Saturate => x.clamp(0.0, 1.0),
-                M::Cos => libm::cosf(x),
-                M::Cosh => libm::coshf(x),
-                M::Sin => libm::sinf(x),
-                M::Sinh => libm::sinhf(x),
-                M::Tan => libm::tanf(x),
-                M::Tanh => libm::tanhf(x),
-                M::Acos => libm::acosf(x),
-                M::Asin => libm::asinf(x),
-                M::Atan => libm::atanf(x),
-                M::Atan2 => libm::atan2f(x, get(m, b, j)),
-                M::Asinh => libm::asinhf(x),
-                M::Acosh => libm::acoshf(x),
-                M::Atanh => libm::atanhf(x),
-                M::Radians => x * (core::f32::consts::PI / 180.0),
-                M::Degrees => x * (180.0 / core::f32::consts::PI),
-                M::Ceil => libm::ceilf(x),
-                M::Floor => libm::floorf(x),
-                M::Round => libm::rintf(x),
-                M::Fract => x - libm::floorf(x),
-                M::Trunc => libm::truncf(x),
                 M::Ldexp => libm::ldexpf(x, m.regs[c.slot[b.unwrap().index()] as usize + j] as i32),
-                M::Exp => libm::expf(x),
-                M::Exp2 => libm::exp2f(x),
-                M::Log => libm::logf(x),
-                M::Log2 => libm::log2f(x),
-                M::Pow => libm::powf(x, get(m, b, j)),
-                M::Sign => if at.kind == K::I {
+                M::Sign if at.kind == K::I => {
                     m.regs[dst + j] = (m.regs[c.slot[a.index()] as usize + j] as i32).signum() as u32; continue;
-                } else if x > 0.0 { 1.0 } else if x < 0.0 { -1.0 } else { 0.0 },
-                M::Fma => x * get(m, b, j) + get(m, cc, j),
-                M::Mix => { let k = get(m, cc, j); x * (1.0 - k) + get(m, b, j) * k }
-                M::Step => if get(m, b, j) < x { 0.0 } else { 1.0 },
-                M::SmoothStep => {
-                    let (e0, e1, v) = (x, get(m, b, j), get(m, cc, j));
-                    let k = ((v - e0) / (e1 - e0)).clamp(0.0, 1.0);
-                    k * k * (3.0 - 2.0 * k)
                 }
-                M::Sqrt => libm::sqrtf(x),
-                M::InverseSqrt => 1.0 / libm::sqrtf(x),
-                M::QuantizeToF16 => x,
-                _ => 0.0,
+                _ => fmath_lane(fun, x, get(m, b, j), get(m, cc, j)),
             };
             m.regs[dst + j] = r.to_bits();
         }
     }
 }
 
+/// One lane of a componentwise binary operator on values of kind `k`.
+#[inline(always)]
+pub(crate) fn bin_lane(k: K, op: B, a: u32, b: u32) -> u32 {
+    match k {
+        K::F => {
+            let (x, y) = (f32::from_bits(a), f32::from_bits(b));
+            match op {
+                B::Add => (x + y).to_bits(),
+                B::Subtract => (x - y).to_bits(),
+                B::Multiply => (x * y).to_bits(),
+                B::Divide => (x / y).to_bits(),
+                B::Modulo => libm::fmodf(x, y).to_bits(),
+                B::Equal => (x == y) as u32,
+                B::NotEqual => (x != y) as u32,
+                B::Less => (x < y) as u32,
+                B::LessEqual => (x <= y) as u32,
+                B::Greater => (x > y) as u32,
+                B::GreaterEqual => (x >= y) as u32,
+                _ => 0,
+            }
+        }
+        K::I => {
+            let (x, y) = (a as i32, b as i32);
+            match op {
+                B::Add => x.wrapping_add(y) as u32,
+                B::Subtract => x.wrapping_sub(y) as u32,
+                B::Multiply => x.wrapping_mul(y) as u32,
+                B::Divide => if y == 0 { 0 } else { x.wrapping_div(y) as u32 },
+                B::Modulo => if y == 0 { 0 } else { x.wrapping_rem(y) as u32 },
+                B::Equal => (x == y) as u32,
+                B::NotEqual => (x != y) as u32,
+                B::Less => (x < y) as u32,
+                B::LessEqual => (x <= y) as u32,
+                B::Greater => (x > y) as u32,
+                B::GreaterEqual => (x >= y) as u32,
+                B::And => (x & y) as u32,
+                B::InclusiveOr => (x | y) as u32,
+                B::ExclusiveOr => (x ^ y) as u32,
+                B::ShiftLeft => x.wrapping_shl(b) as u32,
+                B::ShiftRight => x.wrapping_shr(b) as u32,
+                B::LogicalAnd => (x != 0 && y != 0) as u32,
+                B::LogicalOr => (x != 0 || y != 0) as u32,
+            }
+        }
+        K::U | K::B => match op {
+            B::Add => a.wrapping_add(b),
+            B::Subtract => a.wrapping_sub(b),
+            B::Multiply => a.wrapping_mul(b),
+            B::Divide => if b == 0 { 0 } else { a / b },
+            B::Modulo => if b == 0 { 0 } else { a % b },
+            B::Equal => (a == b) as u32,
+            B::NotEqual => (a != b) as u32,
+            B::Less => (a < b) as u32,
+            B::LessEqual => (a <= b) as u32,
+            B::Greater => (a > b) as u32,
+            B::GreaterEqual => (a >= b) as u32,
+            B::And => a & b,
+            B::InclusiveOr => a | b,
+            B::ExclusiveOr => a ^ b,
+            B::ShiftLeft => a.wrapping_shl(b),
+            B::ShiftRight => a.wrapping_shr(b),
+            B::LogicalAnd => (a != 0 && b != 0) as u32,
+            B::LogicalOr => (a != 0 || b != 0) as u32,
+        },
+    }
+}
+
+/// One lane of a unary operator on a value of kind `k`.
+#[inline(always)]
+pub(crate) fn un_lane(op: UnaryOperator, k: K, v: u32) -> u32 {
+    match (op, k) {
+        (UnaryOperator::Negate, K::F) => (-f32::from_bits(v)).to_bits(),
+        (UnaryOperator::Negate, _) => (v as i32).wrapping_neg() as u32,
+        (UnaryOperator::LogicalNot, _) => (v == 0) as u32,
+        (UnaryOperator::BitwiseNot, _) => !v,
+    }
+}
+
+/// One lane of a conversion (`convert`) or bit cast from `from` to `to`.
+#[inline(always)]
+pub(crate) fn as_lane(from: K, to: K, convert: bool, v: u32) -> u32 {
+    if !convert { return v; }
+    match (from, to) {
+        (K::F, K::I) => { let f = f32::from_bits(v); if f.is_nan() { 0 } else { f as i32 as u32 } }
+        (K::F, K::U) => { let f = f32::from_bits(v); if f.is_nan() { 0 } else { f as u32 } }
+        (K::F, K::B) => (f32::from_bits(v) != 0.0) as u32,
+        (K::I, K::F) => (v as i32 as f32).to_bits(),
+        (K::U, K::F) => (v as f32).to_bits(),
+        (K::B, K::F) => if v != 0 { 1.0f32.to_bits() } else { 0 },
+        (K::I | K::U, K::B) => (v != 0) as u32,
+        (K::B, _) => (v != 0) as u32,
+        _ => v,
+    }
+}
+
+/// Whether `fmath_lane` covers `fun` (componentwise on floats).
+pub(crate) fn fmath_covers(fun: M) -> bool {
+    matches!(fun, M::Abs | M::Min | M::Max | M::Clamp | M::Saturate | M::Cos | M::Cosh | M::Sin | M::Sinh | M::Tan | M::Tanh
+        | M::Acos | M::Asin | M::Atan | M::Atan2 | M::Asinh | M::Acosh | M::Atanh | M::Radians | M::Degrees | M::Ceil | M::Floor
+        | M::Round | M::Fract | M::Trunc | M::Exp | M::Exp2 | M::Log | M::Log2 | M::Pow | M::Sign | M::Fma | M::Mix | M::Step
+        | M::SmoothStep | M::Sqrt | M::InverseSqrt | M::QuantizeToF16)
+}
+
+/// One lane of a componentwise float function of up to three arguments.
+#[inline(always)]
+pub(crate) fn fmath_lane(fun: M, x: f32, y: f32, z: f32) -> f32 {
+    match fun {
+        M::Abs => libm::fabsf(x),
+        M::Min => x.min(y),
+        M::Max => x.max(y),
+        M::Clamp => x.max(y).min(z),
+        M::Saturate => x.clamp(0.0, 1.0),
+        M::Cos => libm::cosf(x),
+        M::Cosh => libm::coshf(x),
+        M::Sin => libm::sinf(x),
+        M::Sinh => libm::sinhf(x),
+        M::Tan => libm::tanf(x),
+        M::Tanh => libm::tanhf(x),
+        M::Acos => libm::acosf(x),
+        M::Asin => libm::asinf(x),
+        M::Atan => libm::atanf(x),
+        M::Atan2 => libm::atan2f(x, y),
+        M::Asinh => libm::asinhf(x),
+        M::Acosh => libm::acoshf(x),
+        M::Atanh => libm::atanhf(x),
+        M::Radians => x * (core::f32::consts::PI / 180.0),
+        M::Degrees => x * (180.0 / core::f32::consts::PI),
+        M::Ceil => libm::ceilf(x),
+        M::Floor => libm::floorf(x),
+        M::Round => libm::rintf(x),
+        M::Fract => x - libm::floorf(x),
+        M::Trunc => libm::truncf(x),
+        M::Exp => libm::expf(x),
+        M::Exp2 => libm::exp2f(x),
+        M::Log => libm::logf(x),
+        M::Log2 => libm::log2f(x),
+        M::Pow => libm::powf(x, y),
+        M::Sign => if x > 0.0 { 1.0 } else if x < 0.0 { -1.0 } else { 0.0 },
+        M::Fma => x * y + z,
+        M::Mix => x * (1.0 - z) + y * z,
+        M::Step => if y < x { 0.0 } else { 1.0 },
+        M::SmoothStep => {
+            let k = ((z - x) / (y - x)).clamp(0.0, 1.0);
+            k * k * (3.0 - 2.0 * k)
+        }
+        M::Sqrt => libm::sqrtf(x),
+        M::InverseSqrt => 1.0 / libm::sqrtf(x),
+        M::QuantizeToF16 => x,
+        _ => 0.0,
+    }
+}
+
 struct NoTextures;
 impl Textures for NoTextures {
-    fn sample(&self, _: u32, _: [f32; 4], _: f32, _: Option<f32>) -> [f32; 4] { [0.0; 4] }
+    fn sample(&self, _: u32, _: [f32; 4], _: Lod, _: Option<f32>) -> [f32; 4] { [0.0; 4] }
 }
 
 fn det(x: &[f32], n: usize) -> f32 {

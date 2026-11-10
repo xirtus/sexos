@@ -7,7 +7,8 @@
 //! signals or threads here: a C library gets its input and output from the Rust
 //! program that links it, through callbacks (FFmpeg's `AVIOContext`), never by
 //! reaching the system itself. So C code inside a program holds exactly the
-//! authority of that program's BOOT row, like the program's Rust code.
+//! authority of that program's BOOT row, like the program's Rust code. Threads
+//! (`pthread`) are the program's own workers, so they add cores, not authority.
 //!
 //! Headers are musl's (MIT), installed by `scripts/build_ffmpeg.sh`; `long double`
 //! is `double` there, because the soft-float target has no x87.
@@ -18,6 +19,7 @@
 #![cfg_attr(not(test), no_std)]
 #![feature(c_variadic)]
 #![allow(clippy::missing_safety_doc)]
+#![allow(non_camel_case_types)]
 
 extern crate alloc;
 
@@ -28,13 +30,18 @@ pub mod stdlib;
 pub mod string;
 pub mod math;
 pub mod time;
+pub mod pthread;
+pub mod cxx;
+pub mod locale;
+#[cfg(target_os = "hermit")]
+pub mod posix;
 
 pub use core::ffi::{c_char, c_int, c_long, c_uint, c_ulong, c_void};
 
 /// `errno`: one per program; SexOS programs that use this library are single-threaded.
 static mut ERRNO: c_int = 0;
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn __errno_location() -> *mut c_int {
     core::ptr::addr_of_mut!(ERRNO)
 }
@@ -66,6 +73,10 @@ pub fn set_log_default(sink: fn(&[u8])) {
 pub(crate) fn log(bytes: &[u8]) {
     if let Some(sink) = unsafe { LOG } {
         sink(bytes);
+    } else {
+        // An ordinary program's diagnostics go to its standard error.
+        #[cfg(target_os = "hermit")]
+        posix::log_line(bytes);
     }
 }
 
@@ -92,6 +103,7 @@ pub unsafe extern "C" fn abort() -> ! {
 
 #[cfg_attr(target_os = "none", no_mangle)]
 pub unsafe extern "C" fn exit(code: c_int) -> ! {
+    cxx::run_at_exit();
     match unsafe { EXIT } {
         Some(exit) => exit(code),
         None => panic!("exit"),
@@ -99,25 +111,25 @@ pub unsafe extern "C" fn exit(code: c_int) -> ! {
 }
 
 /// No environment: a program's settings come from its arguments and its own folder.
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn getenv(_name: *const c_char) -> *mut c_char {
     core::ptr::null_mut()
 }
 
 /// Character set conversion is not offered; FFmpeg falls back to UTF-8 only.
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn iconv_open(_to: *const c_char, _from: *const c_char) -> *mut c_void {
     set_errno(EINVAL);
     usize::MAX as *mut c_void
 }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn iconv(_cd: *mut c_void, _i: *mut *mut c_char, _il: *mut usize, _o: *mut *mut c_char, _ol: *mut usize) -> usize {
     set_errno(EINVAL);
     usize::MAX
 }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn iconv_close(_cd: *mut c_void) -> c_int {
     0
 }

@@ -32,6 +32,8 @@ static mut UNCOMMITTED: u64 = 0;
 static mut LAST_WRITE: u64 = 0;
 /// Uncommitted writes are waiting: the server polls rather than blocks until they commit.
 pub fn writes_pending() -> bool { unsafe { UNCOMMITTED != 0 } }
+/// Bytes written outside a WRITE request (a mounted volume's image): committed like one.
+pub fn wrote(bytes: u64) { unsafe { UNCOMMITTED += bytes.max(1); LAST_WRITE = sex_pdx::get_ticks(); } }
 /// Called when no request is waiting. Commits once writes have rested `COMMIT_DELAY` ticks.
 pub fn commit_when_idle() {
     if !writes_pending() || sex_pdx::get_ticks().saturating_sub(unsafe { LAST_WRITE }) < COMMIT_DELAY { return; }
@@ -40,6 +42,17 @@ pub fn commit_when_idle() {
 fn commit_writes(fs: &mut Fs<'static, Disk>) {
     let bytes = unsafe { core::mem::replace(&mut *core::ptr::addr_of_mut!(UNCOMMITTED), 0) };
     if let Err(e) = fs.commit() { sex_pdx::serial_record!("[files.fs.commit.failed] bytes={} error={:?}", bytes, e); }
+}
+/// Before power goes: commits waiting writes and flushes the disk's own cache.
+pub fn flush_for_power() -> bool {
+    let committed = match unsafe { &mut *core::ptr::addr_of_mut!(STATE) } {
+        State::Ready(fs) => {
+            if writes_pending() { commit_writes(fs); }
+            !fs.has_changes()
+        }
+        _ => true,
+    };
+    committed && DiskFs::diskfs_block_sync() == 0
 }
 enum State { Untried, Absent, Ready(Fs<'static, Disk>) }
 
@@ -142,7 +155,7 @@ fn bring_up() -> State {
         Err(e) => { sex_pdx::serial_record!("[files.fs.mount.failed] error={:?}", e); State::Absent }
     }
 }
-fn status(e: Error) -> u8 {
+pub fn status(e: Error) -> u8 {
     match e {
         Error::Io | Error::Poisoned => w::IO, Error::Corrupt => w::CORRUPT, Error::NoSpace => w::NO_SPACE, Error::NotFound => w::NOT_FOUND,
         Error::Exists => w::EXISTS, Error::NotDir => w::NOT_DIR, Error::IsDir => w::IS_DIR, Error::NotEmpty => w::NOT_EMPTY,
@@ -171,7 +184,16 @@ pub fn poll_replies() {
 const PROGRAM_ROWS: usize = sex_pdx::app_catalog::count(sex_pdx::app_catalog::App::Program);
 const ROOT_MAX: usize = 64;
 #[derive(Clone, Copy)]
-struct Binding { task: u32, root: [u8; ROOT_MAX], len: usize, args: [u8; w::ARGS_MAX], args_len: usize }
+struct Binding { task: u32, root: [u8; ROOT_MAX], len: usize, args: [u8; w::ARGS_MAX], args_len: usize, picked: [u8; PICKED_MAX], picked_len: usize }
+/// Paths the person chose for a run in the picker, space separated, as `@/path` tokens.
+const PICKED_MAX: usize = 1024;
+/// One question to the person per program row: (ticket, mode, suggestion, answer).
+#[derive(Clone, Copy)]
+struct Pick { ticket: u32, mode: u8, hint: [u8; w::PICK_HINT_MAX], hint_len: usize, answer: Answer }
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Answer { Waiting, Cancelled, Chosen }
+static mut PICKS: [Option<Pick>; PROGRAM_ROWS] = [None; PROGRAM_ROWS];
+static mut PICK_TICKET: u32 = 0;
 static mut BINDINGS: [Option<Binding>; PROGRAM_ROWS] = [None; PROGRAM_ROWS];
 /// The last program file read, by its base name, waiting for Shell to say where it runs.
 static mut LOADED: ([u8; 32], usize) = ([0; 32], 0);
@@ -212,14 +234,18 @@ pub fn bind(target: u32, task: u32) {
         }
     }
     let args = unsafe { &mut *core::ptr::addr_of_mut!(LOADED_ARGS) };
-    bindings[index] = Some(Binding { task, root, len, args: args.0, args_len: core::mem::take(&mut args.1) });
+    bindings[index] = Some(Binding { task, root, len, args: args.0, args_len: core::mem::take(&mut args.1), picked: [0; PICKED_MAX], picked_len: 0 });
+    unsafe { (*core::ptr::addr_of_mut!(PICKS))[index] = None; }
     sex_pdx::serial_record!("[files.program.bound] target={} task={} root={}", target, task, core::str::from_utf8(&root[..len]).unwrap_or("?"));
 }
 /// A program's path inside its folder. `..` never climbs out: it is refused.
 fn confine(binding: &Binding, path: &[u8], out: &mut [u8; w::PATH_BYTES]) -> Option<usize> {
-    // `@/path` names a file the person gave this run when starting it, and only that file.
+    // `@/path` names a file or folder the person gave this run when starting it: that
+    // file, or anything inside that folder (`@/` is the whole filesystem), and nothing else.
     if path.first() == Some(&b'@') {
-        let granted = binding.args[..binding.args_len].split(|b| *b == b' ').any(|token| token == path);
+        let granted = binding.args[..binding.args_len].split(|b| *b == b' ').chain(binding.picked[..binding.picked_len].split(|b| *b == b' ')).filter(|t| t.len() > 1 && t[0] == b'@').any(|token| {
+            token == path || path.starts_with(token) && (token.ends_with(b"/") || path[token.len()] == b'/')
+        });
         let abs = &path[1..];
         if !granted || abs.first() != Some(&b'/') || abs.split(|b| *b == b'/').any(|p| p == b".." || p == b".") || abs.len() > out.len() { return None; }
         out[..abs.len()].copy_from_slice(abs);
@@ -236,6 +262,94 @@ fn confine(binding: &Binding, path: &[u8], out: &mut [u8; w::PATH_BYTES]) -> Opt
     }
     Some(n)
 }
+/// The picker portal: questions from programs, answers from the run showing the picker.
+fn picker(program: Option<usize>, r: w::Request, path: &[u8], data: &mut [u8]) -> (u8, u32) {
+    let picks = unsafe { &mut *core::ptr::addr_of_mut!(PICKS) };
+    let bindings = unsafe { &mut *core::ptr::addr_of_mut!(BINDINGS) };
+    match r.kind {
+        w::PICK => {
+            let Some(k) = program else { return (w::DENIED, 0) };
+            let mode = data[0];
+            if mode > w::PICK_FOLDER { return (w::INVALID, 0); }
+            let n = (r.length as usize).min(w::PICK_HINT_MAX);
+            let mut hint = [0u8; w::PICK_HINT_MAX];
+            // Only a name: a suggestion can't point anywhere.
+            for (i, b) in data[1..1 + n].iter().enumerate() { hint[i] = if *b == b'/' || *b < 0x20 { b'_' } else { *b }; }
+            let ticket = unsafe { PICK_TICKET = PICK_TICKET % 0xFF_FFFE + 1; PICK_TICKET };
+            picks[k] = Some(Pick { ticket, mode, hint, hint_len: n, answer: Answer::Waiting });
+            sex_pdx::serial_record!("[files.pick.asked] row={} mode={} ticket={}", k, mode, ticket);
+            (w::OK, ticket)
+        }
+        w::PICKED => {
+            let Some(k) = program else { return (w::DENIED, 0) };
+            let Some(pick) = picks[k].filter(|p| p.ticket as u64 == r.offset) else { return (w::NOT_FOUND, 0) };
+            match pick.answer {
+                Answer::Waiting => (w::PENDING, 0),
+                Answer::Cancelled => { picks[k] = None; (w::DENIED, 0) }
+                Answer::Chosen => {
+                    picks[k] = None;
+                    // The newest grant is the last token.
+                    let Some(b) = bindings[k].as_ref() else { return (w::DENIED, 0) };
+                    let token = b.picked[..b.picked_len].rsplit(|c| *c == b' ').next().unwrap_or(b"");
+                    data[..token.len()].copy_from_slice(token);
+                    (w::OK, token.len() as u32)
+                }
+            }
+        }
+        // Only the person's own picker: Spindle, or a run they gave the whole filesystem.
+        w::PICKS | w::ANSWER => {
+            let whole = match program {
+                None => true,
+                Some(k) => bindings[k].is_some_and(|b| b.args[..b.args_len].split(|c| *c == b' ').any(|t| t == b"@/")),
+            };
+            if !whole { return (w::DENIED, 0); }
+            if r.kind == w::PICKS {
+                let mut used = 0;
+                for (row, pick) in picks.iter().enumerate() {
+                    let Some(p) = pick.filter(|p| p.answer == Answer::Waiting) else { continue };
+                    let Some(b) = bindings[row].as_ref() else { continue };
+                    let data_dir = sex_pdx::program_store::DATA;
+                    let name = &b.root[data_dir.len().min(b.len)..b.len];
+                    if used + 8 + name.len() + p.hint_len > 4000 { break; }
+                    data[used] = row as u8; data[used + 1] = p.mode;
+                    data[used + 2..used + 6].copy_from_slice(&p.ticket.to_le_bytes());
+                    data[used + 6] = name.len() as u8;
+                    data[used + 7..used + 7 + name.len()].copy_from_slice(name);
+                    used += 7 + name.len();
+                    data[used] = p.hint_len as u8;
+                    data[used + 1..used + 1 + p.hint_len].copy_from_slice(&p.hint[..p.hint_len]);
+                    used += 1 + p.hint_len;
+                }
+                return (w::OK, used as u32);
+            }
+            let row = r.offset as usize;
+            let Some(pick) = picks.get_mut(row).and_then(|p| p.as_mut()).filter(|p| p.ticket as u64 == r.length && p.answer == Answer::Waiting) else { return (w::NOT_FOUND, 0) };
+            if path.is_empty() { pick.answer = Answer::Cancelled; sex_pdx::serial_record!("[files.pick.cancelled] row={}", row); return (w::OK, 0); }
+            // The chosen path: absolute, plain, and one the answering run itself holds.
+            let abs = if path.first() == Some(&b'@') { &path[1..] } else { path };
+            if abs.first() != Some(&b'/') || abs.split(|c| *c == b'/').any(|p| p == b".." || p == b".") || abs.contains(&b' ') || abs.contains(&0) { return (w::NAME, 0); }
+            if let Some(k) = program {
+                let b = bindings[k].unwrap();
+                let mut out = [0u8; w::PATH_BYTES];
+                let mut token = [0u8; w::PATH_BYTES + 1];
+                token[0] = b'@'; token[1..1 + abs.len()].copy_from_slice(abs);
+                if confine(&b, &token[..1 + abs.len()], &mut out).is_none() { return (w::DENIED, 0); }
+            }
+            let Some(target) = bindings[row].as_mut() else { return (w::NOT_FOUND, 0) };
+            let sep = (target.picked_len > 0) as usize;
+            if target.picked_len + sep + 1 + abs.len() > PICKED_MAX { return (w::NO_SPACE, 0); }
+            if sep == 1 { target.picked[target.picked_len] = b' '; }
+            let at = target.picked_len + sep;
+            target.picked[at] = b'@';
+            target.picked[at + 1..at + 1 + abs.len()].copy_from_slice(abs);
+            target.picked_len = at + 1 + abs.len();
+            pick.answer = Answer::Chosen;
+            sex_pdx::serial_record!("[files.pick.granted] row={} path={}", row, core::str::from_utf8(abs).unwrap_or("?"));
+            (w::OK, 0)
+        }
+        _ => (w::INVALID, 0),
+    }
+}
 /// The row is running, and running the very run Shell bound: the kernel names its task.
 fn program_live(target: u32, task: u32) -> bool {
     let Some(row) = sex_pdx::app_catalog::by_target(target) else { return false };
@@ -250,11 +364,12 @@ pub fn handle(caller: u32, a: u64, offset: u64, length: u64) -> u64 {
         (Some(index), _) => { if !crate::spindle_history::live(caller) { return w::reply(r.seq, w::DENIED, 0); } index }
         (None, Some(k)) => {
             let bound = unsafe { (*core::ptr::addr_of!(BINDINGS))[k] };
-            if !bound.is_some_and(|b| program_live(caller, b.task)) || r.kind == w::PREPARE || r.kind == w::INSTALL { return w::reply(r.seq, w::DENIED, 0); }
+            if !bound.is_some_and(|b| program_live(caller, b.task)) || matches!(r.kind, w::PREPARE | w::INSTALL | w::MOUNT | w::UNMOUNT) { return w::reply(r.seq, w::DENIED, 0); }
             w::PROGRAM_INDEX_BASE + k
         }
         _ => return w::reply(r.seq, w::DENIED, 0),
     };
+    if r.kind == w::PING { return w::reply(r.seq, w::OK, 0); }
     let Ok(view) = sex_pdx::memory_region_view(w::PROVIDER_SLOT_BASE + index as u64, 0, w::REGION_BYTES as u64, QUERY_VIEW | READ | WRITE) else { return w::reply(r.seq, w::IO, 0) };
     let region = unsafe { core::slice::from_raw_parts_mut(view.virtual_address as *mut u8, w::REGION_BYTES) };
     let state = unsafe { &mut *core::ptr::addr_of_mut!(STATE) };
@@ -263,6 +378,10 @@ pub fn handle(caller: u32, a: u64, offset: u64, length: u64) -> u64 {
     let mut path = [0u8; w::PATH_BYTES];
     let mut path_len = r.path_len as usize;
     path[..path_len].copy_from_slice(&region[..path_len]);
+    if matches!(r.kind, w::PICK | w::PICKED | w::PICKS | w::ANSWER) {
+        let (status, value) = picker(program, r, &path[..path_len], &mut region[w::PATH_BYTES..]);
+        return w::reply(r.seq, status, value);
+    }
     if let (Some(k), true) = (program, r.kind == w::ARGS) {
         let binding = unsafe { (*core::ptr::addr_of!(BINDINGS))[k] }.unwrap();
         region[w::PATH_BYTES..w::PATH_BYTES + binding.args_len].copy_from_slice(&binding.args[..binding.args_len]);
@@ -296,7 +415,26 @@ pub fn handle(caller: u32, a: u64, offset: u64, length: u64) -> u64 {
         commit_writes(fs);
         if fs.has_changes() { return w::reply(r.seq, w::IO, 0); }
     }
-    let result = run(fs, r, &path[..path_len], data);
+    let path = &path[..path_len];
+    // Other systems' volumes, under /media.
+    let rename_halves = (r.kind == w::RENAME).then(|| path.iter().position(|b| *b == 0)).flatten().map(|i| (&path[..i], &path[i + 1..]));
+    let media = match (r.kind, rename_halves) {
+        (w::MOUNT, _) => Some(crate::volumes::mount(fs, path, data)),
+        (w::UNMOUNT, _) => Some(crate::volumes::unmount(fs, path)),
+        (w::RENAME, Some((a, b))) if crate::volumes::owns(a) || crate::volumes::owns(b) => Some(crate::volumes::rename(fs, a, b)),
+        (w::RENAME, _) => None,
+        _ if crate::volumes::owns(path) => Some(crate::volumes::run(fs, r, path, data)),
+        _ => None,
+    };
+    if let Some(result) = media {
+        return match result { Ok(value) => w::reply(r.seq, w::OK, value), Err(status) => w::reply(r.seq, status, 0) };
+    }
+    // A mounted image changes only through its volume.
+    if matches!(r.kind, w::WRITE | w::TRUNCATE | w::REMOVE) && fs.open(path).is_ok_and(|st| crate::volumes::busy(st.id)) {
+        return w::reply(r.seq, w::DENIED, 0);
+    }
+    if r.kind == w::SYNC { crate::volumes::sync_all(fs); }
+    let result = run(fs, r, path, data);
     match result {
         Ok(value) => {
             if batched && value != 0 {

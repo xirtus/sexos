@@ -13,6 +13,7 @@
 #include <sys/reboot.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #include <x86intrin.h>
 
@@ -46,6 +47,26 @@ int main(void) {
     n = 2000; t = __rdtsc();
     for (unsigned long i = 0; i < n; i++) sched_yield();
     add("yield", n, __rdtsc() - t, "yield");
+
+    // One byte to another process through a pipe and one byte back: the round trip a
+    // SexOS call and reply replaces (ipc_roundtrip).
+    int there[2], back[2];
+    if (pipe(there) == 0 && pipe(back) == 0) {
+        pid_t child = fork();
+        if (child == 0) {
+            close(there[1]); close(back[0]);
+            char c;
+            while (read(there[0], &c, 1) == 1) write(back[1], &c, 1);
+            _exit(0);
+        }
+        close(there[0]); close(back[1]);
+        char c = 'x';
+        n = 2000; t = __rdtsc();
+        for (unsigned long i = 0; i < n; i++) { write(there[1], &c, 1); read(back[0], &c, 1); }
+        add("ipc_roundtrip", n, __rdtsc() - t, "trip");
+        close(there[1]);
+        waitpid(child, NULL, 0);
+    }
 
     t = __rdtsc();
     unsigned char *big = malloc(32 * MIB);

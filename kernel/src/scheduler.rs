@@ -17,9 +17,13 @@ pub struct TaskContext {
     pub rip: u64, pub cs: u64, pub rflags: u64, pub rsp: u64, pub ss: u64,
     pub pd_ptr: *const ProtectionDomain,
     pub kstack_top: u64,
+    /// The task's thread pointer (FS base), loaded on every switch to it. Programs
+    /// set it with `program_threads::TLS`; user code cannot change it otherwise.
+    pub fs_base: u64,
 }
 
 const _: () = assert!(core::mem::offset_of!(TaskContext, kstack_top) == 0xC0);
+const _: () = assert!(core::mem::offset_of!(TaskContext, fs_base) == 0xC8);
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,9 +79,12 @@ pub struct Task {
     pub kstack_bytes: u64,
     pub(crate) ext_init: Option<InitArg>,
     resume_observation_pending: AtomicBool,
-    wait_deadline:self_wait::Deadline,
+    pub(crate) wait_deadline: self_wait::Deadline,
     /// x87/SSE registers while the task is off-core (see crate::fpu).
     fpu: crate::fpu::FpuState,
+    /// The core this task runs on, when not its domain's (a program's workers);
+    /// u32::MAX means `smp::home_core` of its domain.
+    pub home: AtomicU32,
 }
 
 impl Task {
@@ -126,6 +133,7 @@ impl Task {
             ss,
             pd_ptr: pd as *const _,
             kstack_top: forged_ksp,  // active ksp; switch_to saves/loads here
+            fs_base: 0,
         };
 
         Self {
@@ -140,6 +148,7 @@ impl Task {
             resume_observation_pending: AtomicBool::new(false),
             wait_deadline:self_wait::Deadline::new(),
             fpu: crate::fpu::FpuState::INIT,
+            home: AtomicU32::new(u32::MAX),
         }
     }
 }
@@ -198,8 +207,20 @@ pub struct Scheduler {
     pending_outgoing: AtomicPtr<Task>,
     retry_cursor: AtomicU32,
     ran_task: AtomicBool,
+    /// The partner of a call or reply made by a task that waits right after: it runs
+    /// next, ahead of the queue, so a round trip is two switches and no queue wait.
+    handoff: AtomicPtr<Task>,
+    handoff_streak: AtomicU32,
+    /// Set by a call-and-wait or reply-and-wait for the wake it causes.
+    handoff_armed: AtomicBool,
     pub core_id: u32,
 }
+/// Partners may take turns ahead of the queue this many times in a row; then
+/// everything queued gets its turn first.
+const HANDOFF_STREAK: u32 = 8;
+pub static HANDOFFS: AtomicU64 = AtomicU64::new(0);
+/// Wakes that had to reach a parked task's own core.
+pub static REMOTE_RESUMES: AtomicU64 = AtomicU64::new(0);
 
 static SCHED_NO_RUNNABLE_LOG_BUDGET: AtomicU64 = AtomicU64::new(16);
 static FIRST_SCHEDULE_LOGGED: AtomicU64 = AtomicU64::new(0);
@@ -232,6 +253,9 @@ impl Scheduler {
             pending_outgoing: AtomicPtr::new(ptr::null_mut()),
             retry_cursor: AtomicU32::new(0),
             ran_task: AtomicBool::new(false),
+            handoff: AtomicPtr::new(ptr::null_mut()),
+            handoff_streak: AtomicU32::new(0),
+            handoff_armed: AtomicBool::new(false),
             core_id,
         }
     }
@@ -266,7 +290,8 @@ impl Scheduler {
         // Retained Detached custody survives Full/Contended admission. Scan a
         // bounded slice of the existing task inventory; Constructed never enters.
         self.retry_admission();
-        let next_task = self.runqueue.steal();
+        let next_task = self.take_handoff();
+        let next_task = if next_task.is_null() { self.runqueue.steal() } else { next_task };
         let next_task = if next_task.is_null() { self.attempt_steal() } else { next_task };
         // SCHEDULER_TICK_PD8_PF_FLAKE_V1: reject corrupt steal results before
         // they reach set_pd/switch_to. A clobbered Task (heap overwrite of a
@@ -410,12 +435,35 @@ impl Scheduler {
     }
 
 
+    /// The waiting partner's turn, unless partners have had too many in a row: then it
+    /// joins the back of the queue like any wake.
+    fn take_handoff(&self) -> *mut Task {
+        let task = self.handoff.swap(ptr::null_mut(), Ordering::AcqRel);
+        if task.is_null() { self.handoff_streak.store(0, Ordering::Relaxed); return task; }
+        if self.handoff_streak.fetch_add(1, Ordering::Relaxed) < HANDOFF_STREAK {
+            HANDOFFS.fetch_add(1, Ordering::Relaxed);
+            return task;
+        }
+        self.handoff_streak.store(0, Ordering::Relaxed);
+        if self.runqueue.try_push(task).is_ok() { ptr::null_mut() } else { task }
+    }
+
+    /// The next wake this core causes is a handoff: see `handoff`.
+    pub fn arm_handoff(&self, on: bool) { self.handoff_armed.store(on, Ordering::Relaxed); }
+
     pub fn admit_task(&self, task: *mut Task) -> Admission {
         if task.is_null() { return Admission::NotRunnable; }
         // A task's queue is decided by the task, not by the core that woke it.
-        let home_core = crate::smp::home_core(unsafe { (*task).context.pd_id });
+        let home_core = match unsafe { (*task).home.load(Ordering::Acquire) } {
+            u32::MAX => crate::smp::home_core(unsafe { (*task).context.pd_id }),
+            core => core,
+        };
         let home = &SCHEDULERS[home_core as usize];
-        let admitted = unsafe { (*task).state.try_admit(|| home.runqueue.try_push(task)) };
+        let handoff = home_core == self.core_id && self.handoff_armed.swap(false, Ordering::Relaxed);
+        let admitted = unsafe { (*task).state.try_admit(|| {
+            if handoff && self.handoff.compare_exchange(ptr::null_mut(), task, Ordering::AcqRel, Ordering::Acquire).is_ok() { return Ok(()); }
+            home.runqueue.try_push(task)
+        }) };
         // That core may be halted, and its next tick is up to a millisecond away.
         if admitted == Admission::Published && home_core != self.core_id { crate::apic::send_to_core(home_core, crate::smp::WAKE_VECTOR); }
         admitted
@@ -471,6 +519,11 @@ impl Scheduler {
             "call {finish_switch}",
             "mov rsi, r12",
             "mov rsp, [rsi + 0xC0]",
+            // The next task's thread pointer (TaskContext.fs_base at 0xC8).
+            "mov eax, [rsi + 0xC8]",
+            "mov edx, [rsi + 0xCC]",
+            "mov ecx, 0xC0000100",
+            "wrmsr",
             // Only now narrow PKRU; the Rust callback ran with kernel access.
             "cmp byte ptr [rip + {pku_enabled}], 0",
             "je 2f",
@@ -728,7 +781,7 @@ pub unsafe fn wait_for_local_resume_or_switch(sched: &Scheduler) -> *const TaskC
         }
         // Timer interrupts deliberately do not schedule kernel frames. They
         // return here, where pending wakes and retained admissions are retried.
-        x86_64::instructions::interrupts::enable_and_hlt();
+        crate::hal::acpi::idle();
     }
 }
 
@@ -768,7 +821,10 @@ pub unsafe fn wait_for_message_ticks(regs_ptr:*const crate::interrupts::SyscallR
     else{if !SELF_WAIT_TASKS.contains(task)||ticks==0||ticks>self_wait::MAX_TICKS{return false;}}
     let pd=core.current_pd_ref();
     if pd.main_task.load(Ordering::Acquire)!=task{return false;}
-    if (*pd.message_ring).len()!=0||!pd.incoming_replies.lock().is_empty(){return true;}
+    // Device interrupt bits end only this timed wait, which a driver uses while it has
+    // a command outstanding; the untimed inbox wait (53) ignores them, so a bit nobody
+    // takes can never turn an idle service into a spin.
+    if (*pd.message_ring).len()!=0||!pd.incoming_replies.lock().is_empty()||crate::device_irq::pending(pd.id){return true;}
     let now=crate::interrupts::TICKS.load(Ordering::Relaxed);
     // A waker on another core may have cancelled just before this task armed its last
     // wait, then woken it. That deadline can only be stale: its owner is running here.
@@ -823,7 +879,17 @@ pub fn unpark_thread(task_ptr: *mut Task) {
 }
 
 fn wake_owned_thread(task_ptr:*mut Task){
-    if unsafe { (*task_ptr).state.wake() } == WakeResult::NeedsAdmission {
+    let woke = unsafe { (*task_ptr).state.wake() };
+    if woke == WakeResult::Recorded {
+        // A task parked on its own core stays attached there, and that core may be
+        // halted: it only looks again on its next interrupt, up to a whole tick away.
+        let seen = unsafe { (*task_ptr).state.snapshot() };
+        let here = crate::core_local::CoreLocal::get().core_id;
+        if let (true, Some(owner)) = (seen.blocked, seen.owner_core) {
+            if owner != here { crate::apic::send_to_core(owner, crate::smp::WAKE_VECTOR); REMOTE_RESUMES.fetch_add(1, Ordering::Relaxed); }
+        }
+    }
+    if woke == WakeResult::NeedsAdmission {
         // Only Detached can claim admission. Attached/SwitchingOut wakes stay
         // pending for their owner and cannot duplicate execution custody.
         let core = crate::core_local::CoreLocal::get().core_id as usize;
@@ -965,6 +1031,8 @@ pub unsafe fn finish_current_task(regs_ptr: *const crate::interrupts::SyscallReg
     assert!(!task.is_null(), "TASK_FINISH_WITHOUT_TASK");
     (*task).wait_deadline.cancel();
     (*task).state.exit();
+    // A worker that ends with an error (a panic) ends its program's run.
+    if (*regs_ptr).rdi != 0 { crate::program_workers::faulted(task); }
     if !crate::program_records::is_record((*task).context.pd_id){serial_println!("[task.finish] pd={} task={} reason={} terminal=1",core.current_pd(),(*task).id,(*regs_ptr).rdi);}
     poll_paging_exit_notifications();
     yield_and_switch(regs_ptr)
