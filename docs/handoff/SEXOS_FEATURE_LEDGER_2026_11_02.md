@@ -3646,6 +3646,10 @@ Plan: `docs/handoff/NVIDIA_GPU_PLAN_2026_11_09.md` (stages N1-N6).
   `document.currentScript` (the browser says which `<script>` runs),
   `<style>.sheet.insertRule`, `window.onerror`, fullscreen and picture-in-picture
   refusing, `getVideoPlaybackQuality`.
+- **Percentage heights** (Y8): `height: N%` resolves against the containing block's
+  definite height (the viewport for the root, the containing block for absolute
+  boxes; auto inside content-sized boxes). YouTube's player page (`html, body,
+  #player { height: 100% }`) had laid out at height 0.
 - **Scripts a page inserts run** (Y8's first step): a `createElement('script')` runs when
   it joins the document: inline text at once, `src` through `fetch` then `load`/`error`,
   modules through `import()`; markup scripts (innerHTML) do not. A `fetched` dispatch
