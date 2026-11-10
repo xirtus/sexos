@@ -584,3 +584,48 @@ fn everyday_web_apis_are_there() {
         "0:connected  true", "0:36 function true", "0:blob abc", "0:seen true a",
     ]);
 }
+
+#[test]
+fn media_source_feeds_a_video() {
+    let mut s = page("<video id=v></video>");
+    s.eval(r#"
+        console.log(MediaSource.isTypeSupported('video/mp4; codecs="avc1.4d401f"'), MediaSource.isTypeSupported('audio/mp4; codecs="mp4a.40.2"'),
+            MediaSource.isTypeSupported('video/webm; codecs="vp9"'), MediaSource.isTypeSupported('video/mp4; codecs="hev1.1.6.L93.B0"'));
+        const v = document.getElementById('v');
+        const ms = new MediaSource();
+        console.log(ms.readyState);
+        ms.addEventListener('sourceopen', () => {
+            const sb = ms.addSourceBuffer('video/mp4; codecs="avc1.4d401f"');
+            const a = ms.addSourceBuffer('audio/mp4; codecs="mp4a.40.2"');
+            console.log('open', ms.readyState, ms.sourceBuffers.length);
+            sb.addEventListener('updateend', () => {
+                console.log('updateend', sb.updating, sb.buffered.length, sb.buffered.end(0), v.buffered.length);
+            });
+            sb.appendBuffer(new Uint8Array([1, 2, 3]));
+            try { sb.appendBuffer(new Uint8Array([4])); } catch (e) { console.log('busy', e.message); }
+            window.sb = sb; window.a = a;
+        });
+        v.src = URL.createObjectURL(ms);
+        window.ms = ms;
+    "#, "t.js").unwrap();
+    s.dispatch("tick").unwrap();
+    // The append waits for the browser, bytes and all.
+    let taken = std::mem::take(&mut s.page_mut().media_bytes);
+    assert_eq!(taken.len(), 1);
+    assert_eq!((taken[0].1, &taken[0].2[..]), (0, &[1u8, 2, 3][..]));
+    let asked: Vec<String> = std::mem::take(&mut s.page_mut().media).into_iter().map(|(_, v, a)| format!("{v} {a}")).collect();
+    assert_eq!(asked, ["mse ", "add video/mp4; codecs=\"avc1.4d401f\"", "add audio/mp4; codecs=\"mp4a.40.2\""]);
+    let node = taken[0].0;
+    s.dispatch(&format!("mse\t{node}\t0\t1\t0-2.5")).unwrap();
+    s.dispatch(&format!("mse\t{node}\t1\t1\t0.5-3")).unwrap();
+    s.eval("console.log('both', v_ranges()); function v_ranges() { const b = document.getElementById('v').buffered; return b.length + ' ' + b.start(0) + ' ' + b.end(0); }", "u.js").unwrap();
+    s.eval("sb.timestampOffset = 5; sb.abort(); sb.changeType('video/webm; codecs=\"vp9\"'); console.log('offset', sb.timestampOffset);", "o.js").unwrap();
+    let asked: Vec<String> = std::mem::take(&mut s.page_mut().media).into_iter().map(|(_, v, a)| format!("{v} {a}")).collect();
+    assert_eq!(asked, ["offset 0 5", "abort 0", "type 0 video/webm; codecs=\"vp9\""]);
+    s.eval("ms.endOfStream(); console.log(ms.readyState, ms.duration, document.getElementById('v').duration);", "w.js").unwrap();
+    let l = logs(&mut s);
+    assert_eq!(l, [
+        "0:true true true false", "0:closed", "0:open open 2", "0:busy InvalidStateError",
+        "0:updateend false 1 2.5 0", "0:both 1 0.5 2.5", "0:offset 5", "0:ended 3 3",
+    ]);
+}
