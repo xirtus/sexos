@@ -19,3 +19,24 @@
   goldens now retain the established 8px outer/6px inner gaps while checking the same
   real corner drag, size delta, floating position and subsequent window-open behavior.
 - **ABI / kernel:** none. No new server buffers or per-pixel allocation.
+
+- **Measured candidate `ed359638`:** sealed build and 55 compositor/reference checks,
+  six guardrails, real 1024x768/1280x800 captures, native 2560x1600 scale 1->2->1,
+  float/resize/close and keyboard/workspace/layout/scratchpad gates passed. Clock and
+  scale-1 text pixel proofs passed. No geometry or font interpretation changed.
+- **Timing scope:** QMP Super+M layout request through Shell receipt to an observed guest
+  pixel, 20 transitions per trace, three alternating traces per image. Exclusive-guest
+  A/A p95 wall ratio was 1.0187, QEMU process CPU ratio 1.0270. Corrected candidate versus
+  baseline ratios were 0.9975 wall and 0.9915 CPU, within the 5% budget; no speedup claim.
+  An earlier contended run failed at +18.2% wall p95 and remains retained. Process CPU
+  observation uses Darwin rusage with the measured Mach timebase; this is not hardware
+  latency or a full-frame publication timestamp.
+- **Evidence:** local `sexos-evidence/quiet-window-chrome/` holds captures, source/ISO
+  hashes, raw samples and reproduction scripts under `captures`, `latency-aa`,
+  `latency-isolated` and `latency-contended`. The superseded runtime-toolbar-color
+  candidate is retained separately as `quiet-window-chrome-provisional-token`.
+- **Integration receipt:** refreshed onto master `fab6598f` (#128 wallpaper/night light,
+  plus current JIT/quiet boot changes) after these measurements. The final combined
+  source still needs current-head CI and functional guest/capture checks; pre-refresh
+  images do not establish wallpaper/night-light integration. Keep the PR draft until
+  those checks complete. Future slim geometry follows its own shared-F2 plan and gates.
