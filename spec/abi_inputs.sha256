@@ -22,7 +22,7 @@ e45f86d95f464bcbefe222acdb7ea565dda7f35301c54dd22ca1a71ba3e86f04  crates/sex-pdx
 
 e7dfb4de37122f0f53279e067deed3b39c9e9f3f369b3d91c9e659484dcf59c5  crates/sex-pdx/src/crash_log.rs
 
-9433aa89d76adccd21a139eab0aed084521811196bd06d91ef9511b641266176  crates/sex-pdx/src/desktop_style.rs
+b118fcbe2b4784a710034911e7272b37642dd50e8e9d9815b417ac12697df6f1  crates/sex-pdx/src/desktop_style.rs
 
 4519de04eef091b40d15e00f40bc2ec7911f916a9ac3e28ebf4fd05613f1beca  crates/sex-pdx/src/device.rs
 
@@ -46,7 +46,7 @@ e1a8e5b73c48cfd4cc079510a2c51eacd7f371f00dffabb5968962ca9f462e30  crates/sex-pdx
 
 3f377a4a91b79e25d50737cd939c37ec76f0a9d6ee7d2cd282901a014c7c05f4  crates/sex-pdx/src/entropy_source.rs
 
-d062164fd4b47a868139af7ca18ecdd5ba2cd6d53c3a4e6d196f36a4fee480f8  crates/sex-pdx/src/fs.rs
+5615f2a223cdf6f78a53fbff6e47b792e897d7526afe017882111c70c73e4110  crates/sex-pdx/src/fs.rs
 
 a0f555cd3af59954d4dce9ae913d16ac90089c8fa1dd61ecfda1a25a85de899d  crates/sex-pdx/src/history_recovery.rs
 

@@ -11,6 +11,7 @@ use alloc::vec::Vec;
 use core::fmt::Write as _;
 use sex_app::{files, Event, Window};
 use sex_pdx::program_memory as memory;
+mod large_read;
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
@@ -105,7 +106,22 @@ pub extern "C" fn _start() -> ! {
     // `run bench spin`: keep the CPU busy without a system call for a while, to
     // show that input and display still get to run (scheduler latency classes).
     let mut args = [0u8; sex_pdx::fs::ARGS_MAX];
-    if files::args(&mut window, &mut args) == b"spin" {
+    let args = files::args(&mut window, &mut args);
+    if args == b"read-large" {
+        let report = match large_read::run(&mut window) {
+            Ok(report) => {
+                sex_pdx::serial_record!("[bench.large.done] target={} task={}", window.target, window.task);
+                report
+            }
+            Err(why) => {
+                sex_pdx::serial_record!("[bench.large.fail] target={} task={} why={}", window.target, window.task, why);
+                alloc::format!("Large read failed: {}\nF11 closes.\n", why)
+            }
+        };
+        window.show(report.as_bytes());
+        loop { if let Event::Close = window.next() { window.close() } }
+    }
+    if args == b"spin" {
         sex_pdx::serial_record!("[bench.spin.start] target={} task={}", window.target, window.task);
         let (t, mut x) = (tsc(), 1u64);
         while tsc() - t < 20_000_000_000 { for _ in 0..1000 { x = core::hint::black_box(x.wrapping_mul(6364136223846793005).wrapping_add(1)); } }

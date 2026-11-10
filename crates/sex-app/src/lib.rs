@@ -293,6 +293,14 @@ pub mod files {
     pub fn read(window: &mut Window, path: &[u8], out: &mut [u8]) -> Result<usize, Error> {
         read_at(window, path, 0, out)
     }
+    /// File-payload device I/O caused by this run's READ requests, excluding metadata.
+    /// A new run or Files restart resets the counters. This does not bypass any
+    /// cache and does not report other clients' I/O or hardware cache misses.
+    pub fn read_io_stats(window: &mut Window) -> Result<w::ReadIoStats, Error> {
+        exchange(Some(window), w::READ_IO_STATS, b"", 0, 0, |_| {}, |n, data| {
+            w::ReadIoStats::decode(data.get(..n as usize).unwrap_or(&[])).ok_or(w::INVALID)
+        })?
+    }
     /// Reads up to `out.len()` bytes of the file from byte `offset`; fewer at its end.
     pub fn read_at(window: &mut Window, path: &[u8], offset: u64, out: &mut [u8]) -> Result<usize, Error> {
         direct::read_at_held(Some(window), path, offset, out)

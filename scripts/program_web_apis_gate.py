@@ -7,6 +7,7 @@ running the same script (sex-web's page example)."""
 import argparse,http.server,os,re,shutil,subprocess,threading,time
 from pathlib import Path
 from PIL import Image
+from browser_gate_viewport import full_viewport
 ROOT=Path(__file__).resolve().parents[1]
 SITE=ROOT/'scripts/web_site'
 W,H=410,330
@@ -67,7 +68,7 @@ def main():
   m=g['wait'](r'\[web.ready\] target=(\d+) task=(\d+)',s,120);target,task=m[1],m[2]
   launch=g['wait'](rf'\[shell.program.launch\] target={target} task={task} surface=(\d+)',s,60);surface=int(launch[1])
   time.sleep(3)
-  tile=list(map(int,re.findall(rf'\[shell.tile.apply\] sid={surface} x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)',t())[-1]))
+  tile=full_viewport(g,ROOT,surface,W,H)
   done=compare('web-apis-loaded',ref,tile)
   s=len(t());g['focus'](surface);time.sleep(.3);q.key('f11');g['wait'](rf'\[web.closed\] target={target} task={task}',s,60)
   text=t();assert 'KERNEL PANIC' not in text and '[web.fatal]' not in text and 'panicked' not in text

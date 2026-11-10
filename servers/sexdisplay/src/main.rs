@@ -4055,7 +4055,7 @@ pub extern "C" fn _start() -> ! {
                     if wm_pd == 0 || msg.caller_pd != wm_pd { continue; }
                     let step = msg.arg0 as i64;
                     let before = sex_pdx::desktop_style::ui_scale();
-                    let wanted = if step == 0 { unsafe { BOOT_UI_SCALE } } else { (before as i64 + step.signum()).clamp(1, sex_pdx::display_boot::MAX_SCALE as i64) as u32 };
+                    let wanted = sex_pdx::desktop_style::chrome::step_scale(before, unsafe { BOOT_UI_SCALE }, step);
                     sex_pdx::desktop_style::set_ui_scale(wanted);
                     if wanted != before {
                         unsafe {

@@ -90,6 +90,34 @@ pub const PICKS: u8 = 19;
 pub const ANSWER: u8 = 20;
 /// Answers OK at once and does nothing: what one call and its reply cost.
 pub const PING: u8 = 21;
+/// Completed file-payload device reads charged only to this live client's READ requests.
+/// Empty path/offset/length; data is three little-endian u64 values. Metadata
+/// reads are excluded; controller/host caches are outside this measurement.
+pub const READ_IO_STATS: u8 = 23;
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ReadIoStats { pub requests: u64, pub device_calls: u64, pub device_bytes: u64 }
+impl ReadIoStats {
+    pub const BYTES: usize = 24;
+    pub const ZERO: Self = Self { requests: 0, device_calls: 0, device_bytes: 0 };
+    pub fn encode(self, out: &mut [u8]) -> Option<()> {
+        let out = out.get_mut(..Self::BYTES)?;
+        for (i, value) in [self.requests, self.device_calls, self.device_bytes].iter().enumerate() {
+            out[i * 8..i * 8 + 8].copy_from_slice(&value.to_le_bytes());
+        }
+        Some(())
+    }
+    pub fn decode(input: &[u8]) -> Option<Self> {
+        if input.len() != Self::BYTES { return None; }
+        let word = |i: usize| u64::from_le_bytes(input[i * 8..i * 8 + 8].try_into().unwrap());
+        Some(Self { requests: word(0), device_calls: word(1), device_bytes: word(2) })
+    }
+    /// A reset or reordered observation cannot become a wrapped throughput result.
+    pub fn since(self, before: Self) -> Option<Self> {
+        Some(Self { requests: self.requests.checked_sub(before.requests)?,
+            device_calls: self.device_calls.checked_sub(before.device_calls)?,
+            device_bytes: self.device_bytes.checked_sub(before.device_bytes)? })
+    }
+}
 pub const PICK_OPEN: u8 = 0;
 pub const PICK_SAVE: u8 = 1;
 pub const PICK_FOLDER: u8 = 2;
