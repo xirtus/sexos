@@ -3390,3 +3390,10 @@ Stages D2 and D3 of `DRIVERS_AND_X17_R1_PLAN_2026_11_09.md`. Handoff: `docs/hand
   proves isolation by data only. No interrupt remapping, one PCI segment, whole-domain
   flushes on loan return.
 
+## Discrete GPU off at boot (NVIDIA N1, 2026-11-09)
+
+Plan: `docs/handoff/NVIDIA_GPU_PLAN_2026_11_09.md` (stages N1-N6).
+- **Kernel** `kernel/src/hal/dgpu.rs`: every display controller is named at boot (`[gpu.found]`), NVIDIA chips from their own `PMC_BOOT_0` register (GA104, GA106, ...). A GPU behind a root port that does not hold the boot framebuffer is powered off like Linux runtime PM: D3hot for each function, the GPU's `_PS3` and `_PR0`..`_PR3` resources off, then the root port's when the GPU is alone behind it (D3cold). Shared resources stay on. `power_on` restores power and each configuration header for the later driver.
+- **AML work budget**: `acpi::with_aml(budget, f)` runs firmware AML quarantined with a limit on register accesses and stalls, so a firmware loop cannot hang the boot.
+- **Gate** `scripts/dgpu_power_gate.py` in CI: QEMU root port + display controller + SSDT power resource (`tests/acpi/dgpu_gate_ssdt.asl`); checks the method order off/on/off on the debug console, the restored header, the boot GPU kept and the desktop up.
+- ABI: none.

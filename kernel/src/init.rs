@@ -414,6 +414,9 @@ pub fn init() {
         );
     }
 
+    // Discrete GPUs no driver owns yet are powered off before leases are made.
+    crate::hal::dgpu::init();
+
     // Hardware discovery and driver lease routing.
     // Includes XHCI discovery + lease to sexusb (slot SLOT_USB_HOST) when present.
     if sexdrive_id != 0 && sexdisp_id != 0 {
