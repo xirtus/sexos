@@ -187,8 +187,9 @@ struct Browser {
     frame_dirty: bool,
     /// The page the next `open` comes from (its `Referer`).
     referrer_next: Option<String>,
-    /// While a page loads: the page it was opened from, for its requests' `Referer`.
-    nav_from: Option<String>,
+    /// While a page loads (`Some`): the page it was opened from, for its requests'
+    /// `Referer`, or `None` when it has none (a typed address, `no-referrer`).
+    nav_from: Option<Option<String>>,
     /// The shown page was laid out again: its iframes may have come, gone or moved.
     frames_check: bool,
 }
@@ -312,7 +313,8 @@ impl Browser {
             self.frame_dirty = true;
         }
         for i in 0..self.frames.len() {
-            let Some(Some(b)) = self.page.boxes.get(self.frames[i].node).copied() else { continue };
+            // No box (hidden, `display: none`): nothing drawn, no pointer, until it has one.
+            let b = self.page.boxes.get(self.frames[i].node).copied().flatten().unwrap_or([0; 4]);
             if b == self.frames[i].rect { continue; }
             self.frames[i].rect = b;
             self.frame_dirty = true;
@@ -497,7 +499,8 @@ impl Browser {
         let mut sent: Vec<(&str, &str)> = p.headers.iter().map(|(k, v)| (k.as_str(), v.as_str())).filter(|(k, _)| !sex_fetch::forbidden_header(k)).collect();
         if let Some(o) = cross { sent.push(("Origin", o)); }
         // The page's own address, or while a page loads the one it was opened from.
-        let referrer = sex_fetch::referrer(self.nav_from.as_deref().unwrap_or(&self.url), &target);
+        let from = match &self.nav_from { Some(loading) => loading.as_deref(), None => Some(self.url.as_str()) };
+        let referrer = from.and_then(|f| sex_fetch::referrer(f, &target));
         let req = sex_fetch::Request { method: &p.method, url: &p.url, headers: &sent, body: &p.body, trusted_origin: cross.is_some(), referrer: referrer.as_deref() };
         p.begun = sex_pdx::get_ticks();
         let started = if patient { net::Exchange::start_patiently(&mut self.window, &req, cookie.as_deref(), p.max) } else { net::Exchange::start(&mut self.window, &req, cookie.as_deref(), p.max) };
@@ -558,7 +561,7 @@ impl Browser {
         self.draw();
         let begun = sex_pdx::get_ticks();
         let referrer = from.as_deref().zip(sex_fetch::Url::parse(url).ok()).and_then(|(f, t)| sex_fetch::referrer(f, &t)).unwrap_or_default();
-        self.nav_from = from;
+        self.nav_from = Some(from);
         let (html, base) = if let Some(page) = built_in(if url.is_empty() { "about:welcome" } else { url }) {
             (String::from(page), String::from(if url.is_empty() { "about:welcome" } else { url }))
         } else if let Some(file) = url.strip_prefix('@') {
