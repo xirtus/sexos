@@ -19,7 +19,16 @@
     try { const s = JSON.stringify(v); return s === undefined ? String(v) : s; } catch (e) { return String(v); }
   }
   function log(level, args) { H(OP.LOG, level, Array.prototype.map.call(args, fmt).join(' ')); }
-  function domError(msg) { const e = new Error(msg); e.name = 'DOMException'; return e; }
+  const DOM_CODES = { IndexSizeError: 1, HierarchyRequestError: 3, WrongDocumentError: 4, InvalidCharacterError: 5, NotFoundError: 8,
+    NotSupportedError: 9, InvalidStateError: 11, SyntaxError: 12, InvalidModificationError: 13, NamespaceError: 14, InvalidAccessError: 15,
+    TypeMismatchError: 17, SecurityError: 18, NetworkError: 19, AbortError: 20, URLMismatchError: 21, QuotaExceededError: 22,
+    TimeoutError: 23, InvalidNodeTypeError: 24, DataCloneError: 25 };
+  class DOMException extends Error {
+    constructor(message, name) { super(message === undefined ? '' : String(message)); this.name = name === undefined ? 'Error' : String(name); }
+    get code() { return DOM_CODES[this.name] || 0; }
+  }
+  for (const k of Object.keys(DOM_CODES)) DOMException[k.replace(/Error$/, '').replace(/([a-z])([A-Z])/g, '$1_$2').toUpperCase() + '_ERR'] = DOM_CODES[k];
+  function domError(msg, name) { return new DOMException(msg, name || 'DOMException'); }
   function check(r) { if (r === '!') throw domError('The operation is not allowed here'); return r; }
 
   function wrap(id) {
@@ -64,7 +73,8 @@
     get returnValue() { return !this.defaultPrevented; }
     set returnValue(v) { if (!v) this.preventDefault(); }
     get srcElement() { return this.target; }
-    composedPath() { const p = []; for (let n = this.target; n; n = n.parentNode) p.push(n); if (p.length && p[p.length - 1] === document) p.push(window); return p; }
+    composedPath() { const p = []; for (let n = this.target; n; n = n instanceof ShadowRoot ? n.host : n.parentNode) p.push(n); if (p.length && p[p.length - 1] === document) p.push(window); return p; }
+    get composed() { return true; }
   }
   class UIEvent extends Event {}
   class MouseEvent extends UIEvent {
@@ -138,7 +148,7 @@
     _dispatch(ev) {
       ev.target = this;
       const path = [];
-      for (let n = this; n; n = n === document ? window : n === window ? null : n.parentNode) path.push(n);
+      for (let n = this; n; n = n === document ? window : n === window ? null : n instanceof ShadowRoot ? n.host : n.parentNode) path.push(n);
       if (path[path.length - 1] !== window && this !== window) { /* detached: no window */ }
       for (let i = 0; i < path.length; i++) {
         const n = path[i];
@@ -171,7 +181,98 @@
       }
     }
   }
-  function report(e) { log(2, [e && e.stack ? e.name + ': ' + e.message + '\n' + e.stack : e]); }
+  let reporting = false;
+  // Scripts a page makes (createElement) run when they join the document, as in other
+  // browsers: inline text at once, `src` once fetched (then 'load' or 'error'). Scripts
+  // that arrive as markup (innerHTML) do not run.
+  let freshScripts = 0;
+  function runCode(el, code) {
+    const prev = document.currentScript;
+    document.currentScript = el;
+    try { (0, eval)(code); } catch (e) { report(e); } finally { document.currentScript = prev; }
+  }
+  function runScript(el) {
+    el._sxFresh = false; freshScripts--;
+    const type = (el.getAttribute('type') || '').trim().toLowerCase(), module = type === 'module';
+    if ((type && !module && !/javascript|ecmascript/.test(type)) || el.hasAttribute('nomodule')) return;
+    const src = el.getAttribute('src');
+    if (src === null) { if (!module) runCode(el, el.textContent); return; }
+    const url = resolveUrl(src);
+    const done = ok => setTimeout(() => el.dispatchEvent(new Event(ok ? 'load' : 'error')), 0);
+    if (module) { import(url).then(() => done(true), e => { report(e); done(false); }); return; }
+    fetch(url).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
+      .then(t => { runCode(el, t); done(true); }, e => { log(1, ['script did not load:', url, String(e && e.message || e)]); done(false); });
+  }
+  function report(e) {
+    log(2, [e && e.stack ? e.name + ': ' + e.message + '\n' + e.stack : e]);
+    // window.onerror and 'error' listeners hear about it too (not about their own errors).
+    if (reporting) return;
+    reporting = true;
+    try {
+      const message = e && e.message !== undefined ? String(e.message) : String(e);
+      if (typeof window.onerror === 'function') window.onerror(message, '', 0, 0, e);
+      const ev = new Event('error'); ev.error = e; ev.message = message; ev.filename = ''; ev.lineno = 0; ev.colno = 0;
+      const arr = window._listeners && window._listeners.error;
+      if (arr) for (const x of arr.slice()) { try { typeof x.fn === 'function' ? x.fn.call(window, ev) : x.fn.handleEvent(ev); } catch (_) {} }
+    } catch (_) {} finally { reporting = false; }
+  }
+
+  // ---- Mutation observers ----
+  // Every change a page script makes goes through the node methods here, which queue a
+  // record for each observer watching that part of the tree; the records arrive in a
+  // microtask, as in other browsers. (Changes the browser makes itself, such as the
+  // page loading, are not reported.)
+  const mutationRegs = [];
+  const mutationPending = new Set();
+  let mutationQueued = false;
+  function mutation(type, target, r) {
+    if (!mutationRegs.length) return;
+    const hit = new Map();
+    for (const reg of mutationRegs) {
+      const o = reg.o;
+      if (reg.target !== target && !(o.subtree && reg.target.contains(target))) continue;
+      if (type === 'childList' ? !o.childList : type === 'attributes' ? !o.attributes || (o.attributeFilter && !o.attributeFilter.includes(r.attributeName)) : !o.characterData) continue;
+      const old = type === 'attributes' ? o.attributeOldValue : type === 'characterData' ? o.characterDataOldValue : false;
+      hit.set(reg.mo, hit.get(reg.mo) || !!old);
+    }
+    for (const [mo, old] of hit) {
+      mo._records.push({ type, target, addedNodes: r.addedNodes || [], removedNodes: r.removedNodes || [], previousSibling: r.previousSibling || null,
+        nextSibling: r.nextSibling || null, attributeName: r.attributeName === undefined ? null : r.attributeName, attributeNamespace: null,
+        oldValue: old && r.oldValue !== undefined ? r.oldValue : null });
+      mutationPending.add(mo);
+    }
+    if (hit.size && !mutationQueued) { mutationQueued = true; Promise.resolve().then(deliverMutations); }
+  }
+  function deliverMutations() {
+    mutationQueued = false;
+    const mos = [...mutationPending]; mutationPending.clear();
+    for (const mo of mos) {
+      const rs = mo.takeRecords();
+      if (rs.length) { try { mo._cb.call(mo, rs, mo); } catch (e) { report(e); } }
+    }
+  }
+  // Records for a change that replaces all of `n`'s children (innerHTML, textContent).
+  function replacingChildren(n, change) {
+    if (!mutationRegs.length) return change();
+    const removedNodes = n.childNodes;
+    change();
+    const addedNodes = n.childNodes;
+    if (removedNodes.length || addedNodes.length) mutation('childList', n, { addedNodes, removedNodes });
+  }
+  // A custom element's callbacks as it leaves the page.
+  function disconnected(root) {
+    if (!customByName.size || root.nodeType !== 1) return;
+    for (const el of [root, ...root.querySelectorAll('*')]) if (el._sxConnected) {
+      el._sxConnected = false;
+      if (typeof el.disconnectedCallback === 'function') { try { el.disconnectedCallback(); } catch (e) { report(e); } }
+    }
+  }
+  function attributeChanged(el, name, old, value) {
+    const obs = el.constructor && el.constructor.observedAttributes;
+    if (typeof el.attributeChangedCallback !== 'function' || !obs || !customByClass.has(el.constructor)) return;
+    if (![...obs].includes(name)) return;
+    try { el.attributeChangedCallback(name, old, value); } catch (e) { report(e); }
+  }
 
   // ---- Nodes ----
   class Node extends EventTarget {
@@ -181,7 +282,7 @@
     get baseURI() { return document.baseURI; }
     get parentNode() { return wrap(H(OP.PARENT, this._id)); }
     get parentElement() { const p = this.parentNode; return p && p.nodeType === 1 ? p : null; }
-    get childNodes() { return list(H(OP.CHILDREN, this._id)); }
+    get childNodes() { const c = list(H(OP.CHILDREN, this._id)); return this._shadow ? c.filter(x => x !== this._shadow) : c; }
     get firstChild() { const c = this.childNodes; return c[0] || null; }
     get lastChild() { const c = this.childNodes; return c[c.length - 1] || null; }
     hasChildNodes() { return this.childNodes.length > 0; }
@@ -192,19 +293,47 @@
     }
     get nextSibling() { return this._sibling(1, false); }
     get previousSibling() { return this._sibling(-1, false); }
-    get isConnected() { for (let n = this; n; n = n.parentNode) if (n === document) return true; return false; }
+    get isConnected() { for (let n = this; n; n = n instanceof ShadowRoot ? n.host : n.parentNode) if (n === document) return true; return false; }
     get textContent() { return H(OP.GET_TEXT, this._id); }
-    set textContent(v) { H(OP.SET_TEXT, this._id, v === null || v === undefined ? '' : String(v)); }
+    set textContent(v) {
+      v = v === null || v === undefined ? '' : String(v);
+      if (this.nodeType === 3) {
+        const old = mutationRegs.length ? H(OP.GET_TEXT, this._id) : null;
+        H(OP.SET_TEXT, this._id, v);
+        mutation('characterData', this, { oldValue: old });
+        return;
+      }
+      if (customByName.size) for (const c of this.childNodes) disconnected(c);
+      replacingChildren(this, () => H(OP.SET_TEXT, this._id, v));
+      keepShadow(this);
+    }
     get nodeValue() { return null; }
     set nodeValue(v) {}
     appendChild(c) { return this.insertBefore(c, null); }
     insertBefore(c, ref) {
-      if (c instanceof DocumentFragment) { for (const k of c.childNodes) this.insertBefore(k, ref); return c; }
+      if (c instanceof DocumentFragment && !(c instanceof ShadowRoot)) { for (const k of c.childNodes) this.insertBefore(k, ref); return c; }
+      if (ref === undefined) ref = null;
+      if (ref === c) return c;
+      if (c.contains(this) || (this instanceof ShadowRoot && c.contains(this.host))) throw domError('The new child element contains the parent.', 'HierarchyRequestError');
+      if (ref && ref.parentNode !== this) throw domError('The node before which the new node is to be inserted is not a child of this node.', 'NotFoundError');
+      const old = c.parentNode;
+      if (old && (mutationRegs.length || customByName.size)) old.removeChild(c);
+      const prev = mutationRegs.length ? (ref ? ref.previousSibling : this.lastChild) : null;
       check(H(OP.INSERT, this._id, c._id, ref ? ref._id : ''));
       if (customByName.size && c.nodeType === 1 && c.isConnected) connected(c);
+      mutation('childList', this, { addedNodes: [c], previousSibling: prev, nextSibling: ref });
+      if (freshScripts && c.nodeType === 1 && c.isConnected) for (const sc of c.localName === 'script' ? [c] : c.querySelectorAll('script')) if (sc._sxFresh) runScript(sc);
       return c;
     }
-    removeChild(c) { if (c.parentNode !== this) throw domError('Not a child of this node'); H(OP.DETACH, c._id); return c; }
+    removeChild(c) {
+      if (!c || c.parentNode !== this) throw domError('The node to be removed is not a child of this node.', 'NotFoundError');
+      const r = mutationRegs.length ? { removedNodes: [c], previousSibling: c.previousSibling, nextSibling: c.nextSibling } : null;
+      const was = customByName.size && c.isConnected;
+      H(OP.DETACH, c._id);
+      if (was) disconnected(c);
+      if (r) mutation('childList', this, r);
+      return c;
+    }
     replaceChild(n, old) { this.insertBefore(n, old); return this.removeChild(old); }
     contains(o) { for (let n = o; n; n = n.parentNode) if (n === this) return true; return false; }
     cloneNode(deep) {
@@ -215,7 +344,26 @@
       if (c) { H(OP.DETACH, c._id); if (!deep) c.textContent = ''; }
       return c;
     }
-    getRootNode() { let n = this; while (n.parentNode) n = n.parentNode; return n; }
+    getRootNode(o) { let n = this; for (;;) { while (n.parentNode) n = n.parentNode; if (o && o.composed && n instanceof ShadowRoot) n = n.host; else return n; } }
+    isSameNode(o) { return this === o; }
+    isEqualNode(o) { return !!o && o.nodeType === this.nodeType && (this.nodeType === 1 ? this.outerHTML === o.outerHTML : this.textContent === o.textContent); }
+    compareDocumentPosition(o) {
+      if (o === this) return 0;
+      if (this.contains(o)) return 20;
+      if (o.contains(this)) return 10;
+      const order = document.querySelectorAll('*');
+      const a = order.indexOf(this.nodeType === 1 ? this : this.parentNode), b = order.indexOf(o.nodeType === 1 ? o : o.parentNode);
+      if (a < 0 || b < 0) return 1 | 32;
+      return a < b ? 4 : 2;
+    }
+  }
+  // Inserting into a host never puts nodes before its (flattened) shadow root, and
+  // replacing all its children keeps the shadow root.
+  function keepShadow(n) {
+    const sh = n._shadow;
+    if (!sh || H(OP.PARENT, sh._id) === String(n._id)) return;
+    const first = H(OP.CHILDREN, n._id).split(',')[0];
+    H(OP.INSERT, n._id, sh._id, first || '');
   }
   class CharacterData extends Node {
     get data() { return this.textContent; }
@@ -223,6 +371,14 @@
     get nodeValue() { return this.data; }
     set nodeValue(v) { this.data = v; }
     get length() { return this.data.length; }
+    appendData(s) { this.data += String(s); }
+    substringData(o, n) { return this.data.substr(o, n); }
+    remove() { const p = this.parentNode; if (p) p.removeChild(this); }
+    before(...xs) { const p = this.parentNode; if (p) for (const x of xs) p.insertBefore(toNode(x), this); }
+    after(...xs) { const p = this.parentNode; if (!p) return; const next = this.nextSibling; for (const x of xs) p.insertBefore(toNode(x), next); }
+    replaceWith(...xs) { this.before(...xs); this.remove(); }
+    get nextElementSibling() { return this._sibling(1, true); }
+    get previousElementSibling() { return this._sibling(-1, true); }
   }
   class Text extends CharacterData {
     constructor(text, id) {
@@ -344,8 +500,25 @@
     get tagName() { return this._tag; }
     get localName() { return this._tag.toLowerCase(); }
     getAttribute(n) { return H(OP.GET_ATTR, this._id, String(n)); }
-    setAttribute(n, v) { check(H(OP.SET_ATTR, this._id, String(n), String(v))); }
-    removeAttribute(n) { H(OP.REMOVE_ATTR, this._id, String(n)); }
+    setAttribute(n, v) {
+      n = String(n); v = String(v);
+      const watched = mutationRegs.length || customByName.size;
+      const old = watched ? this.getAttribute(n) : null;
+      check(H(OP.SET_ATTR, this._id, n, v));
+      if (watched) { mutation('attributes', this, { attributeName: n, oldValue: old }); attributeChanged(this, n, old, v); }
+    }
+    removeAttribute(n) {
+      n = String(n);
+      const watched = mutationRegs.length || customByName.size;
+      const old = watched ? this.getAttribute(n) : null;
+      H(OP.REMOVE_ATTR, this._id, n);
+      if (watched && old !== null) { mutation('attributes', this, { attributeName: n, oldValue: old }); attributeChanged(this, n, old, null); }
+    }
+    setAttributeNS(ns, n, v) { this.setAttribute(String(n).replace(/^\w+:/, ''), v); }
+    getAttributeNS(ns, n) { return this.getAttribute(n); }
+    removeAttributeNS(ns, n) { this.removeAttribute(n); }
+    hasAttributeNS(ns, n) { return this.hasAttribute(n); }
+    hasAttributes() { return this.getAttributeNames().length > 0; }
     hasAttribute(n) { return this.getAttribute(n) !== null; }
     toggleAttribute(n, force) {
       const has = this.hasAttribute(n); const want = force === undefined ? !has : !!force;
@@ -362,9 +535,22 @@
     get style() { return this._style || (this._style = styleFor(this)); }
     set style(v) { this.setAttribute('style', v); }
     get dataset() { return this._dataset || (this._dataset = datasetFor(this)); }
-    get innerHTML() { return H(OP.GET_HTML, this._id, '0'); }
-    set innerHTML(v) { H(OP.SET_HTML, this._id, String(v)); }
-    get outerHTML() { return H(OP.GET_HTML, this._id, '1'); }
+    get innerHTML() {
+      const s = H(OP.GET_HTML, this._id, '0');
+      return this._shadow ? s.slice(H(OP.GET_HTML, this._shadow._id, '1').length) : s;
+    }
+    set innerHTML(v) {
+      if (customByName.size) for (const c of this.childNodes) disconnected(c);
+      replacingChildren(this, () => H(OP.SET_HTML, this._id, String(v)));
+      keepShadow(this);
+      if (customByName.size && this.isConnected) connected(this);
+    }
+    get outerHTML() {
+      const s = H(OP.GET_HTML, this._id, '1');
+      if (!this._shadow) return s;
+      const sh = H(OP.GET_HTML, this._shadow._id, '1'), i = s.indexOf(sh);
+      return i < 0 ? s : s.slice(0, i) + s.slice(i + sh.length);
+    }
     set outerHTML(v) {
       const p = this.parentNode;
       if (!p) return;
@@ -390,7 +576,7 @@
       }
     }
     insertAdjacentElement(where, el) { this.insertAdjacentHTML(where, ''); return el; }
-    remove() { H(OP.DETACH, this._id); }
+    remove() { const p = this.parentNode; if (p) p.removeChild(this); else H(OP.DETACH, this._id); }
     before(...xs) { const p = this.parentNode; if (p) for (const x of xs) p.insertBefore(toNode(x), this); }
     after(...xs) { const p = this.parentNode; if (!p) return; const next = this.nextSibling; for (const x of xs) p.insertBefore(toNode(x), next); }
     replaceWith(...xs) { this.before(...xs); this.remove(); }
@@ -398,8 +584,7 @@
     closest(sel) { for (let n = this; n && n.nodeType === 1; n = n.parentNode) if (n.matches(sel)) return n; return null; }
     getBoundingClientRect() {
       const [x, y, w, h] = H(OP.RECT, this._id).split(',').map(Number);
-      const top = y - window.scrollY;
-      return { x, y: top, left: x, top, width: w, height: h, right: x + w, bottom: top + h };
+      return new DOMRect(x, y - window.scrollY, w, h);
     }
     getClientRects() { return [this.getBoundingClientRect()]; }
     get offsetWidth() { return this.getBoundingClientRect().width; }
@@ -418,6 +603,27 @@
     releasePointerCapture() { if (mouse.capture === this) mouse.capture = null; }
     hasPointerCapture() { return mouse.capture === this; }
     requestPointerLock() { mouse.lock = this; document.pointerLockElement = this; document.dispatchEvent(new Event('pointerlockchange')); }
+    // Shadow DOM, flattened: the shadow root is a real element (display: contents) that
+    // is the host's first child in the browser's tree, hidden from the host's children
+    // here. Its styles apply page-wide and slotted children draw after it.
+    attachShadow(init) {
+      if (this._shadow) throw domError('Shadow root cannot be created on a host which already hosts a shadow tree.', 'NotSupportedError');
+      if (!init || (init.mode !== 'open' && init.mode !== 'closed')) throw new TypeError("Failed to execute 'attachShadow': mode must be 'open' or 'closed'");
+      const r = new ShadowRoot(this, init);
+      this._shadow = r;
+      keepShadow(this);
+      return r;
+    }
+    get shadowRoot() { return this._shadow && this._shadow.mode === 'open' ? this._shadow : null; }
+    get assignedSlot() { return null; }
+    get slot() { return this.getAttribute('slot') || ''; }
+    set slot(v) { this.setAttribute('slot', v); }
+    animate(frames, opts) { const a = new Animation(new KeyframeEffect(this, frames, opts)); a.play(); return a; }
+    getAnimations() { return (this._anims || []).filter(a => a.playState === 'running' || a.playState === 'paused'); }
+    requestFullscreen() { return Promise.reject(domError('Full screen is not available.', 'NotAllowedError')); }
+    computedStyleMap() { return new Map(); }
+    scrollTo() {}
+    scrollBy() {}
   }
   mix(Element, ParentMixin);
   // el.onclick = fn makes the element clickable, as addEventListener does.
@@ -983,6 +1189,8 @@
     get videoHeight() { return this._s().h; }
     get poster() { const h = this.getAttribute('poster'); return h === null ? '' : resolveUrl(h); }
     set poster(v) { this.setAttribute('poster', v); }
+    getVideoPlaybackQuality() { return { creationTime: performance.now(), totalVideoFrames: 0, droppedVideoFrames: 0, corruptedVideoFrames: 0, totalFrameDelay: 0 }; }
+    requestPictureInPicture() { return Promise.reject(domError('Picture-in-Picture is not available.', 'NotSupportedError')); }
   }
   reflect(HTMLVideoElement, ['width', 'height']);
   class HTMLAudioElement extends HTMLMediaElement {}
@@ -1166,7 +1374,47 @@
     set text(v) { this.textContent = v; }
   }
   reflect(HTMLScriptElement, ['type', 'async', 'defer', 'crossOrigin', 'integrity', 'noModule']);
-  class HTMLStyleElement extends HTMLElement {}
+  // A style sheet object over a <style> element. Rules the page inserts (as CSS-in-JS
+  // libraries do) are added to the element's text, so the browser styles with them.
+  class CSSStyleSheet {
+    constructor(owner) { this.ownerNode = owner || null; this.cssRules = []; this.disabled = false; this.media = []; this.title = null; this.type = 'text/css'; }
+    get rules() { return this.cssRules; }
+    get href() { return this.ownerNode && this.ownerNode.localName === 'link' ? this.ownerNode.href : null; }
+    insertRule(rule, i) {
+      i = i === undefined ? 0 : i >>> 0;
+      if (i > this.cssRules.length) throw domError('The index provided is larger than the number of rules.', 'IndexSizeError');
+      this.cssRules.splice(i, 0, { cssText: String(rule), parentStyleSheet: this });
+      this._write();
+      return i;
+    }
+    deleteRule(i) { this.cssRules.splice(i >>> 0, 1); this._write(); }
+    addRule(sel, body, i) { return this.insertRule(sel + ' { ' + body + ' }', i === undefined ? this.cssRules.length : i); }
+    removeRule(i) { this.deleteRule(i); }
+    replaceSync(text) { this.cssRules = [{ cssText: String(text), parentStyleSheet: this }]; this._write(); }
+    replace(text) { this.replaceSync(text); return Promise.resolve(this); }
+    _write() {
+      const o = this.ownerNode;
+      if (!o || o.localName !== 'style') return;
+      if (this._base === undefined) this._base = o.textContent;
+      H(OP.SET_TEXT, o._id, this._base + '\n' + this.cssRules.map(r => r.cssText).join('\n'));
+    }
+  }
+  class HTMLStyleElement extends HTMLElement {
+    get sheet() { return this.isConnected ? this._sheet || (this._sheet = new CSSStyleSheet(this)) : null; }
+  }
+  class HTMLSlotElement extends HTMLElement {
+    get name() { return this.getAttribute('name') || ''; }
+    set name(v) { this.setAttribute('name', v); }
+    assignedNodes(o) {
+      let root = this; while (root.parentNode) root = root.parentNode;
+      if (!(root instanceof ShadowRoot)) return [];
+      const name = this.name;
+      const got = root.host.childNodes.filter(n => n.nodeType === 1 ? (n.getAttribute('slot') || '') === name : !name && n.nodeType === 3);
+      return got.length || !(o && o.flatten) ? got : this.childNodes;
+    }
+    assignedElements(o) { return this.assignedNodes(o).filter(n => n.nodeType === 1); }
+    assign() {}
+  }
   class HTMLLinkElement extends HTMLElement {
     get href() { const h = this.getAttribute('href'); return h === null ? '' : resolveUrl(h); }
     set href(v) { this.setAttribute('href', v); }
@@ -1201,24 +1449,68 @@
     H1: HTMLHeadingElement, H2: HTMLHeadingElement, H3: HTMLHeadingElement, H4: HTMLHeadingElement, H5: HTMLHeadingElement, H6: HTMLHeadingElement,
     SCRIPT: HTMLScriptElement, STYLE: HTMLStyleElement, LINK: HTMLLinkElement, IFRAME: HTMLIFrameElement, UL: HTMLUListElement, OL: HTMLOListElement,
     LI: HTMLLIElement, TABLE: HTMLTableElement, BODY: HTMLBodyElement, HEAD: HTMLHeadElement, HTML: HTMLHtmlElement, META: HTMLMetaElement,
-    TITLE: HTMLTitleElement, PICTURE: HTMLPictureElement, SOURCE: HTMLSourceElement, DIALOG: HTMLDialogElement, SVG: SVGElement,
+    TITLE: HTMLTitleElement, PICTURE: HTMLPictureElement, SLOT: HTMLSlotElement, SOURCE: HTMLSourceElement, DIALOG: HTMLDialogElement, SVG: SVGElement,
     A: HTMLAnchorElement, IMG: HTMLImageElement, INPUT: HTMLInputElement, BUTTON: HTMLButtonElement,
     TEMPLATE: HTMLTemplateElement, CANVAS: HTMLCanvasElement, TEXTAREA: HTMLTextAreaElement, SELECT: HTMLSelectElement,
     OPTION: HTMLOptionElement, FORM: HTMLFormElement, LABEL: HTMLLabelElement };
 
   // A fragment is a detached holder element; inserting it moves its children.
   class DocumentFragment extends Node {
-    constructor() { super(+check(H(OP.CREATE_ELEMENT, 'sx-fragment'))); }
+    constructor(tag) { super(+check(H(OP.CREATE_ELEMENT, tag || 'sx-fragment'))); if (!tag) nodes.set(this._id, this); }
     get nodeType() { return 11; }
     get nodeName() { return '#document-fragment'; }
     get innerHTML() { return H(OP.GET_HTML, this._id, '0'); }
     set innerHTML(v) { H(OP.SET_HTML, this._id, String(v)); }
-    getElementById(id) { return this.querySelector('#' + id); }
+    getElementById(id) { return this.querySelector('#' + CSS.escape(String(id))); }
   }
   mix(DocumentFragment, ParentMixin);
+  class ShadowRoot extends DocumentFragment {
+    constructor(host, init) {
+      super('sx-shadow');
+      nodes.set(this._id, this);
+      this.host = host; this.mode = init.mode; this.delegatesFocus = !!init.delegatesFocus;
+      this.slotAssignment = init.slotAssignment || 'named'; this.clonable = !!init.clonable; this.serializable = !!init.serializable;
+    }
+    get parentNode() { return null; }
+    get parentElement() { return null; }
+    get innerHTML() { return H(OP.GET_HTML, this._id, '0'); }
+    // As on an element: observers hear it and custom elements connect and disconnect.
+    set innerHTML(v) {
+      if (customByName.size) for (const c of this.childNodes) disconnected(c);
+      replacingChildren(this, () => H(OP.SET_HTML, this._id, String(v)));
+      if (customByName.size && this.isConnected) connected(this);
+    }
+    set textContent(v) {
+      if (customByName.size) for (const c of this.childNodes) disconnected(c);
+      replacingChildren(this, () => H(OP.SET_TEXT, this._id, v === null || v === undefined ? '' : String(v)));
+    }
+    get textContent() { return H(OP.GET_TEXT, this._id); }
+    get activeElement() { const a = document._active; return a && this.contains(a) ? a : null; }
+    get styleSheets() { return this.querySelectorAll('style').map(s => s.sheet); }
+    getHTML() { return this.innerHTML; }
+    setHTMLUnsafe(h) { this.innerHTML = h; }
+    elementFromPoint(x, y) { return document.elementFromPoint(x, y); }
+  }
 
   class Document extends Node {
-    constructor() { super(0); this._active = null; this.readyState = 'loading'; this.pointerLockElement = null; }
+    constructor() { super(0); this._active = null; this.readyState = 'loading'; this.pointerLockElement = null; this.currentScript = null; }
+    get fullscreenEnabled() { return false; }
+    get fullscreenElement() { return null; }
+    get fullscreen() { return false; }
+    exitFullscreen() { return Promise.resolve(); }
+    get pictureInPictureEnabled() { return false; }
+    get pictureInPictureElement() { return null; }
+    get styleSheets() { return this.querySelectorAll('style').map(s => s.sheet); }
+    get timeline() { return documentTimeline; }
+    getAnimations() { return animations.filter(a => a.playState === 'running' || a.playState === 'paused'); }
+    createRange() { return new Range(); }
+    get dir() { return this.documentElement ? this.documentElement.getAttribute('dir') || '' : ''; }
+    set dir(v) { if (this.documentElement) this.documentElement.setAttribute('dir', v); }
+    get lastModified() { return new Date(startNs).toLocaleString(); }
+    get designMode() { return 'off'; }
+    set designMode(v) {}
+    execCommand() { return false; }
+    queryCommandSupported() { return false; }
     get nodeType() { return 9; }
     elementFromPoint(x, y) { const id = H(OP.HIT, String(Math.floor(x)), String(Math.floor(y + window.scrollY))); return id ? wrap(id) : null; }
     elementsFromPoint(x, y) { const e = this.elementFromPoint(x, y); return e ? chain(e) : []; }
@@ -1243,7 +1535,9 @@
     getElementById(id) { return wrap(H(OP.BY_ID, String(id))); }
     createElement(tag) {
       const id = +check(H(OP.CREATE_ELEMENT, String(tag)));
-      return wrap(id);
+      const el = wrap(id);
+      if (el.localName === 'script') { el._sxFresh = true; freshScripts++; }
+      return el;
     }
     createElementNS(ns, tag) { return this.createElement(tag); }
     createTextNode(t) { return new Text(t); }
@@ -1331,7 +1625,27 @@
     getElementsByTagName(t) { return this.documentElement.getElementsByTagName(t); }
     importNode(n, deep) { return n.cloneNode(deep); }
     adoptNode(n) { return n; }
+    get title() { const t = this.querySelector('title'); return t ? t.textContent.trim() : ''; }
+    get children() { return [this.documentElement]; }
+    get firstElementChild() { return this.documentElement; }
   }
+  // A string parsed into a document of its own (for HTML, its nodes go in the body; for
+  // XML and SVG, the root element is the document element).
+  class DOMParser {
+    parseFromString(text, type) {
+      type = String(type || 'text/html').toLowerCase();
+      const d = new DetachedDocument();
+      if (type === 'text/html') { d.body.innerHTML = String(text); return d; }
+      const holder = document.createElement('div');
+      holder.innerHTML = String(text).replace(/^\s*<\?xml[^>]*\?>/, '');
+      const root = holder.firstElementChild;
+      if (!root) { const e = document.createElement('parsererror'); e.textContent = 'XML parsing error'; d.documentElement = e; return d; }
+      root.remove();
+      d.documentElement = root; d.head = null; d.body = null;
+      return d;
+    }
+  }
+  class XMLSerializer { serializeToString(n) { return n.nodeType === 9 ? n.documentElement.outerHTML : n.nodeType === 1 ? n.outerHTML : n.textContent; } }
   const implementation = {
     createHTMLDocument: title => new DetachedDocument(title),
     createDocument: () => new DetachedDocument(),
@@ -2721,7 +3035,7 @@
   }
   function structuredClone(v, seen) {
     seen = seen || new Map();
-    if (v === null || typeof v !== 'object') { if (typeof v === 'function' || typeof v === 'symbol') throw domError('could not be cloned'); return v; }
+    if (v === null || typeof v !== 'object') { if (typeof v === 'function' || typeof v === 'symbol') throw domError('could not be cloned', 'DataCloneError'); return v; }
     if (seen.has(v)) return seen.get(v);
     let out;
     if (v instanceof Date) out = new Date(v.getTime());
@@ -2735,11 +3049,420 @@
     seen.set(v, out);
     return out;
   }
+  // ---- Geometry, ranges, animations ----
+  class DOMRectReadOnly {
+    constructor(x, y, w, h) { this.x = +x || 0; this.y = +y || 0; this.width = +w || 0; this.height = +h || 0; }
+    get left() { return Math.min(this.x, this.x + this.width); }
+    get top() { return Math.min(this.y, this.y + this.height); }
+    get right() { return Math.max(this.x, this.x + this.width); }
+    get bottom() { return Math.max(this.y, this.y + this.height); }
+    toJSON() { const { x, y, width, height, left, top, right, bottom } = this; return { x, y, width, height, left, top, right, bottom }; }
+    static fromRect(r) { r = r || {}; return new this(r.x, r.y, r.width, r.height); }
+  }
+  class DOMRect extends DOMRectReadOnly {}
+  // A Range: a stretch of one node's children (or text), which is what pages use them
+  // for (selecting an element's contents, parsing markup in context, measuring).
+  class Range {
+    constructor() { this.startContainer = this.endContainer = document; this.startOffset = this.endOffset = 0; }
+    get collapsed() { return this.startContainer === this.endContainer && this.startOffset === this.endOffset; }
+    get commonAncestorContainer() { for (let n = this.startContainer; n; n = n.parentNode) if (n.contains(this.endContainer)) return n; return document; }
+    setStart(n, o) { this.startContainer = n; this.startOffset = o >>> 0; if (this.endContainer === n && this.endOffset < this.startOffset) this.endOffset = this.startOffset; }
+    setEnd(n, o) { this.endContainer = n; this.endOffset = o >>> 0; }
+    _at(n, d) { const p = n.parentNode; return [p, p ? p.childNodes.indexOf(n) + d : 0]; }
+    setStartBefore(n) { this.setStart(...this._at(n, 0)); }
+    setStartAfter(n) { this.setStart(...this._at(n, 1)); }
+    setEndBefore(n) { this.setEnd(...this._at(n, 0)); }
+    setEndAfter(n) { this.setEnd(...this._at(n, 1)); }
+    selectNode(n) { this.setStartBefore(n); this.setEndAfter(n); }
+    selectNodeContents(n) { this.setStart(n, 0); this.setEnd(n, n.nodeType === 3 ? n.data.length : n.childNodes.length); }
+    collapse(toStart) { if (toStart) this.setEnd(this.startContainer, this.startOffset); else this.setStart(this.endContainer, this.endOffset); }
+    cloneRange() { const r = new Range(); r.setStart(this.startContainer, this.startOffset); r.setEnd(this.endContainer, this.endOffset); return r; }
+    detach() {}
+    // The nodes wholly inside, when both ends are in one element.
+    _nodes() { const c = this.startContainer; return c === this.endContainer && c.nodeType !== 3 ? c.childNodes.slice(this.startOffset, this.endOffset) : []; }
+    cloneContents() { const f = new DocumentFragment(); for (const n of this._nodes()) f.appendChild(n.cloneNode(true)); return f; }
+    extractContents() { const f = new DocumentFragment(); for (const n of this._nodes()) f.appendChild(n); this.collapse(true); return f; }
+    deleteContents() {
+      const c = this.startContainer;
+      if (c.nodeType === 3 && c === this.endContainer) { const d = c.data; c.data = d.slice(0, this.startOffset) + d.slice(this.endOffset); }
+      else for (const n of this._nodes()) n.remove();
+      this.collapse(true);
+    }
+    insertNode(n) {
+      const c = this.startContainer;
+      if (c.nodeType === 3) { const p = c.parentNode; if (p) p.insertBefore(n, c.nextSibling); return; }
+      c.insertBefore(n, c.childNodes[this.startOffset] || null);
+    }
+    surroundContents(el) { const f = this.extractContents(); el.appendChild(f); this.insertNode(el); this.selectNode(el); }
+    createContextualFragment(html) { const f = new DocumentFragment(); f.innerHTML = String(html); return f; }
+    getBoundingClientRect() {
+      const n = this._nodes(), c = this.startContainer;
+      const els = n.length ? n.filter(x => x.nodeType === 1) : [c.nodeType === 3 ? c.parentNode : c].filter(x => x && x.nodeType === 1);
+      if (!els.length) return new DOMRect(0, 0, 0, 0);
+      const rs = els.map(e => e.getBoundingClientRect());
+      const l = Math.min(...rs.map(r => r.left)), t = Math.min(...rs.map(r => r.top));
+      return new DOMRect(l, t, Math.max(...rs.map(r => r.right)) - l, Math.max(...rs.map(r => r.bottom)) - t);
+    }
+    getClientRects() { return [this.getBoundingClientRect()]; }
+    toString() { const c = this.startContainer; return c.nodeType === 3 && c === this.endContainer ? c.data.slice(this.startOffset, this.endOffset) : this._nodes().map(n => n.textContent).join(''); }
+  }
+  Range.START_TO_START = 0; Range.START_TO_END = 1; Range.END_TO_END = 2; Range.END_TO_START = 3;
+  // Web Animations: an animation runs for its time, then holds its last keyframe when
+  // its fill says so; `finished` and `onfinish` tell the page. (The frames in between
+  // are not drawn: CSS animations and transitions are the drawn path.)
+  const animations = [];
+  const documentTimeline = { get currentTime() { return performance.now(); } };
+  class KeyframeEffect {
+    constructor(target, frames, opts) {
+      this.target = target;
+      const o = typeof opts === 'number' ? { duration: opts } : Object.assign({}, opts || {});
+      this._t = { duration: +o.duration || 0, delay: +o.delay || 0, endDelay: +o.endDelay || 0, iterations: o.iterations === undefined ? 1 : +o.iterations, fill: o.fill || 'auto', easing: o.easing || 'linear', direction: o.direction || 'normal' };
+      this._frames = Array.isArray(frames) ? frames.slice() : frames ? (() => {
+        const keys = Object.keys(frames), n = Math.max(0, ...keys.map(k => [].concat(frames[k]).length)), out = [];
+        for (let i = 0; i < n; i++) { const f = {}; for (const k of keys) { const v = [].concat(frames[k]); f[k] = v[Math.min(i, v.length - 1)]; } out.push(f); }
+        return out;
+      })() : [];
+    }
+    getKeyframes() { return this._frames.slice(); }
+    setKeyframes(f) { this._frames = new KeyframeEffect(null, f)._frames; }
+    getTiming() { return Object.assign({}, this._t); }
+    getComputedTiming() { const t = this._t; return Object.assign({}, t, { activeDuration: t.duration * t.iterations, endTime: t.delay + t.duration * t.iterations + t.endDelay }); }
+    updateTiming(t) { Object.assign(this._t, t || {}); }
+    _end() { const t = this._t; return Math.max(0, t.delay + (Number.isFinite(t.iterations) ? t.duration * t.iterations : 0) + t.endDelay); }
+    _hold() {
+      const t = this._t, f = this._frames, el = this.target;
+      if (!el || !f.length || !(t.fill === 'forwards' || t.fill === 'both')) return;
+      const reversed = t.direction === 'reverse' || (t.direction === 'alternate' && t.iterations % 2 === 0) || (t.direction === 'alternate-reverse' && t.iterations % 2 === 1);
+      const last = reversed ? f[0] : f[f.length - 1];
+      for (const k of Object.keys(last)) if (!/^(offset|easing|composite)$/.test(k)) el.style[k] = last[k];
+    }
+  }
+  class Animation extends EventTarget {
+    constructor(effect, timeline) {
+      super();
+      this.effect = effect || null; this.timeline = timeline || documentTimeline; this.id = ''; this.playbackRate = 1;
+      this.playState = 'idle'; this.pending = false; this.onfinish = null; this.oncancel = null; this.onremove = null;
+      this._start = null; this._held = 0; this._timer = null; this.replaceState = 'active';
+      this._fresh();
+    }
+    _fresh() { this.finished = new Promise((ok, no) => { this._ok = ok; this._no = no; }); this.finished.catch(() => {}); this.ready = Promise.resolve(this); }
+    get currentTime() { return this.playState === 'running' ? this._held + (performance.now() - this._start) * this.playbackRate : this.playState === 'idle' ? null : this._held; }
+    set currentTime(v) { this._held = +v || 0; if (this.playState === 'running') { this._start = performance.now(); this._arm(); } }
+    get startTime() { return this.playState === 'running' ? this._start : null; }
+    _left() { return this.effect ? Math.max(0, (this.effect._end() - this._held) / (this.playbackRate || 1)) : 0; }
+    _arm() {
+      if (this._timer !== null) timers.delete(this._timer);
+      this._timer = null;
+      if (this.effect && !Number.isFinite(this.effect._t.iterations)) return;
+      this._timer = addTimer(() => { this._timer = null; this.finish(); }, this._left(), [], false);
+    }
+    play() {
+      if (this.playState === 'running') return;
+      if (this.playState === 'finished') { this._held = 0; this._fresh(); }
+      this.playState = 'running'; this._start = performance.now();
+      const el = this.effect && this.effect.target;
+      if (el) { (el._anims || (el._anims = [])).push(this); }
+      if (!animations.includes(this)) animations.push(this);
+      this._arm();
+    }
+    pause() { if (this.playState !== 'running') return; this._held = this.currentTime; this.playState = 'paused'; if (this._timer !== null) timers.delete(this._timer); this._timer = null; }
+    _drop() {
+      const i = animations.indexOf(this); if (i >= 0) animations.splice(i, 1);
+      const el = this.effect && this.effect.target;
+      if (el && el._anims) el._anims = el._anims.filter(a => a !== this);
+      if (this._timer !== null) timers.delete(this._timer);
+      this._timer = null;
+    }
+    finish() {
+      if (this.playState === 'finished') return;
+      this._held = this.effect ? this.effect._end() : 0;
+      this.playState = 'finished'; this._drop();
+      if (this.effect) this.effect._hold();
+      this._ok(this);
+      const ev = new Event('finish'); ev.currentTime = this._held; ev.timelineTime = performance.now();
+      this.dispatchEvent(ev);
+    }
+    cancel() {
+      if (this.playState === 'idle') return;
+      this.playState = 'idle'; this._held = 0; this._drop();
+      this._no(domError('The user aborted a request.', 'AbortError')); this._fresh();
+      this.dispatchEvent(new Event('cancel'));
+    }
+    reverse() { this.playbackRate = -this.playbackRate; }
+    updatePlaybackRate(r) { this.playbackRate = +r || 0; }
+    commitStyles() { if (this.effect) { const t = this.effect._t.fill; this.effect._t.fill = 'forwards'; this.effect._hold(); this.effect._t.fill = t; } }
+    persist() { this.replaceState = 'persisted'; }
+  }
+
+  // ---- Messages ----
+  class MessageEvent extends Event {
+    constructor(type, init) {
+      super(type, init); init = init || {};
+      this.data = init.data === undefined ? null : init.data; this.origin = init.origin || ''; this.lastEventId = init.lastEventId || '';
+      this.source = init.source || null; this.ports = init.ports || [];
+    }
+  }
+  // Message ports deliver in a task of their own (pages and frameworks use a
+  // MessageChannel to schedule work after the current task).
+  class MessagePort extends EventTarget {
+    constructor() { super(); this._other = null; this._started = false; this._closed = false; this._queue = []; this._onmessage = null; this.onmessageerror = null; }
+    get onmessage() { return this._onmessage; }
+    set onmessage(f) { this._onmessage = typeof f === 'function' ? f : null; if (this._onmessage) this.start(); }
+    addEventListener(type, fn, opts) { super.addEventListener(type, fn, opts); }
+    postMessage(data) {
+      const o = this._other;
+      if (!o || this._closed) return;
+      const d = structuredClone(data);
+      addTimer(() => o._arrive(d), 0, [], false);
+    }
+    _arrive(d) {
+      if (this._closed) return;
+      if (!this._started) { this._queue.push(d); return; }
+      this.dispatchEvent(new MessageEvent('message', { data: d }));
+    }
+    start() {
+      if (this._started) return;
+      this._started = true;
+      const q = this._queue; this._queue = [];
+      for (const d of q) addTimer(() => this._arrive(d), 0, [], false);
+    }
+    close() { this._closed = true; if (this._other) this._other._other = null; }
+  }
+  class MessageChannel {
+    constructor() { this.port1 = new MessagePort(); this.port2 = new MessagePort(); this.port1._other = this.port2; this.port2._other = this.port1; }
+  }
+  const channels = new Map();
+  class BroadcastChannel extends EventTarget {
+    constructor(name) { super(); this.name = String(name); this.onmessage = null; (channels.get(this.name) || channels.set(this.name, new Set()).get(this.name)).add(this); }
+    postMessage(data) {
+      const set = channels.get(this.name);
+      if (!set || !set.has(this)) throw domError('BroadcastChannel is closed.', 'InvalidStateError');
+      for (const c of set) if (c !== this) { const d = structuredClone(data); addTimer(() => { if (set.has(c)) c.dispatchEvent(new MessageEvent('message', { data: d, origin: location.origin })); }, 0, [], false); }
+    }
+    close() { const set = channels.get(this.name); if (set) set.delete(this); }
+  }
+  function postMessage(data, target, transfer) {
+    const origin = typeof target === 'object' && target !== null ? target.targetOrigin || '/' : target === undefined ? '/' : String(target);
+    if (origin !== '*' && origin !== '/' && origin.replace(/\/$/, '') !== location.origin) return;
+    const d = structuredClone(data);
+    const ports = Array.isArray(transfer) ? transfer.filter(p => p instanceof MessagePort) : (target && target.transfer) || [];
+    addTimer(() => window.dispatchEvent(new MessageEvent('message', { data: d, origin: location.origin, source: window, ports })), 0, [], false);
+  }
+
+  // ---- Intl ----
+  // The engine has no Intl, so here is the part pages lean on, for English
+  // ('en-US') and the machine's clock (UTC): numbers, dates, plurals, lists, relative
+  // times, and comparing strings.
+  const LOCALE = 'en-US';
+  const locales = l => [LOCALE];
+  function group(s) { return s.replace(/\B(?=(\d{3})+(?!\d))/g, ','); }
+  class NumberFormat {
+    constructor(l, o) {
+      o = Object.assign({}, o || {});
+      const style = o.style || 'decimal', cur = style === 'currency';
+      const minF = o.minimumFractionDigits !== undefined ? +o.minimumFractionDigits : cur ? 2 : 0;
+      const maxF = o.maximumFractionDigits !== undefined ? Math.max(+o.maximumFractionDigits, minF) : cur ? Math.max(2, minF) : style === 'percent' ? Math.max(0, minF) : Math.max(3, minF);
+      this._o = { locale: LOCALE, numberingSystem: 'latn', style, currency: o.currency ? String(o.currency).toUpperCase() : undefined, currencyDisplay: o.currencyDisplay || 'symbol',
+        unit: o.unit, unitDisplay: o.unitDisplay || 'short', minimumIntegerDigits: +o.minimumIntegerDigits || 1, minimumFractionDigits: minF, maximumFractionDigits: maxF,
+        maximumSignificantDigits: o.maximumSignificantDigits, minimumSignificantDigits: o.minimumSignificantDigits,
+        useGrouping: o.useGrouping === undefined ? 'auto' : o.useGrouping, notation: o.notation || 'standard', compactDisplay: o.compactDisplay || 'short', signDisplay: o.signDisplay || 'auto' };
+      // As in other engines, `format` works detached from its formatter (arr.map(nf.format)).
+      this.format = this.format.bind(this);
+    }
+    resolvedOptions() { const r = {}; for (const k of Object.keys(this._o)) if (this._o[k] !== undefined) r[k] = this._o[k]; return r; }
+    _digits(n, minF, maxF) {
+      const o = this._o;
+      let s;
+      if (o.maximumSignificantDigits) { s = String(+n.toPrecision(+o.maximumSignificantDigits)); }
+      else { s = n.toFixed(maxF); if (s.includes('.')) { s = s.replace(/0+$/, ''); const f = (s.split('.')[1] || '').length; if (f < minF) s += '0'.repeat(minF - f); s = s.replace(/\.$/, ''); } }
+      let [i, f] = s.split('.');
+      if (i.length < o.minimumIntegerDigits) i = '0'.repeat(o.minimumIntegerDigits - i.length) + i;
+      if (o.useGrouping !== false && !(o.useGrouping === 'min2' && i.length < 5)) i = group(i);
+      return f ? i + '.' + f : i;
+    }
+    format(v) {
+      const o = this._o;
+      let n = typeof v === 'bigint' ? Number(v) : +v;
+      if (Number.isNaN(n)) return 'NaN';
+      const neg = n < 0 || Object.is(n, -0) && o.signDisplay === 'negative';
+      n = Math.abs(n);
+      let body;
+      if (!Number.isFinite(n)) body = '∞';
+      else if (o.style === 'percent') body = this._digits(n * 100, o.minimumFractionDigits, o.maximumFractionDigits) + '%';
+      else if (o.notation === 'compact') {
+        const steps = o.compactDisplay === 'long' ? [[1e12, ' trillion'], [1e9, ' billion'], [1e6, ' million'], [1e3, ' thousand']] : [[1e12, 'T'], [1e9, 'B'], [1e6, 'M'], [1e3, 'K']];
+        const st = steps.find(([d]) => n >= d * 0.9995);
+        const x = st ? n / st[0] : n;
+        const r = x < 100 && o.maximumFractionDigits >= 1 && o.maximumSignificantDigits === undefined ? +x.toPrecision(2) : Math.round(x);
+        body = (r >= 1000 ? group(String(r)) : String(r)) + (st ? st[1] : '');
+      }
+      else if (o.notation === 'scientific' || o.notation === 'engineering') body = n.toExponential(Math.min(o.maximumFractionDigits, 20)).replace(/\.?0+e/, 'e').replace('e+', 'E').replace('e', 'E');
+      else body = this._digits(n, o.minimumFractionDigits, o.maximumFractionDigits);
+      if (o.style === 'currency') {
+        const sym = { USD: '$', EUR: '€', GBP: '£', JPY: '¥', INR: '₹', KRW: '₩', CNY: 'CN¥', CAD: 'CA$', AUD: 'A$' }[o.currency];
+        body = o.currencyDisplay === 'code' || !sym ? o.currency + ' ' + body : sym + body;
+      } else if (o.style === 'unit' && o.unit) body += ' ' + o.unit.replace(/-per-/, '/').replace(/^kilobyte$/, 'kB').replace(/^megabyte$/, 'MB').replace(/^gigabyte$/, 'GB').replace(/^second$/, 'sec').replace(/^minute$/, 'min').replace(/^hour$/, 'hr').replace(/^percent$/, '%');
+      const sign = o.signDisplay === 'never' ? '' : neg && n !== 0 ? '-' : (o.signDisplay === 'always' || o.signDisplay === 'exceptZero' && n !== 0) ? '+' : '';
+      return sign + body;
+    }
+    formatToParts(v) { return [{ type: 'literal', value: this.format(v) }]; }
+    formatRange(a, b) { return this.format(a) + '–' + this.format(b); }
+    static supportedLocalesOf(l) { return locales(l); }
+  }
+  const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  class DateTimeFormat {
+    constructor(l, o) {
+      o = Object.assign({}, o || {});
+      const fields = ['weekday', 'era', 'year', 'month', 'day', 'hour', 'minute', 'second', 'fractionalSecondDigits', 'timeZoneName'];
+      if (!fields.some(f => o[f] !== undefined) && !o.dateStyle && !o.timeStyle) { o.year = 'numeric'; o.month = 'numeric'; o.day = 'numeric'; }
+      if (o.dateStyle === 'full') Object.assign(o, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+      else if (o.dateStyle === 'long') Object.assign(o, { year: 'numeric', month: 'long', day: 'numeric' });
+      else if (o.dateStyle === 'medium') Object.assign(o, { year: 'numeric', month: 'short', day: 'numeric' });
+      else if (o.dateStyle === 'short') Object.assign(o, { year: '2-digit', month: 'numeric', day: 'numeric' });
+      if (o.timeStyle) Object.assign(o, { hour: 'numeric', minute: '2-digit' }, o.timeStyle === 'short' ? {} : { second: '2-digit' });
+      const tz = o.timeZone ? String(o.timeZone) : 'UTC';
+      if (!/^(utc|gmt|etc\/utc|etc\/gmt)$/i.test(tz)) throw new RangeError('Invalid time zone specified: ' + tz);
+      this._o = Object.assign({ locale: LOCALE, calendar: 'gregory', numberingSystem: 'latn', timeZone: 'UTC' }, o, { timeZone: 'UTC' });
+      if (this._o.hour !== undefined && this._o.hour12 === undefined && this._o.hourCycle === undefined) this._o.hour12 = true;
+      this.format = this.format.bind(this);
+    }
+    resolvedOptions() { const r = Object.assign({}, this._o); delete r.dateStyle; delete r.timeStyle; return r; }
+    formatToParts(v) {
+      const d = v === undefined ? new Date() : new Date(typeof v === 'object' ? v.getTime() : +v);
+      if (isNaN(d.getTime())) throw new RangeError('Invalid time value');
+      const o = this._o, out = [], two = n => String(n).padStart(2, '0');
+      const lit = s => out.push({ type: 'literal', value: s });
+      const Y = d.getUTCFullYear(), M = d.getUTCMonth(), D = d.getUTCDate();
+      const month = o.month === 'long' ? MONTHS[M] : o.month === 'short' ? MONTHS[M].slice(0, 3) : o.month === 'narrow' ? MONTHS[M][0] : o.month === '2-digit' ? two(M + 1) : String(M + 1);
+      const day = o.day === '2-digit' ? two(D) : String(D);
+      const year = o.year === '2-digit' ? two(Y % 100) : String(Y);
+      if (o.weekday) { const w = DAYS[d.getUTCDay()]; out.push({ type: 'weekday', value: o.weekday === 'long' ? w : o.weekday === 'short' ? w.slice(0, 3) : w[0] }); if (o.month || o.day || o.year) lit(', '); }
+      const wordy = o.month && /^(long|short|narrow)$/.test(o.month);
+      if (wordy) {
+        out.push({ type: 'month', value: month });
+        if (o.day) { lit(' '); out.push({ type: 'day', value: day }); }
+        if (o.year) { lit(o.day ? ', ' : ' '); out.push({ type: 'year', value: year }); }
+      } else {
+        const ps = [];
+        if (o.month) ps.push({ type: 'month', value: month });
+        if (o.day) ps.push({ type: 'day', value: day });
+        if (o.year) ps.push({ type: 'year', value: year });
+        ps.forEach((p, i) => { if (i) lit('/'); out.push(p); });
+      }
+      if (o.hour !== undefined || o.minute !== undefined || o.second !== undefined) {
+        if (out.length) lit(', ');
+        const h24 = d.getUTCHours(), h12 = o.hour12 !== false && o.hourCycle !== 'h23' && o.hourCycle !== 'h24';
+        if (o.hour !== undefined) { const h = h12 ? (h24 % 12 || 12) : h24; out.push({ type: 'hour', value: o.hour === '2-digit' || !h12 && o.minute !== undefined ? two(h) : String(h) }); }
+        if (o.minute !== undefined) { if (o.hour !== undefined) lit(':'); out.push({ type: 'minute', value: o.hour !== undefined || o.minute === '2-digit' ? two(d.getUTCMinutes()) : String(d.getUTCMinutes()) }); }
+        if (o.second !== undefined) { lit(':'); out.push({ type: 'second', value: two(d.getUTCSeconds()) }); }
+        if (o.fractionalSecondDigits) { lit('.'); out.push({ type: 'fractionalSecond', value: String(d.getUTCMilliseconds()).padStart(3, '0').slice(0, o.fractionalSecondDigits) }); }
+        if (o.hour !== undefined && h12) { lit(' '); out.push({ type: 'dayPeriod', value: h24 < 12 ? 'AM' : 'PM' }); }
+        if (o.timeZoneName) { lit(' '); out.push({ type: 'timeZoneName', value: 'UTC' }); }
+      }
+      return out;
+    }
+    format(v) { return this.formatToParts(v).map(p => p.value).join(''); }
+    formatRange(a, b) { return this.format(a) + ' – ' + this.format(b); }
+    static supportedLocalesOf(l) { return locales(l); }
+  }
+  class PluralRules {
+    constructor(l, o) { this._type = (o && o.type) || 'cardinal'; }
+    select(n) {
+      n = Math.abs(+n);
+      if (this._type === 'ordinal') { const a = n % 10, b = n % 100; return a === 1 && b !== 11 ? 'one' : a === 2 && b !== 12 ? 'two' : a === 3 && b !== 13 ? 'few' : 'other'; }
+      return n === 1 ? 'one' : 'other';
+    }
+    resolvedOptions() { return { locale: LOCALE, type: this._type, pluralCategories: this._type === 'ordinal' ? ['few', 'one', 'two', 'other'] : ['one', 'other'] }; }
+    static supportedLocalesOf(l) { return locales(l); }
+  }
+  class Collator {
+    constructor(l, o) { this._o = Object.assign({ locale: LOCALE, usage: 'sort', sensitivity: 'variant', ignorePunctuation: false, collation: 'default', numeric: false, caseFirst: 'false' }, o || {}); this.compare = this.compare.bind(this); }
+    compare(a, b) {
+      a = String(a); b = String(b);
+      const o = this._o;
+      if (o.sensitivity === 'base' || o.sensitivity === 'accent') { a = a.toLowerCase(); b = b.toLowerCase(); }
+      if (o.numeric) { const re = /(\d+)|(\D+)/g, x = a.match(re) || [], y = b.match(re) || []; for (let i = 0; i < Math.min(x.length, y.length); i++) { const p = x[i], q = y[i]; const c = /^\d/.test(p) && /^\d/.test(q) ? (+p) - (+q) : p < q ? -1 : p > q ? 1 : 0; if (c) return Math.sign(c); } return Math.sign(x.length - y.length); }
+      const al = a.toLowerCase(), bl = b.toLowerCase();
+      return al < bl ? -1 : al > bl ? 1 : a < b ? 1 : a > b ? -1 : 0;
+    }
+    resolvedOptions() { return Object.assign({}, this._o); }
+    static supportedLocalesOf(l) { return locales(l); }
+  }
+  class RelativeTimeFormat {
+    constructor(l, o) { this._o = Object.assign({ locale: LOCALE, style: 'long', numeric: 'always', numberingSystem: 'latn' }, o || {}); }
+    format(v, unit) {
+      v = +v; unit = String(unit).replace(/s$/, '');
+      if (!/^(second|minute|hour|day|week|month|quarter|year)$/.test(unit)) throw new RangeError('Invalid unit argument for format() \'' + unit + '\'');
+      if (this._o.numeric === 'auto') {
+        const words = { day: ['yesterday', 'today', 'tomorrow'], year: ['last year', 'this year', 'next year'], month: ['last month', 'this month', 'next month'], week: ['last week', 'this week', 'next week'] }[unit];
+        if (words && (v === -1 || v === 0 || v === 1)) return words[v + 1];
+        if (unit === 'second' && v === 0) return 'now';
+      }
+      const n = Math.abs(v), label = n === 1 ? unit : unit + 's';
+      const s = new NumberFormat().format(n) + ' ' + label;
+      return v < 0 || Object.is(v, -0) ? s + ' ago' : 'in ' + s;
+    }
+    formatToParts(v, unit) { return [{ type: 'literal', value: this.format(v, unit) }]; }
+    resolvedOptions() { return Object.assign({}, this._o); }
+    static supportedLocalesOf(l) { return locales(l); }
+  }
+  class ListFormat {
+    constructor(l, o) { this._o = Object.assign({ locale: LOCALE, type: 'conjunction', style: 'long' }, o || {}); }
+    format(list) {
+      const a = [...list].map(String), word = this._o.type === 'disjunction' ? 'or' : 'and';
+      if (this._o.type === 'unit') return a.join(this._o.style === 'narrow' ? ' ' : ', ');
+      return a.length < 3 ? a.join(' ' + word + ' ') : a.slice(0, -1).join(', ') + ', ' + word + ' ' + a[a.length - 1];
+    }
+    formatToParts(list) { return [{ type: 'literal', value: this.format(list) }]; }
+    resolvedOptions() { return Object.assign({}, this._o); }
+    static supportedLocalesOf(l) { return locales(l); }
+  }
+  class Locale {
+    constructor(tag, o) {
+      const parts = String(tag).replace(/_/g, '-').split('-');
+      this.language = parts[0].toLowerCase();
+      this.region = (o && o.region) || parts.find((p, i) => i && /^([A-Za-z]{2}|\d{3})$/.test(p));
+      if (this.region) this.region = this.region.toUpperCase();
+      this.script = parts.find((p, i) => i && /^[A-Za-z]{4}$/.test(p));
+      this.baseName = [this.language, this.script, this.region].filter(Boolean).join('-');
+      this.calendar = undefined; this.hourCycle = undefined; this.numberingSystem = undefined;
+    }
+    toString() { return this.baseName; }
+    maximize() { return this; }
+    minimize() { return this; }
+  }
+  // NumberFormat, DateTimeFormat and Collator may be called without `new`.
+  const callable = cls => { const f = function (l, o) { return new cls(l, o); }; f.prototype = cls.prototype; f.supportedLocalesOf = cls.supportedLocalesOf; Object.defineProperty(f, 'name', { value: cls.name }); return f; };
+  const Intl = { NumberFormat: callable(NumberFormat), DateTimeFormat: callable(DateTimeFormat), PluralRules, Collator: callable(Collator), RelativeTimeFormat, ListFormat, Locale,
+    getCanonicalLocales: l => (l === undefined ? [] : [].concat(l)).map(x => new Locale(x).baseName),
+    supportedValuesOf: k => k === 'timeZone' ? ['UTC'] : k === 'currency' ? ['EUR', 'GBP', 'JPY', 'USD'] : [] };
+  // The engine's own toLocaleString leaves numbers ungrouped.
+  Object.defineProperty(Number.prototype, 'toLocaleString', { value: function (l, o) { return new NumberFormat(l, o).format(this); }, writable: true, configurable: true });
+  Object.defineProperty(String.prototype, 'localeCompare', { value: function (b, l, o) { return new Collator(l, o).compare(this, b); }, writable: true, configurable: true });
+
+  // ---- navigator extras ----
+  // Decoding answers follow what the media element and Media Source can play.
+  const mediaCapabilities = {
+    decodingInfo(cfg) {
+      cfg = cfg || {};
+      const ok = t => !t || (cfg.type === 'media-source' ? mseSupported(t.contentType || '') : MEDIA_TYPES.test(t.contentType || '') || mseSupported(t.contentType || ''));
+      const supported = !!(cfg.video || cfg.audio) && ok(cfg.video) && ok(cfg.audio) && !(cfg.video && cfg.video.width * cfg.video.height > 3840 * 2160);
+      const smooth = supported && !(cfg.video && (cfg.video.width * cfg.video.height > 1920 * 1080 || cfg.video.framerate > 60));
+      return Promise.resolve({ supported, smooth, powerEfficient: false, keySystemAccess: null, configuration: cfg });
+    },
+    encodingInfo(cfg) { return Promise.resolve({ supported: false, smooth: false, powerEfficient: false, configuration: cfg }); },
+  };
+  function sendBeacon(url, data) {
+    try { fetch(String(url), { method: 'POST', body: data === undefined ? null : data, keepalive: true, credentials: 'include' }).catch(() => {}); } catch (e) { return false; }
+    return true;
+  }
+
   class AbortSignal extends EventTarget {
     constructor() { super(); this.aborted = false; this.reason = undefined; this.onabort = null; }
     throwIfAborted() { if (this.aborted) throw this.reason; }
     static abort(reason) { const c = new AbortController(); c.abort(reason); return c.signal; }
-    static timeout(ms) { const c = new AbortController(); setTimeout(() => c.abort(domError('The operation timed out.')), ms); return c.signal; }
+    static timeout(ms) { const c = new AbortController(); setTimeout(() => c.abort(domError('The operation timed out.', 'TimeoutError')), ms); return c.signal; }
     static any(list) { const c = new AbortController(); for (const s of list) { if (s.aborted) { c.abort(s.reason); break; } s.addEventListener('abort', () => c.abort(s.reason)); } return c.signal; }
   }
   class AbortController {
@@ -2747,7 +3470,7 @@
     abort(reason) {
       const s = this.signal;
       if (s.aborted) return;
-      s.aborted = true; s.reason = reason === undefined ? domError('signal is aborted without reason') : reason;
+      s.aborted = true; s.reason = reason === undefined ? domError('signal is aborted without reason', 'AbortError') : reason;
       const ev = new Event('abort');
       if (typeof s.onabort === 'function') s.onabort(ev);
       s.dispatchEvent(ev);
@@ -2803,10 +3526,25 @@
     disconnect() { this._els.clear(); }
   }
   class MutationObserver {
-    constructor(cb) { this._cb = cb; }
-    observe() {}
-    disconnect() {}
-    takeRecords() { return []; }
+    constructor(cb) {
+      if (typeof cb !== 'function') throw new TypeError("Failed to construct 'MutationObserver': parameter 1 is not of type 'MutationCallback'.");
+      this._cb = cb; this._records = [];
+    }
+    observe(target, opts) {
+      if (!(target instanceof Node)) throw new TypeError("Failed to execute 'observe' on 'MutationObserver': parameter 1 is not of type 'Node'.");
+      const o = Object.assign({}, opts || {});
+      if (o.attributeOldValue || o.attributeFilter) { if (o.attributes === undefined) o.attributes = true; }
+      if (o.characterDataOldValue && o.characterData === undefined) o.characterData = true;
+      if (!o.childList && !o.attributes && !o.characterData) throw new TypeError("Failed to execute 'observe' on 'MutationObserver': The options object must set at least one of 'attributes', 'characterData', or 'childList' to true.");
+      if (o.attributeFilter) o.attributeFilter = [...o.attributeFilter].map(String);
+      const had = mutationRegs.find(r => r.mo === this && r.target === target);
+      if (had) had.o = o; else mutationRegs.push({ mo: this, target, o });
+    }
+    disconnect() {
+      for (let i = mutationRegs.length - 1; i >= 0; i--) if (mutationRegs[i].mo === this) mutationRegs.splice(i, 1);
+      this._records = [];
+    }
+    takeRecords() { const r = this._records; this._records = []; return r; }
   }
   class PerformanceObserver {
     constructor(cb) { this._cb = cb; }
@@ -2883,7 +3621,11 @@
   Object.setPrototypeOf(window, Window.prototype);
   const globals = {
     window, self: window, Window, globalThis: window, document, location, console, performance,
-    navigator: { userAgent: 'Mozilla/5.0 (SexOS) Web/0.2', language: 'en', languages: ['en'], platform: 'SexOS', onLine: true, gpu: new GPU() },
+    navigator: { userAgent: 'Mozilla/5.0 (SexOS) Web/0.2', appName: 'Netscape', appCodeName: 'Mozilla', appVersion: '5.0 (SexOS) Web/0.2', product: 'Gecko', productSub: '20030107',
+      vendor: '', vendorSub: '', language: 'en-US', languages: ['en-US', 'en'], platform: 'SexOS', onLine: true, cookieEnabled: true, doNotTrack: null,
+      hardwareConcurrency: 4, maxTouchPoints: 0, pdfViewerEnabled: false, webdriver: false, plugins: [], mimeTypes: [], javaEnabled: () => false,
+      mediaCapabilities, sendBeacon, gpu: new GPU(),
+      permissions: { query: d => Promise.resolve(Object.assign(new EventTarget(), { name: d && d.name, state: 'prompt', onchange: null })) } },
     screen: { get width() { return view()[0]; }, get height() { return view()[1]; } },
     history: { length: 1, state: null, pushState() {}, replaceState() {}, back() {}, forward() {}, go() {} },
     localStorage: storage(), sessionStorage: storage(),
@@ -2912,6 +3654,8 @@
     GPUQueue, GPUCanvasContext, GPUBufferUsage, GPUTextureUsage, GPUShaderStage, GPUMapMode, GPUColorWrite,
     createImageBitmap: src => Promise.resolve(src),
     fetch, Request, Response, Headers, URL, URLSearchParams, XMLHttpRequest,
+    DOMException, DOMRect, DOMRectReadOnly, Range, Animation, KeyframeEffect, ShadowRoot, HTMLSlotElement, CSSStyleSheet,
+    MessageEvent, MessagePort, MessageChannel, BroadcastChannel, postMessage, DOMParser, XMLSerializer, Intl,
     customElements, atob, btoa, TextEncoder, TextDecoder, structuredClone, AbortController, AbortSignal, Blob, File,
     IntersectionObserver, ResizeObserver, MutationObserver, PerformanceObserver, Image, Option, crypto, CSS,
     requestIdleCallback, cancelIdleCallback: id => { timers.delete(id); },
@@ -2921,7 +3665,7 @@
     HTMLSourceElement, HTMLDialogElement, SVGElement, NodeFilter, TreeWalker, NodeIterator: TreeWalker, FontFace,
     getSelection: () => ({ rangeCount: 0, toString: () => '', removeAllRanges() {}, addRange() {}, getRangeAt() { return null; } }),
     visualViewport: { get width() { return view()[0]; }, get height() { return view()[1]; }, scale: 1, offsetLeft: 0, offsetTop: 0, pageLeft: 0, pageTop: 0, addEventListener() {}, removeEventListener() {} },
-    get origin() { return location.origin; }, isSecureContext: true,
+    get origin() { return location.origin; }, isSecureContext: true, frameElement: null, opener: null, closed: false,
     devicePixelRatio: 1, scrollX: 0, scrollY: 0, pageXOffset: 0, pageYOffset: 0, name: '',
   };
   for (const k of Object.keys(globals)) {
@@ -3017,6 +3761,8 @@
       case 'fetched': fetched(f[1], +f[2], +f[3]); return 0;
       case 'media': mediaState(f); return 0;
       case 'mse': mseState(f); return 0;
+      // A classic script is about to run (its node), or finished (empty).
+      case 'script': document.currentScript = f[1] ? wrap(f[1]) : null; return 0;
       case 'scroll': window.scrollY = window.pageYOffset = +f[1] || 0; return 0;
       case 'click': {
         const el = wrap(f[1]);

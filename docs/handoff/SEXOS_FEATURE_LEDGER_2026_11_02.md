@@ -3602,6 +3602,39 @@ Plan: `docs/handoff/NVIDIA_GPU_PLAN_2026_11_09.md` (stages N1-N6).
 - **How:** `sex_web::mse::Stream` keeps segments by time with the init segment each follows. Web's feed hands the decoder an init segment and then segments in time order. `sex_media::Source` gains `restart(ms)` (seek by starting a new stream) and `next_stream()` (at a switch, or where a feed ran dry, the decoder opens again on what follows, keeping the player's queue and clock; `Next::Later` while it waits). A growing stream keeps its own presentation times (no start-time shift) and reads in 16 KiB steps.
 - **Limits:** `appendWindowStart/End` and `mode = 'sequence'` are accepted but not applied; a `remove()` that cuts a segment in two keeps the whole segment for the decoder (only `buffered` shows the cut).
 
+## Browser: web APIs for players and frameworks, YouTube stage Y6 (2026-11-10)
+
+- **MutationObserver** works: every change a page script makes through the DOM queues
+  records (childList, attributes with `attributeFilter` and old values, characterData,
+  subtree), delivered in a microtask. Changes the browser makes itself are not reported.
+- **Custom elements:** `attributeChangedCallback` for `observedAttributes`, and
+  `disconnectedCallback` (moving an element disconnects and connects it, as specified).
+- **Shadow DOM, flattened:** `attachShadow` makes an `sx-shadow` element
+  (`display: contents` in the UA sheet, as is `slot`) as the host's first child; the
+  page's view of the host hides it. Slots answer `assignedNodes`/`assignedElements`;
+  `getRootNode({composed})`, `composedPath` and event bubbling cross the shadow root.
+  Costs: shadow styles apply page-wide, slotted children draw after the shadow content.
+- **Messaging:** `postMessage`, `MessageEvent`, `MessageChannel`/`MessagePort` (a task
+  per message), `BroadcastChannel`.
+- **Intl** for `en-US` in UTC (QuickJS has none): NumberFormat (grouping, percent,
+  currency, compact), DateTimeFormat (dateStyle/timeStyle and fields, formatToParts),
+  PluralRules, Collator, RelativeTimeFormat, ListFormat, Locale; `toLocaleString` and
+  `localeCompare` use them.
+- **Smaller pieces:** DOMParser, XMLSerializer, DOMException (names, codes), DOMRect,
+  Range, `element.animate` (Web Animations: timing, fill, `finished`),
+  `navigator.mediaCapabilities.decodingInfo`, `sendBeacon`, `cookieEnabled`,
+  `document.currentScript` (the browser says which `<script>` runs),
+  `<style>.sheet.insertRule`, `window.onerror`, fullscreen and picture-in-picture
+  refusing, `getVideoPlaybackQuality`.
+- **Scripts a page inserts run** (Y8's first step): a `createElement('script')` runs when
+  it joins the document: inline text at once, `src` through `fetch` then `load`/`error`,
+  modules through `import()`; markup scripts (innerHTML) do not. A `fetched` dispatch
+  runs with the load budget (120 s), so a player bundle that arrives that way is not cut off.
+- **Evidence:** `cargo test -p sex-js --test dom` (38 tests, 9 new);
+  `scripts/program_web_apis_gate.py` (page built from these APIs, pixel-matched to the
+  host render, page reports its own checks).
+- **ABI / kernel:** none.
+
 ## Video and sound play while they download (2026-11-10)
 
 - Web loads a `<video>`/`<audio>` source from the network without waiting for it: the
