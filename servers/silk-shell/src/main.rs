@@ -5493,7 +5493,13 @@ unsafe fn document_view_poll() {
             .flatten()
             .any(|e| e.target == target && !e.dead && !e.close_pending);
         let inset=incarnation.shell_surface.is_some();
-        let origin=get_surface_bounds(frame).map(|(x,y,_,_)|if inset{(x.saturating_add(8),y.saturating_add(36))}else{(x,y)});
+        let origin=get_surface_bounds(frame).and_then(|(x,y,w,h)| {
+            if inset {
+                desktop_content::children(frame,x,y,w,h).iter().flatten()
+                    .find(|child|child.sid==incarnation.surface)
+                    .map(|child|(child.x,child.y))
+            } else {Some((x,y))}
+        });
         DOCUMENT_VIEWS[i].poll(live, desktop_content_ready(frame), |n| {
             let a = n.args();
             let (s, _) = raw_pdx_call(slot, sex_pdx::document_view::OP, a[0], a[1], a[2]);
