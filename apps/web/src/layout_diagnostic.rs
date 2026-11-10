@@ -1,0 +1,64 @@
+//! Private read-only embed layout probe. Never merge into the production browser.
+use alloc::string::String;
+use core::sync::atomic::{AtomicU32, Ordering};
+use super::Browser;
+use super::sex_html::{dom::Dom, style::Style};
+
+static STATES: [AtomicU32; 2] = [const { AtomicU32::new(0) }; 2];
+static LAYOUTS: [AtomicU32; 2] = [const { AtomicU32::new(0) }; 2];
+static SHOWS: AtomicU32 = AtomicU32::new(0);
+
+fn text(s: &str) -> String {
+    s.chars().take(192).map(|c| if c.is_ascii_graphic() || c == ' ' { c } else { '?' }).collect()
+}
+fn ordinal(b: &Browser) -> usize { b.in_frame.is_some() as usize }
+
+pub(super) fn state(b: &mut Browser, phase: &str) {
+    let seq = STATES[ordinal(b)].fetch_add(1, Ordering::Relaxed) + 1;
+    if seq > 128 { return; }
+    let view = b.view;
+    let window = b.window.size();
+    let frame = b.in_frame.map_or(-1, |n| n as i64);
+    let doc = b.doc.get();
+    let connected = doc.dom.descendants(Dom::ROOT).len();
+    sex_pdx::serial_record!("[web.private.state] local_seq={} phase={} frame={} window={}x{} view={}x{} doc_view={}x{} nodes={} connected={} dirty={} items={} height={} frame_dirty={} frames_check={} full_redraw={} timer={} classic={} fetches={} modules={} url={}",
+        seq, phase, frame, window.0, window.1, view.0, view.1, doc.viewport.0, doc.viewport.1,
+        doc.dom.nodes.len(), connected, doc.dirty as u8, b.page.items.len(), b.page.height,
+        b.frame_dirty as u8, b.frames_check as u8, b.full_redraw as u8,
+        b.timer.map_or(-1, |t| t as i64), doc.classic_scripts.len(), doc.fetches.len(), doc.modules_wanted.len(), text(&b.url));
+}
+
+pub(super) fn layout(b: &mut Browser, styles: &[Style]) {
+    let seq = LAYOUTS[ordinal(b)].fetch_add(1, Ordering::Relaxed) + 1;
+    if seq > 48 { return; }
+    state(b, "layout");
+    let frame = b.in_frame.map_or(-1, |n| n as i64);
+    let doc = b.doc.get();
+    let mut shown = 0;
+    for n in doc.dom.descendants(Dom::ROOT) {
+        let Some(tag) = doc.dom.tag(n) else { continue };
+        let id = doc.dom.attr(n, "id").unwrap_or("");
+        if !matches!(tag, "html" | "body" | "iframe" | "video" | "audio") && !id.contains("player") && shown >= 12 { continue; }
+        let Some(style) = styles.get(n) else { continue };
+        let rect = b.page.boxes.get(n).copied().flatten();
+        sex_pdx::serial_record!("[web.private.node] layout_seq={} frame={} node={} parent={} tag={} id={} class={} style={} children={} box={:?} display={:?} hidden={} opacity={} position={:?} width={:?} height={:?} min_height={:?} overflow_clip={} color={:x} background={:x}",
+            seq, frame, n, doc.dom.nodes[n].parent.map_or(-1, |p| p as i64), tag, text(id), text(doc.dom.attr(n,"class").unwrap_or("")), text(doc.dom.attr(n,"style").unwrap_or("")), doc.dom.nodes[n].children.len(), rect,
+            style.display, style.hidden as u8, style.opacity, style.position, style.width, style.height, style.min_height, style.overflow_clip as u8, style.color, style.background);
+        shown += 1;
+        if shown >= 32 { break; }
+    }
+    for f in &b.frames {
+        sex_pdx::serial_record!("[web.private.frame] layout_seq={} node={} rect={:?} view={}x{} items={} height={} url={}",
+            seq, f.node, f.rect, f.view.0, f.view.1, f.page.items.len(), f.page.height, text(&f.url));
+    }
+}
+
+pub(super) fn publication(b: &mut Browser) {
+    let seq = SHOWS.fetch_add(1, Ordering::Relaxed) + 1;
+    if seq > 96 { return; }
+    let window = b.window.size();
+    // This is a client request receipt, not an invented Display generation.
+    // Correlate [display.app.pixels] and actual screenshots for admission/visibility.
+    sex_pdx::serial_record!("[web.private.publication] local_seq={} target={} task={} window={}x{} requested={}x{} view={}x{} frame_count={} items={} full_redraw={} pixel_generation=unavailable",
+        seq, b.window.target, b.window.task, window.0, window.1, super::W, super::H, b.view.0, b.view.1, b.frames.len(), b.page.items.len(), b.full_redraw as u8);
+}

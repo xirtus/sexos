@@ -16,6 +16,7 @@ extern crate alloc;
 
 mod media;
 mod mse;
+mod layout_diagnostic;
 
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -460,6 +461,7 @@ impl Browser {
         sex_web::frame(&self.page, &mut self.fonts, pixels, W, H, self.scroll, self.focus, &bar, self.editing.is_some());
         self.paint_frames();
         self.window.show_pixels(W as usize, H as usize);
+        layout_diagnostic::publication(self);
         self.full_redraw = false;
         sex_pdx::serial_record!("[web.shown] w={} h={} scroll={} focus={} items={} ticks={}", W, H, self.scroll, self.focus.map_or(-1, |f| f as i64), self.page.items.len(), sex_pdx::get_ticks() - start);
     }
@@ -789,6 +791,7 @@ impl Browser {
     #[inline(never)]
     fn after_script(&mut self, draw: bool) -> bool {
         self.media_requests();
+        layout_diagnostic::state(self, "after_script");
         let doc = self.doc.get();
         for (level, text) in doc.log.drain(..) {
             for line in text.lines().take(8) { sex_pdx::serial_record!("[web.console] level={} {}", level, line); }
@@ -838,6 +841,7 @@ impl Browser {
         sex_web::svg::draw_inline(&self.page, &doc.dom, &styles, &mut self.fonts);
         doc.set_boxes(&self.page.boxes);
         doc.set_layers(&self.page.layers);
+        layout_diagnostic::layout(self, &styles);
         if self.in_frame.is_none() { self.frames_check = true; }
         self.scroll = self.scroll.min(self.max_scroll());
         if self.focus.map_or(false, |f| f >= self.page.links.len()) { self.focus = None; }
