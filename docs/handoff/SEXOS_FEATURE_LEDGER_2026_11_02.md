@@ -3518,3 +3518,15 @@ Plan: `docs/handoff/NVIDIA_GPU_PLAN_2026_11_09.md` (stages N1-N6).
 - **Evidence:** `scripts/wifi_host_gate.sh` (CI): 24 tests incl. IEEE 802.11 annex vectors (PSK, PRF, CCMP, SAE J.10), RFC 3394/3610/4493, full WPA2 and WPA3 handshakes against a test access point, and the real linux-firmware AX210 image (fetched pinned and SHA-256 checked by `scripts/fetch_wifi_firmware.sh`).
 - **No ABI change.** New dependency `sha1` 0.10 (RustCrypto).
 - **Limits:** not wired into the running system yet; QEMU has no Intel Wi-Fi model, so the radio is proven only on hardware. Next (W2): lease the chip to sexnet, ship its firmware, and log `[wifi.alive]` on the x17.
+
+## Media Source Extensions for video and audio (YouTube Y5, 2026-11-10)
+
+- **Scripts:** `MediaSource` (`isTypeSupported`, `addSourceBuffer`, `removeSourceBuffer`, `duration`, `endOfStream`, `sourceopen`/`sourceended`), `SourceBuffer` (`appendBuffer`, `remove`, `abort`, `buffered`, `updating` with `updatestart`/`update`/`updateend`), `SourceBufferList`; `URL.createObjectURL(mediaSource)` as an element's `src`.
+- **Types:** fragmented MP4 with H.264, AV1, AAC or MP3. WebM is refused for now (`isTypeSupported` says false, so players fall back to MP4).
+- **sex-web:** `mse::Stream` parses appended bytes as they come: init segment (track ids, timescales, kinds, trex defaults) and moof/trun times give `buffered`. Host tests use synthetic boxes and FFmpeg-made fixtures.
+- **Web:** each SourceBuffer is a growing `sex_media::Source`; bytes long read are let go. Separate video and audio buffers play on one clock.
+- **sex-media:** `Source::ahead()` and `Source::growing()`; `Player::pair(video, audio, ...)`. A growing stream is opened non-seekable and without `find_stream_info`, so FFmpeg's MP4 parser takes one fragment at a time.
+- **sex-fetch:** `pieces` module (Content-Range parsing, Range piece bookkeeping) for seekable network `src`.
+- **ABI:** sex-js host op `MEDIA_APPEND` = 70 (bytes). No kernel ABI change.
+- **Gate:** `scripts/program_web_mse_gate.py` (QEMU, sound recorded to WAV).
+- **Limits:** no seeking inside an MSE stream yet, no WebM SourceBuffers, no `timestampOffset`.
