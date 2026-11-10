@@ -112,7 +112,7 @@ a947e57a405316312fe334d17fdfdb2d3e6b59e708b4d61f416a4db6275ee4cb  kernel/src/app
 
 cbee8915b1b99dd33248184dc85732256173ad4bc93b3a5f2a8507da396f113c  kernel/src/app_resource_state.rs
 
-e9a52a9683c0f0bed0996c0ed3767aefcd17993cbf8b9acc3817d70f8f86c4a8  kernel/src/app_resources.rs
+eda2fd8f59d09087a1e2c57df2d33cdabd50f0bb8bdd28c184bf2dba80a11f7b  kernel/src/app_resources.rs
 
 f6246b2ba9d3c3aa8354736e5a1f51f9b55972b078efa2008a9e3d0e259125b3  kernel/src/boot_display_state.rs
 
