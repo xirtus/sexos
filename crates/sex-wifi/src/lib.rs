@@ -34,4 +34,5 @@ pub mod pack;
 pub mod rx;
 pub mod sae;
 pub mod scan;
+pub mod tlc;
 pub mod ucode;

@@ -1,7 +1,7 @@
 //! Driver-level behaviour: chip table, firmware files, DMA layout, the power-up
 //! sequence against a register model, the 4-way handshake against an access
 //! point played by the authenticator helpers, and frames end to end.
-use sex_wifi::{assoc, link, rsna, bringup, ccmp, cmdq, context, csr, devices, eapol, hcmd, ieee80211 as w, init, join, pack, rx, scan, tx, ucode};
+use sex_wifi::{assoc, link, rsna, bringup, ccmp, cmdq, context, csr, devices, eapol, hcmd, ieee80211 as w, init, join, pack, rx, scan, tlc, tx, ucode};
 use std::collections::HashMap;
 
 const AP: [u8; 6] = [0x02, 0x11, 0x22, 0x33, 0x44, 0x55];
@@ -790,8 +790,14 @@ struct Firmware {
 
 /// The AP's side of authentication and association.
 #[derive(Clone)]
-struct Ap { auth_status: u16, assoc_status: u16, aid: u16, ignore: u8, tx_status: u16, deauth_after_assoc: Option<u16>, wpa: Option<ApWpa> }
-impl Default for Ap { fn default() -> Self { Ap { auth_status: 0, assoc_status: 0, aid: 5, ignore: 0, tx_status: 1, deauth_after_assoc: None, wpa: None } } }
+struct Ap { auth_status: u16, assoc_status: u16, aid: u16, ignore: u8, tx_status: u16, deauth_after_assoc: Option<u16>, wpa: Option<ApWpa>, sae: Option<ApSae> }
+impl Default for Ap { fn default() -> Self { Ap { auth_status: 0, assoc_status: 0, aid: 5, ignore: 0, tx_status: 1, deauth_after_assoc: None, wpa: None, sae: None } } }
+
+/// The AP's side of SAE (W5d): its passphrase, hash-to-element or not, and an
+/// anti-clogging token it asks for before taking a commit.
+#[derive(Clone)]
+struct ApSae { password: Vec<u8>, h2e: bool, token: Option<Vec<u8>>, run: Option<std::rc::Rc<std::cell::RefCell<sex_wifi::sae::Sae>>>, pmk: Option<[u8; 32]>, confirmed: bool }
+impl ApSae { fn new(password: &[u8], h2e: bool, token: Option<Vec<u8>>) -> Self { Self { password: password.to_vec(), h2e, token, run: None, pmk: None, confirmed: false } } }
 
 /// The AP's half of the 4-way handshake (W5c).
 #[derive(Clone)]
@@ -894,6 +900,52 @@ impl Firmware {
                 continue;
             }
             let reply = match u16::from_le_bytes([frame[0], frame[1]]) {
+                w::FC_MGMT_AUTH if self.ap.sae.is_some() => {
+                    let s = self.ap.sae.as_mut().unwrap();
+                    let sta: [u8; 6] = me.clone().try_into().unwrap();
+                    let ap_mac: [u8; 6] = bssid.clone().try_into().unwrap();
+                    let (alg, trans, status) = (u16::from_le_bytes([frame[24], frame[25]]), u16::from_le_bytes([frame[26], frame[27]]), u16::from_le_bytes([frame[28], frame[29]]));
+                    assert_eq!(alg, assoc::AUTH_SAE);
+                    let body = &frame[30..];
+                    let ok_status = if s.h2e { assoc::STATUS_SAE_HASH_TO_ELEMENT } else { 0 };
+                    let mut b = vec![3, 0];
+                    if trans == 1 {
+                        assert_eq!(status, ok_status);
+                        // Group, token (bare, or in its container at the end with H2E), scalar, element.
+                        let (commit, token): (Vec<u8>, &[u8]) = if s.h2e {
+                            let rest = &body[sex_wifi::sae::COMMIT_LEN..];
+                            (body[..sex_wifi::sae::COMMIT_LEN].to_vec(), if rest.len() > 3 && rest[0] == 255 && rest[2] == 93 { &rest[3..] } else { &[] })
+                        } else {
+                            let t = body.len() - sex_wifi::sae::COMMIT_LEN;
+                            ([&body[..2], &body[2 + t..]].concat(), &body[2..2 + t])
+                        };
+                        if let Some(want) = s.token.clone().filter(|w| token != &w[..]) {
+                            b.extend_from_slice(&[1, 0]);
+                            b.extend_from_slice(&assoc::STATUS_ANTI_CLOGGING_TOKEN.to_le_bytes());
+                            b.extend_from_slice(&19u16.to_le_bytes());
+                            if s.h2e { b.extend_from_slice(&[255, want.len() as u8 + 1, 93]); }
+                            b.extend_from_slice(&want);
+                        } else {
+                            let pwe = if s.h2e { sex_wifi::sae::pwe_from_pt(&sex_wifi::sae::derive_pt(b"Home", &s.password, None), &ap_mac, &sta) }
+                                else { sex_wifi::sae::pwe_hunt_and_peck(&ap_mac, &sta, &s.password).unwrap() };
+                            let mut run = sex_wifi::sae::Sae::new(pwe, &[0x31; 32], &[0x32; 32]).unwrap();
+                            run.process_commit(&commit).unwrap();
+                            s.pmk = Some(run.pmk);
+                            b.extend_from_slice(&[1, 0]);
+                            b.extend_from_slice(&ok_status.to_le_bytes());
+                            b.extend_from_slice(&run.commit());
+                            s.run = Some(std::rc::Rc::new(std::cell::RefCell::new(run)));
+                        }
+                    } else {
+                        // A wrong password shows here: the AP drops the confirm.
+                        let run = s.run.clone().unwrap();
+                        if run.borrow().check_confirm(body).is_err() { continue; }
+                        s.confirmed = true;
+                        b.extend_from_slice(&[2, 0, 0, 0]);
+                        b.extend_from_slice(&run.borrow().confirm(1));
+                    }
+                    from_ap(w::FC_MGMT_AUTH, &me, &bssid, &b)
+                }
                 w::FC_MGMT_AUTH => {
                     let mut b = vec![0, 0, 2, 0]; b.extend_from_slice(&self.ap.auth_status.to_le_bytes());
                     from_ap(w::FC_MGMT_AUTH, &me, &bssid, &b)
@@ -968,6 +1020,7 @@ impl Firmware {
                 (hcmd::MAC_CONF_GROUP, hcmd::SESSION_PROTECTION_CMD) => Some(24),
                 (hcmd::DATA_PATH_GROUP, rsna::SEC_KEY_CMD) => Some(rsna::SEC_KEY_BYTES),
                 (hcmd::LONG_GROUP, hcmd::ADD_STA_KEY) => Some(rsna::ADD_STA_KEY_BYTES),
+                (hcmd::DATA_PATH_GROUP, tlc::TLC_MNG_CONFIG_CMD) => Some(tlc::CONFIG_BYTES),
                 _ => Some(4),
             };
             assert_eq!(Some(len), want, "payload size of {group:#x}/{opcode:#x}");
@@ -1501,7 +1554,7 @@ fn join_uses_only_the_antennas_the_nvm_allows() {
 #[test]
 fn join_command_layouts() {
     // ACK rates (iwx_ack_rates): basic 1/2 Mb/s and 6 Mb/s on 2.4 GHz.
-    let mut t = join::Target { bssid: [2, 0, 0, 0, 0, 1], channel: 1, beacon_interval: 100, dtim_period: 1,
+    let mut t = join::Target { bssid: [2, 0, 0, 0, 0, 1], channel: 1, beacon_interval: 100, dtim_period: 1, rates: 0,
         basic_cck: 0b0011, basic_ofdm: 0b1, short_slot: true, short_preamble: true };
     assert_eq!(join::ack_rates(&t), (0b0011, 0b1));
     // Only 11 Mb/s basic: every lower CCK rate joins; only 24 Mb/s OFDM: 6 and 12 join.
@@ -1629,12 +1682,73 @@ fn tx_command_layouts_and_rates() {
     assert_eq!(tx::byte_count(devices::Family::Ax210, 30, 3), 30);
     assert_eq!(tx::byte_count(devices::Family::Gen22000, 30, 3), 8);
     assert_eq!(tx::byte_count(devices::Family::Ax210, 30, 7), 30 | 1 << 14);
-    let mut t = join::Target { bssid: AP, channel: 36, beacon_interval: 100, dtim_period: 1, basic_cck: 0, basic_ofdm: 0b101, short_slot: true, short_preamble: false };
+    let mut t = join::Target { bssid: AP, channel: 36, beacon_interval: 100, dtim_period: 1, rates: 0, basic_cck: 0, basic_ofdm: 0b101, short_slot: true, short_preamble: false };
     assert_eq!(tx::management_rate(&t), 1 << 14 | 1 << 8, "OFDM 6 Mb/s");
     t.channel = 1; t.basic_cck = 0b1100;
     assert_eq!(tx::management_rate(&t), 1 << 14 | 2, "CCK 5.5 Mb/s");
     t.basic_cck = 0; t.basic_ofdm = 0b100;
     assert_eq!(tx::management_rate(&t), 1 << 14 | 1 << 8 | 2, "OFDM-only 2.4 GHz network: 12 Mb/s");
+}
+
+/// Joins the x17 to "Home" made WPA3-only, then runs SAE with `password` and
+/// association against an AP whose passphrase is "correct horse".
+fn x17_sae(password: &[u8], h2e: bool, token: Option<Vec<u8>>) -> (assoc::Assoc, Firmware, init::Init, w::Bss) {
+    let (mut i, mut b, mut m, mut hw, mut sim, mut bss, v) = x17_ready();
+    bss.security = w::Security::Wpa3Personal;
+    let target = join::Target::of(&bss, 6);
+    let mut j = join::Join::new(target, v, i.mac, i.valid_rx_antennas(), hw.now);
+    run_join(&mut j, &mut i, &mut b, &mut m, &mut hw, &mut sim);
+    sim.ap = Ap { sae: Some(ApSae::new(b"correct horse", h2e, token)), ..Ap::default() };
+    let pwe = if h2e { sex_wifi::sae::pwe_from_pt(&sex_wifi::sae::derive_pt(bss.ssid(), password, None), &i.mac, &bss.bssid) }
+        else { sex_wifi::sae::pwe_hunt_and_peck(&i.mac, &bss.bssid, password).unwrap() };
+    let sae = sex_wifi::sae::Sae::new(pwe, &[0x51; 32], &[0x52; 32]).unwrap();
+    let mut a = assoc::Assoc::with_sae(bss, target, i.mac, b.boot.chip.family, hw.now, sae, h2e);
+    for _ in 0..5000 {
+        let t = hw.now;
+        let more = a.advance(&mut b, &mut i.cmdq, &mut hw, &mut m, t);
+        if !more { break; }
+        sim.serve(&mut m, &b.layout, &mut hw);
+        hw.now += 1000;
+    }
+    (a, sim, i, bss)
+}
+
+#[test]
+fn x17_authenticates_with_sae_on_wpa3() {
+    let (a, sim, _, _) = x17_sae(b"correct horse", false, Some(vec![0xab; 32]));
+    assert_eq!(a.step, assoc::Step::Associated);
+    assert_eq!(a.sae_pmk(), sim.ap.sae.as_ref().unwrap().pmk, "both sides agree on the PMK");
+    let frames: Vec<_> = sim.frames.iter().map(|(_, f)| (u16::from_le_bytes([f[24], f[25]]), u16::from_le_bytes([f[26], f[27]]), f.len())).collect();
+    assert_eq!(frames.len(), 4, "commit, commit with token, confirm, association request");
+    assert_eq!((frames[0].0, frames[0].1, frames[0].2), (3, 1, 30 + sex_wifi::sae::COMMIT_LEN));
+    assert_eq!((frames[1].0, frames[1].1, frames[1].2), (3, 1, 30 + sex_wifi::sae::COMMIT_LEN + 32));
+    assert_eq!((frames[2].0, frames[2].1, frames[2].2), (3, 2, 30 + 34));
+    // The association request names SAE and requires management frame protection.
+    let req = &sim.frames[3].1;
+    let mut rsn = [0u8; 32];
+    let n = w::own_rsn(true, &mut rsn);
+    assert!(req.windows(n).any(|x| x == &rsn[..n]));
+    assert!(rsn[..n].windows(4).any(|x| x == [0x00, 0x0f, 0xac, 8]), "AKM 8: SAE");
+}
+
+#[test]
+fn x17_does_sae_hash_to_element() {
+    let (a, sim, _, _) = x17_sae(b"correct horse", true, Some(vec![0xcd; 16]));
+    assert_eq!(a.step, assoc::Step::Associated);
+    assert_eq!(a.sae_pmk(), sim.ap.sae.as_ref().unwrap().pmk);
+    let (_, commit) = &sim.frames[1];
+    assert_eq!(u16::from_le_bytes([commit[28], commit[29]]), assoc::STATUS_SAE_HASH_TO_ELEMENT);
+    assert_eq!(&commit[30 + sex_wifi::sae::COMMIT_LEN..], &[&[255u8, 17, 93][..], &[0xcd; 16]].concat()[..], "token in its container");
+    // RSNXE (hash-to-element) goes with the association request.
+    assert!(sim.frames[3].1.windows(3).any(|x| x == [244, 1, 1 << 5]));
+}
+
+#[test]
+fn a_wrong_wpa3_password_gets_no_confirm() {
+    let (a, sim, _, _) = x17_sae(b"wrong horse", false, None);
+    assert_eq!(a.step, assoc::Step::Refused(assoc::Refusal::NoAnswer("sae_confirm")));
+    assert!(!sim.ap.sae.as_ref().unwrap().confirmed);
+    assert_eq!(a.sae_pmk(), None);
 }
 
 #[test]
@@ -1668,7 +1782,7 @@ fn x17_connect(password: &[u8], sec_key_cmd: bool) -> (rsna::Rsna, Firmware, w::
     let own_len = w::own_rsn(false, &mut own);
     let pmk = sex_wifi::crypto::psk_from_passphrase(password, bss.ssid());
     let before = sim.commands.len();
-    let mut r = rsna::Rsna::new(pmk, [0xa5; 32], &own[..own_len], bss.rsn_element(), &bss.rsn, target, i.mac, b.boot.chip.family, a.tx, sec_key_cmd, hw.now);
+    let mut r = rsna::Rsna::new(pmk, [0xa5; 32], &own[..own_len], bss.rsn_element(), &bss.rsn, target, i.mac, b.boot.chip.family, a.tx, sec_key_cmd, hw.now, eapol::Akm::Psk);
     r.early(&b, &mut hw, &mut m, &early[..n]);
     sim.serve(&mut m, &b.layout, &mut hw);
     for _ in 0..20_000 {
@@ -1796,7 +1910,7 @@ fn x17_carries_ethernet_over_wpa2() {
     sim.deliver(&mut m, &b.layout, &mpdu_status(fam, &group, ok, true));
     sim.deliver(&mut m, &b.layout, &mpdu_status(fam, &group, ok, true));
     let mut got: Vec<Vec<u8>> = vec![];
-    assert!(link.poll(&mut b, &mut i.cmdq, &mut hw, &mut m, |e| got.push(e.to_vec())));
+    assert!(link.poll(&mut b, &mut i.cmdq, &mut hw, &mut m, 0, |e| got.push(e.to_vec())));
     assert_eq!(got.len(), 2);
     assert_eq!((&got[0][0..6], &got[0][6..12], &got[0][12..14]), (&me[..], &gw[..], &[0x08, 0x00][..]));
     assert_eq!(&got[0][14..], &ip(0x45)[..], "the MIC is cut off");
@@ -1807,8 +1921,106 @@ fn x17_carries_ethernet_over_wpa2() {
     assert_eq!(link.tx.queued, 0, "the TX response freed the ring");
     // The AP leaves: the link goes down.
     sim.deliver(&mut m, &b.layout, &mpdu(fam, &from_ap(w::FC_MGMT_DEAUTH, &me, &bss.bssid, &7u16.to_le_bytes()), 40, 6, true));
-    assert!(!link.poll(&mut b, &mut i.cmdq, &mut hw, &mut m, |_| {}));
+    assert!(!link.poll(&mut b, &mut i.cmdq, &mut hw, &mut m, 0, |_| {}));
     assert_eq!(link.down, Some(link::Down::Disconnected(7)));
+}
+
+#[test]
+fn x17_takes_a_new_group_key_while_connected() {
+    let (r, mut sim, bss, _, _, mut i, mut b, mut m, mut hw) = x17_connect(b"correct horse", true);
+    assert_eq!(r.step, rsna::Step::Connected);
+    let me = i.mac;
+    let fam = b.boot.chip.family;
+    let ptk = sim.ap.wpa.as_ref().unwrap().ptk.unwrap();
+    let mut link = r.into_link();
+    let ok = 3 | 2 << 8 | 1 << 6 | 1 << 11;
+    // Group traffic under the first key (id 2) up to packet number 50.
+    let mut group = protected_from_ap(&[0xff; 6], &bss.bssid, &[0x02, 0x99, 0, 0, 0, 1], 50, &ip(0x40));
+    group[29] |= 2 << 6;
+    sim.deliver(&mut m, &b.layout, &mpdu_status(fam, &group, ok, true));
+    // An hour later the AP sends group key message 1, protected like any data.
+    let new = eapol::GroupKey { id: 2, key: [0x88; 16], rsc: 0 };
+    let mut e = [0u8; eapol::MAX_FRAME];
+    let n = eapol::authenticator::group_message1(&mut e, eapol::Akm::Psk, &ptk, 3, &new);
+    let mut f = protected_from_ap(&me, &bss.bssid, &bss.bssid, 9, &e[..n]);
+    f[40..42].copy_from_slice(&[0x88, 0x8e]);
+    sim.deliver(&mut m, &b.layout, &mpdu_status(fam, &f, ok, true));
+    let (frames, commands) = (sim.frames.len(), sim.commands.len());
+    let mut got = 0;
+    assert!(link.poll(&mut b, &mut i.cmdq, &mut hw, &mut m, 0, |_| got += 1));
+    assert_eq!(got, 1, "the key message is not passed up");
+    assert_eq!((link.rekey_messages, link.rekey_error), (1, None));
+    // The answer (group message 2) goes back protected, with a MIC under the KCK.
+    sim.serve(&mut m, &b.layout, &mut hw);
+    let (cmd, out) = &sim.frames[frames];
+    assert_eq!(&out[0..2], &[0x08, 0x41]);
+    assert_eq!(u16::from_le_bytes([cmd[2], cmd[3]]), tx::FLAG_CMD_RATE);
+    assert_eq!(&out[24..32], &[0xaa, 0xaa, 3, 0, 0, 0, 0x88, 0x8e]);
+    eapol::authenticator::check_message4(&out[32..], eapol::Akm::Psk, &ptk).unwrap();
+    // The new key goes into the firmware; its packet numbers start over.
+    for _ in 0..4 { link.poll(&mut b, &mut i.cmdq, &mut hw, &mut m, 0, |_| {}); sim.serve(&mut m, &b.layout, &mut hw); }
+    let keys: Vec<_> = sim.commands[commands..].iter().filter(|c| (c.0, c.1) == (hcmd::DATA_PATH_GROUP, rsna::SEC_KEY_CMD)).collect();
+    assert_eq!(keys.len(), 1);
+    assert_eq!((u32::from_le_bytes(keys[0].2[8..12].try_into().unwrap()), &keys[0].2[16..32]), (2, &[0x88; 16][..]));
+    assert_eq!(link.rekeyed, 1);
+    let mut group = protected_from_ap(&[0xff; 6], &bss.bssid, &[0x02, 0x99, 0, 0, 0, 1], 1, &ip(0x41));
+    group[29] |= 2 << 6;
+    sim.deliver(&mut m, &b.layout, &mpdu_status(fam, &group, ok, true));
+    let mut got = vec![];
+    assert!(link.poll(&mut b, &mut i.cmdq, &mut hw, &mut m, 0, |e| got.push(e.to_vec())));
+    assert_eq!(got.len(), 1, "packet number 1 under the new key is fresh");
+    // The same frame again is a CCMP replay; the same key message in a new frame
+    // is an EAPOL replay. Neither installs anything.
+    sim.deliver(&mut m, &b.layout, &mpdu_status(fam, &f, ok, true));
+    link.poll(&mut b, &mut i.cmdq, &mut hw, &mut m, 0, |_| {});
+    assert_eq!((link.last_drop, link.rekey_messages), (Some(link::Drop::Replay), 1));
+    let mut f = protected_from_ap(&me, &bss.bssid, &bss.bssid, 10, &e[..n]);
+    f[40..42].copy_from_slice(&[0x88, 0x8e]);
+    sim.deliver(&mut m, &b.layout, &mpdu_status(fam, &f, ok, true));
+    link.poll(&mut b, &mut i.cmdq, &mut hw, &mut m, 0, |_| {});
+    assert_eq!(link.rekey_error, Some(eapol::Error::Replay));
+    assert_eq!(link.rekeyed, 1);
+}
+
+#[test]
+fn x17_hands_data_rates_to_the_firmware() {
+    let (r, mut sim, bss, _, _, mut i, mut b, mut m, mut hw) = x17_connect(b"correct horse", true);
+    assert_ne!(bss.rates, 0, "the beacon named its rates");
+    let target = r.target();
+    let mut link = r.into_link().with_rate_control(4);
+    let commands = sim.commands.len();
+    link.poll(&mut b, &mut i.cmdq, &mut hw, &mut m, 0, |_| {});
+    assert_eq!(link.rate_control, link::RateControl::Sent(0));
+    sim.serve(&mut m, &b.layout, &mut hw);
+    let (group, opcode, c) = &sim.commands[commands];
+    assert_eq!((*group, *opcode), (hcmd::DATA_PATH_GROUP, tlc::TLC_MNG_CONFIG_CMD));
+    assert_eq!((c[0], c[4], c[5], c[6]), (0, 0, 0, 1), "station 0, 20 MHz, legacy, chain A");
+    assert_eq!(u16::from_le_bytes([c[10], c[11]]), tlc::rates(&target));
+    assert_eq!(u16::from_le_bytes([c[24], c[25]]), 2312, "v4: max MPDU after three widths of HT rates");
+    let mut v3 = [0u8; tlc::CONFIG_BYTES];
+    tlc::config(&mut v3, 3, &target);
+    assert_eq!(u16::from_le_bytes([v3[20], v3[21]]), 2312, "v3: after two");
+    link.poll(&mut b, &mut i.cmdq, &mut hw, &mut m, 0, |_| {});
+    assert_eq!(link.rate_control, link::RateControl::On);
+    // Data now goes without a rate: the firmware picks it.
+    let frames = sim.frames.len();
+    let mut eth = vec![0xffu8; 6];
+    eth.extend_from_slice(&i.mac);
+    eth.extend_from_slice(&[0x08, 0x06]);
+    eth.extend_from_slice(&[0x11; 28]);
+    link.send(&b, &mut hw, &mut m, &eth).unwrap();
+    sim.serve(&mut m, &b.layout, &mut hw);
+    let (cmd, _) = &sim.frames[frames];
+    assert_eq!(u16::from_le_bytes([cmd[2], cmd[3]]), 0, "no CMD_RATE, encrypted");
+    assert_eq!(u32::from_le_bytes(cmd[16..20].try_into().unwrap()), 0);
+    // The firmware says which rate it chose.
+    let mut n = vec![0u8; 20];
+    n[4] = 1;
+    n[8..12].copy_from_slice(&(1u32 << 14 | 1 << 8 | 7).to_le_bytes());
+    sim.deliver(&mut m, &b.layout, &packet(tlc::TLC_MNG_UPDATE_NOTIF, hcmd::DATA_PATH_GROUP, 0, 0x80, &n));
+    link.poll(&mut b, &mut i.cmdq, &mut hw, &mut m, 0, |_| {});
+    assert_eq!(link.rate, 1 << 14 | 1 << 8 | 7, "54 Mb/s");
+    assert!(link.up());
 }
 
 #[test]

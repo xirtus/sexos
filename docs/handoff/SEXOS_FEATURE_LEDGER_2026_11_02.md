@@ -3956,3 +3956,33 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   WPA2 on the firmware model and receives decrypted frames, a replay, an undecrypted
   frame, a relayed own broadcast and a deauthentication.
 - **ABI / kernel:** none.
+
+## Intel Wi-Fi, stage W5f: group key rekeying (2026-11-10)
+- **What:** the link keeps the WPA2 supplicant. It answers the AP's later key messages
+  (group rekey, pairwise rekey) and installs the new keys, so a connection survives
+  the AP's hourly group key change. INTEL_WIFI section 15.
+- **Evidence:** `scripts/wifi_host_gate.sh` (46 driver tests). A test plays a group
+  rekey on the firmware model: the key message is not passed up, the answer goes back
+  protected with a valid MIC, and the new key is installed once. Packet numbers
+  restart under the new key, and repeated frames or key messages change nothing.
+- **ABI / kernel:** none.
+
+## Intel Wi-Fi, stage W5g: firmware rate control (2026-11-10)
+- **What:** new `sex_wifi::tlc`. The link hands the shared legacy rates to the
+  firmware (TLC_MNG_CONFIG_CMD v3/v4), which then picks each data frame's rate. That is
+  up to 54 Mb/s instead of a fixed 12. INTEL_WIFI section 16.
+- **Evidence:** `scripts/wifi_host_gate.sh` (47 driver tests). A test checks the
+  command's layout in both versions, data frames without a fixed rate once rate control
+  is on, and the firmware's rate report.
+- **ABI / kernel:** none.
+
+## Intel Wi-Fi, stage W5d: WPA3-Personal (SAE) (2026-11-10)
+- **What:** WPA3-only networks now connect. SAE commit and confirm run in
+  authentication frames, with hunting-and-pecking or hash-to-element and anti-clogging
+  tokens. The association request uses the SAE RSN element (management frame
+  protection required), and the 4-way handshake runs with SAE's PMK.
+  INTEL_WIFI section 17.
+- **Evidence:** `scripts/wifi_host_gate.sh` (50 driver tests). The AP model runs SAE
+  with a token request in both methods, and both sides agree on the PMK. A wrong
+  password gets no confirm.
+- **ABI / kernel:** none.
