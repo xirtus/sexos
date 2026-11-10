@@ -3361,6 +3361,16 @@ Parity report workstream A (`LINUX_AND_DESKTOP_PARITY_REPORT_2026_11_09.md` sect
 - **Gates**: `scripts/power_acpi_gate.py` (QEMU `system_powerdown` ends the VM with exit 0 after Files flushed; launcher Restart resets through the FADT register and the machine boots again; launcher Shut Down ends it; 1 and 4 cores) and `scripts/power_host_gate.sh` (ABI encodings, EISA ids, `\_S5` reader). Both run in CI.
 - **Bare metal next week**: check `[acpi.power]` on the PKU PC: s5=1, reset method, power_button=1, aml=1 quarantined=0, idle state and hwp/cppc.
 
+## Desktop: tiling window manager with Super keys, nine workspaces (2026-11-09)
+
+Hyprland/river/KDE-style window management, stage E1 of the parity report (`docs/handoff/LINUX_AND_DESKTOP_PARITY_REPORT_2026_11_09.md` section 6).
+- **`servers/silk-shell/src/wm.rs`**: pure policy, host-tested by `tests/wm_layouts.rs`. Layouts per workspace: master/stack (default, 55% master), dwindle (Hyprland's halving), monocle, grid. Gaps: 6 px between windows, 8 px to the screen edge. Focus by direction, tiling order kept apart from the frame table so swapping never renumbers frames.
+- **Super chords** (Super is 0x5B/0x5C on PS/2 and USB; Super and every key pressed with it stay with the desktop, repeats and releases too):
+  Super tap or Super+D launcher; Super+Enter terminal; Super+1..9 workspace; Super+Shift+1..9 send window there; Super+Tab / Super+Shift+Tab and Super+Ctrl+Left/Right next/previous workspace; Super+H/J/K/L or arrows focus; with Shift, swap; Super+Q close; Super+F fullscreen; Super+V or Super+Shift+Space float (centred, 60%); Super+Space next layout; Super+M monocle on/off; Super+[ / ] master width -/+5% (15..85); Super+S scratchpad show/hide (centred, 70%, follows you to the current workspace); Super+Shift+S send to scratchpad; Super+W overview.
+- **Nine workspaces.** ABI change (named): SilkBar layout ABI v5 -> v6 in `silkbar-model`: `WORKSPACE_COUNT` 5 -> 9, `LAYOUT_COUNT` 11 -> 15, `ModuleSlot` Chip0..Bell renumbered 10..14, dots 16 px wide, 19 px apart from x=583 (still fits a 1024 px desktop). `abi_version_hash` recomputed. The Atlas overview lays its cards out 3x3 and takes 1..9.
+- **Records**: `[shell.wm.action] action=… done=… scene=a->b focus=a->b layout=…` and `[shell.wm.layout] scene=… layout=… windows=… master_pct=… gap_in=… gap_out=…`.
+- **Gate** `scripts/window_manager_gate.py` boots QEMU and drives every chord over real PS/2 key events, saving screens.
+
 ## Real PCs: wired network, HD Audio and SATA (2026-11-09)
 
 Workstream D of the parity report. Handoff and bare-metal checklist: `docs/handoff/REAL_PC_DRIVERS_2026_11_09.md`.
