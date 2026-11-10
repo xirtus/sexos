@@ -119,6 +119,7 @@ fn completion_without_submission_does_not_release_as_completed() {
 const SLOT_BLOCK_BUFFER: u64 = 17;
 pub const DISKFS_V4_POOL_BASE_LBA:u64=400;
 pub const DISKFS_V4_POOL_SECTORS:u64=1408;
+pub mod crash_log { pub const DISK_BASE_LBA: u64 = 64; pub const DISK_SECTORS: u64 = 64; }
 fn grant() -> memory_region::RegionGrant {
     memory_region::RegionGrant { region_id: 5, virtual_base: 0x400000,
         dma_base: None, length: 4096,

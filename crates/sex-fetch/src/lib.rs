@@ -11,6 +11,7 @@
 extern crate alloc;
 
 pub mod cookie;
+pub mod pieces;
 mod date;
 
 use alloc::string::{String, ToString};

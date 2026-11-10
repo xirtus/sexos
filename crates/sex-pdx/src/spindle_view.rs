@@ -44,6 +44,8 @@ impl Delivery{
   let Some(sequence)=self.sequence.checked_add(1)else{self.retire();return};self.sequence=sequence;self.desired=Some(Notice{target,task,w,h,sequence});
  }
  pub fn refresh(&mut self){if !self.dead{self.last=None;}}
+ /// A Shell started again numbers its notices after every earlier run's.
+ pub fn continue_after(&mut self,sequence:u64){self.sequence=self.sequence.max(sequence);}
  pub fn pending(&self)->bool{self.desired.is_some()}
  pub fn retire(&mut self){self.dead=true;self.desired=None;self.last=None;}
  pub fn poll(&mut self,live:bool,ready:bool,mut send:impl FnMut(Notice)->Result<(),u64>){
