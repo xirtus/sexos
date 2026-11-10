@@ -3467,9 +3467,9 @@ fn commit_published_text(published:&PublishedFrame)->usize{
 }
 
 fn finish_display_transactions(lifecycle: &mut surface_lifecycle::Lifecycle, published: Option<&PublishedFrame>) {
-    unsafe{SCREEN_CAPTURE.reconcile(lifecycle,sex_pdx::get_ticks());}
     // A retained scene cannot be retired or release cleanup custody.
     if unsafe{(*core::ptr::addr_of!(RENDER_SCENE)).is_valid()}{return;}
+    unsafe{SCREEN_CAPTURE.reconcile(lifecycle,sex_pdx::get_ticks());}
     if let Some(published)=published{
         // This receipt belongs to the just-finished Main drain. No intake runs
         // between its scene capture, CPU publication and completion handling.
