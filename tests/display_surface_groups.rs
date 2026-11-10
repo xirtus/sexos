@@ -1282,16 +1282,26 @@ unsafe fn seal_pending_text(index:usize,task:u32,sequence:u32,text:&[u8],selecti
 }}
 
 #[test]fn rounded_partial_stack_visits_all_32_layers_but_stops_at_opaque_owner(){unsafe{
- FRAME_GROUPS=FrameGroups::new();reset_bitmap_stage();let mut expected_mask=0u64;
+ FRAME_GROUPS=FrameGroups::new();reset_bitmap_stage();let mut expected_mask=0u64;let mut program_frames=0;
  for i in 0..MAX_SURFACES{
   let sid=desktop_stack::ORDER[i];let row=app_catalog::INCARNATIONS.iter().enumerate().find(|(_,row)|row.frame()==sid);
   let owner=row.map_or(3,|(_,row)|if row.shell_surface.is_some(){3}else{row.target});
-  if let Some((index,row))=row{if owner==row.target&&sid==row.surface{expected_mask|=1u64<<index;}}
+  if let Some((index,row))=row{
+   if owner==row.target&&sid==row.surface{expected_mask|=1u64<<index;}
+   if row.app==app_catalog::App::Program{program_frames+=1;assert!(i>=29);}
+  }
   SURFACES[i]=Surface{x:20,y:70,w:200,h:150,color:if i==31{0xff0000}else{0xffffff},owner_pd:owner,surface_id:sid,active:true,..SURFACE_EMPTY};
  }
  assert_ne!(native_pixel_bit(SURFACES[31].owner_pd,SURFACES[31].surface_id),0);
+ assert_eq!(program_frames,3);
+ // At local(7,0), the three real Program frames paint their minimal close
+ // rim (declared glass sentinel 0x444444), not the plain surface fill. Blend
+ // those three 32/255 layers, then 29 white layers over 0x000123: 0xf7f7f8.
+ APP_PRESENT_BITS=0;
+ assert_eq!(reference_composite_pixel_selected(27,70,320,260,0x123,0,None),0xf7f7f8);
+ assert_eq!(APP_PRESENT_BITS,expected_mask);
  let scene=capture_scene(320,260,0);
- APP_PRESENT_BITS=0;assert_eq!(composite_pixel(27,70,320,260,0x123,0,&scene),0xf8f8f8);assert_eq!(APP_PRESENT_BITS,expected_mask);
+ APP_PRESENT_BITS=0;assert_eq!(composite_pixel(27,70,320,260,0x123,0,&scene),0xf7f7f8);assert_eq!(APP_PRESENT_BITS,expected_mask);
  APP_PRESENT_BITS=0;assert_eq!(composite_pixel(31,70,320,260,0x123,0,&scene),0xffffff);assert_eq!(APP_PRESENT_BITS,0);
  SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();reset_bitmap_stage();
 }}

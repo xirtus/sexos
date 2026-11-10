@@ -245,3 +245,15 @@ pixel controls are required. IRQs use TSS RSP0 and syscall entry switches to the
 kernel stack before software pushes; those frames do not use Display's user stack.
 Final matched timing must qualify the ordering+cold-init candidate against fresh
 master5f946c33 with identical build/runtime inputs, not relabel441 or older runs.
+
+The final baseline is intentionally advanced before its first build to merged
+master7632af69 (parser157 and checkpoint159). Candidate and baseline will use this
+same base/profile; older441/5f observations are not reclassified as final timing.
+The first refreshed full host sweep passes58/59 cases. Its only failure was the
+capacity test's old colour literal: canonical slots29..31 are real Program frames
+with minimal-rim sentinel0x444444 at local(7,0). Blending those three32/255 layers
+then29 white layers over0x000123 independently gives0xf7f7f8. The test now binds
+that exact role/count/literal, compares the independent legacy shader, and keeps
+all32 contributor-bit and opaque-stop assertions. The focused correction passes;
+a complete current-source rerun remains required. No tolerance or pixel coverage
+was reduced to address the local/CI failure.
