@@ -567,8 +567,14 @@ impl<'a> Layout<'a> {
             (None, Len::Px(h), _) => Some(if s.box_sizing_border { h - vbp } else { h }),
             (None, Len::Pct(_), Some(ph)) => s.height.resolve(ph).map(|h| if s.box_sizing_border { h - vbp } else { h }),
             _ => None,
-        }.map(|h| h.max(0));
-        let saved_def_h = core::mem::replace(&mut self.def_h, own_h);
+        }.map(|h| {
+            let h = match s.min_height.resolve(0) { Some(min) => h.max(min), None => h };
+            h.max(0)
+        });
+        // Items of flex, grid and table containers size in their own lines, areas and
+        // rows, so a percentage height there stays auto rather than take the container's.
+        let for_children = if matches!(s.display, Display::Flex | Display::Grid | Display::Table | Display::TableRow) { None } else { own_h };
+        let saved_def_h = core::mem::replace(&mut self.def_h, for_children);
         let pushed_link = self.push_link(n);
         let (content_h, first_baseline) = match s.display {
             Display::Table => self.table(n, cx, cy, content_w),
