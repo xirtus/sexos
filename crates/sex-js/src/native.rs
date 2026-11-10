@@ -14,7 +14,7 @@ extern "C" {
     fn sxn_init(i: *mut c_void, heap: u32, out: *mut u32) -> i32;
     fn sxn_alloc(i: *mut c_void, n: u32, out: *mut u32) -> i32;
     fn sxn_release(i: *mut c_void, p: u32) -> i32;
-    fn sxn_eval(i: *mut c_void, a: u32, b: u32, c: u32, d: u32, e: u32, out: *mut u32) -> i32;
+    fn sxn_eval(i: *mut c_void, a: u32, b: u32, c: u32, d: u32, e: u32, f: u32, out: *mut u32) -> i32;
     fn sxn_module(i: *mut c_void, a: u32, b: u32, c: u32, d: u32, e: u32, f: u32, out: *mut u32) -> i32;
     fn sxn_ready(i: *mut c_void, a: u32, out: *mut u32) -> i32;
     fn sxn_dispatch(i: *mut c_void, a: u32, b: u32, c: u32, out: *mut u32) -> i32;
@@ -173,8 +173,8 @@ impl<P: Page + 'static> Native<P> {
     pub fn init(&mut self, heap: i32) -> Result<i32, Error> { self.run(|i, o| unsafe { sxn_init(i, heap as u32, o) }) }
     pub fn alloc(&mut self, n: i32) -> Result<i32, Error> { self.run(|i, o| unsafe { sxn_alloc(i, n as u32, o) }) }
     pub fn free(&mut self, p: i32) { let _ = self.run(|i, _| unsafe { sxn_release(i, p as u32) }); }
-    pub fn eval(&mut self, a: (i32, i32, i32, i32, i32)) -> Result<i32, Error> {
-        self.run(|i, o| unsafe { sxn_eval(i, a.0 as u32, a.1 as u32, a.2 as u32, a.3 as u32, a.4 as u32, o) })
+    pub fn eval(&mut self, a: (i32, i32, i32, i32, i32, i32)) -> Result<i32, Error> {
+        self.run(|i, o| unsafe { sxn_eval(i, a.0 as u32, a.1 as u32, a.2 as u32, a.3 as u32, a.4 as u32, a.5 as u32, o) })
     }
     pub fn module(&mut self, a: (i32, i32, i32, i32, i32, i32)) -> Result<i32, Error> {
         self.run(|i, o| unsafe { sxn_module(i, a.0 as u32, a.1 as u32, a.2 as u32, a.3 as u32, a.4 as u32, a.5 as u32, o) })

@@ -28,7 +28,12 @@ def main():
   assert re.search(r'\[shell.window.retile\] frame=\d+ sid=201',t()[s:]),'no retile after resize'
   r=t()[s:];assert not re.search(r'\[shell.tile.apply\] sid=201 ',r),'tiling moved the resized window'
   others=[(int(m[0]),int(m[1])) for m in re.findall(r'\[shell.tile.apply\] sid=\d+ x=(-?\d+) y=-?\d+ w=(\d+)',r)]
-  assert any(ox==0 for ox,_ in others),others
+  # E1's independent layout goldens: 8px outside, 6px between tiles.
+  # Resizing must refill the work area while preserving those existing gaps.
+  assert others and min(ox for ox,_ in others)==8,others
+  assert max(ox+ow for ox,ow in others)==1280-8,others
+  ordered=sorted(set(others))
+  assert all(right[0]-(left[0]+left[1])>=6 for left,right in zip(ordered,ordered[1:])),others
   q.cmd('screendump',{'filename':str(a.out/'resized.ppm')});time.sleep(.5)
   # Another window opens: the tiling leaves the resized window as it is.
   s=len(t());palette_select(g['key'],'FocusProgram',palette_commands(ROOT));q.key('ret')

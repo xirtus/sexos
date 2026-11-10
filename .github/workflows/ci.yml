@@ -113,6 +113,10 @@ jobs:
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends python3-pil
         truncate -s 1G "$RUNNER_TEMP/blank-webjs.img"
         python3 scripts/program_web_js_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-webjs.img" --out "$RUNNER_TEMP/sexos-runtime/web-js"
+    - name: Classic script resources and fetch CORS isolation
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/blank-classic.img"
+        python3 scripts/program_web_classic_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-classic.img" --out "$RUNNER_TEMP/sexos-runtime/web-classic"
     - name: USB input paths
       run: GATE_DIR="$RUNNER_TEMP/sexos-usb" SKIP_BUILD=1 bash scripts/usb_path_gate.sh
     - name: Preserve runtime evidence
@@ -165,6 +169,35 @@ jobs:
           ${{ runner.temp }}/sexos-fuzz
         if-no-files-found: ignore
 
+  media:
+    name: Browser media streaming and seeking
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+    - uses: actions/checkout@v4
+    - uses: ./.github/actions/setup
+    - name: Prepare media host checks
+      run: |
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg
+        bash scripts/media_source_host_gate.sh
+    - name: Build the FFmpeg-enabled image
+      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/media-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/media-build.log"; exit 1)
+    - name: Progressive playback and Range seek
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/media-source.img"
+        python3 scripts/program_web_stream_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/media-source.img" --out "$RUNNER_TEMP/sexos-web-stream"
+        python3 scripts/program_web_seek_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/media-source.img" --out "$RUNNER_TEMP/sexos-web-seek"
+    - name: Preserve media evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sexos-media-proof
+        path: |
+          ${{ runner.temp }}/media-build.log
+          ${{ runner.temp }}/sexos-web-stream
+          ${{ runner.temp }}/sexos-web-seek
+        if-no-files-found: ignore
+
   profiles:
     name: Proof builds (${{ matrix.gate }})
     runs-on: ubuntu-latest
@@ -199,7 +232,7 @@ jobs:
   # Single required check: keeps the old "build" check name for branch rules.
   build:
     if: always()
-    needs: [host, truth, boot, devices, profiles]
+    needs: [host, truth, boot, devices, media, profiles, js-jit]
     runs-on: ubuntu-latest
     steps:
     - run: |
