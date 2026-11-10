@@ -23,6 +23,7 @@ members = [
     "apps/jot",
     "apps/files",
     "apps/peek",
+    "apps/talk",
     "apps/bench",
     "apps/view",
     "apps/wasm",
@@ -62,6 +63,10 @@ members = [
     "crates/sex-time",
     "crates/sex-wasm",
     "apps/spindle",
+    "crates/sex-std",
+    "apps/stdhello",
+    "apps/chello",
+    "apps/pdf",
 ]
 [workspace.package]
 license = "GPL-3.0-only"

@@ -43,7 +43,7 @@ unsafe fn block(ptr: *mut u8) -> (*mut u8, Layout, usize) {
     (base, unsafe { Layout::from_size_align_unchecked(total, align) }, total - offset)
 }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn malloc(size: usize) -> *mut c_void {
     let p = unsafe { allocate(size.max(1), MIN_ALIGN) };
     if p.is_null() {
@@ -52,7 +52,7 @@ pub unsafe extern "C" fn malloc(size: usize) -> *mut c_void {
     p.cast()
 }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn calloc(count: usize, size: usize) -> *mut c_void {
     let Some(bytes) = count.checked_mul(size) else {
         set_errno(ENOMEM);
@@ -65,7 +65,7 @@ pub unsafe extern "C" fn calloc(count: usize, size: usize) -> *mut c_void {
     p
 }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn free(ptr: *mut c_void) {
     if ptr.is_null() {
         return;
@@ -74,7 +74,7 @@ pub unsafe extern "C" fn free(ptr: *mut c_void) {
     unsafe { dealloc(base, layout) };
 }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn realloc(ptr: *mut c_void, size: usize) -> *mut c_void {
     if ptr.is_null() {
         return unsafe { malloc(size) };
@@ -99,7 +99,7 @@ pub unsafe extern "C" fn realloc(ptr: *mut c_void, size: usize) -> *mut c_void {
     fresh.cast()
 }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn posix_memalign(out: *mut *mut c_void, align: usize, size: usize) -> c_int {
     if !align.is_power_of_two() || align % core::mem::size_of::<usize>() != 0 || align > MAX_ALIGN {
         return EINVAL;
@@ -112,7 +112,7 @@ pub unsafe extern "C" fn posix_memalign(out: *mut *mut c_void, align: usize, siz
     0
 }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn aligned_alloc(align: usize, size: usize) -> *mut c_void {
     let mut p = null_mut();
     match unsafe { posix_memalign(&mut p, align.max(core::mem::size_of::<usize>()), size) } {

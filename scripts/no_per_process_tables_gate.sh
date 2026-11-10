@@ -14,6 +14,9 @@ from pathlib import Path
 ALLOWED={
  'cr3_write':[('kernel/src/hal/x86_64.rs','tlb_flush_local','let (p4_frame, flags) = Cr3::read();\n            Cr3::write(p4_frame, flags);')],
  'page_table_root':[('kernel/src/memory/manager.rs','init','let level_4_table = unsafe { active_level_4_table(VirtAddr::new(hhdm_offset)) };\n    let mut mapper = unsafe { OffsetPageTable::new(level_4_table')],
+ # rustls's hash::Context trait names its copy-the-running-hash method `fork`; it
+ # copies a SHA-2 state, not a process.
+ 'process_model':[('crates/sex-tls/src/open/provider.rs','fork','impl hash::Context for $ctx {\n        fn fork_finish(&self) -> hash::Output')],
  'ttbr_write':[('kernel/src/arch/aarch64/mmu.rs','init','TTBR0_ADDR = t0_l0 as u64;'),
                ('kernel/src/arch/aarch64/smp.rs','sex_arm_ap_main','let b0 = super::mmu::ttbr0_pa();\n        let b1 = super::mmu::ttbr1_pa();')],
 }

@@ -12,7 +12,7 @@ unsafe fn len(s: *const c_char) -> usize {
     n
 }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn strnlen(s: *const c_char, max: usize) -> usize {
     let mut n = 0;
     while n < max && unsafe { *s.add(n) } != 0 {
@@ -21,12 +21,12 @@ pub unsafe extern "C" fn strnlen(s: *const c_char, max: usize) -> usize {
     n
 }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn strcmp(a: *const c_char, b: *const c_char) -> c_int {
     unsafe { strncmp(a, b, usize::MAX) }
 }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn strncmp(a: *const c_char, b: *const c_char, n: usize) -> c_int {
     for i in 0..n {
         let (x, y) = unsafe { (*a.add(i) as u8, *b.add(i) as u8) };
@@ -41,12 +41,12 @@ fn lower(c: u8) -> u8 {
     c.to_ascii_lowercase()
 }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn strcasecmp(a: *const c_char, b: *const c_char) -> c_int {
     unsafe { strncasecmp(a, b, usize::MAX) }
 }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn strncasecmp(a: *const c_char, b: *const c_char, n: usize) -> c_int {
     for i in 0..n {
         let (x, y) = unsafe { (lower(*a.add(i) as u8), lower(*b.add(i) as u8)) };
@@ -57,7 +57,7 @@ pub unsafe extern "C" fn strncasecmp(a: *const c_char, b: *const c_char, n: usiz
     0
 }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn strchr(s: *const c_char, c: c_int) -> *mut c_char {
     let c = c as u8;
     let mut p = s;
@@ -73,7 +73,7 @@ pub unsafe extern "C" fn strchr(s: *const c_char, c: c_int) -> *mut c_char {
     }
 }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn strrchr(s: *const c_char, c: c_int) -> *mut c_char {
     let c = c as u8;
     let n = unsafe { len(s) };
@@ -85,7 +85,7 @@ pub unsafe extern "C" fn strrchr(s: *const c_char, c: c_int) -> *mut c_char {
     null_mut()
 }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn memchr(s: *const c_void, c: c_int, n: usize) -> *mut c_void {
     let s = s.cast::<u8>();
     for i in 0..n {
@@ -96,14 +96,14 @@ pub unsafe extern "C" fn memchr(s: *const c_void, c: c_int, n: usize) -> *mut c_
     null_mut()
 }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn strcpy(d: *mut c_char, s: *const c_char) -> *mut c_char {
     let n = unsafe { len(s) };
     unsafe { core::ptr::copy_nonoverlapping(s, d, n + 1) };
     d
 }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn strncpy(d: *mut c_char, s: *const c_char, n: usize) -> *mut c_char {
     let k = unsafe { strnlen(s, n) };
     unsafe {
@@ -113,7 +113,7 @@ pub unsafe extern "C" fn strncpy(d: *mut c_char, s: *const c_char, n: usize) -> 
     d
 }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn strcat(d: *mut c_char, s: *const c_char) -> *mut c_char {
     unsafe { strcpy(d.add(len(d)), s) };
     d
@@ -133,7 +133,7 @@ fn in_set(set: *const c_char, c: u8) -> bool {
     }
 }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn strspn(s: *const c_char, accept: *const c_char) -> usize {
     let mut n = 0;
     while unsafe { *s.add(n) } != 0 && in_set(accept, unsafe { *s.add(n) } as u8) {
@@ -142,7 +142,7 @@ pub unsafe extern "C" fn strspn(s: *const c_char, accept: *const c_char) -> usiz
     n
 }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn strcspn(s: *const c_char, reject: *const c_char) -> usize {
     let mut n = 0;
     while unsafe { *s.add(n) } != 0 && !in_set(reject, unsafe { *s.add(n) } as u8) {
@@ -151,13 +151,13 @@ pub unsafe extern "C" fn strcspn(s: *const c_char, reject: *const c_char) -> usi
     n
 }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn strpbrk(s: *const c_char, accept: *const c_char) -> *mut c_char {
     let n = unsafe { strcspn(s, accept) };
     if unsafe { *s.add(n) } == 0 { null_mut() } else { unsafe { s.add(n) as *mut c_char } }
 }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn strstr(hay: *const c_char, needle: *const c_char) -> *mut c_char {
     let (h, n) = unsafe { (len(hay), len(needle)) };
     if n == 0 {
@@ -171,12 +171,12 @@ pub unsafe extern "C" fn strstr(hay: *const c_char, needle: *const c_char) -> *m
     }
 }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn strdup(s: *const c_char) -> *mut c_char {
     unsafe { strndup(s, usize::MAX) }
 }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn strndup(s: *const c_char, max: usize) -> *mut c_char {
     let n = unsafe { strnlen(s, max) };
     let d = unsafe { crate::mem::malloc(n + 1) }.cast::<c_char>();
@@ -189,7 +189,7 @@ pub unsafe extern "C" fn strndup(s: *const c_char, max: usize) -> *mut c_char {
     d
 }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn strtok_r(s: *mut c_char, delim: *const c_char, save: *mut *mut c_char) -> *mut c_char {
     let mut p = if s.is_null() { unsafe { *save } } else { s };
     if p.is_null() {
@@ -214,7 +214,7 @@ pub unsafe extern "C" fn strtok_r(s: *mut c_char, delim: *const c_char, save: *m
 
 static UNKNOWN: &[u8] = b"error\0";
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn strerror(_e: c_int) -> *mut c_char {
     UNKNOWN.as_ptr() as *mut c_char
 }

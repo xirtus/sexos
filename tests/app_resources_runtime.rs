@@ -78,7 +78,7 @@ pub static HHDM_REQUEST:Hhdm=Hhdm;
 mod program_workers{pub fn all_dead(_:u32)->bool{true}pub fn end(_:u32){}pub fn spawn(_:&crate::capability::ProtectionDomain,_:u32,_:u32,_:u64,_:u64,_:u64)->Result<u64,u64>{Err(1)}}
 pub fn sys_yield(){}
 #[path="../kernel/src/program_image.rs"]mod program_image;
-mod program_tenancy{pub fn read(_:u32,leaf:u64)->u64{unsafe{core::ptr::read_volatile(leaf as *const u64)}}pub fn restored(_:u32,value:u64)->u64{value}pub fn adopt(_:u32,_:&[crate::app_resource_state::PrivatePage]){}pub fn release(_:u32){}pub fn grant(_:u32,page:crate::app_resource_state::PrivatePage){unsafe{core::ptr::write_volatile(page.leaf as *mut u64,page.expected)}}}
+mod program_tenancy{pub fn read(_:u32,leaf:u64)->u64{unsafe{core::ptr::read_volatile(leaf as *const u64)}}pub fn restored(_:u32,_:u64,value:u64)->u64{value}pub fn boot_pages(_:u32,_:&[crate::app_resource_state::PrivatePage]){}pub fn adopt(_:u32,_:&[crate::app_resource_state::PrivatePage]){}pub fn release(_:u32){}pub fn arena(_:u32,_:u64,_:u64){}pub fn grant(_:u32,page:crate::app_resource_state::PrivatePage){unsafe{core::ptr::write_volatile(page.leaf as *mut u64,page.expected)}}}
 mod smp{pub fn shootdown_covers_all()->bool{crate::core_local::INITIALIZED_CORES.load(crate::Ordering::Acquire)==1}pub mod tlb{pub fn service(){}pub fn flush(va:u64){crate::x86_64::instructions::tlb::flush(crate::VirtAddr::new(va))}pub fn flush_pages(_:usize,pages:impl Iterator<Item=u64>){for va in pages{flush(va)}}}}
 mod program_frames{pub fn take()->Option<u64>{None}pub fn give(_:u64){}pub fn available()->u64{0}}
 pub static ALLOCATOR:HeapLock=HeapLock;pub struct HeapLock;impl HeapLock{pub fn lock(&self)->Heap{Heap}}pub struct Heap;impl Heap{pub fn used(&self)->usize{0}}

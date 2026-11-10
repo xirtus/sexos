@@ -43,6 +43,8 @@ const TARGET_MIB: usize = 12;
 
 /// Fills memory a mebibyte at a time: `limit` of them, or until the kernel says no.
 /// Running out must be a refused allocation, not a fault.
+/// The highest memory pressure the kernel reported while filling.
+static PRESSURE: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 fn fill(limit: usize) -> Result<usize, &'static str> {
     let mut chunks: Vec<Vec<u8>> = Vec::new();
     if chunks.try_reserve_exact(limit).is_err() { return Err("no room to count chunks"); }
@@ -51,12 +53,14 @@ fn fill(limit: usize) -> Result<usize, &'static str> {
         if chunk.try_reserve_exact(1024 * 1024).is_err() { break; }
         chunk.resize(1024 * 1024, chunks.len() as u8);
         chunks.push(chunk);
+        PRESSURE.fetch_max(memory::pressure(), core::sync::atomic::Ordering::Relaxed);
     }
     if chunks.iter().enumerate().any(|(i, c)| c.iter().any(|b| *b != i as u8)) { return Err("chunk lost data"); }
     Ok(chunks.len())
 }
 
 fn run(task: u32) -> Result<(String, usize, usize, usize), &'static str> {
+    if memory::pressure() > memory::PRESSURE_CRITICAL { return Err("unknown memory pressure"); }
     fresh_pages()?;
     // Ordinary use: a growing vector, a boxed buffer, a map, formatted text.
     let mut squares: Vec<u64> = Vec::new();
@@ -101,7 +105,7 @@ pub extern "C" fn _start() -> ! {
     let (target, task) = (window.target, window.task);
     match run(task) {
         Ok((text, used, peak, full)) => {
-            sex_pdx::serial_record!("[heaptest.ok] target={} task={} used={} peak={} full_mib={}", target, task, used, peak, full);
+            sex_pdx::serial_record!("[heaptest.ok] target={} task={} used={} peak={} full_mib={} pressure={}", target, task, used, peak, full, memory::pressure());
             window.show(text.as_bytes());
         }
         Err(why) => {
@@ -116,11 +120,13 @@ pub extern "C" fn _start() -> ! {
             // A: take all the memory programs may have.
             Event::Key(key) if key.code == 0x1E => {
                 let limit = sex_pdx::program_store::WINDOW_BYTES / (1024 * 1024);
+                PRESSURE.store(0, core::sync::atomic::Ordering::Relaxed);
                 match fill(limit) {
                     Ok(full) if full < limit => {
-                        sex_pdx::serial_record!("[heaptest.all] target={} task={} full_mib={} peak={}", target, task, full, heap::held());
+                        let seen = PRESSURE.load(core::sync::atomic::Ordering::Relaxed);
+                        sex_pdx::serial_record!("[heaptest.all] target={} task={} full_mib={} peak={} pressure={}", target, task, full, heap::held(), seen);
                         let mut s = String::new();
-                        let _ = write!(s, "Filled {} MiB until the kernel said no.\nPeak: {} KiB. F11 closes.\n", full, heap::held() / 1024);
+                        let _ = write!(s, "Filled {} MiB until the kernel said no.\nPeak: {} KiB. Memory pressure reached {}.\nF11 closes.\n", full, heap::held() / 1024, ["normal", "low", "critical"][seen.min(2) as usize]);
                         window.show(s.as_bytes());
                     }
                     Ok(_) => sex_pdx::serial_record!("[heaptest.fail] target={} task={} why=the heap never ran out", target, task),

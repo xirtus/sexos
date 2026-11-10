@@ -45,6 +45,8 @@ pub struct ReplayMsg {
     pub arg2: u64,
 }
 
+pub fn defer_empty() -> bool { unsafe { (*core::ptr::addr_of!(DEFERRED)).len() == 0 } }
+
 pub fn defer_pop() -> Option<(u64, u32, u64, u64, u64)> {
     unsafe {
         let msg = DEFERRED.pop()?;

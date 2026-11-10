@@ -60,6 +60,7 @@ pub mod history_recovery;
 pub(crate) mod pci_bar_bounds;
 pub(crate) mod nic_boot;
 pub(crate) mod device_lease;
+pub mod device_irq;
 #[cfg(target_arch = "x86_64")]
 pub(crate) mod boot_frame_reservations;
 #[cfg(target_arch = "x86_64")]
