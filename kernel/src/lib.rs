@@ -103,8 +103,6 @@ pub mod syscalls;
 #[cfg(target_arch = "x86_64")]
 pub mod capabilities;
 #[cfg(target_arch = "x86_64")]
-pub mod benchmark;
-#[cfg(target_arch = "x86_64")]
 pub mod init;
 #[cfg(target_arch = "x86_64")]
 pub mod graphics;
