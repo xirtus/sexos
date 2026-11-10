@@ -33,6 +33,7 @@ fn held_device(pd:&ProtectionDomain,slot:u64,set:u64,clear:u64)->Option<(u32,w::
 pub fn identity(pd:&ProtectionDomain,slot:u64,a:u64,b:u64,c:u64,d:u64)->[u64;5] {
     let fail=[w::DENIED,0,0,0,0];
     if a==w::QUERY_WINDOW && b|c|d==0 { return window(pd,slot); }
+    if a==w::QUERY_SUBSYSTEM && b|c|d==0 { return subsystem(pd,slot); }
     if a|b|c|d!=0{return fail;}
     let Some((slot,update))=held(pd,slot,0,0)else{return fail;};
     let grant=update.grant();
@@ -67,8 +68,9 @@ pub fn invoke(pd:&ProtectionDomain,slot:u64,set:u64,clear:u64,reserved0:u64,rese
         else{(w::DMA_REGION_ID,w::DMA_BYTES)};
     // Only bus-master enable needs DMA authority; querying or disabling a
     // controller remains possible when DMA metadata is absent or invalid.
+    let dma_slot=crate::device_lease::Kind::of_class(device.class).map_or(sex_pdx::SLOT_DMA_REGION,|k|k.dma_slot());
     if update.needs_dma() {
-        let dma=match pd.find_capability(sex_pdx::SLOT_DMA_REGION as u32).map(|c|c.data) {
+        let dma=match pd.find_capability(dma_slot as u32).map(|c|c.data) {
             Some(CapabilityData::Region(g))=>g,_=>return fail,
         };
         if dma.region_id!=region_id || dma.length!=bytes || dma.peer_pd.is_some()
@@ -99,6 +101,13 @@ pub fn quiesce(pd:&ProtectionDomain){
 
 /// Where the held device's registers sit inside its leased view: the whole view,
 /// or for a BAR smaller than a page, its offset and length inside that page.
+/// Subsystem vendor and device (config offset 0x2c) of the exact held device.
+fn subsystem(pd:&ProtectionDomain,slot:u64)->[u64;5]{
+    let Some((_,_,device))=held_device(pd,slot,0,0)else{return [w::DENIED,0,0,0,0];};
+    let id=unsafe{crate::hal::pci::pci_config_read(device.bus,device.dev,device.func,0x2c)};
+    [0,(id&0xffff) as u64,(id>>16) as u64,0,0]
+}
+
 fn window(pd:&ProtectionDomain,slot:u64)->[u64;5]{
     let Some((_,_,device))=held_device(pd,slot,0,0)else{return [w::DENIED,0,0,0,0];};
     let Some(view)=device.bar0_view else{return [w::DENIED,0,0,0,0];};

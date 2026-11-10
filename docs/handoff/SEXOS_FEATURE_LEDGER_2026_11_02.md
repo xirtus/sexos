@@ -3637,3 +3637,21 @@ Follow-up to the boot log and crash records work (`BOOT_LOG_AND_CRASH_RECORDS_20
 - Gate: `scripts/crash_screen_gate.py` crashes Display (same desktop back, 98.6% same
   pixels) and Shell (desktop back, Spindle answers `crashes`).
 
+## Intel Wi-Fi, stage W2: the chip starts its firmware (2026-11-10)
+
+- **Lease:** Intel class 02:80 goes to the network service (`Lease::Wifi`, slot 22) with
+  BAR0, command bits, its own 4 MiB DMA pool (slot 23, region 0x4400) and the firmware
+  pack as a read-only region (slot 24). `SYS_IDENTITY` answers `QUERY_SUBSYSTEM`.
+- **Firmware on the boot image:** `firmware/wifi.pack` (all 13 linux-firmware files, each
+  SHA-256 checked by the driver), built by `scripts/make_wifi_firmware_pack.py`; the build
+  fetches the files when missing. The installed boot partition grows to 32 MiB with it.
+- **Driver:** `sex_wifi::rx` (receive ring, both families) and `sex_wifi::bringup`;
+  `servers/sexnet/src/wifi.rs` powers the chip up and logs `[wifi.chip]`,
+  `[wifi.firmware]`, `[wifi.step]`, then `[wifi.alive] fw=…` or `[wifi.failed] step=…`.
+- **Census:** Intel AX200/AX201/AX210/AX211 now say `support=in_progress`.
+- **Evidence:** `scripts/wifi_host_gate.sh` (31 tests), hwdb manifest tests. Real proof
+  is the x17 R1 boot log; QEMU has no Intel Wi-Fi.
+- **ABI:** new `sex_pdx::pci_command` Wi-Fi slots, region ids and `QUERY_SUBSYSTEM`;
+  `kernel/src/pci_command.rs` changed; `abi_version_hash` recomputed.
+- **Kernel growth:** ~45 lines (class lease kind, pool slot per kind, firmware region,
+  subsystem query); mechanism only, no Wi-Fi logic in the kernel.
