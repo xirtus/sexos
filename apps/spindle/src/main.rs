@@ -829,7 +829,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  net-status   show diagnostic state");
             sb.push(b"  net-cancel   stop and release the probe");
             sb.push(b"  net-retry    explicit fresh attempt");
-            sb.push(b"  wifi [scan]  Wi-Fi state and networks heard; scan looks again");
+            sb.push(b"  wifi [scan|join N]  Wi-Fi networks heard; scan looks again");
             serial_println!("[spindle.help.command] name=help ok=1");
             serial_println!("[spindle.help.command] name=clear ok=1");
             serial_println!("[spindle.help.command] name=echo ok=1");

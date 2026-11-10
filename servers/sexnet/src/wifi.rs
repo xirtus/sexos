@@ -7,7 +7,7 @@
 //! only maps the lease, the DMA pool and the firmware pack onto its traits.
 use sex_pdx::wifi_status as ws;
 use sex_pdx::{memory_region as m, pci_command as c};
-use sex_wifi::{bringup::Bringup, context, csr, devices, ieee80211::Security, init::{self, Init}, pack::Pack, scan::{self, Scan}, ucode::Firmware};
+use sex_wifi::{bringup::Bringup, context, csr, devices, ieee80211::Security, init::{self, Init}, join::{self, Join}, pack::Pack, scan::{self, Scan}, ucode::Firmware};
 
 /// The chip's register window (BAR0 view).
 struct Mmio { base: u64, length: u64 }
@@ -64,6 +64,9 @@ pub struct Wifi {
     scan: Option<Scan>,
     /// Scans started, the first one included (the `wifi` command's count).
     scans: u16,
+    /// Stage W5a: joining a network heard in the last scan.
+    join: Option<Join>,
+    joined_ssid: [u8; 32],
     finished: bool,
 }
 
@@ -134,7 +137,7 @@ impl Wifi {
         }
         sex_pdx::serial_record!("[wifi.prepared] pool={} used={} rx_pages={} bus={:#x}",
             dma.length, bringup.layout.end, context::RX_BUFFERS, bus);
-        Some(Wifi { mmio, pool, bringup, last: csr::Step::Ready, file, pnvm, hw_rev, rf_id, init: None, last_init: None, scan: None, scans: 0, finished: false })
+        Some(Wifi { mmio, pool, bringup, last: csr::Step::Ready, file, pnvm, hw_rev, rf_id, init: None, last_init: None, scan: None, scans: 0, join: None, joined_ssid: [0; 32], finished: false })
     }
 
     /// True until the first scan has finished or the chip has failed.
@@ -142,6 +145,7 @@ impl Wifi {
 
     pub fn advance(&mut self, now_ticks: u64) {
         if self.finished { return; }
+        if self.join.is_some() { return self.advance_join(now_ticks); }
         if self.scan.is_some() { return self.advance_scan(now_ticks); }
         if self.init.is_some() { return self.advance_init(now_ticks); }
         let more = self.bringup.advance(&mut self.mmio, &mut self.pool, now_ticks * 1000);
@@ -233,8 +237,53 @@ impl Wifi {
             sc.count, sc.frames, sc.dropped, sc.channels, now_ticks);
     }
 
+    /// Stage W5a: onto the chosen network's channel (contexts, station, queue).
+    fn advance_join(&mut self, now_ticks: u64) {
+        let (Some(j), Some(i)) = (self.join.as_mut(), self.init.as_mut()) else { return };
+        let before = j.step;
+        let more = j.advance(&mut self.bringup, &mut i.cmdq, &mut self.mmio, &mut self.pool, now_ticks * 1000);
+        if j.step != before {
+            sex_pdx::serial_record!("[wifi.join] step={:?} status={:#x} ticks={}", j.step, j.status, now_ticks);
+        }
+        if more { return; }
+        self.finished = true;
+        let ssid = core::str::from_utf8(&self.joined_ssid).unwrap_or("?").trim_end_matches('\0');
+        let t = j.target;
+        if j.step == join::Step::Joined {
+            sex_pdx::serial_record!("[wifi.joined] ssid=\"{}\" bssid={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} channel={} phy={} rlc={} queue={} ticks={}",
+                ssid, t.bssid[0], t.bssid[1], t.bssid[2], t.bssid[3], t.bssid[4], t.bssid[5], t.channel,
+                j.versions.phy, j.versions.rlc, j.versions.scd_queue, now_ticks);
+        } else {
+            use csr::Registers;
+            sex_pdx::serial_record!("[wifi.failed] step=join reason={:?} ssid=\"{}\" int={:#x}", j.step, ssid, self.mmio.read(csr::INT));
+        }
+    }
+
+    /// Starts joining network `index` of the last finished scan.
+    fn start_join(&mut self, index: u64, now_ticks: u64) -> bool {
+        if !self.finished || self.join.is_some() { return false; }
+        let (Some(sc), Some(i)) = (self.scan.as_ref(), self.init.as_ref()) else { return false };
+        if sc.step != scan::Step::Done || i.step != init::Step::Ready { return false; }
+        let Some(n) = sc.networks().nth(index as usize) else { return false };
+        let Ok(fw) = Firmware::parse(self.file) else { return false };
+        let versions = join::Versions::of(&fw, &i.features, self.hw_rev);
+        let target = join::Target::of(&n.bss, n.heard_on);
+        self.joined_ssid = [0; 32];
+        self.joined_ssid[..n.bss.ssid().len()].copy_from_slice(n.bss.ssid());
+        let j = Join::new(target, versions, i.mac, i.features.rx_antennas(), now_ticks * 1000);
+        sex_pdx::serial_record!("[wifi.join.start] index={} channel={} step={:?} ticks={}", index, target.channel, j.step, now_ticks);
+        self.join = Some(j);
+        self.finished = false;
+        true
+    }
+
     /// What the desktop sees (`sex_pdx::wifi_status`).
     fn state(&self) -> ws::State {
+        if let Some(j) = &self.join {
+            let phase = match j.step { join::Step::Joined => ws::JOINED, join::Step::Failed(_) => ws::FAILED, _ => ws::JOINING };
+            let (networks, channels) = self.scan.as_ref().map_or((0, 0), |sc| (sc.count.min(255) as u8, sc.channels));
+            return ws::State { phase, networks, scans: self.scans, channels };
+        }
         let phase = match (&self.scan, self.finished) {
             (None, false) => ws::STARTING,
             (None, true) => ws::FAILED,
@@ -248,7 +297,8 @@ impl Wifi {
     /// A fresh scan, when the chip is ready and the last scan has ended.
     fn rescan(&mut self, now_ticks: u64) -> bool {
         let Some(i) = self.init.as_ref() else { return false };
-        if !self.finished || self.scan.is_none() || i.step != init::Step::Ready { return false; }
+        // Once a join has begun the chip stays on that channel (leaving it is W5b's).
+        if !self.finished || self.scan.is_none() || self.join.is_some() || i.step != init::Step::Ready { return false; }
         let sc = i.scan(now_ticks * 1000);
         self.scans = self.scans.wrapping_add(1);
         sex_pdx::serial_record!("[wifi.scan.start] channels={} scan={} ticks={}", sc.channels, self.scans, now_ticks);
@@ -287,6 +337,8 @@ pub fn request(wifi: Option<&mut Wifi>, caller: u32, action: u64, a: u64, b: u64
         (ws::STATE, Some(w)) => w.state().word(),
         (ws::SCAN, Some(w)) if caller != 6 => { w.rescan(now_ticks); w.state().word() }
         (ws::NETWORK, Some(w)) => w.network(a, b),
+        (ws::JOIN, None) => none,
+        (ws::JOIN, Some(w)) if caller != 6 => { w.start_join(a, now_ticks); w.state().word() }
         _ => ws::REFUSED,
     }
 }

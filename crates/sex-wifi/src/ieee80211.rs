@@ -133,7 +133,16 @@ pub struct Bss {
     pub beacon_interval: u16,
     pub capability: u16,
     pub h2e: bool,
+    /// Basic (required) rates the AP named, as rate-index bits: CCK 1, 2, 5.5, 11
+    /// Mb/s in bits 0..4, OFDM 6..54 Mb/s in bits 0..8 (`join::ack_rates` reads them).
+    pub basic_cck: u8,
+    pub basic_ofdm: u8,
+    /// DTIM period from the TIM element (0 when the frame had none).
+    pub dtim_period: u8,
 }
+/// Rates in 500 kb/s units, in iwx(4) rate-index order: CCK then OFDM.
+pub const CCK_RATES: [u8; 4] = [2, 4, 11, 22];
+pub const OFDM_RATES: [u8; 8] = [12, 18, 24, 36, 48, 72, 96, 108];
 impl Bss {
     pub fn ssid(&self) -> &[u8] { &self.ssid[..self.ssid_len as usize] }
     pub fn rsn_element(&self) -> &[u8] { &self.rsn_element[..self.rsn_element_len as usize] }
@@ -147,13 +156,20 @@ pub fn parse_bss(frame: &[u8]) -> Option<Bss> {
     let mut bss = Bss { bssid: frame[16..22].try_into().unwrap(), ssid: [0; 32], ssid_len: 0, channel: 0,
         security: Security::Open, rsn: Rsn::default(), rsn_element: [0; 64], rsn_element_len: 0,
         beacon_interval: u16::from_le_bytes([frame[32], frame[33]]),
-        capability: u16::from_le_bytes([frame[34], frame[35]]), h2e: false };
+        capability: u16::from_le_bytes([frame[34], frame[35]]), h2e: false,
+        basic_cck: 0, basic_ofdm: 0, dtim_period: 0 };
     let privacy = bss.capability & 0x0010 != 0;
     let mut has_rsn = false;
     for (id, body) in elements(&frame[MGMT_HEADER + 12..]) {
         match id {
             0 if body.len() <= 32 => { bss.ssid[..body.len()].copy_from_slice(body); bss.ssid_len = body.len() as u8; }
             3 if body.len() == 1 => bss.channel = body[0],
+            1 | 50 => for &r in body.iter().filter(|r| *r & 0x80 != 0) {
+                let r = r & 0x7f;
+                if let Some(i) = CCK_RATES.iter().position(|&c| c == r) { bss.basic_cck |= 1 << i; }
+                if let Some(i) = OFDM_RATES.iter().position(|&c| c == r) { bss.basic_ofdm |= 1 << i; }
+            },
+            5 if body.len() >= 2 => bss.dtim_period = body[1],
             61 if !body.is_empty() && bss.channel == 0 => bss.channel = body[0], // HT operation primary channel
             48 if body.len() + 2 <= 64 => {
                 has_rsn = true;

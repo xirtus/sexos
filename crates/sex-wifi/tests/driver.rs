@@ -1,7 +1,7 @@
 //! Driver-level behaviour: chip table, firmware files, DMA layout, the power-up
 //! sequence against a register model, the 4-way handshake against an access
 //! point played by the authenticator helpers, and frames end to end.
-use sex_wifi::{bringup, ccmp, cmdq, context, csr, devices, eapol, hcmd, ieee80211 as w, init, pack, rx, scan, ucode};
+use sex_wifi::{bringup, ccmp, cmdq, context, csr, devices, eapol, hcmd, ieee80211 as w, init, join, pack, rx, scan, ucode};
 use std::collections::HashMap;
 
 const AP: [u8; 6] = [0x02, 0x11, 0x22, 0x33, 0x44, 0x55];
@@ -111,6 +111,11 @@ fn real_ax210_firmware_when_present() {
     assert_eq!(image.lmac.len() + image.umac.len() + image.paging.len() + 2, fw.sections().len());
     let layout = context::Layout::plan(devices::Family::Ax210, &image, fw.iml.unwrap().len(), 8 << 20).unwrap();
     assert!(layout.end < 4 << 20, "firmware plus rings fit in 4 MiB: {}", layout.end);
+    // W5: the x17's firmware takes the join commands this driver sends.
+    let v = join::Versions::of(&fw, &init::Features::of(&fw), 0x420);
+    assert_eq!(v, join::Versions { phy: 4, rlc: 2, scd_queue: 3, uhb: true, mld: false });
+    // The AX211-type MAC (0x44) would need the MLD API instead.
+    assert!(join::Versions::of(&fw, &init::Features::of(&fw), 0x440).mld);
 }
 
 struct Memory(Vec<u8>);
@@ -695,8 +700,12 @@ fn init_firmware(dqa: bool, embedded_pnvm: Option<Vec<u8>>) -> Vec<u8> {
         (29, bits(0, 1 << ucode::API_WIFI_MCC_UPDATE)),
         (29, bits(1, 1 << (ucode::API_REGULATORY_NVM_INFO - 32) | 1 << (ucode::API_REDUCED_SCAN_CONFIG - 32))),
         (30, bits(0, 1 << ucode::CAPA_LAR_SUPPORT | if dqa { 1 << ucode::CAPA_DQA_SUPPORT } else { 0 })),
+        (30, bits(1, 1 << (ucode::CAPA_ULTRA_HB_CHANNELS - 32))),
         (30, bits(2, 1 << (ucode::CAPA_CT_KILL_BY_FW - 64) | 1 << (ucode::CAPA_MCC_UPDATE_11AX_SUPPORT - 64))),
-        (48, vec![0x01, 0x00, 99, 6, 0x0c, 0x01, 5, 0, 0x0d, 0x01, 15, 0, 0xc8, 0x01, 1, 6, 0x02, 0x0c, 1, 4]),
+        // Command versions as the x17's firmware (-77) lists them, W5's included:
+        // PHY_CONTEXT v4, RLC_CONFIG v2, SCD_QUEUE_CONFIG v3.
+        (48, vec![0x01, 0x00, 99, 6, 0x0c, 0x01, 5, 0, 0x0d, 0x01, 15, 0, 0xc8, 0x01, 1, 6, 0x02, 0x0c, 1, 4,
+            0x08, 0x01, 4, 0, 0x08, 0x05, 2, 0, 0x17, 0x05, 3, 2]),
     ];
     if let Some(p) = embedded_pnvm { extra.push((74, p)); }
     firmware_with(&extra)
@@ -769,6 +778,9 @@ struct Firmware {
     /// Frames the radio "hears" during a scan: (frame, energy, channel, padded).
     air: Vec<(Vec<u8>, u8, u8, bool)>,
     scan_status: u8,
+    /// ADD_STA's status word, and the queue number SCD_QUEUE_CONFIG answers with.
+    station_status: u32,
+    queue_answer: u16,
 }
 
 /// An RX MPDU notification as the firmware writes it (descriptor, then frame).
@@ -787,7 +799,7 @@ fn mpdu(family: devices::Family, frame: &[u8], energy: u8, channel: u8, pad: boo
 
 impl Firmware {
     fn new(family: devices::Family, base: u64, slot: usize) -> Self {
-        Self { family, base, slot, read: 0, commands: vec![], lar: true, refuse: None, error_on: None, silent_on: None, pnvm_rung: false, air: vec![], scan_status: 1 }
+        Self { family, base, slot, read: 0, commands: vec![], lar: true, refuse: None, error_on: None, silent_on: None, pnvm_rung: false, air: vec![], scan_status: 1, station_status: 1, queue_answer: 1 }
     }
     fn deliver(&mut self, m: &mut Memory, layout: &context::Layout, p: &[u8]) {
         firmware_delivers(m, layout, self.family, self.base, self.slot, p);
@@ -823,6 +835,13 @@ impl Firmware {
                 (hcmd::PHY_OPS_GROUP, hcmd::TEMP_REPORTING_THRESHOLDS_CMD) => Some(20),
                 (hcmd::LONG_GROUP, hcmd::BT_CONFIG) | (hcmd::SYSTEM_GROUP, hcmd::SOC_CONFIGURATION_CMD) => Some(8),
                 (hcmd::LONG_GROUP, hcmd::SCAN_REQ_UMAC) => Some(scan::REQUEST_V14_BYTES),
+                (hcmd::LONG_GROUP, hcmd::PHY_CONTEXT_CMD) => Some(join::PHY_CONTEXT_BYTES),
+                (hcmd::DATA_PATH_GROUP, hcmd::RLC_CONFIG_CMD) => Some(32),
+                (hcmd::LONG_GROUP, hcmd::MAC_CONTEXT_CMD) => Some(148),
+                (hcmd::LONG_GROUP, hcmd::BINDING_CONTEXT_CMD) => Some(28),
+                (hcmd::LONG_GROUP, hcmd::ADD_STA) => Some(48),
+                (hcmd::DATA_PATH_GROUP, hcmd::SCD_QUEUE_CONFIG_CMD) => Some(36),
+                (hcmd::MAC_CONF_GROUP, hcmd::SESSION_PROTECTION_CMD) => Some(24),
                 _ => Some(4),
             };
             assert_eq!(Some(len), want, "payload size of {group:#x}/{opcode:#x}");
@@ -859,6 +878,12 @@ impl Firmware {
                     a[16..20].copy_from_slice(&37u32.to_le_bytes());
                     // Channels 1-13 and the first 23 at 5 GHz allowed; 14 not.
                     for c in (0..13).chain(14..37) { a[20 + c * 4] = 1; }
+                    a
+                }
+                (hcmd::LONG_GROUP, hcmd::ADD_STA) => self.station_status.to_le_bytes().to_vec(),
+                (hcmd::DATA_PATH_GROUP, hcmd::SCD_QUEUE_CONFIG_CMD) => {
+                    let mut a = vec![0u8; 8];
+                    a[0..2].copy_from_slice(&self.queue_answer.to_le_bytes());
                     a
                 }
                 _ => vec![0u8; 4],
@@ -1249,4 +1274,126 @@ fn scan_keeps_the_strongest_networks_when_full() {
     }
     assert_eq!((s.count, s.dropped), (scan::MAX_NETWORKS, 4));
     assert!(s.networks().all(|n| n.rssi >= -90 + 4), "the four weakest gave way");
+}
+
+/// The x17 up to `[wifi.ready]` with the scan's Home network heard, ready to join.
+fn x17_ready() -> (init::Init, bringup::Bringup, Memory, Chip, Firmware, w::Bss, join::Versions) {
+    let pnvm = pnvm_file(&[(X17_SKU, 0x10d, 0x30)]);
+    let file = init_firmware(false, None);
+    let fw = ucode::Firmware::parse(&file).unwrap();
+    let (mut b, mut m, mut hw, base) = alive_x17(&fw, X17_SKU);
+    let alive = b.alive.unwrap();
+    let mut i = init::Init::new(b.boot.chip, &fw, &alive, Some(&pnvm), &b.layout, base, &mut m, 0x420, X17_RF_ID, hw.now);
+    let mut sim = Firmware::new(b.boot.chip.family, base, 1);
+    run_init(&mut i, &mut b, &mut m, &mut hw, &mut sim);
+    assert_eq!(i.step, init::Step::Ready);
+    let wpa2 = [48u8, 20, 1, 0, 0, 0x0f, 0xac, 4, 1, 0, 0, 0x0f, 0xac, 4, 1, 0, 0, 0x0f, 0xac, 2, 0, 0];
+    let bss = w::parse_bss(&beacon_from([0x02, 0x10, 0, 0, 0, 1], b"Home", 6, Some(&wpa2))).unwrap();
+    let v = join::Versions::of(&fw, &i.features, 0x420);
+    (i, b, m, hw, sim, bss, v)
+}
+
+fn run_join(j: &mut join::Join, i: &mut init::Init, b: &mut bringup::Bringup, m: &mut Memory, hw: &mut Chip, sim: &mut Firmware) {
+    for _ in 0..1000 {
+        let t = hw.now;
+        if !j.advance(b, &mut i.cmdq, hw, m, t) { break; }
+        sim.serve(m, &b.layout, hw);
+        hw.now += 1000;
+    }
+}
+
+#[test]
+fn x17_joins_the_channel_like_iwx_auth() {
+    let (mut i, mut b, mut m, mut hw, mut sim, bss, v) = x17_ready();
+    assert_eq!(v, join::Versions { phy: 4, rlc: 2, scd_queue: 3, uhb: true, mld: false });
+    let target = join::Target::of(&bss, 6);
+    let mut j = join::Join::new(target, v, i.mac, i.features.rx_antennas(), hw.now);
+    let before = sim.commands.len();
+    run_join(&mut j, &mut i, &mut b, &mut m, &mut hw, &mut sim);
+    assert_eq!(j.step, join::Step::Joined);
+    let sent: Vec<(u8, u8)> = sim.commands[before..].iter().map(|c| (c.0, c.1)).collect();
+    assert_eq!(sent, vec![
+        (hcmd::LONG_GROUP, hcmd::PHY_CONTEXT_CMD), (hcmd::DATA_PATH_GROUP, hcmd::RLC_CONFIG_CMD),
+        (hcmd::LONG_GROUP, hcmd::MAC_CONTEXT_CMD), (hcmd::LONG_GROUP, hcmd::BINDING_CONTEXT_CMD),
+        (hcmd::LONG_GROUP, hcmd::ADD_STA), (hcmd::DATA_PATH_GROUP, hcmd::SCD_QUEUE_CONFIG_CMD),
+        (hcmd::MAC_CONF_GROUP, hcmd::SESSION_PROTECTION_CMD),
+    ], "iwx_auth's order");
+    let c = |k: usize| &sim.commands[before + k].2;
+    let u32at = |p: &Vec<u8>, at: usize| u32::from_le_bytes(p[at..at + 4].try_into().unwrap());
+    // PHY: add, channel 6 in the wide field, 2.4 GHz band, no RX chain (RLC v2 carries it).
+    assert_eq!((u32at(c(0), 4), u32at(c(0), 8), c(0)[12], u32at(c(0), 20)), (join::ACTION_ADD, 6, 1, 0));
+    // RLC: antennas A+B valid (phy_config 0x330018 → 3), one idle and one active chain.
+    assert_eq!(u32at(c(1), 4), 3 << 1 | 1 << 10 | 1 << 12);
+    // MAC: our address and the AP's, beacons let through until associated.
+    assert_eq!(&c(2)[16..22], &i.mac);
+    assert_eq!(&c(2)[24..30], &bss.bssid);
+    assert_eq!(u32at(c(2), 52), 1 << 2 | 1 << 6);
+    assert_eq!(u32at(c(2), 116), 100, "beacon interval");
+    // ADD_STA: the AP's address, station 0, MAC 0.
+    assert_eq!((&c(4)[8..14], c(4)[16]), (&bss.bssid[..], 0));
+    // Queue: our TFD ring and byte-count table, 256 entries (log2 - 3 = 5), TID 15.
+    assert_eq!((u32at(c(5), 4), c(5)[8], u32at(c(5), 16)), (1, 15, 5));
+    assert_eq!(u64::from_le_bytes(c(5)[20..28].try_into().unwrap()), b.base + b.layout.tx_byte_counts.offset);
+    assert_eq!(u64::from_le_bytes(c(5)[28..36].try_into().unwrap()), b.base + b.layout.tx_ring.offset);
+    // Session protection: nine beacon intervals.
+    assert_eq!(u32at(c(6), 12), 900);
+}
+
+#[test]
+fn join_fails_on_a_refused_station_or_a_wrong_queue() {
+    let (mut i, mut b, mut m, mut hw, mut sim, bss, v) = x17_ready();
+    sim.station_status = 2;
+    let mut j = join::Join::new(join::Target::of(&bss, 6), v, i.mac, 3, hw.now);
+    run_join(&mut j, &mut i, &mut b, &mut m, &mut hw, &mut sim);
+    assert!(matches!(j.step, join::Step::Failed(init::Failure::BadAnswer { opcode: hcmd::ADD_STA, .. })), "{:?}", j.step);
+    let (mut i, mut b, mut m, mut hw, mut sim, bss, v) = x17_ready();
+    sim.queue_answer = 2;
+    let mut j = join::Join::new(join::Target::of(&bss, 6), v, i.mac, 3, hw.now);
+    run_join(&mut j, &mut i, &mut b, &mut m, &mut hw, &mut sim);
+    assert!(matches!(j.step, join::Step::Failed(init::Failure::BadAnswer { opcode: hcmd::SCD_QUEUE_CONFIG_CMD, .. })), "{:?}", j.step);
+    // A chip that only speaks the MLD API is refused up front, as are old PHY commands.
+    let mld = join::Versions { mld: true, ..v };
+    assert_eq!(join::Join::new(join::Target::of(&bss, 6), mld, i.mac, 3, 0).step, join::Step::Failed(init::Failure::Unsupported("mld_api")));
+    let old = join::Versions { phy: 1, ..v };
+    assert!(join::Join::new(join::Target::of(&bss, 6), old, i.mac, 3, 0).done());
+}
+
+#[test]
+fn join_command_layouts() {
+    // ACK rates (iwx_ack_rates): basic 1/2 Mb/s and 6 Mb/s on 2.4 GHz.
+    let mut t = join::Target { bssid: [2, 0, 0, 0, 0, 1], channel: 1, beacon_interval: 100, dtim_period: 1,
+        basic_cck: 0b0011, basic_ofdm: 0b1, short_slot: true, short_preamble: true };
+    assert_eq!(join::ack_rates(&t), (0b0011, 0b1));
+    // Only 11 Mb/s basic: every lower CCK rate joins; only 24 Mb/s OFDM: 6 and 12 join.
+    t.basic_cck = 0b1000; t.basic_ofdm = 1 << 4;
+    assert_eq!(join::ack_rates(&t), (0b1111, 1 << 4 | 1 << 2 | 1));
+    // 5 GHz: no CCK basic rates, 1 Mb/s stays (the firmware ignores it there).
+    t.channel = 36; t.basic_cck = 0b1111;
+    assert_eq!(join::ack_rates(&t).0, 1);
+    // PHY context without the 6 GHz numbering: 28 bytes, band then channel in one word.
+    let mut p = [0u8; join::PHY_CONTEXT_BYTES];
+    assert_eq!(join::phy_context(&mut p, join::ACTION_ADD, 36, false, Some(0x1406)), join::PHY_CONTEXT_V1_BYTES);
+    assert_eq!((p[8], p[9], u32::from_le_bytes(p[16..20].try_into().unwrap())), (0, 36, 0x1406));
+    // MAC context after association: the AID, no beacons, EDCA per FIFO.
+    let mut mac = [0u8; join::MAC_CONTEXT_BYTES];
+    join::mac_context(&mut mac, join::ACTION_MODIFY, &STA, &t, Some(0xc005));
+    assert_eq!(u32::from_le_bytes(mac[52..56].try_into().unwrap()), 1 << 2);
+    assert_eq!((u32::from_le_bytes(mac[100..104].try_into().unwrap()), u32::from_le_bytes(mac[136..140].try_into().unwrap())), (1, 5));
+    // BE goes to FIFO 2: CWmin 15, CWmax 1023, AIFSN 3; VO to FIFO 4 with TXOP 1504 µs.
+    assert_eq!(&mac[60 + 16..60 + 24], &[15, 0, 0xff, 3, 3, 1 << 2, 0, 0]);
+    assert_eq!(&mac[60 + 32..60 + 40], &[3, 0, 7, 0, 2, 1 << 4, 0xe0, 5]);
+    // Removing a context sends only its id and the action.
+    join::mac_context(&mut mac, join::ACTION_REMOVE, &STA, &t, None);
+    assert!(mac[8..].iter().all(|&b| b == 0));
+}
+
+#[test]
+fn beacons_give_basic_rates_and_dtim() {
+    let mut f = beacon(b"rates", 6, None, false);
+    f.extend_from_slice(&[5, 4, 0, 3, 0, 0]); // TIM: DTIM count 0, period 3
+    f.extend_from_slice(&[50, 4, 0x8c, 0x12, 0x98, 0x24]); // extended rates: 6 and 12 basic
+    let b = w::parse_bss(&f).unwrap();
+    assert_eq!((b.basic_cck, b.basic_ofdm, b.dtim_period), (0b1111, 0b101, 3));
+    let t = join::Target::of(&b, 6);
+    assert_eq!(join::ack_rates(&t), (0b1111, 0b101), "nothing below 6 Mb/s to add");
 }

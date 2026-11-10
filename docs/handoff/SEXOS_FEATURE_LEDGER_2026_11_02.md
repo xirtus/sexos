@@ -3742,3 +3742,15 @@ Follow-up to the boot log and crash records work (`BOOT_LOG_AND_CRASH_RECORDS_20
   `wifi` on the x17 R1.
 - **ABI:** new PDX op `0x2E8` and module `sex_pdx::wifi_status`; `abi_version_hash`
   recomputed (sex-pdx lib.rs). No kernel change. Next: status bar indicator, then W5.
+
+## Intel Wi-Fi, stage W5a: joining a network's channel (2026-11-10)
+
+- **Join:** `sex_wifi::join` sends iwx_auth's commands: PHY context, RLC, MAC context,
+  binding, station, management TX queue (new TFD ring and buffers in the DMA region),
+  session protection. Versions checked against the x17's real firmware.
+- **Spindle:** `wifi` numbers the networks; `wifi join N` joins one (boot log
+  `[wifi.joined]` or `[wifi.failed] step=join`).
+- **Evidence:** `scripts/wifi_host_gate.sh` (34 driver tests): command order, bytes and
+  sizes on the firmware model, failure paths, real firmware versions.
+- **ABI / kernel:** none. W5 is split into W5a-W5e (INTEL_WIFI section 11).
+

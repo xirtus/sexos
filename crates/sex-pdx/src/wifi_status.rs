@@ -21,6 +21,10 @@ pub const SCAN: u64 = 2;
 /// Network `a` of the last (or current) scan, part `b`: `PART_INFO`, `PART_BSSID`,
 /// or `PART_SSID + k` for SSID bytes 7k..7k+7. Replies `MISSING` past the end.
 pub const NETWORK: u64 = 3;
+/// Joins network `a` of the last finished scan (stage W5a: onto its channel, no
+/// authentication yet). Shell and Spindle only. Replies with the state word
+/// (phase `JOINING` when it started).
+pub const JOIN: u64 = 4;
 
 pub const PART_INFO: u64 = 0;
 pub const PART_BSSID: u64 = 1;
@@ -39,7 +43,9 @@ pub const NONE: u8 = 0; // no Intel Wi-Fi chip (or its firmware is missing)
 pub const STARTING: u8 = 1; // firmware loading and init commands
 pub const SCANNING: u8 = 2;
 pub const READY: u8 = 3; // the last scan finished
-pub const FAILED: u8 = 4; // start-up or the last scan failed
+pub const FAILED: u8 = 4; // start-up, the last scan or the last join failed
+pub const JOINING: u8 = 5;
+pub const JOINED: u8 = 6; // on the network's channel, not yet authenticated
 
 /// The state word: phase (bits 0..8), networks heard (8..16), scans started (16..32),
 /// channels in a scan (32..40).
