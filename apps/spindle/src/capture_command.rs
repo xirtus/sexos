@@ -145,7 +145,7 @@ impl Capture {
         self.cancelled = false;
         self.saved = false;
         sb.push(b"Capturing the whole desktop at native size. Escape cancels.");
-        sex_pdx::serial_record!("[spindle.capture.intent] target={} task={} sequence={} epoch={} path={} whole_desktop=1 native=1",c::CLIENT,self.task,sequence,self.epoch,core::str::from_utf8(&self.path[..n]).unwrap_or("?"));
+        sex_pdx::serial_record!("[spindle.capture.intent] target={} task={} sequence={} epoch={} path_prefix={} path_bytes={} whole_desktop=1 native=1",c::CLIENT,self.task,sequence,self.epoch,core::str::from_utf8(&self.path[..n.min(72)]).unwrap_or("?"),n);
     }
     fn fail(&mut self, sb: &mut Scrollback, why: &[u8]) {
         self.cancelled = true;
@@ -478,7 +478,7 @@ impl Capture {
                         .is_some_and(|b| b.service_epoch() == self.epoch)
                 {
                     sb.push(b"Screenshot saved as PNG at native desktop resolution.");
-                    sex_pdx::serial_record!("[spindle.capture.saved] task={} sequence={} epoch={} bytes={} path={} synced=1 released=1",self.task,self.sequence,self.epoch,self.offset,core::str::from_utf8(&self.path[..self.path_len]).unwrap_or("?"));
+                    sex_pdx::serial_record!("[spindle.capture.saved] task={} sequence={} epoch={} bytes={} path_prefix={} path_bytes={} synced=1 released=1",self.task,self.sequence,self.epoch,self.offset,core::str::from_utf8(&self.path[..self.path_len.min(72)]).unwrap_or("?"),self.path_len);
                 } else {
                     sb.push(b"Capture ended without confirmed success; inspect any .part file.");
                 }

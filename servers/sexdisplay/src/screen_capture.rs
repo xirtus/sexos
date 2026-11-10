@@ -69,10 +69,18 @@ impl Server {
         }
     }
     fn scrub(&mut self) {
+        let started = sex_pdx::get_ticks();
         if let Some(b) = self.bank.as_mut() {
             b.scrub()
         }
         self.state = State::Idle;
+        sex_pdx::serial_record!(
+            "[display.capture.scrub] task={} sequence={} bytes={} ticks={} sensitive_zero=1",
+            self.task,
+            self.sequence,
+            c::BYTES,
+            sex_pdx::get_ticks().saturating_sub(started)
+        );
     }
     /// True requests a new completed full desktop publication. Replies carry only
     /// typed status; authority still comes from the held route and stamped sender.
@@ -109,21 +117,25 @@ impl Server {
                 return true;
             }
         } else if msg.arg0 == c::RELEASE {
-            if self.task != msg.caller_task
-                || self.sequence != sequence
-                || self.state == State::Idle
-            {
+            if self.task != msg.caller_task || self.sequence != sequence {
+                Some(c::DENIED)
+            } else if self.state == State::Idle {
+                if self.pending == Some(c::reply(sequence, c::OK, c::RELEASE)) {
+                    self.poll();
+                    return false;
+                }
                 Some(c::DENIED)
             } else {
                 self.scrub();
-                self.pending = None;
+                self.pending = Some(c::reply(sequence, c::OK, c::RELEASE));
                 sex_pdx::serial_record!(
                     "[display.capture.released] target={} task={} sequence={} scrubbed=1",
                     c::CLIENT,
                     self.task,
                     self.sequence
                 );
-                Some(c::OK)
+                self.poll();
+                return false;
             }
         } else {
             Some(c::DENIED)
@@ -157,6 +169,7 @@ impl Server {
         if self.state != State::Waiting {
             return false;
         }
+        let started = sex_pdx::get_ticks();
         let header = c::Header {
             epoch: self.epoch,
             sequence: self.sequence,
@@ -173,7 +186,7 @@ impl Server {
         {
             self.state = State::Ready;
             self.pending = Some(c::reply(self.sequence, c::OK, c::BEGIN));
-            sex_pdx::serial_record!("[display.capture.ready] target={} task={} sequence={} epoch={} generation={} width={} height={} native=1 night={} bytes={}",c::CLIENT,self.task,self.sequence,self.epoch,generation,w,h,night,pixels.len()*4);
+            sex_pdx::serial_record!("[display.capture.ready] target={} task={} sequence={} epoch={} generation={} width={} height={} native=1 night={} bytes={} copy_ticks={}",c::CLIENT,self.task,self.sequence,self.epoch,generation,w,h,night,pixels.len()*4,sex_pdx::get_ticks().saturating_sub(started));
             true
         } else {
             self.scrub();

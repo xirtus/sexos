@@ -29,7 +29,7 @@ def main():
   # This later live scanout is not the captured generation. Only explicitly
   # validated stable regions will be compared; the desktop keeps publishing.
   q.cmd('screendump',{'filename':str(a.out/'published.ppm')})
-  saved=g['wait'](rf'\[spindle.capture.saved\] task={ready[1]} sequence={ready[2]} epoch={ready[3]} bytes=(\d+) path=/shot.png synced=1 released=1',start,240)
+  saved=g['wait'](rf'\[spindle.capture.saved\] task={ready[1]} sequence={ready[2]} epoch={ready[3]} bytes=(\d+) path_prefix=/shot.png path_bytes=9 synced=1 released=1',start,240)
   g['wait'](rf'\[display.capture.released\] target=12 task={ready[1]} sequence={ready[2]} scrubbed=1',start,60)
   assert 'KERNEL PANIC'not in text()and 'serial.record.overflow'not in text()
   proof=dict(ok=True,mode=a.resolution,epoch=int(ready[3]),generation=int(ready[4]),png_bytes=int(saved[1]),iso_sha256=sha(a.iso),capture_runner_sha256=sha(Path(__file__)),helper_sha256=sha(ROOT/'scripts/quil_autosave_gate.py'),extractor_source_sha256=sha(ROOT/'scripts/sexfs_extract.rs'),fs_source_sha256=sha(ROOT/'crates/sexfs/src/lib.rs'),dynamic_reference=dict(frame=153,x=x,y=y,w=w,h=h,bar_h=bar,padding=8))
