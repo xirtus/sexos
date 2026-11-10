@@ -1,0 +1,192 @@
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -25751,36 +25751,56 @@
+ static __exception int js_parse_expr_binary(JSParseState *s, int level,
+                                             int parse_flags)
+ {
+-    int op, opcode;
+-
+-    if (level == 0) {
+-        return js_parse_unary(s, PF_POW_ALLOWED);
+-    } else if (s->token.val == TOK_PRIVATE_NAME &&
+-               (parse_flags & PF_IN_ACCEPTED) && level == 4 &&
+-               peek_token(s, false) == TOK_IN) {
++    /* Precedence is bounded to eight levels. Keep their continuations in the
++       parser's own frame instead of multiplying C/Wasm calls for every nested
++       expression. Unary/assignment recursion and the runtime guards remain. */
++    enum { BINARY_ENTER, BINARY_LOOP, BINARY_RIGHT, BINARY_PRIVATE };
++    struct BinaryFrame {
++        int level, state, opcode;
+         JSAtom atom;
+-        atom = JS_DupAtom(s->ctx, s->token.u.ident.atom);
+-        if (next_token(s))
+-            goto fail_private_in;
+-        if (s->token.val != TOK_IN)
+-            goto fail_private_in;
+-        if (next_token(s))
+-            goto fail_private_in;
+-        if (js_parse_expr_binary(s, level - 1, parse_flags)) {
+-        fail_private_in:
+-            JS_FreeAtom(s->ctx, atom);
+-            return -1;
+-        }
+-        emit_op(s, OP_scope_in_private_field);
+-        emit_atom(s, atom);
+-        emit_u16(s, s->cur_func->scope_level);
+-        JS_FreeAtom(s->ctx, atom);
+-        return 0;
+-    } else {
+-        if (js_parse_expr_binary(s, level - 1, parse_flags))
+-            return -1;
+-    }
+-    for(;;) {
++    } frames[9] = {{ level, BINARY_ENTER, 0, JS_ATOM_NULL }};
++    int depth = 0, op, opcode, i;
++    struct BinaryFrame *f;
++
++    if ((unsigned)level > 8)
++        abort();
++    for (;;) {
++        f = &frames[depth];
++        level = f->level;
++        if (f->state == BINARY_ENTER) {
++            if (level == 0) {
++                if (js_parse_unary(s, PF_POW_ALLOWED))
++                    goto fail;
++                goto parsed_level;
++            }
++            if (s->token.val == TOK_PRIVATE_NAME &&
++                (parse_flags & PF_IN_ACCEPTED) && level == 4 &&
++                peek_token(s, false) == TOK_IN) {
++                f->atom = JS_DupAtom(s->ctx, s->token.u.ident.atom);
++                f->state = BINARY_PRIVATE;
++                if (next_token(s))
++                    goto fail;
++                if (s->token.val != TOK_IN)
++                    goto fail;
++                if (next_token(s))
++                    goto fail;
++            } else {
++                f->state = BINARY_LOOP;
++            }
++            goto parse_lower;
++        }
++        if (f->state == BINARY_PRIVATE) {
++            emit_op(s, OP_scope_in_private_field);
++            emit_atom(s, f->atom);
++            emit_u16(s, s->cur_func->scope_level);
++            JS_FreeAtom(s->ctx, f->atom);
++            f->atom = JS_ATOM_NULL;
++            goto parsed_level;
++        }
++        if (f->state == BINARY_RIGHT) {
++            emit_op(s, f->opcode);
++            f->state = BINARY_LOOP;
++        }
+         op = s->token.val;
+         switch(level) {
+         case 1:
+@@ -25795,7 +25815,7 @@
+                 opcode = OP_mod;
+                 break;
+             default:
+-                return 0;
++                goto parsed_level;
+             }
+             break;
+         case 2:
+@@ -25807,7 +25827,7 @@
+                 opcode = OP_sub;
+                 break;
+             default:
+-                return 0;
++                goto parsed_level;
+             }
+             break;
+         case 3:
+@@ -25822,7 +25842,7 @@
+                 opcode = OP_shr;
+                 break;
+             default:
+-                return 0;
++                goto parsed_level;
+             }
+             break;
+         case 4:
+@@ -25846,11 +25866,11 @@
+                 if (parse_flags & PF_IN_ACCEPTED) {
+                     opcode = OP_in;
+                 } else {
+-                    return 0;
++                    goto parsed_level;
+                 }
+                 break;
+             default:
+-                return 0;
++                goto parsed_level;
+             }
+             break;
+         case 5:
+@@ -25868,7 +25888,7 @@
+                 opcode = OP_strict_neq;
+                 break;
+             default:
+-                return 0;
++                goto parsed_level;
+             }
+             break;
+         case 6:
+@@ -25877,7 +25897,7 @@
+                 opcode = OP_and;
+                 break;
+             default:
+-                return 0;
++                goto parsed_level;
+             }
+             break;
+         case 7:
+@@ -25886,7 +25906,7 @@
+                 opcode = OP_xor;
+                 break;
+             default:
+-                return 0;
++                goto parsed_level;
+             }
+             break;
+         case 8:
+@@ -25895,18 +25915,28 @@
+                 opcode = OP_or;
+                 break;
+             default:
+-                return 0;
++                goto parsed_level;
+             }
+             break;
+         default:
+             abort();
+         }
+         if (next_token(s))
+-            return -1;
++            goto fail;
+         emit_source_loc(s);
+-        if (js_parse_expr_binary(s, level - 1, parse_flags))
+-            return -1;
+-        emit_op(s, opcode);
+-    }
+-    return 0;
++        f->opcode = opcode;
++        f->state = BINARY_RIGHT;
++    parse_lower:
++        ++depth;
++        frames[depth] = (struct BinaryFrame){ level - 1, BINARY_ENTER, 0, JS_ATOM_NULL };
++        continue;
++    parsed_level:
++        if (depth == 0)
++            return 0;
++        --depth;
++    }
++ fail:
++    for (i = 0; i <= depth; ++i)
++        JS_FreeAtom(s->ctx, frames[i].atom);
++    return -1;
+ }
