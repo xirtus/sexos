@@ -1461,13 +1461,16 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             let arg1: u64 = 0;
             let arg2: u64 = 0;
             // With text, a real notification: "summary | body" splits at the bar.
-            let (status, _) = if args.is_empty() { unsafe { pdx_call(SLOT_BELL, OP_BELL_NOTIFY, arg0, arg1, arg2) } } else {
+            // The structured event always goes to Bell's lanes; text also
+            // becomes a desktop notification.
+            let (mut status, _) = unsafe { pdx_call(SLOT_BELL, OP_BELL_NOTIFY, arg0, arg1, arg2) };
+            if !args.is_empty() {
                 let (summary, body) = match args.iter().position(|b| *b == b'|') {
                     Some(i) => (args[..i].trim_ascii(), args[i + 1..].trim_ascii()),
                     None => (args, &[][..]),
                 };
-                (if sex_pdx::notify::post(summary, body, sex_pdx::notify::URGENCY_NORMAL) { 0 } else { 1 }, 0)
-            };
+                if status == 0 && !sex_pdx::notify::post(summary, body, sex_pdx::notify::URGENCY_NORMAL) { status = 1; }
+            }
             if args.is_empty() {
                 sb.push(b"Notification sent (no message text).");
                 sb.push(b"Use: notify <your message here>");
