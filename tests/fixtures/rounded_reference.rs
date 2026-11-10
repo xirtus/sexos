@@ -27,8 +27,10 @@ fn reference_composite_pixel_selected(x:usize,y:usize,w:usize,h:usize,bg:u32,foc
  // Independent comparison sort over literal builtin precedence and immutable
  // catalog data; do not use the production lookup table/key/row iterator.
  let priority=|s:&Surface|{
-  let rank=if s.surface_id==200{0}else if let Some(index)=app_catalog::INCARNATIONS.iter().position(|row|row.frame()==s.surface_id||row.surface==s.surface_id||row.children.contains(&s.surface_id)){1+index}
-   else if let Some(index)=[202,203,204,103,102,101,100].iter().position(|id|*id==s.surface_id){1+app_catalog::COUNT+index}else{usize::MAX};
+  let rank=if s.surface_id==200&&s.owner_pd==3{0}else if let Some(index)=app_catalog::INCARNATIONS.iter().position(|row|
+   (row.frame()==s.surface_id && s.owner_pd==if row.shell_surface.is_some(){3}else{row.target})
+    ||((row.surface==s.surface_id||row.children.contains(&s.surface_id))&&s.owner_pd==row.target)){1+index}
+   else if let Some(index)=[202,203,204,103,102,101,100].iter().position(|id|*id==s.surface_id&&(s.owner_pd==3||(100..=103).contains(id))){1+app_catalog::COUNT+index}else{usize::MAX};
   (if s.owner_pd==3&&s.surface_id==152{0}else if s.surface_id==focused{1}else{2},rank,s.surface_id)
  };
  let mut owners:Vec<_>=SURFACES.iter().filter(|s|s.active&&FRAME_GROUPS.independent(s)).collect();

@@ -67,7 +67,28 @@ const fn ranks() -> [u16; max_id() + 1] {
     }
     result
 }
+const fn owners() -> [u32; max_id() + 1] {
+    let mut result = [u32::MAX; max_id() + 1];
+    let mut i = 0;
+    while i < BUILTINS.len() {
+        // Legacy 100..103 are explicitly owned/mapped standalone descriptors;
+        // their creator is checked by admission/held Shell state, not this rank.
+        result[BUILTINS[i] as usize] = if BUILTINS[i] >= 100 && BUILTINS[i] <= 103 { 0 } else { 3 };
+        i += 1;
+    }
+    i = 0;
+    while i < crate::app_catalog::COUNT {
+        let row = &crate::app_catalog::INCARNATIONS[i];
+        result[row.frame() as usize] = if row.shell_surface.is_some() { 3 } else { row.target };
+        result[row.surface as usize] = row.target;
+        let mut j = 0;
+        while j < row.children.len() { result[row.children[j] as usize] = row.target; j += 1; }
+        i += 1;
+    }
+    result
+}
 static RANKS: [u16; max_id() + 1] = ranks();
+static OWNERS: [u32; max_id() + 1] = owners();
 pub fn rank(surface: u64) -> Option<u16> {
     RANKS.get(usize::try_from(surface).ok()?).copied().filter(|rank| *rank != u16::MAX)
 }
@@ -76,7 +97,8 @@ pub fn rank(surface: u64) -> Option<u16> {
 pub fn key(focus: u64, owner: u32, surface: u64) -> (u8, u16, u64) {
     if owner == 3 && surface == 152 { return (0, 0, surface); }
     if surface == focus { return (1, 0, surface); }
-    (2, rank(surface).unwrap_or(u16::MAX), surface)
+    let rank = rank(surface).filter(|_| OWNERS.get(surface as usize).is_some_and(|expected| *expected == 0 || *expected == owner));
+    (2, rank.unwrap_or(u16::MAX), surface)
 }
 /// Catalog association only. The caller still has to attest the exact live
 /// registration and an actual parent frame before using this as a focus alias.

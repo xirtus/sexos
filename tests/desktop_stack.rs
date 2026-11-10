@@ -21,6 +21,8 @@ use desktop_stack::{FrameFacts,InputFacts,input_allowed};
  assert!(desktop_stack::key(201,3,152)<desktop_stack::key(201,3,201));
  assert!(desktop_stack::key(201,3,201)<desktop_stack::key(201,3,200));
  assert!(desktop_stack::key(0,3,200)<desktop_stack::key(0,3,202));
+ assert!(desktop_stack::key(0,10,156)>desktop_stack::key(0,3,201));
+ assert!(desktop_stack::key(0,8,200)>desktop_stack::key(0,3,202));
  assert!(desktop_stack::key(0,8,800)<desktop_stack::key(0,8,801));
  assert!(desktop_stack::key(201,8,152)>desktop_stack::key(201,3,201));
 }
