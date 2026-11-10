@@ -162,28 +162,30 @@ pub fn reserve_arena(pkey: u8) -> (u64, usize) {
 /// so no page is ever present while they are made (a temporary mapping would be
 /// visible to a program on another core that shares the key). One lock orders makers,
 /// so two cores cannot both create one table.
-pub fn arena_leaf(va: u64, _pkey: u8) -> Option<u64> {
+pub fn arena_leaf(va: u64, pkey: u8) -> Option<u64> {
     use x86_64::registers::control::Cr3;
     static MAKE: spin::Mutex<()> = spin::Mutex::new(());
     if let Some(leaf) = existing_leaf_address(va) { return Some(leaf); }
     let _held = MAKE.lock();
     let hhdm = crate::HHDM_REQUEST.response()?.offset;
     // Present, writable, user: the leaf alone decides access and carries the key.
-    const LINK: u64 = 0b111;
+    // A row on the shared key takes turns by its spans' user bit, which only
+    // `program_tenancy` sets: a span is made closed.
     let mut table = Cr3::read().0.start_address().as_u64();
     for shift in [39, 30, 21] {
+        let link: u64 = if shift == 21 && pkey == sex_pdx::organs::SHARED_PROGRAM_KEY { 0b011 } else { 0b111 };
         let slot = (hhdm + table + ((va >> shift) & 511) * 8) as *mut u64;
         let mut entry = unsafe { core::ptr::read_volatile(slot) };
         if entry & 1 == 0 {
             let frame = crate::memory::allocator::GLOBAL_ALLOCATOR.alloc(0)?;
             zero_frame(frame);
-            entry = frame | LINK;
+            entry = frame | link;
             unsafe { core::ptr::write_volatile(slot, entry); }
         }
         if entry & (1 << 7) != 0 { return None; }
-        if entry & LINK != LINK {
+        if entry & link != link {
             // A kernel mapping made this table; user and write here only let the leaf decide.
-            entry |= LINK;
+            entry |= link;
             unsafe { core::ptr::write_volatile(slot, entry); }
         }
         table = entry & 0x000f_ffff_ffff_f000;
@@ -207,7 +209,13 @@ pub(crate) fn zero_frame(frame: u64) {
 
 fn alias(pd: &ProtectionDomain, physical: u64, length: u64, writable: bool, mmio: bool) -> u64 {
     require_boot();
-    let va = crate::memory::va_allocator::allocate_va(length as usize).expect("BOOT_REGION_NO_VA");
+    // A row that takes turns on the shared key gets whole 2 MiB spans to itself, so
+    // one page-directory entry can open and close the region (`program_tenancy`).
+    let va = if crate::program_tenancy::shared(pd.id) {
+        let span = crate::program_tenancy::SPAN;
+        let va = crate::memory::va_allocator::allocate_va((length.next_multiple_of(span) + span) as usize).expect("BOOT_REGION_NO_VA");
+        va.next_multiple_of(span)
+    } else { crate::memory::va_allocator::allocate_va(length as usize).expect("BOOT_REGION_NO_VA") };
     let mut flags = PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE | PageTableFlags::NO_EXECUTE;
     if writable { flags |= PageTableFlags::WRITABLE; }
     if mmio { flags |= PageTableFlags::NO_CACHE | PageTableFlags::WRITE_THROUGH; }
@@ -780,6 +788,18 @@ pub fn init_paging(pager_pd: u32, client_pds: [u32; 2]) {
     assert!(pager.find_capability(sex_pdx::paging::SLOT_FRAME_POOL as u32).is_none(),"PAGING_BOOT_SLOT_OCCUPIED");
     pager.grant_capability(sex_pdx::paging::SLOT_FRAME_POOL,CapabilityData::FramePool(pool));
     crate::paging::initialize(pool,mappings,pager_pd,pkeys,physical,leaves);
+}
+
+/// The page-directory entry over `address`'s 2 MiB span, if its page table exists.
+pub(crate) fn span_entry(address: u64) -> Option<u64> {
+    existing_leaf_address(address)?;
+    use x86_64::registers::control::Cr3;
+    let hhdm = crate::HHDM_REQUEST.response()?.offset;
+    let mut table = Cr3::read().0.start_address().as_u64();
+    for shift in [39,30] {
+        table = unsafe { core::ptr::read_volatile((hhdm + table + ((address >> shift)&511)*8) as *const u64) } & 0x000f_ffff_ffff_f000;
+    }
+    Some(hhdm + table + ((address >> 21)&511)*8)
 }
 
 pub(crate) fn existing_leaf_address(address: u64) -> Option<u64> {
