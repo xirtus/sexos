@@ -199,7 +199,9 @@ fn settings() -> &'static mut Mixer { unsafe { &mut *core::ptr::addr_of_mut!(MIX
 fn master_gain() -> u32 { let m = settings(); if m.muted { 0 } else { mixer::master_gain(m.master) } }
 
 #[derive(Clone, Copy)]
-struct Stream { ring: ring::Ring, active: bool, pd: u32 }
+/// A program's stream; `frac` is where between two of its frames the next output
+/// falls when it is not at 48 kHz (1/65536 of a frame).
+struct Stream { ring: ring::Ring, active: bool, pd: u32, frac: u32 }
 
 #[derive(Clone, Copy)]
 struct Note { hz: u32, frames: u32, volume: u16 }
@@ -310,11 +312,16 @@ impl Player {
                 r.store(ring::PLAYED, r.load(ring::PLAYED) + (skip - taken));
                 taken = skip;
                 r.store(ring::TAKEN, taken);
+                st.frac = 0;
             }
             if r.load(ring::PAUSED) != 0 { continue; }
             // A program owns only its own ring: a counter it bent is clamped, not trusted.
             let have = written.saturating_sub(taken).min(ring::FRAMES) as usize;
-            if hold && have < PERIOD_FRAMES && r.load(ring::OPEN) != 0 { continue; }
+            let rate = crate::resample::rate_of(r.load(ring::RATE_HZ));
+            let step = crate::resample::step(rate);
+            // Input a whole period needs: its frames at the program's rate, and one to blend.
+            let need = if rate == crate::resample::OUT_RATE { PERIOD_FRAMES } else { ((PERIOD_FRAMES as u64 * step + st.frac as u64) >> 16) as usize + 2 };
+            if hold && have < need && r.load(ring::OPEN) != 0 { continue; }
             let n = have.min(PERIOD_FRAMES);
             // A muted program's sound is taken and counted as played, so its clock
             // runs on, but not heard.
@@ -325,15 +332,25 @@ impl Player {
                 (r.load(ring::VOLUME).min(100) * m.rows[i] as u64 * master as u64 / 10_000) as i64
             };
             let frames = r.frames();
-            for f in 0..n {
-                let at = ((taken + f as u64) % ring::FRAMES) as usize;
-                let [l, rr] = unsafe { core::ptr::read_volatile(frames.add(at)) };
-                mix[f][0] += (l as i64 * gain >> 16) as i32;
-                mix[f][1] += (rr as i64 * gain >> 16) as i32;
-            }
-            r.store(ring::TAKEN, taken + n as u64);
-            self.took[slot][i] = n as u16;
-            if n == 0 && r.load(ring::OPEN) == 0 {
+            let read = |f: usize| unsafe { core::ptr::read_volatile(frames.add(((taken + f as u64) % ring::FRAMES) as usize)) };
+            // Frames of the program's taken, and frames of the mix made.
+            let (used, made) = if rate == crate::resample::OUT_RATE {
+                for (f, out) in mix.iter_mut().enumerate().take(n) {
+                    let [l, rr] = read(f);
+                    out[0] += (l as i64 * gain >> 16) as i32;
+                    out[1] += (rr as i64 * gain >> 16) as i32;
+                }
+                (n, n)
+            } else {
+                let made = crate::resample::outputs(have, st.frac, step, PERIOD_FRAMES);
+                let (used, frac) = crate::resample::mix_into(&mut mix[..], made, st.frac, step, gain, read);
+                st.frac = frac;
+                // A closed stream's last frame has no next to blend with: it is done.
+                if made == 0 && r.load(ring::OPEN) == 0 { st.frac = 0; (have, 0) } else { (used, made) }
+            };
+            r.store(ring::TAKEN, taken + used as u64);
+            self.took[slot][i] = used as u16;
+            if made == 0 && r.load(ring::OPEN) == 0 {
                 st.active = false;
                 sex_pdx::serial_record!("[bell.sound.stream.closed] row={} taken={}", i, taken);
             }
@@ -466,7 +483,7 @@ pub fn stream(caller: u32) -> bool {
     let Some(k) = ring::index_of(caller).filter(|k| *k < STREAMS) else { return false };
     if p.streams[k].is_none() {
         match sex_pdx::sound_ring_bell(k) {
-            Ok(r) => p.streams[k] = Some(Stream { ring: r, active: false, pd: caller }),
+            Ok(r) => p.streams[k] = Some(Stream { ring: r, active: false, pd: caller, frac: 0 }),
             Err(e) => { sex_pdx::serial_record!("[bell.sound.stream.denied] row={} err={}", k, e); return false; }
         }
     }

@@ -55,6 +55,8 @@ jobs:
       run: bash scripts/raid_host_gate.sh
     - name: Hardware census table (names, owners, VMD warning) on the host
       run: bash scripts/hwdb_host_gate.sh
+    - name: Bell sound rate conversion on the host
+      run: bash scripts/sound_host_gate.sh
     - name: Fetch crates for offline host gates
       run: cargo fetch --locked
     - name: Intel Wi-Fi driver core (crypto vectors, handshakes, firmware files, power-up)
