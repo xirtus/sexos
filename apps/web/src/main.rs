@@ -800,7 +800,12 @@ impl Browser {
             for url in need {
                 if script.page().modules.len() >= MAX_MODULES { return; }
                 self.status = Some("Loading scripts…");
-                let body = if url.starts_with("http") { self.fetch_up_to(&url, SCRIPT_MAX).ok().map(|(_, b)| text_of(&self.buf[b])) } else { None };
+                let body = if url.starts_with("http") {
+                    self.fetch_up_to(&url, SCRIPT_MAX).ok().map(|(final_url, b)| {
+                        script.page_mut().keep_source_policy(&url, &final_url);
+                        text_of(&self.buf[b])
+                    })
+                } else { None };
                 self.buf = Vec::new();
                 sex_pdx::serial_record!("[web.module] ok={} bytes={} url={}", body.is_some() as u8, body.as_ref().map_or(0, |b| b.len()), url);
                 // A failed one is still recorded, so it is not asked for again.

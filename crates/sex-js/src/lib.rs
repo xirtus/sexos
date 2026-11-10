@@ -99,6 +99,8 @@ pub mod op {
     /// (connected classic script node): queue a resource for host evaluation.
     /// Its body never enters the page-readable fetch response store.
     pub const CLASSIC_SCRIPT: u32 = 71;
+    /// (source URL): trusted host provenance, "1" for opaque/unknown, else "0".
+    pub const SOURCE_MUTED: u32 = 72;
     /// (id): the loaded bytes, once (text or, with bit 16, an ArrayBuffer).
     pub const FETCH_BODY: u32 = 67;
     /// (id): the reply's final address, a newline, then its headers as `name: value`

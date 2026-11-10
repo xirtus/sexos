@@ -21,6 +21,16 @@ int sexos_baseline_jit_enabled;
 static JSRuntime *rt;
 static JSContext *ctx;
 static int64_t deadline_ns;
+/* Per-Wasm-instance source policy, inherited by compiled function metadata. */
+int sexos_compile_origin = -1;
+int sexos_opaque_source_seen;
+/* Per-VM ambient callback/job provenance: -1 unknown, 0 owned, 1 muted.
+   Every native callback/job scope restores its previous value before returning. */
+int sexos_job_muted = -1;
+extern int sexos_promise_flags(JSValueConst promise);
+static JSValue rejection_handler = JS_UNDEFINED;
+static void report(void);
+
 
 static int64_t now_ns(void) {
     struct timespec ts;
@@ -105,6 +115,39 @@ static char *host_text(int op, const char *a, size_t al, const char *b, size_t b
     return out;
 }
 
+#define OP_SOURCE_MUTED 72
+static int source_muted(const char *name, size_t len) {
+    size_t n = 0;
+    char *policy = host_text(OP_SOURCE_MUTED, name, len, NULL, 0, &n);
+    int muted = !policy || n != 1 || policy[0] != '0';
+    free(policy);
+    if (muted) sexos_opaque_source_seen = 1;
+    return muted;
+}
+static JSValue promise_setup(JSContext *c, JSValueConst self, int argc, JSValueConst *argv) {
+    (void)self;
+    if (!JS_IsUndefined(rejection_handler) || argc != 1 || !JS_IsFunction(c, argv[0]))
+        return JS_ThrowTypeError(c, "invalid promise event registration");
+    rejection_handler = JS_DupValue(c, argv[0]);
+    return JS_UNDEFINED;
+}
+static JSValue promise_flags(JSContext *c, JSValueConst self, int argc, JSValueConst *argv) {
+    (void)self;
+    return JS_NewInt32(c, argc ? sexos_promise_flags(argv[0]) : 3);
+}
+static JSValue checkpoint_empty(JSContext *c, JSValueConst self, int argc, JSValueConst *argv) {
+    (void)self; (void)argc; (void)argv;
+    return JS_NewBool(c, !JS_IsJobPending(rt));
+}
+static void promise_tracker(JSContext *c, JSValueConst promise, JSValueConst reason, bool handled, void *opaque) {
+    (void)opaque;
+    if (c != ctx || JS_IsUndefined(rejection_handler) || (sexos_promise_flags(promise) & 2)) return;
+    JSValueConst args[] = { promise, reason, handled ? JS_TRUE : JS_FALSE };
+    JSValue result = JS_Call(c, rejection_handler, JS_UNDEFINED, 3, args);
+    if (JS_IsException(result)) report();
+    JS_FreeValue(c, result);
+}
+
 static char *module_normalize(JSContext *c, const char *base, const char *name, void *opaque) {
     (void)opaque;
     size_t n;
@@ -126,7 +169,10 @@ static JSModuleDef *module_load(JSContext *c, const char *name, void *opaque) {
         src = calloc(1, 1);
         if (!src) return NULL;
     }
+    int previous_origin = sexos_compile_origin;
+    sexos_compile_origin = source_muted(name, strlen(name));
     JSValue f = JS_Eval(c, src, n, name, JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
+    sexos_compile_origin = previous_origin;
     free(src);
     if (JS_IsException(f)) return NULL;
     JSModuleDef *m = JS_VALUE_GET_PTR(f);
@@ -227,12 +273,16 @@ EXPORT("sx_init") int sx_init(int memory_limit) {
     if (memory_limit > 0) JS_SetMemoryLimit(rt, (size_t)memory_limit);
     JS_SetMaxStackSize(rt, 256 * 1024);
     JS_SetInterruptHandler(rt, interrupt, NULL);
+    JS_SetHostPromiseRejectionTracker(rt, promise_tracker, NULL);
     JS_SetModuleLoaderFunc(rt, module_normalize, module_load, NULL);
     js_dynamic_import_hook = hold_import;
     ctx = JS_NewContext(rt);
     if (!ctx) return -1;
     JSValue global = JS_GetGlobalObject(ctx);
     JS_SetPropertyStr(ctx, global, "__host", JS_NewCFunction(ctx, js_host, "__host", 1));
+    JS_SetPropertyStr(ctx, global, "__sx_promise_setup", JS_NewCFunction(ctx, promise_setup, "promise setup", 1));
+    JS_SetPropertyStr(ctx, global, "__sx_promise_flags", JS_NewCFunction(ctx, promise_flags, "promise flags", 1));
+    JS_SetPropertyStr(ctx, global, "__sx_checkpoint_empty", JS_NewCFunction(ctx, checkpoint_empty, "checkpoint empty", 0));
     JS_FreeValue(ctx, global);
     return 0;
 }
@@ -295,7 +345,11 @@ EXPORT("sx_eval") int sx_eval(const char *src, int len, const char *name, int na
     if (!code) return -1;
     memcpy(code, src, (size_t)len); code[len] = 0;
     deadline_ns = budget_ms > 0 ? now_ns() + (int64_t)budget_ms * 1000000 : 0;
+    int previous_origin = sexos_compile_origin;
+    sexos_compile_origin = error_mode ? error_mode == 2 : source_muted(name, (size_t)name_len);
+    if (sexos_compile_origin) sexos_opaque_source_seen = 1;
     JSValue v = JS_Eval(ctx, code, (size_t)len, file, JS_EVAL_TYPE_GLOBAL);
+    sexos_compile_origin = previous_origin;
     free(code);
     int ok = 0;
     if (JS_IsException(v)) { if (error_mode) report_script(error_mode); else report(); ok = -1; }
@@ -316,6 +370,8 @@ EXPORT("sx_module") int sx_module(const char *src, int len, const char *name, in
     memcpy(file, name, (size_t)name_len); file[name_len] = 0;
     memcpy(code, src, (size_t)len); code[len] = 0;
     deadline_ns = budget_ms > 0 ? now_ns() + (int64_t)budget_ms * 1000000 : 0;
+    int previous_origin = sexos_compile_origin;
+    sexos_compile_origin = source_muted(file, (size_t)name_len);
     int ok = 0;
     if (discover) {
         JSContext *t = JS_NewContext(rt);
@@ -352,6 +408,7 @@ EXPORT("sx_module") int sx_module(const char *src, int len, const char *name, in
         }
         JS_FreeValue(ctx, v);
     }
+    sexos_compile_origin = previous_origin;
     free(file);
     free(code);
     run_jobs();
@@ -373,6 +430,13 @@ EXPORT("sx_dispatch") int sx_dispatch(const char *arg, int len, int budget_ms) {
         JS_FreeValue(ctx, r);
         JS_FreeValue(ctx, a);
         run_jobs();
+        if (len == 4 && !memcmp(arg, "tick", 4)) {
+            JSValue query = JS_NewString(ctx, "next-timer");
+            JSValue next = JS_Call(ctx, fn, global, 1, &query);
+            if (JS_IsException(next)) { report(); out = -1; }
+            else JS_ToInt32(ctx, &out, next);
+            JS_FreeValue(ctx, next); JS_FreeValue(ctx, query);
+        }
         deadline_ns = 0;
     }
     JS_FreeValue(ctx, fn);
