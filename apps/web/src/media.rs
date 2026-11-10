@@ -49,14 +49,20 @@ pub struct Media {
     pub size: (usize, usize),
     /// Pictures shown, for logs and tests.
     pub frames: u32,
+    /// The page feeds this element through a MediaSource.
+    pub mse: Option<crate::mse::Mse>,
+    /// The picture size became known while playing on (lay the page out again).
+    pub resized: bool,
 }
 
 impl Media {
     pub fn new(dom: &Dom, node: NodeId) -> Media {
         let audio = dom.tag(node) == Some("audio");
         let src = source(dom, node);
+        // A MediaSource's object URL is not loaded: the page attaches it ("mse").
+        let waits = !src.is_empty() && !src.starts_with("blob:");
         Media {
-            node, audio, state: if src.is_empty() { State::Empty } else { State::Waiting }, src, player: None,
+            node, audio, state: if waits { State::Waiting } else { State::Empty }, src, player: None, mse: None, resized: false,
             want_play: dom.attr(node, "autoplay").is_some(), looped: dom.attr(node, "loop").is_some(),
             controls: dom.attr(node, "controls").is_some(), muted: dom.attr(node, "muted").is_some(), volume: 100,
             events: Vec::new(), last_report: 0, size: (0, 0), frames: 0,
@@ -78,22 +84,30 @@ impl Media {
                 self.events.push("error");
                 false
             }
-            Ok(dec) => {
-                let info = dec.info.clone();
-                let (w, h) = if self.audio { (0, 0) } else { sex_media::fit(info.width as usize, info.height as usize, MAX_W, MAX_H) };
-                let mut player = Player::new(dec, w, h, true, !self.want_play);
-                player.set_volume(self.volume);
-                player.set_muted(self.muted);
-                sex_pdx::serial_record!("[web.media.opened] node={} format={} video={} audio={} w={} h={} ms={} sound={}",
-                    self.node, info.format, info.video_codec, info.audio_codec, w, h, info.duration_ms, player.has_sound() as u8);
-                self.size = player.size();
-                self.player = Some(player);
-                self.state = State::Ready;
-                self.events.extend_from_slice(&["durationchange", "loadedmetadata", "loadeddata", "canplay", "canplaythrough"]);
-                if self.want_play { self.events.extend_from_slice(&["play", "playing"]); }
-                self.size.0 > 0
-            }
+            Ok(dec) => self.start(dec, None),
         }
+    }
+
+    /// Plays `dec` (and `sound`, a separate sound stream, if any). True when the
+    /// picture size became known.
+    fn start(&mut self, dec: Decoder, sound: Option<Decoder>) -> bool {
+        let info = dec.info.clone();
+        let (w, h) = if self.audio { (0, 0) } else { sex_media::fit(info.width as usize, info.height as usize, MAX_W, MAX_H) };
+        let mut player = match sound {
+            Some(s) => Player::pair(dec, s, w, h, true, !self.want_play),
+            None => Player::new(dec, w, h, true, !self.want_play),
+        };
+        let info = player.info().clone();
+        player.set_volume(self.volume);
+        player.set_muted(self.muted);
+        sex_pdx::serial_record!("[web.media.opened] node={} format={} video={} audio={} w={} h={} ms={} sound={}",
+            self.node, info.format, info.video_codec, info.audio_codec, w, h, info.duration_ms, player.has_sound() as u8);
+        self.size = player.size();
+        self.player = Some(player);
+        self.state = State::Ready;
+        self.events.extend_from_slice(&["durationchange", "loadedmetadata", "loadeddata", "canplay", "canplaythrough"]);
+        if self.want_play { self.events.extend_from_slice(&["play", "playing"]); }
+        self.size.0 > 0
     }
 
     /// Carries out a script's request. True if the element must be loaded (again).
@@ -130,6 +144,24 @@ impl Media {
                 self.events.push("volumechange");
             }
             "loop" => self.looped = arg == "1",
+            "mse" => {
+                self.player = None;
+                self.mse = Some(crate::mse::Mse::new());
+                self.state = State::Empty;
+                self.events.push("emptied");
+            }
+            "add" | "duration" | "end" | "reopen" | "remove" | "drop" => {
+                let node = self.node;
+                let Some(m) = self.mse.as_mut() else { return false };
+                match verb {
+                    "add" => m.add(arg),
+                    "duration" => { m.duration = arg.parse().unwrap_or(f64::NAN); self.events.push("durationchange"); }
+                    "end" => m.end(),
+                    "reopen" => m.reopen(),
+                    "remove" => m.remove(node, arg),
+                    _ => if let Some(b) = arg.parse::<usize>().ok().and_then(|i| m.buffers.get_mut(i)) { b.dropped = true; },
+                }
+            }
             "load" => {
                 self.player = None;
                 self.src = source(dom, self.node);
@@ -146,6 +178,19 @@ impl Media {
     /// Plays on: shows what is due into the page picture. Returns whether the picture
     /// changed and how soon to come back (None: nothing to do until something happens).
     pub fn step(&mut self, fonts: &mut Fonts) -> (bool, Option<u64>) {
+        if self.player.is_none() && self.state != State::Failed && self.mse.as_ref().is_some_and(|m| m.openable()) {
+            match self.mse.as_ref().unwrap().decoders() {
+                Ok((Some(v), a)) => self.resized |= self.start(v, a),
+                Ok((None, Some(a))) => self.resized |= self.start(a, None),
+                Ok((None, None)) => {}
+                Err(e) => {
+                    let mut text = [0u8; 80];
+                    sex_pdx::serial_record!("[web.mse.failed] node={} err={} why={}", self.node, e.0, e.text(&mut text));
+                    self.state = State::Failed;
+                    self.events.push("error");
+                }
+            }
+        }
         let name = self.picture_name();
         let controls = self.controls;
         let Some(p) = self.player.as_mut() else { return (false, None) };

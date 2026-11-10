@@ -15,6 +15,7 @@
 extern crate alloc;
 
 mod media;
+mod mse;
 
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -602,7 +603,8 @@ impl Browser {
     /// Takes the page's requests to its video and audio elements.
     fn media_requests(&mut self) {
         let asked = core::mem::take(&mut self.doc.get().media);
-        if asked.is_empty() { return; }
+        let appends = core::mem::take(&mut self.doc.get().media_bytes);
+        if asked.is_empty() && appends.is_empty() { return; }
         for (node, verb, arg) in asked {
             let dom = &self.doc.get().dom;
             let i = match self.media.iter().position(|m| m.node == node) {
@@ -612,6 +614,11 @@ impl Browser {
             if verb == "play" { self.hush_media(i); }
             let dom = &self.doc.get().dom;
             self.media[i].request(dom, &verb, &arg);
+        }
+        for (node, index, bytes) in appends {
+            let Some(m) = self.media.iter_mut().find(|m| m.node == node) else { continue };
+            let Some(mse) = m.mse.as_mut() else { continue };
+            mse.append(node, index as usize, &bytes);
         }
         self.media_asked = true;
         self.timer = Some(sex_pdx::get_ticks());
@@ -643,6 +650,9 @@ impl Browser {
             let (drew, wait) = m.step(&mut self.fonts);
             if drew { changed.push(m.picture_name()); }
             if let Some(w) = wait { next = Some(next.map_or(w, |n| n.min(w))); }
+            relayout |= core::mem::take(&mut m.resized);
+            // A MediaSource still filling: look again soon.
+            if m.player.is_none() && m.mse.is_some() && m.state != media::State::Failed { next = Some(next.map_or(10, |n| n.min(10))); }
         }
         if relayout {
             self.relayout();
@@ -656,7 +666,11 @@ impl Browser {
             }
         }
         // Tell the page, which may answer by changing it.
-        let reports: Vec<String> = self.media.iter_mut().filter_map(|m| m.report()).collect();
+        let mut reports: Vec<String> = Vec::new();
+        for m in self.media.iter_mut() {
+            if let Some(mse) = m.mse.as_mut() { reports.append(&mut mse.replies); }
+            if let Some(r) = m.report() { reports.push(r); }
+        }
         if !reports.is_empty() {
             if let Some(script) = self.doc.script() {
                 for r in &reports {

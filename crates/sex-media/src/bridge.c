@@ -65,7 +65,7 @@ static void copy_name(char *to, const char *from) {
     to[15] = 0;
 }
 
-struct sx *sx_open(void *opaque, sx_read_fn rd, sx_seek_fn sk, struct sx_info *info, int *err) {
+struct sx *sx_open(void *opaque, sx_read_fn rd, sx_seek_fn sk, struct sx_info *info, int *err, int growing) {
     av_log_set_level(AV_LOG_ERROR);
     memset(info, 0, sizeof *info);
     struct sx *s = av_mallocz(sizeof *s);
@@ -77,8 +77,14 @@ struct sx *sx_open(void *opaque, sx_read_fn rd, sx_seek_fn sk, struct sx_info *i
     if (!s->io || !s->format) { *err = AVERROR(ENOMEM); sx_close(s); return NULL; }
     s->format->pb = s->io;
     s->format->flags |= AVFMT_FLAG_CUSTOM_IO;
+    // Read a growing stream in order, as from a pipe: then the MP4 parser takes one
+    // fragment at a time instead of indexing every fragment up to the last byte.
+    if (growing) s->io->seekable = 0;
     if ((*err = avformat_open_input(&s->format, NULL, NULL, NULL)) < 0) { s->format = NULL; sx_close(s); return NULL; }
-    if ((*err = avformat_find_stream_info(s->format, NULL)) < 0) { sx_close(s); return NULL; }
+    // A stream still arriving (Media Source, a download: Source::growing) is not probed further: probing
+    // reads ahead until it runs into bytes that have not come yet, and the container
+    // parser loses its place there. Its header (an fMP4 moov) names the codecs.
+    if (!growing && (*err = avformat_find_stream_info(s->format, NULL)) < 0) { sx_close(s); return NULL; }
     const char *vname = NULL, *aname = NULL;
     if ((*err = open_decoder(s, AVMEDIA_TYPE_VIDEO, &s->video, &vname)) < 0) { sx_close(s); return NULL; }
     if ((*err = open_decoder(s, AVMEDIA_TYPE_AUDIO, &s->audio, &aname)) < 0) { sx_close(s); return NULL; }
@@ -172,6 +178,10 @@ int sx_next(struct sx *s, uint32_t *out, int out_w, int out_h, int16_t *pcm, int
         if (s->audio.done && s->video.done) return 0;
         // Both decoders were told the end and neither has a frame left.
         if (s->draining) return 0;
+        // A growing source (Media Source) answers EIO for bytes that have not arrived
+        // yet; FFmpeg's probing runs into that at open. The player reads on only once
+        // enough has arrived, so forget it and read again.
+        if (s->io->error == AVERROR(EIO) || s->io->eof_reached) { s->io->error = 0; s->io->eof_reached = 0; }
         int r = av_read_frame(s->format, s->packet);
         if (r == AVERROR_EOF || r == AVERROR(EIO)) {
             s->draining = 1;
