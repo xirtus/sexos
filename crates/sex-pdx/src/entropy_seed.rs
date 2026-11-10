@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! Finite private seed custody on an existing held SexNet route. Scalar
 //! selectors, sequence numbers and tickets never create source authority.
 pub use crate::entropy_source::Identity;
