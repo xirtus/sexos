@@ -928,7 +928,7 @@ fn paint_output_batch(fb:*mut u32,w:usize,h:usize,plan:Plan){unsafe{
  let captured=capture_scene(w,h,FOCUSED_SURFACE_ID);
  let mut preparation=store.prepare(plan.is_full()).unwrap();
  {let target=preparation.target();assert!(raster_batch(&target,&captured,plan));}
- assert!(preparation.commit(|pixels|{core::ptr::copy_nonoverlapping(pixels.as_ptr(),fb,pixels.len());true}));
+ assert!(preparation.commit(|frame|{core::ptr::copy_nonoverlapping(frame.pixels.as_ptr(),fb,frame.pixels.len());true}));
  if !plan.settle_only(){report_app_presented();}
  store.scrub();
  // Store drops before OutputBoundary deallocates its mapped lifetime.

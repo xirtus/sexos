@@ -30,24 +30,38 @@ impl Region{
  fn words(&self,index:usize)->&[u32]{unsafe{core::slice::from_raw_parts(self.pointer.add(index*self.layout.span_bytes()as usize)as*const u32,self.layout.span_bytes()as usize/4)}}
 }
 impl Drop for Region{fn drop(&mut self){unsafe{std::alloc::dealloc(self.pointer,self.allocation);}}}
-fn fill(store:&mut Store,value:u32){let mut p=store.prepare(true).unwrap();{let t=p.target();assert_eq!((t.width(),t.height(),t.len()),(19,7,133));for i in 0..t.len(){unsafe{t.pointer().add(i).write(value);}}}assert!(p.commit(|pixels|pixels.iter().all(|&p|p==value)));}
+fn fill(store:&mut Store,value:u32){let mut p=store.prepare(true).unwrap();{let t=p.target();assert_eq!((t.width(),t.height(),t.len()),(19,7,133));for i in 0..t.len(){unsafe{t.pointer().add(i).write(value);}}}assert!(p.commit(|f|f.previous.is_none()&&f.rows==frame_output::Rows{first:0,end:7}&&f.pixels.iter().all(|&p|p==value)));}
 #[test]fn first_partial_refuses_without_mutation_and_full_initializes_then_swaps(){
  let region=Region::new();let mut s=unsafe{Store::new(region.held())};
  assert_eq!(s.layout(),region.layout);assert_eq!(s.generation(),0);assert!(s.front_pixels().is_none());assert!(s.prepare(false).is_none());assert!(region.words(0).iter().chain(region.words(1)).all(|&v|v==0xa5a5a5a5));
- {let p=s.prepare(true).unwrap();assert!(p.commit(|pixels|pixels.len()==133&&pixels.iter().all(|&p|p==0)));}
+ {let p=s.prepare(true).unwrap();assert!(p.commit(|f|f.pixels.len()==133&&f.pixels.iter().all(|&p|p==0)));}
  let first=s.front_pixels().unwrap().as_ptr();assert_eq!(s.generation(),1);
  fill(&mut s,0x12345678);assert_ne!(first,s.front_pixels().unwrap().as_ptr());assert_eq!(s.generation(),2);assert!(region.words(0).iter().all(|&v|v==0));
 }
-#[test]fn partial_copies_entire_front_not_nominal_damage_and_candidate_is_disjoint(){
+#[test]fn partial_starts_equal_to_front_and_reports_only_changed_rows(){
  let region=Region::new();let mut s=unsafe{Store::new(region.held())};fill(&mut s,0x11223344);let front=s.front_pixels().unwrap().as_ptr()as usize;
- let mut p=s.prepare(false).unwrap();{let t=p.target();let candidate=t.pointer()as usize;assert_eq!(candidate.abs_diff(front),region.layout.span_bytes()as usize);unsafe{t.pointer().add(2).write(7);t.pointer().add(t.len()-1).write(9);}}
- assert!(p.commit(|pixels|pixels.iter().enumerate().all(|(i,&v)|v==if i==2{7}else if i==132{9}else{0x11223344})));
+ let mut p=s.prepare(false).unwrap();{let t=p.target();let candidate=t.pointer()as usize;assert_eq!(candidate.abs_diff(front),region.layout.span_bytes()as usize);
+  assert!((0..t.len()).all(|i|unsafe{t.pointer().add(i).read()}==0x11223344),"candidate begins as the front");
+  unsafe{t.pointer().add(2).write(7);t.pointer().add(t.len()-1).write(9);}}
+ assert!(p.commit(|f|f.previous.is_some_and(|old|old.iter().all(|&v|v==0x11223344))&&f.rows==frame_output::Rows{first:0,end:7}
+  &&f.pixels.iter().enumerate().all(|(i,&v)|v==if i==2{7}else if i==132{9}else{0x11223344})));
  assert_eq!(s.generation(),2);assert_eq!(s.front_pixels().unwrap()[132],9);assert!(region.words(0)[..133].iter().all(|&v|v==0x11223344));assert!(region.words(1)[133..].iter().all(|&v|v==0));
+ // Next partial: the lagging span catches up on exactly the changed rows; one changed row is reported.
+ let mut p=s.prepare(false).unwrap();{let t=p.target();assert_eq!(unsafe{t.pointer().add(2).read()},7);assert_eq!(unsafe{t.pointer().add(132).read()},9);unsafe{t.pointer().add(19*3+4).write(5);}}
+ assert!(p.commit(|f|f.rows==frame_output::Rows{first:3,end:4}));
+ let p=s.prepare(false).unwrap();assert!(p.commit(|f|f.rows.is_empty()&&f.previous.is_some()));
+ assert_eq!(s.front_pixels().unwrap()[19*3+4],5);assert_eq!(s.front_pixels().unwrap()[2],7);
+}
+#[test]fn failed_partial_forces_a_full_catch_up(){
+ let region=Region::new();let mut s=unsafe{Store::new(region.held())};fill(&mut s,1);fill(&mut s,2);
+ {let mut p=s.prepare(false).unwrap();let t=p.target();unsafe{t.pointer().write(3);}}
+ let mut p=s.prepare(false).unwrap();{let t=p.target();assert!((0..t.len()).all(|i|unsafe{t.pointer().add(i).read()}==2),"erased candidate recopied in full");}
+ assert!(p.commit(|f|f.rows.is_empty()));
 }
 #[test]fn failed_external_prefix_publish_keeps_old_front_but_external_output_is_uncertain(){
  let region=Region::new();let mut s=unsafe{Store::new(region.held())};fill(&mut s,11);let front=s.front_pixels().unwrap().as_ptr();let mut external=vec![11;133];
  let mut p=s.prepare(true).unwrap();{let t=p.target();for i in 0..t.len(){unsafe{t.pointer().add(i).write(22);}}}
- assert!(!p.commit(|pixels|{external[..5].copy_from_slice(&pixels[..5]);false}));
+ assert!(!p.commit(|f|{external[..5].copy_from_slice(&f.pixels[..5]);false}));
  assert_eq!(&external[..6],&[22,22,22,22,22,11]);assert_eq!(s.generation(),1);assert_eq!(s.front_pixels().unwrap().as_ptr(),front);assert!(s.front_pixels().unwrap().iter().all(|&v|v==11));assert!(region.words(1).iter().all(|&v|v==0));
 }
 #[test]fn abort_and_callback_unwind_scrub_candidate_including_padding(){

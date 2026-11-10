@@ -14,6 +14,19 @@ pub const FOCUS: u32 = 0x00E9D36A;
 pub const OP_TEXT_ZOOM: u64 = 0x2D4;
 /// Steps of zoom either way; the text scale stays within 1..=MAX_TEXT_SCALE.
 pub const MAX_TEXT_SCALE: u32 = 5;
+/// Shell (the window manager) to Display: step the whole screen's scale.
+/// arg0 = +1 larger, -1 (as u64) smaller, 0 back to what BOOT chose for the
+/// screen. Display logs `[display.scale]` with the scale now in force.
+pub const OP_DISPLAY_SCALE: u64 = 0x2D5;
+/// The interface scale in force in this service: 1, or 2 and 3 on HiDPI
+/// screens. Text sizes, the cursor and window chrome multiply by it.
+static UI_SCALE: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(1);
+pub fn ui_scale() -> u32 {
+    UI_SCALE.load(core::sync::atomic::Ordering::Relaxed)
+}
+pub fn set_ui_scale(scale: u32) {
+    UI_SCALE.store(scale.clamp(1, 3), core::sync::atomic::Ordering::Relaxed);
+}
 pub const fn scale(width: u32) -> u32 {
     if width >= 256 {
         2
