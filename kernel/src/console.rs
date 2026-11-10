@@ -94,9 +94,13 @@ struct Screen {
     row: usize,
     col: usize,
     cells: [u8; MAX_COLS * MAX_ROWS],
+    /// TSC before which the log is not drawn again (see `write`).
+    next_draw: u64,
+    /// Text not yet on the screen.
+    dirty: bool,
 }
 static SCREEN: Mutex<Screen> = Mutex::new(Screen {
-    fb: None, scale: 1, cols: 0, rows: 0, top: 1, row: 0, col: 0, cells: [b' '; MAX_COLS * MAX_ROWS],
+    fb: None, scale: 1, cols: 0, rows: 0, top: 1, row: 0, col: 0, cells: [b' '; MAX_COLS * MAX_ROWS], next_draw: 0, dirty: false,
 });
 /// True while the kernel draws its log on the framebuffer.
 static SHOWING: AtomicBool = AtomicBool::new(false);
@@ -112,24 +116,16 @@ impl Screen {
             fb.cell(4 + col as u32 * self.cell_w(), y, self.scale, self.cells[row * MAX_COLS + col], fg, bg);
         }
     }
-    /// A row over background already cleared: blank cells need no drawing.
-    fn draw_row_ink(&self, fb: &Fb, row: usize, fg: u32, bg: u32) {
-        for col in 0..self.cols {
-            let ch = self.cells[row * MAX_COLS + col];
-            if ch != b' ' { fb.cell(4 + col as u32 * self.cell_w(), 4 + row as u32 * self.cell_h(), self.scale, ch, fg, bg); }
-        }
-    }
     fn put_row_text(&mut self, row: usize, text: &[u8]) {
         for col in 0..self.cols {
             self.cells[row * MAX_COLS + col] = *text.get(col).unwrap_or(&b' ');
         }
     }
-    fn newline(&mut self, fb: &Fb) {
+    fn newline(&mut self) {
         self.col = 0;
         self.row += 1;
         if self.row < self.rows { return; }
-        // Keep the newer half and draw the screen again: one redraw per half screen of
-        // lines, instead of moving every pixel up on each line.
+        // Keep the newer half.
         let keep = (self.rows - self.top) / 2;
         for r in self.top..self.rows {
             for c in 0..self.cols {
@@ -137,23 +133,23 @@ impl Screen {
                 self.cells[r * MAX_COLS + c] = if from < self.rows { self.cells[from * MAX_COLS + c] } else { b' ' };
             }
         }
-        let y = 4 + self.top as u32 * self.cell_h();
-        fb.fill(0, y, fb.width, fb.height - y, BOOT_BG);
-        for r in self.top..self.top + keep { self.draw_row_ink(fb, r, BOOT_FG, BOOT_BG); }
         self.row = self.top + keep;
     }
-    fn byte(&mut self, fb: &Fb, b: u8) {
+    /// Lines only change the text; `redraw` puts it on the screen.
+    fn byte(&mut self, b: u8) {
         match b {
-            b'\n' => self.newline(fb),
+            b'\n' => self.newline(),
             b'\r' => self.col = 0,
             _ => {
-                if self.col >= self.cols { self.newline(fb); }
+                if self.col >= self.cols { self.newline(); }
                 self.cells[self.row * MAX_COLS + self.col] = b;
-                let (x, y) = (4 + self.col as u32 * self.cell_w(), 4 + self.row as u32 * self.cell_h());
-                fb.cell(x, y, self.scale, b, BOOT_FG, BOOT_BG);
                 self.col += 1;
             }
         }
+    }
+    /// Row by row, background and text together, so the screen never shows blank.
+    fn redraw(&self, fb: &Fb) {
+        for r in self.top..self.rows { self.draw_row(fb, r, BOOT_FG, BOOT_BG); }
     }
 }
 
@@ -211,6 +207,23 @@ pub fn release() {
 }
 pub fn showing() -> bool { SHOWING.load(Ordering::Acquire) }
 
+/// Drawing every byte cost seconds on a large or uncached framebuffer. The screen is
+/// drawn again only after nine times as long as the last drawing took, so the boot
+/// spends at most a tenth of its time drawing its log.
+fn draw_due(s: &mut Screen, fb: &Fb) {
+    let now = unsafe { core::arch::x86_64::_rdtsc() };
+    if !s.dirty || now < s.next_draw { return; }
+    s.redraw(fb);
+    s.dirty = false;
+    s.next_draw = now + unsafe { core::arch::x86_64::_rdtsc() }.saturating_sub(now) * 10;
+}
+/// Core 0's timer: text written just before a quiet spell (or a hang) still reaches
+/// the screen.
+pub fn tick() {
+    if !SHOWING.load(Ordering::Acquire) { return; }
+    if let Some(mut s) = SCREEN.try_lock() { if let Some(fb) = s.fb { draw_due(&mut *s, &fb); } }
+}
+
 /// Every logged byte comes through here, from `serial::_print` and serial records.
 pub fn write(bytes: &[u8]) {
     if STOPPING.load(Ordering::Relaxed) { return; }
@@ -223,7 +236,11 @@ pub fn write(bytes: &[u8]) {
     }
     if SHOWING.load(Ordering::Acquire) {
         if let Some(mut s) = SCREEN.try_lock() {
-            if let Some(fb) = s.fb { for &b in bytes { s.byte(&fb, b); } }
+            if let Some(fb) = s.fb {
+                for &b in bytes { s.byte(b); }
+                s.dirty = true;
+                draw_due(&mut *s, &fb);
+            }
         }
     }
 }

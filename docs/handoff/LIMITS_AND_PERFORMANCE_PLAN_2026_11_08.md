@@ -519,6 +519,12 @@ firmware + loader and kernel. On 1 core without PKU (TCG):
   picked (a gate choosing the 1024x768 entry was checked).
 - Excluding the loader, SexOS reaches its first program in 3.0 G cycles; Linux's 7.46 G
   includes firmware and decompressing the kernel, so the kernel part is not behind.
-- The kernel writes 263 KB of serial log before the first program. On a real 115200-baud
-  UART that alone would take over 20 s. Next: keep boot proof lines but send the bulk to
-  the crash/boot log buffer, not the UART, on real hardware.
+- The kernel writes 263 KB of log before the first program, and the boot log screen drew
+  every byte as it came. It now updates the text and draws the screen in batches, waiting
+  nine times as long as the last drawing took (and on core 0's timer, so the last line
+  before a hang still shows). Kernel entry to first program: 3.04 G -> **1.15 G**;
+  power-on to first program **6.81 G**, ahead of Linux's 7.46 G. On a large or uncached
+  framebuffer (a 4K laptop panel) the per-byte drawing would have cost far more.
+- Serial: COM1 is probed and skipped when absent (most laptops). With a real UART at
+  115200 baud the 263 KB would still take ~23 s; trimming the bulk of boot lines is the
+  next step if a machine with one is used for testing.
