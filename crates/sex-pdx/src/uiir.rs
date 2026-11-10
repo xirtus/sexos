@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! UiIR: one BOOT-granted, single-producer/single-consumer data stream.
 //!
 //! UiIR is a transport, not IPC and not authority. BOOT pairs two exact

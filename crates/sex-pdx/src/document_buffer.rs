@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! Fixed BOOT_DAG document snapshot reservations, one per client incarnation.
 //! These slots name existing Region capabilities; protocol bytes grant nothing.
 

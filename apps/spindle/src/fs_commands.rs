@@ -7,7 +7,7 @@ use sex_pdx::memory_region::{QUERY_VIEW, READ, WRITE};
 const CWD_MAX: usize = 512;
 const CAT_MAX: u64 = 32 * 1024;
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Cmd { Ls, Cd, Mkdir, Rm, Mv, Cat, Create, Write, Append(u8), Df, Program(u64, u64), Install }
+enum Cmd { Ls, Cd, Mkdir, Rm, Mv, Cat, Create, Write, Append(u8), Df, Program(u64, u64), Install, Mount, Unmount }
 pub struct Client { sent_at: u64, cmd: Option<Cmd>, seq: u32, kind: u8, path_len: u16, offset: u64, length: u64, sent: bool, cwd: [u8; CWD_MAX], cwd_len: usize, carry: [u8; 160], carry_len: usize, shown: u64, data_len: usize }
 pub static mut FS: Client = Client { sent_at: 0, cmd: None, seq: 0, kind: 0, path_len: 0, offset: 0, length: 0, sent: false, cwd: [0; CWD_MAX], cwd_len: 0, carry: [0; 160], carry_len: 0, shown: 0, data_len: 0 };
 
@@ -75,7 +75,6 @@ impl Client {
             if self.cwd_len == 0 { say!(sb, "/"); } else { say!(sb, "{}", shown(&self.cwd[..self.cwd_len])); }
             return true;
         }
-        if cmd == b"df" { self.start(Cmd::Df, w::STATFS, 0, 0, 0); return true; }
         if cmd == b"install" {
             // install [go] [GIB] [IMAGE]: plans, and with `go` installs. GIB sizes the
             // SexOS store (default: all the free space); IMAGE is a boot image file
@@ -96,12 +95,20 @@ impl Client {
             self.start(Cmd::Install, w::INSTALL, n, gib.saturating_mul(1024), if go { w::INSTALL_GO } else { 0 });
             return true;
         }
+        if cmd == b"df" && first.is_empty() { self.start(Cmd::Df, w::STATFS, 0, 0, 0); return true; }
+        // `unmount NAME` means /media/NAME.
+        let mut media = [0u8; 300];
+        let first = if cmd == b"unmount" && !first.is_empty() && !first.contains(&b'/') && w::MEDIA.len() + 1 + first.len() <= media.len() {
+            let m = w::MEDIA.len();
+            media[..m].copy_from_slice(w::MEDIA); media[m] = b'/'; media[m + 1..m + 1 + first.len()].copy_from_slice(first);
+            &media[..m + 1 + first.len()]
+        } else { first };
         if first.is_empty() && !matches!(cmd, b"ls" | b"cd") { say!(sb, "Usage: {} PATH", shown(cmd)); return true; }
         let mut path = [0u8; w::PATH_BYTES];
         let Some(mut n) = self.join(first, &mut path) else { sb.push(b"Path too long."); return true };
         if cmd == b"cd" && first.is_empty() { self.cwd_len = 0; return true; }
         match cmd {
-            b"ls" | b"cd" | b"cat" => {}
+            b"ls" | b"cd" | b"cat" | b"df" | b"mount" | b"unmount" => {}
             b"mkdir" | b"rm" | b"touch" | b"write" | b"append" => {}
             b"mv" => {
                 if rest.is_empty() { sb.push(b"Usage: mv FROM TO"); return true; }
@@ -123,6 +130,9 @@ impl Client {
             b"mv" => self.start(Cmd::Mv, w::RENAME, n, 0, 0),
             b"cat" => self.start(Cmd::Cat, w::READ, n, 0, 4096),
             b"touch" => self.start(Cmd::Create, w::CREATE, n, 0, 0),
+            b"df" => self.start(Cmd::Df, w::STATFS, n, 0, 0),
+            b"mount" => self.start(Cmd::Mount, w::MOUNT, n, 0, 0),
+            b"unmount" => { say!(sb, "Writing out {}...", shown(&region[..n])); self.start(Cmd::Unmount, w::UNMOUNT, n, 0, 0) }
             _ => {
                 // Text after the path, with a line ending. Create it if needed.
                 let length = rest.len().min(w::DATA_MAX - 1);
@@ -156,14 +166,16 @@ impl Client {
             &named[..bin.len() + target.len()]
         };
         let Some(n) = self.join(target, &mut path) else { sb.push(b"Path too long."); return };
-        // `@PATH` gives the program that one file: it travels as `@/absolute/path`.
+        // `@PATH` gives the program that one file or folder: it travels as `@/absolute/path`.
         let mut given = [0u8; w::ARGS_MAX];
         let mut m = 0;
         for word in args.split(|b| *b == b' ').filter(|w| !w.is_empty()) {
             let mut piece = [0u8; w::ARGS_MAX];
             let word: &[u8] = match word.strip_prefix(b"@") {
                 Some(file) => {
-                    let Some(k) = self.join(file, &mut piece[1..]) else { sb.push(b"Path too long."); return };
+                    let Some(mut k) = self.join(file, &mut piece[1..]) else { sb.push(b"Path too long."); return };
+                    // The root joins to nothing: it is `/`.
+                    if k == 0 { piece[1] = b'/'; k = 1; }
                     piece[0] = b'@';
                     &piece[..k + 1]
                 }
@@ -303,6 +315,16 @@ impl Client {
                     for part in line.chunks(96) { sb.push(part); }
                 }
             }
+            Cmd::Mount => {
+                // One line per volume found: name, format, size.
+                let text = &region[data_at..data_at + (value as usize).min(2048)];
+                for line in text.split(|b| *b == b'\n').filter(|l| !l.is_empty()) {
+                    let name = line.split(|b| *b == b' ').next().unwrap_or(line);
+                    let rest = &line[name.len()..];
+                    say!(sb, "/media/{} ({})", shown(name), shown(rest.trim_ascii()));
+                }
+            }
+            Cmd::Unmount => { say!(sb, "Safe to remove."); }
             Cmd::Program(count, flags) => {
                 use sex_pdx::program_store as store;
                 let (op, third) = if count == 0 { (store::OP_RUN, flags) } else { (store::OP_SPAWN, count) };

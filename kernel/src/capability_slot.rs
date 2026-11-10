@@ -48,8 +48,8 @@ pub fn decode_domain_id(raw: u64) -> Option<u32> {
 /// target existence, and operation-specific authority after this preflight.
 pub fn valid_syscall_selectors(number: u64, selector: u64, destination: u64) -> bool {
     match number {
-        0 | 28 => decode_pdx_slot(selector).is_some(),
-        29 => decode_domain_id(selector).is_some(),
+        0 | 28 | 100 => decode_pdx_slot(selector).is_some(),
+        29 | 101 => decode_domain_id(selector).is_some(),
         43 | 51 | 68 | 69 => decode_capability_slot(selector).is_some(),
         50 => decode_capability_slot(selector).is_some()
             && decode_capability_slot(destination).is_some(),

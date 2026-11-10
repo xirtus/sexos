@@ -69,7 +69,9 @@ impl Url {
             }
             _ => (authority, None),
         };
-        if host.is_empty() || host.len() > 253 || !host.bytes().all(|b| b.is_ascii_alphanumeric() || b"-._".contains(&b)) { return Err(Error::Address); }
+        // A name, an IPv4 address, or an IPv6 address in brackets (kept, as the Host header wants).
+        let literal6 = host.len() > 2 && host.starts_with('[') && host.ends_with(']') && host[1..host.len() - 1].bytes().all(|b| b.is_ascii_hexdigit() || b":.".contains(&b));
+        if host.is_empty() || host.len() > 253 || !literal6 && !host.bytes().all(|b| b.is_ascii_alphanumeric() || b"-._".contains(&b)) { return Err(Error::Address); }
         let port = port.unwrap_or(if secure { 443 } else { 80 });
         if port == 0 { return Err(Error::Address); }
         let mut target = if target.is_empty() { String::from("/") } else if target.starts_with('?') { alloc::format!("/{}", target) } else { String::from(target) };

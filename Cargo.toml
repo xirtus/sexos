@@ -21,7 +21,9 @@ members = [
     "apps/hello",
     "apps/fortune",
     "apps/jot",
+    "apps/files",
     "apps/peek",
+    "apps/talk",
     "apps/bench",
     "apps/view",
     "apps/wasm",
@@ -43,6 +45,8 @@ members = [
     "crates/sex-pdx",
     "crates/sex-font",
     "crates/sexfs",
+    "crates/sex-volumes",
+    "crates/sex-hwdb",
     "crates/sex-net",
     "crates/sex-net-config",
     "crates/sex-tls",
@@ -60,6 +64,10 @@ members = [
     "crates/sex-disk",
     "crates/sex-wasm",
     "apps/spindle",
+    "crates/sex-std",
+    "apps/stdhello",
+    "apps/chello",
+    "apps/pdf",
 ]
 [workspace.package]
 license = "GPL-3.0-only"

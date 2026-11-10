@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! More memory for a running program. The pages come from its own row's window,
 //! reserved at BOOT and mapped on the row's hardware key, so asking mints nothing:
 //! no frames, no capability, no new key. A program gets pages only for itself, they
@@ -8,7 +8,7 @@
 //! the row's current run may grow. Everything else is refused.
 
 /// rdi = pages wanted (0 only asks), → rax = status, rsi = first page's address,
-/// rdx = pages the run holds after the call.
+/// rdx = pages the run holds after the call, r10 = memory pressure (any caller).
 pub const SYS_PROGRAM_MEMORY: u64 = 81;
 pub const PAGE: u64 = 4096;
 /// Most pages one call grants, so the kernel's interrupts-off time stays short.
@@ -23,6 +23,15 @@ pub const RETRY: u64 = 2;
 pub const DENIED: u64 = 3;
 /// The window has fewer pages left than asked for. Nothing was granted.
 pub const FULL: u64 = 6;
+
+/// Memory pressure, returned in r10 by every call: how short the whole machine is on
+/// memory. Advisory: on LOW drop caches and shrink buffers, on CRITICAL also refuse
+/// new work. The kernel never kills for it.
+pub const PRESSURE_NORMAL: u64 = 0;
+/// Free memory below an eighth of what programs could have (at least 32 MiB).
+pub const PRESSURE_LOW: u64 = 1;
+/// Below a thirty-second (at least 8 MiB): allocations will soon be refused.
+pub const PRESSURE_CRITICAL: u64 = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Memory {
@@ -56,6 +65,23 @@ pub fn grow(pages: u64) -> Result<Memory, u64> {
     }
 }
 
+/// The machine's memory pressure now. Any domain may ask; it grants nothing.
+#[cfg(target_arch = "x86_64")]
+pub fn pressure() -> u64 {
+    let level: u64;
+    unsafe {
+        core::arch::asm!("syscall",
+            inlateout("rax") SYS_PROGRAM_MEMORY => _,
+            inlateout("rdi") 0u64 => _,
+            lateout("rsi") _, lateout("rdx") _,
+            lateout("r10") level, lateout("r8") _,
+            out("rcx") _, out("r11") _, options(nostack));
+    }
+    level
+}
+
 /// Host builds (tests) have no kernel to ask.
 #[cfg(not(target_arch = "x86_64"))]
 pub fn grow(_pages: u64) -> Result<Memory, u64> { Err(u64::MAX) }
+#[cfg(not(target_arch = "x86_64"))]
+pub fn pressure() -> u64 { PRESSURE_NORMAL }

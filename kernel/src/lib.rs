@@ -59,6 +59,8 @@ pub mod history_recovery;
 #[cfg(target_arch = "x86_64")]
 pub(crate) mod pci_bar_bounds;
 pub(crate) mod nic_boot;
+pub(crate) mod device_lease;
+pub mod device_irq;
 #[cfg(target_arch = "x86_64")]
 pub(crate) mod boot_frame_reservations;
 #[cfg(target_arch = "x86_64")]
@@ -100,8 +102,6 @@ pub mod pd;
 pub mod syscalls;
 #[cfg(target_arch = "x86_64")]
 pub mod capabilities;
-#[cfg(target_arch = "x86_64")]
-pub mod benchmark;
 #[cfg(target_arch = "x86_64")]
 pub mod init;
 #[cfg(target_arch = "x86_64")]
