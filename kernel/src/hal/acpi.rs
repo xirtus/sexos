@@ -220,18 +220,26 @@ fn memory_refused(address: u64, length: u64, write: bool) -> bool {
     })
 }
 /// Whether the HHDM maps `address` (4 KiB, 2 MiB or 1 GiB leaf).
+/// Whether HHDM + `address` is mapped *to physical `address`*. The HHDM is a fixed offset,
+/// so any other result means `address` aliases a non-HHDM kernel mapping (code, heap,
+/// stacks) and must be refused.
 fn mapped(address: u64) -> bool {
     use x86_64::registers::control::Cr3;
+    if address >= 1 << 52 { return false; }
     let hhdm = HHDM.load(Ordering::Relaxed);
-    let va = hhdm + address;
+    let Some(va) = hhdm.checked_add(address) else { return false };
     let mut table = Cr3::read().0.start_address().as_u64();
     for shift in [39u64, 30, 21, 12] {
         let entry = unsafe { core::ptr::read_volatile((hhdm + table + ((va >> shift) & 511) * 8) as *const u64) };
         if entry & 1 == 0 { return false; }
-        if shift == 12 || (shift != 39 && entry & (1 << 7) != 0) { return true; }
+        if shift == 12 || (shift != 39 && entry & (1 << 7) != 0) {
+            let size = 1u64 << shift;
+            let frame = entry & 0x000f_ffff_ffff_f000 & !(size - 1);
+            return frame + (va & (size - 1)) == address;
+        }
         table = entry & 0x000f_ffff_ffff_f000;
     }
-    true
+    false
 }
 fn width_ok(width: u64) -> Option<u8> { matches!(width, 1 | 2 | 4 | 8).then_some(width as u8) }
 
@@ -268,7 +276,7 @@ fn fw_mem(address: u64, mode: u64, value: u64) -> [u64; 5] {
     let write = (mode >> 8) & 1 != 0;
     let Some(width) = width_ok(mode & 0xFF) else { return [w::INVALID, 0, 0, 0, 0] };
     if address % width as u64 != 0 { return [w::INVALID, 0, 0, 0, 0]; }
-    if memory_refused(address, width as u64, write) || !mapped(address) { return [w::DENIED, 0, 0, 0, 0]; }
+    if memory_refused(address, width as u64, write) || !mapped(address) || !mapped(address + width as u64 - 1) { return [w::DENIED, 0, 0, 0, 0]; }
     let a = address as usize;
     let v = unsafe {
         match (width, write) {
