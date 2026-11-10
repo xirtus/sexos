@@ -50,6 +50,7 @@ ABI_INPUTS=(
   crates/sex-pdx/src/shell_ready.rs
   crates/sex-pdx/src/memory_region.rs
   crates/sex-pdx/src/screen_capture.rs
+  crates/sex-pdx/src/desktop_recording.rs
   crates/sex-pdx/src/paging.rs
   crates/sex-pdx/src/app_lifecycle.rs
   crates/sex-pdx/src/spindle_view.rs

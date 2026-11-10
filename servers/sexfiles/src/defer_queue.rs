@@ -131,15 +131,39 @@ impl Deferred {
         queue.copy_within(1..*len, 0);
         *len -= 1;
         queue[*len] = EMPTY;
-        if !terminal {
-            if let Some(i) = Self::cancellation_client(message.message) {
-                self.cancellation[i] = false;
-            } else if let Some(i) = Self::document_client(message.message) {
-                self.document_len[i] -= 1;
+        if !terminal { self.release_request(message.message); }
+        Some(message)
+    }
+    fn release_request(&mut self, message: Message) {
+        if let Some(i) = Self::cancellation_client(message) {
+            self.cancellation[i] = false;
+        } else if let Some(i) = Self::document_client(message) {
+            self.document_len[i] -= 1;
+        } else {
+            self.ordinary_len -= 1;
+        }
+    }
+    /// Retire exact stamped requests before a service ACKs that app run. Kernel
+    /// hints and every other task keep their original priority/FIFO positions.
+    pub fn retire_task(&mut self, caller_pd: u32, caller_task: u32) -> usize {
+        if caller_pd == 0 || caller_task == 0 {
+            return 0;
+        }
+        let previous = self.request_len;
+        let mut kept = 0;
+        for index in 0..previous {
+            let stamped = self.requests[index];
+            if stamped.message.1 == caller_pd && stamped.caller_task == caller_task {
+                self.release_request(stamped.message);
             } else {
-                self.ordinary_len -= 1;
+                self.requests[kept] = stamped;
+                kept += 1;
             }
         }
-        Some(message)
+        for index in kept..previous {
+            self.requests[index] = EMPTY;
+        }
+        self.request_len = kept;
+        previous - kept
     }
 }

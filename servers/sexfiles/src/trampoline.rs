@@ -18,6 +18,7 @@ fn hot_log() -> bool {
 #[no_mangle]
 pub extern "C" fn trampoline_main() {
     serial_println!("[sexfiles.trampoline.enter] ok=1");
+    crate::recording_runtime::initialize();
     assert!(crate::proof::run_memory_authority_negative_proof(),
         "SEXFILES_MEMORY_AUTHORITY_NEGATIVE_FAILED");
     // SLOT_STORAGE is statically assigned; no dynamic registration call is used here.
@@ -273,6 +274,7 @@ pub extern "C" fn trampoline_main() {
             if let Some((notice,acked))=app_custody.receive(&mut sex_pdx::app_lifecycle::KernelAuthority,
                 msg.type_id,msg.caller_pd as u64,[msg.arg0,msg.arg1,msg.arg2],|notice| {
                     history.retire(notice.target_pd);probes.retire(notice.target_pd);
+                    crate::recording_runtime::retire(notice.target_pd,notice.task_id);
                     assert!(documents.retire(notice.target_pd,&mut vfs::DocumentBackend),"DOCUMENT_SNAPSHOT_RETIRE_SCRUB");
                     let (closed,revoked)=vfs::retire_app_subject(notice.target_pd);
                     sex_pdx::serial_record!("[files.app.cleanup] target={} task={} handles={} caps={} saved_data=retained selection=0",
@@ -310,6 +312,7 @@ pub extern "C" fn trampoline_main() {
             continue;
         }
         if msg.type_id==sex_pdx::usb_disk::OP_CHANGED{crate::volumes::usb_changed(msg.caller_pd);continue;}
+        if crate::recording_runtime::message(&msg){continue;}
         if msg.type_id==sex_pdx::fs::OP{
             let word=crate::fs_service::handle(caller,msg.arg0,msg.arg1,msg.arg2);
             // Nothing else owed and nothing to commit: answer and wait in one entry, so
@@ -323,7 +326,7 @@ pub extern "C" fn trampoline_main() {
             continue;
         }
         if msg.type_id==sex_pdx::program_store::OP{
-            if caller==3{crate::fs_service::reply_later(caller,crate::program_store::load([msg.arg0,msg.arg1]));}
+            if caller==3{let word=if crate::recording_runtime::image_busy(){sex_pdx::program_store::failed(sex_pdx::program_store::IMAGE_BUSY)}else{crate::program_store::load([msg.arg0,msg.arg1])};crate::fs_service::reply_later(caller,word);}
             continue;
         }
         if msg.type_id==sex_pdx::document::OP{

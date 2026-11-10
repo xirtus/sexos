@@ -7,6 +7,7 @@ The generic program_jit_gate.py separately covers kernel W^X and fault isolation
 import argparse, hashlib, http.server, json, os, re, shutil, threading, time
 from pathlib import Path
 from quil_autosave_gate import boot
+from program_role_facts import assert_private_ordinary_launch
 ROOT=Path(__file__).resolve().parents[1]
 
 def main():
@@ -48,6 +49,7 @@ def main():
    numbers=list(map(int,stats.groups()));assert numbers[0]==int(enabled),numbers
    ready=g['wait'](r'\[web.ready\] target=(\d+) task=(\d+)',start,120);target,task=ready[1],ready[2]
    launch=g['wait'](rf'\[shell.program.launch\] target={target} task={task} surface=(\d+)',start,60)
+   assert_private_ordinary_launch(ROOT,t(),int(target),int(task),int(launch[1]))
    if enabled:
     assert numbers[1]>=4 and numbers[2]>=9900 and numbers[3]>=3 and numbers[4]==0,numbers
     assert re.search(rf'\[app.program.code\] target={target} task={task} op=seal ',t()[start:]),'no kernel seal for this domain/run'

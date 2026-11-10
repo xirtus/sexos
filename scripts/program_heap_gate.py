@@ -9,8 +9,8 @@ os.environ.setdefault('SEXOS_GATE_BOUND','1500')
 from pathlib import Path
 from install_program import install
 from quil_autosave_gate import boot
+from program_role_facts import ordinary_rows
 ROOT=Path(__file__).resolve().parents[1]
-ROWS=(ROOT/'crates/sex-pdx/src/app_catalog.rs').read_text().count('app: App::Program, ordinal:')-1
 WINDOW=eval(re.search(r'pub const WINDOW_BYTES: usize = ([\d* ]+);',(ROOT/'crates/sex-pdx/src/program_store.rs').read_text())[1])
 SURFACE={int(a):int(b)for a,b in re.findall(r'app: App::Program, ordinal: \d+, target: (\d+), surface: (\d+)',(ROOT/'crates/sex-pdx/src/app_catalog.rs').read_text())}
 def main():
@@ -18,7 +18,7 @@ def main():
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
  elf=(ROOT/'iso_root/programs/heaptest').read_bytes();assert elf[:4]==b'\x7fELF'
  install(disk,[('heaptest',elf)])
- g=boot(a.iso,disk,a.out,'heap',a.resolution);t=g['text'];q=g['q']
+ g=boot(a.iso,disk,a.out,'heap',a.resolution);t=g['text'];q=g['q'];rows=len(ordinary_rows(ROOT,t()))
  def free_now():
   m=re.findall(r'free_pages=(\d+)',t());return int(m[-1])if m else None
  def run(line):
@@ -51,8 +51,8 @@ def main():
   assert len({r['task']for r in runs})==len(runs),'a run reused an old task identity'
   assert len({r['target']for r in runs})<len(runs),'no row was ever reused'
   # Every row at once: each has its own window on its own key or turn.
-  live=[started() for _ in range(ROWS)]
-  assert len({r['target']for r in live})==ROWS,'programs were not on separate rows'
+  live=[started() for _ in range(rows)]
+  assert len({r['target']for r in live})==rows,'programs were not on separate rows'
   q.cmd('screendump',{'filename':str(a.out/'side-by-side.ppm')});time.sleep(1)
   for r in reversed(live):
    g['focus'](SURFACE[r['target']]);close(r)

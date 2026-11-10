@@ -222,12 +222,16 @@ pub fn reply_later(caller: u32, word: u64) {
         None => sex_pdx::serial_record!("[files.fs.reply.lost] caller={}", caller),
     }
 }
-pub fn replies_pending() -> bool { unsafe { (*core::ptr::addr_of!(REPLIES)).iter().any(|r| r.0 != 0) } }
+pub fn replies_pending() -> bool { (unsafe { (*core::ptr::addr_of!(REPLIES)).iter().any(|r| r.0 != 0) }) || crate::recording_runtime::pending() }
 pub fn poll_replies() {
     let replies = unsafe { &mut *core::ptr::addr_of_mut!(REPLIES) };
     for entry in replies.iter_mut().filter(|r| r.0 != 0) {
+        if sex_pdx::desktop_recording::ENABLED&&entry.0==sex_pdx::desktop_recording::TARGET{
+            sex_pdx::serial_record!("[record.reply.unscoped.drop] target={}",entry.0);*entry=(0,0);continue;
+        }
         if sex_pdx::pdx_reply(entry.0, entry.1) == 0 { *entry = (0, 0); }
     }
+    crate::recording_runtime::poll();
 }
 /// Each program row's current run and the folder it may use. A run Shell never bound,
 /// such as the boot image's own program, has no files at all.
@@ -237,6 +241,42 @@ const ROOT_MAX: usize = 64;
 struct Binding { task: u32, root: [u8; ROOT_MAX], len: usize, args: [u8; w::ARGS_MAX], args_len: usize, picked: [u8; PICKED_MAX], picked_len: usize }
 /// Paths the person chose for a run in the picker, space separated, as `@/path` tokens.
 const PICKED_MAX: usize = 1024;
+/// Constructor only, never admission: the provider installs this after an exact
+/// task/epoch check and actual typed bind-ACK delivery. No generic loader state.
+fn recording_binding(task:u32)->Option<Binding>{
+    if task==0 { return None; }
+    const _:()=assert!(sex_pdx::desktop_recording::ROOT.len()<=ROOT_MAX);
+    let mut root=[0;ROOT_MAX];let length=sex_pdx::desktop_recording::ROOT.len();
+    root[..length].copy_from_slice(sex_pdx::desktop_recording::ROOT);
+    Some(Binding{task,root,len:length,args:[0;w::ARGS_MAX],args_len:0,picked:[0;PICKED_MAX],picked_len:0})
+}
+
+pub(super) fn prepare_recording_root()->sex_pdx::desktop_recording::BindStatus {
+    use sex_pdx::desktop_recording::{BindStatus as Status,ROOT};
+    let state=unsafe{&mut *core::ptr::addr_of_mut!(STATE)};
+    if matches!(state,State::Untried){*state=bring_up();}
+    let State::Ready(fs)=state else{return Status::Unavailable;};
+    if writes_pending(){commit_writes(fs);}
+    if fs.has_changes(){return Status::Io;}
+    match fs.open(ROOT){
+        Ok(stat)=>if stat.kind==Kind::Dir{Status::Ok}else{Status::Denied},
+        Err(Error::NotFound)=>{
+            if fs.mkdir(ROOT,0).and_then(|_|fs.commit()).is_ok(){forget_stats(None);Status::Ok}
+            else{let _=fs.rollback();Status::Io}
+        },
+        Err(_)=>Status::Io,
+    }
+}
+pub(super) fn install_recording_binding(task:Option<u32>){
+    let Some(index)=program_index(sex_pdx::desktop_recording::TARGET)else{return;};
+    let binding=task.and_then(recording_binding);
+    if let Some(cache)=client_cache(w::PROGRAM_INDEX_BASE+index){w::stat_cache::forget(cache,None);}
+    unsafe{
+        (*core::ptr::addr_of_mut!(BINDINGS))[index]=binding;
+        (*core::ptr::addr_of_mut!(PICKS))[index]=None;
+        READ_IO[w::PROGRAM_INDEX_BASE+index]=w::ReadIoStats::ZERO;
+    }
+}
 /// One question to the person per program row: (ticket, mode, suggestion, answer).
 #[derive(Clone, Copy)]
 struct Pick { ticket: u32, mode: u8, hint: [u8; w::PICK_HINT_MAX], hint_len: usize, answer: Answer }
@@ -262,6 +302,7 @@ pub fn loaded(path: &[u8]) {
 /// Shell's word that the file just read runs as `target`'s `task`. Its folder is made
 /// here, so the program finds it waiting.
 pub fn bind(target: u32, task: u32) {
+    if sex_pdx::desktop_recording::ENABLED&&target==sex_pdx::desktop_recording::TARGET{return;}
     let Some(index) = program_index(target) else { return };
     unsafe { READ_IO[w::PROGRAM_INDEX_BASE + index] = w::ReadIoStats::ZERO; }
     let loaded = unsafe { &mut *core::ptr::addr_of_mut!(LOADED) };
@@ -585,7 +626,7 @@ static mut PREPARED_ARGS: ([u8; w::ARGS_MAX], usize) = ([0; w::ARGS_MAX], 0);
 static mut NEXT_TICKET: u32 = 0;
 pub enum Program { Absent, Failed(u32), Loaded(u32) }
 /// Copies a file into `image`. A disk with no filesystem has no such file.
-fn read_program(path: &[u8], image: &mut [u8]) -> Program {
+fn read_program(path: &[u8], image: &mut [u8], remember: bool) -> Program {
     use sex_pdx::program_store as store;
     let state = unsafe { &mut *core::ptr::addr_of_mut!(STATE) };
     if matches!(state, State::Untried) { *state = bring_up(); }
@@ -607,7 +648,7 @@ fn read_program(path: &[u8], image: &mut [u8]) -> Program {
             Err(_) => return Program::Failed(store::IO),
         }
     }
-    loaded(path);
+    if remember { loaded(path); }
     sex_pdx::serial_record!("[files.program.file] bytes={}", size);
     Program::Loaded(size as u32)
 }
@@ -619,7 +660,18 @@ pub fn read_named(name: &[u8], image: &mut [u8]) -> Program {
     let at = store::BIN.len();
     path[..at].copy_from_slice(store::BIN);
     path[at..at + name.len()].copy_from_slice(name);
-    read_program(&path[..at + name.len()], image)
+    read_program(&path[..at + name.len()], image, true)
+}
+/// Read a bare image without consuming prepared tickets, arguments or the generic
+/// loaded-name latch. Source identity is independently enforced by the kernel.
+pub fn read_named_unbound(name:&[u8], image:&mut [u8])->Program {
+    use sex_pdx::program_store as store;
+    if name.is_empty() || name.len()>store::NAME_BYTES || name.iter().any(|byte|matches!(*byte,b'/'|0)) {
+        return Program::Failed(store::NOT_A_PROGRAM);
+    }
+    let mut path=[0u8;32];let at=store::BIN.len();
+    path[..at].copy_from_slice(store::BIN);path[at..at+name.len()].copy_from_slice(name);
+    read_program(&path[..at+name.len()],image,false)
 }
 /// The prepared path, once. A stale ticket finds nothing. When the path is
 /// `/bin/NAME` and no such file exists, the packed NAME comes back too, so the disk
@@ -631,7 +683,7 @@ pub fn read_ticket(ticket: u64, image: &mut [u8]) -> (Program, Option<[u64; 2]>)
     let len = core::mem::take(&mut prepared.1);
     unsafe { *core::ptr::addr_of_mut!(LOADED_ARGS) = *core::ptr::addr_of!(PREPARED_ARGS); }
     let path = &prepared.0[..len];
-    let found = read_program(path, image);
+    let found = read_program(path, image, true);
     let store_name = path.strip_prefix(sex_pdx::program_store::BIN)
         .filter(|name| !name.contains(&b'/'))
         .and_then(sex_pdx::program_store::pack_name);

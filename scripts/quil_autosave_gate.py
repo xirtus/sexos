@@ -14,6 +14,7 @@ from desktop_focus import focus_surface
 from check_desktop_pixels import final_view
 from network_contention_gate import frozen_binding
 from certificate_time_gate import RTC_NORMAL
+from program_role_facts import check_ordinary_launches
 
 FIRST=['d','r','a','f','t','spc','o','n','e']
 SECOND=['spc','a','n','d','spc','t','w','o']
@@ -69,8 +70,11 @@ def boot(iso,disk,out,tag,resolution):
   # Only text not yet checked, backing up a little for a marker split across reads.
   now=text();start=max(0,seen.get('health',0)-64);seen['health']=len(now)
   check_serial_health(now[start:],tag)
+ checked_launches={'off':0}
  def wait(pattern,start=0,timeout=120,*,raw=False):
-  return wait_serial(text,health,pattern,start,timeout,tag=tag,raw=raw)
+  match=wait_serial(text,health,pattern,start,timeout,tag=tag,raw=raw)
+  checked_launches['off']=check_ordinary_launches(Path(__file__).resolve().parents[1],text(),checked_launches['off'])
+  return match
  def stop():
   if proc.poll()is None:proc.kill();proc.wait()
   sock.unlink(missing_ok=True)

@@ -9,6 +9,7 @@ import argparse,re,shutil,struct,time
 from pathlib import Path
 from install_program import install
 from quil_autosave_gate import boot
+from program_role_facts import assert_private_ordinary_launch
 ROOT=Path(__file__).resolve().parents[1]
 SURFACE={int(a):int(b)for a,b in re.findall(r'app: App::Program, ordinal: \d+, target: (\d+), surface: (\d+)',(ROOT/'crates/sex-pdx/src/app_catalog.rs').read_text())}
 def main():
@@ -30,6 +31,7 @@ def main():
   m=g['wait'](r'\[jit\.(ok|fail)\] target=(\d+) task=(\d+)([^\n]*)\n',s,300)
   assert m[1]=='ok',f'JIT test failed: {m[0]}'
   target,task=int(m[2]),int(m[3]);g['wait'](rf'\[jit\.ready\] target={target} task={task}\n',s,60)
+  assert_private_ordinary_launch(ROOT,t(),target,task,SURFACE[target])
   seals=re.findall(rf'\[app\.program\.code\] target={target} task={task} op=(seal|open) va=(0x[0-9a-f]+) pages=(\d+)\n',t()[s:])
   assert ('seal' in {o for o,*_ in seals}) and ('open' in {o for o,*_ in seals}),f'no seal/open evidence: {seals}'
   blocked=re.search(r'\[jit\.blocked\] offset=(\d+)\n',t()[s:]);assert blocked,'WRPKRU was not refused'

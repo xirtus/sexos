@@ -178,7 +178,7 @@ pub fn reserve_successor_from(predecessor:u32,successor:u32,holder:u32,slot:usiz
     coordinator.grant_capability(slot as u64,CapabilityData::AppActivation(ActivationGrant{
         image_source,holder,logical_app:next.logical_app,incarnation:next.number,predecessor,predecessor_task:old_task,
         successor,successor_task:app.task}));
-    crate::serial_println!("[boot.app.successor] logical={} incarnation={} predecessor={} successor={} task={} surface={} key={} dormant=1 leaves={} runtime_mint=0",next.logical_app,next.number,predecessor,successor,app.task,app.surface,app.pkey,app.count);
+    crate::serial_println!("[boot.app.successor] logical={} incarnation={} predecessor={} successor={} task={} surface={} key={} dormant=1 leaves={} runtime_mint=0 source_pinned={}",next.logical_app,next.number,predecessor,successor,app.task,app.surface,app.pkey,app.count,image_source.is_some() as u8);
 }
 /// Scheduler first-admission fences both BOOT sweeps. Ordinary wakes cannot
 /// activate Constructed tasks; the activation commit drops this fence last.
