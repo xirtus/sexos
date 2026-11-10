@@ -3620,3 +3620,20 @@ Details: `docs/handoff/BOOT_LOG_AND_CRASH_RECORDS_2026_11_09.md`.
 - **ABI**: syscall 85 `SYS_CRASH_LOG` (84 is `SYS_POWER` from the ACPI work), message `OP_NOTICE` to Files, `sex_pdx::crash_log` (in `ABI_INPUTS`); hash recomputed.
 - **Fuzzer** `run fuzz [CALLS] [SEED]` and `scripts/syscall_fuzz_gate.py` (3 x 20000 seeded syscalls and pdx calls, in CI).
 - **Gates**: `scripts/crash_screen_gate.py` (three starts: warm restart then cold; probe build, last in CI), `scripts/crash_log_host_gate.sh`.
+
+## Display and Shell start again in place after a crash (2026-11-10)
+
+Follow-up to the boot log and crash records work (`BOOT_LOG_AND_CRASH_RECORDS_2026_11_09.md`).
+
+- Display: restarted from its BOOT pages; its second ready tells Shell to put the desktop
+  back (windows, chrome, bar, terminal/document layout, program redraw, focus).
+- Shell: restarted from its BOOT pages with Display; it rebuilds custody from the kernel's
+  app catalog and gives the opened apps their windows back. Apps keep running.
+- Kernel growth (about 30 lines): Display and Shell join `service_restart`; a domain can
+  be asked to end at its next syscall. `KERNEL_LINE_BUDGET` 21,500 -> 22,500 (master was
+  already at 22,123), reason in `docs/DESIGN_GUARDRAILS.md`.
+- ABI: `document_view::Delivery::continue_after` and `spindle_view::Delivery::continue_after`
+  (library helpers, no wire change); `abi_version_hash` recomputed.
+- Gate: `scripts/crash_screen_gate.py` crashes Display (same desktop back, 98.6% same
+  pixels) and Shell (desktop back, Spindle answers `crashes`).
+

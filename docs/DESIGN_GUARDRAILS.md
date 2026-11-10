@@ -32,6 +32,7 @@ do from ring 3. When a feature needs a little ring-0 help, add the smallest mech
 | Date | Budget | Reason |
 |------|--------|--------|
 | 2026-11-09 | 21,500 | Baseline after removing dead POSIX/Linux-shaped stubs (18,383 lines). Headroom covers the open boot-log/stop-screen (#78), VMD enumeration (#84) and lease (#79) work. ACPI AML in ring 0 (#70, #82) is the open question in the audit. |
+| 2026-11-10 | 22,500 | Master had reached 22,123 after #78, #79, #84 and the Wi-Fi/IOMMU merges. Display and Shell restarting in place adds about 30 lines of mechanism (keep their BOOT pages, end a domain at its next syscall); the desktop logic for coming back lives in Shell. |
 
 ## 2. No Linux-shaped kernel API
 
