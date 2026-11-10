@@ -162,10 +162,22 @@ pub fn find_others<D: BlockDev + ?Sized>(f: &Fat, dev: &mut D) -> Result<Vec<Oth
 /// entries with `boot:///` pointed at the slot's partition, then the other systems.
 /// Padded with a comment to exactly [`MENU_BYTES`] so it can be rewritten in place.
 pub fn menu(image_cfg: &str, slot: Guid, others: &[Other]) -> Result<Vec<u8>, Error> {
+    let blocks: Vec<String> = others.iter().map(|o| {
+        let name: String = o.name.chars().filter(|c| c.is_ascii_graphic() || *c == ' ').collect();
+        format!(":{name}\n    PROTOCOL=efi_chainload\n    IMAGE_PATH=boot://{}\n\n", o.loader)
+    }).collect();
+    compose(image_cfg, slot, &blocks, &crate::update::State::fresh())
+}
+
+/// The menu text: `image_cfg`'s entries aimed at `slot`, then `extra` entries as written,
+/// with `state` and the default entry it implies at the top, padded to [`MENU_BYTES`].
+pub fn compose(image_cfg: &str, slot: Guid, extra: &[String], state: &crate::update::State) -> Result<Vec<u8>, Error> {
     let target = format!("guid://{}/", core::str::from_utf8(&slot.text()).unwrap());
     let mut out = String::new();
     out.push_str(MENU_MARK);
     out.push_str(". Written by SexOS install; SexOS rewrites it in place.\n");
+    out.push_str(&state.line());
+    out.push_str(&format!("DEFAULT_ENTRY={}\n", state.default_entry()));
     let mut entries = false;
     for line in image_cfg.lines() {
         let t = line.trim_start();
@@ -176,11 +188,12 @@ pub fn menu(image_cfg: &str, slot: Guid, others: &[Other]) -> Result<Vec<u8>, Er
         out.push('\n');
     }
     if !entries { return Err(Error::Corrupt); }
-    for o in others {
-        let name: String = o.name.chars().filter(|c| c.is_ascii_graphic() || *c == ' ').collect();
-        out.push_str(&format!(":{name}\n    PROTOCOL=efi_chainload\n    IMAGE_PATH=boot://{}\n\n", o.loader));
-    }
-    let mut bytes = out.into_bytes();
+    for b in extra { out.push_str(b); }
+    pad(out.into_bytes())
+}
+
+/// Fills a menu out to its fixed size with one comment line.
+pub(crate) fn pad(mut bytes: Vec<u8>) -> Result<Vec<u8>, Error> {
     if bytes.len() + 2 > MENU_BYTES { return Err(Error::NoSpace); }
     bytes.push(b'#');
     bytes.resize(MENU_BYTES - 1, b' ');
@@ -269,4 +282,4 @@ pub fn describe(plan: &Plan) -> Vec<String> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

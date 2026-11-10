@@ -1,4 +1,5 @@
 fn main() {
+    release_key();
     println!("cargo:rerun-if-env-changed=SEXFILES_RAMFS_PROOF");
     println!("cargo:rerun-if-env-changed=SEXOS_DISKFS_OBJECT_TABLE_PROOF");
     println!("cargo:rerun-if-env-changed=SEXOS_SEXFILES_JOURNAL_PROOF");
@@ -82,4 +83,19 @@ fn main() {
     if std::env::var("SEXFILES_DISKFS_NEGATIVE_BOUNDS_AUTH_PROOF").as_deref() == Ok("1") {
         println!("cargo:rustc-cfg=sexfiles_diskfs_negative_bounds_auth_proof");
     }
+}
+
+/// The public key updates must be signed with: `SEXOS_RELEASE_KEY` (64 hex digits) when
+/// set, else `keys/release.pub` at the top of the tree. Without either, `update` refuses
+/// every update: a build nobody can sign for takes none.
+fn release_key() {
+    println!("cargo:rerun-if-env-changed=SEXOS_RELEASE_KEY");
+    let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../keys/release.pub");
+    println!("cargo:rerun-if-changed={}", file.display());
+    let key = std::env::var("SEXOS_RELEASE_KEY").ok().or_else(|| std::fs::read_to_string(&file).ok()).unwrap_or_default();
+    let key: String = key.lines().filter(|l| !l.trim_start().starts_with('#')).collect::<String>().trim().to_string();
+    if !key.is_empty() && (key.len() != 64 || !key.bytes().all(|b| b.is_ascii_hexdigit())) {
+        panic!("release key must be 64 hex digits (an Ed25519 public key), got {key:?}");
+    }
+    println!("cargo:rustc-env=SEXOS_RELEASE_KEY_HEX={key}");
 }
