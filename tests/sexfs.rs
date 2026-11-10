@@ -6,10 +6,16 @@ use sexfs::*;
 use std::collections::{BTreeMap, HashMap};
 
 #[derive(Clone, Default)]
-struct Disk { blocks: HashMap<u64, Box<[u8; BLOCK]>>, volatile: Vec<(u64, Box<[u8; BLOCK]>)> , size: u64, writes: u64, flushes: u64, crash_flush: Option<u64>, crash_at: Option<u64>, seed: u64, fail_reads: bool, runs: usize, run_cmds: u64 }
+struct Disk { blocks: HashMap<u64, Box<[u8; BLOCK]>>, volatile: Vec<(u64, Box<[u8; BLOCK]>)> , size: u64, writes: u64, flushes: u64, crash_flush: Option<u64>, crash_at: Option<u64>, seed: u64, fail_reads: bool, runs: usize, run_cmds: u64, data_bytes: u64 }
 impl Device for Disk {
     fn blocks(&self) -> u64 { self.size }
     fn run_blocks(&self) -> usize { self.runs.max(1) }
+    fn read_data(&mut self, block: u64, out: &mut [u8; BLOCK]) -> std::result::Result<(), ()> {
+        self.read(block, out)?; self.data_bytes += BLOCK as u64; Ok(())
+    }
+    fn read_data_run(&mut self, first: u64, out: &mut [u8]) -> std::result::Result<(), ()> {
+        self.read_run(first, out)?; self.data_bytes += out.len() as u64; Ok(())
+    }
     // Runs still land block by block, so a power cut can tear a run anywhere.
     fn write_run(&mut self, first: u64, data: &[u8]) -> std::result::Result<(), ()> {
         assert!(data.len() % BLOCK == 0 && data.len() / BLOCK <= self.runs.max(1));
@@ -233,6 +239,35 @@ fn whole_blocks_travel_in_runs() {
     assert!(back == want);
     // A run read checks every block: damage inside a run is caught.
     fs.verify().unwrap();
+}
+#[test]
+fn repeated_file_reads_reach_device_without_counting_metadata_or_holes() {
+    let mut fs = fresh(40960);
+    fs.device().runs = 32;
+    let id = fs.create(b"payload", 1).unwrap();
+    let data = bytes_of(71, 1 << 20);
+    for (i, chunk) in data.chunks(65536).enumerate() { fs.write(id, i as u64 * 65536, chunk, 1).unwrap(); }
+    fs.commit().unwrap();
+    let mut back = vec![0; 65536];
+    for _ in 0..3 {
+        let before = fs.device().data_bytes;
+        fs.open(b"payload").unwrap(); fs.stat(id).unwrap();
+        assert_eq!(fs.device().data_bytes, before, "metadata is not payload I/O");
+        for (i, chunk) in data.chunks(65536).enumerate() {
+            assert_eq!(fs.read(id, i as u64 * 65536, &mut back).unwrap(), back.len());
+            assert_eq!(back, chunk);
+        }
+        assert_eq!(fs.device().data_bytes - before, data.len() as u64, "even repeated reads reach the device");
+    }
+    let hole = fs.create(b"hole", 2).unwrap();
+    fs.truncate(hole, 65536, 2).unwrap(); fs.commit().unwrap();
+    let before = fs.device().data_bytes;
+    back.fill(99); assert_eq!(fs.read(hole, 0, &mut back).unwrap(), back.len());
+    assert!(back.iter().all(|&b| b == 0));
+    assert_eq!(fs.device().data_bytes, before, "synthesized zeros cannot prove device I/O");
+    // A partial payload read incurs a full block, not a fictitious one-byte command.
+    assert_eq!(fs.read(id, 1, &mut back[..1]).unwrap(), 1);
+    assert_eq!(fs.device().data_bytes - before, BLOCK as u64);
 }
 #[test]
 fn deleting_gives_all_space_back_after_commit() {

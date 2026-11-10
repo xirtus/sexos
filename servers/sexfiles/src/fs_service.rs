@@ -45,6 +45,12 @@ fn commit_writes(fs: &mut Fs<'static, Disk>) {
 }
 /// Clients' regions, found once: (address, 0 until looked up, u64::MAX if absent).
 static mut REGIONS: [u64; 64] = [0; 64];
+// Files serves requests serially. Device counters are sampled only around an
+// authenticated client's READ, never exposed as other clients' global activity.
+static mut DEVICE_READ_CALLS: u64 = 0;
+static mut DEVICE_READ_BYTES: u64 = 0;
+static mut READ_IO: [w::ReadIoStats; 64] = [w::ReadIoStats::ZERO; 64];
+const _: () = assert!(w::PROGRAM_INDEX_BASE + PROGRAM_ROWS <= 64);
 fn client_cache(index: usize) -> Option<&'static [u8]> {
     let regions = unsafe { &mut *core::ptr::addr_of_mut!(REGIONS) };
     let slot = regions.get_mut(index)?;
@@ -103,6 +109,17 @@ impl Device for Disk {
         if out.is_empty() || out.len() % BLOCK != 0 || out.len() > buf.len() { return Err(()); }
         if DiskFs::diskfs_block_read(Self::offset(first), out.len() as u64, SLOT_BUF_LEND) != 0 { return Err(()); }
         out.copy_from_slice(&buf[..out.len()]);
+        Ok(())
+    }
+    fn read_data(&mut self, block: u64, out: &mut [u8; BLOCK]) -> Result<(), ()> {
+        self.read_data_run(block, out)
+    }
+    fn read_data_run(&mut self, first: u64, out: &mut [u8]) -> Result<(), ()> {
+        self.read_run(first, out)?;
+        unsafe {
+            DEVICE_READ_CALLS = DEVICE_READ_CALLS.saturating_add(1);
+            DEVICE_READ_BYTES = DEVICE_READ_BYTES.saturating_add(out.len() as u64);
+        }
         Ok(())
     }
     fn write_run(&mut self, first: u64, data: &[u8]) -> Result<(), ()> {
@@ -246,6 +263,7 @@ pub fn loaded(path: &[u8]) {
 /// here, so the program finds it waiting.
 pub fn bind(target: u32, task: u32) {
     let Some(index) = program_index(target) else { return };
+    unsafe { READ_IO[w::PROGRAM_INDEX_BASE + index] = w::ReadIoStats::ZERO; }
     let loaded = unsafe { &mut *core::ptr::addr_of_mut!(LOADED) };
     let bindings = unsafe { &mut *core::ptr::addr_of_mut!(BINDINGS) };
     if loaded.1 == 0 { bindings[index] = None; return; }
@@ -409,8 +427,26 @@ pub fn handle(caller: u32, a: u64, offset: u64, length: u64) -> u64 {
         _ => return w::reply(r.seq, w::DENIED, 0),
     };
     if r.kind == w::PING { return w::reply(r.seq, w::OK, 0); }
+    let before = unsafe { (DEVICE_READ_CALLS, DEVICE_READ_BYTES) };
+    let answer = handle_request(index, program, r);
+    if r.kind == w::READ {
+        unsafe {
+            let own = &mut *core::ptr::addr_of_mut!(READ_IO).cast::<w::ReadIoStats>().add(index);
+            own.requests = own.requests.saturating_add(1);
+            own.device_calls = own.device_calls.saturating_add(DEVICE_READ_CALLS.saturating_sub(before.0));
+            own.device_bytes = own.device_bytes.saturating_add(DEVICE_READ_BYTES.saturating_sub(before.1));
+        }
+    }
+    answer
+}
+fn handle_request(index: usize, program: Option<usize>, r: w::Request) -> u64 {
     let Ok(view) = sex_pdx::memory_region_view(w::PROVIDER_SLOT_BASE + index as u64, 0, w::REGION_BYTES as u64, QUERY_VIEW | READ | WRITE) else { return w::reply(r.seq, w::IO, 0) };
     let region = unsafe { core::slice::from_raw_parts_mut(view.virtual_address as *mut u8, w::REGION_BYTES) };
+    if r.kind == w::READ_IO_STATS {
+        if r.path_len != 0 || r.offset != 0 || r.length != 0 { return w::reply(r.seq, w::INVALID, 0); }
+        unsafe { READ_IO[index] }.encode(&mut region[w::PATH_BYTES..]).unwrap();
+        return w::reply(r.seq, w::OK, w::ReadIoStats::BYTES as u32);
+    }
     // A client found now may have been absent when Files last looked: keep it, so its
     // cache is cleared with the others.
     if let Some(slot) = unsafe { (*core::ptr::addr_of_mut!(REGIONS)).get_mut(index) } { *slot = view.virtual_address; }
