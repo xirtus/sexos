@@ -33,6 +33,16 @@ fn main() {
     // Copied beside qjs.c: its own directory (/usr/include) would bring the host libc.
     let header = std::fs::read_to_string(rt_dir.join("wasm-rt.h")).unwrap();
     let custom_pages = header.contains("uint32_t page_size");
+    // Current wabt uses __thread even in C99. SexOS runs each engine on one
+    // browser thread and does not initialize a C TLS block for this runtime.
+    // Disable the storage qualifier explicitly in every conditional definition;
+    // host tests retain wabt's normal thread-local trap state.
+    let header = if sex {
+        header.lines().map(|line| {
+            if line.starts_with("#define WASM_RT_THREAD_LOCAL") { "#define WASM_RT_THREAD_LOCAL" }
+            else { line }
+        }).collect::<Vec<_>>().join("\n") + "\n"
+    } else { header };
     std::fs::write(out.join("wasm-rt.h"), &header).unwrap();
     let resource = String::from_utf8(Command::new("clang").arg("-print-resource-dir").output().unwrap().stdout).unwrap();
     let mut objs = Vec::new();
