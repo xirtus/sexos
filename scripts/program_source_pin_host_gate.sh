@@ -15,7 +15,7 @@ assert text.count('load_program(')==3
 activate=text.split('pub fn activation(',1)[1].split('fn checked_program_image(',1)[0]
 assert activate.index('checked_program_image(len,g.image_source)?')<activate.index('load_program(&mut apps[ni],&copy,task)?')
 rebirth=text.split('fn rebirth(',1)[1].split('pub fn force_end(',1)[0]
-assert rebirth.index('checked_program_image(len,source)')<rebirth.index('app.generation=')<rebirth.index('NEXT_RUN_TASK.fetch_add')
+assert rebirth.index('checked_program_image(len,source)')<rebirth.index('next_run_task()?')<rebirth.index('app.generation=')
 loader=text.split('fn load_program(',1)[1].split('pub fn grow(',1)[0]
 assert 'program_image(' not in loader,'the loader must use exactly its verified private copy'
 # Each prepared module is the full production module, with a child test appended
@@ -39,7 +39,7 @@ assert text.count(old)==1
 run('source-bypass',text.replace(old,'if false{return Err(DENIED)}'),False)
 copy='        let copy=image.map(|len|checked_program_image(len,source)).transpose()?;\n'
 generation='        app.generation=app.generation.checked_add(1).ok_or(DENIED)?;\n'
-assert text.count(copy+generation)==1
-run('generation-before-proof',text.replace(copy+generation,generation+copy),False)
+assert text.count(copy)==1
+run('generation-before-proof',text.replace(copy,generation+copy),False)
 (out/'inputs.json').write_text(json.dumps({str(p.relative_to(root)):hashlib.sha256(p.read_bytes()).hexdigest() for p in [source,root/'kernel/src/app_resource_state.rs',fixture,case]},indent=2)+'\n')
 PY

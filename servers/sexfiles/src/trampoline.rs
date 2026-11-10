@@ -252,16 +252,17 @@ pub extern "C" fn trampoline_main() {
         }
         // SEXFILES_DEFER_V1: drain requests stashed by nested reply-wait
         // loops before listening for new ones — they arrived first.
-        let (msg_type, msg_caller, msg_a0, msg_a1, msg_a2) =
+        let stamped =
             if let Some(d) = crate::pdx::defer_pop() {
                 d
             } else {
                 // Listen on slot 0 (self message ring — all servers use this pattern).
                 let m = if crate::fs_service::replies_pending()||crate::fs_service::writes_pending()||history.pending()||probes.pending()||documents.pending(){match sex_pdx::pdx_try_listen_raw(0){Some(m)=>m,None=>{documents.progress(&mut vfs::DocumentBackend);crate::fs_service::commit_when_idle();sex_pdx::sys_yield();continue}}}else{pdx_listen_raw(0)};
-                (m.type_id, m.caller_pd, m.arg0, m.arg1, m.arg2)
+                crate::defer_queue::Stamped { message: (m.type_id, m.caller_pd, m.arg0, m.arg1, m.arg2), caller_task: m.caller_task }
             };
+        let (msg_type, msg_caller, msg_a0, msg_a1, msg_a2) = stamped.message;
         let msg = crate::pdx::ReplayMsg {
-            type_id: msg_type, caller_pd: msg_caller,
+            type_id: msg_type, caller_pd: msg_caller, caller_task: stamped.caller_task,
             arg0: msg_a0, arg1: msg_a1, arg2: msg_a2,
         };
         let caller = msg.caller_pd;
