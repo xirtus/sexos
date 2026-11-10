@@ -84,6 +84,7 @@ use sex_graphics::{WindowBuffer, font};
 mod history_persistence;
 mod storage_probe;
 mod fs_commands;
+mod capture_command;
 mod fetch_command;
 mod update_command;
 mod network_probe;
@@ -792,7 +793,10 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
         serial_println!("[spindle.alias.proof.summary] alias_count=6 ok=1");
     }
     if cmd.is_empty() { return true; }
+    if unsafe{capture_command::CAPTURE.busy()}&&cmd!=b"capture-cancel"{sb.push(b"Capture owns the file buffer. Escape cancels; Close stays available.");return true}
     let recognized = match cmd {
+        b"capture"=>{unsafe{capture_command::CAPTURE.start(args,sb);}true},
+        b"capture-cancel"=>{unsafe{capture_command::CAPTURE.cancel(sb);}true},
         b"net-probe" | b"net-retry" | b"net-cancel" | b"net-status" => {
             if !args.is_empty() {sb.push(b"Network diagnostics take no arguments.");return true;}
             let accepted=unsafe{match cmd {b"net-probe"|b"net-retry"=>NETWORK_PROBE.start_or_retry(),b"net-cancel"=>NETWORK_PROBE.cancel(),_=>true}};
@@ -819,6 +823,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  records      count background programs; stopall [force]");
             sb.push(b"  ls cd pwd mkdir rm mv cat write append touch df   files");
             sb.push(b"  fetch URL FILE   download a file");
+            sb.push(b"  capture FILE.png   save whole desktop (first terminal)");
             sb.push(b"  beep [HZ] [MS] [VOL]  play a note on the sound card");
             sb.push(b"  volume [N|+N|-N|mute|list]  sound volume (ROW N for one program)");
             sb.push(b"  Tab          complete a command name");
@@ -2741,13 +2746,16 @@ pub extern "C" fn _start() -> ! {
         if storage_owner==2{if let Some(e)=unsafe{STORAGE_PROBE.step(sex_pdx::get_ticks(),|r|sex_pdx::pdx_call_checked(SLOT_STORAGE,sex_pdx::spindle_probe::OP,r.header(),r.a,r.b).map(|_|()))}{storage_owner=0;probe_event(e,sb);unsafe{content_render(&line,sb);}}}
         unsafe{HISTORY_STATUS.update(desktop_storage_state(storage_owner));HISTORY_STATUS.poll(|n|{let a=n.args();sex_pdx::pdx_call_checked(SLOT_SHELL,sex_pdx::spindle_status::OP,a[0],a[1],a[2]).map(|_|())});}
         if presentation_pending && !unsafe{DISPLAY_IO.pending()} && sex_pdx::pdx_call_checked(SLOT_DISPLAY,sex_pdx::app_lifecycle::OP_APP_PRESENT,catalog.surface_id,1,0).is_ok(){presentation_pending=false;presentation_sent=true;}
+        if unsafe{capture_command::CAPTURE.step(sb,!DISPLAY_IO.pending())}{unsafe{content_render(&line,sb);}}
         if unsafe{fs_commands::FS.send()}{}
         if unsafe{fs_commands::FS.expired(sex_pdx::get_ticks(),sb)}{unsafe{content_render(&line,sb);}}
         if unsafe{fetch_command::FETCH.step(sb)}{unsafe{content_render(&line,sb);}}
         if unsafe{update_command::UPDATE.step(sb)}{unsafe{content_render(&line,sb);}}
-        let msg=if registration_pending || presentation_pending || storage_owner!=0 || unsafe{DISPLAY_IO.pending() || HISTORY_STATUS.pending() || NETWORK_PROBE.busy()} || unsafe{fs_commands::FS.busy()||fetch_command::FETCH.busy()||update_command::UPDATE.busy()}{
+        let msg=if registration_pending || presentation_pending || storage_owner!=0 || unsafe{DISPLAY_IO.pending() || HISTORY_STATUS.pending() || NETWORK_PROBE.busy()} || unsafe{fs_commands::FS.busy()||fetch_command::FETCH.busy()||update_command::UPDATE.busy()||capture_command::CAPTURE.busy()}{
             match sex_pdx::pdx_try_listen_raw(0){Some(msg)=>msg,None=>{sex_pdx::sys_yield();continue}}
         }else{sex_pdx::pdx_listen_raw(0)};
+        let capture_lines=sb.total_lines;
+        if msg.type_id==1&&unsafe{capture_command::CAPTURE.receive(msg.caller_pd,msg.arg0,sb)}{if sb.total_lines!=capture_lines{unsafe{content_render(&line,sb);}}continue;}
         if msg.type_id==1&&unsafe{fetch_command::FETCH.receive(msg.caller_pd,msg.arg0,sb)}{unsafe{content_render(&line,sb);}continue;}
         if msg.type_id==1&&msg.caller_pd==11&&unsafe{fs_commands::FS.receive(msg.arg0,sb)}{unsafe{content_render(&line,sb);}continue;}
         if let Some(r)=unsafe{DISPLAY_IO.receive(msg.caller_pd,msg.arg0)}{
@@ -2788,6 +2796,7 @@ pub extern "C" fn _start() -> ! {
         }
         if sex_pdx::app_lifecycle::close_requested(msg.type_id,msg.caller_pd,
             [msg.arg0,msg.arg1,msg.arg2],instance_pd(),INSTANCE_TASK.load(core::sync::atomic::Ordering::Acquire)) {
+            unsafe{capture_command::CAPTURE.cancel(sb);}
             let net_pending=unsafe{NETWORK_PROBE.busy()};unsafe{NETWORK_PROBE.close();}
             sex_pdx::serial_record!("[spindle.net.closed] target={} task={} pending={} terminal=1 positive_release=0",instance_pd(),catalog.task_id,net_pending as u8);
             let was_pending=unsafe{STORAGE_PROBE.busy()};
@@ -2823,6 +2832,7 @@ pub extern "C" fn _start() -> ! {
                 }
             }
             if value != 1 { continue; }
+            if scancode==0x01&&unsafe{capture_command::CAPTURE.busy()}{unsafe{capture_command::CAPTURE.cancel(sb);content_render(&line,sb);}continue;}
             // Ctrl chords edit the line; they never insert text.
             if (msg.arg0 >> 9) & 1 == 1 {
                 line_control(scancode, &mut line, hist, sb);

@@ -3,6 +3,7 @@
 pub mod font;
 pub mod qoi;
 pub mod png;
+pub mod png_encode;
 
 pub use font::draw_str;
 pub use font::draw_char;
