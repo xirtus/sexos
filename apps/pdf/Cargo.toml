@@ -1,0 +1,14 @@
+[package]
+name = "pdf"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+
+[[bin]]
+name = "pdf"
+path = "src/main.rs"
+
+[dependencies]
+sex-std = { path = "../../crates/sex-std" }
+# PDF parsing and rendering in pure Rust (Apache-2.0 OR MIT).
+hayro = "0.9.0"

@@ -781,7 +781,7 @@ pub unsafe fn wait_for_local_resume_or_switch(sched: &Scheduler) -> *const TaskC
         }
         // Timer interrupts deliberately do not schedule kernel frames. They
         // return here, where pending wakes and retained admissions are retried.
-        x86_64::instructions::interrupts::enable_and_hlt();
+        crate::hal::acpi::idle();
     }
 }
 

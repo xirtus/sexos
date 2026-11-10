@@ -43,6 +43,17 @@ fn commit_writes(fs: &mut Fs<'static, Disk>) {
     let bytes = unsafe { core::mem::replace(&mut *core::ptr::addr_of_mut!(UNCOMMITTED), 0) };
     if let Err(e) = fs.commit() { sex_pdx::serial_record!("[files.fs.commit.failed] bytes={} error={:?}", bytes, e); }
 }
+/// Before power goes: commits waiting writes and flushes the disk's own cache.
+pub fn flush_for_power() -> bool {
+    let committed = match unsafe { &mut *core::ptr::addr_of_mut!(STATE) } {
+        State::Ready(fs) => {
+            if writes_pending() { commit_writes(fs); }
+            !fs.has_changes()
+        }
+        _ => true,
+    };
+    committed && DiskFs::diskfs_block_sync() == 0
+}
 enum State { Untried, Absent, Ready(Fs<'static, Disk>) }
 
 pub struct Disk { blocks: u64 }
