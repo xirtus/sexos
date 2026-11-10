@@ -10,6 +10,10 @@ pub const PAGE: u64 = 4096;
 pub const MAX_DRAM_ENTRY: usize = 64;
 pub const TX_RING_COUNT: usize = 256;
 pub const RX_RING_COUNT: usize = 512;
+/// Receive buffers actually posted: the ring has 512 descriptors, but 64 pages are
+/// plenty for firmware notifications and keep the region small.
+pub const RX_BUFFERS: usize = 64;
+pub const RX_BUFFER_BYTES: u64 = 4096;
 pub const TFD_BYTES: u64 = 256;
 pub const CONTEXT_INFO_BYTES: usize = 1792;
 pub const CONTEXT_INFO_GEN3_BYTES: usize = 104;
@@ -31,6 +35,11 @@ const PRPH_SCRATCH_IMR_DEBUG_EN: u32 = 1 << 1;
 pub trait Dma {
     fn write(&mut self, offset: u64, bytes: &[u8]);
     fn zero(&mut self, offset: u64, len: u64);
+}
+
+/// Reads what the device wrote into the DMA region (RX status, completions, buffers).
+pub trait DmaRead {
+    fn read(&self, offset: u64, out: &mut [u8]);
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -55,7 +64,9 @@ pub struct Layout {
     pub umac: [Range; MAX_DRAM_ENTRY],
     pub paging: [Range; MAX_DRAM_ENTRY],
     pub counts: (usize, usize, usize),
-    /// First free byte after the firmware; RX buffers and the data queues go here.
+    /// `RX_BUFFERS` receive pages, one after another.
+    pub rx_buffers: Range,
+    /// First free byte after the RX buffers; the data queues go here.
     pub end: u64,
 }
 
@@ -86,10 +97,11 @@ impl Layout {
         let lmac = place(image.lmac);
         let umac = place(image.umac);
         let paging = place(image.paging);
+        let rx_buffers = take(RX_BUFFERS as u64 * RX_BUFFER_BYTES);
         let end = at;
         if end > region_bytes { return Err(Error::TooSmall { needed: end }); }
         Ok(Layout { family, context, prph_scratch, prph_info, rx_status, rx_free, rx_used, cmd_ring, iml,
-            lmac, umac, paging, counts: (image.lmac.len(), image.umac.len(), image.paging.len()), end })
+            lmac, umac, paging, counts: (image.lmac.len(), image.umac.len(), image.paging.len()), rx_buffers, end })
     }
 
     /// Copies the firmware sections and the image loader into place, writes the

@@ -26,6 +26,7 @@ mod certificate_time;
 mod trust_policy;
 mod source_denial;
 mod web;
+mod wifi;
 extern crate sex_rt;
 mod source_binding;
 // One BOOT Net main task owns this fixed error-only backing. No large stack
@@ -5354,6 +5355,8 @@ pub extern "C" fn _start() -> ! {
             },
         }
     };
+    // Intel Wi-Fi (stage W2): power up to firmware ALIVE beside the wired NIC.
+    let mut wifi=wifi::Wifi::open(sex_pdx::get_ticks());
     let mut ethernet:Option<ethernet::Driver<nic::Live>>=None;
     let mut pending_packet:Option<sex_net::Frame>=None;
     let mut transport:Option<sex_net::Engine<'static>>=None;
@@ -5370,6 +5373,10 @@ pub extern "C" fn _start() -> ! {
             }
             dev.pending()
         } else { false };
+        let preparing = preparing | match wifi.as_mut() {
+            Some(w) if w.pending() => { w.advance(sex_pdx::get_ticks()); w.pending() }
+            _ => false,
+        };
         if device.as_ref().is_some_and(|dev|dev.phase()==nic::Phase::Quiescent) {
             let (hardware,mac)=device.take().unwrap().into_quiescent().expect("NIC_PREPARATION_CUSTODY");
             ethernet=Some(ethernet::Driver::new(hardware,mac,sex_pdx::get_ticks()));
