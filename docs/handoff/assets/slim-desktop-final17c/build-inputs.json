@@ -6,5 +6,16 @@
   "C": "Apple clang21 /usr/bin/clang via task-owned PATH wrapper",
   "musl_include": "/Users/xmacbookm5/Projects/sexos-codex-integration/target/musl/include",
   "scope": "UI candidate; own same-worktree build cache initially empty at97d, no copied Cargo artifacts; FFmpeg/libc++ absent",
-  "abi_manifest_sha256": "0ea341b573b36ddd85d5865adf5f96ab4100f62fd2a887e146c29a2c84364c51"
+  "abi_manifest_sha256": "0ea341b573b36ddd85d5865adf5f96ab4100f62fd2a887e146c29a2c84364c51",
+  "limine_sha256": {
+    "limine": "a666824f00372eb990748b589d8b973115f90be9d9e2493ec5f686a70d282aa6",
+    "limine-bios.sys": "66f02e013fe044f3a954cb72474c29796f6541d990019c23269068100044f556",
+    "limine-bios-cd.bin": "7ece36a098644baa2d4e8858cfe552b9f1e4825a85abb859249e2062a9693f34",
+    "limine-uefi-cd.bin": "2ed5bd6ba53724ec504b2ddb0ef8c27739828abd9c8f19ec03bd93ba88064541",
+    "BOOTX64.EFI": "e9071610898f6a40be55e0aa60226b2a31ba763daf494ab29affc0ceae17bb54"
+  },
+  "compiler_sha256": "34129c71a01a74f7f3b2443521519b2e5447553fa187f5fcafaaf8c42cc192e2",
+  "compiler_version": "Apple clang version 21.0.0 (clang-2100.4.1.1)\nTarget: arm64-apple-darwin27.0.0\nThread model: posix\nInstalledDir: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin\n",
+  "FFmpeg": false,
+  "libcxx": false
 }

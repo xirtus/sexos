@@ -61,7 +61,8 @@ logical goldens, then use that published geometry for real input and pixel origi
 coverage thresholds remain. Older 8/36/44 offsets and 50/51 strip goldens require
 source-bound oracle migration, not relaxed assertions.
 
-Checkpoint checks: production shared metric/state cases, 38 Quil view cases, 19
+Initial source-only checkpoint (superseded by the combined evidence below):
+production shared metric/state cases, 38 Quil view cases, 19
 Spindle viewport cases, 33 Browser reader cases, 15 text-readability cases, 13 paint
 obligation cases, five clock/layout cases and three bar-layout cases pass. Renderer
 composition bodies type-check in their actual extraction fixture; its independent
@@ -142,7 +143,8 @@ Clipboard, cursor, activation and civil host wrappers passed with negative contr
 The Linen delivery fixture was repaired with independent literal origins/heights,
 an explicit scale 1 reset, and scale 2/3 retry/readiness checks; its full gate passed
 56 outbox cases and 20 production-wrapper cases. These are scoped host results; the
-final combined source still needs its fresh native and CI qualification.
+at that earlier checkpoint, the final combined source still required fresh native
+and CI qualification.
 
 The ff0 host CI run exposed one remaining stale Quil clipboard fixture: its
 explicit document layout omitted the new UI scale. It now pins scale 1; the
@@ -207,3 +209,45 @@ than a ROM signature, retaining the minimum 100 checked pixels per line and know
 Linen-overlap exclusion. All 30 launcher adverse controls pass, including retained
 ink at an independent literal 34px current body origin. Actual pointer/native
 qualification of these drivers remains pending at this checkpoint.
+
+## Completed pointer and isolated latency qualification
+
+The actual scale-2 yellow control at (90,98) minimizes Quil; the real launcher
+restores the same frame. Actual clock clicks at (1120,28) open and close the clock
+panel. Palette content at scale 2 passes full glyph checks; after real Escape,
+17,135 source-selected fully covered pixels contain no remaining launcher ink
+(1,001 known Linen-overlap pixels excluded, with every line still above the
+unchanged 100-pixel minimum). The first parking attempt was correctly refused as
+`corner_poison_after_ready`; its log is retained. The successful attempt parks at
+the existing safe bar point rather than bypassing the HID guard.
+
+The actual corner drag changes Quil 692x756→572x676 while preserving tiling gaps.
+The actual title drag floats Quil to x=188 and preserves that position when another
+program opens. These are native input/correctness checks, not timing claims.
+
+The matched baseline is clean master 3e075b59, ISO SHA-256
+`0e68ed67ef7126e745b75a0771b927e60cbb7d2b661de0024980398fe41e3683`.
+It was built in a fresh independent Rust target using the same verified musl
+headers, Apple clang 21 binary, no-media profile and all five identical Limine
+binary hashes. Both images use the same CPU/RTC/resolution and fresh blank disks.
+No other agent's build or guest ran during the isolated traces.
+
+A same-image control of 20 real Super+M layout toggles per boot gives p95 ratio
+1.01831 (CPU p95 ratio 1.01853). Three alternating baseline/candidate pairs then
+supply 60 events per image after six warm-up toggles per boot. Input-to-observed
+pixel p95 is 477.074500→449.747459 ms, ratio 0.942720; CPU p95 ratio is 0.933336.
+The unchanged <=1.05 regression threshold passes. The observed point is (1000,750),
+a blank body point with identical master/monocle colors on both images. This
+includes QMP/snapshot polling and is neither a hardware latch, full-frame timing
+nor a universal desktop performance claim. Raw samples, build bindings and the
+control are retained in `performance.json`; earlier failed/contended evidence is
+not replaced. All guests stopped and were reaped before the window was released.
+
+The full refreshed Python suite passes all 1,165 tests. Its first attempt and CI
+caught a removed `glyph` compatibility import still used by the readability gate;
+that import is restored and the failed logs remain. The full service custody gate,
+including clipboard/Quil/IPC sender checks and sexnet service/jobs/TLS/source-custody
+negative controls, passes. Final current-head CI is still required before merge.
+No further production changes follow runtime source 17c7f700 in these evidence-only
+and checker-fix commits. Whole-panel rounded masks and natural Sans app-body labels
+remain the next approved, separate topic.

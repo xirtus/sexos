@@ -12,7 +12,7 @@ from desktop_close_gate import QMP
 from network_contention_gate import frozen_binding,cleanup_receipts,MAX_PCAP,syn_records
 from check_launcher_pixels import verify as launcher_pixels,layout as launcher_layout
 from check_spindle_viewport_pixels import verify as spindle_pixels
-from check_desktop_pixels import font_from_source,cell_coverage,chrome_geometry
+from check_desktop_pixels import font_from_source,glyph,cell_coverage,chrome_geometry
 from check_disk_persistence import ppm_rgb
 from check_tcp_capture import inspect as tcp_capture
 from check_nonunix_target import inspect as target_check

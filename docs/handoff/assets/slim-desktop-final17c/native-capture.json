@@ -1,0 +1,27 @@
+{
+  "ok": true,
+  "mode": "1280x800",
+  "epoch": 1,
+  "generation": 34,
+  "png_bytes": 3073098,
+  "iso_sha256": "213007e199bb3cda516abe5ad08c7b8ed54bc99e4153a073e74c3bdc86cde34b",
+  "capture_runner_sha256": "17ebf6d16c19de2956cd7ecafc4391673d42d2abf4bdda45ffc663b4c0ea7e7e",
+  "helper_sha256": "feb1c6afb7a28a429a92d8c2476776d4c02034835471bf34259a28f57fa6a6a9",
+  "extractor_source_sha256": "6e3a52d800498f774ea65da9913d5bf6a962c12f8ca707cb999976c0a8339ca1",
+  "fs_source_sha256": "a500db6979526a4277ee3d7d5a6388aab5e7afee0f2c9a951d41e7d6a356ac4c",
+  "dynamic_reference": {
+    "frame": 153,
+    "x": 706,
+    "y": 543,
+    "w": 566,
+    "h": 249,
+    "bar_h": 28,
+    "padding": 8
+  },
+  "scope": "native PNG decode and exact live-scanout comparison outside validated terminal/bar dynamic mask",
+  "png_sha256": "2fb036bc63efb4284d739bf7d428f16fc307233641abbcdf040549c9127d999a",
+  "scanout_sha256": "25d3bbdaf44823c4d7957506bfce9b8d95bca50503c5c46236d8a536800da716",
+  "matching_pixels": 833930,
+  "compared_pixels": 833930,
+  "match_ratio": 1.0
+}
