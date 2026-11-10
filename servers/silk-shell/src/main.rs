@@ -5509,6 +5509,20 @@ unsafe fn document_view_poll() {
     }
 }
 static mut SPINDLE_VIEWS:[sex_pdx::spindle_view::Delivery;app_catalog::SPINDLE_COUNT]=[const{sex_pdx::spindle_view::Delivery::new()};app_catalog::SPINDLE_COUNT];
+static mut DISPLAY_SCALE:sex_pdx::desktop_style::chrome::ScaleClient=sex_pdx::desktop_style::chrome::ScaleClient::new();
+unsafe fn display_scale_poll(){
+    let Some((sequence,step))=DISPLAY_SCALE.request()else{return;};
+    let(status,_)=raw_pdx_call(SLOT_DISPLAY,sex_pdx::desktop_style::OP_DISPLAY_SCALE,step as u64,sequence,0);
+    if status==0 {DISPLAY_SCALE.admitted();}
+    else if status!=sex_pdx::ERR_SERVICE_NOT_READY {DISPLAY_SCALE.cancel();}
+}
+unsafe fn display_scale_receive(msg:&sex_pdx::PdxMessage)->bool {
+    if msg.type_id!=1{return false;}
+    let Some(scale)=DISPLAY_SCALE.receive(msg.caller_pd,sex_pdx::display_ready::DISPLAY_PD_ID,msg.arg0)else{return false;};
+    sex_pdx::desktop_style::set_ui_scale(scale);
+    sex_pdx::serial_record!("[shell.display.scale.applied] scale={} receipt={:#x} cpu_publication=1",scale,msg.arg0);
+    true
+}
 static mut DISPLAY_FOCUS: linen_text_delivery::FocusDelivery = linen_text_delivery::FocusDelivery::new();
 static mut LAST_DISPLAY_FOCUS_RESULT:Option<(u64,u64)>=None;
 #[derive(Clone,Copy)]struct LauncherFocus {
@@ -5680,9 +5694,11 @@ unsafe fn adopt_running_apps() {
 /// empty: register as window manager again, put the cursor and the active scene's
 /// windows back, and send every view's content and the focus again.
 unsafe fn display_came_back() {
+    DISPLAY_SCALE.cancel();
+    if let Ok(physical)=sex_pdx::display_boot::physical(){sex_pdx::desktop_style::set_ui_scale(physical.scale);}
     static mut COMEBACKS: u32 = 0;
     COMEBACKS += 1;
-    let _ = raw_pdx_call(SLOT_DISPLAY, OP_REGISTER_WM, 0, 0, 0);
+    let _ = raw_pdx_call(SLOT_DISPLAY, OP_REGISTER_WM, sex_pdx::crash_log::restarts(), 0, 0);
     let (cx, cy) = (desktop_width() / 2, desktop_height() / 2);
     let _ = raw_pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_CURSOR, (cy as u64) << 32 | cx as u64, (18u64 << 32) | 12u64);
     send_scene_render_tokens();
@@ -10541,9 +10557,10 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
             true
         }
         desktop_keys::Action::DisplayScale(step)=>{
-            // Display owns the scale: chrome, text and cursor follow it.
-            let (status,_)=pdx_call(SLOT_DISPLAY,sex_pdx::desktop_style::OP_DISPLAY_SCALE,step as i64 as u64,0,0);
-            sex_pdx::serial_record!("[shell.display.scale] step={} status={:#x}",step,status);
+            // Retain one request; delivery is not an applied geometry receipt.
+            let queued=DISPLAY_SCALE.begin(step as i64);
+            display_scale_poll();
+            sex_pdx::serial_record!("[shell.display.scale] step={} queued={}",step,queued as u8);
             true
         }
     }
@@ -24713,6 +24730,9 @@ fn pop_startup_message() -> Option<sex_pdx::PdxMessage> {
 pub extern "C" fn _start() -> ! {
     let geometry=sex_pdx::display_boot::geometry().expect("BOOT_SHELL_DISPLAY_GEOMETRY");
     DESKTOP_WIDTH.store(geometry.width,core::sync::atomic::Ordering::Release);DESKTOP_HEIGHT.store(geometry.height,core::sync::atomic::Ordering::Release);
+    let physical=sex_pdx::display_boot::physical().expect("BOOT_SHELL_DISPLAY_SCALE");
+    sex_pdx::desktop_style::set_ui_scale(physical.scale);
+    unsafe{DISPLAY_SCALE=sex_pdx::desktop_style::chrome::ScaleClient::for_incarnation(sex_pdx::crash_log::restarts());}
 
     serial_println!("[silkshell.init.start]");
     // Wait before any helper or OP_REGISTER_WM can send ordinary display work.
@@ -24826,7 +24846,7 @@ pub extern "C" fn _start() -> ! {
     serial_println!("[silk-shell] AUTHORITATIVE WM LISTENING (PDX SLOT 6)");
 
     // Register as window manager with sexdisplay (first-caller-wins; kernel-verified identity).
-    sex_pdx::display_ready::send_startup_display(OP_REGISTER_WM, 0, 0, 0)
+    sex_pdx::display_ready::send_startup_display(OP_REGISTER_WM, sex_pdx::crash_log::restarts(), 0, 0)
         .expect("shell startup display registration failed");
 
     // Stage 2B: advertise workspace 0 active to SilkBar
@@ -25089,7 +25109,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { session::save(); }
         unsafe { record_spawn_poll(); }
         unsafe { program_resize_flush(); }
-        unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); shell_close_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); notification_poll(); }
+        unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); display_scale_poll(); shell_close_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); notification_poll(); }
         // Retain failed notification attempts while continuing normal receives.
         // Success means enqueue only; sexinput validates caller and version.
         if shell_ready_publisher.poll() {
@@ -25768,7 +25788,7 @@ pub extern "C" fn _start() -> ! {
                 unsafe { flush_pending_cursor_send(); }
                 // A full input ring may recover while the shell has no work.
                 // Return to the publisher instead of blocking in listen.
-                if shell_ready_publisher.is_pending() || unsafe { RECORD_SPAWN_LEFT != 0 || CURSOR_SEND_PENDING || APP_INPUT.pending() || LAUNCHER_FOCUS.is_some() || CLIPBOARD_INTAKE.pending() || CLIPBOARD.pending() || WORKSPACE_REFRESH_PENDING.iter().any(|p|*p) || linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_POINTER.is_some() || LINEN_ASYNC.can_send() || NOTIFY_NOTICE_UNTIL != 0 } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
+                if shell_ready_publisher.is_pending() || unsafe { RECORD_SPAWN_LEFT != 0 || DISPLAY_SCALE.request().is_some() || CURSOR_SEND_PENDING || APP_INPUT.pending() || LAUNCHER_FOCUS.is_some() || CLIPBOARD_INTAKE.pending() || CLIPBOARD.pending() || WORKSPACE_REFRESH_PENDING.iter().any(|p|*p) || linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_POINTER.is_some() || LINEN_ASYNC.can_send() || NOTIFY_NOTICE_UNTIL != 0 } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
                     sys_yield();
                     continue;
                 }
@@ -25785,6 +25805,7 @@ pub extern "C" fn _start() -> ! {
             if spindle_history_status_receive(&msg) {continue;}
             if workspace_refresh_receive(&msg) { continue; }
             if shell_close_declined_receive(&msg) { continue; }
+            if display_scale_receive(&msg) { continue; }
             if desktop_text_receive(&msg) { continue; }
             if linen_async_reply(&msg) { continue; }
             if APP_CUSTODY.iter().flatten().any(|e| e.target == msg.caller_pd && !e.allows_operation(msg.caller_task,msg.type_id, [msg.arg0,msg.arg1,msg.arg2])) {
