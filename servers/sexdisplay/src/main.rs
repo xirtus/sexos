@@ -586,7 +586,7 @@ fn composite_pixel_source(x: usize, y: usize, w: usize, h: usize, bg: u32, sourc
                 c = if outer_edge {
                     glass_over_bg(scene.tokens.frame_rim_color, x, y, 112, scene)
                 } else {
-                    glass_over_bg(scene.tokens.frame_top_bar_color, x, y, 224, scene)
+                    glass_over_bg(sex_pdx::desktop_style::NATIVE_CANVAS, x, y, 224, scene)
                 };
             }
         } else {

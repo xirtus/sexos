@@ -226,7 +226,7 @@ fn reference_composite_pixel_selected(x: usize, y: usize, w: usize, h: usize, bg
                             c = if edge {
                                 glass_over_bg(DISPLAY_TOKENS.frame_rim_color, x, y, 112)
                             } else {
-                                glass_over_bg(DISPLAY_TOKENS.frame_top_bar_color, x, y, 224)
+                                glass_over_bg(sex_pdx::desktop_style::NATIVE_CANVAS, x, y, 224)
                             };
                         }
                     } else {
