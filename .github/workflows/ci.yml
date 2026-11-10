@@ -55,6 +55,8 @@ jobs:
       run: bash scripts/hwdb_host_gate.sh
     - name: Fetch crates for offline host gates
       run: cargo fetch --locked
+    - name: Intel Wi-Fi driver core (crypto vectors, handshakes, firmware files, power-up)
+      run: bash scripts/wifi_host_gate.sh
     - name: Host kernel-model regressions
       run: |
         python3 scripts/check_architectural_truth.py --run-host --evidence-dir "$RUNNER_TEMP/sexos-truth"

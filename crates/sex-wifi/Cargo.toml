@@ -1,0 +1,13 @@
+[package]
+name = "sex-wifi"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "Intel Wi-Fi 6/6E (AX200/AX201/AX210/AX211) driver core and WPA2/WPA3 supplicant for SexOS"
+
+[dependencies]
+aes = { version = "=0.8.4", default-features = false }
+hmac = { version = "=0.12.1", default-features = false }
+sha1 = { version = "0.10", default-features = false, features = ["force-soft"] }
+sha2 = { version = "=0.10.9", default-features = false, features = ["force-soft"] }
+p256 = { version = "=0.13.2", default-features = false, features = ["arithmetic", "expose-field"] }
