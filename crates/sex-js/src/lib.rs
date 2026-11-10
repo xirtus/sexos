@@ -179,7 +179,7 @@ struct Wasmi<P: Page + 'static> {
     memory: Memory,
     alloc: TypedFunc<i32, i32>,
     free: TypedFunc<i32, ()>,
-    eval: TypedFunc<(i32, i32, i32, i32, i32), i32>,
+    eval: TypedFunc<(i32, i32, i32, i32, i32, i32), i32>,
     module: TypedFunc<(i32, i32, i32, i32, i32, i32), i32>,
     ready: TypedFunc<i32, i32>,
     dispatch: TypedFunc<(i32, i32, i32), i32>,
@@ -199,7 +199,7 @@ impl<P: Page + 'static> Vm<P> {
             Vm::Native(v) => v.write(at, bytes),
         }
     }
-    fn eval(&mut self, a: (i32, i32, i32, i32, i32)) -> Result<i32, Error> { match self { Vm::Wasmi(w) => w.eval.call(&mut w.store, a).map_err(trapped), #[cfg(sexjs_native)] Vm::Native(v) => v.eval(a) } }
+    fn eval(&mut self, a: (i32, i32, i32, i32, i32, i32)) -> Result<i32, Error> { match self { Vm::Wasmi(w) => w.eval.call(&mut w.store, a).map_err(trapped), #[cfg(sexjs_native)] Vm::Native(v) => v.eval(a) } }
     fn module(&mut self, a: (i32, i32, i32, i32, i32, i32)) -> Result<i32, Error> { match self { Vm::Wasmi(w) => w.module.call(&mut w.store, a).map_err(trapped), #[cfg(sexjs_native)] Vm::Native(v) => v.module(a) } }
     fn ready(&mut self, a: i32) -> Result<i32, Error> { match self { Vm::Wasmi(w) => w.ready.call(&mut w.store, a).map_err(trapped), #[cfg(sexjs_native)] Vm::Native(v) => v.ready(a) } }
     fn dispatch(&mut self, a: (i32, i32, i32)) -> Result<i32, Error> { match self { Vm::Wasmi(w) => w.dispatch.call(&mut w.store, a).map_err(trapped), #[cfg(sexjs_native)] Vm::Native(v) => v.dispatch(a) } }
@@ -302,9 +302,20 @@ impl<P: Page + 'static> Script<P> {
 
     /// Runs a classic script. `name` shows in error stacks.
     pub fn eval(&mut self, source: &str, name: &str) -> Result<(), Error> {
+        self.eval_reporting(source, name, 0)
+    }
+
+    /// Evaluates a browser-owned classic resource without exposing source bytes
+    /// to page hooks. The real exception reaches page callbacks only when readable;
+    /// opaque cross-origin errors expose null and the standard generic message.
+    pub fn eval_resource(&mut self, source: &str, name: &str, muted_errors: bool) -> Result<(), Error> {
+        self.eval_reporting(source, name, if muted_errors { 2 } else { 1 })
+    }
+
+    fn eval_reporting(&mut self, source: &str, name: &str, mode: i32) -> Result<(), Error> {
         let src = self.put(source.as_bytes())?;
         let nm = self.put(name.as_bytes())?;
-        let r = self.vm.eval((src, source.len() as i32, nm, name.len() as i32, self.load_budget_ms));
+        let r = self.vm.eval((src, source.len() as i32, nm, name.len() as i32, self.load_budget_ms, mode));
         self.vm.free(src);
         self.vm.free(nm);
         let r = match r { Ok(0) => Ok(()), Ok(_) => Err(Error::Thrown), Err(x) => Err(x) };

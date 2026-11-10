@@ -20,21 +20,26 @@ def main():
    elif self.path=='/page':
     body=('''<!doctype html><title>Classic resources</title><h1>Classic resources</h1><script>
      const readableFetch=fetch;let done=0;
-     function finish(){if(++done===6)console.log('classic cases done');}
+     function finish(){if(++done===8)console.log('classic cases done');}
      globalThis.fetch=()=>{console.log('FAIL fetch hook');throw Error('fetch hook');};
      globalThis.eval=()=>{console.log('FAIL eval hook');throw Error('eval hook');};
+     window.onerror=(message,source,line,column,error)=>{if(message==='same error')console.log('same error callback',error===sameError,error instanceof TypeError);else if(message==='Script error.')console.log('opaque error callback',error===null);else console.log('FAIL unmuted error',message);};
+     window.addEventListener('error',e=>console.log('error event',e.message,e.message==='Script error.'?e.error===null:e.error===sameError));
      function bad(path,name,attr){const s=document.createElement('script');s.src='''+json.dumps(bbase)+'''+path;if(attr)s.setAttribute('crossorigin',attr);s.onload=()=>console.log('FAIL '+name+' executed');s.onerror=()=>{console.log(name+' blocked');finish();};document.head.appendChild(s);}
      const good=document.createElement('script');good.id='good';good.src='''+json.dumps(bbase)+'''+'/good.js';
      good.onload=()=>{console.log('classic loaded',classicRuns,good.textContent==='');finish();readableFetch('''+json.dumps(bbase)+'''+'/good.js').then(()=>console.log('FAIL fetch leaked'),()=>{console.log('fetch blocked');finish();});};
      good.onerror=()=>console.log('FAIL classic resource');document.head.appendChild(good);
      bad('/html.js','html');bad('/nosniff.js','nosniff');bad('/corp.js','corp');bad('/cors.js','cors','anonymous');
+     for(const pair of [['''+json.dumps(abase)+'''+'/same-error.js','same'],['''+json.dumps(bbase)+'''+'/opaque-error.js','opaque']]){const s=document.createElement('script');s.src=pair[0];s.onload=()=>{console.log(pair[1]+' error resource loaded');finish();};s.onerror=()=>console.log('FAIL throwing script load');document.head.appendChild(s);}
      const removed=document.createElement('script');removed.src='''+json.dumps(bbase)+'''+'/removed.js';document.head.appendChild(removed);removed.remove();
      const changed=document.createElement('script');changed.src='''+json.dumps(bbase)+'''+'/stale.js';document.head.appendChild(changed);changed.src='''+json.dumps(bbase)+'''+'/changed.js';
      const inline=document.createElement('script');inline.text="console.log('inline intrinsic')";document.head.appendChild(inline);
      </script>''').encode();mime='text/html';extra=[]
    elif self.path=='/cancel':body=('''<!doctype html><script>const s=document.createElement('script');s.src='''+json.dumps(bbase)+'''+'/old-page.js';document.head.appendChild(s);location.href='/next';</script>''').encode();mime='text/html';extra=[]
    elif self.path=='/next':body=b"<!doctype html><h1>New page</h1><script>console.log('navigation clean',typeof classicRuns);</script>";mime='text/html';extra=[]
-   elif self.path=='/good.js':body=b"globalThis.classicRuns=(globalThis.classicRuns||0)+1; console.log('classic body',document.currentScript.id);";mime='application/javascript';extra=[('X-Content-Type-Options','nosniff')]
+   elif self.path=='/good.js':body=b"globalThis.classicRuns=(globalThis.classicRuns||0)+1; document.body.setAttribute('data-classic','ran'); console.log('classic body',document.currentScript.id);";mime='application/javascript';extra=[('X-Content-Type-Options','nosniff')]
+   elif self.path=='/same-error.js':body=b"globalThis.sameError=new TypeError('same error');throw sameError;";mime='application/javascript';extra=[]
+   elif self.path=='/opaque-error.js':body=b"throw new TypeError('private cross-origin detail');";mime='application/javascript';extra=[]
    elif self.path in ('/html.js','/nosniff.js','/corp.js','/cors.js'):
     body=b"console.log('FAIL rejected source executed');";mime='text/html' if self.path=='/html.js' else 'text/plain' if self.path=='/nosniff.js' else 'application/javascript';extra=[('X-Content-Type-Options','nosniff')] if self.path=='/nosniff.js' else [('Cross-Origin-Resource-Policy','same-origin')] if self.path=='/corp.js' else []
    else:self.send_response(404);self.end_headers();return
@@ -67,7 +72,7 @@ def main():
   saved=g['wait'](r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',start,240);assert saved[1].startswith('Saved'),saved[1]
   start=len(t());command(f'run +net web {abase}/page')
   g['wait'](r'\[web.console\] level=0 classic cases done',start,300)
-  for mark in ('classic body good','classic loaded 1 true','fetch blocked','html blocked','nosniff blocked','corp blocked','cors blocked','inline intrinsic'):
+  for mark in ('classic body good','classic loaded 1 true','fetch blocked','html blocked','nosniff blocked','corp blocked','cors blocked','inline intrinsic','same error callback true true','opaque error callback true','error event same error true','error event Script error. true','same error resource loaded','opaque error resource loaded'):
    assert '[web.console] level=0 '+mark in t()[start:],mark
   assert '[web.console] level=0 FAIL' not in t()[start:]
   good=[r for r in seen if r['path']=='/good.js'];assert len(good)==2,good

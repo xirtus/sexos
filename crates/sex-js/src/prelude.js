@@ -207,11 +207,13 @@
   }
   function report(e) {
     log(2, [e && e.stack ? e.name + ': ' + e.message + '\n' + e.stack : e]);
+    notifyError(e, e && e.message !== undefined ? String(e.message) : String(e));
+  }
+  function notifyError(e, message) {
     // window.onerror and 'error' listeners hear about it too (not about their own errors).
     if (reporting) return;
     reporting = true;
     try {
-      const message = e && e.message !== undefined ? String(e.message) : String(e);
       if (typeof window.onerror === 'function') window.onerror(message, '', 0, 0, e);
       const ev = new Event('error'); ev.error = e; ev.message = message; ev.filename = ''; ev.lineno = 0; ev.colno = 0;
       const arr = window._listeners && window._listeners.error;
@@ -3711,8 +3713,8 @@
 
   const KEY_TYPES = new Set(['keydown', 'keyup', 'keypress']);
   // The browser's entry point: one string, fields split by tabs.
-  Object.defineProperty(window, '__sx_dispatch', { value: function (msg) {
-    try { return dispatch(msg); } finally { flushCanvases(); }
+  Object.defineProperty(window, '__sx_dispatch', { value: function (msg, detail) {
+    try { return dispatch(msg, detail); } finally { flushCanvases(); }
   }, configurable: false, writable: false, enumerable: false });
   // Mouse input: `mouse\tKIND\tNODE\tX\tY\tBUTTON\tBUTTONS\tSTEPS`, X and Y in
   // viewport pixels, NODE the element under the pointer (empty for none). Answers 1
@@ -3785,12 +3787,14 @@
     }
     return 0;
   }
-  function dispatch(msg) {
+  function dispatch(msg, detail) {
     const f = String(msg).split('\t');
     switch (f[0]) {
       case 'mouse': return mouseInput(f);
       case 'flush': return 0;
       case 'tick': return runTimers(performance.now());
+      case 'script-error': report(detail); return 0;
+      case 'script-error-muted': log(2, ['Script error.']); notifyError(null, 'Script error.'); return 0;
       case 'fetched': fetched(f[1], +f[2], +f[3]); return 0;
       case 'media': mediaState(f); return 0;
       case 'mse': mseState(f); return 0;

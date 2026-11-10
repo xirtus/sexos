@@ -1004,3 +1004,18 @@ fn baseline_hot_call_measurement() {
     }
     eprintln!("baseline-jit paired_ns interpreter={:?} jit={:?}",samples[0],samples[1]);
 }
+
+#[test]
+fn classic_resource_errors_preserve_values_and_mute_cross_origin_details() {
+    let mut s=page("");
+    s.eval("var original=new TypeError('same-origin failure'); window.onerror=(message,source,line,column,error)=>console.log('handler',message,error===original,error instanceof TypeError); window.addEventListener('error',e=>console.log('listener',e.message,e.error===original));", "handlers.js").unwrap();
+    assert_eq!(s.eval_resource("throw original", "http://example.test/same.js", false),Err(sex_js::Error::Thrown));
+    let out:Vec<String>=logs(&mut s).into_iter().filter(|line|line.starts_with("0:")).collect();
+    assert_eq!(out,["0:handler same-origin failure true true","0:listener same-origin failure true"]);
+    let mut s=page("");
+    s.eval("window.onerror=(message,source,line,column,error)=>console.log('handler',message,error===null); window.addEventListener('error',e=>console.log('listener',e.message,e.error===null));", "handlers.js").unwrap();
+    assert_eq!(s.eval_resource("throw new Error('private cross-origin detail')", "https://remote.test/opaque.js", true),Err(sex_js::Error::Thrown));
+    let out=logs(&mut s);
+    assert_eq!(out,["2:Script error.","0:handler Script error. true","0:listener Script error. true"]);
+    assert!(s.page().bodies.is_empty());
+}

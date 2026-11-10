@@ -84,7 +84,7 @@ uint8_t *sxn_memory(w2c_sexjs *i, uint64_t *size) { *size = i->w2c_memory.size; 
 int sxn_init(w2c_sexjs *i, u32 heap, u32 *out) { ENTER *out = w2c_sexjs_sx_init(i, heap); LEAVE }
 int sxn_alloc(w2c_sexjs *i, u32 n, u32 *out) { ENTER *out = w2c_sexjs_sx_alloc(i, n); LEAVE }
 int sxn_release(w2c_sexjs *i, u32 p) { ENTER w2c_sexjs_sx_free(i, p); LEAVE }
-int sxn_eval(w2c_sexjs *i, u32 a, u32 b, u32 c, u32 d, u32 e, u32 *out) { ENTER *out = w2c_sexjs_sx_eval(i, a, b, c, d, e); LEAVE }
+int sxn_eval(w2c_sexjs *i, u32 a, u32 b, u32 c, u32 d, u32 e, u32 f, u32 *out) { ENTER *out = w2c_sexjs_sx_eval(i, a, b, c, d, e, f); LEAVE }
 int sxn_module(w2c_sexjs *i, u32 a, u32 b, u32 c, u32 d, u32 e, u32 f, u32 *out) { ENTER *out = w2c_sexjs_sx_module(i, a, b, c, d, e, f); LEAVE }
 int sxn_ready(w2c_sexjs *i, u32 a, u32 *out) { ENTER *out = w2c_sexjs_sx_modules_ready(i, a); LEAVE }
 int sxn_dispatch(w2c_sexjs *i, u32 a, u32 b, u32 c, u32 *out) { ENTER *out = w2c_sexjs_sx_dispatch(i, a, b, c); LEAVE }

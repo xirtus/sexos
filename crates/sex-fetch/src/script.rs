@@ -41,6 +41,9 @@ pub fn allowed(page: &str, response: &str, headers: &str, cors: bool) -> bool {
         return false;
     };
     let page = Url::parse(page).ok(); // built-in/file pages have an opaque origin
+    if page.as_ref().is_some_and(|p| p.secure) && !response.secure {
+        return false;
+    }
     let same_origin = page
         .as_ref()
         .is_some_and(|p| p.origin() == response.origin());
@@ -153,7 +156,7 @@ mod tests {
             &site,
             false
         ));
-        assert!(allowed(
+        assert!(!allowed(
             "https://a.example.com/",
             "http://b.example.com/x.js",
             &site,

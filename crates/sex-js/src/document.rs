@@ -99,10 +99,14 @@ impl FetchAsk {
 }
 
 impl Document {
+    /// Whether a completion belongs to this document, independent of repainting
+    /// or a script intentionally removing its own node after evaluation.
+    pub fn classic_script_owner(&self, ask: &ClassicScript) -> bool { ask.owner == self.resource_owner }
+
     /// A delayed script is still bound to this document and the unchanged,
     /// connected DOM element. Reloading the same URL creates a new owner token.
     pub fn classic_script_current(&self, ask: &ClassicScript) -> bool {
-        ask.owner == self.resource_owner && ask.node < self.dom.nodes.len()
+        self.classic_script_owner(ask) && ask.node < self.dom.nodes.len()
             && self.dom.tag(ask.node) == Some("script")
             && self.dom.is_inclusive_ancestor(Dom::ROOT, ask.node)
             && self.dom.attr(ask.node, "src").map(str::trim) == Some(ask.url.as_str())
