@@ -3416,10 +3416,18 @@ fn service_next_request(){
         BLOCK_RAW_WRITE => {
             let fill_va = block_view.map(|view| view.virtual_address).unwrap_or(0);
             if _buf_cap != SLOT_BLOCK_BUFFER || fill_va == 0 || fill_va == u64::MAX { BLOCK_ERR_NO_DEVICE } else {
-                // From the first raw write on, the running system's own view may change
-                // under it: it stops writing until the next start.
+                // A raw write that reaches the partition table or the running system's own
+                // store may change its view under it: it stops writing until the next start.
+                // Writes elsewhere (the other system slot, the boot menu) leave it as it is.
                 unsafe {
-                    LENS = match LENS { Lens::Store { base, .. } | Lens::Locked { base } => Lens::Locked { base }, _ => Lens::Locked { base: 0 } };
+                    let (first, end) = (offset / NVME_LBA_BYTES, (offset + size).div_ceil(NVME_LBA_BYTES));
+                    let total = disk_sectors();
+                    let table = first < 34 || end > total.saturating_sub(34);
+                    LENS = match LENS {
+                        Lens::Store { base, sectors } if !table && (end <= base || first >= base + sectors) => LENS,
+                        Lens::Store { base, .. } | Lens::Locked { base } => Lens::Locked { base },
+                        _ => Lens::Locked { base: 0 },
+                    };
                     RAW = true;
                 }
                 let status = nvme_write_one_block(offset, size, fill_va);

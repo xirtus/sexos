@@ -8,8 +8,14 @@
 //! Frames go out on the management queue (`tx`); answers come up as RX MPDUs.
 //! Each frame is tried three times, waiting 300 ms for its answer.
 //!
-//! WPA3 networks authenticate with SAE instead of open-system frames (W5d), so
-//! they are refused here for now. WPA2's 4-way handshake follows (`rsna`, W5c).
+//! WPA3 networks authenticate with SAE instead (W5d, `Assoc::with_sae`): a commit
+//! (transaction 1) and a confirm (transaction 2) each way, as net80211 and
+//! wpa_supplicant's `sae.c` exchange them. The commit carries status 126 when the
+//! AP does hash-to-element; an AP under load asks for an anti-clogging token first
+//! (status 76) and the commit is sent again with it. The PMK SAE gives then feeds
+//! the 4-way handshake (`rsna`, W5c), as WPA2's passphrase hash does. WPA3
+//! requires management frame protection, which the RSN element says.
+//! Transition networks (WPA2 and WPA3) keep using WPA2.
 use crate::bringup::Bringup;
 use crate::cmdq::{self, CommandQueue};
 use crate::context::{Dma, DmaRead};
@@ -21,6 +27,7 @@ use crate::init::Failure;
 use crate::join::{self, Target, ACTION_MODIFY, ADD_STA_BYTES, MAC_CONTEXT_BYTES};
 use crate::scan::parse_mpdu;
 use crate::tx::{self, TxQueue};
+use crate::sae::{self, Sae};
 
 pub const ATTEMPTS: u8 = 3;
 pub const FRAME_US: u64 = 300_000;
@@ -28,7 +35,7 @@ const COMMAND_US: u64 = 1_000_000;
 const ADD_STA_SUCCESS: u32 = 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Step { Auth, Assoc, Station, Mac, Associated, Refused(Refusal), Failed(Failure) }
+pub enum Step { SaeCommit, SaeConfirm, Auth, Assoc, Station, Mac, Associated, Refused(Refusal), Failed(Failure) }
 
 /// Why the AP turned us away, beyond the command failures `init::Failure` names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -41,7 +48,19 @@ pub enum Refusal {
     Disconnected(u16),
     /// The firmware could not send the frame (last TX status).
     NotSent { frame: &'static str, status: u16 },
+    /// The AP's SAE commit or confirm did not check out (a wrong password shows
+    /// as a bad confirm).
+    Sae(sae::Error),
 }
+
+/// Status codes of SAE authentication frames.
+pub const STATUS_ANTI_CLOGGING_TOKEN: u16 = 76;
+pub const STATUS_SAE_HASH_TO_ELEMENT: u16 = 126;
+pub const AUTH_SAE: u16 = 3;
+const TOKEN_BYTES: usize = 64;
+
+/// Our side of SAE while it runs.
+struct SaeRun { sae: Sae, h2e: bool, token: [u8; TOKEN_BYTES], token_len: usize }
 
 /// A frame from the AP that matters here.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -64,6 +83,7 @@ pub struct Assoc {
     /// The last EAPOL frame the AP sent while association was finishing: the
     /// 4-way handshake's message 1 often follows the association response at once.
     pub early: Option<([u8; crate::eapol::MAX_FRAME], usize)>,
+    sae: Option<SaeRun>,
 }
 
 impl Assoc {
@@ -74,7 +94,20 @@ impl Assoc {
             Security::Wpa3Personal => Step::Failed(Failure::Unsupported("wpa3_sae")),
             Security::Unsupported => Step::Failed(Failure::Unsupported("security")),
         };
-        Self { step, target, bss, me, family, tx: TxQueue::new(family), aid: 0, attempts: 0, seq: 0, since: now, sent: false, status: 0, early: None }
+        Self { step, target, bss, me, family, tx: TxQueue::new(family), aid: 0, attempts: 0, seq: 0, since: now, sent: false, status: 0, early: None, sae: None }
+    }
+    /// After a finished join to a WPA3 network: SAE with `sae`, built on the
+    /// password element for this AP and us (hash-to-element when `h2e`).
+    pub fn with_sae(bss: Bss, target: Target, me: [u8; 6], family: Family, now: u64, sae: Sae, h2e: bool) -> Self {
+        let mut a = Self::new(bss, target, me, family, now);
+        a.step = Step::SaeCommit;
+        a.bss.h2e = h2e;
+        a.sae = Some(SaeRun { sae, h2e, token: [0; TOKEN_BYTES], token_len: 0 });
+        a
+    }
+    /// The PMK SAE agreed on, once confirmed.
+    pub fn sae_pmk(&self) -> Option<[u8; 32]> {
+        self.sae.as_ref().filter(|_| matches!(self.step, Step::Assoc | Step::Station | Step::Mac | Step::Associated)).map(|s| s.sae.pmk)
     }
     /// Our address, as the frames carry it.
     pub fn me(&self) -> [u8; 6] { self.me }
@@ -87,11 +120,34 @@ impl Assoc {
         self.seq = (self.seq + 1) & 0xfff;
         match step {
             Step::Auth => (w::auth(out, &self.bss.bssid, &self.me, self.seq, w::AUTH_OPEN, 1, 0, &[]), "auth"),
+            Step::SaeCommit => {
+                let s = self.sae.as_ref().unwrap();
+                let commit = s.sae.commit();
+                // Group, then the token (inside its container element with H2E), scalar, element.
+                let mut body = [0u8; sae::COMMIT_LEN + TOKEN_BYTES + 3];
+                let mut n = 0;
+                body[..2].copy_from_slice(&commit[..2]);
+                n += 2;
+                if !s.h2e { body[n..n + s.token_len].copy_from_slice(&s.token[..s.token_len]); n += s.token_len; }
+                body[n..n + sae::COMMIT_LEN - 2].copy_from_slice(&commit[2..]);
+                n += sae::COMMIT_LEN - 2;
+                if s.h2e && s.token_len > 0 {
+                    body[n..n + 3].copy_from_slice(&[255, s.token_len as u8 + 1, 93]);
+                    body[n + 3..n + 3 + s.token_len].copy_from_slice(&s.token[..s.token_len]);
+                    n += 3 + s.token_len;
+                }
+                let status = if s.h2e { STATUS_SAE_HASH_TO_ELEMENT } else { 0 };
+                (w::auth(out, &self.bss.bssid, &self.me, self.seq, AUTH_SAE, 1, status, &body[..n]), "sae_commit")
+            }
+            Step::SaeConfirm => {
+                let c = self.sae.as_ref().unwrap().sae.confirm(1);
+                (w::auth(out, &self.bss.bssid, &self.me, self.seq, AUTH_SAE, 2, 0, &c), "sae_confirm")
+            }
             _ => {
                 let mut rsn = [0u8; 32];
-                let n = if self.bss.security == Security::Open { 0 } else { w::own_rsn(false, &mut rsn) };
+                let n = if self.bss.security == Security::Open { 0 } else { w::own_rsn(self.sae.is_some(), &mut rsn) };
                 let mut bss = self.bss;
-                bss.h2e = false; // RSNXE only with SAE (W5d)
+                bss.h2e &= self.sae.as_ref().is_some_and(|s| s.h2e); // RSNXE only with SAE
                 (w::assoc_request(out, &bss, &self.me, self.seq, &rsn[..n]), "assoc")
             }
         }
@@ -117,6 +173,8 @@ impl Assoc {
         let mut freed: [Option<tx::Status>; 1] = [None];
         let mut early = [0u8; crate::eapol::MAX_FRAME];
         let mut early_len = 0;
+        let mut auth_body = [0u8; 256];
+        let mut auth_len = 0;
         {
             let me = &*self;
             let mut scratch = [0u8; 4096];
@@ -124,7 +182,13 @@ impl Assoc {
                 if cmdq.on_packet(p) { return; }
                 if let Some(s) = tx::parse_response(p) { freed[0] = Some(s); return; }
                 if let Some(rx) = parse_mpdu(p, family, &mut scratch) {
-                    if let Some(hd) = me.hear(rx.frame) { heard = Some(hd); }
+                    if let Some(hd) = me.hear(rx.frame) {
+                        heard = Some(hd);
+                        if let Some(a) = w::parse_auth(rx.frame).filter(|a| a.algorithm == AUTH_SAE && a.body.len() <= 256) {
+                            auth_body[..a.body.len()].copy_from_slice(a.body);
+                            auth_len = a.body.len();
+                        }
+                    }
                     if let Some(e) = crate::rsna::eapol_of(rx.frame, &me.me, &me.bss.bssid).filter(|e| e.len() <= crate::eapol::MAX_FRAME) {
                         early[..e.len()].copy_from_slice(e);
                         early_len = e.len();
@@ -143,17 +207,45 @@ impl Assoc {
         if let Some(e) = error { self.step = Step::Failed(Failure::Firmware(e)); return false; }
         if let Some(Heard::Gone(reason)) = heard { self.refuse(Refusal::Disconnected(reason)); return false; }
         match self.step {
-            Step::Auth | Step::Assoc => self.frames(b, r, dma, heard, tx_status, now),
+            Step::SaeCommit | Step::SaeConfirm | Step::Auth | Step::Assoc => self.frames(b, r, dma, heard, &auth_body[..auth_len], tx_status, now),
             Step::Station | Step::Mac => self.command(b, cmdq, r, dma, now),
             _ => {}
         }
         !self.done()
     }
 
-    fn frames<D: Dma>(&mut self, b: &Bringup, r: &mut impl Registers, dma: &mut D, heard: Option<Heard>, tx_status: Option<tx::Status>, now: u64) {
+    fn frames<D: Dma>(&mut self, b: &Bringup, r: &mut impl Registers, dma: &mut D, heard: Option<Heard>, body: &[u8], tx_status: Option<tx::Status>, now: u64) {
         let step = self.step;
-        let name = if step == Step::Auth { "auth" } else { "assoc" };
+        let name = match step { Step::Auth => "auth", Step::SaeCommit => "sae_commit", Step::SaeConfirm => "sae_confirm", _ => "assoc" };
         match (step, heard) {
+            (Step::SaeCommit, Some(Heard::Auth { status, transaction: 1, algorithm: AUTH_SAE })) => {
+                let s = self.sae.as_mut().unwrap();
+                if status == STATUS_ANTI_CLOGGING_TOKEN {
+                    // Group, then the token (with H2E inside its container element).
+                    let token = body.get(2..).map(|t| if s.h2e && t.len() >= 3 && t[0] == 255 && t[2] == 93 { &t[3..] } else { t }).unwrap_or(&[]);
+                    if token.is_empty() || token.len() > TOKEN_BYTES { self.refuse(Refusal::Status { frame: name, status }); return; }
+                    s.token[..token.len()].copy_from_slice(token);
+                    s.token_len = token.len();
+                    self.sent = false; // again at once, with the token
+                } else if status != w::STATUS_SUCCESS && status != STATUS_SAE_HASH_TO_ELEMENT {
+                    self.refuse(Refusal::Status { frame: name, status });
+                    return;
+                } else {
+                    match s.sae.process_commit(body) {
+                        // Our confirm goes at once.
+                        Ok(()) => { self.go(Step::SaeConfirm, now); return self.frames(b, r, dma, None, &[], None, now); }
+                        Err(e) => { self.refuse(Refusal::Sae(e)); return; }
+                    }
+                }
+            }
+            (Step::SaeConfirm, Some(Heard::Auth { status, transaction: 2, algorithm: AUTH_SAE })) => {
+                if status != w::STATUS_SUCCESS { self.refuse(Refusal::Status { frame: name, status }); return; }
+                match self.sae.as_ref().unwrap().sae.check_confirm(body) {
+                    Ok(()) => self.go(Step::Assoc, now),
+                    Err(e) => self.refuse(Refusal::Sae(e)),
+                }
+                return;
+            }
             (Step::Auth, Some(Heard::Auth { status, transaction: 2, algorithm: w::AUTH_OPEN })) => {
                 if status != w::STATUS_SUCCESS { self.refuse(Refusal::Status { frame: name, status }); } else { self.go(Step::Assoc, now); }
                 return;
