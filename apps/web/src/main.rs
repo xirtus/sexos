@@ -662,6 +662,8 @@ impl Browser {
                 }
                 Err(mut p) => {
                     p.max = MEDIA_MAX;
+                    // An element's load, not a script's: no CORS, and the site's cookies go.
+                    p.script = None;
                     match self.send(&mut p, false) {
                         Ok(ex) => {
                             self.media[i].state = media::State::Loading;
@@ -784,6 +786,9 @@ impl Browser {
             }
             if going.is_empty() && waiting.is_empty() { return; }
             let mut quiet = u32::MAX;
+            // Media downloads keep moving too: one may hold the name resolver, which
+            // answers this program one question at a time.
+            for l in self.media_loads.iter_mut() { let _ = l.ex.poll(&mut self.window); }
             let mut i = 0;
             while i < going.len() {
                 let step = going[i].1.poll(&mut self.window);
