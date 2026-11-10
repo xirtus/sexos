@@ -573,7 +573,7 @@ pub fn typed(key: Key) -> Option<u8> {
 /// sockets ([`net::TcpStream`], [`net::TcpListener`], [`net::UdpSocket`]), over IPv4 or IPv6.
 pub mod net {
     use super::Window;
-    use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+    use core::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
     use sex_pdx::memory_region::{QUERY_VIEW, READ, WRITE};
     use sex_pdx::web as w;
 
@@ -597,17 +597,24 @@ pub mod net {
     static SEQ: AtomicU32 = AtomicU32::new(0);
     /// This program's flow numbers in use, one bit each.
     static FLOWS_HELD: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
-    /// Held from a request's going out until its answer is read, and by [`direct`]
-    /// calls from filling the shared region until they have read it back.
-    static BUSY: AtomicBool = AtomicBool::new(false);
+    /// The task holding the shared region, by its thread pointer (`usize::MAX`: none),
+    /// from filling it until the answer has been read back. The holder may take it
+    /// again (a call inside a call), so a function holds it across its whole use.
+    static OWNER: AtomicUsize = AtomicUsize::new(usize::MAX);
+    static DEPTH: AtomicU32 = AtomicU32::new(0);
     struct Turn;
     impl Turn {
         fn take() -> Turn {
-            while BUSY.compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() { sex_pdx::sys_yield(); }
+            let me = crate::tls::pointer();
+            if OWNER.load(Ordering::Acquire) == me { DEPTH.fetch_add(1, Ordering::Relaxed); return Turn; }
+            while OWNER.compare_exchange_weak(usize::MAX, me, Ordering::Acquire, Ordering::Relaxed).is_err() { sex_pdx::sys_yield(); }
+            DEPTH.store(1, Ordering::Relaxed);
             Turn
         }
     }
-    impl Drop for Turn { fn drop(&mut self) { BUSY.store(false, Ordering::Release); } }
+    impl Drop for Turn {
+        fn drop(&mut self) { if DEPTH.fetch_sub(1, Ordering::Relaxed) == 1 { OWNER.store(usize::MAX, Ordering::Release); } }
+    }
     /// One open flow of this program, by its own number for it.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub struct Flow(u8);
@@ -793,6 +800,7 @@ pub mod net {
     /// The machine's addresses and their prefix lengths: the leased IPv4 address and the
     /// IPv6 ones (link-local and those SLAAC gave).
     pub fn addresses(window: &mut Window) -> Result<alloc::vec::Vec<(IpAddr, u8)>, Error> {
+        let _turn = Turn::take();
         let n = ok(call(window, w::ADDRESSES, 0)?)? as usize;
         let region = region()?;
         Ok((0..n).filter_map(|i| { let e = &region[i * (w::ADDRESS_BYTES + 1)..]; Some((ip_of(e)?, e[w::ADDRESS_BYTES])) }).collect())
@@ -812,6 +820,7 @@ pub mod net {
         loop {
             if sex_pdx::get_ticks().saturating_sub(began) > 30_000 { return Err(Error::TooSlow); }
             if held().is_none() {
+                let _turn = Turn::take();
                 region()?[..host.len()].copy_from_slice(host);
                 let r = call(window, w::RESOLVE_ALL, host.len() as u64)?;
                 if r.0 != w::BUSY { ok(r)?; break; }
@@ -820,19 +829,23 @@ pub mod net {
         }
         unsafe { RESOLVING = Some(RESOLVE_HOLDER); }
         let answer = loop {
+            let turn = Turn::take();
             let r = call(window, w::RESOLVE_ALL, 0);
             match r {
-                Ok((w::WAIT, _)) if sex_pdx::get_ticks().saturating_sub(began) <= 30_000 => pause(),
+                Ok((w::WAIT, _)) if sex_pdx::get_ticks().saturating_sub(began) <= 30_000 => { drop(turn); pause() }
                 Ok((w::WAIT, _)) => break Err(Error::TooSlow),
-                Ok(r) => break ok(r),
+                // The addresses are read before the turn goes.
+                Ok(r) => break ok(r).and_then(|n| {
+                    let region = region()?;
+                    let mut found = [None; 2];
+                    for (i, slot) in found.iter_mut().enumerate().take(n as usize) { *slot = ip_of(&region[i * w::ADDRESS_BYTES..]); }
+                    Ok(found)
+                }),
                 Err(e) => break Err(e),
             }
         };
         unsafe { RESOLVING = None; }
-        let n = answer? as usize;
-        let region = region()?;
-        let mut found = [None; 2];
-        for (i, slot) in found.iter_mut().enumerate().take(n) { *slot = ip_of(&region[i * w::ADDRESS_BYTES..]); }
+        let found = answer?;
         remember(name, found);
         Ok(found.into_iter().flatten().collect())
     }
@@ -1001,6 +1014,7 @@ pub mod net {
         /// Starts connecting to `address` and returns at once; `poll_open` says when it is.
         pub fn begin(window: &mut Window, address: &IpAddr, port: u16) -> Result<TcpStream, Error> {
             let flow = take_flow()?;
+            let _turn = Turn::take();
             put_ip(region().map_err(|e| { release(flow); e })?, address);
             match call_on(window, flow, w::CONNECT_TO, port as u64).and_then(ok) {
                 Ok(_) => Ok(TcpStream { flow, peer: (*address, port) }),
@@ -1045,6 +1059,7 @@ pub mod net {
         /// Sends what fits now; 0 when the send queue is full.
         pub fn write(&mut self, window: &mut Window, bytes: &[u8]) -> Result<usize, Error> {
             let n = bytes.len().min(w::REGION_BYTES);
+            let _turn = Turn::take();
             region()?[..n].copy_from_slice(&bytes[..n]);
             Ok(ok(call_on(window, self.flow, w::SEND, n as u64)?)? as usize)
         }
@@ -1061,6 +1076,7 @@ pub mod net {
         /// Reads what has arrived; 0 when nothing has yet (see `is_closed`).
         pub fn read(&mut self, window: &mut Window, out: &mut [u8]) -> Result<usize, Error> {
             let room = out.len().min(32 * 1024).max(1);
+            let _turn = Turn::take();
             let k = (ok(call_on(window, self.flow, w::RECEIVE, room as u64)?)? as usize).min(out.len());
             out[..k].copy_from_slice(&region()?[..k]);
             Ok(k)
@@ -1104,6 +1120,7 @@ pub mod net {
         /// A connection a peer made, if one has; the listener keeps listening.
         pub fn accept(&mut self, window: &mut Window) -> Result<Option<TcpStream>, Error> {
             let new = take_flow()?;
+            let _turn = Turn::take();
             let r = call_on(window, self.flow, w::ACCEPT, new.0 as u64).and_then(ok_status);
             match r {
                 Ok(w::OK) => {
@@ -1142,6 +1159,7 @@ pub mod net {
         /// frame (1452 bytes over IPv6, 1472 over IPv4) are refused.
         pub fn send_to(&mut self, window: &mut Window, bytes: &[u8], to: &IpAddr, port: u16) -> Result<bool, Error> {
             if bytes.len() > w::REGION_BYTES - w::ENDPOINT_BYTES { return Err(Error::TooLarge); }
+            let _turn = Turn::take();
             let region = region()?;
             put_ip(region, to);
             region[17..19].copy_from_slice(&port.to_be_bytes());
@@ -1152,6 +1170,7 @@ pub mod net {
         }
         /// One datagram that came, if any: its length (cut at `out.len()`), sender and port.
         pub fn recv_from(&mut self, window: &mut Window, out: &mut [u8]) -> Result<Option<(usize, IpAddr, u16)>, Error> {
+            let _turn = Turn::take();
             let r = call_on(window, self.flow, w::UDP_RECEIVE, out.len() as u64)?;
             if ok_status(r)? != w::OK { return Ok(None); }
             let region = region()?;
@@ -1267,6 +1286,8 @@ pub mod net {
         }
         /// One step of setting up: a single call to the network service.
         fn set_up(&mut self, window: &mut Window) -> Result<(), Error> {
+            // One call per step; its region use stays inside the turn.
+            let _turn = Turn::take();
             let flow = self.flow;
             let mut moved = true;
             match self.setup {
@@ -1388,6 +1409,7 @@ pub mod net {
                 return Ok(false);
             }
             let room = (self.cap - self.raw.len()).min(32 * 1024).max(1) as u64;
+            let turn = Turn::take();
             let k = match call_on(window, self.flow, w::RECEIVE, room).and_then(ok) {
                 Ok(k) => k as usize,
                 Err(_) if self.reused && self.raw.is_empty() => { self.fresh(window)?; return Ok(false); }
@@ -1398,6 +1420,7 @@ pub mod net {
                 let take = k.min(self.cap - self.raw.len());
                 let region = region().map_err(|e| { self.cancel(window); e })?;
                 self.raw.extend_from_slice(&region[..take]);
+                drop(turn);
                 self.began = sex_pdx::get_ticks();
                 self.idle = 0;
                 if self.raw.len() == self.cap || self.enough() { self.end(window); }

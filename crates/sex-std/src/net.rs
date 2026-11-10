@@ -29,6 +29,8 @@ struct State {
     inbox: VecDeque<u8>,
     /// A datagram looked at but not taken.
     datagram: Option<(Vec<u8>, IpAddr, u16)>,
+    /// A connection `poll` found on a listener, kept for `accept`.
+    pending: Option<(direct::Socket, IpAddr, u16)>,
     peer_closed: bool,
     read_shut: bool,
     write_shut: bool,
@@ -120,7 +122,7 @@ pub(crate) fn socket(domain: i32, kind: i32, _protocol: i32) -> Result<Sock, i32
     if base != abi::SOCK_STREAM && base != abi::SOCK_DGRAM { return Err(-errno::EPROTOTYPE); }
     Ok(Sock { family: domain, kind: base, state: Mutex::new(State {
         socket: None, role: Role::Fresh, local_port: 0, peer: None, nonblocking: kind & abi::SOCK_NONBLOCK != 0,
-        receive_timeout: None, send_timeout: None, inbox: VecDeque::new(), datagram: None,
+        receive_timeout: None, send_timeout: None, inbox: VecDeque::new(), datagram: None, pending: None,
         peer_closed: false, read_shut: false, write_shut: false, error: 0, options: Vec::new(),
     }) })
 }
@@ -197,10 +199,13 @@ fn finish_connect(st: &mut State) -> Option<Result<bool, i32>> {
 
 pub(crate) unsafe fn accept(sock: &Sock, addr: *mut abi::sockaddr, len: *mut abi::socklen_t) -> Result<Sock, i32> {
     if sock.state().role != Role::Listening { return Err(-errno::EINVAL); }
-    let (s, ip, port) = wait(sock, |st| st.receive_timeout, |st| match st.socket.as_ref()?.accept() {
-        Ok(Some(got)) => Some(Ok(got)),
-        Ok(None) => None,
-        Err(e) => Some(Err(errno_of(e))),
+    let (s, ip, port) = wait(sock, |st| st.receive_timeout, |st| {
+        if let Some(got) = st.pending.take() { return Some(Ok(got)); }
+        match st.socket.as_ref()?.accept() {
+            Ok(Some(got)) => Some(Ok(got)),
+            Ok(None) => None,
+            Err(e) => Some(Err(errno_of(e))),
+        }
     })?;
     unsafe { write_address(addr, len, &ip, port); }
     let new = socket(if ip.is_ipv6() { abi::AF_INET6 } else { abi::AF_INET }, abi::SOCK_STREAM, 0)?;
@@ -290,6 +295,24 @@ pub(crate) fn send_to(sock: &Sock, bytes: &[u8], ip: &IpAddr, port: u16) -> isiz
     match r { Ok(n) => n as isize, Err(e) => e as isize }
 }
 
+/// Takes the next datagram into `st.datagram` if none is held: false when none has
+/// come. A connected socket drops datagrams from anyone but its peer.
+fn next_datagram(st: &mut State) -> Result<bool, i32> {
+    while st.datagram.is_none() {
+        let mut buf = vec![0u8; 65536];
+        let Some(s) = st.socket.as_ref() else { return Err(-errno::EINVAL) };
+        match s.receive_from(&mut buf).map_err(errno_of)? {
+            Some((n, ip, port)) => {
+                if st.peer.is_some_and(|p| p != (ip, port)) { continue; }
+                buf.truncate(n);
+                st.datagram = Some((buf, ip, port));
+            }
+            None => return Ok(false),
+        }
+    }
+    Ok(true)
+}
+
 pub(crate) fn recv_from(sock: &Sock, out: &mut [u8], peek: bool) -> Result<(usize, IpAddr, u16), i32> {
     if sock.kind != abi::SOCK_DGRAM {
         let n = recv(sock, out, peek);
@@ -298,13 +321,10 @@ pub(crate) fn recv_from(sock: &Sock, out: &mut [u8], peek: bool) -> Result<(usiz
     }
     if sock.state().socket.is_none() { return Err(-errno::EINVAL); }
     wait(sock, |st| st.receive_timeout, |st| {
-        if st.datagram.is_none() {
-            let mut buf = vec![0u8; 65536];
-            match st.socket.as_ref()?.receive_from(&mut buf) {
-                Ok(Some((n, ip, port))) => { buf.truncate(n); st.datagram = Some((buf, ip, port)); }
-                Ok(None) => return None,
-                Err(e) => return Some(Err(errno_of(e))),
-            }
+        match next_datagram(st) {
+            Ok(true) => {}
+            Ok(false) => return None,
+            Err(e) => return Some(Err(e)),
         }
         let (data, ip, port) = st.datagram.as_ref()?;
         let n = out.len().min(data.len());
@@ -408,17 +428,14 @@ pub(crate) fn ready(sock: &Sock, events: i16) -> i16 {
             if !st.write_shut { got |= abi::POLLOUT & events; }
         }
         Role::Listening => {
-            // A waiting connection is only found by taking it, so a listener reports
-            // readable and `accept` waits (or says EAGAIN) if none has come.
-            got |= abi::POLLIN & events;
+            // A waiting connection is only found by taking it: keep it for `accept`.
+            if events & abi::POLLIN != 0 && st.pending.is_none() {
+                if let Some(Ok(Some(found))) = st.socket.as_ref().map(|s| s.accept()) { st.pending = Some(found); }
+            }
+            if st.pending.is_some() { got |= abi::POLLIN & events; }
         }
         Role::Udp => {
-            if events & abi::POLLIN != 0 && st.datagram.is_none() {
-                let mut buf = vec![0u8; 65536];
-                if let Some(Ok(Some((n, ip, port)))) = st.socket.as_ref().map(|s| s.receive_from(&mut buf)) {
-                    buf.truncate(n); st.datagram = Some((buf, ip, port));
-                }
-            }
+            if events & abi::POLLIN != 0 { let _ = next_datagram(&mut st); }
             if st.datagram.is_some() { got |= abi::POLLIN & events; }
             got |= abi::POLLOUT & events;
         }
