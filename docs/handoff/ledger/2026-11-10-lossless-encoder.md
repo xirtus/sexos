@@ -32,7 +32,7 @@ input buffer, drains/finishes, renames and syncs. It is not a desktop recording.
 The guest gate recovers `/data/play/proof.mkv` read-only after stopping QEMU,
 then independently verifies codec, dimensions, every RGB byte and packet PTS.
 
-Validation in progress:
+Validation:
 
 - Three production output-queue host tests pass: ordered backward patches/holes,
   32 KiB turns, partial/replayed acknowledgements and failure without mutation.
@@ -49,5 +49,17 @@ Validation in progress:
 - Private FFmpeg 7.1.2 recording profile built with Clang 23.1.5, musl headers,
   FFV1 encoder/decoder and Matroska muxer enabled. Existing forbidden-instruction
   scanning passed, with the existing sha.o frame-pointer recompilation.
-- Guest image and synthetic round trip remain pending. No recording performance,
-  desktop capture integration, physical hardware or daily-driver claim yet.
+- Native guest round trip passed on runtime commit `d14168f0`, clean worktree.
+  ISO SHA-256 `a31aa42df848c3eb928924408023050d0c8bc93aba286a3b78792e2ab2bc351f`;
+  Play `212f2173e4d015076ce8aef8ba658699ff80c216a432cbe476156411492c261d`.
+  Guest wrote and synced 10,503 bytes; independent host decode matched all
+  38,220 RGB bytes and all four packet PTS/durations. Evidence:
+  `sexos-evidence/recording-encoder-guest-d141/result.json`, with the disk, raw
+  serial and recovered Matroska preserved outside Git; build/archive hashes in
+  `sexos-evidence/recording-encoder-inputs/provenance.json`. The guest was stopped
+  and reaped by the harness after sync; no orderly OS-shutdown claim.
+- Subsequent review fixed consumed Close leaving the diagnostic window alive:
+  between file turns it now removes the temporary best-effort and finishes the
+  run. Original native proof predates that cancellation-only change; final
+  candidate CI must qualify the current head. No recording performance, desktop
+  capture integration, physical hardware or daily-driver claim yet.

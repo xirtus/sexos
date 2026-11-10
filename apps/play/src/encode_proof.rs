@@ -6,7 +6,11 @@ use sex_media::recording::{Config, Drain, Encoder};
 fn drain(window: &mut Window, encoder: &mut Encoder, path: &[u8]) -> Result<bool, &'static [u8]> {
     loop {
         if let Some(Event::Close) = window.poll() {
-            return Err(b"Encoding cancelled.");
+            // No Files request is in flight between drain turns. End the run
+            // after best-effort temporary cleanup; do not consume Close and
+            // leave an apparently closed proof window alive.
+            let _ = files::remove(window, path);
+            sex_pdx::task_finish(0);
         }
         match encoder
             .output()
