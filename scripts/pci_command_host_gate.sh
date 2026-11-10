@@ -28,9 +28,11 @@ for forbidden in ['allocate_va(', 'grant_capability(', 'GLOBAL_ALLOCATOR', 'map_
 for p in Path('kernel/src').rglob('*.rs'):
  if p.as_posix()!='kernel/src/hal/pci.rs':
   assert not any(port in p.read_text().lower()for port in ['0xcf8','0xcfc']),p
-s=Path('kernel/src/devmgr.rs').read_text();a=s.index('(0x02, 0x00)');part=s[a:s.index('            _ => {}',a)]
-assert 'command: Some(crate::boot_memory::nic_command(pd,&dev,sex_pdx::SLOT_NIC,view))'in part
-assert s[:a].count('command: None')==3
+s=Path('kernel/src/devmgr.rs').read_text();a=s.index('fn nic_lease(');part=s[a:s.index('\n}\n',a)]
+assert 'command: Some(crate::boot_memory::nic_command(pd, dev, slot, view))'in part
+# NVMe, xHCI and display leases carry no command authority.
+for name in ['fn nvme_lease(','fn xhci_lease(','fn display_lease(']:
+ b=s.index(name);assert 'command: None' in s[b:s.index('\n}\n',b)],name
 PY
 PCI_COMMAND_PORT_SOURCE="$TEST_DIR/ports.rs" rustc --edition=2021 --extern sex_net_config="$TEST_DIR/libsex_net_config.rlib" --test tests/pci_command.rs -o "$TEST_DIR/command"
 "$TEST_DIR/command" --test-threads=1
