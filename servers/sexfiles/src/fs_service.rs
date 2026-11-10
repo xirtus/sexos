@@ -55,7 +55,7 @@ fn client_cache(index: usize) -> Option<&'static [u8]> {
     if *slot == u64::MAX { return None; }
     Some(unsafe { core::slice::from_raw_parts((*slot as usize + w::CACHE_AT) as *const u8, w::CACHE_BYTES) })
 }
-/// Clears what clients were told about `file` (a resolved path's hash), or about
+/// Clears what clients were told about `file` (a file id), or about
 /// everything, before the change can be seen. Only Files' own answers are touched,
 /// never a client's data.
 fn forget_stats(file: Option<u64>) {
@@ -405,8 +405,15 @@ pub fn handle(caller: u32, a: u64, offset: u64, length: u64) -> u64 {
     if r.kind == w::PING { return w::reply(r.seq, w::OK, 0); }
     let Ok(view) = sex_pdx::memory_region_view(w::PROVIDER_SLOT_BASE + index as u64, 0, w::REGION_BYTES as u64, QUERY_VIEW | READ | WRITE) else { return w::reply(r.seq, w::IO, 0) };
     let region = unsafe { core::slice::from_raw_parts_mut(view.virtual_address as *mut u8, w::REGION_BYTES) };
+    // A client found now may have been absent when Files last looked: keep it, so its
+    // cache is cleared with the others.
+    if let Some(slot) = unsafe { (*core::ptr::addr_of_mut!(REGIONS)).get_mut(index) } { *slot = view.virtual_address; }
     let state = unsafe { &mut *core::ptr::addr_of_mut!(STATE) };
-    if matches!(state, State::Untried) { *state = bring_up(); }
+    if matches!(state, State::Untried) {
+        *state = bring_up();
+        // A restarted Files may have lost writes its clients' caches still describe.
+        if matches!(state, State::Ready(_)) { forget_stats(None); }
+    }
     if r.kind == w::INSTALL {
         // Works without a filesystem: a live system on another OS's disk has none.
         let path_len = (r.path_len as usize).min(w::PATH_BYTES);
@@ -478,7 +485,8 @@ pub fn handle(caller: u32, a: u64, offset: u64, length: u64) -> u64 {
     // Before anything changes: forget what clients were told about it.
     match r.kind {
         w::STAT | w::LIST | w::READ | w::STATFS | w::SYNC | w::PREPARE => {}
-        w::WRITE | w::TRUNCATE | w::CREATE | w::MKDIR => forget_stats(Some(w::stat_cache::hash(path))),
+        // By file id, so every spelling of the path (`a//b`, `a/b/`) is cleared.
+        w::WRITE | w::TRUNCATE | w::CREATE | w::MKDIR => { if let Ok(st) = fs.open(path) { forget_stats(Some(st.id)); } }
         _ => forget_stats(None),
     }
     // Other systems' volumes, under /media.
@@ -502,7 +510,7 @@ pub fn handle(caller: u32, a: u64, offset: u64, length: u64) -> u64 {
     let result = run(fs, r, path, data);
     if r.kind == w::STAT && result.is_ok() {
         let word = |i: usize| u64::from_le_bytes(data[i * 8..i * 8 + 8].try_into().unwrap());
-        w::stat_cache::fill(cache, &spelled[..spelled_len], w::stat_cache::hash(path), word(0) != 0, word(1), word(2), word(3));
+        w::stat_cache::fill(cache, &spelled[..spelled_len], word(3), word(0) != 0, word(1), word(2), word(3));
     }
     match result {
         Ok(value) => {

@@ -148,8 +148,8 @@ pub mod stat_cache {
     use core::sync::atomic::{fence, AtomicU64, Ordering};
     pub const ENTRIES: usize = super::CACHE_BYTES / ENTRY;
     const ENTRY: usize = 64;
-    /// Words: 0 sequence, 1 key (the path as the client spelled it), 2 file (the path
-    /// Files resolved it to), 3 size, 4 mtime, 5 directory, 6 file id.
+    /// Words: 0 sequence, 1 key (the path as the client spelled it), 2 file (what Files
+    /// clears it by: the file id), 3 size, 4 mtime, 5 directory, 6 file id.
     const WORDS: usize = 7;
     /// FNV-1a; 0 means an empty entry, so it never returns 0.
     pub fn hash(path: &[u8]) -> u64 {
