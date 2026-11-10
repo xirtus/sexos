@@ -1891,6 +1891,7 @@ version = "0.1.0"
 name = "sex-js"
 version = "0.1.0"
 dependencies = [
+ "sex-app",
  "sex-fetch",
  "sex-gl",
  "sex-html",

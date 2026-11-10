@@ -13,6 +13,8 @@
 // result's length, kept by the host until `result` copies it, or -1 for none.
 IMPORT("call") int host_call(int op, const char *args, int len);
 IMPORT("result") void host_result(char *out);
+IMPORT("jit_available") int host_jit_available(void);
+int sexos_baseline_jit_enabled;
 
 #define EXPORT(name) __attribute__((export_name(name)))
 
@@ -219,6 +221,7 @@ EXPORT("sx_modules_ready") int sx_modules_ready(int budget_ms) {
 }
 
 EXPORT("sx_init") int sx_init(int memory_limit) {
+    sexos_baseline_jit_enabled = host_jit_available();
     rt = JS_NewRuntime();
     if (!rt) return -1;
     if (memory_limit > 0) JS_SetMemoryLimit(rt, (size_t)memory_limit);
