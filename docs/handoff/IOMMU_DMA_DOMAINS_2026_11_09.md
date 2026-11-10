@@ -149,6 +149,13 @@ blocked, which is also the protection against Thunderbolt DMA attacks. Look for
 real driver is a driver bug worth a report. If VT-d is disabled in the BIOS there is no
 DMAR table and SexOS runs exactly as before (`[iommu.absent]`).
 
+If the IOMMU itself gets in the way (a disk or the network stops working, a storm of
+`[iommu.fault]` lines from a real driver, a hang at `[iommu.unit.enable]`), pick
+**"SexOS without DMA protection"** in the boot menu. It boots the same system with the
+kernel command line `iommu=off` (`[iommu.boot_options]`, then `[iommu.absent]
+reason=boot_option_iommu_off`), and drivers copy through their pools as before. The
+boot log of the protected entry is what tells us what to fix.
+
 ## ABI changes (hash recomputed)
 
 - Syscall **90** `SYS_DMA` with `OP_INFO`/`OP_LEND`/`OP_RETURN`, `DEVICE_READ`,
