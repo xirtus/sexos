@@ -3378,6 +3378,15 @@ Stage E2 of the parity report, section 6.
 - **Panel title.** sexdisplay draws the focused window's title in the SilkBar strip between the focus dot and the workspace dots (`panel_title_fg_at`), with the same names as the title bars (`surface_title`). A program renaming its focused window redraws the strip.
 - No ABI change.
 
+## Desktop: notifications with text, a panel notice and history (2026-11-10)
+
+Stage E3 of the parity report, section 6 (mako/dunst/Plasma notifications).
+- **Programs** holding the Bell capability post with `sex_pdx::notify::post(summary, body, urgency)`: the text ("summary\nbody", up to 128 printable ASCII bytes, anything else becomes '?') goes in 16-byte chunks. Spindle: `notify Build done | 3 warnings`.
+- **Bell** puts each sender's chunks together by the kernel's caller PD, applies mute, per-program policy and the spam budget, queues it (critical goes to lane NOW and chimes), then hands it to the Shell with Bell's id and the true sender. A program cannot name another sender.
+- **Shell** takes notifications only from Bell's domain, shows "App: summary" in the SilkBar panel for 5 s (sexdisplay draws it in place of the window title, in amber), and keeps the last 32 in the Bell window, newest first. **Super+N** opens or hides it.
+- **ABI change (named):** new opcodes `OP_BELL_POST` 0xCC (program -> Bell), `OP_NOTIFICATION` 0x2D8 (Bell -> Shell), `OP_PANEL_NOTICE` 0x2D9 (Shell -> Display), one chunk form for all three (`crates/sex-pdx/src/notify.rs`). Kernel grants Bell `SLOT_SHELL` (to the Shell) for the hand-over. `abi_version_hash` recomputed. Display title layouts hold 48 bytes (titles are still 16).
+- **Tests:** `tests/notify.rs` (chunking, forged and out-of-order chunks, control bytes, the client), in `service_custody_host_gate.sh`; `tests/wm_layouts.rs` covers Super+N; QEMU gate `scripts/notifications_gate.py` (Spindle posts twice, the panel shows and hides, Super+N lists both).
+
 ## Real PCs: wired network, HD Audio and SATA (2026-11-09)
 
 Workstream D of the parity report. Handoff and bare-metal checklist: `docs/handoff/REAL_PC_DRIVERS_2026_11_09.md`.
@@ -3685,6 +3694,14 @@ Plan: `docs/handoff/NVIDIA_GPU_PLAN_2026_11_09.md` (stages N1-N6).
   `scripts/program_web_apis_gate.py` (page built from these APIs, pixel-matched to the
   host render, page reports its own checks).
 - **ABI / kernel:** none.
+
+## Browser: iframes and Referer, YouTube stage Y8 (2026-11-10)
+
+- **Iframes are pages of their own.** An `<iframe>` with an http(s) `src`, in the HTML or added by a script, loads as a nested page with its own tree, script engine, timers, fetches, media and pictures (up to 4 per page; frames inside frames aren't loaded yet). The Web program keeps each frame's state in a `Frame` and swaps it in as the current page to work on it, so loading, scripts, layout and media are the same code as for the shown page. The frame is drawn over its iframe box, pointer events over the box go to the frame's page in its own coordinates, and the frame is relaid out when its box changes size. Keys stay with the shown page.
+- **Referer, the real one.** Requests now carry `Referer` under the default policy, strict-origin-when-cross-origin (`sex_fetch::referrer`): the full page address within its origin, only the origin elsewhere, nothing from https to http, nothing from a typed address or a non-http page. A link, form or script navigation sends the page it came from; an iframe's request sends the page around it (`referrerpolicy="no-referrer"` sends none). Scripts still can't set `Referer` themselves. This is what YouTube's embed checks (`embedder.identity.missing.referrer`); the address is always the real embedding page's, never made up.
+- **postMessage across frames.** `iframe.contentWindow` and, inside a frame, `window.parent`/`top` are stand-in windows whose `postMessage` the browser carries to the other page (`OP.POST_MESSAGE` 32, data as JSON). The message reaches only the origin the sender named (or any, for `*`), arrives as a `MessageEvent` with the right `origin` and `source`, and the iframe element gets `load`. `document.referrer` and `location.ancestorOrigins` come from `OP.FRAME` (31). `contentDocument` stays null: frames run in separate engines, so same-origin frames can't reach into each other yet.
+- Tests: `cargo test -p sex-fetch` (referrer policy, header from the browser only), `cargo test -p sex-js --test dom` (frames talk through postMessage). QEMU gate `scripts/program_web_frames_gate.py`: a page on one origin frames a page on another; the server sees the frame request's Referer as the page's origin, both pages' scripts check `parent`, `referrer`, `ancestorOrigins` and the message origins, a message to the wrong origin is dropped, the frame is drawn green over its box, and a click on it reaches the frame's page (it turns blue and tells the page).
+- Still to do for YouTube: test the real embed in a frame on a real https page (needs a page we host that embeds YouTube), frames inside frames, keyboard focus into frames, cookies partitioned per top site.
 
 ## Video and sound play while they download (2026-11-10)
 

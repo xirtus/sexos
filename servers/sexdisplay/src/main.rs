@@ -1063,6 +1063,10 @@ fn phase5_active_app_at(x: usize, y: usize, _bar: &SilkBar, scene: &scene::Scene
     }
 }
 
+/// A new notification, shown in the panel in place of the title for a few seconds.
+static mut PANEL_NOTICE: sex_pdx::notify::Text = sex_pdx::notify::Text::EMPTY;
+static mut PANEL_NOTICE_ASSEMBLER: sex_pdx::notify::Assembler = sex_pdx::notify::Assembler::new();
+const PANEL_NOTICE_INK: u32 = 0x00F9E2AF;
 /// Panel: the focused window's title, right of the focus dot and left of the
 /// workspace dots, like a Waybar or Plasma window title.
 const PANEL_TITLE_X: usize = 166;
@@ -1070,13 +1074,17 @@ const PANEL_TITLE_END: usize = silkbar_model::WS_X0 - 16;
 fn panel_title_fg_at(x: usize, y: usize, bar: &SilkBar, scene: &scene::SceneSnapshot) -> Option<u32> {
     let y0 = (BAR_BG_H - glyphs::TITLE_H) / 2;
     if x + 2 < PANEL_TITLE_X || x >= PANEL_TITLE_END || y < y0 || y >= y0 + glyphs::TITLE_H { return None; }
-    let focused = scene.focus;
-    if focused == 0 { return None; }
-    let title = surface_title(focused)?;
+    let notice = unsafe { &*core::ptr::addr_of!(PANEL_NOTICE) };
+    let (title, notice) = if notice.len > 0 { (notice.as_bytes(), true) } else {
+        let focused = scene.focus;
+        if focused == 0 { return None; }
+        (surface_title(focused)?, false)
+    };
     let alpha = glyphs::title_coverage(title, x as i32 - PANEL_TITLE_X as i32, y - y0);
     if alpha == 0 { return None; }
     let background = bar_color(x, y, bar, scene);
-    Some(coverage_blend(sex_pdx::desktop_style::contrast_ink(background), background, alpha))
+    let ink = if notice { PANEL_NOTICE_INK } else { sex_pdx::desktop_style::contrast_ink(background) };
+    Some(coverage_blend(ink, background, alpha))
 }
 
 /// Same visible top-strip content for full and incremental redraws.
@@ -4040,6 +4048,17 @@ pub extern "C" fn _start() -> ! {
                 && msg.arg0 as u32 == UpdateKind::SetActiveApp as u32
                 && !lifecycle.sid_live(msg.arg1 as u32 as u64) { continue; }
             match msg.type_id {
+                sex_pdx::notify::OP_PANEL_NOTICE => {
+                    // Only the Shell writes the panel notice; it ends with an empty one.
+                    if msg.caller_pd == 3 {
+                        let assembler = unsafe { &mut *core::ptr::addr_of_mut!(PANEL_NOTICE_ASSEMBLER) };
+                        if let Some(text) = assembler.push(msg.arg0, msg.arg1, msg.arg2) {
+                            unsafe { PANEL_NOTICE = text; }
+                            needs_top_strip_redraw = true;
+                            sex_pdx::serial_record!("[display.panel.notice] len={}", text.len);
+                        }
+                    }
+                }
                 sex_pdx::app_lifecycle::OP_APP_TITLE => {
                     // Only the program row that owns this surface may name it.
                     if app_catalog::by_surface(msg.caller_pd, msg.arg0).is_some_and(|row| row.app == app_catalog::App::Program && row.shell_surface.is_none()) {

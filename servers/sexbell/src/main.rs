@@ -233,6 +233,21 @@ fn is_list_reader_allowed(caller_pd: u32) -> bool {
     BELL_LIST_ALLOWLIST.contains(&caller_pd)
 }
 
+/// One notification being put together per sender, by kernel caller PD.
+const POST_SENDERS: usize = 8;
+static mut POST_ASSEMBLERS: [(u32, sex_pdx::notify::Assembler); POST_SENDERS] =
+    [(0, sex_pdx::notify::Assembler::new()); POST_SENDERS];
+fn post_assembler(caller: u32) -> &'static mut sex_pdx::notify::Assembler {
+    let all = unsafe { &mut *core::ptr::addr_of_mut!(POST_ASSEMBLERS) };
+    let i = all.iter().position(|e| e.0 == caller)
+        .or_else(|| all.iter().position(|e| e.0 == 0))
+        // All taken: reuse an idle one, else the first.
+        .or_else(|| all.iter().position(|e| !e.1.pending()))
+        .unwrap_or(0);
+    all[i] = if all[i].0 == caller { all[i] } else { (caller, sex_pdx::notify::Assembler::new()) };
+    &mut all[i].1
+}
+
 // ── Mute List ────────────────────────────────────────────────────────
 
 /// Static mute list of sender PDs. Muted senders' NOTIFY is rejected.
@@ -1422,6 +1437,34 @@ pub extern "C" fn _start() -> ! {
             sex_pdx::sound_ring::OP_LISTEN => {
                 // A program's own microphone ring; whether it hears is the person's say.
                 sound::listen(msg.caller_pd as u32);
+            }
+
+            sex_pdx::notify::OP_BELL_POST => {
+                // A notification with text, a chunk at a time, from the
+                // kernel-named caller. Policy runs once the text is whole.
+                let caller = msg.caller_pd;
+                let Some(text) = post_assembler(caller).push(msg.arg0, msg.arg1, msg.arg2) else { continue };
+                let allowed = !is_muted(caller) && !is_policy_muted(caller) && check_spam_budget(caller);
+                if !allowed {
+                    sex_pdx::serial_record!("[bell.post.reject] caller_pd={} reason=muted_or_spam", caller);
+                    continue;
+                }
+                let urgency = text.urgency;
+                let lane = apply_policy_lane(caller, match urgency { sex_pdx::notify::URGENCY_CRITICAL => LANE_NOW, sex_pdx::notify::URGENCY_LOW => LANE_LATER, _ => LANE_SOON });
+                let pushed = unsafe { BELL_QUEUE.push(caller, 0, urgency, lane, urgency, apply_policy_privacy(caller, 0), 0, 0, 0, 0, 0) };
+                let Ok((event_id, _)) = pushed else {
+                    sex_pdx::serial_record!("[bell.post.reject] caller_pd={} reason=queue", caller);
+                    continue;
+                };
+                bump_generation();
+                if lane == LANE_NOW && sound::chime() {
+                    sex_pdx::serial_record!("[bell.sound.chime] event_id={}", event_id);
+                }
+                // Hand it to the Shell with Bell's id and the true sender.
+                let delivered = sex_pdx::notify::chunks(text.as_bytes(), urgency, event_id as u16, caller as u16)
+                    .all(|(w, a, b)| sex_pdx::pdx_call(sex_pdx::SLOT_SHELL, sex_pdx::notify::OP_NOTIFICATION, w, a, b).0 == 0);
+                sex_pdx::serial_record!("[bell.post.ok] caller_pd={} event_id={} lane={} len={} delivered={}",
+                    caller, event_id, lane, text.len, delivered as u8);
             }
 
             sex_pdx::OP_BELL_TONE => {
