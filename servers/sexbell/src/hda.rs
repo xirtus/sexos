@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Intel High Definition Audio: the sound chip on nearly every PC since 2004.
 //! BOOT leases Bell the controller's register BAR, its memory and bus-master
-//! command bits, and a DMA pool; this file finds an analog output on the codec,
-//! routes it to a converter, and plays one cyclic 48 kHz stereo stream.
+//! command bits, and a DMA pool; this file finds the analog outputs on every codec,
+//! routes them to converters, and plays one cyclic 48 kHz stereo stream to the
+//! outputs the person chose (`select`): by default the best output of the first
+//! codec and every jack sharing its converter.
 //!
 //! The stream runs from start to finish over a ring of periods. Bell writes a
 //! mixed period just ahead of the play position and zeroes each period once the
@@ -104,10 +106,18 @@ pub struct Hda {
     pub vendor: u32,
     pub dac: u32,
     pub pins: u32,
+    /// Every analog output found, on any codec, and which of them play.
+    routes: [Option<Route>; MAX_OUTPUTS],
+    pub outputs: usize,
+    pub on: u32,
 }
 
+pub const MAX_OUTPUTS: usize = 8;
+
+/// `device` is the jack's default-configuration device: 0 line out, 1 speaker,
+/// 2 headphones.
 #[derive(Clone, Copy)]
-struct Route { pin: u32, dac: u32, path: [u32; 6], len: usize, rank: u32 }
+struct Route { codec: u32, pin: u32, dac: u32, path: [u32; 6], len: usize, rank: u32, device: u32 }
 
 impl Hda {
     fn reg<T>(&self, offset: u32) -> *mut T {
@@ -269,7 +279,7 @@ impl Hda {
             if config >> 30 == 1 { continue; } // nothing is wired to this jack
             let device = config >> 20 & 0xf;
             let rank = match device { 1 => 0, 2 => 1, 0 => 2, 0xf | 5 => continue, _ => 3 };
-            let mut route = Route { pin: nid, dac: 0, path: [0; 6], len: 0, rank };
+            let mut route = Route { codec: self.codec, pin: nid, dac: 0, path: [0; 6], len: 0, rank, device };
             if self.find_dac(nid, 0, &mut route) && n < out.len() { out[n] = Some(route); n += 1; }
         }
         n
@@ -341,13 +351,15 @@ impl Hda {
         if (dma.length as usize) < POOL_NEEDS { return Err("dma_small"); }
         let mut h = Hda { mmio: view.virtual_address as usize, length: view.length as usize,
             dma_va: dma.virtual_address as usize, dma_pa, corb_wp: 0, rirb_rp: 0, codec: 0, sd: 0,
-            tail: 0, head: 1, queued: [false; PERIODS], pending: 0, vendor: 0, dac: 0, pins: 0 };
+            tail: 0, head: 1, queued: [false; PERIODS], pending: 0, vendor: 0, dac: 0, pins: 0,
+            routes: [None; MAX_OUTPUTS], outputs: 0, on: 0 };
         if h.length < 0x180 { return Err("short_view"); }
         h.w32(INTCTL, 0);
         let codecs = h.reset()?;
         h.rings()?;
-        // The first codec with an analog output wins; HDMI-only codecs have none.
-        let mut chosen = None;
+        // Every codec's analog outputs; HDMI-only codecs have none. The first codec
+        // with one is where sound goes until the person picks another.
+        let mut first_vendor = None;
         for cad in 0..15u32 {
             if codecs & 1 << cad == 0 { continue; }
             h.codec = cad;
@@ -361,29 +373,66 @@ impl Hda {
                 let mut routes = [None; 8];
                 let n = h.routes(afg, &mut routes);
                 sex_pdx::serial_record!("[bell.hda.codec] address={} vendor={:#010x} function={} outputs={}", cad, vendor, afg, n);
-                if n > 0 { chosen = Some((vendor, routes, n)); break; }
+                for r in routes[..n].iter().flatten() {
+                    if h.outputs < MAX_OUTPUTS { h.routes[h.outputs] = Some(*r); h.outputs += 1; }
+                }
+                if n > 0 && first_vendor.is_none() { first_vendor = Some((vendor, cad)); }
             }
-            if chosen.is_some() { break; }
         }
-        let (vendor, routes, n) = chosen.ok_or("no_analog_output")?;
+        let (vendor, first) = first_vendor.ok_or("no_analog_output")?;
         h.vendor = vendor;
-        let best = routes[..n].iter().flatten().min_by_key(|r| r.rank).copied().ok_or("no_route")?;
-        h.dac = best.dac;
+        let best = h.routes[..h.outputs].iter().flatten().filter(|r| r.codec == first)
+            .min_by_key(|r| r.rank).copied().ok_or("no_route")?;
         // Every analog jack that reaches the same converter plays too, so sound
         // comes out of the speaker and whichever jack is plugged in.
-        for route in routes[..n].iter().flatten().filter(|r| r.dac == best.dac) {
-            h.open_route(route);
-            h.pins += 1;
-            sex_pdx::serial_record!("[bell.hda.route] pin={} dac={} hops={} rank={}", route.pin, route.dac, route.len, route.rank);
+        let mut on = 0;
+        for (k, r) in h.routes[..h.outputs].iter().enumerate() {
+            if r.is_some_and(|r| r.codec == best.codec && r.dac == best.dac) { on |= 1 << k; }
         }
-        let dac = h.dac;
-        let _ = h.verb(dac, SET_FORMAT, FORMAT_48K_S16_STEREO as u32);
-        let _ = h.verb(dac, SET_STREAM, STREAM_TAG << 4);
+        h.select(on);
         h.stream()?;
         h.start()?;
         h.tail = h.position();
         h.head = (h.tail + 1) % PERIODS;
         Ok(h)
+    }
+
+    /// Plays to the outputs in `mask` (bit k is output k) and silences the rest.
+    /// False, and nothing changed, when the mask names no output.
+    pub fn select(&mut self, mask: u32) -> bool {
+        let mask = mask & ((1u32 << self.outputs) - 1);
+        if mask == 0 { return false; }
+        let routes = self.routes;
+        // Off first, so a converter shared with a chosen output is set up again below.
+        for (k, r) in routes[..self.outputs].iter().enumerate() {
+            let Some(r) = r else { continue };
+            if mask & 1 << k != 0 { continue; }
+            self.codec = r.codec;
+            let _ = self.verb(r.pin, SET_PIN_CONTROL, 0);
+            let shared = routes[..self.outputs].iter().enumerate()
+                .any(|(j, o)| mask & 1 << j != 0 && o.is_some_and(|o| o.codec == r.codec && o.dac == r.dac));
+            if !shared { let _ = self.verb(r.dac, SET_STREAM, 0); }
+        }
+        self.pins = 0;
+        for (k, r) in routes[..self.outputs].iter().enumerate() {
+            let Some(r) = r else { continue };
+            if mask & 1 << k == 0 { continue; }
+            self.codec = r.codec;
+            self.open_route(r);
+            let _ = self.verb(r.dac, SET_FORMAT, FORMAT_48K_S16_STEREO as u32);
+            let _ = self.verb(r.dac, SET_STREAM, STREAM_TAG << 4);
+            self.dac = r.dac;
+            self.pins += 1;
+            sex_pdx::serial_record!("[bell.hda.route] output={} codec={} pin={} dac={} hops={} rank={}", k, r.codec, r.pin, r.dac, r.len, r.rank);
+        }
+        self.on = mask;
+        true
+    }
+
+    /// Output `k`: its jack kind (0 line out, 1 speaker, 2 headphones, else other),
+    /// codec address and pin.
+    pub fn output(&self, k: usize) -> Option<(u32, u32, u32)> {
+        self.routes.get(k).copied().flatten().map(|r| (r.device, r.codec, r.pin))
     }
 
     /// The period the controller is reading now.

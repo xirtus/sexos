@@ -130,7 +130,7 @@ c872bf5fe493404db7b792fc4150bf50f44d3fa36a8167d2181789eb067421c5  kernel/src/clo
 
 cf020f742459f6862a152fbed48da11da00a0b3a12c95e2f755c84ff6441be74  kernel/src/history_recovery.rs
 
-20c70edfc2da9b94d553e7c0d0dc0d1638c1caecdec1674da31ded1f9c6dd472  kernel/src/interrupts.rs
+780e2b1fbbe01af61b4223651e9c08e726797c17dd38251888b9c52d7253d733  kernel/src/interrupts.rs
 
 c7d42c2df1965a3b94bce554e10d5047c4269994c942f524b60b9de7b94a470a  kernel/src/ipc.rs
 
@@ -148,7 +148,7 @@ dcc491154df5f4182c1cec5f13498ff9081b030e90d894af41b09163e8cbe029  kernel/src/ipc
 
 a8ee7bdb9f9a22a8314232c1bcc7d8d7ed6115656e40fd741d865caa680cea59  kernel/src/pci_command.rs
 
-61809d8a57261035e1ae901613b4abbc1783d9d4e45a6e36f6c2b7406d4c9ebd  kernel/src/syscalls/mod.rs
+946ff67684b0957bad3f0dcc348ae6518b7ff01540762e699e85365eab26cd1e  kernel/src/syscalls/mod.rs
 
 d96aa774f2c9ddf72f5fca8c9aa31e6127d182038f9bff826faa5e55ef8083eb  kernel/src/trust_source.rs
 

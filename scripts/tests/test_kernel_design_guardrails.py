@@ -14,7 +14,7 @@ KERNEL = ROOT / "kernel"
 
 # Non-blank lines of Rust under kernel/src. Raising it is allowed: say why in the
 # budget table of docs/DESIGN_GUARDRAILS.md in the same PR.
-KERNEL_LINE_BUDGET = 22_500
+KERNEL_LINE_BUDGET = 21_500
 
 # Compatibility layers and userspace stacks: libraries a program links, never the kernel.
 COMPAT_CRATES = {
@@ -63,6 +63,15 @@ class KernelGuardrails(unittest.TestCase):
         self.assertLessEqual(lines, KERNEL_LINE_BUDGET,
                              f"kernel/src has {lines} non-blank lines; over budget. Move the feature "
                              "to a server, or raise the budget with a reason in docs/DESIGN_GUARDRAILS.md")
+
+
+    def test_kernel_never_runs_firmware_aml(self):
+        # AML is untrusted firmware code: it runs in the ring-3 sexacpi server, under PKU.
+        # The kernel parses static tables only (DESIGN_GUARDRAILS 1, audit item A).
+        bad = [str(p.relative_to(ROOT)) for p in kernel_sources() if p.suffix == ".rs"
+               and re.search(r"\bInterpreter\s*::\s*new\b|aml::Interpreter|\.evaluate(_if_present)?\s*\(",
+                             p.read_text(errors="replace"))]
+        self.assertEqual(bad, [], "firmware AML belongs in servers/sexacpi, not the kernel")
 
 
 class BridgeLedger(unittest.TestCase):

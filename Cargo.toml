@@ -4,6 +4,7 @@ exclude = ["vendor/embedded-tls-0.19.0", "vendor/pp-rs-0.2.1", "vendor/image-web
 members = [
     "kernel",
     "servers/sexbell",
+    "servers/sexacpi",
     "servers/sexdisplay",
     "servers/sexshop",
     "servers/silk-shell",

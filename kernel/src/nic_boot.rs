@@ -1,20 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! BOOT policy for the SexNet PCI register layouts, not runtime authority.
 use sex_pdx::pci_command::{Family, Identity, Model};
-/// The historical e1000 register prefix; the old boot diagnostics need it.
-pub const REGISTERS_END:u64=0x5408;
 pub fn model(vendor:u16,device:u16)->Option<Model>{ Identity{vendor,product:device}.model() }
 pub fn supported(vendor:u16,device:u16)->bool{ model(vendor,device).is_some() }
-/// Only the two QEMU-proven e1000 parts run the old in-kernel boot diagnostics.
-pub fn legacy(vendor:u16,device:u16)->bool{
-    vendor==0x8086 && matches!(device,0x100e|0x10d3)
-}
 /// The fixed register prefix a driver of this controller touches.
 pub fn registers_end(vendor:u16,device:u16)->u64{
     model(vendor,device).map_or(u64::MAX,|m|m.registers_end())
-}
-pub fn view_length(actual:u64)->Option<u64>{
-    if actual<REGISTERS_END{None}else{Some(actual.min(64*1024))}
 }
 /// Length of the view leased for this controller: its register prefix, capped at 64 KiB.
 pub fn model_view_length(vendor:u16,device:u16,actual:u64)->Option<u64>{
