@@ -15,8 +15,8 @@
   seek, cached old/new piece reads, sequential/boundary gaps, non-Range servers and
   exact end-of-stream. They pass in an isolated portable-source harness on ARM; full
   cargo host tests require x86 because existing sex-pdx inline assembly is x86-only.
-- CI's existing FFmpeg-enabled device image now runs the unchanged seek gate and the
-  cargo tests, preserving its evidence. Guest validation of the fix remains pending
+- A separate parallel CI job builds an FFmpeg-enabled image and runs the unchanged
+  streaming and seek gates plus cargo tests, preserving evidence. Guest validation of the fix remains pending
   that exact candidate build; no timing threshold was loosened.
-- No kernel, ABI or authority change. Streaming/interleaved sources still need
-  regression evidence on the same feature image before declaring this complete.
+- No kernel, ABI or authority change. The streaming gate supplies interleaved-playback regression evidence on the
+  same feature image; its result is pending.

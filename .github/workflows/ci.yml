@@ -131,11 +131,6 @@ jobs:
         python3 scripts/usb_storage_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-usb-storage"
     - name: USB network adapter
       run: python3 scripts/usb_net_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-usb-net"
-    - name: Seek ahead before a video finishes downloading
-      run: |
-        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg
-        cargo test --locked -p sex-media --lib
-        python3 scripts/program_web_seek_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-web-seek"
     - name: Intel RAID 0 on two NVMe drives, read only
       run: python3 scripts/raid_gate.py --out "$RUNNER_TEMP/sexos-raid"
     - name: Power off and restart through ACPI
@@ -154,12 +149,40 @@ jobs:
       with:
         name: sexos-devices-proof
         path: |
-          ${{ runner.temp }}/sexos-web-seek
           ${{ runner.temp }}/sexos-raid
           ${{ runner.temp }}/sexos-power
           ${{ runner.temp }}/sexos-dgpu
           ${{ runner.temp }}/sexos-persistence
           ${{ runner.temp }}/sexos-fuzz
+        if-no-files-found: ignore
+
+  media:
+    name: Browser media streaming and seeking
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+    - uses: actions/checkout@v4
+    - uses: ./.github/actions/setup
+    - name: Prepare media host checks
+      run: |
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg
+        cargo test --locked -p sex-media --lib
+    - name: Build the FFmpeg-enabled image
+      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/media-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/media-build.log"; exit 1)
+    - name: Progressive playback and Range seek
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/media-source.img"
+        python3 scripts/program_web_stream_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/media-source.img" --out "$RUNNER_TEMP/sexos-web-stream"
+        python3 scripts/program_web_seek_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/media-source.img" --out "$RUNNER_TEMP/sexos-web-seek"
+    - name: Preserve media evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sexos-media-proof
+        path: |
+          ${{ runner.temp }}/media-build.log
+          ${{ runner.temp }}/sexos-web-stream
+          ${{ runner.temp }}/sexos-web-seek
         if-no-files-found: ignore
 
   profiles:
@@ -196,7 +219,7 @@ jobs:
   # Single required check: keeps the old "build" check name for branch rules.
   build:
     if: always()
-    needs: [host, truth, boot, devices, profiles]
+    needs: [host, truth, boot, devices, media, profiles]
     runs-on: ubuntu-latest
     steps:
     - run: |
