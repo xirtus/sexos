@@ -24,6 +24,11 @@ pub const OP_PROBE_FAULT: u64 = 3;
 /// that was started again skips the once-only steps of its first start.
 pub const OP_RESTARTS: u64 = 4;
 
+/// rsi: a page-aligned address in the calling service's own BOOT image; rdx: 1..=4
+/// pages. Restarts leave those pages as the last run wrote them instead of putting
+/// BOOT's copy back, so a service can carry its session into its next run.
+pub const OP_KEEP: u64 = 5;
+
 /// The kernel's message to Files (caller 0) when it holds a record Files has not seen.
 pub const OP_NOTICE: u64 = 0x0C5A_0001;
 
@@ -229,6 +234,9 @@ pub fn call(op: u64, arg: u64, buf: u64) -> (u64, u64, u64) {
 pub fn restarts() -> u64 {
     match call(OP_RESTARTS, 0, 0) { (OK, n, _) => n, _ => 0 }
 }
+/// Keep `pages` pages from `va` across this service's restarts (see `OP_KEEP`).
+#[cfg(target_arch = "x86_64")]
+pub fn keep(va: u64, pages: u64) -> bool { call(OP_KEEP, va, pages).0 == OK }
 /// How many records the kernel holds, and this start's boot id.
 #[cfg(target_arch = "x86_64")]
 pub fn status() -> Option<(usize, u64)> {

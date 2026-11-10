@@ -60,6 +60,24 @@ pub fn capture(pd_id: u32, domain_id: u8) {
     crate::serial_println!("[boot.service.restartable] pd={} pages={} entry={:#x}", pd_id, s.count, s.entry);
 }
 
+/// A service keeps `pages` of its own pages from `va` across its restarts: a restart
+/// leaves them as the last run wrote them, so the next run can pick its session up.
+/// Only pages BOOT captured for this very service, at most 4.
+pub fn keep(pd: u32, va: u64, pages: u64) -> bool {
+    if pd == 0 || va & 0xfff != 0 || !(1..=4).contains(&pages) { return false; }
+    let Some(mut s) = SERVICE.iter().map(|m| m.lock()).find(|s| s.pd == pd) else { return false };
+    let mut found = [usize::MAX; 4];
+    for (n, slot) in found.iter_mut().enumerate().take(pages as usize) {
+        let Some(leaf) = crate::boot_memory::existing_leaf_address(va + n as u64 * 4096) else { return false };
+        let frame = unsafe { core::ptr::read_volatile(leaf as *const u64) } & PTE_FRAME;
+        let count = s.count;
+        let Some(i) = s.pages[..count].iter().position(|p| p.frame == frame) else { return false };
+        *slot = i;
+    }
+    for i in found.into_iter().filter(|&i| i != usize::MAX) { s.pages[i].pristine = 0; }
+    true
+}
+
 /// How many times the service in domain `pd` has been started again.
 pub fn restarts_of(pd: u32) -> u32 {
     (0..SERVICES).find(|&i| SERVICE[i].try_lock().is_some_and(|s| s.pd == pd && pd != 0))
@@ -125,7 +143,7 @@ fn poll_one(index: usize) {
     }
     crate::pci_command::quiesce(pd);
     crate::iommu::revoke(s.pd);
-    for page in &s.pages[..s.count] { crate::boot_memory::copy_frame(page.pristine, page.frame); }
+    for page in s.pages[..s.count].iter().filter(|p| p.pristine != 0) { crate::boot_memory::copy_frame(page.pristine, page.frame); }
     // Requests to the dead run, and answers it was owed, belong to that run.
     let mut dropped = 0;
     while unsafe { (*pd.message_ring).dequeue() }.is_some() { dropped += 1; if dropped > 256 { break; } }
