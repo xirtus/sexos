@@ -10,8 +10,19 @@
 //! steps: the kernel sends Files `OP_PREPARE`, Files commits and flushes, then calls
 //! `READY`. The kernel then enters S5 (or resets). If Files does not answer within
 //! `FLUSH_TICKS`, the kernel goes ahead anyway, so a hung service never keeps a machine on.
+//!
+//! Firmware AML (batteries, lid, thermal zones, `_CST`, `_PTS`) does not run in the kernel.
+//! The ACPI service (`servers/sexacpi`) holds the `FIRMWARE` right: it reads the AML tables
+//! through `FW_TABLE`, reaches the hardware the firmware names through `FW_IO`, `FW_MEM` and
+//! `FW_PCI` (the kernel refuses RAM, the kernel's own ports and PCI BARs), and tells the
+//! kernel what it found (`FW_INVENTORY`, `FW_IDLE`) and what the sensors read
+//! (`FW_SENSORS`). `SENSORS` answers from that last report.
 
 pub const SYS: u64 = 84;
+/// The ACPI service's BOOT identity (domain and layout), outside the catalog's rows.
+pub const ACPI_SERVICE_PD: u32 = 50;
+/// Its hardware key: the Senses organ, beside Input, USB and Bell.
+pub const ACPI_SERVICE_KEY: u8 = 4;
 /// Capability slot every holder uses.
 pub const SLOT: u64 = 62;
 
@@ -21,14 +32,33 @@ pub const OFF: u64 = 2;
 pub const RESTART: u64 = 3;
 pub const READY: u64 = 4;
 pub const SENSORS: u64 = 5;
+/// Firmware window, `FIRMWARE` right only. rdx = arg, r10/r8 = arg2/arg3.
+/// `FW_TABLE`: arg = table index (0 FADT, 1 DSDT, 2.. SSDTs), arg2 = byte offset.
+/// Reply: [OK, length | signature << 32, 24 bytes of the table from offset].
+pub const FW_TABLE: u64 = 16;
+/// `FW_IO`: arg = port | width << 16 | write << 24, arg2 = value. Reply [OK, value].
+pub const FW_IO: u64 = 17;
+/// `FW_MEM`: arg = physical address, arg2 = width | write << 8, arg3 = value.
+pub const FW_MEM: u64 = 18;
+/// `FW_PCI`: arg = segment << 32 | bus << 24 | device << 19 | function << 16 | offset,
+/// arg2 = width | write << 8, arg3 = value.
+pub const FW_PCI: u64 = 19;
+/// `FW_INVENTORY`: arg = batteries | lids << 8 | thermal << 16 | i2c_hid << 24 | ok << 32,
+/// arg2 = `\_S5` as typ_a | typ_b << 8 (or u64::MAX), arg3 = 1 if AML failed.
+pub const FW_INVENTORY: u64 = 20;
+/// `FW_IDLE`: arg = C-state type | latency_us << 8 | mwait hint << 32.
+pub const FW_IDLE: u64 = 21;
+/// `FW_SENSORS`: arg, arg2, arg3 = words 1..=3 of `Sensors::encode`.
+pub const FW_SENSORS: u64 = 22;
 
 /// Rights in a grant.
 pub const REQUEST: u8 = 1;
 pub const FLUSH: u8 = 2;
 pub const SENSE: u8 = 4;
+pub const FIRMWARE: u8 = 8;
 
 /// The message the kernel sends Files (as an IPC call from pd 0) before power changes.
-/// arg0 is the op (`OFF` or `RESTART`).
+/// arg0 is the op (`OFF` or `RESTART`). The ACPI service gets it too, and runs `\_PTS`.
 pub const OP_PREPARE: u64 = 0x50F0;
 /// How long the kernel waits for Files, in timer ticks (about a millisecond each).
 pub const FLUSH_TICKS: u64 = 5000;
@@ -132,6 +162,39 @@ pub fn call(op: u64, arg: u64) -> [u64; 5] {
 #[cfg(not(all(target_arch = "x86_64", target_os = "none")))]
 pub fn call(_op: u64, _arg: u64) -> [u64; 5] { [DENIED, 0, 0, 0, 0] }
 
+/// `call` with the two extra arguments the firmware window uses.
+#[cfg(all(target_arch = "x86_64", target_os = "none"))]
+pub fn call4(op: u64, arg: u64, arg2: u64, arg3: u64) -> [u64; 5] {
+    let (a, b, c, d, e): (u64, u64, u64, u64, u64);
+    unsafe {
+        core::arch::asm!("syscall",
+            inlateout("rax") SYS => a, inlateout("rdi") SLOT => _,
+            inlateout("rsi") op => b, inlateout("rdx") arg => c,
+            inlateout("r10") arg2 => d, inlateout("r8") arg3 => e,
+            out("rcx") _, out("r11") _, options(nostack));
+    }
+    [a, b, c, d, e]
+}
+#[cfg(not(all(target_arch = "x86_64", target_os = "none")))]
+pub fn call4(_op: u64, _arg: u64, _arg2: u64, _arg3: u64) -> [u64; 5] { [DENIED, 0, 0, 0, 0] }
+
+/// Kernel-owned I/O ports the firmware window never reaches: the PICs, the PIT, PCI
+/// configuration (use `FW_PCI`), the PS/2 controller (Input's) and the serial log.
+pub fn port_reserved(port: u16, width: u8) -> bool {
+    let end = port as u32 + width.max(1) as u32;
+    const KEPT: [(u32, u32); 7] = [(0x20, 0x22), (0xA0, 0xA2), (0x40, 0x44), (0xCF8, 0xD00), (0x60, 0x61), (0x64, 0x65), (0x3F8, 0x400)];
+    KEPT.iter().any(|&(a, b)| (port as u32) < b && end > a)
+}
+/// PCI header registers the firmware window may not write: BARs and the expansion ROM.
+pub fn pci_write_reserved(offset: u16, width: u8) -> bool {
+    let (a, b) = (offset as u32, offset as u32 + width.max(1) as u32);
+    (a < 0x28 && b > 0x10) || (a < 0x34 && b > 0x30)
+}
+/// Packs a `FW_PCI` address.
+pub const fn pci_address(segment: u16, bus: u8, device: u8, function: u8, offset: u16) -> u64 {
+    (segment as u64) << 32 | (bus as u64) << 24 | ((device & 31) as u64) << 19 | ((function & 7) as u64) << 16 | (offset & 0xFFF) as u64
+}
+
 pub fn info() -> Result<Info, u64> { Info::decode(call(INFO, 0)) }
 pub fn sensors() -> Result<Sensors, u64> { Sensors::decode(call(SENSORS, 0)) }
 /// Asks for a shut down (`OFF`) or `RESTART`. Returns once the kernel has started it;
@@ -207,6 +270,14 @@ mod tests {
         assert_eq!(s5_from_dsdt(b"no sleep here"), None);
         // A truncated package is refused, not read past.
         assert_eq!(s5_from_dsdt(&[0x08, b'_', b'S', b'5', b'_', 0x12, 0x0A]), None);
+    }
+    #[test]
+    fn window_policy() {
+        assert!(port_reserved(0x20, 1) && port_reserved(0xCFC, 4) && port_reserved(0x3FD, 1) && port_reserved(0x1E, 4));
+        assert!(!port_reserved(0x62, 1) && !port_reserved(0x66, 1) && !port_reserved(0xB2, 1) && !port_reserved(0x70, 1));
+        assert!(pci_write_reserved(0x10, 4) && pci_write_reserved(0x24, 4) && pci_write_reserved(0x30, 4) && pci_write_reserved(0x0E, 4));
+        assert!(!pci_write_reserved(0x04, 2) && !pci_write_reserved(0x84, 4) && !pci_write_reserved(0x28, 4));
+        assert_eq!(pci_address(0, 1, 0x1C, 4, 0x84), 1 << 24 | 0x1C << 19 | 4 << 16 | 0x84);
     }
     #[test]
     fn round_trip() {

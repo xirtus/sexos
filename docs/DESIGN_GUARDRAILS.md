@@ -32,6 +32,7 @@ do from ring 3. When a feature needs a little ring-0 help, add the smallest mech
 | Date | Budget | Reason |
 |------|--------|--------|
 | 2026-11-09 | 21,500 | Baseline after removing dead POSIX/Linux-shaped stubs (18,383 lines). Headroom covers the open boot-log/stop-screen (#78), VMD enumeration (#84) and lease (#79) work. ACPI AML in ring 0 (#70, #82) is the open question in the audit. |
+| 2026-11-10 | 21,500 | Unchanged. AML moved out of ring 0 into `servers/sexacpi` (Andreas, 2026-11-10). The kernel keeps FADT reset/S5, the SCI route, the `Power` check and a filtered firmware window (I/O ports, MMIO and PCI config that refuse RAM, kernel-owned ports and BARs). |
 
 ## 2. No Linux-shaped kernel API
 

@@ -1913,6 +1913,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sexacpi"
+version = "0.1.0"
+dependencies = [
+ "acpi",
+ "linked_list_allocator",
+ "sex-pdx",
+]
+
+[[package]]
 name = "sexbell"
 version = "0.1.0"
 dependencies = [

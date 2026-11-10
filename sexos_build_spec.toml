@@ -8,7 +8,7 @@
 
 [spec]
 version = "1.0.0"
-abi_version_hash = "ce893096c77d9e944ecbe7adf8af7217be79886cbf889894e9a6726e12946262"
+abi_version_hash = "d05875c267fb14c5e7a4488d78e24be5fbdd4f583ce9ea11aae5754365ce7a7b"
 contract_sha256 = "093f260760273d6f40a0bab6330ea7f9d95f744a4d8a7464fb92241e10740df4"
 target = "x86_64-sex.json"
 
@@ -28,6 +28,7 @@ prefixes = ["CARGO_FEATURE_"]
 crates = [
   "sex-kernel",
   "servers/sexbell/Cargo.toml",
+  "servers/sexacpi/Cargo.toml",
   "servers/sexdisplay/Cargo.toml",
   "apps/sexdrive/Cargo.toml",
   "servers/silk-shell/Cargo.toml",
@@ -166,6 +167,14 @@ action = "cargo_manifest"
 manifest = "servers/sexbell/Cargo.toml"
 source_artifact = "target/x86_64-sex/release/sexbell"
 dest_artifact = "iso_root/servers/sexbell"
+rustflags = ""
+
+[[stage]]
+id = "build_sexacpi"
+action = "cargo_manifest"
+manifest = "servers/sexacpi/Cargo.toml"
+source_artifact = "target/x86_64-sex/release/sexacpi"
+dest_artifact = "iso_root/servers/sexacpi"
 rustflags = ""
 
 [[stage]]

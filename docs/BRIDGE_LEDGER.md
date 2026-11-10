@@ -58,4 +58,4 @@ reference and must check on real hardware (or replace with datasheet/REA facts).
 | Crate | Licence | What it does in the kernel | Status |
 |-------|---------|----------------------------|--------|
 | `acpi` (table parsing) | MIT/Apache-2.0 | reads MADT and other static tables at boot | master; fine (static data, no firmware code runs) |
-| `acpi` / `aml` AML interpreter | MIT/Apache-2.0 | runs firmware AML in ring 0 for `\_S5`, batteries, lids, thermal, `_CST`, I2C HID, dGPU `_PS3`/`_OFF` | open in #70 and #82; **audit recommends moving it to a ring-3 ACPI server**, see the audit |
+| `acpi` / `aml` AML interpreter | MIT/Apache-2.0 | **no longer in ring 0.** Runs in the ring-3 `sexacpi` server (Senses organ, pd 50) for `\_S5`, `_PTS`, batteries, lids, thermal, `_CST`, I2C HID. The kernel links the crate for table parsing only and never builds an interpreter (guardrail test `test_kernel_never_runs_firmware_aml`). | moved by the sexacpi PR (2026-11-10); dGPU `_PS3`/`_OFF` (#82) must call it through sexacpi too |

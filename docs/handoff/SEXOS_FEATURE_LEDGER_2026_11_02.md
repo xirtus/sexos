@@ -3332,3 +3332,20 @@ Workstream D of the parity report. Handoff and bare-metal checklist: `docs/hando
   Tuxedo-using component.
 - **Open decision.** #70/#82 run firmware AML in ring 0; the audit recommends a ring-3
   `sexacpi` server.
+
+## Firmware AML leaves the kernel: the sexacpi server (2026-11-10)
+
+- **What changed.** The ACPI AML interpreter (batteries, lid, thermal, `_CST`, I2C HID
+  inventory, `\_S5`, `_PTS`) now runs in `servers/sexacpi`, a ring-3 service in the Senses
+  organ (pd 50, key 4). A firmware bug or interpreter hang stops sexacpi, not the system.
+- **Kernel.** Keeps FADT reset/S5, the SCI and power button, the `Power` check and a
+  filtered firmware window (`sex_pdx::power` ops 16-22, right `FIRMWARE`). It refuses RAM,
+  kernel/bootloader memory, the framebuffer, PIC/PIT/PS2/COM1/CF8 ports and PCI BAR/ROM
+  writes. `kernel/src/hal/acpi.rs` 804 -> ~650 lines.
+- **ABI.** `SYS_POWER` (84) now takes a fourth and fifth argument (r10, r8) for the firmware
+  ops. Shell/SilkBar sensor reads are unchanged.
+- **Gates.** `power_acpi_gate.py` waits for `[sexacpi.ready] aml=1`, the kernel's
+  `[acpi.firmware.inventory] aml=1`, `firmware_told=1` on power-off, and fails if any
+  `[acpi.aml` line appears. `test_kernel_never_runs_firmware_aml` keeps AML out of
+  `kernel/src`. Host window-policy tests in `power_host_gate.sh`.
+- **Open decision closed.** Audit item A is done; #82's dGPU `_OFF` must go through sexacpi.

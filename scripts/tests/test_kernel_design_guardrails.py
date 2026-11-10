@@ -65,6 +65,15 @@ class KernelGuardrails(unittest.TestCase):
                              "to a server, or raise the budget with a reason in docs/DESIGN_GUARDRAILS.md")
 
 
+    def test_kernel_never_runs_firmware_aml(self):
+        # AML is untrusted firmware code: it runs in the ring-3 sexacpi server, under PKU.
+        # The kernel parses static tables only (DESIGN_GUARDRAILS 1, audit item A).
+        bad = [str(p.relative_to(ROOT)) for p in kernel_sources() if p.suffix == ".rs"
+               and re.search(r"\bInterpreter\s*::\s*new\b|aml::Interpreter|\.evaluate(_if_present)?\s*\(",
+                             p.read_text(errors="replace"))]
+        self.assertEqual(bad, [], "firmware AML belongs in servers/sexacpi, not the kernel")
+
+
 class BridgeLedger(unittest.TestCase):
     def test_every_bridge_has_a_ledger_row(self):
         ledger = (ROOT / "docs" / "BRIDGE_LEDGER.md").read_text()

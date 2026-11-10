@@ -490,7 +490,7 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
 
         84 => { // SYS_POWER: shut down, restart, Files' flush answer, power sensors.
             let pd=crate::core_local::CoreLocal::get().current_pd_ref();
-            let reply=crate::hal::acpi::invoke(pd,rdi,rsi,rdx);
+            let reply=crate::hal::acpi::invoke(pd,rdi,rsi,rdx,regs.r10,regs.r8);
             regs.rsi=reply[1];regs.rdx=reply[2];regs.r10=reply[3];regs.r8=reply[4];reply[0]
         },
 
