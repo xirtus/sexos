@@ -225,6 +225,19 @@ fn alias(pd: &ProtectionDomain, physical: u64, length: u64, writable: bool, mmio
     va
 }
 
+/// A supervisor-only, uncached mapping of device registers the kernel itself programs
+/// (MSI-X tables). No domain can reach it: the pages are not user-accessible.
+pub fn kernel_mmio(physical: u64, length: u64) -> u64 {
+    require_boot();
+    let va = crate::memory::va_allocator::allocate_va(length as usize).expect("BOOT_KERNEL_MMIO_NO_VA");
+    let flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::NO_EXECUTE
+        | PageTableFlags::NO_CACHE | PageTableFlags::WRITE_THROUGH;
+    crate::memory::manager::GLOBAL_VAS.lock().as_mut().expect("BOOT_KERNEL_MMIO_NO_VAS")
+        .map_physical_range(VirtAddr::new(va), physical, length, flags, 0)
+        .expect("BOOT_KERNEL_MMIO_MAP_FAILED");
+    va
+}
+
 fn grant(pd: &ProtectionDomain, slot: u64, region: RegionGrant) {
     assert!(pd.find_capability(slot as u32).is_none(), "BOOT_REGION_SLOT_OCCUPIED");
     sex_pdx::memory_region::resolve_info(Some(&region)).expect("BOOT_REGION_INVALID_GRANT");
@@ -620,7 +633,8 @@ pub fn nic_command(pd:&ProtectionDomain,dev:&crate::hal::pci::PciDevice,slot:u64
     -> sex_pdx::pci_command::Grant
 {
     require_boot();
-    assert!(slot == sex_pdx::SLOT_NIC && crate::nic_boot::supported(dev.vendor_id,dev.device_id), "BOOT_NIC_COMMAND_SUBJECT");
+    let extra=slot>=sex_pdx::device::EXTRA_SLOT_BASE&&slot<sex_pdx::device::EXTRA_SLOT_BASE+sex_pdx::device::EXTRA_SLOTS;
+    assert!((slot == sex_pdx::SLOT_NIC || extra) && crate::nic_boot::supported(dev.vendor_id,dev.device_id), "BOOT_NIC_COMMAND_SUBJECT");
     assert_eq!(view.region_id,0x10000 + pd.id * 1024 + slot as u32,"BOOT_NIC_COMMAND_VIEW_ID");
     assert!(sex_pdx::memory_region::resolve_info(Some(&view)).is_ok()
         && view.length >= crate::nic_boot::registers_end(dev.vendor_id,dev.device_id) && view.length <= 65536
