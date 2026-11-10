@@ -12,7 +12,7 @@ fn alienware_x17_r1_parts_are_named_and_owned() {
     assert!(advice(id(0x10de, 0x249c, 0x03, 0x00, 0)).unwrap().contains("firmware framebuffer"));
 
     let wifi = id(0x8086, 0x2725, 0x02, 0x80, 0);
-    assert_eq!(describe(wifi).support, Support::Planned);
+    assert_eq!(describe(wifi).support, Support::InProgress);
     assert!(advice(wifi).unwrap().contains("Ethernet"));
 
     let killer = describe(id(0x10ec, 0x3000, 0x02, 0x00, 0));

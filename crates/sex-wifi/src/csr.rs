@@ -118,6 +118,9 @@ pub struct Boot {
     since: u64,
     started: u64,
     prepare_rounds: u8,
+    /// The chip raised the ALIVE interrupt: its firmware has configured the receive
+    /// hardware (RFH), so the driver must publish the free ring again.
+    pub alive_interrupts: u32,
 }
 
 const READY_US: u64 = 150_000;
@@ -128,7 +131,7 @@ const ALIVE_US: u64 = 1_000_000;
 
 impl Boot {
     pub fn new(chip: Chip, now: u64) -> Self {
-        Self { chip, step: Step::Ready, hw_rev: 0, since: now, started: now, prepare_rounds: 0 }
+        Self { chip, step: Step::Ready, hw_rev: 0, since: now, started: now, prepare_rounds: 0, alive_interrupts: 0 }
     }
     pub fn done(&self) -> bool { matches!(self.step, Step::Alive | Step::Failed(_)) }
     fn fail(&mut self, f: Failure) { self.step = Step::Failed(f); }
@@ -251,6 +254,7 @@ impl Boot {
                 else if cause & (INT_ALIVE | INT_FH_RX) != 0 {
                     // The ALIVE notification itself arrives on the RX ring; the queue
                     // layer confirms it with `alive_received`.
+                    if cause & INT_ALIVE != 0 { self.alive_interrupts = self.alive_interrupts.saturating_add(1); }
                     r.write(INT, cause);
                 } else if now.saturating_sub(self.since) >= ALIVE_US { self.fail(Failure::AliveTimeout); }
             }

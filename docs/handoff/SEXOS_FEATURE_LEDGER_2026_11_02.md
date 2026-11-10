@@ -3619,6 +3619,15 @@ Plan: `docs/handoff/NVIDIA_GPU_PLAN_2026_11_09.md` (stages N1-N6).
   `quil_autosave_gate.boot` now deletes the old serial log first: QEMU's `-serial file:`
   does not truncate, and a reused output directory let an older log show through.
 
+## Programs play sound at any rate (2026-11-10)
+- Bell converts each program's sound to its 48 kHz mix: a program names its rate with
+  `Sound::set_rate(hz)` (8 to 192 kHz; ring header word `RATE_HZ`, 0 means 48 kHz) and Bell
+  resamples by linear interpolation as it mixes (`servers/sexbell/src/resample.rs`). 48 kHz
+  keeps the old direct path. Not an ABI input.
+- `run play --tone HZ RATE` plays a two second test sine written at RATE.
+- Gates: `tests/bell_resample.rs` on the host (`scripts/sound_host_gate.sh`, in CI);
+  `scripts/sound_rate_gate.py` records the virtio sound card: 440 Hz at 44.1 kHz,
+  660 Hz at 22.05 kHz and 880 Hz at 96 kHz each last 2.0 s at their own pitch.
 
 ## Boot log on screen, stop screen, crash records, restartable services, fuzzing (2026-11-09)
 
@@ -3636,3 +3645,22 @@ Details: `docs/handoff/BOOT_LOG_AND_CRASH_RECORDS_2026_11_09.md`.
   lines, off by default; SexNet owns NICs). The kernel is now about 18,600 lines and the
   budget stays 21,500. `sexnet_service_host_gate.sh` now asserts that the kernel only
   discovers NICs.
+
+## Intel Wi-Fi, stage W2: the chip starts its firmware (2026-11-10)
+
+- **Lease:** Intel class 02:80 goes to the network service (`Lease::Wifi`, slot 22) with
+  BAR0, command bits, its own 4 MiB DMA pool (slot 23, region 0x4400) and the firmware
+  pack as a read-only region (slot 24). `SYS_IDENTITY` answers `QUERY_SUBSYSTEM`.
+- **Firmware on the boot image:** `firmware/wifi.pack` (all 13 linux-firmware files, each
+  SHA-256 checked by the driver), built by `scripts/make_wifi_firmware_pack.py`; the build
+  fetches the files when missing. The installed boot partition grows to 32 MiB with it.
+- **Driver:** `sex_wifi::rx` (receive ring, both families) and `sex_wifi::bringup`;
+  `servers/sexnet/src/wifi.rs` powers the chip up and logs `[wifi.chip]`,
+  `[wifi.firmware]`, `[wifi.step]`, then `[wifi.alive] fw=…` or `[wifi.failed] step=…`.
+- **Census:** Intel AX200/AX201/AX210/AX211 now say `support=in_progress`.
+- **Evidence:** `scripts/wifi_host_gate.sh` (31 tests), hwdb manifest tests. Real proof
+  is the x17 R1 boot log; QEMU has no Intel Wi-Fi.
+- **ABI:** new `sex_pdx::pci_command` Wi-Fi slots, region ids and `QUERY_SUBSYSTEM`;
+  `kernel/src/pci_command.rs` changed; `abi_version_hash` recomputed.
+- **Kernel growth:** ~45 lines (class lease kind, pool slot per kind, firmware region,
+  subsystem query); mechanism only, no Wi-Fi logic in the kernel.

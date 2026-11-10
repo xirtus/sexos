@@ -34,6 +34,7 @@ do from ring 3. When a feature needs a little ring-0 help, add the smallest mech
 | 2026-11-09 | 21,500 | Baseline after removing dead POSIX/Linux-shaped stubs (18,383 lines). Headroom covers the open boot-log/stop-screen (#78), VMD enumeration (#84) and lease (#79) work. ACPI AML in ring 0 (#70, #82) is the open question in the audit. |
 | 2026-11-10 | 21,500 | Unchanged. AML moved out of ring 0 into `servers/sexacpi` (Andreas, 2026-11-10). The kernel keeps FADT reset/S5, the SCI route, the `Power` check and a filtered firmware window (I/O ports, MMIO and PCI config that refuse RAM, kernel-owned ports and BARs). |
 | 2026-11-10 | 21,500 | Unchanged. #78 (stop screen, which must stay in the kernel) and #86 (IOMMU page tables, mechanism) took the kernel to 22,121 and turned master red. The fix removed the historical in-kernel e1000 bring-up probe from `hal/pci.rs` (3,266 lines: NIC rings, ARP/ICMP/UDP/TCP/DNS/HTTP frames, off unless built with `SEXOS_BOOT_NIC_DIAGNOSTICS=1`). That is a protocol stack in ring 0, and SexNet owns NICs. Kernel now about 18,600 lines. |
+| 2026-11-10 | 21,500 | Unchanged. A 22,500 raise for #89 (scheduler latency classes, ~115 lines, landed with #96) was dropped: after the NIC probe removal the kernel is ~18,700 lines with them included. |
 
 ## 2. No Linux-shaped kernel API
 

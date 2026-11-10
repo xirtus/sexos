@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Sound for programs: frames go into the program's own sound ring and Bell mixes
 //! them into the sound card, so a program never touches the card or another
-//! program's sound. 48 kHz, stereo, i16.
+//! program's sound. Stereo i16 frames, at 48 kHz unless the program names another
+//! rate (`set_rate`): Bell converts as it mixes.
 use sex_pdx::sound_ring::{self as ring, Ring};
 
 pub use ring::RATE;
@@ -18,6 +19,7 @@ impl Sound {
         r.store(ring::VOLUME, 100);
         r.store(ring::PAUSED, 0);
         r.store(ring::SKIP_TO, taken);
+        r.store(ring::RATE_HZ, 0);
         r.store(ring::OPEN, 1);
         Some(Sound { ring: r, written: taken, start: taken, told: false })
     }
@@ -67,6 +69,8 @@ impl Sound {
     /// The ring's own count of frames played, across runs of the program.
     pub fn played_total(&self) -> u64 { self.ring.load(ring::PLAYED) }
     fn kick_now(&mut self) { self.told = false; self.kick(); }
+    /// The rate of the frames written from now on, 8000 to 192000 Hz (else 48000).
+    pub fn set_rate(&mut self, hz: u32) { self.ring.store(ring::RATE_HZ, hz as u64); }
     pub fn set_volume(&mut self, percent: u8) { self.ring.store(ring::VOLUME, percent.min(100) as u64); }
     /// Undo `close`: the program means to play more into this ring.
     pub fn reopen(&mut self) { self.ring.store(ring::OPEN, 1); self.told = false; }
