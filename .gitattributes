@@ -1,3 +1,2 @@
 # Append-only logs: keep both sides' new lines instead of conflicting.
 docs/handoff/SEXOS_FEATURE_LEDGER_2026_11_02.md merge=union
-spec/abi_inputs.sha256 merge=union

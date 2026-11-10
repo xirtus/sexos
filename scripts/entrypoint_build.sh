@@ -149,7 +149,7 @@ actual_contract_hash="$(sha256sum sexos_contract.toml | awk '{print $1}')"
 # scripts/update_abi_hashes.sh after a deliberate ABI change.
 ABI_MANIFEST="$ROOT_DIR/spec/abi_inputs.sha256"
 [[ -f "$ABI_MANIFEST" ]] || fail "missing spec/abi_inputs.sha256"
-expected_abi="$(sort -k2 "$ABI_MANIFEST")"
+expected_abi="$(grep -v '^$' "$ABI_MANIFEST" | sort -k2)"
 actual_abi="$(sha256sum "${ABI_INPUTS[@]}" | sort -k2)"
 if [[ "$expected_abi" != "$actual_abi" ]]; then
   diff <(printf '%s\n' "$expected_abi") <(printf '%s\n' "$actual_abi") >&2 || true
