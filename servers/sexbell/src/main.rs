@@ -3,6 +3,7 @@
 extern crate alloc;
 mod paging_probe;
 mod sound;
+mod hda;
 
 use sex_pdx::{pdx_reply, serial_println, OP_BELL_NOTIFY, OP_BELL_CLOSE, OP_BELL_ACTION,
               OP_BELL_CLEAR, OP_BELL_MUTE_SENDER, OP_BELL_LIST, OP_BELL_SUBSCRIBE, OP_BELL_SET_POLICY};

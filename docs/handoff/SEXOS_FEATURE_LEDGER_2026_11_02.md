@@ -3210,6 +3210,40 @@ YouTube stage Y3d.
 - Policy: C++ only for ported engines (V8 next), each in its own organ; SexOS itself stays Rust.
 
 
+## Net: TLS 1.2 and 1.3 with every common suite and curve (2026-11-09)
+
+Parity report workstream G, part 1.
+- **Why.** The open-web session spoke only TLS 1.3 with AES-128-GCM over P-256 (embedded-tls). Sites that offer only TLS 1.2, prefer ChaCha20 or AES-256, or ask for X25519 or P-384 failed.
+- **sex-tls `open`** now runs rustls 0.23's unbuffered client (no_std) on a provider of our own in `crates/sex-tls/src/open/provider.rs`: AES-128-GCM, AES-256-GCM and ChaCha20-Poly1305 for TLS 1.3 and TLS 1.2 (ECDHE-ECDSA and ECDHE-RSA), SHA-256/384, key exchange on X25519, P-256 and P-384, ALPN `http/1.1`. X25519 is ours (`open/x25519.rs`) on fiat-crypto's verified field code, checked against RFC 7748 and OpenSSL. Certificates still go through rustls-webpki with the same RSA/ECDSA algorithms and the public roots. `Session`'s API is unchanged; sexnet logs `[net.tls.agreed] version= suite= group=` per session.
+- **No vector registers in the service.** sexnet builds with `chacha20_force_soft` and `poly1305_force_soft` beside the AES/POLYVAL cfgs; `scripts/check_tls_platform.py` checks them for the sexnet stage and pins the new crates (rustls 0.23.46, aes-gcm 0.10.3, chacha20poly1305 0.10.1, hmac 0.12.1, fiat-crypto 0.2.9, optional under `open-web` so the Browser's graph is unchanged).
+- **Tests.** `cargo test -p sex-tls --features open-web`: ten OpenSSL servers each held to one version, suite and group (all nine suites, all three groups, RSA/P-256/P-384 certificates); a server no trusted root signed is refused as a certificate failure; keep-alive. QEMU gate `scripts/program_web_tls_gate.py`: the browser loads a page from a TLS 1.3-only server (agreed TLS13_AES_256_GCM_SHA384 on X25519) and fetches from TLS 1.2-only servers held to ECDHE-RSA-AES256-GCM-SHA384 on P-384 and ECDHE-ECDSA-CHACHA20-POLY1305 on P-256. Its image is built with `SEXOS_TLS_GATE_ROOT` (one extra root, gate builds only).
+- **No ABI change.** Live top-site checks need a real network (the cloud proxy re-terminates TLS): try `run +net web https://...` for google.com, wikipedia.org, github.com, cloudflare.com, amazon.com, youtube.com on Andreas's machine or bare metal.
+
+## Net: IPv6 and sockets for programs (2026-11-09)
+
+Workstream G (plan: `docs/handoff/LINUX_AND_DESKTOP_PARITY_REPORT_2026_11_09.md`), the IPv6 and socket half; TLS is separate.
+- **IPv6 in sexnet.** smoltcp gets `proto-ipv6`, `proto-ipv6-slaac` and room for three addresses. IPv6 starts with the open side (the first program call), never at boot, so the controlled engine and its gates see no IPv6 frames: the interface is made again with a link-local address from the MAC (EUI-64) and SLAAC on, which sends a router solicitation and takes a global address and default route from the router advertisement. smoltcp 0.14 adds the SLAAC route only to a table with no IPv4 route, so the IPv4 default route steps aside while SLAAC updates. A DHCP lease now replaces only the IPv4 address.
+- **NIC.** The e1000/e1000e multicast table passes two groups only: all-nodes (router advertisements) and this MAC's solicited-node group (neighbor solicitations). No multicast-promiscuous mode.
+- **Names in both families.** `dns_wire` asks and parses AAAA (`query_type`, `parse_type`, with the same strict validation and CNAME chains). A lookup asks A, and AAAA when the machine has a global IPv6 address; it answers once both came, or 50 ms after the first (RFC 8305's resolution delay), IPv6 first. The resolver itself is still reached over IPv4 (DHCP's).
+- **Ready on either family.** `UP` answers OK with a DHCP lease or a global IPv6 address; `[net.ipv6.slaac] address=... router=...` is recorded once.
+- **Sockets.** A run Shell bound to the network (`run +net`) can now connect to IPv6 addresses, listen for TCP connections and use UDP, all under the same gate as before. Programs may take ports 1 to 39998 except 68; the ports above are the service's own (its resolver, outbound flows, job tickets), and one port has one listener or socket. A listener takes connections one at a time: on `ACCEPT` the connection becomes the caller's new flow number and another flow listens on. A flow that was shut down is left to finish when closed rather than reset, and a new connection takes a flow the stack is done with first.
+- **SDK (`sex_app::net`).** `IpAddr` (V4/V6, `parse` with or without brackets, RFC 5952 display), `up`, `addresses`, `resolve`; `TcpStream` (`begin`/`poll_open` or `connect`/`connect_to`, `read`/`read_within`, `write`/`write_all`, `is_closed`, `shutdown`, `close`), `TcpListener` (`bind`, `accept`, `accept_within`), `UdpSocket` (`bind`, `send_to`, `recv_from`, `recv_from_within`). `Error::InUse` is new. Exchanges (HTTP, so the browser too) resolve in both families, cache both, connect by `CONNECT_TO`, and move to a name's next address when the first fails or takes over 3 s. `sex_fetch::Url` takes bracketed IPv6 hosts (`http://[fd00::1]:8080/`), kept in the Host header.
+- **Program `talk`.** `run +net talk tcp HOST PORT TEXT`, `udp HOST PORT TEXT`, `listen PORT`, `addresses`, and `check ADDRESS PORT` for the gate.
+- **ABI changes** (`crates/sex-pdx/src/web.rs`; the ABI hash is recomputed): new request kinds `RESOLVE_ALL` 11, `CONNECT_TO` 12, `UDP_BIND` 13, `UDP_SEND` 14, `UDP_RECEIVE` 15, `LISTEN` 16, `ACCEPT` 17, `ADDRESSES` 18, `SHUTDOWN` 19; new status `IN_USE` 8; region layouts `ADDRESS_BYTES` 17 (family 4 or 6, then 16 address bytes) and `ENDPOINT_BYTES` 19 (address, then port big-endian); `FAMILY_V4`, `FAMILY_V6`, `PROGRAM_PORT_MAX`, `put_address`/`address_of`/`put_endpoint`/`endpoint_of`. Kinds 1 to 10 are unchanged (`RESOLVE` still answers 4 IPv4 bytes; `CONNECT` still packs IPv4 and port), so Kaleidoscope and Spindle are untouched. `STATE` now says OPENING for a listener and OPEN after our own FIN.
+- **Tests.** Host (`sexnet_transport_host_gate.sh`): router solicitation and SLAAC address and route, no IPv6 before the open side starts, TCP to an IPv6 peer with shutdown, UDP port rules and echo, a listener taking a connection, A+AAAA resolution with the delay, AAAA wire parsing; `sex-fetch` bracketed URLs. QEMU gate `scripts/program_ipv6_gate.py`: on QEMU's socket backend with a peer the script plays itself (router, neighbor discovery, small TCP/UDP echo and HTTP server, a TCP client), because the build hosts have no IPv6 for QEMU's user network. The machine takes `fd00:5e:0:1:5054:ff:fe12:3456` by SLAAC, `talk` echoes over TCP and UDP and accepts a connection on 7070, and `peek http://[fd00:5e:0:1::1]/page.html` loads a page.
+- **Not yet.** DNS over IPv6 and DHCPv6/RDNSS (the resolver is DHCPv4's), IPv6 fragmentation and MLD, a listen backlog beyond one, UDP datagrams past one frame, TLS to IPv6 literals (the name check takes a host name).
+## Ordinary Rust and C programs: Rust std, POSIX as a guest library, PDF (2026-11-09)
+
+Workstream H of `LINUX_AND_DESKTOP_PARITY_REPORT_2026_11_09.md`. PR #68.
+- **Rust `std` target: `x86_64-sex-std.json`.** Programs link the real standard library, built from rust-src (`build_std = "std,panic_abort"` in a spec stage). The target names Hermit's library interface (`os = "hermit"`): upstream std already calls `sys_read`, `sys_spawn2`, `sys_futex_wait` and so on instead of trapping into a POSIX kernel, so no std fork is needed. Static PIE, only `R_X86_64_RELATIVE`, local-exec TLS; the loader takes it unchanged.
+- **`crates/sex-std`** answers those calls inside the program, over its own grants: files in the program's folder, which is `/` to it (`..` never leaves; `path::resolve`); stdout/stderr to the window as a console and the serial record (`[std.out]`, `[std.err]`), stdin as lines typed into the window; threads as workers (`sex_app::thread`), `Mutex`/`Condvar`/parking on the kernel's wait/wake; `Instant` from the tick; memory from the program heap; `argv` from Shell's argument line (`args::split`, double quotes keep a word). After `main` returns, a console that printed stays until it is closed, with how the program ended. `sex_std::window()` hands the window to a program that draws.
+- **Not yet:** `std::net` says `Unsupported` until the program socket API (sockets thread); `SystemTime` is build time plus uptime until programs get a read-only civil clock; Hermit's std refuses `fsync`, `rename` and `set_len`.
+- **sex-app:** `files::direct` (no window needed: stat, read_at, write_at, create, truncate, list, mkdir, remove, rename, sync, args) for any task; `mailbox` keeps messages one task took from the shared inbox for another (a worker's file answer seen by the main task, keys seen by a worker); one file request in flight per program.
+- **POSIX guest library:** on the std target, `sex-libc` exports `posix.rs`: descriptors (open, read, write, lseek, close, stat/fstat/lstat, unlink, mkdir, rmdir, rename, remove, access, ftruncate, fsync, isatty), buffered `FILE` streams (fopen/fdopen/freopen, fread/fwrite, fgets/fgetc/ungetc, fputs/puts/putchar, fseek/ftell, feof/ferror, printf family to any stream), `opendir`/`readdir`, `exit`/`atexit`/`abort`, sleep. All of it is library code over `sex-std`; nothing is in the kernel or a service. The no_std program target keeps its callback-only C library. `sex-std` adds `sys_rename`, `sys_fsync`, `sys_ftruncate` for it.
+- **Programs:** `run stdhello` (Rust std: HashMap, fs, threads, mpsc, time), `run chello` (an `int main(argc, argv)` C program: stdio, files, folders, errno, qsort), `run pdf [NAME.pdf]` (hayro renders pages; Right/Left, Home/End, Up/Down, +/-/0; writes and opens `welcome.pdf` when given no name).
+- **Gate:** `scripts/program_std_gate.py`, now also a CI step.
+- **ABI:** no kernel ABI change; no `ABI_INPUTS` file changed, `abi_version_hash` unchanged.
+
 ## Files: USB sticks and other systems' disks, the Files app, an open/save picker (2026-11-09)
 
 Workstream I of `docs/handoff/LINUX_AND_DESKTOP_PARITY_REPORT_2026_11_09.md`.
@@ -3254,6 +3288,91 @@ Workstream I of `docs/handoff/LINUX_AND_DESKTOP_PARITY_REPORT_2026_11_09.md`.
   mouse, tablet, rollover, hub unplug, mouse plugged in later); `usb_wheel_host_gate` with
   a rollover test and the descriptor parser's tests; master runtime gate; host unittests;
   architectural truth.
+
+## Power off and restart through ACPI (2026-11-09)
+
+Parity report workstream A (`LINUX_AND_DESKTOP_PARITY_REPORT_2026_11_09.md` section 6).
+- **Kernel** `kernel/src/hal/acpi.rs` replaces the stub. Fixed hardware comes straight from the FADT and never needs AML: PM1 event/control blocks, the reset register, the SCI, ACPI mode (SMI_CMD), HW-reduced sleep registers. `\_S5` is read from the DSDT bytes by a bounds-checked reader (`sex_pdx::power::s5_from_dsdt`) and, when AML runs, from the interpreter.
+- **AML in quarantine.** The `acpi` crate's interpreter runs on its own 256 KiB stack. If firmware AML makes it panic, the panic handler returns to the ACPI code (`sex_aml_enter`/`sex_aml_escape`), AML is set aside for that boot and shut down/restart keep working from the tables. A boot self-test proves the escape before any firmware AML runs (`[acpi.aml.quarantine] self_test=1`). `\_PIC(1)`, `_INI`/`_STA`, `\_PTS(5)` run there.
+- **Shut down**: `\_PTS(5)`, SLP_TYPa/b then SLP_EN on PM1a/PM1b (or the HW-reduced sleep control register). **Restart**: FADT reset register, then port 0xCF9, the keyboard controller, a triple fault.
+- **Power button**: fixed event via the SCI (vector 0x29, level/active-low unless the MADT overrides). GPEs are masked until there is code for them, so an unhandled GPE cannot hold the SCI asserted.
+- **ABI change: `SYS_POWER` (84)** and capability `CapabilityData::Power(sex_pdx::power::Grant)` at slot 62. BOOT grants Shell `REQUEST|SENSE`, Files `FLUSH`, the status bar `SENSE`. Ops `INFO`, `OFF`, `RESTART`, `READY`, `SENSORS`. ABI hash recomputed.
+- **Files first.** A shut down or restart (from Shell or the power button) sends Files `power::OP_PREPARE` (kernel message, pd 0); Files commits waiting writes, flushes the disk cache and answers `READY`. The kernel goes ahead after `FLUSH_TICKS` (about 5 s) if Files never answers.
+- **Desktop**: launcher rows "Shut Down" and "Restart" (`Command::ShutDown`, `Command::Restart`), shown unavailable where the kernel cannot do them; the palette batch proof skips them.
+- **Sensors and devices**: batteries (PNP0C0A `_BST`/`_BIX`/`_BIF`), AC (ACPI0003 `_PSR`), lid (PNP0C0D `_LID`), thermal zones (`_TMP`), read through `SENSORS`. I2C HID devices (PNP0C50/ACPI0C50) are listed at boot for a later driver (`[acpi.i2c_hid]`). Known limit: the `acpi` crate 6.1.1 has no custom region handlers, so laptop batteries behind an Embedded Controller read as absent until we add an EC handler (patch or vendor the crate).
+- **CPU power**: Intel HWP (IA32_HWP_REQUEST, balanced EPP) or AMD CPPC on every core, so the CPU picks its own frequency. Idle uses MWAIT into the deepest `_CST` FFH state with exit latency at most 200 us, only where the APIC timer keeps running in deep idle (ARAT); otherwise HLT (C1).
+- **Gates**: `scripts/power_acpi_gate.py` (QEMU `system_powerdown` ends the VM with exit 0 after Files flushed; launcher Restart resets through the FADT register and the machine boots again; launcher Shut Down ends it; 1 and 4 cores) and `scripts/power_host_gate.sh` (ABI encodings, EISA ids, `\_S5` reader). Both run in CI.
+- **Bare metal next week**: check `[acpi.power]` on the PKU PC: s5=1, reset method, power_button=1, aml=1 quarantined=0, idle state and hwp/cppc.
+
+## Real PCs: wired network, HD Audio and SATA (2026-11-09)
+
+Workstream D of the parity report. Handoff and bare-metal checklist: `docs/handoff/REAL_PC_DRIVERS_2026_11_09.md`.
+- **Leases.** BOOT now leases Intel e1000e/I217-I219, igb (82576, I210/I211, I350), igc (I225/I226) and Realtek r8169/r8125 to SexNet (Realtek registers in BAR2/BAR1); Intel HD Audio (class 04:03, any vendor) to Bell at slot 20 with its own DMA pool; AHCI (class 01:06:01) to the drive service at slot 21. `kernel/src/device_lease.rs`, `kernel/src/nic_boot.rs`.
+- **ABI.** `sex_pdx::pci_command::Model` gains I219, I82576, I210, I350, I225, Rtl8168, Rtl8125 plus `Family`; new `HDA_DMA_*`, `AHCI_DMA_*`, `SLOT_AHCI_HOST`; kernel `PciCapData.class`. `abi_version_hash` recomputed. `[bell.sound.ready]` gains `card=`.
+- **Sound.** Bell drives HD Audio (`servers/sexbell/src/hda.rs`): CORB/RIRB, analog pin to converter routing (speaker, headphones, line out; never HDMI), one always-running 48 kHz stereo stream over 16 periods. Gate `sound_gate.py --card hda`: 440 Hz/400 ms and 1000 Hz/310 ms recorded.
+- **Network.** igb/igc advanced descriptors and queue registers, igc DEV_RST, PHY autonegotiation restart, I219 ich8lan bits, DRV_LOAD; Realtek in `servers/sexnet/src/realtek.rs`. Gates `program_net_gate.py --nic igb|e1000e` (DHCP, HTTP download), `ethernet_peer_gate.py --model igb`; Realtek and igc host-tested only (QEMU lacks them).
+- **SATA.** `apps/sexdrive/src/ahci.rs` serves the block interface when no NVMe is present. `SEXOS_GATE_DISK_BUS=ahci` for gates; filesystem and disk persistence gates pass on SATA and NVMe.
+
+
+## Hardware census, VMD warning, NVMe waits for real SSDs (2026-11-09)
+
+- **What runs now.** Every boot prints one `[hw.device]` line per PCI device with its
+  vendor, model, owning service and support level (driven, firmware, platform,
+  in_progress, planned, none), `[hw.warning]` lines for things a person must act on
+  (Intel VMD/RST RAID hiding the NVMe drives, an NVIDIA GPU with no native driver, Wi-Fi
+  with no driver) and a `[hw.census]` summary. On the QEMU gate machine: 8 devices, all 8
+  working.
+- **NVMe on real SSDs.** Controller disable/enable now waits up to CAP.TO (500 ms units)
+  in timer ticks instead of a fixed poll count (a few ms on bare metal), gives up at once
+  on a fatal status while enabling, and the admin completion doorbell honours the
+  doorbell stride. A namespace with 4 KiB sectors is logged as unsupported. The first
+  NVMe controller is the system disk; later ones are logged, no longer replacing it.
+- **Design.** Device knowledge is data in `crates/sex-hwdb`, shared by BOOT now and by
+  driver manifests later (plan stage D2 in `DRIVERS_AND_X17_R1_PLAN_2026_11_09.md`).
+  The table never leases a device.
+- **ABI.** None; `abi_version_hash` unchanged.
+- **Gates.** `scripts/hwdb_host_gate.sh` (CI), `tests/sexdrive_controller_ready.rs` in the
+  sexdrive DMA host gate, master runtime gate GREEN.
+- **Limits.** One NVMe controller; no VMD driver, MSI-X or IOMMU yet. On a laptop the
+  census is read from the framebuffer boot log (PR #78).
+
+## Driver manifests, many devices per service, MSI-X interrupts (2026-11-09)
+
+Stages D2 and D3 of `DRIVERS_AND_X17_R1_PLAN_2026_11_09.md`. Handoff: `docs/handoff/DRIVER_MANIFESTS_AND_MSIX_2026_11_09.md`.
+- **Leases by manifest.** Each driver service's match table (class, vendor, device, lease kind, first slot, vector count) is data in `crates/sex-hwdb/src/manifest.rs`; `devmgr` only builds leases of each kind. New controllers are a data change, not a kernel edit.
+- **Many devices per service.** First device of a kind keeps its old slot (NVMe 16, xHCI 8, NIC 19, sound 20, AHCI 21); more land at slots 160..191. Two NVMe drives now lease side by side.
+- **MSI/MSI-X.** BOOT programs MSI-X (or MSI) vectors 0x50..0x8F, masked, INTx off. An interrupt sets a pending bit for the owning service and wakes it (no ring messages, no overflow). sexdrive's NVMe completions are interrupt-driven: `[sexdrive.nvme.irq] mode=msix polling=0`.
+- **ABI.** Syscall 86 `SYS_DEVICE` (list own leases, unmask/mask own vector, take pending bits); `sex_pdx::device`; syscall 70 also returns on a pending interrupt bit. `abi_version_hash` recomputed.
+- **Gates.** `hwdb_host_gate.sh` with manifest tests; filesystem gate on MSI-X NVMe, also with a second NVMe; sound, network, USB and master runtime gates.
+- **Limits.** Only NVMe uses interrupts so far; vectors go to the boot core; no interrupt remapping until the IOMMU; second-device drivers are follow-ups.
+
+## Design guardrails: SexOS stays a microkernel SASOS, not a slow Linux (2026-11-09)
+
+- **What changed.** An audit of master and PRs #68 to #84 against the sex-manual
+  (`docs/handoff/LINUX_DRIFT_AUDIT_2026_11_09.md`). New binding rules in
+  `docs/DESIGN_GUARDRAILS.md`: the kernel keeps mechanism only, no Linux-shaped kernel
+  API, compatibility layers are libraries, Linux drivers are temporary Tuxedo bridges with
+  a tracked native (REA) replacement. `docs/BRIDGE_LEDGER.md` lists every bridge (none
+  today), every native driver that used Linux/BSD as reference, device firmware and
+  third-party ring-0 code.
+- **Removed from the kernel.** Unreachable `sys_fork`/`sys_execve`/`sys_pipe`/
+  `sys_translate_driver` ("load Linux driver")/VFS stubs, unused `benchmark.rs`, seven
+  uncompiled directories (desktop, input, network, ...), backup files, and nine `std`
+  phase tests that never compiled. Kernel builds; 18,383 non-blank lines.
+- **Gate.** `scripts/tests/test_kernel_design_guardrails.py` (host unit tests in CI):
+  kernel deps exclude compat crates, no fork/pipe/socket-named kernel files, no backups in
+  `kernel/src`, kernel line budget 21,500, and a ledger row for any GPL-2.0-only or
+  Tuxedo-using component.
+- **Open decision.** #70/#82 run firmware AML in ring 0; the audit recommends a ring-3
+  `sexacpi` server.
+
+## Discrete GPU off at boot (NVIDIA N1, 2026-11-09)
+
+Plan: `docs/handoff/NVIDIA_GPU_PLAN_2026_11_09.md` (stages N1-N6).
+- **Kernel** `kernel/src/hal/dgpu.rs`: every display controller is named at boot (`[gpu.found]`), NVIDIA chips from their own `PMC_BOOT_0` register (GA104, GA106, ...). A GPU behind a root port that does not hold the boot framebuffer is powered off like Linux runtime PM: D3hot for each function, the GPU's `_PS3` and `_PR0`..`_PR3` resources off, then the root port's when the GPU is alone behind it (D3cold). Shared resources stay on. `power_on` restores power and each configuration header for the later driver.
+- **AML work budget**: `acpi::with_aml(budget, f)` runs firmware AML quarantined with a limit on register accesses and stalls, so a firmware loop cannot hang the boot.
+- **Gate** `scripts/dgpu_power_gate.py` in CI: QEMU root port + display controller + SSDT power resource (`tests/acpi/dgpu_gate_ssdt.asl`); checks the method order off/on/off on the debug console, the restored header, the boot GPU kept and the desktop up.
+- ABI: none.
 
 ## Intel Wi-Fi, stage W1: driver core with WPA2 and WPA3 (2026-11-09)
 

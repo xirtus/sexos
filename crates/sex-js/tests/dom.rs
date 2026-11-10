@@ -444,3 +444,143 @@ fn form_post_navigates_with_its_body() {
     assert_eq!(d.navigate.as_deref(), Some("http://example.test/login#done"));
     assert_eq!(d.navigate_post.as_deref(), Some("user=a+b&pw=x%26y"));
 }
+
+/// Loads a module graph the way the browser does: ask what is missing, supply it, repeat.
+fn run_module(s: &mut Script<Document>, src: &str, name: &str, files: &[(&str, &str)]) -> Result<(), sex_js::Error> {
+    for _ in 0..8 {
+        let need = s.module_needs(src, name).unwrap();
+        if need.is_empty() { break; }
+        for url in need {
+            let body = files.iter().find(|f| f.0 == url).map(|f| f.1).unwrap_or_else(|| panic!("asked for {url}"));
+            s.page_mut().modules.insert(url, body.to_string());
+        }
+    }
+    s.eval_module(src, name)
+}
+
+#[test]
+fn module_scripts_import_their_graph() {
+    let mut s = page("<p>hi</p>");
+    let files = [
+        ("http://example.test/dir/a.js", "import { b } from './sub/b.js'; export const a = 'A' + b;"),
+        ("http://example.test/dir/sub/b.js", "import * as c from '/c.js'; export const b = 'B' + c.default + import.meta.url.length;"),
+        ("http://example.test/c.js", "export default 'C';"),
+    ];
+    run_module(&mut s, "import { a } from './a.js'; console.log(a); console.log(typeof window, this === undefined);", "http://example.test/dir/page.html#module1", &files).unwrap();
+    assert_eq!(logs(&mut s), ["0:ABC32", "0:object true"]);
+    // A second module script shares the loaded modules; a missing one is an error, not a crash.
+    run_module(&mut s, "import { b } from './sub/b.js'; console.log('again', b);", "http://example.test/dir/page.html#module2", &files).unwrap();
+    assert_eq!(logs(&mut s), ["0:again BC32"]);
+    assert_eq!(s.eval_module("import x from './nope.js';", "http://example.test/dir/page.html#module3"), Err(sex_js::Error::Thrown));
+    let l = logs(&mut s);
+    assert!(l[0].contains("could not load module"), "{l:?}");
+    // Top-level await and errors thrown while a module runs reach the log.
+    s.eval_module("await null; throw new TypeError('late');", "http://example.test/m4").unwrap_err();
+    let l = logs(&mut s);
+    assert!(l[0].starts_with("2:TypeError: late"), "{l:?}");
+}
+
+#[test]
+fn dynamic_import_waits_for_its_module() {
+    let mut s = page("<p>hi</p>");
+    // From a classic script: the import waits until the host gives the module (and its own imports).
+    s.eval("import('./lazy.js').then(m => console.log('lazy', m.x), e => console.log('failed', e.message));", "http://example.test/dir/page.html#script1").unwrap();
+    assert!(logs(&mut s).is_empty());
+    assert_eq!(s.modules_wanted(), ["http://example.test/dir/lazy.js"]);
+    s.page_mut().modules.insert("http://example.test/dir/lazy.js".into(), "import { y } from './y.js'; export const x = 'X' + y;".into());
+    assert_eq!(s.modules_ready().unwrap(), 1);
+    assert_eq!(s.modules_wanted(), ["http://example.test/dir/y.js"]);
+    s.page_mut().modules.insert("http://example.test/dir/y.js".into(), "export const y = 'Y';".into());
+    assert_eq!(s.modules_ready().unwrap(), 0);
+    assert_eq!(logs(&mut s), ["0:lazy XY"]);
+    // Loaded already: it runs at once. A fragment shares the source. A failed fetch is an error.
+    s.eval("import('./lazy.js#again').then(m => console.log('again', m.x));", "http://example.test/dir/page.html#script2").unwrap();
+    assert_eq!(logs(&mut s), ["0:again XY"]);
+    s.eval("import('/gone.js').then(m => console.log('ok'), e => console.log('failed', e.name));", "http://example.test/dir/page.html#script3").unwrap();
+    assert_eq!(s.modules_wanted(), ["http://example.test/gone.js"]);
+    s.page_mut().modules.insert("http://example.test/gone.js".into(), sex_js::document::failed_module("http://example.test/gone.js"));
+    s.modules_ready().unwrap();
+    assert_eq!(logs(&mut s), ["0:failed TypeError"]);
+    // An entry module knows its own address.
+    s.eval_module("console.log(import.meta.url, new URL('./img.png', import.meta.url).href);", "http://example.test/dir/app.js").unwrap();
+    assert_eq!(logs(&mut s), ["0:http://example.test/dir/app.js http://example.test/dir/img.png"]);
+}
+
+#[test]
+fn defining_a_custom_element_upgrades_the_same_object() {
+    let mut s = page("<x-late id=x></x-late>");
+    s.eval(r#"
+        const el = document.getElementById('x'); el.mine = 1;
+        el.addEventListener('ping', () => console.log('heard'));
+        customElements.define('x-late', class extends HTMLElement { constructor() { super(); this.made = true; } hi() { return 'hi'; } });
+        console.log(document.getElementById('x') === el, el.mine, el.made, el.hi());
+        el.dispatchEvent(new Event('ping'));
+    "#, "t").unwrap();
+    assert_eq!(logs(&mut s), ["0:true 1 true hi", "0:heard"]);
+}
+
+#[test]
+fn old_dom_apis_are_there() {
+    let mut s = page("<div id=a><p>one</p><!-- note --><p>two</p></div>");
+    s.eval(r#"
+        const w = document.createTreeWalker(document.getElementById('a'), NodeFilter.SHOW_ELEMENT);
+        const seen = []; while (w.nextNode()) seen.push(w.currentNode.tagName);
+        console.log(seen.join(','));
+        const e = document.createEvent('CustomEvent'); e.initCustomEvent('hey', true, true, 5);
+        document.addEventListener('hey', ev => console.log('hey', ev.detail, ev.bubbles));
+        document.dispatchEvent(e);
+        const d = document.implementation.createHTMLDocument('');
+        d.body.innerHTML = '<form></form><form></form>';
+        console.log(d.body.childNodes.length, document.querySelectorAll('form').length);
+        const u = new URL('/x.js', document.baseURI); u.hash = 'r=1'; console.log(u.href, URL.canParse('nope'));
+        const c = document.createComment('hidden'); document.body.appendChild(c);
+        console.log(c.nodeType, c.data, document.body.textContent.includes('hidden'), typeof Comment, document.fonts.status, window instanceof Window && window instanceof EventTarget);
+    "#, "t").unwrap();
+    assert_eq!(logs(&mut s), ["0:P,P", "0:hey 5 true", "0:2 0", "0:http://example.test/x.js#r=1 false", "0:8 hidden false function loaded true"]);
+}
+
+#[test]
+fn everyday_web_apis_are_there() {
+    let mut s = page("<div id=a><my-card id=c title=hi></my-card></div>");
+    s.eval(r#"
+        'use strict';
+        // A bare addEventListener is the window's, as in browsers.
+        addEventListener('custom', e => console.log('bare', e.type));
+        dispatchEvent(new Event('custom'));
+        console.log(btoa('hello'), atob('aGVsbG8='), atob(btoa('\xff\x00')).length);
+        console.log(new TextDecoder().decode(new TextEncoder().encode('héllo €')));
+        const img = new Image(4, 5);
+        console.log(img instanceof HTMLImageElement, img.getAttribute('width'));
+        const input = document.createElement('input');
+        input.type = 'checkbox';
+        console.log(input.type, typeof performance.timing.responseStart, performance.getEntriesByType('navigation').length);
+        const v = document.createElement('video');
+        console.log(v instanceof HTMLVideoElement, v instanceof HTMLMediaElement, document.getElementById('a') instanceof HTMLDivElement);
+        const c = structuredClone({ a: [1, { b: 2 }], m: new Map([[1, 2]]) });
+        console.log(JSON.stringify(c.a), c.m.get(1));
+        new IntersectionObserver(es => console.log('seen', es[0].isIntersecting, es[0].target.id)).observe(document.getElementById('a'));
+        const ac = new AbortController(); ac.signal.addEventListener('abort', () => console.log('aborted')); ac.abort();
+        new Blob(['ab', 'c']).text().then(t => console.log('blob', t));
+        class MyCard extends HTMLElement {
+            static get observedAttributes() { return ['title']; }
+            constructor() { super(); this.made = true; }
+            connectedCallback() { console.log('connected', this.id, this.made); }
+            attributeChangedCallback(n, o, v) { console.log('attr', n, v); }
+        }
+        customElements.define('my-card', MyCard);
+        const el = document.getElementById('c');
+        console.log(el instanceof MyCard, customElements.get('my-card') === MyCard);
+        const fresh = new MyCard();
+        console.log(fresh.localName);
+        document.body.appendChild(fresh);
+        crypto.getRandomValues(new Uint8Array(4));
+        console.log(crypto.randomUUID().length, typeof requestIdleCallback, CSS.supports('display', 'grid'));
+    "#, "t.js").unwrap();
+    s.dispatch("tick").unwrap();
+    let l = logs(&mut s);
+    assert_eq!(l, [
+        "0:bare custom", "0:aGVsbG8= hello 2", "0:héllo €", "0:true 4", "0:checkbox number 1", "0:true true true",
+        "0:[1,{\"b\":2}] 2", "0:aborted", "0:attr title hi", "0:connected c true", "0:true true", "0:my-card",
+        "0:connected  true", "0:36 function true", "0:blob abc", "0:seen true a",
+    ]);
+}

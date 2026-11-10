@@ -1,0 +1,137 @@
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
+//! Driver manifests: which devices each driver service asks BOOT to lease to it.
+//!
+//! This is the lease authority's input, kept beside the census table so that adding
+//! support for a new controller is a data change here, not a kernel edit. The kernel's
+//! `devmgr` holds only the mechanisms: how a lease of each `Lease` kind is built (which
+//! BAR, how long the register view, which command bits, which DMA pool). It walks PCI
+//! once, finds the first manifest entry that matches each device, and leases it to that
+//! service, many devices per service.
+//!
+//! A manifest names, per kind of device, the slot the driver reads its first one from;
+//! how many devices the service may hold; and how many interrupt vectors it wants each.
+
+use crate::{Id, Service};
+
+/// How BOOT builds the lease. Each kind is one mechanism in the kernel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Lease {
+    /// NVMe: BAR0 view (64 KiB prefix), memory + bus master turned on.
+    Nvme,
+    /// xHCI: BAR0 view, plus its legacy interrupt line.
+    Xhci,
+    /// Wired Ethernet whose register layout `sex_pdx::pci_command::Model` knows;
+    /// the register BAR the model names, command grant, network DMA pool.
+    Nic,
+    /// Intel High Definition Audio: BAR0, command grant, sound DMA pool.
+    Hda,
+    /// AHCI SATA: BAR5 (ABAR), command grant; the drive pool is already the drive's.
+    Ahci,
+    /// Modern virtio PCI: the one BAR holding all four register blocks, command grant,
+    /// virtio DMA pool.
+    Virtio,
+    /// Display controller: identity only, no BAR view yet (firmware framebuffer).
+    Display,
+}
+
+/// One kind of device a service drives. `class` is `class << 16 | subclass << 8 | prog_if`
+/// compared under `class_mask`; `vendor`/`device` of 0 match any. `slot` is where the
+/// driver finds its first device of this kind (0 = no slot: identity only); further
+/// devices get the next free slot from `sex_pdx::device::EXTRA_SLOT_BASE`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Match {
+    pub class: u32,
+    pub class_mask: u32,
+    pub vendor: u16,
+    pub device: u16,
+    pub lease: Lease,
+    pub slot: u64,
+}
+
+impl Match {
+    pub const fn class(class: u32, class_mask: u32, lease: Lease, slot: u64) -> Match {
+        Match { class, class_mask, vendor: 0, device: 0, lease, slot }
+    }
+    pub const fn vendor_class(vendor: u16, class: u32, class_mask: u32, lease: Lease, slot: u64) -> Match {
+        Match { class, class_mask, vendor, device: 0, lease, slot }
+    }
+    pub const fn id(vendor: u16, device: u16, lease: Lease, slot: u64) -> Match {
+        Match { class: 0, class_mask: 0, vendor, device, lease, slot }
+    }
+    pub fn matches(&self, id: Id) -> bool {
+        let class = (id.class as u32) << 16 | (id.subclass as u32) << 8 | id.prog_if as u32;
+        class & self.class_mask == self.class & self.class_mask
+            && (self.vendor == 0 || self.vendor == id.vendor)
+            && (self.device == 0 || self.device == id.device)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Manifest {
+    pub service: Service,
+    /// At most this many devices of this service (0 = no limit beyond the extra slots).
+    pub max_devices: u8,
+    /// MSI/MSI-X vectors BOOT programs per device (0 = none; the driver polls).
+    pub vectors: u8,
+    /// Ordered: the first matching entry decides the lease kind.
+    pub matches: &'static [Match],
+}
+
+const CLASS: u32 = 0xff_ff00;
+const EXACT: u32 = 0xff_ffff;
+const BASE: u32 = 0xff_0000;
+
+/// sexdrive: every NVMe controller, every AHCI SATA controller.
+pub const DRIVE: Manifest = Manifest {
+    service: Service::Drive, max_devices: 0, vectors: 1,
+    matches: &[
+        Match::class(0x01_08_00, CLASS, Lease::Nvme, 16),
+        Match::class(0x01_06_01, EXACT, Lease::Ahci, 21),
+    ],
+};
+
+/// sexusb: xHCI host controllers (USB 3; USB4 hosts expose xHCI too).
+pub const USB: Manifest = Manifest {
+    service: Service::Usb, max_devices: 0, vectors: 0,
+    matches: &[Match::class(0x0c_03_30, EXACT, Lease::Xhci, 8)],
+};
+
+/// sexnet: Intel and Realtek wired Ethernet (the model table in `sex_pdx::pci_command`
+/// decides which parts have a known register layout).
+pub const NET: Manifest = Manifest {
+    service: Service::Net, max_devices: 0, vectors: 0,
+    matches: &[
+        Match::vendor_class(0x8086, 0x02_00_00, CLASS, Lease::Nic, 19),
+        Match::vendor_class(0x10ec, 0x02_00_00, CLASS, Lease::Nic, 19),
+        Match::vendor_class(0x1186, 0x02_00_00, CLASS, Lease::Nic, 19),
+    ],
+};
+
+/// sexbell: virtio sound, Intel HD Audio controllers.
+pub const BELL: Manifest = Manifest {
+    service: Service::Bell, max_devices: 0, vectors: 0,
+    matches: &[
+        // One sound card is driven: whichever comes first holds slot 20.
+        Match::id(0x1af4, 0x1059, Lease::Virtio, 20),
+        Match::class(0x04_03_00, CLASS, Lease::Hda, 20),
+    ],
+};
+
+/// sexdisplay: every display controller, as identity only.
+pub const DISPLAY: Manifest = Manifest {
+    service: Service::Display, max_devices: 0, vectors: 0,
+    matches: &[Match::class(0x03_00_00, BASE, Lease::Display, 0)],
+};
+
+/// Every manifest, in the order BOOT consults them.
+pub const ALL: &[Manifest] = &[DRIVE, USB, NET, BELL, DISPLAY];
+
+/// The manifest and entry that claim this device, if any.
+pub fn claim(id: Id) -> Option<(&'static Manifest, Match)> {
+    ALL.iter().find_map(|m| m.matches.iter().find(|e| e.matches(id)).map(|e| (m, *e)))
+}
+
+/// The manifest of one service.
+pub fn of(service: Service) -> Option<&'static Manifest> {
+    ALL.iter().find(|m| m.service == service)
+}

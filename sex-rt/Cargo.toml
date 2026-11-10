@@ -3,6 +3,7 @@
 name = "sex-rt"
 version = "0.1.0"
 edition = "2021"
+license = "GPL-2.0-or-later OR MIT"
 description = "SASOS domain runtime with bounded ELF-owned byte allocation"
 
 

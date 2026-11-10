@@ -10390,7 +10390,7 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                     0x1C => {
                         if !COMMAND_PALETTE_DAILY_PROOF_ACTIVE {
                             serial_println!("[command_palette.drain.execute] scancode=0x1C");
-                            if palette_execute_selected() { toggle_command_palette(); }
+                            if palette_execute_from_key() { toggle_command_palette(); }
                         } else {
                             serial_println!("[command_palette.drain.execute.skip] reason=daily_proof_active");
                         }
@@ -14280,6 +14280,8 @@ enum Command {
     MinimizeFocused = 9,
     FocusBrowser = 10,
     FocusProgram = 11,
+    ShutDown = 12,
+    Restart = 13,
 }
 
 /// Static display info for each command in the palette.
@@ -14289,7 +14291,7 @@ struct CommandDef {
 }
 
 /// Daily-driver commands available in the command palette.
-const COMMAND_LIST: [CommandDef; 12] = [
+const COMMAND_LIST: [CommandDef; 14] = [
     CommandDef { command: Command::FocusSpindle, name: "Open Spindle" },
     CommandDef { command: Command::FocusQuil, name: "Open Quil" },
     CommandDef { command: Command::FocusLinen, name: "Open Linen" },
@@ -14302,6 +14304,8 @@ const COMMAND_LIST: [CommandDef; 12] = [
     CommandDef { command: Command::MinimizeFocused, name: "Minimize Focused" },
     CommandDef { command: Command::FocusBrowser, name: "Open Browser" },
     CommandDef { command: Command::FocusProgram, name: "Run Hello" },
+    CommandDef { command: Command::ShutDown, name: "Shut Down" },
+    CommandDef { command: Command::Restart, name: "Restart" },
 ];
 
 /// Whether the command palette overlay is currently open.
@@ -15789,6 +15793,7 @@ fn command_kind_color(cmd: Command) -> u32 {
         Command::MinimizeFocused => 0x00304030,    // muted slate
         Command::FocusBrowser => 0x00205550,        // native Browser teal
         Command::FocusProgram => 0x00504818,
+        Command::ShutDown | Command::Restart => 0x00603030,
     }
 }
 
@@ -15813,6 +15818,7 @@ fn command_palette_selected_accent() -> u32 {
             Command::MinimizeFocused => 0x00708080,    // bright slate
             Command::FocusBrowser => 0x005ED9C3,        // native Browser teal
             Command::FocusProgram => 0x00F9E2AF,
+            Command::ShutDown | Command::Restart => 0x00F38BA8,
         }
     }
 }
@@ -15841,6 +15847,8 @@ unsafe fn palette_render_list() {
             Command::FocusMesh=>"SYSTEM OVERVIEW",
             Command::ZoomToggle=>"RESIZE CURRENT WINDOW",
             Command::MinimizeFocused=>"HIDE CURRENT WINDOW",
+            Command::ShutDown=>"SAVE FILES, POWER OFF",
+            Command::Restart=>"SAVE FILES, START AGAIN",
             _=>status,
         };
         let app=match item.command {
@@ -16468,12 +16476,35 @@ fn spindle_key_word(scancode:u8)->u64{let key=unsafe{APP_MODIFIERS.key(scancode)
 fn spindle_has_focus()->bool{unsafe{FOCUSED_SURFACE_ID==SURFACE_ID_SPINDLE||spindle_activation_info(false).is_ok_and(|info|info.state==2&&app_catalog::by_surface(info.successor,info.surface).is_some_and(|row|FOCUSED_SURFACE_ID==row.frame()))}}
 fn spindle_route_slot()->u64{app_route_slot(app_catalog::App::Spindle,SLOT_SPINDLE)}
 
+/// Shut Down and Restart, as the kernel's power capability allows them.
+fn power_launcher_status(cmd: Command) -> (bool, &'static str, &'static str) {
+    static mut FLAGS: Option<u64> = None;
+    let flags = unsafe { *FLAGS.get_or_insert_with(|| sex_pdx::power::info().map_or(0, |i| i.flags)) };
+    let need = if cmd == Command::Restart { sex_pdx::power::CAN_RESTART } else { sex_pdx::power::CAN_OFF };
+    if flags & need != 0 { (true, "ready", "acpi_power") } else { (false, "NOT ON THIS MACHINE", "acpi_power_unavailable") }
+}
+/// Set while the palette runs a command because the user pressed Enter.
+static mut PALETTE_FROM_KEY: bool = false;
+unsafe fn palette_execute_from_key() -> bool {
+    PALETTE_FROM_KEY = true;
+    let ok = palette_execute_selected();
+    PALETTE_FROM_KEY = false;
+    ok
+}
+/// Asks the kernel to shut down or restart; Files flushes before power goes.
+fn palette_power(cmd: Command) -> bool {
+    let op=if cmd==Command::Restart {sex_pdx::power::RESTART} else {sex_pdx::power::OFF};
+    let result=sex_pdx::power::request(op);
+    sex_pdx::serial_record!("[shell.power.request] op={} ok={} status={:#x}",if op==sex_pdx::power::RESTART{"restart"}else{"off"},result.is_ok() as u8,result.err().unwrap_or(0));
+    result.is_ok()
+}
 fn palette_item_status(cmd: Command) -> (bool, &'static str, &'static str) {
     match cmd {
         Command::FocusSpindle => spindle_launcher_status(),
         Command::FocusQuil => quil_launcher_status(),
         Command::FocusBrowser => browser_launcher_status(),
         Command::FocusProgram => program_launcher_status(),
+        Command::ShutDown | Command::Restart => power_launcher_status(cmd),
         Command::FocusLinen => {
             (true, "nonblocking_ready", "linen_fast_paint_nonblocking")
         }
@@ -16555,6 +16586,12 @@ unsafe fn palette_execute_selected() -> bool {
             sex_pdx::serial_record!("[shell.palette.focus.result] target=BROWSER sid={} ok={}",sid,open_ok as u8);
             open_ok
         }
+        // Only a person's Enter turns the machine off; proofs walking the palette never do.
+        Command::ShutDown | Command::Restart if !PALETTE_FROM_KEY => {
+            sex_pdx::serial_record!("[shell.power.request] skipped=1 reason=not_from_key");
+            false
+        }
+        Command::ShutDown | Command::Restart => palette_power(cmd),
         Command::FocusProgram => {
             let open_ok=open_program_in_active_scene();
             sex_pdx::serial_record!("[shell.palette.focus.result] target=PROGRAM ok={}",open_ok as u8);
@@ -19814,6 +19851,11 @@ unsafe fn maybe_run_palette_rejects_app_open_batch_proof() {
     }
 
     for idx in 0..COMMAND_LIST.len() {
+        // The proof opens and closes apps; it never turns the machine off.
+        if matches!(COMMAND_LIST[idx].command, Command::ShutDown | Command::Restart) {
+            skipped = skipped.saturating_add(1);
+            continue;
+        }
         let old = COMMAND_PALETTE_SELECTED;
         COMMAND_PALETTE_SELECTED = idx as u8;
         sex_pdx::serial_record!("[shell.palette.select] old={} new={}", old, COMMAND_PALETTE_SELECTED);
@@ -19891,7 +19933,7 @@ unsafe fn maybe_run_palette_rejects_app_open_batch_proof() {
             Command::FocusProgram => {
                 palette_batch_emit_app_focus("Program",0,ok,if ok{"ok"}else{"open_or_focus_reject"});
             }
-            Command::ZoomToggle | Command::MinimizeFocused => {}
+            Command::ZoomToggle | Command::MinimizeFocused | Command::ShutDown | Command::Restart => {}
         }
 
         if ok { passed = passed.saturating_add(1); } else { rejected = rejected.saturating_add(1); }
@@ -25700,7 +25742,7 @@ pub extern "C" fn _start() -> ! {
                                     0x24 => { palette_select_next(); mutated = true; } // J - next
                                     0x25 => { palette_select_prev(); mutated = true; } // K - prev
                                     0x1C => { // Enter - execute
-                                        if palette_execute_selected() { toggle_command_palette(); }
+                                        if palette_execute_from_key() { toggle_command_palette(); }
                                         mutated = true;
                                     }
                                     0x01 => { // Escape - close

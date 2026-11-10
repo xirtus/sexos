@@ -14,6 +14,8 @@ LEGACY=(('FocusSpindle','Open Spindle'),('FocusQuil','Open Quil'),('FocusLinen',
         ('ZoomToggle','Zoom Toggle'),('MinimizeFocused','Minimize Focused'))
 CURRENT=LEGACY+(('FocusBrowser','Open Browser'),('FocusProgram','Run Hello'))
 FUTURE=CURRENT+(('HostFixtureOnly','Host fixture only'),)
+# The live catalog: CURRENT plus the power rows at the end.
+ACTUAL=CURRENT+(('ShutDown','Shut Down'),('Restart','Restart'))
 
 def catalog(commands):
     return 'const COMMAND_LIST: [CommandDef; '+str(len(commands))+'] = [\n'+''.join(
@@ -27,7 +29,7 @@ class PaletteCommands(unittest.TestCase):
             return palette_commands(root)
 
     def test_actual_and_archival_and_future_source_catalogs(self):
-        self.assertEqual(palette_commands(ROOT),CURRENT)
+        self.assertEqual(palette_commands(ROOT),ACTUAL)
         for commands in(LEGACY,CURRENT,FUTURE):self.assertEqual(self.read(catalog(commands)),commands)
 
     def test_zoom_paths_are_independent_literal_goldens(self):

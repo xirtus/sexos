@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! Coherent data on existing BOOT Region views. No descriptor grants authority.
 //! Every shared word is atomic: a sequence check alone cannot make racing
 //! non-atomic payload accesses sound. SC words keep the publication proof small.

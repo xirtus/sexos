@@ -26,6 +26,9 @@ mod sex_pdx {
         VIEW.with(|view| *view.borrow())
     }
 }
+mod usb { use crate::sex_pdx; include!(env!("SEXUSB_DMA_SOURCE"));
+    pub fn reserve(p: &mut Option<crate::dma_pool::DmaRegionPool>, n:u64)->(u64,u64) { reserve_dma(p,n) }
+}
 mod net { use crate::sex_pdx; include!(env!("SEXNET_DMA_SOURCE"));
     pub fn reserve(p: &mut Option<crate::dma_pool::DmaRegionPool>, n:u64)->(u64,u64) { reserve_dma(p,n) }
 }
@@ -39,7 +42,7 @@ fn view()->memory_region::RegionView {
     memory_region::RegionView { region_id:7, virtual_address:0x400000,
         length:256*1024, dma_address:Some(0x800000) }
 }
-fn adapters()->[Reserve;1] { [net::reserve] }
+fn adapters()->[Reserve;2] { [usb::reserve,net::reserve] }
 
 #[test]
 fn authorization_failure_does_not_construct_pool_or_return_addresses() {
@@ -72,9 +75,9 @@ fn exhaustion_and_bad_sizes_never_extend_or_rewind_region() {
 }
 #[test]
 fn current_complete_usb_and_nic_initialization_budgets_fit_without_reuse() {
+    // USB two slots:4 host+3 primary ctx+1 descriptor+2 primary IRQ+3 second ctx+2 second IRQ.
     // NIC proof profile:2 first RX+9 observe RX+9 permanent RX+2 first TX+2 permanent TX.
-    // (USB moved to a 2 MiB region and xhci::page; usb_path_gate proves its budget at runtime.)
-    for (reserve,pages) in [(net::reserve as Reserve,24)] {
+    for (reserve,pages) in [(usb::reserve as Reserve,15),(net::reserve as Reserve,24)] {
         configure(Ok(view())); let mut pool=None;
         for _ in 0..pages { assert_ne!(reserve(&mut pool,4096),FAILED); }
         assert_eq!(pool.unwrap().used(),pages*4096);
