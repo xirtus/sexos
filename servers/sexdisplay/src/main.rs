@@ -3586,6 +3586,7 @@ pub extern "C" fn _start() -> ! {
 
     let mut pending_paint=paint_batch::Dirty::new(geometry.width as usize,geometry.height as usize);
     let mut primary_receipt_pending=false;
+    let mut scale_receipts=sex_pdx::desktop_style::chrome::ScalePublisher::new();
 
     // Publish the BOOT-owned prepared frame before declaring first paint.
     assert!(unsafe { render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar) },
@@ -4061,9 +4062,15 @@ pub extern "C" fn _start() -> ! {
                     // Shell, as window manager, steps the whole screen's scale.
                     let wm_pd = DISPLAY_WM_PD.load(core::sync::atomic::Ordering::Acquire);
                     if wm_pd == 0 || msg.caller_pd != wm_pd { continue; }
+                    // Includes legacy arg1=0: no later scale can invalidate
+                    // the value retained for an outstanding publication reply.
+                    if !scale_receipts.allows_change(msg.caller_pd,msg.caller_task,msg.arg1){continue;}
                     let step = msg.arg0 as i64;
                     let before = sex_pdx::desktop_style::ui_scale();
                     let wanted = sex_pdx::desktop_style::chrome::step_scale(before, unsafe { BOOT_UI_SCALE }, step);
+                    // arg1 is a nonzero Shell request sequence. One accepted
+                    // request stays retained through full publication + reply.
+                    if msg.arg1!=0 && !scale_receipts.admit(msg.caller_pd,msg.caller_task,msg.arg1,wanted) {continue;}
                     sex_pdx::desktop_style::set_ui_scale(wanted);
                     if wanted != before {
                         unsafe {
@@ -4570,7 +4577,17 @@ pub extern "C" fn _start() -> ! {
                 0xF5 => {
                     // OP_REGISTER_WM: immutable catalog coordinator only; idempotent.
                     let caller = msg.caller_pd;
-                    if !lifecycle.is_coordinator(caller) { continue; }
+                    // Genesis binds the coordinator's main task to its PD;
+                    // restart rearms that same task. The kernel-owned own-
+                    // restart count in arg0 supplies the incarnation fence.
+                    if !lifecycle.is_coordinator(caller)||msg.caller_task!=caller { continue; }
+                    let Some(changed)=scale_receipts.register(caller,msg.caller_task,msg.arg0)else{continue;};
+                    if changed {
+                        let boot=unsafe{BOOT_UI_SCALE};
+                        sex_pdx::desktop_style::set_ui_scale(boot);
+                        unsafe{for slot in SURFACES.iter_mut().filter(|s|s.active){recompute_text_lines(slot);}CURSOR_UNDER_VALID=false;}
+                        needs_full_redraw=true;
+                    }
                     match DISPLAY_WM_PD.compare_exchange(
                         0, caller,
                         core::sync::atomic::Ordering::AcqRel,
@@ -4889,7 +4906,7 @@ pub extern "C" fn _start() -> ! {
         let transaction_full_render=unsafe{BITMAP_STORES.needs_publication()}||lifecycle.needs_presentation()
             ||(0..surface_lifecycle::CATALOG_CAPACITY).any(|i|lifecycle.phase(i)==Some(surface_lifecycle::Phase::Prepared));
         let (w,h)=unsafe{(FB_W as usize,FB_H as usize)};
-        if needs_full_redraw||transaction_full_render{pending_paint.request_full();}
+        if needs_full_redraw||transaction_full_render||scale_receipts.needs_publication(){pending_paint.request_full();}
         if needs_surface_redraw{pending_paint.request_area();}
         if let Some(rect)=text_damage.rect(){pending_paint.request_damage(rect,w,h);}
         if cursor_only_moved{pending_paint.request_cursor();}
@@ -4908,6 +4925,20 @@ pub extern "C" fn _start() -> ! {
             if primary_receipt_pending&&frame.plan.is_full(){
                 primary_receipt_pending=false;
                 serial_println!("[sexdisplay.render.live.ok] fb_w={} fb_h={}",w,h);
+            }
+        }
+        if scale_receipts.needs_publication()&&published.as_ref().is_some_and(|frame|frame.plan.is_full()){
+            scale_receipts.published();
+            if let Some((target,value))=scale_receipts.reply(){
+                // Record publication before reply can immediately schedule
+                // Shell. This marker does not claim transport succeeded.
+                sex_pdx::serial_record!("[display.scale.published] target={} receipt={:#x} cpu_publication=1",target,value);
+            }
+        }
+        if let Some((target,value))=scale_receipts.reply(){
+            if sex_pdx::pdx_reply(target,value)==0 {
+                scale_receipts.sent();
+                sex_pdx::serial_record!("[display.scale.reply.sent] target={} receipt={:#x}",target,value);
             }
         }
         finish_display_transactions(&mut lifecycle,published.as_ref());

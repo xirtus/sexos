@@ -17,6 +17,9 @@ pub const MAX_TEXT_SCALE: u32 = 5;
 /// Shell (the window manager) to Display: step the whole screen's scale.
 /// arg0 = +1 larger, -1 (as u64) smaller, 0 back to what BOOT chose for the
 /// screen. Display logs `[display.scale]` with the scale now in force.
+/// arg1 = nonzero sequence for a retained asynchronous post-publication reply;
+/// zero preserves legacy fire-and-forget behavior. The enqueue return is not
+/// an applied-scale receipt. Replies use `chrome::scale_receipt` packing.
 pub const OP_DISPLAY_SCALE: u64 = 0x2D5;
 /// The interface scale in force in this service: 1, or 2 and 3 on HiDPI
 /// screens. Text sizes, the cursor and window chrome multiply by it.
@@ -39,6 +42,78 @@ pub const fn scale(width: u32) -> u32 {
 /// this data carries no surface, monitor or input authority.
 pub mod chrome {
     pub const MAX_SCALE: u32 = 3;
+    // Reply payload is disjoint from text/lifecycle receipts. Sequence zero is
+    // reserved for legacy fire-and-forget callers; a request uses arg1.
+    const RECEIPT_TAG: u64 = 0x5343_0000_0000_0000;
+    const SEQUENCE_MASK: u64 = (1u64 << 46)-1;
+    pub const fn scale_receipt(sequence:u64, scale:u32)->Option<u64> {
+        if sequence==0 || sequence>SEQUENCE_MASK || scale<1 || scale>3 {return None;}
+        Some(RECEIPT_TAG | (sequence<<2) | scale as u64)
+    }
+    /// One outstanding scale request per Shell. Queue admission never changes
+    /// applied geometry. A stale, forged or unrelated reply cannot commit it.
+    pub struct ScaleClient { sequence:u64, pending:Option<(u64,i64,bool)> }
+    impl ScaleClient {
+        pub const fn new()->Self {Self::for_incarnation(0)}
+        /// Kernel-owned own-service restart count. A restart keeps task id 3,
+        /// so caller_task alone cannot fence an old run's delayed reply.
+        pub const fn for_incarnation(restarts:u64)->Self {
+            Self{sequence:if restarts<(1<<14){restarts<<32}else{SEQUENCE_MASK},pending:None}
+        }
+        pub fn begin(&mut self,step:i64)->bool {
+            if self.pending.is_some(){return false;}
+            // Never wrap a sequence into another incarnation or reuse one.
+            if self.sequence&0xffff_ffff==0xffff_ffff{return false;}
+            self.sequence+=1;
+            self.pending=Some((self.sequence,step,false));true
+        }
+        pub fn request(&self)->Option<(u64,i64)> {
+            self.pending.and_then(|(sequence,step,sent)|if sent{None}else{Some((sequence,step))})
+        }
+        pub fn admitted(&mut self){if let Some(p)=self.pending.as_mut(){p.2=true;}}
+        pub fn cancel(&mut self){self.pending=None;}
+        pub fn pending(&self)->bool {self.pending.is_some()}
+        pub fn receive(&mut self,caller:u32,display:u32,value:u64)->Option<u32> {
+            let (sequence,_,sent)=self.pending?;
+            if caller!=display || !sent{return None;}
+            let scale=(value&3)as u32;
+            if scale_receipt(sequence,scale)!=Some(value){return None;}
+            self.pending=None;Some(scale)
+        }
+    }
+    /// Display retains the admitted reply until a complete CPU publication and
+    /// successful transport. Failure/retry never turns admission into visibility.
+    pub struct ScalePublisher { subject:Option<(u32,u32,u64)>, pending:Option<(u32,u64,bool)> }
+    impl ScalePublisher {
+        pub const fn new()->Self {Self{subject:None,pending:None}}
+        /// Register only after the held catalog authorized the exact Shell
+        /// main task. Idempotence preserves a pending receipt; a newer own-
+        /// service restart count fences the old run and its pending reply.
+        pub fn register(&mut self,target:u32,task:u32,epoch:u64)->Option<bool>{
+            if target==0||task==0||epoch>=(1<<14){return None;}
+            if let Some((pd,old_task,old_epoch))=self.subject {
+                if pd!=target||old_task!=task||epoch<old_epoch{return None;}
+                if epoch==old_epoch{return Some(false);}
+            }
+            self.subject=Some((target,task,epoch));self.pending=None;Some(true)
+        }
+        pub fn allows_change(&self,target:u32,task:u32,sequence:u64)->bool {
+            let Some((pd,main,epoch))=self.subject else{return false;};
+            !self.pending()&&pd==target&&main==task
+                &&(sequence==0||sequence>>32==epoch)
+        }
+        pub fn admit(&mut self,target:u32,task:u32,sequence:u64,scale:u32)->bool {
+            if !self.allows_change(target,task,sequence){return false;}
+            let Some(value)=scale_receipt(sequence,scale)else{return false;};
+            self.pending=Some((target,value,false));true
+        }
+        pub fn needs_publication(&self)->bool {self.pending.is_some_and(|p|!p.2)}
+        pub fn published(&mut self){if let Some(p)=self.pending.as_mut(){p.2=true;}}
+        pub fn reply(&self)->Option<(u32,u64)> {self.pending.and_then(|(pd,v,ready)|if ready{Some((pd,v))}else{None})}
+        pub fn sent(&mut self){self.pending=None;}
+        pub fn pending(&self)->bool {self.pending.is_some()}
+    }
+
     pub const BAR: u32 = 28; // includes the bottom separator
     pub const TITLE: u32 = 26;
     pub const TARGET: u32 = 24;

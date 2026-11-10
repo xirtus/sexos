@@ -121,6 +121,7 @@ mod shell {
     static mut CLIPBOARD_INTAKE:Intake=Intake::new();
     static mut CLIPBOARD:broker::Broker=broker::Broker::new();
     static mut APP_MODIFIERS:Modifiers=Modifiers::new();
+    static mut DISPLAY_SCALE:desktop_style::chrome::ScaleClient=desktop_style::chrome::ScaleClient::new();
     static mut DESKTOP_KEYS:desktop_keys::Keys=desktop_keys::Keys::new();
     static mut WM_CHORDS:wm::Chords=wm::Chords::new();
     static mut WM_ACTIONS:Vec<wm::WmAction>=Vec::new();
@@ -139,6 +140,8 @@ mod shell {
     unsafe fn volume_key(step:i8){VOLUME_STEPS.push(step);}
     unsafe fn clipboard_live(subject:Subject)->Option<bool>{LIVE_QUERIES.push(subject);if let Some((source,value))=LIVE_ONCE{if source==subject{LIVE_ONCE=None;return value}}match SOURCE_LIVE{Some((source,value))if source==subject=>value,_=>LIVE}}
     unsafe fn pdx_call(route:u64,op:u64,a:u64,b:u64,c:u64)->(u64,u64){SENT.push((route,op,[a,b,c]));(STATUS,0)}
+    // Declared syscall boundary; the retained admission logic is production.
+    unsafe fn raw_pdx_call(route:u64,op:u64,a:u64,b:u64,c:u64)->(u64,u64){pdx_call(route,op,a,b,c)}
     unsafe fn focused_clipboard_participant()->Option<Participant>{match FOCUSED_SURFACE_ID{156=>Some(participant(9,9)),300=>Some(participant(15,15)),301=>Some(participant(16,16)),307=>Some(participant(18,18)),_=>None}}
     // No program row is focused in these cases; programs get keys by their own path.
     unsafe fn focused_program_participant()->Option<Participant>{None}
@@ -147,7 +150,23 @@ mod shell {
     unsafe fn toggle_command_palette(){COMMAND_PALETTE_OPEN=!COMMAND_PALETTE_OPEN;PALETTE_TOGGLES+=1;}
     unsafe fn focus_next_frame(){FOCUSED_SURFACE_ID=if FOCUSED_SURFACE_ID==156{300}else{156};FOCUS_CHANGES+=1;}
     include!(env!("APP_INPUT_PRODUCTION"));
-    unsafe fn reset(){APP_INPUT=Queue::new();CLIPBOARD_INTAKE=Intake::new();CLIPBOARD=broker::Broker::new();APP_MODIFIERS=Modifiers::new();DESKTOP_KEYS=desktop_keys::Keys::new();WM_CHORDS=wm::Chords::new();WM_ACTIONS.clear();FOCUSED_SURFACE_ID=156;COMMAND_PALETTE_OPEN=false;FOCUS_CHANGES=0;PALETTE_TOGGLES=0;for pd in [9,15,16,18]{CLIPBOARD.register(app_lifecycle::CatalogInfo{target_pd:pd,task_id:pd,surface_id:participant(pd,pd).surface,coordinator_pd:3}).unwrap();}LIVE=Some(true);SOURCE_LIVE=None;LIVE_ONCE=None;STATUS=0;SENT.clear();LIVE_QUERIES.clear();VOLUME_STEPS.clear();}
+    unsafe fn reset(){DISPLAY_SCALE=desktop_style::chrome::ScaleClient::new();APP_INPUT=Queue::new();CLIPBOARD_INTAKE=Intake::new();CLIPBOARD=broker::Broker::new();APP_MODIFIERS=Modifiers::new();DESKTOP_KEYS=desktop_keys::Keys::new();WM_CHORDS=wm::Chords::new();WM_ACTIONS.clear();FOCUSED_SURFACE_ID=156;COMMAND_PALETTE_OPEN=false;FOCUS_CHANGES=0;PALETTE_TOGGLES=0;for pd in [9,15,16,18]{CLIPBOARD.register(app_lifecycle::CatalogInfo{target_pd:pd,task_id:pd,surface_id:participant(pd,pd).surface,coordinator_pd:3}).unwrap();}LIVE=Some(true);SOURCE_LIVE=None;LIVE_ONCE=None;STATUS=0;SENT.clear();LIVE_QUERIES.clear();VOLUME_STEPS.clear();}
+    #[test]fn actual_scale_shortcut_retains_admission_and_never_repeats_an_applied_step(){
+        let _guard=LOCK.lock().unwrap();unsafe{reset();
+            assert!(desktop_shortcut(0x1d,1));assert!(desktop_shortcut(0x38,1));
+            STATUS=ERR_SERVICE_NOT_READY;
+            assert!(desktop_shortcut(0x0d,1));
+            let request=*SENT.last().unwrap();assert_eq!(request,(SLOT_DISPLAY,desktop_style::OP_DISPLAY_SCALE,[1,1,0]));
+            assert_eq!(DISPLAY_SCALE.request(),Some((1,1)));
+            STATUS=0;display_scale_poll();assert_eq!(*SENT.last().unwrap(),request);
+            assert_eq!(DISPLAY_SCALE.request(),None);assert!(DISPLAY_SCALE.pending());
+            let sent=SENT.len();assert!(desktop_shortcut(0x0c,1));assert_eq!(SENT.len(),sent);
+            assert_eq!(DISPLAY_SCALE.receive(99,1,desktop_style::chrome::scale_receipt(1,2).unwrap()),None);
+            assert!(DISPLAY_SCALE.pending());
+            assert_eq!(DISPLAY_SCALE.receive(1,1,desktop_style::chrome::scale_receipt(1,2).unwrap()),Some(2));
+            assert!(desktop_shortcut(0x0b,1));assert_eq!(SENT.last().unwrap().2,[0,2,0]);
+        }
+    }
     #[test] fn actual_shell_super_chords_never_reach_the_focused_program(){
         let _g=LOCK.lock().unwrap_or_else(|e|e.into_inner());unsafe{reset();
         // Super+Q: the desktop closes a window; the app sees neither key.

@@ -16,7 +16,7 @@ def function(name):
         depth+=(source[end]=='{')-(source[end]=='}');end+=1
     return source[start:end]
 association=('app_input_association','browser_input_participant','app_input_key_code')
-parts=[function(name) for name in association+('app_input_poll','clipboard_intake_poll','clipboard_source_ready','clipboard_poll','desktop_shortcut')]
+parts=[function(name) for name in association+('display_scale_poll','app_input_poll','clipboard_intake_poll','clipboard_source_ready','clipboard_poll','desktop_shortcut')]
 Path(sys.argv[2]).write_text('\n'.join(parts)+'\n')
 wheel=[function(name) for name in association+('app_input_participant','document_view_sender','browser_wheel_destination','browser_wheel_input','app_input_poll','frame_accepts_input')]
 # Compiled in its own namespace: same production lookup and LIVE/RETRY logic,
