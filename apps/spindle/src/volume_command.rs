@@ -3,7 +3,9 @@
 //!
 //! `volume` shows the master volume; `volume 40`, `volume +5`, `volume -10`, `volume mute`
 //! and `volume unmute` change it. `volume list` shows each program's stream; `volume ROW
-//! 30`, `volume ROW mute` and `volume ROW unmute` set one program's volume.
+//! 30`, `volume ROW mute` and `volume ROW unmute` set one program's volume. `volume ROW
+//! mic on` lets that program hear the microphone until it ends; `volume ROW mic off`
+//! stops it at once.
 //! Bell answers each request with a reply message, which `receive` turns into a line.
 use sex_pdx::sound_mixer as mixer;
 
@@ -22,6 +24,7 @@ fn request(args: &[u8]) -> Result<(u64, u64, u64, Waiting), &'static [u8]> {
     let mut words = args.split(|&b| b == b' ').filter(|w| !w.is_empty());
     let first = words.next();
     let second = words.next();
+    let third = words.next();
     let number = |w: &[u8]| core::str::from_utf8(w).ok().and_then(|t| t.parse::<i64>().ok());
     Ok(match (first, second) {
         (None, _) => (mixer::STATE, 0, 0, Waiting::Master),
@@ -36,6 +39,11 @@ fn request(args: &[u8]) -> Result<(u64, u64, u64, Waiting), &'static [u8]> {
             let v = number(w).filter(|n| (0..=100).contains(n)).ok_or(USAGE)?;
             (mixer::SET_MASTER, v as u64, 0, Waiting::Master)
         }
+        (Some(row), Some(b"mic")) => {
+            let row = number(row).filter(|n| (0..ROWS as i64).contains(n)).ok_or(USAGE)? as u64;
+            let on = match third { Some(b"on") => 1, Some(b"off") => 0, _ => return Err(USAGE) };
+            (mixer::MICROPHONE, row, on, Waiting::Row(row))
+        }
         (Some(row), Some(what)) => {
             let row = number(row).filter(|n| (0..ROWS as i64).contains(n)).ok_or(USAGE)? as u64;
             let setting = match what {
@@ -48,7 +56,7 @@ fn request(args: &[u8]) -> Result<(u64, u64, u64, Waiting), &'static [u8]> {
     })
 }
 
-const USAGE: &[u8] = b"Use: volume [0-100 | +N | -N | mute | unmute | list | ROW 0-100 | ROW mute | ROW unmute]";
+const USAGE: &[u8] = b"Use: volume [0-100 | +N | -N | mute | unmute | list | ROW 0-100 | ROW mute | ROW unmute | ROW mic on|off]";
 
 fn ask(action: u64, a: u64, b: u64) -> bool {
     let (status, _) = sex_pdx::pdx_call(sex_pdx::SLOT_BELL, mixer::OP_MIXER, action, a, b);
@@ -83,7 +91,7 @@ impl Volume {
         if caller != BELL_PD || self.waiting == Waiting::Nothing || !mixer::is_reply(value) { return false; }
         let waiting = core::mem::replace(&mut self.waiting, Waiting::Nothing);
         if value == mixer::REFUSED { sb.push(b"Volume: Bell refused that."); return true; }
-        let mut line = [0u8; 96];
+        let mut line = [0u8; 128];
         let mut at = 0;
         match waiting {
             Waiting::Nothing => return false,
@@ -111,6 +119,8 @@ impl Volume {
                     put(&mut line, &mut at, if st.playing { b", playing at " } else { b", quiet, asks " });
                     percent(&mut line, &mut at, st.asked as u64);
                     put(&mut line, &mut at, b"%");
+                    if st.listening { put(&mut line, &mut at, b", hearing the microphone"); }
+                    else if st.mic_allowed { put(&mut line, &mut at, b", may hear the microphone"); }
                     shown += 1;
                 }
                 if listing {
