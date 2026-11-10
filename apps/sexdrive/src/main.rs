@@ -8,12 +8,15 @@ use sex_pdx::{
     SLOT_SHELL, SLOT_USB_HOST,
     SLOT_DMA_REGION, SLOT_FRAME_REGION, SLOT_BLOCK_BUFFER,
     BLOCK_READ, BLOCK_WRITE, BLOCK_SYNC, BLOCK_CAPACITY,
+    BLOCK_RAW_READ, BLOCK_RAW_WRITE, BLOCK_LAYOUT,
     BLOCK_ERR_BAD_CMD, BLOCK_ERR_BAD_LEN, BLOCK_ERR_NO_DEVICE,
     BLOCK_SECTOR_SIZE, BLOCK_MAX_XFER, BLOCK_MAX_RUN,
 };
 
 
 mod dma_transfer;
+mod lens;
+use lens::{Lens, LENS, RAW};
 mod completion_wait;
 mod raid;
 mod ahci;
@@ -398,6 +401,8 @@ fn nvme_read_into_bounce(offset: u64, size: u64) -> u64 {
     let slba = offset / NVME_LBA_BYTES;
     let nlb = (size / NVME_LBA_BYTES).saturating_sub(1);
 
+    // Every command lands inside the partition this system may use (see `place`).
+    let Some(dev_lba) = place(slba, (nlb as u64) + 1, false) else { return BLOCK_ERR_NO_DEVICE; };
     let sqe_ptr = (io_sq_va as *mut u8).wrapping_add((sq_tail as usize) * 64) as *mut u32;
     unsafe {
         for i in 0..16usize {
@@ -407,8 +412,8 @@ fn nvme_read_into_bounce(offset: u64, size: u64) -> u64 {
         core::ptr::write_volatile(sqe_ptr.add(1), 1u32); // NSID=1
         core::ptr::write_volatile(sqe_ptr.add(6), (data_phys & 0xFFFF_FFFF) as u32); // PRP1 low
         core::ptr::write_volatile(sqe_ptr.add(7), (data_phys >> 32) as u32); // PRP1 high
-        core::ptr::write_volatile(sqe_ptr.add(10), (slba & 0xFFFF_FFFF) as u32); // SLBA low
-        core::ptr::write_volatile(sqe_ptr.add(11), (slba >> 32) as u32); // SLBA high
+        core::ptr::write_volatile(sqe_ptr.add(10), (dev_lba & 0xFFFF_FFFF) as u32); // SLBA low
+        core::ptr::write_volatile(sqe_ptr.add(11), (dev_lba >> 32) as u32); // SLBA high
         core::ptr::write_volatile(sqe_ptr.add(12), (nlb & 0xFFFF) as u32); // NLB (0-based)
     }
     serial_println!(
@@ -620,6 +625,8 @@ fn nvme_read_into_mapped_va(offset: u64, size: u64, dst_va: u64, loan: u64) -> u
         "[sexdrive.nvme.cmd.range] path=typed slba={} nlb={} max_lba={} ok={}",
         slba, nlb, max_lba, range_ok
     ); }
+    // Every command lands inside the partition this system may use (see `place`).
+    let Some(dev_lba) = place(slba, (nlb as u64) + 1, false) else { return BLOCK_ERR_NO_DEVICE; };
     let sqe_ptr = (io_sq_va as *mut u8).wrapping_add((sq_tail as usize) * 64) as *mut u32;
     unsafe {
         for i in 0..16usize {
@@ -631,8 +638,8 @@ fn nvme_read_into_mapped_va(offset: u64, size: u64, dst_va: u64, loan: u64) -> u
         core::ptr::write_volatile(sqe_ptr.add(7), (data_phys >> 32) as u32); // PRP1 high
         core::ptr::write_volatile(sqe_ptr.add(8), (prp2 & 0xFFFF_FFFF) as u32); // PRP2 low
         core::ptr::write_volatile(sqe_ptr.add(9), (prp2 >> 32) as u32); // PRP2 high
-        core::ptr::write_volatile(sqe_ptr.add(10), (slba & 0xFFFF_FFFF) as u32); // SLBA low
-        core::ptr::write_volatile(sqe_ptr.add(11), (slba >> 32) as u32); // SLBA high
+        core::ptr::write_volatile(sqe_ptr.add(10), (dev_lba & 0xFFFF_FFFF) as u32); // SLBA low
+        core::ptr::write_volatile(sqe_ptr.add(11), (dev_lba >> 32) as u32); // SLBA high
         core::ptr::write_volatile(sqe_ptr.add(12), (nlb & 0xFFFF) as u32); // NLB (0-based)
     }
     if hot_log() { serial_println!(
@@ -747,10 +754,89 @@ fn nvme_read_into_mapped_va(offset: u64, size: u64, dst_va: u64, loan: u64) -> u
 }
 
 /// What the namespace says, or just the original fixed area if it could not say.
-fn device_sectors() -> u64 {
+/// The whole disk, as the controller reported it (the Intel RAID volume when one is served).
+fn disk_sectors() -> u64 {
     if raid::serving() { return raid::sectors(); }
     if serving_ahci() { return ahci::sectors(); }
     match unsafe { NVME_IO_STATE.sectors } { 0 => WRITE_PROOF_LBA + 1, sectors => sectors }
+}
+
+/// The sectors this system works in: the whole disk when it is blank or SexOS's own
+/// pre-GPT layout, else only the SexOS store partition. None of another system's disk.
+fn device_sectors() -> u64 {
+    // An Intel RAID volume is served read only as a whole: its members refuse writes.
+    if unsafe { RAW } || raid::serving() { return disk_sectors(); }
+    match unsafe { LENS } {
+        Lens::Store { sectors, .. } => sectors,
+        Lens::Whole | Lens::Locked { .. } => disk_sectors(),
+        Lens::Unknown | Lens::Foreign(_) => WRITE_PROOF_LBA + 1,
+    }
+}
+
+/// Maps a request's sector to the device's, or refuses it.
+fn place(slba: u64, blocks: u64, write: bool) -> Option<u64> {
+    let end = slba.checked_add(blocks)?;
+    if unsafe { RAW } { return (end <= disk_sectors()).then_some(slba); }
+    match unsafe { LENS } {
+        Lens::Whole => Some(slba),
+        Lens::Store { base, sectors } => (end <= sectors).then_some(base + slba),
+        Lens::Locked { base } if !write => Some(base + slba),
+        _ => None,
+    }
+}
+
+fn probe_layout() {
+    use sex_disk::probe::{classify, Layout};
+    let found = classify(&mut RawDisk);
+    let lens = match found {
+        Ok(Layout::Blank) | Ok(Layout::LegacySexos) => Lens::Whole,
+        Ok(Layout::Sexos { first, sectors }) => Lens::Store { base: first, sectors },
+        Ok(Layout::Foreign(sex_disk::probe::Foreign::Gpt)) => Lens::Foreign(lens::FOREIGN_GPT),
+        Ok(Layout::Foreign(sex_disk::probe::Foreign::Mbr)) => Lens::Foreign(lens::FOREIGN_MBR),
+        Ok(Layout::Foreign(sex_disk::probe::Foreign::Filesystem)) => Lens::Foreign(lens::FOREIGN_FS),
+        Ok(Layout::Foreign(sex_disk::probe::Foreign::Damaged)) | Err(_) => Lens::Foreign(lens::FOREIGN_DAMAGED),
+    };
+    unsafe { LENS = lens; }
+    let (kind, base, sectors) = layout_parts(lens);
+    sex_pdx::serial_record!("[sexdrive.disk.layout] kind={} base={} sectors={} disk={}", kind, base, sectors, disk_sectors());
+}
+
+fn layout_parts(lens: Lens) -> (&'static str, u64, u64) {
+    match lens {
+        Lens::Unknown => ("unknown", 0, 0),
+        Lens::Whole => ("whole", 0, disk_sectors()),
+        Lens::Store { base, sectors } => ("store", base, sectors),
+        Lens::Foreign(lens::FOREIGN_GPT) => ("foreign-gpt", 0, 0),
+        Lens::Foreign(lens::FOREIGN_MBR) => ("foreign-mbr", 0, 0),
+        Lens::Foreign(lens::FOREIGN_FS) => ("foreign-fs", 0, 0),
+        Lens::Foreign(_) => ("foreign-damaged", 0, 0),
+        Lens::Locked { base } => ("locked", base, 0),
+    }
+}
+
+/// Reads whole sectors for the probe through the ordinary read path.
+struct RawDisk;
+impl sex_disk::BlockDev for RawDisk {
+    fn sectors(&self) -> u64 { disk_sectors() }
+    fn read(&mut self, lba: u64, buf: &mut [u8]) -> Result<(), sex_disk::Error> {
+        unsafe { RAW = true; }
+        let status = nvme_read_into_mapped_va(lba * NVME_LBA_BYTES, buf.len() as u64, buf.as_mut_ptr() as u64, 0);
+        unsafe { RAW = false; }
+        if status == 0 { Ok(()) } else { Err(sex_disk::Error::Io) }
+    }
+    fn write(&mut self, _: u64, _: &[u8]) -> Result<(), sex_disk::Error> { Err(sex_disk::Error::Io) }
+}
+
+/// BLOCK_LAYOUT's reply: kind in the low byte, the whole disk's sectors above it.
+fn layout_word() -> u64 {
+    let kind = match unsafe { LENS } {
+        Lens::Unknown => sex_pdx::BLOCK_LAYOUT_UNKNOWN,
+        Lens::Whole => sex_pdx::BLOCK_LAYOUT_WHOLE,
+        Lens::Store { .. } => sex_pdx::BLOCK_LAYOUT_STORE,
+        Lens::Foreign(_) => sex_pdx::BLOCK_LAYOUT_FOREIGN,
+        Lens::Locked { .. } => sex_pdx::BLOCK_LAYOUT_LOCKED,
+    };
+    kind | disk_sectors() << 8
 }
 
 fn write_guard_allows(offset: u64, size: u64, buf_cap: u64) -> bool {
@@ -926,6 +1012,8 @@ fn nvme_write_one_block(offset: u64, size: u64, src_va: u64) -> u64 {
         "[sexdrive.nvme.cmd.range] path=typed slba={} nlb={} max_lba={} ok={}",
         slba, nlb as u64, max_lba, range_ok
     ); }
+    // Every command lands inside the partition this system may use (see `place`).
+    let Some(dev_lba) = place(slba, (nlb as u64) + 1, true) else { return BLOCK_ERR_NO_DEVICE; };
     let sqe_ptr = (io_sq_va as *mut u8).wrapping_add((sq_tail as usize) * 64) as *mut u32;
     unsafe {
         for i in 0..16usize {
@@ -937,8 +1025,8 @@ fn nvme_write_one_block(offset: u64, size: u64, src_va: u64) -> u64 {
         core::ptr::write_volatile(sqe_ptr.add(7), (write_phys >> 32) as u32);
         core::ptr::write_volatile(sqe_ptr.add(8), (prp2 & 0xFFFF_FFFF) as u32);
         core::ptr::write_volatile(sqe_ptr.add(9), (prp2 >> 32) as u32);
-        core::ptr::write_volatile(sqe_ptr.add(10), (slba & 0xFFFF_FFFF) as u32);
-        core::ptr::write_volatile(sqe_ptr.add(11), (slba >> 32) as u32);
+        core::ptr::write_volatile(sqe_ptr.add(10), (dev_lba & 0xFFFF_FFFF) as u32);
+        core::ptr::write_volatile(sqe_ptr.add(11), (dev_lba >> 32) as u32);
         core::ptr::write_volatile(sqe_ptr.add(12), nlb);
     }
     if hot_log() { serial_println!(
@@ -1134,6 +1222,8 @@ fn nvme_write_readback_proof(offset: u64, size: u64, src_va: u64) -> u64 {
 
     let slba = lba;
     let nlb = 0u32;
+    // Every command lands inside the partition this system may use (see `place`).
+    let Some(dev_lba) = place(slba, (nlb as u64) + 1, true) else { return BLOCK_ERR_NO_DEVICE; };
     let sqe_ptr = (io_sq_va as *mut u8).wrapping_add((sq_tail as usize) * 64) as *mut u32;
     unsafe {
         for i in 0..16usize {
@@ -1143,8 +1233,8 @@ fn nvme_write_readback_proof(offset: u64, size: u64, src_va: u64) -> u64 {
         core::ptr::write_volatile(sqe_ptr.add(1), 1u32); // NSID=1
         core::ptr::write_volatile(sqe_ptr.add(6), (write_phys & 0xFFFF_FFFF) as u32); // PRP1 low
         core::ptr::write_volatile(sqe_ptr.add(7), (write_phys >> 32) as u32); // PRP1 high
-        core::ptr::write_volatile(sqe_ptr.add(10), (slba & 0xFFFF_FFFF) as u32); // SLBA low
-        core::ptr::write_volatile(sqe_ptr.add(11), (slba >> 32) as u32); // SLBA high
+        core::ptr::write_volatile(sqe_ptr.add(10), (dev_lba & 0xFFFF_FFFF) as u32); // SLBA low
+        core::ptr::write_volatile(sqe_ptr.add(11), (dev_lba >> 32) as u32); // SLBA high
         core::ptr::write_volatile(sqe_ptr.add(12), nlb); // NLB=0 (one block)
     }
     serial_println!(
@@ -1289,8 +1379,8 @@ fn nvme_write_readback_proof(offset: u64, size: u64, src_va: u64) -> u64 {
         core::ptr::write_volatile(sqe_ptr2.add(1), 1u32); // NSID=1
         core::ptr::write_volatile(sqe_ptr2.add(6), (read_phys & 0xFFFF_FFFF) as u32);
         core::ptr::write_volatile(sqe_ptr2.add(7), (read_phys >> 32) as u32);
-        core::ptr::write_volatile(sqe_ptr2.add(10), (slba & 0xFFFF_FFFF) as u32);
-        core::ptr::write_volatile(sqe_ptr2.add(11), (slba >> 32) as u32);
+        core::ptr::write_volatile(sqe_ptr2.add(10), (dev_lba & 0xFFFF_FFFF) as u32);
+        core::ptr::write_volatile(sqe_ptr2.add(11), (dev_lba >> 32) as u32);
         core::ptr::write_volatile(sqe_ptr2.add(12), 0u32);
     }
     if hot_log() { serial_println!(
@@ -1886,7 +1976,8 @@ fn ahci_bounce(write: bool, offset: u64, size: u64, fill: impl FnOnce(u64), drai
         return BLOCK_ERR_NO_DEVICE;
     }
     if write { fill(va); } else { unsafe { core::ptr::write_bytes(va as *mut u8, 0, size as usize); } }
-    let lba = offset / NVME_LBA_BYTES;
+    // Every command lands inside the partition this system may use (see `place`).
+    let Some(lba) = place(offset / NVME_LBA_BYTES, size / NVME_LBA_BYTES, write) else { return BLOCK_ERR_NO_DEVICE };
     let result = ahci::transfer(write, lba, size, phys, || transfer.submit().is_ok());
     match result {
         Ok(()) => {
@@ -1954,6 +2045,13 @@ fn ahci_flush() -> u64 {
 /// profiles). They go through the dispatched block entry points, so they run
 /// on whichever disk serves; only after that disk is ready.
 fn storage_selftests() {
+    // Before any write, on either disk: whose disk is this?
+    probe_layout();
+    if matches!(unsafe { LENS }, Lens::Foreign(_)) {
+        // Another system's disk: skip the write self-tests, which would land in it.
+        sex_pdx::serial_record!("[sexdrive.disk.foreign] writes=refused selftest=skipped");
+        return;
+    }
     let ap3_buf_phys = reserve_dma_phys(PAGE_SIZE);
     let ap3_buf_va = own_dma_virtual(ap3_buf_phys, PAGE_SIZE);
     if ap3_buf_phys == 0 || ap3_buf_phys == u64::MAX || (ap3_buf_phys % PAGE_SIZE) != 0
@@ -3215,19 +3313,43 @@ fn service_next_request(){
 
     // The numeric selector is local to this domain. Its paired peer
     // must match authenticated provenance before any shared byte access.
-    let block_view = if cmd == BLOCK_READ || cmd == BLOCK_WRITE {
+    let io = matches!(cmd, BLOCK_READ | BLOCK_WRITE | BLOCK_RAW_READ | BLOCK_RAW_WRITE);
+    let block_view = if io {
         block_buffer_view(msg.caller_pd, _buf_cap, size,
-            if cmd == BLOCK_READ { WRITE } else { READ })
+            if cmd == BLOCK_READ || cmd == BLOCK_RAW_READ { WRITE } else { READ })
     } else { None };
     // [sexblock.abi.request.decode] — dispatch on typed command
-    let reply_val: u64 = if (cmd == BLOCK_READ || cmd == BLOCK_WRITE)
+    let reply_val: u64 = if io
         && (size == 0 || size > BLOCK_MAX_RUN || offset % BLOCK_SECTOR_SIZE != 0) {
         BLOCK_ERR_BAD_LEN
-    } else if (cmd == BLOCK_READ || cmd == BLOCK_WRITE) && block_view.is_none() {
+    } else if io && block_view.is_none() {
         serial_println!("[sexdrive.block.region.reject] caller={} slot={} bytes={}", msg.caller_pd, _buf_cap, size);
         BLOCK_ERR_NO_DEVICE
     } else { match cmd {
         BLOCK_READ => typed_read_handoff(offset,size,_buf_cap,block_view),
+        // The installer's view: whole disk, untranslated. Only Files holds this route, and
+        // Files only uses it for `install`, which adds partitions in free space.
+        BLOCK_RAW_READ => {
+            unsafe { RAW = true; }
+            let status = typed_read_handoff(offset, size, _buf_cap, block_view);
+            unsafe { RAW = false; }
+            status
+        }
+        BLOCK_RAW_WRITE => {
+            let fill_va = block_view.map(|view| view.virtual_address).unwrap_or(0);
+            if _buf_cap != SLOT_BLOCK_BUFFER || fill_va == 0 || fill_va == u64::MAX { BLOCK_ERR_NO_DEVICE } else {
+                // From the first raw write on, the running system's own view may change
+                // under it: it stops writing until the next start.
+                unsafe {
+                    LENS = match LENS { Lens::Store { base, .. } | Lens::Locked { base } => Lens::Locked { base }, _ => Lens::Locked { base: 0 } };
+                    RAW = true;
+                }
+                let status = nvme_write_one_block(offset, size, fill_va);
+                unsafe { RAW = false; }
+                status
+            }
+        }
+        BLOCK_LAYOUT => layout_word(),
         BLOCK_WRITE => {
             if hot_log() { serial_println!(
                 "[sexdrive.block.write.api.recv] offset={:#x} size={} buf_cap={:#x}",

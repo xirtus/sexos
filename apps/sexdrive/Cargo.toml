@@ -11,4 +11,5 @@ path = "src/main.rs"
 sex-pdx      = { path = "../../crates/sex-pdx" }
 sex-imsm     = { path = "../../crates/sex-imsm" }
 sex-graphics = { path = "../../crates/sex-graphics" }
+sex-disk     = { path = "../../crates/sex-disk" }
 
