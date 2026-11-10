@@ -3763,3 +3763,16 @@ Follow-up to the boot log and crash records work (`BOOT_LOG_AND_CRASH_RECORDS_20
   each TFD and checks the TX command and byte count, then plays the AP. Retries,
   refusals, TX failure and deauthentication are covered.
 - **ABI / kernel:** none (`wifi_status.rs` is not an ABI input).
+
+## Intel Wi-Fi, stage W5c: WPA2 keys (2026-11-10)
+- **What:** `wifi join N PASSPHRASE` connects to a WPA2 network. The passphrase goes
+  over `wifi_status::PASSWORD` and is wiped after the PMK is derived. New
+  `sex_wifi::rsna` runs the 4-way handshake over EAPOL data frames and installs the
+  pairwise and group keys (SEC_KEY_CMD, or ADD_STA_KEY on older firmware). New phases
+  HANDSHAKE and CONNECTED, plus the NEEDS_PASSWORD reply. `eapol::Supplicant` now owns
+  copies of the RSN elements, so it no longer borrows them.
+- **Evidence:** `scripts/wifi_host_gate.sh` (43 driver tests). The firmware model plays
+  the AP's half of the handshake, including message 1 arriving with the association
+  response. Tests cover the key command bytes on both firmware paths and a wrong
+  passphrase.
+- **ABI / kernel:** none (`wifi_status.rs` is not an ABI input).

@@ -28,6 +28,7 @@ pub mod init;
 pub mod join;
 pub mod tx;
 pub mod assoc;
+pub mod rsna;
 pub mod pack;
 pub mod rx;
 pub mod sae;

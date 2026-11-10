@@ -341,6 +341,8 @@ impl History {
     /// Push a command line into history. Clamps to HIST_LINE_BYTES.
     fn push(&mut self, line: &[u8]) -> usize {
         let idx = self.write_pos;
+        // A Wi-Fi passphrase is never kept (history is saved to disk).
+        let line = wifi_command::without_passphrase(line);
         let n = line.len().min(HIST_LINE_BYTES);
         self.ring[self.write_pos][..n].copy_from_slice(&line[..n]);
         for i in n..HIST_LINE_BYTES { self.ring[self.write_pos][i] = 0; }
@@ -829,7 +831,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  net-status   show diagnostic state");
             sb.push(b"  net-cancel   stop and release the probe");
             sb.push(b"  net-retry    explicit fresh attempt");
-            sb.push(b"  wifi [scan|join N]  Wi-Fi networks heard; scan looks again");
+            sb.push(b"  wifi [scan|join N [PASS]]  Wi-Fi networks; join connects");
             serial_println!("[spindle.help.command] name=help ok=1");
             serial_println!("[spindle.help.command] name=clear ok=1");
             serial_println!("[spindle.help.command] name=echo ok=1");

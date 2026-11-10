@@ -9,7 +9,7 @@
 //! Each frame is tried three times, waiting 300 ms for its answer.
 //!
 //! WPA3 networks authenticate with SAE instead of open-system frames (W5d), so
-//! they are refused here for now. WPA2's 4-way handshake follows (W5c).
+//! they are refused here for now. WPA2's 4-way handshake follows (`rsna`, W5c).
 use crate::bringup::Bringup;
 use crate::cmdq::{self, CommandQueue};
 use crate::context::{Dma, DmaRead};
@@ -50,7 +50,7 @@ enum Heard { Auth { status: u16, transaction: u16, algorithm: u16 }, Assoc { sta
 pub struct Assoc {
     pub step: Step,
     pub target: Target,
-    bss: Bss,
+    pub bss: Bss,
     me: [u8; 6],
     family: Family,
     pub tx: TxQueue,
@@ -61,6 +61,9 @@ pub struct Assoc {
     sent: bool,
     /// The station-entry answer, kept for the log.
     pub status: u32,
+    /// The last EAPOL frame the AP sent while association was finishing: the
+    /// 4-way handshake's message 1 often follows the association response at once.
+    pub early: Option<([u8; crate::eapol::MAX_FRAME], usize)>,
 }
 
 impl Assoc {
@@ -71,8 +74,10 @@ impl Assoc {
             Security::Wpa3Personal => Step::Failed(Failure::Unsupported("wpa3_sae")),
             Security::Unsupported => Step::Failed(Failure::Unsupported("security")),
         };
-        Self { step, target, bss, me, family, tx: TxQueue::new(family), aid: 0, attempts: 0, seq: 0, since: now, sent: false, status: 0 }
+        Self { step, target, bss, me, family, tx: TxQueue::new(family), aid: 0, attempts: 0, seq: 0, since: now, sent: false, status: 0, early: None }
     }
+    /// Our address, as the frames carry it.
+    pub fn me(&self) -> [u8; 6] { self.me }
     pub fn done(&self) -> bool { matches!(self.step, Step::Associated | Step::Refused(_) | Step::Failed(_)) }
     fn go(&mut self, step: Step, now: u64) { self.step = step; self.since = now; self.sent = false; self.attempts = 0; }
     fn refuse(&mut self, r: Refusal) { self.step = Step::Refused(r); }
@@ -110,6 +115,8 @@ impl Assoc {
         let (mut error, mut heard, mut tx_status) = (None, None, None);
         let family = self.family;
         let mut freed: [Option<tx::Status>; 1] = [None];
+        let mut early = [0u8; crate::eapol::MAX_FRAME];
+        let mut early_len = 0;
         {
             let me = &*self;
             let mut scratch = [0u8; 4096];
@@ -118,6 +125,10 @@ impl Assoc {
                 if let Some(s) = tx::parse_response(p) { freed[0] = Some(s); return; }
                 if let Some(rx) = parse_mpdu(p, family, &mut scratch) {
                     if let Some(hd) = me.hear(rx.frame) { heard = Some(hd); }
+                    if let Some(e) = crate::rsna::eapol_of(rx.frame, &me.me, &me.bss.bssid).filter(|e| e.len() <= crate::eapol::MAX_FRAME) {
+                        early[..e.len()].copy_from_slice(e);
+                        early_len = e.len();
+                    }
                     return;
                 }
                 if let Some(e) = h::parse_error(p) { error = Some(e); }
@@ -128,6 +139,7 @@ impl Assoc {
             self.tx.release(dma, &b.layout, s);
             tx_status = Some(s);
         }
+        if early_len > 0 { self.early = Some((early, early_len)); }
         if let Some(e) = error { self.step = Step::Failed(Failure::Firmware(e)); return false; }
         if let Some(Heard::Gone(reason)) = heard { self.refuse(Refusal::Disconnected(reason)); return false; }
         match self.step {

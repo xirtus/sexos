@@ -1,7 +1,7 @@
 //! Driver-level behaviour: chip table, firmware files, DMA layout, the power-up
 //! sequence against a register model, the 4-way handshake against an access
 //! point played by the authenticator helpers, and frames end to end.
-use sex_wifi::{assoc, bringup, ccmp, cmdq, context, csr, devices, eapol, hcmd, ieee80211 as w, init, join, pack, rx, scan, tx, ucode};
+use sex_wifi::{assoc, rsna, bringup, ccmp, cmdq, context, csr, devices, eapol, hcmd, ieee80211 as w, init, join, pack, rx, scan, tx, ucode};
 use std::collections::HashMap;
 
 const AP: [u8; 6] = [0x02, 0x11, 0x22, 0x33, 0x44, 0x55];
@@ -790,8 +790,24 @@ struct Firmware {
 
 /// The AP's side of authentication and association.
 #[derive(Clone)]
-struct Ap { auth_status: u16, assoc_status: u16, aid: u16, ignore: u8, tx_status: u16, deauth_after_assoc: Option<u16> }
-impl Default for Ap { fn default() -> Self { Ap { auth_status: 0, assoc_status: 0, aid: 5, ignore: 0, tx_status: 1, deauth_after_assoc: None } } }
+struct Ap { auth_status: u16, assoc_status: u16, aid: u16, ignore: u8, tx_status: u16, deauth_after_assoc: Option<u16>, wpa: Option<ApWpa> }
+impl Default for Ap { fn default() -> Self { Ap { auth_status: 0, assoc_status: 0, aid: 5, ignore: 0, tx_status: 1, deauth_after_assoc: None, wpa: None } } }
+
+/// The AP's half of the 4-way handshake (W5c).
+#[derive(Clone)]
+struct ApWpa { pmk: [u8; 32], rsn: Vec<u8>, anonce: [u8; 32], ptk: Option<eapol::Ptk>, message4: bool, gtk: eapol::GroupKey }
+
+/// An EAPOL frame from the AP as a from-DS data frame.
+fn eapol_from_ap(me: &[u8], bssid: &[u8], e: &[u8]) -> Vec<u8> {
+    let mut f = vec![0u8; 24];
+    f[0..2].copy_from_slice(&(w::FC_DATA | w::FC_FROM_DS).to_le_bytes());
+    f[4..10].copy_from_slice(me); f[10..16].copy_from_slice(bssid); f[16..22].copy_from_slice(bssid);
+    f.extend_from_slice(&[0xaa, 0xaa, 3, 0, 0, 0, 0x88, 0x8e]);
+    f.extend_from_slice(e);
+    f
+}
+
+fn bssid_of(frame: &[u8]) -> [u8; 6] { frame[4..10].try_into().unwrap() }
 
 /// A management frame from the AP (`bssid`) to `da`.
 fn from_ap(fc: u16, da: &[u8], bssid: &[u8], body: &[u8]) -> Vec<u8> {
@@ -858,6 +874,25 @@ impl Firmware {
             if self.ap.tx_status != 1 { continue; }
             if self.ap.ignore > 0 { self.ap.ignore -= 1; continue; }
             let (me, bssid) = (frame[10..16].to_vec(), frame[4..10].to_vec());
+            if u16::from_le_bytes([frame[0], frame[1]]) == w::FC_DATA | w::FC_TO_DS {
+                assert_eq!(&frame[24..32], &[0xaa, 0xaa, 3, 0, 0, 0, 0x88, 0x8e], "EAPOL over LLC/SNAP");
+                assert_eq!(u16::from_le_bytes([tx[2], tx[3]]), tx::FLAG_CMD_RATE | tx::FLAG_ENCRYPT_DIS | tx::FLAG_HIGH_PRI);
+                let Some(wpa) = self.ap.wpa.as_mut() else { continue };
+                let e = &frame[32..];
+                let mut out = [0u8; eapol::MAX_FRAME];
+                if let Some(ptk) = wpa.ptk.clone() {
+                    eapol::authenticator::check_message4(e, eapol::Akm::Psk, &ptk).unwrap();
+                    wpa.message4 = true;
+                    continue;
+                }
+                // A wrong password fails message 2's MIC: the AP stays silent.
+                let Ok((ptk, _)) = eapol::authenticator::check_message2(e, eapol::Akm::Psk, &wpa.pmk, &bssid_of(&frame), &frame[10..16].try_into().unwrap(), &wpa.anonce) else { continue };
+                let n = eapol::authenticator::message3(&mut out, eapol::Akm::Psk, &ptk, 2, &wpa.anonce, &wpa.rsn, &wpa.gtk, None);
+                wpa.ptk = Some(ptk);
+                let f = eapol_from_ap(&frame[10..16], &frame[4..10], &out[..n]);
+                self.deliver(m, layout, &mpdu(self.family, &f, 40, 6, false));
+                continue;
+            }
             let reply = match u16::from_le_bytes([frame[0], frame[1]]) {
                 w::FC_MGMT_AUTH => {
                     let mut b = vec![0, 0, 2, 0]; b.extend_from_slice(&self.ap.auth_status.to_le_bytes());
@@ -874,6 +909,12 @@ impl Firmware {
             let other = from_ap(w::FC_MGMT_AUTH, &[2, 2, 2, 2, 2, 2], &bssid, &[0, 0, 2, 0, 1, 0]);
             self.deliver(m, layout, &mpdu(self.family, &other, 40, 6, true));
             self.deliver(m, layout, &mpdu(self.family, &reply, 40, 6, true));
+            if let (Some(wpa), w::FC_MGMT_ASSOC_REQ) = (self.ap.wpa.as_ref(), u16::from_le_bytes([frame[0], frame[1]])) {
+                // Message 1 right behind the association response.
+                let mut out = [0u8; eapol::MAX_FRAME];
+                let n = eapol::authenticator::message1(&mut out, eapol::Akm::Psk, 1, &wpa.anonce);
+                self.deliver(m, layout, &mpdu(self.family, &eapol_from_ap(&me, &bssid, &out[..n]), 40, 6, false));
+            }
             if let (Some(r), w::FC_MGMT_ASSOC_REQ) = (self.ap.deauth_after_assoc, u16::from_le_bytes([frame[0], frame[1]])) {
                 self.deliver(m, layout, &mpdu(self.family, &from_ap(w::FC_MGMT_DEAUTH, &me, &bssid, &r.to_le_bytes()), 40, 6, true));
             }
@@ -925,6 +966,8 @@ impl Firmware {
                 (hcmd::LONG_GROUP, hcmd::ADD_STA) => Some(48),
                 (hcmd::DATA_PATH_GROUP, hcmd::SCD_QUEUE_CONFIG_CMD) => Some(36),
                 (hcmd::MAC_CONF_GROUP, hcmd::SESSION_PROTECTION_CMD) => Some(24),
+                (hcmd::DATA_PATH_GROUP, rsna::SEC_KEY_CMD) => Some(rsna::SEC_KEY_BYTES),
+                (hcmd::LONG_GROUP, hcmd::ADD_STA_KEY) => Some(rsna::ADD_STA_KEY_BYTES),
                 _ => Some(4),
             };
             assert_eq!(Some(len), want, "payload size of {group:#x}/{opcode:#x}");
@@ -963,7 +1006,7 @@ impl Firmware {
                     for c in (0..13).chain(14..37) { a[20 + c * 4] = 1; }
                     a
                 }
-                (hcmd::LONG_GROUP, hcmd::ADD_STA) => self.station_status.to_le_bytes().to_vec(),
+                (hcmd::LONG_GROUP, hcmd::ADD_STA) | (hcmd::LONG_GROUP, hcmd::ADD_STA_KEY) => self.station_status.to_le_bytes().to_vec(),
                 (hcmd::DATA_PATH_GROUP, hcmd::SCD_QUEUE_CONFIG_CMD) => {
                     let mut a = vec![0u8; 8];
                     a[0..2].copy_from_slice(&self.queue_answer.to_le_bytes());
@@ -1600,4 +1643,87 @@ fn wpa3_only_networks_wait_for_sae() {
     bss.security = w::Security::Wpa3Personal;
     let a = assoc::Assoc::new(bss, join::Target::of(&bss, 6), STA, devices::Family::Ax210, 0);
     assert_eq!(a.step, assoc::Step::Failed(init::Failure::Unsupported("wpa3_sae")));
+}
+
+/// Associates the x17 with "Home" (WPA2), then runs the 4-way handshake with `password`
+/// against an AP whose passphrase is "correct horse".
+fn x17_connect(password: &[u8], sec_key_cmd: bool) -> (rsna::Rsna, Firmware, w::Bss, usize, [u8; 16]) {
+    let (mut i, mut b, mut m, mut hw, mut sim, bss, v) = x17_ready();
+    let target = join::Target::of(&bss, 6);
+    let mut j = join::Join::new(target, v, i.mac, i.valid_rx_antennas(), hw.now);
+    run_join(&mut j, &mut i, &mut b, &mut m, &mut hw, &mut sim);
+    let gtk = eapol::GroupKey { id: 2, key: [0x77; 16], rsc: 0 };
+    let ap_pmk = sex_wifi::crypto::psk_from_passphrase(b"correct horse", bss.ssid());
+    sim.ap = Ap { wpa: Some(ApWpa { pmk: ap_pmk, rsn: bss.rsn_element().to_vec(), anonce: [0x5a; 32], ptk: None, message4: false, gtk }), ..Ap::default() };
+    let mut a = assoc::Assoc::new(bss, target, i.mac, b.boot.chip.family, hw.now);
+    for _ in 0..5000 {
+        let t = hw.now;
+        if !a.advance(&mut b, &mut i.cmdq, &mut hw, &mut m, t) { break; }
+        sim.serve(&mut m, &b.layout, &mut hw);
+        hw.now += 1000;
+    }
+    assert_eq!(a.step, assoc::Step::Associated);
+    let (early, n) = a.early.expect("message 1 heard during association");
+    let mut own = [0u8; 32];
+    let own_len = w::own_rsn(false, &mut own);
+    let pmk = sex_wifi::crypto::psk_from_passphrase(password, bss.ssid());
+    let before = sim.commands.len();
+    let mut r = rsna::Rsna::new(pmk, [0xa5; 32], &own[..own_len], bss.rsn_element(), &bss.rsn, target, i.mac, b.boot.chip.family, a.tx, sec_key_cmd, hw.now);
+    r.early(&b, &mut hw, &mut m, &early[..n]);
+    sim.serve(&mut m, &b.layout, &mut hw);
+    for _ in 0..20_000 {
+        let t = hw.now;
+        if !r.advance(&mut b, &mut i.cmdq, &mut hw, &mut m, t) { break; }
+        sim.serve(&mut m, &b.layout, &mut hw);
+        hw.now += 1000;
+    }
+    (r, sim, bss, before, gtk.key)
+}
+
+#[test]
+fn x17_completes_the_wpa2_handshake_and_installs_keys() {
+    let (r, sim, _, before, gtk) = x17_connect(b"correct horse", true);
+    assert_eq!(r.step, rsna::Step::Connected);
+    assert!(sim.ap.wpa.as_ref().unwrap().message4, "message 4 reached the AP");
+    let ptk = sim.ap.wpa.as_ref().unwrap().ptk.unwrap();
+    let keys: Vec<&(u8, u8, Vec<u8>)> = sim.commands[before..].iter().collect();
+    assert_eq!(keys.iter().map(|c| (c.0, c.1)).collect::<Vec<_>>(), vec![(hcmd::DATA_PATH_GROUP, rsna::SEC_KEY_CMD); 2]);
+    let u32at = |p: &Vec<u8>, at: usize| u32::from_le_bytes(p[at..at + 4].try_into().unwrap());
+    // Pairwise: add, station 0, key 0, CCMP (with MFP: our RSN offers it, the AP's does not).
+    let p = &keys[0].2;
+    assert_eq!((u32at(p, 0), u32at(p, 4), u32at(p, 8), u32at(p, 12)), (1, 1, 0, 0x02));
+    assert_eq!(&p[16..32], &ptk.tk);
+    // Group: key 2, multicast.
+    let g = &keys[1].2;
+    assert_eq!((u32at(g, 8), u32at(g, 12)), (2, 0x42));
+    assert_eq!(&g[16..32], &gtk);
+}
+
+#[test]
+fn older_firmware_installs_keys_with_add_sta_key() {
+    let (r, sim, _, before, _) = x17_connect(b"correct horse", false);
+    assert_eq!(r.step, rsna::Step::Connected);
+    let keys = &sim.commands[before..];
+    assert_eq!(keys.iter().map(|c| (c.0, c.1)).collect::<Vec<_>>(), vec![(hcmd::LONG_GROUP, hcmd::ADD_STA_KEY); 2]);
+    let flags = |p: &Vec<u8>| u16::from_le_bytes([p[2], p[3]]);
+    assert_eq!((keys[0].2[1], flags(&keys[0].2)), (0, 2 | 1 << 3));
+    assert_eq!((keys[1].2[1], flags(&keys[1].2)), (1, 2 | 1 << 3 | 2 << 8 | 1 << 14));
+}
+
+#[test]
+fn a_wrong_password_times_out_without_keys() {
+    let (r, sim, _, before, _) = x17_connect(b"wrong horse", true);
+    assert_eq!(r.step, rsna::Step::Refused(rsna::Refusal::Timeout { messages: 1 }));
+    assert!(sim.commands[before..].is_empty(), "no key installed");
+}
+
+#[test]
+fn eapol_frames_only_from_our_ap() {
+    let e = [1u8, 3, 0, 0];
+    let f = eapol_from_ap(&STA, &AP, &e);
+    assert_eq!(rsna::eapol_of(&f, &STA, &AP), Some(&e[..]));
+    assert_eq!(rsna::eapol_of(&f, &AP, &AP), None, "not to us");
+    assert_eq!(rsna::eapol_of(&f, &STA, &STA), None, "not from our AP");
+    let mut p = f.clone(); p[1] |= 0x40;
+    assert_eq!(rsna::eapol_of(&p, &STA, &AP), None, "protected frames are the firmware's to decrypt");
 }

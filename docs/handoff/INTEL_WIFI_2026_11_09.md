@@ -85,7 +85,7 @@ The driver speaks firmware API 77 (89 for the 0x7e40 "Ma" parts), the same as Op
 | **W4b** (section 10) | the network list for people: `wifi` and `wifi scan` in Spindle (a desktop query to sexnet, `sex_pdx::wifi_status`), rescans; the status bar indicator follows | host test of the words; **x17: `wifi` lists networks** |
 | **W5a** (section 11) | join: PHY context, RLC, MAC context, binding, station, management TX queue, session protection (`iwx_auth`); `wifi join N` in Spindle | host gate on the firmware model and the real x17 file's command versions; **x17: `[wifi.joined]`** |
 | **W5b** (section 12) | open-system auth and association frames on TX queue 1 (`iwx_tx`, TX command v10/gen3 or gen2), then ADD_STA update and MAC context with the AID (`iwx_run`) | host gate: TFD, TX command, byte counts and frames on the firmware model, retries and refusals; **x17: `[wifi.associated]`** |
-| W5c | WPA2: the 4-way handshake from this crate over EAPOL data frames, pairwise and group keys installed (ADD_STA_KEY v3) | x17 completes a WPA2 handshake |
+| **W5c** (section 13) | WPA2: the 4-way handshake over EAPOL data frames on queue 1, pairwise and group keys installed (SEC_KEY_CMD on the x17, ADD_STA_KEY on older firmware); `wifi join N PASSPHRASE` | host gate: the AP's half of the handshake on the firmware model, key command bytes, wrong passphrase; **x17: `[wifi.connected]`** |
 | W5d | WPA3: SAE commit/confirm in authentication frames, PMF | x17 joins a WPA3 network |
 | W5e | data queues into sexnet's Ethernet path; password prompt; saved networks | x17 browses the web over Wi-Fi |
 | W6 | speed and comfort: HT/VHT/HE capabilities, aggregation, power save, roaming, rekeying, 6 GHz | throughput test against the wired NIC |
@@ -392,8 +392,40 @@ the phases ASSOCIATING (7) and ASSOCIATED (8).
 
 Not yet:
 - WPA3-only networks are refused (`wpa3_sae`). SAE authentication is W5d.
-- WPA2 networks associate, but the 4-way handshake (W5c) is not started yet, so the
-  AP drops us after its EAPOL timeout.
+- WPA2's 4-way handshake follows association (section 13).
 - No HT/VHT capabilities are sent, so association is legacy-rate only (W6).
 - `iwx_run`'s smart-fifo, multicast and power commands, and TLC, come with the data
   path (W5e).
+
+## 13. Stage W5c: WPA2 keys (2026-11-10)
+
+`wifi join N PASSPHRASE` (Spindle) sends the passphrase to sexnet in 7-byte parts
+(`wifi_status::PASSWORD`, 8 to 63 characters), then the join. A WPA2 network joined
+without one is answered `NEEDS_PASSWORD`. sexnet derives the PMK (PBKDF2) when the
+association succeeds, then wipes the passphrase. It also wipes it on any failure.
+Spindle keeps no copy, and its saved history drops the passphrase.
+
+`sex_wifi::rsna` runs `eapol::Supplicant` (already tested against the authenticator
+helpers) over the air:
+- EAPOL-Key frames from the AP are from-DS data frames with LLC/SNAP 0x888e. Message 1
+  often comes right behind the association response, so `assoc` keeps the last one
+  it hears (`Assoc::early`).
+- Replies go out on queue 1 as to-DS data frames, unencrypted, with high priority and at
+  the management rate, as `iwx_tx_fill_cmd` sends EAPOL. Message 4 goes out before its
+  keys are installed.
+- Keys are installed with `iwx_mld_set_sta_key_cmd`'s SEC_KEY_CMD (DATA_PATH 0x18, 80
+  bytes) when the firmware lists it, as the x17's -77 firmware does. Otherwise they go
+  with ADD_STA_KEY v2/v3 (76 bytes, status checked). Pairwise is key 0. The group key
+  uses its KDE id with the multicast flag. The MFP flag is set when the AP offers MFP.
+  An IGTK goes in only with SEC_KEY_CMD.
+- The phases are HANDSHAKE (9), then CONNECTED (10) once the pairwise and group keys
+  are in.
+
+Boot log: `[wifi.handshake.start] sec_key_cmd=1 early=1`, then `[wifi.handshake]
+step=… messages=… keys=(pairwise, group, igtk)`, then `[wifi.connected] ssid=…
+security=WPA2`, or `[wifi.failed] step=handshake reason=…`. A wrong passphrase shows
+up as `Refused(Timeout { messages: 1 })`: the AP never sends message 3.
+
+The SNonce comes from sexnet's entropy service (the same source TLS seeds from).
+Next: data frames into sexnet's Ethernet path (W5e, with TLC and the `iwx_run`
+leftovers), and SAE for WPA3 (W5d).
