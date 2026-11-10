@@ -870,6 +870,7 @@ pub fn init() {
     crate::boot_memory::init_uiir(silkshell_id, sexdisp_id);
     crate::boot_memory::init_text_regions(sexdisp_id);
     crate::boot_memory::init_pixel_regions(sexdisp_id);
+    crate::boot_memory::init_screen_capture(sexdisp_id);
     crate::boot_memory::init_sound_rings(sexbell_id);
     crate::boot_memory::init_program_image(sexfiles_id);
     crate::boot_memory::init_fs_regions(sexfiles_id);
