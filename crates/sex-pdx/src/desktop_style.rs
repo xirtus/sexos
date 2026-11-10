@@ -25,13 +25,75 @@ pub fn ui_scale() -> u32 {
     UI_SCALE.load(core::sync::atomic::Ordering::Relaxed)
 }
 pub fn set_ui_scale(scale: u32) {
-    UI_SCALE.store(scale.clamp(1, 3), core::sync::atomic::Ordering::Relaxed);
+    UI_SCALE.store(chrome::clamp_scale(scale), core::sync::atomic::Ordering::Relaxed);
 }
 pub const fn scale(width: u32) -> u32 {
     if width >= 256 {
         2
     } else {
         1
+    }
+}
+
+/// Shared integer chrome geometry. Coordinates are window-local device pixels;
+/// this data carries no surface, monitor or input authority.
+pub mod chrome {
+    pub const MAX_SCALE: u32 = 3;
+    pub const BAR: u32 = 28; // includes the bottom separator
+    pub const TITLE: u32 = 26;
+    pub const TARGET: u32 = 24;
+    pub const UI_FONT: u32 = 13;
+    pub const RESIZE: u32 = 8;
+    pub const OUTER_GAP: u32 = 8;
+    pub const INNER_GAP: u32 = 6;
+    pub const FLOAT_RADIUS: u32 = 12;
+    pub const TILE_RADIUS: u32 = 10;
+
+    pub const fn clamp_scale(scale: u32) -> u32 {
+        if scale < 1 { 1 } else if scale > MAX_SCALE { MAX_SCALE } else { scale }
+    }
+    /// Reset follows the immutable BOOT scale; nonzero steps move one notch.
+    pub const fn step_scale(before: u32, boot: u32, step: i64) -> u32 {
+        if step == 0 { return clamp_scale(boot); }
+        let before=clamp_scale(before);
+        if step > 0 { clamp_scale(before+1) } else { clamp_scale(before-1) }
+    }
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct Rect { pub x: u32, pub y: u32, pub w: u32, pub h: u32 }
+    impl Rect {
+        pub const fn contains(self, x: u32, y: u32) -> bool {
+            x >= self.x && y >= self.y && x-self.x < self.w && y-self.y < self.h
+        }
+    }
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct Metrics { scale: u32 }
+    impl Metrics {
+        pub const fn new(scale: u32) -> Self { Self { scale: clamp_scale(scale) } }
+        pub const fn scale(self) -> u32 { self.scale }
+        pub const fn px(self, logical: u32) -> u32 { logical.saturating_mul(self.scale) }
+        pub const fn bar(self) -> u32 { self.px(BAR) }
+        pub const fn title(self) -> u32 { self.px(TITLE) }
+        pub const fn workarea(self, width: u32, height: u32) -> Rect {
+            let y=if self.bar()<height {self.bar()} else {height};
+            Rect { x:0, y, w:width, h:height-y }
+        }
+        /// Content and pointer mapping share the same bounded inset. Tiny
+        /// frames have an empty body rather than wrapped/overlapping content.
+        pub const fn body(self, width: u32, height: u32) -> Rect {
+            let side=self.px(RESIZE);
+            let x=if side<width {side} else {width};
+            let top=self.title().saturating_add(side);
+            let y=if top<height {top} else {height};
+            Rect { x, y, w:width.saturating_sub(side.saturating_mul(2)),
+                h:height.saturating_sub(top.saturating_add(side)) }
+        }
+        /// Close/minimize/zoom have equal disjoint targets. Callers must
+        /// intersect with the actual frame before accepting a hit.
+        pub const fn control(self, index: u32) -> Option<Rect> {
+            if index>=3 {return None;}
+            Some(Rect { x:self.px(1+index*TARGET), y:self.px(1),
+                w:self.px(TARGET), h:self.px(TARGET) })
+        }
     }
 }
 
