@@ -110,6 +110,7 @@ pub mod graphics;
 pub mod devmgr;
 pub mod iommu;
 pub mod iommu_selftest;
+pub mod vmd;
 #[cfg(target_arch = "x86_64")]
 pub mod hw;
 #[cfg(target_arch = "x86_64")]

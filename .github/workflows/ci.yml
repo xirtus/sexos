@@ -55,10 +55,14 @@ jobs:
       run: bash scripts/iommu_host_gate.sh
     - name: sexdrive DMA lifetime and zero-copy reads on the host
       run: bash scripts/sexdrive_dma_host_gate.sh
+    - name: Intel RAID (IMSM metadata, VMD bus) on the host
+      run: bash scripts/raid_host_gate.sh
     - name: Hardware census table (names, owners, VMD warning) on the host
       run: bash scripts/hwdb_host_gate.sh
     - name: Fetch crates for offline host gates
       run: cargo fetch --locked
+    - name: Intel Wi-Fi driver core (crypto vectors, handshakes, firmware files, power-up)
+      run: bash scripts/wifi_host_gate.sh
     - name: Host kernel-model regressions
       run: |
         python3 scripts/check_architectural_truth.py --run-host --evidence-dir "$RUNNER_TEMP/sexos-truth"
@@ -82,6 +86,8 @@ jobs:
       run: PAGING_LOG="$RUNNER_TEMP/sexos-runtime/serial.log" bash scripts/paging_recovery_runtime_gate.sh
     - name: USB input paths
       run: GATE_DIR="$RUNNER_TEMP/sexos-usb" SKIP_BUILD=1 bash scripts/usb_path_gate.sh
+    - name: Intel RAID 0 on two NVMe drives, read only
+      run: sudo apt-get install -y gdisk && python3 scripts/raid_gate.py --out "$RUNNER_TEMP/sexos-raid"
     - name: Power off and restart through ACPI
       run: |
         bash scripts/power_host_gate.sh
