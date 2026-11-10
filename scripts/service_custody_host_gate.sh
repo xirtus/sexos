@@ -204,6 +204,8 @@ PYKEYS
 rustc --edition=2021 --test tests/desktop_keys.rs -o "$TEST_DIR/desktop-keys"
 rustc --edition=2021 -A dead_code --test tests/wm_layouts.rs -o "$TEST_DIR/wm-layouts"
 "$TEST_DIR/wm-layouts"
+rustc --edition=2021 -A dead_code --test tests/launcher_search.rs -o "$TEST_DIR/launcher-search"
+"$TEST_DIR/launcher-search"
 "$TEST_DIR/desktop-keys"
 python3 - "$TEST_DIR/cursor.rs" "$TEST_DIR/cursor_status.rs" <<'PYCURSOR'
 from pathlib import Path
