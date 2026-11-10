@@ -3323,6 +3323,17 @@ Workstream D of the parity report. Handoff and bare-metal checklist: `docs/hando
   sexdrive DMA host gate, master runtime gate GREEN.
 - **Limits.** One NVMe controller; no VMD driver, MSI-X or IOMMU yet. On a laptop the
   census is read from the framebuffer boot log (PR #78).
+
+## Driver manifests, many devices per service, MSI-X interrupts (2026-11-09)
+
+Stages D2 and D3 of `DRIVERS_AND_X17_R1_PLAN_2026_11_09.md`. Handoff: `docs/handoff/DRIVER_MANIFESTS_AND_MSIX_2026_11_09.md`.
+- **Leases by manifest.** Each driver service's match table (class, vendor, device, lease kind, first slot, vector count) is data in `crates/sex-hwdb/src/manifest.rs`; `devmgr` only builds leases of each kind. New controllers are a data change, not a kernel edit.
+- **Many devices per service.** First device of a kind keeps its old slot (NVMe 16, xHCI 8, NIC 19, sound 20, AHCI 21); more land at slots 160..191. Two NVMe drives now lease side by side.
+- **MSI/MSI-X.** BOOT programs MSI-X (or MSI) vectors 0x50..0x8F, masked, INTx off. An interrupt sets a pending bit for the owning service and wakes it (no ring messages, no overflow). sexdrive's NVMe completions are interrupt-driven: `[sexdrive.nvme.irq] mode=msix polling=0`.
+- **ABI.** Syscall 86 `SYS_DEVICE` (list own leases, unmask/mask own vector, take pending bits); `sex_pdx::device`; syscall 70 also returns on a pending interrupt bit. `abi_version_hash` recomputed.
+- **Gates.** `hwdb_host_gate.sh` with manifest tests; filesystem gate on MSI-X NVMe, also with a second NVMe; sound, network, USB and master runtime gates.
+- **Limits.** Only NVMe uses interrupts so far; vectors go to the boot core; no interrupt remapping until the IOMMU; second-device drivers are follow-ups.
+
 ## Design guardrails: SexOS stays a microkernel SASOS, not a slow Linux (2026-11-09)
 
 - **What changed.** An audit of master and PRs #68 to #84 against the sex-manual

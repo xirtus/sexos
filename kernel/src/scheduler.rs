@@ -821,7 +821,10 @@ pub unsafe fn wait_for_message_ticks(regs_ptr:*const crate::interrupts::SyscallR
     else{if !SELF_WAIT_TASKS.contains(task)||ticks==0||ticks>self_wait::MAX_TICKS{return false;}}
     let pd=core.current_pd_ref();
     if pd.main_task.load(Ordering::Acquire)!=task{return false;}
-    if (*pd.message_ring).len()!=0||!pd.incoming_replies.lock().is_empty(){return true;}
+    // Device interrupt bits end only this timed wait, which a driver uses while it has
+    // a command outstanding; the untimed inbox wait (53) ignores them, so a bit nobody
+    // takes can never turn an idle service into a spin.
+    if (*pd.message_ring).len()!=0||!pd.incoming_replies.lock().is_empty()||crate::device_irq::pending(pd.id){return true;}
     let now=crate::interrupts::TICKS.load(Ordering::Relaxed);
     // A waker on another core may have cancelled just before this task armed its last
     // wait, then woken it. That deadline can only be stale: its owner is running here.
