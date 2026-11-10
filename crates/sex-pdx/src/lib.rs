@@ -1141,6 +1141,47 @@ pub fn pdx_call(slot: u64, opcode: u64, arg0: u64, arg1: u64, arg2: u64) -> (u64
 }
 
 #[inline]
+/// `pdx_call`, then wait for this domain's own inbox or reply slot (`sys_wait_self`),
+/// in one kernel entry. The callee runs next if it lives on this core. Returns as
+/// `pdx_call`; the reply, as always, comes from `pdx_listen_raw(0)`.
+pub fn pdx_call_wait(slot: u64, opcode: u64, arg0: u64, arg1: u64, arg2: u64) -> (u64, u64) {
+    let status: u64;
+    let value: u64;
+    unsafe {
+        core::arch::asm!(
+            "syscall",
+            inlateout("rax") 100u64 => status,
+            in("rdi") slot,
+            inlateout("rsi") opcode => value,
+            in("rdx") arg0,
+            in("r10") arg1,
+            in("r8") arg2,
+            out("rcx") _,
+            out("r11") _,
+            options(nostack),
+        );
+    }
+    (status, value)
+}
+
+/// `pdx_reply`, then, if it was delivered, `sys_wait_self`, in one kernel entry. The
+/// caller runs next if it lives on this core. Returns as `pdx_reply`.
+pub fn pdx_reply_wait(target_pd: u32, value: u64) -> u64 {
+    let ret: u64;
+    unsafe {
+        core::arch::asm!(
+            "syscall",
+            inlateout("rax") 101u64 => ret,
+            in("rdi") target_pd as u64,
+            inlateout("rsi") value => _,
+            out("rcx") _,
+            out("r11") _,
+            options(nostack),
+        );
+    }
+    ret
+}
+
 pub fn pdx_call_checked(slot: u64, opcode: u64, arg0: u64, arg1: u64, arg2: u64) -> Result<u64, u64> {
     let (status, value) = pdx_call(slot, opcode, arg0, arg1, arg2);
     if status == 0 {
@@ -1169,6 +1210,7 @@ pub mod document_buffer;
 pub mod document_snapshot;
 pub mod pci_command;
 pub mod virtio;
+pub mod device;
 pub mod network_config;
 
 pub mod desktop_style;

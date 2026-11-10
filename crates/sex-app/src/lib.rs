@@ -239,10 +239,11 @@ pub mod files {
         let r = w::Request { seq, kind, path_len: path_len as u16, offset, length };
         let a = r.args();
         loop {
-            match sex_pdx::pdx_call_checked(sex_pdx::SLOT_STORAGE, w::OP, a[0], a[1], a[2]) {
-                Ok(_) => break,
-                Err(sex_pdx::ERR_SERVICE_NOT_READY) => sex_pdx::sys_yield(),
-                Err(_) => return Err(w::UNAVAILABLE),
+            // Waits for the answer in the same kernel entry; Files runs next.
+            match sex_pdx::pdx_call_wait(sex_pdx::SLOT_STORAGE, w::OP, a[0], a[1], a[2]) {
+                (0, _) => break,
+                (sex_pdx::ERR_SERVICE_NOT_READY, _) => sex_pdx::sys_yield(),
+                _ => return Err(w::UNAVAILABLE),
             }
         }
         // The main task sleeps until its inbox has something (or briefly, to see the
@@ -301,6 +302,10 @@ pub mod files {
     /// The file's size, or why there is none.
     pub fn size(window: &mut Window, path: &[u8]) -> Result<u64, Error> {
         exchange(Some(&mut *window), w::STAT, path, 0, 0, |_| {}, |_, d| direct::Stat::decode(d).size)
+    }
+    /// One call to Files and its answer, carrying nothing: what a round trip costs.
+    pub fn ping(window: &mut Window) -> Result<(), Error> {
+        request(window, w::PING, b"", 0, 0).map(|_| ())
     }
     /// Makes everything written so far durable.
     pub fn sync(window: &mut Window) -> Result<(), Error> {
