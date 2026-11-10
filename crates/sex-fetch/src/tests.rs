@@ -16,6 +16,11 @@ fn urls() {
     assert_eq!((u.port, u.target.as_str(), u.authority().as_str()), (8080, "/?q=a%20b", "10.0.2.2:8080"));
     assert_eq!(Url::parse("http://user:pw@host.example/").unwrap().host, "host.example");
     for bad in ["ftp://x", "https://", "https://a b/", "http://h:99999/", "http://h:0/", "http://h\r\nX: y/"] { assert!(Url::parse(bad).is_err(), "{}", bad); }
+    // IPv6 literals keep their brackets, so the Host header and origin read right.
+    let u = Url::parse("http://[FD00:5e::1]:8080/x").unwrap();
+    assert_eq!((u.host.as_str(), u.port, u.authority().as_str()), ("[fd00:5e::1]", 8080, "[fd00:5e::1]:8080"));
+    assert_eq!(Url::parse("https://[::1]/").unwrap().port, 443);
+    for bad in ["http://[]/", "http://[fd00::1/", "http://[fd00::g]/", "http://fd00::1/"] { assert!(Url::parse(bad).is_err(), "{}", bad); }
 }
 
 #[test]
