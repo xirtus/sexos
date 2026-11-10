@@ -14,6 +14,12 @@ pub fn init(sexdrive_pd_id: u32, sexdisplay_pd_id: u32, sexusb_pd_id: u32, sexne
     crate::vmd::expand(&mut devices);
     serial_println!("DevMgr: Enumerated {} PCI devices.", devices.len());
 
+    let mut census = sex_hwdb::Census::default();
+    for dev in &devices { census_line(&mut census, dev); }
+    serial_println!("[hw.census] devices={} working={} in_progress={} planned={} unsupported={} warnings={}",
+        census.devices, census.working, census.in_progress, census.planned, census.unsupported, census.warnings);
+
+    let behind_vmd = devices.iter().any(|d| sex_hwdb::is_vmd(sex_hwdb::Id { vendor: d.vendor_id, device: d.device_id, class: d.class_id, subclass: d.subclass_id, prog_if: d.prog_if }));
     let mut nvme_found = false;
     let mut nvme_count = 0u32;
     for dev in devices {
@@ -139,9 +145,24 @@ pub fn init(sexdrive_pd_id: u32, sexdisplay_pd_id: u32, sexusb_pd_id: u32, sexne
     }
 
     if !nvme_found {
-        serial_println!("[kernel.pci.nvme.absent]");
+        serial_println!("[kernel.pci.nvme.absent] behind_vmd={}", behind_vmd as u8);
     }
     serial_println!("DevMgr: Hardware discovery complete.");
+}
+
+/// One line per device naming it, the service that owns its kind, and how far that
+/// support goes, so a first boot on new hardware says what works. Description only:
+/// leases are decided below, never by the table.
+fn census_line(census: &mut sex_hwdb::Census, dev: &crate::hal::pci::PciDevice) {
+    let id = sex_hwdb::Id { vendor: dev.vendor_id, device: dev.device_id, class: dev.class_id, subclass: dev.subclass_id, prog_if: dev.prog_if };
+    let d = census.add(id);
+    let model = if d.model.is_empty() { sex_hwdb::class_name(id.class, id.subclass, id.prog_if) } else { d.model };
+    serial_println!("[hw.device] {:02x}:{:02x}.{} {:04x}:{:04x} class={:02x}{:02x}{:02x} {} {} service={} support={}",
+        dev.bus, dev.dev, dev.func, dev.vendor_id, dev.device_id, dev.class_id, dev.subclass_id, dev.prog_if,
+        sex_hwdb::vendor_name(id.vendor), model, d.service.name(), d.support.name());
+    if let Some(text) = sex_hwdb::advice(id) {
+        serial_println!("[hw.warning] {:02x}:{:02x}.{} {}", dev.bus, dev.dev, dev.func, text);
+    }
 }
 
 /// Virtio devices go to the service that drives that kind of device: sound to

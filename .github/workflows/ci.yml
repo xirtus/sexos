@@ -53,6 +53,8 @@ jobs:
       run: bash scripts/volumes_host_gate.sh
     - name: Intel RAID (IMSM metadata, VMD bus) on the host
       run: bash scripts/raid_host_gate.sh
+    - name: Hardware census table (names, owners, VMD warning) on the host
+      run: bash scripts/hwdb_host_gate.sh
     - name: Fetch crates for offline host gates
       run: cargo fetch --locked
     - name: Host kernel-model regressions

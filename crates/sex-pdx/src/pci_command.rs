@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! Immutable BOOT device-command authority. Request integers select bits, never
 //! a BDF, register offset, mapping, DMA address or capability to create.
 pub const SYS_COMMAND: u64 = 68;

@@ -16,6 +16,7 @@ use sex_pdx::{
 mod dma_transfer;
 mod completion_wait;
 mod raid;
+mod controller_ready;
 mod ahci;
 use dma_transfer::DmaTransfer;
 use sex_pdx::dma_pool::{DmaLease, DmaRegionPool};
@@ -90,7 +91,6 @@ use sex_pdx::SLOT_NVME_HOST;
 static mut NVME0_SERIAL: [u8; 20] = [0; 20];
 const PAGE_SIZE: u64 = 4096;
 const NVME_SQ0TDBL: u64 = 0x1000;
-const NVME_CQ0HDBL: u64 = 0x1004;
 const NVME_LBA_BYTES: u64 = 512;
 // LBA constants below are re-exported from sex_pdx's canonical disk-layout
 // module (the single source of truth every fixed on-disk region in the
@@ -1957,6 +1957,8 @@ fn nvme_probe_bar() {
         serial_println!("[sexdrive.nvme.bar.resolve.err] reason=doorbell_out_of_range required={} granted={}", required_bar_bytes, bar_bytes);
         return;
     }
+    // Admin CQ head doorbell sits one stride after SQ0's (CAP.DSTRD), not always at 0x1004.
+    let cq0hdbl = 0x1000u64 + (1u64 << (2 + cap_dstrd));
     let vs_major = ((nvme_vs >> 16) & 0xFFFF) as u16;
     let vs_minor = ((nvme_vs >> 8) & 0xFF) as u8;
     let csts_rdy = (nvme_csts & 0x1) != 0;
@@ -2137,35 +2139,23 @@ fn nvme_probe_bar() {
         core::ptr::write_volatile((map_va + 0x0014) as *mut u32, cc_disabled);
     }
 
-    let disable_poll_limit = if cap_to == 0 { 1_000_000u32 } else { (cap_to * 20_000).max(200_000) };
-    let mut disable_polls = 0u32;
-    let mut rdy0 = false;
-    while disable_polls < disable_poll_limit {
-        let csts_now = unsafe { core::ptr::read_volatile((map_va + 0x001C) as *const u32) };
-        if (csts_now & 0x1) == 0 {
-            rdy0 = true;
-            serial_println!(
-                "[sexdrive.nvme.reprovision.rdy0] polls={} csts={:#x} cc={:#x}",
-                disable_polls as u64,
-                csts_now as u64,
-                cc_disabled as u64
-            );
-            break;
-        }
-        disable_polls += 1;
-    }
-    if !rdy0 {
-        let csts_now = unsafe { core::ptr::read_volatile((map_va + 0x001C) as *const u32) };
+    // Measured in ticks against CAP.TO: a real SSD can need seconds to stop.
+    let disable = controller_ready::wait(false, cap_to,
+        || unsafe { core::ptr::read_volatile((map_va + 0x001C) as *const u32) },
+        sex_pdx::get_ticks, || sex_pdx::sys_yield());
+    let disable_polls = disable.polls;
+    if disable.outcome != controller_ready::Outcome::Ready {
         serial_println!(
-            "[sexdrive.nvme.reprovision.err] reason=disable_rdy0_timeout polls={} limit={} csts={:#x} cc={:#x}",
-            disable_polls as u64,
-            disable_poll_limit as u64,
-            csts_now as u64,
-            cc_disabled as u64
+            "[sexdrive.nvme.reprovision.err] reason=disable_rdy0_timeout outcome={:?} polls={} elapsed_ticks={} limit_ticks={} csts={:#x} cc={:#x}",
+            disable.outcome, disable.polls as u64, disable.elapsed, controller_ready::deadline_ticks(cap_to),
+            disable.csts as u64, cc_disabled as u64
         );
         return;
     }
-
+    serial_println!(
+        "[sexdrive.nvme.reprovision.rdy0] polls={} elapsed_ticks={} csts={:#x} cc={:#x}",
+        disable.polls as u64, disable.elapsed, disable.csts as u64, cc_disabled as u64
+    );
     let asq_phys = reserve_dma_phys(PAGE_SIZE);
     let acq_phys = reserve_dma_phys(PAGE_SIZE);
     if asq_phys == 0 || asq_phys == u64::MAX || acq_phys == 0 || acq_phys == u64::MAX {
@@ -2228,35 +2218,22 @@ fn nvme_probe_bar() {
         core::ptr::write_volatile((map_va + 0x0014) as *mut u32, cc_enabled);
     }
 
-    let enable_poll_limit = if cap_to == 0 { 1_000_000u32 } else { (cap_to * 20_000).max(200_000) };
-    let mut enable_polls = 0u32;
-    let mut rdy1 = false;
-    while enable_polls < enable_poll_limit {
-        let csts_now = unsafe { core::ptr::read_volatile((map_va + 0x001C) as *const u32) };
-        if (csts_now & 0x1) != 0 {
-            rdy1 = true;
-            serial_println!(
-                "[sexdrive.nvme.reprovision.rdy1] polls={} csts={:#x} cc={:#x}",
-                enable_polls as u64,
-                csts_now as u64,
-                cc_enabled as u64
-            );
-            break;
-        }
-        enable_polls += 1;
-    }
-    if !rdy1 {
-        let csts_now = unsafe { core::ptr::read_volatile((map_va + 0x001C) as *const u32) };
+    let enable = controller_ready::wait(true, cap_to,
+        || unsafe { core::ptr::read_volatile((map_va + 0x001C) as *const u32) },
+        sex_pdx::get_ticks, || sex_pdx::sys_yield());
+    let enable_polls = enable.polls;
+    if enable.outcome != controller_ready::Outcome::Ready {
         serial_println!(
-            "[sexdrive.nvme.reprovision.err] reason=enable_rdy1_timeout polls={} limit={} csts={:#x} cc={:#x}",
-            enable_polls as u64,
-            enable_poll_limit as u64,
-            csts_now as u64,
-            cc_enabled as u64
+            "[sexdrive.nvme.reprovision.err] reason=enable_rdy1_timeout outcome={:?} polls={} elapsed_ticks={} limit_ticks={} csts={:#x} cc={:#x}",
+            enable.outcome, enable.polls as u64, enable.elapsed, controller_ready::deadline_ticks(cap_to),
+            enable.csts as u64, cc_enabled as u64
         );
         return;
     }
-
+    serial_println!(
+        "[sexdrive.nvme.reprovision.rdy1] polls={} elapsed_ticks={} csts={:#x} cc={:#x}",
+        enable.polls as u64, enable.elapsed, enable.csts as u64, cc_enabled as u64
+    );
     let rb_cc = unsafe { core::ptr::read_volatile((map_va + 0x0014) as *const u32) };
     let rb_csts = unsafe { core::ptr::read_volatile((map_va + 0x001C) as *const u32) };
     let rb_aqa = unsafe { core::ptr::read_volatile((map_va + 0x0024) as *const u32) };
@@ -2323,7 +2300,7 @@ fn nvme_probe_bar() {
         cc_iocqes as u64,
         cap_dstrd as u64,
         NVME_SQ0TDBL,
-        NVME_CQ0HDBL
+        cq0hdbl
     );
 
     if cc_iosqes != 6 || cc_iocqes != 4 || cc_mps != 0 {
@@ -2554,7 +2531,7 @@ fn nvme_probe_bar() {
         cq_phase ^= 1;
     }
     unsafe {
-        core::ptr::write_volatile((map_va + NVME_CQ0HDBL) as *mut u32, cq_head);
+        core::ptr::write_volatile((map_va + cq0hdbl) as *mut u32, cq_head);
     }
 
     if sc != 0 || sct != 0 {
@@ -2705,7 +2682,7 @@ fn nvme_probe_bar() {
     let cq_sct = (cq_sf >> 8) & 0x7;
     admin_cq_head = (admin_cq_head + 1) % q_entries;
     if admin_cq_head == 0 { admin_cq_phase ^= 1; }
-    unsafe { core::ptr::write_volatile((map_va + NVME_CQ0HDBL) as *mut u32, admin_cq_head); }
+    unsafe { core::ptr::write_volatile((map_va + cq0hdbl) as *mut u32, admin_cq_head); }
     if cq_sc != 0 || cq_sct != 0 {
         serial_println!(
             "[sexdrive.nvme.ioq.err] reason=create_cq_status_fail cid={} sc={} sct={} dw3={:#x}",
@@ -2787,7 +2764,7 @@ fn nvme_probe_bar() {
     let sq_sct = (sq_sf >> 8) & 0x7;
     admin_cq_head = (admin_cq_head + 1) % q_entries;
     if admin_cq_head == 0 { admin_cq_phase ^= 1; }
-    unsafe { core::ptr::write_volatile((map_va + NVME_CQ0HDBL) as *mut u32, admin_cq_head); }
+    unsafe { core::ptr::write_volatile((map_va + cq0hdbl) as *mut u32, admin_cq_head); }
     if sq_sc != 0 || sq_sct != 0 {
         serial_println!(
             "[sexdrive.nvme.ioq.err] reason=create_sq_status_fail cid={} sc={} sct={} dw3={:#x}",
@@ -2831,13 +2808,18 @@ fn nvme_probe_bar() {
             if dw3 & 0xFFFF == cid as u32 && (dw3 >> 16) & 1 == admin_cq_phase {
                 admin_cq_head = (admin_cq_head + 1) % q_entries;
                 if admin_cq_head == 0 { admin_cq_phase ^= 1; }
-                unsafe { core::ptr::write_volatile((map_va + NVME_CQ0HDBL) as *mut u32, admin_cq_head); }
+                unsafe { core::ptr::write_volatile((map_va + cq0hdbl) as *mut u32, admin_cq_head); }
                 if (dw3 >> 17) & 0x7FFF == 0 {
                     let (size, format) = unsafe { (core::ptr::read_volatile(ns_va as *const u64),
                         core::ptr::read_volatile((ns_va + 26) as *const u8) & 0xF) };
                     let shift = unsafe { core::ptr::read_volatile((ns_va + 128 + 4 * format as u64 + 2) as *const u8) };
                     if shift == 9 { device_size = size; }
                     sex_pdx::serial_record!("[sexdrive.nvme.namespace] sectors={} lba_shift={}", size, shift);
+                    if shift != 9 {
+                        // 4 KiB-sector namespaces need BLOCK_SECTOR_SIZE to follow the disk;
+                        // until then only the fixed proof area is used, never the rest.
+                        sex_pdx::serial_record!("[sexdrive.nvme.namespace.unsupported] lba_bytes={} reason=only_512_byte_sectors fix=nvme_format_lbaf_512", 1u64 << shift.min(63));
+                    }
                 }
                 break;
             }
