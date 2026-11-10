@@ -5,7 +5,9 @@
 //! and `volume unmute` change it. `volume list` shows each program's stream; `volume ROW
 //! 30`, `volume ROW mute` and `volume ROW unmute` set one program's volume. `volume ROW
 //! mic on` lets that program hear the microphone until it ends; `volume ROW mic off`
-//! stops it at once.
+//! stops it at once. `volume outputs` lists the sound card's outputs (speaker,
+//! headphones, line out) and which play; `volume output N` plays to output N alone,
+//! `volume output all` to every one.
 //! Bell answers each request with a reply message, which `receive` turns into a line.
 use sex_pdx::sound_mixer as mixer;
 
@@ -14,7 +16,7 @@ pub const BELL_PD: u32 = 10;
 const ROWS: u64 = 16;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Waiting { Nothing, Master, Row(u64), List { next: u64, shown: u8 } }
+enum Waiting { Nothing, Master, Row(u64), List { next: u64, shown: u8 }, Outputs }
 
 pub struct Volume { waiting: Waiting }
 pub static mut VOLUME: Volume = Volume { waiting: Waiting::Nothing };
@@ -31,6 +33,12 @@ fn request(args: &[u8]) -> Result<(u64, u64, u64, Waiting), &'static [u8]> {
         (Some(b"mute"), None) => (mixer::MUTE_MASTER, 1, 0, Waiting::Master),
         (Some(b"unmute"), None) => (mixer::MUTE_MASTER, 0, 0, Waiting::Master),
         (Some(b"list"), None) => (mixer::STREAM, 0, 0, Waiting::List { next: 0, shown: 0 }),
+        (Some(b"outputs"), None) => (mixer::OUTPUTS, 0, 0, Waiting::Outputs),
+        (Some(b"output"), Some(b"all")) => (mixer::SET_OUTPUTS, 0xFF, 0, Waiting::Outputs),
+        (Some(b"output"), Some(w)) => {
+            let k = number(w).filter(|n| (0..8).contains(n)).ok_or(USAGE)?;
+            (mixer::SET_OUTPUTS, 1 << k, 0, Waiting::Outputs)
+        }
         (Some(w), None) if w[0] == b'+' || w[0] == b'-' => {
             let step = number(w).filter(|n| (-100..=100).contains(n)).ok_or(USAGE)?;
             (mixer::STEP_MASTER, step as u64, 0, Waiting::Master)
@@ -56,7 +64,7 @@ fn request(args: &[u8]) -> Result<(u64, u64, u64, Waiting), &'static [u8]> {
     })
 }
 
-const USAGE: &[u8] = b"Use: volume [0-100 | +N | -N | mute | unmute | list | ROW 0-100 | ROW mute | ROW unmute | ROW mic on|off]";
+const USAGE: &[u8] = b"Use: volume [0-100 | +N | -N | mute | unmute | list | ROW 0-100 | ROW mute | ROW unmute | ROW mic on|off | outputs | output N|all]";
 
 fn ask(action: u64, a: u64, b: u64) -> bool {
     let (status, _) = sex_pdx::pdx_call(sex_pdx::SLOT_BELL, mixer::OP_MIXER, action, a, b);
@@ -101,6 +109,26 @@ impl Volume {
                 put(&mut line, &mut at, b"%");
                 if mixer::state_muted(value) { put(&mut line, &mut at, b", muted"); }
                 if !mixer::state_card(value) { put(&mut line, &mut at, b" (no sound card)"); }
+            }
+            Waiting::Outputs => {
+                let (on, count) = (mixer::outputs_on(value), mixer::outputs_count(value) as usize);
+                put(&mut line, &mut at, b"Sound card outputs: ");
+                percent(&mut line, &mut at, count as u64);
+                if count == 0 { put(&mut line, &mut at, b" (no sound card)"); }
+                sb.push(&line[..at]);
+                for k in 0..count {
+                    let mut line = [0u8; 64];
+                    let mut at = 0;
+                    put(&mut line, &mut at, b"  ");
+                    percent(&mut line, &mut at, k as u64);
+                    put(&mut line, &mut at, match mixer::output_kind(value, k) {
+                        mixer::SPEAKER => b": speaker" as &[u8], mixer::HEADPHONES => b": headphones",
+                        mixer::LINE_OUT => b": line out", mixer::VIRTUAL => b": virtual card", _ => b": other jack" });
+                    put(&mut line, &mut at, if on & 1 << k != 0 { b", playing" } else { b", off" });
+                    sb.push(&line[..at]);
+                }
+                sex_pdx::serial_record!("[spindle.volume.outputs] reply={:#x}", value);
+                return true;
             }
             Waiting::Row(row) | Waiting::List { next: row, .. } => {
                 let st = mixer::Stream::of(value);

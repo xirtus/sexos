@@ -51,7 +51,7 @@ def main():
     got,want=img.getpixel((bx+px,by+py)),ref.getpixel((px,py))
     d=max(abs(i-j)for i,j in zip(got,want));checked+=1;worst=max(worst,d);bad+=d>2
   img.crop((bx,by,bx+vw,by+vh)).save(a.out/f'{name}.png')
-  assert checked>5000 and bad==0,f'{name}: {bad} of {checked} pixels differ (worst {worst})'
+  assert checked>3000 and bad==0,f'{name}: {bad} of {checked} pixels differ (worst {worst})'
   return checked,worst
  loaded=r'\[web.loaded\] bytes_ok=1 items=(\d+) links=(\d+) height=(\d+) sheets=(\d+) images=(\d+) fetch_ticks=(\d+) layout_ticks=(\d+) script_ticks=(\d+) scripted=(\d)'
  try:

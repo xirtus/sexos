@@ -1,0 +1,67 @@
+<!doctype html>
+<html><head><title>Loading</title>
+<style>
+body { margin: 16px; }
+h1 { font-size: 20px; margin: 0 0 8px; }
+p { margin: 4px 0; }
+x-card { display: block; margin: 8px 0; }
+.ok { color: #188038; }
+.bad { color: #b3261e; }
+</style></head>
+<body>
+<h1 id="h">Waiting for the script</h1>
+<x-card id="card"><span id="light">Light text in the slot</span></x-card>
+<p id="count">No changes seen</p>
+<p id="num"></p>
+<p id="date"></p>
+<p id="parsed"></p>
+<p id="msg">No message yet</p>
+<ul id="list"></ul>
+<script>
+// Web platform pieces players and frameworks use: custom elements with a shadow root,
+// MutationObserver, MessageChannel, Intl, DOMParser, DOMException and Range.
+const fails = [];
+const want = (name, ok) => { if (!ok) fails.push(name); };
+class XCard extends HTMLElement {
+  static get observedAttributes() { return ['tone']; }
+  constructor() { super(); this.changes = 0; }
+  connectedCallback() {
+    if (this.shadowRoot) return;
+    const root = this.attachShadow({ mode: 'open' });
+    root.innerHTML = '<div id="box" style="background: #1a73e8; color: white; padding: 6px">Shadow box</div><slot></slot>';
+  }
+  attributeChangedCallback(n, o, v) { this.changes++; }
+}
+customElements.define('x-card', XCard);
+const card = document.getElementById('card');
+card.setAttribute('tone', 'blue');
+want('shadow', card.shadowRoot && card.shadowRoot.getElementById('box').textContent === 'Shadow box' && card.children.length === 1);
+want('attr', card.changes === 1);
+want('slot', card.shadowRoot.querySelector('slot').assignedElements()[0] === document.getElementById('light'));
+const list = document.getElementById('list');
+let seen = 0;
+new MutationObserver(rs => {
+  for (const r of rs) seen += r.addedNodes.length;
+  document.getElementById('count').textContent = 'Mutation records saw ' + seen + ' new items';
+}).observe(list, { childList: true });
+for (const w of ['one', 'two', 'three']) { const li = document.createElement('li'); li.textContent = w; list.appendChild(li); }
+document.getElementById('num').textContent = 'Views: ' + new Intl.NumberFormat('en-US').format(1234567) + ' (' + new Intl.NumberFormat('en', { notation: 'compact' }).format(1234567) + ')';
+document.getElementById('date').textContent = 'Date: ' + new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeZone: 'UTC' }).format(Date.UTC(2026, 10, 9)) + ', zone ' + Intl.DateTimeFormat().resolvedOptions().timeZone;
+const doc = new DOMParser().parseFromString('<p>Parsed <b>markup</b></p>', 'text/html');
+document.getElementById('parsed').textContent = doc.body.textContent;
+want('exception', new DOMException('x', 'NotFoundError').code === 8);
+const r = document.createRange(); r.selectNodeContents(list);
+want('range', r.toString() === 'onetwothree');
+const ch = new MessageChannel();
+ch.port1.onmessage = e => {
+  document.getElementById('msg').textContent = 'Message: ' + e.data.text;
+  want('mutations', seen === 3);
+  const h = document.getElementById('h');
+  h.textContent = fails.length ? 'Failed: ' + fails.join(', ') : 'Platform pieces work';
+  h.className = fails.length ? 'bad' : 'ok';
+  document.title = 'API test';
+  console.log('apis', fails.length ? 'fail ' + fails.join(',') : 'ok');
+};
+ch.port2.postMessage({ text: 'through a MessageChannel' });
+</script>
+</body></html>
