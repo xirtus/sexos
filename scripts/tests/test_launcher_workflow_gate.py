@@ -42,7 +42,7 @@ class LauncherWorkflow(unittest.TestCase):
  @classmethod
  def setUpClass(cls):cls.c=g.source_contract(ROOT)
  def test_actual_source_has_complete_cohort_bindings_and_hit_geometry(self):
-  self.assertEqual(self.c['launcher_count'],12);self.assertEqual(self.c['launcher_app_count'],8);self.assertEqual(self.c['exhausted_title'],'Open Spindle')
+  self.assertEqual(self.c['launcher_count'],14);self.assertEqual(self.c['launcher_app_count'],8);self.assertEqual(self.c['exhausted_title'],'Open Spindle')
   self.assertEqual(g.frame_specs(self.c)[-1]['title'],self.c['exhausted_title'])
   self.assertGreater(len(self.c['source_sha256']),20);self.assertEqual(self.c['grid'],[1008,632,264,160]);self.assertEqual(self.c['canvas'],0x0c1420)
   self.assertEqual(g.minimize_point(12,dict(x=200,y=100),self.c),(225,114))

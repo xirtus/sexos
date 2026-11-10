@@ -18,6 +18,7 @@ struct Domain{main_task:AtomicPtr<scheduler::Task>,trampoline_task:AtomicPtr<sch
 mod app_resources{pub fn poll_exit_notifications(){}}
 mod service_restart{pub fn poll(){}}
 mod iommu{pub fn poll(){}}
+mod hal{pub mod acpi{pub fn poll(){}}}
 mod scheduler{
  pub use super::ownership as task_ownership;
  pub struct Task{pub id:u32,pub state:super::TaskOwnership}
