@@ -229,6 +229,8 @@ unsafe fn shell_catalog_init() {
             Err(_) => panic!("shell lifecycle catalog unavailable"),
         }
     }
+    // A Shell started again after a crash finds the routes already open.
+    if sex_pdx::crash_log::restarts() > 0 { return; }
     assert_eq!(sex_pdx::app_lifecycle::activation(sex_pdx::app_lifecycle::ACTIVATION_SLOT,true),Err(sex_pdx::app_lifecycle::RETRY));
     let blocked=raw_pdx_call(sex_pdx::app_lifecycle::SUCCESSOR_ROUTE_SLOT,OP_QUIL_PING,0,0,0).0;
     assert_eq!(blocked,sex_pdx::ERR_SERVICE_NOT_READY);
@@ -5619,6 +5621,79 @@ unsafe fn desktop_state_poll() {
         linen_text_delivery::LatestPoll::Rejected(error)=>{LAST_DISPLAY_FOCUS_RESULT=Some((FOCUSED_SURFACE_ID,error));sex_pdx::serial_record!("[shell.desktop.focus.rejected] status={:#x}",error);},
         _=>{},
     }
+}
+
+/// Each window of the active scene: its geometry, terminals and documents lay out
+/// again, panes come back, and programs get a resize so they draw again.
+unsafe fn lay_out_windows_again() -> u32 {
+    let mut shown = 0u32;
+    for frame in FRAMES.iter().flatten().filter(|f| f.scene_id == ACTIVE_SCENE_IDX && f.flags & FRAME_FLAG_MINIMIZED == 0) {
+        for tab in frame.tabs.iter().flatten() {
+            let sid = tab.surface_id;
+            let Some((x, y, w, h)) = get_surface_bounds(sid).filter(|_| surface_is_alive(sid)) else { continue };
+            apply_window_geometry(sid, x, y, w, h);
+            native_child_geometry(sid, x, y, w, h);
+            program_resize_note(sid, w, h);
+            shown += 1;
+        }
+    }
+    shown
+}
+
+/// Apps this Shell took over after a restart (by custody index).
+static mut ADOPTED: [bool; sex_pdx::app_lifecycle::SLOTS.len()] = [false; sex_pdx::app_lifecycle::SLOTS.len()];
+
+/// A Shell started again finds the catalog's running apps (the kernel's catalog is
+/// the authority): each gets a frame and a visible window as registration gives it.
+unsafe fn adopt_running_apps() {
+    let mut adopted = 0u32;
+    for index in 0..APP_CUSTODY.len() {
+        let Some(entry) = APP_CUSTODY[index].as_ref() else { continue };
+        if entry.dead || entry.close_pending { continue; }
+        if sex_pdx::app_lifecycle::info(entry.slot) != Err(sex_pdx::app_lifecycle::LIVE) { continue; }
+        // A row the person never opened is running but has no window: leave it be.
+        let Some(row) = app_catalog::by_target(entry.target) else { continue };
+        let activation = row.activation_slot.map(|slot| sex_pdx::app_lifecycle::activation(slot, false).map_or(u64::MAX, |a| a.state));
+        if activation.is_some_and(|state| state != sex_pdx::app_lifecycle::ACTIVATION_ACTIVE) { continue; }
+        let frame_surface = entry.shell_surface().unwrap_or(entry.surface);
+        if lifecycle_state(frame_surface).is_some() { continue; }
+        let Some(slot_idx) = FRAMES.iter().position(|f| f.is_none()) else { break };
+        let mut tabs: [Option<ShellTab>; MAX_TABS_PER_FRAME as usize] = [None; MAX_TABS_PER_FRAME as usize];
+        tabs[0] = Some(ShellTab { surface_id: frame_surface, title_id: entry.surface, flags: 0 });
+        FRAMES[slot_idx] = Some(ShellFrame { frame_id: (slot_idx + 10) as u32, active_tab: 0, tab_count: 1, tabs,
+            scene_id: ACTIVE_SCENE_IDX, flags: FRAME_FLAG_TOP_BAR, normal_x: 200, normal_y: 100, normal_w: 600, normal_h: 400 });
+        if let Some(e) = APP_CUSTODY[index].as_mut() { e.bounds = Some((200, 100, 600, 400)); }
+        lifecycle_register(frame_surface, LifecycleState::Visible);
+        pdx_call(SLOT_DISPLAY, 0xEC, frame_surface, (100u64) << 32 | 200u64, (400u64) << 32 | 600u64);
+        ADOPTED[index] = true;
+        adopted += 1;
+        sex_pdx::serial_record!("[shell.app.adopted] target={} surface={} frame={}", APP_CUSTODY[index].as_ref().map_or(0, |e| e.target), frame_surface, slot_idx + 10);
+    }
+    tile_active_scene_frames();
+    let shown = lay_out_windows_again();
+    sex_pdx::serial_record!("[shell.restarted] restarts={} adopted={} windows={}", sex_pdx::crash_log::restarts(), adopted, shown);
+}
+
+/// Display was started again (it announces itself ready a second time). Its scene is
+/// empty: register as window manager again, put the cursor and the active scene's
+/// windows back, and send every view's content and the focus again.
+unsafe fn display_came_back() {
+    static mut COMEBACKS: u32 = 0;
+    COMEBACKS += 1;
+    let _ = raw_pdx_call(SLOT_DISPLAY, OP_REGISTER_WM, 0, 0, 0);
+    let (cx, cy) = (desktop_width() / 2, desktop_height() / 2);
+    let _ = raw_pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_CURSOR, (cy as u64) << 32 | cx as u64, (18u64 << 32) | 12u64);
+    send_scene_render_tokens();
+    // SilkBar draws the bar from what it is told: tell it the workspace and focus again.
+    pdx_call(SLOT_SILKBAR, OP_SILKBAR_WORKSPACE_ACTIVE, ACTIVE_SCENE_IDX as u64, 0, 0);
+    pdx_call(SLOT_SILKBAR, OP_SILKBAR_FOCUS_STATE, 1, selected_window_options_mask() as u64, 0);
+    sync_scene_visibility();
+    for view in SPINDLE_VIEWS.iter_mut() { view.refresh(); }
+    for view in DOCUMENT_VIEWS.iter_mut() { view.refresh(); }
+    let shown = lay_out_windows_again();
+    linen_paint_surface();
+    if FOCUSED_SURFACE_ID != 0 { pdx_call(SLOT_DISPLAY, 0xED, FOCUSED_SURFACE_ID, 0, 0); }
+    sex_pdx::serial_record!("[shell.display.back] times={} windows={} focus={}", COMEBACKS, shown, FOCUSED_SURFACE_ID);
 }
 
 unsafe fn spindle_view_poll(){
@@ -13242,6 +13317,12 @@ unsafe fn handle_app_surface_req(surface_id: u64, title_id: u64, arg2: u64, call
     if manifest.title_id == 0 {
         serial_println!("[shell.app_surface.reject] reason=zero_title_id sid={} caller={}", manifest.surface_id, caller_pd);
         return false;
+    }
+    // An app this Shell took over after a restart may register again: answer it.
+    if lifecycle_state(frame_surface).is_some() && APP_CUSTODY.iter().position(|e|e.as_ref().is_some_and(|e|e.target==caller_pd && e.surface==manifest.surface_id)).is_some_and(|i|ADOPTED[i]) {
+        if let Some(entry) = APP_CUSTODY.iter_mut().flatten().find(|e|e.target==caller_pd && e.surface==manifest.surface_id) { entry.registration_reply=true; }
+        shell_registration_reply_poll();
+        return true;
     }
     // Validate: not already registered in lifecycle
     if lifecycle_state(frame_surface).is_some() {
@@ -24415,6 +24496,17 @@ pub extern "C" fn _start() -> ! {
         .expect("shell display-ready inbox full");
     serial_println!("[display.ready.accepted] client=silk-shell caller=1 version=1");
     sex_rt::heap_init();
+    // Started again after a crash: notices to apps carry sequence numbers the apps
+    // check, so number them after every earlier run's.
+    let restarts = sex_pdx::crash_log::restarts() as u64;
+    if restarts > 0 {
+        unsafe {
+            for view in SPINDLE_VIEWS.iter_mut() { view.continue_after(restarts << 40); }
+            for view in DOCUMENT_VIEWS.iter_mut() { view.continue_after(restarts << 40); }
+            // Quil keeps the last toolbar action number it accepted, too.
+            DOCUMENT_POINTER_SEQUENCE = DOCUMENT_POINTER_SEQUENCE.max(restarts << 40);
+        }
+    }
     serial_println!("[silk-shell] Authority Starting...");
 
     unsafe {
@@ -24752,6 +24844,9 @@ pub extern "C" fn _start() -> ! {
         Err(e) => {sex_pdx::serial_record!("[uiir.shell.attached] peer={} ok=0 error={:#x}",sex_pdx::uiir::DISPLAY_PD,e);None},
     };
     let mut uiir_focus = 0u64;
+    // Started again after a crash: the apps that were running still are. Give each
+    // its window back, as if it had just registered, and let it draw again.
+    if sex_pdx::crash_log::restarts() > 0 { unsafe { adopt_running_apps(); } }
 
     loop {
         if let Some(stream)=uiir.as_mut() {
@@ -25453,6 +25548,8 @@ pub extern "C" fn _start() -> ! {
                 pdx_listen_raw(0)
             }
         };
+        // Display started again after a crash: it knows nothing of the desktop, so show it again.
+        if sex_pdx::display_ready::is_display_ready(&msg) { unsafe { display_came_back(); } continue; }
         unsafe {
             if shell_lifecycle_hint(&msg) { continue; }
             if shell_program_message(&msg) { continue; }
