@@ -42,6 +42,8 @@ struct Ctx {
     instance: *mut c_void,
     page: *mut dyn Page,
     result: Vec<u8>,
+    #[cfg(feature = "baseline-jit")]
+    jit: super::baseline::Jit,
 }
 
 unsafe fn memory<'a>(ctx: &Ctx) -> &'a mut [u8] {
@@ -86,6 +88,17 @@ unsafe extern "C" fn w2c_wasi__snapshot__preview1_clock_time_get(ctx: *mut Ctx, 
 }
 
 #[no_mangle]
+unsafe extern "C" fn w2c_wasi__snapshot__preview1_random_get(ctx: *mut Ctx, ptr: u32, len: u32) -> u32 {
+    let ctx = unsafe { &mut *ctx };
+    // QuickJS hash seeding, identical to wasmi; this is not a crypto API.
+    let mut seed = unsafe { (*ctx.page).now_ns() } ^ 0x9E37_79B9_7F4A_7C15;
+    let data = unsafe { memory(ctx) };
+    let Some(dst) = data.get_mut(ptr as usize..ptr as usize + len as usize) else { return 21 };
+    for b in dst { seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; *b = seed as u8; }
+    0
+}
+
+#[no_mangle]
 unsafe extern "C" fn w2c_wasi__snapshot__preview1_fd_write(ctx: *mut Ctx, _fd: u32, iovs: u32, count: u32, written: u32) -> u32 {
     let data = unsafe { memory(&*ctx) };
     let mut total = 0u32;
@@ -105,6 +118,21 @@ extern "C" fn w2c_wasi__snapshot__preview1_fd_fdstat_get(_: *mut Ctx, _fd: u32, 
 #[no_mangle]
 extern "C" fn w2c_wasi__snapshot__preview1_fd_seek(_: *mut Ctx, _fd: u32, _o: u64, _w: u32, _at: u32) -> u32 { 8 }
 
+#[no_mangle]
+extern "C" fn w2c_dom_jit_available(_: *mut Ctx) -> u32 { cfg!(feature = "baseline-jit") as u32 }
+
+#[no_mangle]
+unsafe extern "C" fn w2c_dom_jit(ctx: *mut Ctx, pc: u32, len: u32, argv: u32, argc: u32, out: u32) -> u32 {
+    #[cfg(feature = "baseline-jit")]
+    {
+        let ctx = unsafe { &mut *ctx };
+        let data = unsafe { memory(ctx) };
+        return ctx.jit.run(data, pc, len, argv, argc, out) as u32;
+    }
+    #[cfg(not(feature = "baseline-jit"))]
+    { let _ = (ctx, pc, len, argv, argc, out); 0 }
+}
+
 /// One instance of the native engine, with the page it serves.
 pub(crate) struct Native<P: Page + 'static> {
     instance: *mut c_void,
@@ -120,13 +148,17 @@ impl<P: Page + 'static> Native<P> {
         let page = alloc::boxed::Box::into_raw(alloc::boxed::Box::new(page));
         let size = unsafe { sxn_size() };
         let instance = unsafe { alloc_zeroed(Layout::from_size_align(size, ALIGN).unwrap()) } as *mut c_void;
-        let ctx = alloc::boxed::Box::into_raw(alloc::boxed::Box::new(Ctx { instance, page: page as *mut dyn Page, result: Vec::new() }));
+        let ctx = alloc::boxed::Box::into_raw(alloc::boxed::Box::new(Ctx { instance, page: page as *mut dyn Page, result: Vec::new(), #[cfg(feature = "baseline-jit")] jit: super::baseline::Jit::default() }));
         let mut me = Self { instance, ctx, page, dead: true };
         let r = unsafe { sxn_instantiate(instance, ctx as *mut c_void, memory_bytes as u64) };
         if r != 0 { return Err(Error::Engine(format!("native start trapped ({r})"))); }
         me.dead = false;
         Ok(me)
     }
+    #[cfg(feature = "baseline-jit")]
+    pub fn set_jit_enabled(&mut self, enabled: bool) { unsafe { (*self.ctx).jit.enabled = enabled; } }
+    #[cfg(feature = "baseline-jit")]
+    pub fn jit_stats(&self) -> super::baseline::Stats { unsafe { (*self.ctx).jit.stats } }
     pub fn page(&self) -> &P { unsafe { &*self.page } }
     pub fn page_mut(&mut self) -> &mut P { unsafe { &mut *self.page } }
 

@@ -49,6 +49,10 @@ jobs:
       run: cargo test --locked -p sex-disk --lib
     - name: Crash record format host regressions
       run: bash scripts/crash_log_host_gate.sh
+    - name: Experimental JS baseline JIT differential and emitted-code gates
+      run: |
+        SEXJS_NATIVE=0 cargo test --release -p sex-js --features baseline-jit -- --test-threads=1 --nocapture
+        SEXJS_NATIVE=1 cargo test --release -p sex-js --features baseline-jit -- --test-threads=1 --nocapture
     - name: Intel Wi-Fi driver core (crypto vectors, handshakes, firmware files, power-up)
       run: bash scripts/wifi_host_gate.sh
     - name: Power off and restart through ACPI (host half)
@@ -109,6 +113,10 @@ jobs:
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends python3-pil
         truncate -s 1G "$RUNNER_TEMP/blank-webjs.img"
         python3 scripts/program_web_js_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-webjs.img" --out "$RUNNER_TEMP/sexos-runtime/web-js"
+    - name: Experimental browser bytecode JIT (forced interpreter comparison)
+      run: |
+        bash scripts/build_web_jit.sh "$RUNNER_TEMP/web-jit"
+        python3 scripts/program_web_jit_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-webjs.img" --program "$RUNNER_TEMP/web-jit" --out "$RUNNER_TEMP/sexos-runtime/web-jit"
     - name: USB input paths
       run: GATE_DIR="$RUNNER_TEMP/sexos-usb" SKIP_BUILD=1 bash scripts/usb_path_gate.sh
     - name: Preserve runtime evidence
