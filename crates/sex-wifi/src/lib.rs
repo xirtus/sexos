@@ -16,6 +16,7 @@
 
 pub mod bringup;
 pub mod ccmp;
+pub mod cmdq;
 pub mod context;
 pub mod crypto;
 pub mod csr;
@@ -23,6 +24,7 @@ pub mod devices;
 pub mod eapol;
 pub mod hcmd;
 pub mod ieee80211;
+pub mod init;
 pub mod pack;
 pub mod rx;
 pub mod sae;

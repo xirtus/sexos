@@ -11,7 +11,9 @@ framebuffer, and after the countdown the machine restarts itself.
 Start 2 (warm restart, same RAM): the kernel finds the kept stop, pins it at the top of
 the boot log, and Files writes it to disk next to the two earlier records.
 Start 3 (cold, QEMU started again, RAM gone): Files reads all three back from disk and
-`crashes` in Spindle lists them as from an earlier start.
+`crashes` in Spindle lists them as from an earlier start. Then Shell ends: Shell and
+Display start again in place, the running apps keep their windows, and Spindle works.
+Start 1 also ends Display alone: Shell puts the same desktop back on the screen.
 """
 import argparse,os,re,shutil,subprocess,time
 from pathlib import Path
@@ -58,6 +60,11 @@ def count(px,colour):
  c=bytes(colour);return sum(1 for i in range(0,len(px),3*7) if px[i:i+3]==c)
 def frac(px,colour):return count(px,colour)/(len(px)//(3*7))
 
+def same(a,b):
+ _,_,x=ppm_rgb(a.read_bytes(),min_width=1,min_height=1);_,_,y=ppm_rgb(b.read_bytes(),min_width=1,min_height=1)
+ # Every 7th pixel; the bar's clock and the cursor may differ.
+ n=len(x)//(3*7);return sum(1 for i in range(0,len(x),3*7) if x[i:i+3]==y[i:i+3])/n
+
 def desktop(g,s=0):
  g['wait'](r'\[shell.app.registered.reply\] target=15 .*committed=1',s,240);g['wait'](r'\[linen.disk.publish.done\]',s,240)
  g['wait'](r'\[app.private.retired\] target=41 ',s,240);time.sleep(2)
@@ -90,6 +97,14 @@ def main():
   spindle(g,'crash input',r'\[service.restarted\] pd=4 ');g['wait'](r'\[sexinput.restarted\] restarts=1',0,60);time.sleep(1)
   spindle(g,'crash bell',r'\[service.restarted\] pd=10 ');g['wait'](r'\[sexbell.restarted\] restarts=1',0,60);time.sleep(1)
   spindle(g,'beep',r'\[spindle.beep\] hz=880 ms=200 volume=30 status=0')
+  # Display starts again in place: Shell shows the desktop again and the windows come back.
+  _,_,px=shot(g,a.out/'before-display.ppm');before=frac(px,BOOT_BG)
+  s=len(g['text']());spindle(g,'crash display',r'\[service.restarted\] pd=1 ')
+  m=g['wait'](r'\[shell.display.back\] times=1 windows=(\d+)',s,60);assert int(m[1])>=3,m[0]
+  time.sleep(4);_,_,px=shot(g,a.out/'after-display.ppm')
+  evidence['display_restart']=dict(windows=int(m[1]),same_pixels=round(same(a.out/'before-display.ppm',a.out/'after-display.ppm'),3))
+  assert evidence['display_restart']['same_pixels']>.9,evidence
+  spindle(g,'crashes',r'\[spindle.crashes\] count=\d+')
   # The kernel stops: the stop screen, then a restart by itself.
   s=len(g['text']());spindle(g,'crash kernel',r'\[crash.pstore.kept\]')
   time.sleep(1.5);_,_,px=shot(g,a.out/'stop-screen.ppm')
@@ -118,10 +133,17 @@ def main():
   spindle(g,'crashes',r'\[spindle.crashes.row\] seq=\d+ kind=1 pd=\d+ earlier=1')
   assert 'KERNEL PANIC' not in g['text']()
   evidence['cold_kept']=int(m[1])
-  # Shell cannot start again in place yet: its end stops the machine instead of freezing it.
+  # Shell starts again in place: Display starts with it, the running apps keep their
+  # windows, and Spindle (which kept running) still takes commands.
   s=len(g['text']());spindle(g,'crash shell',r'\[crash.probe.service\] pd=3')
-  g['wait'](r'Shell ended\. The desktop cannot go on without it',s,60);g['wait'](r'\[crash.pstore.kept\]',s,30)
-  time.sleep(1);_,_,px=shot(g,a.out/'stop-shell.ppm');assert frac(px,STOP_BG)>.5
+  g['wait'](r'\[service.restarted\] pd=3 ',s,60);g['wait'](r'\[service.restarted\] pd=1 ',s,60)
+  m=g['wait'](r'\[shell.restarted\] restarts=1 adopted=(\d+) windows=(\d+)',s,60);assert int(m[1])>=1 and int(m[2])>=3,m[0]
+  time.sleep(4);_,_,px=shot(g,a.out/'after-shell.ppm');assert frac(px,STOP_BG)<.01
+  # Focus as the new Shell reports it, not the old run's last record.
+  g['focus']=lambda sid:focus_surface(sid,lambda:g['text']()[s:],g['key'])
+  spindle(g,'crashes',r'\[spindle.crashes.row\] seq=\d+ kind=4 pd=3 earlier=0')
+  evidence['shell_restart']=dict(adopted=int(m[1]),windows=int(m[2]))
+  assert 'KERNEL PANIC' not in g['text']()[s:]
  finally:g['stop']()
  print({'ok':True,**evidence})
 if __name__=='__main__':main()

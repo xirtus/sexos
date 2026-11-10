@@ -3639,6 +3639,22 @@ Details: `docs/handoff/BOOT_LOG_AND_CRASH_RECORDS_2026_11_09.md`.
   leave, 98304 frames in 2 s after it, microphone off at once when taken back.
 - Next: a microphone mark in SilkBar while anyone listens (the stream word has the
   bit), HD Audio input, an Allow prompt instead of the command.
+## Display and Shell start again in place after a crash (2026-11-10)
+
+Follow-up to the boot log and crash records work (`BOOT_LOG_AND_CRASH_RECORDS_2026_11_09.md`).
+
+- Display: restarted from its BOOT pages; its second ready tells Shell to put the desktop
+  back (windows, chrome, bar, terminal/document layout, program redraw, focus).
+- Shell: restarted from its BOOT pages with Display; it rebuilds custody from the kernel's
+  app catalog and gives the opened apps their windows back. Apps keep running.
+- Kernel growth (about 30 lines): Display and Shell join `service_restart`; a domain can
+  be asked to end at its next syscall. `KERNEL_LINE_BUDGET` 21,500 -> 22,500 (master was
+  already at 22,123), reason in `docs/DESIGN_GUARDRAILS.md`.
+- ABI: `document_view::Delivery::continue_after` and `spindle_view::Delivery::continue_after`
+  (library helpers, no wire change); `abi_version_hash` recomputed.
+- Gate: `scripts/crash_screen_gate.py` crashes Display (same desktop back, 98.6% same
+  pixels) and Shell (desktop back, Spindle answers `crashes`).
+
 ## Intel Wi-Fi, stage W2: the chip starts its firmware (2026-11-10)
 
 - **Lease:** Intel class 02:80 goes to the network service (`Lease::Wifi`, slot 22) with
@@ -3657,3 +3673,17 @@ Details: `docs/handoff/BOOT_LOG_AND_CRASH_RECORDS_2026_11_09.md`.
   `kernel/src/pci_command.rs` changed; `abi_version_hash` recomputed.
 - **Kernel growth:** ~45 lines (class lease kind, pool slot per kind, firmware region,
   subsystem query); mechanism only, no Wi-Fi logic in the kernel.
+
+## Intel Wi-Fi, stage W3: the firmware is told how to run (2026-11-10)
+
+- **Command queue:** `sex_wifi::cmdq` sends host commands on queue 0 (buffers in the
+  Wi-Fi DMA pool, TFDs, the AX210 write pointer) and matches each answer.
+- **Init sequence:** `sex_wifi::init` loads the platform NVM for the SKU ALIVE reports,
+  runs the firmware's init, reads the NVM (MAC address, bands, antennas, channels) and
+  sends iwx(4)'s configuration through the regulatory domain and scan configuration.
+- **Boot log:** sexnet prints `[wifi.pnvm]`, `[wifi.init] step=…`, `[wifi.nvm]` and
+  `[wifi.ready] mac=… country=… channels=…`, or `[wifi.failed] step=init reason=…`.
+- **Evidence:** `scripts/wifi_host_gate.sh` (26 driver + 10 vector tests): the sequence
+  against a firmware model, its failure paths, and the real x17 firmware and `.pnvm`.
+  Real proof is the x17 R1 boot log.
+- **ABI / kernel:** none.

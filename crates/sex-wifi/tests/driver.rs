@@ -1,7 +1,7 @@
 //! Driver-level behaviour: chip table, firmware files, DMA layout, the power-up
 //! sequence against a register model, the 4-way handshake against an access
 //! point played by the authenticator helpers, and frames end to end.
-use sex_wifi::{bringup, ccmp, context, csr, devices, eapol, hcmd, ieee80211 as w, pack, rx, ucode};
+use sex_wifi::{bringup, ccmp, cmdq, context, csr, devices, eapol, hcmd, ieee80211 as w, init, pack, rx, ucode};
 use std::collections::HashMap;
 
 const AP: [u8; 6] = [0x02, 0x11, 0x22, 0x33, 0x44, 0x55];
@@ -40,7 +40,9 @@ fn chip_table_rules() {
 }
 
 /// A small firmware file with the same TLV structure as Intel's.
-fn synthetic_firmware() -> Vec<u8> {
+fn synthetic_firmware() -> Vec<u8> { firmware_with(&[]) }
+
+fn firmware_with(extra: &[(u32, Vec<u8>)]) -> Vec<u8> {
     let mut f = vec![0u8; 4];
     f.extend_from_slice(&ucode::MAGIC.to_le_bytes());
     let mut text = [0u8; 64];
@@ -66,6 +68,7 @@ fn synthetic_firmware() -> Vec<u8> {
     tlv(36, &[83, 0, 0, 0, 0x34, 0x12, 0, 0, 77, 0, 0, 0]);
     tlv(52, &[0xee; 1234]);
     tlv(48, &[0x0c, 0x01, 0x02, 0x00, 0x09, 0x06, 0x03, 0x00, 0xff]);
+    for (kind, data) in extra { tlv(*kind, data); }
     f
 }
 
@@ -655,4 +658,452 @@ fn real_firmware_pack_starts_the_x17_chip_in_a_4_mib_pool() {
     let b = bringup::Bringup::prepare(chip, &fw, &mut m, 0x1_0000_0000, 4 << 20, 0x420, 0).unwrap();
     assert!(b.layout.end <= 4 << 20 && b.iml_len > 0);
     assert_eq!(b.rx.write, context::RX_BUFFERS as u16);
+    // Every SKU in the x17's .pnvm has a section set for its radio that fits.
+    let pnvm = p.file(chip.pnvm.unwrap()).unwrap();
+    let mut skus = 0;
+    let mut rest = pnvm;
+    while rest.len() >= 8 {
+        let kind = u32::from_le_bytes(rest[0..4].try_into().unwrap());
+        let len = u32::from_le_bytes(rest[4..8].try_into().unwrap()) as usize;
+        if kind == 64 {
+            let sku = [0, 4, 8].map(|o| u32::from_le_bytes(rest[8 + o..12 + o].try_into().unwrap()));
+            let mut alive = hcmd::parse_alive(&hcmd::packets(&alive_v6(sku)).next().unwrap()).unwrap();
+            alive.sku = sku;
+            let i = init::Init::new(chip, &fw, &alive, Some(pnvm), &b.layout, 0x1_0000_0000, &mut m, 0x420, 0x0010d000, 0);
+            assert_eq!(i.pnvm.source, init::PnvmSource::File, "sku {sku:?}");
+            assert!(i.pnvm.sections == 2 && i.pnvm.bytes > 10_000, "{:?}", i.pnvm);
+            skus += 1;
+        }
+        rest = &rest[(8 + ((len + 3) & !3)).min(rest.len())..];
+    }
+    assert!(skus >= 1);
+    // What the init sequence will see in the real firmware.
+    let f = init::Features::of(&fw);
+    assert!(f.api(ucode::API_REDUCED_SCAN_CONFIG) && f.api(ucode::API_REGULATORY_NVM_INFO), "iwx(4) needs both");
+    assert!(f.mcc_answer_version.is_some_and(|v| v < 8));
+    assert_eq!((f.tx_antennas(), f.rx_antennas()), (3, 3));
+}
+
+// ---- Stage W3: commands and the init sequence ----
+
+/// The x17's firmware as far as the init sequence cares: antennas A+B, the API and
+/// capability bits iwx(4) tests, and the command versions of iwlwifi-ty-a0-gf-a0-77.
+fn init_firmware(dqa: bool, embedded_pnvm: Option<Vec<u8>>) -> Vec<u8> {
+    let bits = |index: u32, bits: u32| { let mut v = index.to_le_bytes().to_vec(); v.extend_from_slice(&bits.to_le_bytes()); v };
+    let mut extra = vec![
+        (23, 0x0033_0018u32.to_le_bytes().to_vec()),
+        (29, bits(0, 1 << ucode::API_WIFI_MCC_UPDATE)),
+        (29, bits(1, 1 << (ucode::API_REGULATORY_NVM_INFO - 32) | 1 << (ucode::API_REDUCED_SCAN_CONFIG - 32))),
+        (30, bits(0, 1 << ucode::CAPA_LAR_SUPPORT | if dqa { 1 << ucode::CAPA_DQA_SUPPORT } else { 0 })),
+        (30, bits(2, 1 << (ucode::CAPA_CT_KILL_BY_FW - 64) | 1 << (ucode::CAPA_MCC_UPDATE_11AX_SUPPORT - 64))),
+        (48, vec![0x01, 0x00, 99, 6, 0x0c, 0x01, 5, 0, 0x0d, 0x01, 15, 0, 0xc8, 0x01, 1, 6, 0x02, 0x0c, 1, 4]),
+    ];
+    if let Some(p) = embedded_pnvm { extra.push((74, p)); }
+    firmware_with(&extra)
+}
+
+fn tlv(out: &mut Vec<u8>, kind: u32, data: &[u8]) {
+    out.extend_from_slice(&kind.to_le_bytes());
+    out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    out.extend_from_slice(data);
+    while out.len() % 4 != 0 { out.push(0); }
+}
+
+/// A .pnvm file shaped like iwlwifi-ty-a0-gf-a0.pnvm: per SKU, the hardware type,
+/// a version, and two sections (each with its 4-byte load offset first).
+fn pnvm_file(skus: &[([u32; 3], u16, u8)]) -> Vec<u8> {
+    let mut f = vec![];
+    for (sku, rf, fill) in skus {
+        let s: Vec<u8> = sku.iter().flat_map(|w| w.to_le_bytes()).collect();
+        tlv(&mut f, 64, &s);
+        tlv(&mut f, 58, &[0x42, 0, (*rf & 0xff) as u8, (*rf >> 8) as u8, 0, 0, 0, 0]);
+        tlv(&mut f, 62, &0x1234_5678u32.to_le_bytes());
+        let mut a = 0xcafe_deadu32.to_le_bytes().to_vec(); a.extend(std::iter::repeat(*fill).take(1660));
+        tlv(&mut f, 19, &a);
+        tlv(&mut f, 19, &0xdddd_eeeeu32.to_le_bytes());
+        let mut b = 0xdead_cafeu32.to_le_bytes().to_vec(); b.extend(std::iter::repeat(fill + 1).take(12000));
+        tlv(&mut f, 19, &b);
+    }
+    f
+}
+
+const X17_SKU: [u32; 3] = [397520, 0, 0];
+const X17_RF_ID: u32 = 0x0010_d000;
+
+/// ALIVE v6 (144 bytes) with a SKU id.
+fn alive_v6(sku: [u32; 3]) -> Vec<u8> {
+    let mut b = vec![0u8; 160];
+    b[0..4].copy_from_slice(&(4 + 144u32).to_le_bytes());
+    b[4] = hcmd::ALIVE;
+    b[7] = 0x80;
+    b[8..10].copy_from_slice(&hcmd::ALIVE_STATUS_OK.to_le_bytes());
+    b[12..16].copy_from_slice(&77u32.to_le_bytes());
+    for (i, w) in sku.iter().enumerate() { b[8 + 116 + i * 4..8 + 120 + i * 4].copy_from_slice(&w.to_le_bytes()); }
+    b
+}
+
+fn packet(code: u8, group: u8, index: u8, qid: u8, payload: &[u8]) -> Vec<u8> {
+    let mut b = vec![0u8; 8];
+    b[0..4].copy_from_slice(&(4 + payload.len() as u32).to_le_bytes());
+    b[4] = code; b[5] = group; b[6] = index; b[7] = qid;
+    b.extend_from_slice(payload);
+    b
+}
+
+/// The firmware's side of the command queue: reads each command the driver
+/// queued (TFD -> buffer), and answers on the receive ring the way the x17's
+/// firmware does.
+struct Firmware {
+    family: devices::Family,
+    base: u64,
+    /// Receive-ring slot of the next delivery.
+    slot: usize,
+    /// Commands consumed from the ring.
+    read: u32,
+    commands: Vec<(u8, u8, Vec<u8>)>,
+    lar: bool,
+    refuse: Option<(u8, u8)>,
+    error_on: Option<(u8, u8)>,
+    silent_on: Option<(u8, u8)>,
+    pnvm_rung: bool,
+}
+
+impl Firmware {
+    fn new(family: devices::Family, base: u64, slot: usize) -> Self {
+        Self { family, base, slot, read: 0, commands: vec![], lar: true, refuse: None, error_on: None, silent_on: None, pnvm_rung: false }
+    }
+    fn deliver(&mut self, m: &mut Memory, layout: &context::Layout, p: &[u8]) {
+        firmware_delivers(m, layout, self.family, self.base, self.slot, p);
+        self.slot += 1;
+    }
+    fn serve(&mut self, m: &mut Memory, layout: &context::Layout, hw: &mut Chip) {
+        let doorbell = csr::umac_prph(self.family, csr::UREG_DOORBELL_TO_ISR6) & 0xff_ffff;
+        if !self.pnvm_rung && hw.prph_writes.contains(&(doorbell, csr::DOORBELL_PNVM)) {
+            self.pnvm_rung = true;
+            self.deliver(m, layout, &packet(hcmd::PNVM_INIT_COMPLETE, hcmd::REGULATORY_AND_NVM_GROUP, 0, 0x80, &[0; 4]));
+        }
+        let Some(wp) = hw.writes.iter().rev().find(|w| w.0 == csr::TARG_WRPTR).map(|w| w.1 & 0xffff) else { return };
+        while self.read != wp {
+            let entry = self.read as u64 % context::TX_RING_COUNT as u64;
+            let tfd = &m.0[(layout.cmd_ring.offset + entry * 256) as usize..][..256];
+            let n = u16::from_le_bytes([tfd[0], tfd[1]]) as usize;
+            let mut bytes = vec![];
+            for i in 0..n {
+                let at = 2 + i * 10;
+                let len = u16::from_le_bytes([tfd[at], tfd[at + 1]]) as usize;
+                let addr = u64::from_le_bytes(tfd[at + 2..at + 10].try_into().unwrap());
+                let off = (addr - self.base) as usize;
+                bytes.extend_from_slice(&m.0[off..off + len]);
+            }
+            let (opcode, group, index, qid) = (bytes[0], bytes[1], bytes[2], bytes[3]);
+            let len = u16::from_le_bytes([bytes[4], bytes[5]]) as usize;
+            assert_eq!(bytes.len(), 8 + len, "TFD covers the whole command");
+            // Payload sizes the firmware ABI fixes (iwx(4) structs); a wrong size is refused.
+            let want = match (group, opcode) {
+                (hcmd::LONG_GROUP, hcmd::MCC_UPDATE_CMD) => Some(28),
+                (hcmd::LONG_GROUP, hcmd::SCAN_CFG_CMD) => Some(12),
+                (hcmd::LONG_GROUP, hcmd::REPLY_BEACON_FILTERING_CMD) => Some(60),
+                (hcmd::PHY_OPS_GROUP, hcmd::TEMP_REPORTING_THRESHOLDS_CMD) => Some(20),
+                (hcmd::LONG_GROUP, hcmd::BT_CONFIG) | (hcmd::SYSTEM_GROUP, hcmd::SOC_CONFIGURATION_CMD) => Some(8),
+                _ => Some(4),
+            };
+            assert_eq!(Some(len), want, "payload size of {group:#x}/{opcode:#x}");
+            assert_eq!((qid, index as u32), (0, self.read % 256));
+            let payload = bytes[8..].to_vec();
+            self.commands.push((group, opcode, payload));
+            self.read = (self.read + 1) % if self.family == devices::Family::Ax210 { 65536 } else { 256 };
+            if self.silent_on == Some((group, opcode)) { continue; }
+            if self.error_on == Some((group, opcode)) {
+                let mut e = vec![0u8; 20];
+                e[0..4].copy_from_slice(&0x1234u32.to_le_bytes());
+                e[4] = opcode;
+                self.deliver(m, layout, &packet(hcmd::REPLY_ERROR, 0, 0, 0x80, &e));
+                continue;
+            }
+            let failed = if self.refuse == Some((group, opcode)) { hcmd::CMD_FAILED } else { 0 };
+            let answer: Vec<u8> = match (group, opcode) {
+                (hcmd::REGULATORY_AND_NVM_GROUP, hcmd::NVM_GET_INFO) => {
+                    let mut a = vec![0u8; 468];
+                    a[4..6].copy_from_slice(&0x0a1du16.to_le_bytes());
+                    a[7] = 1;
+                    a[8..12].copy_from_slice(&(init::SKU_2GHZ | init::SKU_5GHZ | init::SKU_11N | init::SKU_11AC | init::SKU_11AX).to_le_bytes());
+                    a[12..16].copy_from_slice(&3u32.to_le_bytes());
+                    a[16..20].copy_from_slice(&3u32.to_le_bytes());
+                    a[20..24].copy_from_slice(&(self.lar as u32).to_le_bytes());
+                    a[24..28].copy_from_slice(&110u32.to_le_bytes());
+                    for c in 0..59 { a[28 + c * 4] = 1; }
+                    a
+                }
+                (hcmd::LONG_GROUP, hcmd::MCC_UPDATE_CMD) => {
+                    let mut a = vec![0u8; 20 + 4 * 37];
+                    a[4..6].copy_from_slice(&((b'D' as u16) << 8 | b'E' as u16).to_le_bytes());
+                    a[12] = 0x10;
+                    a[16..20].copy_from_slice(&37u32.to_le_bytes());
+                    a
+                }
+                _ => vec![0u8; 4],
+            };
+            self.deliver(m, layout, &packet(opcode, group | failed, index, qid, &answer));
+            if (group, opcode) == (hcmd::REGULATORY_AND_NVM_GROUP, hcmd::NVM_ACCESS_COMPLETE) {
+                self.deliver(m, layout, &packet(hcmd::INIT_COMPLETE_NOTIF, 0, 0, 0x80, &[0; 4]));
+            }
+        }
+    }
+}
+
+/// Powers the x17's chip up to ALIVE (v6, with `sku`), as the W2 test does.
+fn alive_x17(fw: &ucode::Firmware<'_>, sku: [u32; 3]) -> (bringup::Bringup, Memory, Chip, u64) {
+    let chip = devices::identify(0x2725, 0x1674, 0x420, X17_RF_ID).unwrap();
+    let base = 0x8000_0000u64;
+    let mut m = Memory(vec![0; 2 << 20]);
+    let mut b = bringup::Bringup::prepare(chip, fw, &mut m, base, 2 << 20, 0x420, 0).unwrap();
+    let mut hw = Chip::new();
+    hw.regs.insert(csr::MAC_ADDR_STRAP, 0x0211_2233);
+    hw.regs.insert(csr::MAC_ADDR_STRAP + 4, 0x0000_4455);
+    let mut started = None;
+    for _ in 0..2000 {
+        let t = hw.now;
+        if !b.advance(&mut hw, &mut m, t) { break; }
+        if started.is_none() && hw.prph_writes.contains(&(csr::UREG_CPU_INIT_RUN + 0x30_0000, 1)) { started = Some(hw.now); }
+        if started.is_some_and(|s| hw.now == s + 3000) {
+            firmware_delivers(&mut m, &b.layout, chip.family, base, 0, &alive_v6(sku));
+            hw.alive_at = Some(hw.now);
+        }
+        hw.now += 1000;
+    }
+    assert_eq!(b.boot.step, csr::Step::Alive);
+    hw.alive_at = None;
+    (b, m, hw, base)
+}
+
+fn run_init(i: &mut init::Init, b: &mut bringup::Bringup, m: &mut Memory, hw: &mut Chip, fw: &mut Firmware) {
+    for _ in 0..10_000 {
+        let t = hw.now;
+        if !i.advance(b, hw, m, t) { break; }
+        fw.serve(m, &b.layout, hw);
+        hw.now += 1000;
+    }
+}
+
+#[test]
+fn alive_v6_carries_the_sku_and_older_layouts_do_not() {
+    let p = alive_v6(X17_SKU);
+    let pk = hcmd::packets(&p).next().unwrap();
+    let a = hcmd::parse_alive(&pk).unwrap();
+    assert!(a.ok);
+    assert_eq!((a.lmac_major, a.sku), (77, X17_SKU));
+    let old = alive_packet(true);
+    assert_eq!(hcmd::parse_alive(&hcmd::packets(&old).next().unwrap()).unwrap().sku, [0; 3]);
+}
+
+#[test]
+fn pnvm_section_for_the_sku_and_this_radio_only() {
+    let file = pnvm_file(&[([1, 0, 0], 0x10d, 0x10), (X17_SKU, 0x10a, 0x20), (X17_SKU, 0x10d, 0x30)]);
+    // The first chunk for the SKU is for another radio: no match there, so the
+    // driver, like iwx(4), does not take it; pnvm_for_sku returns the first chunk.
+    let chunk = ucode::pnvm_for_sku(&file, X17_SKU).unwrap();
+    assert!(ucode::pnvm_image(chunk, 0x42, 0x10d).is_none());
+    let img = ucode::pnvm_image(chunk, 0x42, 0x10a).unwrap();
+    assert_eq!((img.count, img.bytes, img.version), (2, 1660 + 12000, 0x1234_5678));
+    assert_eq!(img.sections()[0][0], 0x20);
+    assert_eq!(img.sections()[1][0], 0x21);
+    assert!(ucode::pnvm_for_sku(&file, [9, 9, 9]).is_none());
+    // Selection tries every chunk for the SKU, as iwx_pnvm_parse does.
+    let best = ucode::pnvm_select(&file, X17_SKU, 0x42, 0x10d).unwrap();
+    assert_eq!(best.sections()[0][0], 0x30);
+    assert!(ucode::pnvm_select(&file, X17_SKU, 0x41, 0x10d).is_none());
+
+    let fw_file = synthetic_firmware();
+    let fw = ucode::Firmware::parse(&fw_file).unwrap();
+    let image = fw.image();
+    let layout = context::Layout::plan(devices::Family::Ax210, &image, 1234, 2 << 20).unwrap();
+    let mut m = Memory(vec![0; 2 << 20]);
+    const BASE: u64 = 0x1_0000_0000;
+    // Joined: one block, its address and byte size in the peripheral scratch.
+    let (addr, size) = layout.write_pnvm(&mut m, BASE, img.sections(), false).unwrap();
+    assert_eq!((addr, size), (BASE + layout.pnvm.offset + 4096, 13660));
+    assert_eq!(u64_at(&m.0, layout.prph_scratch.offset + 16), addr);
+    assert_eq!(u32::from_le_bytes(m.0[(layout.prph_scratch.offset + 24) as usize..][..4].try_into().unwrap()), 13660);
+    let at = (addr - BASE) as usize;
+    assert_eq!((m.0[at], m.0[at + 1659], m.0[at + 1660]), (0x20, 0x20, 0x21));
+    // Fragmented: a table of segment addresses, each segment page aligned.
+    let (addr, _) = layout.write_pnvm(&mut m, BASE, img.sections(), true).unwrap();
+    assert_eq!(addr, BASE + layout.pnvm.offset);
+    let s0 = u64_at(&m.0, layout.pnvm.offset);
+    let s1 = u64_at(&m.0, layout.pnvm.offset + 8);
+    assert_eq!((s0, s1), (BASE + layout.pnvm.offset + 4096, BASE + layout.pnvm.offset + 8192));
+    assert_eq!(m.0[(s1 - BASE) as usize], 0x21);
+    // The 22000 family has no PNVM.
+    let l22 = context::Layout::plan(devices::Family::Gen22000, &image, 0, 2 << 20).unwrap();
+    assert!(l22.write_pnvm(&mut m, BASE, img.sections(), false).is_none());
+}
+
+#[test]
+fn command_queue_frames_commands_and_matches_answers() {
+    let fw_file = synthetic_firmware();
+    let fw = ucode::Firmware::parse(&fw_file).unwrap();
+    for family in [devices::Family::Gen22000, devices::Family::Ax210] {
+        let layout = context::Layout::plan(family, &fw.image(), 0, 2 << 20).unwrap();
+        let mut m = Memory(vec![0; 2 << 20]);
+        let mut hw = Chip::new();
+        let mut q = cmdq::CommandQueue::new(family);
+        let base = 0x4000_0000;
+        // 300 commands: the ring index wraps at 256; on AX210 the write pointer does not.
+        for n in 0..300u32 {
+            let payload = n.to_le_bytes();
+            let s = q.send(&mut m, &mut hw, &layout, base, hcmd::SYSTEM_GROUP, hcmd::SOC_CONFIGURATION_CMD, 0, &payload).unwrap();
+            assert_eq!(q.send(&mut m, &mut hw, &layout, base, 0, 1, 0, &[]), Err(cmdq::Error::Busy));
+            let wp = hw.writes.iter().rev().find(|w| w.0 == csr::TARG_WRPTR).unwrap().1;
+            let want = if family == devices::Family::Ax210 { n + 1 } else { (n + 1) % 256 };
+            assert_eq!(wp, want);
+            // An unsolicited packet or another index does not complete it.
+            let note = packet(hcmd::SOC_CONFIGURATION_CMD, hcmd::SYSTEM_GROUP, s.index, 0x80, &[0; 4]);
+            assert!(!q.on_packet(&hcmd::packets(&note).next().unwrap()));
+            let other = packet(hcmd::SOC_CONFIGURATION_CMD, hcmd::SYSTEM_GROUP, s.index.wrapping_add(1), 0, &[0; 4]);
+            assert!(!q.on_packet(&hcmd::packets(&other).next().unwrap()));
+            let ans = packet(hcmd::SOC_CONFIGURATION_CMD, hcmd::SYSTEM_GROUP, s.index, 0, &[7, 0, 0, 0]);
+            assert!(q.on_packet(&hcmd::packets(&ans).next().unwrap()));
+            assert_eq!(q.response(), &[7, 0, 0, 0]);
+            assert!(!q.answer.unwrap().failed);
+        }
+        // A legacy (group 0) command goes out as LONG_GROUP and its answer matches.
+        let s = q.send(&mut m, &mut hw, &layout, base, 0, hcmd::BT_CONFIG, 0, &[0; 8]).unwrap();
+        let buf = cmdq::CommandQueue::buffer(&layout, (q.cur + 255) % 256);
+        assert_eq!(&m.0[buf.offset as usize..][..4], &[hcmd::BT_CONFIG, hcmd::LONG_GROUP, s.index, 0]);
+        let ans = packet(hcmd::BT_CONFIG, hcmd::LONG_GROUP | hcmd::CMD_FAILED, s.index, 0, &[]);
+        assert!(q.on_packet(&hcmd::packets(&ans).next().unwrap()));
+        assert!(q.answer.unwrap().failed);
+        assert_eq!(q.send(&mut m, &mut hw, &layout, base, 0, 1, 0, &[0; cmdq::MAX_PAYLOAD + 1]), Err(cmdq::Error::TooLong));
+    }
+}
+
+#[test]
+fn x17_init_sequence_reaches_ready() {
+    let pnvm = pnvm_file(&[([1, 0, 0], 0x10d, 0x10), (X17_SKU, 0x10d, 0x30)]);
+    let file = init_firmware(false, None);
+    let fw = ucode::Firmware::parse(&file).unwrap();
+    let (mut b, mut m, mut hw, base) = alive_x17(&fw, X17_SKU);
+    let alive = b.alive.unwrap();
+    let mut i = init::Init::new(b.boot.chip, &fw, &alive, Some(&pnvm), &b.layout, base, &mut m, 0x420, X17_RF_ID, hw.now);
+    assert_eq!(i.pnvm, init::Pnvm { source: init::PnvmSource::File, sections: 2, bytes: 13660, version: 0x1234_5678 });
+    assert_eq!(i.step, init::Step::Pnvm);
+    let mut sim = Firmware::new(b.boot.chip.family, base, 1);
+    run_init(&mut i, &mut b, &mut m, &mut hw, &mut sim);
+    assert_eq!(i.step, init::Step::Ready, "{:?}", i.step);
+    assert!(sim.pnvm_rung && i.pnvm_loaded && i.init_complete);
+    // The PNVM the chip was pointed at is the x17 SKU's.
+    let addr = u64_at(&m.0, b.layout.prph_scratch.offset + 16);
+    assert_eq!(m.0[(addr - base) as usize], 0x30);
+    let order: Vec<(u8, u8)> = sim.commands.iter().map(|c| (c.0, c.1)).collect();
+    use hcmd::*;
+    assert_eq!(order, vec![
+        (SYSTEM_GROUP, INIT_EXTENDED_CFG_CMD), (REGULATORY_AND_NVM_GROUP, NVM_ACCESS_COMPLETE),
+        (REGULATORY_AND_NVM_GROUP, NVM_GET_INFO), (LONG_GROUP, TX_ANT_CONFIGURATION_CMD), (LONG_GROUP, BT_CONFIG),
+        (SYSTEM_GROUP, SOC_CONFIGURATION_CMD), (PHY_OPS_GROUP, TEMP_REPORTING_THRESHOLDS_CMD), (LONG_GROUP, POWER_TABLE_CMD),
+        (LONG_GROUP, MCC_UPDATE_CMD), (LONG_GROUP, SCAN_CFG_CMD), (LONG_GROUP, REPLY_BEACON_FILTERING_CMD),
+    ], "DQA is skipped: this firmware does not claim it");
+    let payload = |g: u8, c: u8| sim.commands.iter().find(|x| (x.0, x.1) == (g, c)).unwrap().2.clone();
+    assert_eq!(payload(SYSTEM_GROUP, INIT_EXTENDED_CFG_CMD), 2u32.to_le_bytes());
+    assert_eq!(payload(LONG_GROUP, TX_ANT_CONFIGURATION_CMD), 3u32.to_le_bytes());
+    assert_eq!(payload(LONG_GROUP, BT_CONFIG), [3, 0, 0, 0, 0, 0, 0, 0]);
+    // The x17's AX210 is a discrete card: flag 1, no crystal latency.
+    assert_eq!(payload(SYSTEM_GROUP, SOC_CONFIGURATION_CMD), [1, 0, 0, 0, 0, 0, 0, 0]);
+    assert_eq!(payload(PHY_OPS_GROUP, TEMP_REPORTING_THRESHOLDS_CMD), [0; 20]);
+    let mcc = payload(LONG_GROUP, MCC_UPDATE_CMD);
+    assert_eq!((mcc.len(), &mcc[..3]), (28, &[b'Z', b'Z', 0x10][..]));
+    // SCAN_CFG v5: no broadcast station id; antennas A+B both ways.
+    assert_eq!(payload(LONG_GROUP, SCAN_CFG_CMD), [0, 0, 0, 0, 3, 0, 0, 0, 3, 0, 0, 0]);
+    assert_eq!(payload(LONG_GROUP, REPLY_BEACON_FILTERING_CMD), vec![0u8; 60]);
+    let nvm = i.nvm.unwrap();
+    assert_eq!((nvm.version, nvm.tx_chains, nvm.rx_chains, nvm.lar, nvm.channels), (0x0a1d, 3, 3, true, 59));
+    assert_eq!(i.mac, [0x02, 0x11, 0x22, 0x33, 0x44, 0x55]);
+    assert_eq!(i.regulatory.unwrap().mcc, *b"DE");
+    assert_eq!(i.regulatory.unwrap().channels, 37);
+    // The NIC lock taken for the MAC address read was held through the commands
+    // (as iwx_init_hw does) and given back at the end.
+    assert_eq!(hw.regs[&csr::GP_CNTRL] & csr::GP_MAC_ACCESS_REQ, 0);
+}
+
+#[test]
+fn init_without_lar_skips_mcc_and_dqa_firmware_gets_dqa() {
+    let file = init_firmware(true, None);
+    let fw = ucode::Firmware::parse(&file).unwrap();
+    let (mut b, mut m, mut hw, base) = alive_x17(&fw, [0; 3]);
+    let alive = b.alive.unwrap();
+    let mut i = init::Init::new(b.boot.chip, &fw, &alive, None, &b.layout, base, &mut m, 0x420, X17_RF_ID, hw.now);
+    // SKU 0: nothing to load, no doorbell.
+    assert_eq!((i.step, i.pnvm.source), (init::Step::ExtendedConfig, init::PnvmSource::NotNeeded));
+    let mut sim = Firmware::new(b.boot.chip.family, base, 1);
+    sim.lar = false;
+    run_init(&mut i, &mut b, &mut m, &mut hw, &mut sim);
+    assert_eq!(i.step, init::Step::Ready);
+    assert!(!sim.pnvm_rung);
+    assert!(sim.commands.iter().any(|c| (c.0, c.1, c.2.as_slice()) == (hcmd::DATA_PATH_GROUP, hcmd::DQA_ENABLE_CMD, &[0u8, 0, 0, 0][..])));
+    assert!(!sim.commands.iter().any(|c| c.1 == hcmd::MCC_UPDATE_CMD));
+    assert!(i.regulatory.is_none());
+}
+
+#[test]
+fn embedded_pnvm_wins_and_unknown_sku_still_rings_the_doorbell() {
+    let embedded = pnvm_file(&[(X17_SKU, 0x10d, 0x50)]);
+    let file = init_firmware(false, Some(embedded));
+    let fw = ucode::Firmware::parse(&file).unwrap();
+    let (b, mut m, hw, base) = alive_x17(&fw, X17_SKU);
+    let i = init::Init::new(b.boot.chip, &fw, &b.alive.unwrap(), Some(&pnvm_file(&[(X17_SKU, 0x10d, 0x30)])), &b.layout, base, &mut m, 0x420, X17_RF_ID, hw.now);
+    assert_eq!(i.pnvm.source, init::PnvmSource::Embedded);
+    assert_eq!(m.0[(u64_at(&m.0, b.layout.prph_scratch.offset + 16) - base) as usize], 0x50);
+
+    let file = init_firmware(false, None);
+    let fw = ucode::Firmware::parse(&file).unwrap();
+    let (mut b, mut m, mut hw, base) = alive_x17(&fw, [7, 7, 7]);
+    let alive = b.alive.unwrap();
+    let mut i = init::Init::new(b.boot.chip, &fw, &alive, Some(&pnvm_file(&[(X17_SKU, 0x10d, 0x30)])), &b.layout, base, &mut m, 0x420, X17_RF_ID, hw.now);
+    assert_eq!((i.step, i.pnvm.source), (init::Step::Pnvm, init::PnvmSource::NoMatch));
+    let mut sim = Firmware::new(b.boot.chip.family, base, 1);
+    run_init(&mut i, &mut b, &mut m, &mut hw, &mut sim);
+    assert!(sim.pnvm_rung, "the firmware is told to go on without it");
+    assert_eq!(i.step, init::Step::Ready);
+    // Missing file: same.
+    let (b, mut m, hw, base) = alive_x17(&fw, X17_SKU);
+    let i = init::Init::new(b.boot.chip, &fw, &b.alive.unwrap(), None, &b.layout, base, &mut m, 0x420, X17_RF_ID, hw.now);
+    assert_eq!((i.step, i.pnvm.source), (init::Step::Pnvm, init::PnvmSource::Missing));
+}
+
+#[test]
+fn init_stops_on_refusal_error_silence_and_crash() {
+    let file = init_firmware(false, None);
+    let fw = ucode::Firmware::parse(&file).unwrap();
+    let run = |setup: &dyn Fn(&mut Firmware, &mut Chip)| {
+        let (mut b, mut m, mut hw, base) = alive_x17(&fw, [0; 3]);
+        let alive = b.alive.unwrap();
+        let mut i = init::Init::new(b.boot.chip, &fw, &alive, None, &b.layout, base, &mut m, 0x420, X17_RF_ID, hw.now);
+        let mut sim = Firmware::new(b.boot.chip.family, base, 1);
+        setup(&mut sim, &mut hw);
+        run_init(&mut i, &mut b, &mut m, &mut hw, &mut sim);
+        (i.step, hw.now)
+    };
+    use hcmd::*;
+    assert_eq!(run(&|f, _| f.refuse = Some((SYSTEM_GROUP, SOC_CONFIGURATION_CMD))).0,
+        init::Step::Failed(init::Failure::Refused { group: SYSTEM_GROUP, opcode: SOC_CONFIGURATION_CMD }));
+    match run(&|f, _| f.error_on = Some((LONG_GROUP, BT_CONFIG))).0 {
+        init::Step::Failed(init::Failure::Firmware(e)) => assert_eq!((e.kind, e.command), (0x1234, BT_CONFIG)),
+        other => panic!("{other:?}"),
+    }
+    let (step, at) = run(&|f, _| f.silent_on = Some((REGULATORY_AND_NVM_GROUP, NVM_GET_INFO)));
+    assert_eq!(step, init::Step::Failed(init::Failure::Timeout { group: REGULATORY_AND_NVM_GROUP, opcode: NVM_GET_INFO }));
+    assert!(at < 3_000_000, "gave up after about a second, not never");
+    // NVM_ACCESS_COMPLETE answered but INIT_COMPLETE never sent.
+    let (step, _) = run(&|f, _| f.silent_on = Some((REGULATORY_AND_NVM_GROUP, NVM_ACCESS_COMPLETE)));
+    assert!(matches!(step, init::Step::Failed(init::Failure::Timeout { .. })));
+    let (step, _) = run(&|_, hw| { hw.regs.insert(csr::MAC_ADDR_STRAP, 0); hw.regs.insert(csr::MAC_ADDR_STRAP + 4, 0); });
+    assert_eq!(step, init::Step::Failed(init::Failure::NoMacAddress));
+    let (step, _) = run(&|_, hw| { hw.regs.insert(csr::INT, csr::INT_SW_ERR); });
+    assert_eq!(step, init::Step::Failed(init::Failure::Crashed { cause: csr::INT_SW_ERR }));
+}
+
+#[test]
+fn mac_address_comes_from_the_fuses() {
+    assert_eq!(init::mac_from_words(0x0211_2233, 0x0000_4455), [0x02, 0x11, 0x22, 0x33, 0x44, 0x55]);
+    assert!(init::valid_mac(&[0x02, 0x11, 0x22, 0x33, 0x44, 0x55]));
+    for bad in [[0; 6], [0xff; 6], [0x02, 0xcc, 0xaa, 0xff, 0xee, 0x00], [0x01, 0, 0, 0, 0, 1]] { assert!(!init::valid_mac(&bad)); }
 }

@@ -33,6 +33,7 @@ do from ring 3. When a feature needs a little ring-0 help, add the smallest mech
 |------|--------|--------|
 | 2026-11-09 | 21,500 | Baseline after removing dead POSIX/Linux-shaped stubs (18,383 lines). Headroom covers the open boot-log/stop-screen (#78), VMD enumeration (#84) and lease (#79) work. ACPI AML in ring 0 (#70, #82) is the open question in the audit. |
 | 2026-11-10 | 22,500 | Master already counted 22,121 after the boot log (#78), VMD (#84), IOMMU (#86) and MSI-X (#87) merges, over the old budget. Stage 7a (#89) adds ~115 lines of scheduler latency classes (urgent queue, preempt vector 0xF2, wake latency counters): choosing which task runs next is the scheduler's job and cannot move to a server. |
+| 2026-11-10 | 22,500 | (Same budget; no raise needed after #89.) Display and Shell restarting in place adds about 30 lines of mechanism (keep their BOOT pages, end a domain at its next syscall); the desktop logic for coming back lives in Shell. |
 
 ## 2. No Linux-shaped kernel API
 

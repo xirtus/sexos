@@ -5355,7 +5355,7 @@ pub extern "C" fn _start() -> ! {
             },
         }
     };
-    // Intel Wi-Fi (stage W2): power up to firmware ALIVE beside the wired NIC.
+    // Intel Wi-Fi (stages W2-W3): power up and initialise the firmware beside the wired NIC.
     let mut wifi=wifi::Wifi::open(sex_pdx::get_ticks());
     let mut ethernet:Option<ethernet::Driver<nic::Live>>=None;
     let mut pending_packet:Option<sex_net::Frame>=None;

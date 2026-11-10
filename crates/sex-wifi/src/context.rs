@@ -15,6 +15,14 @@ pub const RX_RING_COUNT: usize = 512;
 pub const RX_BUFFERS: usize = 64;
 pub const RX_BUFFER_BYTES: u64 = 4096;
 pub const TFD_BYTES: u64 = 256;
+/// Host command buffers on queue 0. One command is in flight at a time, so a few
+/// pages, reused round the ring, are enough; each holds the largest command.
+pub const CMD_SLOTS: usize = 16;
+pub const CMD_BUFFER_BYTES: u64 = 4096;
+/// Platform NVM for AX210-class chips: one page of segment addresses (used when
+/// the firmware wants a fragmented image) and room for one SKU's sections
+/// (about 14 KiB in today's files).
+pub const PNVM_BYTES: u64 = 64 * 1024;
 pub const CONTEXT_INFO_BYTES: usize = 1792;
 pub const CONTEXT_INFO_GEN3_BYTES: usize = 104;
 pub const PRPH_SCRATCH_BYTES: usize = 1660;
@@ -66,6 +74,10 @@ pub struct Layout {
     pub counts: (usize, usize, usize),
     /// `RX_BUFFERS` receive pages, one after another.
     pub rx_buffers: Range,
+    /// `CMD_SLOTS` host command buffers.
+    pub cmd_buffers: Range,
+    /// Platform NVM table page and sections (AX210 family; empty otherwise).
+    pub pnvm: Range,
     /// First free byte after the RX buffers; the data queues go here.
     pub end: u64,
 }
@@ -98,10 +110,39 @@ impl Layout {
         let umac = place(image.umac);
         let paging = place(image.paging);
         let rx_buffers = take(RX_BUFFERS as u64 * RX_BUFFER_BYTES);
+        let cmd_buffers = take(CMD_SLOTS as u64 * CMD_BUFFER_BYTES);
+        let pnvm = if gen3 { take(PAGE + PNVM_BYTES) } else { none };
         let end = at;
         if end > region_bytes { return Err(Error::TooSmall { needed: end }); }
         Ok(Layout { family, context, prph_scratch, prph_info, rx_status, rx_free, rx_used, cmd_ring, iml,
-            lmac, umac, paging, counts: (image.lmac.len(), image.umac.len(), image.paging.len()), rx_buffers, end })
+            lmac, umac, paging, counts: (image.lmac.len(), image.umac.len(), image.paging.len()), rx_buffers, cmd_buffers, pnvm, end })
+    }
+
+    /// Puts one SKU's platform NVM sections in the region and points the
+    /// peripheral scratch at them (`iwx_pnvm_setup`, `iwx_ctxt_info_gen3_set_pnvm`).
+    /// A fragmented image is a table of segment addresses, each segment on its own
+    /// pages; otherwise the sections are joined. Returns (address, bytes) given to
+    /// the chip, or None when this family has no PNVM or the sections do not fit.
+    pub fn write_pnvm(&self, dma: &mut impl Dma, base: u64, sections: &[&[u8]], fragmented: bool) -> Option<(u64, u32)> {
+        if self.family != Family::Ax210 || sections.is_empty() || sections.len() > MAX_DRAM_ENTRY { return None; }
+        let data = self.pnvm.offset + PAGE;
+        let limit = self.pnvm.offset + self.pnvm.len;
+        let mut at = data;
+        let mut table = [0u8; MAX_DRAM_ENTRY * 8];
+        let mut total = 0u64;
+        for (i, s) in sections.iter().enumerate() {
+            if at + s.len() as u64 > limit { return None; }
+            dma.write(at, s);
+            table[i * 8..i * 8 + 8].copy_from_slice(&(base + at).to_le_bytes());
+            total += s.len() as u64;
+            at += s.len() as u64;
+            if fragmented { at = align(at); }
+        }
+        let addr = if fragmented { dma.write(self.pnvm.offset, &table); base + self.pnvm.offset } else { base + data };
+        // prph_scratch.ctrl_cfg.pnvm_cfg: base address at 16, size at 24.
+        dma.write(self.prph_scratch.offset + 16, &addr.to_le_bytes());
+        dma.write(self.prph_scratch.offset + 24, &(total as u32).to_le_bytes());
+        Some((addr, total as u32))
     }
 
     /// Copies the firmware sections and the image loader into place, writes the

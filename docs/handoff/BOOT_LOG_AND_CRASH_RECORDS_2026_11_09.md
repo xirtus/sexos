@@ -45,12 +45,31 @@ service has to say so on its own screen, and the next start has to say what happ
   to the kernel (`OP_ADOPT`), then writes every kernel record not yet on disk. The kernel
   tells Files about new records with a message from caller 0 (`OP_NOTICE`) sent from the
   timer, as it does for app exits.
-- **Restart in place.** `service_restart` now covers Network, Files, Input and Bell (was
-  Network and Files). A service started again asks `OP_RESTARTS` and skips its once-only
-  start steps: Input does not wait for Shell's ready again, Bell does not repeat its
-  paging check. Display and Shell hold the desktop's whole state and cannot yet start
-  again in place; if either ends, the kernel stops the machine with the stop screen and a
-  record instead of leaving a frozen screen.
+- **Restart in place.** `service_restart` covers Network, Files, Input, Bell, Display and
+  Shell. A service started again asks `OP_RESTARTS` and skips its once-only start steps:
+  Input does not wait for Shell's ready again, Bell does not repeat its paging check.
+  - **Display** (2026-11-10) comes back from its BOOT pages and announces itself ready
+    again (`OP_DISPLAY_READY`, which it already sends at start). Shell takes a second
+    ready as the cue to show the desktop again: it registers as window manager, puts back
+    the cursor and the active scene's windows (geometry, chrome, bands), has SilkBar
+    resend the bar, re-lays out terminals, documents and panes, sends programs a resize
+    so they draw again, and restores focus. The crash gate compares the screen before
+    and after: 98.6% of sampled pixels are the same (the clock and Spindle's new lines
+    differ).
+  - **Shell** (2026-11-10) comes back from its BOOT pages; the kernel then asks Display
+    to end at its next syscall (`service_restart::request_end`), so Display starts again
+    and announces itself to the new Shell. The new Shell builds its custody from the
+    kernel's app catalog as at boot, skips the first-boot route checks, and gives each
+    running app the person had opened (boot-active rows, or rows whose activation is
+    `ACTIVE`) a frame again. If such an app registers again it is answered, not refused.
+    Notices to apps (document and terminal views) continue after the old run's sequence
+    numbers (`continue_after(restarts << 40)`), so apps take them as new.
+  - What a Shell restart loses: window positions the person chose (windows are tiled
+    again), minimized state, other workspaces' layout, and whether the Spindle frame was
+    toggled open. Apps keep running with their own state (Spindle keeps its history,
+    Quil its document).
+  - A desktop service that keeps dying (8 restarts) is given up on; then the kernel stops
+    the machine with the stop screen and a record instead of leaving a frozen desktop.
 - **Fuzzing.** `apps/fuzz` (`run fuzz [CALLS] [SEED]`) makes seeded random syscalls (every
   number up to 100 except the few that end, block or reshape the caller) and pdx calls
   (half to slots a program holds: Storage, Display, Shell, Bell, Net, Files' region route;
@@ -80,10 +99,11 @@ its next syscall, as a fault would; the target is woken so it makes one).
 
 - `scripts/crash_screen_gate.py` (probe build; CI runs it last): start 1 checks the boot
   log pixels, ends Network, Input and Bell (each restarts; keys still reach Spindle after
-  Input's restart, `beep` works after Bell's), lists `crashes`, stops the kernel and checks
+  Input's restart, `beep` works after Bell's), ends Display (the same desktop comes back), lists `crashes`, stops the kernel and checks
   the stop screen pixels and the self-restart; start 2 (warm) finds the kept stop, shows
   the amber note, writes it to disk; start 3 (cold, RAM gone) reads all records back from
-  disk and lists them, then ends Shell and checks the machine stops instead of freezing.
+  disk and lists them, then ends Shell: Shell and Display start again, the running apps keep their windows and
+  Spindle still takes commands.
 - `scripts/syscall_fuzz_gate.py`: as above.
 - `scripts/crash_log_host_gate.sh`: record format and ring slot choice on the host.
 
@@ -95,12 +115,9 @@ is a few milliseconds.
 
 ## Not done yet (next steps)
 
-1. **Display and Shell restart in place.** Needs a restart epoch in the Display and Shell
-   protocols: a restarted Display gets its framebuffer handoff and display lease again
-   (the kernel would re-send `DisplayPrimaryFramebuffer` and re-seed `ext_init`), then
-   asks Shell and every client to present again; a restarted Shell asks Display for the
-   surfaces that exist and rebuilds its window list from the app catalog. Until then the
-   machine restarts (with a record) instead of freezing.
+1. **Shell remembers the session across its own restart.** Window positions,
+   minimized frames, other workspaces and the Spindle toggle could live in a small
+   kernel-held region Shell writes as it goes and reads back when restarted.
 2. USB keyboards on the stop screen when the firmware has no legacy emulation (needs a
    polled xHCI path in the kernel, or a hardware watchdog restart).
 3. A crash record for hangs: a watchdog on core 0's timer that stops the machine when no
