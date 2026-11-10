@@ -127,6 +127,8 @@ impl Keys {
     pub fn new(sec_key_cmd: bool, mfp: bool) -> Self { Self { sec_key_cmd, mfp, waiting: [None; 3], in_flight: false, since: 0 } }
     /// Nothing waiting and no command unanswered.
     pub fn idle(&self) -> bool { !self.in_flight && self.waiting.iter().all(|k| k.is_none()) }
+    /// The key whose command the firmware has not answered yet.
+    pub fn in_flight(&self) -> Option<Key> { if self.in_flight { self.waiting[0] } else { None } }
 
     pub fn queue(&mut self, i: Install) {
         let mut put = |k: Key| { if let Some(slot) = self.waiting.iter_mut().find(|s| s.is_none()) { *slot = Some(k); } };

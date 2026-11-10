@@ -82,6 +82,8 @@ pub struct Link {
     pub rekey_messages: u32,
     pub rekeyed: u32,
     pub rekey_error: Option<eapol::Error>,
+    /// The answer to a key message, until the TX queue takes it (new keys wait for it).
+    reply: Option<([u8; 14 + eapol::MAX_FRAME], usize)>,
     pub rate_control: RateControl,
     /// The data rate the firmware last reported choosing (rate_n_flags).
     pub rate: u32,
@@ -130,7 +132,7 @@ impl Link {
     /// Over the association's (or handshake's) queue, once connected.
     pub fn new(tx: TxQueue, target: Target, me: [u8; 6], family: Family, protected: bool) -> Self {
         Self { tx, target, me, family, protected, seq: 0x400, pn: [[None; 16]; 4], sent: 0, received: 0, dropped: 0, last_drop: None, down: None,
-            rekey: None, rekey_messages: 0, rekeyed: 0, rekey_error: None, rate_control: RateControl::Off, rate: DATA_RATE }
+            rekey: None, rekey_messages: 0, rekeyed: 0, rekey_error: None, reply: None, rate_control: RateControl::Off, rate: DATA_RATE }
     }
     /// Answers later key messages with the handshake's state.
     pub fn with_rekey(mut self, r: Rekey) -> Self { self.rekey = Some(r); self }
@@ -178,13 +180,23 @@ impl Link {
         let (mut freed, mut gone, mut error, mut rate) = (None, None, None, None);
         let (mut received, mut dropped, mut last_drop) = (0u64, 0u64, None);
         let mut pn = self.pn;
+        // A key's counters start over when the firmware takes it, in receive order:
+        // frames after its answer are under the new key.
+        let mut installing = self.rekey.as_ref().and_then(|k| k.keys.in_flight()).and_then(|k| match k {
+            Key::Pairwise(_) => Some(0),
+            Key::Group(id, _) => Some(id as usize & 3),
+            Key::Integrity(..) => None,
+        });
         let mut scratch = [0u8; 4096];
         let mut eth = [0u8; 4096];
         let rekeying = self.rekey.is_some();
         let mut key_frame = [0u8; eapol::MAX_FRAME];
         let mut key_len = 0;
         let result = b.receive(r, dma, |p: &Packet<'_>| {
-            if cmdq.on_packet(p) { return; }
+            if cmdq.on_packet(p) {
+                if cmdq.answer.is_some_and(|a| !a.failed) { if let Some(id) = installing.take() { pn[id] = [None; 16]; } }
+                return;
+            }
             if let Some(s) = tx::parse_response(p) { freed = Some(s); return; }
             if let Some(r) = tlc::parse_update(p) { rate = Some(r); return; }
             let Some(rx) = parse_mpdu(p, family, &mut scratch) else {
@@ -225,18 +237,18 @@ impl Link {
         if let Some(e) = error { self.down = Some(Down::Failed(Failure::Firmware(e))); return false; }
         if let Some(reason) = gone { self.down = Some(Down::Disconnected(reason)); return false; }
         if let Some(rate) = rate { self.rate = rate; }
-        if key_len > 0 { self.on_key_message(b, r, dma, &key_frame[..key_len]); }
+        if key_len > 0 { self.on_key_message(&key_frame[..key_len]); }
         // One command at a time: rate control waits for keys, keys for rate control.
         if !self.rate_control_step(b, cmdq, r, dma, now) { return true; }
-        let installed = match self.rekey.as_mut().map(|k| k.keys.install(b, cmdq, r, dma, now)) {
-            Some(Ok(k)) => k,
+        // The answer to a key message goes out before its keys go in.
+        if let Some((eth, n)) = self.reply {
+            if self.send(b, r, dma, &eth[..n]).is_err() { return true; }
+            self.reply = None;
+        }
+        match self.rekey.as_mut().map(|k| k.keys.install(b, cmdq, r, dma, now)) {
+            Some(Ok(Some(_))) => self.rekeyed += 1,
             Some(Err(f)) => { self.down = Some(Down::Failed(f)); return false; }
-            None => None,
-        };
-        if let Some(k) = installed {
-            self.rekeyed += 1;
-            let id = match k { Key::Pairwise(_) => 0, Key::Group(id, _) => id as usize & 3, Key::Integrity(..) => return true };
-            self.pn[id] = [None; 16];
+            _ => {}
         }
         true
     }
@@ -269,7 +281,7 @@ impl Link {
     }
 
     /// A key message from the AP after the handshake: answered, its keys queued.
-    fn on_key_message<D: Dma>(&mut self, b: &Bringup, r: &mut impl Registers, dma: &mut D, frame: &[u8]) {
+    fn on_key_message(&mut self, frame: &[u8]) {
         let Some(k) = self.rekey.as_mut() else { return };
         self.rekey_messages += 1;
         let mut reply = [0u8; eapol::MAX_FRAME];
@@ -282,8 +294,9 @@ impl Link {
                     eth[6..12].copy_from_slice(&self.me);
                     eth[12..14].copy_from_slice(&eapol::ETHERTYPE.to_be_bytes());
                     eth[14..14 + n].copy_from_slice(&reply[..n]);
-                    // The answer goes before the new keys are in, under the current ones.
-                    if self.send(b, r, dma, &eth[..14 + n]).is_err() { self.rekey_error = Some(eapol::Error::Unexpected); }
+                    // Sent under the current keys, before the new ones go in (`poll`
+                    // retries it while the TX queue is full).
+                    self.reply = Some((eth, 14 + n));
                 }
             }
             Err(e) => self.rekey_error = Some(e),
