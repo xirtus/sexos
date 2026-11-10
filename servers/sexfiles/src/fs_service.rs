@@ -131,6 +131,14 @@ fn memory() -> Memory<'static> {
 }
 fn bring_up() -> State {
     let sectors = DiskFs::diskfs_block_call(sex_pdx::BLOCK_CAPACITY, 0, 0, 0);
+    let state = bring_up_on(sectors);
+    // No SexOS filesystem here (a Windows RAID volume, say): its own volumes, read only.
+    if matches!(state, State::Absent) && sectors >= DEVICE_MIN_SECTORS { crate::volumes::attach_device(sectors); }
+    state
+}
+/// Smallest disk worth scanning for other systems' volumes: 1 MiB.
+const DEVICE_MIN_SECTORS: u64 = 2048;
+fn bring_up_on(sectors: u64) -> State {
     if sectors < w::MIN_SECTORS {
         sex_pdx::serial_record!("[files.fs.absent] sectors={}", sectors);
         return State::Absent;
@@ -374,7 +382,7 @@ pub fn handle(caller: u32, a: u64, offset: u64, length: u64) -> u64 {
     let region = unsafe { core::slice::from_raw_parts_mut(view.virtual_address as *mut u8, w::REGION_BYTES) };
     let state = unsafe { &mut *core::ptr::addr_of_mut!(STATE) };
     if matches!(state, State::Untried) { *state = bring_up(); }
-    let State::Ready(fs) = state else { return w::reply(r.seq, w::UNAVAILABLE, 0) };
+    let fs = match state { State::Ready(fs) => Some(fs), _ => None };
     let mut path = [0u8; w::PATH_BYTES];
     let mut path_len = r.path_len as usize;
     path[..path_len].copy_from_slice(&region[..path_len]);
@@ -406,6 +414,13 @@ pub fn handle(caller: u32, a: u64, offset: u64, length: u64) -> u64 {
         path = own; path_len = n;
     }
     let data = &mut region[w::PATH_BYTES..];
+    let Some(fs) = fs else {
+        // No SexOS filesystem on this disk: only its own volumes under /media, read only.
+        let path = &path[..path_len];
+        if !crate::volumes::owns(path) { return w::reply(r.seq, w::UNAVAILABLE, 0); }
+        if r.kind == w::RENAME || r.kind == w::MOUNT || r.kind == w::UNMOUNT { return w::reply(r.seq, w::READ_ONLY, 0); }
+        return match crate::volumes::run(None, r, path, data) { Ok(value) => w::reply(r.seq, w::OK, value), Err(status) => w::reply(r.seq, status, 0) };
+    };
     // Reads change nothing; a write fails before it changes anything (sexfs checks
     // first, and a device error poisons the filesystem). Every other change commits
     // waiting writes first, so its own rollback can only undo itself.
@@ -421,9 +436,9 @@ pub fn handle(caller: u32, a: u64, offset: u64, length: u64) -> u64 {
     let media = match (r.kind, rename_halves) {
         (w::MOUNT, _) => Some(crate::volumes::mount(fs, path, data)),
         (w::UNMOUNT, _) => Some(crate::volumes::unmount(fs, path)),
-        (w::RENAME, Some((a, b))) if crate::volumes::owns(a) || crate::volumes::owns(b) => Some(crate::volumes::rename(fs, a, b)),
+        (w::RENAME, Some((a, b))) if crate::volumes::owns(a) || crate::volumes::owns(b) => Some(crate::volumes::rename(Some(&mut *fs), a, b)),
         (w::RENAME, _) => None,
-        _ if crate::volumes::owns(path) => Some(crate::volumes::run(fs, r, path, data)),
+        _ if crate::volumes::owns(path) => Some(crate::volumes::run(Some(&mut *fs), r, path, data)),
         _ => None,
     };
     if let Some(result) = media {
