@@ -224,6 +224,8 @@ pub extern "C" fn trampoline_main() {
         // [sexobject.multi.profile.done] non_isolated=1
     }
 
+    // A system on trial after an update: from here on a failed start falls back.
+    crate::updater::on_start();
     serial_println!("[sexfiles.ready]");
     serial_println!("[sexfiles.init.ready] slot=1 ok=1");
     serial_println!("[sexfiles.trampoline.loop.enter] ok=1");
@@ -334,6 +336,9 @@ pub extern "C" fn trampoline_main() {
             }continue;
         }
         if msg.type_id==sex_pdx::spindle_history::OP {
+            // The terminal on the desktop is up and asking for its history: a system on
+            // trial after an update has started well enough to keep.
+            if crate::spindle_history::live(caller) { crate::updater::on_healthy(); }
             if let Some(value)=history.handle(&vfs::RAMFS,caller,crate::spindle_history::live(caller),msg.arg0,msg.arg1,msg.arg2,&mut durable_history){pdx_reply(caller,value);}
             continue;
         }

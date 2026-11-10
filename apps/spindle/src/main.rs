@@ -85,6 +85,7 @@ mod history_persistence;
 mod storage_probe;
 mod fs_commands;
 mod fetch_command;
+mod update_command;
 mod network_probe;
 static mut NETWORK_PROBE:network_probe::Client=network_probe::Client::new();
 static mut NETWORK_GENERATION:u64=0;
@@ -813,6 +814,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  run [+net] NAME [ARGS]  start a program from /bin or a path");
             sb.push(b"  edit FILE    open a file in Jot; @FILE gives any program that file");
             sb.push(b"  install [go] [GIB] [IMG] put SexOS beside the other systems on this disk; without go, only plans");
+            sb.push(b"  update [URL]           get the newest signed release into the other system slot, tried once");
             sb.push(b"  spawn N C    start C background copies of program N");
             sb.push(b"  records      count background programs; stopall [force]");
             sb.push(b"  ls cd pwd mkdir rm mv cat write append touch df   files");
@@ -1413,6 +1415,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
         }
         b"ls" if unsafe{fs_commands::FS.submit_line(cmd,args,sb)} => true,
         b"fetch" => {unsafe{let fs=&*core::ptr::addr_of!(fs_commands::FS);fetch_command::FETCH.start(args,sb,|p,o|fs.join(p,o));}true},
+        b"update" => {unsafe{update_command::UPDATE.start(args,sb);}true},
         b"cd"|b"pwd"|b"mkdir"|b"rm"|b"mv"|b"cat"|b"write"|b"append"|b"touch"|b"df"|b"install"|b"mount"|b"unmount" => unsafe{fs_commands::FS.submit_line(cmd,args,sb)},
         // The Files app, given a folder (the whole filesystem by default) to look after.
         b"files" => {
@@ -2731,7 +2734,8 @@ pub extern "C" fn _start() -> ! {
         if unsafe{fs_commands::FS.send()}{}
         if unsafe{fs_commands::FS.expired(sex_pdx::get_ticks(),sb)}{unsafe{content_render(&line,sb);}}
         if unsafe{fetch_command::FETCH.step(sb)}{unsafe{content_render(&line,sb);}}
-        let msg=if registration_pending || presentation_pending || storage_owner!=0 || unsafe{DISPLAY_IO.pending() || HISTORY_STATUS.pending() || NETWORK_PROBE.busy()} || unsafe{fs_commands::FS.busy()||fetch_command::FETCH.busy()}{
+        if unsafe{update_command::UPDATE.step(sb)}{unsafe{content_render(&line,sb);}}
+        let msg=if registration_pending || presentation_pending || storage_owner!=0 || unsafe{DISPLAY_IO.pending() || HISTORY_STATUS.pending() || NETWORK_PROBE.busy()} || unsafe{fs_commands::FS.busy()||fetch_command::FETCH.busy()||update_command::UPDATE.busy()}{
             match sex_pdx::pdx_try_listen_raw(0){Some(msg)=>msg,None=>{sex_pdx::sys_yield();continue}}
         }else{sex_pdx::pdx_listen_raw(0)};
         if msg.type_id==1&&unsafe{fetch_command::FETCH.receive(msg.caller_pd,msg.arg0,sb)}{unsafe{content_render(&line,sb);}continue;}

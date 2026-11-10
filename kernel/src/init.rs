@@ -822,6 +822,12 @@ pub fn init() {
 
     // Final BOOT_DAG memory edges precede sealing and every task admission.
     crate::boot_memory::init(sexdrive_id, sexdisp_id, sexusb_id, sexnet_id, sexfiles_id);
+    // UEFI firmware leaves network controllers bus-mastering (OVMF does, with or without
+    // a network option ROM). The network service proves custody of a NIC only from idle,
+    // so it gets its controllers as a restarted run does: bus mastering off first.
+    if sexnet_id != 0 {
+        if let Some(pd) = crate::ipc::DOMAIN_REGISTRY.get(sexnet_id) { crate::pci_command::quiesce(pd); }
+    }
     crate::boot_memory::init_documents(sexfiles_id, sex_pdx::app_catalog::QUIL_TARGETS);
     assert_eq!((silkshell_id, sexdisp_id), (sex_pdx::uiir::SHELL_PD, sex_pdx::uiir::DISPLAY_PD), "BOOT_UIIR_DOMAINS");
     crate::boot_memory::init_uiir(silkshell_id, sexdisp_id);
@@ -831,6 +837,7 @@ pub fn init() {
     crate::boot_memory::init_program_image(sexfiles_id);
     crate::boot_memory::init_fs_regions(sexfiles_id);
     crate::boot_memory::init_boot_image(sexfiles_id);
+    crate::boot_memory::init_boot_facts(sexfiles_id);
     crate::boot_memory::init_web_regions(sexnet_id);
     crate::program_tenancy::claim_regions();
     // The network service parses the internet, so it is the one most likely to fall over.

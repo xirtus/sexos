@@ -369,10 +369,15 @@ pub fn handle(caller: u32, a: u64, offset: u64, length: u64) -> u64 {
     let Some(r) = w::Request::decode(a, offset, length) else { return w::reply((a & 0xFF_FFFF) as u32, w::INVALID, 0) };
     let program = program_index(caller);
     let index = match (sex_pdx::app_catalog::SPINDLE_TARGETS.iter().position(|t| *t == caller), program) {
-        (Some(index), _) => { if !crate::spindle_history::live(caller) { return w::reply(r.seq, w::DENIED, 0); } index }
+        (Some(index), _) => {
+            if !crate::spindle_history::live(caller) { return w::reply(r.seq, w::DENIED, 0); }
+            // The desktop's terminal is up and talking: a system on trial passes.
+            crate::updater::on_healthy();
+            index
+        }
         (None, Some(k)) => {
             let bound = unsafe { (*core::ptr::addr_of!(BINDINGS))[k] };
-            if !bound.is_some_and(|b| program_live(caller, b.task)) || matches!(r.kind, w::PREPARE | w::INSTALL | w::MOUNT | w::UNMOUNT) { return w::reply(r.seq, w::DENIED, 0); }
+            if !bound.is_some_and(|b| program_live(caller, b.task)) || matches!(r.kind, w::PREPARE | w::INSTALL | w::UPDATE | w::MOUNT | w::UNMOUNT) { return w::reply(r.seq, w::DENIED, 0); }
             w::PROGRAM_INDEX_BASE + k
         }
         _ => return w::reply(r.seq, w::DENIED, 0),
@@ -395,6 +400,15 @@ pub fn handle(caller: u32, a: u64, offset: u64, length: u64) -> u64 {
         // layout under the mounted filesystem may have changed: drop it until restart.
         if go && DiskFs::diskfs_block_call(sex_pdx::BLOCK_LAYOUT, 0, 0, 0) & 0xFF == sex_pdx::BLOCK_LAYOUT_LOCKED { *state = State::Absent; }
         return match result { Ok(n) => w::reply(r.seq, w::OK, n), Err(e) => w::reply(r.seq, status(e), 0) };
+    }
+    if r.kind == w::UPDATE {
+        let State::Ready(fs) = state else { return w::reply(r.seq, w::UNAVAILABLE, 0) };
+        let path_len = (r.path_len as usize).min(w::PATH_BYTES);
+        let mut path = [0u8; w::PATH_BYTES];
+        path[..path_len].copy_from_slice(&region[..path_len]);
+        if writes_pending() { commit_writes(fs); }
+        let result = crate::updater::run(fs, &path[..path_len], &mut region[w::PATH_BYTES..]);
+        return match result { Ok((st, n)) => w::reply(r.seq, st, n), Err(e) => w::reply(r.seq, status(e), 0) };
     }
     let fs = match state { State::Ready(fs) => Some(fs), _ => None };
     let mut path = [0u8; w::PATH_BYTES];

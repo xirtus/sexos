@@ -33,6 +33,7 @@ fn nvme_flush()->u64{EFFECTS.lock().unwrap().device.push((BLOCK_SYNC,0,0));0}
 fn device_sectors()->u64{2048}
 fn layout_word()->u64{0}
 fn serving_ahci()->bool{false}
+fn disk_sectors()->u64{0}
 include!(env!("SEXDRIVE_SERVICE_SOURCE"));
 fn setup()->mpsc::Sender<Message>{
  *EFFECTS.lock().unwrap()=Effects::default();unsafe{NVME_IO_STATE.ready=true;}

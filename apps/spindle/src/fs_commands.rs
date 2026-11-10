@@ -7,8 +7,10 @@ use sex_pdx::memory_region::{QUERY_VIEW, READ, WRITE};
 const CWD_MAX: usize = 512;
 const CAT_MAX: u64 = 32 * 1024;
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Cmd { Ls, Cd, Mkdir, Rm, Mv, Cat, Create, Write, Append(u8), Df, Program(u64, u64), Install, Mount, Unmount }
+enum Cmd { Ls, Cd, Mkdir, Rm, Mv, Cat, Create, Write, Append(u8), Df, Program(u64, u64), Install, Mount, Unmount, Update }
 pub struct Client { sent_at: u64, cmd: Option<Cmd>, seq: u32, kind: u8, path_len: u16, offset: u64, length: u64, sent: bool, cwd: [u8; CWD_MAX], cwd_len: usize, carry: [u8; 160], carry_len: usize, shown: u64, data_len: usize }
+/// How Files answered the last update request: OK go on, EXISTS nothing newer, else stop.
+pub static mut UPDATE_STATUS: Option<u8> = None;
 pub static mut FS: Client = Client { sent_at: 0, cmd: None, seq: 0, kind: 0, path_len: 0, offset: 0, length: 0, sent: false, cwd: [0; CWD_MAX], cwd_len: 0, carry: [0; 160], carry_len: 0, shown: 0, data_len: 0 };
 
 fn region() -> Option<&'static mut [u8]> {
@@ -65,6 +67,22 @@ impl Client {
         self.cmd = Some(cmd); self.kind = kind; self.path_len = path_len as u16; self.offset = offset; self.length = length; self.sent = false;
         self.seq = (self.seq + 1) & 0xFF_FFFF;
         self.carry_len = 0; self.shown = 0;
+    }
+    /// Asks Files to check (two paths) or apply (three) a downloaded update. The outcome
+    /// lands in [`UPDATE_STATUS`].
+    pub fn start_update(&mut self, paths: &[&[u8]], sb: &mut Scrollback) -> bool {
+        if self.busy() { return false; }
+        let Some(region) = region() else { return false };
+        let mut at = 0;
+        for (i, p) in paths.iter().enumerate() {
+            if i > 0 { region[at] = 0; at += 1; }
+            if at + p.len() > w::PATH_BYTES { sb.push(b"Path too long."); return false; }
+            region[at..at + p.len()].copy_from_slice(p);
+            at += p.len();
+        }
+        unsafe { UPDATE_STATUS = None; }
+        self.start(Cmd::Update, w::UPDATE, at, 0, 0);
+        true
     }
     /// Starts a command. False only for `ls` with arguments unusable here.
     pub fn submit_line(&mut self, cmd: &[u8], args: &[u8], sb: &mut Scrollback) -> bool {
@@ -224,6 +242,18 @@ impl Client {
         let Some(region) = region() else { self.cmd = None; return true };
         let data_at = w::PATH_BYTES;
         sex_pdx::serial_record!("[spindle.fs.result] kind={} status={} value={}", self.kind, status, value);
+        if cmd == Cmd::Update {
+            // Files' report, whatever it decided.
+            self.cmd = None;
+            let bytes = &region[data_at..data_at + (value as usize).min(w::DATA_MAX)];
+            for line in bytes.split(|b| *b == b'\n').filter(|l| !l.is_empty()) {
+                sex_pdx::serial_record!("[spindle.update.line] {}", shown(line));
+                for part in line.chunks(96) { sb.push(part); }
+            }
+            if value == 0 && status != w::OK { say!(sb, "update: {}", shown(w::message(status))); }
+            unsafe { UPDATE_STATUS = Some(status); }
+            return true;
+        }
         if status != w::OK {
             // A missing file is what write and append start from.
             if status == w::NOT_FOUND && matches!(cmd, Cmd::Write | Cmd::Append(0)) && self.kind == w::STAT {
@@ -325,6 +355,7 @@ impl Client {
                 }
             }
             Cmd::Unmount => { say!(sb, "Safe to remove."); }
+            Cmd::Update => {}
             Cmd::Program(count, flags) => {
                 use sex_pdx::program_store as store;
                 let (op, third) = if count == 0 { (store::OP_RUN, flags) } else { (store::OP_SPAWN, count) };
