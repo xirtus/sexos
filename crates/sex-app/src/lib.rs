@@ -569,7 +569,8 @@ pub fn typed(key: Key) -> Option<u8> {
 }
 
 /// The network, for a run the person started with `run +net`. Otherwise every call is
-/// refused. HTTP and HTTPS, one page at a time, through the network service's checked TLS.
+/// refused. HTTP and HTTPS through the network service's checked TLS, and TCP and UDP
+/// sockets ([`net::TcpStream`], [`net::TcpListener`], [`net::UdpSocket`]), over IPv4 or IPv6.
 pub mod net {
     use super::Window;
     use sex_pdx::memory_region::{QUERY_VIEW, READ, WRITE};
@@ -577,7 +578,7 @@ pub mod net {
 
     const NET: u32 = 13;
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    pub enum Error { NotAllowed, Offline, NoName, Connect, Certificate, Secure, TooSlow, Address, Failed, TooLarge, Busy }
+    pub enum Error { NotAllowed, Offline, NoName, Connect, Certificate, Secure, TooSlow, Address, Failed, TooLarge, Busy, InUse }
     pub fn message(e: Error) -> &'static [u8] {
         match e {
             Error::NotAllowed => b"This program was not given the network. Start it with run +net.",
@@ -585,6 +586,7 @@ pub mod net {
             Error::Certificate => b"The site's certificate isn't trusted.", Error::Secure => b"The secure connection failed.",
             Error::TooSlow => b"The site took too long.", Error::TooLarge => b"The reply is too large.", Error::Address => b"That address can't be read.", Error::Failed => b"The request failed.",
             Error::Busy => b"Too many connections are open.",
+            Error::InUse => b"That port is in use, or not one a program may take.",
         }
     }
     fn region() -> Result<&'static mut [u8], Error> {
@@ -631,7 +633,7 @@ pub mod net {
         }
     }
     fn ok(r: (u8, u32)) -> Result<u32, Error> {
-        match r.0 { w::OK | w::WAIT => Ok(r.1), w::DENIED => Err(Error::NotAllowed), w::OFFLINE => Err(Error::Offline), w::NO_NAME => Err(Error::NoName), w::BUSY => Err(Error::Busy), _ => Err(Error::Failed) }
+        match r.0 { w::OK | w::WAIT => Ok(r.1), w::DENIED => Err(Error::NotAllowed), w::OFFLINE => Err(Error::Offline), w::NO_NAME => Err(Error::NoName), w::BUSY => Err(Error::Busy), w::IN_USE => Err(Error::InUse), _ => Err(Error::Failed) }
     }
     fn pause() { let until = sex_pdx::get_ticks() + 5; while sex_pdx::get_ticks() < until { sex_pdx::sys_yield(); } }
     fn find(hay: &[u8], needle: &[u8]) -> Option<usize> { hay.windows(needle.len()).position(|w| w == needle) }
@@ -661,6 +663,322 @@ pub mod net {
     /// A decoded HTTP/1.1 reply: its head, and the body unframed and decompressed.
     pub struct Response { pub head: sex_fetch::Head, pub body: alloc::vec::Vec<u8> }
 
+    /// An internet address of either family. Data, not authority: holding one reaches
+    /// nothing a run not given the network could not.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+    pub enum IpAddr { V4([u8; 4]), V6([u8; 16]) }
+    impl IpAddr {
+        /// `10.0.2.2`, `fd00::1` or `[fd00::1]`. Names are for [`resolve`].
+        pub fn parse(text: &[u8]) -> Option<IpAddr> {
+            let text = text.strip_prefix(b"[").and_then(|t| t.strip_suffix(b"]")).unwrap_or(text);
+            if text.contains(&b':') { return parse6(text).map(IpAddr::V6); }
+            let mut a = [0u8; 4];
+            let mut parts = text.split(|b| *b == b'.');
+            for slot in a.iter_mut() {
+                let p = parts.next()?;
+                if p.is_empty() || p.len() > 3 || !p.iter().all(u8::is_ascii_digit) { return None; }
+                *slot = core::str::from_utf8(p).ok()?.parse().ok()?;
+            }
+            parts.next().is_none().then_some(IpAddr::V4(a))
+        }
+        pub fn is_ipv6(&self) -> bool { matches!(self, IpAddr::V6(_)) }
+    }
+    fn parse6(text: &[u8]) -> Option<[u8; 16]> {
+        fn groups(part: &[u8], out: &mut [u16; 8]) -> Option<usize> {
+            if part.is_empty() { return Some(0); }
+            let mut n = 0;
+            for g in part.split(|b| *b == b':') {
+                if g.is_empty() || g.len() > 4 || n == 8 { return None; }
+                out[n] = u16::from_str_radix(core::str::from_utf8(g).ok()?, 16).ok()?; n += 1;
+            }
+            Some(n)
+        }
+        let (mut head, mut tail) = ([0u16; 8], [0u16; 8]);
+        let split = text.windows(2).position(|w| w == b"::");
+        let (h, t) = match split {
+            Some(i) => (groups(&text[..i], &mut head)?, groups(&text[i + 2..], &mut tail)?),
+            None => (groups(text, &mut head)?, 0),
+        };
+        if split.is_none() && h != 8 || split.is_some() && h + t > 7 { return None; }
+        let mut words = [0u16; 8];
+        words[..h].copy_from_slice(&head[..h]);
+        words[8 - t..].copy_from_slice(&tail[..t]);
+        let mut a = [0u8; 16];
+        for (i, w) in words.iter().enumerate() { a[2 * i..2 * i + 2].copy_from_slice(&w.to_be_bytes()); }
+        Some(a)
+    }
+    /// The usual short forms: `10.0.2.2`, and RFC 5952's for IPv6 (`fd00:5e::1`).
+    impl core::fmt::Display for IpAddr {
+        fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+            match self {
+                IpAddr::V4(a) => write!(f, "{}.{}.{}.{}", a[0], a[1], a[2], a[3]),
+                IpAddr::V6(a) => {
+                    let w: [u16; 8] = core::array::from_fn(|i| u16::from_be_bytes([a[2 * i], a[2 * i + 1]]));
+                    // The longest run of two or more zero groups (the first of equals) becomes `::`.
+                    let (mut best, mut at) = ((0, 0), 0);
+                    while at < 8 {
+                        let len = w[at..].iter().take_while(|g| **g == 0).count();
+                        if len > best.1 { best = (at, len); }
+                        at += len.max(1);
+                    }
+                    let mut i = 0;
+                    while i < 8 {
+                        if best.1 >= 2 && i == best.0 { f.write_str(if i == 0 { "::" } else { ":" })?; i += best.1; continue; }
+                        write!(f, "{:x}", w[i])?;
+                        if i < 7 { f.write_str(":")?; }
+                        i += 1;
+                    }
+                    Ok(())
+                }
+            }
+        }
+    }
+    fn put_ip(out: &mut [u8], a: &IpAddr) {
+        match a { IpAddr::V4(b) => w::put_address(out, w::FAMILY_V4, b), IpAddr::V6(b) => w::put_address(out, w::FAMILY_V6, b) }
+    }
+    fn ip_of(bytes: &[u8]) -> Option<IpAddr> {
+        let (family, b) = w::address_of(bytes)?;
+        Some(if family == w::FAMILY_V4 { IpAddr::V4(b.try_into().ok()?) } else { IpAddr::V6(b.try_into().ok()?) })
+    }
+    fn endpoint(bytes: &[u8]) -> Option<(IpAddr, u16)> { Some((ip_of(bytes)?, u16::from_be_bytes([*bytes.get(17)?, *bytes.get(18)?]))) }
+    /// Lets a flow number go without telling the service (it holds nothing under it).
+    fn release(flow: Flow) { unsafe { (*core::ptr::addr_of_mut!(FLOWS_HELD))[flow.0 as usize / 64] &= !(1 << (flow.0 % 64)); } }
+    /// Waits for the network: a DHCP lease or a global IPv6 address. Thirty seconds at most.
+    pub fn up(window: &mut Window) -> Result<(), Error> {
+        let began = sex_pdx::get_ticks();
+        loop {
+            if call(window, w::UP, 0).and_then(ok_status)? == w::OK { return Ok(()); }
+            if sex_pdx::get_ticks().saturating_sub(began) > 30_000 { return Err(Error::Offline); }
+            pause();
+        }
+    }
+    /// `ok`, keeping the status (OK or WAIT).
+    fn ok_status(r: (u8, u32)) -> Result<u8, Error> { ok(r).map(|_| r.0) }
+    /// The machine's addresses and their prefix lengths: the leased IPv4 address and the
+    /// IPv6 ones (link-local and those SLAAC gave).
+    pub fn addresses(window: &mut Window) -> Result<alloc::vec::Vec<(IpAddr, u8)>, Error> {
+        let n = ok(call(window, w::ADDRESSES, 0)?)? as usize;
+        let region = region()?;
+        Ok((0..n).filter_map(|i| { let e = &region[i * (w::ADDRESS_BYTES + 1)..]; Some((ip_of(e)?, e[w::ADDRESS_BYTES])) }).collect())
+    }
+    /// The question a blocking `resolve` holds, apart from every exchange's flow.
+    const RESOLVE_HOLDER: Flow = Flow(w::CLIENT_FLOWS);
+    /// The addresses of `host`, the one to try first first: IPv6 when the machine has a
+    /// global IPv6 address and the name has one, then IPv4. An address is itself.
+    pub fn resolve(window: &mut Window, host: &[u8]) -> Result<alloc::vec::Vec<IpAddr>, Error> {
+        if let Some(a) = IpAddr::parse(host) { return Ok(alloc::vec![a]); }
+        let name = core::str::from_utf8(host).map_err(|_| Error::Address)?;
+        if name.is_empty() || name.len() > 253 { return Err(Error::Address); }
+        up(window)?;
+        if let Some(found) = remembered(name) { return Ok(found.into_iter().flatten().collect()); }
+        let began = sex_pdx::get_ticks();
+        let held = || unsafe { *core::ptr::addr_of!(RESOLVING) };
+        loop {
+            if sex_pdx::get_ticks().saturating_sub(began) > 30_000 { return Err(Error::TooSlow); }
+            if held().is_none() {
+                region()?[..host.len()].copy_from_slice(host);
+                let r = call(window, w::RESOLVE_ALL, host.len() as u64)?;
+                if r.0 != w::BUSY { ok(r)?; break; }
+            }
+            pause();
+        }
+        unsafe { RESOLVING = Some(RESOLVE_HOLDER); }
+        let answer = loop {
+            let r = call(window, w::RESOLVE_ALL, 0);
+            match r {
+                Ok((w::WAIT, _)) if sex_pdx::get_ticks().saturating_sub(began) <= 30_000 => pause(),
+                Ok((w::WAIT, _)) => break Err(Error::TooSlow),
+                Ok(r) => break ok(r),
+                Err(e) => break Err(e),
+            }
+        };
+        unsafe { RESOLVING = None; }
+        let n = answer? as usize;
+        let region = region()?;
+        let mut found = [None; 2];
+        for (i, slot) in found.iter_mut().enumerate().take(n) { *slot = ip_of(&region[i * w::ADDRESS_BYTES..]); }
+        remember(name, found);
+        Ok(found.into_iter().flatten().collect())
+    }
+
+    /// A TCP connection of this program, over IPv4 or IPv6. Calls that wait have a
+    /// non-waiting form, so a program can keep several going and draw between them.
+    pub struct TcpStream { flow: Flow, peer: (IpAddr, u16) }
+    impl TcpStream {
+        /// Starts connecting to `address` and returns at once; `poll_open` says when it is.
+        pub fn begin(window: &mut Window, address: &IpAddr, port: u16) -> Result<TcpStream, Error> {
+            let flow = take_flow()?;
+            put_ip(region().map_err(|e| { release(flow); e })?, address);
+            match call_on(window, flow, w::CONNECT_TO, port as u64).and_then(ok) {
+                Ok(_) => Ok(TcpStream { flow, peer: (*address, port) }),
+                Err(e) => { release(flow); Err(e) }
+            }
+        }
+        /// True once connected (or connected and already closed by the peer).
+        pub fn poll_open(&self, window: &mut Window) -> Result<bool, Error> {
+            match ok(call_on(window, self.flow, w::STATE, 0)?)? {
+                w::STATE_OPENING => Ok(false),
+                w::STATE_CLOSED => Err(Error::Connect),
+                _ => Ok(true),
+            }
+        }
+        /// Connects to `address`, waiting up to thirty seconds.
+        pub fn connect_to(window: &mut Window, address: &IpAddr, port: u16) -> Result<TcpStream, Error> { Self::connect_within(window, address, port, 30_000) }
+        fn connect_within(window: &mut Window, address: &IpAddr, port: u16, ms: u64) -> Result<TcpStream, Error> {
+            let stream = Self::begin(window, address, port)?;
+            let began = sex_pdx::get_ticks();
+            loop {
+                match stream.poll_open(window) {
+                    Ok(true) => return Ok(stream),
+                    Ok(false) if sex_pdx::get_ticks().saturating_sub(began) < ms => pause(),
+                    Ok(false) => { close(window, stream.flow); return Err(Error::Connect); }
+                    Err(e) => { close(window, stream.flow); return Err(e); }
+                }
+            }
+        }
+        /// Connects to `host` (a name or an address) on `port`, trying its addresses in
+        /// turn: IPv6 first when it has one and the machine can use it, then IPv4.
+        pub fn connect(window: &mut Window, host: &[u8], port: u16) -> Result<TcpStream, Error> {
+            let found = resolve(window, host)?;
+            let mut last = Error::NoName;
+            for (i, a) in found.iter().enumerate() {
+                // An address with another after it gets less time, so a dead route doesn't hold up the next.
+                match Self::connect_within(window, a, port, if i + 1 < found.len() { 3_000 } else { 30_000 }) { Ok(s) => return Ok(s), Err(e) => last = e }
+            }
+            Err(last)
+        }
+        /// The address and port at the other end.
+        pub fn peer(&self) -> (IpAddr, u16) { self.peer }
+        /// Sends what fits now; 0 when the send queue is full.
+        pub fn write(&mut self, window: &mut Window, bytes: &[u8]) -> Result<usize, Error> {
+            let n = bytes.len().min(w::REGION_BYTES);
+            region()?[..n].copy_from_slice(&bytes[..n]);
+            Ok(ok(call_on(window, self.flow, w::SEND, n as u64)?)? as usize)
+        }
+        /// Sends all of `bytes`, waiting for room (thirty seconds at most without any).
+        pub fn write_all(&mut self, window: &mut Window, mut bytes: &[u8]) -> Result<(), Error> {
+            let mut moved = sex_pdx::get_ticks();
+            while !bytes.is_empty() {
+                let n = self.write(window, bytes)?;
+                bytes = &bytes[n..];
+                if n > 0 { moved = sex_pdx::get_ticks(); } else if sex_pdx::get_ticks().saturating_sub(moved) > 30_000 { return Err(Error::TooSlow); } else { pause(); }
+            }
+            Ok(())
+        }
+        /// Reads what has arrived; 0 when nothing has yet (see `is_closed`).
+        pub fn read(&mut self, window: &mut Window, out: &mut [u8]) -> Result<usize, Error> {
+            let room = out.len().min(32 * 1024).max(1);
+            let k = (ok(call_on(window, self.flow, w::RECEIVE, room as u64)?)? as usize).min(out.len());
+            out[..k].copy_from_slice(&region()?[..k]);
+            Ok(k)
+        }
+        /// True once the peer has closed its side (or the connection is gone).
+        pub fn is_closed(&self, window: &mut Window) -> Result<bool, Error> {
+            Ok(matches!(ok(call_on(window, self.flow, w::STATE, 0)?)?, w::STATE_PEER_CLOSED | w::STATE_CLOSED))
+        }
+        /// Waits up to `ms` for bytes: how many came, or 0 once the peer has closed and
+        /// everything it sent has been read.
+        pub fn read_within(&mut self, window: &mut Window, out: &mut [u8], ms: u64) -> Result<usize, Error> {
+            let began = sex_pdx::get_ticks();
+            let mut closed = false;
+            loop {
+                let k = self.read(window, out)?;
+                if k > 0 || closed { return Ok(k); }
+                // Bytes can land between the two calls, so a closed peer gets one last read.
+                closed = self.is_closed(window)?;
+                if !closed { if sex_pdx::get_ticks().saturating_sub(began) > ms { return Err(Error::TooSlow); } pause(); }
+            }
+        }
+        /// Sends this side's FIN after what is queued; the stream can still read.
+        pub fn shutdown(&mut self, window: &mut Window) -> Result<(), Error> { ok(call_on(window, self.flow, w::SHUTDOWN, 0)?).map(|_| ()) }
+        /// Closes this side and lets the connection finish on its own.
+        pub fn close(mut self, window: &mut Window) { let _ = self.shutdown(window); close(window, self.flow); }
+    }
+
+    /// A TCP port this program takes connections on, over either family. The run must
+    /// have the network (`run +net`), and the port must be free and at most
+    /// `sex_pdx::web::PROGRAM_PORT_MAX`, not 68.
+    pub struct TcpListener { flow: Flow, port: u16 }
+    impl TcpListener {
+        pub fn bind(window: &mut Window, port: u16) -> Result<TcpListener, Error> {
+            let flow = take_flow()?;
+            match call_on(window, flow, w::LISTEN, port as u64).and_then(ok) {
+                Ok(_) => Ok(TcpListener { flow, port }),
+                Err(e) => { release(flow); Err(e) }
+            }
+        }
+        pub fn port(&self) -> u16 { self.port }
+        /// A connection a peer made, if one has; the listener keeps listening.
+        pub fn accept(&mut self, window: &mut Window) -> Result<Option<TcpStream>, Error> {
+            let new = take_flow()?;
+            let r = call_on(window, self.flow, w::ACCEPT, new.0 as u64).and_then(ok_status);
+            match r {
+                Ok(w::OK) => {
+                    let peer = endpoint(region()?).unwrap_or((IpAddr::V4([0; 4]), 0));
+                    Ok(Some(TcpStream { flow: new, peer }))
+                }
+                Ok(_) => { release(new); Ok(None) }
+                Err(e) => { release(new); Err(e) }
+            }
+        }
+        /// Waits up to `ms` for a connection.
+        pub fn accept_within(&mut self, window: &mut Window, ms: u64) -> Result<TcpStream, Error> {
+            let began = sex_pdx::get_ticks();
+            loop {
+                if let Some(s) = self.accept(window)? { return Ok(s); }
+                if sex_pdx::get_ticks().saturating_sub(began) > ms { return Err(Error::TooSlow); }
+                pause();
+            }
+        }
+        pub fn close(self, window: &mut Window) { close(window, self.flow); }
+    }
+
+    /// A UDP socket of this program, over either family.
+    pub struct UdpSocket { flow: Flow, port: u16 }
+    impl UdpSocket {
+        /// On `port`, or on one the service picks when 0. The same rules as `TcpListener`.
+        pub fn bind(window: &mut Window, port: u16) -> Result<UdpSocket, Error> {
+            let flow = take_flow()?;
+            match call_on(window, flow, w::UDP_BIND, port as u64).and_then(ok) {
+                Ok(port) => Ok(UdpSocket { flow, port: port as u16 }),
+                Err(e) => { release(flow); Err(e) }
+            }
+        }
+        pub fn local_port(&self) -> u16 { self.port }
+        /// Queues one datagram; false when the queue has no room yet. Payloads past one
+        /// frame (1452 bytes over IPv6, 1472 over IPv4) are refused.
+        pub fn send_to(&mut self, window: &mut Window, bytes: &[u8], to: &IpAddr, port: u16) -> Result<bool, Error> {
+            if bytes.len() > w::REGION_BYTES - w::ENDPOINT_BYTES { return Err(Error::TooLarge); }
+            let region = region()?;
+            put_ip(region, to);
+            region[17..19].copy_from_slice(&port.to_be_bytes());
+            region[w::ENDPOINT_BYTES..w::ENDPOINT_BYTES + bytes.len()].copy_from_slice(bytes);
+            let r = call_on(window, self.flow, w::UDP_SEND, bytes.len() as u64)?;
+            if r.0 == w::INVALID { return Err(Error::TooLarge); }
+            Ok(ok_status(r)? == w::OK)
+        }
+        /// One datagram that came, if any: its length (cut at `out.len()`), sender and port.
+        pub fn recv_from(&mut self, window: &mut Window, out: &mut [u8]) -> Result<Option<(usize, IpAddr, u16)>, Error> {
+            let r = call_on(window, self.flow, w::UDP_RECEIVE, out.len() as u64)?;
+            if ok_status(r)? != w::OK { return Ok(None); }
+            let region = region()?;
+            let n = (r.1 as usize).min(out.len());
+            out[..n].copy_from_slice(&region[w::ENDPOINT_BYTES..w::ENDPOINT_BYTES + n]);
+            let (from, port) = endpoint(region).ok_or(Error::Failed)?;
+            Ok(Some((n, from, port)))
+        }
+        /// Waits up to `ms` for a datagram.
+        pub fn recv_from_within(&mut self, window: &mut Window, out: &mut [u8], ms: u64) -> Result<(usize, IpAddr, u16), Error> {
+            let began = sex_pdx::get_ticks();
+            loop {
+                if let Some(d) = self.recv_from(window, out)? { return Ok(d); }
+                if sex_pdx::get_ticks().saturating_sub(began) > ms { return Err(Error::TooSlow); }
+                pause();
+            }
+        }
+        pub fn close(self, window: &mut Window) { close(window, self.flow); }
+    }
+
     /// One HTTP/1.1 request on a flow of its own, read a step at a time, so a program can
     /// keep several going at once (the service makes flows as they are asked for)
     /// and do other work between steps. `start` connects and sends; `poll` reads what
@@ -670,7 +988,9 @@ pub mod net {
         flow: Flow, get_head: bool, raw: alloc::vec::Vec<u8>, cap: usize, max: usize,
         head_end: Option<usize>, framing: Option<sex_fetch::Framing>, chunks: sex_fetch::ChunkScan,
         began: u64, start: u64, idle: u32, calls: u32, empty: u32, peer_done: bool, whole: bool,
-        setup: Setup, host: alloc::string::String, port: u16, tls: bool, address: [u8; 4], out: alloc::vec::Vec<u8>,
+        setup: Setup, host: alloc::string::String, port: u16, tls: bool, out: alloc::vec::Vec<u8>,
+        /// Where the name led, in the order to try, and which one is being tried.
+        addresses: [Option<IpAddr>; 2], trying: usize, connect_at: u64,
         /// On a connection an earlier exchange left open (keep-alive).
         reused: bool,
         /// Where the reply's body ended exactly, once its framing says so.
@@ -696,26 +1016,24 @@ pub mod net {
     /// The exchange of this program whose question the resolver is answering: it answers
     /// one question per caller at a time.
     static mut RESOLVING: Option<Flow> = None;
-    /// Names this program has looked up lately: name, address, when.
-    static mut NAMES: alloc::vec::Vec<(alloc::string::String, [u8; 4], u64)> = alloc::vec::Vec::new();
+    /// Names this program has looked up lately: name, addresses (in the order to try), when.
+    static mut NAMES: alloc::vec::Vec<(alloc::string::String, [Option<IpAddr>; 2], u64)> = alloc::vec::Vec::new();
     const NAME_KEEP_TICKS: u64 = 300_000;
-    fn remembered(host: &str) -> Option<[u8; 4]> {
+    /// How long a connection to one of a name's addresses may take before the next is tried.
+    const NEXT_ADDRESS_TICKS: u64 = 3_000;
+    fn remembered(host: &str) -> Option<[Option<IpAddr>; 2]> {
         let now = sex_pdx::get_ticks();
         let names = unsafe { &mut *core::ptr::addr_of_mut!(NAMES) };
         names.retain(|(_, _, at)| now.saturating_sub(*at) < NAME_KEEP_TICKS);
         names.iter().find(|(n, _, _)| n == host).map(|(_, a, _)| *a)
     }
-    fn remember(host: &str, address: [u8; 4]) {
+    fn remember(host: &str, address: [Option<IpAddr>; 2]) {
         let names = unsafe { &mut *core::ptr::addr_of_mut!(NAMES) };
         names.retain(|(n, _, _)| n != host);
         if names.len() >= 256 { names.remove(0); }
         names.push((alloc::string::String::from(host), address, sex_pdx::get_ticks()));
     }
-    fn numeric(host: &[u8]) -> Option<[u8; 4]> {
-        let mut a = [0u8; 4]; let mut parts = host.split(|b| *b == b'.');
-        for slot in a.iter_mut() { *slot = parts.next().and_then(|p| core::str::from_utf8(p).ok()?.parse::<u8>().ok())?; }
-        parts.next().is_none().then_some(a)
-    }
+    fn numeric(host: &[u8]) -> Option<[Option<IpAddr>; 2]> { IpAddr::parse(host).map(|a| [Some(a), None]) }
     impl Exchange {
         /// Takes a flow number for `req` (with `cookie`, the jar's value for its address)
         /// and returns at once: `poll` resolves, connects, encrypts, sends and then reads,
@@ -739,7 +1057,7 @@ pub mod net {
             let now = sex_pdx::get_ticks();
             Ok(Exchange { flow, get_head, raw: alloc::vec::Vec::new(), cap, max,
                 head_end: None, framing: None, chunks: sex_fetch::ChunkScan::new(), began: now, start: now, idle: 0, calls: 0, empty: 0, peer_done: false, whole: false,
-                setup: if kept.is_some() { Setup::Send { at: 0 } } else { Setup::Up }, host: alloc::string::String::from(host), port, tls, address: [0; 4], out,
+                setup: if kept.is_some() { Setup::Send { at: 0 } } else { Setup::Up }, host: alloc::string::String::from(host), port, tls, out, addresses: [None; 2], trying: 0, connect_at: 0,
                 reused: kept.is_some(), body_end: None })
         }
         /// A kept connection that failed before any reply byte: the site had closed it.
@@ -763,7 +1081,7 @@ pub mod net {
                     let r = call(window, w::UP, 0)?; ok(r)?;
                     if r.0 == w::OK {
                         let known = numeric(self.host.as_bytes()).or_else(|| remembered(&self.host));
-                        self.setup = match known { Some(a) => { self.address = a; Setup::Connect { asked: false } } None => Setup::Resolve { asked: false } };
+                        self.setup = match known { Some(a) => { self.addresses = a; self.trying = 0; Setup::Connect { asked: false } } None => Setup::Resolve { asked: false } };
                     } else { moved = false; }
                 }
                 Setup::Resolve { asked: false } => {
@@ -771,31 +1089,44 @@ pub mod net {
                     if held.is_some_and(|f| f != flow) { moved = false; }
                     else {
                         region()?[..self.host.len()].copy_from_slice(self.host.as_bytes());
-                        let r = call(window, w::RESOLVE, self.host.len() as u64)?;
+                        let r = call(window, w::RESOLVE_ALL, self.host.len() as u64)?;
                         if r.0 == w::BUSY { moved = false; } else { ok(r)?; unsafe { RESOLVING = Some(flow); } self.setup = Setup::Resolve { asked: true }; }
                     }
                 }
                 Setup::Resolve { asked: true } => {
-                    let r = call(window, w::RESOLVE, 0)?;
+                    let r = call(window, w::RESOLVE_ALL, 0)?;
                     if r.0 == w::WAIT { moved = false; }
                     else {
                         unsafe { RESOLVING = None; }
-                        ok(r)?;
+                        let n = ok(r)? as usize;
                         let region = region()?;
-                        self.address = [region[0], region[1], region[2], region[3]];
-                        remember(&self.host, self.address);
+                        self.addresses = [None; 2];
+                        for (i, slot) in self.addresses.iter_mut().enumerate().take(n) { *slot = ip_of(&region[i * w::ADDRESS_BYTES..]); }
+                        if self.addresses[0].is_none() { return Err(Error::NoName); }
+                        remember(&self.host, self.addresses);
+                        self.trying = 0;
                         self.setup = Setup::Connect { asked: false };
                     }
                 }
                 Setup::Connect { asked: false } => {
-                    let r = call_on(window, flow, w::CONNECT, w::address_port(self.address, self.port))?;
-                    if r.0 == w::BUSY { moved = false; } else { ok(r)?; self.setup = Setup::Connect { asked: true }; }
+                    let address = self.addresses[self.trying].ok_or(Error::NoName)?;
+                    put_ip(region()?, &address);
+                    let r = call_on(window, flow, w::CONNECT_TO, self.port as u64)?;
+                    if r.0 == w::BUSY { moved = false; } else { ok(r)?; self.setup = Setup::Connect { asked: true }; self.connect_at = sex_pdx::get_ticks(); }
                 }
-                Setup::Connect { asked: true } => match ok(call_on(window, flow, w::STATE, 0)?)? {
-                    w::STATE_OPEN => self.setup = if self.tls { Setup::Tls { asked: false } } else { Setup::Send { at: 0 } },
-                    w::STATE_OPENING => moved = false,
-                    _ => return Err(Error::Connect),
-                },
+                Setup::Connect { asked: true } => {
+                    let state = ok(call_on(window, flow, w::STATE, 0)?)?;
+                    // A name's next address is tried when the first fails or is slow (the
+                    // Happy Eyeballs order: IPv6, then IPv4).
+                    let next = self.addresses.get(self.trying + 1).copied().flatten().is_some();
+                    let slow = sex_pdx::get_ticks().saturating_sub(self.connect_at) > NEXT_ADDRESS_TICKS;
+                    match state {
+                        w::STATE_OPEN => self.setup = if self.tls { Setup::Tls { asked: false } } else { Setup::Send { at: 0 } },
+                        w::STATE_OPENING if !(next && slow) => moved = false,
+                        _ if next => { self.trying += 1; self.setup = Setup::Connect { asked: false }; }
+                        _ => return Err(Error::Connect),
+                    }
+                }
                 Setup::Tls { asked: false } => {
                     region()?[..self.host.len()].copy_from_slice(self.host.as_bytes());
                     ok(call_on(window, flow, w::TLS_START, self.host.len() as u64)?)?;
@@ -945,7 +1276,9 @@ pub mod net {
         let (rest, tls) = match (url.strip_prefix(b"https://"), url.strip_prefix(b"http://")) { (Some(r), _) => (r, true), (_, Some(r)) => (r, false), _ => return Err(Error::Address) };
         let split = rest.iter().position(|b| *b == b'/').unwrap_or(rest.len());
         let (authority, path) = (&rest[..split], if split == rest.len() { &b"/"[..] } else { &rest[split..] });
-        let (host, port) = match authority.iter().position(|b| *b == b':') {
+        // `[v6]:port` keeps its brackets in the host; the colon to split at follows them.
+        let colon = match authority.iter().position(|b| *b == b']') { Some(end) => authority[end..].iter().position(|b| *b == b':').map(|i| end + i), None => authority.iter().position(|b| *b == b':') };
+        let (host, port) = match colon {
             Some(i) => (&authority[..i], authority[i + 1..].iter().try_fold(0u32, |v, b| b.is_ascii_digit().then(|| v * 10 + (*b - b'0') as u32)).filter(|p| (1..=65535).contains(p)).ok_or(Error::Address)? as u16),
             None => (authority, if tls { 443 } else { 80 }),
         };

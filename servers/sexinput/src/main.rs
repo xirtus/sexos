@@ -540,6 +540,9 @@ pub extern "C" fn _start() -> ! {
             CURSOR_AUTODEMO_ENABLED as u8
         );
     }
+    // Ready is logged before the service starts accepting calls, so a sender's first
+    // report can never appear in the log ahead of it.
+    serial_println!("[sexinput.ready]");
     unsafe {
         sys_set_state(SVC_STATE_LISTENING);
     }
@@ -554,7 +557,6 @@ pub extern "C" fn _start() -> ! {
     let mut kbd_proof_stage: u8 = 0;
     let mut ev_key_edge_stage: u8 = 0;
 
-    serial_println!("[sexinput.ready]");
     // No synthetic, PS/2, or USB producer may send shell work until the
     // authenticated shell has completed initialization. Retain received USB
     // payloads unchanged and drain this FIFO before new ordinary ring messages.
