@@ -293,6 +293,7 @@
       if (c instanceof DocumentFragment && !(c instanceof ShadowRoot)) { for (const k of c.childNodes) this.insertBefore(k, ref); return c; }
       if (ref === undefined) ref = null;
       if (ref === c) return c;
+      if (c.contains(this) || (this instanceof ShadowRoot && c.contains(this.host))) throw domError('The new child element contains the parent.', 'HierarchyRequestError');
       if (ref && ref.parentNode !== this) throw domError('The node before which the new node is to be inserted is not a child of this node.', 'NotFoundError');
       const old = c.parentNode;
       if (old && (mutationRegs.length || customByName.size)) old.removeChild(c);
@@ -1450,6 +1451,18 @@
     }
     get parentNode() { return null; }
     get parentElement() { return null; }
+    get innerHTML() { return H(OP.GET_HTML, this._id, '0'); }
+    // As on an element: observers hear it and custom elements connect and disconnect.
+    set innerHTML(v) {
+      if (customByName.size) for (const c of this.childNodes) disconnected(c);
+      replacingChildren(this, () => H(OP.SET_HTML, this._id, String(v)));
+      if (customByName.size && this.isConnected) connected(this);
+    }
+    set textContent(v) {
+      if (customByName.size) for (const c of this.childNodes) disconnected(c);
+      replacingChildren(this, () => H(OP.SET_TEXT, this._id, v === null || v === undefined ? '' : String(v)));
+    }
+    get textContent() { return H(OP.GET_TEXT, this._id); }
     get activeElement() { const a = document._active; return a && this.contains(a) ? a : null; }
     get styleSheets() { return this.querySelectorAll('style').map(s => s.sheet); }
     getHTML() { return this.innerHTML; }
@@ -3229,6 +3242,8 @@
         unit: o.unit, unitDisplay: o.unitDisplay || 'short', minimumIntegerDigits: +o.minimumIntegerDigits || 1, minimumFractionDigits: minF, maximumFractionDigits: maxF,
         maximumSignificantDigits: o.maximumSignificantDigits, minimumSignificantDigits: o.minimumSignificantDigits,
         useGrouping: o.useGrouping === undefined ? 'auto' : o.useGrouping, notation: o.notation || 'standard', compactDisplay: o.compactDisplay || 'short', signDisplay: o.signDisplay || 'auto' };
+      // As in other engines, `format` works detached from its formatter (arr.map(nf.format)).
+      this.format = this.format.bind(this);
     }
     resolvedOptions() { const r = {}; for (const k of Object.keys(this._o)) if (this._o[k] !== undefined) r[k] = this._o[k]; return r; }
     _digits(n, minF, maxF) {
@@ -3286,6 +3301,7 @@
       if (!/^(utc|gmt|etc\/utc|etc\/gmt)$/i.test(tz)) throw new RangeError('Invalid time zone specified: ' + tz);
       this._o = Object.assign({ locale: LOCALE, calendar: 'gregory', numberingSystem: 'latn', timeZone: 'UTC' }, o, { timeZone: 'UTC' });
       if (this._o.hour !== undefined && this._o.hour12 === undefined && this._o.hourCycle === undefined) this._o.hour12 = true;
+      this.format = this.format.bind(this);
     }
     resolvedOptions() { const r = Object.assign({}, this._o); delete r.dateStyle; delete r.timeStyle; return r; }
     formatToParts(v) {

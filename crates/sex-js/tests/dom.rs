@@ -803,3 +803,20 @@ fn current_script_is_set_while_a_script_runs() {
     s.eval("console.log(document.currentScript)", "t.js").unwrap();
     assert_eq!(logs(&mut s), ["0:s", "0:null"]);
 }
+
+#[test]
+fn review_fixes_cycles_bound_formatters_shadow_lifecycle() {
+    let mut s = page("<div id=a><p id=p></p></div>");
+    s.eval(r#"
+        new MutationObserver(() => {}).observe(document.body, { childList: true, subtree: true });
+        const a = document.getElementById('a'), p = document.getElementById('p');
+        try { p.appendChild(a); } catch (e) { console.log(e.name, a.isConnected, a.parentNode === document.body); }
+        console.log([1000, 2000].map(new Intl.NumberFormat('en').format).join(' '), [0].map(new Intl.DateTimeFormat('en-US', { timeZone: 'UTC' }).format)[0]);
+        class XKid extends HTMLElement { connectedCallback() { console.log('kid in'); } disconnectedCallback() { console.log('kid out'); } }
+        customElements.define('x-kid', XKid);
+        const root = a.attachShadow({ mode: 'open' });
+        root.innerHTML = '<x-kid></x-kid>';
+        root.innerHTML = '';
+    "#, "t.js").unwrap();
+    assert_eq!(logs(&mut s), ["0:HierarchyRequestError true true", "0:1,000 2,000 1/1/1970", "0:kid in", "0:kid out"]);
+}
