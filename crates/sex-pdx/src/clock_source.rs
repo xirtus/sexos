@@ -108,7 +108,7 @@ fn seconds(raw: Raw) -> Option<u64> {
 /// clear all four data outputs; no old snapshot or predicted time is returned.
 pub fn invoke(
     grant: Option<&Grant>, caller: Identity, kind: u64, reserved: [u64; 3],
-    mut pairprovider: impl FnMut() -> Option<(Raw, Raw)>,
+    pairprovider: impl FnMut() -> Option<(Raw, Raw)>,
 ) -> [u64; 5] {
     let Some(grant) = grant else { return [DENIED, 0, 0, 0, 0]; };
     if !caller.valid() || !grant.holder.valid() || !grant.consumer.valid()
@@ -118,6 +118,15 @@ pub fn invoke(
         return [0, CMOS_UTC as u64, ((grant.consumer.pd as u64) << 32) | grant.consumer.task as u64,
             ATTEMPTS as u64, PRECISION_SECONDS];
     }
+    match sample(pairprovider) {
+        Ok(s) => [0, s.seconds, s.attempts as u64, PRECISION_SECONDS, 0],
+        Err(e) => [e, 0, 0, 0, 0],
+    }
+}
+
+/// The checked read itself, apart from who may ask: at most four pairs, with the
+/// rules [`invoke`] states. Shared by the held source and the kernel's civil time.
+pub fn sample(mut pairprovider: impl FnMut() -> Option<(Raw, Raw)>) -> Result<Snapshot, u64> {
     let mut busy = false;
     for attempt in 1..=ATTEMPTS {
         let Some((a, b)) = pairprovider() else { continue; };
@@ -126,11 +135,21 @@ pub fn invoke(
         // and no daylight-saving interpretation; stopped or local/DST clocks
         // cannot silently become certificate time.
         if a.status_d & 0x80 == 0 || a.status_a & 0x70 != 0x20 { continue; }
-        if a.status_b & 1 != 0 { return [INVALID,0,0,0,0]; }
-        let Some(value) = seconds(a) else { return [INVALID, 0, 0, 0, 0]; };
-        return [0, value, attempt as u64, PRECISION_SECONDS, 0];
+        if a.status_b & 1 != 0 { return Err(INVALID); }
+        let Some(value) = seconds(a) else { return Err(INVALID); };
+        return Ok(Snapshot { seconds: value, attempts: attempt });
     }
-    [if busy { BUSY } else { UNAVAILABLE }, 0, 0, 0, 0]
+    Err(if busy { BUSY } else { UNAVAILABLE })
+}
+
+/// Civil time for every task: a read-only syscall answering milliseconds since the
+/// Unix epoch (UTC). The kernel reads the same CMOS profile at most once a minute and
+/// carries it forward with its millisecond tick between reads. It is data, not a
+/// grant: it reaches no device and names no holder. Answers `[0, ms]` or `[error, 0]`.
+pub mod civil {
+    pub const SYS: u64 = 76;
+    /// How long a CMOS reading is carried forward by the tick before another.
+    pub const RESAMPLE_MS: u64 = 60_000;
 }
 
 #[cfg(test)]
