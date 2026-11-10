@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Play plays sound with its pictures: an MP4 with H.264 and AAC, a WebM with VP9 and
-Opus, and an MP3 with no pictures. QEMU records the virtio sound card to a WAV file;
+Opus, an MP4 with AV1 and AAC, a WebM with 10-bit AV1 and Opus (AV1 through dav1d),
+and an MP3 with no pictures. QEMU records the virtio sound card to a WAV file;
 each clip's tone must be there at its pitch and for about its length, and every
 picture must be shown. A longer clip then checks that Space pauses and plays and that
 L seeks forward 5 s.
@@ -11,10 +12,12 @@ from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 ROOT=Path(__file__).resolve().parents[1]
 TESTS=ROOT/'apps/play/tests'
-PLAY=os.environ.get('SEXOS_PLAY',str(ROOT/'target/play/x86_64-sex-app/release/play'))
+PLAY=os.environ.get('SEXOS_PLAY',str(ROOT/'iso_root/programs/play'))
 # name, format, video codec, audio codec, pictures, tone Hz
 CLIPS=[('clip-av.mp4','mov,mp4,m4a,3gp,3g2,mj2','h264','aac',50,440),
        ('clip.webm','matroska,webm','vp9','opus',50,660),
+       ('clip-av1.mp4','mov,mp4,m4a,3gp,3g2,mj2','libdav1d','aac',50,770),
+       ('clip-av1.webm','matroska,webm','libdav1d','opus',50,990),
        ('tone.mp3','mp3','','mp3float',0,880)]
 LONG='clip-long.mp4'  # 8 s, 160x120, 550 Hz
 FILES={'/play':Path(PLAY).read_bytes(),**{'/'+c[0]:(TESTS/c[0]).read_bytes() for c in CLIPS},'/'+LONG:(TESTS/LONG).read_bytes()}

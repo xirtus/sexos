@@ -973,6 +973,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "image-webp"
+version = "0.2.4"
+
+[[package]]
 name = "indexmap"
 version = "2.14.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1847,6 +1851,7 @@ version = "0.1.0"
 name = "sex-image"
 version = "0.1.0"
 dependencies = [
+ "image-webp",
  "zune-core",
  "zune-jpeg",
  "zune-png",
@@ -2673,6 +2678,7 @@ dependencies = [
  "sex-fetch",
  "sex-gl",
  "sex-js",
+ "sex-media",
  "sex-pdx",
  "sex-web",
 ]

@@ -3156,6 +3156,34 @@ row no longer waits for the row before it to end.
   - L seeks from about 1.4 s to 6.4 s, and the next picture is at 6.6 s.
 - **Known issue** (reported, not media): PS/2 extended keys (arrows, E0 prefix) don't reach apps, which is why Play also takes J/K/L.
 
+## Web: `<video>` and `<audio>` (2026-11-09)
+
+- **Pages can play video and sound.** Web plays `<video>` and `<audio>` through sex-media, so the browser uses the same FFmpeg and sound rings as Play.
+  - Sources come from `src` or the first `<source>` child, fetched whole like any other resource (streaming while it arrives is the YouTube thread's next step; `Source::available` is ready for it).
+  - Pictures are drawn as `video:N`, which the painter fills black until the first picture. `<audio controls>` gets a 300x32 box; without `controls` it takes no space.
+  - Controls draw a bar with a play mark and a progress line. K plays and pauses the first ready media element, and J/L seek 5 s.
+- **Scripts** get `HTMLMediaElement`, `HTMLVideoElement`, `HTMLAudioElement` and `new Audio(url)`: `play()` (returns a promise), `pause()`, `load()`, `canPlayType()`, `src`, `currentTime` (seeks), `duration`, `paused`, `ended`, `volume`, `muted`, `loop`, `autoplay`, `controls`, `readyState`, `videoWidth`/`videoHeight`.
+  - Events: `durationchange`, `loadedmetadata`, `loadeddata`, `canplay`, `canplaythrough`, `play`, `playing`, `pause`, `seeking`, `seeked`, `timeupdate`, `volumechange`, `emptied`, `ended`, `error`.
+  - A program has one sound ring, so a page plays sound from one element at a time. Starting one pauses the others that hold sound (`Player::release_sound`), and a player takes the ring only when it first plays.
+  - Host op `MEDIA = 48` carries requests (load, play, pause, seek, volume, muted, loop) to Web (48: text ops stay below `BYTE_OPS` 64, and the forms work takes 27 and 28). Web reports state back with a `media` dispatch.
+- **ABI:** `program_store::IMAGE_BYTES` 4 MiB -> 32 MiB, since Web with FFmpeg is 15 MB.
+- **sex-media:** pictures are BGRA (opaque), and the picture queue holds 48 (about two seconds), so a busy page doesn't starve the sound.
+  - The player primes: it holds the sound ring, and the clock with it, until half a second of sound is queued (or the picture queue is full, the ring is full, or the stream ends). This applies at the start and after a seek, so playback no longer opens with a gap while FFmpeg warms up.
+- **Bell no longer hands the card half a second of silence** when an open stream has nothing queued. It keeps at most 3 periods (~130 ms) ahead in that case.
+  - While 3 or more periods are in flight, an open stream with less than a whole period waits for one, instead of playing in crumbs between silences.
+  - `program_media_gate` now hears each tone as one unbroken stretch (440, 660, 880 Hz: 2.0 s each).
+- `sound_gate.segments(split=True)` cuts a loud stretch where the pitch changes, for sounds played back to back.
+- **Programs the loader would refuse are rebuilt.** The loader refuses code holding WRPKRU, XRSTOR or XRSTORS bytes at any offset (J1). Compiled code can make them by chance. In FFmpeg's sha.c, clang's `rol $0xf,%ebx; add %ebp,%edi` is c1 c3 0f 01 ef, and a VP9 function had a RIP-relative displacement holding 0f ae a9. This left Play refused.
+  - `scripts/key_bytes.py` finds such bytes in ELF programs and object files.
+  - `build_ffmpeg.sh` compiles an offending object again with other flags; a frame pointer fixed sha.c.
+  - The build trace (`cargo_manifest` stages for programs) and `build_play.sh` link a refused program again with `SEX_LAYOUT_SEED`. Play and Web turn it into lld `--shuffle-sections` for `.rodata`, which moves every displacement.
+  - The media gates now play the Play that the image ships (`iso_root/programs/play`).
+- When less than a quarter second of sound is queued, a player step may decode for 40 ms instead of 12, so a busy page doesn't make gaps.
+- **Gate.** `scripts/program_web_media_gate.py` serves `scripts/web_site/media.html`.
+  - It plays a 2 s H.264/AAC clip with `autoplay controls`. The script pauses it at 0.6 s for 0.8 s and plays it again.
+  - On `ended`, the script plays `new Audio('tone.mp3')`.
+  - The gate checks the console events, all 50 pictures, a picture on screen, and the WAV: 440 Hz for about 2 s, then 880 Hz.
+
 ## Web speaks HTTP/1.1: POST, chunked, gzip, cookies, XHR (2026-11-09)
 
 First step toward YouTube (plan: docs/handoff/YOUTUBE_GAP_REPORT_2026_11_09.md).
@@ -3289,6 +3317,35 @@ Workstream I of `docs/handoff/LINUX_AND_DESKTOP_PARITY_REPORT_2026_11_09.md`.
   a rollover test and the descriptor parser's tests; master runtime gate; host unittests;
   architectural truth.
 
+## AV1 video and AVIF pictures, through dav1d (2026-11-09)
+
+- **What runs now.** Play and Web's `<video>` play AV1 in MP4 and in WebM/Matroska
+  (8-bit and 10-bit), the codec YouTube serves most. Web's `<img>` shows AVIF pictures.
+- **How.** `scripts/build_dav1d.sh` builds dav1d 1.5.1 (BSD-2-Clause, from GitHub) with
+  meson as a static archive for x86_64-sex-app (same flags as FFmpeg; bit depths 8 and
+  10/12; its SSSE3/SSE4.1 assembly included; AVX2/AVX-512 code is present but never
+  chosen, since the kernel keeps XCR0 to x87 and SSE). It runs the same refused-bytes
+  scan as FFmpeg (C files recompiled with other flags; any hit in assembly rebuilds
+  dav1d as plain C). Today nothing is hit. `build_ffmpeg.sh` runs it first, then
+  configures FFmpeg with `--enable-libdav1d`, decoder `libdav1d` and parser `av1` (found
+  through dav1d's pkg-config file) and copies `libdav1d.a` beside FFmpeg's archives;
+  sex-media's build.rs links it when present. FFmpeg gives dav1d one thread.
+  sex-libc gains `sysconf` (page size and core count), the only call dav1d lacked.
+- **AVIF.** `sex_media::decode_picture(bytes, max_w, max_h)` opens bytes, decodes the
+  first picture and scales it to fit (opaque 0xFFRRGGBB). sex-image stays pure Rust:
+  `sex_web::decode_image` hands bytes that sex-image does not know and whose `ftyp`
+  brand is `avif`/`avis` (`sex_web::is_avif`) to a decoder the program sets with
+  `sex_web::set_avif_decoder`; Web sets one that calls sex-media and logs `[web.avif]`.
+- **Size.** Code (text) grows about 1.95 MB in Play and in Web.
+- **Gates.** `program_media_gate` adds `clip-av1.mp4` (AV1 + AAC, 770 Hz) and
+  `clip-av1.webm` (10-bit AV1 + Opus, 990 Hz): 50 pictures each, tones heard.
+  `program_web_media_gate`'s page adds `still.avif` (96x48, #E07020), which must decode
+  at its size and colour. `program_play_gate` unchanged. Host test `sex-web/tests/avif.rs`.
+- **Limits.** AVIF alpha (a separate item) is ignored, so transparent AVIFs show opaque.
+  Grid (tiled) AVIFs show only their first tile, and animated AVIF (`avis`) shows its
+  first frame. dav1d runs on one thread; 320x240 keeps up on one core, larger sizes
+  are not measured yet.
+
 ## Power off and restart through ACPI (2026-11-09)
 
 Parity report workstream A (`LINUX_AND_DESKTOP_PARITY_REPORT_2026_11_09.md` section 6).
@@ -3338,6 +3395,35 @@ Workstream D of the parity report. Handoff and bare-metal checklist: `docs/hando
   in CI, two zero-copy tests), `scripts/iommu_gate.py` (QEMU with VT-d: BOOT self-test
   with QEMU's edu DMA device, then `filesystem_gate` and `sound_gate` behind VT-d with no
   driver faults). Report: `docs/handoff/IOMMU_DMA_DOMAINS_2026_11_09.md`.
+
+## WebP and GIF pictures, animated (2026-11-09)
+
+- `sex-image` decodes WebP (lossy, lossless, alpha, animation) through image-webp 0.2.4,
+  vendored no_std in `vendor/image-webp-0.2.4` (an in-memory `io` shim; the encoder and
+  tests left out; an opaque pixel no longer blends to 254), and GIF with its own decoder
+  (`crates/sex-image/src/gif.rs`: LZW, interlacing, transparency, disposal, loop count).
+- `sex_image::Animation<B>` draws one frame at a time onto one canvas; it borrows or owns
+  the file (`&[u8]`, `Rc<[u8]>`).
+- View plays animated GIF and WebP with their own timing and loops, and reads files up to
+  4 MiB. Web shows WebP and GIF in `<img>` and plays up to 16 animated pictures a page.
+- Tests: `crates/sex-image/tests/formats.rs` (GIF against Pillow's decode, WebP against the
+  source, fuzzed damage); `program_view_gate.py` (WebP pixels, an animated GIF's three
+  colours on screen); `program_web_media_gate.py` (a moving GIF on its page).
+
+## Sound mixer: volume keys, master and per-program volume (2026-11-09)
+
+- Bell keeps the person's settings (`sex_pdx::sound_mixer`, op `OP_MIXER` 0xCA): master
+  volume and mute over everything Bell plays (a squared curve, so 50% is a quarter of the
+  amplitude), and a volume and mute per program row on top of what the program asks in its
+  ring. Shell and Spindle may set them, SilkBar may read them; replies carry `TAG` in their
+  top byte. The volume tick plays after the reply.
+- Input gives media keys their own codes (`app_key::KEY_MUTE` 0x75, `KEY_VOLUME_DOWN` 0x76,
+  `KEY_VOLUME_UP` 0x77; PS/2 E0 20/2E/30 used to arrive as D, C and B; USB usages
+  0x7F..0x81). Shell takes them: 5% steps with a tick at the new level, mute toggles.
+- Spindle `volume`: show, `N`, `+N`, `-N`, `mute`, `unmute`, `list`, `ROW N`, `ROW mute`.
+- ABI: `app_key` gains the three key codes. Gate: `scripts/sound_volume_gate.py`.
+- Not yet: an on-screen volume indicator (SilkBar/Display), remembering the volume across
+  boots, device choice, resampling, capture.
 
 
 ## Hardware census, VMD warning, NVMe waits for real SSDs (2026-11-09)
