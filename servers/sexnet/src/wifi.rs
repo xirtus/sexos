@@ -7,7 +7,7 @@
 //! only maps the lease, the DMA pool and the firmware pack onto its traits.
 use sex_pdx::wifi_status as ws;
 use sex_pdx::{memory_region as m, pci_command as c};
-use sex_wifi::{bringup::Bringup, context, csr, devices, ieee80211::Security, init::{self, Init}, join::{self, Join}, assoc::{self, Assoc}, rsna::{self, Rsna}, link::{self as wlink, Link}, tx::TxQueue, ieee80211::{self, Bss}, crypto, hcmd, pack::Pack, scan::{self, Scan}, ucode::Firmware};
+use sex_wifi::{bringup::Bringup, context, csr, devices, ieee80211::Security, init::{self, Init}, join::{self, Join}, assoc::{self, Assoc}, rsna::{self, Rsna}, link::{self as wlink, Link}, tx::TxQueue, ieee80211::{self, Bss}, crypto, hcmd, pack::Pack, scan::{self, Scan}, ucode::Firmware, sae};
 
 /// The chip's register window (BAR0 view).
 struct Mmio { base: u64, length: u64 }
@@ -275,7 +275,18 @@ impl Wifi {
                 ssid, t.bssid[0], t.bssid[1], t.bssid[2], t.bssid[3], t.bssid[4], t.bssid[5], t.channel,
                 j.versions.phy, j.versions.rlc, j.versions.scd_queue, now_ticks);
             if let Some(bss) = self.joined_bss {
-                let a = Assoc::new(bss, t, i.mac, self.bringup.boot.chip.family, now_ticks * 1000);
+                let (mac, family) = (i.mac, self.bringup.boot.chip.family);
+                let a = if bss.security == Security::Wpa3Personal {
+                    match self.sae_for(&bss, &mac) {
+                        Some(sae) => Assoc::with_sae(bss, t, mac, family, now_ticks * 1000, sae, bss.h2e),
+                        None => {
+                            self.password = [0; ws::PASSWORD_MAX];
+                            self.password_len = 0;
+                            sex_pdx::serial_record!("[wifi.failed] step=sae reason=no_entropy_or_element");
+                            return;
+                        }
+                    }
+                } else { Assoc::new(bss, t, mac, family, now_ticks * 1000) };
                 sex_pdx::serial_record!("[wifi.assoc.start] security={:?} step={:?} ticks={}", bss.security, a.step, now_ticks);
                 self.assoc = Some(a);
                 self.finished = false;
@@ -305,7 +316,7 @@ impl Wifi {
                 let family = self.bringup.boot.chip.family;
                 let tx = core::mem::replace(&mut a.tx, TxQueue::new(family));
                 self.rx = RxQueue::EMPTY;
-                self.link = Some(Link::new(tx, a.target, a.me(), family, false));
+                self.link = Some(Link::new(tx, a.target, a.me(), family, false).with_rate_control(self.tlc_version()));
                 sex_pdx::serial_record!("[wifi.link.up] security=open rate={:#x}", wlink::DATA_RATE);
             }
         } else {
@@ -316,33 +327,55 @@ impl Wifi {
         }
     }
 
-    /// The WPA2 handshake after association: the PMK from the passphrase, which is
-    /// then wiped, and a fresh SNonce from the entropy service.
-    fn start_rsna(&mut self, now_ticks: u64) {
-        let Some(a) = self.assoc.take() else { return };
-        let mut snonce = [0u8; 32];
+    /// 32 bytes from the entropy service.
+    fn random32() -> Option<[u8; 32]> {
+        let mut out = [0u8; 32];
         let plan = sex_pdx::browser_sources::PLANS[0];
-        for chunk in snonce.chunks_exact_mut(8) {
+        for chunk in out.chunks_exact_mut(8) {
             let mut word = None;
             for _ in 0..64 { if let Ok(w) = sex_pdx::entropy_word(plan.entropy_slot()) { word = Some(w.value); break; } }
-            let Some(w) = word else {
-                sex_pdx::serial_record!("[wifi.failed] step=handshake reason=no_entropy");
-                self.assoc = Some(a);
-                return;
-            };
-            chunk.copy_from_slice(&w.to_le_bytes());
+            chunk.copy_from_slice(&word?.to_le_bytes());
         }
-        let pmk = crypto::psk_from_passphrase(&self.password[..self.password_len], a.bss.ssid());
+        Some(out)
+    }
+
+    /// WPA3: SAE's password element for this AP and us (hash-to-element when the AP
+    /// does it, hunting and pecking otherwise) with fresh random values. The
+    /// passphrase stays until association ends (it is wiped then either way).
+    fn sae_for(&self, bss: &Bss, me: &[u8; 6]) -> Option<sae::Sae> {
+        let password = &self.password[..self.password_len];
+        let pwe = if bss.h2e { sae::pwe_from_pt(&sae::derive_pt(bss.ssid(), password, None), me, &bss.bssid) }
+            else { sae::pwe_hunt_and_peck(me, &bss.bssid, password).ok()? };
+        // Values outside 2..n-1 (vanishingly rare) are drawn again.
+        for _ in 0..8 {
+            if let Some(s) = sae::Sae::new(pwe, &Self::random32()?, &Self::random32()?) { return Some(s); }
+        }
+        None
+    }
+
+    /// The 4-way handshake after association: the PMK from SAE (WPA3) or from the
+    /// passphrase (WPA2), which is then wiped, and a fresh SNonce from the entropy service.
+    fn start_rsna(&mut self, now_ticks: u64) {
+        let Some(a) = self.assoc.take() else { return };
+        let Some(snonce) = Self::random32() else {
+            sex_pdx::serial_record!("[wifi.failed] step=handshake reason=no_entropy");
+            self.assoc = Some(a);
+            return;
+        };
+        let (pmk, akm) = match a.sae_pmk() {
+            Some(pmk) => (pmk, sex_wifi::eapol::Akm::Sae),
+            None => (crypto::psk_from_passphrase(&self.password[..self.password_len], a.bss.ssid()), sex_wifi::eapol::Akm::Psk),
+        };
         self.password = [0; ws::PASSWORD_MAX];
         self.password_len = 0;
         let mut own = [0u8; 32];
-        let own_len = ieee80211::own_rsn(false, &mut own);
+        let own_len = ieee80211::own_rsn(akm == sex_wifi::eapol::Akm::Sae, &mut own);
         let sec_key = Firmware::parse(self.file).ok()
             .and_then(|fw| fw.command_version(hcmd::DATA_PATH_GROUP, rsna::SEC_KEY_CMD)).is_some_and(|v| v.version != 0);
-        let r = Rsna::new(pmk, snonce, &own[..own_len], a.bss.rsn_element(), &a.bss.rsn, a.target, a.me(), self.bringup.boot.chip.family, a.tx, sec_key, now_ticks * 1000);
+        let r = Rsna::new(pmk, snonce, &own[..own_len], a.bss.rsn_element(), &a.bss.rsn, a.target, a.me(), self.bringup.boot.chip.family, a.tx, sec_key, now_ticks * 1000, akm);
         let mut r = r;
         if let Some((frame, n)) = a.early { r.early(&self.bringup, &mut self.mmio, &mut self.pool, &frame[..n]); }
-        sex_pdx::serial_record!("[wifi.handshake.start] sec_key_cmd={} early={} ticks={}", sec_key as u8, a.early.is_some() as u8, now_ticks);
+        sex_pdx::serial_record!("[wifi.handshake.start] akm={:?} sec_key_cmd={} early={} ticks={}", akm, sec_key as u8, a.early.is_some() as u8, now_ticks);
         self.rsna = Some(r);
         self.finished = false;
     }
@@ -359,11 +392,9 @@ impl Wifi {
         let ssid = core::str::from_utf8(&self.joined_ssid).unwrap_or("?").trim_end_matches('\0');
         if r.step == rsna::Step::Connected {
             sex_pdx::serial_record!("[wifi.connected] ssid=\"{}\" security=WPA2 ticks={}", ssid, now_ticks);
-            let family = self.bringup.boot.chip.family;
-            let tx = core::mem::replace(&mut r.tx, TxQueue::new(family));
-            let (target, me) = (r.target(), r.me());
             self.rx = RxQueue::EMPTY;
-            self.link = Some(Link::new(tx, target, me, family, true));
+            let version = self.tlc_version();
+            self.link = self.rsna.take().map(|r| r.into_link().with_rate_control(version));
             sex_pdx::serial_record!("[wifi.link.up] security=WPA2 rate={:#x}", wlink::DATA_RATE);
         } else {
             use csr::Registers;
@@ -404,6 +435,12 @@ impl Wifi {
         true
     }
 
+    /// TLC_MNG_CONFIG_CMD's version in this firmware (`iwx_rs_init`: 4, else 3).
+    fn tlc_version(&self) -> u8 {
+        Firmware::parse(self.file).ok().and_then(|fw| fw.command_version(hcmd::DATA_PATH_GROUP, sex_wifi::tlc::TLC_MNG_CONFIG_CMD))
+            .map_or(3, |v| if v.version == 4 { 4 } else { 3 })
+    }
+
     /// The link is up: sexnet's IP stack may use it.
     pub fn link_up(&self) -> bool { self.link.as_ref().is_some_and(|l| l.up()) }
     pub fn link_mac(&self) -> Option<[u8; 6]> { self.link.as_ref().map(|l| l.me()) }
@@ -422,8 +459,10 @@ impl Wifi {
     pub fn link_receive(&mut self, submit: impl FnOnce(&[u8]) -> bool) -> bool {
         let (Some(l), Some(i)) = (self.link.as_mut(), self.init.as_mut()) else { return false };
         let before = (l.received, l.dropped);
+        let keys = (l.rekey_messages, l.rekeyed);
+        let rates = (l.rate_control, l.rate);
         let q = &mut self.rx;
-        let up = l.poll(&mut self.bringup, &mut i.cmdq, &mut self.mmio, &mut self.pool, |frame| {
+        let up = l.poll(&mut self.bringup, &mut i.cmdq, &mut self.mmio, &mut self.pool, sex_pdx::get_ticks() * 1000, |frame| {
             if q.count == RX_FRAMES || frame.len() > wlink::MAX_ETHERNET { q.overflow += 1; return; }
             let at = (q.head + q.count) % RX_FRAMES;
             // SAFETY: sexnet runs one thread, and only this queue touches LINK_RX.
@@ -435,6 +474,12 @@ impl Wifi {
             sex_pdx::serial_record!("[wifi.link.down] reason={:?} sent={} received={} dropped={} overflow={}", l.down, l.sent, l.received, l.dropped, q.overflow);
             *q = RxQueue::EMPTY;
             return false;
+        }
+        if (l.rate_control, l.rate) != rates {
+            sex_pdx::serial_record!("[wifi.rate] control={:?} rate={:#x}", l.rate_control, l.rate);
+        }
+        if (l.rekey_messages, l.rekeyed) != keys {
+            sex_pdx::serial_record!("[wifi.rekey] messages={} installed={} error={:?}", l.rekey_messages, l.rekeyed, l.rekey_error);
         }
         if l.received != before.0 && (l.received <= 16 || l.received.is_power_of_two()) {
             sex_pdx::serial_record!("[wifi.link.rx] frames={} dropped={} last_drop={:?} overflow={}", l.received, l.dropped, l.last_drop, q.overflow);
@@ -457,6 +502,11 @@ impl Wifi {
 
     /// What the desktop sees (`sex_pdx::wifi_status`).
     fn state(&self) -> ws::State {
+        if let Some(l) = &self.link {
+            let phase = if !l.up() { ws::FAILED } else if l.protected() { ws::CONNECTED } else { ws::ASSOCIATED };
+            let (networks, channels) = self.scan.as_ref().map_or((0, 0), |sc| (sc.count.min(255) as u8, sc.channels));
+            return ws::State { phase, networks, scans: self.scans, channels };
+        }
         if let Some(r) = &self.rsna {
             let phase = match r.step { rsna::Step::Connected if self.link.as_ref().is_some_and(|l| !l.up()) => ws::FAILED, rsna::Step::Connected => ws::CONNECTED, rsna::Step::Handshake => ws::HANDSHAKE, _ => ws::FAILED };
             let (networks, channels) = self.scan.as_ref().map_or((0, 0), |sc| (sc.count.min(255) as u8, sc.channels));

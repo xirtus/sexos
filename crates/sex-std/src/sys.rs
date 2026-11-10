@@ -2,12 +2,11 @@
 //! The calls Rust's std makes on this target (Hermit's library interface), answered
 //! inside the program. Errors are returned as negative error numbers, as std expects.
 //!
-//! `SystemTime`: programs have no civil clock yet (the kernel's UTC source is granted
-//! to the status bar only). Until a read-only one exists, `SystemTime::now()` is the
-//! time this crate was built plus the time since boot: right to the day, ordered, and
-//! never earlier than a file it wrote before. `Instant` is the kernel's tick, exact.
+//! `SystemTime` is the kernel's civil time (UTC from the machine's clock, carried
+//! forward by its millisecond tick); on a machine without one it falls back to the
+//! time this crate was built plus the time since boot. `Instant` is the kernel's tick.
 #![allow(clippy::missing_safety_doc)]
-use crate::{args, console, path};
+use crate::{args, console, net, path};
 use core::ffi::{c_char, CStr};
 use sex_app::files::direct as files;
 use sex_pdx::fs as w;
@@ -97,7 +96,10 @@ pub unsafe extern "C" fn sys_clock_gettime(clock: abi::clockid_t, tp: *mut times
     let ms = sex_pdx::get_ticks() as i64;
     let (sec, nsec) = match clock {
         abi::CLOCK_MONOTONIC => (ms / 1000, (ms % 1000) * 1_000_000),
-        abi::CLOCK_REALTIME => (BUILT + ms / 1000, (ms % 1000) * 1_000_000),
+        abi::CLOCK_REALTIME => match sex_pdx::civil_time_ms() {
+            Ok(utc) => ((utc / 1000) as i64, ((utc % 1000) * 1_000_000) as i64),
+            Err(_) => (BUILT + ms / 1000, (ms % 1000) * 1_000_000),
+        },
         _ => return -errno::EINVAL,
     };
     unsafe { *tp = timespec { tv_sec: sec, tv_nsec: nsec as _ }; }
@@ -232,6 +234,8 @@ enum Open {
     Console(usize),
     /// Shared by a descriptor and its duplicates, as one open file is.
     File(Arc<OpenFile>),
+    /// A socket, shared by its duplicates.
+    Socket(Arc<net::Sock>),
     Dir { entries: Vec<files::Entry>, given: bool },
 }
 
@@ -342,6 +346,7 @@ pub unsafe extern "C" fn sys_read(fd: i32, buf: *mut u8, len: usize) -> isize {
         match t.get(fd as usize) {
             Some(Some(Open::Console(0))) => None,
             Some(Some(Open::File(f))) if f.read => Some(f.clone()),
+            Some(Some(Open::Socket(s))) => { let s = s.clone(); drop(t); return net::recv(&s, out, false); }
             _ => return -errno::EBADF as isize,
         }
     };
@@ -361,6 +366,7 @@ pub unsafe extern "C" fn sys_write(fd: i32, buf: *const u8, len: usize) -> isize
         match t.get(fd as usize) {
             Some(Some(Open::Console(n @ (1 | 2)))) => { let n = *n; drop(t); console::write(n - 1, data); return len as isize; }
             Some(Some(Open::File(f))) if f.write => f.clone(),
+            Some(Some(Open::Socket(s))) => { let s = s.clone(); drop(t); return net::send(&s, data); }
             _ => return -errno::EBADF as isize,
         }
     };
@@ -425,6 +431,12 @@ pub unsafe extern "C" fn sys_fstat(fd: i32, out: *mut stat) -> i32 {
             return 0;
         }
         Some(Some(Open::Dir { .. })) => { fill_stat(&files::Stat { dir: true, ..Default::default() }, out); return 0; }
+        Some(Some(Open::Socket(_))) => {
+            let mut s: stat = unsafe { core::mem::zeroed() };
+            s.st_mode = abi::S_IFSOCK | 0o777;
+            unsafe { *out = s; }
+            return 0;
+        }
         _ => return -errno::EBADF,
     };
     match files::stat(&path) { Ok(st) => { fill_stat(&st, out); 0 } Err(e) => errno_of(e) }
@@ -508,6 +520,7 @@ pub extern "C" fn sys_dup(fd: i32) -> i32 {
     let copy = match table().get(fd as usize) {
         Some(Some(Open::Console(n))) => Open::Console(*n),
         Some(Some(Open::File(f))) => Open::File(f.clone()),
+        Some(Some(Open::Socket(s))) => Open::Socket(s.clone()),
         Some(Some(Open::Dir { entries, given })) => Open::Dir { entries: entries.clone(), given: *given },
         _ => return -errno::EBADF,
     };
@@ -515,8 +528,14 @@ pub extern "C" fn sys_dup(fd: i32) -> i32 {
 }
 
 #[no_mangle]
-pub extern "C" fn sys_fcntl(fd: i32, _cmd: i32, _arg: i32) -> i32 {
-    if matches!(table().get(fd as usize), Some(Some(_))) { 0 } else { -errno::EBADF }
+pub extern "C" fn sys_fcntl(fd: i32, cmd: i32, arg: i32) -> i32 {
+    let entry = table().get(fd as usize).map(|o| o.as_ref().map(|o| match o { Open::Socket(s) => Some(s.clone()), _ => None }));
+    match (entry, cmd) {
+        (Some(Some(Some(s))), abi::F_GETFL) => if net::nonblocking(&s) { abi::O_NONBLOCK } else { 0 },
+        (Some(Some(Some(s))), abi::F_SETFL) => { net::set_nonblocking(&s, arg & abi::O_NONBLOCK != 0); 0 }
+        (Some(Some(_)), _) => 0,
+        _ => -errno::EBADF,
+    }
 }
 
 // ---- errors --------------------------------------------------------------------------
@@ -528,36 +547,136 @@ pub extern "C" fn sys_get_errno() -> i32 { unsafe { ERRNO } }
 #[no_mangle]
 pub extern "C" fn sys_errno() -> i32 { unsafe { ERRNO } }
 
-// ---- sockets: not yet -----------------------------------------------------------------------
-// std::net reaches these. Until programs have a socket API they say so plainly.
+// ---- sockets (see net.rs) -------------------------------------------------------------------
 
-macro_rules! no_sockets {
-    ($($name:ident($($arg:ident: $t:ty),*) -> $r:ty;)*) => {$(
-        #[no_mangle]
-        pub extern "C" fn $name($($arg: $t),*) -> $r { $(let _ = $arg;)* -(errno::ENOSYS as $r) }
-    )*};
+fn sock(fd: i32) -> Result<Arc<net::Sock>, i32> {
+    match table().get(fd as usize) {
+        Some(Some(Open::Socket(s))) => Ok(s.clone()),
+        Some(Some(_)) => Err(-errno::ENOTSOCK),
+        _ => Err(-errno::EBADF),
+    }
 }
-no_sockets! {
-    sys_socket(domain: i32, kind: i32, protocol: i32) -> i32;
-    sys_accept(s: i32, addr: *mut abi::sockaddr, len: *mut abi::socklen_t) -> i32;
-    sys_bind(s: i32, addr: *const abi::sockaddr, len: abi::socklen_t) -> i32;
-    sys_connect(s: i32, addr: *const abi::sockaddr, len: abi::socklen_t) -> i32;
-    sys_listen(s: i32, backlog: i32) -> i32;
-    sys_recv(s: i32, buf: *mut u8, len: usize, flags: i32) -> isize;
-    sys_recvfrom(s: i32, buf: *mut u8, len: usize, flags: i32, addr: *mut abi::sockaddr, alen: *mut abi::socklen_t) -> isize;
-    sys_send(s: i32, buf: *const core::ffi::c_void, len: usize, flags: i32) -> isize;
-    sys_sendto(s: i32, buf: *const core::ffi::c_void, len: usize, flags: i32, addr: *const abi::sockaddr, alen: abi::socklen_t) -> isize;
-    sys_shutdown(s: i32, how: i32) -> i32;
-    sys_getpeername(s: i32, addr: *mut abi::sockaddr, len: *mut abi::socklen_t) -> i32;
-    sys_getsockname(s: i32, addr: *mut abi::sockaddr, len: *mut abi::socklen_t) -> i32;
-    sys_getsockopt(s: i32, level: i32, name: i32, value: *mut core::ffi::c_void, len: *mut abi::socklen_t) -> i32;
-    sys_setsockopt(s: i32, level: i32, name: i32, value: *const core::ffi::c_void, len: abi::socklen_t) -> i32;
-    sys_ioctl(s: i32, cmd: i32, argp: *mut core::ffi::c_void) -> i32;
-    sys_poll(fds: *mut abi::pollfd, n: abi::nfds_t, timeout: i32) -> i32;
-    sys_eventfd(init: u64, flags: i16) -> i32;
+macro_rules! on_sock { ($fd:expr, $s:ident => $body:expr) => { match sock($fd) { Ok($s) => $body, Err(e) => e as _ } } }
+
+#[no_mangle]
+pub extern "C" fn sys_socket(domain: i32, kind: i32, protocol: i32) -> i32 {
+    match net::socket(domain, kind, protocol) { Ok(s) => insert(Open::Socket(Arc::new(s))), Err(e) => e }
 }
-/// No names can be looked up yet: `EAI_FAIL`.
 #[no_mangle]
-pub extern "C" fn sys_getaddrinfo(_n: *const c_char, _s: *const c_char, _h: *const abi::addrinfo, _r: *mut *mut abi::addrinfo) -> i32 { abi::EAI_FAIL }
+pub unsafe extern "C" fn sys_bind(s: i32, addr: *const abi::sockaddr, len: abi::socklen_t) -> i32 { on_sock!(s, k => unsafe { net::bind(&k, addr, len) }) }
 #[no_mangle]
-pub extern "C" fn sys_freeaddrinfo(_ai: *mut abi::addrinfo) {}
+pub extern "C" fn sys_listen(s: i32, _backlog: i32) -> i32 { on_sock!(s, k => net::listen(&k)) }
+#[no_mangle]
+pub unsafe extern "C" fn sys_connect(s: i32, addr: *const abi::sockaddr, len: abi::socklen_t) -> i32 { on_sock!(s, k => unsafe { net::connect(&k, addr, len) }) }
+#[no_mangle]
+pub unsafe extern "C" fn sys_accept(s: i32, addr: *mut abi::sockaddr, len: *mut abi::socklen_t) -> i32 {
+    on_sock!(s, k => match unsafe { net::accept(&k, addr, len) } { Ok(new) => insert(Open::Socket(Arc::new(new))), Err(e) => e })
+}
+#[no_mangle]
+pub unsafe extern "C" fn sys_recv(s: i32, buf: *mut u8, len: usize, flags: i32) -> isize {
+    let out = unsafe { core::slice::from_raw_parts_mut(buf, len) };
+    on_sock!(s, k => net::recv(&k, out, flags & abi::MSG_PEEK != 0))
+}
+#[no_mangle]
+pub unsafe extern "C" fn sys_recvfrom(s: i32, buf: *mut u8, len: usize, flags: i32, addr: *mut abi::sockaddr, alen: *mut abi::socklen_t) -> isize {
+    let out = unsafe { core::slice::from_raw_parts_mut(buf, len) };
+    on_sock!(s, k => match net::recv_from(&k, out, flags & abi::MSG_PEEK != 0) {
+        Ok((n, ip, port)) => { unsafe { net::write_address_pub(addr, alen, &ip, port) }; n as isize }
+        Err(e) => e as isize,
+    })
+}
+#[no_mangle]
+pub unsafe extern "C" fn sys_send(s: i32, buf: *const core::ffi::c_void, len: usize, _flags: i32) -> isize {
+    let data = unsafe { core::slice::from_raw_parts(buf as *const u8, len) };
+    on_sock!(s, k => net::send(&k, data))
+}
+#[no_mangle]
+pub unsafe extern "C" fn sys_sendto(s: i32, buf: *const core::ffi::c_void, len: usize, _flags: i32, addr: *const abi::sockaddr, alen: abi::socklen_t) -> isize {
+    let data = unsafe { core::slice::from_raw_parts(buf as *const u8, len) };
+    on_sock!(s, k => {
+        if addr.is_null() { net::send(&k, data) } else {
+            match unsafe { net::read_address_pub(addr, alen) } { Ok((ip, port)) => net::send_to(&k, data, &ip, port), Err(e) => e as isize }
+        }
+    })
+}
+#[no_mangle]
+pub extern "C" fn sys_shutdown(s: i32, how: i32) -> i32 { on_sock!(s, k => net::shutdown(&k, how)) }
+#[no_mangle]
+pub unsafe extern "C" fn sys_getpeername(s: i32, addr: *mut abi::sockaddr, len: *mut abi::socklen_t) -> i32 { on_sock!(s, k => unsafe { net::peer_name(&k, addr, len) }) }
+#[no_mangle]
+pub unsafe extern "C" fn sys_getsockname(s: i32, addr: *mut abi::sockaddr, len: *mut abi::socklen_t) -> i32 { on_sock!(s, k => unsafe { net::sock_name(&k, addr, len) }) }
+#[no_mangle]
+pub extern "C" fn sys_getsockopt(s: i32, level: i32, name: i32, value: *mut core::ffi::c_void, len: *mut abi::socklen_t) -> i32 { on_sock!(s, k => net::get_option(&k, level, name, value, len)) }
+#[no_mangle]
+pub extern "C" fn sys_setsockopt(s: i32, level: i32, name: i32, value: *const core::ffi::c_void, len: abi::socklen_t) -> i32 { on_sock!(s, k => net::set_option(&k, level, name, value, len)) }
+#[no_mangle]
+pub extern "C" fn sys_ioctl(s: i32, cmd: i32, argp: *mut core::ffi::c_void) -> i32 {
+    if cmd != abi::FIONBIO { return -errno::EINVAL; }
+    if argp.is_null() { return -errno::EFAULT; }
+    let on = unsafe { *(argp as *const i32) } != 0;
+    on_sock!(s, k => { net::set_nonblocking(&k, on); 0 })
+}
+
+/// Waits until one of `fds` is ready or `timeout` milliseconds pass (-1: no limit).
+/// Files and the console are always ready; sockets say what they have.
+#[no_mangle]
+pub unsafe extern "C" fn sys_poll(fds: *mut abi::pollfd, n: abi::nfds_t, timeout: i32) -> i32 {
+    if fds.is_null() && n > 0 { return -errno::EFAULT; }
+    let fds = unsafe { core::slice::from_raw_parts_mut(fds, n) };
+    let began = sex_pdx::get_ticks();
+    let mut round = 0u32;
+    loop {
+        let mut count = 0;
+        for p in fds.iter_mut() {
+            p.revents = if p.fd < 0 { 0 } else {
+                let entry = table().get(p.fd as usize).map(|o| o.as_ref().map(|o| match o { Open::Socket(s) => Some(s.clone()), _ => None }));
+                match entry {
+                    Some(Some(Some(s))) => net::ready(&s, p.events),
+                    Some(Some(None)) => p.events & (abi::POLLIN | abi::POLLOUT),
+                    _ => abi::POLLNVAL,
+                }
+            };
+            if p.revents != 0 { count += 1; }
+        }
+        if count > 0 || timeout == 0 { return count; }
+        if timeout > 0 && sex_pdx::get_ticks().saturating_sub(began) >= timeout as u64 { return 0; }
+        round += 1;
+        sex_app::thread::pause(round);
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn sys_eventfd(_init: u64, _flags: i16) -> i32 { -errno::ENOSYS }
+
+/// Names to addresses through the network service. The list is one allocation per
+/// entry, freed by `sys_freeaddrinfo`.
+#[no_mangle]
+pub unsafe extern "C" fn sys_getaddrinfo(name: *const c_char, _service: *const c_char, hints: *const abi::addrinfo, out: *mut *mut abi::addrinfo) -> i32 {
+    if name.is_null() || out.is_null() { return abi::EAI_FAIL; }
+    let host = unsafe { CStr::from_ptr(name) }.to_bytes();
+    let (family, socktype) = if hints.is_null() { (abi::AF_UNSPEC, 0) } else { unsafe { ((*hints).ai_family, (*hints).ai_socktype) } };
+    let found = match net::lookup(host) { Ok(f) => f, Err(e) => return e };
+    let mut head: *mut abi::addrinfo = core::ptr::null_mut();
+    for ip in found.iter().rev() {
+        let fam = if ip.is_ipv6() { abi::AF_INET6 } else { abi::AF_INET };
+        if family != abi::AF_UNSPEC && family != fam { continue; }
+        let storage = Box::into_raw(Box::new(unsafe { core::mem::zeroed::<abi::sockaddr_storage>() })) as *mut abi::sockaddr;
+        let mut len = core::mem::size_of::<abi::sockaddr_storage>() as abi::socklen_t;
+        unsafe { net::write_address_pub(storage, &mut len, ip, 0) };
+        head = Box::into_raw(Box::new(abi::addrinfo {
+            ai_flags: 0, ai_family: fam, ai_socktype: socktype, ai_protocol: 0, ai_addrlen: len,
+            ai_canonname: core::ptr::null_mut(), ai_addr: storage, ai_next: head,
+        }));
+    }
+    if head.is_null() { return abi::EAI_NONAME; }
+    unsafe { *out = head; }
+    0
+}
+#[no_mangle]
+pub unsafe extern "C" fn sys_freeaddrinfo(mut ai: *mut abi::addrinfo) {
+    while !ai.is_null() {
+        let entry = unsafe { Box::from_raw(ai) };
+        if !entry.ai_addr.is_null() { drop(unsafe { Box::from_raw(entry.ai_addr as *mut abi::sockaddr_storage) }); }
+        ai = entry.ai_next;
+    }
+}

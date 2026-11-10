@@ -11,7 +11,10 @@ static LOCK:Mutex<()>=Mutex::new(());
 static DOMAIN:AtomicPtr<Domain>=AtomicPtr::new(core::ptr::null_mut());
 static CORE:AtomicPtr<core_local::CoreLocal>=AtomicPtr::new(core::ptr::null_mut());
 static PD_ID:AtomicU32=AtomicU32::new(0);
-struct Domain{id:u32}
+struct Domain{id:u32,main_task:AtomicPtr<scheduler::Task>}
+impl Domain{fn new(id:u32)->Self{Domain{id,main_task:AtomicPtr::new(core::ptr::null_mut())}}}
+static WORKER:AtomicPtr<scheduler::Task>=AtomicPtr::new(core::ptr::null_mut());
+mod program_workers{pub fn is_worker(t:*mut super::scheduler::Task)->bool{!t.is_null()&&t==super::WORKER.load(super::Ordering::Acquire)}}
 mod core_local{
  pub struct CoreLocal{pub core_id:u32}
  impl CoreLocal{
@@ -31,17 +34,26 @@ mod scheduler{
  pub static SCHEDULERS:[Scheduler;1]=[Scheduler{current_task:AtomicPtr::new(core::ptr::null_mut())}];
 }
 fn setup(pd:u32,task:u32)->(*mut Domain,*mut scheduler::Task){
- let domain=Box::into_raw(Box::new(Domain{id:pd}));DOMAIN.store(domain,Ordering::Release);PD_ID.store(pd,Ordering::Release);
+ let domain=Box::into_raw(Box::new(Domain::new(pd)));DOMAIN.store(domain,Ordering::Release);PD_ID.store(pd,Ordering::Release);
  CORE.store(Box::into_raw(Box::new(core_local::CoreLocal{core_id:0})),Ordering::Release);
  let task=Box::into_raw(Box::new(scheduler::Task{id:task,context:scheduler::Context{pd_id:pd as u64,pd_ptr:domain},state:scheduler::State{exited:false}}));
+ WORKER.store(core::ptr::null_mut(),Ordering::Release);unsafe{(*domain).main_task.store(task,Ordering::Release)};
  scheduler::SCHEDULERS[0].current_task.store(task,Ordering::Release);(domain,task)
 }
+/// A second task of the same domain, now running; `worker` says whether it is a program worker.
+fn second(domain:*mut Domain,pd:u32,id:u32,worker:bool)->*mut scheduler::Task{
+ let t=Box::into_raw(Box::new(scheduler::Task{id,context:scheduler::Context{pd_id:pd as u64,pd_ptr:domain},state:scheduler::State{exited:false}}));
+ if worker{WORKER.store(t,Ordering::Release)}scheduler::SCHEDULERS[0].current_task.store(t,Ordering::Release);t
+}
+#[test]fn program_worker_speaks_as_its_run_main_task(){let _l=LOCK.lock().unwrap();let(d,_)=setup(15,901);second(d,15,950,true);assert_eq!(sender::current_task(15),Some(901));}
+#[test]fn other_tasks_of_a_domain_keep_their_own_identity(){let _l=LOCK.lock().unwrap();let(d,_)=setup(15,901);second(d,15,950,false);assert_eq!(sender::current_task(15),Some(950));}
+#[test]fn worker_of_an_ended_run_does_not_borrow_the_main_identity(){let _l=LOCK.lock().unwrap();let(d,m)=setup(15,901);unsafe{(*m).state.exited=true};second(d,15,950,true);assert_eq!(sender::current_task(15),Some(950));}
 #[test]fn captures_actual_scheduled_task_not_domain_or_catalog_number(){let _l=LOCK.lock().unwrap();setup(15,901);assert_eq!(sender::current_task(15),Some(901));}
 #[test]fn missing_scheduled_task_cannot_attest_identity(){let _l=LOCK.lock().unwrap();setup(15,901);scheduler::SCHEDULERS[0].current_task.store(core::ptr::null_mut(),Ordering::Release);assert_eq!(sender::current_task(15),None);}
 #[test]fn zero_task_and_out_of_range_core_fail_closed(){let _l=LOCK.lock().unwrap();setup(15,0);assert_eq!(sender::current_task(15),None);setup(15,901);CORE.store(Box::into_raw(Box::new(core_local::CoreLocal{core_id:1})),Ordering::Release);assert_eq!(sender::current_task(15),None);}
 #[test]fn current_domain_scalar_and_pointer_must_match_expected_sender(){let _l=LOCK.lock().unwrap();setup(15,901);assert_eq!(sender::current_task(16),None);PD_ID.store(16,Ordering::Release);assert_eq!(sender::current_task(15),None);}
 #[test]fn task_context_full_width_domain_cannot_alias_or_substitute(){let _l=LOCK.lock().unwrap();let(_,t)=setup(15,901);for pd in[16,15+(1u64<<32),u64::MAX]{unsafe{(*t).context.pd_id=pd};assert_eq!(sender::current_task(15),None);}}
-#[test]fn equal_numeric_domain_does_not_substitute_another_domain_pointer(){let _l=LOCK.lock().unwrap();let(_,t)=setup(15,901);unsafe{(*t).context.pd_ptr=Box::into_raw(Box::new(Domain{id:15}))};assert_eq!(sender::current_task(15),None);}
+#[test]fn equal_numeric_domain_does_not_substitute_another_domain_pointer(){let _l=LOCK.lock().unwrap();let(_,t)=setup(15,901);unsafe{(*t).context.pd_ptr=Box::into_raw(Box::new(Domain::new(15)))};assert_eq!(sender::current_task(15),None);}
 #[test]fn terminal_task_cannot_supply_new_application_provenance(){let _l=LOCK.lock().unwrap();let(_,t)=setup(15,901);unsafe{(*t).state.exited=true};assert_eq!(sender::current_task(15),None);}
 #[test]fn captured_scalar_is_stable_after_scheduler_moves_to_another_task(){let _l=LOCK.lock().unwrap();setup(15,901);let old=sender::current_task(15).unwrap();setup(15,902);assert_eq!((old,sender::current_task(15)),(901,Some(902)));}
 #[test]fn catalog_checks_actual_task_separately_from_expected_domain(){

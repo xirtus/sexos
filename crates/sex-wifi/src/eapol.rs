@@ -332,6 +332,23 @@ pub mod authenticator {
         len
     }
 
+    /// Group key message 1 (rekeying): the new GTK in a KDE, wrapped with the KEK.
+    pub fn group_message1(out: &mut [u8; MAX_FRAME], akm: Akm, ptk: &Ptk, replay: u64, gtk: &GroupKey) -> usize {
+        let mut plain = [0u8; 32];
+        plain[..8].copy_from_slice(&[0xdd, 22, 0x00, 0x0f, 0xac, 1, gtk.id, 0]);
+        plain[8..24].copy_from_slice(&gtk.key);
+        plain[24] = 0xdd;
+        let mut wrapped = [0u8; 40];
+        aes_wrap(&ptk.kek, &plain, &mut wrapped).unwrap();
+        let info = KEY_INFO_ACK | KEY_INFO_MIC | KEY_INFO_SECURE | KEY_INFO_ENCRYPTED;
+        let len = build(out, akm, info, replay, &[0; 32], &wrapped, Some(&ptk.kck));
+        out[65..73].copy_from_slice(&gtk.rsc.to_le_bytes());
+        out[MIC_AT..MIC_AT + 16].fill(0);
+        let m = mic(akm, &ptk.kck, &out[..len]);
+        out[MIC_AT..MIC_AT + 16].copy_from_slice(&m);
+        len
+    }
+
     /// Checks a station's message 2 and returns its SNonce.
     pub fn check_message2(frame: &[u8], akm: Akm, pmk: &[u8; 32], aa: &[u8; 6], spa: &[u8; 6], anonce: &[u8; 32]) -> Result<(Ptk, [u8; 32]), Error> {
         let key = parse(frame)?;

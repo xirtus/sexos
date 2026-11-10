@@ -73,6 +73,7 @@ members = [
     "crates/sex-std",
     "apps/stdhello",
     "apps/chello",
+    "apps/stdnet",
     "apps/pdf",
 ]
 [workspace.package]
