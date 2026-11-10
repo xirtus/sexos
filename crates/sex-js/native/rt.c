@@ -64,6 +64,8 @@ size_t sxn_size(void) { return sizeof(w2c_sexjs); }
 int sxn_instantiate(w2c_sexjs *i, void *ctx, uint64_t max_bytes) {
   ENTER
   wasm2c_sexjs_instantiate(i, ctx, ctx);
+  /* The caller's cap holds from the start, as under wasmi's limiter. */
+  if (i->w2c_memory.size > max_bytes) { catcher = outer; return WASM_RT_TRAP_OOB; }
   if (max_bytes >> 16 < i->w2c_memory.max_pages) i->w2c_memory.max_pages = max_bytes >> 16;
   w2c_sexjs_0x5Finitialize(i);
   LEAVE
