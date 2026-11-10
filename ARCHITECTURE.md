@@ -172,6 +172,7 @@ All communicate via sex-pdx capability invocations + UiIR transport rings.
 - NO in-place rendering mutation outside epoch boundaries
 - NO implicit kernel policy engines
 - NO hidden state — all state derivable from (epoch_id, input_stream, capability_graph)
+- NO drivers, filesystems, protocol stacks or firmware interpreters in the kernel; NO Linux-shaped syscalls (fork, pipes, fds, sockets). Compatibility layers are libraries; Linux drivers are temporary ring-3 bridges with a tracked native replacement. See `docs/DESIGN_GUARDRAILS.md` and `docs/BRIDGE_LEDGER.md`.
 
 ---
 
