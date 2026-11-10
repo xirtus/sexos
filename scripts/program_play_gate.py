@@ -11,7 +11,7 @@ CLIP=(ROOT/'apps/play/tests/clip.mp4').read_bytes()
 # solid 0xC82828 for one second, then 0x28C828. Values as FFmpeg 9 on the host
 # decodes them at (3w/4, h/2), 0x00RRGGBB.
 FIRST,SECOND=0xC62726,0x26C626
-PLAY=os.environ.get('SEXOS_PLAY',str(ROOT/'target/play/x86_64-sex-app/release/play'))
+PLAY=os.environ.get('SEXOS_PLAY',str(ROOT/'iso_root/programs/play'))
 FILES={'/play':Path(PLAY).read_bytes(),'/clip.mp4':CLIP,'/note.txt':b'not a video\n'}
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):

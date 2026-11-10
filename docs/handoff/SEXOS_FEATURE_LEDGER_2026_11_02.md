@@ -3156,6 +3156,34 @@ row no longer waits for the row before it to end.
   - L seeks from about 1.4 s to 6.4 s, and the next picture is at 6.6 s.
 - **Known issue** (reported, not media): PS/2 extended keys (arrows, E0 prefix) don't reach apps, which is why Play also takes J/K/L.
 
+## Web: `<video>` and `<audio>` (2026-11-09)
+
+- **Pages can play video and sound.** Web plays `<video>` and `<audio>` through sex-media, so the browser uses the same FFmpeg and sound rings as Play.
+  - Sources come from `src` or the first `<source>` child, fetched whole like any other resource (streaming while it arrives is the YouTube thread's next step; `Source::available` is ready for it).
+  - Pictures are drawn as `video:N`, which the painter fills black until the first picture. `<audio controls>` gets a 300x32 box; without `controls` it takes no space.
+  - Controls draw a bar with a play mark and a progress line. K plays and pauses the first ready media element, and J/L seek 5 s.
+- **Scripts** get `HTMLMediaElement`, `HTMLVideoElement`, `HTMLAudioElement` and `new Audio(url)`: `play()` (returns a promise), `pause()`, `load()`, `canPlayType()`, `src`, `currentTime` (seeks), `duration`, `paused`, `ended`, `volume`, `muted`, `loop`, `autoplay`, `controls`, `readyState`, `videoWidth`/`videoHeight`.
+  - Events: `durationchange`, `loadedmetadata`, `loadeddata`, `canplay`, `canplaythrough`, `play`, `playing`, `pause`, `seeking`, `seeked`, `timeupdate`, `volumechange`, `emptied`, `ended`, `error`.
+  - A program has one sound ring, so a page plays sound from one element at a time. Starting one pauses the others that hold sound (`Player::release_sound`), and a player takes the ring only when it first plays.
+  - Host op `MEDIA = 48` carries requests (load, play, pause, seek, volume, muted, loop) to Web (48: text ops stay below `BYTE_OPS` 64, and the forms work takes 27 and 28). Web reports state back with a `media` dispatch.
+- **ABI:** `program_store::IMAGE_BYTES` 4 MiB -> 32 MiB, since Web with FFmpeg is 15 MB.
+- **sex-media:** pictures are BGRA (opaque), and the picture queue holds 48 (about two seconds), so a busy page doesn't starve the sound.
+  - The player primes: it holds the sound ring, and the clock with it, until half a second of sound is queued (or the picture queue is full, the ring is full, or the stream ends). This applies at the start and after a seek, so playback no longer opens with a gap while FFmpeg warms up.
+- **Bell no longer hands the card half a second of silence** when an open stream has nothing queued. It keeps at most 3 periods (~130 ms) ahead in that case.
+  - While 3 or more periods are in flight, an open stream with less than a whole period waits for one, instead of playing in crumbs between silences.
+  - `program_media_gate` now hears each tone as one unbroken stretch (440, 660, 880 Hz: 2.0 s each).
+- `sound_gate.segments(split=True)` cuts a loud stretch where the pitch changes, for sounds played back to back.
+- **Programs the loader would refuse are rebuilt.** The loader refuses code holding WRPKRU, XRSTOR or XRSTORS bytes at any offset (J1). Compiled code can make them by chance. In FFmpeg's sha.c, clang's `rol $0xf,%ebx; add %ebp,%edi` is c1 c3 0f 01 ef, and a VP9 function had a RIP-relative displacement holding 0f ae a9. This left Play refused.
+  - `scripts/key_bytes.py` finds such bytes in ELF programs and object files.
+  - `build_ffmpeg.sh` compiles an offending object again with other flags; a frame pointer fixed sha.c.
+  - The build trace (`cargo_manifest` stages for programs) and `build_play.sh` link a refused program again with `SEX_LAYOUT_SEED`. Play and Web turn it into lld `--shuffle-sections` for `.rodata`, which moves every displacement.
+  - The media gates now play the Play that the image ships (`iso_root/programs/play`).
+- When less than a quarter second of sound is queued, a player step may decode for 40 ms instead of 12, so a busy page doesn't make gaps.
+- **Gate.** `scripts/program_web_media_gate.py` serves `scripts/web_site/media.html`.
+  - It plays a 2 s H.264/AAC clip with `autoplay controls`. The script pauses it at 0.6 s for 0.8 s and plays it again.
+  - On `ended`, the script plays `new Audio('tone.mp3')`.
+  - The gate checks the console events, all 50 pictures, a picture on screen, and the WAV: 440 Hz for about 2 s, then 880 Hz.
+
 ## Web speaks HTTP/1.1: POST, chunked, gzip, cookies, XHR (2026-11-09)
 
 First step toward YouTube (plan: docs/handoff/YOUTUBE_GAP_REPORT_2026_11_09.md).
@@ -3210,6 +3238,28 @@ YouTube stage Y3d.
 - Policy: C++ only for ported engines (V8 next), each in its own organ; SexOS itself stays Rust.
 
 
+## Net: TLS 1.2 and 1.3 with every common suite and curve (2026-11-09)
+
+Parity report workstream G, part 1.
+- **Why.** The open-web session spoke only TLS 1.3 with AES-128-GCM over P-256 (embedded-tls). Sites that offer only TLS 1.2, prefer ChaCha20 or AES-256, or ask for X25519 or P-384 failed.
+- **sex-tls `open`** now runs rustls 0.23's unbuffered client (no_std) on a provider of our own in `crates/sex-tls/src/open/provider.rs`: AES-128-GCM, AES-256-GCM and ChaCha20-Poly1305 for TLS 1.3 and TLS 1.2 (ECDHE-ECDSA and ECDHE-RSA), SHA-256/384, key exchange on X25519, P-256 and P-384, ALPN `http/1.1`. X25519 is ours (`open/x25519.rs`) on fiat-crypto's verified field code, checked against RFC 7748 and OpenSSL. Certificates still go through rustls-webpki with the same RSA/ECDSA algorithms and the public roots. `Session`'s API is unchanged; sexnet logs `[net.tls.agreed] version= suite= group=` per session.
+- **No vector registers in the service.** sexnet builds with `chacha20_force_soft` and `poly1305_force_soft` beside the AES/POLYVAL cfgs; `scripts/check_tls_platform.py` checks them for the sexnet stage and pins the new crates (rustls 0.23.46, aes-gcm 0.10.3, chacha20poly1305 0.10.1, hmac 0.12.1, fiat-crypto 0.2.9, optional under `open-web` so the Browser's graph is unchanged).
+- **Tests.** `cargo test -p sex-tls --features open-web`: ten OpenSSL servers each held to one version, suite and group (all nine suites, all three groups, RSA/P-256/P-384 certificates); a server no trusted root signed is refused as a certificate failure; keep-alive. QEMU gate `scripts/program_web_tls_gate.py`: the browser loads a page from a TLS 1.3-only server (agreed TLS13_AES_256_GCM_SHA384 on X25519) and fetches from TLS 1.2-only servers held to ECDHE-RSA-AES256-GCM-SHA384 on P-384 and ECDHE-ECDSA-CHACHA20-POLY1305 on P-256. Its image is built with `SEXOS_TLS_GATE_ROOT` (one extra root, gate builds only).
+- **No ABI change.** Live top-site checks need a real network (the cloud proxy re-terminates TLS): try `run +net web https://...` for google.com, wikipedia.org, github.com, cloudflare.com, amazon.com, youtube.com on Andreas's machine or bare metal.
+
+## Net: IPv6 and sockets for programs (2026-11-09)
+
+Workstream G (plan: `docs/handoff/LINUX_AND_DESKTOP_PARITY_REPORT_2026_11_09.md`), the IPv6 and socket half; TLS is separate.
+- **IPv6 in sexnet.** smoltcp gets `proto-ipv6`, `proto-ipv6-slaac` and room for three addresses. IPv6 starts with the open side (the first program call), never at boot, so the controlled engine and its gates see no IPv6 frames: the interface is made again with a link-local address from the MAC (EUI-64) and SLAAC on, which sends a router solicitation and takes a global address and default route from the router advertisement. smoltcp 0.14 adds the SLAAC route only to a table with no IPv4 route, so the IPv4 default route steps aside while SLAAC updates. A DHCP lease now replaces only the IPv4 address.
+- **NIC.** The e1000/e1000e multicast table passes two groups only: all-nodes (router advertisements) and this MAC's solicited-node group (neighbor solicitations). No multicast-promiscuous mode.
+- **Names in both families.** `dns_wire` asks and parses AAAA (`query_type`, `parse_type`, with the same strict validation and CNAME chains). A lookup asks A, and AAAA when the machine has a global IPv6 address; it answers once both came, or 50 ms after the first (RFC 8305's resolution delay), IPv6 first. The resolver itself is still reached over IPv4 (DHCP's).
+- **Ready on either family.** `UP` answers OK with a DHCP lease or a global IPv6 address; `[net.ipv6.slaac] address=... router=...` is recorded once.
+- **Sockets.** A run Shell bound to the network (`run +net`) can now connect to IPv6 addresses, listen for TCP connections and use UDP, all under the same gate as before. Programs may take ports 1 to 39998 except 68; the ports above are the service's own (its resolver, outbound flows, job tickets), and one port has one listener or socket. A listener takes connections one at a time: on `ACCEPT` the connection becomes the caller's new flow number and another flow listens on. A flow that was shut down is left to finish when closed rather than reset, and a new connection takes a flow the stack is done with first.
+- **SDK (`sex_app::net`).** `IpAddr` (V4/V6, `parse` with or without brackets, RFC 5952 display), `up`, `addresses`, `resolve`; `TcpStream` (`begin`/`poll_open` or `connect`/`connect_to`, `read`/`read_within`, `write`/`write_all`, `is_closed`, `shutdown`, `close`), `TcpListener` (`bind`, `accept`, `accept_within`), `UdpSocket` (`bind`, `send_to`, `recv_from`, `recv_from_within`). `Error::InUse` is new. Exchanges (HTTP, so the browser too) resolve in both families, cache both, connect by `CONNECT_TO`, and move to a name's next address when the first fails or takes over 3 s. `sex_fetch::Url` takes bracketed IPv6 hosts (`http://[fd00::1]:8080/`), kept in the Host header.
+- **Program `talk`.** `run +net talk tcp HOST PORT TEXT`, `udp HOST PORT TEXT`, `listen PORT`, `addresses`, and `check ADDRESS PORT` for the gate.
+- **ABI changes** (`crates/sex-pdx/src/web.rs`; the ABI hash is recomputed): new request kinds `RESOLVE_ALL` 11, `CONNECT_TO` 12, `UDP_BIND` 13, `UDP_SEND` 14, `UDP_RECEIVE` 15, `LISTEN` 16, `ACCEPT` 17, `ADDRESSES` 18, `SHUTDOWN` 19; new status `IN_USE` 8; region layouts `ADDRESS_BYTES` 17 (family 4 or 6, then 16 address bytes) and `ENDPOINT_BYTES` 19 (address, then port big-endian); `FAMILY_V4`, `FAMILY_V6`, `PROGRAM_PORT_MAX`, `put_address`/`address_of`/`put_endpoint`/`endpoint_of`. Kinds 1 to 10 are unchanged (`RESOLVE` still answers 4 IPv4 bytes; `CONNECT` still packs IPv4 and port), so Kaleidoscope and Spindle are untouched. `STATE` now says OPENING for a listener and OPEN after our own FIN.
+- **Tests.** Host (`sexnet_transport_host_gate.sh`): router solicitation and SLAAC address and route, no IPv6 before the open side starts, TCP to an IPv6 peer with shutdown, UDP port rules and echo, a listener taking a connection, A+AAAA resolution with the delay, AAAA wire parsing; `sex-fetch` bracketed URLs. QEMU gate `scripts/program_ipv6_gate.py`: on QEMU's socket backend with a peer the script plays itself (router, neighbor discovery, small TCP/UDP echo and HTTP server, a TCP client), because the build hosts have no IPv6 for QEMU's user network. The machine takes `fd00:5e:0:1:5054:ff:fe12:3456` by SLAAC, `talk` echoes over TCP and UDP and accepts a connection on 7070, and `peek http://[fd00:5e:0:1::1]/page.html` loads a page.
+- **Not yet.** DNS over IPv6 and DHCPv6/RDNSS (the resolver is DHCPv4's), IPv6 fragmentation and MLD, a listen backlog beyond one, UDP datagrams past one frame, TLS to IPv6 literals (the name check takes a host name).
 ## Ordinary Rust and C programs: Rust std, POSIX as a guest library, PDF (2026-11-09)
 
 Workstream H of `LINUX_AND_DESKTOP_PARITY_REPORT_2026_11_09.md`. PR #68.
@@ -3267,6 +3317,35 @@ Workstream I of `docs/handoff/LINUX_AND_DESKTOP_PARITY_REPORT_2026_11_09.md`.
   a rollover test and the descriptor parser's tests; master runtime gate; host unittests;
   architectural truth.
 
+## AV1 video and AVIF pictures, through dav1d (2026-11-09)
+
+- **What runs now.** Play and Web's `<video>` play AV1 in MP4 and in WebM/Matroska
+  (8-bit and 10-bit), the codec YouTube serves most. Web's `<img>` shows AVIF pictures.
+- **How.** `scripts/build_dav1d.sh` builds dav1d 1.5.1 (BSD-2-Clause, from GitHub) with
+  meson as a static archive for x86_64-sex-app (same flags as FFmpeg; bit depths 8 and
+  10/12; its SSSE3/SSE4.1 assembly included; AVX2/AVX-512 code is present but never
+  chosen, since the kernel keeps XCR0 to x87 and SSE). It runs the same refused-bytes
+  scan as FFmpeg (C files recompiled with other flags; any hit in assembly rebuilds
+  dav1d as plain C). Today nothing is hit. `build_ffmpeg.sh` runs it first, then
+  configures FFmpeg with `--enable-libdav1d`, decoder `libdav1d` and parser `av1` (found
+  through dav1d's pkg-config file) and copies `libdav1d.a` beside FFmpeg's archives;
+  sex-media's build.rs links it when present. FFmpeg gives dav1d one thread.
+  sex-libc gains `sysconf` (page size and core count), the only call dav1d lacked.
+- **AVIF.** `sex_media::decode_picture(bytes, max_w, max_h)` opens bytes, decodes the
+  first picture and scales it to fit (opaque 0xFFRRGGBB). sex-image stays pure Rust:
+  `sex_web::decode_image` hands bytes that sex-image does not know and whose `ftyp`
+  brand is `avif`/`avis` (`sex_web::is_avif`) to a decoder the program sets with
+  `sex_web::set_avif_decoder`; Web sets one that calls sex-media and logs `[web.avif]`.
+- **Size.** Code (text) grows about 1.95 MB in Play and in Web.
+- **Gates.** `program_media_gate` adds `clip-av1.mp4` (AV1 + AAC, 770 Hz) and
+  `clip-av1.webm` (10-bit AV1 + Opus, 990 Hz): 50 pictures each, tones heard.
+  `program_web_media_gate`'s page adds `still.avif` (96x48, #E07020), which must decode
+  at its size and colour. `program_play_gate` unchanged. Host test `sex-web/tests/avif.rs`.
+- **Limits.** AVIF alpha (a separate item) is ignored, so transparent AVIFs show opaque.
+  Grid (tiled) AVIFs show only their first tile, and animated AVIF (`avis`) shows its
+  first frame. dav1d runs on one thread; 320x240 keeps up on one core, larger sizes
+  are not measured yet.
+
 ## Power off and restart through ACPI (2026-11-09)
 
 Parity report workstream A (`LINUX_AND_DESKTOP_PARITY_REPORT_2026_11_09.md` section 6).
@@ -3290,6 +3369,35 @@ Workstream D of the parity report. Handoff and bare-metal checklist: `docs/hando
 - **Sound.** Bell drives HD Audio (`servers/sexbell/src/hda.rs`): CORB/RIRB, analog pin to converter routing (speaker, headphones, line out; never HDMI), one always-running 48 kHz stereo stream over 16 periods. Gate `sound_gate.py --card hda`: 440 Hz/400 ms and 1000 Hz/310 ms recorded.
 - **Network.** igb/igc advanced descriptors and queue registers, igc DEV_RST, PHY autonegotiation restart, I219 ich8lan bits, DRV_LOAD; Realtek in `servers/sexnet/src/realtek.rs`. Gates `program_net_gate.py --nic igb|e1000e` (DHCP, HTTP download), `ethernet_peer_gate.py --model igb`; Realtek and igc host-tested only (QEMU lacks them).
 - **SATA.** `apps/sexdrive/src/ahci.rs` serves the block interface when no NVMe is present. `SEXOS_GATE_DISK_BUS=ahci` for gates; filesystem and disk persistence gates pass on SATA and NVMe.
+
+## WebP and GIF pictures, animated (2026-11-09)
+
+- `sex-image` decodes WebP (lossy, lossless, alpha, animation) through image-webp 0.2.4,
+  vendored no_std in `vendor/image-webp-0.2.4` (an in-memory `io` shim; the encoder and
+  tests left out; an opaque pixel no longer blends to 254), and GIF with its own decoder
+  (`crates/sex-image/src/gif.rs`: LZW, interlacing, transparency, disposal, loop count).
+- `sex_image::Animation<B>` draws one frame at a time onto one canvas; it borrows or owns
+  the file (`&[u8]`, `Rc<[u8]>`).
+- View plays animated GIF and WebP with their own timing and loops, and reads files up to
+  4 MiB. Web shows WebP and GIF in `<img>` and plays up to 16 animated pictures a page.
+- Tests: `crates/sex-image/tests/formats.rs` (GIF against Pillow's decode, WebP against the
+  source, fuzzed damage); `program_view_gate.py` (WebP pixels, an animated GIF's three
+  colours on screen); `program_web_media_gate.py` (a moving GIF on its page).
+
+## Sound mixer: volume keys, master and per-program volume (2026-11-09)
+
+- Bell keeps the person's settings (`sex_pdx::sound_mixer`, op `OP_MIXER` 0xCA): master
+  volume and mute over everything Bell plays (a squared curve, so 50% is a quarter of the
+  amplitude), and a volume and mute per program row on top of what the program asks in its
+  ring. Shell and Spindle may set them, SilkBar may read them; replies carry `TAG` in their
+  top byte. The volume tick plays after the reply.
+- Input gives media keys their own codes (`app_key::KEY_MUTE` 0x75, `KEY_VOLUME_DOWN` 0x76,
+  `KEY_VOLUME_UP` 0x77; PS/2 E0 20/2E/30 used to arrive as D, C and B; USB usages
+  0x7F..0x81). Shell takes them: 5% steps with a tick at the new level, mute toggles.
+- Spindle `volume`: show, `N`, `+N`, `-N`, `mute`, `unmute`, `list`, `ROW N`, `ROW mute`.
+- ABI: `app_key` gains the three key codes. Gate: `scripts/sound_volume_gate.py`.
+- Not yet: an on-screen volume indicator (SilkBar/Display), remembering the volume across
+  boots, device choice, resampling, capture.
 
 
 ## Hardware census, VMD warning, NVMe waits for real SSDs (2026-11-09)

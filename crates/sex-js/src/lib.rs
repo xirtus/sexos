@@ -71,6 +71,10 @@ pub mod op {
     /// (control, caret in characters): focuses a text control and places its caret;
     /// (): no text control has focus.
     pub const CARET: u32 = 28;
+    /// (video or audio element, verb, argument): play, pause, seek SECONDS, load,
+    /// volume 0..1, muted 0/1, loop 0/1; queued for the browser. The browser answers
+    /// with `media` dispatches carrying the element's state and its events.
+    pub const MEDIA: u32 = 48;
     /// (base, specifier): the module's address (asked by the engine, not the prelude).
     pub const MODULE_RESOLVE: u32 = 29;
     /// (address): the module's source, or nothing when the browser has not loaded it.
