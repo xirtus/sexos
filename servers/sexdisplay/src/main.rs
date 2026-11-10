@@ -947,12 +947,10 @@ fn module_rect(bar: &SilkBar, slot: ModuleSlot) -> (usize, usize, usize, usize) 
 }
 
 fn workspace_color(x: usize, y: usize, bar: &SilkBar, scene: &scene::SceneSnapshot) -> Option<u32> {
-    const WS_SLOTS: [ModuleSlot; 5] = [
-        ModuleSlot::Workspace0,
-        ModuleSlot::Workspace1,
-        ModuleSlot::Workspace2,
-        ModuleSlot::Workspace3,
-        ModuleSlot::Workspace4,
+    const WS_SLOTS: [ModuleSlot; 9] = [
+        ModuleSlot::Workspace0, ModuleSlot::Workspace1, ModuleSlot::Workspace2,
+        ModuleSlot::Workspace3, ModuleSlot::Workspace4, ModuleSlot::Workspace5,
+        ModuleSlot::Workspace6, ModuleSlot::Workspace7, ModuleSlot::Workspace8,
     ];
     for (idx, slot) in WS_SLOTS.iter().enumerate() {
         let (wx, wy, ww, wh) = module_rect(bar, *slot);
