@@ -20,6 +20,8 @@ struct Page { frame: u64, pristine: u64 }
 struct Service { pd: u32, entry: u64, stack_top: u64, pages: [Page; MAX_PAGES], count: usize }
 const SERVICES: usize = 6;
 static SERVICE: [Mutex<Service>; SERVICES] = [const { Mutex::new(Service { pd: 0, entry: 0, stack_top: 0, pages: [Page { frame: 0, pristine: 0 }; MAX_PAGES], count: 0 }) }; SERVICES];
+// BOOT publishes immutable identity separately; self count cannot contend with its own rearm.
+static SERVICE_IDS:[AtomicU32;SERVICES]=[const{AtomicU32::new(0)};SERVICES];
 static RESTARTS: [AtomicU32; SERVICES] = [const { AtomicU32::new(0) }; SERVICES];
 static GAVE_UP: [core::sync::atomic::AtomicBool; SERVICES] = [const { core::sync::atomic::AtomicBool::new(false) }; SERVICES];
 
@@ -32,7 +34,7 @@ pub fn capture(pd_id: u32, domain_id: u8) {
     let pd = crate::ipc::DOMAIN_REGISTRY.get(pd_id).expect("SERVICE_RESTART_DOMAIN");
     let main = pd.main_task.load(Ordering::Acquire);
     assert!(!main.is_null(), "SERVICE_RESTART_TASK");
-    let mut s = SERVICE.iter().map(|m| m.lock()).find(|s| s.pd == 0).expect("SERVICE_RESTART_SLOTS");
+    let (index,mut s)=SERVICE.iter().enumerate().map(|(i,m)|(i,m.lock())).find(|(_,s)|s.pd==0).expect("SERVICE_RESTART_SLOTS");
     let (base, top) = (code_base(domain_id), stack_top(domain_id));
     let ranges = [(base, base + SLOT_BYTES), (top - STACK_BYTES, top)];
     for (start, end) in ranges {
@@ -57,7 +59,8 @@ pub fn capture(pd_id: u32, domain_id: u8) {
     s.pd = pd_id;
     s.entry = unsafe { (*main).context.rip };
     s.stack_top = unsafe { (*main).context.rsp };
-    crate::serial_println!("[boot.service.restartable] pd={} pages={} entry={:#x}", pd_id, s.count, s.entry);
+    SERVICE_IDS[index].store(pd_id,Ordering::Release);
+    crate::serial_println!("[boot.service.restartable] pd={} task={} pages={} entry={:#x}", pd_id, unsafe{(*main).id}, s.count, s.entry);
 }
 
 /// A service keeps `pages` of its own pages from `va` across its restarts: a restart
@@ -80,8 +83,35 @@ pub fn keep(pd: u32, va: u64, pages: u64) -> bool {
 
 /// How many times the service in domain `pd` has been started again.
 pub fn restarts_of(pd: u32) -> u32 {
-    (0..SERVICES).find(|&i| SERVICE[i].try_lock().is_some_and(|s| s.pd == pd && pd != 0))
-        .map_or(0, |i| RESTARTS[i].load(Ordering::Relaxed))
+    SERVICE_IDS.iter().position(|id|pd!=0&&id.load(Ordering::Acquire)==pd)
+        .map_or(0,|i|RESTARTS[i].load(Ordering::Acquire))
+}
+
+/// Snapshot only a genuinely held route, under the same lock as peer rearm.
+pub fn peer_state(holder:&crate::capability::ProtectionDomain,slot:u64)->Result<sex_pdx::crash_log::PeerState,u64>{
+    use sex_pdx::crash_log::{self as w,PeerLife as L,PeerState};
+    use crate::scheduler::task_ownership::Phase;
+    let slot=crate::capability_slot::decode_capability_slot(slot).ok_or(w::INVALID)?;
+    let target=match holder.find_capability(slot).map(|c|c.data){Some(crate::capability::CapabilityData::Domain(pd))=>pd,_=>return Err(w::DENIED)};
+    let mut contended=false;
+    for index in 0..SERVICES{
+        let Some(service)=SERVICE[index].try_lock()else{contended=true;continue};
+        if service.pd==0 || service.pd!=target{continue}
+        let domain=crate::ipc::DOMAIN_REGISTRY.get(target).ok_or(w::NOT_FOUND)?;
+        let main=domain.main_task.load(Ordering::Acquire);
+        let main=unsafe{main.as_ref()}.ok_or(w::INVALID)?;
+        if main.id==0 || main.context.pd_id!=target as u64 || main.context.pd_ptr!=domain as *const _{return Err(w::INVALID)}
+        let state=main.state.snapshot();
+        let ending=target<64 && END_REQUESTS.load(Ordering::Acquire)&(1u64<<target)!=0;
+        let life=if GAVE_UP[index].load(Ordering::Acquire){L::GaveUp}
+            else if state.exited{if state.phase==Phase::Dead&&state.owner_core.is_none(){L::Dead}else{L::Exited}}
+            else if state.phase==Phase::Dead{return Err(w::INVALID)}
+            else if ending{L::Ending}else if state.fault_blocked{L::FaultBlocked}
+            else if state.phase==Phase::Constructed{L::Starting}else{L::Live};
+        let epoch=(RESTARTS[index].load(Ordering::Acquire) as u64).checked_add(1).ok_or(w::INVALID)?;
+        return Ok(PeerState{epoch,life})
+    }
+    Err(if contended{w::RETRY}else{w::NOT_FOUND})
 }
 
 /// Domains asked to end at their next syscall, as a fault would end them (one bit each).
