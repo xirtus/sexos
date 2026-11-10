@@ -21,7 +21,7 @@ class HardwarePreflight(unittest.TestCase):
                 tables = sys / "firmware/acpi/tables"
                 tables.mkdir(parents=True)
                 (tables / table).write_bytes(b"fixture")
-            # A sibling/home target must never hide a missing checked-in target.
+            # A sibling target must never hide a missing checked-in target.
             (root / "x86_64-sex.json").write_text("{}")
             if target:
                 (repo / "x86_64-sex.json").write_text("{}")
@@ -43,7 +43,7 @@ class HardwarePreflight(unittest.TestCase):
             tool = limine / "limine"
             tool.write_text("#!/bin/sh\necho fixture-limine\n")
             tool.chmod(0o755)
-            env = dict(os.environ, HOME=str(root), PATH=str(bins) + os.pathsep + os.environ["PATH"],
+            env = dict(os.environ, PATH=str(bins) + os.pathsep + os.environ["PATH"],
                        SEXOS_PREFLIGHT_REPO_ROOT=str(repo), SEXOS_PREFLIGHT_PROC_ROOT=str(proc),
                        SEXOS_PREFLIGHT_SYS_ROOT=str(sys))
             result = subprocess.run(["bash", str(SCRIPT)], env=env, text=True,
@@ -81,7 +81,7 @@ class HardwarePreflight(unittest.TestCase):
         result = self.inventory(flags="not_pku vmx")
         self.assertEqual(result.returncode, 1, result.stdout)
 
-    def test_home_target_cannot_mask_missing_repository_target(self):
+    def test_sibling_target_cannot_mask_missing_repository_target(self):
         result = self.inventory(target=False)
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertIn("Checked-in target spec missing", result.stdout)

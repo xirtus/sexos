@@ -25,7 +25,8 @@ Validation:
 - Seven full-script Bash subprocess tests in
   `scripts/tests/test_hardware_preflight.py`: Intel/AMD table inventory,
   VMX without a table, missing PKU, false PKU substring, a missing repository target
-  despite a home/sibling target, and failed Secure Boot inspection.
+  despite a sibling target, and failed Secure Boot inspection. Fixture paths use
+  task-specific overrides; the user's home environment is preserved.
 - Every fixture run uses explicit `SEXOS_PREFLIGHT_{REPO,PROC,SYS}_ROOT` overrides
   and prints a fixture/override warning. These are synthetic host-inventory tests,
   not a claim of real hardware results. The production script defaults to its own
