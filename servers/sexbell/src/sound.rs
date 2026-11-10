@@ -343,7 +343,7 @@ impl Player {
                 (n, n)
             } else {
                 let made = crate::resample::outputs(have, st.frac, step, PERIOD_FRAMES);
-                let (used, frac) = crate::resample::mix_into(&mut mix[..], made, st.frac, step, gain, read);
+                let (used, frac) = crate::resample::mix_into(&mut mix[..], made, have, st.frac, step, gain, read);
                 st.frac = frac;
                 // A closed stream's last frame has no next to blend with: it is done.
                 if made == 0 && r.load(ring::OPEN) == 0 { st.frac = 0; (have, 0) } else { (used, made) }

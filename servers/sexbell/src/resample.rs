@@ -27,8 +27,10 @@ pub fn outputs(have: usize, frac: u32, step: u64, want: usize) -> usize {
 }
 
 /// Mixes `n` output frames into `mix` with `gain` (1/65536), reading input frame `i`
-/// through `read(i)`. Returns (input frames used up, new phase).
-pub fn mix_into(mix: &mut [[i32; 2]], n: usize, frac: u32, step: u64, gain: i64, read: impl Fn(usize) -> [i16; 2]) -> (usize, u32) {
+/// through `read(i)`, of which `have` have arrived. Returns (input frames used up, new
+/// phase). Never more than `have` are used up: when downsampling steps past the end,
+/// the rest of the step stays in the phase and is skipped once those frames arrive.
+pub fn mix_into(mix: &mut [[i32; 2]], n: usize, have: usize, frac: u32, step: u64, gain: i64, read: impl Fn(usize) -> [i16; 2]) -> (usize, u32) {
     let mut pos = frac as u64;
     for out in mix.iter_mut().take(n) {
         let i = (pos >> 16) as usize;
@@ -40,5 +42,6 @@ pub fn mix_into(mix: &mut [[i32; 2]], n: usize, frac: u32, step: u64, gain: i64,
         }
         pos += step;
     }
-    ((pos >> 16) as usize, (pos & 0xFFFF) as u32)
+    let used = ((pos >> 16) as usize).min(have);
+    (used, (pos - ((used as u64) << 16)) as u32)
 }

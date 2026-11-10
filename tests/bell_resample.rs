@@ -16,7 +16,7 @@ fn convert(input: &[[i16; 2]], rate: u32, period: usize) -> Vec<i32> {
         let n = outputs(have, frac, st, period);
         if n == 0 { break; }
         let mut mix = vec![[0i32; 2]; period];
-        let (used, f) = mix_into(&mut mix, n, frac, st, 65536, |i| input[taken + i]);
+        let (used, f) = mix_into(&mut mix, n, have, frac, st, 65536, |i| input[taken + i]);
         taken += used; frac = f;
         out.extend(mix[..n].iter().map(|m| m[0]));
     }
@@ -69,4 +69,26 @@ fn crossings(x: &[i32]) -> usize { x.windows(2).filter(|w| w[0] < 0 && w[1] >= 0
     assert_eq!(outputs(0, 0, step(44_100), 10), 0);
     assert_eq!(outputs(1, 0, step(44_100), 10), 0);
     assert_eq!(outputs(2, 0, step(44_100), 10), 1);
+}
+
+/// Frames arriving two at a time at 192 kHz: Bell never takes frames not yet written,
+/// and the output is the same as converting all of it at once.
+#[test] fn short_writes_never_overtake_the_writer() {
+    let input = tone(192_000, 1000.0, 19_200);
+    let st = step(192_000);
+    let (mut written, mut taken, mut frac, mut out) = (0usize, 0usize, 0u32, Vec::new());
+    while written < input.len() {
+        written += 2;
+        loop {
+            let have = written - taken;
+            let n = outputs(have, frac, st, 64);
+            if n == 0 { break; }
+            let mut mix = vec![[0i32; 2]; 64];
+            let (used, f) = mix_into(&mut mix, n, have, frac, st, 65536, |i| input[taken + i]);
+            taken += used; frac = f;
+            assert!(taken <= written, "took {taken} of {written}");
+            out.extend(mix[..n].iter().map(|m| m[0]));
+        }
+    }
+    assert_eq!(out, convert(&input, 192_000, 64));
 }
