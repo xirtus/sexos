@@ -32,8 +32,12 @@ pub fn user_bytes_writable(start: u64, len: usize) -> bool { validate_user_bytes
 /// does. The pending-wake handshake covers publication after these observations. No
 /// event is consumed. Returns only if nothing parked; otherwise the task resumes in user
 /// mode with `regs` as they are now.
+/// Only a domain's main task sleeps here: a reply or message wakes the main task, so a
+/// worker (a program's thread) returns at once and polls as before.
 unsafe fn wait_unless_pending(regs: &mut crate::interrupts::SyscallRegs) {
     let pd = crate::core_local::CoreLocal::get().current_pd_ref();
+    let current = crate::scheduler::SCHEDULERS[crate::core_local::CoreLocal::get().core_id as usize].current_task.load(core::sync::atomic::Ordering::Acquire);
+    if current != pd.main_task.load(core::sync::atomic::Ordering::Acquire) { return; }
     let has_message = (*pd.message_ring).len() != 0;
     let has_reply = !pd.incoming_replies.lock().is_empty();
     if !has_message && !has_reply { crate::scheduler::wait_for_message(regs as *const _); }

@@ -208,6 +208,24 @@ pub extern "C" fn _start() -> ! {
         Ok(count) => sex_pdx::serial_record!("[threads.pthread] target={} task={} threads=4 count={}", target, task, count),
         Err(why) => sex_pdx::serial_record!("[threads.fail] target={} task={} why=pthread {}", target, task, why),
     }
+    // A worker uses Files too: create, write, stat and read a file, then the main task
+    // checks what it saw. A worker's call must not sleep waiting for a reply that only
+    // wakes the main task.
+    static FILE_STEP: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+    if let Ok(h) = thread::spawn(|| {
+        use sex_app::files::direct;
+        let step = |n: u32| FILE_STEP.store(n, Ordering::Release);
+        let _ = direct::create(b"worker.txt");
+        step(1); if direct::write_at(b"worker.txt", 0, b"from a worker") != Ok(13) { return; }
+        step(2); if !direct::stat(b"worker.txt").is_ok_and(|st| st.size == 13) { return; }
+        let mut back = [0u8; 13];
+        step(3); if direct::read_at(b"worker.txt", 0, &mut back) != Ok(13) || &back != b"from a worker" { return; }
+        step(4);
+    }) { h.join(); }
+    match FILE_STEP.load(Ordering::Acquire) {
+        4 => sex_pdx::serial_record!("[threads.files] target={} task={} worker=1 ok=1", target, task),
+        n => sex_pdx::serial_record!("[threads.fail] target={} task={} why=worker file request failed at step {}", target, task, n),
+    }
     let pixels = window.pixels();
     pixels[..W * H].copy_from_slice(&many);
     window.show_pixels(W, H);
