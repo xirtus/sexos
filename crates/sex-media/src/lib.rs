@@ -107,7 +107,9 @@ pub struct Growing {
 
 /// How far past the coming piece's end a read just waits for it rather than asking
 /// for a new piece (FFmpeg skips small gaps between sound and pictures).
-pub const NEAR: u64 = 1 << 20;
+// 1 MiB meant a seek could wait over ten seconds on a 100 KiB/s connection.
+// Keep short demuxer skips local, but start a Range for larger missing gaps.
+pub const NEAR: u64 = 128 * 1024;
 
 impl Growing {
     pub fn shared() -> alloc::rc::Rc<core::cell::RefCell<Growing>> { Default::default() }
@@ -1069,5 +1071,52 @@ impl Drop for Player {
             s.skip();
             s.close();
         }
+    }
+}
+
+#[cfg(test)]
+mod growing_tests {
+    use super::*;
+
+    fn stream(ranges: bool) -> alloc::rc::Rc<core::cell::RefCell<Growing>> {
+        let s = Growing::shared();
+        { let mut g = s.borrow_mut();
+          g.bytes.resize(600 * 1024, 7); g.total = Some(1500 * 1024); g.ranges = ranges; }
+        s
+    }
+
+    #[test]
+    fn forward_seek_asks_for_a_piece_before_whole_download() {
+        let mut s = stream(true);
+        let at = 1200 * 1024;
+        assert_eq!(s.read_at(at, &mut [0; 16]), None);
+        assert_eq!(s.borrow().want, Some(at));
+        s.borrow_mut().begin(at, 2 * 1024 * 1024);
+        s.borrow_mut().bytes.extend_from_slice(&[3; 16]);
+        let mut out = [0; 16];
+        assert_eq!(s.read_at(at, &mut out), Some(16));
+        assert_eq!(out, [3; 16]);
+        assert_eq!(s.read_at(0, &mut out), Some(16));
+        assert_eq!(out, [7; 16]);
+    }
+
+    #[test]
+    fn sequential_and_small_interleaved_gaps_keep_the_current_download() {
+        let mut s = stream(true);
+        for at in [600 * 1024, 616 * 1024, 728 * 1024] {
+            assert_eq!(s.read_at(at, &mut [0; 16]), None);
+            assert_eq!(s.available(at), 0);
+            assert_eq!(s.borrow().want, None);
+        }
+    }
+
+    #[test]
+    fn no_range_server_and_end_of_stream_do_not_request_a_piece() {
+        let mut s = stream(false);
+        assert_eq!(s.read_at(1200 * 1024, &mut [0; 16]), None);
+        assert_eq!(s.borrow().want, None);
+        s.borrow_mut().ranges = true;
+        assert_eq!(s.read_at(1500 * 1024, &mut [0; 16]), Some(0));
+        assert_eq!(s.borrow().want, None);
     }
 }
