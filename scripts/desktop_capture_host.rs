@@ -27,9 +27,8 @@ pub mod app_catalog {
     pub const SPINDLE_TARGETS: [u32; 1] = [12];
 }
 #[macro_export]
-macro_rules! serial_record {
-    ($($x:tt)*) => {{}};
-}
+macro_rules! serial_record { ($($x:tt)*) => {{ let text=std::fmt::format(format_args!($($x)*));assert!(text.len()<256,"oversize production diagnostic: {}",text.len()); }}; }
+
 #[derive(Clone, Copy)]
 pub struct PdxMessage {
     pub type_id: u64,
@@ -140,6 +139,7 @@ struct World {
     calls: VecDeque<(u64, u64, [u64; 3])>,
     replies: VecDeque<(u32, u64)>,
     reject_write: bool,
+    reply_full: bool,
 }
 impl World {
     fn new() -> Self {
@@ -151,6 +151,7 @@ impl World {
             calls: VecDeque::new(),
             replies: VecDeque::new(),
             reject_write: false,
+            reply_full: false,
         }
     }
 }
@@ -206,9 +207,17 @@ pub fn pdx_call_checked(slot: u64, op: u64, a: u64, b: u64, c: u64) -> Result<u6
     })
 }
 pub fn pdx_reply(_: u32, word: u64) -> u64 {
-    WORLD.with(|w| w.borrow_mut().replies.push_back((1, word)));
-    0
+    WORLD.with(|w| {
+        let mut w = w.borrow_mut();
+        if w.reply_full {
+            1
+        } else {
+            w.replies.push_back((1, word));
+            0
+        }
+    })
 }
+
 fn msg(pd: u32, task: u32, kind: u64, seq: u32) -> PdxMessage {
     PdxMessage {
         type_id: screen_capture::OP,
@@ -674,4 +683,69 @@ fn invalid_publication_never_creates_a_readable_frame() {
     s.poll();
     let (_, word) = WORLD.with(|w| w.borrow_mut().replies.pop_front()).unwrap();
     assert_eq!(c::decode_reply(word), Some((1, c::CANCELLED, c::BEGIN)));
+}
+#[test]
+fn authorized_release_receipt_survives_provider_reply_backpressure() {
+    use screen_capture as c;
+    reset();
+    let mut s = server::Server::new();
+    s.attach(1);
+    let l = live();
+    assert!(s.request(msg(12, 12, c::BEGIN, 1), &l, 1, 2, 1));
+    s.published(1, 2, 1, &[1, 2], 0);
+    s.poll();
+    WORLD.with(|w| w.borrow_mut().replies.clear());
+    WORLD.with(|w| w.borrow_mut().reply_full = true);
+    s.request(msg(12, 12, c::RELEASE, 1), &l, 2, 2, 1);
+    erased();
+    s.poll();
+    assert!(
+        !s.request(msg(12, 12, c::BEGIN, 2), &l, 3, 2, 1),
+        "new capture overwrote an undelivered release receipt"
+    );
+    s.request(msg(12, 12, c::RELEASE, 1), &l, 4, 2, 1);
+    assert!(WORLD.with(|w| w.borrow().replies.is_empty()));
+    WORLD.with(|w| w.borrow_mut().reply_full = false);
+    s.poll();
+    let (_, word) = WORLD
+        .with(|w| w.borrow_mut().replies.pop_front())
+        .expect("authorized RELEASE ACK was lost");
+    assert_eq!(c::decode_reply(word), Some((1, c::OK, c::RELEASE)));
+    assert!(s.request(msg(12, 12, c::BEGIN, 2), &l, 5, 2, 1));
+}
+#[test]
+fn retirement_discards_undelivered_release_receipt_before_rebirth() {
+    use screen_capture as c;
+    reset();
+    let mut s = server::Server::new();
+    s.attach(1);
+    let mut l = live();
+    assert!(s.request(msg(12, 12, c::BEGIN, 1), &l, 1, 2, 1));
+    s.published(1, 2, 1, &[1, 2], 0);
+    s.poll();
+    WORLD.with(|w| w.borrow_mut().replies.clear());
+    WORLD.with(|w| w.borrow_mut().reply_full = true);
+    s.request(msg(12, 12, c::RELEASE, 1), &l, 2, 2, 1);
+    erased();
+    l.phase = surface_lifecycle::Phase::Prepared;
+    s.reconcile(&l, 3);
+    WORLD.with(|w| w.borrow_mut().reply_full = false);
+    s.poll();
+    assert!(
+        WORLD.with(|w| w.borrow().replies.is_empty()),
+        "old RELEASE ACK leaked into a reborn incarnation"
+    );
+    l.task = 13;
+    l.phase = surface_lifecycle::Phase::Live;
+    assert!(s.request(msg(12, 13, c::BEGIN, 1), &l, 4, 2, 1));
+}
+#[test]
+fn long_valid_capture_path_keeps_diagnostics_bounded() {
+    reset();
+    let mut client = client::Capture::new();
+    let mut sb = Scrollback::default();
+    let mut path = vec![b'a'; 200];
+    path.extend_from_slice(b".png");
+    client.start(&path, &mut sb);
+    assert!(client.busy());
 }
