@@ -26,6 +26,24 @@ def disk_args(disk):
  if bus=='ahci':return['-drive',f'if=none,id=sata,file={disk},format=raw','-device','ide-hd,drive=sata,bus=ide.0']
  raise ValueError('SEXOS_GATE_DISK_BUS must be nvme or ahci')
 
+def check_serial_health(text,tag):
+ if re.search(r'KERNEL PANIC|KERNEL PAGE FAULT|DOUBLE FAULT|GP FAULT|panicked at|serial.record.overflow',text):raise RuntimeError(tag+' guest failure')
+
+def wait_serial(text,health,pattern,start=0,timeout=120,*,tag='serial',raw=False):
+ """Wait for complete receipts; raw is reserved for unterminated firmware menus.
+
+ Keep text offsets and match offsets unchanged. Health always checks the raw
+ stream, including faults whose terminating newline has not arrived yet.
+ """
+ d=time.monotonic()+timeout
+ while time.monotonic()<d:
+  health();now=text()
+  if not raw:now=now[:now.rfind('\n')+1]
+  match=re.search(pattern,now[start:])
+  if match:return match
+  time.sleep(.02)
+ raise TimeoutError(f'{tag}: {pattern}')
+
 def boot(iso,disk,out,tag,resolution):
  serial=out/f'{tag}-serial.log';sock=Path('/tmp')/f'sex-autosave-{os.getpid()}-{tag}.sock'
  cmd=['qemu-system-x86_64','-M','q35','-cpu',os.environ.get('SEXOS_GATE_CPU','max,+pku,+rdseed'),'-rtc',RTC_NORMAL,'-smp',os.environ.get('SEXOS_GATE_CORES','1'),*(['-accel','tcg,thread=multi']if os.environ.get('SEXOS_GATE_CORES','1')!='1'else[]),'-m',os.environ.get('SEXOS_GATE_MEMORY','512M'),'-vga','none','-device','VGA,xres='+resolution.replace('x',',yres='),'-device','nec-usb-xhci,id=xhci','-device','usb-tablet,bus=xhci.0',*([]if os.environ.get('SEXOS_GATE_NO_CDROM')else['-cdrom',str(iso)]),*(['-drive','if=pflash,format=raw,readonly=on,file='+os.environ['SEXOS_GATE_FIRMWARE']]if os.environ.get('SEXOS_GATE_FIRMWARE')else[]),*disk_args(disk),'-serial',f'file:{serial}','-qmp',f'unix:{sock},server=on,wait=off','-display','none','-no-reboot','-no-shutdown',*os.environ.get('SEXOS_GATE_NIC','-nic none').split(),*os.environ.get('SEXOS_GATE_DEVICES','').split(),*os.environ.get('SEXOS_GATE_IOMMU','').split()]
@@ -48,21 +66,16 @@ def boot(iso,disk,out,tag,resolution):
   if proc.poll()is not None:raise RuntimeError(tag+' guest exited')
   # Only text not yet checked, backing up a little for a marker split across reads.
   now=text();start=max(0,seen.get('health',0)-64);seen['health']=len(now)
-  if re.search(r'KERNEL PANIC|KERNEL PAGE FAULT|DOUBLE FAULT|GP FAULT|panicked at|serial.record.overflow',now[start:]):raise RuntimeError(tag+' guest failure')
- def wait(pattern,start=0,timeout=120):
-  d=time.monotonic()+timeout
-  while time.monotonic()<d:
-   health();m=re.search(pattern,text()[start:])
-   if m:return m
-   time.sleep(.02)
-  raise TimeoutError(f'{tag}: {pattern}')
+  check_serial_health(now[start:],tag)
+ def wait(pattern,start=0,timeout=120,*,raw=False):
+  return wait_serial(text,health,pattern,start,timeout,tag=tag,raw=raw)
  d=time.monotonic()+15
  while not sock.exists():
   health()
   if time.monotonic()>d:raise TimeoutError('QMP unavailable')
   time.sleep(.05)
  q=QMP(sock)
- if resolution=='1024x768':wait(r'SexOS compact 1024x768',timeout=10);q.key('down');q.key('ret')
+ if resolution=='1024x768':wait(r'SexOS compact 1024x768',timeout=10,raw=True);q.key('down');q.key('ret')
  wait(r'\[shell.app.registered.reply\] target=15 .*committed=1',timeout=180);wait(r'\[linen.disk.publish.done\]',timeout=180)
  def key(name,pattern):s=len(text());q.key(name);return wait(pattern,s)
  def chord(mod,k,pattern):
