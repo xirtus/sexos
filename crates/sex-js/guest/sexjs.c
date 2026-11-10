@@ -3,6 +3,7 @@
 // the prelude reaches the page. Built for wasm32-wasip1 as a reactor by
 // scripts/build_quickjs_wasm.sh; the host (crates/sex-js) runs it on wasmi.
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -18,6 +19,7 @@ int sexos_baseline_jit_enabled;
 
 #define EXPORT(name) __attribute__((export_name(name)))
 
+extern uint32_t sexos_debug_job_count(JSRuntime *rt);
 static JSRuntime *rt;
 static JSContext *ctx;
 static int64_t deadline_ns;
@@ -263,12 +265,23 @@ static void report(void) {
     JS_FreeValue(ctx, e);
 }
 
+// Private diagnostic only: do not change queue semantics while measuring cap hits.
+static int cap_reports;
 static void run_jobs(void) {
     JSContext *c;
+    int done = 0;
     for (int i = 0; i < 10000; i++) {
         int r = JS_ExecutePendingJob(rt, &c);
         if (r == 0) break;
+        done++;
         if (r < 0) report();
+    }
+    if (done == 10000 && JS_IsJobPending(rt) && cap_reports++ < 8) {
+        char msg[128];
+        snprintf(msg, sizeof(msg), "microtask.cap jobs=%d pending=%u", done, sexos_debug_job_count(rt));
+        size_t n;
+        char *reply = host_text(1, "0", 1, msg, strlen(msg), &n);
+        free(reply);
     }
 }
 
