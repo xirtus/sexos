@@ -95,8 +95,8 @@ fn state_line(s: ws::State, scan: bool, join: bool, out: &mut [u8]) -> usize {
         } else { b"Wi-Fi: connecting to the network; type wifi to see how it went." }),
         ws::ASSOCIATED | ws::CONNECTED => put(out, &mut at, if scan || join {
             b"Wi-Fi: already connected to a network; leaving it comes later." as &[u8]
-        } else if s.phase == ws::CONNECTED { b"Wi-Fi: connected (WPA2 keys installed); internet over Wi-Fi comes next." }
-        else { b"Wi-Fi: connected to the open network; internet over Wi-Fi comes next." }),
+        } else if s.phase == ws::CONNECTED { b"Wi-Fi: connected (WPA2); the network service now uses Wi-Fi." }
+        else { b"Wi-Fi: connected to the open network; the network service now uses Wi-Fi." }),
         _ => put(out, &mut at, b"Wi-Fi: the chip stopped; the boot log's [wifi.failed] line says where."),
     }
     at
