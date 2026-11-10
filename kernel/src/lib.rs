@@ -9,6 +9,12 @@ extern crate alloc;
 #[cfg(target_arch = "x86_64")]
 pub mod serial;
 #[cfg(target_arch = "x86_64")]
+pub mod console;
+#[cfg(target_arch = "x86_64")]
+pub mod console_font;
+#[cfg(target_arch = "x86_64")]
+pub mod crash_log;
+#[cfg(target_arch = "x86_64")]
 pub mod vga;
 #[cfg(target_arch = "x86_64")]
 pub mod memory;
@@ -108,6 +114,9 @@ pub mod init;
 pub mod graphics;
 #[cfg(target_arch = "x86_64")]
 pub mod devmgr;
+pub mod iommu;
+pub mod iommu_selftest;
+pub mod vmd;
 #[cfg(target_arch = "x86_64")]
 pub mod hw;
 #[cfg(target_arch = "x86_64")]
@@ -182,6 +191,13 @@ pub static MODULE_REQUEST: ModulesRequest = ModulesRequest::new();
 #[link_section = ".limine_requests"]
 pub static MP_REQUEST: limine::request::MpRequest = limine::request::MpRequest::new(0);
 
+/// The kernel file, whose command line is the boot menu entry's `CMDLINE=`
+/// (e.g. `iommu=off`). Limine 7 answers this request, not the newer cmdline one.
+#[cfg(target_arch = "x86_64")]
+#[used]
+#[link_section = ".limine_requests"]
+pub static KERNEL_FILE_REQUEST: limine::request::ExecutableFileRequest = limine::request::ExecutableFileRequest::new();
+
 #[cfg(target_arch = "x86_64")]
 #[used]
 #[link_section = ".limine_requests"]
@@ -194,6 +210,10 @@ static _LIMINE_END: RequestsEndMarker = RequestsEndMarker::new();
 
 #[cfg(target_arch = "x86_64")]
 pub fn kernel_init() {
+    // 0. The screen first: every line from here on is drawn on it until Display starts.
+    if let Some(fb) = FB_REQUEST.response().and_then(|r| r.framebuffers().iter().next()) {
+        console::init(&fb);
+    }
     // 1. HAL first: GDT + IDT + CR4.PKE — must precede any exception-prone code
     hal::init();
 
@@ -206,7 +226,11 @@ pub fn kernel_init() {
         serial_println!("FATAL: Limine HHDM missing");
         loop { core::hint::spin_loop(); }
     });
+    let pstore = crash_log::pstore_usable(mmap);
     memory::manager::init(mmap, hhdm.offset);
+    crash_log::init(hhdm.offset, pstore);
+    // What stopped the last start stays on screen for a moment before this one goes on.
+    if crash_log::show_earlier_on_boot_screen() { console::pause_seconds(4); }
 
     // 2.5 Initialize CoreLocal for BSP (needs heap)
     unsafe { crate::core_local::CoreLocal::init(0); }
@@ -226,6 +250,7 @@ pub fn kernel_init() {
     };
     serial_println!("kernel: RSDP Physical Address: {:#x}", rsdp_phys);
 
+    iommu::RSDP.store(rsdp_phys as u64, core::sync::atomic::Ordering::Release);
     hal::init_advanced(rsdp_phys as u64, hhdm.offset);
 
     // 3.5 The other cores, set up and idle. Nothing runs on them yet.
@@ -290,6 +315,8 @@ pub fn kernel_init() {
                     crate::gdt::debug_dump_user_selectors();
                     serial_println!("tss.rsp0={:#x}", crate::gdt::debug_tss_rsp0());
                     serial_println!("context_switch.begin");
+                    // Display has the framebuffer from its first instruction.
+                    console::release();
                     crate::scheduler::Scheduler::switch_to(core::ptr::null_mut(), next_ctx_ptr);
                 }
             }

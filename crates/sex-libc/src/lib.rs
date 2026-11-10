@@ -118,6 +118,20 @@ pub unsafe extern "C" fn getenv(_name: *const c_char) -> *mut c_char {
     core::ptr::null_mut()
 }
 
+/// `sysconf`: the page size and the cores this program's threads use (musl's numbers);
+/// any other name is refused with EINVAL. dav1d asks for the cores.
+#[cfg_attr(target_os = "none", no_mangle)]
+pub unsafe extern "C" fn sysconf(name: c_int) -> core::ffi::c_long {
+    const SC_PAGESIZE: c_int = 30;
+    const SC_NPROCESSORS_CONF: c_int = 83;
+    const SC_NPROCESSORS_ONLN: c_int = 84;
+    match name {
+        SC_PAGESIZE => 4096,
+        SC_NPROCESSORS_CONF | SC_NPROCESSORS_ONLN => pthread::cores().max(1) as core::ffi::c_long,
+        _ => { set_errno(EINVAL); -1 }
+    }
+}
+
 /// Character set conversion is not offered; FFmpeg falls back to UTF-8 only.
 #[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn iconv_open(_to: *const c_char, _from: *const c_char) -> *mut c_void {

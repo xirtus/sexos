@@ -8,7 +8,7 @@
   delete globalThis.__host;
   const OP = { LOG: 1, BY_ID: 2, QUERY: 3, INFO: 4, GET_ATTR: 5, SET_ATTR: 6, REMOVE_ATTR: 7, GET_TEXT: 8, SET_TEXT: 9,
     GET_HTML: 10, SET_HTML: 11, CREATE_ELEMENT: 12, CREATE_TEXT: 13, INSERT: 14, DETACH: 15, PARENT: 16, CHILDREN: 17,
-    ATTR_NAMES: 18, VIEWPORT: 19, NAVIGATE: 20, CLICKABLE: 21, RECT: 22, LOCATION: 23, CANVAS: 24, MEASURE: 25, HIT: 26, VALUE: 27, CARET: 28, GL: 64, GL_QUERY: 65, FETCH: 66, FETCH_BODY: 67, FETCH_HEAD: 68, COOKIE: 69 };
+    ATTR_NAMES: 18, VIEWPORT: 19, NAVIGATE: 20, CLICKABLE: 21, RECT: 22, LOCATION: 23, CANVAS: 24, MEASURE: 25, HIT: 26, VALUE: 27, CARET: 28, MEDIA: 48, GL: 64, GL_QUERY: 65, FETCH: 66, FETCH_BODY: 67, FETCH_HEAD: 68, COOKIE: 69, MEDIA_APPEND: 70 };
   const nodes = new Map();
   const defaultChecked = new WeakMap();
 
@@ -921,27 +921,240 @@
     createImageData(w, h) { return { width: w, height: h, data: new Uint8ClampedArray(Math.max(0, w * h * 4)) }; }
     putImageData() {}
   }
+  // Video and sound. The browser decodes and plays them (sex-media); scripts send it
+  // requests and it answers with 'media' dispatches carrying each element's state.
+  const MEDIA_TYPES = /^(video|audio)\/(mp4|webm|ogg|mpeg|mp3|aac|flac|wav|x-wav|x-m4a|quicktime|x-matroska)\b/i;
   class HTMLMediaElement extends HTMLElement {
+    _s() {
+      return this._st || (this._st = { t: 0, d: NaN, paused: true, ended: false, w: 0, h: 0, ready: 0,
+        volume: 1, muted: this.hasAttribute('muted'), seeking: false, error: null });
+    }
+    _ask(verb, arg) { H(OP.MEDIA, this._id, verb, arg === undefined ? '' : String(arg)); }
+    play() {
+      const s = this._s();
+      if (s.paused) { s.paused = false; this._ask('play'); }
+      return Promise.resolve();
+    }
+    pause() { const s = this._s(); if (!s.paused) { s.paused = true; this._ask('pause'); } }
+    load() {
+      const s = this._s(); s.t = 0; s.ended = false; s.ready = 0;
+      if (this._ms) { this._ms._detach(); this._ms = null; }
+      // A MediaSource's object URL: the page feeds the bytes (Media Source Extensions).
+      const ms = blobUrls.get(this.getAttribute('src') || '');
+      if (ms instanceof MediaSource) { this._ms = ms; ms._attach(this); return; }
+      this._ask('load');
+    }
+    canPlayType(type) { return MEDIA_TYPES.test(String(type)) ? 'maybe' : ''; }
     get src() { const h = this.getAttribute('src'); return h === null ? '' : resolveUrl(h); }
-    set src(v) { this.setAttribute('src', v); }
-    get paused() { return this._paused !== false; }
-    get currentTime() { return this._t || 0; }
-    set currentTime(v) { this._t = +v || 0; }
-    get duration() { return NaN; }
-    get readyState() { return 0; }
-    get muted() { return this.hasAttribute('muted'); }
-    set muted(v) { this.toggleAttribute('muted', !!v); }
-    get volume() { return this._v === undefined ? 1 : this._v; }
-    set volume(v) { this._v = +v; }
-    // Playback is not here yet: play() reports that, as a browser does when it may not play.
-    play() { return Promise.reject(domError('NotSupportedError: media playback is not available')); }
-    pause() { this._paused = true; }
-    load() {}
-    canPlayType() { return ''; }
+    set src(v) { this.setAttribute('src', v); this.load(); }
+    get currentSrc() { return this.src; }
+    get currentTime() { return this._s().t; }
+    set currentTime(v) { const s = this._s(); s.t = Math.max(0, +v || 0); s.seeking = true; this._ask('seek', s.t); }
+    get duration() { return this._ms ? this._ms._d : this._s().d; }
+    get paused() { return this._s().paused; }
+    get ended() { return this._s().ended; }
+    get seeking() { return this._s().seeking; }
+    get readyState() { return this._s().ready; }
+    get networkState() { return this._s().ready ? 1 : 2; }
+    get error() { return this._s().error; }
+    get volume() { return this._s().volume; }
+    set volume(v) { const s = this._s(); s.volume = Math.min(1, Math.max(0, +v || 0)); this._ask('volume', s.volume); }
+    get muted() { return this._s().muted; }
+    set muted(v) { const s = this._s(); s.muted = !!v; this._ask('muted', s.muted ? 1 : 0); }
+    get autoplay() { return this.hasAttribute('autoplay'); }
+    set autoplay(v) { this.toggleAttribute('autoplay', !!v); }
+    get loop() { return this.hasAttribute('loop'); }
+    set loop(v) { this.toggleAttribute('loop', !!v); this._ask('loop', v ? 1 : 0); }
+    get controls() { return this.hasAttribute('controls'); }
+    set controls(v) { this.toggleAttribute('controls', !!v); }
+    get playbackRate() { return 1; }
+    set playbackRate(v) {}
+    get buffered() {
+      if (this._ms) return this._ms._buffered();
+      const d = this._s().d; return timeRanges(d > 0 ? [[0, d]] : []);
+    }
+    get played() { return this.buffered; }
+    get seekable() { return this.buffered; }
   }
-  reflect(HTMLMediaElement, ['preload', 'poster', 'crossOrigin']);
-  class HTMLVideoElement extends HTMLMediaElement { get videoWidth() { return 0; } get videoHeight() { return 0; } }
+  HTMLMediaElement.HAVE_NOTHING = 0; HTMLMediaElement.HAVE_METADATA = 1; HTMLMediaElement.HAVE_CURRENT_DATA = 2;
+  HTMLMediaElement.HAVE_FUTURE_DATA = 3; HTMLMediaElement.HAVE_ENOUGH_DATA = 4;
+  class HTMLVideoElement extends HTMLMediaElement {
+    get videoWidth() { return this._s().w; }
+    get videoHeight() { return this._s().h; }
+    get poster() { const h = this.getAttribute('poster'); return h === null ? '' : resolveUrl(h); }
+    set poster(v) { this.setAttribute('poster', v); }
+  }
+  reflect(HTMLVideoElement, ['width', 'height']);
   class HTMLAudioElement extends HTMLMediaElement {}
+  function Audio(src) {
+    const a = document.createElement('audio');
+    if (src !== undefined) a.src = src;
+    return a;
+  }
+  function timeRanges(r) {
+    const range = i => { if (!(i >= 0 && i < r.length)) throw domError('IndexSizeError'); return r[i]; };
+    return { length: r.length, start: i => range(i)[0], end: i => range(i)[1] };
+  }
+  // Media Source Extensions. The page makes a MediaSource, points a <video> at its
+  // object URL and appends byte stream segments to its SourceBuffers; the browser
+  // reads their times (for `buffered`) and decodes them as they arrive. Fragmented
+  // MP4 with H.264, AV1, AAC or MP3 for now.
+  // The byte streams sex-web's MSE reads (crates/sex-web/src/mse.rs: format).
+  const MSE_TYPE = /^\s*(video|audio)\/(mp4|webm)\s*(;|$)/i;
+  const MSE_CODEC = {
+    mp4: /^(avc1|avc3|av01)(\..*)?$|^mp4a(\.40(\.\d+)?|\.6b|\.69)?$|^mp3$/i,
+    webm: /^(vp8|vp9|vp09|av01)(\..*)?$|^(opus|vorbis)$/i,
+  };
+  function mseSupported(type) {
+    type = String(type);
+    const t = MSE_TYPE.exec(type);
+    if (!t) return false;
+    const m = /codecs\s*=\s*"?([^";]*)"?/i.exec(type);
+    return !m || m[1].split(',').every(c => MSE_CODEC[t[2].toLowerCase()].test(c.trim()));
+  }
+  class SourceBuffer extends EventTarget {
+    constructor(ms, index, type) {
+      super(); this._ms = ms; this._i = index; this._type = type; this._ranges = []; this.updating = false;
+      this.mode = 'segments'; this._off = 0; this.appendWindowStart = 0; this.appendWindowEnd = Infinity;
+      this.onupdatestart = this.onupdate = this.onupdateend = this.onerror = this.onabort = null;
+    }
+    get buffered() { return timeRanges(this._ranges); }
+    get timestampOffset() { return this._off; }
+    set timestampOffset(v) {
+      v = +v;
+      if (!isFinite(v)) throw new TypeError('timestampOffset must be a number of seconds');
+      if (this.updating || !this._ms._el) throw domError('InvalidStateError');
+      this._off = v; this._ms._ask('offset', this._i + ' ' + v);
+    }
+    _start() {
+      if (this._ms.readyState === 'closed' || !this._ms._el) throw domError('InvalidStateError');
+      if (this.updating) throw domError('InvalidStateError');
+      if (this._ms.readyState === 'ended') { this._ms.readyState = 'open'; this._ms._ask('reopen'); }
+      this.updating = true;
+      this.dispatchEvent(new Event('updatestart'));
+    }
+    appendBuffer(data) {
+      let bytes;
+      if (data instanceof ArrayBuffer) bytes = data;
+      else if (ArrayBuffer.isView(data)) bytes = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+      else throw new TypeError('appendBuffer takes an ArrayBuffer or a view');
+      this._start();
+      H(OP.MEDIA_APPEND, this._ms._el._id, '' + this._i, bytes);
+    }
+    remove(start, end) {
+      if (!(start >= 0) || !(end > start)) throw new TypeError('remove: bad range');
+      this._start();
+      this._ms._ask('remove', this._i + ' ' + start + ' ' + end);
+    }
+    abort() {
+      this._ms._ask('abort', '' + this._i);
+      if (this.updating) { this.updating = false; this.dispatchEvent(new Event('abort')); this.dispatchEvent(new Event('updateend')); }
+    }
+    changeType(type) {
+      if (!mseSupported(type)) throw domError('NotSupportedError');
+      if (this.updating) throw domError('InvalidStateError');
+      this._type = type; this._ms._ask('type', this._i + ' ' + type);
+    }
+    // 'mse\tNODE\tINDEX\tOK\tA-B,C-D'
+    _done(ok, ranges) {
+      this._ranges = ranges ? ranges.split(',').map(r => r.split('-').map(Number)) : [];
+      if (!this.updating) return;
+      this.updating = false;
+      if (!ok) { this.dispatchEvent(new Event('error')); this.dispatchEvent(new Event('updateend')); this._ms.endOfStream('decode'); return; }
+      this.dispatchEvent(new Event('update'));
+      this.dispatchEvent(new Event('updateend'));
+    }
+  }
+  class SourceBufferList extends EventTarget {
+    constructor() { super(); this._l = []; }
+    get length() { return this._l.length; }
+    item(i) { return this._l[i] || null; }
+    [Symbol.iterator]() { return this._l[Symbol.iterator](); }
+  }
+  class MediaSource extends EventTarget {
+    constructor() {
+      super(); this.readyState = 'closed'; this._el = null; this._d = NaN;
+      this.sourceBuffers = new SourceBufferList(); this.activeSourceBuffers = this.sourceBuffers;
+      this.onsourceopen = this.onsourceended = this.onsourceclose = null;
+    }
+    static isTypeSupported(type) { return mseSupported(type); }
+    static get canConstructInDedicatedWorker() { return false; }
+    _ask(verb, arg) { if (this._el) this._el._ask(verb, arg); }
+    _attach(el) {
+      this._el = el; el._ask('mse');
+      setTimeout(() => { if (this._el !== el) return; this.readyState = 'open'; this.dispatchEvent(new Event('sourceopen')); }, 0);
+    }
+    _detach() {
+      this._el = null; this.readyState = 'closed'; this.sourceBuffers._l = [];
+      this.dispatchEvent(new Event('sourceclose'));
+    }
+    get duration() { return this._d; }
+    set duration(v) {
+      v = +v;
+      if (!(v >= 0)) throw new TypeError('duration must be a number of seconds');
+      if (this.readyState !== 'open') throw domError('InvalidStateError');
+      this._d = v; this._ask('duration', v);
+    }
+    addSourceBuffer(type) {
+      if (!mseSupported(type)) throw domError('NotSupportedError');
+      if (this.readyState !== 'open') throw domError('InvalidStateError');
+      const sb = new SourceBuffer(this, this.sourceBuffers._l.length, String(type));
+      this.sourceBuffers._l.push(sb);
+      this._ask('add', String(type));
+      this.sourceBuffers.dispatchEvent(new Event('addsourcebuffer'));
+      return sb;
+    }
+    removeSourceBuffer(sb) {
+      const i = this.sourceBuffers._l.indexOf(sb);
+      if (i < 0) throw domError('NotFoundError');
+      sb.abort(); this.sourceBuffers._l.splice(i, 1);
+      this._ask('drop', '' + sb._i);
+    }
+    endOfStream(error) {
+      if (this.readyState !== 'open' || this.sourceBuffers._l.some(b => b.updating)) throw domError('InvalidStateError');
+      this.readyState = 'ended'; this._ask('end', error || '');
+      if (!error) {
+        let end = 0;
+        for (const b of this.sourceBuffers._l) for (const r of b._ranges) end = Math.max(end, r[1]);
+        if (!(this._d >= end)) this._d = end;
+      }
+      this.dispatchEvent(new Event('sourceended'));
+    }
+    setLiveSeekableRange() {}
+    clearLiveSeekableRange() {}
+    // What every SourceBuffer has: their ranges' intersection.
+    _buffered() {
+      const lists = this.sourceBuffers._l.map(b => b._ranges);
+      if (!lists.length) return timeRanges([]);
+      let acc = lists[0];
+      for (const l of lists.slice(1)) {
+        const out = [];
+        for (const a of acc) for (const b of l) { const s = Math.max(a[0], b[0]), e = Math.min(a[1], b[1]); if (e > s) out.push([s, e]); }
+        acc = out;
+      }
+      return timeRanges(acc);
+    }
+  }
+  function mseState(f) {
+    const el = wrap(f[1]);
+    const sb = el && el._ms && el._ms.sourceBuffers._l.find(b => b._i === +f[2]);
+    if (sb) sb._done(f[3] === '1', f[4] || '');
+  }
+  // 'media\tNODE\tEVENTS\tTIME\tDURATION\tPAUSED\tENDED\tWIDTH\tHEIGHT\tREADY'
+  function mediaState(f) {
+    const el = wrap(f[1]);
+    if (!(el instanceof HTMLMediaElement)) return;
+    const s = el._s();
+    s.t = +f[3] || 0; s.d = f[4] === '' ? NaN : +f[4]; s.paused = f[5] === '1'; s.ended = f[6] === '1';
+    s.w = +f[7] || 0; s.h = +f[8] || 0; s.ready = +f[9] || 0;
+    for (const name of f[2] ? f[2].split(',') : []) {
+      if (name === 'seeked') s.seeking = false;
+      if (name === 'error') s.error = { code: 4, message: 'The file could not be played' };
+      // dispatchEvent also runs the on<name> handler property.
+      el.dispatchEvent(new Event(name));
+    }
+  }
+  reflect(HTMLMediaElement, ['preload', 'crossOrigin']);
   class HTMLDivElement extends HTMLElement {}
   class HTMLSpanElement extends HTMLElement {}
   class HTMLParagraphElement extends HTMLElement {}
@@ -2608,7 +2821,6 @@
     if (height !== undefined) img.height = height;
     return img;
   }
-  function Audio(src) { const a = document.createElement('audio'); if (src !== undefined) a.src = src; return a; }
   function Option(text, value, defaultSelected, selected) {
     const o = document.createElement('option');
     if (text !== undefined) o.textContent = text;
@@ -2689,6 +2901,7 @@
     scrollTo() {}, scrollBy() {}, scroll() {}, focus() {}, blur() {},
     Event, UIEvent, MouseEvent, PointerEvent, WheelEvent, FocusEvent, KeyboardEvent, CustomEvent, EventTarget, Node, Text, Comment, CDATASection, ProcessingInstruction, CharacterData, Element, HTMLElement,
     HTMLAnchorElement, HTMLImageElement, HTMLInputElement, HTMLButtonElement, HTMLCanvasElement, HTMLTemplateElement,
+    HTMLMediaElement, HTMLVideoElement, HTMLAudioElement, Audio, MediaSource, SourceBuffer, SourceBufferList,
     HTMLTextAreaElement, HTMLSelectElement, HTMLOptionElement, HTMLFormElement, HTMLLabelElement, FormData, InputEvent, SubmitEvent,
     Document, DocumentFragment, DOMTokenList, CanvasRenderingContext2D, CanvasGradient, CanvasPattern,
     WebGLRenderingContext, WebGL2RenderingContext, WebGLBuffer, WebGLTexture, WebGLProgram, WebGLShader, WebGLFramebuffer,
@@ -2700,9 +2913,9 @@
     createImageBitmap: src => Promise.resolve(src),
     fetch, Request, Response, Headers, URL, URLSearchParams, XMLHttpRequest,
     customElements, atob, btoa, TextEncoder, TextDecoder, structuredClone, AbortController, AbortSignal, Blob, File,
-    IntersectionObserver, ResizeObserver, MutationObserver, PerformanceObserver, Image, Audio, Option, crypto, CSS,
+    IntersectionObserver, ResizeObserver, MutationObserver, PerformanceObserver, Image, Option, crypto, CSS,
     requestIdleCallback, cancelIdleCallback: id => { timers.delete(id); },
-    HTMLMediaElement, HTMLVideoElement, HTMLAudioElement, HTMLDivElement, HTMLSpanElement, HTMLParagraphElement, HTMLHeadingElement,
+    HTMLDivElement, HTMLSpanElement, HTMLParagraphElement, HTMLHeadingElement,
     HTMLScriptElement, HTMLStyleElement, HTMLLinkElement, HTMLIFrameElement, HTMLUListElement, HTMLOListElement, HTMLLIElement,
     HTMLTableElement, HTMLBodyElement, HTMLHeadElement, HTMLHtmlElement, HTMLMetaElement, HTMLTitleElement, HTMLPictureElement,
     HTMLSourceElement, HTMLDialogElement, SVGElement, NodeFilter, TreeWalker, NodeIterator: TreeWalker, FontFace,
@@ -2802,6 +3015,8 @@
       case 'flush': return 0;
       case 'tick': return runTimers(performance.now());
       case 'fetched': fetched(f[1], +f[2], +f[3]); return 0;
+      case 'media': mediaState(f); return 0;
+      case 'mse': mseState(f); return 0;
       case 'scroll': window.scrollY = window.pageYOffset = +f[1] || 0; return 0;
       case 'click': {
         const el = wrap(f[1]);

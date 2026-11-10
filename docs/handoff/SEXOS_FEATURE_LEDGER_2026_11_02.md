@@ -3156,6 +3156,34 @@ row no longer waits for the row before it to end.
   - L seeks from about 1.4 s to 6.4 s, and the next picture is at 6.6 s.
 - **Known issue** (reported, not media): PS/2 extended keys (arrows, E0 prefix) don't reach apps, which is why Play also takes J/K/L.
 
+## Web: `<video>` and `<audio>` (2026-11-09)
+
+- **Pages can play video and sound.** Web plays `<video>` and `<audio>` through sex-media, so the browser uses the same FFmpeg and sound rings as Play.
+  - Sources come from `src` or the first `<source>` child, fetched whole like any other resource (streaming while it arrives is the YouTube thread's next step; `Source::available` is ready for it).
+  - Pictures are drawn as `video:N`, which the painter fills black until the first picture. `<audio controls>` gets a 300x32 box; without `controls` it takes no space.
+  - Controls draw a bar with a play mark and a progress line. K plays and pauses the first ready media element, and J/L seek 5 s.
+- **Scripts** get `HTMLMediaElement`, `HTMLVideoElement`, `HTMLAudioElement` and `new Audio(url)`: `play()` (returns a promise), `pause()`, `load()`, `canPlayType()`, `src`, `currentTime` (seeks), `duration`, `paused`, `ended`, `volume`, `muted`, `loop`, `autoplay`, `controls`, `readyState`, `videoWidth`/`videoHeight`.
+  - Events: `durationchange`, `loadedmetadata`, `loadeddata`, `canplay`, `canplaythrough`, `play`, `playing`, `pause`, `seeking`, `seeked`, `timeupdate`, `volumechange`, `emptied`, `ended`, `error`.
+  - A program has one sound ring, so a page plays sound from one element at a time. Starting one pauses the others that hold sound (`Player::release_sound`), and a player takes the ring only when it first plays.
+  - Host op `MEDIA = 48` carries requests (load, play, pause, seek, volume, muted, loop) to Web (48: text ops stay below `BYTE_OPS` 64, and the forms work takes 27 and 28). Web reports state back with a `media` dispatch.
+- **ABI:** `program_store::IMAGE_BYTES` 4 MiB -> 32 MiB, since Web with FFmpeg is 15 MB.
+- **sex-media:** pictures are BGRA (opaque), and the picture queue holds 48 (about two seconds), so a busy page doesn't starve the sound.
+  - The player primes: it holds the sound ring, and the clock with it, until half a second of sound is queued (or the picture queue is full, the ring is full, or the stream ends). This applies at the start and after a seek, so playback no longer opens with a gap while FFmpeg warms up.
+- **Bell no longer hands the card half a second of silence** when an open stream has nothing queued. It keeps at most 3 periods (~130 ms) ahead in that case.
+  - While 3 or more periods are in flight, an open stream with less than a whole period waits for one, instead of playing in crumbs between silences.
+  - `program_media_gate` now hears each tone as one unbroken stretch (440, 660, 880 Hz: 2.0 s each).
+- `sound_gate.segments(split=True)` cuts a loud stretch where the pitch changes, for sounds played back to back.
+- **Programs the loader would refuse are rebuilt.** The loader refuses code holding WRPKRU, XRSTOR or XRSTORS bytes at any offset (J1). Compiled code can make them by chance. In FFmpeg's sha.c, clang's `rol $0xf,%ebx; add %ebp,%edi` is c1 c3 0f 01 ef, and a VP9 function had a RIP-relative displacement holding 0f ae a9. This left Play refused.
+  - `scripts/key_bytes.py` finds such bytes in ELF programs and object files.
+  - `build_ffmpeg.sh` compiles an offending object again with other flags; a frame pointer fixed sha.c.
+  - The build trace (`cargo_manifest` stages for programs) and `build_play.sh` link a refused program again with `SEX_LAYOUT_SEED`. Play and Web turn it into lld `--shuffle-sections` for `.rodata`, which moves every displacement.
+  - The media gates now play the Play that the image ships (`iso_root/programs/play`).
+- When less than a quarter second of sound is queued, a player step may decode for 40 ms instead of 12, so a busy page doesn't make gaps.
+- **Gate.** `scripts/program_web_media_gate.py` serves `scripts/web_site/media.html`.
+  - It plays a 2 s H.264/AAC clip with `autoplay controls`. The script pauses it at 0.6 s for 0.8 s and plays it again.
+  - On `ended`, the script plays `new Audio('tone.mp3')`.
+  - The gate checks the console events, all 50 pictures, a picture on screen, and the WAV: 440 Hz for about 2 s, then 880 Hz.
+
 ## Web speaks HTTP/1.1: POST, chunked, gzip, cookies, XHR (2026-11-09)
 
 First step toward YouTube (plan: docs/handoff/YOUTUBE_GAP_REPORT_2026_11_09.md).
@@ -3289,6 +3317,35 @@ Workstream I of `docs/handoff/LINUX_AND_DESKTOP_PARITY_REPORT_2026_11_09.md`.
   a rollover test and the descriptor parser's tests; master runtime gate; host unittests;
   architectural truth.
 
+## AV1 video and AVIF pictures, through dav1d (2026-11-09)
+
+- **What runs now.** Play and Web's `<video>` play AV1 in MP4 and in WebM/Matroska
+  (8-bit and 10-bit), the codec YouTube serves most. Web's `<img>` shows AVIF pictures.
+- **How.** `scripts/build_dav1d.sh` builds dav1d 1.5.1 (BSD-2-Clause, from GitHub) with
+  meson as a static archive for x86_64-sex-app (same flags as FFmpeg; bit depths 8 and
+  10/12; its SSSE3/SSE4.1 assembly included; AVX2/AVX-512 code is present but never
+  chosen, since the kernel keeps XCR0 to x87 and SSE). It runs the same refused-bytes
+  scan as FFmpeg (C files recompiled with other flags; any hit in assembly rebuilds
+  dav1d as plain C). Today nothing is hit. `build_ffmpeg.sh` runs it first, then
+  configures FFmpeg with `--enable-libdav1d`, decoder `libdav1d` and parser `av1` (found
+  through dav1d's pkg-config file) and copies `libdav1d.a` beside FFmpeg's archives;
+  sex-media's build.rs links it when present. FFmpeg gives dav1d one thread.
+  sex-libc gains `sysconf` (page size and core count), the only call dav1d lacked.
+- **AVIF.** `sex_media::decode_picture(bytes, max_w, max_h)` opens bytes, decodes the
+  first picture and scales it to fit (opaque 0xFFRRGGBB). sex-image stays pure Rust:
+  `sex_web::decode_image` hands bytes that sex-image does not know and whose `ftyp`
+  brand is `avif`/`avis` (`sex_web::is_avif`) to a decoder the program sets with
+  `sex_web::set_avif_decoder`; Web sets one that calls sex-media and logs `[web.avif]`.
+- **Size.** Code (text) grows about 1.95 MB in Play and in Web.
+- **Gates.** `program_media_gate` adds `clip-av1.mp4` (AV1 + AAC, 770 Hz) and
+  `clip-av1.webm` (10-bit AV1 + Opus, 990 Hz): 50 pictures each, tones heard.
+  `program_web_media_gate`'s page adds `still.avif` (96x48, #E07020), which must decode
+  at its size and colour. `program_play_gate` unchanged. Host test `sex-web/tests/avif.rs`.
+- **Limits.** AVIF alpha (a separate item) is ignored, so transparent AVIFs show opaque.
+  Grid (tiled) AVIFs show only their first tile, and animated AVIF (`avis`) shows its
+  first frame. dav1d runs on one thread; 320x240 keeps up on one core, larger sizes
+  are not measured yet.
+
 ## Power off and restart through ACPI (2026-11-09)
 
 Parity report workstream A (`LINUX_AND_DESKTOP_PARITY_REPORT_2026_11_09.md` section 6).
@@ -3304,6 +3361,23 @@ Parity report workstream A (`LINUX_AND_DESKTOP_PARITY_REPORT_2026_11_09.md` sect
 - **Gates**: `scripts/power_acpi_gate.py` (QEMU `system_powerdown` ends the VM with exit 0 after Files flushed; launcher Restart resets through the FADT register and the machine boots again; launcher Shut Down ends it; 1 and 4 cores) and `scripts/power_host_gate.sh` (ABI encodings, EISA ids, `\_S5` reader). Both run in CI.
 - **Bare metal next week**: check `[acpi.power]` on the PKU PC: s5=1, reset method, power_button=1, aml=1 quarantined=0, idle state and hwp/cppc.
 
+## Desktop: tiling window manager with Super keys, nine workspaces (2026-11-09)
+
+Hyprland/river/KDE-style window management, stage E1 of the parity report (`docs/handoff/LINUX_AND_DESKTOP_PARITY_REPORT_2026_11_09.md` section 6).
+- **`servers/silk-shell/src/wm.rs`**: pure policy, host-tested by `tests/wm_layouts.rs`. Layouts per workspace: master/stack (default, 55% master), dwindle (Hyprland's halving), monocle, grid. Gaps: 6 px between windows, 8 px to the screen edge. Focus by direction, tiling order kept apart from the frame table so swapping never renumbers frames.
+- **Super chords** (Super is 0x5B/0x5C on PS/2 and USB; Super and every key pressed with it stay with the desktop, repeats and releases too):
+  Super tap or Super+D launcher; Super+Enter terminal; Super+1..9 workspace; Super+Shift+1..9 send window there; Super+Tab / Super+Shift+Tab and Super+Ctrl+Left/Right next/previous workspace; Super+H/J/K/L or arrows focus; with Shift, swap; Super+Q close; Super+F fullscreen; Super+V or Super+Shift+Space float (centred, 60%); Super+Space next layout; Super+M monocle on/off; Super+[ / ] master width -/+5% (15..85); Super+S scratchpad show/hide (centred, 70%, follows you to the current workspace); Super+Shift+S send to scratchpad; Super+W overview.
+- **Nine workspaces.** ABI change (named): SilkBar layout ABI v5 -> v6 in `silkbar-model`: `WORKSPACE_COUNT` 5 -> 9, `LAYOUT_COUNT` 11 -> 15, `ModuleSlot` Chip0..Bell renumbered 10..14, dots 16 px wide, 19 px apart from x=583 (still fits a 1024 px desktop). `abi_version_hash` recomputed. The Atlas overview lays its cards out 3x3 and takes 1..9.
+- **Records**: `[shell.wm.action] action=… done=… scene=a->b focus=a->b layout=…` and `[shell.wm.layout] scene=… layout=… windows=… master_pct=… gap_in=… gap_out=…`.
+- **Gate** `scripts/window_manager_gate.py` boots QEMU and drives every chord over real PS/2 key events, saving screens.
+
+## Desktop: launcher search and the focused window title in the panel (2026-11-10)
+
+Stage E2 of the parity report, section 6.
+- **Type to search.** With the launcher open (Super tap), letters, digits and space filter and rank its rows by name and by search words (`terminal` finds Spindle, `web` finds Browser, `reboot` finds Restart); Backspace edits, Esc clears a search before it closes the launcher, the arrows choose, Enter opens the best match and does nothing when nothing matches. J/K still choose rows until a search begins. Pure scoring in `servers/silk-shell/src/launcher_search.rs`, host tests `tests/launcher_search.rs` (in `service_custody_host_gate.sh`), QEMU gate `scripts/launcher_search_gate.py`. Record: `[shell.launcher.search] query=… matches=… top=… changed=…`.
+- **Panel title.** sexdisplay draws the focused window's title in the SilkBar strip between the focus dot and the workspace dots (`panel_title_fg_at`), with the same names as the title bars (`surface_title`). A program renaming its focused window redraws the strip.
+- No ABI change.
+
 ## Real PCs: wired network, HD Audio and SATA (2026-11-09)
 
 Workstream D of the parity report. Handoff and bare-metal checklist: `docs/handoff/REAL_PC_DRIVERS_2026_11_09.md`.
@@ -3312,6 +3386,61 @@ Workstream D of the parity report. Handoff and bare-metal checklist: `docs/hando
 - **Sound.** Bell drives HD Audio (`servers/sexbell/src/hda.rs`): CORB/RIRB, analog pin to converter routing (speaker, headphones, line out; never HDMI), one always-running 48 kHz stereo stream over 16 periods. Gate `sound_gate.py --card hda`: 440 Hz/400 ms and 1000 Hz/310 ms recorded.
 - **Network.** igb/igc advanced descriptors and queue registers, igc DEV_RST, PHY autonegotiation restart, I219 ich8lan bits, DRV_LOAD; Realtek in `servers/sexnet/src/realtek.rs`. Gates `program_net_gate.py --nic igb|e1000e` (DHCP, HTTP download), `ethernet_peer_gate.py --model igb`; Realtek and igc host-tested only (QEMU lacks them).
 - **SATA.** `apps/sexdrive/src/ahci.rs` serves the block interface when no NVMe is present. `SEXOS_GATE_DISK_BUS=ahci` for gates; filesystem and disk persistence gates pass on SATA and NVMe.
+## IOMMU: a DMA domain for every driver, and the first zero-copy loan (2026-11-09)
+
+- **What runs now.** On machines with Intel VT-d (and in QEMU with `-device intel-iommu`),
+  each driver service's devices can reach only that service's DMA pool, their own
+  firmware-reserved memory, and memory the service lends them. Devices nobody leased
+  (dGPU, Wi-Fi, Thunderbolt, ...) reach nothing. Stray DMA is blocked and logged as
+  `[iommu.fault]` with the device and its owner. sexdrive lends Files' block buffer to
+  the NVMe controller, so disk reads land in Files' memory with no copy; a read that
+  times out ends the loan first, so a late completion faults instead of corrupting it.
+- **Design.** `crates/sex-iommu` (DMAR/IVRS parsing, VT-d fields, I/O page tables,
+  lending window; host-tested) and `kernel/src/iommu.rs`, which runs at BOOT after all
+  leases exist and before the seal, walking capabilities rather than devmgr, so new
+  leasing code gets domains for free. Pools are identity-mapped, so no driver had to
+  change. All tables, including each service's 128 MiB lending window, are built at
+  BOOT; lending only fills prepared leaves. The graphics-only unit stays off so the
+  firmware framebuffer keeps working; firmware DMA protection (PMR/TE) is replaced.
+- **ABI** (hash recomputed): syscall **90** `SYS_DMA` (`sex_pdx::dma_lend`): `OP_INFO`,
+  `OP_LEND` (region slot, offset, bytes, DEVICE_READ/DEVICE_WRITE -> device address),
+  `OP_RETURN`; statuses `DENIED`, `NO_IOMMU`, `EXHAUSTED`, `UNCERTAIN`; 64 loans, 128 MiB window.
+- **Limits.** AMD-Vi is detected and reported but not yet programmed (next step).
+  Interrupt remapping is off. Register-based invalidation (no queued invalidation yet).
+  Only sexdrive's reads use a loan so far; network and sound still bounce.
+- **Gates.** `scripts/iommu_host_gate.sh` (CI), `scripts/sexdrive_dma_host_gate.sh` (now
+  in CI, two zero-copy tests), `scripts/iommu_gate.py` (QEMU with VT-d: BOOT self-test
+  with QEMU's edu DMA device, then `filesystem_gate` and `sound_gate` behind VT-d with no
+  driver faults). Report: `docs/handoff/IOMMU_DMA_DOMAINS_2026_11_09.md`.
+
+## WebP and GIF pictures, animated (2026-11-09)
+
+- `sex-image` decodes WebP (lossy, lossless, alpha, animation) through image-webp 0.2.4,
+  vendored no_std in `vendor/image-webp-0.2.4` (an in-memory `io` shim; the encoder and
+  tests left out; an opaque pixel no longer blends to 254), and GIF with its own decoder
+  (`crates/sex-image/src/gif.rs`: LZW, interlacing, transparency, disposal, loop count).
+- `sex_image::Animation<B>` draws one frame at a time onto one canvas; it borrows or owns
+  the file (`&[u8]`, `Rc<[u8]>`).
+- View plays animated GIF and WebP with their own timing and loops, and reads files up to
+  4 MiB. Web shows WebP and GIF in `<img>` and plays up to 16 animated pictures a page.
+- Tests: `crates/sex-image/tests/formats.rs` (GIF against Pillow's decode, WebP against the
+  source, fuzzed damage); `program_view_gate.py` (WebP pixels, an animated GIF's three
+  colours on screen); `program_web_media_gate.py` (a moving GIF on its page).
+
+## Sound mixer: volume keys, master and per-program volume (2026-11-09)
+
+- Bell keeps the person's settings (`sex_pdx::sound_mixer`, op `OP_MIXER` 0xCA): master
+  volume and mute over everything Bell plays (a squared curve, so 50% is a quarter of the
+  amplitude), and a volume and mute per program row on top of what the program asks in its
+  ring. Shell and Spindle may set them, SilkBar may read them; replies carry `TAG` in their
+  top byte. The volume tick plays after the reply.
+- Input gives media keys their own codes (`app_key::KEY_MUTE` 0x75, `KEY_VOLUME_DOWN` 0x76,
+  `KEY_VOLUME_UP` 0x77; PS/2 E0 20/2E/30 used to arrive as D, C and B; USB usages
+  0x7F..0x81). Shell takes them: 5% steps with a tick at the new level, mute toggles.
+- Spindle `volume`: show, `N`, `+N`, `-N`, `mute`, `unmute`, `list`, `ROW N`, `ROW mute`.
+- ABI: `app_key` gains the three key codes. Gate: `scripts/sound_volume_gate.py`.
+- Not yet: an on-screen volume indicator (SilkBar/Display), remembering the volume across
+  boots, device choice, resampling, capture.
 
 
 ## Hardware census, VMD warning, NVMe waits for real SSDs (2026-11-09)
@@ -3365,6 +3494,77 @@ Stages D2 and D3 of `DRIVERS_AND_X17_R1_PLAN_2026_11_09.md`. Handoff: `docs/hand
   Tuxedo-using component.
 - **Open decision.** #70/#82 run firmware AML in ring 0; the audit recommends a ring-3
   `sexacpi` server.
+## Disks behind Intel RAID: VMD bus driver and Intel RST (IMSM) volumes, read only (2026-11-09)
+
+- **Why.** Many 2020+ laptops (Dell, HP, Lenovo; likely the Alienware x17 R1) ship with the
+  BIOS set to "RAID On": the NVMe drives sit behind Intel VMD and are invisible on PCI, and
+  two drives are often one Intel RST RAID 0 volume (Windows on it). SexOS saw no disk.
+- **VMD bus driver.** `crates/sex-vmd` (host-tested logic) + `kernel/src/vmd.rs` (BOOT only):
+  for every VMD controller (8086:9a0b Tiger Lake, 467f, 4c3d, 7d0b, a77f, ad0b, b60b, b06f,
+  201d, 28c0) map its CFGBAR, find the first bus (VMCAP/VMCONFIG), number the buses behind
+  each root port, place every memory BAR in MEMBAR1/MEMBAR2 (past VMD's own 8 KiB MSI-X
+  table; 64-bit BARs go to MEMBAR2 if MEMBAR1 is above 4 GiB), open bridge windows, enable
+  memory + bus master, INTx off. The devices are added to devmgr's list as ordinary
+  `PciDevice`s with the new `ecam` field (kernel address of their config page; 0 = legacy
+  ports), so the normal NVMe lease applies. Drivers behind VMD poll (MSI-X there is remapped
+  through VMD and not set up).
+- **Second NVMe.** The second NVMe controller is leased to sexdrive at `SLOT_NVME_HOST_2`
+  (160, the first per-service extra slot of the driver-manifest design); the first stays at 16
+  and is the first one found.
+- **IMSM.** `crates/sex-imsm`: assembles the Matrix Partition Block from the disk's last 17
+  sectors (anchor at the second-to-last sector, extra sectors before it), checks signature,
+  size and checksum, lists disks (serials) and volumes, maps volume sectors to member sectors
+  for RAID 0 (any strip size, any member count) and RAID 1 (either mirror; members marked for
+  rebuild are skipped). Migrating/initialising volumes, RAID 5 and RAID 10 are reported, not read.
+- **sexdrive.** After the first drive is ready it reads the drive's tail. A RAID member is
+  never written: the write guard, the single-block write path and the boot write self-tests are
+  off for it. The second drive comes up with a small polled controller (`raid.rs`), drives are
+  matched to members by serial number (mdadm's normalisation: no spaces, ':' -> ';', last 16),
+  and if every member of a RAID 0/1 volume is present, the block service serves the volume:
+  BLOCK_CAPACITY is its size, BLOCK_READ reads it strip by strip from both drives. The boot log
+  lists metadata, members, volumes and the volume's GPT partitions
+  (`[sexdrive.raid.*]`, `[sexdrive.nvme2.*]`, `[kernel.vmd.*]`).
+- **ABI** (hash recomputed): `sex_pdx::SLOT_NVME_HOST` (16, was a local constant) and
+  `SLOT_NVME_HOST_2` (160). `PciDevice` (kernel-internal) gains `ecam`.
+- **Gates.** `scripts/raid_host_gate.sh` (CI): 7 IMSM tests on fixtures that `mdadm --examine`
+  reads as valid (RAID 0, RAID 1, two-volume Matrix RAID with a 2-sector MPB) and an end-to-end
+  read of generated 2- and 3-member sets; 4 VMD tests against a simulated Tiger Lake VMD domain
+  (two root ports, NVMe behind each, MEMBAR1 above/below 4 GiB, running out of buses/memory).
+  `scripts/raid_gate.py` (QEMU): two NVMe drives as an IMSM RAID 0 with 4 KiB strips, attached
+  in reverse member order; sexdrive serves the volume, lists both GPT partitions (one entry
+  lies on the second drive), finds the backup GPT in the volume's last sector, and both drive
+  images are byte-identical afterwards.
+- **Files opens the volume (2026-11-10).** When the served disk holds no SexOS filesystem
+  (Files' mount fails and its format is refused), `servers/sexfiles/src/volumes.rs` scans the
+  disk itself with sex-volumes and mounts each FAT/exFAT/NTFS/ext4 partition read only under
+  `/media/LABEL` (`Source::Device`, `[files.media.device]`, `[files.media.mounted] ... read_only=1`).
+  `/media` requests are served even with no SexOS filesystem; every change there answers
+  "read-only disk". `scripts/raid_gate.py` now puts a FAT16 partition with HELLO.TXT on the RAID
+  volume and, from Spindle, lists `/media`, prints the file and sees a write refused.
+- **Limits.** Read only (writes to a RAID volume would need parity/mirror care). No VMD in QEMU, so the
+  VMD path is proven only against the simulation until the x17 R1 test. A third NVMe is logged
+  and not leased. 4 KiB-sector (4Kn) drives are not sized yet.
+
+
+## AMD-Vi: AMD machines get per-driver DMA domains too (2026-11-10)
+
+- **What runs now.** On AMD machines (and QEMU with `-device amd-iommu`) every driver
+  service's devices reach only its DMA pool, its firmware-reserved memory and what it
+  lends, exactly as on Intel VT-d. Devices nobody leased point at an empty page table, so
+  their DMA faults. sexdrive's zero-copy reads now work on AMD too.
+- **Design.** `sex_iommu::ivrs` reads device id ranges, aliases (devices behind
+  PCIe-to-PCI bridges) and IVMD reserved memory, using only the newest IVHD type.
+  `sex_iommu::amdvi` encodes device table entries, commands and events.
+  `kernel/src/iommu.rs` now drives either vendor: the domain, pool, reserved-memory,
+  lending and revoke code is shared, and only attach, flush, enable and fault reading
+  differ per unit. Firmware that left AMD-Vi on is taken over.
+- **ABI.** None. Syscall 90 is unchanged; `abi_version_hash` unchanged.
+- **Gates.** `scripts/iommu_host_gate.sh` (12 tests, CI; found a wrong next-level field
+  in AMD page-table entries), `scripts/iommu_gate.py --vendor amd` (QEMU AMD-Vi: BOOT
+  self-test, files with zero-copy reads, sound) and the same gate on VT-d.
+- **Limits.** QEMU's AMD-Vi model does not log events for blocked DMA, so its self-test
+  proves isolation by data only. No interrupt remapping, one PCI segment, whole-domain
+  flushes on loan return.
 
 ## Discrete GPU off at boot (NVIDIA N1, 2026-11-09)
 
@@ -3373,38 +3573,201 @@ Plan: `docs/handoff/NVIDIA_GPU_PLAN_2026_11_09.md` (stages N1-N6).
 - **AML work budget**: `acpi::with_aml(budget, f)` runs firmware AML quarantined with a limit on register accesses and stalls, so a firmware loop cannot hang the boot.
 - **Gate** `scripts/dgpu_power_gate.py` in CI: QEMU root port + display controller + SSDT power resource (`tests/acpi/dgpu_gate_ssdt.asl`); checks the method order off/on/off on the debug console, the restored header, the boot GPU kept and the desktop up.
 - ABI: none.
+## Net: ALPN http/1.1 (2026-11-09)
 
-## Programs: std::net, C sockets and a real clock (2026-11-10)
+- The open-web TLS session names `http/1.1` in its handshake (ALPN), as browsers do (the rustls move set `alpn_protocols`). Host test `[sexnet.tls.open.host]` now proves it on the wire: an OpenSSL server offering `h2` and `http/1.1` must pick `http/1.1`. YouTube stage Y3e.
 
-Follow-up to workstream H (Rust std, POSIX guest library), on the program socket API of #69.
-- **std::net.** `crates/sex-std/src/net.rs` answers Hermit's socket calls over the program's own
-  network flows: `TcpStream` (connect, `connect_timeout`, read/write from two threads, peek,
-  read/write timeouts, non-blocking, shutdown), `TcpListener` (bind on a fixed port, accept),
-  `UdpSocket` (bind, send_to/recv_from, connect), `ToSocketAddrs` through the network
-  service's resolver, `poll`. A socket is a descriptor beside files; waits happen a step at a
-  time without holding the socket. Runs started without `run +net` get `EACCES`.
-- **sex-app.** `net::direct`: window-free socket calls for any task. Net requests now take a
-  program-wide turn (one in flight), fill and read the shared region inside it, and leave other
-  tasks' answers and keys in the mailbox; flow numbers and sequence are atomics.
-- **C.** `sex-libc/src/posix_net.rs`: musl's `socket`, `bind`, `listen`, `accept`, `connect`,
-  `send`/`recv`, `sendto`/`recvfrom`, `shutdown`, `get/setsockopt`, `getpeername`,
-  `getsockname`, `poll`, `fcntl` (O_NONBLOCK), `getaddrinfo`/`freeaddrinfo`/`gai_strerror`,
-  `inet_pton`/`inet_ntop`/`inet_addr`, `htons` family, `gettimeofday`, translating musl's
-  structures and numbers to sex-std's.
-- **Civil time.** `SystemTime::now()`, C `time()`/`gettimeofday`/`clock_gettime(CLOCK_REALTIME)`
-  now read the kernel's civil time: syscall 76, milliseconds since the Unix epoch, from the same
-  checked q35 CMOS UTC read as the held clock source (`clock_source::sample`), read at most once a
-  minute and carried forward by the millisecond tick. It is data like the tick, not a grant:
-  every task may read it, it reaches no device on its own. Before, programs saw build time plus
-  uptime.
-- **Kernel growth** (named per DESIGN_GUARDRAILS §1): `kernel/src/clock_source.rs` +22 lines,
-  `syscalls/mod.rs` +3. Why not a server: the CMOS is already read in ring 0 for the held source,
-  and serving time from a server would give every program a route it otherwise does not hold.
-- **ABI change:** new syscall 76 (`sex_pdx::clock_source::civil::SYS`, `sex_pdx::civil_time_ms`);
-  `clock_source::invoke` now shares `clock_source::sample` (same results). `abi_version_hash`
-  c83c5e4c… → 15f53962….
-- **Gate.** `scripts/program_std_gate.py` (CI): host TCP+UDP echo services and a forwarded port;
-  `run +net stdnet` (15 checks: clock within 10 minutes of the host's, connect, echo, two threads,
-  timeouts, non-blocking, UDP, refused port, listener answering the gate), and
-  `run +net chello net ...` (C TCP/UDP echo, poll); plain `chello` checks that a run without
-  `+net` is refused.
+
+## Intel Wi-Fi, stage W1: driver core with WPA2 and WPA3 (2026-11-09)
+
+- **New crate `sex-wifi`** (no_std, no allocation), the hardware-independent part of an Intel Wi-Fi 6/6E driver for AX200, AX201, AX210, AX211 and the Killer modules on them (the x17 R1's AX1675). Re-implemented in Rust from OpenBSD `iwx(4)` (ISC); no Linux code. Report and stages W1-W8: `docs/handoff/INTEL_WIFI_2026_11_09.md`.
+- **Driver side:** chip and firmware table, Intel TLV firmware parser, DMA layout and context info (22000 and AX210 layouts), the power-up sequence to "firmware ALIVE" as a step-at-a-time state machine, host command framing and RX packets.
+- **Network side:** scan results with security detection (open, WPA2, WPA3, transition, hash-to-element), open and SAE authentication, association, Ethernet II to and from 802.11 data frames, CCMP.
+- **Security:** WPA2-Personal and WPA3-Personal (SAE on P-256, hunting-and-pecking and hash-to-element), the station side of the 4-way and group-key handshakes, GTK and IGTK, replay/downgrade/tamper checks.
+- **Evidence:** `scripts/wifi_host_gate.sh` (CI): 24 tests incl. IEEE 802.11 annex vectors (PSK, PRF, CCMP, SAE J.10), RFC 3394/3610/4493, full WPA2 and WPA3 handshakes against a test access point, and the real linux-firmware AX210 image (fetched pinned and SHA-256 checked by `scripts/fetch_wifi_firmware.sh`).
+- **No ABI change.** New dependency `sha1` 0.10 (RustCrypto).
+- **Limits:** not wired into the running system yet; QEMU has no Intel Wi-Fi model, so the radio is proven only on hardware. Next (W2): lease the chip to sexnet, ship its firmware, and log `[wifi.alive]` on the x17.
+
+## Media Source Extensions for video and audio (YouTube Y5, 2026-11-10)
+
+- **Scripts:** `MediaSource` (`isTypeSupported`, `addSourceBuffer`, `removeSourceBuffer`, `duration`, `endOfStream`, `sourceopen`/`sourceended`), `SourceBuffer` (`appendBuffer`, `remove`, `abort`, `buffered`, `updating` with `updatestart`/`update`/`updateend`), `SourceBufferList`; `URL.createObjectURL(mediaSource)` as an element's `src`.
+- **Types:** fragmented MP4 with H.264, AV1, AAC or MP3. WebM is refused for now (`isTypeSupported` says false, so players fall back to MP4).
+- **sex-web:** `mse::Stream` parses appended bytes as they come: init segment (track ids, timescales, kinds, trex defaults) and moof/trun times give `buffered`. Host tests use synthetic boxes and FFmpeg-made fixtures.
+- **Web:** each SourceBuffer is a growing `sex_media::Source`; bytes long read are let go. Separate video and audio buffers play on one clock.
+- **sex-media:** `Source::ahead()` and `Source::growing()`; `Player::pair(video, audio, ...)`. A growing stream is opened non-seekable and without `find_stream_info`, so FFmpeg's MP4 parser takes one fragment at a time.
+- **sex-fetch:** `pieces` module (Content-Range parsing, Range piece bookkeeping) for seekable network `src`.
+- **ABI:** sex-js host op `MEDIA_APPEND` = 70 (bytes). No kernel ABI change.
+- **Gate:** `scripts/program_web_mse_gate.py` (QEMU, sound recorded to WAV).
+- **Then (same day):** WebM SourceBuffers (VP9, AV1, Opus, Vorbis; Clusters of known or unknown size), `timestampOffset` (written into `tfdt` / the Cluster `Timecode`), `abort`, `changeType`, seeking (waits until the target's segments are appended), quality switches (a new init segment mid-stream), `remove()` that frees segments, and a 160 MiB per-buffer quota that lets go of played segments first.
+- **How:** `sex_web::mse::Stream` keeps segments by time with the init segment each follows. Web's feed hands the decoder an init segment and then segments in time order. `sex_media::Source` gains `restart(ms)` (seek by starting a new stream) and `next_stream()` (at a switch, or where a feed ran dry, the decoder opens again on what follows, keeping the player's queue and clock; `Next::Later` while it waits). A growing stream keeps its own presentation times (no start-time shift) and reads in 16 KiB steps.
+- **Limits:** `appendWindowStart/End` and `mode = 'sequence'` are accepted but not applied; a `remove()` that cuts a segment in two keeps the whole segment for the decoder (only `buffered` shows the cut).
+
+## Video and sound play while they download (2026-11-10)
+
+- Web loads a `<video>`/`<audio>` source from the network without waiting for it: the
+  element is `Loading` (event `loadstart`) while `media_loads` takes in its bytes for at
+  most 4 ms a tick, and it opens as soon as `sex_media::AHEAD` + 64 KiB has arrived
+  (`[web.media.early] node= have= done=0`). The player already waits whenever too little
+  lies ahead of where it reads.
+- `sex_app::net::Exchange::stream(into)`: for a reply with a length or until-close body
+  that is not compressed, moves body bytes out as they arrive (`head()` gives the head);
+  chunked or compressed replies, redirects and error pages are read whole as before.
+- `sex_media::Growing` (shared through `Rc<RefCell<..>>`) is a `Source` for a download in
+  progress: length from Content-Length, `available` counts what has come, and a read
+  past it is an error, never a false end.
+- An MP4 whose index sits at its end cannot open early: the first try fails
+  (`[web.media.failed] ... last=0`) and it opens once all of it is here.
+- Media sources may be up to 256 MiB (`MEDIA_MAX`). Seeking past what has arrived waits
+  for it; Range reads for seeking ahead come next (sex_fetch pieces, YouTube thread).
+- Gates: `program_web_stream_gate.py` (host ffmpeg makes a 1.5 MB clip and an end-indexed
+  one, served at 300 KB/s: opens at ~600 KB, 250 pictures, 10 s of 440 Hz).
+  `quil_autosave_gate.boot` now deletes the old serial log first: QEMU's `-serial file:`
+  does not truncate, and a reused output directory let an older log show through.
+
+## Boot without DMA protection (2026-11-10)
+
+- **What runs now.** The boot menu has "SexOS without DMA protection": the same system
+  with the IOMMU (VT-d / AMD-Vi) left off, a way out if a machine's firmware tables or
+  IOMMU misbehave during bare-metal testing. The default entry stays protected.
+- **Design.** The entry passes `CMDLINE=iommu=off`; the kernel reads its own command
+  line through Limine's kernel-file request and `iommu::init_boot` stops before touching
+  any unit. Logged as `[iommu.boot_options]` and `[iommu.absent] reason=boot_option_iommu_off`.
+- **ABI.** None.
+- **Gates.** `scripts/tests/test_limine_iommu_entry.py` (the entry boots exactly the main
+  entry's modules); checked in QEMU with both IOMMU models by booting that entry.
+
+## Programs play sound at any rate (2026-11-10)
+- Bell converts each program's sound to its 48 kHz mix: a program names its rate with
+  `Sound::set_rate(hz)` (8 to 192 kHz; ring header word `RATE_HZ`, 0 means 48 kHz) and Bell
+  resamples by linear interpolation as it mixes (`servers/sexbell/src/resample.rs`). 48 kHz
+  keeps the old direct path. Not an ABI input.
+- `run play --tone HZ RATE` plays a two second test sine written at RATE.
+- Gates: `tests/bell_resample.rs` on the host (`scripts/sound_host_gate.sh`, in CI);
+  `scripts/sound_rate_gate.py` records the virtio sound card: 440 Hz at 44.1 kHz,
+  660 Hz at 22.05 kHz and 880 Hz at 96 kHz each last 2.0 s at their own pitch.
+
+## Boot log on screen, stop screen, crash records, restartable services, fuzzing (2026-11-09)
+
+Workstream C of the Linux/desktop parity report: bare metal without a serial port.
+Details: `docs/handoff/BOOT_LOG_AND_CRASH_RECORDS_2026_11_09.md`.
+- **Boot log on the framebuffer** (`kernel/src/console.rs`) from the first instruction until Display takes the screen; every kernel line and service record also goes to a 64 KiB log ring.
+- **Stop screen**: a panic, kernel page fault or double fault, or Display/Shell ending, halts the other cores by NMI and paints the reason, core, domain and the newest log lines, then restarts the machine after 30 s or a key.
+- **Crash records** (`sex_pdx::crash_log`, `kernel/src/crash_log.rs`): faults, restarts and stops. A stop is kept in 8 KiB of RAM at 48 MiB across the restart and shown at the top of the next boot log; Files keeps all records in a reserved disk ring (LBA 64..127) and gives earlier starts' records back to the kernel; Spindle `crashes` lists them.
+- **Restart in place** now covers Input and Bell as well as Network and Files (`OP_RESTARTS` lets a service skip its once-only start steps).
+- **ABI**: syscall 85 `SYS_CRASH_LOG` (84 is `SYS_POWER` from the ACPI work), message `OP_NOTICE` to Files, `sex_pdx::crash_log` (in `ABI_INPUTS`); hash recomputed.
+- **Fuzzer** `run fuzz [CALLS] [SEED]` and `scripts/syscall_fuzz_gate.py` (3 x 20000 seeded syscalls and pdx calls, in CI).
+- **Gates**: `scripts/crash_screen_gate.py` (three starts: warm restart then cold; probe build, last in CI), `scripts/crash_log_host_gate.sh`.
+
+## Programs hear the microphone, with the person's leave (2026-11-10)
+- Each program's sound ring is now 512 KiB: the second half holds what Bell hears from
+  the microphone (`sound_ring::CAPTURE_AT`, `HEARD`; the program sets `LISTEN` and sends
+  `OP_LISTEN` 0xCB). Bell tells it where it stands in `MIC`: off, waiting for the
+  person, on, or no microphone.
+- Only the person allows it: `volume ROW mic on` (mixer action `MICROPHONE`, from Shell
+  or Spindle) until the program ends; `volume ROW mic off` stops it at once. `volume list`
+  shows who may hear and who is hearing. Bell runs the card's input stream only while
+  an allowed program listens.
+- `sex_app::sound::Sound::{listen, mic, hear, lost}`; `run play --listen SECONDS`.
+- virtio-drivers is vendored (`vendor/virtio-drivers-0.13.0`, MIT) with input transfers
+  added (`pcm_capture_nb`, `pcm_capture_take`); the upstream crate plays only.
+- Programs that read `SEX_LAYOUT_SEED` (Web, Play) now shuffle functions as well as
+  read-only data: a call between functions held XRSTORS bytes in Web.
+- Gate: `scripts/sound_listen_gate.py` (QEMU's silent input): nothing heard before
+  leave, 98304 frames in 2 s after it, microphone off at once when taken back.
+- Next: a microphone mark in SilkBar while anyone listens (the stream word has the
+  bit), HD Audio input, an Allow prompt instead of the command.
+## Display and Shell start again in place after a crash (2026-11-10)
+
+Follow-up to the boot log and crash records work (`BOOT_LOG_AND_CRASH_RECORDS_2026_11_09.md`).
+
+- Display: restarted from its BOOT pages; its second ready tells Shell to put the desktop
+  back (windows, chrome, bar, terminal/document layout, program redraw, focus).
+- Shell: restarted from its BOOT pages with Display; it rebuilds custody from the kernel's
+  app catalog and gives the opened apps their windows back. Apps keep running.
+- Kernel growth (about 30 lines): Display and Shell join `service_restart`; a domain can
+  be asked to end at its next syscall. `KERNEL_LINE_BUDGET` 21,500 -> 22,500 (master was
+  already at 22,123), reason in `docs/DESIGN_GUARDRAILS.md`.
+- ABI: `document_view::Delivery::continue_after` and `spindle_view::Delivery::continue_after`
+  (library helpers, no wire change); `abi_version_hash` recomputed.
+- Gate: `scripts/crash_screen_gate.py` crashes Display (same desktop back, 98.6% same
+  pixels) and Shell (desktop back, Spindle answers `crashes`).
+
+## Intel Wi-Fi, stage W2: the chip starts its firmware (2026-11-10)
+
+- **Lease:** Intel class 02:80 goes to the network service (`Lease::Wifi`, slot 22) with
+  BAR0, command bits, its own 4 MiB DMA pool (slot 23, region 0x4400) and the firmware
+  pack as a read-only region (slot 24). `SYS_IDENTITY` answers `QUERY_SUBSYSTEM`.
+- **Firmware on the boot image:** `firmware/wifi.pack` (all 13 linux-firmware files, each
+  SHA-256 checked by the driver), built by `scripts/make_wifi_firmware_pack.py`; the build
+  fetches the files when missing. The installed boot partition grows to 32 MiB with it.
+- **Driver:** `sex_wifi::rx` (receive ring, both families) and `sex_wifi::bringup`;
+  `servers/sexnet/src/wifi.rs` powers the chip up and logs `[wifi.chip]`,
+  `[wifi.firmware]`, `[wifi.step]`, then `[wifi.alive] fw=…` or `[wifi.failed] step=…`.
+- **Census:** Intel AX200/AX201/AX210/AX211 now say `support=in_progress`.
+- **Evidence:** `scripts/wifi_host_gate.sh` (31 tests), hwdb manifest tests. Real proof
+  is the x17 R1 boot log; QEMU has no Intel Wi-Fi.
+- **ABI:** new `sex_pdx::pci_command` Wi-Fi slots, region ids and `QUERY_SUBSYSTEM`;
+  `kernel/src/pci_command.rs` changed; `abi_version_hash` recomputed.
+- **Kernel growth:** ~45 lines (class lease kind, pool slot per kind, firmware region,
+  subsystem query); mechanism only, no Wi-Fi logic in the kernel.
+
+## Intel Wi-Fi, stage W3: the firmware is told how to run (2026-11-10)
+
+- **Command queue:** `sex_wifi::cmdq` sends host commands on queue 0 (buffers in the
+  Wi-Fi DMA pool, TFDs, the AX210 write pointer) and matches each answer.
+- **Init sequence:** `sex_wifi::init` loads the platform NVM for the SKU ALIVE reports,
+  runs the firmware's init, reads the NVM (MAC address, bands, antennas, channels) and
+  sends iwx(4)'s configuration through the regulatory domain and scan configuration.
+- **Boot log:** sexnet prints `[wifi.pnvm]`, `[wifi.init] step=…`, `[wifi.nvm]` and
+  `[wifi.ready] mac=… country=… channels=…`, or `[wifi.failed] step=init reason=…`.
+- **Evidence:** `scripts/wifi_host_gate.sh` (26 driver + 10 vector tests): the sequence
+  against a firmware model, its failure paths, and the real x17 firmware and `.pnvm`.
+  Real proof is the x17 R1 boot log.
+- **ABI / kernel:** none.
+
+## Intel Wi-Fi, stage W4: finding networks (2026-11-10)
+
+- **Scan:** `sex_wifi::scan` sends one passive UMAC scan of every channel the NVM and
+  regulatory domain allow, reads beacons and probe responses from RX MPDU notifications,
+  and keeps each network once at its strongest signal.
+- **Boot log:** sexnet scans right after `[wifi.ready]` and prints `[wifi.network]
+  ssid=… bssid=… channel=… rssi=… security=…` per network, then `[wifi.scan.done]`.
+- **Evidence:** `scripts/wifi_host_gate.sh` (30 driver + 10 vector tests): the request
+  bytes, MPDU parsing on both families, a full scan on the firmware model. Real proof is
+  the x17 R1 boot log.
+- **ABI / kernel:** none. Still to come: the list in the status bar and Spindle (W4b).
+
+## Shell keeps windows, workspaces and layouts across its own restart (2026-11-10)
+
+- **What:** after a Shell crash, every window comes back where it was, on its workspace,
+  minimized, floating or zoomed as before; each workspace keeps its layout; Spindle's
+  window opens again if it was open; focus returns.
+- **How:** `servers/silk-shell/src/session.rs` writes a checksummed one-page snapshot that
+  the kernel leaves alone on restart; a new Shell restores it after adopting apps.
+- **ABI:** `SYS_CRASH_LOG` op 5 `OP_KEEP` (`sex_pdx::crash_log::keep`); `abi_version_hash`
+  recomputed. **Kernel:** `service_restart::keep` (~20 lines, mechanism only: skip
+  restoring up to 4 of the caller's own BOOT pages).
+- **Evidence:** `scripts/crash_screen_gate.py` start 3 switches the layout to dwindle,
+  crashes Shell, and checks 4 windows restored, the dwindle layout, and 96% identical
+  pixels before and after.
+
+## Intel Wi-Fi, stage W4b: networks in Spindle (2026-11-10)
+
+- **Spindle `wifi`:** the chip's state and every network the last scan heard (SSID,
+  signal, channel, security, BSSID); `wifi scan` starts a fresh scan.
+- **Protocol:** `sex_pdx::wifi_status` (op `0x2E8`, sexnet answers one word per request;
+  a network in up to seven words). Desktop only: programs are refused.
+- **Evidence:** host tests of the words in `scripts/wifi_host_gate.sh`; real proof is
+  `wifi` on the x17 R1.
+- **ABI:** new PDX op `0x2E8` and module `sex_pdx::wifi_status`; `abi_version_hash`
+  recomputed (sex-pdx lib.rs). No kernel change. Next: status bar indicator, then W5.
+
+## Install beside another system, and a live USB that never touches it (2026-11-09)
+
+Roadmap workstream B, part 1 (report: `docs/handoff/LINUX_AND_DESKTOP_PARITY_REPORT_2026_11_09.md` §6).
+- **The live system leaves other systems' disks alone.** At start the disk driver (`apps/sexdrive`) decides whose disk it is (`sex_disk::probe`, no heap): blank or SexOS's old whole-disk install → SexOS uses the whole disk as before; a GPT with a SexOS store partition → SexOS reads and writes only inside it (every NVMe command is translated by `place`); anything else (GPT, MBR, a bare filesystem, a damaged table) → ordinary reads and writes are refused and the write self-tests are skipped. `[sexdrive.disk.layout] kind=...` says which. Before this, booting the ISO on a PC wrote DiskFS proof sectors and Files' filesystem straight into whatever was on its NVMe.
+- **ABI change: block requests 5-7** (`sex_pdx::BLOCK_RAW_READ`, `BLOCK_RAW_WRITE`, `BLOCK_LAYOUT` + `BLOCK_LAYOUT_*`). Raw requests address the whole disk for the installer (Files only); the first raw write stops the running system's own writes until restart. **`fs::INSTALL` changed**: `offset` = store size in MiB, `length` = `INSTALL_GO`; the reply is a text report. `abi_version_hash` recomputed.
+- **`crates/sex-disk`** (new, no_std): GPT read (primary, else backup), free space, add, write backup-then-primary with a protective MBR; FAT12/16 read and FAT16/32 write (8.3 names, contiguous files, data → FATs → directory entry, FSInfo kept exact), `format_fat32`; the install planner. 14 host tests cross-checked with `sgdisk -v`, mtools and `fsck.vfat`, including a Windows-like disk (ESP with `\EFI\Microsoft\Boot\bootmgfw.efi` and a fallback loader) where not one byte of the Windows partition changes.
+- **`install [go] [GIB] [IMAGE]`** in Spindle. Without `go` Files only plans and prints it. On a GPT disk it adds three partitions in free space (SexOS system A and B, 256 MiB each, and the SexOS store: GIB or all the largest free run, at least 1 GiB) and never moves or resizes anything; on a blank disk it makes a new GPT and a 260 MiB FAT32 ESP. Limine goes to `\EFI\SEXOS\BOOTX64.EFI` on the shared ESP, and to `\EFI\BOOT\BOOTX64.EFI` only when no fallback loader exists. Its menu `\EFI\BOOT\LIMINE.CFG` (16 KiB, contiguous, for in-place rewrites by A/B updates) points the image's entries at slot A by partition GUID and adds a chainload entry per system found on the ESP (Windows boot manager, shim/GRUB, systemd-boot, others). Refuses when another `limine.cfg` would win. The partition table is written last, so a failed install leaves every system starting as before.
+- **Not yet**: no UEFI boot entry is registered (the kernel has no runtime services), so on a PC whose ESP already has a fallback loader (Windows) the person picks `\EFI\SEXOS\BOOTX64.EFI` once in the firmware's boot menu; Install says so. Slot B, signed updates and try-once fallback are part 2.
+- **Gates**: `scripts/install_gate.py` (QEMU + OVMF with its own variable store): a Linux-like GPT disk is hashed before and after a live session (unchanged), `install` plans, `install go` installs, sgdisk/fsck/mtools check the disk and the Linux partition's bytes, then the PC starts from the disk with no ISO and a file survives a restart; a blank disk becomes SexOS's alone. `scripts/usb_stick_gate.py`: the ISO written to a USB stick (usb-storage on xHCI, no CD) reaches the desktop under UEFI and under BIOS.

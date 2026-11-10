@@ -17,11 +17,13 @@ mod spindle_history;
 mod spindle_probe;
 mod program_store;
 mod fs_service;
+mod installer;
 mod volumes;
 mod document;
 mod document_journal;
 mod history_journal;
 mod history_disk;
+mod crash_keeper;
 
 use crate::trampoline::trampoline_main;
 

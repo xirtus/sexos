@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A picture is shown: View, a program, decodes a PNG and a JPEG it was given and Display composites their pixels (the PNG exactly); a picture larger than the window is shrunk to fit; a file that is not a picture is refused in words."""
+"""A picture is shown: View, a program, decodes a PNG, a JPEG and a WebP it was given, plays an animated GIF frame by frame, and Display composites their pixels (the PNG exactly); a picture larger than the window is shrunk to fit; a file that is not a picture is refused in words."""
 import argparse,http.server,io,os,re,shutil,threading,time
 from pathlib import Path
 from PIL import Image
@@ -15,7 +15,15 @@ def jpeg(w,h):
  img.putdata([((x*255)//w,(y*255)//h,96) for y in range(h) for x in range(w)])
  b=io.BytesIO();img.save(b,'JPEG',quality=95,subsampling=0);return img,b.getvalue()
 JPG,JPG_BYTES=jpeg(240,160)
-FILES={'/view':(ROOT/'iso_root/programs/view').read_bytes(),'/pic.png':PIC_BYTES,'/big.png':BIG_BYTES,'/pic.jpg':JPG_BYTES,'/note.txt':b'not a picture\n'}
+def webp(img):
+ b=io.BytesIO();img.save(b,'WEBP',lossless=True,exact=True);return b.getvalue()
+WEBP_BYTES=webp(PIC)
+ANIM_COLOURS=[(220,40,40),(40,200,60),(40,80,230)]
+def anim():
+ frames=[Image.new('RGB',(120,80),c) for c in ANIM_COLOURS]
+ b=io.BytesIO();frames[0].save(b,'GIF',save_all=True,append_images=frames[1:],duration=400,loop=0);return b.getvalue()
+GIF_BYTES=anim()
+FILES={'/view':(ROOT/'iso_root/programs/view').read_bytes(),'/pic.png':PIC_BYTES,'/big.png':BIG_BYTES,'/pic.jpg':JPG_BYTES,'/pic.webp':WEBP_BYTES,'/anim.gif':GIF_BYTES,'/note.txt':b'not a picture\n'}
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):
   body=FILES.get(self.path)
@@ -45,7 +53,7 @@ def main():
   m=expect(f'fetch http://10.0.2.2:{PORT}{url} {name}',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',300);assert m[1].startswith('Saved'),m[1]
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
-  fetched('/view','/bin/view');fetched('/pic.png','pic.png');fetched('/big.png','big.png');fetched('/pic.jpg','pic.jpg');fetched('/note.txt','note.txt')
+  fetched('/view','/bin/view');fetched('/pic.png','pic.png');fetched('/big.png','big.png');fetched('/pic.jpg','pic.jpg');fetched('/pic.webp','pic.webp');fetched('/anim.gif','anim.gif');fetched('/note.txt','note.txt')
   s=len(t());expect('run view @pic.png',r'\[view.shown\] w=300 h=200 bytes=\d+ scaled=0')
   m=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60);g['wait'](r'\[display.app.pixels\] target=\d+ surface=\d+ w=300 h=200',s,60);time.sleep(3)
   shot=a.out/'view.ppm';q.cmd('screendump',{'filename':str(shot)});time.sleep(.5)
@@ -86,8 +94,34 @@ def main():
   assert bw<=aw and bh<=ah and (bw==aw or bh==ah),f'{bw}x{bh} does not fit {aw}x{ah}'
   big=(bw,bh,aw,ah)
   close(m)
-  expect('run view @note.txt',r'\[view.failed\] That file is not a PNG or JPEG picture.')
+  # Lossless WebP: exact, like the PNG.
+  s=len(t());expect('run view @pic.webp',r'\[view.shown\] w=300 h=200 bytes=\d+ scaled=0')
+  m=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60);g['wait'](r'\[display.app.pixels\] target=\d+ surface=\d+ w=300 h=200',s,60);time.sleep(3)
+  shot=a.out/'view-webp.ppm';q.cmd('screendump',{'filename':str(shot)});time.sleep(.5)
+  tile=re.findall(rf'\[shell.tile.apply\] sid={m[3]} x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)',t());x,y,w,h=map(int,tile[-1])
+  img=Image.open(shot).convert('RGB');bx,by=x+8,y+36
+  wchecked=wbad=0
+  for py in range(0,min(200,h-44),7):
+   for px in range(0,min(300,w-16),11):
+    if 636<=bx+px<660 and 398<=by+py<432:continue
+    wchecked+=1;wbad+=img.getpixel((bx+px,by+py))!=PIC.getpixel((px,py))
+  assert wchecked>100 and wbad==0,f'WebP: {wbad} of {wchecked} pixels differ'
+  close(m)
+  # Animated GIF: three frames, 400 ms each, looping forever; each colour reaches the screen.
+  s=len(t());expect('run view @anim.gif',r'\[view.animated\] frames=3 loops=-1')
+  m=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60)
+  g['wait'](r'\[view.frame\] n=4 delay=400',s,60)
+  tile=re.findall(rf'\[shell.tile.apply\] sid={m[3]} x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)',t());x,y,w,h=map(int,tile[-1])
+  seen=set()
+  for i in range(12):
+   shot=a.out/f'view-gif-{i}.ppm';q.cmd('screendump',{'filename':str(shot)});time.sleep(.25)
+   c=Image.open(shot).convert('RGB').getpixel((x+8+60,y+36+40))
+   for k,want in enumerate(ANIM_COLOURS):
+    if max(abs(p-q2) for p,q2 in zip(c,want))<=2:seen.add(k)
+  assert seen=={0,1,2},f'animation colours seen: {sorted(seen)}'
+  close(m)
+  expect('run view @note.txt',r'\[view.failed\] That file is not a PNG, JPEG, WebP or GIF picture.')
   assert 'KERNEL PANIC' not in t() and 'panicked' not in t()
-  print({'ok':True,'big':big,'pixels_checked':checked,'jpeg_pixels_checked':jchecked,'jpeg_worst':worst})
+  print({'ok':True,'big':big,'pixels_checked':checked,'webp_pixels_checked':wchecked,'gif_colours':len(seen),'jpeg_pixels_checked':jchecked,'jpeg_worst':worst})
  finally:g['stop']()
 if __name__=='__main__':main()

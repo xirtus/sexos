@@ -3,6 +3,7 @@
 extern crate alloc;
 mod paging_probe;
 mod sound;
+mod resample;
 mod hda;
 
 use sex_pdx::{pdx_reply, serial_println, OP_BELL_NOTIFY, OP_BELL_CLOSE, OP_BELL_ACTION,
@@ -549,7 +550,9 @@ unsafe fn retire_app_resources(target:u32)->usize {
 pub extern "C" fn _start() -> ! {
     serial_println!("[sexbell.init.start]");
     serial_println!("[bell.boot]");
-    paging_probe::run();
+    // The paging check runs on the first start only: its pages keep what it wrote.
+    let restarts = sex_pdx::crash_log::restarts();
+    if restarts == 0 { paging_probe::run(); } else { serial_println!("[sexbell.restarted] restarts={}", restarts); }
     sound::init();
 
     // ── Bell Bridge status stub (Phase 1): marker-only, no IPC ──
@@ -1395,10 +1398,29 @@ pub extern "C" fn _start() -> ! {
                 }
             }
 
+            sex_pdx::sound_mixer::OP_MIXER => {
+                // The desktop only: Shell and Spindle set, SilkBar reads.
+                let caller = msg.caller_pd as u32;
+                let spindle = sex_pdx::app_catalog::SPINDLE_TARGETS.contains(&caller);
+                let reply = if caller == 3 || spindle || caller == 6 {
+                    sound::mixer_request(msg.arg0, msg.arg1, msg.arg2, caller != 6)
+                } else {
+                    sex_pdx::serial_record!("[bell.mixer.denied] caller_pd={}", caller);
+                    sex_pdx::sound_mixer::REFUSED
+                };
+                pdx_reply(msg.caller_pd, reply);
+                if msg.arg0 == sex_pdx::sound_mixer::STEP_MASTER && reply != sex_pdx::sound_mixer::REFUSED { sound::tick(); }
+            }
+
             sex_pdx::sound_ring::OP_PLAY => {
                 // A program's own sound, from its own ring; muting silences it too.
                 let allowed = !is_muted(msg.caller_pd) && !is_policy_muted(msg.caller_pd);
                 if allowed { sound::stream(msg.caller_pd as u32); }
+            }
+
+            sex_pdx::sound_ring::OP_LISTEN => {
+                // A program's own microphone ring; whether it hears is the person's say.
+                sound::listen(msg.caller_pd as u32);
             }
 
             sex_pdx::OP_BELL_TONE => {

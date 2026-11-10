@@ -39,7 +39,7 @@ reference and must check on real hardware (or replace with datasheet/REA facts).
 | `apps/sexdrive` `ahci.rs` | AHCI SATA | AHCI 1.3.1 specification | none beyond spec | #79 |
 | `crates/sex-vmd`, `kernel/src/vmd.rs` | Intel VMD (RST "RAID On") | PCIe spec; register meanings from Linux `drivers/pci/controller/vmd.c` | bus numbering and BAR windows on the x17 R1 | #84 |
 | `crates/sex-imsm`, `apps/sexdrive` `raid.rs` | Intel IMSM RAID 0/1 metadata | metadata layout as mdadm reads it; fixtures checked with `mdadm --examine` (no mdadm code) | real RST-created volumes | #84 |
-| `crates/sex-wifi` | Intel AX200/AX201/AX210/AX211 | OpenBSD `iwx` (ISC) and Intel firmware interface | firmware load and association on real cards | #83 |
+| `crates/sex-wifi`, `servers/sexnet` `wifi.rs` | Intel AX200/AX201/AX210/AX211 | OpenBSD `iwx` (ISC) and Intel firmware interface | receive-ring formats and the 0x1c80 free-ring index, firmware load to ALIVE, PNVM handoff and init commands to `[wifi.ready]`, scan request and RX MPDU layout, association on real cards | #83, W2, W3, W4 |
 | `kernel/src/hal/dgpu.rs` | NVIDIA dGPU power off (D3cold) | Linux runtime PM approach (`_PS3`, `_PRx` `_OFF`, root port) | `_OFF` on the x17 R1's PEG port | #82 |
 | `servers/sexusb` | xHCI, hubs, HID | xHCI 1.2 and USB HID specs | firmware handoff on real PCs | #76 |
 | `crates/sex-volumes` | FAT, exFAT, ext4 (read), NTFS (read), MBR/GPT | on-disk format documentation | disks made by Windows and Linux | #75 |
@@ -50,7 +50,7 @@ reference and must check on real hardware (or replace with datasheet/REA facts).
 
 | Firmware | Device | Source and licence | Loaded by |
 |----------|--------|--------------------|-----------|
-| `iwlwifi-*.ucode`, `*.pnvm` | Intel Wi-Fi | linux-firmware, Intel redistributable licence | `crates/sex-wifi` (#83) |
+| `iwlwifi-*.ucode`, `*.pnvm` | Intel Wi-Fi | linux-firmware, Intel redistributable licence | `servers/sexnet` from the boot pack `firmware/wifi.pack` (`crates/sex-wifi`, #83, W2) |
 | GSP-RM (planned) | NVIDIA GA10x | linux-firmware, NVIDIA redistributable licence | planned `sexgpu` |
 
 ## 4. Third-party code that runs in ring 0

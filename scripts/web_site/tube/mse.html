@@ -1,0 +1,153 @@
+<!doctype html>
+<html><head><title>Tube MSE</title></head>
+<body>
+<h1>Media Source</h1>
+<video id=v width=320 height=240></video>
+<script>
+// Plays the way a DASH player (YouTube's among them) does: one MediaSource, a video
+// SourceBuffer and an audio SourceBuffer, each fed fragmented MP4 fetched in Range
+// pieces, then endOfStream and play.
+const say = (...a) => console.log('tube mse', ...a);
+const v = document.getElementById('v');
+const PIECE = 24 * 1024;
+const VIDEO = 'video/mp4; codecs="avc1.42c00d"', AUDIO = 'audio/mp4; codecs="mp4a.40.2"';
+say('types', MediaSource.isTypeSupported(VIDEO), MediaSource.isTypeSupported(AUDIO), MediaSource.isTypeSupported('video/webm; codecs="vp9"'));
+const ms = new MediaSource();
+function append(sb, bytes) {
+  return new Promise((ok, bad) => {
+    sb.onupdateend = () => { sb.onupdateend = sb.onerror = null; ok(); };
+    sb.onerror = () => bad(new Error('append refused'));
+    sb.appendBuffer(bytes);
+  });
+}
+async function stream(sb, url) {
+  let at = 0, total = Infinity, pieces = 0;
+  while (at < total) {
+    const r = await fetch(url, { headers: { Range: 'bytes=' + at + '-' + (at + PIECE - 1) } });
+    if (r.status !== 206) throw new Error(url + ' answered ' + r.status);
+    total = +r.headers.get('content-range').split('/')[1];
+    const bytes = await r.arrayBuffer();
+    await append(sb, bytes);
+    at += bytes.byteLength; pieces++;
+  }
+  return pieces;
+}
+ms.addEventListener('sourceopen', async () => {
+  try {
+    say('open', ms.readyState);
+    const vsb = ms.addSourceBuffer(VIDEO), asb = ms.addSourceBuffer(AUDIO);
+    const pieces = await Promise.all([stream(vsb, 'mse-video.mp4'), stream(asb, 'mse-audio.mp4')]);
+    const b = v.buffered;
+    say('buffered', pieces.join('+'), b.length, b.start(0).toFixed(2), b.end(0).toFixed(2), vsb.buffered.end(0).toFixed(2));
+    ms.endOfStream();
+    say('ended', ms.readyState, ms.duration.toFixed(1));
+    await v.play();
+  } catch (e) { say('failed', e.message); }
+});
+v.addEventListener('playing', () => say('playing'));
+v.addEventListener('ended', () => { say('done', v.currentTime.toFixed(1)); live(); });
+// Then as a stream plays: it starts while segments still arrive (a piece every half
+// second), and the rest keep coming until endOfStream.
+function live() {
+  const v2 = document.createElement('video');
+  document.body.appendChild(v2);
+  const ms2 = new MediaSource();
+  let appended = 0, ended = false;
+  v2.addEventListener('playing', () => say('live playing', appended, ended));
+  v2.addEventListener('ended', () => { say('live done', v2.currentTime.toFixed(1)); switching(); });
+  async function slow(sb, url) {
+    const whole = await (await fetch(url)).arrayBuffer();
+    for (let at = 0; at < whole.byteLength; at += 16 * 1024) {
+      await append(sb, whole.slice(at, at + 16 * 1024));
+      appended++;
+      await new Promise(go => setTimeout(go, 500));
+    }
+  }
+  ms2.addEventListener('sourceopen', async () => {
+    try {
+      const vsb = ms2.addSourceBuffer(VIDEO), asb = ms2.addSourceBuffer(AUDIO);
+      v2.play();
+      await Promise.all([slow(vsb, 'mse-live-video.mp4'), slow(asb, 'mse-live-audio.mp4')]);
+      ms2.endOfStream(); ended = true;
+      say('live ended', appended, ms2.duration.toFixed(1));
+    } catch (e) { say('live failed', e.message); }
+  });
+  v2.src = URL.createObjectURL(ms2);
+}
+// A quality switch, as YouTube makes one: 0-4 s at 320x240, then a new init segment
+// and 4-8 s at 160x120, placed there with timestampOffset (the sound likewise, 330 Hz
+// after 4 s). It plays straight through.
+const WEBM_VIDEO = 'video/webm; codecs="vp9"', WEBM_AUDIO = 'audio/webm; codecs="opus"';
+async function whole(url) { return (await fetch(url)).arrayBuffer(); }
+function element(name, next, sources) {
+  const el = document.createElement('video');
+  document.body.appendChild(el);
+  const m = new MediaSource();
+  el.ms = m;
+  el.addEventListener('ended', () => { say(name + ' done', el.currentTime.toFixed(1)); if (next) next(); });
+  el.addEventListener('error', () => say(name + ' error'));
+  m.addEventListener('sourceopen', async () => {
+    try { await sources(el, m); } catch (e) { say(name + ' failed', e.message); }
+  });
+  el.src = URL.createObjectURL(m);
+  return el;
+}
+function ranges(b) { let o = [b.length]; for (let i = 0; i < b.length; i++) o.push(b.start(i).toFixed(2) + '-' + b.end(i).toFixed(2)); return o.join(' '); }
+function switching() {
+  element('switch', seeking, async (el, m) => {
+    const vsb = m.addSourceBuffer(VIDEO), asb = m.addSourceBuffer(AUDIO);
+    await append(vsb, await whole('mse-video.mp4'));
+    await append(asb, await whole('mse-audio.mp4'));
+    vsb.timestampOffset = 4; asb.timestampOffset = 4;
+    await append(vsb, await whole('mse-video-small.mp4'));
+    await append(asb, await whole('mse-audio-b.mp4'));
+    say('switch buffered', ranges(el.buffered));
+    m.endOfStream();
+    el.play();
+  });
+}
+// Seeking ahead of what has come: the element stays seeking until the page appends
+// the segments that hold the new time, then plays from there. Video only.
+function seeking() {
+  let asked = false, appended = false, vsb;
+  const el = element('seek', webm, async (el, m) => {
+    vsb = m.addSourceBuffer(VIDEO);
+    await append(vsb, await whole('mse-video.mp4'));
+    el.play();
+  });
+  el.addEventListener('timeupdate', async () => {
+    if (asked || el.currentTime < 1) return;
+    asked = true;
+    el.currentTime = 6;
+    say('seek asked', el.seeking, ranges(vsb.buffered));
+    await new Promise(go => setTimeout(go, 500));
+    say('seek still', el.seeking);
+    vsb.timestampOffset = 4;
+    appended = true;
+    await append(vsb, await whole('mse-video-small.mp4'));
+  });
+  el.addEventListener('seeked', () => {
+    say('seeked', el.currentTime.toFixed(1), appended);
+    // endOfStream once nothing is updating.
+    const end = () => vsb.updating ? setTimeout(end, 50) : el.ms.endOfStream();
+    end();
+  });
+  el.addEventListener('ended', () => {
+    vsb.onupdateend = () => say('removed', ranges(vsb.buffered));
+    vsb.remove(0, 4);
+  });
+}
+// WebM: VP9 and Opus SourceBuffers, as YouTube uses them where the browser takes them.
+function webm() {
+  element('webm', null, async (el, m) => {
+    const vsb = m.addSourceBuffer(WEBM_VIDEO), asb = m.addSourceBuffer(WEBM_AUDIO);
+    await Promise.all([append(vsb, await whole('mse-video.webm')), append(asb, await whole('mse-audio.webm'))]);
+    say('webm buffered', ranges(el.buffered));
+    m.endOfStream();
+    el.play();
+  });
+}
+v.addEventListener('error', () => say('error'));
+v.src = URL.createObjectURL(ms);
+</script>
+</body></html>

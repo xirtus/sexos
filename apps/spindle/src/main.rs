@@ -96,6 +96,8 @@ mod scroll_view;
 mod text_delivery;
 mod display_delivery;
 mod sextime_command;
+mod volume_command;
+mod wifi_command;
 mod calc_command;
 mod complete;
 static mut HISTORY_STATUS:sex_pdx::spindle_status::Publisher=sex_pdx::spindle_status::Publisher::new(0,0);
@@ -730,6 +732,38 @@ fn spindle_grid_destroy() {
     serial_println!("[spindle.grid.destroy.queued] surfaces={}", GRID_SURF_X * GRID_SURF_Y);
 }
 
+/// Lists crash records newest first: this start's, then those Files kept from earlier ones.
+fn crashes_command(sb: &mut Scrollback) {
+    use sex_pdx::crash_log as crash;
+    let Some((count, boot)) = crash::status() else { sb.push(b"Crash records are not available here."); return };
+    serial_println!("[spindle.crashes] count={}", count);
+    if count == 0 { sb.push(b"Nothing has crashed. No records from this start or earlier ones."); return; }
+    let mut shown = 0;
+    for index in (0..count).rev() {
+        let Some(r) = crash::read(index) else { continue };
+        let mut line = [0u8; 160];
+        let mut w = Cursor { buf: &mut line, len: 0 };
+        let when = if r.boot == boot { "this start" } else { "earlier start" };
+        let _ = core::fmt::Write::write_fmt(&mut w, format_args!("{}, {} s in: {}: ", when, r.uptime_ms / 1000, r.kind.label()));
+        let head = w.len;
+        let msg = r.message();
+        let first = msg.split(|&b| b == b'\n').next().unwrap_or(msg);
+        let take = first.len().min(line.len() - head);
+        line[head..head + take].copy_from_slice(&first[..take]);
+        sb.push(&line[..head + take]);
+        serial_println!("[spindle.crashes.row] seq={} kind={} pd={} earlier={}", r.seq, r.kind as u8, r.pd, (r.boot != boot) as u8);
+        shown += 1;
+        if shown == 12 { break; }
+    }
+}
+struct Cursor<'a> { buf: &'a mut [u8], len: usize }
+impl core::fmt::Write for Cursor<'_> {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        for &b in s.as_bytes() { if self.len < self.buf.len() { self.buf[self.len] = b; self.len += 1; } }
+        Ok(())
+    }
+}
+
 fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut EventRing) -> bool {
     let (raw_cmd, args) = tokenize(line);
     let mut cmd = raw_cmd;
@@ -778,13 +812,15 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  calc ln(2)   exp ln log sin cos tan, 2**0.5");
             sb.push(b"  run [+net] NAME [ARGS]  start a program from /bin or a path");
             sb.push(b"  edit FILE    open a file in Jot; @FILE gives any program that file");
-            sb.push(b"  install [IMG] make this disk start SexOS, from the running system or an image");
+            sb.push(b"  install [go] [GIB] [IMG] put SexOS beside the other systems on this disk; without go, only plans");
             sb.push(b"  spawn N C    start C background copies of program N");
             sb.push(b"  records      count background programs; stopall [force]");
             sb.push(b"  ls cd pwd mkdir rm mv cat write append touch df   files");
             sb.push(b"  fetch URL FILE   download a file");
             sb.push(b"  beep [HZ] [MS] [VOL]  play a note on the sound card");
+            sb.push(b"  volume [N|+N|-N|mute|list]  sound volume (ROW N for one program)");
             sb.push(b"  Tab          complete a command name");
+            sb.push(b"  crashes      what stopped, this start and earlier ones");
             sb.push(b"  about        Spindle version + identity");
             sb.push(b"  route        input/surface route info");
             sb.push(b"  close        session lifecycle status");
@@ -793,6 +829,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  net-status   show diagnostic state");
             sb.push(b"  net-cancel   stop and release the probe");
             sb.push(b"  net-retry    explicit fresh attempt");
+            sb.push(b"  wifi [scan]  Wi-Fi state and networks heard; scan looks again");
             serial_println!("[spindle.help.command] name=help ok=1");
             serial_println!("[spindle.help.command] name=clear ok=1");
             serial_println!("[spindle.help.command] name=echo ok=1");
@@ -1436,6 +1473,30 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
                 args.len(), status, if status == 0 { 0 } else { status as i64 }
             );
             serial_println!("[spindle.bell.command] name=notify ok=1 reason=fire_and_forget");
+            true
+        }
+        b"crashes" => { crashes_command(sb); true }
+        b"crash" if option_env!("SEXOS_CRASH_PROBE").is_some() => {
+            // Test builds only: stop a service, or the kernel, as a fault would.
+            let target = if args.eq_ignore_ascii_case(b"kernel") { Some(0) } else {
+                sex_pdx::crash_log::SERVICE_NAMES.iter().position(|n| n.as_bytes().eq_ignore_ascii_case(args)).map(|i| i as u64 + 1)
+            };
+            match target {
+                Some(t) => {
+                    serial_println!("[spindle.crash.probe] target={}", t);
+                    let (status, _, _) = sex_pdx::crash_log::call(sex_pdx::crash_log::OP_PROBE_FAULT, t, 0);
+                    sb.push(if status == 0 { b"Asked the kernel to stop it." } else { b"The kernel refused." });
+                }
+                None => sb.push(b"Use: crash kernel | crash Display | Input | Shell | Bell | ..."),
+            }
+            true
+        }
+        b"wifi" => {
+            unsafe { (*core::ptr::addr_of_mut!(wifi_command::WIFI)).start(args, sb); }
+            true
+        }
+        b"volume" => {
+            unsafe { (*core::ptr::addr_of_mut!(volume_command::VOLUME)).start(args, sb); }
             true
         }
         b"beep" => {
@@ -2695,6 +2756,8 @@ pub extern "C" fn _start() -> ! {
             }
             continue;
         }
+        if msg.type_id==1 && unsafe{(*core::ptr::addr_of_mut!(volume_command::VOLUME)).receive(msg.caller_pd,msg.arg0,sb)} {unsafe{content_render(&line,sb);}continue;}
+        if msg.type_id==1 && unsafe{(*core::ptr::addr_of_mut!(wifi_command::WIFI)).receive(msg.caller_pd,msg.arg0,sb)} {unsafe{content_render(&line,sb);}continue;}
         if msg.type_id==1 && msg.caller_pd==13 {
             sex_pdx::serial_record!("[spindle.net.reply] target={} task={} tag={} seq={} value={} observed=1",instance_pd(),catalog.task_id,msg.arg0>>56,(msg.arg0>>32)&sex_pdx::network_job::MAX_SEQ as u64,msg.arg0 as u32);
             unsafe{NETWORK_PROBE.reply(msg.arg0,sex_pdx::get_ticks());}

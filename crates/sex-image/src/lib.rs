@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! PNG and JPEG decoding for confined SexOS programs.
+//! PNG, JPEG, WebP and GIF decoding for confined SexOS programs.
 //!
 //! This crate wraps the pure Rust `zune-png` and `zune-jpeg` decoders
-//! (MIT/Apache-2.0/Zlib) with `no_std` + `alloc` and no SIMD, so it runs in
+//! (MIT/Apache-2.0/Zlib) and `image-webp` (MIT/Apache-2.0, vendored no_std),
+//! and has its own GIF decoder, with `no_std` + `alloc` and no SIMD, so it runs in
 //! a SexOS program on the scalar soft-float target. Decoding is meant to
 //! happen inside the program that asked for the picture, never in Display or
 //! a server: a hostile file can at worst fault the program that opened it.
@@ -13,6 +14,9 @@
 //!
 //! Pixels come out as unpremultiplied `0xAARRGGBB`, the same layout as
 //! `sex_graphics::png` and `sex_graphics::qoi`.
+//!
+//! Animated GIF and WebP play through [`Animation`], which draws one frame at a
+//! time onto a single canvas.
 
 #![no_std]
 #![forbid(unsafe_op_in_unsafe_fn)]
@@ -24,6 +28,8 @@ use zune_core::bytestream::ZCursor;
 use zune_core::colorspace::ColorSpace;
 use zune_core::options::DecoderOptions;
 
+mod gif;
+
 /// Largest side any header may announce (the JPEG maximum).
 const HEADER_MAX: usize = u16::MAX as usize;
 
@@ -32,6 +38,8 @@ const HEADER_MAX: usize = u16::MAX as usize;
 pub enum Format {
     Png,
     Jpeg,
+    Webp,
+    Gif,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -48,6 +56,10 @@ pub enum Error {
     Png,
     /// The JPEG decoder refused the file.
     Jpeg,
+    /// The WebP decoder refused the file.
+    Webp,
+    /// The GIF decoder refused the file.
+    Gif,
     /// The decoder produced a colour layout this crate does not convert.
     Unsupported,
 }
@@ -79,7 +91,7 @@ impl Limits {
         max_input_bytes: 8 << 20,
     };
 
-    fn admit(&self, width: usize, height: usize) -> Result<usize, Error> {
+    pub(crate) fn admit(&self, width: usize, height: usize) -> Result<usize, Error> {
         if width == 0 || height == 0 {
             return Err(Error::TooLarge);
         }
@@ -170,6 +182,10 @@ pub fn sniff(bytes: &[u8]) -> Option<Format> {
         Some(Format::Png)
     } else if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
         Some(Format::Jpeg)
+    } else if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
+        Some(Format::Webp)
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some(Format::Gif)
     } else {
         None
     }
@@ -190,10 +206,20 @@ pub fn dimensions(bytes: &[u8]) -> Result<(Format, usize, usize), Error> {
             let info = decoder.info().ok_or(Error::Jpeg)?;
             Ok((Format::Jpeg, info.width as usize, info.height as usize))
         }
+        Format::Webp => {
+            let decoder = webp_decoder(bytes)?;
+            let (w, h) = decoder.dimensions();
+            Ok((Format::Webp, w as usize, h as usize))
+        }
+        Format::Gif => {
+            let (w, h) = gif::dimensions(bytes)?;
+            Ok((Format::Gif, w, h))
+        }
     }
 }
 
-/// Decodes a PNG or JPEG file, chosen by its signature, into a new buffer.
+/// Decodes a PNG, JPEG, WebP or GIF file, chosen by its signature, into a new
+/// buffer. For an animation this is its first frame.
 pub fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, Error> {
     if bytes.len() > limits.max_input_bytes {
         return Err(Error::InputTooLarge);
@@ -216,6 +242,126 @@ pub fn decode_into(bytes: &[u8], limits: &Limits, out: &mut [u32]) -> Result<(us
     match sniff(bytes).ok_or(Error::UnknownFormat)? {
         Format::Png => png_into(bytes, limits, out),
         Format::Jpeg => jpeg_into(bytes, limits, out),
+        Format::Webp | Format::Gif => {
+            let mut animation = Animation::open(bytes, limits)?;
+            let (w, h) = (animation.width, animation.height);
+            let count = w * h;
+            let canvas = out.get_mut(..count).ok_or(Error::TooLarge)?;
+            animation.next_into(canvas)?;
+            Ok((w, h))
+        }
+    }
+}
+
+fn webp_decoder<B: AsRef<[u8]>>(bytes: B) -> Result<image_webp::WebPDecoder<image_webp::Cursor<B>>, Error> {
+    image_webp::WebPDecoder::new(image_webp::Cursor::new(bytes)).map_err(|_| Error::Webp)
+}
+
+enum Frames<B: AsRef<[u8]>> {
+    Gif(gif::Gif, B),
+    Webp { decoder: image_webp::WebPDecoder<image_webp::Cursor<B>>, alpha: bool, animated: bool, left: u32 },
+    Still(B),
+}
+
+/// A picture that may move: GIF or WebP frames drawn one at a time onto the
+/// caller's canvas, or a still PNG, JPEG, GIF or WebP as one frame. `B` holds
+/// the file: borrowed (`&[u8]`) or owned (`Vec<u8>`, `Rc<[u8]>`) by the player.
+pub struct Animation<B: AsRef<[u8]>> {
+    pub width: usize,
+    pub height: usize,
+    frames: Frames<B>,
+    limits: Limits,
+}
+
+impl<B: AsRef<[u8]>> Animation<B> {
+    /// Reads the header and, for GIF, finds every frame. Refuses pictures the
+    /// limits do not admit before any pixel memory is reserved.
+    pub fn open(file: B, limits: &Limits) -> Result<Self, Error> {
+        let bytes = file.as_ref();
+        if bytes.len() > limits.max_input_bytes {
+            return Err(Error::InputTooLarge);
+        }
+        let (frames, width, height) = match sniff(bytes).ok_or(Error::UnknownFormat)? {
+            Format::Gif => {
+                let g = gif::Gif::open(bytes, limits)?;
+                let (w, h) = (g.width, g.height);
+                (Frames::Gif(g, file), w, h)
+            }
+            Format::Webp => {
+                let decoder = webp_decoder(file)?;
+                let (w, h) = decoder.dimensions();
+                limits.admit(w as usize, h as usize)?;
+                let animated = decoder.is_animated();
+                let left = if animated { decoder.num_frames() } else { 1 };
+                (Frames::Webp { alpha: decoder.has_alpha(), decoder, animated, left }, w as usize, h as usize)
+            }
+            Format::Png | Format::Jpeg => {
+                let (_, w, h) = dimensions(bytes)?;
+                limits.admit(w, h)?;
+                (Frames::Still(file), w, h)
+            }
+        };
+        Ok(Animation { width, height, frames, limits: *limits })
+    }
+
+    /// How many frames one pass shows (1 for a still).
+    pub fn frames(&self) -> usize {
+        match &self.frames {
+            Frames::Still(_) => 1,
+            Frames::Gif(g, _) => g.frames(),
+            Frames::Webp { decoder, animated, .. } => if *animated { decoder.num_frames() as usize } else { 1 },
+        }
+    }
+
+    /// Times the animation repeats after the first pass; `None` is forever.
+    pub fn loops(&self) -> Option<u32> {
+        match &self.frames {
+            Frames::Still(_) => Some(0),
+            Frames::Gif(g, _) => match g.loops { Some(0) => None, Some(n) => Some(n), None => Some(0) },
+            Frames::Webp { decoder, .. } => match decoder.loop_count() {
+                image_webp::LoopCount::Forever => None,
+                image_webp::LoopCount::Times(n) => Some(u16::from(n) as u32),
+            },
+        }
+    }
+
+    /// Draws the next frame onto `canvas` (exactly width * height pixels; keep
+    /// it between calls, as frames draw over the ones before) and returns how
+    /// long it shows in milliseconds, 0 for a still. After the last frame the
+    /// first follows.
+    pub fn next_into(&mut self, canvas: &mut [u32]) -> Result<u32, Error> {
+        let count = self.width * self.height;
+        if canvas.len() != count {
+            return Err(Error::TooLarge);
+        }
+        match &mut self.frames {
+            Frames::Still(bytes) => {
+                let (w, h) = decode_into(bytes.as_ref(), &self.limits, canvas)?;
+                if (w, h) == (self.width, self.height) { Ok(0) } else { Err(Error::Unsupported) }
+            }
+            Frames::Gif(g, bytes) => g.next(bytes.as_ref(), canvas),
+            Frames::Webp { decoder, alpha, animated, left } => {
+                let size = decoder.output_buffer_size().ok_or(Error::TooLarge)?;
+                let colorspace = if *alpha { ColorSpace::RGBA } else { ColorSpace::RGB };
+                let bytes = as_bytes(canvas);
+                if size > bytes.len() {
+                    return Err(Error::Unsupported);
+                }
+                let delay = if *animated {
+                    if *left == 0 {
+                        decoder.reset_animation();
+                        *left = decoder.num_frames();
+                    }
+                    *left -= 1;
+                    decoder.read_frame(&mut bytes[..size]).map_err(|_| Error::Webp)?
+                } else {
+                    decoder.read_image(&mut bytes[..size]).map_err(|_| Error::Webp)?;
+                    0
+                };
+                expand_in_place(bytes, count, colorspace)?;
+                Ok(delay)
+            }
+        }
     }
 }
 
@@ -284,7 +430,7 @@ fn target(out: &mut [u32], count: usize, size: usize) -> Result<&mut [u8], Error
     Ok(bytes)
 }
 
-fn reserve_pixels(count: usize) -> Result<Vec<u32>, Error> {
+pub(crate) fn reserve_pixels(count: usize) -> Result<Vec<u32>, Error> {
     let mut pixels = Vec::new();
     pixels.try_reserve_exact(count).map_err(|_| Error::OutOfMemory)?;
     pixels.resize(count, 0);

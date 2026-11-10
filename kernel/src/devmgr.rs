@@ -10,7 +10,9 @@ use sex_hwdb::manifest::Lease;
 pub fn init(sexdrive_pd_id: u32, sexdisplay_pd_id: u32, sexusb_pd_id: u32, sexnet_pd_id: u32, sexbell_pd_id: u32) {
     serial_println!("DevMgr: Starting hardware discovery...");
 
-    let devices = HAL.enumerate_pci();
+    let mut devices = HAL.enumerate_pci();
+    // Drives behind Intel VMD (RST "RAID On") join the list as ordinary devices.
+    crate::vmd::expand(&mut devices);
     serial_println!("DevMgr: Enumerated {} PCI devices.", devices.len());
 
     let mut census = sex_hwdb::Census::default();
@@ -64,6 +66,7 @@ pub fn init(sexdrive_pd_id: u32, sexdisplay_pd_id: u32, sexusb_pd_id: u32, sexne
             }
             Lease::Hda => class_lease(&dev, crate::device_lease::Kind::Hda, pd, slot, first),
             Lease::Ahci => class_lease(&dev, crate::device_lease::Kind::Ahci, pd, slot, first),
+            Lease::Wifi => class_lease(&dev, crate::device_lease::Kind::Wifi, pd, slot, first),
             Lease::Virtio => virtio(&dev, pd, slot, first),
             Lease::Display => display_lease(&dev, pd),
         };
@@ -106,7 +109,7 @@ impl Services {
 /// NVMe: BAR0 view; firmware may leave the controller cold with DMA off, so BOOT
 /// turns memory space and bus mastering on (the status half is write-one-to-clear).
 fn nvme_lease(dev: &crate::hal::pci::PciDevice, pd: &ProtectionDomain, slot: u64) -> bool {
-    serial_println!("[kernel.pci.nvme.found] {:02x}:{:02x}.{} vendor={:04x} device={:04x}", dev.bus, dev.dev, dev.func, dev.vendor_id, dev.device_id);
+    serial_println!("[kernel.pci.nvme.found] {:02x}:{:02x}.{} vendor={:04x} device={:04x} behind_vmd={}", dev.bus, dev.dev, dev.func, dev.vendor_id, dev.device_id, (dev.ecam != 0) as u8);
     dev.write_u32(0x04, (dev.read_u32(0x04) & 0xFFFF) | 0x0006);
     pd.grant_capability(slot, CapabilityData::Pci(PciCapData {
         bus: dev.bus, dev: dev.dev, func: dev.func, vendor_id: dev.vendor_id, device_id: dev.device_id,
@@ -200,8 +203,9 @@ fn virtio(dev: &crate::hal::pci::PciDevice, pd: &ProtectionDomain, slot: u64, fi
     true
 }
 
-/// HD Audio goes to the Bell service, AHCI to the drive service: one BAR view,
-/// memory and bus-master command bits, and (for the first device) a DMA pool.
+/// HD Audio goes to the Bell service, AHCI to the drive service, Intel Wi-Fi to
+/// the network service: one BAR view, memory and bus-master command bits, and
+/// (for the first device) a DMA pool.
 fn class_lease(dev: &crate::hal::pci::PciDevice, kind: crate::device_lease::Kind, pd: &ProtectionDomain, slot: u64, first: bool) -> bool {
     serial_println!("[kernel.pci.class.found] {:02x}:{:02x}.{} kind={:?} vendor={:04x} device={:04x}",
         dev.bus, dev.dev, dev.func, kind, dev.vendor_id, dev.device_id);

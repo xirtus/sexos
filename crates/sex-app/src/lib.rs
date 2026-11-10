@@ -1207,6 +1207,8 @@ pub mod net {
         reused: bool,
         /// Where the reply's body ended exactly, once its framing says so.
         body_end: Option<usize>,
+        /// Body bytes `stream` has handed out (and taken from `raw`).
+        drained: usize,
     }
     /// Connections whose last reply ended cleanly and that the site keeps open: host,
     /// port, TLS, the flow, and since when it has been idle.
@@ -1270,7 +1272,7 @@ pub mod net {
             Ok(Exchange { flow, get_head, raw: alloc::vec::Vec::new(), cap, max,
                 head_end: None, framing: None, chunks: sex_fetch::ChunkScan::new(), began: now, start: now, idle: 0, calls: 0, empty: 0, peer_done: false, whole: false,
                 setup: if kept.is_some() { Setup::Send { at: 0 } } else { Setup::Up }, host: alloc::string::String::from(host), port, tls, out, addresses: [None; 2], trying: 0, connect_at: 0,
-                reused: kept.is_some(), body_end: None })
+                reused: kept.is_some(), body_end: None, drained: 0 })
         }
         /// A kept connection that failed before any reply byte: the site had closed it.
         /// Start over on a new one (as browsers do), once.
@@ -1389,7 +1391,7 @@ pub mod net {
             let body = &seen[self.head_end.unwrap_or(0)..];
             match self.framing {
                 Some(sex_fetch::Framing::Chunked) => match self.chunks.advance(body) { Ok(None) => false, Ok(Some(end)) => { self.body_end = Some(end); true } Err(_) => true },
-                Some(sex_fetch::Framing::Length(n)) => { let done = body.len() as u64 >= n; if done { self.body_end = Some(n as usize); } done }
+                Some(sex_fetch::Framing::Length(n)) => { let done = (body.len() + self.drained) as u64 >= n; if done { self.body_end = Some(n as usize); } done }
                 Some(sex_fetch::Framing::Empty) => { self.body_end = Some(0); true }
                 Some(f) => sex_fetch::complete(f, body).unwrap_or(true),
                 None => true,
@@ -1408,7 +1410,7 @@ pub mod net {
                 }
                 return Ok(false);
             }
-            let room = (self.cap - self.raw.len()).min(32 * 1024).max(1) as u64;
+            let room = self.cap.saturating_sub(self.raw.len() + self.drained).min(32 * 1024).max(1) as u64;
             let turn = Turn::take();
             let k = match call_on(window, self.flow, w::RECEIVE, room).and_then(ok) {
                 Ok(k) => k as usize,
@@ -1417,13 +1419,13 @@ pub mod net {
             };
             self.calls += 1;
             if k > 0 {
-                let take = k.min(self.cap - self.raw.len());
+                let take = k.min(self.cap.saturating_sub(self.raw.len() + self.drained));
                 let region = region().map_err(|e| { self.cancel(window); e })?;
                 self.raw.extend_from_slice(&region[..take]);
                 drop(turn);
                 self.began = sex_pdx::get_ticks();
                 self.idle = 0;
-                if self.raw.len() == self.cap || self.enough() { self.end(window); }
+                if self.raw.len() + self.drained >= self.cap || self.enough() { self.end(window); }
                 return Ok(self.whole);
             }
             self.empty += 1;
@@ -1441,7 +1443,7 @@ pub mod net {
             self.whole = true;
             // Keep the connection when the reply ended exactly where its framing said and
             // the site keeps it open; otherwise let it go.
-            let keep = !self.peer_done && self.head_end.is_some_and(|h| self.body_end.is_some_and(|b| h + b == self.raw.len()))
+            let keep = !self.peer_done && self.head_end.is_some_and(|h| self.body_end.is_some_and(|b| h + b == self.raw.len() + self.drained))
                 && sex_fetch::parse_head(&self.raw).ok().flatten().is_some_and(|(head, _)| head.keeps_connection(self.raw.starts_with(b"HTTP/1.0")));
             if keep {
                 let idle = idle_flows();
@@ -1451,6 +1453,31 @@ pub mod net {
                 close(window, self.flow);
             }
             sex_pdx::serial_record!("[net.receive.stats] bytes={} calls={} empty={} ticks={} flow={} reused={} kept={}", self.raw.len(), self.calls, self.empty, sex_pdx::get_ticks() - self.start, self.flow.0, self.reused as u8, keep as u8);
+        }
+        /// The reply's head, once it has arrived.
+        pub fn head(&self) -> Option<sex_fetch::Head> {
+            self.head_end?;
+            sex_fetch::parse_head(&self.raw).ok().flatten().map(|(h, _)| h)
+        }
+        /// For a reply whose body can be used as it arrives (a length or an until-close
+        /// body, not compressed, not chunked): moves the body bytes that came since the
+        /// last call to the end of `into` and gives the body's length, if the head said
+        /// it. `None` while the head is still coming or when the body must be read whole
+        /// (then `finish` as usual). Once bytes are taken this way, `finish` has no body.
+        pub fn stream(&mut self, into: &mut alloc::vec::Vec<u8>) -> Option<Option<u64>> {
+            let at = self.head_end?;
+            let total = match self.framing? { sex_fetch::Framing::Length(n) => Some(n), sex_fetch::Framing::UntilClose => None, _ => return None };
+            let head = sex_fetch::parse_head(&self.raw).ok().flatten()?.0;
+            if head.get("content-encoding").is_some_and(|e| !e.trim().eq_ignore_ascii_case("identity")) { return None; }
+            // A length body ends there: bytes past it belong to no one.
+            let end = total.map_or(self.raw.len(), |n| self.raw.len().min(at + (n as usize).saturating_sub(self.drained)));
+            if end > at {
+                if into.try_reserve(end - at).is_err() { return None; }
+                into.extend_from_slice(&self.raw[at..end]);
+                self.drained += end - at;
+                self.raw.drain(at..end);
+            }
+            Some(total)
         }
         /// Gives the exchange up and lets its flow go.
         pub fn cancel(&mut self, window: &mut Window) {
