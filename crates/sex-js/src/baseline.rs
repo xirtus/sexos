@@ -164,11 +164,17 @@ fn emit(bc: &[u8], argc: usize, padding: usize) -> Option<Vec<u8>> {
             if depth == STACK {
                 return None;
             }
-            // Construct constants one byte at a time: raw immediates could contain
-            // forbidden PKRU/XRSTOR bytes even across instruction boundaries.
-            code.extend_from_slice(&[0x31, 0xc0]);
-            for b in n.to_be_bytes() {
-                code.extend_from_slice(&[0xc1, 0xe0, 0x08, 0xb0, b]);
+            // Use a short immediate where safe; re-encode dangerous payloads byte
+            // by byte. The complete function is scanned across boundaries too.
+            let mut literal = [0xb8, 0, 0, 0, 0]; // mov eax,imm32
+            literal[1..].copy_from_slice(&n.to_le_bytes());
+            if !blocked(&literal) {
+                code.extend_from_slice(&literal);
+            } else {
+                code.extend_from_slice(&[0x31, 0xc0]);
+                for b in n.to_be_bytes() {
+                    code.extend_from_slice(&[0xc1, 0xe0, 0x08, 0xb0, b]);
+                }
             }
             store(&mut code, depth);
             depth += 1;

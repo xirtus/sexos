@@ -956,13 +956,26 @@ fn baseline_hot_bytecode_matches_forced_interpreter() {
 #[cfg(feature = "baseline-jit")]
 #[test]
 fn baseline_hot_call_measurement() {
-    let workload="function mix(a,b) { return (((a+b)*3) ^ (a-b)) + ((a&b) | (a^b)); } let sum=0; for(let i=0;i<100000;i++) sum+=mix(i,17); console.log(sum);";
+    // Several arithmetic terms amortize the sandbox crossing. A short function's
+    // boundary cost is measured separately by the browser smoke fixture.
+    let term="(((a+b)*3)^((a-b)*7))";
+    let function=format!("function mix(a,b) {{ return {}; }}", vec![term;5].join("+"));
+    let workload="let sum=0; for(let i=0;i<100000;i++) sum+=mix(i,17); console.log(sum);";
     let mut expected=None;
-    for enabled in [false,true] {
+    let mut samples=[Vec::new(),Vec::new()];
+    for enabled in [false,true,true,false] {
         let mut s=page("");s.set_jit_enabled(enabled);
+        s.eval(&function,"define.js").unwrap();
+        s.eval("for(let i=0;i<1000;i++) mix(i,17);","warm.js").unwrap();
+        let before=s.jit_stats();
         let started=std::time::Instant::now();s.eval(workload,"hot.js").unwrap();
         let elapsed=started.elapsed();let result=logs(&mut s);
         if let Some(ref want)=expected {assert_eq!(&result,want);} else {expected=Some(result);}
-        eprintln!("baseline-jit enabled={enabled} native={} elapsed={elapsed:?} stats={:?}",Script::<Document>::NATIVE,s.jit_stats());
+        let after=s.jit_stats();
+        #[cfg(all(target_arch="x86_64",target_os="linux"))]
+        if enabled {assert!(after.executed-before.executed>=99999,"{after:?}");}
+        samples[enabled as usize].push(elapsed.as_nanos());
+        eprintln!("baseline-jit enabled={enabled} native={} warm_elapsed={elapsed:?} before={before:?} after={after:?}",Script::<Document>::NATIVE);
     }
+    eprintln!("baseline-jit paired_ns interpreter={:?} jit={:?}",samples[0],samples[1]);
 }

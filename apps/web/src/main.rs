@@ -724,6 +724,8 @@ impl Browser {
         #[cfg(feature = "baseline-jit")]
         script.set_jit_enabled(self.jit_enabled);
         sex_pdx::serial_record!("[web.script] engine_ticks={} memory={}", sex_pdx::get_ticks() - started, script.memory_bytes());
+        #[cfg(feature = "baseline-jit")]
+        let scripts_started = sex_pdx::get_ticks();
         for s in scripts.iter() {
             let r = if s.module {
                 self.load_modules(&mut script, s);
@@ -740,7 +742,7 @@ impl Browser {
         #[cfg(feature = "baseline-jit")]
         {
             let stats = script.jit_stats();
-            sex_pdx::serial_record!("[web.jit] enabled={} compiled={} executed={} bailouts={} refused={} ticks={}", self.jit_enabled as u8, stats.compiled, stats.executed, stats.bailouts, stats.refused, sex_pdx::get_ticks() - started);
+            sex_pdx::serial_record!("[web.jit] enabled={} compiled={} executed={} bailouts={} refused={} ticks={} script_ticks={}", self.jit_enabled as u8, stats.compiled, stats.executed, stats.bailouts, stats.refused, sex_pdx::get_ticks() - started, sex_pdx::get_ticks() - scripts_started);
         }
         self.script_scroll = 0;
         self.doc = Doc::Scripted(alloc::boxed::Box::new(script));

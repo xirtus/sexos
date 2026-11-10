@@ -44,7 +44,7 @@ def main():
   for enabled in (False,True):
    start=len(t());command(f'run +net web {base}/jit.html'+('' if enabled else ' --no-jit'))
    value=g['wait'](r'\[web.console\] level=0 jit-result ([^\r\n]+)',start,300);assert value[1]==expected,(value[1],expected)
-   stats=g['wait'](r'\[web.jit\] enabled=(\d+) compiled=(\d+) executed=(\d+) bailouts=(\d+) refused=(\d+) ticks=(\d+)',start,60)
+   stats=g['wait'](r'\[web.jit\] enabled=(\d+) compiled=(\d+) executed=(\d+) bailouts=(\d+) refused=(\d+) ticks=(\d+) script_ticks=(\d+)',start,60)
    numbers=list(map(int,stats.groups()));assert numbers[0]==int(enabled),numbers
    ready=g['wait'](r'\[web.ready\] target=(\d+) task=(\d+)',start,120);target,task=ready[1],ready[2]
    launch=g['wait'](rf'\[shell.program.launch\] target={target} task={task} surface=(\d+)',start,60)
@@ -52,7 +52,7 @@ def main():
     assert numbers[1]>=4 and numbers[2]>=9900 and numbers[3]>=3 and numbers[4]==0,numbers
     assert re.search(rf'\[app.program.code\] target={target} task={task} op=seal ',t()[start:]),'no kernel seal for this domain/run'
    else:assert numbers[1:5]==[0,0,0,0],numbers
-   results.append(dict(enabled=enabled,compiled=numbers[1],executed=numbers[2],bailouts=numbers[3],refused=numbers[4],ticks=numbers[5],result=value[1],target=int(target),task=int(task)))
+   results.append(dict(enabled=enabled,compiled=numbers[1],executed=numbers[2],bailouts=numbers[3],refused=numbers[4],ticks=numbers[5],script_ticks=numbers[6],result=value[1],target=int(target),task=int(task)))
    g['focus'](int(launch[1]));q.key('f11');g['wait'](rf'\[web.closed\] target={target} task={task}',start,60)
    g['wait'](rf'\[app.private.retired\] target={target} task={task} ',start,120)
   assert '[web.fatal]' not in t() and 'KERNEL PANIC' not in t()
