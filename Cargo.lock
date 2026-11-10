@@ -704,6 +704,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6d5a32815ae3f33302d95fdcb2ce17862f8c65363dcfd29360480ba1001fc9c"
 
 [[package]]
+name = "fuzz"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-pdx",
+]
+
+[[package]]
 name = "generic-array"
 version = "0.14.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1862,6 +1870,10 @@ name = "sex-imsm"
 version = "0.1.0"
 
 [[package]]
+name = "sex-iommu"
+version = "0.1.0"
+
+[[package]]
 name = "sex-js"
 version = "0.1.0"
 dependencies = [
@@ -1891,6 +1903,7 @@ dependencies = [
  "raw-cpuid 11.6.0",
  "scopeguard",
  "sex-hwdb",
+ "sex-iommu",
  "sex-pdx",
  "sex-vmd",
  "spin",

@@ -28,6 +28,10 @@ static mut DMA_POOL: Option<DmaRegionPool> = None;
 static mut DMA_VIEW: Option<RegionView> = None;
 static mut READ_LEASE: Option<DmaLease> = None;
 static mut WRITE_LEASE: Option<DmaLease> = None;
+// Files' block buffer, lent to our devices through the IOMMU: reads land there
+// directly instead of bouncing through the pool. 0 = no loan (no IOMMU).
+static mut BLOCK_LOAN: u64 = 0;
+static mut ZERO_COPY_SEEN: bool = false;
 
 // SERIAL_DIET_V1: shared budget for hot-loop diagnostics. Early boot keeps
 // the full trace (first 240 lines); steady-state loops go quiet so
@@ -208,9 +212,41 @@ fn own_dma_virtual(phys: u64, size: u64) -> u64 {
     }
 }
 
+/// With an IOMMU, lend Files' block buffer to the controller once, for reads.
+fn lend_block_buffer() {
+    use sex_pdx::dma_lend;
+    let info = dma_lend::info();
+    if !info.active {
+        sex_pdx::serial_record!("[sexdrive.dma.loan] slot={} active=0 reason=no_iommu reads=bounce", SLOT_BLOCK_BUFFER);
+        return;
+    }
+    match dma_lend::lend(SLOT_BLOCK_BUFFER, 0, BLOCK_MAX_RUN, dma_lend::DEVICE_WRITE) {
+        Ok(loan) => {
+            unsafe { BLOCK_LOAN = loan.device_address; }
+            sex_pdx::serial_record!("[sexdrive.dma.loan] slot={} active=1 domain={} device_address={:#x} pages={} reads=zero_copy",
+                SLOT_BLOCK_BUFFER, info.domain, loan.device_address, loan.pages);
+        }
+        Err(e) => sex_pdx::serial_record!("[sexdrive.dma.loan] slot={} active=1 error={:#x} reads=bounce", SLOT_BLOCK_BUFFER, e),
+    }
+}
+
+fn block_loan() -> u64 { unsafe { BLOCK_LOAN } }
+
+/// A command we gave up on may still finish. End the loan first: the IOMMU
+/// then blocks that late DMA instead of letting it land in Files' buffer.
+fn end_block_loan() {
+    unsafe {
+        if BLOCK_LOAN == 0 { return; }
+        let returned = sex_pdx::dma_lend::give_back(BLOCK_LOAN).is_ok();
+        BLOCK_LOAN = 0;
+        serial_println!("[sexdrive.dma.loan.ended] reason=uncertain_io returned={}", returned as u8);
+    }
+}
+
 const ADMIN_POLLS: u32 = 64_000_000;
 fn stop_uncertain_io() {
     unsafe { NVME_IO_STATE.ready = false; }
+    end_block_loan();
     ahci::stop_io();
     serial_println!("[sexdrive.dma.quarantine] ready=0 reason=unresolved_submission");
 }
@@ -227,6 +263,21 @@ fn prp2_for(buffer: &sex_pdx::dma_pool::DmaBuffer, size: u64) -> Option<u64> {
     let list = (buffer.virtual_address + BLOCK_MAX_RUN) as *mut u64;
     for i in 1..pages {
         unsafe { core::ptr::write_volatile(list.add((i - 1) as usize), buffer.physical_address + i * PAGE_SIZE); }
+    }
+    Some(buffer.physical_address + BLOCK_MAX_RUN)
+}
+
+/// PRP2 when the data pages are a loan (consecutive device addresses from
+/// `loan`); the PRP list itself still lives in the lease's pool page.
+fn prp2_for_loan(buffer: &sex_pdx::dma_pool::DmaBuffer, loan: u64, size: u64) -> Option<u64> {
+    let pages = size.div_ceil(PAGE_SIZE);
+    if pages == 0 || pages > BLOCK_MAX_RUN / PAGE_SIZE { return None; }
+    if pages == 1 { return Some(0); }
+    if pages == 2 { return Some(loan + PAGE_SIZE); }
+    if buffer.length < BLOCK_MAX_RUN + PAGE_SIZE { return None; }
+    let list = (buffer.virtual_address + BLOCK_MAX_RUN) as *mut u64;
+    for i in 1..pages {
+        unsafe { core::ptr::write_volatile(list.add((i - 1) as usize), loan + i * PAGE_SIZE); }
     }
     Some(buffer.physical_address + BLOCK_MAX_RUN)
 }
@@ -477,12 +528,16 @@ fn typed_read_handoff(offset:u64,size:u64,buf_cap:u64,view:Option<RegionView>)->
     let Some(view)=view else{return BLOCK_ERR_NO_DEVICE};
     if view.length<size || view.virtual_address==0 || view.virtual_address==u64::MAX
         || view.virtual_address.checked_add(size).is_none(){return BLOCK_ERR_NO_DEVICE}
-    nvme_read_into_mapped_va(offset,size,view.virtual_address)
+    // The view starts at the region's first byte, which is where the loan starts.
+    nvme_read_into_mapped_va(offset,size,view.virtual_address,block_loan())
 }
 
 /// Block reads: the Intel RAID volume when one is served, else the first
 /// drive's raw sectors (always those when the RAID layer itself asks).
-fn nvme_read_into_mapped_va(offset: u64, size: u64, dst_va: u64) -> u64 {
+/// `loan` != 0: `dst_va` is the start of memory lent to the controller at that
+/// device address, and the data goes there directly (single drives only; a
+/// RAID volume is assembled strip by strip through the pool).
+fn nvme_read_into_mapped_va(offset: u64, size: u64, dst_va: u64, loan: u64) -> u64 {
     if raid::serving() && !raid::raw() { return raid::read(offset, size, dst_va); }
     if serving_ahci() { return ahci_read_into_mapped_va(offset, size, dst_va); }
     if size == 0
@@ -550,8 +605,11 @@ fn nvme_read_into_mapped_va(offset: u64, size: u64, dst_va: u64) -> u64 {
         return BLOCK_ERR_NO_DEVICE;
     }
     if transfer.buffer.length < size { return BLOCK_ERR_NO_DEVICE; }
-    unsafe { core::ptr::write_bytes(data_va as *mut u8, 0, size as usize); }
-    let Some(prp2) = prp2_for(&transfer.buffer, size) else { return BLOCK_ERR_BAD_LEN; };
+    let zero_copy = loan != 0;
+    if !zero_copy { unsafe { core::ptr::write_bytes(data_va as *mut u8, 0, size as usize); } }
+    let prp2 = if zero_copy { prp2_for_loan(&transfer.buffer, loan, size) } else { prp2_for(&transfer.buffer, size) };
+    let Some(prp2) = prp2 else { return BLOCK_ERR_BAD_LEN; };
+    let data_phys = if zero_copy { loan } else { data_phys };
 
     let slba = offset / NVME_LBA_BYTES;
     let nlb = (size / NVME_LBA_BYTES).saturating_sub(1);
@@ -675,6 +733,11 @@ fn nvme_read_into_mapped_va(offset: u64, size: u64, dst_va: u64) -> u64 {
     }
 
     // The CQE was observed (acquire) above, so the device's data is complete.
+    if zero_copy {
+        unsafe { if !ZERO_COPY_SEEN { ZERO_COPY_SEEN = true;
+            serial_println!("[sexdrive.read.zero_copy] first=1 device_address={:#x} bytes={} copy=0", loan, size); } }
+        return 0;
+    }
     unsafe { core::ptr::copy_nonoverlapping(data_va as *const u8, dst_va as *mut u8, size as usize); }
     if hot_log() { serial_println!(
         "[sexdrive.block.read.handoff.copy.ok] phase=B len={}",
@@ -740,8 +803,14 @@ fn write_guard_allows(offset: u64, size: u64, buf_cap: u64) -> bool {
         && offset >= sex_pdx::DISKFS_V4_POOL_BASE_LBA * NVME_LBA_BYTES
         && offset.checked_add(size).map_or(false,|end|end <=
             (sex_pdx::DISKFS_V4_POOL_BASE_LBA+sex_pdx::DISKFS_V4_POOL_SECTORS)*NVME_LBA_BYTES);
+    // The crash record ring: one sector per record (sex_pdx::crash_log).
+    let crash_start = sex_pdx::crash_log::DISK_BASE_LBA * NVME_LBA_BYTES;
+    let crash_end = (sex_pdx::crash_log::DISK_BASE_LBA + sex_pdx::crash_log::DISK_SECTORS - 1) * NVME_LBA_BYTES;
+    let allow_crash_ring = proof_mode && size == WRITE_PROOF_LEN
+        && (offset % NVME_LBA_BYTES) == 0
+        && offset >= crash_start && offset <= crash_end;
     let allow = allow_proof || allow_manifest || allow_object || allow_linen || allow_quil
-        || allow_sexfs_meta || allow_sexfs_obj || allow_pool_bulk;
+        || allow_sexfs_meta || allow_sexfs_obj || allow_pool_bulk || allow_crash_ring;
     if !allow || hot_log() {
     serial_println!(
         "[sexdrive.write.guard.config] proof_lba={} proof_offset={:#x} manifest_lba={} object_lba_start={} object_lba_end={} proof_len={} magic={:#x} sexfs_meta={}-{} sexfs_obj={}-{}",
@@ -1409,7 +1478,7 @@ fn nvme_multiblock_write_readback_proof() -> u64 {
             lba,
             AP4_MULTI_BLOCK_BYTES
         );
-        let read_status = nvme_read_into_mapped_va(lba * NVME_LBA_BYTES, AP4_MULTI_BLOCK_BYTES, read_va);
+        let read_status = nvme_read_into_mapped_va(lba * NVME_LBA_BYTES, AP4_MULTI_BLOCK_BYTES, read_va, 0);
         if read_status != 0 {
             serial_println!(
                 "[sexdrive.storage100.multi.read.complete] idx={} lba={} status=1 bytes={}",
@@ -1536,7 +1605,7 @@ fn nvme_persist_read_proof() -> u64 {
             return BLOCK_ERR_NO_DEVICE;
         }
 
-        let read_status = nvme_read_into_mapped_va(lba * NVME_LBA_BYTES, AP5A_PERSIST_BLOCK_BYTES, read_va);
+        let read_status = nvme_read_into_mapped_va(lba * NVME_LBA_BYTES, AP5A_PERSIST_BLOCK_BYTES, read_va, 0);
         if read_status != 0 {
             serial_println!("[sexdrive.storage100.persist.fail] phase=read reason=read_status_fail idx={} lba={} status={}", b, lba, read_status);
             return BLOCK_ERR_NO_DEVICE;
@@ -1748,7 +1817,7 @@ fn nvme_storage100_negative_mismatch() -> u64 {
         );
         return write_status;
     }
-    let read_status = nvme_read_into_mapped_va(lba * NVME_LBA_BYTES, size, read_va);
+    let read_status = nvme_read_into_mapped_va(lba * NVME_LBA_BYTES, size, read_va, 0);
     if read_status != 0 {
         serial_println!(
             "[sexdrive.storage100.neg.mismatch.fail] reason=read_status status={}",
@@ -3268,6 +3337,7 @@ fn fill_initial_frame(shared_addr:u64){
 pub extern "C" fn _start() -> ! {
     serial_println!("[sexdrive.init.start]");
     if init_dma_region() {
+        lend_block_buffer();
         nvme_probe_bar();
         // NVMe is preferred: AHCI is only probed (and its ports only touched)
         // when no NVMe controller came up. A machine with both serves NVMe.

@@ -87,6 +87,12 @@ impl CoreLocal {
         }
     }
 
+    /// This core's state, or none before it is set up (a stop early in boot).
+    pub fn try_get() -> Option<&'static CoreLocal> {
+        let base = GsBase::read().as_u64();
+        if base == 0 { None } else { Some(unsafe { &*(base as *const CoreLocal) }) }
+    }
+
     pub fn get_mut() -> &'static mut CoreLocal {
         unsafe {
             &mut *(GsBase::read().as_u64() as *mut CoreLocal)

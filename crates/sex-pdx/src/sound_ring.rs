@@ -32,6 +32,9 @@ pub const OPEN: usize = 24;
 pub const VOLUME: usize = 32;
 pub const PAUSED: usize = 40;
 pub const SKIP_TO: usize = 48;
+/// The rate the program's frames are at, in Hz (8000..=192000); 0 means [`RATE`].
+/// Bell converts to its own rate as it mixes.
+pub const RATE_HZ: usize = 56;
 
 /// The program's own view, writable.
 pub const CLIENT_SLOT: u64 = 260;

@@ -386,6 +386,16 @@ pub fn send_to_others(vector: u8) {
         lapic.offset(0x300 / 4).write_volatile((0b11 << 18) | (1 << 14) | vector as u32);
     }
 }
+/// An NMI to every core but this one: the machine is stopping, and they halt in the NMI
+/// handler. Masked interrupts do not hold an NMI back.
+pub fn stop_others() {
+    let lapic = LAPIC_ADDR.load(core::sync::atomic::Ordering::Acquire) as *mut u32;
+    if lapic.is_null() { return; }
+    unsafe {
+        for _ in 0..1_000_000 { if lapic.offset(0x300 / 4).read_volatile() & (1 << 12) == 0 { break; } core::hint::spin_loop(); }
+        lapic.offset(0x300 / 4).write_volatile((0b11 << 18) | (1 << 14) | (0b100 << 8));
+    }
+}
 /// Fixed delivery to one core. Core ids follow start order, so the table maps them.
 pub fn send_to_core(core: u32, vector: u8) {
     let Some(id) = crate::smp::local_apic_of(core) else { return };
