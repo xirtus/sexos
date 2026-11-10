@@ -72,12 +72,160 @@ static JSValue js_host(JSContext *c, JSValueConst this_val, int argc, JSValueCon
     return v;
 }
 
+// ---- ES modules ----
+// Module addresses are resolved and their sources supplied by the host (ops 29 and 30);
+// the host fetches what a module graph needs before the graph runs (see sx_module).
+#define OP_MODULE_RESOLVE 29
+#define OP_MODULE_SOURCE 30
+// Set while sx_module only discovers a graph: a module the host lacks loads as an
+// empty stand-in (the host notes it), so every import reachable today is found.
+static int discovering;
+// How many modules the host lacked during the last discovery.
+static int missed;
+
+// Calls host op `op` with one or two text arguments; returns its text (malloc'd, zero
+// terminated, length in *n) or NULL when the host has none.
+static char *host_text(int op, const char *a, size_t al, const char *b, size_t bl, size_t *n) {
+    size_t total = 4 + al + (b ? 4 + bl : 0);
+    char *buf = malloc(total);
+    if (!buf) return NULL;
+    uint32_t l = (uint32_t)al;
+    memcpy(buf, &l, 4); memcpy(buf + 4, a, al);
+    if (b) { l = (uint32_t)bl; memcpy(buf + 4 + al, &l, 4); memcpy(buf + 8 + al, b, bl); }
+    int r = host_call(op, buf, (int)total);
+    free(buf);
+    if (r < 0) return NULL;
+    char *out = malloc((size_t)r + 1);
+    if (!out) return NULL;
+    host_result(out);
+    out[r] = 0;
+    *n = (size_t)r;
+    return out;
+}
+
+static char *module_normalize(JSContext *c, const char *base, const char *name, void *opaque) {
+    (void)opaque;
+    size_t n;
+    char *r = host_text(OP_MODULE_RESOLVE, base, strlen(base), name, strlen(name), &n);
+    if (!r) { JS_ThrowReferenceError(c, "could not resolve module '%s'", name); return NULL; }
+    char *out = js_malloc(c, n + 1);
+    if (out) memcpy(out, r, n + 1);
+    free(r);
+    return out;
+}
+
+static JSModuleDef *module_load(JSContext *c, const char *name, void *opaque) {
+    (void)opaque;
+    size_t n = 0;
+    char *src = host_text(OP_MODULE_SOURCE, name, strlen(name), NULL, 0, &n);
+    if (!src) {
+        if (!discovering) { JS_ThrowReferenceError(c, "could not load module '%s'", name); return NULL; }
+        missed++;
+        src = calloc(1, 1);
+        if (!src) return NULL;
+    }
+    JSValue f = JS_Eval(c, src, n, name, JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
+    free(src);
+    if (JS_IsException(f)) return NULL;
+    JSModuleDef *m = JS_VALUE_GET_PTR(f);
+    JSValue meta = JS_GetImportMeta(c, m);
+    if (!JS_IsException(meta)) JS_DefinePropertyValueStr(c, meta, "url", JS_NewString(c, name), JS_PROP_C_W_E);
+    JS_FreeValue(c, meta);
+    JS_FreeValue(c, f);
+    return m;
+}
+
+// ---- Dynamic import() ----
+// import() may name a module (or a graph) the host has not fetched. Such an import is
+// held here; the host fetches what it noted and calls sx_modules_ready, which loads every
+// held import whose graph is now complete and settles its promise.
+extern int (*js_dynamic_import_hook)(JSContext *, const char *, const char *, JSValueConst *);
+typedef struct Held { JSContext *c; char *base; char *spec; JSValue funcs[2]; struct Held *next; } Held;
+static Held *held;
+static void run_jobs(void);
+
+
+// True when the graph `spec` names (from `base`) needs a module the host lacks; the host
+// notes each one. Finds them as sx_module does, in a throwaway context.
+static int graph_missing(const char *base, const char *spec) {
+    size_t n;
+    char *url = host_text(OP_MODULE_RESOLVE, base, strlen(base), spec, strlen(spec), &n);
+    if (!url) return 0;
+    // `import "url";` with the url as a JS string.
+    char *src = malloc(2 * n + 16);
+    if (!src) { free(url); return 0; }
+    char *p = src;
+    memcpy(p, "import \"", 8); p += 8;
+    for (size_t i = 0; i < n; i++) { if (url[i] == '"' || url[i] == '\\') *p++ = '\\'; *p++ = url[i] == '\n' ? ' ' : url[i]; }
+    memcpy(p, "\";", 3); p += 2;
+    free(url);
+    JSContext *t = JS_NewContext(rt);
+    int found = 0;
+    if (t) {
+        discovering = 1; missed = 0;
+        JSValue f = JS_Eval(t, src, (size_t)(p - src), base, JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
+        if (!JS_IsException(f)) JS_ResolveModule(t, f);
+        JS_FreeValue(t, JS_GetException(t));
+        JS_FreeValue(t, f);
+        found = missed;
+        discovering = 0;
+        JS_FreeContext(t);
+    }
+    free(src);
+    return found;
+}
+
+static int hold_import(JSContext *c, const char *base, const char *spec, JSValueConst *funcs) {
+    if (discovering || !graph_missing(base, spec)) return 0;
+    Held *h = malloc(sizeof *h);
+    char *b = strdup(base), *s = strdup(spec);
+    if (!h || !b || !s) { free(h); free(b); free(s); return 0; }
+    h->c = c; h->base = b; h->spec = s;
+    h->funcs[0] = JS_DupValue(c, funcs[0]); h->funcs[1] = JS_DupValue(c, funcs[1]);
+    h->next = held; held = h;
+    return 1;
+}
+
+// Loads the held imports whose graphs are complete. Returns how many are still held.
+EXPORT("sx_modules_ready") int sx_modules_ready(int budget_ms) {
+    deadline_ns = budget_ms > 0 ? now_ns() + (int64_t)budget_ms * 1000000 : 0;
+    Held *list = held, *keep = NULL;
+    held = NULL;
+    int left = 0;
+    while (list) {
+        Held *h = list; list = h->next;
+        if (graph_missing(h->base, h->spec)) { h->next = keep; keep = h; left++; continue; }
+        JSValue promise = JS_LoadModule(h->c, h->base, h->spec);
+        if (JS_IsException(promise)) {
+            JSValue e = JS_GetException(h->c);
+            JS_FreeValue(h->c, JS_Call(h->c, h->funcs[1], JS_UNDEFINED, 1, &e));
+            JS_FreeValue(h->c, e);
+        } else {
+            JSValue then = JS_GetPropertyStr(h->c, promise, "then");
+            JS_FreeValue(h->c, JS_Call(h->c, then, promise, 2, h->funcs));
+            JS_FreeValue(h->c, then);
+        }
+        JS_FreeValue(h->c, promise);
+        JS_FreeValue(h->c, h->funcs[0]); JS_FreeValue(h->c, h->funcs[1]);
+        free(h->base); free(h->spec); free(h);
+    }
+    // Imports held meanwhile (by the modules just run) join the ones still waiting.
+    while (keep) { Held *h = keep; keep = h->next; h->next = held; held = h; }
+    run_jobs();
+    left = 0;
+    for (Held *h = held; h; h = h->next) left++;
+    deadline_ns = 0;
+    return left;
+}
+
 EXPORT("sx_init") int sx_init(int memory_limit) {
     rt = JS_NewRuntime();
     if (!rt) return -1;
     if (memory_limit > 0) JS_SetMemoryLimit(rt, (size_t)memory_limit);
     JS_SetMaxStackSize(rt, 256 * 1024);
     JS_SetInterruptHandler(rt, interrupt, NULL);
+    JS_SetModuleLoaderFunc(rt, module_normalize, module_load, NULL);
+    js_dynamic_import_hook = hold_import;
     ctx = JS_NewContext(rt);
     if (!ctx) return -1;
     JSValue global = JS_GetGlobalObject(ctx);
@@ -136,6 +284,53 @@ EXPORT("sx_eval") int sx_eval(const char *src, int len, const char *name, int na
     int ok = 0;
     if (JS_IsException(v)) { report(); ok = -1; }
     JS_FreeValue(ctx, v);
+    run_jobs();
+    deadline_ns = 0;
+    return ok;
+}
+
+// A module script: `discover` 1 only finds the modules it needs that the host lacks
+// (the host notes them as module_load asks), in a throwaway context, running nothing;
+// 0 runs it. `name` is its address, the base for its imports. 0 on success, -1 after
+// reporting an exception (or, discovering, on any failure).
+EXPORT("sx_module") int sx_module(const char *src, int len, const char *name, int name_len, int budget_ms, int discover) {
+    char *file = malloc((size_t)name_len + 1);
+    char *code = malloc((size_t)len + 1);
+    if (!file || !code) { free(file); free(code); return -1; }
+    memcpy(file, name, (size_t)name_len); file[name_len] = 0;
+    memcpy(code, src, (size_t)len); code[len] = 0;
+    deadline_ns = budget_ms > 0 ? now_ns() + (int64_t)budget_ms * 1000000 : 0;
+    int ok = 0;
+    if (discover) {
+        JSContext *t = JS_NewContext(rt);
+        if (!t) ok = -1;
+        else {
+            discovering = 1;
+            JSValue f = JS_Eval(t, code, (size_t)len, file, JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
+            if (JS_IsException(f) || JS_ResolveModule(t, f) < 0) {
+                ok = -1;
+                JS_FreeValue(t, JS_GetException(t));
+            }
+            JS_FreeValue(t, f);
+            discovering = 0;
+            JS_FreeContext(t);
+        }
+    } else {
+        JSValue v = JS_Eval(ctx, code, (size_t)len, file, JS_EVAL_TYPE_MODULE);
+        if (JS_IsException(v)) { report(); ok = -1; }
+        else {
+            run_jobs();
+            // A module's evaluation is a promise; a rejection is the module's error.
+            if (JS_IsPromise(v) && JS_PromiseState(ctx, v) == JS_PROMISE_REJECTED) {
+                JS_Throw(ctx, JS_PromiseResult(ctx, v));
+                report();
+                ok = -1;
+            }
+        }
+        JS_FreeValue(ctx, v);
+    }
+    free(file);
+    free(code);
     run_jobs();
     deadline_ns = 0;
     return ok;

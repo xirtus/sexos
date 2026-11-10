@@ -49,7 +49,9 @@ const SOURCE_MAX: usize = 4 << 20;
 const MAX_SHEETS: usize = 8;
 const MAX_IMAGES: usize = 24;
 const MAX_REDIRECTS: usize = 6;
-const MAX_SCRIPTS: usize = 32;
+const MAX_SCRIPTS: usize = 64;
+/// Most ES modules one page may load.
+const MAX_MODULES: usize = 256;
 /// Largest body a script's `fetch` may load (a game's data file, say).
 const FETCH_MAX: usize = 32 << 20;
 /// How often a running CSS animation is drawn (about 30 a second).
@@ -103,6 +105,9 @@ impl Doc {
     fn script(&mut self) -> Option<&mut Script<Document>> { match self { Doc::Scripted(s) => Some(s), _ => None } }
 }
 
+/// One script of a page, ready to run.
+struct PageScript { source: String, name: String, module: bool }
+
 struct Browser {
     window: Window,
     fonts: Fonts,
@@ -135,6 +140,8 @@ struct Browser {
     hover_css: bool,
     /// A form's POST body for the next page `open` loads.
     post: Option<String>,
+    /// The import map of the page being loaded, until its scripts start.
+    import_map: Vec<(String, String)>,
     /// The scroll offset the page script last heard (`window.scrollY`).
     script_scroll: i32,
 }
@@ -360,42 +367,54 @@ impl Browser {
         self.scroll_to(frag);
     }
 
-    /// The page's classic scripts in document order: inline text, or fetched from `src`.
+    /// The page's scripts in the order they run: classic scripts as they appear, then
+    /// deferred ones (`defer` and modules) in document order. Inline text, or fetched
+    /// from `src`. Classic scripts marked `nomodule` are skipped, as module browsers do.
     #[inline(never)]
-    fn scripts(&mut self, dom: &sex_html::dom::Dom, base: &str) -> Vec<(String, String)> {
-        let mut out = Vec::new();
+    fn scripts(&mut self, dom: &sex_html::dom::Dom, base: &str) -> Vec<PageScript> {
+        let mut now = Vec::new();
+        let mut later = Vec::new();
         for n in dom.descendants(sex_html::dom::Dom::ROOT) {
-            if out.len() >= MAX_SCRIPTS { break; }
+            if now.len() + later.len() >= MAX_SCRIPTS { break; }
             if dom.tag(n) != Some("script") { continue; }
             let ty = dom.attr(n, "type").unwrap_or("").trim().to_ascii_lowercase();
-            if !(ty.is_empty() || ty.contains("javascript") || ty == "module" || ty.contains("ecmascript")) { continue; }
-            match dom.attr(n, "src") {
+            let module = ty == "module";
+            if ty == "importmap" { self.import_map.extend(sex_js::document::import_map(base, &dom.text_content(n))); continue; }
+            if !(ty.is_empty() || ty.contains("javascript") || module || ty.contains("ecmascript")) { continue; }
+            if !module && dom.attr(n, "nomodule").is_some() { continue; }
+            let deferred = module || (dom.attr(n, "defer").is_some() && dom.attr(n, "src").is_some());
+            let got = match dom.attr(n, "src") {
                 // A built-in page's scripts are built in too.
-                Some(src) if base.starts_with("about:") => {
-                    if let Some(code) = built_in(&alloc::format!("about:{}", src.trim_start_matches("./"))) { out.push((String::from(code), alloc::format!("about:{}", src))); }
-                }
+                Some(src) if base.starts_with("about:") => built_in(&alloc::format!("about:{}", src.trim_start_matches("./"))).map(|code| (String::from(code), alloc::format!("about:{}", src))),
                 Some(src) if base.starts_with('@') => {
                     let Some(path) = local_path(base, src) else { continue };
                     self.buf.resize(SOURCE_MAX, 0);
-                    if let Ok(n) = files::read(&mut self.window, path.as_bytes(), &mut self.buf) { out.push((text_of(&self.buf[..n]), alloc::format!("@{}", path))); }
+                    let r = files::read(&mut self.window, path.as_bytes(), &mut self.buf).ok().map(|n| (text_of(&self.buf[..n]), alloc::format!("@{}", path)));
                     self.buf = Vec::new();
+                    r
                 }
                 Some(src) => {
                     let Some(abs) = sex_html::url::resolve(base, src) else { continue };
                     if !abs.starts_with("http") { continue; }
                     self.status = Some("Loading scripts…");
-                    if let Ok((_, body)) = self.fetch(&abs) { out.push((text_of(&self.buf[body]), abs)); }
+                    let r = self.fetch(&abs).ok().map(|(url, body)| (text_of(&self.buf[body]), url));
                     self.buf = Vec::new();
+                    r
                 }
-                None => out.push((dom.text_content(n), alloc::format!("{}#script{}", base, out.len() + 1))),
-            }
+                None => Some((dom.text_content(n), alloc::format!("{}#script{}", base.split('#').next().unwrap_or(base), now.len() + later.len() + 1))),
+            };
+            let Some((source, name)) = got else { continue };
+            let s = PageScript { source, name, module };
+            if deferred { later.push(s) } else { now.push(s) }
         }
-        out
+        now.extend(later);
+        now
     }
 
     #[inline(never)]
-    fn run_scripts(&mut self, scripts: Vec<(String, String)>) {
-        let Doc::Plain(doc) = core::mem::replace(&mut self.doc, Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", (W, H - BAR), clock))) else { return };
+    fn run_scripts(&mut self, scripts: Vec<PageScript>) {
+        let Doc::Plain(mut doc) = core::mem::replace(&mut self.doc, Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", (W, H - BAR), clock))) else { return };
+        doc.import_map = core::mem::take(&mut self.import_map);
         let started = sex_pdx::get_ticks();
         let mut script = match Script::new(doc, sex_js::Limits::default()) {
             Ok(s) => s,
@@ -405,14 +424,39 @@ impl Browser {
             }
         };
         sex_pdx::serial_record!("[web.script] engine_ticks={} memory={}", sex_pdx::get_ticks() - started, script.memory_bytes());
-        for (source, name) in scripts.iter() {
-            let r = script.eval(source, name);
+        for s in scripts.iter() {
+            let r = if s.module {
+                self.load_modules(&mut script, s);
+                script.eval_module(&s.source, &s.name)
+            } else {
+                script.eval(&s.source, &s.name)
+            };
             if let Err(sex_js::Error::Trapped(why)) = &r { sex_pdx::serial_record!("[web.script] trapped={}", why); break; }
         }
         let _ = script.dispatch("ready");
         self.script_scroll = 0;
         self.doc = Doc::Scripted(alloc::boxed::Box::new(script));
         self.after_script(false);
+    }
+
+    /// Fetches every module a module script imports, a level of the graph at a time,
+    /// until the engine is missing none (or `MAX_MODULES` are loaded). One that will not
+    /// load is left out; importing it is then the script's error.
+    #[inline(never)]
+    fn load_modules(&mut self, script: &mut Script<Document>, s: &PageScript) {
+        for _ in 0..MAX_MODULES {
+            let Ok(need) = script.module_needs(&s.source, &s.name) else { return };
+            if need.is_empty() { return; }
+            for url in need {
+                if script.page().modules.len() >= MAX_MODULES { return; }
+                self.status = Some("Loading scripts…");
+                let body = if url.starts_with("http") { self.fetch(&url).ok().map(|(_, b)| text_of(&self.buf[b])) } else { None };
+                self.buf = Vec::new();
+                sex_pdx::serial_record!("[web.module] ok={} bytes={} url={}", body.is_some() as u8, body.as_ref().map_or(0, |b| b.len()), url);
+                // A failed one is still recorded, so it is not asked for again.
+                script.page_mut().modules.insert(url, body.unwrap_or_default());
+            }
+        }
     }
 
     /// After any script ran: print its console, take a navigation, and lay out again
@@ -429,7 +473,7 @@ impl Browser {
             return true;
         }
         // Fetches are served on the next tick, once this script has returned.
-        if !doc.fetches.is_empty() && matches!(self.doc, Doc::Scripted(_)) { self.timer = Some(sex_pdx::get_ticks()); }
+        if (!doc.fetches.is_empty() || !doc.modules_wanted.is_empty()) && matches!(self.doc, Doc::Scripted(_)) { self.timer = Some(sex_pdx::get_ticks()); }
         let doc = self.doc.get();
         let queue = core::mem::take(&mut doc.canvas_queue);
         let dirty = core::mem::take(&mut doc.dirty);
@@ -485,6 +529,7 @@ impl Browser {
     /// Runs due timers and animation frames.
     #[inline(never)]
     fn tick(&mut self) {
+        self.serve_imports();
         self.serve_fetches();
         self.sync_scroll();
         if self.animating {
@@ -498,6 +543,31 @@ impl Browser {
         self.next_frame();
         if let Err(sex_js::Error::Trapped(why)) = next { sex_pdx::serial_record!("[web.script] trapped={}", why); self.doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", (W, H - BAR), clock)); }
         self.after_script(true);
+    }
+
+    /// Loads the modules that `import()` calls wait for (and what those import), then
+    /// lets the imports go on. A module that can't be loaded is empty, so its import fails.
+    #[inline(never)]
+    fn serve_imports(&mut self) {
+        for _ in 0..MAX_MODULES {
+            let Doc::Scripted(s) = &mut self.doc else { return };
+            let wanted = s.modules_wanted();
+            if wanted.is_empty() { return; }
+            for url in wanted {
+                let full = matches!(&self.doc, Doc::Scripted(s) if s.page().modules.len() >= MAX_MODULES);
+                let body = if url.starts_with("http") && !full { self.fetch(&url).ok().map(|(_, b)| text_of(&self.buf[b])) } else { None };
+                self.buf = Vec::new();
+                sex_pdx::serial_record!("[web.module] import=1 ok={} bytes={} url={}", body.is_some() as u8, body.as_ref().map_or(0, |b| b.len()), url);
+                let Doc::Scripted(s) = &mut self.doc else { return };
+                s.page_mut().modules.insert(url, body.unwrap_or_default());
+            }
+            let Doc::Scripted(s) = &mut self.doc else { return };
+            if let Err(sex_js::Error::Trapped(why)) = s.modules_ready() {
+                sex_pdx::serial_record!("[web.script] trapped={}", why);
+                self.doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", (W, H - BAR), clock));
+                return;
+            }
+        }
     }
 
     /// Loads what the page's scripts asked `fetch` and XHR for, and tells each script.
@@ -808,7 +878,7 @@ pub extern "C" fn _start() -> ! {
     let Some(fonts) = Fonts::new() else { window.show(b"Web: the fonts could not be loaded."); loop { if let Event::Close = window.next() { window.close() } } };
     let page = sex_html::render("", W, H, &fonts as &dyn Host);
     let doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", (W, H - BAR), clock));
-    let mut b = Browser { window, fonts, page, doc, sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None };
+    let mut b = Browser { window, fonts, page, doc, sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None, import_map: Vec::new() };
     // Big WebGL draws spread over the cores, a band of rows each.
     let cores = sex_app::thread::cores();
     sex_gl::set_parallel(sex_app::thread::parallel, cores);

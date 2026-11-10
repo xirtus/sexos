@@ -44,6 +44,12 @@ pub struct Document {
     pub cookies: Option<alloc::rc::Rc<core::cell::RefCell<sex_fetch::Jar>>>,
     /// Seconds since 1970, for cookie expiry.
     pub wall: fn() -> u64,
+    /// Loaded ES module sources by address, for `import`.
+    pub modules: alloc::collections::BTreeMap<String, String>,
+    /// Module addresses asked for and not in `modules`.
+    pub modules_wanted: Vec<String>,
+    /// The page's import map: (bare specifier, or a prefix ending in `/`, address).
+    pub import_map: Vec<(String, String)>,
 }
 
 /// One request a script made with `fetch` or `XMLHttpRequest`.
@@ -90,7 +96,7 @@ fn rough_measure(font: &str, text: &str) -> i32 {
 
 impl Document {
     pub fn new(dom: Dom, url: &str, viewport: (i32, i32), clock: fn() -> u64) -> Self {
-        Self { dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, navigate_post: None, rects: Vec::new(), layers: Vec::new(), clock, canvas_queue: Vec::new(), measure: rough_measure, gl: Default::default(), pictures: Vec::new(), fetches: Vec::new(), bodies: Vec::new(), heads: Vec::new(), next_fetch: 0, cookies: None, wall: || 0 }
+        Self { dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, navigate_post: None, rects: Vec::new(), layers: Vec::new(), clock, canvas_queue: Vec::new(), measure: rough_measure, gl: Default::default(), pictures: Vec::new(), fetches: Vec::new(), bodies: Vec::new(), heads: Vec::new(), next_fetch: 0, cookies: None, wall: || 0, modules: Default::default(), modules_wanted: Vec::new(), import_map: Vec::new() }
     }
 
     /// Takes each element's laid-out box from the browser's layout, for
@@ -142,8 +148,22 @@ fn valid_name(name: &str) -> bool {
     !name.is_empty() && name.len() <= 64 && name.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b':' | b'.'))
 }
 
+/// Where an `import` specifier points from module `base`: the import map's entry
+/// (exact, or the longest matching prefix ending in `/`) first; then relative and
+/// absolute addresses resolve against `base`; another bare name (`lit`) is left as it is.
+pub fn resolve_module(map: &[(String, String)], base: &str, spec: &str) -> String {
+    if let Some((_, to)) = map.iter().find(|(k, _)| k == spec) { return to.clone(); }
+    if let Some((k, to)) = map.iter().filter(|(k, _)| k.ends_with('/') && spec.starts_with(k.as_str())).max_by_key(|(k, _)| k.len()) {
+        return format!("{}{}", to, &spec[k.len()..]);
+    }
+    let relative = spec.starts_with("./") || spec.starts_with("../") || spec.starts_with('/');
+    if !relative && !spec.contains("://") { return String::from(spec); }
+    sex_html::url::resolve(base, spec).unwrap_or_else(|| String::from(spec))
+}
+
 impl Page for Document {
     fn now_ns(&mut self) -> u64 { (self.clock)() }
+    fn take_wanted_modules(&mut self) -> Vec<String> { core::mem::take(&mut self.modules_wanted) }
 
     fn call_bytes(&mut self, operation: u32, a: &[&[u8]]) -> Option<Vec<u8>> {
         let text = |i: usize| a.get(i).and_then(|b| core::str::from_utf8(b).ok()).unwrap_or("");
@@ -318,6 +338,18 @@ impl Page for Document {
                     None => Some(self.dom.control_value(n)),
                 }
             }
+            op::MODULE_RESOLVE => Some(resolve_module(&self.import_map, strip_fragment(a.first()?), a.get(1)?)),
+            op::MODULE_SOURCE => {
+                // The fragment names nothing to fetch: x.js#a and x.js share one source.
+                let url = &strip_fragment(a.first()?);
+                match self.modules.get(*url) {
+                    Some(src) => Some(src.clone()),
+                    None => {
+                        if !self.modules_wanted.iter().any(|w| w == url) { self.modules_wanted.push(String::from(*url)); }
+                        None
+                    }
+                }
+            }
             op::CARET => {
                 let caret = match a.first().filter(|s| !s.is_empty()) {
                     Some(_) => Some((self.element(a.first())?, a.get(1).and_then(|p| p.parse().ok()).unwrap_or(0))),
@@ -354,4 +386,39 @@ fn floor(s: &str, max: usize) -> usize {
 }
 
 /// An address without its `#fragment`.
+/// The `imports` of an import map (`<script type="importmap">`), addresses resolved
+/// against the page: (specifier or prefix ending in `/`, address).
+pub fn import_map(base: &str, json: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let Some(at) = json.find("\"imports\"") else { return out };
+    let rest = &json[at + 9..];
+    let Some(open) = rest.find('{') else { return out };
+    let mut chars = rest[open + 1..].chars().peekable();
+    // Reads one JSON string, after its opening quote.
+    fn string(chars: &mut core::iter::Peekable<core::str::Chars>) -> Option<String> {
+        let mut s = String::new();
+        loop {
+            match chars.next()? {
+                '"' => return Some(s),
+                '\\' => { let c = chars.next()?; s.push(match c { 'n' => '\n', 't' => '\t', other => other }); }
+                c => s.push(c),
+            }
+        }
+    }
+    loop {
+        while chars.peek().is_some_and(|c| c.is_whitespace() || *c == ',') { chars.next(); }
+        match chars.next() {
+            Some('"') => {}
+            _ => break,
+        }
+        let Some(key) = string(&mut chars) else { break };
+        while chars.peek().is_some_and(|c| c.is_whitespace() || *c == ':') { chars.next(); }
+        if chars.next() != Some('"') { break; }
+        let Some(value) = string(&mut chars) else { break };
+        let url = sex_html::url::resolve(base, &value).unwrap_or(value);
+        out.push((key, url));
+    }
+    out
+}
+
 pub(crate) fn strip_fragment(url: &str) -> &str { url.split('#').next().unwrap_or("") }

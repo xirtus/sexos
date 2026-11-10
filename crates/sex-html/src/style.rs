@@ -447,6 +447,12 @@ pub fn compute(dom: &Dom, cascade: &Cascade, node: NodeId, parent: &Style, root_
     // font-size first: other `em` lengths depend on it.
     for d in &ordered { if d.name == "font-size" || d.name == "font" { apply(&mut style, d, &ctx, true); } }
     for d in &ordered { apply(&mut style, d, &ctx, false); }
+    // `background-clip: text` paints the background only through the letters: the text
+    // takes the background's colour (a gradient's first stop) and the box none.
+    if style.background >> 24 != 0 && ordered.iter().rev().find(|d| d.name == "background-clip" || d.name == "-webkit-background-clip").is_some_and(|d| d.value.trim().eq_ignore_ascii_case("text")) {
+        if style.color >> 24 == 0 { style.color = style.background; }
+        style.background = 0;
+    }
     style.transitions = resolve_transitions(&style.transition_lists);
     if style.animation.is_some() || !style.transitions.is_empty() || cascade.has_transitions {
         let own = style.clone();
@@ -1352,6 +1358,8 @@ fn font_shorthand(s: &mut Style, v: &str, ctx: &Ctx) {
     for (i, w) in ws.iter().enumerate() {
         if w.starts_with(|c: char| c.is_ascii_digit() || c == '.') || matches!(*w, "small" | "medium" | "large" | "x-large" | "xx-large" | "x-small" | "smaller" | "larger") {
             let (size, lh) = w.split_once('/').unwrap_or((w, ""));
+            // A bare number is a weight (`font: 400 18px/1.5 Lato`), never a size.
+            if size != "0" && size.bytes().all(|c| c.is_ascii_digit() || c == b'.') { continue; }
             if let Some(px) = font_size(size, s, ctx) {
                 s.font_size = px;
                 if !lh.is_empty() {
