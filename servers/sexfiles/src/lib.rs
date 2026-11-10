@@ -16,6 +16,7 @@ mod document;
 mod document_journal;
 pub mod history_journal;
 pub mod history_disk;
+pub mod crash_keeper;
 pub mod messages;
 pub mod trampoline;
 pub mod backends;

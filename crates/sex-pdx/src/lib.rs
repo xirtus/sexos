@@ -565,6 +565,19 @@ pub fn device_window(slot:u64)->Result<(u64,u64),u64> {
     Ok((offset,length))
 }
 
+/// The held device's PCI subsystem vendor and device ids.
+pub fn device_subsystem(slot:u64)->Result<(u16,u16),u64> {
+    let(status,vendor,device,reserved0,reserved1):(u64,u64,u64,u64,u64);
+    unsafe { core::arch::asm!("syscall",
+        inlateout("rax") pci_command::SYS_IDENTITY=>status,in("rdi")slot,
+        inlateout("rsi")pci_command::QUERY_SUBSYSTEM=>vendor,inlateout("rdx")0u64=>device,
+        inlateout("r10")0u64=>reserved0,inlateout("r8")0u64=>reserved1,
+        out("rcx")_,out("r11")_,options(nostack)); }
+    if status!=0 { return Err(status) }
+    if reserved0|reserved1!=0 || vendor>u16::MAX as u64 || device>u16::MAX as u64 {return Err(pci_command::IO)}
+    Ok((vendor as u16,device as u16))
+}
+
 /// Checked immutable BOOT data through this subject's held NIC lease.
 pub fn device_network_config(slot:u64)->Result<network_config::Config,u64>{
     let(status,a,b,c,d):(u64,u64,u64,u64,u64);
@@ -1227,6 +1240,7 @@ pub mod document;
 pub mod document_buffer;
 pub mod document_snapshot;
 pub mod pci_command;
+pub mod dma_lend;
 pub mod virtio;
 pub mod device;
 pub mod network_config;
@@ -1243,6 +1257,7 @@ pub mod display_frames;
 pub mod text_batch;
 pub mod text_region;
 pub mod program_store;
+pub mod crash_log;
 pub mod program_memory;
 pub mod program_code;
 pub mod power;

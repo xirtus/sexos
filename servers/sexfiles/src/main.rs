@@ -23,6 +23,7 @@ mod document;
 mod document_journal;
 mod history_journal;
 mod history_disk;
+mod crash_keeper;
 
 use crate::trampoline::trampoline_main;
 

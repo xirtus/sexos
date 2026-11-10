@@ -117,6 +117,15 @@ run_stage() {
       dst="$(rg -n '^dst\s*=\s*"[^"]+"' "$stage" | sed -E 's/.*"([^"]+)".*/\1/')"
       cp "$src" "$dst"
       ;;
+    wifi_firmware)
+      # Intel Wi-Fi firmware files as one pack BOOT gives the network service. The
+      # fetch (pinned, SHA-256 checked) skips files already present and complete, so
+      # an earlier offline or interrupted build is completed; offline builds pack what
+      # they have and a chip without its file says "firmware missing" in the boot log.
+      bash scripts/fetch_wifi_firmware.sh target/wifi-firmware \
+        || echo "[wifi.firmware] note: fetch incomplete; the pack holds only the files present"
+      python3 scripts/make_wifi_firmware_pack.py --out iso_root/firmware/wifi.pack
+      ;;
     boot_image)
       # The disk image `install` writes, built from this ISO's own files.
       python3 scripts/make_boot_image.py --root iso_root --out iso_root/boot.img

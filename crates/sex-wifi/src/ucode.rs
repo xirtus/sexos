@@ -25,6 +25,24 @@ const TLV_CMD_VERSIONS: u32 = 48;
 const TLV_IML: u32 = 52;
 const TLV_UMAC_DEBUG_ADDRS: u32 = 54;
 const TLV_LMAC_DEBUG_ADDRS: u32 = 55;
+const TLV_HW_TYPE: u32 = 58;
+const TLV_PNVM_VERSION: u32 = 62;
+const TLV_PNVM_SKU: u32 = 64;
+const TLV_PNVM_DATA: u32 = 74;
+/// A deprecated separator some PNVM files still carry as a section.
+const PNVM_SEPARATOR: u32 = 0xdddd_eeee;
+pub const MAX_PNVM_SECTIONS: usize = 64;
+
+/// Capability and API bits the init sequence looks at (iwx(4) names).
+pub const CAPA_LAR_SUPPORT: usize = 1;
+pub const CAPA_DQA_SUPPORT: usize = 12;
+pub const CAPA_LAR_MULTI_MCC: usize = 29;
+pub const CAPA_FRAGMENTED_PNVM_IMG: usize = 32;
+pub const CAPA_CT_KILL_BY_FW: usize = 74;
+pub const CAPA_MCC_UPDATE_11AX_SUPPORT: usize = 89;
+pub const API_WIFI_MCC_UPDATE: usize = 9;
+pub const API_REGULATORY_NVM_INFO: usize = 48;
+pub const API_REDUCED_SCAN_CONFIG: usize = 56;
 const MAX_SCAN_CHANNELS: u32 = 67;
 const FW_ADDR_CACHE_CONTROL: u32 = 0xc000_0000;
 
@@ -51,6 +69,8 @@ pub struct Firmware<'a> {
     pub capa_bits: [u32; 5],
     /// Image loader (AX210 family).
     pub iml: Option<&'a [u8]>,
+    /// Platform NVM shipped inside the firmware file (preferred over the .pnvm file).
+    pub pnvm: Option<&'a [u8]>,
     pub cmd_versions: &'a [u8],
     pub umac_error_table: Option<u32>,
     pub lmac_error_table: Option<u32>,
@@ -72,7 +92,7 @@ impl<'a> Firmware<'a> {
             // Newer files put just the API number in the header word.
             major: ver >> 24, minor: (ver >> 16) & 0xff, api: if ver >> 8 == 0 { ver } else { (ver >> 8) & 0xff },
             flags: 0, phy_config: 0, probe_max_len: 0, scan_channels: 40,
-            api_bits: [0; 4], capa_bits: [0; 5], iml: None, cmd_versions: &[],
+            api_bits: [0; 4], capa_bits: [0; 5], iml: None, pnvm: None, cmd_versions: &[],
             umac_error_table: None, lmac_error_table: None,
             sections: [Section { device_offset: 0, data: &[] }; MAX_SECTIONS], count: 0,
         };
@@ -114,6 +134,7 @@ impl<'a> Firmware<'a> {
                     fw.major = u32_at(data, 0); fw.minor = u32_at(data, 4); // third word: local build, not the API
                 }
                 TLV_IML => fw.iml = Some(data),
+                TLV_PNVM_DATA => if fw.pnvm.is_none() { fw.pnvm = Some(data) },
                 TLV_CMD_VERSIONS => fw.cmd_versions = &data[..len - len % 4],
                 TLV_UMAC_DEBUG_ADDRS if len >= 4 => fw.umac_error_table = Some(u32_at(data, 0) & !FW_ADDR_CACHE_CONTROL),
                 TLV_LMAC_DEBUG_ADDRS if len >= 4 => fw.lmac_error_table = Some(u32_at(data, 0) & !FW_ADDR_CACHE_CONTROL),
@@ -163,7 +184,6 @@ impl Image<'_, '_> {
 /// Platform NVM files (*.pnvm) are TLV lists too; the driver passes the whole
 /// SKU-matching chunk to the firmware. This finds the chunk for a SKU id.
 pub fn pnvm_for_sku<'a>(file: &'a [u8], sku: [u32; 3]) -> Option<&'a [u8]> {
-    const TLV_PNVM_SKU: u32 = 64;
     let mut rest = file;
     while rest.len() >= 8 {
         let kind = u32_at(rest, 0);
@@ -190,4 +210,63 @@ pub fn pnvm_for_sku<'a>(file: &'a [u8], sku: [u32; 3]) -> Option<&'a [u8]> {
         rest = &rest[step..];
     }
     None
+}
+
+/// The sections of one SKU's PNVM chunk that the firmware loads, when the chunk
+/// is for this chip (`mac_type` = HW_REV bits 4-15, `rf_type` = RF_ID bits 12-23).
+#[derive(Clone, Copy, Debug)]
+pub struct PnvmImage<'a> { pub sections: [&'a [u8]; MAX_PNVM_SECTIONS], pub count: usize, pub bytes: usize, pub version: u32 }
+impl<'a> PnvmImage<'a> {
+    pub fn sections(&self) -> &[&'a [u8]] { &self.sections[..self.count] }
+}
+
+/// Picks the PNVM image for this SKU and radio: like `iwx_pnvm_parse`, every
+/// chunk whose SKU matches is tried until one is for this hardware.
+pub fn pnvm_select(file: &[u8], sku: [u32; 3], mac_type: u16, rf_type: u16) -> Option<PnvmImage<'_>> {
+    let mut rest = file;
+    while rest.len() >= 8 {
+        let kind = u32_at(rest, 0);
+        let len = u32_at(rest, 4) as usize;
+        let step = 8 + ((len + 3) & !3);
+        if rest.len() - 8 < len || step > rest.len() { return None; }
+        if kind == TLV_PNVM_SKU && len >= 12 && [u32_at(rest, 8), u32_at(rest, 12), u32_at(rest, 16)] == sku {
+            if let Some(img) = pnvm_image(&rest[step..], mac_type, rf_type) { return Some(img); }
+        }
+        rest = &rest[step..];
+    }
+    None
+}
+
+pub fn pnvm_image(chunk: &[u8], mac_type: u16, rf_type: u16) -> Option<PnvmImage<'_>> {
+    let mut img = PnvmImage { sections: [&[]; MAX_PNVM_SECTIONS], count: 0, bytes: 0, version: 0 };
+    let mut matched = false;
+    let mut rest = chunk;
+    while rest.len() >= 8 {
+        let kind = u32_at(rest, 0);
+        let len = u32_at(rest, 4) as usize;
+        if rest.len() - 8 < len { return None; }
+        let data = &rest[8..8 + len];
+        match kind {
+            TLV_PNVM_VERSION if len >= 4 => img.version = u32_at(data, 0),
+            TLV_HW_TYPE if len >= 4 && !matched => {
+                let mac = u16::from_le_bytes([data[0], data[1]]);
+                let rf = u16::from_le_bytes([data[2], data[3]]);
+                matched = mac == mac_type && rf == rf_type;
+            }
+            TLV_SEC_RT if len >= 4 => {
+                if u32_at(data, 0) != PNVM_SEPARATOR {
+                    if img.count >= MAX_PNVM_SECTIONS { return None; }
+                    img.sections[img.count] = &data[4..];
+                    img.count += 1;
+                    img.bytes += len - 4;
+                }
+            }
+            TLV_PNVM_SKU => break,
+            _ => {}
+        }
+        let step = 8 + ((len + 3) & !3);
+        if step > rest.len() { break; }
+        rest = &rest[step..];
+    }
+    (matched && img.bytes > 0).then_some(img)
 }
