@@ -2,18 +2,23 @@
 //! Authentic kernel exit hints have a separate slot per BOOT lifecycle entry;
 //! they drain first, but authorize nothing until ServiceCustody attests them.
 pub type Message = (u64, u32, u64, u64, u64);
-const EMPTY: Message = (0, 0, 0, 0, 0);
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Stamped {
+    pub message: Message,
+    pub caller_task: u32,
+}
+const EMPTY: Stamped = Stamped { message: (0, 0, 0, 0, 0), caller_task: 0 };
 const REQUESTS: usize = 8;
 const DOCUMENT_CLIENTS: usize = sex_pdx::app_catalog::DOCUMENT_TARGETS.len();
 const TOTAL_REQUESTS: usize = REQUESTS + DOCUMENT_CLIENTS * (sex_pdx::document::WINDOW + 1);
 const EXITS: usize = sex_pdx::app_lifecycle::SLOTS.len();
 pub struct Deferred {
-    requests: [Message; TOTAL_REQUESTS],
+    requests: [Stamped; TOTAL_REQUESTS],
     request_len: usize,
     ordinary_len: usize,
     document_len: [usize; DOCUMENT_CLIENTS],
     cancellation: [bool; DOCUMENT_CLIENTS],
-    exits: [Message; EXITS],
+    exits: [Stamped; EXITS],
     exit_len: usize,
 }
 impl Deferred {
@@ -51,15 +56,22 @@ impl Deferred {
             && r.b == 0)
             .then_some(i)
     }
-    pub fn push(&mut self, m: Message) -> bool {
+    // Legacy test fixtures intentionally have no kernel envelope. Production
+    // callers must use the stamped API so nested waits cannot erase identity.
+    #[cfg(test)]
+    pub fn push(&mut self, message: Message) -> bool {
+        self.push_stamped(Stamped { message, caller_task: 0 })
+    }
+    pub fn push_stamped(&mut self, stamped: Stamped) -> bool {
+        let m = stamped.message;
         if sex_pdx::app_lifecycle::ExitNotice::decode(m.0, m.1 as u64, [m.2, m.3, m.4]).is_ok() {
-            if self.exits[..self.exit_len].contains(&m) {
+            if self.exits[..self.exit_len].contains(&stamped) {
                 return true;
             }
             if self.exit_len == EXITS {
                 return false;
             }
-            self.exits[self.exit_len] = m;
+            self.exits[self.exit_len] = stamped;
             self.exit_len += 1;
             true
         } else {
@@ -67,16 +79,16 @@ impl Deferred {
                 if self.cancellation[i] {
                     let index = self.requests[..self.request_len]
                         .iter()
-                        .position(|&old| Self::cancellation_client(old) == Some(i))
+                        .position(|&old| Self::cancellation_client(old.message) == Some(i))
                         .unwrap();
                     let old = self.requests[index];
-                    if old == m {
+                    if old == stamped {
                         return true;
                     }
                     // Cancellation is idempotent. Retain the latest exact
                     // request at its arrival position, without stealing a data
                     // slot or reordering any remaining messages.
-                    if m.2 & 0xFF_FFFF <= old.2 & 0xFF_FFFF {
+                    if m.2 & 0xFF_FFFF <= old.message.2 & 0xFF_FFFF {
                         return false;
                     }
                     self.requests
@@ -96,12 +108,16 @@ impl Deferred {
                 }
                 self.ordinary_len += 1;
             }
-            self.requests[self.request_len] = m;
+            self.requests[self.request_len] = stamped;
             self.request_len += 1;
             true
         }
     }
+    #[cfg(test)]
     pub fn pop(&mut self) -> Option<Message> {
+        self.pop_stamped().map(|m| m.message)
+    }
+    pub fn pop_stamped(&mut self) -> Option<Stamped> {
         let terminal = self.exit_len != 0;
         let (queue, len) = if terminal {
             (&mut self.exits[..], &mut self.exit_len)
@@ -116,9 +132,9 @@ impl Deferred {
         *len -= 1;
         queue[*len] = EMPTY;
         if !terminal {
-            if let Some(i) = Self::cancellation_client(message) {
+            if let Some(i) = Self::cancellation_client(message.message) {
                 self.cancellation[i] = false;
-            } else if let Some(i) = Self::document_client(message) {
+            } else if let Some(i) = Self::document_client(message.message) {
                 self.document_len[i] -= 1;
             } else {
                 self.ordinary_len -= 1;
