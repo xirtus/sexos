@@ -118,14 +118,16 @@ pub enum State { WaitMessage1, WaitMessage3, Done }
 /// Station-side handshake state. `own_rsn` is the RSN element we sent in the
 /// association request; `ap_rsn` is the one from the AP's beacon or probe
 /// response, which message 3 must repeat exactly (downgrade protection).
-pub struct Supplicant<'a> {
+pub struct Supplicant {
     akm: Akm,
     pmk: [u8; 32],
     aa: [u8; 6],
     spa: [u8; 6],
     snonce: [u8; 32],
-    own_rsn: &'a [u8],
-    ap_rsn: &'a [u8],
+    own_rsn: [u8; RSN_BYTES],
+    own_rsn_len: u8,
+    ap_rsn: [u8; RSN_BYTES],
+    ap_rsn_len: u8,
     ptk: Option<Ptk>,
     replay: Option<u64>,
     /// Keys already handed to the driver. A retransmitted message 3 or group
@@ -137,9 +139,15 @@ pub struct Supplicant<'a> {
     pub state: State,
 }
 
-impl<'a> Supplicant<'a> {
-    pub fn new(akm: Akm, pmk: [u8; 32], aa: [u8; 6], spa: [u8; 6], snonce: [u8; 32], own_rsn: &'a [u8], ap_rsn: &'a [u8]) -> Self {
-        Self { akm, pmk, aa, spa, snonce, own_rsn, ap_rsn, ptk: None, replay: None, installed_tk: None, installed_gtk: None, installed_igtk: None, state: State::WaitMessage1 }
+/// Longest RSN element kept (id, length and body).
+pub const RSN_BYTES: usize = 64;
+
+impl Supplicant {
+    /// The elements are copied (cut at `RSN_BYTES`), so the state can be kept.
+    pub fn new(akm: Akm, pmk: [u8; 32], aa: [u8; 6], spa: [u8; 6], snonce: [u8; 32], own_rsn: &[u8], ap_rsn: &[u8]) -> Self {
+        let keep = |e: &[u8]| { let mut a = [0u8; RSN_BYTES]; let n = e.len().min(RSN_BYTES); a[..n].copy_from_slice(&e[..n]); (a, n as u8) };
+        let ((own_rsn, own_rsn_len), (ap_rsn, ap_rsn_len)) = (keep(own_rsn), keep(ap_rsn));
+        Self { akm, pmk, aa, spa, snonce, own_rsn, own_rsn_len, ap_rsn, ap_rsn_len, ptk: None, replay: None, installed_tk: None, installed_gtk: None, installed_igtk: None, state: State::WaitMessage1 }
     }
     pub fn ptk(&self) -> Option<&Ptk> { self.ptk.as_ref() }
 
@@ -194,7 +202,7 @@ impl<'a> Supplicant<'a> {
             anonce.copy_from_slice(key.nonce);
             let ptk = derive_ptk(self.akm, &self.pmk, &self.aa, &self.spa, &anonce, &self.snonce);
             self.replay = Some(key.replay);
-            let len = build(reply, self.akm, KEY_INFO_PAIRWISE | KEY_INFO_MIC, key.replay, &self.snonce, self.own_rsn, Some(&ptk.kck));
+            let len = build(reply, self.akm, KEY_INFO_PAIRWISE | KEY_INFO_MIC, key.replay, &self.snonce, &self.own_rsn[..self.own_rsn_len as usize], Some(&ptk.kck));
             self.ptk = Some(ptk);
             self.state = State::WaitMessage3;
             return Ok((len, install));
@@ -213,7 +221,7 @@ impl<'a> Supplicant<'a> {
             if self.state == State::WaitMessage1 { return Err(Error::Unexpected); }
             if key.info & KEY_INFO_INSTALL == 0 { return Err(Error::Unexpected); }
             let rsn = find_element(kdes, 48).ok_or(Error::RsnMismatch)?;
-            if rsn != self.ap_rsn { return Err(Error::RsnMismatch); }
+            if rsn != &self.ap_rsn[..self.ap_rsn_len as usize] { return Err(Error::RsnMismatch); }
             let gtk = find_gtk(kdes, key.rsc).ok_or(Error::NoGtk)?;
             install.pairwise = self.fresh_tk(ptk.tk);
             install.group = self.fresh_gtk(gtk);

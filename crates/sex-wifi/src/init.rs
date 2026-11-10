@@ -193,6 +193,14 @@ impl Init {
 
     pub fn done(&self) -> bool { matches!(self.step, Step::Ready | Step::Failed(_)) }
 
+    /// Receive antennas the firmware allows, narrowed by the NVM's mask when it
+    /// has one (`iwx_fw_valid_rx_ant`); scanning and joining both use it.
+    pub fn valid_rx_antennas(&self) -> u8 {
+        let mut rx = self.features.rx_antennas();
+        if let Some(n) = self.nvm { if n.rx_chains != 0 { rx &= n.rx_chains; } }
+        rx
+    }
+
     /// A scan of every channel the NVM and regulatory domain allow (stage W4).
     pub fn scan(&self, now_us: u64) -> crate::scan::Scan {
         use crate::scan;
@@ -372,8 +380,7 @@ impl Init {
             Step::ScanConfig => {
                 if !f.api(u::API_REDUCED_SCAN_CONFIG) { return Err(Failure::Unsupported("reduced_scan_config")); }
                 if f.scan_config_version.is_none_or(|v| v < 5) { p[2] = 0xff; }
-                let mut rx = f.rx_antennas();
-                if nvm.rx_chains != 0 { rx &= nvm.rx_chains; }
+                let rx = self.valid_rx_antennas();
                 let mut tx = f.tx_antennas();
                 if nvm.tx_chains != 0 { tx &= nvm.tx_chains; }
                 put(p, 4, tx as u32);

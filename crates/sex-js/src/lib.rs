@@ -284,7 +284,10 @@ impl<P: Page + 'static> Script<P> {
     /// `key\tTYPE\tKEY`, `load`. Returns its result (-1 if it threw).
     pub fn dispatch(&mut self, message: &str) -> Result<i32, Error> {
         let m = self.put(message.as_bytes())?;
-        let r = self.dispatch.call(&mut self.store, (m, message.len() as i32, self.budget_ms));
+        // A fetch's arrival may run a script the page inserted (a player's multi-megabyte
+        // bundle): that gets the load budget, as the page's own scripts do.
+        let budget = if message.starts_with("fetched\t") { self.load_budget_ms.max(self.budget_ms) } else { self.budget_ms };
+        let r = self.dispatch.call(&mut self.store, (m, message.len() as i32, budget));
         let _ = self.free.call(&mut self.store, m);
         r.map_err(|x| Error::Trapped(format!("{x}")))
     }

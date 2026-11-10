@@ -282,6 +282,7 @@ h1, h2, h3, h4, h5, h6, li, table, caption, thead, tbody, tfoot, tr, td, th, opt
 head, script, style, link, meta, title, template, noscript, datalist, param, base, area, map, [hidden], input[type=hidden],
 dialog:not([open]), noembed, noframes, rp { display: none }
 li { display: list-item }
+sx-shadow, slot { display: contents }
 table { display: table }
 tr { display: table-row }
 td, th { display: table-cell; padding: 1px 3px }

@@ -3566,11 +3566,31 @@ Stages D2 and D3 of `DRIVERS_AND_X17_R1_PLAN_2026_11_09.md`. Handoff: `docs/hand
   proves isolation by data only. No interrupt remapping, one PCI segment, whole-domain
   flushes on loan return.
 
+## Firmware AML leaves the kernel: the sexacpi server (2026-11-10)
+
+- **What changed.** The ACPI AML interpreter (batteries, lid, thermal, `_CST`, I2C HID
+  inventory, `\_S5`, `_PTS`) now runs in `servers/sexacpi`, a ring-3 service in the Senses
+  organ (pd 50, key 4). A firmware bug or interpreter hang stops sexacpi, not the system.
+- **Kernel.** Keeps FADT reset/S5, the SCI and power button, the `Power` check and a
+  filtered firmware window (`sex_pdx::power` ops 16-22, right `FIRMWARE`). It refuses RAM,
+  kernel/bootloader memory, the framebuffer, PIC/PIT/PS2/COM1/CF8 ports and PCI BAR/ROM
+  writes. `kernel/src/hal/acpi.rs` 804 -> ~650 lines.
+- **ABI.** `SYS_POWER` (84) now takes a fourth and fifth argument (r10, r8) for the firmware
+  ops. Shell/SilkBar sensor reads are unchanged.
+- **Gates.** `power_acpi_gate.py` waits for `[sexacpi.ready] aml=1`, the kernel's
+  `[acpi.firmware.inventory] aml=1`, `firmware_told=1` on power-off, and fails if any
+  `[acpi.aml` line appears. `test_kernel_never_runs_firmware_aml` keeps AML out of
+  `kernel/src`. Host window-policy tests in `power_host_gate.sh`.
+- **dGPU (#82).** `_PS3`, `_PRx` `_OFF`/`_ON` and the gate's power cycle run in sexacpi. The kernel parks
+  the GPU in D3hot at boot (`[gpu.power] ... acpi=pending`) and offers `FW_DGPU` (op 23): info, root
+  port D3hot, done, restore headers, prepare again. It acts only on GPUs it listed itself.
+- **Open decision closed.** Audit item A is done.
+
 ## Discrete GPU off at boot (NVIDIA N1, 2026-11-09)
 
 Plan: `docs/handoff/NVIDIA_GPU_PLAN_2026_11_09.md` (stages N1-N6).
 - **Kernel** `kernel/src/hal/dgpu.rs`: every display controller is named at boot (`[gpu.found]`), NVIDIA chips from their own `PMC_BOOT_0` register (GA104, GA106, ...). A GPU behind a root port that does not hold the boot framebuffer is powered off like Linux runtime PM: D3hot for each function, the GPU's `_PS3` and `_PR0`..`_PR3` resources off, then the root port's when the GPU is alone behind it (D3cold). Shared resources stay on. `power_on` restores power and each configuration header for the later driver.
-- **AML work budget**: `acpi::with_aml(budget, f)` runs firmware AML quarantined with a limit on register accesses and stalls, so a firmware loop cannot hang the boot.
+- **AML work budget**: `acpi::with_aml(budget, f)` runs firmware AML quarantined with a limit on register accesses and stalls, so a firmware loop cannot hang the boot. _(2026-11-10, #88: the ACPI half now runs in `servers/sexacpi`; the kernel keeps D3hot, header save/restore and `PMC_BOOT_0`, and exposes them only through `FW_DGPU`.)_
 - **Gate** `scripts/dgpu_power_gate.py` in CI: QEMU root port + display controller + SSDT power resource (`tests/acpi/dgpu_gate_ssdt.asl`); checks the method order off/on/off on the debug console, the restored header, the boot GPU kept and the desktop up.
 - ABI: none.
 ## Net: ALPN http/1.1 (2026-11-09)
@@ -3601,6 +3621,39 @@ Plan: `docs/handoff/NVIDIA_GPU_PLAN_2026_11_09.md` (stages N1-N6).
 - **Then (same day):** WebM SourceBuffers (VP9, AV1, Opus, Vorbis; Clusters of known or unknown size), `timestampOffset` (written into `tfdt` / the Cluster `Timecode`), `abort`, `changeType`, seeking (waits until the target's segments are appended), quality switches (a new init segment mid-stream), `remove()` that frees segments, and a 160 MiB per-buffer quota that lets go of played segments first.
 - **How:** `sex_web::mse::Stream` keeps segments by time with the init segment each follows. Web's feed hands the decoder an init segment and then segments in time order. `sex_media::Source` gains `restart(ms)` (seek by starting a new stream) and `next_stream()` (at a switch, or where a feed ran dry, the decoder opens again on what follows, keeping the player's queue and clock; `Next::Later` while it waits). A growing stream keeps its own presentation times (no start-time shift) and reads in 16 KiB steps.
 - **Limits:** `appendWindowStart/End` and `mode = 'sequence'` are accepted but not applied; a `remove()` that cuts a segment in two keeps the whole segment for the decoder (only `buffered` shows the cut).
+
+## Browser: web APIs for players and frameworks, YouTube stage Y6 (2026-11-10)
+
+- **MutationObserver** works: every change a page script makes through the DOM queues
+  records (childList, attributes with `attributeFilter` and old values, characterData,
+  subtree), delivered in a microtask. Changes the browser makes itself are not reported.
+- **Custom elements:** `attributeChangedCallback` for `observedAttributes`, and
+  `disconnectedCallback` (moving an element disconnects and connects it, as specified).
+- **Shadow DOM, flattened:** `attachShadow` makes an `sx-shadow` element
+  (`display: contents` in the UA sheet, as is `slot`) as the host's first child; the
+  page's view of the host hides it. Slots answer `assignedNodes`/`assignedElements`;
+  `getRootNode({composed})`, `composedPath` and event bubbling cross the shadow root.
+  Costs: shadow styles apply page-wide, slotted children draw after the shadow content.
+- **Messaging:** `postMessage`, `MessageEvent`, `MessageChannel`/`MessagePort` (a task
+  per message), `BroadcastChannel`.
+- **Intl** for `en-US` in UTC (QuickJS has none): NumberFormat (grouping, percent,
+  currency, compact), DateTimeFormat (dateStyle/timeStyle and fields, formatToParts),
+  PluralRules, Collator, RelativeTimeFormat, ListFormat, Locale; `toLocaleString` and
+  `localeCompare` use them.
+- **Smaller pieces:** DOMParser, XMLSerializer, DOMException (names, codes), DOMRect,
+  Range, `element.animate` (Web Animations: timing, fill, `finished`),
+  `navigator.mediaCapabilities.decodingInfo`, `sendBeacon`, `cookieEnabled`,
+  `document.currentScript` (the browser says which `<script>` runs),
+  `<style>.sheet.insertRule`, `window.onerror`, fullscreen and picture-in-picture
+  refusing, `getVideoPlaybackQuality`.
+- **Scripts a page inserts run** (Y8's first step): a `createElement('script')` runs when
+  it joins the document: inline text at once, `src` through `fetch` then `load`/`error`,
+  modules through `import()`; markup scripts (innerHTML) do not. A `fetched` dispatch
+  runs with the load budget (120 s), so a player bundle that arrives that way is not cut off.
+- **Evidence:** `cargo test -p sex-js --test dom` (38 tests, 9 new);
+  `scripts/program_web_apis_gate.py` (page built from these APIs, pixel-matched to the
+  host render, page reports its own checks).
+- **ABI / kernel:** none.
 
 ## Video and sound play while they download (2026-11-10)
 
@@ -3657,6 +3710,11 @@ Details: `docs/handoff/BOOT_LOG_AND_CRASH_RECORDS_2026_11_09.md`.
 - **ABI**: syscall 85 `SYS_CRASH_LOG` (84 is `SYS_POWER` from the ACPI work), message `OP_NOTICE` to Files, `sex_pdx::crash_log` (in `ABI_INPUTS`); hash recomputed.
 - **Fuzzer** `run fuzz [CALLS] [SEED]` and `scripts/syscall_fuzz_gate.py` (3 x 20000 seeded syscalls and pdx calls, in CI).
 - **Gates**: `scripts/crash_screen_gate.py` (three starts: warm restart then cold; probe build, last in CI), `scripts/crash_log_host_gate.sh`.
+- **Kernel budget fix (2026-11-10).** Master went red at 22,121 kernel lines after #78/#86.
+  #88 also removed the in-kernel e1000/ARP/UDP/DNS boot probe from `hal/pci.rs` (3,266
+  lines, off by default; SexNet owns NICs). The kernel is now about 18,600 lines and the
+  budget stays 21,500. `sexnet_service_host_gate.sh` now asserts that the kernel only
+  discovers NICs.
 
 ## Programs hear the microphone, with the person's leave (2026-11-10)
 - Each program's sound ring is now 512 KiB: the second half holds what Bell hears from
@@ -3762,6 +3820,39 @@ Follow-up to the boot log and crash records work (`BOOT_LOG_AND_CRASH_RECORDS_20
 - **ABI:** new PDX op `0x2E8` and module `sex_pdx::wifi_status`; `abi_version_hash`
   recomputed (sex-pdx lib.rs). No kernel change. Next: status bar indicator, then W5.
 
+## Intel Wi-Fi, stage W5a: joining a network's channel (2026-11-10)
+
+- **Join:** `sex_wifi::join` sends iwx_auth's commands: PHY context, RLC, MAC context,
+  binding, station, management TX queue (new TFD ring and buffers in the DMA region),
+  session protection. Versions checked against the x17's real firmware.
+- **Spindle:** `wifi` numbers the networks; `wifi join N` joins one (boot log
+  `[wifi.joined]` or `[wifi.failed] step=join`).
+- **Evidence:** `scripts/wifi_host_gate.sh` (35 driver tests): command order, bytes and
+  sizes on the firmware model, failure paths, real firmware versions.
+- **ABI / kernel:** none. W5 is split into W5a-W5e (INTEL_WIFI section 11).
+
+## Intel Wi-Fi, stage W5b: authentication and association (2026-11-10)
+- **What:** after the join, `wifi join N` authenticates (open system) and associates,
+  then updates the station and MAC context with the AID (`iwx_run`). New
+  `sex_wifi::tx` sends 802.11 frames on TX queue 1 (gen3/gen2 TX command, TFD,
+  byte counts, TX responses). New phases ASSOCIATING/ASSOCIATED in `wifi_status`.
+- **Evidence:** `scripts/wifi_host_gate.sh` (39 driver tests): the firmware model reads
+  each TFD and checks the TX command and byte count, then plays the AP. Retries,
+  refusals, TX failure and deauthentication are covered.
+- **ABI / kernel:** none (`wifi_status.rs` is not an ABI input).
+
+## Intel Wi-Fi, stage W5c: WPA2 keys (2026-11-10)
+- **What:** `wifi join N PASSPHRASE` connects to a WPA2 network. The passphrase goes
+  over `wifi_status::PASSWORD` and is wiped after the PMK is derived. New
+  `sex_wifi::rsna` runs the 4-way handshake over EAPOL data frames and installs the
+  pairwise and group keys (SEC_KEY_CMD, or ADD_STA_KEY on older firmware). New phases
+  HANDSHAKE and CONNECTED, plus the NEEDS_PASSWORD reply. `eapol::Supplicant` now owns
+  copies of the RSN elements, so it no longer borrows them.
+- **Evidence:** `scripts/wifi_host_gate.sh` (43 driver tests). The firmware model plays
+  the AP's half of the handshake, including message 1 arriving with the association
+  response. Tests cover the key command bytes on both firmware paths and a wrong
+  passphrase.
+- **ABI / kernel:** none (`wifi_status.rs` is not an ABI input).
 ## Install beside another system, and a live USB that never touches it (2026-11-09)
 
 Roadmap workstream B, part 1 (report: `docs/handoff/LINUX_AND_DESKTOP_PARITY_REPORT_2026_11_09.md` §6).
