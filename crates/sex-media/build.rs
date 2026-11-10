@@ -12,6 +12,9 @@ fn main() {
     println!("cargo:rerun-if-changed=src/bridge.c");
     println!("cargo:rerun-if-changed={}", ff.join("lib/libavcodec.a").display());
     println!("cargo::rustc-check-cfg=cfg(ffmpeg)");
+    println!("cargo::rustc-check-cfg=cfg(ffmpeg_recording)");
+    let recording_marker = ff.join("sexos-recording-v1");
+    if recording_marker.exists() { println!("cargo:rerun-if-changed={}", recording_marker.display()); }
     let target = env::var("TARGET").unwrap_or_default();
     if !target.contains("sex") && !target.ends_with("-none") {
         return; // host checks only; the program itself is built for SexOS
@@ -21,6 +24,8 @@ fn main() {
         return;
     }
     println!("cargo:rustc-cfg=ffmpeg");
+    let recording = std::fs::read(&recording_marker).is_ok_and(|bytes| bytes == b"1\n");
+    if recording { println!("cargo:rustc-cfg=ffmpeg_recording"); }
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
     let resource = String::from_utf8(Command::new("clang").arg("-print-resource-dir").output().unwrap().stdout).unwrap();
     let obj = out.join("ffmpeg_bridge.o");
@@ -35,7 +40,21 @@ fn main() {
     assert!(status.success(), "compiling src/bridge.c failed");
     let lib = out.join("libmediabridge.a");
     let _ = std::fs::remove_file(&lib);
-    assert!(Command::new("llvm-ar").arg("crs").arg(&lib).arg(&obj).status().unwrap().success());
+    let mut objects = vec![obj];
+    if recording {
+        println!("cargo:rerun-if-changed=src/recording/bridge.c");
+        let object = out.join("recording_bridge.o");
+        assert!(Command::new("clang")
+            .args(["--target=x86_64-unknown-none-elf", "-nostdinc", "-std=c17", "-O2", "-fPIC", "-ffunction-sections", "-fdata-sections"])
+            .args(["-msse2", "-mno-avx", "-mno-red-zone", "-fno-stack-protector", "-Wall", "-Werror"])
+            .arg("-isystem").arg(format!("{}/include", resource.trim()))
+            .arg("-isystem").arg(ff.join("include-c"))
+            .arg("-I").arg(ff.join("include"))
+            .args(["-c", "src/recording/bridge.c", "-o"]).arg(&object)
+            .status().expect("clang recording bridge").success());
+        objects.push(object);
+    }
+    assert!(Command::new("llvm-ar").arg("crs").arg(&lib).args(&objects).status().unwrap().success());
     println!("cargo:rustc-link-search=native={}", out.display());
     println!("cargo:rustc-link-search=native={}", ff.join("lib").display());
     // dav1d (AV1) sits beside FFmpeg's archives when it was built with them.
