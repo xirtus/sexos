@@ -74,6 +74,10 @@ jobs:
       run: PAGING_LOG="$RUNNER_TEMP/sexos-runtime/serial.log" bash scripts/paging_recovery_runtime_gate.sh
     - name: USB input paths
       run: GATE_DIR="$RUNNER_TEMP/sexos-usb" SKIP_BUILD=1 bash scripts/usb_path_gate.sh
+    - name: Power off and restart through ACPI
+      run: |
+        bash scripts/power_host_gate.sh
+        python3 scripts/power_acpi_gate.py --iso sexos-v1.0.0.iso --out "$RUNNER_TEMP/sexos-power"
     - name: Reboot persistence and rendering
       run: GATE_DIR="$RUNNER_TEMP/sexos-persistence" SKIP_BUILD=1 bash scripts/disk_persistence_gate.sh
     - name: Task finish and quota cleanup with surviving client
