@@ -14,4 +14,3 @@
   `volume list` asks row by row the same way and needs checking.
 - Next: follow the headphone jack (speaker off while headphones are in) by pin sense
   and unsolicited responses; HDMI and DisplayPort audio.
-=======
