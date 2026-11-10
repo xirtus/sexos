@@ -84,39 +84,102 @@ impl Source for alloc::rc::Rc<[u8]> {
 
 /// A download still arriving: the loader appends to `bytes` and sets `done` at the
 /// end; the decoder reads what is there. Shared as [`Growing::shared`].
+///
+/// When the server takes Range requests (`ranges`), a read far from what is coming
+/// (a seek ahead, or back into a gap) sets `want`: the loader then keeps the bytes it
+/// has in `kept`, and starts a new piece there (`start`, `bytes` from empty).
 #[derive(Default)]
 pub struct Growing {
+    /// The piece coming in now, which begins at `start` in the stream.
     pub bytes: Vec<u8>,
+    pub start: u64,
+    /// Pieces that came before, each with where it begins.
+    pub kept: Vec<(u64, Vec<u8>)>,
     /// The length the server said, if it said one.
     pub total: Option<u64>,
-    /// Every byte is here (or the download stopped: the stream ends where it got to).
+    /// The piece coming in now has stopped (without `ranges`: the stream ends there).
     pub done: bool,
+    /// The server can send a piece from any byte on.
+    pub ranges: bool,
+    /// Where the decoder wants to read and nothing is coming: the loader's next piece.
+    pub want: Option<u64>,
 }
+
+/// How far past the coming piece's end a read just waits for it rather than asking
+/// for a new piece (FFmpeg skips small gaps between sound and pictures).
+pub const NEAR: u64 = 1 << 20;
 
 impl Growing {
     pub fn shared() -> alloc::rc::Rc<core::cell::RefCell<Growing>> { Default::default() }
+
+    /// The stream's end, if known now.
+    fn end(&self) -> Option<u64> {
+        if self.done && (!self.ranges || self.total.is_none()) { Some(self.start + self.bytes.len() as u64) } else { self.total }
+    }
+
+    /// The piece holding `at`, if one does.
+    fn piece(&self, at: u64) -> Option<(u64, &[u8])> {
+        core::iter::once((self.start, self.bytes.as_slice())).chain(self.kept.iter().map(|(s, b)| (*s, b.as_slice())))
+            .find(|(s, b)| at >= *s && at < s + b.len() as u64)
+    }
+
+    /// Where the bytes from `at` on stop being here (`at` when it is not).
+    fn reach(&self, at: u64) -> u64 {
+        let mut pos = at;
+        for _ in 0..=self.kept.len() {
+            match self.piece(pos) { Some((s, b)) => pos = s + b.len() as u64, None => break }
+        }
+        pos
+    }
+
+    /// Every byte is here: nothing more will be wanted.
+    pub fn whole(&self) -> bool { self.end().is_some_and(|e| self.reach(0) >= e) }
+
+    /// A read at `at` found nothing here: ask for a piece there unless the one coming
+    /// will soon reach it.
+    fn ask(&mut self, at: u64) {
+        let edge = self.start + self.bytes.len() as u64;
+        if self.ranges && (self.done || at < self.start || at > edge + NEAR) && self.end().is_none_or(|e| at < e) {
+            self.want = Some(at);
+        }
+    }
+
+    /// Starts the next piece at `at`, keeping what came (and letting go of the pieces
+    /// furthest from `at` while more than `limit` bytes are kept).
+    pub fn begin(&mut self, at: u64, limit: usize) {
+        let old = core::mem::take(&mut self.bytes);
+        if !old.is_empty() { self.kept.push((self.start, old)); }
+        let mut held: usize = self.kept.iter().map(|(_, b)| b.len()).sum();
+        while held > limit && !self.kept.is_empty() {
+            let far = (0..self.kept.len()).max_by_key(|&i| self.kept[i].0.abs_diff(at)).unwrap();
+            held -= self.kept.swap_remove(far).1.len();
+        }
+        (self.start, self.done, self.want) = (at, false, None);
+    }
 }
 
 impl Source for alloc::rc::Rc<core::cell::RefCell<Growing>> {
-    fn len(&self) -> Option<u64> {
-        let g = self.borrow();
-        if g.done { Some(g.bytes.len() as u64) } else { g.total }
-    }
+    fn len(&self) -> Option<u64> { self.borrow().end() }
     fn read_at(&mut self, at: u64, out: &mut [u8]) -> Option<usize> {
-        let g = self.borrow();
-        let have = g.bytes.len() as u64;
-        if at >= have {
-            // Past what has come: the end once it is all here, else an error rather
-            // than a 0 FFmpeg would take for the end.
-            return if g.done { Some(0) } else { None };
+        let mut g = self.borrow_mut();
+        if let Some((s, b)) = g.piece(at) {
+            let b = &b[(at - s) as usize..];
+            let n = out.len().min(b.len());
+            out[..n].copy_from_slice(&b[..n]);
+            return Some(n);
         }
-        let n = out.len().min((have - at) as usize);
-        out[..n].copy_from_slice(&g.bytes[at as usize..at as usize + n]);
-        Some(n)
+        // Past what has come: the end once it is all here, else an error rather
+        // than a 0 FFmpeg would take for the end.
+        if g.end().is_some_and(|e| at >= e) { return Some(0); }
+        g.ask(at);
+        None
     }
     fn available(&self, at: u64) -> u64 {
-        let g = self.borrow();
-        if g.done { u64::MAX } else { (g.bytes.len() as u64).saturating_sub(at) }
+        let mut g = self.borrow_mut();
+        let reach = g.reach(at);
+        if g.end().is_some_and(|e| reach >= e) { return u64::MAX; }
+        g.ask(reach);
+        reach - at
     }
 }
 
@@ -279,6 +342,13 @@ pub struct Decoder {
     pub info: Info,
     /// The stream ended where another will follow (`Source::next_stream`).
     parked: bool,
+    /// A read found its bytes not here yet; go on once they are.
+    #[allow(dead_code)]
+    stalled: bool,
+    /// The last seek, until a frame comes from it: a stalled read after it lost its
+    /// place in the demuxer, so it is done again.
+    #[allow(dead_code)]
+    sought: Option<u64>,
 }
 
 #[cfg_attr(not(ffmpeg), allow(dead_code))]
@@ -300,6 +370,7 @@ impl Decoder {
         let at = self.io.at;
         let have = self.io.src.available(at);
         if self.parked { return have > 0; }
+        if self.stalled && have == 0 { return false; }
         have >= self.io.src.ahead() || self.io.src.len().is_some_and(|len| have >= len.saturating_sub(at))
     }
 
@@ -309,7 +380,7 @@ impl Decoder {
     #[cfg(ffmpeg)]
     fn open_io(mut io: Box<Io>) -> Result<Decoder, Error> {
         let (s, info) = Self::open_raw(&mut io)?;
-        Ok(Decoder { s, io, info, parked: false })
+        Ok(Decoder { s, io, info, parked: false, stalled: false, sought: None })
     }
 
     /// Opens FFmpeg on `io`, which must stay where it is while the stream is open.
@@ -346,6 +417,12 @@ impl Decoder {
         assert!(out.len() >= w * h);
         if self.parked { return self.go_on(out, w, h, pcm); }
         if self.s.is_null() { return Err(Error::UNSUPPORTED); }
+        if core::mem::take(&mut self.stalled) {
+            if let Some(ms) = self.sought {
+                let r = unsafe { ffi::sx_seek(self.s, ms as i64) };
+                if r < 0 { return Err(Error(r)); }
+            }
+        }
         let (mut frames, mut at): (c_int, i64) = (0, -1);
         let r = unsafe {
             ffi::sx_next(self.s, out.as_mut_ptr(), w as c_int, h as c_int, pcm.as_mut_ptr().cast(),
@@ -353,8 +430,12 @@ impl Decoder {
         };
         match r {
             0 => self.go_on(out, w, h, pcm),
-            1 => Ok(Next::Picture { at_ms: at }),
-            2 => Ok(Next::Sound { frames: frames.max(0) as usize, at_ms: at }),
+            1 => { self.sought = None; Ok(Next::Picture { at_ms: at }) }
+            2 => { self.sought = None; Ok(Next::Sound { frames: frames.max(0) as usize, at_ms: at }) }
+            // Bytes still to come: wait for them. A source that says they are here
+            // (a file) failed for good: the stream ends there, as before.
+            3 if self.io.src.available(self.io.at) == 0 => { self.stalled = true; Ok(Next::Later) }
+            3 => Ok(Next::End),
             e => Err(Error(e)),
         }
     }
@@ -368,6 +449,7 @@ impl Decoder {
     pub fn seek(&mut self, ms: u64) -> Result<(), Error> {
         if self.io.src.restart(ms) { return self.reopen(); }
         if self.s.is_null() { return Err(Error::UNSUPPORTED); }
+        (self.sought, self.stalled) = (Some(ms), false);
         let r = unsafe { ffi::sx_seek(self.s, ms as i64) };
         if r < 0 { Err(Error(r)) } else { Ok(()) }
     }
