@@ -66,6 +66,9 @@ lazy_static! {
         idt[0x40].set_handler_fn(revoke_key_handler);
         idt[0x21].set_handler_fn(keyboard_interrupt_handler);
         idt[0x22].set_handler_fn(generic_irq_handler); 
+        for (i, handler) in crate::device_irq::HANDLERS.iter().enumerate() {
+            idt[crate::device_irq::FIRST_VECTOR + i as u8].set_handler_fn(*handler);
+        }
         idt[crate::hal::acpi::SCI_VECTOR].set_handler_fn(sci_handler);
         idt[crate::smp::tlb::VECTOR].set_handler_fn(tlb_shootdown_handler);
         idt[crate::smp::WAKE_VECTOR].set_handler_fn(wake_handler);
