@@ -45,6 +45,8 @@ jobs:
       run: bash scripts/hwdb_host_gate.sh
     - name: Bell sound rate conversion on the host
       run: bash scripts/sound_host_gate.sh
+    - name: Disk layouts (GPT, FAT, install beside other systems)
+      run: cargo test --locked -p sex-disk --lib
     - name: Crash record format host regressions
       run: bash scripts/crash_log_host_gate.sh
     - name: Intel Wi-Fi driver core (crypto vectors, handshakes, firmware files, power-up)

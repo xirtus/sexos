@@ -812,7 +812,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  calc ln(2)   exp ln log sin cos tan, 2**0.5");
             sb.push(b"  run [+net] NAME [ARGS]  start a program from /bin or a path");
             sb.push(b"  edit FILE    open a file in Jot; @FILE gives any program that file");
-            sb.push(b"  install [IMG] make this disk start SexOS, from the running system or an image");
+            sb.push(b"  install [go] [GIB] [IMG] put SexOS beside the other systems on this disk; without go, only plans");
             sb.push(b"  spawn N C    start C background copies of program N");
             sb.push(b"  records      count background programs; stopall [force]");
             sb.push(b"  ls cd pwd mkdir rm mv cat write append touch df   files");
