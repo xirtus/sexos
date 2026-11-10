@@ -3621,6 +3621,24 @@ Details: `docs/handoff/BOOT_LOG_AND_CRASH_RECORDS_2026_11_09.md`.
 - **Fuzzer** `run fuzz [CALLS] [SEED]` and `scripts/syscall_fuzz_gate.py` (3 x 20000 seeded syscalls and pdx calls, in CI).
 - **Gates**: `scripts/crash_screen_gate.py` (three starts: warm restart then cold; probe build, last in CI), `scripts/crash_log_host_gate.sh`.
 
+## Programs hear the microphone, with the person's leave (2026-11-10)
+- Each program's sound ring is now 512 KiB: the second half holds what Bell hears from
+  the microphone (`sound_ring::CAPTURE_AT`, `HEARD`; the program sets `LISTEN` and sends
+  `OP_LISTEN` 0xCB). Bell tells it where it stands in `MIC`: off, waiting for the
+  person, on, or no microphone.
+- Only the person allows it: `volume ROW mic on` (mixer action `MICROPHONE`, from Shell
+  or Spindle) until the program ends; `volume ROW mic off` stops it at once. `volume list`
+  shows who may hear and who is hearing. Bell runs the card's input stream only while
+  an allowed program listens.
+- `sex_app::sound::Sound::{listen, mic, hear, lost}`; `run play --listen SECONDS`.
+- virtio-drivers is vendored (`vendor/virtio-drivers-0.13.0`, MIT) with input transfers
+  added (`pcm_capture_nb`, `pcm_capture_take`); the upstream crate plays only.
+- Programs that read `SEX_LAYOUT_SEED` (Web, Play) now shuffle functions as well as
+  read-only data: a call between functions held XRSTORS bytes in Web.
+- Gate: `scripts/sound_listen_gate.py` (QEMU's silent input): nothing heard before
+  leave, 98304 frames in 2 s after it, microphone off at once when taken back.
+- Next: a microphone mark in SilkBar while anyone listens (the stream word has the
+  bit), HD Audio input, an Allow prompt instead of the command.
 ## Display and Shell start again in place after a crash (2026-11-10)
 
 Follow-up to the boot log and crash records work (`BOOT_LOG_AND_CRASH_RECORDS_2026_11_09.md`).
