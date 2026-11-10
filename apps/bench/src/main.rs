@@ -73,6 +73,12 @@ fn run(window: &mut Window, r: &mut Report) -> Result<(), &'static str> {
     let got = files::read(window, FILE, &mut back).map_err(|_| "read failed")?;
     r.add("file_read", 4, tsc() - t, "MiB");
     if got != 4 * MIB || back != data { return Err("file came back different"); }
+    // 4 KiB reads at scattered places in the file: the latency of one small read.
+    let n = 256;
+    let mut block = [0u8; 4096];
+    let t = tsc();
+    for i in 0..n { let at = ((i * 7919) % 1024) as u64 * 4096; if files::read_at(window, FILE, at, &mut block) != Ok(4096) { return Err("short 4 KiB read"); } }
+    r.add("file_read_4k", n, tsc() - t, "read");
     let n = 500;
     let t = tsc();
     for _ in 0..n { if files::size(window, FILE) != Ok(4 * MIB as u64) { return Err("wrong size"); } }

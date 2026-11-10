@@ -6,7 +6,7 @@ set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 kernel="$1"; cores="${2:-1}"; mods="${3:-}"
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
-gcc -O2 -static -o "$work/init" "$here/bench.c"
+gcc -O2 -static -pthread -o "$work/init" "$here/bench.c"
 mkdir -p "$work/root/dev" "$work/root/tmp"
 cp "$work/init" "$work/root/init"
 if [[ -n "$mods" ]]; then mkdir -p "$work/root/mods"; cp "$mods"/*.ko "$work/root/mods/"; fi

@@ -461,7 +461,7 @@ impl Scheduler {
             crate::program_records::before_dispatch((*next_task).context.pd_id);
             crate::program_tenancy::before_dispatch((*next_task).context.pd_id);
             if !self.ran_task.swap(true, Ordering::Relaxed) {
-                serial_println!("[smp.core.first_task] core={} pd={}", self.core_id, (*next_task).context.pd_id);
+                serial_println!("[smp.core.first_task] core={} pd={} tsc={}", self.core_id, (*next_task).context.pd_id, core::arch::x86_64::_rdtsc());
             }
             core.set_pd(next_pd_ptr);
             note_dispatch((*next_task).context.pd_id);
