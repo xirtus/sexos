@@ -138,3 +138,10 @@ Parser Wasm remains `cfe27438…`; the embedded prelude now includes the genuine
 viewport-resize event case. Initial 72-head results do not qualify this refreshed
 source automatically. Fresh exact-head CI and coherent native/HTTPS image proof
 are pending after the coordinated UX window; the PR remains draft.
+
+Before the coherent build, merge current master
+`17a1a530078b9916027399c5e13af81a94d71d19` (Files request-stamp 155 and checked
+run-ID 156) as well. This merge has no parser/source overlap; Wasm stays
+`cfe27438…`. The final combined ABI-manifest SHA256 is
+`cbf69f944943439aeefa95d96b2607dafb819a63ea31e2193a94bde53aff47ba`.
+The earlier `db440699…` manifest is historical and is not the final image ABI.
