@@ -3602,6 +3602,39 @@ Plan: `docs/handoff/NVIDIA_GPU_PLAN_2026_11_09.md` (stages N1-N6).
 - **How:** `sex_web::mse::Stream` keeps segments by time with the init segment each follows. Web's feed hands the decoder an init segment and then segments in time order. `sex_media::Source` gains `restart(ms)` (seek by starting a new stream) and `next_stream()` (at a switch, or where a feed ran dry, the decoder opens again on what follows, keeping the player's queue and clock; `Next::Later` while it waits). A growing stream keeps its own presentation times (no start-time shift) and reads in 16 KiB steps.
 - **Limits:** `appendWindowStart/End` and `mode = 'sequence'` are accepted but not applied; a `remove()` that cuts a segment in two keeps the whole segment for the decoder (only `buffered` shows the cut).
 
+## Browser: web APIs for players and frameworks, YouTube stage Y6 (2026-11-10)
+
+- **MutationObserver** works: every change a page script makes through the DOM queues
+  records (childList, attributes with `attributeFilter` and old values, characterData,
+  subtree), delivered in a microtask. Changes the browser makes itself are not reported.
+- **Custom elements:** `attributeChangedCallback` for `observedAttributes`, and
+  `disconnectedCallback` (moving an element disconnects and connects it, as specified).
+- **Shadow DOM, flattened:** `attachShadow` makes an `sx-shadow` element
+  (`display: contents` in the UA sheet, as is `slot`) as the host's first child; the
+  page's view of the host hides it. Slots answer `assignedNodes`/`assignedElements`;
+  `getRootNode({composed})`, `composedPath` and event bubbling cross the shadow root.
+  Costs: shadow styles apply page-wide, slotted children draw after the shadow content.
+- **Messaging:** `postMessage`, `MessageEvent`, `MessageChannel`/`MessagePort` (a task
+  per message), `BroadcastChannel`.
+- **Intl** for `en-US` in UTC (QuickJS has none): NumberFormat (grouping, percent,
+  currency, compact), DateTimeFormat (dateStyle/timeStyle and fields, formatToParts),
+  PluralRules, Collator, RelativeTimeFormat, ListFormat, Locale; `toLocaleString` and
+  `localeCompare` use them.
+- **Smaller pieces:** DOMParser, XMLSerializer, DOMException (names, codes), DOMRect,
+  Range, `element.animate` (Web Animations: timing, fill, `finished`),
+  `navigator.mediaCapabilities.decodingInfo`, `sendBeacon`, `cookieEnabled`,
+  `document.currentScript` (the browser says which `<script>` runs),
+  `<style>.sheet.insertRule`, `window.onerror`, fullscreen and picture-in-picture
+  refusing, `getVideoPlaybackQuality`.
+- **Scripts a page inserts run** (Y8's first step): a `createElement('script')` runs when
+  it joins the document: inline text at once, `src` through `fetch` then `load`/`error`,
+  modules through `import()`; markup scripts (innerHTML) do not. A `fetched` dispatch
+  runs with the load budget (120 s), so a player bundle that arrives that way is not cut off.
+- **Evidence:** `cargo test -p sex-js --test dom` (38 tests, 9 new);
+  `scripts/program_web_apis_gate.py` (page built from these APIs, pixel-matched to the
+  host render, page reports its own checks).
+- **ABI / kernel:** none.
+
 ## Video and sound play while they download (2026-11-10)
 
 - Web loads a `<video>`/`<audio>` source from the network without waiting for it: the
@@ -3762,35 +3795,12 @@ Follow-up to the boot log and crash records work (`BOOT_LOG_AND_CRASH_RECORDS_20
 - **ABI:** new PDX op `0x2E8` and module `sex_pdx::wifi_status`; `abi_version_hash`
   recomputed (sex-pdx lib.rs). No kernel change. Next: status bar indicator, then W5.
 
-## Browser: web APIs for players and frameworks, YouTube stage Y6 (2026-11-10)
+## Install beside another system, and a live USB that never touches it (2026-11-09)
 
-- **MutationObserver** works: every change a page script makes through the DOM queues
-  records (childList, attributes with `attributeFilter` and old values, characterData,
-  subtree), delivered in a microtask. Changes the browser makes itself are not reported.
-- **Custom elements:** `attributeChangedCallback` for `observedAttributes`, and
-  `disconnectedCallback` (moving an element disconnects and connects it, as specified).
-- **Shadow DOM, flattened:** `attachShadow` makes an `sx-shadow` element
-  (`display: contents` in the UA sheet, as is `slot`) as the host's first child; the
-  page's view of the host hides it. Slots answer `assignedNodes`/`assignedElements`;
-  `getRootNode({composed})`, `composedPath` and event bubbling cross the shadow root.
-  Costs: shadow styles apply page-wide, slotted children draw after the shadow content.
-- **Messaging:** `postMessage`, `MessageEvent`, `MessageChannel`/`MessagePort` (a task
-  per message), `BroadcastChannel`.
-- **Intl** for `en-US` in UTC (QuickJS has none): NumberFormat (grouping, percent,
-  currency, compact), DateTimeFormat (dateStyle/timeStyle and fields, formatToParts),
-  PluralRules, Collator, RelativeTimeFormat, ListFormat, Locale; `toLocaleString` and
-  `localeCompare` use them.
-- **Smaller pieces:** DOMParser, XMLSerializer, DOMException (names, codes), DOMRect,
-  Range, `element.animate` (Web Animations: timing, fill, `finished`),
-  `navigator.mediaCapabilities.decodingInfo`, `sendBeacon`, `cookieEnabled`,
-  `document.currentScript` (the browser says which `<script>` runs),
-  `<style>.sheet.insertRule`, `window.onerror`, fullscreen and picture-in-picture
-  refusing, `getVideoPlaybackQuality`.
-- **Scripts a page inserts run** (Y8's first step): a `createElement('script')` runs when
-  it joins the document: inline text at once, `src` through `fetch` then `load`/`error`,
-  modules through `import()`; markup scripts (innerHTML) do not. A `fetched` dispatch
-  runs with the load budget (120 s), so a player bundle that arrives that way is not cut off.
-- **Evidence:** `cargo test -p sex-js --test dom` (38 tests, 9 new);
-  `scripts/program_web_apis_gate.py` (page built from these APIs, pixel-matched to the
-  host render, page reports its own checks).
-- **ABI / kernel:** none.
+Roadmap workstream B, part 1 (report: `docs/handoff/LINUX_AND_DESKTOP_PARITY_REPORT_2026_11_09.md` §6).
+- **The live system leaves other systems' disks alone.** At start the disk driver (`apps/sexdrive`) decides whose disk it is (`sex_disk::probe`, no heap): blank or SexOS's old whole-disk install → SexOS uses the whole disk as before; a GPT with a SexOS store partition → SexOS reads and writes only inside it (every NVMe command is translated by `place`); anything else (GPT, MBR, a bare filesystem, a damaged table) → ordinary reads and writes are refused and the write self-tests are skipped. `[sexdrive.disk.layout] kind=...` says which. Before this, booting the ISO on a PC wrote DiskFS proof sectors and Files' filesystem straight into whatever was on its NVMe.
+- **ABI change: block requests 5-7** (`sex_pdx::BLOCK_RAW_READ`, `BLOCK_RAW_WRITE`, `BLOCK_LAYOUT` + `BLOCK_LAYOUT_*`). Raw requests address the whole disk for the installer (Files only); the first raw write stops the running system's own writes until restart. **`fs::INSTALL` changed**: `offset` = store size in MiB, `length` = `INSTALL_GO`; the reply is a text report. `abi_version_hash` recomputed.
+- **`crates/sex-disk`** (new, no_std): GPT read (primary, else backup), free space, add, write backup-then-primary with a protective MBR; FAT12/16 read and FAT16/32 write (8.3 names, contiguous files, data → FATs → directory entry, FSInfo kept exact), `format_fat32`; the install planner. 14 host tests cross-checked with `sgdisk -v`, mtools and `fsck.vfat`, including a Windows-like disk (ESP with `\EFI\Microsoft\Boot\bootmgfw.efi` and a fallback loader) where not one byte of the Windows partition changes.
+- **`install [go] [GIB] [IMAGE]`** in Spindle. Without `go` Files only plans and prints it. On a GPT disk it adds three partitions in free space (SexOS system A and B, 256 MiB each, and the SexOS store: GIB or all the largest free run, at least 1 GiB) and never moves or resizes anything; on a blank disk it makes a new GPT and a 260 MiB FAT32 ESP. Limine goes to `\EFI\SEXOS\BOOTX64.EFI` on the shared ESP, and to `\EFI\BOOT\BOOTX64.EFI` only when no fallback loader exists. Its menu `\EFI\BOOT\LIMINE.CFG` (16 KiB, contiguous, for in-place rewrites by A/B updates) points the image's entries at slot A by partition GUID and adds a chainload entry per system found on the ESP (Windows boot manager, shim/GRUB, systemd-boot, others). Refuses when another `limine.cfg` would win. The partition table is written last, so a failed install leaves every system starting as before.
+- **Not yet**: no UEFI boot entry is registered (the kernel has no runtime services), so on a PC whose ESP already has a fallback loader (Windows) the person picks `\EFI\SEXOS\BOOTX64.EFI` once in the firmware's boot menu; Install says so. Slot B, signed updates and try-once fallback are part 2.
+- **Gates**: `scripts/install_gate.py` (QEMU + OVMF with its own variable store): a Linux-like GPT disk is hashed before and after a live session (unchanged), `install` plans, `install go` installs, sgdisk/fsck/mtools check the disk and the Linux partition's bytes, then the PC starts from the disk with no ISO and a file survives a restart; a blank disk becomes SexOS's alone. `scripts/usb_stick_gate.py`: the ISO written to a USB stick (usb-storage on xHCI, no CD) reaches the desktop under UEFI and under BIOS.
