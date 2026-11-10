@@ -272,8 +272,21 @@ static void run_jobs(void) {
     }
 }
 
+// Deliver a classic resource's exception without passing its source through a
+// page-controlled eval function. Opaque cross-origin values are never exposed.
+static void report_script(int mode) {
+    JSValue error = JS_GetException(ctx);
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue dispatch = JS_GetPropertyStr(ctx, global, "__sx_dispatch");
+    JSValue args[2] = { JS_NewString(ctx, mode == 2 ? "script-error-muted" : "script-error"), mode == 2 ? JS_NULL : JS_DupValue(ctx, error) };
+    JSValue result = JS_Call(ctx, dispatch, JS_UNDEFINED, 2, args);
+    if (JS_IsException(result)) report();
+    JS_FreeValue(ctx, result); JS_FreeValue(ctx, args[0]); JS_FreeValue(ctx, args[1]);
+    JS_FreeValue(ctx, dispatch); JS_FreeValue(ctx, global); JS_FreeValue(ctx, error);
+}
+
 // Evaluates source as a classic script. 0 on success, -1 after reporting an exception.
-EXPORT("sx_eval") int sx_eval(const char *src, int len, const char *name, int name_len, int budget_ms) {
+EXPORT("sx_eval") int sx_eval(const char *src, int len, const char *name, int name_len, int budget_ms, int error_mode) {
     char file[128];
     int fl = name_len < 127 ? name_len : 127;
     memcpy(file, name, (size_t)fl); file[fl] = 0;
@@ -285,7 +298,7 @@ EXPORT("sx_eval") int sx_eval(const char *src, int len, const char *name, int na
     JSValue v = JS_Eval(ctx, code, (size_t)len, file, JS_EVAL_TYPE_GLOBAL);
     free(code);
     int ok = 0;
-    if (JS_IsException(v)) { report(); ok = -1; }
+    if (JS_IsException(v)) { if (error_mode) report_script(error_mode); else report(); ok = -1; }
     JS_FreeValue(ctx, v);
     run_jobs();
     deadline_ns = 0;
