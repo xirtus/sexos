@@ -934,6 +934,15 @@ pub fn init() {
     // Independent, exact BOOT source for the status-bar publisher. Its bounded
     // read mechanism supplies explicit snapshots; neither timer cadence nor
     // renderer fallback confers civil-time authority.
+    // Power: Shell may ask to shut down or restart, Files flushes first, the bar reads sensors.
+    for (holder,rights,role) in [(silkshell_id,sex_pdx::power::REQUEST|sex_pdx::power::SENSE,"shell"),
+        (sexfiles_id,sex_pdx::power::FLUSH,"files"),(silkbar_id,sex_pdx::power::SENSE,"bar")] {
+        let Some(pd)=(holder!=0).then(||crate::ipc::DOMAIN_REGISTRY.get(holder)).flatten() else {continue};
+        assert!(pd.find_capability(sex_pdx::power::SLOT as u32).is_none(),"BOOT_POWER_SLOT_COLLISION");
+        pd.grant_capability(sex_pdx::power::SLOT,crate::capability::CapabilityData::Power(sex_pdx::power::Grant{holder_pd:holder,rights}));
+        if rights&sex_pdx::power::FLUSH!=0 {crate::hal::acpi::set_flusher(holder);}
+        serial_println!("[boot.power.grant] holder={} role={} slot={} rights={:#x} runtime_mint=0",holder,role,sex_pdx::power::SLOT,rights);
+    }
     let bar_holder=crate::ipc::DOMAIN_REGISTRY.get(silkbar_id).expect("BOOT_BAR_CLOCK_HOLDER");
     let bar_task=bar_holder.main_task.load(core::sync::atomic::Ordering::Acquire);
     assert!(!bar_task.is_null(),"BOOT_BAR_CLOCK_TASK");

@@ -3210,6 +3210,18 @@ YouTube stage Y3d.
 - Policy: C++ only for ported engines (V8 next), each in its own organ; SexOS itself stays Rust.
 
 
+## Ordinary Rust and C programs: Rust std, POSIX as a guest library, PDF (2026-11-09)
+
+Workstream H of `LINUX_AND_DESKTOP_PARITY_REPORT_2026_11_09.md`. PR #68.
+- **Rust `std` target: `x86_64-sex-std.json`.** Programs link the real standard library, built from rust-src (`build_std = "std,panic_abort"` in a spec stage). The target names Hermit's library interface (`os = "hermit"`): upstream std already calls `sys_read`, `sys_spawn2`, `sys_futex_wait` and so on instead of trapping into a POSIX kernel, so no std fork is needed. Static PIE, only `R_X86_64_RELATIVE`, local-exec TLS; the loader takes it unchanged.
+- **`crates/sex-std`** answers those calls inside the program, over its own grants: files in the program's folder, which is `/` to it (`..` never leaves; `path::resolve`); stdout/stderr to the window as a console and the serial record (`[std.out]`, `[std.err]`), stdin as lines typed into the window; threads as workers (`sex_app::thread`), `Mutex`/`Condvar`/parking on the kernel's wait/wake; `Instant` from the tick; memory from the program heap; `argv` from Shell's argument line (`args::split`, double quotes keep a word). After `main` returns, a console that printed stays until it is closed, with how the program ended. `sex_std::window()` hands the window to a program that draws.
+- **Not yet:** `std::net` says `Unsupported` until the program socket API (sockets thread); `SystemTime` is build time plus uptime until programs get a read-only civil clock; Hermit's std refuses `fsync`, `rename` and `set_len`.
+- **sex-app:** `files::direct` (no window needed: stat, read_at, write_at, create, truncate, list, mkdir, remove, rename, sync, args) for any task; `mailbox` keeps messages one task took from the shared inbox for another (a worker's file answer seen by the main task, keys seen by a worker); one file request in flight per program.
+- **POSIX guest library:** on the std target, `sex-libc` exports `posix.rs`: descriptors (open, read, write, lseek, close, stat/fstat/lstat, unlink, mkdir, rmdir, rename, remove, access, ftruncate, fsync, isatty), buffered `FILE` streams (fopen/fdopen/freopen, fread/fwrite, fgets/fgetc/ungetc, fputs/puts/putchar, fseek/ftell, feof/ferror, printf family to any stream), `opendir`/`readdir`, `exit`/`atexit`/`abort`, sleep. All of it is library code over `sex-std`; nothing is in the kernel or a service. The no_std program target keeps its callback-only C library. `sex-std` adds `sys_rename`, `sys_fsync`, `sys_ftruncate` for it.
+- **Programs:** `run stdhello` (Rust std: HashMap, fs, threads, mpsc, time), `run chello` (an `int main(argc, argv)` C program: stdio, files, folders, errno, qsort), `run pdf [NAME.pdf]` (hayro renders pages; Right/Left, Home/End, Up/Down, +/-/0; writes and opens `welcome.pdf` when given no name).
+- **Gate:** `scripts/program_std_gate.py`, now also a CI step.
+- **ABI:** no kernel ABI change; no `ABI_INPUTS` file changed, `abi_version_hash` unchanged.
+
 ## Files: USB sticks and other systems' disks, the Files app, an open/save picker (2026-11-09)
 
 Workstream I of `docs/handoff/LINUX_AND_DESKTOP_PARITY_REPORT_2026_11_09.md`.
@@ -3254,6 +3266,22 @@ Workstream I of `docs/handoff/LINUX_AND_DESKTOP_PARITY_REPORT_2026_11_09.md`.
   mouse, tablet, rollover, hub unplug, mouse plugged in later); `usb_wheel_host_gate` with
   a rollover test and the descriptor parser's tests; master runtime gate; host unittests;
   architectural truth.
+
+## Power off and restart through ACPI (2026-11-09)
+
+Parity report workstream A (`LINUX_AND_DESKTOP_PARITY_REPORT_2026_11_09.md` section 6).
+- **Kernel** `kernel/src/hal/acpi.rs` replaces the stub. Fixed hardware comes straight from the FADT and never needs AML: PM1 event/control blocks, the reset register, the SCI, ACPI mode (SMI_CMD), HW-reduced sleep registers. `\_S5` is read from the DSDT bytes by a bounds-checked reader (`sex_pdx::power::s5_from_dsdt`) and, when AML runs, from the interpreter.
+- **AML in quarantine.** The `acpi` crate's interpreter runs on its own 256 KiB stack. If firmware AML makes it panic, the panic handler returns to the ACPI code (`sex_aml_enter`/`sex_aml_escape`), AML is set aside for that boot and shut down/restart keep working from the tables. A boot self-test proves the escape before any firmware AML runs (`[acpi.aml.quarantine] self_test=1`). `\_PIC(1)`, `_INI`/`_STA`, `\_PTS(5)` run there.
+- **Shut down**: `\_PTS(5)`, SLP_TYPa/b then SLP_EN on PM1a/PM1b (or the HW-reduced sleep control register). **Restart**: FADT reset register, then port 0xCF9, the keyboard controller, a triple fault.
+- **Power button**: fixed event via the SCI (vector 0x29, level/active-low unless the MADT overrides). GPEs are masked until there is code for them, so an unhandled GPE cannot hold the SCI asserted.
+- **ABI change: `SYS_POWER` (84)** and capability `CapabilityData::Power(sex_pdx::power::Grant)` at slot 62. BOOT grants Shell `REQUEST|SENSE`, Files `FLUSH`, the status bar `SENSE`. Ops `INFO`, `OFF`, `RESTART`, `READY`, `SENSORS`. ABI hash recomputed.
+- **Files first.** A shut down or restart (from Shell or the power button) sends Files `power::OP_PREPARE` (kernel message, pd 0); Files commits waiting writes, flushes the disk cache and answers `READY`. The kernel goes ahead after `FLUSH_TICKS` (about 5 s) if Files never answers.
+- **Desktop**: launcher rows "Shut Down" and "Restart" (`Command::ShutDown`, `Command::Restart`), shown unavailable where the kernel cannot do them; the palette batch proof skips them.
+- **Sensors and devices**: batteries (PNP0C0A `_BST`/`_BIX`/`_BIF`), AC (ACPI0003 `_PSR`), lid (PNP0C0D `_LID`), thermal zones (`_TMP`), read through `SENSORS`. I2C HID devices (PNP0C50/ACPI0C50) are listed at boot for a later driver (`[acpi.i2c_hid]`). Known limit: the `acpi` crate 6.1.1 has no custom region handlers, so laptop batteries behind an Embedded Controller read as absent until we add an EC handler (patch or vendor the crate).
+- **CPU power**: Intel HWP (IA32_HWP_REQUEST, balanced EPP) or AMD CPPC on every core, so the CPU picks its own frequency. Idle uses MWAIT into the deepest `_CST` FFH state with exit latency at most 200 us, only where the APIC timer keeps running in deep idle (ARAT); otherwise HLT (C1).
+- **Gates**: `scripts/power_acpi_gate.py` (QEMU `system_powerdown` ends the VM with exit 0 after Files flushed; launcher Restart resets through the FADT register and the machine boots again; launcher Shut Down ends it; 1 and 4 cores) and `scripts/power_host_gate.sh` (ABI encodings, EISA ids, `\_S5` reader). Both run in CI.
+- **Bare metal next week**: check `[acpi.power]` on the PKU PC: s5=1, reset method, power_button=1, aml=1 quarantined=0, idle state and hwp/cppc.
+
 ## Real PCs: wired network, HD Audio and SATA (2026-11-09)
 
 Workstream D of the parity report. Handoff and bare-metal checklist: `docs/handoff/REAL_PC_DRIVERS_2026_11_09.md`.
@@ -3285,6 +3313,26 @@ Workstream D of the parity report. Handoff and bare-metal checklist: `docs/hando
   sexdrive DMA host gate, master runtime gate GREEN.
 - **Limits.** One NVMe controller; no VMD driver, MSI-X or IOMMU yet. On a laptop the
   census is read from the framebuffer boot log (PR #78).
+## Design guardrails: SexOS stays a microkernel SASOS, not a slow Linux (2026-11-09)
+
+- **What changed.** An audit of master and PRs #68 to #84 against the sex-manual
+  (`docs/handoff/LINUX_DRIFT_AUDIT_2026_11_09.md`). New binding rules in
+  `docs/DESIGN_GUARDRAILS.md`: the kernel keeps mechanism only, no Linux-shaped kernel
+  API, compatibility layers are libraries, Linux drivers are temporary Tuxedo bridges with
+  a tracked native (REA) replacement. `docs/BRIDGE_LEDGER.md` lists every bridge (none
+  today), every native driver that used Linux/BSD as reference, device firmware and
+  third-party ring-0 code.
+- **Removed from the kernel.** Unreachable `sys_fork`/`sys_execve`/`sys_pipe`/
+  `sys_translate_driver` ("load Linux driver")/VFS stubs, unused `benchmark.rs`, seven
+  uncompiled directories (desktop, input, network, ...), backup files, and nine `std`
+  phase tests that never compiled. Kernel builds; 18,383 non-blank lines.
+- **Gate.** `scripts/tests/test_kernel_design_guardrails.py` (host unit tests in CI):
+  kernel deps exclude compat crates, no fork/pipe/socket-named kernel files, no backups in
+  `kernel/src`, kernel line budget 21,500, and a ledger row for any GPL-2.0-only or
+  Tuxedo-using component.
+- **Open decision.** #70/#82 run firmware AML in ring 0; the audit recommends a ring-3
+  `sexacpi` server.
+
 
 ## Boot log on screen, stop screen, crash records, restartable services, fuzzing (2026-11-09)
 

@@ -17,6 +17,8 @@ pub fn set_clock_default(clock: fn() -> (i64, u64)) {
 }
 
 fn now() -> (i64, u64) {
+    #[cfg(target_os = "hermit")]
+    if unsafe { WALL }.is_none() { return crate::posix::clock(); }
     unsafe { WALL }.map_or((0, 0), |f| f())
 }
 
@@ -44,7 +46,7 @@ pub struct tm {
 
 
 /// CLOCK_REALTIME is 0; every other clock is monotonic.
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn clock_gettime(id: c_int, ts: *mut timespec) -> c_int {
     let (wall, mono) = now();
     let ns = if id == 0 { wall } else { mono as i64 };
@@ -55,7 +57,7 @@ pub unsafe extern "C" fn clock_gettime(id: c_int, ts: *mut timespec) -> c_int {
     0
 }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn time(out: *mut i64) -> i64 {
     let t = now().0.div_euclid(1_000_000_000);
     if !out.is_null() {
@@ -65,7 +67,7 @@ pub unsafe extern "C" fn time(out: *mut i64) -> i64 {
 }
 
 /// CLOCKS_PER_SEC is 1,000,000 in musl.
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub extern "C" fn clock() -> c_long {
     (now().1 / 1000) as c_long
 }
@@ -107,19 +109,19 @@ pub fn civil(t: i64) -> tm {
     }
 }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn gmtime_r(t: *const i64, out: *mut tm) -> *mut tm {
     unsafe { *out = civil(*t) };
     out
 }
 
 /// SexOS keeps civil time in UTC; local time is UTC.
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn localtime_r(t: *const i64, out: *mut tm) -> *mut tm {
     unsafe { gmtime_r(t, out) }
 }
 
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn mktime(t: *mut tm) -> i64 {
     let t = unsafe { &mut *t };
     let months = t.tm_year as i64 * 12 + t.tm_mon as i64;
@@ -130,7 +132,7 @@ pub unsafe extern "C" fn mktime(t: *mut tm) -> i64 {
 }
 
 /// `strftime` for the numeric fields: `%Y %m %d %H %M %S %y %j %F %T %%`.
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn strftime(out: *mut c_char, cap: usize, fmt: *const c_char, t: *const tm) -> usize {
     let fmt = unsafe { core::slice::from_raw_parts(fmt.cast::<u8>(), crate::string::strnlen(fmt, usize::MAX)) };
     let t = unsafe { &*t };

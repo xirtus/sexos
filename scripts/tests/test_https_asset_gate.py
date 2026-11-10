@@ -353,7 +353,7 @@ def key_fixture(mode='ready',post=True,compact=False):
  trace='';actions=[];tick=1;menu_k=0
  if compact:
   for code in ('down','ret'):actions.append(dict(key=code,code=gate.KEY_CODES[code],kind='boot',transport='send-key',serial_start=0,serial_qmp_return=0,serial_end=0,host_start=tick,host_qmp_return=tick+.1,host_end=tick+.2));tick+=1
- keys=['g','a','f','i','q','g','grave_accent','k','k','k','k','ret','a','grave_accent','k','k','k','k','ret','f']if mode=='ready'else['g','q']if mode=='partial-clear'else['g','f11']if mode=='partial-close'else['g']
+ keys=['g','a','f','i','q','g','grave_accent','k','k','k','k','k','k','ret','a','grave_accent','k','k','k','k','k','k','ret','f']if mode=='ready'else['g','q']if mode=='partial-clear'else['g','f11']if mode=='partial-close'else['g']
  for code in keys:
   start=len(trace);number=gate.KEY_CODES[code];trace+=f'[sexinput.ps2.scancode] raw={hex(number)}\n'
   if code in gate.BROWSER_EFFECTS:
@@ -361,8 +361,8 @@ def key_fixture(mode='ready',post=True,compact=False):
    held=f'[shell.browser.input] code={number} down=1 slot=43 accepted=1\n';trace+=effects[code]+held if post else held+effects[code]
   else:
    if code=='k':
-    old,new=((0,11),(11,10),(10,9),(9,8))[menu_k%4];trace+=f'[shell.palette.select] old={old} new={new}\n';menu_k+=1
-   else:trace+=dict(grave_accent='[shell.palette.open] ok=1 selected=0 count=12\n',k='[shell.palette.select] old=0 new=9\n',ret='[shell.window.action] action=ZoomToggle frame=9 sid=300 ok=1\n',f11='[sext.app.pool.ready] target=15 task=15 bytes=1 ok=1\n')[code]
+    old,new=((0,13),(13,12),(12,11),(11,10),(10,9),(9,8))[menu_k%6];trace+=f'[shell.palette.select] old={old} new={new}\n';menu_k+=1
+   else:trace+=dict(grave_accent='[shell.palette.open] ok=1 selected=0 count=14\n',k='[shell.palette.select] old=0 new=9\n',ret='[shell.window.action] action=ZoomToggle frame=9 sid=300 ok=1\n',f11='[sext.app.pool.ready] target=15 task=15 bytes=1 ok=1\n')[code]
   trace+=f'[sexinput.ps2.scancode] raw={hex(number|128)}\n';actions.append(dict(key=code,code=number,kind='browser'if code in gate.BROWSER_EFFECTS else'close'if code=='f11'else'menu',transport='input-send-event',serial_start=start,serial_qmp_return=start,serial_end=len(trace),host_start=tick,host_qmp_return=tick+.1,host_end=tick+.2));tick+=1
  return trace,[dict(serial_end=len(trace))],actions
 
@@ -381,7 +381,7 @@ class PhysicalKeyCausality(unittest.TestCase):
  def test_old_palette_count_or_transition_cannot_authorize_zoom(self):
   for compact in(False,True):
    trace,_,actions=key_fixture('ready',compact=compact)
-   for action_index,old,new in[(6,'count=12','count=11'),(7,'old=0 new=11','old=0 new=9')]:
+   for action_index,old,new in[(6,'count=14','count=13'),(7,'old=0 new=13','old=0 new=11')]:
     index=action_index+(2 if compact else 0)
     self.assertIn(old,trace[actions[index]['serial_start']:actions[index]['serial_end']])
     changed,frames,rows=change_key_fixture(trace,actions,index,lambda chunk:chunk.replace(old,new))
