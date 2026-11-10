@@ -8,7 +8,7 @@
 
 [spec]
 version = "1.0.0"
-abi_version_hash = "17424cba5cf60075af2b015f7476e311eaa90ada8a9ab936032fc4ac615db8b3"
+abi_version_hash = "fc7adebdb9c8dded73461abb326ed92a6dce41d5a2b278111c5fb82e7750d3fd"
 contract_sha256 = "093f260760273d6f40a0bab6330ea7f9d95f744a4d8a7464fb92241e10740df4"
 target = "x86_64-sex.json"
 
@@ -451,6 +451,11 @@ action = "copy_file"
 src = "limine.cfg"
 dst = "iso_root/limine.cfg"
 artifacts = ["iso_root/limine.cfg"]
+
+[[stage]]
+id = "wifi_firmware"
+action = "wifi_firmware"
+artifacts = ["iso_root/firmware/wifi.pack"]
 
 [[stage]]
 id = "boot_image"

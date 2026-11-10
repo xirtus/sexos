@@ -90,6 +90,26 @@ pub fn write_prph(r: &mut impl Registers, family: Family, addr: u32, value: u32)
     r.write(PRPH_WDAT, value);
 }
 
+/// Asks the chip to stay awake for register and peripheral access
+/// (`iwx_nic_lock`). Polls a bounded number of times; false means try again on a
+/// later step. Every success must be paired with `nic_unlock`.
+pub fn nic_lock(r: &mut impl Registers) -> bool {
+    r.set(GP_CNTRL, GP_MAC_ACCESS_REQ);
+    for _ in 0..1000 {
+        if r.read(GP_CNTRL) & (GP_MAC_CLOCK_READY | GP_GOING_TO_SLEEP) == GP_MAC_CLOCK_READY { return true; }
+    }
+    r.clear(GP_CNTRL, GP_MAC_ACCESS_REQ);
+    false
+}
+pub fn nic_unlock(r: &mut impl Registers) { r.clear(GP_CNTRL, GP_MAC_ACCESS_REQ); }
+
+/// UMAC doorbell: tells the firmware the platform NVM is in place.
+pub const UREG_DOORBELL_TO_ISR6: u32 = 0xa0_5c04;
+pub const DOORBELL_PNVM: u32 = 1 << 20;
+/// Where the MAC address fuses are mirrored (22000 and AX210 families).
+pub const MAC_ADDR_OTP: u32 = 0x380;
+pub const MAC_ADDR_STRAP: u32 = 0x388;
+
 /// Address of a UMAC peripheral register for this family.
 pub fn umac_prph(family: Family, addr: u32) -> u32 { if family == Family::Ax210 { addr + 0x30_0000 } else { addr } }
 
@@ -118,6 +138,9 @@ pub struct Boot {
     since: u64,
     started: u64,
     prepare_rounds: u8,
+    /// The chip raised the ALIVE interrupt: its firmware has configured the receive
+    /// hardware (RFH), so the driver must publish the free ring again.
+    pub alive_interrupts: u32,
 }
 
 const READY_US: u64 = 150_000;
@@ -128,7 +151,7 @@ const ALIVE_US: u64 = 1_000_000;
 
 impl Boot {
     pub fn new(chip: Chip, now: u64) -> Self {
-        Self { chip, step: Step::Ready, hw_rev: 0, since: now, started: now, prepare_rounds: 0 }
+        Self { chip, step: Step::Ready, hw_rev: 0, since: now, started: now, prepare_rounds: 0, alive_interrupts: 0 }
     }
     pub fn done(&self) -> bool { matches!(self.step, Step::Alive | Step::Failed(_)) }
     fn fail(&mut self, f: Failure) { self.step = Step::Failed(f); }
@@ -251,6 +274,7 @@ impl Boot {
                 else if cause & (INT_ALIVE | INT_FH_RX) != 0 {
                     // The ALIVE notification itself arrives on the RX ring; the queue
                     // layer confirms it with `alive_received`.
+                    if cause & INT_ALIVE != 0 { self.alive_interrupts = self.alive_interrupts.saturating_add(1); }
                     r.write(INT, cause);
                 } else if now.saturating_sub(self.since) >= ALIVE_US { self.fail(Failure::AliveTimeout); }
             }

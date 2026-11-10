@@ -313,12 +313,12 @@ mod tests {
     const PEER: &str = r#"
 import socket,ssl,sys
 c=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);c.minimum_version=ssl.TLSVersion.TLSv1_3;c.set_ecdh_curve('prime256v1');c.num_tickets=0
-c.load_cert_chain(sys.argv[1],sys.argv[2])
+c.load_cert_chain(sys.argv[1],sys.argv[2]);c.set_alpn_protocols(['h2','http/1.1'])
 s=socket.socket();s.bind(('127.0.0.1',0));s.listen(4);print(s.getsockname()[1],flush=True)
 conns=0;reqs=0
 while reqs<3:
  raw,_=s.accept();conns+=1
- t=c.wrap_socket(raw,server_side=True);f=t.makefile('rb')
+ t=c.wrap_socket(raw,server_side=True);f=t.makefile('rb');alpn=t.selected_alpn_protocol()
  while True:
   line=f.readline()
   if not line:break
@@ -327,7 +327,7 @@ while reqs<3:
   t.sendall(b'HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n'%len(body)+body)
   if reqs==3:break
  t.close()
-print('connections=%d requests=%d'%(conns,reqs),flush=True)
+print('connections=%d requests=%d alpn=%s'%(conns,reqs,alpn),flush=True)
 "#;
     fn openssl(dir: &std::path::Path, args: &[&str]) { assert!(Command::new("openssl").args(args).current_dir(dir).stderr(Stdio::null()).status().unwrap().success(), "{:?}", args); }
 
@@ -530,7 +530,7 @@ print('connections=%d requests=%d'%(conns,reqs),flush=True)
         }
         let mut summary = String::new();
         out.read_line(&mut summary).unwrap();
-        assert_eq!(summary.trim(), "connections=1 requests=3");
+        assert_eq!(summary.trim(), "connections=1 requests=3 alpn=http/1.1");
         let _ = peer.wait();
         let _ = std::fs::remove_dir_all(&dir);
     }

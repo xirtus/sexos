@@ -191,15 +191,18 @@ use sex_pdx::sound_ring as ring;
 use sex_pdx::sound_mixer as mixer;
 
 /// The person's settings: master volume and mute, and each row's volume and mute.
-struct Mixer { master: u8, muted: bool, rows: [u8; STREAMS], rows_muted: [bool; STREAMS] }
-static mut MIXER: Mixer = Mixer { master: 100, muted: false, rows: [100; STREAMS], rows_muted: [false; STREAMS] };
+/// `mic`: rows whose program the person let hear the microphone, until it ends.
+struct Mixer { master: u8, muted: bool, rows: [u8; STREAMS], rows_muted: [bool; STREAMS], mic: [bool; STREAMS] }
+static mut MIXER: Mixer = Mixer { master: 100, muted: false, rows: [100; STREAMS], rows_muted: [false; STREAMS], mic: [false; STREAMS] };
 fn settings() -> &'static mut Mixer { unsafe { &mut *core::ptr::addr_of_mut!(MIXER) } }
 
 /// Master gain in 1/65536, 0 while muted.
 fn master_gain() -> u32 { let m = settings(); if m.muted { 0 } else { mixer::master_gain(m.master) } }
 
 #[derive(Clone, Copy)]
-struct Stream { ring: ring::Ring, active: bool, pd: u32 }
+/// A program's stream; `frac` is where between two of its frames the next output
+/// falls when it is not at 48 kHz (1/65536 of a frame).
+struct Stream { ring: ring::Ring, active: bool, pd: u32, frac: u32 }
 
 #[derive(Clone, Copy)]
 struct Note { hz: u32, frames: u32, volume: u16 }
@@ -207,7 +210,8 @@ struct Note { hz: u32, frames: u32, volume: u16 }
 /// The sound chip BOOT leased Bell: a virtio sound card (virtual machines) or an
 /// Intel HD Audio controller (real PCs, and QEMU's intel-hda).
 enum Card {
-    Virtio { card: VirtIOSound<PoolHal, LeaseTransport>, stream: u32 },
+    /// `input`: the card's first input stream (a microphone), when it has one.
+    Virtio { card: VirtIOSound<PoolHal, LeaseTransport>, stream: u32, input: Option<u32> },
     Hda(crate::hda::Hda),
 }
 impl Card {
@@ -219,7 +223,7 @@ impl Card {
     }
     fn submit(&mut self, period: &[u8; PERIOD_BYTES]) -> Result<u16, &'static str> {
         match self {
-            Card::Virtio { card, stream } => card.pcm_xfer_nb(*stream, period).map_err(|e| {
+            Card::Virtio { card, stream, .. } => card.pcm_xfer_nb(*stream, period).map_err(|e| {
                 sex_pdx::serial_record!("[bell.sound.xfer.error] {:?}", e); "xfer" }),
             Card::Hda(h) => h.submit(period).ok_or("ring_full"),
         }
@@ -229,12 +233,31 @@ impl Card {
     /// The HD Audio stream runs from the start; a virtio stream starts once fed.
     fn start(&mut self) -> bool {
         match self {
-            Card::Virtio { card, stream } => card.pcm_start(*stream).is_ok(),
+            Card::Virtio { card, stream, .. } => card.pcm_start(*stream).is_ok(),
             Card::Hda(_) => true,
         }
     }
     fn stream(&self) -> u32 { match self { Card::Virtio { stream, .. } => *stream, Card::Hda(_) => 0 } }
+    fn has_input(&self) -> bool { matches!(self, Card::Virtio { input: Some(_), .. }) }
+    /// Starts or stops the microphone stream.
+    fn input_run(&mut self, on: bool) -> bool {
+        match self {
+            Card::Virtio { card, input: Some(i), .. } => if on { card.pcm_start(*i).is_ok() } else { card.pcm_stop(*i).is_ok() },
+            _ => false,
+        }
+    }
+    /// Asks for one more period from the microphone.
+    fn input_ask(&mut self) -> bool {
+        match self { Card::Virtio { card, input: Some(i), .. } => card.pcm_capture_nb(*i).is_ok(), _ => false }
+    }
+    /// A period the microphone filled, if one is back.
+    fn input_take(&mut self) -> Option<alloc::vec::Vec<u8>> {
+        match self { Card::Virtio { card, input: Some(_), .. } => card.pcm_capture_take().ok().flatten().map(|(_, f)| f), _ => None }
+    }
 }
+
+/// Capture periods kept with the device while someone listens.
+const LISTEN_AHEAD: usize = 4;
 
 struct Player {
     card: Card,
@@ -253,6 +276,10 @@ struct Player {
     /// Frames each stream gave each in-flight period, credited to PLAYED when the
     /// card hands that period back.
     took: [[u16; STREAMS]; IN_FLIGHT],
+    /// The microphone stream runs; `asked` periods are with the device.
+    hearing: bool,
+    asked: usize,
+    heard: u64,
 }
 /// The period being mixed, kept off the service's small stack.
 static mut MIX: [[i32; 2]; PERIOD_FRAMES] = [[0; 2]; PERIOD_FRAMES];
@@ -310,11 +337,16 @@ impl Player {
                 r.store(ring::PLAYED, r.load(ring::PLAYED) + (skip - taken));
                 taken = skip;
                 r.store(ring::TAKEN, taken);
+                st.frac = 0;
             }
             if r.load(ring::PAUSED) != 0 { continue; }
             // A program owns only its own ring: a counter it bent is clamped, not trusted.
             let have = written.saturating_sub(taken).min(ring::FRAMES) as usize;
-            if hold && have < PERIOD_FRAMES && r.load(ring::OPEN) != 0 { continue; }
+            let rate = crate::resample::rate_of(r.load(ring::RATE_HZ));
+            let step = crate::resample::step(rate);
+            // Input a whole period needs: its frames at the program's rate, and one to blend.
+            let need = if rate == crate::resample::OUT_RATE { PERIOD_FRAMES } else { ((PERIOD_FRAMES as u64 * step + st.frac as u64) >> 16) as usize + 2 };
+            if hold && have < need && r.load(ring::OPEN) != 0 { continue; }
             let n = have.min(PERIOD_FRAMES);
             // A muted program's sound is taken and counted as played, so its clock
             // runs on, but not heard.
@@ -325,15 +357,25 @@ impl Player {
                 (r.load(ring::VOLUME).min(100) * m.rows[i] as u64 * master as u64 / 10_000) as i64
             };
             let frames = r.frames();
-            for f in 0..n {
-                let at = ((taken + f as u64) % ring::FRAMES) as usize;
-                let [l, rr] = unsafe { core::ptr::read_volatile(frames.add(at)) };
-                mix[f][0] += (l as i64 * gain >> 16) as i32;
-                mix[f][1] += (rr as i64 * gain >> 16) as i32;
-            }
-            r.store(ring::TAKEN, taken + n as u64);
-            self.took[slot][i] = n as u16;
-            if n == 0 && r.load(ring::OPEN) == 0 {
+            let read = |f: usize| unsafe { core::ptr::read_volatile(frames.add(((taken + f as u64) % ring::FRAMES) as usize)) };
+            // Frames of the program's taken, and frames of the mix made.
+            let (used, made) = if rate == crate::resample::OUT_RATE {
+                for (f, out) in mix.iter_mut().enumerate().take(n) {
+                    let [l, rr] = read(f);
+                    out[0] += (l as i64 * gain >> 16) as i32;
+                    out[1] += (rr as i64 * gain >> 16) as i32;
+                }
+                (n, n)
+            } else {
+                let made = crate::resample::outputs(have, st.frac, step, PERIOD_FRAMES);
+                let (used, frac) = crate::resample::mix_into(&mut mix[..], made, have, st.frac, step, gain, read);
+                st.frac = frac;
+                // A closed stream's last frame has no next to blend with: it is done.
+                if made == 0 && r.load(ring::OPEN) == 0 { st.frac = 0; (have, 0) } else { (used, made) }
+            };
+            r.store(ring::TAKEN, taken + used as u64);
+            self.took[slot][i] = used as u16;
+            if made == 0 && r.load(ring::OPEN) == 0 {
                 st.active = false;
                 sex_pdx::serial_record!("[bell.sound.stream.closed] row={} taken={}", i, taken);
             }
@@ -347,7 +389,54 @@ impl Player {
         true
     }
 
+    /// Rows whose program wants the microphone and may have it.
+    fn listener(&self, i: usize) -> bool {
+        self.streams[i].is_some_and(|st| st.ring.load(ring::LISTEN) == 1 && settings().mic[i])
+    }
+    fn listening(&self) -> bool { (0..STREAMS).any(|i| self.listener(i)) }
+
+    /// The microphone: tell each asking program where it stands, run the input stream
+    /// while anyone may listen, and copy what it hears into each listener's ring.
+    fn listen_pump(&mut self) {
+        let input = self.card.has_input();
+        for (i, st) in self.streams.iter().enumerate() {
+            let Some(st) = st else { continue };
+            let want = st.ring.load(ring::LISTEN) == 1;
+            let mic = if !want { ring::MIC_OFF } else if !input { ring::MIC_NONE }
+                else if settings().mic[i] { ring::MIC_ON } else { ring::MIC_WAITING };
+            if st.ring.load(ring::MIC) != mic { st.ring.store(ring::MIC, mic); sex_pdx::serial_record!("[bell.mic.row] row={} state={}", i, mic); }
+        }
+        let on = input && self.listening();
+        if on != self.hearing {
+            let ok = self.card.input_run(on);
+            self.hearing = on;
+            sex_pdx::serial_record!("[bell.mic] on={} ok={} heard={}", on as u8, ok as u8, self.heard);
+        }
+        // Periods come back in order; while no one listens they are dropped.
+        while let Some(frames) = self.card.input_take() {
+            self.asked = self.asked.saturating_sub(1);
+            if !self.hearing { continue; }
+            let n = (frames.len() / FRAME_BYTES) as u64;
+            for i in 0..STREAMS {
+                if !self.listener(i) { continue; }
+                let r = self.streams[i].unwrap().ring;
+                let at = r.load(ring::HEARD);
+                let slots = r.heard();
+                for f in 0..n as usize {
+                    let b = &frames[f * FRAME_BYTES..];
+                    let pair = [i16::from_le_bytes([b[0], b[1]]), i16::from_le_bytes([b[2], b[3]])];
+                    unsafe { core::ptr::write_volatile(slots.add(((at + f as u64) % ring::CAPTURE_FRAMES) as usize), pair) };
+                }
+                r.store(ring::HEARD, at + n);
+            }
+            if self.heard == 0 { sex_pdx::serial_record!("[bell.mic.first] frames={}", n); }
+            self.heard += n;
+        }
+        while self.hearing && self.asked < LISTEN_AHEAD && self.card.input_ask() { self.asked += 1; }
+    }
+
     fn pump(&mut self) {
+        self.listen_pump();
         // Reap finished periods in order; the device returns them as it plays.
         while self.flying > 0 {
             if !self.card.done(self.tokens[self.first]) { break; }
@@ -394,7 +483,7 @@ pub fn init() {
 fn player_with(card: Card) -> Player {
     Player { card, started: false, notes: [Note { hz: 0, frames: 0, volume: 0 }; NOTES],
         head: 0, len: 0, done: 0, phase: 0, tokens: [0; IN_FLIGHT], first: 0, flying: 0,
-        period: [0; PERIOD_BYTES], played: 0, streams: [None; STREAMS], took: [[0; STREAMS]; IN_FLIGHT] }
+        period: [0; PERIOD_BYTES], played: 0, streams: [None; STREAMS], took: [[0; STREAMS]; IN_FLIGHT], hearing: false, asked: 0, heard: 0 }
 }
 
 fn open() -> Result<Player, &'static str> {
@@ -423,7 +512,13 @@ fn open() -> Result<Player, &'static str> {
     card.pcm_set_params(stream, (PERIOD_BYTES * IN_FLIGHT) as u32, PERIOD_BYTES as u32,
         PcmFeatures::empty(), CHANNELS, PcmFormat::S16, PcmRate::Rate48000).map_err(|_| "params")?;
     card.pcm_prepare(stream).map_err(|_| "prepare")?;
-    Ok(player_with(Card::Virtio { card, stream }))
+    // The microphone, if the card has one: the same format, a period per request.
+    let input = card.input_streams().ok().and_then(|s| s.first().copied()).filter(|&i| {
+        card.pcm_set_params(i, (PERIOD_BYTES * LISTEN_AHEAD) as u32, PERIOD_BYTES as u32,
+            PcmFeatures::empty(), CHANNELS, PcmFormat::S16, PcmRate::Rate48000).is_ok() && card.pcm_prepare(i).is_ok()
+    });
+    sex_pdx::serial_record!("[bell.mic.card] input={}", input.map_or(-1, |i| i as i64));
+    Ok(player_with(Card::Virtio { card, stream, input }))
 }
 
 /// An Intel HD Audio controller: its own DMA pool, then the codec bring-up.
@@ -457,21 +552,14 @@ pub fn tone(hz: u64, ms: u64, volume: u64) -> bool {
 pub fn chime() -> bool { tone(1319, 90, 30) && tone(1760, 140, 30) }
 
 /// Notes still to play, streams playing, or periods still with the device.
-pub fn busy() -> bool { player().is_some_and(|p| p.len > 0 || p.flying > 0 || p.streaming()) }
+pub fn busy() -> bool { player().is_some_and(|p| p.len > 0 || p.flying > 0 || p.streaming() || p.hearing || p.asked > 0) }
 
 /// A program row says its ring has sound: play it from where Bell last took.
 /// False when there's no card or the caller has no ring.
 pub fn stream(caller: u32) -> bool {
     let Some(p) = player() else { return false };
-    let Some(k) = ring::index_of(caller).filter(|k| *k < STREAMS) else { return false };
-    if p.streams[k].is_none() {
-        match sex_pdx::sound_ring_bell(k) {
-            Ok(r) => p.streams[k] = Some(Stream { ring: r, active: false, pd: caller }),
-            Err(e) => { sex_pdx::serial_record!("[bell.sound.stream.denied] row={} err={}", k, e); return false; }
-        }
-    }
+    let Some(k) = ring_of(p, caller) else { return false };
     let st = p.streams[k].as_mut().unwrap();
-    st.pd = caller;
     if !st.active {
         st.active = true;
         sex_pdx::serial_record!("[bell.sound.stream.open] row={} caller={} written={} taken={}",
@@ -481,9 +569,54 @@ pub fn stream(caller: u32) -> bool {
     true
 }
 
+/// The caller's row, its ring taken up if Bell had not yet.
+fn ring_of(p: &mut Player, caller: u32) -> Option<usize> {
+    let k = ring::index_of(caller).filter(|k| *k < STREAMS)?;
+    if p.streams[k].is_none() {
+        match sex_pdx::sound_ring_bell(k) {
+            Ok(r) => p.streams[k] = Some(Stream { ring: r, active: false, pd: caller, frac: 0 }),
+            Err(e) => { sex_pdx::serial_record!("[bell.sound.stream.denied] row={} err={}", k, e); return None; }
+        }
+    }
+    p.streams[k].as_mut().unwrap().pd = caller;
+    Some(k)
+}
+
+/// A program set or cleared `LISTEN` in its ring. Without the person's leave it hears
+/// nothing and its ring says it waits.
+pub fn listen(caller: u32) -> bool {
+    let Some(p) = player() else { return false };
+    let Some(k) = ring_of(p, caller) else { return false };
+    sex_pdx::serial_record!("[bell.mic.asked] row={} caller={} listen={} allowed={}", k, caller,
+        p.streams[k].unwrap().ring.load(ring::LISTEN), settings().mic[k] as u8);
+    p.pump();
+    true
+}
+
 /// A program ended, closed or crashed: stop its stream, whatever its ring says.
 pub fn retire(pd: u32) -> bool {
+    // Leave to hear the microphone lapses with the program, whether or not it ever
+    // used its ring: the row is the program's PD's, and the next program there asks anew.
+    let row = ring::index_of(pd).filter(|k| *k < STREAMS);
+    if let Some(k) = row {
+        if settings().mic[k] { sex_pdx::serial_record!("[bell.mic.lapsed] row={} pd={}", k, pd); }
+        settings().mic[k] = false;
+    }
     let Some(p) = player() else { return false };
+    p.listen_pump();
+    // What the microphone put in the ring is the program's alone: wipe it before the
+    // row runs another program.
+    if let Some(k) = row {
+        if let Some(r) = p.streams[k].map(|st| st.ring).or_else(|| sex_pdx::sound_ring_bell(k).ok()) {
+            if r.load(ring::HEARD) != 0 {
+                unsafe { core::ptr::write_bytes(r.heard(), 0, ring::CAPTURE_FRAMES as usize) };
+                sex_pdx::serial_record!("[bell.mic.wiped] row={} heard={}", k, r.load(ring::HEARD));
+            }
+            r.store(ring::HEARD, 0);
+            r.store(ring::LISTEN, 0);
+            r.store(ring::MIC, ring::MIC_OFF);
+        }
+    }
     let Some(st) = p.streams.iter_mut().flatten().find(|st| st.active && st.pd == pd) else { return false };
     st.active = false;
     sex_pdx::serial_record!("[bell.sound.stream.retired] pd={} taken={}", pd, st.ring.load(ring::TAKEN));
@@ -506,9 +639,9 @@ pub fn mixer_request(action: u64, a: u64, b: u64, write: bool) -> u64 {
     let m = settings();
     let state = |m: &Mixer| mixer::state(m.master, m.muted, present());
     let row = |m: &Mixer, k: usize| {
-        let (playing, asked, pd) = player().and_then(|p| p.streams[k].as_ref())
-            .map_or((false, 0, 0), |st| (st.active, st.ring.load(ring::VOLUME).min(100) as u8, st.pd));
-        mixer::Stream { volume: m.rows[k], muted: m.rows_muted[k], playing, asked, pd }.word()
+        let (playing, asked, pd, listening) = player().and_then(|p| p.streams[k].as_ref())
+            .map_or((false, 0, 0, false), |st| (st.active, st.ring.load(ring::VOLUME).min(100) as u8, st.pd, st.ring.load(ring::MIC) == ring::MIC_ON));
+        mixer::Stream { volume: m.rows[k], muted: m.rows_muted[k], playing, asked, pd, mic_allowed: m.mic[k], listening }.word()
     };
     let reply = match action {
         mixer::STATE => state(m),
@@ -525,6 +658,12 @@ pub fn mixer_request(action: u64, a: u64, b: u64, write: bool) -> u64 {
             m.rows[a as usize] = b as u8;
             m.rows_muted[a as usize] = b & mixer::MUTED != 0;
             row(m, a as usize)
+        }
+        mixer::MICROPHONE if (a as usize) < STREAMS && b <= 1 => {
+            m.mic[a as usize] = b == 1;
+            sex_pdx::serial_record!("[bell.mic.leave] row={} allowed={}", a, b);
+            if let Some(p) = player() { p.pump(); }
+            row(settings(), a as usize)
         }
         _ => return mixer::REFUSED,
     };

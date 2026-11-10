@@ -3,6 +3,7 @@
 extern crate alloc;
 mod paging_probe;
 mod sound;
+mod resample;
 mod hda;
 
 use sex_pdx::{pdx_reply, serial_println, OP_BELL_NOTIFY, OP_BELL_CLOSE, OP_BELL_ACTION,
@@ -1415,6 +1416,11 @@ pub extern "C" fn _start() -> ! {
                 // A program's own sound, from its own ring; muting silences it too.
                 let allowed = !is_muted(msg.caller_pd) && !is_policy_muted(msg.caller_pd);
                 if allowed { sound::stream(msg.caller_pd as u32); }
+            }
+
+            sex_pdx::sound_ring::OP_LISTEN => {
+                // A program's own microphone ring; whether it hears is the person's say.
+                sound::listen(msg.caller_pd as u32);
             }
 
             sex_pdx::OP_BELL_TONE => {

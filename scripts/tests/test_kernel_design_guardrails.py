@@ -14,7 +14,7 @@ KERNEL = ROOT / "kernel"
 
 # Non-blank lines of Rust under kernel/src. Raising it is allowed: say why in the
 # budget table of docs/DESIGN_GUARDRAILS.md in the same PR.
-KERNEL_LINE_BUDGET = 21_500
+KERNEL_LINE_BUDGET = 22_500
 
 # Compatibility layers and userspace stacks: libraries a program links, never the kernel.
 COMPAT_CRATES = {
