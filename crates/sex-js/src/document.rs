@@ -101,6 +101,21 @@ impl FetchAsk {
 }
 
 impl Document {
+    // PRIVATE read-only diagnostic. Never expose these through page bindings.
+    pub fn diagnostic_owner(&self) -> u64 { self.resource_owner }
+    pub fn diagnostic_source_policy(&self, source: &str) -> (&'static str, bool) {
+        let source = strip_fragment(source);
+        let state = if self.source_policies.contains_key(source) { "recorded-final-url" }
+            else if self.source_policy_overflow { "unknown-overflow" }
+            else { sex_html::url::resolve(&self.url, source).map_or("unknown-or-host-local", |resolved| {
+                match (sex_fetch::Url::parse(&self.url), sex_fetch::Url::parse(&resolved)) {
+                    (Ok(a), Ok(b)) if a.origin() == b.origin() => "origin-derived-same",
+                    (Ok(_), Ok(_)) => "origin-derived-cross",
+                    _ => "unknown-or-host-local",
+                }
+            }) };
+        (state, self.source_muted(source))
+    }
     /// Bind requested module names to the fetched final URL, including redirects.
     /// This records provenance only; it grants no fetch/CORS access.
     pub fn keep_source_policy(&mut self, requested: &str, final_url: &str) {

@@ -15,6 +15,7 @@
 extern crate alloc;
 
 mod media;
+mod live_diagnostic;
 mod mse;
 mod viewport;
 
@@ -871,6 +872,7 @@ impl Browser {
         if self.in_frame.is_none() { self.frames_check = true; }
         self.scroll = self.scroll.min(self.max_scroll());
         if self.focus.map_or(false, |f| f >= self.page.links.len()) { self.focus = None; }
+        live_diagnostic::record_layout(self, &styles);
         // Ask for the next tick soon: the change may have started timers.
         if matches!(self.doc, Doc::Scripted(_)) && self.timer.is_none() { self.timer = Some(sex_pdx::get_ticks()); }
         self.next_frame();
@@ -1654,6 +1656,7 @@ pub extern "C" fn _start() -> ! {
         } };
         match event {
             Event::Close => { sex_pdx::serial_record!("[web.closed] target={} task={}", b.window.target, b.window.task); b.window.close() }
+            Event::Key(key) if key.code == 0x15 && key.control && key.shift => live_diagnostic::snapshot(&b),
             Event::Key(key) => b.key(key),
             Event::Resize { .. } => {
                 let (width, height) = b.window.size();
