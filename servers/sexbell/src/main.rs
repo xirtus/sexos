@@ -1418,6 +1418,11 @@ pub extern "C" fn _start() -> ! {
                 if allowed { sound::stream(msg.caller_pd as u32); }
             }
 
+            sex_pdx::sound_ring::OP_LISTEN => {
+                // A program's own microphone ring; whether it hears is the person's say.
+                sound::listen(msg.caller_pd as u32);
+            }
+
             sex_pdx::OP_BELL_TONE => {
                 // Fire and forget, like a notification: arg0 Hz (0 rests), arg1 ms, arg2 volume %.
                 let volume = if msg.arg2 == 0 { 30 } else { msg.arg2 };
