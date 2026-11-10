@@ -2,10 +2,13 @@
 //! The [`Page`] for a parsed document: scripts read and change the [`Dom`], and the
 //! browser lays the page out again when [`Document::dirty`] says they did.
 use crate::{op, Page};
+use core::sync::atomic::{AtomicU64, Ordering};
+static NEXT_RESOURCE_OWNER: AtomicU64 = AtomicU64::new(1);
 use alloc::{format, string::String, vec::Vec};
 use sex_html::dom::{Dom, Kind, NodeId};
 
 pub struct Document {
+    resource_owner: u64,
     pub dom: Dom,
     /// The page's address, for `location`.
     pub url: String,
@@ -43,6 +46,8 @@ pub struct Document {
     pub pictures: Vec<(String, alloc::rc::Rc<sex_image::Image>)>,
     /// `fetch`/XHR requests the browser has not loaded yet.
     pub fetches: Vec<FetchAsk>,
+    /// Classic script resources: loaded/evaluated by the browser, not fetch().
+    pub classic_scripts: Vec<ClassicScript>,
     /// Loaded bodies the script has not taken yet, by request id.
     pub bodies: Vec<(u32, Vec<u8>)>,
     /// Video and audio requests not yet taken by the browser: (element, verb, argument).
@@ -62,6 +67,16 @@ pub struct Document {
     pub modules_wanted: Vec<String>,
     /// The page's import map: (bare specifier, or a prefix ending in `/`, address).
     pub import_map: Vec<(String, String)>,
+}
+
+/// A connected script element requesting classic execution. The host derives
+/// its URL and CORS mode from the actual DOM, never a page-supplied fetch option.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClassicScript {
+    pub node: NodeId,
+    pub url: String,
+    pub cors: bool,
+    owner: u64,
 }
 
 /// One request a script made with `fetch` or `XMLHttpRequest`.
@@ -84,6 +99,21 @@ impl FetchAsk {
 }
 
 impl Document {
+    /// A delayed script is still bound to this document and the unchanged,
+    /// connected DOM element. Reloading the same URL creates a new owner token.
+    pub fn classic_script_current(&self, ask: &ClassicScript) -> bool {
+        ask.owner == self.resource_owner && ask.node < self.dom.nodes.len()
+            && self.dom.tag(ask.node) == Some("script")
+            && self.dom.is_inclusive_ancestor(Dom::ROOT, ask.node)
+            && self.dom.attr(ask.node, "src").map(str::trim) == Some(ask.url.as_str())
+            && self.dom.attr(ask.node, "crossorigin").is_some() == ask.cors
+            && !self.dom.attr(ask.node, "crossorigin").is_some_and(|v| v.eq_ignore_ascii_case("use-credentials"))
+            && self.dom.attr(ask.node, "type").is_none_or(|v| {
+                let ty = v.trim().to_ascii_lowercase();
+                ty.is_empty() || ty.contains("javascript") || ty.contains("ecmascript")
+            })
+    }
+
     /// Keeps a loaded body until the script takes it. Bodies nobody reads (a failed
     /// request, or a response whose body was never asked for) give way to newer ones
     /// once 64 are waiting.
@@ -108,7 +138,7 @@ fn rough_measure(font: &str, text: &str) -> i32 {
 
 impl Document {
     pub fn new(dom: Dom, url: &str, viewport: (i32, i32), clock: fn() -> u64) -> Self {
-        Self { dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, navigate_post: None, referrer: String::new(), parent_origin: None, outbox: Vec::new(), rects: Vec::new(), layers: Vec::new(), clock, canvas_queue: Vec::new(), measure: rough_measure, gl: Default::default(), pictures: Vec::new(), fetches: Vec::new(), bodies: Vec::new(), media: Vec::new(), media_bytes: Vec::new(), heads: Vec::new(), next_fetch: 0, cookies: None, wall: || 0, modules: Default::default(), modules_wanted: Vec::new(), import_map: Vec::new() }
+        Self { resource_owner: NEXT_RESOURCE_OWNER.fetch_add(1, Ordering::Relaxed), dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, navigate_post: None, referrer: String::new(), parent_origin: None, outbox: Vec::new(), rects: Vec::new(), layers: Vec::new(), clock, canvas_queue: Vec::new(), measure: rough_measure, gl: Default::default(), pictures: Vec::new(), fetches: Vec::new(), classic_scripts: Vec::new(), bodies: Vec::new(), media: Vec::new(), media_bytes: Vec::new(), heads: Vec::new(), next_fetch: 0, cookies: None, wall: || 0, modules: Default::default(), modules_wanted: Vec::new(), import_map: Vec::new() }
     }
 
     /// Takes each element's laid-out box from the browser's layout, for
@@ -180,6 +210,20 @@ impl Page for Document {
     fn call_bytes(&mut self, operation: u32, a: &[&[u8]]) -> Option<Vec<u8>> {
         let text = |i: usize| a.get(i).and_then(|b| core::str::from_utf8(b).ok()).unwrap_or("");
         match operation {
+            op::CLASSIC_SCRIPT => {
+                if self.classic_scripts.len() >= 64 { return None; }
+                let node = self.element(Some(&text(0)))?;
+                if self.dom.tag(node) != Some("script") || !self.dom.is_inclusive_ancestor(Dom::ROOT, node) { return None; }
+                let ty = self.dom.attr(node, "type").unwrap_or("").trim().to_ascii_lowercase();
+                if !ty.is_empty() && !ty.contains("javascript") && !ty.contains("ecmascript") { return None; }
+                let src = self.dom.attr(node, "src")?.trim();
+                if src.is_empty() { return None; }
+                // Credentialed cross-origin script mode needs a complete ACAC
+                // policy; refuse until supported instead of silently bypassing it.
+                if self.dom.attr(node, "crossorigin").is_some_and(|v| v.eq_ignore_ascii_case("use-credentials")) { return None; }
+                self.classic_scripts.push(ClassicScript { node, url: String::from(src), cors: self.dom.attr(node, "crossorigin").is_some(), owner: self.resource_owner });
+                return Some(b"1".to_vec());
+            }
             op::FETCH => {
                 // A page may not have more than 64 requests waiting at once.
                 if self.fetches.len() >= 64 { return None; }

@@ -5,10 +5,11 @@
 (function () {
   'use strict';
   const H = globalThis.__host;
+  const intrinsicEval = globalThis.eval;
   delete globalThis.__host;
   const OP = { LOG: 1, BY_ID: 2, QUERY: 3, INFO: 4, GET_ATTR: 5, SET_ATTR: 6, REMOVE_ATTR: 7, GET_TEXT: 8, SET_TEXT: 9,
     GET_HTML: 10, SET_HTML: 11, CREATE_ELEMENT: 12, CREATE_TEXT: 13, INSERT: 14, DETACH: 15, PARENT: 16, CHILDREN: 17,
-    ATTR_NAMES: 18, VIEWPORT: 19, NAVIGATE: 20, CLICKABLE: 21, RECT: 22, LOCATION: 23, CANVAS: 24, MEASURE: 25, HIT: 26, VALUE: 27, CARET: 28, MEDIA: 48, GL: 64, GL_QUERY: 65, FETCH: 66, FETCH_BODY: 67, FETCH_HEAD: 68, COOKIE: 69, MEDIA_APPEND: 70, FRAME: 31, POST_MESSAGE: 32 };
+    ATTR_NAMES: 18, VIEWPORT: 19, NAVIGATE: 20, CLICKABLE: 21, RECT: 22, LOCATION: 23, CANVAS: 24, MEASURE: 25, HIT: 26, VALUE: 27, CARET: 28, MEDIA: 48, GL: 64, GL_QUERY: 65, FETCH: 66, FETCH_BODY: 67, FETCH_HEAD: 68, COOKIE: 69, MEDIA_APPEND: 70, CLASSIC_SCRIPT: 71, FRAME: 31, POST_MESSAGE: 32 };
   const nodes = new Map();
   const defaultChecked = new WeakMap();
 
@@ -189,7 +190,7 @@
   function runCode(el, code) {
     const prev = document.currentScript;
     document.currentScript = el;
-    try { (0, eval)(code); } catch (e) { report(e); } finally { document.currentScript = prev; }
+    try { (0, intrinsicEval)(code); } catch (e) { report(e); } finally { document.currentScript = prev; }
   }
   function runScript(el) {
     el._sxFresh = false; freshScripts--;
@@ -200,8 +201,9 @@
     const url = resolveUrl(src);
     const done = ok => setTimeout(() => el.dispatchEvent(new Event(ok ? 'load' : 'error')), 0);
     if (module) { import(url).then(() => done(true), e => { report(e); done(false); }); return; }
-    fetch(url).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
-      .then(t => { runCode(el, t); done(true); }, e => { log(1, ['script did not load:', url, String(e && e.message || e)]); done(false); });
+    // A classic script is a browser resource, not page-readable fetch data.
+    // The host evaluates it directly and sends a completion event afterwards.
+    if (H(OP.CLASSIC_SCRIPT, '' + el._id) === null) done(false);
   }
   function report(e) {
     log(2, [e && e.stack ? e.name + ': ' + e.message + '\n' + e.stack : e]);
@@ -3805,6 +3807,7 @@
       // An iframe's page loaded (or failed to): its element hears `load`.
       case 'frameload': { const el = wrap(f[1]); if (el) el.dispatchEvent(new Event('load')); return 0; }
       case 'script': document.currentScript = f[1] ? wrap(f[1]) : null; return 0;
+      case 'scriptend': { const el = wrap(f[1]); if (el) setTimeout(() => el.dispatchEvent(new Event(f[2] === '1' ? 'load' : 'error')), 0); return 0; }
       case 'scroll': window.scrollY = window.pageYOffset = +f[1] || 0; return 0;
       case 'click': {
         const el = wrap(f[1]);

@@ -774,7 +774,7 @@ impl Browser {
             return true;
         }
         // Fetches are served on the next tick, once this script has returned.
-        if (!doc.fetches.is_empty() || !doc.modules_wanted.is_empty()) && matches!(self.doc, Doc::Scripted(_)) { self.timer = Some(sex_pdx::get_ticks()); }
+        if (!doc.fetches.is_empty() || !doc.modules_wanted.is_empty() || !doc.classic_scripts.is_empty()) && matches!(self.doc, Doc::Scripted(_)) { self.timer = Some(sex_pdx::get_ticks()); }
         let doc = self.doc.get();
         let queue = core::mem::take(&mut doc.canvas_queue);
         let dirty = core::mem::take(&mut doc.dirty);
@@ -833,6 +833,7 @@ impl Browser {
     fn tick(&mut self) {
         self.serve_imports();
         self.serve_fetches();
+        self.serve_classic_scripts();
         self.sync_scroll();
         let media_next = self.media_tick();
         let (moved, pictures_next) = self.fonts.step_pictures(sex_pdx::get_ticks());
@@ -1034,6 +1035,41 @@ impl Browser {
                 self.doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", self.view, clock));
                 return;
             }
+        }
+    }
+
+    /// Loads connected classic script elements as private browser resources.
+    /// Source never enters fetch response storage or a page's global eval hook.
+    #[inline(never)]
+    fn serve_classic_scripts(&mut self) {
+        let asked = match self.doc.script() { Some(s) => core::mem::take(&mut s.page_mut().classic_scripts), None => return };
+        for ask in asked {
+            if !self.doc.get().classic_script_current(&ask) { continue; }
+            let base = self.url.clone();
+            let Some(abs) = sex_html::url::resolve(&base, &ask.url) else { continue };
+            let loaded = if abs.starts_with("http") {
+                let origin = ask.cors.then(|| sex_fetch::Url::parse(&base).map(|u| u.origin()).unwrap_or_else(|_| String::from("null")));
+                self.http("GET", &abs, &[], &[], SCRIPT_MAX, origin.as_deref()).ok().filter(|r| {
+                    (200..300).contains(&r.status) && sex_fetch::script::allowed(&base, &r.url, &r.headers, ask.cors)
+                })
+            } else {
+                let req = sex_js::FetchAsk { url: abs.clone(), ..Default::default() };
+                self.local(&req).ok().filter(|r| (200..300).contains(&r.status))
+            };
+            // Navigation, frame switches, removal or src/type changes invalidate
+            // the owning document/node token, even on a same-URL reload.
+            if self.url != base || !self.doc.get().classic_script_current(&ask) { return; }
+            let ok = loaded.is_some();
+            sex_pdx::serial_record!("[web.script.source] node={} ok={} url={}", ask.node, ok as u8, abs);
+            let Some(script) = self.doc.script() else { return };
+            if let Some(r) = loaded {
+                let _ = script.dispatch(&alloc::format!("script\t{}", ask.node));
+                let result = script.eval(&text_of(&r.body), &r.url);
+                let _ = script.dispatch("script\t");
+                if let Err(sex_js::Error::Trapped(why)) = result { sex_pdx::serial_record!("[web.script] trapped={}", why); return; }
+            }
+            let _ = script.dispatch(&alloc::format!("scriptend\t{}\t{}", ask.node, ok as u8));
+            if self.after_script(true) { return; }
         }
     }
 

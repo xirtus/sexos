@@ -14,7 +14,7 @@ extern crate alloc;
 
 pub mod document;
 pub mod webgl;
-pub use document::{Document, FetchAsk};
+pub use document::{ClassicScript, Document, FetchAsk};
 
 use alloc::{format, string::String, vec::Vec};
 use wasmi::{Caller, Config, Engine, Extern, Linker, Memory, Module, Store, StoreLimits, StoreLimitsBuilder, TypedFunc};
@@ -92,6 +92,9 @@ pub mod op {
     /// Arguments after the url (all optional): method, request headers as
     /// `name: value` lines, and the body's bytes.
     pub const FETCH: u32 = 66;
+    /// (connected classic script node): queue a resource for host evaluation.
+    /// Its body never enters the page-readable fetch response store.
+    pub const CLASSIC_SCRIPT: u32 = 71;
     /// (id): the loaded bytes, once (text or, with bit 16, an ArrayBuffer).
     pub const FETCH_BODY: u32 = 67;
     /// (id): the reply's final address, a newline, then its headers as `name: value`
