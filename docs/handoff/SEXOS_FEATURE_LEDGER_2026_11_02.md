@@ -3491,8 +3491,14 @@ Stages D2 and D3 of `DRIVERS_AND_X17_R1_PLAN_2026_11_09.md`. Handoff: `docs/hand
   in reverse member order; sexdrive serves the volume, lists both GPT partitions (one entry
   lies on the second drive), finds the backup GPT in the volume's last sector, and both drive
   images are byte-identical afterwards.
-- **Limits.** Read only: Files does not yet mount partitions of the served volume (next: hand
-  the volume's partitions to sex-volumes, where NTFS/FAT readers exist). No VMD in QEMU, so the
+- **Files opens the volume (2026-11-10).** When the served disk holds no SexOS filesystem
+  (Files' mount fails and its format is refused), `servers/sexfiles/src/volumes.rs` scans the
+  disk itself with sex-volumes and mounts each FAT/exFAT/NTFS/ext4 partition read only under
+  `/media/LABEL` (`Source::Device`, `[files.media.device]`, `[files.media.mounted] ... read_only=1`).
+  `/media` requests are served even with no SexOS filesystem; every change there answers
+  "read-only disk". `scripts/raid_gate.py` now puts a FAT16 partition with HELLO.TXT on the RAID
+  volume and, from Spindle, lists `/media`, prints the file and sees a write refused.
+- **Limits.** Read only (writes to a RAID volume would need parity/mirror care). No VMD in QEMU, so the
   VMD path is proven only against the simulation until the x17 R1 test. A third NVMe is logged
   and not leased. 4 KiB-sector (4Kn) drives are not sized yet.
 

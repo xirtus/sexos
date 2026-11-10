@@ -4,6 +4,10 @@
 //! loop mount: how a stick's contents arrive today, and how the gates test it); USB mass
 //! storage and second disks become one more kind of [`Source`].
 //!
+//! When the disk itself holds no SexOS filesystem (an Intel RAID volume sexdrive serves
+//! read only, usually Windows), its own partitions are mounted here instead, read only:
+//! [`attach_device`].
+//!
 //! The image file's writes are ordinary filesystem writes, batched like any other and
 //! committed together, so the copy-on-write filesystem underneath keeps a whole image at
 //! every commit. Nothing here holds the filesystem: each request lends it.
@@ -24,8 +28,11 @@ const MOUNTS_MAX: usize = 16;
 enum Source {
     /// A file of the SexOS filesystem, by inode, `sectors` long.
     Image { id: u64, sectors: u64 },
+    /// The block device sexdrive serves, when it holds no SexOS filesystem. Read only.
+    Device { sectors: u64 },
 }
 struct Mount { name: String, source: Source, start: u64, len: u64, volume: Box<dyn Volume> }
+impl Mount { fn read_only(&self) -> bool { matches!(self.source, Source::Device { .. }) } }
 static mut MOUNTS: Vec<Mount> = Vec::new();
 fn mounts() -> &'static mut Vec<Mount> { unsafe { &mut *core::ptr::addr_of_mut!(MOUNTS) } }
 
@@ -61,12 +68,46 @@ impl sv::Disk for ImageDisk<'_> {
     fn flush(&mut self) -> sv::Result<()> { Ok(()) }
 }
 
-/// Runs `op` with a mount's volume and its disk.
-fn with<T>(fs: &mut Fs<'static, FsDisk>, m: &mut Mount, op: impl FnOnce(&mut dyn Volume, &mut dyn sv::Disk) -> sv::Result<T>) -> sv::Result<T> {
-    let Source::Image { id, sectors } = m.source;
-    let mut image = ImageDisk { fs, id, sectors };
-    let mut slice = sv::Slice { disk: &mut image, start: m.start, len: m.len };
-    op(m.volume.as_mut(), &mut slice)
+/// The block device itself, by absolute sector, through Files' shared block buffer.
+/// Nothing is ever written through it.
+struct DeviceDisk { sectors: u64 }
+impl sv::Disk for DeviceDisk {
+    fn sectors(&self) -> u64 { self.sectors }
+    fn read(&mut self, lba: u64, buf: &mut [u8]) -> sv::Result<()> {
+        use crate::backends::diskfs::DiskFs;
+        let va = crate::vfs::diskfs_bridge_get_buf_va();
+        let room = crate::vfs::diskfs_bridge_buf_len() as usize / sv::SECTOR * sv::SECTOR;
+        if va == 0 || va == u64::MAX || room == 0 { return Err(sv::Error::Io); }
+        if lba.checked_add((buf.len() / sv::SECTOR) as u64).is_none_or(|end| end > self.sectors) { return Err(sv::Error::Io); }
+        let mut done = 0;
+        while done < buf.len() {
+            let n = (buf.len() - done).min(room);
+            if DiskFs::diskfs_block_read(lba * sv::SECTOR as u64 + done as u64, n as u64, sex_pdx::SLOT_BUF_LEND) != 0 { return Err(sv::Error::Io); }
+            let shared = unsafe { core::slice::from_raw_parts(va as *const u8, n) };
+            buf[done..done + n].copy_from_slice(shared);
+            done += n;
+        }
+        Ok(())
+    }
+    fn write(&mut self, _: u64, _: &[u8]) -> sv::Result<()> { Err(sv::Error::ReadOnly) }
+    fn flush(&mut self) -> sv::Result<()> { Ok(()) }
+}
+
+/// Runs `op` with a mount's volume and its disk. An image needs the SexOS filesystem.
+fn with<T>(fs: Option<&mut Fs<'static, FsDisk>>, m: &mut Mount, op: impl FnOnce(&mut dyn Volume, &mut dyn sv::Disk) -> sv::Result<T>) -> sv::Result<T> {
+    match m.source {
+        Source::Image { id, sectors } => {
+            let Some(fs) = fs else { return Err(sv::Error::Io) };
+            let mut image = ImageDisk { fs, id, sectors };
+            let mut slice = sv::Slice { disk: &mut image, start: m.start, len: m.len };
+            op(m.volume.as_mut(), &mut slice)
+        }
+        Source::Device { sectors } => {
+            let mut device = DeviceDisk { sectors };
+            let mut slice = sv::Slice { disk: &mut device, start: m.start, len: m.len };
+            op(m.volume.as_mut(), &mut slice)
+        }
+    }
 }
 
 pub fn status(e: sv::Error) -> u8 {
@@ -91,7 +132,7 @@ fn find(path: &[u8]) -> Option<(usize, &[u8])> {
 pub fn busy(id: u64) -> bool { mounts().iter().any(|m| matches!(m.source, Source::Image { id: i, .. } if i == id)) }
 
 /// One request on a path under `/media`.
-pub fn run(fs: &mut Fs<'static, FsDisk>, r: w::Request, path: &[u8], data: &mut [u8]) -> Result<u32, u8> {
+pub fn run(fs: Option<&mut Fs<'static, FsDisk>>, r: w::Request, path: &[u8], data: &mut [u8]) -> Result<u32, u8> {
     if path == MEDIA || path == b"/media/" {
         return match r.kind {
             w::STAT => { data[..32].fill(0); data[0] = 1; Ok(32) }
@@ -105,6 +146,8 @@ pub fn run(fs: &mut Fs<'static, FsDisk>, r: w::Request, path: &[u8], data: &mut 
     }
     let Some((index, inner)) = find(path) else { return Err(w::NOT_FOUND) };
     let m = &mut mounts()[index];
+    if m.read_only() && !matches!(r.kind, w::STAT | w::LIST | w::READ | w::STATFS | w::SYNC) { return Err(w::READ_ONLY); }
+    if m.read_only() && r.kind == w::SYNC { return Ok(0); }
     let result = match r.kind {
         w::STAT => with(fs, m, |v, d| v.stat(d, inner)).map(|st| {
             data[..32].fill(0);
@@ -141,10 +184,11 @@ pub fn run(fs: &mut Fs<'static, FsDisk>, r: w::Request, path: &[u8], data: &mut 
     result.map_err(status)
 }
 /// A rename with both halves under `/media`: only within one volume.
-pub fn rename(fs: &mut Fs<'static, FsDisk>, from: &[u8], to: &[u8]) -> Result<u32, u8> {
+pub fn rename(fs: Option<&mut Fs<'static, FsDisk>>, from: &[u8], to: &[u8]) -> Result<u32, u8> {
     let (Some((a, inner_from)), Some((b, inner_to))) = (find(from), find(to)) else { return Err(if owns(from) && owns(to) { w::NOT_FOUND } else { w::OTHER_DISK }) };
     if a != b { return Err(w::OTHER_DISK); }
     if inner_from.iter().all(|c| *c == b'/') { return Err(w::DENIED); }
+    if mounts()[a].read_only() { return Err(w::READ_ONLY); }
     with(fs, &mut mounts()[a], |v, d| v.rename(d, inner_from, inner_to)).map(|_| 0).map_err(status)
 }
 fn statfs_out(total: u64, free: u64, data: &mut [u8]) -> u32 {
@@ -220,14 +264,32 @@ pub fn mount(fs: &mut Fs<'static, FsDisk>, path: &[u8], data: &mut [u8]) -> Resu
 pub fn unmount(fs: &mut Fs<'static, FsDisk>, path: &[u8]) -> Result<u32, u8> {
     let Some((index, inner)) = find(path) else { return Err(w::NOT_FOUND) };
     if !inner.iter().all(|b| *b == b'/') { return Err(w::INVALID); }
-    with(fs, &mut mounts()[index], |v, d| v.sync(d)).map_err(status)?;
+    if !mounts()[index].read_only() { with(Some(fs), &mut mounts()[index], |v, d| v.sync(d)).map_err(status)?; }
     let m = mounts().remove(index);
     sex_pdx::serial_record!("[files.media.unmounted] name={}", m.name);
     Ok(0)
 }
 /// SYNC with no path reaches every volume too.
 pub fn sync_all(fs: &mut Fs<'static, FsDisk>) {
-    for m in mounts().iter_mut() {
-        if let Err(e) = with(fs, m, |v, d| v.sync(d)) { sex_pdx::serial_record!("[files.media.sync.failed] name={} error={:?}", m.name, e); }
+    for m in mounts().iter_mut().filter(|m| !m.read_only()) {
+        if let Err(e) = with(Some(&mut *fs), m, |v, d| v.sync(d)) { sex_pdx::serial_record!("[files.media.sync.failed] name={} error={:?}", m.name, e); }
+    }
+}
+
+/// The disk holds no SexOS filesystem: mounts every volume on it, read only, under
+/// `/media` (the partitions of a Windows RAID volume, say). Named by label, else "disk".
+pub fn attach_device(sectors: u64) {
+    if mounts().iter().any(|m| m.read_only()) { return; }
+    let mut device = DeviceDisk { sectors };
+    let found = match sv::scan(&mut device) {
+        Ok(found) => found,
+        Err(e) => { sex_pdx::serial_record!("[files.media.device.none] sectors={} error={:?}", sectors, e); return; }
+    };
+    sex_pdx::serial_record!("[files.media.device] sectors={} volumes={}", sectors, found.len());
+    for (part, f) in found.into_iter().enumerate() {
+        if mounts().len() >= MOUNTS_MAX { break; }
+        let name = mount_name(&f.volume.label(), b"disk", part);
+        sex_pdx::serial_record!("[files.media.mounted] name={} format={} sectors={} start={} read_only=1", name, f.volume.format().name(), f.len, f.start);
+        mounts().push(Mount { name, source: Source::Device { sectors }, start: f.start, len: f.len, volume: f.volume });
     }
 }
