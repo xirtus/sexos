@@ -1,7 +1,7 @@
 //! Driver-level behaviour: chip table, firmware files, DMA layout, the power-up
 //! sequence against a register model, the 4-way handshake against an access
 //! point played by the authenticator helpers, and frames end to end.
-use sex_wifi::{assoc, link, rsna, bringup, ccmp, cmdq, context, csr, devices, eapol, hcmd, ieee80211 as w, init, join, pack, rx, scan, tx, ucode};
+use sex_wifi::{assoc, link, rsna, bringup, ccmp, cmdq, context, csr, devices, eapol, hcmd, ieee80211 as w, init, join, pack, rx, scan, tlc, tx, ucode};
 use std::collections::HashMap;
 
 const AP: [u8; 6] = [0x02, 0x11, 0x22, 0x33, 0x44, 0x55];
@@ -968,6 +968,7 @@ impl Firmware {
                 (hcmd::MAC_CONF_GROUP, hcmd::SESSION_PROTECTION_CMD) => Some(24),
                 (hcmd::DATA_PATH_GROUP, rsna::SEC_KEY_CMD) => Some(rsna::SEC_KEY_BYTES),
                 (hcmd::LONG_GROUP, hcmd::ADD_STA_KEY) => Some(rsna::ADD_STA_KEY_BYTES),
+                (hcmd::DATA_PATH_GROUP, tlc::TLC_MNG_CONFIG_CMD) => Some(tlc::CONFIG_BYTES),
                 _ => Some(4),
             };
             assert_eq!(Some(len), want, "payload size of {group:#x}/{opcode:#x}");
@@ -1501,7 +1502,7 @@ fn join_uses_only_the_antennas_the_nvm_allows() {
 #[test]
 fn join_command_layouts() {
     // ACK rates (iwx_ack_rates): basic 1/2 Mb/s and 6 Mb/s on 2.4 GHz.
-    let mut t = join::Target { bssid: [2, 0, 0, 0, 0, 1], channel: 1, beacon_interval: 100, dtim_period: 1,
+    let mut t = join::Target { bssid: [2, 0, 0, 0, 0, 1], channel: 1, beacon_interval: 100, dtim_period: 1, rates: 0,
         basic_cck: 0b0011, basic_ofdm: 0b1, short_slot: true, short_preamble: true };
     assert_eq!(join::ack_rates(&t), (0b0011, 0b1));
     // Only 11 Mb/s basic: every lower CCK rate joins; only 24 Mb/s OFDM: 6 and 12 join.
@@ -1629,7 +1630,7 @@ fn tx_command_layouts_and_rates() {
     assert_eq!(tx::byte_count(devices::Family::Ax210, 30, 3), 30);
     assert_eq!(tx::byte_count(devices::Family::Gen22000, 30, 3), 8);
     assert_eq!(tx::byte_count(devices::Family::Ax210, 30, 7), 30 | 1 << 14);
-    let mut t = join::Target { bssid: AP, channel: 36, beacon_interval: 100, dtim_period: 1, basic_cck: 0, basic_ofdm: 0b101, short_slot: true, short_preamble: false };
+    let mut t = join::Target { bssid: AP, channel: 36, beacon_interval: 100, dtim_period: 1, rates: 0, basic_cck: 0, basic_ofdm: 0b101, short_slot: true, short_preamble: false };
     assert_eq!(tx::management_rate(&t), 1 << 14 | 1 << 8, "OFDM 6 Mb/s");
     t.channel = 1; t.basic_cck = 0b1100;
     assert_eq!(tx::management_rate(&t), 1 << 14 | 2, "CCK 5.5 Mb/s");
@@ -1866,6 +1867,47 @@ fn x17_takes_a_new_group_key_while_connected() {
     link.poll(&mut b, &mut i.cmdq, &mut hw, &mut m, 0, |_| {});
     assert_eq!(link.rekey_error, Some(eapol::Error::Replay));
     assert_eq!(link.rekeyed, 1);
+}
+
+#[test]
+fn x17_hands_data_rates_to_the_firmware() {
+    let (r, mut sim, bss, _, _, mut i, mut b, mut m, mut hw) = x17_connect(b"correct horse", true);
+    assert_ne!(bss.rates, 0, "the beacon named its rates");
+    let target = r.target();
+    let mut link = r.into_link().with_rate_control(4);
+    let commands = sim.commands.len();
+    link.poll(&mut b, &mut i.cmdq, &mut hw, &mut m, 0, |_| {});
+    assert_eq!(link.rate_control, link::RateControl::Sent(0));
+    sim.serve(&mut m, &b.layout, &mut hw);
+    let (group, opcode, c) = &sim.commands[commands];
+    assert_eq!((*group, *opcode), (hcmd::DATA_PATH_GROUP, tlc::TLC_MNG_CONFIG_CMD));
+    assert_eq!((c[0], c[4], c[5], c[6]), (0, 0, 0, 1), "station 0, 20 MHz, legacy, chain A");
+    assert_eq!(u16::from_le_bytes([c[10], c[11]]), tlc::rates(&target));
+    assert_eq!(u16::from_le_bytes([c[24], c[25]]), 2312, "v4: max MPDU after three widths of HT rates");
+    let mut v3 = [0u8; tlc::CONFIG_BYTES];
+    tlc::config(&mut v3, 3, &target);
+    assert_eq!(u16::from_le_bytes([v3[20], v3[21]]), 2312, "v3: after two");
+    link.poll(&mut b, &mut i.cmdq, &mut hw, &mut m, 0, |_| {});
+    assert_eq!(link.rate_control, link::RateControl::On);
+    // Data now goes without a rate: the firmware picks it.
+    let frames = sim.frames.len();
+    let mut eth = vec![0xffu8; 6];
+    eth.extend_from_slice(&i.mac);
+    eth.extend_from_slice(&[0x08, 0x06]);
+    eth.extend_from_slice(&[0x11; 28]);
+    link.send(&b, &mut hw, &mut m, &eth).unwrap();
+    sim.serve(&mut m, &b.layout, &mut hw);
+    let (cmd, _) = &sim.frames[frames];
+    assert_eq!(u16::from_le_bytes([cmd[2], cmd[3]]), 0, "no CMD_RATE, encrypted");
+    assert_eq!(u32::from_le_bytes(cmd[16..20].try_into().unwrap()), 0);
+    // The firmware says which rate it chose.
+    let mut n = vec![0u8; 20];
+    n[4] = 1;
+    n[8..12].copy_from_slice(&(1u32 << 14 | 1 << 8 | 7).to_le_bytes());
+    sim.deliver(&mut m, &b.layout, &packet(tlc::TLC_MNG_UPDATE_NOTIF, hcmd::DATA_PATH_GROUP, 0, 0x80, &n));
+    link.poll(&mut b, &mut i.cmdq, &mut hw, &mut m, 0, |_| {});
+    assert_eq!(link.rate, 1 << 14 | 1 << 8 | 7, "54 Mb/s");
+    assert!(link.up());
 }
 
 #[test]

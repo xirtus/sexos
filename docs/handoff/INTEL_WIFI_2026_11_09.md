@@ -490,3 +490,21 @@ drop after the first rekey. The handshake's supplicant now lives on in the link
   frame is dropped as a CCMP replay; a repeated key message as an EAPOL replay.
 
 Boot log: `[wifi.rekey] messages=… installed=… error=…`.
+
+## 16. Stage W5g: firmware rate control (2026-11-10)
+
+Data used to go at a fixed 12 Mb/s. Once the link runs, it now sends
+TLC_MNG_CONFIG_CMD (DATA_PATH 0x0f, v3 or v4 by the firmware's version table, 28 bytes
+either way; `iwx_rs_init`) with the legacy rates both sides have: station 0, 20 MHz,
+non-HT, chain A, max MPDU 2312. After the answer, data frames go without CMD_RATE and
+with rate 0, and the firmware picks each frame's rate (`iwx_tx_fill_cmd`). Management
+and EAPOL-before-keys frames keep the lowest basic rate. TLC_MNG_UPDATE_NOTIF (0xf7)
+reports the chosen rate. If the command is refused or not answered within 1 s, the fixed
+rate stays.
+
+`Bss::rates` (and `Target::rates`) now record every rate the AP names, not only the
+basic ones. The station still associates as a legacy station, so the top rate is
+54 Mb/s. HT/VHT (HT capabilities in the association request, an HT PHY context, and
+HT rates in this command) is the next step for speed.
+
+Boot log: `[wifi.rate] control=… rate=…`.

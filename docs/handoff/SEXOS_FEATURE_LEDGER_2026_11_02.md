@@ -3939,3 +3939,12 @@ Roadmap workstream B, part 1 (report: `docs/handoff/LINUX_AND_DESKTOP_PARITY_REP
   protected with a valid MIC, and the new key is installed once. Packet numbers
   restart under the new key, and repeated frames or key messages change nothing.
 - **ABI / kernel:** none.
+
+## Intel Wi-Fi, stage W5g: firmware rate control (2026-11-10)
+- **What:** new `sex_wifi::tlc`. The link hands the shared legacy rates to the
+  firmware (TLC_MNG_CONFIG_CMD v3/v4), which then picks each data frame's rate. That is
+  up to 54 Mb/s instead of a fixed 12. INTEL_WIFI section 16.
+- **Evidence:** `scripts/wifi_host_gate.sh` (47 driver tests). A test checks the
+  command's layout in both versions, data frames without a fixed rate once rate control
+  is on, and the firmware's rate report.
+- **ABI / kernel:** none.

@@ -305,7 +305,7 @@ impl Wifi {
                 let family = self.bringup.boot.chip.family;
                 let tx = core::mem::replace(&mut a.tx, TxQueue::new(family));
                 self.rx = RxQueue::EMPTY;
-                self.link = Some(Link::new(tx, a.target, a.me(), family, false));
+                self.link = Some(Link::new(tx, a.target, a.me(), family, false).with_rate_control(self.tlc_version()));
                 sex_pdx::serial_record!("[wifi.link.up] security=open rate={:#x}", wlink::DATA_RATE);
             }
         } else {
@@ -360,7 +360,8 @@ impl Wifi {
         if r.step == rsna::Step::Connected {
             sex_pdx::serial_record!("[wifi.connected] ssid=\"{}\" security=WPA2 ticks={}", ssid, now_ticks);
             self.rx = RxQueue::EMPTY;
-            self.link = self.rsna.take().map(Rsna::into_link);
+            let version = self.tlc_version();
+            self.link = self.rsna.take().map(|r| r.into_link().with_rate_control(version));
             sex_pdx::serial_record!("[wifi.link.up] security=WPA2 rate={:#x}", wlink::DATA_RATE);
         } else {
             use csr::Registers;
@@ -401,6 +402,12 @@ impl Wifi {
         true
     }
 
+    /// TLC_MNG_CONFIG_CMD's version in this firmware (`iwx_rs_init`: 4, else 3).
+    fn tlc_version(&self) -> u8 {
+        Firmware::parse(self.file).ok().and_then(|fw| fw.command_version(hcmd::DATA_PATH_GROUP, sex_wifi::tlc::TLC_MNG_CONFIG_CMD))
+            .map_or(3, |v| if v.version == 4 { 4 } else { 3 })
+    }
+
     /// The link is up: sexnet's IP stack may use it.
     pub fn link_up(&self) -> bool { self.link.as_ref().is_some_and(|l| l.up()) }
     pub fn link_mac(&self) -> Option<[u8; 6]> { self.link.as_ref().map(|l| l.me()) }
@@ -420,6 +427,7 @@ impl Wifi {
         let (Some(l), Some(i)) = (self.link.as_mut(), self.init.as_mut()) else { return false };
         let before = (l.received, l.dropped);
         let keys = (l.rekey_messages, l.rekeyed);
+        let rates = (l.rate_control, l.rate);
         let q = &mut self.rx;
         let up = l.poll(&mut self.bringup, &mut i.cmdq, &mut self.mmio, &mut self.pool, sex_pdx::get_ticks() * 1000, |frame| {
             if q.count == RX_FRAMES || frame.len() > wlink::MAX_ETHERNET { q.overflow += 1; return; }
@@ -433,6 +441,9 @@ impl Wifi {
             sex_pdx::serial_record!("[wifi.link.down] reason={:?} sent={} received={} dropped={} overflow={}", l.down, l.sent, l.received, l.dropped, q.overflow);
             *q = RxQueue::EMPTY;
             return false;
+        }
+        if (l.rate_control, l.rate) != rates {
+            sex_pdx::serial_record!("[wifi.rate] control={:?} rate={:#x}", l.rate_control, l.rate);
         }
         if (l.rekey_messages, l.rekeyed) != keys {
             sex_pdx::serial_record!("[wifi.rekey] messages={} installed={} error={:?}", l.rekey_messages, l.rekeyed, l.rekey_error);
