@@ -306,8 +306,79 @@ Each stage is a PR, merged when its gates pass at 1 and 4 cores.
   - Files in `/bin` already had no count limit; the store is for programs installed
     with the system.
 
+- Stage 5, first part (switching between programs on the shared key):
+  - Program rows from the fourth on share one PKU key and take turns on one core.
+    A switch used to clear and set the present bit of every page both programs held
+    (1,100+ region pages each, plus their memory), so it grew with program size.
+    Worse, the region pages went into a fixed 1,400-entry table: once stage 4 sized
+    pixel surfaces to the screen, a screen above about 1400x1000 overflowed it and
+    BOOT panicked as soon as these rows existed. Andreas's PC would have hit this.
+  - Now every page such a row holds lies on whole 2 MiB spans nobody else maps into:
+    its arena already did, and BOOT now places its regions on span boundaries. A
+    switch flips the user bit of the spans' page-directory entries (6 spans for a
+    row's regions at 1920x1080, plus one per 2 MiB of program memory) and flushes
+    this core's TLB. BOOT's 64 KiB first stack for the row is outside any span and
+    still takes turns page by page.
+  - Kernel checks of user pointers now honour the user and write bits at every
+    paging level, as the CPU does, so a closed span is closed to system calls too.
+  - Measured: ~190,000-310,000 cycles per switch under TCG, almost all of it the
+    full TLB flush (QEMU drops its whole software TLB); constant in program size.
+    On hardware this is a few page-directory writes plus a TLB refill; PCID
+    (stage 7) can remove the flush.
+  - No ABI change. Gate: `scripts/program_pool_gate.py` (six programs side by
+    side at 1920x1080, four on the shared key, all drawn, switches counted).
+
+- Stage 6, first part (IPC: call and wait, reply and wait, direct handoff):
+  - A round trip to a service took seven kernel entries: call, an empty listen,
+    a wait, the service's listen and reply, its empty listen and wait, then the
+    caller's listen; and each woken side waited its turn behind the whole queue.
+  - Two new system calls do a step and its wait in one entry: `PDX_CALL_WAIT` (100,
+    syscall 0 then 53) and `PDX_REPLY_WAIT` (101, syscall 29 then 53). The wake either
+    causes is a handoff: if the partner lives on this core it runs next, ahead of the
+    queue, so a round trip is two switches with no queue wait. Partners may take
+    turns ahead of the queue 8 times in a row, then everything queued runs first, so
+    a busy pair cannot starve the desktop.
+  - Used by `sex_app::files` (every file request) and by Files when it has nothing
+    else owed or uncommitted. New `fs::PING` request, answered at once.
+  - Bench (`ipc_roundtrip`, 1 core, TCG): SexOS 392,117 -> 255,906 cycles per round
+    trip (1.5x); `file_stat` 438,089 -> 335,941. Linux 6.8 pipe round trip between
+    two processes (`tools/bench/linux`, same machine): 226,366. So SexOS IPC is now
+    level with a Linux pipe under emulation, where each kernel entry costs ~30,000
+    cycles because QEMU emulates `wrpkru` slowly. On hardware a SexOS round trip is
+    four kernel entries and two switches without a page-table change, against two
+    page-table switches for Linux; the 10x target is measured there.
+  - Found and fixed at 4 cores: a task parked waiting for a message stays attached
+    to its core, and a wake from another core only marked it pending. If that core
+    was halted, it looked again only at its next timer interrupt, so every call to a
+    service on another core cost about one tick. Such a wake now sends the owning
+    core a wake interrupt. 4 cores: `ipc_roundtrip` 2,731,734 -> 396,167 cycles
+    (6.9x), `file_stat` 2,620,806 -> 494,010, `file_read` 24.6M -> 14.8M per MiB.
+  - Next: deliver the message in the waiting call's registers (no listen after the
+    wake, two entries per round trip).
+  - ABI changes: system calls 100 (`sex_pdx::pdx_call_wait`) and 101
+    (`sex_pdx::pdx_reply_wait`), `sex_pdx::fs::PING` (21), `sex_app::files::ping`.
+
 Where SexOS can exceed Linux: allocation is already faster (batched grants, no
 fault per page); one address space makes zero-copy sharing a capability grant
 instead of a copy, so with stages 3 and 6 file and IPC data should never be
 copied; and PKU switches are tens of cycles on hardware against a Linux
 process switch's page-table change.
+
+### Memory pressure signal (2026-11-09)
+
+The kernel now tells programs and services how short the machine is on memory before an
+allocation fails. `program_frames::pressure()` compares free pages (above the 16 MiB
+floor) with the most that were ever free: LOW below an eighth (at least 32 MiB),
+CRITICAL below a thirty-second (at least 8 MiB). A level rises at once and falls only
+when free memory is a quarter above the mark, so nothing flaps. Transitions log
+`[memory.pressure] level= free_pages= base_pages=`. It is advisory: nothing is killed.
+
+- ABI addition: syscall 81 (`SYS_PROGRAM_MEMORY`) now returns the level in r10 for
+  every caller, whatever the status (r10 was clobbered before, so old callers are
+  unaffected). `sex_pdx::program_memory::{pressure, PRESSURE_NORMAL, PRESSURE_LOW,
+  PRESSURE_CRITICAL}`.
+- Gate: program_heap. Heaptest reports the highest level seen while filling memory; at
+  512 MiB it reaches critical (level 1 at 10283 free pages, 2 at 2570 of 82272), and after
+  Close the kernel logs level 0 and the next run starts at normal. Green at 1 and 4 cores.
+- Next: consumers. The browser drops decoded images and caches on LOW, Play shrinks
+  buffers, and Desk shows a warning on CRITICAL.

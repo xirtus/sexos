@@ -155,6 +155,7 @@ pub fn reserve_successor(predecessor:u32,successor:u32,holder:u32,slot:usize){
         app.entry=task.context.rip;app.stack_top=task.context.rsp;
         assert!(app.count<=app.boot_pages.len(),"PROGRAM_BOOT_MANIFEST");
         app.boot_pages[..app.count].copy_from_slice(&app.pages[..app.count]);app.boot_count=app.count;
+        crate::program_tenancy::boot_pages(app.target,&app.pages[..app.count]);
         app.image_pages=0;app.grown=0;
     }
     retire_private_pages(&app.pages[..app.count],
@@ -163,7 +164,7 @@ pub fn reserve_successor(predecessor:u32,successor:u32,holder:u32,slot:usize){
         |va|crate::smp::tlb::flush(va)).expect("SUCCESSOR_RESERVE_LEAVES");
     if app.reusable{
         let (arena,pages)=crate::boot_memory::reserve_arena(app.pkey);
-        app.arena=arena;app.arena_pages=pages;
+        app.arena=arena;app.arena_pages=pages;crate::program_tenancy::arena(app.target,arena,(pages*4096) as u64);
     }
     let coordinator=crate::ipc::DOMAIN_REGISTRY.get(holder).expect("SUCCESSOR_NO_HOLDER");
     assert!(coordinator.find_capability(slot as u32).is_none());
@@ -323,7 +324,7 @@ pub fn activation(pd:&ProtectionDomain,slot:u64,kind:u64,len:u64)->[u64;5]{
         let id=new.target;
         let count=restore_reserved_pages(&new.pages[..new.count],
             |leaf|unsafe{core::ptr::read_volatile(leaf as *const u64)},
-            |leaf,value|unsafe{core::ptr::write_volatile(leaf as *mut u64,crate::program_tenancy::restored(id,value))},
+            |leaf,value|unsafe{core::ptr::write_volatile(leaf as *mut u64,crate::program_tenancy::restored(id,leaf,value))},
             |_|{})?;
         crate::smp::tlb::flush_pages(count,new.pages[..new.count].iter().map(|p|p.va));
         crate::program_tenancy::adopt(id,&new.pages[..new.count]);
@@ -603,7 +604,7 @@ fn rebirth(apps:&mut [App;MAX_APPS],index:usize,image:Option<usize>)->Result<u64
     let id=app.target;
     let count=restore_reserved_pages(&app.pages[..app.count],
         |leaf|unsafe{core::ptr::read_volatile(leaf as *const u64)},
-        |leaf,value|unsafe{core::ptr::write_volatile(leaf as *mut u64,crate::program_tenancy::restored(id,value))},
+        |leaf,value|unsafe{core::ptr::write_volatile(leaf as *mut u64,crate::program_tenancy::restored(id,leaf,value))},
         |_|{})?;
     crate::smp::tlb::flush_pages(count,app.pages[..app.count].iter().map(|p|p.va));
     crate::program_tenancy::adopt(id,&app.pages[..app.count]);
