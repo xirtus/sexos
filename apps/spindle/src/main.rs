@@ -96,6 +96,7 @@ mod scroll_view;
 mod text_delivery;
 mod display_delivery;
 mod sextime_command;
+mod volume_command;
 mod calc_command;
 mod complete;
 static mut HISTORY_STATUS:sex_pdx::spindle_status::Publisher=sex_pdx::spindle_status::Publisher::new(0,0);
@@ -784,6 +785,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  ls cd pwd mkdir rm mv cat write append touch df   files");
             sb.push(b"  fetch URL FILE   download a file");
             sb.push(b"  beep [HZ] [MS] [VOL]  play a note on the sound card");
+            sb.push(b"  volume [N|+N|-N|mute|list]  sound volume (ROW N for one program)");
             sb.push(b"  Tab          complete a command name");
             sb.push(b"  about        Spindle version + identity");
             sb.push(b"  route        input/surface route info");
@@ -1436,6 +1438,10 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
                 args.len(), status, if status == 0 { 0 } else { status as i64 }
             );
             serial_println!("[spindle.bell.command] name=notify ok=1 reason=fire_and_forget");
+            true
+        }
+        b"volume" => {
+            unsafe { (*core::ptr::addr_of_mut!(volume_command::VOLUME)).start(args, sb); }
             true
         }
         b"beep" => {
@@ -2695,6 +2701,7 @@ pub extern "C" fn _start() -> ! {
             }
             continue;
         }
+        if msg.type_id==1 && unsafe{(*core::ptr::addr_of_mut!(volume_command::VOLUME)).receive(msg.caller_pd,msg.arg0,sb)} {unsafe{content_render(&line,sb);}continue;}
         if msg.type_id==1 && msg.caller_pd==13 {
             sex_pdx::serial_record!("[spindle.net.reply] target={} task={} tag={} seq={} value={} observed=1",instance_pd(),catalog.task_id,msg.arg0>>56,(msg.arg0>>32)&sex_pdx::network_job::MAX_SEQ as u64,msg.arg0 as u32);
             unsafe{NETWORK_PROBE.reply(msg.arg0,sex_pdx::get_ticks());}

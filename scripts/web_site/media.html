@@ -1,0 +1,30 @@
+<!doctype html>
+<html><head><title>media test</title></head>
+<body style="margin:0;background:#fff">
+<video id="v" src="clip-av.mp4" controls autoplay></video>
+<!-- Loads but waits: it must not take the video's sound. -->
+<audio id="later" src="tone.mp3"></audio>
+<!-- An animated GIF plays; a WebP and an AVIF (AV1, through dav1d) show. -->
+<img src="spin.gif" width="64" height="32"> <img src="still.webp" width="64" height="32"> <img src="still.avif" width="96" height="48">
+<script>
+const v = document.getElementById('v');
+const log = m => console.log(m);
+log('can mp4=' + v.canPlayType('video/mp4') + ' webm=' + v.canPlayType('video/webm; codecs="vp9"') + ' avi=' + (v.canPlayType('video/x-msvideo') || 'no'));
+v.addEventListener('loadedmetadata', () => log('meta ' + v.videoWidth + 'x' + v.videoHeight + ' ' + v.duration.toFixed(1)));
+let held = false;
+v.addEventListener('timeupdate', () => {
+  if (held || v.currentTime < 0.6) return;
+  held = true;
+  v.pause();
+  log('paused at ' + v.currentTime.toFixed(1) + ' paused=' + v.paused);
+  setTimeout(() => { v.play(); log('resumed'); }, 800);
+});
+v.addEventListener('ended', () => {
+  log('video ended at ' + v.currentTime.toFixed(1));
+  const a = new Audio('tone.mp3');
+  let ends = 0;
+  a.onended = () => { ends++; setTimeout(() => log('audio ended ' + ends), 300); };
+  a.play();
+});
+</script>
+</body></html>

@@ -38,7 +38,10 @@ fn main() {
     assert!(Command::new("llvm-ar").arg("crs").arg(&lib).arg(&obj).status().unwrap().success());
     println!("cargo:rustc-link-search=native={}", out.display());
     println!("cargo:rustc-link-search=native={}", ff.join("lib").display());
-    for l in ["mediabridge", "avformat", "avcodec", "swscale", "swresample", "avutil"] {
+    // dav1d (AV1) sits beside FFmpeg's archives when it was built with them.
+    let dav1d = ff.join("lib/libdav1d.a").exists();
+    for l in ["mediabridge", "avformat", "avcodec", "dav1d", "swscale", "swresample", "avutil"] {
+        if l == "dav1d" && !dav1d { continue; }
         println!("cargo:rustc-link-lib=static={l}");
     }
 }
