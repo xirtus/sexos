@@ -1313,3 +1313,13 @@ fn adoption_provenance_does_not_invoke_accessors_or_proxy_traps_twice() {
     s.eval("console.log('lookup counts',getterCalls,proxyCalls)","counts.js").unwrap();
     assert_eq!(logs(&mut s),["0:lookup counts 1 1"]);
 }
+
+#[test]
+fn a_pending_finally_wrapper_rechecks_captured_proxy_provenance() {
+    let mut s=page("");
+    s.eval("var release,handler={apply(){}};const proxy=new Proxy(()=>{},handler);new Promise(resolve=>release=resolve).finally(proxy);onunhandledrejection=e=>{e.preventDefault();console.log('FAIL captured proxy',e.reason)};", "before-opaque.js").unwrap();
+    s.eval_resource("handler.apply=()=>{throw 'opaque later trap'}", "https://remote.test/later.js", true).unwrap();
+    s.eval("release()", "owned.js").unwrap();
+    for _ in 0..3{s.dispatch("tick").unwrap();}
+    let got=logs(&mut s);assert!(got.is_empty(),"{got:?}");
+}

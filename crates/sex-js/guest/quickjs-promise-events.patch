@@ -55,7 +55,7 @@
 
 -    return s->func(ctx, this_val, argc, arg_buf, s->magic, vc(s->data));
 +    int previous_job_muted = sexos_job_muted;
-+    if (s->sexos_muted_errors) sexos_job_muted = 1;
++    if (sexos_function_muted(func_obj)) sexos_job_muted = 1;
 +    JSValue result = s->func(ctx, this_val, argc, arg_buf, s->magic, vc(s->data));
 +    sexos_job_muted = previous_job_muted;
 +    return result;
@@ -306,7 +306,7 @@
      ret = perform_promise_then(ctx, this_val, argv, vc(resolving_funcs));
      for(i = 0; i < 2; i++)
          JS_FreeValue(ctx, resolving_funcs[i]);
-@@ -57740,3 +57802,95 @@
+@@ -57740,3 +57802,112 @@
  #undef malloc
  #undef free
  #undef realloc
@@ -314,21 +314,38 @@
 +/* Host-only provenance helpers. No object property or source-name heuristic is
 +   used to unmute code. Bound functions keep their target's source; proxies and
 +   generated/unknown callbacks fail closed after opaque code entered the VM. */
-+static bool sexos_function_muted(JSValueConst function) {
-+    for (int depth = 0; depth < 16 && JS_IsObject(function); depth++) {
-+        JSObject *p = JS_VALUE_GET_OBJ(function);
-+        if (js_class_has_bytecode(p->class_id))
-+            return p->u.func.function_bytecode->sexos_muted_errors;
-+        if (p->class_id == JS_CLASS_BOUND_FUNCTION) {
-+            if (p->u.bound_function->sexos_muted_errors) return true;
-+            function = p->u.bound_function->func_obj;
-+            continue;
-+        }
-+        if (p->class_id == JS_CLASS_C_FUNCTION_DATA)
-+            return p->u.c_function_data_record->sexos_muted_errors;
-+        return p->class_id == JS_CLASS_PROXY && sexos_opaque_source_seen;
++/* Walk only engine metadata; no property access, proxy trap or JS call. The
++   shared budget bounds cycles and repeated captures. Unknown deep graphs fail
++   closed once opaque code has entered the VM. Captures are read at use time. */
++static bool sexos_function_muted_walk(JSValueConst function, unsigned *left) {
++    if (!JS_IsObject(function)) return false;
++    if (!*left) return sexos_opaque_source_seen;
++    --*left;
++    JSObject *p = JS_VALUE_GET_OBJ(function);
++    if (js_class_has_bytecode(p->class_id))
++        return p->u.func.function_bytecode->sexos_muted_errors;
++    if (p->class_id == JS_CLASS_BOUND_FUNCTION) {
++        JSBoundFunction *bound = p->u.bound_function;
++        return bound->sexos_muted_errors || sexos_function_muted_walk(bound->func_obj, left);
 +    }
-+    return JS_IsObject(function) && sexos_opaque_source_seen;
++    if (p->class_id == JS_CLASS_C_FUNCTION_DATA) {
++        JSCFunctionDataRecord *data = p->u.c_function_data_record;
++        if (data->sexos_muted_errors) return true;
++        for (unsigned i = 0; i < data->data_len; i++)
++            if (sexos_function_muted_walk(data->data[i], left)) return true;
++        return false;
++    }
++    if (p->class_id == JS_CLASS_PROMISE) return sexos_promise_muted(function);
++    if (p->class_id == JS_CLASS_PROMISE_RESOLVE_FUNCTION ||
++        p->class_id == JS_CLASS_PROMISE_REJECT_FUNCTION) {
++        JSPromiseFunctionData *resolver = p->u.promise_function_data;
++        return resolver && sexos_promise_muted(resolver->promise);
++    }
++    return p->class_id == JS_CLASS_PROXY && sexos_opaque_source_seen;
++}
++static bool sexos_function_muted(JSValueConst function) {
++    unsigned left = 64;
++    return sexos_function_muted_walk(function, &left);
 +}
 +static JSFunctionBytecode *sexos_running_bytecode(JSContext *ctx) {
 +    for (JSStackFrame *f = ctx->rt->current_stack_frame; f; f = f->prev_frame) {
