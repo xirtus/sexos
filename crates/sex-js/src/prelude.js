@@ -32,6 +32,8 @@
     const comma = info.indexOf(',');
     const type = +info.slice(0, comma), name = info.slice(comma + 1);
     if (type === 9) return document;
+    const custom = type === 1 && customByName.get(name.toLowerCase());
+    if (custom) { upgrading = { id, tag: name }; n = new custom(); upgrading = null; nodes.set(id, n); return n; }
     n = type === 3 ? new Text(null, id) : new (ELEMENT_CLASSES[name] || HTMLElement)(id, name);
     nodes.set(id, n);
     return n;
@@ -56,6 +58,13 @@
     preventDefault() { if (this.cancelable) this.defaultPrevented = true; }
     stopPropagation() { this._stop = true; }
     stopImmediatePropagation() { this._stop = true; this._stopNow = true; }
+    // The old way: document.createEvent(kind) then initEvent/initCustomEvent.
+    initEvent(type, bubbles, cancelable) { this.type = String(type); this.bubbles = !!bubbles; this.cancelable = !!cancelable; }
+    initCustomEvent(type, bubbles, cancelable, detail) { this.initEvent(type, bubbles, cancelable); this.detail = detail === undefined ? null : detail; }
+    get returnValue() { return !this.defaultPrevented; }
+    set returnValue(v) { if (!v) this.preventDefault(); }
+    get srcElement() { return this.target; }
+    composedPath() { const p = []; for (let n = this.target; n; n = n.parentNode) p.push(n); if (p.length && p[p.length - 1] === document) p.push(window); return p; }
   }
   class UIEvent extends Event {}
   class MouseEvent extends UIEvent {
@@ -107,6 +116,7 @@
 
   class EventTarget {
     addEventListener(type, fn, opts) {
+      if (this == null) return globalThis.addEventListener(type, fn, opts);
       if (typeof fn !== 'function' && !(fn && typeof fn.handleEvent === 'function')) return;
       const l = this._listeners || (this._listeners = {});
       const arr = l[type] || (l[type] = []);
@@ -115,10 +125,12 @@
       if (type === 'click' && this instanceof Element) H(OP.CLICKABLE, this._id);
     }
     removeEventListener(type, fn) {
+      if (this == null) return globalThis.removeEventListener(type, fn);
       const arr = this._listeners && this._listeners[type];
       if (arr) { const i = arr.findIndex(x => x.fn === fn); if (i >= 0) arr.splice(i, 1); }
     }
     dispatchEvent(ev) {
+      if (this == null) return globalThis.dispatchEvent(ev);
       // A click runs its target's activation behaviour (checkboxes, submit buttons, labels).
       if (ev.type === 'click' && this.nodeType === 1 && !ev._activating) { ev._activating = true; return activate(this, ev); }
       return this._dispatch(ev);
@@ -166,6 +178,7 @@
     constructor(id) { super(); this._id = id; }
     get nodeType() { return 1; }
     get ownerDocument() { return document; }
+    get baseURI() { return document.baseURI; }
     get parentNode() { return wrap(H(OP.PARENT, this._id)); }
     get parentElement() { const p = this.parentNode; return p && p.nodeType === 1 ? p : null; }
     get childNodes() { return list(H(OP.CHILDREN, this._id)); }
@@ -183,10 +196,12 @@
     get textContent() { return H(OP.GET_TEXT, this._id); }
     set textContent(v) { H(OP.SET_TEXT, this._id, v === null || v === undefined ? '' : String(v)); }
     get nodeValue() { return null; }
+    set nodeValue(v) {}
     appendChild(c) { return this.insertBefore(c, null); }
     insertBefore(c, ref) {
       if (c instanceof DocumentFragment) { for (const k of c.childNodes) this.insertBefore(k, ref); return c; }
       check(H(OP.INSERT, this._id, c._id, ref ? ref._id : ''));
+      if (customByName.size && c.nodeType === 1 && c.isConnected) connected(c);
       return c;
     }
     removeChild(c) { if (c.parentNode !== this) throw domError('Not a child of this node'); H(OP.DETACH, c._id); return c; }
@@ -218,6 +233,19 @@
     get nodeName() { return '#text'; }
     get wholeText() { return this.data; }
   }
+  // A comment is an empty text node in the page; its words stay here and are never drawn.
+  class Comment extends Text {
+    constructor(text) { super(''); this._c = text === undefined ? '' : String(text); }
+    get nodeType() { return 8; }
+    get nodeName() { return '#comment'; }
+    get data() { return this._c; }
+    set data(v) { this._c = String(v); }
+    get textContent() { return this._c; }
+    set textContent(v) { this._c = String(v); }
+    cloneNode() { return new Comment(this._c); }
+  }
+  class CDATASection extends Text {}
+  class ProcessingInstruction extends CharacterData {}
 
   // Shared by Element, Document and DocumentFragment.
   const ParentMixin = {
@@ -301,7 +329,17 @@
   }
 
   class Element extends Node {
-    constructor(id, tag) { super(id); this._tag = tag; }
+    constructor(id, tag) {
+      // `new MyElement()` for a defined custom element, or its upgrade by `wrap`.
+      if (id === undefined) {
+        const def = upgrading || (customByClass.get(new.target) && { id: +check(H(OP.CREATE_ELEMENT, customByClass.get(new.target))), tag: customByClass.get(new.target).toUpperCase() });
+        upgrading = null;
+        if (def && def.existing) return def.existing;
+        if (def) { id = def.id; tag = def.tag; }
+      }
+      super(id); this._tag = tag;
+      if (id !== undefined) nodes.set(id, this);
+    }
     get nodeName() { return this._tag; }
     get tagName() { return this._tag; }
     get localName() { return this._tag.toLowerCase(); }
@@ -327,6 +365,14 @@
     get innerHTML() { return H(OP.GET_HTML, this._id, '0'); }
     set innerHTML(v) { H(OP.SET_HTML, this._id, String(v)); }
     get outerHTML() { return H(OP.GET_HTML, this._id, '1'); }
+    set outerHTML(v) {
+      const p = this.parentNode;
+      if (!p) return;
+      const holder = document.createElement('div');
+      holder.innerHTML = String(v);
+      for (const k of holder.childNodes) p.insertBefore(k, this);
+      p.removeChild(this);
+    }
     get innerText() { return this.textContent; }
     set innerText(v) { this.textContent = v; }
     get nextElementSibling() { return this._sibling(1, true); }
@@ -386,6 +432,7 @@
     get title() { return this.getAttribute('title') || ''; }
     set title(v) { this.setAttribute('title', v); }
     get tabIndex() { return +(this.getAttribute('tabindex') || 0); }
+    set tabIndex(v) { this.setAttribute('tabindex', String(v | 0)); }
   }
   function reflect(cls, props) {
     for (const p of props) Object.defineProperty(cls.prototype, p, {
@@ -585,6 +632,9 @@
     set defaultChecked(v) { if (defaultChecked.has(this)) defaultChecked.set(this, !!v); else this.toggleAttribute('checked', !!v); }
     get selectionStart() { return edit.el === this ? edit.caret : this.value.length; }
     get selectionEnd() { return this.selectionStart; }
+    set selectionStart(v) { if (edit.el === this) edit.caret = Math.max(0, Math.min(this.value.length, v | 0)); }
+    set selectionEnd(v) {}
+    setSelectionRange(a) { this.selectionStart = a; }
     setSelectionRange(a) { if (edit.el === this) { edit.caret = Math.max(0, Math.min(+a || 0, Array.from(this.value).length)); showCaret(); } }
     select() {}
     get validity() { const valid = controlValidity(this); return { valid, valueMissing: !valid }; }
@@ -597,6 +647,7 @@
     get disabled() { return this.hasAttribute('disabled'); }
     set disabled(v) { this.toggleAttribute('disabled', !!v); }
     get type() { return (this.getAttribute('type') || 'text').toLowerCase(); }
+    set type(v) { this.setAttribute('type', v); }
   }
   reflect(HTMLInputElement, ['name', 'placeholder', 'min', 'max', 'step', 'pattern', 'autocomplete']);
   for (const p of ['required', 'readOnly', 'multiple', 'autofocus']) Object.defineProperty(HTMLInputElement.prototype, p, { get() { return this.hasAttribute(p.toLowerCase()); }, set(v) { this.toggleAttribute(p.toLowerCase(), !!v); }, configurable: true });
@@ -606,7 +657,9 @@
     get defaultValue() { return this.textContent; }
     set defaultValue(v) { this.textContent = v; }
     get rows() { return +(this.getAttribute('rows') || 2); }
+    set rows(v) { this.setAttribute('rows', String(v)); }
     get cols() { return +(this.getAttribute('cols') || 20); }
+    set cols(v) { this.setAttribute('cols', String(v)); }
   }
   class HTMLOptionElement extends HTMLElement {
     get value() { const v = this.getAttribute('value'); return v === null ? this.text : v; }
@@ -614,11 +667,14 @@
     get text() { return this.textContent.replace(/\s+/g, ' ').trim(); }
     set text(v) { this.textContent = v; }
     get label() { return this.getAttribute('label') || this.text; }
+    set label(v) { this.setAttribute('label', v); }
     get selected() { const s = this.closest('select'); return s ? s.selectedIndex === s.options.indexOf(this) : this.hasAttribute('selected'); }
     set selected(v) { const s = this.closest('select'); if (s && v) s.selectedIndex = s.options.indexOf(this); else this.toggleAttribute('selected', !!v); }
     get defaultSelected() { return this.hasAttribute('selected'); }
+    set defaultSelected(v) { this.toggleAttribute('selected', !!v); }
     get index() { const s = this.closest('select'); return s ? s.options.indexOf(this) : 0; }
     get disabled() { return this.hasAttribute('disabled'); }
+    set disabled(v) { this.toggleAttribute('disabled', !!v); }
     get form() { const s = this.closest('select'); return s ? s.form : null; }
   }
   class HTMLSelectElement extends HTMLElement {
@@ -697,6 +753,7 @@
     get disabled() { return this.hasAttribute('disabled'); }
     set disabled(v) { this.toggleAttribute('disabled', !!v); }
     get type() { return (this.getAttribute('type') || 'submit').toLowerCase(); }
+    set type(v) { this.setAttribute('type', v); }
   }
   reflect(HTMLButtonElement, ['name', 'value']);
   class HTMLTemplateElement extends HTMLElement {
@@ -864,7 +921,75 @@
     createImageData(w, h) { return { width: w, height: h, data: new Uint8ClampedArray(Math.max(0, w * h * 4)) }; }
     putImageData() {}
   }
-  const ELEMENT_CLASSES = { A: HTMLAnchorElement, IMG: HTMLImageElement, INPUT: HTMLInputElement, BUTTON: HTMLButtonElement,
+  class HTMLMediaElement extends HTMLElement {
+    get src() { const h = this.getAttribute('src'); return h === null ? '' : resolveUrl(h); }
+    set src(v) { this.setAttribute('src', v); }
+    get paused() { return this._paused !== false; }
+    get currentTime() { return this._t || 0; }
+    set currentTime(v) { this._t = +v || 0; }
+    get duration() { return NaN; }
+    get readyState() { return 0; }
+    get muted() { return this.hasAttribute('muted'); }
+    set muted(v) { this.toggleAttribute('muted', !!v); }
+    get volume() { return this._v === undefined ? 1 : this._v; }
+    set volume(v) { this._v = +v; }
+    // Playback is not here yet: play() reports that, as a browser does when it may not play.
+    play() { return Promise.reject(domError('NotSupportedError: media playback is not available')); }
+    pause() { this._paused = true; }
+    load() {}
+    canPlayType() { return ''; }
+  }
+  reflect(HTMLMediaElement, ['preload', 'poster', 'crossOrigin']);
+  class HTMLVideoElement extends HTMLMediaElement { get videoWidth() { return 0; } get videoHeight() { return 0; } }
+  class HTMLAudioElement extends HTMLMediaElement {}
+  class HTMLDivElement extends HTMLElement {}
+  class HTMLSpanElement extends HTMLElement {}
+  class HTMLParagraphElement extends HTMLElement {}
+  class HTMLHeadingElement extends HTMLElement {}
+  class HTMLScriptElement extends HTMLElement {
+    get src() { const h = this.getAttribute('src'); return h === null ? '' : resolveUrl(h); }
+    set src(v) { this.setAttribute('src', v); }
+    get text() { return this.textContent; }
+    set text(v) { this.textContent = v; }
+  }
+  reflect(HTMLScriptElement, ['type', 'async', 'defer', 'crossOrigin', 'integrity', 'noModule']);
+  class HTMLStyleElement extends HTMLElement {}
+  class HTMLLinkElement extends HTMLElement {
+    get href() { const h = this.getAttribute('href'); return h === null ? '' : resolveUrl(h); }
+    set href(v) { this.setAttribute('href', v); }
+  }
+  reflect(HTMLLinkElement, ['rel', 'as', 'type', 'media', 'crossOrigin']);
+  class HTMLIFrameElement extends HTMLElement {
+    get contentWindow() { return null; }
+    get contentDocument() { return null; }
+    get src() { const h = this.getAttribute('src'); return h === null ? '' : resolveUrl(h); }
+    set src(v) { this.setAttribute('src', v); }
+  }
+  class HTMLUListElement extends HTMLElement {}
+  class HTMLOListElement extends HTMLElement {}
+  class HTMLLIElement extends HTMLElement {}
+  class HTMLTableElement extends HTMLElement {}
+  class HTMLBodyElement extends HTMLElement {}
+  class HTMLHeadElement extends HTMLElement {}
+  class HTMLHtmlElement extends HTMLElement {}
+  class HTMLMetaElement extends HTMLElement {}
+  class HTMLTitleElement extends HTMLElement {}
+  class HTMLPictureElement extends HTMLElement {}
+  class HTMLSourceElement extends HTMLElement {}
+  class HTMLDialogElement extends HTMLElement {
+    get open() { return this.hasAttribute('open'); }
+    set open(v) { this.toggleAttribute('open', !!v); }
+    show() { this.open = true; }
+    showModal() { this.open = true; }
+    close(v) { this.open = false; if (v !== undefined) this.returnValue = v; this.dispatchEvent(new Event('close')); }
+  }
+  class SVGElement extends Element {}
+  const ELEMENT_CLASSES = { VIDEO: HTMLVideoElement, AUDIO: HTMLAudioElement, DIV: HTMLDivElement, SPAN: HTMLSpanElement, P: HTMLParagraphElement,
+    H1: HTMLHeadingElement, H2: HTMLHeadingElement, H3: HTMLHeadingElement, H4: HTMLHeadingElement, H5: HTMLHeadingElement, H6: HTMLHeadingElement,
+    SCRIPT: HTMLScriptElement, STYLE: HTMLStyleElement, LINK: HTMLLinkElement, IFRAME: HTMLIFrameElement, UL: HTMLUListElement, OL: HTMLOListElement,
+    LI: HTMLLIElement, TABLE: HTMLTableElement, BODY: HTMLBodyElement, HEAD: HTMLHeadElement, HTML: HTMLHtmlElement, META: HTMLMetaElement,
+    TITLE: HTMLTitleElement, PICTURE: HTMLPictureElement, SOURCE: HTMLSourceElement, DIALOG: HTMLDialogElement, SVG: SVGElement,
+    A: HTMLAnchorElement, IMG: HTMLImageElement, INPUT: HTMLInputElement, BUTTON: HTMLButtonElement,
     TEMPLATE: HTMLTemplateElement, CANVAS: HTMLCanvasElement, TEXTAREA: HTMLTextAreaElement, SELECT: HTMLSelectElement,
     OPTION: HTMLOptionElement, FORM: HTMLFormElement, LABEL: HTMLLabelElement };
 
@@ -898,6 +1023,7 @@
     }
     get URL() { return location.href; }
     get location() { return location; }
+    set location(v) { location.href = v; }
     get defaultView() { return window; }
     get cookie() { const v = H(OP.COOKIE); return v === null ? '' : v; }
     set cookie(v) { H(OP.COOKIE, String(v)); }
@@ -908,14 +1034,108 @@
     }
     createElementNS(ns, tag) { return this.createElement(tag); }
     createTextNode(t) { return new Text(t); }
-    createComment() { return new Text(''); }
+    createComment(t) { return new Comment(t); }
     createDocumentFragment() { return new DocumentFragment(); }
     createEvent() { return new Event(''); }
     hasFocus() { return true; }
+    get baseURI() { const b = this.querySelector('base[href]'); return b ? new URL(b.getAttribute('href'), location.href).href : location.href; }
+    get characterSet() { return 'UTF-8'; }
+    get charset() { return 'UTF-8'; }
+    get compatMode() { return 'CSS1Compat'; }
+    get contentType() { return 'text/html'; }
+    get visibilityState() { return 'visible'; }
+    get hidden() { return false; }
+    get scrollingElement() { return this.documentElement; }
+    get referrer() { return ''; }
+    get forms() { return this.querySelectorAll('form'); }
+    get images() { return this.querySelectorAll('img'); }
+    get links() { return this.querySelectorAll('a[href]'); }
+    get scripts() { return this.querySelectorAll('script'); }
+    get implementation() { return implementation; }
+    get fonts() { return fonts; }
+    createTreeWalker(root, what, filter) { return new TreeWalker(root, what, filter); }
+    createNodeIterator(root, what, filter) { return new TreeWalker(root, what, filter); }
+    importNode(n, deep) { return n.cloneNode(deep); }
+    adoptNode(n) { return n; }
   }
   mix(Document, ParentMixin);
   const document = new Document();
   nodes.set(0, document);
+
+  // Walks a subtree in document order, keeping the nodes the mask and filter accept.
+  const NodeFilter = { FILTER_ACCEPT: 1, FILTER_REJECT: 2, FILTER_SKIP: 3, SHOW_ALL: 0xFFFFFFFF, SHOW_ELEMENT: 1,
+    SHOW_ATTRIBUTE: 2, SHOW_TEXT: 4, SHOW_CDATA_SECTION: 8, SHOW_PROCESSING_INSTRUCTION: 64, SHOW_COMMENT: 128,
+    SHOW_DOCUMENT: 256, SHOW_DOCUMENT_TYPE: 512, SHOW_DOCUMENT_FRAGMENT: 1024 };
+  class TreeWalker {
+    constructor(root, what, filter) { this.root = root; this.whatToShow = what === undefined ? 0xFFFFFFFF : what >>> 0; this.filter = filter || null; this.currentNode = root; this.referenceNode = root; }
+    _ok(n) {
+      if (!(this.whatToShow & (1 << (n.nodeType - 1)))) return 3;
+      const f = this.filter; if (!f) return 1;
+      return typeof f === 'function' ? f(n) : f.acceptNode(n);
+    }
+    _next(n) {
+      if (n.firstChild) return n.firstChild;
+      for (; n && n !== this.root; n = n.parentNode) if (n.nextSibling) return n.nextSibling;
+      return null;
+    }
+    _prev(n) {
+      if (n === this.root) return null;
+      let p = n.previousSibling;
+      if (!p) return n.parentNode;
+      while (p.lastChild) p = p.lastChild;
+      return p;
+    }
+    nextNode() { for (let n = this._next(this.currentNode); n; n = this._next(n)) if (this._ok(n) === 1) return (this.currentNode = this.referenceNode = n); return null; }
+    previousNode() { for (let n = this._prev(this.currentNode); n; n = this._prev(n)) if (this._ok(n) === 1) return (this.currentNode = this.referenceNode = n); return null; }
+    parentNode() { for (let n = this.currentNode; n && n !== this.root; ) { n = n.parentNode; if (n && this._ok(n) === 1) return (this.currentNode = n); } return null; }
+    firstChild() { for (let n = this.currentNode.firstChild; n; n = n.nextSibling) if (this._ok(n) === 1) return (this.currentNode = n); return null; }
+    lastChild() { for (let n = this.currentNode.lastChild; n; n = n.previousSibling) if (this._ok(n) === 1) return (this.currentNode = n); return null; }
+    nextSibling() { for (let n = this.currentNode.nextSibling; n; n = n.nextSibling) if (this._ok(n) === 1) return (this.currentNode = n); return null; }
+    previousSibling() { for (let n = this.currentNode.previousSibling; n; n = n.previousSibling) if (this._ok(n) === 1) return (this.currentNode = n); return null; }
+    detach() {}
+  }
+
+  // A second, detached document (jQuery and sanitizers parse markup into one): its own
+  // nodes live in this document's store, unattached.
+  class DetachedDocument extends EventTarget {
+    constructor(title) {
+      super();
+      this.documentElement = document.createElement('html');
+      this.head = document.createElement('head'); this.body = document.createElement('body');
+      this.documentElement.appendChild(this.head); this.documentElement.appendChild(this.body);
+      if (title !== undefined) { const t = document.createElement('title'); t.textContent = title; this.head.appendChild(t); }
+    }
+    get nodeType() { return 9; }
+    get baseURI() { return document.baseURI; }
+    createElement(t) { return document.createElement(t); }
+    createElementNS(ns, t) { return document.createElement(t); }
+    createTextNode(t) { return document.createTextNode(t); }
+    createComment(t) { return document.createComment(t); }
+    createDocumentFragment() { return document.createDocumentFragment(); }
+    querySelector(s) { return this.documentElement.querySelector(s); }
+    querySelectorAll(s) { return this.documentElement.querySelectorAll(s); }
+    getElementById(id) { return this.documentElement.querySelector('#' + CSS.escape(id)); }
+    getElementsByTagName(t) { return this.documentElement.getElementsByTagName(t); }
+    importNode(n, deep) { return n.cloneNode(deep); }
+    adoptNode(n) { return n; }
+  }
+  const implementation = {
+    createHTMLDocument: title => new DetachedDocument(title),
+    createDocument: () => new DetachedDocument(),
+    createDocumentType: (name, publicId, systemId) => ({ nodeType: 10, name, publicId, systemId }),
+    hasFeature: () => true,
+  };
+  // Fonts: the browser draws with its own faces, so every face is ready.
+  const fonts = Object.assign(new EventTarget(), {
+    status: 'loaded', size: 0, ready: Promise.resolve(),
+    load: () => Promise.resolve([]), check: () => true, add() {}, delete: () => false, clear() {},
+    forEach() {}, has: () => false, values: () => [][Symbol.iterator](), [Symbol.iterator]: () => [][Symbol.iterator](),
+  });
+  fonts.ready = Promise.resolve(fonts);
+  class FontFace {
+    constructor(family, source, desc) { this.family = family; this.status = 'loaded'; Object.assign(this, desc || {}); this.loaded = Promise.resolve(this); }
+    load() { return Promise.resolve(this); }
+  }
 
   // ---- WebGL ----
   // Calls are queued as commands (fields split by \x1f, commands by \x1e) with their bulk
@@ -2162,16 +2382,281 @@
       this._q = v && v !== '?' ? (v[0] === '?' ? v : '?' + v) : '';
       this.searchParams._l = new URLSearchParams(this._q)._l;
     }
+    get hash() { return this._h; }
+    set hash(v) { v = String(v); this._h = v && v !== '#' ? (v[0] === '#' ? v : '#' + v) : ''; }
+    set href(v) { const u = new URL(v); for (const k of ['protocol', 'host', 'pathname', 'search', 'hash']) this[k] = u[k]; }
     get hostname() { return this.host.replace(/:\d+$/, ''); }
+    set hostname(v) { const p = this.port; this.host = String(v) + (p ? ':' + p : ''); }
+    set port(v) { this.host = this.hostname + (v === '' || v == null ? '' : ':' + v); }
+    get username() { return ''; }
+    get password() { return ''; }
     get port() { const m = /:(\d+)$/.exec(this.host); return m ? m[1] : ''; }
     get origin() { return this.host ? this.protocol + '//' + this.host : 'null'; }
     get href() { return this.protocol + (this.host || this.protocol === 'file:' ? '//' + this.host : '') + this.pathname + this.search + this.hash; }
     toString() { return this.href; }
     toJSON() { return this.href; }
+    static canParse(u, base) { try { new URL(u, base); return true; } catch (e) { return false; } }
+    static parse(u, base) { try { return new URL(u, base); } catch (e) { return null; } }
+    static createObjectURL(o) { const id = 'blob:' + location.origin + '/' + crypto.randomUUID(); blobUrls.set(id, o); return id; }
+    static revokeObjectURL(id) { blobUrls.delete(id); }
   }
+  const blobUrls = new Map();
 
+  // ---- Custom elements ----
+  const customByName = new Map(), customByClass = new Map(), customWaiting = new Map();
+  let upgrading = null;
+  function connected(root) {
+    const all = [root, ...(root.querySelectorAll ? root.querySelectorAll('*') : [])];
+    for (const el of all) if (customByName.has(el.localName) && typeof el.connectedCallback === 'function' && !el._sxConnected) {
+      el._sxConnected = true;
+      try { el.connectedCallback(); } catch (e) { log(2, [e]); }
+    }
+  }
+  const customElements = {
+    define(name, cls) {
+      name = String(name).toLowerCase();
+      if (customByName.has(name)) throw domError('"' + name + '" has already been defined as a custom element');
+      customByName.set(name, cls); customByClass.set(cls, name);
+      // Elements already in the page become instances of the new class.
+      for (const up of document.querySelectorAll(name)) {
+        // Upgraded in place: references the page holds keep their listeners and state.
+        // (One the page never touched was just made as the class, by wrap.)
+        if (!(up instanceof cls)) {
+          Object.setPrototypeOf(up, cls.prototype);
+          upgrading = { id: up._id, tag: up._tag, existing: up };
+          try { new cls(); } catch (e) { log(2, [e]); } finally { upgrading = null; }
+        }
+        const attrs = cls.observedAttributes || [];
+        if (typeof up.attributeChangedCallback === 'function') for (const a of attrs) if (up.hasAttribute(a)) { try { up.attributeChangedCallback(a, null, up.getAttribute(a)); } catch (e) { log(2, [e]); } }
+        if (up.isConnected) connected(up);
+      }
+      const w = customWaiting.get(name);
+      if (w) { customWaiting.delete(name); w.forEach(f => f(cls)); }
+    },
+    get(name) { return customByName.get(String(name).toLowerCase()); },
+    getName(cls) { return customByClass.get(cls) || null; },
+    whenDefined(name) {
+      name = String(name).toLowerCase();
+      if (customByName.has(name)) return Promise.resolve(customByName.get(name));
+      return new Promise(r => { const l = customWaiting.get(name) || []; l.push(r); customWaiting.set(name, l); });
+    },
+    upgrade() {},
+  };
+
+  // ---- Smaller browser APIs ----
+  const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  function btoa(s) {
+    s = String(s);
+    let out = '';
+    for (let i = 0; i < s.length; i += 3) {
+      const a = s.charCodeAt(i), b = s.charCodeAt(i + 1), c = s.charCodeAt(i + 2);
+      if (a > 255 || b > 255 || c > 255) throw domError('The string to be encoded contains characters outside of the Latin1 range.');
+      const n = (a << 16) | ((b || 0) << 8) | (c || 0);
+      out += B64[n >> 18] + B64[(n >> 12) & 63] + (i + 1 < s.length ? B64[(n >> 6) & 63] : '=') + (i + 2 < s.length ? B64[n & 63] : '=');
+    }
+    return out;
+  }
+  function atob(s) {
+    s = String(s).replace(/[\t\n\f\r ]/g, '').replace(/-/g, '+').replace(/_/g, '/');
+    if (s.length % 4 === 0) s = s.replace(/==?$/, '');
+    if (s.length % 4 === 1 || /[^A-Za-z0-9+/]/.test(s)) throw domError('The string to be decoded is not correctly encoded.');
+    let out = '', bits = 0, acc = 0;
+    for (let i = 0; i < s.length; i++) {
+      acc = (acc << 6) | B64.indexOf(s[i]); bits += 6;
+      if (bits >= 8) { bits -= 8; out += String.fromCharCode((acc >> bits) & 255); }
+    }
+    return out;
+  }
+  class TextEncoder {
+    get encoding() { return 'utf-8'; }
+    encode(s) {
+      s = s === undefined ? '' : String(s);
+      const out = [];
+      for (const ch of s) {
+        let c = ch.codePointAt(0);
+        if (c >= 0xD800 && c <= 0xDFFF) c = 0xFFFD;
+        if (c < 0x80) out.push(c);
+        else if (c < 0x800) out.push(0xC0 | (c >> 6), 0x80 | (c & 63));
+        else if (c < 0x10000) out.push(0xE0 | (c >> 12), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+        else out.push(0xF0 | (c >> 18), 0x80 | ((c >> 12) & 63), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+      }
+      return new Uint8Array(out);
+    }
+  }
+  class TextDecoder {
+    constructor(label) { this.encoding = String(label || 'utf-8').toLowerCase().replace('utf8', 'utf-8'); }
+    decode(buf) {
+      if (buf === undefined) return '';
+      const b = buf instanceof ArrayBuffer ? new Uint8Array(buf) : new Uint8Array(buf.buffer || buf, buf.byteOffset || 0, buf.byteLength === undefined ? buf.length : buf.byteLength);
+      if (this.encoding !== 'utf-8') { let o = ''; for (let i = 0; i < b.length; i++) o += String.fromCharCode(b[i]); return o; }
+      let out = '', i = b[0] === 0xEF && b[1] === 0xBB && b[2] === 0xBF ? 3 : 0;
+      while (i < b.length) {
+        const c = b[i];
+        let cp, n;
+        if (c < 0x80) { cp = c; n = 1; }
+        else if (c >= 0xC2 && c < 0xE0) { cp = c & 31; n = 2; }
+        else if (c >= 0xE0 && c < 0xF0) { cp = c & 15; n = 3; }
+        else if (c >= 0xF0 && c < 0xF5) { cp = c & 7; n = 4; }
+        else { out += '\uFFFD'; i++; continue; }
+        let ok = i + n <= b.length;
+        for (let k = 1; ok && k < n; k++) { if ((b[i + k] & 0xC0) !== 0x80) ok = false; else cp = (cp << 6) | (b[i + k] & 63); }
+        if (!ok) { out += '\uFFFD'; i++; continue; }
+        out += String.fromCodePoint(cp); i += n;
+      }
+      return out;
+    }
+  }
+  function structuredClone(v, seen) {
+    seen = seen || new Map();
+    if (v === null || typeof v !== 'object') { if (typeof v === 'function' || typeof v === 'symbol') throw domError('could not be cloned'); return v; }
+    if (seen.has(v)) return seen.get(v);
+    let out;
+    if (v instanceof Date) out = new Date(v.getTime());
+    else if (v instanceof RegExp) out = new RegExp(v.source, v.flags);
+    else if (ArrayBuffer.isView(v)) out = new v.constructor(v);
+    else if (v instanceof ArrayBuffer) out = v.slice(0);
+    else if (v instanceof Map) { out = new Map(); seen.set(v, out); v.forEach((x, k) => out.set(structuredClone(k, seen), structuredClone(x, seen))); return out; }
+    else if (v instanceof Set) { out = new Set(); seen.set(v, out); v.forEach(x => out.add(structuredClone(x, seen))); return out; }
+    else if (Array.isArray(v)) { out = []; seen.set(v, out); v.forEach((x, i) => { out[i] = structuredClone(x, seen); }); return out; }
+    else { out = {}; seen.set(v, out); for (const k of Object.keys(v)) out[k] = structuredClone(v[k], seen); return out; }
+    seen.set(v, out);
+    return out;
+  }
+  class AbortSignal extends EventTarget {
+    constructor() { super(); this.aborted = false; this.reason = undefined; this.onabort = null; }
+    throwIfAborted() { if (this.aborted) throw this.reason; }
+    static abort(reason) { const c = new AbortController(); c.abort(reason); return c.signal; }
+    static timeout(ms) { const c = new AbortController(); setTimeout(() => c.abort(domError('The operation timed out.')), ms); return c.signal; }
+    static any(list) { const c = new AbortController(); for (const s of list) { if (s.aborted) { c.abort(s.reason); break; } s.addEventListener('abort', () => c.abort(s.reason)); } return c.signal; }
+  }
+  class AbortController {
+    constructor() { this.signal = new AbortSignal(); }
+    abort(reason) {
+      const s = this.signal;
+      if (s.aborted) return;
+      s.aborted = true; s.reason = reason === undefined ? domError('signal is aborted without reason') : reason;
+      const ev = new Event('abort');
+      if (typeof s.onabort === 'function') s.onabort(ev);
+      s.dispatchEvent(ev);
+    }
+  }
+  class Blob {
+    constructor(parts, opts) {
+      const enc = new TextEncoder(), chunks = [];
+      for (const p of parts || []) chunks.push(p instanceof Blob ? p._b : typeof p === 'string' ? enc.encode(p) : p instanceof ArrayBuffer ? new Uint8Array(p) : ArrayBuffer.isView(p) ? new Uint8Array(p.buffer, p.byteOffset, p.byteLength) : enc.encode(String(p)));
+      const n = chunks.reduce((a, c) => a + c.length, 0);
+      this._b = new Uint8Array(n);
+      let at = 0;
+      for (const c of chunks) { this._b.set(c, at); at += c.length; }
+      this.type = (opts && opts.type) || '';
+    }
+    get size() { return this._b.length; }
+    arrayBuffer() { return Promise.resolve(this._b.slice().buffer); }
+    bytes() { return Promise.resolve(this._b.slice()); }
+    text() { return Promise.resolve(new TextDecoder().decode(this._b)); }
+    slice(a, b, type) { const x = new Blob([], { type }); x._b = this._b.slice(a, b); return x; }
+  }
+  class File extends Blob { constructor(parts, name, opts) { super(parts, opts); this.name = String(name); this.lastModified = Date.now(); } }
+  // Observers: everything counts as on screen and at its laid-out size, once, soon after
+  // it is observed (pages use them to start lazy loading and animations).
+  class IntersectionObserver {
+    constructor(cb, opts) { this._cb = cb; this._els = new Set(); this.root = (opts && opts.root) || null; this.rootMargin = (opts && opts.rootMargin) || '0px'; this.thresholds = [].concat((opts && opts.threshold) || 0); }
+    observe(el) {
+      if (!el || this._els.has(el)) return;
+      this._els.add(el);
+      setTimeout(() => {
+        if (!this._els.has(el)) return;
+        const r = el.getBoundingClientRect ? el.getBoundingClientRect() : { x: 0, y: 0, width: 0, height: 0, top: 0, left: 0, right: 0, bottom: 0 };
+        try { this._cb([{ target: el, isIntersecting: true, intersectionRatio: 1, boundingClientRect: r, intersectionRect: r, rootBounds: null, time: performance.now() }], this); } catch (e) { log(2, [e]); }
+      }, 0);
+    }
+    unobserve(el) { this._els.delete(el); }
+    disconnect() { this._els.clear(); }
+    takeRecords() { return []; }
+  }
+  class ResizeObserver {
+    constructor(cb) { this._cb = cb; this._els = new Set(); }
+    observe(el) {
+      if (!el || this._els.has(el)) return;
+      this._els.add(el);
+      setTimeout(() => {
+        if (!this._els.has(el)) return;
+        const r = el.getBoundingClientRect();
+        const size = [{ inlineSize: r.width, blockSize: r.height }];
+        try { this._cb([{ target: el, contentRect: r, borderBoxSize: size, contentBoxSize: size, devicePixelContentBoxSize: size }], this); } catch (e) { log(2, [e]); }
+      }, 0);
+    }
+    unobserve(el) { this._els.delete(el); }
+    disconnect() { this._els.clear(); }
+  }
+  class MutationObserver {
+    constructor(cb) { this._cb = cb; }
+    observe() {}
+    disconnect() {}
+    takeRecords() { return []; }
+  }
+  class PerformanceObserver {
+    constructor(cb) { this._cb = cb; }
+    observe() {}
+    disconnect() {}
+    takeRecords() { return []; }
+    static get supportedEntryTypes() { return []; }
+  }
+  function Image(width, height) {
+    const img = document.createElement('img');
+    if (width !== undefined) img.width = width;
+    if (height !== undefined) img.height = height;
+    return img;
+  }
+  function Audio(src) { const a = document.createElement('audio'); if (src !== undefined) a.src = src; return a; }
+  function Option(text, value, defaultSelected, selected) {
+    const o = document.createElement('option');
+    if (text !== undefined) o.textContent = text;
+    if (value !== undefined) o.setAttribute('value', value);
+    if (defaultSelected || selected) o.setAttribute('selected', '');
+    return o;
+  }
+  const crypto = {
+    getRandomValues(a) {
+      for (let i = 0; i < a.length; i++) a[i] = Math.floor(Math.random() * 4294967296);
+      return a;
+    },
+    randomUUID() {
+      const b = crypto.getRandomValues(new Uint8Array(16));
+      b[6] = (b[6] & 15) | 64; b[8] = (b[8] & 63) | 128;
+      const h = Array.from(b, x => x.toString(16).padStart(2, '0')).join('');
+      return h.slice(0, 8) + '-' + h.slice(8, 12) + '-' + h.slice(12, 16) + '-' + h.slice(16, 20) + '-' + h.slice(20);
+    },
+    subtle: {},
+  };
+  const CSS = {
+    supports(prop, value) {
+      const p = value === undefined ? String(prop).replace(/^\(|\)$/g, '').split(':')[0].trim() : String(prop);
+      return /^(display|color|background|background-color|margin|padding|border|width|height|position|top|left|right|bottom|font|font-size|font-weight|opacity|transform|transition|animation|flex|gap|grid|z-index|overflow|text-align|line-height|box-shadow|border-radius|--[\w-]+)$/.test(p);
+    },
+    escape(s) { return String(s).replace(/([^\w-])/g, '\\$1').replace(/^(\d)/, '\\3$1 '); },
+  };
+  function requestIdleCallback(fn, opts) {
+    return addTimer(() => fn({ didTimeout: false, timeRemaining: () => 16 }), 1, [], false);
+  }
   const startNs = Date.now();
-  const performance = { now: () => Date.now() - startNs, timeOrigin: startNs, mark() {}, measure() {} };
+  // Navigation timing, as if the page arrived when the scripts started.
+  const navTiming = { navigationStart: startNs, fetchStart: startNs, domainLookupStart: startNs, domainLookupEnd: startNs, connectStart: startNs, connectEnd: startNs, secureConnectionStart: startNs, requestStart: startNs, responseStart: startNs, responseEnd: startNs, domLoading: startNs, domInteractive: startNs, domContentLoadedEventStart: startNs, domContentLoadedEventEnd: startNs, domComplete: startNs, loadEventStart: startNs, loadEventEnd: startNs, unloadEventStart: 0, unloadEventEnd: 0, redirectStart: 0, redirectEnd: 0 };
+  const navEntry = { name: '', entryType: 'navigation', startTime: 0, duration: 0, type: 'navigate', redirectCount: 0, transferSize: 0, encodedBodySize: 0, decodedBodySize: 0, toJSON() { return this; } };
+  for (const k of Object.keys(navTiming)) if (navTiming[k]) navEntry[k] = 0;
+  const marks = [];
+  const performance = {
+    now: () => Date.now() - startNs, timeOrigin: startNs, timing: navTiming, navigation: { type: 0, redirectCount: 0 },
+    mark(name, o) { const e = { name: String(name), entryType: 'mark', startTime: (o && o.startTime) || performance.now(), duration: 0, detail: (o && o.detail) || null }; marks.push(e); return e; },
+    measure(name) { const e = { name: String(name), entryType: 'measure', startTime: 0, duration: performance.now(), detail: null }; marks.push(e); return e; },
+    clearMarks() { marks.length = 0; }, clearMeasures() {}, clearResourceTimings() {}, setResourceTimingBufferSize() {},
+    getEntries() { return [navEntry, ...marks]; },
+    getEntriesByType(t) { return t === 'navigation' ? [navEntry] : marks.filter(m => m.entryType === t); },
+    getEntriesByName(n, t) { return marks.filter(m => m.name === n && (!t || m.entryType === t)); },
+    toJSON() { return { timeOrigin: startNs }; },
+    addEventListener() {}, removeEventListener() {},
+    memory: { usedJSHeapSize: 0, totalJSHeapSize: 0, jsHeapSizeLimit: 0 },
+  };
   const console = {
     log() { log(0, arguments); }, info() { log(0, arguments); }, debug() { log(0, arguments); },
     warn() { log(1, arguments); }, error() { log(2, arguments); },
@@ -2181,9 +2666,11 @@
 
   const window = globalThis;
   const view = () => H(OP.VIEWPORT).split(',').map(Number);
-  Object.setPrototypeOf(window, EventTarget.prototype);
+  // `window instanceof Window`, and Window.prototype for polyfills that patch it.
+  class Window extends EventTarget {}
+  Object.setPrototypeOf(window, Window.prototype);
   const globals = {
-    window, self: window, globalThis: window, document, location, console, performance,
+    window, self: window, Window, globalThis: window, document, location, console, performance,
     navigator: { userAgent: 'Mozilla/5.0 (SexOS) Web/0.2', language: 'en', languages: ['en'], platform: 'SexOS', onLine: true, gpu: new GPU() },
     screen: { get width() { return view()[0]; }, get height() { return view()[1]; } },
     history: { length: 1, state: null, pushState() {}, replaceState() {}, back() {}, forward() {}, go() {} },
@@ -2200,7 +2687,7 @@
     getComputedStyle: el => el.style,
     matchMedia: q => ({ matches: false, media: q, addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {} }),
     scrollTo() {}, scrollBy() {}, scroll() {}, focus() {}, blur() {},
-    Event, UIEvent, MouseEvent, PointerEvent, WheelEvent, FocusEvent, KeyboardEvent, CustomEvent, EventTarget, Node, Text, CharacterData, Element, HTMLElement,
+    Event, UIEvent, MouseEvent, PointerEvent, WheelEvent, FocusEvent, KeyboardEvent, CustomEvent, EventTarget, Node, Text, Comment, CDATASection, ProcessingInstruction, CharacterData, Element, HTMLElement,
     HTMLAnchorElement, HTMLImageElement, HTMLInputElement, HTMLButtonElement, HTMLCanvasElement, HTMLTemplateElement,
     HTMLTextAreaElement, HTMLSelectElement, HTMLOptionElement, HTMLFormElement, HTMLLabelElement, FormData, InputEvent, SubmitEvent,
     Document, DocumentFragment, DOMTokenList, CanvasRenderingContext2D, CanvasGradient, CanvasPattern,
@@ -2212,6 +2699,16 @@
     GPUQueue, GPUCanvasContext, GPUBufferUsage, GPUTextureUsage, GPUShaderStage, GPUMapMode, GPUColorWrite,
     createImageBitmap: src => Promise.resolve(src),
     fetch, Request, Response, Headers, URL, URLSearchParams, XMLHttpRequest,
+    customElements, atob, btoa, TextEncoder, TextDecoder, structuredClone, AbortController, AbortSignal, Blob, File,
+    IntersectionObserver, ResizeObserver, MutationObserver, PerformanceObserver, Image, Audio, Option, crypto, CSS,
+    requestIdleCallback, cancelIdleCallback: id => { timers.delete(id); },
+    HTMLMediaElement, HTMLVideoElement, HTMLAudioElement, HTMLDivElement, HTMLSpanElement, HTMLParagraphElement, HTMLHeadingElement,
+    HTMLScriptElement, HTMLStyleElement, HTMLLinkElement, HTMLIFrameElement, HTMLUListElement, HTMLOListElement, HTMLLIElement,
+    HTMLTableElement, HTMLBodyElement, HTMLHeadElement, HTMLHtmlElement, HTMLMetaElement, HTMLTitleElement, HTMLPictureElement,
+    HTMLSourceElement, HTMLDialogElement, SVGElement, NodeFilter, TreeWalker, NodeIterator: TreeWalker, FontFace,
+    getSelection: () => ({ rangeCount: 0, toString: () => '', removeAllRanges() {}, addRange() {}, getRangeAt() { return null; } }),
+    visualViewport: { get width() { return view()[0]; }, get height() { return view()[1]; }, scale: 1, offsetLeft: 0, offsetTop: 0, pageLeft: 0, pageTop: 0, addEventListener() {}, removeEventListener() {} },
+    get origin() { return location.origin; }, isSecureContext: true,
     devicePixelRatio: 1, scrollX: 0, scrollY: 0, pageXOffset: 0, pageYOffset: 0, name: '',
   };
   for (const k of Object.keys(globals)) {
