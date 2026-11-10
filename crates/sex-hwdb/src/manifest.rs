@@ -32,6 +32,8 @@ pub enum Lease {
     Virtio,
     /// Display controller: identity only, no BAR view yet (firmware framebuffer).
     Display,
+    /// Intel Wi-Fi: BAR0, command grant, its own 4 MiB DMA pool and the firmware pack.
+    Wifi,
 }
 
 /// One kind of device a service drives. `class` is `class << 16 | subclass << 8 | prog_if`
@@ -97,13 +99,15 @@ pub const USB: Manifest = Manifest {
 };
 
 /// sexnet: Intel and Realtek wired Ethernet (the model table in `sex_pdx::pci_command`
-/// decides which parts have a known register layout).
+/// decides which parts have a known register layout), and Intel Wi-Fi (the chip table
+/// in `sex_wifi::devices` decides which ones it can start).
 pub const NET: Manifest = Manifest {
     service: Service::Net, max_devices: 0, vectors: 0,
     matches: &[
         Match::vendor_class(0x8086, 0x02_00_00, CLASS, Lease::Nic, 19),
         Match::vendor_class(0x10ec, 0x02_00_00, CLASS, Lease::Nic, 19),
         Match::vendor_class(0x1186, 0x02_00_00, CLASS, Lease::Nic, 19),
+        Match::vendor_class(0x8086, 0x02_80_00, CLASS, Lease::Wifi, 22),
     ],
 };
 

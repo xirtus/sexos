@@ -78,8 +78,8 @@ The driver speaks firmware API 77 (89 for the 0x7e40 "Ma" parts), the same as Op
 
 | Stage | What | Proof |
 |---|---|---|
-| **W1** (this PR) | driver core crate: chips, firmware files, DMA layout, power-up, commands, 802.11, WPA2/WPA3, CCMP | host tests with IEEE/RFC vectors, real firmware images |
-| **W2** | kernel leases Intel Wi-Fi (class 02:80, ids from `sex_wifi::devices`) to sexnet with a 4 MiB DMA region; firmware files on the boot image; sexnet powers the chip up and waits for ALIVE; boot log `[wifi.chip]`, `[wifi.alive] fw=…` or the exact failure step | host gate on the lease; **x17 boot log next week** |
+| **W1** (#83) | driver core crate: chips, firmware files, DMA layout, power-up, commands, 802.11, WPA2/WPA3, CCMP | host tests with IEEE/RFC vectors, real firmware images |
+| **W2** (section 7) | kernel leases Intel Wi-Fi (class 02:80, ids from `sex_wifi::devices`) to sexnet with a 4 MiB DMA region; firmware files on the boot image; sexnet powers the chip up and waits for ALIVE; boot log `[wifi.chip]`, `[wifi.alive] fw=…` or the exact failure step | host gate on the lease; **x17 boot log next week** |
 | W3 | RX ring and command queue processing; the init command set (PNVM load, PHY/antenna config, BT coexistence, regulatory MCC, MAC and station contexts) | x17: "init complete" |
 | W4 | scanning (UMAC scan), a network list in the status bar and `wifi scan` in Spindle | x17 lists nearby networks |
 | W5 | connect: open/SAE authentication, association, the handshake from this crate, key install, data queues into sexnet's Ethernet path; passphrase prompt; saved networks | x17 browses the web over Wi-Fi |
@@ -103,3 +103,65 @@ The driver speaks firmware API 77 (89 for the 0x7e40 "Ma" parts), the same as Op
   vector values.
 - linux-firmware `intel/iwlwifi/*` (Intel redistributable licence): firmware data only.
 - No Linux kernel (GPL-2.0-only) code is used.
+
+## 7. Stage W2: the chip starts its firmware (2026-11-10)
+
+What the x17 R1 should print at its first boot, in order:
+
+```
+[hw.device] 3b:00.0 8086:2725 class=028000 Intel Wi-Fi 6E AX210 / Killer AX1675x service=sexnet support=in_progress
+[devmgr.lease] 3b:00.0 8086:2725 service=sexnet pd=… slot=22 kind=Wifi nth=1
+[boot.class.command] … kind=Wifi … dma_region=0x4400 dma_bytes=4194304
+[boot.wifi.firmware.region] pd=… bytes=13795328
+[wifi.chip] vendor=0x8086 device=0x2725 subsystem=…:1674 hw_rev=… rf_id=… bar_bytes=…
+[wifi.chip.known] name="Killer Wi-Fi 6E AX1675x (AX210)" family=Ax210 firmware=iwlwifi-ty-a0-gf-a0-77.ucode integrated=0
+[wifi.firmware] file=iwlwifi-ty-a0-gf-a0-77.ucode bytes=1594276 version=… api=77 …
+[wifi.prepared] pool=4194304 used=… rx_pages=64 bus=…
+[wifi.step] from=Ready to=Reset … (then Clock, Configure, NicLock, WaitAlive)
+[wifi.alive] fw=… umac=… notifications=1 …
+```
+
+Any other ending is a `[wifi.failed] step=… reason=…` line naming the step, with the
+interrupt cause, `GP_CNTRL` and the receive ring position, so the log alone says what to
+fix. `step=Failed(RfKill)` means the radio switch (or Fn key) is off.
+
+How it is wired:
+
+- **Kernel (mechanism only, ~45 lines).** The NET manifest in `sex-hwdb` claims Intel
+  class 02:80 as `Lease::Wifi` at slot 22. `device_lease::Kind::Wifi` is the class lease
+  HD Audio and AHCI already use: BAR0 (at least 8 KiB of registers), memory and
+  bus-master bits, and a DMA pool, here 4 MiB at its own slot 23 so the wired NIC keeps
+  its pool at slot 32. The boot module `firmware/wifi.pack` becomes a read-only region at
+  slot 24 of the service holding the chip; the kernel never parses it.
+  `SYS_IDENTITY` gained `QUERY_SUBSYSTEM` (the module maker's ids; the x17's Killer module is subsystem device 1674).
+- **Firmware pack.** `scripts/make_wifi_firmware_pack.py` packs the fetched files (name,
+  offset, length, SHA-256 each; format in `sex_wifi::pack`). The build fetches the files
+  if they are missing and packs whatever it has; an offline build gets an empty pack and
+  the chip logs `reason=Missing`. The installed system carries the pack too (the boot
+  partition image grows from 12 to 32 MiB, its full slot, when firmware is present).
+- **Driver crate.** `sex_wifi::rx` (the receive ring for both families: free ring, used
+  ring, status word, page recycling, the 0x1c80 write index) and `sex_wifi::bringup`
+  (firmware into DMA, pages posted, the free ring made visible before the CPU starts,
+  power-up, then the receive ring read until ALIVE).
+- **Network service.** `servers/sexnet/src/wifi.rs` maps the lease, the pool and the pack
+  onto the crate's traits and steps it from sexnet's main loop, beside the NIC.
+
+Why the driver is still inside sexnet and not its own server (the guardrails' default):
+a new server needs its own boot module, protection domain and PKU organ, and the radio's
+packets would then cross one more boundary to reach the IP stack. Until MSI-X and IOMMU
+domains land (W7), a separate server would add a copy without adding isolation the
+hardware enforces. The crate does not depend on sexnet, so moving it later is a matter of
+a new `Service` in the manifest.
+
+Proof: `scripts/wifi_host_gate.sh` adds the receive ring on both families, ALIVE through
+the ring (good and bad status), refusal of a page the driver never posted, the pack's
+checksum and lookup, and the real pack starting the x17's chip layout in a 4 MiB pool.
+QEMU has no Intel Wi-Fi, so the boot gates prove only that nothing else changed.
+
+ABI: new `sex_pdx::pci_command` constants (`SLOT_WIFI`, `SLOT_WIFI_DMA`,
+`SLOT_WIFI_FIRMWARE`, `WIFI_DMA_REGION_ID` 0x4400, `WIFI_FIRMWARE_REGION_ID` 0x4401,
+`QUERY_SUBSYSTEM`), `sex_pdx::device_subsystem`, and `kernel/src/pci_command.rs` (DMA slot
+per lease kind, subsystem query). `abi_version_hash` recomputed.
+
+Next, W3: the command queue and the init commands (PNVM, PHY and antenna configuration,
+regulatory domain, MAC context), ending in `[wifi.ready]`.
