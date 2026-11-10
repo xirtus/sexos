@@ -3598,3 +3598,16 @@ Plan: `docs/handoff/NVIDIA_GPU_PLAN_2026_11_09.md` (stages N1-N6).
   one, served at 300 KB/s: opens at ~600 KB, 250 pictures, 10 s of 440 Hz).
   `quil_autosave_gate.boot` now deletes the old serial log first: QEMU's `-serial file:`
   does not truncate, and a reused output directory let an older log show through.
+
+## Boot without DMA protection (2026-11-10)
+
+- **What runs now.** The boot menu has "SexOS without DMA protection": the same system
+  with the IOMMU (VT-d / AMD-Vi) left off, a way out if a machine's firmware tables or
+  IOMMU misbehave during bare-metal testing. The default entry stays protected.
+- **Design.** The entry passes `CMDLINE=iommu=off`; the kernel reads its own command
+  line through Limine's kernel-file request and `iommu::init_boot` stops before touching
+  any unit. Logged as `[iommu.boot_options]` and `[iommu.absent] reason=boot_option_iommu_off`.
+- **ABI.** None.
+- **Gates.** `scripts/tests/test_limine_iommu_entry.py` (the entry boots exactly the main
+  entry's modules); checked in QEMU with both IOMMU models by booting that entry.
+

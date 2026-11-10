@@ -185,6 +185,13 @@ pub static MODULE_REQUEST: ModulesRequest = ModulesRequest::new();
 #[link_section = ".limine_requests"]
 pub static MP_REQUEST: limine::request::MpRequest = limine::request::MpRequest::new(0);
 
+/// The kernel file, whose command line is the boot menu entry's `CMDLINE=`
+/// (e.g. `iommu=off`). Limine 7 answers this request, not the newer cmdline one.
+#[cfg(target_arch = "x86_64")]
+#[used]
+#[link_section = ".limine_requests"]
+pub static KERNEL_FILE_REQUEST: limine::request::ExecutableFileRequest = limine::request::ExecutableFileRequest::new();
+
 #[cfg(target_arch = "x86_64")]
 #[used]
 #[link_section = ".limine_requests"]
