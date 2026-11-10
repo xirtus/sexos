@@ -173,3 +173,11 @@ Captured drag/release routing is untouched. Literal negative/outside/bar-crossin
 controls at all three scales compare this predicate with actual FrameGroups
 selection, and tiny/zero screens fail closed. The shared geometry suite is now
 13 cases; all 3 owner/row controls also pass with this agreement checked.
+
+A focused production-compositor control also fills all 32 slots with overlapping
+partial corners, requires the last real owner to be visited, then checks an
+opaque pixel stops before that owner. Literal colour and APP_PRESENT results
+pass. This proves capacity/stop correctness, not worst-case guest timing or
+optimized target stack size; those remain pending. The focused current-source
+AA/legacy-overlay/signed-row controls pass after the workarea fix and heap154
+master refresh; they are not relabelled as another full 59-case sweep.

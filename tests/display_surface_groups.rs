@@ -1279,3 +1279,13 @@ unsafe fn seal_pending_text(index:usize,task:u32,sequence:u32,text:&[u8],selecti
  for y in 0..160{for x in 0..180{assert_eq!(actual[y*180+x],composite_pixel(x,y,180,160,0x123,0,&after),"signed changed row {x},{y}");}}
  SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();reset_bitmap_stage();
 }}
+
+#[test]fn rounded_partial_stack_visits_all_32_layers_but_stops_at_opaque_owner(){unsafe{
+ FRAME_GROUPS=FrameGroups::new();reset_bitmap_stage();
+ for i in 0..MAX_SURFACES{SURFACES[i]=Surface{x:20,y:70,w:200,h:150,color:0xffffff,owner_pd:8,surface_id:800+i as u64,active:true,..SURFACE_EMPTY};}
+ SURFACES[31].owner_pd=9;SURFACES[31].surface_id=156;SURFACES[31].color=0xff0000;
+ let scene=capture_scene(320,260,0);
+ APP_PRESENT_BITS=0;assert_eq!(composite_pixel(27,70,320,260,0x123,0,&scene),0xf8f8f8);assert_eq!(APP_PRESENT_BITS,1);
+ APP_PRESENT_BITS=0;assert_eq!(composite_pixel(31,70,320,260,0x123,0,&scene),0xffffff);assert_eq!(APP_PRESENT_BITS,0);
+ SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();reset_bitmap_stage();
+}}
