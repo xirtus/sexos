@@ -10,7 +10,8 @@ its AVIF (AV1 through dav1d) must decode to its colour.
 Build FFmpeg first (scripts/build_ffmpeg.sh), then the ISO."""
 import argparse,http.server,os,re,shutil,sys,threading,time
 from pathlib import Path
-from browser_gate_viewport import content_rect
+from browser_gate_viewport import live_viewport,painted_viewport
+from web_surface_geometry import canvas_box
 from PIL import Image
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 ROOT=Path(__file__).resolve().parents[1]
@@ -52,19 +53,24 @@ def main():
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
   g['focus'](153);time.sleep(.5);s=len(t());keys(f'fetch {base}/web /bin/web');q.key('ret')
   m=g['wait'](r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',s,600);assert m[1].startswith('Saved'),m[1]
-  g['focus'](153);time.sleep(.5);s=len(t());keys(f'run +net web {url}');q.key('ret')
+  g['focus'](153);time.sleep(.5);s=len(t());keys('run +net web about:welcome');q.key('ret')
+  m=g['wait'](r'\[web.ready\] target=(\d+) task=(\d+)',s,600);target,task=m[1],m[2]
+  surface=int(g['wait'](rf'\[shell.program.launch\] target={target} task={task} surface=(\d+)',s,60)[1])
+  # Establish a visible canvas before starting the timed autoplay fixture.
+  live_viewport(g,ROOT,surface)
+  g['focus'](surface);time.sleep(.3);s=len(t());q.key('slash');keys(url);q.key('ret')
   can=console(r'can (\S+ \S+ \S+)',s,1200);assert can[1]=='mp4=maybe webm=maybe avi=no',can[0]
   opened=g['wait'](r'\[web.media.opened\] node=\d+ format=\S+ video=h264 audio=aac w=320 h=240 ms=\d+ sound=1',s,600)
   meta=console(r'meta (\d+)x(\d+) (\S+)',s,120);assert meta.groups()==('320','240','2.0'),meta[0]
-  m=g['wait'](r'\[web.ready\] target=(\d+) task=(\d+)',s,600);target,task=m[1],m[2]
-  surface=int(g['wait'](rf'\[shell.program.launch\] target={target} task={task} surface=(\d+)',s,60)[1])
   paused=console(r'paused at (\S+) paused=(\w+)',s,120);assert paused[2]=='true',paused[0]
   # While it plays: the picture must be on screen, not black or blank.
   console(r'resumed',s,60);time.sleep(.5)
   shot=a.out/'playing.ppm';q.cmd('screendump',{'filename':str(shot)});time.sleep(.5)
-  x,y,w,h=map(int,re.findall(rf'\[shell.tile.apply\] sid={surface} x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)',t())[-1])
-  img=Image.open(shot).convert('RGB');bx,by,_,_=content_rect(t(),(x,y,w,h))
-  region=img.crop((bx,by,bx+320,by+240));region.save(a.out/'playing.png')
+  tile,pw,ph=painted_viewport(g,ROOT,surface)
+  bx,by,_,_=canvas_box(ROOT,tile,pw,ph)
+  assert pw>=320 and ph>=270,('video clipped',tile,pw,ph)
+  img=Image.open(shot).convert('RGB')
+  region=img.crop((bx,by+30,bx+320,by+30+240));region.save(a.out/'playing.png')
   colours={region.getpixel((px,py)) for px in range(0,320,8) for py in range(0,220,8)}
   bright=sum(1 for px in range(0,320,8) for py in range(0,220,8) if sum(region.getpixel((px,py)))>150)
   assert len(colours)>20 and bright>200,f'no picture on screen: {len(colours)} colours, {bright} bright samples'

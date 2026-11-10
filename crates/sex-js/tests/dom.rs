@@ -1323,3 +1323,15 @@ fn a_pending_finally_wrapper_rechecks_captured_proxy_provenance() {
     for _ in 0..3{s.dispatch("tick").unwrap();}
     let got=logs(&mut s);assert!(got.is_empty(),"{got:?}");
 }
+
+#[test]
+fn resize_observes_host_viewport_and_does_not_supply_dimensions_from_script_message() {
+    let mut s = page("<p>resize</p>");
+    s.eval("addEventListener('resize',e=>console.log(e.type,e.target===window,innerWidth,innerHeight)); window.onresize=()=>console.log('property',innerWidth,innerHeight);", "resize.js").unwrap();
+    s.page_mut().viewport=(1264,676);
+    s.dispatch("resize").unwrap();
+    assert_eq!(logs(&mut s),["0:resize true 1264 676","0:property 1264 676"]);
+    s.page_mut().viewport=(0,0);
+    s.dispatch("resize\t99999\t99999").unwrap();
+    assert_eq!(logs(&mut s),["0:resize true 0 0","0:property 0 0"]);
+}

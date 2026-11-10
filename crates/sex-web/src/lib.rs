@@ -492,7 +492,7 @@ pub const BAR: i32 = 30;
 pub fn frame(page: &Page, fonts: &mut Fonts, pixels: &mut [u32], width: i32, height: i32, scroll: i32, focus: Option<usize>, bar_text: &str, editing: bool) {
     let mut t = Target { pixels, width, height, scroll, top: BAR, premul: false, clip: None };
     paint(page, fonts, &mut t, focus);
-    let mut bar = Target { pixels: t.pixels, width, height: BAR, scroll: 0, top: 0, premul: false, clip: None };
+    let mut bar = Target { pixels: t.pixels, width, height: height.min(BAR).max(0), scroll: 0, top: 0, premul: false, clip: None };
     bar.fill(0, 0, width, BAR, 0xFF0D_1420, 0);
     bar.fill(6, 4, width - 12, BAR - 8, if editing { 0xFFFF_FFFF } else { 0xFF22_2C3A }, 8);
     let font = FontKey { size: 13, bold: false, italic: false, mono: false };
