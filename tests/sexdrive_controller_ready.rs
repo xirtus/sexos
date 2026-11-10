@@ -30,3 +30,15 @@ use std::cell::Cell;
     let r=wait(true,1,||0,||7,||{});
     assert_eq!((r.outcome,r.polls),(Outcome::PollLimit,MAX_POLLS));
 }
+#[test]fn shutdown_waits_for_shst_complete_within_rtd3e(){
+    // Drive reports RTD3E 2.5 s; SHST goes 01 (in progress) then 10 (complete) at 1200 ticks.
+    assert_eq!(shutdown_ticks(2_500_000),2_500);assert_eq!(shutdown_ticks(0),1_000);assert_eq!(shutdown_ticks(10_000_000),MAX_SHUTDOWN_TICKS);
+    let t=Cell::new(0u64);
+    let r=wait_shutdown(2_500,||if t.get()>=1200{RDY|SHST_COMPLETE}else{RDY|(1<<2)},||t.get(),||t.set(t.get()+1));
+    assert_eq!(r.outcome,Outcome::Ready);assert!(r.elapsed>=1199&&r.elapsed<1201);
+}
+#[test]fn shutdown_gives_up_at_the_limit_and_ignores_a_vanished_device(){
+    let t=Cell::new(0u64);
+    let r=wait_shutdown(1_000,||u32::MAX,||t.get(),||t.set(t.get()+10));
+    assert_eq!((r.outcome,r.elapsed),(Outcome::Deadline,1_000));
+}
