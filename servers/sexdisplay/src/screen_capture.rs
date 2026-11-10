@@ -146,9 +146,16 @@ impl Server {
     }
     /// Called only after the Store accepted successful CPU publication, with an
     /// immediately borrowed completed front. No front pointer is retained.
-    pub fn published(&mut self, generation: u64, w: usize, h: usize, pixels: &[u32], night: u8) {
+    pub fn published(
+        &mut self,
+        generation: u64,
+        w: usize,
+        h: usize,
+        pixels: &[u32],
+        night: u8,
+    ) -> bool {
         if self.state != State::Waiting {
-            return;
+            return false;
         }
         let header = c::Header {
             epoch: self.epoch,
@@ -167,9 +174,11 @@ impl Server {
             self.state = State::Ready;
             self.pending = Some(c::reply(self.sequence, c::OK, c::BEGIN));
             sex_pdx::serial_record!("[display.capture.ready] target={} task={} sequence={} epoch={} generation={} width={} height={} native=1 night={} bytes={}",c::CLIENT,self.task,self.sequence,self.epoch,generation,w,h,night,pixels.len()*4);
+            true
         } else {
             self.scrub();
             self.pending = Some(c::reply(self.sequence, c::CANCELLED, c::BEGIN));
+            false
         }
     }
     pub fn poll(&mut self) {

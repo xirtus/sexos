@@ -381,7 +381,7 @@ fn run_client(
                     pdx_reply(12, c::reply(a[1] as u32, c::OK, c::RELEASE));
                 } else {
                     if display.request(msg(12, 12, a[0], a[1] as u32), &l, get_ticks(), 129, 173) {
-                        display.published(1, 129, 173, &pixels, 0)
+                        display.published(1, 129, 173, &pixels, 0);
                     }
                     display.poll();
                 }

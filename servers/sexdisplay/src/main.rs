@@ -2056,7 +2056,15 @@ fn render_prepared(fb:*mut u32,w:usize,h:usize,bar:&SilkBar,requested:Plan)->Opt
     let prepared={let target=preparation.target();raster_batch(&target,scene,plan)};
     if !prepared{drop(preparation);backup.restore();return None;}
     if !preparation.commit(|frame|publish_frame(fb,w,h,frame)){backup.restore();return None;}
-    if let Some(front)=store.front_pixels(){unsafe{SCREEN_CAPTURE.published(store.generation(),w,h,front,sex_pdx::desktop_look::night_level());}}
+    if let Some(front)=store.front_pixels(){unsafe{
+        if SCREEN_CAPTURE.published(store.generation(),w,h,front,sex_pdx::desktop_look::night_level()){
+            let frame=app_catalog::by_target(sex_pdx::screen_capture::CLIENT).map(|row|row.frame());
+            if let Some(surface)=scene.surfaces.iter().find(|s|s.active&&Some(s.surface_id)==frame){
+                sex_pdx::serial_record!("[display.capture.reference] generation={} frame={} x={} y={} w={} h={} bar_h={} source=published_scene",
+                    store.generation(),surface.surface_id,surface.x,surface.y,surface.w,surface.h,BAR_BG_H);
+            }
+        }
+    }}
     let present_bits=if settle_only{0}else{unsafe{APP_PRESENT_BITS}};
     if !settle_only{
         record_cursor_presented();
