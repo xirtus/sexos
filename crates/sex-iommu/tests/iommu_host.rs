@@ -2,6 +2,7 @@
 //! Host checks for sex-iommu: firmware tables as real machines lay them out,
 //! page tables, and the lending window.
 use sex_iommu::dmar::{Dmar, Structure, SCOPE_ENDPOINT, SCOPE_BRIDGE};
+use sex_iommu::amdvi;
 use sex_iommu::ivrs::Ivrs;
 use sex_iommu::table::{Format, Frames, MapError, Table, READ, WRITE};
 use sex_iommu::vtd::{self, Cap, Ecap, Fault};
@@ -130,25 +131,130 @@ fn dmar_rejects_malformed() {
     assert!(Dmar::parse(&t).is_err());
 }
 
-#[test]
-fn ivrs_units() {
+fn ivhd(kind: u8, base: u64, entries: &[u8]) -> Vec<u8> {
+    let header = if kind == 0x10 { 24 } else { 40 };
+    let mut b = vec![kind, 0xb0, 0, 0];
+    b.extend_from_slice(&0x0002u16.to_le_bytes());
+    b.extend_from_slice(&0x40u16.to_le_bytes());
+    b.extend_from_slice(&base.to_le_bytes());
+    b.extend_from_slice(&0u16.to_le_bytes());
+    b.resize(header, 0);
+    b.extend_from_slice(entries);
+    let len = b.len() as u16;
+    b[2..4].copy_from_slice(&len.to_le_bytes());
+    b
+}
+
+fn ivmd(kind: u8, flags: u8, id: u16, aux: u16, start: u64, len: u64) -> Vec<u8> {
+    let mut b = vec![kind, flags, 32, 0];
+    b.extend_from_slice(&id.to_le_bytes());
+    b.extend_from_slice(&aux.to_le_bytes());
+    b.extend_from_slice(&[0; 8]);
+    b.extend_from_slice(&start.to_le_bytes());
+    b.extend_from_slice(&len.to_le_bytes());
+    b
+}
+
+fn ivrs(blocks: &[Vec<u8>]) -> Vec<u8> {
     let mut body = Vec::new();
     body.extend_from_slice(&((48u32 << 15) | (40 << 8)).to_le_bytes());
     body.extend_from_slice(&[0; 8]);
-    let mut ivhd = vec![0x11, 0xb0, 40, 0];
-    ivhd.extend_from_slice(&0x0002u16.to_le_bytes());
-    ivhd.extend_from_slice(&0x40u16.to_le_bytes());
-    ivhd.extend_from_slice(&0xfd20_0000u64.to_le_bytes());
-    ivhd.extend_from_slice(&0u16.to_le_bytes());
-    ivhd.resize(40, 0);
-    body.extend(ivhd);
-    let t = header(b"IVRS", &body);
+    for b in blocks { body.extend_from_slice(b); }
+    header(b"IVRS", &body)
+}
+
+#[test]
+fn ivrs_units() {
+    let t = ivrs(&[ivhd(0x11, 0xfd20_0000, &[0x01, 0, 0, 0])]);
     let i = Ivrs::parse(&t).unwrap();
     assert_eq!(i.virtual_address_bits(), 48);
     let u: Vec<_> = i.units().collect();
     assert_eq!(u.len(), 1);
     assert_eq!(u[0].register_base, 0xfd20_0000);
     assert_eq!(u[0].device_id, 2);
+    assert!(u[0].covers(0x0100) && u[0].covers(0xffff));
+}
+
+#[test]
+fn ivrs_device_entries_newest_type_and_reserved_memory() {
+    // A Ryzen-like table: the same IOMMU as type 0x10 and 0x40 (only 0x40
+    // counts), a range for buses 0..=2 with a special IOAPIC entry and an
+    // ACPI HID entry in between, an alias range behind a PCIe-to-PCI bridge
+    // and one select entry. A second unit lists bus 0x40 only.
+    let mut e = Vec::new();
+    e.extend_from_slice(&[0x48, 0, 0, 0xd7, 0x21, 0xa0, 0x00, 0x01]); // IOAPIC special, id 00:14.0
+    e.extend_from_slice(&[0x03, 0x00, 0x00, 0]); // range start 00:00.0
+    e.extend_from_slice(&[0x04, 0xff, 0x02, 0]); // range end 02:1f.7
+    let mut hid = vec![0xf0, 0xa0, 0x00, 0x40];
+    hid.extend_from_slice(b"AMDI0020");
+    hid.extend_from_slice(&[0; 8]);
+    hid.extend_from_slice(&[0, 2]); // UID format, UID length 2
+    hid.extend_from_slice(b"ID");
+    e.extend_from_slice(&hid);
+    e.extend_from_slice(&[0x43, 0x00, 0x05, 0, 0, 0x00, 0x04, 0]); // alias range start 05:00.0 -> 04:00.0
+    e.extend_from_slice(&[0x04, 0xff, 0x05, 0]); // range end 05:1f.7
+    e.extend_from_slice(&[0x02, 0x08, 0x07, 0]); // select 07:01.0
+    let old = ivhd(0x10, 0xfd20_0000, &[0x01, 0, 0, 0]);
+    let new = ivhd(0x40, 0xfd20_0000, &e);
+    let second = ivhd(0x40, 0xfd30_0000, &[0x03, 0x00, 0x40, 0, 0x04, 0xff, 0x40, 0]);
+    let t = ivrs(&[old, new, second,
+        ivmd(0x21, 0x07, 0x0310, 0, 0x9d00_0123, 0x2000),
+        ivmd(0x22, 0x08, 0x0500, 0x05ff, 0xa000_0000, 0x1000),
+        ivmd(0x20, 0x00, 0, 0, 0xb000_0000, 0x1000)]);
+    let i = Ivrs::parse(&t).unwrap();
+    let units: Vec<_> = i.units().collect();
+    assert_eq!(units.len(), 2, "the type 0x10 copy is ignored");
+    assert!(units.iter().all(|u| u.kind == 0x40));
+    let base = |sid: u16| i.unit_for(sid).map(|u| u.register_base);
+    assert_eq!(base(0x0000), Some(0xfd20_0000));
+    assert_eq!(base(0x0210), Some(0xfd20_0000));
+    assert_eq!(base(0x0508), Some(0xfd20_0000));
+    assert_eq!(base(0x0708), Some(0xfd20_0000));
+    assert_eq!(base(0x0300), None, "bus 3 is listed by no unit");
+    assert_eq!(base(0x4010), Some(0xfd30_0000));
+    assert_eq!(units[0].alias(0x0508), Some(0x0400));
+    assert_eq!(units[0].alias(0x0210), None);
+    let r: Vec<_> = i.reserved().collect();
+    assert_eq!(r.len(), 2, "a block that is neither unity nor exclusion is ignored");
+    assert_eq!((r[0].first, r[0].last, r[0].start, r[0].end, r[0].read, r[0].write), (0x0310, 0x0310, 0x9d00_0000, 0x9d00_3000, true, true));
+    assert_eq!((r[1].first, r[1].last, r[1].read, r[1].write), (0x0500, 0x05ff, true, true));
+    // A truncated device entry ends the walk without reading past the block.
+    let t = ivrs(&[ivhd(0x40, 0xfd20_0000, &[0x46, 0x08, 0x00])]);
+    let i = Ivrs::parse(&t).unwrap();
+    assert!(!i.units().next().unwrap().covers(0x0008));
+}
+
+#[test]
+fn amdvi_entries_commands_and_events() {
+    let d = amdvi::dte(Some(0x1234_5000), 4, 7);
+    assert_eq!(d[0], 0x1234_5000 | (4 << 9) | 3 | (3 << 61));
+    assert_eq!(amdvi::dte_domain(&d), 7);
+    assert_eq!(amdvi::dte(None, 4, 0)[0], 3, "blocked: valid, translation valid, no rights, mode 0");
+    assert_eq!(amdvi::device_table(0x40_0000, amdvi::DEVICE_TABLE_BYTES), 0x40_0000 | 511);
+    assert_eq!(amdvi::ring(0x9000), 0x9000 | (8 << 56));
+    assert_eq!(amdvi::completion_wait(0x5008, 1), [0x5008 | 1 | (1 << 60), 1]);
+    assert_eq!(amdvi::invalidate_device(0x0310), [0x0310 | (2 << 60), 0]);
+    assert_eq!(amdvi::invalidate_domain(9), [(9 << 32) | (3 << 60), 0x7fff_ffff_ffff_f003]);
+    // IO_PAGE_FAULT from 03:00.0, domain 9, write to a present read-only page.
+    let f = amdvi::decode_event(0x0300 | (9 << 32) | (0x030 << 48) | (2 << 60), 0x2000_0123).unwrap();
+    assert_eq!(f.source, Bdf::new(3, 0, 0));
+    assert_eq!((f.address, f.write, f.reason), (0x2000_0000, true, amdvi::REASON_PERMISSION));
+    assert_eq!(f.reason_text(), "amd_access_not_permitted");
+    let f = amdvi::decode_event(0x0300 | (2 << 60), 0x5000).unwrap();
+    assert_eq!((f.write, f.reason_text()), (false, "amd_page_not_present"));
+    assert_eq!(amdvi::decode_event(5 << 60, 0).unwrap().reason_text(), "amd_command_error");
+    assert!(amdvi::decode_event(0, 0).is_none());
+}
+
+#[test]
+fn table_amdvi_entry_bits() {
+    let mut m = Mem::new(16);
+    let t = Table::new(&mut m, 4, Format::AmdVi).unwrap();
+    t.map(&mut m, 0x4000_0000, 0x7000, READ, true).unwrap();
+    let l4 = m.read(t.root, 0);
+    assert_eq!(l4 & 0xfff, 1 | (3 << 9), "level-4 entry points at a level-3 table");
+    assert_eq!(l4 >> 61, 3, "non-leaf entries grant both rights");
+    assert_eq!(t.translate(&mut m, 0x4000_0010), Some((0x7010, READ)));
 }
 
 struct Mem { tables: HashMap<u64, [u64; 512]>, next: u64, budget: usize }
@@ -236,11 +342,11 @@ fn vtd_fields() {
     let (lo, hi) = vtd::context_entry(0x5000, 2, 7);
     assert_eq!((lo, hi), (0x5001, 2 | (7 << 8)));
     assert_eq!(vtd::context_did(hi), 7);
-    let f = Fault::decode(0x1234_5000, (1 << 63) | (5 << 32) | 0x0420).unwrap();
+    let f = vtd::decode_fault(0x1234_5000, (1 << 63) | (5 << 32) | 0x0420).unwrap();
     assert_eq!(f.source, Bdf::new(4, 4, 0));
     assert!(f.write);
     assert_eq!(f.reason_text(), "write_not_permitted");
-    assert!(Fault::decode(0, 0).is_none());
+    assert!(vtd::decode_fault(0, 0).is_none());
 }
 
 #[test]

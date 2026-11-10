@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! IOMMU data: firmware tables (Intel DMAR, AMD IVRS), VT-d register fields,
+//! IOMMU data: firmware tables (Intel DMAR, AMD IVRS), VT-d and AMD-Vi fields,
 //! I/O page tables and the device-address window drivers borrow from.
 //!
 //! No hardware access lives here. The kernel supplies frames and register
@@ -7,6 +7,7 @@
 //! `tests/` check it without a machine.
 #![no_std]
 
+pub mod amdvi;
 pub mod dmar;
 pub mod ivrs;
 pub mod vtd;
@@ -43,4 +44,40 @@ pub(crate) fn u64_at(b: &[u8], at: usize) -> Option<u64> {
 /// ACPI table checksum: all bytes of the table sum to zero.
 pub fn checksum_ok(table: &[u8]) -> bool {
     table.iter().fold(0u8, |sum, b| sum.wrapping_add(*b)) == 0
+}
+
+/// A blocked DMA, decoded from a VT-d fault record or an AMD-Vi event.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Fault {
+    pub source: Bdf,
+    /// Page address the device tried to reach.
+    pub address: u64,
+    /// VT-d fault reason (0x01..), or 0x80 + an AMD-Vi event code.
+    pub reason: u8,
+    pub write: bool,
+}
+
+impl Fault {
+    pub fn reason_text(&self) -> &'static str {
+        match self.reason {
+            0x01 => "root_entry_not_present",
+            0x02 => "context_entry_not_present",
+            0x03 => "context_entry_invalid",
+            0x04 => "address_beyond_width",
+            0x05 => "write_not_permitted",
+            0x06 => "read_not_permitted",
+            0x07 => "table_address_invalid",
+            0x08 => "root_table_address_invalid",
+            0x09 => "context_table_address_invalid",
+            0x0a | 0x0b => "reserved_bits_set",
+            amdvi::REASON_ILLEGAL_DTE => "amd_illegal_device_table_entry",
+            amdvi::REASON_NOT_PRESENT => "amd_page_not_present",
+            amdvi::REASON_PERMISSION => "amd_access_not_permitted",
+            amdvi::REASON_HARDWARE => "amd_table_hardware_error",
+            amdvi::REASON_COMMAND => "amd_command_error",
+            amdvi::REASON_INVALIDATION_TIMEOUT => "amd_iotlb_invalidation_timeout",
+            amdvi::REASON_INVALID_REQUEST => "amd_invalid_device_request",
+            _ => "other",
+        }
+    }
 }

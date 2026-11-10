@@ -8,6 +8,10 @@
 //!    and 2 MiB writes another; the data must arrive through the domain.
 //! 3. Read-only: a page lent for reading must not be written.
 //! 4. Unmapped: an address outside the domain must not be reached.
+//!
+//! Each blocked DMA must also be logged as a fault on VT-d. QEMU's AMD-Vi
+//! model blocks these without logging an event, so there the data alone
+//! (sentinel pages unchanged) is the proof.
 use sex_iommu::table::{READ, WRITE};
 use sex_iommu::Bdf;
 
@@ -83,7 +87,10 @@ pub fn run() {
         // 1. No domain yet: the device reaches nothing, even "its own" address.
         let wrote = edu.copy(BUFFER, outside & 0x0fff_ffff, true);
         let unleased = t.faults_from(bdf).len();
-        let blocked_unleased = wrote && unleased > 0 && all(outside, SENTINEL);
+        // Faults must be logged where the unit logs them; the data must hold everywhere.
+        let must_log = t.logs_every_fault();
+        let logged = |n: usize| n > 0 || !must_log;
+        let blocked_unleased = wrote && logged(unleased) && all(outside, SENTINEL);
 
         let Some(table) = t.table() else { return None };
         let mapped = t.map(&table, 0x10_0000, source, READ) && t.map(&table, 0x20_0000, target, READ | WRITE)
@@ -96,10 +103,10 @@ pub fn run() {
         let _ = edu.copy(0x30_0000, BUFFER, false);
         let _ = edu.copy(BUFFER, 0x40_0000, true);
         let readonly_faults = t.faults_from(bdf);
-        let read_only_held = all(readonly, SENTINEL) && readonly_faults.iter().any(|f| f.write);
-        // 4. An address the domain does not map.
-        let _ = edu.copy(BUFFER, 0x50_0000, true);
-        let unmapped_blocked = !t.faults_from(bdf).is_empty();
+        let read_only_held = all(readonly, SENTINEL) && logged(readonly_faults.iter().filter(|f| f.write).count());
+        // 4. An address the domain does not map: the page that sits at it must not change.
+        let _ = edu.copy(BUFFER, outside & 0x0fff_ffff, true);
+        let unmapped_blocked = logged(t.faults_from(bdf).len()) && all(outside, SENTINEL);
         // Back to no domain: the device is unleased again.
         t.attach(bdf, None);
         Some((blocked_unleased, unleased, translated && clean, read_only_held, unmapped_blocked))

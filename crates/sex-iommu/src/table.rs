@@ -22,12 +22,13 @@ pub const WRITE: u8 = 2;
 pub enum Format { Vtd, AmdVi }
 
 impl Format {
+    /// An entry pointing at a table of `level` (1 = leaf table).
     fn table(self, frame: u64, level: u8) -> u64 {
         match self {
             // Non-leaf rights are ANDed with the leaf's, so grant both here.
             Format::Vtd => frame | 3,
-            // PR, next level in bits 11:9, IR and IW.
-            Format::AmdVi => frame | 1 | ((level as u64 - 1) << 9) | (3 << 61),
+            // PR, the next table's level in bits 11:9, IR and IW.
+            Format::AmdVi => frame | 1 | ((level as u64) << 9) | (3 << 61),
         }
     }
     fn leaf(self, frame: u64, rights: u8) -> u64 {

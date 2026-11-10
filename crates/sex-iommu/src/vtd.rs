@@ -96,43 +96,18 @@ pub const fn context_entry(page_table: u64, aw: u64, did: u16) -> (u64, u64) {
 
 pub const fn context_did(high: u64) -> u16 { (high >> 8) as u16 }
 
-/// One fault record (128 bits) decoded.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Fault {
-    pub source: crate::Bdf,
-    /// Page address the device tried to reach.
-    pub address: u64,
-    pub reason: u8,
-    pub write: bool,
-}
+pub use crate::Fault;
 
 pub const FAULT_F: u64 = 1 << 63;
 
-impl Fault {
-    pub fn decode(low: u64, high: u64) -> Option<Self> {
-        if high & FAULT_F == 0 { return None; }
-        Some(Self {
-            source: crate::Bdf::from_sid(high as u16),
-            address: low & !0xfff,
-            reason: (high >> 32) as u8,
-            // T1 = 0 means a write request.
-            write: high & (1 << 62) == 0,
-        })
-    }
-
-    pub fn reason_text(&self) -> &'static str {
-        match self.reason {
-            0x01 => "root_entry_not_present",
-            0x02 => "context_entry_not_present",
-            0x03 => "context_entry_invalid",
-            0x04 => "address_beyond_width",
-            0x05 => "write_not_permitted",
-            0x06 => "read_not_permitted",
-            0x07 => "table_address_invalid",
-            0x08 => "root_table_address_invalid",
-            0x09 => "context_table_address_invalid",
-            0x0a | 0x0b => "reserved_bits_set",
-            _ => "other",
-        }
-    }
+/// One VT-d fault record (128 bits) decoded.
+pub fn decode_fault(low: u64, high: u64) -> Option<Fault> {
+    if high & FAULT_F == 0 { return None; }
+    Some(Fault {
+        source: crate::Bdf::from_sid(high as u16),
+        address: low & !0xfff,
+        reason: (high >> 32) as u8,
+        // T1 = 0 means a write request.
+        write: high & (1 << 62) == 0,
+    })
 }

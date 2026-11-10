@@ -1,4 +1,4 @@
-# IOMMU: a DMA domain for every driver (stage D4, 2026-11-09)
+# IOMMU: a DMA domain for every driver (stage D4, 2026-11-09; AMD-Vi 2026-11-10)
 
 Stage D4 of `DRIVERS_AND_X17_R1_PLAN_2026_11_09.md`. The sex-manual promised "zero-copy
 DMA via lent memory". Until now that was not safe to build: without an IOMMU, a
@@ -9,8 +9,8 @@ loan: sexdrive reads straight into Files' block buffer.
 
 ## What a device can reach now
 
-With VT-d present (every Intel CPU with PKU we target has it; QEMU has it with
-`-device intel-iommu`):
+With VT-d or AMD-Vi present (every Intel and AMD CPU with PKU we target has one;
+QEMU has them as `-device intel-iommu` and `-device amd-iommu`):
 
 | Device | Reaches |
 |---|---|
@@ -27,9 +27,9 @@ reason=...`, checked from the timer every 16 ticks.
 ## How it is built
 
 - **`crates/sex-iommu`** (no_std, no hardware access, host-tested): DMAR parsing (units,
-  device scopes through bridges, RMRR), IVRS parsing (AMD units), VT-d register fields
-  and entry encodings, 3/4-level I/O page tables (VT-d and AMD-Vi entry formats), and
-  the fixed lending window. `scripts/iommu_host_gate.sh`, 9 tests.
+  device scopes through bridges, RMRR), IVRS parsing (units, device id ranges, aliases,
+  IVMD), VT-d and AMD-Vi register fields, entries, commands and events, 3/4-level I/O
+  page tables in both formats, and the fixed lending window. `scripts/iommu_host_gate.sh`.
 - **`kernel/src/iommu.rs`**: runs once at BOOT, after every device lease and DMA pool
   exists and before the capability graph is sealed. It does not touch `devmgr`: it
   walks every protection domain's capabilities, so every `CapabilityData::Pci` lease
@@ -84,13 +84,43 @@ may still finish it later, into memory Files has reused. sexdrive now ends the l
 first (`[sexdrive.dma.loan.ended] reason=uncertain_io`), so a late completion hits the
 IOMMU and faults instead of corrupting Files' memory. Host tests cover both paths.
 
-## AMD-Vi, VMD, and what comes next
+## AMD-Vi (2026-11-10)
 
-- **AMD machines** (`IVRS` table): units are read and reported (`[iommu.amd.unit]`,
-  `[iommu.absent] vendor=amd ... reason=amd_vi_not_yet`) and everything runs as before
-  with pools. The page-table code already has the AMD-Vi entry format; what remains is
-  the device table, command buffer and event log (QEMU has `-device amd-iommu` to gate
-  it). That is the next IOMMU step.
+AMD machines now get the same domains, lending and zero-copy reads as Intel ones.
+Everything above the hardware is shared: one domain per driver service, BOOT DMA pools
+identity-mapped, the 128 MiB lending window, syscall 90, loan revocation on restart.
+Only the unit differs:
+
+| | Intel VT-d | AMD-Vi |
+|---|---|---|
+| Firmware table | DMAR: units, device scopes, RMRR | IVRS: units (newest IVHD type only), device id ranges and aliases, IVMD |
+| Who translates a device | scope match, else the INCLUDE_PCI_ALL unit | the unit whose device entries list its requester id |
+| Per device | context entry (root table, context table per bus) | 32-byte entry in one 2 MiB device table per segment |
+| Unleased device | context entry not present | entry points at an empty page table (domain 0): every DMA faults |
+| Flushes | register-based context and IOTLB invalidation | command ring: INVALIDATE_DEVTAB_ENTRY, INVALIDATE_IOMMU_PAGES, COMPLETION_WAIT |
+| Faults | fault recording registers | event log ring (IO_PAGE_FAULT etc.) |
+
+Details:
+- **Devices behind a PCIe-to-PCI bridge** DMA with the bridge's requester id. IVRS
+  alias entries say so, and the alias gets the same domain (`[iommu.device] ... alias=1`).
+- **IVMD** unity and exclusion ranges are mapped like RMRR: into the owning service's
+  domain, or a small domain of its own for a device nobody leased. Exclusion ranges
+  are mapped rather than programmed into the exclusion registers, so they stay per device.
+- **Firmware that left the IOMMU on** (AMD pre-boot DMA protection) is turned off just
+  long enough to load our device table, command ring and event log, then turned on and
+  flushed with INVALIDATE_IOMMU_ALL, or per device id and domain when that is missing.
+- **Interrupts** stay unremapped (device table IV = 0), so MSI/MSI-X work unchanged.
+- **RETURN** of a loan waits for COMPLETION_WAIT after the domain flush; if it never
+  arrives the answer is `UNCERTAIN`, exactly as on VT-d.
+
+QEMU's AMD-Vi model blocks DMA through empty or read-only entries without writing an
+event, so on AMD the self-test proves isolation by the data (sentinel pages unchanged)
+and does not require logged faults; on VT-d it requires both. Real AMD hardware logs
+IO_PAGE_FAULT events, which `[iommu.fault]` shows with reason `amd_page_not_present` or
+`amd_access_not_permitted`.
+
+## What comes next
+
 - **Intel VMD / RST** ("RAID On", likely on the x17 R1): drives behind VMD do DMA with
   the VMD endpoint's requester id. Follow-up agreed with the VMD thread (PR #84): a small
   table in `kernel/src/vmd.rs` (child -> VMD endpoint) that `iommu.rs` asks at BOOT, so
@@ -99,9 +129,10 @@ IOMMU and faults instead of corrupting Files' memory. Host tests cover both path
   playing from programs' sound rings, USB mass storage into Files. Each is a driver
   change only; the kernel side is done.
 - **Interrupt remapping** (needed for x2APIC with >255 CPUs and to stop devices forging
-  MSIs): a later step, after MSI-X lands.
-- **Queued invalidation** for faster loan/return on busy drivers (today's register
-  invalidation flushes a whole domain).
+  MSIs): a later step, now that MSI-X has landed. Both vendors.
+- **Queued invalidation** on VT-d and page-selective flushes on both, for faster
+  loan/return on busy drivers (today a return flushes the whole domain).
+- **More than one PCI segment** (large servers): units on segment 1+ are skipped today.
 
 ## Bare metal (x17 R1) notes
 
@@ -123,10 +154,13 @@ DMAR table and SexOS runs exactly as before (`[iommu.absent]`).
 
 ## Gates
 
-- `scripts/iommu_host_gate.sh` (CI): DMAR/IVRS, VT-d fields, page tables, window.
+- `scripts/iommu_host_gate.sh` (CI): DMAR/IVRS (device ranges, aliases, IVMD, the
+  newest-IVHD-type rule), VT-d fields, AMD-Vi entries, commands and events, page tables
+  in both formats, window. 12 tests. Writing the AMD-Vi table test found and fixed a
+  wrong next-level field in AMD page-table entries before any AMD machine ran it.
 - `scripts/sexdrive_dma_host_gate.sh`: two new zero-copy tests (PRPs name the loan, no
   copy; a timeout ends the loan).
-- `scripts/iommu_gate.py` (QEMU, VT-d): the BOOT self-test with QEMU's `edu` DMA device
+- `scripts/iommu_gate.py` (QEMU, VT-d; `--vendor amd` for AMD-Vi): the BOOT self-test with QEMU's `edu` DMA device
   (unleased device blocked, translated read and write land, a read-only page holds, an
   unmapped address faults), then the whole `filesystem_gate` (directories, files,
   reboot, power cut) and `sound_gate` (two notes at the right pitch) with every driver

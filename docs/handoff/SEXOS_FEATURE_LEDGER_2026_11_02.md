@@ -3358,3 +3358,24 @@ Workstream D of the parity report. Handoff and bare-metal checklist: `docs/hando
   Tuxedo-using component.
 - **Open decision.** #70/#82 run firmware AML in ring 0; the audit recommends a ring-3
   `sexacpi` server.
+
+## AMD-Vi: AMD machines get per-driver DMA domains too (2026-11-10)
+
+- **What runs now.** On AMD machines (and QEMU with `-device amd-iommu`) every driver
+  service's devices reach only its DMA pool, its firmware-reserved memory and what it
+  lends, exactly as on Intel VT-d. Devices nobody leased point at an empty page table, so
+  their DMA faults. sexdrive's zero-copy reads now work on AMD too.
+- **Design.** `sex_iommu::ivrs` reads device id ranges, aliases (devices behind
+  PCIe-to-PCI bridges) and IVMD reserved memory, using only the newest IVHD type.
+  `sex_iommu::amdvi` encodes device table entries, commands and events.
+  `kernel/src/iommu.rs` now drives either vendor: the domain, pool, reserved-memory,
+  lending and revoke code is shared, and only attach, flush, enable and fault reading
+  differ per unit. Firmware that left AMD-Vi on is taken over.
+- **ABI.** None. Syscall 90 is unchanged; `abi_version_hash` unchanged.
+- **Gates.** `scripts/iommu_host_gate.sh` (12 tests, CI; found a wrong next-level field
+  in AMD page-table entries), `scripts/iommu_gate.py --vendor amd` (QEMU AMD-Vi: BOOT
+  self-test, files with zero-copy reads, sound) and the same gate on VT-d.
+- **Limits.** QEMU's AMD-Vi model does not log events for blocked DMA, so its self-test
+  proves isolation by data only. No interrupt remapping, one PCI segment, whole-domain
+  flushes on loan return.
+
