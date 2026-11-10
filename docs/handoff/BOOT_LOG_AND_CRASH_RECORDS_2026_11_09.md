@@ -64,10 +64,20 @@ service has to say so on its own screen, and the next start has to say what happ
     `ACTIVE`) a frame again. If such an app registers again it is answered, not refused.
     Notices to apps (document and terminal views) continue after the old run's sequence
     numbers (`continue_after(restarts << 40)`), so apps take them as new.
-  - What a Shell restart loses: window positions the person chose (windows are tiled
-    again), minimized state, other workspaces' layout, and whether the Spindle frame was
-    toggled open. Apps keep running with their own state (Spindle keeps its history,
-    Quil its document).
+  - The session survives too (2026-11-10). Shell keeps one page of its image,
+    `servers/silk-shell/src/session.rs`, and asks the kernel to keep it across restarts
+    (`SYS_CRASH_LOG` op 5 `OP_KEEP`, `sex_pdx::crash_log::keep`): a restart puts BOOT's
+    copy back on every other page but leaves that one as the last run wrote it. Shell
+    writes into it, at most every 5 ticks and only when something changed, each
+    window's place and size, workspace, minimized/floating/zoomed state and pre-zoom
+    size (in tiling order), each workspace's layout, master width and gaps, the active
+    workspace and the focus. A new Shell reads it after adopting the running apps and
+    puts it all back, opening Spindle's window again if it was open
+    (`[shell.session.restored]`). Rules: a state word is SAVED only when a checksum
+    matches, and APPLYING while a new Shell restores, so a page cut off mid-write, or a
+    Shell that crashes while restoring, means the next Shell starts from its defaults.
+    The kernel only keeps pages BOOT captured for the calling service, at most 4.
+    Apps keep their own state (Spindle its history, Quil its document).
   - A desktop service that keeps dying (8 restarts) is given up on; then the kernel stops
     the machine with the stop screen and a record instead of leaving a frozen desktop.
 - **Fuzzing.** `apps/fuzz` (`run fuzz [CALLS] [SEED]`) makes seeded random syscalls (every
@@ -115,9 +125,7 @@ is a few milliseconds.
 
 ## Not done yet (next steps)
 
-1. **Shell remembers the session across its own restart.** Window positions,
-   minimized frames, other workspaces and the Spindle toggle could live in a small
-   kernel-held region Shell writes as it goes and reads back when restarted.
+1. ~~Shell remembers the session across its own restart.~~ Done (see above).
 2. USB keyboards on the stop screen when the firmware has no legacy emulation (needs a
    polled xHCI path in the kernel, or a hardware watchdog restart).
 3. A crash record for hangs: a watchdog on core 0's timer that stops the machine when no
