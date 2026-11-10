@@ -6,6 +6,7 @@ import argparse,re,shutil,time
 from pathlib import Path
 from quil_autosave_gate import boot
 from quil_workflow_gate import palette_select,palette_commands
+from browser_gate_viewport import chrome_metrics
 ROOT=Path(__file__).resolve().parents[1]
 ACTION=r'\[shell.wm.action\] action={} done=(\d) scene=(\d)->(\d) focus=(\d+)->(\d+) layout=(\w+)'
 def main():
@@ -31,7 +32,8 @@ def main():
   base=tiles(0);assert 201 in base and 359 in base,base
   # Gaps: tiled windows keep apart from each other and from the screen edge.
   q1,h1=base[201],base[359]
-  assert q1[0]>0 and q1[1]>50,('no outer gap',q1)
+  metrics=chrome_metrics(t());ui=metrics['scale']
+  assert q1[0]>=8*ui and q1[1]>=metrics['bar']+8*ui,('no outer gap',q1,metrics)
   assert h1[0]-(q1[0]+q1[2])>0 or q1[0]-(h1[0]+h1[2])>0,('no inner gap',q1,h1)
   shot('01-master-stack')
   # Super+Space: the next layout.

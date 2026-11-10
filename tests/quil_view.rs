@@ -141,6 +141,7 @@ fn notices_require_exact_sender_incarnation_task_and_fresh_sequence() {
         task: 9,
         w: 624,
         h: 291,
+        ui_scale:1,
         sequence: 4,
     };
     assert!(Notice::decode(3, 9, 9, n.args(), 3).is_some());
@@ -472,7 +473,7 @@ fn third_geometry_binds_catalog_task_without_domain_task_alias() {
     assert!(Notice::decode(3, 18, 180, n.args(), 0).is_some());
     assert!(Notice::decode(3, 18, 18, n.args(), 0).is_none());
     assert!(Notice::decode(16, 18, 180, n.args(), 0).is_none());
-    assert_eq!(Layout::new(18, 320, 300).top, 36);
+    assert_eq!(Layout::new(18, 320, 300).top, 34);
 }
 
 #[test]
@@ -588,7 +589,7 @@ fn browser_geometry_binds_actual_task_and_retains_until_ready() {
     ] {
         assert!(Notice::decode(caller, target, task, first.args(), last).is_none());
     }
-    assert_eq!(Layout::new(15, 320, 240).top, 36);
+    assert_eq!(Layout::new(15, 320, 240).top, 34);
     delivery.queue(15, 150, 220, 150);
     delivery.poll(false, true, |_| panic!("terminal subject"));
     delivery.queue(15, 150, 640, 480);
@@ -996,7 +997,7 @@ fn one_four_byte_character_does_not_collapse_otherwise_ascii_viewport() {
 
 #[test]
 fn long_status_never_squeezes_the_document_name_below_eight_cells() {
-    let l = Layout { w: 496, h: 315, scale: 2, cols: 39, rows: 17, top: 12, toolbar_rows: 1 };
+    let l = Layout { w: 496, h: 315, scale: 2, ui_scale:1, cols: 39, rows: 17, top: 12, toolbar_rows: 1 };
     let mut top = 0;
     let t = view::render_selection(b"abc", 3, &mut top, l, b"uibeta", true, b"UNSAVED: CTRL S SAVES, F11 DISCARDS", None, None, None);
     let header = t.bytes[..t.len].split(|&b| b == b'\n').next().unwrap();
@@ -1059,7 +1060,7 @@ fn invalid_geometry_membership_and_terminal_delivery_never_replace_valid_pending
         delivery.poll(true,true,|n|{
             assert_eq!((n.target,n.task,n.w,n.h,n.sequence),(23,2300,512,384,1));Err(ERR_SERVICE_NOT_READY)
         });assert!(delivery.pending());
-        let malformed=Notice{target,task,w,h,sequence:1};
+        let malformed=Notice{target,task,w,h,ui_scale:1,sequence:1};
         assert_eq!(Notice::decode(3,target,task,malformed.args(),0),None);
     }
     delivery.poll(false,true,|_|panic!("retired incarnation must not send"));
@@ -1078,7 +1079,7 @@ fn last_quil_invalid_geometry_membership_and_terminal_delivery_never_replace_val
         delivery.poll(true,true,|n|{
             assert_eq!((n.target,n.task,n.w,n.h,n.sequence),(39,3900,512,384,1));Err(ERR_SERVICE_NOT_READY)
         });assert!(delivery.pending());
-        let malformed=Notice{target,task,w,h,sequence:1};
+        let malformed=Notice{target,task,w,h,ui_scale:1,sequence:1};
         assert_eq!(Notice::decode(3,target,task,malformed.args(),0),None);
     }
     delivery.poll(false,true,|_|panic!("retired incarnation must not send"));
@@ -1140,4 +1141,25 @@ fn region_replaces_chunks_with_one_fill_and_a_lost_reply_sends_it_again() {
     assert!(matches!(again[0],text_batch::Request::Begin{sequence:10,..}));
     let receipt=text_batch::Applied{surface:156,sequence:10}.encode().unwrap();
     assert_eq!(out.receive(1,receipt),Some((10,80)));assert!(!out.pending());
+}
+
+#[test]
+fn viewport_notice_carries_only_valid_applied_ui_scale_and_layout_freezes_it(){
+    use document_view::Notice;
+    for ui_scale in 1..=3 {
+        let n=Notice{target:9,task:9,w:624,h:400,ui_scale,sequence:1};
+        assert_eq!(Notice::decode(3,9,9,n.args(),0),Some(n));
+        assert!(Notice::decode(8,9,9,n.args(),0).is_none());
+    }
+    for ui_scale in [0,4,255] {
+        let n=Notice{target:9,task:9,w:624,h:400,ui_scale,sequence:1};
+        assert!(Notice::decode(3,9,9,n.args(),0).is_none());
+    }
+    for ui in 1..=3 {
+        let l=Layout::with_scale(9,1024,768,ui);
+        assert_eq!(l.ui_scale,ui);assert_eq!(l.scale,2*ui);
+        let x=8*ui;let y=l.top+l.header_rows()as u32*9*l.scale;
+        assert_eq!(l.hit(x,y),Some(document_view::NEW));
+        assert_eq!(l.hit(x-1,y),None);
+    }
 }

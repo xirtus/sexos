@@ -13,7 +13,7 @@ const MAX_ROWS: usize = 48;
 /// A readable measure also leaves room for seven body rows in a tall view
 /// without enlarging the fixed display transaction or shrinking the font.
 pub const MAX_COLUMNS: usize = 110;
-const TOP: u32 = 28 + INSET;
+const TOP: u32 = sex_pdx::desktop_style::chrome::TITLE+INSET;
 const GLYPH_HEIGHT: u32 = 7;
 const HOST: &[u8] = sex_pdx::network_config::HOST_NAME;
 const PATH: &[u8] = b" /welcome";
@@ -40,7 +40,7 @@ pub struct Frame {
 
 /// Geometry and one source-byte anchor are the entire retained reader state.
 /// No body copy or per-byte/per-line table is retained.
-pub struct Reader { width: u32, height: u32, anchor: usize, limit: usize }
+pub struct Reader { width: u32, height: u32, ui_scale:u32, anchor: usize, limit: usize }
 
 struct Line { start: usize, end: usize, next: usize }
 struct Layout { total: usize, first: usize, offset: usize }
@@ -109,20 +109,21 @@ fn layout(body: &[u8], cols: usize, visible: usize, anchor: usize) -> Layout {
 }
 
 impl Reader {
-    pub const fn new() -> Self { Self { width: 0, height: 0, anchor: 0, limit: MAX_BODY } }
-    pub fn resize(&mut self, w: u32, h: u32) { self.width = w; self.height = h; }
+    pub const fn new() -> Self { Self { width: 0, height: 0, ui_scale:1, anchor: 0, limit: MAX_BODY } }
+    pub fn resize(&mut self,w:u32,h:u32){self.resize_scaled(w,h,sex_pdx::desktop_style::ui_scale());}
+    pub fn resize_scaled(&mut self,w:u32,h:u32,ui_scale:u32){self.width=w;self.height=h;self.ui_scale=sex_pdx::desktop_style::chrome::clamp_scale(ui_scale);}
     pub fn clear(&mut self) { self.anchor = 0; }
     pub fn long_text(&mut self,long:bool) { self.limit=if long {LONG_BODY} else {MAX_BODY}; }
     pub fn source_anchor(&self) -> usize { self.anchor }
 
     fn geometry(&self) -> (usize, usize) {
         if self.width == 0 || self.height == 0 { return (0,0); }
-        let factor = scale(self.width);
+        let factor = scale(self.width)*self.ui_scale;
         // The renderer wraps immediately on its last physical column. Reserve
         // one column so an explicit newline cannot produce an extra blank row.
-        let cols = ((self.width.saturating_sub(2*INSET)/(ADVANCE*factor)).saturating_sub(1) as usize).min(MAX_COLUMNS);
+        let cols = ((self.width.saturating_sub(2*INSET*self.ui_scale)/(ADVANCE*factor)).saturating_sub(1) as usize).min(MAX_COLUMNS);
         // The frame's bottom rim covers the last INSET pixels of the tile.
-        let first_bottom = TOP + GLYPH_HEIGHT*factor + INSET;
+        let first_bottom = TOP*self.ui_scale + GLYPH_HEIGHT*factor + INSET*self.ui_scale;
         if cols == 0 || self.height < first_bottom { return (0,0); }
         let physical = 1 + (self.height-first_bottom)/(LINE*factor);
         let rows = (physical as usize).min(MAX_ROWS).min(CAPACITY/(cols+1));

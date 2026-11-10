@@ -1,0 +1,20 @@
+{
+  "ok": true,
+  "checked": 3936,
+  "bad": 0,
+  "worst": 0,
+  "origin": [
+    714,
+    640
+  ],
+  "extent": [
+    410,
+    144
+  ],
+  "scope": "Untouched CI image/reference/serial; corrected published body origin, legacy visible extent",
+  "run": 42877473277,
+  "job": 130044519433,
+  "serial_sha256": "05ea4de9d1e89ff4872f8100b049460e2ba0b9c151d168e393479371bb4d84b5",
+  "screenshot_sha256": "1c6365b9d53ad17a15f1bdfb16c95215dfff5fa187a553e4f97accfec0bb088a",
+  "reference_sha256": "6db43ce4884bac6a862d153a85a17be0c2c7227d48c509f964d4309f0afbb171"
+}

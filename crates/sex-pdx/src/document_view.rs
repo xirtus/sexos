@@ -17,19 +17,22 @@ pub struct Layout {
     pub w: u32,
     pub h: u32,
     pub scale: u32,
+    pub ui_scale:u32,
     pub cols: usize,
     pub rows: usize,
     pub top: u32,
     pub toolbar_rows: usize,
 }
 impl Layout {
-    pub fn new(target: u32, w: u32, h: u32) -> Self {
-        let scale = s::scale(w);
-        let cols = (w.saturating_sub(2 * s::INSET) / (s::ADVANCE * scale))
+    pub fn new(target:u32,w:u32,h:u32)->Self{Self::with_scale(target,w,h,s::ui_scale())}
+    pub fn with_scale(target:u32,w:u32,h:u32,ui:u32)->Self{
+        let ui=s::chrome::clamp_scale(ui);
+        let scale = s::scale(w)*ui;
+        let cols = (w.saturating_sub(2 * (s::INSET*ui)) / (s::ADVANCE * scale))
             .saturating_sub(1)
             .clamp(1, 110) as usize;
         // Frameless document holders draw their own top chrome band.
-        let top = if crate::app_catalog::app_of(target).is_some()&&!crate::app_catalog::has_shell_frame(target)&&!crate::app_catalog::is_spindle(target) { 36 } else { s::TEXT_TOP };
+        let top = if crate::app_catalog::app_of(target).is_some()&&!crate::app_catalog::has_shell_frame(target)&&!crate::app_catalog::is_spindle(target) { s::chrome::Metrics::new(ui).title()+s::chrome::Metrics::new(ui).px(s::chrome::RESIZE) } else { s::TEXT_TOP*ui };
         let desired_toolbar = if cols >= 4 * TOOLBAR_CELL {
             1
         } else if cols >= 2 * TOOLBAR_CELL {
@@ -39,7 +42,7 @@ impl Layout {
         } else {
             0
         };
-        let rows = if w >= 2 * s::INSET + s::GLYPH_WIDTH * scale
+        let rows = if w >= 2 * (s::INSET*ui) + s::GLYPH_WIDTH * scale
             && h.saturating_sub(top) >= s::GLYPH_HEIGHT * scale {
             1 + (h - top - s::GLYPH_HEIGHT * scale) / (s::LINE * scale)
         } else {
@@ -54,6 +57,7 @@ impl Layout {
             w,
             h,
             scale,
+            ui_scale:ui,
             cols,
             rows,
             top,
@@ -78,11 +82,11 @@ impl Layout {
     }
     pub fn hit(self, x: u32, y: u32) -> Option<u8> {
         let per = self.toolbar_per_row();
-        if per == 0 || x >= self.w || y >= self.h || x < s::INSET
+        if per == 0 || x >= self.w || y >= self.h || x < (s::INSET*self.ui_scale)
             || y < self.top + self.header_rows() as u32 * s::LINE * self.scale {
             return None;
         }
-        let col = ((x - s::INSET) / (s::ADVANCE * self.scale)) as usize;
+        let col = ((x - (s::INSET*self.ui_scale)) / (s::ADVANCE * self.scale)) as usize;
         let row = ((y - self.top) / (s::LINE * self.scale)) as usize - self.header_rows();
         let item = row * per + col / TOOLBAR_CELL;
         if row >= self.toolbar_rows || col >= self.cols || col >= per * TOOLBAR_CELL || item >= 4 {
@@ -97,13 +101,14 @@ pub struct Notice {
     pub task: u32,
     pub w: u32,
     pub h: u32,
+    pub ui_scale: u32,
     pub sequence: u64,
 }
 impl Notice {
     pub fn args(self) -> [u64; 3] {
         [
             (self.task as u64) << 32 | self.target as u64,
-            (self.h as u64) << 32 | self.w as u64,
+            (self.ui_scale as u64)<<56 | (self.h as u64) << 32 | self.w as u64,
             self.sequence,
         ]
     }
@@ -112,7 +117,8 @@ impl Notice {
             target: args[0] as u32,
             task: (args[0] >> 32) as u32,
             w: args[1] as u32,
-            h: (args[1] >> 32) as u32,
+            h: ((args[1] >> 32)&0x00ff_ffff) as u32,
+            ui_scale:(args[1]>>56)as u32,
             sequence: args[2],
         };
         if caller != 3
@@ -125,6 +131,7 @@ impl Notice {
             || n.h == 0
             || n.w > 4096
             || n.h > 4096
+            || !(1..=3).contains(&n.ui_scale)
         {
             return None;
         }
@@ -134,7 +141,7 @@ impl Notice {
 /// One desired notice per fixed BOOT subject; full queues retain exact data.
 pub struct Delivery {
     desired: Option<Notice>,
-    last: Option<(u32, u32)>,
+    last: Option<(u32, u32, u32)>,
     sequence: u64,
     dead: bool,
 }
@@ -158,7 +165,7 @@ impl Delivery {
         {
             return;
         }
-        if self.desired.map(|n| (n.w, n.h)).or(self.last) == Some((w, h)) {
+        if self.desired.map(|n| (n.w, n.h, n.ui_scale)).or(self.last) == Some((w, h, s::ui_scale())) {
             return;
         }
         let Some(sequence) = self.sequence.checked_add(1) else {
@@ -171,6 +178,7 @@ impl Delivery {
             task,
             w,
             h,
+            ui_scale:s::ui_scale(),
             sequence,
         });
     }
@@ -208,7 +216,7 @@ impl Delivery {
         }
         match send(n) {
             Ok(()) => {
-                self.last = Some((n.w, n.h));
+                self.last = Some((n.w, n.h, n.ui_scale));
                 self.desired = None
             }
             Err(crate::ERR_SERVICE_NOT_READY) => {}

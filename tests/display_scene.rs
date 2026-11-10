@@ -4,6 +4,7 @@
 extern crate self as sex_pdx;
 pub const ERR_SERVICE_NOT_READY:u64=u64::MAX-1;
 pub const ERR_CAP_INVALID:u64=u64::MAX-3;
+fn bar_height()->usize{28}
 #[path="../crates/sex-pdx/src/memory_region.rs"]pub mod memory_region;
 pub use memory_region::MemoryRegionInfo;
 // This compositor fixture grants no capture authority. Compile/run the real
@@ -106,7 +107,7 @@ fn assert_scrubbed(scene:&SceneSnapshot){
  let frame=core::sync::atomic::AtomicU64::new(91);let mut tokens=DEFAULT_RENDER_TOKENS;tokens.frame_rim_color=0x123456;let mut scene=SceneSnapshot::EMPTY;
  assert!(scene.capture(&surfaces,&groups,&Set::UNBOUND,&[text_transaction::Stage::EMPTY;MAX_SURFACES],&bar,tokens,153,frame.load(core::sync::atomic::Ordering::Relaxed),1280,800));
  let parent=Surface{owner_pd:3,surface_id:153,active:true,..SURFACE_EMPTY};groups.observe(&[parent]);bar.civil_clock=silkbar_model::civil_clock::CivilClock::new();tokens.frame_rim_color=0;frame.store(92,core::sync::atomic::Ordering::Relaxed);assert_eq!(bar.civil_clock.seconds(),0);assert_eq!(tokens.frame_rim_color,0);
- assert_eq!(groups.awaiting_parent(&child),None);assert_eq!(scene.groups.awaiting_parent(&child),Some(153));assert_eq!(scene.bar.civil_clock.seconds(),1793491200);assert_eq!(scene.tokens.frame_rim_color,0x123456);assert_eq!((scene.width,scene.height,scene.focus,scene.frame),(1280,800,153,91));assert_eq!(frame.load(core::sync::atomic::Ordering::Relaxed),92);let retained=scene.blur_rows;let next=scene_bar_blur_rows(768);assert_eq!(retained,scene_bar_blur_rows(800));assert_ne!(retained,next);
+ assert_eq!(groups.awaiting_parent(&child),None);assert_eq!(scene.groups.awaiting_parent(&child),Some(153));assert_eq!(scene.bar.civil_clock.seconds(),1793491200);assert_eq!(scene.tokens.frame_rim_color,0x123456);assert_eq!((scene.width,scene.height,scene.focus,scene.frame),(1280,800,153,91));assert_eq!(frame.load(core::sync::atomic::Ordering::Relaxed),92);let retained=scene.blur_rows;let next=scene_bar_blur_rows(200);assert_eq!(retained,scene_bar_blur_rows(800));assert_ne!(retained,next);
 }
 #[test]fn pending_bitmap_protocol_is_excluded_and_committed_pixels_are_owned(){
  let mut stores=Set::UNBOUND;let b=bind(15,150);assert!(stores.initialize_once(b));publish(&mut stores,b,1,0xff123456);
@@ -136,10 +137,10 @@ fn assert_scrubbed(scene:&SceneSnapshot){
  for(width,height)in[(1,1),(MAX_FB_W,MAX_FB_H)]{assert!(scene.capture(&source,&FrameGroups::new(),&Set::UNBOUND,&[text_transaction::Stage::EMPTY;MAX_SURFACES],&silkbar_model::DEFAULT_SILK_BAR,DEFAULT_RENDER_TOKENS,153,19,width,height));assert_eq!((scene.width,scene.height),(width,height));}
  // Compare the actual pure capture helper with the actual legacy blur
  // implementation, not a fixture-only copy of its arithmetic.
- for height in [1usize,2,49,50,768,800]{
+ for height in [1usize,2,27,28,49,50,768,800]{
   let rows=scene_bar_blur_rows(height);assert!(fill_bar_bg_buffer(1280,height as u32));assert!(blur_bar_bg_buffer_radius1(1280,height as u32));
-  for y in 0..BAR_BG_H.min(height){for x in [0,1,640,1279]{assert_eq!(rows[y],unsafe{BAR_BLUR_BUF[y*BAR_BG_W_CAP+x]},"height{height} y{y} x{x}");}}
-  assert!(rows[BAR_BG_H.min(height)..].iter().all(|row|*row==0));
+  for y in 0..28usize.min(height){for x in [0,1,640,1279]{assert_eq!(rows[y],unsafe{BAR_BLUR_BUF[y*BAR_BG_W_CAP+x]},"height{height} y{y} x{x}");}}
+  assert!(rows[28usize.min(height)..].iter().all(|row|*row==0));
  }
  scene.scrub();scene.scrub();assert_scrubbed(&scene);
 }
@@ -173,11 +174,11 @@ fn scrub_cursor_under(){boundary::cursor();}
 // then construct the descriptive receipt. No device write/native success is
 // claimed; the actual prepared-output pipeline has its own registered tests.
 fn rendered_receipt(plan:Plan,present_bits:u64,bar:&SilkBar)->Option<PublishedFrame>{
- let fail=boundary::rendering();let text_projections={
+ let fail=boundary::rendering();let (text_projections,bar_height)={
   let lease=SceneLease::capture(1024,768,bar)?;assert!(lease.view().is_valid());if fail{return None;}
-  lease.view().text_projections
+  (lease.view().text_projections,lease.view().metrics.bar()as usize)
  };
- scene_scrubbed();Some(PublishedFrame{plan,present_bits,canon_ss:0,text_projections})
+ scene_scrubbed();Some(PublishedFrame{plan,bar_height,present_bits,canon_ss:0,text_projections})
 }
 
 fn reset_host_inputs(){
@@ -277,7 +278,7 @@ fn typed_bitmap_clear(sequence:u32){unsafe{assert!(BITMAP_STORES.receive(15,150,
  unsafe{SURFACES[0]=Surface{owner_pd:9,surface_id:156,active:true,w:200,h:100,..SURFACE_EMPTY};}
  for(sequence,bytes)in[(1u32,&b""[..]),(2,&b""[..]),(3,&b"hidden"[..])]{
   assert!(!typed_completion_needs_publication());typed_text(0,9,90,156,sequence,bytes);
-  assert!(damage::Damage::new().rect().is_none());assert!(typed_completion_needs_publication());no_applied();
+  assert!(damage::Damage::new(28).rect().is_none());assert!(typed_completion_needs_publication());no_applied();
   let receipt=rendered_receipt(Plan::full(),0,&bar).unwrap();finish_display_transactions(&mut lifecycle,Some(&receipt));assert!(!typed_completion_needs_publication());
   let mut got=Vec::new();typed_poll(|owner,word|{got.push((owner,word));0});assert_eq!(got,[(9,text_batch::Applied{surface:156,sequence}.encode().unwrap())]);no_applied();
  }

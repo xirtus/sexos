@@ -742,6 +742,7 @@ impl Browser {
             }
             if req.type_id==sex_pdx::document_view::OP{
                 if let Some(n)=sex_pdx::document_view::Notice::decode(req.caller_pd,self.identity.target_pd,self.identity.task_id,[req.arg0,req.arg1,req.arg2],self.viewport_sequence){
+                    sex_pdx::desktop_style::set_ui_scale(n.ui_scale);
                     self.viewport_sequence=n.sequence;self.reader.resize(n.w,n.h);self.import_viewport=(n.w,n.h);
                     // A live recreation may have erased partial display staging.
                     // Replace unsent words with a higher Clear; accepted terminal

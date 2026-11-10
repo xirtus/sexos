@@ -1,0 +1,14 @@
+{
+  "source": "a427b95c73dc9f0c75a5ca6a3aab93202b3c57af",
+  "source_status": "",
+  "master": "d92091cbc609e983ffe59a972461c834d8685986",
+  "iso_sha256": "817e08083f5a72f9614c094f3e4294c3339ed961f6b0d8541056d45261469249",
+  "spec_sha256": "8134f9adbd38ec79f651436ae0e6e5cbd258ef1a60f44e369cf18b7c439bb906",
+  "abi_sha256": "db44069993f91da0430c8ddc29d3f8e23ce84612a1e1e86b0e10ba27e91225d2",
+  "compiler": "/usr/bin/clang Apple21",
+  "compiler_sha256": "34129c71a01a74f7f3b2443521519b2e5447553fa187f5fcafaaf8c42cc192e2",
+  "musl_include": "/Users/xmacbookm5/Projects/sexos-codex-integration/target/musl/include",
+  "FFmpeg": false,
+  "libcxx": false,
+  "scope": "Fresh integrated151 UI artifact, own same-worktree target cache; no copied Cargo outputs"
+}

@@ -45,8 +45,8 @@ class LauncherWorkflow(unittest.TestCase):
   self.assertEqual(self.c['launcher_count'],14);self.assertEqual(self.c['launcher_app_count'],8);self.assertEqual(self.c['exhausted_title'],'Open Spindle')
   self.assertEqual(g.frame_specs(self.c)[-1]['title'],self.c['exhausted_title'])
   self.assertGreater(len(self.c['source_sha256']),20);self.assertEqual(self.c['grid'],[1008,632,264,160]);self.assertEqual(self.c['canvas'],0x0c1420)
-  self.assertEqual(g.minimize_point(12,dict(x=200,y=100),self.c),(225,114))
-  self.assertEqual(g.minimize_point(9,dict(x=208,y=136),self.c),(225,114))
+  self.assertEqual(g.minimize_point(12,dict(x=200,y=100),self.c),(237,113))
+  self.assertEqual(g.minimize_point(9,dict(x=208,y=134),self.c),(237,113))
  def test_exact_finite_actions_cleanup_and_boot_successor_pass(self):
   r=g.lifecycle_joins(trace());self.assertEqual(len(r['actions']),11);self.assertEqual([c['target']for c in r['cleanup']],[12,17])
  def test_actual_task_is_separate_catalog_data_not_domain_alias(self):
@@ -138,13 +138,13 @@ class LauncherErasureControls(unittest.TestCase):
   return ('[launcher.text.view] x=400 y=200 w=480 h=280 scale=2 selected=0 first=0 rows=1\n'
    '[launcher.text.row] index=0 row=0 name=Focus Spindle status=RUNNING / LAST INSTANCE\n'
    '[command_palette.close]\n[linen.list.text] '+linen+' scale=2 text_color=0xf0f8ff rows=3 committed_view=1\n')
- def ink(self,trace,only_row=None,clip=None):
+ def ink(self,trace,only_row=None,clip=None,body_top=36):
   image=ppm(1280,800);v,lines=g.launcher_layout(trace)
   for row,line in lines:
    if only_row is not None and row!=only_row:continue
    for col,char in enumerate(line[:38]):
     data=bytearray(image[len(b'P6\n1280 800\n255\n'):])
-    draw_cell(data,1280,v['x']+8+col*12,v['y']+36+row*18,char,2,b'\xf0\xf8\xff',self.c['font'],clip)
+    draw_cell(data,1280,v['x']+8+col*12,v['y']+body_top+row*18,char,2,b'\xf0\xf8\xff',self.c['font'],clip)
     image=b'P6\n1280 800\n255\n'+bytes(data)
   return image
  def test_actual_old_signature_and_lower_rows_after_header_erasure_fail(self):
@@ -152,6 +152,12 @@ class LauncherErasureControls(unittest.TestCase):
   for row in (None,0,3):
    with self.subTest(row=row):
     with self.assertRaisesRegex(ValueError,'old launcher text remains'):g.launcher_erased(trace,self.ink(trace,row),self.c,(1280,800))
+ def test_current_origin_and_source_selected_geist_ink_remain_checked(self):
+  trace='[display.chrome.metrics] scale=1 bar=28 title=26 inset=8 body_top=34 target=24 width=1280 height=800 publication=1\n'+self.trace('x=0 y=36 w=640 h=756')
+  self.assertEqual(g.launcher_erased(trace,ppm(1280,800),self.c,(1280,800))['remaining_launcher_ink'],0)
+  for row in (None,0,3):
+   with self.assertRaisesRegex(ValueError,'old launcher text remains'):
+    g.launcher_erased(trace,self.ink(trace,row,body_top=34),self.c,(1280,800))
  def test_known_linen_band_overlap_excluded_but_coverage_mandatory(self):
   trace=self.trace('x=400 y=200 w=80 h=280')
   allowed=self.ink(trace,clip=(408,236,472,416))

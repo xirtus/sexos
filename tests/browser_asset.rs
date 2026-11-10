@@ -53,25 +53,25 @@ fn frame_row(frame:&asset_view::Frame,row:usize)->&[u8]{
     use asset_view::{geometry,Mode};
     let fit=geometry(1280,750,48,48,Mode::Fit).unwrap();
     let actual=geometry(1280,750,48,48,Mode::Actual).unwrap();
-    assert_eq!(fit,bitmap_batch::Geometry{x:544,y:333,width:48,height:48,scale:4});
-    assert_eq!(actual,bitmap_batch::Geometry{x:616,y:405,width:48,height:48,scale:1});
+    assert_eq!(fit,bitmap_batch::Geometry{x:544,y:332,width:48,height:48,scale:4});
+    assert_eq!(actual,bitmap_batch::Geometry{x:616,y:404,width:48,height:48,scale:1});
     // Both centers agree; no stretching or fractional resampling is introduced.
-    assert_eq!((fit.x as u32*2+48*4,fit.y as u32*2+48*4),(1280,858));
-    assert_eq!((actual.x as u32*2+48,actual.y as u32*2+48),(1280,858));
+    assert_eq!((fit.x as u32*2+48*4,fit.y as u32*2+48*4),(1280,856));
+    assert_eq!((actual.x as u32*2+48,actual.y as u32*2+48),(1280,856));
     assert_eq!(format!("{:?}",Mode::Fit),"Fit");assert_eq!(format!("{:?}",Mode::Actual),"Actual");
 }
 #[test]fn fit_uses_both_axes_and_actual_never_crops_when_the_image_does_not_fit(){
     use asset_view::{geometry,Mode};
-    assert_eq!(geometry(512,219,48,48,Mode::Fit).unwrap().scale,1);
+    assert_eq!(geometry(512,219,48,48,Mode::Fit).unwrap().scale,2);
     assert_eq!(geometry(512,219,48,48,Mode::Actual).unwrap().scale,1);
     assert_eq!(geometry(512,400,48,24,Mode::Fit).unwrap().scale,4);
     assert_eq!(geometry(240,150,48,24,Mode::Fit).unwrap().scale,2);
     for mode in[Mode::Fit,Mode::Actual]{
         assert!(geometry(63,700,48,48,mode).is_none());
-        assert!(geometry(512,171,48,48,mode).is_none());
-        assert!(geometry(512,172,48,48,mode).is_some());
-        assert!(geometry(256,189,48,48,mode).is_none());
-        assert!(geometry(256,190,48,48,mode).is_some());
+        assert!(geometry(512,169,48,48,mode).is_none());
+        assert!(geometry(512,170,48,48,mode).is_some());
+        assert!(geometry(256,187,48,48,mode).is_none());
+        assert!(geometry(256,188,48,48,mode).is_some());
     }
 }
 #[test]fn every_admitted_geometry_is_centered_bounded_and_has_representable_coordinates(){
@@ -80,7 +80,7 @@ fn frame_row(frame:&asset_view::Frame,row:usize)->&[u8]{
         for h in[0,20,80,120,171,172,189,190,219,712,65535,131000,u32::MAX]{
             for(iw,ih)in[(1,1),(48,48),(3,47),(47,3)]{for mode in[Mode::Fit,Mode::Actual]{
                 if let Some(g)=geometry(w,h,iw,ih,mode){
-                    let top=36+chrome_rows(w)as u32*9*desktop_style::scale(w)+8;
+                    let top=34+chrome_rows(w)as u32*9*desktop_style::scale(w)+8;
                     let(left,right)=(g.x as u32-8,w-8-(g.x as u32+iw as u32*g.scale as u32));
                     let(above,below)=(g.y as u32-top,h-8-(g.y as u32+ih as u32*g.scale as u32));
                     assert!(g.valid());assert!(left.abs_diff(right)<=1);assert!(above.abs_diff(below)<=1);
@@ -100,7 +100,7 @@ fn frame_row(frame:&asset_view::Frame,row:usize)->&[u8]{
         let f=render(w,h,Status::Ready,mode,48,48);assert_eq!(asset_view::chrome_rows(w),4);
         assert!(frame_row(&f,0).starts_with(b"QOI / controlled HTTPS lab root"));
         assert!(frame_row(&f,1).starts_with(b"Image ready"));
-        let metrics=match(mode,w){(Mode::Fit,512|504)=>b"Fit 48x48 / 1x".as_slice(),(Mode::Fit,_)=>b"Fit 48x48 / 4x",_=>b"1:1 48x48 / 1x"};
+        let metrics=match(mode,w){(Mode::Fit,512|504)=>b"Fit 48x48 / 2x".as_slice(),(Mode::Fit,_)=>b"Fit 48x48 / 4x",_=>b"1:1 48x48 / 1x"};
         assert!(frame_row(&f,2).starts_with(metrics));
         assert!(frame_row(&f,3).starts_with(b"F Fit  A 1:1  G fetch  Q clear"));
         for row in 4..f.rows{assert!(frame_row(&f,row).iter().all(|&byte|byte==b' '));}
@@ -138,8 +138,8 @@ fn frame_row(frame:&asset_view::Frame,row:usize)->&[u8]{
             assert!(!frame_row(&f,2).starts_with(b"Image does not fit"));
         }
     }
-    let f=render(512,49,Status::Loading,Mode::Fit,0,0);assert_eq!(f.rows,0);
-    let f=render(512,50,Status::Loading,Mode::Fit,0,0);assert_eq!(f.rows,1);
+    let f=render(512,47,Status::Loading,Mode::Fit,0,0);assert_eq!(f.rows,0);
+    let f=render(512,48,Status::Loading,Mode::Fit,0,0);assert_eq!(f.rows,1);
 }
 
 #[test]fn no_fit_status_is_explicit_without_renumbering_existing_receipts(){

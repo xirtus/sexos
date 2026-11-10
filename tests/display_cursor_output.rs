@@ -3,6 +3,7 @@
 //! Background/menu shading and CPU output are declared host boundaries.
 #![allow(dead_code,unused_unsafe,static_mut_refs)]
 extern crate self as sex_pdx;
+fn bar_height()->usize{28}
 #[path="../crates/sex-pdx/src/desktop_style.rs"]pub mod desktop_style;
 #[path="../crates/sex-pdx/src/desktop_look.rs"]pub mod desktop_look;
 #[path="../crates/sex-pdx/src/spindle_view.rs"]pub mod spindle_view;
@@ -51,8 +52,8 @@ impl OutputBoundary{
   {let target=preparation.target();let fb=target.pointer();
    match mode{
     Mode::Full=>{shade(&target,0,H);menu_rect(&target,menu);},
-    Mode::Move=>restore_cursor_under(fb,W,H,target.len()),
-    Mode::Strip=>{restore_cursor_under(fb,W,H,target.len());shade(&target,0,51);menu_rect(&target,menu);},
+    Mode::Move=>restore_cursor_under(fb,W,H,target.len(),captured.metrics),
+    Mode::Strip=>{restore_cursor_under(fb,W,H,target.len(),captured.metrics);shade(&target,0,28);menu_rect(&target,menu);},
    }
    draw_cursor_z_top(fb,W,H,target.len(),true,&captured);
   }
@@ -101,7 +102,7 @@ fn fresh_full(cursor:(i32,i32),menu:u32)->Vec<u32>{
  for cursor in [(127,111),(125,103),(0,49),(-3,45),(128,112)]{
   reset();let mut output=OutputBoundary::new();output.paint(Mode::Full,cursor,MENU_OLD);
   let(ox,oy)=(cursor.0.max(0)as usize,cursor.1.max(0)as usize);
-  for y in 0..H{for x in 0..W{if y<51||x<ox||x>=ox+8||y<oy||y>=oy+16{assert_eq!(output.visible[y*W+x],underlay(x,y,MENU_OLD),"{cursor:?} {x}/{y}");}}}
+  for y in 0..H{for x in 0..W{if y<28||x<ox||x>=ox+8||y<oy||y>=oy+16{assert_eq!(output.visible[y*W+x],underlay(x,y,MENU_OLD),"{cursor:?} {x}/{y}");}}}
   if cursor==(127,111){assert_eq!(output.visible[111*W+127],0x00ffffff);}
   output.paint(Mode::Move,(60,80),MENU_OLD);assert_eq!(output.visible,fresh_full((60,80),MENU_OLD));output.padding_is_zero();
  }reset();

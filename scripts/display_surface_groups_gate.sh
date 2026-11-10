@@ -17,7 +17,7 @@ a=s.index('static mut PROGRAM_TITLES:');parts.append(s[a:s.index('\n',a)])
 a=s.index('static mut PANEL_NOTICE:');parts.append(s[a:s.index('\n',a)])
 for k in ('const PROGRAM_ROWS:','static mut PIXEL_REGIONS:','static mut PIXEL_SIZE:'):
     a=s.index(k);parts.append(s[a:s.index('\n',a)])
-for name in ['program_title','surface_title','panel_title_fg_at','program_pixel_at','program_pixel_row','coverage_blend','scene_bar_blur_rows','bg','vertical_gradient_xrgb','lerp_color_xrgb','clamp_surface','composite_pixel','composite_pixel_selected','composite_pixel_source','bitmap_viewport','bitmap_color','bitmap_surface_damage','fill_rect_color','ascii_glyph_index','scalar_glyph','toolbar_title_fg_at','surface_text_scale','recompute_text_lines','apply_pending_text','text_projection_requirement','changed_text_rows','legacy_text_clear','legacy_text_draw','surface_text_fg_at','raster_batch','raster_full','raster_strip','raster_area','raster_row','fast_content_run','text_run','raster_damage','fill_bar_bg_buffer','blur_bar_bg_buffer_radius1','clock_total_seconds','clock_visible_monotonic_ok','text_surface_damage','app_indicator_color','phase5_active_app_at','top_strip_pixel']:
+for name in ['chrome_metrics','bar_height','frame_height','frame_rim','reflow_bar','in_rect','program_pixel_at_for','program_pixel_row_for','bitmap_viewport_for','toolbar_title_fg_at_scaled','surface_text_scale_for','surface_text_fg_at_scaled','ui_label_at','ui_label_at_scaled','program_title','surface_title','panel_title_fg_at','program_pixel_at','program_pixel_row','coverage_blend','scene_bar_blur_rows','bg','vertical_gradient_xrgb','lerp_color_xrgb','clamp_surface','composite_pixel','composite_pixel_selected','composite_pixel_source','bitmap_viewport','bitmap_color','bitmap_surface_damage','fill_rect_color','ascii_glyph_index','scalar_glyph','toolbar_title_fg_at','surface_text_scale','recompute_text_lines','apply_pending_text','text_projection_requirement','changed_text_rows','legacy_text_clear','legacy_text_draw','surface_text_fg_at','raster_batch','raster_full','raster_strip','raster_area','raster_row','fast_content_run','text_run','raster_damage','fill_bar_bg_buffer','blur_bar_bg_buffer_radius1','clock_total_seconds','clock_visible_monotonic_ok','text_surface_damage','app_indicator_color','phase5_active_app_at','top_strip_pixel']:
  a=s.index('fn '+name+'(');i=s.index('{',a)+1;depth=1
  while depth: depth+=(s[i]=='{')-(s[i]=='}');i+=1
  part=s[a:i]
@@ -59,7 +59,7 @@ assert 'stage.retire(info.target_pd,info.task_id);' in s and 'if !SURFACES[index
 assert 'if let Some(index)=vacant {' in s and 'TEXT_STAGES[index].reset();' in s and 'BITMAP_STORES.reset_surface(' in s
 destroy=s[s.index('                0xEE => {'):s.index('                0xF5 => {')]
 assert destroy.index('TEXT_STAGES[index].reset();')<destroy.index('*slot = SURFACE_EMPTY;')
-assert 'if let Some(rect)=text_damage.rect(){pending_paint.request_damage(rect,w,h);}' in s
+assert 'if let Some(rect)=text_damage.rect(){pending_paint.request_damage(rect,w,h,bar_height());}' in s
 assert '0xFD | 0x276 | 0x277 | 0x278 | 0x27A | 0x27B | 0x27C | 0x27D | 0x28B | 0x28C)' in s
 fill=s[s.index('                0xEF => {'):s.index('                sex_pdx::bitmap_batch::BEGIN')]
 assert 'fill_damage::update(slot,rect_index,sx,sy,sw,sh,color)' in fill

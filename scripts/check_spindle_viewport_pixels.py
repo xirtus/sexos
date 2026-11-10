@@ -2,7 +2,7 @@
 import re
 from pathlib import Path
 from history_roster_evidence import source_spindles, verify_boot_roster
-from check_desktop_pixels import cell_errors
+from check_desktop_pixels import cell_errors,chrome_geometry
 from check_disk_persistence import ppm_rgb
 
 SCALE_SOURCE='crates/sex-pdx/src/spindle_view.rs'
@@ -20,13 +20,15 @@ def _scale_threshold(root=None):
     if len(declarations)!=1 or len(matches)!=1:raise ValueError('unsupported or ambiguous bound Spindle scale function')
     return int(matches[0][1])
 
-def layout(w,h,root=None):
-    bw=max(0,w-16);bh=max(0,h-44)
-    threshold=_scale_threshold(root);scale=2 if bw>=threshold else 1
-    cols=min(110,max(0,max(0,bw-16)//(6*scale)-1))
-    rows=min(48,1+(bh-12-7*scale)//(9*scale))if bh>=12+7*scale and cols else 0
-    empty=(8,36,bw,0)
-    return [(8,36,bw,bh),empty,empty,empty],cols,[rows,0]
+def layout(w,h,root=None,*,metrics=None):
+    m=metrics if metrics is not None else dict(inset=8,body_top=36,scale=1)
+    ui=m['scale'];inset=m['inset'];top=m['body_top']
+    bw=max(0,w-2*inset);bh=max(0,h-top-inset)
+    threshold=_scale_threshold(root);scale=(2 if bw>=threshold else 1)*ui
+    cols=min(110,max(0,max(0,bw-2*inset)//(6*scale)-1))
+    rows=min(48,1+(bh-12*ui-7*scale)//(9*scale))if bh>=12*ui+7*scale and cols else 0
+    empty=(inset,top,bw,0)
+    return [(inset,top,bw,bh),empty,empty,empty],cols,[rows,0]
 
 def _source_grid(root,target):
     rows=source_spindles(root)
@@ -48,6 +50,7 @@ def _source_grid(root,target):
 
 def verify(text,ppm,font,target=17,require_prompt=None,require_echo=True,require_all_ink=True,resolution=None,root=None,require_text=None):
     try:
+        text=text[:text.rfind('\n')+1]
         root=Path(__file__).resolve().parents[1]if root is None else Path(root)
         sids=_source_grid(root,target)
         roster=verify_boot_roster(root,text)
@@ -58,16 +61,17 @@ def verify(text,ppm,font,target=17,require_prompt=None,require_echo=True,require
         actual_task,seq,w,h,cols,top,bottom=map(int,accepted[-1])
         if actual_task!=task:raise ValueError('viewport task differs from held BOOT roster')
         if seq==0:raise ValueError('zero viewport sequence')
-        panes,expected_cols,rows=layout(w,h,root)
+        metric=chrome_geometry(text);ui=metric['scale'];inset=metric['inset'];body_top=metric['body_top']
+        panes,expected_cols,rows=layout(w,h,root,metrics=metric)
         threshold=_scale_threshold(root)
         if (cols,[top,bottom])!=(expected_cols,rows):raise ValueError('wrong viewport text capacity')
         views={int(sid):tuple(map(int,(x,y,w,h)))for sid,x,y,w,h in re.findall(rf'\[shell.app.viewport\] target={target} sid=(\d+) x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)',text)if int(sid)in sids}
         if sids[0]not in views:raise ValueError('missing catalog terminal viewport')
-        x=views[sids[0]][0]-8;y=views[sids[0]][1]-36
+        x=views[sids[0]][0]-inset;y=views[sids[0]][1]-body_top
         if views[sids[0]]!=(x+panes[0][0],y+panes[0][1],panes[0][2],panes[0][3]):raise ValueError('layout does not match shell geometry')
         width,height,pixels=ppm_rgb(ppm,**({'min_width':1,'min_height':1}if resolution else{}))
         if resolution and (width,height)!=tuple(resolution):raise ValueError('wrong actual framebuffer resolution')
-        if x<0 or y<50 or x+w>width or y+h>height:raise ValueError('viewport outside framebuffer')
+        if x<0 or y<metric['bar'] or x+w>width or y+h>height:raise ValueError('viewport outside framebuffer')
         records={}
         for sid,sequence,paint,c,r,n in re.findall(rf'\[spindle.view.text\] target={target} sid=(\d+) sequence=(\d+) paint=(\d+) cols=(\d+) rows=(\d+) bytes=(\d+)',text):
             if int(sid)not in sids or int(sequence)!=seq:continue
@@ -80,7 +84,7 @@ def verify(text,ppm,font,target=17,require_prompt=None,require_echo=True,require
         if sids[0]not in records or set(records)-{sids[0]}:raise ValueError('missing exact current-layout text payloads')
         rendered=[];errors=[]
         for index,sid in enumerate(sids[:1]):
-            c,r,n,data=records[sid];px,py,pw,ph=panes[index];sx,sy=x+px,y+py;scale=2 if pw>=threshold else 1;expected_rows=rows[0]
+            c,r,n,data=records[sid];px,py,pw,ph=panes[index];sx,sy=x+px,y+py;scale=(2 if pw>=threshold else 1)*ui;expected_rows=rows[0]
             if expected_rows==0:
                 if (c,r,n,data)!=(0,0,0,b''):raise ValueError('collapsed pane retained text')
                 rendered.append([]);continue
@@ -90,12 +94,12 @@ def verify(text,ppm,font,target=17,require_prompt=None,require_echo=True,require
             lines=lines[:-1];rendered.append(lines);ink=0;mismatch=0
             # Include unused physical columns and former rows: stale glyphs
             # after a shorter repaint must not masquerade as current content.
-            physical_cols=min(110,max(0,pw-16)//(6*scale));physical_rows=min(48,max(0,1+(ph-12-7*scale)//(9*scale)))
+            physical_cols=min(110,max(0,pw-2*inset)//(6*scale));physical_rows=min(48,max(0,1+(ph-12*ui-7*scale)//(9*scale)))
             for row in range(physical_rows):
                 for col in range(physical_cols):
                     char=chr(lines[row][col])if row<r and col<c else' '
-                    if char!=' 'and(8+col*6*scale+5*scale>pw or 12+row*9*scale+7*scale>ph):raise ValueError('clipped nonblank viewport glyph')
-                    m,i=cell_errors(pixels,width,sx+8+col*6*scale,sy+12+row*9*scale,char,scale,b'\xe8\xff\xff',font,clip=(sx+pw,sy+ph))
+                    if char!=' 'and(inset+col*6*scale+5*scale>pw or 12*ui+row*9*scale+7*scale>ph):raise ValueError('clipped nonblank viewport glyph')
+                    m,i=cell_errors(pixels,width,sx+inset+col*6*scale,sy+12*ui+row*9*scale,char,scale,b'\xe8\xff\xff',font,clip=(sx+pw,sy+ph))
                     mismatch+=m;ink+=i
             if mismatch:errors.append(f'sid{sid}: viewport glyph mismatch={mismatch}')
             if (require_all_ink or data.strip())and not ink:errors.append(f'sid{sid}: no viewport ink')
@@ -108,4 +112,4 @@ def verify(text,ppm,font,target=17,require_prompt=None,require_echo=True,require
         prompt=rendered[0][-1].decode()if rendered[0]else''
         if require_prompt and require_prompt not in prompt:raise ValueError('missing exact visible prompt')
         return errors
-    except (ValueError,KeyError,OverflowError)as e:return[str(e)]
+    except (ValueError,KeyError,OverflowError,AssertionError)as e:return[str(e)]

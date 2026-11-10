@@ -71,16 +71,22 @@ impl View {
 pub fn text(rows:&[Row<'_>],selected:usize,w:u32,h:u32)->View {
     text_with(rows,selected,w,h,DEFAULT_HEAD)
 }
-const DEFAULT_HEAD:[&str;2]=["APPS / ACTIONS","J/K CHOOSE  ENTER OPEN  ESC CLOSE"];
+pub const DEFAULT_HEAD:[&str;2]=["APPS / ACTIONS","J/K CHOOSE  ENTER OPEN  ESC CLOSE"];
 /// The launcher view with its two header lines given, such as a search query.
 pub fn text_with(rows:&[Row<'_>],selected:usize,w:u32,h:u32,head:[&str;2])->View {
-    let scale=if w>=256 {2}else{1};let line_h=9*scale;
-    let capacity=(h.saturating_sub(44)/line_h).saturating_sub(2) as usize/2;
+    text_with_metrics(rows,selected,w,h,head,ViewMetrics{ui:1,top:34,inset:8})
+}
+/// Descriptive layout supplied by the shared chrome contract; no ambient state.
+#[derive(Clone,Copy)]
+pub struct ViewMetrics{pub ui:u32,pub top:u32,pub inset:u32}
+pub fn text_with_metrics(rows:&[Row<'_>],selected:usize,w:u32,h:u32,head:[&str;2],m:ViewMetrics)->View{
+    let scale=(if w>=256 {2}else{1})*m.ui.clamp(1,3);let line_h=9*scale;
+    let capacity=(h.saturating_sub(m.top).saturating_sub(m.inset)/line_h).saturating_sub(2) as usize/2;
     let visible=capacity.min(5).min(rows.len());
     let first=if visible==0 {0}else{selected.min(rows.len().saturating_sub(1)).saturating_sub(visible-1)};
-    let mut v=View{bytes:[0;512],len:0,first,rows:visible,scale,row_y:36+2*line_h,row_h:2*line_h};
+    let mut v=View{bytes:[0;512],len:0,first,rows:visible,scale,row_y:m.top.saturating_add(2*line_h),row_h:2*line_h};
     // At most twelve lines fit in 512 bytes even with future long labels.
-    let cols=((w.saturating_sub(16)/(6*scale)) as usize).min(40);
+    let cols=((w.saturating_sub(m.inset.saturating_mul(2))/(6*scale)) as usize).min(40);
     if cols<3 || visible==0 {v.rows=0;return v;}
     // The everyday header stays a literal: gates read it from this source.
     if head==DEFAULT_HEAD {v.line(b"","APPS / ACTIONS",cols);v.line(b"","J/K CHOOSE  ENTER OPEN  ESC CLOSE",cols);}

@@ -59,7 +59,7 @@ fn sample(year:i64,month:u8,day:u8,hour:u8,minute:u8,second:u8)->u32{
         let f=clock_view::render(w,h,View::Pending);assert!(f.cols<=63&&f.rows<=24&&f.len<=512);assert!(f.bytes[f.len..].iter().all(|v|*v==0));
         if f.rows==0{assert_eq!(f.len,0);continue;}
         assert_eq!(f.len,f.rows*(f.cols+1)-1);let lines=f.bytes[..f.len].split(|v|*v==10).collect::<Vec<_>>();assert_eq!(lines.len(),f.rows);assert!(lines.iter().all(|l|l.len()==f.cols&&l.iter().all(|v|(32..=126).contains(v))));
-        let factor=desktop_style::scale(w);assert!(36+desktop_style::GLYPH_HEIGHT*factor+(f.rows as u32-1)*desktop_style::LINE*factor<=h);
+        let factor=desktop_style::scale(w);assert!(34+desktop_style::GLYPH_HEIGHT*factor+(f.rows as u32-1)*desktop_style::LINE*factor<=h);
     }}
 }
 #[test]fn legacy_status_remains_exact_and_does_not_render_epoch_outside_source_policy(){

@@ -48,6 +48,16 @@ def source_contract(root):
  contract['clock']=dict(dimensions=dimensions,digits=digit_font,color=int(color[1],16)&0xffffff)
  contract['civil_clock']=civil_contract(root);contract['source_sha256'].update(contract['civil_clock']['source_sha256'])
  for field in('font_profile','coverage','background','captions','color'):contract['clock'][field]=contract['civil_clock'].get(field)
+ if contract['civil_clock']['caption_profile']=='slim-utc-date-v1':
+  # Retain the explicit old DEMO oracle for archived tests/evidence. Current
+  # native images use the separate held-source civil contract, never this box.
+  import geist_cells
+  match=re.search(r'pub const DEFAULT_THEME: Theme = Theme \{.*?chip_border:\s*(0x[0-9A-Fa-f]+)',model,re.S);assert match
+  background=int(match[1],16)&0xffffff
+  values=[((background>>shift)&255)/255 for shift in(16,8,0)]
+  light=sum((v/12.92 if v<=.04045 else((v+.055)/1.055)**2.4)*k for v,k in zip(values,(.2126,.7152,.0722)))+.05
+  contract['clock'].update(font_profile='geist-sans-caption-v1',captions=geist_cells.captions(root=root),background=background,color=0 if light*light>=1.05*.05 else 0xffffff,archive_only=True)
+  contract['source_sha256']['crates/sex-font/examples/captions.rs']=hashlib.sha256((root/'crates/sex-font/examples/captions.rs').read_bytes()).hexdigest()
  contract['quil_initial']=bytes(match[1],'ascii').decode('unicode_escape').encode('ascii');contract['font']=font_from_source((root/'servers/sexdisplay/src/main.rs').read_text())
  for name in('scripts/tls_responsiveness_gate.py','servers/quil/src/main.rs','crates/silkbar-model/src/lib.rs','scripts/check_quil_ui_pixels.py','scripts/check_document_disk.py','scripts/tls_lifecycle_gate.py','scripts/desktop_focus.py','scripts/desktop_close_gate.py','servers/silk-shell/src/main.rs'):
   contract['source_sha256'][name]=hashlib.sha256((root/name).read_bytes()).hexdigest()
@@ -136,9 +146,16 @@ def verify_quil_frame(trace,ppm,expected,contract,resolution):
  except ValueError as exc:return dict(ok=False,errors=[str(exc)])
 
 def clock_panel(trace,contract,resolution):
- d=contract['clock']['dimensions'];width,height=resolution;x=d['CHIP_X3']-max(0,d['CHIP_X3']+d['CLOCK_W']+16-width);clicks=list(re.finditer(r'\[shell.silkbar.click\] target=clock x=(\d+) y=(\d+)',trace));assert len(clicks)==2,'actual clock hit-test open/close clicks absent'
- for click in clicks:assert x<=int(click[1])<x+d['CLOCK_W'] and d['CHIP_Y']<=int(click[2])<d['CHIP_Y']+d['CHIP_H'],'actual click missed source-bound clock module'
- panels=list(re.finditer(r'\[shell.panel.geometry\] surface=148 x=(\d+) y=(\d+) w=(\d+) h=(\d+) desktop_w=(\d+) desktop_h=(\d+) submitted=1',trace));assert len(panels)==1,'missing/foreign clock panel geometry';panel=panels[0];px,py,pw,ph,desktop_w,desktop_h=map(int,panel.groups());assert (desktop_w,desktop_h)==resolution and (pw,ph)==(240,300) and 0<=px<=width-pw and 50<=py<=height-ph,'submitted clock panel is clipped/outside desktop'
+ width,height=resolution
+ slim=contract['civil_clock']['caption_profile']=='slim-utc-date-v1'
+ if slim:
+  from browser_gate_viewport import clock_rect,chrome_metrics
+  x,cy,cw,ch=clock_rect(trace);bar=chrome_metrics(trace)['bar']
+ else:
+  d=contract['clock']['dimensions'];x=d['CHIP_X3']-max(0,d['CHIP_X3']+d['CLOCK_W']+16-width);cy,cw,ch=d['CHIP_Y'],d['CLOCK_W'],d['CHIP_H'];bar=50
+ clicks=list(re.finditer(r'\[shell.silkbar.click\] target=clock x=(\d+) y=(\d+)',trace));assert len(clicks)==2,'actual clock hit-test open/close clicks absent'
+ for click in clicks:assert x<=int(click[1])<x+cw and cy<=int(click[2])<cy+ch,'actual click missed source-bound clock module'
+ panels=list(re.finditer(r'\[shell.panel.geometry\] surface=148 x=(\d+) y=(\d+) w=(\d+) h=(\d+) desktop_w=(\d+) desktop_h=(\d+) submitted=1',trace));assert len(panels)==1,'missing/foreign clock panel geometry';panel=panels[0];px,py,pw,ph,desktop_w,desktop_h=map(int,panel.groups());assert (desktop_w,desktop_h)==resolution and (pw,ph)==(240,300) and 0<=px<=width-pw and bar<=py<=height-ph,'submitted clock panel is clipped/outside desktop'
  opened=re.search(r'\[shell.clock.open.ok\] id=0x94',trace);closed=re.search(r'\[shell.clock.close.ok\] id=0x94',trace);started=re.search(r'\[browser.command.started\] kind=TlsPrepare accepted=1',trace);assert opened and closed and started and clicks[0].start()<panel.start()<opened.start()<clicks[1].start()<closed.start()<started.start(),'clock panel open/close did not precede TLS workload'
  return dict(clicks=[dict(x=int(c[1]),y=int(c[2]),offset=c.start())for c in clicks],submitted_geometry=dict(surface=148,x=px,y=py,w=pw,h=ph,desktop_w=width,desktop_h=height),pixels='unconfirmed; submitted geometry and actual Shell hit-test only')
 
@@ -162,6 +179,7 @@ def demo_clock_pixels(clock,stamp):
 
 def verify_demo_clock(trace,ppm,contract,resolution=None):
  try:
+  assert not(contract['clock'].get('archive_only')and'[display.chrome.metrics]'in trace),'DEMO archive profile cannot qualify current slim native evidence'
   layouts=list(re.finditer(r'\[sexdisplay.clock.presentation\] label=DEMO wall_time=0 x=(\d+) y=(\d+) w=(\d+) h=(\d+) digits=(?:30|proportional) width=(\d+)',trace));assert len(layouts)==trace.count('[sexdisplay.clock.presentation]')==1,'missing/foreign DEMO presentation'
   x,y,w,h,declared=map(int,layouts[0].groups());width,height,pixels=ppm_rgb(ppm,min_width=1,min_height=1);d=contract['clock']['dimensions'];wanted_x=d['CHIP_X3']-max(0,d['CHIP_X3']+d['CLOCK_W']+16-width)
   assert (width,height)==tuple(resolution)if resolution else True,'wrong framebuffer resolution'
@@ -288,7 +306,11 @@ def main():
   if not result['ok']:raise RuntimeError(str(result['errors']))
   return result
  def click_clock():
-  d=contract['clock']['dimensions'];x=d['CHIP_X3']-max(0,d['CHIP_X3']+d['CLOCK_W']+16-resolution[0])+d['CLOCK_W']//2;y=d['CHIP_Y']+d['CHIP_H']//2
+  if contract['civil_clock']['caption_profile']=='slim-utc-date-v1':
+   from browser_gate_viewport import clock_rect
+   cx,cy,cw,ch=clock_rect(text());x=cx+cw//2;y=cy+ch//2
+  else:
+   d=contract['clock']['dimensions'];x=d['CHIP_X3']-max(0,d['CHIP_X3']+d['CLOCK_W']+16-resolution[0])+d['CLOCK_W']//2;y=d['CHIP_Y']+d['CHIP_H']//2
   for expected in('open','close'):
    start=len(text());sent=time.monotonic();q.cmd('input-send-event',{'events':[{'type':'abs','data':{'axis':'x','value':round(x*32767/(resolution[0]-1))}},{'type':'abs','data':{'axis':'y','value':round(y*32767/(resolution[1]-1))}}]});wait(r'\[shell.pointer.abs\]|\[silk-shell.pointer.recv\].*class=|\[shell.abs.normalize\]',start);q.cmd('input-send-event',{'events':[{'type':'btn','data':{'down':True,'button':'left'}}]});wait(r'\[shell.clock.'+expected+r'.ok\] id=0x94',start);q.cmd('input-send-event',{'events':[{'type':'btn','data':{'down':False,'button':'left'}}]});record('clock_panel_'+expected,start,sent)
   start=len(text());q.cmd('input-send-event',{'events':[{'type':'abs','data':{'axis':'x','value':32700}},{'type':'abs','data':{'axis':'y','value':30000}}]});wait(r'\[shell.abs.normalize\] raw_x=32700 raw_y=30000 .*reason=(?:ok|duplicate_sample)',start)

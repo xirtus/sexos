@@ -22,11 +22,12 @@ impl List {
 }
 /// Inputs are the published table only; no staging or transport state is read.
 pub fn list(items: &[Item<'_>], selected: u64, width: u32, height: u32) -> List {
-    let scale = if width >= 256 { 2 } else { 1 };
+    let m=sex_pdx::desktop_style::chrome::Metrics::new(sex_pdx::desktop_style::ui_scale());
+    let scale = (if width >= 256 { 2 } else { 1 })*m.scale();
     let line_h = 9 * scale;
-    let cols = (width.saturating_sub(16) / (6 * scale)).clamp(1,80) as usize;
+    let cols = (width.saturating_sub(m.px(16)) / (6 * scale)).clamp(1,80) as usize;
     let mut out = List { text: [0;512], len:0, first:0, rows:0,
-        selected_row:None, row_y:36 + 2*line_h, row_h:2*line_h };
+        selected_row:None, row_y:m.title()+m.px(8) + 2*line_h, row_h:2*line_h };
     if cols < 4 || height < out.row_y + out.row_h { return out; }
     out.rows = ((height - out.row_y) / out.row_h).min(5).min(items.len() as u32) as usize;
     if out.rows == 0 { return out; }
@@ -53,9 +54,10 @@ pub struct Child { pub sid:u64, pub x:i32, pub y:i32, pub w:u32, pub h:u32 }
 /// Called only after live immutable catalog authorization in the shell.
 pub fn children(frame:u64,x:i32,y:i32,w:u32,h:u32)->[Option<Child>;4] {
     let mut result=[None;4];
-    let bw=w.saturating_sub(16); let bh=h.saturating_sub(44);
+    let body=sex_pdx::desktop_style::chrome::Metrics::new(sex_pdx::desktop_style::ui_scale()).body(w,h);
+    let(bw,bh)=(body.w,body.h);
     if bw==0 || bh==0 {return result}
-    let bx=x.saturating_add(8);let by=y.saturating_add(36);
+    let bx=x.saturating_add(body.x as i32);let by=y.saturating_add(body.y as i32);
     if let Some(row)=crate::app_catalog::INCARNATIONS.iter().find(|row|row.shell_surface==Some(frame)) {
         match row.app {
             crate::app_catalog::App::Quil=>{result[0]=Some(Child{sid:row.surface,x:bx,y:by,w:bw,h:bh});},

@@ -25,7 +25,8 @@ assert '!DESKTOP_STATES.pending_surface(sid)' in focus
 assert 'DISPLAY_FOCUS.observe(arg0,admission)' in s and 'slot==SLOT_DISPLAY && opcode==0xED' in s
 draw=re.findall(r'^fn shell_draw_text\b.*?^\}',s,re.M|re.S)
 assert len(draw)==1
-pathlib.Path(sys.argv[2]).write_text('\n'.join([p,n,draw[0],function('linen_queue_text')]))
+metrics=re.findall(r'^fn chrome_metrics\b.*?^\}',s,re.M|re.S);assert len(metrics)==1
+pathlib.Path(sys.argv[2]).write_text('\n'.join([metrics[0],p,n,draw[0],function('linen_queue_text')]))
 PY
 DESKTOP_CONTENT_PRODUCTION="$TMP/production.rs" rustc --edition=2021 --test "$ROOT/tests/desktop_content.rs" -o "$TMP/test"
 "$TMP/test"

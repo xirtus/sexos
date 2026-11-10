@@ -4,6 +4,7 @@ import argparse,re,shutil,time
 from pathlib import Path
 from quil_autosave_gate import boot
 from quil_workflow_gate import palette_select,palette_commands
+from browser_gate_viewport import chrome_metrics
 ROOT=Path(__file__).resolve().parents[1]
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
@@ -15,8 +16,12 @@ def main():
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(3)
   # Quil's title bar, dragged right.
-  s=len(t());at(200,64);time.sleep(.5);btn(True);time.sleep(.3)
-  for i in range(1,11):at(200+i*20,64);time.sleep(.15)
+  metrics=chrome_metrics(t())
+  x,y,w,h=map(int,re.findall(r'\[shell.tile.apply\] sid=201 x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)',t())[-1])
+  tx=x+192*metrics['scale'];ty=y+metrics['title']//2
+  assert x+72*metrics['scale']<tx<x+w-metrics['inset'] and y<=ty<y+metrics['title'],('title drag point',x,y,w,h,tx,ty)
+  s=len(t());at(tx,ty);time.sleep(.5);btn(True);time.sleep(.3)
+  for i in range(1,11):at(tx+i*20,ty);time.sleep(.15)
   btn(False);g['wait'](r'\[shell.window.float\] frame=\d+ sid=201',s,30);g['wait'](r'\[silk.drag.end\] surface=201',s,30);time.sleep(2)
   moved=quil_x();assert moved>=150,moved
   q.cmd('screendump',{'filename':str(a.out/'floated.ppm')});time.sleep(.5)
