@@ -44,16 +44,16 @@ def wiring(s):
     prepared=compact(function(s,'render_prepared'));batch=compact(function(s,'raster_batch'))
     assert prepared.index('ifunsafe{(*core::ptr::addr_of!(RENDER_SCENE)).is_valid()}{returnNone;}')<prepared.index('FRAME_OUTPUT.as_mut()'),'reject nested render before exclusive store borrow'
     assert prepared.count('SceneLease::capture(')==1 and prepared.count('raster_batch(')==1 and prepared.count('preparation.commit(')==1,'one scene/preparation/publication per batch'
-    assert prepared.index('store.prepare(')<prepared.index('SceneLease::capture(')<prepared.index('letscene=lease.view();')<prepared.index('raster_batch(&target,scene,plan)')<prepared.index('preparation.commit(|pixels|publish_frame(fb,w,h,pixels))')<prepared.index('letpresent_bits=ifsettle_only{0}else{unsafe{APP_PRESENT_BITS}};')<prepared.index('record_cursor_presented();')<prepared.index('report_app_presented();')<prepared.index('civil_clock_drawn('),'one owned scene covers raster/publish/posteffects'
+    assert prepared.index('store.prepare(')<prepared.index('SceneLease::capture(')<prepared.index('letscene=lease.view();')<prepared.index('raster_batch(&target,scene,plan)')<prepared.index('preparation.commit(|frame|publish_frame(fb,w,h,frame))')<prepared.index('letpresent_bits=ifsettle_only{0}else{unsafe{APP_PRESENT_BITS}};')<prepared.index('record_cursor_presented();')<prepared.index('report_app_presented();')<prepared.index('civil_clock_drawn('),'one owned scene covers raster/publish/posteffects'
     assert prepared.index('preparation.commit(')<prepared.index('lettext_projections=scene.text_projections;')
     assert prepared.endswith('Some(PublishedFrame{plan,present_bits,canon_ss,text_projections})}') and not any(x in prepared for x in('mem::forget','ManuallyDrop','drop(lease)')),'lease stays ordinary scoped ownership through receipt construction'
     assert 'requested.is_empty()||!valid_scanout('in prepared and 'if!prepared{drop(preparation);backup.restore();returnNone;}'in prepared
-    assert 'if!preparation.commit(|pixels|publish_frame(fb,w,h,pixels)){backup.restore();returnNone;}'in prepared
+    assert 'if!preparation.commit(|frame|publish_frame(fb,w,h,frame)){backup.restore();returnNone;}'in prepared
     assert batch.index('ifplan.settle_only(){returntrue;}')<batch.index('restore_cursor_under('),'pure Settle leaves cursor and overlays untouched'
     assert 'SceneLease'not in batch and batch.count('restore_cursor_under(')==1 and batch.index('restore_cursor_under(')<batch.index('letbody=matchplan.content')<batch.index('plan.strip&&!raster_strip('),'one restore then body/strip from same scene'
     for name in ['draw_atlas_cards_pass','draw_atlas_frame_previews_pass','draw_launcher_panel','draw_cursor_z_top']:assert batch.count(name+'(')==1,name+' at most once per batch'
     assert batch.index('draw_launcher_panel(')<batch.index('draw_cursor_z_top('),'cursor last over launcher'
-    assert 'for(index,pixel)inpixels.iter().enumerate(){unsafe{core::ptr::write_volatile(fb.add(index),*pixel);}}'in compact(function(s,'publish_frame'))
+    assert 'for(index,pixel)inrow[first..end].iter().enumerate(){unsafe{core::ptr::write_volatile(out.add(first+index),*pixel);}}'in compact(function(s,'publish_frame'))
     for name in ['raster_full','raster_strip','raster_area','raster_damage']:
         body=compact(function(s,name))
         assert 'scene:&scene::SceneSnapshot' in body and not any(x in body for x in('SceneLease','draw_cursor_z_top(','draw_launcher_panel(','draw_atlas_cards_pass(','draw_atlas_frame_previews_pass(','restore_cursor_under(','civil_clock_drawn(','report_app_presented(','record_cursor_presented(','render_prepared(')),name+' primitive may only paint borrowed target/scene'
