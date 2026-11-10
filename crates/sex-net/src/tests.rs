@@ -294,3 +294,147 @@ fn configured_ready(config:sex_net_config::Config)->(Engine<'static>,u64){
   e.client_abort();e.begin_dns(1).unwrap();let dns=tick(&mut e,&mut now).unwrap();assert_eq!(dns.dns_ticket(&config),None);
  }
 }
+
+// IPv6 on the open side: SLAAC, neighbor discovery, TCP and UDP to a raw peer.
+const PREFIX6:[u8;8]=[0xfd,0,0,0x5e,0,0,0,1];
+const PEER_LL6:[u8;16]=[0xfe,0x80,0,0,0,0,0,0,0,0,0,0,0,0,0,1];
+const PEER6:[u8;16]=[0xfd,0,0,0x5e,0,0,0,1,0,0,0,0,0,0,0,1];
+const OUR6:[u8;16]=[0xfd,0,0,0x5e,0,0,0,1,0x50,0x54,0,0xff,0xfe,0x12,0x34,0x56];
+const ALL_NODES:[u8;16]=[0xff,2,0,0,0,0,0,0,0,0,0,0,0,0,0,1];
+/// A frame from the peer: IPv6 with `next` and its payload, the upper checksum filled in.
+fn ip6(dst_mac:[u8;6],src:[u8;16],dst:[u8;16],next:u8,payload:&[u8],hop:u8)->Vec<u8>{
+ let mut p=payload.to_vec();let at=match next{58=>2,6=>16,_=>6};p[at..at+2].fill(0);
+ let mut pseudo=Vec::from(&src[..]);pseudo.extend_from_slice(&dst);pseudo.extend_from_slice(&(p.len()as u32).to_be_bytes());pseudo.extend_from_slice(&[0,0,0,next]);pseudo.extend_from_slice(&p);
+ let check=sum(&pseudo);p[at..at+2].copy_from_slice(&check.to_be_bytes());
+ let mut v=Vec::from(&dst_mac[..]);v.extend_from_slice(&PEER);v.extend_from_slice(&[0x86,0xdd,0x60,0,0,0]);v.extend_from_slice(&(p.len()as u16).to_be_bytes());v.push(next);v.push(hop);
+ v.extend_from_slice(&src);v.extend_from_slice(&dst);v.extend_from_slice(&p);v
+}
+struct Six{next:u8,src:[u8;16],dst:[u8;16],body:Vec<u8>}
+fn parse6(f:&Frame)->Option<Six>{
+ let v=&f.bytes[..f.length];if v.get(12..14)!=Some(&[0x86,0xdd]){return None;}
+ let n=u16::from_be_bytes([v[18],v[19]])as usize;let (src,dst):([u8;16],[u8;16])=(v[22..38].try_into().unwrap(),v[38..54].try_into().unwrap());
+ let body=v[54..54+n].to_vec();
+ let mut pseudo=Vec::from(&src[..]);pseudo.extend_from_slice(&dst);pseudo.extend_from_slice(&(n as u32).to_be_bytes());pseudo.extend_from_slice(&[0,0,0,v[20]]);pseudo.extend_from_slice(&body);
+ assert_eq!(sum(&pseudo),0,"upper-layer checksum");
+ Some(Six{next:v[20],src,dst,body})
+}
+fn router_advert()->Vec<u8>{
+ let mut b=vec![134,0,0,0,64,0,0x07,0x08,0,0,0,0,0,0,0,0,1,1];b.extend_from_slice(&PEER);
+ b.extend_from_slice(&[3,4,64,0xc0]);b.extend_from_slice(&86400u32.to_be_bytes());b.extend_from_slice(&14400u32.to_be_bytes());b.extend_from_slice(&[0;4]);b.extend_from_slice(&PREFIX6);b.extend_from_slice(&[0;8]);
+ ip6([0x33,0x33,0,0,0,1],PEER_LL6,ALL_NODES,58,&b,255)
+}
+fn attached()->(Engine<'static>,u64){
+ let mut e=engine();
+ let b=OpenBuffers{dns_rx_meta:Box::leak(Box::new([DnsMetadata::EMPTY;2])),dns_rx:Box::leak(Box::new([0u8;1024])),dns_tx_meta:Box::leak(Box::new([DnsMetadata::EMPTY;2])),dns_tx:Box::leak(Box::new([0u8;1024]))};
+ e.open_attach(b).unwrap();(e,1)
+}
+/// Ticks, answering neighbor solicitations for the peer; gives every other IPv6 frame.
+fn run6(e:&mut Engine<'static>,now:&mut u64,turns:usize)->Vec<Six>{
+ let mut out=Vec::new();
+ for _ in 0..turns{
+  let Some(f)=tick(e,now) else{continue};let Some(s)=parse6(&f) else{continue};
+  if s.next==58&&s.body[0]==135&&(s.body[8..24]==PEER6||s.body[8..24]==PEER_LL6){
+   let mut na=vec![136,0,0,0,0xe0,0,0,0];na.extend_from_slice(&s.body[8..24]);na.extend_from_slice(&[2,1]);na.extend_from_slice(&PEER);
+   let target:[u8;16]=s.body[8..24].try_into().unwrap();e.submit_frame(&ip6(OUR,target,s.src,58,&na,255)).unwrap();continue;
+  }
+  out.push(s);
+ }
+ out
+}
+fn slaac()->(Engine<'static>,u64){
+ let(mut e,mut now)=attached();
+ let sent=run6(&mut e,&mut now,8);
+ let rs=sent.iter().find(|s|s.next==58&&s.body[0]==133).expect("router solicitation");
+ assert_eq!(rs.src,[0xfe,0x80,0,0,0,0,0,0,0x50,0x54,0,0xff,0xfe,0x12,0x34,0x56]);assert_eq!(rs.dst[..2],[0xff,2]);
+ assert!(!e.open_ready());assert_eq!(e.open_global6(),None);
+ e.submit_frame(&router_advert()).unwrap();run6(&mut e,&mut now,8);
+ (e,now)
+}
+#[test]fn open_side_solicits_a_router_and_takes_a_slaac_address_and_default_route(){
+ let(e,_)=slaac();
+assert_eq!(e.open_global6(),Some(OUR6));assert_eq!(e.open_router6(),Some(PEER_LL6));assert!(e.open_ready());
+ let a=e.open_addresses();assert!(a.contains(&(Address::V6(OUR6),64)));assert!(a.iter().all(|(a,_)|matches!(a,Address::V6(_))),"no lease, no IPv4: {a:?}");
+}
+#[test]fn the_controlled_engine_sends_no_ipv6_until_the_open_side_starts(){
+ let mut e=engine();let mut now=0;
+ for _ in 0..50{if let Some(f)=tick(&mut e,&mut now){assert!(parse6(&f).is_none());}}
+}
+#[test]fn tcp_connects_to_an_ipv6_peer_from_the_slaac_address_and_carries_bytes(){
+ let(mut e,mut now)=slaac();let flow=e.open_add_flow().unwrap();
+ e.open_connect(flow,Address::V6(PEER6),7).unwrap();
+ let syn=run6(&mut e,&mut now,8).into_iter().find(|s|s.next==6).expect("SYN");
+ assert_eq!((syn.src,syn.dst),(OUR6,PEER6));assert_eq!(syn.body[13]&0x12,2);
+ let port=u16::from_be_bytes([syn.body[0],syn.body[1]]);let seq=u32::from_be_bytes(syn.body[4..8].try_into().unwrap());
+ let seg=|s:u32,a:u32,flags:u8,data:&[u8]|{let mut t=vec![0u8;20];t[0..2].copy_from_slice(&7u16.to_be_bytes());t[2..4].copy_from_slice(&port.to_be_bytes());t[4..8].copy_from_slice(&s.to_be_bytes());t[8..12].copy_from_slice(&a.to_be_bytes());t[12]=5<<4;t[13]=flags;t[14..16].copy_from_slice(&8192u16.to_be_bytes());t.extend_from_slice(data);ip6(OUR,PEER6,OUR6,6,&t,64)};
+ e.submit_frame(&seg(500,seq+1,0x12,&[])).unwrap();run6(&mut e,&mut now,4);
+ assert_eq!(e.open_state(flow),OpenState::Open);
+ assert_eq!(e.open_send(flow,b"over six"),Ok(8));
+ let data=run6(&mut e,&mut now,8).into_iter().find(|s|s.next==6&&s.body.len()>20).expect("data");assert_eq!(&data.body[20..],b"over six");
+ e.submit_frame(&seg(501,seq+9,0x18,b"back")).unwrap();run6(&mut e,&mut now,4);
+ let mut out=[0u8;16];assert_eq!(e.open_receive(flow,&mut out),Ok(4));assert_eq!(&out[..4],b"back");
+ assert_eq!(e.open_peer(flow),Some((Address::V6(PEER6),7)));
+ // Shut down, the flow sends its FIN and, closed, is left to finish rather than reset.
+ e.open_shutdown(flow);let fin=run6(&mut e,&mut now,4).into_iter().find(|s|s.next==6).expect("FIN");assert_eq!(fin.body[13]&1,1);
+ e.open_close(flow);assert_eq!(e.open_state(flow),OpenState::Open);assert!(!e.open_idle(flow));
+}
+#[test]fn ipv4_needs_a_lease_and_ipv6_a_global_address(){
+ let(mut e,_)=attached();let flow=e.open_add_flow().unwrap();
+ assert_eq!(e.open_connect(flow,Address::V4([10,0,2,2]),80),Err(Error::Config));
+ assert_eq!(e.open_connect(flow,Address::V6(PEER6),80),Err(Error::Config));
+}
+#[test]fn udp_binds_program_ports_only_and_echoes_over_ipv6(){
+ let(mut e,mut now)=slaac();let a=e.open_add_udp().unwrap();let b=e.open_add_udp().unwrap();
+ let port=e.open_udp_bind(a,0).unwrap();assert!((UDP_PORT_BASE..=UDP_PORT_LAST).contains(&port));
+ for bad in [68,PROGRAM_PORT_MAX+1,OPEN_PORT_BASE,46079,48001,port]{assert_eq!(e.open_udp_bind(b,bad),Err(Error::Busy),"{bad}");}
+ assert_eq!(e.open_udp_bind(b,5353),Ok(5353));
+ assert_eq!(e.open_udp_send(a,Address::V6(PEER6),7,&[0;UDP_PAYLOAD_V6+1]),Err(Error::Length));
+ assert_eq!(e.open_udp_send(a,Address::V6(PEER6),7,b"ping"),Ok(true));
+ let d=run6(&mut e,&mut now,8).into_iter().find(|s|s.next==17).expect("datagram");
+ assert_eq!((d.src,d.dst),(OUR6,PEER6));assert_eq!(&d.body[8..],b"ping");assert_eq!(u16::from_be_bytes([d.body[0],d.body[1]]),port);
+ let mut u=vec![0,7];u.extend_from_slice(&port.to_be_bytes());u.extend_from_slice(&12u16.to_be_bytes());u.extend_from_slice(&[0,0]);u.extend_from_slice(b"pong");
+ e.submit_frame(&ip6(OUR,PEER6,OUR6,17,&u,64)).unwrap();run6(&mut e,&mut now,2);
+ let mut out=[0u8;8];assert_eq!(e.open_udp_receive(a,&mut out),Ok(Some((Address::V6(PEER6),7,4))));assert_eq!(&out[..4],b"pong");
+ assert_eq!(e.open_udp_receive(a,&mut out),Ok(None));assert_eq!(e.open_udp_receive(b,&mut out),Ok(None));
+}
+#[test]fn a_listening_flow_takes_an_ipv6_connection_and_one_port_has_one_listener(){
+ let(mut e,mut now)=slaac();let l=e.open_add_flow().unwrap();let other=e.open_add_flow().unwrap();
+ assert_eq!(e.open_listen(l,OPEN_PORT_BASE),Err(Error::Busy));
+ e.open_listen(l,7070).unwrap();assert_eq!(e.open_listen(other,7070),Err(Error::Busy));
+ assert_eq!(e.open_state(l),OpenState::Opening);assert!(!e.open_connected(l));
+ let mut t=vec![0u8;20];t[0..2].copy_from_slice(&41000u16.to_be_bytes());t[2..4].copy_from_slice(&7070u16.to_be_bytes());t[4..8].copy_from_slice(&900u32.to_be_bytes());t[12]=5<<4;t[13]=2;t[14..16].copy_from_slice(&8192u16.to_be_bytes());
+ e.submit_frame(&ip6(OUR,PEER6,OUR6,6,&t,64)).unwrap();
+ let synack=run6(&mut e,&mut now,8).into_iter().find(|s|s.next==6).expect("SYN-ACK");assert_eq!(synack.body[13]&0x12,0x12);
+ let ours=u32::from_be_bytes(synack.body[4..8].try_into().unwrap());
+ t[4..8].copy_from_slice(&901u32.to_be_bytes());t[8..12].copy_from_slice(&(ours+1).to_be_bytes());t[13]=0x10;
+ e.submit_frame(&ip6(OUR,PEER6,OUR6,6,&t,64)).unwrap();run6(&mut e,&mut now,2);
+ assert!(e.open_connected(l));assert_eq!(e.open_peer(l),Some((Address::V6(PEER6),41000)));
+ // Once the first has its peer, another flow may listen on the port again.
+ e.open_listen(other,7070).unwrap();
+}
+fn answer(query:&[u8],data:&[u8])->Vec<u8>{
+ let mut r=query.to_vec();r[2]=0x81;r[3]=0x80;r[7]=1;let kind=&query[query.len()-4..query.len()-2];
+ r.extend_from_slice(&[0xc0,0x0c]);r.extend_from_slice(kind);r.extend_from_slice(&[0,1,0,0,0,60]);r.extend_from_slice(&(data.len()as u16).to_be_bytes());r.extend_from_slice(data);r
+}
+fn resolving()->(Engine<'static>,u64,Vec<(u16,Vec<u8>)>){
+ let(mut e,mut now)=slaac();e.submit_frame(&arp()).unwrap();tick(&mut e,&mut now);
+ e.open.as_mut().unwrap().lease=Some(Lease{address:LOCAL,prefix:24,gateway:Some(PEER_IP),dns:Some(PEER_IP)});
+ e.open_resolve_all(b"both.example").unwrap();
+ let mut queries=Vec::new();for _ in 0..8{if let Some(f)=tick(&mut e,&mut now){if let Some((port,53,q))=parse_udp(&f){queries.push((port,q));}}}
+ (e,now,queries)
+}
+#[test]fn resolving_asks_both_families_once_ipv6_works_and_waits_briefly_for_the_second(){
+ let(mut e,mut now,q)=resolving();
+ assert_eq!(q.len(),2);assert_eq!(&q[0].1[q[0].1.len()-4..],&[0,1,0,1]);assert_eq!(&q[1].1[q[1].1.len()-4..],&[0,28,0,1]);
+ e.submit_frame(&udp(PEER_IP,LOCAL,53,q[0].0,&answer(&q[0].1,&[192,0,2,7]))).unwrap();tick(&mut e,&mut now);
+ assert_eq!(e.open_resolved_all(),Ok(None));
+ e.submit_frame(&udp(PEER_IP,LOCAL,53,q[1].0,&answer(&q[1].1,&PEER6))).unwrap();tick(&mut e,&mut now);
+ assert_eq!(e.open_resolved_all(),Ok(Some(Answers{v6:Some(PEER6),v4:Some([192,0,2,7])})));
+ // Only IPv4 answers: it is used once the resolution delay has passed.
+ let(mut e,mut now,q)=resolving();
+ e.submit_frame(&udp(PEER_IP,LOCAL,53,q[0].0,&answer(&q[0].1,&[192,0,2,8]))).unwrap();tick(&mut e,&mut now);
+ assert_eq!(e.open_resolved_all(),Ok(None));
+ now+=RESOLUTION_DELAY_MS;e.advance(now);
+ assert_eq!(e.open_resolved_all(),Ok(Some(Answers{v6:None,v4:Some([192,0,2,8])})));
+ // The IPv4-only question of old asks A alone.
+ e.open_resolve(b"old.example").unwrap();let mut n=0;for _ in 0..8{if let Some(f)=tick(&mut e,&mut now){if parse_udp(&f).is_some(){n+=1;}}}assert_eq!(n,1);
+}
