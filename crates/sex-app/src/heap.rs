@@ -33,14 +33,57 @@ unsafe impl talc::lock_api::RawMutex for Lock {
 /// Where the heap's memory comes from: the run's window, one contiguous span that
 /// only grows. `end` is the heap's end as talc last reported it.
 #[derive(Debug)]
-pub struct Window { end: Option<NonNull<u8>> }
+pub struct Window {
+    end: Option<NonNull<u8>>,
+    limit: Option<Limit>,
+}
 // Only ever touched under the heap's lock.
 unsafe impl Send for Window {}
 
-impl Window {
-    pub const fn new() -> Self { Self { end: None } }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LimitError {
+    Invalid,
+    Started,
+    Configured,
+    Memory,
 }
-impl Default for Window { fn default() -> Self { Self::new() } }
+
+impl Window {
+    /// Configure under this allocator's lock before its first allocation. This
+    /// limits heap pages only, not executable/static pages or the main stack.
+    pub fn set_limit(&mut self, bytes: usize) -> Result<(), LimitError> {
+        let bytes = u64::try_from(bytes).map_err(|_| LimitError::Invalid)?;
+        if bytes == 0 || bytes % memory::PAGE != 0 {
+            return Err(LimitError::Invalid);
+        }
+        if self.limit.is_some() {
+            return Err(LimitError::Configured);
+        }
+        if self.end.is_some() {
+            return Err(LimitError::Started);
+        }
+        let current = memory::grow(0).map_err(|_| LimitError::Memory)?;
+        if current.pages != 0 {
+            return Err(LimitError::Started);
+        }
+        if current.base == 0 || current.base % memory::PAGE != 0 || current.base.checked_add(bytes).is_none() {
+            return Err(LimitError::Memory);
+        }
+        self.limit = Some(Limit { max_pages: bytes / memory::PAGE, base: current.base, pages: 0, failed: false });
+        Ok(())
+    }
+    pub const fn new() -> Self {
+        Self {
+            end: None,
+            limit: None,
+        }
+    }
+}
+impl Default for Window {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 /// Asks for `pages` in calls the kernel accepts. Returns the run's memory after the
 /// last call that succeeded, or None if not one did.
@@ -55,20 +98,66 @@ fn ask(pages: u64) -> Option<memory::Memory> {
     last
 }
 
+#[derive(Debug)]
+struct Limit { max_pages: u64, base: u64, pages: u64, failed: bool }
+impl Limit {
+    fn ask(&mut self, pages: u64) -> Option<memory::Memory> {
+        if self.failed { return None; }
+        let before = match memory::grow(0) { Ok(m) => m, Err(_) => { self.failed = true; return None; } };
+        // Anchor every later query to the original run's base AND owned range.
+        // A malformed response cannot recover through fallback into another span.
+        if before.base != self.base || before.pages != self.pages || before.pages > self.max_pages {
+            self.failed = true; return None;
+        }
+        if self.pages.checked_add(pages)? > self.max_pages { return None; }
+        let mut left = pages;
+        let mut last = None;
+        while left > 0 {
+            let n = left.min(memory::MAX_PAGES_PER_CALL);
+            let got = match memory::grow(n) { Ok(m) => m, Err(_) => break };
+            let next = self.pages.checked_add(n)?;
+            if got.base != self.base || got.pages != next || next > self.max_pages
+                || got.base.checked_add(got.pages.checked_mul(memory::PAGE)?).is_none() {
+                self.failed = true; return None;
+            }
+            // Count every valid accepted chunk, including a partial large ask.
+            self.pages = next; last = Some(got); left -= n;
+        }
+        last
+    }
+}
+
 // The source never allocates, so it never re-enters the heap it feeds.
 unsafe impl talc::source::Source for Window {
     fn acquire<B: Binning>(talc: &mut Talc<Self, B>, layout: Layout) -> Result<(), ()> {
         // Room for the block, its alignment, and talc's own bookkeeping.
-        let bytes = layout.size().checked_add(layout.align()).and_then(|b| b.checked_add(1024)).ok_or(())? as u64;
+        let bytes = layout
+            .size()
+            .checked_add(layout.align())
+            .and_then(|b| b.checked_add(1024))
+            .ok_or(())? as u64;
         let need = bytes.div_ceil(memory::PAGE);
         // A big step first; near the window's end, exactly what this one needs.
-        let got = ask(need.max(STEP_PAGES)).or_else(|| ask(need)).ok_or(())?;
-        let end = got.end() as *mut u8;
+        let got = match talc.source.limit.as_mut() {
+            Some(limit) => limit.ask(need.max(STEP_PAGES)).or_else(|| limit.ask(need)),
+            None => ask(need.max(STEP_PAGES)).or_else(|| ask(need)),
+        }.ok_or(())?;
+        let end = got
+            .base
+            .checked_add(got.pages.checked_mul(memory::PAGE).ok_or(())?)
+            .ok_or(())? as *mut u8;
         match talc.source.end.take() {
             Some(old) => talc.source.end = Some(unsafe { talc.extend(old, end) }),
-            None => talc.source.end = unsafe { talc.claim(got.base as *mut u8, (got.end() - got.base) as usize) },
+            None => {
+                talc.source.end =
+                    unsafe { talc.claim(got.base as *mut u8, (got.end() - got.base) as usize) }
+            }
         }
-        if talc.source.end.is_some() { Ok(()) } else { Err(()) }
+        if talc.source.end.is_some() {
+            Ok(())
+        } else {
+            Err(())
+        }
     }
 }
 
@@ -80,5 +169,14 @@ static HEAP: Heap = Heap::new(Window::new());
 
 /// The heap's pages so far, in bytes.
 pub fn held() -> usize {
-    memory::grow(0).map(|m| (m.pages * memory::PAGE) as usize).unwrap_or(0)
+    memory::grow(0)
+        .map(|m| (m.pages * memory::PAGE) as usize)
+        .unwrap_or(0)
+}
+
+/// Explicit heap-only limit, set before the first Rust or C allocation. The
+/// allocator lock serializes configuration with all growth and partial results.
+#[cfg(feature = "heap")]
+pub fn set_limit(bytes: usize) -> Result<(), LimitError> {
+    HEAP.lock().source.set_limit(bytes)
 }
