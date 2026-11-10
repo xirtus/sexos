@@ -12,6 +12,7 @@ mod app_catalog;
 #[path="../crates/sex-pdx/src/desktop_style.rs"]pub mod desktop_style;
 use silkbar_model::{SilkBar,ModuleSlot,DEFAULT_THEME,DEFAULT_SILK_BAR,UpdateKind,SilkBarUpdate};
 use silkbar_model::civil_clock::{Applied,CivilClock,Reject,State,Update,HEALTH_TICKS,STAGNANT_TURNS};
+#[path="../servers/sexdisplay/src/glyphs.rs"]mod glyphs;
 include!(env!("SILKBAR_CIVIL_DISPLAY"));
 const OWNER:(u32,u32)=(6,6);
 const MIN:u32=clock_source::MIN_SECONDS as u32;const MAX:u32=clock_source::MAX_SECONDS as u32;
@@ -124,10 +125,10 @@ fn text(line:&[u8])->&str{core::str::from_utf8(line).unwrap().trim_end()}
   for y in cy.saturating_sub(1)..cy+ch+1{for x in cx.saturating_sub(1)..cx+cw+1{
    let mut expected=None;
    for row in 0..2{let yy=cy+if row==0{1}else{11};if x>=cx&&x<cx+78&&y>=yy&&y<yy+7{
-    let col=(x-cx)/6;let px=(x-cx)%6;let glyph=(lines[row][col]-32)as usize;
-    if px<5&&(FONT_ASCII_5X7[glyph][y-yy]>>(4-px))&1!=0{expected=Some(DEFAULT_THEME.text);}
+    let col=(x-cx)/6;let px=(x-cx)%6;
+    if px<5{let alpha=glyphs::ui_cell(lines[row][col] as u32,5,7).unwrap()[(y-yy)*5+px];if alpha!=0{expected=Some(coverage_blend(DEFAULT_THEME.text,0,alpha));}}
    }}
-   assert_eq!(clock_fg_at(x,y,&bar,&lines),expected,"width{width} state{state:?} x{x} y{y}");
+   assert_eq!(clock_fg_at(x,y,&bar,&lines,0),expected,"width{width} state{state:?} x{x} y{y}");
   }}
  }}
 }

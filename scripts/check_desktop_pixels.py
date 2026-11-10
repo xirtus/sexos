@@ -91,16 +91,29 @@ def cell_errors(pixels,width,x0,y0,char,scale,color,font,clip=None):
     pixels a pane cuts off."""
     inside=lambda x,y:clip is None or (x<clip[0] and y<clip[1])
     mismatch=ink=0
-    if scale>=2 and (char==' ' or 32<=ord(char)<=126):
+    if scale>=1 and (char==' ' or 32<=ord(char)<=126):
         import geist_cells
         w,h=6*scale,9*scale
         cell=geist_cells.cells(w,h)[ord(char)-32]
+        # Compact Geist cells may have no fully opaque pixel. Their background
+        # is the uniform native canvas/selection, observed from zero-coverage
+        # pixels; compare every antialiased pixel instead of accepting no ink.
+        background=None
+        if scale==1:
+            from collections import Counter
+            empty=[bytes(pixels[((y0+i//w)*width+x0+i%w)*3:((y0+i//w)*width+x0+i%w)*3+3])for i,a in enumerate(cell)if a==0 and inside(x0+i%w,y0+i//w)]
+            if not empty:return 1,0
+            background=Counter(empty).most_common(1)[0][0]
         for i,a in enumerate(cell):
-            if 0<a<255:continue
+            if scale!=1 and 0<a<255:continue
             x=x0+i%w;y=y0+i//w
             if not inside(x,y):continue
-            actual=pixels[(y*width+x)*3:(y*width+x)*3+3]==color
-            mismatch+=actual!=(a==255);ink+=a==255
+            actual=pixels[(y*width+x)*3:(y*width+x)*3+3]
+            if scale==1:
+                expected=bytes((fg*a+bg*(255-a))//255 for fg,bg in zip(color,background))
+                mismatch+=actual!=expected;ink+=a>0 and actual!=background
+            else:
+                mismatch+=(actual==color)!=(a==255);ink+=a==255
         return mismatch,ink
     bitmap=glyph(font,char) if char!=' ' else (0,)*7
     for gy,bits in enumerate(bitmap):
@@ -120,9 +133,16 @@ def draw_cell(pixels,width,x0,y0,char,scale,color,font,clip=None):
     or the scaled 5x7 font), the shape cell_errors expects. `clip` (x0, y0, x1, y1)."""
     def put(x,y):
         if clip is None or (clip[0]<=x<clip[2] and clip[1]<=y<clip[3]):pixels[(y*width+x)*3:(y*width+x)*3+3]=color
-    if scale>=2 and 32<=ord(char)<=126:
+    if scale>=1 and 32<=ord(char)<=126:
         import geist_cells
-        for gx,gy in geist_cells.solid(char,6*scale,9*scale):put(x0+gx,y0+gy)
+        if scale==1:
+            for i,a in enumerate(geist_cells.cells(6,9)[ord(char)-32]):
+                x=x0+i%6;y=y0+i//6
+                if clip is not None and not(clip[0]<=x<clip[2] and clip[1]<=y<clip[3]):continue
+                at=(y*width+x)*3;back=pixels[at:at+3]
+                pixels[at:at+3]=bytes((fg*a+bg*(255-a))//255 for fg,bg in zip(color,back))
+        else:
+            for gx,gy in geist_cells.solid(char,6*scale,9*scale):put(x0+gx,y0+gy)
         return
     for gy,bits in enumerate(glyph(font,char) if char!=' ' else (0,)*7):
         for gx in range(5):

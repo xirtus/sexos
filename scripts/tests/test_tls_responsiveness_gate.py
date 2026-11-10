@@ -34,6 +34,11 @@ def metadata():
 
 def clock_fixture(contract,width=1280,stamp=(10,42,7)):
  d=contract['clock']['dimensions'];x=d['CHIP_X3']-max(0,d['CHIP_X3']+d['CLOCK_W']+16-width);y=d['CHIP_Y'];height=800 if width==1280 else 768;raw=bytearray(width*height*3);color=contract['clock']['color'].to_bytes(3,'big')
+ if contract['clock'].get('font_profile')=='geist-sans-cells-v1':
+  chip=gate.demo_clock_pixels(contract['clock'],stamp)
+  for yy in range(7):
+   at=((y+1+yy)*width+x)*3;raw[at:at+76*3]=chip[yy*76*3:(yy+1)*76*3]
+  trace=f'[sexdisplay.clock.presentation] label=DEMO wall_time=0 x={x} y={y} w=80 h=22 digits=30 width={width}\n';return trace,f'P6\n{width} {height}\n255\n'.encode()+raw,(width,height)
  def put(xx,yy):at=((y+1+yy)*width+x+xx)*3;raw[at:at+3]=color
  for col,ch in enumerate('DEMO '):
   for yy,bits in enumerate(gate.glyph(contract['font'],ch)):

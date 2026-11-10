@@ -35,6 +35,9 @@ LOG='''[linen.list.text] x=640 y=50 w=640 h=670 scale=2 text_color=0xf0f8ff rows
 def draw(pixels,width,x0,y0,char,scale,color):
     """One cell as Display draws it: Geist Mono at scale 2 and up (fully covered pixels
     only), else the 5x7 font scaled; non-ASCII always the 5x7 font."""
+    if scale==1 and 32<=ord(char)<=126:
+        checker.draw_cell(pixels,width,x0,y0,char,scale,color,FONT)
+        return
     if scale>=2 and 32<=ord(char)<=126:
         import geist_cells
         for gx,gy in geist_cells.solid(char,6*scale,9*scale):

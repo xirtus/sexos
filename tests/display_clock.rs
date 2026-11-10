@@ -6,6 +6,7 @@ mod app_catalog;
 extern crate self as sex_pdx;
 #[path="../crates/sex-pdx/src/desktop_style.rs"]pub mod desktop_style;
 use silkbar_model::{SilkBar,ModuleSlot,DEFAULT_THEME,Action};
+#[path="../servers/sexdisplay/src/glyphs.rs"]mod glyphs;
 include!(env!("DISPLAY_CLOCK_PRODUCTION"));
 const LABEL:[[u8;7];4]=[
     [30,17,17,17,17,17,30], // D
@@ -15,22 +16,23 @@ const LABEL:[[u8;7];4]=[
 ];
 #[test]fn full_demo_prefix_is_visible_at_both_actual_widths(){
  for width in [1024,1280]{let bar=silkbar_model::for_desktop_width(width).unwrap();let(cx,cy,_,_)=module_rect(&bar,ModuleSlot::Clock);
-  for y in 0..7{for x in 0..30{let cell=x/6;let px=x%6;let expected=cell<4&&px<5&&(LABEL[cell][y]>>(4-px))&1!=0;
-   assert_eq!(clock_fg_at(cx+x,cy+1+y,&bar,&civil_clock_lines(&bar.civil_clock)),expected.then_some(DEFAULT_THEME.text),"width={width} x={x} y={y}");}}
+  for y in 0..7{for x in 0..30{let cell=x/6;let px=x%6;let alpha=if cell<5&&px<5{glyphs::ui_cell(b"DEMO "[cell] as u32,5,7).unwrap()[y*5+px]}else{0};
+   assert_eq!(clock_fg_at(cx+x,cy+1+y,&bar,&civil_clock_lines(&bar.civil_clock),0),(alpha!=0).then(||coverage_blend(DEFAULT_THEME.text,0,alpha)),"width={width} x={x} y={y}");}}
  }
 }
 #[test]fn whole_clock_stays_inside_chip_and_prefix_survives_counter_updates(){
  for width in [1024,1280]{let mut bar=silkbar_model::for_desktop_width(width).unwrap();let(cx,cy,cw,ch)=module_rect(&bar,ModuleSlot::Clock);assert!(cx+cw<=width&&cw>=76&&ch>=8);
   for value in [0,(23<<16)|(59<<8)|58]{bar.clock_hh=(value>>16)as u8;bar.clock_mm=(value>>8)as u8;bar.clock_ss=value as u8;
-   for y in cy..cy+ch{for x in cx..cx+cw{if y==cy||y>=cy+8||x>=cx+76{assert_eq!(clock_fg_at(x,y,&bar,&civil_clock_lines(&bar.civil_clock)),None);}}}
-   assert!(clock_fg_at(cx,cy+1,&bar,&civil_clock_lines(&bar.civil_clock)).is_some());assert!(clock_fg_at(cx+31,cy+1,&bar,&civil_clock_lines(&bar.civil_clock)).is_some());
+   for y in cy..cy+ch{for x in cx..cx+cw{if y==cy||y>=cy+8||x>=cx+76{assert_eq!(clock_fg_at(x,y,&bar,&civil_clock_lines(&bar.civil_clock),0),None);}}}
+   assert!((0..30).any(|dx|(0..7).any(|dy|clock_fg_at(cx+dx,cy+1+dy,&bar,&civil_clock_lines(&bar.civil_clock),0).is_some())));
   }
  }
 }
 #[test]fn fitted_clock_and_all_status_hit_regions_share_display_geometry(){
  for(width,expected_x)in[(1024,928),(1280,1090)]{let bar=silkbar_model::for_desktop_width(width).unwrap();let(cx,cy,_,_)=module_rect(&bar,ModuleSlot::Clock);assert_eq!(cx,expected_x);assert!(silkbar_model::hit_test_action(&bar,cx+40,cy+10)==Action::OpenClock);
-  for b in &bar.layout[6..]{assert!(b.x+b.w<=width);assert!(silkbar_model::hit_test_action(&bar,b.x,b.y)!=Action::None);}
-  let left_end=bar.layout[..6].iter().map(|b|b.x+b.w).max().unwrap();assert!(left_end+16<=bar.layout[6].x);
+  let status_start=1+silkbar_model::WORKSPACE_COUNT;
+  for b in &bar.layout[status_start..]{assert!(b.x+b.w<=width);assert!(silkbar_model::hit_test_action(&bar,b.x,b.y)!=Action::None);}
+  let left_end=bar.layout[..status_start].iter().map(|b|b.x+b.w).max().unwrap();assert!(left_end+16<=bar.layout[status_start].x);
   if width==1024{assert!(silkbar_model::hit_test_action(&bar,1095,cy+10)!=Action::OpenClock);}
  }
 }

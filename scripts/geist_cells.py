@@ -6,14 +6,15 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 W,H=12,18
 _cells={}
-def cells(w=W,h=H):
+def cells(w=W,h=H,font="mono",root=ROOT):
  """Cells for a w x h grid: Display's text scale s draws 6s x 9s cells."""
- if (w,h) not in _cells:
-  out=subprocess.run(['cargo','run','-q','--manifest-path',str(ROOT/'Cargo.toml'),'-p','sex-font','--example','cells','--',str(w),str(h)],check=True,capture_output=True,text=True).stdout
+ root=Path(root).resolve()
+ if (w,h,font,root) not in _cells:
+  out=subprocess.run(['cargo','run','-q','--manifest-path',str(root/'Cargo.toml'),'-p','sex-font','--example','cells','--',str(w),str(h),font],check=True,capture_output=True,text=True).stdout
   got=[bytes(map(int,row.split(','))) for row in out.split()]
   assert len(got)==95 and all(len(c)==w*h for c in got)
-  _cells[(w,h)]=got
- return _cells[(w,h)]
+  _cells[(w,h,font,root)]=got
+ return _cells[(w,h,font,root)]
 def solid(ch,w=W,h=H):
  """Pixels of `ch` with full coverage, as (dx, dy) from the cell's top left."""
  c=cells(w,h)[ord(ch)-32] if 32<=ord(ch)<=126 else bytes(w*h)

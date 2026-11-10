@@ -40,6 +40,14 @@ pub fn mono_cell(scalar: u32, w: usize, h: usize) -> Option<&'static [u8]> {
     cache().get(key, |out| mono().is_some_and(|font| sex_font::draw_cell(font, scalar, w, h, acc(), out)))
 }
 
+/// Geist Sans for fixed-position panel labels, sharing the bounded glyph cache.
+/// Size 0 keys are cell-fitted, distinct from proportional title keys.
+pub fn ui_cell(scalar: u32, w: usize, h: usize) -> Option<&'static [u8]> {
+    if w == 0 || h == 0 || w > MAX_W || h > MAX_H || scalar == 9 || scalar == 10 { return None; }
+    let key = Key { font: SANS, scalar, size: 0, phase: 0, w: w as u8, h: h as u8 };
+    cache().get(key, |out| sans().is_some_and(|font| sex_font::draw_cell(font, scalar, w, h, acc(), out)))
+}
+
 /// Window titles: Geist Sans at 17 px on an 18-pixel line, baseline 14 px down.
 pub const TITLE_SIZE: u32 = 17 * 64;
 pub const TITLE_H: usize = 18;

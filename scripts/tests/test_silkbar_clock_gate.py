@@ -36,6 +36,11 @@ def image(c,state='Snapshot',width=1280,seconds=T,stale=False):
  elif c['caption_profile']=='date-caption-v1':
   first,second={'Unknown':('UTC stale','Sample stale')if stale else('UTC unknown','Awaiting UTC'),'Unavailable':('UTC unknown','Source error'),'Rollback':('UTC blocked','Time blocked'),'Exhausted':('UTC ended','Updates ended')}[state]
  else:first,second={'Unknown':('UTC stale','q35 1s old')if stale else('UTC unknown','src? prec?'),'Unavailable':('UTC unknown','q35 1s fail'),'Rollback':('UTC blocked','q35 1s stop'),'Exhausted':('UTC ended','src? prec?')}[state]
+ if c.get('font_profile')=='geist-sans-cells-v1':
+  chip=gate.clock_cell_pixels(c,(first,second))
+  for yy in range(22):
+   at=((18+yy)*width+x)*3;raw[at:at+80*3]=chip[yy*80*3:(yy+1)*80*3]
+  return f'P6\n{width} {h}\n255\n'.encode()+raw
  for row,text in enumerate((first,second)):
   for col,ch in enumerate(text):
    for gy,bits in enumerate(glyph(c['font'],ch)):
