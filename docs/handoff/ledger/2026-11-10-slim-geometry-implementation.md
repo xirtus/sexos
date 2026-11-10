@@ -48,9 +48,11 @@ the 136px clock interior without shrinking Geist.
 
 The fixed Sans/Mono cache stays 2 MiB with the existing bounded scratch/slots. UI
 font size, baseline and overhang padding scale together. The bar backing bound grows
-50->84 rows for 3x: two 2560-wide legacy scratch arrays add 696,320 static bytes; owned
-scene rows add 136 bytes, plus small fixed metric/notice fields. BOOT/service slot
-headroom and actual rendering/cache work must be measured before acceptance. No new
+50->84 rows for 3x: two declared 2560-wide legacy scratch arrays have a conservative
+additional bound of 696,320 bytes; owned scene rows add 136 bytes, plus small fixed
+metric/notice fields. Linked resident cost must be measured separately because
+unused compatibility paths can be eliminated. BOOT/service slot headroom and
+actual rendering/cache work must be measured before acceptance. No new
 blur pass, animation timer, per-pixel allocation or kernel code is introduced.
 
 Geometry diagnostics are emitted only after a completed full CPU publication and
@@ -186,3 +188,22 @@ Window-manager gap checks likewise use the published bar plus the unchanged 8px
 logical gap instead of an obsolete 50px bar constant. Final current-head host/CI
 and matched fresh-baseline isolated performance checks remain required. Whole-panel
 rounding and natural Sans app-body labels remain the next separate topic.
+
+Matched fresh master 3e075b59 section measurements use the same compiler/profile:
+Display text/data/BSS totals 4,370,009→4,382,505 bytes (+12,496); Shell totals
+1,031,605→1,039,805 (+8,200); SilkBar remains 48,733. `llvm-nm --print-size` finds
+neither legacy `BAR_BG_BUF` nor `BAR_BLUR_BUF` in the linked Display image, so the
+conservative declaration bound above is not a measured resident-memory increase.
+The bounded font cache remains 0x206018 bytes including metadata. Current-source
+BOOT, scale transitions and native capture all succeeded within the service layout.
+These size results are not rendering-latency evidence.
+
+The remaining native floating-window driver now selects its drag point inside the
+actual published titlebar, instead of y=64 (which is outside the new 26px title).
+The full launcher workflow's no-ghost, held pane reconstruction and erasure helpers
+likewise use complete published chrome metrics, retaining explicit archived defaults
+when absent. Erasure samples source-selected fully covered Geist glyph pixels rather
+than a ROM signature, retaining the minimum 100 checked pixels per line and known
+Linen-overlap exclusion. All 30 launcher adverse controls pass, including retained
+ink at an independent literal 34px current body origin. Actual pointer/native
+qualification of these drivers remains pending at this checkpoint.

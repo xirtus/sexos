@@ -12,7 +12,7 @@ from desktop_close_gate import QMP
 from network_contention_gate import frozen_binding,cleanup_receipts,MAX_PCAP,syn_records
 from check_launcher_pixels import verify as launcher_pixels,layout as launcher_layout
 from check_spindle_viewport_pixels import verify as spindle_pixels
-from check_desktop_pixels import font_from_source,glyph
+from check_desktop_pixels import font_from_source,cell_coverage,chrome_geometry
 from check_disk_persistence import ppm_rgb
 from check_tcp_capture import inspect as tcp_capture
 from check_nonunix_target import inspect as target_check
@@ -155,7 +155,8 @@ def lifecycle_joins(trace,start=0):
 def no_ghost(trace,image,contract,resolution):
  width,height,pixels=ppm_rgb(image,min_width=1,min_height=1)
  if (width,height)!=tuple(resolution):raise ValueError('wrong actual framebuffer resolution')
- x,y,w,h=contract['grid'];left,top=max(0,x),max(50,y);right,bottom=min(width,x+w),min(height,y+h)
+ metrics=chrome_geometry(trace);inset,body_top,bar=(metrics[k]for k in('inset','body_top','bar'))
+ x,y,w,h=contract['grid'];left,top=max(0,x),max(bar,y);right,bottom=min(width,x+w),min(height,y+h)
  if right<=left or bottom<=top:raise ValueError('no clipped pre-parent footprint to inspect')
  color=contract['foreground'].to_bytes(3,'big');ink=sum(pixels[(py*width+px)*3:(py*width+px)*3+3]==color for py in range(top,bottom)for px in range(left,right))
  if ink:raise ValueError('Spindle pre-parent glyph/sliver ink remains')
@@ -165,8 +166,8 @@ def no_ghost(trace,image,contract,resolution):
  browser=[r for _,r in rows(trace,'shell.tile.apply')if r.get('sid')=='300'and all(k in r for k in ('x','y','w','h'))]
  if not browser:raise ValueError('no actual Browser tile for opaque ghost check')
  bx,by,bw,bh=(int(browser[-1][k],0)for k in ('x','y','w','h'))
- a,b,c,d=max(left,bx+8),max(top,by+36),min(right,bx+bw-8),min(bottom,by+bh-8)
- if not 0<=bx<bx+bw<=width or not 50<=by<by+bh<=height or c<=a or d<=b:raise ValueError('no valid Browser body/legacy-grid intersection')
+ a,b,c,d=max(left,bx+inset),max(top,by+body_top),min(right,bx+bw-inset),min(bottom,by+bh-inset)
+ if not 0<=bx<bx+bw<=width or not bar<=by<by+bh<=height or c<=a or d<=b:raise ValueError('no valid Browser body/legacy-grid intersection')
  canvas=contract['canvas'].to_bytes(3,'big');opaque=sum(pixels[(py*width+px)*3:(py*width+px)*3+3]==canvas for py in range(b,d)for px in range(a,c))
  if opaque:raise ValueError('opaque Spindle canvas remains over Browser body')
  return dict(checked_pixels=(right-left)*(bottom-top),forbidden_ink=ink,canvas_checked_pixels=(c-a)*(d-b),forbidden_canvas=opaque,clipped_legacy_footprint=[left,top,right-left,bottom-top],browser_body_intersection=[a,b,c-a,d-b])
@@ -177,7 +178,8 @@ def spindle_geometry(trace,target):
  current=m[-1];task,sequence,w,h=map(int,current.groups()[:4]);sid=TARGETS[target]['panes'][0]
  views=re.findall(rf'\[shell.app.viewport\] target={target} sid={sid} x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)',trace)
  if not views:raise ValueError('no exact parent-fitted first pane')
- x,y,_,_=map(int,views[-1]);return dict(task=task,sequence=sequence,x=x-8,y=y-36,w=w,h=h)
+ metrics=chrome_geometry(trace)
+ x,y,_,_=map(int,views[-1]);return dict(task=task,sequence=sequence,x=x-metrics['inset'],y=y-metrics['body_top'],w=w,h=h)
 
 def frame_action(trace,frame):
  target=frame['target'];phase=frame['name'].rsplit('-',1)[-1]
@@ -222,31 +224,32 @@ def launcher_erased(trace,image,contract,resolution):
  if not any(p>layout_pos for p,_ in rows(trace,'command_palette.close')):raise ValueError('post-action frame lacks actual latest launcher close')
  linen=rows(trace,'linen.list.text')
  if not linen:raise ValueError('unknown same-color Linen overlap')
- item=linen[-1][1]
+ item=linen[-1][1];metrics=chrome_geometry(trace);inset,body_top=(metrics[k]for k in('inset','body_top'))
  try:
   x,y,w,h,scale,count=(int(item[k])for k in ('x','y','w','h','scale','rows'))
-  if scale not in (1,2)or not 1<=count<=5 or w<=16 or h<=44 or int(item['text_color'],0)!=contract['launcher_foreground']:raise ValueError('invalid Linen text overlap')
+  if scale not in (1,2,3,4,6)or not 1<=count<=5 or w<=2*inset or h<=body_top+inset or int(item['text_color'],0)!=contract['launcher_foreground']:raise ValueError('invalid Linen text overlap')
  except(KeyError,TypeError)as exc:raise ValueError('incomplete Linen text overlap')from exc
  # Linen uses two heading lines and two lines/item; reserve all cells in
  # that actual text band conservatively, including its empty status lines.
- excluded=(x+8,y+36,x+w-8,min(y+h,y+36+(2+2*count)*9*scale))
+ excluded=(x+inset,y+body_top,x+w-inset,min(y+h,y+body_top+(2+2*count)*9*scale))
  width,height,pixels=ppm_rgb(image,min_width=1,min_height=1)
  if(width,height)!=tuple(resolution):raise ValueError('wrong launcher-erasure framebuffer')
  color=contract['launcher_foreground'].to_bytes(3,'big');checked=skipped=remaining=0;line_checks=[]
- columns=min(80,(view['w']-16)//(6*view['scale']));limit=min(columns,40)-1
+ columns=min(80,(view['w']-2*inset)//(6*view['scale']));limit=min(columns,40)-1
  if lines[0][1]!=contract['launcher_header']:raise ValueError('launcher header source differs')
  for row,line in lines:
   line_checked=line_skipped=line_remaining=0
   for col,char in enumerate(line[:limit]):
-   for gy,bits in enumerate(glyph(contract['font'],char)):
-    for gx in range(5):
-     if not bits&(1<<(4-gx)):continue
-     for dy in range(view['scale']):
-      for dx in range(view['scale']):
-       px=view['x']+8+(col*6+gx)*view['scale']+dx;py=view['y']+36+(row*9+gy)*view['scale']+dy
-       if not 0<=px<width or not 0<=py<height:raise ValueError('launcher erasure mask outside framebuffer')
-       if excluded[0]<=px<excluded[2]and excluded[1]<=py<excluded[3]:line_skipped+=1;continue
-       line_checked+=1;line_remaining+=pixels[(py*width+px)*3:(py*width+px)*3+3]==color
+   coverage=cell_coverage(contract['font'],char,view['scale'])
+   for at,alpha in enumerate(coverage):
+    # Fully covered source-selected glyph pixels have an exact foreground,
+    # independent of the prior canvas. Retain the original minimum coverage.
+    if alpha!=255:continue
+    gx,gy=at%(6*view['scale']),at//(6*view['scale'])
+    px=view['x']+inset+col*6*view['scale']+gx;py=view['y']+body_top+row*9*view['scale']+gy
+    if not 0<=px<width or not 0<=py<height:raise ValueError('launcher erasure mask outside framebuffer')
+    if excluded[0]<=px<excluded[2]and excluded[1]<=py<excluded[3]:line_skipped+=1;continue
+    line_checked+=1;line_remaining+=pixels[(py*width+px)*3:(py*width+px)*3+3]==color
   if line_checked<100:raise ValueError(f'insufficient unambiguous launcher erasure coverage: line={row}')
   checked+=line_checked;skipped+=line_skipped;remaining+=line_remaining
   line_checks.append(dict(row=row,checked_ink_pixels=line_checked,linen_overlap_skipped=line_skipped,remaining_ink=line_remaining))
