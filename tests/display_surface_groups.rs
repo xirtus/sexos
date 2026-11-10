@@ -57,16 +57,15 @@ include!("fixtures/compositor_reference.rs");
   let mut s=Surface{x:0,y:50,w:width,h:100,text_len:1,text_color:0xfedcba,..surf(9,156)};
   s.text_buf[0]=byte;if selected{s.selection_end=1;}recompute_text_lines(&mut s);
   let scale=surface_text_scale(&s);
-  // Full size draws Geist Mono's coverage over the surface colour; small size and
-  // letters Geist lacks keep the 5x7 font.
+  // Every grid scale uses Geist Mono coverage; only unavailable glyphs fall back.
   let scalar=sex_pdx::text_encoding::cell(&s.text_buf[..1],0).map(|c|c.0);
-  let geist=if scale==2{scalar.and_then(|c|glyphs::mono_cell(c,12,18))}else{None};
+  let geist=scalar.and_then(|c|glyphs::mono_cell(c,6*scale,9*scale));
   for y in 0..9*scale {for x in 0..6*scale {
    let rows=if (32..=126).contains(&byte){FONT_ASCII_5X7[(byte-32)as usize]}else if byte==9{[0;7]}else{[31,17,21,21,21,17,31]};
    let ink=x/scale<5&&y/scale<7&&rows[y/scale]&(1<<(4-x/scale))!=0;
    let back=if selected{Some(0xff36577c)}else{None};
    let expected=if byte==b'\n'{None}else if let Some(cell)=geist{
-    let a=cell[y*12+x];if a==0{back}else{Some(coverage_blend(0xfedcba,back.unwrap_or(s.color),a))}
+    let a=cell[y*6*scale+x];if a==0{back}else{Some(coverage_blend(0xfedcba,back.unwrap_or(s.color),a))}
    }else if ink{Some(0xfedcba)}else{back};
    assert_eq!(surface_text_fg_at(8+x,62+y,&s),expected,"w={width} byte={byte} selected={selected} x={x} y={y}");
   }}
@@ -216,11 +215,10 @@ unsafe fn legacy_reference_pixel(x:usize,y:usize,w:usize,h:usize,focus:u64)->u32
  }}}}
 }}
 fn cat(pd:u32)->Catalog{Catalog{slot:pd as usize,target_pd:pd,task_id:pd,surface_id:if pd==9{156}else{154},coordinator_pd:3}}
-/// Full-size text is Geist Mono where Geist has the letter: its coverage over `back`.
+/// Every text scale uses Geist Mono where available: its coverage over `back`.
 /// None means the 5x7 font applies.
 fn geist_pixel(scalar:u32,scale:usize,x:usize,y:usize,text:u32,back:u32)->Option<u32>{
- if scale!=2{return None}
- let cell=glyphs::mono_cell(scalar,12,18)?;let a=cell[y*12+x];
+ let cell=glyphs::mono_cell(scalar,6*scale,9*scale)?;let a=cell[y*6*scale+x];
  Some(if a==0{back}else{coverage_blend(text,back,a)})
 }
 /// A pixel Geist covers fully in 'A', relative to its cell: drawn exactly in the text colour.
@@ -498,8 +496,8 @@ fn normal_app_indicator_uses_actual_focus_and_clears_with_it(){unsafe{
 fn repaint_begin()->u64{0}
 fn repaint_end(_kind:&str,_started:u64){}
 const TEST_CLOCK_LINES:[[u8;13];2]=[[b'C';13],[b'D';13]];
-fn clock_fg_at(x:usize,y:usize,_:&SilkBar,lines:&[[u8;13];2])->Option<u32>{assert_eq!(*lines,TEST_CLOCK_LINES);(x==0&&y==0).then_some(1)}
-fn bell_badge_at(x:usize,y:usize,_:&SilkBar)->Option<u32>{(x==1&&y==0).then_some(2)}
+fn clock_fg_at(x:usize,y:usize,_:&SilkBar,lines:&[[u8;13];2],_:u32)->Option<u32>{assert_eq!(*lines,TEST_CLOCK_LINES);(x==0&&y==0).then_some(1)}
+fn bell_badge_at(x:usize,y:usize,_:&SilkBar,_:u32)->Option<u32>{(x==1&&y==0).then_some(2)}
 fn phase5_tint_swatch_at(x:usize,y:usize,_:&SilkBar)->Option<u32>{(x==2&&y==0).then_some(3)}
 fn phase5_palette_dot_at(x:usize,y:usize,_:&SilkBar)->Option<u32>{(x==3&&y==0).then_some(4)}
 fn bar_color(_:usize,_:usize,_:&SilkBar,_:&scene::SceneSnapshot)->u32{9}
@@ -594,7 +592,7 @@ unsafe fn span_text_fill(index:usize) {
  for row in[0,1]{for col in[0,1]{assert_eq!(surface_text_fg_at(tx+col*6*scale+5*scale,ty+row*9*scale+8*scale,&s),Some(0xff36577c));}}
  assert_eq!(surface_text_fg_at(tx+2*6*scale,ty,&s),None); // newline cell
  assert_eq!(surface_text_fg_at(tx+2*6*scale,ty+9*scale,&s),None); // past line end
- let mut ink=0;for y in ty..ty+7*scale{for x in tx..tx+5*scale{if surface_text_fg_at(x,y,&s)==Some(0xfffafafa){ink+=1;}}}assert!(ink>0);
+ let mut ink=0;for y in ty..ty+7*scale{for x in tx..tx+5*scale{if surface_text_fg_at(x,y,&s).is_some_and(|color|color!=0xff36577c){ink+=1;}}}assert!(ink>0);
  s.erase_selection();assert_eq!((s.selection_start,s.selection_end),(0,0));
  assert_eq!(surface_text_fg_at(tx+6*scale,ty,&s),None);
  // Legacy mutation also erases former selection so it cannot drift over bytes.
@@ -1074,7 +1072,9 @@ unsafe fn seal_pending_text(index:usize,task:u32,sequence:u32,text:&[u8],selecti
   TEXT_STAGES[0].reset();SURFACES[0]=SURFACE_EMPTY;
   assert_eq!(&snapshot.surfaces[0].text_buf[..text.len()],text);
   let after:Vec<_>=(70..190).flat_map(|y|(20..220).map(move|x|(x,y))).map(|(x,y)|composite_pixel(x,y,300,230,0xabcdef,focus,&snapshot)).collect();
-  assert_eq!(before,after);assert!(before.iter().any(|&pixel|pixel==0xfffafafa));
+  assert_eq!(before,after);
+  let alpha=*glyphs::mono_cell('é' as u32,6,9).unwrap().iter().find(|&&a|a>0).unwrap();
+  assert!(before.contains(&coverage_blend(0xfffafafa,0xff36577c,alpha)));
   snapshot.scrub();assert!(!snapshot.is_valid());assert!(snapshot.surfaces[0].text_buf.iter().all(|&byte|byte==0));
   if focus==0{SURFACES[0]=Surface{x:20,y:70,w:200,h:120,..surf(15,300)};seal_pending_text(0,150,7,text,(0,text.len()));}
  }
@@ -1162,7 +1162,10 @@ unsafe fn seal_pending_text(index:usize,task:u32,sequence:u32,text:&[u8],selecti
   let changed=pixels.iter().zip(&before).filter(|(a,b)|a!=b).count();assert!(changed>0);
   // A literal formerly occupied third row must erase on short/empty updates;
   // the replacement's rectangle alone cannot establish this result.
-  if old==b"AB\nCD\nEF"{assert!(before[100*w..109*w].iter().any(|&p|p==0xfffafafa));assert!(pixels[100*w..109*w].iter().all(|&p|p!=0xfffafafa));}
+  if old==b"AB\nCD\nEF"{
+   assert!((100..109).any(|y|(28..40).any(|x|before[y*w+x]!=canonical.color&&before[y*w+x]!=0xff36577c)));
+   assert!((100..109).all(|y|(28..40).all(|x|pixels[y*w+x]==canonical.color)));
+  }
   for y in 0..h{for x in 0..w{if x<required.x||x>=required.right||y<required.y||y>=required.bottom{assert_eq!(pixels[y*w+x],before[y*w+x]);}}}
   assert_eq!(SURFACES[0].text_buf,canonical.text_buf);assert_eq!(SURFACES[0].text_len,canonical.text_len);assert!(TEXT_STAGES[0].needs_publication());
  }}

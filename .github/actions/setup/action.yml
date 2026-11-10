@@ -21,7 +21,7 @@ runs:
     run: |
       # Skip man-page index rebuilds, the slowest part of apt on the runners.
       sudo rm -f /var/lib/man-db/auto-update
-      pkgs="ripgrep clang lld llvm nasm musl-dev cmake ninja-build meson acpica-tools mtools gdisk dosfstools"
+      pkgs="ripgrep clang lld llvm wabt nasm musl-dev cmake ninja-build meson acpica-tools mtools gdisk dosfstools"
       if [[ "${{ inputs.qemu }}" == true ]]; then pkgs="$pkgs xorriso qemu-system-x86"; fi
       sudo apt-get update -qq
       sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends $pkgs
