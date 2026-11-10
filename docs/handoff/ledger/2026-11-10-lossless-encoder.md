@@ -84,3 +84,12 @@ Review follow-up (after both native proofs above):
   result, requiring terminal failure across output, finish and frame calls.
 - Host round trip still passes after these review changes. Current guest round
   trip/CI must pass before this draft can merge.
+
+- Review-corrected native Play at clean `f82ccbe5` passed the complete round trip
+  on the same pinned ISO, using Play SHA-256
+  `377a3d2d409acaa24e19e44d23f1239f4bb7d600aee566f8b46d2f27c2fdddfc`.
+  Exact pixels, timestamps and recovered Matroska bytes match both earlier runs;
+  evidence: `sexos-evidence/recording-encoder-guest-f82/result.json`.
+- Required CI also executes the production Rust callback test against an explicitly
+  scripted C ABI and rejects a compiled mutant that drops sticky seek failure.
+  This boundary test complements, and does not replace, actual guest encoding.

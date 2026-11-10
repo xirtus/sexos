@@ -300,6 +300,7 @@ jobs:
       run: |
         rustc --edition=2021 --test tests/recording_output.rs -o "$RUNNER_TEMP/recording-output"
         "$RUNNER_TEMP/recording-output"
+        bash scripts/recording_callbacks_host_gate.sh
         rustc --edition=2021 -O -A dead_code -A unused_attributes scripts/sexfs_extract.rs -o "$RUNNER_TEMP/sexfs-extract"
         truncate -s 1G "$RUNNER_TEMP/recording-source.img"
         python3 scripts/recording_guest_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/recording-source.img" --extractor "$RUNNER_TEMP/sexfs-extract" --out "$RUNNER_TEMP/recording"
