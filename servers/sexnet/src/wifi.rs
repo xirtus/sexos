@@ -6,7 +6,7 @@
 //! Everything that can be checked without the chip lives in `sex_wifi`; this file
 //! only maps the lease, the DMA pool and the firmware pack onto its traits.
 use sex_pdx::{memory_region as m, pci_command as c};
-use sex_wifi::{bringup::Bringup, context, csr, devices, init::{self, Init}, pack::Pack, ucode::Firmware};
+use sex_wifi::{bringup::Bringup, context, csr, devices, ieee80211::Security, init::{self, Init}, pack::Pack, scan::{self, Scan}, ucode::Firmware};
 
 /// The chip's register window (BAR0 view).
 struct Mmio { base: u64, length: u64 }
@@ -60,6 +60,7 @@ pub struct Wifi {
     rf_id: u32,
     init: Option<Init>,
     last_init: Option<init::Step>,
+    scan: Option<Scan>,
     finished: bool,
 }
 
@@ -130,14 +131,15 @@ impl Wifi {
         }
         sex_pdx::serial_record!("[wifi.prepared] pool={} used={} rx_pages={} bus={:#x}",
             dma.length, bringup.layout.end, context::RX_BUFFERS, bus);
-        Some(Wifi { mmio, pool, bringup, last: csr::Step::Ready, file, pnvm, hw_rev, rf_id, init: None, last_init: None, finished: false })
+        Some(Wifi { mmio, pool, bringup, last: csr::Step::Ready, file, pnvm, hw_rev, rf_id, init: None, last_init: None, scan: None, finished: false })
     }
 
-    /// True until the chip is ready to scan or has failed.
+    /// True until the first scan has finished or the chip has failed.
     pub fn pending(&self) -> bool { !self.finished }
 
     pub fn advance(&mut self, now_ticks: u64) {
         if self.finished { return; }
+        if self.scan.is_some() { return self.advance_scan(now_ticks); }
         if self.init.is_some() { return self.advance_init(now_ticks); }
         let more = self.bringup.advance(&mut self.mmio, &mut self.pool, now_ticks * 1000);
         let step = self.bringup.boot.step;
@@ -182,8 +184,8 @@ impl Wifi {
             self.last_init = Some(i.step);
         }
         if more { return; }
-        self.finished = true;
         if i.step != init::Step::Ready {
+            self.finished = true;
             use csr::Registers;
             sex_pdx::serial_record!("[wifi.failed] step=init reason={:?} commands={} answered={} int={:#x} gp_cntrl={:#x}",
                 i.step, i.cmdq.sent, i.answered, self.mmio.read(csr::INT), self.mmio.read(csr::GP_CNTRL));
@@ -197,5 +199,33 @@ impl Wifi {
         let (mcc, channels) = i.regulatory.map_or(([b'-'; 2], n.channels as u32), |r| (r.mcc, r.channels));
         sex_pdx::serial_record!("[wifi.ready] mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} country={}{} channels={} commands={} ticks={}",
             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], mcc[0] as char, mcc[1] as char, channels, i.cmdq.sent, now_ticks);
+        // Stage W4: look for networks straight away.
+        let sc = i.scan(now_ticks * 1000);
+        sex_pdx::serial_record!("[wifi.scan.start] channels={} ticks={}", sc.channels, now_ticks);
+        self.scan = Some(sc);
+    }
+
+    /// Stage W4: one passive scan of every allowed channel, then the networks found.
+    fn advance_scan(&mut self, now_ticks: u64) {
+        let (Some(sc), Some(i)) = (self.scan.as_mut(), self.init.as_mut()) else { return };
+        if sc.advance(&mut self.bringup, &mut i.cmdq, &mut self.mmio, &mut self.pool, now_ticks * 1000) { return; }
+        self.finished = true;
+        if sc.step != scan::Step::Done {
+            sex_pdx::serial_record!("[wifi.failed] step=scan reason={:?} frames={} networks={}", sc.step, sc.frames, sc.count);
+            return;
+        }
+        for n in sc.networks() {
+            let b = &n.bss;
+            let ssid = core::str::from_utf8(b.ssid()).unwrap_or("?");
+            let security = match b.security {
+                Security::Open => "open", Security::Wpa2Personal => "wpa2", Security::Wpa3Personal => "wpa3",
+                Security::Wpa3Transition => "wpa2/wpa3", Security::Unsupported => "unsupported",
+            };
+            sex_pdx::serial_record!("[wifi.network] ssid=\"{}\" bssid={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} channel={} rssi={} security={} beacons={}",
+                ssid, b.bssid[0], b.bssid[1], b.bssid[2], b.bssid[3], b.bssid[4], b.bssid[5],
+                if b.channel != 0 { b.channel } else { n.heard_on }, n.rssi, security, n.frames);
+        }
+        sex_pdx::serial_record!("[wifi.scan.done] networks={} frames={} dropped={} channels={} ticks={}",
+            sc.count, sc.frames, sc.dropped, sc.channels, now_ticks);
     }
 }

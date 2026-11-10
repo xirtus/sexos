@@ -3653,3 +3653,15 @@ Details: `docs/handoff/BOOT_LOG_AND_CRASH_RECORDS_2026_11_09.md`.
   against a firmware model, its failure paths, and the real x17 firmware and `.pnvm`.
   Real proof is the x17 R1 boot log.
 - **ABI / kernel:** none.
+
+## Intel Wi-Fi, stage W4: finding networks (2026-11-10)
+
+- **Scan:** `sex_wifi::scan` sends one passive UMAC scan of every channel the NVM and
+  regulatory domain allow, reads beacons and probe responses from RX MPDU notifications,
+  and keeps each network once at its strongest signal.
+- **Boot log:** sexnet scans right after `[wifi.ready]` and prints `[wifi.network]
+  ssid=… bssid=… channel=… rssi=… security=…` per network, then `[wifi.scan.done]`.
+- **Evidence:** `scripts/wifi_host_gate.sh` (30 driver + 10 vector tests): the request
+  bytes, MPDU parsing on both families, a full scan on the firmware model. Real proof is
+  the x17 R1 boot log.
+- **ABI / kernel:** none. Still to come: the list in the status bar and Spindle (W4b).
