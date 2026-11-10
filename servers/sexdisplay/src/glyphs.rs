@@ -47,7 +47,8 @@ const TITLE_BASELINE: i32 = 14 * 256;
 /// Pixels a glyph's bitmap reaches left of its pen position, for overhangs.
 const TITLE_LEFT: i32 = 2;
 
-const TITLE_MAX: usize = 16;
+/// Window titles are at most 16 bytes; panel notices use up to 48.
+const TITLE_MAX: usize = 48;
 
 /// A title laid out once: per character its glyph (0 = none), pen position in
 /// 1/256 pixel and bitmap width in pixels. Recent titles are kept, as titles are
