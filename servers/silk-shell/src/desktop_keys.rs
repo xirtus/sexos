@@ -1,6 +1,7 @@
 //! Shell-owned Alt shortcuts: Alt+Tab, and Alt+= / Alt+- / Alt+0 for the focused
 //! window's text size, and Ctrl+Alt+= / Ctrl+Alt+- / Ctrl+Alt+0 for the whole
-//! screen's scale (HiDPI). App-local Tab and editor modifiers stay local.
+//! screen's scale (HiDPI). App-local Tab and editor modifiers stay local. The volume
+//! and mute keys always belong to Shell.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Action {
     Pass,
@@ -10,7 +11,17 @@ pub enum Action {
     TextZoom(i8),
     /// The whole desktop's scale: +1 larger, -1 smaller, 0 the screen's own.
     DisplayScale(i8),
+    /// Master volume by this many percent; 0 toggles mute.
+    Volume(i8),
 }
+
+/// Media key codes, as `sex_pdx::app_key` names them (kept here so this file builds alone).
+pub const KEY_MUTE: u8 = 0x75;
+pub const KEY_VOLUME_DOWN: u8 = 0x76;
+pub const KEY_VOLUME_UP: u8 = 0x77;
+
+/// One volume key press (or repeat) moves the master volume this far.
+pub const VOLUME_STEP: i8 = 5;
 pub struct Keys {
     alt: bool,
     ctrl: bool,
@@ -26,6 +37,20 @@ impl Keys {
         }
     }
     pub fn event(&mut self, code: u8, value: u64) -> Action {
+        // Volume keys: presses and repeats step, mute toggles once, releases are Shell's.
+        let volume = match code {
+            KEY_VOLUME_UP => Some(VOLUME_STEP),
+            KEY_VOLUME_DOWN => Some(-VOLUME_STEP),
+            KEY_MUTE => Some(0),
+            _ => None,
+        };
+        if let Some(step) = volume {
+            return match value {
+                1 => Action::Volume(step),
+                2 if step != 0 => Action::Volume(step),
+                _ => Action::Consume,
+            };
+        }
         // Repeats pass through, except a held zoom shortcut's.
         if value > 2 || (value == 2 && self.captured != Some(code)) {
             return Action::Pass;
@@ -88,6 +113,12 @@ mod tests {
         assert_eq!(k.event(0x38, 1), Action::Consume);
         assert_eq!(k.event(0x0B, 1), Action::TextZoom(0));
         assert_eq!(k.event(0x0B, 0), Action::Consume);
+        assert_eq!(k.event(KEY_VOLUME_UP, 1), Action::Volume(VOLUME_STEP));
+        assert_eq!(k.event(KEY_VOLUME_UP, 2), Action::Volume(VOLUME_STEP));
+        assert_eq!(k.event(KEY_VOLUME_UP, 0), Action::Consume);
+        assert_eq!(k.event(KEY_VOLUME_DOWN, 1), Action::Volume(-VOLUME_STEP));
+        assert_eq!(k.event(KEY_MUTE, 1), Action::Volume(0));
+        assert_eq!(k.event(KEY_MUTE, 2), Action::Consume);
         assert_eq!(k.event(0x0F, 1), Action::NextFrame);
         assert_eq!(k.event(0x0F, 0), Action::Consume);
         assert_eq!(k.event(0x1E, 1), Action::Pass);

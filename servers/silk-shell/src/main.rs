@@ -10327,6 +10327,7 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
             sex_pdx::serial_record!("[shell.app.switch] old={} new={} live={} shortcut=alt_tab",old,FOCUSED_SURFACE_ID,surface_is_alive(FOCUSED_SURFACE_ID) as u8);
             true
         }
+        desktop_keys::Action::Volume(step)=>{volume_key(step);true}
         desktop_keys::Action::TextZoom(step)=>{
             // Display owns text layout; Shell only names the focused window and the step.
             let sid=FOCUSED_SURFACE_ID;
@@ -10341,6 +10342,15 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
             true
         }
     }
+}
+
+/// A volume key: Bell keeps the volume and answers with the new state, which Shell
+/// need not wait for. `step` 0 toggles mute.
+unsafe fn volume_key(step:i8) {
+    use sex_pdx::sound_mixer as mixer;
+    let (action,a)=if step==0{(mixer::MUTE_MASTER,2)}else{(mixer::STEP_MASTER,step as i64 as u64)};
+    let (status,_)=pdx_call(SLOT_BELL,mixer::OP_MIXER,action,a,0);
+    sex_pdx::serial_record!("[shell.volume] step={} status={:#x}",step,status);
 }
 
 /// main OP_HID_EVENT dispatch.  Used by linen_sync_reply and before-linen

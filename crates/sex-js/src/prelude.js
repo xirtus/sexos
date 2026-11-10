@@ -8,7 +8,7 @@
   delete globalThis.__host;
   const OP = { LOG: 1, BY_ID: 2, QUERY: 3, INFO: 4, GET_ATTR: 5, SET_ATTR: 6, REMOVE_ATTR: 7, GET_TEXT: 8, SET_TEXT: 9,
     GET_HTML: 10, SET_HTML: 11, CREATE_ELEMENT: 12, CREATE_TEXT: 13, INSERT: 14, DETACH: 15, PARENT: 16, CHILDREN: 17,
-    ATTR_NAMES: 18, VIEWPORT: 19, NAVIGATE: 20, CLICKABLE: 21, RECT: 22, LOCATION: 23, CANVAS: 24, MEASURE: 25, HIT: 26, VALUE: 27, CARET: 28, GL: 64, GL_QUERY: 65, FETCH: 66, FETCH_BODY: 67, FETCH_HEAD: 68, COOKIE: 69 };
+    ATTR_NAMES: 18, VIEWPORT: 19, NAVIGATE: 20, CLICKABLE: 21, RECT: 22, LOCATION: 23, CANVAS: 24, MEASURE: 25, HIT: 26, VALUE: 27, CARET: 28, MEDIA: 48, GL: 64, GL_QUERY: 65, FETCH: 66, FETCH_BODY: 67, FETCH_HEAD: 68, COOKIE: 69 };
   const nodes = new Map();
   const defaultChecked = new WeakMap();
 
@@ -921,27 +921,81 @@
     createImageData(w, h) { return { width: w, height: h, data: new Uint8ClampedArray(Math.max(0, w * h * 4)) }; }
     putImageData() {}
   }
+  // Video and sound. The browser decodes and plays them (sex-media); scripts send it
+  // requests and it answers with 'media' dispatches carrying each element's state.
+  const MEDIA_TYPES = /^(video|audio)\/(mp4|webm|ogg|mpeg|mp3|aac|flac|wav|x-wav|x-m4a|quicktime|x-matroska)\b/i;
   class HTMLMediaElement extends HTMLElement {
+    _s() {
+      return this._st || (this._st = { t: 0, d: NaN, paused: true, ended: false, w: 0, h: 0, ready: 0,
+        volume: 1, muted: this.hasAttribute('muted'), seeking: false, error: null });
+    }
+    _ask(verb, arg) { H(OP.MEDIA, this._id, verb, arg === undefined ? '' : String(arg)); }
+    play() {
+      const s = this._s();
+      if (s.paused) { s.paused = false; this._ask('play'); }
+      return Promise.resolve();
+    }
+    pause() { const s = this._s(); if (!s.paused) { s.paused = true; this._ask('pause'); } }
+    load() { const s = this._s(); s.t = 0; s.ended = false; s.ready = 0; this._ask('load'); }
+    canPlayType(type) { return MEDIA_TYPES.test(String(type)) ? 'maybe' : ''; }
     get src() { const h = this.getAttribute('src'); return h === null ? '' : resolveUrl(h); }
-    set src(v) { this.setAttribute('src', v); }
-    get paused() { return this._paused !== false; }
-    get currentTime() { return this._t || 0; }
-    set currentTime(v) { this._t = +v || 0; }
-    get duration() { return NaN; }
-    get readyState() { return 0; }
-    get muted() { return this.hasAttribute('muted'); }
-    set muted(v) { this.toggleAttribute('muted', !!v); }
-    get volume() { return this._v === undefined ? 1 : this._v; }
-    set volume(v) { this._v = +v; }
-    // Playback is not here yet: play() reports that, as a browser does when it may not play.
-    play() { return Promise.reject(domError('NotSupportedError: media playback is not available')); }
-    pause() { this._paused = true; }
-    load() {}
-    canPlayType() { return ''; }
+    set src(v) { this.setAttribute('src', v); this.load(); }
+    get currentSrc() { return this.src; }
+    get currentTime() { return this._s().t; }
+    set currentTime(v) { const s = this._s(); s.t = Math.max(0, +v || 0); s.seeking = true; this._ask('seek', s.t); }
+    get duration() { return this._s().d; }
+    get paused() { return this._s().paused; }
+    get ended() { return this._s().ended; }
+    get seeking() { return this._s().seeking; }
+    get readyState() { return this._s().ready; }
+    get networkState() { return this._s().ready ? 1 : 2; }
+    get error() { return this._s().error; }
+    get volume() { return this._s().volume; }
+    set volume(v) { const s = this._s(); s.volume = Math.min(1, Math.max(0, +v || 0)); this._ask('volume', s.volume); }
+    get muted() { return this._s().muted; }
+    set muted(v) { const s = this._s(); s.muted = !!v; this._ask('muted', s.muted ? 1 : 0); }
+    get autoplay() { return this.hasAttribute('autoplay'); }
+    set autoplay(v) { this.toggleAttribute('autoplay', !!v); }
+    get loop() { return this.hasAttribute('loop'); }
+    set loop(v) { this.toggleAttribute('loop', !!v); this._ask('loop', v ? 1 : 0); }
+    get controls() { return this.hasAttribute('controls'); }
+    set controls(v) { this.toggleAttribute('controls', !!v); }
+    get playbackRate() { return 1; }
+    set playbackRate(v) {}
+    get buffered() { const d = this._s().d; return { length: d > 0 ? 1 : 0, start: () => 0, end: () => d }; }
+    get played() { return this.buffered; }
+    get seekable() { return this.buffered; }
   }
-  reflect(HTMLMediaElement, ['preload', 'poster', 'crossOrigin']);
-  class HTMLVideoElement extends HTMLMediaElement { get videoWidth() { return 0; } get videoHeight() { return 0; } }
+  HTMLMediaElement.HAVE_NOTHING = 0; HTMLMediaElement.HAVE_METADATA = 1; HTMLMediaElement.HAVE_CURRENT_DATA = 2;
+  HTMLMediaElement.HAVE_FUTURE_DATA = 3; HTMLMediaElement.HAVE_ENOUGH_DATA = 4;
+  class HTMLVideoElement extends HTMLMediaElement {
+    get videoWidth() { return this._s().w; }
+    get videoHeight() { return this._s().h; }
+    get poster() { const h = this.getAttribute('poster'); return h === null ? '' : resolveUrl(h); }
+    set poster(v) { this.setAttribute('poster', v); }
+  }
+  reflect(HTMLVideoElement, ['width', 'height']);
   class HTMLAudioElement extends HTMLMediaElement {}
+  function Audio(src) {
+    const a = document.createElement('audio');
+    if (src !== undefined) a.src = src;
+    return a;
+  }
+  // 'media\tNODE\tEVENTS\tTIME\tDURATION\tPAUSED\tENDED\tWIDTH\tHEIGHT\tREADY'
+  function mediaState(f) {
+    const el = wrap(f[1]);
+    if (!(el instanceof HTMLMediaElement)) return;
+    const s = el._s();
+    s.t = +f[3] || 0; s.d = f[4] === '' ? NaN : +f[4]; s.paused = f[5] === '1'; s.ended = f[6] === '1';
+    s.w = +f[7] || 0; s.h = +f[8] || 0; s.ready = +f[9] || 0;
+    for (const name of f[2] ? f[2].split(',') : []) {
+      if (name === 'seeked') s.seeking = false;
+      if (name === 'error') s.error = { code: 4, message: 'The file could not be played' };
+      // dispatchEvent also runs the on<name> handler property.
+      el.dispatchEvent(new Event(name));
+    }
+  }
+  reflect(HTMLMediaElement, ['preload', 'crossOrigin']);
   class HTMLDivElement extends HTMLElement {}
   class HTMLSpanElement extends HTMLElement {}
   class HTMLParagraphElement extends HTMLElement {}
@@ -2608,7 +2662,6 @@
     if (height !== undefined) img.height = height;
     return img;
   }
-  function Audio(src) { const a = document.createElement('audio'); if (src !== undefined) a.src = src; return a; }
   function Option(text, value, defaultSelected, selected) {
     const o = document.createElement('option');
     if (text !== undefined) o.textContent = text;
@@ -2689,6 +2742,7 @@
     scrollTo() {}, scrollBy() {}, scroll() {}, focus() {}, blur() {},
     Event, UIEvent, MouseEvent, PointerEvent, WheelEvent, FocusEvent, KeyboardEvent, CustomEvent, EventTarget, Node, Text, Comment, CDATASection, ProcessingInstruction, CharacterData, Element, HTMLElement,
     HTMLAnchorElement, HTMLImageElement, HTMLInputElement, HTMLButtonElement, HTMLCanvasElement, HTMLTemplateElement,
+    HTMLMediaElement, HTMLVideoElement, HTMLAudioElement, Audio,
     HTMLTextAreaElement, HTMLSelectElement, HTMLOptionElement, HTMLFormElement, HTMLLabelElement, FormData, InputEvent, SubmitEvent,
     Document, DocumentFragment, DOMTokenList, CanvasRenderingContext2D, CanvasGradient, CanvasPattern,
     WebGLRenderingContext, WebGL2RenderingContext, WebGLBuffer, WebGLTexture, WebGLProgram, WebGLShader, WebGLFramebuffer,
@@ -2700,9 +2754,9 @@
     createImageBitmap: src => Promise.resolve(src),
     fetch, Request, Response, Headers, URL, URLSearchParams, XMLHttpRequest,
     customElements, atob, btoa, TextEncoder, TextDecoder, structuredClone, AbortController, AbortSignal, Blob, File,
-    IntersectionObserver, ResizeObserver, MutationObserver, PerformanceObserver, Image, Audio, Option, crypto, CSS,
+    IntersectionObserver, ResizeObserver, MutationObserver, PerformanceObserver, Image, Option, crypto, CSS,
     requestIdleCallback, cancelIdleCallback: id => { timers.delete(id); },
-    HTMLMediaElement, HTMLVideoElement, HTMLAudioElement, HTMLDivElement, HTMLSpanElement, HTMLParagraphElement, HTMLHeadingElement,
+    HTMLDivElement, HTMLSpanElement, HTMLParagraphElement, HTMLHeadingElement,
     HTMLScriptElement, HTMLStyleElement, HTMLLinkElement, HTMLIFrameElement, HTMLUListElement, HTMLOListElement, HTMLLIElement,
     HTMLTableElement, HTMLBodyElement, HTMLHeadElement, HTMLHtmlElement, HTMLMetaElement, HTMLTitleElement, HTMLPictureElement,
     HTMLSourceElement, HTMLDialogElement, SVGElement, NodeFilter, TreeWalker, NodeIterator: TreeWalker, FontFace,
@@ -2802,6 +2856,7 @@
       case 'flush': return 0;
       case 'tick': return runTimers(performance.now());
       case 'fetched': fetched(f[1], +f[2], +f[3]); return 0;
+      case 'media': mediaState(f); return 0;
       case 'scroll': window.scrollY = window.pageYOffset = +f[1] || 0; return 0;
       case 'click': {
         const el = wrap(f[1]);
