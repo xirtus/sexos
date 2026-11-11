@@ -69,6 +69,7 @@ pub struct Controller {
     terminal: Option<w::AppStatus>,
     close_needed: bool,
     deadline: u64,
+    cleanup_retry_at: u64,
     reply: Option<(Person, w::IntentStatus)>,
     candidate: Option<sex_pdx::PdxMessage>,
 }
@@ -101,6 +102,7 @@ impl Controller {
             terminal: None,
             close_needed: false,
             deadline: 0,
+            cleanup_retry_at: 0,
             reply: None,
             candidate: None,
         }
@@ -298,6 +300,7 @@ impl Controller {
                     self.task = 0;
                     self.session = None;
                     self.deadline = now.saturating_add(30_000);
+                    self.cleanup_retry_at = 0;
                 }
                 w::Intent::Chunk {
                     sequence,
@@ -622,9 +625,37 @@ impl Controller {
             return;
         }
         if Self::peer(store::SHELL_ROUTE_SLOT, self.files_epoch) != Observation::Live {
-            // A restarted/unknown Files cannot bless a queued old read, binding,
-            // or release reply. Retain image custody and refuse new work.
+            // Restart cannot authorize old image bytes. The original transaction
+            // may only surrender custody through its exact cleanup Release.
             self.stop();
+            if matches!(self.phase, Phase::Read | Phase::Load | Phase::Release)
+                && crash_log::peer_state(store::SHELL_ROUTE_SLOT)
+                    .is_ok_and(|peer| peer.life == PeerLife::Live && peer.epoch != self.files_epoch as u64)
+            {
+                if self.phase != Phase::Release {
+                    if self.image_request(w::ImageKind::Release) {
+                        self.phase = Phase::Release;
+                    }
+                } else if let Some(message) = self.candidate.take() {
+                    if w::ImageReply::decode(message.caller_pd, message.arg0).is_some_and(|reply|
+                        reply.kind == w::ImageKind::Release
+                            && Some(reply.sequence) == self.role
+                            && reply.status == w::BindStatus::Ok)
+                    {
+                        // This acknowledgement proves surrender only. Never
+                        // rebirth/bind/use an image across the Files restart.
+                        self.image_held = false;
+                        self.finish(w::IntentStatus::Failed);
+                    }
+                }
+                // A request enqueued before the restart may have been lost.
+                // Exact Release is idempotent; retry it, never the old Read.
+                if now >= self.cleanup_retry_at {
+                    if let Some(request) = self.request.as_mut() { request.sent = false; }
+                    self.send_pending();
+                    self.cleanup_retry_at = now.saturating_add(200);
+                }
+            }
             self.send_person();
             return;
         }

@@ -387,3 +387,21 @@ fn failed_self_epoch_never_becomes_first_boot_authority() {
         .iter()
         .any(|x| x.1 == w::OP_FILES_IMAGE));
 }
+
+#[test]
+fn files_restart_accepts_only_exact_cleanup_never_old_read_or_rebirth() {
+    let _s=SERIAL.lock().unwrap();reset();
+    let mut c=controller::Controller::new();begin(&mut c);
+    let read=w::ImageRequest::decode(3,call(w::OP_FILES_IMAGE)).unwrap();
+    HOST.lock().unwrap().files=Some(4);
+    files_reply(&mut c,w::ImageReply::new(read,w::BindStatus::Ok,4096).unwrap().word());
+    let release=w::ImageRequest::decode(3,call(w::OP_FILES_IMAGE)).unwrap();
+    assert_eq!(release.kind,w::ImageKind::Release);
+    assert_eq!(release.sequence,read.sequence);
+    assert_eq!(release.files_epoch,read.files_epoch);
+    assert!(!HOST.lock().unwrap().events.contains(&"load"));
+    files_reply(&mut c,w::ImageReply::new(release,w::BindStatus::Ok,0).unwrap().word());
+    c.poll(500);
+    assert!(!HOST.lock().unwrap().events.contains(&"rebirth"));
+    assert!(!HOST.lock().unwrap().calls.iter().any(|call|call.1==w::OP_FILES_BIND));
+}
