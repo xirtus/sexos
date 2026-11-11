@@ -34,10 +34,10 @@ fn overlapping_owners_and_bad_bounds_fail_without_losing_original_owner() {
 #[test]
 fn reservation_capacity_failure_keeps_all_existing_ranges() {
     let mut owner = BootFrameReservations::new();
-    for i in 1..=128 { owner.reserve(i*8192,4096,|_|false).unwrap(); }
-    assert!(owner.reserve(129*8192,4096,|_|false).is_err());
-    for i in 1..=128 { assert!(owner.contains(i*8192)); }
-    assert!(!owner.contains(129*8192));
+    for i in 1..=256 { owner.reserve(i*8192,4096,|_|false).unwrap(); }
+    assert_eq!(owner.reserve(257*8192,4096,|_|false), Err("BOOT_FRAME_RESERVATIONS_FULL"));
+    for i in 1..=256 { assert!(owner.contains(i*8192)); }
+    assert!(!owner.contains(257*8192));
 }
 
 #[test]
@@ -74,4 +74,19 @@ fn actual_bootstrap_planner_fails_invalid_ranges_and_reports_missing_capacity() 
     assert!(plan.region(u64::MAX-4095,8192).is_err());
     assert_eq!(plan.region(0x10_0000,4096),Ok(Some(Range {start:0x10_0000,end:0x10_1000})));
     assert_eq!(plan.metadata,None);
+}
+
+#[test]
+fn additional_boot_regions_preserve_overlap_and_consumed_frame_checks() {
+    let mut owner = BootFrameReservations::new();
+    for i in 1..=128 { owner.reserve(i*8192,4096,|_|false).unwrap(); }
+    assert_eq!(owner.reserve(128*8192,4096,|_|false), Err("BOOT_FRAME_OWNERSHIP_OVERLAP"));
+    assert_eq!(owner.reserve(129*8192,4096,|_|true), Err("BOOT_FRAME_OWNERSHIP_OVERLAP"));
+    assert!(!owner.contains(129*8192));
+    // Rejected attempts consume no slot; all remaining owners still fit.
+    for i in 129..=256 { owner.reserve(i*8192,4096,|_|false).unwrap(); }
+    for i in 1..=256 {
+        assert!(owner.contains(i*8192 + 4095));
+        assert!(!owner.contains(i*8192 + 4096));
+    }
 }
