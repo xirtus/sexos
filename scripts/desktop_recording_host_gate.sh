@@ -76,3 +76,4 @@ for test in activation_source_receipt recording_app_files recording_app_session 
     "$TEST_DIR/$test" --test-threads=1
 done
 python3 "$ROOT_DIR/tests/program_role_facts.py"
+python3 "$ROOT_DIR/scripts/tests/test_boot_image_recorder.py"
