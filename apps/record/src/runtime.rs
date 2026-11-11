@@ -33,6 +33,7 @@ pub struct Runtime {
     write_token: Option<(u64, usize)>,
     origin: Option<u64>,
     last_pts: Option<u64>,
+    frames: u32,
     next_acquire: u64,
     failed: bool,
     report: Option<w::AppReport>,
@@ -52,6 +53,7 @@ impl Runtime {
             write_token: None,
             origin: None,
             last_pts: None,
+            frames: 0,
             next_acquire: 0,
             failed: false,
             report: None,
@@ -211,6 +213,7 @@ impl Runtime {
             {
                 if self.session.saved() {
                     self.stage = Stage::Done;
+                    sex_pdx::serial_record!("[record.saved] frames={} last_pts_ms={} synced=1 released=1",self.frames,self.last_pts.unwrap_or(0));
                     self.queue_report(w::AppStatus::Saved)
                 } else {
                     self.fail()
@@ -378,7 +381,8 @@ impl Runtime {
                             .frame(&self.pixels, pts)
                             .is_ok()
                         {
-                            self.last_pts = Some(pts)
+                            self.last_pts = Some(pts);
+                            self.frames = self.frames.saturating_add(1)
                         } else {
                             self.fail()
                         }
