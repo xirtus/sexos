@@ -23,7 +23,9 @@ class RecorderModules(unittest.TestCase):
 
     def test_repository_default_and_compact_config_share_one_module(self):
         config=(SCRIPT.parents[1]/'limine.cfg').read_text()
-        self.assertEqual(config.count('MODULE_PATH=boot:///apps/hello'),2)
+        entries=sum(line.startswith(':')for line in config.splitlines())
+        self.assertGreaterEqual(entries,2)
+        self.assertEqual(config.count('MODULE_PATH=boot:///apps/hello'),entries)
         config=config.replace('MODULE_PATH=boot:///apps/hello','MODULE_PATH=boot:///apps/hello\n    MODULE_PATH=boot:///programs/record')
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);(root/'programs').mkdir();record=root/'programs/record';record.write_bytes(b'fixture exact module')
