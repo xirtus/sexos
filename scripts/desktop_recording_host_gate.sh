@@ -75,3 +75,4 @@ for test in activation_source_receipt recording_app_files recording_app_session 
     SEXOS_RECORDER=1 rustc --test --edition=2021 "$ROOT_DIR/tests/$test.rs" -o "$TEST_DIR/$test"
     "$TEST_DIR/$test" --test-threads=1
 done
+python3 "$ROOT_DIR/tests/program_role_facts.py"

@@ -14,8 +14,13 @@ def program_rows(root, serial):
     catalog = {}
     by_ordinal = {}
     source = (root/'crates/sex-pdx/src/app_catalog.rs').read_text()
-    for app, ordinal, target, surface in re.findall(
-            r'app: App::(\w+), ordinal: (\d+), target: (\d+), surface: (\d+)', source):
+    rows = re.findall(r'app:\s*App::(\w+),\s*ordinal:\s*(\d+),\s*target:\s*(\d+),\s*surface:\s*(\d+)', source)
+    # Quil uses the catalog's fixed constructor; its first three arguments are
+    # ordinal, target and surface. Do not silently omit those actual subjects.
+    rows += [('Quil', *match) for match in re.findall(r'^\s*quil\(\s*(\d+),\s*(\d+),\s*(\d+),', source, re.M)]
+    declared = re.search(r'pub const INCARNATIONS:\s*\[Incarnation;\s*(\d+)\]', source)
+    if declared: assert len(rows)==int(declared[1]), 'unparsed catalog row or duplicate constructor'
+    for app, ordinal, target, surface in rows:
         row = dict(app=app, ordinal=int(ordinal), target=int(target), surface=int(surface))
         assert row['target'] not in catalog and (app,row['ordinal']) not in by_ordinal, 'duplicate source catalog subject'
         catalog[row['target']] = row
