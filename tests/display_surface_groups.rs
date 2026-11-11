@@ -1220,6 +1220,26 @@ unsafe fn seal_pending_text(index:usize,task:u32,sequence:u32,text:&[u8],selecti
   SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();
   let mut alone=Surface{x:40,y:70,w:(w as u32).min(200),h:90,..surf(9,156)};alone.text_len=text.len() as u16;alone.text_buf[..text.len()].copy_from_slice(text);SURFACES[0]=alone;recompute_text_lines(&mut SURFACES[0]);
   check("independent",w,h,0);check("independent focused",w,h,156);
+  // A translucent bitmap and partial fill force the ordinary source painter
+  // even on opaque row intervals. A lower owner remains visible through AA.
+  reset_bitmap_stage();
+  SURFACES[0]=Surface{x:20,y:70,w:200,h:150,color:0x204060,chrome_flags:SURFACE_CHROME_TOP_BAR,..surf(15,300)};
+  SURFACES[1]=Surface{x:0,y:28,w:w as u32,h:h as u32-28,color:0x000077,..surf(16,301)};
+  fill_damage::update(&mut SURFACES[0],0,25,0,40,120,0x102030).unwrap();
+  let g=bitmap_batch::Geometry{x:0,y:0,width:48,height:48,scale:2};
+  publish_bitmap(1,g,&vec![0x80ff0000;g.len()]);
+  for focus in[0,300]{
+   let scene=capture_scene(w,h,focus);
+   let mut scratch=surface_groups::RowScratch::new();
+   let mut row=scene.groups.row_winners(&scene.surfaces,focus,110,w,h,&mut scratch).unwrap();
+   let(end,source)=row.run(50);let source=source.unwrap();
+   assert_eq!(source.surface.surface_id,300);
+   assert!(scene.groups.opaque_run(source.surface,50,end,110,w,h));
+   let mut probe=vec![0;w*h];
+   assert!(!fast_content_run(probe.as_mut_ptr(),50,end,110,w,h,source,&scene));
+   check("opaque bitmap and AA lower owner",w,h,focus);
+  }
+  reset_bitmap_stage();
  }
  SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();
 }}
