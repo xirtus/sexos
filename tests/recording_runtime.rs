@@ -66,6 +66,7 @@ pub struct Message {
 }
 struct World {
     files_epoch: u64,
+    self_epoch_error: Option<u64>,
     shell_epoch: u64,
     shell_life: crash_wire::PeerLife,
     peer_error: Option<u64>,
@@ -124,8 +125,9 @@ pub mod app_lifecycle {
 }
 pub mod crash_log {
     pub use super::crash_wire::*;
-    pub fn restarts() -> u64 {
-        crate::WORLD.lock().unwrap().as_ref().unwrap().files_epoch - 1
+    pub fn self_epoch() -> Result<u64,u64> {
+        let world=crate::WORLD.lock().unwrap(); let world=world.as_ref().unwrap();
+        match world.self_epoch_error { Some(error)=>Err(error), None=>Ok(world.files_epoch) }
     }
     pub fn peer_state(slot: u64) -> Result<PeerState, u64> {
         assert_eq!(slot, 6);

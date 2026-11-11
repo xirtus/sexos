@@ -254,6 +254,14 @@ pub fn call(op: u64, arg: u64, buf: u64) -> (u64, u64, u64) {
 pub fn restarts() -> u64 {
     match call(OP_RESTARTS, 0, 0) { (OK, n, _) => n, _ => 0 }
 }
+/// Checked incarnation for authority-sensitive service protocols. Unlike the
+/// legacy presentation helper, a failed query never becomes first-boot epoch1.
+#[cfg(target_arch = "x86_64")]
+pub fn self_epoch() -> Result<u64,u64> {
+    let (status,count,_)=call(OP_RESTARTS,0,0);
+    if status!=OK{return Err(status)}
+    count.checked_add(1).ok_or(INVALID)
+}
 /// Keep `pages` pages from `va` across this service's restarts (see `OP_KEEP`).
 #[cfg(target_arch = "x86_64")]
 pub fn keep(va: u64, pages: u64) -> bool { call(OP_KEEP, va, pages).0 == OK }
