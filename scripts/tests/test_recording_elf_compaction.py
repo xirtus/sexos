@@ -20,6 +20,13 @@ class ELFCompaction(unittest.TestCase):
         for offset in (24,32,54,64,120,160,180,239):
             after=bytearray(before);after[offset]^=1
             with self.subTest(offset=offset),self.assertRaises(AssertionError):module.validate(before,bytes(after))
+    def test_dynamic_range_outside_load_is_still_preserved(self):
+        before=bytearray(self.fixture());before.extend(bytes(range(16)))
+        # Replace the non-file-backed stack header with an independent dynamic range.
+        struct.pack_into('<IIQQQQQQ',before,120,2,6,240,8192,8192,16,16,8)
+        after=bytearray(before);after[250]^=1
+        with self.assertRaises(AssertionError):module.validate(bytes(before),bytes(after))
+
     def test_truncation_and_wrong_architecture_reject(self):
         before=self.fixture()
         with self.assertRaises(AssertionError):module.validate(before,before[:-1])

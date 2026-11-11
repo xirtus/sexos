@@ -21,10 +21,11 @@ def validate(before,after):
     for index in range(count):
         row=struct.unpack_from('<IIQQQQQQ',before,offset+index*size)
         kind,flags,start,va,pa,length,memory,align=row
-        if kind!=1:continue
-        assert start+length<=min(len(before),len(after)),'truncated load segment'
+        if not length:continue
+        assert start+length<=min(len(before),len(after)),'truncated file-backed program segment'
         original=masked(before[start:start+length],start)
-        assert original==masked(after[start:start+length],start),'loaded bytes changed'
+        assert original==masked(after[start:start+length],start),'file-backed program segment changed'
+        if kind!=1:continue
         loaded.append(dict(va=va,file_bytes=length,memory_bytes=memory,flags=flags,masked_sha256=digest(original)))
     assert loaded,'no load segments'
     return loaded
