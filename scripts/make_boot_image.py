@@ -9,12 +9,19 @@ ROOT=Path(__file__).resolve().parents[1]
 SECTORS=24576
 SECTORS_WITH_FIRMWARE=65536
 def recorder_module(root, config):
- modules=[line.split('=',1)[1].strip() for line in config.splitlines()
-          if line.strip().startswith('MODULE_PATH=')]
- programs=[path for path in modules if path.startswith('boot:///programs/')]
- if not programs:return None
- if programs!=['boot:///programs/record']:
-  raise ValueError('unsupported or duplicate installed program module')
+ seen_in_entry=False
+ configured=False
+ for line in config.splitlines():
+  line=line.strip()
+  if line.startswith(':'):
+   seen_in_entry=False
+  elif line.startswith('MODULE_PATH='):
+   path=line.split('=',1)[1].strip()
+   if not path.startswith('boot:///programs/'):continue
+   if path!='boot:///programs/record' or seen_in_entry:
+    raise ValueError('unsupported or duplicate installed program module in entry')
+   seen_in_entry=True;configured=True
+ if not configured:return None
  record=root/'programs'/'record'
  if not record.is_file():raise FileNotFoundError('configured recorder module is missing')
  return record

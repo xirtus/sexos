@@ -21,6 +21,15 @@ class RecorderModules(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     boot.recorder_module(root, config)
 
+    def test_repository_default_and_compact_config_share_one_module(self):
+        config=(SCRIPT.parents[1]/'limine.cfg').read_text()
+        self.assertEqual(config.count('MODULE_PATH=boot:///apps/hello'),2)
+        config=config.replace('MODULE_PATH=boot:///apps/hello','MODULE_PATH=boot:///apps/hello\n    MODULE_PATH=boot:///programs/record')
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);(root/'programs').mkdir();record=root/'programs/record';record.write_bytes(b'fixture exact module')
+            self.assertEqual(boot.recorder_module(root,config),record)
+            with self.assertRaises(ValueError):boot.recorder_module(root,config.replace('MODULE_PATH=boot:///programs/record','MODULE_PATH=boot:///programs/record\n    MODULE_PATH=boot:///programs/record',1))
+
     @unittest.skipUnless(all(shutil.which(x) for x in ('mformat','mmd','mcopy','mtype')), 'mtools required')
     def test_actual_fat_copies_only_configured_record_module(self):
         def run(*args):
@@ -41,9 +50,9 @@ class RecorderModules(unittest.TestCase):
             record = root/'programs/record'; record.write_bytes(b'fixture recorder exact bytes')
             (root/'programs/unrelated').write_bytes(b'not a boot module')
             for enabled in (False, True):
-                config = 'KERNEL_PATH=boot:///sexos-kernel\nMODULE_PATH=boot:///boot.img\n'
+                config = ':Default\nKERNEL_PATH=boot:///sexos-kernel\nMODULE_PATH=boot:///boot.img\n'
                 if enabled:
-                    config += '    MODULE_PATH=boot:///programs/record\n'
+                    config += '    MODULE_PATH=boot:///programs/record\n:Compact\nKERNEL_PATH=boot:///sexos-kernel\n    MODULE_PATH=boot:///programs/record\n'
                 (root/'limine.cfg').write_text(config)
                 image = Path(tmp)/('enabled.img' if enabled else 'normal.img')
                 run('python3',str(SCRIPT),'--root',str(root),'--out',str(image))
