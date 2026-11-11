@@ -743,7 +743,20 @@ fn raster_row(fb:*mut u32,y:usize,x0:usize,x1:usize,w:usize,h:usize,scene: &scen
         let end=end.min(x1);
         if row.is_some(){
             if let Some(source)=source{
-                if scene.groups.opaque_run(source.surface,x,end,y,w,h)&&fast_content_run(fb,x,end,y,w,h,source,scene){x=end;continue;}
+                if scene.groups.opaque_run(source.surface,x,end,y,w,h){
+                    if !fast_content_run(fb,x,end,y,w,h,source,scene){
+                        // This exact scene's row interval already proves the
+                        // owner fully covers every pixel. Chrome, bitmap and
+                        // partial-fill shading still use the ordinary painter,
+                        // without repeating group/rounded coverage per pixel.
+                        while x<end{
+                            let color=composite_pixel_source_unmasked(x,y,w,h,back,source,scene);
+                            unsafe{core::ptr::write_volatile(fb.add(y*w+x),color);}
+                            x+=1;
+                        }
+                    }
+                    x=end;continue;
+                }
             }else{
                 unsafe{core::slice::from_raw_parts_mut(fb.add(y*w+x),end-x).fill(back);}
                 x=end;continue;
