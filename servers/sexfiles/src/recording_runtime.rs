@@ -143,7 +143,7 @@ fn poll_image(r: &mut Runtime) {
     }
 }
 fn files_epoch() -> Option<u32> {
-    u32::try_from(crash_log::restarts().checked_add(1)?).ok()
+    u32::try_from(crash_log::self_epoch().ok()?).ok().filter(|epoch| *epoch != 0)
 }
 fn target(task: u32) -> Check {
     if task == 0 {

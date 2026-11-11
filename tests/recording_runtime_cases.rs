@@ -5,6 +5,7 @@ fn reset() {
     while pdx::defer_pop().is_some() {}
     *WORLD.lock().unwrap() = Some(World {
         files_epoch: 1,
+        self_epoch_error: None,
         shell_epoch: 1,
         shell_life: crash_wire::PeerLife::Live,
         peer_error: None,
@@ -368,4 +369,17 @@ fn retirement_removes_both_retained_data_result_and_deferred_old_task_before_ack
     recording_runtime::retire(42, 107);
     assert!(pdx::defer_empty());
     assert!(!recording_runtime::pending());
+}
+
+#[test]
+fn failed_self_epoch_does_not_initialize_cold_journal_or_read_image() {
+    reset();
+    recording_runtime::cold_reset_for_test();
+    WORLD.lock().unwrap().as_mut().unwrap().self_epoch_error=Some(crash_wire::RETRY);
+    recording_runtime::initialize();
+    assert!(matches!(recording_runtime::journal_for_test(), Ok(Fence::Quarantined(1))));
+    dispatch(msg(w::OP_FILES_IMAGE,3,3,image_request(1).args()));
+    recording_runtime::poll();
+    assert_eq!(WORLD.lock().unwrap().as_ref().unwrap().io_count,0);
+    assert!(recording_runtime::image_busy());
 }
