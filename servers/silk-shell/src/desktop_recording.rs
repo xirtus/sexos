@@ -247,7 +247,15 @@ impl Controller {
             let Some(intent) = w::Intent::decode(m.caller_pd, [m.arg0, m.arg1, m.arg2]) else {
                 return true;
             };
-            if let w::Intent::Stop { .. } = intent {
+            if let w::Intent::Stop { sequence } = intent {
+                // Stop uses a fresh person-intent nonce. Keep the same actual
+                // scope owner, but route terminal status to that current nonce.
+                // A stale Stop remains revocation-only and cannot roll it back.
+                if let Some(mut person)=self.person.filter(|p|p.task==m.caller_task && sequence>p.sequence) {
+                    person.sequence=sequence;
+                    self.person=Some(person);self.last_person=Some(person);
+                    if let Some((recipient,_))=self.reply.as_mut(){if recipient.task==person.task{*recipient=person;}}
+                }
                 self.stop();
                 return true;
             }

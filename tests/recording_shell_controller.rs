@@ -409,3 +409,20 @@ fn files_restart_accepts_only_exact_cleanup_never_old_read_or_rebirth() {
     assert!(!HOST.lock().unwrap().events.contains(&"rebirth"));
     assert!(!HOST.lock().unwrap().calls.iter().any(|call|call.1==w::OP_FILES_BIND));
 }
+
+#[test]
+fn stop_nonce_receives_saved_without_changing_scope_owner() {
+    let _s=SERIAL.lock().unwrap();reset();
+    let mut c=controller::Controller::new();let mut report=prepared(&mut c);
+    c.receive(&message(42,report.task,w::OP_RECORDER,report.args()),12,false);c.poll(13);
+    let arm=cap::ControlRequest::decode(3,call(cap::OP_CONTROL)).unwrap();
+    intent(&mut c,w::Intent::Stop{sequence:2});c.poll(14);
+    let stop=cap::ControlRequest::decode(3,call(cap::OP_CONTROL)).unwrap();
+    assert_eq!(stop.scope,arm.scope);
+    let stopped=cap::ControlReply::new(stop.sequence,report.task,cap::ControlStatus::Stopped).unwrap();
+    c.receive(&message(1,1,1,[stopped.word().unwrap(),0,0]),15,false);c.poll(16);
+    assert_eq!(w::decode_intent_reply(3,call(1)[0]),Some((2,w::IntentStatus::Stopped)));
+    intent(&mut c,w::Intent::Stop{sequence:1});
+    report.status=w::AppStatus::Saved;c.receive(&message(42,report.task,w::OP_RECORDER,report.args()),17,false);c.poll(18);
+    assert_eq!(w::decode_intent_reply(3,call(1)[0]),Some((2,w::IntentStatus::Saved)));
+}
