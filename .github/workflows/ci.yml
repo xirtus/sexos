@@ -47,6 +47,8 @@ jobs:
       run: bash scripts/sound_host_gate.sh
     - name: Explicit program heap limits with actual Talc
       run: bash scripts/program_heap_limit_host_gate.sh
+    - name: Unarmed recorder custody and restart contracts
+      run: bash scripts/desktop_recording_host_gate.sh
     - name: Native screenshot custody and PNG output on the host
       run: bash scripts/desktop_capture_host_gate.sh
     - name: HTML containing-block and replaced sizing
