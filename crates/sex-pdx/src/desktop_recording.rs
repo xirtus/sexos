@@ -394,3 +394,195 @@ pub fn decode_intent_reply(caller:u32,word:u64)->Option<(u32,IntentStatus)>{
     let status=match (word>>48)&255 {1=>IntentStatus::Denied,2=>IntentStatus::Unavailable,3=>IntentStatus::Busy,4=>IntentStatus::Starting,5=>IntentStatus::Stopped,6=>IntentStatus::Saved,7=>IntentStatus::Failed,8=>IntentStatus::Active,_=>return None};
     Some((sequence,status))
 }
+
+/// Setup and progress over the reserved application's existing held Shell route.
+/// Each receiver must additionally validate the kernel-stamped current main task,
+/// both held service epochs, and its retained session before changing state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AppCommand {
+    Prepare {
+        session: SessionSequence,
+        length: u16,
+        shell_epoch: u32,
+        task: u32,
+        files_epoch: u32,
+        spindle_task: u32,
+    },
+    Name {
+        session: SessionSequence,
+        offset: u8,
+        words: [u64; 2],
+    },
+    Active {
+        session: SessionSequence,
+        shell_epoch: u64,
+        display_epoch: u32,
+        task: u32,
+    },
+    Stop {
+        session: SessionSequence,
+        shell_epoch: u64,
+        display_epoch: u32,
+        task: u32,
+    },
+}
+impl AppCommand {
+    pub fn args(self) -> [u64; 3] {
+        match self {
+            Self::Prepare {
+                session,
+                length,
+                shell_epoch,
+                task,
+                files_epoch,
+                spindle_task,
+            } => [
+                1 << 56 | (length as u64) << 32 | session.word() as u64,
+                (shell_epoch as u64) << 32 | task as u64,
+                (files_epoch as u64) << 32 | spindle_task as u64,
+            ],
+            Self::Name {
+                session,
+                offset,
+                words,
+            } => [
+                2 << 56 | (offset as u64) << 32 | session.word() as u64,
+                words[0],
+                words[1],
+            ],
+            Self::Active {
+                session,
+                shell_epoch,
+                display_epoch,
+                task,
+            } => [
+                3 << 56 | session.word() as u64,
+                shell_epoch,
+                (display_epoch as u64) << 32 | task as u64,
+            ],
+            Self::Stop {
+                session,
+                shell_epoch,
+                display_epoch,
+                task,
+            } => [
+                8 << 56 | session.word() as u64,
+                shell_epoch,
+                (display_epoch as u64) << 32 | task as u64,
+            ],
+        }
+    }
+    pub fn decode(caller: u32, args: [u64; 3]) -> Option<Self> {
+        if caller != SHELL {
+            return None;
+        }
+        let session = SessionSequence::decode(args[0] & 0xffff_ffff)?;
+        match args[0] >> 56 {
+            1 if args[0] & 0x00ff_0000_0000_0000 == 0 => {
+                let length = ((args[0] >> 32) & 0xffff) as u16;
+                let files_epoch = (args[2] >> 32) as u32;
+                let spindle_task = args[2] as u32;
+                let shell_epoch = (args[1] >> 32) as u32;
+                let task = args[1] as u32;
+                (session.matches(shell_epoch as u64)
+                    && length != 0
+                    && (length as usize) <= NAME_BYTES
+                    && task != 0
+                    && files_epoch != 0
+                    && spindle_task != 0)
+                    .then_some(Self::Prepare {
+                        session,
+                        length,
+                        shell_epoch,
+                        task,
+                        files_epoch,
+                        spindle_task,
+                    })
+            }
+            2 if args[0] & 0x00ff_ff00_0000_0000 == 0 => {
+                let offset = ((args[0] >> 32) & 255) as u8;
+                (offset % 16 == 0 && (offset as usize) < NAME_BYTES).then_some(Self::Name {
+                    session,
+                    offset,
+                    words: [args[1], args[2]],
+                })
+            }
+            kind @ (3 | 8) if args[0] & 0x00ff_ffff_0000_0000 == 0 => {
+                let display_epoch = (args[2] >> 32) as u32;
+                let task = args[2] as u32;
+                if !session.matches(args[1]) || display_epoch == 0 || task == 0 {
+                    return None;
+                }
+                Some(if kind == 3 {
+                    Self::Active {
+                        session,
+                        shell_epoch: args[1],
+                        display_epoch,
+                        task,
+                    }
+                } else {
+                    Self::Stop {
+                        session,
+                        shell_epoch: args[1],
+                        display_epoch,
+                        task,
+                    }
+                })
+            }
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum AppStatus {
+    Prepared = 4,
+    Saved = 5,
+    Failed = 6,
+    Stopped = 7,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AppReport {
+    pub session: SessionSequence,
+    pub status: AppStatus,
+    pub task: u32,
+    pub files_epoch: u32,
+    pub display_epoch: u32,
+    pub spindle_task: u32,
+}
+impl AppReport {
+    pub const fn args(self) -> [u64; 3] {
+        [
+            (self.status as u64) << 56 | self.session.word() as u64,
+            (self.files_epoch as u64) << 32 | self.task as u64,
+            (self.display_epoch as u64) << 32 | self.spindle_task as u64,
+        ]
+    }
+    pub fn decode(caller: u32, args: [u64; 3]) -> Option<Self> {
+        if caller != TARGET || args[0] & 0x00ff_ffff_0000_0000 != 0 {
+            return None;
+        }
+        let session = SessionSequence::decode(args[0] & 0xffff_ffff)?;
+        let status = match args[0] >> 56 {
+            4 => AppStatus::Prepared,
+            5 => AppStatus::Saved,
+            6 => AppStatus::Failed,
+            7 => AppStatus::Stopped,
+            _ => return None,
+        };
+        let (task, files_epoch, display_epoch, spindle_task) = (
+            args[1] as u32,
+            (args[1] >> 32) as u32,
+            (args[2] >> 32) as u32,
+            args[2] as u32,
+        );
+        (task != 0 && files_epoch != 0 && display_epoch != 0 && spindle_task != 0).then_some(Self {
+            session,
+            status,
+            task,
+            files_epoch,
+            display_epoch,
+            spindle_task,
+        })
+    }
+}

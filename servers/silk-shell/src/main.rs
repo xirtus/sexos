@@ -3,6 +3,8 @@
 
 extern crate alloc;
 mod desktop_keys;
+mod desktop_recording;
+static mut DESKTOP_RECORDING:desktop_recording::Controller=desktop_recording::Controller::new();
 mod app_custody;
 /// The BOOT incarnation catalog, at crate root for app_custody.
 use sex_pdx::app_catalog;
@@ -16773,6 +16775,18 @@ fn browser_active_frame()->Option<(u32,u64)>{
     if row.app!=app_catalog::App::Browser || !native_launcher_status(row.target).0{return None}
     Some((row.target,row.frame()))
 }
+/// The reserved row must consume its ordinary BOOT edge before later ordinary
+/// rows can advance. This activates only the bounded idle stub, never a loaded
+/// recorder image or any recording consent. It is not an activation fork.
+fn recorder_idle_poll(){
+    use sex_pdx::{app_lifecycle as a,desktop_recording as w};
+    if !w::ENABLED{return}
+    let Some(row)=app_catalog::by_target(w::TARGET)else{return};
+    let Some(slot)=row.activation_slot else{return};
+    if a::activation(slot,false).is_ok_and(|info|info.state==a::ACTIVATION_READY){
+        if let Ok(info)=a::activation(slot,true){sex_pdx::serial_record!("[record.idle.launch] target={} task={} surface={} capture=0",info.successor,info.task,info.surface);}
+    }
+}
 static mut PROGRAM_REBIRTH: Option<usize> = None;
 /// What each program row can do right now, from the rows' own held grants.
 fn program_rows()->impl Iterator<Item=(&'static app_catalog::Incarnation,usize,u64)>{
@@ -20566,6 +20580,7 @@ unsafe fn frame_close_allowed(frame_id: u32) -> bool {
 /// Reuses the same destroy mechanism as keyboard SurfaceAction::DestroyFocused.
 /// Returns true if the surface was actually destroyed.
 unsafe fn close_surface_from_frame_light(surface_id: u64) -> bool {
+    if !DESKTOP_RECORDING.before_hide(surface_id){return false}
     serial_println!("[silk.close.request] sid={}", surface_id);
     serial_println!("[silk.lifecycle.close.begin] sid={}", surface_id);
     // Must be closeable (checks registry, lifecycle registration, or alive flags).
@@ -20876,6 +20891,7 @@ unsafe fn minimize_frame(frame_id: u32) -> bool {
     if !surface_is_alive(surface_id) {
         return false;
     }
+    if !DESKTOP_RECORDING.before_hide(surface_id){return false}
     // Mark frame as minimized.
     set_frame_minimized(frame_id, true);
     serial_println!("[silk.lifecycle.minimize.snapshot] frame={} sid={} scene={}", frame_id, surface_id, ACTIVE_SCENE_IDX);
@@ -24447,6 +24463,11 @@ fn handle_silkbar_click(px: i32, py: i32) -> bool {
     let m=chrome_metrics();let mut bar=DEFAULT_SILK_BAR;
     if !silkbar_model::reflow_chrome(&mut bar,desktop_width()as usize,m.bar()as usize,m.px(sex_pdx::desktop_style::chrome::TARGET)as usize){return false;}
     let action = hit_test_action(&bar, ux, uy);
+    if matches!(action,Action::ToggleModule(Module::StatusChip(0)))&&unsafe{DESKTOP_RECORDING.stop_target()}{
+        unsafe{DESKTOP_RECORDING.stop_now();}
+        sex_pdx::serial_record!("[record.stop.request] source=trusted_chip x={} y={}",ux,uy);
+        return true;
+    }
     match action {
         Action::None => false,
         Action::SwitchWorkspace(n) => {
@@ -25127,6 +25148,8 @@ pub extern "C" fn _start() -> ! {
                 }
             }
         }
+        recorder_idle_poll();
+        unsafe {DESKTOP_RECORDING.poll(sex_pdx::get_ticks());}
         unsafe { program_rebirth_poll(); }
         unsafe { session::save(); }
         unsafe { record_spawn_poll(); }
@@ -25810,7 +25833,7 @@ pub extern "C" fn _start() -> ! {
                 unsafe { flush_pending_cursor_send(); }
                 // A full input ring may recover while the shell has no work.
                 // Return to the publisher instead of blocking in listen.
-                if shell_ready_publisher.is_pending() || unsafe { RECORD_SPAWN_LEFT != 0 || DISPLAY_SCALE.request().is_some() || CURSOR_SEND_PENDING || APP_INPUT.pending() || LAUNCHER_FOCUS.is_some() || CLIPBOARD_INTAKE.pending() || CLIPBOARD.pending() || WORKSPACE_REFRESH_PENDING.iter().any(|p|*p) || linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_POINTER.is_some() || LINEN_ASYNC.can_send() || NOTIFY_NOTICE_UNTIL != 0 } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
+                if shell_ready_publisher.is_pending() || unsafe { DESKTOP_RECORDING.pending() || RECORD_SPAWN_LEFT != 0 || DISPLAY_SCALE.request().is_some() || CURSOR_SEND_PENDING || APP_INPUT.pending() || LAUNCHER_FOCUS.is_some() || CLIPBOARD_INTAKE.pending() || CLIPBOARD.pending() || WORKSPACE_REFRESH_PENDING.iter().any(|p|*p) || linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_POINTER.is_some() || LINEN_ASYNC.can_send() || NOTIFY_NOTICE_UNTIL != 0 } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
                     sys_yield();
                     continue;
                 }
@@ -25821,6 +25844,7 @@ pub extern "C" fn _start() -> ! {
         if sex_pdx::display_ready::is_display_ready(&msg) { unsafe { display_came_back(); } continue; }
         unsafe {
             if shell_lifecycle_hint(&msg) { continue; }
+            if DESKTOP_RECORDING.receive(&msg,sex_pdx::get_ticks(),PROGRAM_READING||PROGRAM_REBIRTH.is_some()||RECORD_SPAWN_LEFT!=0) {continue;}
             if shell_program_message(&msg) { continue; }
             if clipboard_receive(&msg) { continue; }
             if notification_receive(&msg) { continue; }

@@ -1639,6 +1639,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "record"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-media",
+ "sex-pdx",
+]
+
+[[package]]
 name = "rfc6979"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
