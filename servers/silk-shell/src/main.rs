@@ -11249,6 +11249,7 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
         }
         sex_pdx::serial_record!("[silk-shell.pointer.recv] class=EV_BTN btn={} pressed={}",
             button, pressed);
+        if button==1&&pressed&&recording_stop_hit(POINTER_X,POINTER_Y){return;}
         if !ATLAS_MODE_ENABLED && (ABS_SEEN_VALID || POINTER_USB_STATE_INIT) { program_pointer_button(button, pressed); }
         if button == 1 {
             serial_println!(
@@ -23847,6 +23848,7 @@ fn hit_target_label(target: HitTarget, silkbar_handled: bool) -> (&'static str, 
 /// Emits [shell.click_focus.down/hit/miss] markers.
 /// Emits [shell.frame.rim.drag.start] for rim drag, [shell.frame.chrome.capture] for other chrome.
 unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTarget, bool) {
+    if buttons_val&1!=0&&recording_stop_hit(px,py){return(HitTarget::None,true);}
     let old_focus = FOCUSED_SURFACE_ID;
     serial_println!("[shell.click_focus.down] x={} y={} buttons={:#x}", px, py, buttons_val);
     // ── Atlas intercept: if Atlas mode is enabled, hit-test scene cards ──
@@ -24451,10 +24453,28 @@ unsafe fn toggle_scene_settings_panel() {
     }
 }
 
+/// Protected recording Stop precedes Atlas and ordinary pointer capture.
+/// Call only after authenticated input admission (or internal proof dispatch).
+/// Existing button-up paths retain responsibility for releasing app/drag state.
+unsafe fn recording_stop_hit(px:i32,py:i32)->bool {
+    if !DESKTOP_RECORDING.stop_target()||DISPLAY_SCALE.pending()
+        ||!(ABS_SEEN_VALID||POINTER_USB_STATE_INIT)||px<0||py<0||py>=desktop_bar_height(){return false;}
+    let m=chrome_metrics();let mut bar=DEFAULT_SILK_BAR;
+    if !silkbar_model::reflow_chrome(&mut bar,desktop_width()as usize,m.bar()as usize,m.px(sex_pdx::desktop_style::chrome::TARGET)as usize){return false;}
+    if !matches!(hit_test_action(&bar,px as usize,py as usize),Action::ToggleModule(Module::StatusChip(0))){return false;}
+    DESKTOP_RECORDING.stop_now();
+    // Do not drop a program's captured release or commit a drag/snap here.
+    // Cancel Atlas's pending drop so the consumed Stop cannot switch scenes.
+    if ATLAS_DRAG_INTENT.active {let _=atlas_pointer_drag_cancel("record_stop");}
+    sex_pdx::serial_record!("[record.stop.request] source=trusted_chip x={} y={}",px,py);
+    true
+}
+
 /// Handle a left-click within the SilkBar top strip (y < 50).
 /// Uses hit_test_action() from silkbar-model to determine what was clicked,
 /// then dispatches the action (workspace switch, launcher, etc.).
 fn handle_silkbar_click(px: i32, py: i32) -> bool {
+    if unsafe{recording_stop_hit(px,py)}{return true;}
     if py < 0 || py >= desktop_bar_height() || px < 0 {
         return false;
     }
@@ -24463,11 +24483,6 @@ fn handle_silkbar_click(px: i32, py: i32) -> bool {
     let m=chrome_metrics();let mut bar=DEFAULT_SILK_BAR;
     if !silkbar_model::reflow_chrome(&mut bar,desktop_width()as usize,m.bar()as usize,m.px(sex_pdx::desktop_style::chrome::TARGET)as usize){return false;}
     let action = hit_test_action(&bar, ux, uy);
-    if matches!(action,Action::ToggleModule(Module::StatusChip(0)))&&unsafe{DESKTOP_RECORDING.stop_target()}{
-        unsafe{DESKTOP_RECORDING.stop_now();}
-        sex_pdx::serial_record!("[record.stop.request] source=trusted_chip x={} y={}",ux,uy);
-        return true;
-    }
     match action {
         Action::None => false,
         Action::SwitchWorkspace(n) => {
@@ -25922,6 +25937,8 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
                 OP_USB_MOUSE_REPORT => {
+                    if msg.caller_pd!=sex_pdx::shell_ready::INPUT_PD_ID||msg.caller_task!=sex_pdx::shell_ready::INPUT_PD_ID {continue;}
+                    if unsafe{DISPLAY_SCALE.pending()}{continue;}
                     // AP14: pointer producer shell marker
                     unsafe {
                         static mut PTR_PRODUCER_SHELL_EMITTED: bool = false;
@@ -25963,6 +25980,7 @@ pub extern "C" fn _start() -> ! {
                         // The synthetic click-focus proof uses EV_ABS before button down to set
                         // the click position explicitly, so it is unaffected by this change.
                         POINTER_BUTTONS = buttons & 0x07;
+                        if buttons&1!=0&&recording_stop_hit(POINTER_X,POINTER_Y){continue;}
                         POINTER_WHEEL_ACCUM = POINTER_WHEEL_ACCUM.saturating_add(wheel as i32);
                         serial_println!(
                             "[shell.pointer.usb_state.ok] x={} y={} buttons={:#x} wheel={}",
@@ -27597,6 +27615,7 @@ pub extern "C" fn _start() -> ! {
                             // ── Click/focus proof marker: pointer event received ──
                             sex_pdx::serial_record!("[silk-shell.pointer.recv] class=EV_BTN btn={} pressed={}",
                                 button, pressed);
+                            if button==1&&pressed&&recording_stop_hit(POINTER_X,POINTER_Y){continue;}
                             if !ATLAS_MODE_ENABLED && (ABS_SEEN_VALID || POINTER_USB_STATE_INIT) { program_pointer_button(button, pressed); }
                             serial_println!("[silk-shell] Pointer BTN {} {} buttons={:#x}",
                                 button, if pressed { "dn" } else { "up" }, POINTER_BUTTONS);

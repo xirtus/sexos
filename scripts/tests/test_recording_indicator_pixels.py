@@ -51,6 +51,10 @@ mod scene {
   let mut bar=silkbar_model::DEFAULT_SILK_BAR;
   assert!(silkbar_model::reflow_chrome(&mut bar,w,metrics.bar()as usize,metrics.px(24)as usize));
   let r=recording_indicator::rect(&bar,w,h,scale).unwrap();
+  // Shell builds this same layout for protected Stop hit testing.
+  for y in r.y..r.y+r.size {for x in r.x..r.x+r.size {
+   assert!(matches!(silkbar_model::hit_test_action(&bar,x,y),silkbar_model::Action::ToggleModule(silkbar_model::Module::StatusChip(0))));
+  }}
   let mut pixels=vec![0x102030;w*h];let(fg,bg)=(0xff4040,0x203040);
   assert!(recording_indicator::paint(pixels.as_mut_ptr(),w,h,&bar,scale,fg,bg));
   let snapshot=scene::SceneSnapshot{surfaces:vec![Surface{active:true,surface_id:0x90,x:r.x as i32,y:r.y as i32}],metrics};
