@@ -177,6 +177,7 @@ fn raw(doc: &Doc, page: &Page, media: &[super::media::Media], at: usize, frame: 
         let parent=d.dom.nodes[n].parent;
         sex_pdx::serial_record!("[web.live.node] owner={} frame={} node={} parent={:?} tag={} id={} children={} box={:?} parent_box={:?}",owner,frame,n,parent,d.dom.tag(n).unwrap_or(""),text(d.dom.attr(n,"id").unwrap_or("")),d.dom.nodes[n].children.len(),page.boxes.get(n).copied().flatten(),parent.and_then(|p|page.boxes.get(p).copied().flatten()));
         sex_pdx::serial_record!("[web.live.attrs] owner={} frame={} node={} class={} style={} hidden_attr={} width={} height={} src={}",owner,frame,n,text(d.dom.attr(n,"class").unwrap_or("")),text(d.dom.attr(n,"style").unwrap_or("")),d.dom.attr(n,"hidden").is_some()as u8,text(d.dom.attr(n,"width").unwrap_or("")),text(d.dom.attr(n,"height").unwrap_or("")),text(d.dom.attr(n,"src").unwrap_or("")));
+        sex_pdx::serial_record!("[web.live.control] owner={} frame={} node={} role={} aria_label={} title={} disabled_attr={}",owner,frame,n,text(d.dom.attr(n,"role").unwrap_or("")),text(d.dom.attr(n,"aria-label").unwrap_or("")),text(d.dom.attr(n,"title").unwrap_or("")),d.dom.attr(n,"disabled").is_some()as u8);
     }
     let mut scripts=0;
     for n in 0..d.dom.nodes.len().min(SCAN) {
