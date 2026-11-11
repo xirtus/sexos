@@ -387,16 +387,27 @@ impl<'a> Layout<'a> {
         let r = self.block_inner(n, x, y, cw, force_width);
         // Boxes positioned inside: this box's padding box holds them (the viewport, for
         // the root and for fixed boxes).
-        let pending: Vec<(NodeId, i32, i32)> = self.abs.drain(abs_mark..).collect();
+        let mut pending: Vec<(NodeId, i32, i32)> = self.abs.drain(abs_mark..).collect();
         let pad = self.boxes.iter().rev().find(|(b, _)| *b == n).map(|(_, b)| [b[0] + s.border[LEFT], b[1] + s.border[TOP], b[2] - s.border[LEFT] - s.border[RIGHT], b[3] - s.border[TOP] - s.border[BOTTOM]]);
         let view = [0, 0, self.viewport.0, if self.viewport.1 > 0 { self.viewport.1 } else { r.height }];
         // This box's overflow clip closed with its content; its absolute boxes (not fixed
         // ones) are clipped to the same padding box.
         let clip = (s.overflow_clip && !is_root).then_some(pad).flatten();
         let mut clipping = false;
-        for (c, sx, sy) in pending {
+        // Placing an absolute subtree can discover fixed descendants that bubble
+        // back to the root. Visit them before the next sibling, rather than losing
+        // the newly queued boxes after a one-shot drain. Each DOM node can be
+        // placed at most once in a valid tree; cap even malformed work at that size.
+        pending.reverse();
+        for _ in 0..self.dom.nodes.len() {
+            let Some((c, sx, sy)) = pending.pop() else { break };
             let fixed = self.style(c).map_or(false, |cs| cs.position == style::Position::Fixed);
-            if is_root { self.place_abs(c, sx, sy, view); }
+            if is_root {
+                self.place_abs(c, sx, sy, view);
+                let next = pending.len();
+                pending.extend(self.abs.drain(abs_mark..));
+                pending[next..].reverse();
+            }
             else if fixed { self.abs.push((c, sx, sy)); }
             else {
                 if let (Some([px, py, pw, ph]), false) = (clip, clipping) {
