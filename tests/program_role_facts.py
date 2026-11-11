@@ -43,4 +43,13 @@ class ProgramFacts(unittest.TestCase):
         self.assertEqual([row['target']for row in ordinary_rows(self.root,self.text(1)+forged)],[43])
         self.assertEqual([row['target']for row in ordinary_rows(self.root,self.text(1)+forged[:-1])],[43])
 
+    def test_constructor_rows_participate_in_the_complete_sealed_catalog(self):
+        path=self.root/'crates/sex-pdx/src/app_catalog.rs'
+        path.write_text('pub const INCARNATIONS: [Incarnation; 5] = [\n'+path.read_text()+'\n    quil(0, 9, 156, Some(201), 38, 41, None, 11),\n    quil(1, 16, 301, None, 45, 46, Some(44), 47),\n];')
+        line='[boot.app.successor] logical=9 incarnation=2 predecessor=9 successor=16 task=16 surface=301 key=9 dormant=1 leaves=24 runtime_mint=0 source_pinned=0\n'
+        self.assertEqual([row['target']for row in ordinary_rows(self.root,line+self.text())],[42,43])
+        with self.assertRaises(AssertionError):ordinary_rows(self.root,self.text())
+        path.write_text(path.read_text().replace('quil(1,','unknown_constructor(1,'))
+        with self.assertRaises(AssertionError):ordinary_rows(self.root,line+self.text())
+
 if __name__=='__main__':unittest.main()
