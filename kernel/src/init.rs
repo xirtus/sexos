@@ -877,7 +877,11 @@ pub fn init() {
         let row=apps::by_target(sex_pdx::desktop_recording::TARGET).expect("BOOT_RECORD_ROW");
         let key=sex_pdx::organs::program_key(row.ordinal);
         assert!(row.app==App::Program && row.ordinal!=0 && key==5,"BOOT_RECORD_PRIVATE_ROW");
-        assert!(!apps::INCARNATIONS.iter().any(|other|other.app==App::Program && other.target!=row.target && sex_pdx::organs::program_key(other.ordinal)==key),"BOOT_RECORD_SHARED_KEY");
+        let anchor=apps::predecessor(row).expect("BOOT_RECORD_ANCHOR");
+        assert!(anchor.ordinal==0 && anchor.target==41,"BOOT_RECORD_ANCHOR_IDENTITY");
+        // The key5 anchor shares genesis only; normal successor admission
+        // requires its complete retirement before row42 can execute/capture.
+        assert!(!apps::INCARNATIONS.iter().any(|other|other.app==App::Program && other.ordinal!=0 && other.target!=row.target && sex_pdx::organs::program_key(other.ordinal)==key),"BOOT_RECORD_SHARED_KEY");
         let mut matching=modules.modules().iter().filter(|module|module.path().ends_with("/programs/record"));
         let image=matching.next().expect("BOOT_RECORD_IMAGE_REQUIRED");
         assert!(matching.next().is_none(),"BOOT_RECORD_IMAGE_AMBIGUOUS");
