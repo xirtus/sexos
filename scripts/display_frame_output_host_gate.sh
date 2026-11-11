@@ -86,7 +86,7 @@ def item(name):
 def derived(needle):
     prefix=main[:main.index(needle)];match=re.search(r'(#\[derive\([^\n]+\)\])\s*$',prefix);assert match,'missing actual derive '+needle
     return match[1]+'\n'+block(main,needle)
-parts=[item(n)for n in ['CURSOR_ARROW_W','CURSOR_ARROW_H','CURSOR_UNDER_SAVED','CURSOR_UNDER_X','CURSOR_UNDER_Y','CURSOR_UNDER_VALID','PREPARED_CURSOR','RENDER_SCENE','SURFACES','FRAME_GROUPS','BITMAP_STORES','TEXT_STAGES','DISPLAY_TOKENS','FOCUSED_SURFACE_ID']]
+parts=[item(n)for n in ['RECORDING_CAPTURE','CURSOR_ARROW_W','CURSOR_ARROW_H','CURSOR_UNDER_SAVED','CURSOR_UNDER_X','CURSOR_UNDER_Y','CURSOR_UNDER_VALID','PREPARED_CURSOR','RENDER_SCENE','SURFACES','FRAME_GROUPS','BITMAP_STORES','TEXT_STAGES','DISPLAY_TOKENS','FOCUSED_SURFACE_ID']]
 parts+=[derived('struct PreparedCursor{'),block(main,'struct PublishedFrame{'),block(main,'struct OutputBackup{'),block(main,'impl OutputBackup{'),block(main,'impl Drop for OutputBackup{'),block(main,'struct SceneLease {'),block(main,'impl SceneLease {'),block(main,'impl Drop for SceneLease {')]
 parts+=[fn(main,n)for n in ['valid_scanout','raster_batch','render_prepared','render','typed_completion_needs_publication','join_pending_text']]
 parts+=[fn(main,'publish_frame').replace('fn publish_frame(', 'fn actual_publish_frame(',1)]
@@ -111,7 +111,7 @@ def invoke(cmd,name,env=None):
 inputs=[Path(os.environ['OUTPUT_GATE_PATH']).resolve(strict=True),main_path,sdk_path,fixture,root/'tests/display_frames.rs',root/'tests/display_frame_output.rs',root/'kernel/src/memory/va_allocator.rs',root/'servers/sexdisplay/src/frame_output.rs',root/'servers/sexdisplay/src/damage.rs',root/'crates/sex-pdx/src/display_frames.rs',root/'crates/sex-pdx/src/memory_region.rs']+sorted((root/'crates/silkbar-model/src').rglob('*.rs'))
 inputs += [root/n for n in ['servers/sexdisplay/src/text_transaction.rs','crates/sex-pdx/src/text_batch.rs','crates/sex-pdx/src/text_encoding.rs']]
 inputs += [root/n for n in ['tests/display_paint_batch.rs','servers/sexdisplay/src/paint_batch.rs','servers/sexdisplay/src/scene.rs','servers/sexdisplay/src/surface_lifecycle.rs','servers/sexdisplay/src/surface_groups.rs','servers/sexdisplay/src/bitmap_binding.rs','servers/sexdisplay/src/bitmap_transaction.rs','servers/sexdisplay/src/bitmap_stores.rs','crates/sex-pdx/src/app_catalog.rs','crates/sex-pdx/src/app_lifecycle.rs','crates/sex-pdx/src/bitmap_batch.rs','crates/sex-pdx/src/desktop_style.rs','crates/sex-pdx/src/spindle_view.rs']]
-inputs += [root/'crates/sex-pdx/src/screen_capture.rs',root/'servers/sexdisplay/src/screen_capture.rs']
+inputs += [root/'crates/sex-pdx/src/screen_capture.rs',root/'servers/sexdisplay/src/screen_capture.rs',root/'crates/sex-pdx/src/desktop_recording.rs',root/'crates/sex-pdx/src/desktop_recording_capture.rs',root/'servers/sexdisplay/src/recording_capture.rs',root/'servers/sexdisplay/src/recording_indicator.rs']
 input_hashes={str(v):hashlib.sha256(v.read_bytes()).hexdigest()for v in inputs}
 lib=out/'libsilkbar_model.rlib';r=invoke(['rustc','--edition=2021','--crate-name','silkbar_model','--crate-type','rlib',str(root/'crates/silkbar-model/src/lib.rs'),'-o',str(lib)],'model.compile');assert r.returncode==0,r.stderr
 def compile_test(name,text,pipeline=production_path,case=None,expect_failure=False,count=None,paint=None):
