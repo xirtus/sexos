@@ -126,3 +126,41 @@ fn alpha(s:&Surface,scale:u32,x:usize,y:usize)->u8{
  surfaces[3].owner_pd=8;
  assert_eq!(g.winner(&surfaces,program.frame(),40,140,180,200).unwrap().surface_id,program.frame());
 }
+
+#[test]fn row_candidates_match_scalar_for_every_focus_and_reordered_clipped_layers(){
+ let mut scratch=surface_groups::RowScratch::new();
+ for scale in 1..=3{
+  let mut groups=FrameGroups::new();groups.set_scale(scale);
+  groups.register(Catalog{slot:9,target_pd:9,task_id:9,surface_id:156,coordinator_pd:3});
+  let mut surfaces=[
+   Surface{owner_pd:3,..surface(201,-10,70,140,100)},
+   Surface{owner_pd:9,..surface(156,0,0,180,180)},
+   surface(800,15,85,120,85),surface(801,0,28,180,152),
+   Surface{owner_pd:3,..surface(152,140,65,55,100)},
+   Surface{active:false,..surface(802,0,0,180,180)},
+   // Equal unknown-surface keys exercise the scalar selector's first-slot tie.
+   Surface{owner_pd:7,..surface(800,30,90,100,70)},
+  ];
+  groups.observe(&surfaces);groups.fit_children(&mut surfaces);
+  for reversed in [false,true]{
+   if reversed{surfaces.reverse();}
+   for focus in [0,201,156,800,801,152,802]{
+    // Reusing one scratch across scale, focus, row and slice order must not
+    // retain a prior candidate. Include clipped bar/top/bottom AA transitions.
+    for y in (0..180).filter(|y|*y%7==0 || (65..100).contains(y) || *y>=158){
+     let mut row=groups.row_winners(&surfaces,focus,y,180,180,&mut scratch).unwrap();
+     for x in 0..180{
+      let expected=groups.winner(&surfaces,focus,x,y,180,180);
+      let actual=row.source(x);
+      assert_eq!(actual.map(|s|s.surface.surface_id),expected.map(|s|s.surface_id),"scale={scale} reverse={reversed} focus={focus} {x},{y}");
+      if let(Some(actual),Some(expected))=(actual,expected){
+       assert!(core::ptr::eq(actual.surface,expected));
+       assert!(core::ptr::eq(actual.content,groups.content(expected,&surfaces,x,y,180,180)));
+       assert_eq!(actual.chrome,expected.surface_id==focus||groups.is_frame(expected)||groups.is_program_frame(expected));
+      }
+     }
+    }
+   }
+  }
+ }
+}
