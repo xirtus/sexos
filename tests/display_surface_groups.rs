@@ -26,6 +26,7 @@ pub fn pdx_call(_:u64,_:u64,_:u64,_:u64,_:u64)->(u64,u64){unreachable!("display 
 #[path="../crates/sex-pdx/src/app_catalog.rs"] #[allow(dead_code)] mod app_catalog;
 #[path="../servers/sexdisplay/src/surface_lifecycle.rs"] mod surface_lifecycle;
 #[path="../servers/sexdisplay/src/surface_groups.rs"] mod surface_groups;
+#[path="../servers/sexdisplay/src/recording_indicator.rs"] mod recording_indicator;
 use surface_lifecycle::*;
 use surface_groups::FrameGroups;
 macro_rules! serial_println { ($($a:tt)*) => {} }
