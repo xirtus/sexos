@@ -267,7 +267,7 @@ EXPORT("sx_modules_ready") int sx_modules_ready(int budget_ms) {
 }
 
 EXPORT("sx_init") int sx_init(int memory_limit) {
-    sexos_baseline_jit_enabled = host_jit_available();
+    sexos_baseline_jit_enabled = host_jit_available() == 2;
     rt = JS_NewRuntime();
     if (!rt) return -1;
     if (memory_limit > 0) JS_SetMemoryLimit(rt, (size_t)memory_limit);

@@ -980,6 +980,44 @@ fn baseline_hot_bytecode_matches_forced_interpreter() {
 
 #[cfg(feature = "baseline-jit")]
 #[test]
+fn baseline_boolean_branches_match_interpreter_types_and_coercions() {
+    let source = r#"
+        function flags(x) { return !!(x&1) && !!(x&2) || !!(x&4); }
+        function choose(x) { return x && 7; }
+        function less(a,b) { return a < b; }
+        function strict() { return true === 1; }
+        function loose() { return true == 1; }
+        let truth=0;
+        for(let i=-512;i<512;i++) {
+            if(flags(i)) truth++;
+            choose(i); less(i,7); strict(); loose();
+        }
+        console.log(truth,typeof flags(3),flags(3),flags(0));
+        console.log(choose(0),choose(-1),typeof choose(0),choose('text'));
+        console.log(less(-2147483648,2147483647),typeof less(1,2),strict(),loose());
+        console.log(flags(NaN),flags(-0),Object.is(choose(-0),-0));
+        let seen=0;
+        console.log(flags({valueOf(){seen++;return 3;}}),seen);
+        try { flags({valueOf(){throw new Error('coercion');}}); }
+        catch(e) { console.log(e.message); }
+    "#;
+    let mut interpreter=page(""); interpreter.set_jit_enabled(false);
+    interpreter.eval(source,"boolean-flow.js").unwrap();
+    let expected=logs(&mut interpreter);
+    let mut jit=page(""); jit.eval(source,"boolean-flow.js").unwrap();
+    assert_eq!(logs(&mut jit),expected);
+    assert_eq!(interpreter.jit_stats().executed,0);
+    #[cfg(all(target_arch="x86_64",target_os="linux"))]
+    {
+        let stats=jit.jit_stats();
+        assert!(stats.compiled>=3,"{stats:?}");
+        assert!(stats.executed>=2900,"{stats:?}");
+        assert_eq!(stats.refused,0,"{stats:?}");
+    }
+}
+
+#[cfg(feature = "baseline-jit")]
+#[test]
 fn baseline_hot_call_measurement() {
     // Several arithmetic terms amortize the sandbox crossing. A short function's
     // boundary cost is measured separately by the browser smoke fixture.
