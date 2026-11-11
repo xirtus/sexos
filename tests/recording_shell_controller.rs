@@ -135,6 +135,7 @@ pub mod app_lifecycle {
         pub task: u32,
         pub surface: u64,
         pub state: u64,
+        pub source_pinned: bool,
     }
     pub fn activation(slot: usize, commit: bool) -> Result<ActivationInfo, u64> {
         assert_eq!(slot, 302);
@@ -146,6 +147,7 @@ pub mod app_lifecycle {
             successor: 42,
             task: h.task,
             surface: 500,
+            source_pinned: true,
             state: h.state,
         })
     }
@@ -158,6 +160,7 @@ pub mod app_lifecycle {
             successor: 42,
             task: h.task,
             surface: 500,
+            source_pinned: true,
             state: 5,
         })
     }
@@ -171,6 +174,7 @@ pub mod app_lifecycle {
             successor: 42,
             task: h.task,
             surface: 500,
+            source_pinned: true,
             state: 2,
         })
     }

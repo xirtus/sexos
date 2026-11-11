@@ -349,6 +349,10 @@ impl Controller {
                     let Ok(info) = life::activation(slot, false) else {
                         return true;
                     };
+                    if !info.source_pinned || info.successor!=w::TARGET || info.surface!=row.surface {
+                        self.finish(w::IntentStatus::Unavailable);
+                        return true;
+                    }
                     if !matches!(
                         info.state,
                         life::ACTIVATION_READY | life::ACTIVATION_REUSABLE

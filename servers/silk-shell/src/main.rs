@@ -16784,7 +16784,7 @@ fn recorder_idle_poll(){
     if !w::ENABLED{return}
     let Some(row)=app_catalog::by_target(w::TARGET)else{return};
     let Some(slot)=row.activation_slot else{return};
-    if a::activation(slot,false).is_ok_and(|info|info.state==a::ACTIVATION_READY){
+    if a::activation(slot,false).is_ok_and(|info|info.source_pinned&&info.successor==w::TARGET&&info.surface==row.surface&&info.state==a::ACTIVATION_READY){
         if let Ok(info)=a::activation(slot,true){sex_pdx::serial_record!("[record.idle.launch] target={} task={} surface={} capture=0",info.successor,info.task,info.surface);}
     }
 }
@@ -16792,8 +16792,7 @@ static mut PROGRAM_REBIRTH: Option<usize> = None;
 /// What each program row can do right now, from the rows' own held grants.
 fn program_rows()->impl Iterator<Item=(&'static app_catalog::Incarnation,usize,u64)>{
     app_catalog::INCARNATIONS.iter().filter(|row|row.app==app_catalog::App::Program&&row.ordinal!=0)
-        .filter(|row|!sex_pdx::desktop_recording::ENABLED||row.target!=sex_pdx::desktop_recording::TARGET)
-        .filter_map(|row|{let slot=row.activation_slot?;let info=sex_pdx::app_lifecycle::activation(slot,false).ok()?;Some((row,slot,info.state))})
+        .filter_map(|row|{let slot=row.activation_slot?;let info=sex_pdx::app_lifecycle::activation(slot,false).ok()?;if info.source_pinned || info.successor!=row.target || info.surface!=row.surface{return None}Some((row,slot,info.state))})
 }
 fn program_launcher_status()->(bool,&'static str,&'static str){
     use sex_pdx::app_lifecycle as a;

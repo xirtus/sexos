@@ -286,7 +286,7 @@ pub fn activation(pd:&ProtectionDomain,slot:u64,kind:u64,len:u64)->[u64;5]{
         let old=&apps[oi];let new=&apps[ni];
         g.authorize(pd.id,old.target,old.boot_task,new.target,new.boot_task,old.identity,new.identity)?;
         if new.predecessor!=old.target{return Err(DENIED)}
-        let reply_of=|a:&App,state:u64|[0,a.target as u64,a.task as u64,a.surface,state];
+        let reply_of=|a:&App,state:u64|[0,a.target as u64,a.task as u64,a.surface,state|if g.image_source.is_some(){sex_pdx::app_lifecycle::ACTIVATION_SOURCE_PINNED}else{0}];
         if kind==3{
             // A program from disk, on a row that has not started or has fully ended.
             if !new.reusable{return Err(DENIED)}
@@ -308,11 +308,10 @@ pub fn activation(pd:&ProtectionDomain,slot:u64,kind:u64,len:u64)->[u64;5]{
             if kind==2{return rebirth(&mut apps,ni,None,g.image_source).map(|state|reply_of(&apps[ni],state))}
         }
         // Once consumed, replay never revalidates or restores retired leaves.
-        if new.activated{return Ok([0,new.target as u64,new.task as u64,new.surface,
-            if TERMINAL[ni].load(Ordering::Acquire){3}else{2}])}
+        if new.activated{return Ok(reply_of(new,if TERMINAL[ni].load(Ordering::Acquire){3}else{2}))}
         // A program row can start once the row before it has started; it need not have ended.
         let ready=if old.reusable{old.activated}else{old.retired && old.acked==REQUIRED && dead(old).is_ok()};
-        let reply=[0,new.target as u64,new.task as u64,new.surface,if ready{1}else{0}];
+        let reply=reply_of(new,if ready{1}else{0});
         if kind==0{return Ok(reply)}
         if kind==2{return Err(DENIED)}
         if !ready{return Err(RETRY)}
@@ -343,7 +342,7 @@ pub fn activation(pd:&ProtectionDomain,slot:u64,kind:u64,len:u64)->[u64;5]{
         DORMANT[ni].store(false,Ordering::Release);
         assert!(crate::scheduler::SCHEDULERS[0].activate_task(main),"SUCCESSOR_EXCLUSIVE_COMMIT");
         crate::serial_println!("[app.activation.committed] logical={} incarnation={} predecessor={} successor={} task={} surface={} pages={} runtime_alloc=0 runtime_mint=0 bsp=1",g.logical_app,g.incarnation,g.predecessor,g.successor,g.successor_task,new.surface,count);
-        Ok([0,new.target as u64,new.task as u64,new.surface,2])
+        Ok(reply_of(new,2))
     })();result.unwrap_or_else(|e|[e,0,0,0,0])
 }
 /// A new run of a reusable row, in two steps so no service sees it live early.

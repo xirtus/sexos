@@ -871,6 +871,20 @@ pub fn init() {
     crate::boot_memory::init_text_regions(sexdisp_id);
     crate::boot_memory::init_pixel_regions(sexdisp_id);
     crate::boot_memory::init_screen_capture(sexdisp_id);
+    // Recorder authority exists only in the explicit profile with a retained,
+    // exact image source and a uniquely private reusable key.
+    let recorder_source=if sex_pdx::desktop_recording::ENABLED{
+        let row=apps::by_target(sex_pdx::desktop_recording::TARGET).expect("BOOT_RECORD_ROW");
+        let key=sex_pdx::organs::program_key(row.ordinal);
+        assert!(row.app==App::Program && row.ordinal!=0 && key==5,"BOOT_RECORD_PRIVATE_ROW");
+        assert!(!apps::INCARNATIONS.iter().any(|other|other.app==App::Program && other.target!=row.target && sex_pdx::organs::program_key(other.ordinal)==key),"BOOT_RECORD_SHARED_KEY");
+        let mut matching=modules.modules().iter().filter(|module|module.path().ends_with("/programs/record"));
+        let image=matching.next().expect("BOOT_RECORD_IMAGE_REQUIRED");
+        assert!(matching.next().is_none(),"BOOT_RECORD_IMAGE_AMBIGUOUS");
+        Some(crate::boot_memory::retain_image_source(image.data()))
+    }else{None};
+    if recorder_source.is_some(){crate::boot_memory::init_recording_capture(sexdisp_id);}
+
     crate::boot_memory::init_sound_rings(sexbell_id);
     crate::boot_memory::init_program_image(sexfiles_id);
     crate::boot_memory::init_fs_regions(sexfiles_id);
@@ -1041,10 +1055,15 @@ pub fn init() {
         assert!(shell.find_capability(sex_pdx::web::SHELL_SLOT as u32).is_none(),"BOOT_SHELL_NETWORK_COLLISION");
         shell.grant_capability(sex_pdx::web::SHELL_SLOT,crate::capability::CapabilityData::Domain(sexnet_id));
     }
+    if recorder_source.is_some(){
+        let files=crate::ipc::DOMAIN_REGISTRY.get(sexfiles_id).expect("BOOT_RECORD_FILES");
+        assert!(files.find_capability(6).is_none(),"BOOT_RECORD_FILES_SHELL_COLLISION");
+        files.grant_capability(6,crate::capability::CapabilityData::Domain(silkshell_id));
+    }
     // One-shot activation chain: each successor is bound to its exact predecessor.
     for incarnation in sex_pdx::app_catalog::INCARNATIONS.iter().filter(|i|i.ordinal!=0) {
         let predecessor=sex_pdx::app_catalog::predecessor(incarnation).expect("BOOT_SUCCESSOR_PREDECESSOR");
-        crate::app_resources::reserve_successor(predecessor.target,incarnation.target,silkshell_id,incarnation.activation_slot.expect("BOOT_SUCCESSOR_ACTIVATION_SLOT"));
+        crate::app_resources::reserve_successor_from(predecessor.target,incarnation.target,silkshell_id,incarnation.activation_slot.expect("BOOT_SUCCESSOR_ACTIVATION_SLOT"),if incarnation.target==sex_pdx::desktop_recording::TARGET{recorder_source}else{None});
     }
     // Linen serves Spindle's existing async list/open/search route. A read-only
     // lifecycle observer fences queued requests after death without owning an ACK.

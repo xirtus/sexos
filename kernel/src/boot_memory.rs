@@ -322,6 +322,14 @@ pub fn init_screen_capture(display:u32){
     if DOMAIN_REGISTRY.get(c::CLIENT).is_some(){paired_at(display,c::CLIENT,c::SLOT,c::SLOT,c::REGION_ID,c::BYTES as u64,false);}
 }
 
+/// Pinned recorder profile only: Display writes, reserved private row reads.
+pub fn init_recording_capture(display:u32){
+    use sex_pdx::desktop_recording_capture as c;
+    require_boot();
+    assert!(sex_pdx::desktop_recording::ENABLED,"BOOT_RECORD_PROFILE");
+    paired_at(display,sex_pdx::desktop_recording::TARGET,c::SLOT,c::SLOT,c::REGION_ID,c::BYTES as u64,false);
+}
+
 /// Immutable Display-only frame storage, reserved at geometry-known genesis.
 /// One buddy reservation contains two page-aligned, disjoint frame spans.
 /// This is PD-held memory authority; tasks within the PD share its access.
