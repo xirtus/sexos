@@ -40,7 +40,7 @@ def main():
   base=f'http://10.0.2.2:{server.server_address[1]}';start=len(t())
   command(f'fetch {base}/web /bin/web')
   saved=g['wait'](r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',start,240);assert saved[1].startswith('Saved'),saved[1]
-  expected=f'{sum(((i+7)*3)^(i-7) for i in range(10000))}|2147483648|-2147483649|4294967296|true|a1|2'
+  expected=f'{sum(((i+7)*3)^(i-7) for i in range(10000))}|2147483648|-2147483649|4294967296|true|a1|2|640,boolean,true,false,0,7,number,true,boolean,false,false,0,true,7'
   for enabled in (False,True):
    start=len(t());command(f'run +net web {base}/jit.html'+('' if enabled else ' --no-jit'))
    value=g['wait'](r'\[web.console\] level=0 jit-result ([^\r\n]+)',start,300);assert value[1]==expected,(value[1],expected)
@@ -49,7 +49,7 @@ def main():
    ready=g['wait'](r'\[web.ready\] target=(\d+) task=(\d+)',start,120);target,task=ready[1],ready[2]
    launch=g['wait'](rf'\[shell.program.launch\] target={target} task={task} surface=(\d+)',start,60)
    if enabled:
-    assert numbers[1]>=4 and numbers[2]>=9900 and numbers[3]>=3 and numbers[4]==0,numbers
+    assert numbers[1]>=7 and numbers[2]>=12500 and numbers[3]>=3 and numbers[4]==0,numbers
     assert re.search(rf'\[app.program.code\] target={target} task={task} op=seal ',t()[start:]),'no kernel seal for this domain/run'
    else:assert numbers[1:5]==[0,0,0,0],numbers
    results.append(dict(enabled=enabled,compiled=numbers[1],executed=numbers[2],bailouts=numbers[3],refused=numbers[4],ticks=numbers[5],script_ticks=numbers[6],result=value[1],target=int(target),task=int(task)))

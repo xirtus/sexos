@@ -16,7 +16,7 @@ sex-image = { path = "../sex-image" }
 sex-fetch = { path = "../sex-fetch" }
 
 [features]
-# Experimental straight-line int32 QuickJS bytecode compiler; disabled by default.
+# Experimental forward-control-flow int32/boolean QuickJS bytecode compiler; disabled by default.
 baseline-jit = []
 
 [target.'cfg(target_os = "none")'.dependencies]

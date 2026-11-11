@@ -1,6 +1,6 @@
 --- a/quickjs.c
 +++ b/quickjs.c
-@@ -16486,6 +16486,20 @@
+@@ -16486,6 +16486,21 @@
                           argv, flags);
      }
      b = p->u.func.function_bytecode;
@@ -12,11 +12,12 @@
 +    if (sexos_baseline_jit_enabled && flags == 0 && b->func_kind == JS_FUNC_NORMAL &&
 +        b->has_simple_parameter_list && !b->var_count && !b->closure_var_count &&
 +        argc == b->arg_count && argc <= 8 && b->byte_code_len <= 128) {
-+        __attribute__((import_module("dom"), import_name("jit")))
++        __attribute__((import_module("dom"), import_name("jit_v2")))
 +        extern int sexos_jit(const uint8_t *, int, JSValueConst *, int, int32_t *);
 +        int32_t result;
-+        if (sexos_jit(b->byte_code_buf, b->byte_code_len, argv, argc, &result))
-+            return JS_NewInt32(caller_ctx, result);
++        int kind = sexos_jit(b->byte_code_buf, b->byte_code_len, argv, argc, &result);
++        if (kind == 1) return JS_NewInt32(caller_ctx, result);
++        if (kind == 2) return JS_NewBool(caller_ctx, result);
 +    }
  
      if (unlikely(argc < b->arg_count || (flags & JS_CALL_FLAG_COPY_ARGV))) {
