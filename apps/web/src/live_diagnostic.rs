@@ -40,7 +40,11 @@ fn chosen(dom: &Dom) -> Vec<NodeId> {
         if connected(dom, n) != Some(true) { continue; }
         let tag = dom.tag(n).unwrap_or("");
         let id = dom.attr(n, "id").unwrap_or("");
-        if !matches!(tag, "html" | "body" | "iframe" | "video" | "audio") && !id.contains("player") { continue; }
+        // Include semantic controls and inline vectors, so a zero-size clickable
+        // control can be explained using its actual cached computed style.
+        // Selection remains bounded and does not read JS properties/getters.
+        if !matches!(tag, "html" | "body" | "iframe" | "video" | "audio" | "button" | "svg")
+            && dom.attr(n, "role") != Some("button") && !id.contains("player") { continue; }
         let mut p = Some(n);
         for _ in 0..ANCESTORS {
             let Some(at) = p else { break };
