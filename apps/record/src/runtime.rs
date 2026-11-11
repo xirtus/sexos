@@ -213,7 +213,9 @@ impl Runtime {
             {
                 if self.session.saved() {
                     self.stage = Stage::Done;
-                    sex_pdx::serial_record!("[record.saved] frames={} last_pts_ms={} synced=1 released=1",self.frames,self.last_pts.unwrap_or(0));
+                    if let Some(scope)=self.session.scope {
+                        sex_pdx::serial_record!("[record.saved] session={} task={} frames={} last_pts_ms={} synced=1 released=1",scope.session.word(),scope.task,self.frames,self.last_pts.unwrap_or(0));
+                    }
                     self.queue_report(w::AppStatus::Saved)
                 } else {
                     self.fail()
@@ -382,7 +384,12 @@ impl Runtime {
                             .is_ok()
                         {
                             self.last_pts = Some(pts);
-                            self.frames = self.frames.saturating_add(1)
+                            self.frames = self.frames.saturating_add(1);
+                            // At most 301 receipts for the bounded 60s/5fps
+                            // session, with no allocation or shared frame read.
+                            if self.frames<=301 {if let Some(scope)=self.session.scope {
+                                sex_pdx::serial_record!("[record.frame.accepted] session={} task={} index={} generation={} publication_ms={} pts_ms={}",scope.session.word(),scope.task,self.frames,frame.generation,frame.publication_ms,pts);
+                            }}
                         } else {
                             self.fail()
                         }

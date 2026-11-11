@@ -6,6 +6,7 @@ import argparse, hashlib, json, os, re, shutil, subprocess, time
 from pathlib import Path
 from install_program import install
 from quil_autosave_gate import boot
+from recording_trace import correlate, check_packets
 ROOT=Path(__file__).resolve().parents[1]
 def sha(p): return hashlib.sha256(p.read_bytes()).hexdigest()
 def main():
@@ -15,6 +16,7 @@ def main():
  assert not any(a.out.iterdir()),'fresh evidence directory required'
  result={'ok':False,'scope':'actual desktop recording, saved file and independent decode; no isolation/hardware proof'}
  for name in ('iso','source_disk','program','extractor'):result[name+'_sha256']=sha(getattr(a,name))
+ result['trace_helper_sha256']=sha(ROOT/'scripts/recording_trace.py')
  result['gate_sha256']=sha(Path(__file__));result['boot_helper_sha256']=sha(ROOT/'scripts/quil_autosave_gate.py')
  disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
  with disk.open('r+b')as f:f.truncate(1024**3)
@@ -36,11 +38,13 @@ def main():
    time.sleep(.2)
   g['q'].cmd('screendump',{'filename':str(a.out/'active.ppm')})
   g['focus'](153);line('record-stop')
-  saved=g['wait'](r'\[record.saved\] frames=(\d+) last_pts_ms=(\d+) synced=1 released=1',start,240)
+  saved_pattern=rf'\[record.saved\] session={armed[1]} task={armed[2]} frames=(\d+) last_pts_ms=(\d+) synced=1 released=1\r?\n'
+  saved=g['wait'](saved_pattern,start,240)
   text=g['text']()[start:];revoked=re.search(rf'\[display.recording.revoked\] session={armed[1]} task={armed[2]} .*scrubbed=1',text)
-  assert revoked and revoked.start()<text.index('[record.saved]'),'Saved must follow actual revoke/scrub'
+  assert revoked and revoked.start()<re.search(saved_pattern,text).start(),'Saved must follow actual revoke/scrub'
   assert not re.search(frame_pattern,text[revoked.end():]),'frame published after revoke'
   result['frames'],result['last_pts_ms']=int(saved[1]),int(saved[2]);assert result['frames']>=2
+  trace=correlate(text[:re.search(saved_pattern,text).start()],result['session'],result['task'],result['frames']);result['publication_trace']=trace
   assert '[kernel.panic]'not in text and 'KERNEL PANIC'not in text
   g['stop']();g=None
   movie=a.out/'desktop.mkv';subprocess.run([str(a.extractor.resolve()),str(disk),'/recordings/desktop.mkv',str(movie)],check=True)
@@ -50,6 +54,7 @@ def main():
   pts=[round(float(row['pts_time'])*1000)for row in probe['packets']]
   assert len(pts)==result['frames'] and pts[0]==0 and pts[-1]==result['last_pts_ms']
   assert all(b>a for a,b in zip(pts,pts[1:]))
+  check_packets(trace,pts)
   decoded=a.out/'decoded.rgb';subprocess.run(['ffmpeg','-v','error','-y','-i',str(movie),'-fps_mode','passthrough','-f','rawvideo','-pix_fmt','rgb24',str(decoded)],check=True)
   assert decoded.stat().st_size==result['frames']*640*360*3
   assert len(set(decoded.read_bytes()[:640*360*3]))>8,'captured desktop is blank/uniform'
