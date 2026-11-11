@@ -157,11 +157,15 @@ struct RowSource { surface: usize, content: usize, chrome: bool }
 struct RowRun { end: usize, source: Option<RowSource> }
 /// Scene-owned storage contains indices, never references into an older scene.
 /// Fill it in place: no large row aggregate is returned or copied on the stack.
-pub struct RowScratch { edges: [usize; MAX_ROW_RUNS + 1], runs: [RowRun; MAX_ROW_RUNS] }
+pub struct RowScratch { edges: [usize; MAX_ROW_RUNS + 1], runs: [RowRun; MAX_ROW_RUNS],
+    candidates: [RowCandidate; crate::surface_lifecycle::MAX_SURFACES] }
+#[derive(Clone, Copy)]
+struct RowCandidate { index: usize, left: usize, right: usize, key: (u8,u16,u64) }
+impl RowCandidate { const EMPTY: Self = Self { index: 0, left: 0, right: 0, key: (0,0,0) }; }
 const MAX_ROW_RUNS: usize = crate::surface_lifecycle::MAX_SURFACES * 6 + 1;
 impl RowScratch {
-    pub const fn new() -> Self { Self { edges: [0; MAX_ROW_RUNS + 1], runs: [RowRun { end: 0, source: None }; MAX_ROW_RUNS] } }
-    pub fn clear(&mut self) { self.edges.fill(0); self.runs.fill(RowRun { end: 0, source: None }); }
+    pub const fn new() -> Self { Self { edges: [0; MAX_ROW_RUNS + 1], runs: [RowRun { end: 0, source: None }; MAX_ROW_RUNS], candidates: [RowCandidate::EMPTY; crate::surface_lifecycle::MAX_SURFACES] } }
+    pub fn clear(&mut self) { self.edges.fill(0); self.runs.fill(RowRun { end: 0, source: None }); self.candidates.fill(RowCandidate::EMPTY); }
 }
 /// Both borrows are tied to this preparation. A caller cannot reuse scratch
 /// while the view exists, or resolve its indices against a different scene.
@@ -190,11 +194,23 @@ impl FrameGroups {
     pub fn row_winners<'a, 's>(&self, surfaces: &'a [Surface], focused: u64, y: usize, w: usize, h: usize,
         scratch: &'s mut RowScratch) -> Option<RowWinners<'a, 's>> {
         if surfaces.len() > crate::surface_lifecycle::MAX_SURFACES || w == 0 || y >= h { return None; }
+        // Resolve authenticated focus once, then retain only this row's exact
+        // independent nonzero spans and canonical keys in Scene-owned scratch.
+        // No cached references or previous row/scene candidates are consulted.
+        let raised_focus = surfaces.iter().find(|s| s.active && s.surface_id == focused)
+            .and_then(|s| self.child_group(s)).filter(|g| g.frame_seen)
+            .and_then(|g| g.catalog.frame_surface_id()).unwrap_or(focused);
+        let mut candidates = 0;
         let edges = &mut scratch.edges; edges[0] = 0; edges[1] = w; let mut n = 2;
-        for s in surfaces.iter().filter(|s| s.active) {
+        for (index,s) in surfaces.iter().enumerate().filter(|(_,s)| s.active) {
             let (_sx,sy,sw,sh) = self.rect(s,w,h);
             if sw != 0 && sh != 0 && y >= sy && y-sy < sh {
                 let(a,b)=self.row_span(s,y,w,h,false);
+                if a<b && self.independent(s) {
+                    scratch.candidates[candidates]=RowCandidate { index, left:a, right:b,
+                        key:sex_pdx::desktop_stack::key(raised_focus,s.owner_pd,s.surface_id) };
+                    candidates+=1;
+                }
                 edges[n] = a; edges[n+1] = b; n += 2;
                 let(oa,ob)=self.row_span(s,y,w,h,true);
                 if(oa,ob)!=(a,b){edges[n]=oa;edges[n+1]=ob;n+=2;}
@@ -216,12 +232,16 @@ impl FrameGroups {
         let mut count = 0;
         for i in 1..n { if edges[i] > edges[i-1] {
             let x = edges[i-1];
-            let source = self.winner(surfaces,focused,x,y,w,h).map(|surface| {
+            // Rounded nonzero row spans are contiguous. The same interval
+            // boundaries already split every silhouette and child/body edge.
+            let source = scratch.candidates[..candidates].iter()
+                .filter(|c| x>=c.left && x<c.right).min_by_key(|c| c.key).map(|candidate| {
+                let surface=&surfaces[candidate.index];
                 let content = self.content(surface,surfaces,x,y,w,h);
-                // winner/content return members of this exact slice. Keep the
-                // conversion checked; no raw pointers enter reusable storage.
+                // Content belongs to this exact slice. Keep its conversion
+                // checked; no raw pointers enter reusable storage.
                 RowSource {
-                    surface: surfaces.iter().position(|s| core::ptr::eq(s,surface)).unwrap(),
+                    surface: candidate.index,
                     content: surfaces.iter().position(|s| core::ptr::eq(s,content)).unwrap(),
                     chrome: surface.surface_id == focused || self.is_frame(surface) || self.is_program_frame(surface),
                 }
