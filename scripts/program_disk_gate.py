@@ -5,12 +5,12 @@ from pathlib import Path
 import program_launch_gate as launch
 from install_program import install,fnv
 from quil_autosave_gate import boot
+from program_role_facts import ordinary_rows
 from quil_workflow_gate import palette_select,palette_commands
 from check_desktop_pixels import font_from_source
 ROOT=Path(__file__).resolve().parents[1]
 FORTUNE=(ROOT/'apps/fortune/src/main.rs').read_text()
 # Every program row but the boot image's own.
-ROWS=(ROOT/'crates/sex-pdx/src/app_catalog.rs').read_text().count('app: App::Program, ordinal:')-1
 HELLO_TEXT=launch.TEXT
 FORTUNE_TEXT=re.search(r'const TEXT: &\[u8\] = b"(.*?)";',FORTUNE,re.S)[1]
 def writable_code(elf):
@@ -25,7 +25,7 @@ def main():
  elf=(ROOT/'iso_root/programs/fortune').read_bytes();assert elf[:4]==b'\x7fELF'
  install(disk,[('fortune',elf),('badhash',elf,fnv(elf)^1),('wxcode',writable_code(elf))])
  font=font_from_source((ROOT/'servers/sexdisplay/src/main.rs').read_text())
- g=boot(a.iso,disk,a.out,'disk',a.resolution);t=g['text'];q=g['q'];commands=palette_commands(ROOT)
+ g=boot(a.iso,disk,a.out,'disk',a.resolution);t=g['text'];q=g['q'];rows=len(ordinary_rows(ROOT,t()));commands=palette_commands(ROOT)
  def run(line):
   g['focus'](153);time.sleep(.5)
   for k in line:
@@ -61,8 +61,8 @@ def main():
   m=g['wait'](r'\[hello.ready\] target=(\d+) task=(\d+) surface=(\d+) bytes=',s,60);g['wait'](rf'\[display.text.committed\] target={m[1]} ',s,60);time.sleep(2)
   path=a.out/'hello-after.ppm';q.cmd('screendump',{'filename':str(path)});time.sleep(.5);hello=drawn(path,m[3],HELLO_TEXT);close(m[1],int(m[2]),'hello')
   # All rows at once, and one more refused rather than displacing any of them.
-  live=[started('run fortune') for _ in range(ROWS)]
-  assert len({row[0]for row in live})==ROWS,'programs were not on separate rows'
+  live=[started('run fortune') for _ in range(rows)]
+  assert len({row[0]for row in live})==rows,'programs were not on separate rows'
   s=len(t());run('run fortune');g['wait'](r'\[shell.program.denied\] reason=no_free_row',s,60)
   path=a.out/'side-by-side.ppm';q.cmd('screendump',{'filename':str(path)});time.sleep(1)
   side=[drawn(path,sid,text) for _,_,sid in live]
@@ -73,7 +73,7 @@ def main():
  finally:g['stop']()
  # A disk with no store past its end gets a plain answer, not a hang or a fault.
  bare=a.out/'bare.img';shutil.copyfile(a.source_disk,bare)
- g=boot(a.iso,bare,a.out,'bare',a.resolution);t=g['text'];q=g['q']
+ g=boot(a.iso,bare,a.out,'bare',a.resolution);t=g['text'];q=g['q'];rows=len(ordinary_rows(ROOT,t()))
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120)
   for attempt in range(2):

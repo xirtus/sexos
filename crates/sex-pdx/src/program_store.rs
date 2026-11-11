@@ -61,6 +61,7 @@ pub const CORRUPT: u32 = 4;
 pub const NOT_A_PROGRAM: u32 = 5;
 pub const NO_FREE_ROW: u32 = 6;
 pub const NO_MORE_RECORDS: u32 = 7;
+pub const IMAGE_BUSY:u32=8;
 pub fn refusal(code: u64) -> &'static [u8] {
     match code as u32 {
         NOT_FOUND => b"No program by that name.",
@@ -70,6 +71,7 @@ pub fn refusal(code: u64) -> &'static [u8] {
         NOT_A_PROGRAM => b"That file is not a program SexOS can run.",
         NO_FREE_ROW => b"All program windows are in use. Close one first.",
         NO_MORE_RECORDS => b"This machine has room for no more background programs.",
+        IMAGE_BUSY=>b"Another program is still preparing. Try again.",
         _ => b"The program did not start.",
     }
 }

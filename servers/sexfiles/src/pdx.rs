@@ -60,3 +60,8 @@ pub fn defer_pop() -> Option<crate::defer_queue::Stamped> {
         Some(msg)
     }
 }
+
+/// Called only after held lifecycle attestation, before retirement ACK delivery.
+pub fn defer_retire_task(caller_pd:u32,caller_task:u32)->usize {
+    unsafe { DEFERRED.retire_task(caller_pd,caller_task) }
+}

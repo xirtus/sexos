@@ -16777,6 +16777,7 @@ static mut PROGRAM_REBIRTH: Option<usize> = None;
 /// What each program row can do right now, from the rows' own held grants.
 fn program_rows()->impl Iterator<Item=(&'static app_catalog::Incarnation,usize,u64)>{
     app_catalog::INCARNATIONS.iter().filter(|row|row.app==app_catalog::App::Program&&row.ordinal!=0)
+        .filter(|row|!sex_pdx::desktop_recording::ENABLED||row.target!=sex_pdx::desktop_recording::TARGET)
         .filter_map(|row|{let slot=row.activation_slot?;let info=sex_pdx::app_lifecycle::activation(slot,false).ok()?;Some((row,slot,info.state))})
 }
 fn program_launcher_status()->(bool,&'static str,&'static str){

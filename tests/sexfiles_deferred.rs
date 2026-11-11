@@ -166,3 +166,73 @@ fn stamped_queue_memory_is_bounded_without_changing_wire_payload() {
     assert_eq!(core::mem::size_of::<queue::Message>(), 40);
     assert_eq!(core::mem::size_of::<queue::Stamped>(), 48);
 }
+
+#[test]
+fn exact_task_retirement_frees_only_its_requests_before_rebind() {
+    let mut q = queue::Deferred::new();
+    let old = queue::Stamped {
+        message: (0x99, 42, 1, 0, 0),
+        caller_task: 107,
+    };
+    let next = queue::Stamped {
+        message: (0x99, 42, 2, 0, 0),
+        caller_task: 108,
+    };
+    let peer = queue::Stamped {
+        message: (0x99, 43, 3, 0, 0),
+        caller_task: 107,
+    };
+    for item in [old, next, peer, old] {
+        assert!(q.push_stamped(item));
+    }
+    let exit = queue::Stamped {
+        message: (OP_APP_EXIT, 0, 42, 107, 0),
+        caller_task: 0,
+    };
+    assert!(q.push_stamped(exit));
+    assert_eq!(q.retire_task(0, 107), 0);
+    assert_eq!(q.retire_task(42, 0), 0);
+    assert_eq!(q.retire_task(42, 107), 2);
+    assert_eq!(q.len(), 3);
+    assert_eq!(q.pop_stamped(), Some(exit));
+    assert_eq!(q.pop_stamped(), Some(next));
+    assert_eq!(q.pop_stamped(), Some(peer));
+    assert_eq!(q.pop_stamped(), None);
+    for _ in 0..8 {
+        assert!(q.push_stamped(next));
+    }
+    assert!(!q.push_stamped(old));
+}
+#[test]
+fn retiring_document_data_and_cancel_restores_the_correct_reserved_counters() {
+    let mut q = queue::Deferred::new();
+    let request = |kind, seq, task| queue::Stamped {
+        message: (
+            document::OP,
+            9,
+            document::Request {
+                seq,
+                kind,
+                object: if kind == document::ABORT { 0 } else { 3 },
+                offset: 0,
+                a: 0,
+                b: 0,
+            }
+            .header(),
+            0,
+            0,
+        ),
+        caller_task: task,
+    };
+    for seq in 1..=4 {
+        assert!(q.push_stamped(request(document::READ, seq, 91)));
+    }
+    assert!(q.push_stamped(request(document::ABORT, 5, 91)));
+    assert_eq!(q.retire_task(9, 91), 5);
+    assert_eq!(q.len(), 0);
+    for seq in 1..=4 {
+        assert!(q.push_stamped(request(document::READ, seq, 92)));
+    }
+    assert!(q.push_stamped(request(document::ABORT, 5, 92)));
+    assert!(!q.push_stamped(request(document::READ, 6, 92)));
+}

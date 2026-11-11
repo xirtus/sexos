@@ -14,9 +14,14 @@ static mut DIRECTORY: [u8; store::SECTOR * store::MAX_DIRECTORY_SECTORS] = [0; s
 pub fn load(name: [u64; 2]) -> u64 {
     // A run with arguments arrives as a ticket for `/bin/NAME`; without that file it is
     // the store's program NAME, still with its arguments.
-    match try_load(name) { Ok(len) => store::loaded(len), Err(error) => store::failed(error) }
+    match try_load(name,true) { Ok(len) => store::loaded(len), Err(error) => store::failed(error) }
 }
-fn try_load(mut name: [u64; 2]) -> Result<u32, u32> {
+/// Image bytes only: never consume an unrelated prepared ticket or loaded latch.
+pub fn load_unbound(name:[u64;2])->u64 {
+    match try_load(name,false) { Ok(len)=>store::loaded(len),Err(error)=>store::failed(error) }
+}
+fn try_load(mut name: [u64; 2], remember:bool) -> Result<u32, u32> {
+    if !remember && name[0]==store::TICKET { return Err(store::NOT_FOUND); }
     let buf_va = crate::vfs::diskfs_bridge_get_buf_va();
     if buf_va == 0 || buf_va == u64::MAX { return Err(store::IO); }
     let view = sex_pdx::memory_region_view(store::IMAGE_SLOT_FILES, 0, store::IMAGE_BYTES as u64, QUERY_VIEW | READ | WRITE).map_err(|_| store::IO)?;
@@ -28,7 +33,8 @@ fn try_load(mut name: [u64; 2]) -> Result<u32, u32> {
         let mut bytes = [0u8; store::NAME_BYTES];
         bytes[..8].copy_from_slice(&a); bytes[8..].copy_from_slice(&b);
         let len = bytes.iter().position(|b| *b == 0).unwrap_or(store::NAME_BYTES);
-        crate::fs_service::read_named(&bytes[..len], image)
+        if remember { crate::fs_service::read_named(&bytes[..len], image) }
+        else { crate::fs_service::read_named_unbound(&bytes[..len], image) }
     };
     match found {
         crate::fs_service::Program::Loaded(len) => return Ok(len),
@@ -72,6 +78,6 @@ fn try_load(mut name: [u64; 2]) -> Result<u32, u32> {
     }
     sex_pdx::serial_record!("[files.program.read] bytes={} lba={}", len, entry.lba);
     let packed = [name[0].to_le_bytes(), name[1].to_le_bytes()].concat();
-    crate::fs_service::loaded(&packed[..packed.iter().position(|b| *b == 0).unwrap_or(store::NAME_BYTES)]);
+    if remember { crate::fs_service::loaded(&packed[..packed.iter().position(|b| *b == 0).unwrap_or(store::NAME_BYTES)]); }
     Ok(entry.len)
 }
