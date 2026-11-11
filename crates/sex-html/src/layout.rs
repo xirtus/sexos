@@ -940,7 +940,9 @@ impl<'a> Layout<'a> {
             _ => {
                 let (min, max) = self.intrinsic(n);
                 let (_, bp, _) = sum_h(s, 0);
-                let width = match s.width.resolve(0) { Some(w) => if s.box_sizing_border { w } else { w + bp }, None => max.clamp(min, max.max(min)) };
+                // Atomic preparation happens at the origin, but percentages still
+                // resolve against the real containing block's content width.
+                let width = match s.width.resolve(cw) { Some(w) => if s.box_sizing_border { w } else { w + bp }, None => max.clamp(min, max.max(min)) };
                 let r = self.block(n, 0, 0, width + m_l + m_r, Some(width));
                 (r.width - m_l - m_r, r.height)
             }
