@@ -139,6 +139,7 @@ p=Path('iso_root/limine.cfg');s=p.read_text();anchor='    MODULE_PATH=boot:///ap
 assert anchor in s and '/programs/record' not in s
 p.write_text(s.replace(anchor,anchor+'\n    MODULE_PATH=boot:///programs/record'))
 PY_RECORD
+        python3 scripts/strip_recording_boot.py --root iso_root --receipt iso_root/recording-stripping.json
       fi
       # The disk image `install` writes, built from this ISO's own files.
       python3 scripts/make_boot_image.py --root iso_root --out iso_root/boot.img
