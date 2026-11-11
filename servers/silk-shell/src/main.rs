@@ -3,6 +3,8 @@
 
 extern crate alloc;
 mod desktop_keys;
+mod desktop_recording;
+static mut DESKTOP_RECORDING:desktop_recording::Controller=desktop_recording::Controller::new();
 mod app_custody;
 /// The BOOT incarnation catalog, at crate root for app_custody.
 use sex_pdx::app_catalog;
@@ -11247,6 +11249,7 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
         }
         sex_pdx::serial_record!("[silk-shell.pointer.recv] class=EV_BTN btn={} pressed={}",
             button, pressed);
+        if button==1&&pressed&&recording_stop_hit(POINTER_X,POINTER_Y){return;}
         if !ATLAS_MODE_ENABLED && (ABS_SEEN_VALID || POINTER_USB_STATE_INIT) { program_pointer_button(button, pressed); }
         if button == 1 {
             serial_println!(
@@ -16773,12 +16776,23 @@ fn browser_active_frame()->Option<(u32,u64)>{
     if row.app!=app_catalog::App::Browser || !native_launcher_status(row.target).0{return None}
     Some((row.target,row.frame()))
 }
+/// The reserved row must consume its ordinary BOOT edge before later ordinary
+/// rows can advance. This activates only the bounded idle stub, never a loaded
+/// recorder image or any recording consent. It is not an activation fork.
+fn recorder_idle_poll(){
+    use sex_pdx::{app_lifecycle as a,desktop_recording as w};
+    if !w::ENABLED{return}
+    let Some(row)=app_catalog::by_target(w::TARGET)else{return};
+    let Some(slot)=row.activation_slot else{return};
+    if a::activation(slot,false).is_ok_and(|info|info.source_pinned&&info.successor==w::TARGET&&info.surface==row.surface&&info.state==a::ACTIVATION_READY){
+        if let Ok(info)=a::activation(slot,true){sex_pdx::serial_record!("[record.idle.launch] target={} task={} surface={} capture=0",info.successor,info.task,info.surface);}
+    }
+}
 static mut PROGRAM_REBIRTH: Option<usize> = None;
 /// What each program row can do right now, from the rows' own held grants.
 fn program_rows()->impl Iterator<Item=(&'static app_catalog::Incarnation,usize,u64)>{
     app_catalog::INCARNATIONS.iter().filter(|row|row.app==app_catalog::App::Program&&row.ordinal!=0)
-        .filter(|row|!sex_pdx::desktop_recording::ENABLED||row.target!=sex_pdx::desktop_recording::TARGET)
-        .filter_map(|row|{let slot=row.activation_slot?;let info=sex_pdx::app_lifecycle::activation(slot,false).ok()?;Some((row,slot,info.state))})
+        .filter_map(|row|{let slot=row.activation_slot?;let info=sex_pdx::app_lifecycle::activation(slot,false).ok()?;if info.source_pinned || info.successor!=row.target || info.surface!=row.surface{return None}Some((row,slot,info.state))})
 }
 fn program_launcher_status()->(bool,&'static str,&'static str){
     use sex_pdx::app_lifecycle as a;
@@ -20566,6 +20580,7 @@ unsafe fn frame_close_allowed(frame_id: u32) -> bool {
 /// Reuses the same destroy mechanism as keyboard SurfaceAction::DestroyFocused.
 /// Returns true if the surface was actually destroyed.
 unsafe fn close_surface_from_frame_light(surface_id: u64) -> bool {
+    if !DESKTOP_RECORDING.before_hide(surface_id){return false}
     serial_println!("[silk.close.request] sid={}", surface_id);
     serial_println!("[silk.lifecycle.close.begin] sid={}", surface_id);
     // Must be closeable (checks registry, lifecycle registration, or alive flags).
@@ -20876,6 +20891,7 @@ unsafe fn minimize_frame(frame_id: u32) -> bool {
     if !surface_is_alive(surface_id) {
         return false;
     }
+    if !DESKTOP_RECORDING.before_hide(surface_id){return false}
     // Mark frame as minimized.
     set_frame_minimized(frame_id, true);
     serial_println!("[silk.lifecycle.minimize.snapshot] frame={} sid={} scene={}", frame_id, surface_id, ACTIVE_SCENE_IDX);
@@ -23831,6 +23847,7 @@ fn hit_target_label(target: HitTarget, silkbar_handled: bool) -> (&'static str, 
 /// Emits [shell.click_focus.down/hit/miss] markers.
 /// Emits [shell.frame.rim.drag.start] for rim drag, [shell.frame.chrome.capture] for other chrome.
 unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTarget, bool) {
+    if buttons_val&1!=0&&recording_stop_hit(px,py){return(HitTarget::None,true);}
     let old_focus = FOCUSED_SURFACE_ID;
     serial_println!("[shell.click_focus.down] x={} y={} buttons={:#x}", px, py, buttons_val);
     // ── Atlas intercept: if Atlas mode is enabled, hit-test scene cards ──
@@ -24435,10 +24452,28 @@ unsafe fn toggle_scene_settings_panel() {
     }
 }
 
+/// Protected recording Stop precedes Atlas and ordinary pointer capture.
+/// Call only after authenticated input admission (or internal proof dispatch).
+/// Existing button-up paths retain responsibility for releasing app/drag state.
+unsafe fn recording_stop_hit(px:i32,py:i32)->bool {
+    if !DESKTOP_RECORDING.stop_target()||DISPLAY_SCALE.pending()
+        ||!(ABS_SEEN_VALID||POINTER_USB_STATE_INIT)||px<0||py<0||py>=desktop_bar_height(){return false;}
+    let m=chrome_metrics();let mut bar=DEFAULT_SILK_BAR;
+    if !silkbar_model::reflow_chrome(&mut bar,desktop_width()as usize,m.bar()as usize,m.px(sex_pdx::desktop_style::chrome::TARGET)as usize){return false;}
+    if !matches!(hit_test_action(&bar,px as usize,py as usize),Action::ToggleModule(Module::StatusChip(0))){return false;}
+    DESKTOP_RECORDING.stop_now();
+    // Do not drop a program's captured release or commit a drag/snap here.
+    // Cancel Atlas's pending drop so the consumed Stop cannot switch scenes.
+    if ATLAS_DRAG_INTENT.active {let _=atlas_pointer_drag_cancel("record_stop");}
+    sex_pdx::serial_record!("[record.stop.request] source=trusted_chip x={} y={}",px,py);
+    true
+}
+
 /// Handle a left-click within the SilkBar top strip (y < 50).
 /// Uses hit_test_action() from silkbar-model to determine what was clicked,
 /// then dispatches the action (workspace switch, launcher, etc.).
 fn handle_silkbar_click(px: i32, py: i32) -> bool {
+    if unsafe{recording_stop_hit(px,py)}{return true;}
     if py < 0 || py >= desktop_bar_height() || px < 0 {
         return false;
     }
@@ -25127,6 +25162,8 @@ pub extern "C" fn _start() -> ! {
                 }
             }
         }
+        recorder_idle_poll();
+        unsafe {DESKTOP_RECORDING.poll(sex_pdx::get_ticks());}
         unsafe { program_rebirth_poll(); }
         unsafe { session::save(); }
         unsafe { record_spawn_poll(); }
@@ -25810,7 +25847,7 @@ pub extern "C" fn _start() -> ! {
                 unsafe { flush_pending_cursor_send(); }
                 // A full input ring may recover while the shell has no work.
                 // Return to the publisher instead of blocking in listen.
-                if shell_ready_publisher.is_pending() || unsafe { RECORD_SPAWN_LEFT != 0 || DISPLAY_SCALE.request().is_some() || CURSOR_SEND_PENDING || APP_INPUT.pending() || LAUNCHER_FOCUS.is_some() || CLIPBOARD_INTAKE.pending() || CLIPBOARD.pending() || WORKSPACE_REFRESH_PENDING.iter().any(|p|*p) || linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_POINTER.is_some() || LINEN_ASYNC.can_send() || NOTIFY_NOTICE_UNTIL != 0 } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
+                if shell_ready_publisher.is_pending() || unsafe { DESKTOP_RECORDING.pending() || RECORD_SPAWN_LEFT != 0 || DISPLAY_SCALE.request().is_some() || CURSOR_SEND_PENDING || APP_INPUT.pending() || LAUNCHER_FOCUS.is_some() || CLIPBOARD_INTAKE.pending() || CLIPBOARD.pending() || WORKSPACE_REFRESH_PENDING.iter().any(|p|*p) || linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_POINTER.is_some() || LINEN_ASYNC.can_send() || NOTIFY_NOTICE_UNTIL != 0 } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
                     sys_yield();
                     continue;
                 }
@@ -25821,6 +25858,7 @@ pub extern "C" fn _start() -> ! {
         if sex_pdx::display_ready::is_display_ready(&msg) { unsafe { display_came_back(); } continue; }
         unsafe {
             if shell_lifecycle_hint(&msg) { continue; }
+            if DESKTOP_RECORDING.receive(&msg,sex_pdx::get_ticks(),PROGRAM_READING||PROGRAM_REBIRTH.is_some()||RECORD_SPAWN_LEFT!=0) {continue;}
             if shell_program_message(&msg) { continue; }
             if clipboard_receive(&msg) { continue; }
             if notification_receive(&msg) { continue; }
@@ -25898,6 +25936,8 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
                 OP_USB_MOUSE_REPORT => {
+                    if msg.caller_pd!=sex_pdx::shell_ready::INPUT_PD_ID||msg.caller_task!=sex_pdx::shell_ready::INPUT_PD_ID {continue;}
+                    if unsafe{DISPLAY_SCALE.pending()}{continue;}
                     // AP14: pointer producer shell marker
                     unsafe {
                         static mut PTR_PRODUCER_SHELL_EMITTED: bool = false;
@@ -25939,6 +25979,7 @@ pub extern "C" fn _start() -> ! {
                         // The synthetic click-focus proof uses EV_ABS before button down to set
                         // the click position explicitly, so it is unaffected by this change.
                         POINTER_BUTTONS = buttons & 0x07;
+                        if buttons&1!=0&&recording_stop_hit(POINTER_X,POINTER_Y){continue;}
                         POINTER_WHEEL_ACCUM = POINTER_WHEEL_ACCUM.saturating_add(wheel as i32);
                         serial_println!(
                             "[shell.pointer.usb_state.ok] x={} y={} buttons={:#x} wheel={}",
@@ -27573,6 +27614,7 @@ pub extern "C" fn _start() -> ! {
                             // ── Click/focus proof marker: pointer event received ──
                             sex_pdx::serial_record!("[silk-shell.pointer.recv] class=EV_BTN btn={} pressed={}",
                                 button, pressed);
+                            if button==1&&pressed&&recording_stop_hit(POINTER_X,POINTER_Y){continue;}
                             if !ATLAS_MODE_ENABLED && (ABS_SEEN_VALID || POINTER_USB_STATE_INIT) { program_pointer_button(button, pressed); }
                             serial_println!("[silk-shell] Pointer BTN {} {} buttons={:#x}",
                                 button, if pressed { "dn" } else { "up" }, POINTER_BUTTONS);

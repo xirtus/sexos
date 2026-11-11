@@ -15,6 +15,7 @@ pub mod display_ready;
 pub mod shell_ready;
 pub mod memory_region;
 pub mod screen_capture;
+pub mod desktop_recording_capture;
 pub mod desktop_recording;
 pub mod dma_pool;
 pub mod paging;

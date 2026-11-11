@@ -142,6 +142,11 @@ impl Window {
         if m.type_id == 0x202 { return Key::decode(m.arg0, m.arg1, m.arg2).map(Event::Key); }
         None
     }
+    /// Process one already received message while the application multiplexes
+    /// its own nonblocking protocols. Shell input keeps the usual authentication.
+    pub fn receive(&mut self, message: &sex_pdx::PdxMessage) -> Option<Event> {
+        self.event(message)
+    }
     /// The next key or close, waiting for one.
     pub fn next(&mut self) -> Event {
         if let Some(slot) = self.held.iter_mut().find(|e| e.is_some()) { return slot.take().unwrap(); }

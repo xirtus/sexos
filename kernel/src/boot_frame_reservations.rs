@@ -36,7 +36,7 @@ impl BootstrapPlanner {
         Ok(if start < end { Some(Range {start,end}) } else { None })
     }
 }
-const CAPACITY: usize = 128;
+const CAPACITY: usize = 256;
 pub struct BootFrameReservations { ranges: [Range; CAPACITY], count: usize }
 impl BootFrameReservations {
     pub const fn new() -> Self { Self { ranges: [Range {start:0,end:0};CAPACITY], count:0 } }

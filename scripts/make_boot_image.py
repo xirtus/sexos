@@ -8,11 +8,32 @@ ROOT=Path(__file__).resolve().parents[1]
 # the whole 32 MiB slot the disk keeps for it (sex_pdx::fs::BOOT_SECTORS).
 SECTORS=24576
 SECTORS_WITH_FIRMWARE=65536
+def recorder_module(root, config):
+ seen_in_entry=False
+ configured=False
+ for line in config.splitlines():
+  line=line.strip()
+  if line.startswith(':'):
+   seen_in_entry=False
+  elif line.startswith('MODULE_PATH='):
+   path=line.split('=',1)[1].strip()
+   if not path.startswith('boot:///programs/'):continue
+   if path!='boot:///programs/record' or seen_in_entry:
+    raise ValueError('unsupported or duplicate installed program module in entry')
+   seen_in_entry=True;configured=True
+ if not configured:return None
+ record=root/'programs'/'record'
+ if not record.is_file():raise FileNotFoundError('configured recorder module is missing')
+ return record
 def main():
  p=argparse.ArgumentParser();p.add_argument('--root',type=Path,default=ROOT/'iso_root');p.add_argument('--out',type=Path,required=True);a=p.parse_args()
  img=a.out;img.parent.mkdir(parents=True,exist_ok=True)
  pack=a.root/'firmware'/'wifi.pack'
- sectors=SECTORS_WITH_FIRMWARE if pack.is_file() and pack.stat().st_size>1<<20 else SECTORS
+ config=(a.root/'limine.cfg').read_text()
+ record=recorder_module(a.root,config)
+ # Recorder images use the existing full boot slot; mcopy still fails closed
+ # if modules and firmware exceed it. Never grow the install partition here.
+ sectors=SECTORS_WITH_FIRMWARE if record is not None or pack.is_file() and pack.stat().st_size>1<<20 else SECTORS
  with img.open('wb') as f:f.truncate(sectors*512)
  run=lambda *c:subprocess.run(c,check=True,capture_output=True)
  run('mformat','-i',str(img),'-T',str(sectors),'-h','64','-s','32','-v','SEXOS','::')
@@ -22,13 +43,16 @@ def main():
   for d in ('::/EFI','::/EFI/BOOT','::/servers','::/apps','::/firmware'):run('mmd','-i',str(img),d)
   run('mcopy','-i',str(img),str(efi),'::/EFI/BOOT/BOOTX64.EFI')
  # The installed system boots without the image it was installed from.
- cfg=Path(tmp_cfg:=str(img)+'.cfg');cfg.write_text(''.join(l for l in (a.root/'limine.cfg').read_text().splitlines(True)
+ cfg=Path(tmp_cfg:=str(img)+'.cfg');cfg.write_text(''.join(l for l in config.splitlines(True)
    if 'boot:///boot.img' not in l and (pack.is_file() or 'boot:///firmware/wifi.pack' not in l)))
  run('mcopy','-i',str(img),str(cfg),'::/limine.cfg');cfg.unlink()
  run('mcopy','-i',str(img),str(a.root/'sexos-kernel'),'::/sexos-kernel')
  for sub in ('servers','apps'):
   for f in sorted((a.root/sub).iterdir()):
    if f.is_file():run('mcopy','-i',str(img),str(f),f'::/{sub}/{f.name}')
+ if record is not None:
+  run('mmd','-i',str(img),'::/programs')
+  run('mcopy','-i',str(img),str(record),'::/programs/record')
  if pack.is_file():run('mcopy','-i',str(img),str(pack),'::/firmware/wifi.pack')
  print(img,img.stat().st_size)
 if __name__=='__main__':main()

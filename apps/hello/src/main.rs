@@ -44,6 +44,13 @@ fn show(surface: u64, region: u64) {
 pub extern "C" fn _start() -> ! {
     let identity = lifecycle::catalog(lifecycle::SELF_CATALOG_SLOT).expect("HELLO_SELF_AUTHORITY");
     let row = sex_pdx::app_catalog::by_surface(identity.target_pd, identity.surface_id).expect("HELLO_CATALOG_ROW");
+    // The reserved private recorder row starts only this bounded, noncapturing
+    // BOOT stub. Its dynamic image is separately pinned by BOOT; neither an idle
+    // activation nor a placeholder rebirth can restore recording consent.
+    if sex_pdx::desktop_recording::ENABLED && identity.target_pd==sex_pdx::desktop_recording::TARGET {
+        sex_pdx::serial_record!("[record.idle] target={} task={} capture=0",identity.target_pd,identity.task_id);
+        sex_pdx::task_finish(0);
+    }
     // The first row only anchors the chain of program rows: it runs at BOOT, so
     // it leaves at once and a launch activates the next row.
     if row.ordinal == 0 {

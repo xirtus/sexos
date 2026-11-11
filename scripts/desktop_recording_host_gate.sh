@@ -71,4 +71,9 @@ PY_RUNTIME
 SEXOS_RECORDER=1 RECORDING_RUNTIME_CASES="$ROOT_DIR/tests/recording_runtime_cases.rs" RECORDING_NESTED_DISK_SOURCE="$TEST_DIR/nested_disk.rs" RECORDING_ORDINARY_DISPATCH_SOURCE="$TEST_DIR/ordinary.rs" rustc --test --edition=2021 "$TEST_DIR/runtime_runner.rs" -o "$TEST_DIR/runtime"
 "$TEST_DIR/runtime" --test-threads=1
 
+for test in activation_source_receipt recording_app_files recording_app_session recording_shell_controller; do
+    SEXOS_RECORDER=1 rustc --test --edition=2021 "$ROOT_DIR/tests/$test.rs" -o "$TEST_DIR/$test"
+    "$TEST_DIR/$test" --test-threads=1
+done
 python3 "$ROOT_DIR/tests/program_role_facts.py"
+python3 "$ROOT_DIR/scripts/tests/test_boot_image_recorder.py"

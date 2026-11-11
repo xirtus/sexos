@@ -4,7 +4,7 @@
 
 51392ac11144d6f43427d400053d0c6d8ec4b0c2605eb0c33a53c525374bc602  crates/sex-pdx/src/app_key.rs
 
-0f88d10b629503599986dda2140158ae6d3637f4f8f3a885132a99d6d4d9cfbd  crates/sex-pdx/src/app_lifecycle.rs
+5945e7ea7809976b3bc7d41d861cd3160c2d337cde6ea7b13389f73766a74cbd  crates/sex-pdx/src/app_lifecycle.rs
 
 4918d7d03ca42713f932e7e5c66172044b848ff4e8b13f59d1395c18e7cbe7f8  crates/sex-pdx/src/app_scroll.rs
 
@@ -22,7 +22,9 @@ e45f86d95f464bcbefe222acdb7ea565dda7f35301c54dd22ca1a71ba3e86f04  crates/sex-pdx
 
 98357d79e617b3cf3a9895e8e4eaa38ca8d2510ce02a432229aff6698b87c621  crates/sex-pdx/src/crash_log.rs
 
-ab8817143b15e29969990957e5c465b5a703ee4812ae21c399de2ce55fa83aa2  crates/sex-pdx/src/desktop_recording.rs
+9de5025a3d3b67d02e061fd9dac37173e11bdc0776a6b620892dd756d9a0ecef  crates/sex-pdx/src/desktop_recording.rs
+
+c086d9b4df16cff98e5ae8ea9f153f0a5210df5c6ab4fa2dba68d843d60fd20b  crates/sex-pdx/src/desktop_recording_capture.rs
 
 801e34b49d8bd9daf55068e6f75398599193e2d9b702a0f2a8680dbff16d2f85  crates/sex-pdx/src/desktop_style.rs
 
@@ -52,7 +54,7 @@ e1a8e5b73c48cfd4cc079510a2c51eacd7f371f00dffabb5968962ca9f462e30  crates/sex-pdx
 
 a0f555cd3af59954d4dce9ae913d16ac90089c8fa1dd61ecfda1a25a85de899d  crates/sex-pdx/src/history_recovery.rs
 
-b6b3fdc4b086c225d8fb94582c1bcdfad8316c856dd5fb72e8bb0814d652e9c0  crates/sex-pdx/src/lib.rs
+5aaf9049323c6d2069909ba0246211390a8c90b5ac203c249a2123296c752c55  crates/sex-pdx/src/lib.rs
 
 b02d602feb5f239687f1a450e8c0ec2b932c366df85ae4f2a5dc67df3f5edcef  crates/sex-pdx/src/memory_region.rs
 
@@ -69,6 +71,8 @@ eac0c2eb5f726f3cfac35fc4ce3f4d3d8eb64fedb7879de9d2f9620ab2a48994  crates/sex-pdx
 7bb87aa1010d27d5e0315eb214ea71b7bfa338e3187f2e7f55fa93b350f883ac  crates/sex-pdx/src/program_memory.rs
 
 c4df9d38bc8a063e7d5eb201d20e9b171543efb9cbc425774fa147fa2bf6150b  crates/sex-pdx/src/program_store.rs
+
+309bc618c344eb7186879bf7bde673ec120d4a2bc20bf4502e9a1dfc14b88696  crates/sex-pdx/src/recording_frame_bank.rs
 
 93d33d6a62bf030a19ffdfe31883f76c873f02a93eff525f4bb9dd308a2f3ec7  crates/sex-pdx/src/screen_capture.rs
 
@@ -114,11 +118,11 @@ a947e57a405316312fe334d17fdfdb2d3e6b59e708b4d61f416a4db6275ee4cb  kernel/src/app
 
 cbee8915b1b99dd33248184dc85732256173ad4bc93b3a5f2a8507da396f113c  kernel/src/app_resource_state.rs
 
-207c8adc20d327291576b370feeb74c51ed998fb096e81f7aaebd01981dd3e21  kernel/src/app_resources.rs
+7d505c8f8e0c159d03e6360fc087f52753d668b304640b76e02901e0e98694de  kernel/src/app_resources.rs
 
 f6246b2ba9d3c3aa8354736e5a1f51f9b55972b078efa2008a9e3d0e259125b3  kernel/src/boot_display_state.rs
 
-d6c573d6be7ccaf284ecf779f7965985f0965f5dc84ba010ceaea815e0744a80  kernel/src/boot_memory.rs
+b37f850e899372b572cf87889607f56e834ccfa36c138ea3d6af9c53a4db1c2f  kernel/src/boot_memory.rs
 
 2fd25f89091106c70503869c40f52cfeb6662fab8ddfcd2c6202d2e04550fe69  kernel/src/boot_network.rs
 

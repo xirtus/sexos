@@ -165,3 +165,21 @@ fn person_status_is_typed_and_never_confuses_starting_with_active_or_saved() {
     assert!(intent_reply(0,IntentStatus::Active).is_none());assert!(intent_reply(1<<24,IntentStatus::Saved).is_none());
     assert!(decode_intent_reply(SHELL,0x8809_0000_0000_0001).is_none());
 }
+
+#[test]
+fn app_setup_and_reports_keep_real_reborn_task_and_service_epochs() {
+    let session=SessionSequence::new(3,19).unwrap();let task=0x4000_0006;
+    let commands=[AppCommand::Prepare{session,length:31,shell_epoch:3,task,files_epoch:7,spindle_task:12},AppCommand::Name{session,offset:16,words:[123,456]},AppCommand::Active{session,shell_epoch:3,display_epoch:5,task},AppCommand::Stop{session,shell_epoch:3,display_epoch:5,task}];
+    for command in commands {
+        let args=command.args();assert_eq!(AppCommand::decode(SHELL,args),Some(command));assert!(AppCommand::decode(TARGET,args).is_none());
+        let mut invalid=args;invalid[0]|=1<<48;assert!(AppCommand::decode(SHELL,invalid).is_none());
+    }
+    let mut mismatch=commands[0].args();mismatch[1]=4u64<<32|task as u64;assert!(AppCommand::decode(SHELL,mismatch).is_none());
+    let mut zero=commands[2].args();zero[2]&=0xffff_ffff;assert!(AppCommand::decode(SHELL,zero).is_none());
+    for status in [AppStatus::Prepared,AppStatus::Saved,AppStatus::Failed,AppStatus::Stopped] {
+        let report=AppReport{session,status,task,files_epoch:7,display_epoch:5,spindle_task:12};
+        assert_eq!(AppReport::decode(TARGET,report.args()),Some(report));assert!(AppReport::decode(SHELL,report.args()).is_none());
+        let mut bad=report.args();bad[0]|=1<<32;assert!(AppReport::decode(TARGET,bad).is_none());
+        let mut bad=report.args();bad[1]&=0xffff_ffff;assert!(AppReport::decode(TARGET,bad).is_none());
+    }
+}

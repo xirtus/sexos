@@ -1,0 +1,7 @@
+# Verified compaction of opt-in staged modules
+
+The actual f52d254c profile exhausted the fixed32MiB installed FAT:11,473,920 bytes free before copying13,795,328-byte Wi-Fi firmware. A copied failed image reproduced mcopy's explicit Disk full error; logs/failure JSON retained under desktop-recorder/native-boot-entries. No firmware is dropped and no partition is enlarged.
+
+The opt-in builder now strips only nonruntime ELF sections from staged server/app/record copies. Kernel and all original target ELFs remain untouched. Before replacing any copy, the helper checks the complete ELF header except exact section-table metadata fields, every program header byte (including dynamic/stack/TLS entries), and every PT_LOAD byte except those same ELF section metadata fields. It retains before/after hashes and segment hashes in recording-stripping.json. The canonical stripped /programs/record is scanned again with the existing key-byte scanner; that same canonical file supplies the ISO BOOT source, installed FAT module and native Files input.
+
+An isolated experiment saved2,884,240 bytes including kernel; production excludes the kernel's153,496-byte saving. Three targeted validation controls pass: only section metadata may vary, runtime/header/stack/payload mutations reject, truncated/wrong-architecture copies reject. These are explicit synthetic ELF validation fixtures. Actual full stripped-profile capacity/build and native recording proof remain pending. No performance or hardware claim.

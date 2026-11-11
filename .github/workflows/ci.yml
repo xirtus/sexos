@@ -49,6 +49,8 @@ jobs:
       run: bash scripts/program_heap_limit_host_gate.sh
     - name: Unarmed recorder custody and restart contracts
       run: bash scripts/desktop_recording_host_gate.sh
+    - name: Unarmed recorder application custom-target check
+      run: SEXOS_RECORDER=1 RUSTFLAGS="-C relocation-model=pic -C link-arg=-pie" cargo check --locked --manifest-path apps/record/Cargo.toml --target x86_64-sex-app.json -Z build-std=core,compiler_builtins,alloc -Z build-std-features=compiler-builtins-mem
     - name: Native screenshot custody and PNG output on the host
       run: bash scripts/desktop_capture_host_gate.sh
     - name: HTML containing-block and replaced sizing
@@ -333,6 +335,8 @@ jobs:
     - uses: ./.github/actions/setup
       with:
         recording: "true"
+    - name: Recorder encoder-profile custom-target check
+      run: SEXOS_RECORDER=1 RUSTFLAGS="-C relocation-model=pic -C link-arg=-pie" cargo check --locked --manifest-path apps/record/Cargo.toml --target x86_64-sex-app.json -Z build-std=core,compiler_builtins,alloc -Z build-std-features=compiler-builtins-mem
     - name: Independent decoder
       run: sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg
     - name: Build recording-profile candidate

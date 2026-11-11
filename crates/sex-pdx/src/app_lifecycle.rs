@@ -205,8 +205,16 @@ pub const ACTIVATION_EXHAUSTED:u64=3;
 pub const ACTIVATION_REUSABLE:u64=4;
 /// A new run is waiting for every service to forget the old one.
 pub const ACTIVATION_REBIRTHING:u64=5;
+pub const ACTIVATION_SOURCE_PINNED:u64=1<<8;
 #[derive(Debug,Clone,Copy,PartialEq,Eq)]
-pub struct ActivationInfo{pub successor:u32,pub task:u32,pub surface:u64,pub state:u64}
+pub struct ActivationInfo{pub successor:u32,pub task:u32,pub surface:u64,pub state:u64,pub source_pinned:bool}
+impl ActivationInfo{
+    pub fn decode(pd:u64,task:u64,surface:u64,flags:u64)->Result<Self,u64>{
+        let state=flags&0xff;
+        if flags&!(ACTIVATION_SOURCE_PINNED|0xff)!=0 || state>ACTIVATION_REBIRTHING || pd==0 || task==0{return Err(INVALID)}
+        Ok(Self{successor:u32::try_from(pd).map_err(|_|INVALID)?,task:u32::try_from(task).map_err(|_|INVALID)?,surface,state,source_pinned:flags&ACTIVATION_SOURCE_PINNED!=0})
+    }
+}
 /// kind0 observes; kind1 consumes the fixed one-shot grant or replays its
 /// receipt. No caller supplies a domain, image, address or replacement grant.
 #[cfg(target_arch="x86_64")]
@@ -229,6 +237,5 @@ fn activation_call(slot:usize,kind:u64,len:u64)->Result<ActivationInfo,u64>{
         inlateout("rdx") len=>task,lateout("r10") surface,lateout("r8") state,
         out("rcx") _,out("r11") _,options(nostack));}
     if status!=OK{return Err(status)}
-    Ok(ActivationInfo{successor:u32::try_from(pd).map_err(|_|INVALID)?,
-        task:u32::try_from(task).map_err(|_|INVALID)?,surface,state})
+    ActivationInfo::decode(pd,task,surface,state)
 }
