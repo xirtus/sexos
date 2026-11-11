@@ -11,10 +11,24 @@ pub use memory_region::MemoryRegionInfo;
 // capture observer inactive; active custody has its dedicated production gate.
 #[path="../crates/sex-pdx/src/screen_capture.rs"]pub mod screen_capture;
 #[path="../servers/sexdisplay/src/screen_capture.rs"]mod capture_server;
+// Actual recording controller stays unattached: this fixture grants no bank,
+// task or peer authority. Dedicated recording tests exercise active custody.
+#[path="../crates/sex-pdx/src/desktop_recording.rs"]pub mod desktop_recording;
+#[path="../crates/sex-pdx/src/desktop_recording_capture.rs"]pub mod desktop_recording_capture;
+#[path="../servers/sexdisplay/src/recording_capture.rs"]mod recording_capture;
+#[path="../servers/sexdisplay/src/recording_indicator.rs"]mod recording_indicator;
+pub mod crash_log {
+ pub struct Peer {pub epoch:u64}
+ impl Peer {pub fn live(&self)->bool{false}}
+ pub fn peer_state(_:u64)->Result<Peer,u64>{panic!("inactive recording cannot query peer authority")}
+}
+pub fn pdx_call(_:u64,_:u64,_:u64,_:u64,_:u64)->(u64,u64,u64,u64){panic!("inactive recording cannot emit events")}
 static mut SCREEN_CAPTURE:capture_server::Server=capture_server::Server::new();
 #[derive(Clone,Copy)]pub struct PdxMessage{pub type_id:u64,pub arg0:u64,pub arg1:u64,pub arg2:u64,pub caller_pd:u32,pub caller_task:u32}
 pub fn screen_capture_bank(_:bool)->Result<screen_capture::Bank,u64>{Err(ERR_CAP_INVALID)}
 pub fn get_ticks()->u64{0}
+pub fn memory_region_info(_:u64)->Result<MemoryRegionInfo,u64>{panic!("inactive recording cannot acquire a bank")}
+pub fn memory_region_view(_:u64,_:u64,_:u64,_:u8)->Result<memory_region::RegionView,u64>{panic!("inactive recording cannot map a bank")}
 #[path="../crates/sex-pdx/src/display_frames.rs"]pub mod display_frames;
 #[path="../servers/sexdisplay/src/frame_output.rs"]mod frame_output;
 #[path="../servers/sexdisplay/src/paint_batch.rs"]mod paint_batch;
@@ -23,6 +37,7 @@ use paint_batch::{Content,Plan};
 #[path="../crates/sex-pdx/src/app_catalog.rs"]pub mod app_catalog;
 #[path="../crates/sex-pdx/src/app_lifecycle.rs"]mod app_lifecycle_sdk;
 pub mod app_lifecycle{
+ pub fn catalog(_:usize)->Result<CatalogInfo,u64>{panic!("inactive recording cannot query task authority")}
  pub use crate::app_lifecycle_sdk::*;
  pub fn info(slot:usize)->Result<LifecycleInfo,u64>{crate::boundary::info(slot)}
  pub fn ack(slot:usize,task:u32)->Result<(),u64>{crate::boundary::ack(slot,task)}
