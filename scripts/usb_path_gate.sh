@@ -36,10 +36,29 @@ trap cleanup EXIT INT TERM
 
 has() { grep -qE "$1" "$2" 2>/dev/null; }
 
-wait_marker() { # pattern log timeout
-  local deadline=$((SECONDS + $3))
+boot_menu_waiting() {
+  has 'Limine [0-9]+\.[0-9]+' "$1" \
+    && has 'Booting automatically in' "$1" \
+    && ! has 'limine: Loading kernel|\[boot\.kernel_entry\]' "$1"
+}
+
+wait_marker() { # pattern log timeout [qmp_sock]
+  local deadline=$((SECONDS + $3)) boot_requested=0 menu_since=-1
   while (( SECONDS < deadline )); do
     has "$1" "$2" && return 0
+    # The saved failures never entered the kernel: Limine stayed at its menu.
+    # Select its configured default once, as a person pressing Enter would.
+    # Do not restart QEMU, extend the deadline or inject late guest input.
+    if [[ -n "${4:-}" && "$boot_requested" == 0 ]] && boot_menu_waiting "$2"; then
+      if (( menu_since < 0 )); then menu_since=$SECONDS; fi
+      if (( SECONDS >= menu_since + 3 )); then
+        boot_requested=1
+        printf '[usb_path_gate.boot] action=select_default key=ret\n' >> "$2.boot-actions.log"
+        qmp_sendkey "$4" ret "$((deadline - SECONDS))" || return 1
+      fi
+    else
+      menu_since=-1
+    fi
     sleep 1
   done
   return 1
@@ -110,26 +129,53 @@ time.sleep(0.3)
 PY
 }
 
-qmp_sendkey() { # sock key
-  python3 - "$1" "$2" <<'PY'
+qmp_sendkey() { # sock key [remaining_seconds]
+  python3 - "$1" "$2" "${3:-5}" <<'PY'
 import json, socket, sys, time
-sock_path, key = sys.argv[1], sys.argv[2]
+sock_path, key = sys.argv[1:3]
+deadline = time.monotonic() + min(5.0, float(sys.argv[3]))
 s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-s.settimeout(5)
+def remaining():
+    left = deadline - time.monotonic()
+    if left <= 0:
+        raise TimeoutError("QMP key deadline")
+    return left
+s.settimeout(remaining())
 s.connect(sock_path)
+pending = b""
 def rd():
-    buf = b""
-    while b"\n" not in buf:
-        buf += s.recv(4096)
-    return buf
-rd()
+    global pending
+    remaining()
+    while b"\n" not in pending:
+        s.settimeout(remaining())
+        part = s.recv(4096)
+        if not part:
+            raise ConnectionError("QMP closed before key acknowledgement")
+        pending += part
+        if len(pending) > 65536:
+            raise ValueError("QMP response exceeds bound")
+    line, pending = pending.split(b"\n", 1)
+    return json.loads(line)
+if "QMP" not in rd():
+    raise ValueError("missing QMP greeting")
+next_id = 0
 def cmd(c):
+    global next_id
+    next_id += 1
+    c["id"] = next_id
+    s.settimeout(remaining())
     s.sendall((json.dumps(c) + "\n").encode())
-    rd()
+    while True:
+        reply = rd()
+        if reply.get("id") == next_id:
+            if "error" in reply or "return" not in reply:
+                raise ValueError("QMP key command rejected")
+            return
 cmd({"execute": "qmp_capabilities"})
 cmd({"execute": "send-key", "arguments": {"keys": [
     {"type": "qcode", "data": key}]}})
-time.sleep(0.5)
+time.sleep(min(0.5, max(0.0, deadline - time.monotonic())))
+s.close()
 PY
 }
 
@@ -167,7 +213,7 @@ L1="$GATE_DIR/lane_tablet.log"
 if [[ "$(row_get build)" != "FAIL" ]]; then
   boot_lane tablet "$L1" "$GATE_DIR/qmp1.sock" \
     -device nec-usb-xhci,id=xhci -device usb-tablet,bus=xhci.0
-  if wait_marker '\[sexusb\.enum\.summary\]' "$L1" "$READY_TIMEOUT"; then
+  if wait_marker '\[sexusb\.enum\.summary\]' "$L1" "$READY_TIMEOUT" "$GATE_DIR/qmp1.sock"; then
     sleep "$SETTLE_SECONDS"
     qmp_py "$GATE_DIR/qmp1.sock" || true
     sleep 3
@@ -217,7 +263,7 @@ L2="$GATE_DIR/lane_nodevice.log"
 if [[ "$(row_get build)" != "FAIL" ]]; then
   boot_lane nodevice "$L2" "$GATE_DIR/qmp2.sock" \
     -device nec-usb-xhci,id=xhci
-  wait_marker '\[sexusb\.discovery\.summary\]' "$L2" "$READY_TIMEOUT" || true
+  wait_marker '\[sexusb\.discovery\.summary\]' "$L2" "$READY_TIMEOUT" "$GATE_DIR/qmp2.sock" || true
   sleep "$SETTLE_SECONDS"
   stop_lane
 
@@ -237,7 +283,7 @@ L3="$GATE_DIR/lane_kbd.log"
 if [[ "$(row_get build)" != "FAIL" ]]; then
   boot_lane kbd "$L3" "$GATE_DIR/qmp3.sock" \
     -device nec-usb-xhci,id=xhci -device usb-kbd,bus=xhci.0
-  if wait_marker '\[sexusb\.hid\.bind\.summary\]' "$L3" "$READY_TIMEOUT"; then
+  if wait_marker '\[sexusb\.hid\.bind\.summary\]' "$L3" "$READY_TIMEOUT" "$GATE_DIR/qmp3.sock"; then
     sleep "$SETTLE_SECONDS"
     qmp_sendkey "$GATE_DIR/qmp3.sock" "a" || true
     sleep 3
@@ -260,7 +306,7 @@ L4="$GATE_DIR/lane_mouse.log"
 if [[ "$(row_get build)" != "FAIL" ]]; then
   boot_lane mouse "$L4" "$GATE_DIR/qmp4.sock" \
     -device nec-usb-xhci,id=xhci -device usb-mouse,bus=xhci.0
-  if wait_marker '\[sexusb\.hid\.bind\.summary\]' "$L4" "$READY_TIMEOUT"; then
+  if wait_marker '\[sexusb\.hid\.bind\.summary\]' "$L4" "$READY_TIMEOUT" "$GATE_DIR/qmp4.sock"; then
     sleep "$SETTLE_SECONDS"
     qmp_sendkey "$GATE_DIR/qmp4.sock" "a" >/dev/null 2>&1 || true
     python3 - "$GATE_DIR/qmp4.sock" <<'PY' || true
@@ -310,7 +356,7 @@ if [[ "$(row_get build)" != "FAIL" ]]; then
     -device qemu-xhci,id=xhci -device usb-hub,bus=xhci.0,port=1,id=hub \
     -device usb-kbd,bus=xhci.0,port=1.1 -device usb-mouse,bus=xhci.0,port=1.2 \
     -device usb-tablet,bus=xhci.0,port=2 -device usb-kbd,bus=xhci.0,port=3,id=k2
-  if wait_marker '\[sexusb\.enum\.summary\]' "$L5" "$READY_TIMEOUT"; then
+  if wait_marker '\[sexusb\.enum\.summary\]' "$L5" "$READY_TIMEOUT" "$GATE_DIR/qmp5.sock"; then
     sleep "$SETTLE_SECONDS"
     python3 - "$GATE_DIR/qmp5.sock" <<'PY' || true
 import json, socket, sys, time
