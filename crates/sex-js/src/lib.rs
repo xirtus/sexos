@@ -428,8 +428,11 @@ fn link<P: Page + 'static>(linker: &mut Linker<State<P>>) -> Result<(), wasmi::e
         let at = out as u32 as usize;
         if let Some(dst) = data.get_mut(at..at + r.len()) { dst.copy_from_slice(&r); }
     })?;
-    linker.func_wrap("dom", "jit_available", |_: C<'_, P>| -> i32 { cfg!(feature = "baseline-jit") as i32 })?;
-    linker.func_wrap("dom", "jit", |mut c: C<'_, P>, pc: i32, len: i32, argv: i32, argc: i32, out: i32| -> i32 {
+    // Protocol 2 carries an int32/boolean result kind. Legacy guests must fall
+    // back rather than reinterpret a boolean result as an integer.
+    linker.func_wrap("dom", "jit_available", |_: C<'_, P>| -> i32 { if cfg!(feature = "baseline-jit") {2} else {0} })?;
+    linker.func_wrap("dom", "jit", |_: C<'_, P>, _: i32, _: i32, _: i32, _: i32, _: i32| -> i32 { 0 })?;
+    linker.func_wrap("dom", "jit_v2", |mut c: C<'_, P>, pc: i32, len: i32, argv: i32, argc: i32, out: i32| -> i32 {
         #[cfg(feature = "baseline-jit")]
         {
             let Some(m) = mem(&c) else { return 0 };
