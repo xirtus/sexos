@@ -155,6 +155,9 @@ static mut SURFACES: [Surface; MAX_SURFACES] = [SURFACE_EMPTY; MAX_SURFACES];
 mod scene;
 mod frame_output;
 mod screen_capture;
+mod recording_capture;
+mod recording_indicator;
+static mut RECORDING_CAPTURE:recording_capture::Server=recording_capture::Server::new();
 static mut SCREEN_CAPTURE:screen_capture::Server=screen_capture::Server::new();
 mod paint_batch;
 static mut FRAME_OUTPUT: Option<frame_output::Store> = None;
@@ -173,6 +176,7 @@ impl SceneLease {
             let frame = RENDER_FRAME_COUNTER.load(core::sync::atomic::Ordering::Relaxed);
             if !destination.capture(&SURFACES, &FRAME_GROUPS, &BITMAP_STORES, &TEXT_STAGES, bar,
                 DISPLAY_TOKENS, FOCUSED_SURFACE_ID, frame, w, h) { return None; }
+            destination.recording=RECORDING_CAPTURE.mark();
         }
         Some(Self { _single_task: core::marker::PhantomData })
     }
@@ -2000,6 +2004,10 @@ fn raster_batch(target:&frame_output::Target<'_>,scene: &scene::SceneSnapshot,pl
         draw_launcher_panel(fb,w,h,total,scene);
     }
     draw_cursor_z_top(fb,w,h,total,true,scene);
+    // Protected marker is the final writer: network/chrome/cursor cannot hide it.
+    if scene.recording.is_some() {
+        if !unsafe{recording_indicator::paint(fb,w,h,&scene.bar,scene.metrics.scale(),DEFAULT_THEME.urgent,DEFAULT_THEME.chip_fill)}{return false;}
+    }
     true
 }
 
@@ -2025,6 +2033,10 @@ fn render_prepared(fb:*mut u32,w:usize,h:usize,bar:&SilkBar,requested:Plan)->Opt
     if !prepared{drop(preparation);backup.restore();return None;}
     if !preparation.commit(|frame|publish_frame(fb,w,h,frame)){backup.restore();return None;}
     if let Some(front)=store.front_pixels(){unsafe{
+        // Only a real full/strip CPU publication can establish the visible marker.
+        if plan.clock_dirty(){RECORDING_CAPTURE.published(scene.recording,
+            recording_indicator::matches(front,w,h,&scene.bar,scene.metrics.scale(),DEFAULT_THEME.urgent,DEFAULT_THEME.chip_fill),
+            store.generation(),w,h,front,sex_pdx::desktop_look::night_level(),sex_pdx::get_ticks());}
         if SCREEN_CAPTURE.published(store.generation(),w,h,front,sex_pdx::desktop_look::night_level()){
             let frame=app_catalog::by_target(sex_pdx::screen_capture::CLIENT).map(|row|row.frame());
             if let Some(surface)=scene.surfaces.iter().find(|s|s.active&&Some(s.surface_id)==frame){
@@ -2648,7 +2660,7 @@ unsafe fn input_trace_display_summary() {
 /// `save_under`: capture the pixels beneath the cursor rect before drawing,
 /// enabling the cursor-only fast path. Raster roots first reconstruct or
 /// restore the old cursor, then paint overlays before capturing a fresh patch.
-/// The cursor remains the last visible layer in every prepared frame.
+/// The cursor is the last ordinary layer; recording paints its protected marker afterwards.
 
 #[derive(Clone,Copy)]
 struct PreparedCursor{x:usize,y:usize,seq:u32,shell_tick:u32}
@@ -3368,6 +3380,7 @@ fn browser_text_binding_live(lifecycle: &surface_lifecycle::Lifecycle, owner: u3
 fn prepare_app_cleanup(lifecycle: &mut surface_lifecycle::Lifecycle, bar: &mut SilkBar) -> bool {
     // A retained scene cannot be retired or release cleanup custody.
     if unsafe{(*core::ptr::addr_of!(RENDER_SCENE)).is_valid()}{return false;}
+    unsafe{RECORDING_CAPTURE.reconcile(sex_pdx::get_ticks());}
     let mut changed = false;
     for index in 0..surface_lifecycle::CATALOG_CAPACITY {
         let Some(catalog) = lifecycle.catalog(index) else { continue; };
@@ -3447,7 +3460,7 @@ fn commit_published_text(published:&PublishedFrame)->usize{
 fn finish_display_transactions(lifecycle: &mut surface_lifecycle::Lifecycle, published: Option<&PublishedFrame>) {
     // A retained scene cannot be retired or release cleanup custody.
     if unsafe{(*core::ptr::addr_of!(RENDER_SCENE)).is_valid()}{return;}
-    unsafe{SCREEN_CAPTURE.reconcile(lifecycle,sex_pdx::get_ticks());}
+    unsafe{SCREEN_CAPTURE.reconcile(lifecycle,sex_pdx::get_ticks());RECORDING_CAPTURE.reconcile(sex_pdx::get_ticks());}
     if let Some(published)=published{
         // This receipt belongs to the just-finished Main drain. No intake runs
         // between its scene capture, CPU publication and completion handling.
@@ -3538,6 +3551,8 @@ pub extern "C" fn _start() -> ! {
     }else{
         sex_pdx::serial_record!("[sexdisplay.clock.presentation] label=DEMO wall_time=0 x={} y={} w={} h={} digits=proportional width={}",clock_layout.x,clock_layout.y,clock_layout.w,clock_layout.h,unsafe{FB_W});
     }
+    unsafe{RECORDING_CAPTURE.attach(match sex_pdx::crash_log::call(sex_pdx::crash_log::OP_RESTARTS,0,0){
+        (sex_pdx::crash_log::OK,n,_)=>n.checked_add(1).unwrap_or(0),_=>0});}
     let mut lifecycle = load_lifecycle_catalog();
     clock_canon_store(bar.clock_hh, bar.clock_mm, bar.clock_ss);
     let mut last_clock_tick = sex_pdx::get_ticks();
@@ -3952,6 +3967,16 @@ pub extern "C" fn _start() -> ! {
                     0x276|0x277|0x278|0x27A|0x27B|0x27C|0x27D|0x28C=>32,0xFA|0xFB=>64,0xFD=>128,
                     silkbar_model::OP_SILKBAR_UPDATE=>256,_=>512,
                 };
+            }
+
+            if msg.type_id==sex_pdx::desktop_recording_capture::OP_CONTROL{
+                let placement=recording_indicator::rect(&bar,unsafe{FB_W as usize},unsafe{FB_H as usize},chrome_metrics().scale()).is_some();
+                unsafe{RECORDING_CAPTURE.control(msg,sex_pdx::get_ticks(),placement);}
+                continue;
+            }
+            if msg.type_id==sex_pdx::desktop_recording_capture::OP_FRAME{
+                unsafe{RECORDING_CAPTURE.frame(msg,sex_pdx::get_ticks());}
+                continue;
             }
 
             if msg.type_id==sex_pdx::screen_capture::OP{
@@ -4898,6 +4923,8 @@ pub extern "C" fn _start() -> ! {
         if cursor_only_moved{pending_paint.request_cursor();}
         if needs_top_strip_redraw{pending_paint.request_strip();}
         if typed_completion_needs_publication(){join_pending_text(&mut pending_paint,w,h);}
+        unsafe{RECORDING_CAPTURE.placement(recording_indicator::rect(&bar,w,h,chrome_metrics().scale()).is_some());}
+        if unsafe{RECORDING_CAPTURE.needs_publication(sex_pdx::get_ticks())}{pending_paint.request_full();}
         let plan=pending_paint.plan(w,h);
         let published=if fb_live&&!plan.is_empty(){
             clock_canon_apply_to_bar(&mut bar);
@@ -4928,7 +4955,7 @@ pub extern "C" fn _start() -> ! {
             }
         }
         finish_display_transactions(&mut lifecycle,published.as_ref());
-        unsafe{SCREEN_CAPTURE.poll();}
+        unsafe{SCREEN_CAPTURE.poll();RECORDING_CAPTURE.poll(sex_pdx::get_ticks());}
         unsafe { for stage in &mut TEXT_STAGES { stage.poll_reply(sex_pdx::pdx_reply); } }
         unsafe { BITMAP_STORES.poll_reply(sex_pdx::pdx_reply); }
 

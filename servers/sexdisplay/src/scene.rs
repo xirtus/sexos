@@ -22,6 +22,8 @@ pub struct TextProjection{
 /// Deliberately neither Copy nor Clone: large owned payload stays in its fixed
 /// Display backing. No framebuffer, producer pointer, receipt, or Stage lives here.
 pub struct SceneSnapshot {
+    // Immutable description of the recording scope; never arm authority itself.
+    pub(super) recording:Option<[u64;4]>,
     pub(super) surfaces:[Surface;MAX_SURFACES],
     // Descriptive captured multipart contexts, never reply authority.
     pub(super) text_projections:[Option<TextProjection>;MAX_SURFACES],
@@ -40,7 +42,7 @@ pub struct SceneSnapshot {
 impl SceneSnapshot {
     /// Initialize existing static storage directly; never return a captured
     /// aggregate or construct a second large image on the service stack.
-    pub const EMPTY:Self=Self{surfaces:[SURFACE_EMPTY;MAX_SURFACES],text_projections:[None;MAX_SURFACES],groups:FrameGroups::new(),
+    pub const EMPTY:Self=Self{recording:None,surfaces:[SURFACE_EMPTY;MAX_SURFACES],text_projections:[None;MAX_SURFACES],groups:FrameGroups::new(),
         bitmaps:PublishedStores::EMPTY,bar:DEFAULT_SILK_BAR,metrics:sex_pdx::desktop_style::chrome::Metrics::new(1),tokens:DEFAULT_RENDER_TOKENS,
         focus:0,frame:0,blur_rows:[0;crate::BAR_BG_H],width:0,height:0,valid:false};
 
@@ -82,6 +84,7 @@ impl SceneSnapshot {
     /// Metadata resets are descriptive only; source lifecycle tombstones remain
     /// owned by the separate live admission state.
     pub fn scrub(&mut self){
+        self.recording=None;
         unsafe{core::ptr::write_volatile(&mut self.valid,false);}
         for surface in &mut self.surfaces{
             unsafe{core::ptr::write_volatile(surface,SURFACE_EMPTY);}
