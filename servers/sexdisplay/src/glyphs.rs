@@ -29,11 +29,21 @@ fn acc() -> &'static mut [i32] { unsafe { &mut *core::ptr::addr_of_mut!(ACC) } }
 
 static mut FONTS: Option<(Font<'static>, Font<'static>)> = None;
 
-/// Both fonts, parsed once.
+/// Keep cold parser temporaries out of every warm glyph/layout caller's
+/// frame. Display is one task; initialization does not yield or recurse.
+#[inline(never)]
+fn initialize_fonts() -> Option<()> {
+    let parsed = (Font::new(GEIST_MONO)?, Font::new(GEIST_SANS)?);
+    unsafe { core::ptr::write(core::ptr::addr_of_mut!(FONTS), Some(parsed)); }
+    Some(())
+}
+/// Both fonts, parsed once. Warm calls borrow immutable parsed data and cannot
+/// acquire a mutable reference overlapping a previously returned font borrow.
+#[inline]
 fn fonts() -> Option<&'static (Font<'static>, Font<'static>)> {
-    let slot = unsafe { &mut *core::ptr::addr_of_mut!(FONTS) };
-    if slot.is_none() { *slot = Some((Font::new(GEIST_MONO)?, Font::new(GEIST_SANS)?)); }
-    slot.as_ref()
+    let slot = core::ptr::addr_of!(FONTS);
+    if unsafe { (*slot).is_none() } { initialize_fonts()?; }
+    unsafe { (&*slot).as_ref() }
 }
 fn mono() -> Option<&'static Font<'static>> { fonts().map(|f| &f.0) }
 fn sans() -> Option<&'static Font<'static>> { fonts().map(|f| &f.1) }

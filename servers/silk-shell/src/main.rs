@@ -5493,7 +5493,13 @@ unsafe fn document_view_poll() {
             .flatten()
             .any(|e| e.target == target && !e.dead && !e.close_pending);
         let inset=incarnation.shell_surface.is_some();
-        let origin=get_surface_bounds(frame).map(|(x,y,_,_)|if inset{(x.saturating_add(8),y.saturating_add(36))}else{(x,y)});
+        let origin=get_surface_bounds(frame).and_then(|(x,y,w,h)| {
+            if inset {
+                desktop_content::children(frame,x,y,w,h).iter().flatten()
+                    .find(|child|child.sid==incarnation.surface)
+                    .map(|child|(child.x,child.y))
+            } else {Some((x,y))}
+        });
         DOCUMENT_VIEWS[i].poll(live, desktop_content_ready(frame), |n| {
             let a = n.args();
             let (s, _) = raw_pdx_call(slot, sex_pdx::document_view::OP, a[0], a[1], a[2]);
@@ -11588,6 +11594,31 @@ unsafe fn get_surface_bounds(sid: u64) -> Option<(i32, i32, u32, u32)> {
     }
 }
 
+/// Initial input state from held Shell registration/frame records. A placeholder
+/// marked Visible is not a window until its actual active frame exists. The
+/// legacy owned 100..103 surfaces retain their explicit standalone mapped path.
+unsafe fn input_surface_eligible(sid:u64)->bool {
+    let registered=is_focusable_surface(sid);
+    if !registered{return false;}
+    sex_pdx::desktop_stack::input_allowed(sex_pdx::desktop_stack::InputFacts {
+        registered, alive:surface_is_alive(sid),
+        lifecycle_ready:surface_is_lifecycle_focusable(sid), in_scene:surface_in_active_scene(sid),
+        frame:frame_for_surface(sid).map(|frame|sex_pdx::desktop_stack::FrameFacts {
+            active_tab:active_surface_for_frame(frame)==Some(sid), accepts_input:frame_accepts_input(frame),
+        }),
+        standalone_owned:is_shell_surface(sid),
+    })
+}
+/// A child alias is descriptive until the exact live custody entry and its
+/// actual parent frame agree. Unknown/foreign/unbound aliases remain unchanged.
+unsafe fn input_focus_surface(sid:u64)->u64 {
+    let parent=sex_pdx::desktop_stack::catalog_frame(sid);
+    if parent!=sid && frame_for_surface(parent).is_some() && APP_CUSTODY.iter().flatten().any(|entry| {
+        !entry.dead && !entry.close_pending && app_catalog::by_surface(entry.target,entry.surface)
+            .is_some_and(|row| row.frame()==parent && (row.surface==sid || row.children.contains(&sid)))
+    }) {parent} else {sid}
+}
+
 /// Returns true if (px, py) is within the given surface's bounds.
 /// Guards: returns false if surface is dead/invalid.
 /// Accesses surface position from static mut (caller must ensure unsafe context).
@@ -11599,8 +11630,9 @@ fn point_in_surface(px: i32, py: i32, sid: u64) -> bool {
             serial_println!("[shell.surface.dead.skip] id={} reason=inactive", sid);
             return false;
         }
+        if !input_surface_eligible(sid) {return false;}
         if APP_CUSTODY.iter().flatten().any(|e| e.surface == sid || e.is_successor_frame(sid)) {
-            return get_surface_bounds(sid).map_or(false, |(x,y,w,h)| px >= x && py >= y && (px as i64) < x as i64 + w as i64 && (py as i64) < y as i64 + h as i64);
+            return get_surface_bounds(sid).is_some_and(|(x,y,w,h)| chrome_metrics().panel_hit((x,y,w,h),(px,py),(desktop_width()as u32,desktop_height()as u32)));
         }
         let (x, y, w, h) = match sid {
             SURFACE_ID_APP    => WINDOWS.get(1).map_or((0,0,0,0), |w| (w.desc.x, w.desc.y, w.desc.width, w.desc.height)),
@@ -11629,7 +11661,7 @@ fn point_in_surface(px: i32, py: i32, sid: u64) -> bool {
                 return false;
             }
         };
-        px >= x && px < (x + w as i32) && py >= y && py < (y + h as i32)
+        chrome_metrics().panel_hit((x,y,w,h),(px,py),(desktop_width()as u32,desktop_height()as u32))
     }
 }
 
@@ -11712,7 +11744,7 @@ static SURFACE_FOCUS_ACCEPT_BUDGET: core::sync::atomic::AtomicU32 =
 /// Call before any focus-dependent operation.
 unsafe fn clear_focus_if_dead() {
     let focused = FOCUSED_SURFACE_ID;
-    if focused != 0 && (!surface_is_alive(focused) || !surface_is_lifecycle_focusable(focused)) {
+    if focused != 0 && !input_surface_eligible(input_focus_surface(focused)) {
         serial_println!("[shell.focus.clear_dead] sid={} reason=invalid", focused);
         // AP9: dead target clear marker
         surface_input_lifetime_mark_dead_clear(focused);
@@ -11732,12 +11764,10 @@ unsafe fn clear_focus_if_dead() {
             serial_println!("[focus.ref.clear] id={} reason=not_focusable lifecycle={:?}",
                 focused, lifecycle_state(focused));
         }
-        let z_order = [SURFACE_ID_QUIL, SURFACE_ID_MESH, SURFACE_ID_COLLAR, SURFACE_ID_BELL_PLACEHOLDER, SURFACE_ID_LINEN, SURFACE_ID_TEST4,
-                       SURFACE_ID_TEST3, SURFACE_ID_STATIC, SURFACE_ID_APP];
         let mut found = false;
-        for &sid in &z_order {
+        for &sid in &sex_pdx::desktop_stack::ORDER {
             if sid == focused { continue; }
-            if surface_is_alive(sid) && surface_is_lifecycle_focusable(sid) {
+            if input_surface_eligible(sid) {
                 if try_set_focus(sid) {
                     found = true;
                 }
@@ -21371,6 +21401,7 @@ unsafe fn frame_light_at(frame_id: u32, x: i32, y: i32) -> u32 {
         None => return FRAME_LIGHT_NONE,
     };
     let (sx, sy, _sw, _sh) = bounds;
+    if !chrome_metrics().panel_hit((sx,sy,_sw,_sh),(x,y),(desktop_width()as u32,desktop_height()as u32)){return FRAME_LIGHT_NONE;}
 
     // One-shot light hitbox diagnostic.
     unsafe {
@@ -23627,6 +23658,7 @@ unsafe fn apply_resize_geometry(dx: i32, dy: i32) -> bool {
 unsafe fn hit_test_surface_chrome(x: i32, y: i32, sid: u64) -> Option<HitTarget> {
     let bounds = get_surface_bounds(sid)?;
     let (sx, sy, sw, sh) = bounds;
+    if !chrome_metrics().panel_hit((sx,sy,sw,sh),(x,y),(desktop_width()as u32,desktop_height()as u32)){return None;}
     // One-shot frame bounds marker.
     unsafe {
         static mut CHROME_BOUNDS_BUDGET: u32 = 8;
@@ -23721,7 +23753,7 @@ unsafe fn hit_test_surface_chrome(x: i32, y: i32, sid: u64) -> Option<HitTarget>
 /// Does NOT check SilkBar or trigger any side effects.
 /// SilkBar intercept is handled separately by handle_silkbar_click().
 unsafe fn hit_test_at(x: i32, y: i32) -> HitTarget {
-    let focused = FOCUSED_SURFACE_ID;
+    let focused = input_focus_surface(FOCUSED_SURFACE_ID);
     if point_in_surface(x, y, focused) {
         // Chrome check: rim/tab-strip takes priority over content area.
         if let Some(chrome_target) = hit_test_surface_chrome(x, y, focused) {
@@ -23745,28 +23777,13 @@ unsafe fn hit_test_at(x: i32, y: i32) -> HitTarget {
             }
             // Frame doesn't accept input — fall through to z-order.
         } else {
-            // Non-frame surface (linen, standalone) — always hittable.
+            // Explicitly owned standalone mapped surface passed eligibility.
             return HitTarget::Surface(focused);
         }
     }
-    for entry in APP_CUSTODY.iter().flatten() {
-        let sid=entry.shell_surface().unwrap_or(entry.surface);
-        if entry.dead || sid == focused || !point_in_surface(x,y,sid) { continue; }
-        if let Some(fid) = frame_for_surface(sid) {
-            if frame_accepts_input(fid) {
-                if let Some(chrome) = hit_test_surface_chrome(x,y,sid) { return chrome; }
-                return HitTarget::Surface(sid);
-            }
-        }
-    }
-    let z_order = [SURFACE_ID_QUIL, SURFACE_ID_MESH, SURFACE_ID_COLLAR, SURFACE_ID_BELL_PLACEHOLDER, SURFACE_ID_LINEN, SURFACE_ID_TEST4,
-                   SURFACE_ID_TEST3, SURFACE_ID_STATIC, SURFACE_ID_APP];
-    for &sid in &z_order {
+    for &sid in &sex_pdx::desktop_stack::ORDER {
         if sid == focused { continue; }
-        if !surface_is_alive(sid) {
-            serial_println!("[shell.hit_test.skip] id={} reason=dead", sid);
-            continue;
-        }
+        if !is_focusable_surface(sid) {continue;}
         if point_in_surface(x, y, sid) {
             // Chrome check for z-order surfaces too (if frame-owned).
             if let Some(chrome_target) = hit_test_surface_chrome(x, y, sid) {
@@ -23791,7 +23808,7 @@ unsafe fn hit_test_at(x: i32, y: i32) -> HitTarget {
                 // Frame doesn't accept input — skip to next z-order.
                 continue;
             } else {
-                // Non-frame surface (linen, standalone) — always hittable.
+                // Explicitly owned standalone mapped surface passed eligibility.
                 return HitTarget::Surface(sid);
             }
         }

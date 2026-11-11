@@ -67,6 +67,26 @@ impl FrameGroups {
     pub fn independent(&self, s: &Surface) -> bool {
         s.active && !self.child_group(s).map_or(false, |g| g.frame_seen || g.parent_required())
     }
+    /// Only independent windows have a silhouette. Exact fitted children share
+    /// the parent's mask and never acquire four extra sets of rounded corners.
+    pub fn coverage(&self,s:&Surface,x:usize,y:usize)->u8{
+        if !s.active||y<self.metrics.bar()as usize{return 0;}
+        let (lx,ly)=(x as i64-s.x as i64,y as i64-s.y as i64);
+        if lx<0||ly<0||lx>=s.w as i64||ly>=s.h as i64{return 0;}
+        if !self.independent(s){return 255;}
+        self.metrics.rounded(s.w,s.h).coverage(lx,ly)
+    }
+    pub fn row_span(&self,s:&Surface,y:usize,w:usize,h:usize,opaque:bool)->(usize,usize){
+        let(sx,sy,sw,sh)=self.rect(s,w,h);
+        if sw==0||sh==0||y<sy||y-sy>=sh{return(0,0);}
+        if !self.independent(s){return(sx,sx+sw);}
+        let(a,b)=self.metrics.rounded(s.w,s.h).row(y as i64-s.y as i64,opaque);
+        let clip=|v:i64|v.clamp(0,w as i64)as usize;
+        (clip(s.x as i64+a as i64),clip(s.x as i64+b as i64))
+    }
+    pub fn opaque_run(&self,s:&Surface,x0:usize,x1:usize,y:usize,w:usize,h:usize)->bool{
+        let(a,b)=self.row_span(s,y,w,h,true);x0<x1&&x0>=a&&x1<=b
+    }
     /// Admission diagnostic only. No visibility, fitting or PRESENT completion
     /// follows from the existence of a catalog or an awaiting child.
     pub fn awaiting_parent(&self, s: &Surface) -> Option<u64> {
@@ -76,17 +96,27 @@ impl FrameGroups {
     }
     pub fn winner<'a>(&self, surfaces: &'a [Surface], focused: u64,
         x: usize, y: usize, w: usize, h: usize) -> Option<&'a Surface> {
-        // The shell's modal launcher must remain above app focus without
-        // stealing that focus (its actions still target the previous window).
-        if let Some(overlay)=surfaces.iter().find(|s|s.active && s.owner_pd==3
-            && s.surface_id==152 && contains(self.rect(s,w,h),x,y)) {return Some(overlay);}
-        // A focus reference to a bound child raises its actual frame, never a ghost child.
+        self.winner_below(surfaces,focused,None,x,y,w,h)
+    }
+    /// Actual next visible owner, borrowed from this same immutable scene.
+    /// A foreign/stale `above` reference cannot resume another layer traversal.
+    pub fn winner_below<'a>(&self,surfaces:&'a[Surface],focused:u64,above:Option<&Surface>,
+        x:usize,y:usize,w:usize,h:usize)->Option<&'a Surface>{
+        // A focus reference raises only its authenticated, observed parent.
         let focused = surfaces.iter().find(|s| s.active && s.surface_id == focused)
             .and_then(|s| self.child_group(s)).filter(|g| g.frame_seen)
             .and_then(|g| g.catalog.frame_surface_id()).unwrap_or(focused);
-        let hit = |s: &&Surface| self.independent(s) && contains(self.rect(s,w,h),x,y);
-        surfaces.iter().filter(|s| s.surface_id == focused).find(hit)
-            .or_else(|| surfaces.iter().filter(|s| s.surface_id != focused).find(hit))
+        let key = |s: &Surface| sex_pdx::desktop_stack::key(focused,s.owner_pd,s.surface_id);
+        let floor = match above {
+            Some(above) => Some(key(surfaces.iter().find(|s| core::ptr::eq(*s,above))?)),
+            None => None,
+        };
+        // Constant-time shared ranks, independent of allocation/slot reuse.
+        // The fixed scan borrows only this scene; no sorting arena or lookup
+        // based on the latest mutable Shell state enters a prepared frame.
+        surfaces.iter().filter(|s| self.independent(s) && contains(self.rect(s,w,h),x,y)
+            && self.coverage(s,x,y)!=0 && floor.is_none_or(|floor| key(s)>floor))
+            .min_by_key(|s| key(s))
     }
     /// The frame owns z-order/chrome. Only exact app-owned children can replace
     /// its body pixels; clipping never changes the child's text coordinate origin.
@@ -94,19 +124,20 @@ impl FrameGroups {
         x: usize, y: usize, w: usize, h: usize) -> &'a Surface {
         let Some(g) = self.groups.iter().flatten().find(|g| g.frame_seen
             && frame.owner_pd == g.catalog.coordinator_pd && Some(frame.surface_id) == g.catalog.frame_surface_id()) else { return frame; };
-        let (sx,sy,sw,sh) = self.rect(frame,w,h);
-        let b=self.metrics.body(sw as u32,sh as u32);
-        let body = (sx.saturating_add(b.x as usize),sy.saturating_add(b.y as usize),b.w as usize,b.h as usize);
-        if !contains(body,x,y) { return frame; }
+        let b=self.metrics.body(frame.w,frame.h);
+        let(lx,ly)=(x as i64-frame.x as i64,y as i64-frame.y as i64);
+        if lx<0||ly<0||lx>u32::MAX as i64||ly>u32::MAX as i64||!b.contains(lx as u32,ly as u32){return frame;}
         surfaces.iter().find(|s| s.active && s.owner_pd == g.catalog.target_pd && g.catalog.is_content(s.surface_id)
             && contains(self.rect(s,w,h),x,y)).unwrap_or(frame)
     }
 }
 pub fn rect(s:&Surface,w:usize,h:usize)->(usize,usize,usize,usize){rect_below(s,w,h,crate::bar_height())}
 fn rect_below(s: &Surface,w: usize,h: usize,bar:usize) -> (usize,usize,usize,usize) {
-    let x=(s.x.max(0) as usize).min(w.saturating_sub(1));
-    let y=(s.y.max(bar as i32) as usize).min(h.saturating_sub(1));
-    (x,y,(s.w as usize).min(w.saturating_sub(x)),(s.h as usize).min(h.saturating_sub(y)))
+    let left=(s.x as i64).clamp(0,w as i64);
+    let top=(s.y as i64).clamp(bar.min(h)as i64,h as i64);
+    let right=(s.x as i64+s.w as i64).clamp(left,w as i64);
+    let bottom=(s.y as i64+s.h as i64).clamp(top,h as i64);
+    (left as usize,top as usize,(right-left)as usize,(bottom-top)as usize)
 }
 pub fn contains((x,y,w,h):(usize,usize,usize,usize),px:usize,py:usize)->bool {
     px >= x && px-x < w && py >= y && py-y < h
@@ -121,57 +152,102 @@ pub struct PixelSource<'a> {
     pub chrome: bool,
 }
 #[derive(Clone, Copy)]
-struct RowRun<'a> { end: usize, source: Option<PixelSource<'a>> }
-pub struct RowWinners<'a> { runs: [RowRun<'a>; MAX_ROW_RUNS], count: usize, cursor: usize }
-const MAX_ROW_RUNS: usize = crate::surface_lifecycle::MAX_SURFACES * 4 + 1;
-impl<'a> RowWinners<'a> {
+struct RowSource { surface: usize, content: usize, chrome: bool }
+#[derive(Clone, Copy)]
+struct RowRun { end: usize, source: Option<RowSource> }
+/// Scene-owned storage contains indices, never references into an older scene.
+/// Fill it in place: no large row aggregate is returned or copied on the stack.
+pub struct RowScratch { edges: [usize; MAX_ROW_RUNS + 1], runs: [RowRun; MAX_ROW_RUNS],
+    candidates: [RowCandidate; crate::surface_lifecycle::MAX_SURFACES] }
+#[derive(Clone, Copy)]
+struct RowCandidate { index: usize, left: usize, right: usize, key: (u8,u16,u64) }
+impl RowCandidate { const EMPTY: Self = Self { index: 0, left: 0, right: 0, key: (0,0,0) }; }
+const MAX_ROW_RUNS: usize = crate::surface_lifecycle::MAX_SURFACES * 6 + 1;
+impl RowScratch {
+    pub const fn new() -> Self { Self { edges: [0; MAX_ROW_RUNS + 1], runs: [RowRun { end: 0, source: None }; MAX_ROW_RUNS], candidates: [RowCandidate::EMPTY; crate::surface_lifecycle::MAX_SURFACES] } }
+    pub fn clear(&mut self) { self.edges.fill(0); self.runs.fill(RowRun { end: 0, source: None }); self.candidates.fill(RowCandidate::EMPTY); }
+}
+/// Both borrows are tied to this preparation. A caller cannot reuse scratch
+/// while the view exists, or resolve its indices against a different scene.
+pub struct RowWinners<'a, 's> { surfaces: &'a [Surface], runs: &'s [RowRun], count: usize, cursor: usize }
+impl<'a> RowWinners<'a, '_> {
+    #[inline(always)]
+    fn pixel_source(&self, source: Option<RowSource>) -> Option<PixelSource<'a>> {
+        source.map(|s| PixelSource { surface: &self.surfaces[s.surface], content: &self.surfaces[s.content], chrome: s.chrome })
+    }
     #[inline(always)]
     pub fn source(&mut self, x: usize) -> Option<PixelSource<'a>> {
         while self.cursor + 1 < self.count && x >= self.runs[self.cursor].end { self.cursor += 1; }
-        if self.cursor < self.count && x < self.runs[self.cursor].end { self.runs[self.cursor].source } else { None }
+        if self.cursor < self.count && x < self.runs[self.cursor].end { self.pixel_source(self.runs[self.cursor].source) } else { None }
     }
     /// End and source of the run holding `x`: every pixel to `end` has this source.
     #[inline(always)]
     pub fn run(&mut self, x: usize) -> (usize, Option<PixelSource<'a>>) {
         while self.cursor + 1 < self.count && x >= self.runs[self.cursor].end { self.cursor += 1; }
         if self.cursor < self.count && x < self.runs[self.cursor].end {
-            (self.runs[self.cursor].end, self.runs[self.cursor].source)
+            (self.runs[self.cursor].end, self.pixel_source(self.runs[self.cursor].source))
         } else { (usize::MAX, None) }
     }
     pub fn selected(&mut self, x: usize) -> Option<u64> { self.source(x).map(|s| s.surface.surface_id) }
 }
 impl FrameGroups {
-    pub fn row_winners<'a>(&self, surfaces: &'a [Surface], focused: u64, y: usize, w: usize, h: usize) -> Option<RowWinners<'a>> {
+    pub fn row_winners<'a, 's>(&self, surfaces: &'a [Surface], focused: u64, y: usize, w: usize, h: usize,
+        scratch: &'s mut RowScratch) -> Option<RowWinners<'a, 's>> {
         if surfaces.len() > crate::surface_lifecycle::MAX_SURFACES || w == 0 || y >= h { return None; }
-        let mut edges = [0usize; MAX_ROW_RUNS + 1]; edges[1] = w; let mut n = 2;
-        for s in surfaces.iter().filter(|s| s.active) {
-            let (sx,sy,sw,sh) = self.rect(s,w,h);
+        // Resolve authenticated focus once, then retain only this row's exact
+        // independent nonzero spans and canonical keys in Scene-owned scratch.
+        // No cached references or previous row/scene candidates are consulted.
+        let raised_focus = surfaces.iter().find(|s| s.active && s.surface_id == focused)
+            .and_then(|s| self.child_group(s)).filter(|g| g.frame_seen)
+            .and_then(|g| g.catalog.frame_surface_id()).unwrap_or(focused);
+        let mut candidates = 0;
+        let edges = &mut scratch.edges; edges[0] = 0; edges[1] = w; let mut n = 2;
+        for (index,s) in surfaces.iter().enumerate().filter(|(_,s)| s.active) {
+            let (_sx,sy,sw,sh) = self.rect(s,w,h);
             if sw != 0 && sh != 0 && y >= sy && y-sy < sh {
-                edges[n] = sx; edges[n+1] = sx+sw; n += 2;
+                let(a,b)=self.row_span(s,y,w,h,false);
+                if a<b && self.independent(s) {
+                    scratch.candidates[candidates]=RowCandidate { index, left:a, right:b,
+                        key:sex_pdx::desktop_stack::key(raised_focus,s.owner_pd,s.surface_id) };
+                    candidates+=1;
+                }
+                edges[n] = a; edges[n+1] = b; n += 2;
+                let(oa,ob)=self.row_span(s,y,w,h,true);
+                if(oa,ob)!=(a,b){edges[n]=oa;edges[n+1]=ob;n+=2;}
                 // Even an unfitted child cannot replace pixels outside the
                 // parent's body. Splitting here also preserves tiny/clipped frames.
                 if self.is_frame(s) {
-                    let b=self.metrics.body(sw as u32,sh as u32);
-                    let body_y = sy.saturating_add(b.y as usize);
-                    if y >= body_y && y-body_y < b.h as usize {
-                        let left = sx.saturating_add(b.x as usize).min(w);
+                    let b=self.metrics.body(s.w,s.h);
+                    let body_y=s.y as i64+b.y as i64;
+                    if y as i64>=body_y&&(y as i64)-body_y<(b.h as i64){
+                        let left=(s.x as i64+b.x as i64).clamp(0,w as i64)as usize;
                         edges[n] = left;
-                        edges[n+1] = left.saturating_add(b.w as usize).min(w);
+                        edges[n+1]=(s.x as i64+b.x as i64+b.w as i64).clamp(left as i64,w as i64)as usize;
                         n += 2;
                     }
                 }
             }
         }
         for i in 1..n { let value=edges[i]; let mut j=i; while j>0 && edges[j-1]>value { edges[j]=edges[j-1]; j-=1; } edges[j]=value; }
-        let mut result = RowWinners { runs: [RowRun { end: 0, source: None }; MAX_ROW_RUNS], count: 0, cursor: 0 };
+        let mut count = 0;
         for i in 1..n { if edges[i] > edges[i-1] {
             let x = edges[i-1];
-            let source = self.winner(surfaces,focused,x,y,w,h).map(|surface| PixelSource {
-                surface, content: self.content(surface,surfaces,x,y,w,h),
-                chrome: surface.surface_id == focused || self.is_frame(surface) || self.is_program_frame(surface),
+            // Rounded nonzero row spans are contiguous. The same interval
+            // boundaries already split every silhouette and child/body edge.
+            let source = scratch.candidates[..candidates].iter()
+                .filter(|c| x>=c.left && x<c.right).min_by_key(|c| c.key).map(|candidate| {
+                let surface=&surfaces[candidate.index];
+                let content = self.content(surface,surfaces,x,y,w,h);
+                // Content belongs to this exact slice. Keep its conversion
+                // checked; no raw pointers enter reusable storage.
+                RowSource {
+                    surface: candidate.index,
+                    content: surfaces.iter().position(|s| core::ptr::eq(s,content)).unwrap(),
+                    chrome: surface.surface_id == focused || self.is_frame(surface) || self.is_program_frame(surface),
+                }
             });
-            result.runs[result.count] = RowRun { end: edges[i], source }; result.count += 1;
+            scratch.runs[count] = RowRun { end: edges[i], source }; count += 1;
         } }
-        Some(result)
+        Some(RowWinners { surfaces, runs: &scratch.runs[..count], count, cursor: 0 })
     }
 }

@@ -396,6 +396,39 @@ fn composite_pixel_selected(x: usize, y: usize, w: usize, h: usize, bg: u32, foc
 /// lifecycle authority is retained across a display drain.
 fn composite_pixel_source(x: usize, y: usize, w: usize, h: usize, bg: u32, source: Option<surface_groups::PixelSource<'_>>, scene: &scene::SceneSnapshot) -> u32 {
     let Some(source) = source else { return bg; };
+    let alpha=scene.groups.coverage(source.surface,x,y);
+    if alpha==255{return composite_pixel_source_unmasked(x,y,w,h,bg,source,scene);}
+    composite_rounded_edge(x,y,w,h,bg,source,None,scene)
+}
+
+/// Only AA edge pixels need the actual lower owners. Keep bounded scratch out
+/// of the ordinary opaque-pixel path; never shade hidden layers speculatively.
+#[inline(never)]
+fn composite_rounded_edge(x:usize,y:usize,w:usize,h:usize,bg:u32,first:surface_groups::PixelSource<'_>,omit:Option<&Surface>,scene: &scene::SceneSnapshot)->u32{
+    let mut colors=[0u32;surface_lifecycle::MAX_SURFACES];
+    let mut alphas=[0u8;surface_lifecycle::MAX_SURFACES];
+    let mut count=0;
+    let mut next=Some(first);
+    while let Some(source)=next{
+        if count==surface_lifecycle::MAX_SURFACES{break;}
+        let alpha=if omit.is_some_and(|s|core::ptr::eq(s,source.surface)){0}else{scene.groups.coverage(source.surface,x,y)};
+        if alpha!=0{
+            colors[count]=composite_pixel_source_unmasked(x,y,w,h,bg,source,scene);
+            alphas[count]=alpha;count+=1;
+            if alpha==255{break;}
+        }
+        next=scene.groups.winner_below(&scene.surfaces,scene.focus,Some(source.surface),x,y,w,h)
+            .map(|surface|surface_groups::PixelSource{
+                surface,content:scene.groups.content(surface,&scene.surfaces,x,y,w,h),
+                chrome:surface.surface_id==scene.focus||scene.groups.is_frame(surface)||scene.groups.is_program_frame(surface),
+            });
+    }
+    let mut result=bg;
+    while count!=0{count-=1;result=coverage_blend(colors[count],result,alphas[count]);}
+    result
+}
+
+fn composite_pixel_source_unmasked(x:usize,y:usize,w:usize,h:usize,bg:u32,source:surface_groups::PixelSource<'_>,scene: &scene::SceneSnapshot)->u32{
     let surf = source.surface;
     let (sx, sy, sw, sh) = scene.groups.rect(surf, w, h);
     if !surf.active || sw == 0 || sh == 0 || x < sx || x >= sx + sw || y < sy || y >= sy + sh { return bg; }
@@ -425,8 +458,10 @@ fn composite_pixel_source(x: usize, y: usize, w: usize, h: usize, bg: u32, sourc
             }
         }
         // Rim + Frame Light + Top Bar check (focused surface only).
-        let lx = x - sx;  // local x within clamped surface
-        let ly = y - sy;  // local y within clamped surface
+        // Viewport clipping never moves the original frame or its content.
+        let lx = (x as i64-surf.x as i64)as usize;
+        let ly = (y as i64-surf.y as i64)as usize;
+        let (sw,sh)=(surf.w as usize,surf.h as usize);
 
         // Edge detection with saturating_sub to prevent underflow
         // on tiny surfaces (rim fills entire surface if sw/sh < RIM_PX).
@@ -601,10 +636,13 @@ fn fast_content_run(fb:*mut u32,x0:usize,x1:usize,y:usize,w:usize,h:usize,source
     let (sx,sy,sw,sh)=scene.groups.rect(surf,w,h);
     if !surf.active||sw==0||sh==0||x0<sx||x1>sx+sw||y<sy||y>=sy+sh{return false;}
     let content=if source.chrome{
-        let ly=y-sy;
+        let ly=(y as i64-surf.y as i64)as usize;
+        let lx0=(x0 as i64-surf.x as i64)as usize;
+        let lx1=(x1 as i64-surf.x as i64)as usize;
+        let(sw,sh)=(surf.w as usize,surf.h as usize);
         let top=if surf.chrome_flags&SURFACE_CHROME_TOP_BAR!=0{(scene.metrics.title()as usize)}else{(scene.metrics.px(8)as usize)};
         if y<(scene.metrics.bar()as usize)||ly<top||ly>=sh.saturating_sub((scene.metrics.px(8)as usize))
-            ||x0-sx<(scene.metrics.px(8)as usize)||x1-sx>sw.saturating_sub((scene.metrics.px(8)as usize)){return false;}
+            ||lx0<(scene.metrics.px(8)as usize)||lx1>sw.saturating_sub((scene.metrics.px(8)as usize)){return false;}
         source.content
     }else{surf};
     if unsafe{scene.bitmaps.matches_surface(content.owner_pd,content.surface_id)}{return false;}
@@ -639,16 +677,17 @@ fn text_run(row:*mut u32,x0:usize,x1:usize,y:usize,surf:&Surface,metrics:sex_pdx
     const GLYPH_W:usize=sex_pdx::desktop_style::GLYPH_WIDTH as usize;
     const GLYPH_H:usize=sex_pdx::desktop_style::GLYPH_HEIGHT as usize;
     let scale=surface_text_scale_for(surf,metrics.scale());
-    let tx=(surf.x.max(0) as usize).saturating_add(metrics.px(sex_pdx::desktop_style::INSET)as usize);
+    let tx=surf.x as i64+metrics.px(sex_pdx::desktop_style::INSET)as i64;
     let top_inset=if surf.chrome_flags&SURFACE_CHROME_TOP_BAR!=0{(metrics.title()as usize)+(metrics.px(8)as usize)}else{metrics.px(sex_pdx::desktop_style::TEXT_TOP)as usize};
-    let ty=(surf.y.max(0) as usize).saturating_add(top_inset);
-    if y<ty{return;}
-    let line=(y-ty)/((GLYPH_H+2)*scale);
+    let ty=surf.y as i64+top_inset as i64;
+    if (y as i64)<ty{return;}
+    let local_y=(y as i64-ty)as usize;
+    let line=local_y/((GLYPH_H+2)*scale);
     if line>=surf.line_count as usize{return;}
-    let py=((y-ty)/scale)%(GLYPH_H+2);
+    let py=(local_y/scale)%(GLYPH_H+2);
     let advance=(GLYPH_W+1)*scale;
-    let first=x0.saturating_sub(tx)/advance;
-    let last=(x1.saturating_sub(tx)+advance-1)/advance;
+    let first=(x0 as i64-tx).max(0)as usize/advance;
+    let last=((x1 as i64-tx).max(0)as usize+advance-1)/advance;
     let row_start=surf.line_cells[line] as usize;
     let row_end=if line+1<surf.line_count as usize{surf.line_cells[line+1]}else{surf.cell_count} as usize;
     let len=(surf.text_len as usize).min(TEXT_BUF_CAP);
@@ -661,15 +700,17 @@ fn text_run(row:*mut u32,x0:usize,x1:usize,y:usize,surf:&Surface,metrics:sex_pdx
         if scalar==10{continue;}
         let selected=index<surf.selection_end as usize&&end>surf.selection_start as usize
             &&surf.selection_end as usize<=surf.text_len as usize;
-        let left=tx+col*advance;
+        let left=tx+(col*advance)as i64;
+        let from=left.max(x0 as i64).min(x1 as i64)as usize;
+        let to=(left+advance as i64).max(x0 as i64).min(x1 as i64)as usize;
         // Geist Mono drawn for this cell size, as surface_text_fg_at draws it.
         {
             let line_h=(GLYPH_H+2)*scale;
             if let Some(cell)=glyphs::mono_cell(scalar,advance,line_h){
-                let gy=(y-ty)%line_h;
+                let gy=local_y%line_h;
                 let back=if selected{0xff36577c}else{surf.color};
-                for x in left.max(x0)..(left+advance).min(x1){
-                    let alpha=cell[gy*advance+(x-left)];
+                for x in from..to{
+                    let alpha=cell[gy*advance+(x as i64-left)as usize];
                     if alpha!=0{unsafe{core::ptr::write_volatile(row.add(x),coverage_blend(surf.text_color,back,alpha));}}
                     else if selected{unsafe{core::ptr::write_volatile(row.add(x),back);}}
                 }
@@ -678,8 +719,8 @@ fn text_run(row:*mut u32,x0:usize,x1:usize,y:usize,surf:&Surface,metrics:sex_pdx
         }
         let bits=if py<GLYPH_H{scalar_glyph(scalar)[py]}else{0};
         if bits==0&&!selected{continue;}
-        for x in left.max(x0)..(left+advance).min(x1){
-            let px=(x-left)/scale;
+        for x in from..to{
+            let px=(x as i64-left)as usize/scale;
             let ink=px<GLYPH_W&&(bits>>(GLYPH_W-1-px))&1!=0;
             if ink{unsafe{core::ptr::write_volatile(row.add(x),surf.text_color);}}
             else if selected{unsafe{core::ptr::write_volatile(row.add(x),0xff36577c);}}
@@ -691,14 +732,31 @@ fn text_run(row:*mut u32,x0:usize,x1:usize,y:usize,surf:&Surface,metrics:sex_pdx
 fn raster_row(fb:*mut u32,y:usize,x0:usize,x1:usize,w:usize,h:usize,scene: &scene::SceneSnapshot){
     let focused=scene.focus;
     let back=bg(y,h);
-    let mut row=unsafe{scene.groups.row_winners(&scene.surfaces,focused,y,w,h)};
+    // The scene owns bounded index-only workspace. Reentry falls back to the
+    // scalar compositor instead of aliasing another row's mutable scratch.
+    let mut scratch=scene.row_scratch.try_borrow_mut().ok();
+    let mut row=scratch.as_deref_mut().and_then(|scratch|
+        scene.groups.row_winners(&scene.surfaces,focused,y,w,h,scratch));
     let mut x=x0;
     while x<x1{
         let (end,source)=match row.as_mut(){Some(row)=>row.run(x),None=>(x1,None)};
         let end=end.min(x1);
         if row.is_some(){
             if let Some(source)=source{
-                if fast_content_run(fb,x,end,y,w,h,source,scene){x=end;continue;}
+                if scene.groups.opaque_run(source.surface,x,end,y,w,h){
+                    if !fast_content_run(fb,x,end,y,w,h,source,scene){
+                        // This exact scene's row interval already proves the
+                        // owner fully covers every pixel. Chrome, bitmap and
+                        // partial-fill shading still use the ordinary painter,
+                        // without repeating group/rounded coverage per pixel.
+                        while x<end{
+                            let color=composite_pixel_source_unmasked(x,y,w,h,back,source,scene);
+                            unsafe{core::ptr::write_volatile(fb.add(y*w+x),color);}
+                            x+=1;
+                        }
+                    }
+                    x=end;continue;
+                }
             }else{
                 unsafe{core::slice::from_raw_parts_mut(fb.add(y*w+x),end-x).fill(back);}
                 x=end;continue;
@@ -1620,9 +1678,9 @@ fn changed_text_rows(old:&Surface,new:&Surface,rect:damage::Rect)->damage::Rect{
     if first==usize::MAX{return rect;}
     let top=if new.chrome_flags & SURFACE_CHROME_TOP_BAR != 0 {frame_height()+frame_rim()} else {chrome_metrics().px(sex_pdx::desktop_style::TEXT_TOP)as usize};
     let line=9*surface_text_scale(new);
-    let origin=(new.y.max(0) as usize).saturating_add(top);
-    let y=origin.saturating_add(first*line).max(rect.y).min(rect.bottom);
-    let bottom=origin.saturating_add((last+1)*line).min(rect.bottom).max(y);
+    let origin=new.y as i64+top as i64;
+    let y=(origin+(first*line)as i64).clamp(rect.y as i64,rect.bottom as i64)as usize;
+    let bottom=(origin+((last+1)*line)as i64).clamp(y as i64,rect.bottom as i64)as usize;
     if y==bottom{return rect;}
     damage::Rect{x:rect.x,y,right:rect.right,bottom}
 }
@@ -1737,9 +1795,12 @@ fn surface_text_fg_at_scaled(x: usize, y: usize, surf: &Surface, ui_scale:u32) -
     const CHAR_SPACING: usize = 1;
     let scale = surface_text_scale_for(surf,ui_scale);
     let line_h = (GLYPH_H + 2) * scale;
-    let tx = (surf.x.max(0) as usize).saturating_add(sex_pdx::desktop_style::chrome::Metrics::new(ui_scale).px(sex_pdx::desktop_style::INSET)as usize);
+    let (x,y)=(x as i64-surf.x as i64,y as i64-surf.y as i64);
+    if x<0||y<0{return None;}
+    let(x,y)=(x as usize,y as usize);
+    let tx = sex_pdx::desktop_style::chrome::Metrics::new(ui_scale).px(sex_pdx::desktop_style::INSET)as usize;
     let top_inset = if surf.chrome_flags & SURFACE_CHROME_TOP_BAR != 0 { (sex_pdx::desktop_style::chrome::Metrics::new(ui_scale).title()as usize) + (sex_pdx::desktop_style::chrome::Metrics::new(ui_scale).px(8)as usize) } else { sex_pdx::desktop_style::chrome::Metrics::new(ui_scale).px(sex_pdx::desktop_style::TEXT_TOP)as usize };
-    let ty = (surf.y.max(0) as usize).saturating_add(top_inset);
+    let ty = top_inset;
 
     if x < tx || y < ty { return None; }
 
@@ -2370,10 +2431,10 @@ fn text_surface_damage(surf: &Surface, w: usize, h: usize) -> (usize,usize,usize
     if surf.text_len == 0 || surf.line_count == 0 {return (0,0,0,0);}
     let (x,y,sw,sh)=surface_groups::rect(surf,w,h);
     let top=if surf.chrome_flags & SURFACE_CHROME_TOP_BAR != 0 {frame_height()+frame_rim()} else {chrome_metrics().px(sex_pdx::desktop_style::TEXT_TOP)as usize};
-    let text_y=(surf.y.max(0) as usize).saturating_add(top).max(y);
-    let bottom=(surf.y.max(0) as usize).saturating_add(top)
-        .saturating_add(surf.line_count as usize * 9 * surface_text_scale(surf))
-        .min(y.saturating_add(sh));
+    let origin=surf.y as i64+top as i64;
+    let text_y=origin.clamp(y as i64,(y+sh)as i64)as usize;
+    let bottom=(origin+(surf.line_count as usize*9*surface_text_scale(surf))as i64)
+        .clamp(text_y as i64,(y+sh)as i64)as usize;
     (x,text_y,sw,bottom.saturating_sub(text_y))
 }
 
@@ -2800,11 +2861,22 @@ fn draw_launcher_panel(fb: *mut u32, w: usize, h: usize, total_pixels: usize, sc
                     if px >= w { continue; }
                     let idx = py * w + px;
                     if idx >= total_pixels { continue; }
-                    // 1px border on all sides
-                    let color = if row == 0 || row == sh - 1 || col == 0 || col == sw - 1 {
+                    let alpha=scene.groups.coverage(surf,px,py);
+                    if alpha==0{continue;}
+                    let(lx,ly)=(px as i64-surf.x as i64,py as i64-surf.y as i64);
+                    let color = if lx==0||ly==0||lx==surf.w as i64-1||ly==surf.h as i64-1 {
                         LAUNCHER_BORDER_COLOR
-                    } else {
-                        LAUNCHER_PANEL_COLOR
+                    } else { LAUNCHER_PANEL_COLOR };
+                    let color=if alpha==255{color}else{
+                        // This retained legacy overlay is painted after normal
+                        // rows. Reconstruct its actual underlay with itself
+                        // omitted, avoiding an AA blend over its prior blend.
+                        let under=scene.groups.winner(&scene.surfaces,scene.focus,px,py,w,h)
+                            .map(|surface|surface_groups::PixelSource{
+                                surface,content:scene.groups.content(surface,&scene.surfaces,px,py,w,h),
+                                chrome:surface.surface_id==scene.focus||scene.groups.is_frame(surface)||scene.groups.is_program_frame(surface),
+                            }).map_or(bg(py,h),|source|composite_rounded_edge(px,py,w,h,bg(py,h),source,Some(surf),scene));
+                        coverage_blend(color,under,alpha)
                     };
                     core::ptr::write_volatile(fb.add(idx), color);
                 }

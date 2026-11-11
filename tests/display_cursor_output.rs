@@ -3,6 +3,7 @@
 //! Background/menu shading and CPU output are declared host boundaries.
 #![allow(dead_code,unused_unsafe,static_mut_refs)]
 extern crate self as sex_pdx;
+#[path="../crates/sex-pdx/src/desktop_stack.rs"]pub mod desktop_stack;
 fn bar_height()->usize{28}
 #[path="../crates/sex-pdx/src/desktop_style.rs"]pub mod desktop_style;
 #[path="../crates/sex-pdx/src/desktop_look.rs"]pub mod desktop_look;

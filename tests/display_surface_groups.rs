@@ -3,6 +3,7 @@
 //! sentinels; surface selection, clipping, fill, font and presentation bits are real.
 #![allow(dead_code,unused_variables,unused_unsafe,static_mut_refs)]
 extern crate self as sex_pdx;
+#[path="../crates/sex-pdx/src/desktop_stack.rs"]pub mod desktop_stack;
 #[macro_export]macro_rules! serial_record{($($arg:tt)*)=>{{let _=format_args!($($arg)*);}}}
 #[path="../crates/sex-pdx/src/text_encoding.rs"]pub mod text_encoding;
 #[path="../crates/sex-pdx/src/text_batch.rs"]pub mod text_batch;
@@ -42,6 +43,7 @@ fn alpha_blend_xrgb_over_xrgb(c:u32,_b:u32,_a:u8)->u32{unsafe{TEST_BLEND_BACKGRO
 fn pulse_alpha(base:u8,_a:u8,_f:u64,_p:u64)->u8{base}
 include!(env!("DISPLAY_COMPOSITION_SOURCE"));
 include!("fixtures/compositor_reference.rs");
+include!("fixtures/rounded_reference.rs");
 #[test]fn printable_rom_preserves_case_and_rejects_every_unsupported_byte(){
  assert_eq!(FONT_ASCII_5X7.len(),95);
  assert_eq!((desktop_style::GLYPH_WIDTH,desktop_style::GLYPH_HEIGHT,desktop_style::ADVANCE,desktop_style::LINE),(5,7,6,9));
@@ -163,7 +165,8 @@ unsafe fn publish_bitmap(sequence:u32,g:bitmap_batch::Geometry,pixels:&[u32])->b
  for y in 51..h{for x in 0..w{
    let selected=FRAME_GROUPS.winner(&SURFACES,0,x,y,w,h).map(|s|s.surface_id);
    let color=composite_pixel(x,y,w,h,0x123,0, &pixel_scene_3);
-   if selected==Some(300){let in_image=x-20<192&&y-70<192;assert_eq!(color,if in_image{0xffff00ff}else{0x123456});}else{assert_eq!(color,0x123);}
+   if selected==Some(300){let in_image=x-20<192&&y-70<192;let plain=if in_image{0xffff00ff}else{0x123456};
+    assert_eq!(color,reference_round_blend(plain,0x123,reference_round_alpha(&SURFACES[0],1,x,y)));}else{assert_eq!(color,0x123);}
   }}
  }
  SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();reset_bitmap_stage();
@@ -284,7 +287,11 @@ fn frame()->Surface{Surface{chrome_flags:1,color:0x445566,..surf(3,201)}}
   let (fx,fy,fw,fh)=surface_groups::rect(&s[0],1000,800);
   for py in 0..801{for px in [0,7,8,fx,fx.saturating_add(7),fx.saturating_add(8),999,1000]{
    let content=g.content(&s[0],&s,px,py,1000,800);
-   if content.surface_id==156{assert!(px>=fx+8&&px-fx-8<fw.saturating_sub(16));assert!(py>=fy+34&&py-fy-34<fh.saturating_sub(42));assert!(px<1000&&py<800);}
+   if content.surface_id==156{
+    let(lx,ly)=(px as i64-x as i64,py as i64-y as i64);
+    assert!(lx>=8&&lx< w.saturating_sub(8)as i64);assert!(ly>=34&&ly<h.saturating_sub(8)as i64);
+    assert!(px<1000&&py<800);
+   }
   }}
  }
 }
@@ -316,12 +323,12 @@ fn scanline_cache_matches_winner_at_every_pixel_with_focus_clipping_and_minimize
  for minimized in [false,true]{
   s[0].active=!minimized;
   for focus in [0,201,156,153,154,888]{for y in [49,50,51,64,65,99,100,127,136,159,180,229,250,399]{
-   let mut row=g.row_winners(&s,focus,y,420,410).unwrap();
+   let mut row_scratch=surface_groups::RowScratch::new();let mut row=g.row_winners(&s,focus,y,420,410,&mut row_scratch).unwrap();
    for x in 0..420{assert_eq!(row.selected(x),g.winner(&s,focus,x,y,420,410).map(|s|s.surface_id),"{focus} {x} {y} {minimized}");}
   }}
  }
- assert!(g.row_winners(&s,0,0,0,10).is_none());
- assert!(g.row_winners(&s,0,10,10,10).is_none());
+ assert!(g.row_winners(&s,0,0,0,10,&mut surface_groups::RowScratch::new()).is_none());
+ assert!(g.row_winners(&s,0,10,10,10,&mut surface_groups::RowScratch::new()).is_none());
 }
 
 #[path = "../servers/sexdisplay/src/damage.rs"]
@@ -509,7 +516,7 @@ fn shared_full_and_incremental_strip_uses_current_focus(){unsafe{
 unsafe fn assert_span_reference(w:usize,h:usize,focuses:&[u64]) {
  for &focus in focuses {let pixel_scene_8=capture_scene(w,h,focus);
  for y in 0..h {
-  let mut row=pixel_scene_8.groups.row_winners(&pixel_scene_8.surfaces,focus,y,w,h).unwrap();
+  let mut row_scratch=surface_groups::RowScratch::new();let mut row=pixel_scene_8.groups.row_winners(&pixel_scene_8.surfaces,focus,y,w,h,&mut row_scratch).unwrap();
   for x in 0..w {
    let selected=FRAME_GROUPS.winner(&SURFACES,focus,x,y,w,h).map(|s|s.surface_id);
    APP_PRESENT_BITS=0;
@@ -572,10 +579,10 @@ unsafe fn span_text_fill(index:usize) {
  SURFACES[0]=Surface{x:60,y:70,w:220,h:160,..surf(3,153)};
  FRAME_GROUPS.fit_children(&mut SURFACES);assert_span_reference(320,240,&[153,154]);
  let oversized=[SURFACE_EMPTY;MAX_SURFACES+1];
- assert!(FRAME_GROUPS.row_winners(&oversized,0,60,320,240).is_none());
+ assert!(FRAME_GROUPS.row_winners(&oversized,0,60,320,240,&mut surface_groups::RowScratch::new()).is_none());
  // Fixed storage remains bounded even when every active rectangle contributes
  // both outer edges; no dynamic allocation or pointer crosses an IPC boundary.
- assert!(core::mem::size_of::<surface_groups::RowWinners<'_>>()<=8192);
+ assert!(core::mem::size_of::<surface_groups::RowWinners<'_, '_>>()<=64);
 }}
 
 #[test]fn actual_selection_cells_cover_spaces_and_spacing_skip_newlines_preserve_ink(){
@@ -636,7 +643,7 @@ fn spindle_children(pd:u32)->[Surface;5] {
    for focus in[0,parent,child.surface_id]{
     for(px,py)in[(x,y),(x+sw-1,y+sh-1)]{
      assert!(g.winner(&surfaces,focus,px,py,w,h).is_none(),"pd={pd} pane={} focus={focus} framebuffer={w}x{h}",child.surface_id);
-     let mut row=g.row_winners(&surfaces,focus,py,w,h).unwrap();assert!(row.source(px).is_none());
+     let mut row_scratch=surface_groups::RowScratch::new();let mut row=g.row_winners(&surfaces,focus,py,w,h,&mut row_scratch).unwrap();assert!(row.source(px).is_none());
     }
    }
   }
@@ -690,10 +697,10 @@ fn spindle_children(pd:u32)->[Surface;5] {
    SURFACES[0]=Surface{x,y,w:200,h:200,text_len:1,text_buf:{let mut b=[0;TEXT_BUF_CAP];b[0]=b'X';b},..surf(pd,sid)};recompute_text_lines(&mut SURFACES[0]);
    FRAME_GROUPS.observe(&SURFACES);FRAME_GROUPS.fit_children(&mut SURFACES);
    let(sx,sy,sw,sh)=surface_groups::rect(&SURFACES[0],w,h);
-   if x>=w as i32{assert_eq!((sw,sh),(1,1));}
+   if x>=w as i32{assert_eq!((sw,sh),(0,0));}
    for focus in[0,sid,spindle_catalog(pd).frame_surface_id().unwrap()]{let pixel_scene_11=capture_scene(w,h,focus);
  for py in sy..sy+sh{
-    let mut row=pixel_scene_11.groups.row_winners(&pixel_scene_11.surfaces,focus,py,w,h).unwrap();
+    let mut row_scratch=surface_groups::RowScratch::new();let mut row=pixel_scene_11.groups.row_winners(&pixel_scene_11.surfaces,focus,py,w,h,&mut row_scratch).unwrap();
     for px in sx..sx+sw{
      APP_PRESENT_BITS=0;assert_eq!(composite_pixel(px,py,w,h,0xabcdef,focus, &pixel_scene_11),0xabcdef);assert_eq!(APP_PRESENT_BITS,0);
      let source=row.source(px);assert!(source.is_none());assert_eq!(composite_pixel_source(px,py,w,h,0xabcdef,source, &pixel_scene_11),0xabcdef);assert_eq!(APP_PRESENT_BITS,0);
@@ -712,7 +719,7 @@ fn spindle_children(pd:u32)->[Surface;5] {
   for slot in 1..2{recompute_text_lines(&mut SURFACES[slot]);let child=SURFACES[slot];let(px,py)=(child.x as usize+child.w as usize/2,child.y as usize+child.h as usize/2);
    for focus in[0,parent,child.surface_id]{
     APP_PRESENT_BITS=0;assert_eq!(composite_pixel(px,py,w,h,0xabcdef,focus, &capture_scene(w,h,focus)),child.color);assert_eq!(APP_PRESENT_BITS,native_pixel_bit(pd,child.surface_id));
-    let pane_scene=capture_scene(w,h,focus);let mut row=pane_scene.groups.row_winners(&pane_scene.surfaces,focus,py,w,h).unwrap();let source=row.source(px).unwrap();assert_eq!(source.surface.surface_id,parent);assert_eq!(source.content.surface_id,child.surface_id);
+    let pane_scene=capture_scene(w,h,focus);let mut row_scratch=surface_groups::RowScratch::new();let mut row=pane_scene.groups.row_winners(&pane_scene.surfaces,focus,py,w,h,&mut row_scratch).unwrap();let source=row.source(px).unwrap();assert_eq!(source.surface.surface_id,parent);assert_eq!(source.content.surface_id,child.surface_id);
     APP_PRESENT_BITS=0;assert_eq!(composite_pixel_source(px,py,w,h,0xabcdef,Some(source), &pane_scene),child.color);assert_eq!(APP_PRESENT_BITS,native_pixel_bit(pd,child.surface_id));
    }
    // Wrong-owner content cannot borrow the held child group or native bits.
@@ -766,7 +773,7 @@ fn reference_contrast(a:u32,b:u32)->f64{
    let pixel_scene_13=capture_scene(w,h,sid);
 
  for y in 105..121{
-    let mut row=pixel_scene_13.groups.row_winners(&pixel_scene_13.surfaces,sid,y,w,h).unwrap();
+    let mut row_scratch=surface_groups::RowScratch::new();let mut row=pixel_scene_13.groups.row_winners(&pixel_scene_13.surfaces,sid,y,w,h,&mut row_scratch).unwrap();
     for x in 183..269{
      let foreground=toolbar_title_fg_at(x-100,y-100,sid,background);
      let want=foreground.unwrap_or(background);
@@ -837,7 +844,7 @@ fn reference_contrast(a:u32,b:u32)->f64{
   let pixel_scene_15=capture_scene(w,h,0);
   for row in 0..2{for column in 0..8{let glyph=if row==0&&column<6{expected[column]}else if row==1&&column<3{expected[6+column]}else{[0;7]};
 
- for py in 0..9*factor{let y=82+row*9*factor+py;let mut cache=pixel_scene_15.groups.row_winners(&pixel_scene_15.surfaces,0,y,w,h).unwrap();
+ for py in 0..9*factor{let y=82+row*9*factor+py;let mut row_scratch=surface_groups::RowScratch::new();let mut cache=pixel_scene_15.groups.row_winners(&pixel_scene_15.surfaces,0,y,w,h,&mut row_scratch).unwrap();
     for px in 0..6*factor{let x=28+column*6*factor+px;
      let ink=py/factor<7&&px/factor<5&&glyph[py/factor]&(1<<(4-px/factor))!=0;
      let selected=row==0&&(1..=4).contains(&column);
@@ -1093,7 +1100,7 @@ unsafe fn seal_pending_text(index:usize,task:u32,sequence:u32,text:&[u8],selecti
  for focus in[0,153,154]{let snapshot=capture_scene(400,300,focus);let child=&snapshot.surfaces[1];let scale=surface_text_scale(child);
   let(x,y)=(child.x as usize+8+6*scale,child.y as usize+12+8*scale);
   assert_eq!(composite_pixel(x,y,400,300,0xabcdef,focus,&snapshot),0xff36577c);
-  let mut row=snapshot.groups.row_winners(&snapshot.surfaces,focus,y,400,300).unwrap();
+  let mut row_scratch=surface_groups::RowScratch::new();let mut row=snapshot.groups.row_winners(&snapshot.surfaces,focus,y,400,300,&mut row_scratch).unwrap();
   assert_eq!(composite_pixel_source(x,y,400,300,0xabcdef,row.source(x),&snapshot),0xff36577c);
   assert_eq!(&SURFACES[1].text_buf[..3],b"OLD");
  }
@@ -1176,11 +1183,20 @@ unsafe fn seal_pending_text(index:usize,task:u32,sequence:u32,text:&[u8],selecti
   let mut fast=vec![0u32;w*h];let mut slow=vec![0u32;w*h];
   for y in 51..h{
    APP_PRESENT_BITS=0;raster_row(fast.as_mut_ptr(),y,0,w,w,h,&scene);let fast_bits=APP_PRESENT_BITS;
-   APP_PRESENT_BITS=0;let mut row=scene.groups.row_winners(&scene.surfaces,focus,y,w,h);
+   APP_PRESENT_BITS=0;let mut row_scratch=surface_groups::RowScratch::new();let mut row=scene.groups.row_winners(&scene.surfaces,focus,y,w,h,&mut row_scratch);
    for x in 0..w{slow[y*w+x]=if let Some(row)=row.as_mut(){composite_pixel_source(x,y,w,h,bg(y,h),row.source(x),&scene)}else{composite_pixel(x,y,w,h,bg(y,h),focus,&scene)};}
    assert_eq!(fast_bits,APP_PRESENT_BITS,"{name} present bits y={y}");
    for x in 0..w{assert_eq!(fast[y*w+x],slow[y*w+x],"{name} x={x} y={y}");}
   }
+  // Reentrant scratch use takes the real scalar path, with identical pixels
+  // and contributor bits; it never creates a second mutable row borrow.
+  let mut fallback=vec![7u32;w*h];
+  let busy=scene.row_scratch.borrow_mut();
+  APP_PRESENT_BITS=0;raster_row(fallback.as_mut_ptr(),70,0,w,w,h,&scene);let fallback_bits=APP_PRESENT_BITS;
+  drop(busy);
+  APP_PRESENT_BITS=0;raster_row(fast.as_mut_ptr(),70,0,w,w,h,&scene);
+  assert_eq!(fallback_bits,APP_PRESENT_BITS,"{name} reentrant contributor bits");
+  assert_eq!(&fallback[70*w..71*w],&fast[70*w..71*w],"{name} reentrant pixels");
   // A damage rectangle paints the same pixels and nothing outside it.
   let mut part=vec![7u32;w*h];for y in 60..(h-1).min(200){raster_row(part.as_mut_ptr(),y,w/3,w*2/3,w,h,&scene);}
   for y in 0..h{for x in 0..w{let inside=y>=60&&y<(h-1).min(200)&&x>=w/3&&x<w*2/3;assert_eq!(part[y*w+x],if inside{slow[y*w+x]}else{7},"{name} damage x={x} y={y}");}}
@@ -1204,6 +1220,117 @@ unsafe fn seal_pending_text(index:usize,task:u32,sequence:u32,text:&[u8],selecti
   SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();
   let mut alone=Surface{x:40,y:70,w:(w as u32).min(200),h:90,..surf(9,156)};alone.text_len=text.len() as u16;alone.text_buf[..text.len()].copy_from_slice(text);SURFACES[0]=alone;recompute_text_lines(&mut SURFACES[0]);
   check("independent",w,h,0);check("independent focused",w,h,156);
+  // A translucent bitmap and partial fill force the ordinary source painter
+  // even on opaque row intervals. A lower owner remains visible through AA.
+  reset_bitmap_stage();
+  SURFACES[0]=Surface{x:20,y:70,w:200,h:150,color:0x204060,chrome_flags:SURFACE_CHROME_TOP_BAR,..surf(15,300)};
+  SURFACES[1]=Surface{x:0,y:28,w:w as u32,h:h as u32-28,color:0x000077,..surf(16,301)};
+  fill_damage::update(&mut SURFACES[0],0,25,0,40,120,0x102030).unwrap();
+  let g=bitmap_batch::Geometry{x:0,y:0,width:48,height:48,scale:2};
+  publish_bitmap(1,g,&vec![0x80ff0000;g.len()]);
+  for focus in[0,300]{
+   let scene=capture_scene(w,h,focus);
+   let mut scratch=surface_groups::RowScratch::new();
+   let mut row=scene.groups.row_winners(&scene.surfaces,focus,110,w,h,&mut scratch).unwrap();
+   let(end,source)=row.run(50);let source=source.unwrap();
+   assert_eq!(source.surface.surface_id,300);
+   assert!(scene.groups.opaque_run(source.surface,50,end,110,w,h));
+   let mut probe=vec![0;w*h];
+   assert!(!fast_content_run(probe.as_mut_ptr(),50,end,110,w,h,source,&scene));
+   check("opaque bitmap and AA lower owner",w,h,focus);
+  }
+  reset_bitmap_stage();
  }
  SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();
+}}
+
+#[test]fn rounded_edges_blend_actual_owners_and_only_mark_real_contributors(){unsafe{
+ SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();reset_bitmap_stage();
+ SURFACES[0]=Surface{x:20,y:70,w:200,h:150,color:0x110000,owner_pd:9,surface_id:156,active:true,..SURFACE_EMPTY};
+ SURFACES[1]=Surface{x:0,y:28,w:320,h:230,color:0x000077,owner_pd:15,surface_id:300,active:true,..SURFACE_EMPTY};
+ let old=capture_scene(320,260,0);
+ for(x,color,bits)in[(20,0x000077,4),(27,0x020068,5),(31,0x110000,1)]{
+  APP_PRESENT_BITS=0;assert_eq!(composite_pixel(x,70,320,260,0x123,0,&old),color);assert_eq!(APP_PRESENT_BITS,bits);
+  let mut row_scratch=surface_groups::RowScratch::new();let mut row=old.groups.row_winners(&old.surfaces,0,70,320,260,&mut row_scratch).unwrap();
+  APP_PRESENT_BITS=0;assert_eq!(composite_pixel_source(x,70,320,260,0x123,row.source(x),&old),color);assert_eq!(APP_PRESENT_BITS,bits);
+ }
+ let mut pixels=vec![0;320*260];raster_row(pixels.as_mut_ptr(),70,0,320,320,260,&old);
+ assert_eq!((pixels[70*320+20],pixels[70*320+27],pixels[70*320+31]),(0x000077,0x020068,0x110000));
+ FRAME_GROUPS.set_scale(3);SURFACES[0].color=0xffffff;
+ APP_PRESENT_BITS=0;assert_eq!(composite_pixel(27,70,320,260,0x123,0,&old),0x020068);assert_eq!(APP_PRESENT_BITS,5);
+ // Two translucent corner samples over a third real owner; a fourth opaque
+ // owner is hidden and must never gain APP_PRESENT through speculative shading.
+ FRAME_GROUPS.set_scale(1);SURFACES[0]=old.surfaces[0];
+ SURFACES[1]=Surface{color:0x007700,owner_pd:12,surface_id:154,..SURFACES[0]};
+ SURFACES[2]=Surface{x:0,y:28,w:320,h:230,color:0x0000bb,owner_pd:15,surface_id:300,active:true,..SURFACE_EMPTY};
+ SURFACES[3]=Surface{owner_pd:16,surface_id:301,color:0xabcdef,..SURFACES[2]};
+ let layered=capture_scene(320,260,0);APP_PRESENT_BITS=0;
+ assert_eq!(composite_pixel(27,70,320,260,0x123,0,&layered),0x020c8e);assert_eq!(APP_PRESENT_BITS,7);
+ // Legacy overlay underlay reconstruction must skip its own retained layer.
+ let source=surface_groups::PixelSource{surface:&layered.surfaces[0],content:&layered.surfaces[0],chrome:false};
+ APP_PRESENT_BITS=0;assert_eq!(composite_rounded_edge(27,70,320,260,0x123,source,Some(&layered.surfaces[0]),&layered),0x000ea3);assert_eq!(APP_PRESENT_BITS,6);
+ SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();reset_bitmap_stage();
+}}
+
+#[test]fn legacy_overlay_rounded_edge_reconstructs_underlay_without_double_blending(){unsafe{
+ SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();reset_bitmap_stage();
+ SURFACES[0]=Surface{x:20,y:70,w:200,h:150,color:0xdeadbe,owner_pd:3,surface_id:146,active:true,..SURFACE_EMPTY};
+ SURFACES[1]=Surface{x:0,y:28,w:320,h:230,color:0x000077,owner_pd:8,surface_id:888,active:true,..SURFACE_EMPTY};
+ let scene=capture_scene(320,260,0);let mut pixels=vec![0;320*260];
+ for y in 0..260{raster_row(pixels.as_mut_ptr(),y,0,320,320,260,&scene);}
+ // Generic surface colour is intentionally different from the legacy pass:
+ // reading its prior blended edge would produce the wrong visible result.
+ draw_legacy_launcher_pixels(pixels.as_mut_ptr(),320,260,pixels.len(),&scene);
+ assert_eq!((pixels[70*320+20],pixels[70*320+27],pixels[70*320+31]),(0x000077,0x080b78,0x405880));
+ for y in 28..260{for x in 0..320{
+  let a=reference_round_alpha(&SURFACES[0],1,x,y);
+  let under=if reference_round_alpha(&SURFACES[1],1,x,y)!=0{reference_round_blend(0x000077,0x123,reference_round_alpha(&SURFACES[1],1,x,y))}else{0x123};
+  let(lx,ly)=(x as i64-20,y as i64-70);
+  let paint=if lx==0||ly==0||lx==199||ly==149{0x405880}else{0x203058};
+  let expected=if a==0{under}else{reference_round_blend(paint,under,a)};
+  assert_eq!(pixels[y*320+x],expected,"legacy overlay {x},{y}");
+ }}
+ SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();reset_bitmap_stage();
+}}
+
+#[test]fn changed_row_damage_uses_original_signed_glyph_origin_after_top_clipping(){unsafe{
+ SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();reset_bitmap_stage();
+ SURFACES[0]=Surface{x:20,y:-30,w:120,h:150,color:0x102030,text_color:0xffffff,text_len:17,owner_pd:8,surface_id:888,active:true,..SURFACE_EMPTY};
+ SURFACES[0].text_buf[..17].copy_from_slice(b"A\nB\nC\nD\nE\nF\nG\nH\nI");recompute_text_lines(&mut SURFACES[0]);
+ assert_eq!(surface_text_scale(&SURFACES[0]),1);
+ let old=SURFACES[0];let before=capture_scene(180,160,0);let mut actual=vec![0;180*160];
+ for y in 0..160{raster_row(actual.as_mut_ptr(),y,0,180,180,160,&before);}
+ SURFACES[0].text_buf[12]=b'Z';recompute_text_lines(&mut SURFACES[0]);
+ let mut d=damage::Damage::new(28);d.add(text_surface_damage(&old,180,160),180,160);d.add(text_surface_damage(&SURFACES[0],180,160),180,160);
+ let changed=changed_text_rows(&old,&SURFACES[0],d.rect().unwrap());
+ assert_eq!((changed.y,changed.bottom),(36,45)); // -30 +12 +6*9, one full line
+ let after=capture_scene(180,160,0);
+ for y in changed.y..changed.bottom{raster_row(actual.as_mut_ptr(),y,changed.x,changed.right,180,160,&after);}
+ for y in 0..160{for x in 0..180{assert_eq!(actual[y*180+x],composite_pixel(x,y,180,160,0x123,0,&after),"signed changed row {x},{y}");}}
+ SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();reset_bitmap_stage();
+}}
+
+#[test]fn rounded_partial_stack_visits_all_32_layers_but_stops_at_opaque_owner(){unsafe{
+ FRAME_GROUPS=FrameGroups::new();reset_bitmap_stage();let mut expected_mask=0u64;let mut program_frames=0;
+ for i in 0..MAX_SURFACES{
+  let sid=desktop_stack::ORDER[i];let row=app_catalog::INCARNATIONS.iter().enumerate().find(|(_,row)|row.frame()==sid);
+  let owner=row.map_or(3,|(_,row)|if row.shell_surface.is_some(){3}else{row.target});
+  if let Some((index,row))=row{
+   if owner==row.target&&sid==row.surface{expected_mask|=1u64<<index;}
+   if row.app==app_catalog::App::Program{program_frames+=1;assert!(i>=29);}
+  }
+  SURFACES[i]=Surface{x:20,y:70,w:200,h:150,color:if i==31{0xff0000}else{0xffffff},owner_pd:owner,surface_id:sid,active:true,..SURFACE_EMPTY};
+ }
+ assert_ne!(native_pixel_bit(SURFACES[31].owner_pd,SURFACES[31].surface_id),0);
+ assert_eq!(program_frames,3);
+ // At local(7,0), the three real Program frames paint their minimal close
+ // rim (declared glass sentinel 0x444444), not the plain surface fill. Blend
+ // those three 32/255 layers, then 29 white layers over 0x000123: 0xf7f7f8.
+ APP_PRESENT_BITS=0;
+ assert_eq!(reference_composite_pixel_selected(27,70,320,260,0x123,0,None),0xf7f7f8);
+ assert_eq!(APP_PRESENT_BITS,expected_mask);
+ let scene=capture_scene(320,260,0);
+ APP_PRESENT_BITS=0;assert_eq!(composite_pixel(27,70,320,260,0x123,0,&scene),0xf7f7f8);assert_eq!(APP_PRESENT_BITS,expected_mask);
+ APP_PRESENT_BITS=0;assert_eq!(composite_pixel(31,70,320,260,0x123,0,&scene),0xffffff);assert_eq!(APP_PRESENT_BITS,0);
+ SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();reset_bitmap_stage();
 }}
