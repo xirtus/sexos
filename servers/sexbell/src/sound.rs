@@ -220,12 +220,16 @@ enum Card {
     /// `input`: the card's first input stream (a microphone), when it has one.
     Virtio { card: VirtIOSound<PoolHal, LeaseTransport>, stream: u32, input: Option<u32> },
     Hda(crate::hda::Hda),
+    /// A USB sound card SexUSB drives: periods go through `sex_pdx::usb_audio`'s ring,
+    /// and one is done once SexUSB has taken its last frame (`ends`, by token).
+    Usb { link: sex_pdx::usb_audio::Shared, ends: [u64; IN_FLIGHT], next: u16 },
 }
 impl Card {
     fn done(&mut self, token: u16) -> bool {
         match self {
             Card::Virtio { card, .. } => card.pcm_xfer_ok(token).is_ok(),
             Card::Hda(h) => h.done(token),
+            Card::Usb { link, ends, .. } => link.card().is_none() || link.taken() >= ends[token as usize % IN_FLIGHT],
         }
     }
     fn submit(&mut self, period: &[u8; PERIOD_BYTES]) -> Result<u16, &'static str> {
@@ -233,22 +237,39 @@ impl Card {
             Card::Virtio { card, stream, .. } => card.pcm_xfer_nb(*stream, period).map_err(|e| {
                 sex_pdx::serial_record!("[bell.sound.xfer.error] {:?}", e); "xfer" }),
             Card::Hda(h) => h.submit(period).ok_or("ring_full"),
+            Card::Usb { link, ends, next } => {
+                if link.card().is_none() { return Err("usb_gone"); }
+                let frames = unsafe { core::slice::from_raw_parts(period.as_ptr() as *const [i16; 2], PERIOD_FRAMES) };
+                if link.write(frames) != PERIOD_FRAMES { return Err("usb_full"); }
+                let token = *next;
+                ends[token as usize % IN_FLIGHT] = link.written();
+                *next = next.wrapping_add(1);
+                Ok(token)
+            }
         }
     }
     /// Whether a period can go to the chip now, checked before mixing one.
-    fn room(&mut self) -> bool { match self { Card::Virtio { .. } => true, Card::Hda(h) => h.room() } }
+    fn room(&mut self) -> bool {
+        match self {
+            Card::Virtio { .. } => true,
+            Card::Hda(h) => h.room(),
+            Card::Usb { link, .. } => link.card().is_some() && link.room() >= PERIOD_FRAMES as u64,
+        }
+    }
     /// The HD Audio stream runs from the start; a virtio stream starts once fed.
     fn start(&mut self) -> bool {
         match self {
             Card::Virtio { card, stream, .. } => card.pcm_start(*stream).is_ok(),
-            Card::Hda(_) => true,
+            Card::Hda(_) | Card::Usb { .. } => true,
         }
     }
-    fn stream(&self) -> u32 { match self { Card::Virtio { stream, .. } => *stream, Card::Hda(_) => 0 } }
+    fn stream(&self) -> u32 { match self { Card::Virtio { stream, .. } => *stream, _ => 0 } }
+    fn name(&self) -> &'static str { match self { Card::Virtio { .. } => "virtio", Card::Hda(_) => "hda", Card::Usb { .. } => "usb" } }
     /// The outputs word: how many, their kinds, and which play.
     fn outputs(&self) -> u64 {
         match self {
             Card::Virtio { .. } => mixer::outputs(1, &[mixer::VIRTUAL]),
+            Card::Usb { .. } => mixer::outputs(1, &[mixer::USB]),
             Card::Hda(h) => {
                 let mut kinds = [0u8; mixer::MAX_OUTPUTS];
                 let n = h.outputs.min(mixer::MAX_OUTPUTS);
@@ -266,7 +287,7 @@ impl Card {
     }
     fn select(&mut self, mask: u64) -> bool {
         match self {
-            Card::Virtio { .. } => mask & 1 == 1 || mask == mixer::AUTO,
+            Card::Virtio { .. } | Card::Usb { .. } => mask & 1 == 1 || mask == mixer::AUTO,
             // The person's own pick stops Bell following the jack; AUTO resumes it.
             Card::Hda(h) if mask == mixer::AUTO => { h.auto = true; let home = h.home; h.select(home); h.follow_jack(); true }
             Card::Hda(h) => { let ok = mask <= 0xFF && h.select(mask as u32); if ok { h.auto = false; } ok }
@@ -518,7 +539,7 @@ pub fn init() {
     match open() {
         Ok(p) => {
             sex_pdx::serial_record!("[bell.sound.ready] card={} stream={} rate={} channels={} period_bytes={}",
-                match p.card { Card::Virtio { .. } => "virtio", Card::Hda(_) => "hda" }, p.card.stream(), RATE, CHANNELS, PERIOD_BYTES);
+                p.card.name(), p.card.stream(), RATE, CHANNELS, PERIOD_BYTES);
             unsafe { *core::ptr::addr_of_mut!(PLAYER) = Some(p) };
         }
         Err(reason) => sex_pdx::serial_record!("[bell.sound.absent] reason={}", reason),
@@ -580,10 +601,62 @@ fn open_hda(view: m::RegionView) -> Result<Player, &'static str> {
     Ok(player_with(Card::Hda(h)))
 }
 
-pub fn present() -> bool { player().is_some() }
+// ── USB sound cards ───────────────────────────────────────────────────
+// A card SexUSB finds takes over playback, as headphones plugged in do; the card
+// Bell had waits and comes back when it is unplugged.
+static mut USB_REGION: Option<u64> = None;
+static mut USB_SEEN: u32 = 0;
+static mut PARKED: Option<(Card, bool)> = None;
+
+fn usb_link() -> Option<sex_pdx::usb_audio::Shared> {
+    let base = unsafe { *core::ptr::addr_of!(USB_REGION) }.unwrap_or_else(|| {
+        let at = sex_pdx::memory_region_full_view(sex_pdx::usb_audio::SLOT, m::QUERY_VIEW | m::READ | m::WRITE).ok()
+            .filter(|v| v.length >= sex_pdx::usb_audio::BYTES && v.region_id == sex_pdx::usb_audio::REGION_ID)
+            .map_or(0, |v| v.virtual_address);
+        unsafe { *core::ptr::addr_of_mut!(USB_REGION) = Some(at) };
+        at
+    });
+    (base != 0).then(|| unsafe { sex_pdx::usb_audio::Shared::at(base as *mut u8) })
+}
+
+/// Follows a USB sound card coming and going. Cheap: two loads when nothing changed.
+fn usb_check() {
+    let Some(link) = usb_link() else { return };
+    let seen = unsafe { &mut *core::ptr::addr_of_mut!(USB_SEEN) };
+    let parked = unsafe { &mut *core::ptr::addr_of_mut!(PARKED) };
+    match link.card() {
+        Some(c) if c.generation != *seen => {
+            *seen = c.generation;
+            let card = Card::Usb { link, ends: [0; IN_FLIGHT], next: 0 };
+            match player() {
+                None => unsafe { *core::ptr::addr_of_mut!(PLAYER) = Some(player_with(card)) },
+                Some(p) => {
+                    let old = core::mem::replace(&mut p.card, card);
+                    if !matches!(old, Card::Usb { .. }) { *parked = Some((old, p.started)); }
+                    // Periods still with the old card play out there; counting starts again.
+                    p.first = 0; p.flying = 0; p.started = false;
+                }
+            }
+            sex_pdx::serial_record!("[bell.usb.card] vendor={:#06x} product={:#06x} uac={} generation={} parked={}",
+                c.vendor, c.product, c.class, c.generation, parked.is_some() as u8);
+        }
+        None if *seen != 0 && player().is_some_and(|p| matches!(p.card, Card::Usb { .. })) => {
+            let p = player().unwrap();
+            let back = parked.take();
+            sex_pdx::serial_record!("[bell.usb.gone] generation={} back={}", *seen, back.as_ref().map_or("none", |(c, _)| c.name()));
+            if let Some((card, started)) = back { p.card = card; p.started = started; }
+            p.first = 0; p.flying = 0;
+            *seen = 0;
+        }
+        _ => {}
+    }
+}
+
+pub fn present() -> bool { usb_check(); player().is_some() }
 
 /// Queue a note: `hz` 0 is a rest. False when there's no card or the queue is full.
 pub fn tone(hz: u64, ms: u64, volume: u64) -> bool {
+    usb_check();
     let Some(p) = player() else { return false };
     if hz > 20_000 || ms == 0 || ms > MAX_MS || volume > 100 || p.len == NOTES { return false; }
     let frames = (RATE as u64 * ms / 1000).max(1) as u32;
@@ -602,6 +675,7 @@ pub fn busy() -> bool { player().is_some_and(|p| p.len > 0 || p.flying > 0 || p.
 /// A program row says its ring has sound: play it from where Bell last took.
 /// False when there's no card or the caller has no ring.
 pub fn stream(caller: u32) -> bool {
+    usb_check();
     let Some(p) = player() else { return false };
     let Some(k) = ring_of(p, caller) else { return false };
     let st = p.streams[k].as_mut().unwrap();
@@ -673,6 +747,7 @@ pub fn retire(pd: u32) -> bool {
 }
 
 pub fn pump() {
+    usb_check();
     if let Some(p) = player() {
         let before = p.played;
         p.pump();

@@ -55,6 +55,8 @@ pub const HEADPHONES: u8 = 2;
 /// A monitor, over HDMI or DisplayPort.
 pub const HDMI: u8 = 3;
 pub const DISPLAYPORT: u8 = 4;
+/// A USB sound card or headset.
+pub const USB: u8 = 5;
 pub const OTHER: u8 = 14;
 /// The one output of a virtual sound card.
 pub const VIRTUAL: u8 = 15;

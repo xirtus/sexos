@@ -1269,6 +1269,7 @@ pub mod virtio;
 pub mod device;
 pub mod usb_disk;
 pub mod usb_net;
+pub mod usb_audio;
 pub mod network_config;
 
 pub mod desktop_style;
