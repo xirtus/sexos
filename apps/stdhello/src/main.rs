@@ -56,6 +56,29 @@ fn main() {
     check("remove_file and remove_dir", removed && std::fs::metadata(path).is_err());
     check("no way out of the folder", std::fs::read("../../anything").is_err());
 
+    // The rest of std::fs: nested folders, file types, rename, set_len, sync, remove_dir_all.
+    use sex_std::fs::FileExt;
+    let nested = std::fs::create_dir_all("stdhello-tree/a/b").is_ok() && std::fs::create_dir_all("stdhello-tree/a/b").is_ok();
+    let _ = std::fs::write("stdhello-tree/a/b/leaf.txt", b"0123456789");
+    let types = std::fs::metadata("stdhello-tree/a").is_ok_and(|m| m.is_dir() && !m.is_file())
+        && std::fs::read_dir("stdhello-tree/a").is_ok_and(|mut d| d.next().is_some_and(|e| e.is_ok_and(|e| e.file_type().is_ok_and(|t| t.is_dir()))));
+    check("create_dir_all and file types", nested && types);
+    let modified = std::fs::metadata("stdhello-tree/a/b/leaf.txt").and_then(|m| m.modified());
+    check("metadata len and modified", modified.is_ok() && std::fs::metadata("stdhello-tree/a/b/leaf.txt").is_ok_and(|m| m.len() == 10));
+    let renamed = sex_std::fs::rename("stdhello-tree/a/b/leaf.txt", "stdhello-tree/moved.txt").is_ok()
+        && std::fs::metadata("stdhello-tree/a/b/leaf.txt").is_err()
+        && std::fs::read("stdhello-tree/moved.txt").is_ok_and(|b| b == b"0123456789");
+    check("rename", renamed);
+    let cut = std::fs::OpenOptions::new().write(true).open("stdhello-tree/moved.txt").and_then(|f| { f.truncate(4)?; f.fsync()?; f.metadata() });
+    check("set_len and sync", cut.is_ok_and(|m| m.len() == 4) && std::fs::read("stdhello-tree/moved.txt").is_ok_and(|b| b == b"0123"));
+    let copied = sex_std::fs::copy("stdhello-tree/moved.txt", "stdhello-tree/copy.txt").is_ok_and(|n| n == 4);
+    check("copy and canonicalize", copied && sex_std::fs::canonicalize("stdhello-tree/a/../copy.txt").is_ok_and(|p| p == std::path::Path::new("/stdhello-tree/copy.txt")));
+    let _ = std::fs::create_dir("stdhello-tree/empty");
+    check("read_dir of an empty folder", sex_std::fs::read_dir("stdhello-tree/empty").is_ok_and(|v| v.is_empty()));
+    check("remove_dir_all", sex_std::fs::remove_dir_all("stdhello-tree").is_ok() && std::fs::metadata("stdhello-tree").is_err());
+    // std's own answer for starting another program (see sex_std::process).
+    check("Command says unsupported", std::process::Command::new("stdhello").status().is_err_and(|e| e.kind() == std::io::ErrorKind::Unsupported));
+
     let counter = Arc::new(Mutex::new(0u64));
     let handles: Vec<_> = (0..4).map(|i| {
         let counter = Arc::clone(&counter);

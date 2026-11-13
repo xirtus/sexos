@@ -24,11 +24,13 @@ pub struct GridPlace { pub start: i32, pub end: i32, pub span: i32 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Len { Auto, Px(i32), /// hundredths of a percent
-    Pct(i32) }
+    Pct(i32),
+    /// `calc()` mixing both: pixels plus hundredths of a percent.
+    Mix(i32, i32) }
 
 impl Len {
     pub fn resolve(self, base: i32) -> Option<i32> {
-        match self { Len::Auto => None, Len::Px(p) => Some(p), Len::Pct(p) => Some((base as i64 * p as i64 / 10000) as i32) }
+        match self { Len::Auto => None, Len::Px(p) => Some(p), Len::Pct(p) => Some((base as i64 * p as i64 / 10000) as i32), Len::Mix(px, p) => Some(px + (base as i64 * p as i64 / 10000) as i32) }
     }
     pub fn or_zero(self, base: i32) -> i32 { self.resolve(base).unwrap_or(0) }
 }
@@ -188,7 +190,7 @@ impl Style {
             display: Display::Inline,
             color: 0xFF20_2124,
             background: 0,
-            font_size: 16,
+            font_size: zoomed(16),
             bold: false,
             italic: false,
             mono: false,
@@ -523,7 +525,7 @@ fn presentational_hints(dom: &Dom, node: NodeId, s: &mut Style, ctx: &Ctx) {
         if let Some(size) = dom.attr(node, "size") {
             let n: i32 = size.trim_start_matches(['+', '-']).parse().unwrap_or(3);
             let n = if size.starts_with('+') { 3 + n } else if size.starts_with('-') { 3 - n } else { n };
-            s.font_size = [10, 13, 16, 18, 24, 32, 48][n.clamp(1, 7) as usize - 1];
+            s.font_size = zoomed([10, 13, 16, 18, 24, 32, 48][n.clamp(1, 7) as usize - 1]);
         }
         if let Some(face) = dom.attr(node, "face") { s.mono = is_mono(face); }
     }
@@ -565,31 +567,40 @@ fn is_mono(family: &str) -> bool {
         || (f.contains("monospace") && !f.contains("sans") && !f.contains("serif") && !f.contains("system"))
 }
 
+/// Page zoom in percent: absolute lengths (px, pt, in, ...) and keyword font sizes
+/// grow by it, so the page lays out again at its new size (Ctrl +/- in the browser).
+static ZOOM: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(100);
+
+/// Sets the page zoom, in percent (25 to 500), for pages styled from now on.
+pub fn set_zoom(percent: u32) { ZOOM.store(percent.clamp(25, 500), core::sync::atomic::Ordering::Relaxed); }
+pub fn zoom() -> u32 { ZOOM.load(core::sync::atomic::Ordering::Relaxed) }
+pub(crate) fn zoomed(px: i32) -> i32 { (px as i64 * zoom() as i64 / 100) as i32 }
+
 fn parse_len(v: &str, s: &Style, ctx: &Ctx) -> Option<Len> {
     let v = v.trim();
     if v.eq_ignore_ascii_case("auto") || v.eq_ignore_ascii_case("none") || v == "initial" || v == "fit-content" || v == "max-content" || v == "min-content" { return Some(Len::Auto); }
     if let Some(inner) = v.strip_prefix("calc(").and_then(|r| r.strip_suffix(')')) { return parse_calc(inner, s, ctx); }
-    if let Some(inner) = v.strip_prefix("min(").or(v.strip_prefix("max(")).or(v.strip_prefix("clamp(")).and_then(|r| r.strip_suffix(')')) {
-        // Pick the first plain length: good enough for most responsive sizing.
-        for part in inner.split(',') { if let Some(l) = parse_len(part, s, ctx) { if l != Len::Auto { return Some(l); } } }
-        return None;
-    }
+    if v.starts_with("min(") || v.starts_with("max(") || v.starts_with("clamp(") { return parse_calc(v, s, ctx); }
     if let Some(inner) = v.strip_prefix("var(") { let _ = inner; return None; }
     let end = v.find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+')).unwrap_or(v.len());
     let n = css::parse_number(&v[..end])?;
     let unit = v[end..].to_ascii_lowercase();
     let px = |hundredths: i64| Some(Len::Px((hundredths / 100) as i32));
+    // Absolute units scale with the page zoom; em, rem, % and viewport units follow
+    // what they are relative to.
+    let z = zoom() as i64;
+    let abs = |hundredths: i64| px(hundredths * z / 100);
     match unit.as_str() {
-        "px" => px(n as i64),
-        "" => if n == 0 { Some(Len::Px(0)) } else { px(n as i64) },
+        "px" => abs(n as i64),
+        "" => if n == 0 { Some(Len::Px(0)) } else { abs(n as i64) },
         "em" => px(n as i64 * s.font_size as i64),
         "rem" => px(n as i64 * ctx.root_font as i64),
         "ex" | "ch" => px(n as i64 * s.font_size as i64 / 2),
-        "pt" => px(n as i64 * 4 / 3),
-        "pc" => px(n as i64 * 16),
-        "in" => px(n as i64 * 96),
-        "cm" => px(n as i64 * 96 * 100 / 254),
-        "mm" => px(n as i64 * 96 * 10 / 254),
+        "pt" => abs(n as i64 * 4 / 3),
+        "pc" => abs(n as i64 * 16),
+        "in" => abs(n as i64 * 96),
+        "cm" => abs(n as i64 * 96 * 100 / 254),
+        "mm" => abs(n as i64 * 96 * 10 / 254),
         "vw" => px(n as i64 * ctx.viewport.0 as i64 / 100),
         "vh" => px(n as i64 * ctx.viewport.1 as i64 / 100),
         "vmin" => px(n as i64 * ctx.viewport.0.min(ctx.viewport.1) as i64 / 100),
@@ -599,30 +610,128 @@ fn parse_len(v: &str, s: &Style, ctx: &Ctx) -> Option<Len> {
     }
 }
 
-/// `calc()` with one `+`/`-` between a percentage and a length is approximated by
-/// the percentage alone when present, else the sum of pixel terms.
+/// `calc()`: sums, differences, products and quotients by numbers, parentheses and
+/// nested `calc()`/`min()`/`max()`/`clamp()`, of lengths and percentages. The result
+/// is pixels, a percentage, or both (`Len::Mix`).
 fn parse_calc(inner: &str, s: &Style, ctx: &Ctx) -> Option<Len> {
-    let mut px = 0;
-    let mut pct = None;
-    let mut sign = 1;
-    for tok in inner.split_ascii_whitespace() {
-        match tok {
-            "+" => sign = 1,
-            "-" => sign = -1,
-            t => match parse_len(t, s, ctx)? {
-                Len::Px(p) => px += sign * p,
-                Len::Pct(p) => pct = Some(sign * p),
-                Len::Auto => return None,
-            },
+    let toks = calc_tokens(inner)?;
+    let mut at = 0;
+    let v = calc_sum(&toks, &mut at, s, ctx)?;
+    if at != toks.len() { return None; }
+    let (px, pct, num) = v;
+    if num.is_some() { return if px == 0 && pct == 0 { Some(Len::Px(num.unwrap() as i32)) } else { None }; }
+    Some(match (px as i32, pct as i32) { (p, 0) => Len::Px(p), (0, q) => Len::Pct(q), (p, q) => Len::Mix(p, q) })
+}
+
+/// A calc value: pixels, hundredths of a percent, or (when `Some`) a plain number
+/// (hundredths, for `*` and `/`).
+type CalcV = (i64, i64, Option<i64>);
+
+fn calc_tokens(t: &str) -> Option<Vec<String>> {
+    let mut out = Vec::new();
+    let b = t.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c.is_ascii_whitespace() { i += 1; continue; }
+        if matches!(c, b'(' | b')' | b'*' | b'/' | b',') { out.push(String::from(c as char)); i += 1; continue; }
+        // + and - are operators between whitespace; otherwise a number's sign.
+        if (c == b'+' || c == b'-') && (i + 1 >= b.len() || b[i + 1].is_ascii_whitespace()) { out.push(String::from(c as char)); i += 1; continue; }
+        let st = i;
+        let mut depth = 0;
+        while i < b.len() {
+            let d = b[i];
+            if d == b'(' { depth += 1; } else if d == b')' { if depth == 0 { break; } depth -= 1; }
+            else if depth == 0 && (d.is_ascii_whitespace() || matches!(d, b'*' | b'/' | b',')) { break; }
+            i += 1;
+        }
+        if i == st { return None; }
+        out.push(String::from(&t[st..i]));
+    }
+    Some(out)
+}
+
+fn calc_sum(t: &[String], at: &mut usize, s: &Style, ctx: &Ctx) -> Option<CalcV> {
+    let mut v = calc_product(t, at, s, ctx)?;
+    while let Some(op) = t.get(*at).map(String::as_str).filter(|o| *o == "+" || *o == "-") {
+        *at += 1;
+        let w = calc_product(t, at, s, ctx)?;
+        let k = if op == "+" { 1 } else { -1 };
+        v = match (v.2, w.2) {
+            (Some(a), Some(b)) => (0, 0, Some(a + k * b)),
+            (None, None) => (v.0 + k * w.0, v.1 + k * w.1, None),
+            // `0` mixes with lengths.
+            (Some(0), None) => (k * w.0, k * w.1, None),
+            (None, Some(0)) => v,
+            _ => return None,
+        };
+    }
+    Some(v)
+}
+
+fn calc_product(t: &[String], at: &mut usize, s: &Style, ctx: &Ctx) -> Option<CalcV> {
+    let mut v = calc_atom(t, at, s, ctx)?;
+    while let Some(op) = t.get(*at).map(String::as_str).filter(|o| *o == "*" || *o == "/") {
+        *at += 1;
+        let w = calc_atom(t, at, s, ctx)?;
+        v = match (op, v.2, w.2) {
+            ("*", Some(a), Some(b)) => (0, 0, Some(a * b / 100)),
+            ("*", None, Some(b)) => (v.0 * b / 100, v.1 * b / 100, None),
+            ("*", Some(a), None) => (w.0 * a / 100, w.1 * a / 100, None),
+            ("/", Some(a), Some(b)) if b != 0 => (0, 0, Some(a * 100 / b)),
+            ("/", None, Some(b)) if b != 0 => (v.0 * 100 / b, v.1 * 100 / b, None),
+            _ => return None,
+        };
+    }
+    Some(v)
+}
+
+fn calc_atom(t: &[String], at: &mut usize, s: &Style, ctx: &Ctx) -> Option<CalcV> {
+    let tok = t.get(*at)?.as_str();
+    *at += 1;
+    if tok == "(" {
+        let v = calc_sum(t, at, s, ctx)?;
+        if t.get(*at).map(String::as_str) != Some(")") { return None; }
+        *at += 1;
+        return Some(v);
+    }
+    let lower = tok.to_ascii_lowercase();
+    if let Some(inner) = lower.strip_prefix("calc(").and_then(|r| r.strip_suffix(')')) {
+        let toks = calc_tokens(inner)?;
+        let mut i = 0;
+        let v = calc_sum(&toks, &mut i, s, ctx)?;
+        return (i == toks.len()).then_some(v);
+    }
+    for f in ["min(", "max(", "clamp("] {
+        if let Some(inner) = lower.strip_prefix(f).and_then(|r| r.strip_suffix(')')) {
+            // Without the base they are relative to, mixed arguments take the first;
+            // plain lengths compare.
+            let toks = calc_tokens(inner)?;
+            let mut args = Vec::new();
+            let mut i = 0;
+            loop {
+                args.push(calc_sum(&toks, &mut i, s, ctx)?);
+                match toks.get(i).map(String::as_str) { Some(",") => i += 1, None => break, _ => return None }
+            }
+            let all_px = args.iter().all(|a| a.1 == 0 && a.2.is_none());
+            if !all_px { return args.first().copied(); }
+            let px: Vec<i64> = args.iter().map(|a| a.0).collect();
+            return Some((match f { "min(" => *px.iter().min()?, "max(" => *px.iter().max()?, _ => if px.len() == 3 { px[1].clamp(px[0], px[2].max(px[0])) } else { return None } }, 0, None));
         }
     }
-    Some(match pct { Some(p) if px == 0 => Len::Pct(p), Some(p) => Len::Pct(p), None => Len::Px(px) })
+    if let Ok(n) = tok.parse::<f64>() { return Some((0, 0, Some((n * 100.0) as i64))); }
+    match parse_len(tok, s, ctx)? {
+        Len::Px(p) => Some((p as i64, 0, None)),
+        Len::Pct(p) => Some((0, p as i64, None)),
+        Len::Mix(px, p) => Some((px as i64, p as i64, None)),
+        Len::Auto => None,
+    }
 }
 
 fn font_size(v: &str, s: &Style, ctx: &Ctx) -> Option<i32> {
     let parent = ctx.parent.font_size;
     Some(match v.trim().to_ascii_lowercase().as_str() {
-        "xx-small" => 9, "x-small" => 10, "small" => 13, "medium" => 16, "large" => 18, "x-large" => 24, "xx-large" => 32, "xxx-large" => 48,
+        "xx-small" => zoomed(9), "x-small" => zoomed(10), "small" => zoomed(13), "medium" => zoomed(16), "large" => zoomed(18), "x-large" => zoomed(24), "xx-large" => zoomed(32), "xxx-large" => zoomed(48),
         "smaller" => parent * 5 / 6, "larger" => parent * 6 / 5,
         other => {
             let mut probe = s.clone();
@@ -630,6 +739,7 @@ fn font_size(v: &str, s: &Style, ctx: &Ctx) -> Option<i32> {
             match parse_len(other, &probe, ctx)? {
                 Len::Px(p) => p,
                 Len::Pct(p) => parent * p / 10000,
+                Len::Mix(px, p) => px + parent * p / 10000,
                 Len::Auto => return None,
             }
         }
@@ -761,6 +871,7 @@ fn len_text(l: Len) -> String {
     match l {
         Len::Px(p) => alloc::format!("{p}px"),
         Len::Pct(h) => alloc::format!("{}%", h as f32 / 100.0),
+        Len::Mix(px, h) => alloc::format!("calc({}% + {px}px)", h as f32 / 100.0),
         Len::Auto => String::from("auto"),
     }
 }
@@ -1208,7 +1319,7 @@ fn apply(s: &mut Style, d: &Declaration, ctx: &Ctx, font_only: bool) {
         "transform" | "translate" => {
             // Translations add up; other transforms are not drawn.
             let (mut x, mut y) = (Len::Px(0), Len::Px(0));
-            let add = |a: Len, b: Option<Len>| match (a, b) { (Len::Px(p), Some(Len::Px(q))) => Len::Px(p + q), (a, Some(Len::Px(0))) => a, (Len::Px(0), Some(b)) => b, (Len::Pct(p), Some(Len::Pct(q))) => Len::Pct(p + q), (a, _) => a };
+            let add = |a: Len, b: Option<Len>| match (a, b) { (Len::Px(p), Some(Len::Px(q))) => Len::Px(p + q), (a, Some(Len::Px(0))) => a, (Len::Px(0), Some(b)) => b, (Len::Pct(p), Some(Len::Pct(q))) => Len::Pct(p + q), (Len::Px(p), Some(Len::Pct(q))) | (Len::Pct(q), Some(Len::Px(p))) => Len::Mix(p, q), (Len::Mix(p, q), Some(Len::Px(r))) => Len::Mix(p + r, q), (Len::Mix(p, q), Some(Len::Pct(r))) => Len::Mix(p, q + r), (a, _) => a };
             if d.name == "translate" {
                 let w = words(v);
                 x = w.first().and_then(|w| parse_len(w, s, ctx)).unwrap_or(Len::Px(0));
@@ -1221,6 +1332,14 @@ fn apply(s: &mut Style, d: &Declaration, ctx: &Ctx, font_only: bool) {
                         "translate" | "translate3d" => { x = add(x, a.first().copied().flatten()); y = add(y, a.get(1).copied().flatten()); }
                         "translatex" => x = add(x, a.first().copied().flatten()),
                         "translatey" => y = add(y, a.first().copied().flatten()),
+                        // The translation part of a 2D or 3D matrix (unitless pixels).
+                        "matrix" | "matrix3d" => {
+                            let n: Vec<f64> = args.split(',').filter_map(|a| a.trim().parse().ok()).collect();
+                            let (tx, ty) = match (name, n.len()) { ("matrix", 6) => (n[4], n[5]), ("matrix3d", 16) => (n[12], n[13]), _ => (0.0, 0.0) };
+                            let z = zoom() as f64 / 100.0;
+                            x = add(x, Some(Len::Px((tx * z) as i32)));
+                            y = add(y, Some(Len::Px((ty * z) as i32)));
+                        }
                         _ => {}
                     }
                 }

@@ -154,17 +154,21 @@ pub(crate) fn flush() {
     for stream in 0..2 { if !c.lines[stream].is_empty() { c.record(stream); } }
 }
 
-/// The input line typed so far but not yet read.
+/// Typed lines not yet read (whole lines, or what is left of one).
 static PENDING: Mutex<Vec<u8>> = Mutex::new(Vec::new());
+/// The line being typed: echoed, not yet ended with Enter.
+static TYPING: Mutex<Vec<u8>> = Mutex::new(Vec::new());
 
 /// Reads typed input into `out`: what is left of the last line, or the next line.
 /// 0 when the window was closed.
 pub(crate) fn read(out: &mut [u8]) -> usize {
     let mut pending = PENDING.lock().unwrap_or_else(|e| e.into_inner());
     if pending.is_empty() {
-        if CONSOLE.lock().map(|c| c.closed).unwrap_or(true) { return 0; }
-        let Some(line) = read_line() else { return 0 };
-        *pending = line;
+        if let Ok(mut c) = CONSOLE.lock() { c.show(); }
+        loop {
+            if closed() { return 0; }
+            if let Some(line) = take(window_mut().next()) { *pending = line; break; }
+        }
     }
     let n = out.len().min(pending.len());
     out[..n].copy_from_slice(&pending[..n]);
@@ -172,53 +176,66 @@ pub(crate) fn read(out: &mut [u8]) -> usize {
     n
 }
 
-/// One line from the window's keys, echoed; `None` if the window was closed.
-fn read_line() -> Option<Vec<u8>> {
-    let mut line = Vec::new();
-    {
-        let mut c = CONSOLE.lock().ok()?;
-        c.show();
+fn closed() -> bool { CONSOLE.lock().map(|c| c.closed).unwrap_or(true) }
+
+/// Whether a read of standard input would return at once: a whole line was typed, or
+/// the window was closed. Takes the keys already waiting, without waiting for more.
+/// A program that took the window for itself reads its keys there, so never.
+pub(crate) fn input_ready() -> bool {
+    if taken() { return false; }
+    let mut pending = PENDING.lock().unwrap_or_else(|e| e.into_inner());
+    if !pending.is_empty() || closed() { return true; }
+    if let Ok(mut c) = CONSOLE.lock() { if !c.opened { c.show(); } }
+    while let Some(event) = window_mut().poll() {
+        if let Some(line) = take(event) { *pending = line; return true; }
+        if closed() { return true; }
     }
-    loop {
-        match window_mut().next() {
-            Event::Close => { if let Ok(mut c) = CONSOLE.lock() { c.closed = true; } return None; }
-            Event::Key(key) if key.code == 0x0E => {
-                if line.pop().is_some() {
-                    let mut c = CONSOLE.lock().ok()?;
-                    if c.vt.is_some() { echo(&mut c, b"\x08 \x08"); } else { c.text.pop(); c.show(); }
-                }
-            }
-            Event::Resize { width, height } => {
+    false
+}
+
+/// One key or close into the line being typed, echoed; the whole line once Enter ends it.
+fn take(event: Event) -> Option<Vec<u8>> {
+    let mut line = TYPING.lock().unwrap_or_else(|e| e.into_inner());
+    match event {
+        Event::Close => { if let Ok(mut c) = CONSOLE.lock() { c.closed = true; } None }
+        Event::Key(key) if key.code == 0x0E => {
+            if line.pop().is_some() {
                 let mut c = CONSOLE.lock().ok()?;
-                if let Some(vt) = c.vt.as_mut() { vt.resize(width, height); }
-                c.show();
+                if c.vt.is_some() { echo(&mut c, b"\x08 \x08"); } else { c.text.pop(); c.show(); }
             }
-            Event::Pointer(p) => {
-                if let sex_pdx::app_pointer::Kind::Wheel { steps } = p.kind {
-                    let mut c = CONSOLE.lock().ok()?;
-                    if let Some(vt) = c.vt.as_mut() { vt.screen.scroll_view(steps as isize * 3); }
-                    c.show();
-                }
-            }
-            Event::Key(key) if key.shift && matches!(key.code, 0x49 | 0x68 | 0x51 | 0x6D) => {
-                let mut c = CONSOLE.lock().ok()?;
-                if let Some(vt) = c.vt.as_mut() {
-                    let page = vt.screen.rows() as isize - 1;
-                    vt.screen.scroll_view(if matches!(key.code, 0x49 | 0x68) { page } else { -page });
-                }
-                c.show();
-            }
-            Event::Key(key) => {
-                let typed = if key.code == 0x1C { Some(b'\n') } else { sex_app::typed(key) };
-                if let Some(b) = typed {
-                    line.push(b);
-                    let mut c = CONSOLE.lock().ok()?;
-                    echo(&mut c, &[b]);
-                    if b == b'\n' { return Some(line); }
-                }
-            }
-            _ => {}
+            None
         }
+        Event::Resize { width, height } => {
+            let mut c = CONSOLE.lock().ok()?;
+            if let Some(vt) = c.vt.as_mut() { vt.resize(width, height); }
+            c.show();
+            None
+        }
+        Event::Pointer(p) => {
+            if let sex_pdx::app_pointer::Kind::Wheel { steps } = p.kind {
+                let mut c = CONSOLE.lock().ok()?;
+                if let Some(vt) = c.vt.as_mut() { vt.screen.scroll_view(steps as isize * 3); }
+                c.show();
+            }
+            None
+        }
+        Event::Key(key) if key.shift && matches!(key.code, 0x49 | 0x68 | 0x51 | 0x6D) => {
+            let mut c = CONSOLE.lock().ok()?;
+            if let Some(vt) = c.vt.as_mut() {
+                let page = vt.screen.rows() as isize - 1;
+                vt.screen.scroll_view(if matches!(key.code, 0x49 | 0x68) { page } else { -page });
+            }
+            c.show();
+            None
+        }
+        Event::Key(key) => {
+            let b = if key.code == 0x1C { Some(b'\n') } else { sex_app::typed(key) }?;
+            line.push(b);
+            let mut c = CONSOLE.lock().ok()?;
+            echo(&mut c, &[b]);
+            if b == b'\n' { Some(std::mem::take(&mut *line)) } else { None }
+        }
+        _ => None,
     }
 }
 

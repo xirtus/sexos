@@ -3,7 +3,13 @@
 //! musl's structures and numbers, translated to the program's own sockets in sex-std
 //! (Hermit's interface underneath). A run reaches the network only if it was started
 //! with `run +net`; otherwise calls fail with `EACCES`.
-use crate::{c_char, c_int, c_void, set_errno};
+//!
+//! `select` and `pselect` are `poll` underneath, over sockets, files and the standard
+//! streams alike (standard input is readable once a whole line was typed). Names:
+//! `getaddrinfo` (numbers and names, well-known services by name, `AI_PASSIVE`,
+//! `AI_NUMERICHOST`, `AI_NUMERICSERV`, `AI_CANONNAME`), `getnameinfo` (numeric: there
+//! is no reverse lookup), and the old `gethostbyname`.
+use crate::{c_char, c_int, c_void, posix_util, set_errno};
 use alloc::boxed::Box;
 use core::ptr::null_mut;
 
@@ -41,11 +47,15 @@ const SOL_SOCKET: c_int = 1;
 const H_SOL_SOCKET: c_int = 4095;
 const MSG_PEEK: c_int = 2;
 const H_MSG_PEEK: c_int = 1;
+const EAI_BADFLAGS: c_int = -1;
 const EAI_NONAME: c_int = -2;
 const EAI_AGAIN: c_int = -3;
 const EAI_FAIL: c_int = -4;
 const EAI_FAMILY: c_int = -6;
+const EAI_SOCKTYPE: c_int = -7;
 const EAI_SERVICE: c_int = -8;
+const EAI_MEMORY: c_int = -10;
+const EAI_OVERFLOW: c_int = -12;
 
 fn family_to_h(f: c_int) -> c_int { match f { AF_INET => H_AF_INET, AF_INET6 => H_AF_INET6, 0 => 0, _ => -1 } }
 fn family_from_h(f: c_int) -> c_int { match f { H_AF_INET => AF_INET, H_AF_INET6 => AF_INET6, _ => f } }
@@ -199,21 +209,33 @@ pub struct addrinfo {
     pub ai_addrlen: u32, pub ai_addr: *mut c_void, pub ai_canonname: *mut c_char, pub ai_next: *mut addrinfo,
 }
 const AI_PASSIVE: c_int = 1;
+const AI_CANONNAME: c_int = 2;
+const AI_NUMERICHOST: c_int = 4;
+const AI_NUMERICSERV: c_int = 0x400;
+/// Every flag musl defines; the others (`AI_V4MAPPED`, `AI_ALL`, `AI_ADDRCONFIG`) change
+/// nothing here.
+const AI_KNOWN: c_int = 0x43f;
 
-fn service_port(service: *const c_char) -> Result<u16, c_int> {
-    if service.is_null() { return Ok(0); }
-    let s = unsafe { crate::stdio::c_str(service) };
-    if s.is_empty() { return Ok(0); }
-    core::str::from_utf8(s).ok().and_then(|t| t.parse::<u16>().ok()).ok_or(EAI_SERVICE)
+fn c_bytes<'a>(p: *const c_char) -> &'a [u8] { if p.is_null() { b"" } else { unsafe { crate::stdio::c_str(p) } } }
+
+/// A copy of `text` in the C heap, for `ai_canonname`.
+fn c_copy(text: &[u8]) -> *mut c_char {
+    let p = unsafe { crate::mem::malloc(text.len() + 1) } as *mut u8;
+    if !p.is_null() { unsafe { core::ptr::copy_nonoverlapping(text.as_ptr(), p, text.len()); *p.add(text.len()) = 0; } }
+    p as *mut c_char
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn getaddrinfo(node: *const c_char, service: *const c_char, hints: *const addrinfo, res: *mut *mut addrinfo) -> c_int {
     if res.is_null() { return EAI_FAIL; }
-    let port = match service_port(service) { Ok(p) => p, Err(e) => return e };
+    if node.is_null() && service.is_null() { return EAI_NONAME; }
     let (family, socktype, protocol, flags) = if hints.is_null() { (0, 0, 0, 0) } else { unsafe { ((*hints).ai_family, (*hints).ai_socktype, (*hints).ai_protocol, (*hints).ai_flags) } };
+    if flags & !AI_KNOWN != 0 || (flags & AI_CANONNAME != 0 && node.is_null()) { return EAI_BADFLAGS; }
+    if !matches!(socktype, 0 | 1 | 2) { return EAI_SOCKTYPE; }
+    let port = match posix_util::service_port(c_bytes(service), flags & AI_NUMERICSERV != 0) { Ok(p) => p, Err(e) => return e };
     let hf = family_to_h(family);
     if hf < 0 { return EAI_FAMILY; }
+    if flags & AI_NUMERICHOST != 0 && !node.is_null() && !posix_util::is_numeric_host(c_bytes(node)) { return EAI_NONAME; }
     // No name: the "any" address to listen on, or this machine's own.
     let fallback: &[u8] = if flags & AI_PASSIVE != 0 { if family == AF_INET6 { b"::\0" } else { b"0.0.0.0\0" } } else if family == AF_INET6 { b"::1\0" } else { b"127.0.0.1\0" };
     let name = if node.is_null() { fallback.as_ptr() as *const c_char } else { node };
@@ -247,24 +269,160 @@ pub unsafe extern "C" fn getaddrinfo(node: *const c_char, service: *const c_char
         }
         at = h.ai_next;
     }
-    unsafe { sys_freeaddrinfo(list); *res = head; }
-    if head.is_null() { EAI_NONAME } else { 0 }
+    unsafe { sys_freeaddrinfo(list); }
+    if head.is_null() { return EAI_NONAME; }
+    // The first entry carries the name asked for: there are no aliases to follow.
+    if flags & AI_CANONNAME != 0 {
+        let copy = c_copy(c_bytes(node));
+        if copy.is_null() { unsafe { freeaddrinfo(head) }; return EAI_MEMORY; }
+        unsafe { (*head).ai_canonname = copy; }
+    }
+    unsafe { *res = head; }
+    0
 }
 #[no_mangle]
 pub unsafe extern "C" fn freeaddrinfo(mut ai: *mut addrinfo) {
     while !ai.is_null() {
         let entry = unsafe { Box::from_raw(ai) };
         if !entry.ai_addr.is_null() { drop(unsafe { Box::from_raw(entry.ai_addr as *mut [u8; 28]) }); }
+        if !entry.ai_canonname.is_null() { unsafe { crate::mem::free(entry.ai_canonname as *mut c_void) }; }
         ai = entry.ai_next;
     }
 }
 #[no_mangle]
 pub extern "C" fn gai_strerror(e: c_int) -> *const c_char {
     (match e {
+        0 => "Success\0",
+        EAI_BADFLAGS => "Invalid flags\0",
         EAI_NONAME => "Name does not resolve\0", EAI_AGAIN => "Temporary failure in name resolution\0",
-        EAI_FAMILY => "Unrecognized address family or invalid length\0", EAI_SERVICE => "Unrecognized service\0",
+        EAI_FAIL => "Non-recoverable failure in name resolution\0",
+        EAI_FAMILY => "Unrecognized address family or invalid length\0",
+        EAI_SOCKTYPE => "Unrecognized socket type\0", EAI_SERVICE => "Unrecognized service\0",
+        EAI_MEMORY => "Out of memory\0", EAI_OVERFLOW => "Overflow\0",
         _ => "Unknown error\0",
     }).as_ptr() as *const c_char
+}
+
+const NI_NUMERICHOST: c_int = 1;
+const NI_NUMERICSERV: c_int = 2;
+const NI_NAMEREQD: c_int = 8;
+
+/// An address as text: always the number, since there is no reverse lookup (so
+/// `NI_NAMEREQD` fails). The service is its well-known name unless `NI_NUMERICSERV`.
+#[no_mangle]
+pub unsafe extern "C" fn getnameinfo(sa: *const c_void, salen: u32, host: *mut c_char, hostlen: u32, serv: *mut c_char, servlen: u32, flags: c_int) -> c_int {
+    if sa.is_null() || salen < 2 { return EAI_FAMILY; }
+    let family = unsafe { *(sa as *const u16) } as c_int;
+    let (need, at) = match family { AF_INET => (16, 4), AF_INET6 => (28, 8), _ => return EAI_FAMILY };
+    if (salen as usize) < need { return EAI_FAMILY; }
+    let bytes = unsafe { core::slice::from_raw_parts(sa as *const u8, need) };
+    let port = u16::from_be_bytes([bytes[2], bytes[3]]);
+    if !host.is_null() && hostlen > 0 {
+        if flags & NI_NAMEREQD != 0 && flags & NI_NUMERICHOST == 0 { return EAI_NONAME; }
+        if unsafe { inet_ntop(family, bytes[at..].as_ptr() as *const c_void, host, hostlen) }.is_null() { return EAI_OVERFLOW; }
+    }
+    if !serv.is_null() && servlen > 0 {
+        use core::fmt::Write;
+        let mut t = Text { buf: [0; 46], len: 0 };
+        let named = if flags & NI_NUMERICSERV == 0 { posix_util::service_name(port) } else { None };
+        let _ = match named { Some(n) => t.write_str(n), None => write!(t, "{port}") };
+        if t.len + 1 > servlen as usize { return EAI_OVERFLOW; }
+        unsafe { core::ptr::copy_nonoverlapping(t.buf.as_ptr(), serv as *mut u8, t.len); *serv.add(t.len) = 0; }
+    }
+    0
+}
+
+/// musl's `struct hostent`.
+#[repr(C)]
+pub struct hostent { pub h_name: *mut c_char, pub h_aliases: *mut *mut c_char, pub h_addrtype: c_int, pub h_length: c_int, pub h_addr_list: *mut *mut c_char }
+static mut HOST: hostent = hostent { h_name: null_mut(), h_aliases: null_mut(), h_addrtype: 0, h_length: 0, h_addr_list: null_mut() };
+static mut HOST_NAME: [u8; 256] = [0; 256];
+static mut HOST_ADDRS: [[u8; 4]; 8] = [[0; 4]; 8];
+static mut HOST_LIST: [*mut c_char; 9] = [null_mut(); 9];
+static mut HOST_ALIASES: [*mut c_char; 1] = [null_mut()];
+#[no_mangle]
+pub static mut h_errno: c_int = 0;
+#[no_mangle]
+pub unsafe extern "C" fn __h_errno_location() -> *mut c_int { core::ptr::addr_of_mut!(h_errno) }
+
+/// The old name lookup, IPv4 only: up to eight addresses, in storage the next call
+/// reuses (as everywhere).
+#[no_mangle]
+pub unsafe extern "C" fn gethostbyname(name: *const c_char) -> *mut hostent {
+    const HOST_NOT_FOUND: c_int = 1;
+    const TRY_AGAIN: c_int = 2;
+    let hints = addrinfo { ai_flags: 0, ai_family: AF_INET, ai_socktype: 1, ai_protocol: 0, ai_addrlen: 0, ai_addr: null_mut(), ai_canonname: null_mut(), ai_next: null_mut() };
+    let mut res: *mut addrinfo = null_mut();
+    match unsafe { getaddrinfo(name, null_mut(), &hints, &mut res) } {
+        0 => {}
+        EAI_AGAIN => { unsafe { h_errno = TRY_AGAIN }; return null_mut(); }
+        _ => { unsafe { h_errno = HOST_NOT_FOUND }; return null_mut(); }
+    }
+    unsafe {
+        let text = c_bytes(name);
+        let n = text.len().min(255);
+        let hn = &mut *core::ptr::addr_of_mut!(HOST_NAME);
+        hn[..n].copy_from_slice(&text[..n]);
+        hn[n] = 0;
+        let (addrs, list) = (&mut *core::ptr::addr_of_mut!(HOST_ADDRS), &mut *core::ptr::addr_of_mut!(HOST_LIST));
+        let (mut at, mut count) = (res, 0);
+        while !at.is_null() && count < 8 {
+            let sa = (*at).ai_addr as *const u8;
+            core::ptr::copy_nonoverlapping(sa.add(4), addrs[count].as_mut_ptr(), 4);
+            list[count] = addrs[count].as_mut_ptr() as *mut c_char;
+            count += 1;
+            at = (*at).ai_next;
+        }
+        list[count] = null_mut();
+        freeaddrinfo(res);
+        HOST = hostent { h_name: hn.as_mut_ptr() as *mut c_char, h_aliases: core::ptr::addr_of_mut!(HOST_ALIASES) as *mut *mut c_char, h_addrtype: AF_INET, h_length: 4, h_addr_list: list.as_mut_ptr() };
+        core::ptr::addr_of_mut!(HOST)
+    }
+}
+
+// ---- select ------------------------------------------------------------------------------
+
+#[repr(C)]
+pub struct timespec { pub tv_sec: i64, pub tv_nsec: i64 }
+
+unsafe fn select_ms(nfds: c_int, r: *mut posix_util::FdSet, w: *mut posix_util::FdSet, e: *mut posix_util::FdSet, ms: c_int) -> c_int {
+    if !(0..=posix_util::FD_SETSIZE as c_int).contains(&nfds) { set_errno(crate::EINVAL); return -1; }
+    let (rs, ws, es) = unsafe { (r.as_ref(), w.as_ref(), e.as_ref()) };
+    let asked = posix_util::polls_of(nfds as usize, rs, ws, es);
+    let mut fds: alloc::vec::Vec<pollfd> = asked.iter().map(|&(fd, events)| pollfd { fd, events, revents: 0 }).collect();
+    let n = unsafe { sys_poll(fds.as_mut_ptr(), fds.len(), ms) };
+    if n < 0 { set_errno(-n); return -1; }
+    let answers: alloc::vec::Vec<(c_int, i16, i16)> = fds.iter().map(|p| (p.fd, p.events, p.revents)).collect();
+    match posix_util::sets_of(&answers, unsafe { r.as_mut() }, unsafe { w.as_mut() }, unsafe { e.as_mut() }) {
+        Some(count) => count,
+        None => { set_errno(crate::EBADF); -1 }
+    }
+}
+
+/// `select`, as `poll` over the descriptors in the sets. The time left is not written
+/// back (POSIX allows either).
+#[no_mangle]
+pub unsafe extern "C" fn select(nfds: c_int, r: *mut posix_util::FdSet, w: *mut posix_util::FdSet, e: *mut posix_util::FdSet, timeout: *mut timeval) -> c_int {
+    let t = if timeout.is_null() { None } else { unsafe { Some(((*timeout).tv_sec, (*timeout).tv_usec)) } };
+    let Ok(ms) = posix_util::timeout_ms(t) else { set_errno(crate::EINVAL); return -1 };
+    unsafe { select_ms(nfds, r, w, e, ms) }
+}
+/// `pselect`: there are no signals, so the mask changes nothing.
+#[no_mangle]
+pub unsafe extern "C" fn pselect(nfds: c_int, r: *mut posix_util::FdSet, w: *mut posix_util::FdSet, e: *mut posix_util::FdSet, timeout: *const timespec, _mask: *const c_void) -> c_int {
+    let t = if timeout.is_null() { None } else { unsafe { Some(((*timeout).tv_sec, (*timeout).tv_nsec / 1000)) } };
+    let Ok(ms) = posix_util::timeout_ms(t) else { set_errno(crate::EINVAL); return -1 };
+    unsafe { select_ms(nfds, r, w, e, ms) }
+}
+/// `ppoll`: `poll` with a `timespec`; no signals, so no mask.
+#[no_mangle]
+pub unsafe extern "C" fn ppoll(fds: *mut pollfd, n: usize, timeout: *const timespec, _mask: *const c_void) -> c_int {
+    let ms = if timeout.is_null() { -1 } else {
+        let t = unsafe { &*timeout };
+        if t.tv_sec < 0 || !(0..1_000_000_000).contains(&t.tv_nsec) { set_errno(crate::EINVAL); return -1; }
+        t.tv_sec.saturating_mul(1000).saturating_add((t.tv_nsec + 999_999) / 1_000_000).min(c_int::MAX as i64) as c_int
+    };
+    unsafe { poll(fds, n, ms) }
 }
 
 // ---- byte order and addresses ---------------------------------------------------------------

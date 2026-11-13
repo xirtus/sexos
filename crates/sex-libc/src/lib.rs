@@ -33,6 +33,7 @@ pub mod time;
 pub mod pthread;
 pub mod cxx;
 pub mod locale;
+pub mod posix_util;
 #[cfg(target_os = "hermit")]
 pub mod posix;
 #[cfg(target_os = "hermit")]
