@@ -300,6 +300,9 @@ fn fill_stat(st: &files::Stat, out: *mut stat) {
     s.st_size = st.size as i64;
     s.st_blksize = 4096;
     s.st_blocks = st.size.div_ceil(512) as i64;
+    // Seconds since the Unix epoch, where the volume keeps them (0: it does not).
+    let t = timespec { tv_sec: st.modified as i64, tv_nsec: 0 };
+    (s.st_mtim, s.st_atim, s.st_ctim) = (t, t, t);
     unsafe { *out = s; }
 }
 
@@ -512,6 +515,31 @@ pub extern "C" fn sys_ftruncate(fd: i32, size: i64) -> i32 {
     files::truncate(&f.path, size as u64).map_or_else(errno_of, |_| 0)
 }
 
+/// Reads at `offset` without moving the descriptor's position (`pread`). Asking for
+/// nothing checks only that the descriptor is a file open for reading.
+#[no_mangle]
+pub unsafe extern "C" fn sys_pread(fd: i32, buf: *mut u8, len: usize, offset: i64) -> isize {
+    if offset < 0 { return -errno::EINVAL as isize; }
+    let f = match file(fd) { Ok(f) if f.read => f, Ok(_) => return -errno::EBADF as isize, Err(e) => return if e == -errno::EINVAL { -errno::ESPIPE as isize } else { e as isize } };
+    if len == 0 { return 0; }
+    let out = unsafe { core::slice::from_raw_parts_mut(buf, len) };
+    files::read_at(&f.path, offset as u64, out).map_or_else(|e| errno_of(e) as isize, |n| n as isize)
+}
+/// Writes at `offset` without moving the descriptor's position (`pwrite`). Writing
+/// nothing checks only that the descriptor is a file open for writing.
+#[no_mangle]
+pub unsafe extern "C" fn sys_pwrite(fd: i32, buf: *const u8, len: usize, offset: i64) -> isize {
+    if offset < 0 { return -errno::EINVAL as isize; }
+    let f = match file(fd) { Ok(f) if f.write => f, Ok(_) => return -errno::EBADF as isize, Err(e) => return if e == -errno::EINVAL { -errno::ESPIPE as isize } else { e as isize } };
+    if len == 0 { return 0; }
+    let data = unsafe { core::slice::from_raw_parts(buf, len) };
+    match files::write_at(&f.path, offset as u64, data) {
+        Ok(0) if !data.is_empty() => -errno::ENOSPC as isize,
+        Ok(n) => n as isize,
+        Err(e) => errno_of(e) as isize,
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn sys_isatty(fd: i32) -> i32 { matches!(table().get(fd as usize), Some(Some(Open::Console(_)))) as i32 }
 
@@ -618,7 +646,9 @@ pub extern "C" fn sys_ioctl(s: i32, cmd: i32, argp: *mut core::ffi::c_void) -> i
 }
 
 /// Waits until one of `fds` is ready or `timeout` milliseconds pass (-1: no limit).
-/// Files and the console are always ready; sockets say what they have.
+/// Files and folders are always ready; standard input is readable once a whole line
+/// was typed (or the window closed); standard output and error are always writable;
+/// sockets say what they have.
 #[no_mangle]
 pub unsafe extern "C" fn sys_poll(fds: *mut abi::pollfd, n: abi::nfds_t, timeout: i32) -> i32 {
     if fds.is_null() && n > 0 { return -errno::EFAULT; }
@@ -629,10 +659,18 @@ pub unsafe extern "C" fn sys_poll(fds: *mut abi::pollfd, n: abi::nfds_t, timeout
         let mut count = 0;
         for p in fds.iter_mut() {
             p.revents = if p.fd < 0 { 0 } else {
-                let entry = table().get(p.fd as usize).map(|o| o.as_ref().map(|o| match o { Open::Socket(s) => Some(s.clone()), _ => None }));
+                enum Is { Sock(Arc<net::Sock>), Input, Output, Other }
+                let entry = table().get(p.fd as usize).map(|o| o.as_ref().map(|o| match o {
+                    Open::Socket(s) => Is::Sock(s.clone()),
+                    Open::Console(0) => Is::Input,
+                    Open::Console(_) => Is::Output,
+                    _ => Is::Other,
+                }));
                 match entry {
-                    Some(Some(Some(s))) => net::ready(&s, p.events),
-                    Some(Some(None)) => p.events & (abi::POLLIN | abi::POLLOUT),
+                    Some(Some(Is::Sock(s))) => net::ready(&s, p.events),
+                    Some(Some(Is::Input)) => if p.events & abi::POLLIN != 0 && console::input_ready() { abi::POLLIN } else { 0 },
+                    Some(Some(Is::Output)) => p.events & abi::POLLOUT,
+                    Some(Some(Is::Other)) => p.events & (abi::POLLIN | abi::POLLOUT),
                     _ => abi::POLLNVAL,
                 }
             };
