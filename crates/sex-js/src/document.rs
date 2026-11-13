@@ -385,6 +385,18 @@ impl Page for Document {
                     _ => None,
                 };
             }
+            op::IDB => {
+                let store = self.storage.clone()?;
+                let area = format!("{}{}", crate::storage::IDB_PREFIX, self.page_url()?.origin());
+                let name = a.get(1).copied().unwrap_or("");
+                return match *a.first()? {
+                    "load" => store.borrow().get(&area, name).map(String::from),
+                    "save" => Some(String::from(if store.borrow_mut().set_within(&area, name, a.get(2).copied().unwrap_or(""), crate::storage::IDB_QUOTA) { "" } else { "!" })),
+                    "delete" => { store.borrow_mut().remove(&area, name); Some(none()) }
+                    "list" => Some(store.borrow().area(&area).map(|x| x.items.keys().cloned().collect::<Vec<_>>().join("\n")).unwrap_or_default()),
+                    _ => None,
+                };
+            }
             op::BY_ID => {
                 let want = *a.first()?;
                 self.dom.descendants(Dom::ROOT).into_iter().find(|&n| self.dom.attr(n, "id") == Some(want)).map(|n| format!("{n}"))

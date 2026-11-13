@@ -21,7 +21,7 @@
   delete globalThis.__host;
   const OP = { LOG: 1, BY_ID: 2, QUERY: 3, INFO: 4, GET_ATTR: 5, SET_ATTR: 6, REMOVE_ATTR: 7, GET_TEXT: 8, SET_TEXT: 9,
     GET_HTML: 10, SET_HTML: 11, CREATE_ELEMENT: 12, CREATE_TEXT: 13, INSERT: 14, DETACH: 15, PARENT: 16, CHILDREN: 17,
-    ATTR_NAMES: 18, VIEWPORT: 19, NAVIGATE: 20, CLICKABLE: 21, RECT: 22, LOCATION: 23, CANVAS: 24, MEASURE: 25, HIT: 26, VALUE: 27, CARET: 28, MEDIA: 48, GL: 64, GL_QUERY: 65, FETCH: 66, FETCH_BODY: 67, FETCH_HEAD: 68, COOKIE: 69, MEDIA_APPEND: 70, CLASSIC_SCRIPT: 71, FRAME: 31, POST_MESSAGE: 32, STORAGE: 33, WS: 73, WS_TAKE: 74 };
+    ATTR_NAMES: 18, VIEWPORT: 19, NAVIGATE: 20, CLICKABLE: 21, RECT: 22, LOCATION: 23, CANVAS: 24, MEASURE: 25, HIT: 26, VALUE: 27, CARET: 28, MEDIA: 48, GL: 64, GL_QUERY: 65, FETCH: 66, FETCH_BODY: 67, FETCH_HEAD: 68, COOKIE: 69, MEDIA_APPEND: 70, CLASSIC_SCRIPT: 71, FRAME: 31, POST_MESSAGE: 32, STORAGE: 33, IDB: 34, WS: 73, WS_TAKE: 74 };
   const nodes = new Map();
   const defaultChecked = new WeakMap();
 
@@ -2775,6 +2775,9 @@
     key(i) { return this._key(i >>> 0); }
     get length() { return this._len(); }
   }
+  // The proxy reports stored keys as its own; the helpers stay hidden (configurable,
+  // so the proxy may leave them out).
+  const hidden = o => { const d = {}; for (const k of Object.keys(o)) d[k] = { value: o[k], configurable: true }; return d; };
   const storageProxy = (impl) => new Proxy(impl, {
     get(t, p, r) { if (typeof p === 'symbol' || p in t) return Reflect.get(t, p, r); return t.getItem(p); },
     set(t, p, v) { if (typeof p === 'symbol' || p in t) return Reflect.set(t, p, v); t.setItem(p, v); return true; },
@@ -2785,22 +2788,22 @@
   });
   const storage = () => {
     const m = new Map();
-    const s = Object.create(Storage.prototype, {
-      _get: { value: k => (m.has(k) ? m.get(k) : null) }, _set: { value: (k, v) => { m.set(k, v); } },
-      _remove: { value: k => { m.delete(k); } }, _clear: { value: () => m.clear() },
-      _key: { value: i => [...m.keys()][i] ?? null }, _len: { value: () => m.size },
-    });
+    const s = Object.create(Storage.prototype, hidden({
+      _get: k => (m.has(k) ? m.get(k) : null), _set: (k, v) => { m.set(k, v); },
+      _remove: k => { m.delete(k); }, _clear: () => m.clear(),
+      _key: i => [...m.keys()][i] ?? null, _len: () => m.size,
+    }));
     return storageProxy(s);
   };
   const lastingStorage = () => {
     if (H(OP.STORAGE, 'len') == null) return storage();
     const quota = () => new DOMException("The quota has been exceeded.", 'QuotaExceededError');
-    const s = Object.create(Storage.prototype, {
-      _get: { value: k => H(OP.STORAGE, 'get', k) ?? null },
-      _set: { value: (k, v) => { if (H(OP.STORAGE, 'set', k, v) === '!') throw quota(); } },
-      _remove: { value: k => { H(OP.STORAGE, 'remove', k); } }, _clear: { value: () => { H(OP.STORAGE, 'clear'); } },
-      _key: { value: i => H(OP.STORAGE, 'key', '' + i) ?? null }, _len: { value: () => +(H(OP.STORAGE, 'len') || 0) },
-    });
+    const s = Object.create(Storage.prototype, hidden({
+      _get: k => H(OP.STORAGE, 'get', k) ?? null,
+      _set: (k, v) => { if (H(OP.STORAGE, 'set', k, v) === '!') throw quota(); },
+      _remove: k => { H(OP.STORAGE, 'remove', k); }, _clear: () => { H(OP.STORAGE, 'clear'); },
+      _key: i => H(OP.STORAGE, 'key', '' + i) ?? null, _len: () => +(H(OP.STORAGE, 'len') || 0),
+    }));
     return storageProxy(s);
   };
 
@@ -4047,4 +4050,6 @@
     }
     return 0;
   }
+  // What indexeddb.js (evaluated right after) builds on; it takes this and removes it.
+  Object.defineProperty(globalThis, '__sx_idb', { value: { H, OP, domError, addTimer, EventTarget, Event, DOMException, report }, configurable: true });
 })();
