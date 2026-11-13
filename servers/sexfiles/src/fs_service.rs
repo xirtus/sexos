@@ -722,7 +722,8 @@ pub fn read_ticket(ticket: u64, image: &mut [u8]) -> (Program, Option<[u64; 2]>)
     match found { Program::Absent => (Program::Absent, store_name), other => (other, None) }
 }
 fn run(fs: &mut Fs<'static, Disk>, r: w::Request, path: &[u8], data: &mut [u8]) -> Result<u32, Error> {
-    let now = 0;
+    // Modification times: Unix seconds from the civil clock (0 if it is unknown).
+    let now = sex_pdx::civil_time_ms().map(|ms| ms / 1000).unwrap_or(0);
     // Test builds only: a path that makes Files fall over, to show it comes back.
     if option_env!("SEXOS_FILES_CRASH_PROBE").is_some() && path == b"/crash.probe" {
         sex_pdx::serial_record!("[files.crash.probe]");
