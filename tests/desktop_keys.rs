@@ -5,12 +5,13 @@ use keys::{Action::*, Keys};
 fn alt_tab_is_one_focus_action_and_release_never_leaks_to_new_app() {
     let mut k = Keys::new();
     assert_eq!(k.event(0x38, 1), Consume);
-    assert_eq!(k.event(0x0F, 1), NextFrame);
+    assert_eq!(k.event(0x0F, 1), Switch(1));
     assert_eq!(k.event(0x0F, 1), Consume);
     assert_eq!(k.event(0x0F, 0), Consume);
-    assert_eq!(k.event(0x0F, 1), NextFrame);
-    // Alt may be released before Tab: neither release belongs to an app.
-    assert_eq!(k.event(0x38, 0), Consume);
+    assert_eq!(k.event(0x0F, 1), Switch(1));
+    // Alt may be released before Tab: it ends the switcher, and neither
+    // release belongs to an app.
+    assert_eq!(k.event(0x38, 0), SwitchEnd(true));
     assert_eq!(k.event(0x0F, 0), Consume);
     assert_eq!(k.event(0x0F, 1), Pass);
     assert_eq!(k.event(0x0F, 0), Pass);

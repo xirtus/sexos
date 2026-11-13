@@ -1,0 +1,48 @@
+[package]
+name = "fd"
+version = "10.5.2"
+edition = "2024"
+# fd's own licence (vendor/fd-10.5.2/LICENSE-MIT, LICENSE-APACHE); the SexOS lines in it are tagged.
+license = "MIT OR Apache-2.0"
+description = "fd 10.5.2 (vendor/fd-10.5.2) as a SexOS program"
+
+# fd's source, unchanged but for lines marked `SexOS:`.
+[[bin]]
+name = "fd"
+path = "../../vendor/fd-10.5.2/src/main.rs"
+
+# fd 10.5.2's own dependency list (its Cargo.toml), plus sex-std. No completions
+# feature and no jemalloc: the program's heap is sex-std's.
+[dependencies]
+sex-std = { path = "../../crates/sex-std" }
+aho-corasick = "1.1"
+anyhow = "1.0"
+argmax = "0.4.0"
+clap = { version = "4.6.1", features = ["suggestions", "color", "wrap_help", "cargo", "derive"] }
+crossbeam-channel = "0.5.15"
+etcetera = "0.11"
+faccess = "0.2.4"
+globset = "0.4.19"
+ignore = "0.4.28"
+jiff = "0.2.27"
+lscolors = { version = "0.21", default-features = false, features = ["nu-ansi-term"] }
+memchr = "2.8.0"
+normpath = "1.5.1"
+nu-ansi-term = "0.50"
+regex = "1.12.2"
+regex-syntax = "0.8"
+
+# Ctrl-C handling: no signals on SexOS (vendor/fd-10.5.2/src/walk.rs).
+[target.'cfg(any(unix, windows))'.dependencies]
+ctrlc = "3.5"
+
+[target.'cfg(all(unix, not(target_os = "redox")))'.dependencies]
+libc = "0.2"
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.31.1", default-features = false, features = ["signal", "user", "hostname"] }
+
+# fd without its optional features (completions, jemalloc); imports only those use stay unused.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("completions", "use-jemalloc"))'] }
+unused_imports = "allow"

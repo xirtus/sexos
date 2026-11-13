@@ -910,6 +910,7 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
 
     // Push into lock-free global queue; discard if full (to prevent blocking Ring-0)
     if INPUT_RING.enqueue(scancode).is_ok() {
+        wake_input_listener();
         let enq_n = PS2_ENQUEUE_LOG_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
         if enq_n <= 16 {
             serial_println!("[ps2.input_ring.enqueue] n={} type=0x201 sc={:#x}", enq_n, scancode);
@@ -926,6 +927,14 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
         serial_println!("[ps2.eoi] n={}", eoi_n);
     }
     unsafe { send_eoi(); }
+}
+/// The domain that takes scancodes from the input ring, so a key wakes it at once
+/// instead of waiting for its next poll.
+pub static INPUT_LISTENER: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+fn wake_input_listener() {
+    let pd = INPUT_LISTENER.load(Ordering::Relaxed);
+    if pd == 0 { return; }
+    if let Some(d) = crate::ipc::DOMAIN_REGISTRY.get(pd) { crate::scheduler::unpark_thread(d.main_task.load(Ordering::Acquire)); }
 }
 /// ACPI SCI: the power button. Status is cleared before EOI (the line is level triggered).
 extern "x86-interrupt" fn sci_handler(_stack_frame: InterruptStackFrame) {

@@ -71,12 +71,15 @@ impl Browser {
     pub(super) fn refind(&mut self) {
         let Some(q) = self.find.clone() else { return };
         self.marks = sex_web::find_marks(&self.page, &mut self.fonts, &q);
-        if self.find_at >= self.marks.len() { self.find_at = 0; }
+        if self.find_at >= self.matches() { self.find_at = 0; }
     }
+
+    /// How many places the search was found (a match may have a mark on each line).
+    pub(super) fn matches(&self) -> usize { self.marks.last().map_or(0, |m| m[4] as usize + 1) }
 
     /// Scrolls the current match into view.
     fn show_match(&mut self) {
-        if let Some(m) = self.marks.get(self.find_at) {
+        if let Some(m) = self.marks.iter().find(|m| m[4] as usize == self.find_at) {
             let view = self.view.1;
             if m[1] < self.scroll || m[1] + m[3] > self.scroll + view { self.scroll = (m[1] - view / 3).clamp(0, self.max_scroll()); }
         }
@@ -89,7 +92,7 @@ impl Browser {
         match key.code {
             0x01 => { self.find = None; self.finding = false; self.marks.clear(); self.draw(); return; }
             0x1C => {
-                let n = self.marks.len();
+                let n = self.matches();
                 if n > 0 { self.find_at = if key.shift { (self.find_at + n - 1) % n } else { (self.find_at + 1) % n }; }
             }
             0x0E => { q.pop(); self.find_at = 0; self.refind(); }
@@ -100,7 +103,7 @@ impl Browser {
             },
         }
         self.show_match();
-        sex_pdx::serial_record!("[web.find] query={} matches={} at={}", self.find.as_deref().unwrap_or(""), self.marks.len(), self.find_at);
+        sex_pdx::serial_record!("[web.find] query={} matches={} at={}", self.find.as_deref().unwrap_or(""), self.matches(), self.find_at);
         self.draw();
     }
 

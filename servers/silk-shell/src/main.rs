@@ -10561,13 +10561,14 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
             false
         },
         desktop_keys::Action::Consume=>true,
-        desktop_keys::Action::NextFrame=>{
+        desktop_keys::Action::Switch(dir)=>{
             let old=FOCUSED_SURFACE_ID;
             if COMMAND_PALETTE_OPEN {toggle_command_palette();}
-            focus_next_frame();
+            switcher_step(dir);
             sex_pdx::serial_record!("[shell.app.switch] old={} new={} live={} shortcut=alt_tab",old,FOCUSED_SURFACE_ID,surface_is_alive(FOCUSED_SURFACE_ID) as u8);
             true
         }
+        desktop_keys::Action::SwitchEnd(keep)=>{switcher_end(keep);true}
         desktop_keys::Action::Volume(step)=>{volume_key(step);true}
         desktop_keys::Action::TextZoom(step)=>{
             // Display owns text layout; Shell only names the focused window and the step.
@@ -10584,6 +10585,39 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
             true
         }
     }
+}
+
+// ── Alt+Tab window switcher (KDE/GNOME style) ──────────────────────────────
+// Order and stepping live in sex_pdx::window_switcher (host-tested); Display
+// draws the cards with live thumbnails. Focus follows the selection while Alt
+// is held, so the chosen window is already raised when Alt is let go.
+static mut SWITCHER_RECENT: sex_pdx::window_switcher::Recent<MAX_FRAMES> = sex_pdx::window_switcher::Recent::new();
+static mut SWITCHER: sex_pdx::window_switcher::Session = sex_pdx::window_switcher::Session::new();
+unsafe fn switcher_publish() {
+    let [a, b, c] = SWITCHER.state().wire();
+    let (status, _) = pdx_call(SLOT_DISPLAY, sex_pdx::window_switcher::OP_WINDOW_SWITCHER, a, b, c);
+    sex_pdx::serial_record!("[shell.switcher] open={} count={} selected={} status={:#x}", SWITCHER.is_open() as u8, c & 0xF, c >> 8 & 0xF, status);
+}
+unsafe fn switcher_step(dir: i8) {
+    let mut frames = [(0u32, 0u64, wm::Rect::default()); MAX_FRAMES];
+    let n = wm_visible_frames(&mut frames, false);
+    let mut present = [0u64; MAX_FRAMES];
+    for i in 0..n { present[i] = frames[i].1; }
+    let mut ordered = [0u64; sex_pdx::window_switcher::MAX_ENTRIES];
+    if !SWITCHER.is_open() && FOCUSED_SURFACE_ID != 0 { SWITCHER_RECENT.touch(FOCUSED_SURFACE_ID); }
+    let count = SWITCHER_RECENT.order(&present[..n], &mut ordered);
+    match SWITCHER.step(&ordered[..count], FOCUSED_SURFACE_ID, dir) {
+        Some(sid) => { if sid != FOCUSED_SURFACE_ID { try_set_focus(sid); } switcher_publish(); }
+        // No window on this workspace: the old frame walk (panels, consoles).
+        None => focus_next_frame(),
+    }
+}
+unsafe fn switcher_end(keep: bool) {
+    let Some(sid) = SWITCHER.end(keep) else { return };
+    if sid != 0 && sid != FOCUSED_SURFACE_ID { try_set_focus(sid); }
+    if FOCUSED_SURFACE_ID != 0 { SWITCHER_RECENT.touch(FOCUSED_SURFACE_ID); }
+    switcher_publish();
+    sex_pdx::serial_record!("[shell.switcher.end] keep={} focus={}", keep as u8, FOCUSED_SURFACE_ID);
 }
 
 /// A volume key: Bell keeps the volume and answers with the new state, which Shell
@@ -16108,6 +16142,67 @@ unsafe fn desktop_look_step(wallpaper: u8, night: u8) -> bool {
     if ok { DESKTOP_LOOK = next; }
     sex_pdx::serial_record!("[shell.look] wallpaper={} name={} night={} ok={}", next.0, look::WALLPAPERS[next.0 as usize].0, next.1, ok as u8);
     ok
+}
+/// A notice from the Shell itself ("System"), kept in history like Bell's.
+unsafe fn shell_notice(text: &[u8], urgency: u8) {
+    let mut t = sex_pdx::notify::Text::EMPTY;
+    let n = text.len().min(sex_pdx::notify::TEXT_MAX);
+    t.bytes[..n].copy_from_slice(&text[..n]);
+    t.len = n as u8; t.urgency = urgency;
+    NOTIFY_RING[NOTIFY_TOTAL % NOTIFY_HISTORY] = t;
+    NOTIFY_TOTAL += 1;
+    let mut line = [0u8; sex_pdx::notify::TEXT_MAX];
+    let mut k = 0;
+    for &b in b"System: ".iter().chain(t.summary()) { if k < line.len() { line[k] = b; k += 1; } }
+    notify_panel(&line[..k]);
+    NOTIFY_NOTICE_UNTIL = sex_pdx::get_ticks() + NOTIFY_SHOW_TICKS;
+    if bell_frame_id().is_some() { bell_render_lane_text(); }
+}
+// ── Out of memory: when the machine stays critically short, end the program run
+// holding the most memory and say so. Services and the built-in apps are never ended;
+// programs see the pressure level on every memory call and should trim first. ───────
+static mut MEMORY_CRITICAL_SINCE: u64 = 0;
+static mut MEMORY_LAST_END: u64 = 0;
+static mut MEMORY_LAST_LOOK: u64 = 0;
+/// How long critical pressure must last before a program is ended, and the least time
+/// between two ends, so programs get the chance to trim and freed pages to show.
+const MEMORY_GRACE_TICKS: u64 = 5_000;
+unsafe fn shell_memory_poll() {
+    let now = sex_pdx::get_ticks();
+    if now.saturating_sub(MEMORY_LAST_LOOK) < 250 { return; }
+    MEMORY_LAST_LOOK = now;
+    if sex_pdx::program_memory::pressure() != sex_pdx::program_memory::PRESSURE_CRITICAL {
+        MEMORY_CRITICAL_SINCE = 0; return;
+    }
+    if MEMORY_CRITICAL_SINCE == 0 {
+        MEMORY_CRITICAL_SINCE = now;
+        sex_pdx::serial_record!("[shell.oom.critical] tick={}", now);
+        return;
+    }
+    if now.saturating_sub(MEMORY_CRITICAL_SINCE) < MEMORY_GRACE_TICKS || now.saturating_sub(MEMORY_LAST_END) < MEMORY_GRACE_TICKS { return; }
+    let mut pick: Option<(usize, u64)> = None;
+    for (i, e) in APP_CUSTODY.iter().enumerate() {
+        let Some(e) = e else { continue };
+        if e.dead || e.forced || !app_catalog::by_surface(e.target, e.surface).is_some_and(|r| r.app == app_catalog::App::Program) { continue; }
+        let pages = sex_pdx::system_stats::domain(e.target).map_or(0, |d| if d.pages == sex_pdx::system_stats::UNKNOWN { 0 } else { d.pages });
+        if pick.map_or(true, |(_, p)| pages > p) { pick = Some((i, pages)); }
+    }
+    let Some((i, pages)) = pick else { return };
+    let Some(e) = APP_CUSTODY[i].as_mut() else { return };
+    e.forced = true;
+    MEMORY_LAST_END = now;
+    let ok = sex_pdx::app_lifecycle::force_end(e.slot).is_ok();
+    let name = sex_pdx::system_stats::name(e.target);
+    let name = &name[..name.iter().position(|&c| c == 0).unwrap_or(16)];
+    let name = if name.is_empty() { &b"A program"[..] } else { name };
+    let mut text = [0u8; sex_pdx::notify::TEXT_MAX];
+    let mut k = 0;
+    for &b in name.iter().chain(b" was closed: memory ran out\nIt held the most memory (".iter()) { if k < text.len() { text[k] = b; k += 1; } }
+    let mut digits = [0u8; 20]; let mut d = digits.len(); let mut mib = pages * 4 / 1024;
+    loop { d -= 1; digits[d] = b'0' + (mib % 10) as u8; mib /= 10; if mib == 0 { break; } }
+    for &b in digits[d..].iter().chain(b" MiB).".iter()) { if k < text.len() { text[k] = b; k += 1; } }
+    shell_notice(&text[..k], 2);
+    sex_pdx::serial_record!("[shell.oom.end] target={} task={} pages={} ok={}", e.target, e.task, pages, ok as u8);
 }
 unsafe fn notification_receive(msg: &sex_pdx::PdxMessage) -> bool {
     if msg.type_id != sex_pdx::notify::OP_NOTIFICATION { return false; }
@@ -23119,6 +23214,8 @@ unsafe fn try_set_focus_inner(sid: u64,refresh_children:bool) -> bool {
     if refresh_children {if let Some((x,y,w,h))=get_surface_bounds(sid) { native_child_geometry(sid,x,y,w,h); }}
     let old_focus = FOCUSED_SURFACE_ID;
     FOCUSED_SURFACE_ID = sid;
+    // Alt+Tab order; steps inside an open switcher do not reorder it.
+    if !SWITCHER.is_open() { SWITCHER_RECENT.touch(sid); }
     // A4: Sync FocusRef shadow and emit commit marker.
     sync_focus_ref();
     serial_println!("[focus.ref.commit] id={}", sid);
@@ -25165,7 +25262,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { session::save(); }
         unsafe { record_spawn_poll(); }
         unsafe { program_resize_flush(); }
-        unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); display_scale_poll(); shell_close_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); notification_poll(); }
+        unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); display_scale_poll(); shell_close_poll(); shell_memory_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); notification_poll(); }
         // Retain failed notification attempts while continuing normal receives.
         // Success means enqueue only; sexinput validates caller and version.
         if shell_ready_publisher.poll() {
@@ -25844,7 +25941,7 @@ pub extern "C" fn _start() -> ! {
                 unsafe { flush_pending_cursor_send(); }
                 // A full input ring may recover while the shell has no work.
                 // Return to the publisher instead of blocking in listen.
-                if shell_ready_publisher.is_pending() || unsafe { RECORD_SPAWN_LEFT != 0 || DISPLAY_SCALE.request().is_some() || CURSOR_SEND_PENDING || APP_INPUT.pending() || LAUNCHER_FOCUS.is_some() || CLIPBOARD_INTAKE.pending() || CLIPBOARD.pending() || WORKSPACE_REFRESH_PENDING.iter().any(|p|*p) || linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_POINTER.is_some() || LINEN_ASYNC.can_send() || NOTIFY_NOTICE_UNTIL != 0 } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
+                if shell_ready_publisher.is_pending() || unsafe { RECORD_SPAWN_LEFT != 0 || DISPLAY_SCALE.request().is_some() || CURSOR_SEND_PENDING || APP_INPUT.pending() || LAUNCHER_FOCUS.is_some() || CLIPBOARD_INTAKE.pending() || CLIPBOARD.pending() || WORKSPACE_REFRESH_PENDING.iter().any(|p|*p) || linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_POINTER.is_some() || LINEN_ASYNC.can_send() || NOTIFY_NOTICE_UNTIL != 0 || MEMORY_CRITICAL_SINCE != 0 } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
                     sys_yield();
                     continue;
                 }
@@ -25853,6 +25950,8 @@ pub extern "C" fn _start() -> ! {
         };
         // Display started again after a crash: it knows nothing of the desktop, so show it again.
         if sex_pdx::display_ready::is_display_ready(&msg) { unsafe { display_came_back(); } continue; }
+        // The kernel's critical-memory word: the poll above acts on it.
+        if msg.type_id == sex_pdx::program_memory::OP_PRESSURE && msg.caller_pd == 0 { unsafe { MEMORY_LAST_LOOK = 0; } continue; }
         unsafe {
             if shell_lifecycle_hint(&msg) { continue; }
             if shell_program_message(&msg) { continue; }
