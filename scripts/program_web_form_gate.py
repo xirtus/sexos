@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Web forms work: a click focuses a text field, typing (with Backspace) edits it, a
 click toggles a checkbox, and Enter submits the form as a GET with every field; that
-page then submits a POST form, whose answer is the next page."""
+page then submits a POST form, whose answer is the next page, which posts a
+multipart/form-data form."""
 import argparse,http.server,json,os,re,shutil,threading,time
 from pathlib import Path
 from browser_gate_viewport import live_viewport
@@ -19,13 +20,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
  def do_POST(self):
   n=int(self.headers.get('Content-Length','0'));sent=self.rfile.read(n).decode('latin-1')
   kind=self.headers.get('Content-Type','')
-  body=f'<!doctype html><p>posted</p><script>console.log({json.dumps("form posted "+kind+" "+sent)})</script>'.encode()
+  if kind.startswith('multipart/form-data; boundary='):
+   b=kind.split('=',1)[1];want=f'--{b}\r\nContent-Disposition: form-data; name="n"\r\n\r\na b\r\nc\r\n--{b}\r\nContent-Disposition: form-data; name="q%22"\r\n\r\n\u00e9\r\n--{b}--\r\n'
+   body=f'<!doctype html><p>multipart</p><script>console.log({json.dumps("form multipart "+("ok" if sent.encode("latin-1").decode("utf-8")==want else "bad "+sent))})</script>'.encode()
+  else:
+   # A urlencoded POST answers with a page that posts a multipart form next.
+   body=f'<!doctype html><p>posted</p><form id=m method=post enctype=multipart/form-data action=posted><input type=hidden name=n value="a b&#10;c"><input type=hidden name=\'q"\' value="\u00e9"></form><script>console.log({json.dumps("form posted "+kind+" "+sent)});document.getElementById("m").submit()</script>'.encode()
   self.send_response(200);self.send_header('Content-Type','text/html');self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
  def log_message(self,*a):pass
 class Quiet(http.server.ThreadingHTTPServer):daemon_threads=True
 server=Quiet(('127.0.0.1',0),Handler);PORT=server.server_address[1]
 threading.Thread(target=server.serve_forever,daemon=True).start()
 os.environ['SEXOS_GATE_NIC']='-netdev user,id=n0 -device e1000e,netdev=n0'
+os.environ.setdefault('SEXOS_GATE_BOUND','900')
 from quil_autosave_gate import boot
 KEYS={' ':'spc','/':'slash','.':'dot','-':'minus'}
 def main():
@@ -72,6 +79,8 @@ def main():
   assert m[1]=='?q=sexos&c=on&t=two%0D%0Alines',m[1]
   m=g['wait'](r'\[web.console\] level=0 form posted ([^\n]*)',s,120)
   assert m[1].strip()=='application/x-www-form-urlencoded a=1+2&b=x%26y',m[1]
+  m=g['wait'](r'\[web.console\] level=0 form multipart ([^\n]*)',s,120)
+  assert m[1].strip()=='ok',m[1]
   s=len(t());q.key('f11');g['wait'](rf'\[web.closed\] target={target} task={task}',s,60)
   text=t();assert 'KERNEL PANIC' not in text and '[web.fatal]' not in text and 'panicked' not in text
   print({'ok':True,'tile':(x,y,w,h)})

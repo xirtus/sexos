@@ -37,6 +37,8 @@ jobs:
       run: bash scripts/volumes_host_gate.sh
     - name: IOMMU tables, page tables and lending window on the host
       run: bash scripts/iommu_host_gate.sh
+    - name: Display model (KMS, EDID) and Intel Gen12 display engine on the host
+      run: bash scripts/kms_host_gate.sh
     - name: sexdrive DMA lifetime and zero-copy reads on the host
       run: bash scripts/sexdrive_dma_host_gate.sh
     - name: Intel RAID (IMSM metadata, VMD bus) on the host
@@ -65,6 +67,18 @@ jobs:
       run: cargo test --locked -p sex-ime
     - name: Network stack (IPv6 resolvers, accept backlog, UDP queues) on the host
       run: cargo test --locked -p sex-net --lib
+    - name: HTTP/2 client (HPACK, 50 streams) against a real h2 server, plain and over TLS
+      run: |
+        python3 -m pip install --quiet --user --break-system-packages h2==4.4.1
+        SEXOS_REQUIRE_H2=1 cargo test --locked -p sex-http --lib h2
+        SEXOS_REQUIRE_H2=1 cargo test --locked -p sex-tls --features open-web --lib alpn
+    - name: WireGuard protocol (Python peer interop) and SSH client (real OpenSSH) on the host
+      run: |
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends openssh-server
+        # The runner account is password-locked; without PAM sshd refuses locked accounts even for keys.
+        sudo usermod -p '*' "$USER"
+        cargo test --locked -p sex-wg
+        cargo test --locked -p sex-ssh
     - name: Crash record format host regressions
       run: bash scripts/crash_log_host_gate.sh
     - name: Experimental JS baseline JIT differential and emitted-code gates
@@ -150,6 +164,11 @@ jobs:
       run: python3 scripts/program_bench_gate.py --large-read --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/large-read"
     - name: IPv6-only network (SLAAC, RDNSS, DHCPv6, sockets, name lookup)
       run: python3 scripts/program_ipv6_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/ipv6"
+    - name: ssh program logs in to OpenSSH on the host
+      run: |
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends openssh-server
+        sudo usermod -p '*' "$USER"
+        python3 scripts/ssh_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/ssh"
     - name: Web page JavaScript (native QuickJS tier)
       run: |
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends python3-pil
@@ -165,6 +184,16 @@ jobs:
       run: |
         truncate -s 1G "$RUNNER_TEMP/blank-promise.img"
         python3 scripts/program_web_promise_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-promise.img" --out "$RUNNER_TEMP/sexos-runtime/web-promise"
+    - name: Browser tabs, history, bookmarks, lasting storage, find and zoom across a reboot
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/blank-daily.img"
+        python3 scripts/program_web_daily_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-daily.img" --out "$RUNNER_TEMP/sexos-runtime/web-daily"
+    - name: Browser WebSocket echo (text, binary, 70 KB, ping, clean close)
+      run: python3 scripts/program_web_websocket_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-daily.img" --out "$RUNNER_TEMP/sexos-runtime/web-websocket"
+    - name: Browser downloads (20 MB to Files, hash read back from disk)
+      run: python3 scripts/program_web_download_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-daily.img" --out "$RUNNER_TEMP/sexos-runtime/web-download"
+    - name: Browser forms (GET, urlencoded and multipart POST)
+      run: python3 scripts/program_web_form_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-daily.img" --out "$RUNNER_TEMP/sexos-runtime/web-form"
     - name: Native screenshot saved as a real PNG file
       run: |
         truncate -s 1G "$RUNNER_TEMP/capture-source.img"
@@ -194,6 +223,10 @@ jobs:
       run: |
         truncate -s 256M "$RUNNER_TEMP/blank-usb.img"
         python3 scripts/usb_storage_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-usb-storage"
+    - name: Files background copy, cancel, trash and delete for good
+      run: python3 scripts/files_jobs_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-jobs"
+    - name: Files safe eject and pulled-out sticks
+      run: python3 scripts/files_eject_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-eject"
     - name: USB network adapter
       run: python3 scripts/usb_net_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-usb-net"
     - name: Intel RAID 0 on two NVMe drives, read only
@@ -214,6 +247,10 @@ jobs:
       with:
         name: sexos-devices-proof
         path: |
+          ${{ runner.temp }}/sexos-files-jobs/*.ppm
+          ${{ runner.temp }}/sexos-files-jobs/*.log
+          ${{ runner.temp }}/sexos-files-eject/*.ppm
+          ${{ runner.temp }}/sexos-files-eject/*.log
           ${{ runner.temp }}/sexos-raid
           ${{ runner.temp }}/sexos-power
           ${{ runner.temp }}/sexos-dgpu

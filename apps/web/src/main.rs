@@ -14,9 +14,14 @@
 
 extern crate alloc;
 
+mod download;
 mod media;
 mod mse;
+mod keys;
+mod profile;
+mod tabs;
 mod viewport;
+mod websocket;
 
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -30,6 +35,7 @@ const WELCOME: &str = include_str!("welcome.html");
 /// JavaScript on Canvas 2D, so they exercise the same engine as any web page.
 const BUILT_IN: &[(&str, &str)] = &[
     ("about:welcome", WELCOME),
+    ("about:blank", "<title></title>"),
     ("about:games", include_str!("games/index.html")),
     ("about:solitaire", include_str!("games/solitaire.html")),
     ("about:chess", include_str!("games/chess.html")),
@@ -179,7 +185,7 @@ struct Browser {
     /// The page's style sheets use `:hover`: pointer moves restyle it.
     hover_css: bool,
     /// A form's POST body for the next page `open` loads.
-    post: Option<String>,
+    post: Option<(String, String)>,
     /// The import map of the page being loaded, until its scripts start.
     import_map: Vec<(String, String)>,
     /// The scroll offset the page script last heard (`window.scrollY`).
@@ -201,6 +207,30 @@ struct Browser {
     nav_from: Option<Option<String>>,
     /// The shown page was laid out again: its iframes may have come, gone or moved.
     frames_check: bool,
+    /// Every tab; `tabs[active]` is a stand-in while its page is in the fields above.
+    tabs: Vec<tabs::Tab>,
+    active: usize,
+    /// Pages to go forward to (Shift+Backspace) after going back.
+    forward: Vec<String>,
+    /// History, bookmarks, cookies and storage kept in Files.
+    profile: profile::Profile,
+    /// Addresses offered while typing in the bar, and the one chosen with the arrows.
+    suggestions: Vec<String>,
+    chosen: Option<usize>,
+    /// Find in page (Ctrl+F): what is searched (`Some` while the find bar shows),
+    /// the current match, and every match's rectangle.
+    find: Option<String>,
+    find_at: usize,
+    marks: Vec<[i32; 4]>,
+    /// The find bar has the keys.
+    finding: bool,
+    /// The zoom the shown page was laid out at.
+    laid_zoom: u32,
+    /// Every page's WebSockets (each knows its page).
+    sockets: Vec<websocket::Conn>,
+    /// This window's finished downloads, and the one running (for the bar).
+    downloads: Vec<download::Done>,
+    download_status: Option<String>,
 }
 
 /// Most iframes a page loads; more show as empty boxes.
@@ -453,12 +483,14 @@ impl Browser {
 
     /// When the next timer of any page (shown or framed) is due.
     fn next_due(&self) -> Option<u64> {
-        self.frames.iter().filter_map(|f| f.timer).chain(self.timer).min()
+        self.frames.iter().filter_map(|f| f.timer).chain(self.timer).chain(self.profile.due).chain(self.ws_due()).min()
     }
 
     /// Runs the timers that are due, on every page.
     fn tick_all(&mut self) {
+        self.ws_poll();
         let now = sex_pdx::get_ticks();
+        if self.profile.due.is_some_and(|d| d <= now) { self.profile.save(&mut self.window, &self.jar.borrow(), wall(), false); }
         if self.timer.is_some_and(|t| t <= now) { self.tick(); }
         let mut i = 0;
         while i < self.frames.len() {
@@ -471,6 +503,8 @@ impl Browser {
     /// After any work: frames follow the page, messages are delivered, and a frame's
     /// change shows.
     fn settle(&mut self) {
+        self.ws_asks();
+        self.profile.touched(&self.jar.borrow());
         if core::mem::take(&mut self.frames_check) { self.sync_frames(); }
         if !self.frames.is_empty() { self.deliver(); }
         if core::mem::take(&mut self.frame_dirty) { self.draw(); }
@@ -483,11 +517,21 @@ impl Browser {
         let start = sex_pdx::get_ticks();
         let pixels = &mut self.window.pixels()[..self.surface.pixels];
         let bar = match (&self.editing, self.status) {
+            (None, _) if self.download_status.is_some() => self.download_status.clone().unwrap_or_default(),
             (Some(t), _) => t.clone(),
             (None, Some(s)) => alloc::format!("{}  {}", s, self.url),
             (None, None) => if self.page.title.is_empty() { self.url.clone() } else { alloc::format!("{} — {}", self.page.title, self.url) },
         };
-        sex_web::frame(&self.page, &mut self.fonts, pixels, self.surface.w, self.surface.h, self.scroll, self.focus, &bar, self.editing.is_some());
+        let labels = self.tab_labels();
+        let mark = if self.profile.bookmarked(&self.url) && self.editing.is_none() { "★ " } else { "" };
+        let bar = alloc::format!("{mark}{bar}");
+        let chrome = sex_web::Chrome {
+            text: &bar, editing: self.editing.is_some(), tabs: &labels, active: self.active,
+            suggestions: &self.suggestions, chosen: self.chosen,
+            find: self.find.as_deref().map(|q| (q, self.find_at, self.marks.len())), marks: &self.marks,
+            zoom: sex_html::style::zoom(),
+        };
+        sex_web::frame_with(&self.page, &mut self.fonts, pixels, self.surface.w, self.surface.h, self.scroll, self.focus, &chrome);
         self.paint_frames();
         self.window.show_pixels(self.surface.w as usize, self.surface.h as usize);
         self.full_redraw = false;
@@ -585,7 +629,8 @@ impl Browser {
         // The page this one is opened from, for its `Referer`: a link or script on it,
         // or the page around an iframe. A typed address has none.
         let from = self.referrer_next.take();
-        if remember && !self.url.is_empty() && self.in_frame.is_none() { self.history.push(self.url.clone()); }
+        if remember && !self.url.is_empty() && self.in_frame.is_none() { self.history.push(self.url.clone()); self.forward.clear(); }
+        if self.in_frame.is_none() { self.find = None; self.finding = false; self.marks.clear(); }
         // Same page, other fragment: just scroll.
         let (here, _) = sex_html::url::fragment(&self.url);
         let (there, frag) = sex_html::url::fragment(url);
@@ -596,7 +641,10 @@ impl Browser {
         }
         if self.in_frame.is_none() { self.status = Some("Loading…"); }
         self.url = String::from(url);
-        // Leaving the page stops its sound and pictures, and their downloads, and its frames.
+        // Leaving the page stops its sound and pictures, and their downloads, and its
+        // frames and sockets.
+        let owner = self.doc.get().owner();
+        self.ws_close_page(owner);
         self.drop_frames();
         self.media.clear();
         for mut l in core::mem::take(&mut self.media_loads) { l.ex.cancel(&mut self.window); }
@@ -604,7 +652,9 @@ impl Browser {
         let begun = sex_pdx::get_ticks();
         let referrer = from.as_deref().zip(sex_fetch::Url::parse(url).ok()).and_then(|(f, t)| sex_fetch::referrer(f, &t)).unwrap_or_default();
         self.nav_from = Some(from);
-        let (html, base) = if let Some(page) = built_in(if url.is_empty() { "about:welcome" } else { url }) {
+        let (html, base) = if url == "about:downloads" {
+            (self.downloads_page(), String::from(url))
+        } else if let Some(page) = built_in(if url.is_empty() { "about:welcome" } else { url }) {
             (String::from(page), String::from(if url.is_empty() { "about:welcome" } else { url }))
         } else if let Some(file) = url.strip_prefix('@') {
             self.buf.resize(SOURCE_MAX, 0);
@@ -615,11 +665,13 @@ impl Browser {
         } else if url.starts_with("http://") || url.starts_with("https://") {
             let got = match &post {
                 // A form's POST: the answer is the next page.
-                Some(body) => self.http("POST", url, &[("Content-Type", "application/x-www-form-urlencoded")], body.as_bytes(), SOURCE_MAX, None)
+                Some((body, ty)) => self.http("POST", url, &[("Content-Type", if ty.is_empty() { "application/x-www-form-urlencoded" } else { ty.as_str() })], body.as_bytes(), SOURCE_MAX, None)
                     .and_then(|r| if r.status >= 400 { Err(&b"The site answered with an error."[..]) } else { self.buf = r.body; Ok((r.url, 0..self.buf.len())) }),
-                None => self.fetch(url),
+                // A plain load may turn out to be a download, saved to Files as it comes.
+                None => self.fetch_or_download(url).map(|r| r.unwrap_or_else(|| (String::from("about:downloads"), 0..0))),
             };
             match got {
+                Ok((done, _)) if done == "about:downloads" => { self.url = done.clone(); (self.downloads_page(), done) }
                 Ok((final_url, body)) => { let t = text_of(&self.buf[body]); (t, final_url) }
                 Err(why) => (message_page("Can't open this page", core::str::from_utf8(why).unwrap_or(""), url), String::from(url)),
             }
@@ -673,6 +725,7 @@ impl Browser {
         let mut doc = Document::new(dom, &base, self.view, clock);
         doc.measure = sex_web::canvas::measure_css;
         doc.cookies = Some(self.jar.clone());
+        doc.storage = Some(self.profile.storage.clone());
         doc.wall = wall;
         doc.referrer = referrer;
         doc.parent_origin = self.parent.as_deref().and_then(|p| sex_fetch::Url::parse(p).ok()).map(|u| u.origin());
@@ -694,6 +747,8 @@ impl Browser {
         self.focus = None;
         if self.in_frame.is_some() { return; }
         self.status = None;
+        self.profile.visit(&self.url);
+        self.profile.titled(&self.url, &self.page.title);
         let title: Vec<u8> = self.page.title.bytes().take(16).collect();
         self.window.title(if title.is_empty() { b"Web" } else { &title });
         self.scroll_to(frag);
@@ -824,7 +879,7 @@ impl Browser {
             for line in text.lines().take(8) { sex_pdx::serial_record!("[web.console] level={} {}", level, line); }
         }
         if let Some(url) = doc.navigate.take() {
-            self.post = doc.navigate_post.take();
+            self.post = doc.navigate_post.take().map(|b| (b, core::mem::take(&mut doc.navigate_type)));
             self.referrer_next = Some(self.url.clone());
             self.open(&url, true);
             return true;
@@ -871,6 +926,7 @@ impl Browser {
         if self.in_frame.is_none() { self.frames_check = true; }
         self.scroll = self.scroll.min(self.max_scroll());
         if self.focus.map_or(false, |f| f >= self.page.links.len()) { self.focus = None; }
+        if self.in_frame.is_none() { self.laid_zoom = sex_html::style::zoom(); if self.find.is_some() { self.refind(); } }
         // Ask for the next tick soon: the change may have started timers.
         if matches!(self.doc, Doc::Scripted(_)) && self.timer.is_none() { self.timer = Some(sex_pdx::get_ticks()); }
         self.next_frame();
@@ -887,6 +943,7 @@ impl Browser {
     /// Runs due timers and animation frames.
     #[inline(never)]
     fn tick(&mut self) {
+        self.ws_asks();
         self.serve_imports();
         self.serve_fetches();
         self.serve_classic_scripts();
@@ -1478,10 +1535,22 @@ impl Browser {
     fn pointer(&mut self, p: sex_pdx::app_pointer::Pointer) {
         use sex_pdx::app_pointer::Kind;
         let (x, y) = (p.x as i32, p.y as i32 - BAR);
-        if p.y >= 0 && (p.y as i32) < BAR && matches!(p.kind, Kind::Down { button: 0 }) {
-            self.editing = Some(String::new());
-            self.draw();
+        if p.y >= 0 && (p.y as i32) < BAR && matches!(p.kind, Kind::Down { button: 0 | 1 }) {
+            match (self.tab_at(p.x as i32, p.y as i32), p.kind) {
+                (Some(i), Kind::Down { button: 1 }) => { self.show_tab(i); self.close_tab(); }
+                (Some(i), _) => self.show_tab(i),
+                (None, _) => { self.editing = Some(String::new()); self.suggestions.clear(); self.chosen = None; self.draw(); }
+            }
             return;
+        }
+        // A suggestion under the bar takes the click while typing.
+        if self.editing.is_some() && matches!(p.kind, Kind::Down { button: 0 }) {
+            if let Some(i) = sex_web::suggestion_at(self.surface.w, self.suggestions.len(), p.x as i32, p.y as i32) {
+                let url = self.suggestions[i].clone();
+                self.editing = None;
+                self.suggestions.clear();
+                return self.open(&url, true);
+            }
         }
         let (px, py) = (x, y + self.scroll);
         // Over a frame: the frame's page has the pointer, in its own coordinates.
@@ -1497,6 +1566,12 @@ impl Browser {
         }
         // Links are named by node: a script's relayout rebuilds the list.
         let link = if y >= 0 { self.page.links.iter().find(|l| px >= l.x && px < l.x + l.w && py >= l.y && py < l.y + l.h).map(|l| l.node) } else { None };
+        if let (Kind::Down { button: 1 }, Some(n), None) = (p.kind, link, self.in_frame) {
+            let href = self.page.links.iter().find(|l| l.node == n).map(|l| l.href.clone()).unwrap_or_default();
+            if let Some(t) = (!href.starts_with("javascript:") && !href.is_empty()).then(|| sex_html::url::resolve(&self.url, &href)).flatten() {
+                if t.starts_with("http") || built_in(&t).is_some() { let current = self.active; self.new_tab(Some(&t)); self.show_tab(current); return; }
+            }
+        }
         let pressed = match p.kind {
             Kind::Down { button: 0 } => { self.press_link = link; None }
             Kind::Up { button: 0 } => self.press_link.take(),
@@ -1573,28 +1648,47 @@ impl Browser {
 
     fn key(&mut self, key: sex_pdx::app_key::Key) {
         let view = self.view.1.max(40);
+        // The browser's own shortcuts come before the page's.
+        if key.control && self.in_frame.is_none() && self.shortcut(key) { return; }
+        if self.finding { return self.find_key(key); }
         if self.editing.is_none() && self.page_key(key) { return; }
         if let Some(text) = self.editing.as_mut() {
+            let mut typed = true;
             match key.code {
-                0x01 => { self.editing = None; self.draw(); }
+                0x01 => { self.editing = None; self.suggestions.clear(); self.chosen = None; self.draw(); return; }
                 0x1C => {
-                    let mut url = self.editing.take().unwrap();
+                    let mut url = match self.chosen.and_then(|i| self.suggestions.get(i)) { Some(s) => s.clone(), None => self.editing.clone().unwrap() };
+                    self.editing = None;
+                    self.suggestions.clear();
+                    self.chosen = None;
                     if !url.contains("://") && !url.starts_with('@') && !url.starts_with("about:") && !url.is_empty() { url.insert_str(0, "https://"); }
                     self.open(&url, true);
+                    return;
                 }
-                0x0E => { text.pop(); self.draw(); }
-                _ => if let Some(c) = sex_app::text(key) { text.push(c); self.draw(); },
+                0x0E => { text.pop(); }
+                _ => match nav(key) {
+                    Some(Nav::Down) if !self.suggestions.is_empty() => { typed = false; self.chosen = Some(self.chosen.map_or(0, |c| (c + 1).min(self.suggestions.len() - 1))); }
+                    Some(Nav::Up) => { typed = false; self.chosen = self.chosen.and_then(|c| c.checked_sub(1)); }
+                    _ => match sex_app::text(key) { Some(c) => text.push(c), None => return },
+                },
             }
+            if typed {
+                let t = self.editing.clone().unwrap_or_default();
+                self.suggestions = self.profile.suggest(&t, 6);
+                self.chosen = None;
+                sex_pdx::serial_record!("[web.suggest] typed={} count={} first={}", t, self.suggestions.len(), self.suggestions.first().map_or("-", |s| s.as_str()));
+            }
+            self.draw();
             return;
         }
         match key.code {
             0x1C => return self.follow(),
-            0x0E => { if let Some(prev) = self.history.pop() { self.open(&prev, false); } return; }
+            0x0E if key.shift => { if let Some(next) = self.forward.pop() { let here = self.url.clone(); self.open(&next, false); self.history.push(here); } return; }
+            0x0E => { if let Some(prev) = self.history.pop() { let here = self.url.clone(); self.open(&prev, false); self.forward.push(here); } return; }
             0x39 => return self.scroll_by(if key.shift { -view + 40 } else { view - 40 }),
             0x49 => return self.scroll_by(-view + 40),
             0x51 => return self.scroll_by(view - 40),
             0x35 if !key.shift => { self.editing = Some(String::new()); self.draw(); return; }
-            0x13 if key.control => { let u = self.url.clone(); self.open(&u, false); return; }
             0x24..=0x26 if !key.control && self.media_key(key.code) => return,
             _ => {}
         }
@@ -1626,7 +1720,12 @@ pub extern "C" fn _start() -> ! {
     let view = surface.document(BAR);
     let page = sex_html::render("", view.0, view.1, &fonts as &dyn Host);
     let doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", view, clock));
-    let mut b = Browser { #[cfg(feature = "baseline-jit")] jit_enabled: !given.split_ascii_whitespace().any(|a| a == "--no-jit"), window, surface, reported_size: (width, height), fonts, page, doc, sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), media_asked: false, media_loads: Vec::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None, import_map: Vec::new(), view, parent: None, frames: Vec::new(), in_frame: None, frame_dirty: false, referrer_next: None, nav_from: None, frames_check: false };
+    let mut b = Browser { #[cfg(feature = "baseline-jit")] jit_enabled: !given.split_ascii_whitespace().any(|a| a == "--no-jit"), window, surface, reported_size: (width, height), fonts, page, doc, sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), media_asked: false, media_loads: Vec::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None, import_map: Vec::new(), view, parent: None, frames: Vec::new(), in_frame: None, frame_dirty: false, referrer_next: None, nav_from: None, frames_check: false,
+        tabs: Vec::new(), active: 0, forward: Vec::new(), profile: Default::default(), suggestions: Vec::new(), chosen: None,
+        find: None, find_at: 0, marks: Vec::new(), finding: false, laid_zoom: 100, sockets: Vec::new(), downloads: Vec::new(), download_status: None };
+    b.profile = profile::Profile::load(&mut b.window, &mut b.jar.borrow_mut(), wall());
+    let first_tab = tabs::Tab::blank(&b);
+    b.tabs.push(first_tab);
     // Big WebGL draws spread over the cores, a band of rows each.
     let cores = sex_app::thread::cores();
     sex_gl::set_parallel(sex_app::thread::parallel, cores);
@@ -1653,7 +1752,7 @@ pub extern "C" fn _start() -> ! {
             None => b.window.next(),
         } };
         match event {
-            Event::Close => { sex_pdx::serial_record!("[web.closed] target={} task={}", b.window.target, b.window.task); b.window.close() }
+            Event::Close => b.quit(),
             Event::Key(key) => b.key(key),
             Event::Resize { .. } => {
                 let (width, height) = b.window.size();

@@ -654,6 +654,7 @@ version = "0.1.0"
 dependencies = [
  "sex-app",
  "sex-pdx",
+ "sha2",
 ]
 
 [[package]]
@@ -1161,6 +1162,14 @@ checksum = "b63fbc4a50860e98e7b2aa7804ded1db5cbc3aff9193adaff57a6931bf7c4b4c"
 dependencies = [
  "adler2",
  "simd-adler32",
+]
+
+[[package]]
+name = "monitor"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-pdx",
 ]
 
 [[package]]
@@ -1866,6 +1875,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-gpu-intel"
+version = "0.1.0"
+dependencies = [
+ "sex-kms",
+]
+
+[[package]]
 name = "sex-graphics"
 version = "0.1.0"
 dependencies = [
@@ -1958,6 +1974,10 @@ name = "sex-keymap"
 version = "0.1.0"
 
 [[package]]
+name = "sex-kms"
+version = "0.1.0"
+
+[[package]]
 name = "sex-libc"
 version = "0.1.0"
 dependencies = [
@@ -2020,6 +2040,17 @@ version = "0.1.0"
 dependencies = [
  "rustybuzz",
  "unicode-bidi",
+]
+
+[[package]]
+name = "sex-ssh"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "ed25519-compact",
+ "p256",
+ "rsa",
+ "sha2",
 ]
 
 [[package]]
@@ -2091,6 +2122,14 @@ dependencies = [
  "sex-html",
  "sex-image",
  "sex-js",
+]
+
+[[package]]
+name = "sex-wg"
+version = "0.1.0"
+dependencies = [
+ "chacha20poly1305",
+ "fiat-crypto",
 ]
 
 [[package]]
@@ -2407,6 +2446,15 @@ checksum = "d91ed6c858b01f942cd56b37a94b3e0a1798290327d1236e4d9cf4eaca44d29d"
 dependencies = [
  "base64ct",
  "der",
+]
+
+[[package]]
+name = "ssh"
+version = "0.1.0"
+dependencies = [
+ "sex-ssh",
+ "sex-std",
+ "sha2",
 ]
 
 [[package]]
