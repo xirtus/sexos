@@ -4065,3 +4065,13 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
 - **Kernel / ABI:** about 10 lines in `program_frames.rs`; new op `OP_PRESSURE` 0x3A1.
 - **Follow-up:** the Shell spins on `sys_yield` while a panel notice shows (5 s) and while
   memory is critical; a timed wait would be cheaper (workstream C owns that loop).
+
+## Key-to-pixel latency gate, slice J6 (2026-11-13)
+- **What:** `scripts/latency_gate.py` times each key typed into Spindle from the host's
+  key event to Display committing Spindle's new text, first idle, then with four
+  programs computing flat out (`run bench spin N`, N billion TSC cycles; new argument).
+- **First numbers (QEMU TCG, 2 cores, 40 keys each):** idle p50 78 ms, p95 91 ms, p99 95
+  ms; with 4 busy programs p50 76 ms, p95 176 ms, p99 1,518 ms (one stall). The flat
+  ~75 ms includes TCG and the host's key path. Default bound 2,000 ms; not in CI.
+- **Next:** find the 1.5 s stall under load (scheduler or Display), then tighten the
+  bound; the plan's hardware target is p99 < 16 ms.
