@@ -1286,6 +1286,7 @@ pub mod notify;
 pub mod desktop_look;
 pub mod window_switcher;
 pub mod screenshot;
+pub mod tray;
 pub mod document_view;
 
 pub mod display_boot;

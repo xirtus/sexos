@@ -31,6 +31,8 @@ pub enum Ask {
     Volume,
     /// A player key with this code: deliver it to the program Bell names.
     Player(u8),
+    /// The panel tray's state or slider: show the new state in the tray.
+    Tray,
 }
 
 const ASKS: usize = 8;

@@ -10538,6 +10538,7 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
     if media_keys::is_player_key(code){if value==1{player_key(code);}return true;}
     let modifier=APP_MODIFIERS.observe(code,value)|keyboard_layout::observe(code,value);
     if screenshot_key(code,value) {return true;}
+    if tray_key(code,value) {return true;}
     match DESKTOP_KEYS.event(code,value) {
         desktop_keys::Action::Pass=>{
             if !COMMAND_PALETTE_OPEN {
@@ -10834,12 +10835,147 @@ unsafe fn player_key(code:u8){
     if status==0{MEDIA_ASKS.push(media_keys::Ask::Player(code));}
     sex_pdx::serial_record!("[shell.media.key] code={:#x} focused={} status={:#x}",code,focused,status);
 }
+// ── Panel tray ───────────────────────────────────────────────────────────
+// Network, volume and battery icons in the bar; their click opens quick
+// settings (volume slider, mute, network, battery, keyboard layout) and the
+// clock opens a month calendar. Layouts are shared with Display through
+// sex_pdx::tray (host-tested); Bell and sexnet answer asynchronously.
+static mut TRAY: sex_pdx::tray::Status = sex_pdx::tray::Status::UNKNOWN;
+static mut TRAY_VIEW: sex_pdx::tray::View = sex_pdx::tray::View { menu: sex_pdx::tray::Menu::None, month_offset: 0 };
+static mut TRAY_REFRESHED: Option<u64> = None;
+/// When Shell last asked sexnet, and whether a look is due. The kernel keeps
+/// one undelivered reply per PD, so Bell and sexnet are asked one after the other.
+static mut TRAY_WIFI_ASKED: Option<u64> = None;
+static mut TRAY_WIFI_DUE: bool = false;
+/// sexnet's PD, which answers Wi-Fi state.
+const TRAY_SEXNET_PD: u32 = 13;
+unsafe fn tray_publish() {
+    use sex_pdx::tray;
+    let label = keyboard_layout::active_label();
+    let (status, _) = pdx_call(SLOT_DISPLAY, tray::OP_TRAY, TRAY.wire(), tray::label_wire(label.as_bytes()), TRAY_VIEW.wire());
+    sex_pdx::serial_record!("[shell.tray] menu={} offset={} volume={} muted={} battery={} wifi={} layout={} status={:#x}", TRAY_VIEW.wire() & 0xFF, TRAY_VIEW.month_offset, TRAY.volume, TRAY.muted as u8, TRAY.battery.map_or(-1, |b| b as i32), TRAY.wifi, label, status);
+}
+/// Asks Bell and sexnet again and reads the battery; answers republish.
+unsafe fn tray_refresh() {
+    use sex_pdx::sound_mixer as mixer;
+    TRAY_REFRESHED = Some(sex_pdx::get_ticks());
+    if let Ok(p) = sex_pdx::power::sensors() { TRAY.battery = p.battery_percent; TRAY.charging = p.charging; TRAY.on_ac = p.on_ac; }
+    TRAY_WIFI_DUE = true;
+    // Bell first; its answer asks sexnet (tray_volume).
+    if !MEDIA_ASKS.pending() && pdx_call(SLOT_BELL, mixer::OP_MIXER, mixer::STATE, 0, 0).0 == 0 { MEDIA_ASKS.push(media_keys::Ask::Tray); }
+    else { tray_ask_wifi(); }
+    tray_publish();
+}
+unsafe fn tray_ask_wifi() {
+    let now = sex_pdx::get_ticks();
+    if !TRAY_WIFI_DUE || MEDIA_ASKS.pending() || TRAY_WIFI_ASKED.is_some_and(|t| now.saturating_sub(t) < 5_000) { return; }
+    TRAY_WIFI_DUE = false;
+    let status = pdx_call(sex_pdx::SLOT_NET, sex_pdx::wifi_status::OP, sex_pdx::wifi_status::STATE, 0, 0).0;
+    TRAY_WIFI_ASKED = (status == 0).then_some(now);
+}
+/// Every 30 s, and every 2 s while a tray menu shows.
+unsafe fn tray_tick() {
+    // The first look waits for boot to settle (Bell, sexnet and the bar up).
+    if TRAY_REFRESHED.is_none() && sex_pdx::get_ticks() < 8_000 { return; }
+    let every = if TRAY_VIEW.menu == sex_pdx::tray::Menu::None { 30_000 } else { 2_000 };
+    if TRAY_REFRESHED.map_or(true, |t| sex_pdx::get_ticks().saturating_sub(t) >= every) { tray_refresh(); }
+}
+unsafe fn tray_volume(word: u64) {
+    use sex_pdx::sound_mixer as mixer;
+    TRAY.volume = mixer::state_volume(word).min(100); TRAY.muted = mixer::state_muted(word); TRAY.sound = true;
+    tray_publish();
+    tray_ask_wifi();
+}
+unsafe fn tray_receive(msg: &sex_pdx::PdxMessage) -> bool {
+    if msg.type_id != 1 || TRAY_WIFI_ASKED.is_none() || msg.caller_pd != TRAY_SEXNET_PD || msg.arg0 >> 56 != sex_pdx::wifi_status::TAG >> 56 { return false; }
+    TRAY_WIFI_ASKED = None;
+    TRAY.wifi = sex_pdx::wifi_status::State::of(msg.arg0).phase;
+    tray_publish();
+    true
+}
+/// Opens (or closes) a tray menu on its OS panel surface, closing the other one.
+unsafe fn tray_toggle(menu: sex_pdx::tray::Menu) {
+    use sex_pdx::tray::{self, Menu};
+    let (w, bar, s) = (desktop_width() as usize, desktop_bar_height() as usize, sex_pdx::desktop_style::ui_scale() as usize);
+    let rect = match menu {
+        Menu::Quick => tray::Quick::new(w, bar, s).map(|q| q.panel),
+        Menu::Calendar => tray::Calendar::new(w, bar, s).map(|c| c.panel),
+        Menu::None => None,
+    };
+    let other_open = match menu { Menu::Quick => CLOCK_ACTIVE, _ => STATUS_ACTIVE };
+    if other_open { tray_close(); }
+    let Some((x, y, pw, ph)) = rect else { return };
+    let (x, y, pw, ph) = (x as u32, y as u32, pw as u32, ph as u32);
+    match menu {
+        Menu::Quick => { toggle_os_panel(&mut STATUS_ACTIVE, PanelKind::Status, SURFACE_ID_STATUS, "status", x, y, pw, ph); }
+        _ => { toggle_os_panel(&mut CLOCK_ACTIVE, PanelKind::Clock, SURFACE_ID_CLOCK, "clock", x, y, pw, ph); }
+    }
+    let open = if menu == Menu::Quick { STATUS_ACTIVE } else { CLOCK_ACTIVE };
+    TRAY_VIEW = tray::View { menu: if open { menu } else { Menu::None }, month_offset: 0 };
+    if open { tray_refresh(); } else { tray_publish(); }
+}
+unsafe fn tray_close() {
+    if STATUS_ACTIVE { toggle_os_panel(&mut STATUS_ACTIVE, PanelKind::Status, SURFACE_ID_STATUS, "status", 0, 0, 0, 0); }
+    if CLOCK_ACTIVE { toggle_os_panel(&mut CLOCK_ACTIVE, PanelKind::Clock, SURFACE_ID_CLOCK, "clock", 0, 0, 0, 0); }
+    TRAY_VIEW = sex_pdx::tray::View::default();
+    tray_publish();
+}
+/// A click below the bar while a tray menu shows.
+unsafe fn tray_click(px: i32, py: i32) {
+    use sex_pdx::tray::{self, CalendarHit, Menu, QuickHit};
+    use sex_pdx::sound_mixer as mixer;
+    let (w, bar, s) = (desktop_width() as usize, desktop_bar_height() as usize, sex_pdx::desktop_style::ui_scale() as usize);
+    let (x, y) = (px.max(0) as usize, py.max(0) as usize);
+    match TRAY_VIEW.menu {
+        Menu::Quick => {
+            let Some(q) = tray::Quick::new(w, bar, s) else { return tray_close() };
+            let hit = q.hit(x, y);
+            sex_pdx::serial_record!("[shell.tray.click] menu=quick hit={:?}", hit);
+            let ask = match hit {
+                QuickHit::Volume(v) => Some((mixer::SET_MASTER, v as u64)),
+                QuickHit::Mute => Some((mixer::MUTE_MASTER, 2)),
+                QuickHit::Layout => { let (label, _) = keyboard_layout::next(); sex_pdx::serial_record!("[shell.tray.layout] label={}", label); tray_publish(); None }
+                QuickHit::Outside => { tray_close(); None }
+                _ => None,
+            };
+            if let Some((action, a)) = ask {
+                // Show the choice at once; Bell's answer confirms it.
+                if action == mixer::SET_MASTER { TRAY.volume = a as u8; } else { TRAY.muted = !TRAY.muted; }
+                if pdx_call(SLOT_BELL, mixer::OP_MIXER, action, a, 0).0 == 0 { MEDIA_ASKS.push(media_keys::Ask::Tray); }
+                tray_publish();
+            }
+        }
+        Menu::Calendar => {
+            let Some(c) = tray::Calendar::new(w, bar, s) else { return tray_close() };
+            let hit = c.hit(x, y);
+            sex_pdx::serial_record!("[shell.tray.click] menu=calendar hit={:?}", hit);
+            let offset = TRAY_VIEW.month_offset;
+            TRAY_VIEW.month_offset = match hit {
+                CalendarHit::Prev => offset.saturating_sub(1),
+                CalendarHit::Next => offset.saturating_add(1),
+                CalendarHit::Today => 0,
+                CalendarHit::Outside => return tray_close(),
+                CalendarHit::Inside => return,
+            };
+            tray_publish();
+        }
+        Menu::None => {}
+    }
+}
+/// Escape closes an open tray menu.
+unsafe fn tray_key(code: u8, value: u64) -> bool {
+    if TRAY_VIEW.menu == sex_pdx::tray::Menu::None || code != 0x01 { return false; }
+    if value == 1 { tray_close(); }
+    true
+}
 /// Bell's answer to a volume key (shown in the panel) or a player key (delivered).
 unsafe fn media_keys_receive(msg:&sex_pdx::PdxMessage)->bool{
     if msg.type_id!=1||msg.caller_pd!=NOTIFY_BELL_PD||!media_keys::is_mixer_answer(msg.arg0)||!MEDIA_ASKS.pending(){return false}
     let word=msg.arg0;
     match MEDIA_ASKS.pop(){
+        Some(media_keys::Ask::Tray) if !media_keys::refused(word)=>tray_volume(word),
         Some(media_keys::Ask::Volume) if !media_keys::refused(word)=>{
+            tray_volume(word);
             let mut text=[0u8;48];let n=media_keys::osd_text(word,&mut text);
             let shown=notify_panel(&text[..n]);
             if shown{NOTIFY_NOTICE_UNTIL=sex_pdx::get_ticks()+media_keys::OSD_TICKS;}
@@ -24180,6 +24316,7 @@ unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTar
     // The overview takes every click while it is open.
     if OVERVIEW.is_open() { overview_click(px, py); return (HitTarget::None, true); }
     if SCREENSHOT.is_open() { return (HitTarget::None, true); }
+    if TRAY_VIEW.menu != sex_pdx::tray::Menu::None && py >= desktop_bar_height() { tray_click(px, py); return (HitTarget::None, true); }
     let old_focus = FOCUSED_SURFACE_ID;
     serial_println!("[shell.click_focus.down] x={} y={} buttons={:#x}", px, py, buttons_val);
     // ── Atlas intercept: if Atlas mode is enabled, hit-test scene cards ──
@@ -24828,7 +24965,7 @@ fn handle_silkbar_click(px: i32, py: i32) -> bool {
         }
         Action::OpenClock => {
             sex_pdx::serial_record!("[shell.silkbar.click] target=clock x={} y={}", ux, uy);
-            unsafe { toggle_os_panel(&mut CLOCK_ACTIVE, PanelKind::Clock, SURFACE_ID_CLOCK, "clock", 1000, 55, 240, 300); }
+            unsafe { tray_toggle(sex_pdx::tray::Menu::Calendar); }
             true
         }
         Action::ToggleModule(Module::Workspaces(_)) => {
@@ -24837,7 +24974,7 @@ fn handle_silkbar_click(px: i32, py: i32) -> bool {
         }
         Action::ToggleModule(_module) => {
             serial_println!("[shell.silkbar.click] target=status x={} y={}", ux, uy);
-            unsafe { toggle_os_panel(&mut STATUS_ACTIVE, PanelKind::Status, SURFACE_ID_STATUS, "status", 860, 55, 200, 300); }
+            unsafe { tray_toggle(sex_pdx::tray::Menu::Quick); }
             true
         }
         Action::OpenBell => {
@@ -25480,7 +25617,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { session::save(); }
         unsafe { record_spawn_poll(); }
         unsafe { program_resize_flush(); }
-        unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); display_scale_poll(); shell_close_poll(); shell_memory_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); notification_poll(); }
+        unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); display_scale_poll(); shell_close_poll(); shell_memory_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); notification_poll(); tray_tick(); }
         // Retain failed notification attempts while continuing normal receives.
         // Success means enqueue only; sexinput validates caller and version.
         if shell_ready_publisher.poll() {
@@ -26176,6 +26313,7 @@ pub extern "C" fn _start() -> ! {
             if clipboard_receive(&msg) { continue; }
             if notification_receive(&msg) { continue; }
             if media_keys_receive(&msg) { continue; }
+            if tray_receive(&msg) { continue; }
             if spindle_history_status_receive(&msg) {continue;}
             if workspace_refresh_receive(&msg) { continue; }
             if shell_close_declined_receive(&msg) { continue; }
