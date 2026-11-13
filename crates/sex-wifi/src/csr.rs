@@ -40,6 +40,8 @@ pub const IF_PREPARE: u32 = 0x0800_0000;
 pub const IF_HAP_WAKE_L1A: u32 = 0x0008_0000;
 pub const MBOX_OS_ALIVE: u32 = 0x20;
 pub const RESET_SW: u32 = 0x80;
+pub const RESET_MASTER_DISABLED: u32 = 0x100;
+pub const RESET_STOP_MASTER: u32 = 0x200;
 pub const RESET_LINK_PWR_MGMT_DISABLED: u32 = 0x8000_0000;
 pub const GP_MAC_CLOCK_READY: u32 = 0x1;
 pub const GP_INIT_DONE: u32 = 0x4;
@@ -78,6 +80,29 @@ pub trait Registers {
     fn write(&mut self, offset: u32, value: u32);
     fn set(&mut self, offset: u32, bits: u32) { let v = self.read(offset); self.write(offset, v | bits); }
     fn clear(&mut self, offset: u32, bits: u32) { let v = self.read(offset); self.write(offset, v & !bits); }
+}
+
+/// Stops a running chip so it can be started again from the beginning (`iwx_stop_device`
+/// for pre-BZ chips): interrupts off, the wake request dropped, bus-master DMA
+/// stopped (`iwx_apm_stop`), then the on-board processor reset. Afterwards the DMA
+/// region is ours again and a new `Bringup` may lay it out. Returns whether the
+/// chip confirmed its DMA had stopped (a few register reads at most).
+pub fn stop(r: &mut impl Registers) -> bool {
+    r.write(INT_MASK, 0);
+    r.write(INT, u32::MAX);
+    r.write(FH_INT_STATUS, u32::MAX);
+    r.clear(GP_CNTRL, GP_MAC_ACCESS_REQ);
+    r.set(RESET, RESET_STOP_MASTER);
+    let mut stopped = false;
+    for _ in 0..1000 {
+        let v = r.read(RESET);
+        if v == u32::MAX { break; }
+        if v & RESET_MASTER_DISABLED != 0 { stopped = true; break; }
+    }
+    r.set(RESET, RESET_SW);
+    r.write(INT_MASK, 0);
+    r.write(INT, u32::MAX);
+    stopped
 }
 
 fn prph_mask(family: Family) -> u32 { if family == Family::Ax210 { 0x00ff_ffff } else { 0x000f_ffff } }

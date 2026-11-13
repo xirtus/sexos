@@ -23,6 +23,8 @@ pub struct Document {
     pub navigate: Option<String>,
     /// The body of a form POST that `navigate` loads (form-urlencoded).
     pub navigate_post: Option<String>,
+    /// The POST body's `Content-Type` (empty: `application/x-www-form-urlencoded`).
+    pub navigate_type: String,
     /// `document.referrer`: the page this one was opened from, as its request said.
     pub referrer: String,
     /// For a page in an iframe, the origin of the page around it (`window.parent`).
@@ -63,12 +65,27 @@ pub struct Document {
     pub cookies: Option<alloc::rc::Rc<core::cell::RefCell<sex_fetch::Jar>>>,
     /// Seconds since 1970, for cookie expiry.
     pub wall: fn() -> u64,
+    /// WebSocket requests not taken by the browser yet.
+    pub ws_asks: Vec<WsAsk>,
+    /// Messages that came for each socket, oldest first: (id, bytes).
+    pub ws_in: Vec<(u32, Vec<u8>)>,
+    next_ws: u32,
+    /// `localStorage` of every origin, kept by the browser.
+    pub storage: Option<alloc::rc::Rc<core::cell::RefCell<crate::storage::WebStorage>>>,
     /// Loaded ES module sources by address, for `import`.
     pub modules: alloc::collections::BTreeMap<String, String>,
     /// Module addresses asked for and not in `modules`.
     pub modules_wanted: Vec<String>,
     /// The page's import map: (bare specifier, or a prefix ending in `/`, address).
     pub import_map: Vec<(String, String)>,
+}
+
+/// What a page asked of its WebSockets.
+#[derive(Debug, Clone)]
+pub enum WsAsk {
+    Open { id: u32, url: String, protocols: String },
+    Send { id: u32, binary: bool, data: Vec<u8> },
+    Close { id: u32, code: u16, reason: String },
 }
 
 /// A connected script element requesting classic execution. The host derives
@@ -127,6 +144,8 @@ impl Document {
     }
     /// Whether a completion belongs to this document, independent of repainting
     /// or a script intentionally removing its own node after evaluation.
+    /// This page's id among every page the program has made.
+    pub fn owner(&self) -> u64 { self.resource_owner }
     pub fn classic_script_owner(&self, ask: &ClassicScript) -> bool { ask.owner == self.resource_owner }
 
     /// A delayed script is still bound to this document and the unchanged,
@@ -168,7 +187,7 @@ fn rough_measure(font: &str, text: &str) -> i32 {
 
 impl Document {
     pub fn new(dom: Dom, url: &str, viewport: (i32, i32), clock: fn() -> u64) -> Self {
-        Self { resource_owner: NEXT_RESOURCE_OWNER.fetch_add(1, Ordering::Relaxed), source_policies: Default::default(), source_policy_overflow: false, dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, navigate_post: None, referrer: String::new(), parent_origin: None, outbox: Vec::new(), rects: Vec::new(), layers: Vec::new(), clock, canvas_queue: Vec::new(), measure: rough_measure, gl: Default::default(), pictures: Vec::new(), fetches: Vec::new(), classic_scripts: Vec::new(), bodies: Vec::new(), media: Vec::new(), media_bytes: Vec::new(), heads: Vec::new(), next_fetch: 0, cookies: None, wall: || 0, modules: Default::default(), modules_wanted: Vec::new(), import_map: Vec::new() }
+        Self { resource_owner: NEXT_RESOURCE_OWNER.fetch_add(1, Ordering::Relaxed), source_policies: Default::default(), source_policy_overflow: false, dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, navigate_post: None, navigate_type: String::new(), referrer: String::new(), parent_origin: None, outbox: Vec::new(), rects: Vec::new(), layers: Vec::new(), clock, canvas_queue: Vec::new(), measure: rough_measure, gl: Default::default(), pictures: Vec::new(), fetches: Vec::new(), classic_scripts: Vec::new(), bodies: Vec::new(), media: Vec::new(), media_bytes: Vec::new(), heads: Vec::new(), next_fetch: 0, cookies: None, wall: || 0, storage: None, ws_asks: Vec::new(), ws_in: Vec::new(), next_ws: 0, modules: Default::default(), modules_wanted: Vec::new(), import_map: Vec::new() }
     }
 
     /// Takes each element's laid-out box from the browser's layout, for
@@ -273,6 +292,31 @@ impl Page for Document {
                 self.media_bytes.push((n, text(1).parse().ok()?, bytes.to_vec()));
                 return Some(Vec::new());
             }
+            op::WS => {
+                let id = |i: usize| a.get(i).and_then(|b| core::str::from_utf8(b).ok()).and_then(|t| t.parse::<u32>().ok());
+                match text(0) {
+                    "open" => {
+                        if self.ws_asks.len() >= 256 { return None; }
+                        self.next_ws += 1;
+                        self.ws_asks.push(WsAsk::Open { id: self.next_ws, url: String::from(text(1)), protocols: String::from(text(2)) });
+                        return Some(format!("{}", self.next_ws).into_bytes());
+                    }
+                    "send" => {
+                        let queued: usize = self.ws_asks.iter().map(|w| if let WsAsk::Send { data, .. } = w { data.len() } else { 0 }).sum();
+                        let data = a.get(3).copied().unwrap_or(&[]);
+                        if queued + data.len() > 64 << 20 { return None; }
+                        self.ws_asks.push(WsAsk::Send { id: id(1)?, binary: text(2) == "b", data: data.to_vec() });
+                        return Some(Vec::new());
+                    }
+                    "close" => { self.ws_asks.push(WsAsk::Close { id: id(1)?, code: text(2).parse().unwrap_or(1000), reason: String::from(text(3)) }); return Some(Vec::new()); }
+                    _ => return None,
+                }
+            }
+            op::WS_TAKE => {
+                let id: u32 = text(0).parse().ok()?;
+                let i = self.ws_in.iter().position(|(n, _)| *n == id)?;
+                return Some(self.ws_in.remove(i).1);
+            }
             op::FETCH_HEAD => {
                 let id: u32 = text(0).parse().ok()?;
                 let i = self.heads.iter().position(|(n, _)| *n == id)?;
@@ -325,6 +369,33 @@ impl Page for Document {
                 // Keep the log bounded: a page that logs in a loop must not fill memory.
                 if self.log.len() < 256 { self.log.push((level, String::from(&text[..floor(text, 1024)]))); }
                 None
+            }
+            op::STORAGE => {
+                let store = self.storage.clone()?;
+                let url = self.page_url()?;
+                let origin = url.origin();
+                let key = a.get(1).copied().unwrap_or("");
+                return match *a.first()? {
+                    "get" => store.borrow().get(&origin, key).map(String::from),
+                    "set" => Some(String::from(if store.borrow_mut().set(&origin, key, a.get(2).copied().unwrap_or("")) { "" } else { "!" })),
+                    "remove" => { store.borrow_mut().remove(&origin, key); Some(none()) }
+                    "clear" => { store.borrow_mut().clear(&origin); Some(none()) }
+                    "len" => Some(format!("{}", store.borrow().len(&origin))),
+                    "key" => store.borrow().key(&origin, key.parse().ok()?).map(String::from),
+                    _ => None,
+                };
+            }
+            op::IDB => {
+                let store = self.storage.clone()?;
+                let area = format!("{}{}", crate::storage::IDB_PREFIX, self.page_url()?.origin());
+                let name = a.get(1).copied().unwrap_or("");
+                return match *a.first()? {
+                    "load" => store.borrow().get(&area, name).map(String::from),
+                    "save" => Some(String::from(if store.borrow_mut().set_within(&area, name, a.get(2).copied().unwrap_or(""), crate::storage::IDB_QUOTA) { "" } else { "!" })),
+                    "delete" => { store.borrow_mut().remove(&area, name); Some(none()) }
+                    "list" => Some(store.borrow().area(&area).map(|x| x.items.keys().cloned().collect::<Vec<_>>().join("\n")).unwrap_or_default()),
+                    _ => None,
+                };
             }
             op::BY_ID => {
                 let want = *a.first()?;
@@ -412,7 +483,11 @@ impl Page for Document {
                 Some(attrs.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>().join("\n"))
             }
             op::VIEWPORT => Some(format!("{},{}", self.viewport.0, self.viewport.1)),
-            op::NAVIGATE => { self.navigate = Some(String::from(*a.first()?)); self.navigate_post = a.get(1).filter(|m| m.eq_ignore_ascii_case("post")).map(|_| String::from(a.get(2).copied().unwrap_or(""))); None }
+            op::NAVIGATE => { self.navigate = Some(String::from(*a.first()?)); self.navigate_post = a.get(1).filter(|m| m.eq_ignore_ascii_case("post")).map(|_| String::from(a.get(2).copied().unwrap_or("")));
+                // Only the form encodings a page may choose.
+                let ty = a.get(3).copied().unwrap_or("");
+                self.navigate_type = if ty.starts_with("multipart/form-data; boundary=") || ty == "text/plain" { String::from(ty) } else { String::new() };
+                None }
             op::CLICKABLE => {
                 let n = self.element(a.first())?;
                 if self.dom.clickable.insert(n) { self.dirty = true; }

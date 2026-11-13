@@ -110,6 +110,7 @@ impl Window {
         bytes[..n].copy_from_slice(&name[..n]);
         let words = (u64::from_le_bytes(bytes[..8].try_into().unwrap()), u64::from_le_bytes(bytes[8..].try_into().unwrap()));
         call(SLOT_DISPLAY, lifecycle::OP_APP_TITLE, self.surface, words.0, words.1);
+        sex_pdx::system_stats::set_name(name);
     }
     /// Replaces the window's text. Longer text than the region holds is cut.
     pub fn show(&mut self, text: &[u8]) {
@@ -477,6 +478,9 @@ pub mod files {
         }
     }
     pub fn mkdir(window: &mut Window, path: &[u8]) -> Result<(), Error> { request(window, w::MKDIR, path, 0, 0).map(|_| ()) }
+    /// Writes out and forgets the volume `/media/NAME`; for a USB stick every volume on it
+    /// (Eject). Grants into it end with it.
+    pub fn eject(window: &mut Window, media_path: &[u8]) -> Result<(), Error> { request(window, w::UNMOUNT, media_path, 0, 0).map(|_| ()) }
     pub fn create(window: &mut Window, path: &[u8]) -> Result<(), Error> { request(window, w::CREATE, path, 0, 0).map(|_| ()) }
     /// A file, or an empty folder.
     pub fn remove(window: &mut Window, path: &[u8]) -> Result<(), Error> { request(window, w::REMOVE, path, 0, 0).map(|_| ()) }
@@ -1519,6 +1523,64 @@ pub mod net {
             }
         }
     }
+    /// A connection that stays open both ways (a WebSocket after its handshake): the
+    /// same setup as an [`Exchange`] (name, Happy Eyeballs, TLS), then bytes in and out
+    /// for as long as both ends like. Every call is one step and returns at once.
+    pub struct Duplex { ex: Exchange, sent_first: bool }
+    impl Duplex {
+        /// Starts connecting to `host`:`port` (TLS when `tls`), sending `first` once up.
+        pub fn start(window: &mut Window, host: &str, port: u16, tls: bool, first: alloc::vec::Vec<u8>) -> Result<Duplex, Error> {
+            if host.is_empty() || host.len() > 253 { return Err(Error::Address); }
+            forget_stale(window);
+            let flow = take_flow()?;
+            let now = sex_pdx::get_ticks();
+            let ex = Exchange { flow, get_head: false, raw: alloc::vec::Vec::new(), cap: usize::MAX, max: usize::MAX,
+                head_end: None, framing: None, chunks: sex_fetch::ChunkScan::new(), began: now, start: now, idle: 0, calls: 0, empty: 0, peer_done: false, whole: false,
+                setup: Setup::Up, host: alloc::string::String::from(host), port, tls, out: first, addresses: [None; 2], trying: 0, connect_at: 0,
+                reused: false, body_end: None, drained: 0 };
+            Ok(Duplex { ex, sent_first: false })
+        }
+        /// True once connected and the first bytes are sent.
+        pub fn ready(&self) -> bool { self.ex.setup == Setup::Done }
+        /// One step: moves setup on, or takes what arrived into `into`. True when
+        /// anything happened. An error means the connection is gone.
+        pub fn poll(&mut self, window: &mut Window, into: &mut alloc::vec::Vec<u8>) -> Result<bool, Error> {
+            if self.ex.whole { return Err(Error::Failed); }
+            if self.ex.setup != Setup::Done {
+                // Setting up may not take more than thirty seconds.
+                if sex_pdx::get_ticks().saturating_sub(self.ex.start) > 30_000 { self.close(window); return Err(Error::TooSlow); }
+                if let Err(e) = self.ex.set_up(window) { self.close(window); return Err(e); }
+                if self.ex.setup == Setup::Done { self.sent_first = true; }
+                return Ok(self.ex.idle == 0);
+            }
+            let turn = Turn::take();
+            let k = match call_on(window, self.ex.flow, w::RECEIVE, 32 * 1024).and_then(ok) { Ok(k) => k as usize, Err(e) => { drop(turn); self.close(window); return Err(e); } };
+            if k > 0 { into.extend_from_slice(&region()?[..k]); return Ok(true); }
+            drop(turn);
+            let state = call_on(window, self.ex.flow, w::STATE, 0).and_then(ok)?;
+            if matches!(state, w::STATE_PEER_CLOSED | w::STATE_CLOSED) { self.close(window); return Err(Error::Failed); }
+            Ok(false)
+        }
+        /// Sends `bytes` (once ready), waiting for room up to ten seconds.
+        pub fn send(&mut self, window: &mut Window, mut bytes: &[u8]) -> Result<(), Error> {
+            if !self.ready() || self.ex.whole { return Err(Error::Failed); }
+            let mut moved = sex_pdx::get_ticks();
+            while !bytes.is_empty() {
+                let _turn = Turn::take();
+                let region = region()?;
+                let n = bytes.len().min(region.len());
+                region[..n].copy_from_slice(&bytes[..n]);
+                let took = ok(call_on(window, self.ex.flow, w::SEND, n as u64)?)? as usize;
+                bytes = &bytes[took..];
+                if took > 0 { moved = sex_pdx::get_ticks(); } else if sex_pdx::get_ticks().saturating_sub(moved) > 10_000 { return Err(Error::TooSlow); } else { drop(_turn); pause(); }
+            }
+            if self.ex.tls { ok(call_on(window, self.ex.flow, w::FINISH_REQUEST, 0)?)?; }
+            Ok(())
+        }
+        /// Lets the connection go.
+        pub fn close(&mut self, window: &mut Window) { self.ex.cancel(window); }
+    }
+
     /// Waits on one exchange to the end, yielding while bytes are flowing.
     fn wait(window: &mut Window, ex: &mut Exchange) -> Result<(), Error> {
         // While bytes are flowing the next frame is usually a scheduler turn away:
