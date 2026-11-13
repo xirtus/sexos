@@ -30,3 +30,9 @@
 - ABI: new Files request kind 40 and `sex_pdx::package` (no syscall). `spec/abi_inputs.sha256` updated.
 - Not yet: microphone is asked and recorded but capture does not check it yet; the GUI
   Store and the launcher's own question (the launcher starts catalog apps, not packages).
+- **Store (I4, command side)**: `pkg refresh [URL]` downloads `sexos-store.txt` and its
+  signature (made by `sexpkg index`), Files checks it against the trusted keys and keeps
+  it with the source URL; `pkg search WORDS`, `pkg get NAME`, `pkg upgrade` (every
+  installed package the catalog has newer). Each package is still checked on its own
+  signature. Gate covers refresh, search, get, re-refresh from the saved source, upgrade
+  and an up-to-date second upgrade.

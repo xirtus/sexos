@@ -12,7 +12,10 @@ with the gates' public test key, and serves them over HTTP. In Spindle:
 * `pkg allow chello network`: `run chello net HOST PORT` now reaches the echo server
   without `+net` and without a question (23 checks);
 * 1.1 upgrades it, 1.0 is then refused as a downgrade, `pkg list` shows one package,
-  `pkg remove chello` removes it and `pkg list` shows none."""
+  `pkg remove chello` removes it and `pkg list` shows none;
+* the store: `pkg refresh URL` checks the signed catalog, `pkg search` finds chello,
+  `pkg get chello` installs 1.0; the catalog then offers 1.1, `pkg refresh` (the saved
+  source) and `pkg upgrade` upgrade it, and a second `pkg upgrade` finds nothing."""
 import argparse,functools,http.server,os,re,shutil,socket,socketserver,subprocess,threading,time
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
@@ -108,6 +111,18 @@ def main():
   do('pkg list',r'\[files\.pkg\.list\] count=1\n')
   do('pkg remove chello',r'\[files\.pkg\.removed\] name=chello program=chello\n')
   do('pkg list',r'\[files\.pkg\.list\] count=0\n')
+  store=serve/'store';store.mkdir()
+  shutil.copyfile(serve/'chello-1.0.sexpkg',store/'chello-1.0.sexpkg');sexpkg('index','test',store)
+  do(f'pkg refresh {base}store',r'\[files\.pkg\.catalog\] packages=1\n')
+  do('pkg search C library',r'\[files\.pkg\.search\] hits=1\n')
+  m,_=do('pkg get chello',r'\[files\.pkg\.(refused|installed)\] ([^\n]*)\n')
+  assert m[1]=='installed' and 'version=1.0 program=chello upgrade=0' in m[2],m[0]
+  (store/'chello-1.0.sexpkg').unlink();shutil.copyfile(serve/'chello-1.1.sexpkg',store/'chello-1.1.sexpkg');sexpkg('index','test',store)
+  do('pkg refresh',r'\[files\.pkg\.catalog\] packages=1\n')
+  m,_=do('pkg upgrade',r'\[files\.pkg\.(refused|installed)\] ([^\n]*)\n')
+  assert m[1]=='installed' and 'version=1.1 program=chello upgrade=1' in m[2],m[0]
+  do('pkg upgrade',r'\[files\.pkg\.locate\] name= found=0\n')
+  out['store']='refresh, search, get, upgrade'
   text=t();assert 'KERNEL PANIC' not in text and 'KERNEL PAGE FAULT' not in text
   print({'ok':True,**out})
  finally:

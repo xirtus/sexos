@@ -8,7 +8,10 @@
 //!   pkg list               installed packages and what each was allowed
 //!   pkg trust KEY          trust packages signed by this publisher key
 //!   pkg allow|deny PROGRAM network|microphone   change an answer
-//!   pkg search|get|upgrade see `store_command`
+//!   pkg refresh [URL]      download and check the store's signed catalog (URL is kept)
+//!   pkg search WORDS       find packages in the catalog
+//!   pkg get NAME           download and install one from the store
+//!   pkg upgrade            download and install every newer version the catalog has
 //!
 //! The first run of a program whose package asks for the network stops to ask the person.
 //! The answer is kept; a "no" runs it without the network, so its network calls are refused.
@@ -24,8 +27,13 @@ use sex_pdx::package::DOWNLOAD;
 enum Stage { Idle, Fetch, Ask, Wait, Answer, Consent }
 #[derive(Clone, Copy)]
 struct Held { ticket: u32, flags: u64, name: [u8; 16], len: usize, open: u32, allowed: u32 }
-pub struct Pkg { stage: Stage, op: u64, arg: [u8; 512], arg_len: usize, length: u64, held: Option<Held>, then_run: bool }
-pub static mut PKG: Pkg = Pkg { stage: Stage::Idle, op: 0, arg: [0; 512], arg_len: 0, length: 0, held: None, then_run: false };
+/// One step of a longer job: a download ("URL PATH") or a Files package request.
+#[derive(Clone, Copy)]
+struct Act { fetch: bool, op: u64, a: [u8; 600], len: usize }
+const NO_ACT: Act = Act { fetch: false, op: 0, a: [0; 600], len: 0 };
+const PLAN_MAX: usize = 24;
+pub struct Pkg { stage: Stage, op: u64, arg: [u8; 512], arg_len: usize, length: u64, held: Option<Held>, then_run: bool, plan: [Act; PLAN_MAX], plan_len: usize, plan_at: usize }
+pub static mut PKG: Pkg = Pkg { stage: Stage::Idle, op: 0, arg: [0; 512], arg_len: 0, length: 0, held: None, then_run: false, plan: [NO_ACT; PLAN_MAX], plan_len: 0, plan_at: 0 };
 
 struct Text { buf: [u8; 160], len: usize }
 impl core::fmt::Write for Text {
@@ -62,15 +70,10 @@ impl Pkg {
             b"install" | b"check" if !rest.is_empty() => {
                 let op = if sub == b"install" { p::INSTALL } else { p::CHECK };
                 if rest.starts_with(b"https://") || rest.starts_with(b"http://") {
-                    let mut line = [0u8; 700];
-                    if rest.len() + 1 + DOWNLOAD.len() > line.len() { sb.push(b"pkg: address too long"); return; }
-                    line[..rest.len()].copy_from_slice(rest);
-                    line[rest.len()] = b' ';
-                    line[rest.len() + 1..rest.len() + 1 + DOWNLOAD.len()].copy_from_slice(DOWNLOAD);
-                    self.queue(op, DOWNLOAD, 0);
-                    self.stage = Stage::Fetch;
-                    unsafe { FETCH.start(&line[..rest.len() + 1 + DOWNLOAD.len()], sb, |p, o| { let k = p.len(); if k > o.len() { return None; } o[..k].copy_from_slice(p); Some(k) }); }
-                    if unsafe { !FETCH.busy() } { self.stage = Stage::Idle; sb.push(b"pkg: the download could not start"); }
+                    self.plan_len = 0; self.plan_at = 0;
+                    if !self.push_fetch(rest, b"", DOWNLOAD) { sb.push(b"pkg: address too long"); return; }
+                    self.push_files(op, DOWNLOAD);
+                    self.advance(sb);
                     return;
                 }
                 let mut path = [0u8; 512];
@@ -80,6 +83,21 @@ impl Pkg {
             b"remove" | b"uninstall" if !rest.is_empty() => self.queue(p::REMOVE, rest, 0),
             b"list" | b"" => self.queue(p::LIST, b"", 0),
             b"trust" if !rest.is_empty() => self.queue(p::TRUST, rest, 0),
+            // The store: a signed catalog of packages at a folder URL.
+            b"refresh" => {
+                self.plan_len = 0; self.plan_at = 0;
+                if rest.is_empty() { self.queue(p::SOURCE, b"", 0); return; }
+                if !(rest.starts_with(b"https://") || rest.starts_with(b"http://")) || rest.len() > 400 { sb.push(b"Usage: pkg refresh [URL of the store folder]"); return; }
+                let mut url = [0u8; 401];
+                url[..rest.len()].copy_from_slice(rest);
+                let mut n = rest.len();
+                if !rest.ends_with(b"/") { url[n] = b'/'; n += 1; }
+                self.plan_catalog(&url[..n]);
+                self.advance(sb);
+            }
+            b"search" | b"find" => self.queue(p::SEARCH, rest, 0),
+            b"get" if !rest.is_empty() => { self.plan_len = 0; self.plan_at = 0; self.queue(p::LOCATE, rest, 0) }
+            b"upgrade" => { self.plan_len = 0; self.plan_at = 0; self.queue(p::LOCATE, b"", 0) }
             b"allow" | b"deny" => {
                 let mut w = rest.splitn(2, |b| *b == b' ');
                 let (program, grant) = (w.next().unwrap_or(b""), w.next().unwrap_or(b"").trim_ascii());
@@ -90,8 +108,46 @@ impl Pkg {
                 sb.push(b"pkg install FILE|URL   install or upgrade a signed package");
                 sb.push(b"pkg check FILE   pkg remove NAME   pkg list   pkg trust KEY");
                 sb.push(b"pkg allow|deny PROGRAM network|microphone");
+                sb.push(b"pkg refresh [URL]   pkg search WORDS   pkg get NAME   pkg upgrade");
             }
         }
+    }
+    fn push(&mut self, act: Act) -> bool {
+        if self.plan_len == PLAN_MAX { return false; }
+        self.plan[self.plan_len] = act; self.plan_len += 1; true
+    }
+    fn push_fetch(&mut self, base: &[u8], file: &[u8], to: &[u8]) -> bool {
+        let mut a = NO_ACT;
+        a.fetch = true;
+        let n = base.len() + file.len() + 1 + to.len();
+        if n > a.a.len() { return false; }
+        a.a[..base.len()].copy_from_slice(base);
+        a.a[base.len()..base.len() + file.len()].copy_from_slice(file);
+        a.a[base.len() + file.len()] = b' ';
+        a.a[base.len() + file.len() + 1..n].copy_from_slice(to);
+        a.len = n;
+        self.push(a)
+    }
+    fn push_files(&mut self, op: u64, arg: &[u8]) -> bool {
+        let mut a = NO_ACT;
+        a.op = op; a.len = arg.len().min(a.a.len());
+        a.a[..a.len].copy_from_slice(&arg[..a.len]);
+        self.push(a)
+    }
+    fn plan_catalog(&mut self, url: &[u8]) {
+        self.push_fetch(url, b"sexos-store.txt", p::CATALOG_DOWNLOAD);
+        self.push_fetch(url, b"sexos-store.sig", p::SIG_DOWNLOAD);
+        self.push_files(p::CATALOG, url);
+    }
+    /// Starts the job's next step, if any.
+    fn advance(&mut self, sb: &mut Scrollback) {
+        if self.plan_at >= self.plan_len { self.plan_len = 0; self.plan_at = 0; return; }
+        let act = self.plan[self.plan_at];
+        self.plan_at += 1;
+        if !act.fetch { self.queue(act.op, &act.a[..act.len], 0); return; }
+        self.stage = Stage::Fetch;
+        unsafe { FETCH.start(&act.a[..act.len], sb, |p, o| { let k = p.len(); if k > o.len() { return None; } o[..k].copy_from_slice(p); Some(k) }); }
+        if unsafe { !FETCH.busy() } { self.stage = Stage::Idle; self.plan_len = 0; self.plan_at = 0; sb.push(b"pkg: the download could not start"); }
     }
     fn queue(&mut self, op: u64, arg: &[u8], length: u64) {
         let n = arg.len().min(self.arg.len());
@@ -138,8 +194,9 @@ impl Pkg {
             Stage::Idle | Stage::Wait => false,
             Stage::Fetch => {
                 if unsafe { FETCH.busy() } { return false; }
-                if unsafe { FETCH.result } != Some(true) { sb.push(b"pkg: the download failed."); self.stage = Stage::Idle; return true; }
-                self.stage = Stage::Ask;
+                if unsafe { FETCH.result } != Some(true) { sb.push(b"pkg: the download failed."); self.stage = Stage::Idle; self.plan_len = 0; self.plan_at = 0; return true; }
+                self.stage = Stage::Idle;
+                self.advance(sb);
                 false
             }
             Stage::Ask | Stage::Answer => {
@@ -162,6 +219,16 @@ impl Pkg {
                 } else if self.op == p::CONSENT && status == sex_pdx::fs::OK {
                     sb.push(b"Saved. It applies from the program's next run.");
                 }
+                // A store answer names what to download next.
+                if status == sex_pdx::fs::OK && (self.op == p::SOURCE || self.op == p::LOCATE) {
+                    let machine = unsafe { &*core::ptr::addr_of!(crate::fs_commands::PACKAGE_MACHINE) };
+                    let (buf, len) = (machine.0, machine.1);
+                    for url in buf[..len].split(|b| *b == b'\n').filter(|l| !l.is_empty()) {
+                        if self.op == p::SOURCE { self.plan_catalog(url); }
+                        else { self.push_fetch(url, b"", DOWNLOAD); self.push_files(p::INSTALL, DOWNLOAD); }
+                    }
+                }
+                self.advance(sb);
                 true
             }
         }

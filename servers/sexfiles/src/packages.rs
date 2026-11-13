@@ -76,6 +76,10 @@ pub fn note(fs: &mut F, program: &[u8]) -> Option<p::Note> {
 
 struct Report<'a> { out: &'a mut [u8], n: usize }
 impl Report<'_> {
+    fn machine(&mut self, s: &str) {
+        if self.n < self.out.len() { self.out[self.n] = p::MACHINE; self.n += 1; }
+        self.line(s);
+    }
     fn line(&mut self, s: &str) {
         for b in s.bytes().chain(core::iter::once(b'\n')) { if self.n < self.out.len() { self.out[self.n] = b; self.n += 1; } }
     }
@@ -98,10 +102,14 @@ pub fn handle(fs: &mut F, op: u64, arg: &[u8], length: u64, out: &mut [u8]) -> (
         p::LIST => list(fs, &mut r),
         p::TRUST => trust(fs, arg, &mut r),
         p::CONSENT => consent(fs, arg, length, &mut r),
+        p::CATALOG => catalog(fs, arg, &mut r),
+        p::SEARCH => search(fs, arg, &mut r),
+        p::LOCATE => locate(fs, arg, &mut r),
+        p::SOURCE => { match read_all(fs, &store_file("source"), 1024) { Ok(u) => { r.machine(core::str::from_utf8(&u).unwrap_or("")); w::OK } Err(_) => { r.line("No store set. Use: pkg refresh URL"); w::NOT_FOUND } } }
         _ => w::INVALID,
     };
     // A change is all or nothing: commit it, or go back to before it.
-    if status == w::OK && matches!(op, p::INSTALL | p::REMOVE | p::TRUST | p::CONSENT) {
+    if status == w::OK && matches!(op, p::INSTALL | p::REMOVE | p::TRUST | p::CONSENT | p::CATALOG) {
         if let Err(e) = fs.commit() { let _ = fs.rollback(); r.line(&format!("The disk failed while saving ({e:?}). Nothing changed.")); return (w::IO, r.n as u32); }
     } else if fs.has_changes() { let _ = fs.rollback(); }
     (status, r.n as u32)
@@ -274,5 +282,60 @@ fn consent(fs: &mut F, arg: &[u8], length: u64, r: &mut Report) -> u8 {
     if crate::fs_service::writes_pending() { if fs.commit().is_err() { let _ = fs.rollback(); return w::IO; } }
     if write_file(fs, &record(program, "consent"), &text[..k]).is_err() { return w::IO; }
     sex_pdx::serial_record!("[files.pkg.consent] program={} answered={} allowed={}", program, answered_all, allowed_all);
+    w::OK
+}
+
+fn store_file(leaf: &str) -> Vec<u8> { format!("{}/{}", core::str::from_utf8(p::ROOT).unwrap(), leaf).into_bytes() }
+fn kept_catalog(fs: &mut F) -> Option<Vec<sex_pkg::index::Item>> {
+    let text = read_all(fs, &store_file("catalog.txt"), sex_pkg::index::MAX_BYTES).ok()?;
+    sex_pkg::index::parse(core::str::from_utf8(&text).ok()?).ok()
+}
+
+fn catalog(fs: &mut F, url: &[u8], r: &mut Report) -> u8 {
+    let text = read_all(fs, p::CATALOG_DOWNLOAD, sex_pkg::index::MAX_BYTES);
+    let sig = read_all(fs, p::SIG_DOWNLOAD, 512);
+    let _ = fs.remove_path(p::CATALOG_DOWNLOAD);
+    let _ = fs.remove_path(p::SIG_DOWNLOAD);
+    let (Ok(text), Ok(sig)) = (text, sig) else { r.line("The catalog did not download."); let _ = fs.commit(); return w::NOT_FOUND };
+    let keys = trusted(fs);
+    let items = match sex_pkg::index::verify(&text, sig.trim_ascii(), &keys) { Ok(i) => i, Err(e) => { let _ = fs.commit(); return refused(r, e.why()) } };
+    let url = core::str::from_utf8(url).unwrap_or("");
+    if !(url.starts_with("https://") || url.starts_with("http://")) || !url.ends_with('/') { return refused(r, "A store is a folder URL ending in /."); }
+    if write_file(fs, &store_file("catalog.txt"), &text).is_err() || write_file(fs, &store_file("source"), url.as_bytes()).is_err() { r.line("The disk failed."); return w::IO; }
+    sex_pdx::serial_record!("[files.pkg.catalog] packages={}", items.len());
+    r.line(&format!("Store catalog: {} packages. Find some with: pkg search WORDS", items.len()));
+    w::OK
+}
+
+fn search(fs: &mut F, query: &[u8], r: &mut Report) -> u8 {
+    let Some(items) = kept_catalog(fs) else { r.line("No store catalog yet. Get one with: pkg refresh URL"); return w::NOT_FOUND };
+    let have = installed(fs);
+    let hits = sex_pkg::index::search(&items, core::str::from_utf8(query).unwrap_or(""));
+    for i in &hits {
+        let mark = match have.iter().find(|(_, m)| m.name == i.name) { Some((_, m)) if m.version < i.version => format!("  (installed {}, newer here)", m.version), Some(_) => "  (installed)".into(), None => String::new() };
+        let grants = if i.grants == 0 { String::new() } else { format!("  asks for: {}", sex_pkg::index::line(i).split(" grants=").nth(1).and_then(|g| g.split(' ').next()).unwrap_or("")) };
+        r.line(&format!("{} {}  {}{}{}", i.name, i.version, i.summary, grants, mark));
+    }
+    if hits.is_empty() { r.line("Nothing matches."); }
+    sex_pdx::serial_record!("[files.pkg.search] hits={}", hits.len());
+    w::OK
+}
+
+fn locate(fs: &mut F, name: &[u8], r: &mut Report) -> u8 {
+    let Some(items) = kept_catalog(fs) else { r.line("No store catalog yet. Get one with: pkg refresh URL"); return w::NOT_FOUND };
+    let Ok(source) = read_all(fs, &store_file("source"), 1024) else { return w::NOT_FOUND };
+    let source = String::from_utf8(source).unwrap_or_default();
+    let name = core::str::from_utf8(name).unwrap_or("");
+    let have = installed(fs);
+    let mut n = 0;
+    for i in &items {
+        let wanted = if name.is_empty() { have.iter().any(|(_, m)| m.name == i.name && m.version < i.version) } else { i.name == name };
+        if !wanted { continue; }
+        r.line(&format!("Getting {} {} ({} KiB)...", i.name, i.version, i.bytes.div_ceil(1024)));
+        r.machine(&format!("{}{}", source, i.file));
+        n += 1;
+    }
+    sex_pdx::serial_record!("[files.pkg.locate] name={} found={}", name, n);
+    if n == 0 { r.line(if name.is_empty() { "Everything is up to date." } else { "The store has no package by that name." }); return if name.is_empty() { w::OK } else { w::NOT_FOUND }; }
     w::OK
 }

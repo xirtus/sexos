@@ -23,6 +23,20 @@ pub const TRUST: u64 = 3;
 pub const CONSENT: u64 = 4;
 /// Check a package without installing it: the report says what it is and asks for.
 pub const CHECK: u64 = 5;
+/// A store catalog was downloaded to [`CATALOG_DOWNLOAD`] and [`SIG_DOWNLOAD`]: check its
+/// signature, keep it, and remember the path (the store's folder URL) as the source.
+pub const CATALOG: u64 = 6;
+/// Packages in the kept catalog matching every word of the path.
+pub const SEARCH: u64 = 7;
+/// Where to download packages from: the path names one package, or is empty for every
+/// installed package the catalog has newer. Report lines starting with [`MACHINE`] hold URLs.
+pub const LOCATE: u64 = 8;
+/// The saved store folder URL, as one [`MACHINE`] line.
+pub const SOURCE: u64 = 9;
+/// Report lines for Spindle rather than the person start with this byte.
+pub const MACHINE: u8 = 1;
+pub const CATALOG_DOWNLOAD: &[u8] = b"/download.catalog";
+pub const SIG_DOWNLOAD: &[u8] = b"/download.catalog.sig";
 
 pub const ROOT: &[u8] = b"/system/packages";
 pub const TRUSTED: &[u8] = b"/system/packages/trusted";

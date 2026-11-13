@@ -13,6 +13,8 @@ pub struct Client { sent_at: u64, cmd: Option<Cmd>, seq: u32, kind: u8, path_len
 pub static mut UPDATE_STATUS: Option<u8> = None;
 /// How Files answered the last package request.
 pub static mut PACKAGE_STATUS: Option<u8> = None;
+/// The last package report's lines meant for Spindle (URLs), newline separated.
+pub static mut PACKAGE_MACHINE: ([u8; 4096], usize) = ([0; 4096], 0);
 pub static mut FS: Client = Client { sent_at: 0, cmd: None, seq: 0, kind: 0, path_len: 0, offset: 0, length: 0, sent: false, cwd: [0; CWD_MAX], cwd_len: 0, carry: [0; 160], carry_len: 0, shown: 0, data_len: 0, bare: [0; 16], bare_len: 0 };
 
 fn region() -> Option<&'static mut [u8]> {
@@ -260,7 +262,14 @@ impl Client {
         if cmd == Cmd::Package {
             self.cmd = None;
             let bytes = &region[data_at..data_at + (value as usize).min(w::DATA_MAX)];
+            let machine = unsafe { &mut *core::ptr::addr_of_mut!(PACKAGE_MACHINE) };
+            machine.1 = 0;
             for line in bytes.split(|b| *b == b'\n').filter(|l| !l.is_empty()) {
+                if line[0] == sex_pdx::package::MACHINE {
+                    let l = &line[1..];
+                    if machine.1 + l.len() + 1 <= machine.0.len() { machine.0[machine.1..machine.1 + l.len()].copy_from_slice(l); machine.0[machine.1 + l.len()] = b'\n'; machine.1 += l.len() + 1; }
+                    continue;
+                }
                 sex_pdx::serial_record!("[spindle.pkg.line] {}", shown(line));
                 for part in line.chunks(96) { sb.push(part); }
             }
