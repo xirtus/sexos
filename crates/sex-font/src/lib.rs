@@ -8,6 +8,7 @@
 #![no_std]
 
 pub mod cache;
+pub mod fallback;
 pub mod raster;
 
 pub use ttf_parser::GlyphId;

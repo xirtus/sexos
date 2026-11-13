@@ -38,12 +38,24 @@ fn fonts() -> Option<&'static (Font<'static>, Font<'static>)> {
 fn mono() -> Option<&'static Font<'static>> { fonts().map(|f| &f.0) }
 fn sans() -> Option<&'static Font<'static>> { fonts().map(|f| &f.1) }
 
-/// Geist Mono coverage for one `w` x `h` grid cell, or `None` if Geist lacks the
-/// scalar (callers fall back to the bitmap font) or the cell is beyond the cache.
+static mut FALLBACK: Option<sex_font::fallback::Fallback<'static>> = None;
+/// Noto Sans Mono, Symbols 2, CJK and the emoji, parsed on the first character Geist lacks.
+fn fallback() -> Option<&'static sex_font::fallback::Fallback<'static>> {
+    let slot = unsafe { &mut *core::ptr::addr_of_mut!(FALLBACK) };
+    if slot.is_none() { *slot = sex_font::fallback::Fallback::embedded(); }
+    slot.as_ref()
+}
+
+/// Coverage for one `w` x `h` grid cell: Geist Mono, else the first fallback font
+/// that has the scalar (Cyrillic, Greek, CJK, emoji, symbols). `None` if none has it
+/// (callers fall back to the bitmap font) or the cell is beyond the cache.
 pub fn mono_cell(scalar: u32, w: usize, h: usize) -> Option<&'static [u8]> {
     if w == 0 || h == 0 || w > MAX_W || h > MAX_H || scalar == 9 || scalar == 10 { return None; }
     let key = Key { font: MONO, scalar, size: 0, phase: 0, w: w as u8, h: h as u8 };
-    cache().get(key, |out| mono().is_some_and(|font| sex_font::draw_cell(font, scalar, w, h, acc(), out)))
+    cache().get(key, |out| {
+        mono().is_some_and(|font| sex_font::draw_cell(font, scalar, w, h, acc(), out))
+            || fallback().is_some_and(|f| f.draw_cell(scalar, w, h, acc(), out))
+    })
 }
 
 /// Window titles: Geist Sans at 17 px on an 18-pixel line, baseline 14 px down.

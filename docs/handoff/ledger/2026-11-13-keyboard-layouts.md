@@ -32,3 +32,15 @@ is not delivered, Super+Ctrl+Space is the layout action, wire round-trips with t
 
 **Next.** Shortcuts still follow key positions (Ctrl+Z is the key labelled Y on DE); the chosen
 layouts come from Settings once B1 lands (A10); Spindle and the launcher still read US.
+
+## Fallback fonts: Cyrillic, Greek, CJK, emoji, symbols (A6, 2026-11-13)
+
+Display's text cells drew only what Geist or the old bitmap font has. Now `glyphs::mono_cell`
+tries, after Geist Mono: Noto Sans Mono (Latin extended, Greek, Cyrillic, IPA), the emoji of
+Noto Color Emoji (1,439, as shaded 36x36 coverage tinted like text), Noto Sans Symbols 2, then
+Noto Sans CJK SC cut to GB2312 + JIS X 0208 + KS X 1001 + Big5 level 1 (about 14,000
+characters). `crates/sex-font/src/fallback.rs`; fonts in `assets/fonts/noto/` (OFL 1.1), built by
+`scripts/gen_fallback_fonts.py` from Ubuntu's Noto packages. Display grows by about 5 MB.
+Wide characters are fitted into one cell (the grid is one cell per scalar); double-width cells
+and fallback for title/UI text (Geist Sans) are next. Host: `cargo test -p sex-font --test
+fallback` (Ж 日 あ 한 國 😀 👍 ❤ 🚀 ♞ ⣿ each come from the right font with ink at three cell sizes).
