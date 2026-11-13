@@ -15,6 +15,7 @@ extern crate alloc;
 
 mod jobs;
 mod search;
+mod thumbs;
 
 use alloc::format;
 use alloc::string::String;
@@ -25,6 +26,7 @@ use sex_app::{Event, Nav, Window};
 use sex_pdx::fs as w;
 use jobs::{Job, Kind, Outcome};
 use search::{Index, Search};
+use thumbs::Thumbs;
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
@@ -55,6 +57,7 @@ const KEY_S: u8 = 0x1F;
 const KEY_E: u8 = 0x12;
 const KEY_I: u8 = 0x17;
 const KEY_F: u8 = 0x21;
+const KEY_G: u8 = 0x22;
 
 /// One step Ctrl+Z can take back.
 enum Undo { Moved { from: Vec<u8>, to: Vec<u8> }, Trashed { from: Vec<u8>, to: Vec<u8>, info: Vec<u8> }, Copied { to: Vec<u8> }, Made { path: Vec<u8> } }
@@ -94,6 +97,10 @@ struct App {
     search: Option<Search>,
     /// The listing shows search results for this, not the folder.
     found: Option<Vec<u8>>,
+    /// Ctrl+G: the folder as a grid of thumbnails.
+    thumbs: Thumbs,
+    /// The window shows pixels (the grid), not text.
+    showing_pixels: bool,
 }
 
 /// The path as Files knows a granted one: `@/absolute/path`.
@@ -154,6 +161,7 @@ impl App {
         }
         self.cursor = self.cursor.min(self.entries.len().saturating_sub(1));
         sex_pdx::serial_record!("[files.app.list] dir={} count={}", shown(&self.cwd), self.entries.len());
+        self.thumbs.folder(&self.cwd, &self.entries);
     }
     fn go(&mut self, window: &mut Window, dir: Vec<u8>) {
         self.cwd = dir; self.cursor = 0; self.top = 0; self.load(window);
@@ -200,6 +208,21 @@ impl App {
     fn select(&mut self, name: &[u8]) { if let Some(i) = self.entries.iter().position(|e| e.name == name) { self.cursor = i; } }
 
     fn render(&mut self, window: &mut Window) {
+        if self.thumbs.on && self.input.is_none() && self.search.is_none() && self.question.is_none() {
+            let mut head = format!("Files  {}", shown(&self.cwd));
+            if let Some(q) = &self.found { head = format!("Found {} for \"{}\" in {}", self.entries.len(), shown(q), shown(&self.cwd)); }
+            let mut foot = String::new();
+            if let Some(job) = &self.job { foot.push_str(&job.progress()); foot.push_str("  "); }
+            if !self.status.is_empty() { foot.push_str(&self.status); foot.push_str("  "); }
+            if self.thumbs.busy() { foot.push_str("Making thumbnails...  "); }
+            foot.push_str("Arrows move  Enter open  Ctrl+G list");
+            let mut top = self.top;
+            self.thumbs.draw(window, &head, &foot, &self.cwd, &self.entries, self.cursor, &mut top);
+            self.top = top;
+            self.showing_pixels = true;
+            return;
+        }
+        if self.showing_pixels { window.show_pixels(0, 0); self.showing_pixels = false; self.top = 0; }
         let mut t = String::new();
         if let Some(sr) = &self.search {
             t.push_str(&format!("Searching {} for \"{}\": {} found in {} files so far. Esc stops.\n\n", shown(&sr.base), shown(&sr.query), sr.results.len(), sr.looked));
@@ -228,7 +251,7 @@ impl App {
             t.push_str(&format!("{}: {}|   (Enter confirms, Esc cancels)\n", label, shown(text)));
         } else if !self.status.is_empty() { t.push_str(&self.status); t.push('\n'); }
         if let Some(job) = &self.job { t.push_str(&job.progress()); t.push('\n'); }
-        t.push_str("Enter open  Backspace up  F2 rename  Ctrl+I size and checksum\nCtrl+C/X/V copy, cut, paste  Ctrl+N folder\nDel trash  Shift+Del delete for good  Ctrl+T show trash\nIn the trash: Ctrl+R restore  Ctrl+E empty\nOn a stick: Ctrl+E eject  Ctrl+D disks  Ctrl+Z undo  Ctrl+H home\nCtrl+F search names and words in files\n");
+        t.push_str("Enter open  Backspace up  F2 rename  Ctrl+I size and checksum\nCtrl+C/X/V copy, cut, paste  Ctrl+N folder\nDel trash  Shift+Del delete for good  Ctrl+T show trash\nIn the trash: Ctrl+R restore  Ctrl+E empty\nOn a stick: Ctrl+E eject  Ctrl+D disks  Ctrl+Z undo  Ctrl+H home\nCtrl+F search names and words in files  Ctrl+G thumbnails\n");
         window.show(t.as_bytes());
     }
 
@@ -250,7 +273,7 @@ impl App {
     /// One piece of the background job. True when the window should be drawn again.
     fn work(&mut self, window: &mut Window) -> bool {
         if self.search.is_some() { return self.search_step(window); }
-        let Some(job) = self.job.as_mut() else { return false };
+        let Some(job) = self.job.as_mut() else { return self.thumbs.on && self.thumbs.step(window) };
         match job.step(window) {
             Outcome::Running => {
                 let pct = job.percent();
@@ -581,6 +604,11 @@ impl App {
                 KEY_E => self.empty_trash(window),
                 KEY_I => self.info(window),
                 KEY_F => self.input = Some((Input::Search, Vec::new())),
+                KEY_G => {
+                    self.thumbs.on = !self.thumbs.on;
+                    sex_pdx::serial_record!("[files.app.grid] on={} dir={}", self.thumbs.on as u8, shown(&self.cwd));
+                    if self.thumbs.on { self.thumbs.folder(&self.cwd, &self.entries); }
+                }
                 KEY_H => { let r = self.root.clone(); self.go(window, r); }
                 KEY_D => self.go(window, w::MEDIA.to_vec()),
                 KEY_S => match self.question.as_ref().map(|q| q.mode) {
@@ -591,6 +619,18 @@ impl App {
                 _ => {}
             }
             return;
+        }
+        // In the grid, arrows move across and down by whole rows.
+        if self.thumbs.on && !self.entries.is_empty() {
+            let cols = Thumbs::columns(window.size().0);
+            let last = self.entries.len() - 1;
+            match sex_app::nav(key) {
+                Some(Nav::Left) => { self.cursor = self.cursor.saturating_sub(1); return; }
+                Some(Nav::Right) => { self.cursor = (self.cursor + 1).min(last); return; }
+                Some(Nav::Up) => { self.cursor = self.cursor.saturating_sub(cols); return; }
+                Some(Nav::Down) => { self.cursor = (self.cursor + cols).min(last); return; }
+                _ => {}
+            }
         }
         match (key.code, sex_app::nav(key)) {
             (_, Some(Nav::Up)) => self.cursor = self.cursor.saturating_sub(1),
@@ -659,7 +699,7 @@ pub extern "C" fn _start() -> ! {
     };
     let portal = root == b"/";
     let mut app = App { cwd: root.clone(), root, entries: Vec::new(), cursor: 0, top: 0, clip: None, undo: Vec::new(), input: None, status: String::new(), question: None, portal,
-                        job: None, job_undo: None, job_select: None, last_drawn: 0, last_pct: 0, confirm: None, origins: Vec::new(), watching: None, last_look: 0, index: Index::new(), search: None, found: None };
+                        job: None, job_undo: None, job_select: None, last_drawn: 0, last_pct: 0, confirm: None, origins: Vec::new(), watching: None, last_look: 0, index: Index::new(), search: None, found: None, thumbs: Thumbs::new(), showing_pixels: false };
     let start = app.root.clone();
     app.go(&mut window, start);
     app.poll_questions(&mut window);
@@ -667,7 +707,7 @@ pub extern "C" fn _start() -> ! {
     sex_pdx::serial_record!("[files.app.ready] target={} task={} root={} portal={}", window.target, window.task, shown(&app.root), portal as u8);
     loop {
         // While a job runs, look for keys between its pieces instead of sleeping.
-        let event = if app.job.is_some() || app.search.is_some() {
+        let event = if app.job.is_some() || app.search.is_some() || app.thumbs.busy() {
             match window.poll() { Some(e) => Some(e), None => { if app.work(&mut window) { app.render(&mut window); } continue; } }
         } else { window.next_within(400) };
         match event {
@@ -677,6 +717,7 @@ pub extern "C" fn _start() -> ! {
                 let _ = files::sync(&mut window); sex_pdx::serial_record!("[files.app.closed]"); window.close()
             }
             Some(Event::Key(key)) => { app.key(&mut window, key); app.render(&mut window); }
+            Some(Event::Resize { .. }) if app.thumbs.on => app.render(&mut window),
             Some(_) => {}
             // Quiet: another program may be asking the person for a file.
             None => {

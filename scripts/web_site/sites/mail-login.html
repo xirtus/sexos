@@ -1,0 +1,21 @@
+<!doctype html>
+<!-- A webmail sign-in page: username and password, posted to the server, which sets a
+     session cookie and redirects to the inbox. The fields sit at the top so the gate
+     can click them: each is 26 px tall. -->
+<html lang="en"><head><meta charset="utf-8"><title>Webmail: sign in</title>
+<style>
+body { margin: 0; font: 14px sans-serif; background: #f2f4f8; }
+form { margin: 0; }
+input { display: block; margin: 0; width: 240px; height: 20px; }
+.box { margin-top: 24px; padding: 16px; max-width: 320px; background: #fff; border: 1px solid #d6dbe4; border-radius: 6px; }
+.box h1 { font-size: 20px; margin: 0 0 8px; }
+.err { color: #b00020; }
+</style></head>
+<body>
+<form method="post" action="/mail/login">
+<input name="_user" id="user" autocomplete="username" placeholder="Username" required>
+<input name="_pass" id="pass" type="password" autocomplete="current-password" placeholder="Password" required>
+<input type="hidden" name="_token" value="f00dfeed">
+</form>
+<div class="box"><h1>Sign in to Webmail</h1><p>Use your mail account. Press Enter in the password field to sign in.</p>ERROR</div>
+</body></html>

@@ -23,6 +23,7 @@ mod recording_journal;
 mod recording_runtime;
 mod installer;
 mod updater;
+mod packages;
 mod volumes;
 mod document;
 mod document_journal;

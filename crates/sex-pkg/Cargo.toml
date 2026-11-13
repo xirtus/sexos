@@ -1,6 +1,10 @@
 [package]
 name = "sex-pkg"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "SexOS packages: signed archives of a program, its data and the grants it asks for"
 
 [dependencies]
+sha2 = { version = "0.10", default-features = false }
+ed25519-compact = { version = "2.6", default-features = false }

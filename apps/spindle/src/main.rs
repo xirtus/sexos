@@ -88,6 +88,7 @@ mod capture_command;
 mod record_command;
 mod fetch_command;
 mod update_command;
+mod pkg_command;
 mod network_probe;
 static mut NETWORK_PROBE:network_probe::Client=network_probe::Client::new();
 static mut NETWORK_GENERATION:u64=0;
@@ -790,6 +791,8 @@ impl core::fmt::Write for Cursor<'_> {
 }
 
 fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut EventRing) -> bool {
+    // A package's first run waits for the person's yes or no.
+    if unsafe { pkg_command::PKG.answer(line, sb) } { return true; }
     let (raw_cmd, args) = tokenize(line);
     let mut cmd = raw_cmd;
     if raw_cmd == b"d" {
@@ -985,7 +988,9 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             true
         }
         // `+net` first lets this run reach the network. Words after the name are its arguments.
-        b"run" if args.contains(&b'/') || args.contains(&b' ') || args.starts_with(b"+net") => {
+        // Every run goes through Files, so a package's grants are checked; with no
+        // filesystem a bare name still reaches the disk program store.
+        b"run" if !args.is_empty() => {
             let (flags, rest) = match args.strip_prefix(b"+net") { Some(r) => (sex_pdx::program_store::RUN_NETWORK, r.trim_ascii_start()), None => (0, args) };
             let mut words = rest.splitn(2, |b| *b == b' ');
             let (target, program_args) = (words.next().unwrap_or(b""), words.next().unwrap_or(b"").trim_ascii_start());
@@ -1446,6 +1451,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
         b"ls" if unsafe{fs_commands::FS.submit_line(cmd,args,sb)} => true,
         b"fetch" => {unsafe{let fs=&*core::ptr::addr_of!(fs_commands::FS);fetch_command::FETCH.start(args,sb,|p,o|fs.join(p,o));}true},
         b"update" => {unsafe{update_command::UPDATE.start(args,sb);}true},
+        b"pkg" => {unsafe{pkg_command::PKG.command(args,sb);}true},
         b"cd"|b"pwd"|b"mkdir"|b"rm"|b"mv"|b"cat"|b"write"|b"append"|b"touch"|b"df"|b"install"|b"mount"|b"unmount" => unsafe{fs_commands::FS.submit_line(cmd,args,sb)},
         // The Files app, given a folder (the whole filesystem by default) to look after.
         b"files" => {
@@ -2778,7 +2784,8 @@ pub extern "C" fn _start() -> ! {
         if unsafe{fs_commands::FS.expired(sex_pdx::get_ticks(),sb)}{unsafe{content_render(&line,sb);}}
         if unsafe{fetch_command::FETCH.step(sb)}{unsafe{content_render(&line,sb);}}
         if unsafe{update_command::UPDATE.step(sb)}{unsafe{content_render(&line,sb);}}
-        let msg=if registration_pending || presentation_pending || storage_owner!=0 || unsafe{DISPLAY_IO.pending() || HISTORY_STATUS.pending() || NETWORK_PROBE.busy()} || unsafe{fs_commands::FS.busy()||fetch_command::FETCH.busy()||update_command::UPDATE.busy()} || unsafe{capture_command::CAPTURE.busy()||record_command::RECORD.sending()}{
+        if unsafe{pkg_command::PKG.step(sb)}{unsafe{content_render(&line,sb);}}
+        let msg=if registration_pending || presentation_pending || storage_owner!=0 || unsafe{DISPLAY_IO.pending() || HISTORY_STATUS.pending() || NETWORK_PROBE.busy()} || unsafe{fs_commands::FS.busy()||fetch_command::FETCH.busy()||update_command::UPDATE.busy()||pkg_command::PKG.busy()} || unsafe{capture_command::CAPTURE.busy()||record_command::RECORD.sending()}{
             match sex_pdx::pdx_try_listen_raw(0){Some(msg)=>msg,None=>{sex_pdx::sys_yield();continue}}
         }else{sex_pdx::pdx_listen_raw(0)};
         let capture_lines=sb.total_lines;

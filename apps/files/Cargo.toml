@@ -12,4 +12,6 @@ path = "src/main.rs"
 sex-pdx = { path = "../../crates/sex-pdx" }
 sex-app = { path = "../../crates/sex-app" }
 sex-config = { path = "../../crates/sex-config" }
+sex-image = { path = "../../crates/sex-image" }
+sex-font = { path = "../../crates/sex-font" }
 sha2 = { version = "=0.10.9", default-features = false, features = ["force-soft"] }

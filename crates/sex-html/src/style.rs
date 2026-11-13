@@ -165,6 +165,15 @@ pub struct Style {
     pub vertical_super: i8,
     /// `transform: translate(..)` (percentages are of the box's own size).
     pub translate: Option<(Len, Len)>,
+    /// The linear part of `transform` (rotate, scale, skew, matrix) and of the `rotate`
+    /// and `scale` properties: x' = a x + c y, y' = b x + d y as [a, b, c, d], about
+    /// `transform-origin`. None when it is the identity.
+    pub linear: Option<[f32; 4]>,
+    /// `transform-origin`, of the border box.
+    pub origin: (Len, Len),
+    /// The first `font-family` that is a web font (`@font-face`) the page loaded, as
+    /// `1 +` its index among [`set_web_fonts`]'s families; 0 for the built-in faces.
+    pub family: u16,
     /// The first outer `box-shadow`: x, y, blur, spread and colour.
     pub shadow: Option<(i32, i32, i32, i32, u32)>,
     /// The first of `animation`.
@@ -240,6 +249,9 @@ impl Style {
             transition_lists: (Vec::new(), Vec::new(), Vec::new(), Vec::new()),
             shadow: None,
             translate: None,
+            linear: None,
+            origin: (Len::Pct(5000), Len::Pct(5000)),
+            family: 0,
             vertical_super: 0,
         }
     }
@@ -252,6 +264,7 @@ impl Style {
         s.bold = parent.bold;
         s.italic = parent.italic;
         s.mono = parent.mono;
+        s.family = parent.family;
         s.line_height = parent.line_height;
         s.align = parent.align;
         s.white_space = parent.white_space;
@@ -558,6 +571,73 @@ fn table_attr<'d>(dom: &'d Dom, mut node: NodeId, name: &str) -> Option<&'d str>
         node = p;
     }
     None
+}
+
+/// A lock for the web font list, which style and layout read and the browser sets.
+struct Shared<T>(core::cell::UnsafeCell<T>, core::sync::atomic::AtomicBool);
+// SAFETY: every access holds the flag.
+unsafe impl<T: Send> Sync for Shared<T> {}
+impl<T> Shared<T> {
+    fn with<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
+        use core::sync::atomic::Ordering;
+        while self.1.compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() { core::hint::spin_loop(); }
+        // SAFETY: the flag is held.
+        let r = f(unsafe { &mut *self.0.get() });
+        self.1.store(false, Ordering::Release);
+        r
+    }
+}
+
+/// Web fonts by family (lowercased): each face's weight, style and font number.
+static WEB_FONTS: Shared<Vec<(String, Vec<(bool, bool, u8)>)>> = Shared(core::cell::UnsafeCell::new(Vec::new()), core::sync::atomic::AtomicBool::new(false));
+
+/// The page's web fonts: (family, bold, italic, the painter's font number) for each
+/// `@font-face` that loaded. Styles computed after this see them.
+pub fn set_web_fonts(faces: Vec<(String, bool, bool, u8)>) {
+    let mut families: Vec<(String, Vec<(bool, bool, u8)>)> = Vec::new();
+    for (family, bold, italic, face) in faces {
+        let family = family.to_ascii_lowercase();
+        match families.iter_mut().find(|f| f.0 == family) {
+            Some(f) => f.1.push((bold, italic, face)),
+            None => families.push((family, alloc::vec![(bold, italic, face)])),
+        }
+    }
+    WEB_FONTS.with(|w| *w = families);
+}
+
+/// Adds web fonts to those already known (pages in other tabs keep theirs, so a
+/// family's number never changes once given). (family, bold, italic, font number).
+pub fn add_web_fonts(faces: Vec<(String, bool, bool, u8)>) {
+    WEB_FONTS.with(|families| for (family, bold, italic, face) in faces {
+        let family = family.to_ascii_lowercase();
+        match families.iter_mut().find(|f| f.0 == family) {
+            Some(f) => if !f.1.iter().any(|g| g.2 == face) { f.1.push((bold, italic, face)) },
+            None => families.push((family, alloc::vec![(bold, italic, face)])),
+        }
+    });
+}
+
+/// The first family in a `font-family` list that is a loaded web font.
+fn family_of(list: &str) -> u16 {
+    WEB_FONTS.with(|w| {
+        if w.is_empty() { return 0; }
+        for name in css::split_top(list, ',') {
+            let name = name.trim().trim_matches(|c| c == '"' || c == '\'').trim().to_ascii_lowercase();
+            if let Some(i) = w.iter().position(|f| f.0 == name) { return i as u16 + 1; }
+        }
+        0
+    })
+}
+
+/// The web font for `family` nearest the weight and style asked: its number, and
+/// whether it is bold and italic itself (so neither needs drawing in).
+pub fn web_face(family: u16, bold: bool, italic: bool) -> Option<(u8, bool, bool)> {
+    if family == 0 { return None; }
+    WEB_FONTS.with(|w| {
+        let faces = &w.get(family as usize - 1)?.1;
+        let score = |f: &(bool, bool, u8)| (f.0 == bold) as u8 * 2 + (f.1 == italic) as u8;
+        faces.iter().max_by_key(|f| score(f)).map(|f| (f.2, f.0, f.1))
+    })
 }
 
 fn is_mono(family: &str) -> bool {
@@ -1099,6 +1179,51 @@ fn zeroed(v: &str) -> String {
 
 fn round(x: f32) -> f32 { if x >= 0.0 { (x + 0.5) as i64 as f32 } else { (x - 0.5) as i64 as f32 } }
 
+const IDENTITY: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
+
+/// `m` then `n` applied (CSS lists apply right to left, so `transform: A B` is A·B).
+fn mul(m: [f32; 4], n: [f32; 4]) -> [f32; 4] {
+    [m[0] * n[0] + m[2] * n[1], m[1] * n[0] + m[3] * n[1], m[0] * n[2] + m[2] * n[3], m[1] * n[2] + m[3] * n[3]]
+}
+
+/// An angle in radians: deg, rad, grad, turn (a bare 0 too).
+fn angle(v: &str) -> Option<f32> {
+    let v = v.trim();
+    let num = |u: &str| v.strip_suffix(u).and_then(|n| n.trim().parse::<f32>().ok());
+    const PI: f32 = core::f32::consts::PI;
+    num("deg").map(|d| d * PI / 180.0).or_else(|| num("grad").map(|g| g * PI / 200.0)).or_else(|| num("rad").map(|r| r))
+        .or_else(|| num("turn").map(|t| t * 2.0 * PI)).or_else(|| (v == "0").then_some(0.0))
+}
+
+/// sin and cos without a maths library: reduced to [-pi/4, pi/4], then series.
+pub fn sin_cos(a: f32) -> (f32, f32) {
+    const PI: f32 = core::f32::consts::PI;
+    let q = (a / (PI / 2.0) + if a >= 0.0 { 0.5 } else { -0.5 }) as i32;
+    let r = a - q as f32 * (PI / 2.0);
+    let r2 = r * r;
+    let s = r * (1.0 - r2 / 6.0 * (1.0 - r2 / 20.0 * (1.0 - r2 / 42.0 * (1.0 - r2 / 72.0))));
+    let c = 1.0 - r2 / 2.0 * (1.0 - r2 / 12.0 * (1.0 - r2 / 30.0 * (1.0 - r2 / 56.0)));
+    match q.rem_euclid(4) { 0 => (s, c), 1 => (c, -s), 2 => (-s, -c), _ => (-c, s) }
+}
+
+/// One rotate/scale/skew function as a linear map.
+fn linear_fn(name: &str, args: &str) -> Option<[f32; 4]> {
+    let a: Vec<&str> = args.split(',').map(str::trim).filter(|a| !a.is_empty()).collect();
+    let num = |i: usize| a.get(i).and_then(|v| v.strip_suffix('%').map_or_else(|| v.parse::<f32>().ok(), |p| p.parse::<f32>().ok().map(|p| p / 100.0)));
+    let tan = |t: f32| { let (s, c) = sin_cos(t); if c.abs() < 1e-6 { None } else { Some(s / c) } };
+    Some(match name {
+        "rotate" | "rotatez" => { let (s, c) = sin_cos(angle(a.first()?)?); [c, s, -s, c] }
+        "scale" => { let x = num(0)?; [x, 0.0, 0.0, num(1).unwrap_or(x)] }
+        "scale3d" => [num(0)?, 0.0, 0.0, num(1)?],
+        "scalex" => [num(0)?, 0.0, 0.0, 1.0],
+        "scaley" => [1.0, 0.0, 0.0, num(0)?],
+        "skew" => [1.0, a.get(1).and_then(|v| angle(v)).map_or(Some(0.0), tan)?, tan(angle(a.first()?)?)?, 1.0],
+        "skewx" => [1.0, 0.0, tan(angle(a.first()?)?)?, 1.0],
+        "skewy" => [1.0, tan(angle(a.first()?)?)?, 0.0, 1.0],
+        _ => return None,
+    })
+}
+
 fn words(v: &str) -> Vec<&str> {
     let mut out = Vec::new();
     let mut depth = 0;
@@ -1186,7 +1311,7 @@ fn apply(s: &mut Style, d: &Declaration, ctx: &Ctx, font_only: bool) {
         }
         "font-weight" => s.bold = match lv.as_str() { "bold" | "bolder" => true, "normal" | "lighter" => false, n => n.parse::<i32>().map_or(s.bold, |w| w >= 600) },
         "font-style" => s.italic = lv.starts_with("italic") || lv.starts_with("oblique"),
-        "font-family" => s.mono = is_mono(&lv),
+        "font-family" => { s.mono = is_mono(&lv); s.family = family_of(&d.value); }
         "line-height" => {
             s.line_height = if lv == "normal" { 0 } else if let Some(n) = css::parse_number(&lv) {
                 s.font_size * n / 100
@@ -1316,9 +1441,32 @@ fn apply(s: &mut Style, d: &Declaration, ctx: &Ctx, font_only: bool) {
             if let Some(Len::Px(p)) = w.last().and_then(|w| parse_len(w, s, ctx)) { s.gap = p }
             if matches!(d.name.as_str(), "gap" | "grid-gap") { if let Some(Len::Px(p)) = w.first().and_then(|w| parse_len(w, s, ctx)) { s.row_gap = p } }
         }
+        "rotate" | "scale" => {
+            // The individual properties: rotate(1 angle), scale(1 or 2 numbers).
+            let f = if d.name == "rotate" { alloc::format!("rotate({lv})") } else { alloc::format!("scale({})", words(&lv).join(",")) };
+            let (name, args) = f.strip_suffix(')').and_then(|f| f.split_once('(')).unwrap();
+            s.linear = if lv == "none" { None } else { linear_fn(name, args).filter(|m| *m != IDENTITY) };
+        }
+        "transform-origin" => {
+            let w = words(&lv);
+            let side = |w: &str, s: &Style| match w { "left" | "top" => Some(Len::Pct(0)), "center" => Some(Len::Pct(5000)), "right" | "bottom" => Some(Len::Pct(10000)), w => parse_len(w, s, ctx) };
+            let (mut ox, mut oy) = (Len::Pct(5000), Len::Pct(5000));
+            match w.as_slice() {
+                [one] if matches!(*one, "top" | "bottom") => oy = side(one, s).unwrap_or(oy),
+                [one] => ox = side(one, s).unwrap_or(ox),
+                [a, b, ..] => {
+                    // Keywords may come either way round.
+                    let (a, b) = if matches!(*a, "top" | "bottom") || matches!(*b, "left" | "right") { (*b, *a) } else { (*a, *b) };
+                    ox = side(a, s).unwrap_or(ox); oy = side(b, s).unwrap_or(oy);
+                }
+                _ => {}
+            }
+            s.origin = (ox, oy);
+        }
         "transform" | "translate" => {
-            // Translations add up; other transforms are not drawn.
+            // Translations add up; the rest multiplies into the linear part.
             let (mut x, mut y) = (Len::Px(0), Len::Px(0));
+            let mut lin = IDENTITY;
             let add = |a: Len, b: Option<Len>| match (a, b) { (Len::Px(p), Some(Len::Px(q))) => Len::Px(p + q), (a, Some(Len::Px(0))) => a, (Len::Px(0), Some(b)) => b, (Len::Pct(p), Some(Len::Pct(q))) => Len::Pct(p + q), (Len::Px(p), Some(Len::Pct(q))) | (Len::Pct(q), Some(Len::Px(p))) => Len::Mix(p, q), (Len::Mix(p, q), Some(Len::Px(r))) => Len::Mix(p + r, q), (Len::Mix(p, q), Some(Len::Pct(r))) => Len::Mix(p, q + r), (a, _) => a };
             if d.name == "translate" {
                 let w = words(v);
@@ -1332,10 +1480,18 @@ fn apply(s: &mut Style, d: &Declaration, ctx: &Ctx, font_only: bool) {
                         "translate" | "translate3d" => { x = add(x, a.first().copied().flatten()); y = add(y, a.get(1).copied().flatten()); }
                         "translatex" => x = add(x, a.first().copied().flatten()),
                         "translatey" => y = add(y, a.first().copied().flatten()),
+                        "rotate" | "rotatez" | "scale" | "scalex" | "scaley" | "scale3d" | "skew" | "skewx" | "skewy" => {
+                            if let Some(m) = linear_fn(name, args) { lin = mul(lin, m); }
+                        }
                         // The translation part of a 2D or 3D matrix (unitless pixels).
                         "matrix" | "matrix3d" => {
                             let n: Vec<f64> = args.split(',').filter_map(|a| a.trim().parse().ok()).collect();
                             let (tx, ty) = match (name, n.len()) { ("matrix", 6) => (n[4], n[5]), ("matrix3d", 16) => (n[12], n[13]), _ => (0.0, 0.0) };
+                            match (name, n.len()) {
+                                ("matrix", 6) => lin = mul(lin, [n[0] as f32, n[1] as f32, n[2] as f32, n[3] as f32]),
+                                ("matrix3d", 16) => lin = mul(lin, [n[0] as f32, n[1] as f32, n[4] as f32, n[5] as f32]),
+                                _ => {}
+                            }
                             let z = zoom() as f64 / 100.0;
                             x = add(x, Some(Len::Px((tx * z) as i32)));
                             y = add(y, Some(Len::Px((ty * z) as i32)));
@@ -1345,6 +1501,7 @@ fn apply(s: &mut Style, d: &Declaration, ctx: &Ctx, font_only: bool) {
                 }
             }
             s.translate = (x != Len::Px(0) || y != Len::Px(0)).then_some((x, y));
+            if d.name == "transform" { s.linear = (lin != IDENTITY).then_some(lin); }
         }
         "box-shadow" => {
             s.shadow = None;
@@ -1463,7 +1620,7 @@ fn inherit_one(s: &mut Style, name: &str, p: &Style) {
         "background-color" | "background" => s.background = p.background,
         "font-size" => s.font_size = p.font_size,
         "font-weight" => s.bold = p.bold,
-        "font-family" => s.mono = p.mono,
+        "font-family" => { s.mono = p.mono; s.family = p.family; }
         "display" => s.display = p.display,
         "width" => s.width = p.width,
         "text-align" => s.align = p.align,
@@ -1488,6 +1645,7 @@ fn font_shorthand(s: &mut Style, v: &str, ctx: &Ctx) {
                     });
                 }
                 s.mono = is_mono(&ws[i + 1..].join(" "));
+                s.family = family_of(&ws[i + 1..].join(" "));
                 for pre in &ws[..i] {
                     match *pre { "bold" | "bolder" | "600" | "700" | "800" | "900" => s.bold = true, "italic" | "oblique" => s.italic = true, _ => {} }
                 }

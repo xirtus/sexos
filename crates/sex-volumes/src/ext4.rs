@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! ext2, ext3 and ext4, read only: the disks Linux machines leave behind.
+//! ext2, ext3 and ext4: the disks Linux machines leave behind. ext4 volumes with extents
+//! are also written (see `write`); ext2/3 and volumes with features we can't keep
+//! consistent stay read only.
 //!
 //! Files are found through extent trees (ext4) or classic block maps (ext2/3), small
 //! files and directories may live inside the inode itself (inline data), and htree
 //! directories are read linearly: their index blocks look like empty dirents to a reader
-//! that doesn't care about the hash. Nothing here writes, so the journal is never
-//! replayed and checksums are not verified; a volume with features we can't read
+//! that doesn't care about the hash. Reading never replays the journal or verifies
+//! checksums; a volume with features we can't read
 //! (compression, a journal device, dirdata) is refused at mount, an encrypted file or
 //! directory when it is opened.
 //!
@@ -14,6 +16,8 @@
 //! of a path is not followed.
 use crate::{le16, le32, parts, read_bytes, Disk, Entry, Error, Format, Kind, Result, Stat, Volume};
 use alloc::{string::String, vec, vec::Vec};
+
+mod write;
 
 const ROOT: u32 = 2;
 const INCOMPAT_FILETYPE: u32 = 0x2;
@@ -49,6 +53,8 @@ pub struct Ext4 {
     /// Each group's inode table block, 0 until its descriptor block has been read.
     tables: Vec<u64>,
     label: String,
+    /// What writing needs; `w.on` is false on a volume kept read only.
+    w: write::State,
 }
 
 /// One inode as stored, with the fields every caller wants pulled out.
@@ -95,6 +101,7 @@ impl Ext4 {
             first_meta_bg: le32(&sb, 0x104) as u64,
             tables: vec![0; groups as usize],
             label: String::from_utf8_lossy(&name[..end]).into_owned(),
+            w: write::State::from_super(&sb, bs, incompat, ro_compat, inode_size),
         })
     }
 
@@ -322,13 +329,17 @@ impl Ext4 {
 
     /// Follows `path` from the root directory.
     fn walk(&mut self, disk: &mut dyn Disk, path: &[u8]) -> Result<Inode> {
-        let mut cur = self.inode(disk, ROOT)?;
-        for part in parts(path)? {
+        Ok(self.find(disk, &parts(path)?)?.1)
+    }
+    /// Follows path parts from the root: the inode's number and the inode.
+    fn find(&mut self, disk: &mut dyn Disk, parts: &[&[u8]]) -> Result<(u32, Inode)> {
+        let (mut no, mut cur) = (ROOT, self.inode(disk, ROOT)?);
+        for part in parts {
             match cur.kind() { S_IFDIR => {}, S_IFLNK => return Err(Error::Unsupported), _ => return Err(Error::NotDir) }
-            let ino = self.entries(disk, &cur)?.into_iter().find(|e| e.1 == part).ok_or(Error::NotFound)?.0;
-            cur = self.inode(disk, ino)?;
+            no = self.entries(disk, &cur)?.into_iter().find(|e| e.1 == *part).ok_or(Error::NotFound)?.0;
+            cur = self.inode(disk, no)?;
         }
-        Ok(cur)
+        Ok((no, cur))
     }
 }
 
@@ -339,7 +350,8 @@ fn kind_of(ino: &Inode) -> Option<Kind> {
 impl Volume for Ext4 {
     fn format(&self) -> Format { Format::Ext4 }
     fn label(&self) -> String { self.label.clone() }
-    fn read_only(&self) -> bool { true }
+    fn read_only(&self) -> bool { !self.w.on }
+    fn set_now(&mut self, unix: u64) { self.w.now = unix; }
     fn statfs(&mut self, _: &mut dyn Disk) -> Result<(u64, u64)> { Ok((self.blocks * self.bs, self.free.min(self.blocks) * self.bs)) }
     fn stat(&mut self, disk: &mut dyn Disk, path: &[u8]) -> Result<Stat> {
         let ino = self.walk(disk, path)?;
@@ -366,4 +378,10 @@ impl Volume for Ext4 {
         self.read_data(disk, &ino, offset, &mut buf[..n])?;
         Ok(n)
     }
+    fn write(&mut self, disk: &mut dyn Disk, path: &[u8], offset: u64, data: &[u8]) -> Result<usize> { self.write_file(disk, path, offset, data) }
+    fn create(&mut self, disk: &mut dyn Disk, path: &[u8]) -> Result<()> { self.make(disk, path, false) }
+    fn mkdir(&mut self, disk: &mut dyn Disk, path: &[u8]) -> Result<()> { self.make(disk, path, true) }
+    fn remove(&mut self, disk: &mut dyn Disk, path: &[u8]) -> Result<()> { self.unlink_path(disk, path) }
+    fn rename(&mut self, disk: &mut dyn Disk, from: &[u8], to: &[u8]) -> Result<()> { self.move_path(disk, from, to) }
+    fn truncate(&mut self, disk: &mut dyn Disk, path: &[u8], len: u64) -> Result<()> { self.truncate_file(disk, path, len) }
 }

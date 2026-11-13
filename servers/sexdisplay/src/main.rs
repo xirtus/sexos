@@ -155,6 +155,10 @@ use surface_lifecycle::{Surface, MAX_SURFACES, TEXT_BUF_CAP, TEXT_MAX_ROWS, TEXT
 static mut SURFACES: [Surface; MAX_SURFACES] = [SURFACE_EMPTY; MAX_SURFACES];
 mod scene;
 mod frame_output;
+mod virtio_gpu;
+mod intel;
+/// The virtio-gpu that took the screen over from firmware, if BOOT leased one.
+static mut GPU: Option<virtio_gpu::Gpu> = None;
 mod screen_capture;
 static mut SCREEN_CAPTURE:screen_capture::Server=screen_capture::Server::new();
 mod paint_batch;
@@ -1943,7 +1947,9 @@ impl Drop for OutputBackup{fn drop(&mut self){for pixel in &mut self.saved{unsaf
 fn valid_scanout(fb:*mut u32,w:usize,h:usize)->bool{
     let Some(bytes)=w.checked_mul(h).and_then(|n|n.checked_mul(4))else{return false;};
     let address=fb as u64;
-    if address<HIGH_HALF_BASE || address.checked_add(bytes as u64).is_none(){return false;}
+    // BOOT's framebuffer is a high-half alias; a virtio-gpu scanout buffer is
+    // this service's own region, checked once when the device took over.
+    if (address<HIGH_HALF_BASE&&!gpu_scanout_active()) || address.checked_add(bytes as u64).is_none(){return false;}
     unsafe{address==FB_PTR&&w==FB_W as usize&&h==FB_H as usize&&w!=0&&h!=0&&w<=MAX_FB_W&&h<=MAX_FB_H}
 }
 
@@ -1957,6 +1963,7 @@ fn publish_frame(fb:*mut u32,w:usize,h:usize,frame:frame_output::Publication<'_>
     if frame.previous.is_some_and(|old|old.len()!=pixels.len())||frame.rows.end>h{return false;}
     let pitch=unsafe{FB_PITCH} as usize;
     let mut written=0usize;
+    let(mut touched_first,mut touched_end)=(usize::MAX,0usize);
     // A new night light level repaints every pixel: what the output shows was
     // warmed by the old level, so comparing with the old frame is not enough.
     let night=sex_pdx::desktop_look::night_level();
@@ -1980,6 +1987,7 @@ fn publish_frame(fb:*mut u32,w:usize,h:usize,frame:frame_output::Publication<'_>
             for(index,pixel)in row[first..end].iter().enumerate(){unsafe{core::ptr::write_volatile(out.add(first+index),sex_pdx::desktop_look::night(*pixel,night));}}
         }
         written+=end-first;
+        if end>first{touched_first=touched_first.min(y);touched_end=y+1;}
     }
     unsafe{PUBLISHED_PIXELS=PUBLISHED_PIXELS.wrapping_add(written as u64);LAST_WRITTEN=written as u64;}
     // Order posted/write-combining CPU stores before releasing presentation
@@ -1988,6 +1996,19 @@ fn publish_frame(fb:*mut u32,w:usize,h:usize,frame:frame_output::Publication<'_>
     unsafe{core::arch::asm!("sfence",options(nostack,preserves_flags));}
     #[cfg(not(target_arch="x86_64"))]
     core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+    // virtio-gpu: the host shows the changed rows only now, all at once.
+    if touched_end>touched_first&&!gpu_present(touched_first,touched_end){return false;}
+    true
+}
+
+/// Display scans out from its own virtio-gpu resource (slice L2).
+fn gpu_scanout_active()->bool{unsafe{(*core::ptr::addr_of!(GPU)).is_some()}}
+
+/// Show rows `first..end` of the scanout buffer: one fenced flip. True without a GPU.
+fn gpu_present(first:usize,end:usize)->bool{
+    let Some(gpu)=(unsafe{(*core::ptr::addr_of_mut!(GPU)).as_mut()})else{return true};
+    if gpu.present(first as u32,end as u32).is_err(){return false;}
+    virtio_gpu::flip_receipt(gpu,first,end);
     true
 }
 
@@ -3229,7 +3250,8 @@ fn handle_primary_fb(ptr: u64, packed: u64) -> bool {
         return false;
     }
     unsafe {
-        FB_PTR = ptr;
+        // After a virtio-gpu takeover the scanout buffer is the output, not BOOT's.
+        if (*core::ptr::addr_of!(GPU)).is_none() { FB_PTR = ptr; }
         FB_W = w as u32;
         FB_H = h as u32;
     }
@@ -3506,6 +3528,15 @@ pub extern "C" fn _start() -> ! {
     assert!(geometry.pitch>=geometry.width*4&&geometry.pitch%4==0,"DISPLAY_PITCH");
     assert!(address>=HIGH_HALF_BASE,"BOOT_DISPLAY_ADDRESS");
     unsafe{FB_PTR=address;FB_W=geometry.width;FB_H=geometry.height;FB_PITCH=geometry.pitch/4;}
+    match virtio_gpu::open(geometry.width,geometry.height,address,geometry.pitch/4){
+        Ok(gpu)=>{
+            virtio_gpu::report(&gpu);
+            unsafe{FB_PTR=gpu.scanout_address();FB_PITCH=geometry.width;GPU=Some(gpu);}
+        }
+        Err(reason)=>sex_pdx::serial_record!("[display.kms.virtio] takeover=0 reason={}",reason),
+    }
+    // Intel display engine: read-only receipt of what firmware lit (slice L3).
+    let _=intel::report();
     // Private frames are packed; publication steps rows at the scanout pitch.
     let frame_layout=sex_pdx::display_frames::Layout::new(geometry.width as u64,geometry.height as u64,geometry.width as u64*4)
         .expect("DISPLAY_FRAME_LAYOUT");

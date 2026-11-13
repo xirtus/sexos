@@ -674,6 +674,8 @@ version = "0.1.0"
 dependencies = [
  "sex-app",
  "sex-config",
+ "sex-font",
+ "sex-image",
  "sex-pdx",
  "sha2",
 ]
@@ -1152,6 +1154,14 @@ name = "log"
 version = "0.4.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
+
+[[package]]
+name = "lua"
+version = "0.1.0"
+dependencies = [
+ "sex-libc",
+ "sex-std",
+]
 
 [[package]]
 name = "managed"
@@ -2035,6 +2045,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-pkg"
+version = "0.1.0"
+dependencies = [
+ "ed25519-compact",
+ "sha2",
+]
+
+[[package]]
 name = "sex-rt"
 version = "0.1.0"
 dependencies = [
@@ -2125,6 +2143,7 @@ version = "0.1.0"
 dependencies = [
  "libm",
  "sex-canvas",
+ "sex-fetch",
  "sex-font",
  "sex-html",
  "sex-image",
@@ -2174,6 +2193,7 @@ name = "sexdisplay"
 version = "0.1.0"
 dependencies = [
  "sex-font",
+ "sex-gpu-intel",
  "sex-graphics",
  "sex-pdx",
  "sex-rt",
@@ -2199,6 +2219,7 @@ dependencies = [
  "sex-disk",
  "sex-object-model",
  "sex-pdx",
+ "sex-pkg",
  "sex-rt",
  "sex-volumes",
  "sexfs",

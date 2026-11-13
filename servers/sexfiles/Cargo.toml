@@ -8,8 +8,9 @@ edition = "2021"
 spin = "0.9.8"
 sex-pdx = { path = "../../crates/sex-pdx" }
 sex-config = { path = "../../crates/sex-config", features = ["password"] }
-sexfs = { path = "../../crates/sexfs" }
+sexfs = { path = "../../crates/sexfs", features = ["repair"] }
 sex-disk = { path = "../../crates/sex-disk" }
+sex-pkg = { path = "../../crates/sex-pkg" }
 sex-volumes = { path = "../../crates/sex-volumes" }
 sex-rt = { path = "../../sex-rt" }
 sex-object-model = { path = "../../crates/sex-object-model" }

@@ -34,6 +34,7 @@ pub mod pthread;
 pub mod cxx;
 pub mod locale;
 pub mod posix_util;
+pub mod setjmp;
 #[cfg(target_os = "hermit")]
 pub mod posix;
 #[cfg(target_os = "hermit")]

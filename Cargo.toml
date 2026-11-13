@@ -75,6 +75,7 @@ members = [
     "crates/sex-time",
     "crates/sex-config",
     "crates/sex-disk",
+    "crates/sex-pkg",
     "crates/sex-wasm",
     "apps/spindle",
     "crates/sex-std",
@@ -83,6 +84,7 @@ members = [
     "apps/stdnet",
     "apps/ssh",
     "apps/pdf",
+    "apps/lua",
 ]
 [workspace.package]
 license = "GPL-3.0-only"
