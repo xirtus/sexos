@@ -39,6 +39,12 @@ pub const OUTPUTS: u64 = 8;
 /// goes back to the default outputs, following the headphone jack.
 pub const SET_OUTPUTS: u64 = 10;
 pub const AUTO: u64 = 1 << 8;
+/// Which program a media key (play/pause, stop, next, previous) is for: program `a`
+/// (the focused one's PD, 0 for none) when it has played sound since it started, else
+/// the program that most recently started playing. Replies with that row's `stream`
+/// word (its PD inside), or `REFUSED` when no program has played. Shell asks; Bell
+/// only names the program, and Shell delivers the key to it as an ordinary key.
+pub const LAST_PLAYER: u64 = 11;
 /// Set in the outputs word while Bell follows the headphone jack.
 pub const OUTPUTS_AUTO: u64 = 1 << 12;
 
