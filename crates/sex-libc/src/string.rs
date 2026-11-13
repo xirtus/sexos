@@ -26,6 +26,12 @@ pub unsafe extern "C" fn strcmp(a: *const c_char, b: *const c_char) -> c_int {
     unsafe { strncmp(a, b, usize::MAX) }
 }
 
+/// The C locale collates by byte value.
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub unsafe extern "C" fn strcoll(a: *const c_char, b: *const c_char) -> c_int {
+    unsafe { strcmp(a, b) }
+}
+
 #[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn strncmp(a: *const c_char, b: *const c_char, n: usize) -> c_int {
     for i in 0..n {
@@ -214,9 +220,37 @@ pub unsafe extern "C" fn strtok_r(s: *mut c_char, delim: *const c_char, save: *m
 
 static UNKNOWN: &[u8] = b"error\0";
 
+/// The text for the errors the library itself reports (musl's wording); "error" for
+/// the rest.
 #[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
-pub unsafe extern "C" fn strerror(_e: c_int) -> *mut c_char {
-    UNKNOWN.as_ptr() as *mut c_char
+pub unsafe extern "C" fn strerror(e: c_int) -> *mut c_char {
+    let text: &[u8] = match e {
+        1 => b"Operation not permitted\0",
+        2 => b"No such file or directory\0",
+        5 => b"I/O error\0",
+        9 => b"Bad file descriptor\0",
+        11 => b"Resource temporarily unavailable\0",
+        12 => b"Out of memory\0",
+        13 => b"Permission denied\0",
+        17 => b"File exists\0",
+        20 => b"Not a directory\0",
+        21 => b"Is a directory\0",
+        22 => b"Invalid argument\0",
+        24 => b"No file descriptors available\0",
+        28 => b"No space left on device\0",
+        29 => b"Invalid seek\0",
+        30 => b"Read-only file system\0",
+        32 => b"Broken pipe\0",
+        34 => b"Result not representable\0",
+        38 => b"Function not implemented\0",
+        39 => b"Directory not empty\0",
+        95 => b"Not supported\0",
+        104 => b"Connection reset by peer\0",
+        110 => b"Operation timed out\0",
+        111 => b"Connection refused\0",
+        _ => UNKNOWN,
+    };
+    text.as_ptr() as *mut c_char
 }
 
 #[cfg(test)]

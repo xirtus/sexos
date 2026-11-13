@@ -1,0 +1,13 @@
+[package]
+name = "lua"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+
+[[bin]]
+name = "lua"
+path = "src/main.rs"
+
+[dependencies]
+sex-std = { path = "../../crates/sex-std" }
+sex-libc = { path = "../../crates/sex-libc" }

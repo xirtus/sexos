@@ -75,6 +75,7 @@ members = [
     "apps/chello",
     "apps/stdnet",
     "apps/pdf",
+    "apps/lua",
 ]
 [workspace.package]
 license = "GPL-3.0-only"
