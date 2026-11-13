@@ -194,6 +194,19 @@ impl Keyboard {
         }
     }
 
+    /// The key a shortcut on `code` means. Shortcuts follow the letters on the keys:
+    /// Ctrl+Z is the key that types `z` here (the key labelled Y on a US keyboard
+    /// under German), reported with the US code programs already match. Keys whose
+    /// plain level is not a Latin letter (Russian, digits, punctuation) keep their
+    /// position, as on other systems.
+    pub fn shortcut_code(&mut self, code: u8) -> u8 {
+        self.ready();
+        match self.table.get(code as usize).map(|levels| levels[0]) {
+            Some(Sym::Char(c)) if c.is_ascii_lowercase() => layouts::us_code(c).unwrap_or(code),
+            _ => code,
+        }
+    }
+
     /// One key press (not a modifier, not a release): what it typed.
     pub fn press(&mut self, code: u8) -> Typed {
         self.ready();

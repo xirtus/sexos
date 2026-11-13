@@ -33,6 +33,10 @@ pub fn observe(code: u8, value: u64) -> bool {
     held && matches!(code, sex_keymap::code::ALT_GR | sex_keymap::code::CAPS_LOCK | sex_keymap::code::MENU)
 }
 
+/// The code a Ctrl shortcut on `raw` stands for: the US key of the Latin
+/// letter the active layout puts there (Ctrl+Z on a German keyboard is undo).
+pub fn shortcut_code(raw: u8) -> u8 { keyboard().shortcut_code(raw) }
+
 /// The key a program gets for a press of `raw` (the code before any per-program
 /// renumbering), carrying what it typed under the active layout.
 pub fn typing(key: Key, raw: u8) -> Key {

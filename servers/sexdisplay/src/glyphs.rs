@@ -15,7 +15,8 @@ const SANS: u8 = 2;
 /// emoji drawn in proportional text use this one.
 const EMOJI_FONT: u8 = 200;
 /// Largest bitmap drawn; a Key holds sizes up to 255.
-const MAX_W: usize = 128;
+// A wide (CJK, emoji) character's two cells at the 90x135 maximum: 180.
+const MAX_W: usize = 192;
 // UI scale 3 times maximum text zoom 5 needs a 90x135 cell.
 const MAX_H: usize = 144;
 

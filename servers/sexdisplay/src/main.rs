@@ -667,21 +667,24 @@ fn text_run(row:*mut u32,x0:usize,x1:usize,y:usize,surf:&Surface,metrics:sex_pdx
         let selected=index<surf.selection_end as usize&&end>surf.selection_start as usize
             &&surf.selection_end as usize<=surf.text_len as usize;
         let left=tx+col*advance;
+        // A wide character (CJK, emoji) spans two cells; its second draws the right half.
+        let span=if sex_shape::cells::is_wide(scalar){2}else{1};
+        let half=(span==2&&ordinal>row_start&&surf.cell_starts[ordinal-1] as usize==index) as usize;
         // Geist Mono drawn for this cell size, as surface_text_fg_at draws it.
         {
             let line_h=(GLYPH_H+2)*scale;
-            if let Some(cell)=glyphs::mono_cell(scalar,advance,line_h){
+            if let Some(cell)=glyphs::mono_cell(scalar,advance*span,line_h){
                 let gy=(y-ty)%line_h;
                 let back=if selected{0xff36577c}else{surf.color};
                 for x in left.max(x0)..(left+advance).min(x1){
-                    let alpha=cell[gy*advance+(x-left)];
+                    let alpha=cell[gy*advance*span+half*advance+(x-left)];
                     if alpha!=0{unsafe{core::ptr::write_volatile(row.add(x),coverage_blend(surf.text_color,back,alpha));}}
                     else if selected{unsafe{core::ptr::write_volatile(row.add(x),back);}}
                 }
                 continue;
             }
         }
-        let bits=if py<GLYPH_H{scalar_glyph(scalar)[py]}else{0};
+        let bits=if py<GLYPH_H&&half==0{scalar_glyph(scalar)[py]}else{0};
         if bits==0&&!selected{continue;}
         for x in left.max(x0)..(left+advance).min(x1){
             let px=(x-left)/scale;
@@ -1544,8 +1547,19 @@ fn recompute_text_lines(surf: &mut Surface) {
     surf.line_cells[0] = 0;
     surf.line_count = 1;
     while let Some((scalar,end)) = sex_pdx::text_encoding::cell(&surf.text_buf[..len],i) {
+        // CJK and emoji take two cells: the same offset twice. One never splits
+        // across rows. (A wide character is 3 or 4 bytes, so cells never outnumber bytes.)
+        let wide=scalar!=10&&sex_shape::cells::is_wide(scalar);
+        if wide&&col>0&&col+1>=cols {
+            if (surf.line_count as usize) >= TEXT_MAX_ROWS { break; }
+            surf.line_starts[surf.line_count as usize] = i as u16;
+            surf.line_cells[surf.line_count as usize] = surf.cell_count;
+            surf.line_count += 1;
+            col = 0;
+        }
         surf.cell_starts[surf.cell_count as usize]=i as u16;
         surf.cell_count+=1;
+        if wide{surf.cell_starts[surf.cell_count as usize]=i as u16;surf.cell_count+=1;col+=1;}
         i=end;
         if scalar == 10 {
             if (surf.line_count as usize) >= TEXT_MAX_ROWS { break; }
@@ -1775,15 +1789,18 @@ fn surface_text_fg_at_scaled(x: usize, y: usize, surf: &Surface, ui_scale:u32) -
     // Geist Mono is the default at every scale, including the compact 6x9 grid.
     // Keep the legacy glyph only for missing font coverage or a cache failure.
     let advance = (GLYPH_W + CHAR_SPACING) * scale;
+    // A wide character (CJK, emoji) spans two cells; its second shows the right half.
+    let span = if sex_shape::cells::is_wide(scalar) { 2 } else { 1 };
+    let half = (span == 2 && ordinal > surf.line_cells[row] as usize && surf.cell_starts[ordinal - 1] as usize == char_idx) as usize;
     {
-        if let Some(cell) = glyphs::mono_cell(scalar, advance, line_h) {
+        if let Some(cell) = glyphs::mono_cell(scalar, advance * span, line_h) {
             let (gx, gy) = ((x - tx) % advance, (y - ty) % line_h);
-            let alpha = cell[gy * advance + gx];
+            let alpha = cell[gy * advance * span + half * advance + gx];
             if alpha == 0 { return background; }
             return Some(coverage_blend(surf.text_color, background.unwrap_or(surf.color), alpha));
         }
     }
-    if px >= GLYPH_W || py >= GLYPH_H { return background; }
+    if px >= GLYPH_W || py >= GLYPH_H || half != 0 { return background; }
     let glyph_row = scalar_glyph(scalar)[py];
     let bit = (glyph_row >> (GLYPH_W - 1 - px)) & 1;
     if bit != 0 { Some(surf.text_color) } else { background }

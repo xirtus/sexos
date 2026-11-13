@@ -89,3 +89,34 @@ fn line_algorithm_matches_unicode_bidi() {
         assert_eq!(mine, reference(&line), "{line}");
     }
 }
+
+#[test]
+fn wide_characters_take_two_cells() {
+    for c in ['日', 'あ', 'ア', '한', 'Ａ', '😀', '🚀', '𠀀'] { assert!(sex_shape::cells::is_wide(c as u32), "{c}"); }
+    for c in ['a', 'ש', 'ب', 'Ж', 'é', '─', '\n'] { assert!(!sex_shape::cells::is_wide(c as u32), "{c:?}"); }
+    // The generated table against the unicode-width crate, for CJK and emoji.
+    use unicode_width::UnicodeWidthChar;
+    let mut differ = Vec::new();
+    for s in (0x1100..=0x2FFFFu32).filter(|s| !(0xD800..0xE000).contains(s)) {
+        let c = char::from_u32(s).unwrap();
+        if sex_shape::cells::is_wide(s) && c.width() != Some(2) { differ.push(s); }
+    }
+    assert!(differ.is_empty(), "{:x?}", &differ[..differ.len().min(20)]);
+}
+
+#[test]
+fn wide_cells_move_together_in_right_to_left_rows() {
+    // "日" takes two cells (the same offset twice); in a Hebrew row the pair moves as one.
+    let text = "שלום 日 x";
+    let mut cells: Vec<u16> = Vec::new();
+    for (i, c) in text.char_indices() {
+        cells.push(i as u16);
+        if sex_shape::cells::is_wide(c as u32) { cells.push(i as u16); }
+    }
+    let n = cells.len();
+    sex_shape::cells::reorder_lines(text.as_bytes(), &mut cells, &[0], n);
+    let shown: String = cells.iter().map(|&b| text[b as usize..].chars().next().unwrap()).collect();
+    // A Hebrew paragraph: the Hebrew word sits at the right.
+    assert_eq!(shown, "日日 x םולש");
+    assert_eq!(cells.len(), n);
+}
