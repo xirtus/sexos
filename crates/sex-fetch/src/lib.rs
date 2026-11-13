@@ -14,6 +14,7 @@ pub mod cookie;
 pub mod pieces;
 pub mod script;
 pub mod ws;
+pub mod woff;
 mod date;
 
 use alloc::string::{String, ToString};

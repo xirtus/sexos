@@ -1,4 +1,5 @@
-//! Shell-owned Alt shortcuts: Alt+Tab, and Alt+= / Alt+- / Alt+0 for the focused
+//! Shell-owned Alt shortcuts: Alt+Tab (Shift+Alt+Tab back; Escape cancels,
+//! letting go of Alt keeps the choice), and Alt+= / Alt+- / Alt+0 for the focused
 //! window's text size, and Ctrl+Alt+= / Ctrl+Alt+- / Ctrl+Alt+0 for the whole
 //! screen's scale (HiDPI). App-local Tab and editor modifiers stay local. The volume
 //! and mute keys always belong to Shell.
@@ -6,7 +7,10 @@
 pub enum Action {
     Pass,
     Consume,
-    NextFrame,
+    /// The window switcher: +1 the next window, -1 the previous one.
+    Switch(i8),
+    /// The switcher ends: true keeps the selected window, false goes back.
+    SwitchEnd(bool),
     /// +1 larger, -1 smaller, 0 back to the default size.
     TextZoom(i8),
     /// The whole desktop's scale: +1 larger, -1 smaller, 0 the screen's own.
@@ -25,6 +29,9 @@ pub const VOLUME_STEP: i8 = 5;
 pub struct Keys {
     alt: bool,
     ctrl: bool,
+    shift: bool,
+    /// Alt+Tab opened the switcher and Alt is still held.
+    switching: bool,
     /// A key pressed with Alt, whose repeat and release Shell keeps from the app.
     captured: Option<u8>,
 }
@@ -33,6 +40,8 @@ impl Keys {
         Self {
             alt: false,
             ctrl: false,
+            shift: false,
+            switching: false,
             captured: None,
         }
     }
@@ -51,17 +60,39 @@ impl Keys {
                 _ => Action::Consume,
             };
         }
+        // While the switcher is up, Escape cancels and the arrows step.
+        if self.switching && value != 0 {
+            match code {
+                0x01 if value == 1 => { self.switching = false; return Action::SwitchEnd(false); }
+                0x4B => return Action::Switch(-1),
+                0x4D => return Action::Switch(1),
+                0x01 => return Action::Consume,
+                _ => {}
+            }
+        }
+        if self.switching && matches!(code, 0x01 | 0x4B | 0x4D) {
+            return Action::Consume;
+        }
+        // Ctrl stays the app's too; Shell only notes it for Ctrl+Alt shortcuts.
+        // Right Ctrl (0x61) too: Input gives it the USB code so AltGr is distinct.
+        if code == 0x1D || code == 0x61 {
+            self.ctrl = value != 0;
+            return Action::Pass;
+        }
         // Repeats pass through, except a held zoom shortcut's.
         if value > 2 || (value == 2 && self.captured != Some(code)) {
             return Action::Pass;
         }
         if code == 0x38 {
             self.alt = value == 1;
+            if value == 0 && core::mem::replace(&mut self.switching, false) {
+                return Action::SwitchEnd(true);
+            }
             return Action::Consume;
         }
-        // Ctrl stays the app's too; Shell only notes it for Ctrl+Alt shortcuts.
-        if code == 0x1D || code == 0x61 {
-            self.ctrl = value != 0;
+        // Shift stays the app's; Shell notes it for Shift+Alt+Tab.
+        if code == 0x2A || code == 0x36 {
+            self.shift = value != 0;
             return Action::Pass;
         }
         let zoom = match code {
@@ -89,7 +120,10 @@ impl Keys {
         match zoom {
             Some(step) if self.ctrl => Action::DisplayScale(step),
             Some(step) => Action::TextZoom(step),
-            None => Action::NextFrame,
+            None => {
+                self.switching = true;
+                Action::Switch(if self.shift { -1 } else { 1 })
+            }
         }
     }
 }
@@ -119,9 +153,44 @@ mod tests {
         assert_eq!(k.event(KEY_VOLUME_DOWN, 1), Action::Volume(-VOLUME_STEP));
         assert_eq!(k.event(KEY_MUTE, 1), Action::Volume(0));
         assert_eq!(k.event(KEY_MUTE, 2), Action::Consume);
-        assert_eq!(k.event(0x0F, 1), Action::NextFrame);
+        assert_eq!(k.event(0x0F, 1), Action::Switch(1));
         assert_eq!(k.event(0x0F, 0), Action::Consume);
         assert_eq!(k.event(0x1E, 1), Action::Pass);
+    }
+    #[test]
+    fn alt_tab_switcher_steps_and_ends_with_alt_or_escape() {
+        let mut k = Keys::new();
+        // Plain Tab and Escape stay the app's.
+        assert_eq!(k.event(0x0F, 1), Action::Pass);
+        assert_eq!(k.event(0x0F, 0), Action::Pass);
+        assert_eq!(k.event(0x01, 1), Action::Pass);
+        assert_eq!(k.event(0x01, 0), Action::Pass);
+        assert_eq!(k.event(0x38, 1), Action::Consume);
+        assert_eq!(k.event(0x0F, 1), Action::Switch(1));
+        assert_eq!(k.event(0x0F, 0), Action::Consume);
+        assert_eq!(k.event(0x0F, 1), Action::Switch(1));
+        assert_eq!(k.event(0x0F, 0), Action::Consume);
+        assert_eq!(k.event(0x2A, 1), Action::Pass);
+        assert_eq!(k.event(0x0F, 1), Action::Switch(-1));
+        assert_eq!(k.event(0x0F, 0), Action::Consume);
+        assert_eq!(k.event(0x2A, 0), Action::Pass);
+        assert_eq!(k.event(0x4D, 1), Action::Switch(1));
+        assert_eq!(k.event(0x4D, 2), Action::Switch(1));
+        assert_eq!(k.event(0x4D, 0), Action::Consume);
+        assert_eq!(k.event(0x4B, 1), Action::Switch(-1));
+        assert_eq!(k.event(0x4B, 0), Action::Consume);
+        assert_eq!(k.event(0x38, 0), Action::SwitchEnd(true));
+        // Escape goes back and Alt's release is then plain.
+        assert_eq!(k.event(0x38, 1), Action::Consume);
+        assert_eq!(k.event(0x0F, 1), Action::Switch(1));
+        assert_eq!(k.event(0x0F, 0), Action::Consume);
+        assert_eq!(k.event(0x01, 1), Action::SwitchEnd(false));
+        assert_eq!(k.event(0x01, 0), Action::Pass);
+        assert_eq!(k.event(0x38, 0), Action::Consume);
+        // Alt with arrows alone is not the switcher's.
+        assert_eq!(k.event(0x38, 1), Action::Consume);
+        assert_eq!(k.event(0x4D, 1), Action::Pass);
+        assert_eq!(k.event(0x38, 0), Action::Consume);
     }
     #[test]
     fn ctrl_alt_steps_the_screen_scale_once_per_press() {

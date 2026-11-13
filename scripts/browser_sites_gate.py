@@ -34,6 +34,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
    if f'session={SESSION}' not in self.headers.get('Cookie',''):return self.send(302,extra=[('Location','/mail/')])
    rows=''.join(f'<tr><td><b>{f}</b></td><td>{s}</td><td>{d}</td></tr>' for f,s,d in [('Finance','Quarterly report is ready','09:12'),('Calendar','Team lunch on Friday','Yesterday'),('Builds','Nightly image passed','Nov 11')])
    return self.send(200,f'<!doctype html><title>Inbox (3) - Webmail</title><style>body{{font:14px sans-serif;margin:0}}header{{background:#2b5797;color:#fff;padding:8px}}table{{border-collapse:collapse;width:100%}}td{{border-bottom:1px solid #ddd;padding:6px}}</style><header>Webmail · signed in as {logins[-1] if logins else "?"}</header><h2 style="margin:8px">Inbox</h2><table>{rows}</table>'.encode())
+  if path.startswith('/fonts/'):
+   f=SITES.parent/'fonts'/path.removeprefix('/fonts/')
+   return self.send(200,f.read_bytes(),'font/woff') if f.is_file() and f.suffix=='.woff' else self.send(404)
   f=SITES/path.removeprefix('/sites/') if path.startswith('/sites/') else None
   if f is None or not f.is_file() or f.suffix!='.html':return self.send(404)
   self.send(200,f.read_bytes())
@@ -57,7 +60,7 @@ KEYS={' ':'spc','/':'slash','.':'dot','-':'minus','_':None}
 BASE=f'http://10.0.2.2:{PORT}'
 # name, local address, live address, text to find (lowercase), fewest matches.
 SUITE=[
- ('encyclopedia',f'{BASE}/sites/wikipedia.html','https://en.wikipedia.org/wiki/Microkernel','microkernel',3),
+ ('encyclopedia',f'{BASE}/sites/wikipedia.html','https://en.wikipedia.org/wiki/Microkernel','inter-process communication',1),
  ('news',f'{BASE}/sites/news.html','https://text.npr.org/','comeback',1),
  ('links',f'{BASE}/sites/hackernews.html','https://news.ycombinator.com/','comments',4),
  ('github',f'{BASE}/sites/github.html','https://github.com/xirtus/sexos','microkernel',1),
@@ -105,6 +108,9 @@ def main():
    else:
     s=go(url);stats=loaded(s)
    time.sleep(1.5)
+   if name=='news' and not a.live:
+    # The masthead's web font (WOFF; the WOFF2 source is skipped).
+    g['wait'](r'\[web.font\] family=Ledger Display loaded=1 ',s,60)
    found=find(text,least)
    outcomes.append({'site':name,'url':url,'text':text,'matches':found,'seconds':round(time.time()-began,1),**stats})
    print(outcomes[-1],flush=True)
