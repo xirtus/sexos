@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Alt+Tab window switcher: held Alt shows Display's card row with live
+"""Alt+Tab window switcher and Super+W window overview: held Alt shows Display's card row with live
 thumbnails, Tab and Shift+Tab step it, letting go of Alt keeps the choice,
 Escape goes back, and a quick Alt+Tab returns to the previous window
 (most-recently-used order, as in KDE and GNOME)."""
@@ -76,7 +76,7 @@ def main():
         opened = wait(r'\[shell.switcher\] open=1 count=(\d+) selected=1 ', start)
         count = int(opened[1])
         if count < 2: raise RuntimeError('switcher needs two windows, saw %d' % count)
-        drawn = wait(r'\[display.switcher.draw\] count=%d selected=1 panel=(\d+)x(\d+)\+(\d+)\+(\d+)' % count, start)
+        drawn = wait(r'\[display.switcher.draw\] count=%d selected=1 grid=0 cols=\d+ panel=(\d+)x(\d+)\+(\d+)\+(\d+)' % count, start)
         second = focus()
         if second == first: raise RuntimeError('Alt+Tab did not move focus')
         time.sleep(1.5)
@@ -106,9 +106,46 @@ def main():
         start = len(text()); keys(('alt', True), ('tab', True), ('tab', False), ('esc', True), ('esc', False), ('alt', False))
         cancel = wait(r'\[shell.switcher.end\] keep=0 focus=(\d+)', start)
         if int(cancel[1]) != first: raise RuntimeError('Escape did not return to the window it started from')
-        # The Spindle console never saw the Escape or Tab.
-        result = dict(ok=True, windows=count, first=first, second=second, panel=[pw, ph, x0, y0],
-                      scope='QEMU 1280x800: switcher open/step/back/keep/cancel with live-thumbnail pixels present')
+        # Overview (Super+W): every window as a live thumbnail in a grid.
+        start = len(text()); keys(('meta_l', True), ('w', True), ('w', False), ('meta_l', False))
+        wait(r'\[shell.overview.open\] windows=%d' % count, start)
+        grid = wait(r'\[display.switcher.draw\] count=%d selected=0 grid=1 cols=(\d+) ' % count, start)
+        cards = {int(i): (int(sid), int(x), int(y), int(cw), int(ch)) for i, sid, x, y, cw, ch in
+                 re.findall(r'\[shell.overview.card\] index=(\d+) sid=(\d+) x=(\d+) y=(\d+) w=(\d+) h=(\d+)', text()[start:])}
+        if len(cards) != count or cards[0][0] != focus(): raise RuntimeError('overview cards differ')
+        time.sleep(1.5)
+        oshot = out / 'overview-open.ppm'; q.cmd('screendump', {'filename': str(oshot)})
+        w, h, px = ppm(oshot)
+        colours = {px[(y * w + x) * 3:(y * w + x) * 3 + 3] for i in cards for y in range(cards[i][2], cards[i][2] + cards[i][4], 3) for x in range(cards[i][1], cards[i][1] + cards[i][3], 3)}
+        if len(colours) < 24: raise RuntimeError('overview thumbnails look empty')
+        # Right arrow selects the next card; Enter goes there.
+        start = len(text()); keys(('right', True), ('right', False))
+        wait(r'\[display.switcher\] count=%d selected=1 grid=1' % count, start)
+        start = len(text()); keys(('ret', True), ('ret', False))
+        picked = wait(r'\[shell.overview.close\] keep=1 focus=(\d+)', start)
+        if int(picked[1]) != cards[1][0]: raise RuntimeError('Enter did not go to the selected window')
+        # Click the last card.
+        start = len(text()); keys(('meta_l', True), ('w', True), ('w', False), ('meta_l', False))
+        wait(r'\[shell.overview.open\]', start)
+        cards = {int(i): (int(sid), int(x), int(y), int(cw), int(ch)) for i, sid, x, y, cw, ch in
+                 re.findall(r'\[shell.overview.card\] index=(\d+) sid=(\d+) x=(\d+) y=(\d+) w=(\d+) h=(\d+)', text()[start:])}
+        last = cards[count - 1]
+        cx, cy = last[1] + last[3] // 2, last[2] + last[4] // 2
+        start = len(text())
+        q.cmd('input-send-event', {'events': [{'type': 'abs', 'data': {'axis': 'x', 'value': round(cx * 32767 / 1279)}}, {'type': 'abs', 'data': {'axis': 'y', 'value': round(cy * 32767 / 799)}}]})
+        time.sleep(.5)
+        q.cmd('input-send-event', {'events': [{'type': 'btn', 'data': {'down': True, 'button': 'left'}}]}); time.sleep(.2)
+        q.cmd('input-send-event', {'events': [{'type': 'btn', 'data': {'down': False, 'button': 'left'}}]})
+        clicked = wait(r'\[shell.overview.close\] keep=1 focus=(\d+)', start)
+        if int(clicked[1]) != last[0]: raise RuntimeError('click did not go to the clicked window')
+        # Escape closes without moving focus.
+        start = len(text()); keys(('meta_l', True), ('w', True), ('w', False), ('meta_l', False))
+        wait(r'\[shell.overview.open\]', start)
+        start = len(text()); keys(('right', True), ('right', False), ('esc', True), ('esc', False))
+        esc = wait(r'\[shell.overview.close\] keep=0 focus=(\d+)', start)
+        if int(esc[1]) != last[0]: raise RuntimeError('Escape moved focus')
+        result = dict(ok=True, windows=count, first=first, second=second, panel=[pw, ph, x0, y0], overview_cols=int(grid[1]),
+                      scope='QEMU 1280x800: Alt+Tab switcher open/step/back/keep/cancel and Super+W overview keys/Enter/click/Escape, with live-thumbnail pixels present')
         (out / 'result.json').write_text(json.dumps(result, indent=2) + '\n'); print(json.dumps(result))
     except Exception as e:
         (out / 'result.json').write_text(json.dumps(dict(ok=False, error=str(e))) + '\n'); raise
