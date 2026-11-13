@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>SexOS YouTube embed test</title>
+<meta name="viewport" content="width=device-width">
+<style>body{margin:8px;font:14px sans-serif}iframe{width:384px;height:216px;border:0;display:block}#log{white-space:pre-wrap;font:12px monospace}</style></head>
+<body>
+<p>SexOS browser test: a YouTube embed in an iframe on a real https page.</p>
+<iframe id="player" src="https://www.youtube-nocookie.com/embed/aqz-KE-bpKQ?enablejsapi=1" title="Big Buck Bunny" referrerpolicy="strict-origin-when-cross-origin" allow="autoplay; encrypted-media" allowfullscreen></iframe>
+<div id="log">waiting for the player…</div>
+<script>
+// Listens to the player the way YouTube's IFrame API does, and shows what it says.
+const frame = document.getElementById('player'), log = document.getElementById('log');
+const seen = {};
+window.addEventListener('message', e => {
+  if (!/^https:\/\/www\.youtube(-nocookie)?\.com$/.test(e.origin)) return;
+  let d; try { d = typeof e.data === 'string' ? JSON.parse(e.data) : e.data; } catch (_) { return; }
+  const key = d.event + (d.info && d.info.playerState !== undefined ? ':' + d.info.playerState : '');
+  if (seen[key]) return; seen[key] = 1;
+  const line = 'player ' + key + (d.info && d.info.videoData ? ' ' + d.info.videoData.title : '');
+  console.log(line);
+  log.textContent += '\n' + line;
+});
+frame.addEventListener('load', () => {
+  console.log('embed frame loaded');
+  let n = 0;
+  const t = setInterval(() => {
+    frame.contentWindow.postMessage(JSON.stringify({ event: 'listening', id: 1, channel: 'widget' }), '*');
+    if (++n > 20) clearInterval(t);
+  }, 500);
+});
+</script>
+</body></html>
