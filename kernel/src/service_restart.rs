@@ -28,7 +28,7 @@ static GAVE_UP: [core::sync::atomic::AtomicBool; SERVICES] = [const { core::sync
 fn code_base(domain_id: u8) -> u64 { 0x4000_0000 + (domain_id as u64).saturating_sub(1) * SLOT_BYTES }
 fn stack_top(domain_id: u8) -> u64 { 0x7000_0000_0000 + (domain_id as u64).saturating_sub(1) * SLOT_BYTES + 0x0010_0000 }
 
-/// At BOOT, before the service first runs: remember every page it owns as it is now.
+/// At BOOT, before the service first runs: remember every writable page it owns as it is now.
 pub fn capture(pd_id: u32, domain_id: u8) {
     if pd_id == 0 { return; }
     let pd = crate::ipc::DOMAIN_REGISTRY.get(pd_id).expect("SERVICE_RESTART_DOMAIN");
@@ -43,6 +43,9 @@ pub fn capture(pd_id: u32, domain_id: u8) {
             let value = unsafe { core::ptr::read_volatile(leaf as *const u64) };
             // Present, user, on this service's key: its own page.
             if value & 5 != 5 || (value >> 59) & 15 != pd.pku_key as u64 { continue; }
+            // Read-only pages (code, constants, fonts) cannot change, so a restart has
+            // nothing to put back there; only writable pages are copied.
+            if value & 2 == 0 { continue; }
             assert!(s.count < MAX_PAGES, "SERVICE_RESTART_PAGES");
             let n = s.count;
             s.pages[n] = Page { frame: value & PTE_FRAME, pristine: 0 };
