@@ -1523,8 +1523,11 @@ impl Browser {
                 Kind::Wheel { steps } => ("wheel", 0, steps),
                 Kind::Leave => ("leave", 0, 0),
             };
+            let diagnostic=live_diagnostic::pointer_begin(self,kind,&node,x,y);
             let script = self.doc.script().unwrap();
-            kept = script.dispatch(&alloc::format!("mouse\t{kind}\t{node}\t{x}\t{y}\t{button}\t{}\t{steps}", p.buttons)).map_or(false, |r| r == 1);
+            let result=script.dispatch(&alloc::format!("mouse\t{kind}\t{node}\t{x}\t{y}\t{button}\t{}\t{steps}", p.buttons));
+            live_diagnostic::pointer_end(diagnostic,&result);
+            kept = result.map_or(false, |r| r == 1);
             if self.doc.get().navigate.is_some() { self.after_script(true); return; }
             self.after_script(true);
             self.timers_changed();

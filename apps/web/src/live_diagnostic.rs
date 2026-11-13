@@ -192,3 +192,19 @@ fn raw(doc: &Doc, page: &Page, media: &[super::media::Media], at: usize, frame: 
         sex_pdx::serial_record!("[web.live.media] owner={} frame={} node={} state={:?} native_player={} want_play={} frames={} size={:?} mse={} muted={} volume={} events={} pending={:?} js_properties=unavailable src={}",owner,frame,m.node,m.state,m.player.is_some()as u8,m.want_play as u8,m.frames,m.size,m.mse.is_some()as u8,m.muted as u8,m.volume,m.events.len(),m.pending,text(&m.src));
     }
 }
+
+// Observe the existing native input boundary only. No second hit test or JS call.
+static POINTERS: AtomicU32 = AtomicU32::new(0);
+pub(super) fn pointer_begin(b:&Browser,kind:&str,node:&str,x:i32,y:i32)->Option<(u32,u64,i64)> {
+    if kind!="down" && kind!="up" {return None;}
+    let seq=POINTERS.fetch_add(1,Ordering::Relaxed);if seq>=16{return None;}
+    let d=document(&b.doc);let owner=d.diagnostic_owner();let frame=b.in_frame.map_or(-1,|n|n as i64);
+    let n=node.parse::<usize>().ok();
+    sex_pdx::serial_record!("[web.live.pointer.begin] seq={} owner={} frame={} kind={} node={} x={} y={} tag={} class={} rect={:?} layer={:?}",seq,owner,frame,kind,node,x,y,n.and_then(|n|d.dom.tag(n)).unwrap_or(""),text(n.and_then(|n|d.dom.attr(n,"class")).unwrap_or("")),n.and_then(|n|d.rects.get(n)).copied().flatten(),n.and_then(|n|d.layers.get(n)).copied());
+    Some((seq,owner,frame))
+}
+pub(super) fn pointer_end(token:Option<(u32,u64,i64)>,result:&Result<i32,sex_js::Error>) {
+    let Some((seq,owner,frame))=token else{return;};
+    let (kind,value)=match result {Ok(n)=>("returned",*n),Err(sex_js::Error::Thrown)=>("thrown",0),Err(sex_js::Error::Trapped(_))=>("trapped",0),Err(_)=>("other-error",0)};
+    sex_pdx::serial_record!("[web.live.pointer.end] seq={} owner={} frame={} result={} value={} listener_invocation=unavailable",seq,owner,frame,kind,value);
+}
