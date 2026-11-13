@@ -13,6 +13,7 @@
 //! flicker: read what GOP set up, read the panel's EDID over DP AUX, check the
 //! mode is native, then flip our own framebuffers at vblank.
 #![no_std]
+#[cfg(feature = "kms")]
 extern crate alloc;
 
 pub mod aux;

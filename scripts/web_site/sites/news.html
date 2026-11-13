@@ -1,0 +1,59 @@
+<!doctype html>
+<!-- A page in the shape of a news front page: sticky masthead, nav strip, a CSS grid of
+     story cards with pictures (srcset), a lead story, a flex sidebar, and a footer. -->
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Daily Ledger: news</title>
+<style>
+* { box-sizing: border-box; }
+body { margin: 0; font: 16px/1.5 Georgia, 'Times New Roman', serif; color: #121212; background: #fff; }
+.masthead { position: sticky; top: 0; z-index: 10; background: #fff; border-bottom: 1px solid #e2e2e2; text-align: center; padding: 8px 16px; }
+.masthead h1 { margin: 0; font-size: clamp(24px, 4vw, 44px); letter-spacing: .01em; }
+.masthead .date { font: 12px/1.2 sans-serif; color: #5a5a5a; }
+nav.sections { display: flex; justify-content: center; flex-wrap: wrap; gap: 4px 18px; font: 13px sans-serif; border-bottom: 2px solid #121212; padding: 6px 0; }
+nav.sections a { color: #121212; text-decoration: none; }
+.wrap { max-width: 1200px; margin: 0 auto; padding: 16px; display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 1fr); gap: 24px; }
+.lead { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; border-bottom: 1px solid #e2e2e2; padding-bottom: 16px; }
+.lead h2 { font-size: 28px; line-height: 1.15; margin: 0 0 8px; }
+.kicker { font: bold 12px sans-serif; text-transform: uppercase; color: #a3001b; letter-spacing: .05em; }
+.pic { display: block; width: 100%; aspect-ratio: 3 / 2; background: linear-gradient(120deg, #cfd8dc, #90a4ae); }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; margin-top: 16px; }
+.card h3 { font-size: 18px; line-height: 1.2; margin: 6px 0; }
+.card p, .lead p { margin: 0; color: #363636; font-size: 15px; }
+.byline { font: 12px sans-serif; color: #727272; margin-top: 4px; }
+aside { border-left: 1px solid #e2e2e2; padding-left: 16px; }
+aside h4 { font: bold 14px sans-serif; text-transform: uppercase; margin: 0 0 8px; }
+aside ol { padding-left: 1.2em; margin: 0; }
+aside li { margin-bottom: 10px; font-size: 15px; }
+.newsletter { display: flex; gap: 6px; margin-top: 16px; }
+.newsletter input { flex: 1; min-width: 0; padding: 6px; border: 1px solid #999; }
+.newsletter button { padding: 6px 10px; background: #121212; color: #fff; border: 0; }
+footer { border-top: 2px solid #121212; margin-top: 24px; padding: 16px; font: 12px sans-serif; color: #5a5a5a; text-align: center; }
+@media (max-width: 700px) { .wrap, .lead { grid-template-columns: 1fr; } aside { border: 0; padding: 0; } }
+</style></head>
+<body>
+<header class="masthead"><div class="date">Friday, November 13, 2026</div><h1>The Daily Ledger</h1></header>
+<nav class="sections" aria-label="Sections"><a href="#">World</a><a href="#">Politics</a><a href="#">Business</a><a href="#">Technology</a><a href="#">Science</a><a href="#">Health</a><a href="#">Sports</a><a href="#">Arts</a><a href="#">Opinion</a></nav>
+<div class="wrap">
+  <main>
+    <article class="lead">
+      <div><div class="kicker">Technology</div><h2><a href="#" style="color:inherit;text-decoration:none">Small kernels make a comeback on everyday laptops</a></h2>
+      <p>Engineers say a design once confined to research labs now starts faster and crashes less than the systems it replaces.</p><div class="byline">By A. Reporter · 6 min read</div></div>
+      <picture><source type="image/avif" srcset=""><span class="pic" role="img" aria-label="A laptop on a desk"></span></picture>
+    </article>
+    <section class="cards" aria-label="More stories">
+      <article class="card"><span class="pic"></span><div class="kicker">Science</div><h3>Weather satellites get a software update in orbit</h3><p>The upload took four days.</p><div class="byline">By B. Writer</div></article>
+      <article class="card"><span class="pic"></span><div class="kicker">Business</div><h3>Chip makers report record quarter</h3><p>Demand for laptops rose again.</p><div class="byline">By C. Analyst</div></article>
+      <article class="card"><span class="pic"></span><div class="kicker">Arts</div><h3>A museum opens its archive to the public</h3><p>Ten thousand drawings, all online.</p><div class="byline">By D. Critic</div></article>
+      <article class="card"><span class="pic"></span><div class="kicker">Sports</div><h3>Late goal settles the cup final</h3><p>The match went to extra time.</p><div class="byline">By E. Fan</div></article>
+      <article class="card"><span class="pic"></span><div class="kicker">Health</div><h3>Walking more, sitting less: what a new study says</h3><p>Small changes added up.</p><div class="byline">By F. Doctor</div></article>
+      <article class="card"><span class="pic"></span><div class="kicker">World</div><h3>Rivers rise after a week of rain</h3><p>Towns prepare for floods.</p><div class="byline">By G. Correspondent</div></article>
+    </section>
+  </main>
+  <aside>
+    <h4>Most read</h4>
+    <ol><li><a href="#">How to choose a laptop that lasts</a></li><li><a href="#">The quiet return of the paper map</a></li><li><a href="#">Five recipes for a cold night</a></li><li><a href="#">Why your phone feels slower</a></li></ol>
+    <form class="newsletter" action="#"><input type="email" placeholder="Email for the morning briefing" aria-label="Email"><button>Sign up</button></form>
+  </aside>
+</div>
+<footer>© 2026 The Daily Ledger · <a href="#">Contact</a> · <a href="#">Privacy</a> · <a href="#">Terms</a></footer>
+</body></html>

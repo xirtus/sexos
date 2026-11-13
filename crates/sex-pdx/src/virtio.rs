@@ -12,9 +12,12 @@ pub const NET: u16 = 0x1041;
 pub const BLOCK: u16 = 0x1042;
 pub const INPUT: u16 = 0x1052;
 pub const SOUND: u16 = 0x1059;
+pub const GPU: u16 = 0x1050;
 
 /// Sound device lease in the Bell service, the way `SLOT_NIC` is sexnet's NIC.
 pub const SLOT_SOUND: u64 = 20;
+/// virtio-gpu lease in the Display service (workstream L, slice L2).
+pub const SLOT_GPU: u64 = 25;
 /// The DMA pool BOOT gives a virtio driver at `SLOT_DMA_REGION`.
 pub const DMA_REGION_ID: u32 = 0x4200;
 pub const DMA_BYTES: u64 = 256 * 1024;
