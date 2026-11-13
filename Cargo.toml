@@ -32,6 +32,7 @@ members = [
     "apps/jit",
     "apps/threads",
     "apps/shapes",
+    "apps/monitor",
     "apps/fputest",
     "apps/fuzz",
     "apps/play",

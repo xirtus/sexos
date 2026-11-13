@@ -1,0 +1,25 @@
+<!doctype html>
+<html><head><title>Daily start</title></head>
+<body>
+<h1>Daily use</h1>
+<p>A needle in the text, another needle here,</p>
+<p>and the last needle at the end.</p>
+<script>
+const n = (+localStorage.getItem('count') || 0) + 1;
+localStorage.setItem('count', n);
+localStorage.extra = 'x' + n;
+let keys = 0;
+document.addEventListener('keydown', e => { if (e.key === 'x') { keys++; console.log('daily start keys ' + keys + ' count ' + n); } });
+console.log('daily count ' + n + ' cookie ' + (document.cookie.replace(/; /g, ',') || '-') + ' extra ' + localStorage.extra);
+const r = indexedDB.open('visits', 1);
+r.onupgradeneeded = () => { const os = r.result.createObjectStore('visits', { autoIncrement: true }); os.createIndex('by_n', 'n', { unique: true }); };
+r.onsuccess = () => {
+  const tx = r.result.transaction('visits', 'readwrite');
+  const os = tx.objectStore('visits');
+  os.add({ n, at: new Date() });
+  let total = 0;
+  os.openCursor().onsuccess = e => { const c = e.target.result; if (c) { total += c.value.n; c.continue(); } };
+  tx.oncomplete = () => { r.result.transaction('visits').objectStore('visits').count().onsuccess = e => console.log('daily idb ' + e.target.result + ' sum ' + total); };
+};
+</script>
+</body></html>

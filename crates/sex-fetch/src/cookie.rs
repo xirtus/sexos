@@ -31,6 +31,8 @@ pub struct Cookie {
 pub struct Jar {
     cookies: Vec<Cookie>,
     serial: u64,
+    /// Every store, replacement or removal adds one.
+    edits: u64,
 }
 
 fn is_ip(host: &str) -> bool { host.bytes().all(|b| b.is_ascii_digit() || b == b'.') || host.contains(':') }
@@ -49,7 +51,7 @@ fn default_path(url: &Url) -> String {
 }
 
 impl Jar {
-    pub const fn new() -> Self { Jar { cookies: Vec::new(), serial: 0 } }
+    pub const fn new() -> Self { Jar { cookies: Vec::new(), serial: 0, edits: 0 } }
     pub fn len(&self) -> usize { self.cookies.len() }
     pub fn is_empty(&self) -> bool { self.cookies.is_empty() }
     pub fn iter(&self) -> impl Iterator<Item = &Cookie> { self.cookies.iter() }
@@ -58,6 +60,43 @@ impl Jar {
     pub fn store(&mut self, url: &Url, header: &str, now: u64) { self.set(url, header, now, true) }
     /// Takes a `document.cookie = ...` assignment from a page at `url`.
     pub fn store_from_script(&mut self, url: &Url, text: &str, now: u64) { self.set(url, text, now, false) }
+
+    /// Grows with every change to the jar: the browser saves it when this moved.
+    pub fn changes(&self) -> u64 { self.edits }
+
+    /// The cookies that outlast the session (those with an expiry), one per line,
+    /// for the browser to keep in Files. Session cookies are not saved.
+    pub fn save(&self, now: u64) -> String {
+        let mut out = String::new();
+        for c in &self.cookies {
+            let Some(e) = c.expires.filter(|e| *e > now) else { continue };
+            out.push_str(&alloc::format!("{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n", c.name, c.value, c.domain, c.host_only as u8, c.path, c.secure as u8, c.http_only as u8, e));
+        }
+        out
+    }
+
+    /// Reads back what [`save`](Self::save) wrote, dropping expired or malformed lines.
+    pub fn load(text: &str, now: u64) -> Jar {
+        let mut jar = Jar::default();
+        for line in text.lines() {
+            let f: Vec<&str> = line.split('\t').collect();
+            let [name, value, domain, host_only, path, secure, http_only, expires] = f[..] else { continue };
+            let Ok(e) = expires.parse::<u64>() else { continue };
+            if e <= now || domain.is_empty() || !path.starts_with('/') || name.len() + value.len() > MAX_BYTES { continue; }
+            if name.bytes().chain(value.bytes()).any(|b| b < 0x20 || b == 0x7f) { continue; }
+            jar.serial += 1;
+            jar.cookies.push(Cookie { name: name.to_string(), value: value.to_string(), domain: domain.to_ascii_lowercase(), host_only: host_only == "1", path: path.to_string(), secure: secure == "1", http_only: http_only == "1", expires: Some(e), created: jar.serial });
+            if jar.cookies.len() >= MAX_COOKIES { break; }
+        }
+        jar
+    }
+
+    /// Forgets the cookies of `host` and of the domains above it (clearing a site's data).
+    pub fn clear_site(&mut self, host: &str) {
+        let before = self.cookies.len();
+        self.cookies.retain(|c| !domain_match(host, &c.domain) && c.domain != host);
+        if self.cookies.len() != before { self.edits += 1; }
+    }
 
     fn set(&mut self, url: &Url, header: &str, now: u64, from_http: bool) {
         if header.len() > MAX_BYTES { return; }
@@ -101,6 +140,7 @@ impl Jar {
         if c.name.starts_with("__Host-") && (!c.host_only || c.path != "/") { return; }
         if c.secure && !url.secure { return; }
         let old = self.cookies.iter().position(|o| o.name == c.name && o.domain == c.domain && o.path == c.path);
+        self.edits += 1;
         if let Some(i) = old {
             if self.cookies[i].http_only && !from_http { return; }
             c.created = self.cookies[i].created;
