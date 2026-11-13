@@ -235,6 +235,8 @@ jobs:
       run: python3 scripts/files_thumbs_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-thumbs"
     - name: ext4 stick written from SexOS, e2fsck clean
       run: python3 scripts/files_ext4_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-ext4"
+    - name: Encrypted home unlocks with its password, unreadable without it
+      run: python3 scripts/files_home_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-home"
     - name: Power cuts while Files writes (QEMU killed, disk checked each time)
       run: python3 scripts/powercut_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-powercut"
     - name: Files repairs a damaged disk at start

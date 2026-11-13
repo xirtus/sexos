@@ -2215,6 +2215,7 @@ dependencies = [
 name = "sexfiles"
 version = "0.1.0"
 dependencies = [
+ "sex-crypt",
  "sex-disk",
  "sex-object-model",
  "sex-pdx",

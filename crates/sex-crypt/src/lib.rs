@@ -26,6 +26,8 @@ pub enum Error {
     WrongPassword,
     /// A header we can't read (another version, impossible parameters).
     Corrupt,
+    /// Not enough memory for the key derivation the header asks for.
+    NoMemory,
 }
 
 /// Argon2id cost: memory in KiB, passes, lanes.
@@ -34,6 +36,9 @@ pub struct Cost { pub memory_kib: u32, pub passes: u32, pub lanes: u32 }
 impl Cost {
     /// About a second on one core of a laptop; more under QEMU's software CPU.
     pub const DEFAULT: Cost = Cost { memory_kib: 64 * 1024, passes: 3, lanes: 1 };
+    /// For a service whose memory is small: 16 MiB, more passes (RFC 9106's second
+    /// recommended option scaled down, still far above what a GPU farm likes).
+    pub const SMALL: Cost = Cost { memory_kib: 16 * 1024, passes: 4, lanes: 1 };
 }
 
 /// XTS-AES-256 with a 512-bit key: the first half encrypts, the second makes tweaks.
@@ -72,8 +77,12 @@ impl Xts {
 fn kek(password: &[u8], salt: &[u8; 32], cost: Cost) -> Result<[u8; KEY], Error> {
     let params = argon2::Params::new(cost.memory_kib, cost.passes, cost.lanes, Some(KEY)).map_err(|_| Error::Corrupt)?;
     let a = argon2::Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params);
+    // Its working memory is asked for, not assumed: a server that can't grow says so.
+    let mut blocks: alloc::vec::Vec<argon2::Block> = alloc::vec::Vec::new();
+    blocks.try_reserve_exact(cost.memory_kib as usize).map_err(|_| Error::NoMemory)?;
+    blocks.resize(cost.memory_kib as usize, argon2::Block::default());
     let mut out = [0u8; KEY];
-    a.hash_password_into(password, salt, &mut out).map_err(|_| Error::Corrupt)?;
+    a.hash_password_into_with_memory(password, salt, &mut out, &mut blocks[..]).map_err(|_| Error::Corrupt)?;
     Ok(out)
 }
 fn check(master: &[u8; KEY]) -> [u8; 32] {
@@ -88,6 +97,12 @@ const WRAP_UNIT: u64 = u64::MAX;
 /// A new header for `master`, wrapped by `password`. `salt` and `master` must be random.
 pub fn header(password: &[u8], salt: &[u8; 32], master: &[u8; KEY], cost: Cost) -> Result<[u8; HEADER], Error> {
     let mut h = [0u8; HEADER];
+    header_into(&mut h, password, salt, master, cost)?;
+    Ok(h)
+}
+/// [`header`] written into `h`, for a caller whose stack is small.
+pub fn header_into(h: &mut [u8; HEADER], password: &[u8], salt: &[u8; 32], master: &[u8; KEY], cost: Cost) -> Result<(), Error> {
+    h.fill(0);
     h[..8].copy_from_slice(MAGIC);
     h[8..12].copy_from_slice(&VERSION.to_le_bytes());
     h[12..16].copy_from_slice(&cost.memory_kib.to_le_bytes());
@@ -98,7 +113,7 @@ pub fn header(password: &[u8], salt: &[u8; 32], master: &[u8; KEY], cost: Cost) 
     Xts::new(&kek(password, salt, cost)?).encrypt(WRAP_UNIT, &mut wrapped);
     h[64..128].copy_from_slice(&wrapped);
     h[128..160].copy_from_slice(&check(master));
-    Ok(h)
+    Ok(())
 }
 /// The cost a header asks for, or why it can't be read.
 pub fn cost(h: &[u8]) -> Result<Cost, Error> {
