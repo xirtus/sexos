@@ -1,0 +1,14 @@
+[package]
+name = "ssh"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+
+[[bin]]
+name = "ssh"
+path = "src/main.rs"
+
+[dependencies]
+sex-std = { path = "../../crates/sex-std" }
+sex-ssh = { path = "../../crates/sex-ssh" }
+sha2 = { version = "=0.10.9", default-features = false }

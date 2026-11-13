@@ -275,7 +275,12 @@ pub fn paint(page: &Page, fonts: &mut Fonts, target: &mut Target, focus: Option<
     let top = target.scroll;
     let bottom = target.scroll + target.height - target.top;
     let outer = target.clip;
+    let sticky = !page.item_sticky.is_empty();
+    let mut moved;
     for (i, item) in page.items.iter().enumerate() {
+        // A sticky box's items follow the scroll.
+        let dy = if sticky { page.sticky_shift(i, target.scroll) } else { 0 };
+        let item = if dy != 0 { moved = item.clone(); moved.offset(0, dy); &moved } else { item };
         let (a, b) = item.vertical_span();
         if b <= top || a >= bottom { continue; }
         target.clip = page.clip_of(i).or(outer);
@@ -314,6 +319,8 @@ pub fn paint(page: &Page, fonts: &mut Fonts, target: &mut Target, focus: Option<
 /// when each is opaque and so covers what was under it. False when that can't stand in
 /// for a full `frame`.
 pub fn repaint_pictures(page: &Page, fonts: &mut Fonts, pixels: &mut [u32], width: i32, height: i32, scroll: i32, changed: &[String]) -> bool {
+    // Sticky boxes move with the scroll: only a whole frame places them.
+    if !page.item_sticky.is_empty() { return false; }
     let mut t = Target { pixels, width, height, scroll, top: BAR, premul: false, clip: None };
     let (top, bottom) = (scroll, scroll + height - BAR);
     let mut items: Vec<(i32, i32, i32, i32, &str, Option<[i32; 4]>)> = Vec::new();

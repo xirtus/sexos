@@ -14,6 +14,7 @@
 extern crate alloc;
 
 mod jobs;
+mod search;
 
 use alloc::format;
 use alloc::string::String;
@@ -23,6 +24,7 @@ use sex_app::files::{self, Entry, Pick, Question};
 use sex_app::{Event, Nav, Window};
 use sex_pdx::fs as w;
 use jobs::{Job, Kind, Outcome};
+use search::{Index, Search};
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
@@ -52,10 +54,11 @@ const KEY_D: u8 = 0x20;
 const KEY_S: u8 = 0x1F;
 const KEY_E: u8 = 0x12;
 const KEY_I: u8 = 0x17;
+const KEY_F: u8 = 0x21;
 
 /// One step Ctrl+Z can take back.
 enum Undo { Moved { from: Vec<u8>, to: Vec<u8> }, Trashed { from: Vec<u8>, to: Vec<u8>, info: Vec<u8> }, Copied { to: Vec<u8> }, Made { path: Vec<u8> } }
-enum Input { Rename(Vec<u8>), NewFolder, SaveAs }
+enum Input { Rename(Vec<u8>), NewFolder, SaveAs, Search }
 /// Something that can't be undone, waiting for the same key a second time.
 #[derive(PartialEq, Eq)]
 enum Confirm { DeleteForever(Vec<u8>), EmptyTrash(Vec<u8>) }
@@ -83,6 +86,14 @@ struct App {
     confirm: Option<Confirm>,
     /// In a trash folder: where each entry came from, by row.
     origins: Vec<Option<Vec<u8>>>,
+    /// The `/media` volume being looked at, while it is there: noticed when it goes.
+    watching: Option<Vec<u8>>,
+    last_look: u64,
+    index: Index,
+    /// A search running in the background.
+    search: Option<Search>,
+    /// The listing shows search results for this, not the folder.
+    found: Option<Vec<u8>>,
 }
 
 /// The path as Files knows a granted one: `@/absolute/path`.
@@ -117,13 +128,19 @@ fn human(bytes: u64) -> String {
 
 impl App {
     fn load(&mut self, window: &mut Window) {
+        self.found = None;
         match files::list(window, &at(&self.cwd)) {
             Ok(mut list) => {
-                list.retain(|e| e.name != TRASH);
+                // A copy still being written (or cut short by a pulled stick) is not a file yet.
+                list.retain(|e| e.name != TRASH && !(e.name.first() == Some(&b'.') && e.name.ends_with(b".part")));
                 list.sort_by(|a, b| b.dir.cmp(&a.dir).then_with(|| a.name.to_ascii_lowercase().cmp(&b.name.to_ascii_lowercase())));
                 self.entries = list;
             }
-            Err(e) => { self.entries.clear(); self.status = format!("Can't open {}: {}", shown(&self.cwd), shown(files::message(e))); }
+            Err(e) => {
+                self.entries.clear();
+                self.status = format!("Can't open {}: {}", shown(&self.cwd), shown(files::message(e)));
+                sex_pdx::serial_record!("[files.app.list.failed] dir={} error={}", shown(&self.cwd), e);
+            }
         }
         self.origins.clear();
         if base(&self.cwd) == TRASH {
@@ -138,12 +155,57 @@ impl App {
         self.cursor = self.cursor.min(self.entries.len().saturating_sub(1));
         sex_pdx::serial_record!("[files.app.list] dir={} count={}", shown(&self.cwd), self.entries.len());
     }
-    fn go(&mut self, window: &mut Window, dir: Vec<u8>) { self.cwd = dir; self.cursor = 0; self.top = 0; self.load(window); }
+    fn go(&mut self, window: &mut Window, dir: Vec<u8>) {
+        self.cwd = dir; self.cursor = 0; self.top = 0; self.load(window);
+        let root = disk_root(&self.cwd);
+        self.watching = (root != b"/" && self.status.is_empty()).then_some(root);
+    }
+    /// Ctrl+E outside a trash: Eject the stick or disk the current folder is on (or the one selected in
+    /// /media). Everything is written out first; then it is safe to pull out.
+    fn eject(&mut self, window: &mut Window) {
+        let target = if self.cwd == w::MEDIA { self.selected() } else { Some(disk_root(&self.cwd)).filter(|r| r != b"/") };
+        let Some(vol) = target else { self.status = "Ctrl+E ejects a stick or disk: open it, or pick it in Ctrl+D disks.".into(); return };
+        let name = base(&vol).to_vec();
+        self.status = format!("Writing out {}...", shown(&name));
+        self.render(window);
+        let _ = files::sync(window);
+        match files::eject(window, &at(&vol)) {
+            Ok(()) => {
+                sex_pdx::serial_record!("[files.app.ejected] name={}", shown(&name));
+                self.watching = None;
+                if self.root.starts_with(&vol) {
+                    // This run was given only that disk: nothing is left to show.
+                    self.cwd = self.root.clone(); self.entries.clear(); self.origins.clear();
+                } else { let m = w::MEDIA.to_vec(); self.go(window, m); }
+                self.status = format!("{} can be pulled out safely now.", shown(&name));
+            }
+            Err(e) => {
+                sex_pdx::serial_record!("[files.app.eject.failed] name={} error={}", shown(&name), e);
+                self.status = format!("Couldn't eject {}: {}. Keep it plugged in.", shown(&name), shown(files::message(e)));
+            }
+        }
+    }
+    /// The volume being looked at disappeared without Eject: say so, once.
+    fn look_for_pulled(&mut self, window: &mut Window) -> bool {
+        let Some(vol) = self.watching.clone() else { return false };
+        if files::stat(window, &at(&vol)).is_ok() { return false; }
+        self.watching = None;
+        let name = base(&vol).to_vec();
+        sex_pdx::serial_record!("[files.app.pulled] name={}", shown(&name));
+        self.entries.clear(); self.origins.clear();
+        self.status = format!("{} was pulled out without Ctrl+E Eject: a file being written to it may be cut short. Plug it back in and copy again.", shown(&name));
+        true
+    }
     fn selected(&self) -> Option<Vec<u8>> { self.entries.get(self.cursor).map(|e| join(&self.cwd, &e.name)) }
     fn select(&mut self, name: &[u8]) { if let Some(i) = self.entries.iter().position(|e| e.name == name) { self.cursor = i; } }
 
     fn render(&mut self, window: &mut Window) {
         let mut t = String::new();
+        if let Some(sr) = &self.search {
+            t.push_str(&format!("Searching {} for \"{}\": {} found in {} files so far. Esc stops.\n\n", shown(&sr.base), shown(&sr.query), sr.results.len(), sr.looked));
+        } else if let Some(q) = &self.found {
+            t.push_str(&format!("Found {} for \"{}\" in {}. Enter opens its folder, Esc goes back.\n", self.entries.len(), shown(q), shown(&self.cwd)));
+        }
         let space = files::space(window, &at(&self.cwd)).ok().filter(|s| s.0 > 0).map(|(total, free)| format!("  {} free of {}", human(free), human(total))).unwrap_or_default();
         t.push_str(&format!("Files  {}{}\n", shown(&self.cwd), space));
         if let Some(q) = &self.question {
@@ -162,11 +224,11 @@ impl App {
         if self.entries.len() > self.top + ROWS { t.push_str(&format!("  ... {} more\n", self.entries.len() - self.top - ROWS)); }
         t.push('\n');
         if let Some((kind, text)) = &self.input {
-            let label = match kind { Input::Rename(_) => "Rename to", Input::NewFolder => "New folder", Input::SaveAs => "Save as" };
+            let label = match kind { Input::Rename(_) => "Rename to", Input::NewFolder => "New folder", Input::SaveAs => "Save as", Input::Search => "Search names and words" };
             t.push_str(&format!("{}: {}|   (Enter confirms, Esc cancels)\n", label, shown(text)));
         } else if !self.status.is_empty() { t.push_str(&self.status); t.push('\n'); }
         if let Some(job) = &self.job { t.push_str(&job.progress()); t.push('\n'); }
-        t.push_str("Enter open  Backspace up  F2 rename  Ctrl+I size and checksum\nCtrl+C/X/V copy, cut, paste  Ctrl+N folder\nDel trash  Shift+Del delete for good  Ctrl+T show trash\nIn the trash: Ctrl+R restore  Ctrl+E empty\nCtrl+Z undo  Ctrl+D disks  Ctrl+H home  Esc stops a copy\n");
+        t.push_str("Enter open  Backspace up  F2 rename  Ctrl+I size and checksum\nCtrl+C/X/V copy, cut, paste  Ctrl+N folder\nDel trash  Shift+Del delete for good  Ctrl+T show trash\nIn the trash: Ctrl+R restore  Ctrl+E empty\nOn a stick: Ctrl+E eject  Ctrl+D disks  Ctrl+Z undo  Ctrl+H home\nCtrl+F search names and words in files\n");
         window.show(t.as_bytes());
     }
 
@@ -187,6 +249,7 @@ impl App {
     }
     /// One piece of the background job. True when the window should be drawn again.
     fn work(&mut self, window: &mut Window) -> bool {
+        if self.search.is_some() { return self.search_step(window); }
         let Some(job) = self.job.as_mut() else { return false };
         match job.step(window) {
             Outcome::Running => {
@@ -219,10 +282,33 @@ impl App {
                 self.job = None;
                 self.job_undo = None;
                 self.status = format!("Couldn't finish: {}. Nothing half-done was left.", why);
-                self.load(window);
+                if !self.look_for_pulled(window) { self.load(window); }
                 true
             }
         }
+    }
+    fn search_step(&mut self, window: &mut Window) -> bool {
+        let Some(sr) = self.search.as_mut() else { return false };
+        if let search::Step::Running = sr.step(window, &mut self.index) {
+            let now = sex_pdx::get_ticks();
+            if now.saturating_sub(self.last_drawn) >= 150 { self.last_drawn = now; return true; }
+            return false;
+        }
+        let sr = self.search.take().unwrap();
+        self.show_found(&sr, true);
+        true
+    }
+    /// Search results in place of the folder's listing: names relative to it.
+    fn show_found(&mut self, sr: &Search, finished: bool) {
+        sex_pdx::serial_record!("[files.app.search] base={} query={} results={} looked={} read={} ms={} finished={}",
+            shown(&sr.base), shown(&sr.query), sr.results.len(), sr.looked, sr.read, sr.elapsed_ms(), finished as u8);
+        for f in sr.results.iter().take(20) { sex_pdx::serial_record!("[files.app.found] path={} by={}", shown(&f.path), if f.by_words { "words" } else { "name" }); }
+        self.entries = sr.results.iter().map(|f| Entry { name: f.path.clone(), dir: f.dir, size: f.size }).collect();
+        self.cwd = sr.base.clone();
+        self.origins.clear();
+        self.cursor = 0; self.top = 0;
+        self.found = Some(sr.query.clone());
+        self.status = if finished { format!("{} found in {} files ({} ms).", sr.results.len(), sr.looked, sr.elapsed_ms()) } else { "Stopped searching: what was found so far is below.".into() };
     }
     fn stop_job(&mut self, window: &mut Window) {
         let Some(job) = self.job.as_mut() else { return };
@@ -394,6 +480,14 @@ impl App {
     }
     fn finish_input(&mut self, window: &mut Window) {
         let Some((kind, text)) = self.input.take() else { return };
+        if let Input::Search = kind {
+            if text.iter().all(|b| *b == b' ') { return; }
+            let base = self.cwd.clone();
+            sex_pdx::serial_record!("[files.app.search.start] base={} query={}", shown(&base), shown(&text));
+            self.search = Some(Search::new(window, &mut self.index, &base, &text));
+            self.last_drawn = 0;
+            return;
+        }
         if text.is_empty() || text.contains(&b'/') || text == b"." || text == b".." { self.status = "That name can't be used.".into(); return; }
         match kind {
             Input::Rename(from) => {
@@ -410,6 +504,7 @@ impl App {
                     Err(e) => self.status = format!("Couldn't make the folder: {}.", shown(files::message(e))),
                 }
             }
+            Input::Search => {}
             Input::SaveAs => { let path = join(&self.cwd, &text); self.answer(window, Some(path)); }
         }
         let _ = files::sync(window);
@@ -458,6 +553,10 @@ impl App {
         }
         // Shift+Del and Ctrl+E ask twice; anything else between keeps things.
         let confirming = self.confirm.is_some();
+        if let Some(sr) = self.search.take() {
+            if key.code == ESC { self.show_found(&sr, false); } else { self.search = Some(sr); self.status = "Searching: Esc stops.".into(); }
+            return;
+        }
         if self.job.is_some() {
             if key.code == ESC { self.stop_job(window); return; }
             let changes = key.control && matches!(key.code, KEY_V | KEY_Z | KEY_N | KEY_R | KEY_E | KEY_I)
@@ -477,8 +576,11 @@ impl App {
                 KEY_N => self.input = Some((Input::NewFolder, Vec::new())),
                 KEY_T => { let t = join(&disk_root(&self.cwd), TRASH); self.go(window, t); }
                 KEY_R => self.restore(window),
+                // Ctrl+E: Empty in a trash, Eject on a stick or disk.
+                KEY_E if base(&self.cwd) != TRASH && (self.cwd == w::MEDIA || disk_root(&self.cwd) != b"/") => self.eject(window),
                 KEY_E => self.empty_trash(window),
                 KEY_I => self.info(window),
+                KEY_F => self.input = Some((Input::Search, Vec::new())),
                 KEY_H => { let r = self.root.clone(); self.go(window, r); }
                 KEY_D => self.go(window, w::MEDIA.to_vec()),
                 KEY_S => match self.question.as_ref().map(|q| q.mode) {
@@ -500,6 +602,14 @@ impl App {
             (ENTER, _) => {
                 let Some(e) = self.entries.get(self.cursor) else { return };
                 let path = join(&self.cwd, &e.name);
+                if self.found.is_some() && !e.dir {
+                    // A search result: open the folder it is in, on it.
+                    let name = base(&path).to_vec();
+                    self.go(window, parent(&path));
+                    self.select(&name);
+                    sex_pdx::serial_record!("[files.app.found.opened] path={}", shown(&path));
+                    return;
+                }
                 if e.dir { self.go(window, path); }
                 else if matches!(self.question.as_ref().map(|q| q.mode), Some(Pick::Open)) { self.answer(window, Some(path)); }
                 else { self.status = format!("{}: {}. Programs open it with run NAME @{}.", shown(&e.name), human(e.size), shown(&path)); }
@@ -513,7 +623,7 @@ impl App {
                     self.select(&here);
                 }
             }
-            (ESC, _) => if self.question.is_some() && !confirming { self.answer(window, None); },
+            (ESC, _) => if self.found.is_some() { self.load(window); } else if self.question.is_some() && !confirming { self.answer(window, None); },
             (F2, _) => if let Some(p) = self.selected() { let name = base(&p).to_vec(); self.input = Some((Input::Rename(p), name)); },
             (F5, _) => self.load(window),
             _ => {}
@@ -536,14 +646,15 @@ pub extern "C" fn _start() -> ! {
     };
     let portal = root == b"/";
     let mut app = App { cwd: root.clone(), root, entries: Vec::new(), cursor: 0, top: 0, clip: None, undo: Vec::new(), input: None, status: String::new(), question: None, portal,
-                        job: None, job_undo: None, job_select: None, last_drawn: 0, last_pct: 0, confirm: None, origins: Vec::new() };
-    app.load(&mut window);
+                        job: None, job_undo: None, job_select: None, last_drawn: 0, last_pct: 0, confirm: None, origins: Vec::new(), watching: None, last_look: 0, index: Index::new(), search: None, found: None };
+    let start = app.root.clone();
+    app.go(&mut window, start);
     app.poll_questions(&mut window);
     app.render(&mut window);
     sex_pdx::serial_record!("[files.app.ready] target={} task={} root={} portal={}", window.target, window.task, shown(&app.root), portal as u8);
     loop {
         // While a job runs, look for keys between its pieces instead of sleeping.
-        let event = if app.job.is_some() {
+        let event = if app.job.is_some() || app.search.is_some() {
             match window.poll() { Some(e) => Some(e), None => { if app.work(&mut window) { app.render(&mut window); } continue; } }
         } else { window.next_within(400) };
         match event {
@@ -555,7 +666,12 @@ pub extern "C" fn _start() -> ! {
             Some(Event::Key(key)) => { app.key(&mut window, key); app.render(&mut window); }
             Some(_) => {}
             // Quiet: another program may be asking the person for a file.
-            None => if app.poll_questions(&mut window) { app.render(&mut window); },
+            None => {
+                let mut redraw = app.poll_questions(&mut window);
+                let now = sex_pdx::get_ticks();
+                if now.saturating_sub(app.last_look) >= 1000 { app.last_look = now; redraw |= app.look_for_pulled(&mut window); }
+                if redraw { app.render(&mut window); }
+            }
         }
     }
 }

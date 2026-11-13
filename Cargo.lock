@@ -2009,6 +2009,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-ssh"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "ed25519-compact",
+ "p256",
+ "rsa",
+ "sha2",
+]
+
+[[package]]
 name = "sex-std"
 version = "0.1.0"
 dependencies = [
@@ -2077,6 +2088,14 @@ dependencies = [
  "sex-html",
  "sex-image",
  "sex-js",
+]
+
+[[package]]
+name = "sex-wg"
+version = "0.1.0"
+dependencies = [
+ "chacha20poly1305",
+ "fiat-crypto",
 ]
 
 [[package]]
@@ -2390,6 +2409,15 @@ checksum = "d91ed6c858b01f942cd56b37a94b3e0a1798290327d1236e4d9cf4eaca44d29d"
 dependencies = [
  "base64ct",
  "der",
+]
+
+[[package]]
+name = "ssh"
+version = "0.1.0"
+dependencies = [
+ "sex-ssh",
+ "sex-std",
+ "sha2",
 ]
 
 [[package]]

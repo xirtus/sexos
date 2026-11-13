@@ -3,7 +3,7 @@
 localStorage and gets a lasting cookie; Ctrl+D bookmarks it; Ctrl+T opens two more tabs,
 Ctrl+W closes the middle one and the first tab still has its script state; Ctrl+F finds
 three matches; Ctrl+= zooms and the page reflows taller; closing saves the profile.
-Second boot on the same disk: the counter goes on (2), the cookie comes back to the
+Second boot on the same disk: the counter goes on (2), IndexedDB has both visits, the cookie comes back to the
 server, and typing the start of the address suggests the bookmark."""
 import argparse,http.server,os,re,shutil,threading,time
 from pathlib import Path
@@ -54,6 +54,7 @@ def main():
  g,t,q,keys,m,(target,task)=session('boot1')
  try:
   assert m[1]=='1' and m[3]=='x1',m.group(0)
+  g['wait'](r'\[web.console\] level=0 daily idb 1 sum 1',0,120)
   s=len(t());q.key('x');g['wait'](r'\[web.console\] level=0 daily start keys 1 count 1',s,60)
   g['chord']('ctrl','d',r'\[web.bookmark\] on=1 count=1 ')
   for name in ('b','c'):
@@ -83,6 +84,7 @@ def main():
  g,t,q,keys,m,_=session('boot2')
  try:
   assert m[1]=='2' and m[3]=='x2',m.group(0)
+  g['wait'](r'\[web.console\] level=0 daily idb 2 sum 3',0,120)
   assert 'keep=yes' in m[2],m[2]
   assert any('keep=yes' in c and 'gone' not in c for c in seen_cookies[1:]),seen_cookies
   s=len(t());q.key('slash');time.sleep(.3);keys('10.0.2')

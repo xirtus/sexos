@@ -1,0 +1,13 @@
+[package]
+name = "sex-ssh"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "SSH client protocol for SexOS (curve25519, AES-GCM, ed25519/ecdsa/rsa host keys); no I/O"
+
+[dependencies]
+aes-gcm = { version = "=0.10.3", default-features = false, features = ["aes"] }
+sha2 = { version = "=0.10.9", default-features = false }
+ed25519-compact = { version = "2.6", default-features = false, features = ["x25519"] }
+p256 = { version = "=0.13.2", default-features = false, features = ["ecdsa"] }
+rsa = { version = "=0.9.8", default-features = false, features = ["sha2"] }
