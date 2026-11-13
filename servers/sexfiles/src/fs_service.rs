@@ -462,7 +462,7 @@ pub fn handle(caller: u32, a: u64, offset: u64, length: u64) -> u64 {
         }
         (None, Some(k)) => {
             let bound = unsafe { (*core::ptr::addr_of!(BINDINGS))[k] };
-            if !bound.is_some_and(|b| program_live(caller, b.task)) || matches!(r.kind, w::PREPARE | w::INSTALL | w::UPDATE | w::MOUNT | w::UNMOUNT) { return w::reply(r.seq, w::DENIED, 0); }
+            if !bound.is_some_and(|b| program_live(caller, b.task)) || matches!(r.kind, w::PREPARE | w::INSTALL | w::UPDATE | w::MOUNT | w::UNMOUNT | sex_pdx::package::KIND) { return w::reply(r.seq, w::DENIED, 0); }
             w::PROGRAM_INDEX_BASE + k
         }
         _ => return w::reply(r.seq, w::DENIED, 0),
@@ -519,6 +519,17 @@ fn handle_request(index: usize, program: Option<usize>, r: w::Request) -> u64 {
         if writes_pending() { commit_writes(fs); }
         let result = crate::updater::run(fs, &path[..path_len], &mut region[w::PATH_BYTES..]);
         return match result { Ok((st, n)) => w::reply(r.seq, st, n), Err(e) => w::reply(r.seq, status(e), 0) };
+    }
+    if r.kind == sex_pdx::package::KIND {
+        let State::Ready(fs) = state else { return w::reply(r.seq, w::UNAVAILABLE, 0) };
+        let path_len = (r.path_len as usize).min(w::PATH_BYTES);
+        let mut path = [0u8; w::PATH_BYTES];
+        path[..path_len].copy_from_slice(&region[..path_len]);
+        forget_stats(None);
+        // Others' writes are saved first, so undoing a refused package undoes only it.
+        if writes_pending() { commit_writes(fs); }
+        let (st, n) = crate::packages::handle(fs, r.offset, &path[..path_len], r.length, &mut region[w::PATH_BYTES..w::CACHE_AT]);
+        return w::reply(r.seq, st, n);
     }
     let fs = match state { State::Ready(fs) => Some(fs), _ => None };
     let mut path = [0u8; w::PATH_BYTES];
@@ -775,6 +786,9 @@ fn run(fs: &mut Fs<'static, Disk>, r: w::Request, path: &[u8], data: &mut [u8]) 
             // Never zero, and within the reply's 24 bits.
             let ticket = unsafe { NEXT_TICKET = NEXT_TICKET % 0xFF_FFFE + 1; NEXT_TICKET };
             prepared.2 = ticket;
+            // A program a package installed: what it asks for and what the person said.
+            let note = path.strip_prefix(sex_pdx::program_store::BIN).and_then(|name| crate::packages::note(fs, name));
+            match note { Some(n) => n.encode(data), None => data[..sex_pdx::package::NOTE_BYTES].fill(0) }
             Ok(ticket)
         }
         w::STATFS => {
