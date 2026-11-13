@@ -89,6 +89,7 @@ members = [
     "apps/rg",
     "apps/fd",
     "apps/python",
+    "apps/store",
 ]
 [workspace.package]
 license = "GPL-3.0-only"

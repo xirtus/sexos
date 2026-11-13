@@ -72,7 +72,8 @@ crates = [
   "apps/lua/Cargo.toml",
   "apps/rg/Cargo.toml",
   "apps/fd/Cargo.toml",
-  "apps/python/Cargo.toml"
+  "apps/python/Cargo.toml",
+  "apps/store/Cargo.toml"
 ]
 
 [[stage]]
@@ -497,6 +498,15 @@ target = "x86_64-sex-app.json"
 manifest = "apps/hum/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/hum"
 dest_artifact = "iso_root/programs/hum"
+
+# Store: the package catalog in a window (`store` in Spindle).
+[[stage]]
+id = "build_store"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/store/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/store"
+dest_artifact = "iso_root/programs/store"
 
 [[stage]]
 id = "build_snoop"
