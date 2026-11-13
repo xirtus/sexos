@@ -354,3 +354,31 @@ jobs:
           ${{ runner.temp }}/recording
           ${{ runner.temp }}/recording-build.log
         if-no-files-found: ignore
+
+  productivity:
+    name: Productivity programs
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+    - uses: actions/checkout@v4
+    - uses: ./.github/actions/setup
+    - name: Build the image
+      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/productivity-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/productivity-build.log"; exit 1)
+    - name: PDF finds a word on page 7, outline, thumbnails and zoom
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/blank-pdf.img"
+        python3 scripts/program_pdf_find_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-pdf.img" --out "$RUNNER_TEMP/sexos-productivity/pdf-find"
+    - name: View pictures, turns, zoom, animated WebP and a folder slideshow
+      run: |
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends python3-pil
+        truncate -s 256M "$RUNNER_TEMP/blank-view.img"
+        python3 scripts/program_view_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-view.img" --out "$RUNNER_TEMP/sexos-productivity/view"
+    - name: Preserve productivity evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sexos-productivity-proof
+        path: |
+          ${{ runner.temp }}/productivity-build.log
+          ${{ runner.temp }}/sexos-productivity
+        if-no-files-found: ignore
