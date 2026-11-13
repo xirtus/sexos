@@ -23,6 +23,11 @@
 //! * sockets: the program's network flows (`sex_app::net::direct`), for a run started
 //!   with `run +net`: TCP connections and listeners, UDP, and name lookup.
 //!
+//! What std's Hermit port refuses on its own (`rename`, `File::set_len`,
+//! `File::sync_all`, `remove_dir_all`, `canonicalize`, a working `copy`) is in
+//! [`fs`]; why `std::process::Command` cannot start another program yet is in
+//! [`process`].
+//!
 //! A program uses it with `use sex_std as _;` (or calls [`window`] for pixels) and a
 //! normal `fn main`.
 #![cfg_attr(target_os = "hermit", feature(thread_local, rustc_private))]
@@ -35,6 +40,10 @@ mod console;
 pub mod sys;
 #[cfg(target_os = "hermit")]
 mod net;
+#[cfg(target_os = "hermit")]
+pub mod fs;
+#[cfg(target_os = "hermit")]
+pub mod process;
 
 pub use sex_app;
 pub use sex_pdx;

@@ -53,6 +53,11 @@ macro_rules! apps_lock{()=>{{
 static TARGETS:[AtomicU32;MAX_APPS]=[const{AtomicU32::new(0)};MAX_APPS];
 static DORMANT:[AtomicBool;MAX_APPS]=[const{AtomicBool::new(false)};MAX_APPS];
 static TERMINAL:[AtomicBool;MAX_APPS]=[const{AtomicBool::new(false)};MAX_APPS];
+/// The live run of an app row and the pages its manifest holds, for the system monitor.
+pub fn held_pages(target:u32)->Option<(u32,u64)>{
+    let i=TARGETS.iter().position(|t|t.load(Ordering::Acquire)==target)?;
+    let apps=apps_lock!()?;Some((apps[i].task,apps[i].count as u64))
+}
 fn boot(){assert_eq!(crate::ipc::BOOT_PHASE.load(Ordering::Acquire),crate::ipc::BootPhase::RegistryBuild as u8,"APP_GENESIS_AFTER_SEAL");}
 pub fn plan_boot_apps(targets:&[u32]){
     boot();assert!(targets.len()<=MAX_APPS);let mut apps=APPS.lock();

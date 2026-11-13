@@ -654,6 +654,7 @@ version = "0.1.0"
 dependencies = [
  "sex-app",
  "sex-pdx",
+ "sha2",
 ]
 
 [[package]]
@@ -1161,6 +1162,14 @@ checksum = "b63fbc4a50860e98e7b2aa7804ded1db5cbc3aff9193adaff57a6931bf7c4b4c"
 dependencies = [
  "adler2",
  "simd-adler32",
+]
+
+[[package]]
+name = "monitor"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-pdx",
 ]
 
 [[package]]
@@ -1848,6 +1857,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-gpu-intel"
+version = "0.1.0"
+dependencies = [
+ "sex-kms",
+]
+
+[[package]]
 name = "sex-graphics"
 version = "0.1.0"
 dependencies = [
@@ -1930,6 +1946,10 @@ dependencies = [
  "x86",
  "x86_64",
 ]
+
+[[package]]
+name = "sex-kms"
+version = "0.1.0"
 
 [[package]]
 name = "sex-libc"

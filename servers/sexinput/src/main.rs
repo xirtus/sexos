@@ -287,8 +287,9 @@ impl KeyboardOutbox {
         if extended && matches!(raw&0x7f,0x2A|0x36) {return true;}
         let mut edge=KeyEdge{code:(raw&0x7f)as u8,down:(raw&0x80==0)as u8,source:1,modifiers:0};
         // Media keys share their byte with D, C and B: give them their own codes
-        // (sex_pdx::app_key::KEY_MUTE, KEY_VOLUME_DOWN, KEY_VOLUME_UP).
-        if extended {edge.code=match edge.code {0x20=>0x75,0x2E=>0x76,0x30=>0x77,c=>c};}
+        // (sex_pdx::app_key::KEY_MUTE, KEY_VOLUME_DOWN, KEY_VOLUME_UP), and the player
+        // keys share G, J, P and Q's (KEY_PLAY_PAUSE, KEY_STOP, KEY_NEXT, KEY_PREVIOUS).
+        if extended {edge.code=match edge.code {0x20=>0x75,0x2E=>0x76,0x30=>0x77,0x22=>0x78,0x24=>0x7A,0x19=>0x7C,0x10=>0x7F,c=>c};}
         self.push(&[edge])
     }
     /// One USB keyboard snapshot: modifiers plus up to six pressed usages packed one per

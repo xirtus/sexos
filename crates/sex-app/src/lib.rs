@@ -109,6 +109,7 @@ impl Window {
         bytes[..n].copy_from_slice(&name[..n]);
         let words = (u64::from_le_bytes(bytes[..8].try_into().unwrap()), u64::from_le_bytes(bytes[8..].try_into().unwrap()));
         call(SLOT_DISPLAY, lifecycle::OP_APP_TITLE, self.surface, words.0, words.1);
+        sex_pdx::system_stats::set_name(name);
     }
     /// Replaces the window's text. Longer text than the region holds is cut.
     pub fn show(&mut self, text: &[u8]) {

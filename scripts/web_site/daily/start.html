@@ -1,0 +1,15 @@
+<!doctype html>
+<html><head><title>Daily start</title></head>
+<body>
+<h1>Daily use</h1>
+<p>A needle in the text, another needle here,</p>
+<p>and the last needle at the end.</p>
+<script>
+const n = (+localStorage.getItem('count') || 0) + 1;
+localStorage.setItem('count', n);
+localStorage.extra = 'x' + n;
+let keys = 0;
+document.addEventListener('keydown', e => { if (e.key === 'x') { keys++; console.log('daily start keys ' + keys + ' count ' + n); } });
+console.log('daily count ' + n + ' cookie ' + (document.cookie.replace(/; /g, ',') || '-') + ' extra ' + localStorage.extra);
+</script>
+</body></html>

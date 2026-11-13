@@ -14,6 +14,7 @@ pub const EV_WHEEL:u64=app_scroll::CLASS;
 #[path = "../crates/sex-pdx/src/text_selection.rs"] pub mod text_selection;
 #[path = "../crates/sex-pdx/src/clipboard.rs"] pub mod clipboard;
 #[path = "../servers/silk-shell/src/app_input.rs"] mod app_input;
+#[path = "../servers/silk-shell/src/media_keys.rs"] mod media_keys;
 #[path = "../servers/silk-shell/src/clipboard.rs"] mod broker;
 #[path = "../servers/silk-shell/src/desktop_keys.rs"] mod desktop_keys;
 #[path = "../servers/silk-shell/src/wm.rs"] #[allow(dead_code)] mod wm;
@@ -141,6 +142,8 @@ mod shell {
     static mut SENT:Vec<(u64,u64,[u64;3])>=Vec::new();
     static mut VOLUME_STEPS:Vec<i8>=Vec::new();
     unsafe fn volume_key(step:i8){VOLUME_STEPS.push(step);}
+    static mut PLAYER_KEYS:Vec<u8>=Vec::new();
+    unsafe fn player_key(code:u8){PLAYER_KEYS.push(code);}
     unsafe fn clipboard_live(subject:Subject)->Option<bool>{LIVE_QUERIES.push(subject);if let Some((source,value))=LIVE_ONCE{if source==subject{LIVE_ONCE=None;return value}}match SOURCE_LIVE{Some((source,value))if source==subject=>value,_=>LIVE}}
     unsafe fn pdx_call(route:u64,op:u64,a:u64,b:u64,c:u64)->(u64,u64){SENT.push((route,op,[a,b,c]));(STATUS,0)}
     // Declared syscall boundary; the retained admission logic is production.
@@ -156,7 +159,7 @@ mod shell {
     unsafe fn switcher_step(_:i8){focus_next_frame();}
     unsafe fn switcher_end(_:bool){}
     include!(env!("APP_INPUT_PRODUCTION"));
-    unsafe fn reset(){POINTER_BUTTONS=0;INTERACTION=InteractionState::Idle;DISPLAY_SCALE=desktop_style::chrome::ScaleClient::new();APP_INPUT=Queue::new();CLIPBOARD_INTAKE=Intake::new();CLIPBOARD=broker::Broker::new();APP_MODIFIERS=Modifiers::new();DESKTOP_KEYS=desktop_keys::Keys::new();WM_CHORDS=wm::Chords::new();WM_ACTIONS.clear();FOCUSED_SURFACE_ID=156;COMMAND_PALETTE_OPEN=false;FOCUS_CHANGES=0;PALETTE_TOGGLES=0;for pd in [9,15,16,18]{CLIPBOARD.register(app_lifecycle::CatalogInfo{target_pd:pd,task_id:pd,surface_id:participant(pd,pd).surface,coordinator_pd:3}).unwrap();}LIVE=Some(true);SOURCE_LIVE=None;LIVE_ONCE=None;STATUS=0;SENT.clear();LIVE_QUERIES.clear();VOLUME_STEPS.clear();}
+    unsafe fn reset(){POINTER_BUTTONS=0;INTERACTION=InteractionState::Idle;DISPLAY_SCALE=desktop_style::chrome::ScaleClient::new();APP_INPUT=Queue::new();CLIPBOARD_INTAKE=Intake::new();CLIPBOARD=broker::Broker::new();APP_MODIFIERS=Modifiers::new();DESKTOP_KEYS=desktop_keys::Keys::new();WM_CHORDS=wm::Chords::new();WM_ACTIONS.clear();FOCUSED_SURFACE_ID=156;COMMAND_PALETTE_OPEN=false;FOCUS_CHANGES=0;PALETTE_TOGGLES=0;for pd in [9,15,16,18]{CLIPBOARD.register(app_lifecycle::CatalogInfo{target_pd:pd,task_id:pd,surface_id:participant(pd,pd).surface,coordinator_pd:3}).unwrap();}LIVE=Some(true);SOURCE_LIVE=None;LIVE_ONCE=None;STATUS=0;SENT.clear();LIVE_QUERIES.clear();VOLUME_STEPS.clear();PLAYER_KEYS.clear();}
     #[test]fn actual_scale_shortcut_retains_admission_and_never_repeats_an_applied_step(){
         let _guard=LOCK.lock().unwrap();unsafe{reset();
             assert!(desktop_shortcut(0x1d,1));assert!(desktop_shortcut(0x38,1));
@@ -185,6 +188,11 @@ mod shell {
         let _lock=LOCK.lock().unwrap();unsafe{reset();
         for (code,value) in [(0x77,1),(0x77,2),(0x77,0),(0x76,1),(0x76,0),(0x75,1),(0x75,0)]{assert!(desktop_shortcut(code,value));}
         assert_eq!(VOLUME_STEPS,vec![5,5,-5,0]);assert!(!APP_INPUT.pending());}
+    }
+    #[test] fn player_keys_go_to_bell_once_per_press_never_to_the_focused_app(){
+        let _lock=LOCK.lock().unwrap();unsafe{reset();
+        for (code,value) in [(0x78,1),(0x78,2),(0x78,0),(0x7a,1),(0x7a,0),(0x7c,1),(0x7c,0),(0x7f,1),(0x7f,0)]{assert!(desktop_shortcut(code,value));}
+        assert_eq!(PLAYER_KEYS,vec![0x78,0x7a,0x7c,0x7f]);assert!(!APP_INPUT.pending()&&SENT.is_empty());}
     }
     #[test] fn actual_shell_full_keeps_exact_front_then_sends_original_route_in_fifo_order(){
         let _lock=LOCK.lock().unwrap();unsafe{reset();let first=item(1,participant(9,9));let second=item(2,participant(15,15));assert!(APP_INPUT.push(first));assert!(APP_INPUT.push(second));STATUS=9;

@@ -196,6 +196,13 @@ struct Mixer { master: u8, muted: bool, rows: [u8; STREAMS], rows_muted: [bool; 
 static mut MIXER: Mixer = Mixer { master: 100, muted: false, rows: [100; STREAMS], rows_muted: [false; STREAMS], mic: [false; STREAMS] };
 fn settings() -> &'static mut Mixer { unsafe { &mut *core::ptr::addr_of_mut!(MIXER) } }
 
+/// For media keys: which PD each row's program is while it has played since it
+/// started (0 when it has not), and the row that most recently started playing.
+static mut PLAYED: [u32; STREAMS] = [0; STREAMS];
+static mut LAST_PLAYED: Option<usize> = None;
+fn played() -> &'static mut [u32; STREAMS] { unsafe { &mut *core::ptr::addr_of_mut!(PLAYED) } }
+fn last_played() -> &'static mut Option<usize> { unsafe { &mut *core::ptr::addr_of_mut!(LAST_PLAYED) } }
+
 /// Master gain in 1/65536, 0 while muted.
 fn master_gain() -> u32 { let m = settings(); if m.muted { 0 } else { mixer::master_gain(m.master) } }
 
@@ -595,6 +602,8 @@ pub fn stream(caller: u32) -> bool {
     let st = p.streams[k].as_mut().unwrap();
     if !st.active {
         st.active = true;
+        played()[k] = caller;
+        *last_played() = Some(k);
         sex_pdx::serial_record!("[bell.sound.stream.open] row={} caller={} written={} taken={}",
             k, caller, st.ring.load(ring::WRITTEN), st.ring.load(ring::TAKEN));
     }
@@ -632,6 +641,8 @@ pub fn retire(pd: u32) -> bool {
     // used its ring: the row is the program's PD's, and the next program there asks anew.
     let row = ring::index_of(pd).filter(|k| *k < STREAMS);
     if let Some(k) = row {
+        if played()[k] == pd { played()[k] = 0; }
+        if *last_played() == Some(k) { *last_played() = None; }
         if settings().mic[k] { sex_pdx::serial_record!("[bell.mic.lapsed] row={} pd={}", k, pd); }
         settings().mic[k] = false;
     }
@@ -680,6 +691,12 @@ pub fn mixer_request(action: u64, a: u64, b: u64, write: bool) -> u64 {
         mixer::STATE => state(m),
         mixer::STREAM if (a as usize) < STREAMS => row(m, a as usize),
         mixer::OUTPUTS => match player() { Some(p) => p.card.outputs(), None => mixer::outputs(0, &[]) },
+        mixer::LAST_PLAYER => {
+            let focused = ring::index_of(a as u32).filter(|k| *k < STREAMS && a != 0 && played()[*k] == a as u32);
+            let Some(k) = focused.or(*last_played()) else { return mixer::REFUSED };
+            sex_pdx::serial_record!("[bell.mixer.player] focused={} row={} pd={}", a, k, played()[k]);
+            return row(m, k);
+        }
         _ if !write => return mixer::REFUSED,
         mixer::SET_MASTER if a <= 100 => { m.master = a as u8; state(m) }
         mixer::MUTE_MASTER if a <= 2 => { m.muted = if a == 2 { !m.muted } else { a == 1 }; state(m) }

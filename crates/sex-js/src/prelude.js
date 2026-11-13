@@ -21,7 +21,7 @@
   delete globalThis.__host;
   const OP = { LOG: 1, BY_ID: 2, QUERY: 3, INFO: 4, GET_ATTR: 5, SET_ATTR: 6, REMOVE_ATTR: 7, GET_TEXT: 8, SET_TEXT: 9,
     GET_HTML: 10, SET_HTML: 11, CREATE_ELEMENT: 12, CREATE_TEXT: 13, INSERT: 14, DETACH: 15, PARENT: 16, CHILDREN: 17,
-    ATTR_NAMES: 18, VIEWPORT: 19, NAVIGATE: 20, CLICKABLE: 21, RECT: 22, LOCATION: 23, CANVAS: 24, MEASURE: 25, HIT: 26, VALUE: 27, CARET: 28, MEDIA: 48, GL: 64, GL_QUERY: 65, FETCH: 66, FETCH_BODY: 67, FETCH_HEAD: 68, COOKIE: 69, MEDIA_APPEND: 70, CLASSIC_SCRIPT: 71, FRAME: 31, POST_MESSAGE: 32 };
+    ATTR_NAMES: 18, VIEWPORT: 19, NAVIGATE: 20, CLICKABLE: 21, RECT: 22, LOCATION: 23, CANVAS: 24, MEASURE: 25, HIT: 26, VALUE: 27, CARET: 28, MEDIA: 48, GL: 64, GL_QUERY: 65, FETCH: 66, FETCH_BODY: 67, FETCH_HEAD: 68, COOKIE: 69, MEDIA_APPEND: 70, CLASSIC_SCRIPT: 71, FRAME: 31, POST_MESSAGE: 32, STORAGE: 33 };
   const nodes = new Map();
   const defaultChecked = new WeakMap();
 
@@ -816,8 +816,21 @@
     if (method === 'dialog') return;
     const action = resolveUrl(attr('action', 'formaction') || H(OP.LOCATION) || '');
     const enc = v => encodeURIComponent(String(v).replace(/\r?\n|\r/g, '\r\n')).replace(/[!'()~]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase()).replace(/%20/g, '+');
-    const query = formEntries(form, submitter).map(([k, v]) => enc(k) + '=' + enc(v)).join('&');
-    if (method === 'post') { H(OP.NAVIGATE, action, 'POST', query); return; }
+    const entries = formEntries(form, submitter);
+    const query = entries.map(([k, v]) => enc(k) + '=' + enc(v)).join('&');
+    if (method === 'post') {
+      const enctype = (attr('enctype', 'formenctype') || '').toLowerCase().trim();
+      const crlf = v => String(v).replace(/\r?\n|\r/g, '\r\n');
+      if (enctype === 'multipart/form-data') {
+        const b = '----SexOSFormBoundary' + Math.random().toString(36).slice(2, 14);
+        const name = n => crlf(n).replace(/\r/g, '%0D').replace(/\n/g, '%0A').replace(/"/g, '%22');
+        const body = entries.map(([k, v]) => '--' + b + '\r\nContent-Disposition: form-data; name="' + name(k) + '"\r\n\r\n' + crlf(v) + '\r\n').join('') + '--' + b + '--\r\n';
+        H(OP.NAVIGATE, action, 'POST', body, 'multipart/form-data; boundary=' + b);
+      } else if (enctype === 'text/plain') {
+        H(OP.NAVIGATE, action, 'POST', entries.map(([k, v]) => k + '=' + v + '\r\n').join(''), 'text/plain');
+      } else H(OP.NAVIGATE, action, 'POST', query);
+      return;
+    }
     H(OP.NAVIGATE, action.replace(/[?#].*$/, '') + '?' + query);
   }
   // A click on `el`: checkboxes and radios change before the click and change back if
@@ -2752,16 +2765,43 @@
     _resize(w, h) { if (this._gl) this._gl._resize(w, h); }
   }
 
+  // Storage: `sessionStorage` lives as long as the page; `localStorage` is the
+  // browser's, per origin, kept in Files (op STORAGE) when the page has an origin.
+  class Storage {
+    getItem(k) { return this._get(String(k)); }
+    setItem(k, v) { this._set(String(k), String(v)); }
+    removeItem(k) { this._remove(String(k)); }
+    clear() { this._clear(); }
+    key(i) { return this._key(i >>> 0); }
+    get length() { return this._len(); }
+  }
+  const storageProxy = (impl) => new Proxy(impl, {
+    get(t, p, r) { if (typeof p === 'symbol' || p in t) return Reflect.get(t, p, r); return t.getItem(p); },
+    set(t, p, v) { if (typeof p === 'symbol' || p in t) return Reflect.set(t, p, v); t.setItem(p, v); return true; },
+    has(t, p) { return typeof p === 'symbol' || p in t ? Reflect.has(t, p) : t.getItem(p) !== null; },
+    deleteProperty(t, p) { if (typeof p !== 'symbol' && !(p in t)) t.removeItem(p); return true; },
+    ownKeys(t) { const out = []; for (let i = 0; i < t.length; i++) out.push(t.key(i)); return out; },
+    getOwnPropertyDescriptor(t, p) { const v = typeof p === 'string' && !(p in t) ? t.getItem(p) : null; return v === null ? undefined : { value: v, writable: true, enumerable: true, configurable: true }; },
+  });
   const storage = () => {
     const m = new Map();
-    return {
-      getItem: k => (m.has(String(k)) ? m.get(String(k)) : null),
-      setItem: (k, v) => { m.set(String(k), String(v)); },
-      removeItem: k => { m.delete(String(k)); },
-      clear: () => m.clear(),
-      key: i => [...m.keys()][i] || null,
-      get length() { return m.size; },
-    };
+    const s = Object.create(Storage.prototype, {
+      _get: { value: k => (m.has(k) ? m.get(k) : null) }, _set: { value: (k, v) => { m.set(k, v); } },
+      _remove: { value: k => { m.delete(k); } }, _clear: { value: () => m.clear() },
+      _key: { value: i => [...m.keys()][i] ?? null }, _len: { value: () => m.size },
+    });
+    return storageProxy(s);
+  };
+  const lastingStorage = () => {
+    if (H(OP.STORAGE, 'len') == null) return storage();
+    const quota = () => new DOMException("The quota has been exceeded.", 'QuotaExceededError');
+    const s = Object.create(Storage.prototype, {
+      _get: { value: k => H(OP.STORAGE, 'get', k) ?? null },
+      _set: { value: (k, v) => { if (H(OP.STORAGE, 'set', k, v) === '!') throw quota(); } },
+      _remove: { value: k => { H(OP.STORAGE, 'remove', k); } }, _clear: { value: () => { H(OP.STORAGE, 'clear'); } },
+      _key: { value: i => H(OP.STORAGE, 'key', '' + i) ?? null }, _len: { value: () => +(H(OP.STORAGE, 'len') || 0) },
+    });
+    return storageProxy(s);
   };
 
   // fetch(): the browser loads the address after the script returns (from the same places
@@ -3708,7 +3748,7 @@
       permissions: { query: d => Promise.resolve(Object.assign(new EventTarget(), { name: d && d.name, state: 'prompt', onchange: null })) } },
     screen: { get width() { return view()[0]; }, get height() { return view()[1]; } },
     history: { length: 1, state: null, pushState() {}, replaceState() {}, back() {}, forward() {}, go() {} },
-    localStorage: storage(), sessionStorage: storage(),
+    localStorage: lastingStorage(), sessionStorage: storage(), Storage,
     setTimeout: (fn, ms, ...args) => addTimer(fn, ms, args, false),
     setInterval: (fn, ms, ...args) => addTimer(fn, ms, args, true),
     clearTimeout: id => { timers.delete(id); },

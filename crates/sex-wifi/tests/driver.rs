@@ -1021,6 +1021,7 @@ impl Firmware {
                 (hcmd::DATA_PATH_GROUP, rsna::SEC_KEY_CMD) => Some(rsna::SEC_KEY_BYTES),
                 (hcmd::LONG_GROUP, hcmd::ADD_STA_KEY) => Some(rsna::ADD_STA_KEY_BYTES),
                 (hcmd::DATA_PATH_GROUP, tlc::TLC_MNG_CONFIG_CMD) => Some(tlc::CONFIG_BYTES),
+                (hcmd::LONG_GROUP, hcmd::MCAST_FILTER_CMD) => Some(link::MCAST_FILTER_BYTES),
                 _ => Some(4),
             };
             assert_eq!(Some(len), want, "payload size of {group:#x}/{opcode:#x}");
@@ -2021,6 +2022,52 @@ fn x17_hands_data_rates_to_the_firmware() {
     link.poll(&mut b, &mut i.cmdq, &mut hw, &mut m, 0, |_| {});
     assert_eq!(link.rate, 1 << 14 | 1 << 8 | 7, "54 Mb/s");
     assert!(link.up());
+}
+
+#[test]
+fn x17_passes_multicast_and_drops_the_link_when_beacons_stop() {
+    let (r, mut sim, _, _, _, mut i, mut b, mut m, mut hw) = x17_connect(b"correct horse", true);
+    let bssid = r.target().bssid;
+    let mut link = r.into_link().with_rate_control(4);
+    // Rate control first, then the multicast filter (one command at a time).
+    link.poll(&mut b, &mut i.cmdq, &mut hw, &mut m, 0, |_| {});
+    assert_eq!(link.multicast, link::Setup::Wanted);
+    sim.serve(&mut m, &b.layout, &mut hw);
+    let commands = sim.commands.len();
+    link.poll(&mut b, &mut i.cmdq, &mut hw, &mut m, 0, |_| {});
+    assert_eq!((link.rate_control, link.multicast), (link::RateControl::On, link::Setup::Sent(0)));
+    sim.serve(&mut m, &b.layout, &mut hw);
+    let (group, opcode, c) = &sim.commands[commands];
+    assert_eq!((*group, *opcode), (hcmd::LONG_GROUP, hcmd::MCAST_FILTER_CMD));
+    assert_eq!(&c[..], &link::mcast_filter(&bssid)[..]);
+    assert_eq!((c[0], c[1], c[2], c[3], &c[4..10]), (1, 0, 0, 1, &bssid[..]), "filter own, port 0, no list, pass all");
+    link.poll(&mut b, &mut i.cmdq, &mut hw, &mut m, 0, |_| {});
+    assert_eq!(link.multicast, link::Setup::On);
+    // A few missed beacons are weather; a long run means the AP is gone.
+    let missed = |n: u32| { let mut d = vec![0u8; 20]; d[4..8].copy_from_slice(&n.to_le_bytes()); d };
+    sim.deliver(&mut m, &b.layout, &packet(hcmd::MISSED_BEACONS_NOTIFICATION, 0, 0, 0x80, &missed(5)));
+    assert!(link.poll(&mut b, &mut i.cmdq, &mut hw, &mut m, 0, |_| {}));
+    assert_eq!(link.missed_beacons, 5);
+    sim.deliver(&mut m, &b.layout, &packet(hcmd::MISSED_BEACONS_NOTIF, hcmd::MAC_CONF_GROUP, 0, 0x80, &missed(link::BEACON_LOSS + 1)));
+    assert!(!link.poll(&mut b, &mut i.cmdq, &mut hw, &mut m, 0, |_| {}));
+    assert_eq!(link.down, Some(link::Down::BeaconLoss(link::BEACON_LOSS + 1)));
+}
+
+#[test]
+fn stopping_the_chip_halts_dma_then_resets_it() {
+    let mut hw = Chip::new();
+    hw.regs.insert(csr::RESET, csr::RESET_MASTER_DISABLED);
+    hw.regs.insert(csr::GP_CNTRL, csr::GP_MAC_ACCESS_REQ | csr::GP_MAC_CLOCK_READY);
+    assert!(csr::stop(&mut hw), "the chip said its DMA stopped");
+    let at = |hw: &Chip, reg: u32, bits: u32| hw.writes.iter().position(|w| w.0 == reg && w.1 & bits == bits);
+    let (stop, reset) = (at(&hw, csr::RESET, csr::RESET_STOP_MASTER).unwrap(), at(&hw, csr::RESET, csr::RESET_SW).unwrap());
+    assert!(stop < reset, "DMA stops before the processor resets");
+    assert_eq!(hw.regs[&csr::GP_CNTRL] & csr::GP_MAC_ACCESS_REQ, 0, "wake request dropped");
+    assert_eq!(hw.regs[&csr::INT_MASK], 0, "interrupts off");
+    // A chip that never confirms still gets reset.
+    let mut silent = Chip::new();
+    assert!(!csr::stop(&mut silent));
+    assert!(at(&silent, csr::RESET, csr::RESET_SW).is_some());
 }
 
 #[test]

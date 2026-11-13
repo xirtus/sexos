@@ -56,6 +56,7 @@ crates = [
   "apps/bench/Cargo.toml",
   "apps/wasm/Cargo.toml",
   "apps/shapes/Cargo.toml",
+  "apps/monitor/Cargo.toml",
   "apps/fputest/Cargo.toml",
   "apps/fuzz/Cargo.toml",
   "apps/jit/Cargo.toml",
@@ -296,6 +297,14 @@ target = "x86_64-sex-app.json"
 manifest = "apps/shapes/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/shapes"
 dest_artifact = "iso_root/programs/shapes"
+
+[[stage]]
+id = "build_monitor"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/monitor/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/monitor"
+dest_artifact = "iso_root/programs/monitor"
 
 [[stage]]
 id = "build_fputest"

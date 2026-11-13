@@ -5,6 +5,14 @@
 //! hardware (the Alienware x17 R1's Killer AX1675x) says exactly how far it got.
 //! Everything that can be checked without the chip lives in `sex_wifi`; this file
 //! only maps the lease, the DMA pool and the firmware pack onto its traits.
+//!
+//! Recovery: a lost link (deauthentication, the AP's beacons gone, a firmware
+//! crash) or a failed join restarts the chip from the beginning (`csr::stop`, then
+//! a fresh bring-up and init), scans, and joins the same network again, with
+//! growing pauses between tries. The network's name and passphrase are kept for
+//! that in this service's memory only, for this boot (never in a file); a refused
+//! handshake (usually a wrong passphrase) or `wifi leave` forgets them. Joining
+//! another network, or a scan after a failure, restarts the chip the same way.
 use sex_pdx::wifi_status as ws;
 use sex_pdx::{memory_region as m, pci_command as c};
 use sex_wifi::{bringup::Bringup, context, csr, devices, ieee80211::Security, init::{self, Init}, join::{self, Join}, assoc::{self, Assoc}, rsna::{self, Rsna}, link::{self as wlink, Link}, tx::TxQueue, ieee80211::{self, Bss}, crypto, hcmd, pack::Pack, scan::{self, Scan}, ucode::Firmware, sae};
@@ -80,7 +88,29 @@ pub struct Wifi {
     /// Frames from the air waiting for the IP stack.
     rx: RxQueue,
     finished: bool,
+    /// The network to stay on (name and passphrase), for this boot only.
+    saved: Option<Saved>,
+    /// A chip restart is due at this tick (after a link loss, a failure, a new join).
+    restart_at: Option<u64>,
+    /// Join `saved` when the scan after a restart finishes.
+    want_join: bool,
+    /// Tries since the last connection; pauses grow with it.
+    attempts: u8,
+    restarts: u32,
+    /// No register access until this tick (the chip settling after a reset).
+    settle_until: u64,
 }
+
+#[derive(Clone, Copy)]
+struct Saved { ssid: [u8; 32], ssid_len: usize, password: [u8; ws::PASSWORD_MAX], password_len: usize }
+impl Saved { fn ssid(&self) -> &[u8] { &self.ssid[..self.ssid_len] } }
+
+/// Tries to rejoin before giving up (until the next `wifi join`): about three minutes.
+const MAX_ATTEMPTS: u8 = 10;
+/// Ticks (ms) between tries: 1 s, doubling, at most 30 s.
+fn pause(attempt: u8) -> u64 { (1000u64 << attempt.saturating_sub(1).min(5)).min(30_000) }
+/// A software reset takes effect within milliseconds (`iwx_sw_reset` waits 5 ms).
+const SETTLE_TICKS: u64 = 10;
 
 /// Received Ethernet frames held for the IP stack, oldest first: the air delivers
 /// a burst at a time, the stack takes one frame per turn. Full means dropped.
@@ -156,13 +186,22 @@ impl Wifi {
         }
         sex_pdx::serial_record!("[wifi.prepared] pool={} used={} rx_pages={} bus={:#x}",
             dma.length, bringup.layout.end, context::RX_BUFFERS, bus);
-        Some(Wifi { mmio, pool, bringup, last: csr::Step::Ready, file, pnvm, hw_rev, rf_id, init: None, last_init: None, scan: None, scans: 0, join: None, joined_ssid: [0; 32], joined_bss: None, assoc: None, rsna: None, password: [0; ws::PASSWORD_MAX], password_len: 0, link: None, rx: RxQueue::EMPTY, finished: false })
+        Some(Wifi { mmio, pool, bringup, last: csr::Step::Ready, file, pnvm, hw_rev, rf_id, init: None, last_init: None, scan: None, scans: 0, join: None, joined_ssid: [0; 32], joined_bss: None, assoc: None, rsna: None, password: [0; ws::PASSWORD_MAX], password_len: 0, link: None, rx: RxQueue::EMPTY, finished: false,
+            saved: None, restart_at: None, want_join: false, attempts: 0, restarts: 0, settle_until: 0 })
     }
 
-    /// True until the first scan has finished or the chip has failed.
-    pub fn pending(&self) -> bool { !self.finished }
+    /// True while the chip is busy (starting, scanning, joining) or recovering.
+    pub fn pending(&self) -> bool {
+        !self.finished || self.restart_at.is_some() || self.link.as_ref().is_some_and(|l| !l.up())
+    }
 
     pub fn advance(&mut self, now_ticks: u64) {
+        if let Some(down) = self.link.as_ref().and_then(|l| l.down) { self.link_lost(down, now_ticks); }
+        if let Some(at) = self.restart_at {
+            if now_ticks >= at { self.restart(now_ticks); }
+            return;
+        }
+        if now_ticks < self.settle_until { return; }
         if self.finished { return; }
         if self.rsna.is_some() { return self.advance_rsna(now_ticks); }
         if self.assoc.is_some() { return self.advance_assoc(now_ticks); }
@@ -241,6 +280,7 @@ impl Wifi {
         self.finished = true;
         if sc.step != scan::Step::Done {
             sex_pdx::serial_record!("[wifi.failed] step=scan reason={:?} frames={} networks={}", sc.step, sc.frames, sc.count);
+            if self.want_join { self.retry(now_ticks); }
             return;
         }
         for n in sc.networks() {
@@ -256,6 +296,96 @@ impl Wifi {
         }
         sex_pdx::serial_record!("[wifi.scan.done] networks={} frames={} dropped={} channels={} ticks={}",
             sc.count, sc.frames, sc.dropped, sc.channels, now_ticks);
+        if self.want_join { self.join_saved(now_ticks); }
+    }
+
+    /// After a restart's scan: joins the saved network (its strongest access point).
+    fn join_saved(&mut self, now_ticks: u64) {
+        self.want_join = false;
+        let Some(saved) = self.saved else { return };
+        let best = self.scan.as_ref().and_then(|sc| sc.networks().enumerate()
+            .filter(|(_, n)| n.bss.ssid() == saved.ssid()).max_by_key(|(_, n)| n.rssi).map(|(k, _)| k as u64));
+        let Some(index) = best else {
+            sex_pdx::serial_record!("[wifi.rejoin] ssid=\"{}\" heard=0 attempt={}", core::str::from_utf8(saved.ssid()).unwrap_or("?"), self.attempts);
+            return self.retry(now_ticks);
+        };
+        self.password = saved.password;
+        self.password_len = saved.password_len;
+        if !self.start_join(index, now_ticks) {
+            self.password = [0; ws::PASSWORD_MAX];
+            self.password_len = 0;
+            self.retry(now_ticks);
+        }
+    }
+
+    /// Stops the chip and starts it again from the beginning; a scan follows its init.
+    fn restart(&mut self, now_ticks: u64) {
+        self.restart_at = None;
+        let stopped = csr::stop(&mut self.mmio);
+        self.init = None; self.last_init = None; self.scan = None; self.join = None; self.assoc = None; self.rsna = None;
+        self.link = None; self.rx = RxQueue::EMPTY; self.joined_bss = None;
+        self.password = [0; ws::PASSWORD_MAX];
+        self.password_len = 0;
+        self.restarts = self.restarts.wrapping_add(1);
+        let chip = self.bringup.boot.chip;
+        let (base, bytes) = (self.bringup.base, self.pool.length);
+        let prepared = Firmware::parse(self.file).ok()
+            .map(|fw| Bringup::prepare(chip, &fw, &mut self.pool, base, bytes, self.hw_rev, now_ticks * 1000));
+        sex_pdx::serial_record!("[wifi.restart] count={} dma_stopped={} rejoin={} attempt={} ticks={}",
+            self.restarts, stopped as u8, self.want_join as u8, self.attempts, now_ticks);
+        match prepared {
+            Some(Ok(b)) => { self.bringup = b; self.last = csr::Step::Ready; self.finished = false; self.settle_until = now_ticks + SETTLE_TICKS; }
+            other => {
+                self.finished = true;
+                self.want_join = false;
+                sex_pdx::serial_record!("[wifi.failed] step=restart reason={}", if other.is_none() { "firmware" } else { "layout" });
+            }
+        }
+    }
+
+    /// Schedules another try at the saved network, or gives up after `MAX_ATTEMPTS`
+    /// (the chip still restarts, so a scan or a join works again).
+    fn retry(&mut self, now_ticks: u64) {
+        if self.saved.is_none() { self.want_join = false; self.restart_at = Some(now_ticks); return; }
+        self.attempts = self.attempts.saturating_add(1);
+        if self.attempts > MAX_ATTEMPTS {
+            sex_pdx::serial_record!("[wifi.rejoin.gave_up] attempts={}", self.attempts - 1);
+            self.want_join = false;
+            self.restart_at = Some(now_ticks);
+            return;
+        }
+        let wait = pause(self.attempts);
+        sex_pdx::serial_record!("[wifi.retry] attempt={} in_ticks={}", self.attempts, wait);
+        self.want_join = true;
+        self.restart_at = Some(now_ticks + wait);
+    }
+
+    /// The link went down: the IP stack has already let go of it (main loop).
+    fn link_lost(&mut self, down: wlink::Down, now_ticks: u64) {
+        sex_pdx::serial_record!("[wifi.lost] reason={:?} saved={}", down, self.saved.is_some() as u8);
+        self.link = None;
+        self.attempts = 0;
+        self.retry(now_ticks);
+    }
+
+    /// A join, association or handshake failed. A refused handshake or SAE exchange
+    /// usually means a wrong passphrase: it is forgotten and not tried again.
+    fn join_failed(&mut self, wrong_password: bool, now_ticks: u64) {
+        if wrong_password {
+            sex_pdx::serial_record!("[wifi.passphrase.refused] saved=0");
+            self.saved = None;
+            self.attempts = 0;
+        }
+        self.retry(now_ticks);
+    }
+
+    /// Stops using Wi-Fi's network: forgets it and restarts the chip (it scans again).
+    fn leave(&mut self, now_ticks: u64) {
+        sex_pdx::serial_record!("[wifi.leave] connected={}", self.link_up() as u8);
+        self.saved = None;
+        self.attempts = 0;
+        self.want_join = false;
+        self.restart_at = Some(now_ticks);
     }
 
     /// Stage W5a: onto the chosen network's channel (contexts, station, queue).
@@ -283,7 +413,7 @@ impl Wifi {
                             self.password = [0; ws::PASSWORD_MAX];
                             self.password_len = 0;
                             sex_pdx::serial_record!("[wifi.failed] step=sae reason=no_entropy_or_element");
-                            return;
+                            return self.join_failed(false, now_ticks);
                         }
                     }
                 } else { Assoc::new(bss, t, mac, family, now_ticks * 1000) };
@@ -296,6 +426,7 @@ impl Wifi {
             self.password = [0; ws::PASSWORD_MAX];
             self.password_len = 0;
             sex_pdx::serial_record!("[wifi.failed] step=join reason={:?} ssid=\"{}\" int={:#x}", j.step, ssid, self.mmio.read(csr::INT));
+            self.join_failed(false, now_ticks);
         }
     }
 
@@ -317,6 +448,7 @@ impl Wifi {
                 let tx = core::mem::replace(&mut a.tx, TxQueue::new(family));
                 self.rx = RxQueue::EMPTY;
                 self.link = Some(Link::new(tx, a.target, a.me(), family, false).with_rate_control(self.tlc_version()));
+                self.attempts = 0;
                 sex_pdx::serial_record!("[wifi.link.up] security=open rate={:#x}", wlink::DATA_RATE);
             }
         } else {
@@ -324,6 +456,9 @@ impl Wifi {
             self.password = [0; ws::PASSWORD_MAX];
             self.password_len = 0;
             sex_pdx::serial_record!("[wifi.failed] step=assoc reason={:?} ssid=\"{}\" int={:#x}", a.step, ssid, self.mmio.read(csr::INT));
+            // SAE that the AP refuses or never confirms: the passphrase is wrong.
+            let sae = a.bss.security == Security::Wpa3Personal && matches!(a.step, assoc::Step::Refused(_));
+            self.join_failed(sae, now_ticks);
         }
     }
 
@@ -395,10 +530,13 @@ impl Wifi {
             self.rx = RxQueue::EMPTY;
             let version = self.tlc_version();
             self.link = self.rsna.take().map(|r| r.into_link().with_rate_control(version));
+            self.attempts = 0;
             sex_pdx::serial_record!("[wifi.link.up] security=WPA2 rate={:#x}", wlink::DATA_RATE);
         } else {
             use csr::Registers;
             sex_pdx::serial_record!("[wifi.failed] step=handshake reason={:?} ssid=\"{}\" int={:#x}", r.step, ssid, self.mmio.read(csr::INT));
+            let refused = matches!(r.step, rsna::Step::Refused(_));
+            self.join_failed(refused, now_ticks);
         }
     }
 
@@ -412,6 +550,25 @@ impl Wifi {
         let n = (len.saturating_sub(from)).min(7);
         self.password[from..from + n].copy_from_slice(&bytes[..n]);
         self.password_len = len;
+        true
+    }
+
+    /// The desktop's join of network `index` of the last scan: remembers it (with the
+    /// passphrase just given) and joins at once when the chip is idle, or after a
+    /// restart when it is on another network or a join failed.
+    fn request_join(&mut self, index: u64, now_ticks: u64) -> bool {
+        let Some(n) = self.scan.as_ref().and_then(|sc| sc.networks().nth(index as usize)) else { return false };
+        if n.bss.security != ieee80211::Security::Open && self.password_len == 0 { return false; }
+        if n.bss.security == ieee80211::Security::Unsupported { return false; }
+        let mut saved = Saved { ssid: [0; 32], ssid_len: n.bss.ssid().len(), password: self.password, password_len: self.password_len };
+        saved.ssid[..saved.ssid_len].copy_from_slice(n.bss.ssid());
+        self.saved = Some(saved);
+        self.attempts = 0;
+        if self.start_join(index, now_ticks) { return true; }
+        // Busy (connected, joining, failed, or mid-scan): start over and join by name.
+        sex_pdx::serial_record!("[wifi.join.switch] ssid=\"{}\" connected={}", core::str::from_utf8(saved.ssid()).unwrap_or("?"), self.link_up() as u8);
+        self.want_join = true;
+        self.restart_at = Some(now_ticks);
         true
     }
 
@@ -502,6 +659,10 @@ impl Wifi {
 
     /// What the desktop sees (`sex_pdx::wifi_status`).
     fn state(&self) -> ws::State {
+        if self.restart_at.is_some() || (self.want_join && !self.finished) {
+            let phase = if self.want_join { ws::JOINING } else { ws::STARTING };
+            return ws::State { phase, networks: 0, scans: self.scans, channels: 0 };
+        }
         if let Some(l) = &self.link {
             let phase = if !l.up() { ws::FAILED } else if l.protected() { ws::CONNECTED } else { ws::ASSOCIATED };
             let (networks, channels) = self.scan.as_ref().map_or((0, 0), |sc| (sc.count.min(255) as u8, sc.channels));
@@ -534,6 +695,13 @@ impl Wifi {
 
     /// A fresh scan, when the chip is ready and the last scan has ended.
     fn rescan(&mut self, now_ticks: u64) -> bool {
+        // After a failed join (or a chip that stopped) a scan needs a fresh chip.
+        if self.finished && self.restart_at.is_none() && !self.link_up() && self.link.is_none()
+            && (self.join.is_some() || self.init.as_ref().is_none_or(|i| i.step != init::Step::Ready)) {
+            self.want_join = false;
+            self.restart_at = Some(now_ticks);
+            return true;
+        }
         let Some(i) = self.init.as_ref() else { return false };
         // Once a join has begun the chip stays on that channel (leaving it is W5b's).
         if !self.finished || self.scan.is_none() || self.join.is_some() || i.step != init::Step::Ready { return false; }
@@ -577,9 +745,12 @@ pub fn request(wifi: Option<&mut Wifi>, caller: u32, action: u64, a: u64, b: u64
         (ws::NETWORK, Some(w)) => w.network(a, b),
         (ws::JOIN, None) => none,
         (ws::JOIN, Some(w)) if caller != 6 => {
-            if !w.start_join(a, now_ticks) && w.needs_password(a) { return ws::NEEDS_PASSWORD; }
+            if w.needs_password(a) { return ws::NEEDS_PASSWORD; }
+            w.request_join(a, now_ticks);
             w.state().word()
         }
+        (ws::LEAVE, Some(w)) if caller != 6 => { w.leave(now_ticks); w.state().word() }
+        (ws::LEAVE, None) => none,
         (ws::PASSWORD, Some(w)) if caller != 6 => if w.password_part(a, b) { w.state().word() } else { ws::REFUSED },
         _ => ws::REFUSED,
     }

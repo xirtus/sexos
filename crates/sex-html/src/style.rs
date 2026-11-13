@@ -188,7 +188,7 @@ impl Style {
             display: Display::Inline,
             color: 0xFF20_2124,
             background: 0,
-            font_size: 16,
+            font_size: zoomed(16),
             bold: false,
             italic: false,
             mono: false,
@@ -523,7 +523,7 @@ fn presentational_hints(dom: &Dom, node: NodeId, s: &mut Style, ctx: &Ctx) {
         if let Some(size) = dom.attr(node, "size") {
             let n: i32 = size.trim_start_matches(['+', '-']).parse().unwrap_or(3);
             let n = if size.starts_with('+') { 3 + n } else if size.starts_with('-') { 3 - n } else { n };
-            s.font_size = [10, 13, 16, 18, 24, 32, 48][n.clamp(1, 7) as usize - 1];
+            s.font_size = zoomed([10, 13, 16, 18, 24, 32, 48][n.clamp(1, 7) as usize - 1]);
         }
         if let Some(face) = dom.attr(node, "face") { s.mono = is_mono(face); }
     }
@@ -565,6 +565,15 @@ fn is_mono(family: &str) -> bool {
         || (f.contains("monospace") && !f.contains("sans") && !f.contains("serif") && !f.contains("system"))
 }
 
+/// Page zoom in percent: absolute lengths (px, pt, in, ...) and keyword font sizes
+/// grow by it, so the page lays out again at its new size (Ctrl +/- in the browser).
+static ZOOM: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(100);
+
+/// Sets the page zoom, in percent (25 to 500), for pages styled from now on.
+pub fn set_zoom(percent: u32) { ZOOM.store(percent.clamp(25, 500), core::sync::atomic::Ordering::Relaxed); }
+pub fn zoom() -> u32 { ZOOM.load(core::sync::atomic::Ordering::Relaxed) }
+pub(crate) fn zoomed(px: i32) -> i32 { (px as i64 * zoom() as i64 / 100) as i32 }
+
 fn parse_len(v: &str, s: &Style, ctx: &Ctx) -> Option<Len> {
     let v = v.trim();
     if v.eq_ignore_ascii_case("auto") || v.eq_ignore_ascii_case("none") || v == "initial" || v == "fit-content" || v == "max-content" || v == "min-content" { return Some(Len::Auto); }
@@ -579,17 +588,21 @@ fn parse_len(v: &str, s: &Style, ctx: &Ctx) -> Option<Len> {
     let n = css::parse_number(&v[..end])?;
     let unit = v[end..].to_ascii_lowercase();
     let px = |hundredths: i64| Some(Len::Px((hundredths / 100) as i32));
+    // Absolute units scale with the page zoom; em, rem, % and viewport units follow
+    // what they are relative to.
+    let z = zoom() as i64;
+    let abs = |hundredths: i64| px(hundredths * z / 100);
     match unit.as_str() {
-        "px" => px(n as i64),
-        "" => if n == 0 { Some(Len::Px(0)) } else { px(n as i64) },
+        "px" => abs(n as i64),
+        "" => if n == 0 { Some(Len::Px(0)) } else { abs(n as i64) },
         "em" => px(n as i64 * s.font_size as i64),
         "rem" => px(n as i64 * ctx.root_font as i64),
         "ex" | "ch" => px(n as i64 * s.font_size as i64 / 2),
-        "pt" => px(n as i64 * 4 / 3),
-        "pc" => px(n as i64 * 16),
-        "in" => px(n as i64 * 96),
-        "cm" => px(n as i64 * 96 * 100 / 254),
-        "mm" => px(n as i64 * 96 * 10 / 254),
+        "pt" => abs(n as i64 * 4 / 3),
+        "pc" => abs(n as i64 * 16),
+        "in" => abs(n as i64 * 96),
+        "cm" => abs(n as i64 * 96 * 100 / 254),
+        "mm" => abs(n as i64 * 96 * 10 / 254),
         "vw" => px(n as i64 * ctx.viewport.0 as i64 / 100),
         "vh" => px(n as i64 * ctx.viewport.1 as i64 / 100),
         "vmin" => px(n as i64 * ctx.viewport.0.min(ctx.viewport.1) as i64 / 100),
@@ -622,7 +635,7 @@ fn parse_calc(inner: &str, s: &Style, ctx: &Ctx) -> Option<Len> {
 fn font_size(v: &str, s: &Style, ctx: &Ctx) -> Option<i32> {
     let parent = ctx.parent.font_size;
     Some(match v.trim().to_ascii_lowercase().as_str() {
-        "xx-small" => 9, "x-small" => 10, "small" => 13, "medium" => 16, "large" => 18, "x-large" => 24, "xx-large" => 32, "xxx-large" => 48,
+        "xx-small" => zoomed(9), "x-small" => zoomed(10), "small" => zoomed(13), "medium" => zoomed(16), "large" => zoomed(18), "x-large" => zoomed(24), "xx-large" => zoomed(32), "xxx-large" => zoomed(48),
         "smaller" => parent * 5 / 6, "larger" => parent * 6 / 5,
         other => {
             let mut probe = s.clone();

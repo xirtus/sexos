@@ -179,6 +179,7 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
     let rdx = regs.rdx;
     let r10 = regs.r10;
     let r8  = regs.r8;
+    crate::cpu_account::count_syscall();
 
     // Reject full-width selector aliases before lookup, dequeue, allocation,
     // mapping, or reply insertion. Validated selector casts below are safe.
@@ -225,6 +226,7 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
 
     let result = match rax {
         85 => crate::crash_log::syscall(regs),
+        87 => crate::cpu_account::syscall(regs), // SYS_STATS: CPU time and memory by domain, read-only.
         0 => { // SYSCALL_PDX_CALL
             let slot = rdi as u32;
             let num = rsi;

@@ -428,6 +428,7 @@ impl Scheduler {
         }
 
         note_latency(unsafe { &*next_task });
+        crate::cpu_account::switch(self.core_id, Some(unsafe { (*next_task).context.pd_id as u32 }));
         // A concrete next task has exclusive dispatch custody. Outgoing custody
         // remains SwitchingOut until the assembly's post-stack-release callback.
         let old_task = self.current_task.load(Ordering::Acquire);
@@ -856,6 +857,7 @@ pub unsafe fn wait_for_local_resume_or_switch(sched: &Scheduler) -> *const TaskC
         let current = sched.current_task.load(Ordering::Acquire);
         if !current.is_null() && (*current).state.resume_attached(sched.core_id) {
             log_wake_event("local_resume", current);
+            crate::cpu_account::switch(sched.core_id, Some((*current).context.pd_id as u32));
             finish_last_runnable_proof(current);
             return &(*current).context;
         }
@@ -868,6 +870,7 @@ pub unsafe fn wait_for_local_resume_or_switch(sched: &Scheduler) -> *const TaskC
         if !current.is_null() && (*current).state.snapshot().exited {
             leave_dead_task(sched, current);
         }
+        crate::cpu_account::switch(sched.core_id, None);
         // Timer interrupts deliberately do not schedule kernel frames. They
         // return here, where pending wakes and retained admissions are retried.
         crate::hal::acpi::idle();

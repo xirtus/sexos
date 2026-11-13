@@ -12,6 +12,7 @@ pub use smoltcp::socket::tcp::State;
 pub use smoltcp::iface::SocketStorage as Storage;
 pub use smoltcp::socket::udp::PacketMetadata as DnsMetadata;
 pub mod dns_wire;
+pub mod v6config;
 pub const MAX_FRAME:usize=1514;
 pub const FLOW_BYTES:usize=4096;
 pub const TURN_BYTES:usize=256;
@@ -93,10 +94,45 @@ pub struct Engine<'a>{network:sex_net_config::Config,seed:u64,iface:Interface,fl
     active_flow:bool,stats:Statistics,open:Option<Open>}
 /// The open-internet side: its own TCP flow, DNS socket and DHCP client, attached the
 /// first time something asks for them, so nothing else ever sees their traffic.
-struct Open{tcp:alloc::vec::Vec<SocketHandle>,udp:alloc::vec::Vec<SocketHandle>,dns:SocketHandle,dhcp:SocketHandle,lease:Option<Lease>,next_port:u16,next_udp_port:u16,query:Question}
+struct Open{tcp:alloc::vec::Vec<SocketHandle>,udp:alloc::vec::Vec<SocketHandle>,dns:SocketHandle,dhcp:SocketHandle,lease:Option<Lease>,next_port:u16,next_udp_port:u16,query:Question,
+    /// Each TCP flow's listening group (port and the group's own number), so several flows
+    /// can wait on one port as its backlog.
+    groups:alloc::vec::Vec<Option<(u16,usize)>>,six:Six,cache:alloc::vec::Vec<Cached>}
+/// What the IPv6 network said about resolvers: RDNSS entries from router advertisements
+/// with when each runs out, and stateless DHCPv6's answer.
+struct Six{rdnss:[Option<([u8;16],u64)>;v6config::MAX_RESOLVERS],dhcp6:SocketHandle,ask:bool,xid:u32,started:u64,next_at:u64,timeout:u64,
+    dhcp_resolvers:[Option<[u8;16]>;v6config::MAX_RESOLVERS],refresh_at:Option<u64>}
 /// The name being looked up: its A question (`id`) and, when IPv6 can be used, its AAAA
 /// question (`id+1`), and what came back for each.
-struct Question{id:u16,name:[u8;255],len:usize,resolver:[u8;4],six:bool,v4:Option<[u8;4]>,v6:Option<[u8;16]>,done4:bool,done6:bool,first_at:u64}
+struct Question{id:u16,name:[u8;255],len:usize,resolver:Address,six:bool,v4:Option<[u8;4]>,v6:Option<[u8;16]>,done4:bool,done6:bool,first_at:u64,
+    /// The shortest TTL among the answers, and whether the answer is in the cache yet.
+    ttl:u32,kept:bool}
+/// One remembered lookup: its name as DNS labels, what each family gave, when it runs
+/// out, and whether AAAA was asked (an IPv4-only answer can't stand for both).
+struct Cached{name:[u8;255],len:usize,six:bool,v4:Option<[u8;4]>,v6:Option<[u8;16]>,until:u64}
+/// Names remembered at once; the one running out soonest makes room.
+pub const CACHE_ENTRIES:usize=512;
+/// TTLs are kept between these, in seconds; a name with no address is kept the
+/// negative time (RFC 2308 suggests the SOA minimum; most resolvers cap it near this).
+pub const CACHE_MIN_TTL:u32=5;
+pub const CACHE_MAX_TTL:u32=86400;
+pub const CACHE_NEGATIVE_TTL:u32=30;
+impl Six{
+    fn start(&mut self,now:u64,seed:u64){
+        self.ask=true;self.started=now;self.next_at=now;self.timeout=0;
+        self.xid=((seed as u32)^(now as u32).wrapping_mul(0x9e37_79b9)^self.xid.wrapping_add(1))&0xff_ffff;
+    }
+    fn advert(&mut self,advert:v6config::Advert,now:u64){
+        for (address,life) in advert.resolvers.iter().flatten(){
+            let until=if *life==u32::MAX{u64::MAX}else{now.saturating_add(*life as u64*1000)};
+            let entry=self.rdnss.iter().position(|e|e.is_some_and(|(a,_)|a==*address))
+                .or_else(|| self.rdnss.iter().position(|e|e.is_none_or(|(_,u)|u<=now)));
+            if let Some(i)=entry{self.rdnss[i]=if *life==0{None}else{Some((*address,until))};}
+        }
+        // M or O: ask DHCPv6 for the other configuration, once per answer.
+        if (advert.other||advert.managed)&&!self.ask&&self.refresh_at.is_none(){self.start(now,0);}
+    }
+}
 /// An address of either family. Data, never authority.
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]pub enum Address{V4([u8;4]),V6([u8;16])}
 impl Address{
@@ -121,8 +157,8 @@ pub const PROGRAM_PORT_MAX:u16=OPEN_PORT_BASE-2;
 pub const UDP_PORT_BASE:u16=OPEN_PORT_BASE+7001;
 pub const UDP_PORT_LAST:u16=OPEN_PORT_BASE+7999;
 /// Each program UDP socket's queues: datagrams and bytes each way.
-pub const UDP_PACKETS:usize=16;
-pub const UDP_BYTES:usize=16*1024;
+pub const UDP_PACKETS:usize=64;
+pub const UDP_BYTES:usize=64*1024;
 /// The largest datagram payload sent, so it fits one Ethernet frame unfragmented.
 pub const UDP_PAYLOAD_V4:usize=1472;
 pub const UDP_PAYLOAD_V6:usize=1452;
@@ -168,6 +204,10 @@ impl<'a> Engine<'a>{
         let tcp=alloc::vec::Vec::new();
         let dns=udp::Socket::new(udp::PacketBuffer::new(dns_rx_meta,dns_rx),udp::PacketBuffer::new(dns_tx_meta,dns_tx));
         let dns=self.flows.add(dns);let dhcp=self.flows.add(dhcpv4::Socket::new());
+        let meta=||alloc::vec![udp::PacketMetadata::EMPTY;2];
+        let mut dhcp6=udp::Socket::new(udp::PacketBuffer::new(meta(),alloc::vec![0u8;1024]),udp::PacketBuffer::new(meta(),alloc::vec![0u8;256]));
+        dhcp6.bind(IpListenEndpoint{addr:None,port:v6config::CLIENT_PORT}).map_err(|_|Error::Protocol)?;
+        let dhcp6=self.flows.add(dhcp6);
         // IPv6 starts with the open side, so nothing else ever sees its traffic: the
         // interface is made again with a link-local address from the MAC and SLAAC on,
         // which asks the routers for a prefix and a default route.
@@ -179,8 +219,9 @@ impl<'a> Engine<'a>{
         iface.update_ip_addrs(|ips|{for a in addresses{let _=ips.push(a);}let _=ips.push(IpCidr::new(IpAddress::Ipv6(Ipv6Address::from(link_local(mac.0))),64));});
         let g=self.network.gateway;iface.routes_mut().add_default_ipv4_route(Ipv4Address::new(g[0],g[1],g[2],g[3])).map_err(|_|Error::Config)?;
         self.iface=iface;
-        let query=Question{id:1,name:[0;255],len:0,resolver:[0;4],six:false,v4:None,v6:None,done4:true,done6:true,first_at:0};
-        self.open=Some(Open{tcp,udp:alloc::vec::Vec::new(),dns,dhcp,lease:None,next_port:OPEN_PORT_BASE,next_udp_port:UDP_PORT_BASE,query});
+        let query=Question{id:1,name:[0;255],len:0,resolver:Address::V4([0;4]),six:false,v4:None,v6:None,done4:true,done6:true,first_at:0,ttl:u32::MAX,kept:true};
+        let six=Six{rdnss:[None;v6config::MAX_RESOLVERS],dhcp6,ask:false,xid:0,started:0,next_at:0,timeout:0,dhcp_resolvers:[None;v6config::MAX_RESOLVERS],refresh_at:None};
+        self.open=Some(Open{tcp,udp:alloc::vec::Vec::new(),dns,dhcp,lease:None,next_port:OPEN_PORT_BASE,next_udp_port:UDP_PORT_BASE,query,groups:alloc::vec::Vec::new(),six,cache:alloc::vec::Vec::new()});
         Ok(())
     }
     /// The global IPv6 address SLAAC gave, if any.
@@ -210,12 +251,12 @@ impl<'a> Engine<'a>{
         // Out of memory is an answer (the caller waits for a flow), never a fall.
         let zeroed=|n:usize|->Result<alloc::vec::Vec<u8>,Error>{let mut v=alloc::vec::Vec::new();v.try_reserve_exact(n).map_err(|_|Error::Length)?;v.resize(n,0);Ok(v)};
         let (rx,tx)=(zeroed(OPEN_RX_BYTES)?,zeroed(OPEN_TX_BYTES)?);
-        open.tcp.try_reserve(1).map_err(|_|Error::Length)?;
+        open.tcp.try_reserve(1).map_err(|_|Error::Length)?;open.groups.try_reserve(1).map_err(|_|Error::Length)?;
         let mut flow=tcp::Socket::new(tcp::SocketBuffer::new(rx),tcp::SocketBuffer::new(tx));
         flow.set_timeout(Some(Duration::from_secs(30)));flow.set_nagle_enabled(false);
         // Acknowledge at once: a delayed ACK holds the sender to one window per delay.
         flow.set_ack_delay(None);
-        open.tcp.push(self.flows.add(flow));
+        open.tcp.push(self.flows.add(flow));open.groups.push(None);
         Ok(open.tcp.len()-1)
     }
     fn open_poll_dhcp(&mut self){
@@ -229,9 +270,11 @@ impl<'a> Engine<'a>{
                 self.iface.update_ip_addrs(|ips|{ips.retain(|c|!matches!(c,IpCidr::Ipv4(_)));let _=ips.push(IpCidr::Ipv4(config.address));});
                 if let Some(router)=config.router{let _=self.iface.routes_mut().add_default_ipv4_route(router);}
                 self.network.local=address;
+                // Another network may answer names differently.
+                if open.lease.is_some_and(|l|l!=lease){open.cache.clear();}
                 open.lease=Some(lease);
             }
-            Some(dhcpv4::Event::Deconfigured)=>{open.lease=None;}
+            Some(dhcpv4::Event::Deconfigured)=>{open.lease=None;open.cache.clear();}
             None=>{}
         }
     }
@@ -240,21 +283,55 @@ impl<'a> Engine<'a>{
     /// Ask about `host` in both families: AAAA too when the machine has a global IPv6
     /// address to use one from. `open_resolved_all` gives the answers.
     pub fn open_resolve_all(&mut self,host:&[u8])->Result<(),Error>{let six=self.open_global6().is_some();self.open_ask(host,six)}
+    /// The resolver lookups go to: the leased IPv4 one, else the first IPv6 one the
+    /// router advertised (RDNSS) or DHCPv6 gave.
+    pub fn open_resolver(&self)->Option<Address>{
+        let open=self.open.as_ref()?;
+        if let Some(d)=open.lease.and_then(|l|l.dns){return Some(Address::V4(d));}
+        self.open_resolvers6().into_iter().flatten().next().map(Address::V6)
+    }
+    /// The IPv6 resolvers known now: RDNSS entries still in their lifetime, then DHCPv6's.
+    pub fn open_resolvers6(&self)->[Option<[u8;16]>;v6config::MAX_RESOLVERS]{
+        let mut out=[None;v6config::MAX_RESOLVERS];
+        let Some(open)=self.open.as_ref() else{return out};
+        let now=self.last;
+        let found=open.six.rdnss.iter().flatten().filter(|(_,until)|*until>now).map(|(a,_)|*a).chain(open.six.dhcp_resolvers.iter().flatten().copied());
+        let mut n=0;
+        for a in found{if n<out.len()&&!out[..n].contains(&Some(a)){out[n]=Some(a);n+=1;}}
+        out
+    }
+    /// Names in the cache now.
+    pub fn open_cache_len(&self)->usize{self.open.as_ref().map_or(0,|o|o.cache.len())}
+    /// Forgets every remembered lookup (the network changed).
+    pub fn open_cache_flush(&mut self){if let Some(o)=self.open.as_mut(){o.cache.clear();}}
     fn open_ask(&mut self,host:&[u8],six:bool)->Result<(),Error>{
         let local=self.network.local;
+        let now=self.last;
+        let mut name=[0u8;255];
+        let len=dns_wire::encode_name(host,&mut name).ok_or(Error::Length)?;
+        {
+            let open=self.open.as_mut().ok_or(Error::Config)?;
+            open.cache.retain(|c|c.until>now);
+            if let Some(c)=open.cache.iter().find(|c|c.len==len&&c.name[..len]==name[..len]&&(c.six||!six)){
+                // Answered from memory: nothing goes on the wire.
+                let q=&mut open.query;
+                q.name=name;q.len=len;q.six=six;q.v4=c.v4;q.v6=if six{c.v6}else{None};q.done4=true;q.done6=true;q.first_at=now.max(1);q.kept=true;
+                return Ok(());
+            }
+        }
+        let resolver=self.open_resolver().ok_or(Error::Config)?;
         let open=self.open.as_mut().ok_or(Error::Config)?;
-        let lease=open.lease.ok_or(Error::Config)?;
-        let resolver=lease.dns.ok_or(Error::Config)?;
         let q=&mut open.query;
-        q.len=dns_wire::encode_name(host,&mut q.name).ok_or(Error::Length)?;
+        q.name=name;q.len=len;q.ttl=u32::MAX;q.kept=false;
         // The A question takes an odd id and the AAAA question the next, neither zero.
         q.id=match q.id.wrapping_add(2){n if n>=0xFFFE=>1,n=>n|1};
         q.resolver=resolver;q.six=six;q.v4=None;q.v6=None;q.done4=false;q.done6=!six;q.first_at=0;
         let port=OPEN_PORT_BASE-1;
         let socket=self.flows.get_mut::<udp::Socket>(open.dns);
         socket.close();
-        socket.bind((IpAddress::v4(local[0],local[1],local[2],local[3]),port)).map_err(|_|Error::Protocol)?;
-        let to=(IpAddress::v4(resolver[0],resolver[1],resolver[2],resolver[3]),53);
+        let bind=match resolver{Address::V4(_)=>IpListenEndpoint{addr:Some(IpAddress::v4(local[0],local[1],local[2],local[3])),port},Address::V6(_)=>IpListenEndpoint{addr:None,port}};
+        socket.bind(bind).map_err(|_|Error::Protocol)?;
+        let to=(resolver.ip(),53);
         for (id,kind) in [(q.id,dns_wire::A),(q.id+1,dns_wire::AAAA)]{
             if kind==dns_wire::AAAA&&!six{continue;}
             let mut query=[0u8;DNS_BYTES];
@@ -269,18 +346,31 @@ impl<'a> Engine<'a>{
         let Some(open)=self.open.as_mut() else{return};
         let socket=self.flows.get_mut::<udp::Socket>(open.dns);
         let q=&mut open.query;
+        let mut ttl=q.ttl;
         while let Ok((bytes,meta))=socket.recv(){
-            if meta.endpoint.addr!=IpAddress::v4(q.resolver[0],q.resolver[1],q.resolver[2],q.resolver[3])||meta.endpoint.port!=53||bytes.len()<2{continue;}
+            if meta.endpoint.addr!=q.resolver.ip()||meta.endpoint.port!=53||bytes.len()<2{continue;}
             let id=u16::from_be_bytes([bytes[0],bytes[1]]);
             let kind=if id==q.id&&!q.done4{dns_wire::A}else if id==q.id+1&&q.six&&!q.done6{dns_wire::AAAA}else{continue};
             let found=match dns_wire::parse_type(id,&q.name[..q.len],kind,bytes){
                 Ok(None)=>continue,
-                Ok(Some(f))=>Some(f.address),
+                Ok(Some(f))=>{ttl=ttl.min(f.ttl);Some(f.address)},
                 // A family with no usable answer is done with none; the other may still have one.
                 Err(_)=>None,
             };
             if kind==dns_wire::A{q.done4=true;q.v4=found.map(|a|[a[0],a[1],a[2],a[3]]);}else{q.done6=true;q.v6=found;}
             if found.is_some()&&q.first_at==0{q.first_at=now.max(1);}
+        }
+        q.ttl=ttl;
+        if q.done4&&q.done6&&!q.kept{
+            q.kept=true;
+            let seconds=if q.v4.is_none()&&q.v6.is_none(){CACHE_NEGATIVE_TTL}else{q.ttl.clamp(CACHE_MIN_TTL,CACHE_MAX_TTL)};
+            let entry=Cached{name:q.name,len:q.len,six:q.six,v4:q.v4,v6:q.v6,until:now.saturating_add(seconds as u64*1000)};
+            let cache=&mut open.cache;
+            cache.retain(|c|!(c.len==entry.len&&c.name[..c.len]==entry.name[..entry.len]));
+            if cache.len()>=CACHE_ENTRIES{
+                if let Some(i)=cache.iter().enumerate().min_by_key(|(_,c)|c.until).map(|(i,_)|i){cache.swap_remove(i);}
+            }
+            if cache.try_reserve(1).is_ok(){cache.push(entry);}
         }
     }
     /// The IPv4 answer to the current question, if it arrived. Err for a final failure.
@@ -316,6 +406,7 @@ impl<'a> Engine<'a>{
         open.next_port=if open.next_port>=OPEN_PORT_BASE+7000{OPEN_PORT_BASE}else{open.next_port+1};
         let port=open.next_port;
         let handle=*open.tcp.get(flow).ok_or(Error::Length)?;
+        open.groups[flow]=None;
         let flow=self.flows.get_mut::<tcp::Socket>(handle);
         flow.abort();
         let local=match address{Address::V4(_)=>IpListenEndpoint{addr:Some(IpAddress::v4(local[0],local[1],local[2],local[3])),port},Address::V6(_)=>IpListenEndpoint{addr:None,port}};
@@ -323,15 +414,37 @@ impl<'a> Engine<'a>{
     }
     /// Makes flow `flow` listen on `port`, for either family. Another flow listening there
     /// already, or a port that is not a program's, is `Error::Busy`.
-    pub fn open_listen(&mut self,flow:usize,port:u16)->Result<(),Error>{
+    pub fn open_listen(&mut self,flow:usize,port:u16)->Result<(),Error>{self.open_listen_in(flow,port,None)}
+    /// Makes flow `flow` one more listener in group `group` on `port`: a backlog. Every
+    /// flow of a group waits on the port at once, so that many peers can connect before
+    /// the program accepts any. A listener on the port in another group is `Error::Busy`.
+    pub fn open_listen_group(&mut self,flow:usize,port:u16,group:usize)->Result<(),Error>{self.open_listen_in(flow,port,Some(group))}
+    fn open_listen_in(&mut self,flow:usize,port:u16,group:Option<usize>)->Result<(),Error>{
         if !program_port(port){return Err(Error::Busy);}
         let handle=self.tcp_handle(flow)?;
-        let open=self.open.as_ref().ok_or(Error::Config)?;
-        if open.tcp.iter().any(|h|*h!=handle&&{let s=self.flows.get::<tcp::Socket>(*h);s.state()==State::Listen&&s.listen_endpoint().port==port}){return Err(Error::Busy);}
+        let open=self.open.as_mut().ok_or(Error::Config)?;
+        let flows=&self.flows;
+        let other=open.tcp.iter().zip(&open.groups).any(|(h,g)|*h!=handle&&{let s=flows.get::<tcp::Socket>(*h);s.state()==State::Listen&&s.listen_endpoint().port==port}
+            &&(group.is_none()||*g!=group.map(|n|(port,n))));
+        if other{return Err(Error::Busy);}
+        open.groups[flow]=group.map(|n|(port,n));
         let flow=self.flows.get_mut::<tcp::Socket>(handle);
         flow.abort();
         flow.listen(IpListenEndpoint{addr:None,port}).map_err(|_|Error::Protocol)
     }
+    /// A flow of `group` a peer has connected to, waiting to be accepted. The caller takes
+    /// it with `open_take`, and may put a fresh flow in the backlog in its place.
+    pub fn open_accepted(&self,group:usize)->Option<usize>{
+        let open=self.open.as_ref()?;
+        open.groups.iter().enumerate().find(|(i,g)|g.is_some_and(|(_,n)|n==group)&&self.open_connected(*i)).map(|(i,_)|i)
+    }
+    /// The flows still listening in `group`.
+    pub fn open_backlog(&self,group:usize)->usize{
+        let Some(open)=self.open.as_ref() else{return 0};
+        open.groups.iter().zip(&open.tcp).filter(|(g,h)|g.is_some_and(|(_,n)|n==group)&&matches!(self.flows.get::<tcp::Socket>(**h).state(),State::Listen|State::SynReceived)).count()
+    }
+    /// Takes flow `flow` out of its listening group, as an accepted connection.
+    pub fn open_take(&mut self,flow:usize){if let Some(g)=self.open.as_mut().and_then(|o|o.groups.get_mut(flow)){*g=None;}}
     /// A listening flow a peer has connected to.
     pub fn open_connected(&self,flow:usize)->bool{
         self.tcp_handle(flow).is_ok_and(|h|!matches!(self.flows.get::<tcp::Socket>(h).state(),State::Listen|State::SynReceived|State::SynSent|State::Closed))
@@ -374,6 +487,7 @@ impl<'a> Engine<'a>{
     }
     /// Lets the flow go: reset, unless it was shut down and is finishing on its own.
     pub fn open_close(&mut self,flow:usize){
+        self.open_take(flow);
         if let Ok(h)=self.tcp_handle(flow){
             let s=self.flows.get_mut::<tcp::Socket>(h);
             if !matches!(s.state(),State::FinWait1|State::FinWait2|State::Closing|State::TimeWait|State::LastAck){s.abort();}
@@ -438,6 +552,7 @@ impl<'a> Engine<'a>{
     pub fn submit_frame(&mut self,bytes:&[u8])->Result<(),Error>{
         if self.stopped{return Err(Error::Stopped);}if self.adapter.rx.is_some(){return Err(Error::Busy);}
         if !(14..=MAX_FRAME).contains(&bytes.len()){return Err(Error::Length);}
+        if let Some(open)=self.open.as_mut(){if let Some(advert)=v6config::router_advert(bytes){open.six.advert(advert,self.last);}}
         let mut frame=Frame::empty();frame.length=bytes.len();frame.bytes[..bytes.len()].copy_from_slice(bytes);self.adapter.rx=Some(frame);Ok(())
     }
     pub fn take_frame(&mut self)->Option<Frame>{self.adapter.tx.take()}
@@ -564,6 +679,36 @@ impl<'a> Engine<'a>{
         }
         self.iface.poll_egress(time,&mut self.adapter,&mut self.flows);
         self.open_poll_dhcp();
+        self.open_poll_dhcp6();
+        // Replies are taken each turn, so a stray datagram can't crowd out the answer.
+        self.open_collect();
+    }
+    /// Stateless DHCPv6: once a router says other configuration comes from DHCPv6, ask
+    /// for the resolvers with an Information-Request, retrying with backoff, and again
+    /// when the answer's refresh time runs out.
+    fn open_poll_dhcp6(&mut self){
+        let now=self.last;
+        #[allow(irrefutable_let_patterns)]
+        let HardwareAddress::Ethernet(mac)=self.iface.hardware_addr() else{return};
+        let Some(open)=self.open.as_mut() else{return};
+        let six=&mut open.six;
+        let socket=self.flows.get_mut::<udp::Socket>(six.dhcp6);
+        while let Ok((bytes,_))=socket.recv(){
+            if !six.ask{continue;}
+            if let Some(info)=v6config::reply(six.xid,mac.0,bytes){
+                six.dhcp_resolvers=info.resolvers;six.ask=false;
+                six.refresh_at=Some(now.saturating_add(info.refresh_s as u64*1000));
+            }
+        }
+        if !six.ask&&six.refresh_at.is_some_and(|at|now>=at){six.refresh_at=None;six.start(now,self.seed);}
+        if six.ask&&now>=six.next_at{
+            let message=v6config::information_request(six.xid,mac.0,now-six.started);
+            let to=(IpAddress::Ipv6(Ipv6Address::from(v6config::ALL_SERVERS)),v6config::SERVER_PORT);
+            if socket.send_slice(&message,to).is_ok(){
+                let jitter=((self.seed^six.xid as u64^now)%201)as i64-100;
+                six.timeout=v6config::next_timeout(six.timeout,jitter);six.next_at=now.saturating_add(six.timeout);
+            }
+        }
     }
 }
 
