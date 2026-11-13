@@ -10,6 +10,7 @@ sex-font = { path = "../../crates/sex-font" }
 sex-graphics = { path = "../../crates/sex-graphics", default-features = false }
 sex-rt = { path = "../../sex-rt" }
 sex-time = { path = "../../crates/sex-time", default-features = false }
+sex-gpu-intel = { path = "../../crates/sex-gpu-intel", default-features = false }
 
 [features]
 default = ["no_std"]

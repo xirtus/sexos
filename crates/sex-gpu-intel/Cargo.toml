@@ -8,4 +8,10 @@ license = "GPL-2.0-or-later OR MIT"
 path = "src/lib.rs"
 
 [dependencies]
-sex-kms = { path = "../sex-kms" }
+sex-kms = { path = "../sex-kms", optional = true }
+
+[features]
+# The KMS view (readout -> sex-kms device/state) needs a heap; the register
+# logic does not, so a service without an allocator can still use it.
+default = ["kms"]
+kms = ["dep:sex-kms"]

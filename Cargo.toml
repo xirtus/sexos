@@ -73,6 +73,7 @@ members = [
     "crates/sex-object-model",
     "crates/sex-time",
     "crates/sex-disk",
+    "crates/sex-pkg",
     "crates/sex-wasm",
     "apps/spindle",
     "crates/sex-std",

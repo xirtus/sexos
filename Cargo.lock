@@ -2650,6 +2650,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-pkg"
+version = "0.1.0"
+dependencies = [
+ "ed25519-compact",
+ "sha2",
+]
+
+[[package]]
 name = "sex-rt"
 version = "0.1.0"
 dependencies = [
@@ -2786,6 +2794,7 @@ name = "sexdisplay"
 version = "0.1.0"
 dependencies = [
  "sex-font",
+ "sex-gpu-intel",
  "sex-graphics",
  "sex-pdx",
  "sex-rt",
@@ -2810,6 +2819,7 @@ dependencies = [
  "sex-disk",
  "sex-object-model",
  "sex-pdx",
+ "sex-pkg",
  "sex-rt",
  "sex-volumes",
  "sexfs",
