@@ -4043,3 +4043,25 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
 - **Evidence:** `program_monitor_gate.py` (typed commands, pointer focus) and
   `latency_classes_gate.py` (367 pointer moves under load) pass.
 - **ABI:** none new; xHCI lease now carries one vector.
+
+## Protocol fuzzing, slice J3 (2026-11-13)
+- **What:** `run fuzz CALLS SEED proto`: three calls in four are pdx calls to a held
+  service with an operation number some `sex-pdx` protocol really uses (all literal
+  `OP_*`, collected by `apps/fuzz/build.rs`, so new protocols are covered at once) and
+  mutated arguments. Each run logs its answers by value and operations covered.
+- **Evidence:** `scripts/syscall_fuzz_gate.py` now adds one protocol seed (CI). A
+  1,000,000-call protocol run (`--calls 1000000 --seeds '' --proto-seeds 7`) covered
+  94/94 operations with no service or kernel fault.
+
+## Out-of-memory policy, slice J4 (2026-11-13)
+- **What:** when program memory turns critical the kernel sends the Shell one
+  `program_memory::OP_PRESSURE` word (caller 0). If it stays critical for 5 s (time for
+  programs to trim), the Shell ends the program run holding the most memory (never a
+  service or built-in app), shows "System: NAME was closed: memory ran out" and keeps it
+  in notification history, then waits 5 s before any further end.
+- **Evidence:** `scripts/program_oom_gate.py`: Heap test takes 215 MiB on a 512 MiB
+  machine, is ended (225 MiB freed), pressure returns to normal, Spindle answers and
+  Monitor starts. `program_heap_gate.py` still passes.
+- **Kernel / ABI:** about 10 lines in `program_frames.rs`; new op `OP_PRESSURE` 0x3A1.
+- **Follow-up:** the Shell spins on `sys_yield` while a panel notice shows (5 s) and while
+  memory is critical; a timed wait would be cheaper (workstream C owns that loop).

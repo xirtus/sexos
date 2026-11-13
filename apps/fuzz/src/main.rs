@@ -7,6 +7,11 @@
 //! the kernel or any service; the kernel's answer to a bad call is an error, and this
 //! program keeps running to say how many calls it made. The same seed makes the same
 //! calls, so a failure found once can be found again.
+//!
+//! `run fuzz CALLS SEED proto` is protocol mode: three calls in four are pdx calls to a
+//! service this program holds, with an operation number every `sex-pdx` protocol really
+//! uses (collected at build time, see build.rs) and mutated arguments, so each service's
+//! request parsing sees well-formed operations with bad arguments, not only noise.
 #![no_std]
 #![no_main]
 
@@ -24,6 +29,20 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 /// and threads (each has its own test), so the run would end before it reports.
 /// 100 is PDX_CALL_WAIT: a valid send may park forever without a reply.
 const SKIP: [u64; 8] = [53, 62, 65, 80, 81, 82, 83, 100];
+
+include!(concat!(env!("OUT_DIR"), "/ops.rs"));
+
+/// Answers seen, by value, to report how calls were refused.
+struct Answers { values: [u64; 32], counts: [u64; 32], other: u64 }
+impl Answers {
+    fn note(&mut self, v: u64) {
+        for i in 0..32 {
+            if self.counts[i] != 0 && self.values[i] == v { self.counts[i] += 1; return; }
+            if self.counts[i] == 0 { self.values[i] = v; self.counts[i] = 1; return; }
+        }
+        self.other += 1;
+    }
+}
 
 struct Rng(u64);
 impl Rng {
@@ -80,10 +99,32 @@ pub extern "C" fn _start() -> ! {
     let mut words = args.split(|&b| b == b' ').filter(|w| !w.is_empty());
     let calls = parse(words.next(), 20_000).min(10_000_000);
     let seed = parse(words.next(), 1).max(1);
-    sex_pdx::serial_record!("[fuzz.start] target={} task={} calls={} seed={}", window.target, window.task, calls, seed);
+    let proto = words.next() == Some(&b"proto"[..]);
+    sex_pdx::serial_record!("[fuzz.start] target={} task={} calls={} seed={} proto={} ops={}", window.target, window.task, calls, seed, proto as u8, OPS.len());
+    let mut answers = Answers { values: [0; 32], counts: [0; 32], other: 0 };
+    let mut ops_sent = [0u8; 1024];
     let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
     let (mut made, mut ipc, mut ok) = (0u64, 0u64, 0u64);
     while made < calls {
+        const HELD: [u64; 7] = [sex_pdx::SLOT_STORAGE, sex_pdx::SLOT_DISPLAY, sex_pdx::SLOT_SHELL,
+            sex_pdx::SLOT_BELL, sex_pdx::SLOT_NET, sex_pdx::fs::CLIENT_SLOT, 0];
+        if proto && rng.below(4) != 0 {
+            // A real operation to a held service, with arguments that are edge values,
+            // pointers or noise. The send's answer is whatever the service replies.
+            let k = rng.below(OPS.len() as u64) as usize;
+            let a = [HELD[rng.below(HELD.len() as u64) as usize], OPS[k].1,
+                argument(&mut rng), argument(&mut rng), argument(&mut rng)];
+            let r = call(0, a);
+            answers.note(r);
+            if r == 0 { ok += 1; }
+            if k < ops_sent.len() * 8 { ops_sent[k / 8] |= 1 << (k % 8); }
+            ipc += 1; made += 1;
+            if made % 5000 == 0 {
+                sex_pdx::serial_record!("[fuzz.progress] calls={} ipc={} ok={}", made, ipc, ok);
+                if let Some(Event::Close) = window.poll() { window.close() }
+            }
+            continue;
+        }
         let n = if rng.below(4) == 0 { 0 } else { rng.below(101) };
         if SKIP.contains(&n) { continue; }
         let mut a = [argument(&mut rng), argument(&mut rng), argument(&mut rng), argument(&mut rng), argument(&mut rng)];
@@ -92,8 +133,6 @@ pub extern "C" fn _start() -> ! {
             // Half the time a slot a program holds (Storage, Display, Shell, Bell, Net, the
             // file region's route), so services see the bad requests, not only the kernel.
             0 => {
-                const HELD: [u64; 7] = [sex_pdx::SLOT_STORAGE, sex_pdx::SLOT_DISPLAY, sex_pdx::SLOT_SHELL,
-                    sex_pdx::SLOT_BELL, sex_pdx::SLOT_NET, sex_pdx::fs::CLIENT_SLOT, 0];
                 a[0] = if rng.below(2) == 0 { HELD[rng.below(HELD.len() as u64) as usize] } else { rng.below(600) };
                 if rng.below(2) == 0 { a[1] = rng.below(0x400); }
                 ipc += 1;
@@ -102,7 +141,9 @@ pub extern "C" fn _start() -> ! {
             70 => a[0] = rng.below(3),
             _ => {}
         }
-        if call(n, a) == 0 { ok += 1; }
+        let r = call(n, a);
+        answers.note(r);
+        if r == 0 { ok += 1; }
         made += 1;
         if made % 5000 == 0 {
             sex_pdx::serial_record!("[fuzz.progress] calls={} ipc={} ok={}", made, ipc, ok);
@@ -110,6 +151,12 @@ pub extern "C" fn _start() -> ! {
             if let Some(Event::Close) = window.poll() { window.close() }
         }
     }
+    let covered: u32 = ops_sent.iter().map(|b| b.count_ones()).sum();
+    for i in 0..32 {
+        if answers.counts[i] == 0 { break; }
+        sex_pdx::serial_record!("[fuzz.answer] value={:#x} count={}", answers.values[i], answers.counts[i]);
+    }
+    sex_pdx::serial_record!("[fuzz.ops] covered={} of={} other_answers={}", covered, OPS.len(), answers.other);
     sex_pdx::serial_record!("[fuzz.done] target={} task={} calls={} ipc={} ok={} seed={}", window.target, window.task, made, ipc, ok, seed);
     let mut text = Text { buf: [0; 256], len: 0 };
     let _ = write!(text, "Fuzz run done.\n{} calls ({} pdx calls), {} answered OK.\nSeed {}. F11 closes.", made, ipc, ok, seed);
