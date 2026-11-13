@@ -104,8 +104,10 @@ pub enum WmAction {
     Close,
     /// Super+F.
     Fullscreen,
-    /// Super+V or Super+Shift+Space.
+    /// Super+Shift+V or Super+Shift+Space.
     ToggleFloating,
+    /// Super+V: the previous clipboard entry; pressed again soon, the one before.
+    ClipboardHistory,
     /// Super+Space: the next layout on this workspace.
     CycleLayout,
     /// Super+M: monocle on this workspace, or back to the previous layout.
@@ -169,7 +171,8 @@ pub fn binding(key: u8, m: Mods) -> Option<WmAction> {
         (code::D, _) => WmAction::Launcher,
         (code::Q, _) => WmAction::Close,
         (code::F, _) => WmAction::Fullscreen,
-        (code::V, _) | (code::SPACE, true) => WmAction::ToggleFloating,
+        (code::V, false) => WmAction::ClipboardHistory,
+        (code::V, true) | (code::SPACE, true) => WmAction::ToggleFloating,
         (code::SPACE, false) => WmAction::CycleLayout,
         (code::M, _) => WmAction::ToggleMonocle,
         (code::BRACKET_RIGHT, _) => WmAction::GrowMaster,
