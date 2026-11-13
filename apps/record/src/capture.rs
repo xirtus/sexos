@@ -75,6 +75,11 @@ impl Capture {
         if !value.live() {
             return Err(Error::Unavailable);
         }
+        if option_env!("SEXOS_RECORDING_PROBES") == Some("1") {
+            // Address-only test receipt from the actual validated held grant.
+            // It neither grants access nor reads shared contents.
+            sex_pdx::serial_record!("[record.probe.bank] session={} task={} shell_epoch={} display_epoch={} region={} address={:#x} bytes={} rights={}", scope.session.word(), scope.record_task, scope.shell_epoch, scope.display_epoch, info.region_id, view.virtual_address, view.length, info.rights);
+        }
         Ok(value)
     }
     fn live(&mut self) -> bool {

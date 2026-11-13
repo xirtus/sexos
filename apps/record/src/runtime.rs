@@ -177,6 +177,11 @@ impl Runtime {
         self.capture = Some(capture);
         self.files = Some(files);
         self.pixels = pixels;
+        if option_env!("SEXOS_RECORDING_PROBES") == Some("1") {
+            // This allocation remains owned until the session ends. No pixel
+            // values are disclosed; probes must still be denied by PKU.
+            sex_pdx::serial_record!("[record.probe.private] session={} task={} shell_epoch={} display_epoch={} address={:#x} bytes={}", scope.session.word(), scope.task, scope.shell_epoch, scope.display_epoch, self.pixels.as_ptr() as usize, self.pixels.len() * core::mem::size_of::<u32>());
+        }
         self.stage = Stage::Creating;
         Ok(())
     }

@@ -27,7 +27,13 @@ impl Server {
         let rights=sex_pdx::memory_region::QUERY_VIEW|sex_pdx::memory_region::READ|sex_pdx::memory_region::WRITE;
         self.bank=sex_pdx::memory_region_info(c::SLOT).ok().and_then(|info|
             sex_pdx::memory_region_view(c::SLOT,0,c::BYTES as u64,rights).ok().and_then(|view|
-                unsafe{c::Bank::from_resolved(info,view,true)}));
+                {
+                    let bank=unsafe{c::Bank::from_resolved(info,view,true)}?;
+                    if option_env!("SEXOS_RECORDING_PROBES")==Some("1") {
+                        sex_pdx::serial_record!("[display.recording.probe.bank] epoch={} region={} address={:#x} bytes={} rights={}",epoch,info.region_id,view.virtual_address,view.length,info.rights);
+                    }
+                    Some(bank)
+                }));
         if let Some(bank)=self.bank.as_mut() {
             // A failed epoch installation still revokes any old visible token.
             bank.scrub();if !bank.install_epoch(epoch){self.bank=None;}
