@@ -4075,3 +4075,15 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   ~75 ms includes TCG and the host's key path. Default bound 2,000 ms; not in CI.
 - **Next:** find the 1.5 s stall under load (scheduler or Display), then tighten the
   bound; the plan's hardware target is p99 < 16 ms.
+
+## Program start time, slice J7 measurement (2026-11-13)
+- **What:** `scripts/program_start_gate.py` times `run NAME` to `[NAME.ready]` for
+  Fortune, Monitor, Shapes and Jot, three runs each, from Spindle taking the command.
+- **Numbers (QEMU TCG, 1 core):** Jot 53-94 ms (target < 100 ms is met even under
+  emulation), Fortune 36-46 ms (195 ms first run, read from disk), Monitor 54-63 ms,
+  Shapes 404-484 ms (its first draw is a full tiny-skia scene).
+- **Harness note:** the time from the Enter key event is 0.8-1.6 s. That is QEMU's
+  `send-key` holding each key 100 ms, so typed commands queue up; it was the same on
+  master and is not guest latency. Gates should time from guest markers.
+- **Next:** Shapes' start is its own drawing, not loading; prelinking and lazy pages
+  are not needed yet for the < 100 ms target.
