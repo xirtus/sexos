@@ -109,6 +109,7 @@ pub extern "C" fn _start() -> ! {
             Event::Key(key) => key,
             _ => continue,
         };
+        sex_pdx::serial_record!("[settings.key] code={} page={} row={}", key.code, m.page, m.row);
         const F2: u8 = 0x3C;
         let change = if m.entering() {
             let c = match key.code { ENTER => 13, ESC => 27, BACKSPACE => 8, _ => sex_app::typed(key).unwrap_or(0) };

@@ -57,6 +57,7 @@ def main():
  finally:g['stop']()
 def evidence(text):
  """On failure, the serial lines this gate is about, so CI's log shows them."""
- keep=re.compile(r'settings|files\.config|files\.password|shell\.(lock|idle|screen|config|look)|display\.(screen|clock)|PANIC|panic|fault',re.I)
- for line in [l for l in text.splitlines() if keep.search(l)][-80:]:print('[serial]',line[:200])
+ keep=re.compile(r'settings|files\.config|files\.password|shell|focus|input|hid|display\.screen|display\.clock\.zone|PANIC|panic|fault|exception|#PF|killed|retired|finish|exit',re.I)
+ drop=re.compile(r'clock\.civil')
+ for line in [l for l in text.splitlines() if keep.search(l) and not drop.search(l)][-150:]:print('[serial]',line[:200])
 if __name__=='__main__':main()
