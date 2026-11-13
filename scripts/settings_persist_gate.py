@@ -48,11 +48,17 @@ def main():
   g['wait'](r'\[files.config.set\] caller=\d+ key=3 value=1 status=0',s,30)
   # Any key wakes the Shell, which then sees the new generation.
   time.sleep(.6);q.key('down');g['wait'](r'\[shell.look\] wallpaper=1 name=Dusk night=1 ok=1',s,30)
+  # Search finds the time zone; one step on is Europe/London, and the bar follows.
+  s=len(t())
+  for k in 'zone':q.key(k);time.sleep(.1)
+  q.key('right');g['wait'](r'\[settings.set\] key=11 value=1 status=0',s,30)
+  time.sleep(.6);q.key('esc');g['wait'](r'\[display.clock.zone\] zone=1 name=Europe/London',s,30)
   assert 'KERNEL PANIC' not in t()
  finally:g['stop']()
  g=boot(a.iso,disk,a.out,'settings-3',a.resolution);t=g['text']
  try:
   g['wait'](r'\[shell.look\] wallpaper=1 name=Dusk night=1 ok=1',0,120)
+  g['wait'](r'\[display.clock.zone\] zone=1 name=Europe/London',0,60)
   assert 'KERNEL PANIC' not in t()
   print({'ok':True,'loaded':loaded.group(0)})
  finally:g['stop']()

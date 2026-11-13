@@ -32,11 +32,13 @@ struct Watch {
     queued: usize,
     /// The look from settings still has to reach Display.
     look_owed: bool,
+    /// The bar clock's time zone still has to reach Display.
+    zone_owed: bool,
 }
 
 static mut WATCH: Watch = Watch {
     copy: Config::new(), seen: None, target: 0, asked: Asked::Nothing, asked_at: 0, last_poll: 0,
-    queue: [(0, 0); QUEUE], queued: 0, look_owed: false,
+    queue: [(0, 0); QUEUE], queued: 0, look_owed: false, zone_owed: false,
 };
 
 fn watch() -> &'static mut Watch { unsafe { &mut *core::ptr::addr_of_mut!(WATCH) } }
@@ -54,6 +56,7 @@ pub fn poll() {
     let w = watch();
     let now = sex_pdx::get_ticks();
     if w.look_owed { show_look(w); }
+    if w.zone_owed { show_zone(w); }
     // Files restarted or lost the request: ask again after a while.
     if w.asked != Asked::Nothing && now.saturating_sub(w.asked_at) > 5 * POLL_TICKS { w.asked = Asked::Nothing; }
     if w.asked != Asked::Nothing { return; }
@@ -114,6 +117,7 @@ fn take(w: &mut Watch, key: u16, value: i32) {
     if before == value { return; }
     match key {
         id::WALLPAPER | id::NIGHT_LIGHT => show_look(w),
+        id::ZONE => show_zone(w),
         _ => {}
     }
 }
@@ -122,8 +126,14 @@ fn show_look(w: &mut Watch) {
     w.look_owed = !unsafe { crate::desktop_look_apply(w.copy.value(id::WALLPAPER) as u8, w.copy.value(id::NIGHT_LIGHT) as u8) };
 }
 
-/// Display started again and knows nothing: show the look from settings again.
-pub fn display_restarted() { watch().look_owed = true; }
+fn show_zone(w: &mut Watch) {
+    let zone = w.copy.value(id::ZONE) as u64;
+    w.zone_owed = sex_pdx::pdx_call(sex_pdx::SLOT_DISPLAY, sex_pdx::clock_zone::OP_CLOCK_ZONE, zone, 0, 0).0 != 0;
+    sex_pdx::serial_record!("[shell.clock.zone] zone={} ok={}", zone, !w.zone_owed as u8);
+}
+
+/// Display started again and knows nothing: show the look and the clock's zone again.
+pub fn display_restarted() { let w = watch(); w.look_owed = true; w.zone_owed = w.copy.value(id::ZONE) != 0; }
 
 /// The person changed a setting with a Shell key: tell Files, so it lasts.
 pub fn changed_here(key: u16, value: i32) {

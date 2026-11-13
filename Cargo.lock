@@ -2013,6 +2013,9 @@ dependencies = [
 [[package]]
 name = "sex-time"
 version = "0.1.0"
+dependencies = [
+ "sex-config",
+]
 
 [[package]]
 name = "sex-tls"

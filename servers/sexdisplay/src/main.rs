@@ -1826,9 +1826,14 @@ fn civil_clock_lines(clock:&silkbar_model::civil_clock::CivilClock)->[[u8;13];2]
 fn civil_clock_caption(clock:&silkbar_model::civil_clock::CivilClock)->[u8;20]{
     let lines=civil_clock_lines(clock);let mut text=[b' ';20];
     if clock.state()==silkbar_model::civil_clock::State::Snapshot {
-        text[..5].copy_from_slice(&lines[0][4..9]);
-        text[6..9].copy_from_slice(b"UTC");text[10]=b'|';
-        text[12..18].copy_from_slice(&lines[1][..6]);
+        // Local time from the same UTC sample, in the zone the Shell gave (UTC by default).
+        let (offset,abbr)=sex_time::zone::zone(sex_pdx::clock_zone::zone()).offset_at(clock.seconds() as i64);
+        let local=(clock.seconds() as i64+offset as i64).clamp(0,u32::MAX as i64) as u32;
+        let day=local%86_400;
+        for(at,value)in[(0,day/3600),(3,day/60%60)]{text[at]=b'0'+(value/10)as u8;text[at+1]=b'0'+(value%10)as u8;}
+        text[2]=b':';
+        let n=abbr.len().min(5);text[6..6+n].copy_from_slice(&abbr.as_bytes()[..n]);text[7+n]=b'|';
+        text[9+n..15+n].copy_from_slice(&civil_clock_date(local)[..6]);
     }else if clock.state()==silkbar_model::civil_clock::State::Unavailable {
         text[..15].copy_from_slice(b"UTC unavailable");
     }else{text[..13].copy_from_slice(&lines[0]);}
@@ -4006,6 +4011,13 @@ pub extern "C" fn _start() -> ! {
                             needs_top_strip_redraw = true;
                             sex_pdx::serial_record!("[display.panel.notice] len={}", text.len);
                         }
+                    }
+                }
+                sex_pdx::clock_zone::OP_CLOCK_ZONE => {
+                    // Only the Shell picks the bar clock's time zone (from settings).
+                    if msg.caller_pd == 3 && sex_pdx::clock_zone::set(msg.arg0) {
+                        needs_top_strip_redraw = true;
+                        sex_pdx::serial_record!("[display.clock.zone] zone={} name={}", msg.arg0, sex_time::zone::zone(msg.arg0 as usize).name);
                     }
                 }
                 sex_pdx::desktop_look::OP_DESKTOP_LOOK => {

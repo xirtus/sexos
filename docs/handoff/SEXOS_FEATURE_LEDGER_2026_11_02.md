@@ -4036,3 +4036,16 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
 - **Not yet:** Display scale, keyboard repeat and volume are stored but not yet acted
   on by Display, Input and Bell (each owner's slice reads `sex_app::settings` or the
   Shell's copy). A launcher entry for Settings belongs to the desktop workstream.
+
+## Time zones, slice B4 (2026-11-13)
+- **What:** `sex_time::zone`: 59 zones as compiled Rust data (standard offset, abbreviation,
+  and today's daylight-saving rule: EU, US/Canada, south-east Australia, New Zealand,
+  Chile, Israel, Egypt). Current rules only, not history. The Shell sends the zone from
+  settings to Display (`OP_CLOCK_ZONE` 0x2F1), and the bar shows local time and its
+  abbreviation (`14:05 CEST | 13 NOV`) from the same UTC sample. UTC stays the default.
+- **Evidence:** `cargo test -p sex-time` (Berlin, New York, Sydney, Auckland, Israel,
+  Egypt transitions in 2026, table order equals `sex_config::ZONES`), in
+  `settings_host_gate.sh`; `silkbar_clock_gate.py` source contract updated for the
+  zone-aware caption; `settings_persist_gate.py` picks Europe/London in Settings and
+  checks it after a restart.
+- **Not yet:** 12-hour clock display (stored only); programs' own local time.
