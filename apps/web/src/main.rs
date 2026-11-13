@@ -1421,7 +1421,7 @@ impl Browser {
             (_, 0x39) => " ".into(),
             (_, 0x49) => "PageUp".into(),
             (_, 0x51) => "PageDown".into(),
-            _ => match sex_app::typed(key) { Some(c) => (c as char).to_string(), None => return false },
+            _ => match sex_app::text(key) { Some(c) => c.to_string(), None => return false },
         };
         let control = if key.control { "1" } else { "0" };
         self.sync_scroll();
@@ -1583,7 +1583,7 @@ impl Browser {
                     self.open(&url, true);
                 }
                 0x0E => { text.pop(); self.draw(); }
-                _ => if let Some(c) = sex_app::typed(key) { text.push(c as char); self.draw(); },
+                _ => if let Some(c) = sex_app::text(key) { text.push(c); self.draw(); },
             }
             return;
         }

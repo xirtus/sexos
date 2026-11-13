@@ -16,6 +16,7 @@ mod app_input;
 mod wm;
 mod launcher_search;
 mod session;
+mod keyboard_layout;
 use alloc::vec::Vec;
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -10513,6 +10514,7 @@ unsafe fn wm_action(action: wm::WmAction) -> bool {
         A::Wallpaper => desktop_look_step(1, 0),
         A::NightLight => desktop_look_step(0, 1),
         A::Lock => false,
+        A::KeyboardLayout => { let (label, title) = keyboard_layout::next(); keyboard_layout_notice(label, title) }
     };
     sex_pdx::serial_record!("[shell.wm.action] action={:?} done={} scene={}->{} focus={}->{} layout={}",
         action, done as u8, before.0, ACTIVE_SCENE_IDX, before.1, FOCUSED_SURFACE_ID, wm_tiling().layout.name());
@@ -10529,7 +10531,7 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
             wm_action(action);return true;
         }
     }
-    let modifier=APP_MODIFIERS.observe(code,value);
+    let modifier=APP_MODIFIERS.observe(code,value)|keyboard_layout::observe(code,value);
     match DESKTOP_KEYS.event(code,value) {
         desktop_keys::Action::Pass=>{
             if !COMMAND_PALETTE_OPEN {
@@ -10538,7 +10540,7 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
                     // Desktop function keys retain their existing Shell actions.
                     if matches!(code,0x0f|0x29|0x3b..=0x44|0x46|0x52|0x57|0x58|0x59){return false;}
                     let Some(normalized)=app_input_key_code(destination,code) else{return true};
-                    let key=APP_MODIFIERS.key(normalized);
+                    let key=keyboard_layout::typing(APP_MODIFIERS.key(normalized),code);
                     let input=if key.control {
                         match code {0x2e=>app_input::Input::Clipboard(sex_pdx::clipboard::Action::Copy),0x2d=>app_input::Input::Clipboard(sex_pdx::clipboard::Action::Cut),0x2f=>app_input::Input::Clipboard(sex_pdx::clipboard::Action::Paste),_=>app_input::Input::Key(key)}
                     }else{app_input::Input::Key(key)};
@@ -10550,7 +10552,7 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
                 if let Some(destination)=focused_program_participant(){
                     if modifier || value!=1{return true;}
                     if matches!(code,0x0f|0x29|0x3b..=0x44|0x46|0x52|0x57|0x58|0x59){return false;}
-                    if !APP_INPUT.push(app_input::Item{destination,input:app_input::Input::Key(APP_MODIFIERS.key(code))}){
+                    if !APP_INPUT.push(app_input::Item{destination,input:app_input::Input::Key(keyboard_layout::typing(APP_MODIFIERS.key(code),code))}){
                         sex_pdx::serial_record!("[shell.app.input.full] capacity=32 pd={} task={} accepted=0",destination.subject.pd,destination.subject.task);
                     }
                     app_input_poll();return true;
@@ -16062,6 +16064,18 @@ unsafe fn notify_history() -> impl Iterator<Item = &'static sex_pdx::notify::Tex
 unsafe fn notify_panel(text: &[u8]) -> bool {
     sex_pdx::notify::chunks(text, 0, 0, 0)
         .all(|(w, a, b)| pdx_call(SLOT_DISPLAY, sex_pdx::notify::OP_PANEL_NOTICE, w, a, b).0 == 0)
+}
+/// The panel names the keyboard layout just chosen, e.g. "Keyboard: DE  German".
+unsafe fn keyboard_layout_notice(label: &str, title: &str) -> bool {
+    let mut text = [0u8; 64];
+    let mut n = 0;
+    for part in [b"Keyboard: ".as_slice(), label.as_bytes(), b"  ", title.as_bytes()] {
+        let take = part.len().min(text.len() - n);
+        text[n..n + take].copy_from_slice(&part[..take]);
+        n += take;
+    }
+    sex_pdx::serial_record!("[shell.keyboard.layout] label={} title={}", label, title);
+    notify_panel(&text[..n])
 }
 // ── Wallpaper and night light: the Shell chooses, Display paints. ──
 static mut DESKTOP_LOOK: (u8, u8) = (0, 0);

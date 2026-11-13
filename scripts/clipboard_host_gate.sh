@@ -30,8 +30,10 @@ prefix=source[a:b]
 wheel.append('unsafe fn actual_main_wheel_prefix(msg:&PdxMessage){for _ in 0..1 {\n'+prefix+'\n}}')
 Path(sys.argv[3]).write_text('\n'.join(wheel)+'\n')
 PY
+# Shell's keyboard layouts, as the crate Shell links.
+rustc --edition=2021 --crate-type=rlib --crate-name sex_keymap "$ROOT/crates/sex-keymap/src/lib.rs" -o "$CLIPBOARD_TEMP/libsex_keymap.rlib"
 for name in text_encoding text_selection clipboard_wire clipboard_client clipboard_broker app_input; do
-    APP_INPUT_PRODUCTION="$CLIPBOARD_TEMP/app_input_production.rs" rustc --edition=2021 -A dead_code --test "$ROOT/tests/$name.rs" -o "$CLIPBOARD_TEMP/$name"
+    APP_INPUT_PRODUCTION="$CLIPBOARD_TEMP/app_input_production.rs" rustc --edition=2021 -A dead_code --extern sex_keymap="$CLIPBOARD_TEMP/libsex_keymap.rlib" --test "$ROOT/tests/$name.rs" -o "$CLIPBOARD_TEMP/$name"
     "$CLIPBOARD_TEMP/$name" --test-threads=1
 done
 BROWSER_INPUT_LIVENESS_PRODUCTION="$CLIPBOARD_TEMP/input_liveness.rs" BROWSER_WHEEL_PRODUCTION="$CLIPBOARD_TEMP/browser_wheel.rs" rustc --edition=2021 -A dead_code --test "$ROOT/tests/browser_wheel_route.rs" -o "$CLIPBOARD_TEMP/browser-wheel"

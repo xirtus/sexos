@@ -1932,6 +1932,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-keymap"
+version = "0.1.0"
+
+[[package]]
 name = "sex-libc"
 version = "0.1.0"
 dependencies = [
@@ -2246,6 +2250,7 @@ dependencies = [
 name = "silk-shell"
 version = "0.1.0"
 dependencies = [
+ "sex-keymap",
  "sex-pdx",
  "sex-rt",
  "silkbar-model",

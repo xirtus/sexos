@@ -55,6 +55,8 @@ jobs:
       run: cargo test --locked -p sex-html
     - name: Disk layouts (GPT, FAT, install beside other systems)
       run: cargo test --locked -p sex-disk --lib
+    - name: Keyboard layouts, dead keys and Compose
+      run: cargo test --locked -p sex-keymap
     - name: Crash record format host regressions
       run: bash scripts/crash_log_host_gate.sh
     - name: Experimental JS baseline JIT differential and emitted-code gates

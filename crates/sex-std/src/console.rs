@@ -106,20 +106,24 @@ fn read_line() -> Option<Vec<u8>> {
         match window_mut().next() {
             Event::Close => { if let Ok(mut c) = CONSOLE.lock() { c.closed = true; } return None; }
             Event::Key(key) if key.code == 0x0E => {
-                if line.pop().is_some() {
-                    let mut c = CONSOLE.lock().ok()?;
+                // One character back, with every byte of it.
+                let mut c = CONSOLE.lock().ok()?;
+                while let Some(b) = line.pop() {
                     c.text.pop();
-                    c.show();
+                    if b & 0xC0 != 0x80 { break; }
                 }
+                c.show();
             }
             Event::Key(key) => {
-                let typed = if key.code == 0x1C { Some(b'\n') } else { sex_app::typed(key) };
-                if let Some(b) = typed {
-                    line.push(b);
+                let typed = if key.code == 0x1C { Some('\n') } else { sex_app::text(key) };
+                if let Some(ch) = typed {
+                    let mut utf8 = [0; 4];
+                    let bytes = ch.encode_utf8(&mut utf8).as_bytes();
+                    line.extend_from_slice(bytes);
                     let mut c = CONSOLE.lock().ok()?;
-                    c.text.push(b);
+                    c.text.extend_from_slice(bytes);
                     c.show();
-                    if b == b'\n' { return Some(line); }
+                    if ch == '\n' { return Some(line); }
                 }
             }
             _ => {}
