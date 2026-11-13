@@ -4030,3 +4030,16 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   Monitor redraws, Input ~3,700 calls/s and Bar ~2,400 calls/s at idle (polling).
 - **Not yet:** kill/restart from Monitor (needs a Shell request, workstream C owns
   Shell), per-program I/O and network bytes.
+
+## Idle power: Input and USB stop polling (2026-11-13)
+- **What:** an idle desktop no longer wakes Input and USB every tick. Input sleeps up
+  to 32 ticks when nothing is queued for Shell, and is woken at once by a message (USB
+  reports) or, new, by a PS/2 key: the kernel wakes the task that takes the input ring.
+  USB unmasks its xHCI controller's MSI/MSI-X vector (hwdb manifest now asks for one)
+  and sleeps up to 32 ticks when idle; without a vector it still polls every tick.
+- **Measured:** idle QEMU host CPU on one core 38% -> 28% (102% before #175). Monitor
+  no longer lists Input or USB among the busiest at idle.
+- **Kernel:** `interrupts::INPUT_LISTENER` + wake on scancode (about 10 lines).
+- **Evidence:** `program_monitor_gate.py` (typed commands, pointer focus) and
+  `latency_classes_gate.py` (367 pointer moves under load) pass.
+- **ABI:** none new; xHCI lease now carries one vector.
