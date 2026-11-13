@@ -162,6 +162,8 @@ jobs:
       run: |
         truncate -s 1G "$RUNNER_TEMP/blank-packages.img"
         python3 scripts/package_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-packages.img" --out "$RUNNER_TEMP/sexos-runtime/packages"
+    - name: Python 3.13 interpreter (CPython)
+      run: python3 scripts/python_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/python"
     - name: Large reads must reach the device
       run: python3 scripts/program_bench_gate.py --large-read --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/large-read"
     - name: IPv6-only network (SLAAC, RDNSS, DHCPv6, sockets, name lookup)
