@@ -22,6 +22,7 @@
 #![allow(non_camel_case_types)]
 
 extern crate alloc;
+use alloc::vec::Vec;
 
 pub mod format;
 pub mod mem;
@@ -114,21 +115,81 @@ pub unsafe extern "C" fn exit(code: c_int) -> ! {
     }
 }
 
-/// No environment: a program's settings come from its arguments and its own folder.
+/// The environment: empty when a program starts (its settings come from its arguments
+/// and its own folder). `setenv` and `unsetenv` change this program's own copy, which
+/// `getenv` and `environ` read, as CPython's `os.environ` expects.
+static mut ENV: Vec<Vec<u8>> = Vec::new();
+static mut ENV_PTRS: Vec<*mut c_char> = Vec::new();
+static mut EMPTY_ENV: [*mut c_char; 1] = [core::ptr::null_mut()];
 #[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
-pub unsafe extern "C" fn getenv(_name: *const c_char) -> *mut c_char {
-    core::ptr::null_mut()
+#[allow(non_upper_case_globals)]
+pub static mut environ: *mut *mut c_char = core::ptr::addr_of_mut!(EMPTY_ENV) as *mut *mut c_char;
+
+fn env_key(entry: &[u8]) -> &[u8] { &entry[..entry.iter().position(|&b| b == b'=').unwrap_or(entry.len())] }
+unsafe fn env_rebuild() {
+    unsafe {
+        let env = &mut *core::ptr::addr_of_mut!(ENV);
+        let ptrs = &mut *core::ptr::addr_of_mut!(ENV_PTRS);
+        ptrs.clear();
+        ptrs.extend(env.iter_mut().map(|e| e.as_mut_ptr().cast::<c_char>()));
+        ptrs.push(core::ptr::null_mut());
+        environ = ptrs.as_mut_ptr();
+    }
 }
 
-/// `sysconf`: the page size and the cores this program's threads use (musl's numbers);
-/// any other name is refused with EINVAL. dav1d asks for the cores.
-#[cfg_attr(target_os = "none", no_mangle)]
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub unsafe extern "C" fn getenv(name: *const c_char) -> *mut c_char {
+    if name.is_null() { return core::ptr::null_mut(); }
+    let name = unsafe { stdio::c_str(name) };
+    let env = unsafe { &mut *core::ptr::addr_of_mut!(ENV) };
+    match env.iter_mut().find(|e| env_key(e) == name) {
+        Some(e) => unsafe { e.as_mut_ptr().add(name.len() + 1).cast() },
+        None => core::ptr::null_mut(),
+    }
+}
+
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub unsafe extern "C" fn setenv(name: *const c_char, value: *const c_char, overwrite: c_int) -> c_int {
+    let (name, value) = unsafe { (stdio::c_str(name), stdio::c_str(value)) };
+    if name.is_empty() || name.contains(&b'=') { set_errno(EINVAL); return -1; }
+    let env = unsafe { &mut *core::ptr::addr_of_mut!(ENV) };
+    let mut entry = Vec::with_capacity(name.len() + value.len() + 2);
+    entry.extend_from_slice(name);
+    entry.push(b'=');
+    entry.extend_from_slice(value);
+    entry.push(0);
+    match env.iter().position(|e| env_key(e) == name) {
+        Some(_) if overwrite == 0 => return 0,
+        Some(i) => env[i] = entry,
+        None => env.push(entry),
+    }
+    unsafe { env_rebuild() };
+    0
+}
+
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub unsafe extern "C" fn unsetenv(name: *const c_char) -> c_int {
+    let name = unsafe { stdio::c_str(name) };
+    if name.is_empty() || name.contains(&b'=') { set_errno(EINVAL); return -1; }
+    unsafe {
+        (*core::ptr::addr_of_mut!(ENV)).retain(|e| env_key(e) != name);
+        env_rebuild();
+    }
+    0
+}
+
+/// `sysconf`: the page size, the clock tick of `times`, the cores this program's
+/// threads use (musl's numbers); any other name is refused with EINVAL. dav1d asks
+/// for the cores, CPython for the tick and the page size.
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn sysconf(name: c_int) -> core::ffi::c_long {
     const SC_PAGESIZE: c_int = 30;
     const SC_NPROCESSORS_CONF: c_int = 83;
     const SC_NPROCESSORS_ONLN: c_int = 84;
+    const SC_CLK_TCK: c_int = 2;
     match name {
         SC_PAGESIZE => 4096,
+        SC_CLK_TCK => 100,
         SC_NPROCESSORS_CONF | SC_NPROCESSORS_ONLN => pthread::cores().max(1) as core::ffi::c_long,
         _ => { set_errno(EINVAL); -1 }
     }

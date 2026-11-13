@@ -71,7 +71,8 @@ crates = [
   "apps/pdf/Cargo.toml",
   "apps/lua/Cargo.toml",
   "apps/rg/Cargo.toml",
-  "apps/fd/Cargo.toml"
+  "apps/fd/Cargo.toml",
+  "apps/python/Cargo.toml"
 ]
 
 [[stage]]
@@ -429,6 +430,16 @@ build_std = "std,panic_abort"
 manifest = "apps/fd/Cargo.toml"
 source_artifact = "target/x86_64-sex-std/release/fd"
 dest_artifact = "iso_root/programs/fd"
+
+# Python 3.13: CPython (vendor/cpython-3.13.18) on sex-libc, its stdlib frozen in.
+[[stage]]
+id = "build_python"
+action = "cargo_manifest"
+target = "x86_64-sex-std.json"
+build_std = "std,panic_abort"
+manifest = "apps/python/Cargo.toml"
+source_artifact = "target/x86_64-sex-std/release/python"
+dest_artifact = "iso_root/programs/python"
 
 # PDF: the first ordinary std app, hayro rendering pages into the window.
 [[stage]]
