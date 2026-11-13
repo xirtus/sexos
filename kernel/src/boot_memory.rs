@@ -13,19 +13,20 @@ fn require_boot() {
         BootPhase::RegistryBuild as u8, "BOOT_MEMORY_AFTER_GENESIS");
 }
 
-pub(crate) fn backing(length: u64) -> u64 {
+pub(crate) fn backing(length: u64) -> u64 { try_backing(length).expect("BOOT_REGION_NO_FRAMES") }
+/// `backing`, or None when no free block that large is left (memory is fragmented).
+pub(crate) fn try_backing(length: u64) -> Option<u64> {
     require_boot();
     assert!(length > 0 && length % 4096 == 0);
     let pages = (length / 4096).next_power_of_two();
-    let physical = crate::memory::allocator::GLOBAL_ALLOCATOR.alloc(pages.trailing_zeros() as usize)
-        .expect("BOOT_REGION_NO_FRAMES");
+    let physical = crate::memory::allocator::GLOBAL_ALLOCATOR.alloc(pages.trailing_zeros() as usize)?;
     crate::memory::manager::GLOBAL_VAS.lock().as_mut().expect("BOOT_REGION_NO_VAS")
         .frame_allocator.reserve_boot_region(physical, pages * 4096)
         .expect("BOOT_REGION_FRAME_OWNERSHIP_COLLISION");
     let hhdm = crate::HHDM_REQUEST.response().expect("BOOT_REGION_NO_HHDM").offset;
     // Zero the entire reservation, including buddy rounding, before publication.
     unsafe { core::ptr::write_bytes((physical + hhdm) as *mut u8, 0, (pages * 4096) as usize); }
-    physical
+    Some(physical)
 }
 
 /// Retained source authority: private BOOT frames, no user/DMA grant or runtime free.
