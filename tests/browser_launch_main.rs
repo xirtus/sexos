@@ -101,7 +101,7 @@ fn spindle_launcher_status()->(bool,&'static str,&'static str){(false,"unused","
 fn spindle_active_frame()->Option<(u32,u64)>{None}
 
 #[test]fn browser_row_preserves_existing_indices_and_webstub_identity(){let _l=LOCK.lock().unwrap();unsafe{reset();
- assert_eq!(COMMAND_LIST.len(),19);assert_eq!((COMMAND_LIST[0].command,COMMAND_LIST[1].command),(Command::FocusSpindle,Command::FocusQuil));
+ assert_eq!(COMMAND_LIST.len(),20);assert_eq!((COMMAND_LIST[0].command,COMMAND_LIST[1].command),(Command::FocusSpindle,Command::FocusQuil));
  assert_eq!(COMMAND_LIST[8].command,Command::ZoomToggle);assert_eq!(COMMAND_LIST[9].command,Command::MinimizeFocused);
  assert_eq!((COMMAND_LIST[10].command,COMMAND_LIST[10].name),(Command::FocusBrowser,"Open Browser"));assert_eq!(Command::FocusBrowser as u8,10);
  assert_eq!((SURFACE_ID_BROWSER,BROWSER_FRAME_ID),(205,8));assert!(![300,343,344].contains(&SURFACE_ID_BROWSER));

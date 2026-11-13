@@ -4022,6 +4022,12 @@ Input, sexacpi describes the `PNP0C50` touchpad (`_CRS`, `_DSM`, `_ADR`, `FMCN`)
 to Input, which brings the pad into touchpad mode and turns frames into pointer, click,
 scroll, Alt+Tab swipe and pinch-zoom events. Polled for now. Details:
 `LAPTOP_POWER_2026_11_13.md` (Touchpad section).
+
+## Sleep: lid close and launcher Sleep (2026-11-13)
+
+Suspend to idle: the lid or the launcher puts the desktop to sleep, the lid or power button
+wakes it. Firmware low-power-idle `_DSM` (Intel and Microsoft), panel dark, cores prefer
+energy. Details: `LAPTOP_POWER_2026_11_13.md` (Sleep section).
 ## System monitor, slice J1 (2026-11-13)
 - **What:** `run monitor` opens Monitor: every service and program that has used the
   CPU, busiest first, with its share of one core over the last second, the memory an

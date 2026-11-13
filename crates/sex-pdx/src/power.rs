@@ -181,6 +181,8 @@ pub struct Sensors {
     /// The power button was pressed and a desktop holds it (see `CTL_CLAIM_BUTTON`):
     /// the Shell shows its power dialog. Cleared when a `REQUEST` holder reads it.
     pub button_pressed: bool,
+    /// The desktop is asleep (suspend to idle, `CTL_SLEEP`), filled in by the kernel.
+    pub sleeping: bool,
 }
 impl Sensors {
     pub fn encode(&self) -> [u64; 5] {
@@ -198,7 +200,7 @@ impl Sensors {
         let hot = self.hottest_decikelvin.map_or(0, |v| v as u64 | 1 << 32)
             | self.critical_decikelvin.map_or(0, |c| (c as u64) << 33 | 1 << 49)
             | (self.thermal_critical as u64) << 50;
-        [OK, battery, ac | lid << 2 | light | profile | (self.button_pressed as u64) << 24, hot, 0]
+        [OK, battery, ac | lid << 2 | light | profile | (self.button_pressed as u64) << 24 | (self.sleeping as u64) << 25, hot, 0]
     }
     pub fn decode(raw: [u64; 5]) -> Result<Self, u64> {
         if raw[0] != OK { return Err(raw[0]); }
@@ -218,6 +220,7 @@ impl Sensors {
             thermal_critical: t & 1 << 50 != 0,
             profile: match (m >> 20) & 7 { 0 => None, p => Some((p - 1) as u8) },
             button_pressed: m & 1 << 24 != 0,
+            sleeping: m & 1 << 25 != 0,
         })
     }
 }
@@ -233,6 +236,10 @@ pub const CTL_PROFILE: u64 = 3;
 /// instead of shutting down. A second press within `BUTTON_FALLBACK_TICKS` (the desktop
 /// is not answering) still shuts down.
 pub const CTL_CLAIM_BUTTON: u64 = 4;
+/// Suspend to idle: value 1 enters, 0 wakes. The kernel records it (`Sensors::sleeping`)
+/// and queues it for the ACPI service, which runs the firmware's low-power-idle `_DSM`
+/// (screen off, entry; exit, screen on) and darkens or restores the panel.
+pub const CTL_SLEEP: u64 = 5;
 pub const PROFILE_PERFORMANCE: u8 = 0;
 pub const PROFILE_BALANCED: u8 = 1;
 pub const PROFILE_SAVER: u8 = 2;
@@ -381,7 +388,7 @@ mod tests {
         assert_eq!(Sensors::decode(s.encode()), Ok(s));
         let s = Sensors { battery_percent: Some(41), on_ac: Some(false), battery_minutes: Some(125), battery_health: Some(93), battery_critical: true,
             brightness: Some(60), critical_decikelvin: Some(3782), thermal_critical: true, hottest_decikelvin: Some(3800), profile: Some(PROFILE_SAVER),
-            button_pressed: true, ..Default::default() };
+            button_pressed: true, sleeping: true, ..Default::default() };
         assert_eq!(Sensors::decode(s.encode()), Ok(s));
         // The old layout (words written before these fields existed) still decodes.
         let old = [OK, 87 | 1 << 8 | 1 << 9, 1 | 2 | 4, 3132 | 1 << 32, 0];

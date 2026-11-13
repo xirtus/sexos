@@ -372,7 +372,8 @@ pub fn cpu_init_local() -> u64 {
             Msr::new(0xC001_02B1).write(1); // CPPC_ENABLE
             let caps = Msr::new(0xC001_02B0).read();
             let (highest, lowest) = ((caps >> 24) & 0xFF, caps & 0xFF);
-            let epp = PROFILE_EPP[PROFILE.load(Ordering::Relaxed) as usize % 3] as u64;
+            // Asleep, every core prefers energy whatever the profile.
+    let epp = if SLEEPING.load(Ordering::Relaxed) { 0xFF } else { PROFILE_EPP[PROFILE.load(Ordering::Relaxed) as usize % 3] as u64 };
             Msr::new(0xC001_02B3).write(highest | lowest << 8 | epp << 24); // max, min, desired auto, EPP
             EPP_MSR.store(0xC001_02B3, Ordering::Relaxed);
         }
@@ -658,7 +659,7 @@ fn read_sensors(take_button: bool) -> [u64; 5] {
         Some(words) => [w::OK, words[0], words[1], words[2], 0],
         None => w::Sensors::default().encode(),
     };
-    r[2] = r[2] & !(7 << 20 | 1 << 24) | (PROFILE.load(Ordering::Relaxed) as u64 + 1) << 20;
+    r[2] = r[2] & !(7 << 20 | 3 << 24) | (PROFILE.load(Ordering::Relaxed) as u64 + 1) << 20 | (SLEEPING.load(Ordering::Relaxed) as u64) << 25;
     let pressed = if take_button { BUTTON_PRESSED.swap(false, Ordering::AcqRel) } else { BUTTON_PRESSED.load(Ordering::Acquire) };
     if pressed { r[2] |= 1 << 24; }
     r
@@ -669,6 +670,8 @@ fn read_sensors(take_button: bool) -> [u64; 5] {
 /// The desktop holds the power button (`CTL_CLAIM_BUTTON`).
 static BUTTON_CLAIMED: AtomicBool = AtomicBool::new(false);
 static BUTTON_PRESSED: AtomicBool = AtomicBool::new(false);
+/// Suspend to idle (`CTL_SLEEP`): the desktop is dark and waits for the lid or the button.
+static SLEEPING: AtomicBool = AtomicBool::new(false);
 /// Brightness requests waiting for the ACPI service (it runs the firmware's `_BCM`).
 static CONTROL_QUEUE: spin::Mutex<([u64; 8], usize)> = spin::Mutex::new(([0; 8], 0));
 
@@ -689,17 +692,29 @@ fn control(caller: u32, word: u64) -> [u64; 5] {
     match word & 0xFF {
         w::CTL_PROFILE => set_profile(value),
         w::CTL_CLAIM_BUTTON => { DESKTOP_PD.store(caller, Ordering::Release); BUTTON_CLAIMED.store(true, Ordering::Release); [w::OK, 0, 0, 0, 0] }
-        w::CTL_BRIGHTNESS_STEP | w::CTL_BRIGHTNESS_SET => {
-            if FIRMWARE_PD.load(Ordering::Acquire) == 0 { return [w::UNAVAILABLE, 0, 0, 0, 0]; }
-            let mut q = CONTROL_QUEUE.lock();
-            if q.1 >= q.0.len() { return [w::BUSY, 0, 0, 0, 0]; }
-            let n = q.1;
-            q.0[n] = word & 0xFFFF;
-            q.1 += 1;
+        w::CTL_SLEEP if value > 1 => [w::INVALID, 0, 0, 0, 0],
+        w::CTL_SLEEP => {
+            if SLEEPING.swap(value == 1, Ordering::AcqRel) == (value == 1) { return [w::OK, 0, 0, 0, 0]; }
+            PROFILE_EPOCH.fetch_add(1, Ordering::AcqRel);
+            profile_apply_local();
+            // Without the ACPI service the desktop still sleeps (dark, energy preferred).
+            let queued = queue_control(word)[0] == w::OK;
+            serial_println!("[acpi.sleep] enter={} firmware_told={}", value, queued as u8);
             [w::OK, 0, 0, 0, 0]
         }
+        w::CTL_BRIGHTNESS_STEP | w::CTL_BRIGHTNESS_SET => queue_control(word),
         _ => [w::INVALID, 0, 0, 0, 0],
     }
+}
+/// Hands a desktop request to the ACPI service (it drains them with `FW_CONTROL`).
+fn queue_control(word: u64) -> [u64; 5] {
+    if FIRMWARE_PD.load(Ordering::Acquire) == 0 { return [w::UNAVAILABLE, 0, 0, 0, 0]; }
+    let mut q = CONTROL_QUEUE.lock();
+    if q.1 >= q.0.len() { return [w::BUSY, 0, 0, 0, 0]; }
+    let n = q.1;
+    q.0[n] = word & 0xFFFF;
+    q.1 += 1;
+    [w::OK, 0, 0, 0, 0]
 }
 fn fw_control() -> [u64; 5] {
     let mut q = CONTROL_QUEUE.lock();

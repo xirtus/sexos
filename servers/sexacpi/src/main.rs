@@ -343,7 +343,7 @@ fn adr_matches(adr: u64, b: Bdf) -> bool {
     (adr >> 16) as u8 == b.dev && (adr & 0xFFFF == b.func as u64 || adr & 0xFFFF == 0xFFFF)
 }
 /// Every ACPI device.
-fn acpi_devices(aml: &Aml) -> Vec<AmlName> {
+pub(crate) fn acpi_devices(aml: &Aml) -> Vec<AmlName> {
     let mut found = Vec::new();
     let mut ns = aml.namespace.lock().clone();
     let _ = ns.traverse(|path, level| { if matches!(level.kind, NamespaceLevelKind::Device) { found.push(path.clone()); } Ok(true) });

@@ -12,6 +12,9 @@
  * interrupt pin 0x15C. QEMU has no Serial IO function, so the ACPI service must describe
  * the pad and Input must say its controller is not leased. Each _PS0 writes 'P'.
  *
+ * A power engine plug-in (\_SB.PEPD, INT33A1) answers Intel's low-power S0 idle _DSM:
+ * screen off 'd', entry 'S', exit 'W', screen on 'D' on port 0x402.
+ *
  * Built with -DTHERMAL_TRIP, the zone heats past its critical trip point (_CRT) after a
  * few reads, so the machine must shut itself down cleanly.
  */
@@ -23,6 +26,27 @@ DefinitionBlock ("", "SSDT", 2, "SEXOS", "LAPTOP", 1)
     {
         OperationRegion (SXDC, SystemIO, 0x402, 1)
         Field (SXDC, ByteAcc, NoLock, Preserve) { SXDB, 8 }
+
+        Device (PEPD)
+        {
+            Name (_HID, "INT33A1")
+            Name (_CID, EisaId ("PNP0D80"))
+            Name (_UID, One)
+            Method (_STA, 0, NotSerialized) { Return (0x0F) }
+            Method (_DSM, 4, Serialized)
+            {
+                If (Arg0 == ToUUID ("c4eb40a0-6cd2-11e2-bcfd-0800200c9a66"))
+                {
+                    If (Arg2 == Zero) { Return (Buffer (One) { 0x79 }) }
+                    If (Arg2 == 0x03) { SXDB = 0x64 }
+                    If (Arg2 == 0x04) { SXDB = 0x44 }
+                    If (Arg2 == 0x05) { SXDB = 0x53 }
+                    If (Arg2 == 0x06) { SXDB = 0x57 }
+                    Return (Zero)
+                }
+                Return (Buffer (One) { 0x00 })
+            }
+        }
 
         Device (ADP1)
         {

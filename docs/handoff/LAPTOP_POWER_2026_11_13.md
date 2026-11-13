@@ -85,6 +85,21 @@ On the x17 R1, look for:
 4. If bring-up fails: `[sexinput.touchpad.retry] ... bus=Some(AddressNack)` means the pad is
    unpowered or at another address; `not_designware` means the function stayed in D3.
 
+## Sleep (H8, suspend to idle)
+
+- Closing the lid, or the launcher's new **Sleep** row, puts the desktop to sleep; opening
+  the lid or pressing the power button wakes it.
+- The Shell sends `CTL_SLEEP` (power control 5, value 1/0). The kernel records it
+  (`Sensors::sleeping`, word 2 bit 25), makes every core prefer energy (EPP 0xFF) while
+  asleep, and queues it for the ACPI service.
+- sexacpi runs the firmware's low-power S0 idle `_DSM` on the `INT33A1`/`PNP0D80` device:
+  Intel's (3 screen off, 5 entry; 6 exit, 4 screen on) and Microsoft's (3, 7; 8, 4), each only
+  if function 0 lists it. Dell firmware uses these for the keyboard light, fans and the
+  platform's deepest idle. The panel goes to its lowest `_BCL` level and comes back.
+- Not yet: devices in D3 (the touchpad's `SET_POWER` sleep, NVMe APST, the display engine
+  off), a slower kernel tick while asleep, and a lock screen on wake.
+- Gate: the laptop SSDT's `\_SB.PEPD` logs d/S/W/D; `laptop_power_gate.py` checks the order.
+
 ## Not done here
 
 - Touchpad GPIO interrupt (replaces polling) and a bus server for other I2C devices

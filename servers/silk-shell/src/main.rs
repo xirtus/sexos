@@ -14623,6 +14623,7 @@ enum Command {
     PowerSaver = 16,
     PowerBalanced = 17,
     PowerPerformance = 18,
+    Sleep = 19,
 }
 
 /// Static display info for each command in the palette.
@@ -14632,7 +14633,7 @@ struct CommandDef {
 }
 
 /// Daily-driver commands available in the command palette.
-const COMMAND_LIST: [CommandDef; 19] = [
+const COMMAND_LIST: [CommandDef; 20] = [
     CommandDef { command: Command::FocusSpindle, name: "Open Spindle" },
     CommandDef { command: Command::FocusQuil, name: "Open Quil" },
     CommandDef { command: Command::FocusLinen, name: "Open Linen" },
@@ -14652,6 +14653,7 @@ const COMMAND_LIST: [CommandDef; 19] = [
     CommandDef { command: Command::PowerSaver, name: "Power Saver" },
     CommandDef { command: Command::PowerBalanced, name: "Balanced Power" },
     CommandDef { command: Command::PowerPerformance, name: "Performance Power" },
+    CommandDef { command: Command::Sleep, name: "Sleep" },
 ];
 
 /// Whether the command palette overlay is currently open.
@@ -14682,6 +14684,7 @@ fn command_words(cmd: Command) -> &'static str {
         Command::PowerSaver => "battery profile energy quiet",
         Command::PowerBalanced => "battery profile energy normal",
         Command::PowerPerformance => "battery profile fast speed",
+        Command::Sleep => "suspend standby lid power",
     }
 }
 /// COMMAND_LIST indexes that match the query, best first.
@@ -16391,7 +16394,7 @@ fn command_kind_color(cmd: Command) -> u32 {
         Command::FocusProgram => 0x00504818,
         Command::ShutDown | Command::Restart => 0x00603030,
         Command::BrightnessUp | Command::BrightnessDown => 0x00605820,
-        Command::PowerSaver | Command::PowerBalanced | Command::PowerPerformance => 0x00305830,
+        Command::PowerSaver | Command::PowerBalanced | Command::PowerPerformance | Command::Sleep => 0x00305830,
     }
 }
 
@@ -16418,7 +16421,7 @@ fn command_palette_selected_accent() -> u32 {
             Command::FocusProgram => 0x00F9E2AF,
             Command::ShutDown | Command::Restart => 0x00F38BA8,
             Command::BrightnessUp | Command::BrightnessDown => 0x00F9E2AF,
-            Command::PowerSaver | Command::PowerBalanced | Command::PowerPerformance => 0x00A6E3A1,
+            Command::PowerSaver | Command::PowerBalanced | Command::PowerPerformance | Command::Sleep => 0x00A6E3A1,
         }
     }
 }
@@ -16454,7 +16457,7 @@ unsafe fn palette_render_list() {
             Command::MinimizeFocused=>"HIDE CURRENT WINDOW",
             Command::ShutDown=>"SAVE FILES, POWER OFF",
             Command::Restart=>"SAVE FILES, START AGAIN",
-            Command::BrightnessUp|Command::BrightnessDown|Command::PowerSaver|Command::PowerBalanced|Command::PowerPerformance=>status,
+            Command::BrightnessUp|Command::BrightnessDown|Command::PowerSaver|Command::PowerBalanced|Command::PowerPerformance|Command::Sleep=>status,
             _=>status,
         };
         let app=match item.command {
@@ -17129,6 +17132,7 @@ fn laptop_launcher_status(cmd: Command) -> (bool, &'static str, &'static str) {
     let s = sex_pdx::power::sensors().unwrap_or_default();
     let flags = sex_pdx::power::info().map_or(0, |i| i.flags);
     match cmd {
+        Command::Sleep => if s.sleeping { (true, "ASLEEP", "sleeping") } else { (true, "SCREEN OFF, WAKE WITH LID OR POWER", "sleep_available") },
         Command::BrightnessUp | Command::BrightnessDown => {
             if s.brightness.is_some() { (true, "SCREEN BRIGHTNESS", "acpi_backlight") } else { (false, "NO ACPI BACKLIGHT", "acpi_backlight_unavailable") }
         }
@@ -17141,6 +17145,7 @@ fn laptop_launcher_status(cmd: Command) -> (bool, &'static str, &'static str) {
 }
 fn laptop_command(cmd: Command) -> bool {
     use sex_pdx::power as p;
+    if cmd == Command::Sleep { return unsafe { sleep_enter("launcher") }; }
     let (what, result) = match cmd {
         Command::BrightnessUp => ("brightness_up", p::control(p::CTL_BRIGHTNESS_STEP, 1)),
         Command::BrightnessDown => ("brightness_down", p::control(p::CTL_BRIGHTNESS_STEP, 0xFF)),
@@ -17174,13 +17179,35 @@ unsafe fn laptop_poll() {
         }
         LAPTOP_LID = s.lid_open;
     }
-    if s.button_pressed { power_button_dialog(); }
+    if s.button_pressed {
+        if LAPTOP_SLEEPING { sleep_exit("power_button"); } else { power_button_dialog(); }
+    }
+}
+
+/// Suspend to idle: the ACPI service runs the firmware's low-power-idle entry (screen
+/// off, then sleep entry), the panel goes dark, the CPUs prefer saving energy. The lid
+/// opening or the power button wakes the desktop.
+static mut LAPTOP_SLEEPING: bool = false;
+unsafe fn sleep_enter(by: &str) -> bool {
+    if LAPTOP_SLEEPING { return true; }
+    if COMMAND_PALETTE_OPEN { toggle_command_palette(); }
+    let r = sex_pdx::power::control(sex_pdx::power::CTL_SLEEP, 1);
+    LAPTOP_SLEEPING = r.is_ok();
+    sex_pdx::serial_record!("[shell.sleep] enter=1 by={} ok={}", by, r.is_ok() as u8);
+    r.is_ok()
+}
+unsafe fn sleep_exit(by: &str) {
+    if !LAPTOP_SLEEPING { return; }
+    let r = sex_pdx::power::control(sex_pdx::power::CTL_SLEEP, 0);
+    LAPTOP_SLEEPING = false;
+    sex_pdx::serial_record!("[shell.sleep] enter=0 by={} ok={}", by, r.is_ok() as u8);
 }
 /// The lid closed or opened. A lock screen (when there is one) locks here; until then the
 /// launcher closes so nothing typed blind runs, and the change is logged.
 unsafe fn lid_changed(open: bool) {
     let closed_launcher = !open && COMMAND_PALETTE_OPEN && toggle_command_palette();
     sex_pdx::serial_record!("[shell.lid] open={} launcher_closed={}", open as u8, closed_launcher as u8);
+    if open { sleep_exit("lid"); } else { sleep_enter("lid"); }
 }
 /// The power dialog: the launcher opens with Shut Down selected (Restart is the next row);
 /// Enter shuts down, Esc closes it.
@@ -17214,7 +17241,7 @@ fn palette_item_status(cmd: Command) -> (bool, &'static str, &'static str) {
         Command::FocusBrowser => browser_launcher_status(),
         Command::FocusProgram => program_launcher_status(),
         Command::ShutDown | Command::Restart => power_launcher_status(cmd),
-        Command::BrightnessUp | Command::BrightnessDown | Command::PowerSaver | Command::PowerBalanced | Command::PowerPerformance => laptop_launcher_status(cmd),
+        Command::BrightnessUp | Command::BrightnessDown | Command::PowerSaver | Command::PowerBalanced | Command::PowerPerformance | Command::Sleep => laptop_launcher_status(cmd),
         Command::FocusLinen => {
             (true, "nonblocking_ready", "linen_fast_paint_nonblocking")
         }
@@ -17302,7 +17329,7 @@ unsafe fn palette_execute_selected() -> bool {
             false
         }
         Command::ShutDown | Command::Restart => palette_power(cmd),
-        Command::BrightnessUp | Command::BrightnessDown | Command::PowerSaver | Command::PowerBalanced | Command::PowerPerformance => laptop_command(cmd),
+        Command::BrightnessUp | Command::BrightnessDown | Command::PowerSaver | Command::PowerBalanced | Command::PowerPerformance | Command::Sleep => laptop_command(cmd),
         Command::FocusProgram => {
             let open_ok=open_program_in_active_scene();
             sex_pdx::serial_record!("[shell.palette.focus.result] target=PROGRAM ok={}",open_ok as u8);
@@ -20564,7 +20591,7 @@ unsafe fn maybe_run_palette_rejects_app_open_batch_proof() {
     for idx in 0..COMMAND_LIST.len() {
         // The proof opens and closes apps; it never turns the machine off.
         if matches!(COMMAND_LIST[idx].command, Command::ShutDown | Command::Restart | Command::BrightnessUp | Command::BrightnessDown
-            | Command::PowerSaver | Command::PowerBalanced | Command::PowerPerformance) {
+            | Command::PowerSaver | Command::PowerBalanced | Command::PowerPerformance | Command::Sleep) {
             skipped = skipped.saturating_add(1);
             continue;
         }
@@ -20646,7 +20673,7 @@ unsafe fn maybe_run_palette_rejects_app_open_batch_proof() {
                 palette_batch_emit_app_focus("Program",0,ok,if ok{"ok"}else{"open_or_focus_reject"});
             }
             Command::ZoomToggle | Command::MinimizeFocused | Command::ShutDown | Command::Restart | Command::BrightnessUp | Command::BrightnessDown
-            | Command::PowerSaver | Command::PowerBalanced | Command::PowerPerformance => {}
+            | Command::PowerSaver | Command::PowerBalanced | Command::PowerPerformance | Command::Sleep => {}
         }
 
         if ok { passed = passed.saturating_add(1); } else { rejected = rejected.saturating_add(1); }

@@ -210,11 +210,67 @@ pub fn controls(aml: &Aml, light: &mut Backlight) -> bool {
         match r[1] & 0xFF {
             w::CTL_BRIGHTNESS_STEP => light.step(aml, value == 1, "desktop"),
             w::CTL_BRIGHTNESS_SET => light.to_percent(aml, value),
+            w::CTL_SLEEP => sleep(aml, light, value == 1),
             _ => {}
         }
         any = true;
     }
     any
+}
+
+// ── Suspend to idle ────────────────────────────────────────────────────────
+
+/// Intel's and Microsoft's low-power S0 idle `_DSM`s on the power engine plug-in device
+/// (`INT33A1` / `PNP0D80`). Functions: 3 screen off, 4 screen on, 5 entry, 6 exit (and
+/// Microsoft's 7/8 modern-standby entry/exit). Firmware uses them to turn off the keyboard
+/// light, slow the fans and let the platform reach its deepest idle state.
+const LPS0_INTEL: [u8; 16] = [0xA0, 0x40, 0xEB, 0xC4, 0xD2, 0x6C, 0xE2, 0x11, 0xBC, 0xFD, 0x08, 0x00, 0x20, 0x0C, 0x9A, 0x66];
+const LPS0_MICROSOFT: [u8; 16] = [0x56, 0x0D, 0xE0, 0x11, 0x64, 0xCE, 0xCE, 0x47, 0x83, 0x7B, 0x1F, 0x89, 0x8F, 0x9A, 0xA4, 0x61];
+
+fn dsm(aml: &Aml, dev: &AmlName, uuid: &[u8; 16], revision: u64, function: u64) -> Option<WrappedObject> {
+    let args = alloc::vec![
+        WrappedObject::new(Object::Buffer(uuid.to_vec())),
+        WrappedObject::new(Object::Integer(revision)),
+        WrappedObject::new(Object::Integer(function)),
+        WrappedObject::new(Object::Package(Vec::new())),
+    ];
+    eval(aml, dev, "_DSM", args)
+}
+/// Function bits a `_DSM` supports (function 0's answer).
+fn dsm_mask(aml: &Aml, dev: &AmlName, uuid: &[u8; 16], revision: u64) -> u64 {
+    match dsm(aml, dev, uuid, revision, 0).as_deref() {
+        Some(Object::Buffer(b)) => b.iter().take(8).enumerate().fold(0, |m, (i, v)| m | (*v as u64) << (8 * i)),
+        Some(Object::Integer(v)) => *v,
+        _ => 0,
+    }
+}
+
+static SLEEP_SAVED: Single<u8> = Single(RefCell::new(None));
+
+fn sleep(aml: &Aml, light: &mut Backlight, enter: bool) {
+    let all = crate::acpi_devices(aml);
+    let dev = all.iter().find(|p| crate::ids_of(aml, p).iter().any(|i| i == "INT33A1" || i == "PNP0D80")).cloned();
+    let mut ran = alloc::string::String::new();
+    if let Some(dev) = &dev {
+        for (uuid, revision, name, steps) in [(&LPS0_INTEL, 0u64, "intel", if enter { [3u64, 5] } else { [6, 4] }),
+                                              (&LPS0_MICROSOFT, 0, "microsoft", if enter { [3, 7] } else { [8, 4] })] {
+            let mask = dsm_mask(aml, dev, uuid, revision);
+            for f in steps {
+                if mask & 1 << f != 0 && dsm(aml, dev, uuid, revision, f).is_some() {
+                    ran.push_str(&alloc::format!("{name}:{f} "));
+                }
+            }
+        }
+    }
+    // The panel: down to its lowest level while asleep, back after.
+    if enter {
+        *SLEEP_SAVED.0.borrow_mut() = light.current;
+        if light.output.is_some() { light.to_percent(aml, 0); }
+    } else if let Some(level) = SLEEP_SAVED.0.borrow_mut().take() {
+        light.to_percent(aml, level);
+    }
+    serial_println!("[sexacpi.sleep] enter={} lps0={} ran={} panel={}", enter as u8, dev.as_ref().map_or(alloc::string::String::from("none"), |d| alloc::format!("{d}")),
+        ran.trim_end(), light.current.map_or(-1, |v| v as i32));
 }
 
 // ── Sensors ────────────────────────────────────────────────────────────────

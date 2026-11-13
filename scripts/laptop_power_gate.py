@@ -92,7 +92,14 @@ def main():
   desktop(g)
   # The lid closes and opens again (the firmware's _LID, read by the service).
   closed=g['wait'](r'\[shell\.lid\] open=0 ',0,180).end()
-  g['wait'](r'\[shell\.lid\] open=1 ',closed,120)
+  # Closing the lid suspends to idle: firmware's LPS0 screen-off and entry, panel dark.
+  g['wait'](r'\[shell\.sleep\] enter=1 by=lid ok=1',closed,30)
+  g['wait'](r'\[acpi\.sleep\] enter=1 firmware_told=1',closed,30)
+  g['wait'](r'\[sexacpi\.sleep\] enter=1 lps0=\\_SB\.PEPD ran=intel:3 intel:5 panel=10',closed,30)
+  opened=g['wait'](r'\[shell\.lid\] open=1 ',closed,120).end()
+  g['wait'](r'\[shell\.sleep\] enter=0 by=lid ok=1',opened,30)
+  g['wait'](r'\[sexacpi\.sleep\] enter=0 lps0=\\_SB\.PEPD ran=intel:6 intel:4 panel=60',opened,30)
+  if 'dSWD' not in g['firmware']().replace('B','').replace('P',''):raise RuntimeError(f"LPS0 order: {g['firmware']()!r}")
   def key(code,pattern):s=len(g['text']());g['q'].key(code);return g['wait'](pattern,s,30)
   # Launcher: Power Saver, then Brightness Down.
   s=len(g['text']());palette_select(key,'PowerSaver',commands);g['q'].key('ret')
@@ -116,7 +123,7 @@ def main():
   code=g['ended']();result['dialog_off']=code
   if code!=0:raise RuntimeError(f'QEMU exit {code} after S5')
  except Exception:
-  print('\n'.join(l for l in g['text']().splitlines() if re.search(r'\[(sexacpi|sexinput\.touchpad|boot\.touchpad|acpi|shell\.(lid|power|laptop)|display\.panel\.battery)',l)),file=sys.stderr);raise
+  print('\n'.join(l for l in g['text']().splitlines() if re.search(r'\[(sexacpi|sexinput\.touchpad|boot\.touchpad|acpi|shell\.(lid|power|laptop|sleep)|display\.panel\.battery)',l)),file=sys.stderr);raise
  finally:g['stop']()
  # Boot 2: a thermal zone past its critical trip point shuts the machine down.
  g=launch(a.iso,disk,a.out,'thermal',thermal=True)
