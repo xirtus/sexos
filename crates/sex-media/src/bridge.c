@@ -39,6 +39,8 @@ struct sx {
     struct SwsContext *scale;
     SwrContext *resample;
     int draining;
+    // The resampler's tail has been given out at the end.
+    int flushed;
     int absolute;               // times are the stream's own (Media Source), not from its start
     int scale_w, scale_h, scale_from_w, scale_from_h, scale_fmt;
 };
@@ -169,6 +171,15 @@ static int sound(struct sx *s, int16_t *pcm, int cap, int *frames) {
 // frame they hold); the caller may open again on what follows.
 int sx_next(struct sx *s, uint32_t *out, int out_w, int out_h, int16_t *pcm, int cap, int *frames, int64_t *at_ms) {
     *frames = 0;
+    // Sound the resampler kept back (a decoded frame larger than `cap`) goes out
+    // before anything new, so none is lost and the sound never falls behind.
+    if (s->resample && swr_get_out_samples(s->resample, 0) > 0) {
+        const uint8_t *none[1] = { NULL };
+        uint8_t *dst[1] = { (uint8_t *)pcm };
+        int n = swr_convert(s->resample, dst, cap, none, 0);
+        if (n < 0) return n;
+        if (n > 0) { *frames = n; *at_ms = -1; return 2; }
+    }
     for (;;) {
         // Sound first: it is small, and its ring must never run dry while pictures wait.
         struct decoder *order[2] = { &s->audio, &s->video };
@@ -184,7 +195,16 @@ int sx_next(struct sx *s, uint32_t *out, int out_w, int out_h, int16_t *pcm, int
             av_frame_unref(s->frame);
             return r;
         }
-        if (s->audio.done && s->video.done) return 0;
+        if (s->audio.done && s->video.done) {
+            // The end: whatever the resampler still holds plays too.
+            if (s->resample && !s->flushed) {
+                uint8_t *dst[1] = { (uint8_t *)pcm };
+                int n = swr_convert(s->resample, dst, cap, NULL, 0);
+                if (n <= 0) s->flushed = 1;
+                if (n > 0) { *frames = n; *at_ms = -1; return 2; }
+            }
+            return 0;
+        }
         // Both decoders were told the end and neither has a frame left.
         if (s->draining) return 0;
         // A growing source (Media Source) answers EIO for bytes that have not arrived
@@ -225,6 +245,7 @@ int sx_seek(struct sx *s, int64_t ms) {
     }
     if (s->resample) swr_init(s->resample);
     s->draining = 0;
+    s->flushed = 0;
     return 0;
 }
 
@@ -273,6 +294,19 @@ int sx_set_audio_track(struct sx *s, int n) {
     s->audio = d;
     swr_free(&s->resample);
     return 0;
+}
+
+// A tag of the file (title, artist, album, track, date...), from the container or,
+// failing that, the sound stream. Returns its length (cut to cap-1), or -1 for none.
+int sx_tag(struct sx *s, const char *key, char *out, int cap) {
+    AVDictionaryEntry *e = av_dict_get(s->format->metadata, key, NULL, 0);
+    if (!e && s->audio.stream >= 0) e = av_dict_get(s->format->streams[s->audio.stream]->metadata, key, NULL, 0);
+    if (!e || cap <= 0) return -1;
+    int n = (int)strlen(e->value);
+    if (n > cap - 1) n = cap - 1;
+    memcpy(out, e->value, n);
+    out[n] = 0;
+    return n;
 }
 
 // FFmpeg's error text, for the window.

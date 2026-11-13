@@ -124,6 +124,7 @@ mod ffi {
         pub fn sx_next(s: *mut c_void, out: *mut u32, w: c_int, h: c_int, pcm: *mut i16, cap: c_int,
                        frames: *mut c_int, at_ms: *mut i64) -> c_int;
         pub fn sx_seek(s: *mut c_void, ms: i64) -> c_int;
+        pub fn sx_tag(s: *mut c_void, key: *const c_char, out: *mut c_char, cap: c_int) -> c_int;
         pub fn sx_audio_tracks(s: *mut c_void, current: *mut c_int) -> c_int;
         pub fn sx_set_audio_track(s: *mut c_void, n: c_int) -> c_int;
         pub fn sx_close(s: *mut c_void);
@@ -328,6 +329,22 @@ impl Decoder {
     }
     #[cfg(not(ffmpeg))]
     pub fn seek(&mut self, _: u64) -> Result<(), Error> { Err(Error::UNSUPPORTED) }
+
+    /// The file's tag `key` ("title", "artist", "album", "track"...), if it has one.
+    pub fn tag(&self, key: &str) -> Option<alloc::string::String> {
+        #[cfg(ffmpeg)]
+        if !self.s.is_null() {
+            let mut k = [0u8; 32];
+            let n = key.len().min(31);
+            k[..n].copy_from_slice(&key.as_bytes()[..n]);
+            let mut out = [0u8; 128];
+            let got = unsafe { ffi::sx_tag(self.s, k.as_ptr().cast(), out.as_mut_ptr().cast(), out.len() as c_int) };
+            if got < 0 { return None; }
+            return Some(alloc::string::String::from_utf8_lossy(&out[..got as usize]).into_owned());
+        }
+        let _ = key;
+        None
+    }
 
     /// How many sound tracks the stream has, and which plays (None for none).
     pub fn audio_tracks(&self) -> (usize, Option<usize>) {
