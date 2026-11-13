@@ -1415,6 +1415,7 @@ name = "play"
 version = "0.1.0"
 dependencies = [
  "sex-app",
+ "sex-font",
  "sex-media",
  "sex-pdx",
 ]

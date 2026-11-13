@@ -45,9 +45,9 @@ struct sx {
 
 void sx_close(struct sx *s);
 
-static int open_decoder(struct sx *s, enum AVMediaType type, struct decoder *d, const char **name) {
+static int open_decoder(struct sx *s, enum AVMediaType type, struct decoder *d, const char **name, int wanted) {
     const AVCodec *codec = NULL;
-    d->stream = av_find_best_stream(s->format, type, -1, -1, &codec, 0);
+    d->stream = av_find_best_stream(s->format, type, wanted, -1, &codec, 0);
     d->done = 1;
     if (d->stream < 0 || !codec) { d->stream = -1; return 0; }
     AVStream *st = s->format->streams[d->stream];
@@ -93,8 +93,8 @@ struct sx *sx_open(void *opaque, sx_read_fn rd, sx_seek_fn sk, struct sx_info *i
     // parser loses its place there. Its header (an fMP4 moov) names the codecs.
     if (!growing && (*err = avformat_find_stream_info(s->format, NULL)) < 0) { sx_close(s); return NULL; }
     const char *vname = NULL, *aname = NULL;
-    if ((*err = open_decoder(s, AVMEDIA_TYPE_VIDEO, &s->video, &vname)) < 0) { sx_close(s); return NULL; }
-    if ((*err = open_decoder(s, AVMEDIA_TYPE_AUDIO, &s->audio, &aname)) < 0) { sx_close(s); return NULL; }
+    if ((*err = open_decoder(s, AVMEDIA_TYPE_VIDEO, &s->video, &vname, -1)) < 0) { sx_close(s); return NULL; }
+    if ((*err = open_decoder(s, AVMEDIA_TYPE_AUDIO, &s->audio, &aname, -1)) < 0) { sx_close(s); return NULL; }
     if (s->video.stream < 0 && s->audio.stream < 0) { *err = AVERROR_DECODER_NOT_FOUND; sx_close(s); return NULL; }
     s->packet = av_packet_alloc();
     s->frame = av_frame_alloc();
@@ -239,6 +239,40 @@ void sx_close(struct sx *s) {
     if (s->format) avformat_close_input(&s->format);
     if (s->io) { av_freep(&s->io->buffer); avio_context_free(&s->io); }
     av_free(s);
+}
+
+// The sound tracks (a film's languages, a commentary): how many there are, and in
+// *current which of them plays (counted among sound tracks), or -1 for none.
+int sx_audio_tracks(struct sx *s, int *current) {
+    int n = 0;
+    *current = -1;
+    for (unsigned i = 0; i < s->format->nb_streams; i++) {
+        if (s->format->streams[i]->codecpar->codec_type != AVMEDIA_TYPE_AUDIO) continue;
+        if ((int)i == s->audio.stream) *current = n;
+        n++;
+    }
+    return n;
+}
+
+// Play sound track `n` (counted among sound tracks) instead. The caller seeks next,
+// so the new track starts in step with the pictures. Returns 0 or an AVERROR.
+int sx_set_audio_track(struct sx *s, int n) {
+    int stream = -1;
+    for (unsigned i = 0, k = 0; i < s->format->nb_streams; i++) {
+        if (s->format->streams[i]->codecpar->codec_type != AVMEDIA_TYPE_AUDIO) continue;
+        if ((int)k++ == n) { stream = (int)i; break; }
+    }
+    if (stream < 0) return AVERROR(EINVAL);
+    if (stream == s->audio.stream) return 0;
+    struct decoder d = { 0 };
+    const char *name = NULL;
+    int r = open_decoder(s, AVMEDIA_TYPE_AUDIO, &d, &name, stream);
+    if (r < 0) return r;
+    if (d.stream != stream) { avcodec_free_context(&d.codec); return AVERROR_DECODER_NOT_FOUND; }
+    avcodec_free_context(&s->audio.codec);
+    s->audio = d;
+    swr_free(&s->resample);
+    return 0;
 }
 
 // FFmpeg's error text, for the window.

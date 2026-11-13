@@ -5,13 +5,17 @@
 //! can only crash this window.
 //!
 //! Keys: Space or K pauses and plays; Left/J and Right/L go back and forward 5 s;
-//! Home goes to the start. F11 closes. The keyboard's media keys work too, wherever
+//! Home goes to the start. Subtitles come from a SubRip or SubStation file given after
+//! the video (`run play @film.mp4 @film.srt`), or one beside it when Play may read it.
+//! S shows or hides subtitles, A plays the next sound track,
+//! [ and ] play slower and faster (= back to normal). F11 closes. The keyboard's media keys work too, wherever
 //! the focus is, while Play is the program playing (Shell routes them): play/pause
 //! toggles and stop pauses at the start.
 #![no_std]
 #![no_main]
 
 extern crate alloc;
+mod captions;
 mod encode_proof;
 
 use alloc::boxed::Box;
@@ -64,7 +68,7 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 
 fn say(window: &mut Window, why: &[u8]) {
     let mut text = [0u8; 300];
-    let head = b"Play. Space pauses, J/L or Left/Right seek, F11 closes.\n\n";
+    let head = b"Play. Space pauses, J/L or Left/Right seek, S subtitles, A sound track, [ ] speed, F11 closes.\n\n";
     let n = (head.len() + why.len()).min(text.len());
     text[..head.len()].copy_from_slice(head);
     text[head.len()..n].copy_from_slice(&why[..n - head.len()]);
@@ -78,8 +82,11 @@ fn fail(window: &mut Window, why: &[u8]) {
 
 const SEEK_MS: i64 = 5000;
 
+/// Subtitles, while shown.
+struct Subs { track: sex_media::subtitles::Track, painter: captions::Painter, on: bool, text: alloc::string::String }
+
 /// Handles keys and close; false when the person closed the window.
-fn keys(window: &mut Window, player: &mut Player) -> bool {
+fn keys(window: &mut Window, player: &mut Player, subs: &mut Option<Subs>) -> bool {
     while let Some(e) = window.poll() {
         match e {
             Event::Close => return false,
@@ -95,6 +102,29 @@ fn keys(window: &mut Window, player: &mut Player) -> bool {
                     player.seek(to);
                 }
                 0x66 => player.seek(0),
+                // S: subtitles on or off.
+                0x1F => if let Some(s) = subs.as_mut() {
+                    s.on = !s.on;
+                    sex_pdx::serial_record!("[play.subtitles] on={}", s.on as u8);
+                },
+                // A: the next sound track.
+                0x1E => {
+                    let (n, now) = player.audio_tracks();
+                    if n > 1 {
+                        let next = now.map_or(0, |c| (c + 1) % n);
+                        let ok = player.set_audio_track(next).is_ok();
+                        sex_pdx::serial_record!("[play.audio.track] track={} of={} ok={}", next, n, ok as u8);
+                    } else {
+                        sex_pdx::serial_record!("[play.audio.track] track={} of={} ok=0", now.map_or(-1, |c| c as i64), n);
+                    }
+                }
+                // [ slower, ] faster, = normal: quarter steps from 50% to 200%.
+                0x1A | 0x1B | 0x0D => {
+                    let now = player.speed();
+                    let to = match k.code { 0x1A => now.saturating_sub(25).max(50), 0x1B => (now + 25).min(200), _ => 100 };
+                    player.set_speed(to);
+                    sex_pdx::serial_record!("[play.speed] percent={}", player.speed());
+                }
                 sex_pdx::app_key::KEY_STOP => {
                     player.pause();
                     player.seek(0);
@@ -111,7 +141,7 @@ fn keys(window: &mut Window, player: &mut Player) -> bool {
 struct Played { pictures: u32, sound_frames: u64 }
 
 /// Plays the stream; returns what was shown and heard, or FFmpeg's error.
-fn play(window: &mut Window, src: FileSource) -> Result<Played, sex_media::Error> {
+fn play(window: &mut Window, src: FileSource, mut subs: Option<Subs>) -> Result<Played, sex_media::Error> {
     let dec = Decoder::open(Box::new(src))?;
     let info = dec.info.clone();
     let (w, h) = sex_media::fit(info.width as usize, info.height as usize, MAX_W, MAX_H);
@@ -137,7 +167,7 @@ fn play(window: &mut Window, src: FileSource) -> Result<Played, sex_media::Error
     }
     let mut stalled = false;
     loop {
-        if !keys(window, &mut player) {
+        if !keys(window, &mut player, &mut subs) {
             sex_pdx::serial_record!("[play.closed] target={} task={} frames={}", window.target, window.task, player.shown);
             drop(player);
             sex_pdx::task_finish(0);
@@ -150,6 +180,16 @@ fn play(window: &mut Window, src: FileSource) -> Result<Played, sex_media::Error
             Step::Picture { n, at_ms } => {
                 let px = player.picture();
                 window.pixels()[..w * h].copy_from_slice(px);
+                if let Some(s) = subs.as_mut().filter(|s| s.on) {
+                    let mut text = core::mem::take(&mut s.text);
+                    s.track.at(at_ms.max(0) as u64, &mut text);
+                    if text != s.painter.shown {
+                        sex_pdx::serial_record!("[play.caption] at_ms={} text={}", at_ms, text.replace('\n', " / "));
+                        s.painter.shown.clone_from(&text);
+                    }
+                    s.painter.draw(&mut window.pixels()[..w * h], w, h, &text);
+                    s.text = text;
+                }
                 window.show_pixels(w, h);
                 if n < 3 || n % 10 == 0 {
                     let hash = px.iter().fold(0xcbf2_9ce4_8422_2325u64, |a, &p| (a ^ p as u64).wrapping_mul(0x100_0000_01b3));
@@ -288,14 +328,19 @@ pub extern "C" fn _start() -> ! {
     } else { words.first().map(|f| f.to_vec()) };
     match file {
         None if words.first().is_some_and(|w| w.starts_with(b"--")) => {}
-        None => fail(&mut window, b"Usage: run play @VIDEO.mp4"),
+        None => fail(&mut window, b"Usage: run play @VIDEO.mp4 [@SUBTITLES.srt]"),
         Some(path) => match files::size(&mut window, &path) {
             Err(e) => fail(&mut window, files::message(e)),
             Ok(len) => {
                 say(&mut window, b"Opening...");
+                let given = words.get(1).filter(|w| !w.starts_with(b"--")).copied();
+                let subs = captions::load(&mut window, &path, given).and_then(|(file, track)| {
+                    sex_pdx::serial_record!("[play.subtitles.loaded] file={} cues={}", core::str::from_utf8(&file).unwrap_or("?"), track.cues.len());
+                    Some(Subs { track, painter: captions::Painter::new()?, on: true, text: alloc::string::String::new() })
+                });
                 let wp: *mut Window = &mut window;
                 let src = FileSource { window: wp, path, len, cache: Vec::new(), cache_at: 0 };
-                match play(unsafe { &mut *wp }, src) {
+                match play(unsafe { &mut *wp }, src, subs) {
                     Ok(p) if p.pictures == 0 && p.sound_frames == 0 => fail(&mut window, b"That file has nothing to play."),
                     Ok(p) if p.pictures == 0 => say(&mut window, b"Finished playing."),
                     Ok(_) => {}
