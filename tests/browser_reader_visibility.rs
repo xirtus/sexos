@@ -70,7 +70,7 @@ impl App{
 }
 fn public_fingerprint(bytes:&[u8])->u64{clipboard::hash(bytes)}
 include!(env!("BROWSER_READER_VISIBILITY"));
-fn key(code:u8,shift:bool,control:bool)->app_key::Key{app_key::Key{code,shift,control}}
+fn key(code:u8,shift:bool,control:bool)->app_key::Key{app_key::Key::new(code,shift,control)}
 fn response(value:clipboard::Response){let p=value.wire();assert!(unsafe{CLIPBOARD.receive(clipboard::SHELL,p.opcode,p.args,get_ticks())});}
 fn intent(ticket:u32){response(clipboard::Response::Intent{ticket,action:clipboard::Action::Copy});}
 fn requests()->Vec<clipboard::Request>{SENT.with(|s|s.borrow().clone())}

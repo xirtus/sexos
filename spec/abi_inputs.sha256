@@ -2,7 +2,7 @@
 
 07b846017c83b1662fc66dbdffd14dd09374b7a58454ebf0cbbc06954757e0f3  crates/sex-pdx/src/app_catalog.rs
 
-bf94bd2c216fe7f43588e51e2f7834ebcaf43b8485c9fd7b405454654f72ad8e  crates/sex-pdx/src/app_key.rs
+a6cf4bef8fe0fcbebba08a34d8cec047eedd3c3043f0e19cff9c1dac54747c1e  crates/sex-pdx/src/app_key.rs
 
 0f88d10b629503599986dda2140158ae6d3637f4f8f3a885132a99d6d4d9cfbd  crates/sex-pdx/src/app_lifecycle.rs
 
@@ -158,7 +158,7 @@ cae67c2ff9adc1e53c84114f80246865f1b7dd70b6a2718098d45738ed846fda  kernel/src/ipc
 
 a6cec3ea15190f7bbebebca78444a4cf2c190597bc7c1596165b3693dd798b96  kernel/src/pci_command.rs
 
-6db1276f5af5a91e7abab7adb85a11350a0ac662ecdf9707a441fcb285535999  kernel/src/service_restart.rs
+8d100d2506999e38f5eb6a3e9b65066873a9c4a3e5eff11b0ae9589cd352a75f  kernel/src/service_restart.rs
 
 aa6169383696167b349be8f37819f61fb896239b3ff7aa489f4ffac1a4e11524  kernel/src/syscalls/mod.rs
 

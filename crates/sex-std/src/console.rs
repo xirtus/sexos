@@ -122,20 +122,26 @@ fn take(event: Event) -> Option<Vec<u8>> {
     match event {
         Event::Close => { if let Ok(mut c) = CONSOLE.lock() { c.closed = true; } None }
         Event::Key(key) if key.code == 0x0E => {
-            if line.pop().is_some() {
+            // One character back, with every byte of it.
+            if !line.is_empty() {
                 let mut c = CONSOLE.lock().ok()?;
-                c.text.pop();
+                while let Some(b) = line.pop() {
+                    c.text.pop();
+                    if b & 0xC0 != 0x80 { break; }
+                }
                 c.show();
             }
             None
         }
         Event::Key(key) => {
-            let b = if key.code == 0x1C { Some(b'\n') } else { sex_app::typed(key) }?;
-            line.push(b);
+            let ch = if key.code == 0x1C { Some('\n') } else { sex_app::text(key) }?;
+            let mut utf8 = [0; 4];
+            let bytes = ch.encode_utf8(&mut utf8).as_bytes();
+            line.extend_from_slice(bytes);
             let mut c = CONSOLE.lock().ok()?;
-            c.text.push(b);
+            c.text.extend_from_slice(bytes);
             c.show();
-            if b == b'\n' { Some(std::mem::take(&mut *line)) } else { None }
+            if ch == '\n' { Some(std::mem::take(&mut *line)) } else { None }
         }
         _ => None,
     }

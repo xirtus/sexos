@@ -487,6 +487,30 @@ fn picker(program: Option<usize>, r: w::Request, path: &[u8], data: &mut [u8]) -
     }
 }
 /// The row is running, and running the very run Shell bound: the kernel names its task.
+/// The run holds `+packages`: Spindle put it in the run's arguments for `run +pkg`, and
+/// only Spindle prepares runs, so a program cannot give it to itself.
+fn holds_packages(binding: &Binding) -> bool {
+    binding.args[..binding.args_len].split(|b| *b == b' ').any(|t| t == sex_pdx::package::GRANT_TOKEN)
+}
+/// A package request from a program holding `+packages`: the argument Files acts on, or
+/// None (refused, logged). Trusting a publisher and the person's answers to grants stay
+/// Spindle's; no downgrades; package files only from the program's own folder.
+fn program_package(binding: &Binding, r: w::Request, arg: &[u8], out: &mut [u8; w::PATH_BYTES]) -> Option<usize> {
+    use sex_pdx::package as p;
+    let program = core::str::from_utf8(&binding.root[sex_pdx::program_store::DATA.len()..binding.len]).unwrap_or("?");
+    let refuse = |why: &str| { sex_pdx::serial_record!("[files.pkg.denied] program={} op={} why={}", program, r.offset, why); None };
+    match r.offset {
+        p::INSTALL if r.length & p::ALLOW_DOWNGRADE != 0 => refuse("downgrade"),
+        p::INSTALL | p::CHECK => match confine(binding, arg, out) { Some(n) => Some(n), None => refuse("path") },
+        p::REMOVE | p::LIST | p::CATALOG | p::SEARCH | p::LOCATE | p::SOURCE => {
+            if arg.len() > out.len() { return refuse("length"); }
+            out[..arg.len()].copy_from_slice(arg);
+            Some(arg.len())
+        }
+        p::TRUST | p::CONSENT => refuse("spindle_only"),
+        _ => refuse("unknown"),
+    }
+}
 fn program_live(target: u32, task: u32) -> bool {
     let Some(row) = sex_pdx::app_catalog::by_target(target) else { return false };
     matches!(sex_pdx::app_lifecycle::catalog(row.lifecycle_slot), Ok(c) if c.is_subject(target, row.surface, 3) && c.task_id == task)
@@ -507,7 +531,12 @@ pub fn handle(caller: u32, a: u64, offset: u64, length: u64) -> u64 {
             let bound = unsafe { (*core::ptr::addr_of!(BINDINGS))[k] };
             // A program may eject (UNMOUNT) a volume its grant covers whole, checked with
             // its other paths below; mounting stays Spindle's.
-            if !bound.is_some_and(|b| program_live(caller, b.task)) || matches!(r.kind, w::PREPARE | w::INSTALL | w::UPDATE | w::MOUNT | sex_pdx::package::KIND) { return w::reply(r.seq, w::DENIED, 0); }
+            if !bound.is_some_and(|b| program_live(caller, b.task)) || matches!(r.kind, w::PREPARE | w::INSTALL | w::UPDATE | w::MOUNT) { return w::reply(r.seq, w::DENIED, 0); }
+            // Packages only for a run the person started with `run +pkg` (see `program_package`).
+            if r.kind == sex_pdx::package::KIND && !bound.is_some_and(|b| holds_packages(&b)) {
+                sex_pdx::serial_record!("[files.pkg.denied] target={} op={} why=no_grant", caller, r.offset);
+                return w::reply(r.seq, w::DENIED, 0);
+            }
             w::PROGRAM_INDEX_BASE + k
         }
         _ => return w::reply(r.seq, w::DENIED, 0),
@@ -573,7 +602,15 @@ fn handle_request(index: usize, program: Option<usize>, r: w::Request) -> u64 {
         forget_stats(None);
         // Others' writes are saved first, so undoing a refused package undoes only it.
         if writes_pending() { commit_writes(fs); }
-        let (st, n) = crate::packages::handle(fs, r.offset, &path[..path_len], r.length, &mut region[w::PATH_BYTES..w::CACHE_AT]);
+        // A program's request acts inside its own folder: Files is told which.
+        let mut own = [0u8; w::PATH_BYTES];
+        let binding = program.and_then(|k| unsafe { (*core::ptr::addr_of!(BINDINGS))[k] });
+        let arg = match &binding {
+            None => &path[..path_len],
+            Some(b) => match program_package(b, r, &path[..path_len], &mut own) { Some(n) => &own[..n], None => return w::reply(r.seq, w::DENIED, 0) },
+        };
+        let folder = binding.as_ref().map(|b| &b.root[..b.len]);
+        let (st, n) = crate::packages::handle(fs, r.offset, arg, r.length, &mut region[w::PATH_BYTES..w::CACHE_AT], folder);
         return w::reply(r.seq, st, n);
     }
     let fs = match state { State::Ready(fs) => Some(fs), _ => None };

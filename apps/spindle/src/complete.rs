@@ -111,6 +111,7 @@ pub const COMMANDS: &[&[u8]] = &[
     b"session",
     b"sextime",
     b"status",
+    b"store",
     b"touch",
     b"truncdoc",
     b"unmount",
