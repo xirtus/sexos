@@ -22,6 +22,11 @@ pub const TX_ANT_CONFIGURATION_CMD: u8 = 0x98;
 pub const BT_CONFIG: u8 = 0x9b;
 pub const MCC_UPDATE_CMD: u8 = 0xc8;
 pub const REPLY_BEACON_FILTERING_CMD: u8 = 0xd2;
+/// Which group-addressed frames the firmware passes up (`iwx_allow_mcast`).
+pub const MCAST_FILTER_CMD: u8 = 0xd0;
+/// Beacons from our AP stopped arriving (`iwx_rx_bmiss`); MAC_CONF_GROUP has a newer one.
+pub const MISSED_BEACONS_NOTIFICATION: u8 = 0xa2;
+pub const MISSED_BEACONS_NOTIF: u8 = 0xf6;
 /// SYSTEM_GROUP
 pub const SOC_CONFIGURATION_CMD: u8 = 0x01;
 pub const INIT_EXTENDED_CFG_CMD: u8 = 0x03;
