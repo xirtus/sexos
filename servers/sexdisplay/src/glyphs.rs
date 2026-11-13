@@ -41,12 +41,28 @@ fn fonts() -> Option<&'static (Font<'static>, Font<'static>)> {
 fn mono() -> Option<&'static Font<'static>> { fonts().map(|f| &f.0) }
 fn sans() -> Option<&'static Font<'static>> { fonts().map(|f| &f.1) }
 
-static mut FALLBACK: Option<sex_font::fallback::Fallback<'static>> = None;
-/// Noto Sans Mono, Symbols 2, CJK and the emoji, parsed on the first character Geist lacks.
+static mut FALLBACK: core::mem::MaybeUninit<sex_font::fallback::Fallback<'static>> = core::mem::MaybeUninit::uninit();
+/// 0: not tried yet, 1: parsed, 2: a font failed to parse.
+static mut FALLBACK_STATE: u8 = 0;
+/// The Noto fallbacks and the emoji, parsed on the first character Geist lacks.
+/// They are parsed straight into the static: built on Display's 64 KB stack and
+/// copied, deep inside text drawing, they overflowed it.
 fn fallback() -> Option<&'static sex_font::fallback::Fallback<'static>> {
-    let slot = unsafe { &mut *core::ptr::addr_of_mut!(FALLBACK) };
-    if slot.is_none() { *slot = sex_font::fallback::Fallback::embedded(); }
-    slot.as_ref()
+    // SAFETY: Display is one task (see the module note); FALLBACK is read only once
+    // FALLBACK_STATE says it was fully written.
+    unsafe {
+        if FALLBACK_STATE == 0 { load_fallback(); }
+        (FALLBACK_STATE == 1).then(|| (*core::ptr::addr_of!(FALLBACK)).assume_init_ref())
+    }
+}
+/// Parse every font now, while the stack is shallow, rather than on the first
+/// character that needs one, deep inside drawing.
+pub fn warm() { let _ = fonts(); let _ = fallback(); }
+#[cold]
+#[inline(never)]
+unsafe fn load_fallback() {
+    let ok = sex_font::fallback::Fallback::embedded_into(&mut *core::ptr::addr_of_mut!(FALLBACK));
+    FALLBACK_STATE = if ok { 1 } else { 2 };
 }
 
 /// Coverage for one `w` x `h` grid cell: Geist Mono, else the first fallback font
@@ -104,7 +120,12 @@ fn text_layout(title: &[u8], size: u32) -> Option<&'static TitleLayout> {
     let layouts = unsafe { &mut *core::ptr::addr_of_mut!(LAYOUTS) };
     if let Some(i) = layouts.iter().position(|l| l.size == size && l.len == title.len() && &l.text[..l.len] == title) { return Some(&layouts[i]); }
     let font = sans()?;
-    let mut l = NO_LAYOUT;
+    // Laid out in its slot, not on the stack (Display's stack is 64 KB).
+    let next = unsafe { &mut *core::ptr::addr_of_mut!(NEXT_LAYOUT) };
+    let slot = *next % layouts.len();
+    *next = next.wrapping_add(1);
+    let l = &mut layouts[slot];
+    *l = NO_LAYOUT;
     l.size = size;
     l.len = title.len();
     l.text[..title.len()].copy_from_slice(title);
@@ -137,11 +158,7 @@ fn text_layout(title: &[u8], size: u32) -> Option<&'static TitleLayout> {
         i = end.max(i + 1);
     }
     l.end = pen;
-    let next = unsafe { &mut *core::ptr::addr_of_mut!(NEXT_LAYOUT) };
-    let i = *next % layouts.len();
-    *next = next.wrapping_add(1);
-    layouts[i] = l;
-    Some(&layouts[i])
+    Some(&layouts[slot])
 }
 
 /// Where each character of `title` begins, in whole pixels from the title's left.

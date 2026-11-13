@@ -95,6 +95,31 @@ impl Fallback<'static> {
             scripts: [Font::new(NOTO_ARABIC)?, Font::new(NOTO_HEBREW)?, Font::new(NOTO_DEVANAGARI)?, Font::new(NOTO_THAI)?],
         })
     }
+
+    /// [`Self::embedded`] written straight into `slot`, one font at a time: the whole
+    /// set is about 12 KB, too much to build on a small stack and then copy.
+    /// Returns whether every font parsed; on `false`, `slot` holds nothing.
+    pub fn embedded_into(slot: &mut core::mem::MaybeUninit<Self>) -> bool {
+        let p = slot.as_mut_ptr();
+        // SAFETY: each field is written exactly once through a raw pointer into
+        // `slot`; the caller treats `slot` as initialised only when this returns true.
+        unsafe {
+            let fonts: [(&'static [u8], *mut Font<'static>); 7] = [
+                (NOTO_MONO, core::ptr::addr_of_mut!((*p).mono)),
+                (NOTO_SYMBOLS, core::ptr::addr_of_mut!((*p).symbols)),
+                (NOTO_CJK, core::ptr::addr_of_mut!((*p).cjk)),
+                (NOTO_ARABIC, core::ptr::addr_of_mut!((*p).scripts[0])),
+                (NOTO_HEBREW, core::ptr::addr_of_mut!((*p).scripts[1])),
+                (NOTO_DEVANAGARI, core::ptr::addr_of_mut!((*p).scripts[2])),
+                (NOTO_THAI, core::ptr::addr_of_mut!((*p).scripts[3])),
+            ];
+            for (data, field) in fonts {
+                match Font::new(data) { Some(f) => field.write(f), None => return false }
+            }
+            match Emoji::new(EMOJI) { Some(e) => core::ptr::addr_of_mut!((*p).emoji).write(e), None => return false }
+        }
+        true
+    }
 }
 
 impl<'a> Fallback<'a> {

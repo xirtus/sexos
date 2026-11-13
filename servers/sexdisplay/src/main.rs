@@ -3497,6 +3497,7 @@ pub extern "C" fn _start() -> ! {
     assert!(geometry.pitch>=geometry.width*4&&geometry.pitch%4==0,"DISPLAY_PITCH");
     assert!(address>=HIGH_HALF_BASE,"BOOT_DISPLAY_ADDRESS");
     unsafe{FB_PTR=address;FB_W=geometry.width;FB_H=geometry.height;FB_PITCH=geometry.pitch/4;}
+    glyphs::warm();
     // Private frames are packed; publication steps rows at the scanout pitch.
     let frame_layout=sex_pdx::display_frames::Layout::new(geometry.width as u64,geometry.height as u64,geometry.width as u64*4)
         .expect("DISPLAY_FRAME_LAYOUT");

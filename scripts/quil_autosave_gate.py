@@ -28,7 +28,9 @@ def disk_args(disk):
  raise ValueError('SEXOS_GATE_DISK_BUS must be nvme or ahci')
 
 def check_serial_health(text,tag):
- if re.search(r'KERNEL PANIC|KERNEL PAGE FAULT|DOUBLE FAULT|GP FAULT|panicked at|serial.record.overflow',text):raise RuntimeError(tag+' guest failure')
+ m=re.search(r'KERNEL PANIC|KERNEL PAGE FAULT|DOUBLE FAULT|GP FAULT|panicked at|serial.record.overflow',text)
+ # Name what failed: the matching line and a few after it.
+ if m:raise RuntimeError(tag+' guest failure: '+text[text.rfind('\n',0,m.start())+1:][:600])
 
 def wait_serial(text,health,pattern,start=0,timeout=120,*,tag='serial',raw=False):
  """Wait for complete receipts; raw is reserved for unterminated firmware menus.
