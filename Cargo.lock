@@ -11,8 +11,6 @@ checksum = "366ffbaa4442f4684d91e2cd7c5ea7c4ed8add41959a31447066e279e432b618"
 [[package]]
 name = "acpi"
 version = "6.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b763acdc1d85c36d61acf97a59938f23202d0e8efe45e8759de10c02db242744"
 dependencies = [
  "bit_field",
  "bitflags 2.13.1",
@@ -1855,6 +1853,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-hid-touch"
+version = "0.1.0"
+
+[[package]]
 name = "sex-html"
 version = "0.1.0"
 
@@ -1930,6 +1932,10 @@ dependencies = [
  "x86",
  "x86_64",
 ]
+
+[[package]]
+name = "sex-laptop"
+version = "0.1.0"
 
 [[package]]
 name = "sex-libc"
@@ -2076,6 +2082,7 @@ version = "0.1.0"
 dependencies = [
  "acpi",
  "linked_list_allocator",
+ "sex-laptop",
  "sex-pdx",
 ]
 

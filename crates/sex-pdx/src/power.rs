@@ -32,6 +32,8 @@ pub const OFF: u64 = 2;
 pub const RESTART: u64 = 3;
 pub const READY: u64 = 4;
 pub const SENSORS: u64 = 5;
+/// `CONTROL`: arg = `control_word(CTL_*, value)`. `REQUEST` right.
+pub const CONTROL: u64 = 6;
 /// Firmware window, `FIRMWARE` right only. rdx = arg, r10/r8 = arg2/arg3.
 /// `FW_TABLE`: arg = table index (0 FADT, 1 DSDT, 2.. SSDTs), arg2 = byte offset.
 /// Reply: [OK, length | signature << 32, 24 bytes of the table from offset].
@@ -64,6 +66,9 @@ pub const DGPU_PORT_D3: u64 = 1;
 pub const DGPU_DONE: u64 = 2;
 pub const DGPU_RESTORE: u64 = 3;
 pub const DGPU_PREPARE: u64 = 4;
+/// `FW_CONTROL`: the next queued `CONTROL` word for the ACPI service -> [OK, word], or
+/// [UNAVAILABLE] when none is waiting.
+pub const FW_CONTROL: u64 = 24;
 /// PCI bus/device/function as 16 bits.
 pub const fn bdf(bus: u8, dev: u8, func: u8) -> u16 { (bus as u16) << 8 | ((dev as u16) & 31) << 3 | (func as u16 & 7) }
 /// A GPU's marketing name, for logs.
@@ -90,6 +95,9 @@ pub const FIRMWARE: u8 = 8;
 /// The message the kernel sends Files (as an IPC call from pd 0) before power changes.
 /// arg0 is the op (`OFF` or `RESTART`). The ACPI service gets it too, and runs `\_PTS`.
 pub const OP_PREPARE: u64 = 0x50F0;
+/// The message the kernel sends the desktop that holds the power button (from pd 0) when
+/// the button is pressed or the lid opens or closes: read `SENSORS` for what changed.
+pub const OP_EVENT: u64 = 0x50F1;
 /// How long the kernel waits for Files, in timer ticks (about a millisecond each).
 pub const FLUSH_TICKS: u64 = 5000;
 
@@ -155,27 +163,81 @@ pub struct Sensors {
     pub lid_open: Option<bool>,
     /// Hottest thermal zone, in tenths of a kelvin.
     pub hottest_decikelvin: Option<u32>,
+    /// Minutes to empty (discharging) or to full (charging), when the rate is known.
+    pub battery_minutes: Option<u16>,
+    /// Last-full over design capacity, 0..=100.
+    pub battery_health: Option<u8>,
+    /// The firmware flagged the battery critical, or 2% or less is left on battery power.
+    /// The kernel shuts down cleanly when the ACPI service reports it.
+    pub battery_critical: bool,
+    /// Panel brightness 0..=100 through ACPI `_BQC`, or None without ACPI backlight.
+    pub brightness: Option<u8>,
+    /// The hottest zone's critical trip point (`_CRT`), in tenths of a kelvin.
+    pub critical_decikelvin: Option<u16>,
+    /// A thermal zone is at or above its critical trip point: the kernel shuts down.
+    pub thermal_critical: bool,
+    /// CPU power profile in force (`PROFILE_*`), filled in by the kernel.
+    pub profile: Option<u8>,
+    /// The power button was pressed and a desktop holds it (see `CTL_CLAIM_BUTTON`):
+    /// the Shell shows its power dialog. Cleared when a `REQUEST` holder reads it.
+    pub button_pressed: bool,
 }
 impl Sensors {
     pub fn encode(&self) -> [u64; 5] {
-        let battery = match self.battery_percent { Some(p) => p as u64 | 1 << 8 | (self.charging as u64) << 9, None => 0 };
+        let battery = match self.battery_percent {
+            Some(p) => p as u64 | 1 << 8 | (self.charging as u64) << 9
+                | self.battery_minutes.map_or(0, |m| (m as u64) << 16 | 1 << 32)
+                | self.battery_health.map_or(0, |h| (h.min(100) as u64) << 40 | 1 << 48)
+                | (self.battery_critical as u64) << 49,
+            None => 0,
+        };
         let ac = match self.on_ac { Some(v) => 1 | (v as u64) << 1, None => 0 };
         let lid = match self.lid_open { Some(v) => 1 | (v as u64) << 1, None => 0 };
-        let hot = self.hottest_decikelvin.map_or(0, |v| v as u64 | 1 << 32);
-        [OK, battery, ac | lid << 2, hot, 0]
+        let light = self.brightness.map_or(0, |b| (b.min(100) as u64) << 8 | 1 << 16);
+        let profile = self.profile.map_or(0, |p| ((p & 3) as u64 + 1) << 20);
+        let hot = self.hottest_decikelvin.map_or(0, |v| v as u64 | 1 << 32)
+            | self.critical_decikelvin.map_or(0, |c| (c as u64) << 33 | 1 << 49)
+            | (self.thermal_critical as u64) << 50;
+        [OK, battery, ac | lid << 2 | light | profile | (self.button_pressed as u64) << 24, hot, 0]
     }
     pub fn decode(raw: [u64; 5]) -> Result<Self, u64> {
         if raw[0] != OK { return Err(raw[0]); }
-        let b = raw[1];
+        let (b, m, t) = (raw[1], raw[2], raw[3]);
+        let present = b & 1 << 8 != 0;
         Ok(Self {
-            battery_percent: (b & 1 << 8 != 0).then_some((b as u8).min(100)),
+            battery_percent: present.then_some((b as u8).min(100)),
             charging: b & 1 << 9 != 0,
-            on_ac: (raw[2] & 1 != 0).then_some(raw[2] & 2 != 0),
-            lid_open: (raw[2] & 4 != 0).then_some(raw[2] & 8 != 0),
-            hottest_decikelvin: (raw[3] & 1 << 32 != 0).then_some(raw[3] as u32),
+            on_ac: (m & 1 != 0).then_some(m & 2 != 0),
+            lid_open: (m & 4 != 0).then_some(m & 8 != 0),
+            hottest_decikelvin: (t & 1 << 32 != 0).then_some(t as u32),
+            battery_minutes: (present && b & 1 << 32 != 0).then_some((b >> 16) as u16),
+            battery_health: (present && b & 1 << 48 != 0).then_some(((b >> 40) as u8).min(100)),
+            battery_critical: present && b & 1 << 49 != 0,
+            brightness: (m & 1 << 16 != 0).then_some(((m >> 8) as u8).min(100)),
+            critical_decikelvin: (t & 1 << 49 != 0).then_some((t >> 33) as u16),
+            thermal_critical: t & 1 << 50 != 0,
+            profile: match (m >> 20) & 7 { 0 => None, p => Some((p - 1) as u8) },
+            button_pressed: m & 1 << 24 != 0,
         })
     }
 }
+
+/// `CONTROL` commands (arg = command | value << 8). `REQUEST` right.
+/// Brightness: value 1 = one step up, 0xFF = one step down (queued for the ACPI service).
+pub const CTL_BRIGHTNESS_STEP: u64 = 1;
+/// Brightness to the supported level nearest value (percent), queued for the ACPI service.
+pub const CTL_BRIGHTNESS_SET: u64 = 2;
+/// CPU power profile: value = `PROFILE_*`. The kernel writes the preference on every core.
+pub const CTL_PROFILE: u64 = 3;
+/// The desktop handles the power button from now on: a press sets `button_pressed`
+/// instead of shutting down. A second press within `BUTTON_FALLBACK_TICKS` (the desktop
+/// is not answering) still shuts down.
+pub const CTL_CLAIM_BUTTON: u64 = 4;
+pub const PROFILE_PERFORMANCE: u8 = 0;
+pub const PROFILE_BALANCED: u8 = 1;
+pub const PROFILE_SAVER: u8 = 2;
+pub const BUTTON_FALLBACK_TICKS: u64 = 10_000;
+pub const fn control_word(command: u64, value: u8) -> u64 { command | (value as u64) << 8 }
 
 #[cfg(all(target_arch = "x86_64", target_os = "none"))]
 pub fn call(op: u64, arg: u64) -> [u64; 5] {
@@ -227,6 +289,10 @@ pub const fn pci_address(segment: u16, bus: u8, device: u8, function: u8, offset
 
 pub fn info() -> Result<Info, u64> { Info::decode(call(INFO, 0)) }
 pub fn sensors() -> Result<Sensors, u64> { Sensors::decode(call(SENSORS, 0)) }
+/// Sends a `CONTROL` word (`control_word(CTL_*, value)`).
+pub fn control(command: u64, value: u8) -> Result<(), u64> {
+    match call(CONTROL, control_word(command, value))[0] { OK => Ok(()), e => Err(e) }
+}
 /// Asks for a shut down (`OFF`) or `RESTART`. Returns once the kernel has started it;
 /// the machine goes down after Files has flushed.
 pub fn request(op: u64) -> Result<(), u64> {
@@ -311,8 +377,17 @@ mod tests {
     }
     #[test]
     fn round_trip() {
-        let s = Sensors { battery_percent: Some(87), charging: true, on_ac: Some(true), lid_open: Some(false), hottest_decikelvin: Some(3132) };
+        let s = Sensors { battery_percent: Some(87), charging: true, on_ac: Some(true), lid_open: Some(false), hottest_decikelvin: Some(3132), ..Default::default() };
         assert_eq!(Sensors::decode(s.encode()), Ok(s));
+        let s = Sensors { battery_percent: Some(41), on_ac: Some(false), battery_minutes: Some(125), battery_health: Some(93), battery_critical: true,
+            brightness: Some(60), critical_decikelvin: Some(3782), thermal_critical: true, hottest_decikelvin: Some(3800), profile: Some(PROFILE_SAVER),
+            button_pressed: true, ..Default::default() };
+        assert_eq!(Sensors::decode(s.encode()), Ok(s));
+        // The old layout (words written before these fields existed) still decodes.
+        let old = [OK, 87 | 1 << 8 | 1 << 9, 1 | 2 | 4, 3132 | 1 << 32, 0];
+        let d = Sensors::decode(old).unwrap();
+        assert_eq!((d.battery_percent, d.battery_minutes, d.brightness, d.profile, d.button_pressed), (Some(87), None, None, None, false));
+        assert_eq!(control_word(CTL_BRIGHTNESS_STEP, 0xFF), 0xFF01);
         assert_eq!(Sensors::decode(Sensors::default().encode()), Ok(Sensors::default()));
         let i = Info { flags: CAN_OFF | CAN_RESTART, idle_state: 3, idle_latency_us: 80, batteries: 1, lids: 1, thermal_zones: 2, i2c_hid: 1 };
         assert_eq!(Info::decode(i.encode()), Ok(i));

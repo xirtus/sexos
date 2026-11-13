@@ -986,9 +986,10 @@ pub fn init() {
     // Independent, exact BOOT source for the status-bar publisher. Its bounded
     // read mechanism supplies explicit snapshots; neither timer cadence nor
     // renderer fallback confers civil-time authority.
-    // Power: Shell may ask to shut down or restart, Files flushes first, the bar reads sensors.
+    // Power: Shell may ask to shut down or restart, Files flushes first, the bar and the
+    // panel (Display draws the battery) read sensors.
     for (holder,rights,role) in [(silkshell_id,sex_pdx::power::REQUEST|sex_pdx::power::SENSE,"shell"),
-        (sexfiles_id,sex_pdx::power::FLUSH,"files"),(silkbar_id,sex_pdx::power::SENSE,"bar"),
+        (sexfiles_id,sex_pdx::power::FLUSH,"files"),(silkbar_id,sex_pdx::power::SENSE,"bar"),(sexdisp_id,sex_pdx::power::SENSE,"panel"),
         (sexacpi_id,sex_pdx::power::FIRMWARE,"acpi")] {
         let Some(pd)=(holder!=0).then(||crate::ipc::DOMAIN_REGISTRY.get(holder)).flatten() else {continue};
         assert!(pd.find_capability(sex_pdx::power::SLOT as u32).is_none(),"BOOT_POWER_SLOT_COLLISION");

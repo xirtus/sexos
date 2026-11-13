@@ -1013,11 +1013,60 @@ fn panel_title_fg_at(x:usize,y:usize,bar:&SilkBar,scene: &scene::SceneSnapshot,b
     ui_label_at_scaled(text,x-left,y-top,background,scene.metrics.scale())
 }
 
+/// Battery in the panel, left of the status chips: "87%  2:05 left", "64%  charging",
+/// read from the power sensors (the ACPI service reads the firmware's batteries).
+static mut PANEL_BATTERY: ([u8; 24], usize, usize) = ([0; 24], 0, 0);
+static mut PANEL_BATTERY_NEXT: u64 = 0;
+/// Polls the sensors every two seconds; true when the text changed.
+fn panel_battery_poll(scale: u32) -> bool {
+    let now = sex_pdx::get_ticks();
+    unsafe { if now < PANEL_BATTERY_NEXT { return false; } PANEL_BATTERY_NEXT = now + 2000; }
+    let Ok(s) = sex_pdx::power::sensors() else { return false };
+    let mut text = [0u8; 24];
+    let mut n = 0;
+    let mut put = |bytes: &[u8], n: &mut usize| for &b in bytes { if *n < text.len() { text[*n] = b; *n += 1; } };
+    if let Some(p) = s.battery_percent {
+        let mut digits = [0u8; 3];
+        let d = if p >= 100 { digits = *b"100"; 3 } else if p >= 10 { digits[0] = b'0' + p / 10; digits[1] = b'0' + p % 10; 2 } else { digits[0] = b'0' + p; 1 };
+        put(&digits[..d], &mut n);
+        put(b"%", &mut n);
+        if s.charging { put(b"  charging", &mut n); }
+        else if let Some(m) = s.battery_minutes.filter(|_| s.on_ac != Some(true)) {
+            let (h, m) = ((m / 60).min(99), m % 60);
+            put(b"  ", &mut n);
+            if h >= 10 { put(&[b'0' + (h / 10) as u8], &mut n); }
+            put(&[b'0' + (h % 10) as u8, b':', b'0' + (m / 10) as u8, b'0' + (m % 10) as u8], &mut n);
+            put(b" left", &mut n);
+        }
+    }
+    unsafe {
+        let old = &mut *core::ptr::addr_of_mut!(PANEL_BATTERY);
+        if old.1 == n && old.0[..n] == text[..n] { return false; }
+        let width = glyphs::ui_width(&text[..n], scale).unwrap_or(n * 7 * scale as usize);
+        *old = (text, n, width);
+        sex_pdx::serial_record!("[display.panel.battery] text={} width={}", core::str::from_utf8(&text[..n]).unwrap_or("?"), width);
+    }
+    true
+}
+fn panel_battery_at(x: usize, y: usize, bar: &SilkBar, scene: &scene::SceneSnapshot, background: u32) -> Option<u32> {
+    let (text, n, width) = unsafe { &*core::ptr::addr_of!(PANEL_BATTERY) };
+    if *n == 0 { return None; }
+    let scale = scene.metrics.scale() as usize;
+    let (cx, _, _, _) = module_rect(bar, ModuleSlot::Chip0);
+    let end = cx.saturating_sub(10 * scale);
+    let left = end.saturating_sub(*width);
+    let line_h = glyphs::UI_H * scale;
+    let top = (scene.metrics.bar() as usize).saturating_sub(line_h) / 2;
+    if x < left || x >= end || y < top || y >= top + line_h { return None; }
+    ui_label_at_scaled(&text[..*n], x - left, y - top, background, scene.metrics.scale())
+}
+
 /// Same visible top-strip content for full and incremental redraws.
 fn top_strip_pixel(x: usize, y: usize, bar: &SilkBar, lines: &[u8;20], scene: &scene::SceneSnapshot) -> u32 {
     let background = bar_color(x, y, bar, scene);
     if let Some(fg) = clock_fg_at_scaled(x,y,bar,lines,background,scene.metrics.scale()) { fg }
     else if let Some(fg) = bell_badge_at_scaled(x,y,bar,background,scene.metrics.scale()) { fg }
+    else if let Some(fg) = panel_battery_at(x, y, bar, scene, background) { fg }
     else if let Some(fg) = phase5_active_app_at(x, y, bar, scene) { fg }
     else if let Some(fg) = panel_title_fg_at(x, y, bar, scene, background) { fg }
     else if let Some(fg) = phase5_tint_swatch_at(x, y, bar) { fg }
@@ -3675,6 +3724,7 @@ pub extern "C" fn _start() -> ! {
             }
         }
 
+        if panel_battery_poll(sex_pdx::desktop_style::ui_scale()) { needs_top_strip_redraw = true; }
         let raw_ticks = sex_pdx::get_ticks();
         let sec_now = raw_ticks / 62;
         if bar.civil_enabled&&bar.civil_clock.health(raw_ticks){

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-exclude = ["vendor/embedded-tls-0.19.0", "vendor/pp-rs-0.2.1", "vendor/image-webp-0.2.4", "vendor/virtio-drivers-0.13.0"]
+exclude = ["vendor/embedded-tls-0.19.0", "vendor/pp-rs-0.2.1", "vendor/image-webp-0.2.4", "vendor/virtio-drivers-0.13.0", "vendor/acpi-6.1.1"]
 members = [
     "kernel",
     "servers/sexbell",
@@ -52,6 +52,8 @@ members = [
     "crates/sexfs",
     "crates/sex-volumes",
     "crates/sex-hwdb",
+    "crates/sex-laptop",
+    "crates/sex-hid-touch",
     "crates/sex-net",
     "crates/sex-net-config",
     "crates/sex-tls",
@@ -133,6 +135,8 @@ opt-level = 3
 pp-rs = { path = "vendor/pp-rs-0.2.1" }
 # Bell captures sound: virtio-snd input transfers added (vendor/virtio-drivers-0.13.0/SEXOS_CHANGES.md).
 virtio-drivers = { path = "vendor/virtio-drivers-0.13.0" }
+# sexacpi drives the embedded controller and hears Notify (vendor/acpi-6.1.1/SEXOS_CHANGES.md).
+acpi = { path = "vendor/acpi-6.1.1" }
 # The shader interpreter runs per vertex and per pixel; keep it fast in tests too.
 [profile.dev.package.sex-gl]
 opt-level = 3

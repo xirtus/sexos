@@ -4006,3 +4006,11 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   with a token request in both methods, and both sides agree on the PMK. A wrong
   password gets no confirm.
 - **ABI / kernel:** none.
+
+## Laptop power: battery, lid, brightness, profiles, thermal (2026-11-13)
+
+Embedded controller driver and firmware events in sexacpi (vendored acpi crate now calls region
+handlers and `Notify`), battery percent and time left in the panel, lid and power-button events
+to the Shell (power dialog), ACPI brightness with Fn keys and launcher commands, HWP/CPPC power
+profiles, clean shut down on a critical thermal zone or battery. Touchpad protocol, descriptor
+parser and gestures as a host-tested crate. Details: `LAPTOP_POWER_2026_11_13.md`.

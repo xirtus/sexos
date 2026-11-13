@@ -19,7 +19,7 @@ use acpi::sdt::fadt::Fadt;
 use acpi::{AcpiTables, Handle, PciAddress, PhysicalMapping};
 use alloc::vec::Vec;
 use core::ptr::NonNull;
-use core::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use sex_pdx::power as w;
 use x86_64::instructions::port::Port;
 
@@ -359,8 +359,10 @@ pub fn cpu_init_local() -> u64 {
                 Msr::new(0x770).write(1); // IA32_PM_ENABLE
                 let caps = Msr::new(0x771).read();
                 let (highest, lowest) = (caps & 0xFF, (caps >> 24) & 0xFF);
-                let epp = if eax & (1 << 10) != 0 { 0x80u64 << 24 } else { 0 };
+                let has_epp = eax & (1 << 10) != 0;
+                let epp = if has_epp { (PROFILE_EPP[PROFILE.load(Ordering::Relaxed) as usize % 3] as u64) << 24 } else { 0 };
                 Msr::new(0x774).write(lowest | highest << 8 | epp); // IA32_HWP_REQUEST, desired = auto
+                if has_epp { EPP_MSR.store(0x774, Ordering::Relaxed); }
             }
             flags |= w::HWP;
         }
@@ -370,15 +372,52 @@ pub fn cpu_init_local() -> u64 {
             Msr::new(0xC001_02B1).write(1); // CPPC_ENABLE
             let caps = Msr::new(0xC001_02B0).read();
             let (highest, lowest) = ((caps >> 24) & 0xFF, caps & 0xFF);
-            Msr::new(0xC001_02B3).write(highest | lowest << 8 | 0x80 << 24); // max, min, desired auto, EPP
+            let epp = PROFILE_EPP[PROFILE.load(Ordering::Relaxed) as usize % 3] as u64;
+            Msr::new(0xC001_02B3).write(highest | lowest << 8 | epp << 24); // max, min, desired auto, EPP
+            EPP_MSR.store(0xC001_02B3, Ordering::Relaxed);
         }
         flags |= w::CPPC;
     }
     flags
 }
 
+// ── Power profile ──────────────────────────────────────────────────────────
+
+/// Energy-performance preference per profile (performance, balanced, saver), as
+/// `sex_laptop::profile` and Linux's intel_pstate name them.
+const PROFILE_EPP: [u8; 3] = [0x00, 0x80, 0xC0];
+static PROFILE: AtomicU8 = AtomicU8::new(w::PROFILE_BALANCED);
+/// The MSR holding the preference (HWP_REQUEST or CPPC_REQUEST), 0 if none.
+static EPP_MSR: AtomicU32 = AtomicU32::new(0);
+static PROFILE_EPOCH: AtomicU32 = AtomicU32::new(0);
+static PROFILE_APPLIED: [AtomicU32; 64] = [const { AtomicU32::new(0) }; 64];
+/// Writes the current profile's preference on this core, once per change.
+fn profile_apply_local() {
+    let epoch = PROFILE_EPOCH.load(Ordering::Acquire);
+    let slot = &PROFILE_APPLIED[(this_core() as usize) % 64];
+    if slot.swap(epoch, Ordering::AcqRel) == epoch { return; }
+    let msr = EPP_MSR.load(Ordering::Relaxed);
+    if msr == 0 { return; }
+    let epp = PROFILE_EPP[PROFILE.load(Ordering::Relaxed) as usize % 3] as u64;
+    unsafe {
+        let mut m = x86_64::registers::model_specific::Msr::new(msr);
+        let v = m.read();
+        m.write(v & !(0xFF << 24) | epp << 24);
+    }
+}
+fn set_profile(p: u8) -> [u64; 5] {
+    if p > w::PROFILE_SAVER { return [w::INVALID, 0, 0, 0, 0]; }
+    PROFILE.store(p, Ordering::Release);
+    PROFILE_EPOCH.fetch_add(1, Ordering::AcqRel);
+    profile_apply_local();
+    let msr = EPP_MSR.load(Ordering::Relaxed);
+    serial_println!("[acpi.profile] profile={} epp={:#04x} msr={:#x} applied={}", ["performance", "balanced", "saver"][p as usize], PROFILE_EPP[p as usize], msr, (msr != 0) as u8);
+    [w::OK, (msr != 0) as u64, 0, 0, 0]
+}
+
 /// The scheduler's idle: MWAIT into the chosen C-state, or HLT (C1). Interrupts wake it.
 pub fn idle() {
+    profile_apply_local();
     let hint = MWAIT_HINT.load(Ordering::Relaxed);
     if hint == u32::MAX {
         x86_64::instructions::interrupts::enable_and_hlt();
@@ -545,8 +584,10 @@ pub fn sci() {
     let status = pm1_status_read(f);
     if status & PM1_PWRBTN != 0 {
         pm1_status_clear(f, PM1_PWRBTN);
-        serial_println!("[acpi.power_button] pressed=1");
-        begin(w::OFF, "power_button");
+        // The desktop shows its power dialog; a press it never took shuts down anyway.
+        let to_desktop = BUTTON_CLAIMED.load(Ordering::Acquire) && !BUTTON_PRESSED.swap(true, Ordering::AcqRel);
+        serial_println!("[acpi.power_button] pressed=1 to_desktop={}", to_desktop as u8);
+        if to_desktop { wake_desktop(); } else { begin(w::OFF, "power_button"); }
     }
     if status & PM1_WAK != 0 { pm1_status_clear(f, PM1_WAK); }
 }
@@ -612,11 +653,73 @@ pub fn restart() -> ! {
 
 // ── Sensors ────────────────────────────────────────────────────────────────
 
-fn read_sensors() -> [u64; 5] {
-    match *SENSOR_WORDS.lock() {
+fn read_sensors(take_button: bool) -> [u64; 5] {
+    let mut r = match *SENSOR_WORDS.lock() {
         Some(words) => [w::OK, words[0], words[1], words[2], 0],
         None => w::Sensors::default().encode(),
+    };
+    r[2] = r[2] & !(7 << 20 | 1 << 24) | (PROFILE.load(Ordering::Relaxed) as u64 + 1) << 20;
+    let pressed = if take_button { BUTTON_PRESSED.swap(false, Ordering::AcqRel) } else { BUTTON_PRESSED.load(Ordering::Acquire) };
+    if pressed { r[2] |= 1 << 24; }
+    r
+}
+
+// ── Control: requests from the desktop ─────────────────────────────────────
+
+/// The desktop holds the power button (`CTL_CLAIM_BUTTON`).
+static BUTTON_CLAIMED: AtomicBool = AtomicBool::new(false);
+static BUTTON_PRESSED: AtomicBool = AtomicBool::new(false);
+/// Brightness requests waiting for the ACPI service (it runs the firmware's `_BCM`).
+static CONTROL_QUEUE: spin::Mutex<([u64; 8], usize)> = spin::Mutex::new(([0; 8], 0));
+
+/// The desktop that holds the button; it is woken with `OP_EVENT`.
+static DESKTOP_PD: AtomicU32 = AtomicU32::new(0);
+/// Lid bits of the last sensor report, to tell the desktop when they change.
+static LAST_LID: AtomicU8 = AtomicU8::new(0);
+fn wake_desktop() {
+    let pd = DESKTOP_PD.load(Ordering::Acquire);
+    if pd == 0 { return; }
+    if let Some(d) = crate::ipc::DOMAIN_REGISTRY.get(pd) {
+        let msg = crate::ipc::messages::MessageType::IpcCall { func_id: w::OP_EVENT, arg0: 0, arg1: 0, arg2: 0, caller_pd: 0, caller_task: 0 };
+        if unsafe { (*d.message_ring).enqueue(msg) }.is_ok() { crate::scheduler::unpark_thread(d.main_task.load(Ordering::Acquire)); }
     }
+}
+fn control(caller: u32, word: u64) -> [u64; 5] {
+    let value = (word >> 8) as u8;
+    match word & 0xFF {
+        w::CTL_PROFILE => set_profile(value),
+        w::CTL_CLAIM_BUTTON => { DESKTOP_PD.store(caller, Ordering::Release); BUTTON_CLAIMED.store(true, Ordering::Release); [w::OK, 0, 0, 0, 0] }
+        w::CTL_BRIGHTNESS_STEP | w::CTL_BRIGHTNESS_SET => {
+            if FIRMWARE_PD.load(Ordering::Acquire) == 0 { return [w::UNAVAILABLE, 0, 0, 0, 0]; }
+            let mut q = CONTROL_QUEUE.lock();
+            if q.1 >= q.0.len() { return [w::BUSY, 0, 0, 0, 0]; }
+            let n = q.1;
+            q.0[n] = word & 0xFFFF;
+            q.1 += 1;
+            [w::OK, 0, 0, 0, 0]
+        }
+        _ => [w::INVALID, 0, 0, 0, 0],
+    }
+}
+fn fw_control() -> [u64; 5] {
+    let mut q = CONTROL_QUEUE.lock();
+    if q.1 == 0 { return [w::UNAVAILABLE, 0, 0, 0, 0]; }
+    let word = q.0[0];
+    q.0.copy_within(1.., 0);
+    q.1 -= 1;
+    [w::OK, word, 0, 0, 0]
+}
+/// What the ACPI service reported that the kernel acts on: a critical battery or thermal
+/// zone shuts the machine down cleanly (Files flushes first).
+fn sensors_reported(words: [u64; 3]) {
+    let s = w::Sensors::decode([w::OK, words[0], words[1], words[2], 0]).unwrap_or_default();
+    let lid = ((words[1] >> 2) & 3) as u8;
+    if LAST_LID.swap(lid, Ordering::AcqRel) != lid { wake_desktop(); }
+    let why = if s.thermal_critical { "thermal_critical" } else if s.battery_critical { "battery_critical" } else { return };
+    if STATE.load(Ordering::Acquire) != 0 { return; }
+    serial_println!("[acpi.power.critical] reason={} percent={} temperature_dk={} trip_dk={}", why,
+        s.battery_percent.map_or(-1, |p| p as i32), s.hottest_decikelvin.map_or(0, |t| t), s.critical_decikelvin.map_or(0, |t| t as u32));
+    begin(w::OFF, why);
 }
 
 // ── The Power capability (syscall 84) ──────────────────────────────────────
@@ -640,7 +743,9 @@ pub fn invoke(pd: &crate::capability::ProtectionDomain, slot: u64, op: u64, arg:
             poll();
             [w::OK, 0, 0, 0, 0]
         }
-        w::SENSORS if has(w::SENSE) || has(w::REQUEST) => read_sensors(),
+        w::SENSORS if has(w::SENSE) || has(w::REQUEST) => read_sensors(has(w::REQUEST)),
+        w::CONTROL if has(w::REQUEST) => control(pd.id, arg),
+        w::FW_CONTROL if has(w::FIRMWARE) => fw_control(),
         w::FW_TABLE if has(w::FIRMWARE) => fw_table(arg, arg2),
         w::FW_IO if has(w::FIRMWARE) => fw_io(arg, arg2),
         w::FW_MEM if has(w::FIRMWARE) => fw_mem(arg, arg2, arg3),
@@ -651,10 +756,11 @@ pub fn invoke(pd: &crate::capability::ProtectionDomain, slot: u64, op: u64, arg:
         w::FW_SENSORS if has(w::FIRMWARE) => {
             let first = SENSOR_WORDS.lock().replace([arg, arg2, arg3]).is_none();
             if first { serial_println!("[acpi.firmware.sensors] first=1 words={:#x},{:#x},{:#x}", arg, arg2, arg3); }
+            sensors_reported([arg, arg2, arg3]);
             [w::OK, 0, 0, 0, 0]
         }
-        w::OFF | w::RESTART | w::READY | w::SENSORS => denied,
-        w::FW_TABLE | w::FW_IO | w::FW_MEM | w::FW_PCI | w::FW_INVENTORY | w::FW_IDLE | w::FW_SENSORS | w::FW_DGPU => denied,
+        w::OFF | w::RESTART | w::READY | w::SENSORS | w::CONTROL => denied,
+        w::FW_TABLE | w::FW_IO | w::FW_MEM | w::FW_PCI | w::FW_INVENTORY | w::FW_IDLE | w::FW_SENSORS | w::FW_DGPU | w::FW_CONTROL => denied,
         _ => [w::INVALID, 0, 0, 0, 0],
     }
 }
