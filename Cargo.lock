@@ -1326,6 +1326,7 @@ name = "pdf"
 version = "0.1.0"
 dependencies = [
  "hayro",
+ "sex-font",
  "sex-std",
 ]
 
