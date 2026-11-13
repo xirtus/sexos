@@ -9,6 +9,8 @@
 extern crate alloc;
 #[cfg(feature = "repair")]
 pub mod check;
+#[cfg(all(test, feature = "repair"))]
+mod powercut;
 
 pub const BLOCK: usize = 4096;
 pub const NAME_MAX: usize = 255;
