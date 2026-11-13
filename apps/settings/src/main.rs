@@ -28,12 +28,16 @@ const ENTER: u8 = 0x1C;
 const BACKSPACE: u8 = 0x0E;
 
 /// Every value as Files holds it now (defaults for any it cannot answer).
+/// Every value Files holds now. A key Files does not answer keeps its default, and
+/// the others still load.
 fn load() -> (Config, u64) {
     let mut values = Config::new();
     let generation = settings::generation().unwrap_or(0);
-    if let Ok(all) = settings::all() {
-        for (k, v) in KEYS.iter().zip(all) { let _ = values.set(k.id, v); }
+    let mut failed = 0;
+    for k in KEYS.iter() {
+        match settings::get(k.id) { Ok(v) => { let _ = values.set(k.id, v); } Err(_) => failed += 1 }
     }
+    sex_pdx::serial_record!("[settings.load] generation={} failed={} night={}", generation, failed, values.value(sex_config::id::NIGHT_LIGHT));
     (values, generation)
 }
 

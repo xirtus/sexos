@@ -8,7 +8,7 @@ the file, the Shell asks for the changes and shows Dusk with night light 2 again
 with no key pressed. Then the Settings program (installed on the disk) lowers night
 light to 1 from its Desktop page; the Shell applies it from Files, and a third start
 shows it."""
-import argparse,shutil,time
+import argparse,re,shutil,time
 from pathlib import Path
 from install_program import install
 from quil_autosave_gate import boot
@@ -38,6 +38,7 @@ def main():
    s=len(t());press('meta_l','shift','n');g['wait'](rf'\[files.config.set\] caller=3 key=3 value={level} status=0',s,30)
   g['wait'](r'\[shell.config.saved\] key=3 value=2 status=0',s,30)
   assert 'KERNEL PANIC' not in t()
+ except Exception:evidence(t());raise
  finally:g['stop']()
  g=boot(a.iso,disk,a.out,'settings-2',a.resolution);t=g['text'];q=g['q']
  try:
@@ -61,6 +62,7 @@ def main():
   q.key('right');g['wait'](r'\[settings.set\] key=11 value=1 status=0',s,30)
   time.sleep(.6);q.key('esc');g['wait'](r'\[display.clock.zone\] zone=1 name=Europe/London',s,30)
   assert 'KERNEL PANIC' not in t()
+ except Exception:evidence(t());raise
  finally:g['stop']()
  g=boot(a.iso,disk,a.out,'settings-3',a.resolution);t=g['text']
  try:
@@ -68,5 +70,10 @@ def main():
   g['wait'](r'\[display.clock.zone\] zone=1 name=Europe/London',0,60)
   assert 'KERNEL PANIC' not in t()
   print({'ok':True,'loaded':loaded.group(0)})
+ except Exception:evidence(t());raise
  finally:g['stop']()
+def evidence(text):
+ """On failure, the serial lines this gate is about, so CI's log shows them."""
+ keep=re.compile(r'settings|files\.config|files\.password|shell\.(lock|idle|screen|config|look)|display\.(screen|clock)|PANIC|panic|fault',re.I)
+ for line in [l for l in text.splitlines() if keep.search(l)][-80:]:print('[serial]',line[:200])
 if __name__=='__main__':main()

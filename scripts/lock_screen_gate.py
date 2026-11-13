@@ -5,7 +5,7 @@ With no password set, Super+Esc locks and Enter unlocks. Settings sets a passwor
 (F2, typed twice). Locked again: keys meant for Settings never reach it, a wrong
 password is refused, the right one unlocks. Then Settings sets "dim after" to one
 minute and the screen dims after a quiet minute; a key wakes it."""
-import argparse,shutil,time
+import argparse,re,shutil,time
 from pathlib import Path
 from install_program import install
 from quil_autosave_gate import boot
@@ -53,5 +53,10 @@ def main():
   s=len(t());q.key('shift');g['wait'](r'\[shell.idle\] state=awake',s,30);g['wait'](r'\[display.screen\] mode=0 locked=0',s,30)
   assert 'KERNEL PANIC' not in t()
   print({'ok':True})
+ except Exception:evidence(t());raise
  finally:g['stop']()
+def evidence(text):
+ """On failure, the serial lines this gate is about, so CI's log shows them."""
+ keep=re.compile(r'settings|files\.config|files\.password|shell\.(lock|idle|screen|config|look)|display\.(screen|clock)|PANIC|panic|fault',re.I)
+ for line in [l for l in text.splitlines() if keep.search(l)][-80:]:print('[serial]',line[:200])
 if __name__=='__main__':main()
