@@ -1799,6 +1799,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "settings"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-config",
+ "sex-pdx",
+]
+
+[[package]]
 name = "sex-app"
 version = "0.1.0"
 dependencies = [

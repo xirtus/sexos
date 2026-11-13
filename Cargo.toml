@@ -23,6 +23,7 @@ members = [
     "apps/fortune",
     "apps/jot",
     "apps/files",
+    "apps/settings",
     "apps/peek",
     "apps/talk",
     "apps/bench",

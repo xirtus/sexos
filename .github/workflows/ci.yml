@@ -53,8 +53,8 @@ jobs:
       run: bash scripts/desktop_capture_host_gate.sh
     - name: HTML containing-block and replaced sizing
       run: cargo test --locked -p sex-html
-    - name: Settings schema, file format and protocol
-      run: cargo test --locked -p sex-config
+    - name: Settings schema, file format, protocol and the Settings program's pages
+      run: bash scripts/settings_host_gate.sh
     - name: Disk layouts (GPT, FAT, install beside other systems)
       run: cargo test --locked -p sex-disk --lib
     - name: Crash record format host regressions

@@ -11,6 +11,7 @@ pub mod thread;
 pub mod tls;
 pub mod sound;
 pub mod mailbox;
+pub mod settings;
 
 /// Runs `main` on a stack of `bytes` taken from the heap, for programs that need more
 /// than the 64 KiB a run starts with (deep layout, script engines, decoders).

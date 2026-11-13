@@ -66,7 +66,8 @@ crates = [
   "apps/stdhello/Cargo.toml",
   "apps/stdnet/Cargo.toml",
   "apps/chello/Cargo.toml",
-  "apps/pdf/Cargo.toml"
+  "apps/pdf/Cargo.toml",
+  "apps/settings/Cargo.toml"
 ]
 
 [[stage]]
@@ -264,6 +265,14 @@ target = "x86_64-sex-app.json"
 manifest = "apps/view/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/view"
 dest_artifact = "iso_root/programs/view"
+
+[[stage]]
+id = "build_settings"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/settings/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/settings"
+dest_artifact = "iso_root/programs/settings"
 
 [[stage]]
 id = "build_heaptest"

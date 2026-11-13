@@ -4023,3 +4023,16 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   (two starts on one disk).
 - **ABI:** new PDX opcode `0x2F0` (`sex_pdx::config::OP`) to Files, reply tag `0xC6`.
   No syscall, no kernel change.
+
+## Settings program, slices B2/B3 (2026-11-13)
+- **What:** new `apps/settings` (`run settings`): a page per schema section
+  (Appearance, Desktop, Display, Keyboard, Sound, Date & time, Lock & idle, System),
+  type-to-search across all settings, Left/Right to change a value within its range
+  (Shift for bigger steps), saved by Files at once. The Shell applies desktop changes
+  live. `sex_app::settings` gives every program `get`, `set` and `generation`.
+- **Evidence:** `scripts/settings_host_gate.sh` (pages, search, steps, render) in CI;
+  `scripts/settings_persist_gate.py` drives the program over a second start and checks
+  a third.
+- **Not yet:** Display scale, keyboard repeat and volume are stored but not yet acted
+  on by Display, Input and Bell (each owner's slice reads `sex_app::settings` or the
+  Shell's copy). A launcher entry for Settings belongs to the desktop workstream.
