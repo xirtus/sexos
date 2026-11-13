@@ -18,6 +18,10 @@ pub const UNLOCK: u8 = 25;
 pub const LOCK: u8 = 26;
 /// The reply's value: one of the states below.
 pub const STATE: u8 = 27;
+/// Data: the current password, then the new one; `offset`: the current one's length.
+/// Rewraps the volume's key in its header: no data block is touched. WRONG_PASSWORD
+/// if the current one isn't it.
+pub const CHANGE: u8 = 28;
 
 pub const STATE_NONE: u32 = 0;
 pub const STATE_LOCKED: u32 = 1;

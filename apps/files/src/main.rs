@@ -67,7 +67,7 @@ const HOME_MIB: u64 = 256;
 enum Undo { Moved { from: Vec<u8>, to: Vec<u8> }, Trashed { from: Vec<u8>, to: Vec<u8>, info: Vec<u8> }, Copied { to: Vec<u8> }, Made { path: Vec<u8> } }
 enum Input { Rename(Vec<u8>), NewFolder, SaveAs, Search, Password(Secret) }
 /// What a password typed into Files is for.
-enum Secret { Unlock, New, Repeat(Vec<u8>) }
+enum Secret { Unlock, New, Repeat(Vec<u8>), Current, ChangeTo(Vec<u8>), ChangeRepeat(Vec<u8>, Vec<u8>) }
 /// Something that can't be undone, waiting for the same key a second time.
 #[derive(PartialEq, Eq)]
 enum Confirm { DeleteForever(Vec<u8>), EmptyTrash(Vec<u8>) }
@@ -254,13 +254,15 @@ impl App {
         t.push('\n');
         if let Some((kind, text)) = &self.input {
             let label = match kind { Input::Rename(_) => "Rename to", Input::NewFolder => "New folder", Input::SaveAs => "Save as", Input::Search => "Search names and words",
-                Input::Password(Secret::Unlock) => "Password for home", Input::Password(Secret::New) => "New password for home (8 or more)", Input::Password(Secret::Repeat(_)) => "The same password again" };
+                Input::Password(Secret::Unlock) => "Password for home", Input::Password(Secret::New) => "New password for home (8 or more)", Input::Password(Secret::Repeat(_)) => "The same password again",
+                Input::Password(Secret::Current) => "Current password for home", Input::Password(Secret::ChangeTo(_)) => "New password (8 or more)",
+                Input::Password(Secret::ChangeRepeat(..)) => "The new password again" };
             // A password shows only how long it is.
             let shown_text = if matches!(kind, Input::Password(_)) { "*".repeat(text.len()) } else { String::from(shown(text)) };
             t.push_str(&format!("{}: {}|   (Enter confirms, Esc cancels)\n", label, shown_text));
         } else if !self.status.is_empty() { t.push_str(&self.status); t.push('\n'); }
         if let Some(job) = &self.job { t.push_str(&job.progress()); t.push('\n'); }
-        t.push_str("Enter open  Backspace up  F2 rename  Ctrl+I size and checksum\nCtrl+C/X/V copy, cut, paste  Ctrl+N folder\nDel trash  Shift+Del delete for good  Ctrl+T show trash\nIn the trash: Ctrl+R restore  Ctrl+E empty\nOn a stick: Ctrl+E eject  Ctrl+D disks  Ctrl+Z undo  Ctrl+H home\nCtrl+F search names and words in files  Ctrl+G thumbnails  Ctrl+K home lock\n");
+        t.push_str("Enter open  Backspace up  F2 rename  Ctrl+I size and checksum\nCtrl+C/X/V copy, cut, paste  Ctrl+N folder\nDel trash  Shift+Del delete for good  Ctrl+T show trash\nIn the trash: Ctrl+R restore  Ctrl+E empty\nOn a stick: Ctrl+E eject  Ctrl+D disks  Ctrl+Z undo  Ctrl+H home\nCtrl+F search names and words in files  Ctrl+G thumbnails  Ctrl+K home lock  Ctrl+Shift+K its password\n");
         window.show(t.as_bytes());
     }
 
@@ -528,6 +530,21 @@ impl App {
             },
             Secret::New if text.len() < h::PASSWORD_MIN => { self.status = "At least 8 characters.".into(); self.input = Some((Input::Password(Secret::New), Vec::new())); }
             Secret::New => self.input = Some((Input::Password(Secret::Repeat(text.to_vec())), Vec::new())),
+            Secret::Current => self.input = Some((Input::Password(Secret::ChangeTo(text.to_vec())), Vec::new())),
+            Secret::ChangeTo(mut old) if text.len() < h::PASSWORD_MIN => { old.fill(0); self.status = "At least 8 characters: nothing changed.".into(); }
+            Secret::ChangeTo(old) => self.input = Some((Input::Password(Secret::ChangeRepeat(old, text.to_vec())), Vec::new())),
+            Secret::ChangeRepeat(mut old, mut new) => {
+                let same = new == text;
+                new.fill(0);
+                if !same { old.fill(0); self.status = "The two new passwords differ: nothing changed.".into(); return; }
+                self.status = "Changing the password...".into();
+                let r = files::home_change(window, &old, text);
+                old.fill(0);
+                match r {
+                    Ok(()) => { sex_pdx::serial_record!("[files.app.home.changed]"); self.status = "Home's password is changed.".into(); }
+                    Err(e) => { sex_pdx::serial_record!("[files.app.home.change.refused] status={}", e); self.status = format!("Couldn't change the password: {}.", shown(h::message(e))); }
+                }
+            }
             Secret::Repeat(mut first) => {
                 if first != text { self.status = "The two passwords differ: nothing changed.".into(); first.fill(0); return; }
                 first.fill(0);
@@ -643,6 +660,12 @@ impl App {
                 KEY_E => self.empty_trash(window),
                 KEY_I => self.info(window),
                 KEY_F => self.input = Some((Input::Search, Vec::new())),
+                // Ctrl+Shift+K: a new password for an encrypted home.
+                KEY_K if self.portal && key.shift => match files::home_state(window) {
+                    Ok(sex_pdx::home_lock::STATE_NONE) => self.status = "Home isn't encrypted: Ctrl+K encrypts it.".into(),
+                    Ok(_) => self.input = Some((Input::Password(Secret::Current), Vec::new())),
+                    Err(e) => self.status = format!("Home: {}.", shown(sex_pdx::home_lock::message(e))),
+                },
                 // Ctrl+K: encrypt home, unlock it, or lock it again.
                 KEY_K if self.portal => match files::home_state(window) {
                     Ok(sex_pdx::home_lock::STATE_NONE) => { self.input = Some((Input::Password(Secret::New), Vec::new())); self.status = format!("Home will be encrypted ({} MiB): only this password opens it, and it can't be recovered.", HOME_MIB); }

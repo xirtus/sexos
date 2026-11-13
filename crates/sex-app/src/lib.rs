@@ -490,6 +490,13 @@ pub mod files {
     pub fn home_setup(window: &mut Window, mib: u64, password: &[u8]) -> Result<(), Error> { home_secret(window, sex_pdx::home_lock::SETUP, mib, password) }
     /// Unlocks `/home`; `home_lock::WRONG_PASSWORD` if it isn't the password.
     pub fn home_unlock(window: &mut Window, password: &[u8]) -> Result<(), Error> { home_secret(window, sex_pdx::home_lock::UNLOCK, 0, password) }
+    /// A new password for home; `home_lock::WRONG_PASSWORD` if `old` isn't the current one.
+    pub fn home_change(window: &mut Window, old: &[u8], new: &[u8]) -> Result<(), Error> {
+        if old.len() > 256 || new.len() > 256 { return Err(w::NAME); }
+        let len = old.len() + new.len();
+        exchange(Some(window), sex_pdx::home_lock::CHANGE, b"", old.len() as u64, len as u64,
+                 |d| { d[..old.len()].copy_from_slice(old); d[old.len()..len].copy_from_slice(new) }, |_, _| ()).map(|_| ())
+    }
     /// Writes `/home` out and forgets its key.
     pub fn home_lock(window: &mut Window) -> Result<(), Error> { request(window, sex_pdx::home_lock::LOCK, b"", 0, 0).map(|_| ()) }
     pub fn create(window: &mut Window, path: &[u8]) -> Result<(), Error> { request(window, w::CREATE, path, 0, 0).map(|_| ()) }

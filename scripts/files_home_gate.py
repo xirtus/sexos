@@ -8,7 +8,9 @@ answers LOCKED. On the host the disk image holds no byte of that file's text, an
 `sexfs-fsck --deep` finds the system disk clean.
 
 Boot 2: Files starts and asks for the password. A wrong one is refused and the file
-stays unreadable; the right one unlocks home and the file reads back."""
+stays unreadable; the right one unlocks home and the file reads back. Ctrl+Shift+K
+changes the password (old one, new one twice), home is locked, the old password is
+refused and the new one opens it."""
 import argparse,os,random,shutil,subprocess,time
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
@@ -16,6 +18,7 @@ KEYS={' ':'spc','/':'slash','.':'dot','-':'minus',':':'semicolon','_':'minus'}
 MARKER=b'SEXOS-HOME-SECRET-'+random.Random(9).randbytes(8).hex().encode()
 SECRET=(MARKER+b'\n')*2000
 PASSWORD='correct horse 42'
+NEWPASS='battery staple 7'
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
  shutil.rmtree(a.out,ignore_errors=True);a.out.mkdir(parents=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
@@ -46,7 +49,7 @@ def main():
     time.sleep(.06)
   def line(text):g['focus'](153);time.sleep(.5);keys(text);q.key('ret')
   def expect(text,pattern,timeout=60):s=len(t());line(text);return g['wait'](pattern,s,timeout)
-  def ctrl(k):q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':k}],'hold-time':80})
+  def ctrl(k,shift=False):q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'}]+([{'type':'qcode','data':'shift'}] if shift else [])+[{'type':'qcode','data':k}],'hold-time':80})
   def files():
    s=len(t());line('files');m=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60)
    g['wait'](r'\[files.app.ready\] ',s,60);g['wait'](rf'\[display.text.committed\] target={m[1]} ',s,60);time.sleep(1)
@@ -85,6 +88,15 @@ def main():
   s=len(t());typed(surface,PASSWORD)
   m=g['wait'](r'\[files.home.unlocked\] ms=(\d+) ',s,300);result['unlock_ms']=int(m[1])
   g['wait'](r'\[files.app.home.unlocked\]',s,30)
+  expect('cat /home/secret.txt',r'\[spindle.fs.cat\] '+MARKER.decode())
+  s=len(t());g['focus'](surface);time.sleep(.5);ctrl('k',True);g['wait'](r'\[display.text.committed\] ',s,30);time.sleep(.5)
+  typed(surface,PASSWORD);time.sleep(.5);typed(surface,NEWPASS);time.sleep(.5);typed(surface,NEWPASS)
+  m=g['wait'](r'\[files.home.changed\] ms=(\d+)',s,300);result['change_ms']=int(m[1])
+  g['wait'](r'\[files.app.home.changed\]',s,30)
+  s=len(t());g['focus'](surface);time.sleep(.5);ctrl('k');g['wait'](r'\[files.home.locked\]',s,60)
+  s=len(t());g['focus'](surface);time.sleep(.5);ctrl('k');g['wait'](r'\[display.text.committed\] ',s,30);time.sleep(.5)
+  typed(surface,PASSWORD);g['wait'](r'\[files.home.unlock.refused\] why=WrongPassword',s,300)
+  s=len(t());typed(surface,NEWPASS);g['wait'](r'\[files.home.unlocked\] ',s,300)
   expect('cat /home/secret.txt',r'\[spindle.fs.cat\] '+MARKER.decode())
  session('home2',second)
  result['ok']=True;print(result)

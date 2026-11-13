@@ -6,4 +6,5 @@
 - sexfiles runs home work on its own 256 KiB stack: its main stack was too shallow for the key derivation (the first try faulted in blake2b_long).
 - Shared-file touches: `sexos_build_spec.toml` build_sexfiles gets `--cfg aes_force_soft` (servers are soft-float); CI step added.
 - Gate `scripts/files_home_gate.py`: no byte of the home file on the disk image, SEXCRYPT header present, `sexfs-fsck --deep` clean; second boot refuses a wrong password, unlocks with the right one. QEMU TCG: setup KDF ~0.7 s, unlock ~0.4 s.
-- Next: a pre-desktop login screen belongs to the shell (workstream C); password change (`rewrap`) has no UI yet.
+- Password change: Ctrl+Shift+K in Files (current, new twice); kind CHANGE 28 rewraps the header with a new salt, no data block touched. Gate checks the old password is then refused.
+- Next: the Settings lock/login screen unlocks home through the same UNLOCK request.

@@ -586,7 +586,7 @@ fn handle_request(index: usize, program: Option<usize>, r: w::Request) -> u64 {
         let (status, value) = picker(program, r, &path[..path_len], &mut region[w::PATH_BYTES..]);
         return w::reply(r.seq, status, value);
     }
-    if matches!(r.kind, sex_pdx::home_lock::SETUP | sex_pdx::home_lock::UNLOCK | sex_pdx::home_lock::LOCK | sex_pdx::home_lock::STATE) {
+    if matches!(r.kind, sex_pdx::home_lock::SETUP | sex_pdx::home_lock::UNLOCK | sex_pdx::home_lock::LOCK | sex_pdx::home_lock::STATE | sex_pdx::home_lock::CHANGE) {
         // Only Spindle, Shell or a run holding the whole filesystem.
         if let Some(k) = program {
             let b = unsafe { (*core::ptr::addr_of!(BINDINGS))[k] }.unwrap();
@@ -594,8 +594,8 @@ fn handle_request(index: usize, program: Option<usize>, r: w::Request) -> u64 {
         }
         let Some(fs) = fs else { return w::reply(r.seq, w::UNAVAILABLE, 0) };
         if writes_pending() { commit_writes(fs); }
-        let n = (r.length as usize).min(256);
-        let mut secret = [0u8; 256];
+        let n = (r.length as usize).min(512);
+        let mut secret = [0u8; 512];
         secret[..n].copy_from_slice(&region[w::PATH_BYTES..w::PATH_BYTES + n]);
         // The password doesn't stay in the client's region either.
         region[w::PATH_BYTES..w::PATH_BYTES + n].fill(0);

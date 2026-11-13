@@ -153,6 +153,7 @@ fn control_here(main: &mut Fs<'static, FsDisk>, kind: u8, mib: u64, secret: &[u8
         h::SETUP => setup(main, mib, secret),
         h::UNLOCK => unlock(main, secret),
         h::LOCK => lock(main),
+        h::CHANGE => change(main, mib as usize, secret),
         _ => Err(w::INVALID),
     }
 }
@@ -227,6 +228,31 @@ fn unlock(main: &mut Fs<'static, FsDisk>, password: &[u8]) -> Result<u32, u8> {
         }
         Err(e) => { sex_pdx::serial_record!("[files.home.mount.failed] error={:?}", e); Err(crate::fs_service::status(e)) }
     }
+}
+/// A new password for the same key: only the header changes.
+#[inline(never)]
+fn change(main: &mut Fs<'static, FsDisk>, old_len: usize, both: &[u8]) -> Result<u32, u8> {
+    if old_len > both.len() { return Err(w::INVALID); }
+    let (old, new) = both.split_at(old_len);
+    if new.len() < h::PASSWORD_MIN { return Err(w::NAME); }
+    let st = main.open(h::IMAGE).map_err(|_| w::NOT_FOUND)?;
+    let mut header = vec![0u8; HEADER];
+    if main.read(st.id, 0, &mut header).map_err(crate::fs_service::status)? != HEADER { return Err(w::CORRUPT); }
+    let mut salt = [0u8; 32];
+    random(&mut salt).ok_or(w::UNSUPPORTED)?;
+    let start = sex_pdx::get_ticks();
+    let next = match sex_crypt::rewrap(&header, old, new, &salt) {
+        Ok(h) => h,
+        Err(e) => {
+            sex_pdx::serial_record!("[files.home.change.refused] why={:?}", e);
+            return Err(crypt_status(e));
+        }
+    };
+    let now = sex_pdx::civil_time_ms().map(|ms| ms / 1000).unwrap_or(0);
+    let written = main.write(st.id, 0, &next, now).and_then(|_| main.commit());
+    if let Err(e) = written { let _ = main.rollback(); return Err(crate::fs_service::status(e)); }
+    sex_pdx::serial_record!("[files.home.changed] ms={}", sex_pdx::get_ticks().saturating_sub(start));
+    Ok(0)
 }
 #[inline(never)]
 fn lock(main: &mut Fs<'static, FsDisk>) -> Result<u32, u8> {
