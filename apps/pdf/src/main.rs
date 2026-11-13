@@ -8,8 +8,8 @@
 //! Keys: Right, Space, Page Down or N for the next page; Left, Page Up or P for the
 //! previous one; Home and End for the first and last; Up and Down scroll a page taller
 //! than the window; + and - zoom, 0 or W fits the page to the window's width, F fits
-//! the whole page, 1 shows it at 100 %. Ctrl+F finds text (Enter or F3 for the next
-//! hit, Shift for the one before, Escape closes the bar); T shows page thumbnails and
+//! the whole page, 1 shows it at 100 %. Ctrl+F finds text (Enter, Ctrl+G or F3 for the
+//! next hit, Shift for the one before, Escape closes the bar); T shows page thumbnails and
 //! O the document's outline, where Up, Down and Enter choose.
 mod sample;
 // The pure parts, and those that need only hayro, build and are tested on the host too.

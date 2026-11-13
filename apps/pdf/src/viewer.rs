@@ -38,6 +38,8 @@ const ESCAPE: u8 = 0x01;
 const BACKSPACE: u8 = 0x0E;
 const ENTER: u8 = 0x1C;
 const KEY_F: u8 = 0x21;
+const KEY_G: u8 = 0x22;
+/// Shell keeps F3 for itself today; it is honoured if it ever arrives.
 const F3: u8 = 0x3D;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -367,7 +369,7 @@ impl Viewer {
         let step = size.1 * 3 / 4;
         if key.control && key.code == KEY_F {
             self.finding = true;
-        } else if key.code == F3 {
+        } else if key.code == F3 || key.control && key.code == KEY_G {
             self.finding = true;
             self.find(key.shift);
         } else if self.finding && key.code == ESCAPE {

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """PDF finds text: `run pdf @find10.pdf` opens a ten-page document the person gave it;
 Ctrl+F, typing ZANZIBAR and Enter turns to page 7, the only page holding the word, and
-lights it up; F3 comes back round to the same single hit. The outline panel lists the
+lights it up; Ctrl+G comes back round to the same single hit. The outline panel lists the
 document's four bookmarks and Enter on one turns to its page; the thumbnail strip
 renders small pages; F fits the whole page and + zooms in from there.
 
@@ -26,7 +26,7 @@ os.environ['SEXOS_GATE_NIC']='-netdev user,id=n0 -device e1000e,netdev=n0'
 from quil_autosave_gate import boot
 # Ten pages' text read and several pages rendered under emulation.
 os.environ.setdefault('SEXOS_GATE_BOUND','1500')
-KEYS={' ':'spc','/':'slash','.':'dot','-':'minus',':':'semicolon'}
+KEYS={' ':'spc','/':'slash','.':'dot','-':'minus'}
 SURFACE={int(a):int(b)for a,b in re.findall(r'app: App::Program, ordinal: \d+, target: (\d+), surface: (\d+)',(ROOT/'crates/sex-pdx/src/app_catalog.rs').read_text())}
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
@@ -39,6 +39,7 @@ def main():
  def keys(text):
   for k in text:
    if k=='@':shifted('2')
+   elif k==':':shifted('semicolon')
    elif k.isupper():shifted(k.lower())
    else:q.key(KEYS.get(k,k))
    time.sleep(.06)
@@ -64,8 +65,9 @@ def main():
   hit=g['wait'](rf'\[pdf\.find\] term={UNIQUE.lower()} page={UNIQUE_PAGE} hits=1 index=1\n',s,300)
   g['wait'](rf'\[pdf\.page\] page={UNIQUE_PAGE} pages={PAGES} width=\d+ height=\d+ ink=(\d+) ms=\d+\n',s,900)
   time.sleep(1.5);q.cmd('screendump',{'filename':str(a.out/'pdf-find.ppm')})
-  # F3: the only hit again, after going round.
-  press('f3',rf'\[pdf\.find\] term={UNIQUE.lower()} page={UNIQUE_PAGE} hits=1 index=1\n')
+  # Ctrl+G (Shell keeps F3): the only hit again, after going round.
+  s=len(t());q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'g'}],'hold-time':80})
+  g['wait'](rf'\[pdf\.find\] term={UNIQUE.lower()} page={UNIQUE_PAGE} hits=1 index=1\n',s,300)
   # A word on every page: Enter steps to the next page's hit.
   s=len(t());q.key('esc');time.sleep(.3);q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'f'}],'hold-time':80})
   for _ in range(len(UNIQUE)):q.key('backspace');time.sleep(.04)
