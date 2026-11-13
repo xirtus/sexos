@@ -157,3 +157,16 @@ fn switching_cycles_the_chosen_layouts() {
     assert!(!k.choose(["xx"]));
     assert_eq!(k.layout().label, "US");
 }
+
+#[test]
+fn shortcuts_follow_the_letters() {
+    // German swaps Y and Z: Ctrl on the key labelled Z sends the US Z code.
+    let mut de = kb("de");
+    assert_eq!(de.shortcut_code(0x15), 0x2C);
+    assert_eq!(de.shortcut_code(0x2C), 0x15);
+    // US is unchanged; non-Latin layouts keep the physical key.
+    let mut us = kb("us");
+    for c in [0x2Eu8, 0x2F, 0x2D, 0x1E, 0x02] { assert_eq!(us.shortcut_code(c), c); }
+    let mut ru = kb("ru");
+    assert_eq!(ru.shortcut_code(0x2E), 0x2E);
+}

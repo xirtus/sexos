@@ -60,3 +60,21 @@ out += ['    (0x%x, %d),' % (s, CLS.index(c)) for s, c in runs]
 out.append('];')
 Path(__file__).resolve().parents[1].joinpath('crates/sex-shape/src/bidi_classes.rs').write_text('\n'.join(out) + '\n')
 print(len(runs), 'bidi runs')
+
+# Which characters take two cells of a text grid: East Asian Width W or F
+# (assigned characters that are not marks, format characters or the Hangul filler).
+wide = []
+for cp in range(0x110000):
+    c = chr(cp)
+    w = unicodedata.east_asian_width(c) in ('W', 'F') and unicodedata.category(c) not in ('Mn', 'Mc', 'Me', 'Cf', 'Cn') and cp != 0x3164
+    if w:
+        if wide and wide[-1][1] == cp - 1: wide[-1][1] = cp
+        else: wide.append([cp, cp])
+out = ['// SPDX-License-Identifier: GPL-2.0-or-later OR MIT',
+       '// Generated from Unicode East Asian Width (W, F) of assigned characters (Unicode %s).' % unicodedata.unidata_version,
+       '// Do not edit: regenerate with scripts/gen_shape_tables.py.', '',
+       '/// Inclusive ranges of characters that take two text cells, sorted.',
+       'pub static WIDE: [(u32, u32); %d] = [' % len(wide)]
+out += ['    (0x%05x, 0x%05x),' % (a, b) for a, b in wide]
+out.append('];')
+Path(__file__).resolve().parent.parent.joinpath('crates/sex-shape/src/wide_table.rs').write_text('\n'.join(out) + '\n')

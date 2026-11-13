@@ -10541,13 +10541,15 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
                     if modifier || value!=1{return true;}
                     // Desktop function keys retain their existing Shell actions.
                     if matches!(code,0x0f|0x29|0x3b..=0x44|0x46|0x52|0x57|0x58|0x59){return false;}
-                    let Some(normalized)=app_input_key_code(destination,code) else{return true};
+                    // Ctrl shortcuts follow the letter on the key under the active layout.
+                    let shortcut=if APP_MODIFIERS.key(code).control{keyboard_layout::shortcut_code(code)}else{code};
+                    let Some(normalized)=app_input_key_code(destination,shortcut) else{return true};
                     if let Some(changed)=keyboard_layout::compose(APP_MODIFIERS.key(normalized),code,|k|{APP_INPUT.push(app_input::Item{destination,input:app_input::Input::Key(k)});}){
                         if changed{keyboard_preedit_notice();}app_input_poll();return true;
                     }
                     let key=keyboard_layout::typing(APP_MODIFIERS.key(normalized),code);
                     let input=if key.control {
-                        match code {0x2e=>app_input::Input::Clipboard(sex_pdx::clipboard::Action::Copy),0x2d=>app_input::Input::Clipboard(sex_pdx::clipboard::Action::Cut),0x2f=>app_input::Input::Clipboard(sex_pdx::clipboard::Action::Paste),_=>app_input::Input::Key(key)}
+                        match shortcut {0x2e=>app_input::Input::Clipboard(sex_pdx::clipboard::Action::Copy),0x2d=>app_input::Input::Clipboard(sex_pdx::clipboard::Action::Cut),0x2f=>app_input::Input::Clipboard(sex_pdx::clipboard::Action::Paste),_=>app_input::Input::Key(key)}
                     }else{app_input::Input::Key(key)};
                     if !APP_INPUT.push(app_input::Item{destination,input}){
                         sex_pdx::serial_record!("[shell.app.input.full] capacity=32 pd={} task={} accepted=0",destination.subject.pd,destination.subject.task);
@@ -10557,10 +10559,11 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
                 if let Some(destination)=focused_program_participant(){
                     if modifier || value!=1{return true;}
                     if matches!(code,0x0f|0x29|0x3b..=0x44|0x46|0x52|0x57|0x58|0x59){return false;}
-                    if let Some(changed)=keyboard_layout::compose(APP_MODIFIERS.key(code),code,|k|{APP_INPUT.push(app_input::Item{destination,input:app_input::Input::Key(k)});}){
+                    let shortcut=if APP_MODIFIERS.key(code).control{keyboard_layout::shortcut_code(code)}else{code};
+                    if let Some(changed)=keyboard_layout::compose(APP_MODIFIERS.key(shortcut),code,|k|{APP_INPUT.push(app_input::Item{destination,input:app_input::Input::Key(k)});}){
                         if changed{keyboard_preedit_notice();}app_input_poll();return true;
                     }
-                    if !APP_INPUT.push(app_input::Item{destination,input:app_input::Input::Key(keyboard_layout::typing(APP_MODIFIERS.key(code),code))}){
+                    if !APP_INPUT.push(app_input::Item{destination,input:app_input::Input::Key(keyboard_layout::typing(APP_MODIFIERS.key(shortcut),code))}){
                         sex_pdx::serial_record!("[shell.app.input.full] capacity=32 pd={} task={} accepted=0",destination.subject.pd,destination.subject.task);
                     }
                     app_input_poll();return true;

@@ -282,6 +282,20 @@ mod shell {
         assert!(desktop_shortcut(0x39,0));assert!(desktop_shortcut(0x1d,0));assert!(desktop_shortcut(0x5b,0));
         while keyboard_layout::active_label()!="US"{keyboard_layout::next();}}
     }
+    #[test] fn actual_ctrl_shortcuts_follow_the_letter_on_the_key(){
+        let _lock=LOCK.lock().unwrap();unsafe{reset();FOCUSED_SURFACE_ID=300;
+        let ctrl=|code:u8|->Key{let before=SENT.len();assert!(desktop_shortcut(0x1d,1));assert!(desktop_shortcut(code,1));assert!(desktop_shortcut(code,0));assert!(desktop_shortcut(0x1d,0));assert_eq!(SENT.len(),before+1);let(_,_,args)=*SENT.last().unwrap();Key::decode(args[0],args[1],args[2]).unwrap()};
+        while keyboard_layout::active_label()!="US"{keyboard_layout::next();}
+        assert_eq!(ctrl(0x2c).code,0x2c);
+        // German: the key labelled Z (US Y position) is Ctrl+Z, undo.
+        while keyboard_layout::active_label()!="DE"{keyboard_layout::next();}
+        let k=ctrl(0x15);assert_eq!((k.code,k.control),(0x2c,true));
+        assert_eq!(ctrl(0x2c).code,0x15);
+        // Plain typing keeps the physical key.
+        let before=SENT.len();assert!(desktop_shortcut(0x15,1));assert!(desktop_shortcut(0x15,0));assert_eq!(SENT.len(),before+1);
+        let(_,_,args)=*SENT.last().unwrap();assert_eq!(Key::decode(args[0],args[1],args[2]).unwrap().code,0x15);
+        while keyboard_layout::active_label()!="US"{keyboard_layout::next();}}
+    }
     #[test] fn actual_shortcut_pinyin_commits_nihao_as_text_keys(){
         let _lock=LOCK.lock().unwrap();unsafe{reset();FOCUSED_SURFACE_ID=300;
         while keyboard_layout::active_label()!="PY"{keyboard_layout::next();}

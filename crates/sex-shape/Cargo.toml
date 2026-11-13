@@ -12,6 +12,8 @@ rustybuzz = { version = "0.20", default-features = false, optional = true }
 [dev-dependencies]
 # MIT/Apache-2.0: the reference the line algorithm is checked against.
 unicode-bidi = "0.3.18"
+# MIT/Apache-2.0: the reference the wide-character table is checked against.
+unicode-width = "0.2"
 
 [features]
 default = []

@@ -23,11 +23,36 @@ pub fn reorder_lines(text: &[u8], cells: &mut [u16], lines: &[u16], count: usize
         let Some(line) = text.get(byte(start)..line_end).and_then(|b| core::str::from_utf8(b).ok()) else { continue };
         let mut order = [0u16; bidi::MAX];
         let Some(n) = bidi::visual_order_into(line, &mut order) else { continue };
-        if n != end - start { continue; }
-        let mut logical = [0u16; bidi::MAX];
-        logical[..n].copy_from_slice(&cells[start..end]);
-        for (visual, &l) in order[..n].iter().enumerate() { cells[start + visual] = logical[l as usize]; }
+        // A wide character has two cells with the same offset: move them together.
+        let mut first_cell = [0u16; bidi::MAX];
+        let mut chars = 0;
+        for k in start..end {
+            if k > start && cells[k] == cells[k - 1] { continue; }
+            if chars == bidi::MAX { chars = usize::MAX; break; }
+            first_cell[chars] = k as u16;
+            chars += 1;
+        }
+        if chars != n { continue; }
+        let mut logical = [0u16; bidi::MAX * 2];
+        if end - start > logical.len() { continue; }
+        logical[..end - start].copy_from_slice(&cells[start..end]);
+        let mut at = start;
+        for &l in &order[..n] {
+            let from = first_cell[l as usize] as usize - start;
+            let width = if l as usize + 1 < n { first_cell[l as usize + 1] as usize - start - from } else { end - start - from };
+            cells[at..at + width].copy_from_slice(&logical[from..from + width]);
+            at += width;
+        }
     }
+}
+
+/// Whether a character takes two cells of a text grid: CJK ideographs, kana,
+/// Hangul, fullwidth forms and emoji (East Asian Width W or F).
+pub fn is_wide(scalar: u32) -> bool {
+    if scalar < 0x1100 { return false; }
+    let table = &super::wide_table::WIDE;
+    let i = table.partition_point(|&(_, last)| last < scalar);
+    i < table.len() && table[i].0 <= scalar
 }
 
 /// The scalar to draw for the character at byte `at` of `text`: an Arabic letter's

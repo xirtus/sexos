@@ -164,4 +164,14 @@ pub static ALL: [Def; 16] = [
     },
 ];
 
+/// The key code that types `letter` (a-z) on a US keyboard.
+pub fn us_code(letter: char) -> Option<u8> {
+    for (row, codes) in [US_R0, US_R1, US_R2, US_R3].iter().zip(ROW_CODES) {
+        for (key, &code) in row.split(' ').zip(codes) {
+            if key.starts_with(letter) { return Some(code); }
+        }
+    }
+    None
+}
+
 pub fn by_name(name: &str) -> Option<usize> { ALL.iter().position(|d| d.name == name) }

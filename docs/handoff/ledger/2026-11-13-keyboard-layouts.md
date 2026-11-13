@@ -75,3 +75,23 @@ now also checks ب ﺳ ש न ก.
 
 **Next.** Display cells are one per scalar: double-width CJK cells and full rustybuzz shaping in
 Display (it needs an allocator) remain. A10 (repeat, Caps-as-Ctrl from Settings) waits for B1.
+
+## Double-width cells and layout-aware shortcuts
+
+**Wide cells.** CJK, Hangul, fullwidth forms and emoji (Unicode East Asian Width W or F, minus
+marks and format characters) take two Display cells. `sex_shape::cells::is_wide` reads a range
+table generated into `crates/sex-shape/src/wide_table.rs` by `scripts/gen_shape_tables.py`; a host
+test compares it with the `unicode-width` crate (dev-only, MIT/Apache) over U+1100..U+2FFFF.
+Display's `recompute_text_lines` pushes a wide scalar's byte offset twice, wraps before it when it
+would split, and draws one glyph across both halves (`glyphs::MAX_W` 192). In right-to-left rows
+`reorder_lines` moves the pair as one. Tests: `crates/sex-shape/tests/text.rs`,
+`tests/display_text_readability.rs`.
+
+**Shortcuts follow the layout.** `Keyboard::shortcut_code` maps a key to the US key of the Latin
+letter the active layout puts there, so Ctrl+Z on a German keyboard is undo and Ctrl+A on AZERTY
+selects all. Non-Latin layouts (Russian, Hebrew, Arabic, ...) keep the physical key. Shell applies
+it while Ctrl is held, before browser commands and the clipboard keys; typing and compose still use
+the physical key. Tests: `crates/sex-keymap/tests/layouts.rs`, `tests/app_input.rs`
+(`actual_ctrl_shortcuts_follow_the_letter_on_the_key`).
+
+**Next.** A10 (key repeat, Caps-as-Ctrl from Settings) after Settings PR #170.
