@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! `wifi`: what sexnet's Intel Wi-Fi chip is doing and the networks its last scan
 //! heard (`sex_pdx::wifi_status`). `wifi scan` asks for a fresh scan; `wifi join N`
-//! connects to network N (open networks), `wifi join N PASSPHRASE` to a WPA2 one:
-//! the passphrase goes to sexnet in 7-byte parts, then the join.
+//! connects to network N (open networks), `wifi join N PASSPHRASE` to a WPA2/WPA3
+//! one: the passphrase goes to sexnet in 7-byte parts, then the join. sexnet keeps
+//! the network for this boot and rejoins it by itself after a lost link; `wifi leave`
+//! disconnects and forgets it.
 //!
 //! sexnet answers each request with one reply word, which `receive` turns into
 //! lines; a network takes a few words (its facts, its BSSID, its SSID in 7-byte
@@ -17,7 +19,7 @@ const MAX_LISTED: u64 = 64;
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Waiting {
     Nothing,
-    State { scan: bool, join: bool },
+    State { scan: bool, join: bool, leave: bool },
     Network { index: u64, part: u64 },
     /// Passphrase part `part` sent; the join of network `index` follows the last.
     Password { index: u64, part: u64 },
@@ -40,7 +42,7 @@ pub static mut WIFI: Wifi = Wifi {
     password_len: 0,
 };
 
-const USAGE: &[u8] = b"Use: wifi [scan | join N [PASSPHRASE]]";
+const USAGE: &[u8] = b"Use: wifi [scan | join N [PASSPHRASE] | leave]";
 
 fn ask(action: u64, a: u64, b: u64) -> bool {
     let (status, _) = sex_pdx::pdx_call(sex_pdx::SLOT_NET, ws::OP, action, a, b);
@@ -66,8 +68,13 @@ fn hex(out: &mut [u8], at: &mut usize, b: u8) {
 }
 
 /// The state line for a state word.
-fn state_line(s: ws::State, scan: bool, join: bool, out: &mut [u8]) -> usize {
+fn state_line(s: ws::State, scan: bool, join: bool, leave: bool, out: &mut [u8]) -> usize {
     let mut at = 0;
+    if leave {
+        put(out, &mut at, if s.phase == ws::NONE { b"Wi-Fi: no Intel Wi-Fi chip here." as &[u8] }
+            else { b"Wi-Fi: left the network and forgot it; the chip restarts and scans again." });
+        return at;
+    }
     match s.phase {
         ws::NONE => put(out, &mut at, b"Wi-Fi: no Intel Wi-Fi chip here, or its firmware is missing."),
         ws::STARTING => put(out, &mut at, b"Wi-Fi: starting the chip's firmware; try again in a moment."),
@@ -89,15 +96,17 @@ fn state_line(s: ws::State, scan: bool, join: bool, out: &mut [u8]) -> usize {
             put(out, &mut at, b").");
             if scan || join { put(out, &mut at, b" That is not possible right now."); }
         }
-        ws::JOINING => put(out, &mut at, b"Wi-Fi: connecting to the network; type wifi to see how it went."),
+        ws::JOINING => put(out, &mut at, if join {
+            b"Wi-Fi: connecting (the chip restarts first if it was busy); type wifi to see how it went." as &[u8]
+        } else { b"Wi-Fi: connecting to the network; type wifi to see how it went." }),
         ws::JOINED | ws::ASSOCIATING | ws::HANDSHAKE => put(out, &mut at, if scan || join {
             b"Wi-Fi: already joining a network." as &[u8]
         } else { b"Wi-Fi: connecting to the network; type wifi to see how it went." }),
-        ws::ASSOCIATED | ws::CONNECTED => put(out, &mut at, if scan || join {
-            b"Wi-Fi: already connected to a network; leaving it comes later." as &[u8]
-        } else if s.phase == ws::CONNECTED { b"Wi-Fi: connected (WPA2); the network service now uses Wi-Fi." }
+        ws::ASSOCIATED | ws::CONNECTED => put(out, &mut at, if scan {
+            b"Wi-Fi: connected; scanning while connected comes later (wifi leave first)." as &[u8]
+        } else if join { b"Wi-Fi: connected; that network was busy, try again." } else if s.phase == ws::CONNECTED { b"Wi-Fi: connected (WPA2); the network service now uses Wi-Fi." }
         else { b"Wi-Fi: connected to the open network; the network service now uses Wi-Fi." }),
-        _ => put(out, &mut at, b"Wi-Fi: the chip stopped; the boot log's [wifi.failed] line says where."),
+        _ => put(out, &mut at, b"Wi-Fi: the last step failed (the boot log's [wifi.failed] line says where); wifi scan restarts the chip."),
     }
     at
 }
@@ -163,13 +172,18 @@ impl Wifi {
         let (action, a, scan, join) = match (words.next(), words.next(), words.next()) {
             (None, _, _) => (ws::STATE, 0, false, false),
             (Some(b"scan"), None, _) => (ws::SCAN, 0, true, false),
+            (Some(b"leave") | Some(b"forget"), None, _) => {
+                if ask(ws::LEAVE, 0, 0) { self.waiting = Waiting::State { scan: false, join: false, leave: true }; }
+                else { sb.push(b"Wi-Fi: the network service is unreachable."); }
+                return;
+            }
             (Some(b"join"), Some(n), rest) => {
                 let Some(n) = parse(n) else { sb.push(USAGE); return; };
                 if rest.is_none() { (ws::JOIN, n - 1, false, true) } else {
                     // Everything after N is the passphrase (it may hold spaces).
                     let pw = passphrase(args);
                     if !(ws::PASSWORD_MIN..=ws::PASSWORD_MAX).contains(&pw.len()) {
-                        sb.push(b"Wi-Fi: a WPA2 passphrase has 8 to 63 characters.");
+                        sb.push(b"Wi-Fi: a Wi-Fi passphrase has 8 to 63 characters.");
                         return;
                     }
                     self.password = [0; ws::PASSWORD_MAX];
@@ -182,7 +196,7 @@ impl Wifi {
             }
             _ => { sb.push(USAGE); return; }
         };
-        if ask(action, a, 0) { self.waiting = Waiting::State { scan, join }; } else { sb.push(b"Wi-Fi: the network service is unreachable."); }
+        if ask(action, a, 0) { self.waiting = Waiting::State { scan, join, leave: false }; } else { sb.push(b"Wi-Fi: the network service is unreachable."); }
     }
 
     /// A reply from sexnet. False when it was not for a `wifi` command.
@@ -194,9 +208,9 @@ impl Wifi {
         let mut line = [0u8; 128];
         match waiting {
             Waiting::Nothing => return false,
-            Waiting::State { scan, join } => {
+            Waiting::State { scan, join, leave } => {
                 let s = ws::State::of(value);
-                let n = state_line(s, scan, join, &mut line);
+                let n = state_line(s, scan, join, leave, &mut line);
                 sb.push(&line[..n]);
                 sex_pdx::serial_record!("[spindle.wifi] phase={} networks={} scans={} channels={}", s.phase, s.networks, s.scans, s.channels);
                 // A scan just started has nothing finished to list yet.
@@ -211,7 +225,7 @@ impl Wifi {
                     return true;
                 }
                 self.forget();
-                if ask(ws::JOIN, index, 0) { self.waiting = Waiting::State { scan: false, join: true }; }
+                if ask(ws::JOIN, index, 0) { self.waiting = Waiting::State { scan: false, join: true, leave: false }; }
             }
             Waiting::Network { index, part } => {
                 if value == ws::MISSING { return true; }

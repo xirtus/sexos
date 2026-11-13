@@ -7,7 +7,12 @@ loads a page over IPv6 through the same HTTP exchanges the browser uses.
 
 The far side is this script: a peer on QEMU's socket network backend that speaks
 IPv6 frames itself (router, neighbor discovery, a small TCP and UDP echo server, and
-a TCP client), because the build hosts have no IPv6 for QEMU's user network to use."""
+a TCP client), because the build hosts have no IPv6 for QEMU's user network to use.
+
+The network has no IPv4 at all, so names resolve only through what IPv6 says: the
+router advertisement carries the resolver (RDNSS) and sets the O flag, so the machine
+also asks stateless DHCPv6 (an Information-Request answered here). Then
+`run +net peek http://six.test/` must look the name up over IPv6 and load the page."""
 import argparse,os,re,shutil,socket,struct,threading,time
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
@@ -19,6 +24,8 @@ def eui64(mac):return bytes([mac[0]^2])+mac[1:3]+b'\xff\xfe'+mac[3:]
 GUEST=PREFIX+eui64(GUEST_MAC);GUEST_LL=bytes.fromhex('fe80000000000000')+eui64(GUEST_MAC)
 PAGE=b'<html><body><h1>Hello over IPv6</h1><p>Fetched by a program, by address.</p></body></html>'
 ALL_NODES=bytes.fromhex('ff02'+'00'*13+'01')
+ALL_DHCP=bytes.fromhex('ff02'+'00'*11+'010002')
+NAME=b'six.test'
 def text6(a):return socket.inet_ntop(socket.AF_INET6,a) if hasattr(socket,'inet_ntop') else a.hex()
 
 def checksum(data):
@@ -38,14 +45,16 @@ class Peer:
  """One end of QEMU's socket backend: length-prefixed Ethernet frames."""
  def __init__(self):
   self.server=socket.socket();self.server.bind(('127.0.0.1',0));self.server.listen(1);self.port=self.server.getsockname()[1]
-  self.conn=None;self.lock=threading.Lock();self.log=[];self.tcp={};self.client=None;self.udp=[];self.ra_sent=0;self.rs_seen=0;self.ns_seen=0
+  self.conn=None;self.lock=threading.Lock();self.log=[];self.tcp={};self.client=None;self.udp=[];self.ra_sent=0;self.rs_seen=0;self.ns_seen=0;self.dhcp6=[];self.dns=[]
   threading.Thread(target=self.serve,daemon=True).start()
  def send(self,frame):
   frame=frame.ljust(60,b'\0')
   with self.lock:self.conn.sendall(struct.pack('!I',len(frame))+frame)
  def ra(self):
   options=b'\x01\x01'+PEER_MAC+struct.pack('!BBBBIII',3,4,64,0xC0,86400,14400,0)+PREFIX+bytes(8)
-  body=struct.pack('!BBHBBHII',134,0,0,64,0,1800,0,0)+options
+  # RDNSS (RFC 8106): this peer resolves names. O flag: ask DHCPv6 for the rest.
+  options+=struct.pack('!BBHI',25,3,0,600)+PEER
+  body=struct.pack('!BBHBBHII',134,0,0,64,0x40,1800,0,0)+options
   self.send(ether(mcast_mac(ALL_NODES),ip6(PEER_LL,ALL_NODES,58,body,255)));self.ra_sent+=1
  def serve(self):
   self.conn,_=self.server.accept();buf=b''
@@ -75,11 +84,34 @@ class Peer:
     na=struct.pack('!BBHI',136,0,0,0xE0000000)+body[8:24]+b'\x02\x01'+PEER_MAC
     self.send(ether(f[6:12],ip6(body[8:24],src,58,na,255)))
    elif kind==128 and dst==PEER:self.send(ether(f[6:12],ip6(PEER,src,58,b'\x81'+body[1:])))
+  elif nh==17 and dst==ALL_DHCP and struct.unpack('!H',body[2:4])[0]==547:self.dhcpv6(f[6:12],src,body[8:])
+  elif nh==17 and dst==PEER and struct.unpack('!H',body[2:4])[0]==53:self.resolve(f[6:12],src,struct.unpack('!H',body[:2])[0],body[8:])
   elif nh==17 and dst==PEER:
    sport,dport=struct.unpack('!HH',body[:4]);payload=body[8:]
    self.udp.append((text6(src),sport,payload))
    if dport==7:self.send(ether(f[6:12],ip6(PEER,src,17,struct.pack('!HHHH',7,sport,8+len(payload),0)+payload)))
   elif nh==6 and dst==PEER:self.segment(f[6:12],src,body)
+ def dhcpv6(self,mac,src,m):
+  # Stateless DHCPv6: answer an Information-Request with this peer as the resolver.
+  if m[0]!=11:return
+  self.dhcp6.append(m)
+  client=b'';at=4
+  while at+4<=len(m):
+   code,n=struct.unpack('!HH',m[at:at+4])
+   if code==1:client=m[at:at+4+n]
+   at+=4+n
+  reply=bytes([7])+m[1:4]+client+struct.pack('!HHHH',2,10,3,1)+PEER_MAC+struct.pack('!HH',23,16)+PEER
+  self.send(ether(mac,ip6(PEER_LL,src,17,struct.pack('!HHHH',547,546,8+len(reply),0)+reply)))
+ def resolve(self,mac,src,sport,q):
+  # One name: AAAA gives this peer, A has no data (there is no IPv4 here).
+  name=[];at=12
+  while q[at]:name.append(q[at+1:at+1+q[at]]);at+=1+q[at]
+  kind=struct.unpack('!H',q[at+1:at+3])[0];question=q[12:at+5];self.dns.append((b'.'.join(name),kind))
+  known=b'.'.join(name).lower()==NAME
+  answer=struct.pack('!HHHIH',0xc00c,28,1,60,16)+PEER if known and kind==28 else b''
+  head=q[:2]+struct.pack('!HHHHH',0x8180 if known else 0x8183,1,1 if answer else 0,0,0)
+  r=head+question+answer
+  self.send(ether(mac,ip6(PEER,src,17,struct.pack('!HHHH',53,sport,8+len(r),0)+r)))
  def tcp_out(self,mac,src,dst,sport,dport,seq,ack,flags,payload=b''):
   head=struct.pack('!HHIIBBHHH',sport,dport,seq,ack,5<<4,flags,65535,0,0)
   self.send(ether(mac,ip6(src,dst,6,head+payload)))
@@ -170,7 +202,16 @@ def main():
   assert any(c['port']==80 and c['got'].startswith(b'GET /page.html HTTP/1.0\r\nHost: ['+text6(PEER).encode()+b']\r\n') for c in peer.tcp.values()),[c['got'][:80] for c in peer.tcp.values()]
   assert peer.udp and peer.udp[0][2]==b'hello by UDP',peer.udp
   q.cmd('screendump',{'filename':str(a.out/'peek.ppm')});time.sleep(.5)
+  # By name, on a network with no IPv4: the resolver came from IPv6 (RDNSS, DHCPv6).
+  assert peer.dhcp6,'no DHCPv6 Information-Request'
+  m=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,30)
+  g['focus'](int(m[3]));time.sleep(.3);s=len(t());q.key('f11');g['wait'](rf'\[app.private.retired\] target={m[1]} task={m[2]} ',s,90)
+  g['focus'](153);time.sleep(.5);s=len(t())
+  keys('run +net peek http://six.test/page.html');q.key('ret')
+  r=g['wait'](r'\[peek.(got\] [^\n]*|refused\] [^\n]*)',s,120)[0];assert r.startswith('[peek.got] status=200 bytes='+str(len(PAGE))),(r,peer.dns)
+  assert (NAME,28) in peer.dns,peer.dns
+  assert any(c['got'].startswith(b'GET /page.html HTTP/1.0\r\nHost: six.test\r\n') for c in peer.tcp.values()),[c['got'][:80] for c in peer.tcp.values()]
   assert 'KERNEL PANIC' not in t() and 'panicked' not in t()
-  print({'ok':True,'address':address,'router_solicitations':peer.rs_seen,'neighbor_solicitations':peer.ns_seen,'peer_errors':[l for l in peer.log if l.startswith('error')]})
+  print({'ok':True,'address':address,'router_solicitations':peer.rs_seen,'neighbor_solicitations':peer.ns_seen,'dhcpv6_requests':len(peer.dhcp6),'dns_questions':len(peer.dns),'peer_errors':[l for l in peer.log if l.startswith('error')]})
  finally:g['stop']()
 if __name__=='__main__':main()

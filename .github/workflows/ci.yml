@@ -63,6 +63,8 @@ jobs:
       run: cargo test --locked -p sex-shape --features shaping
     - name: Pinyin input method
       run: cargo test --locked -p sex-ime
+    - name: Network stack (IPv6 resolvers, accept backlog, UDP queues) on the host
+      run: cargo test --locked -p sex-net --lib
     - name: Crash record format host regressions
       run: bash scripts/crash_log_host_gate.sh
     - name: Experimental JS baseline JIT differential and emitted-code gates
@@ -146,6 +148,8 @@ jobs:
         python3 scripts/program_std_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/programs-std"
     - name: Large reads must reach the device
       run: python3 scripts/program_bench_gate.py --large-read --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/large-read"
+    - name: IPv6-only network (SLAAC, RDNSS, DHCPv6, sockets, name lookup)
+      run: python3 scripts/program_ipv6_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/ipv6"
     - name: Web page JavaScript (native QuickJS tier)
       run: |
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends python3-pil

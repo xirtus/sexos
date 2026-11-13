@@ -333,7 +333,7 @@ fn run6(e:&mut Engine<'static>,now:&mut u64,turns:usize)->Vec<Six>{
  let mut out=Vec::new();
  for _ in 0..turns{
   let Some(f)=tick(e,now) else{continue};let Some(s)=parse6(&f) else{continue};
-  if s.next==58&&s.body[0]==135&&(s.body[8..24]==PEER6||s.body[8..24]==PEER_LL6){
+  if s.next==58&&s.body[0]==135&&(s.body[8..24]==PEER6||s.body[8..24]==PEER_LL6||s.body[8..24]==RESOLVER6){
    let mut na=vec![136,0,0,0,0xe0,0,0,0];na.extend_from_slice(&s.body[8..24]);na.extend_from_slice(&[2,1]);na.extend_from_slice(&PEER);
    let target:[u8;16]=s.body[8..24].try_into().unwrap();e.submit_frame(&ip6(OUR,target,s.src,58,&na,255)).unwrap();continue;
   }
@@ -437,4 +437,159 @@ fn resolving()->(Engine<'static>,u64,Vec<(u16,Vec<u8>)>){
  assert_eq!(e.open_resolved_all(),Ok(Some(Answers{v6:None,v4:Some([192,0,2,8])})));
  // The IPv4-only question of old asks A alone.
  e.open_resolve(b"old.example").unwrap();let mut n=0;for _ in 0..8{if let Some(f)=tick(&mut e,&mut now){if parse_udp(&f).is_some(){n+=1;}}}assert_eq!(n,1);
+}
+
+// IPv6-only networks: resolvers from router advertisements (RDNSS) and stateless DHCPv6.
+const RESOLVER6:[u8;16]=[0xfd,0,0,0x5e,0,0,0,1,0,0,0,0,0,0,0,0x53];
+const DHCP_RESOLVER6:[u8;16]=[0xfd,0,0,0x5e,0,0,0,2,0,0,0,0,0,0,0,0x53];
+const OUR_LL6:[u8;16]=[0xfe,0x80,0,0,0,0,0,0,0x50,0x54,0,0xff,0xfe,0x12,0x34,0x56];
+/// A router advertisement with flags `mo` (M 0x80, O 0x40) and an RDNSS option when `rdnss` has a lifetime.
+fn advert(mo:u8,rdnss:Option<u32>)->Vec<u8>{
+ let mut b=vec![134,0,0,0,64,mo,0x07,0x08,0,0,0,0,0,0,0,0,1,1];b.extend_from_slice(&PEER);
+ b.extend_from_slice(&[3,4,64,0xc0]);b.extend_from_slice(&86400u32.to_be_bytes());b.extend_from_slice(&14400u32.to_be_bytes());b.extend_from_slice(&[0;4]);b.extend_from_slice(&PREFIX6);b.extend_from_slice(&[0;8]);
+ if let Some(life)=rdnss{b.extend_from_slice(&[25,3,0,0]);b.extend_from_slice(&life.to_be_bytes());b.extend_from_slice(&RESOLVER6);}
+ ip6([0x33,0x33,0,0,0,1],PEER_LL6,ALL_NODES,58,&b,255)
+}
+fn slaac_with(frame:Vec<u8>)->(Engine<'static>,u64,Vec<Six>){
+ let(mut e,mut now)=attached();run6(&mut e,&mut now,8);
+ e.submit_frame(&frame).unwrap();let out=run6(&mut e,&mut now,8);(e,now,out)
+}
+fn udp6(src:[u8;16],dst:[u8;16],sport:u16,dport:u16,body:&[u8])->Vec<u8>{
+ let mut u=sport.to_be_bytes().to_vec();u.extend_from_slice(&dport.to_be_bytes());u.extend_from_slice(&((8+body.len())as u16).to_be_bytes());u.extend_from_slice(&[0,0]);u.extend_from_slice(body);
+ ip6(OUR,src,dst,17,&u,64)
+}
+#[test]fn rdnss_gives_an_ipv6_only_network_its_resolver_and_aaaa_lookups_use_it(){
+ let(mut e,mut now,_)=slaac_with(advert(0,Some(600)));
+ assert_eq!(e.open_lease(),None);assert_eq!(e.open_resolver(),Some(Address::V6(RESOLVER6)));
+ e.open_resolve_all(b"six.example").unwrap();
+ let qs:Vec<Six>=run6(&mut e,&mut now,8).into_iter().filter(|s|s.next==17).collect();
+ assert_eq!(qs.len(),2,"A and AAAA");for q in &qs{assert_eq!((q.src,q.dst),(OUR6,RESOLVER6));assert_eq!(u16::from_be_bytes([q.body[2],q.body[3]]),53);}
+ let aaaa=qs.iter().find(|q|q.body[q.body.len()-4..]==[0,28,0,1]).unwrap();let a=qs.iter().find(|q|q.body[q.body.len()-4..]==[0,1,0,1]).unwrap();
+ let port=u16::from_be_bytes([aaaa.body[0],aaaa.body[1]]);
+ e.submit_frame(&udp6(RESOLVER6,OUR6,53,port,&answer(&aaaa.body[8..],&PEER6))).unwrap();run6(&mut e,&mut now,2);
+ // A from the wrong source is ignored; the right one says there is no IPv4 address.
+ let mut none=a.body[8..].to_vec();none[2]=0x81;none[3]=0x83;
+ e.submit_frame(&udp6(PEER6,OUR6,53,port,&answer(&a.body[8..],&[192,0,2,1]))).unwrap();run6(&mut e,&mut now,2);
+ e.submit_frame(&udp6(RESOLVER6,OUR6,53,port,&none)).unwrap();run6(&mut e,&mut now,2);
+ assert_eq!(e.open_resolved_all(),Ok(Some(Answers{v6:Some(PEER6),v4:None})));
+}
+#[test]fn rdnss_lifetimes_expire_and_zero_removes_the_resolver(){
+ let(mut e,mut now,_)=slaac_with(advert(0,Some(2)));
+ assert_eq!(e.open_resolver(),Some(Address::V6(RESOLVER6)));
+ now+=2000;e.advance(now);assert_eq!(e.open_resolver(),None,"lifetime ran out");
+ e.submit_frame(&advert(0,Some(600))).unwrap();run6(&mut e,&mut now,4);assert_eq!(e.open_resolver(),Some(Address::V6(RESOLVER6)));
+ e.submit_frame(&advert(0,Some(0))).unwrap();run6(&mut e,&mut now,4);assert_eq!(e.open_resolver(),None,"lifetime 0 withdraws it");
+ // The leased IPv4 resolver comes first on a dual-stack network.
+ e.submit_frame(&advert(0,Some(600))).unwrap();run6(&mut e,&mut now,4);
+ e.open.as_mut().unwrap().lease=Some(Lease{address:LOCAL,prefix:24,gateway:Some(PEER_IP),dns:Some(PEER_IP)});
+ assert_eq!(e.open_resolver(),Some(Address::V4(PEER_IP)));assert_eq!(e.open_resolvers6()[0],Some(RESOLVER6));
+}
+#[test]fn forged_adverts_are_ignored(){
+ for bad in 0..3{
+  let mut f=advert(0x40,Some(600));
+  match bad{0=>f[21]=64,1=>{f[22..38].copy_from_slice(&PEER6);},_=>{let n=f.len();f[n-1]^=1;}}
+  assert_eq!(v6config::router_advert(&f),None,"{bad}");
+ }
+ let a=v6config::router_advert(&advert(0x40,Some(600))).unwrap();assert!(a.other&&!a.managed);assert_eq!(a.resolvers[0],Some((RESOLVER6,600)));
+}
+fn dhcp6_reply(xid:&[u8],resolver:[u8;16],refresh:Option<u32>,client:[u8;6])->Vec<u8>{
+ let mut m=vec![7];m.extend_from_slice(xid);
+ m.extend_from_slice(&[0,1,0,10]);m.extend_from_slice(&v6config::duid(client));
+ m.extend_from_slice(&[0,2,0,10,0,3,0,1]);m.extend_from_slice(&PEER);
+ m.extend_from_slice(&[0,23,0,16]);m.extend_from_slice(&resolver);
+ if let Some(r)=refresh{m.extend_from_slice(&[0,32,0,4]);m.extend_from_slice(&r.to_be_bytes());}
+ m
+}
+#[test]fn the_other_config_flag_starts_stateless_dhcpv6_for_resolvers(){
+ let(mut e,mut now,out)=slaac_with(advert(0x40,None));
+ assert_eq!(e.open_resolver(),None);
+ let req=out.into_iter().find(|s|s.next==17).expect("Information-Request");
+ assert_eq!((req.src,req.dst),(OUR_LL6,v6config::ALL_SERVERS));
+ assert_eq!(u16::from_be_bytes([req.body[0],req.body[1]]),546);assert_eq!(u16::from_be_bytes([req.body[2],req.body[3]]),547);
+ let m=&req.body[8..];assert_eq!(m[0],11);
+ assert!(m.windows(4).any(|w|w==[0,6,0,4]),"asks for options");assert!(m.windows(10).any(|w|w==v6config::duid(OUR)),"names itself by DUID-LL");
+ // No answer: it asks again, waiting about twice as long each time.
+ let mut at=Vec::new();for _ in 0..9000{now+=1;e.advance(now);if let Some(f)=e.take_frame(){if parse6(&f).is_some_and(|s|s.next==17){at.push(now);}}}
+ assert!(at.len()>=3,"{at:?}");let (g1,g2)=(at[1]-at[0],at[2]-at[1]);assert!(g2>=g1*17/10,"backoff {g1} then {g2}");
+ // A reply for another transaction or client does nothing; the right one gives the resolver.
+ let xid=m[1..4].to_vec();
+ e.submit_frame(&udp6(PEER_LL6,OUR_LL6,547,546,&dhcp6_reply(&[9,9,9],DHCP_RESOLVER6,None,OUR))).unwrap();run6(&mut e,&mut now,2);
+ e.submit_frame(&udp6(PEER_LL6,OUR_LL6,547,546,&dhcp6_reply(&xid,DHCP_RESOLVER6,None,PEER))).unwrap();run6(&mut e,&mut now,2);
+ assert_eq!(e.open_resolver(),None);
+ let latest=at.last().copied().unwrap();let _=latest;
+ // Elapsed time moved on, but the transaction id stays for the whole exchange.
+ e.submit_frame(&udp6(PEER_LL6,OUR_LL6,547,546,&dhcp6_reply(&xid,DHCP_RESOLVER6,Some(700),OUR))).unwrap();run6(&mut e,&mut now,2);
+ assert_eq!(e.open_resolver(),Some(Address::V6(DHCP_RESOLVER6)));
+ // Asked again only when the refresh time is up.
+ let mut asked=0;for _ in 0..1000{now+=1;e.advance(now);if e.take_frame().and_then(|f|parse6(&f)).is_some_and(|s|s.next==17){asked+=1;}}assert_eq!(asked,0);
+ now+=700_000;e.advance(now);let again=run6(&mut e,&mut now,4).into_iter().find(|s|s.next==17).expect("refresh");assert_eq!(again.body[8],11);
+}
+
+// A port's backlog: many peers connect before the program accepts any.
+fn syn6(sport:u16,dport:u16,seq:u32,ack:u32,flags:u8)->Vec<u8>{
+ let mut t=vec![0u8;20];t[0..2].copy_from_slice(&sport.to_be_bytes());t[2..4].copy_from_slice(&dport.to_be_bytes());t[4..8].copy_from_slice(&seq.to_be_bytes());t[8..12].copy_from_slice(&ack.to_be_bytes());t[12]=5<<4;t[13]=flags;t[14..16].copy_from_slice(&8192u16.to_be_bytes());
+ ip6(OUR,PEER6,OUR6,6,&t,64)
+}
+#[test]fn sixty_four_peers_connect_at_once_to_a_backlog_and_each_is_accepted(){
+ let(mut e,mut now)=slaac();
+ const N:usize=64;let flows:Vec<usize>=(0..N).map(|_|e.open_add_flow().unwrap()).collect();
+ for f in &flows{e.open_listen_group(*f,8080,1).unwrap();}
+ assert_eq!(e.open_backlog(1),N);
+ // Another group, or a plain listener, can't take the port.
+ let other=e.open_add_flow().unwrap();assert_eq!(e.open_listen(other,8080),Err(Error::Busy));assert_eq!(e.open_listen_group(other,8080,2),Err(Error::Busy));
+ let mut ours=std::collections::HashMap::new();
+ for i in 0..N as u16{
+  e.submit_frame(&syn6(41000+i,8080,1000,0,2)).unwrap();
+  for s in run6(&mut e,&mut now,3){if s.next==6&&s.body[13]&0x12==0x12{ours.insert(u16::from_be_bytes([s.body[2],s.body[3]]),u32::from_be_bytes(s.body[4..8].try_into().unwrap()));}}
+ }
+ assert_eq!(ours.len(),N,"every SYN answered");assert_eq!(e.open_accepted(1),None);
+ for (port,seq) in &ours{e.submit_frame(&syn6(*port,8080,1001,seq+1,0x10)).unwrap();run6(&mut e,&mut now,1);}
+ let mut peers=std::collections::HashSet::new();
+ while let Some(f)=e.open_accepted(1){e.open_take(f);peers.insert(e.open_peer(f).unwrap().1);}
+ assert_eq!(peers.len(),N);assert_eq!(e.open_backlog(1),0);
+ // Refilled, the backlog takes the next peer.
+ e.open_listen_group(other,8080,1).unwrap();e.submit_frame(&syn6(42000,8080,5,0,2)).unwrap();
+ assert!(run6(&mut e,&mut now,3).iter().any(|s|s.next==6&&s.body[13]&0x12==0x12));
+}
+#[test]fn a_thousand_datagrams_arrive_without_loss_and_a_burst_queues(){
+ let(mut e,mut now)=slaac();let s=e.open_add_udp().unwrap();e.open_udp_bind(s,9000).unwrap();
+ let mut got=0u32;let mut out=[0u8;64];
+ for i in 0..1000u32{
+  e.submit_frame(&udp6(PEER6,OUR6,5000,9000,&i.to_be_bytes())).unwrap();run6(&mut e,&mut now,1);
+  if i%50==49{while let Ok(Some((_,_,n)))=e.open_udp_receive(s,&mut out){assert_eq!(&out[..n],&got.to_be_bytes());got+=1;}}
+ }
+ assert_eq!(got,1000);
+ // A burst the size of the queue waits whole for a program that reads late.
+ for i in 0..UDP_PACKETS as u32{e.submit_frame(&udp6(PEER6,OUR6,5000,9000,&[i as u8;1000])).unwrap();run6(&mut e,&mut now,1);}
+ let mut n=0;while let Ok(Some(_))=e.open_udp_receive(s,&mut out){n+=1;}assert_eq!(n,UDP_PACKETS);
+}
+
+// The resolver cache: answers kept for their TTL, a name with no address for a short while.
+fn answer_ttl(query:&[u8],data:&[u8],ttl:u32)->Vec<u8>{let mut r=answer(query,data);let n=r.len();r[n-6-data.len()..n-2-data.len()].copy_from_slice(&ttl.to_be_bytes());r}
+fn queries(e:&mut Engine<'static>,now:&mut u64)->Vec<(u16,Vec<u8>)>{let mut v=Vec::new();for _ in 0..8{if let Some(f)=tick(e,now){if let Some((port,53,q))=parse_udp(&f){v.push((port,q));}}}v}
+#[test]fn answers_are_cached_for_their_ttl_and_then_asked_again(){
+ let(mut e,mut now,q)=resolving();
+ e.submit_frame(&udp(PEER_IP,LOCAL,53,q[0].0,&answer_ttl(&q[0].1,&[192,0,2,7],120))).unwrap();tick(&mut e,&mut now);
+ e.submit_frame(&udp(PEER_IP,LOCAL,53,q[1].0,&answer_ttl(&q[1].1,&PEER6,60))).unwrap();tick(&mut e,&mut now);
+ let both=Some(Answers{v6:Some(PEER6),v4:Some([192,0,2,7])});
+ assert_eq!(e.open_resolved_all(),Ok(both));assert_eq!(e.open_cache_len(),1);
+ // Asked again, in any letter case: answered at once, nothing sent.
+ e.open_resolve_all(b"BOTH.example").unwrap();assert_eq!(e.open_resolved_all(),Ok(both));assert!(queries(&mut e,&mut now).is_empty());
+ e.open_resolve(b"both.example").unwrap();assert_eq!(e.open_resolved(),Ok(Some([192,0,2,7])));
+ // The shorter TTL (60 s) rules: after it, the resolver is asked again.
+ now+=60_000;e.advance(now);e.submit_frame(&arp()).unwrap();tick(&mut e,&mut now);e.open_resolve_all(b"both.example").unwrap();assert_eq!(queries(&mut e,&mut now).len(),2);
+}
+#[test]fn a_name_with_no_address_is_remembered_briefly_and_ipv4_only_answers_dont_stand_for_both(){
+ let(mut e,mut now,q)=resolving();
+ for (port,query) in &q{let mut r=query.clone();r[2]=0x81;r[3]=0x83;e.submit_frame(&udp(PEER_IP,LOCAL,53,*port,&r)).unwrap();tick(&mut e,&mut now);}
+ assert_eq!(e.open_resolved_all(),Err(Error::Protocol));
+ e.open_resolve_all(b"both.example").unwrap();assert_eq!(e.open_resolved_all(),Err(Error::Protocol));assert!(queries(&mut e,&mut now).is_empty());
+ now+=CACHE_NEGATIVE_TTL as u64*1000;e.advance(now);e.submit_frame(&arp()).unwrap();tick(&mut e,&mut now);e.open_resolve_all(b"both.example").unwrap();assert_eq!(queries(&mut e,&mut now).len(),2);
+ // An A-only lookup is cached, but a later lookup wanting AAAA too still asks.
+ e.open_resolve(b"four.example").unwrap();let q=queries(&mut e,&mut now);assert_eq!(q.len(),1);
+ e.submit_frame(&udp(PEER_IP,LOCAL,53,q[0].0,&answer_ttl(&q[0].1,&[192,0,2,9],300))).unwrap();tick(&mut e,&mut now);
+ assert_eq!(e.open_resolved(),Ok(Some([192,0,2,9])));
+ e.open_resolve(b"four.example").unwrap();assert!(queries(&mut e,&mut now).is_empty());assert_eq!(e.open_resolved(),Ok(Some([192,0,2,9])));
+ e.open_resolve_all(b"four.example").unwrap();assert_eq!(queries(&mut e,&mut now).len(),2);
+ e.open_cache_flush();assert_eq!(e.open_cache_len(),0);
 }
