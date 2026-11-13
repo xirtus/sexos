@@ -31,9 +31,13 @@ pub enum Ask {
     Volume,
     /// A player key with this code: deliver it to the program Bell names.
     Player(u8),
+    /// The master state, for the sound panel.
+    Master,
+    /// Row k's stream word, for the sound panel.
+    Row(u8),
 }
 
-const ASKS: usize = 8;
+const ASKS: usize = 32;
 pub struct Asks { q: [Option<Ask>; ASKS], head: usize, len: usize }
 impl Asks {
     pub const fn new() -> Self { Self { q: [None; ASKS], head: 0, len: 0 } }
@@ -82,6 +86,80 @@ pub fn osd_text(state: u64, out: &mut [u8; 48]) -> usize {
     n
 }
 
+/// The sound panel at the top of the notifications window (Super+N): the master
+/// volume and each program that has a sound ring, with its own volume. Up/Down pick a
+/// program, Left/Right change its volume by 5%, M mutes it. Bell keeps the volumes;
+/// this only shows Bell's answers and asks for changes.
+pub const ROWS: usize = 16;
+pub const PANEL_STEP: u8 = 5;
+pub struct SoundPanel { pub master: u64, pub rows: [u64; ROWS], pub selected: usize, pub open: bool }
+impl SoundPanel {
+    pub const fn new() -> Self { Self { master: 0, rows: [0; ROWS], selected: 0, open: false } }
+    /// Rows with a program on them: (row, volume, muted, playing, pd).
+    pub fn shown(&self) -> impl Iterator<Item = (usize, u8, bool, bool, u32)> + '_ {
+        self.rows.iter().enumerate().filter(|(_, w)| is_mixer_answer(**w) && !refused(**w) && stream_pd(**w) != 0)
+            .map(|(k, w)| (k, (*w as u8).min(100), w & 1 << 8 != 0, w & 1 << 9 != 0, stream_pd(*w)))
+    }
+    pub fn answer(&mut self, ask: Ask, word: u64) {
+        match ask {
+            Ask::Master if !refused(word) => self.master = word,
+            Ask::Row(k) if (k as usize) < ROWS => self.rows[k as usize] = if refused(word) { 0 } else { word },
+            _ => {}
+        }
+        let n = self.shown().count();
+        if self.selected >= n { self.selected = n.saturating_sub(1); }
+    }
+    /// A key while the panel's window has the focus: `Some((row, b))` to send to Bell
+    /// as `SET_STREAM` (volume | MUTED), `None` when there is nothing to change.
+    /// `handled` is false for keys that are not the panel's.
+    pub fn key(&mut self, code: u8) -> (bool, Option<(u8, u64)>) {
+        let n = self.shown().count();
+        match code {
+            0x48 => { self.selected = self.selected.saturating_sub(1); (true, None) }
+            0x50 => { if self.selected + 1 < n { self.selected += 1; } (true, None) }
+            0x4B | 0x4D | 0x32 => {
+                let Some((row, volume, muted, _, _)) = self.shown().nth(self.selected) else { return (true, None) };
+                let (volume, muted) = match code {
+                    0x4B => (volume.saturating_sub(PANEL_STEP), muted),
+                    0x4D => ((volume + PANEL_STEP).min(100), muted),
+                    _ => (volume, !muted),
+                };
+                (true, Some((row as u8, volume as u64 | if muted { 1 << 8 } else { 0 })))
+            }
+            _ => (false, None),
+        }
+    }
+    /// The panel as text: one line per program, the chosen one marked.
+    pub fn text(&self, out: &mut [u8]) -> usize {
+        let mut n = 0;
+        let cap = out.len();
+        let mut put = |b: &[u8], n: &mut usize| for &c in b { if *n < cap { out[*n] = c; *n += 1; } };
+        let num = |v: u32, buf: &mut [u8; 10]| -> usize { let mut i = 10; let mut v = v; loop { i -= 1; buf[i] = b'0' + (v % 10) as u8; v /= 10; if v == 0 { break i; } } };
+        let mut d = [0u8; 10];
+        put(b"SOUND  master ", &mut n);
+        let i = num((self.master as u8).min(100) as u32, &mut d); put(&d[i..], &mut n);
+        put(b"%", &mut n);
+        if self.master & 1 << 8 != 0 { put(b" muted", &mut n); }
+        put(b"\n", &mut n);
+        let mut any = false;
+        for (idx, (_, volume, muted, playing, pd)) in self.shown().enumerate() {
+            any = true;
+            put(if idx == self.selected { b"> " } else { b"  " }, &mut n);
+            put(b"Program ", &mut n);
+            let i = num(pd, &mut d); put(&d[i..], &mut n);
+            put(b"  ", &mut n);
+            let i = num(volume as u32, &mut d); put(&d[i..], &mut n);
+            put(b"%", &mut n);
+            if muted { put(b" muted", &mut n); }
+            if playing { put(b" playing", &mut n); }
+            put(b"\n", &mut n);
+        }
+        if any { put(b"Up/Down pick, Left/Right volume, M mute\n", &mut n); } else { put(b"  No program has sound\n", &mut n); }
+        put(b"\n", &mut n);
+        n
+    }
+}
+
 #[cfg(test)]
 mod tests {
     extern crate std;
@@ -109,6 +187,25 @@ mod tests {
         assert_eq!(a.pop(), None);
         for _ in 0..ASKS { assert!(a.push(Ask::Volume)); }
         assert!(!a.push(Ask::Volume));
+    }
+    #[test]
+    fn sound_panel_lists_programs_and_changes_the_chosen_one() {
+        let mut p = SoundPanel::new();
+        p.answer(Ask::Master, TAG | 80 | 1 << 9);
+        p.answer(Ask::Row(0), TAG | 42u64 << 32 | 1 << 9 | 100);
+        p.answer(Ask::Row(1), REFUSED);
+        p.answer(Ask::Row(3), TAG | 43u64 << 32 | 1 << 8 | 60);
+        let mut out = [0u8; 256];
+        let n = p.text(&mut out);
+        assert_eq!(std::str::from_utf8(&out[..n]).unwrap(),
+            "SOUND  master 80%\n> Program 42  100% playing\n  Program 43  60% muted\nUp/Down pick, Left/Right volume, M mute\n\n");
+        assert_eq!(p.key(0x4B), (true, Some((0, 95))));
+        assert_eq!(p.key(0x50), (true, None));
+        assert_eq!(p.key(0x4D), (true, Some((3, 65 | 1 << 8))));
+        assert_eq!(p.key(0x32), (true, Some((3, 60))));
+        assert_eq!(p.key(0x50), (true, None));
+        assert_eq!(p.selected, 1);
+        assert_eq!(p.key(0x24), (false, None));
     }
     #[test]
     fn stream_word_names_the_pd() {
