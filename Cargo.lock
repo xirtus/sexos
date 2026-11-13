@@ -255,6 +255,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f1fe948ff07f4bd06c30984e69f5b4899c516a3ef74f34df92a2df2ab535495"
 
 [[package]]
+name = "calendar"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-calendar",
+ "sex-font",
+ "sex-pdx",
+]
+
+[[package]]
 name = "cc"
 version = "1.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1809,6 +1819,27 @@ dependencies = [
  "sex-pdx",
  "talc",
 ]
+
+[[package]]
+name = "sex-calc"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-calc-core",
+ "sex-font",
+ "sex-pdx",
+]
+
+[[package]]
+name = "sex-calc-core"
+version = "0.1.0"
+dependencies = [
+ "libm",
+]
+
+[[package]]
+name = "sex-calendar"
+version = "0.1.0"
 
 [[package]]
 name = "sex-canvas"
