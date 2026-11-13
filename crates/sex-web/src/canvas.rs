@@ -42,7 +42,7 @@ impl State {
     fn new() -> Self {
         Self {
             ctm: Transform::identity(), fill: Style::Color(0xFF00_0000), stroke: Style::Color(0xFF00_0000), line_width: 1.0,
-            alpha: 1.0, cap: LineCap::Butt, join: LineJoin::Miter, font: FontKey { size: 10, bold: false, italic: false, mono: false },
+            alpha: 1.0, cap: LineCap::Butt, join: LineJoin::Miter, font: FontKey { size: 10, bold: false, italic: false, mono: false, face: 0 },
             align: 0, baseline: 0, blend: BlendMode::SourceOver,
         }
     }
@@ -66,7 +66,7 @@ pub struct Surface {
 
 /// Parses a CSS `font` shorthand as far as Geist can follow it.
 pub fn parse_font(css: &str) -> FontKey {
-    let mut key = FontKey { size: 10, bold: false, italic: false, mono: false };
+    let mut key = FontKey { size: 10, bold: false, italic: false, mono: false, face: 0 };
     let lower = css.to_ascii_lowercase();
     for t in lower.split_ascii_whitespace() {
         let t = t.split('/').next().unwrap_or(t);

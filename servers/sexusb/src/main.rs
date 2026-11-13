@@ -364,7 +364,17 @@ pub extern "C" fn _start() -> ! {
     let files = sex_pdx::memory_region_info(sex_pdx::usb_disk::BUFFER_SLOT).ok().and_then(|info| info.peer_pd).unwrap_or(0);
     let region = sex_pdx::memory_region_full_view(sex_pdx::usb_disk::BUFFER_SLOT, Q | R | W).map(|v| v.virtual_address).unwrap_or(0);
     serial_println!("[sexusb.disks.route] files={} region={} ok={}", files, (region != 0) as u8, (files != 0 && region != 0) as u8);
+    // With the controller's MSI/MSI-X vector unmasked, an event wakes this task, so an
+    // idle controller costs no polling. Without one, poll every tick as before.
+    let irq = match sex_pdx::device::at_slot(SLOT_USB_HOST).filter(|l| l.vectors > 0) {
+        Some(lease) => match sex_pdx::device::irq_unmask(SLOT_USB_HOST, 0) {
+            Ok(()) => { serial_println!("[sexusb.irq] mode={} vectors={} polling=0", lease.mode.name(), lease.vectors); true }
+            Err(e) => { serial_println!("[sexusb.irq] mode={} unmask_error={:#x} polling=1", lease.mode.name(), e); false }
+        },
+        None => { serial_println!("[sexusb.irq] mode=none polling=1"); false }
+    };
     loop {
+        if irq { let _ = sex_pdx::device::irq_take(); }
         let mut busy = false;
         for _ in 0..64 {
             let Some(e) = usb.x.event() else { break };
@@ -391,7 +401,8 @@ pub extern "C" fn _start() -> ! {
             let _ = sex_pdx::pdx_reply(m.caller_pd, value);
         }
         poll_pointer_reports();
-        if !busy { let _ = sex_pdx::sys_wait_self_ticks(1); }
+        let queued = unsafe { (*core::ptr::addr_of!(KEYBOARD_OUTBOX)).len > 0 || (*core::ptr::addr_of!(POINTER_OUTBOX)).len > 0 };
+        if !busy { let _ = sex_pdx::sys_wait_self_ticks(if irq && !queued && !usb.changed { 32 } else { 1 }); }
     }
 }
 

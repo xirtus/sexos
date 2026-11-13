@@ -13,3 +13,5 @@ sex-canvas = { path = "../sex-canvas" }
 sex-js = { path = "../sex-js" }
 libm = "0.2"
 
+[dev-dependencies]
+sex-fetch = { path = "../sex-fetch" }
