@@ -476,6 +476,9 @@ pub mod files {
         }
     }
     pub fn mkdir(window: &mut Window, path: &[u8]) -> Result<(), Error> { request(window, w::MKDIR, path, 0, 0).map(|_| ()) }
+    /// Writes out and forgets the volume `/media/NAME`; for a USB stick every volume on it
+    /// (Eject). Grants into it end with it.
+    pub fn eject(window: &mut Window, media_path: &[u8]) -> Result<(), Error> { request(window, w::UNMOUNT, media_path, 0, 0).map(|_| ()) }
     pub fn create(window: &mut Window, path: &[u8]) -> Result<(), Error> { request(window, w::CREATE, path, 0, 0).map(|_| ()) }
     /// A file, or an empty folder.
     pub fn remove(window: &mut Window, path: &[u8]) -> Result<(), Error> { request(window, w::REMOVE, path, 0, 0).map(|_| ()) }

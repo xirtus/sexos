@@ -83,6 +83,9 @@ struct App {
     confirm: Option<Confirm>,
     /// In a trash folder: where each entry came from, by row.
     origins: Vec<Option<Vec<u8>>>,
+    /// The `/media` volume being looked at, while it is there: noticed when it goes.
+    watching: Option<Vec<u8>>,
+    last_look: u64,
 }
 
 /// The path as Files knows a granted one: `@/absolute/path`.
@@ -119,11 +122,16 @@ impl App {
     fn load(&mut self, window: &mut Window) {
         match files::list(window, &at(&self.cwd)) {
             Ok(mut list) => {
-                list.retain(|e| e.name != TRASH);
+                // A copy still being written (or cut short by a pulled stick) is not a file yet.
+                list.retain(|e| e.name != TRASH && !(e.name.first() == Some(&b'.') && e.name.ends_with(b".part")));
                 list.sort_by(|a, b| b.dir.cmp(&a.dir).then_with(|| a.name.to_ascii_lowercase().cmp(&b.name.to_ascii_lowercase())));
                 self.entries = list;
             }
-            Err(e) => { self.entries.clear(); self.status = format!("Can't open {}: {}", shown(&self.cwd), shown(files::message(e))); }
+            Err(e) => {
+                self.entries.clear();
+                self.status = format!("Can't open {}: {}", shown(&self.cwd), shown(files::message(e)));
+                sex_pdx::serial_record!("[files.app.list.failed] dir={} error={}", shown(&self.cwd), e);
+            }
         }
         self.origins.clear();
         if base(&self.cwd) == TRASH {
@@ -138,7 +146,47 @@ impl App {
         self.cursor = self.cursor.min(self.entries.len().saturating_sub(1));
         sex_pdx::serial_record!("[files.app.list] dir={} count={}", shown(&self.cwd), self.entries.len());
     }
-    fn go(&mut self, window: &mut Window, dir: Vec<u8>) { self.cwd = dir; self.cursor = 0; self.top = 0; self.load(window); }
+    fn go(&mut self, window: &mut Window, dir: Vec<u8>) {
+        self.cwd = dir; self.cursor = 0; self.top = 0; self.load(window);
+        let root = disk_root(&self.cwd);
+        self.watching = (root != b"/" && self.status.is_empty()).then_some(root);
+    }
+    /// Ctrl+E outside a trash: Eject the stick or disk the current folder is on (or the one selected in
+    /// /media). Everything is written out first; then it is safe to pull out.
+    fn eject(&mut self, window: &mut Window) {
+        let target = if self.cwd == w::MEDIA { self.selected() } else { Some(disk_root(&self.cwd)).filter(|r| r != b"/") };
+        let Some(vol) = target else { self.status = "Ctrl+E ejects a stick or disk: open it, or pick it in Ctrl+D disks.".into(); return };
+        let name = base(&vol).to_vec();
+        self.status = format!("Writing out {}...", shown(&name));
+        self.render(window);
+        let _ = files::sync(window);
+        match files::eject(window, &at(&vol)) {
+            Ok(()) => {
+                sex_pdx::serial_record!("[files.app.ejected] name={}", shown(&name));
+                self.watching = None;
+                if self.root.starts_with(&vol) {
+                    // This run was given only that disk: nothing is left to show.
+                    self.cwd = self.root.clone(); self.entries.clear(); self.origins.clear();
+                } else { let m = w::MEDIA.to_vec(); self.go(window, m); }
+                self.status = format!("{} can be pulled out safely now.", shown(&name));
+            }
+            Err(e) => {
+                sex_pdx::serial_record!("[files.app.eject.failed] name={} error={}", shown(&name), e);
+                self.status = format!("Couldn't eject {}: {}. Keep it plugged in.", shown(&name), shown(files::message(e)));
+            }
+        }
+    }
+    /// The volume being looked at disappeared without Eject: say so, once.
+    fn look_for_pulled(&mut self, window: &mut Window) -> bool {
+        let Some(vol) = self.watching.clone() else { return false };
+        if files::stat(window, &at(&vol)).is_ok() { return false; }
+        self.watching = None;
+        let name = base(&vol).to_vec();
+        sex_pdx::serial_record!("[files.app.pulled] name={}", shown(&name));
+        self.entries.clear(); self.origins.clear();
+        self.status = format!("{} was pulled out without Ctrl+E Eject: a file being written to it may be cut short. Plug it back in and copy again.", shown(&name));
+        true
+    }
     fn selected(&self) -> Option<Vec<u8>> { self.entries.get(self.cursor).map(|e| join(&self.cwd, &e.name)) }
     fn select(&mut self, name: &[u8]) { if let Some(i) = self.entries.iter().position(|e| e.name == name) { self.cursor = i; } }
 
@@ -166,7 +214,7 @@ impl App {
             t.push_str(&format!("{}: {}|   (Enter confirms, Esc cancels)\n", label, shown(text)));
         } else if !self.status.is_empty() { t.push_str(&self.status); t.push('\n'); }
         if let Some(job) = &self.job { t.push_str(&job.progress()); t.push('\n'); }
-        t.push_str("Enter open  Backspace up  F2 rename  Ctrl+I size and checksum\nCtrl+C/X/V copy, cut, paste  Ctrl+N folder\nDel trash  Shift+Del delete for good  Ctrl+T show trash\nIn the trash: Ctrl+R restore  Ctrl+E empty\nCtrl+Z undo  Ctrl+D disks  Ctrl+H home  Esc stops a copy\n");
+        t.push_str("Enter open  Backspace up  F2 rename  Ctrl+I size and checksum\nCtrl+C/X/V copy, cut, paste  Ctrl+N folder\nDel trash  Shift+Del delete for good  Ctrl+T show trash\nIn the trash: Ctrl+R restore  Ctrl+E empty\nOn a stick: Ctrl+E eject  Ctrl+D disks  Ctrl+Z undo  Ctrl+H home\n");
         window.show(t.as_bytes());
     }
 
@@ -219,7 +267,7 @@ impl App {
                 self.job = None;
                 self.job_undo = None;
                 self.status = format!("Couldn't finish: {}. Nothing half-done was left.", why);
-                self.load(window);
+                if !self.look_for_pulled(window) { self.load(window); }
                 true
             }
         }
@@ -477,6 +525,8 @@ impl App {
                 KEY_N => self.input = Some((Input::NewFolder, Vec::new())),
                 KEY_T => { let t = join(&disk_root(&self.cwd), TRASH); self.go(window, t); }
                 KEY_R => self.restore(window),
+                // Ctrl+E: Empty in a trash, Eject on a stick or disk.
+                KEY_E if base(&self.cwd) != TRASH && (self.cwd == w::MEDIA || disk_root(&self.cwd) != b"/") => self.eject(window),
                 KEY_E => self.empty_trash(window),
                 KEY_I => self.info(window),
                 KEY_H => { let r = self.root.clone(); self.go(window, r); }
@@ -536,8 +586,9 @@ pub extern "C" fn _start() -> ! {
     };
     let portal = root == b"/";
     let mut app = App { cwd: root.clone(), root, entries: Vec::new(), cursor: 0, top: 0, clip: None, undo: Vec::new(), input: None, status: String::new(), question: None, portal,
-                        job: None, job_undo: None, job_select: None, last_drawn: 0, last_pct: 0, confirm: None, origins: Vec::new() };
-    app.load(&mut window);
+                        job: None, job_undo: None, job_select: None, last_drawn: 0, last_pct: 0, confirm: None, origins: Vec::new(), watching: None, last_look: 0 };
+    let start = app.root.clone();
+    app.go(&mut window, start);
     app.poll_questions(&mut window);
     app.render(&mut window);
     sex_pdx::serial_record!("[files.app.ready] target={} task={} root={} portal={}", window.target, window.task, shown(&app.root), portal as u8);
@@ -555,7 +606,12 @@ pub extern "C" fn _start() -> ! {
             Some(Event::Key(key)) => { app.key(&mut window, key); app.render(&mut window); }
             Some(_) => {}
             // Quiet: another program may be asking the person for a file.
-            None => if app.poll_questions(&mut window) { app.render(&mut window); },
+            None => {
+                let mut redraw = app.poll_questions(&mut window);
+                let now = sex_pdx::get_ticks();
+                if now.saturating_sub(app.last_look) >= 1000 { app.last_look = now; redraw |= app.look_for_pulled(&mut window); }
+                if redraw { app.render(&mut window); }
+            }
         }
     }
 }
