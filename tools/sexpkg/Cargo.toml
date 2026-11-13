@@ -1,0 +1,13 @@
+[package]
+name = "sexpkg"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "Builds, signs and catalogs SexOS packages"
+
+# A host tool: kept out of the SexOS workspace.
+[workspace]
+
+[dependencies]
+sex-pkg = { path = "../../crates/sex-pkg" }
+sha2 = "0.10"

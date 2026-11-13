@@ -87,6 +87,7 @@ pub const COMMANDS: &[&[u8]] = &[
     b"object-search",
     b"object-tag",
     b"pd",
+    b"pkg",
     b"probe-cancel",
     b"probe-help",
     b"probe-retry",

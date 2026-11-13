@@ -1292,6 +1292,7 @@ pub mod display_frames;
 pub mod text_batch;
 pub mod text_region;
 pub mod program_store;
+pub mod package;
 pub mod crash_log;
 pub mod system_stats;
 pub mod program_memory;
