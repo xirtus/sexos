@@ -32,6 +32,7 @@ members = [
     "apps/jit",
     "apps/threads",
     "apps/shapes",
+    "apps/monitor",
     "apps/fputest",
     "apps/fuzz",
     "apps/play",
@@ -47,6 +48,8 @@ members = [
     "purple-scanout",
     "crates/sex-pdx",
     "crates/sex-iommu",
+    "crates/sex-kms",
+    "crates/sex-gpu-intel",
     "crates/sex-vmd",
     "crates/sex-imsm",
     "crates/sex-font",
@@ -58,6 +61,8 @@ members = [
     "crates/sex-tls",
     "crates/sex-wifi",
     "crates/sex-http",
+    "crates/sex-wg",
+    "crates/sex-ssh",
     "crates/sex-fetch",
     "crates/sex-trust-config",
     "crates/sex-graphics",
@@ -75,7 +80,9 @@ members = [
     "apps/stdhello",
     "apps/chello",
     "apps/stdnet",
+    "apps/ssh",
     "apps/pdf",
+    "apps/lua",
 ]
 [workspace.package]
 license = "GPL-3.0-only"

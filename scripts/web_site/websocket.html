@@ -1,0 +1,24 @@
+<!doctype html>
+<html><head><title>WebSocket</title></head>
+<body><p id=s>connecting</p>
+<script>
+const big = 'x'.repeat(70000);
+const ws = new WebSocket(location.href.replace(/^http/, 'ws').replace(/websocket\.html.*$/, 'echo'), ['echo', 'other']);
+ws.binaryType = 'arraybuffer';
+let n = 0;
+ws.onopen = () => {
+  console.log('ws open ' + ws.protocol + ' ' + ws.readyState);
+  ws.send('hello ünïcode');
+  ws.send(new Uint8Array([1, 2, 3, 250]));
+  ws.send(big);
+};
+ws.onmessage = e => {
+  n++;
+  if (typeof e.data === 'string') console.log('ws text ' + (e.data.length > 100 ? 'big ' + (e.data === big) : e.data));
+  else console.log('ws binary ' + Array.from(new Uint8Array(e.data)).join(','));
+  if (n === 3) ws.close(1000, 'bye');
+};
+ws.onerror = () => console.log('ws error');
+ws.onclose = e => { console.log('ws close ' + e.code + ' ' + e.wasClean + ' ' + e.reason); document.getElementById('s').textContent = 'closed'; };
+try { new WebSocket('ftp://x/'); } catch (e) { console.log('ws bad scheme ' + e.name); }
+</script></body></html>

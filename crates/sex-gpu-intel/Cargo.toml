@@ -1,0 +1,11 @@
+[package]
+name = "sex-gpu-intel"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later OR MIT"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+sex-kms = { path = "../sex-kms" }

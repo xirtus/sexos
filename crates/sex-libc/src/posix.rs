@@ -13,7 +13,7 @@
 //! program holds exactly what its BOOT row holds, like a Rust one.
 //!
 //! There is no process model (no fork, exec or process ids): a program is a run of
-//! its row, not a Unix process.
+//! its row, not a Unix process. `mmap` of a file is a library emulation (see below).
 //!
 //! The C types are musl's (x86-64), the headers the program compiles against.
 use crate::format::{self, Sink};
@@ -51,6 +51,10 @@ extern "C" {
     fn sys_rename(from: *const c_char, to: *const c_char) -> i32;
     fn sys_fsync(fd: i32) -> i32;
     fn sys_ftruncate(fd: i32, size: i64) -> i32;
+    fn sys_pread(fd: i32, buf: *mut u8, len: usize, offset: i64) -> isize;
+    fn sys_pwrite(fd: i32, buf: *const u8, len: usize, offset: i64) -> isize;
+    fn sys_dup(fd: i32) -> i32;
+    fn sys_yield();
 }
 
 /// A negative error number becomes `errno` and -1.
@@ -358,9 +362,81 @@ pub unsafe extern "C" fn fclose(f: *mut FILE) -> c_int {
         open.swap_remove(i);
         drop(unsafe { Box::from_raw(f) });
         unsafe { sys_close(fd) };
+        // A `tmpfile` stream's file goes with it.
+        let temps = unsafe { &mut *core::ptr::addr_of_mut!(TEMPS) };
+        if let Some(i) = temps.iter().position(|(p, _)| *p == f) {
+            let (_, name) = temps.swap_remove(i);
+            unsafe { sys_unlink(name.as_ptr().cast()) };
+        }
     }
     r
 }
+
+/// Streams `tmpfile` made, with their file names (NUL-terminated).
+static mut TEMPS: Vec<(*mut FILE, Vec<u8>)> = Vec::new();
+static mut TEMP_COUNT: u32 = 0;
+
+/// A name no file in the program's folder has yet: `tmp` and a number, within
+/// musl's `L_tmpnam` (20 bytes). With no shared `/tmp`, temporary files live in the
+/// program's own folder like every other file it makes.
+unsafe fn fresh_name(out: &mut [u8; 20]) -> bool {
+    for _ in 0..1000 {
+        let n = unsafe { TEMP_COUNT = TEMP_COUNT.wrapping_add(1); TEMP_COUNT };
+        let salt = (clock().1 as u32) & 0xFFFF;
+        let value = ((salt as u64) << 32) | n as u64;
+        out[..3].copy_from_slice(b"tmp");
+        for i in 0..12 {
+            out[3 + i] = b"0123456789abcdef"[((value >> (44 - 4 * i)) & 0xF) as usize];
+        }
+        out[15] = 0;
+        let mut st: HStat = unsafe { core::mem::zeroed() };
+        if unsafe { sys_stat(out.as_ptr().cast(), &mut st) } < 0 { return true; }
+    }
+    false
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn tmpnam(buf: *mut c_char) -> *mut c_char {
+    static mut NAME: [u8; 20] = [0; 20];
+    let mut name = [0u8; 20];
+    if !unsafe { fresh_name(&mut name) } { return null_mut(); }
+    let out = if buf.is_null() { core::ptr::addr_of_mut!(NAME).cast::<c_char>() } else { buf };
+    unsafe { core::ptr::copy_nonoverlapping(name.as_ptr().cast(), out, 20) };
+    out
+}
+
+/// A stream on a new file in the program's folder, removed when the stream closes.
+#[no_mangle]
+pub unsafe extern "C" fn tmpfile() -> *mut FILE {
+    let mut name = [0u8; 20];
+    if !unsafe { fresh_name(&mut name) } { set_errno(17); return null_mut(); }
+    let f = unsafe { fopen(name.as_ptr().cast(), b"w+x\0".as_ptr().cast()) };
+    if !f.is_null() {
+        let len = name.iter().position(|&b| b == 0).unwrap_or(19) + 1;
+        unsafe { (*core::ptr::addr_of_mut!(TEMPS)).push((f, name[..len].to_vec())) };
+    }
+    f
+}
+
+/// There is no shell and no other process to run: `system(NULL)` says so (0), and a
+/// command fails with ENOSYS.
+#[no_mangle]
+pub unsafe extern "C" fn system(command: *const c_char) -> c_int {
+    if command.is_null() { return 0; }
+    set_errno(crate::ENOSYS);
+    -1
+}
+
+/// Signals do not exist for a program (no other process can send one, and faults end
+/// the program). A handler is accepted and never called; the previous one is
+/// reported as SIG_DFL.
+#[no_mangle]
+pub unsafe extern "C" fn signal(_sig: c_int, _handler: usize) -> usize { 0 }
+
+/// `raise`: with no handlers, the default action of every signal C programs raise
+/// (SIGABRT, SIGTERM, SIGINT...) ends the program.
+#[no_mangle]
+pub unsafe extern "C" fn raise(sig: c_int) -> c_int { unsafe { exit(128 + sig) } }
 #[no_mangle]
 pub unsafe extern "C" fn fflush(f: *mut FILE) -> c_int {
     if !f.is_null() { return unsafe { flush_stream(f) }; }
@@ -535,12 +611,177 @@ pub unsafe extern "C" fn vdprintf(fd: c_int, fmt: *const c_char, mut ap: VaList)
 #[no_mangle]
 pub unsafe extern "C" fn dprintf(fd: c_int, fmt: *const c_char, ap: ...) -> c_int { unsafe { vdprintf(fd, fmt, ap) } }
 
+// ---- positioned reads and writes, duplicates ----------------------------------------------
+
+#[no_mangle]
+pub unsafe extern "C" fn pread(fd: c_int, buf: *mut c_void, n: usize, offset: i64) -> isize {
+    ret(unsafe { sys_pread(fd, buf.cast(), n, offset) } as i64) as isize
+}
+#[no_mangle]
+pub unsafe extern "C" fn pwrite(fd: c_int, buf: *const c_void, n: usize, offset: i64) -> isize {
+    ret(unsafe { sys_pwrite(fd, buf.cast(), n, offset) } as i64) as isize
+}
+#[no_mangle]
+pub unsafe extern "C" fn dup(fd: c_int) -> c_int { ret(unsafe { sys_dup(fd) } as i64) as c_int }
+#[no_mangle]
+pub unsafe extern "C" fn fdatasync(fd: c_int) -> c_int { unsafe { fsync(fd) } }
+#[no_mangle]
+pub unsafe extern "C" fn sync() { unsafe { sys_fsync(0) }; }
+#[no_mangle]
+pub unsafe extern "C" fn truncate(path: *const c_char, size: i64) -> c_int {
+    let fd = unsafe { sys_open(path, 0o1, 0) };
+    if fd < 0 { return ret(fd as i64) as c_int; }
+    let r = unsafe { sys_ftruncate(fd, size) };
+    unsafe { sys_close(fd) };
+    ret(r as i64) as c_int
+}
+
+// ---- mmap, as a library ------------------------------------------------------------------
+//
+// There is no paging behind a file here: a program's memory is its own heap, and its
+// files are Files' (see the crate notes). So `mmap` of a file is emulated the way a
+// library can: the bytes are read into fresh page-aligned memory. `MAP_PRIVATE` is
+// then exact (changes stay in memory). `MAP_SHARED` with `PROT_WRITE` writes the
+// memory back to the file at `msync` and `munmap` (and when the program exits): up to
+// the file's end, never extending it. What it cannot do: show another descriptor's
+// writes to the file in the mapping, place a mapping at a fixed address (`MAP_FIXED`),
+// or unmap part of a mapping.
+
+const PROT_WRITE: c_int = 2;
+const MAP_SHARED: c_int = 1;
+const MAP_PRIVATE: c_int = 2;
+const MAP_FIXED: c_int = 0x10;
+const MAP_ANONYMOUS: c_int = 0x20;
+const MS_SYNC: c_int = 4;
+const MAP_FAILED: *mut c_void = usize::MAX as *mut c_void;
+
+#[derive(Clone, Copy)]
+struct Mapping {
+    addr: usize,
+    /// Rounded up to whole pages: what was allocated.
+    pages: usize,
+    /// As asked: what may go back to the file.
+    len: usize,
+    /// A duplicate of the file's descriptor, kept for write-back; -1 for none.
+    fd: c_int,
+    offset: i64,
+}
+
+static mut MAPS: Vec<Mapping> = Vec::new();
+static MAPS_HELD: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+struct MapsGuard;
+impl Drop for MapsGuard { fn drop(&mut self) { MAPS_HELD.store(false, core::sync::atomic::Ordering::Release); } }
+fn maps() -> (MapsGuard, &'static mut Vec<Mapping>) {
+    while MAPS_HELD.swap(true, core::sync::atomic::Ordering::Acquire) { unsafe { sys_yield() }; }
+    (MapsGuard, unsafe { &mut *core::ptr::addr_of_mut!(MAPS) })
+}
+
+fn page_layout(pages: usize) -> Option<alloc::alloc::Layout> { alloc::alloc::Layout::from_size_align(pages, crate::posix_util::PAGE).ok() }
+
+/// Writes a shared mapping's bytes back to its file, up to the file's present end.
+unsafe fn write_back(m: &Mapping) -> i32 {
+    if m.fd < 0 { return 0; }
+    let mut h: HStat = unsafe { core::mem::zeroed() };
+    let r = unsafe { sys_fstat(m.fd, &mut h) };
+    if r < 0 { return r; }
+    let n = crate::posix_util::writeback_len(m.len, m.offset as u64, h.size.max(0) as u64);
+    let mut done = 0;
+    while done < n {
+        let w = unsafe { sys_pwrite(m.fd, (m.addr + done) as *const u8, n - done, m.offset + done as i64) };
+        if w <= 0 { return if w < 0 { w as i32 } else { -28 }; } // ENOSPC
+        done += w as usize;
+    }
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn mmap(addr: *mut c_void, len: usize, prot: c_int, flags: c_int, fd: c_int, offset: i64) -> *mut c_void {
+    let fail = |e: c_int| { set_errno(e); MAP_FAILED };
+    let kind = flags & (MAP_SHARED | MAP_PRIVATE); // 3: MAP_SHARED_VALIDATE, shared
+    if kind == 0 || offset < 0 || offset as usize % crate::posix_util::PAGE != 0 { return fail(crate::EINVAL); }
+    if flags & MAP_FIXED != 0 { let _ = addr; return fail(95); } // ENOTSUP: no fixed placement
+    let Some(pages) = crate::posix_util::map_len(len) else { return fail(crate::EINVAL) };
+    let Some(layout) = page_layout(pages) else { return fail(crate::ENOMEM) };
+    let anonymous = flags & MAP_ANONYMOUS != 0;
+    let shared_write = !anonymous && kind & MAP_SHARED != 0 && prot & PROT_WRITE != 0;
+    if !anonymous {
+        // A regular file, open for reading (and writing, to share writes).
+        let mut h: HStat = unsafe { core::mem::zeroed() };
+        let r = unsafe { sys_fstat(fd, &mut h) };
+        if r < 0 { return fail(-r); }
+        if h.mode & 0o170000 != 0o100000 { return fail(19); } // ENODEV
+        if unsafe { sys_pread(fd, null_mut(), 0, offset) } < 0 { return fail(13); } // EACCES
+        if shared_write && unsafe { sys_pwrite(fd, core::ptr::null(), 0, offset) } < 0 { return fail(13); }
+    }
+    let p = unsafe { alloc::alloc::alloc_zeroed(layout) };
+    if p.is_null() { return fail(crate::ENOMEM); }
+    if !anonymous {
+        let mut done = 0;
+        while done < len {
+            let n = unsafe { sys_pread(fd, p.add(done), len - done, offset + done as i64) };
+            if n < 0 { unsafe { alloc::alloc::dealloc(p, layout) }; return fail(-n as c_int); }
+            if n == 0 { break; } // past the end: zeros, as a mapping shows
+            done += n as usize;
+        }
+    }
+    let keep = if shared_write { unsafe { sys_dup(fd) } } else { -1 };
+    if shared_write && keep < 0 { unsafe { alloc::alloc::dealloc(p, layout) }; return fail(-keep); }
+    let (_held, all) = maps();
+    all.push(Mapping { addr: p as usize, pages, len, fd: keep, offset });
+    p as *mut c_void
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn munmap(addr: *mut c_void, len: usize) -> c_int {
+    let m = {
+        let (_held, all) = maps();
+        let Some(i) = all.iter().position(|m| m.addr == addr as usize) else { set_errno(crate::EINVAL); return -1 };
+        if crate::posix_util::map_len(len) != Some(all[i].pages) { set_errno(crate::EINVAL); return -1; } // whole mappings only
+        all.swap_remove(i)
+    };
+    let r = unsafe { write_back(&m) };
+    if m.fd >= 0 { unsafe { sys_close(m.fd) }; }
+    if let Some(layout) = page_layout(m.pages) { unsafe { alloc::alloc::dealloc(m.addr as *mut u8, layout) }; }
+    ret(r as i64) as c_int
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn msync(addr: *mut c_void, len: usize, flags: c_int) -> c_int {
+    let (at, end) = (addr as usize, (addr as usize).saturating_add(len));
+    let found = {
+        let (_held, all) = maps();
+        all.iter().find(|m| at >= m.addr && end <= m.addr + m.pages).copied()
+    };
+    let Some(m) = found else { set_errno(crate::ENOMEM); return -1 };
+    let mut r = unsafe { write_back(&m) };
+    if r == 0 && m.fd >= 0 && flags & MS_SYNC != 0 { r = unsafe { sys_fsync(m.fd) }; }
+    ret(r as i64) as c_int
+}
+
+/// Writes every shared mapping back, as the end of a program unmaps them.
+unsafe fn unmap_all() {
+    let all: Vec<Mapping> = { let (_held, all) = maps(); core::mem::take(all) };
+    for m in &all { unsafe { write_back(m) }; if m.fd >= 0 { unsafe { sys_close(m.fd) }; } }
+}
+
+/// Memory here is always readable and writable: protection changes are accepted.
+#[no_mangle]
+pub unsafe extern "C" fn mprotect(_addr: *mut c_void, _len: usize, _prot: c_int) -> c_int { 0 }
+#[no_mangle]
+pub unsafe extern "C" fn madvise(_addr: *mut c_void, _len: usize, _advice: c_int) -> c_int { 0 }
+#[no_mangle]
+pub unsafe extern "C" fn posix_madvise(_addr: *mut c_void, _len: usize, _advice: c_int) -> c_int { 0 }
+#[no_mangle]
+pub unsafe extern "C" fn mlock(_addr: *const c_void, _len: usize) -> c_int { 0 }
+#[no_mangle]
+pub unsafe extern "C" fn munlock(_addr: *const c_void, _len: usize) -> c_int { 0 }
+
 // ---- ending ---------------------------------------------------------------------------
 
 #[no_mangle]
 pub unsafe extern "C" fn exit(code: c_int) -> ! {
     crate::cxx::run_at_exit();
-    unsafe { flush_all(); sys_exit(code) }
+    unsafe { flush_all(); unmap_all(); sys_exit(code) }
 }
 #[no_mangle]
 pub unsafe extern "C" fn _exit(code: c_int) -> ! { unsafe { sys_exit(code) } }
