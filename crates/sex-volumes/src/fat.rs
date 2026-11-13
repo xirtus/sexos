@@ -628,6 +628,9 @@ impl Volume for Fat {
         let mut first = f.cluster;
         if end > old { first = self.resize(disk, first, old, end, offset)?; }
         self.write_data(disk, first, offset, data)?;
+        // A power cut must never leave the entry pointing at clusters the FAT does not
+        // hold yet, or a size covering bytes not yet written: those reach the stick first.
+        if end > old { disk.flush()?; }
         self.update(disk, &l, &f, first, end.max(old) as u32)?;
         Ok(data.len())
     }
@@ -656,6 +659,7 @@ impl Volume for Fat {
             s[12..32].copy_from_slice(&self.new_tail(*target, 0));
         }
         write_bytes(disk, self.cluster_at(c), &both)?;
+        disk.flush()?;
         let tail = self.new_tail(c, 0);
         self.add(disk, dir, name, ATTR_DIR, tail).map_err(|e| { let _ = self.free_chain(disk, c); e })
     }
@@ -667,7 +671,9 @@ impl Volume for Fat {
             if !self.entries(&inner).is_empty() { return Err(Error::NotEmpty); }
         }
         self.delete_slots(disk, &l, &f)?;
-        if f.cluster != 0 { self.free_chain(disk, f.cluster)?; }
+        // The entry goes before its clusters are freed: a cut in between leaves lost
+        // clusters, never an entry sharing clusters with the next file written.
+        if f.cluster != 0 { disk.flush()?; self.free_chain(disk, f.cluster)?; }
         Ok(())
     }
     fn rename(&mut self, disk: &mut dyn Disk, from: &[u8], to: &[u8]) -> Result<()> {
@@ -709,8 +715,26 @@ impl Volume for Fat {
     fn truncate(&mut self, disk: &mut dyn Disk, path: &[u8], len: u64) -> Result<()> {
         let (l, f) = self.file(disk, path)?;
         if f.attr & ATTR_RO != 0 { return Err(Error::ReadOnly); }
-        let first = self.resize(disk, f.cluster, f.size as u64, len, len)?;
-        self.update(disk, &l, &f, first, len as u32)
+        let old = f.size as u64;
+        if len >= old {
+            let first = self.resize(disk, f.cluster, old, len, len)?;
+            if len > old { disk.flush()?; }
+            return self.update(disk, &l, &f, first, len as u32);
+        }
+        // Shorter: the entry first, then the clusters past the end are freed.
+        let have = if f.cluster == 0 { Vec::new() } else { self.chain(disk, f.cluster)? };
+        let need = len.div_ceil(self.cluster_bytes) as usize;
+        let first = if need == 0 { 0 } else { f.cluster };
+        self.update(disk, &l, &f, first, len as u32)?;
+        if need < have.len() {
+            disk.flush()?;
+            if need == 0 { self.free_chain(disk, f.cluster)?; } else {
+                let eoc = self.eoc();
+                self.set(disk, have[need - 1], eoc)?;
+                self.free_chain(disk, have[need])?;
+            }
+        }
+        Ok(())
     }
     fn sync(&mut self, disk: &mut dyn Disk) -> Result<()> {
         if let (Some(at), true) = (self.fsinfo, self.fsinfo_dirty) {

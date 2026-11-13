@@ -7,7 +7,7 @@ edition = "2021"
 [dependencies]
 spin = "0.9.8"
 sex-pdx = { path = "../../crates/sex-pdx" }
-sexfs = { path = "../../crates/sexfs" }
+sexfs = { path = "../../crates/sexfs", features = ["repair"] }
 sex-disk = { path = "../../crates/sex-disk" }
 sex-pkg = { path = "../../crates/sex-pkg" }
 sex-volumes = { path = "../../crates/sex-volumes" }

@@ -202,6 +202,19 @@ fn bring_up_on(sectors: u64) -> State {
             }
             Err(e) => { sex_pdx::serial_record!("[files.fs.format.failed] error={:?}", e); State::Absent }
         },
+        // Damaged: salvage what can be read into a new tree beside the old one (a
+        // power cut during repair leaves the disk as it was), then use that.
+        Err(Error::Corrupt) => {
+            sex_pdx::serial_record!("[files.fs.repair.start] blocks={}", blocks);
+            match sexfs::check::repair(Disk { blocks }, memory(), false) {
+                Ok((fs, r)) => {
+                    sex_pdx::serial_record!("[files.fs.repaired] generation={} bad_nodes={} from_older={} orphans={} dangling={} stray_blocks={} shared_blocks={} files={} dirs={}",
+                        r.generation, r.bad_nodes, r.from_older, r.orphans, r.dangling_entries, r.stray_blocks, r.shared_blocks, r.files, r.dirs);
+                    State::Ready(fs)
+                }
+                Err(e) => { sex_pdx::serial_record!("[files.fs.mount.failed] error={:?}", e); State::Absent }
+            }
+        }
         Err(e) => { sex_pdx::serial_record!("[files.fs.mount.failed] error={:?}", e); State::Absent }
     }
 }

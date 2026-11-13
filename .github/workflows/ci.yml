@@ -59,6 +59,8 @@ jobs:
       run: cargo test --locked -p sex-pkg
     - name: Disk layouts (GPT, FAT, install beside other systems)
       run: cargo test --locked -p sex-disk --lib
+    - name: SexOS filesystem check and repair (injected faults)
+      run: cargo test --locked --release -p sexfs --features repair --lib
     - name: Network stack (IPv6 resolvers, accept backlog, UDP queues) on the host
       run: cargo test --locked -p sex-net --lib
     - name: HTTP/2 client (HPACK, 50 streams) against a real h2 server, plain and over TLS
@@ -229,6 +231,14 @@ jobs:
       run: python3 scripts/files_jobs_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-jobs"
     - name: Files safe eject and pulled-out sticks
       run: python3 scripts/files_eject_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-eject"
+    - name: Files thumbnails for a folder of 50 pictures, cached
+      run: python3 scripts/files_thumbs_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-thumbs"
+    - name: ext4 stick written from SexOS, e2fsck clean
+      run: python3 scripts/files_ext4_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-ext4"
+    - name: Power cuts while Files writes (QEMU killed, disk checked each time)
+      run: python3 scripts/powercut_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-powercut"
+    - name: Files repairs a damaged disk at start
+      run: python3 scripts/sexfs_repair_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-fs-repair"
     - name: USB network adapter
       run: python3 scripts/usb_net_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-usb-net"
     - name: Intel RAID 0 on two NVMe drives, read only
@@ -255,6 +265,7 @@ jobs:
           ${{ runner.temp }}/sexos-files-jobs/*.log
           ${{ runner.temp }}/sexos-files-eject/*.ppm
           ${{ runner.temp }}/sexos-files-eject/*.log
+          ${{ runner.temp }}/sexos-fs-repair/*.log
           ${{ runner.temp }}/sexos-raid
           ${{ runner.temp }}/sexos-power
           ${{ runner.temp }}/sexos-dgpu

@@ -653,6 +653,8 @@ name = "files"
 version = "0.1.0"
 dependencies = [
  "sex-app",
+ "sex-font",
+ "sex-image",
  "sex-pdx",
  "sha2",
 ]
