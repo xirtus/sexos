@@ -6,11 +6,73 @@
 //! as many as the window's text holds. The window opens with the first output or read,
 //! so a program that never prints opens none. Input is a line typed into the window,
 //! echoed as it is typed, with Backspace; closing the window ends input.
+//!
+//! A program that writes an escape sequence (colours, cursor movement, clearing: what
+//! command-line ports print) turns the window into a real terminal: a VT100/xterm screen
+//! (`sex-vt`) drawn in the window's pixels, with what was printed before carried over,
+//! scrollback on the wheel and Shift+PageUp, and the terminal's answers (a cursor
+//! position report, say) arriving on standard input as they would from a terminal.
 use sex_app::{Event, Window};
 use sex_pdx::text_region::BYTES as SHOWN;
 use std::sync::Mutex;
 
+/// The window as a terminal, once the program wrote an escape sequence.
+struct Vt {
+    screen: sex_vt::Screen,
+    parser: sex_vt::Parser,
+    painter: sex_vt::render::Painter,
+    cache: Box<sex_vt::render::Cache>,
+    size: (usize, usize),
+    after_cr: bool,
+}
+impl Vt {
+    fn new() -> Box<Vt> {
+        let (w, h) = window_mut().size();
+        let (cw, ch) = sex_vt::render::cell_for_height(18);
+        let painter = sex_vt::render::Painter::new(cw, ch);
+        let (cols, rows) = painter.grid(w, h);
+        // An empty cache is all zeroes; building it on the stack would not fit.
+        let cache = unsafe { Box::<sex_vt::render::Cache>::new_zeroed().assume_init() };
+        Box::new(Vt { screen: sex_vt::Screen::new(cols, rows), parser: sex_vt::Parser::new(), painter, cache, size: (w.max(32), h.max(32)), after_cr: false })
+    }
+    /// Output, with lone newlines as CR LF (a terminal's output processing).
+    fn feed(&mut self, bytes: &[u8]) {
+        let mut start = 0;
+        for (i, &b) in bytes.iter().enumerate() {
+            if b == b'\n' && !(if i == 0 { self.after_cr } else { bytes[i - 1] == b'\r' }) {
+                self.screen.feed(&mut self.parser, &bytes[start..i]);
+                self.screen.feed(&mut self.parser, b"\r\n");
+                start = i + 1;
+            }
+        }
+        self.screen.feed(&mut self.parser, &bytes[start..]);
+        if let Some(&last) = bytes.last() { self.after_cr = last == b'\r'; }
+        // The terminal's answers are input, as from a real terminal.
+        let replies = self.screen.take_replies();
+        if !replies.is_empty() { PENDING.lock().unwrap_or_else(|e| e.into_inner()).extend_from_slice(&replies); }
+    }
+    fn resize(&mut self, w: usize, h: usize) {
+        self.size = (w.max(32), h.max(32));
+        let (cols, rows) = self.painter.grid(self.size.0, self.size.1);
+        self.screen.resize(cols, rows);
+    }
+    fn draw(&mut self) {
+        let window = window_mut();
+        if let Some(title) = self.screen.take_title() { let t = title.to_vec(); window.title(&t); }
+        let dirty = self.screen.take_dirty();
+        if !dirty.iter().any(|d| *d) { return; }
+        let (w, h) = self.size;
+        let pixels = window.pixels();
+        if pixels.len() < w * h { return; }
+        self.painter.draw(&self.screen, &dirty, &mut self.cache, &mut pixels[..w * h], w, true);
+        let used = self.screen.rows() * self.painter.cell_h;
+        if used < h { pixels[used * w..h * w].fill(sex_vt::DEFAULT_BG); }
+        window.show_pixels(w, h);
+    }
+}
+
 struct Console {
+    vt: Option<Box<Vt>>,
     /// What the window shows (when it is a console): the newest output.
     text: Vec<u8>,
     /// The line each stream is gathering for the serial record.
@@ -20,7 +82,7 @@ struct Console {
     closed: bool,
 }
 
-static CONSOLE: Mutex<Console> = Mutex::new(Console { text: Vec::new(), lines: [Vec::new(), Vec::new()], opened: false, closed: false });
+static CONSOLE: Mutex<Console> = Mutex::new(Console { vt: None, text: Vec::new(), lines: [Vec::new(), Vec::new()], opened: false, closed: false });
 static mut WINDOW: Option<Window> = None;
 /// Set once the program has the window for itself.
 static TAKEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -45,6 +107,7 @@ impl Console {
     fn show(&mut self) {
         if taken() || self.closed { return; }
         self.opened = true;
+        if let Some(vt) = self.vt.as_mut() { vt.draw(); return; }
         let cap = SHOWN as usize - 64;
         if self.text.len() > cap {
             // Keep whole lines.
@@ -67,7 +130,21 @@ pub(crate) fn write(stream: usize, bytes: &[u8]) {
     for &b in bytes {
         if b == b'\n' { c.record(stream); } else if c.lines[stream].len() < 400 { c.lines[stream].push(b); } else { c.record(stream); c.lines[stream].push(b); }
     }
-    c.text.extend_from_slice(bytes);
+    if c.vt.is_none() && !taken() && bytes.contains(&0x1b) {
+        // The first escape sequence: from here on the window is a terminal, starting
+        // with what was printed before.
+        let mut vt = Vt::new();
+        let before = core::mem::take(&mut c.text);
+        vt.feed(&before);
+        c.vt = Some(vt);
+    }
+    match c.vt.as_mut() { Some(vt) => vt.feed(bytes), None => c.text.extend_from_slice(bytes) }
+    c.show();
+}
+
+/// Echo of typed input, through the terminal when there is one.
+fn echo(c: &mut Console, bytes: &[u8]) {
+    match c.vt.as_mut() { Some(vt) => vt.feed(bytes), None => c.text.extend_from_slice(bytes) }
     c.show();
 }
 
@@ -108,17 +185,35 @@ fn read_line() -> Option<Vec<u8>> {
             Event::Key(key) if key.code == 0x0E => {
                 if line.pop().is_some() {
                     let mut c = CONSOLE.lock().ok()?;
-                    c.text.pop();
+                    if c.vt.is_some() { echo(&mut c, b"\x08 \x08"); } else { c.text.pop(); c.show(); }
+                }
+            }
+            Event::Resize { width, height } => {
+                let mut c = CONSOLE.lock().ok()?;
+                if let Some(vt) = c.vt.as_mut() { vt.resize(width, height); }
+                c.show();
+            }
+            Event::Pointer(p) => {
+                if let sex_pdx::app_pointer::Kind::Wheel { steps } = p.kind {
+                    let mut c = CONSOLE.lock().ok()?;
+                    if let Some(vt) = c.vt.as_mut() { vt.screen.scroll_view(steps as isize * 3); }
                     c.show();
                 }
+            }
+            Event::Key(key) if key.shift && matches!(key.code, 0x49 | 0x68 | 0x51 | 0x6D) => {
+                let mut c = CONSOLE.lock().ok()?;
+                if let Some(vt) = c.vt.as_mut() {
+                    let page = vt.screen.rows() as isize - 1;
+                    vt.screen.scroll_view(if matches!(key.code, 0x49 | 0x68) { page } else { -page });
+                }
+                c.show();
             }
             Event::Key(key) => {
                 let typed = if key.code == 0x1C { Some(b'\n') } else { sex_app::typed(key) };
                 if let Some(b) = typed {
                     line.push(b);
                     let mut c = CONSOLE.lock().ok()?;
-                    c.text.push(b);
-                    c.show();
+                    echo(&mut c, &[b]);
                     if b == b'\n' { return Some(line); }
                 }
             }
@@ -135,8 +230,7 @@ pub(crate) fn finish(how: &str) {
         let Ok(mut c) = CONSOLE.lock() else { return };
         if !c.opened || c.closed || taken() { false } else {
             let line = format!("\n[{how}. Close the window to dismiss.]");
-            c.text.extend_from_slice(line.as_bytes());
-            c.show();
+            echo(&mut c, line.as_bytes());
             true
         }
     };

@@ -1023,6 +1023,9 @@ version = "0.1.0"
 dependencies = [
  "sex-app",
  "sex-pdx",
+ "sex-textedit",
+ "sex-vt",
+ "spellbook",
 ]
 
 [[package]]
@@ -1994,7 +1997,12 @@ version = "0.1.0"
 dependencies = [
  "sex-app",
  "sex-pdx",
+ "sex-vt",
 ]
+
+[[package]]
+name = "sex-textedit"
+version = "0.1.0"
 
 [[package]]
 name = "sex-time"
@@ -2036,6 +2044,14 @@ version = "0.1.0"
 [[package]]
 name = "sex-volumes"
 version = "0.1.0"
+
+[[package]]
+name = "sex-vt"
+version = "0.1.0"
+dependencies = [
+ "sex-font",
+ "vte",
+]
 
 [[package]]
 name = "sex-wasm"
@@ -2327,6 +2343,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "spellbook"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d204abcbdf8e88729306a8d0ca01a79d8a49969fe1f84696909d6dbc4321c1a"
+dependencies = [
+ "foldhash",
+ "hashbrown",
+]
+
+[[package]]
 name = "spin"
 version = "0.9.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2460,6 +2486,16 @@ name = "tap"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "55937e1799185b12863d447f42597ed69d9928686b8d88a1df17376a097d8369"
+
+[[package]]
+name = "term"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-pdx",
+ "sex-vt",
+ "sex-wasm",
+]
 
 [[package]]
 name = "thiserror"
@@ -2637,6 +2673,16 @@ name = "volatile"
 version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "442887c63f2c839b346c192d047a7c87e73d0689c9157b00b53dcc27dd5ea793"
+
+[[package]]
+name = "vte"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a5924018406ce0063cd67f8e008104968b74b563ee1b85dde3ed1f7cb87d3dbd"
+dependencies = [
+ "arrayvec",
+ "memchr",
+]
 
 [[package]]
 name = "wasi"
