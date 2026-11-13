@@ -9,6 +9,10 @@ use alloc::string::String;
 
 /// Bytes (keys plus values, as UTF-8) one origin may keep, as browsers allow.
 pub const QUOTA: usize = 5 << 20;
+/// Bytes of IndexedDB one origin may keep.
+pub const IDB_QUOTA: usize = 64 << 20;
+/// IndexedDB databases are kept as areas named this prefix and the origin.
+pub const IDB_PREFIX: &str = "idb ";
 /// Origins kept; the least recently changed goes first beyond this.
 const MAX_ORIGINS: usize = 512;
 
@@ -61,12 +65,15 @@ impl WebStorage {
     pub fn get(&self, origin: &str, key: &str) -> Option<&str> { self.areas.get(origin)?.items.get(key).map(String::as_str) }
 
     /// False when it would take the origin over its quota (nothing changes then).
-    pub fn set(&mut self, origin: &str, key: &str, value: &str) -> bool {
+    pub fn set(&mut self, origin: &str, key: &str, value: &str) -> bool { self.set_within(origin, key, value, QUOTA) }
+
+    /// Like [`set`](Self::set), with the area's own quota in bytes.
+    pub fn set_within(&mut self, origin: &str, key: &str, value: &str, quota: usize) -> bool {
         let changes = self.changes + 1;
         let area = self.areas.entry(String::from(origin)).or_default();
         let old = area.items.get(key).map_or(0, |v| key.len() + v.len());
         let bytes = area.bytes - old + key.len() + value.len();
-        if bytes > QUOTA { return false; }
+        if bytes > quota { return false; }
         if area.items.get(key).is_some_and(|v| v == value) { return true; }
         area.items.insert(String::from(key), String::from(value));
         area.bytes = bytes;
@@ -120,7 +127,7 @@ impl WebStorage {
         for line in text.lines() {
             let mut f = line.split('\t');
             let (Some(o), Some(k), Some(v), None) = (f.next(), f.next(), f.next(), f.next()) else { continue };
-            s.set(&unescape(o), &unescape(k), &unescape(v));
+            s.set_within(&unescape(o), &unescape(k), &unescape(v), usize::MAX);
         }
         s.changes = 0;
         s

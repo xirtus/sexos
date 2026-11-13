@@ -38,7 +38,7 @@ pub enum Item {
 }
 
 impl Item {
-    fn offset(&mut self, dx: i32, dy: i32) {
+    pub fn offset(&mut self, dx: i32, dy: i32) {
         match self {
             Item::Rect { x, y, .. } | Item::Image { x, y, .. } | Item::Bullet { x, y, .. } => { *x += dx; *y += dy; }
             Item::Text { x, baseline, .. } => { *x += dx; *baseline += dy; }
@@ -79,12 +79,26 @@ pub struct Page {
     pub clips: Vec<[i32; 4]>,
     /// Each item's clip (an index into `clips`, 0 for none); empty when nothing clips.
     pub item_clips: Vec<u16>,
+    /// `position: sticky` boxes: (box top, box height, `top` inset, bottom of the
+    /// containing block). Entry 0 is unused.
+    pub stickies: Vec<[i32; 4]>,
+    /// Each item's sticky box (an index into `stickies`, 0 for none); empty when none.
+    pub item_sticky: Vec<u16>,
 }
 
 impl Page {
     /// The rectangle item `i` is clipped to, if any.
     pub fn clip_of(&self, i: usize) -> Option<[i32; 4]> {
         match self.item_clips.get(i) { Some(&c) if c > 0 => self.clips.get(c as usize).copied(), _ => None }
+    }
+    /// How far sticky box `i`'s items move down when the page is scrolled by `scroll`
+    /// (with `top` the inset): until the box's top reaches `scroll + top`, then with the
+    /// view, never past the bottom of its containing block.
+    pub fn sticky_shift(&self, item: usize, scroll: i32) -> i32 {
+        let Some(&k) = self.item_sticky.get(item) else { return 0 };
+        if k == 0 { return 0; }
+        let [y, h, top, limit] = self.stickies[k as usize];
+        (scroll + top - y).min(limit - y - h).max(0)
     }
     /// The link under a point, if any.
     pub fn link_at(&self, x: i32, y: i32) -> Option<&Link> {
@@ -110,9 +124,10 @@ pub fn layout_in(dom: &Dom, styles: &[Option<Style>], width: i32, viewport_heigh
         let r = l.block(html, 0, 0, width, None);
         height = r.margin_top + r.height + r.margin_bottom;
     }
-    let (mut tagged, clips) = resolve_clips(core::mem::take(&mut l.items));
+    let (mut tagged, clips, sticky_marks) = resolve_clips(core::mem::take(&mut l.items));
     let (order, below) = layer_order(&mut tagged);
-    let item_clips: Vec<u16> = if clips.len() > 1 { tagged.iter().map(|t| t.1).collect() } else { Vec::new() };
+    let item_clips: Vec<u16> = if clips.len() > 1 { tagged.iter().map(|t| t.1 as u16).collect() } else { Vec::new() };
+    let item_sticky: Vec<u16> = if sticky_marks.len() > 1 { tagged.iter().map(|t| (t.1 >> 16) as u16).collect() } else { Vec::new() };
     l.items = tagged.into_iter().map(|t| t.0).collect();
     // Ranks in paint order: layers under normal flow, normal flow itself, then the rest.
     let flow_rank = below as u32;
@@ -139,7 +154,12 @@ pub fn layout_in(dom: &Dom, styles: &[Option<Style>], width: i32, viewport_heigh
     };
     for (n, r) in l.boxes { put(n, r); }
     for k in &l.links { put(k.node, [k.x, k.y, k.w, k.h]); }
-    Page { width, height, background: background | 0xFF00_0000, title, items: l.items, links: l.links, anchors: l.anchors, boxes, layers, clips, item_clips }
+    // A sticky box stops at the bottom of its containing block.
+    let stickies: Vec<[i32; 4]> = sticky_marks.into_iter().map(|([y, h, top, _], parent)| {
+        let limit = boxes.get(parent as usize).copied().flatten().map_or(height, |b| b[1] + b[3]);
+        [y, h, top, limit.max(y + h)]
+    }).collect();
+    Page { width, height, background: background | 0xFF00_0000, title, items: l.items, links: l.links, anchors: l.anchors, boxes, layers, clips, item_clips, stickies, item_sticky }
 }
 
 /// Parses, styles and lays out a whole page.
@@ -208,6 +228,10 @@ const LAYER_END: i32 = i32::MIN + 2;
 /// between them to its padding box (x, y, `radius` wide, `h` high).
 const CLIP_BEGIN: i32 = i32::MIN + 3;
 const CLIP_END: i32 = i32::MIN + 4;
+/// Sticky markers: the box's top in `y`, height in `radius`, `top` inset in `h`, and
+/// the node of its containing block in `color`.
+const STICKY_BEGIN: i32 = i32::MIN + 5;
+const STICKY_END: i32 = i32::MIN + 6;
 
 fn marker(item: &Item) -> Option<(i32, i32, u32)> {
     match *item { Item::Rect { w, h, color, .. } if w <= LAYER_END => Some((w, h, color)), _ => None }
@@ -215,9 +239,11 @@ fn marker(item: &Item) -> Option<(i32, i32, u32)> {
 
 /// Turns clip markers into a clip index on each item, and the clip rectangles (nested
 /// clips intersect).
-fn resolve_clips(items: Vec<Item>) -> (Vec<(Item, u16)>, Vec<[i32; 4]>) {
+fn resolve_clips(items: Vec<Item>) -> (Vec<(Item, u32)>, Vec<[i32; 4]>, Vec<([i32; 4], u32)>) {
     let mut clips = alloc::vec![[0; 4]];
     let mut stack: Vec<u16> = Vec::new();
+    let mut stickies = alloc::vec![([0; 4], 0u32)];
+    let mut sticky: Vec<u16> = Vec::new();
     let mut out = Vec::with_capacity(items.len());
     for item in items {
         match item {
@@ -233,21 +259,26 @@ fn resolve_clips(items: Vec<Item>) -> (Vec<(Item, u16)>, Vec<[i32; 4]>) {
                 stack.push((clips.len() - 1) as u16);
             }
             Item::Rect { w: CLIP_END, .. } => { stack.pop(); }
-            item => out.push((item, stack.last().copied().unwrap_or(0))),
+            Item::Rect { y, w: STICKY_BEGIN, h, radius, color, .. } => {
+                if stickies.len() < u16::MAX as usize { stickies.push(([y, radius, h, 0], color)); }
+                sticky.push((stickies.len() - 1) as u16);
+            }
+            Item::Rect { w: STICKY_END, .. } => { sticky.pop(); }
+            item => out.push((item, stack.last().copied().unwrap_or(0) as u32 | (sticky.last().copied().unwrap_or(0) as u32) << 16)),
         }
     }
-    (out, clips)
+    (out, clips, stickies)
 }
 
 /// Moves each layer's items after normal flow, ordered by stacking context and
 /// z-index (negative z-indexes under normal flow), and drops the markers. Returns
 /// the layers' sequence numbers in paint order and how many paint under normal flow.
-fn layer_order(items: &mut Vec<(Item, u16)>) -> (Vec<u32>, usize) {
+fn layer_order(items: &mut Vec<(Item, u32)>) -> (Vec<u32>, usize) {
     if !items.iter().any(|i| marker(&i.0).is_some()) { return (Vec::new(), 0); }
     // Each layer: its sort key (the path of (z, seq) through enclosing stacking
     // contexts) and its items.
-    let mut layers: Vec<(Vec<(i32, u32)>, Vec<(Item, u16)>)> = Vec::new();
-    let mut flow: Vec<(Item, u16)> = Vec::new();
+    let mut layers: Vec<(Vec<(i32, u32)>, Vec<(Item, u32)>)> = Vec::new();
+    let mut flow: Vec<(Item, u32)> = Vec::new();
     // Open layers: index into `layers`, and whether it starts a stacking context.
     let mut open: Vec<(usize, bool)> = Vec::new();
     for item in core::mem::take(items) {
@@ -423,6 +454,15 @@ impl<'a> Layout<'a> {
             let dy = s.inset[TOP].resolve(0).or_else(|| s.inset[BOTTOM].resolve(0).map(|v| -v)).unwrap_or(0);
             if s.position == style::Position::Relative && (dx != 0 || dy != 0) { self.shift(i0, l0, b0, a0, dx, dy); }
         }
+        // Sticky to the top: marks its items, which paint moves with the scroll.
+        if s.position == style::Position::Sticky {
+            if let Some(top) = s.inset[TOP].resolve(self.viewport.1.max(0)) {
+                let parent = self.dom.nodes[n].parent.unwrap_or(n) as u32;
+                let (by, bh) = self.boxes.iter().rev().find(|(b, _)| *b == n).map_or((y + r.margin_top, r.height), |(_, b)| (b[1], b[3]));
+                self.items.insert(i0, Item::Rect { x: 0, y: by, w: STICKY_BEGIN, h: top, color: parent, radius: bh });
+                self.items.push(Item::Rect { x: 0, y: 0, w: STICKY_END, h: 0, color: 0, radius: 0 });
+            }
+        }
         if positioned { self.items.push(Item::Rect { x: 0, y: 0, w: LAYER_END, h: 0, color: seq, radius: 0 }); }
         r
     }
@@ -576,7 +616,7 @@ impl<'a> Layout<'a> {
         let own_h = match (forced_height, s.height, self.def_h) {
             (Some(h), _, _) => Some(h - vbp),
             (None, Len::Px(h), _) => Some(if s.box_sizing_border { h - vbp } else { h }),
-            (None, Len::Pct(_), Some(ph)) => s.height.resolve(ph).map(|h| if s.box_sizing_border { h - vbp } else { h }),
+            (None, Len::Pct(_) | Len::Mix(..), Some(ph)) => s.height.resolve(ph).map(|h| if s.box_sizing_border { h - vbp } else { h }),
             _ => None,
         }.map(|h| {
             let h = match s.min_height.resolve(0) { Some(min) => h.max(min), None => h };
@@ -920,7 +960,7 @@ impl<'a> Layout<'a> {
                 // prepare this atomic piece. An indefinite percentage height is
                 // auto, so intrinsic aspect/default sizing still applies.
                 let height = match s.height {
-                    Len::Pct(_) => self.def_h.and_then(|h| s.height.resolve(h)),
+                    Len::Pct(_) | Len::Mix(..) => self.def_h.and_then(|h| s.height.resolve(h)),
                     _ => s.height.resolve(0),
                 };
                 let (w, h) = match (s.width.resolve(cw), height, natural) {

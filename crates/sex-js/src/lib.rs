@@ -19,7 +19,7 @@ pub mod storage;
 pub mod webgl;
 #[cfg(sexjs_native)]
 mod native;
-pub use document::{ClassicScript, Document, FetchAsk};
+pub use document::{ClassicScript, Document, FetchAsk, WsAsk};
 
 use alloc::{format, string::String, vec::Vec};
 use wasmi::{Caller, Config, Engine, Extern, Linker, Memory, Module, Store, StoreLimits, StoreLimitsBuilder, TypedFunc};
@@ -27,7 +27,7 @@ use wasmi::{Caller, Config, Engine, Extern, Linker, Memory, Module, Store, Store
 /// The engine, as built by `scripts/build_quickjs_wasm.sh`.
 pub static QUICKJS_WASM: &[u8] = include_bytes!("../quickjs.wasm");
 /// The DOM and browser API, written in JavaScript over `__host`.
-pub static PRELUDE: &str = include_str!("prelude.js");
+pub static PRELUDE: &str = concat!(include_str!("prelude.js"), "\n", include_str!("indexeddb.js"));
 
 /// Page operations, `__host`'s first argument. Node ids travel as decimal strings.
 pub mod op {
@@ -120,6 +120,18 @@ pub mod op {
     /// (answers `!` over the quota), `remove`, `clear`, `len` or `key` (key = index).
     /// Nothing answers when the page has no lasting storage (not an http(s) page).
     pub const STORAGE: u32 = 33;
+    /// WebSocket: (`open`, url, protocols comma-separated) answers the socket's id;
+    /// (`send`, id, `t` or `b`, bytes); (`close`, id, code, reason). The browser
+    /// connects after the script returns and dispatches `ws\tID\topen\tPROTOCOL`,
+    /// `ws\tID\tmessage\tt|b` (then [`WS_TAKE`] has the bytes), `ws\tID\terror` and
+    /// `ws\tID\tclose\tCODE\tCLEAN\tREASON`.
+    pub const WS: u32 = 73;
+    /// IndexedDB databases of the page's origin, each kept whole: (`load`, name) its
+    /// saved form; (`save`, name, text) answers `!` over the quota; (`delete`, name);
+    /// (`list`) the names, one per line. Nothing answers without lasting storage.
+    pub const IDB: u32 = 34;
+    /// (id): the oldest message not yet taken (text, or with bit 16 an ArrayBuffer).
+    pub const WS_TAKE: u32 = 74;
 }
 
 /// What scripts act on. A `None` result is JavaScript `null`.

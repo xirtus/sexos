@@ -14,12 +14,14 @@
 
 extern crate alloc;
 
+mod download;
 mod media;
 mod mse;
 mod keys;
 mod profile;
 mod tabs;
 mod viewport;
+mod websocket;
 
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -224,6 +226,11 @@ struct Browser {
     finding: bool,
     /// The zoom the shown page was laid out at.
     laid_zoom: u32,
+    /// Every page's WebSockets (each knows its page).
+    sockets: Vec<websocket::Conn>,
+    /// This window's finished downloads, and the one running (for the bar).
+    downloads: Vec<download::Done>,
+    download_status: Option<String>,
 }
 
 /// Most iframes a page loads; more show as empty boxes.
@@ -476,11 +483,12 @@ impl Browser {
 
     /// When the next timer of any page (shown or framed) is due.
     fn next_due(&self) -> Option<u64> {
-        self.frames.iter().filter_map(|f| f.timer).chain(self.timer).chain(self.profile.due).min()
+        self.frames.iter().filter_map(|f| f.timer).chain(self.timer).chain(self.profile.due).chain(self.ws_due()).min()
     }
 
     /// Runs the timers that are due, on every page.
     fn tick_all(&mut self) {
+        self.ws_poll();
         let now = sex_pdx::get_ticks();
         if self.profile.due.is_some_and(|d| d <= now) { self.profile.save(&mut self.window, &self.jar.borrow(), wall(), false); }
         if self.timer.is_some_and(|t| t <= now) { self.tick(); }
@@ -495,6 +503,7 @@ impl Browser {
     /// After any work: frames follow the page, messages are delivered, and a frame's
     /// change shows.
     fn settle(&mut self) {
+        self.ws_asks();
         self.profile.touched(&self.jar.borrow());
         if core::mem::take(&mut self.frames_check) { self.sync_frames(); }
         if !self.frames.is_empty() { self.deliver(); }
@@ -508,6 +517,7 @@ impl Browser {
         let start = sex_pdx::get_ticks();
         let pixels = &mut self.window.pixels()[..self.surface.pixels];
         let bar = match (&self.editing, self.status) {
+            (None, _) if self.download_status.is_some() => self.download_status.clone().unwrap_or_default(),
             (Some(t), _) => t.clone(),
             (None, Some(s)) => alloc::format!("{}  {}", s, self.url),
             (None, None) => if self.page.title.is_empty() { self.url.clone() } else { alloc::format!("{} — {}", self.page.title, self.url) },
@@ -631,7 +641,10 @@ impl Browser {
         }
         if self.in_frame.is_none() { self.status = Some("Loading…"); }
         self.url = String::from(url);
-        // Leaving the page stops its sound and pictures, and their downloads, and its frames.
+        // Leaving the page stops its sound and pictures, and their downloads, and its
+        // frames and sockets.
+        let owner = self.doc.get().owner();
+        self.ws_close_page(owner);
         self.drop_frames();
         self.media.clear();
         for mut l in core::mem::take(&mut self.media_loads) { l.ex.cancel(&mut self.window); }
@@ -639,7 +652,9 @@ impl Browser {
         let begun = sex_pdx::get_ticks();
         let referrer = from.as_deref().zip(sex_fetch::Url::parse(url).ok()).and_then(|(f, t)| sex_fetch::referrer(f, &t)).unwrap_or_default();
         self.nav_from = Some(from);
-        let (html, base) = if let Some(page) = built_in(if url.is_empty() { "about:welcome" } else { url }) {
+        let (html, base) = if url == "about:downloads" {
+            (self.downloads_page(), String::from(url))
+        } else if let Some(page) = built_in(if url.is_empty() { "about:welcome" } else { url }) {
             (String::from(page), String::from(if url.is_empty() { "about:welcome" } else { url }))
         } else if let Some(file) = url.strip_prefix('@') {
             self.buf.resize(SOURCE_MAX, 0);
@@ -652,9 +667,11 @@ impl Browser {
                 // A form's POST: the answer is the next page.
                 Some((body, ty)) => self.http("POST", url, &[("Content-Type", if ty.is_empty() { "application/x-www-form-urlencoded" } else { ty.as_str() })], body.as_bytes(), SOURCE_MAX, None)
                     .and_then(|r| if r.status >= 400 { Err(&b"The site answered with an error."[..]) } else { self.buf = r.body; Ok((r.url, 0..self.buf.len())) }),
-                None => self.fetch(url),
+                // A plain load may turn out to be a download, saved to Files as it comes.
+                None => self.fetch_or_download(url).map(|r| r.unwrap_or_else(|| (String::from("about:downloads"), 0..0))),
             };
             match got {
+                Ok((done, _)) if done == "about:downloads" => { self.url = done.clone(); (self.downloads_page(), done) }
                 Ok((final_url, body)) => { let t = text_of(&self.buf[body]); (t, final_url) }
                 Err(why) => (message_page("Can't open this page", core::str::from_utf8(why).unwrap_or(""), url), String::from(url)),
             }
@@ -926,6 +943,7 @@ impl Browser {
     /// Runs due timers and animation frames.
     #[inline(never)]
     fn tick(&mut self) {
+        self.ws_asks();
         self.serve_imports();
         self.serve_fetches();
         self.serve_classic_scripts();
@@ -1704,7 +1722,7 @@ pub extern "C" fn _start() -> ! {
     let doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", view, clock));
     let mut b = Browser { #[cfg(feature = "baseline-jit")] jit_enabled: !given.split_ascii_whitespace().any(|a| a == "--no-jit"), window, surface, reported_size: (width, height), fonts, page, doc, sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), media_asked: false, media_loads: Vec::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None, import_map: Vec::new(), view, parent: None, frames: Vec::new(), in_frame: None, frame_dirty: false, referrer_next: None, nav_from: None, frames_check: false,
         tabs: Vec::new(), active: 0, forward: Vec::new(), profile: Default::default(), suggestions: Vec::new(), chosen: None,
-        find: None, find_at: 0, marks: Vec::new(), finding: false, laid_zoom: 100 };
+        find: None, find_at: 0, marks: Vec::new(), finding: false, laid_zoom: 100, sockets: Vec::new(), downloads: Vec::new(), download_status: None };
     b.profile = profile::Profile::load(&mut b.window, &mut b.jar.borrow_mut(), wall());
     let first_tab = tabs::Tab::blank(&b);
     b.tabs.push(first_tab);

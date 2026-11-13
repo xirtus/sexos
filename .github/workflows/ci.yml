@@ -163,6 +163,10 @@ jobs:
       run: |
         truncate -s 1G "$RUNNER_TEMP/blank-daily.img"
         python3 scripts/program_web_daily_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-daily.img" --out "$RUNNER_TEMP/sexos-runtime/web-daily"
+    - name: Browser WebSocket echo (text, binary, 70 KB, ping, clean close)
+      run: python3 scripts/program_web_websocket_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-daily.img" --out "$RUNNER_TEMP/sexos-runtime/web-websocket"
+    - name: Browser downloads (20 MB to Files, hash read back from disk)
+      run: python3 scripts/program_web_download_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-daily.img" --out "$RUNNER_TEMP/sexos-runtime/web-download"
     - name: Browser forms (GET, urlencoded and multipart POST)
       run: python3 scripts/program_web_form_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-daily.img" --out "$RUNNER_TEMP/sexos-runtime/web-form"
     - name: Native screenshot saved as a real PNG file
