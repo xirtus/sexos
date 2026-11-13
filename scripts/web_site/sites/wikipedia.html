@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<!-- A page in the shape MediaWiki's Vector 2022 skin serves: header, sidebar, sticky
+     title bar, table of contents, infobox table, footnotes. The text is the gate's own. -->
+<html class="client-nojs vector-feature-sticky-header-enabled" lang="en" dir="ltr">
+<head>
+<meta charset="UTF-8">
+<title>Microkernel - Encyclopedia</title>
+<meta name="viewport" content="width=1120">
+<style>
+:root { --border: #a2a9b1; --link: #3366cc; --bg-subtle: #f8f9fa; }
+body { margin: 0; font-family: sans-serif; color: #202122; background: #fff; }
+a { color: var(--link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+.vector-header { display: flex; align-items: center; justify-content: space-between; height: 50px; padding: 0 16px; border-bottom: 1px solid #eaecf0; }
+.vector-header .mw-logo { font-family: serif; font-size: 1.4em; letter-spacing: .02em; }
+.vector-search-box input { width: calc(100% - 80px); min-width: 240px; padding: 5px 8px; border: 1px solid var(--border); border-radius: 2px; }
+.mw-page-container { display: grid; grid-template-columns: 176px minmax(0, 1fr); column-gap: 24px; max-width: 1200px; margin: 0 auto; padding: 0 24px; }
+.vector-toc { position: sticky; top: 8px; font-size: .875em; align-self: start; }
+.vector-toc ul { list-style: none; margin: 0; padding-left: 0; }
+.vector-toc li { margin: 4px 0; }
+.vector-toc .toc-level-2 { padding-left: 12px; }
+.vector-sticky-header { position: sticky; top: 0; background: #fff; border-bottom: 1px solid #eaecf0; z-index: 2; }
+.mw-first-heading { font-family: 'Linux Libertine', Georgia, serif; font-size: 1.8em; font-weight: normal; margin: 8px 0 4px; }
+.vector-page-toolbar { display: flex; gap: 16px; font-size: .875em; border-bottom: 1px solid var(--border); padding-bottom: 4px; }
+#siteSub { font-size: .875em; color: #54595d; margin: 8px 0; }
+.mw-parser-output h2 { font-family: Georgia, serif; font-weight: normal; border-bottom: 1px solid var(--border); margin: 1em 0 .25em; }
+.mw-parser-output h3 { font-size: 1.1em; margin: .6em 0 .2em; }
+.mw-parser-output p { line-height: 1.6; margin: .5em 0; }
+.infobox { float: right; clear: right; width: 22em; margin: 0 0 1em 1em; border: 1px solid var(--border); background: var(--bg-subtle); border-spacing: 3px; font-size: 88%; line-height: 1.5em; }
+.infobox caption { font-weight: bold; font-size: 125%; padding: .2em; }
+.infobox th { text-align: left; vertical-align: top; padding-right: .5em; }
+.hatnote { font-style: italic; padding-left: 1.6em; margin-bottom: .5em; }
+sup.reference { font-size: 80%; line-height: 1; }
+.reflist { font-size: 90%; column-width: 30em; }
+.reflist ol { margin: 0; padding-left: 1.6em; }
+.thumb { float: right; clear: right; margin: .5em 0 1.3em 1.4em; width: 222px; }
+.thumbinner { border: 1px solid #c8ccd1; background: var(--bg-subtle); padding: 3px; font-size: 94%; text-align: center; }
+.thumbimage { display: block; width: 214px; height: 160px; background: linear-gradient(135deg, #dfe6ef, #b7c4d6); }
+.thumbcaption { text-align: left; line-height: 1.4em; padding: 3px; }
+table.wikitable { border-collapse: collapse; background: var(--bg-subtle); margin: 1em 0; }
+table.wikitable th, table.wikitable td { border: 1px solid var(--border); padding: .2em .4em; }
+table.wikitable th { background: #eaecf0; }
+.navbox { clear: both; border: 1px solid var(--border); margin-top: 1em; font-size: 88%; text-align: center; padding: 4px; }
+.catlinks { border: 1px solid var(--border); background: var(--bg-subtle); padding: 5px; margin-top: 1em; font-size: .875em; }
+#footer { font-size: .75em; color: #54595d; padding: 1.25em 0; border-top: 1px solid var(--border); margin-top: 2em; }
+</style>
+</head>
+<body class="skin-vector skin-vector-2022 mediawiki ltr">
+<a class="mw-jump-link" href="#bodyContent" style="position:absolute;left:-9999px">Jump to content</a>
+<header class="vector-header mw-header">
+  <div class="vector-header-start"><a href="#" class="mw-logo">The Free Encyclopedia</a></div>
+  <div class="vector-search-box"><form action="#" id="searchform"><input type="search" name="search" placeholder="Search the encyclopedia" aria-label="Search"><button>Search</button></form></div>
+  <nav class="vector-user-links"><a href="#">Create account</a> · <a href="#">Log in</a></nav>
+</header>
+<div class="mw-page-container">
+  <nav class="vector-column-start">
+    <div class="vector-toc" id="vector-toc" role="navigation" aria-labelledby="toc-heading">
+      <h2 id="toc-heading" style="font-size:1em;margin:12px 0 4px">Contents</h2>
+      <ul>
+        <li><a href="#top">(Top)</a></li>
+        <li><a href="#History">1 History</a></li>
+        <li><a href="#Design">2 Design</a>
+          <ul><li class="toc-level-2"><a href="#Messages">2.1 Messages</a></li><li class="toc-level-2"><a href="#Servers">2.2 Servers</a></li></ul></li>
+        <li><a href="#Performance">3 Performance</a></li>
+        <li><a href="#See_also">4 See also</a></li>
+        <li><a href="#References">5 References</a></li>
+      </ul>
+    </div>
+  </nav>
+  <div class="mw-content-container">
+    <main id="content" class="mw-body" role="main">
+      <div class="vector-sticky-header"><h1 id="firstHeading" class="firstHeading mw-first-heading"><span class="mw-page-title-main">Microkernel</span></h1>
+      <div class="vector-page-toolbar"><a href="#">Article</a><a href="#">Talk</a><span style="flex:1"></span><a href="#">Read</a><a href="#">Edit</a><a href="#">View history</a></div></div>
+      <div id="bodyContent" class="vector-body">
+        <div id="siteSub">From the Free Encyclopedia</div>
+        <div id="mw-content-text" class="mw-body-content"><div class="mw-parser-output">
+          <div role="note" class="hatnote">For the operating system family built on one, see <a href="#">Single address space operating system</a>.</div>
+          <table class="infobox vevent">
+            <caption>Microkernel</caption>
+            <tbody>
+              <tr><th scope="row">Type</th><td>Kernel design</td></tr>
+              <tr><th scope="row">Runs in kernel mode</th><td>Address spaces, threads, message passing</td></tr>
+              <tr><th scope="row">Runs as servers</th><td>Drivers, file systems, network stacks</td></tr>
+              <tr><th scope="row">Contrast</th><td><a href="#">Monolithic kernel</a>, <a href="#">Hybrid kernel</a></td></tr>
+            </tbody>
+          </table>
+          <p>In computer science, a <b>microkernel</b> is the near-minimum amount of software that can provide the mechanisms needed to build an operating system.<sup class="reference"><a href="#cite_note-1">[1]</a></sup> Those mechanisms are low-level address space management, thread management, and inter-process communication (IPC). Everything else, from device drivers to file systems, runs outside the kernel as ordinary programs called <i>servers</i>.</p>
+          <p>Because a fault in a server cannot corrupt the kernel, a microkernel system can restart a failed driver while the rest keeps running.<sup class="reference"><a href="#cite_note-2">[2]</a></sup></p>
+          <h2 id="History"><span class="mw-headline">History</span></h2>
+          <div class="thumb tright"><div class="thumbinner"><span class="thumbimage" role="img" aria-label="Diagram"></span><div class="thumbcaption">Layers of a microkernel system: the kernel at the bottom, servers above it, applications on top.</div></div></div>
+          <p>The idea of keeping the kernel small dates to the late 1960s. Later research systems showed that careful design of message passing makes the cost of crossing between servers small enough for daily use.</p>
+          <h2 id="Design"><span class="mw-headline">Design</span></h2>
+          <h3 id="Messages"><span class="mw-headline">Messages</span></h3>
+          <p>Servers talk by sending messages through the kernel. A message can carry a small amount of data directly, or grant the receiver access to a page of memory.</p>
+          <h3 id="Servers"><span class="mw-headline">Servers</span></h3>
+          <p>Each server owns one job. A file server, for example, answers requests to open and read files and asks a disk driver server for blocks.</p>
+          <table class="wikitable">
+            <tbody><tr><th>Part</th><th>Kernel mode</th><th>User mode</th></tr>
+            <tr><td>Scheduler</td><td>Yes</td><td>—</td></tr>
+            <tr><td>Disk driver</td><td>—</td><td>Yes</td></tr>
+            <tr><td>Network stack</td><td>—</td><td>Yes</td></tr></tbody>
+          </table>
+          <h2 id="Performance"><span class="mw-headline">Performance</span></h2>
+          <p>Early microkernels were slow because every request crossed into the kernel twice. Modern designs keep these crossings short, and a single address space with hardware memory keys can avoid copying altogether.<sup class="reference"><a href="#cite_note-3">[3]</a></sup></p>
+          <h2 id="See_also"><span class="mw-headline">See also</span></h2>
+          <ul><li><a href="#">Exokernel</a></li><li><a href="#">Kernel (operating system)</a></li><li><a href="#">Capability-based security</a></li></ul>
+          <h2 id="References"><span class="mw-headline">References</span></h2>
+          <div class="reflist"><ol class="references">
+            <li id="cite_note-1"><span class="reference-text">An introduction to kernel design. Example Press. p. 12.</span></li>
+            <li id="cite_note-2"><span class="reference-text">Notes on restartable drivers. Example Journal. 4 (2): 33–41.</span></li>
+            <li id="cite_note-3"><span class="reference-text">Single address spaces revisited. Example Workshop.</span></li>
+          </ol></div>
+          <div class="navbox" role="navigation">Operating system kernels: <a href="#">Monolithic</a> · <a href="#">Micro</a> · <a href="#">Hybrid</a> · <a href="#">Exo</a></div>
+        </div></div>
+        <div id="catlinks" class="catlinks">Categories: <a href="#">Operating system kernels</a> | <a href="#">Microkernels</a></div>
+      </div>
+    </main>
+    <footer id="footer" class="mw-footer">This page was last edited on 1 November 2026. Text is available under a free license.</footer>
+  </div>
+</div>
+</body>
+</html>
