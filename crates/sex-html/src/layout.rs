@@ -915,7 +915,7 @@ impl<'a> Layout<'a> {
             "img" | "svg" | "canvas" | "video" | "audio" | "iframe" | "object" | "embed" => {
                 let inline_svg = tag == "svg" && self.dom.attr(n, "src").is_none();
                 let src = if inline_svg { alloc::format!("svg:{n}") } else { self.picture_src(n, tag) };
-                let natural = if tag == "canvas" { Some(self.canvas_size(n)) } else if inline_svg { self.svg_size(n) } else if tag == "audio" { Some((300, 32)) } else { self.host.image_size(&src) };
+                let natural = if tag == "canvas" { Some(self.canvas_size(n)) } else if inline_svg { self.svg_size(n) } else if tag == "audio" { Some((300, 32)) } else { self.host.image_size(&src).map(|(w, h)| (crate::style::zoomed(w), crate::style::zoomed(h))) };
                 // Percentages use the containing block, not the origin used to
                 // prepare this atomic piece. An indefinite percentage height is
                 // auto, so intrinsic aspect/default sizing still applies.
@@ -1656,7 +1656,7 @@ impl<'a> Layout<'a> {
                 let tag = tag.as_str();
                 if matches!(tag, "img" | "svg" | "canvas" | "video" | "audio" | "iframe" | "object" | "embed") {
                     let src = self.picture_src(n, tag);
-                    let natural = if tag == "canvas" { Some(self.canvas_size(n)) } else if tag == "svg" && self.dom.attr(n, "src").is_none() { self.svg_size(n) } else if tag == "audio" { Some((300, 32)) } else { self.host.image_size(&src) };
+                    let natural = if tag == "canvas" { Some(self.canvas_size(n)) } else if tag == "svg" && self.dom.attr(n, "src").is_none() { self.svg_size(n) } else if tag == "audio" { Some((300, 32)) } else { self.host.image_size(&src).map(|(w, h)| (crate::style::zoomed(w), crate::style::zoomed(h))) };
                     // A percentage is indefinite during intrinsic contribution sizing.
                     let height = s.height.resolve(0).filter(|_| matches!(s.height, Len::Px(_)));
                     let w = match (height, natural) {

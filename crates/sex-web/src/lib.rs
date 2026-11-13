@@ -490,23 +490,149 @@ pub const BAR: i32 = 30;
 /// The whole window: a bar showing `bar_text` (the address, or what is being typed,
 /// with a caret when `editing`), then `page` scrolled by `scroll`.
 pub fn frame(page: &Page, fonts: &mut Fonts, pixels: &mut [u32], width: i32, height: i32, scroll: i32, focus: Option<usize>, bar_text: &str, editing: bool) {
+    let chrome = Chrome { text: bar_text, editing, ..Chrome::default() };
+    frame_with(page, fonts, pixels, width, height, scroll, focus, &chrome);
+}
+
+/// What the browser draws around the page: the bar (tabs and address), suggestions
+/// under the address while typing, find-in-page marks and the find bar.
+#[derive(Default)]
+pub struct Chrome<'a> {
+    /// The address, or what is being typed.
+    pub text: &'a str,
+    pub editing: bool,
+    /// Each tab's label; the strip shows only with two tabs or more.
+    pub tabs: &'a [String],
+    pub active: usize,
+    /// Addresses offered under the bar while typing, and the chosen one.
+    pub suggestions: &'a [String],
+    pub chosen: Option<usize>,
+    /// Find in page: what is searched, the current match (from 0) and how many there are.
+    pub find: Option<(&'a str, usize, usize)>,
+    /// Page rectangles (x, y, w, h) of the find matches.
+    pub marks: &'a [[i32; 4]],
+    /// The page zoom in percent, shown in the bar when not 100.
+    pub zoom: u32,
+}
+
+/// Tab chips in the bar: each chip's x and width, for `width` and `n` tabs.
+pub fn tab_chips(width: i32, n: usize) -> Vec<(i32, i32)> {
+    if n < 2 { return Vec::new(); }
+    // Tabs take up to half the bar; the address keeps the rest.
+    let room = (width / 2 - 8).max(0);
+    let w = (room / n as i32).clamp(28, 140);
+    (0..n).map(|i| (6 + i as i32 * (w + 2), w)).take_while(|(x, w)| x + w <= width - 60).collect()
+}
+
+/// Rows of suggestions under the bar.
+pub const SUGGESTION_ROW: i32 = 24;
+
+/// The suggestion row under (`x`, `y`) in window coordinates, if any.
+pub fn suggestion_at(width: i32, count: usize, x: i32, y: i32) -> Option<usize> {
+    if x < 6 || x >= width - 6 || y < BAR { return None; }
+    let i = ((y - BAR) / SUGGESTION_ROW) as usize;
+    (i < count).then_some(i)
+}
+
+/// The bar's own label for a tab: its title cut to fit `w`.
+fn fit(fonts: &mut Fonts, text: &str, font: FontKey, w: i32) -> String {
+    let mut shown = String::from(text);
+    if fonts.text_width(&shown, font) <= w { return shown; }
+    while !shown.is_empty() && fonts.text_width(&shown, font) + fonts.text_width("…", font) > w { shown.pop(); }
+    shown.push('…');
+    shown
+}
+
+/// Like [`frame`], with tabs, suggestions, find marks and zoom.
+pub fn frame_with(page: &Page, fonts: &mut Fonts, pixels: &mut [u32], width: i32, height: i32, scroll: i32, focus: Option<usize>, c: &Chrome) {
     let mut t = Target { pixels, width, height, scroll, top: BAR, premul: false, clip: None };
     paint(page, fonts, &mut t, focus);
+    // Find matches: the current one strong, the others light, over the text.
+    for (i, m) in c.marks.iter().enumerate() {
+        let current = c.find.is_some_and(|(_, at, _)| at == i);
+        let color = if current { 0x80FF_8C00 } else { 0x70FF_EB3B };
+        t.fill(m[0], m[1], m[2], m[3], color, 2);
+    }
     let mut bar = Target { pixels: t.pixels, width, height: height.min(BAR).max(0), scroll: 0, top: 0, premul: false, clip: None };
     bar.fill(0, 0, width, BAR, 0xFF0D_1420, 0);
-    bar.fill(6, 4, width - 12, BAR - 8, if editing { 0xFFFF_FFFF } else { 0xFF22_2C3A }, 8);
     let font = FontKey { size: 13, bold: false, italic: false, mono: false };
-    let color = if editing { 0xFF1F_1F1F } else { 0xFFD7_E3F0 };
+    let small = FontKey { size: 12, ..font };
+    let chips = tab_chips(width, c.tabs.len());
+    for (i, (x, w)) in chips.iter().enumerate() {
+        let on = i == c.active;
+        bar.fill(*x, 4, *w, BAR - 8, if on { 0xFF3A_4A60 } else { 0xFF18_2230 }, 6);
+        let label = fit(fonts, &c.tabs[i], small, w - 12);
+        text_run(&mut bar, fonts, x + 6, 19, small, if on { 0xFFFF_FFFF } else { 0xFF9A_A8B8 }, &label);
+    }
+    let left = chips.last().map_or(6, |(x, w)| x + w + 6);
+    let zoom = if c.zoom != 0 && c.zoom != 100 { alloc::format!("{}%", c.zoom) } else { String::new() };
+    let zoom_w = if zoom.is_empty() { 0 } else { fonts.text_width(&zoom, small) + 10 };
+    bar.fill(left, 4, width - 6 - left - zoom_w, BAR - 8, if c.editing { 0xFFFF_FFFF } else { 0xFF22_2C3A }, 8);
+    if !zoom.is_empty() { text_run(&mut bar, fonts, width - zoom_w, 19, small, 0xFFD7_E3F0, &zoom); }
+    let color = if c.editing { 0xFF1F_1F1F } else { 0xFFD7_E3F0 };
     // Keep the end of a long address in view while typing.
-    let room = width - 40;
-    let mut shown = bar_text;
+    let room = width - left - 34 - zoom_w;
+    let mut shown = c.text;
     while fonts.text_width(shown, font) > room && !shown.is_empty() {
         let cut = shown.char_indices().nth(1).map_or(shown.len(), |(i, _)| i);
-        shown = if editing { &shown[cut..] } else { &shown[..shown.char_indices().last().map_or(0, |(i, _)| i)] };
+        shown = if c.editing { &shown[cut..] } else { &shown[..shown.char_indices().last().map_or(0, |(i, _)| i)] };
     }
-    text_run(&mut bar, fonts, 16, 19, font, color, shown);
-    if editing {
-        let x = 16 + fonts.text_width(shown, font) + 1;
+    text_run(&mut bar, fonts, left + 10, 19, font, color, shown);
+    if c.editing {
+        let x = left + 10 + fonts.text_width(shown, font) + 1;
         bar.fill(x, 8, 1, BAR - 16, 0xFF0B_57D0, 0);
     }
+    // Suggestions drop down over the page.
+    let all = Target { pixels: bar.pixels, width, height, scroll: 0, top: 0, premul: false, clip: None };
+    let mut over = all;
+    if c.editing && !c.suggestions.is_empty() {
+        let h = c.suggestions.len() as i32 * SUGGESTION_ROW + 4;
+        over.fill(6, BAR, width - 12, h, 0xFFFF_FFFF, 0);
+        over.fill(6, BAR + h - 1, width - 12, 1, 0xFFC4_C7C5, 0);
+        for (i, s) in c.suggestions.iter().enumerate() {
+            let y = BAR + 2 + i as i32 * SUGGESTION_ROW;
+            if c.chosen == Some(i) { over.fill(6, y, width - 12, SUGGESTION_ROW, 0xFFD3_E3FD, 0); }
+            let label = fit(fonts, s, font, width - 32);
+            text_run(&mut over, fonts, 16, y + 17, font, 0xFF1F_1F1F, &label);
+        }
+    }
+    // The find bar sits at the bottom right.
+    if let Some((query, at, count)) = c.find {
+        let status = if count == 0 { String::from("no matches") } else { alloc::format!("{} of {}", at + 1, count) };
+        let w = (fonts.text_width(query, font) + fonts.text_width(&status, small) + 48).clamp(180, width - 12);
+        let (x, y) = (width - 6 - w, height - BAR);
+        over.fill(x, y, w, BAR - 4, 0xFF22_2C3A, 8);
+        over.fill(x + 6, y + 4, w - 20 - fonts.text_width(&status, small), BAR - 12, 0xFFFF_FFFF, 4);
+        let q = fit(fonts, query, font, w - 40 - fonts.text_width(&status, small));
+        text_run(&mut over, fonts, x + 10, y + 17, font, 0xFF1F_1F1F, &q);
+        let cx = x + 11 + fonts.text_width(&q, font);
+        over.fill(cx, y + 7, 1, BAR - 18, 0xFF0B_57D0, 0);
+        text_run(&mut over, fonts, x + w - 8 - fonts.text_width(&status, small), y + 17, small, if count == 0 { 0xFFFF_8A80 } else { 0xFFD7_E3F0 }, &status);
+    }
+}
+
+/// Find in page: the page rectangles (x, y, w, h) of each place `query` shows in the
+/// page's text, in reading order, ignoring case. Matches within one run of text.
+pub fn find_marks(page: &Page, fonts: &mut Fonts, query: &str) -> Vec<[i32; 4]> {
+    let mut out = Vec::new();
+    if query.is_empty() { return out; }
+    let q: Vec<char> = query.chars().flat_map(char::to_lowercase).collect();
+    for item in page.items.iter() {
+        let Item::Text { x, baseline, font, text, .. } = item else { continue };
+        let lower: Vec<(usize, char)> = text.char_indices().flat_map(|(i, c)| c.to_lowercase().map(move |l| (i, l))).collect();
+        if lower.len() < q.len() { continue; }
+        let mut i = 0;
+        while i + q.len() <= lower.len() {
+            if lower[i..i + q.len()].iter().map(|(_, c)| *c).eq(q.iter().copied()) {
+                let start = lower[i].0;
+                let end = lower.get(i + q.len()).map_or(text.len(), |(b, _)| *b);
+                let x0 = x + fonts.text_width(&text[..start], *font);
+                let w = fonts.text_width(&text[start..end], *font).max(2);
+                out.push([x0 - 1, baseline - font.size + font.size / 8, w + 2, font.size * 5 / 4]);
+                if out.len() >= 1000 { return out; }
+                i += q.len();
+            } else { i += 1; }
+        }
+    }
+    out
 }

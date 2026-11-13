@@ -179,3 +179,22 @@ fn referrer_policy() {
     let text = core::str::from_utf8(&out).unwrap();
     assert!(text.contains("Referer: https://a.example/\r\n") && !text.contains("evil"), "{text}");
 }
+
+#[test]
+fn cookies_outlast_the_run_when_they_have_an_expiry() {
+    let a = Url::parse("https://a.example/x").unwrap();
+    let mut jar = Jar::new();
+    let before = jar.changes();
+    jar.store(&a, "keep=1; Max-Age=3600", 1000);
+    jar.store(&a, "session=1", 1000);
+    jar.store(&a, "secret=2; Max-Age=3600; HttpOnly; Secure", 1000);
+    assert!(jar.changes() > before);
+    let back = Jar::load(&jar.save(1000), 1001);
+    assert_eq!(back.header(&a, 1001).as_deref(), Some("keep=1; secret=2"));
+    assert_eq!(back.script_view(&a, 1001), "keep=1");
+    // Expired by the time it is read back.
+    assert_eq!(Jar::load(&jar.save(1000), 5000).len(), 0);
+    let mut back = back;
+    back.clear_site("a.example");
+    assert_eq!(back.len(), 0);
+}
