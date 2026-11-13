@@ -145,7 +145,7 @@ struct Clock(u32);
 impl rustls::time_provider::TimeProvider for Clock {
     fn current_time(&self) -> Option<UnixTime> { Some(UnixTime::since_unix_epoch(core::time::Duration::from_secs(self.0 as u64))) }
 }
-fn config(seconds: u32) -> Result<ClientConfig, rustls::Error> {
+fn config(seconds: u32, alpn: &[&[u8]]) -> Result<ClientConfig, rustls::Error> {
     let provider = Arc::new(provider::provider(SUPPORTED));
     let mut store = RootCertStore::empty();
     store.extend(roots().iter().cloned());
@@ -155,7 +155,7 @@ fn config(seconds: u32) -> Result<ClientConfig, rustls::Error> {
         .with_protocol_versions(&[&rustls::version::TLS13, &rustls::version::TLS12])?
         .dangerous().with_custom_certificate_verifier(verifier)
         .with_no_client_auth();
-    config.alpn_protocols = alloc::vec![b"http/1.1".to_vec()];
+    config.alpn_protocols = alpn.iter().map(|p| p.to_vec()).collect();
     Ok(config)
 }
 impl Failure {
@@ -180,12 +180,15 @@ impl Session {
     /// Starts the handshake with `host`. The kernel-seeded `seed` is mixed into the
     /// service's generator and wiped; `seconds` is the time certificates are checked
     /// at. The session sizes its own queues.
-    pub fn start(host: &str, seed: &mut [u8; 32], seconds: u32) -> Result<Self, crate::Error> {
+    pub fn start(host: &str, seed: &mut [u8; 32], seconds: u32) -> Result<Self, crate::Error> { Self::start_offering(host, seed, seconds, &[b"http/1.1"]) }
+    /// As `start`, offering the application protocols `alpn` (most wanted first), such
+    /// as `[b"h2", b"http/1.1"]`; `alpn()` says which the server chose.
+    pub fn start_offering(host: &str, seed: &mut [u8; 32], seconds: u32, alpn: &[&[u8]]) -> Result<Self, crate::Error> {
         provider::reseed(seed);
         crate::erase(seed);
         if !(1_577_836_800..=4_102_444_799).contains(&seconds) { return Err(crate::Error::Clock); }
         let name = ServerName::try_from(host).map_err(|_| crate::Error::Policy)?.to_owned();
-        let config = config(seconds).map_err(|_| crate::Error::Policy)?;
+        let config = config(seconds, alpn).map_err(|_| crate::Error::Policy)?;
         let conn = UnbufferedClientConnection::new(Arc::new(config), name).map_err(|_| crate::Error::Policy)?;
         let mut session = Self { conn: Some(conn), wire_in: Vec::new(), wire_out: Vec::new(), plain_out: Vec::new(), plain_in: Vec::new(), peer_closed: false, stage: Stage::Handshake };
         session.wire_in.try_reserve_exact(WIRE_IN).map_err(|_| crate::Error::Memory)?;
@@ -295,6 +298,8 @@ impl Session {
         self.plain_in.drain(..n);
         n
     }
+    /// The application protocol the server chose by ALPN, once the handshake is done.
+    pub fn alpn(&self) -> Option<&[u8]> { self.conn.as_ref()?.alpn_protocol() }
     pub fn drained(&self) -> bool { self.plain_in.is_empty() && matches!(self.stage, Stage::Finished | Stage::Failed(_)) }
     /// The protocol version and suite agreed, once the handshake is done.
     pub fn agreed(&self) -> Option<(rustls::ProtocolVersion, rustls::CipherSuite, Option<rustls::NamedGroup>)> {
@@ -408,6 +413,83 @@ print('connections=%d requests=%d alpn=%s'%(conns,reqs,alpn),flush=True)
             let _ = server.wait();
             let _ = std::fs::remove_dir_all(&dir);
         }
+    }
+
+    /// HTTP/2 over TLS: ALPN picks h2, and fifty requests share the one connection.
+    #[test]
+    fn alpn_h2_carries_fifty_streams_over_one_session() {
+        if Command::new("python3").args(["-c", "import h2"]).status().map_or(true, |s| !s.success()) {
+            assert!(std::env::var("SEXOS_REQUIRE_H2").is_err(), "python3 h2 missing (pip install h2)");
+            return;
+        }
+        const H2: &str = r#"
+import socket,ssl,sys,h2.connection,h2.config,h2.events
+c=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);c.load_cert_chain(sys.argv[1],sys.argv[2]);c.set_alpn_protocols(['h2','http/1.1'])
+s=socket.socket();s.bind(('127.0.0.1',0));s.listen(1);print(s.getsockname()[1],flush=True)
+t=c.wrap_socket(s.accept()[0],server_side=True);alpn=t.selected_alpn_protocol()
+h=h2.connection.H2Connection(config=h2.config.H2Configuration(client_side=False));h.initiate_connection();t.sendall(h.data_to_send())
+served=0
+while served<50:
+ d=t.recv(65536)
+ if not d:break
+ for e in h.receive_data(d):
+  if isinstance(e,h2.events.RequestReceived):
+   p=dict(e.headers)[b':path'];body=b'stream body for '+p
+   h.send_headers(e.stream_id,[(':status','200'),('content-length',str(len(body)))]);h.send_data(e.stream_id,body,end_stream=True);served+=1
+ t.sendall(h.data_to_send())
+print('served=%d alpn=%s'%(served,alpn),flush=True)
+"#;
+        let host = "h2.sexos.test";
+        let dir = std::env::temp_dir().join(format!("sexos-tls-h2-{}", std::process::id()));
+        chain(&dir, host, "ec:P-256");
+        let seconds = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as u32 + 1;
+        let mut server = Command::new("python3").current_dir(&dir).args(["-c", H2, "leaf.pem", "leaf.key"]).stdout(Stdio::piped()).spawn().unwrap();
+        let mut lines = BufReader::new(server.stdout.take().unwrap());
+        let mut port = String::new();
+        lines.read_line(&mut port).unwrap();
+        let mut socket = TcpStream::connect(("127.0.0.1", port.trim().parse::<u16>().unwrap())).unwrap();
+        socket.set_nonblocking(true).unwrap();
+        let mut session = Session::start_offering(host, &mut [9; 32], seconds, &[b"h2", b"http/1.1"]).unwrap();
+        let mut h2 = sex_http::h2::Client::new();
+        let (mut asked, mut ended, mut bodies) = (false, 0, std::collections::BTreeMap::<u32, std::vec::Vec<u8>>::new());
+        let began = Instant::now();
+        while ended < 50 {
+            let mut chunk = [0u8; 16384];
+            match socket.read(&mut chunk[..session.wire_room().min(16384)]) { Ok(0) => session.peer_closed(), Ok(k) => session.offer_wire(&chunk[..k]), Err(_) => {} }
+            session.poll();
+            if session.stage() == Stage::Ready {
+                if !asked {
+                    assert_eq!(session.alpn(), Some(&b"h2"[..]));
+                    for n in 0..50 { h2.request(b"GET", b"https", host.as_bytes(), format!("/{n}").as_bytes(), &[], None).unwrap(); }
+                    asked = true;
+                }
+                let out = h2.output();
+                if !out.is_empty() { assert_eq!(session.send(&out), out.len()); session.finish_request(); }
+                let k = session.receive(&mut chunk);
+                if k > 0 { h2.receive(&chunk[..k]).unwrap(); }
+                while let Some(e) = h2.event() {
+                    match e {
+                        sex_http::h2::Event::Data { stream, bytes } => bodies.entry(stream).or_default().extend(bytes),
+                        sex_http::h2::Event::End { .. } => ended += 1,
+                        _ => {}
+                    }
+                }
+            }
+            let k = session.take_wire(&mut chunk);
+            if k > 0 { let _ = socket.write_all(&chunk[..k]); }
+            assert!(!matches!(session.stage(), Stage::Failed(_)), "{:?}", session.stage());
+            assert!(began.elapsed() < Duration::from_secs(30), "stuck: {ended} ended");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        for (i, (stream, body)) in bodies.iter().enumerate() { assert_eq!(*stream, 1 + 2 * i as u32); assert_eq!(body, format!("stream body for /{i}").as_bytes()); }
+        assert_eq!(bodies.len(), 50);
+        let _ = socket.write_all(&[]);
+        drop(socket);
+        let mut summary = String::new();
+        lines.read_to_string(&mut summary).unwrap();
+        server.wait().unwrap();
+        assert_eq!(summary.trim(), "served=50 alpn=h2");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A server whose certificate the public roots don't vouch for is refused, and the
