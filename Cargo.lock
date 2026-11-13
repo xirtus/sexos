@@ -1816,6 +1816,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-config"
+version = "0.1.0"
+
+[[package]]
 name = "sex-disk"
 version = "0.1.0"
 dependencies = [
@@ -1970,6 +1974,7 @@ name = "sex-pdx"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "sex-config",
  "sex-net-config",
  "sex-trust-config",
  "spin",

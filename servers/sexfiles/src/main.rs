@@ -29,6 +29,7 @@ mod document_journal;
 mod history_journal;
 mod history_disk;
 mod crash_keeper;
+mod config_store;
 
 use crate::trampoline::trampoline_main;
 

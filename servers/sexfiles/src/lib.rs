@@ -10,6 +10,7 @@ pub mod spindle_history;
 mod spindle_probe;
 mod program_store;
 mod fs_service;
+mod config_store;
 mod recording_role;
 mod recording_image;
 mod recording_journal;

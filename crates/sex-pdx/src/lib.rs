@@ -1300,5 +1300,6 @@ pub mod clipboard;
 pub mod clipboard_client;
 pub mod app_key;
 pub mod app_pointer;
+pub mod config;
 pub mod app_scroll;
 pub mod bitmap_batch;

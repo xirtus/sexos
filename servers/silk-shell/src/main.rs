@@ -16,6 +16,7 @@ mod app_input;
 mod wm;
 mod launcher_search;
 mod session;
+mod config_watch;
 use alloc::vec::Vec;
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -16070,6 +16071,14 @@ unsafe fn desktop_look_step(wallpaper: u8, night: u8) -> bool {
     use sex_pdx::desktop_look as look;
     let (w, n) = DESKTOP_LOOK;
     let next = ((w + wallpaper) % look::WALLPAPERS.len() as u8, (n + night) % look::NIGHT_LEVELS);
+    let ok = desktop_look_apply(next.0, next.1);
+    if ok { use sex_pdx::config::schema::id; config_watch::changed_here(id::WALLPAPER, next.0 as i32); config_watch::changed_here(id::NIGHT_LIGHT, next.1 as i32); }
+    ok
+}
+/// Shows a wallpaper and night light level (from a key or from settings).
+unsafe fn desktop_look_apply(wallpaper: u8, night: u8) -> bool {
+    use sex_pdx::desktop_look as look;
+    let next = (wallpaper % look::WALLPAPERS.len() as u8, night % look::NIGHT_LEVELS);
     let ok = pdx_call(SLOT_DISPLAY, look::OP_DESKTOP_LOOK, next.0 as u64, next.1 as u64, 0).0 == 0;
     if ok { DESKTOP_LOOK = next; }
     sex_pdx::serial_record!("[shell.look] wallpaper={} name={} night={} ok={}", next.0, look::WALLPAPERS[next.0 as usize].0, next.1, ok as u8);
@@ -25804,6 +25813,7 @@ pub extern "C" fn _start() -> ! {
         // empty, flush the coalesced cursor position (latest wins) before
         // blocking — the display gets exactly one current-state update per
         // drained burst instead of one IPC per HID event.
+        config_watch::poll();
         let msg = match pop_startup_message().or_else(|| pdx_try_listen_raw(0)) {
             Some(m) => m,
             None => {
@@ -25818,9 +25828,10 @@ pub extern "C" fn _start() -> ! {
             }
         };
         // Display started again after a crash: it knows nothing of the desktop, so show it again.
-        if sex_pdx::display_ready::is_display_ready(&msg) { unsafe { display_came_back(); } continue; }
+        if sex_pdx::display_ready::is_display_ready(&msg) { unsafe { display_came_back(); } config_watch::display_restarted(); continue; }
         unsafe {
             if shell_lifecycle_hint(&msg) { continue; }
+            if config_watch::receive(&msg) { continue; }
             if shell_program_message(&msg) { continue; }
             if clipboard_receive(&msg) { continue; }
             if notification_receive(&msg) { continue; }

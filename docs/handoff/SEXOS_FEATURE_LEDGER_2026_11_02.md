@@ -4006,3 +4006,20 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   with a token request in both methods, and both sides agree on the PMK. A wrong
   password gets no confirm.
 - **ABI / kernel:** none.
+
+## Settings store, slice B1: `sex-config` kept by Files (2026-11-13)
+- **What:** new `crates/sex-config`: one typed schema of 18 settings (appearance,
+  desktop, display, keyboard, sound, time, session, setup) with stable numbers, ranges
+  and defaults, and a forgiving TOML-subset text form. Files keeps the live table and
+  writes it to `/system/settings.toml` on every change. The Shell watches it by
+  generation and applies what it owns; wallpaper and night light chosen with Super+B
+  and Super+Shift+N now last across restarts (the "not yet" above). Plan:
+  `DAILY_DRIVER_NEXT_100_SLICES.md` workstream B.
+- **Who may change settings:** the Shell (over its program route), Spindle, and the
+  program Files bound to `/data/settings`, all named by the kernel's caller domain.
+  Everyone with a route to Files may read. Files checks every key and range.
+- **Evidence:** `cargo test -p sex-config` (schema, round trip, hand-edited files,
+  protocol and caller rules), in CI. QEMU gate `scripts/settings_persist_gate.py`
+  (two starts on one disk).
+- **ABI:** new PDX opcode `0x2F0` (`sex_pdx::config::OP`) to Files, reply tag `0xC6`.
+  No syscall, no kernel change.
