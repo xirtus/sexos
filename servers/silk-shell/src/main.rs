@@ -10561,13 +10561,14 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
             false
         },
         desktop_keys::Action::Consume=>true,
-        desktop_keys::Action::NextFrame=>{
+        desktop_keys::Action::Switch(dir)=>{
             let old=FOCUSED_SURFACE_ID;
             if COMMAND_PALETTE_OPEN {toggle_command_palette();}
-            focus_next_frame();
+            switcher_step(dir);
             sex_pdx::serial_record!("[shell.app.switch] old={} new={} live={} shortcut=alt_tab",old,FOCUSED_SURFACE_ID,surface_is_alive(FOCUSED_SURFACE_ID) as u8);
             true
         }
+        desktop_keys::Action::SwitchEnd(keep)=>{switcher_end(keep);true}
         desktop_keys::Action::Volume(step)=>{volume_key(step);true}
         desktop_keys::Action::TextZoom(step)=>{
             // Display owns text layout; Shell only names the focused window and the step.
@@ -10584,6 +10585,39 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
             true
         }
     }
+}
+
+// ── Alt+Tab window switcher (KDE/GNOME style) ──────────────────────────────
+// Order and stepping live in sex_pdx::window_switcher (host-tested); Display
+// draws the cards with live thumbnails. Focus follows the selection while Alt
+// is held, so the chosen window is already raised when Alt is let go.
+static mut SWITCHER_RECENT: sex_pdx::window_switcher::Recent<MAX_FRAMES> = sex_pdx::window_switcher::Recent::new();
+static mut SWITCHER: sex_pdx::window_switcher::Session = sex_pdx::window_switcher::Session::new();
+unsafe fn switcher_publish() {
+    let [a, b, c] = SWITCHER.state().wire();
+    let (status, _) = pdx_call(SLOT_DISPLAY, sex_pdx::window_switcher::OP_WINDOW_SWITCHER, a, b, c);
+    sex_pdx::serial_record!("[shell.switcher] open={} count={} selected={} status={:#x}", SWITCHER.is_open() as u8, c & 0xF, c >> 8 & 0xF, status);
+}
+unsafe fn switcher_step(dir: i8) {
+    let mut frames = [(0u32, 0u64, wm::Rect::default()); MAX_FRAMES];
+    let n = wm_visible_frames(&mut frames, false);
+    let mut present = [0u64; MAX_FRAMES];
+    for i in 0..n { present[i] = frames[i].1; }
+    let mut ordered = [0u64; sex_pdx::window_switcher::MAX_ENTRIES];
+    if !SWITCHER.is_open() && FOCUSED_SURFACE_ID != 0 { SWITCHER_RECENT.touch(FOCUSED_SURFACE_ID); }
+    let count = SWITCHER_RECENT.order(&present[..n], &mut ordered);
+    match SWITCHER.step(&ordered[..count], FOCUSED_SURFACE_ID, dir) {
+        Some(sid) => { if sid != FOCUSED_SURFACE_ID { try_set_focus(sid); } switcher_publish(); }
+        // No window on this workspace: the old frame walk (panels, consoles).
+        None => focus_next_frame(),
+    }
+}
+unsafe fn switcher_end(keep: bool) {
+    let Some(sid) = SWITCHER.end(keep) else { return };
+    if sid != 0 && sid != FOCUSED_SURFACE_ID { try_set_focus(sid); }
+    if FOCUSED_SURFACE_ID != 0 { SWITCHER_RECENT.touch(FOCUSED_SURFACE_ID); }
+    switcher_publish();
+    sex_pdx::serial_record!("[shell.switcher.end] keep={} focus={}", keep as u8, FOCUSED_SURFACE_ID);
 }
 
 /// A volume key: Bell keeps the volume and answers with the new state, which Shell
@@ -23180,6 +23214,8 @@ unsafe fn try_set_focus_inner(sid: u64,refresh_children:bool) -> bool {
     if refresh_children {if let Some((x,y,w,h))=get_surface_bounds(sid) { native_child_geometry(sid,x,y,w,h); }}
     let old_focus = FOCUSED_SURFACE_ID;
     FOCUSED_SURFACE_ID = sid;
+    // Alt+Tab order; steps inside an open switcher do not reorder it.
+    if !SWITCHER.is_open() { SWITCHER_RECENT.touch(sid); }
     // A4: Sync FocusRef shadow and emit commit marker.
     sync_focus_ref();
     serial_println!("[focus.ref.commit] id={}", sid);

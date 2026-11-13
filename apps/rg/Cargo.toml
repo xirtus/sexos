@@ -1,0 +1,29 @@
+[package]
+name = "rg"
+version = "15.2.0"
+edition = "2024"
+# ripgrep's own licence (vendor/ripgrep-15.2.0/COPYING); the SexOS lines in it are tagged.
+license = "Unlicense OR MIT"
+description = "ripgrep 15.2.0 (vendor/ripgrep-15.2.0) as a SexOS program"
+
+# ripgrep's binary source, unchanged but for lines marked `SexOS:`.
+[[bin]]
+name = "rg"
+path = "../../vendor/ripgrep-15.2.0/crates/core/main.rs"
+
+# ripgrep 15.2.0's own dependency list (its Cargo.toml), plus sex-std.
+[dependencies]
+sex-std = { path = "../../crates/sex-std" }
+anyhow = "1.0.75"
+bstr = "1.7.0"
+grep = "0.4.1"
+ignore = "0.4.29"
+lexopt = "0.3.0"
+log = "0.4.5"
+serde_json = "1.0.23"
+termcolor = "1.4.0"
+textwrap = { version = "0.16.0", default-features = false }
+
+# ripgrep without PCRE2 (a C library): its `pcre2` feature stays off.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("pcre2"))'] }

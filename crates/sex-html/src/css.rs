@@ -3,7 +3,7 @@
 //!
 //! Declarations stay as text until the cascade needs them (see `style`). `@media`
 //! blocks are kept when their query fits the viewport width; `@supports` content is
-//! kept; other at-rules (`@font-face`, `@keyframes`, `@import`, ...) are skipped.
+//! kept; `@keyframes` and `@font-face` are collected; other at-rules (`@import`, ...) are skipped.
 use crate::dom::{Dom, Kind, NodeId};
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -56,6 +56,47 @@ pub struct Sheet {
     pub rules: Vec<Rule>,
     /// `@keyframes`: each animation's frames, at offsets in thousandths.
     pub keyframes: Vec<(String, Vec<(i32, Vec<Declaration>)>)>,
+    /// `@font-face` rules, in order.
+    pub font_faces: Vec<FontFace>,
+}
+
+/// One `@font-face`: the family it names, its sources (addresses, as written, with
+/// their `format()` hint lowercased) and the weight and style it is for.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FontFace {
+    pub family: String,
+    pub sources: Vec<(String, String)>,
+    pub bold: bool,
+    pub italic: bool,
+}
+
+/// Reads one `@font-face` block.
+pub fn parse_font_face(inner: &str) -> Option<FontFace> {
+    let mut f = FontFace::default();
+    for d in parse_declarations(inner) {
+        let v = d.value.trim();
+        match d.name.as_str() {
+            "font-family" => f.family = String::from(v.trim_matches(|c| c == '"' || c == '\'').trim()),
+            "font-weight" => f.bold = v.split_whitespace().next().map_or(false, |w| w == "bold" || w == "bolder" || w.parse::<u32>().map_or(false, |n| n >= 600)),
+            "font-style" => f.italic = v.starts_with("italic") || v.starts_with("oblique"),
+            "src" => {
+                for part in split_top(v, ',') {
+                    let part = part.trim();
+                    let Some(at) = part.find("url(") else { continue };
+                    let rest = &part[at + 4..];
+                    let Some(close) = rest.find(')') else { continue };
+                    let url = rest[..close].trim().trim_matches(|c| c == '"' || c == '\'');
+                    let format = part.find("format(").map(|i| {
+                        let r = &part[i + 7..];
+                        String::from(r[..r.find(')').unwrap_or(r.len())].trim().trim_matches(|c| c == '"' || c == '\'')).to_ascii_lowercase()
+                    }).unwrap_or_default();
+                    if !url.is_empty() { f.sources.push((String::from(url), format)); }
+                }
+            }
+            _ => {}
+        }
+    }
+    (!f.family.is_empty() && !f.sources.is_empty()).then_some(f)
 }
 
 fn skip_comments_and_space(b: &[u8], mut i: usize) -> usize {
@@ -133,6 +174,7 @@ fn parse_rules(css: &str, vw: i32, sheet: &mut Sheet) {
                     let name = at[name.len()..].trim().trim_matches(|c| c == '"' || c == '\'');
                     sheet.keyframes.push((String::from(name), parse_frames(inner)));
                 }
+                "font-face" => if let Some(f) = parse_font_face(inner) { sheet.font_faces.push(f) },
                 _ => {}
             }
         } else {

@@ -15,6 +15,7 @@
 extern crate alloc;
 
 mod download;
+mod webfont;
 mod media;
 mod mse;
 mod keys;
@@ -221,7 +222,7 @@ struct Browser {
     /// the current match, and every match's rectangle.
     find: Option<String>,
     find_at: usize,
-    marks: Vec<[i32; 4]>,
+    marks: Vec<[i32; 5]>,
     /// The find bar has the keys.
     finding: bool,
     /// The zoom the shown page was laid out at.
@@ -230,6 +231,8 @@ struct Browser {
     sockets: Vec<websocket::Conn>,
     /// This window's finished downloads, and the one running (for the bar).
     downloads: Vec<download::Done>,
+    /// Web font files loaded, by address, with their font number (None: unreadable).
+    web_fonts: Vec<(String, Option<u8>)>,
     download_status: Option<String>,
 }
 
@@ -528,7 +531,7 @@ impl Browser {
         let chrome = sex_web::Chrome {
             text: &bar, editing: self.editing.is_some(), tabs: &labels, active: self.active,
             suggestions: &self.suggestions, chosen: self.chosen,
-            find: self.find.as_deref().map(|q| (q, self.find_at, self.marks.len())), marks: &self.marks,
+            find: self.find.as_deref().map(|q| (q, self.find_at, self.matches())), marks: &self.marks,
             zoom: sex_html::style::zoom(),
         };
         sex_web::frame_with(&self.page, &mut self.fonts, pixels, self.surface.w, self.surface.h, self.scroll, self.focus, &chrome);
@@ -686,6 +689,7 @@ impl Browser {
         let fetched = sex_pdx::get_ticks();
         // Style sheets and pictures from the network, within limits.
         let mut sheets: Vec<String> = Vec::new();
+        let mut faces: Vec<(String, sex_html::css::FontFace)> = Vec::new();
         self.fonts.images.clear();
         self.fonts.svgs.clear();
         self.fonts.moving.clear();
@@ -695,8 +699,14 @@ impl Browser {
             for (i, link) in links.iter().enumerate() {
                 self.status = Some("Loading style…");
                 if i == 0 { self.draw(); }
-                if let Ok((_, body)) = self.fetch(link) { sheets.push(text_of(&self.buf[body])); }
+                if let Ok((_, body)) = self.fetch(link) {
+                    let text = text_of(&self.buf[body]);
+                    faces.extend(sex_html::font_faces(&text, self.view.0).into_iter().map(|f| (link.clone(), f)));
+                    sheets.push(text);
+                }
             }
+            faces.extend(sex_html::page_font_faces(&dom, self.view.0).into_iter().map(|f| (base.clone(), f)));
+            self.load_fonts(faces);
             let sources: Vec<String> = sex_html::image_sources(&dom).into_iter().map(String::from).collect();
             let mut seen: Vec<&str> = Vec::new();
             for src in sources.iter() {
@@ -1722,7 +1732,7 @@ pub extern "C" fn _start() -> ! {
     let doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", view, clock));
     let mut b = Browser { #[cfg(feature = "baseline-jit")] jit_enabled: !given.split_ascii_whitespace().any(|a| a == "--no-jit"), window, surface, reported_size: (width, height), fonts, page, doc, sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), media_asked: false, media_loads: Vec::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None, import_map: Vec::new(), view, parent: None, frames: Vec::new(), in_frame: None, frame_dirty: false, referrer_next: None, nav_from: None, frames_check: false,
         tabs: Vec::new(), active: 0, forward: Vec::new(), profile: Default::default(), suggestions: Vec::new(), chosen: None,
-        find: None, find_at: 0, marks: Vec::new(), finding: false, laid_zoom: 100, sockets: Vec::new(), downloads: Vec::new(), download_status: None };
+        find: None, find_at: 0, marks: Vec::new(), finding: false, laid_zoom: 100, sockets: Vec::new(), downloads: Vec::new(), download_status: None, web_fonts: Vec::new() };
     b.profile = profile::Profile::load(&mut b.window, &mut b.jar.borrow_mut(), wall());
     let first_tab = tabs::Tab::blank(&b);
     b.tabs.push(first_tab);
