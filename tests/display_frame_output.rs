@@ -1,6 +1,7 @@
 // Host-owned aligned spans and explicit unsafe simulated held-region replies.
 // This fixture exercises actual SDK validation; metadata is not native authority.
 #![allow(dead_code)]
+#[path="../crates/sex-shape/src/lib.rs"] #[allow(unused_attributes)] pub mod sex_shape;
 extern crate self as sex_pdx;
 #[path="../crates/sex-pdx/src/memory_region.rs"]pub mod memory_region;
 pub use memory_region::MemoryRegionInfo;

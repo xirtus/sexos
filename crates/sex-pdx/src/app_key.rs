@@ -81,5 +81,8 @@ impl Modifiers {
 /// on USB keyboards usages 0x7F..0x81; Input gives them these codes of their own. Shell
 /// takes them for the master volume; programs never see them.
 pub const KEY_MUTE: u8 = 0x75;
+/// A key that only carries text: what an input method commits (`你好` after
+/// `nihao` Space) arrives as one such key a character, with [`Text::Char`].
+pub const KEY_TEXT: u8 = 0x7E;
 pub const KEY_VOLUME_DOWN: u8 = 0x76;
 pub const KEY_VOLUME_UP: u8 = 0x77;

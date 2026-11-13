@@ -19,6 +19,7 @@ fn every_script_reaches_a_font() {
         ('あ', Source::Cjk), ('カ', Source::Cjk), ('한', Source::Cjk), ('國', Source::Cjk), ('。', Source::Cjk),
         ('😀', Source::Emoji), ('👍', Source::Emoji), ('❤', Source::Emoji), ('🚀', Source::Emoji),
         ('♞', Source::Symbols), ('⣿', Source::Symbols),
+        ('ب', Source::Script(0)), ('\u{FEB3}', Source::Script(0)), ('ש', Source::Script(1)), ('न', Source::Script(2)), ('ก', Source::Script(3)),
     ];
     for &(c, want) in cases {
         let scalar = c as u32;

@@ -11,6 +11,9 @@ use sex_font::{Font, GEIST_MONO, GEIST_SANS};
 
 const MONO: u8 = 1;
 const SANS: u8 = 2;
+/// Cache keys of fallback outline fonts in proportional text are SANS + their id;
+/// emoji drawn in proportional text use this one.
+const EMOJI_FONT: u8 = 200;
 /// Largest bitmap drawn; a Key holds sizes up to 255.
 const MAX_W: usize = 128;
 // UI scale 3 times maximum text zoom 5 needs a 90x135 cell.
@@ -70,17 +73,31 @@ fn sans_padding(size:u32)->i32{
     if size%base==0&&scale>=1&&scale<=3{TITLE_LEFT*scale as i32}else{TITLE_LEFT}
 }
 
-/// Window titles are at most 16 bytes; panel notices use up to 48.
-const TITLE_MAX: usize = 48;
+/// Window titles are at most 16 bytes; panel notices (`sex_pdx::notify`) up to 128.
+const TITLE_MAX: usize = 128;
+/// `font` of a byte inside a UTF-8 sequence: drawn by the sequence's first byte.
+const SKIP: u8 = 255;
+/// `font` of an emoji (its scalar in `scalar`), drawn from the emoji coverage.
+const EMOJI: u8 = 254;
 
-/// A title laid out once: per character its glyph (0 = none), pen position in
+/// A title laid out once: per byte its glyph (0 = none), the font that has it (0
+/// Geist Sans, 1.. a fallback outline font, [`EMOJI`], [`SKIP`]), pen position in
 /// 1/256 pixel and bitmap width in pixels. Recent titles are kept, as titles are
 /// drawn a pixel at a time.
 #[derive(Clone, Copy)]
-struct TitleLayout { size: u32, len: usize, text: [u8; TITLE_MAX], glyph: [u16; TITLE_MAX], pen: [i32; TITLE_MAX], width: [u8; TITLE_MAX] }
-const NO_LAYOUT: TitleLayout = TitleLayout { size: 0, len: usize::MAX, text: [0; TITLE_MAX], glyph: [0; TITLE_MAX], pen: [0; TITLE_MAX], width: [0; TITLE_MAX] };
+struct TitleLayout { size: u32, len: usize, text: [u8; TITLE_MAX], glyph: [u16; TITLE_MAX], font: [u8; TITLE_MAX], scalar: [u32; TITLE_MAX], pen: [i32; TITLE_MAX], width: [u8; TITLE_MAX], end: i32 }
+const NO_LAYOUT: TitleLayout = TitleLayout { size: 0, len: usize::MAX, text: [0; TITLE_MAX], glyph: [0; TITLE_MAX], font: [0; TITLE_MAX], scalar: [0; TITLE_MAX], pen: [0; TITLE_MAX], width: [0; TITLE_MAX], end: 0 };
 static mut LAYOUTS: [TitleLayout; 8] = [NO_LAYOUT; 8];
 static mut NEXT_LAYOUT: usize = 0;
+
+/// The scalar starting at byte `at` and its end; a malformed byte stands for itself.
+fn utf8_at(text: &[u8], at: usize) -> (u32, usize) {
+    let n = match text[at] { 0xC2..=0xDF => 2, 0xE0..=0xEF => 3, 0xF0..=0xF4 => 4, _ => 1 };
+    match text.get(at..at + n).and_then(|b| core::str::from_utf8(b).ok()).and_then(|s| s.chars().next()) {
+        Some(c) if n > 1 => (c as u32, at + n),
+        _ => (text[at] as u32, at + 1),
+    }
+}
 
 fn text_layout(title: &[u8], size: u32) -> Option<&'static TitleLayout> {
     let title = &title[..title.len().min(TITLE_MAX)];
@@ -92,17 +109,34 @@ fn text_layout(title: &[u8], size: u32) -> Option<&'static TitleLayout> {
     l.len = title.len();
     l.text[..title.len()].copy_from_slice(title);
     let (mut pen, mut prev) = (0, None);
-    for (i, &byte) in title.iter().enumerate() {
-        let glyph = font.glyph(byte as u32);
-        if let (Some(p), Some(g)) = (prev, glyph) { pen += font.kerning(p, g, size); }
+    let mut i = 0;
+    while i < title.len() {
+        // One scalar (a malformed byte stands for itself); its other bytes are skipped.
+        let (scalar, end) = utf8_at(title, i);
+        for k in i + 1..end.min(title.len()) { l.font[k] = SKIP; l.pen[k] = pen; }
         l.pen[i] = pen;
-        if let Some(g) = glyph {
+        l.scalar[i] = scalar;
+        if let Some(g) = font.glyph(scalar) {
+            if let Some(p) = prev { pen += font.kerning(p, g, size); l.pen[i] = pen; }
             let width = ((font.advance(g, size) + 255) >> 8) + 2 * sans_padding(size);
             if width as usize <= MAX_W { l.glyph[i] = g.0; l.width[i] = width as u8; }
             pen += font.advance(g, size);
             prev = Some(g);
+        } else if let Some((id, f, g)) = fallback().and_then(|fb| fb.outline(scalar)).and_then(|(id, f)| Some((id, f, f.glyph(scalar)?))) {
+            // CJK, Cyrillic, Arabic...: the fallback font at the same size.
+            let width = ((f.advance(g, size) + 255) >> 8) + 2 * sans_padding(size);
+            if width as usize <= MAX_W { l.glyph[i] = g.0; l.font[i] = id; l.width[i] = width as u8; }
+            pen += f.advance(g, size);
+            prev = None;
+        } else if fallback().is_some_and(|fb| fb.emoji().has(scalar)) {
+            let side = (size / 64) as i32 + 2;
+            if side as usize <= MAX_W { l.glyph[i] = 1; l.font[i] = EMOJI; l.width[i] = side as u8; }
+            pen += side * 256;
+            prev = None;
         }
+        i = end.max(i + 1);
     }
+    l.end = pen;
     let next = unsafe { &mut *core::ptr::addr_of_mut!(NEXT_LAYOUT) };
     let i = *next % layouts.len();
     *next = next.wrapping_add(1);
@@ -125,11 +159,7 @@ const CAPTION_BASELINE: i32 = 7 * 256;
 /// Natural advance for a compact caption, used to bound the existing status boxes.
 pub fn caption_width(text: &[u8]) -> Option<usize> {
     let layout = text_layout(text, CAPTION_SIZE)?;
-    if layout.len == 0 { return Some(0); }
-    let last = layout.len - 1;
-    let font = sans()?;
-    let advance = font.advance(sex_font::GlyphId(layout.glyph[last]), CAPTION_SIZE);
-    Some(((layout.pen[last] + advance + 255).max(0) >> 8) as usize)
+    Some(((layout.end + 255).max(0) >> 8) as usize)
 }
 
 /// Default UI role: natural Geist Sans at 13 logical pixels on a 16px line.
@@ -139,9 +169,7 @@ pub const UI_H:usize=sex_pdx::desktop_style::chrome::UI_LINE as usize;
 pub fn ui_width(text:&[u8],scale:u32)->Option<usize>{
     let size=sex_pdx::desktop_style::chrome::UI_FONT*64*scale.clamp(1,3);
     let l=text_layout(text,size)?;
-    if l.len==0{return Some(0);}
-    let last=l.len-1;
-    Some(((l.pen[last]+sans()?.advance(sex_font::GlyphId(l.glyph[last]),size)+255).max(0)>>8)as usize)
+    Some(((l.end+255).max(0)>>8)as usize)
 }
 pub fn ui_coverage(text:&[u8],x:i32,y:usize,scale:u32)->Option<u8>{
     let scale=scale.clamp(1,3);
@@ -161,19 +189,25 @@ pub fn caption_coverage(text: &[u8], x: i32, y: usize) -> Option<u8> {
 fn sans_coverage(title: &[u8], x: i32, y: usize, size: u32, height: usize, baseline: i32) -> Option<u8> {
     if y >= height { return Some(0); }
     let l = text_layout(title, size)?;
-    let font = sans()?;
     let mut cover = 0u32;
     for i in 0..l.len {
+        if l.font[i] == SKIP { continue; }
         let left = (l.pen[i] >> 8) - sans_padding(size);
         if x < left { break; }
         let width = l.width[i] as i32;
         if l.glyph[i] == 0 { return None; }
         if x >= left + width { continue; }
         let phase = ((l.pen[i] & 255) >> 6) as u8;
-        let glyph = sex_font::GlyphId(l.glyph[i]);
-        let key = Key { font: SANS, scalar: glyph.0 as u32, size: (size / 64) as u16, phase, w: width as u8, h: height as u8 };
-        let origin = sans_padding(size) * 256 + phase as i32 * 64;
-        let bitmap = cache().get(key, |out| font.draw(glyph, size, origin, baseline, width as usize, height, acc(), out))?;
+        let bitmap = if l.font[i] == EMOJI {
+            let key = Key { font: EMOJI_FONT, scalar: l.scalar[i], size: (size / 64) as u16, phase: 0, w: width as u8, h: height as u8 };
+            cache().get(key, |out| fallback().is_some_and(|f| f.emoji().draw_cell(l.scalar[i], width as usize, height, out)))?
+        } else {
+            let font = if l.font[i] == 0 { sans()? } else { fallback()?.font(l.font[i])? };
+            let glyph = sex_font::GlyphId(l.glyph[i]);
+            let key = Key { font: SANS + l.font[i], scalar: glyph.0 as u32, size: (size / 64) as u16, phase, w: width as u8, h: height as u8 };
+            let origin = sans_padding(size) * 256 + phase as i32 * 64;
+            cache().get(key, |out| font.draw(glyph, size, origin, baseline, width as usize, height, acc(), out))?
+        };
         cover += bitmap[y * width as usize + (x - left) as usize] as u32;
     }
     Some(cover.min(255) as u8)

@@ -2,7 +2,8 @@
 //! The fonts drawn when Geist lacks a character, tried in order: Noto Sans Mono
 //! (Latin extended, Greek, Cyrillic, IPA), Noto Sans Symbols 2, Noto Sans CJK SC
 //! (a cut of about 14,000 Chinese, Japanese and Korean characters) and the emoji of
-//! Noto Color Emoji as shaded 36x36 coverage. All SIL Open Font License 1.1
+//! Noto Color Emoji as shaded 36x36 coverage; Noto Sans Arabic, Hebrew, Devanagari
+//! and Thai before the symbols. All SIL Open Font License 1.1
 //! (assets/fonts/noto/README.md); scripts/gen_fallback_fonts.py builds them.
 //!
 //! A grid cell holds one character, so a wide character (an ideograph, an emoji) is
@@ -13,10 +14,14 @@ use crate::Font;
 pub static NOTO_MONO: &[u8] = include_bytes!("../../../assets/fonts/noto/NotoSansMono-Regular.ttf");
 pub static NOTO_SYMBOLS: &[u8] = include_bytes!("../../../assets/fonts/noto/NotoSansSymbols2-Regular.ttf");
 pub static NOTO_CJK: &[u8] = include_bytes!("../../../assets/fonts/noto/NotoSansCJK-SC-Subset.otf");
+pub static NOTO_ARABIC: &[u8] = include_bytes!("../../../assets/fonts/noto/NotoSansArabic-Regular.ttf");
+pub static NOTO_HEBREW: &[u8] = include_bytes!("../../../assets/fonts/noto/NotoSansHebrew-Regular.ttf");
+pub static NOTO_DEVANAGARI: &[u8] = include_bytes!("../../../assets/fonts/noto/NotoSansDevanagari-Regular.ttf");
+pub static NOTO_THAI: &[u8] = include_bytes!("../../../assets/fonts/noto/NotoSansThai-Regular.ttf");
 pub static EMOJI: &[u8] = include_bytes!("../../../assets/fonts/noto/emoji-36.sxe");
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Source { Mono, Symbols, Cjk, Emoji }
+pub enum Source { Mono, Symbols, Cjk, Emoji, Script(usize) }
 
 /// Emoji coverage: "SXE1", u16 size, u16 count, sorted u32 scalars, then
 /// size*size/2 bytes per emoji (two 4-bit levels a byte, high nibble first).
@@ -78,12 +83,17 @@ impl<'a> Emoji<'a> {
     }
 }
 
-pub struct Fallback<'a> { mono: Font<'a>, symbols: Font<'a>, cjk: Font<'a>, emoji: Emoji<'a> }
+/// Arabic (with its presentation forms), Hebrew, Devanagari, Thai.
+const SCRIPTS: usize = 4;
+pub struct Fallback<'a> { mono: Font<'a>, symbols: Font<'a>, cjk: Font<'a>, emoji: Emoji<'a>, scripts: [Font<'a>; SCRIPTS] }
 
 impl Fallback<'static> {
     /// The embedded fonts, parsed.
     pub fn embedded() -> Option<Self> {
-        Some(Self { mono: Font::new(NOTO_MONO)?, symbols: Font::new(NOTO_SYMBOLS)?, cjk: Font::new(NOTO_CJK)?, emoji: Emoji::new(EMOJI)? })
+        Some(Self {
+            mono: Font::new(NOTO_MONO)?, symbols: Font::new(NOTO_SYMBOLS)?, cjk: Font::new(NOTO_CJK)?, emoji: Emoji::new(EMOJI)?,
+            scripts: [Font::new(NOTO_ARABIC)?, Font::new(NOTO_HEBREW)?, Font::new(NOTO_DEVANAGARI)?, Font::new(NOTO_THAI)?],
+        })
     }
 }
 
@@ -93,10 +103,28 @@ impl<'a> Fallback<'a> {
     pub fn source(&self, scalar: u32) -> Option<Source> {
         if self.mono.glyph(scalar).is_some() { Some(Source::Mono) }
         else if self.emoji.has(scalar) { Some(Source::Emoji) }
+        else if let Some(i) = self.scripts.iter().position(|f| f.glyph(scalar).is_some()) { Some(Source::Script(i)) }
         else if self.symbols.glyph(scalar).is_some() { Some(Source::Symbols) }
         else if self.cjk.glyph(scalar).is_some() { Some(Source::Cjk) }
         else { None }
     }
+
+    /// For proportional text: the outline font (by a small id, 1 and up) that has
+    /// `scalar`, in fallback order. Emoji are not outlines: see [`Self::emoji`].
+    pub fn outline(&self, scalar: u32) -> Option<(u8, &Font<'a>)> {
+        match self.source(scalar)? {
+            Source::Mono => Some((1, &self.mono)),
+            Source::Symbols => Some((2, &self.symbols)),
+            Source::Cjk => Some((3, &self.cjk)),
+            Source::Script(i) => Some((4 + i as u8, &self.scripts[i])),
+            Source::Emoji => None,
+        }
+    }
+    /// The outline font with this id (see [`Self::outline`]).
+    pub fn font(&self, id: u8) -> Option<&Font<'a>> {
+        match id { 1 => Some(&self.mono), 2 => Some(&self.symbols), 3 => Some(&self.cjk), 4.. => self.scripts.get(id as usize - 4), _ => None }
+    }
+    pub fn emoji(&self) -> &Emoji<'a> { &self.emoji }
 
     /// One grid cell for `scalar` from the first fallback that has it.
     pub fn draw_cell(&self, scalar: u32, w: usize, h: usize, acc: &mut [i32], out: &mut [u8]) -> bool {
@@ -105,6 +133,7 @@ impl<'a> Fallback<'a> {
             Some(Source::Emoji) => self.emoji.draw_cell(scalar, w, h, out),
             Some(Source::Symbols) => fitted(&self.symbols, scalar, w, h, acc, out),
             Some(Source::Cjk) => fitted(&self.cjk, scalar, w, h, acc, out),
+            Some(Source::Script(i)) => fitted(&self.scripts[i], scalar, w, h, acc, out),
             None => false,
         }
     }

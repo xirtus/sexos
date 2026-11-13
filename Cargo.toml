@@ -50,6 +50,8 @@ members = [
     "crates/sex-imsm",
     "crates/sex-font",
     "crates/sex-keymap",
+    "crates/sex-shape",
+    "crates/sex-ime",
     "crates/sexfs",
     "crates/sex-volumes",
     "crates/sex-hwdb",

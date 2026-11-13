@@ -69,7 +69,8 @@ def emoji():
 
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
-    for name in ['NotoSansMono-Regular.ttf', 'NotoSansSymbols2-Regular.ttf']:
+    for name in ['NotoSansMono-Regular.ttf', 'NotoSansSymbols2-Regular.ttf', 'NotoSansArabic-Regular.ttf',
+                 'NotoSansHebrew-Regular.ttf', 'NotoSansDevanagari-Regular.ttf', 'NotoSansThai-Regular.ttf']:
         shutil.copyfile(NOTO / name, OUT / name)
     with tempfile.TemporaryDirectory() as tmp:
         cjk(Path(tmp))

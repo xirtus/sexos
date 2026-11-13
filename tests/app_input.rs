@@ -149,6 +149,8 @@ mod shell {
     static mut SENT:Vec<(u64,u64,[u64;3])>=Vec::new();
     static mut VOLUME_STEPS:Vec<i8>=Vec::new();
     unsafe fn volume_key(step:i8){VOLUME_STEPS.push(step);}
+    static mut PREEDIT_NOTICES:usize=0;
+    unsafe fn keyboard_preedit_notice()->bool{PREEDIT_NOTICES+=1;true}
     unsafe fn clipboard_live(subject:Subject)->Option<bool>{LIVE_QUERIES.push(subject);if let Some((source,value))=LIVE_ONCE{if source==subject{LIVE_ONCE=None;return value}}match SOURCE_LIVE{Some((source,value))if source==subject=>value,_=>LIVE}}
     unsafe fn pdx_call(route:u64,op:u64,a:u64,b:u64,c:u64)->(u64,u64){SENT.push((route,op,[a,b,c]));(STATUS,0)}
     // Declared syscall boundary; the retained admission logic is production.
@@ -268,6 +270,23 @@ mod shell {
         assert_eq!(WM_ACTIONS.last(),Some(&wm::WmAction::KeyboardLayout));
         assert!(desktop_shortcut(0x39,0));assert!(desktop_shortcut(0x1d,0));assert!(desktop_shortcut(0x5b,0));
         while keyboard_layout::active_label()!="US"{keyboard_layout::next();}}
+    }
+    #[test] fn actual_shortcut_pinyin_commits_nihao_as_text_keys(){
+        let _lock=LOCK.lock().unwrap();unsafe{reset();FOCUSED_SURFACE_ID=300;
+        while keyboard_layout::active_label()!="PY"{keyboard_layout::next();}
+        // n i h a o: the input method takes them, the panel shows the pre-edit.
+        for code in [0x31,0x17,0x23,0x1e,0x18]{assert!(desktop_shortcut(code,1));assert!(desktop_shortcut(code,0));}
+        assert!(SENT.is_empty());assert_eq!(PREEDIT_NOTICES,5);
+        let mut line=[0u8;160];let n=keyboard_layout::preedit_line(&mut line);
+        assert!(std::str::from_utf8(&line[..n]).unwrap().starts_with("nihao  1 你好"));
+        // Space commits 你好: two text-only keys.
+        assert!(desktop_shortcut(0x39,1));assert!(desktop_shortcut(0x39,0));
+        // Shell's loop polls while input is queued; one key goes per poll.
+        for _ in 0..4{if APP_INPUT.pending(){app_input_poll();}}
+        let typed:Vec<_>=SENT.iter().map(|(_,_,a)|Key::decode(a[0],a[1],a[2]).unwrap()).collect();
+        assert_eq!(typed.iter().map(|k|(k.code,k.text)).collect::<Vec<_>>(),vec![(app_key::KEY_TEXT,app_key::Text::Char('你')),(app_key::KEY_TEXT,app_key::Text::Char('好'))]);
+        // With nothing composed, Space and digits are the program's again.
+        assert!(desktop_shortcut(0x39,1));assert_eq!(Key::decode(SENT.last().unwrap().2[0],1,1).unwrap().code,0x39);}
     }
     #[test] fn actual_shortcut_preserves_shell_grave_function_and_explicit_global_reserved_keys(){
         let _lock=LOCK.lock().unwrap();unsafe{for focus in [156,300]{reset();FOCUSED_SURFACE_ID=focus;for code in [0x0f,0x29,0x3b,0x3c,0x3d,0x3e,0x3f,0x40,0x41,0x42,0x43,0x44,0x46,0x52,0x57,0x58,0x59]{assert!(!desktop_shortcut(code,1),"reserved code={code:#x}");assert!(!APP_INPUT.pending());assert!(SENT.is_empty());}}

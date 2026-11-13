@@ -2,6 +2,7 @@
 // observation boundaries. HIGH_HALF_BASE=0 is a host scanout double, not a
 // relaxation of the actual guest constant or proof of framebuffer authority.
 #![allow(dead_code,static_mut_refs)]
+#[path="../crates/sex-shape/src/lib.rs"] #[allow(unused_attributes)] pub mod sex_shape;
 extern crate self as sex_pdx;
 fn bar_height()->usize{28}
 #[path="../crates/sex-pdx/src/memory_region.rs"]pub mod memory_region;

@@ -10540,6 +10540,9 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
                     // Desktop function keys retain their existing Shell actions.
                     if matches!(code,0x0f|0x29|0x3b..=0x44|0x46|0x52|0x57|0x58|0x59){return false;}
                     let Some(normalized)=app_input_key_code(destination,code) else{return true};
+                    if let Some(changed)=keyboard_layout::compose(APP_MODIFIERS.key(normalized),code,|k|{APP_INPUT.push(app_input::Item{destination,input:app_input::Input::Key(k)});}){
+                        if changed{keyboard_preedit_notice();}app_input_poll();return true;
+                    }
                     let key=keyboard_layout::typing(APP_MODIFIERS.key(normalized),code);
                     let input=if key.control {
                         match code {0x2e=>app_input::Input::Clipboard(sex_pdx::clipboard::Action::Copy),0x2d=>app_input::Input::Clipboard(sex_pdx::clipboard::Action::Cut),0x2f=>app_input::Input::Clipboard(sex_pdx::clipboard::Action::Paste),_=>app_input::Input::Key(key)}
@@ -10552,6 +10555,9 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
                 if let Some(destination)=focused_program_participant(){
                     if modifier || value!=1{return true;}
                     if matches!(code,0x0f|0x29|0x3b..=0x44|0x46|0x52|0x57|0x58|0x59){return false;}
+                    if let Some(changed)=keyboard_layout::compose(APP_MODIFIERS.key(code),code,|k|{APP_INPUT.push(app_input::Item{destination,input:app_input::Input::Key(k)});}){
+                        if changed{keyboard_preedit_notice();}app_input_poll();return true;
+                    }
                     if !APP_INPUT.push(app_input::Item{destination,input:app_input::Input::Key(keyboard_layout::typing(APP_MODIFIERS.key(code),code))}){
                         sex_pdx::serial_record!("[shell.app.input.full] capacity=32 pd={} task={} accepted=0",destination.subject.pd,destination.subject.task);
                     }
@@ -16064,6 +16070,13 @@ unsafe fn notify_history() -> impl Iterator<Item = &'static sex_pdx::notify::Tex
 unsafe fn notify_panel(text: &[u8]) -> bool {
     sex_pdx::notify::chunks(text, 0, 0, 0)
         .all(|(w, a, b)| pdx_call(SLOT_DISPLAY, sex_pdx::notify::OP_PANEL_NOTICE, w, a, b).0 == 0)
+}
+/// While composing with an input method, the panel shows the letters and the
+/// candidates for them (`nihao  1 你好 ...`).
+unsafe fn keyboard_preedit_notice() -> bool {
+    let mut text = [0u8; 160];
+    let n = keyboard_layout::preedit_line(&mut text);
+    n != 0 && notify_panel(&text[..n])
 }
 /// The panel names the keyboard layout just chosen, e.g. "Keyboard: DE  German".
 unsafe fn keyboard_layout_notice(label: &str, title: &str) -> bool {

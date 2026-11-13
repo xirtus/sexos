@@ -32,7 +32,7 @@ const US_R2: &str = "aA sS dD fF gG hH jJ kK lL ;: '\" \\|";
 const US_R3: &str = "<> zZ xX cC vV bB nN mM ,< .> /?";
 const NORDIC_R3: &str = "<>| zZ xX cC vV bB nN mMµ ,; .: -_";
 
-pub static ALL: [Def; 15] = [
+pub static ALL: [Def; 16] = [
     Def { name: "us", label: "US", title: "English (US)", rows: [US_R0, US_R1, US_R2, US_R3] },
     Def {
         name: "us-intl", label: "USI", title: "English (US, international)",
@@ -151,6 +151,8 @@ pub static ALL: [Def; 15] = [
             "<> zZ xX cC vV bB kK mM ,< .> /?",
         ],
     },
+    // Pinyin: the US keys, with Shell's input method turning letters into Chinese.
+    Def { name: "zh-pinyin", label: "PY", title: "Chinese (Pinyin)", rows: [US_R0, US_R1, US_R2, US_R3] },
     Def {
         name: "ru", label: "RU", title: "Russian",
         rows: [

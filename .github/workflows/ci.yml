@@ -59,6 +59,10 @@ jobs:
       run: cargo test --locked -p sex-keymap
     - name: Fallback fonts reach Cyrillic, Greek, CJK, emoji and symbols
       run: cargo test --locked -p sex-font --test fallback
+    - name: Shaping (rustybuzz vs hb-shape), Arabic joining and bidi
+      run: cargo test --locked -p sex-shape --features shaping
+    - name: Pinyin input method
+      run: cargo test --locked -p sex-ime
     - name: Crash record format host regressions
       run: bash scripts/crash_log_host_gate.sh
     - name: Experimental JS baseline JIT differential and emitted-code gates
