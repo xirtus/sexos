@@ -58,6 +58,7 @@ members = [
     "crates/sex-wifi",
     "crates/sex-http",
     "crates/sex-wg",
+    "crates/sex-ssh",
     "crates/sex-fetch",
     "crates/sex-trust-config",
     "crates/sex-graphics",
@@ -75,6 +76,7 @@ members = [
     "apps/stdhello",
     "apps/chello",
     "apps/stdnet",
+    "apps/ssh",
     "apps/pdf",
 ]
 [workspace.package]

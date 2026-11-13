@@ -65,6 +65,7 @@ crates = [
   "apps/cpp/Cargo.toml",
   "apps/stdhello/Cargo.toml",
   "apps/stdnet/Cargo.toml",
+  "apps/ssh/Cargo.toml",
   "apps/chello/Cargo.toml",
   "apps/pdf/Cargo.toml"
 ]
@@ -366,6 +367,16 @@ build_std = "std,panic_abort"
 manifest = "apps/stdnet/Cargo.toml"
 source_artifact = "target/x86_64-sex-std/release/stdnet"
 dest_artifact = "iso_root/programs/stdnet"
+
+# SSH client: log in to other machines (keys, known hosts, exec and shell).
+[[stage]]
+id = "build_ssh"
+action = "cargo_manifest"
+target = "x86_64-sex-std.json"
+build_std = "std,panic_abort"
+manifest = "apps/ssh/Cargo.toml"
+source_artifact = "target/x86_64-sex-std/release/ssh"
+dest_artifact = "iso_root/programs/ssh"
 
 # Ordinary C programs: main(argc, argv) on sex-libc's POSIX guest layer over sex-std.
 [[stage]]
