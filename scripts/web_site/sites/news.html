@@ -4,10 +4,12 @@
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>The Daily Ledger: news</title>
 <style>
+@font-face { font-family: 'Ledger Display'; src: url(/fonts/ledger.woff2) format('woff2'), url(/fonts/geist-mono.woff) format('woff'); font-weight: 400; font-display: swap; }
 * { box-sizing: border-box; }
 body { margin: 0; font: 16px/1.5 Georgia, 'Times New Roman', serif; color: #121212; background: #fff; }
 .masthead { position: sticky; top: 0; z-index: 10; background: #fff; border-bottom: 1px solid #e2e2e2; text-align: center; padding: 8px 16px; }
-.masthead h1 { margin: 0; font-size: clamp(24px, 4vw, 44px); letter-spacing: .01em; }
+.masthead h1 { margin: 0; font-family: 'Ledger Display', Georgia, serif; font-size: clamp(24px, 4vw, 44px); letter-spacing: .01em; }
+.badge { display: inline-block; background: #a3001b; color: #fff; font: bold 11px sans-serif; padding: 2px 6px; transform: rotate(-6deg) scale(1.1); transform-origin: left center; }
 .masthead .date { font: 12px/1.2 sans-serif; color: #5a5a5a; }
 nav.sections { display: flex; justify-content: center; flex-wrap: wrap; gap: 4px 18px; font: 13px sans-serif; border-bottom: 2px solid #121212; padding: 6px 0; }
 nav.sections a { color: #121212; text-decoration: none; }
@@ -36,7 +38,7 @@ footer { border-top: 2px solid #121212; margin-top: 24px; padding: 16px; font: 1
 <div class="wrap">
   <main>
     <article class="lead">
-      <div><div class="kicker">Technology</div><h2><a href="#" style="color:inherit;text-decoration:none">Small kernels make a comeback on everyday laptops</a></h2>
+      <div><span class="badge">Live</span> <div class="kicker">Technology</div><h2><a href="#" style="color:inherit;text-decoration:none">Small kernels make a comeback on everyday laptops</a></h2>
       <p>Engineers say a design once confined to research labs now starts faster and crashes less than the systems it replaces.</p><div class="byline">By A. Reporter · 6 min read</div></div>
       <picture><source type="image/avif" srcset=""><span class="pic" role="img" aria-label="A laptop on a desk"></span></picture>
     </article>

@@ -32,6 +32,9 @@ pub const PRESSURE_NORMAL: u64 = 0;
 pub const PRESSURE_LOW: u64 = 1;
 /// Below a thirty-second (at least 8 MiB): allocations will soon be refused.
 pub const PRESSURE_CRITICAL: u64 = 2;
+/// From the kernel (caller 0) to the Shell when pressure becomes critical:
+/// arg0 = level, arg1 = free program pages. The Shell's out-of-memory policy acts on it.
+pub const OP_PRESSURE: u64 = 0x3A1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Memory {

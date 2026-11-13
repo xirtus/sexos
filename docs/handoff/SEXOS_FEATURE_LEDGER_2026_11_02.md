@@ -4045,3 +4045,38 @@ scroll, Alt+Tab swipe and pinch-zoom events. Polled for now. Details:
   Monitor redraws, Input ~3,700 calls/s and Bar ~2,400 calls/s at idle (polling).
 - **Not yet:** kill/restart from Monitor (needs a Shell request, workstream C owns
   Shell), per-program I/O and network bytes.
+
+## Idle power: Input and USB stop polling (2026-11-13)
+- **What:** an idle desktop no longer wakes Input and USB every tick. Input sleeps up
+  to 32 ticks when nothing is queued for Shell, and is woken at once by a message (USB
+  reports) or, new, by a PS/2 key: the kernel wakes the task that takes the input ring.
+  USB unmasks its xHCI controller's MSI/MSI-X vector (hwdb manifest now asks for one)
+  and sleeps up to 32 ticks when idle; without a vector it still polls every tick.
+- **Measured:** idle QEMU host CPU on one core 38% -> 28% (102% before #175). Monitor
+  no longer lists Input or USB among the busiest at idle.
+- **Kernel:** `interrupts::INPUT_LISTENER` + wake on scancode (about 10 lines).
+- **Evidence:** `program_monitor_gate.py` (typed commands, pointer focus) and
+  `latency_classes_gate.py` (367 pointer moves under load) pass.
+- **ABI:** none new; xHCI lease now carries one vector.
+
+## Protocol fuzzing, slice J3 (2026-11-13)
+- **What:** `run fuzz CALLS SEED proto`: three calls in four are pdx calls to a held
+  service with an operation number some `sex-pdx` protocol really uses (all literal
+  `OP_*`, collected by `apps/fuzz/build.rs`, so new protocols are covered at once) and
+  mutated arguments. Each run logs its answers by value and operations covered.
+- **Evidence:** `scripts/syscall_fuzz_gate.py` now adds one protocol seed (CI). A
+  1,000,000-call protocol run (`--calls 1000000 --seeds '' --proto-seeds 7`) covered
+  94/94 operations with no service or kernel fault.
+
+## Out-of-memory policy, slice J4 (2026-11-13)
+- **What:** when program memory turns critical the kernel sends the Shell one
+  `program_memory::OP_PRESSURE` word (caller 0). If it stays critical for 5 s (time for
+  programs to trim), the Shell ends the program run holding the most memory (never a
+  service or built-in app), shows "System: NAME was closed: memory ran out" and keeps it
+  in notification history, then waits 5 s before any further end.
+- **Evidence:** `scripts/program_oom_gate.py`: Heap test takes 215 MiB on a 512 MiB
+  machine, is ended (225 MiB freed), pressure returns to normal, Spindle answers and
+  Monitor starts. `program_heap_gate.py` still passes.
+- **Kernel / ABI:** about 10 lines in `program_frames.rs`; new op `OP_PRESSURE` 0x3A1.
+- **Follow-up:** the Shell spins on `sys_yield` while a panel notice shows (5 s) and while
+  memory is critical; a timed wait would be cheaper (workstream C owns that loop).

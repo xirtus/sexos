@@ -117,7 +117,7 @@ pub const DRIVE: Manifest = Manifest {
 
 /// sexusb: xHCI host controllers (USB 3; USB4 hosts expose xHCI too).
 pub const USB: Manifest = Manifest {
-    service: Service::Usb, max_devices: 0, vectors: 0,
+    service: Service::Usb, max_devices: 0, vectors: 1,
     matches: &[Match::class(0x0c_03_30, EXACT, Lease::Xhci, 8)],
 };
 

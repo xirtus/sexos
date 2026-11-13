@@ -364,6 +364,7 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
 
                     match cap.map(|c| c.data) {
                         Some(CapabilityData::InputRing) => {
+                            crate::interrupts::INPUT_LISTENER.store(current_pd.id, Ordering::Relaxed);
                             if let Some(scancode) = crate::interrupts::INPUT_RING.dequeue() {
                                 (0x201, 1, scancode as u64, 0, 0)
                             } else {

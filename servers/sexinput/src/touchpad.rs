@@ -164,3 +164,11 @@ pub fn poll(now: u64, mut out: impl FnMut(Out)) {
     }
     p.next_poll = now + if now.saturating_sub(p.last_touch) < IDLE_AFTER { ACTIVE_TICKS } else { IDLE_TICKS };
 }
+
+/// How long Input may sleep: `bound`, or until the touchpad's next read is due.
+pub fn wait_bound(now: u64, bound: u64) -> u64 {
+    match unsafe { (*core::ptr::addr_of!(PAD)).as_ref() } {
+        Some(p) => p.next_poll.saturating_sub(now).clamp(1, bound.max(1)),
+        None => bound,
+    }
+}

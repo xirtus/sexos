@@ -86,6 +86,8 @@ members = [
     "apps/ssh",
     "apps/pdf",
     "apps/lua",
+    "apps/rg",
+    "apps/fd",
 ]
 [workspace.package]
 license = "GPL-3.0-only"
@@ -146,6 +148,8 @@ pp-rs = { path = "vendor/pp-rs-0.2.1" }
 virtio-drivers = { path = "vendor/virtio-drivers-0.13.0" }
 # sexacpi drives the embedded controller and hears Notify (vendor/acpi-6.1.1/SEXOS_CHANGES.md).
 acpi = { path = "vendor/acpi-6.1.1" }
+# rg and fd: ignore's parallel walker on std's Hermit target (vendor/ignore-0.4.34/src/walk.rs, `SexOS:`).
+ignore = { path = "vendor/ignore-0.4.34" }
 # The shader interpreter runs per vertex and per pixel; keep it fast in tests too.
 [profile.dev.package.sex-gl]
 opt-level = 3

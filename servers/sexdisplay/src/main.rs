@@ -2068,6 +2068,7 @@ fn raster_batch(target:&frame_output::Target<'_>,scene: &scene::SceneSnapshot,pl
             draw_atlas_frame_previews_pass(fb,w,h,total,scene);
         }
         draw_launcher_panel(fb,w,h,total,scene);
+        draw_window_switcher(fb,w,h,total,scene);
     }
     draw_cursor_z_top(fb,w,h,total,true,scene);
     true
@@ -2844,6 +2845,100 @@ fn draw_cursor_z_top(fb: *mut u32, w: usize, h: usize, total_pixels: usize, save
 /// app surfaces but under the cursor. Renders a solid rect with a thin border.
 /// Only active when the launcher surface is active (toggled by shell).
 /// Does not affect the top-strip render proof (y<50 area).
+/// The Alt+Tab switcher the Shell asked for, hidden when it sent none.
+static mut WINDOW_SWITCHER: sex_pdx::window_switcher::State = sex_pdx::window_switcher::State::HIDDEN;
+/// The name a switcher card shows: a program's own title, else its family's.
+fn switcher_title(surface_id: u64) -> &'static [u8] {
+    app_catalog::INCARNATIONS.iter()
+        .find(|row| row.surface == surface_id || row.shell_surface == Some(surface_id))
+        .and_then(|row| program_title(row.surface))
+        .or_else(|| surface_title(surface_id))
+        .unwrap_or(b"Window")
+}
+/// Alt+Tab: a glass panel over the desktop with one card per window, each a
+/// live thumbnail scaled from the window's own composed pixels (so windows
+/// hidden behind others or by monocle still show) and its title, the
+/// selected card ringed in the focus colour. Drawn after every body pass while
+/// shown; the publisher writes out only the spans that changed.
+fn draw_window_switcher(fb: *mut u32, w: usize, h: usize, total_pixels: usize, scene: &scene::SceneSnapshot) {
+    use sex_pdx::window_switcher::Layout;
+    let state = unsafe { WINDOW_SWITCHER };
+    if !state.visible() { return; }
+    let scale = scene.metrics.scale();
+    let Some(layout) = Layout::new(w, h, state.count as usize, scale) else { return; };
+    const PANEL: u32 = 0x00121726;
+    const CARD: u32 = 0x001E2536;
+    const CARD_SELECTED: u32 = 0x002C3650;
+    let ring = sex_pdx::desktop_style::FOCUS;
+    let at = |x: usize, y: usize| -> Option<usize> { let i = y * w + x; (x < w && y < h && i < total_pixels).then_some(i) };
+    let (px, py, pw, ph) = layout.panel;
+    let radius = 10 * scale as usize;
+    for y in py..py + ph {
+        for x in px..px + pw {
+            // Rounded corners: skip pixels outside the corner circles.
+            let dx = if x < px + radius { px + radius - x } else if x >= px + pw - radius { x + radius + 1 - (px + pw) } else { 0 };
+            let dy = if y < py + radius { py + radius - y } else if y >= py + ph - radius { y + radius + 1 - (py + ph) } else { 0 };
+            if dx * dx + dy * dy > radius * radius { continue; }
+            let Some(i) = at(x, y) else { continue };
+            unsafe {
+                let under = core::ptr::read_volatile(fb.add(i));
+                core::ptr::write_volatile(fb.add(i), alpha_blend_xrgb_over_xrgb(PANEL, under, 225));
+            }
+        }
+    }
+    for (index, sid) in state.ids().enumerate() {
+        let selected = index == state.selected as usize;
+        let (cx, cy, cw, ch) = layout.card(index);
+        let card = if selected { CARD_SELECTED } else { CARD };
+        let rim = if selected { 3 * scale as usize } else { 0 };
+        for y in cy..cy + ch {
+            for x in cx..cx + cw {
+                let edge = x < cx + rim || x >= cx + cw - rim || y < cy + rim || y >= cy + ch - rim;
+                if let Some(i) = at(x, y) { unsafe { core::ptr::write_volatile(fb.add(i), if edge { ring } else { card }); } }
+            }
+        }
+        // Thumbnail: the window's rectangle fitted into the card's top, keeping its shape.
+        let pad = 6 * scale as usize;
+        let (bx, by, bw, bh) = (cx + pad, cy + pad, cw.saturating_sub(2 * pad), layout.thumb_h.saturating_sub(pad));
+        let source = scene.surfaces.iter().find(|s| s.active && s.surface_id == sid);
+        if let Some(surf) = source {
+            let (sx, sy, sw, sh) = scene.groups.rect(surf, w, h);
+            if sw > 0 && sh > 0 && bw > 0 && bh > 0 {
+                let (tw, th) = if sw * bh >= sh * bw { (bw, (sh * bw / sw).max(1)) } else { ((sw * bh / sh).max(1), bh) };
+                let (ox, oy) = (bx + (bw - tw) / 2, by + (bh - th) / 2);
+                for ty in 0..th {
+                    let src_y = sy + ty * sh / th;
+                    for tx in 0..tw {
+                        let src_x = sx + tx * sw / tw;
+                        let c = composite_pixel_selected(src_x, src_y, w, h, card, sid, Some(sid), scene);
+                        if let Some(i) = at(ox + tx, oy + ty) { unsafe { core::ptr::write_volatile(fb.add(i), c); } }
+                    }
+                }
+            }
+        }
+        // Title, centred under the thumbnail and cut to the card.
+        let title = switcher_title(sid);
+        let line = glyphs::UI_H * scale as usize;
+        let ly = cy + layout.thumb_h + layout.gap + (layout.label_h.saturating_sub(line)) / 2;
+        let tw = glyphs::ui_width(title, scale).unwrap_or(0).min(cw.saturating_sub(2 * pad));
+        let lx = cx + (cw - tw) / 2;
+        for y in 0..line {
+            for x in 0..tw {
+                if let Some(c) = ui_label_at_scaled(title, x, y, card, scale) {
+                    if let Some(i) = at(lx + x, ly + y) { unsafe { core::ptr::write_volatile(fb.add(i), c); } }
+                }
+            }
+        }
+    }
+    unsafe {
+        static mut SWITCHER_DRAW_BUDGET: u32 = 16;
+        if SWITCHER_DRAW_BUDGET > 0 {
+            SWITCHER_DRAW_BUDGET -= 1;
+            sex_pdx::serial_record!("[display.switcher.draw] count={} selected={} panel={}x{}+{}+{}", state.count, state.selected, pw, ph, px, py);
+        }
+    }
+}
+
 fn draw_launcher_panel(fb: *mut u32, w: usize, h: usize, total_pixels: usize, scene: &scene::SceneSnapshot) {
     unsafe {
         for surf in scene.surfaces.iter() {
@@ -4094,6 +4189,16 @@ pub extern "C" fn _start() -> ! {
                     if msg.caller_pd == 3 && sex_pdx::desktop_look::set(msg.arg0, msg.arg1) {
                         needs_full_redraw = true;
                         sex_pdx::serial_record!("[display.look] wallpaper={} night={}", msg.arg0, msg.arg1);
+                    }
+                }
+                sex_pdx::window_switcher::OP_WINDOW_SWITCHER => {
+                    // Only the Shell opens, steps and hides the Alt+Tab switcher.
+                    if msg.caller_pd == 3 {
+                        if let Some(state) = sex_pdx::window_switcher::State::decode(msg.arg0, msg.arg1, msg.arg2) {
+                            unsafe { WINDOW_SWITCHER = state; }
+                            needs_full_redraw = true;
+                            sex_pdx::serial_record!("[display.switcher] count={} selected={}", state.count, state.selected);
+                        }
                     }
                 }
                 sex_pdx::app_lifecycle::OP_APP_TITLE => {
