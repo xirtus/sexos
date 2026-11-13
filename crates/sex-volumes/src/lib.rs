@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Other systems' filesystems, as Files sees them: FAT12/16/32 and exFAT read and write,
-//! ext4 and NTFS read only. USB sticks, SD cards and disks from other machines mount
+//! Other systems' filesystems, as Files sees them: FAT12/16/32, exFAT and ext4 (with
+//! extents) read and write; ext2/3 and NTFS read only. USB sticks, SD cards and disks from other machines mount
 //! under `/media`; until USB mass storage lands, an image file on the SexOS filesystem
 //! stands in for the stick.
 //!

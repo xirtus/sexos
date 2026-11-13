@@ -3,6 +3,7 @@
 
 extern crate alloc;
 mod desktop_keys;
+mod media_keys;
 mod app_custody;
 /// The BOOT incarnation catalog, at crate root for app_custody.
 use sex_pdx::app_catalog;
@@ -10529,6 +10530,7 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
             wm_action(action);return true;
         }
     }
+    if media_keys::is_player_key(code){if value==1{player_key(code);}return true;}
     let modifier=APP_MODIFIERS.observe(code,value);
     match DESKTOP_KEYS.event(code,value) {
         desktop_keys::Action::Pass=>{
@@ -10590,7 +10592,39 @@ unsafe fn volume_key(step:i8) {
     use sex_pdx::sound_mixer as mixer;
     let (action,a)=if step==0{(mixer::MUTE_MASTER,2)}else{(mixer::STEP_MASTER,step as i64 as u64)};
     let (status,_)=pdx_call(SLOT_BELL,mixer::OP_MIXER,action,a,0);
+    if status==0{MEDIA_ASKS.push(media_keys::Ask::Volume);}
     sex_pdx::serial_record!("[shell.volume] step={} status={:#x}",step,status);
+}
+/// Mixer answers Shell asked for: what each is for, in Bell's answering order.
+static mut MEDIA_ASKS:media_keys::Asks=media_keys::Asks::new();
+/// A player key: Bell names the program it is for (the focused one if it plays).
+unsafe fn player_key(code:u8){
+    let focused=focused_program_participant().map_or(0,|p|p.subject.pd as u64);
+    let (status,_)=pdx_call(SLOT_BELL,sex_pdx::sound_mixer::OP_MIXER,sex_pdx::sound_mixer::LAST_PLAYER,focused,0);
+    if status==0{MEDIA_ASKS.push(media_keys::Ask::Player(code));}
+    sex_pdx::serial_record!("[shell.media.key] code={:#x} focused={} status={:#x}",code,focused,status);
+}
+/// Bell's answer to a volume key (shown in the panel) or a player key (delivered).
+unsafe fn media_keys_receive(msg:&sex_pdx::PdxMessage)->bool{
+    if msg.type_id!=1||msg.caller_pd!=NOTIFY_BELL_PD||!media_keys::is_mixer_answer(msg.arg0)||!MEDIA_ASKS.pending(){return false}
+    let word=msg.arg0;
+    match MEDIA_ASKS.pop(){
+        Some(media_keys::Ask::Volume) if !media_keys::refused(word)=>{
+            let mut text=[0u8;48];let n=media_keys::osd_text(word,&mut text);
+            let shown=notify_panel(&text[..n]);
+            if shown{NOTIFY_NOTICE_UNTIL=sex_pdx::get_ticks()+media_keys::OSD_TICKS;}
+            sex_pdx::serial_record!("[shell.osd] text={} shown={}",core::str::from_utf8(&text[..n]).unwrap_or("?"),shown as u8);
+        }
+        Some(media_keys::Ask::Player(code)) if !media_keys::refused(word)=>{
+            let pd=media_keys::stream_pd(word);
+            let to=APP_CUSTODY.iter().flatten().find(|e|e.target==pd&&!e.dead&&!e.retired).map(|e|e.surface).and_then(|sid|program_participant(sid));
+            let sent=to.is_some_and(|d|APP_INPUT.push(app_input::Item{destination:d,input:app_input::Input::Key(sex_pdx::app_key::Key{code,shift:false,control:false})}));
+            if sent{app_input_poll();}
+            sex_pdx::serial_record!("[shell.media.route] code={:#x} pd={} sent={}",code,pd,sent as u8);
+        }
+        ask=>sex_pdx::serial_record!("[shell.media.refused] ask={:?}",ask),
+    }
+    true
 }
 
 /// main OP_HID_EVENT dispatch.  Used by linen_sync_reply and before-linen
@@ -25919,6 +25953,7 @@ pub extern "C" fn _start() -> ! {
             if shell_program_message(&msg) { continue; }
             if clipboard_receive(&msg) { continue; }
             if notification_receive(&msg) { continue; }
+            if media_keys_receive(&msg) { continue; }
             if spindle_history_status_receive(&msg) {continue;}
             if workspace_refresh_receive(&msg) { continue; }
             if shell_close_declined_receive(&msg) { continue; }

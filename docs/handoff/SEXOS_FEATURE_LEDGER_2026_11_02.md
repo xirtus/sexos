@@ -4014,3 +4014,26 @@ handlers and `Notify`), battery percent and time left in the panel, lid and powe
 to the Shell (power dialog), ACPI brightness with Fn keys and launcher commands, HWP/CPPC power
 profiles, clean shut down on a critical thermal zone or battery. Touchpad protocol, descriptor
 parser and gestures as a host-tested crate. Details: `LAPTOP_POWER_2026_11_13.md`.
+## System monitor, slice J1 (2026-11-13)
+- **What:** `run monitor` opens Monitor: every service and program that has used the
+  CPU, busiest first, with its share of one core over the last second, the memory an
+  app run holds, and its system calls per second; at the top, the machine's load and
+  free program memory. Programs that call `Window::title` are listed by that name.
+- **Kernel:** new `kernel/src/cpu_account.rs` (~110 lines). Each core charges TSC
+  cycles to the domain it ran (or to its idle count) at every switch, at the idle wait
+  and at a local resume; the dispatcher counts system calls per domain.
+- **ABI:** new syscall 87 `SYS_STATS` (`sex_pdx::system_stats`): overview, domain
+  (cycles, pages, task, calls), name, next domain, set own name. Read-only numbers,
+  no right needed; naming is self-only.
+- **Found with it and fixed:** the Network service spun about 70% of a core on an idle
+  desktop (about 70,000 calls/s) because it asked for a 100-tick self-wait, which the
+  kernel refuses at once (most is 64). `sex_pdx::sys_wait_self_ticks` now clamps to
+  `SELF_WAIT_MAX_TICKS`, which also fixes the USB service's 100-tick wait. Idle QEMU
+  CPU on one core: 102% before, 38% after.
+- **Evidence:** `scripts/program_monitor_gate.py`: Monitor lists Bench (`run bench
+  spin`) at the top at 74-78% of the only core (the desktop keeps the rest), or of
+  one of two cores with `SEXOS_GATE_CORES=2`.
+- **Next idle-power targets the monitor shows:** Display ~30-40% under TCG while
+  Monitor redraws, Input ~3,700 calls/s and Bar ~2,400 calls/s at idle (polling).
+- **Not yet:** kill/restart from Monitor (needs a Shell request, workstream C owns
+  Shell), per-program I/O and network bytes.

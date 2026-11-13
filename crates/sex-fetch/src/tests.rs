@@ -179,3 +179,53 @@ fn referrer_policy() {
     let text = core::str::from_utf8(&out).unwrap();
     assert!(text.contains("Referer: https://a.example/\r\n") && !text.contains("evil"), "{text}");
 }
+
+#[test]
+fn cookies_outlast_the_run_when_they_have_an_expiry() {
+    let a = Url::parse("https://a.example/x").unwrap();
+    let mut jar = Jar::new();
+    let before = jar.changes();
+    jar.store(&a, "keep=1; Max-Age=3600", 1000);
+    jar.store(&a, "session=1", 1000);
+    jar.store(&a, "secret=2; Max-Age=3600; HttpOnly; Secure", 1000);
+    assert!(jar.changes() > before);
+    let back = Jar::load(&jar.save(1000), 1001);
+    assert_eq!(back.header(&a, 1001).as_deref(), Some("keep=1; secret=2"));
+    assert_eq!(back.script_view(&a, 1001), "keep=1");
+    // Expired by the time it is read back.
+    assert_eq!(Jar::load(&jar.save(1000), 5000).len(), 0);
+    let mut back = back;
+    back.clear_site("a.example");
+    assert_eq!(back.len(), 0);
+}
+
+#[test]
+fn websocket_handshake_and_frames() {
+    // RFC 6455 section 1.3's example.
+    assert_eq!(ws::accept_for("dGhlIHNhbXBsZSBub25jZQ=="), "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
+    let u = ws::parse("wss://echo.example:8443/chat?x=1").unwrap();
+    assert!(u.secure && u.port == 8443 && u.target == "/chat?x=1");
+    assert!(ws::parse("http://a/").is_none());
+    let (req, key) = ws::handshake(&u, &[1; 16], "https://a.example", &["chat"], None);
+    let req = core::str::from_utf8(&req).unwrap();
+    assert!(req.starts_with("GET /chat?x=1 HTTP/1.1\r\nHost: echo.example:8443\r\nUpgrade: websocket\r\n"));
+    let answer = alloc::format!("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {}\r\nSec-WebSocket-Protocol: chat\r\n\r\n", ws::accept_for(&key));
+    let (head, _) = parse_head(answer.as_bytes()).unwrap().unwrap();
+    assert_eq!(ws::check(&head, &key, &["chat"]).as_deref(), Ok("chat"));
+    assert!(ws::check(&head, "other", &["chat"]).is_err());
+    // Client frames are masked.
+    let f = ws::frame(ws::TEXT, b"Hi", [1, 2, 3, 4]);
+    assert_eq!(f, vec![0x81, 0x82, 1, 2, 3, 4, b'H' ^ 1, b'i' ^ 2]);
+    assert_eq!(ws::frame(ws::BINARY, &[0; 300], [0; 4])[1..4], [0x80 | 126, 1, 44]);
+    // Server frames: a fragmented text, a ping in between, then a close.
+    let mut r = ws::Reader::default();
+    r.push(&[0x01, 3, b'H', b'e', b'l']);
+    assert_eq!(r.next(), Ok(None));
+    r.push(&[0x89, 1, 7, 0x80, 2, b'l', b'o', 0x88, 4, 0x03, 0xE8, b'o', b'k']);
+    assert_eq!(r.next(), Ok(Some(ws::Event::Ping(vec![7]))));
+    assert_eq!(r.next(), Ok(Some(ws::Event::Text("Hello".into()))));
+    assert_eq!(r.next(), Ok(Some(ws::Event::Close(1000, "ok".into()))));
+    let mut bad = ws::Reader::default();
+    bad.push(&[0x81, 0x81, 0, 0, 0, 0, 0]);
+    assert_eq!(bad.next(), Err(1002));
+}

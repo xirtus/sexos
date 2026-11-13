@@ -1,0 +1,11 @@
+<!doctype html>
+<html><head><title>Daily tab</title></head>
+<body>
+<p>Another tab.</p>
+<script>
+const name = location.search.slice(1) || 'tab';
+let keys = 0;
+document.addEventListener('keydown', e => { if (e.key === 'x') { keys++; console.log('daily ' + name + ' keys ' + keys); } });
+console.log('daily ' + name + ' ready');
+</script>
+</body></html>

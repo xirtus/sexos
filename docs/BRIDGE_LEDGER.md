@@ -43,6 +43,8 @@ reference and must check on real hardware (or replace with datasheet/REA facts).
 | `kernel/src/hal/dgpu.rs` (D3hot, headers) + `servers/sexacpi` (`_PS3`/`_OFF`) | NVIDIA dGPU power off (D3cold) | Linux runtime PM approach (`_PS3`, `_PRx` `_OFF`, root port) | `_OFF` on the x17 R1's PEG port | #82 |
 | `servers/sexusb` | xHCI, hubs, HID | xHCI 1.2 and USB HID specs | firmware handoff on real PCs | #76 |
 | `crates/sex-volumes` | FAT, exFAT, ext4 (read), NTFS (read), MBR/GPT | on-disk format documentation | disks made by Windows and Linux | #75 |
+| `crates/sex-gpu-intel` (driver logic for the planned `servers/sexgpu-intel`), `crates/sex-kms` | Intel Gen12 Tiger Lake display engine (UHD 8086:9a60 on the x17 R1): GMBUS, DP AUX, transcoder readout, planes, cursor, backlight PWM, hotplug | Intel public PRMs (Tiger Lake Vol 2c registers, Vol 12 display); MIT i915 register headers as cross-check only; VESA E-EDID, DisplayPort and CTA-861 layouts | GMBUS pin numbers, AUX timing, TGL-H port set, SDEISR/DE HPD bits, PLANE_SURFLIVE latching, PWM controller on the x17 R1 | L1/L3 |
+| `servers/sexdisplay` `virtio_gpu.rs` | virtio-gpu 2D (QEMU) | virtio 1.2 specification §5.7 only; no crate, no Linux code | QEMU only | L2 |
 | `servers/sexbell` `sound.rs` | virtio sound | `virtio-drivers` crate (MIT), linked | QEMU only | master |
 | Planned: NVIDIA GSP driver (`sexgpu`) | RTX 30 (GA104) | NVIDIA open-gpu-kernel-modules (MIT/GPL dual, port under MIT with notices); nova (GPL-2.0) read only | everything | plan in `docs/handoff/NVIDIA_GPU_PLAN_2026_11_09.md` |
 

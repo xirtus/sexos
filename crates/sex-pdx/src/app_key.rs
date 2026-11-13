@@ -33,3 +33,12 @@ impl Modifiers {
 pub const KEY_MUTE: u8 = 0x75;
 pub const KEY_VOLUME_DOWN: u8 = 0x76;
 pub const KEY_VOLUME_UP: u8 = 0x77;
+
+/// Player keys: E0 22 / E0 24 / E0 19 / E0 10 on PS/2 (again sharing G, J, P and Q's
+/// byte). Shell routes each to the focused program when it plays sound, else to the
+/// program that played last (`sound_mixer::LAST_PLAYER`); it arrives there as an
+/// ordinary key with this code.
+pub const KEY_PLAY_PAUSE: u8 = 0x78;
+pub const KEY_STOP: u8 = 0x7A;
+pub const KEY_NEXT: u8 = 0x7C;
+pub const KEY_PREVIOUS: u8 = 0x7F;

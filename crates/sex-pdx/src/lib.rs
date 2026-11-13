@@ -445,7 +445,13 @@ pub fn sys_wait_self() {
 /// Pause this BOOT-created main task until inbox/reply activity or a bounded
 /// nominal timer delay (1..=64 ticks). Wakes can be spurious/coalesced; callers
 /// recheck their own inputs. No target task, new grant or delivery receipt.
+/// Longest single self-wait the kernel takes; a longer one is refused at once.
+pub const SELF_WAIT_MAX_TICKS:u64=64;
+/// Waits up to `ticks` (at most [`SELF_WAIT_MAX_TICKS`]) or until a message comes.
+/// Longer requests are clamped: a refused wait returns at once, and a service that
+/// loops on it would spin a whole core while it looks idle.
 pub fn sys_wait_self_ticks(ticks:u64)->Result<(),u64>{
+    let ticks=ticks.min(SELF_WAIT_MAX_TICKS);
     let result:u64;
     unsafe{core::arch::asm!("syscall",inlateout("rax")70u64=>result,
         in("rdi")ticks,in("rsi")0u64,in("rdx")0u64,in("r10")0u64,in("r8")0u64,
@@ -1286,7 +1292,9 @@ pub mod display_frames;
 pub mod text_batch;
 pub mod text_region;
 pub mod program_store;
+pub mod package;
 pub mod crash_log;
+pub mod system_stats;
 pub mod program_memory;
 pub mod program_code;
 pub mod power;

@@ -224,7 +224,7 @@ fn exact(vendor: u16, device: u16) -> Option<Device> {
         (0x1af4, 0x1041) | (0x1af4, 0x1000) => known("network device", Net, Planned),
         (0x1af4, 0x1042) | (0x1af4, 0x1001) => known("block device", Drive, Planned),
         (0x1af4, 0x1052) => known("input device", Input, Planned),
-        (0x1af4, 0x1050) => known("GPU", Display, Planned),
+        (0x1af4, 0x1050) => known("GPU", Display, Driven),
         _ => return None,
     })
 }

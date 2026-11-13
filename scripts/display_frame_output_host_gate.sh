@@ -90,6 +90,8 @@ parts=[item(n)for n in ['CURSOR_ARROW_W','CURSOR_ARROW_H','CURSOR_UNDER_SAVED','
 parts+=[derived('struct PreparedCursor{'),block(main,'struct PublishedFrame{'),block(main,'struct OutputBackup{'),block(main,'impl OutputBackup{'),block(main,'impl Drop for OutputBackup{'),block(main,'struct SceneLease {'),block(main,'impl SceneLease {'),block(main,'impl Drop for SceneLease {')]
 parts+=[fn(main,n)for n in ['valid_scanout','raster_batch','render_prepared','render','typed_completion_needs_publication','join_pending_text']]
 parts+=[fn(main,'publish_frame').replace('fn publish_frame(', 'fn actual_publish_frame(',1)]
+# Host doubles for the virtio-gpu presentation step (no device on the host).
+parts+=['fn gpu_scanout_active()->bool{false}','fn gpu_present(_first:usize,_end:usize)->bool{true}']
 # Exact Main plan/render/completion statements; only the host function boundary
 # supplies the same local variables. No copied pending-work policy in the test.
 start=main.index('let plan=pending_paint.plan(w,h);');end=main.index('pending_paint.complete(published.is_some());',start)+len('pending_paint.complete(published.is_some());')
