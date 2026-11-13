@@ -59,6 +59,14 @@ jobs:
       run: cargo test --locked -p sex-pkg
     - name: Disk layouts (GPT, FAT, install beside other systems)
       run: cargo test --locked -p sex-disk --lib
+    - name: Keyboard layouts, dead keys and Compose
+      run: cargo test --locked -p sex-keymap
+    - name: Fallback fonts reach Cyrillic, Greek, CJK, emoji and symbols
+      run: cargo test --locked -p sex-font --test fallback
+    - name: Shaping (rustybuzz vs hb-shape), Arabic joining and bidi
+      run: cargo test --locked -p sex-shape --features shaping
+    - name: Pinyin input method
+      run: cargo test --locked -p sex-ime
     - name: SexOS filesystem check and repair (injected faults)
       run: cargo test --locked --release -p sexfs --features repair --lib
     - name: Network stack (IPv6 resolvers, accept backlog, UDP queues) on the host

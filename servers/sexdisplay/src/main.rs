@@ -663,6 +663,7 @@ fn text_run(row:*mut u32,x0:usize,x1:usize,y:usize,surf:&Surface,metrics:sex_pdx
         let index=surf.cell_starts[ordinal] as usize;
         let Some((scalar,end))=sex_pdx::text_encoding::cell(&surf.text_buf[..len],index)else{continue;};
         if scalar==10{continue;}
+        let scalar=sex_shape::cells::shown(&surf.text_buf[..len],index,scalar);
         let selected=index<surf.selection_end as usize&&end>surf.selection_start as usize
             &&surf.selection_end as usize<=surf.text_len as usize;
         let left=tx+col*advance;
@@ -1562,7 +1563,8 @@ fn recompute_text_lines(surf: &mut Surface) {
                 col = 0;
             }
         }
-    }
+    }    // Rows with Hebrew or Arabic show their cells in visual order (Unicode bidi).
+    sex_shape::cells::reorder_lines(&surf.text_buf[..len],&mut surf.cell_starts,&surf.line_cells[..surf.line_count as usize],surf.cell_count as usize);
 }
 
 // These mutate text data only; dispatch admits the exact live surface owner.
@@ -1763,6 +1765,7 @@ fn surface_text_fg_at_scaled(x: usize, y: usize, surf: &Surface, ui_scale:u32) -
     let char_idx=surf.cell_starts[ordinal] as usize;
     let (scalar,char_end)=sex_pdx::text_encoding::cell(&surf.text_buf[..(surf.text_len as usize).min(TEXT_BUF_CAP)],char_idx)?;
     if scalar==10 { return None; }
+    let scalar=sex_shape::cells::shown(&surf.text_buf[..(surf.text_len as usize).min(TEXT_BUF_CAP)],char_idx,scalar);
     // Selection belongs to this committed surface text. Paint the whole cell,
     // including spaces and inter-glyph spacing, beneath existing foreground ink.
     let selected = char_idx < surf.selection_end as usize
@@ -3620,6 +3623,7 @@ pub extern "C" fn _start() -> ! {
     }
     // Intel display engine: read-only receipt of what firmware lit (slice L3).
     let _=intel::report();
+    glyphs::warm();
     // Private frames are packed; publication steps rows at the scanout pitch.
     let frame_layout=sex_pdx::display_frames::Layout::new(geometry.width as u64,geometry.height as u64,geometry.width as u64*4)
         .expect("DISPLAY_FRAME_LAYOUT");

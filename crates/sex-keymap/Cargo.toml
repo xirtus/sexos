@@ -1,0 +1,8 @@
+[package]
+name = "sex-keymap"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later OR MIT"
+description = "Keyboard layouts for SexOS: key codes to characters, dead keys, AltGr, Caps Lock and the Compose key"
+
+[dependencies]

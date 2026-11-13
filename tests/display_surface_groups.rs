@@ -2,6 +2,7 @@
 //! Actual compositor body extracted by gate. Glass shaders are deterministic
 //! sentinels; surface selection, clipping, fill, font and presentation bits are real.
 #![allow(dead_code,unused_variables,unused_unsafe,static_mut_refs)]
+#[path="../crates/sex-shape/src/lib.rs"] #[allow(unused_attributes)] pub mod sex_shape;
 extern crate self as sex_pdx;
 #[macro_export]macro_rules! serial_record{($($arg:tt)*)=>{{let _=format_args!($($arg)*);}}}
 #[path="../crates/sex-pdx/src/text_encoding.rs"]pub mod text_encoding;

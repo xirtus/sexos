@@ -1,6 +1,7 @@
 // Host fixture uses actual SDK, Surface, FrameGroups, bitmap publication and Scene.
 // Controlled held metadata is not a runtime grant or native composition proof.
 #![allow(dead_code,static_mut_refs)]
+#[path="../crates/sex-shape/src/lib.rs"] #[allow(unused_attributes)] pub mod sex_shape;
 extern crate self as sex_pdx;
 pub const ERR_SERVICE_NOT_READY:u64=u64::MAX-1;
 pub const ERR_CAP_INVALID:u64=u64::MAX-3;

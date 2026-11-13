@@ -74,7 +74,8 @@ impl Keys {
             return Action::Consume;
         }
         // Ctrl stays the app's too; Shell only notes it for Ctrl+Alt shortcuts.
-        if code == 0x1D {
+        // Right Ctrl (0x61) too: Input gives it the USB code so AltGr is distinct.
+        if code == 0x1D || code == 0x61 {
             self.ctrl = value != 0;
             return Action::Pass;
         }

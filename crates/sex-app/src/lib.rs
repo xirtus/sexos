@@ -586,14 +586,13 @@ pub fn nav(key: Key) -> Option<Nav> {
         _ => return None,
     })
 }
-/// The character a key types, if any, on the keyboard codes Shell passes through.
+/// The ASCII character a key types, if any. Programs that take any text use [`text`].
 pub fn typed(key: Key) -> Option<u8> {
-    let plain: &[u8; 58] = b"\0\x001234567890-=\0\0qwertyuiop[]\0\0asdfghjkl;'`\0\\zxcvbnm,./\0*\0 ";
-    let upper: &[u8; 58] = b"\0\0!@#$%^&*()_+\0\0QWERTYUIOP{}\0\0ASDFGHJKL:\"~\0|ZXCVBNM<>?\0*\0 ";
-    if key.control { return None; }
-    let c = *if key.shift { upper } else { plain }.get(key.code as usize)?;
-    (c != 0).then_some(c)
+    key.char().filter(char::is_ascii).map(|c| c as u8)
 }
+/// The character a key typed under the person's keyboard layout, if any: `ü` on a
+/// German keyboard, `é` after a dead `´`, `€` from Compose `=` `e`.
+pub fn text(key: Key) -> Option<char> { key.char() }
 
 /// The network, for a run the person started with `run +net`. Otherwise every call is
 /// refused. HTTP and HTTPS through the network service's checked TLS, and TCP and UDP
