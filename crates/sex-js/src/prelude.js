@@ -56,7 +56,7 @@
     if (type === 9) return document;
     const custom = type === 1 && customByName.get(name.toLowerCase());
     if (custom) { upgrading = { id, tag: name }; n = new custom(); upgrading = null; nodes.set(id, n); return n; }
-    n = type === 3 ? new Text(null, id) : new (ELEMENT_CLASSES[name] || HTMLElement)(id, name);
+    n = type === 3 ? new Text(null, id) : new (svgElement(id, name) ? (name.toLowerCase() === 'svg' ? SVGSVGElement : SVGElement) : ELEMENT_CLASSES[name] || HTMLElement)(id, name);
     nodes.set(id, n);
     return n;
   }
@@ -421,6 +421,15 @@
     get nextElementSibling() { return this._sibling(1, true); }
     get previousElementSibling() { return this._sibling(-1, true); }
   }
+  // The node type and position constants, on the class and its instances
+  // (`n.nodeType === Node.ELEMENT_NODE`).
+  for (const [k, v] of Object.entries({ ELEMENT_NODE: 1, ATTRIBUTE_NODE: 2, TEXT_NODE: 3, CDATA_SECTION_NODE: 4, ENTITY_REFERENCE_NODE: 5,
+    ENTITY_NODE: 6, PROCESSING_INSTRUCTION_NODE: 7, COMMENT_NODE: 8, DOCUMENT_NODE: 9, DOCUMENT_TYPE_NODE: 10, DOCUMENT_FRAGMENT_NODE: 11,
+    NOTATION_NODE: 12, DOCUMENT_POSITION_DISCONNECTED: 1, DOCUMENT_POSITION_PRECEDING: 2, DOCUMENT_POSITION_FOLLOWING: 4,
+    DOCUMENT_POSITION_CONTAINS: 8, DOCUMENT_POSITION_CONTAINED_BY: 16, DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32 })) {
+    Object.defineProperty(Node, k, { value: v, enumerable: true });
+    Object.defineProperty(Node.prototype, k, { value: v, enumerable: true });
+  }
   class Text extends CharacterData {
     constructor(text, id) {
       super(id === undefined ? +H(OP.CREATE_TEXT, text === undefined ? '' : String(text)) : id);
@@ -544,6 +553,8 @@
     get nodeName() { return this._tag; }
     get tagName() { return this._tag; }
     get localName() { return this._tag.toLowerCase(); }
+    get namespaceURI() { return HTML_NS; }
+    get prefix() { return null; }
     getAttribute(n) { return H(OP.GET_ATTR, this._id, String(n)); }
     setAttribute(n, v) {
       n = String(n); v = String(v);
@@ -1531,12 +1542,52 @@
     showModal() { this.open = true; }
     close(v) { this.open = false; if (v !== undefined) this.returnValue = v; this.dispatchEvent(new Event('close')); }
   }
-  class SVGElement extends Element {}
+  // SVG elements: their own namespace and class, and case-kept tag names (`path`,
+  // `linearGradient`), as scripts building icons and controls check.
+  const SVG_NS = 'http://www.w3.org/2000/svg', HTML_NS = 'http://www.w3.org/1999/xhtml';
+  const SVG_TAGS = new Map(['svg', 'g', 'path', 'circle', 'rect', 'line', 'polyline', 'polygon', 'ellipse', 'defs', 'use', 'symbol',
+    'text', 'tspan', 'textPath', 'linearGradient', 'radialGradient', 'stop', 'clipPath', 'mask', 'pattern', 'filter', 'marker',
+    'foreignObject', 'desc', 'animate', 'animateTransform', 'feGaussianBlur', 'feOffset', 'feColorMatrix', 'feBlend', 'feFlood',
+    'feComposite', 'feMerge', 'feMergeNode', 'feDropShadow', 'switch', 'view'].map(t => [t.toLowerCase(), t]));
+  // Names both HTML and SVG use: SVG only inside an <svg>.
+  const SVG_SHARED = new Set(['a', 'title', 'image', 'style', 'script']);
+  const svgMarked = new Set();
+  function svgElement(id, name) {
+    const l = name.toLowerCase();
+    if (svgMarked.has(id) || SVG_TAGS.has(l)) return true;
+    if (!SVG_SHARED.has(l)) return false;
+    for (let p = H(OP.PARENT, id), i = 0; p !== null && p !== undefined && p !== '' && i < 64; p = H(OP.PARENT, p), i++) {
+      const info = H(OP.INFO, p);
+      if (!info || info.slice(0, info.indexOf(',')) !== '1') return false;
+      const t = info.slice(info.indexOf(',') + 1).toLowerCase();
+      if (t === 'svg') return true;
+      if (t === 'foreignobject') return false;
+    }
+    return false;
+  }
+  class SVGElement extends Element {
+    get namespaceURI() { return SVG_NS; }
+    get tagName() { const l = this._tag.toLowerCase(); return SVG_TAGS.get(l) || l; }
+    get nodeName() { return this.tagName; }
+    get localName() { return this.tagName; }
+    get ownerSVGElement() { for (let p = this.parentNode; p && p.nodeType === 1; p = p.parentNode) if (p instanceof SVGSVGElement) return p; return null; }
+    get viewportElement() { return this.ownerSVGElement; }
+    getBBox() { const r = this.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; }
+    getCTM() { return null; }
+    getScreenCTM() { return null; }
+    focus() {}
+    blur() {}
+  }
+  class SVGSVGElement extends SVGElement {
+    createSVGPoint() { return { x: 0, y: 0, matrixTransform() { return this; } }; }
+    createSVGMatrix() { return { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0, multiply() { return this; }, inverse() { return this; } }; }
+  }
+  class SVGGraphicsElement extends SVGElement {}
   const ELEMENT_CLASSES = { VIDEO: HTMLVideoElement, AUDIO: HTMLAudioElement, DIV: HTMLDivElement, SPAN: HTMLSpanElement, P: HTMLParagraphElement,
     H1: HTMLHeadingElement, H2: HTMLHeadingElement, H3: HTMLHeadingElement, H4: HTMLHeadingElement, H5: HTMLHeadingElement, H6: HTMLHeadingElement,
     SCRIPT: HTMLScriptElement, STYLE: HTMLStyleElement, LINK: HTMLLinkElement, IFRAME: HTMLIFrameElement, UL: HTMLUListElement, OL: HTMLOListElement,
     LI: HTMLLIElement, TABLE: HTMLTableElement, BODY: HTMLBodyElement, HEAD: HTMLHeadElement, HTML: HTMLHtmlElement, META: HTMLMetaElement,
-    TITLE: HTMLTitleElement, PICTURE: HTMLPictureElement, SLOT: HTMLSlotElement, SOURCE: HTMLSourceElement, DIALOG: HTMLDialogElement, SVG: SVGElement,
+    TITLE: HTMLTitleElement, PICTURE: HTMLPictureElement, SLOT: HTMLSlotElement, SOURCE: HTMLSourceElement, DIALOG: HTMLDialogElement, SVG: SVGSVGElement,
     A: HTMLAnchorElement, IMG: HTMLImageElement, INPUT: HTMLInputElement, BUTTON: HTMLButtonElement,
     TEMPLATE: HTMLTemplateElement, CANVAS: HTMLCanvasElement, TEXTAREA: HTMLTextAreaElement, SELECT: HTMLSelectElement,
     OPTION: HTMLOptionElement, FORM: HTMLFormElement, LABEL: HTMLLabelElement };
@@ -1626,7 +1677,13 @@
       if (el.localName === 'script') { el._sxFresh = true; freshScripts++; }
       return el;
     }
-    createElementNS(ns, tag) { return this.createElement(tag); }
+    createElementNS(ns, tag) {
+      tag = String(tag).replace(/^[^:]*:/, '');
+      if (ns !== SVG_NS) return this.createElement(tag);
+      const id = +check(H(OP.CREATE_ELEMENT, tag));
+      svgMarked.add(id);
+      return wrap(id);
+    }
     createTextNode(t) { return new Text(t); }
     createComment(t) { return new Comment(t); }
     createDocumentFragment() { return new DocumentFragment(); }
@@ -1702,7 +1759,7 @@
     get nodeType() { return 9; }
     get baseURI() { return document.baseURI; }
     createElement(t) { return document.createElement(t); }
-    createElementNS(ns, t) { return document.createElement(t); }
+    createElementNS(ns, t) { return document.createElementNS(ns, t); }
     createTextNode(t) { return document.createTextNode(t); }
     createComment(t) { return document.createComment(t); }
     createDocumentFragment() { return document.createDocumentFragment(); }
@@ -3847,7 +3904,7 @@
     HTMLDivElement, HTMLSpanElement, HTMLParagraphElement, HTMLHeadingElement,
     HTMLScriptElement, HTMLStyleElement, HTMLLinkElement, HTMLIFrameElement, HTMLUListElement, HTMLOListElement, HTMLLIElement,
     HTMLTableElement, HTMLBodyElement, HTMLHeadElement, HTMLHtmlElement, HTMLMetaElement, HTMLTitleElement, HTMLPictureElement,
-    HTMLSourceElement, HTMLDialogElement, SVGElement, NodeFilter, TreeWalker, NodeIterator: TreeWalker, FontFace,
+    HTMLSourceElement, HTMLDialogElement, SVGElement, SVGSVGElement, SVGGraphicsElement, NodeFilter, TreeWalker, NodeIterator: TreeWalker, FontFace,
     getSelection: () => ({ rangeCount: 0, toString: () => '', removeAllRanges() {}, addRange() {}, getRangeAt() { return null; } }),
     visualViewport: { get width() { return view()[0]; }, get height() { return view()[1]; }, scale: 1, offsetLeft: 0, offsetTop: 0, pageLeft: 0, pageTop: 0, addEventListener() {}, removeEventListener() {} },
     get origin() { return location.origin; }, isSecureContext: true, frameElement: null, opener: null, closed: false,
