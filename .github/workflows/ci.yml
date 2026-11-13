@@ -182,6 +182,8 @@ jobs:
       run: |
         truncate -s 256M "$RUNNER_TEMP/blank-usb.img"
         python3 scripts/usb_storage_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-usb-storage"
+    - name: Files background copy, cancel, trash and delete for good
+      run: python3 scripts/files_jobs_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-jobs"
     - name: USB network adapter
       run: python3 scripts/usb_net_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-usb-net"
     - name: Intel RAID 0 on two NVMe drives, read only
@@ -202,6 +204,8 @@ jobs:
       with:
         name: sexos-devices-proof
         path: |
+          ${{ runner.temp }}/sexos-files-jobs/*.ppm
+          ${{ runner.temp }}/sexos-files-jobs/*.log
           ${{ runner.temp }}/sexos-raid
           ${{ runner.temp }}/sexos-power
           ${{ runner.temp }}/sexos-dgpu

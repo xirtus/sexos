@@ -654,6 +654,7 @@ version = "0.1.0"
 dependencies = [
  "sex-app",
  "sex-pdx",
+ "sha2",
 ]
 
 [[package]]
