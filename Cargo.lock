@@ -1808,6 +1808,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-calc"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-calc-core",
+ "sex-font",
+ "sex-pdx",
+]
+
+[[package]]
+name = "sex-calc-core"
+version = "0.1.0"
+dependencies = [
+ "libm",
+]
+
+[[package]]
 name = "sex-canvas"
 version = "0.1.0"
 dependencies = [
