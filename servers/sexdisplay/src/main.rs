@@ -155,6 +155,7 @@ static mut SURFACES: [Surface; MAX_SURFACES] = [SURFACE_EMPTY; MAX_SURFACES];
 mod scene;
 mod frame_output;
 mod virtio_gpu;
+mod intel;
 /// The virtio-gpu that took the screen over from firmware, if BOOT leased one.
 static mut GPU: Option<virtio_gpu::Gpu> = None;
 mod screen_capture;
@@ -3522,6 +3523,8 @@ pub extern "C" fn _start() -> ! {
         }
         Err(reason)=>sex_pdx::serial_record!("[display.kms.virtio] takeover=0 reason={}",reason),
     }
+    // Intel display engine: read-only receipt of what firmware lit (slice L3).
+    let _=intel::report();
     // Private frames are packed; publication steps rows at the scanout pitch.
     let frame_layout=sex_pdx::display_frames::Layout::new(geometry.width as u64,geometry.height as u64,geometry.width as u64*4)
         .expect("DISPLAY_FRAME_LAYOUT");

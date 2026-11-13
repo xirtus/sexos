@@ -2,11 +2,13 @@
 //! Read what firmware (UEFI GOP) left running, so SexOS can take the panel
 //! over without a modeset: same timings, same pipe, new framebuffers.
 
-use alloc::vec::Vec;
-use sex_kms::edid::Edid;
-use sex_kms::mode::{Mode, FLAG_HSYNC_POSITIVE, FLAG_VSYNC_POSITIVE};
-use sex_kms::model::{Connector, ConnectorKind, Device, Format, Framebuffer, Plane, PlaneKind, PlaneState, Rect, State, Status};
+#[cfg(feature = "kms")]
+pub use kms::*;
 use crate::regs::*;
+
+/// Sync polarity bits, as `sex_kms::mode` numbers them.
+const FLAG_HSYNC_POSITIVE: u8 = 1 << 0;
+const FLAG_VSYNC_POSITIVE: u8 = 1 << 1;
 use crate::Mmio;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -85,6 +87,17 @@ pub fn read_pipe(m: &mut impl Mmio, p: u32) -> PipeReadout {
     r
 }
 
+
+#[cfg(feature = "kms")]
+mod kms {
+use alloc::vec::Vec;
+use sex_kms::edid::Edid;
+use sex_kms::mode::Mode;
+use sex_kms::model::{Connector, ConnectorKind, Device, Format, Framebuffer, Plane, PlaneKind, PlaneState, Rect, State, Status};
+use crate::regs::*;
+use crate::Mmio;
+use super::{read_pipe, PipeReadout};
+
 pub fn read_all(m: &mut impl Mmio) -> Vec<PipeReadout> { (0..PIPES).map(|p| read_pipe(m, p)).collect() }
 
 /// The connector type a port drives. Port A in DP mode is the eDP panel on
@@ -156,4 +169,5 @@ pub fn to_kms(pipes: &[PipeReadout], ports: &[Port], measured_mhz: &[u32]) -> (D
         }
     }
     (dev, st)
+}
 }

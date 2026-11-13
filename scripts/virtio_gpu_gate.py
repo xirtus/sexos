@@ -76,10 +76,13 @@ def main():
   checks={'bar':(px(first,300,14),(37,42,63)),'launcher':(px(first,19,14),(87,158,205)),'close':(px(first,20,49),(230,68,68))}
   bad={k:v for k,v in checks.items() if not near(*v)}
   if bad:raise RuntimeError(f'desktop not on the GPU resource: {bad}')
-  for x,y in((200,300),(260,340),(320,380)):hmp(f'mouse_move {x} {y}');time.sleep(.4)
-  time.sleep(2)
-  second=shot('moved.ppm')
-  changed=sum(1 for i in range(0,len(first[2]),3) if first[2][i:i+3]!=second[2][i:i+3])
+  # Slow runners may still be settling input; keep moving for up to 60 s.
+  changed=0;deadline=time.monotonic()+60;step=0
+  while changed<20 and time.monotonic()<deadline:
+   for x,y in((200,300),(260,340),(320,380),(-150,-120)):hmp(f'mouse_move {x+step} {y}');time.sleep(.3)
+   step+=7;time.sleep(1.5)
+   second=shot('moved.ppm')
+   changed=sum(1 for i in range(0,len(first[2]),3) if first[2][i:i+3]!=second[2][i:i+3])
   if changed<20:raise RuntimeError(f'pointer move did not reach the screen (changed={changed})')
   print({'ok':True,'head':(head[1],head[2]),'edid':edid[0],'desktop':(w,h),'changed_pixels':changed})
  except Exception:

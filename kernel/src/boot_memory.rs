@@ -739,6 +739,15 @@ pub fn virtio_dma(pd_id:u32){
     dma(pd_id,sex_pdx::virtio::DMA_REGION_ID,sex_pdx::virtio::DMA_BYTES);
 }
 
+/// The display-register prefix of an Intel GPU's BAR0 (GTTMMADR), if present.
+pub fn intel_display_bar(pd:&ProtectionDomain,dev:&crate::hal::pci::PciDevice,slot:u64)->Option<RegionGrant>{
+    require_boot();
+    let(physical,actual_length)=dev.probe_boot_bar_any(0)?;
+    let length=sex_pdx::display_frames::INTEL_REGISTERS;
+    if actual_length<length{return None}
+    Some(pci_view(pd,slot,physical,actual_length,length))
+}
+
 /// The register BAR of a controller leased by class (HD Audio, AHCI), if its
 /// whole register prefix fits.
 pub fn class_bar(pd:&ProtectionDomain,dev:&crate::hal::pci::PciDevice,slot:u64,kind:crate::device_lease::Kind)->Option<(RegionGrant,(u32,u32))>{

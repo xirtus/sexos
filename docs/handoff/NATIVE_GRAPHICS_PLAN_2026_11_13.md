@@ -55,6 +55,18 @@ MIT i915 headers were a cross-check only. Ledger table 2 has the row.
   pointer is still drawn into the frame (cursor queue = L6), and display hotplug
   events (`VIRTIO_GPU_EVENT_DISPLAY`) and a second head (L5) are next.
 
+## L3 first step: Intel boot receipt (same PR as L2)
+
+BOOT leases Display a view of a Tiger Lake GPU's display registers (BAR0's first
+0xD0000 bytes, `display_frames::INTEL_SLOT` 27, `Lease::IntelDisplay`; no command
+grant, no DMA pool). `servers/sexdisplay/src/intel.rs` uses `sex-gpu-intel` (built
+without its heap-needing `kms` feature) to print, without changing anything on screen:
+`[display.intel.pipe]` per lit pipe (port, mode, bpc, timings, plane, stride, surface,
+PSR), `[display.intel.ports]` live hotplug mask, `[display.intel.backlight]`, and for
+the eDP panel `[display.intel.dpcd]` and `[display.intel.edid]` read over AUX. Its only
+register writes are AUX transactions. QEMU has no Intel display, so the x17 boot log is
+its first run.
+
 ## The x17 R1 and its screens (what to check on the hardware)
 
 - The internal panel is on the Intel iGPU in hybrid (Optimus) mode. If the BIOS

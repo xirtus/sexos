@@ -14,6 +14,10 @@ pub const REGION_ID:u32=11;
 /// one packed frame, DMA-addressable, the host resource's backing.
 pub const SCANOUT_SLOT:u64=26;
 pub const SCANOUT_REGION_ID:u32=0x4210;
+/// Intel display engine lease in Display: BAR0's display registers only
+/// (pipes, transcoders, planes, DDI/AUX, PCH GMBUS/hotplug/backlight).
+pub const INTEL_SLOT:u64=27;
+pub const INTEL_REGISTERS:u64=0xd0000;
 pub const MAX_WIDTH:u64=8192;
 pub const MAX_HEIGHT:u64=4320;
 pub const PAGE:u64=4096;
