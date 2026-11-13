@@ -9,6 +9,7 @@
 #![no_main]
 
 mod model;
+mod setup;
 
 use model::{Change, Model};
 use sex_app::settings;
@@ -42,10 +43,48 @@ fn show(window: &mut Window, m: &Model) {
     window.show(&text[..n]);
 }
 
+/// First-start setup: runs until its last step or until the window closes.
+fn first_start(window: &mut Window) {
+    let mut s = setup::Setup::new();
+    let mut status: &[u8] = b"";
+    sex_pdx::serial_record!("[settings.setup] step=start");
+    loop {
+        let mut text = [0u8; 4096];
+        let n = setup::render(&s, &mut text, status);
+        window.show(&text[..n]);
+        if s.step == setup::Step::Done { return; }
+        let key = match window.next() { Event::Close => window_close(), Event::Key(k) => k, _ => continue };
+        status = b"";
+        match (sex_app::nav(key), key.code) {
+            (Some(Nav::Up), _) => s.up_down(false),
+            (Some(Nav::Down), _) => s.up_down(true),
+            (_, ESC) => s.back(),
+            (_, BACKSPACE) => s.backspace(),
+            (_, ENTER) => {
+                let step = s.step;
+                let ok = match s.next() {
+                    setup::Out::Nothing => true,
+                    setup::Out::Values(values) => values.iter().filter(|(k, _)| *k != 0).all(|(k, v)| settings::set(*k, *v).is_ok()),
+                    setup::Out::Password(mut p, n) => {
+                        let r = settings::password(sex_config::secret::SET, &p[..n]);
+                        for b in p.iter_mut() { unsafe { core::ptr::write_volatile(b, 0) }; }
+                        r == Ok(sex_config::secret::OK)
+                    }
+                };
+                sex_pdx::serial_record!("[settings.setup] step={:?} ok={}", step, ok as u8);
+                if !ok { status = b"That could not be saved; it can be changed later in Settings."; }
+            }
+            _ => if let Some(c) = sex_app::typed(key) { s.typed(c) },
+        }
+    }
+}
+fn window_close() -> ! { sex_pdx::task_finish(0) }
+
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     let mut window = Window::open();
     window.title(b"Settings");
+    if settings::get(sex_config::id::SETUP_DONE).is_ok_and(|done| done == 0) { first_start(&mut window); }
     let (values, mut generation) = load();
     let mut m = Model::new(values);
     sex_pdx::serial_record!("[settings.open] generation={}", generation);

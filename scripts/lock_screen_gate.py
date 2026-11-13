@@ -10,6 +10,13 @@ from pathlib import Path
 from install_program import install
 from quil_autosave_gate import boot
 ROOT=Path(__file__).resolve().parents[1]
+def first_start(g,q,t,s):
+ """Settings opens with first-start setup on a fresh disk: keep the defaults, no
+ password, never idle."""
+ g['wait'](r'\[settings.setup\] step=start',s,120);time.sleep(1)
+ for step in ('Layout','Zone','Password'):
+  q.key('ret');g['wait'](rf'\[settings.setup\] step={step} ok=1',s,120)
+ q.key('down');time.sleep(.2);q.key('down');time.sleep(.2);q.key('ret');g['wait'](r'\[settings.setup\] step=Idle ok=1',s,60)
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
@@ -29,7 +36,7 @@ def main():
   shot('00-locked-no-password')
   s=len(t());q.key('ret');g['wait'](r'\[shell.lock.check\] status=2',s,60);g['wait'](r'\[shell.lock\] locked=0',s,30)
   # Settings sets a password.
-  g['focus'](153);time.sleep(.5);s=len(t());typ('run settings');q.key('ret');g['wait'](r'\[settings.open\] generation=\d+',s,120);time.sleep(1)
+  g['focus'](153);time.sleep(.5);s=len(t());typ('run settings');q.key('ret');first_start(g,q,t,s);g['wait'](r'\[settings.open\] generation=\d+',s,120);time.sleep(1)
   s=len(t());q.key('f2');typ('opensesame');q.key('ret');typ('opensesame');q.key('ret')
   g['wait'](r'\[files.password\] caller=\d+ verb=3 status=0',s,120);g['wait'](r'\[settings.password\] status=0',s,60)
   # Locked: a key meant for Settings changes nothing.

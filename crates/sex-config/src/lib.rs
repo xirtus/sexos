@@ -103,6 +103,39 @@ pub mod id {
     pub const BLANK_AFTER: u16 = 16;
     pub const LOCK_ON_IDLE: u16 = 17;
     pub const SETUP_DONE: u16 = 18;
+    pub const OPEN_PDF: u16 = 19;
+    pub const OPEN_IMAGE: u16 = 20;
+    pub const OPEN_VIDEO: u16 = 21;
+    pub const OPEN_AUDIO: u16 = 22;
+    pub const OPEN_PAGE: u16 = 23;
+}
+
+/// Programs that open each kind of file, the default first. Append-only.
+pub const PDF_PROGRAMS: &[&str] = &["pdf", "web"];
+pub const IMAGE_PROGRAMS: &[&str] = &["view", "web"];
+pub const VIDEO_PROGRAMS: &[&str] = &["play"];
+pub const AUDIO_PROGRAMS: &[&str] = &["play"];
+pub const PAGE_PROGRAMS: &[&str] = &["web"];
+
+/// The `open.*` setting for a file name, by its extension.
+pub fn kind_of(name: &[u8]) -> Option<u16> {
+    let dot = name.iter().rposition(|b| *b == b'.')?;
+    let ext = &name[dot + 1..];
+    let is = |list: &[&str]| list.iter().any(|e| e.as_bytes().eq_ignore_ascii_case(ext));
+    Some(if is(&["pdf"]) { id::OPEN_PDF }
+        else if is(&["png", "jpg", "jpeg", "gif", "webp", "bmp"]) { id::OPEN_IMAGE }
+        else if is(&["mp4", "mkv", "webm", "mov", "avi", "m4v"]) { id::OPEN_VIDEO }
+        else if is(&["mp3", "ogg", "opus", "flac", "wav", "m4a", "aac"]) { id::OPEN_AUDIO }
+        else if is(&["html", "htm", "svg"]) { id::OPEN_PAGE }
+        else { return None })
+}
+
+impl Config {
+    /// The program the person chose for this file name, if its kind has one.
+    pub fn program_for(&self, name: &[u8]) -> Option<&'static str> {
+        let k = key(kind_of(name)?)?;
+        match k.kind { Kind::Choice(names) => names.get(self.value(k.id) as usize).copied(), _ => None }
+    }
 }
 
 const fn int(min: i32, max: i32) -> Kind { Kind::Int { min, max } }
@@ -129,6 +162,11 @@ pub const KEYS: &[Key] = &[
     Key { id: id::BLANK_AFTER, name: "session.blank_after_min", label: "Screen off after (minutes, 0 never)", kind: int(0, 240), default: 0 },
     Key { id: id::LOCK_ON_IDLE, name: "session.lock_on_idle", label: "Lock when idle", kind: Kind::Bool, default: 1 },
     Key { id: id::SETUP_DONE, name: "setup.done", label: "First-start setup finished", kind: Kind::Bool, default: 0 },
+    Key { id: id::OPEN_PDF, name: "open.pdf", label: "Open PDF documents with", kind: Kind::Choice(PDF_PROGRAMS), default: 0 },
+    Key { id: id::OPEN_IMAGE, name: "open.image", label: "Open pictures with", kind: Kind::Choice(IMAGE_PROGRAMS), default: 0 },
+    Key { id: id::OPEN_VIDEO, name: "open.video", label: "Open videos with", kind: Kind::Choice(VIDEO_PROGRAMS), default: 0 },
+    Key { id: id::OPEN_AUDIO, name: "open.audio", label: "Open music with", kind: Kind::Choice(AUDIO_PROGRAMS), default: 0 },
+    Key { id: id::OPEN_PAGE, name: "open.page", label: "Open web pages with", kind: Kind::Choice(PAGE_PROGRAMS), default: 0 },
 ];
 pub const COUNT: usize = KEYS.len();
 
@@ -423,6 +461,20 @@ mod tests {
         let c = Config::new();
         let mut small = [0u8; 64];
         assert_eq!(c.write(&mut small), None);
+    }
+
+    #[test]
+    fn files_open_with_the_chosen_program() {
+        let mut c = Config::new();
+        assert_eq!(c.program_for(b"report.PDF"), Some("pdf"));
+        assert_eq!(c.program_for(b"cat.jpeg"), Some("view"));
+        assert_eq!(c.program_for(b"film.mkv"), Some("play"));
+        assert_eq!(c.program_for(b"song.flac"), Some("play"));
+        assert_eq!(c.program_for(b"index.html"), Some("web"));
+        assert_eq!(c.program_for(b"notes"), None);
+        assert_eq!(c.program_for(b"archive.tar.gz"), None);
+        c.set(id::OPEN_PDF, 1).unwrap();
+        assert_eq!(c.program_for(b"report.pdf"), Some("web"));
     }
 
     #[test]

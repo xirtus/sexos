@@ -11,3 +11,4 @@ path = "src/main.rs"
 [dependencies]
 sex-pdx = { path = "../../crates/sex-pdx" }
 sex-app = { path = "../../crates/sex-app" }
+sex-config = { path = "../../crates/sex-config" }

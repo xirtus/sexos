@@ -18,7 +18,7 @@ pub fn page_title(section: &str) -> &str {
     match section {
         "appearance" => "Appearance", "desktop" => "Desktop", "display" => "Display",
         "keyboard" => "Keyboard", "sound" => "Sound", "time" => "Date & time",
-        "session" => "Lock & idle", "setup" => "System", other => other,
+        "session" => "Lock & idle", "setup" => "System", "open" => "Default apps", other => other,
     }
 }
 
@@ -244,7 +244,7 @@ mod tests {
     #[test]
     fn pages_follow_the_schema() {
         let (p, n) = pages();
-        assert_eq!(&p[..n], &["appearance", "desktop", "display", "keyboard", "sound", "time", "session", "setup"]);
+        assert_eq!(&p[..n], &["appearance", "desktop", "display", "keyboard", "sound", "time", "session", "setup", "open"]);
     }
 
     #[test]
@@ -328,6 +328,6 @@ mod tests {
         assert!(text.ends_with("Saved."));
         m.next_page(false);
         m.next_page(false);
-        assert_eq!(pages().0[m.page], "setup");
+        assert_eq!(pages().0[m.page], "open");
     }
 }

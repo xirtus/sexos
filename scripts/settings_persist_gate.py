@@ -13,6 +13,13 @@ from pathlib import Path
 from install_program import install
 from quil_autosave_gate import boot
 ROOT=Path(__file__).resolve().parents[1]
+def first_start(g,q,t,s):
+ """Settings opens with first-start setup on a fresh disk: keep the defaults, no
+ password, never idle."""
+ g['wait'](r'\[settings.setup\] step=start',s,120);time.sleep(1)
+ for step in ('Layout','Zone','Password'):
+  q.key('ret');g['wait'](rf'\[settings.setup\] step={step} ok=1',s,120)
+ q.key('down');time.sleep(.2);q.key('down');time.sleep(.2);q.key('ret');g['wait'](r'\[settings.setup\] step=Idle ok=1',s,60)
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
@@ -41,7 +48,7 @@ def main():
   g['wait'](r'\[app.private.retired\] target=41 ',0,120)
   g['focus'](153);time.sleep(.5);s=len(t())
   for k in 'run settings':q.key('spc' if k==' ' else k);time.sleep(.05)
-  q.key('ret');g['wait'](r'\[settings.open\] generation=\d+',s,120);time.sleep(1)
+  q.key('ret');first_start(g,q,t,s);g['wait'](r'\[settings.open\] generation=\d+',s,120);time.sleep(1)
   # Appearance -> Desktop page, down to night light, one step lower.
   s=len(t());q.key('tab');time.sleep(.3);q.key('down');time.sleep(.3);q.key('left')
   g['wait'](r'\[settings.set\] key=3 value=1 status=0',s,30)

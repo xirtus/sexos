@@ -4069,3 +4069,18 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   lock-surface stub; QEMU gate `scripts/lock_screen_gate.py` in CI (devices job).
 - **Not yet:** inhibiting idle while media plays (needs a Bell hint); a salt from the
   kernel's held entropy source instead of RDRAND.
+
+## First-start setup and default apps, slices B8/B9 (2026-11-13)
+- **B8:** while `setup.done` is off, Settings opens with four questions: keyboard
+  layout, time zone (type to narrow the list), a lock password (may be empty), and
+  idle behaviour (dim/lock/off after 5/10/15 or 10/15/30 minutes, or never). Each answer
+  is an ordinary setting; the last turns `setup.done` on. No user accounts yet, so no
+  user name. Launching Settings by itself on a fresh disk waits for programs shipping
+  with the system (packages workstream); `run settings` starts it today.
+- **B9:** `open.pdf`, `open.image`, `open.video`, `open.audio`, `open.page` (Settings page
+  "Default apps") and `sex_config::kind_of` / `Config::program_for` by extension. Files
+  says which program opens a file and the exact `run` line. Opening it from Files with
+  one key needs a Shell "open with" portal (a program may not start another today):
+  noted for the desktop workstream.
+- **Evidence:** `settings_host_gate.sh` (setup walk, zone filter, empty password,
+  associations); the QEMU gates walk the setup first on their fresh disks.
