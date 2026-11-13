@@ -82,6 +82,8 @@ members = [
     "apps/ssh",
     "apps/pdf",
     "apps/lua",
+    "crates/sex-sdl",
+    "apps/sdltest",
 ]
 [workspace.package]
 license = "GPL-3.0-only"
