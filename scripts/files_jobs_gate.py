@@ -5,7 +5,8 @@ A 32 MiB file is copied in the Files app in the background; Esc half-way must le
 file (not even a hidden part) in the destination. Copied again to the end, its SHA-256
 read back through Files (Ctrl+I) must equal the source's. Moved to the trash, it shows
 up there and Ctrl+R restores it with the same hash; Shift+Del twice deletes it for good,
-and Ctrl+E twice empties the trash."""
+and Ctrl+E twice empties the trash. Ctrl+F finds a word inside a text file; searching
+again comes from the index (no file read again) in under a second."""
 import argparse,hashlib,http.server,os,random,re,shutil,threading,time
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
@@ -102,6 +103,23 @@ def main():
   s=len(t());ctrl('e')
   g['wait'](r'\[files.app.job.done\] kind=Delete what=the trash ',s,120)
   g['wait'](r'\[files.app.list\] dir=/.Trash count=0\b',s,30)
+  # 6. Search by a word inside a text file; the second time from the index, in under 1 s.
+  expect('mkdir 0gate/notes',r'\[spindle.fs.result\] kind=3 status=0')
+  expect('write 0gate/notes/plan.txt meeting about the Zanzibar budget',r'\[spindle.fs.result\] kind=8 status=0')
+  expect('write 0gate/notes/other.txt nothing to see',r'\[spindle.fs.result\] kind=8 status=0')
+  g['focus'](fa_sid);time.sleep(.5)
+  step(lambda:ctrl('h'),r'\[files.app.list\] dir=/ count=')
+  step(lambda:q.key('ret'),r'\[files.app.list\] dir=/0gate count=2\b')
+  for n in (1,2):
+   ctrl('f');time.sleep(.5);keys('zanzib')
+   m=step(lambda:q.key('ret'),r'\[files.app.search\] base=/0gate query=zanzib results=(\d+) looked=(\d+) read=(\d+) ms=(\d+) finished=1',60)
+   result[f'search{n}']={'results':int(m[1]),'looked':int(m[2]),'read':int(m[3]),'ms':int(m[4])}
+   assert int(m[1])==1,m[0]
+   g['wait'](r'\[files.app.found\] path=notes/plan.txt by=words',0,10)
+  assert result['search2']['read']==0 and result['search2']['ms']<1000,result
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'files-search.ppm')})
+  step(lambda:q.key('ret'),r'\[files.app.found.opened\] path=/0gate/notes/plan.txt')
+  g['wait'](r'\[files.app.list\] dir=/0gate/notes count=2\b',0,10)
   # Spindle sees the same: nothing left of either copy, no hidden parts.
   s=len(t());line('ls 0gate/dst');g['wait'](r'\[spindle.fs.result\] kind=2 status=0',s,60);time.sleep(1)
   listed=re.findall(r'\[spindle.fs.line\] ([^\n]*)',t()[s:]);assert not any('big' in x or 'part' in x for x in listed),listed

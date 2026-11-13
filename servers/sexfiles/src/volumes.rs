@@ -189,6 +189,7 @@ pub fn usb_changed(caller: u32) {
     mounts().retain(|m| match m.source {
         Source::Usb { disk, .. } if present & (1 << disk) == 0 => {
             sex_pdx::serial_record!("[files.media.usb.gone] name={} disk={}", m.name, disk);
+            revoke(&m.name);
             false
         }
         _ => true,
@@ -365,16 +366,34 @@ pub fn mount(fs: &mut Fs<'static, FsDisk>, path: &[u8], data: &mut [u8]) -> Resu
     data[..n].copy_from_slice(&out.as_bytes()[..n]);
     Ok(n as u32)
 }
+/// Grants to a volume's folder end with the volume.
+fn revoke(name: &str) {
+    let mut prefix = MEDIA.to_vec();
+    prefix.push(b'/');
+    prefix.extend_from_slice(name.as_bytes());
+    crate::fs_service::revoke_under(&prefix);
+}
 /// Writes out what a volume holds back and forgets it. The image stays where it was.
+///
+/// For a USB disk this is Eject: every volume on that disk is written out, the stick
+/// itself is told to flush its cache, and only then are they all forgotten and every
+/// grant into them taken back. If any of that fails nothing is forgotten, so the
+/// person is not told it is safe to pull out a stick that still holds their data.
 pub fn unmount(fs: &mut Fs<'static, FsDisk>, path: &[u8]) -> Result<u32, u8> {
     let Some((index, inner)) = find(path) else { return Err(w::NOT_FOUND) };
     if !inner.iter().all(|b| *b == b'/') { return Err(w::INVALID); }
-    if !mounts()[index].read_only() { with(Some(fs), &mut mounts()[index], |v, d| v.sync(d)).map_err(status)?; }
-    let m = mounts().remove(index);
-    if let Source::Usb { disk, .. } = m.source {
-        if !mounts().iter().any(|o| matches!(o.source, Source::Usb { disk: d, .. } if d == disk)) { unsafe { EJECTED |= 1 << disk; } }
+    let usb = match mounts()[index].source { Source::Usb { disk, .. } => Some(disk), _ => None };
+    let same = |m: &Mount, i: usize| i == index || usb.is_some() && matches!(m.source, Source::Usb { disk, .. } if Some(disk) == usb);
+    let all: Vec<usize> = (0..mounts().len()).filter(|i| same(&mounts()[*i], *i)).collect();
+    for &i in &all {
+        if !mounts()[i].read_only() { with(Some(&mut *fs), &mut mounts()[i], |v, d| v.sync(d)).map_err(status)?; }
     }
-    sex_pdx::serial_record!("[files.media.unmounted] name={}", m.name);
+    for &i in all.iter().rev() {
+        let m = mounts().remove(i);
+        sex_pdx::serial_record!("[files.media.unmounted] name={}", m.name);
+        revoke(&m.name);
+    }
+    if let Some(disk) = usb { unsafe { EJECTED |= 1 << disk; } }
     Ok(0)
 }
 /// SYNC with no path reaches every volume too.
