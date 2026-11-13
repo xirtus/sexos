@@ -90,6 +90,14 @@ fn page_styles(dom: &Dom) -> Vec<(alloc::string::String, Option<alloc::string::S
         .map(|i| (dom.text_content(i), dom.attr(i, "media").map(alloc::string::String::from))).collect()
 }
 
+/// The `@font-face` rules of a style sheet's text (for the caller to fetch the fonts).
+pub fn font_faces(css_text: &str, width: i32) -> Vec<css::FontFace> { css::parse_sheet(css_text, width).font_faces }
+
+/// The `@font-face` rules in the page's own `<style>` elements.
+pub fn page_font_faces(dom: &Dom, width: i32) -> Vec<css::FontFace> {
+    page_styles(dom).into_iter().flat_map(|(t, _)| font_faces(&t, width)).collect()
+}
+
 /// `<link rel=stylesheet href=...>` addresses, in document order, for the caller to fetch.
 pub fn stylesheet_links(dom: &Dom) -> Vec<&str> {
     dom.descendants(Dom::ROOT).into_iter().filter(|&i| dom.tag(i) == Some("link"))

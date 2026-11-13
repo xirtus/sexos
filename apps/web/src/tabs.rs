@@ -40,7 +40,7 @@ pub struct Tab {
     frames_shown: u64,
     find: Option<String>,
     find_at: usize,
-    marks: Vec<[i32; 4]>,
+    marks: Vec<[i32; 5]>,
     pub title: String,
     laid_zoom: u32,
 }
