@@ -77,6 +77,13 @@ def main():
   for want in('batteries=1 ','ac=1 ','lids=1 ','backlight=1'):
    if want not in ready:raise RuntimeError(f'inventory: {ready}')
   g['wait'](r'\[sexacpi\.backlight\] path=\\_SB\.PCI0\.GFX0\.DD1F levels=10 current=50')
+  # The touchpad: described from _CRS/_DSM/_ADR/FMCN and handed to Input, which holds no
+  # Serial IO controller under QEMU.
+  if 'i2c_hid=1' not in ready:raise RuntimeError(f'touchpad inventory: {ready}')
+  result['touchpad']=g['wait'](r'\[sexacpi\.touchpad\] path=\\_SB\.PCI0\.I2C1\.TPD0 pci=00:15\.1 address=0x2c ten_bit=0 khz=400 hid_register=0x20 gpio=348 counts=82/156/30')[0]
+  g['wait'](r'\[sexacpi\.touchpad\.sent\] pci=00:15\.1 status=0x0')
+  g['wait'](r'\[sexinput\.touchpad\.found\] pci=00:15\.1 address=0x2c khz=400 hid_register=0x20')
+  g['wait'](r'\[sexinput\.touchpad\.absent\] reason=controller_not_leased')
   sensors=g['wait'](r'\[sexacpi\.sensors\] battery=50 charging=0 minutes=120 health=96 ac=0 lid=1 temp_dk=3182 crit_dk=3732 brightness=\d+ critical=0')
   # The brightness-up key, as firmware Notify: it used to stop the interpreter.
   g['wait'](r'\[sexacpi\.notify\] path=\\_SB\.PCI0\.GFX0\.DD1F value=0x86 kind=backlight')
@@ -97,6 +104,7 @@ def main():
   g['wait'](r'\[sexacpi\.sensors\] [^\n]*brightness=50 ',s,30)
   fw=g['firmware']()
   if fw.count('B')<2:raise RuntimeError(f'_BCM did not run twice: {fw!r}')
+  if fw.count('P')<2:raise RuntimeError(f'touchpad and controller _PS0 did not run: {fw!r}')
   # The power button opens the power dialog; Enter shuts down cleanly.
   s=len(g['text']());g['q'].cmd('system_powerdown')
   g['wait'](r'\[acpi\.power_button\] pressed=1 to_desktop=1',s,30)
@@ -108,7 +116,7 @@ def main():
   code=g['ended']();result['dialog_off']=code
   if code!=0:raise RuntimeError(f'QEMU exit {code} after S5')
  except Exception:
-  print('\n'.join(l for l in g['text']().splitlines() if re.search(r'\[(sexacpi|acpi|shell\.(lid|power|laptop)|display\.panel\.battery)',l)),file=sys.stderr);raise
+  print('\n'.join(l for l in g['text']().splitlines() if re.search(r'\[(sexacpi|sexinput\.touchpad|boot\.touchpad|acpi|shell\.(lid|power|laptop)|display\.panel\.battery)',l)),file=sys.stderr);raise
  finally:g['stop']()
  # Boot 2: a thermal zone past its critical trip point shuts the machine down.
  g=launch(a.iso,disk,a.out,'thermal',thermal=True)

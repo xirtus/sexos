@@ -37,6 +37,7 @@ use sex_pdx::power as w;
 use sex_pdx::serial_println;
 
 mod laptop;
+mod touchpad;
 
 // ── Memory ─────────────────────────────────────────────────────────────────
 
@@ -284,7 +285,7 @@ fn inventory(aml: &Aml) -> Devices {
                 else if has("ACPI0003") { d.ac.push(path); }
                 else if has("PNP0C0D") { d.lids.push(path); }
                 else if has("PNP0C50") || has("ACPI0C50") {
-                    serial_println!("[sexacpi.i2c_hid] path={} ids={:?} driver=later", path, ids);
+                    serial_println!("[sexacpi.i2c_hid] path={} ids={:?}", path, ids);
                     d.i2c_hid.push(path);
                 }
             }
@@ -549,6 +550,7 @@ pub extern "C" fn _start() -> ! {
         s5, if idle == w::OK { "mwait" } else { "hlt" }, ec.is_some() as u8, light.output.is_some() as u8);
 
     power_off_gpus(aml);
+    let mut touchpads = bounded(|| touchpad::find(aml, &devices.i2c_hid));
 
     let mut next_read = 0u64;
     let mut last = w::Sensors::default();
@@ -562,6 +564,7 @@ pub extern "C" fn _start() -> ! {
                 }
             }
         }
+        if !touchpads.is_empty() { touchpad::send(&mut touchpads); }
         // Firmware events: EC queries run `_Qxx`, which notify devices.
         if let Some(dev) = &ec { laptop::ec_events(aml, dev); }
         let mut refresh = laptop::controls(aml, &mut light);

@@ -766,7 +766,8 @@ pub fn class_command(pd:&ProtectionDomain,dev:&crate::hal::pci::PciDevice,slot:u
         && view.length >= kind.registers_end() && view.length <= 65536
         && view.rights == QUERY_VIEW|READ|WRITE && view.dma_base.is_none() && view.peer_pd.is_none(), "BOOT_CLASS_COMMAND_VIEW");
     let g=sex_pdx::pci_command::Grant {subject:pd.id,bus:dev.bus,device:dev.dev,function:dev.func,
-        vendor_id:dev.vendor_id,device_id:dev.device_id,allowed:sex_pdx::pci_command::NIC_BITS};
+        vendor_id:dev.vendor_id,device_id:dev.device_id,
+        allowed:if kind==crate::device_lease::Kind::SerialIo{sex_pdx::pci_command::MEMORY}else{sex_pdx::pci_command::NIC_BITS}};
     assert!(sex_pdx::pci_command::authorize(Some(&g),pd.id,0,0).is_ok(),"BOOT_CLASS_COMMAND_GRANT");
     let (region,bytes)=kind.dma();
     crate::serial_println!("[boot.class.command] pd={} slot={} kind={:?} bus={} device={} function={} vendor={:#x} product={:#x} allowed={} dma_region={:#x} dma_bytes={} runtime_mint=0",
@@ -778,7 +779,7 @@ pub fn class_command(pd:&ProtectionDomain,dev:&crate::hal::pci::PciDevice,slot:u
 /// service already holds its pool from `init`.
 pub fn class_dma(pd_id:u32,kind:crate::device_lease::Kind){
     require_boot();
-    if kind==crate::device_lease::Kind::Ahci { return; }
+    if matches!(kind,crate::device_lease::Kind::Ahci|crate::device_lease::Kind::SerialIo) { return; }
     let (region,bytes)=kind.dma();
     dma_at(pd_id,kind.dma_slot(),region,bytes);
     if kind==crate::device_lease::Kind::Wifi { wifi_firmware(pd_id); }

@@ -163,7 +163,7 @@ impl Recognizer {
         if px != 0 || py != 0 { emit(Event::Move(px, py)); }
     }
 
-    fn two_fingers(&mut self, cur: &[Contact], dx: i32, dy: i32, emit: &mut impl FnMut(Event)) {
+    fn two_fingers(&mut self, cur: &[Contact], _dx: i32, dy: i32, emit: &mut impl FnMut(Event)) {
         let s = spread(cur);
         if self.mode == Mode::Undecided || self.mode == Mode::Pointer {
             let change = (s - self.spread_base).abs() * 100 / self.spread_base.max(1);

@@ -7,6 +7,11 @@
  * "brightness up" notification (0x86), as a laptop's EC _Qxx method does for the Fn key.
  * _BCM writes 'B' to the debug console port 0x402.
  *
+ * A Serial IO I2C controller (\_SB.PCI0.I2C1, PCI 00:15.1, firmware clock counts in FMCN)
+ * carries an I2C HID touchpad at 0x2C, 400 kHz, HID descriptor register 0x20 (_DSM), GPIO
+ * interrupt pin 0x15C. QEMU has no Serial IO function, so the ACPI service must describe
+ * the pad and Input must say its controller is not leased. Each _PS0 writes 'P'.
+ *
  * Built with -DTHERMAL_TRIP, the zone heats past its critical trip point (_CRT) after a
  * few reads, so the machine must shut itself down cleanly.
  */
@@ -79,6 +84,48 @@ DefinitionBlock ("", "SSDT", 2, "SEXOS", "LAPTOP", 1)
                     \_SB.SXDB = 0x42
                 }
                 Method (_BQC, 0, NotSerialized) { Return (BCLV) }
+            }
+        }
+    }
+
+    Scope (\_SB.PCI0)
+    {
+        Device (I2C1)
+        {
+            Name (_ADR, 0x00150001)
+            Method (FMCN, 0, NotSerialized) { Return (Package (0x03) { 0x52, 0x9C, 0x1E }) }
+            Method (_PS0, 0, NotSerialized) { \_SB.SXDB = 0x50 }
+            Method (_PS3, 0, NotSerialized) { }
+
+            Device (TPD0)
+            {
+                Name (_HID, "SXTP0001")
+                Name (_CID, "PNP0C50")
+                Name (_UID, One)
+                Method (_STA, 0, NotSerialized) { Return (0x0F) }
+                Method (_PS0, 0, NotSerialized) { \_SB.SXDB = 0x50 }
+                Method (_PS3, 0, NotSerialized) { }
+                Method (_CRS, 0, NotSerialized)
+                {
+                    Return (ResourceTemplate ()
+                    {
+                        I2cSerialBusV2 (0x002C, ControllerInitiated, 400000, AddressingMode7Bit, "\\_SB.PCI0.I2C1",
+                            0x00, ResourceConsumer, , Exclusive, )
+                        GpioInt (Level, ActiveLow, Exclusive, PullUp, 0x0000, "\\_SB.GPI0", 0x00, ResourceConsumer, , )
+                        {
+                            0x015C
+                        }
+                    })
+                }
+                Method (_DSM, 4, Serialized)
+                {
+                    If (Arg0 == ToUUID ("3cdff6f7-4267-4555-ad05-b30a3d8938de"))
+                    {
+                        If (Arg2 == Zero) { Return (Buffer (One) { 0x03 }) }
+                        If (Arg2 == One) { Return (0x20) }
+                    }
+                    Return (Buffer (One) { 0x00 })
+                }
             }
         }
     }

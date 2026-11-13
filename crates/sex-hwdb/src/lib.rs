@@ -251,6 +251,7 @@ fn by_class(id: Id) -> (Service, Support) {
         (0x0c, 0x03, _) => (Usb, Unsupported),
         (0x0c, 0x05, _) => (Kernel, Platform),
         // Intel Serial IO (I2C/SPI/UART): the bus under laptop touchpads (I2C HID).
+        (0x0c, 0x80, _) if manifest::serial_io_i2c(id.vendor, id.device) => (Input, InProgress),
         (0x0c, 0x80, _) if id.vendor == 0x8086 => (Input, Planned),
         _ => (Nothing, Unsupported),
     }

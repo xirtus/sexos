@@ -1867,56 +1867,42 @@ where
         let right = right.clone().unwrap_transparent_reference();
 
         /*
-         * Some of these operations allow strings and buffers to be used as operands. Apparently
-         * NT's interpreter just takes the first 4 bytes of the string/buffer and casts them as an
-         * integer...
+         * SexOS: strings and buffers compare as whole byte sequences (ACPI 6.5 §19.6.69 and
+         * neighbours): equal when length and bytes match, ordered lexicographically, the
+         * shorter prefix first. Upstream cast the first four bytes to an integer and
+         * panicked on any longer buffer: every HID-over-I2C `_DSM` compares its 16-byte UUID.
          */
-        let (left, right) = match *left {
-            Object::Integer(left) => (left, right.as_integer()?),
-            Object::String(ref left) => {
-                let left = {
-                    let mut bytes = [0u8; 4];
-                    let left_bytes = left.as_bytes();
-                    let bytes_to_use = usize::min(4, left_bytes.len());
-                    (bytes[0..bytes_to_use]).copy_from_slice(&left_bytes[0..bytes_to_use]);
-                    u32::from_le_bytes(bytes) as u64
-                };
-                let right = {
-                    let mut bytes = [0u8; 4];
-                    let right = right.as_string()?;
-                    let right_bytes = right.as_bytes();
-                    let bytes_to_use = usize::min(4, right_bytes.len());
-                    (bytes[0..bytes_to_use]).copy_from_slice(&right_bytes[0..bytes_to_use]);
-                    u32::from_le_bytes(bytes) as u64
-                };
-                (left, right)
+        fn bytes_of(o: &Object) -> Result<alloc::vec::Vec<u8>, AmlError> {
+            Ok(match o {
+                Object::Buffer(b) => b.clone(),
+                Object::String(s) => s.as_bytes().to_vec(),
+                Object::Integer(v) => v.to_le_bytes().to_vec(),
+                other => Err(AmlError::InvalidOperationOnObject { op: Operation::LogicalOp, typ: other.typ() })?,
+            })
+        }
+        let (ordering, left_true, right_true) = match *left {
+            Object::Integer(l) => {
+                let r = right.as_integer()?;
+                (l.cmp(&r), l > 0, r > 0)
             }
-            Object::Buffer(ref left) => {
-                let Object::Buffer(ref right) = *right else { panic!() };
-                let left = {
-                    let mut bytes = [0u8; 4];
-                    (bytes[0..left.len()]).copy_from_slice(left);
-                    u32::from_le_bytes(bytes) as u64
-                };
-                let right = {
-                    let mut bytes = [0u8; 4];
-                    (bytes[0..right.len()]).copy_from_slice(right);
-                    u32::from_le_bytes(bytes) as u64
-                };
-                (left, right)
+            Object::String(_) | Object::Buffer(_) => {
+                let l = bytes_of(&left)?;
+                let r = bytes_of(&right)?;
+                (l.as_slice().cmp(r.as_slice()), l.iter().any(|b| *b != 0), r.iter().any(|b| *b != 0))
             }
             _ => Err(AmlError::InvalidOperationOnObject { op: Operation::LogicalOp, typ: left.typ() })?,
         };
 
+        use core::cmp::Ordering::*;
         let result = match op.op {
-            Opcode::LAnd => (left > 0) && (right > 0),
-            Opcode::LOr => (left > 0) || (right > 0),
-            Opcode::LNotEqual => left != right,
-            Opcode::LLessEqual => left <= right,
-            Opcode::LGreaterEqual => left >= right,
-            Opcode::LEqual => left == right,
-            Opcode::LGreater => left > right,
-            Opcode::LLess => left < right,
+            Opcode::LAnd => left_true && right_true,
+            Opcode::LOr => left_true || right_true,
+            Opcode::LNotEqual => ordering != Equal,
+            Opcode::LLessEqual => ordering != Greater,
+            Opcode::LGreaterEqual => ordering != Less,
+            Opcode::LEqual => ordering == Equal,
+            Opcode::LGreater => ordering == Greater,
+            Opcode::LLess => ordering == Less,
             _ => panic!(),
         };
         let result = if result { Object::Integer(u64::MAX) } else { Object::Integer(0) };

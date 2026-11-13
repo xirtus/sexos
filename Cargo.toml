@@ -57,6 +57,7 @@ members = [
     "crates/sex-hwdb",
     "crates/sex-laptop",
     "crates/sex-hid-touch",
+    "crates/sex-i2c-dw",
     "crates/sex-net",
     "crates/sex-net-config",
     "crates/sex-tls",

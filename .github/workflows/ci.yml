@@ -109,6 +109,8 @@ jobs:
       run: cargo test --locked -p sex-laptop
     - name: Touchpad model (I2C HID, report descriptors, contacts, gestures)
       run: cargo test --locked -p sex-hid-touch
+    - name: DesignWare I2C bus (simulated controller)
+      run: cargo test --locked -p sex-i2c-dw
 
   truth:
     name: Host kernel-model regressions (${{ matrix.shard }}/3)

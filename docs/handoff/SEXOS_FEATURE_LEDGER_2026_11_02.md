@@ -4014,6 +4014,14 @@ handlers and `Notify`), battery percent and time left in the panel, lid and powe
 to the Shell (power dialog), ACPI brightness with Fn keys and launcher commands, HWP/CPPC power
 profiles, clean shut down on a critical thermal zone or battery. Touchpad protocol, descriptor
 parser and gestures as a host-tested crate. Details: `LAPTOP_POWER_2026_11_13.md`.
+
+## Laptop touchpad over I2C (2026-11-13)
+
+DesignWare I2C master crate (`sex-i2c-dw`), BOOT lease of Intel Serial IO I2C functions to
+Input, sexacpi describes the `PNP0C50` touchpad (`_CRS`, `_DSM`, `_ADR`, `FMCN`) and hands it
+to Input, which brings the pad into touchpad mode and turns frames into pointer, click,
+scroll, Alt+Tab swipe and pinch-zoom events. Polled for now. Details:
+`LAPTOP_POWER_2026_11_13.md` (Touchpad section).
 ## System monitor, slice J1 (2026-11-13)
 - **What:** `run monitor` opens Monitor: every service and program that has used the
   CPU, busiest first, with its share of one core over the last second, the memory an

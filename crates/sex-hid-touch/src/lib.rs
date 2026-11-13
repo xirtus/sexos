@@ -15,4 +15,5 @@
 pub mod descriptor;
 pub mod gesture;
 pub mod i2c_hid;
+pub mod session;
 pub mod touch;

@@ -50,10 +50,45 @@ firmware plumbing every laptop needs first. Target: Alienware x17 R1.
    work (workstream L).
 5. `[acpi.profile] ... msr=0x774 applied=1` after picking Power Saver.
 
+## Touchpad (H4–H6, second PR)
+
+- **Bus**: `crates/sex-i2c-dw`, a polled Synopsys DesignWare I2C master (Intel Serial IO and
+  AMD FCH both use the block). Releases Intel's LPSS reset, checks `IC_COMP_TYPE`, combined
+  write/repeated-start/read transfers that never overflow the receive FIFO, NACK and
+  arbitration aborts as errors, bounded polls. SCL counts come from firmware (`FMCN`/`SSCN`)
+  or from the controller clock by product id. 12 tests on a simulated controller.
+- **Lease**: BOOT leases every Intel Serial IO I2C function (product ids in
+  `sex_hwdb::manifest::SERIAL_IO_I2C`, Skylake to Meteor Lake) to Input at slot 28, then
+  the extra slots: BAR0 (0x300 bytes: DesignWare block + Intel private page), memory bit
+  only, no DMA, and the function woken from D3hot to D0. SPI and UART functions are not
+  leased.
+- **Where the pad is**: only firmware knows. sexacpi reads the `PNP0C50` device's `_CRS`
+  (I2C address, speed, controller path, GPIO pin), `_DSM` function 1 (HID descriptor
+  register), the controller's `_ADR` and `FMCN`, runs both `_PS0`, and sends one
+  `sex_pdx::touchpad::Found` to Input over a BOOT route (sexacpi slot 61). Input takes it
+  only from BOOT's ACPI identity.
+- **Driver**: `crates/sex-hid-touch` `session` brings the pad up (descriptor, power on,
+  reset, report descriptor, Input Mode = touchpad) and polls the input register, dropping
+  repeated reports. `servers/sexinput/src/touchpad.rs` turns frames into pointer motion,
+  taps and clickpad buttons, two-finger wheel steps, three-finger swipes (Alt+Tab) and
+  pinches (Ctrl+= / Ctrl+-), through Input's ordinary outboxes.
+- **Polling**: 125 Hz while touched, 20 Hz after two idle seconds. The GPIO interrupt is next:
+  the pad's pin (`gpio=` in the log) on the Tiger Lake GPIO controller (`INT34C6`).
+
+ABI: `sex_pdx::touchpad` (`OP_FOUND` 0x50F2, `ROUTE_SLOT` 61, `CONTROLLER_SLOT` 28),
+`Lease::SerialIo`, `devmgr::init` takes Input's identity.
+
+On the x17 R1, look for:
+1. `[devmgr.lease] 00:15.N 8086:43eX service=sexinput ... kind=SerialIo`.
+2. `[sexacpi.touchpad] path=... pci=00:15.N address=0x2c khz=400 hid_register=0x20 gpio=... counts=...`.
+3. `[sexinput.i2c.ready] ... from_firmware=1 fifo=64/64` then `[sexinput.touchpad.ready] vendor=...`.
+4. If bring-up fails: `[sexinput.touchpad.retry] ... bus=Some(AddressNack)` means the pad is
+   unpowered or at another address; `not_designware` means the function stayed in D3.
+
 ## Not done here
 
-- H4–H6 bus side: DesignWare I2C server (`servers/sexi2c`) with the LPSS lease, the touchpad's
-  `_CRS`/`_DSM` from sexacpi, and pointer events into the Shell.
+- Touchpad GPIO interrupt (replaces polling) and a bus server for other I2C devices
+  (sensors, audio amplifiers) when one appears.
 - H8 suspend to idle.
 - GPE-driven EC events: events are polled from the EC status register every pass (64 ms);
   the GPE route can replace the poll once the kernel arms GPEs.

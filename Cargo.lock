@@ -1898,6 +1898,10 @@ name = "sex-hwdb"
 version = "0.1.0"
 
 [[package]]
+name = "sex-i2c-dw"
+version = "0.1.0"
+
+[[package]]
 name = "sex-image"
 version = "0.1.0"
 dependencies = [
@@ -2199,6 +2203,8 @@ name = "sexinput"
 version = "0.1.0"
 dependencies = [
  "linked_list_allocator",
+ "sex-hid-touch",
+ "sex-i2c-dw",
  "sex-pdx",
  "sex-rt",
  "x86_64",
