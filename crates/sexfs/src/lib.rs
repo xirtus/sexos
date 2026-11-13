@@ -5,6 +5,10 @@
 //! the last commit whole. Free space isn't stored: mounting walks the tree, which
 //! removes a whole class of leak and double-use bugs at the price of a slower mount.
 #![cfg_attr(not(test), no_std)]
+#[cfg(feature = "repair")]
+extern crate alloc;
+#[cfg(feature = "repair")]
+pub mod check;
 
 pub const BLOCK: usize = 4096;
 pub const NAME_MAX: usize = 255;
