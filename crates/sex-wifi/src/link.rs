@@ -21,7 +21,13 @@
 //!   answer goes back protected and the new keys into the firmware. A key's packet
 //!   numbers start over once it is in.
 //!
-//! A deauthentication or disassociation from the AP ends the link.
+//! A deauthentication or disassociation from the AP ends the link, and so does the
+//! firmware reporting that the AP's beacons stopped (`iwx_rx_bmiss`; iwx first
+//! probes the AP, we leave rejoining to the service, which rescans).
+//!
+//! Once up, the link also tells the firmware to pass every multicast frame
+//! (MCAST_FILTER_CMD with pass_all, as `iwx_allow_mcast` does), so IPv6 neighbour
+//! discovery and mDNS arrive and not only broadcasts.
 use crate::bringup::Bringup;
 use crate::cmdq::CommandQueue;
 use crate::context::{Dma, DmaRead};
@@ -56,7 +62,33 @@ pub enum RateControl { Off, Wanted(u8), Sent(u64), On, Refused }
 const COMMAND_US: u64 = 1_000_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Down { Disconnected(u16), Failed(Failure) }
+pub enum Down { Disconnected(u16), Failed(Failure), BeaconLoss(u32) }
+
+/// A command sent once after the link is up: waiting to go, sent, taken, or refused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Setup { Wanted, Sent(u64), On, Refused }
+
+/// Consecutive beacons missed before the link counts as lost: about two seconds
+/// at the usual 102.4 ms beacon interval (net80211 probes after 7).
+pub const BEACON_LOSS: u32 = 20;
+pub const MCAST_FILTER_BYTES: usize = 12;
+
+/// MCAST_FILTER_CMD (`iwx_mcast_filter_cmd`): pass all multicast, drop our own.
+pub fn mcast_filter(bssid: &[u8; 6]) -> [u8; MCAST_FILTER_BYTES] {
+    let mut c = [0u8; MCAST_FILTER_BYTES];
+    c[0] = 1; // filter_own
+    c[3] = 1; // pass_all
+    c[4..10].copy_from_slice(bssid);
+    c
+}
+
+/// Consecutive beacons missed since the last frame from the AP, from a missed-beacons
+/// notification (both versions keep it at byte 4).
+pub fn parse_missed_beacons(p: &Packet<'_>) -> Option<u32> {
+    if p.is_response() { return None; }
+    if !(p.is(h::LEGACY_GROUP, h::MISSED_BEACONS_NOTIFICATION) || p.is(h::MAC_CONF_GROUP, h::MISSED_BEACONS_NOTIF)) { return None; }
+    p.data.get(4..8).map(|b| u32::from_le_bytes(b.try_into().unwrap()))
+}
 
 /// Why a frame from the air was not passed up.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -87,6 +119,10 @@ pub struct Link {
     pub rate_control: RateControl,
     /// The data rate the firmware last reported choosing (rate_n_flags).
     pub rate: u32,
+    /// MCAST_FILTER_CMD after rate control.
+    pub multicast: Setup,
+    /// The most consecutive beacons the firmware reported missing.
+    pub missed_beacons: u32,
 }
 
 /// Ethernet frame out of a data frame body from the AP: checks and strips CCMP.
@@ -132,7 +168,8 @@ impl Link {
     /// Over the association's (or handshake's) queue, once connected.
     pub fn new(tx: TxQueue, target: Target, me: [u8; 6], family: Family, protected: bool) -> Self {
         Self { tx, target, me, family, protected, seq: 0x400, pn: [[None; 16]; 4], sent: 0, received: 0, dropped: 0, last_drop: None, down: None,
-            rekey: None, rekey_messages: 0, rekeyed: 0, rekey_error: None, reply: None, rate_control: RateControl::Off, rate: DATA_RATE }
+            rekey: None, rekey_messages: 0, rekeyed: 0, rekey_error: None, reply: None, rate_control: RateControl::Off, rate: DATA_RATE,
+            multicast: Setup::Wanted, missed_beacons: 0 }
     }
     /// Answers later key messages with the handshake's state.
     pub fn with_rekey(mut self, r: Rekey) -> Self { self.rekey = Some(r); self }
@@ -178,6 +215,7 @@ impl Link {
         if cause != 0 { r.write(csr::INT, cause); }
         let (family, me, bssid, protected) = (self.family, self.me, self.target.bssid, self.protected);
         let (mut freed, mut gone, mut error, mut rate) = (None, None, None, None);
+        let mut missed = 0u32;
         let (mut received, mut dropped, mut last_drop) = (0u64, 0u64, None);
         let mut pn = self.pn;
         // A key's counters start over when the firmware takes it, in receive order:
@@ -199,6 +237,7 @@ impl Link {
             }
             if let Some(s) = tx::parse_response(p) { freed = Some(s); return; }
             if let Some(r) = tlc::parse_update(p) { rate = Some(r); return; }
+            if let Some(n) = parse_missed_beacons(p) { missed = missed.max(n); return; }
             let Some(rx) = parse_mpdu(p, family, &mut scratch) else {
                 if let Some(e) = h::parse_error(p) { error = Some(e); }
                 return;
@@ -236,10 +275,13 @@ impl Link {
         if let Err(id) = result { self.down = Some(Down::Failed(Failure::BadRxBuffer(id))); return false; }
         if let Some(e) = error { self.down = Some(Down::Failed(Failure::Firmware(e))); return false; }
         if let Some(reason) = gone { self.down = Some(Down::Disconnected(reason)); return false; }
+        self.missed_beacons = self.missed_beacons.max(missed);
+        if missed > BEACON_LOSS { self.down = Some(Down::BeaconLoss(missed)); return false; }
         if let Some(rate) = rate { self.rate = rate; }
         if key_len > 0 { self.on_key_message(&key_frame[..key_len]); }
         // One command at a time: rate control waits for keys, keys for rate control.
         if !self.rate_control_step(b, cmdq, r, dma, now) { return true; }
+        if !self.multicast_step(b, cmdq, r, dma, now) { return true; }
         // The answer to a key message goes out before its keys go in.
         if let Some((eth, n)) = self.reply {
             if self.send(b, r, dma, &eth[..n]).is_err() { return true; }
@@ -273,6 +315,33 @@ impl Link {
                 } else if now.saturating_sub(since) >= COMMAND_US {
                     cmdq.abandon();
                     self.rate_control = RateControl::Refused;
+                    true
+                } else { false }
+            }
+            _ => true,
+        }
+    }
+
+    /// Sends MCAST_FILTER_CMD once rate control is settled and takes its answer.
+    /// Returns false while it is in flight. A refusal leaves broadcasts working.
+    fn multicast_step<D: Dma + DmaRead>(&mut self, b: &Bringup, cmdq: &mut CommandQueue, r: &mut impl Registers, dma: &mut D, now: u64) -> bool {
+        match self.multicast {
+            Setup::Wanted if matches!(self.rate_control, RateControl::Off | RateControl::On | RateControl::Refused)
+                && cmdq.pending.is_none() && self.rekey.as_ref().is_none_or(|k| k.keys.idle()) => {
+                let c = mcast_filter(&self.target.bssid);
+                match cmdq.send(dma, r, &b.layout, b.base, h::LEGACY_GROUP, h::MCAST_FILTER_CMD, 0, &c) {
+                    Ok(_) => { self.multicast = Setup::Sent(now); false }
+                    Err(cmdq::Error::Busy) => true,
+                    Err(_) => { self.multicast = Setup::Refused; true }
+                }
+            }
+            Setup::Sent(since) => {
+                if let Some(a) = cmdq.answer.take() {
+                    self.multicast = if a.failed { Setup::Refused } else { Setup::On };
+                    true
+                } else if now.saturating_sub(since) >= COMMAND_US {
+                    cmdq.abandon();
+                    self.multicast = Setup::Refused;
                     true
                 } else { false }
             }
