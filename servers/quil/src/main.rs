@@ -418,7 +418,12 @@ fn quil_dispatch_key(key:sex_pdx::app_key::Key,palette_active:&mut bool,selected
             0x53=>{let range=if selected{range}else{(snapshot.caret(),sex_pdx::text_encoding::next(&QUIL_BUFFER[..QUIL_BUFFER_LEN],snapshot.caret()))};range.0!=range.1&&quil_replace(range,&[])},
             0x0f=>quil_replace(range,b"\t"),
             0x1c=>quil_replace(range,b"\n"),
-            _=>{if let Some(ch)=scancode_to_char(key.code as u64,key.shift){sex_pdx::serial_record!("[quil.text.recv] code={} ch={}",key.code,ch);quil_replace(range,&[ch])}else{false}},
+            // A character the keyboard layout typed (ü, é, €, й), or the US table's.
+            _=>match key.text{
+                sex_pdx::app_key::Text::Char(c)=>{let mut utf8=[0u8;4];sex_pdx::serial_record!("[quil.text.recv] code={} scalar={:#x}",key.code,c as u32);quil_replace(range,c.encode_utf8(&mut utf8).as_bytes())},
+                sex_pdx::app_key::Text::Nothing=>false,
+                sex_pdx::app_key::Text::Us=>{if let Some(ch)=scancode_to_char(key.code as u64,key.shift){sex_pdx::serial_record!("[quil.text.recv] code={} ch={}",key.code,ch);quil_replace(range,&[ch])}else{false}},
+            },
         };
         if changed {draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);}
     }

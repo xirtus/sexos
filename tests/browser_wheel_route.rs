@@ -170,7 +170,7 @@ unsafe fn refused(){browser_wheel_input(1,0);assert!(!APP_INPUT.pending());asser
  for _ in 0..4{app_input_poll();assert_eq!(APP_INPUT.front(),Some(wheel(-3)));assert!(SENT.is_empty());}
  LIVE=Some(true);STATUS=ERR_SERVICE_NOT_READY;
  for _ in 0..4{app_input_poll();assert_eq!(APP_INPUT.front(),Some(wheel(-3)));assert_eq!(SENT.last().unwrap(),&(43,OP_HID_EVENT,[(-3i64)as u64,0,5]));}
- assert!(APP_INPUT.push(Item{destination:Participant::from_catalog(lifecycle_abi::CatalogInfo{target_pd:18,task_id:18,surface_id:307,coordinator_pd:3}).unwrap(),input:Input::Key(app_key::Key{code:0x1e,shift:true,control:false})}));
+ assert!(APP_INPUT.push(Item{destination:Participant::from_catalog(lifecycle_abi::CatalogInfo{target_pd:18,task_id:18,surface_id:307,coordinator_pd:3}).unwrap(),input:Input::Key(app_key::Key::new(0x1e,true,false))}));
  STATUS=0;app_input_poll();assert!(matches!(APP_INPUT.front().unwrap().input,Input::Key(_)));app_input_poll();assert!(!APP_INPUT.pending());
  assert_eq!(SENT[4],(43,OP_HID_EVENT,[(-3i64)as u64,0,5]));assert_eq!(SENT[5].0,56);assert_eq!(FOCUSED_SURFACE_ID,307);
  }}
@@ -235,7 +235,7 @@ fn held_for(pd:u32,task:u32,sid:u64,slot:usize)->(app_custody::Entry,lifecycle_a
  let _lock=LOCK.lock().unwrap();unsafe{
  reset();let(e,c)=held_for(30,300,343,154);let p=app_input_participant(&e,c).unwrap();
  let(e2,c2)=held_for(31,310,344,158);let p2=app_input_participant(&e2,c2).unwrap();
- let first=Item{destination:p,input:Input::Key(app_key::Key{code:0x67,shift:false,control:false})};
+ let first=Item{destination:p,input:Input::Key(app_key::Key::new(0x67,false,false))};
  let second=Item{destination:p2,..first};APP_INPUT.push(first);APP_INPUT.push(second);
  // Both boot identities remain installed; changed focus does not rewrite custody.
  REAL_LIVE=true;HELD=[Some(Held{slot:e.slot,catalog:Ok(c),info:Err(app_lifecycle::LIVE)}),Some(Held{slot:e2.slot,catalog:Ok(c2),info:Err(app_lifecycle::LIVE)}),None];
@@ -267,7 +267,7 @@ unsafe fn live_integration()->(Item,Item){
  APP_CUSTODY=[Some(e),Some(e2),None];
  HELD=[Some(Held{slot:154,catalog:Ok(c),info:Err(app_lifecycle::LIVE)}),Some(Held{slot:158,catalog:Ok(c2),info:Err(app_lifecycle::LIVE)}),None];
  FOCUSED_SURFACE_ID=344;WINNER=HitTarget::Surface(344);CATALOG=Ok(c2);
- let first=Item{destination:app_input_participant(&e,c).unwrap(),input:Input::Key(app_key::Key{code:0x67,shift:false,control:false})};
+ let first=Item{destination:app_input_participant(&e,c).unwrap(),input:Input::Key(app_key::Key::new(0x67,false,false))};
  let second=Item{destination:app_input_participant(&e2,c2).unwrap(),input:first.input};
  assert!(APP_INPUT.push(first));assert!(APP_INPUT.push(second));(first,second)
 }

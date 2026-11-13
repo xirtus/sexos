@@ -19,6 +19,7 @@ mod launcher_search;
 mod session;
 mod config_watch;
 mod lock;
+mod keyboard_layout;
 use alloc::vec::Vec;
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -10313,7 +10314,7 @@ fn is_pointer_move(word:u64)->bool{
 /// The program window under the pointer (or holding its capture), with the pointer
 /// relative to its pixel area, and whether the pointer is inside that area.
 unsafe fn program_pointer_target()->Option<(u64,sex_pdx::clipboard::Participant,i16,i16,bool)>{
-    if COMMAND_PALETTE_OPEN || ATLAS_MODE_ENABLED || LAUNCHER_ACTIVE || CLOCK_ACTIVE || STATUS_ACTIVE || BELL_ACTIVE || SCENE_SETTINGS_ACTIVE {return None}
+    if OVERVIEW.is_open() || COMMAND_PALETTE_OPEN || ATLAS_MODE_ENABLED || LAUNCHER_ACTIVE || CLOCK_ACTIVE || STATUS_ACTIVE || BELL_ACTIVE || SCENE_SETTINGS_ACTIVE {return None}
     let sid=if POINTER_CAPTURE!=0 {POINTER_CAPTURE} else {
         if matches!(INTERACTION,InteractionState::Dragging{..}){return None}
         match hit_test_at(POINTER_X,POINTER_Y){HitTarget::Surface(sid)=>sid,_=>return None}
@@ -10511,11 +10512,12 @@ unsafe fn wm_action(action: wm::WmAction) -> bool {
             None => false,
         },
         A::Scratchpad => wm_scratchpad_toggle(),
-        A::Overview => { atlas_toggle(); true }
+        A::Overview => overview_toggle(),
         A::Notifications => toggle_bell(),
         A::Wallpaper => desktop_look_step(1, 0),
         A::NightLight => desktop_look_step(0, 1),
         A::Lock => lock::lock(),
+        A::KeyboardLayout => { let (label, title) = keyboard_layout::next(); keyboard_layout_notice(label, title) }
     };
     sex_pdx::serial_record!("[shell.wm.action] action={:?} done={} scene={}->{} focus={}->{} layout={}",
         action, done as u8, before.0, ACTIVE_SCENE_IDX, before.1, FOCUSED_SURFACE_ID, wm_tiling().layout.name());
@@ -10532,8 +10534,9 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
             wm_action(action);return true;
         }
     }
+    if overview_key(code,value) {return true;}
     if media_keys::is_player_key(code){if value==1{player_key(code);}return true;}
-    let modifier=APP_MODIFIERS.observe(code,value);
+    let modifier=APP_MODIFIERS.observe(code,value)|keyboard_layout::observe(code,value);
     match DESKTOP_KEYS.event(code,value) {
         desktop_keys::Action::Pass=>{
             if !COMMAND_PALETTE_OPEN {
@@ -10541,10 +10544,15 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
                     if modifier || value!=1{return true;}
                     // Desktop function keys retain their existing Shell actions.
                     if matches!(code,0x0f|0x29|0x3b..=0x44|0x46|0x52|0x57|0x58|0x59){return false;}
-                    let Some(normalized)=app_input_key_code(destination,code) else{return true};
-                    let key=APP_MODIFIERS.key(normalized);
+                    // Ctrl shortcuts follow the letter on the key under the active layout.
+                    let shortcut=if APP_MODIFIERS.key(code).control{keyboard_layout::shortcut_code(code)}else{code};
+                    let Some(normalized)=app_input_key_code(destination,shortcut) else{return true};
+                    if let Some(changed)=keyboard_layout::compose(APP_MODIFIERS.key(normalized),code,|k|{APP_INPUT.push(app_input::Item{destination,input:app_input::Input::Key(k)});}){
+                        if changed{keyboard_preedit_notice();}app_input_poll();return true;
+                    }
+                    let key=keyboard_layout::typing(APP_MODIFIERS.key(normalized),code);
                     let input=if key.control {
-                        match code {0x2e=>app_input::Input::Clipboard(sex_pdx::clipboard::Action::Copy),0x2d=>app_input::Input::Clipboard(sex_pdx::clipboard::Action::Cut),0x2f=>app_input::Input::Clipboard(sex_pdx::clipboard::Action::Paste),_=>app_input::Input::Key(key)}
+                        match shortcut {0x2e=>app_input::Input::Clipboard(sex_pdx::clipboard::Action::Copy),0x2d=>app_input::Input::Clipboard(sex_pdx::clipboard::Action::Cut),0x2f=>app_input::Input::Clipboard(sex_pdx::clipboard::Action::Paste),_=>app_input::Input::Key(key)}
                     }else{app_input::Input::Key(key)};
                     if !APP_INPUT.push(app_input::Item{destination,input}){
                         sex_pdx::serial_record!("[shell.app.input.full] capacity=32 pd={} task={} accepted=0",destination.subject.pd,destination.subject.task);
@@ -10554,7 +10562,11 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
                 if let Some(destination)=focused_program_participant(){
                     if modifier || value!=1{return true;}
                     if matches!(code,0x0f|0x29|0x3b..=0x44|0x46|0x52|0x57|0x58|0x59){return false;}
-                    if !APP_INPUT.push(app_input::Item{destination,input:app_input::Input::Key(APP_MODIFIERS.key(code))}){
+                    let shortcut=if APP_MODIFIERS.key(code).control{keyboard_layout::shortcut_code(code)}else{code};
+                    if let Some(changed)=keyboard_layout::compose(APP_MODIFIERS.key(shortcut),code,|k|{APP_INPUT.push(app_input::Item{destination,input:app_input::Input::Key(k)});}){
+                        if changed{keyboard_preedit_notice();}app_input_poll();return true;
+                    }
+                    if !APP_INPUT.push(app_input::Item{destination,input:app_input::Input::Key(keyboard_layout::typing(APP_MODIFIERS.key(shortcut),code))}){
                         sex_pdx::serial_record!("[shell.app.input.full] capacity=32 pd={} task={} accepted=0",destination.subject.pd,destination.subject.task);
                     }
                     app_input_poll();return true;
@@ -10563,13 +10575,14 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
             false
         },
         desktop_keys::Action::Consume=>true,
-        desktop_keys::Action::NextFrame=>{
+        desktop_keys::Action::Switch(dir)=>{
             let old=FOCUSED_SURFACE_ID;
             if COMMAND_PALETTE_OPEN {toggle_command_palette();}
-            focus_next_frame();
+            switcher_step(dir);
             sex_pdx::serial_record!("[shell.app.switch] old={} new={} live={} shortcut=alt_tab",old,FOCUSED_SURFACE_ID,surface_is_alive(FOCUSED_SURFACE_ID) as u8);
             true
         }
+        desktop_keys::Action::SwitchEnd(keep)=>{switcher_end(keep);true}
         desktop_keys::Action::Volume(step)=>{volume_key(step);true}
         desktop_keys::Action::TextZoom(step)=>{
             // Display owns text layout; Shell only names the focused window and the step.
@@ -10586,6 +10599,104 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
             true
         }
     }
+}
+
+// ── Alt+Tab window switcher (KDE/GNOME style) ──────────────────────────────
+// Order and stepping live in sex_pdx::window_switcher (host-tested); Display
+// draws the cards with live thumbnails. Focus follows the selection while Alt
+// is held, so the chosen window is already raised when Alt is let go.
+static mut SWITCHER_RECENT: sex_pdx::window_switcher::Recent<MAX_FRAMES> = sex_pdx::window_switcher::Recent::new();
+static mut SWITCHER: sex_pdx::window_switcher::Session = sex_pdx::window_switcher::Session::new();
+unsafe fn switcher_publish() { switcher_send(SWITCHER.state()); }
+unsafe fn switcher_send(state: sex_pdx::window_switcher::State) {
+    let [a, b, c] = state.wire();
+    let (status, _) = pdx_call(SLOT_DISPLAY, sex_pdx::window_switcher::OP_WINDOW_SWITCHER, a, b, c);
+    sex_pdx::serial_record!("[shell.switcher] open={} count={} selected={} grid={} status={:#x}", state.visible() as u8, c & 0xF, c >> 8 & 0xF, state.grid as u8, status);
+}
+/// This workspace's windows, most recently focused first.
+unsafe fn switcher_windows(ordered: &mut [u64; sex_pdx::window_switcher::MAX_ENTRIES]) -> usize {
+    let mut frames = [(0u32, 0u64, wm::Rect::default()); MAX_FRAMES];
+    let n = wm_visible_frames(&mut frames, false);
+    let mut present = [0u64; MAX_FRAMES];
+    for i in 0..n { present[i] = frames[i].1; }
+    if FOCUSED_SURFACE_ID != 0 { SWITCHER_RECENT.touch(FOCUSED_SURFACE_ID); }
+    SWITCHER_RECENT.order(&present[..n], ordered)
+}
+// ── Window overview (Super+W): every window of the workspace as a live
+// thumbnail in a grid (GNOME Activities, KDE Present Windows). Arrows, Tab or
+// the pointer pick; Enter or a click goes there; Escape or Super+W closes.
+static mut OVERVIEW: sex_pdx::window_switcher::Session = sex_pdx::window_switcher::Session::new();
+unsafe fn overview_layout() -> Option<sex_pdx::window_switcher::Layout> {
+    let count = OVERVIEW.state().count as usize;
+    sex_pdx::window_switcher::Layout::grid(desktop_width() as usize, desktop_height() as usize,
+        desktop_bar_height() as usize, count, sex_pdx::desktop_style::ui_scale())
+}
+unsafe fn overview_toggle() -> bool {
+    if OVERVIEW.is_open() { overview_close(false); return true; }
+    if SWITCHER.is_open() { switcher_end(true); }
+    if COMMAND_PALETTE_OPEN { toggle_command_palette(); }
+    let mut ordered = [0u64; sex_pdx::window_switcher::MAX_ENTRIES];
+    let count = switcher_windows(&mut ordered);
+    if !OVERVIEW.open_grid(&ordered[..count], FOCUSED_SURFACE_ID) { return false; }
+    switcher_send(OVERVIEW.state());
+    sex_pdx::serial_record!("[shell.overview.open] windows={}", count);
+    if let Some(l) = overview_layout() {
+        for (i, sid) in ordered[..count].iter().enumerate() {
+            let (x, y, w, h) = l.card(i);
+            sex_pdx::serial_record!("[shell.overview.card] index={} sid={} x={} y={} w={} h={}", i, sid, x, y, w, h);
+        }
+    }
+    true
+}
+/// `keep`: go to the selected window; otherwise stay where focus was.
+unsafe fn overview_close(keep: bool) {
+    let Some(sid) = OVERVIEW.end(keep) else { return };
+    if keep && sid != FOCUSED_SURFACE_ID { try_set_focus(sid); }
+    switcher_send(sex_pdx::window_switcher::State::HIDDEN);
+    sex_pdx::serial_record!("[shell.overview.close] keep={} focus={}", keep as u8, FOCUSED_SURFACE_ID);
+}
+/// Keys while the overview is open; modifiers pass so their state stays true.
+unsafe fn overview_key(code: u8, value: u64) -> bool {
+    if !OVERVIEW.is_open() || matches!(code, 0x1D | 0x2A | 0x36 | 0x38 | 0x5B | 0x5C | 0x61 | 0x64) { return false; }
+    if value == 0 { return true; }
+    let cols = overview_layout().map_or(1, |l| l.cols) as isize;
+    let moved = match code {
+        0x01 if value == 1 => { overview_close(false); return true; }
+        0x1C if value == 1 => { overview_close(true); return true; }
+        0x4B => OVERVIEW.move_by(-1),
+        0x4D | 0x0F => OVERVIEW.move_by(1),
+        0x48 => OVERVIEW.move_by(-cols),
+        0x50 => OVERVIEW.move_by(cols),
+        _ => None,
+    };
+    if moved.is_some() { switcher_send(OVERVIEW.state()); }
+    true
+}
+/// A click while the overview is open: a card goes there, anywhere else closes.
+unsafe fn overview_click(px: i32, py: i32) {
+    let hit = overview_layout().and_then(|l| if px < 0 || py < 0 { None } else { l.card_at(px as usize, py as usize) });
+    match hit.and_then(|i| OVERVIEW.select(i)) {
+        Some(_) => overview_close(true),
+        None => overview_close(false),
+    }
+}
+unsafe fn switcher_step(dir: i8) {
+    if OVERVIEW.is_open() { overview_close(false); }
+    let mut ordered = [0u64; sex_pdx::window_switcher::MAX_ENTRIES];
+    // An open switcher keeps the order it opened with.
+    let count = if SWITCHER.is_open() { 0 } else { switcher_windows(&mut ordered) };
+    match SWITCHER.step(&ordered[..count], FOCUSED_SURFACE_ID, dir) {
+        Some(sid) => { if sid != FOCUSED_SURFACE_ID { try_set_focus(sid); } switcher_publish(); }
+        // No window on this workspace: the old frame walk (panels, consoles).
+        None => focus_next_frame(),
+    }
+}
+unsafe fn switcher_end(keep: bool) {
+    let Some(sid) = SWITCHER.end(keep) else { return };
+    if sid != 0 && sid != FOCUSED_SURFACE_ID { try_set_focus(sid); }
+    if FOCUSED_SURFACE_ID != 0 { SWITCHER_RECENT.touch(FOCUSED_SURFACE_ID); }
+    switcher_publish();
+    sex_pdx::serial_record!("[shell.switcher.end] keep={} focus={}", keep as u8, FOCUSED_SURFACE_ID);
 }
 
 /// A volume key: Bell keeps the volume and answers with the new state, which Shell
@@ -10620,7 +10731,7 @@ unsafe fn media_keys_receive(msg:&sex_pdx::PdxMessage)->bool{
         Some(media_keys::Ask::Player(code)) if !media_keys::refused(word)=>{
             let pd=media_keys::stream_pd(word);
             let to=APP_CUSTODY.iter().flatten().find(|e|e.target==pd&&!e.dead&&!e.retired).map(|e|e.surface).and_then(|sid|program_participant(sid));
-            let sent=to.is_some_and(|d|APP_INPUT.push(app_input::Item{destination:d,input:app_input::Input::Key(sex_pdx::app_key::Key{code,shift:false,control:false})}));
+            let sent=to.is_some_and(|d|APP_INPUT.push(app_input::Item{destination:d,input:app_input::Input::Key(sex_pdx::app_key::Key::new(code,false,false))}));
             if sent{app_input_poll();}
             sex_pdx::serial_record!("[shell.media.route] code={:#x} pd={} sent={}",code,pd,sent as u8);
         }
@@ -16099,6 +16210,25 @@ unsafe fn notify_history() -> impl Iterator<Item = &'static sex_pdx::notify::Tex
 unsafe fn notify_panel(text: &[u8]) -> bool {
     sex_pdx::notify::chunks(text, 0, 0, 0)
         .all(|(w, a, b)| pdx_call(SLOT_DISPLAY, sex_pdx::notify::OP_PANEL_NOTICE, w, a, b).0 == 0)
+}
+/// While composing with an input method, the panel shows the letters and the
+/// candidates for them (`nihao  1 你好 ...`).
+unsafe fn keyboard_preedit_notice() -> bool {
+    let mut text = [0u8; 160];
+    let n = keyboard_layout::preedit_line(&mut text);
+    n != 0 && notify_panel(&text[..n])
+}
+/// The panel names the keyboard layout just chosen, e.g. "Keyboard: DE  German".
+unsafe fn keyboard_layout_notice(label: &str, title: &str) -> bool {
+    let mut text = [0u8; 64];
+    let mut n = 0;
+    for part in [b"Keyboard: ".as_slice(), label.as_bytes(), b"  ", title.as_bytes()] {
+        let take = part.len().min(text.len() - n);
+        text[n..n + take].copy_from_slice(&part[..take]);
+        n += take;
+    }
+    sex_pdx::serial_record!("[shell.keyboard.layout] label={} title={}", label, title);
+    notify_panel(&text[..n])
 }
 // ── Wallpaper and night light: the Shell chooses, Display paints. ──
 static mut DESKTOP_LOOK: (u8, u8) = (0, 0);
@@ -23191,6 +23321,8 @@ unsafe fn try_set_focus_inner(sid: u64,refresh_children:bool) -> bool {
     if refresh_children {if let Some((x,y,w,h))=get_surface_bounds(sid) { native_child_geometry(sid,x,y,w,h); }}
     let old_focus = FOCUSED_SURFACE_ID;
     FOCUSED_SURFACE_ID = sid;
+    // Alt+Tab order; steps inside an open switcher do not reorder it.
+    if !SWITCHER.is_open() { SWITCHER_RECENT.touch(sid); }
     // A4: Sync FocusRef shadow and emit commit marker.
     sync_focus_ref();
     serial_println!("[focus.ref.commit] id={}", sid);
@@ -23937,6 +24069,8 @@ fn hit_target_label(target: HitTarget, silkbar_handled: bool) -> (&'static str, 
 /// Emits [shell.click_focus.down/hit/miss] markers.
 /// Emits [shell.frame.rim.drag.start] for rim drag, [shell.frame.chrome.capture] for other chrome.
 unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTarget, bool) {
+    // The overview takes every click while it is open.
+    if OVERVIEW.is_open() { overview_click(px, py); return (HitTarget::None, true); }
     let old_focus = FOCUSED_SURFACE_ID;
     serial_println!("[shell.click_focus.down] x={} y={} buttons={:#x}", px, py, buttons_val);
     // ── Atlas intercept: if Atlas mode is enabled, hit-test scene cards ──

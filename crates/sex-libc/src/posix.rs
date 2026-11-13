@@ -55,6 +55,7 @@ extern "C" {
     fn sys_pwrite(fd: i32, buf: *const u8, len: usize, offset: i64) -> isize;
     fn sys_dup(fd: i32) -> i32;
     fn sys_yield();
+    fn sys_read_entropy(buf: *mut u8, len: usize, flags: u32) -> isize;
 }
 
 /// A negative error number becomes `errno` and -1.
@@ -635,6 +636,42 @@ pub unsafe extern "C" fn truncate(path: *const c_char, size: i64) -> c_int {
     unsafe { sys_close(fd) };
     ret(r as i64) as c_int
 }
+
+// ---- what CPython also asks for -----------------------------------------------------------
+
+/// Random bytes from the program's entropy source (RDRAND where the processor has it).
+#[no_mangle]
+pub unsafe extern "C" fn getrandom(buf: *mut c_void, len: usize, flags: u32) -> isize {
+    ret(unsafe { sys_read_entropy(buf.cast(), len, flags) } as i64) as isize
+}
+#[no_mangle]
+pub unsafe extern "C" fn getentropy(buf: *mut c_void, len: usize) -> c_int {
+    if len > 256 { set_errno(5); return -1; }
+    if unsafe { getrandom(buf, len, 0) } != len as isize { return -1; }
+    0
+}
+/// `dup2` where the descriptor table allows it: `new` is closed, and the duplicate
+/// must land on it (the table hands out the lowest free number); otherwise EBUSY.
+#[no_mangle]
+pub unsafe extern "C" fn dup2(old: c_int, new: c_int) -> c_int {
+    if old == new { return new; }
+    unsafe { sys_close(new) };
+    let d = unsafe { sys_dup(old) };
+    if d < 0 { return ret(d as i64) as c_int; }
+    if d != new { unsafe { sys_close(d) }; set_errno(16); return -1; }
+    new
+}
+/// File times are kept by the store, not set by programs.
+#[no_mangle]
+pub unsafe extern "C" fn utime(_path: *const c_char, _times: *const c_void) -> c_int { set_errno(crate::ENOSYS); -1 }
+/// No signal ever arrives, so waiting for one would never end.
+#[no_mangle]
+pub unsafe extern "C" fn pause() -> c_int { set_errno(crate::ENOSYS); -1 }
+/// musl's real-time signal numbers (`SIGRTMIN`/`SIGRTMAX`), though none is delivered.
+#[no_mangle]
+pub extern "C" fn __libc_current_sigrtmin() -> c_int { 35 }
+#[no_mangle]
+pub extern "C" fn __libc_current_sigrtmax() -> c_int { 64 }
 
 // ---- mmap, as a library ------------------------------------------------------------------
 //

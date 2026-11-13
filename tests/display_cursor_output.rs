@@ -2,6 +2,7 @@
 //! Actual cursor helpers/stencil over actual Scene and held-frame preparation.
 //! Background/menu shading and CPU output are declared host boundaries.
 #![allow(dead_code,unused_unsafe,static_mut_refs)]
+#[path="../crates/sex-shape/src/lib.rs"] #[allow(unused_attributes)] pub mod sex_shape;
 extern crate self as sex_pdx;
 fn bar_height()->usize{28}
 #[path="../crates/sex-pdx/src/desktop_style.rs"]pub mod desktop_style;

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Exact production glyph table, layout and pixel functions, extracted by gate.
 #![allow(dead_code)]
+#[path="../crates/sex-shape/src/lib.rs"] #[allow(unused_attributes)] pub mod sex_shape;
 extern crate self as sex_pdx;
 #[path="../crates/sex-pdx/src/text_encoding.rs"]pub mod text_encoding;
 #[path="../crates/sex-pdx/src/desktop_style.rs"]pub mod desktop_style;
@@ -167,4 +168,21 @@ fn owned_surface(owner:u32,sid:u64,width:u32,text:&[u8])->Surface{
  let resets=glyphs::cache_resets();
  for _ in 0..8{for c in 32..127{glyphs::mono_cell(c,6,9).unwrap();glyphs::mono_cell(c,12,18).unwrap();}}
  assert_eq!(glyphs::cache_resets(),resets);
+}
+#[test]fn cjk_and_emoji_take_two_cells_and_draw_one_glyph_across_them(){
+ // "a日b": 日 is two cells (its offset twice), so b is in the fourth column.
+ let s=surface(640,"a日b".as_bytes());
+ assert_eq!(s.cell_count,4);assert_eq!(&s.cell_starts[..4],&[0,1,1,4]);
+ let wide=glyphs::mono_cell('日' as u32,24,18).expect("CJK fallback");
+ assert!(wide.iter().any(|a|*a!=0));
+ for y in 0..18{for x in 0..24{
+  let a=wide[y*24+x];let want=if a==0{None}else{Some(coverage_blend(s.text_color,s.color,a))};
+  assert_eq!(surface_text_fg_at(28+12+x,72+y,&s),want,"x={x} y={y}");
+ }}
+ for y in 0..18{for x in 0..12{assert_eq!(surface_text_fg_at(28+36+x,72+y,&s),cell_pixel(&s,'b' as u32,x,y,false));}}
+ // A wide character never splits across rows: at the last column it starts the next.
+ let mut text=vec![b'x';s.wrap_cols as usize-1];text.extend_from_slice("日".as_bytes());
+ let t=surface(640,&text);assert_eq!(t.line_count,2);assert_eq!(t.line_cells[1] as usize,t.wrap_cols as usize-1);
+ // Emoji too.
+ let e=surface(640,"😀".as_bytes());assert_eq!(e.cell_count,2);
 }

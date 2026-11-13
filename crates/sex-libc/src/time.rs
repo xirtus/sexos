@@ -66,6 +66,25 @@ pub unsafe extern "C" fn time(out: *mut i64) -> i64 {
     t
 }
 
+/// Every clock counts from the system tick: one millisecond.
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub unsafe extern "C" fn clock_getres(_id: c_int, ts: *mut timespec) -> c_int {
+    if !ts.is_null() { unsafe { (*ts).tv_sec = 0; (*ts).tv_nsec = 1_000_000 }; }
+    0
+}
+
+/// `<sys/times.h>`: a program's time is its running time (there are no child
+/// processes, and user and system time are not told apart), in `sysconf(_SC_CLK_TCK)`
+/// ticks of 10 ms.
+#[repr(C)]
+pub struct tms { pub tms_utime: c_long, pub tms_stime: c_long, pub tms_cutime: c_long, pub tms_cstime: c_long }
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub unsafe extern "C" fn times(out: *mut tms) -> c_long {
+    let ticks = (now().1 / 10_000_000) as c_long;
+    if !out.is_null() { unsafe { *out = tms { tms_utime: ticks, tms_stime: 0, tms_cutime: 0, tms_cstime: 0 } }; }
+    ticks
+}
+
 /// CLOCKS_PER_SEC is 1,000,000 in musl.
 #[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub extern "C" fn clock() -> c_long {
@@ -120,6 +139,10 @@ pub unsafe extern "C" fn gmtime_r(t: *const i64, out: *mut tm) -> *mut tm {
 pub unsafe extern "C" fn localtime_r(t: *const i64, out: *mut tm) -> *mut tm {
     unsafe { gmtime_r(t, out) }
 }
+
+/// Local time is UTC, so `timegm` is `mktime`.
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub unsafe extern "C" fn timegm(t: *mut tm) -> i64 { unsafe { mktime(t) } }
 
 #[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn mktime(t: *mut tm) -> i64 {

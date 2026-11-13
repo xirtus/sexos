@@ -127,6 +127,8 @@ pub enum WmAction {
     Wallpaper,
     /// Super+Shift+N: night light off, low, medium, high.
     NightLight,
+    /// Super+Ctrl+Space: the next keyboard layout.
+    KeyboardLayout,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -153,6 +155,7 @@ pub fn binding(key: u8, m: Mods) -> Option<WmAction> {
         return match key {
             code::RIGHT | code::L => Some(WmAction::NextWorkspace),
             code::LEFT | code::H => Some(WmAction::PrevWorkspace),
+            code::SPACE => Some(WmAction::KeyboardLayout),
             _ => None,
         };
     }

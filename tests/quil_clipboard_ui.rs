@@ -147,11 +147,7 @@ include!(env!("QUIL_CLIPBOARD_UI_SOURCE"));
 
 fn key(code: u8, shift: bool, control: bool) {
     quil_dispatch_key(
-        app_key::Key {
-            code,
-            shift,
-            control,
-        },
+        app_key::Key::new(code, shift, control),
         &mut false,
         &mut 0,
     )
