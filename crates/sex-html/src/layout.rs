@@ -14,7 +14,11 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct FontKey { pub size: i32, pub bold: bool, pub italic: bool, pub mono: bool }
+pub struct FontKey {
+    pub size: i32, pub bold: bool, pub italic: bool, pub mono: bool,
+    /// A web font's number (from `@font-face`), 0 for the built-in faces.
+    pub face: u8,
+}
 
 /// What layout asks of the system: text measurement and image sizes.
 pub trait Host {
@@ -84,6 +88,12 @@ pub struct Page {
     pub stickies: Vec<[i32; 4]>,
     /// Each item's sticky box (an index into `stickies`, 0 for none); empty when none.
     pub item_sticky: Vec<u16>,
+    /// Rotated, scaled or skewed boxes: the map from layout to page coordinates,
+    /// x' = a x + c y + e, y' = b x + d y + f as [a, b, c, d, e, f] (nested ones already
+    /// combined). Entry 0 is unused.
+    pub transforms: Vec<[f32; 6]>,
+    /// Each item's transform (an index into `transforms`, 0 for none); empty when none.
+    pub item_transform: Vec<u16>,
 }
 
 impl Page {
@@ -116,7 +126,7 @@ pub fn layout(dom: &Dom, styles: &[Option<Style>], width: i32, host: &dyn Host) 
 /// themselves in (0 takes the page's own height).
 pub fn layout_in(dom: &Dom, styles: &[Option<Style>], width: i32, viewport_height: i32, host: &dyn Host) -> Page {
     let html = dom.find("html");
-    let mut l = Layout { dom, styles, host, items: Vec::new(), links: Vec::new(), anchors: Vec::new(), intrinsic: alloc::vec![None; dom.nodes.len()], link_stack: Vec::new(), boxes: Vec::new(),
+    let mut l = Layout { dom, styles, host, items: Vec::new(), affines: Vec::new(), links: Vec::new(), anchors: Vec::new(), intrinsic: alloc::vec![None; dom.nodes.len()], link_stack: Vec::new(), boxes: Vec::new(),
         abs: Vec::new(), positioned: Vec::new(), force_height: None, def_h: (viewport_height > 0).then_some(viewport_height), root: html, viewport: (width, viewport_height), floats: Vec::new(), float_base: 0 };
     let body = dom.find("body");
     let mut height = 0;
@@ -124,10 +134,12 @@ pub fn layout_in(dom: &Dom, styles: &[Option<Style>], width: i32, viewport_heigh
         let r = l.block(html, 0, 0, width, None);
         height = r.margin_top + r.height + r.margin_bottom;
     }
-    let (mut tagged, clips, sticky_marks) = resolve_clips(core::mem::take(&mut l.items));
+    let affines = core::mem::take(&mut l.affines);
+    let (mut tagged, clips, sticky_marks, transforms) = resolve_clips(core::mem::take(&mut l.items), &affines);
     let (order, below) = layer_order(&mut tagged);
     let item_clips: Vec<u16> = if clips.len() > 1 { tagged.iter().map(|t| t.1 as u16).collect() } else { Vec::new() };
     let item_sticky: Vec<u16> = if sticky_marks.len() > 1 { tagged.iter().map(|t| (t.1 >> 16) as u16).collect() } else { Vec::new() };
+    let item_transform: Vec<u16> = if transforms.len() > 1 { tagged.iter().map(|t| (t.1 >> 32) as u16).collect() } else { Vec::new() };
     l.items = tagged.into_iter().map(|t| t.0).collect();
     // Ranks in paint order: layers under normal flow, normal flow itself, then the rest.
     let flow_rank = below as u32;
@@ -159,7 +171,7 @@ pub fn layout_in(dom: &Dom, styles: &[Option<Style>], width: i32, viewport_heigh
         let limit = boxes.get(parent as usize).copied().flatten().map_or(height, |b| b[1] + b[3]);
         [y, h, top, limit.max(y + h)]
     }).collect();
-    Page { width, height, background: background | 0xFF00_0000, title, items: l.items, links: l.links, anchors: l.anchors, boxes, layers, clips, item_clips, stickies, item_sticky }
+    Page { width, height, background: background | 0xFF00_0000, title, items: l.items, links: l.links, anchors: l.anchors, boxes, layers, clips, item_clips, stickies, item_sticky, transforms, item_transform }
 }
 
 /// Parses, styles and lays out a whole page.
@@ -191,6 +203,8 @@ struct Layout<'a> {
     styles: &'a [Option<Style>],
     host: &'a dyn Host,
     items: Vec<Item>,
+    /// Maps of rotated, scaled or skewed boxes, by `TRANSFORM_BEGIN` markers.
+    affines: Vec<[f32; 6]>,
     links: Vec<Link>,
     anchors: Vec<(String, i32)>,
     intrinsic: Vec<Option<(i32, i32)>>,
@@ -232,6 +246,15 @@ const CLIP_END: i32 = i32::MIN + 4;
 /// the node of its containing block in `color`.
 const STICKY_BEGIN: i32 = i32::MIN + 5;
 const STICKY_END: i32 = i32::MIN + 6;
+/// Transform markers: `x` is the index of the box's map in `Layout::affines`.
+const TRANSFORM_BEGIN: i32 = i32::MIN + 7;
+const TRANSFORM_END: i32 = i32::MIN + 8;
+
+/// `p` after `q`: the map that applies `q` first.
+fn compose(p: [f32; 6], q: [f32; 6]) -> [f32; 6] {
+    [p[0] * q[0] + p[2] * q[1], p[1] * q[0] + p[3] * q[1], p[0] * q[2] + p[2] * q[3], p[1] * q[2] + p[3] * q[3],
+     p[0] * q[4] + p[2] * q[5] + p[4], p[1] * q[4] + p[3] * q[5] + p[5]]
+}
 
 fn marker(item: &Item) -> Option<(i32, i32, u32)> {
     match *item { Item::Rect { w, h, color, .. } if w <= LAYER_END => Some((w, h, color)), _ => None }
@@ -239,7 +262,9 @@ fn marker(item: &Item) -> Option<(i32, i32, u32)> {
 
 /// Turns clip markers into a clip index on each item, and the clip rectangles (nested
 /// clips intersect).
-fn resolve_clips(items: Vec<Item>) -> (Vec<(Item, u32)>, Vec<[i32; 4]>, Vec<([i32; 4], u32)>) {
+fn resolve_clips(items: Vec<Item>, affines: &[[f32; 6]]) -> (Vec<(Item, u64)>, Vec<[i32; 4]>, Vec<([i32; 4], u32)>, Vec<[f32; 6]>) {
+    let mut transforms = alloc::vec![[1.0, 0.0, 0.0, 1.0, 0.0, 0.0]];
+    let mut turned: Vec<u16> = Vec::new();
     let mut clips = alloc::vec![[0; 4]];
     let mut stack: Vec<u16> = Vec::new();
     let mut stickies = alloc::vec![([0; 4], 0u32)];
@@ -264,21 +289,28 @@ fn resolve_clips(items: Vec<Item>) -> (Vec<(Item, u32)>, Vec<[i32; 4]>, Vec<([i3
                 sticky.push((stickies.len() - 1) as u16);
             }
             Item::Rect { w: STICKY_END, .. } => { sticky.pop(); }
-            item => out.push((item, stack.last().copied().unwrap_or(0) as u32 | (sticky.last().copied().unwrap_or(0) as u32) << 16)),
+            Item::Rect { x, w: TRANSFORM_BEGIN, .. } => {
+                let own = affines.get(x as usize).copied().unwrap_or(transforms[0]);
+                let m = match turned.last() { Some(&t) => compose(transforms[t as usize], own), None => own };
+                if transforms.len() < u16::MAX as usize { transforms.push(m); }
+                turned.push((transforms.len() - 1) as u16);
+            }
+            Item::Rect { w: TRANSFORM_END, .. } => { turned.pop(); }
+            item => out.push((item, stack.last().copied().unwrap_or(0) as u64 | (sticky.last().copied().unwrap_or(0) as u64) << 16 | (turned.last().copied().unwrap_or(0) as u64) << 32)),
         }
     }
-    (out, clips, stickies)
+    (out, clips, stickies, transforms)
 }
 
 /// Moves each layer's items after normal flow, ordered by stacking context and
 /// z-index (negative z-indexes under normal flow), and drops the markers. Returns
 /// the layers' sequence numbers in paint order and how many paint under normal flow.
-fn layer_order(items: &mut Vec<(Item, u32)>) -> (Vec<u32>, usize) {
+fn layer_order(items: &mut Vec<(Item, u64)>) -> (Vec<u32>, usize) {
     if !items.iter().any(|i| marker(&i.0).is_some()) { return (Vec::new(), 0); }
     // Each layer: its sort key (the path of (z, seq) through enclosing stacking
     // contexts) and its items.
-    let mut layers: Vec<(Vec<(i32, u32)>, Vec<(Item, u32)>)> = Vec::new();
-    let mut flow: Vec<(Item, u32)> = Vec::new();
+    let mut layers: Vec<(Vec<(i32, u32)>, Vec<(Item, u64)>)> = Vec::new();
+    let mut flow: Vec<(Item, u64)> = Vec::new();
     // Open layers: index into `layers`, and whether it starts a stacking context.
     let mut open: Vec<(usize, bool)> = Vec::new();
     for item in core::mem::take(items) {
@@ -334,7 +366,14 @@ impl Piece {
     }
 }
 
-fn font_of(s: &Style) -> FontKey { FontKey { size: s.font_size.max(1), bold: s.bold, italic: s.italic, mono: s.mono } }
+fn font_of(s: &Style) -> FontKey {
+    let key = FontKey { size: s.font_size.max(1), bold: s.bold, italic: s.italic, mono: s.mono, face: 0 };
+    match style::web_face(s.family, s.bold, s.italic) {
+        // A real bold or italic face is not made bold or slanted again.
+        Some((face, bold, italic)) => FontKey { face, bold: s.bold && !bold, italic: s.italic && !italic, mono: false, ..key },
+        None => key,
+    }
+}
 
 fn sum_h(s: &Style, cw: i32) -> (i32, i32, i32) {
     // margins, border+padding (left + right)
@@ -377,9 +416,29 @@ impl<'a> Layout<'a> {
             let own_w = r.width - s.margin[LEFT].or_zero(cw) - s.margin[RIGHT].or_zero(cw);
             let (dx, dy) = (tx.or_zero(own_w), ty.or_zero(r.height));
             self.shift(i0, l0, b0, a0, dx, dy);
+            if s.linear.is_some() { self.turn(n, i0, x, y, &r); }
+            return r;
+        }
+        if s.linear.is_some() {
+            let i0 = self.items.len();
+            let r = self.block_faded(n, x, y, cw, force_width);
+            self.turn(n, i0, x, y, &r);
             return r;
         }
         self.block_faded(n, x, y, cw, force_width)
+    }
+
+    /// Marks the items of box `n` (from `i0`) as rotated, scaled or skewed about its
+    /// `transform-origin`.
+    fn turn(&mut self, n: NodeId, i0: usize, x: i32, y: i32, r: &BlockResult) {
+        let s = self.style(n).unwrap();
+        let Some([a, b, c, d]) = s.linear else { return };
+        let [bx, by, bw, bh] = self.boxes.iter().rev().find(|(m, _)| *m == n).map_or([x, y + r.margin_top, r.width, r.height], |(_, b)| *b);
+        let (ox, oy) = ((bx + s.origin.0.or_zero(bw)) as f32, (by + s.origin.1.or_zero(bh)) as f32);
+        // About the origin: p' = o + L (p - o).
+        self.affines.push([a, b, c, d, ox - a * ox - c * oy, oy - b * ox - d * oy]);
+        self.items.insert(i0, Item::Rect { x: (self.affines.len() - 1) as i32, y: 0, w: TRANSFORM_BEGIN, h: 0, color: 0, radius: 0 });
+        self.items.push(Item::Rect { x: 0, y: 0, w: TRANSFORM_END, h: 0, color: 0, radius: 0 });
     }
 
     fn block_faded(&mut self, n: NodeId, x: i32, y: i32, cw: i32, force_width: Option<i32>) -> BlockResult {

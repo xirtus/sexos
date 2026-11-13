@@ -33,6 +33,9 @@ const MAX_SIZE: i32 = 96;
 pub struct Fonts {
     sans: Font<'static>,
     mono: Font<'static>,
+    /// Web fonts (`@font-face`) loaded so far; `FontKey::face` n is `web[n - 1]`. They
+    /// stay for the program's life, so glyphs cached for one never belong to another.
+    web: Vec<Font<'static>>,
     cache: Box<Cache>,
     acc: Vec<i32>,
     /// Decoded pictures by address, for layout sizes and painting.
@@ -70,43 +73,68 @@ impl Fonts {
             if ptr.is_null() { return None; }
             Box::from_raw(ptr)
         };
-        Some(Fonts { sans, mono, cache, acc: alloc::vec![0; sex_font::raster::scratch_len(256, 256)], images: Vec::new(), svgs: Vec::new(), moving: Vec::new(), frames_shown: 0 })
+        Some(Fonts { sans, mono, web: Vec::new(), cache, acc: alloc::vec![0; sex_font::raster::scratch_len(256, 256)], images: Vec::new(), svgs: Vec::new(), moving: Vec::new(), frames_shown: 0 })
     }
 
-    fn face(&self, mono: bool) -> &Font<'static> { if mono { &self.mono } else { &self.sans } }
+    fn faces(&self) -> Faces<'_> { Faces { sans: &self.sans, mono: &self.mono, web: &self.web } }
+
+    /// Most web fonts kept.
+    pub const MAX_WEB_FONTS: usize = 64;
+
+    /// Adds a web font (TrueType or OpenType bytes): its `FontKey::face` number, or None
+    /// when the bytes are not a font or there are already [`Self::MAX_WEB_FONTS`].
+    pub fn add_face(&mut self, data: Vec<u8>) -> Option<u8> {
+        if self.web.len() >= Self::MAX_WEB_FONTS { return None; }
+        ttf_check(&data)?;
+        // Kept for good: see `web`.
+        let data: &'static [u8] = Box::leak(data.into_boxed_slice());
+        self.web.push(Font::new(data)?);
+        Some(self.web.len() as u8)
+    }
 
 
     fn draw_size(size: i32) -> i32 { size.clamp(1, MAX_SIZE) }
 
     fn advances(&self, text: &str, font: FontKey, each: impl FnMut(char, Option<(u8, GlyphId)>, i32)) -> i32 {
-        Faces { sans: &self.sans, mono: &self.mono }.advances(text, font, each)
+        self.faces().advances(text, font, each)
     }
 }
 
 /// The two faces, for measuring without a glyph cache.
-struct Faces<'a> { sans: &'a Font<'static>, mono: &'a Font<'static> }
+struct Faces<'a> { sans: &'a Font<'static>, mono: &'a Font<'static>, web: &'a [Font<'static>] }
+
+/// Whether `data` parses as a font (before it is kept).
+fn ttf_check(data: &[u8]) -> Option<()> { Font::new(data).map(|_| ()) }
 
 /// Text width in pixels, as layout measures it, without a [`Fonts`].
 pub fn measure(text: &str, font: FontKey) -> i32 {
     let (Some(sans), Some(mono)) = (Font::new(sex_font::GEIST_SANS), Font::new(sex_font::GEIST_MONO)) else { return 0 };
-    let faces = Faces { sans: &sans, mono: &mono };
+    let faces = Faces { sans: &sans, mono: &mono, web: &[] };
     let mut any = false;
     let pen = faces.advances(text, font, |_, _, _| any = true);
     let bold = if font.bold && any { font.size * 256 / 24 } else { 0 };
     (pen - bold + 255) / 256
 }
 
-impl Faces<'_> {
-    fn face(&self, mono: bool) -> &Font<'static> { if mono { self.mono } else { self.sans } }
+impl<'a> Faces<'a> {
+    /// A face by its code: SANS, MONO, or 2 + a web font's index.
+    fn face(&self, code: u8) -> &'a Font<'static> {
+        match code { SANS => self.sans, MONO => self.mono, n => self.web.get(n as usize - 2).unwrap_or(self.sans) }
+    }
 
-    /// The glyph for `c`: from the requested face, else the other one. Spaces that
+    /// The face a key draws with first.
+    fn first(&self, font: FontKey) -> u8 {
+        if font.face > 0 && (font.face as usize) <= self.web.len() { font.face + 1 } else if font.mono { MONO } else { SANS }
+    }
+
+    /// The glyph for `c`: from the requested face, else the built-in ones. Spaces that
     /// should not show are mapped to the space glyph.
-    fn glyph(&self, c: char, mono: bool) -> Option<(u8, GlyphId)> {
+    fn glyph(&self, c: char, font: FontKey) -> Option<(u8, GlyphId)> {
         let c = match c { '\u{A0}' | '\u{2002}' | '\u{2003}' | '\u{2009}' => ' ', '\u{2212}' => '-', c => c };
-        let first = if mono { MONO } else { SANS };
-        let second = if mono { SANS } else { MONO };
-        for f in [first, second] {
-            if let Some(g) = self.face(f == MONO).glyph(c as u32) { return Some((f, g)); }
+        let first = self.first(font);
+        let (a, b) = if font.mono { (MONO, SANS) } else { (SANS, MONO) };
+        for f in [first, a, b] {
+            if let Some(g) = self.face(f).glyph(c as u32) { return Some((f, g)); }
         }
         None
     }
@@ -121,10 +149,10 @@ impl Faces<'_> {
         let mut prev: Option<(u8, GlyphId)> = None;
         for c in text.chars() {
             if c == '\u{AD}' || c == '\u{200B}' || c == '\u{200C}' || c == '\u{200D}' || c == '\u{FE0F}' { continue; }
-            let g = self.glyph(c, font.mono);
+            let g = self.glyph(c, font);
             let adv = match g {
                 Some((f, id)) => {
-                    let face = self.face(f == MONO);
+                    let face = self.face(f);
                     let kern = match prev { Some((pf, pid)) if pf == f => face.kerning(pid, id, size), _ => 0 };
                     pen += scale(kern);
                     scale(face.advance(id, size)) + bold
@@ -149,7 +177,8 @@ impl Host for Fonts {
     }
     fn metrics(&self, font: FontKey) -> (i32, i32) {
         let size = (Self::draw_size(font.size) * 64) as u32;
-        let face = self.face(font.mono);
+        let faces = self.faces();
+        let face = faces.face(faces.first(font));
         let up = |v: i32| (v * font.size.max(1) / Self::draw_size(font.size) + 255) / 256;
         (up(face.ascender(size)), up(-face.descender(size)))
     }
@@ -276,14 +305,122 @@ pub fn paint(page: &Page, fonts: &mut Fonts, target: &mut Target, focus: Option<
     let bottom = target.scroll + target.height - target.top;
     let outer = target.clip;
     let sticky = !page.item_sticky.is_empty();
+    let turned = !page.item_transform.is_empty();
     let mut moved;
-    for (i, item) in page.items.iter().enumerate() {
+    let mut i = 0;
+    while i < page.items.len() {
+        // Rotated, scaled or skewed: the run of items under one transform paints apart.
+        if turned && page.item_transform[i] != 0 {
+            let k = page.item_transform[i];
+            let end = (i..page.items.len()).find(|&j| page.item_transform[j] != k).unwrap_or(page.items.len());
+            paint_turned(page, fonts, target, i..end, page.transforms[k as usize], outer);
+            i = end;
+            continue;
+        }
+        let item = &page.items[i];
+        i += 1;
         // A sticky box's items follow the scroll.
-        let dy = if sticky { page.sticky_shift(i, target.scroll) } else { 0 };
+        let dy = if sticky { page.sticky_shift(i - 1, target.scroll) } else { 0 };
         let item = if dy != 0 { moved = item.clone(); moved.offset(0, dy); &moved } else { item };
         let (a, b) = item.vertical_span();
         if b <= top || a >= bottom { continue; }
-        target.clip = page.clip_of(i).or(outer);
+        target.clip = page.clip_of(i - 1).or(outer);
+        draw_item(target, fonts, item, bg);
+    }
+    target.clip = outer;
+    if let Some(l) = focus.and_then(|f| page.links.get(f)) {
+        let ring = 0xFF0B_57D0;
+        target.fill(l.x - 2, l.y - 1, l.w + 4, 2, ring, 0);
+        target.fill(l.x - 2, l.y + l.h - 1, l.w + 4, 2, ring, 0);
+        target.fill(l.x - 2, l.y - 1, 2, l.h + 2, ring, 0);
+        target.fill(l.x + l.w, l.y - 1, 2, l.h + 2, ring, 0);
+    }
+}
+
+/// The page rectangle an item covers: x0, y0, x1, y1.
+fn item_extent(fonts: &mut Fonts, item: &Item) -> (i32, i32, i32, i32) {
+    match item {
+        Item::Rect { x, y, w, h, .. } | Item::Image { x, y, w, h, .. } => (*x, *y, x + w, y + h),
+        Item::Bullet { x, y, size, .. } => (*x, *y, x + size, y + size),
+        Item::Text { x, baseline, font, text, .. } => (*x, baseline - font.size * 5 / 4, x + fonts.text_width(text, *font), baseline + font.size / 2),
+    }
+}
+
+/// Paints items `run` (one rotated, scaled or skewed box's) into a layer of their own,
+/// then maps it onto the target through `m` with bilinear sampling. Only the part of the
+/// layer that lands in view is drawn.
+fn paint_turned(page: &Page, fonts: &mut Fonts, target: &mut Target, run: core::ops::Range<usize>, m: [f32; 6], outer: Option<[i32; 4]>) {
+    let [a, b, c, d, e, f] = m;
+    let det = a * d - b * c;
+    if det.abs() < 1e-6 { return; }
+    let inv = [d / det, -b / det, -c / det, a / det];
+    let (mut x0, mut y0, mut x1, mut y1) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
+    for item in &page.items[run.clone()] {
+        let (p, q, r, s) = item_extent(fonts, item);
+        x0 = x0.min(p); y0 = y0.min(q); x1 = x1.max(r); y1 = y1.max(s);
+    }
+    if x0 >= x1 || y0 >= y1 { return; }
+    let map = |x: f32, y: f32| (a * x + c * y + e, b * x + d * y + f);
+    let unmap = |x: f32, y: f32| { let (x, y) = (x - e, y - f); (inv[0] * x + inv[2] * y, inv[1] * x + inv[3] * y) };
+    // Where the layer lands on the page, cut to the view (and the outer clip).
+    let corners = [map(x0 as f32, y0 as f32), map(x1 as f32, y0 as f32), map(x0 as f32, y1 as f32), map(x1 as f32, y1 as f32)];
+    let (vx0, vy0, vx1, vy1) = target.bounds();
+    let to_page = |v: i32| v + target.scroll - target.top;
+    let (mut px0, mut py0, mut px1, mut py1) = (vx0 as f32, to_page(vy0) as f32, vx1 as f32, to_page(vy1) as f32);
+    if let Some([cx, cy, cw, ch]) = outer { px0 = px0.max(cx as f32); py0 = py0.max(cy as f32); px1 = px1.min((cx + cw) as f32); py1 = py1.min((cy + ch) as f32); }
+    let dx0 = libm::floorf(corners.iter().map(|p| p.0).fold(f32::MAX, f32::min).max(px0)) as i32;
+    let dx1 = libm::ceilf(corners.iter().map(|p| p.0).fold(f32::MIN, f32::max).min(px1)) as i32;
+    let dy0 = libm::floorf(corners.iter().map(|p| p.1).fold(f32::MAX, f32::min).max(py0)) as i32;
+    let dy1 = libm::ceilf(corners.iter().map(|p| p.1).fold(f32::MIN, f32::max).min(py1)) as i32;
+    if dx0 >= dx1 || dy0 >= dy1 { return; }
+    // The layer pixels those page pixels come from.
+    let back = [unmap(dx0 as f32, dy0 as f32), unmap(dx1 as f32, dy0 as f32), unmap(dx0 as f32, dy1 as f32), unmap(dx1 as f32, dy1 as f32)];
+    let sx0 = (libm::floorf(back.iter().map(|p| p.0).fold(f32::MAX, f32::min)) as i32 - 1).max(x0);
+    let sx1 = (libm::ceilf(back.iter().map(|p| p.0).fold(f32::MIN, f32::max)) as i32 + 1).min(x1);
+    let sy0 = (libm::floorf(back.iter().map(|p| p.1).fold(f32::MAX, f32::min)) as i32 - 1).max(y0);
+    let sy1 = (libm::ceilf(back.iter().map(|p| p.1).fold(f32::MIN, f32::max)) as i32 + 1).min(y1);
+    let (sw, sh) = (sx1 - sx0, sy1 - sy0);
+    // A layer bigger than this is not drawn (a huge scale-down of a huge box).
+    if sw <= 0 || sh <= 0 || sw as i64 * sh as i64 > 16 << 20 { return; }
+    let mut layer = alloc::vec![0u32; (sw * sh) as usize];
+    {
+        let mut t = Target { pixels: &mut layer, width: sw, height: sh, scroll: 0, top: 0, premul: true, clip: None };
+        for i in run.clone() {
+            let mut item = page.items[i].clone();
+            item.offset(-sx0, -sy0);
+            t.clip = page.clip_of(i).map(|[x, y, w, h]| [x - sx0, y - sy0, w, h]);
+            draw_item(&mut t, fonts, &item, 0);
+        }
+    }
+    let at = |x: i32, y: i32| if x < 0 || y < 0 || x >= sw || y >= sh { 0 } else { layer[(y * sw + x) as usize] };
+    for py in dy0..dy1 {
+        let ty = py - target.scroll + target.top;
+        let row = (ty * target.width) as usize;
+        for px in dx0..dx1 {
+            let (u, v) = unmap(px as f32 + 0.5, py as f32 + 0.5);
+            let (u, v) = (u - sx0 as f32 - 0.5, v - sy0 as f32 - 0.5);
+            let (iu, iv) = (libm::floorf(u) as i32, libm::floorf(v) as i32);
+            if iu < -1 || iv < -1 || iu >= sw || iv >= sh { continue; }
+            let (fu, fv) = (((u - iu as f32) * 256.0) as u32, ((v - iv as f32) * 256.0) as u32);
+            let (p00, p10, p01, p11) = (at(iu, iv), at(iu + 1, iv), at(iu, iv + 1), at(iu + 1, iv + 1));
+            if p00 | p10 | p01 | p11 == 0 { continue; }
+            let lerp = |s: u32| {
+                let ch = |p: u32| (p >> s) & 0xFF;
+                let top = ch(p00) * (256 - fu) + ch(p10) * fu;
+                let low = ch(p01) * (256 - fu) + ch(p11) * fu;
+                ((top * (256 - fv) + low * fv) >> 16) & 0xFF
+            };
+            let (sa, sr, sg, sb) = (lerp(24), lerp(16), lerp(8), lerp(0));
+            if sa == 0 { continue; }
+            let dst = &mut target.pixels[row + px as usize];
+            let mix = |d: u32, s: u32| (s + d * (255 - sa) / 255).min(255);
+            *dst = mix((*dst >> 16) & 0xFF, sr) << 16 | mix((*dst >> 8) & 0xFF, sg) << 8 | mix(*dst & 0xFF, sb);
+        }
+    }
+}
+
+/// Draws one item.
+fn draw_item(target: &mut Target, fonts: &mut Fonts, item: &Item, bg: u32) {
         match item {
             Item::Rect { x, y, w, h, color, radius } => target.fill(*x, *y, *w, *h, *color, *radius),
             Item::Bullet { x, y, size, color, kind } => match kind {
@@ -304,23 +441,14 @@ pub fn paint(page: &Page, fonts: &mut Fonts, target: &mut Target, focus: Option<
                 if *strike { target.fill(*x, *baseline - font.size * 3 / 10, width, thick, *color, 0); }
             }
         }
-    }
-    target.clip = outer;
-    if let Some(l) = focus.and_then(|f| page.links.get(f)) {
-        let ring = 0xFF0B_57D0;
-        target.fill(l.x - 2, l.y - 1, l.w + 4, 2, ring, 0);
-        target.fill(l.x - 2, l.y + l.h - 1, l.w + 4, 2, ring, 0);
-        target.fill(l.x - 2, l.y - 1, 2, l.h + 2, ring, 0);
-        target.fill(l.x + l.w, l.y - 1, 2, l.h + 2, ring, 0);
-    }
 }
 
 /// Draws only the pictures named in `changed` (canvases that drew) over the last frame,
 /// when each is opaque and so covers what was under it. False when that can't stand in
 /// for a full `frame`.
 pub fn repaint_pictures(page: &Page, fonts: &mut Fonts, pixels: &mut [u32], width: i32, height: i32, scroll: i32, changed: &[String]) -> bool {
-    // Sticky boxes move with the scroll: only a whole frame places them.
-    if !page.item_sticky.is_empty() { return false; }
+    // Sticky boxes move with the scroll and turned boxes paint as layers: only a whole frame does those.
+    if !page.item_sticky.is_empty() || !page.item_transform.is_empty() { return false; }
     let mut t = Target { pixels, width, height, scroll, top: BAR, premul: false, clip: None };
     let (top, bottom) = (scroll, scroll + height - BAR);
     let mut items: Vec<(i32, i32, i32, i32, &str, Option<[i32; 4]>)> = Vec::new();
@@ -360,7 +488,7 @@ fn image(target: &mut Target, fonts: &mut Fonts, x: i32, y: i32, w: i32, h: i32,
         target.fill(x, y, 1, h, 0xFFC4_C7C5, 0);
         target.fill(x + w - 1, y, 1, h, 0xFFC4_C7C5, 0);
         if !alt.is_empty() && h > 16 {
-            let font = FontKey { size: 13, bold: false, italic: false, mono: false };
+            let font = FontKey { size: 13, bold: false, italic: false, mono: false, face: 0 };
             text_run(target, fonts, x + 4, y + 15, font, 0xFF5F_6368, alt);
         }
         return;
@@ -375,7 +503,7 @@ fn image(target: &mut Target, fonts: &mut Fonts, x: i32, y: i32, w: i32, h: i32,
         for tx in x.max(bx0)..(x + w).min(bx1) {
             let s = img.pixels[srow + ((tx - x) as i64 * iw / w as i64) as usize];
             let p = &mut target.pixels[row + tx as usize];
-            *p = blend(*p, s, s >> 24);
+            *p = if target.premul { blend_premul(*p, s, s >> 24) } else { blend(*p, s, s >> 24) };
         }
     }
 }
@@ -395,13 +523,13 @@ pub fn text_run(target: &mut Target, fonts: &mut Fonts, x: i32, baseline: i32, f
     for (f, id, c, pen) in glyphs {
         let at = x256 + pen;
         let phase = ((at & 255) / 64) as u8;
-        let face = fonts.face(f == MONO);
+        let face = fonts.faces().face(f);
         let size64 = (size * 64) as u32;
         let adv = (face.advance(id, size64) + 255) / 256;
         let w = (adv + 2 * pad).clamp(1, 255) as usize;
         let key = Key { font: f, scalar: c as u32, size: size as u16, phase, w: w as u8, h: h as u8 };
-        let (sans, mono, acc) = (&fonts.sans, &fonts.mono, &mut fonts.acc);
-        let face = if f == MONO { mono } else { sans };
+        let (sans, mono, web, acc) = (&fonts.sans, &fonts.mono, &fonts.web, &mut fonts.acc);
+        let face = Faces { sans, mono, web }.face(f);
         let bits = fonts.cache.get(key, |out| {
             face.draw(id, size64, pad * 256 + phase as i32 * 64, (pad + asc) * 256, w, h, acc, out)
         });
@@ -516,8 +644,8 @@ pub struct Chrome<'a> {
     pub chosen: Option<usize>,
     /// Find in page: what is searched, the current match (from 0) and how many there are.
     pub find: Option<(&'a str, usize, usize)>,
-    /// Page rectangles (x, y, w, h) of the find matches.
-    pub marks: &'a [[i32; 4]],
+    /// Page rectangles (x, y, w, h) of the find matches, with each one's match number.
+    pub marks: &'a [[i32; 5]],
     /// The page zoom in percent, shown in the bar when not 100.
     pub zoom: u32,
 }
@@ -555,14 +683,14 @@ pub fn frame_with(page: &Page, fonts: &mut Fonts, pixels: &mut [u32], width: i32
     let mut t = Target { pixels, width, height, scroll, top: BAR, premul: false, clip: None };
     paint(page, fonts, &mut t, focus);
     // Find matches: the current one strong, the others light, over the text.
-    for (i, m) in c.marks.iter().enumerate() {
-        let current = c.find.is_some_and(|(_, at, _)| at == i);
+    for m in c.marks.iter() {
+        let current = c.find.is_some_and(|(_, at, _)| at as i32 == m[4]);
         let color = if current { 0x80FF_8C00 } else { 0x70FF_EB3B };
         t.fill(m[0], m[1], m[2], m[3], color, 2);
     }
     let mut bar = Target { pixels: t.pixels, width, height: height.min(BAR).max(0), scroll: 0, top: 0, premul: false, clip: None };
     bar.fill(0, 0, width, BAR, 0xFF0D_1420, 0);
-    let font = FontKey { size: 13, bold: false, italic: false, mono: false };
+    let font = FontKey { size: 13, bold: false, italic: false, mono: false, face: 0 };
     let small = FontKey { size: 12, ..font };
     let chips = tab_chips(width, c.tabs.len());
     for (i, (x, w)) in chips.iter().enumerate() {
@@ -619,27 +747,55 @@ pub fn frame_with(page: &Page, fonts: &mut Fonts, pixels: &mut [u32], width: i32
 }
 
 /// Find in page: the page rectangles (x, y, w, h) of each place `query` shows in the
-/// page's text, in reading order, ignoring case. Matches within one run of text.
-pub fn find_marks(page: &Page, fonts: &mut Fonts, query: &str) -> Vec<[i32; 4]> {
+/// page's text, in reading order, ignoring case, with the number of the match each
+/// belongs to (a match across a line wrap has a rectangle on each line). Runs of
+/// white space count as one space.
+pub fn find_marks(page: &Page, fonts: &mut Fonts, query: &str) -> Vec<[i32; 5]> {
     let mut out = Vec::new();
-    if query.is_empty() { return out; }
-    let q: Vec<char> = query.chars().flat_map(char::to_lowercase).collect();
-    for item in page.items.iter() {
+    let q: Vec<char> = query.split_whitespace().collect::<Vec<_>>().join(" ").chars().flat_map(char::to_lowercase).collect();
+    if q.is_empty() { return out; }
+    // The page's text as one stream, lowercased, each char with its item and byte. Runs
+    // on one line join as they sit (a gap reads as a space); a new line reads as a space,
+    // so a phrase is found across a wrap.
+    let mut chars: Vec<(char, usize, usize)> = Vec::new();
+    let mut last: Option<(i32, i32)> = None;
+    for (n, item) in page.items.iter().enumerate() {
         let Item::Text { x, baseline, font, text, .. } = item else { continue };
-        let lower: Vec<(usize, char)> = text.char_indices().flat_map(|(i, c)| c.to_lowercase().map(move |l| (i, l))).collect();
-        if lower.len() < q.len() { continue; }
-        let mut i = 0;
-        while i + q.len() <= lower.len() {
-            if lower[i..i + q.len()].iter().map(|(_, c)| *c).eq(q.iter().copied()) {
-                let start = lower[i].0;
-                let end = lower.get(i + q.len()).map_or(text.len(), |(b, _)| *b);
-                let x0 = x + fonts.text_width(&text[..start], *font);
-                let w = fonts.text_width(&text[start..end], *font).max(2);
-                out.push([x0 - 1, baseline - font.size + font.size / 8, w + 2, font.size * 5 / 4]);
-                if out.len() >= 1000 { return out; }
-                i += q.len();
-            } else { i += 1; }
+        if let Some((b, end)) = last {
+            let gap = *baseline != b || *x > end + font.size / 8;
+            if gap && chars.last().map_or(false, |c| c.0 != ' ') { chars.push((' ', usize::MAX, 0)); }
         }
+        for (i, c) in text.char_indices() {
+            for l in c.to_lowercase() {
+                let l = if l.is_whitespace() { ' ' } else { l };
+                if l == ' ' && chars.last().map_or(true, |c| c.0 == ' ') { continue; }
+                chars.push((l, n, i));
+            }
+        }
+        last = Some((*baseline, x + fonts.text_width(text, *font)));
+    }
+    let mut found = 0;
+    let mut i = 0;
+    while i + q.len() <= chars.len() {
+        if !chars[i..i + q.len()].iter().map(|c| c.0).eq(q.iter().copied()) { i += 1; continue; }
+        // One mark for each item the match touches.
+        let mut k = i;
+        while k < i + q.len() {
+            let n = chars[k].1;
+            if n == usize::MAX { k += 1; continue; }
+            let mut e = k;
+            while e + 1 < i + q.len() && chars[e + 1].1 == n { e += 1; }
+            let Item::Text { x, baseline, font, text, .. } = &page.items[n] else { unreachable!() };
+            let start = chars[k].2;
+            let end = chars.get(e + 1).filter(|c| c.1 == n).map_or_else(|| text[chars[e].2..].chars().next().map_or(text.len(), |c| chars[e].2 + c.len_utf8()), |c| c.2);
+            let x0 = x + fonts.text_width(&text[..start], *font);
+            let w = fonts.text_width(&text[start..end], *font).max(2);
+            out.push([x0 - 1, baseline - font.size + font.size / 8, w + 2, font.size * 5 / 4, found]);
+            k = e + 1;
+        }
+        found += 1;
+        if found >= 1000 { return out; }
+        i += q.len();
     }
     out
 }
