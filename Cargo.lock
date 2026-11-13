@@ -1849,6 +1849,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-gpu-intel"
+version = "0.1.0"
+dependencies = [
+ "sex-kms",
+]
+
+[[package]]
 name = "sex-graphics"
 version = "0.1.0"
 dependencies = [
@@ -1931,6 +1938,10 @@ dependencies = [
  "x86",
  "x86_64",
 ]
+
+[[package]]
+name = "sex-kms"
+version = "0.1.0"
 
 [[package]]
 name = "sex-libc"
