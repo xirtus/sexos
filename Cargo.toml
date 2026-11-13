@@ -81,6 +81,7 @@ members = [
     "apps/stdnet",
     "apps/ssh",
     "apps/pdf",
+    "apps/lua",
 ]
 [workspace.package]
 license = "GPL-3.0-only"
