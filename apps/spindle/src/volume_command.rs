@@ -126,7 +126,8 @@ impl Volume {
                     percent(&mut line, &mut at, k as u64);
                     put(&mut line, &mut at, match mixer::output_kind(value, k) {
                         mixer::SPEAKER => b": speaker" as &[u8], mixer::HEADPHONES => b": headphones",
-                        mixer::LINE_OUT => b": line out", mixer::VIRTUAL => b": virtual card", _ => b": other jack" });
+                        mixer::LINE_OUT => b": line out", mixer::VIRTUAL => b": virtual card",
+                        mixer::HDMI => b": HDMI monitor", mixer::DISPLAYPORT => b": DisplayPort monitor", _ => b": other jack" });
                     put(&mut line, &mut at, if on & 1 << k != 0 { b", playing" } else { b", off" });
                     sb.push(&line[..at]);
                 }

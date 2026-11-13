@@ -253,7 +253,12 @@ impl Card {
                 let mut kinds = [0u8; mixer::MAX_OUTPUTS];
                 let n = h.outputs.min(mixer::MAX_OUTPUTS);
                 for (k, kind) in kinds.iter_mut().enumerate().take(n) {
-                    *kind = match h.output(k).map(|o| o.0) { Some(d @ 0..=2) => d as u8, _ => mixer::OTHER };
+                    *kind = match (h.display(k), h.output(k).map(|o| o.0)) {
+                        (Some(crate::hdmi::Display::Hdmi), _) => mixer::HDMI,
+                        (Some(crate::hdmi::Display::DisplayPort), _) => mixer::DISPLAYPORT,
+                        (None, Some(d @ 0..=2)) => d as u8,
+                        _ => mixer::OTHER,
+                    };
                 }
                 mixer::outputs(h.on as u8, &kinds[..n]) | if h.auto { mixer::OUTPUTS_AUTO } else { 0 }
             }
