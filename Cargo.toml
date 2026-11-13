@@ -54,6 +54,7 @@ members = [
     "crates/sex-font",
     "crates/sexfs",
     "crates/sex-volumes",
+    "crates/sex-crypt",
     "crates/sex-hwdb",
     "crates/sex-net",
     "crates/sex-net-config",
