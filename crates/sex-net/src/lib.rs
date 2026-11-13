@@ -13,6 +13,7 @@ pub use smoltcp::iface::SocketStorage as Storage;
 pub use smoltcp::socket::udp::PacketMetadata as DnsMetadata;
 pub mod dns_wire;
 pub mod v6config;
+pub mod dns_secure;
 pub const MAX_FRAME:usize=1514;
 pub const FLOW_BYTES:usize=4096;
 pub const TURN_BYTES:usize=256;
