@@ -53,12 +53,16 @@ impl Staging {
     fn wipe(&mut self) { for b in self.bytes.iter_mut() { unsafe { core::ptr::write_volatile(b, 0) }; } }
 }
 
-/// The stored form: `argon2id$m=4096,t=3,p=1$<salt hex>$<hash hex>`.
+/// The stored form: `argon2id$m=2048,t=4,p=1$<salt hex>$<hash hex>`.
 pub const STORED_MAX: usize = 128;
 #[cfg(feature = "password")]
-const M_KIB: u32 = 4096;
+const M_KIB: u32 = 2048;
 #[cfg(feature = "password")]
-const T: u32 = 3;
+const T: u32 = 4;
+/// Argon2's working memory. Servers have a small heap, so the blocks live here, in
+/// the binary's zeroed data, and one hash runs at a time.
+#[cfg(feature = "password")]
+static mut BLOCKS: [argon2::Block; M_KIB as usize] = [argon2::Block::new(); M_KIB as usize];
 
 /// What `serve` needs from Files: the stored hash, a place to write a new one, and
 /// randomness for salts.
@@ -74,7 +78,9 @@ fn hash(password: &[u8], salt: &[u8; 16]) -> Option<[u8; 32]> {
     use argon2::{Algorithm, Argon2, Params, Version};
     let params = Params::new(M_KIB, T, 1, Some(32)).ok()?;
     let mut out = [0u8; 32];
-    Argon2::new(Algorithm::Argon2id, Version::V0x13, params).hash_password_into(password, salt, &mut out).ok()?;
+    // Files serves one request at a time, so nothing else holds the blocks.
+    let blocks = unsafe { &mut *core::ptr::addr_of_mut!(BLOCKS) };
+    Argon2::new(Algorithm::Argon2id, Version::V0x13, params).hash_password_into_with_memory(password, salt, &mut out, &mut blocks[..]).ok()?;
     Some(out)
 }
 #[cfg(not(feature = "password"))]
@@ -87,7 +93,7 @@ fn unhex<const N: usize>(text: &[u8]) -> Option<[u8; N]> {
     for i in 0..N { out[i] = ((text[2 * i] as char).to_digit(16)? * 16 + (text[2 * i + 1] as char).to_digit(16)?) as u8; }
     Some(out)
 }
-const PREFIX: &[u8] = b"argon2id$m=4096,t=3,p=1$";
+const PREFIX: &[u8] = b"argon2id$m=2048,t=4,p=1$";
 
 fn encode(salt: &[u8; 16], digest: &[u8; 32], out: &mut [u8; STORED_MAX]) -> usize {
     out[..PREFIX.len()].copy_from_slice(PREFIX);
@@ -178,7 +184,7 @@ mod tests {
         assert_eq!(send(&mut stage, &mut store, false, b"hunter2", SET), DENIED, "only Settings sets it");
         assert_eq!(send(&mut stage, &mut store, true, b"correct horse battery staple!", SET), OK);
         let text = store.text.clone().unwrap();
-        assert!(text.starts_with(b"argon2id$m=4096,t=3,p=1$"));
+        assert!(text.starts_with(b"argon2id$m=2048,t=4,p=1$"));
         assert!(!text.windows(7).any(|w| w == b"correct"), "only the hash is stored");
         assert!(stage.bytes.iter().all(|b| *b == 0), "staging wiped");
         assert_eq!(send(&mut stage, &mut store, false, b"correct horse battery staple!", CHECK), OK);
