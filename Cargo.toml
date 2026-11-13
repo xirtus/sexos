@@ -85,6 +85,7 @@ members = [
     "apps/lua",
     "apps/rg",
     "apps/fd",
+    "apps/python",
     "crates/sex-sdl",
     "apps/sdltest",
 ]

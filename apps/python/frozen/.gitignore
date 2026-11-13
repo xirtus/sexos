@@ -1,0 +1,2 @@
+# The marshalled modules are build inputs (made by scripts/python_freeze.py).
+!*.bin

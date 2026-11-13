@@ -14,7 +14,7 @@ macro_rules! two { ($($n:ident $f:ident $nl:ident),*) => { $(
     #[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)] pub extern "C" fn $nl(x: f64, y: f64) -> f64 { libm::$n(x, y) }
 )* } }
 
-one!(acos acosf acosl, asin asinf asinl, atan atanf atanl, cos cosf cosl, cosh coshf coshl, sin sinf sinl, sinh sinhf sinhl, tan tanf tanl, tanh tanhf tanhl, exp expf expl, exp2 exp2f exp2l, expm1 expm1f expm1l, log logf logl, log10 log10f log10l, log2 log2f log2l, log1p log1pf log1pl, sqrt sqrtf sqrtl, cbrt cbrtf cbrtl, ceil ceilf ceill, floor floorf floorl, round roundf roundl, trunc truncf truncl, rint rintf rintl, fabs fabsf fabsl, erf erff erfl, erfc erfcf erfcl, tgamma tgammaf tgammal, lgamma lgammaf lgammal);
+one!(acos acosf acosl, acosh acoshf acoshl, asinh asinhf asinhl, atanh atanhf atanhl, asin asinf asinl, atan atanf atanl, cos cosf cosl, cosh coshf coshl, sin sinf sinl, sinh sinhf sinhl, tan tanf tanl, tanh tanhf tanhl, exp expf expl, exp2 exp2f exp2l, expm1 expm1f expm1l, log logf logl, log10 log10f log10l, log2 log2f log2l, log1p log1pf log1pl, sqrt sqrtf sqrtl, cbrt cbrtf cbrtl, ceil ceilf ceill, floor floorf floorl, round roundf roundl, trunc truncf truncl, rint rintf rintl, fabs fabsf fabsl, erf erff erfl, erfc erfcf erfcl, tgamma tgammaf tgammal, lgamma lgammaf lgammal);
 two!(atan2 atan2f atan2l, pow powf powl, fmod fmodf fmodl, hypot hypotf hypotl, copysign copysignf copysignl, fmin fminf fminl, fmax fmaxf fmaxl, fdim fdimf fdiml, remainder remainderf remainderl, nextafter nextafterf nextafterl);
 
 #[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)] pub extern "C" fn ldexp(x: f64, e: c_int) -> f64 { libm::ldexp(x, e) }
