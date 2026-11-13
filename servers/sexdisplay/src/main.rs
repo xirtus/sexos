@@ -2826,7 +2826,8 @@ fn switcher_title(surface_id: u64) -> &'static [u8] {
         .or_else(|| surface_title(surface_id))
         .unwrap_or(b"Window")
 }
-/// Alt+Tab: a glass panel over the desktop with one card per window, each a
+/// Alt+Tab (and the Super+W overview grid over a dimmed desktop): a glass
+/// panel over the desktop with one card per window, each a
 /// live thumbnail scaled from the window's own composed pixels (so windows
 /// hidden behind others or by monocle still show) and its title, the
 /// selected card ringed in the focus colour. Drawn after every body pass while
@@ -2836,24 +2837,27 @@ fn draw_window_switcher(fb: *mut u32, w: usize, h: usize, total_pixels: usize, s
     let state = unsafe { WINDOW_SWITCHER };
     if !state.visible() { return; }
     let scale = scene.metrics.scale();
-    let Some(layout) = Layout::new(w, h, state.count as usize, scale) else { return; };
+    let layout = if state.grid { Layout::grid(w, h, scene.metrics.bar() as usize, state.count as usize, scale) }
+        else { Layout::new(w, h, state.count as usize, scale) };
+    let Some(layout) = layout else { return; };
     const PANEL: u32 = 0x00121726;
     const CARD: u32 = 0x001E2536;
     const CARD_SELECTED: u32 = 0x002C3650;
     let ring = sex_pdx::desktop_style::FOCUS;
     let at = |x: usize, y: usize| -> Option<usize> { let i = y * w + x; (x < w && y < h && i < total_pixels).then_some(i) };
     let (px, py, pw, ph) = layout.panel;
-    let radius = 10 * scale as usize;
+    // The overview dims the whole desktop below the panel; the switcher is a rounded glass panel.
+    let (radius, shade) = if state.grid { (0, 200) } else { (10 * scale as usize, 225) };
     for y in py..py + ph {
         for x in px..px + pw {
             // Rounded corners: skip pixels outside the corner circles.
             let dx = if x < px + radius { px + radius - x } else if x >= px + pw - radius { x + radius + 1 - (px + pw) } else { 0 };
             let dy = if y < py + radius { py + radius - y } else if y >= py + ph - radius { y + radius + 1 - (py + ph) } else { 0 };
-            if dx * dx + dy * dy > radius * radius { continue; }
+            if radius != 0 && dx * dx + dy * dy > radius * radius { continue; }
             let Some(i) = at(x, y) else { continue };
             unsafe {
                 let under = core::ptr::read_volatile(fb.add(i));
-                core::ptr::write_volatile(fb.add(i), alpha_blend_xrgb_over_xrgb(PANEL, under, 225));
+                core::ptr::write_volatile(fb.add(i), alpha_blend_xrgb_over_xrgb(PANEL, under, shade));
             }
         }
     }
@@ -2905,7 +2909,7 @@ fn draw_window_switcher(fb: *mut u32, w: usize, h: usize, total_pixels: usize, s
         static mut SWITCHER_DRAW_BUDGET: u32 = 16;
         if SWITCHER_DRAW_BUDGET > 0 {
             SWITCHER_DRAW_BUDGET -= 1;
-            sex_pdx::serial_record!("[display.switcher.draw] count={} selected={} panel={}x{}+{}+{}", state.count, state.selected, pw, ph, px, py);
+            sex_pdx::serial_record!("[display.switcher.draw] count={} selected={} grid={} cols={} panel={}x{}+{}+{}", state.count, state.selected, state.grid as u8, layout.cols, pw, ph, px, py);
         }
     }
 }
@@ -4168,7 +4172,7 @@ pub extern "C" fn _start() -> ! {
                         if let Some(state) = sex_pdx::window_switcher::State::decode(msg.arg0, msg.arg1, msg.arg2) {
                             unsafe { WINDOW_SWITCHER = state; }
                             needs_full_redraw = true;
-                            sex_pdx::serial_record!("[display.switcher] count={} selected={}", state.count, state.selected);
+                            sex_pdx::serial_record!("[display.switcher] count={} selected={} grid={}", state.count, state.selected, state.grid as u8);
                         }
                     }
                 }

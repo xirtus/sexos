@@ -82,3 +82,33 @@ fn layout_fits_cards_on_small_and_hidpi_screens() {
     assert_eq!(Layout::new(1280, 800, 0, 1), None);
     assert_eq!(Layout::new(100, 60, 8, 1), None);
 }
+
+#[test]
+fn overview_grid_wire_layout_and_navigation() {
+    let mut s = Session::new();
+    assert!(!s.open_grid(&[], 1));
+    assert!(s.open_grid(&[4, 5, 6, 7, 8], 4));
+    let state = s.state();
+    assert!(state.grid && state.selected == 0);
+    let [a, b, c] = state.wire();
+    assert_eq!(c, 5 | 1 << 16);
+    assert_eq!(State::decode(a, b, c), Some(state));
+    assert_eq!(State::decode(0, 0, 1 << 16), None);
+    assert_eq!(s.move_by(3), Some(7));
+    assert_eq!(s.move_by(3), Some(5));
+    assert_eq!(s.move_by(-2), Some(8));
+    assert_eq!(s.end(false), Some(4));
+    for (w, h, bar, scale) in [(1280, 800, 28, 1), (1024, 768, 28, 1), (2560, 1600, 56, 2)] {
+        for n in 1..=MAX_ENTRIES {
+            let l = Layout::grid(w, h, bar, n, scale).unwrap();
+            assert!(l.cols >= 1 && l.cols <= n);
+            for i in 0..n {
+                let (x, y, cw, ch) = l.card(i);
+                assert!(x + cw <= w && y >= bar && y + ch <= h, "{w}x{h} n={n} i={i}");
+                assert_eq!(l.card_at(x + cw / 2, y + ch / 2), Some(i));
+            }
+        }
+    }
+    // Four windows on a wide screen: a 2x2 or 4x1 grid, never one tall column.
+    assert!(Layout::grid(1280, 800, 28, 4, 1).unwrap().cols >= 2);
+}
