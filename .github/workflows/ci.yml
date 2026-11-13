@@ -37,6 +37,8 @@ jobs:
       run: bash scripts/volumes_host_gate.sh
     - name: IOMMU tables, page tables and lending window on the host
       run: bash scripts/iommu_host_gate.sh
+    - name: Display model (KMS, EDID) and Intel Gen12 display engine on the host
+      run: bash scripts/kms_host_gate.sh
     - name: sexdrive DMA lifetime and zero-copy reads on the host
       run: bash scripts/sexdrive_dma_host_gate.sh
     - name: Intel RAID (IMSM metadata, VMD bus) on the host

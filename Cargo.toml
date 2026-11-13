@@ -46,6 +46,8 @@ members = [
     "purple-scanout",
     "crates/sex-pdx",
     "crates/sex-iommu",
+    "crates/sex-kms",
+    "crates/sex-gpu-intel",
     "crates/sex-vmd",
     "crates/sex-imsm",
     "crates/sex-font",
