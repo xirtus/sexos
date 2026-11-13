@@ -5,6 +5,7 @@ button click. Each state must match, pixel for pixel, what the host renders (sex
 import argparse,http.server,os,re,shutil,subprocess,threading,time
 from pathlib import Path
 from PIL import Image
+from browser_gate_viewport import full_viewport
 ROOT=Path(__file__).resolve().parents[1]
 SITE=ROOT/'scripts/web_site'
 W,H=410,330
@@ -65,7 +66,7 @@ def main():
   m=g['wait'](r'\[web.ready\] target=(\d+) task=(\d+)',s,120);target,task=m[1],m[2]
   launch=g['wait'](rf'\[shell.program.launch\] target={target} task={task} surface=(\d+)',s,60);surface=int(launch[1])
   time.sleep(3)
-  tile=list(map(int,re.findall(rf'\[shell.tile.apply\] sid={surface} x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)',t())[-1]))
+  tile=full_viewport(g,ROOT,surface,W,H)
   done=compare('web-webgl-loaded',refs['loaded'],tile)
   # Right focuses the button; Enter clicks it and six more frames turn the square.
   g['focus'](surface);time.sleep(.3)
