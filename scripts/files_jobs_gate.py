@@ -5,7 +5,8 @@ A 32 MiB file is copied in the Files app in the background; Esc half-way must le
 file (not even a hidden part) in the destination. Copied again to the end, its SHA-256
 read back through Files (Ctrl+I) must equal the source's. Moved to the trash, it shows
 up there and Ctrl+R restores it with the same hash; Shift+Del twice deletes it for good,
-and Ctrl+E twice empties the trash."""
+and Ctrl+E twice empties the trash. Ctrl+F finds a word inside a text file; searching
+again comes from the index (no file read again) in under a second."""
 import argparse,hashlib,http.server,os,random,re,shutil,threading,time
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
