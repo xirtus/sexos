@@ -55,8 +55,12 @@ jobs:
       run: bash scripts/desktop_capture_host_gate.sh
     - name: HTML containing-block and replaced sizing
       run: cargo test --locked -p sex-html
+    - name: Signed package format and store catalog
+      run: cargo test --locked -p sex-pkg
     - name: Disk layouts (GPT, FAT, install beside other systems)
       run: cargo test --locked -p sex-disk --lib
+    - name: SexOS filesystem check and repair (injected faults)
+      run: cargo test --locked --release -p sexfs --features repair --lib
     - name: Network stack (IPv6 resolvers, accept backlog, UDP queues) on the host
       run: cargo test --locked -p sex-net --lib
     - name: HTTP/2 client (HPACK, 50 streams) against a real h2 server, plain and over TLS
@@ -154,6 +158,10 @@ jobs:
         python3 scripts/program_std_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/programs-std"
     - name: Lua 5.4 interpreter
       run: python3 scripts/lua_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/lua"
+    - name: Signed packages, install service and first-run grant question
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/blank-packages.img"
+        python3 scripts/package_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-packages.img" --out "$RUNNER_TEMP/sexos-runtime/packages"
     - name: SDL2 program (video, sound, keys)
       run: |
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends python3-pil
@@ -227,6 +235,14 @@ jobs:
       run: python3 scripts/files_jobs_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-jobs"
     - name: Files safe eject and pulled-out sticks
       run: python3 scripts/files_eject_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-eject"
+    - name: Files thumbnails for a folder of 50 pictures, cached
+      run: python3 scripts/files_thumbs_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-thumbs"
+    - name: ext4 stick written from SexOS, e2fsck clean
+      run: python3 scripts/files_ext4_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-ext4"
+    - name: Power cuts while Files writes (QEMU killed, disk checked each time)
+      run: python3 scripts/powercut_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-powercut"
+    - name: Files repairs a damaged disk at start
+      run: python3 scripts/sexfs_repair_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-fs-repair"
     - name: USB network adapter
       run: python3 scripts/usb_net_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-usb-net"
     - name: Intel RAID 0 on two NVMe drives, read only
@@ -235,6 +251,8 @@ jobs:
       run: python3 scripts/power_acpi_gate.py --iso sexos-v1.0.0.iso --out "$RUNNER_TEMP/sexos-power"
     - name: Discrete GPU powered off through ACPI
       run: python3 scripts/dgpu_power_gate.py --iso sexos-v1.0.0.iso --out "$RUNNER_TEMP/sexos-dgpu"
+    - name: Display drives a virtio-gpu (EDID, takeover, tear-free flips)
+      run: python3 scripts/virtio_gpu_gate.py --iso sexos-v1.0.0.iso --out "$RUNNER_TEMP/sexos-virtio-gpu"
     - name: Reboot persistence and rendering
       run: GATE_DIR="$RUNNER_TEMP/sexos-persistence" SKIP_BUILD=1 bash scripts/disk_persistence_gate.sh
     - name: Syscall and IPC fuzzing
@@ -251,6 +269,7 @@ jobs:
           ${{ runner.temp }}/sexos-files-jobs/*.log
           ${{ runner.temp }}/sexos-files-eject/*.ppm
           ${{ runner.temp }}/sexos-files-eject/*.log
+          ${{ runner.temp }}/sexos-fs-repair/*.log
           ${{ runner.temp }}/sexos-raid
           ${{ runner.temp }}/sexos-power
           ${{ runner.temp }}/sexos-dgpu
