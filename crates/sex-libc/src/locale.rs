@@ -36,6 +36,57 @@ pub extern "C" fn isupper_l(c: c_int, _l: locale_t) -> c_int { ascii(c, u8::is_a
 #[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub extern "C" fn iswlower_l(c: u32, _l: locale_t) -> c_int { char::from_u32(c).is_some_and(|c| c.is_lowercase()) as c_int }
 
+// The plain `<ctype.h>` tests, in the C locale (musl's header turns some into macros;
+// these are the functions behind them, for code that takes their address).
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub extern "C" fn isalnum(c: c_int) -> c_int { ascii(c, u8::is_ascii_alphanumeric) }
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub extern "C" fn isalpha(c: c_int) -> c_int { ascii(c, u8::is_ascii_alphabetic) }
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub extern "C" fn iscntrl(c: c_int) -> c_int { ascii(c, u8::is_ascii_control) }
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub extern "C" fn isdigit(c: c_int) -> c_int { ascii(c, u8::is_ascii_digit) }
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub extern "C" fn isgraph(c: c_int) -> c_int { ascii(c, u8::is_ascii_graphic) }
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub extern "C" fn islower(c: c_int) -> c_int { ascii(c, u8::is_ascii_lowercase) }
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub extern "C" fn isprint(c: c_int) -> c_int { ((0x20..0x7F).contains(&c)) as c_int }
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub extern "C" fn ispunct(c: c_int) -> c_int { ascii(c, u8::is_ascii_punctuation) }
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub extern "C" fn isspace(c: c_int) -> c_int { (c == 0x0B || ascii(c, u8::is_ascii_whitespace) != 0) as c_int }
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub extern "C" fn isupper(c: c_int) -> c_int { ascii(c, u8::is_ascii_uppercase) }
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub extern "C" fn isxdigit(c: c_int) -> c_int { ascii(c, u8::is_ascii_hexdigit) }
+
+/// `setlocale`: the one locale answers to "C", "POSIX", "C.UTF-8" and "" (the
+/// default); asking for any other is refused with NULL, as C allows.
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub unsafe extern "C" fn setlocale(_category: c_int, name: *const c_char) -> *mut c_char {
+    static C: &[u8] = b"C\0";
+    if !name.is_null() {
+        let n = unsafe { core::slice::from_raw_parts(name.cast::<u8>(), crate::string::strnlen(name, 64)) };
+        if !matches!(n, b"" | b"C" | b"POSIX" | b"C.UTF-8" | b"C.utf8") { return core::ptr::null_mut(); }
+    }
+    C.as_ptr() as *mut c_char
+}
+
+/// musl's `struct lconv`: ten strings, then fourteen `char` fields.
+#[repr(C)]
+pub struct lconv { strings: [*const c_char; 10], chars: [c_char; 14] }
+struct Lconv(lconv);
+unsafe impl Sync for Lconv {}
+static C_LCONV: Lconv = {
+    const DOT: *const c_char = b".\0".as_ptr().cast();
+    const EMPTY: *const c_char = b"\0".as_ptr().cast();
+    Lconv(lconv { strings: [DOT, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY], chars: [127; 14] })
+};
+/// `localeconv`: the C locale's numbers ('.' for the decimal point).
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub extern "C" fn localeconv() -> *mut lconv { core::ptr::addr_of!(C_LCONV.0) as *mut lconv }
+
 #[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn strtod_l(s: *const c_char, end: *mut *mut c_char, _l: locale_t) -> f64 { unsafe { crate::stdlib::strtod(s, end) } }
 #[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]

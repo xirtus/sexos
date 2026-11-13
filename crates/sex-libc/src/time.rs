@@ -131,77 +131,107 @@ pub unsafe extern "C" fn mktime(t: *mut tm) -> i64 {
     secs
 }
 
-/// `strftime` for the numeric fields: `%Y %m %d %H %M %S %y %j %F %T %%`.
-#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
-pub unsafe extern "C" fn strftime(out: *mut c_char, cap: usize, fmt: *const c_char, t: *const tm) -> usize {
-    let fmt = unsafe { core::slice::from_raw_parts(fmt.cast::<u8>(), crate::string::strnlen(fmt, usize::MAX)) };
-    let t = unsafe { &*t };
-    let mut buf = [0u8; 256];
-    let mut n = 0;
-    let put = |v: i64, width: usize, buf: &mut [u8; 256], n: &mut usize| {
-        let mut d = [b'0'; 20];
-        let mut k = 0;
-        let mut x = v.unsigned_abs();
-        while x > 0 || k < width {
-            d[19 - k] = b'0' + (x % 10) as u8;
-            x /= 10;
-            k += 1;
-        }
-        for &c in &d[20 - k..] {
-            if *n < buf.len() {
-                buf[*n] = c;
-                *n += 1;
-            }
-        }
-    };
+const DAYS: [&[u8]; 7] = [b"Sunday", b"Monday", b"Tuesday", b"Wednesday", b"Thursday", b"Friday", b"Saturday"];
+const MONTHS: [&[u8]; 12] = [b"January", b"February", b"March", b"April", b"May", b"June", b"July", b"August", b"September", b"October", b"November", b"December"];
+
+/// strftime's output so far, cut off at its capacity.
+struct Out { buf: [u8; 256], n: usize }
+impl Out {
+    fn bytes(&mut self, b: &[u8]) { for &c in b { if self.n < self.buf.len() { self.buf[self.n] = c; self.n += 1; } } }
+    /// A number, padded with `pad` to `width` places.
+    fn num(&mut self, v: i64, width: usize, pad: u8) {
+        if v < 0 { self.bytes(b"-"); }
+        let mut d = [pad; 20];
+        let (mut x, mut k) = (v.unsigned_abs(), 0);
+        while x > 0 || k == 0 { d[19 - k] = b'0' + (x % 10) as u8; x /= 10; k += 1; }
+        let k = k.max(width).min(20);
+        self.bytes(&d[20 - k..]);
+    }
+}
+
+/// Week of the year with weeks starting on `first` (0 Sunday, 1 Monday), as %U/%W.
+fn week(t: &tm, first: i64) -> i64 { (t.tm_yday as i64 + 7 - (t.tm_wday as i64 - first).rem_euclid(7)) / 7 }
+
+fn format(o: &mut Out, fmt: &[u8], t: &tm) {
+    let year = t.tm_year as i64 + 1900;
+    let wday = (t.tm_wday as usize).min(6);
+    let mon = (t.tm_mon as usize).min(11);
     let mut i = 0;
     while i < fmt.len() {
-        if fmt[i] != b'%' || i + 1 >= fmt.len() {
-            if n < buf.len() {
-                buf[n] = fmt[i];
-                n += 1;
-            }
-            i += 1;
-            continue;
-        }
-        let year = t.tm_year as i64 + 1900;
-        match fmt[i + 1] {
-            b'Y' => put(year, 4, &mut buf, &mut n),
-            b'y' => put(year % 100, 2, &mut buf, &mut n),
-            b'm' => put(t.tm_mon as i64 + 1, 2, &mut buf, &mut n),
-            b'd' => put(t.tm_mday as i64, 2, &mut buf, &mut n),
-            b'H' => put(t.tm_hour as i64, 2, &mut buf, &mut n),
-            b'M' => put(t.tm_min as i64, 2, &mut buf, &mut n),
-            b'S' => put(t.tm_sec as i64, 2, &mut buf, &mut n),
-            b'j' => put(t.tm_yday as i64 + 1, 3, &mut buf, &mut n),
-            b'F' => {
-                put(year, 4, &mut buf, &mut n);
-                buf[n] = b'-'; n += 1;
-                put(t.tm_mon as i64 + 1, 2, &mut buf, &mut n);
-                buf[n] = b'-'; n += 1;
-                put(t.tm_mday as i64, 2, &mut buf, &mut n);
-            }
-            b'T' => {
-                put(t.tm_hour as i64, 2, &mut buf, &mut n);
-                buf[n] = b':'; n += 1;
-                put(t.tm_min as i64, 2, &mut buf, &mut n);
-                buf[n] = b':'; n += 1;
-                put(t.tm_sec as i64, 2, &mut buf, &mut n);
-            }
-            b'%' => { buf[n] = b'%'; n += 1; }
+        if fmt[i] != b'%' || i + 1 >= fmt.len() { o.bytes(&fmt[i..i + 1]); i += 1; continue; }
+        // C99's E and O modifiers name the same fields in the C locale.
+        let mut c = fmt[i + 1];
+        if (c == b'E' || c == b'O') && i + 2 < fmt.len() { i += 1; c = fmt[i + 1]; }
+        match c {
+            b'Y' | b'G' => o.num(year, 4, b'0'),
+            b'y' | b'g' => o.num(year.rem_euclid(100), 2, b'0'),
+            b'C' => o.num(year.div_euclid(100), 2, b'0'),
+            b'm' => o.num(t.tm_mon as i64 + 1, 2, b'0'),
+            b'd' => o.num(t.tm_mday as i64, 2, b'0'),
+            b'e' => o.num(t.tm_mday as i64, 2, b' '),
+            b'H' => o.num(t.tm_hour as i64, 2, b'0'),
+            b'I' => o.num((t.tm_hour as i64 + 11) % 12 + 1, 2, b'0'),
+            b'M' => o.num(t.tm_min as i64, 2, b'0'),
+            b'S' => o.num(t.tm_sec as i64, 2, b'0'),
+            b'j' => o.num(t.tm_yday as i64 + 1, 3, b'0'),
+            b'u' => o.num(if t.tm_wday == 0 { 7 } else { t.tm_wday as i64 }, 1, b'0'),
+            b'w' => o.num(t.tm_wday as i64, 1, b'0'),
+            b'U' => o.num(week(t, 0), 2, b'0'),
+            b'W' | b'V' => o.num(week(t, 1), 2, b'0'),
+            b'a' => o.bytes(&DAYS[wday][..3]),
+            b'A' => o.bytes(DAYS[wday]),
+            b'b' | b'h' => o.bytes(&MONTHS[mon][..3]),
+            b'B' => o.bytes(MONTHS[mon]),
+            b'p' => o.bytes(if t.tm_hour < 12 { b"AM" } else { b"PM" }),
+            b'c' => format(o, b"%a %b %e %H:%M:%S %Y", t),
+            b'x' | b'D' => format(o, b"%m/%d/%y", t),
+            b'X' | b'T' => format(o, b"%H:%M:%S", t),
+            b'r' => format(o, b"%I:%M:%S %p", t),
+            b'R' => format(o, b"%H:%M", t),
+            b'F' => format(o, b"%Y-%m-%d", t),
+            b'z' => o.bytes(b"+0000"),
+            b'Z' => o.bytes(b"UTC"),
+            b'n' => o.bytes(b"\n"),
+            b't' => o.bytes(b"\t"),
+            b'%' => o.bytes(b"%"),
             _ => {}
         }
         i += 2;
     }
+}
+
+/// `strftime` in the C locale, in UTC: every C99 conversion.
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub unsafe extern "C" fn strftime(out: *mut c_char, cap: usize, fmt: *const c_char, t: *const tm) -> usize {
+    let fmt = unsafe { core::slice::from_raw_parts(fmt.cast::<u8>(), crate::string::strnlen(fmt, usize::MAX)) };
+    let mut o = Out { buf: [0; 256], n: 0 };
+    format(&mut o, fmt, unsafe { &*t });
+    let n = o.n;
     if n + 1 > cap {
         return 0;
     }
     unsafe {
-        core::ptr::copy_nonoverlapping(buf.as_ptr(), out.cast::<u8>(), n);
+        core::ptr::copy_nonoverlapping(o.buf.as_ptr(), out.cast::<u8>(), n);
         *out.add(n) = 0;
     }
     n
 }
+
+/// One `struct tm` that `gmtime` and `localtime` share, as C says.
+static mut SHARED_TM: tm = tm { tm_sec: 0, tm_min: 0, tm_hour: 0, tm_mday: 0, tm_mon: 0, tm_year: 0, tm_wday: 0, tm_yday: 0, tm_isdst: 0, tm_gmtoff: 0, tm_zone: core::ptr::null() };
+
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub unsafe extern "C" fn gmtime(t: *const i64) -> *mut tm {
+    unsafe { gmtime_r(t, core::ptr::addr_of_mut!(SHARED_TM)) }
+}
+
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub unsafe extern "C" fn localtime(t: *const i64) -> *mut tm {
+    unsafe { localtime_r(t, core::ptr::addr_of_mut!(SHARED_TM)) }
+}
+
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub extern "C" fn difftime(end: i64, start: i64) -> f64 { (end - start) as f64 }
 
 #[cfg(test)]
 mod tests {
@@ -218,5 +248,8 @@ mod tests {
         let n = unsafe { strftime(out.as_mut_ptr(), 32, b"%F %T\0".as_ptr().cast(), &civil(86_399)) };
         let s: Vec<u8> = out[..n].iter().map(|&c| c as u8).collect();
         assert_eq!(s, b"1970-01-01 23:59:59");
+        let n = unsafe { strftime(out.as_mut_ptr(), 32, b"%c|%p|%j\0".as_ptr().cast(), &civil(86_399)) };
+        let s: Vec<u8> = out[..n].iter().map(|&c| c as u8).collect();
+        assert_eq!(s, b"Thu Jan  1 23:59:59 1970|PM|001");
     }
 }
