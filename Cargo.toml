@@ -77,6 +77,8 @@ members = [
     "apps/pdf",
     "crates/sex-calc-core",
     "apps/sex-calc",
+    "crates/sex-calendar",
+    "apps/calendar",
 ]
 [workspace.package]
 license = "GPL-3.0-only"

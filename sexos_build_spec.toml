@@ -67,7 +67,8 @@ crates = [
   "apps/stdnet/Cargo.toml",
   "apps/chello/Cargo.toml",
   "apps/pdf/Cargo.toml",
-  "apps/sex-calc/Cargo.toml"
+  "apps/sex-calc/Cargo.toml",
+  "apps/calendar/Cargo.toml"
 ]
 
 [[stage]]
@@ -473,6 +474,14 @@ target = "x86_64-sex-app.json"
 manifest = "apps/sex-calc/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/sex-calc"
 dest_artifact = "iso_root/programs/sex-calc"
+
+[[stage]]
+id = "build_calendar"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/calendar/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/calendar"
+dest_artifact = "iso_root/programs/calendar"
 
 [[stage]]
 id = "copy_limine_cfg"
