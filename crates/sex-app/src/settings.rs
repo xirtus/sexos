@@ -56,3 +56,45 @@ pub fn all() -> Result<[i32; schema::COUNT], Error> {
     Ok(out)
 }
 pub use sex_pdx::config::message;
+
+fn secret_reply(m: &sex_pdx::PdxMessage) -> bool {
+    m.type_id == 1 && m.caller_pd == FILES && sex_pdx::config::schema::secret::decode_reply(m.arg0).is_some()
+}
+
+/// Sends `password` to Files for `verb` (`secret::CHECK` or `secret::SET`) and
+/// returns Files' status for it (`secret::OK`, `WRONG`, `NO_PASSWORD`, ...). Only
+/// Settings may SET. The password never leaves Files once sent.
+pub fn password(verb: u8, password: &[u8]) -> Result<u8, Error> {
+    use sex_pdx::config::schema::secret as s;
+    let mut sent = 0;
+    for (a, b) in s::requests(password, verb) {
+        loop {
+            match sex_pdx::pdx_call_wait(sex_pdx::SLOT_STORAGE, s::OP, a, b, 0) {
+                (0, _) => break,
+                (sex_pdx::ERR_SERVICE_NOT_READY, _) => sex_pdx::sys_yield(),
+                _ => return Err(UNAVAILABLE),
+            }
+        }
+        sent += 1;
+    }
+    let give_up = sex_pdx::get_ticks().saturating_add(30_000);
+    let mut last = UNAVAILABLE;
+    while sent > 0 {
+        let m = match mailbox::take(secret_reply).or_else(|| sex_pdx::pdx_try_listen_raw(0)) {
+            Some(m) => m,
+            None => {
+                if sex_pdx::get_ticks() > give_up { return Err(UNAVAILABLE); }
+                let _ = sex_pdx::sys_wait_self_ticks(2);
+                continue;
+            }
+        };
+        if secret_reply(&m) { last = s::decode_reply(m.arg0).unwrap_or(UNAVAILABLE); sent -= 1; continue; }
+        if is_answer(&m) || m.caller_pd == super::SHELL { mailbox::put(m); }
+    }
+    Ok(last)
+}
+/// Whether a lock password is set.
+pub fn password_set() -> Result<bool, Error> {
+    use sex_pdx::config::schema::secret as s;
+    password(s::STATE, b"").map(|status| status == s::OK)
+}

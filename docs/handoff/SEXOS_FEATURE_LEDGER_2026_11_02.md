@@ -4049,3 +4049,23 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   zone-aware caption; `settings_persist_gate.py` picks Europe/London in Settings and
   checks it after a restart.
 - **Not yet:** 12-hour clock display (stored only); programs' own local time.
+
+## Lock screen and idle, slices B6/B7 (2026-11-13)
+- **What:** Super+Esc locks (the binding the window manager already reserved; Super+L
+  stays focus-right). While locked the Shell keeps every key, click and move, and
+  Display paints only the lock surface over the whole frame: "Locked", one dot per typed
+  character, and why the last try failed. Enter sends the password to Files, which
+  keeps only an Argon2id hash (m=4 MiB, t=3, random salt) in `/system/password` and
+  answers match or not (`sex_config::secret`, opcode 0x2F3, reply tag 0xC7). With no
+  password set, Enter unlocks. Settings sets the password with F2 (typed twice).
+  Idle: after `session.dim_after_min` the screen dims, after `lock_after_min` it locks
+  (if `lock_on_idle`), after `blank_after_min` it goes black; any input wakes it, and
+  the input that wakes it does nothing else. Idle times default to never, so test runs
+  and unconfigured machines never dim; first-start setup will offer times.
+- **Display:** `OP_SCREEN_STATE` 0x2F2 (`sex_pdx::screen_state`) from the Shell only;
+  dim and off shade the finished frame on its way out, as night light does.
+- **Evidence:** `settings_host_gate.sh` (password set/check/wipe with real Argon2id,
+  state words and shades, Settings password entry); display host gates updated with a
+  lock-surface stub; QEMU gate `scripts/lock_screen_gate.py` in CI (devices job).
+- **Not yet:** inhibiting idle while media plays (needs a Bell hint); a salt from the
+  kernel's held entropy source instead of RDRAND.

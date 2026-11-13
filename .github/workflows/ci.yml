@@ -196,6 +196,10 @@ jobs:
       run: python3 scripts/power_acpi_gate.py --iso sexos-v1.0.0.iso --out "$RUNNER_TEMP/sexos-power"
     - name: Discrete GPU powered off through ACPI
       run: python3 scripts/dgpu_power_gate.py --iso sexos-v1.0.0.iso --out "$RUNNER_TEMP/sexos-dgpu"
+    - name: Lock screen, password and idle dim
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/lock-source.img"
+        python3 scripts/lock_screen_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/lock-source.img" --out "$RUNNER_TEMP/sexos-lock"
     - name: Reboot persistence and rendering
       run: GATE_DIR="$RUNNER_TEMP/sexos-persistence" SKIP_BUILD=1 bash scripts/disk_persistence_gate.sh
     - name: Syscall and IPC fuzzing
@@ -211,6 +215,7 @@ jobs:
           ${{ runner.temp }}/sexos-raid
           ${{ runner.temp }}/sexos-power
           ${{ runner.temp }}/sexos-dgpu
+          ${{ runner.temp }}/sexos-lock
           ${{ runner.temp }}/sexos-persistence
           ${{ runner.temp }}/sexos-fuzz
         if-no-files-found: ignore

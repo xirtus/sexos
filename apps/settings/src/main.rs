@@ -66,7 +66,14 @@ pub extern "C" fn _start() -> ! {
             Event::Key(key) => key,
             _ => continue,
         };
-        let change = match (sex_app::nav(key), key.code) {
+        const F2: u8 = 0x3C;
+        let change = if m.entering() {
+            let c = match key.code { ENTER => 13, ESC => 27, BACKSPACE => 8, _ => sex_app::typed(key).unwrap_or(0) };
+            m.password_key(c)
+        } else if key.code == F2 {
+            m.start_password();
+            Change::None
+        } else { match (sex_app::nav(key), key.code) {
             (Some(Nav::Up), _) => { m.move_row(false); Change::None }
             (Some(Nav::Down), _) => { m.move_row(true); Change::None }
             (Some(Nav::Left), _) => m.step(false, key.shift),
@@ -78,7 +85,13 @@ pub extern "C" fn _start() -> ! {
                 if let Some(c) = sex_app::typed(key) { m.type_char(c); }
                 Change::None
             }
-        };
+        } };
+        if let Change::Password(mut typed, n) = change {
+            let result = settings::password(sex_config::secret::SET, &typed[..n]);
+            for b in typed.iter_mut() { unsafe { core::ptr::write_volatile(b, 0) }; }
+            sex_pdx::serial_record!("[settings.password] status={}", match result { Ok(s) => s, Err(e) => e });
+            m.say(match result { Ok(sex_config::secret::OK) => "Lock password set.", Ok(_) | Err(_) => "The password could not be saved." });
+        }
         if let Change::Set(id, value) = change {
             let result = settings::set(id, value);
             sex_pdx::serial_record!("[settings.set] key={} value={} status={}", id, value, result.err().unwrap_or(0));

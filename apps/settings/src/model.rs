@@ -41,14 +41,23 @@ pub struct Model {
     /// One line about the last change: saved, refused, or why.
     pub status: [u8; 64],
     pub status_len: usize,
+    /// Typing a new lock password (F2), if under way.
+    pub entry: Option<Entry>,
+}
+
+/// A new lock password, typed twice.
+pub struct Entry { pub typed: [u8; 64], pub len: usize, pub first: [u8; 64], pub first_len: usize, pub confirming: bool }
+impl Entry {
+    fn new() -> Self { Entry { typed: [0; 64], len: 0, first: [0; 64], first_len: 0, confirming: false } }
+    fn wipe(&mut self) { self.typed = [0; 64]; self.first = [0; 64]; self.len = 0; self.first_len = 0; }
 }
 
 /// What a key asks for.
-pub enum Change { None, Set(u16, i32) }
+pub enum Change { None, Set(u16, i32), Password([u8; 64], usize) }
 
 impl Model {
     pub fn new(values: Config) -> Self {
-        Model { values, page: 0, row: 0, query: [0; QUERY_MAX], query_len: 0, status: [0; 64], status_len: 0 }
+        Model { values, page: 0, row: 0, query: [0; QUERY_MAX], query_len: 0, status: [0; 64], status_len: 0, entry: None }
     }
     pub fn searching(&self) -> bool { self.query_len > 0 }
     /// The rows shown now: schema indexes.
@@ -90,6 +99,32 @@ impl Model {
     }
     pub fn backspace(&mut self) { self.query_len = self.query_len.saturating_sub(1); self.row = 0; }
     pub fn clear_search(&mut self) { self.query_len = 0; self.row = 0; }
+    /// F2: start typing a new lock password.
+    pub fn start_password(&mut self) { self.entry = Some(Entry::new()); }
+    pub fn entering(&self) -> bool { self.entry.is_some() }
+    /// A key while typing a password: a character, Backspace (8), Esc (27) or Enter (13).
+    pub fn password_key(&mut self, c: u8) -> Change {
+        let Some(e) = self.entry.as_mut() else { return Change::None };
+        match c {
+            27 => { e.wipe(); self.entry = None; self.say("Password not changed."); }
+            8 => e.len = e.len.saturating_sub(1),
+            13 if e.len == 0 => self.say("Type at least one character."),
+            13 if !e.confirming => {
+                e.first = e.typed; e.first_len = e.len; e.typed = [0; 64]; e.len = 0; e.confirming = true;
+            }
+            13 => {
+                let same = e.len == e.first_len && e.typed[..e.len] == e.first[..e.len];
+                let out = (e.typed, e.len);
+                e.wipe();
+                self.entry = None;
+                if same { return Change::Password(out.0, out.1); }
+                self.say("The two passwords differ. Press F2 to try again.");
+            }
+            c if (0x20..0x7F).contains(&c) && e.len < 64 => { e.typed[e.len] = c; e.len += 1; }
+            _ => {}
+        }
+        Change::None
+    }
     /// Left/Right (or Enter, as Right) on the chosen row.
     pub fn step(&self, forward: bool, big: bool) -> Change {
         let Some(k) = self.selected() else { return Change::None };
@@ -110,7 +145,7 @@ pub fn step_value(k: &Key, v: i32, forward: bool, big: bool) -> i32 {
         Kind::Bool => 1 - v.clamp(0, 1),
         Kind::Int { min, max } => {
             let span = max - min;
-            let unit = if span >= 500 { 25 } else if span >= 50 { 5 } else { 1 };
+            let unit = if k.name.ends_with("_min") { 1 } else if span >= 500 { 25 } else if span >= 50 { 5 } else { 1 };
             let d = if big { unit * 10 } else { unit };
             (if forward { v.saturating_add(d) } else { v.saturating_sub(d) }).clamp(min, max)
         }
@@ -160,7 +195,14 @@ impl Out<'_> {
 /// The whole window as text, into `out`; returns its length.
 pub fn render(m: &Model, out: &mut [u8]) -> usize {
     let mut w = Out { buf: out, at: 0 };
-    w.put("Settings    Tab: next page   type: search   F11: close\n\n");
+    w.put("Settings    Tab: next page   type: search   F2: lock password   F11: close\n\n");
+    if let Some(e) = &m.entry {
+        w.put(if e.confirming { "Type the new lock password again: " } else { "New lock password: " });
+        for _ in 0..e.len { w.byte(b'*'); }
+        w.put("_\n\nEnter: next   Esc: cancel\n");
+        for b in &m.status[..m.status_len] { w.byte(*b); }
+        return w.at;
+    }
     let (pages, n) = pages();
     if m.searching() {
         w.put("Search: ");
@@ -235,13 +277,39 @@ mod tests {
         m.move_row(true);
         m.move_row(true);
         assert_eq!(m.selected().unwrap().id, id::REPEAT_RATE);
-        match m.step(true, false) { Change::Set(k, v) => assert_eq!((k, v), (id::REPEAT_RATE, 30)), Change::None => panic!() }
+        match m.step(true, false) { Change::Set(k, v) => assert_eq!((k, v), (id::REPEAT_RATE, 30)), _ => panic!() }
         m.clear_search();
         for c in b"zzz" { m.type_char(*c); }
         assert!(m.selected().is_none());
         let mut buf = [0u8; 4096];
         let n = render(&m, &mut buf);
         assert!(core::str::from_utf8(&buf[..n]).unwrap().contains("Nothing matches."));
+    }
+
+    #[test]
+    fn password_typed_twice() {
+        let mut m = Model::new(Config::new());
+        m.start_password();
+        for c in b"s3cret" { m.password_key(*c); }
+        m.password_key(8);
+        m.password_key(b't');
+        assert!(matches!(m.password_key(13), Change::None));
+        let mut buf = [0u8; 4096];
+        let n = render(&m, &mut buf);
+        assert!(core::str::from_utf8(&buf[..n]).unwrap().contains("Type the new lock password again: _"));
+        for c in b"s3cret" { m.password_key(*c); }
+        match m.password_key(13) { Change::Password(p, n) => assert_eq!(&p[..n], b"s3cret"), _ => panic!("no password") }
+        assert!(!m.entering());
+        m.start_password();
+        for c in b"a" { m.password_key(*c); }
+        m.password_key(13);
+        for c in b"b" { m.password_key(*c); }
+        assert!(matches!(m.password_key(13), Change::None));
+        assert!(core::str::from_utf8(&m.status[..m.status_len]).unwrap().contains("differ"));
+        m.start_password();
+        assert!(matches!(m.password_key(13), Change::None), "empty refused");
+        m.password_key(27);
+        assert!(!m.entering());
     }
 
     #[test]

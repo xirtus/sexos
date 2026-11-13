@@ -313,6 +313,7 @@ pub extern "C" fn trampoline_main() {
         }
         if msg.type_id==sex_pdx::usb_disk::OP_CHANGED{crate::volumes::usb_changed(msg.caller_pd);continue;}
         if crate::recording_runtime::message(&msg){continue;}
+        if msg.type_id==sex_config::secret::OP{let word=crate::password_store::handle(caller,msg.arg0,msg.arg1);crate::fs_service::reply_later(caller,word);continue;}
         if msg.type_id==sex_pdx::config::OP{let word=crate::config_store::handle(caller,msg.arg0,msg.arg1);crate::fs_service::reply_later(caller,word);continue;}
         if msg.type_id==sex_pdx::fs::OP{
             let word=crate::fs_service::handle(caller,msg.arg0,msg.arg1,msg.arg2);

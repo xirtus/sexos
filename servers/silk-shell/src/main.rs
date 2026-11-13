@@ -17,6 +17,7 @@ mod wm;
 mod launcher_search;
 mod session;
 mod config_watch;
+mod lock;
 use alloc::vec::Vec;
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -10513,7 +10514,7 @@ unsafe fn wm_action(action: wm::WmAction) -> bool {
         A::Notifications => toggle_bell(),
         A::Wallpaper => desktop_look_step(1, 0),
         A::NightLight => desktop_look_step(0, 1),
-        A::Lock => false,
+        A::Lock => lock::lock(),
     };
     sex_pdx::serial_record!("[shell.wm.action] action={:?} done={} scene={}->{} focus={}->{} layout={}",
         action, done as u8, before.0, ACTIVE_SCENE_IDX, before.1, FOCUSED_SURFACE_ID, wm_tiling().layout.name());
@@ -10597,6 +10598,7 @@ unsafe fn volume_key(step:i8) {
 /// main OP_HID_EVENT dispatch.  Used by linen_sync_reply and before-linen
 /// drain so button click/focus works even during blocking Linen fetch.
 unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
+    if lock::input(event_class, arg0 as u8, arg1) { return; }
     // A scale starts only with no held buttons/drag. Consume pointer events
     // during its bounded publication handshake, so old hit geometry cannot
     // target newly painted controls; unrelated keyboard input remains live.
@@ -25814,6 +25816,7 @@ pub extern "C" fn _start() -> ! {
         // blocking — the display gets exactly one current-state update per
         // drained burst instead of one IPC per HID event.
         config_watch::poll();
+        lock::poll();
         let msg = match pop_startup_message().or_else(|| pdx_try_listen_raw(0)) {
             Some(m) => m,
             None => {
@@ -25824,14 +25827,16 @@ pub extern "C" fn _start() -> ! {
                     sys_yield();
                     continue;
                 }
+                if let Some(t) = lock::next_wake() { let _ = sex_pdx::sys_wait_self_ticks(t.min(60_000) + 1); continue; }
                 pdx_listen_raw(0)
             }
         };
         // Display started again after a crash: it knows nothing of the desktop, so show it again.
-        if sex_pdx::display_ready::is_display_ready(&msg) { unsafe { display_came_back(); } config_watch::display_restarted(); continue; }
+        if sex_pdx::display_ready::is_display_ready(&msg) { unsafe { display_came_back(); } config_watch::display_restarted(); lock::display_restarted(); continue; }
         unsafe {
             if shell_lifecycle_hint(&msg) { continue; }
             if config_watch::receive(&msg) { continue; }
+            if lock::receive(&msg) { continue; }
             if shell_program_message(&msg) { continue; }
             if clipboard_receive(&msg) { continue; }
             if notification_receive(&msg) { continue; }
@@ -26062,6 +26067,7 @@ pub extern "C" fn _start() -> ! {
                 OP_HID_EVENT => {
                     // Fixed BOOT sexinput main task, authenticated by IPC metadata.
                     if msg.caller_pd!=sex_pdx::shell_ready::INPUT_PD_ID || msg.caller_task!=sex_pdx::shell_ready::INPUT_PD_ID {continue;}
+                    if lock::input(msg.arg2, msg.arg0 as u8, msg.arg1) { continue; }
                     let scancode = msg.arg0 as u8;
                     let value = msg.arg1; // 1=pressed, 0=released
                     let event_class = msg.arg2; // EV_KEY, EV_REL, EV_ABS, EV_BTN

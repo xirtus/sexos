@@ -1,0 +1,50 @@
+#!/usr/bin/env python3
+"""Lock screen and idle (workstream B6/B7).
+
+With no password set, Super+Esc locks and Enter unlocks. Settings sets a password
+(F2, typed twice). Locked again: keys meant for Settings never reach it, a wrong
+password is refused, the right one unlocks. Then Settings sets "dim after" to one
+minute and the screen dims after a quiet minute; a key wakes it."""
+import argparse,shutil,time
+from pathlib import Path
+from install_program import install
+from quil_autosave_gate import boot
+ROOT=Path(__file__).resolve().parents[1]
+def main():
+ p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
+ a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
+ install(disk,[('settings',(ROOT/'iso_root/programs/settings').read_bytes())])
+ g=boot(a.iso,disk,a.out,'lock',a.resolution);t=g['text'];q=g['q']
+ def send(down,keys):q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':down,'key':{'type':'qcode','data':k}}}for k in keys]});time.sleep(.06)
+ def press(*keys):
+  for k in keys:send(True,[k])
+  for k in reversed(keys):send(False,[k])
+ def typ(text):
+  for k in text:q.key('spc' if k==' ' else k);time.sleep(.08)
+ def shot(name):time.sleep(1.5);q.cmd('screendump',{'filename':str(a.out/f'{name}.ppm')})
+ try:
+  g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
+  # No password yet: Enter unlocks.
+  s=len(t());press('meta_l','esc');g['wait'](r'\[shell.lock\] locked=1',s,30);g['wait'](r'\[display.screen\] mode=0 locked=1 typed=0 say=3',s,30)
+  shot('00-locked-no-password')
+  s=len(t());q.key('ret');g['wait'](r'\[shell.lock.check\] status=2',s,60);g['wait'](r'\[shell.lock\] locked=0',s,30)
+  # Settings sets a password.
+  g['focus'](153);time.sleep(.5);s=len(t());typ('run settings');q.key('ret');g['wait'](r'\[settings.open\] generation=\d+',s,120);time.sleep(1)
+  s=len(t());q.key('f2');typ('opensesame');q.key('ret');typ('opensesame');q.key('ret')
+  g['wait'](r'\[files.password\] caller=\d+ verb=3 status=0',s,120);g['wait'](r'\[settings.password\] status=0',s,60)
+  # Locked: a key meant for Settings changes nothing.
+  s=len(t());press('meta_l','esc');g['wait'](r'\[display.screen\] mode=0 locked=1 typed=0 say=0',s,30)
+  q.key('right');time.sleep(1);assert '[settings.set]' not in t()[s:],'a key reached Settings while locked'
+  typ('wrong');g['wait'](r'\[display.screen\] mode=0 locked=1 typed=6 say=0',s,30);shot('01-locked-typing')
+  s=len(t());q.key('ret');g['wait'](r'\[shell.lock.check\] status=1',s,120);g['wait'](r'\[display.screen\] mode=0 locked=1 typed=0 say=1',s,30)
+  shot('02-wrong-password')
+  s=len(t());typ('opensesame');q.key('ret');g['wait'](r'\[shell.lock.check\] status=0',s,120);g['wait'](r'\[shell.lock\] locked=0',s,30)
+  # Idle: dim after one minute.
+  s=len(t());q.key('esc');typ('dim');q.key('right');g['wait'](r'\[settings.set\] key=14 value=1 status=0',s,30)
+  time.sleep(1);q.key('esc');s=len(t())
+  g['wait'](r'\[shell.idle\] state=dim idle_ms=\d+',s,150);g['wait'](r'\[display.screen\] mode=1 locked=0',s,30);shot('03-dimmed')
+  s=len(t());q.key('shift');g['wait'](r'\[shell.idle\] state=awake',s,30);g['wait'](r'\[display.screen\] mode=0 locked=0',s,30)
+  assert 'KERNEL PANIC' not in t()
+  print({'ok':True})
+ finally:g['stop']()
+if __name__=='__main__':main()

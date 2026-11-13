@@ -19,6 +19,7 @@
 #![cfg_attr(not(test), no_std)]
 
 pub mod wire;
+pub mod secret;
 
 /// What values a key takes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -107,7 +108,8 @@ pub mod id {
 const fn int(min: i32, max: i32) -> Kind { Kind::Int { min, max } }
 
 /// Every setting, in the order Settings and the file show them. Keys of one
-/// section stay together.
+/// section stay together. Idle times default to never: first-start setup offers
+/// times, so a machine nobody set up (or a test run) never dims on its own.
 pub const KEYS: &[Key] = &[
     Key { id: id::ACCENT, name: "appearance.accent", label: "Accent colour", kind: Kind::Color, default: 0x3D7EFF },
     Key { id: id::ANIMATIONS, name: "appearance.animations", label: "Animations", kind: Kind::Bool, default: 1 },
@@ -122,9 +124,9 @@ pub const KEYS: &[Key] = &[
     Key { id: id::ZONE, name: "time.zone", label: "Time zone", kind: Kind::Choice(ZONES), default: 0 },
     Key { id: id::NTP, name: "time.network_time", label: "Set time from the network", kind: Kind::Bool, default: 1 },
     Key { id: id::HOUR24, name: "time.hour24", label: "24-hour clock", kind: Kind::Bool, default: 1 },
-    Key { id: id::DIM_AFTER, name: "session.dim_after_min", label: "Dim after (minutes, 0 never)", kind: int(0, 120), default: 5 },
-    Key { id: id::LOCK_AFTER, name: "session.lock_after_min", label: "Lock after (minutes, 0 never)", kind: int(0, 240), default: 10 },
-    Key { id: id::BLANK_AFTER, name: "session.blank_after_min", label: "Screen off after (minutes, 0 never)", kind: int(0, 240), default: 15 },
+    Key { id: id::DIM_AFTER, name: "session.dim_after_min", label: "Dim after (minutes, 0 never)", kind: int(0, 120), default: 0 },
+    Key { id: id::LOCK_AFTER, name: "session.lock_after_min", label: "Lock after (minutes, 0 never)", kind: int(0, 240), default: 0 },
+    Key { id: id::BLANK_AFTER, name: "session.blank_after_min", label: "Screen off after (minutes, 0 never)", kind: int(0, 240), default: 0 },
     Key { id: id::LOCK_ON_IDLE, name: "session.lock_on_idle", label: "Lock when idle", kind: Kind::Bool, default: 1 },
     Key { id: id::SETUP_DONE, name: "setup.done", label: "First-start setup finished", kind: Kind::Bool, default: 0 },
 ];

@@ -141,6 +141,7 @@ mod surface_lifecycle;
 use sex_pdx::app_catalog;
 mod text_transaction;
 mod glyphs;
+mod lock_screen;
 mod bitmap_binding;
 mod bitmap_transaction;
 mod bitmap_stores;
@@ -1959,7 +1960,9 @@ fn publish_frame(fb:*mut u32,w:usize,h:usize,frame:frame_output::Publication<'_>
     // A new night light level repaints every pixel: what the output shows was
     // warmed by the old level, so comparing with the old frame is not enough.
     let night=sex_pdx::desktop_look::night_level();
-    let previous=if sex_pdx::desktop_look::take_night_change(){None}else{frame.previous};
+    // Dim and screen-off shade the finished frame the same way (`screen_state`).
+    let mode=sex_pdx::screen_state::mode();
+    let previous=if sex_pdx::desktop_look::take_night_change()|sex_pdx::screen_state::take_mode_change(){None}else{frame.previous};
     for y in frame.rows.first..frame.rows.end{
         let row=&pixels[y*w..(y+1)*w];
         let (first,end)=match previous{
@@ -1968,7 +1971,9 @@ fn publish_frame(fb:*mut u32,w:usize,h:usize,frame:frame_output::Publication<'_>
                 (first,(first..w).rev().find(|&x|row[x]!=old[x]).unwrap_or(first)+1)}
             None=>(0,w)};
         let out=unsafe{fb.add(y*pitch)};
-        if night==0{
+        if mode!=sex_pdx::screen_state::NORMAL{
+            for(index,pixel)in row[first..end].iter().enumerate(){unsafe{core::ptr::write_volatile(out.add(first+index),sex_pdx::screen_state::shade(sex_pdx::desktop_look::night(*pixel,night),mode));}}
+        }else if night==0{
         for(index,pixel)in row[first..end].iter().enumerate(){unsafe{core::ptr::write_volatile(out.add(first+index),*pixel);}}
         }else{
             // Night light warms the finished frame on its way out.
@@ -2004,6 +2009,8 @@ fn raster_batch(target:&frame_output::Target<'_>,scene: &scene::SceneSnapshot,pl
         }
         draw_launcher_panel(fb,w,h,total,scene);
     }
+    // Locked: the lock surface covers everything the passes above painted.
+    lock_screen::draw(fb,w,h,total);
     draw_cursor_z_top(fb,w,h,total,true,scene);
     true
 }
@@ -4010,6 +4017,20 @@ pub extern "C" fn _start() -> ! {
                             unsafe { PANEL_NOTICE = text; }
                             needs_top_strip_redraw = true;
                             sex_pdx::serial_record!("[display.panel.notice] len={}", text.len);
+                        }
+                    }
+                }
+                sex_pdx::screen_state::OP_SCREEN_STATE => {
+                    // Only the Shell locks, dims and turns off the screen.
+                    if msg.caller_pd == 3 {
+                        match sex_pdx::screen_state::set(msg.arg0, msg.arg1) {
+                            Some(true) => {
+                                needs_full_redraw = true;
+                                let l = sex_pdx::screen_state::lock();
+                                sex_pdx::serial_record!("[display.screen] mode={} locked={} typed={} say={}", msg.arg0, l.locked as u8, l.typed, l.say);
+                            }
+                            Some(false) => {}
+                            None => sex_pdx::serial_record!("[display.screen.refused] mode={} lock={:#x}", msg.arg0, msg.arg1),
                         }
                     }
                 }
