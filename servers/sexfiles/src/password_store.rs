@@ -42,10 +42,31 @@ fn stage(caller: u32) -> &'static mut Staging {
     &mut stages[at].1
 }
 
+/// Argon2 and the disk write after it need more stack than Files' own, which is small
+/// and already deep when a request arrives. They run on this one instead.
+const DEEP: usize = 256 * 1024;
+#[repr(C, align(16))]
+struct Stack([u8; DEEP]);
+static mut STACK: Stack = Stack([0; DEEP]);
+
+fn on_deep_stack(f: &mut dyn FnMut()) {
+    extern "C" fn enter(f: *mut &mut dyn FnMut()) { unsafe { (*f)() } }
+    let top = unsafe { core::ptr::addr_of_mut!(STACK) as usize } + DEEP;
+    let mut f = f;
+    // SAFETY: Files serves one request at a time, so the stack is ours alone; r12 is
+    // callee-saved and brings the old stack pointer back across the call.
+    unsafe {
+        core::arch::asm!("mov r12, rsp", "mov rsp, {top}", "call {enter}", "mov rsp, r12",
+            top = in(reg) top, enter = sym enter, in("rdi") &mut f as *mut &mut dyn FnMut(),
+            out("r12") _, clobber_abi("C"));
+    }
+}
+
 /// One request; the word to reply with.
 pub fn handle(caller: u32, arg0: u64, arg1: u64) -> u64 {
     let may_set = crate::fs_service::program_is(caller, b"settings");
-    let status = s::serve(stage(caller), may_set, arg0, arg1, &mut Disk);
+    let mut status = s::INVALID;
+    on_deep_stack(&mut || status = s::serve(stage(caller), may_set, arg0, arg1, &mut Disk));
     if let Some((verb, _)) = sex_config::wire::decode_request(arg0).filter(|(v, _)| *v != s::PUT) {
         sex_pdx::serial_record!("[files.password] caller={} verb={} status={}", caller, verb, status);
     }
