@@ -12,7 +12,8 @@ fn x17_r1_parts_find_their_services() {
     assert_eq!(claim(id(0x8086, 0x43ed, 0x0c, 3, 0x30)).map(|(m, e)| (m.service, e.lease)), Some((Service::Usb, Lease::Xhci)));
     assert_eq!(claim(id(0x10ec, 0x3000, 2, 0, 0)).map(|(m, e)| (m.service, e.lease)), Some((Service::Net, Lease::Nic)));
     assert_eq!(claim(id(0x8086, 0x43c8, 4, 3, 0x80)).map(|(m, e)| (m.service, e.lease)), Some((Service::Bell, Lease::Hda)));
-    assert_eq!(claim(id(0x8086, 0x9a60, 3, 0, 0)).map(|(m, e)| (m.service, e.lease)), Some((Service::Display, Lease::Display)));
+    assert_eq!(claim(id(0x8086, 0x9a60, 3, 0, 0)).map(|(m, e)| (m.service, e.lease)), Some((Service::Display, Lease::IntelDisplay)));
+    assert_eq!(claim(id(0x8086, 0x3e9b, 3, 0, 0)).map(|(m, e)| (m.service, e.lease)), Some((Service::Display, Lease::Display)));
     assert_eq!(claim(id(0x10de, 0x249c, 3, 2, 0)).map(|(m, e)| (m.service, e.lease)), Some((Service::Display, Lease::Display)));
     // Killer AX1675x (AX210): Intel Wi-Fi goes to the network service beside the wired NIC.
     assert_eq!(claim(id(0x8086, 0x2725, 2, 0x80, 0)).map(|(m, e)| (m.service, e.lease, e.slot)), Some((Service::Net, Lease::Wifi, 22)));

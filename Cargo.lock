@@ -2149,6 +2149,7 @@ name = "sexdisplay"
 version = "0.1.0"
 dependencies = [
  "sex-font",
+ "sex-gpu-intel",
  "sex-graphics",
  "sex-pdx",
  "sex-rt",
