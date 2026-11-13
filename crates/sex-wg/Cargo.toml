@@ -1,0 +1,10 @@
+[package]
+name = "sex-wg"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "WireGuard (Noise_IKpsk2) for SexOS: handshake, transport, cookies, timers; no I/O"
+
+[dependencies]
+chacha20poly1305 = { version = "=0.10.1", default-features = false }
+fiat-crypto = { version = "=0.2.9", default-features = false }

@@ -3,8 +3,11 @@
 //! capability, TLS, allocator or publication authority is provided by parsing.
 //! Fixed resources select their own request path and expected MIME; legacy
 //! entry points retain the text/plain profile and exact original wire bytes.
+//! `h2` is the HTTP/2 client for the open web; it alone uses the allocator.
 #![no_std]
+extern crate alloc;
 #[cfg(test)]
 extern crate std;
 mod codec;
+pub mod h2;
 pub use codec::*;

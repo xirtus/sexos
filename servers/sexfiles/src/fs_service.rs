@@ -331,6 +331,36 @@ pub fn bind(target: u32, task: u32) {
     unsafe { (*core::ptr::addr_of_mut!(PICKS))[index] = None; }
     sex_pdx::serial_record!("[files.program.bound] target={} task={} root={}", target, task, core::str::from_utf8(&root[..len]).unwrap_or("?"));
 }
+/// A volume under `/media` went away (ejected or pulled out): every run loses the grants
+/// it held to `prefix` or anything inside it, so a stick that later mounts under the same
+/// name is not reachable through them. Returns how many grants were taken back.
+pub fn revoke_under(prefix: &[u8]) -> usize {
+    fn under(token: &[u8], prefix: &[u8]) -> bool {
+        token.len() > 1 && token[0] == b'@' && { let abs = &token[1..]; abs.starts_with(prefix) && (abs.len() == prefix.len() || abs[prefix.len()] == b'/') }
+    }
+    fn keep(buf: &mut [u8], len: &mut usize, prefix: &[u8]) -> usize {
+        let mut out = [0u8; PICKED_MAX];
+        let (mut n, mut gone) = (0usize, 0usize);
+        for token in buf[..*len].split(|b| *b == b' ').filter(|t| !t.is_empty()) {
+            if under(token, prefix) { gone += 1; continue; }
+            if n > 0 { out[n] = b' '; n += 1; }
+            out[n..n + token.len()].copy_from_slice(token);
+            n += token.len();
+        }
+        buf[..n].copy_from_slice(&out[..n]);
+        *len = n;
+        gone
+    }
+    let bindings = unsafe { &mut *core::ptr::addr_of_mut!(BINDINGS) };
+    let mut total = 0;
+    for b in bindings.iter_mut().flatten() {
+        total += keep(&mut b.args, &mut b.args_len, prefix) + keep(&mut b.picked, &mut b.picked_len, prefix);
+    }
+    // What any run was told about paths on that volume is stale now.
+    forget_stats(None);
+    sex_pdx::serial_record!("[files.media.revoked] prefix={} grants={}", core::str::from_utf8(prefix).unwrap_or("?"), total);
+    total
+}
 /// A program's path inside its folder. `..` never climbs out: it is refused.
 fn confine(binding: &Binding, path: &[u8], out: &mut [u8; w::PATH_BYTES]) -> Option<usize> {
     // `@/path` names a file or folder the person gave this run when starting it: that
@@ -462,7 +492,9 @@ pub fn handle(caller: u32, a: u64, offset: u64, length: u64) -> u64 {
         }
         (None, Some(k)) => {
             let bound = unsafe { (*core::ptr::addr_of!(BINDINGS))[k] };
-            if !bound.is_some_and(|b| program_live(caller, b.task)) || matches!(r.kind, w::PREPARE | w::INSTALL | w::UPDATE | w::MOUNT | w::UNMOUNT | sex_pdx::package::KIND) { return w::reply(r.seq, w::DENIED, 0); }
+            // A program may eject (UNMOUNT) a volume its grant covers whole, checked with
+            // its other paths below; mounting stays Spindle's.
+            if !bound.is_some_and(|b| program_live(caller, b.task)) || matches!(r.kind, w::PREPARE | w::INSTALL | w::UPDATE | w::MOUNT | sex_pdx::package::KIND) { return w::reply(r.seq, w::DENIED, 0); }
             w::PROGRAM_INDEX_BASE + k
         }
         _ => return w::reply(r.seq, w::DENIED, 0),
@@ -701,7 +733,8 @@ pub fn read_ticket(ticket: u64, image: &mut [u8]) -> (Program, Option<[u64; 2]>)
     match found { Program::Absent => (Program::Absent, store_name), other => (other, None) }
 }
 fn run(fs: &mut Fs<'static, Disk>, r: w::Request, path: &[u8], data: &mut [u8]) -> Result<u32, Error> {
-    let now = 0;
+    // Modification times: Unix seconds from the civil clock (0 if it is unknown).
+    let now = sex_pdx::civil_time_ms().map(|ms| ms / 1000).unwrap_or(0);
     // Test builds only: a path that makes Files fall over, to show it comes back.
     if option_env!("SEXOS_FILES_CRASH_PROBE").is_some() && path == b"/crash.probe" {
         sex_pdx::serial_record!("[files.crash.probe]");

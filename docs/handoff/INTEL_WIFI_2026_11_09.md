@@ -537,3 +537,44 @@ Transition networks (WPA2/WPA3) keep using WPA2 for now. Only group 19 is offere
 
 Boot log: `[wifi.assoc.start] security=Wpa3Personal step=SaeCommit`,
 `[wifi.handshake.start] akm=Sae …`.
+
+## 18. Stage W6a: staying connected (2026-11-13)
+
+Before this stage a lost link, a failed join or a wrong passphrase left the chip
+stuck until reboot: `wifi join` and `wifi scan` were refused once any join had begun.
+Now:
+
+- **Multicast.** Once the link is up and rate control has settled, sexnet sends
+  MCAST_FILTER_CMD (0xd0, 12 bytes: filter_own=1, port 0, no list, pass_all=1, BSSID),
+  as `iwx_allow_mcast` does in `iwx_run`, so IPv6 neighbour discovery and mDNS reach
+  the stack and not only broadcasts. A refusal leaves the link up (`link::Setup`).
+- **Beacon loss.** The missed-beacons notification (legacy 0xa2, or MAC_CONF_GROUP
+  0xf6; both keep `consec_missed_beacons_since_last_rx` at byte 4) takes the link
+  down as `Down::BeaconLoss(n)` after more than 20 in a row (about 2 s). iwx sends a
+  directed probe after 7; we let the service rescan instead.
+- **Chip restart.** `csr::stop` is `iwx_stop_device` for pre-BZ chips: interrupts
+  off, MAC_ACCESS_REQ dropped, STOP_MASTER then a bounded wait for MASTER_DISABLED,
+  then SW_RESET. sexnet then lays the DMA pool out again with a fresh `Bringup` and
+  runs the same bring-up, init and scan as at boot (10 ms settle first).
+- **Rejoin.** `wifi join N [PASSPHRASE]` remembers the network's name and
+  passphrase in sexnet's own memory for this boot (never a file; no other PD can
+  read it). After a lost link, or a join/association/scan failure, sexnet restarts
+  the chip, scans, and joins the strongest AP with that name, pausing 1, 2, 4, 8,
+  16, then 30 s between tries, and gives up after 10 tries in a row (a fresh
+  `wifi join` starts over). A refused WPA2 handshake or WPA3 SAE exchange (almost
+  always a wrong passphrase) forgets the network and does not retry.
+- **Switching and leaving.** `wifi join N` while connected, joining or after a
+  failure restarts the chip and joins network N by name. `wifi leave` (alias
+  `wifi forget`, new `wifi_status::LEAVE = 6`) forgets the network and restarts the
+  chip, which scans again. `wifi scan` after a failure restarts the chip.
+
+Boot-log lines: `[wifi.lost] reason=…`, `[wifi.retry] attempt= in_ticks=`,
+`[wifi.restart] count= dma_stopped= rejoin= attempt=`, `[wifi.rejoin] ssid= heard=0`,
+`[wifi.rejoin.gave_up]`, `[wifi.passphrase.refused]`, `[wifi.join.switch]`,
+`[wifi.leave]`.
+
+ABI: `sex_pdx::wifi_status::LEAVE` is new (a desktop request word, not a syscall;
+`wifi_status.rs` is not a pinned ABI input). Tests: `x17_passes_multicast_and_drops_the_link_when_beacons_stop`,
+`stopping_the_chip_halts_dma_then_resets_it` (`scripts/wifi_host_gate.sh`). The
+restart path itself is only provable on the radio: on the x17, `wifi leave` then
+`wifi join N PASS` exercises it, and walking out of range exercises beacon loss.

@@ -5,7 +5,9 @@
 //! can only crash this window.
 //!
 //! Keys: Space or K pauses and plays; Left/J and Right/L go back and forward 5 s;
-//! Home goes to the start. F11 closes.
+//! Home goes to the start. F11 closes. The keyboard's media keys work too, wherever
+//! the focus is, while Play is the program playing (Shell routes them): play/pause
+//! toggles and stop pauses at the start.
 #![no_std]
 #![no_main]
 
@@ -82,7 +84,7 @@ fn keys(window: &mut Window, player: &mut Player) -> bool {
         match e {
             Event::Close => return false,
             Event::Key(k) => match k.code {
-                57 | 37 => {
+                57 | 37 | sex_pdx::app_key::KEY_PLAY_PAUSE => {
                     if player.paused() { player.play() } else { player.pause() }
                     sex_pdx::serial_record!("[play.paused] {}", player.paused() as u8);
                 }
@@ -93,6 +95,11 @@ fn keys(window: &mut Window, player: &mut Player) -> bool {
                     player.seek(to);
                 }
                 0x66 => player.seek(0),
+                sex_pdx::app_key::KEY_STOP => {
+                    player.pause();
+                    player.seek(0);
+                    sex_pdx::serial_record!("[play.stopped] paused={}", player.paused() as u8);
+                }
                 _ => {}
             },
             _ => {}
