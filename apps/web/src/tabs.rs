@@ -141,6 +141,8 @@ impl Browser {
         let going = self.active;
         let next = if going + 1 < self.tabs.len() { going + 1 } else { going - 1 };
         // Take the closing page's frames and downloads down with it.
+        let owner = self.doc.get().owner();
+        self.ws_close_page(owner);
         self.drop_frames();
         for mut l in core::mem::take(&mut self.media_loads) { l.ex.cancel(&mut self.window); }
         self.media.clear();

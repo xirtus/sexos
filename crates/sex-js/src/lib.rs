@@ -19,7 +19,7 @@ pub mod storage;
 pub mod webgl;
 #[cfg(sexjs_native)]
 mod native;
-pub use document::{ClassicScript, Document, FetchAsk};
+pub use document::{ClassicScript, Document, FetchAsk, WsAsk};
 
 use alloc::{format, string::String, vec::Vec};
 use wasmi::{Caller, Config, Engine, Extern, Linker, Memory, Module, Store, StoreLimits, StoreLimitsBuilder, TypedFunc};
@@ -120,6 +120,14 @@ pub mod op {
     /// (answers `!` over the quota), `remove`, `clear`, `len` or `key` (key = index).
     /// Nothing answers when the page has no lasting storage (not an http(s) page).
     pub const STORAGE: u32 = 33;
+    /// WebSocket: (`open`, url, protocols comma-separated) answers the socket's id;
+    /// (`send`, id, `t` or `b`, bytes); (`close`, id, code, reason). The browser
+    /// connects after the script returns and dispatches `ws\tID\topen\tPROTOCOL`,
+    /// `ws\tID\tmessage\tt|b` (then [`WS_TAKE`] has the bytes), `ws\tID\terror` and
+    /// `ws\tID\tclose\tCODE\tCLEAN\tREASON`.
+    pub const WS: u32 = 73;
+    /// (id): the oldest message not yet taken (text, or with bit 16 an ArrayBuffer).
+    pub const WS_TAKE: u32 = 74;
 }
 
 /// What scripts act on. A `None` result is JavaScript `null`.

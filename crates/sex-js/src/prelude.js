@@ -21,7 +21,7 @@
   delete globalThis.__host;
   const OP = { LOG: 1, BY_ID: 2, QUERY: 3, INFO: 4, GET_ATTR: 5, SET_ATTR: 6, REMOVE_ATTR: 7, GET_TEXT: 8, SET_TEXT: 9,
     GET_HTML: 10, SET_HTML: 11, CREATE_ELEMENT: 12, CREATE_TEXT: 13, INSERT: 14, DETACH: 15, PARENT: 16, CHILDREN: 17,
-    ATTR_NAMES: 18, VIEWPORT: 19, NAVIGATE: 20, CLICKABLE: 21, RECT: 22, LOCATION: 23, CANVAS: 24, MEASURE: 25, HIT: 26, VALUE: 27, CARET: 28, MEDIA: 48, GL: 64, GL_QUERY: 65, FETCH: 66, FETCH_BODY: 67, FETCH_HEAD: 68, COOKIE: 69, MEDIA_APPEND: 70, CLASSIC_SCRIPT: 71, FRAME: 31, POST_MESSAGE: 32, STORAGE: 33 };
+    ATTR_NAMES: 18, VIEWPORT: 19, NAVIGATE: 20, CLICKABLE: 21, RECT: 22, LOCATION: 23, CANVAS: 24, MEASURE: 25, HIT: 26, VALUE: 27, CARET: 28, MEDIA: 48, GL: 64, GL_QUERY: 65, FETCH: 66, FETCH_BODY: 67, FETCH_HEAD: 68, COOKIE: 69, MEDIA_APPEND: 70, CLASSIC_SCRIPT: 71, FRAME: 31, POST_MESSAGE: 32, STORAGE: 33, WS: 73, WS_TAKE: 74 };
   const nodes = new Map();
   const defaultChecked = new WeakMap();
 
@@ -2956,6 +2956,68 @@
   }
   Object.assign(XMLHttpRequest, { UNSENT: 0, OPENED: 1, HEADERS_RECEIVED: 2, LOADING: 3, DONE: 4 });
 
+  // WebSocket: the browser keeps the connection (op WS) and tells the page what
+  // happens on it ('ws' messages); each message's bytes come over once (op WS_TAKE).
+  const sockets = new Map();
+  class CloseEvent extends Event {
+    constructor(type, init) { super(type, init); this.code = (init && init.code) || 0; this.reason = (init && init.reason) || ''; this.wasClean = !!(init && init.wasClean); }
+  }
+  class WebSocket extends EventTarget {
+    constructor(url, protocols) {
+      super();
+      let href;
+      const raw = String(url).trim();
+      if (/^wss?:\/\/[^/?#]+/i.test(raw)) href = raw.replace(/^wss?:/i, m => m.toLowerCase()).replace(/^(wss?:\/\/[^/?#]+)$/, '$1/');
+      else try { href = new URL(raw, H(OP.LOCATION) || undefined).href; } catch (e) { throw domError("The URL '" + url + "' is invalid.", 'SyntaxError'); }
+      href = href.replace(/^http(s?):/, 'ws$1:');
+      if (!/^wss?:\/\//.test(href) || href.includes('#')) throw domError("The URL's scheme must be either 'ws' or 'wss'.", 'SyntaxError');
+      const list = protocols === undefined ? [] : (Array.isArray(protocols) ? protocols : [protocols]).map(String);
+      if (new Set(list).size !== list.length || list.some(p => !/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/.test(p))) throw domError('The subprotocol is invalid.', 'SyntaxError');
+      this.url = href; this.readyState = 0; this.protocol = ''; this.extensions = ''; this.binaryType = 'blob'; this.bufferedAmount = 0;
+      this.onopen = this.onmessage = this.onerror = this.onclose = null;
+      this._id = H(OP.WS, 'open', href, list.join(','));
+      if (this._id == null) throw domError('Too many WebSockets.', 'SyntaxError');
+      sockets.set(this._id, this);
+    }
+    send(data) {
+      if (this.readyState === 0) throw domError('Still in CONNECTING state.', 'InvalidStateError');
+      if (this.readyState !== 1) return;
+      const id = '' + this._id;
+      if (typeof data === 'string') H(OP.WS, 'send', id, 't', data);
+      else if (data instanceof ArrayBuffer) H(OP.WS, 'send', id, 'b', data);
+      else if (ArrayBuffer.isView(data)) H(OP.WS, 'send', id, 'b', data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength));
+      else if (data instanceof Blob) H(OP.WS, 'send', id, 'b', data._b.slice().buffer);
+      else H(OP.WS, 'send', id, 't', String(data));
+    }
+    close(code, reason) {
+      if (code !== undefined && code !== 1000 && !(code >= 3000 && code <= 4999)) throw domError('The close code must be 1000 or 3000-4999.', 'InvalidAccessError');
+      reason = reason === undefined ? '' : String(reason);
+      if (new TextEncoder().encode(reason).length > 123) throw domError('The close reason is too long.', 'SyntaxError');
+      if (this.readyState >= 2) return;
+      this.readyState = 2;
+      H(OP.WS, 'close', '' + this._id, '' + (code === undefined ? 1000 : code), reason);
+    }
+  }
+  Object.assign(WebSocket, { CONNECTING: 0, OPEN: 1, CLOSING: 2, CLOSED: 3 });
+  Object.assign(WebSocket.prototype, { CONNECTING: 0, OPEN: 1, CLOSING: 2, CLOSED: 3 });
+  function wsEvent(f) {
+    const ws = sockets.get(f[1]);
+    if (!ws) return;
+    switch (f[2]) {
+      case 'open': ws.readyState = 1; ws.protocol = f[3] || ''; ws.dispatchEvent(new Event('open')); break;
+      case 'message': {
+        const binary = f[3] === 'b';
+        const v = H(binary ? OP.WS_TAKE | 0x10000 : OP.WS_TAKE, '' + ws._id);
+        if (ws.readyState !== 1) break;
+        const data = !binary ? (v ?? '') : ws.binaryType === 'arraybuffer' ? (v || new ArrayBuffer(0)) : new Blob([v || new ArrayBuffer(0)]);
+        ws.dispatchEvent(new MessageEvent('message', { data, origin: ws.url.replace(/^(wss?:\/\/[^/]+).*$/, '$1') }));
+        break;
+      }
+      case 'error': ws.dispatchEvent(new Event('error')); break;
+      case 'close': ws.readyState = 3; sockets.delete(f[1]); ws.dispatchEvent(new CloseEvent('close', { code: +f[3] || 1006, wasClean: f[4] === '1', reason: f.slice(5).join('\t') })); break;
+    }
+  }
+
   // Query strings.
   class URLSearchParams {
     constructor(init) {
@@ -3773,7 +3835,7 @@
     GPUBindGroupLayout, GPUPipelineLayout, GPURenderPipeline, GPUCommandEncoder, GPUCommandBuffer, GPURenderPassEncoder,
     GPUQueue, GPUCanvasContext, GPUBufferUsage, GPUTextureUsage, GPUShaderStage, GPUMapMode, GPUColorWrite,
     createImageBitmap: src => Promise.resolve(src),
-    fetch, Request, Response, Headers, URL, URLSearchParams, XMLHttpRequest,
+    fetch, Request, Response, Headers, URL, URLSearchParams, XMLHttpRequest, WebSocket, CloseEvent,
     DOMException, DOMRect, DOMRectReadOnly, Range, Animation, KeyframeEffect, ShadowRoot, HTMLSlotElement, CSSStyleSheet,
     MessageEvent, MessagePort, MessageChannel, BroadcastChannel, postMessage, DOMParser, XMLSerializer, Intl,
     customElements, atob, btoa, TextEncoder, TextDecoder, structuredClone, AbortController, AbortSignal, Blob, File,
@@ -3930,6 +3992,7 @@
       case 'script-error': report(detail); return 0;
       case 'script-error-muted': log(2, ['Script error.']); notifyError(null, 'Script error.'); return 0;
       case 'fetched': fetched(f[1], +f[2], +f[3]); return 0;
+      case 'ws': wsEvent(f); return 0;
       case 'media': mediaState(f); return 0;
       case 'mse': mseState(f); return 0;
       // A classic script is about to run (its node), or finished (empty).
