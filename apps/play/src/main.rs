@@ -85,12 +85,77 @@ const SEEK_MS: i64 = 5000;
 /// Subtitles, while shown.
 struct Subs { track: sex_media::subtitles::Track, painter: captions::Painter, on: bool, text: alloc::string::String }
 
-/// Handles keys and close; false when the person closed the window.
-fn keys(window: &mut Window, player: &mut Player, subs: &mut Option<Subs>) -> bool {
+/// How one item of the playlist ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Outcome { Ended, Next, Previous, Closed }
+
+/// What is drawn over the picture besides the picture: subtitles, and the controls
+/// (state, time, place in the playlist, speed) for a moment after each key and while
+/// paused.
+struct Ui {
+    subs: Option<Subs>,
+    controls: Option<captions::Painter>,
+    controls_until: u64,
+    /// This item and how many there are.
+    item: (usize, usize),
+    /// The time shown last, so a paused picture is drawn again only when it changes.
+    drawn_ms: i64,
+}
+
+const CONTROLS_MS: u64 = 2500;
+
+fn clock(out: &mut alloc::string::String, ms: u64) {
+    use core::fmt::Write;
+    let s = ms / 1000;
+    if s >= 3600 { let _ = write!(out, "{}:{:02}:{:02}", s / 3600, s / 60 % 60, s % 60); }
+    else { let _ = write!(out, "{}:{:02}", s / 60, s % 60); }
+}
+
+/// The current picture with subtitles and controls over it.
+fn present(window: &mut Window, player: &mut Player, ui: &mut Ui, at_ms: i64) {
+    let (w, h) = player.size();
+    if w == 0 || player.picture().len() < w * h { return; }
+    window.pixels()[..w * h].copy_from_slice(player.picture());
+    if let Some(s) = ui.subs.as_mut().filter(|s| s.on) {
+        let mut text = core::mem::take(&mut s.text);
+        s.track.at(at_ms.max(0) as u64, &mut text);
+        if text != s.painter.shown {
+            sex_pdx::serial_record!("[play.caption] at_ms={} text={}", at_ms, text.replace('\n', " / "));
+            s.painter.shown.clone_from(&text);
+        }
+        s.painter.draw(&mut window.pixels()[..w * h], w, h, &text);
+        s.text = text;
+    }
+    let showing = player.paused() || sex_pdx::get_ticks() < ui.controls_until;
+    if let (Some(c), true) = (ui.controls.as_mut(), showing) {
+        use core::fmt::Write;
+        let mut text = alloc::string::String::new();
+        text.push_str(if player.paused() { "Paused  " } else { "Playing  " });
+        clock(&mut text, at_ms.max(0) as u64);
+        let total = player.duration_ms();
+        if total > 0 { text.push_str(" / "); clock(&mut text, total); }
+        if ui.item.1 > 1 { let _ = write!(text, "   {} of {}", ui.item.0 + 1, ui.item.1); }
+        if player.speed() != 100 { let _ = write!(text, "   {}%", player.speed()); }
+        let progress = if total > 0 { (at_ms.max(0) as u64).min(total) * 1000 / total } else { 0 };
+        c.controls(&mut window.pixels()[..w * h], w, h, &text, progress as u32);
+        if text != c.shown {
+            sex_pdx::serial_record!("[play.controls] text={}", text);
+            c.shown = text;
+        }
+    }
+    ui.drawn_ms = at_ms;
+    window.show_pixels(w, h);
+}
+
+/// Handles keys and close; an outcome when this item is done.
+fn keys(window: &mut Window, player: &mut Player, ui: &mut Ui) -> Option<Outcome> {
+    let mut any = false;
     while let Some(e) = window.poll() {
         match e {
-            Event::Close => return false,
-            Event::Key(k) => match k.code {
+            Event::Close => return Some(Outcome::Closed),
+            Event::Key(k) => {
+                any = true;
+                match k.code {
                 57 | 37 | sex_pdx::app_key::KEY_PLAY_PAUSE => {
                     if player.paused() { player.play() } else { player.pause() }
                     sex_pdx::serial_record!("[play.paused] {}", player.paused() as u8);
@@ -102,8 +167,15 @@ fn keys(window: &mut Window, player: &mut Player, subs: &mut Option<Subs>) -> bo
                     player.seek(to);
                 }
                 0x66 => player.seek(0),
+                // N and the next key: the next item; P and the previous key: back to
+                // this item's start, or the item before when near its start.
+                0x31 | sex_pdx::app_key::KEY_NEXT => return Some(Outcome::Next),
+                0x19 | sex_pdx::app_key::KEY_PREVIOUS => {
+                    if player.time_ms() < 3000 && ui.item.0 > 0 { return Some(Outcome::Previous); }
+                    player.seek(0);
+                }
                 // S: subtitles on or off.
-                0x1F => if let Some(s) = subs.as_mut() {
+                0x1F => if let Some(s) = ui.subs.as_mut() {
                     s.on = !s.on;
                     sex_pdx::serial_record!("[play.subtitles] on={}", s.on as u8);
                 },
@@ -131,17 +203,24 @@ fn keys(window: &mut Window, player: &mut Player, subs: &mut Option<Subs>) -> bo
                     sex_pdx::serial_record!("[play.stopped] paused={}", player.paused() as u8);
                 }
                 _ => {}
-            },
+                }
+            }
             _ => {}
         }
     }
-    true
+    if any {
+        ui.controls_until = sex_pdx::get_ticks() + CONTROLS_MS;
+        let at = player.time_ms();
+        present(window, player, ui, at);
+    }
+    None
 }
 
-struct Played { pictures: u32, sound_frames: u64 }
+struct Played { pictures: u32, sound_frames: u64, outcome: Outcome, at_ms: i64, duration_ms: u64 }
 
-/// Plays the stream; returns what was shown and heard, or FFmpeg's error.
-fn play(window: &mut Window, src: FileSource, mut subs: Option<Subs>) -> Result<Played, sex_media::Error> {
+/// Plays the stream from `start_ms`; returns what was shown and heard and how it
+/// ended, or FFmpeg's error. `progress` is called now and then with the time, to save it.
+fn play(window: &mut Window, src: FileSource, ui: &mut Ui, start_ms: u64, progress: &mut dyn FnMut(&mut Window, u64, u64)) -> Result<Played, sex_media::Error> {
     let dec = Decoder::open(Box::new(src))?;
     let info = dec.info.clone();
     let (w, h) = sex_media::fit(info.width as usize, info.height as usize, MAX_W, MAX_H);
@@ -156,6 +235,11 @@ fn play(window: &mut Window, src: FileSource, mut subs: Option<Subs>) -> Result<
     if info.sample_rate > 0 && !player.has_sound() {
         sex_pdx::serial_record!("[play.sound.none] reason=no_ring");
     }
+    if start_ms > 0 {
+        sex_pdx::serial_record!("[play.resume] ms={}", start_ms);
+        player.seek(start_ms);
+    }
+    ui.controls_until = sex_pdx::get_ticks() + CONTROLS_MS;
     let (w, h) = player.size();
     if w == 0 {
         let mut text = Vec::new();
@@ -166,48 +250,150 @@ fn play(window: &mut Window, src: FileSource, mut subs: Option<Subs>) -> Result<
         say(window, &text);
     }
     let mut stalled = false;
-    loop {
-        if !keys(window, &mut player, &mut subs) {
-            sex_pdx::serial_record!("[play.closed] target={} task={} frames={}", window.target, window.task, player.shown);
-            drop(player);
-            sex_pdx::task_finish(0);
-        }
+    let mut saved_at = sex_pdx::get_ticks();
+    let outcome = loop {
+        if let Some(o) = keys(window, &mut player, ui) { break o; }
         if let (Some(sex_media::Silence::Stalled { played, pending }), false) = (player.silence(), stalled) {
             stalled = true;
             sex_pdx::serial_record!("[play.sound.stalled] played={} pending={}", played, pending);
         }
+        if sex_pdx::get_ticks() - saved_at > 5000 {
+            saved_at = sex_pdx::get_ticks();
+            let at = player.time_ms().max(0) as u64;
+            progress(window, at, player.duration_ms());
+        }
         match player.step() {
             Step::Picture { n, at_ms } => {
-                let px = player.picture();
-                window.pixels()[..w * h].copy_from_slice(px);
-                if let Some(s) = subs.as_mut().filter(|s| s.on) {
-                    let mut text = core::mem::take(&mut s.text);
-                    s.track.at(at_ms.max(0) as u64, &mut text);
-                    if text != s.painter.shown {
-                        sex_pdx::serial_record!("[play.caption] at_ms={} text={}", at_ms, text.replace('\n', " / "));
-                        s.painter.shown.clone_from(&text);
-                    }
-                    s.painter.draw(&mut window.pixels()[..w * h], w, h, &text);
-                    s.text = text;
-                }
-                window.show_pixels(w, h);
+                present(window, &mut player, ui, at_ms);
                 if n < 3 || n % 10 == 0 {
+                    let px = player.picture();
                     let hash = px.iter().fold(0xcbf2_9ce4_8422_2325u64, |a, &p| (a ^ p as u64).wrapping_mul(0x100_0000_01b3));
                     sex_pdx::serial_record!("[play.frame] n={} at_ms={} hash={:016x} probe={:06x}", n, at_ms, hash, px[(h / 2) * w + 3 * w / 4] & 0xFF_FFFF);
                 }
             }
             Step::Wait { ms } => { let _ = sex_pdx::sys_wait_self_ticks(ms.clamp(1, 16)); }
-            Step::Paused => { let _ = sex_pdx::sys_wait_self_ticks(30); }
-            Step::Ended => break,
+            Step::Paused => {
+                // Controls fade a moment after the last key even while paused.
+                let _ = sex_pdx::sys_wait_self_ticks(30);
+            }
+            Step::Ended => break Outcome::Ended,
         }
+    };
+    let at_ms = player.time_ms();
+    if outcome == Outcome::Closed {
+        sex_pdx::serial_record!("[play.closed] target={} task={} frames={}", window.target, window.task, player.shown);
     }
     if let Some(e) = player.error() {
         return Err(e);
     }
     let ms = sex_pdx::get_ticks() - begun;
-    sex_pdx::serial_record!("[play.done] frames={} ms={} w={} h={} sound_frames={} played={} late_ms={}",
-        player.shown, ms, w, h, player.heard, player.played(), player.late_ms);
-    Ok(Played { pictures: player.shown, sound_frames: player.heard })
+    if outcome == Outcome::Ended {
+        sex_pdx::serial_record!("[play.done] frames={} ms={} w={} h={} sound_frames={} played={} late_ms={}",
+            player.shown, ms, w, h, player.heard, player.played(), player.late_ms);
+    }
+    Ok(Played { pictures: player.shown, sound_frames: player.heard, outcome, at_ms, duration_ms: player.duration_ms() })
+}
+
+/// Where each video was left, in Play's own folder: "ms<TAB>path" lines, newest first.
+const RESUME_FILE: &[u8] = b"play-resume.txt";
+const RESUME_MAX: usize = 64;
+/// Positions this close to either end are not kept: start again from the beginning.
+const RESUME_EDGE_MS: u64 = 3000;
+
+struct Resume { entries: Vec<(u64, Vec<u8>)> }
+impl Resume {
+    fn load(window: &mut Window) -> Resume {
+        let mut buf = alloc::vec![0u8; 16 * 1024];
+        let n = files::read(window, RESUME_FILE, &mut buf).unwrap_or(0);
+        let entries = buf[..n].split(|b| *b == b'\n').filter_map(|l| {
+            let tab = l.iter().position(|b| *b == b'\t')?;
+            let ms = core::str::from_utf8(&l[..tab]).ok()?.parse().ok()?;
+            Some((ms, l[tab + 1..].to_vec()))
+        }).take(RESUME_MAX).collect();
+        Resume { entries }
+    }
+    fn get(&self, path: &[u8]) -> u64 { self.entries.iter().find(|e| e.1 == path).map_or(0, |e| e.0) }
+    /// Remembers `ms` for `path`, or forgets it near either end. Writes when it changed.
+    fn set(&mut self, window: &mut Window, path: &[u8], ms: u64, duration: u64) {
+        let keep = ms >= RESUME_EDGE_MS && (duration == 0 || ms + RESUME_EDGE_MS < duration);
+        let before = self.get(path);
+        if (keep && before == ms) || (!keep && before == 0) { return; }
+        self.entries.retain(|e| e.1 != path);
+        if keep { self.entries.insert(0, (ms, path.to_vec())); self.entries.truncate(RESUME_MAX); }
+        let mut out = Vec::new();
+        for (ms, p) in &self.entries {
+            out.extend_from_slice(alloc::format!("{}\t", ms).as_bytes());
+            out.extend_from_slice(p);
+            out.push(b'\n');
+        }
+        let ok = files::write(window, RESUME_FILE, &out).is_ok();
+        sex_pdx::serial_record!("[play.resume.saved] ms={} kept={} ok={}", ms, keep as u8, ok as u8);
+    }
+}
+
+fn is_subtitles(w: &[u8]) -> bool {
+    [&b".srt"[..], b".ass", b".ssa"].iter().any(|e| w.len() > e.len() && w[w.len() - e.len()..].eq_ignore_ascii_case(e))
+}
+
+/// Plays the playlist: each video, with the subtitle file named right after it.
+fn playlist(window: &mut Window, words: &[&[u8]]) {
+    let mut items: Vec<(&[u8], Option<&[u8]>)> = Vec::new();
+    for w in words.iter().copied().filter(|w| !w.starts_with(b"--")) {
+        match items.last_mut() {
+            Some(last) if is_subtitles(w) && last.1.is_none() => last.1 = Some(w),
+            _ => items.push((w, None)),
+        }
+    }
+    if items.is_empty() { return fail(window, b"Usage: run play @VIDEO.mp4 [@SUBTITLES.srt] [@MORE.mp4 ...]"); }
+    let mut resume = Resume::load(window);
+    let mut ui = Ui { subs: None, controls: captions::Painter::new(), controls_until: 0, item: (0, items.len()), drawn_ms: 0 };
+    let mut i = 0usize;
+    while i < items.len() {
+        let (path, given) = items[i];
+        ui.item = (i, items.len());
+        sex_pdx::serial_record!("[play.item] n={} of={} file={}", i, items.len(), core::str::from_utf8(path).unwrap_or("?"));
+        let len = match files::size(window, path) {
+            Ok(len) => len,
+            Err(e) => {
+                fail(window, files::message(e));
+                i += 1;
+                continue;
+            }
+        };
+        say(window, b"Opening...");
+        ui.subs = captions::load(window, path, given).and_then(|(file, track)| {
+            sex_pdx::serial_record!("[play.subtitles.loaded] file={} cues={}", core::str::from_utf8(&file).unwrap_or("?"), track.cues.len());
+            Some(Subs { track, painter: captions::Painter::new()?, on: true, text: alloc::string::String::new() })
+        });
+        let start = resume.get(path);
+        let wp: *mut Window = window;
+        let src = FileSource { window: wp, path: path.to_vec(), len, cache: Vec::new(), cache_at: 0 };
+        let rp: *mut Resume = &mut resume;
+        let mut save = |w: &mut Window, at: u64, total: u64| unsafe { (*rp).set(w, path, at, total) };
+        match play(unsafe { &mut *wp }, src, &mut ui, start, &mut save) {
+            Ok(p) => {
+                // Where it was left; an item played to its end starts afresh next time.
+                let at = if p.outcome == Outcome::Ended { 0 } else { p.at_ms.max(0) as u64 };
+                resume.set(window, path, at, p.duration_ms);
+                match p.outcome {
+                    Outcome::Closed => sex_pdx::task_finish(0),
+                    Outcome::Previous => { i = i.saturating_sub(1); continue; }
+                    Outcome::Next | Outcome::Ended => {}
+                }
+                if p.pictures == 0 && p.sound_frames == 0 { fail(window, b"That file has nothing to play."); }
+                else if p.pictures == 0 && i + 1 == items.len() { say(window, b"Finished playing."); }
+            }
+            Err(e) => {
+                let mut text = [0u8; 96];
+                let mut why = Vec::new();
+                why.extend_from_slice(b"Cannot play that file: ");
+                why.extend_from_slice(e.text(&mut text).as_bytes());
+                fail(window, &why);
+            }
+        }
+        i += 1;
+    }
+    sex_pdx::serial_record!("[play.playlist.done] items={}", items.len());
 }
 
 /// cos and sin of `x` (|x| up to about 4), by their series, since programs have no libm here.
@@ -326,35 +512,8 @@ pub extern "C" fn _start() -> ! {
         tone(&mut window, number(words.get(1)).unwrap_or(440), number(words.get(2)).unwrap_or(sex_app::sound::RATE));
         None
     } else { words.first().map(|f| f.to_vec()) };
-    match file {
-        None if words.first().is_some_and(|w| w.starts_with(b"--")) => {}
-        None => fail(&mut window, b"Usage: run play @VIDEO.mp4 [@SUBTITLES.srt]"),
-        Some(path) => match files::size(&mut window, &path) {
-            Err(e) => fail(&mut window, files::message(e)),
-            Ok(len) => {
-                say(&mut window, b"Opening...");
-                let given = words.get(1).filter(|w| !w.starts_with(b"--")).copied();
-                let subs = captions::load(&mut window, &path, given).and_then(|(file, track)| {
-                    sex_pdx::serial_record!("[play.subtitles.loaded] file={} cues={}", core::str::from_utf8(&file).unwrap_or("?"), track.cues.len());
-                    Some(Subs { track, painter: captions::Painter::new()?, on: true, text: alloc::string::String::new() })
-                });
-                let wp: *mut Window = &mut window;
-                let src = FileSource { window: wp, path, len, cache: Vec::new(), cache_at: 0 };
-                match play(unsafe { &mut *wp }, src, subs) {
-                    Ok(p) if p.pictures == 0 && p.sound_frames == 0 => fail(&mut window, b"That file has nothing to play."),
-                    Ok(p) if p.pictures == 0 => say(&mut window, b"Finished playing."),
-                    Ok(_) => {}
-                    Err(e) => {
-                        let mut text = [0u8; 96];
-                        let mut why = Vec::new();
-                        why.extend_from_slice(b"Cannot play that file: ");
-                        why.extend_from_slice(e.text(&mut text).as_bytes());
-                        fail(&mut window, &why);
-                    }
-                }
-            }
-        },
-    }
+    if file.is_some() { playlist(&mut window, &words); }
+    else if !words.first().is_some_and(|w| w.starts_with(b"--")) { fail(&mut window, b"Usage: run play @VIDEO.mp4 [@SUBTITLES.srt] [@MORE.mp4 ...]"); }
     sex_pdx::serial_record!("[play.ready] target={} task={}", window.target, window.task);
     loop {
         if let Event::Close = window.next() {
