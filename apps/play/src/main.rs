@@ -251,6 +251,7 @@ fn play(window: &mut Window, src: FileSource, ui: &mut Ui, start_ms: u64, progre
     }
     let mut stalled = false;
     let mut saved_at = sex_pdx::get_ticks();
+    let mut flash = false;
     let outcome = loop {
         if let Some(o) = keys(window, &mut player, ui) { break o; }
         if let (Some(sex_media::Silence::Stalled { played, pending }), false) = (player.silence(), stalled) {
@@ -265,6 +266,12 @@ fn play(window: &mut Window, src: FileSource, ui: &mut Ui, start_ms: u64, progre
         match player.step() {
             Step::Picture { n, at_ms } => {
                 present(window, &mut player, ui, at_ms);
+                // A picture that turns bright in the middle is logged with the tick it
+                // was shown at: the A/V sync gate lines these up with its beeps.
+                let mid = player.picture().get((h / 2) * w + w / 2).copied().unwrap_or(0);
+                let bright = (mid >> 16 & 0xFF) + (mid >> 8 & 0xFF) + (mid & 0xFF) > 600;
+                if bright && !flash { sex_pdx::serial_record!("[play.flash] at_ms={} tick={} played={}", at_ms, sex_pdx::get_ticks(), player.played()); }
+                flash = bright;
                 if n < 3 || n % 10 == 0 {
                     let px = player.picture();
                     let hash = px.iter().fold(0xcbf2_9ce4_8422_2325u64, |a, &p| (a ^ p as u64).wrapping_mul(0x100_0000_01b3));
