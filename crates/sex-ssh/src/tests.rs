@@ -29,7 +29,7 @@ fn sshd(dir: &Path, host_alg: &str, key: &keys::Ed25519) -> Option<Sshd> {
     std::fs::write(dir.join("sshd_config"), cfg).unwrap();
     // sshd needs root for privilege separation; CI runners have password-less sudo.
     let mut cmd = if root() { Command::new("/usr/sbin/sshd") } else { let _ = Command::new("sudo").args(["-n", "mkdir", "-p", "/run/sshd"]).status(); let mut c = Command::new("sudo"); c.args(["-n", "/usr/sbin/sshd"]); c };
-    let child = cmd.args(["-D", "-e", "-f"]).arg(dir.join("sshd_config")).stderr(Stdio::null()).spawn().unwrap();
+    let child = cmd.args(["-D", "-e", "-f"]).arg(dir.join("sshd_config")).stderr(std::fs::File::create(dir.join("sshd.log")).map(Stdio::from).unwrap_or(Stdio::null())).spawn().unwrap();
     let began = Instant::now();
     while TcpStream::connect(("127.0.0.1", port)).is_err() { assert!(began.elapsed() < Duration::from_secs(10)); std::thread::sleep(Duration::from_millis(20)); }
     Some(Sshd { child, port, pid: dir.join("pid") })

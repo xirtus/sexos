@@ -65,6 +65,8 @@ jobs:
     - name: WireGuard protocol (Python peer interop) and SSH client (real OpenSSH) on the host
       run: |
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends openssh-server
+        # The runner account is password-locked; without PAM sshd refuses locked accounts even for keys.
+        sudo usermod -p '*' "$USER"
         cargo test --locked -p sex-wg
         cargo test --locked -p sex-ssh
     - name: Crash record format host regressions
@@ -155,6 +157,7 @@ jobs:
     - name: ssh program logs in to OpenSSH on the host
       run: |
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends openssh-server
+        sudo usermod -p '*' "$USER"
         python3 scripts/ssh_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/ssh"
     - name: Web page JavaScript (native QuickJS tier)
       run: |
