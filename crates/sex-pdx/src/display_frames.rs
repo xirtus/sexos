@@ -10,6 +10,10 @@ use crate::memory_region::{RegionView,QUERY_VIEW,READ,WRITE,USER_VA_END};
 
 pub const SLOT:u64=98;
 pub const REGION_ID:u32=11;
+/// Scanout buffer BOOT adds beside the frames when Display holds a virtio-gpu:
+/// one packed frame, DMA-addressable, the host resource's backing.
+pub const SCANOUT_SLOT:u64=26;
+pub const SCANOUT_REGION_ID:u32=0x4210;
 pub const MAX_WIDTH:u64=8192;
 pub const MAX_HEIGHT:u64=4320;
 pub const PAGE:u64=4096;

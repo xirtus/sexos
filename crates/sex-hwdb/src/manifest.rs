@@ -121,10 +121,14 @@ pub const BELL: Manifest = Manifest {
     ],
 };
 
-/// sexdisplay: every display controller, as identity only.
+/// sexdisplay: virtio-gpu as a driven device (slice L2), every other display
+/// controller as identity only.
 pub const DISPLAY: Manifest = Manifest {
     service: Service::Display, max_devices: 0, vectors: 0,
-    matches: &[Match::class(0x03_00_00, BASE, Lease::Display, 0)],
+    matches: &[
+        Match::id(0x1af4, 0x1050, Lease::Virtio, 25),
+        Match::class(0x03_00_00, BASE, Lease::Display, 0),
+    ],
 };
 
 /// Every manifest, in the order BOOT consults them.

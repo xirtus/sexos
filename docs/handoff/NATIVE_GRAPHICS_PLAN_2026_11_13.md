@@ -29,6 +29,32 @@ Nothing in the kernel changed. All of it is ring-3 library code (guardrails:
 drivers live in services). The Intel code is written from the public PRMs; the
 MIT i915 headers were a cross-check only. Ledger table 2 has the row.
 
+## L2: virtio-gpu in Display (second PR)
+
+- **What runs.** BOOT leases a virtio-gpu (1af4:1050) to Display at slot 25 with the
+  usual virtio BAR view, command grant and DMA pool, and adds a DMA-addressable
+  scanout buffer of one packed frame at slot 26 (`display_frames::SCANOUT_*`).
+  `servers/sexdisplay/src/virtio_gpu.rs` (written from virtio 1.2 §5.7, no crate)
+  resets the device, negotiates `VERSION_1` + `EDID`, reads the heads and the EDID,
+  creates resource 1 on the scanout buffer, copies the boot picture into it and sets
+  the scanout, so the switch shows no black frame.
+- **Every publication is a flip.** `publish_frame` writes the changed spans into the
+  scanout buffer as before, then sends one `TRANSFER_TO_HOST_2D` for the changed rows
+  and one fenced `RESOURCE_FLUSH`. The host shows the resource only on flush, so a
+  half-written frame never appears. The fence id is the flip sequence
+  (`[display.kms.flip] sequence=N`).
+- **Gate** `scripts/virtio_gpu_gate.py` (CI, "Disks, power and fuzzing"): receipts for
+  lease, scanout grant, head, EDID (QEMU's 1280x800) and takeover; a screendump of the
+  host resource shows the desktop; moving the pointer changes the screen afterwards.
+- Without a virtio-gpu nothing changes (`[display.kms.virtio] takeover=0 reason=no_lease`).
+- BOOT's frame-reservation table grew from 128 to 192 entries: the QEMU desktop had
+  used all 128 and the scanout buffer was the 129th.
+- **Not yet:** the desktop still runs at the mode Limine chose (1024x768 in that
+  gate) although the EDID says 1280x800; switching to the EDID mode needs Display's
+  frames to be re-laid out at runtime. Flips are not yet held to the refresh rate, the
+  pointer is still drawn into the frame (cursor queue = L6), and display hotplug
+  events (`VIRTIO_GPU_EVENT_DISPLAY`) and a second head (L5) are next.
+
 ## The x17 R1 and its screens (what to check on the hardware)
 
 - The internal panel is on the Intel iGPU in hybrid (Optimus) mode. If the BIOS
@@ -46,7 +72,7 @@ MIT i915 headers were a cross-check only. Ledger table 2 has the row.
 
 ## Next PRs, in order
 
-1. **L2 virtio-gpu in `sexdisplay` (QEMU).** Manifest row for virtio-gpu
+1. ~~**L2 virtio-gpu in `sexdisplay` (QEMU).**~~ Done in the second PR (section above); what remains of it is native resolution, pacing and the second head. Manifest row for virtio-gpu
    (1af4:1050) leased to `sexdisplay`; 2D resources backed by the existing frame
    spans (needs their device addresses through the DMA-lend window, syscall 90);
    `SET_SCANOUT` + `RESOURCE_FLUSH` per flip, fence completion as the flip event,

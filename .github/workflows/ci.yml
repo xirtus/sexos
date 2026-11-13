@@ -198,6 +198,8 @@ jobs:
       run: python3 scripts/power_acpi_gate.py --iso sexos-v1.0.0.iso --out "$RUNNER_TEMP/sexos-power"
     - name: Discrete GPU powered off through ACPI
       run: python3 scripts/dgpu_power_gate.py --iso sexos-v1.0.0.iso --out "$RUNNER_TEMP/sexos-dgpu"
+    - name: Display drives a virtio-gpu (EDID, takeover, tear-free flips)
+      run: python3 scripts/virtio_gpu_gate.py --iso sexos-v1.0.0.iso --out "$RUNNER_TEMP/sexos-virtio-gpu"
     - name: Reboot persistence and rendering
       run: GATE_DIR="$RUNNER_TEMP/sexos-persistence" SKIP_BUILD=1 bash scripts/disk_persistence_gate.sh
     - name: Syscall and IPC fuzzing
