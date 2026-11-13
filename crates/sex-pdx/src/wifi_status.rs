@@ -22,14 +22,19 @@ pub const SCAN: u64 = 2;
 /// or `PART_SSID + k` for SSID bytes 7k..7k+7. Replies `MISSING` past the end.
 pub const NETWORK: u64 = 3;
 /// Joins network `a` of the last finished scan: onto its channel (W5a), then
-/// authentication and association (W5b). Shell and Spindle only. Replies with the state word
-/// (phase `JOINING` when it started).
+/// authentication and association (W5b). While on another network, or after a failed
+/// join, the chip restarts, scans, and joins the network by name. Shell and Spindle
+/// only. Replies with the state word (phase `JOINING` when it started).
 pub const JOIN: u64 = 4;
-/// Part of the passphrase for the next `JOIN` (WPA2): `a` = part k (bits 0..8) and
-/// the whole length (8..16), `b` = bytes 7k..7k+7 as `bytes_word`. Shell and
-/// Spindle only. sexnet keeps it until the join, then only the key derived from it.
-/// A `JOIN` of a WPA2 network without one is answered `NEEDS_PASSWORD`.
+/// Part of the passphrase for the next `JOIN` (WPA2/WPA3): `a` = part k (bits 0..8)
+/// and the whole length (8..16), `b` = bytes 7k..7k+7 as `bytes_word`. Shell and
+/// Spindle only. sexnet keeps it in its own memory for this boot, to rejoin the
+/// network after a lost link, until `LEAVE` or a refused handshake; never in a file.
+/// A `JOIN` of a secured network without one is answered `NEEDS_PASSWORD`.
 pub const PASSWORD: u64 = 5;
+/// Leaves the network (if any), forgets it and its passphrase, and restarts the chip,
+/// which scans again. Shell and Spindle only. Replies with the state word.
+pub const LEAVE: u64 = 6;
 /// 9 × 7 bytes hold WPA2's 63-character maximum.
 pub const PASSWORD_PARTS: u64 = 9;
 pub const PASSWORD_MAX: usize = 63;

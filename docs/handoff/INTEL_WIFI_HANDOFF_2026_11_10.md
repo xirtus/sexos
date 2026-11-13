@@ -14,6 +14,7 @@ This note is for whoever picks up the native Intel Wi-Fi driver (`crates/sex-wif
 | W5f | group/pairwise rekeying while connected | PR #120 |
 | W5g | firmware rate control (TLC), legacy rates up to 54 Mb/s | PR #120 |
 | W5d | WPA3-Personal: SAE (hunting-and-pecking + H2E, anti-clogging tokens) | PR #120 |
+| W6a | multicast filter, beacon loss, chip restart, automatic rejoin, `wifi leave` | design doc section 18 |
 
 Everything is tested only against the firmware model in `crates/sex-wifi/tests/driver.rs`.
 No radio has run yet. First real test: the Alienware x17 R1 (Killer AX1675x,
@@ -24,7 +25,8 @@ No radio has run yet. First real test: the Alienware x17 R1 (Killer AX1675x,
 - `bash scripts/wifi_host_gate.sh` runs 50 driver tests and the Spindle command tests.
 - Build sexnet with the RUSTFLAGS line in `scripts/entrypoint_build.sh`
   (`-Z build-std`, `--target x86_64-sex.json`).
-- On hardware, from Spindle: `wifi`, `wifi scan`, then `wifi join N PASSPHRASE`.
+- On hardware, from Spindle: `wifi`, `wifi scan`, then `wifi join N PASSPHRASE`
+  (`wifi leave` disconnects; a wrong passphrase can simply be retried).
   Check the serial log, in order:
   - `[wifi.joined]`
   - `[wifi.associated]`
@@ -57,10 +59,10 @@ No radio has run yet. First real test: the Alienware x17 R1 (Killer AX1675x,
    - smart FIFO (SF_CONFIG)
    - multicast filter (MCAST_FILTER_CMD, so ARP/IPv6 multicast is received reliably)
    - power save
-   - beacon-loss / missed-beacon notification, to take the link down and rejoin
-5. **Reconnect.** Rejoin after a deauthentication or a link loss, and remember the
-   last network (passphrase storage needs a design decision: keep it in a capability-held
-   secret, never in plain files).
+   - (multicast filter and beacon loss: done in W6a)
+5. **Remember networks across boots.** W6a rejoins within a boot (section 18). Keeping
+   passphrases across reboots needs an encrypted, capability-held secret store; until
+   then the user types `wifi join` once per boot.
 6. **Status bar Wi-Fi chip.** SilkBar has no SLOT_NET route; it needs a kernel init grant.
 
 ## Rules
