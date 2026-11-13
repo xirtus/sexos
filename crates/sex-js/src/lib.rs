@@ -15,6 +15,7 @@ extern crate alloc;
 #[cfg(feature = "baseline-jit")]
 pub mod baseline;
 pub mod document;
+pub mod storage;
 pub mod webgl;
 #[cfg(sexjs_native)]
 mod native;
@@ -115,6 +116,10 @@ pub mod op {
     /// (to -1) or into iframe element `to`. The browser delivers it as
     /// `message\tFROM\tORIGIN\tDATA` (FROM `parent`, or the iframe element it came from).
     pub const POST_MESSAGE: u32 = 32;
+    /// `localStorage` of the page's origin: (verb, key, value) with verb `get`, `set`
+    /// (answers `!` over the quota), `remove`, `clear`, `len` or `key` (key = index).
+    /// Nothing answers when the page has no lasting storage (not an http(s) page).
+    pub const STORAGE: u32 = 33;
 }
 
 /// What scripts act on. A `None` result is JavaScript `null`.

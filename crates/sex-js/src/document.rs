@@ -23,6 +23,8 @@ pub struct Document {
     pub navigate: Option<String>,
     /// The body of a form POST that `navigate` loads (form-urlencoded).
     pub navigate_post: Option<String>,
+    /// The POST body's `Content-Type` (empty: `application/x-www-form-urlencoded`).
+    pub navigate_type: String,
     /// `document.referrer`: the page this one was opened from, as its request said.
     pub referrer: String,
     /// For a page in an iframe, the origin of the page around it (`window.parent`).
@@ -63,6 +65,8 @@ pub struct Document {
     pub cookies: Option<alloc::rc::Rc<core::cell::RefCell<sex_fetch::Jar>>>,
     /// Seconds since 1970, for cookie expiry.
     pub wall: fn() -> u64,
+    /// `localStorage` of every origin, kept by the browser.
+    pub storage: Option<alloc::rc::Rc<core::cell::RefCell<crate::storage::WebStorage>>>,
     /// Loaded ES module sources by address, for `import`.
     pub modules: alloc::collections::BTreeMap<String, String>,
     /// Module addresses asked for and not in `modules`.
@@ -168,7 +172,7 @@ fn rough_measure(font: &str, text: &str) -> i32 {
 
 impl Document {
     pub fn new(dom: Dom, url: &str, viewport: (i32, i32), clock: fn() -> u64) -> Self {
-        Self { resource_owner: NEXT_RESOURCE_OWNER.fetch_add(1, Ordering::Relaxed), source_policies: Default::default(), source_policy_overflow: false, dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, navigate_post: None, referrer: String::new(), parent_origin: None, outbox: Vec::new(), rects: Vec::new(), layers: Vec::new(), clock, canvas_queue: Vec::new(), measure: rough_measure, gl: Default::default(), pictures: Vec::new(), fetches: Vec::new(), classic_scripts: Vec::new(), bodies: Vec::new(), media: Vec::new(), media_bytes: Vec::new(), heads: Vec::new(), next_fetch: 0, cookies: None, wall: || 0, modules: Default::default(), modules_wanted: Vec::new(), import_map: Vec::new() }
+        Self { resource_owner: NEXT_RESOURCE_OWNER.fetch_add(1, Ordering::Relaxed), source_policies: Default::default(), source_policy_overflow: false, dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, navigate_post: None, navigate_type: String::new(), referrer: String::new(), parent_origin: None, outbox: Vec::new(), rects: Vec::new(), layers: Vec::new(), clock, canvas_queue: Vec::new(), measure: rough_measure, gl: Default::default(), pictures: Vec::new(), fetches: Vec::new(), classic_scripts: Vec::new(), bodies: Vec::new(), media: Vec::new(), media_bytes: Vec::new(), heads: Vec::new(), next_fetch: 0, cookies: None, wall: || 0, storage: None, modules: Default::default(), modules_wanted: Vec::new(), import_map: Vec::new() }
     }
 
     /// Takes each element's laid-out box from the browser's layout, for
@@ -326,6 +330,21 @@ impl Page for Document {
                 if self.log.len() < 256 { self.log.push((level, String::from(&text[..floor(text, 1024)]))); }
                 None
             }
+            op::STORAGE => {
+                let store = self.storage.clone()?;
+                let url = self.page_url()?;
+                let origin = url.origin();
+                let key = a.get(1).copied().unwrap_or("");
+                return match *a.first()? {
+                    "get" => store.borrow().get(&origin, key).map(String::from),
+                    "set" => Some(String::from(if store.borrow_mut().set(&origin, key, a.get(2).copied().unwrap_or("")) { "" } else { "!" })),
+                    "remove" => { store.borrow_mut().remove(&origin, key); Some(none()) }
+                    "clear" => { store.borrow_mut().clear(&origin); Some(none()) }
+                    "len" => Some(format!("{}", store.borrow().len(&origin))),
+                    "key" => store.borrow().key(&origin, key.parse().ok()?).map(String::from),
+                    _ => None,
+                };
+            }
             op::BY_ID => {
                 let want = *a.first()?;
                 self.dom.descendants(Dom::ROOT).into_iter().find(|&n| self.dom.attr(n, "id") == Some(want)).map(|n| format!("{n}"))
@@ -412,7 +431,11 @@ impl Page for Document {
                 Some(attrs.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>().join("\n"))
             }
             op::VIEWPORT => Some(format!("{},{}", self.viewport.0, self.viewport.1)),
-            op::NAVIGATE => { self.navigate = Some(String::from(*a.first()?)); self.navigate_post = a.get(1).filter(|m| m.eq_ignore_ascii_case("post")).map(|_| String::from(a.get(2).copied().unwrap_or(""))); None }
+            op::NAVIGATE => { self.navigate = Some(String::from(*a.first()?)); self.navigate_post = a.get(1).filter(|m| m.eq_ignore_ascii_case("post")).map(|_| String::from(a.get(2).copied().unwrap_or("")));
+                // Only the form encodings a page may choose.
+                let ty = a.get(3).copied().unwrap_or("");
+                self.navigate_type = if ty.starts_with("multipart/form-data; boundary=") || ty == "text/plain" { String::from(ty) } else { String::new() };
+                None }
             op::CLICKABLE => {
                 let n = self.element(a.first())?;
                 if self.dom.clickable.insert(n) { self.dirty = true; }
