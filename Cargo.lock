@@ -3886,6 +3886,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-diskimage"
+version = "0.1.0"
+dependencies = [
+ "miniz_oxide 0.9.1",
+ "sex-archive",
+ "sex-disk",
+]
+
+[[package]]
 name = "sex-fetch"
 version = "0.1.0"
 dependencies = [

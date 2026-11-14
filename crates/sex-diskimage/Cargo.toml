@@ -1,0 +1,11 @@
+[package]
+name = "sex-diskimage"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Read-only disk and CD images for SexOS programs: ISO 9660 (Joliet, Rock Ridge, El Torito), UDF, raw, qcow2, VHD, VHDX, VMDK and their MBR/GPT partitions"
+
+[dependencies]
+sex-archive = { path = "../sex-archive" }
+sex-disk = { path = "../sex-disk" }
+miniz_oxide = { version = "=0.9.1", default-features = false, features = ["with-alloc"] }
