@@ -287,13 +287,16 @@ fn stereo_opposite_polarity_waveform_is_not_mistaken_for_silence() {
 fn tiled_550_by_144_canvas_fits_and_pointer_uses_the_scaled_time_axis() {
     let (mut ui, mut s) = studio();
     s.session.add(vec![[1000; 2]; 48000]).unwrap();
-    s.handle_event(
+    let responses = s.handle_event(
         &mut ui,
         Event::Resize {
             width: 550,
             height: 144,
         },
     );
+    assert!(responses
+        .iter()
+        .any(|r| matches!(r, Response::Command(c) if c == "moan.layout")));
     s.refresh(&mut ui);
     ui.layout();
     reveal(&mut ui, &s);

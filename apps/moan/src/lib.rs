@@ -389,6 +389,7 @@ impl Studio {
             ("moan.format.flac", "FLAC Export", "Ctrl+Shift+2"),
             ("moan.format.mp3", "MP3 Export", "Ctrl+Shift+3"),
             ("moan.timeline", "Show Waveform Timeline", "Ctrl+T"),
+            ("moan.metrics", "Refresh View", "Ctrl+Shift+L"),
             ("moan.tone", "Add Tone Track", "Ctrl+Shift+T"),
             ("moan.split", "Split Clip", "Ctrl+E"),
             ("moan.cut", "Cut Selected Time", "Ctrl+Shift+K"),
@@ -771,7 +772,7 @@ impl Studio {
             }
         }
         let resized = matches!(event, weft::Event::Resize { .. });
-        let responses = ui.handle(event);
+        let mut responses = ui.handle(event);
         if resized {
             let height =
                 waveform::HEADER + waveform::ROW * self.session.tracks.len().min(MAX_TRACKS).max(1);
@@ -786,6 +787,7 @@ impl Studio {
                     .shrink(0.0),
             );
             ui.layout();
+            responses.push(Response::Command("moan.layout".into()));
         }
         responses
     }
@@ -811,8 +813,8 @@ impl Studio {
         let rect = ui.rect(self.waveform);
         let p = Point::new(pointer.x / ui.theme().scale, pointer.y / ui.theme().scale);
         let visible = rect.intersect(&ui.rect(self.viewport));
-        let x = (((p.x - rect.x).max(0.0) / (rect.w - 1.0).max(1.0) * (waveform::WIDTH - 1) as f32)
-            as usize)
+        let x = (((p.x - rect.x).max(0.0) / (rect.w - 1.0).max(1.0) * (waveform::WIDTH - 1) as f32
+            + 0.5) as usize)
             .min(waveform::WIDTH - 1);
         let frame = self.view.frame(x);
         if pointer.kind == PointerKind::Down(Button::Left)

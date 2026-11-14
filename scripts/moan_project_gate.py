@@ -7,6 +7,8 @@ from pathlib import Path
 from install_program import install
 from quil_autosave_gate import boot
 from program_egui_gate import colours
+from program_gate_geometry import current_tile
+from moan_gate_geometry import ready, viewport, origin
 ROOT=Path(__file__).resolve().parents[1]
 class Controls:
     def __init__(self,g,out,resolution):self.g=g;self.q=g['q'];self.text=g['text'];self.out=out;self.rw,self.rh=map(int,resolution.split('x'))
@@ -25,16 +27,17 @@ class Controls:
         start=self.run(line or 'run '+name);m=self.g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',start,120)
         return start,int(m[1]),int(m[2]),int(m[3])
     def focus(self,surface):self.g['focus'](surface);time.sleep(.4)
-    def tile(self,surface):return list(map(int,re.findall(rf'\[shell.tile.apply\] sid={surface} x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)',self.text())[-1]))
+    def tile(self,surface):return current_tile(self.text(),surface)
     def move(self,x,y):
         self.q.cmd('input-send-event',{'events':[{'type':'abs','data':{'axis':'x','value':round(max(0,min(self.rw-1,x))*32767/(self.rw-1))}},{'type':'abs','data':{'axis':'y','value':round(max(0,min(self.rh-1,y))*32767/(self.rh-1))}}]});time.sleep(.2)
     def button(self,down):self.q.cmd('input-send-event',{'events':[{'type':'btn','data':{'down':down,'button':'left'}}]});time.sleep(.2)
     def timeline(self,surface):
         self.focus(surface);start=len(self.text());self.chord('ctrl','t');m=self.g['wait'](r'\[moan.timeline\] x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+) start=(\d+) span=(\d+)',start,60)
-        x,y,w,h,start_frame,span=map(int,m.groups());tile=self.tile(surface)
-        return tile[0]+8+x,tile[1]+36+y,w,h,start_frame,span
+        x,y,w,h,start_frame,span=map(int,m.groups());tile,size=viewport(self.g,surface,start);ox,oy=origin(tile,size)
+        assert 0 <= x and 0 <= y and x+w <= size[0] and y+h <= size[1], (x,y,w,h,size)
+        return ox+x,oy+y,w,h,start_frame,span
     def drag(self,surface,left,right,track=1):
-        x,y,w,h,_,_=self.timeline(surface);row=y+20+track*56+25;start=len(self.text());self.move(x+left,row);self.button(True);self.move(x+right,row);self.button(False)
+        x,y,w,h,_,_=self.timeline(surface);row=y+20+track*56+25;start=len(self.text());self.move(x+round(left*(w-1)/559),row);self.button(True);self.move(x+round(right*(w-1)/559),row);self.button(False)
         m=self.g['wait'](rf'\[moan.selection\] track={track} cursor=\d+ from=(\d+) to=(\d+) dirty=\d',start,60)
         # The initial Down receipt is empty selection; wait for nonempty final range.
         self.g['wait'](rf'\[moan.selection\] track={track} cursor=\d+ from=[1-9]\d* to=[1-9]\d* dirty=\d',start,60)
@@ -54,7 +57,7 @@ def main():
     try:
         c=Controls(g,out,a.resolution);g['wait'](r'\[app.private.retired\] target=41 ',0,180)
         start,_,_,files_surface=c.launch('files','files');g['wait'](r'\[files.app.ready\].*portal=1',start,180)
-        start,target,task,surface=c.launch('moan');g['wait'](r'\[moan.ready\]',start,300);c.focus(surface)
+        start,target,task,surface=c.launch('moan');g['wait'](r'\[moan.ready\]',start,300);ready(g,surface);c.focus(surface)
         for n in (1,2):
             start=len(c.text());c.chord('ctrl','shift','t');g['wait'](rf'\[moan.project\] tracks={n} frames=96000',start,60)
         c.drag(surface,70,210);start=len(c.text());c.chord('ctrl','shift','k');g['wait'](r'\[moan.project\] tracks=2 frames=96000 selected=1 clips=3',start,60)
@@ -80,9 +83,9 @@ def main():
         c=Controls(g,out,a.resolution);g['wait'](r'\[app.private.retired\] target=41 ',0,180)
         start,target,task,surface=c.launch('moan','run moan @/edit.moan')
         g['wait'](rf'\[moan.project.opened\] bytes={saved_bytes} tracks=2 clips=3 hash={saved_hash} sources_shared=1 clean=1',start,300)
-        g['wait'](r'\[moan.ready\]',start,120);c.timeline(surface);c.screenshot(surface,'reopened-waveform.ppm')
+        g['wait'](r'\[moan.ready\]',start,120);ready(g,surface);c.timeline(surface);c.screenshot(surface,'reopened-waveform.ppm')
         # The reopened clip can still be edited, then undone to its clean baseline.
-        x,y,w,h,_,_=c.timeline(surface);c.move(x+490,y+20+56+25);c.button(True);c.button(False)
+        x,y,w,h,_,_=c.timeline(surface);c.move(x+round(490*(w-1)/559),y+20+56+25);c.button(True);c.button(False)
         start=len(c.text());c.chord('ctrl','e');g['wait'](r'\[moan.project\] tracks=2 frames=96000 selected=1 clips=4',start,60)
         start=len(c.text());c.chord('ctrl','z');g['wait'](r'\[moan.project\] tracks=2 frames=96000 selected=1 clips=3',start,60);g['wait'](r'\[moan.selection\].*dirty=0',start,60)
         c.screenshot(surface,'reopened-edit-undo.ppm');c.close(surface,target,task)
