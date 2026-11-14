@@ -113,6 +113,8 @@ jobs:
       run: bash scripts/wifi_host_gate.sh
     - name: Power off and restart through ACPI (host half)
       run: bash scripts/power_host_gate.sh
+    - name: Drag VM ABI layouts and VMX/EPT encodings (host half)
+      run: bash scripts/drag_host_gate.sh
 
   truth:
     name: Host kernel-model regressions (${{ matrix.shard }}/3)
@@ -295,6 +297,10 @@ jobs:
       run: |
         truncate -s 1G "$RUNNER_TEMP/fuzz-source.img"
         python3 scripts/syscall_fuzz_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/fuzz-source.img" --out "$RUNNER_TEMP/sexos-fuzz"
+    - name: Drag VM syscall 110 refused cleanly without VMX (QEMU TCG; the guest path needs --accel kvm)
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/drag-source.img"
+        python3 scripts/drag_gate.py --accel tcg --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/drag-source.img" --out "$RUNNER_TEMP/sexos-drag"
     - name: Preserve evidence
       if: always()
       uses: actions/upload-artifact@v4
@@ -311,6 +317,7 @@ jobs:
           ${{ runner.temp }}/sexos-dgpu
           ${{ runner.temp }}/sexos-persistence
           ${{ runner.temp }}/sexos-fuzz
+          ${{ runner.temp }}/sexos-drag
         if-no-files-found: ignore
 
   media:

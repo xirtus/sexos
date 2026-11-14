@@ -65,7 +65,7 @@ All of this stays out of the kernel, in a confined server per guest:
 | Phase | Delivers | Test |
 | --- | --- | --- |
 | D0 | This design, Andreas's decision, budget row | review |
-| D1 | Kernel VMX: VM cap, lend/map, vCPU run, exits to ring 3 | gate: QEMU with nested VMX (`-cpu host,+vmx` under KVM in CI is not available, so TCG `-cpu max` which emulates VMX) runs a 16-byte real-mode guest that writes to port 0xE9 and halts |
+| D1 | Landed (branch `claude/project-thread-bcyshp-drag`): kernel VMX (`kernel/src/vmx.rs`), `SYS_VM` 110 ops 0-8 (`crates/sex-pdx/src/vm.rs`), Machine cap on program rows, `apps/dragtest` | host: `scripts/drag_host_gate.sh` (record layouts, EPT/VMX encodings). QEMU: `scripts/drag_gate.py`. QEMU TCG does not emulate VMX, so CI (`--accel tcg`) proves the clean refusal; the real-mode guest (four exits on port 0xE9, HLT) runs with `--accel kvm` on a host with VMX and nested KVM. See section 8. |
 | D2 | `drag` server: Linux direct boot, serial console, virtio-blk | gate: tiny Linux (or a unikernel) guest prints a line on its serial console |
 | D3 | virtio-net through SexNet, virtio-gpu 2D into a window, virtio-input | gate: guest screenshot shows its framebuffer |
 | D4 | SMP guests, x2APIC, posted interrupts, preemption fairness | bench vs bare metal |
@@ -84,3 +84,71 @@ All of this stays out of the kernel, in a confined server per guest:
 
 2026-11-14: Andreas approved (a) the `SYS_VM` mechanism in section 3 and (b) a kernel budget
 raise of about 1,200 lines for it. D1 starts.
+
+## 8. D1 as landed (2026-11-14)
+
+ABI change: new syscall 110 `SYS_VM` (`sex_pdx::vm`), new capability kind `Machine`
+(slot 261), both named here and pinned in `spec/abi_inputs.sha256`. 110 was checked free
+in `kernel/` and `crates/sex-pdx` at implementation time.
+
+| Op | Number | Arguments (rsi, rdx, r10, r8) | Reply |
+| --- | --- | --- | --- |
+| INFO | 0 | none | rsi = 1 when VMX is usable, rdx = reason code |
+| CREATE | 1 | none | rsi = vm |
+| LEND_MEMORY (= MAP) | 2 | vm, heap address, guest-physical address, pages \| access << 32 | rsi = pages |
+| VCPU_CREATE | 3 | vm | rsi = vcpu (real mode, 0000:0000) |
+| VCPU_RUN | 4 | vm, vcpu, `*mut Exit`, flags (`RUN_LOAD_REGS`) | the exit record |
+| VCPU_GET_REGS | 5 | vm, vcpu, `*mut State` | |
+| VCPU_SET_REGS | 6 | vm, vcpu, `*const State` | |
+| INJECT | 7 | vm, vcpu, vector \| kind << 8 \| has_error << 11, error code | |
+| DESTROY | 8 | vm | |
+
+Statuses: OK 0, INVALID 1, DENIED 2, UNAVAILABLE 3, EXHAUSTED 4, BUSY 5, ENTRY_FAILED 6
+(rsi = VM-instruction error). `Exit` is 192 bytes: basic reason (bit 31 = entry failure),
+instruction length, qualification, guest-physical and linear address, instruction info,
+interruption info and error, decoded I/O port/size/flags, and the 18 guest registers.
+
+How the kernel side works:
+
+- Nothing VMX runs until a program calls SYS_VM. The first call probes CPUID.1:ECX.VMX,
+  `IA32_FEATURE_CONTROL`, `IA32_VMX_BASIC`, the (TRUE) control MSRs, EPT capabilities and
+  the CR0/CR4 fixed bits, and logs `[drag] vmx=available ...` or
+  `[drag] vmx=unavailable reason=...`. Without VMX every op but INFO answers UNAVAILABLE.
+- VMX is scoped to one `VCPU_RUN`: interrupts off, CR4.VMXE on, VMXON (per-core region),
+  VMCLEAR + VMPTRLD (per-core VMCS), the whole VMCS written from the vCPU's `State`,
+  VMLAUNCH, exit, state read back, VMCLEAR, VMXOFF, CR4 restored. No core stays in VMX
+  operation between calls, so a vCPU may run on any core and INIT/NMI behave as before.
+- Controls: external-interrupt and NMI exiting (host interrupts stay the host's; an NMI
+  that exits is re-raised with `int 2`), VMX preemption timer when present (a slice of
+  4M TSC cycles), HLT, unconditional I/O, CR8, MOV-DR, MWAIT/MONITOR, RDPMC and WBINVD
+  exiting, no MSR bitmap (every MSR access exits), EPT + unrestricted guest, 64-bit
+  host, EFER saved and loaded. Host interrupt and time-slice exits come back to ring 3
+  and `sex_pdx::vm::run` simply runs again, so the scheduler and IRQs work as usual.
+- After every exit the kernel restores what the guest could change and the host relies
+  on: PKRU (guest WRPKRU), KERNEL_GS_BASE (guest SWAPGS), GDTR/IDTR limits (VM exit sets
+  them to 0xFFFF) and CR4.
+- Guest memory: only pages of the caller's own heap (`app_resources::heap_frames`: the
+  live run, pages `grow` gave it, still mapped as given, writable when the guest may
+  write). Kernel pages, BOOT pages, the image, the stack, device windows and other runs'
+  frames are refused. EPT leaves are write-back, 4 KiB. A page lent to a VM can not be
+  sealed as program code (`SYS_PROGRAM_CODE` refuses), so a guest can not write
+  instructions the WRPKRU scan has passed. EPT tables come from program frames and go
+  back on DESTROY; a global EPT generation makes every core INVEPT before its next entry
+  after any unmap or destroy. A run's VMs end in `retire`, before its frames are reused.
+- The capability: BOOT grants `Machine` (slot 261) to the program rows 41-49 only. Per-
+  program consent (a package grant asked through Spindle, like `+pkg`) is for D2.
+
+Kernel growth: about 560 non-blank lines (`vmx.rs` about 520, hooks in `app_resources`,
+`init`, `capability`, `syscalls`, `lib`), inside the 22,700 budget.
+
+What D1 leaves for later: guest FPU/XSAVE state is the VMM's own registers (D2 saves and
+restores it around the run), VPID, keeping VMX on and the VMCS loaded between runs (D4
+performance), MSR bitmaps, posted interrupts, SVM (D5), and per-program consent.
+
+Gate coverage: CI runs `scripts/drag_host_gate.sh` (host job) and
+`scripts/drag_gate.py --accel tcg` (devices job). QEMU TCG has no VMX, so CI proves that
+the kernel does not touch VMX at boot, reports `vmx=unavailable` on first use, refuses
+INFO/CREATE with UNAVAILABLE, and that the program closes and its row retires normally.
+The guest path (`--accel kvm`, auto-selected when `/dev/kvm` is usable and the host has
+vmx and pku) was not run in the cloud container this was built in (no /dev/kvm); it is
+the x17 / KVM-host receipt for D1.
