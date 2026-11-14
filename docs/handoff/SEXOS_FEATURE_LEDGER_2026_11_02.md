@@ -223,6 +223,12 @@ text, wheel) OK; sealed `make full` green. No runtime behaviour changed.
 **Limit.** This bounds one big stack object, not total stack depth. A real
 fix is a stack high-water measurement or a stack quota separate from heap.
 
+## G-13. Batik and Burlesque creative applications (2026-11-14)
+
+**What changed.** Built `apps/batik` (raster editor & digital painting window over `batik-core` with brush/eraser/bucket/selection tools, layers, levels/invert/blur adjustments, undo/redo, and PNG/ORA file persistence) and `apps/burlesque` (presentations window over `burlesque-core` with slide management, layouts, editable fields, `PresenterSession` presenter view, `.pptx`/`.odp`/`.md` open, and `%PDF-1.4` export), both `#![forbid(unsafe_code)]` with `SEX_LAYOUT_SEED` section shuffling.
+
+**Evidence.** Host headless window tests (`apps/batik/tests/window.rs`, `apps/burlesque/tests/window.rs`) and live SexOS QEMU gates (`scripts/batik_gate.py`, `scripts/burlesque_gate.py`).
+
 ## G-15. Flash UVC webcam driver server and capture app (2026-11-14)
 
 **What changed.** Added `crates/sex-uvc` (`#![no_std]`, `#![forbid(unsafe_code)]` USB Video Class 1.1/1.5 descriptor parser, 26/34-byte Probe/Commit control negotiation, bounded `FID`/`EOF`/`ERR` payload reassembler, and `YUY2`/`NV12`/`MJPEG` frame decoders), `servers/sexuvc` (ring-3 userspace UVC webcam driver server with per-client capability grants), and `apps/flash` (camera capture app saving PNG stills and encoding WebM VP9 video directly through Splicy's `sex_media::export::Exporter` without duplicating an encoder).

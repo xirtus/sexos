@@ -7,10 +7,12 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-echo "[burlesque_host_gate] Running cargo test --locked -p burlesque-core..."
+echo "[burlesque_host_gate] Running cargo test --locked -p burlesque-core -p burlesque --no-default-features..."
 cargo test --locked -p burlesque-core
+cargo test --locked -p burlesque --no-default-features
 
 echo "[burlesque_host_gate] Checking x86_64-sex-app.json build target (no_std + alloc)..."
 cargo check --locked -p burlesque-core --target x86_64-sex-app.json -Z build-std=core,compiler_builtins,alloc
+cargo check --locked -p burlesque --target x86_64-sex-app.json -Z build-std=core,compiler_builtins,alloc
 
 echo "[burlesque_host_gate] PASS"
