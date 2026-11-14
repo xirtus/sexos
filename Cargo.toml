@@ -118,6 +118,7 @@ members = [
     "crates/vellum-edit",
     "crates/loom-core",
     "crates/aftercare-core",
+    "crates/corset-core",
 ]
 [workspace.package]
 license = "GPL-3.0-only"
