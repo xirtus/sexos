@@ -29,6 +29,7 @@ struct Desc{window_id:u64}struct Window{desc:Desc}
 enum UpdateKind{SetActiveApp}
 const MAX_TABS_PER_FRAME:u8=4;const HOVER_NONE:u32=0;const FRAME_LIGHT_NONE:u8=0;
 unsafe fn shell_program_reborn(_:&sex_pdx::PdxMessage){}
+unsafe fn launch_ended(_:u32,_:u32){}
 static mut APP_CUSTODY:[Option<app_custody::Entry>;3]=[None;3];
 static mut FRAMES:[Option<Frame>;3]=[None;3];static mut COLLAR_GRANTS:[Option<Grant>;3]=[None;3];
 static mut WINDOWS:Vec<Window>=Vec::new();
