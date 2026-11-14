@@ -1,0 +1,23 @@
+[package]
+name = "assuit"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[[bin]]
+name = "assuit"
+path = "src/main.rs"
+
+[dependencies]
+# WordCraft (storytold/wordcraft, MIT OR Apache-2.0): document model, Word-compatible
+# layout, DOCX/ODT/RTF reading and writing, page rendering with vello_cpu.
+wordcraft-engine = { git = "https://github.com/storytold/wordcraft", rev = "a4b898f820eb28626865292fd037a155e4a07aef" }
+serde_json = "1"
+# craft-font-store's SHA-256: the unrolled rounds compile `rol $0xf` + `add %ebp,%edi`,
+# which holds WRPKRU (0f 01 ef) and makes the loader refuse the program. The compact
+# rounds do not (scripts/key_bytes.py). Only this program's build takes the feature.
+sha2 = { version = "0.10.9", default-features = false, features = ["force-soft-compact"] }
+
+[target.'cfg(target_os = "hermit")'.dependencies]
+sex-std = { path = "../../crates/sex-std" }
+sex-office = { path = "../../crates/sex-office" }
