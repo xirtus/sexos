@@ -406,6 +406,24 @@ pub unsafe extern "C" fn tmpnam(buf: *mut c_char) -> *mut c_char {
     out
 }
 
+/// `mkstemp`: replaces the template's trailing `XXXXXX` and creates that file in the
+/// program's folder, exclusively.
+#[no_mangle]
+pub unsafe extern "C" fn mkstemp(template: *mut c_char) -> c_int {
+    let len = unsafe { c_str(template) }.len();
+    let name = unsafe { core::slice::from_raw_parts_mut(template.cast::<u8>(), len) };
+    if len < 6 || name[len - 6..].iter().any(|&b| b != b'X') { set_errno(crate::EINVAL); return -1; }
+    for _ in 0..100 {
+        let n = (unsafe { TEMP_COUNT = TEMP_COUNT.wrapping_add(1); TEMP_COUNT } as u64) ^ ((clock().1 as u64) << 12);
+        for (i, b) in name[len - 6..].iter_mut().enumerate() { *b = b"0123456789abcdefghijklmnopqrstuv"[((n >> (5 * i)) & 31) as usize]; }
+        let fd = unsafe { sys_open(template, 0o2 | 0o100 | 0o200, 0o600) };
+        if fd >= 0 { return fd; }
+        if fd != -17 { set_errno(-fd); return -1; }
+    }
+    set_errno(17);
+    -1
+}
+
 /// A stream on a new file in the program's folder, removed when the stream closes.
 #[no_mangle]
 pub unsafe extern "C" fn tmpfile() -> *mut FILE {
