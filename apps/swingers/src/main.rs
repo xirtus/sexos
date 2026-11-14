@@ -9,12 +9,13 @@
 //! Progress is printed and recorded as `[swingers.*]` lines (the gates read them).
 mod disk;
 mod net;
+mod remote;
 
 use sex_torrent::create::{Creator, FileSpec, Options, Version};
 use sex_torrent::magnet::{Magnet, MagnetPeer};
 use sex_torrent::metainfo::Metainfo;
 use sex_torrent::session::{TorrentConfig, TorrentParams};
-use sex_torrent::{InfoHashes, PeerAddr, PeerId};
+use sex_torrent::{PeerAddr, PeerId};
 use std::path::{Path, PathBuf};
 
 #[cfg(target_os = "hermit")]
@@ -43,6 +44,7 @@ pub fn random(out: &mut [u8]) {
 
 fn usage() -> ! {
     say("usage: swingers get MAGNET|FILE.torrent [--dir DIR] [--peer HOST:PORT]... [--seed-secs N] [--port P] [--anonymous]");
+    say("       swingers daemon [--dir DIR] [--port P] [--rpc PORT] [--user U --password P]");
     say("       swingers create PATH --out FILE.torrent [--v1|--v2|--hybrid] [--tracker URL]");
     std::process::exit(2)
 }
@@ -52,6 +54,7 @@ fn main() {
     match args.first().map(String::as_str) {
         Some("get") => get(&args[1..]),
         Some("create") => create(&args[1..]),
+        Some("daemon") => daemon(&args[1..]),
         _ => usage(),
     }
 }
@@ -80,45 +83,74 @@ fn get(args: &[String]) {
             _ => usage(),
         }
     }
-    let mut source = source.unwrap_or_else(|| usage());
+    let source = source.unwrap_or_else(|| usage());
+    let peer_id = PeerId::generate(anonymous, &mut |b: &mut [u8]| random(b));
+    let mut client = net::Client::new(port, dir, peer_id, anonymous);
+    if let Err(e) = client.add_source(&source, None, peers, None) { say(&format!("[swingers.failed] {e}")); std::process::exit(1) }
+    client.run(Some(seed_secs));
+}
+
+/// A torrent ready to add: what the engine needs plus what the program keeps.
+pub struct Prepared { pub params: TorrentParams, pub meta: Option<Metainfo>, pub trackers: Vec<String>, pub peers: Vec<PeerAddr>, pub name: String }
+
+/// Reads a magnet link, a bare info-hash or a .torrent (path or bytes) into a torrent.
+pub fn prepare(source: &str, bytes: Option<Vec<u8>>, peer_id: PeerId, port: u16, anonymous: bool) -> Result<Prepared, String> {
+    let mut source = String::from(source);
     // A bare 40-hex info-hash is a magnet link without trackers.
     if source.len() == 40 && sex_torrent::from_hex::<20>(&source).is_some() { source = format!("magnet:?xt=urn:btih:{source}"); }
-    let peer_id = PeerId::generate(anonymous, &mut |b: &mut [u8]| random(b));
     let mut config = TorrentConfig { listen_port: Some(port), anonymous, ..TorrentConfig::default() };
     if anonymous { config.pex = false; config.client = String::new(); }
     let mut seed = [0u8; 8];
     random(&mut seed);
-
-    let (params, meta, trackers, name) = if source.starts_with("magnet:") {
-        let m = Magnet::parse(&source).unwrap_or_else(|e| { say(&format!("[swingers.failed] bad magnet: {e:?}")); std::process::exit(1) });
+    let mut out = if bytes.is_none() && source.starts_with("magnet:") {
+        let m = Magnet::parse(&source).map_err(|e| format!("bad magnet: {e:?}"))?;
+        let mut peers = Vec::new();
         for p in &m.peers {
             match p { MagnetPeer::Addr(a) => peers.push(*a), MagnetPeer::Host(h, n) => peers.extend(resolve(h, *n)) }
         }
         let mut p = TorrentParams::new(m.info_hashes, peer_id);
         p.config = config;
         let name = m.display_name.clone().unwrap_or_else(|| sex_torrent::to_hex(&m.info_hashes.wire()));
-        (p, None, m.trackers.clone(), name)
+        Prepared { params: p, meta: None, trackers: m.trackers.clone(), peers, name }
     } else {
-        let bytes = std::fs::read(&source).unwrap_or_else(|e| { say(&format!("[swingers.failed] cannot read {source}: {e}")); std::process::exit(1) });
-        let m = Metainfo::parse(&bytes).unwrap_or_else(|e| { say(&format!("[swingers.failed] not a torrent: {e:?}")); std::process::exit(1) });
+        let bytes = match bytes { Some(b) => b, None => std::fs::read(&source).map_err(|e| format!("cannot read {source}: {e}"))? };
+        let m = Metainfo::parse(&bytes).map_err(|e| format!("not a torrent: {e:?}"))?;
         let mut p = TorrentParams::new(m.info_hashes, peer_id);
-        p.layout = Some(m.layout().unwrap_or_else(|e| { say(&format!("[swingers.failed] layout: {e:?}")); std::process::exit(1) }));
+        p.layout = Some(m.layout().map_err(|e| format!("layout: {e:?}"))?);
         p.verifier = Some(m.verifier());
         p.info = Some(m.info_bytes.clone());
         p.check_files = true;
         p.config = config;
         let trackers = m.trackers.iter().flatten().cloned().collect();
         let name = m.name.clone();
-        (p, Some(m), trackers, name)
+        Prepared { params: p, meta: Some(m), trackers, peers: Vec::new(), name }
     };
-    let mut params = params;
-    params.rng_seed = u64::from_le_bytes(seed);
-    say(&format!("[swingers.added] {} {}", sex_torrent::to_hex(&params.info_hashes.wire()), name));
-    let hashes: InfoHashes = params.info_hashes;
-    let mut client = net::Client::new(port, dir, peer_id, anonymous);
-    client.add(params, meta, trackers, peers);
-    client.run(seed_secs);
-    let _ = hashes;
+    out.params.rng_seed = u64::from_le_bytes(seed);
+    Ok(out)
+}
+
+/// `swingers daemon [--dir DIR] [--port P] [--rpc PORT] [--user U --password P]`: keeps
+/// running and takes torrents over Transmission's RPC (phone apps, transmission-remote)
+/// and the web UI at /swingers/.
+fn daemon(args: &[String]) {
+    let (mut dir, mut port, mut rpc, mut user, mut password) = (PathBuf::from("."), 6881u16, 9091u16, String::new(), String::new());
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        let mut val = || it.next().cloned().unwrap_or_else(|| usage());
+        match a.as_str() {
+            "--dir" => dir = PathBuf::from(val()),
+            "--port" => port = val().parse().unwrap_or_else(|_| usage()),
+            "--rpc" => rpc = val().parse().unwrap_or_else(|_| usage()),
+            "--user" => user = val(),
+            "--password" => password = val(),
+            _ => usage(),
+        }
+    }
+    let peer_id = PeerId::generate(false, &mut |b: &mut [u8]| random(b));
+    let mut client = net::Client::new(port, dir, peer_id, false);
+    if let Err(e) = client.listen_rpc(rpc, &user, &password) { say(&format!("[swingers.failed] rpc: {e}")); std::process::exit(1) }
+    say(&format!("[swingers.rpc] listening on port {rpc}"));
+    client.run(None);
 }
 
 fn create(args: &[String]) {

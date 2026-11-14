@@ -34,22 +34,24 @@ enum Done {
     Announced { torrent: TorrentKey, url: String, peers: Vec<PeerAddr>, interval: u64, error: Option<String> },
 }
 
-struct Job { trackers: Vec<String>, disk: Option<Disk>, next_announce: Millis, announced_done: bool, finished_at: Option<Millis>, name: String }
+pub(crate) struct Job { pub trackers: Vec<String>, pub disk: Option<Disk>, pub next_announce: Millis, pub announced_done: bool, pub finished_at: Option<Millis>, pub name: String, pub id: u64, pub added: i64, pub dir: PathBuf, pub paused: bool, pub magnet: String }
 
 pub struct Client {
-    session: Session,
-    jobs: HashMap<TorrentKey, Job>,
+    pub(crate) session: Session,
+    pub(crate) jobs: HashMap<TorrentKey, Job>,
+    pub(crate) rpc: Option<crate::remote::Rpc>,
+    pub(crate) next_id: u64,
     conns: HashMap<u32, Conn>,
     listener: Option<TcpListener>,
     port: u16,
-    dir: PathBuf,
+    pub(crate) dir: PathBuf,
     peer_id: PeerId,
     anonymous: bool,
     next_peer: u32,
-    started: Instant,
+    pub(crate) started: Instant,
     done_tx: Sender<Done>,
     done_rx: Receiver<Done>,
-    queue: VecDeque<SessionAction>,
+    pub(crate) queue: VecDeque<SessionAction>,
     key: u32,
 }
 
@@ -64,26 +66,48 @@ impl Client {
         let (done_tx, done_rx) = channel();
         let mut k = [0u8; 4];
         crate::random(&mut k);
-        Client { session: Session::new(SessionConfig::default()), jobs: HashMap::new(), conns: HashMap::new(), listener, port, dir, peer_id, anonymous,
+        Client { session: Session::new(SessionConfig::default()), jobs: HashMap::new(), rpc: None, next_id: 1, conns: HashMap::new(), listener, port, dir, peer_id, anonymous,
             next_peer: 1, started: Instant::now(), done_tx, done_rx, queue: VecDeque::new(), key: u32::from_le_bytes(k) }
     }
 
-    fn now(&self) -> Millis { self.started.elapsed().as_millis() as Millis }
+    /// Serves Transmission's RPC and the web UI on `port` (daemon mode).
+    pub fn listen_rpc(&mut self, port: u16, user: &str, password: &str) -> Result<(), String> {
+        self.rpc = Some(crate::remote::Rpc::new(port, user, password, &self.dir.display().to_string(), self.port)?);
+        Ok(())
+    }
 
-    pub fn add(&mut self, params: TorrentParams, meta: Option<Metainfo>, trackers: Vec<String>, peers: Vec<PeerAddr>) {
+    pub(crate) fn now(&self) -> Millis { self.started.elapsed().as_millis() as Millis }
+
+    /// Adds a torrent from a magnet link, info-hash or .torrent. Returns its RPC id, key
+    /// and whether it was already here.
+    pub fn add_source(&mut self, source: &str, bytes: Option<Vec<u8>>, extra_peers: Vec<PeerAddr>, dir: Option<PathBuf>) -> Result<(u64, TorrentKey, bool), String> {
+        let prep = crate::prepare(source, bytes, self.peer_id, self.port, self.anonymous)?;
+        let key = prep.params.info_hashes.wire();
+        if let Some(j) = self.jobs.get(&key) { return Ok((j.id, key, true)); }
+        let magnet = prep.meta.as_ref().map(|m| sex_torrent::magnet::Magnet::from_metainfo(m).to_uri()).unwrap_or_else(|| format!("magnet:?xt=urn:btih:{}", sex_torrent::to_hex(&key)));
+        say(&format!("[swingers.added] {} {}", sex_torrent::to_hex(&key), prep.name));
+        let mut peers = prep.peers;
+        peers.extend(extra_peers);
+        self.add(prep.params, prep.name, prep.trackers, peers, dir.unwrap_or_else(|| self.dir.clone()), magnet);
+        Ok((self.jobs[&key].id, key, false))
+    }
+
+    fn add(&mut self, params: TorrentParams, name: String, trackers: Vec<String>, peers: Vec<PeerAddr>, dir: PathBuf, magnet: String) {
         let now = self.now();
         let key = params.info_hashes.wire();
-        let name = meta.as_ref().map(|m| m.name.clone()).unwrap_or_default();
-        let disk = params.layout.clone().map(|l| Disk::new(&self.dir, l, &sex_torrent::to_hex(&key)));
+        let disk = params.layout.clone().map(|l| Disk::new(&dir, l, &sex_torrent::to_hex(&key)));
         let t = Torrent::new(params, now);
-        self.jobs.insert(key, Job { trackers, disk, next_announce: 0, announced_done: false, finished_at: None, name });
+        let id = self.next_id; self.next_id += 1;
+        let added = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+        self.jobs.insert(key, Job { trackers, disk, next_announce: 0, announced_done: false, finished_at: None, name, id, added, dir, paused: false, magnet });
         if let Some(a) = self.session.add(t, now) { self.queue.extend(a); }
         let more = self.session.with(&key, now, |t, now| t.add_peers(&peers, now));
         self.queue.extend(more);
     }
 
     /// Runs until every torrent is done and has seeded `seed_secs`.
-    pub fn run(&mut self, seed_secs: u64) {
+    /// `seed_secs: None` runs until stopped (daemon mode).
+    pub fn run(&mut self, seed_secs: Option<u64>) {
         let mut last_tick = 0;
         let mut last_report = 0;
         loop {
@@ -92,10 +116,11 @@ impl Client {
             let mut busy = self.accept(now);
             busy |= self.pump(now);
             while let Ok(d) = self.done_rx.try_recv() { self.done(d); busy = true; }
+            busy |= crate::remote::pump(self);
             if now >= last_tick + 50 { last_tick = now; let a = self.session.on_tick(now); self.queue.extend(a); self.announce(now); }
             if now >= last_report + 2000 { last_report = now; self.report(now); }
             self.drain();
-            if self.check_finished(now, seed_secs) { break; }
+            if self.check_finished(now, seed_secs.unwrap_or(0)) && seed_secs.is_some() { break; }
             if !busy { std::thread::sleep(Duration::from_millis(2)); }
         }
         let now = self.now();
@@ -123,11 +148,13 @@ impl Client {
                 let a = self.session.with(&k, now, |t, now| t.flush_cache(now));
                 self.queue.extend(a);
                 self.drain();
+                let daemon = self.rpc.is_some();
                 let job = self.jobs.get_mut(&k).expect("job");
                 if let Some(d) = job.disk.as_mut() {
                     d.close();
+                    // The gates check every file; a daemon's files can be huge, so it skips this.
                     for (i, f) in d.layout().files.clone().iter().enumerate() {
-                        if f.pad { continue; }
+                        if f.pad || daemon { continue; }
                         let path = d.path_of(i).expect("file");
                         let sum = std::fs::read(&path).map(|b| sex_torrent::to_hex(&Sha256::digest(&b))).unwrap_or_else(|e| format!("unreadable:{e}"));
                         say(&format!("[swingers.file] {} {}", path.display(), sum));
@@ -182,7 +209,7 @@ impl Client {
                 Ok(l) => {
                     if let Some(job) = self.jobs.get_mut(&torrent) {
                         job.name = m.name.clone();
-                        job.disk = Some(Disk::new(&self.dir, l.clone(), &sex_torrent::to_hex(&torrent)));
+                        job.disk = Some(Disk::new(&job.dir.clone(), l.clone(), &sex_torrent::to_hex(&torrent)));
                     }
                     say(&format!("[swingers.metadata] {} {} files={}", sex_torrent::to_hex(&torrent), m.name, m.files.iter().filter(|f| !f.attr.pad).count()));
                     let v = m.verifier();

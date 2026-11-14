@@ -107,7 +107,7 @@ jobs:
       run: cargo test --locked -p sex-torrent
     - name: Swingers downloads from and seeds to aria2 on the host
       run: |
-        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends aria2
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends aria2 transmission-cli
         bash scripts/swingers_host_gate.sh
     - name: Needle printing and scanning protocols (IPP, PWG raster, DNS-SD, eSCL goldens)
       run: |
