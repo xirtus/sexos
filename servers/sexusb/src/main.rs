@@ -402,7 +402,12 @@ pub extern "C" fn _start() -> ! {
         }
         poll_pointer_reports();
         let queued = unsafe { (*core::ptr::addr_of!(KEYBOARD_OUTBOX)).len > 0 || (*core::ptr::addr_of!(POINTER_OUTBOX)).len > 0 };
-        if !busy { let _ = sex_pdx::sys_wait_self_ticks(if irq && !queued && !usb.changed { 32 } else { 1 }); }
+        // Long waits only when nothing can be missed: an interrupt taken by a sleep in
+        // this pass may be for an undrained event, and the network's transmit ring
+        // (USB Ethernet) has no wake of its own.
+        let slept = crate::xhci::SLEPT.swap(false, core::sync::atomic::Ordering::Relaxed);
+        let quiet = irq && !queued && !usb.changed && !slept && !usb.ether_active();
+        if !busy { let _ = sex_pdx::sys_wait_self_ticks(if quiet { 32 } else { 1 }); }
     }
 }
 

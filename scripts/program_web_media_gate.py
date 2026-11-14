@@ -19,7 +19,7 @@ SITE=ROOT/'scripts/web_site'
 CLIPS=ROOT/'apps/play/tests'
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):
-  if self.path=='/web':f=ROOT/'iso_root/programs/web'
+  if self.path=='/web':f=ROOT/'iso_root/programs/kaleidoscope'
   elif self.path in('/site/clip-av.mp4','/site/tone.mp3'):f=CLIPS/self.path.removeprefix('/site/')
   elif self.path.startswith('/site/'):f=SITE/self.path.removeprefix('/site/')
   else:f=None
@@ -51,9 +51,9 @@ def main():
  try:
   g['wait'](r'\[bell.sound.ready\]',0,180)
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
-  g['focus'](153);time.sleep(.5);s=len(t());keys(f'fetch {base}/web /bin/web');q.key('ret')
+  g['focus'](153);time.sleep(.5);s=len(t());keys(f'fetch {base}/web /bin/kaleidoscope');q.key('ret')
   m=g['wait'](r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',s,600);assert m[1].startswith('Saved'),m[1]
-  g['focus'](153);time.sleep(.5);s=len(t());keys('run +net web about:welcome');q.key('ret')
+  g['focus'](153);time.sleep(.5);s=len(t());keys('run +net kaleidoscope about:welcome');q.key('ret')
   m=g['wait'](r'\[web.ready\] target=(\d+) task=(\d+)',s,600);target,task=m[1],m[2]
   surface=int(g['wait'](rf'\[shell.program.launch\] target={target} task={task} surface=(\d+)',s,60)[1])
   # Establish a visible canvas before starting the timed autoplay fixture.

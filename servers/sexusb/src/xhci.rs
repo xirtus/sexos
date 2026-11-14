@@ -128,7 +128,11 @@ pub fn page(pool: &mut DmaRegionPool, pages: u64) -> Result<(u64, u64), Failure>
 /// interrupt bit makes every self-wait return at once until it is taken, so take it
 /// and keep waiting until the time is really up: polling loops that count ticks would
 /// otherwise spin through their whole budget in microseconds and time out.
+/// Set by `sleep_ticks`: an interrupt it took may belong to an event the main loop has
+/// not drained yet, so the loop must look again before its long idle wait.
+pub static SLEPT: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 pub fn sleep_ticks(ticks: u64) {
+    SLEPT.store(true, core::sync::atomic::Ordering::Relaxed);
     let end = sex_pdx::get_ticks().saturating_add(ticks);
     loop {
         let _ = sex_pdx::device::irq_take();

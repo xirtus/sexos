@@ -1,8 +1,11 @@
 //! Person-triggered whole-desktop PNG, using one held read-only screenshot bank.
 //! The main loop owns both replies and the Files region for the complete job.
+//! The Shell's screenshot UI (Print) asks for a region with
+//! `sex_pdx::screenshot::OP_SCREENSHOT_TAKE`; that picture is cropped and named
+//! `/Screenshot-N.png` with the first free N, and a notification says where.
 use crate::Scrollback;
 use sex_graphics::png_encode::Encoder;
-use sex_pdx::{fs as f, screen_capture as c};
+use sex_pdx::{fs as f, screen_capture as c, screenshot as s};
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Phase {
     Idle,
@@ -36,6 +39,12 @@ pub struct Capture {
     revoke_sent: bool,
     cancelled: bool,
     saved: bool,
+    /// The region asked for, and once the frame is in, its crop of it.
+    region: s::Rect,
+    crop: (usize, usize, usize, usize),
+    frame_width: usize,
+    /// Screenshot UI: the attempt number N of `/Screenshot-N.png` (0: a typed path).
+    auto: u32,
 }
 pub static mut CAPTURE: Capture = Capture::new();
 impl Capture {
@@ -61,6 +70,10 @@ impl Capture {
             revoke_sent: false,
             cancelled: false,
             saved: false,
+            region: s::Rect::FULL,
+            crop: (0, 0, 0, 0),
+            frame_width: 0,
+            auto: 0,
         }
     }
     pub fn busy(&self) -> bool {
@@ -74,14 +87,6 @@ impl Capture {
         self.lease = false;
     }
     pub fn start(&mut self, args: &[u8], sb: &mut Scrollback) {
-        if self.busy() {
-            sb.push(b"A capture is already active.");
-            return;
-        }
-        if crate::instance_pd() != c::CLIENT {
-            sb.push(b"Capture is available in the first terminal only.");
-            return;
-        }
         if args.is_empty()
             || !args.ends_with(b".png")
             || args.iter().any(|b| b.is_ascii_whitespace())
@@ -89,34 +94,68 @@ impl Capture {
             sb.push(b"Usage: capture FILE.png (whole desktop, native size)");
             return;
         }
+        self.begin(Some(args), s::Rect::FULL, sb);
+    }
+    /// The Shell's screenshot UI picked `region` (zero: the whole desktop).
+    pub fn take(&mut self, region: s::Rect, sb: &mut Scrollback) {
+        if !self.begin(None, region, sb) {
+            sex_pdx::notify::post(b"Screenshot not taken", b"The terminal is busy with another file job.", sex_pdx::notify::URGENCY_NORMAL);
+        }
+    }
+    fn auto_path(&mut self) {
+        let mut name = [0u8; 32];
+        let n = s::file_name(self.auto, &mut name);
+        self.path[..n].copy_from_slice(&name[..n]);
+        self.path_len = n;
+    }
+    fn begin(&mut self, args: Option<&[u8]>, region: s::Rect, sb: &mut Scrollback) -> bool {
+        if self.busy() {
+            sb.push(b"A capture is already active.");
+            return false;
+        }
+        if crate::instance_pd() != c::CLIENT {
+            sb.push(b"Capture is available in the first terminal only.");
+            return false;
+        }
         if unsafe {
             crate::fs_commands::FS.busy()
                 || crate::fetch_command::FETCH.busy()
                 || crate::update_command::UPDATE.busy()
         } {
             sb.push(b"Finish the current file operation before capture.");
-            return;
+            return false;
         }
-        let Some(n) = (unsafe { crate::fs_commands::FS.join(args, &mut self.path) }) else {
-            sb.push(b"Capture path is too long.");
-            return;
+        let n = match args {
+            Some(args) => {
+                let Some(n) = (unsafe { crate::fs_commands::FS.join(args, &mut self.path) }) else {
+                    sb.push(b"Capture path is too long.");
+                    return false;
+                };
+                if n > f::PATH_BYTES {
+                    sb.push(b"Capture path is too long.");
+                    return false;
+                }
+                self.auto = 0;
+                n
+            }
+            None => {
+                self.auto = 1;
+                self.auto_path();
+                self.path_len
+            }
         };
-        if n > f::PATH_BYTES {
-            sb.push(b"Capture path is too long.");
-            return;
-        }
         let Ok(bank) = sex_pdx::screen_capture_bank(false) else {
             sb.push(b"This terminal has no capture grant.");
-            return;
+            return false;
         };
         let epoch = bank.service_epoch();
         if epoch == 0 {
             sb.push(b"Display capture is not ready; try again.");
-            return;
+            return false;
         }
         let Some(sequence) = self.sequence.checked_add(1) else {
             sb.push(b"Capture sequence exhausted; reopen the terminal.");
-            return;
+            return false;
         };
         self.bank = Some(bank);
         self.epoch = epoch;
@@ -133,13 +172,20 @@ impl Capture {
         self.revoke_sent = false;
         self.cancelled = false;
         self.saved = false;
-        sb.push(b"Capturing the whole desktop.");
+        self.region = region;
+        sb.push(if region.is_full() { &b"Capturing the whole desktop."[..] } else { &b"Capturing the selected region."[..] });
         sb.push(b"Native resolution. Escape cancels.");
-        sex_pdx::serial_record!("[spindle.capture.intent] target={} task={} sequence={} epoch={} path_prefix={} path_bytes={} whole_desktop=1 native=1",c::CLIENT,self.task,sequence,self.epoch,core::str::from_utf8(&self.path[..n.min(72)]).unwrap_or("?"),n);
+        sex_pdx::serial_record!("[spindle.capture.intent] target={} task={} sequence={} epoch={} path_prefix={} path_bytes={} whole_desktop={} native=1 region={},{},{},{} auto={}",c::CLIENT,self.task,sequence,self.epoch,core::str::from_utf8(&self.path[..n.min(72)]).unwrap_or("?"),n,region.is_full() as u8,region.x,region.y,region.w,region.h,self.auto);
+        true
     }
     fn fail(&mut self, sb: &mut Scrollback, why: &[u8]) {
         self.cancelled = true;
         sb.push(why);
+        if self.auto != 0 {
+            sex_pdx::notify::post(b"Screenshot not saved", why, sex_pdx::notify::URGENCY_NORMAL);
+            sex_pdx::serial_record!("[spindle.screenshot.failed] attempt={}", self.auto);
+            self.auto = 0;
+        }
         self.header = None;
         self.encoder = None;
         if self.pending && self.to_files {
@@ -276,9 +322,10 @@ impl Capture {
                         self.fail(sb, b"Capture has no Files buffer.");
                         return true;
                     };
+                    let (crop, width) = (self.crop, self.frame_width);
                     let Ok(n) = encoder.fill_with(
-                        c::pixels(header.width, header.height).unwrap(),
-                        |i| bank.pixel(i).expect("CAPTURE_PIXEL_BOUNDS"),
+                        crop.2 * crop.3,
+                        |i| bank.pixel(s::crop_index(crop, width, i)).expect("CAPTURE_PIXEL_BOUNDS"),
                         &mut region[f::PATH_BYTES..f::PATH_BYTES + 32 * 1024],
                     ) else {
                         self.fail(sb, b"PNG encoding failed.");
@@ -368,6 +415,12 @@ impl Capture {
                     self.phase = Phase::Create;
                     return true;
                 }
+                // Screenshot UI: the next free /Screenshot-N.png.
+                if status == f::OK && self.auto != 0 && self.auto < 100_000 {
+                    self.auto += 1;
+                    self.auto_path();
+                    return true;
+                }
                 self.fail(
                     sb,
                     if status == f::OK {
@@ -437,12 +490,18 @@ impl Capture {
                     self.fail(sb, b"Display returned no owned capture frame.");
                     return true;
                 };
-                let Ok(encoder) = Encoder::new(header.width, header.height) else {
+                let Some(crop) = self.region.clamp(header.width, header.height) else {
+                    self.fail(sb, b"The selected region is outside the desktop.");
+                    return true;
+                };
+                let Ok(encoder) = Encoder::new(crop.2, crop.3) else {
                     self.fail(sb, b"Capture dimensions cannot be encoded.");
                     return true;
                 };
                 self.header = Some(header);
                 self.encoder = Some(encoder);
+                self.crop = crop;
+                self.frame_width = header.width;
                 self.phase = Phase::Stat;
                 true
             } else if self.phase == Phase::Release {
@@ -454,7 +513,16 @@ impl Capture {
                         .as_ref()
                         .is_some_and(|b| b.service_epoch() == self.epoch)
                 {
-                    sb.push(b"Screenshot saved as PNG at native desktop resolution.");
+                    sb.push(if self.auto != 0 { &b"Screenshot saved in Files."[..] } else { &b"Screenshot saved as PNG at native desktop resolution."[..] });
+                    if self.auto != 0 {
+                        let mut body = [0u8; 64];
+                        let lead = b"Saved in Files as ";
+                        body[..lead.len()].copy_from_slice(lead);
+                        let name = &self.path[1..self.path_len];
+                        body[lead.len()..lead.len() + name.len()].copy_from_slice(name);
+                        sex_pdx::notify::post(b"Screenshot saved", &body[..lead.len() + name.len()], sex_pdx::notify::URGENCY_NORMAL);
+                        sex_pdx::serial_record!("[spindle.screenshot.saved] name={} w={} h={} bytes={}",core::str::from_utf8(name).unwrap_or("?"),self.crop.2,self.crop.3,self.offset);
+                    }
                     sex_pdx::serial_record!("[spindle.capture.saved] task={} sequence={} epoch={} bytes={} path_prefix={} path_bytes={} synced=1 released=1",self.task,self.sequence,self.epoch,self.offset,core::str::from_utf8(&self.path[..self.path_len.min(72)]).unwrap_or("?"),self.path_len);
                 } else {
                     sb.push(b"Capture ended without confirmed success; inspect the partial PNG.");

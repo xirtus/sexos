@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""System monitor: `run monitor` lists the services and programs that use the CPU with
+"""System monitor: `run mesh` lists the services and programs that use the CPU with
 their share of one core, from the kernel's read-only statistics (syscall 87). While
 `run bench spin` computes without a system call, Monitor must name Bench at the top of
 its list at close to a whole core, and the window must show it."""
@@ -13,7 +13,7 @@ SAMPLE=r'\[monitor\.sample\] rows=(\d+) busy_tenths=(\d+) top_pd=(\d+) top_tenth
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');p.add_argument('--min-tenths',type=int,default=700);a=p.parse_args()
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
- install(disk,[(n,(ROOT/'iso_root/programs'/n).read_bytes())for n in('monitor','bench')])
+ install(disk,[(n,(ROOT/'iso_root/programs'/n).read_bytes())for n in('mesh','bench')])
  g=boot(a.iso,disk,a.out,'monitor',a.resolution);t=g['text'];q=g['q']
  def run(line):
   g['focus'](153);time.sleep(.5)
@@ -21,7 +21,7 @@ def main():
   q.key('ret')
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120)
-  s=len(t());run('run monitor')
+  s=len(t());run('run mesh')
   g['wait'](r'\[monitor\.ready\] target=(\d+) task=(\d+)',s,180)
   idle=g['wait'](SAMPLE,s,120)
   s=len(t());run('run bench spin')

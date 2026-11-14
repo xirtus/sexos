@@ -11,8 +11,11 @@ use spin::Mutex;
 const SLOT_BYTES: u64 = 0x0100_0000;
 const STACK_BYTES: u64 = 64 * 1024;
 const MAX_PAGES: usize = 2048;
-/// A service that keeps dying is left down rather than restarted forever.
+/// A service that keeps dying is left down rather than restarted forever: this many
+/// restarts, each within `CRASH_LOOP_TICKS` of the one before. A service that runs
+/// that long between faults starts a new count, so a long uptime never runs out.
 const MAX_RESTARTS: u32 = 8;
+const CRASH_LOOP_TICKS: u64 = 60_000;
 const PTE_FRAME: u64 = 0x000f_ffff_ffff_f000;
 
 #[derive(Clone, Copy)]
@@ -23,6 +26,8 @@ static SERVICE: [Mutex<Service>; SERVICES] = [const { Mutex::new(Service { pd: 0
 // BOOT publishes immutable identity separately; self count cannot contend with its own rearm.
 static SERVICE_IDS:[AtomicU32;SERVICES]=[const{AtomicU32::new(0)};SERVICES];
 static RESTARTS: [AtomicU32; SERVICES] = [const { AtomicU32::new(0) }; SERVICES];
+static LOOP: [AtomicU32; SERVICES] = [const { AtomicU32::new(0) }; SERVICES];
+static LAST_RESTART: [core::sync::atomic::AtomicU64; SERVICES] = [const { core::sync::atomic::AtomicU64::new(0) }; SERVICES];
 static GAVE_UP: [core::sync::atomic::AtomicBool; SERVICES] = [const { core::sync::atomic::AtomicBool::new(false) }; SERVICES];
 
 fn code_base(domain_id: u8) -> u64 { 0x4000_0000 + (domain_id as u64).saturating_sub(1) * SLOT_BYTES }
@@ -169,7 +174,9 @@ fn poll_one(index: usize) {
     if main.is_null() { return; }
     let state = unsafe { (*main).state.snapshot() };
     if !state.exited || state.phase != crate::scheduler::task_ownership::Phase::Dead || state.owner_core.is_some() { return; }
-    if RESTARTS[index].load(Ordering::Relaxed) >= MAX_RESTARTS {
+    let now = crate::interrupts::TICKS.load(Ordering::Relaxed);
+    if now.saturating_sub(LAST_RESTART[index].load(Ordering::Relaxed)) > CRASH_LOOP_TICKS { LOOP[index].store(0, Ordering::Relaxed); }
+    if LOOP[index].load(Ordering::Relaxed) >= MAX_RESTARTS {
         GAVE_UP[index].store(true, Ordering::Relaxed);
         crate::crash_log::service(s.pd, MAX_RESTARTS, true);
         return;
@@ -186,6 +193,8 @@ fn poll_one(index: usize) {
     let id = unsafe { (*main).id };
     unsafe { (*main).rearm(id, s.entry, s.stack_top, pd); }
     let count = RESTARTS[index].fetch_add(1, Ordering::Relaxed) + 1;
+    LOOP[index].fetch_add(1, Ordering::Relaxed);
+    LAST_RESTART[index].store(now, Ordering::Relaxed);
     let admitted = crate::scheduler::SCHEDULERS[0].activate_task(main);
     crate::serial_println!("[service.restarted] pd={} task={} restarts={} pages={} dropped_messages={} admitted={}", s.pd, id, count, s.count, dropped, admitted as u8);
     crate::crash_log::service(s.pd, count, false);

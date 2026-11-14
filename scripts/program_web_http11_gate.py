@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Web over HTTP/1.1, the way youtube.com talks: `run +net web URL` loads a page sent
+"""Web over HTTP/1.1, the way youtube.com talks: `run +net kaleidoscope URL` loads a page sent
 chunked and gzip-compressed with Set-Cookie headers; its script reads and writes
 document.cookie, POSTs JSON with its own headers to an API (the cookies go along, the
 HttpOnly one too, which the script itself can't see), then loads media bytes with an
@@ -36,7 +36,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
   for k,v in extra:self.send_header(k,v)
   self.end_headers();self.wfile.write(body)
  def do_GET(self):
-  if self.path=='/web':return self.plain(200,(ROOT/'iso_root/programs/web').read_bytes(),'application/octet-stream')
+  if self.path=='/web':return self.plain(200,(ROOT/'iso_root/programs/kaleidoscope').read_bytes(),'application/octet-stream')
   if self.path=='/tube/':
    SEEN['accept-encoding']=self.headers.get('Accept-Encoding','');SEEN['ua']=self.headers.get('User-Agent','')
    return self.chunked((SITE/'index.html').read_bytes().replace(b'{{OTHER}}',f'http://10.0.2.2:{OTHER_PORT}'.encode()),'text/html; charset=utf-8',[('Set-Cookie','sid=s3cret; Path=/; HttpOnly'),('Set-Cookie','visitor=v1; Path=/; Max-Age=3600')])
@@ -91,9 +91,9 @@ def main():
    time.sleep(.06)
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
-  g['focus'](153);time.sleep(.5);s=len(t());keys(f'fetch {base}/web /bin/web');q.key('ret')
+  g['focus'](153);time.sleep(.5);s=len(t());keys(f'fetch {base}/web /bin/kaleidoscope');q.key('ret')
   m=g['wait'](r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',s,240);assert m[1].startswith('Saved'),m[1]
-  g['focus'](153);time.sleep(.5);s=len(t());keys(f'run +net web {base}/tube/');q.key('ret')
+  g['focus'](153);time.sleep(.5);s=len(t());keys(f'run +net kaleidoscope {base}/tube/');q.key('ret')
   page=g['wait'](r'\[web.http\] method=GET status=200 bytes=(\d+) encoding=gzip chunked=1 cookies=(\d+) ticks=\d+ url=[^\n]*/tube/\n',s,300)
   assert int(page[1])==len((SITE/'index.html').read_bytes().replace(b'{{OTHER}}',f'http://10.0.2.2:{OTHER_PORT}'.encode())),('decoded size',page[1]);assert page[2]=='2',('cookies kept',page[2])
   first=g['wait'](r'\[web.console\] level=0 tube cookie ([^\n]*)\n',s,300)

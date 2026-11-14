@@ -42,6 +42,6 @@ mod console{pub fn stop(_:std::fmt::Arguments)->!{panic!("unexpected desktop sto
 #[path="../kernel/src/service_restart.rs"]mod service_restart;
 
 mod core_local{pub static CALLER:std::sync::atomic::AtomicU32=std::sync::atomic::AtomicU32::new(12);pub struct CoreLocal;impl CoreLocal{pub fn get()->Self{Self}pub fn current_pd(&self)->u32{CALLER.load(crate::Ordering::Acquire)}}}
-mod interrupts{pub struct SyscallRegs{pub rdi:u64,pub rsi:u64,pub rdx:u64}}
+mod interrupts{pub struct SyscallRegs{pub rdi:u64,pub rsi:u64,pub rdx:u64}pub static TICKS:core::sync::atomic::AtomicU64=core::sync::atomic::AtomicU64::new(0);}
 mod peer_envelope{include!(env!("SEXOS_PEER_ENVELOPE_SOURCE"));}
 fn peer_call(caller:u32,slot:u64,buf:u64)->(u64,u64,u64){core_local::CALLER.store(caller,Ordering::Release);let mut r=interrupts::SyscallRegs{rdi:wire::OP_RESTARTS,rsi:slot,rdx:buf};let status=peer_envelope::syscall(&mut r);(status,r.rsi,r.rdx)}

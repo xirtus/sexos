@@ -22,7 +22,7 @@ def frame(op,data):
 class Handler(http.server.BaseHTTPRequestHandler):
  protocol_version='HTTP/1.1'
  def do_GET(self):
-  if self.path=='/web':body=(ROOT/'iso_root/programs/web').read_bytes();self.send_response(200);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body);return
+  if self.path=='/web':body=(ROOT/'iso_root/programs/kaleidoscope').read_bytes();self.send_response(200);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body);return
   if self.path=='/site/echo':return self.echo()
   f=SITE/self.path.split('?')[0].removeprefix('/site/')
   if not self.path.startswith('/site/') or not f.is_file():self.send_response(404);self.send_header('Content-Length','0');self.end_headers();return
@@ -59,9 +59,9 @@ def main():
    time.sleep(.06)
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
-  g['focus'](153);time.sleep(.5);s=len(t());keys(f'fetch http://10.0.2.2:{PORT}/web /bin/web');q.key('ret')
+  g['focus'](153);time.sleep(.5);s=len(t());keys(f'fetch http://10.0.2.2:{PORT}/web /bin/kaleidoscope');q.key('ret')
   m=g['wait'](r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',s,240);assert m[1].startswith('Saved'),m[1]
-  g['focus'](153);time.sleep(.5);s=len(t());keys(f'run +net web http://10.0.2.2:{PORT}/site/websocket.html');q.key('ret')
+  g['focus'](153);time.sleep(.5);s=len(t());keys(f'run +net kaleidoscope http://10.0.2.2:{PORT}/site/websocket.html');q.key('ret')
   g['wait'](r'\[web.console\] level=0 ws bad scheme SyntaxError',s,300)
   g['wait'](r'\[web.console\] level=0 ws open echo 1',s,120)
   g['wait'](r'\[web.console\] level=0 ws text hello ünïcode',s,60)

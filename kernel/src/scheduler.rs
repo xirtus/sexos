@@ -216,6 +216,10 @@ pub fn class_of(pd: u64) -> usize {
 }
 /// Interactive tasks may run this many times in a row ahead of a waiting normal one.
 const URGENT_STREAK: u32 = 16;
+/// An interactive task whose time ran out keeps its class this many turns in a row,
+/// then waits behind the normal queue once: a long repaint gets most of its core, and
+/// services still get a fair share while the desktop draws (boot, busy screens).
+const SLICED_KEEP: u32 = 4;
 pub type UrgentQueue = scheduler_queue::BoundedQueue<Task, 64>;
 /// Wake-to-run latency per class: wakes, total and worst TSC cycles, and a histogram
 /// by powers of two from 1024 cycles (bucket i holds waits below 1024 << i).
@@ -263,6 +267,11 @@ pub struct Scheduler {
     handoff_streak: AtomicU32,
     /// Set by a call-and-wait or reply-and-wait for the wake it causes.
     handoff_armed: AtomicBool,
+    /// The outgoing task's time ran out (timer or preemption), as opposed to a yield.
+    sliced: AtomicBool,
+    /// Turns an interactive task kept its class after its time ran out since a normal
+    /// task last ran here (see `SLICED_KEEP`).
+    kept: AtomicU32,
     pub core_id: u32,
 }
 /// Partners may take turns ahead of the queue this many times in a row; then
@@ -310,6 +319,8 @@ impl Scheduler {
             handoff: AtomicPtr::new(ptr::null_mut()),
             handoff_streak: AtomicU32::new(0),
             handoff_armed: AtomicBool::new(false),
+            sliced: AtomicBool::new(false),
+            kept: AtomicU32::new(0),
             core_id,
         }
     }
@@ -500,7 +511,7 @@ impl Scheduler {
         }
         self.urgent_streak.store(0, Ordering::Relaxed);
         let task = self.runqueue.steal();
-        if task.is_null() { self.urgent.steal() } else { task }
+        if task.is_null() { self.urgent.steal() } else { self.kept.store(0, Ordering::Relaxed); task }
     }
 
     /// The waiting partner's turn, unless partners have had too many in a row: then it
@@ -519,12 +530,22 @@ impl Scheduler {
     /// The next wake this core causes is a handoff: see `handoff`.
     pub fn arm_handoff(&self, on: bool) { self.handoff_armed.store(on, Ordering::Relaxed); }
 
-    pub fn admit_task(&self, task: *mut Task) -> Admission { self.admit(task, true) }
+    pub fn admit_task(&self, task: *mut Task) -> Admission { self.admit(task, true, false) }
 
-    /// `woken` is false for a task that was switched out still runnable (its time
-    /// ran out, or it yielded): it waits in the normal queue whatever its class, so an
-    /// interactive task that polls cannot keep the rest of its core from running.
-    fn admit(&self, task: *mut Task, woken: bool) -> Admission {
+    /// `tick` for a task whose time ran out: an interactive one in the middle of real
+    /// work (a repaint) keeps its class, so busy programs cannot stretch a frame.
+    pub fn tick_sliced(&self) -> ScheduleDecision {
+        self.sliced.store(true, Ordering::Relaxed);
+        let decision = self.tick();
+        if matches!(decision, ScheduleDecision::NoRunnable) { self.sliced.store(false, Ordering::Relaxed); }
+        decision
+    }
+
+    /// `woken` is false for a task that was switched out still runnable. One that
+    /// yielded waits in the normal queue whatever its class, so an interactive task that
+    /// polls cannot keep the rest of its core from running. One whose time ran out
+    /// (`sliced`) keeps its class for `SLICED_KEEP` turns.
+    fn admit(&self, task: *mut Task, woken: bool, sliced: bool) -> Admission {
         if task.is_null() { return Admission::NotRunnable; }
         // A task's queue is decided by the task, not by the core that woke it.
         let home_core = match unsafe { (*task).home.load(Ordering::Acquire) } {
@@ -538,13 +559,15 @@ impl Scheduler {
             // Wake latency counts real wakes, not a turn given up by yielding.
             if woken { unsafe { (*task).woken_at.store(core::arch::x86_64::_rdtsc(), Ordering::Relaxed) }; }
             if handoff && self.handoff.compare_exchange(ptr::null_mut(), task, Ordering::AcqRel, Ordering::Acquire).is_ok() { return Ok(()); }
-            if woken && class_of(unsafe { (*task).context.pd_id }) == CLASS_INTERACTIVE && home.urgent.try_push(task).is_ok() { urgent = true; return Ok(()); }
+            let interactive = class_of(unsafe { (*task).context.pd_id }) == CLASS_INTERACTIVE;
+            let keep = sliced && interactive && home.kept.fetch_add(1, Ordering::Relaxed) < SLICED_KEEP;
+            if (woken || keep) && interactive && home.urgent.try_push(task).is_ok() { urgent = true; return Ok(()); }
             home.runqueue.try_push(task)
         }) };
         // That core may be halted, and its next tick is up to a millisecond away.
         // An interactive wake asks a core running a normal task to switch now, this
         // core included: the interrupt arrives once it is back in user code.
-        if admitted == Admission::Published && urgent && home.running_normal() { crate::apic::send_to_core(home_core, crate::smp::PREEMPT_VECTOR); }
+        if admitted == Admission::Published && urgent && woken && home.running_normal() { crate::apic::send_to_core(home_core, crate::smp::PREEMPT_VECTOR); }
         else if admitted == Admission::Published && home_core != self.core_id { crate::apic::send_to_core(home_core, crate::smp::WAKE_VECTOR); }
         admitted
     }
@@ -822,7 +845,7 @@ pub extern "C" fn scheduler_finish_switch() {
         assert!((*old).state.release_after_stack_switch(core), "OUTGOING_CUSTODY_MISMATCH");
         // After release, access only immutable fields or the atomic protocol.
         // Another lane may immediately acquire and rewrite the saved context.
-        sched.admit(old, false);
+        sched.admit(old, false, sched.sliced.swap(false, Ordering::Relaxed));
         poll_paging_exit_notifications();
     }
 }
