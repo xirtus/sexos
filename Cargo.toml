@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-exclude = ["vendor/embedded-tls-0.19.0", "vendor/pp-rs-0.2.1", "vendor/image-webp-0.2.4", "vendor/virtio-drivers-0.13.0"]
+exclude = ["vendor/embedded-tls-0.19.0", "vendor/pp-rs-0.2.1", "vendor/image-webp-0.2.4", "vendor/virtio-drivers-0.13.0", "vendor/smoltcp-0.14.0"]
 members = [
     "kernel",
     "servers/sexbell",
@@ -193,6 +193,8 @@ opt-level = 3
 opt-level = 3
 # naga's GLSL front end runs in programs: its preprocessor, made no_std (vendor/pp-rs-0.2.1).
 [patch.crates-io]
+# Independent bounded ARP/IPv6 discovery clocks (see vendored provenance).
+smoltcp = { path = "vendor/smoltcp-0.14.0" }
 pp-rs = { path = "vendor/pp-rs-0.2.1" }
 # Bell captures sound: virtio-snd input transfers added (vendor/virtio-drivers-0.13.0/SEXOS_CHANGES.md).
 virtio-drivers = { path = "vendor/virtio-drivers-0.13.0" }
