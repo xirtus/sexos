@@ -69,7 +69,7 @@ crates = [
   "apps/ssh/Cargo.toml",
   "apps/chello/Cargo.toml",
   "apps/pdf/Cargo.toml",
-  "apps/gingham/Cargo.toml",
+  "apps/spreadeagle/Cargo.toml",
   "apps/lua/Cargo.toml",
   "apps/rg/Cargo.toml",
   "apps/fd/Cargo.toml",
@@ -489,15 +489,15 @@ manifest = "apps/pdf/Cargo.toml"
 source_artifact = "target/x86_64-sex-std/release/pdf"
 dest_artifact = "iso_root/programs/pdf"
 
-# Gingham: the spreadsheet, GridCraft's engine (formulas, xlsx) under a native grid.
+# Spreadeagle: the spreadsheet, GridCraft's engine (formulas, xlsx) under a native grid.
 [[stage]]
-id = "build_gingham"
+id = "build_spreadeagle"
 action = "cargo_manifest"
 target = "x86_64-sex-std.json"
 build_std = "std,panic_abort"
-manifest = "apps/gingham/Cargo.toml"
-source_artifact = "target/x86_64-sex-std/release/gingham"
-dest_artifact = "iso_root/programs/gingham"
+manifest = "apps/spreadeagle/Cargo.toml"
+source_artifact = "target/x86_64-sex-std/release/spreadeagle"
+dest_artifact = "iso_root/programs/spreadeagle"
 
 [[stage]]
 id = "build_play"

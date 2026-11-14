@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Gingham: the SexOS spreadsheet. `run gingham NAME.xlsx` opens a workbook in the
+//! Spreadeagle: the SexOS spreadsheet. `run spreadeagle NAME.xlsx` opens a workbook in the
 //! program's folder (xlsx, xls, csv or tsv; a name that does not exist yet starts an
 //! empty workbook saved there). With no name it opens `welcome.xlsx`, writing it first
 //! if it is missing.
@@ -17,7 +17,7 @@ mod book;
 #[cfg(target_os = "hermit")]
 mod ui;
 
-/// The first workbook, hand-written SpreadsheetML (apps/gingham/make_welcome.py).
+/// The first workbook, hand-written SpreadsheetML (apps/spreadeagle/make_welcome.py).
 #[cfg_attr(not(target_os = "hermit"), allow(dead_code))]
 const WELCOME: &[u8] = include_bytes!("../assets/welcome.xlsx");
 
@@ -31,7 +31,7 @@ fn main() {
     });
     let opened = if std::fs::metadata(&name).is_ok() {
         book::Book::open(&name).map(|(b, warnings)| {
-            for w in warnings { sex_std::record(&format!("[gingham.warning] {w}")); }
+            for w in warnings { sex_std::record(&format!("[spreadeagle.warning] {w}")); }
             b
         })
     } else {
@@ -40,12 +40,12 @@ fn main() {
     let book = match opened {
         Ok(book) => book,
         Err(message) => {
-            println!("Gingham could not open {name}: {message}\n\nPut a workbook in this program's folder and run: gingham NAME.xlsx");
+            println!("Spreadeagle could not open {name}: {message}\n\nPut a workbook in this program's folder and run: spreadeagle NAME.xlsx");
             std::process::exit(1);
         }
     };
     let (target, task) = sex_std::identity();
-    sex_std::record(&format!("[gingham.open] target={target} task={task} name={name} sheets={}", book.sheets().join(",")));
+    sex_std::record(&format!("[spreadeagle.open] target={target} task={task} name={name} sheets={}", book.sheets().join(",")));
     let window = sex_std::window();
     ui::Ui::new(book, name).run(window);
     std::process::exit(0);

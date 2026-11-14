@@ -74,7 +74,7 @@ impl Ui {
         let sheets = self.book.sheets();
         let sheet = sheets.get(self.book.active_sheet()).cloned().unwrap_or_default();
         let cells: Vec<String> = (0..8).map(|r| self.book.shown(r, self.col).text).collect();
-        sex_std::record(&format!("[gingham.column] sheet={sheet} col={} text={}", column_name(self.col), cells.join("|")));
+        sex_std::record(&format!("[spreadeagle.column] sheet={sheet} col={} text={}", column_name(self.col), cells.join("|")));
     }
 
     fn commit(&mut self) -> bool {
@@ -82,7 +82,7 @@ impl Ui {
         let text: String = edit.text.iter().collect();
         match self.book.set(self.row, self.col, &text) {
             Ok(()) => {
-                sex_std::record(&format!("[gingham.set] cell={} input={text}", self.cell_name()));
+                sex_std::record(&format!("[spreadeagle.set] cell={} input={text}", self.cell_name()));
                 self.message.clear();
             }
             Err(e) => self.message = format!("{}: {e}", self.cell_name()),
@@ -240,11 +240,11 @@ impl Ui {
     fn save(&mut self) {
         match self.book.save() {
             Ok(bytes) => {
-                sex_std::record(&format!("[gingham.saved] name={} bytes={bytes}", self.book.path));
+                sex_std::record(&format!("[spreadeagle.saved] name={} bytes={bytes}", self.book.path));
                 self.message = format!("Saved {} ({bytes} bytes)", self.name);
             }
             Err(e) => {
-                sex_std::record(&format!("[gingham.save-failed] {e}"));
+                sex_std::record(&format!("[spreadeagle.save-failed] {e}"));
                 self.message = e;
             }
         }
@@ -398,6 +398,6 @@ impl Ui {
                 }
             }
         }
-        sex_std::record("[gingham.closed]");
+        sex_std::record("[spreadeagle.closed]");
     }
 }

@@ -3,7 +3,7 @@ name = "sex-office"
 version = "0.1.0"
 edition = "2021"
 license = "GPL-3.0-only"
-description = "Shared painting for the SexOS office apps (Gingham, Brocade, Burlesque): rectangles and cached anti-aliased text into a window's pixels"
+description = "Shared painting for the SexOS office apps (Spreadeagle, Brocade, Burlesque): rectangles and cached anti-aliased text into a window's pixels"
 
 [dependencies]
 sex-font = { path = "../sex-font" }

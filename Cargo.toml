@@ -95,7 +95,7 @@ members = [
     "crates/sex-sdl",
     "apps/sdltest",
     "apps/driftspark",
-    "apps/gingham",
+    "apps/spreadeagle",
     "crates/sex-office",
 ]
 [workspace.package]
@@ -127,9 +127,9 @@ codegen-units = 1
 opt-level = "z"
 codegen-units = 1
 strip = true
-# Gingham carries GridCraft's whole engine: size-optimised and stripped, it stays well
+# Spreadeagle carries GridCraft's whole engine: size-optimised and stripped, it stays well
 # under the 16 MiB program limit.
-[profile.release.package.gingham]
+[profile.release.package.spreadeagle]
 strip = true
 [profile.release.package.gridcraft-engine]
 opt-level = "s"

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Writes assets/welcome.xlsx: a small two-sheet workbook in hand-written SpreadsheetML,
-so Gingham's first file comes from a writer other than its own (the reader is tested on
+so Spreadeagle's first file comes from a writer other than its own (the reader is tested on
 a file the engine did not make). Run from anywhere; the output is committed."""
 import zipfile
 from pathlib import Path
@@ -29,7 +29,7 @@ WB_RELS = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>
 </Relationships>'''
 STRINGS = ['Item', 'Cost', 'Rent', 'Food', 'Fun', 'Total', 'Per year',
-           'Welcome to Gingham, the SexOS spreadsheet.', 'Arrows move, type to edit, Enter commits, Ctrl+S saves.']
+           'Welcome to Spreadeagle, the SexOS spreadsheet.', 'Arrows move, type to edit, Enter commits, Ctrl+S saves.']
 SST = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
        f'<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="{len(STRINGS)}" uniqueCount="{len(STRINGS)}">'
        + ''.join(f'<si><t>{s}</t></si>' for s in STRINGS) + '</sst>')

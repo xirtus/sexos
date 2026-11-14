@@ -130,7 +130,7 @@ mod tests {
     const WELCOME: &[u8] = include_bytes!("../assets/welcome.xlsx");
 
     fn temp(name: &str) -> String {
-        let dir = std::env::temp_dir().join(format!("gingham-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("spreadeagle-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir.join(name).to_string_lossy().into_owned()
     }

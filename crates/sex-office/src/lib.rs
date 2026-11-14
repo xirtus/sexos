@@ -144,9 +144,9 @@ mod tests {
         let mut px = vec![0u32; 200 * 40];
         let mut canvas = Canvas::new(&mut px, 200, 40);
         let mut pen = Pen::sans(14);
-        let w = pen.measure("Gingham 42");
+        let w = pen.measure("Spreadeagle 42");
         assert!(w > 40 && w < 140, "width {w}");
-        pen.text(&mut canvas, 10, 10, "Gingham 42", 0xffffff, Some((10, 50)));
+        pen.text(&mut canvas, 10, 10, "Spreadeagle 42", 0xffffff, Some((10, 50)));
         let inked: Vec<usize> = (0..200).filter(|x| (0..40).any(|y| px[y * 200 + x] != 0)).collect();
         assert!(!inked.is_empty());
         assert!(inked.iter().all(|x| (10..60).contains(x)), "{inked:?}");
