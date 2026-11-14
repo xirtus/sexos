@@ -131,6 +131,11 @@ strip = true
 # under the 16 MiB program limit.
 [profile.release.package.spreadeagle]
 strip = true
+[profile.release.package."sha2@0.11.1"]
+# SHA-256 at opt-level 3 compiles `rol $0xf` + `add %ebp,%edi`, which holds WRPKRU
+# (0f 01 ef) and makes the loader refuse Spreadeagle (scripts/key_bytes.py). Only the
+# version GridCraft uses; the build also relinks std programs in another layout.
+opt-level = "s"
 [profile.release.package.gridcraft-engine]
 opt-level = "s"
 [profile.release.package.gridcraft-functions]
