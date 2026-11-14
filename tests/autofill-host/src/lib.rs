@@ -773,6 +773,44 @@ fn native_revoke_under_contention(retirement: bool) {
         });
         current(C);
         assert!(!matches!(c.poll(209), Some(Ok(_))));
+        let reused = Subject {
+            pd: C.pd,
+            task: C.task + 1000,
+        };
+        unsafe {
+            native_routes::retire(C);
+        }
+        env(|e| {
+            e.live.retain(|s| *s != C);
+            e.live.push(reused);
+            e.inbox.push((reused, VecDeque::new()));
+        });
+        unsafe {
+            native_routes::bound(reused.pd, reused.task);
+        }
+        native_pump();
+        let old = autofill::chunk(autofill::DATA, 1, 99, 0, b"oldpass!").unwrap();
+        for source in [P, reused] {
+            current(source);
+            pdx_call(
+                SLOT_SHELL,
+                old.opcode,
+                old.args[0],
+                old.args[1],
+                old.args[2],
+            );
+            native_pump();
+        }
+        env(|e| {
+            assert!(e
+                .inbox
+                .iter()
+                .find(|(s, _)| *s == reused)
+                .unwrap()
+                .1
+                .iter()
+                .all(|m| m.type_id != autofill::DATA))
+        });
     } else {
         assert!(p.revoked());
         current(C);
