@@ -7,6 +7,8 @@ This is an engine proof; no claim about the pending Weft UI or microphone UX.
 import argparse
 import array
 import json
+import io
+import struct
 import os
 from pathlib import Path
 import shutil
@@ -18,8 +20,34 @@ from install_program import install
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def open_recording(path):
+    """Read WAV; accommodate only QEMU's exact PCM placeholder-size header.
+
+    Some QEMU WAV backends leave both size words zero after normal quit. The
+    captured samples remain intact. Never rewrite the artifact or relax Moan's
+    production import parser; this adapter is only for the gate's recording.
+    """
+    with Path(path).open('rb') as file:
+        header=file.read(44)
+        placeholders=(len(header)==44 and header[:4]==b'RIFF'
+                      and header[4:8]==b'\0'*4 and header[8:16]==b'WAVEfmt '
+                      and header[36:40]==b'data' and header[40:44]==b'\0'*4)
+        if placeholders:
+            if header[16:20]!=struct.pack('<I',16) or struct.unpack('<HHIIHH',header[20:36])!=(1,2,48000,192000,4,16):
+                raise wave.Error('unexpected QEMU recording format')
+            maximum=16*1024*1024
+            payload=file.read(maximum+1)
+            if not payload or len(payload)>maximum or len(payload)%4:
+                raise wave.Error('invalid QEMU recording payload length')
+            header=bytearray(header)
+            struct.pack_into('<I',header,4,36+len(payload))
+            struct.pack_into('<I',header,40,len(payload))
+            return wave.open(io.BytesIO(header+payload),'rb')
+    return wave.open(str(path),'rb')
+
+
 def inspect(path):
-    with wave.open(str(path), 'rb') as wav:
+    with open_recording(path) as wav:
         assert wav.getnchannels() == 2 and wav.getsampwidth() == 2
         rate = wav.getframerate()
         assert rate == 48000
@@ -48,7 +76,7 @@ def inspect(path):
 
 
 def inspect_effects(path):
-    with wave.open(str(path), 'rb') as wav:
+    with open_recording(path) as wav:
         assert wav.getnchannels() == 2 and wav.getsampwidth() == 2
         rate = wav.getframerate()
         assert rate == 48000
