@@ -20,6 +20,8 @@ const MIN_MATCH: usize = 4;
 /// The last bytes of a block are always literals (as in LZ4), so matches never run past
 /// the end and the decoder can copy without tail checks.
 const LAST_LITERALS: usize = 5;
+/// No match may start in the block's last 12 bytes.
+const MFLIMIT: usize = 12;
 const HASH_BITS: u32 = 12;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -61,7 +63,8 @@ fn sequence(src: &[u8], out: &mut [u8], o: &mut usize, lit: core::ops::Range<usi
 fn lz(src: &[u8; PAGE], out: &mut [u8; MAX_PACKED]) -> usize {
     let mut table = [0u16; 1 << HASH_BITS];
     let (mut i, mut anchor, mut o) = (0usize, 0usize, 0usize);
-    let limit = PAGE - LAST_LITERALS - MIN_MATCH;
+    // LZ4 blocks end with a match no closer than 12 bytes (MFLIMIT) to the end.
+    let limit = PAGE - MFLIMIT;
     // Position 0 can never be a candidate (table holds 0 for "none"), which costs nothing.
     while i < limit {
         let v = read4(src, i);
@@ -132,6 +135,38 @@ mod tests {
         unpack(p, &out, &mut back).expect("unpack");
         assert!(back[..] == page[..]);
         p
+    }
+    /// Every match starts at least MFLIMIT bytes before the end and the block ends
+    /// in at least LAST_LITERALS literals, as LZ4 decoders require.
+    fn lz4_rules(block: &[u8]) {
+        let (mut i, mut o) = (0usize, 0usize);
+        let len = |i: &mut usize, mut n: usize| { loop { let b = block[*i]; *i += 1; n += b as usize; if b != 255 { return n; } } };
+        loop {
+            let token = block[i]; i += 1;
+            let mut lits = (token >> 4) as usize;
+            if lits == 15 { lits = len(&mut i, 15); }
+            i += lits; o += lits;
+            if i == block.len() { assert!(lits >= LAST_LITERALS && o == PAGE); return; }
+            assert!(o + MFLIMIT <= PAGE, "match starts {} bytes before the end", PAGE - o);
+            i += 2;
+            let mut ml = (token & 15) as usize;
+            if ml == 15 { ml = len(&mut i, 15); }
+            o += ml + MIN_MATCH;
+        }
+    }
+    #[test] fn last_match_keeps_lz4_end_rules() {
+        // A short repeat right at the tail, after a long zero run (the review's case).
+        let mut seed = 7u64;
+        for at in 4070..PAGE - 4 {
+            let mut page = [0u8; PAGE];
+            for b in &mut page[4000..] { *b = rng(&mut seed) as u8; }
+            let r = [1u8, 2, 3, 4];
+            page[at - 40..at - 36].copy_from_slice(&r);
+            page[at..at + 4].copy_from_slice(&r);
+            let mut out = [0u8; MAX_PACKED];
+            if let Packed::Lz(n) = pack(&page, &mut out) { lz4_rules(&out[..n]); }
+            round(&page);
+        }
     }
     fn rng(seed: &mut u64) -> u64 { *seed ^= *seed << 13; *seed ^= *seed >> 7; *seed ^= *seed << 17; *seed }
     #[test] fn zero_and_fill() {
