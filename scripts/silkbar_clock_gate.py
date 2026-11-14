@@ -64,7 +64,7 @@ def _slim_render_shape(display):
  compact=lambda value:re.sub(r'\s+','',value)
  caption=compact(_function(display,'civil_clock_caption'))
  assert caption.split('{',1)[0]=='fncivil_clock_caption(clock:&silkbar_model::civil_clock::CivilClock)->[u8;20]'
- for binding in ('letlines=civil_clock_lines(clock);','text[..5].copy_from_slice(&lines[0][4..9]);','text[6..9].copy_from_slice(b"UTC");','text[10]=b\'|\';','text[12..18].copy_from_slice(&lines[1][..6]);','text[..15].copy_from_slice(b"UTCunavailable");'):
+ for binding in ('letlines=civil_clock_lines(clock);','sex_time::zone::zone(sex_pdx::clock_zone::zone()).offset_at(clock.seconds()asi64);','text[2]=b\':\';','text[6..6+n].copy_from_slice(&abbr.as_bytes()[..n]);text[7+n]=b\'|\';','text[9+n..15+n].copy_from_slice(&civil_clock_date(local)[..6]);','text[..15].copy_from_slice(b"UTCunavailable");'):
   assert binding in caption,('unknown single-line civil binding',binding)
  assert 'clock.state()==silkbar_model::civil_clock::State::Snapshot'in caption
  for name in('civil_clock_fg_at_scaled','clock_fg_at_scaled','top_strip_pixel'):

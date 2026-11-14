@@ -78,7 +78,7 @@ new `crates/sex-keymap/`, `crates/sex-font/`, new `crates/sex-shape/`, `servers/
 | A1 | Keymap crate: scancode/HID usage → keysym tables, US as the first table, used by Input | `crates/sex-keymap`, `servers/sexinput` | host: every US key matches the old table; gate: typing in Jot unchanged |
 | A2 | Layouts UK, DE, FR, ES, IT, Nordic (SE/NO/DK/FI), Dvorak, Colemak | `crates/sex-keymap/layouts/` | host: golden table per layout; gate: QMP `sendkey` with DE layout yields `ü`, `ß` in Jot |
 | A3 | Dead keys and AltGr level 3 | `crates/sex-keymap` | host: `´`+`e` → `é`, AltGr+`q` → `@` on DE |
-| A4 | Compose key with an XCompose-style table (Rust data, no X11 code) | `crates/sex-keymap/compose.rs` | host: Compose `o` `"` → `ö`; gate: Compose in Web address bar |
+| A4 | Compose key with an XCompose-style table (Rust data, no X11 code) | `crates/sex-keymap/compose.rs` | host: Compose `o` `"` → `ö`; gate: Compose in Kaleidoscope address bar |
 | A5 | Layout switch shortcut (Super+Space) and per-session layout list | `servers/sexinput`, small shell hook | gate: switch US→DE→US, bar shows layout code |
 | A6 | Font fallback chain: Geist → Noto Sans (Latin ext, Greek, Cyrillic) → Noto CJK subset → Noto Emoji (monochrome) | `crates/sex-font`, assets | host: glyph lookup for `Ж`, `日`, `😀` hits a font; screenshot gate shows no tofu |
 | A7 | Text shaping with `rustybuzz` (MIT) for ligatures, combining marks and Arabic/Devanagari | new `crates/sex-shape` | host: shaped clusters match HarfBuzz reference output for 20 strings |
@@ -101,7 +101,7 @@ Goal: one Settings program and a real session: time zone, lock, idle. Write set:
 | B6 | Lock screen: Super+L, password hashed with Argon2id stored by Files, compositor shows only the lock surface | `servers/silk-shell/src/lock.rs`, hook | gate: locked screen ignores app input; wrong password refused; right one unlocks |
 | B7 | Idle policy: dim after N min, lock after M, display blank; inhibited while media plays | `lock.rs`, `servers/sexbell` hint | gate: shortened timers dim→lock→blank; playing video inhibits |
 | B8 | First-boot setup: language, layout, time zone, user name and password | `apps/settings/src/first_boot.rs` | gate: fresh disk boots into setup, finishes into desktop |
-| B9 | Default apps and file associations (open `.pdf` with PDF, `.mp4` with Play) | `crates/sex-config`, `apps/files` hook | gate: double-click in Files opens the configured program |
+| B9 | Default apps and file associations (open `.pdf` with PDF, `.mp4` with Qupid) | `crates/sex-config`, `apps/files` hook | gate: double-click in Files opens the configured program |
 
 ### C. Desktop shell (10 slices)
 
@@ -166,7 +166,7 @@ Goal: everyday apps people expect. Write set: `apps/jot/`, `servers/quil/`, `app
 | # | Slice | Files | Behaviour test |
 | --- | --- | --- | --- |
 | F1 | Terminal emulator: VT100/xterm subset (`vte` crate, MIT), scrollback, copy/paste, runs Spindle and `std` CLI programs | new `apps/term` | gate: `vttest`-style fixture renders; colored output correct |
-| F2 | PTY-like stream pair as a PDX protocol (library, not a kernel API) | `crates/sex-pdx/src/stream.rs`, `crates/sex-std` | host: echo program round trip; gate: program reads lines from Term |
+| F2 | PTY-like stream pair as a PDX protocol (library, not a kernel API) | `crates/sex-pdx/src/stream.rs`, `crates/sex-std` | host: echo program round trip; gate: program reads lines from Spindle's terminal (Term) |
 | F3 | Jot: undo/redo tree, find/replace, multiple tabs, line numbers | `apps/jot`, `servers/quil` | gate: edit, undo 5, redo 2, save, reopen equal |
 | F4 | Code editing: syntax highlighting (tree-sitter-free lexers for Rust/C/JS/Markdown/TOML) | `apps/jot/src/highlight.rs` | host: token golden tests; screenshot |
 | F5 | Spell check with Hunspell-format dictionaries (Rust `spellbook`, MPL/MIT) | `apps/jot`, assets | gate: misspelled word underlined; suggestion replaces it |
@@ -184,12 +184,12 @@ Goal: music and video feel complete. Write set: `apps/play/`, `servers/sexbell/`
 | --- | --- | --- | --- |
 | G1 | Media keys and volume OSD (mute, up/down, play/pause routed to the focused or last player) | `servers/sexbell`, shell hook | gate: volume key changes Bell master; OSD appears |
 | G2 | Per-program volume panel in the bar | `servers/silkbar` module, `sexbell` | gate: lower one program, other unchanged in mix output |
-| G3 | Music app: library from Files, albums/artists, queue, gapless | new `apps/music` | gate: two-track queue plays gapless (no silence > 5 ms) |
-| G4 | Play: subtitles (SRT/ASS text), audio track choice, playback speed | `apps/play`, `crates/sex-media` | gate: SRT line drawn at its timestamp |
-| G5 | Play: playlist, resume position, fullscreen controls overlay | `apps/play` | gate: reopen resumes within 1 s of saved position |
+| G3 | Qupid library (was Music app): library from Files, albums/artists, queue, gapless | new `apps/music` | gate: two-track queue plays gapless (no silence > 5 ms) |
+| G4 | Qupid (was Play): subtitles (SRT/ASS text), audio track choice, playback speed | `apps/play`, `crates/sex-media` | gate: SRT line drawn at its timestamp |
+| G5 | Qupid (was Play): playlist, resume position, fullscreen controls overlay | `apps/play` | gate: reopen resumes within 1 s of saved position |
 | G6 | USB Audio Class 1/2 output and input in `sexusb` + Bell device | `servers/sexusb`, `servers/sexbell` | gate: QEMU `usb-audio` receives the test tone |
 | G7 | HDMI/DP audio on Intel HDA codecs (Bluetooth audio is a later workstream) | `servers/sexbell/src/hda.rs` | x17 receipt; host: codec parse of HDMI pin |
-| G8 | A/V sync and latency gate across Play and Web | `scripts/av_sync_gate.py` | gate: drift < 40 ms over 5 min |
+| G8 | A/V sync and latency gate across Qupid and Kaleidoscope | `scripts/av_sync_gate.py` | gate: drift < 40 ms over 5 min |
 
 ### H. Laptop power (9 slices)
 
@@ -219,12 +219,12 @@ Goal: installing and building software is normal. Write set: `crates/sex-pkg/`,
 | I1 | Package format: signed archive (ed25519, same trust model as updates) with manifest of grants | `crates/sex-pkg` | host: tampered package refused; manifest parsed |
 | I2 | Install/remove/upgrade service in `sexshop`, programs launched outside the boot catalog | `servers/sexshop` | gate: install package from Files, launch it, remove it |
 | I3 | Permission prompt on first run from the manifest (network, files, microphone) | `servers/sexshop`, shell hook | gate: denied network grant → program gets refusal |
-| I4 | Store program: catalog from an HTTPS index, search, install, update all | new `apps/store` | gate: local HTTPS index; install + update path |
+| I4 | sexshop (was Store) program: catalog from an HTTPS index, search, install, update all | new `apps/store` | gate: local HTTPS index; install + update path |
 | I5 | `std`: `std::fs` complete (dirs, metadata, rename), `std::process::Command` as "run program" | `crates/sex-std` | host+gate: std test subset passes |
 | I6 | `sex-libc`: `select/poll` on sockets and streams, `getaddrinfo`, `mmap` of files as library emulation | `crates/sex-libc` | gate: C HTTP client + `poll` test |
-| I7 | Port a real CLI set: ripgrep, fd, bat, a Lua interpreter | `sex-packages/` recipes | gate: each runs in Term (F1) with expected output |
+| I7 | Port a real CLI set: ripgrep, fd, bat, a Lua interpreter | `sex-packages/` recipes | gate: each runs in Spindle's terminal (F1) with expected output |
 | I8 | Port SDL2 (video/audio/input onto sex-app) and one SDL game | `sex-packages/sdl2` | gate: SDL test program draws and plays tone |
-| I9 | Python (CPython or RustPython) as a package | `sex-packages/python` | gate: `python -c 'print(2**100)'` in Term |
+| I9 | Python (CPython or RustPython) as a package | `sex-packages/python` | gate: `python -c 'print(2**100)'` in Spindle |
 
 ### J. Reliability, monitoring and performance (9 slices)
 
@@ -257,7 +257,7 @@ Goal: networking as capable as a desktop's. Write set: `crates/sex-net/`, `crate
 | K4 | DNS over HTTPS / TLS option with system resolver cache | `crates/sex-net` | gate: resolver uses DoH when configured |
 | K5 | Per-program firewall from grants, visible in Settings | `crates/sex-net-config` | gate: blocked program refused, allowed one connects |
 | K6 | WireGuard client (native Rust, BSD/MIT reference like boringtun) | new `crates/sex-wg` | gate: tunnel to a QEMU-host WireGuard peer, HTTP through it |
-| K7 | SSH client program (`russh`, Apache/MIT) in Term | new `apps/ssh` | gate: login to host sshd with key, run `echo` |
+| K7 | SSH client program (`russh`, Apache/MIT) in Spindle | new `apps/ssh` | gate: login to host sshd with key, run `echo` |
 | K8 | Network page in Settings: interfaces, IPs, DNS, proxy | `apps/settings` page | gate: static IP set from Settings takes effect |
 
 ### L. Native graphics and monitors (8 slices)
@@ -283,7 +283,7 @@ Start all twelve at once; within each, slices run in order. Cross-workstream dep
 
 - `sex-config` (B1) first: A10, C6, D-zoom defaults, H7, K5, K8 and J9 read it. Until B1 merges,
   those slices use a hard-coded default and switch to config in a follow-up.
-- Term (F1, F2) before I7–I9 and K7.
+- Spindle's terminal (F1, F2) before I7–I9 and K7.
 - Lock screen (B6) before H3. HDA HDMI (G7) and L4 meet on x17.
 - I3 permission prompts reuse grants that D5 and E use; keep the grant types in `sex-pdx`.
 

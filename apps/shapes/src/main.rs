@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Shapes: anti-aliased drawing in a program's own window. `run shapes`. It draws
+//! Gestalt (formerly Shapes): anti-aliased drawing in a program's own window. `run gestalt`. It draws
 //! sex-canvas's demo scene (tiny-skia, on the program's heap) into the window's pixel
 //! surface. The arrow keys move the front window and redraw it, shadow and all.
 #![no_std]
@@ -30,7 +30,7 @@ fn draw(window: &mut Window, dx: f32, dy: f32) {
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     let mut window = Window::open();
-    window.title(b"Shapes");
+    window.title(b"Gestalt");
     let (mut dx, mut dy) = (0.0f32, 0.0f32);
     draw(&mut window, dx, dy);
     sex_pdx::serial_record!("[shapes.ready] target={} task={}", window.target, window.task);

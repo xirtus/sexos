@@ -11,7 +11,7 @@ ROOT=Path(__file__).resolve().parents[1]
 def main():
  p=argparse.ArgumentParser()
  for n in ('iso','source-disk','out'):p.add_argument('--'+n,required=True,type=Path)
- p.add_argument('--program',type=Path,default=ROOT/'iso_root/programs/web');p.add_argument('--resolution',default='1280x800');a=p.parse_args()
+ p.add_argument('--program',type=Path,default=ROOT/'iso_root/programs/kaleidoscope');p.add_argument('--resolution',default='1280x800');a=p.parse_args()
  a.out.mkdir(parents=True,exist_ok=True);seen=[];servers=[]
  class Handler(http.server.BaseHTTPRequestHandler):
   def do_GET(self):
@@ -70,9 +70,9 @@ def main():
   g['focus'](int(surface));q.key('f11');g['wait'](rf'\[web.closed\] target={target} task={task}\r?\n',start,60)
   g['wait'](rf'\[app.private.retired\] target={target} task={task} ',start,120)
  try:
-  g['wait'](r'\[app.private.retired\] target=41 ',0,120);start=len(t());command(f'fetch {abase}/web /bin/web')
+  g['wait'](r'\[app.private.retired\] target=41 ',0,120);start=len(t());command(f'fetch {abase}/web /bin/kaleidoscope')
   saved=g['wait'](r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',start,240);assert saved[1].startswith('Saved'),saved[1]
-  start=len(t());command(f'run +net web {abase}/page')
+  start=len(t());command(f'run +net kaleidoscope {abase}/page')
   g['wait'](r'\[web.console\] level=0 classic cases done\r?\n',start,300)
   for mark in ('static before following true','static load currentScript null true','classic body good','classic loaded 1 true','fetch blocked','html blocked','nosniff blocked','corp blocked','cors blocked','inline intrinsic','same error callback true true','opaque error callback true','error event same error true','error event Script error. true','same error resource loaded','opaque error resource loaded'):
    assert '[web.console] level=0 '+mark in t()[start:],mark
@@ -81,7 +81,7 @@ def main():
   assert {r['origin'] for r in good}=={None,abase},good
   assert all(r['referer']==abase+'/' for r in good),good
   assert not any(r['path'] in ('/removed.js','/stale.js','/changed.js') for r in seen),seen
-  close(start);start=len(t());command(f'run +net web {abase}/cancel')
+  close(start);start=len(t());command(f'run +net kaleidoscope {abase}/cancel')
   g['wait'](r'\[web.console\] level=0 navigation clean undefined\r?\n',start,300)
   assert not any(r['path']=='/old-page.js' for r in seen),seen
   close(start)

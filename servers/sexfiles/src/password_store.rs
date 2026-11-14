@@ -1,0 +1,94 @@
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
+//! The lock password: Files keeps only an Argon2id hash in `/system/password` and
+//! answers whether a password matches (`sex_config::secret`). Only the program run
+//! from `/data/settings` may set it.
+use sex_config::secret::{self as s, Staging, Store, STORED_MAX};
+
+pub const PATH: &[u8] = b"/system/password";
+const CALLERS: usize = 8;
+/// The Shell, whose lock screen may also open the encrypted home.
+const SHELL: u32 = 3;
+static mut STAGES: [(u32, Staging); CALLERS] = [const { (0, Staging::new()) }; CALLERS];
+
+struct Disk;
+impl Store for Disk {
+    fn load(&mut self, out: &mut [u8; STORED_MAX]) -> Option<usize> {
+        crate::fs_service::read_own(PATH, out).filter(|n| *n > 0)
+    }
+    fn save(&mut self, text: &[u8]) -> bool { crate::fs_service::replace_own(PATH, text) }
+    /// A salt need only be unique: the CPU's RDRAND, mixed with time and a counter.
+    fn salt(&mut self) -> [u8; 16] {
+        static mut COUNT: u64 = 0;
+        let mut out = [0u8; 16];
+        for half in out.chunks_mut(8) {
+            let mut r: u64 = 0;
+            let mut ok: u8 = 0;
+            for _ in 0..10 {
+                unsafe { core::arch::asm!("rdrand {r}", "setc {ok}", r = out(reg) r, ok = out(reg_byte) ok, options(nomem, nostack)); }
+                if ok != 0 { break; }
+            }
+            let count = unsafe { COUNT += 1; COUNT };
+            let mixed = r ^ sex_pdx::get_ticks().rotate_left(17) ^ count.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+            half.copy_from_slice(&mixed.to_le_bytes());
+        }
+        out
+    }
+}
+
+fn stage(caller: u32) -> &'static mut Staging {
+    let stages = unsafe { &mut *core::ptr::addr_of_mut!(STAGES) };
+    let at = stages.iter().position(|(c, _)| *c == caller)
+        .or_else(|| stages.iter().position(|(c, _)| *c == 0))
+        .unwrap_or((caller as usize) % CALLERS);
+    stages[at].0 = caller;
+    &mut stages[at].1
+}
+
+/// Argon2 and the disk write after it need more stack than Files' own, which is small
+/// and already deep when a request arrives. They run on this one instead.
+const DEEP: usize = 256 * 1024;
+#[repr(C, align(16))]
+struct Stack([u8; DEEP]);
+static mut STACK: Stack = Stack([0; DEEP]);
+
+fn on_deep_stack(f: &mut dyn FnMut()) {
+    extern "C" fn enter(f: *mut &mut dyn FnMut()) { unsafe { (*f)() } }
+    let top = unsafe { core::ptr::addr_of_mut!(STACK) as usize } + DEEP;
+    let mut f = f;
+    // SAFETY: Files serves one request at a time, so the stack is ours alone; r12 is
+    // callee-saved and brings the old stack pointer back across the call.
+    unsafe {
+        core::arch::asm!("mov r12, rsp", "mov rsp, {top}", "call {enter}", "mov rsp, r12",
+            top = in(reg) top, enter = sym enter, in("rdi") &mut f as *mut &mut dyn FnMut(),
+            out("r12") _, clobber_abi("C"));
+    }
+}
+
+/// One request; the word to reply with.
+/// Serves one request; the reply word, or None for a PUT (which gets none).
+pub fn handle(caller: u32, arg0: u64, arg1: u64) -> Option<u64> {
+    let may_set = crate::fs_service::program_is(caller, b"settings");
+    let mut status = s::INVALID;
+    // The lock screen's password also opens the encrypted home: keep a copy before
+    // CHECK wipes the staged bytes.
+    let check = sex_config::wire::decode_request(arg0).is_some_and(|(v, _)| v == s::CHECK);
+    let mut home = [0u8; s::MAX];
+    let n = (arg1 as usize).min(s::MAX);
+    let for_home = check && caller == SHELL && n > 0;
+    if for_home { home[..n].copy_from_slice(stage(caller).staged(n)); }
+    on_deep_stack(&mut || status = s::serve(stage(caller), may_set, arg0, arg1, &mut Disk));
+    if for_home && matches!(status, s::OK | s::NO_PASSWORD) {
+        if let Some(st) = crate::fs_service::home_unlock_from_lock_screen(&home[..n]) {
+            sex_pdx::serial_record!("[files.password.home] status={}", st);
+        }
+    }
+    for b in home.iter_mut() { unsafe { core::ptr::write_volatile(b, 0) }; }
+    match sex_config::wire::decode_request(arg0) {
+        Some((verb, _)) if !s::answered(verb) => None,
+        decoded => {
+            let verb = decoded.map_or(0, |(v, _)| v);
+            sex_pdx::serial_record!("[files.password] caller={} verb={} status={}", caller, verb, status);
+            Some(s::reply(status))
+        }
+    }
+}

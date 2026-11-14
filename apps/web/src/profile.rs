@@ -12,11 +12,11 @@ use sex_app::{files, Window};
 use sex_js::storage::WebStorage;
 use sex_web::sex_html;
 
-const DIR: &[u8] = b"Web";
-const HISTORY: &[u8] = b"Web/history.tsv";
-const BOOKMARKS: &[u8] = b"Web/bookmarks.tsv";
-const COOKIES: &[u8] = b"Web/cookies.tsv";
-const STORAGE: &[u8] = b"Web/storage.tsv";
+const DIR: &[u8] = b"Kaleidoscope";
+const HISTORY: &[u8] = b"Kaleidoscope/history.tsv";
+const BOOKMARKS: &[u8] = b"Kaleidoscope/bookmarks.tsv";
+const COOKIES: &[u8] = b"Kaleidoscope/cookies.tsv";
+const STORAGE: &[u8] = b"Kaleidoscope/storage.tsv";
 /// Most history entries kept; the least recently visited go first.
 const MAX_HISTORY: usize = 5000;
 /// Biggest profile file read back.

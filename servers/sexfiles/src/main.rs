@@ -24,6 +24,7 @@ mod recording_runtime;
 mod installer;
 mod updater;
 mod packages;
+mod console_relay;
 mod volumes;
 mod home;
 mod document;
@@ -31,6 +32,8 @@ mod document_journal;
 mod history_journal;
 mod history_disk;
 mod crash_keeper;
+mod config_store;
+mod password_store;
 
 use crate::trampoline::trampoline_main;
 

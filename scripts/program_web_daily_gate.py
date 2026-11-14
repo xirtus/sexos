@@ -12,7 +12,7 @@ SITE=ROOT/'scripts/web_site'
 seen_cookies=[]
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):
-  if self.path=='/web':body=(ROOT/'iso_root/programs/web').read_bytes();self.send_response(200);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body);return
+  if self.path=='/web':body=(ROOT/'iso_root/programs/kaleidoscope').read_bytes();self.send_response(200);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body);return
   path=self.path.split('?')[0]
   f=SITE/path.removeprefix('/site/') if path.startswith('/site/') else None
   if f is None or not f.is_file():self.send_response(404);self.end_headers();return
@@ -43,9 +43,9 @@ def main():
     else:q.key(KEYS.get(k,k))
     time.sleep(.06)
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
-  g['focus'](153);time.sleep(.5);s=len(t());keys(f'fetch http://10.0.2.2:{PORT}/web /bin/web');q.key('ret')
+  g['focus'](153);time.sleep(.5);s=len(t());keys(f'fetch http://10.0.2.2:{PORT}/web /bin/kaleidoscope');q.key('ret')
   m=g['wait'](r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',s,240);assert m[1].startswith('Saved'),m[1]
-  g['focus'](153);time.sleep(.5);s=len(t());keys(f'run +net web {start}');q.key('ret')
+  g['focus'](153);time.sleep(.5);s=len(t());keys(f'run +net kaleidoscope {start}');q.key('ret')
   m=g['wait'](r'\[web.console\] level=0 daily count (\d+) cookie (\S+) extra (\S+)',s,300)
   r=g['wait'](r'\[web.ready\] target=(\d+) task=(\d+)',s,120)
   time.sleep(2)

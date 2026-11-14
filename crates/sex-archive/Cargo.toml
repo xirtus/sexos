@@ -1,0 +1,19 @@
+[package]
+name = "sex-archive"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Archive browsing, extraction and creation (zip, tar, gz, zst, xz) for SexOS programs"
+
+[features]
+default = []
+std = []
+
+[dependencies]
+miniz_oxide = { version = "=0.9.1", default-features = false, features = ["with-alloc"] }
+crc32fast = { version = "=1.5.4", default-features = false }
+ruzstd = { version = "=0.9.1", default-features = false, features = ["hash"] }
+lzma-rust2 = { version = "=0.25.0", default-features = false }
+
+[dev-dependencies]
+crc32fast = "=1.5.4"

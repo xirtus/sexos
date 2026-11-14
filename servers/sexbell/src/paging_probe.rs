@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Second boot-authorized client of sext; one page stays live during reuse.
 use sex_pdx::{paging::SLOT_DEMAND_REGION, serial_record};
-static mut DEFERRED: [Option<sex_pdx::PdxMessage>; 32] = [None; 32];
+/// Messages that arrive while the probe waits for the pager; boot traffic can be bursty.
+const DEFERRED_MAX: usize = 128;
+static mut DEFERRED: [Option<sex_pdx::PdxMessage>; DEFERRED_MAX] = [None; DEFERRED_MAX];
 static mut DEFERRED_COUNT: usize = 0;
 static mut DEFERRED_READ: usize = 0;
 pub fn next_message() -> sex_pdx::PdxMessage {
@@ -50,7 +52,7 @@ pub fn run() {
                 break;
             }
             unsafe {
-                assert!(DEFERRED_COUNT < 32, "BELL_DEFERRED_OVERFLOW");
+                assert!(DEFERRED_COUNT < DEFERRED_MAX, "BELL_DEFERRED_OVERFLOW");
                 DEFERRED[DEFERRED_COUNT] = Some(reply);
                 DEFERRED_COUNT += 1;
             }
@@ -79,7 +81,7 @@ pub fn exit_reuse() {
             break;
         }
         unsafe {
-            assert!(DEFERRED_COUNT < 32, "BELL_DEFERRED_OVERFLOW");
+            assert!(DEFERRED_COUNT < DEFERRED_MAX, "BELL_DEFERRED_OVERFLOW");
             DEFERRED[DEFERRED_COUNT] = Some(reply);
             DEFERRED_COUNT += 1;
         }

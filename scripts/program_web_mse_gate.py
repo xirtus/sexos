@@ -21,7 +21,7 @@ SEEN={'ranges':0,'whole':0}
 class Handler(http.server.BaseHTTPRequestHandler):
  protocol_version='HTTP/1.1'
  def do_GET(self):
-  if self.path=='/web':f=ROOT/'iso_root/programs/web'
+  if self.path=='/web':f=ROOT/'iso_root/programs/kaleidoscope'
   elif self.path.startswith('/tube/'):f=SITE/self.path.removeprefix('/tube/')
   else:f=None
   if f is None or not f.is_file():self.send_response(404);self.send_header('Content-Length','0');self.end_headers();return
@@ -60,9 +60,9 @@ def main():
  try:
   g['wait'](r'\[bell.sound.ready\]',0,180)
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
-  g['focus'](153);time.sleep(.5);s=len(t());keys(f'fetch {base}/web /bin/web');q.key('ret')
+  g['focus'](153);time.sleep(.5);s=len(t());keys(f'fetch {base}/web /bin/kaleidoscope');q.key('ret')
   m=g['wait'](r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',s,600);assert m[1].startswith('Saved'),m[1]
-  g['focus'](153);time.sleep(.5);s=len(t());keys(f'run +net web {url}');q.key('ret')
+  g['focus'](153);time.sleep(.5);s=len(t());keys(f'run +net kaleidoscope {url}');q.key('ret')
   types=console(r'types ([^\n]*)\n',s,1200);assert types[1]=='true true true',types[0]
   console(r'open open',s,300)
   buf=console(r'(buffered|failed) ([^\n]*)\n',s,600);assert buf[1]=='buffered',buf[0]

@@ -39,11 +39,11 @@ def main():
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120)
   base=f'http://10.0.2.2:{server.server_address[1]}';start=len(t())
-  command(f'fetch {base}/web /bin/web')
+  command(f'fetch {base}/web /bin/kaleidoscope')
   saved=g['wait'](r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',start,240);assert saved[1].startswith('Saved'),saved[1]
   expected=f'{sum(((i+7)*3)^(i-7) for i in range(10000))}|2147483648|-2147483649|4294967296|true|a1|2|640,boolean,true,false,0,7,number,true,boolean,false,false,0,true,7'
   for enabled in (False,True):
-   start=len(t());command(f'run +net web {base}/jit.html'+('' if enabled else ' --no-jit'))
+   start=len(t());command(f'run +net kaleidoscope {base}/jit.html'+('' if enabled else ' --no-jit'))
    value=g['wait'](r'\[web.console\] level=0 jit-result ([^\r\n]+)',start,300);assert value[1]==expected,(value[1],expected)
    stats=g['wait'](r'\[web.jit\] enabled=(\d+) compiled=(\d+) executed=(\d+) bailouts=(\d+) refused=(\d+) ticks=(\d+) script_ticks=(\d+)',start,60)
    numbers=list(map(int,stats.groups()));assert numbers[0]==int(enabled),numbers

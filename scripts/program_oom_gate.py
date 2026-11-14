@@ -12,7 +12,7 @@ ROOT=Path(__file__).resolve().parents[1]
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
- install(disk,[(n,(ROOT/'iso_root/programs'/n).read_bytes())for n in('heaptest','monitor')])
+ install(disk,[(n,(ROOT/'iso_root/programs'/n).read_bytes())for n in('heaptest','mesh')])
  g=boot(a.iso,disk,a.out,'oom',a.resolution);t=g['text'];q=g['q']
  def run(line):
   g['focus'](153);time.sleep(.5)
@@ -37,7 +37,7 @@ def main():
   except Exception:pass
   # The desktop still works: a command answers and a new program starts.
   s=len(t());run('crashes');g['wait'](r'\[spindle.crashes\] count=\d+',s,60)
-  s=len(t());run('run monitor');g['wait'](r'\[monitor\.ready\] target=\d+',s,180)
+  s=len(t());run('run mesh');g['wait'](r'\[monitor\.ready\] target=\d+',s,180)
   text=t()
   ended=re.findall(r'\[shell\.oom\.end\] target=(\d+)',text);assert ended==[target],f'ended {ended}, want only {target}'
   services=[l for l in re.findall(r'fault.kill \[[^\]]+\] pd=(\d+)',text) if int(l)<=15];assert not services,services

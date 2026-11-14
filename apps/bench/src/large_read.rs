@@ -28,6 +28,7 @@ pub fn run(window: &mut Window) -> Result<String, &'static str> {
     let mut report = String::from("Large device-backed reads. F11 closes.\n");
     for pass in 0..3 {
         let before = files::read_io_stats(window).map_err(|_| "read I/O counters unavailable")?;
+        let cpu0 = cpu_split(window.target);
         let start = sex_pdx::get_ticks();
         let mut read_cycles = 0u64;
         for offset in (0..TOTAL).step_by(CHUNK) {
@@ -45,9 +46,19 @@ pub fn run(window: &mut Window) -> Result<String, &'static str> {
         if io.requests != (TOTAL / CHUNK) as u64 || io.device_calls == 0 || io.device_bytes != TOTAL as u64 {
             return Err("large read was not fully device backed");
         }
+        let cpu1 = cpu_split(window.target);
+        sex_pdx::serial_record!("[bench.large.cpu] pass={} drive={} files={} bench={} idle={}", pass,
+            cpu1[0].wrapping_sub(cpu0[0]), cpu1[1].wrapping_sub(cpu0[1]), cpu1[2].wrapping_sub(cpu0[2]), cpu1[3].wrapping_sub(cpu0[3]));
         sex_pdx::serial_record!("[bench.large.read] pass={} bytes={} requests={} device_calls={} device_bytes={} read_cycles={} elapsed_ticks={} verified=1",
             pass, TOTAL, io.requests, io.device_calls, io.device_bytes, read_cycles, elapsed);
         let _ = writeln!(report, "Pass {}: {} cycles/MiB, {} device reads", pass + 1, read_cycles / 16, io.device_calls);
     }
     Ok(report)
+}
+
+/// CPU cycles so far of Drive, Files, this program and all cores' idle time (syscall 87).
+fn cpu_split(me: u32) -> [u64; 4] {
+    use sex_pdx::system_stats as st;
+    let c = |pd| st::domain(pd).map_or(0, |d| d.cycles);
+    [c(2), c(11), c(me), st::overview().map_or(0, |o| o.idle_cycles)]
 }

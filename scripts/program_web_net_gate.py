@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Web over the network: `run +net web URL` follows a redirect, fetches the page, its
+"""Web over the network: `run +net kaleidoscope URL` follows a redirect, fetches the page, its
 screen style sheet (not the print one) and its PNG, and draws exactly what the host
 renders from the same files. Right focuses a link, Enter opens the second page, and
 Backspace comes back."""
@@ -13,7 +13,7 @@ SITE=ROOT/'scripts/web_site'
 W,H=410,330
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):
-  if self.path=='/web':body=(ROOT/'iso_root/programs/web').read_bytes();self.send_response(200);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body);return
+  if self.path=='/web':body=(ROOT/'iso_root/programs/kaleidoscope').read_bytes();self.send_response(200);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body);return
   if self.path=='/start':self.send_response(302);self.send_header('Location','/site/index.html');self.end_headers();return
   f=SITE/self.path.removeprefix('/site/') if self.path.startswith('/site/') else None
   if f is None or not f.is_file():self.send_response(404);self.end_headers();return
@@ -57,10 +57,10 @@ def main():
  loaded=r'\[web.loaded\] bytes_ok=1 items=(\d+) links=(\d+) height=(\d+) sheets=(\d+) images=(\d+) fetch_ticks=(\d+) layout_ticks=(\d+)'
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
-  # A run with arguments starts from a file: fetch the program to /bin/web first.
-  g['focus'](153);time.sleep(.5);s=len(t());keys(f'fetch {base}/web /bin/web');q.key('ret')
+  # A run with arguments starts from a file: fetch the program to /bin/kaleidoscope first.
+  g['focus'](153);time.sleep(.5);s=len(t());keys(f'fetch {base}/web /bin/kaleidoscope');q.key('ret')
   m=g['wait'](r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',s,240);assert m[1].startswith('Saved'),m[1]
-  g['focus'](153);time.sleep(.5);s=len(t());keys(f'run +net web {base}/start');q.key('ret')
+  g['focus'](153);time.sleep(.5);s=len(t());keys(f'run +net kaleidoscope {base}/start');q.key('ret')
   first=g['wait'](loaded,s,300);assert first[4]=='1' and first[5]=='1',('sheets/images',first[4],first[5])
   m=g['wait'](r'\[web.ready\] target=(\d+) task=(\d+)',s,120);target,task=m[1],m[2]
   launch=g['wait'](rf'\[shell.program.launch\] target={target} task={task} surface=(\d+)',s,60);surface=int(launch[1])

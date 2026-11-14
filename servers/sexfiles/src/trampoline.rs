@@ -313,6 +313,8 @@ pub extern "C" fn trampoline_main() {
         }
         if msg.type_id==sex_pdx::usb_disk::OP_CHANGED{crate::volumes::usb_changed(msg.caller_pd);continue;}
         if crate::recording_runtime::message(&msg){continue;}
+        if msg.type_id==sex_config::secret::OP{if let Some(word)=crate::password_store::handle(caller,msg.arg0,msg.arg1){crate::fs_service::reply_later(caller,word);}continue;}
+        if msg.type_id==sex_pdx::config::OP{let word=crate::config_store::handle(caller,msg.arg0,msg.arg1);crate::fs_service::reply_later(caller,word);continue;}
         if msg.type_id==sex_pdx::fs::OP{
             let word=crate::fs_service::handle(caller,msg.arg0,msg.arg1,msg.arg2);
             // Nothing else owed and nothing to commit: answer and wait in one entry, so
@@ -326,7 +328,7 @@ pub extern "C" fn trampoline_main() {
             continue;
         }
         if msg.type_id==sex_pdx::program_store::OP{
-            if caller==3{let word=if crate::recording_runtime::image_busy(){sex_pdx::program_store::failed(sex_pdx::program_store::IMAGE_BUSY)}else{crate::program_store::load([msg.arg0,msg.arg1])};crate::fs_service::reply_later(caller,word);}
+            if caller==3{let word=if crate::recording_runtime::image_busy(){sex_pdx::program_store::failed(sex_pdx::program_store::IMAGE_BUSY)}else{crate::program_store::load([msg.arg0,msg.arg1],msg.arg2 as u32)};crate::fs_service::reply_later(caller,word);}
             continue;
         }
         if msg.type_id==sex_pdx::document::OP{

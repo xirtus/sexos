@@ -44,6 +44,7 @@ pub unsafe extern "C" fn _start() -> ! {
 pub extern "C" fn sys_exit(status: i32) -> ! {
     let me = sex_pdx::app_lifecycle::catalog(sex_pdx::app_lifecycle::SELF_CATALOG_SLOT).map_or((0, 0), |i| (i.target_pd, i.task_id));
     sex_pdx::serial_record!("[std.exit] target={} task={} status={}", me.0, me.1, status);
+    console::ended(status);
     console::finish(&if status == 0 { "Finished".to_string() } else { format!("Finished with status {status}") });
     sex_pdx::task_finish(status as u32 as u64)
 }
@@ -51,6 +52,7 @@ pub extern "C" fn sys_exit(status: i32) -> ! {
 #[no_mangle]
 pub extern "C" fn sys_abort() -> ! {
     sex_pdx::serial_record!("[std.abort]");
+    console::ended(134);
     console::finish("Stopped: the program failed");
     sex_pdx::task_finish(134)
 }
@@ -594,6 +596,13 @@ pub extern "C" fn sys_socket(domain: i32, kind: i32, protocol: i32) -> i32 {
 pub unsafe extern "C" fn sys_bind(s: i32, addr: *const abi::sockaddr, len: abi::socklen_t) -> i32 { on_sock!(s, k => unsafe { net::bind(&k, addr, len) }) }
 #[no_mangle]
 pub extern "C" fn sys_listen(s: i32, _backlog: i32) -> i32 { on_sock!(s, k => net::listen(&k)) }
+/// SexOS's own: TLS on a connected socket, to `host` (see net::tls_start).
+#[no_mangle]
+pub unsafe extern "C" fn sys_tls_start(s: i32, host: *const u8, len: usize) -> i32 {
+    if host.is_null() { return -errno::EFAULT; }
+    let host = unsafe { core::slice::from_raw_parts(host, len) };
+    on_sock!(s, k => net::tls_start(&k, host))
+}
 #[no_mangle]
 pub unsafe extern "C" fn sys_connect(s: i32, addr: *const abi::sockaddr, len: abi::socklen_t) -> i32 { on_sock!(s, k => unsafe { net::connect(&k, addr, len) }) }
 #[no_mangle]

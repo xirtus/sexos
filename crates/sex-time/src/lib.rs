@@ -14,6 +14,8 @@
 //! are rejected rather than given an unspecified signed notation.
 #![cfg_attr(not(test), no_std)]
 
+pub mod zone;
+
 /// Seconds from the Unix epoch to the SexTime epoch.
 pub const UNIX_OFFSET: i64 = 1_356_048_000;
 pub const SECONDS_PER_DAY: i64 = 86_400;
@@ -92,7 +94,7 @@ pub const fn days_in_month(year: i64, month: u8) -> u8 {
 
 // Era-based civil conversions over 400-year cycles. Inputs are bounded by
 // the callers so no intermediate overflows.
-const fn civil_from_unix_days(days: i64) -> (i64, u8, u8) {
+pub(crate) const fn civil_from_unix_days(days: i64) -> (i64, u8, u8) {
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
     let doe = z.rem_euclid(146_097);
@@ -105,7 +107,7 @@ const fn civil_from_unix_days(days: i64) -> (i64, u8, u8) {
     (year, month, day)
 }
 
-const fn unix_days_from_civil(year: i64, month: u8, day: u8) -> i64 {
+pub(crate) const fn unix_days_from_civil(year: i64, month: u8, day: u8) -> i64 {
     let y = if month <= 2 { year - 1 } else { year };
     let era = y.div_euclid(400);
     let yoe = y.rem_euclid(400);
