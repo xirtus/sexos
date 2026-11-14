@@ -157,10 +157,25 @@ static int SEXOS_UpdateWindowFramebuffer(_THIS, SDL_Window *window, const SDL_Re
 
 static void send_key(const struct sex_sdl_event *e)
 {
-    /* Shell passes PS/2 set-1 codes, and movement keys as Linux's codes; below 0x59
-     * the two agree, so Linux's table maps both. */
+    /* Shell passes PS/2 set-1 codes; below 0x59 set-1 and Linux codes
+     * agree, so Linux's table maps them. */
     SDL_Scancode code = e->code >= 0 && e->code < (int)SDL_arraysize(linux_scancode_table)
                             ? linux_scancode_table[e->code] : SDL_SCANCODE_UNKNOWN;
+    /* Shell passes the grey movement keys as their set-1 codes without the E0 prefix,
+     * which the Linux table reads as the keypad: report them as the movement keys. */
+    switch (e->code) {
+    case 0x47: code = SDL_SCANCODE_HOME; break;
+    case 0x48: code = SDL_SCANCODE_UP; break;
+    case 0x49: code = SDL_SCANCODE_PAGEUP; break;
+    case 0x4b: code = SDL_SCANCODE_LEFT; break;
+    case 0x4d: code = SDL_SCANCODE_RIGHT; break;
+    case 0x4f: code = SDL_SCANCODE_END; break;
+    case 0x50: code = SDL_SCANCODE_DOWN; break;
+    case 0x51: code = SDL_SCANCODE_PAGEDOWN; break;
+    case 0x52: code = SDL_SCANCODE_INSERT; break;
+    case 0x53: code = SDL_SCANCODE_DELETE; break;
+    default: break;
+    }
     /* Shell sends presses only, with the modifiers held at the time. */
     if (e->shift) {
         SDL_SendKeyboardKey(SDL_PRESSED, SDL_SCANCODE_LSHIFT);
