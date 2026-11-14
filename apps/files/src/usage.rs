@@ -129,7 +129,7 @@ impl App {
         if let Some(dir) = st.dirs.pop_front() {
             let rel = dir[st.base.len()..].strip_prefix(b"/").unwrap_or(&dir[st.base.len()..]).to_vec();
             for e in direct::list(&at(&dir)).unwrap_or_default() {
-                if e.name == crate::TRASH || e.name.first() == Some(&b'.') && e.name.ends_with(b".part") { continue; }
+                if e.name == crate::TRASH || e.name == crate::meta::FILE || e.name.first() == Some(&b'.') && e.name.ends_with(b".part") { continue; }
                 let mut r = rel.clone();
                 if !r.is_empty() { r.push(b'/'); }
                 r.extend_from_slice(&e.name);
