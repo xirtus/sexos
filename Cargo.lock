@@ -2574,6 +2574,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "moan-core"
+version = "0.1.0"
+
+[[package]]
+name = "moan-probe"
+version = "0.1.0"
+dependencies = [
+ "moan-core",
+ "sex-app",
+ "sex-pdx",
+]
+
+[[package]]
 name = "monitor"
 version = "0.1.0"
 dependencies = [

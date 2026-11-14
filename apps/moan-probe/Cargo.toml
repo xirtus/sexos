@@ -1,0 +1,10 @@
+[package]
+name = "moan-probe"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+
+[dependencies]
+sex-app = { path = "../../crates/sex-app" }
+sex-pdx = { path = "../../crates/sex-pdx" }
+moan-core = { path = "../../crates/moan-core" }

@@ -4206,3 +4206,14 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
 
 ## J8 finding: disk reads are not NVMe-queue bound yet (2026-11-14)
 - `run bench read-large` at 4 cores without PKU now logs `[bench.large.cpu]` (Drive, Files, bench, idle cycles per pass). 16 MiB in 64 KiB requests: ~275M cycles; Files ~100M (~390k per request), Drive ~42M (~165k), rest waiting on the serial request chain. Per-core NVMe queues would not help until requests are pipelined (Files readahead / async Drive replies) and Files' per-request CPU drops; deferred until then.
+## ChatGPT round 171: Moan timeline and mixer core (2026-11-14)
+- `crates/moan-core`: frame-accurate 48 kHz stereo timeline, non-destructive split
+  and trim, linear fades, clip gain, per-track volume/balance, mute/solo and final
+  saturating mix. Borrowed immutable PCM, no allocation during render.
+- Ten host integration tests pass. `apps/moan-probe` builds for the SexOS program
+  target; the guest sends an edited two-track mix through the existing Bell ring.
+- `scripts/moan_gate.py` checks QEMU's recorded stereo waveform (pitch, duration,
+  amplitude, continuity). Both gates are wired into CI; QEMU must pass before merge.
+- No kernel or owned app changes. This is the engine slice, not a complete DAW;
+  Weft UI, capture UX, effects, project persistence and export follow. Contract and
+  next steps: `docs/handoff/MOAN_2026_11_14.md`.
