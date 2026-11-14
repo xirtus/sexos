@@ -1,0 +1,81 @@
+# SPDX-License-Identifier: GPL-3.0-only
+[workspace]
+
+[package]
+name = "sexos-fuzz"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "GPL-3.0-only"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1.4", features = ["derive"] }
+
+# sexos master crates
+sex-archive = { path = "../crates/sex-archive" }
+vellum-edit = { path = "../crates/vellum-edit" }
+sex-image = { path = "../crates/sex-image" }
+gaze-codecs = { path = "../crates/gaze-codecs" }
+sex-html = { path = "../crates/sex-html" }
+sex-http = { path = "../crates/sex-http" }
+sex-volumes = { path = "../crates/sex-volumes" }
+sex-font = { path = "../crates/sex-font" }
+sex-mail = { path = "../crates/sex-mail" }
+
+[[bin]]
+name = "fuzz_archive"
+path = "fuzz_targets/fuzz_archive.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_docx_xlsx_ooxml"
+path = "fuzz_targets/fuzz_docx_xlsx_ooxml.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_pdf"
+path = "fuzz_targets/fuzz_pdf.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_volumes"
+path = "fuzz_targets/fuzz_volumes.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_image"
+path = "fuzz_targets/fuzz_image.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_html_css"
+path = "fuzz_targets/fuzz_html_css.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_http_hpack"
+path = "fuzz_targets/fuzz_http_hpack.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_mail"
+path = "fuzz_targets/fuzz_mail.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_font"
+path = "fuzz_targets/fuzz_font.rs"
+test = false
+doc = false
