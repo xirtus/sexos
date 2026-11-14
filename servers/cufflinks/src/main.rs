@@ -9,8 +9,10 @@
 //! `[cufflinks.firmware] ...`, `[cufflinks.ready] addr=...`, `[cufflinks.device] addr=...
 //! name=... rssi=...`, `[cufflinks.pair] ...`.
 //!
-//! W1 builds this server but BOOT does not start it yet: it needs a BOOT row and the two
-//! region grants (kernel `boot_memory.rs`), which belong to a kernel-owning thread.
+//! BOOT starts it as domain `bt_hci::CUFFLINKS_PD` (Senses organ) with the HCI region
+//! shared with SexUSB, the firmware pack and a route to Files. With no controller it
+//! logs `[cufflinks.idle] controller=none` and sleeps in `sys_wait_self` until SexUSB
+//! sends `bt_hci::OP_LINK`: an idle Cufflinks takes no CPU.
 #![no_std]
 #![no_main]
 extern crate alloc;
@@ -38,7 +40,16 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     park()
 }
 
-fn park() -> ! { loop { let _ = sex_pdx::sys_wait_self_ticks(100); } }
+/// Sleep for good: only messages wake us, and each is answered.
+fn park() -> ! { loop { serve(); sex_pdx::sys_wait_self(); } }
+
+/// Answer what arrived: SexUSB's link notes (the link itself is read from the region).
+fn serve() {
+    while let Some(m) = sex_pdx::pdx_try_listen_raw(0) {
+        if m.type_id <= 1 { continue; }
+        let _ = sex_pdx::pdx_reply(m.caller_pd, if m.type_id == bt_hci::OP_LINK { 0 } else { u64::MAX });
+    }
+}
 
 /// Random bytes for keys and nonces: RDRAND, mixed with the time stamp counter when the
 /// CPU has none. (W2: take the system entropy grant instead.)
@@ -85,10 +96,13 @@ pub extern "C" fn _start() -> ! {
     log!("[cufflinks.transport] ok=1 slot={}", bt_hci::SLOT);
     let mut packet = [0u8; bt_hci::MAX_PACKET];
     loop {
-        // Wait for SexUSB to report a controller.
+        // Wait for SexUSB to report a controller: it sends OP_LINK when one comes.
+        let mut idle = false;
         let ((vendor, product), generation) = loop {
+            serve();
             if let Some(l) = ring.link() { break l; }
-            let _ = sex_pdx::sys_wait_self_ticks(10);
+            if !idle { log!("[cufflinks.idle] controller=none"); idle = true; }
+            sex_pdx::sys_wait_self();
         };
         let name = intel::part(vendor, product).map(|p| p.name).unwrap_or("unknown");
         log!("[cufflinks.controller] vendor={:#06x} product={:#06x} part=\"{}\"", vendor, product, name);

@@ -146,6 +146,9 @@ pub struct Usb {
     bt: Option<bt::Bt>,
     pub bt_region: u64,
     bt_buffers: ((u64, u64), (u64, u64), (u64, u64)),
+    /// Bluetooth keyboards' held keys (device, modifiers, keys), from Cufflinks; merged
+    /// with USB keyboards' in `send_keys`.
+    bt_keys: [(u8, u8, u64); 8],
 }
 
 const BOUNCE: u64 = sex_pdx::usb_disk::BUFFER_BYTES + 8192;
@@ -165,7 +168,7 @@ impl Usb {
         Usb { x, dev: [Device::empty(); MAX_DEVICES], slot_dev: [0; 256], root_pending: 0, sent_keys: 0,
             sent_modifiers: 0, stats: Stats::default(), bounce: (0, 0), disks: [0; sex_pdx::usb_disk::MAX_DISKS as usize],
             generation: 0, changed: false, freed: 0, ether: None, net_region: 0, ether_buffers: ((0, 0), (0, 0)),
-            bt: None, bt_region: 0, bt_buffers: ((0, 0), (0, 0), (0, 0)) }
+            bt: None, bt_region: 0, bt_buffers: ((0, 0), (0, 0), (0, 0)), bt_keys: [(0, 0, 0); 8] }
     }
 
     fn ctx(&self, base: u64, index: u64) -> *mut u32 { (base + index * self.x.csz) as *mut u32 }
@@ -702,15 +705,17 @@ impl Usb {
         let mut keys = 0u64;
         let mut n = 0;
         let mut modifiers = 0u8;
-        for d in self.dev.iter().filter(|d| d.used) {
-            for e in d.intr.iter().filter(|e| e.active && e.role == Role::Keyboard) {
-                modifiers |= e.modifiers;
-                for b in 0..6 {
-                    let key = (e.keys >> (8 * b)) as u8;
-                    if key == 0 || n == 6 || (0..n).any(|j| (keys >> (8 * j)) as u8 == key) { continue; }
-                    keys |= (key as u64) << (8 * n);
-                    n += 1;
-                }
+        let usb = self.dev.iter().filter(|d| d.used)
+            .flat_map(|d| d.intr.iter().filter(|e| e.active && e.role == Role::Keyboard).map(|e| (e.modifiers, e.keys)));
+        // Bluetooth keyboards (from Cufflinks) count as more keyboards.
+        let bt = self.bt_keys.iter().filter(|k| k.0 != 0).map(|k| (k.1, k.2));
+        for (m, held) in usb.chain(bt) {
+            modifiers |= m;
+            for b in 0..6 {
+                let key = (held >> (8 * b)) as u8;
+                if key == 0 || n == 6 || (0..n).any(|j| (keys >> (8 * j)) as u8 == key) { continue; }
+                keys |= (key as u64) << (8 * n);
+                n += 1;
             }
         }
         if keys == self.sent_keys && modifiers == self.sent_modifiers { return; }
@@ -741,7 +746,11 @@ impl Usb {
             let _ = send_report_to_sexinput(OP_USB_MOUSE_REPORT, 0, buttons as u64, packed);
             return;
         }
-        // Relative motion wider than 8 bits is split into several reports.
+        self.send_relative(slot, r.len() as u32, buttons, x, y, wheel);
+    }
+
+    /// Relative motion to Input; motion wider than 8 bits is split into several reports.
+    fn send_relative(&mut self, slot: u32, bytes: u32, buttons: u8, x: i32, y: i32, wheel: i8) {
         let (mut dx, mut dy) = (x, y);
         let mut first = true;
         loop {
@@ -750,7 +759,7 @@ impl Usb {
             dx -= sx; dy -= sy;
             let w = if first { wheel } else { 0 };
             let packed = (sx as i8 as u8 as u64) | ((sy as i8 as u8 as u64) << 8) | ((w as u8 as u64) << 16);
-            if first { record_device_wheel(slot, r.len() as u32, false, w, packed); }
+            if first { record_device_wheel(slot, bytes, false, w, packed); }
             let _ = send_report_to_sexinput(OP_USB_MOUSE_REPORT, 0, buttons as u64, packed);
             first = false;
             if dx == 0 && dy == 0 { break; }
