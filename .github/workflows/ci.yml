@@ -65,6 +65,8 @@ jobs:
       run: cargo test --locked -p sex-html
     - name: Leather SDK sample models and real Weft widgets
       run: cargo test --locked -p leather-samples --no-default-features
+    - name: Chastity encrypted vault and Weft UI
+      run: bash scripts/chastity_host_gate.sh
     - name: Weft toolkit and Abacus
       run: cargo test --locked -p weft && cargo test --locked -p abacus --no-default-features
     - name: Settings schema, file format, protocol and the Settings program's pages
@@ -463,6 +465,8 @@ jobs:
       run: python3 scripts/velvet_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/velvet"
     - name: Leather SDK hello, text editor, image viewer and fetch windows
       run: python3 scripts/leather_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/leather"
+    - name: Chastity vault UI and encrypted snapshot across reboot
+      run: python3 scripts/chastity_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/chastity"
     - name: Preserve program evidence
       if: always()
       uses: actions/upload-artifact@v4

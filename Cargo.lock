@@ -66,6 +66,7 @@ dependencies = [
  "cfg-if",
  "cipher 0.4.4",
  "cpufeatures 0.2.17",
+ "zeroize",
 ]
 
 [[package]]
@@ -247,6 +248,7 @@ dependencies = [
  "blake2",
  "cpufeatures 0.2.17",
  "password-hash",
+ "zeroize",
 ]
 
 [[package]]
@@ -615,6 +617,34 @@ dependencies = [
  "chacha20 0.9.1",
  "cipher 0.4.4",
  "poly1305",
+ "zeroize",
+]
+
+[[package]]
+name = "chastity"
+version = "0.1.0"
+dependencies = [
+ "chastity-core",
+ "sex-app",
+ "sex-pdx",
+ "shibari",
+ "weft",
+ "zeroize",
+]
+
+[[package]]
+name = "chastity-core"
+version = "0.1.0"
+dependencies = [
+ "aes 0.8.4",
+ "argon2",
+ "base64 0.22.1",
+ "chacha20 0.9.1",
+ "chacha20poly1305",
+ "hmac",
+ "miniz_oxide 0.8.9",
+ "roxmltree 0.21.2",
+ "sha2 0.10.9",
  "zeroize",
 ]
 

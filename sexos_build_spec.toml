@@ -72,6 +72,7 @@ crates = [
   "apps/abacus/Cargo.toml",
   "apps/velvet/Cargo.toml",
   "apps/leather-samples/Cargo.toml",
+  "apps/chastity/Cargo.toml",
   "apps/stdnet/Cargo.toml",
   "apps/ssh/Cargo.toml",
   "apps/chello/Cargo.toml",
@@ -471,6 +472,14 @@ target = "x86_64-sex-app.json"
 manifest = "apps/abacus/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/abacus"
 dest_artifact = "iso_root/programs/abacus"
+
+[[stage]]
+id = "build_chastity"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/chastity/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/chastity"
+dest_artifact = "iso_root/programs/chastity"
 
 # SSH client: log in to other machines (keys, known hosts, exec and shell).
 [[stage]]

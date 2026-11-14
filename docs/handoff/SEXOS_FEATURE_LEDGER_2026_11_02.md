@@ -4280,3 +4280,23 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   actual palette/keyboard controls, checks results/errors and retains screenshots.
   QEMU runtime result remains pending CI. Depends on Weft #220; no kernel changes.
 - Details: `docs/handoff/ABACUS_EXTRAS_2026_11_14.md`.
+
+## ChatGPT round 173: Chastity vault and Weft window (2026-11-14)
+- `apps/chastity`: actual Weft unlock/create/import UI, add/load/delete entries,
+  secure generator, encrypted snapshot saves, explicit and idle lock. Secret
+  credential input is intercepted before toolkit history; only masks enter Weft.
+  Shibari holds the unlocked master secret in the app domain and wipes on lock.
+- `crates/chastity-core`: Argon2id + XChaCha20-Poly1305 authenticated file, bounded
+  inputs/KDF cost, zeroizing plaintext/key storage and exact-run one-use autofill
+  authorization API. Live cross-app routing/consent is an explicit follow-up.
+- Password-only KDBX4 import supports Argon2id/d, AES/ChaCha20, gzip and protected
+  ChaCha20 XML; unsupported variants/attachments/custom fields are refused. Tested
+  against an independently generated, fictional pykeepass fixture.
+- Thirteen core and four UI tests pass locally; guest release and key-byte scan pass.
+  Independent review identified plaintext-reallocation/workspace gaps; fixed with
+  explicit zeroizing Argon2/decompression workspaces, pre-sized secret buffers,
+  detached in-place AEAD and a masked XML DOM view. Post-fix read-only review reported no blocking findings.
+  A real UI QEMU reboot/persistence/wrong-password gate is wired into Programs CI;
+  runtime validation is pending before merge. Independent review fixes are included.
+- Snapshots require a new filename (existing files are never replaced). Exact
+  compatibility, security boundary and limitations: `CHASTITY_2026_11_14.md`.
