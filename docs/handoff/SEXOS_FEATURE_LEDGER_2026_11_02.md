@@ -4185,6 +4185,10 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   `sex_pdx::accounts` (op 0x2B0). Host gates in CI.
 - **Next:** `servers/multipass` in the boot catalog, Tatami page, Valentine program on
   Weft. Details: `docs/handoff/VALENTINE_MULTIPASS_2026_11_14.md`.
+## G-1: Core model host unit tests and QEMU gate retry determinism (2026-11-14)
+- Added 20 host unit tests across `silkbar-model`, `sex-object-model`, `sex-trust-config`, `sex-volumes` and `sex-crypt`, plus `scripts/core_models_host_gate.sh` (also running `sex-canvas` and `sex-gl` host suites). No production behaviour changes.
+- Fixed `scripts/usb_net_gate.py` so transient early `fetch: could not connect` responses sleep 1s and retry instead of breaking on attempt 0, and raised multi-core TCG timeouts in `scripts/program_jit_gate.py` for 2-vCPU CI runners.
+
 ## J6b: busy programs no longer stall the desktop (2026-11-14)
 - Cause of the 1.5 s key-to-screen stall under load: a Display repaint (~270 ticks under TCG) that used up its time slice went back to the normal queue behind every busy program, so with four `bench spin` programs on two cores a repaint took 1.1-1.6 s and keys waited behind it.
 - Kernel: a task whose time ran out (`Scheduler::tick_sliced`, timer/preempt path) keeps its interactive class for `SLICED_KEEP`=4 turns, then waits behind the normal queue once (the counter resets whenever a normal task runs); a task that yields still drops to the normal queue. No preempt IPI for a re-queued sliced task. An unbounded first version (16:1) starved Bell/pager/Browser at boot in CI. Bell's boot paging probe now defers up to 128 messages (was 32).
