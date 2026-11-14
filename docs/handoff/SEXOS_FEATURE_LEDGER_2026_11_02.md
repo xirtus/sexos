@@ -4230,3 +4230,17 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   claim is based on compilation or the host reference alone.
 - This slice stacks on round 171 (#244); no kernel, Weft or owned app changes.
   The DAW window, capture UX, persistence and export remain future slices.
+
+## ChatGPT round 177: Moan workstation window (2026-11-14)
+- Actual Weft app: multitrack clip timeline table, Play/Pause/Stop, microphone
+  capture with the existing grant flow, split/cut/fade/gain, track volume/pan,
+  mute/solo, EQ/compressor/reverb presets and twelve-level undo/redo. Shared owned
+  PCM supports editing without self-references or sample copies at each split.
+- PCM WAV import and streaming exclusive-create WAV export through Files' picker;
+  sync is required for success. Eight tracks, sixty seconds per imported/captured
+  source. Capture gaps retain timing, and Stop drains unread frames first.
+- 21 engine tests plus eight project/UI tests; guest build and instruction scan
+  pass locally. Window visually checked on host. QEMU window/playback/edit/capture
+  gates added, pending CI. Weft #220 and Moan #244/#246 are dependencies.
+- Remaining: FFmpeg FLAC/MP3 export, persistent projects and graphical waveforms.
+  No kernel, shell, toolkit or Claude-owned app code was edited.
