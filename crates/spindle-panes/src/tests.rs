@@ -118,3 +118,15 @@ fn tabs_open_close_move() {
     tabs.close(1);
     assert_eq!((tabs.active, tabs.focus()), (0, 1));
 }
+
+#[test]
+fn config_reads_settings_and_reports_problems() {
+    let c = config::parse("# Spindle\ntheme = Solarized Dark\nfont-size = 20\npadding=8 # roomy\nbackground = #101010 # dark\ncolor1 = #ff0000\nwhat = 1\nfont-size = 99\nnonsense\n");
+    assert_eq!(c.theme, "solarized-dark");
+    assert_eq!((c.font_size, c.padding, c.scrollback), (20, 8, 10_000));
+    assert_eq!(c.colors, alloc::vec![(alloc::string::String::from("background"), 0x101010), (alloc::string::String::from("color1"), 0xFF0000)]);
+    assert_eq!(c.problems.len(), 3, "{:?}", c.problems);
+    let t = config::with_setting("# x\ntheme = nord\npadding = 2\n", "theme", "latte");
+    assert_eq!(t, "# x\ntheme = latte\npadding = 2\n");
+    assert_eq!(config::with_setting("", "theme", "nord"), "theme = nord\n");
+}

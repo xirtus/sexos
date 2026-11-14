@@ -10,7 +10,7 @@
 //! as kitty does, and `ED 2`/`ED 3` clear them. Decoded pixels are 0xAARRGGBB
 //! (unpremultiplied), at most [`MEMORY_CAP`] bytes across all images, oldest evicted.
 
-use crate::{Screen, DEFAULT_BG};
+use crate::Screen;
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use core::cell::Cell;
@@ -377,7 +377,7 @@ pub fn composite(screen: &Screen, cell_w: usize, cell_h: usize, drawn: &[bool], 
             if ya >= yb { continue; }
             if p.z < 0 {
                 bgs.clear();
-                bgs.extend((0..screen.cols()).map(|c| crate::colors(&screen.visible(c, row)).1));
+                bgs.extend((0..screen.cols()).map(|c| screen.colors(&screen.visible(c, row)).1));
             }
             for y in ya..yb {
                 let src_y = (sy + (y - y0) * sh / dh).min(img.height as i64 - 1) as usize;
@@ -392,7 +392,7 @@ pub fn composite(screen: &Screen, cell_w: usize, cell_h: usize, drawn: &[bool], 
                     if p.z < 0 {
                         // Under the text: only where the cell's background shows.
                         let bg = bgs[x as usize / cell_w];
-                        if *dst != bg || (p.z < UNDER_BACKGROUNDS && bg != DEFAULT_BG) { continue; }
+                        if *dst != bg || (p.z < UNDER_BACKGROUNDS && bg != screen.theme().bg) { continue; }
                     }
                     *dst = blend(*dst, px & 0x00FF_FFFF, a);
                 }

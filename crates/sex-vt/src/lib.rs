@@ -17,6 +17,7 @@ extern crate alloc;
 pub mod images;
 mod kitty;
 pub mod keys;
+pub mod theme;
 mod png;
 mod sixel;
 #[cfg(feature = "render")]
@@ -164,6 +165,8 @@ pub struct Screen {
     last_char: char,
     selection: Option<(Point, Point)>,
     ext: Extras,
+    /// The colours this screen is drawn in.
+    theme: theme::Theme,
     /// Inline images (kitty graphics, sixel) and their placements.
     images: images::ImageStore,
 }
@@ -180,10 +183,16 @@ impl Screen {
             mouse: 0, mouse_sgr: false, title: Vec::new(), title_changed: false, replies: Vec::new(), view: 0,
             dirty: vec![true; rows], all_dirty: true, bells: 0, last_char: ' ', selection: None,
             ext: Extras::default(),
+            theme: theme::MOCHA,
             images: images::ImageStore::new(),
         }
     }
     pub fn cols(&self) -> usize { self.cols }
+    pub fn theme(&self) -> &theme::Theme { &self.theme }
+    /// New colours: every row is drawn again.
+    pub fn set_theme(&mut self, theme: theme::Theme) { if theme != self.theme { self.theme = theme; self.all_dirty = true; } }
+    /// A cell's final colours in this screen's theme.
+    pub fn colors(&self, cell: &Cell) -> (u32, u32) { colors_in(&self.theme, cell) }
     pub fn rows(&self) -> usize { self.rows }
     /// Where the cursor is, as (column, row) on the screen.
     pub fn cursor(&self) -> (usize, usize) { (self.x.min(self.cols - 1), self.y) }
@@ -757,15 +766,18 @@ pub const DEFAULT_FG: u32 = 0xCDD6F4;
 pub const DEFAULT_BG: u32 = 0x11111B;
 
 /// A cell's final colours, 0x00RRGGBB, after bold-brightening and inverse.
-pub fn colors(cell: &Cell) -> (u32, u32) {
+pub fn colors(cell: &Cell) -> (u32, u32) { colors_in(&theme::MOCHA, cell) }
+/// A cell's final colours in `theme`.
+pub fn colors_in(theme: &theme::Theme, cell: &Cell) -> (u32, u32) {
+    let palette = |i: u8| theme.palette(i);
     let resolve = |c: Color, default: u32, bright: bool| match c {
         Color::Default => default,
         Color::Indexed(i) if bright && i < 8 => palette(i + 8),
         Color::Indexed(i) => palette(i),
         Color::Rgb(r, g, b) => (r as u32) << 16 | (g as u32) << 8 | b as u32,
     };
-    let mut fg = resolve(cell.fg, DEFAULT_FG, cell.flags & BOLD != 0);
-    let mut bg = resolve(cell.bg, DEFAULT_BG, false);
+    let mut fg = resolve(cell.fg, theme.fg, cell.flags & BOLD != 0);
+    let mut bg = resolve(cell.bg, theme.bg, false);
     if cell.flags & INVERSE != 0 { core::mem::swap(&mut fg, &mut bg); }
     if cell.flags & DIM != 0 { fg = (fg >> 1) & 0x7F7F7F; }
     if cell.flags & HIDDEN != 0 { fg = bg; }

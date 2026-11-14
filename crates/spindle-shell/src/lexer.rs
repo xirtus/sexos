@@ -61,6 +61,21 @@ fn ends_word(c: char, rest: &str) -> bool {
     }
 }
 
+/// The length of the parenthesised group at the start of `s` (through its `)`), when it
+/// closes without whitespace inside.
+fn balanced(s: &str) -> Option<usize> {
+    let mut depth = 0usize;
+    for (k, c) in s.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => { depth -= 1; if depth == 0 { return Some(k + 1); } }
+            c if c.is_whitespace() => return None,
+            _ => {}
+        }
+    }
+    None
+}
+
 fn is_ident(c: char) -> bool { c.is_alphanumeric() || c == '_' || c == '-' }
 
 pub fn lex(src: &str) -> Vec<Token> {
@@ -136,6 +151,17 @@ pub fn lex(src: &str) -> Vec<Token> {
                 let mut j = i;
                 while j < src.len() {
                     let ch = src[j..].chars().next().unwrap();
+                    // `print(6*7)`, `f(x)=y`: parentheses right after a word's first
+                    // character belong to the word when they close before a space.
+                    if j > i && ch == '(' {
+                        if let Some(close) = balanced(&src[j..]) {
+                            let after = src[j + close..].chars().next();
+                            if after.map_or(true, |a| a.is_whitespace() || matches!(a, '|' | ';' | ')')) || after.is_some_and(|a| !ends_word(a, &src[j + close..])) {
+                                j += close;
+                                continue;
+                            }
+                        }
+                    }
                     if j > i && ends_word(ch, &src[j..]) { break; }
                     j += ch.len_utf8();
                 }

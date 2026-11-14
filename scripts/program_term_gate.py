@@ -67,11 +67,16 @@ def main():
   assert 'buy milk' in screen and 'todo.txt' in screen and '~/notes >' in screen,screen
   # Structured pipelines (P8): typed tables through `|`.
   s=len(t());term_line('seq 1 10 | math sum');g['wait'](r'\[term\.shell\.done\] exit=0 error=0',s,30)
-  s=len(t());term_line('ls notes | where name =~ todo | sort-by name | get name');g['wait'](r'\[term\.shell\.done\] exit=0 error=0',s,30)
+  s=len(t());term_line('ls notes | where type == file | sort-by name | get name');g['wait'](r'\[term\.shell\.done\] exit=0 error=0',s,30)
   s=len(t());term_line('ls | where type == dir | length');g['wait'](r'\[term\.shell\.done\] exit=0 error=0',s,30)
   rows=snapshot();screen='\n'.join(rows.values())
   assert '55' in screen and 'todo.txt' in screen,screen
   q.cmd('screendump',{'filename':str(a.out/'spindle-pipelines.ppm')})
+  # Themes and settings (P7): `theme nord` saves spindle.conf; the window reloads it.
+  s=len(t());term_line('theme nord');g['wait'](r'\[term\.theme\.saved\] name=nord ok=1',s,30)
+  g['wait'](r'\[term\.config\] theme=nord font=18 padding=4 ',s,30);time.sleep(1)
+  q.cmd('screendump',{'filename':str(a.out/'spindle-theme-nord.ppm')})
+  s=len(t());term_line('theme mocha');g['wait'](r'\[term\.config\] theme=mocha ',s,30)
   # A Wasm program behind the stream: Rust std's println and stdin.
   s=len(t());term_line('greet Andreas');g['wait'](r'\[term\.job\.start\] name=greet',s,60);time.sleep(3)
   term_line('b a b');time.sleep(1);q.key('ret')

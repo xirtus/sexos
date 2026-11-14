@@ -12,6 +12,8 @@ extern crate alloc;
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 
+pub mod config;
+
 pub type PaneId = u32;
 
 /// How a split divides its space.

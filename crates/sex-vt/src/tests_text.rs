@@ -401,3 +401,18 @@ fn copy_mode_keeps_its_place_when_history_is_trimmed() {
     cm.key(&mut s, k('l'), NO);
     assert_eq!(s.line_text(cm.cursor().row), "c");
 }
+
+#[test]
+fn themes_change_default_and_named_colours() {
+    let mut s = Screen::new(10, 2);
+    let mut p = Parser::new();
+    s.feed(&mut p, b"a\x1b[31mb\x1b[38;5;100mc");
+    assert_eq!(s.colors(&s.visible(0, 0)), (0xCDD6F4, 0x11111B));
+    s.set_theme(crate::theme::Theme::named("Solarized Dark").unwrap());
+    assert_eq!(s.colors(&s.visible(0, 0)), (0x839496, 0x002B36));
+    assert_eq!(s.colors(&s.visible(1, 0)).0, 0xDC322F);
+    // The 256-colour cube does not change with the theme.
+    assert_eq!(s.colors(&s.visible(2, 0)).0, crate::palette(100));
+    assert!(crate::theme::Theme::named("latte").unwrap().is_light());
+    assert_eq!(crate::theme::parse_color("#0a0B0c"), Some(0x0A0B0C));
+}

@@ -44,6 +44,8 @@ use spindle_panes::{Divider, PaneId, Rect, Split, Tabs, Toward};
 /// `crates/sex-wasm/guests/greet`: Rust's std built for wasm32-wasip1.
 const GREET: &[u8] = include_bytes!("../../../crates/sex-wasm/tests/greet.wasm");
 const MODULE_MAX: usize = 8 << 20;
+/// Spindle's settings, in its folder.
+const CONFIG: &[u8] = b"spindle.conf";
 const STREAM_RING: usize = 64 * 1024;
 static mut CACHE: Cache = Cache::new();
 
@@ -79,7 +81,7 @@ const START_MS: u64 = 20_000;
 struct ShellWait { capture: bool, output: Vec<u8>, line: String }
 
 /// Commands of the terminal itself, before the shell: they draw on its screen or close it.
-const OWN: &[&[u8]] = &[b"help", b"clear", b"history", b"colors", b"vtcheck", b"snapshot", b"exit", b"write", b"cat"];
+const OWN: &[&[u8]] = &[b"theme", b"help", b"clear", b"history", b"colors", b"vtcheck", b"snapshot", b"exit", b"write", b"cat"];
 
 /// A way of reading the scrollback that takes the keys for a while.
 enum Mode {
@@ -142,7 +144,7 @@ impl Pane {
         let (width, height) = (width.max(32), height.max(32));
         let (cols, rows) = painter.grid(width, height);
         Pane {
-            screen: Screen::new(cols, rows), parser: Parser::new(), painter, width, height, buf: vec![sex_vt::DEFAULT_BG; width * height], cell_h, closed: false,
+            screen: Screen::new(cols, rows), parser: Parser::new(), painter, width, height, buf: vec![0; width * height], cell_h, closed: false,
             cwd: Vec::new(), line: Vec::new(), at: 0, history: Vec::new(), recall: None,
             job: None, drag: None, focused_drawn: false, osc_title: None, osc_cwd: None, progress: None, mode: Mode::Normal, prompt_at: (0, 0), slot: 0, engine: spindle_shell::Engine::new(), shell_wait: None, last_click: (0, usize::MAX, usize::MAX), after_cr: false,
         }
@@ -166,7 +168,7 @@ impl Pane {
         if (width, height) == (self.width, self.height) { return; }
         self.width = width;
         self.height = height;
-        self.buf = vec![sex_vt::DEFAULT_BG; width * height];
+        self.buf = vec![self.screen.theme().bg; width * height];
         let (cols, rows) = self.painter.grid(self.width, self.height);
         self.screen.resize(cols, rows);
         if let Some(Job { runner: Runner::Guest(g), .. }) = &self.job { g.stream.set_size(cols as u32, rows as u32); }
@@ -195,7 +197,7 @@ impl Pane {
         self.painter.draw(&self.screen, &dirty, cache, &mut self.buf[..w * h], w, focused);
         // Below the last whole row, the terminal's background.
         let used = self.screen.rows() * self.painter.cell_h;
-        if used < h { self.buf[used * w..h * w].fill(sex_vt::DEFAULT_BG); }
+        if used < h { let bg = self.screen.theme().bg; self.buf[used * w..h * w].fill(bg); }
         self.draw_mode(cache);
         true
     }
@@ -449,6 +451,28 @@ impl Pane {
                 if let Err(e) = files::write(window, &path, &text) { self.fail("write", e); }
             }
             b"colors" => self.say(&colors()),
+            // `theme NAME` saves it in spindle.conf; the window sees the change and every
+            // pane takes it.
+            b"theme" => match args.first() {
+                None => {
+                    let list = spindle_panes::config::THEME_NAMES.join(" ");
+                    let now = self.screen.theme().name;
+                    self.say(&format!("themes: {}\nnow: {} (set with theme NAME, or edit spindle.conf)\n", list, now));
+                }
+                Some(name) => {
+                    let name = String::from_utf8_lossy(name).into_owned();
+                    match sex_vt::theme::Theme::named(&name) {
+                        None => self.say(&format!("\x1b[31mtheme: no theme called {}\x1b[0m (type theme)\n", name)),
+                        Some(t) => {
+                            let old = read_all_direct(CONFIG, 64 << 10).unwrap_or_default();
+                            let text = spindle_panes::config::with_setting(&String::from_utf8_lossy(&old), "theme", t.name);
+                            let _ = files::direct::create(CONFIG);
+                            let saved = files::direct::truncate(CONFIG, 0).and_then(|_| files::direct::write_at(CONFIG, 0, text.as_bytes())).is_ok();
+                            sex_pdx::serial_record!("[term.theme.saved] name={} ok={}", t.name, saved as u8);
+                        }
+                    }
+                }
+            },
             b"vtcheck" => self.vtcheck(window),
             // The screen's text to the serial record, for gates and bug reports.
             b"snapshot" => {
@@ -1154,6 +1178,11 @@ struct Spindle {
     resizing: bool,
     title: String,
     painter: Painter,
+    /// `spindle.conf`: what it says, the theme it makes, and when it was last read.
+    config: spindle_panes::config::Config,
+    theme: sex_vt::theme::Theme,
+    config_stamp: Option<(u64, u64)>,
+    config_checked: u64,
 }
 
 /// Pixels between panes, and the colours of the window's own parts.
@@ -1172,10 +1201,45 @@ impl Spindle {
         let mut s = Spindle {
             panes: BTreeMap::new(), tabs: Tabs::new(1), next_id: 2, width: width.max(64), height: height.max(64), cell_h,
             clipboard: Vec::new(), relayout: true, dragging: None, resizing: false, title: String::new(), painter: Painter::new(cw, ch),
+            config: Default::default(), theme: sex_vt::theme::MOCHA, config_stamp: None, config_checked: 0,
         };
         let area = s.area();
         s.panes.insert(1, Pane::new(area.w, area.h, cell_h));
+        s.check_config(true);
         s
+    }
+    /// Reads `spindle.conf` again when it changed (checked at most once a second unless
+    /// `now`), and applies it to every pane: theme, text size, padding, scrollback.
+    fn check_config(&mut self, now: bool) {
+        let t = sex_pdx::get_ticks();
+        if !now && t.saturating_sub(self.config_checked) < 1000 { return; }
+        self.config_checked = t;
+        let stamp = files::direct::stat(CONFIG).ok().map(|st| (st.size, st.modified));
+        if stamp == self.config_stamp { return; }
+        self.config_stamp = stamp;
+        let text = stamp.and_then(|_| read_all_direct(CONFIG, 64 << 10).ok()).unwrap_or_default();
+        let config = spindle_panes::config::parse(&String::from_utf8_lossy(&text));
+        let mut theme = sex_vt::theme::Theme::named(&config.theme).unwrap_or(sex_vt::theme::MOCHA);
+        for (key, c) in &config.colors {
+            match key.as_str() {
+                "foreground" => theme.fg = *c, "background" => theme.bg = *c,
+                "cursor" => theme.cursor = *c, "selection" => theme.selection = *c,
+                k => if let Some(i) = k.strip_prefix("color").and_then(|n| n.parse::<usize>().ok()) { theme.ansi[i] = *c; },
+            }
+        }
+        for p in &config.problems { sex_pdx::serial_record!("[term.config.problem] {}", p); }
+        sex_pdx::serial_record!("[term.config] theme={} font={} padding={} scrollback={} colors={} problems={}", theme.name, config.font_size, config.padding, config.scrollback, config.colors.len(), config.problems.len());
+        self.theme = theme;
+        for pane in self.panes.values_mut() { pane.screen.set_theme(theme); pane.screen.set_history_max(config.scrollback); }
+        let step = config.font_size as isize - self.cell_h as isize;
+        self.config = config;
+        self.set_text_size(step);
+        self.relayout = true;
+    }
+    /// A pane's text area inside its place: the padding all round.
+    fn inner(&self, r: Rect) -> Rect {
+        let p = self.config.padding.min(r.w / 4).min(r.h / 4);
+        Rect::new(r.x + p, r.y + p, r.w - 2 * p, r.h - 2 * p)
     }
     /// The height of the tab bar: shown once there are two tabs.
     fn bar_h(&self) -> usize { if self.tabs.len() > 1 { self.painter.cell_h + 8 } else { 0 } }
@@ -1188,6 +1252,8 @@ impl Spindle {
         let area = self.area();
         let mut pane = Pane::new(area.w / 2, area.h / 2, self.cell_h);
         pane.cwd = cwd;
+        pane.screen.set_theme(self.theme);
+        pane.screen.set_history_max(self.config.scrollback);
         // The lowest relay slot no other pane holds; past the last, the pane runs only
         // Wasm programs.
         let used: Vec<u8> = self.panes.values().map(|p| p.slot).collect();
@@ -1304,7 +1370,7 @@ impl Spindle {
         let target = if matches!(p.kind, Kind::Down { .. } | Kind::Wheel { .. }) { tab.pane_at(area, GAP, x, y) } else { Some(tab.focus) };
         let Some(id) = target else { return };
         if matches!(p.kind, Kind::Down { .. }) && id != self.tabs.focus() { self.tabs.current_mut().focus = id; self.relayout = true; }
-        let Some(r) = self.tabs.current().rect_of(id, area, GAP) else { return };
+        let Some(r) = self.tabs.current().rect_of(id, area, GAP).map(|r| self.inner(r)) else { return };
         p.x = x.saturating_sub(r.x) as i32 as _;
         p.y = y.saturating_sub(r.y) as i32 as _;
         let clip = self.clipboard.clone();
@@ -1340,10 +1406,11 @@ impl Spindle {
         let layout = tab.layout(area, GAP);
         let mut changed = relayout;
         if relayout {
-            pixels[..w * h].fill(sex_vt::DEFAULT_BG);
+            pixels[..w * h].fill(self.theme.bg);
             let rects: Vec<String> = layout.iter().map(|(id, r)| format!("{}:{}x{}+{}+{}", id, r.w, r.h, r.x, r.y)).collect();
             sex_pdx::serial_record!("[term.panes] tabs={} active={} focus={} zoomed={} {}", self.tabs.len(), self.tabs.active, tab.focus, tab.zoomed as u8, rects.join(" "));
         }
+        let layout: Vec<(PaneId, Rect)> = layout.into_iter().map(|(id, r)| (id, self.inner(r))).collect();
         for (id, r) in &layout {
             let Some(pane) = self.panes.get_mut(id) else { continue };
             if relayout { pane.resize(r.w, r.h); pane.screen.mark_all_dirty(); }
@@ -1429,7 +1496,8 @@ extern "C" fn main() -> ! {
     sex_pdx::serial_record!("[term.ready] target={} task={} cols={} rows={}", window.target, window.task, cols, rows);
     loop {
         // While a program runs, look at its output often; otherwise sleep until an event.
-        let event = if spindle.running() { window.next_within(16) } else { Some(window.next()) };
+        let event = if spindle.running() { window.next_within(16) } else { window.next_within(1000) };
+        spindle.check_config(false);
         match event {
             Some(Event::Close) => { sex_pdx::serial_record!("[term.closed] how=window"); window.close() }
             Some(Event::Resize { width, height }) => { spindle.width = width.max(64); spindle.height = height.max(64); spindle.relayout = true; }

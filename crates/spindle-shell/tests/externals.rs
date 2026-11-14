@@ -151,3 +151,12 @@ fn a_new_line_drops_a_waiting_one() {
     // Resuming with nothing waiting is harmless.
     assert!(matches!(e.resume(result("x", 0), &mut h), Step::Done(_)));
 }
+
+#[test]
+fn program_arguments_keep_their_punctuation() {
+    let mut e = Engine::new();
+    e.color = false;
+    let mut h = host();
+    let Step::RunExternal { request, .. } = e.run("greet -e print(6*7) a=b x.y", &mut h, 80) else { panic!() };
+    assert_eq!(request.args, vec!["-e".to_string(), "print(6*7)".to_string(), "a=b".to_string(), "x.y".to_string()]);
+}

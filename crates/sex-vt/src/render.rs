@@ -3,7 +3,7 @@
 //! that changed. Pixels are 0x00RRGGBB, row-major, `stride` pixels per row.
 
 use crate::hints::Hint;
-use crate::{colors, Highlight, Screen, STRIKE, UNDERLINE};
+use crate::{Highlight, Screen, STRIKE, UNDERLINE};
 use sex_font::cache::{GlyphCache, Key};
 use sex_font::Font;
 
@@ -65,17 +65,17 @@ impl Painter {
             for col in 0..screen.cols() {
                 if (col + 1) * cw > stride { break; }
                 let cell = screen.visible(col, row);
-                let (mut fg, mut bg) = colors(&cell);
+                let (mut fg, mut bg) = screen.colors(&cell);
                 let selected = screen.selected(col, row);
                 let cursor_here = show_cursor && row == cy && col == cx;
-                if selected { bg = 0x45475A; }
+                if selected { bg = screen.theme().selection; }
                 match screen.highlight(col, row) {
                     Highlight::None => {}
                     Highlight::Match => if !selected { bg = MATCH_BG },
                     Highlight::Current => { bg = CURRENT_BG; fg = CURRENT_FG; }
                 }
                 // A solid block when focused, an outline when not, as most terminals do.
-                if cursor_here && focused { core::mem::swap(&mut fg, &mut bg); if fg == bg { fg = crate::DEFAULT_BG; bg = crate::DEFAULT_FG; } }
+                if cursor_here && focused { core::mem::swap(&mut fg, &mut bg); if fg == bg { fg = screen.theme().bg; bg = screen.theme().cursor; } }
                 let (x0, y0) = (col * cw, row * ch);
                 self.glyph(cache, pixels, stride, x0, y0, cell.ch, fg, bg);
                 let mut rule = |y: usize, color: u32| { let at = (y0 + y) * stride + x0; pixels[at..at + cw].fill(color); };
@@ -83,12 +83,12 @@ impl Painter {
                 // A hyperlink is underlined faintly, so it can be told from text the program underlined.
                 else if cell.link != 0 { rule(ch - 1, blend(bg, fg, 110)); }
                 if cell.flags & STRIKE != 0 { rule(ch / 2, fg); }
-                if cursor_here && !focused { hollow(pixels, stride, x0, y0, cw, ch, crate::DEFAULT_FG); }
+                if cursor_here && !focused { hollow(pixels, stride, x0, y0, cw, ch, screen.theme().cursor); }
                 if copy == Some((col, row)) { hollow(pixels, stride, x0, y0, cw, ch, COPY_CURSOR); }
             }
             // The sliver right of the last column.
             let used = screen.cols() * cw;
-            if used < stride { for y in 0..ch { let at = (row * ch + y) * stride; pixels[at + used..at + stride].fill(crate::DEFAULT_BG); } }
+            if used < stride { for y in 0..ch { let at = (row * ch + y) * stride; pixels[at + used..at + stride].fill(screen.theme().bg); } }
         }
         // Inline images over (or under) the text of the rows just drawn.
         crate::images::composite(screen, cw, ch, &painted, pixels, stride);
