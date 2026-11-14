@@ -206,6 +206,7 @@ pub fn usb_changed(caller: u32) {
         let mut usb = UsbDisk { disk, sectors };
         let found = match sv::scan(&mut usb) { Ok(f) => f, Err(e) => { sex_pdx::serial_record!("[files.media.usb.unreadable] disk={} error={:?}", disk, e); continue } };
         if found.is_empty() { sex_pdx::serial_record!("[files.media.usb.unknown] disk={} product={}", disk, product); }
+        replayed();
         for (part, f) in found.into_iter().enumerate() {
             if mounts().len() >= MOUNTS_MAX { break; }
             let name = mount_name(&f.volume.label(), product.as_bytes(), part);
@@ -421,4 +422,11 @@ pub fn attach_device(sectors: u64) {
         sex_pdx::serial_record!("[files.media.mounted] name={} format={} sectors={} start={} read_only=1", name, f.volume.format().name(), f.len, f.start);
         mounts().push(Mount { name, source: Source::Device { sectors }, start: f.start, len: f.len, volume: f.volume });
     }
+}
+
+/// Says so when a mount just replayed a journal Linux left (an ext4 stick pulled out
+/// or a machine that lost power before its last writes were home).
+fn replayed() {
+    let n = sv::ext4::RECOVERED.swap(0, core::sync::atomic::Ordering::Relaxed);
+    if n > 0 { sex_pdx::serial_record!("[files.media.ext4.replayed] blocks={}", n - 1); }
 }
