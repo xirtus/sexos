@@ -95,30 +95,37 @@ pub fn save(app: &mut App, studio: &mut Studio) -> Result<(), &'static str> {
     let chosen = picked.map_err(|_| "Save project cancelled")?;
     files::create(&mut app.window, chosen)
         .map_err(|_| "Choose a new filename; existing projects are preserved")?;
-    for (index, piece) in bytes.chunks(4096).enumerate() {
-        events(app, studio)?;
-        let written = files::write_at(&mut app.window, chosen, (index * 4096) as u64, piece)
-            .map_err(|_| "Project write failed; partial new file retained")?;
-        if written != piece.len() {
-            return Err("Disk full; partial new project retained");
+    let result: Result<(), &'static str> = (|| {
+        for (index, piece) in bytes.chunks(4096).enumerate() {
+            events(app, studio)?;
+            let written = files::write_at(&mut app.window, chosen, (index * 4096) as u64, piece)
+                .map_err(|_| "Project write failed; partial new file retained")?;
+            if written != piece.len() {
+                return Err("Disk full; partial new project retained");
+            }
         }
+        files::sync(&mut app.window).map_err(|_| "Project sync failed; session remains unsaved")?;
+        events(app, studio)?;
+        studio.session.mark_saved();
+        sex_pdx::serial_record!(
+            "[moan.project.saved] bytes={} tracks={} clips={} hash={:#x} synced=1",
+            bytes.len(),
+            studio.session.tracks.len(),
+            studio
+                .session
+                .tracks
+                .iter()
+                .map(|t| t.clips.len())
+                .sum::<usize>(),
+            sex_pdx::text_batch::hash(&bytes)
+        );
+        Ok(())
+    })();
+    if result.is_err() {
+        let synced = files::sync(&mut app.window).is_ok();
+        sex_pdx::serial_record!("[moan.project.partial] synced={}", synced as u8);
     }
-    files::sync(&mut app.window).map_err(|_| "Project sync failed; session remains unsaved")?;
-    events(app, studio)?;
-    studio.session.mark_saved();
-    sex_pdx::serial_record!(
-        "[moan.project.saved] bytes={} tracks={} clips={} hash={:#x} synced=1",
-        bytes.len(),
-        studio.session.tracks.len(),
-        studio
-            .session
-            .tracks
-            .iter()
-            .map(|t| t.clips.len())
-            .sum::<usize>(),
-        sex_pdx::text_batch::hash(&bytes)
-    );
-    Ok(())
+    result
 }
 /// The Shell can launch a held project route. Loading it never widens authority.
 pub fn startup(app: &mut App, studio: &mut Studio) {
