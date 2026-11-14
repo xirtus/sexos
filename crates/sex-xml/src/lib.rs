@@ -189,7 +189,14 @@ pub fn parse(text: &str) -> Node {
                         value = decode(&text[v0..j]);
                     }
                 }
-                if !key.is_empty() { empty = false; attrs.push((String::from(key), value)); } else { j += 1; }
+                if !key.is_empty() {
+                    empty = false;
+                    attrs.push((String::from(key), value));
+                } else {
+                    // Skip the stray character whole: stepping one byte could land inside
+                    // a UTF-8 sequence and the next slice would panic (issue #261).
+                    j += text[j.min(text.len())..].chars().next().map_or(1, char::len_utf8);
+                }
             }
             i = j;
             let node = Node { name: String::from(name), attrs, children: Vec::new() };
@@ -364,4 +371,16 @@ mod tests {
         assert_eq!(text_of(b"<?xml version=\"1.0\" encoding=\"windows-1251\"?>\xCF\xF0\xE8\xE2\xE5\xF2"), "<?xml version=\"1.0\" encoding=\"windows-1251\"?>\u{41F}\u{440}\u{438}\u{432}\u{435}\u{442}");
         assert_eq!(text_of(b"<?xml encoding='ISO-8859-1'?>caf\xE9"), "<?xml encoding='ISO-8859-1'?>caf\u{E9}");
     }
+    #[test]
+    fn empty_attribute_key_before_multibyte_text() {
+        // Issue #261: `="""` then a non-ASCII character used to panic on a char boundary.
+        let bytes: &[u8] = &[38, 60, 75, 10, 61, 34, 34, 255];
+        let text = alloc::string::String::from_utf8_lossy(bytes);
+        let _ = parse(&text);
+        // Every prefix of markup full of multibyte characters and stray quotes parses.
+        let messy = "<a =\"\"\"é ='x'ü \"ä\" b=ö/>текст<p 日本=\"語\" \"\"\"€>x</p>";
+        for (n, _) in messy.char_indices() { let _ = parse(&messy[..n]); }
+        let _ = parse(messy);
+    }
+
 }
