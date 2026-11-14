@@ -333,11 +333,11 @@ impl Term {
     /// Starts `/bin/NAME`, a program of its own (Rust std, C, Python, Lua...), with this
     /// terminal as its console. Only a Term started with Spindle's `spindle` command may.
     fn start_native(&mut self, cmd: &[u8], args: &[&[u8]]) {
-        let relay = files::direct::relay::release;
-        let _ = relay();
         let words = args.join(&b' ');
         let n = String::from_utf8_lossy(cmd).into_owned();
-        match files::direct::relay::start(cmd, &words) {
+        // A general launch ticket is not permission to attach a terminal console.
+        // Preserve the relay permission/pending error before preparing any run.
+        match files::direct::relay::release().and_then(|_| files::direct::relay::start(cmd, &words)) {
             Ok(()) => {
                 sex_pdx::serial_record!("[term.native.start] name={}", n);
                 self.job = Some(Job { name: n, runner: Runner::Native { since: sex_pdx::get_ticks() }, line: Vec::new() });
