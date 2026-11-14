@@ -696,7 +696,11 @@ impl Studio {
         ui: &mut Ui,
         pending_recording: bool,
     ) -> Option<Action> {
-        if pending_recording && !self.session.is_dirty() && self.pending.is_none() {
+        if let Some((_, action)) = &mut self.pending {
+            *action = Action::Quit;
+            return None;
+        }
+        if pending_recording && !self.session.is_dirty() {
             let id = ui.message(
                 "Unsaved microphone recording",
                 "Discard the recording and close? Stop keeps it as an editable track.",
