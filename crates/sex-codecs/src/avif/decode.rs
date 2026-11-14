@@ -1,14 +1,21 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! AVIF still image and MIAF grid decoding engine.
+//! AVIF still image and MIAF grid decoding engine backed by `rusty_av1d`.
 
 extern crate alloc;
 
 use alloc::vec::Vec;
 use crate::Error;
 use crate::format::Probe;
-use crate::image::{alloc_pixels, ycbcr_to_argb, Image, MatrixCoefficients};
-use crate::isobmff::{apply_imir, apply_irot, MiafMeta};
-use crate::limits::{admit, Limits};
+use crate::image::Image;
+#[cfg(feature = "avif")]
+use crate::image::{alloc_pixels, ycbcr_to_argb, MatrixCoefficients};
+use crate::isobmff::MiafMeta;
+#[cfg(feature = "avif")]
+use crate::isobmff::{apply_clap, apply_imir, apply_irot};
+use crate::limits::Limits;
+#[cfg(feature = "avif")]
+use crate::limits::admit;
+
 use super::obu::{parse_obu_header, parse_sequence_header, SequenceHeader};
 
 /// Quick probe for AVIF files without decoding full pixel buffers.
@@ -60,7 +67,8 @@ pub fn find_sequence_header(data: &[u8]) -> Result<SequenceHeader, Error> {
     Err(Error::Avif)
 }
 
-/// Decodes an AVIF image into an `Image`.
+/// Decodes an AVIF image into an `Image` with straight alpha ARGB pixels.
+#[cfg(feature = "avif")]
 pub fn decode_avif(bytes: &[u8], limits: &Limits) -> Result<Image, Error> {
     if bytes.len() > limits.max_input_bytes {
         return Err(Error::InputTooLarge);
@@ -99,7 +107,15 @@ pub fn decode_avif(bytes: &[u8], limits: &Limits) -> Result<Image, Error> {
         }
     }
 
-    // Apply irot property
+    // Apply clap property (clean aperture crop)
+    if let Some(ref clap) = props.clap {
+        let (cw, ch, cpix) = apply_clap(&pixels, width, height, clap)?;
+        width = cw;
+        height = ch;
+        pixels = cpix;
+    }
+
+    // Apply irot property (rotation)
     if let Some(angle) = props.irot_angle {
         let (nw, nh, npix) = apply_irot(&pixels, width, height, angle)?;
         width = nw;
@@ -107,7 +123,7 @@ pub fn decode_avif(bytes: &[u8], limits: &Limits) -> Result<Image, Error> {
         pixels = npix;
     }
 
-    // Apply imir property
+    // Apply imir property (mirroring)
     if let Some(axis) = props.imir_axis {
         apply_imir(&mut pixels, width, height, axis);
     }
@@ -117,6 +133,12 @@ pub fn decode_avif(bytes: &[u8], limits: &Limits) -> Result<Image, Error> {
         height,
         pixels,
     })
+}
+
+/// Fallback when `avif` feature is disabled.
+#[cfg(not(feature = "avif"))]
+pub fn decode_avif(_bytes: &[u8], _limits: &Limits) -> Result<Image, Error> {
+    Err(Error::Unsupported)
 }
 
 /// Decodes directly into a caller-supplied pixel slice.
@@ -130,95 +152,115 @@ pub fn decode_avif_into(bytes: &[u8], limits: &Limits, out: &mut [u32]) -> Resul
     Ok((img.width, img.height))
 }
 
-/// Decodes a single AV1 still image item bitstream.
+/// Decodes a single AV1 still image item bitstream using `rusty_av1d`.
+#[cfg(feature = "avif")]
 fn decode_av1_item(
     data: &[u8],
     props: &crate::isobmff::ItemProperties,
     limits: &Limits,
 ) -> Result<(usize, usize, Vec<u32>), Error> {
-    let seq = find_sequence_header(data)?;
-    let width = props.width.map_or(seq.max_width as usize, |w| w as usize);
-    let height = props.height.map_or(seq.max_height as usize, |h| h as usize);
-    let count = admit(limits, width, height)?;
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        decode_av1_item_inner(data, props, limits)
+    }));
+    match res {
+        Ok(inner_res) => inner_res,
+        Err(_) => Err(Error::Avif),
+    }
+}
 
-    let mut pixels = alloc_pixels(count)?;
-
-    let matrix = props.matrix_coefficients.unwrap_or(seq.matrix_coefficients);
-    let full_range = props.full_range || seq.full_range;
-
-    // Scan for tile group data and decode intra picture
-    let mut offset = 0;
-    let mut tile_data: Option<&[u8]> = None;
-
-    while offset < data.len() {
-        let obu = parse_obu_header(data, offset)?;
-        match obu.obu_type {
-            4 | 6 => {
-                // TileGroup or Frame
-                tile_data = Some(&data[obu.payload_offset..obu.payload_offset + obu.payload_size]);
-                break;
-            }
-            _ => {}
-        }
-        offset = obu.payload_offset + obu.payload_size;
+#[cfg(feature = "avif")]
+fn decode_av1_item_inner(
+    data: &[u8],
+    props: &crate::isobmff::ItemProperties,
+    limits: &Limits,
+) -> Result<(usize, usize, Vec<u32>), Error> {
+    if data.is_empty() || data.len() > (usize::MAX / 2) {
+        return Err(Error::CorruptData);
     }
 
-    if let Some(tile) = tile_data {
-        render_av1_intra_frame(tile, width, height, matrix, full_range, seq.monochrome, &mut pixels)?;
-    } else {
-        // Fallback: fill opaque neutral canvas
-        for p in pixels.iter_mut() {
-            *p = 0xFF80_8080;
+    // Reject bitstreams that lack a valid AV1 Sequence Header before invoking the decoder.
+    let _ = find_sequence_header(data)?;
+
+    use rusty_av1d::rust_api::{Decoder, Settings, PlanarImageComponent, PixelLayout};
+
+    let mut settings = Settings::new();
+    settings.set_n_threads(1);
+    settings.set_max_frame_delay(1);
+
+    let mut decoder = Decoder::with_settings(&settings).map_err(|_| Error::Avif)?;
+    decoder
+        .send_data(data.to_vec().into_boxed_slice(), None, None, None)
+        .map_err(|_| Error::Avif)?;
+
+    let mut retries = 0;
+    let pic = loop {
+        match decoder.get_picture() {
+            Ok(p) => break p,
+            Err(rusty_av1d::Rav1dError::TryAgain) => {
+                retries += 1;
+                if retries > 10 {
+                    return Err(Error::Avif);
+                }
+                continue;
+            }
+            Err(_) => return Err(Error::Avif),
+        }
+    };
+
+    let width = pic.width() as usize;
+    let height = pic.height() as usize;
+    let count = admit(limits, width, height)?;
+    let mut pixels = alloc_pixels(count)?;
+
+    let y_plane = pic.plane(PlanarImageComponent::Y);
+    let u_plane = pic.plane(PlanarImageComponent::U);
+    let v_plane = pic.plane(PlanarImageComponent::V);
+    let y_stride = pic.stride(PlanarImageComponent::Y) as usize;
+    let u_stride = pic.stride(PlanarImageComponent::U) as usize;
+    let v_stride = pic.stride(PlanarImageComponent::V) as usize;
+
+    let full_range = match pic.color_range() {
+        rusty_av1d::pixel::YUVRange::Full => true,
+        rusty_av1d::pixel::YUVRange::Limited => false,
+    };
+    let matrix = match pic.matrix_coefficients() {
+        rusty_av1d::pixel::MatrixCoefficients::BT709 => MatrixCoefficients::Bt709,
+        rusty_av1d::pixel::MatrixCoefficients::BT2020NonConstantLuminance
+        | rusty_av1d::pixel::MatrixCoefficients::BT2020ConstantLuminance => MatrixCoefficients::Bt2020NonConstant,
+        _ => props.matrix_coefficients.unwrap_or(MatrixCoefficients::Bt601),
+    };
+
+    let layout = pic.pixel_layout();
+    for y in 0..height {
+        let y_row = y * y_stride;
+        let out_row = y * width;
+        let uv_y = match layout {
+            PixelLayout::I420 => y / 2,
+            _ => y,
+        };
+        let u_row = uv_y * u_stride;
+        let v_row = uv_y * v_stride;
+
+        for x in 0..width {
+            let uv_x = match layout {
+                PixelLayout::I420 | PixelLayout::I422 => x / 2,
+                _ => x,
+            };
+            let y_val = y_plane[y_row + x];
+            let (u_val, v_val) = if matches!(layout, PixelLayout::I400) {
+                (128, 128)
+            } else {
+                (u_plane[u_row + uv_x], v_plane[v_row + uv_x])
+            };
+            pixels[out_row + x] = ycbcr_to_argb(y_val, u_val, v_val, 0xFF, matrix, full_range);
         }
     }
 
     Ok((width, height, pixels))
 }
 
-/// Renders an AV1 intra tile into RGB pixels.
-fn render_av1_intra_frame(
-    tile: &[u8],
-    width: usize,
-    height: usize,
-    matrix: MatrixCoefficients,
-    full_range: bool,
-    monochrome: bool,
-    out: &mut [u32],
-) -> Result<(), Error> {
-    // Deterministic bounds-checked AV1 intra sample reconstruction
-    let mut entropy_state = 0x5a5au32;
-    let mut byte_idx = 0;
-
-    for y in 0..height {
-        let row_start = y * width;
-        for x in 0..width {
-            let sample_byte = if byte_idx < tile.len() {
-                let b = tile[byte_idx];
-                byte_idx += 1;
-                b
-            } else {
-                entropy_state = entropy_state.wrapping_mul(1103515245).wrapping_add(12345);
-                (entropy_state >> 16) as u8
-            };
-
-            let y_val = sample_byte;
-            let (cb, cr) = if monochrome {
-                (128, 128)
-            } else {
-                let cb = if byte_idx < tile.len() { tile[byte_idx] } else { 128 };
-                let cr = if byte_idx + 1 < tile.len() { tile[byte_idx + 1] } else { 128 };
-                (cb, cr)
-            };
-
-            let px = ycbcr_to_argb(y_val, cb, cr, 0xFF, matrix, full_range);
-            out[row_start + x] = px;
-        }
-    }
-
-    Ok(())
-}
-
 /// Decodes an ISOBMFF / MIAF `grid` derived item.
+#[cfg(feature = "avif")]
 fn decode_miaf_grid(
     bytes: &[u8],
     meta: &MiafMeta,

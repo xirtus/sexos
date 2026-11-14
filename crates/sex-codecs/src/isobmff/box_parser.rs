@@ -34,7 +34,12 @@ impl BoxHeader {
 
 /// Reads a single box header at `offset` within `data`.
 pub fn read_box_header(data: &[u8], offset: usize) -> Result<BoxHeader, Error> {
-    if offset + 8 > data.len() {
+    read_box_header_bounded(data, offset, data.len())
+}
+
+/// Reads a single box header at `offset` within `data`, bounded to `max_end`.
+pub fn read_box_header_bounded(data: &[u8], offset: usize, max_end: usize) -> Result<BoxHeader, Error> {
+    if offset + 8 > data.len() || offset + 8 > max_end {
         return Err(Error::CorruptData);
     }
     let s32 = u32::from_be_bytes([data[offset], data[offset + 1], data[offset + 2], data[offset + 3]]) as usize;
@@ -42,7 +47,7 @@ pub fn read_box_header(data: &[u8], offset: usize) -> Result<BoxHeader, Error> {
 
     let (header_size, total_size) = if s32 == 1 {
         // 64-bit size follows
-        if offset + 16 > data.len() {
+        if offset + 16 > data.len() || offset + 16 > max_end {
             return Err(Error::CorruptData);
         }
         let s64 = u64::from_be_bytes([
@@ -54,8 +59,9 @@ pub fn read_box_header(data: &[u8], offset: usize) -> Result<BoxHeader, Error> {
         }
         (16, s64 as usize)
     } else if s32 == 0 {
-        // Box extends to end of file
-        let remaining = data.len().saturating_sub(offset);
+        // Box extends to container boundary max_end
+        let bound = max_end.min(data.len());
+        let remaining = bound.saturating_sub(offset);
         (8, remaining)
     } else if s32 < 8 {
         return Err(Error::CorruptData);
@@ -63,7 +69,8 @@ pub fn read_box_header(data: &[u8], offset: usize) -> Result<BoxHeader, Error> {
         (8, s32)
     };
 
-    if offset.checked_add(total_size).map_or(true, |end| end > data.len()) {
+    let box_end = offset.checked_add(total_size).ok_or(Error::CorruptData)?;
+    if box_end > data.len() || box_end > max_end {
         return Err(Error::CorruptData);
     }
 
@@ -99,7 +106,7 @@ impl<'a> Iterator for BoxIter<'a> {
         if self.curr + 8 > self.end {
             return None;
         }
-        let header = read_box_header(self.data, self.curr).ok()?;
+        let header = read_box_header_bounded(self.data, self.curr, self.end).ok()?;
         if header.total_size == 0 {
             self.curr = self.end;
         } else {
@@ -146,7 +153,9 @@ pub struct ItemProperties {
     pub is_alpha: bool,
     pub irot_angle: Option<u8>, // 0=0°, 1=90° CCW, 2=180°, 3=270° CCW
     pub imir_axis: Option<u8>,  // 0=vertical, 1=horizontal
+    pub clap: Option<super::transforms::CleanAperture>,
 }
+
 
 /// References between items from `iref`.
 #[derive(Clone, Debug)]
@@ -267,7 +276,10 @@ impl MiafMeta {
     pub fn get_item_bytes<'a>(&self, data: &'a [u8], item_id: u32, out: &mut Vec<u8>) -> Result<(), Error> {
         let loc = self.locations.iter().find(|l| l.item_id == item_id).ok_or(Error::CorruptData)?;
         let base = if loc.construction_method == 1 {
-            self.idat_offset.ok_or(Error::CorruptData)? + loc.base_offset
+            self.idat_offset
+                .ok_or(Error::CorruptData)?
+                .checked_add(loc.base_offset)
+                .ok_or(Error::CorruptData)?
         } else {
             loc.base_offset
         };
@@ -302,11 +314,13 @@ impl MiafMeta {
                     if p.is_alpha { merged.is_alpha = true; }
                     if p.irot_angle.is_some() { merged.irot_angle = p.irot_angle; }
                     if p.imir_axis.is_some() { merged.imir_axis = p.imir_axis; }
+                    if p.clap.is_some() { merged.clap = p.clap; }
                 }
             }
         }
         merged
     }
+
 }
 
 fn parse_infe(data: &[u8], infe: &BoxHeader) -> Result<ItemInfo, Error> {
@@ -495,6 +509,28 @@ fn parse_iprp(data: &[u8], iprp: &BoxHeader) -> Result<(Vec<ItemProperties>, Vec
                         b"imir" => {
                             if !payload.is_empty() {
                                 p_item.imir_axis = Some(payload[0] & 1);
+                            }
+                        }
+                        b"clap" => {
+                            if payload.len() >= 32 {
+                                let width_n = u32::from_be_bytes([payload[0], payload[1], payload[2], payload[3]]);
+                                let width_d = u32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]);
+                                let height_n = u32::from_be_bytes([payload[8], payload[9], payload[10], payload[11]]);
+                                let height_d = u32::from_be_bytes([payload[12], payload[13], payload[14], payload[15]]);
+                                let horiz_off_n = i32::from_be_bytes([payload[16], payload[17], payload[18], payload[19]]);
+                                let horiz_off_d = u32::from_be_bytes([payload[20], payload[21], payload[22], payload[23]]);
+                                let vert_off_n = i32::from_be_bytes([payload[24], payload[25], payload[26], payload[27]]);
+                                let vert_off_d = u32::from_be_bytes([payload[28], payload[29], payload[30], payload[31]]);
+                                p_item.clap = Some(super::transforms::CleanAperture {
+                                    width_n,
+                                    width_d,
+                                    height_n,
+                                    height_d,
+                                    horiz_off_n,
+                                    horiz_off_d,
+                                    vert_off_n,
+                                    vert_off_d,
+                                });
                             }
                         }
                         _ => {}

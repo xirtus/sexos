@@ -5,4 +5,5 @@ pub mod box_parser;
 pub mod transforms;
 
 pub use box_parser::{BoxHeader, BoxIter, ItemLocation, ItemProperties, ItemReference, MiafMeta};
-pub use transforms::{apply_imir, apply_irot};
+pub use transforms::{apply_clap, apply_imir, apply_irot, CleanAperture};
+

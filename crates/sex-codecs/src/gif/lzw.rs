@@ -95,7 +95,13 @@ pub fn decode_lzw(
                 // Special case: code == next_code
                 let mut c = prev;
                 while c >= clear_code {
+                    if c >= MAX_CODES {
+                        return Err(Error::Gif);
+                    }
                     c = prefix[c] as usize;
+                }
+                if c >= MAX_CODES || stack_top >= MAX_CODES {
+                    return Err(Error::Gif);
                 }
                 stack[stack_top] = suffix[c];
                 stack_top += 1;
@@ -109,6 +115,9 @@ pub fn decode_lzw(
                 stack[stack_top] = suffix[cur];
                 stack_top += 1;
                 cur = prefix[cur] as usize;
+            }
+            if cur >= MAX_CODES || stack_top >= MAX_CODES {
+                return Err(Error::Gif);
             }
             stack[stack_top] = suffix[cur];
             stack_top += 1;
@@ -126,7 +135,7 @@ pub fn decode_lzw(
                 }
             }
         } else {
-            if cur >= clear_code {
+            if cur >= clear_code || cur >= MAX_CODES || stack_top >= MAX_CODES {
                 return Err(Error::Gif);
             }
             stack[stack_top] = suffix[cur];

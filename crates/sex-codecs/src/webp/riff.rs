@@ -103,6 +103,13 @@ pub fn demux_webp(bytes: &[u8]) -> Result<WebpFile<'_>, Error> {
                     let fy = u32::from_le_bytes([payload[3], payload[4], payload[5], 0]) as usize * 2;
                     let fw = u32::from_le_bytes([payload[6], payload[7], payload[8], 0]) as usize + 1;
                     let fh = u32::from_le_bytes([payload[9], payload[10], payload[11], 0]) as usize + 1;
+                    if let Some(ref v) = vp8x {
+                        let end_x = fx.checked_add(fw).ok_or(Error::TooLarge)?;
+                        let end_y = fy.checked_add(fh).ok_or(Error::TooLarge)?;
+                        if end_x > v.canvas_width || end_y > v.canvas_height {
+                            return Err(Error::TooLarge);
+                        }
+                    }
                     let dur = u32::from_le_bytes([payload[12], payload[13], payload[14], 0]);
                     let flags = payload[15];
                     let dispose_background = (flags & 1) != 0;

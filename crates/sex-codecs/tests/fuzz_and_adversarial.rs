@@ -46,13 +46,17 @@ fn tiny_limits_refuse_before_allocating() {
 }
 
 #[test]
-fn ten_thousand_mutations_stress_fuzz() {
+fn fifty_thousand_mutations_stress_fuzz() {
     let fixtures = [
         fixture("gradient_lossless.webp"),
+        fixture("quadrant.webp"),
         fixture("anim.webp"),
         fixture("still.gif"),
+        fixture("quadrant.gif"),
         fixture("anim.gif"),
+        fixture("quadrant.avif"),
         fixture("smpte32.avif"),
+        fixture("quadrant.heic"),
         fixture("smpte32.heic"),
     ];
 
@@ -65,7 +69,8 @@ fn ten_thousand_mutations_stress_fuzz() {
         (prng.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 32) as u32
     };
 
-    const TOTAL_ITERATIONS: usize = 12_000;
+    const TOTAL_ITERATIONS: usize = 50_000;
+
 
     for i in 0..TOTAL_ITERATIONS {
         let base = &fixtures[i % fixtures.len()];

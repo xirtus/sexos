@@ -12,7 +12,7 @@ echo "[sex-codecs-gate] 1/2: Running cargo test --locked -p sex-codecs..."
 cargo test --locked -p sex-codecs
 
 echo "[sex-codecs-gate] 2/2: Verifying #![no_std] userspace compilation for x86_64-sex-app.json..."
-cargo check --target x86_64-sex-app.json \
+cargo check --no-default-features --features heic --target x86_64-sex-app.json \
   -Z build-std=core,compiler_builtins,alloc \
   -Z build-std-features=compiler-builtins-mem \
   -p sex-codecs

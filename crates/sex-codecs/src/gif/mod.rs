@@ -186,6 +186,12 @@ impl<'a> GifAnimationDecoder<'a> {
                     let top = u16_le(bytes, at + 3)?;
                     let fw = u16_le(bytes, at + 5)?;
                     let fh = u16_le(bytes, at + 7)?;
+                    admit(limits, fw, fh)?;
+                    let fw_end = left.checked_add(fw).ok_or(Error::TooLarge)?;
+                    let fh_end = top.checked_add(fh).ok_or(Error::TooLarge)?;
+                    if fw_end > width || fh_end > height {
+                        return Err(Error::TooLarge);
+                    }
                     let lflags = bytes[at + 9];
                     let interlaced = (lflags & 0x40) != 0;
 
@@ -233,6 +239,9 @@ impl<'a> GifAnimationDecoder<'a> {
         }
 
         let max_frame_pixels = frames.iter().map(|f| f.width * f.height).max().unwrap_or(0);
+        if max_frame_pixels > limits.max_pixels {
+            return Err(Error::TooLarge);
+        }
         let mut decomp_buf = Vec::new();
         decomp_buf.try_reserve_exact(max_frame_pixels).map_err(|_| Error::OutOfMemory)?;
         decomp_buf.resize(max_frame_pixels, 0);
