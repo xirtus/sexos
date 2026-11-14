@@ -94,6 +94,8 @@ fn editable_project_roundtrip_preserves_pcm_clips_mixer_effects_and_shared_sourc
     assert_eq!(a, b);
     let mut a_tracks = original.tracks.clone();
     let mut b_tracks = decoded.tracks.clone();
+    a_tracks[0].muted = false;
+    b_tracks[0].muted = false;
     render_processed(&mut a_tracks, 0, &mut a);
     render_processed(&mut b_tracks, 0, &mut b);
     assert_eq!(a, b);
