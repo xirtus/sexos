@@ -194,7 +194,7 @@ fn hours(c: &mut Canvas, app: &App, l: &Layout, f: &mut Faces, first: Date, cols
     for r in 0..=shown {
         let y = top + r * Layout::HOUR_H;
         c.fill(l.grid_x, y, col_w * cols, 1, LINE);
-        if r < shown && first_hour + r < 24 { c.text(&mut f.tiny, 4, y + 2, &format!("{:02}:00", first_hour + r), DIM, Layout::WEEK_W + 4); }
+        if r < shown && first_hour + r < 24 { c.text(&mut f.tiny, 1, y + 2, &format!("{:02}:00", first_hour + r), DIM, Layout::WEEK_W + 8); }
     }
     let (tw, th) = (f.tiny.w as i32, f.tiny.h as i32);
     let chars = |px: i32| ((px - 8) / tw).max(0) as usize;

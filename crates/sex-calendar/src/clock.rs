@@ -88,7 +88,7 @@ pub fn format_duration(seconds: u64) -> String {
     let mut out = String::new();
     if h > 0 { let _ = write!(out, "{h}h"); }
     if m > 0 { let _ = write!(out, "{m}m"); }
-    if s > 0 || out.is_empty() { let _ = write!(out, "{s:02}s"); }
+    if out.is_empty() { let _ = write!(out, "{s}s"); } else if s > 0 { let _ = write!(out, "{s:02}s"); }
     out
 }
 
