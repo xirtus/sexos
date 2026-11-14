@@ -13,19 +13,20 @@ fn require_boot() {
         BootPhase::RegistryBuild as u8, "BOOT_MEMORY_AFTER_GENESIS");
 }
 
-pub(crate) fn backing(length: u64) -> u64 {
+pub(crate) fn backing(length: u64) -> u64 { try_backing(length).expect("BOOT_REGION_NO_FRAMES") }
+/// `backing`, or None when no free block that large is left (memory is fragmented).
+pub(crate) fn try_backing(length: u64) -> Option<u64> {
     require_boot();
     assert!(length > 0 && length % 4096 == 0);
     let pages = (length / 4096).next_power_of_two();
-    let physical = crate::memory::allocator::GLOBAL_ALLOCATOR.alloc(pages.trailing_zeros() as usize)
-        .expect("BOOT_REGION_NO_FRAMES");
+    let physical = crate::memory::allocator::GLOBAL_ALLOCATOR.alloc(pages.trailing_zeros() as usize)?;
     crate::memory::manager::GLOBAL_VAS.lock().as_mut().expect("BOOT_REGION_NO_VAS")
         .frame_allocator.reserve_boot_region(physical, pages * 4096)
         .expect("BOOT_REGION_FRAME_OWNERSHIP_COLLISION");
     let hhdm = crate::HHDM_REQUEST.response().expect("BOOT_REGION_NO_HHDM").offset;
     // Zero the entire reservation, including buddy rounding, before publication.
     unsafe { core::ptr::write_bytes((physical + hhdm) as *mut u8, 0, (pages * 4096) as usize); }
-    physical
+    Some(physical)
 }
 
 /// Retained source authority: private BOOT frames, no user/DMA grant or runtime free.
@@ -392,6 +393,15 @@ pub fn init_display_frames(display: u32, layout: sex_pdx::display_frames::Layout
     crate::serial_println!("[boot.display.frames] pd={} task={} slot={} region={} width={} height={} pitch={} frame_bytes={} span_bytes={} total_bytes={} reserved_bytes={} buffers=2 pkey={} private=1 zero=1 readback=1 sealed_later=1 runtime_mint=0",
         display, task, SLOT, REGION_ID, layout.width(), layout.height(), layout.pitch(),
         layout.frame_bytes(), layout.span_bytes(), layout.total_bytes(), layout.buddy_bytes(), pd.pku_key);
+    // A virtio-gpu scans out from its own host resource; its backing is one more
+    // packed frame the device may read (workstream L, slice L2).
+    if matches!(pd.find_capability(sex_pdx::virtio::SLOT_GPU as u32).map(|c| c.data),
+        Some(CapabilityData::Pci(d)) if d.vendor_id == sex_pdx::virtio::VENDOR && d.device_id == sex_pdx::virtio::GPU) {
+        use sex_pdx::display_frames::{SCANOUT_SLOT, SCANOUT_REGION_ID};
+        dma_at(display, SCANOUT_SLOT, SCANOUT_REGION_ID, layout.span_bytes());
+        crate::serial_println!("[boot.display.scanout] pd={} slot={} region={:#x} bytes={} device=virtio-gpu runtime_mint=0",
+            display, SCANOUT_SLOT, SCANOUT_REGION_ID, layout.span_bytes());
+    }
 }
 
 /// The first UiIR stream: the producer may write its ring and only read the
@@ -733,6 +743,15 @@ pub fn virtio_command(pd:&ProtectionDomain,dev:&crate::hal::pci::PciDevice,slot:
 pub fn virtio_dma(pd_id:u32){
     require_boot();
     dma(pd_id,sex_pdx::virtio::DMA_REGION_ID,sex_pdx::virtio::DMA_BYTES);
+}
+
+/// The display-register prefix of an Intel GPU's BAR0 (GTTMMADR), if present.
+pub fn intel_display_bar(pd:&ProtectionDomain,dev:&crate::hal::pci::PciDevice,slot:u64)->Option<RegionGrant>{
+    require_boot();
+    let(physical,actual_length)=dev.probe_boot_bar_any(0)?;
+    let length=sex_pdx::display_frames::INTEL_REGISTERS;
+    if actual_length<length{return None}
+    Some(pci_view(pd,slot,physical,actual_length,length))
 }
 
 /// The register BAR of a controller leased by class (HD Audio, AHCI), if its

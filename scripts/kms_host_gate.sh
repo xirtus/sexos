@@ -7,7 +7,7 @@ TEST_DIR="$(mktemp -d "${TMPDIR:-/tmp}/sexos-kms.XXXXXX")"
 trap 'rm -rf "$TEST_DIR"' EXIT
 R="rustc --edition=2021 -O -C overflow-checks=on"
 $R --crate-type=rlib --crate-name sex_kms "$ROOT_DIR/crates/sex-kms/src/lib.rs" --out-dir "$TEST_DIR"
-$R --crate-type=rlib --crate-name sex_gpu_intel -L "$TEST_DIR" --extern sex_kms="$TEST_DIR/libsex_kms.rlib" \
+$R --cfg 'feature="kms"' --crate-type=rlib --crate-name sex_gpu_intel -L "$TEST_DIR" --extern sex_kms="$TEST_DIR/libsex_kms.rlib" \
   "$ROOT_DIR/crates/sex-gpu-intel/src/lib.rs" --out-dir "$TEST_DIR"
 for t in "$ROOT_DIR"/crates/sex-kms/tests/*.rs "$ROOT_DIR"/crates/sex-gpu-intel/tests/*.rs; do
   name="$(basename "$(dirname "$(dirname "$t")")")-$(basename "$t" .rs)"

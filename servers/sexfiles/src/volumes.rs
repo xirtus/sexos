@@ -254,6 +254,8 @@ pub fn run(fs: Option<&mut Fs<'static, FsDisk>>, r: w::Request, path: &[u8], dat
     let m = &mut mounts()[index];
     if m.read_only() && !matches!(r.kind, w::STAT | w::LIST | w::READ | w::STATFS | w::SYNC) { return Err(w::READ_ONLY); }
     if m.read_only() && r.kind == w::SYNC { return Ok(0); }
+    // What changes is stamped with the civil clock, as sexfs files are.
+    if !matches!(r.kind, w::STAT | w::LIST | w::READ | w::STATFS) { m.volume.set_now(sex_pdx::civil_time_ms().map(|ms| ms / 1000).unwrap_or(0)); }
     let result = match r.kind {
         w::STAT => with(fs, m, |v, d| v.stat(d, inner)).map(|st| {
             data[..32].fill(0);

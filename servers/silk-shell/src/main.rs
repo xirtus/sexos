@@ -17,6 +17,7 @@ mod app_input;
 mod wm;
 mod launcher_search;
 mod session;
+mod keyboard_layout;
 use alloc::vec::Vec;
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -10311,7 +10312,7 @@ fn is_pointer_move(word:u64)->bool{
 /// The program window under the pointer (or holding its capture), with the pointer
 /// relative to its pixel area, and whether the pointer is inside that area.
 unsafe fn program_pointer_target()->Option<(u64,sex_pdx::clipboard::Participant,i16,i16,bool)>{
-    if COMMAND_PALETTE_OPEN || ATLAS_MODE_ENABLED || LAUNCHER_ACTIVE || CLOCK_ACTIVE || STATUS_ACTIVE || BELL_ACTIVE || SCENE_SETTINGS_ACTIVE {return None}
+    if OVERVIEW.is_open() || COMMAND_PALETTE_OPEN || ATLAS_MODE_ENABLED || LAUNCHER_ACTIVE || CLOCK_ACTIVE || STATUS_ACTIVE || BELL_ACTIVE || SCENE_SETTINGS_ACTIVE {return None}
     let sid=if POINTER_CAPTURE!=0 {POINTER_CAPTURE} else {
         if matches!(INTERACTION,InteractionState::Dragging{..}){return None}
         match hit_test_at(POINTER_X,POINTER_Y){HitTarget::Surface(sid)=>sid,_=>return None}
@@ -10509,11 +10510,13 @@ unsafe fn wm_action(action: wm::WmAction) -> bool {
             None => false,
         },
         A::Scratchpad => wm_scratchpad_toggle(),
-        A::Overview => { atlas_toggle(); true }
+        A::Overview => overview_toggle(),
+        A::ClipboardHistory => clipboard_history_step(),
         A::Notifications => toggle_bell(),
         A::Wallpaper => desktop_look_step(1, 0),
         A::NightLight => desktop_look_step(0, 1),
         A::Lock => false,
+        A::KeyboardLayout => { let (label, title) = keyboard_layout::next(); keyboard_layout_notice(label, title) }
     };
     sex_pdx::serial_record!("[shell.wm.action] action={:?} done={} scene={}->{} focus={}->{} layout={}",
         action, done as u8, before.0, ACTIVE_SCENE_IDX, before.1, FOCUSED_SURFACE_ID, wm_tiling().layout.name());
@@ -10530,9 +10533,10 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
             wm_action(action);return true;
         }
     }
+    if overview_key(code,value) {return true;}
     if media_keys::is_player_key(code){if value==1{player_key(code);}return true;}
     if FOCUSED_SURFACE_ID==SURFACE_ID_BELL_PLACEHOLDER&&sound_panel_key(code,value){return true;}
-    let modifier=APP_MODIFIERS.observe(code,value);
+    let modifier=APP_MODIFIERS.observe(code,value)|keyboard_layout::observe(code,value);
     match DESKTOP_KEYS.event(code,value) {
         desktop_keys::Action::Pass=>{
             if !COMMAND_PALETTE_OPEN {
@@ -10540,10 +10544,15 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
                     if modifier || value!=1{return true;}
                     // Desktop function keys retain their existing Shell actions.
                     if matches!(code,0x0f|0x29|0x3b..=0x44|0x46|0x52|0x57|0x58|0x59){return false;}
-                    let Some(normalized)=app_input_key_code(destination,code) else{return true};
-                    let key=APP_MODIFIERS.key(normalized);
+                    // Ctrl shortcuts follow the letter on the key under the active layout.
+                    let shortcut=if APP_MODIFIERS.key(code).control{keyboard_layout::shortcut_code(code)}else{code};
+                    let Some(normalized)=app_input_key_code(destination,shortcut) else{return true};
+                    if let Some(changed)=keyboard_layout::compose(APP_MODIFIERS.key(normalized),code,|k|{APP_INPUT.push(app_input::Item{destination,input:app_input::Input::Key(k)});}){
+                        if changed{keyboard_preedit_notice();}app_input_poll();return true;
+                    }
+                    let key=keyboard_layout::typing(APP_MODIFIERS.key(normalized),code);
                     let input=if key.control {
-                        match code {0x2e=>app_input::Input::Clipboard(sex_pdx::clipboard::Action::Copy),0x2d=>app_input::Input::Clipboard(sex_pdx::clipboard::Action::Cut),0x2f=>app_input::Input::Clipboard(sex_pdx::clipboard::Action::Paste),_=>app_input::Input::Key(key)}
+                        match shortcut {0x2e=>app_input::Input::Clipboard(sex_pdx::clipboard::Action::Copy),0x2d=>app_input::Input::Clipboard(sex_pdx::clipboard::Action::Cut),0x2f=>app_input::Input::Clipboard(sex_pdx::clipboard::Action::Paste),_=>app_input::Input::Key(key)}
                     }else{app_input::Input::Key(key)};
                     if !APP_INPUT.push(app_input::Item{destination,input}){
                         sex_pdx::serial_record!("[shell.app.input.full] capacity=32 pd={} task={} accepted=0",destination.subject.pd,destination.subject.task);
@@ -10553,7 +10562,11 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
                 if let Some(destination)=focused_program_participant(){
                     if modifier || value!=1{return true;}
                     if matches!(code,0x0f|0x29|0x3b..=0x44|0x46|0x52|0x57|0x58|0x59){return false;}
-                    if !APP_INPUT.push(app_input::Item{destination,input:app_input::Input::Key(APP_MODIFIERS.key(code))}){
+                    let shortcut=if APP_MODIFIERS.key(code).control{keyboard_layout::shortcut_code(code)}else{code};
+                    if let Some(changed)=keyboard_layout::compose(APP_MODIFIERS.key(shortcut),code,|k|{APP_INPUT.push(app_input::Item{destination,input:app_input::Input::Key(k)});}){
+                        if changed{keyboard_preedit_notice();}app_input_poll();return true;
+                    }
+                    if !APP_INPUT.push(app_input::Item{destination,input:app_input::Input::Key(keyboard_layout::typing(APP_MODIFIERS.key(shortcut),code))}){
                         sex_pdx::serial_record!("[shell.app.input.full] capacity=32 pd={} task={} accepted=0",destination.subject.pd,destination.subject.task);
                     }
                     app_input_poll();return true;
@@ -10562,13 +10575,14 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
             false
         },
         desktop_keys::Action::Consume=>true,
-        desktop_keys::Action::NextFrame=>{
+        desktop_keys::Action::Switch(dir)=>{
             let old=FOCUSED_SURFACE_ID;
             if COMMAND_PALETTE_OPEN {toggle_command_palette();}
-            focus_next_frame();
+            switcher_step(dir);
             sex_pdx::serial_record!("[shell.app.switch] old={} new={} live={} shortcut=alt_tab",old,FOCUSED_SURFACE_ID,surface_is_alive(FOCUSED_SURFACE_ID) as u8);
             true
         }
+        desktop_keys::Action::SwitchEnd(keep)=>{switcher_end(keep);true}
         desktop_keys::Action::Volume(step)=>{volume_key(step);true}
         desktop_keys::Action::TextZoom(step)=>{
             // Display owns text layout; Shell only names the focused window and the step.
@@ -10585,6 +10599,143 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
             true
         }
     }
+}
+
+// ── Alt+Tab window switcher (KDE/GNOME style) ──────────────────────────────
+// Order and stepping live in sex_pdx::window_switcher (host-tested); Display
+// draws the cards with live thumbnails. Focus follows the selection while Alt
+// is held, so the chosen window is already raised when Alt is let go.
+static mut SWITCHER_RECENT: sex_pdx::window_switcher::Recent<MAX_FRAMES> = sex_pdx::window_switcher::Recent::new();
+static mut SWITCHER: sex_pdx::window_switcher::Session = sex_pdx::window_switcher::Session::new();
+unsafe fn switcher_publish() { switcher_send(SWITCHER.state()); }
+unsafe fn switcher_send(state: sex_pdx::window_switcher::State) {
+    let [a, b, c] = state.wire();
+    let (status, _) = pdx_call(SLOT_DISPLAY, sex_pdx::window_switcher::OP_WINDOW_SWITCHER, a, b, c);
+    sex_pdx::serial_record!("[shell.switcher] open={} count={} selected={} grid={} status={:#x}", state.visible() as u8, c & 0xF, c >> 8 & 0xF, state.grid as u8, status);
+}
+/// This workspace's windows, most recently focused first.
+unsafe fn switcher_windows(ordered: &mut [u64; sex_pdx::window_switcher::MAX_ENTRIES]) -> usize {
+    let mut frames = [(0u32, 0u64, wm::Rect::default()); MAX_FRAMES];
+    let n = wm_visible_frames(&mut frames, false);
+    let mut present = [0u64; MAX_FRAMES];
+    for i in 0..n { present[i] = frames[i].1; }
+    if FOCUSED_SURFACE_ID != 0 { SWITCHER_RECENT.touch(FOCUSED_SURFACE_ID); }
+    SWITCHER_RECENT.order(&present[..n], ordered)
+}
+// ── Window overview (Super+W): every window of the workspace as a live
+// thumbnail in a grid (GNOME Activities, KDE Present Windows). Arrows, Tab or
+// the pointer pick; Enter or a click goes there; Escape or Super+W closes.
+static mut OVERVIEW: sex_pdx::window_switcher::Session = sex_pdx::window_switcher::Session::new();
+unsafe fn overview_layout() -> Option<sex_pdx::window_switcher::Layout> {
+    let count = OVERVIEW.state().count as usize;
+    sex_pdx::window_switcher::Layout::grid(desktop_width() as usize, desktop_height() as usize,
+        desktop_bar_height() as usize, count, sex_pdx::desktop_style::ui_scale())
+}
+unsafe fn overview_toggle() -> bool {
+    if OVERVIEW.is_open() { overview_close(false); return true; }
+    if SWITCHER.is_open() { switcher_end(true); }
+    if COMMAND_PALETTE_OPEN { toggle_command_palette(); }
+    let mut ordered = [0u64; sex_pdx::window_switcher::MAX_ENTRIES];
+    let count = switcher_windows(&mut ordered);
+    if !OVERVIEW.open_grid(&ordered[..count], FOCUSED_SURFACE_ID) { return false; }
+    switcher_send(OVERVIEW.state());
+    sex_pdx::serial_record!("[shell.overview.open] windows={}", count);
+    if let Some(l) = overview_layout() {
+        for (i, sid) in ordered[..count].iter().enumerate() {
+            let (x, y, w, h) = l.card(i);
+            sex_pdx::serial_record!("[shell.overview.card] index={} sid={} x={} y={} w={} h={}", i, sid, x, y, w, h);
+        }
+    }
+    true
+}
+/// `keep`: go to the selected window; otherwise stay where focus was.
+unsafe fn overview_close(keep: bool) {
+    let Some(sid) = OVERVIEW.end(keep) else { return };
+    if keep && sid != FOCUSED_SURFACE_ID { try_set_focus(sid); }
+    switcher_send(sex_pdx::window_switcher::State::HIDDEN);
+    sex_pdx::serial_record!("[shell.overview.close] keep={} focus={}", keep as u8, FOCUSED_SURFACE_ID);
+}
+/// Keys while the overview is open; modifiers pass so their state stays true.
+unsafe fn overview_key(code: u8, value: u64) -> bool {
+    if !OVERVIEW.is_open() || matches!(code, 0x1D | 0x2A | 0x36 | 0x38 | 0x5B | 0x5C | 0x61 | 0x64) { return false; }
+    if value == 0 { return true; }
+    let cols = overview_layout().map_or(1, |l| l.cols) as isize;
+    let moved = match code {
+        0x01 if value == 1 => { overview_close(false); return true; }
+        0x1C if value == 1 => { overview_close(true); return true; }
+        0x4B => OVERVIEW.move_by(-1),
+        0x4D | 0x0F => OVERVIEW.move_by(1),
+        0x48 => OVERVIEW.move_by(-cols),
+        0x50 => OVERVIEW.move_by(cols),
+        _ => None,
+    };
+    if moved.is_some() { switcher_send(OVERVIEW.state()); }
+    true
+}
+/// A click while the overview is open: a card goes there, anywhere else closes.
+unsafe fn overview_click(px: i32, py: i32) {
+    let hit = overview_layout().and_then(|l| if px < 0 || py < 0 { None } else { l.card_at(px as usize, py as usize) });
+    match hit.and_then(|i| OVERVIEW.select(i)) {
+        Some(_) => overview_close(true),
+        None => overview_close(false),
+    }
+}
+unsafe fn switcher_step(dir: i8) {
+    if OVERVIEW.is_open() { overview_close(false); }
+    let mut ordered = [0u64; sex_pdx::window_switcher::MAX_ENTRIES];
+    // An open switcher keeps the order it opened with.
+    let count = if SWITCHER.is_open() { 0 } else { switcher_windows(&mut ordered) };
+    match SWITCHER.step(&ordered[..count], FOCUSED_SURFACE_ID, dir) {
+        Some(sid) => { if sid != FOCUSED_SURFACE_ID { try_set_focus(sid); } switcher_publish(); }
+        // No window on this workspace: the old frame walk (panels, consoles).
+        None => focus_next_frame(),
+    }
+}
+unsafe fn switcher_end(keep: bool) {
+    let Some(sid) = SWITCHER.end(keep) else { return };
+    if sid != 0 && sid != FOCUSED_SURFACE_ID { try_set_focus(sid); }
+    if FOCUSED_SURFACE_ID != 0 { SWITCHER_RECENT.touch(FOCUSED_SURFACE_ID); }
+    switcher_publish();
+    sex_pdx::serial_record!("[shell.switcher.end] keep={} focus={}", keep as u8, FOCUSED_SURFACE_ID);
+}
+
+// ── Clipboard history (Super+V) ─────────────────────────────────────────────
+// The broker keeps the last earlier copies (clipboard.rs). Super+V makes the
+// previous one the clipboard again and names it in the panel; pressed again
+// while that notice shows, it steps one further back, so Ctrl+V pastes it.
+static mut CLIP_CYCLE: (u64, usize) = (0, 0);
+unsafe fn clipboard_history_step() -> bool {
+    let now = sex_pdx::get_ticks();
+    let (last, presses) = CLIP_CYCLE;
+    let total = CLIPBOARD.history_len();
+    let mut text = [0u8; 120];
+    let mut n = 0;
+    fn put(text: &mut [u8; 120], part: &[u8], n: &mut usize) { let take = part.len().min(text.len() - *n); text[*n..*n + take].copy_from_slice(&part[..take]); *n += take; }
+    if total == 0 {
+        put(&mut text, b"Clipboard history is empty", &mut n);
+        if notify_panel(&text[..n]) { NOTIFY_NOTICE_UNTIL = now + NOTIFY_SHOW_TICKS; }
+        sex_pdx::serial_record!("[shell.clipboard.history] empty=1");
+        return false;
+    }
+    let index = if last != 0 && now.wrapping_sub(last) < NOTIFY_SHOW_TICKS { presses.min(total - 1) } else { 0 };
+    let Some(p) = CLIPBOARD.restore(index) else {
+        sex_pdx::serial_record!("[shell.clipboard.history] busy=1");
+        return false;
+    };
+    CLIP_CYCLE = (now, index + 1);
+    put(&mut text, b"Clipboard: ", &mut n);
+    // First line only, cut on a character boundary, with an ellipsis when cut.
+    let body = CLIPBOARD.current_text().unwrap_or(b"");
+    let line = body.iter().position(|&b| b == b'\n' || b == b'\r').map_or(body, |end| &body[..end]);
+    let room = text.len() - n - 3;
+    let mut cut = line.len().min(room);
+    while cut > 0 && cut < line.len() && line[cut] & 0xC0 == 0x80 { cut -= 1; }
+    put(&mut text, &line[..cut], &mut n);
+    if cut < body.len() { put(&mut text, "…".as_bytes(), &mut n); }
+    if notify_panel(&text[..n]) { NOTIFY_NOTICE_UNTIL = now + NOTIFY_SHOW_TICKS; }
+    sex_pdx::serial_record!("[shell.clipboard.history] index={} total={} generation={} len={} owner={} hash={:#x}",
+        index, total, p.generation, p.len, p.owner.pd, p.hash);
+    true
 }
 
 /// A volume key: Bell keeps the volume and answers with the new state, which Shell
@@ -10619,7 +10770,7 @@ unsafe fn media_keys_receive(msg:&sex_pdx::PdxMessage)->bool{
         Some(media_keys::Ask::Player(code)) if !media_keys::refused(word)=>{
             let pd=media_keys::stream_pd(word);
             let to=APP_CUSTODY.iter().flatten().find(|e|e.target==pd&&!e.dead&&!e.retired).map(|e|e.surface).and_then(|sid|program_participant(sid));
-            let sent=to.is_some_and(|d|APP_INPUT.push(app_input::Item{destination:d,input:app_input::Input::Key(sex_pdx::app_key::Key{code,shift:false,control:false})}));
+            let sent=to.is_some_and(|d|APP_INPUT.push(app_input::Item{destination:d,input:app_input::Input::Key(sex_pdx::app_key::Key::new(code,false,false))}));
             if sent{app_input_poll();}
             sex_pdx::serial_record!("[shell.media.route] code={:#x} pd={} sent={}",code,pd,sent as u8);
         }
@@ -16133,6 +16284,25 @@ unsafe fn notify_panel(text: &[u8]) -> bool {
     sex_pdx::notify::chunks(text, 0, 0, 0)
         .all(|(w, a, b)| pdx_call(SLOT_DISPLAY, sex_pdx::notify::OP_PANEL_NOTICE, w, a, b).0 == 0)
 }
+/// While composing with an input method, the panel shows the letters and the
+/// candidates for them (`nihao  1 你好 ...`).
+unsafe fn keyboard_preedit_notice() -> bool {
+    let mut text = [0u8; 160];
+    let n = keyboard_layout::preedit_line(&mut text);
+    n != 0 && notify_panel(&text[..n])
+}
+/// The panel names the keyboard layout just chosen, e.g. "Keyboard: DE  German".
+unsafe fn keyboard_layout_notice(label: &str, title: &str) -> bool {
+    let mut text = [0u8; 64];
+    let mut n = 0;
+    for part in [b"Keyboard: ".as_slice(), label.as_bytes(), b"  ", title.as_bytes()] {
+        let take = part.len().min(text.len() - n);
+        text[n..n + take].copy_from_slice(&part[..take]);
+        n += take;
+    }
+    sex_pdx::serial_record!("[shell.keyboard.layout] label={} title={}", label, title);
+    notify_panel(&text[..n])
+}
 // ── Wallpaper and night light: the Shell chooses, Display paints. ──
 static mut DESKTOP_LOOK: (u8, u8) = (0, 0);
 /// Steps the wallpaper and the night light level, each wrapping around.
@@ -16144,6 +16314,67 @@ unsafe fn desktop_look_step(wallpaper: u8, night: u8) -> bool {
     if ok { DESKTOP_LOOK = next; }
     sex_pdx::serial_record!("[shell.look] wallpaper={} name={} night={} ok={}", next.0, look::WALLPAPERS[next.0 as usize].0, next.1, ok as u8);
     ok
+}
+/// A notice from the Shell itself ("System"), kept in history like Bell's.
+unsafe fn shell_notice(text: &[u8], urgency: u8) {
+    let mut t = sex_pdx::notify::Text::EMPTY;
+    let n = text.len().min(sex_pdx::notify::TEXT_MAX);
+    t.bytes[..n].copy_from_slice(&text[..n]);
+    t.len = n as u8; t.urgency = urgency;
+    NOTIFY_RING[NOTIFY_TOTAL % NOTIFY_HISTORY] = t;
+    NOTIFY_TOTAL += 1;
+    let mut line = [0u8; sex_pdx::notify::TEXT_MAX];
+    let mut k = 0;
+    for &b in b"System: ".iter().chain(t.summary()) { if k < line.len() { line[k] = b; k += 1; } }
+    notify_panel(&line[..k]);
+    NOTIFY_NOTICE_UNTIL = sex_pdx::get_ticks() + NOTIFY_SHOW_TICKS;
+    if bell_frame_id().is_some() { bell_render_lane_text(); }
+}
+// ── Out of memory: when the machine stays critically short, end the program run
+// holding the most memory and say so. Services and the built-in apps are never ended;
+// programs see the pressure level on every memory call and should trim first. ───────
+static mut MEMORY_CRITICAL_SINCE: u64 = 0;
+static mut MEMORY_LAST_END: u64 = 0;
+static mut MEMORY_LAST_LOOK: u64 = 0;
+/// How long critical pressure must last before a program is ended, and the least time
+/// between two ends, so programs get the chance to trim and freed pages to show.
+const MEMORY_GRACE_TICKS: u64 = 5_000;
+unsafe fn shell_memory_poll() {
+    let now = sex_pdx::get_ticks();
+    if now.saturating_sub(MEMORY_LAST_LOOK) < 250 { return; }
+    MEMORY_LAST_LOOK = now;
+    if sex_pdx::program_memory::pressure() != sex_pdx::program_memory::PRESSURE_CRITICAL {
+        MEMORY_CRITICAL_SINCE = 0; return;
+    }
+    if MEMORY_CRITICAL_SINCE == 0 {
+        MEMORY_CRITICAL_SINCE = now;
+        sex_pdx::serial_record!("[shell.oom.critical] tick={}", now);
+        return;
+    }
+    if now.saturating_sub(MEMORY_CRITICAL_SINCE) < MEMORY_GRACE_TICKS || now.saturating_sub(MEMORY_LAST_END) < MEMORY_GRACE_TICKS { return; }
+    let mut pick: Option<(usize, u64)> = None;
+    for (i, e) in APP_CUSTODY.iter().enumerate() {
+        let Some(e) = e else { continue };
+        if e.dead || e.forced || !app_catalog::by_surface(e.target, e.surface).is_some_and(|r| r.app == app_catalog::App::Program) { continue; }
+        let pages = sex_pdx::system_stats::domain(e.target).map_or(0, |d| if d.pages == sex_pdx::system_stats::UNKNOWN { 0 } else { d.pages });
+        if pick.map_or(true, |(_, p)| pages > p) { pick = Some((i, pages)); }
+    }
+    let Some((i, pages)) = pick else { return };
+    let Some(e) = APP_CUSTODY[i].as_mut() else { return };
+    e.forced = true;
+    MEMORY_LAST_END = now;
+    let ok = sex_pdx::app_lifecycle::force_end(e.slot).is_ok();
+    let name = sex_pdx::system_stats::name(e.target);
+    let name = &name[..name.iter().position(|&c| c == 0).unwrap_or(16)];
+    let name = if name.is_empty() { &b"A program"[..] } else { name };
+    let mut text = [0u8; sex_pdx::notify::TEXT_MAX];
+    let mut k = 0;
+    for &b in name.iter().chain(b" was closed: memory ran out\nIt held the most memory (".iter()) { if k < text.len() { text[k] = b; k += 1; } }
+    let mut digits = [0u8; 20]; let mut d = digits.len(); let mut mib = pages * 4 / 1024;
+    loop { d -= 1; digits[d] = b'0' + (mib % 10) as u8; mib /= 10; if mib == 0 { break; } }
+    for &b in digits[d..].iter().chain(b" MiB).".iter()) { if k < text.len() { text[k] = b; k += 1; } }
+    shell_notice(&text[..k], 2);
+    sex_pdx::serial_record!("[shell.oom.end] target={} task={} pages={} ok={}", e.target, e.task, pages, ok as u8);
 }
 unsafe fn notification_receive(msg: &sex_pdx::PdxMessage) -> bool {
     if msg.type_id != sex_pdx::notify::OP_NOTIFICATION { return false; }
@@ -23161,6 +23392,8 @@ unsafe fn try_set_focus_inner(sid: u64,refresh_children:bool) -> bool {
     if refresh_children {if let Some((x,y,w,h))=get_surface_bounds(sid) { native_child_geometry(sid,x,y,w,h); }}
     let old_focus = FOCUSED_SURFACE_ID;
     FOCUSED_SURFACE_ID = sid;
+    // Alt+Tab order; steps inside an open switcher do not reorder it.
+    if !SWITCHER.is_open() { SWITCHER_RECENT.touch(sid); }
     // A4: Sync FocusRef shadow and emit commit marker.
     sync_focus_ref();
     serial_println!("[focus.ref.commit] id={}", sid);
@@ -23907,6 +24140,8 @@ fn hit_target_label(target: HitTarget, silkbar_handled: bool) -> (&'static str, 
 /// Emits [shell.click_focus.down/hit/miss] markers.
 /// Emits [shell.frame.rim.drag.start] for rim drag, [shell.frame.chrome.capture] for other chrome.
 unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTarget, bool) {
+    // The overview takes every click while it is open.
+    if OVERVIEW.is_open() { overview_click(px, py); return (HitTarget::None, true); }
     let old_focus = FOCUSED_SURFACE_ID;
     serial_println!("[shell.click_focus.down] x={} y={} buttons={:#x}", px, py, buttons_val);
     // ── Atlas intercept: if Atlas mode is enabled, hit-test scene cards ──
@@ -25207,7 +25442,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { session::save(); }
         unsafe { record_spawn_poll(); }
         unsafe { program_resize_flush(); }
-        unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); display_scale_poll(); shell_close_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); notification_poll(); sound_panel_poll(); }
+        unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); display_scale_poll(); shell_close_poll(); shell_memory_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); notification_poll(); sound_panel_poll(); }
         // Retain failed notification attempts while continuing normal receives.
         // Success means enqueue only; sexinput validates caller and version.
         if shell_ready_publisher.poll() {
@@ -25886,7 +26121,7 @@ pub extern "C" fn _start() -> ! {
                 unsafe { flush_pending_cursor_send(); }
                 // A full input ring may recover while the shell has no work.
                 // Return to the publisher instead of blocking in listen.
-                if shell_ready_publisher.is_pending() || unsafe { RECORD_SPAWN_LEFT != 0 || DISPLAY_SCALE.request().is_some() || CURSOR_SEND_PENDING || APP_INPUT.pending() || LAUNCHER_FOCUS.is_some() || CLIPBOARD_INTAKE.pending() || CLIPBOARD.pending() || WORKSPACE_REFRESH_PENDING.iter().any(|p|*p) || linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_POINTER.is_some() || LINEN_ASYNC.can_send() || NOTIFY_NOTICE_UNTIL != 0 } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
+                if shell_ready_publisher.is_pending() || unsafe { RECORD_SPAWN_LEFT != 0 || DISPLAY_SCALE.request().is_some() || CURSOR_SEND_PENDING || APP_INPUT.pending() || LAUNCHER_FOCUS.is_some() || CLIPBOARD_INTAKE.pending() || CLIPBOARD.pending() || WORKSPACE_REFRESH_PENDING.iter().any(|p|*p) || linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_POINTER.is_some() || LINEN_ASYNC.can_send() || NOTIFY_NOTICE_UNTIL != 0 || MEMORY_CRITICAL_SINCE != 0 } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
                     sys_yield();
                     continue;
                 }
@@ -25895,6 +26130,8 @@ pub extern "C" fn _start() -> ! {
         };
         // Display started again after a crash: it knows nothing of the desktop, so show it again.
         if sex_pdx::display_ready::is_display_ready(&msg) { unsafe { display_came_back(); } continue; }
+        // The kernel's critical-memory word: the poll above acts on it.
+        if msg.type_id == sex_pdx::program_memory::OP_PRESSURE && msg.caller_pd == 0 { unsafe { MEMORY_LAST_LOOK = 0; } continue; }
         unsafe {
             if shell_lifecycle_hint(&msg) { continue; }
             if shell_program_message(&msg) { continue; }

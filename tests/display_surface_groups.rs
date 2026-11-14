@@ -2,6 +2,7 @@
 //! Actual compositor body extracted by gate. Glass shaders are deterministic
 //! sentinels; surface selection, clipping, fill, font and presentation bits are real.
 #![allow(dead_code,unused_variables,unused_unsafe,static_mut_refs)]
+#[path="../crates/sex-shape/src/lib.rs"] #[allow(unused_attributes)] pub mod sex_shape;
 extern crate self as sex_pdx;
 #[macro_export]macro_rules! serial_record{($($arg:tt)*)=>{{let _=format_args!($($arg)*);}}}
 #[path="../crates/sex-pdx/src/text_encoding.rs"]pub mod text_encoding;
@@ -376,6 +377,7 @@ static mut CURSOR_UNDERLAY_SENTINEL:[u32;4]=[0;4];
 fn restore_cursor_under(_: *mut u32,_:usize,_:usize,_:usize,_:desktop_style::chrome::Metrics){unsafe{DAMAGE_ORDER.push("restore");CURSOR_UNDERLAY_SENTINEL[0]=0;}}
 fn draw_cursor_z_top(_: *mut u32,_:usize,_:usize,_:usize,save:bool,_:&scene::SceneSnapshot){assert!(save);unsafe{DAMAGE_ORDER.push("cursor");CURSOR_UNDERLAY_SENTINEL[1]=0;}}
 fn draw_launcher_panel(_: *mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapshot){unsafe{DAMAGE_ORDER.push("launcher");}}
+fn draw_window_switcher(_:*mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapshot){}
 fn report_app_presented(){unsafe{DAMAGE_ORDER.push("presented");}}
 #[path="../servers/sexdisplay/src/paint_batch.rs"]mod paint_batch;
 use paint_batch::{Content,Plan};
@@ -799,7 +801,8 @@ fn reference_contrast(a:u32,b:u32)->f64{
 }
 
 #[test]fn utf8_scalar_cell_tables_preserve_source_offsets_wrapping_and_bounded_reset(){
- let text="Aé€😀\tZ\nöß…".as_bytes();
+ // A narrow four-byte scalar (plane 16, private use); wide CJK and emoji are covered in display_text_readability.
+ let text="Aé€\u{10FFFD}\tZ\nöß…".as_bytes();
  for width in[40,240,400]{
   let mut surface=Surface{x:20,y:70,w:width,h:300,text_len:text.len()as u16,..surf(9,156)};
   surface.text_buf[..text.len()].copy_from_slice(text);recompute_text_lines(&mut surface);
@@ -826,7 +829,7 @@ fn reference_contrast(a:u32,b:u32)->f64{
  assert_eq!(maximum.cell_count,1);assert!(maximum.cell_starts[1..].iter().all(|&x|x==0));
 }
 #[test]fn actual_utf8_glyphs_fallback_tab_and_byte_selection_match_scalar_scanline_and_damage(){unsafe{
- let text="Aé€😀\tZ\nöß…".as_bytes();
+ let text="Aé€\u{10FFFD}\tZ\nöß…".as_bytes();
  let expected=[FONT_ASCII_5X7[(b'A'-32)as usize],[2,4,14,17,31,16,14],[7,8,30,8,30,8,7],[31,17,21,21,21,17,31],[0;7],FONT_ASCII_5X7[(b'Z'-32)as usize],[10,0,0,14,17,17,14],[12,18,18,28,18,18,28],[0,0,0,0,0,0,21]];
  for width in[240,400]{
   let(w,h)=(600,300);SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();
@@ -841,7 +844,7 @@ fn reference_contrast(a:u32,b:u32)->f64{
     for px in 0..6*factor{let x=28+column*6*factor+px;
      let ink=py/factor<7&&px/factor<5&&glyph[py/factor]&(1<<(4-px/factor))!=0;
      let selected=row==0&&(1..=4).contains(&column);
-     let scalars=[['A','é','€','😀','\t','Z','\0','\0'],['ö','ß','…','\0','\0','\0','\0','\0']];
+     let scalars=[['A','é','€','\u{10FFFD}','\t','Z','\0','\0'],['ö','ß','…','\0','\0','\0','\0','\0']];
      let back=if selected{0xff36577c}else{SURFACES[0].color};
      let color=match scalars[row][column]{'\0'=>back,c=>geist_pixel(c as u32,factor,px,py,0xe0f0ff,back).unwrap_or(if ink{0xe0f0ff}else{back})};
      assert_eq!(composite_pixel(x,y,w,h,0,0, &pixel_scene_15),color,"scalar width={width} row={row} col={column}");

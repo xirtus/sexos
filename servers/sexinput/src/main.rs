@@ -65,6 +65,10 @@ const KEYBOARD_PROOF_ENABLED: bool = option_env!("SEXOS_KEYBOARD_PROOF").is_some
 /// Autonomous cursor demo gate. Drives silk-shell cursor demo via OP_AUTODEMO_TICK.
 /// Gate: SEXOS_CURSOR_AUTODEMO=1 at build time.
 /// Decoupled from SEXOS_KEYBOARD_CURSOR: keyboard cursor fallback no longer implies autodemo.
+/// Loops after which boot's timed input proofs are all done.
+const IDLE_AFTER_TICKS: u64 = 1024;
+/// Longest sleep with nothing queued: a lost wake costs at most this much latency.
+const IDLE_WAIT_TICKS: u64 = 32;
 const CURSOR_AUTODEMO_ENABLED: bool = option_env!("SEXOS_CURSOR_AUTODEMO").is_some();
 const OP_AUTODEMO_TICK: u64 = 0x2A0;
 // One-shot gate: set true after synthetic drag proof stages 0→1→2 complete.
@@ -289,7 +293,9 @@ impl KeyboardOutbox {
         // Media keys share their byte with D, C and B: give them their own codes
         // (sex_pdx::app_key::KEY_MUTE, KEY_VOLUME_DOWN, KEY_VOLUME_UP), and the player
         // keys share G, J, P and Q's (KEY_PLAY_PAUSE, KEY_STOP, KEY_NEXT, KEY_PREVIOUS).
-        if extended {edge.code=match edge.code {0x20=>0x75,0x2E=>0x76,0x30=>0x77,0x22=>0x78,0x24=>0x7A,0x19=>0x7C,0x10=>0x7F,c=>c};}
+        // Right Ctrl and right Alt (AltGr) get the codes USB keyboards give them, so
+        // layouts can tell AltGr from Alt whichever keyboard it is.
+        if extended {edge.code=match edge.code {0x20=>0x75,0x2E=>0x76,0x30=>0x77,0x22=>0x78,0x24=>0x7A,0x19=>0x7C,0x10=>0x7F,0x1D=>0x61,0x38=>0x64,c=>c};}
         self.push(&[edge])
     }
     /// One USB keyboard snapshot: modifiers plus up to six pressed usages packed one per
@@ -1263,7 +1269,11 @@ pub extern "C" fn _start() -> ! {
             pdx_call(SLOT_SHELL, OP_AUTODEMO_TICK, 0, 0, 0);
         }
 
-        // Polled devices: one tick of latency, not a spin.
-        let _=sex_pdx::sys_wait_self_ticks(1);
+        // Every source wakes this task: messages (USB reports from the USB service)
+        // and PS/2 scancodes (the kernel wakes the input ring's listener). So once
+        // boot's timed proofs are over and nothing waits to go to Shell, sleep long;
+        // the deadline only bounds a lost wake.
+        let idle=tick>IDLE_AFTER_TICKS&&keyboard_outbox.len==0&&pointer_outbox.len==0;
+        let _=sex_pdx::sys_wait_self_ticks(if idle {IDLE_WAIT_TICKS} else {1});
     }
 }

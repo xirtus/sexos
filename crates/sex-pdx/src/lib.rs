@@ -1285,6 +1285,7 @@ pub mod sound_mixer;
 pub mod wifi_status;
 pub mod notify;
 pub mod desktop_look;
+pub mod window_switcher;
 pub mod document_view;
 
 pub mod display_boot;
@@ -1293,6 +1294,7 @@ pub mod display_frames;
 pub mod text_batch;
 pub mod text_region;
 pub mod program_store;
+pub mod package;
 pub mod crash_log;
 pub mod system_stats;
 pub mod program_memory;

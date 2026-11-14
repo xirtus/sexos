@@ -7,11 +7,15 @@ use sex_pdx::memory_region::{QUERY_VIEW, READ, WRITE};
 const CWD_MAX: usize = 512;
 const CAT_MAX: u64 = 32 * 1024;
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Cmd { Ls, Cd, Mkdir, Rm, Mv, Cat, Create, Write, Append(u8), Df, Program(u64, u64), Install, Mount, Unmount, Update }
-pub struct Client { sent_at: u64, cmd: Option<Cmd>, seq: u32, kind: u8, path_len: u16, offset: u64, length: u64, sent: bool, cwd: [u8; CWD_MAX], cwd_len: usize, carry: [u8; 160], carry_len: usize, shown: u64, data_len: usize }
+enum Cmd { Ls, Cd, Mkdir, Rm, Mv, Cat, Create, Write, Append(u8), Df, Program(u64, u64), Install, Mount, Unmount, Update, Package }
+pub struct Client { sent_at: u64, cmd: Option<Cmd>, seq: u32, kind: u8, path_len: u16, offset: u64, length: u64, sent: bool, cwd: [u8; CWD_MAX], cwd_len: usize, carry: [u8; 160], carry_len: usize, shown: u64, data_len: usize, bare: [u8; 16], bare_len: usize }
 /// How Files answered the last update request: OK go on, EXISTS nothing newer, else stop.
 pub static mut UPDATE_STATUS: Option<u8> = None;
-pub static mut FS: Client = Client { sent_at: 0, cmd: None, seq: 0, kind: 0, path_len: 0, offset: 0, length: 0, sent: false, cwd: [0; CWD_MAX], cwd_len: 0, carry: [0; 160], carry_len: 0, shown: 0, data_len: 0 };
+/// How Files answered the last package request.
+pub static mut PACKAGE_STATUS: Option<u8> = None;
+/// The last package report's lines meant for Spindle (URLs), newline separated.
+pub static mut PACKAGE_MACHINE: ([u8; 4096], usize) = ([0; 4096], 0);
+pub static mut FS: Client = Client { sent_at: 0, cmd: None, seq: 0, kind: 0, path_len: 0, offset: 0, length: 0, sent: false, cwd: [0; CWD_MAX], cwd_len: 0, carry: [0; 160], carry_len: 0, shown: 0, data_len: 0, bare: [0; 16], bare_len: 0 };
 
 fn region() -> Option<&'static mut [u8]> {
     let view = sex_pdx::memory_region_view(w::CLIENT_SLOT, 0, w::REGION_BYTES as u64, QUERY_VIEW | READ | WRITE).ok()?;
@@ -82,6 +86,16 @@ impl Client {
         }
         unsafe { UPDATE_STATUS = None; }
         self.start(Cmd::Update, w::UPDATE, at, 0, 0);
+        true
+    }
+    /// A package request (`sex_pdx::package`): `arg` is a path, name or key. The outcome
+    /// lands in [`PACKAGE_STATUS`] and Files' report goes to the scrollback.
+    pub fn start_package(&mut self, op: u64, arg: &[u8], length: u64) -> bool {
+        if self.busy() || arg.len() > w::PATH_BYTES { return false; }
+        let Some(region) = region() else { return false };
+        region[..arg.len()].copy_from_slice(arg);
+        unsafe { PACKAGE_STATUS = None; }
+        self.start(Cmd::Package, sex_pdx::package::KIND, arg.len(), op, length);
         true
     }
     /// Starts a command. False only for `ls` with arguments unusable here.
@@ -171,11 +185,18 @@ impl Client {
     /// A bare name means the program directory. `args` reach the program, and `flags`
     /// carry what the person allowed this run, such as the network.
     pub fn submit_program(&mut self, target: &[u8], args: &[u8], flags: u64, count: u64, sb: &mut Scrollback) {
+        self.submit_program_granted(target, args, flags, count, false, sb)
+    }
+    /// `packages`: the run may install and remove packages (`run +pkg`). Files sees that as
+    /// the argument `+packages`, which only this adds: a typed one is dropped.
+    pub fn submit_program_granted(&mut self, target: &[u8], args: &[u8], flags: u64, count: u64, packages: bool, sb: &mut Scrollback) {
         if self.busy() { sb.push(b"The disk is busy with the last command."); return; }
         let Some(region) = region() else { sb.push(b"The disk is not available."); return };
         if args.len() > w::ARGS_MAX { sb.push(b"Arguments too long."); return; }
         let mut path = [0u8; w::PATH_BYTES];
         let mut named = [0u8; 64];
+        self.bare_len = 0;
+        if !target.contains(&b'/') && target.len() <= self.bare.len() { self.bare[..target.len()].copy_from_slice(target); self.bare_len = target.len(); }
         let target = if target.contains(&b'/') { target } else {
             let bin = sex_pdx::program_store::BIN;
             if bin.len() + target.len() > named.len() { sb.push(b"Name too long."); return; }
@@ -187,7 +208,9 @@ impl Client {
         // `@PATH` gives the program that one file or folder: it travels as `@/absolute/path`.
         let mut given = [0u8; w::ARGS_MAX];
         let mut m = 0;
-        for word in args.split(|b| *b == b' ').filter(|w| !w.is_empty()) {
+        let token = sex_pdx::package::GRANT_TOKEN;
+        if packages { given[..token.len()].copy_from_slice(token); m = token.len(); }
+        for word in args.split(|b| *b == b' ').filter(|w| !w.is_empty() && *w != token) {
             let mut piece = [0u8; w::ARGS_MAX];
             let word: &[u8] = match word.strip_prefix(b"@") {
                 Some(file) => {
@@ -243,6 +266,24 @@ impl Client {
         let Some(region) = region() else { self.cmd = None; return true };
         let data_at = w::PATH_BYTES;
         sex_pdx::serial_record!("[spindle.fs.result] kind={} status={} value={}", self.kind, status, value);
+        if cmd == Cmd::Package {
+            self.cmd = None;
+            let bytes = &region[data_at..data_at + (value as usize).min(w::DATA_MAX)];
+            let machine = unsafe { &mut *core::ptr::addr_of_mut!(PACKAGE_MACHINE) };
+            machine.1 = 0;
+            for line in bytes.split(|b| *b == b'\n').filter(|l| !l.is_empty()) {
+                if line[0] == sex_pdx::package::MACHINE {
+                    let l = &line[1..];
+                    if machine.1 + l.len() + 1 <= machine.0.len() { machine.0[machine.1..machine.1 + l.len()].copy_from_slice(l); machine.0[machine.1 + l.len()] = b'\n'; machine.1 += l.len() + 1; }
+                    continue;
+                }
+                sex_pdx::serial_record!("[spindle.pkg.line] {}", shown(line));
+                for part in line.chunks(96) { sb.push(part); }
+            }
+            if value == 0 && status != w::OK { say!(sb, "pkg: {}", shown(w::message(status))); }
+            unsafe { PACKAGE_STATUS = Some(status); }
+            return true;
+        }
         if cmd == Cmd::Update {
             // Files' report, whatever it decided.
             self.cmd = None;
@@ -262,6 +303,14 @@ impl Client {
                 return true;
             }
             self.cmd = None;
+            // A bare name with no filesystem to prepare it: the disk program store may have it.
+            if let (Cmd::Program(0, _), true) = (cmd, self.bare_len > 0) {
+                if let Some(name) = sex_pdx::program_store::pack_name(&self.bare[..self.bare_len]) {
+                    let asked = sex_pdx::pdx_call_checked(crate::SLOT_SHELL, sex_pdx::program_store::OP_RUN, name[0], name[1], 0).is_ok();
+                    say!(sb, "{}", if asked { "Asked for the program. A window opens if it starts." } else { "Could not reach the shell." });
+                    return true;
+                }
+            }
             // A disk too small for a filesystem still has the old object list.
             if status == w::UNAVAILABLE && cmd == Cmd::Ls {
                 let accepted = unsafe { !crate::HISTORY_IO.fenced() && crate::STORAGE_PROBE.submit(crate::storage_probe::Job::List) };
@@ -356,9 +405,13 @@ impl Client {
                 }
             }
             Cmd::Unmount => { say!(sb, "Safe to remove."); }
-            Cmd::Update => {}
+            Cmd::Update | Cmd::Package => {}
             Cmd::Program(count, flags) => {
                 use sex_pdx::program_store as store;
+                // A package's program: ask the person first, or apply what they said.
+                let note = sex_pdx::package::Note::decode(&region[data_at..data_at + sex_pdx::package::NOTE_BYTES]);
+                let name = if self.bare_len > 0 { &self.bare[..self.bare_len] } else { let path = &region[..self.path_len as usize]; path.rsplit(|b| *b == b'/').next().unwrap_or(path) };
+                let Some(flags) = (unsafe { crate::pkg_command::PKG.before_run(note, name, value, flags, count, sb) }) else { self.cmd = None; return true };
                 let (op, third) = if count == 0 { (store::OP_RUN, flags) } else { (store::OP_SPAWN, count) };
                 let asked = sex_pdx::pdx_call_checked(crate::SLOT_SHELL, op, store::TICKET, value as u64, third).is_ok();
                 say!(sb, "{}", if !asked { "Could not reach the shell." } else if count == 0 { "Asked for the program. A window opens if it starts." } else { "Asked for background programs. Check with: records" });

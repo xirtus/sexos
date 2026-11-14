@@ -1,0 +1,20 @@
+[package]
+name = "sex-shape"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later OR MIT"
+description = "Text shaping for SexOS: bidirectional order, Arabic joining in text cells, and OpenType shaping with rustybuzz"
+
+[dependencies]
+# MIT. Only with the `shaping` feature: proportional text (titles, the browser).
+rustybuzz = { version = "0.20", default-features = false, optional = true }
+
+[dev-dependencies]
+# MIT/Apache-2.0: the reference the line algorithm is checked against.
+unicode-bidi = "0.3.18"
+# MIT/Apache-2.0: the reference the wide-character table is checked against.
+unicode-width = "0.2"
+
+[features]
+default = []
+shaping = ["dep:rustybuzz"]

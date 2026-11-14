@@ -19,6 +19,8 @@ pub const EV_WHEEL:u64=app_scroll::CLASS;
 #[path = "../servers/silk-shell/src/desktop_keys.rs"] mod desktop_keys;
 #[path = "../servers/silk-shell/src/wm.rs"] #[allow(dead_code)] mod wm;
 #[path = "../servers/silk-shell/src/browser_input.rs"] mod browser_input;
+// Built with `--extern sex_keymap=...` (scripts/clipboard_host_gate.sh).
+#[path = "../servers/silk-shell/src/keyboard_layout.rs"] mod keyboard_layout;
 use app_input::{Input, Intake, Item, Queue, CAPACITY, INTAKE_DEFER_TURNS};
 use app_key::{Key, Modifiers};
 use clipboard::{Action, Participant, Subject};
@@ -29,7 +31,7 @@ fn participant(pd: u32, task: u32) -> Participant {
 }
 fn item(n: usize, destination: Participant) -> Item {
     Item { destination, input: if n%5==0 { Input::Clipboard(Action::Copy) } else {
-        if n%3==0 { Input::Scroll(app_scroll::Scroll::new(if n%2==0{-1}else{1}).unwrap()) } else { Input::Key(Key { code: (n%255+1)as u8, shift: n%2!=0, control:n%3==0 }) } } }
+        if n%3==0 { Input::Scroll(app_scroll::Scroll::new(if n%2==0{-1}else{1}).unwrap()) } else { Input::Key(Key::new((n%255+1)as u8,n%2!=0,n%3==0)) } } }
 }
 fn drain(queue: &mut Queue) -> Vec<Item> {
     let mut result=Vec::new();while let Some(front)=queue.front() {result.push(front);queue.pop();}result
@@ -68,14 +70,20 @@ fn drain(queue: &mut Queue) -> Vec<Item> {
     let old=Item{destination:participant(9,9),input:Input::Key(m.key(0x2e))};assert!(q.push(old));
     // Focus moves while both physical shifts/controls are down.
     assert!(m.observe(0x2a,0));assert!(m.observe(0x1d,0));let new=Item{destination:participant(15,15),input:Input::Key(m.key(0x2f))};assert!(q.push(new));
-    assert!(m.observe(0x36,0));assert!(m.observe(0x61,0));assert_eq!(m.key(0x1e),Key{code:0x1e,shift:false,control:false});
+    assert!(m.observe(0x36,0));assert!(m.observe(0x61,0));assert_eq!(m.key(0x1e),Key::new(0x1e,false,false));
     assert_eq!(drain(&mut q),[old,new]);assert!(matches!(new.input,Input::Key(Key{shift:true,control:true,..})));
-    for code in [0x2a,0x36,0x1d,0x61] {assert!(!m.observe(code,2));}assert!(!m.observe(0x20,1));assert_eq!(m.key(0x20),Key{code:0x20,shift:false,control:false});
+    for code in [0x2a,0x36,0x1d,0x61] {assert!(!m.observe(code,2));}assert!(!m.observe(0x20,1));assert_eq!(m.key(0x20),Key::new(0x20,false,false));
 }
 #[test] fn key_wire_is_canonical_for_all_codes_modifiers_and_reserved_bits() {
     for code in 1..=255 {for shift in [false,true] {for control in [false,true] {
-        let key=Key{code,shift,control};assert_eq!(Key::decode(key.wire(),1,1),Some(key));
-        for bit in (10..16).chain(17..64) {assert!(Key::decode(key.wire()|1u64<<bit,1,1).is_none());}
+        let key=Key::new(code,shift,control);assert_eq!(Key::decode(key.wire(),1,1),Some(key));
+        for bit in (10..16).chain(18..64) {assert!(Key::decode(key.wire()|1u64<<bit,1,1).is_none());}
+        // What the layout typed rides in bit 17 and bits 32..53; a scalar needs the flag.
+        for text in [app_key::Text::Nothing,app_key::Text::Char('ü'),app_key::Text::Char('€'),app_key::Text::Char('😀')] {
+            let typed=Key{text,..key};assert_eq!(Key::decode(typed.wire(),1,1),Some(typed));
+        }
+        assert!(Key::decode(key.wire()|(0xfc_u64<<32),1,1).is_none());
+        assert!(Key::decode(key.wire()|1<<17|(0xd800_u64<<32),1,1).is_none());
         for (down,class) in [(0,1),(2,1),(1,0),(1,2),(u64::MAX,1),(1,u64::MAX)] {assert!(Key::decode(key.wire(),down,class).is_none());}
     }}}
     for word in [0,1,255,1<<16,(1<<16)|256,u64::MAX] {assert!(Key::decode(word,1,1).is_none());}
@@ -142,6 +150,8 @@ mod shell {
     static mut SENT:Vec<(u64,u64,[u64;3])>=Vec::new();
     static mut VOLUME_STEPS:Vec<i8>=Vec::new();
     unsafe fn volume_key(step:i8){VOLUME_STEPS.push(step);}
+    static mut PREEDIT_NOTICES:usize=0;
+    unsafe fn keyboard_preedit_notice()->bool{PREEDIT_NOTICES+=1;true}
     static mut PLAYER_KEYS:Vec<u8>=Vec::new();
     unsafe fn player_key(code:u8){PLAYER_KEYS.push(code);}
     const SURFACE_ID_BELL_PLACEHOLDER:u64=204;
@@ -157,8 +167,13 @@ mod shell {
     fn is_pointer_move(word:u64)->bool{matches!(app_pointer::Pointer::decode(word,0,app_pointer::CLASS),Some(app_pointer::Pointer{kind:app_pointer::Kind::Move,..}))}
     unsafe fn toggle_command_palette(){COMMAND_PALETTE_OPEN=!COMMAND_PALETTE_OPEN;PALETTE_TOGGLES+=1;}
     unsafe fn focus_next_frame(){FOCUSED_SURFACE_ID=if FOCUSED_SURFACE_ID==156{300}else{156};FOCUS_CHANGES+=1;}
+    // Production's switcher steps focus once per Alt+Tab; ending it keeps that focus.
+    unsafe fn switcher_step(_:i8){focus_next_frame();}
+    unsafe fn switcher_end(_:bool){}
+    // The overview is closed in these cases; production returns false then.
+    unsafe fn overview_key(_:u8,_:u64)->bool{false}
     include!(env!("APP_INPUT_PRODUCTION"));
-    unsafe fn reset(){POINTER_BUTTONS=0;INTERACTION=InteractionState::Idle;DISPLAY_SCALE=desktop_style::chrome::ScaleClient::new();APP_INPUT=Queue::new();CLIPBOARD_INTAKE=Intake::new();CLIPBOARD=broker::Broker::new();APP_MODIFIERS=Modifiers::new();DESKTOP_KEYS=desktop_keys::Keys::new();WM_CHORDS=wm::Chords::new();WM_ACTIONS.clear();FOCUSED_SURFACE_ID=156;COMMAND_PALETTE_OPEN=false;FOCUS_CHANGES=0;PALETTE_TOGGLES=0;for pd in [9,15,16,18]{CLIPBOARD.register(app_lifecycle::CatalogInfo{target_pd:pd,task_id:pd,surface_id:participant(pd,pd).surface,coordinator_pd:3}).unwrap();}LIVE=Some(true);SOURCE_LIVE=None;LIVE_ONCE=None;STATUS=0;SENT.clear();LIVE_QUERIES.clear();VOLUME_STEPS.clear();PLAYER_KEYS.clear();}
+    unsafe fn reset(){keyboard_layout::reset();POINTER_BUTTONS=0;INTERACTION=InteractionState::Idle;DISPLAY_SCALE=desktop_style::chrome::ScaleClient::new();APP_INPUT=Queue::new();CLIPBOARD_INTAKE=Intake::new();CLIPBOARD=broker::Broker::new();APP_MODIFIERS=Modifiers::new();DESKTOP_KEYS=desktop_keys::Keys::new();WM_CHORDS=wm::Chords::new();WM_ACTIONS.clear();FOCUSED_SURFACE_ID=156;COMMAND_PALETTE_OPEN=false;FOCUS_CHANGES=0;PALETTE_TOGGLES=0;for pd in [9,15,16,18]{CLIPBOARD.register(app_lifecycle::CatalogInfo{target_pd:pd,task_id:pd,surface_id:participant(pd,pd).surface,coordinator_pd:3}).unwrap();}LIVE=Some(true);SOURCE_LIVE=None;LIVE_ONCE=None;STATUS=0;SENT.clear();LIVE_QUERIES.clear();VOLUME_STEPS.clear();PLAYER_KEYS.clear();}
     #[test]fn actual_scale_shortcut_retains_admission_and_never_repeats_an_applied_step(){
         let _guard=LOCK.lock().unwrap();unsafe{reset();
             assert!(desktop_shortcut(0x1d,1));assert!(desktop_shortcut(0x38,1));
@@ -247,8 +262,60 @@ mod shell {
     }
     #[test] fn actual_shortcut_delivers_ps2_usb_browser_navigation_with_exact_modifier_snapshot(){
         let _lock=LOCK.lock().unwrap();unsafe{for (raw,canonical)in [(0x47,0x66),(0x48,0x67),(0x49,0x68),(0x4b,0x69),(0x4d,0x6a),(0x4f,0x6b),(0x50,0x6c),(0x51,0x6d)]{for code in [raw,canonical]{for shift in [false,true]{for control in [false,true]{
-            reset();FOCUSED_SURFACE_ID=300;if shift{assert!(desktop_shortcut(0x36,1));}if control{assert!(desktop_shortcut(0x61,1));}assert!(SENT.is_empty());assert!(desktop_shortcut(code,1));assert_eq!(SENT.len(),1);let(route,opcode,args)=SENT[0];assert_eq!((route,opcode),(43,OP_HID_EVENT));assert_eq!(Key::decode(args[0],args[1],args[2]),Some(Key{code:canonical,shift,control}));assert!(desktop_shortcut(code,0));assert_eq!(SENT.len(),1);
+            reset();FOCUSED_SURFACE_ID=300;if shift{assert!(desktop_shortcut(0x36,1));}if control{assert!(desktop_shortcut(0x61,1));}assert!(SENT.is_empty());assert!(desktop_shortcut(code,1));assert_eq!(SENT.len(),1);let(route,opcode,args)=SENT[0];assert_eq!((route,opcode),(43,OP_HID_EVENT));assert_eq!(Key::decode(args[0],args[1],args[2]),Some(Key::new(canonical,shift,control)));assert!(desktop_shortcut(code,0));assert_eq!(SENT.len(),1);
         }}}}reset();for code in [0x53,0x6f]{assert!(desktop_shortcut(code,1));let(route,_,args)=*SENT.last().unwrap();assert_eq!(route,41);assert_eq!(Key::decode(args[0],args[1],args[2]).unwrap().code,code);}}
+    }
+    #[test] fn actual_shortcut_carries_the_layouts_characters_dead_keys_and_altgr(){
+        let _lock=LOCK.lock().unwrap();unsafe{reset();FOCUSED_SURFACE_ID=300;
+        let typed=|code:u8|->app_key::Text{let before=SENT.len();assert!(desktop_shortcut(code,1));assert!(desktop_shortcut(code,0));assert_eq!(SENT.len(),before+1);let(_,_,args)=*SENT.last().unwrap();Key::decode(args[0],args[1],args[2]).unwrap().text};
+        // US: the plain wire programs built before layouts read.
+        while keyboard_layout::active_label()!="US"{keyboard_layout::next();}
+        assert_eq!(typed(0x15),app_key::Text::Us);
+        assert_eq!(keyboard_layout::next(),("DE","German"));
+        assert_eq!(typed(0x15),app_key::Text::Char('z'));
+        assert_eq!(typed(0x1a),app_key::Text::Char('ü'));
+        assert_eq!(typed(0x0d),app_key::Text::Nothing);
+        assert_eq!(typed(0x12),app_key::Text::Char('é'));
+        // AltGr goes to the layout, not the program: AltGr+Q is @.
+        let before=SENT.len();assert!(desktop_shortcut(0x64,1));assert_eq!(SENT.len(),before);
+        assert_eq!(typed(0x10),app_key::Text::Char('@'));
+        assert!(desktop_shortcut(0x64,0));assert_eq!(SENT.len(),before+1);
+        // Super+Ctrl+Space steps the layout.
+        assert!(desktop_shortcut(0x5b,1));assert!(desktop_shortcut(0x1d,1));assert!(desktop_shortcut(0x39,1));
+        assert_eq!(WM_ACTIONS.last(),Some(&wm::WmAction::KeyboardLayout));
+        assert!(desktop_shortcut(0x39,0));assert!(desktop_shortcut(0x1d,0));assert!(desktop_shortcut(0x5b,0));
+        while keyboard_layout::active_label()!="US"{keyboard_layout::next();}}
+    }
+    #[test] fn actual_ctrl_shortcuts_follow_the_letter_on_the_key(){
+        let _lock=LOCK.lock().unwrap();unsafe{reset();FOCUSED_SURFACE_ID=300;
+        let ctrl=|code:u8|->Key{let before=SENT.len();assert!(desktop_shortcut(0x1d,1));assert!(desktop_shortcut(code,1));assert!(desktop_shortcut(code,0));assert!(desktop_shortcut(0x1d,0));assert_eq!(SENT.len(),before+1);let(_,_,args)=*SENT.last().unwrap();Key::decode(args[0],args[1],args[2]).unwrap()};
+        while keyboard_layout::active_label()!="US"{keyboard_layout::next();}
+        assert_eq!(ctrl(0x2c).code,0x2c);
+        // German: the key labelled Z (US Y position) is Ctrl+Z, undo.
+        while keyboard_layout::active_label()!="DE"{keyboard_layout::next();}
+        let k=ctrl(0x15);assert_eq!((k.code,k.control),(0x2c,true));
+        assert_eq!(ctrl(0x2c).code,0x15);
+        // Plain typing keeps the physical key.
+        let before=SENT.len();assert!(desktop_shortcut(0x15,1));assert!(desktop_shortcut(0x15,0));assert_eq!(SENT.len(),before+1);
+        let(_,_,args)=*SENT.last().unwrap();assert_eq!(Key::decode(args[0],args[1],args[2]).unwrap().code,0x15);
+        while keyboard_layout::active_label()!="US"{keyboard_layout::next();}}
+    }
+    #[test] fn actual_shortcut_pinyin_commits_nihao_as_text_keys(){
+        let _lock=LOCK.lock().unwrap();unsafe{reset();FOCUSED_SURFACE_ID=300;
+        while keyboard_layout::active_label()!="PY"{keyboard_layout::next();}
+        // n i h a o: the input method takes them, the panel shows the pre-edit.
+        for code in [0x31,0x17,0x23,0x1e,0x18]{assert!(desktop_shortcut(code,1));assert!(desktop_shortcut(code,0));}
+        assert!(SENT.is_empty());assert_eq!(PREEDIT_NOTICES,5);
+        let mut line=[0u8;160];let n=keyboard_layout::preedit_line(&mut line);
+        assert!(std::str::from_utf8(&line[..n]).unwrap().starts_with("nihao  1 你好"));
+        // Space commits 你好: two text-only keys.
+        assert!(desktop_shortcut(0x39,1));assert!(desktop_shortcut(0x39,0));
+        // Shell's loop polls while input is queued; one key goes per poll.
+        for _ in 0..4{if APP_INPUT.pending(){app_input_poll();}}
+        let typed:Vec<_>=SENT.iter().map(|(_,_,a)|Key::decode(a[0],a[1],a[2]).unwrap()).collect();
+        assert_eq!(typed.iter().map(|k|(k.code,k.text)).collect::<Vec<_>>(),vec![(app_key::KEY_TEXT,app_key::Text::Char('你')),(app_key::KEY_TEXT,app_key::Text::Char('好'))]);
+        // With nothing composed, Space and digits are the program's again.
+        assert!(desktop_shortcut(0x39,1));assert_eq!(Key::decode(SENT.last().unwrap().2[0],1,1).unwrap().code,0x39);}
     }
     #[test] fn actual_shortcut_preserves_shell_grave_function_and_explicit_global_reserved_keys(){
         let _lock=LOCK.lock().unwrap();unsafe{for focus in [156,300]{reset();FOCUSED_SURFACE_ID=focus;for code in [0x0f,0x29,0x3b,0x3c,0x3d,0x3e,0x3f,0x40,0x41,0x42,0x43,0x44,0x46,0x52,0x57,0x58,0x59]{assert!(!desktop_shortcut(code,1),"reserved code={code:#x}");assert!(!APP_INPUT.pending());assert!(SENT.is_empty());}}
@@ -256,7 +323,7 @@ mod shell {
     }
     #[test] fn actual_alt_tab_consumes_one_switch_and_modifiers_release_correctly_after_focus_change(){
         let _lock=LOCK.lock().unwrap();unsafe{reset();for code in [0x2a,0x36,0x1d,0x61]{assert!(desktop_shortcut(code,1));}COMMAND_PALETTE_OPEN=true;assert!(desktop_shortcut(0x38,1));assert!(desktop_shortcut(0x0f,1));assert_eq!(FOCUSED_SURFACE_ID,300);assert_eq!(FOCUS_CHANGES,1);assert_eq!(PALETTE_TOGGLES,1);assert!(!COMMAND_PALETTE_OPEN);assert!(desktop_shortcut(0x0f,1));assert_eq!(FOCUS_CHANGES,1);assert!(desktop_shortcut(0x0f,0));assert!(desktop_shortcut(0x38,0));assert!(SENT.is_empty());
-        assert!(desktop_shortcut(0x2a,0));assert!(desktop_shortcut(0x1d,0));assert!(desktop_shortcut(0x4b,1));let(route,_,args)=*SENT.last().unwrap();assert_eq!(route,43);assert_eq!(Key::decode(args[0],args[1],args[2]),Some(Key{code:0x69,shift:true,control:true}));assert!(desktop_shortcut(0x36,0));assert!(desktop_shortcut(0x61,0));assert!(desktop_shortcut(0x30,1));let(_,_,args)=*SENT.last().unwrap();assert_eq!(Key::decode(args[0],args[1],args[2]),Some(Key{code:0x30,shift:false,control:false}));assert_eq!(FOCUS_CHANGES,1);}
+        assert!(desktop_shortcut(0x2a,0));assert!(desktop_shortcut(0x1d,0));assert!(desktop_shortcut(0x4b,1));let(route,_,args)=*SENT.last().unwrap();assert_eq!(route,43);assert_eq!(Key::decode(args[0],args[1],args[2]),Some(Key::new(0x69,true,true)));assert!(desktop_shortcut(0x36,0));assert!(desktop_shortcut(0x61,0));assert!(desktop_shortcut(0x30,1));let(_,_,args)=*SENT.last().unwrap();assert_eq!(Key::decode(args[0],args[1],args[2]),Some(Key::new(0x30,false,false)));assert_eq!(FOCUS_CHANGES,1);}
     }
     #[test] fn alt_plus_minus_and_zero_size_the_focused_windows_text_and_never_reach_the_app(){
         let _lock=LOCK.lock().unwrap();unsafe{reset();FOCUSED_SURFACE_ID=300;
@@ -275,8 +342,8 @@ mod shell {
         assert!(!desktop_shortcut(0x0f,1));assert_eq!(FOCUS_CHANGES,1);assert!(!APP_INPUT.pending());assert!(SENT.is_empty());}}
     }
     #[test] fn actual_ctrl_c_intent_precedes_following_key_and_keeps_original_focus_destination(){
-        let _lock=LOCK.lock().unwrap();unsafe{reset();assert!(desktop_shortcut(0x36,1));assert!(desktop_shortcut(0x1e,1));assert_eq!(SENT.len(),1);assert!(desktop_shortcut(0x1d,1));STATUS=ERR_SERVICE_NOT_READY;assert!(desktop_shortcut(0x2e,1));assert!(CLIPBOARD.outbox_pending());assert!(desktop_shortcut(0x4d,1));let expected=Item{destination:participant(9,9),input:Input::Key(Key{code:0x4d,shift:true,control:true})};assert_eq!(APP_INPUT.front(),Some(expected));assert!(desktop_shortcut(0x2e,0));
-        FOCUSED_SURFACE_ID=300;STATUS=0;clipboard_poll();let intent_index=SENT.len()-1;assert_eq!((SENT[intent_index].0,SENT[intent_index].1),(41,clipboard::INTENT));app_input_poll();assert!(!APP_INPUT.pending());let(route,opcode,args)=*SENT.last().unwrap();assert_eq!((route,opcode),(41,OP_HID_EVENT));assert_eq!(Key::decode(args[0],args[1],args[2]),Some(Key{code:0x4d,shift:true,control:true}));assert!(SENT.len()-1>intent_index);assert!(desktop_shortcut(0x1d,0));assert!(desktop_shortcut(0x36,0));assert!(desktop_shortcut(0x30,1));let(route,_,args)=*SENT.last().unwrap();assert_eq!(route,43);assert_eq!(Key::decode(args[0],args[1],args[2]),Some(Key{code:0x30,shift:false,control:false}));}
+        let _lock=LOCK.lock().unwrap();unsafe{reset();assert!(desktop_shortcut(0x36,1));assert!(desktop_shortcut(0x1e,1));assert_eq!(SENT.len(),1);assert!(desktop_shortcut(0x1d,1));STATUS=ERR_SERVICE_NOT_READY;assert!(desktop_shortcut(0x2e,1));assert!(CLIPBOARD.outbox_pending());assert!(desktop_shortcut(0x4d,1));let expected=Item{destination:participant(9,9),input:Input::Key(Key::new(0x4d,true,true))};assert_eq!(APP_INPUT.front(),Some(expected));assert!(desktop_shortcut(0x2e,0));
+        FOCUSED_SURFACE_ID=300;STATUS=0;clipboard_poll();let intent_index=SENT.len()-1;assert_eq!((SENT[intent_index].0,SENT[intent_index].1),(41,clipboard::INTENT));app_input_poll();assert!(!APP_INPUT.pending());let(route,opcode,args)=*SENT.last().unwrap();assert_eq!((route,opcode),(41,OP_HID_EVENT));assert_eq!(Key::decode(args[0],args[1],args[2]),Some(Key::new(0x4d,true,true)));assert!(SENT.len()-1>intent_index);assert!(desktop_shortcut(0x1d,0));assert!(desktop_shortcut(0x36,0));assert!(desktop_shortcut(0x30,1));let(route,_,args)=*SENT.last().unwrap();assert_eq!(route,43);assert_eq!(Key::decode(args[0],args[1],args[2]),Some(Key::new(0x30,false,false)));}
     }
 }
 

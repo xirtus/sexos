@@ -229,3 +229,23 @@ fn websocket_handshake_and_frames() {
     bad.push(&[0x81, 0x81, 0, 0, 0, 0, 0]);
     assert_eq!(bad.next(), Err(1002));
 }
+
+#[test]
+fn woff_unpacks_to_the_font_it_wraps() {
+    let woff = include_bytes!("../../../scripts/web_site/fonts/geist-mono.woff");
+    let ttf = include_bytes!("../../../assets/fonts/geist/GeistMono-Regular.ttf");
+    assert_eq!(crate::woff::kind(woff), crate::woff::Kind::Woff);
+    let sfnt = crate::woff::to_sfnt(woff).unwrap();
+    // Same tables, same bytes, as the original file lists them.
+    let n = u16::from_be_bytes([ttf[4], ttf[5]]) as usize;
+    for i in 0..n {
+        let r = &ttf[12 + 16 * i..28 + 16 * i];
+        let tag = &r[..4];
+        let (off, len) = (u32::from_be_bytes(r[8..12].try_into().unwrap()) as usize, u32::from_be_bytes(r[12..16].try_into().unwrap()) as usize);
+        let s = (0..n).map(|j| &sfnt[12 + 16 * j..28 + 16 * j]).find(|e| &e[..4] == tag).unwrap();
+        let (so, sl) = (u32::from_be_bytes(s[8..12].try_into().unwrap()) as usize, u32::from_be_bytes(s[12..16].try_into().unwrap()) as usize);
+        assert_eq!(&sfnt[so..so + sl], &ttf[off..off + len], "table {:?}", core::str::from_utf8(tag));
+    }
+    assert_eq!(crate::woff::to_sfnt(b"wOF2\0\0\0\0"), None);
+    assert_eq!(crate::woff::to_sfnt(&ttf[..]).as_deref(), Some(&ttf[..]));
+}

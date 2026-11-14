@@ -69,6 +69,7 @@ pub fn init(sexdrive_pd_id: u32, sexdisplay_pd_id: u32, sexusb_pd_id: u32, sexne
             Lease::Wifi => class_lease(&dev, crate::device_lease::Kind::Wifi, pd, slot, first),
             Lease::Virtio => virtio(&dev, pd, slot, first),
             Lease::Display => display_lease(&dev, pd),
+            Lease::IntelDisplay => intel_display_lease(&dev, pd, slot),
         };
         if !leased { continue; }
         held[index] += 1;
@@ -164,6 +165,21 @@ fn display_lease(dev: &crate::hal::pci::PciDevice, pd: &ProtectionDomain) -> boo
         command: None,
         virtio: None, class: 0, window: (0, 0),
     }));
+    true
+}
+
+/// Intel display engine: a read/write view of its display registers so Display
+/// can read what firmware lit and talk to the panel over AUX. No command grant
+/// (firmware left memory decode on) and no DMA pool.
+fn intel_display_lease(dev: &crate::hal::pci::PciDevice, pd: &ProtectionDomain, slot: u64) -> bool {
+    let Some(view) = crate::boot_memory::intel_display_bar(pd, dev, slot) else {
+        serial_println!("[kernel.cap.display.skip] device={:04x} reason=bar0", dev.device_id); return false;
+    };
+    pd.grant_capability(slot, CapabilityData::Pci(PciCapData {
+        bus: dev.bus, dev: dev.dev, func: dev.func, vendor_id: dev.vendor_id, device_id: dev.device_id,
+        bar0_view: Some(view), command: None, virtio: None, class: 0x03_00_00 | dev.prog_if as u32, window: (0, view.length as u32),
+    }));
+    serial_println!("[kernel.cap.display.grant] pd={} slot={} device={:04x} bytes={}", pd.id, slot, dev.device_id, view.length);
     true
 }
 
