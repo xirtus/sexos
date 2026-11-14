@@ -12,6 +12,7 @@ from install_program import install
 from quil_autosave_gate import boot
 from program_egui_gate import colours
 from program_gate_geometry import maximize, current_tile
+from lua_gate import qcodes
 ROOT=Path(__file__).resolve().parents[1]
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
@@ -21,7 +22,8 @@ def main():
  rw,rh=map(int,a.resolution.split('x'))
  g=boot(a.iso,disk,a.out,'weft',a.resolution);t=g['text'];q=g['q']
  def keys(names):
-  for k in names:q.key(k);time.sleep(.08)
+  for k in names:
+   q.cmd('send-key',{'keys':[{'type':'qcode','data':k}],'hold-time':40});time.sleep(.12)
  def run(line):
   g['focus'](153);time.sleep(.5)
   keys(['spc' if k==' ' else k for k in line]);q.key('ret')
@@ -69,12 +71,11 @@ def main():
   def chord(*codes):
    q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':dn,'key':{'type':'qcode','data':x}}}for dn,ks in((True,codes),(False,tuple(reversed(codes))))for x in ks]})
   def text(value):
-   symbols={'+':('shift','equal'),'*':('shift','8'),'(':('shift','9'),')':('shift','0')}
+   # Keep modifiers and characters on the same queued QMP path. Immediate
+   # input-send-event chords can overtake pending send-key letters.
    for c in value:
-    if c in symbols:chord(*symbols[c])
-    elif c.isupper():chord('shift',c.lower())
-    else:q.key({' ':'spc','-':'minus','.':'dot','/':'slash'}.get(c,c))
-    time.sleep(.08)
+    q.cmd('send-key',{'keys':[{'type':'qcode','data':key}for key in qcodes(c)],'hold-time':40})
+    time.sleep(.12)
   def command(query,identity):
    start=len(t());chord('ctrl','shift','p');time.sleep(.3);text(query);q.key('ret')
    g['wait'](rf'\[abacus.command\] id={identity}\n',start,60);time.sleep(.2)
