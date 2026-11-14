@@ -1,0 +1,15 @@
+[package]
+name = "needle"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+
+[[bin]]
+name = "needle"
+path = "src/main.rs"
+
+[dependencies]
+sex-std = { path = "../../crates/sex-std" }
+sex-print = { path = "../../crates/sex-print" }
+sex-font = { path = "../../crates/sex-font" }
+sex-image = { path = "../../crates/sex-image" }
