@@ -30,6 +30,10 @@ fn main() {
         ("swap", ""),
         ("crash", "__builtin_trap();"),
         ("hang", "for (;;) { __asm__ volatile(\"pause\"); }"),
+        (
+            "restart",
+            "if (process->steady_time >= 1024) plug->host->request_restart(plug->host);",
+        ),
     ] {
         let process = "   const uint32_t nframes = process->frames_count;";
         assert!(source.contains(process));
