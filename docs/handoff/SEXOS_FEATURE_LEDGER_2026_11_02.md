@@ -4198,6 +4198,10 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
 ## Fix: USB Ethernet regression from #196 (2026-11-14)
 - usb_net_gate failed on master ("fetch: could not connect"). With MSI-X wakes, sexusb idled 32 ticks between passes. Two gaps: `sleep_ticks` took interrupts for events the main loop had not drained yet, and the network's USB Ethernet transmit ring has no wake. Now `xhci::SLEPT` makes the next wait 1 tick after any sleep in a pass, and the loop polls every tick while an Ethernet adapter is up (`Usb::ether_active`). usb_net_gate passes; idle QEMU CPU 19%.
 
+## G-4: Image codecs crate for WebP, animated GIF, AVIF and HEIC (2026-11-14)
+- New `#![forbid(unsafe_code)]` library crate `crates/sex-codecs` (`sex_image::{Image, Limits}` compatible, `#![no_std]` on `x86_64-sex-app` for WebP/GIF/HEIC/ISOBMFF plus `rusty_av1d` AVIF): still and animated WebP (`ANIM`/`ANMF`), streaming GIF89a (`AnimationDecoder`, 4 disposal modes), ISOBMFF/MIAF demuxer (`grid`, `auxC` alpha, `irot`, `imir`, `clap`), AVIF (`rusty_av1d`) and HEIC (`heic-rs`).
+- Gate: `scripts/sex_codecs_host_gate.sh` (4-quadrant pixel-fidelity tests across all 4 formats, 50k mutation fuzz suite, and `x86_64-sex-app` target check).
+
 ## J1b: end a program from the system monitor (2026-11-14)
 - Mesh (apps/monitor): Up/Down choose a line (marked `>`), Delete ends that program; the result shows under the list. Logs `[monitor.choose]`, `[monitor.end]`.
 - New PDX op (ABI addition): `system_stats::OP_END_PROGRAM` 0x3A2 to the Shell (SLOT_SHELL), answers OK / NOT_A_PROGRAM 4 / NOT_FOCUSED 5 / NOT_ENDED 6. Only the focused program may ask; only Program rows can be ended, never services. Shell logs `[shell.program.end]`.
