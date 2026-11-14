@@ -4349,7 +4349,7 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
 - Local Lock wipes owned buffers immediately; provider revocation is ACK/retry
   fenced before visible completion or unlock, even at full native intake/transport.
   Small550x144 tiles cannot approve hidden scope; full context/resize rechecked.
--26 canonical app/core and17 routing/native-wrapper host tests pass; std guest
+-30 canonical app/core and17 routing/native-wrapper host tests pass; std guest
   builds/scans. Scoped fail-closed entropy covers all KDBX random values. Header/KDF
   preflight precedes allocations. Reviewed Argon2 wiping, bounded decompression and
   shared cumulative attachment budget are included.
@@ -4360,5 +4360,7 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   actual Close retires the run after local wipe (dead custody cannot receive ACK).
   Final live2app consent gate also passes: default deny, visible allow once, reused
   consumer run and Lock unavailable. Exact artifacts/hashes in CHASTITY_RUNTIME_2026_11_14.md.
+  Final file admission897ff617 bounds reads before allocation and preserves existing
+  unreadable/oversized vaults as locked; fournew host tests and final two-bootbaseline pass.
   Remote CI remains pending; no merges until all relevant checks green.
 - Details: CHASTITY_2026_11_14.md and CHASTITY_AUTOFILL_2026_11_14.md.
