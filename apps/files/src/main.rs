@@ -123,6 +123,8 @@ struct App {
     showing_pixels: bool,
     /// Archives, ratings and tags, batch rename, duplicates, disk usage, compare.
     loom: loom::Loom,
+    /// A file Enter opened, until its program has started (or couldn't).
+    opening: Option<(u32, Vec<u8>)>,
 }
 
 /// The path as Files knows a granted one: `@/absolute/path`.
@@ -541,6 +543,27 @@ impl App {
             Err(e) => { self.status = format!("Couldn't undo: {}.", shown(files::message(e))); self.undo.push(step); }
         }
     }
+    /// Enter on a file: it opens in its program, which is given that file alone.
+    fn open_file(&mut self, name: &[u8], path: &[u8]) {
+        let Some(program) = opener(name, path) else { self.status = format!("No program opens {} yet.", shown(name)); return };
+        let mut args = [0u8; w::ARGS_MAX];
+        let Some(n) = sex_pdx::launch::open_args(path, &mut args) else {
+            self.status = format!("{} can't be opened from here yet: its path has a space in it.", shown(name));
+            return;
+        };
+        let cookie = OPENS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        match sex_app::launch::run(&program, &args[..n], false, cookie) {
+            Ok(()) => {
+                sex_pdx::serial_record!("[files.app.open] program={} path={}", shown(&program), shown(path));
+                self.status = format!("Opening {} in {}.", shown(name), shown(&program));
+                self.opening = Some((cookie, program));
+            }
+            Err(e) => {
+                sex_pdx::serial_record!("[files.app.open.failed] program={} path={} error={:?}", shown(&program), shown(path), e);
+                self.status = format!("Couldn't open {} in {}.", shown(name), shown(&program));
+            }
+        }
+    }
     /// A password typed for home.
     fn password(&mut self, window: &mut Window, secret: Secret, text: &[u8]) {
         use sex_pdx::home_lock as h;
@@ -783,7 +806,7 @@ impl App {
                 }
                 if e.dir { self.go(window, path); }
                 else if matches!(self.question.as_ref().map(|q| q.mode), Some(Pick::Open)) { self.answer(window, Some(path)); }
-                else { self.status = opens_with(&e.name, e.size, &path); }
+                else { let name = e.name.clone(); self.open_file(&name, &path); }
             }
             (BACKSPACE, _) => {
                 // Never above what this run was given.
@@ -802,23 +825,22 @@ impl App {
     }
 }
 
-/// What Enter on a file says: the program settings chose for its kind (Default apps).
-fn opens_with(name: &[u8], size: u64, path: &[u8]) -> String {
+/// The program Enter opens a file with: the one Settings chose for its kind (Default
+/// apps), else the system's for its type.
+fn opener(name: &[u8], path: &[u8]) -> Option<Vec<u8>> {
     let chosen = sex_config::kind_of(name).and_then(|kind| {
         let k = sex_config::key(kind)?;
         let v = sex_app::settings::get(kind).unwrap_or(k.default);
         match k.kind { sex_config::Kind::Choice(names) => names.get(v as usize).copied(), _ => None }
     });
-    match chosen {
-        Some(program) => format!("{}: {}. Opens with {}: run {} @{}", shown(name), human(size), program, program, shown(path)),
-        None => format!("{}: {}. Programs open it with run NAME @{}.", shown(name), human(size), shown(path)),
-    }
+    chosen.map(|p| p.as_bytes().to_vec()).or_else(|| sex_pdx::launch::program_for(path).map(|p| p.to_vec()))
 }
+static OPENS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0x0F11_0000);
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     let mut window = Window::open();
-    window.title(b"Files");
+    window.title(b"Loom");
     // The folder the person gave: `@/` is everything.
     let mut args = [0u8; w::ARGS_MAX];
     let given = files::args(&mut window, &mut args);
@@ -830,7 +852,7 @@ pub extern "C" fn _start() -> ! {
     };
     let portal = root == b"/";
     let mut app = App { cwd: root.clone(), root, entries: Vec::new(), cursor: 0, top: 0, clip: None, undo: Vec::new(), input: None, status: String::new(), question: None, disk_ask: None, portal,
-                        job: None, job_undo: None, job_select: None, last_drawn: 0, last_pct: 0, confirm: None, origins: Vec::new(), watching: None, last_look: 0, index: Index::new(), search: None, found: None, thumbs: Thumbs::new(), showing_pixels: false, loom: loom::Loom::new() };
+                        job: None, job_undo: None, job_select: None, last_drawn: 0, last_pct: 0, confirm: None, origins: Vec::new(), watching: None, last_look: 0, index: Index::new(), search: None, found: None, thumbs: Thumbs::new(), showing_pixels: false, loom: loom::Loom::new(), opening: None };
     app.meta_load(&mut window);
     let start = app.root.clone();
     app.go(&mut window, start);
@@ -846,6 +868,18 @@ pub extern "C" fn _start() -> ! {
     // Where the left button went down, until a drag starts or it comes up.
     let mut press: Option<(i32, i32)> = None;
     loop {
+        if let Some((cookie, program)) = app.opening.clone() {
+            match sex_app::launch::poll(cookie) {
+                Some(sex_app::launch::Event::Refused { code, .. }) => {
+                    app.opening = None;
+                    sex_pdx::serial_record!("[files.app.open.refused] program={} code={}", shown(&program), code);
+                    app.status = if code == sex_pdx::program_store::NOT_FOUND { format!("{} isn't installed.", shown(&program)) } else { format!("{} couldn't start.", shown(&program)) };
+                    app.render(&mut window);
+                }
+                Some(_) => app.opening = None,
+                None => {}
+            }
+        }
         // While a job runs, look for keys between its pieces instead of sleeping.
         let event = if app.job.is_some() || app.search.is_some() || app.thumbs.busy() || app.loom.busy() {
             match window.poll() { Some(e) => Some(e), None => { if app.work(&mut window) { app.render(&mut window); } continue; } }

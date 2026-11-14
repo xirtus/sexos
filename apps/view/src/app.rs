@@ -525,7 +525,7 @@ pub fn main() {
         std::process::exit(status);
     }
     let window = sex_std::window();
-    window.title(b"View");
+    window.title(b"Gaze");
     let mut state = State { shown: 0, playing: None, look: Look::default(), still: None, scratch: Vec::new(), slides: None, auto: None, drag: None,
         panel: Panel { on: false, lines: Vec::new(), letters: Letters::new() } };
     match words.iter().find(|w| !w.is_empty()).map(|f| f.as_bytes().to_vec()) {

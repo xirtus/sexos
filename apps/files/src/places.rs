@@ -8,7 +8,7 @@
 //! down into the folder Files was in; Ctrl+V uploads what Ctrl+C picked; Esc leaves.
 //!
 //! The network is the person's to give: Files reaches it only in a run started with
-//! `run +net files`; otherwise opening a place says so and nothing else happens.
+//! `run +net loom`; otherwise opening a place says so and nothing else happens.
 //! Passwords and keys live in memory only, for this run (wiped when forgotten or when
 //! Files closes); they are never written down or put in a record.
 //!
@@ -387,9 +387,9 @@ impl App {
     }
     fn connect(&mut self, window: &mut Window, i: usize) -> Result<Box<dyn Place>, String> {
         let s = &self.loom.places.saved[i];
-        // The network is given at launch (`run +net files`); ask the service first so the
+        // The network is given at launch (`run +net loom`); ask the service first so the
         // answer is plain.
-        if let Err(e) = net::direct::up() { return Err(String::from(shown(net::message(e))).replace("This program was not given the network. Start it with run +net.", "Files was started without the network: start it with run +net files")); }
+        if let Err(e) = net::direct::up() { return Err(String::from(shown(net::message(e))).replace("This program was not given the network. Start it with run +net.", "Files was started without the network: start it with run +net loom")); }
         let authority = if (s.tls && s.port == 443) || (!s.tls && s.port == 80) { s.host.clone() } else { format!("{}:{}", s.host, s.port) };
         match s.proto {
             Proto::Sftp => {

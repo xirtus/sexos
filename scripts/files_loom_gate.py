@@ -18,7 +18,7 @@ stick:
    (named without an extension, so Files knows it by its content) with a FAT32 EFI System
    partition, an ext4 one and a swap one: it enters the first two and copies a file out of
    each, and copies the swap partition, which it can't open, out whole as a .img;
-8. started again with the network (`run +net files`), adds an SFTP place (Ctrl+Shift+P) on
+8. started again with the network (`run +net loom`), adds an SFTP place (Ctrl+Shift+P) on
    an OpenSSH server the gate runs on the host (reached at 10.0.2.2, logging in with an
    ed25519 key file from the stick), copies a remote file down (Ctrl+Shift+X) and uploads
    a local one (Ctrl+C, then Ctrl+V in the place). Skipped when the host has no sshd.
@@ -126,7 +126,7 @@ def main():
  srv=sshd(a.out/'sftp');dav=webdav(a.out/'dav')
  if srv:subprocess.run(['mcopy','-i',str(imgs),str(srv[2]/'user'),'::id_ed25519'],check=True,env=MT)
  import http.server,threading
- FILES={'/files':(ROOT/'iso_root/programs/files').read_bytes()}
+ FILES={'/files':(ROOT/'iso_root/programs/loom').read_bytes()}
  class Handler(http.server.BaseHTTPRequestHandler):
   def do_GET(self):
    body=FILES.get(self.path)
@@ -152,13 +152,13 @@ def main():
  cs=lambda k:chord(k,'ctrl','shift')
  E=re.escape
  def open_files(where='/media/LOOM',command=None):
-  s=len(t());line(command or 'files '+where);m=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60)
+  s=len(t());line(command or 'loom '+where);m=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60)
   g['wait'](rf'\[files.app.list\] dir={E(where)} count=\d+',s,60);g['wait'](rf'\[display.text.committed\] target={m[1]} ',s,60);time.sleep(1)
   g['focus'](int(m[3]));time.sleep(.5);return s
  result={}
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
-  m=expect(f'fetch http://10.0.2.2:{PORT}/files /bin/files',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240);assert m[1].startswith('Saved'),m[1]
+  m=expect(f'fetch http://10.0.2.2:{PORT}/files /bin/loom',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240);assert m[1].startswith('Saved'),m[1]
   q.cmd('blockdev-add',{'driver':'raw','node-name':'loomdrive','file':{'driver':'file','filename':str(stick)}})
   s=len(t())
   for _ in range(40):
@@ -281,7 +281,7 @@ def main():
   step(lambda:q.key('f11'),r'\[files.app.closed\]');time.sleep(2)
   # 8. An SFTP place, with the network given at launch.
   if srv:
-   s=open_files('/media/IMGS','run +net files @/media/IMGS')
+   s=open_files('/media/IMGS','run +net loom @/media/IMGS')
    step(lambda:q.key('end'),r'\[display.text.committed\]',10)
    ctrl('c');time.sleep(.5)
    step(lambda:cs('p'),r'\[files.app.places.list\] place=- dir=/ count=3\b')
