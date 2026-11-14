@@ -37,9 +37,9 @@ const NET: u32 = 13;
 /// reaches its inbox wakes it at once.
 const MAILBOX_LOOK_TICKS: u64 = 4;
 
-fn is_answer(m: &sex_pdx::PdxMessage) -> bool { m.type_id == 1 && (m.caller_pd == FILES || m.caller_pd == NET) }
+fn is_answer(m: &sex_pdx::PdxMessage) -> bool { m.type_id == 1 && (m.caller_pd == FILES || m.caller_pd == NET) || launch::is_event(m) }
 /// A message from Shell: keys, pointer, resizes and closes for the main task's window.
-fn is_shell(m: &sex_pdx::PdxMessage) -> bool { m.caller_pd == SHELL }
+fn is_shell(m: &sex_pdx::PdxMessage) -> bool { m.caller_pd == SHELL && !launch::is_event(m) }
 
 pub enum Event {
     Key(Key),
@@ -49,6 +49,12 @@ pub enum Event {
     /// The mouse moved, clicked or scrolled over the window's pixel area (positions in
     /// pixels from its top-left; see [`sex_pdx::app_pointer`]).
     Pointer(sex_pdx::app_pointer::Pointer),
+    /// Something was dropped on the window at (x, y) of its pixel area: a file (`kind`
+    /// [`sex_pdx::dnd::FILE`], an absolute path this run may now use) or text
+    /// ([`sex_pdx::dnd::TEXT`]). [`dnd::dropped`] holds the bytes until the next drop.
+    Drop { kind: u8, x: i16, y: i16 },
+    /// A drag this window started is over: `target` is the row that took it, 0 if none.
+    DragEnded { target: u32 },
 }
 
 /// Retries only while the service queue is full; anything else ends the program.
@@ -140,6 +146,7 @@ impl Window {
         if m.type_id == 0x202 {
             if let Some(p) = sex_pdx::app_pointer::Pointer::decode(m.arg0, m.arg1, m.arg2) { return Some(Event::Pointer(p)); }
         }
+        if m.type_id == sex_pdx::dnd::OP_DROP { return dnd::receive(m); }
         if lifecycle::close_requested(m.type_id, m.caller_pd, [m.arg0, m.arg1, m.arg2], self.target, self.task) { return Some(Event::Close); }
         if m.type_id == 0x202 { return Key::decode(m.arg0, m.arg1, m.arg2).map(Event::Key); }
         None
@@ -176,7 +183,7 @@ impl Window {
         }
     }
     /// Ends the program. Nothing it saved is lost: files are on disk once written.
-    pub fn close(self) -> ! { sex_pdx::task_finish(0) }
+    pub fn close(self) -> ! { launch::exit(0) }
 }
 
 /// Files in the program's own folder. Paths are relative to it; `..` is refused.
@@ -185,6 +192,143 @@ impl Window {
 /// wait for it. Those in [`files::direct`] need no window: any task of the program may
 /// call them, and what arrives meanwhile waits in the [`mailbox`] for its owner. One
 /// request is in flight at a time per program; others wait their turn.
+/// Starting other programs, and opening files in the program for their type. A run
+/// started here gets only grants this run holds; Shell reports it started, was refused,
+/// or ended (see [`sex_pdx::launch`]).
+/// Drag and drop between programs ([`sex_pdx::dnd`]).
+pub mod dnd {
+    use super::{files, Event, Window};
+    use sex_pdx::dnd as d;
+    static mut INCOMING: Option<d::Payload> = None;
+    static mut DROPPED: d::Payload = d::Payload::new(0, 0, 0);
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum Error { Files(files::Error), TooLong, Shell }
+    /// The bytes of the last [`Event::Drop`].
+    pub fn dropped() -> &'static [u8] { unsafe { (*core::ptr::addr_of!(DROPPED)).as_bytes() } }
+    pub(crate) fn receive(m: &sex_pdx::PdxMessage) -> Option<Event> {
+        let incoming = unsafe { &mut *core::ptr::addr_of_mut!(INCOMING) };
+        match d::Message::decode([m.arg0, m.arg1, m.arg2])? {
+            d::Message::Begin { kind, len, extra } => { *incoming = Some(d::Payload::new(kind, len, extra)); None }
+            d::Message::Data { offset, count, bytes } => {
+                if let Some(p) = incoming.as_mut() { if !p.take(offset, count, &bytes) { *incoming = None; } }
+                None
+            }
+            d::Message::End => {
+                let p = incoming.take().filter(|p| p.valid())?;
+                let (x, y) = d::position(p.extra);
+                unsafe { *core::ptr::addr_of_mut!(DROPPED) = p; }
+                Some(Event::Drop { kind: p.kind, x, y })
+            }
+            d::Message::Done { target } => Some(Event::DragEnded { target }),
+            d::Message::Cancel => { *incoming = None; None }
+        }
+    }
+    fn send(message: d::Message) -> Result<(), Error> {
+        let [a, b, c] = message.wire();
+        for _ in 0..200 {
+            match sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL, d::OP_DRAG, a, b, c) {
+                Ok(_) => return Ok(()),
+                Err(sex_pdx::ERR_SERVICE_NOT_READY) => sex_pdx::sys_yield(),
+                Err(_) => return Err(Error::Shell),
+            }
+        }
+        Err(Error::Shell)
+    }
+    fn start(kind: u8, payload: &[u8], ticket: u64) -> Result<(), Error> {
+        if payload.is_empty() || payload.len() > d::MAX_BYTES { return Err(Error::TooLong); }
+        send(d::Message::Begin { kind, len: payload.len(), extra: ticket })?;
+        for piece in d::pieces(payload) { send(piece)?; }
+        Ok(())
+    }
+    /// Starts dragging a file this run holds (`@/path`, or a name in its own folder).
+    /// Call it while the left button is down in the window; Shell carries the drag to
+    /// wherever the person lets go, and [`Event::DragEnded`] says where it went.
+    pub fn drag_file(window: &mut Window, path: &[u8]) -> Result<(), Error> {
+        let mut abs = [0u8; d::MAX_BYTES];
+        let (ticket, n) = files::offer(window, path, &mut abs).map_err(Error::Files)?;
+        start(d::FILE, &abs[..n], ticket as u64)
+    }
+    /// Starts dragging a piece of text (up to [`sex_pdx::dnd::MAX_BYTES`] bytes).
+    pub fn drag_text(text: &str) -> Result<(), Error> { start(d::TEXT, text.as_bytes(), 0) }
+    /// Takes back a drag before the button comes up.
+    pub fn cancel() { let _ = send(d::Message::Cancel); }
+}
+
+pub mod launch {
+    use super::{files, mailbox, SHELL};
+    use sex_pdx::launch as l;
+    pub use l::Event;
+    use sex_pdx::program_store as store;
+
+    pub(crate) fn is_event(m: &sex_pdx::PdxMessage) -> bool { m.caller_pd == SHELL && m.type_id == l::OP_EVENT }
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum Error {
+        /// Files refused: no such program, or a grant this run does not hold (a `files` code).
+        Files(files::Error),
+        /// No program opens files of this type.
+        NoProgram,
+        /// Shell could not be asked.
+        Shell,
+    }
+    /// Starts `/bin/NAME` (or `@/path` of a program file this run holds) with `args`.
+    /// `network` only works for a run that has the network. Events for it carry `cookie`.
+    pub fn run(name: &[u8], args: &[u8], network: bool, cookie: u32) -> Result<(), Error> {
+        start(name, args, if network { store::RUN_NETWORK } else { 0 }, cookie)
+    }
+    /// Like [`run`], for a helper the person never sees: no window on any workspace.
+    pub fn run_hidden(name: &[u8], args: &[u8], cookie: u32) -> Result<(), Error> { start(name, args, store::RUN_HIDDEN, cookie) }
+    fn start(name: &[u8], args: &[u8], flags: u64, cookie: u32) -> Result<(), Error> {
+        let mut path = [0u8; 64];
+        let path: &[u8] = if name.first() == Some(&b'@') { name }
+            else { let n = l::bin_path(name, &mut path).ok_or(Error::Files(sex_pdx::fs::NAME))?; &path[..n] };
+        let ticket = files::direct::prepare(path, args).map_err(Error::Files)?;
+        sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL, l::OP_LAUNCH, ticket as u64, flags, cookie as u64).map_err(|_| Error::Shell)?;
+        Ok(())
+    }
+    /// Opens the file at absolute `path` in the program for its type, handing it only
+    /// that file. This run must hold `path` itself.
+    pub fn open(path: &[u8], cookie: u32) -> Result<(), Error> {
+        let program = l::program_for(path).ok_or(Error::NoProgram)?;
+        let mut args = [0u8; sex_pdx::fs::ARGS_MAX];
+        let n = l::open_args(path, &mut args).ok_or(Error::Files(sex_pdx::fs::NAME))?;
+        run(program, &args[..n], false, cookie)
+    }
+    /// Ends the run started with `cookie`.
+    pub fn kill(cookie: u32) { let _ = sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL, l::OP_KILL, cookie as u64, 0, 0); }
+    /// The next event for `cookie` if one has come, without waiting.
+    pub fn poll(cookie: u32) -> Option<Event> {
+        let mine = |m: &sex_pdx::PdxMessage| is_event(m) && Event::decode(m.type_id, [m.arg0, m.arg1, m.arg2]).is_some_and(|e| e.cookie() == cookie);
+        if let Some(m) = mailbox::take(mine) { return Event::decode(m.type_id, [m.arg0, m.arg1, m.arg2]); }
+        while let Some(m) = sex_pdx::pdx_try_listen_raw(0) {
+            if mine(&m) { return Event::decode(m.type_id, [m.arg0, m.arg1, m.arg2]); }
+            // Keys, closes and others' answers wait for their owners.
+            mailbox::put(m);
+        }
+        None
+    }
+    /// Waits for the next event for `cookie`.
+    pub fn wait(cookie: u32) -> Event {
+        loop {
+            if let Some(e) = poll(cookie) { return e; }
+            let _ = sex_pdx::sys_wait_self_ticks(4);
+        }
+    }
+    /// Ends this run with `status`, telling whoever started it.
+    pub fn exit(status: u32) -> ! {
+        report(status);
+        sex_pdx::task_finish(status as u64)
+    }
+    /// Tells Shell how this run ends, waiting out a full queue for a while.
+    pub fn report(status: u32) {
+        for _ in 0..200 {
+            match sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL, l::OP_EXIT, status as u64, 0, 0) {
+                Err(sex_pdx::ERR_SERVICE_NOT_READY) => sex_pdx::sys_yield(),
+                _ => return,
+            }
+        }
+    }
+}
+
 pub mod files {
     use super::{is_answer, is_shell, mailbox, Window, FILES};
     use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -437,6 +581,13 @@ pub mod files {
         }
         /// Makes everything written so far durable.
         pub fn sync() -> Result<(), Error> { simple(w::SYNC, b"", 0) }
+        /// Asks Files to hold a run of the program file `path` with argument line `args`,
+        /// for Shell to start (`sex_pdx::launch`); answers its ticket. Files refuses
+        /// grants in `args` this run does not hold itself.
+        pub fn prepare(path: &[u8], args: &[u8]) -> Result<u32, Error> {
+            if args.len() > w::ARGS_MAX { return Err(w::NAME); }
+            exchange(None, w::PREPARE, path, 0, args.len() as u64, |d| d[..args.len()].copy_from_slice(args), |ticket, _| ticket)
+        }
         /// Everything in the folder `path` (`b""` for the program's own folder).
         pub fn list(path: &[u8]) -> Result<alloc::vec::Vec<Entry>, Error> {
             let mut all = alloc::vec::Vec::new();
@@ -554,6 +705,15 @@ pub mod files {
     /// Asks the person to choose a file (or a folder, or where to save) in the Files
     /// app, and waits. The answer is a path this run may now use, `@/...`, kept in `out`.
     /// Closing the window meanwhile cancels. Errors: DENIED when the person cancelled.
+    /// Offers a path this run holds for a drag ([`crate::dnd::drag_file`]): the ticket,
+    /// and the absolute path written to `out`.
+    pub fn offer(window: &mut Window, path: &[u8], out: &mut [u8; sex_pdx::dnd::MAX_BYTES]) -> Result<(u32, usize), Error> {
+        exchange(Some(window), w::OFFER, path, 0, 0, |_| {}, |ticket, d| {
+            let n = (u16::from_le_bytes([d[0], d[1]]) as usize).min(out.len());
+            out[..n].copy_from_slice(&d[2..2 + n]);
+            (ticket, n)
+        })
+    }
     pub fn pick<'a>(window: &mut Window, mode: Pick, suggestion: &[u8], out: &'a mut [u8; w::PATH_BYTES]) -> Result<&'a [u8], Error> {
         let n = suggestion.len().min(w::PICK_HINT_MAX);
         let code = match mode { Pick::Open => w::PICK_OPEN, Pick::Save => w::PICK_SAVE, Pick::Folder => w::PICK_FOLDER };

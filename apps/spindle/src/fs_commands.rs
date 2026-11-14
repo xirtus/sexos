@@ -231,6 +231,8 @@ impl Client {
         }
         region[..n].copy_from_slice(&path[..n]);
         region[w::PATH_BYTES..w::PATH_BYTES + m].copy_from_slice(&given[..m]);
+        // The session keeps this run's line, to open it again after a restart.
+        if count == 0 { unsafe { crate::session_command::SESSION.submitted(&path[..n], &given[..m], flags); } }
         self.start(Cmd::Program(count, flags), w::PREPARE, n, 0, m as u64);
     }
     /// Delivers the current request. Retries a full queue on the next pass.
@@ -415,6 +417,7 @@ impl Client {
                 let Some(flags) = (unsafe { crate::pkg_command::PKG.before_run(note, name, value, flags, count, sb) }) else { self.cmd = None; return true };
                 let (op, third) = if count == 0 { (store::OP_RUN, flags) } else { (store::OP_SPAWN, count) };
                 let asked = sex_pdx::pdx_call_checked(crate::SLOT_SHELL, op, store::TICKET, value as u64, third).is_ok();
+                if asked && count == 0 { unsafe { crate::session_command::SESSION.asked(value); } }
                 say!(sb, "{}", if !asked { "Could not reach the shell." } else if count == 0 { "Asked for the program. A window opens if it starts." } else { "Asked for background programs. Check with: records" });
             }
         }

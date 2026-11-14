@@ -81,6 +81,7 @@ unsafe fn pdx_call(slot:u64,op:u64,sid:u64,a:u64,b:u64)->(u64,u64){let result=ra
 unsafe fn update_local_geometry(_:u64,_:i32,_:i32,_:u32,_:u32){}
 unsafe fn send_frame_tab_info(_:u32){}
 unsafe fn tile_active_scene_frames(){OPS.push("tile".into());}
+unsafe fn session_placed(_:u64,_:u8){}
 unsafe fn try_set_focus(sid:u64)->bool{try_set_focus_inner(sid,true)}
 unsafe fn try_set_focus_inner(sid:u64,refresh_children:bool)->bool{launcher_focus_discard();if refresh_children&&ACTUAL_DESKTOP.is_some(){ACTUAL_DESKTOP.as_mut().unwrap().observe(Operation{opcode:0xEC,surface:154,packed:1,control:1},Admission::Accepted);}let f=FRAMES.iter().flatten().find(|f|f.frame_id==sid as u32).unwrap();if f.scene_id!=ACTIVE_SCENE_IDX||frame_is_minimized(f.frame_id)||STATE[index(sid)]!=LifecycleState::Visible{return false}FOCUSED_SURFACE_ID=sid;pdx_call(SLOT_DISPLAY,0xED,sid,0,0);true}
 unsafe fn restore_minimized_frame_inner(fid:u32,focus:bool)->bool{OPS.push(format!("restore:{fid}"));let f=FRAMES.iter_mut().flatten().find(|f|f.frame_id==fid).unwrap();f.flags&=!FRAME_FLAG_MINIMIZED;STATE[index(fid as u64)]=LifecycleState::Visible;pdx_call(SLOT_DISPLAY,0xEC,fid as u64,0,0);if focus&&DESKTOP_STATES.ready(fid as u64){try_set_focus(fid as u64);}true}

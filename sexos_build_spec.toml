@@ -51,6 +51,7 @@ crates = [
   "apps/quil/Cargo.toml",
   "apps/files/Cargo.toml",
   "apps/peek/Cargo.toml",
+  "apps/shuttle/Cargo.toml",
   "apps/talk/Cargo.toml",
   "apps/view/Cargo.toml",
   "apps/heaptest/Cargo.toml",
@@ -271,6 +272,14 @@ target = "x86_64-sex-app.json"
 manifest = "apps/peek/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/peek"
 dest_artifact = "iso_root/programs/peek"
+
+[[stage]]
+id = "build_shuttle"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/shuttle/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/shuttle"
+dest_artifact = "iso_root/programs/shuttle"
 
 [[stage]]
 id = "build_talk"

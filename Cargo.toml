@@ -25,6 +25,7 @@ members = [
     "apps/files",
     "apps/settings",
     "apps/peek",
+    "apps/shuttle",
     "apps/talk",
     "apps/bench",
     "apps/view",

@@ -45,6 +45,8 @@ pub extern "C" fn sys_exit(status: i32) -> ! {
     let me = sex_pdx::app_lifecycle::catalog(sex_pdx::app_lifecycle::SELF_CATALOG_SLOT).map_or((0, 0), |i| (i.target_pd, i.task_id));
     sex_pdx::serial_record!("[std.exit] target={} task={} status={}", me.0, me.1, status);
     console::finish(&if status == 0 { "Finished".to_string() } else { format!("Finished with status {status}") });
+    // Whoever started this run hears how it ended (`sex_pdx::launch`).
+    sex_app::launch::report(status as u32);
     sex_pdx::task_finish(status as u32 as u64)
 }
 

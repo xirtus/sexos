@@ -64,7 +64,26 @@ pub extern "C" fn _start() -> ! {
         let status: &[u8] = match window.next() {
             Event::Close => { sex_pdx::serial_record!("[jot.closed] target={} task={}", window.target, window.task); window.close() }
             // Ctrl+S saves.
-            Event::Resize { .. } | Event::Pointer(_) => continue,
+            Event::Resize { .. } | Event::Pointer(_) | Event::DragEnded { .. } => continue,
+            // A file dropped on the window opens here; dropped text goes in at the cursor.
+            Event::Drop { kind, .. } => {
+                let bytes = sex_app::dnd::dropped();
+                if kind == sex_pdx::dnd::FILE && bytes.len() + 1 <= chosen.len() {
+                    chosen[0] = b'@';
+                    chosen[1..1 + bytes.len()].copy_from_slice(bytes);
+                    file_len = 1 + bytes.len();
+                    match files::read(&mut window, &chosen[..file_len], note) {
+                        Ok(n) => { len = n; cursor = n; sex_pdx::serial_record!("[jot.dropped] kind=file bytes={} path={}", n, core::str::from_utf8(bytes).unwrap_or("?")); b"Opened the dropped file." }
+                        Err(e) => { len = 0; cursor = 0; sex_pdx::serial_record!("[jot.dropped] kind=file status={}", e); files::message(e) }
+                    }
+                } else if kind == sex_pdx::dnd::TEXT && len + bytes.len() <= note.len() {
+                    note.copy_within(cursor..len, cursor + bytes.len());
+                    note[cursor..cursor + bytes.len()].copy_from_slice(bytes);
+                    cursor += bytes.len(); len += bytes.len();
+                    sex_pdx::serial_record!("[jot.dropped] kind=text bytes={}", bytes.len());
+                    b""
+                } else { b"That doesn't fit here." }
+            }
             // Ctrl+O and Ctrl+Shift+S ask the person, through Files, for a file to use.
             Event::Key(key) if key.control && (key.code == 0x18 || key.code == 0x1F && key.shift) => {
                 let mut out = [0u8; sex_pdx::fs::PATH_BYTES];

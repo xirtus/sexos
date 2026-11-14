@@ -380,6 +380,7 @@ fn draw_launcher_panel(_: *mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapsh
 mod lock_screen{pub fn draw(_: *mut u32,_:usize,_:usize,_:usize)->bool{false}}
 fn draw_window_switcher(_:*mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapshot){}
 fn draw_screenshot_ui(_:*mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapshot){}
+fn draw_tray_menu(_:*mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapshot){}
 fn report_app_presented(){unsafe{DAMAGE_ORDER.push("presented");}}
 #[path="../servers/sexdisplay/src/paint_batch.rs"]mod paint_batch;
 use paint_batch::{Content,Plan};
