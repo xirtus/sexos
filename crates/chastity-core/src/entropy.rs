@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Cryptographic entropy. Host uses the OS; SexOS fails closed when the CPU
 //! generator is unavailable or exhausted. It never uses std's timestamp fallback.
+#[cfg(all(target_os = "hermit", not(getrandom_backend = "custom")))]
+compile_error!("Chastity requires --cfg getrandom_backend=\"custom\" on SexOS: refusing the noncryptographic std entropy fallback");
+
 pub fn fill(out: &mut [u8]) -> Result<(), getrandom::Error> {
     #[cfg(not(target_os = "hermit"))]
     {
