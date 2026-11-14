@@ -57,8 +57,10 @@ state and UI; `src/program.rs` binds actions to native file/network operations;
 Edit the current line in Weft's text field. Add Line inserts an empty line after
 it; Previous/Next select another line without losing edits. The model preserves
 Unicode and blank lines and is limited to 64 KiB. Load accepts UTF-8 text and
-normalizes CRLF to LF. Save replaces the file named above the editor and reports
-success only after `files::sync` succeeds. This is a line-oriented teaching
+normalizes CRLF to LF. Save exclusively creates a new filename. Replacing an existing destination requires
+a successful Load of that exact path first; changing paths cannot inherit that
+authorization. A held-document launch loads its content before allowing replacement.
+Success is reported only after `files::sync` succeeds. This is a line-oriented teaching
 editor, not Quil or a multiline custom widget. It has no autosave or close prompt.
 The ordinary Weft field provides keyboard selection and local undo.
 
@@ -99,3 +101,8 @@ exact hash, decodes the original picture, and fetches an exact local HTTP fixtur
 through `+net`. It retains a screenshot for each window and closes every run.
 A guest compile and a host UI test alone do not establish guest playback or UI
 behavior; only report the QEMU result after the gate runs successfully.
+
+Review follow-up: the host save-policy regressions preserve an existing unobserved
+file byte-for-byte and verify explicit loaded/new routes. The QEMU gate attempts
+a blocked path-switch overwrite, reloads the original hash and verifies startup
+autoload on a second run.

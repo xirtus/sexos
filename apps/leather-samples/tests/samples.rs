@@ -73,3 +73,62 @@ fn hello_image_and_network_models_are_copyable_widgets() {
         assert!(ui.paint(&mut pixels).is_some());
     }
 }
+
+#[derive(Default)]
+struct MemoryStore {
+    files: std::collections::BTreeMap<String, Vec<u8>>,
+    replacements: usize,
+    syncs: usize,
+}
+impl leather_samples::Store for MemoryStore {
+    fn create(&mut self, path: &str) -> Result<(), &'static str> {
+        if self.files.contains_key(path) {
+            return Err("exists");
+        }
+        self.files.insert(path.into(), Vec::new());
+        Ok(())
+    }
+    fn replace(&mut self, path: &str, text: &[u8]) -> Result<(), &'static str> {
+        self.replacements += 1;
+        self.files.insert(path.into(), text.into());
+        Ok(())
+    }
+    fn sync(&mut self) -> Result<(), &'static str> {
+        self.syncs += 1;
+        Ok(())
+    }
+}
+#[test]
+fn save_never_truncates_an_unloaded_existing_document() {
+    let mut store = MemoryStore::default();
+    store.files.insert("@held".into(), b"valuable".to_vec());
+    let mut state = leather_samples::SaveState::default();
+    assert!(state
+        .save(&mut store, "@held", b"default template")
+        .is_err());
+    assert_eq!(store.files["@held"], b"valuable");
+    assert_eq!(store.replacements, 0);
+    assert_eq!(store.syncs, 0);
+    // Changing the path to another existing file cannot borrow authorization.
+    state.loaded("other.txt");
+    assert!(state.save(&mut store, "@held", b"changed").is_err());
+    assert_eq!(store.files["@held"], b"valuable");
+}
+#[test]
+fn saving_new_or_loaded_routes_is_explicit_and_syncs() {
+    let mut store = MemoryStore::default();
+    let mut state = leather_samples::SaveState::default();
+    state.save(&mut store, "new.txt", b"first").unwrap();
+    state.save(&mut store, "new.txt", b"second").unwrap();
+    assert_eq!(store.files["new.txt"], b"second");
+    assert_eq!(store.syncs, 2);
+    store
+        .files
+        .insert("loaded.txt".into(), b"original".to_vec());
+    state.loaded("loaded.txt");
+    state
+        .save(&mut store, "loaded.txt", b"edited original")
+        .unwrap();
+    assert_eq!(store.files["loaded.txt"], b"edited original");
+    assert_eq!(store.syncs, 3);
+}

@@ -4217,3 +4217,7 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   All four guest binaries build; `scripts/leather_gate.py` checks greet, edit/save/
   sync/reload hashes, image decode, network fixture hash, screenshots and clean close.
   Guest runtime validation remains pending until that QEMU gate passes in CI.
+- Round175 review follow-up: editor startup loads supplied documents; unseen paths
+  use exclusive CREATE, and replacement requires a successfully loaded/currently
+  created exact route. Seven host tests include preservation of an existing unseen
+  file; QEMU gate attempts a blocked overwrite and verifies the original hash.

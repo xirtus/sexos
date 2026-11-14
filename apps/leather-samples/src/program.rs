@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Capability-bound I/O and native event loop, intentionally outside the UI model.
-use crate::{Action, Document, Kind, Sample, TEXT_LIMIT};
+use crate::{Action, Document, Kind, Sample, SaveState, Store, TEXT_LIMIT};
 use alloc::{format, string::String, vec};
 use sex_app::{files, net};
 use weft::{sexos::App, Response, Strings, Theme};
@@ -35,14 +35,49 @@ fn image(app: &mut App, sample: &Sample, bytes: &[u8]) -> Result<(), &'static st
         .set_image(sample.image, img.width, img.height, img.pixels);
     Ok(())
 }
+struct FilesStore<'a>(&'a mut sex_app::Window);
+impl Store for FilesStore<'_> {
+    fn create(&mut self, path: &str) -> Result<(), &'static str> {
+        files::create(self.0, path.as_bytes()).map_err(|_| {
+            "Load an existing document before replacing it; cannot create this destination"
+        })
+    }
+    fn replace(&mut self, path: &str, text: &[u8]) -> Result<(), &'static str> {
+        files::write(self.0, path.as_bytes(), text).map_err(|_| "Cannot save file")
+    }
+    fn sync(&mut self) -> Result<(), &'static str> {
+        files::sync(self.0).map_err(|_| "Cannot sync file")
+    }
+}
 pub fn run(kind: Kind) -> ! {
     let mut app = App::open(kind.title(), Theme::light(), Strings::new("en"));
     let mut sample = Sample::build(&mut app.ui, kind);
+    let mut save_state = SaveState::default();
     let mut args = [0; sex_pdx::fs::ARGS_MAX];
     let given = files::args(&mut app.window, &mut args);
     if let Ok(text) = core::str::from_utf8(given) {
         if !text.trim().is_empty() {
             app.ui.set_text(sample.path, text.trim());
+        }
+    }
+    // A held document launch must load the document, not merely prefill its path
+    // next to the template's default text. Failed loads never authorize replace.
+    if kind == Kind::Stitch && !given.is_empty() {
+        let path = String::from(app.ui.text_of(sample.path));
+        match read(&mut app, &path, TEXT_LIMIT)
+            .and_then(|bytes| Document::parse(&bytes).map(|document| (document, bytes)))
+        {
+            Ok((document, bytes)) => {
+                sample.loaded(&mut app.ui, document);
+                save_state.loaded(&path);
+                sex_pdx::serial_record!(
+                    "[leather.loaded] bytes={} lines={} hash={:#x} startup=1",
+                    bytes.len(),
+                    sample.document.lines.len(),
+                    sex_pdx::text_batch::hash(&bytes)
+                );
+            }
+            Err(error) => app.ui.set_text(sample.status, error),
         }
     }
     if kind == Kind::Lantern {
@@ -92,9 +127,7 @@ pub fn run(kind: Kind) -> ! {
             app.present();
             let result: Result<String, &str> = match action {
                 Action::Save(path, text) => (|| {
-                    files::write(&mut app.window, path.as_bytes(), text.as_bytes())
-                        .map_err(|_| "Cannot save file")?;
-                    files::sync(&mut app.window).map_err(|_| "Cannot sync file")?;
+                    save_state.save(&mut FilesStore(&mut app.window), &path, text.as_bytes())?;
                     sex_pdx::serial_record!("[leather.saved] bytes={} synced=1", text.len());
                     Ok(format!("Saved {} bytes", text.len()))
                 })(),
@@ -102,6 +135,7 @@ pub fn run(kind: Kind) -> ! {
                     let data = read(&mut app, &path, TEXT_LIMIT)?;
                     let document = Document::parse(&data)?;
                     sample.loaded(&mut app.ui, document);
+                    save_state.loaded(&path);
                     sex_pdx::serial_record!(
                         "[leather.loaded] bytes={} lines={} hash={:#x}",
                         data.len(),

@@ -163,7 +163,7 @@ impl Sample {
             match kind {
                 Kind::Hello => "Press Greet to meet Weft.",
                 Kind::Stitch => {
-                    "Line 1. Edit a line, then add or select another. Save replaces this file."
+                    "Line 1. Save creates a new file; load an existing document before replacing it."
                 }
                 Kind::Lantern => "An original sample picture; enter a filename to open another.",
                 Kind::Postcard => {
@@ -245,5 +245,38 @@ impl Sample {
             ui.focus(Some(self.content));
         }
         None
+    }
+}
+
+/// File operations used by the editor save policy. CREATE must atomically refuse
+/// an existing name; only a loaded or just-created route may be replaced.
+pub trait Store {
+    fn create(&mut self, path: &str) -> Result<(), &'static str>;
+    fn replace(&mut self, path: &str, text: &[u8]) -> Result<(), &'static str>;
+    fn sync(&mut self) -> Result<(), &'static str>;
+}
+#[derive(Default)]
+pub struct SaveState {
+    loaded_path: Option<String>,
+}
+impl SaveState {
+    /// Call only after the complete file has been read and parsed successfully.
+    pub fn loaded(&mut self, path: &str) {
+        self.loaded_path = Some(path.into());
+    }
+    pub fn save(
+        &mut self,
+        store: &mut impl Store,
+        path: &str,
+        text: &[u8],
+    ) -> Result<(), &'static str> {
+        if self.loaded_path.as_deref() != Some(path) {
+            store.create(path)?;
+            // A failed write/sync may leave our new partial file; a subsequent
+            // save may retry it, but no unrelated existing file was truncated.
+            self.loaded(path);
+        }
+        store.replace(path, text)?;
+        store.sync()
     }
 }
