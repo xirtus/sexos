@@ -48,20 +48,16 @@ def main():
   m=g['wait'](r'\[egui.ready\] target=(\d+) task=(\d+) ',s,300);target,task=m[1],m[2]
   frame=g['wait'](r'\[egui.frame\] n=1 w=(\d+) h=(\d+) meshes=(\d+) triangles=(\d+) pixels=(\d+) ms=(\d+)',s,300)
   launch=g['wait'](rf'\[shell.program.launch\] target={target} task={task} surface=(\d+)',s,60);surface=int(launch[1])
-  time.sleep(3)
-  tile=list(map(int,re.findall(rf'\[shell.tile.apply\] sid={surface} x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)',t())[-1]))
-  if args=='probe':
-   # Starter windows can tile the new program down to144client pixels high.
-   # The wheel target is y190: maximize via the real Shell action, then wait
-   # for the client's resized paint before using the fixed probe coordinates.
-   tile,before=maximize(g,surface)
-   cursor=before;deadline=time.monotonic()+120
-   while True:
-    frame=g['wait'](r'\[egui.frame\] n=\d+ w=(\d+) h=(\d+) meshes=(\d+) triangles=(\d+) pixels=(\d+) ms=(\d+)',cursor,max(1,deadline-time.monotonic()))
-    cursor+=frame.end()
-    if int(frame[1])>=320 and int(frame[2])>=250:break
-    assert time.monotonic()<deadline,'probe never painted a usable viewport'
-   assert tile[0]>=0 and tile[1]>=0 and tile[0]+tile[2]<=rw and tile[1]+tile[3]<=rh,tile
+  # Both the wheel probe and full demo need a reviewable viewport. Preserve
+  # the demo's triangle oracle by waiting for its actual maximized paint.
+  tile,before=maximize(g,surface)
+  cursor=before;deadline=time.monotonic()+120
+  while True:
+   frame=g['wait'](r'\[egui.frame\] n=\d+ w=(\d+) h=(\d+) meshes=(\d+) triangles=(\d+) pixels=(\d+) ms=(\d+)',cursor,max(1,deadline-time.monotonic()))
+   cursor+=frame.end()
+   if (int(frame[1]),int(frame[2]))==(tile[2]-16,tile[3]-42):break
+   assert time.monotonic()<deadline,'client never painted its maximized viewport'
+  assert tile[0]>=0 and tile[1]>=0 and tile[0]+tile[2]<=rw and tile[1]+tile[3]<=rh,tile
   return target,task,surface,tile,frame
  def shot(name,tile):
   path=a.out/f'{name}.ppm';q.cmd('screendump',{'filename':str(path)});time.sleep(.5)
