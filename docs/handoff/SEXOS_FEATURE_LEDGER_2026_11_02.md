@@ -4685,3 +4685,49 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   interrupts.rs relative to current master; it only redacts normal PS/2 payloads.
   Diagnostic records retain the explicit proof profile. The original dirty
   checkout and all historical image/source bindings remain untouched.
+
+## ChatGPT round 190: source wiring, lifecycle admission and Quil pixels (2026-11-14)
+- All 1,286 Python regressions pass after integration of master ba8ebc28 and the
+  final Quil/Fuzz repairs. The Display/Linen source gates retain readiness/FIFO
+  order and all twelve original polls while admitting only the exact optional
+  mutable receive and autofill broker poll. Both baseline variants and twenty
+  negative mutations are exercised; the actual 10/56/20 Rust host tests pass.
+- Fuzz's fourth launch was explicitly refused while Spindle saved its session.
+  The gate now recognizes only the exact current command's complete busy frame,
+  with no admission side effects, then a later durable empty-session save before
+  resubmitting the identical command. The original deadline and two-retry bound
+  remain. All four real 20,000-operation seeds pass on normal v3, including all
+  112 protocol operations and retirement. This successful run needed zero retries;
+  the retry path has retained historical replay and six negative-control tests.
+- Canonical v3 builds and its 60-second diagnostic boot pass. Its frozen closure
+  contains 1,836 production inputs; normal ISO is 5d5533803ef52cca123c73643360530b1becdc5b8fb61c1a3254c3f2e958c61c,
+  diagnostic ISO da426781caa8e9463678f72dbbd601052a45a4eeb57ddf2c2d805228d22d0d7f.
+  Both contain the actual patched Net ELF 7c388c3f1eb848ac226c91e853ffbf39c8ef2cf2b35b9a8fecb9183e0439cae1.
+  HTTPS assets pass all nine strict pixel states; independent quiesced browser
+  reserve passes ten captures and 105 physical key events. Original bindings stay
+  immutable. These two passes do not qualify the failed connected session.
+- Connected v3 exposes two concrete defects: Quil's oracle still expected bitmap
+  glyphs, and Shell's document viewport receipt used y+36 while the actual owned
+  child used the approved y+34. The production fix derives the logging origin
+  from the same bounded four-child layout sent to Display; it changes no route,
+  grant or kernel code. A compiled production-expression harness covers all three
+  UI scales and rejects the old hardcoded expression and foreign child identity.
+- Quil's oracle checks every antialiased RGB pixel, padding and full body erasure
+  against source-selected Mono/fallback coverage and exact integer blending.
+  A temporary host harness links locked sex-font for non-ASCII and wide cells;
+  bidi/formatting claims are rejected. Sixteen pixel tests cover partial, zero and
+  solid coverage corruption, stale antialias ink, 255/256 width policy and Unicode.
+  Corrected analysis of the original capture is explicitly not a new QEMU pass.
+- Master ba8's media profile2 (VP9/Opus/AAC) and the handoff Shine profile coexist.
+  A new separate prefix builds with its source/license/archive/tool receipts.
+  Optional vpx linking is retained after avcodec/shine/dav1d; Mac libvpx uses a
+  build-local llvm-readelf alias. Profile0 and profile2 Moan/Web link checks pass
+  the unchanged instruction scanner. The bounded seed2 layout qualification and
+  the explicitly reconstructed seed0 displacement evidence are retained honestly.
+- Fresh v4 image/connected/three-codec export proof remains pending. Its baseline
+  is explicitly ba8, not the subsequent c209 laptop-power kernel changes. Those
+  upstream changes are reconciled separately into prerequisite PR #296, including
+  a fresh causal timer-source review before admitting any new tree fingerprints.
+  Component repair sets remain staged and tested locally. Only #244 has merged;
+  exact-head full CI and its aggregator remain mandatory. Original dirty checkout
+  and historical artifacts remain untouched; authored kernel delta stays +9 logs.
