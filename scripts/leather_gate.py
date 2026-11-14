@@ -7,6 +7,7 @@ from pathlib import Path
 from install_program import install,fnv
 from program_egui_gate import colours
 from program_gate_geometry import maximize, current_tile
+from lua_gate import qcodes
 ROOT=Path(__file__).resolve().parents[1]
 BODY=b'Leather reached the network.\n'
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -34,11 +35,19 @@ def main():
         q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':down,'key':{'type':'qcode','data':key}}}for down,part in ((True,keys),(False,tuple(reversed(keys))))for key in part]})
     def type_text(text):
         for c in text:
-            if c in '+:':chord('shift','equal' if c=='+' else 'semicolon')
-            else:q.key({' ':'spc','-':'minus','.':'dot','/':'slash'}.get(c,c))
-            time.sleep(.06)
+            q.cmd('send-key',{'keys':[{'type':'qcode','data':key}for key in qcodes(c)],'hold-time':40})
+            time.sleep(.12)
+    def spindle(line):
+        base=None
+        for n,c in enumerate(line):
+            fence=len(t());type_text(c)
+            got=g['wait'](rf'\[spindle\.input\.recv\] key=printable ch={re.escape(c)} len=(\d+)\n',fence,30)
+            if base is None:base=int(got[1])-n
+            assert int(got[1])==base+n,(line[:n+1],got[0])
+        fence=len(t());q.key('ret')
+        g['wait'](rf'\[spindle\.input\.recv\] key=enter len={base+len(line)-1}\n',fence,30)
     def launch(name,args='',network=False):
-        g['focus'](153);time.sleep(.3);start=len(t());type_text('run '+('+net 'if network else '')+'leather-'+name+(' '+args if args else ''));q.key('ret')
+        g['focus'](153);time.sleep(.3);start=len(t());spindle('run '+('+net 'if network else '')+'leather-'+name+(' '+args if args else ''))
         m=g['wait'](rf'\[leather.ready\] app={name} target=(\d+) task=(\d+) frames=([1-9]\d*)',start,300)
         target,task=int(m[1]),int(m[2]);launch=g['wait'](rf'\[shell.program.launch\] target={target} task={task} surface=(\d+)',start,60)
         surface=int(launch[1]);tile,resized=maximize(g,surface)
@@ -60,7 +69,9 @@ def main():
     try:
         g['wait'](r'\[app.private.retired\] target=41 ',0,180)
         start,click,close=launch('hello');click('primary');g['wait'](r'\[leather.greet\] ok=1',start);close()
-        start,click,close=launch('stitch');click('content');chord('ctrl','a');type_text('copied leather');click('add');type_text('second line');click('primary')
+        start,click,close=launch('stitch');click('content');chord('ctrl','a');type_text('copied leather');g['wait'](r'\[leather.edit\] line=1 lines=1 bytes=14',start,60)
+        added=len(t());click('add');g['wait'](r'\[leather.edit\] line=2 lines=2 bytes=15',added,60)
+        edited=len(t());type_text('second line');g['wait'](r'\[leather.edit\] line=2 lines=2 bytes=26',edited,60);click('primary')
         text=b'copied leather\nsecond line';g['wait'](rf'\[leather.saved\] bytes={len(text)} synced=1',start)
         click('load');g['wait'](rf'\[leather.loaded\] bytes={len(text)} lines=2 hash={fnv(text):#x}',start)
         # Saving to a different existing path must not inherit authorization.

@@ -129,6 +129,20 @@ pub fn run(kind: Kind) -> ! {
                 sex_pdx::task_finish(0);
             }
             let Some(action) = sample.on(&mut app.ui, &response) else {
+                if kind == Kind::Stitch
+                    && (response == Response::Clicked(sample.add)
+                        || response == Response::Changed(sample.content))
+                {
+                    let lines = &sample.document.lines;
+                    let bytes = lines.iter().map(String::len).sum::<usize>()
+                        + lines.len().saturating_sub(1);
+                    sex_pdx::serial_record!(
+                        "[leather.edit] line={} lines={} bytes={}",
+                        sample.document.line + 1,
+                        lines.len(),
+                        bytes
+                    );
+                }
                 if response == Response::Clicked(sample.primary) && kind == Kind::Hello {
                     sex_pdx::serial_record!("[leather.greet] ok=1");
                 }
