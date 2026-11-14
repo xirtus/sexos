@@ -1,0 +1,23 @@
+[package]
+name = "aftercare"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Aftercare: encrypted, deduplicated backups of a folder to a USB disk or any granted folder"
+
+[[bin]]
+name = "aftercare"
+path = "src/main.rs"
+
+[dependencies]
+aftercare-core = { path = "../../crates/aftercare-core" }
+# rust-random, MIT/Apache-2.0: the engine takes a rand_core 0.6 CryptoRng.
+rand_core = { version = "=0.6.4", default-features = false }
+# RustCrypto, MIT/Apache-2.0: the random pool, and the hashes restore reports.
+sha2 = { version = "=0.10.9", default-features = false }
+
+[target.'cfg(target_os = "hermit")'.dependencies]
+sex-std = { path = "../../crates/sex-std" }
+
+[dev-dependencies]
+rand_chacha = { version = "=0.3.1", default-features = false }
