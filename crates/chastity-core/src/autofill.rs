@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! The boundary a browser fills logins through. Nothing calls it yet.
+//! Exact-origin candidate and fill selection, used by the live Chastity provider.
 //!
-//! **Plan for Kaleidoscope** (not wired; no PDX opcode, Shell route or catalog policy
-//! exists for it yet):
+//! The Shell-brokered program SDK is live; browser form injection is not wired.
+//! A future Kaleidoscope caller follows the same per-request selection policy:
 //!
 //! 1. Kaleidoscope asks, over a Shell-brokered route, "logins for this page", giving
 //!    only the page's URL. It never names an entry and never gets a list of the vault.

@@ -7,7 +7,8 @@
 //!   seam where Shibari, the planned RAM-only secret keeper, takes over.
 //! * [`totp`]: RFC 6238 codes from `otpauth://` URIs.
 //! * [`generator`]: random passwords from the system's entropy.
-//! * [`autofill`]: the boundary a browser (Kaleidoscope) will ask through; not wired yet.
+//! * [`autofill`]: exact-origin selection used by the live provider; browser form
+//!   injection remains a separate consumer integration.
 //!
 //! Builds for the host (`cargo test -p chastity-core`) and for SexOS programs
 //! (`x86_64-sex-std.json`, with `apps/chastity`).

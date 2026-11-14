@@ -47,3 +47,14 @@ tests. The native wrapper tests include full intake, transport Full retries,
 Close tombstone/retirement, reused row and old-token/epoch replay. Both binaries pass
 scripts/key_bytes.py. These tests do not promise complete compiler/allocator memory
 erasure; the documented dependency and caller custody limits still apply.
+
+Compile-only fail-closed entropy follow-up d34f6323 adds no runtime path: a Hermit
+build missing `--cfg getrandom_backend="custom"` fails with the explicit error
+`Chastity requires --cfg getrandom_backend="custom" on SexOS`. The proper release
+build, key-byte scan and all30 host tests pass; resulting ELF is
+b6333503949dff3d33fd1a132c60293e71d0922f25b66c78f67a8754064d076e.
+The prior full baseline/live evidence above remains scoped to its recorded hashes;
+no QEMU rerun is claimed for this compile guard. Local negative/positive build logs:
+/tmp/chastity-entropy-misconfig.log and /tmp/chastity-entropy-guard-build.log.
+The sealed-build trace also needs the parent integration's TOML-aware rustflags
+parser fix, so the Chastity stage cannot silently omit its required flags.
