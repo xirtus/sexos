@@ -129,4 +129,35 @@
 /* pymalloc's small-object pools; with no mmap its arenas come from malloc. */
 #define WITH_PYMALLOC 1
 
+/* Sockets: sex-libc's BSD-style socket calls over sexnet (crates/sex-libc/src/posix_net.rs),
+ * for the socket and select modules. */
+#define ENABLE_IPV6 1
+#define HAVE_ACCEPT 1
+#define HAVE_ACCEPT4 1
+#define HAVE_ADDRINFO 1
+#define HAVE_ARPA_INET_H 1
+#define HAVE_BIND 1
+#define HAVE_CONNECT 1
+#define HAVE_GAI_STRERROR 1
+#define HAVE_GETADDRINFO 1
+#define HAVE_GETHOSTBYNAME 1
+#define HAVE_GETNAMEINFO 1
+#define HAVE_GETPEERNAME 1
+#define HAVE_GETSOCKNAME 1
+#define HAVE_INET_PTON 1
+#define HAVE_LISTEN 1
+#define HAVE_NETDB_H 1
+#define HAVE_NETINET_IN_H 1
+#define HAVE_NETINET_TCP_H 1
+#define HAVE_POLL 1
+#define HAVE_POLL_H 1
+#define HAVE_RECVFROM 1
+#define HAVE_SENDTO 1
+#define HAVE_SETSOCKOPT 1
+#define HAVE_SHUTDOWN 1
+#define HAVE_SOCKADDR_STORAGE 1
+#define HAVE_SOCKET 1
+#define HAVE_SYS_POLL_H 1
+#define HAVE_SYS_SOCKET_H 1
+
 #endif /* Py_PYCONFIG_H */

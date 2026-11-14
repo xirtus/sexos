@@ -4055,7 +4055,7 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   stays focus-right). While locked the Shell keeps every key, click and move, and
   Display paints only the lock surface over the whole frame: "Locked", one dot per typed
   character, and why the last try failed. Enter sends the password to Files, which
-  keeps only an Argon2id hash (m=4 MiB, t=3, random salt) in `/system/password` and
+  keeps only an Argon2id hash (m=2 MiB, t=4, random salt) in `/system/password` and
   answers match or not (`sex_config::secret`, opcode 0x2F3, reply tag 0xC7). With no
   password set, Enter unlocks. Settings sets the password with Ctrl+P (typed twice; the Shell keeps F-keys and Tab, so Settings pages use PgDn/PgUp).
   Idle: after `session.dim_after_min` the screen dims, after `lock_after_min` it locks
@@ -4069,6 +4069,33 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   lock-surface stub; QEMU gate `scripts/lock_screen_gate.py` in CI (devices job).
 - **Not yet:** inhibiting idle while media plays (needs a Bell hint); a salt from the
   kernel's held entropy source instead of RDRAND.
+
+## Volume and keyboard settings act (2026-11-14)
+- **Volume:** the Shell keeps the volume in settings (`sound.volume`). After a volume or mute
+  key, it stores the level Bell answers. When the setting changes (Settings, or a restart
+  that loads it) it gives Bell `SET_MASTER`. The default is now 100%, Bell's own, so a fresh
+  disk changes nothing.
+- **Keyboard:** the Shell's key repeat takes `keyboard.repeat_delay_ms` and
+  `keyboard.repeat_rate`, and Caps Lock acts as Ctrl with `keyboard.caps_as_ctrl`. It reads
+  them on its first walk of the settings and on every change.
+- **Evidence:** `scripts/settings_persist_gate.py`:
+  - Boot 1: volume down twice stores 90%, and the Shell's repeat starts at 400 ms / 40 ms.
+  - Boot 2: Settings lengthens the repeat delay and the Shell follows.
+  - Boot 3: Bell is set to 90% and the delay is back, with no key pressed.
+- **Not yet:** Display scale (workstream L) and the volume set from Spindle's `volume`
+  command (Spindle talks to Bell directly) aren't kept.
+
+## Lock screen opens the encrypted home (2026-11-14)
+- **What:** when the Shell's password CHECK passes (or no lock password is set) and the
+  encrypted `/home` (PR #197) is locked, Files tries the typed password on it. Signing in
+  at the lock screen opens `/home` too, like a login. Only the Shell (PD 3) gets this;
+  the staged bytes are copied once and wiped after.
+- **Protocol:** PUT chunks of `sex_config::secret` are no longer answered. Files keeps one
+  unsent reply per caller, so a reply per chunk overwrote the answer that mattered. The
+  Shell's config watch holds its requests while a password check waits; the lock check
+  gives up after 60 s.
+- **Evidence:** `scripts/files_home_gate.py` boot 2 now locks home and the session, types
+  the password on the lock screen, and reads the home file back.
 
 ## First-start setup and default apps, slices B8/B9 (2026-11-13)
 - **B8:** while `setup.done` is off, Settings opens with four questions: keyboard
@@ -4191,6 +4218,10 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
 - New PDX op (ABI addition): `system_stats::OP_END_PROGRAM` 0x3A2 to the Shell (SLOT_SHELL), answers OK / NOT_A_PROGRAM 4 / NOT_FOCUSED 5 / NOT_ENDED 6. Only the focused program may ask; only Program rows can be ended, never services. Shell logs `[shell.program.end]`.
 - Fix: Shell's forced ends (OOM policy and this) now also send a confirmed Close, so a program idle in its event wait wakes, faults on its released pages and is retired (before, an idle program stayed parked).
 - Gate: scripts/program_end_gate.py (Files' line refused with status 4, Fortune ended and retired).
+
+## G-5: User guide in docs/user/ (2026-11-14)
+- Added modular user guide under `docs/user/` (`README.md`, desktop navigation, capabilities/Collar/Shibari, UEFI installation/A-B updates, creative/communication suites, and 17 per-app guides) using canonical themed names (`Silk`, `Atlas`, `Spindle`, `Loom`, `Kaleidoscope`, `Quil`, `Jot`, `Tatami`, `Qupid`, `sexshop`, `Mesh`, `Vellum`, `Gaze`, `Abacus`, `Voyeur`, `Date`, `Chastity`, `Gestalt`, `Flirt`).
+- Included 10 curated 1280x800 and 1024x768 QEMU gate screenshots (`docs/user/assets/`, 300 KiB total); verified all 53 relative links and kernel/naming guardrails.
 
 ## J8 finding: disk reads are not NVMe-queue bound yet (2026-11-14)
 - `run bench read-large` at 4 cores without PKU now logs `[bench.large.cpu]` (Drive, Files, bench, idle cycles per pass). 16 MiB in 64 KiB requests: ~275M cycles; Files ~100M (~390k per request), Drive ~42M (~165k), rest waiting on the serial request chain. Per-core NVMe queues would not help until requests are pipelined (Files readahead / async Drive replies) and Files' per-request CPU drops; deferred until then.
