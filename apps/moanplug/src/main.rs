@@ -86,7 +86,12 @@ fn run() -> Result<(), ()> {
             }
             let entry = unsafe { mapped.export(&binary, b"clap_entry").map_err(|_| ())? };
             let mut plugin = unsafe { Processor::open(entry.cast()).map_err(|_| ())? };
-            plugin.render(&request.pcm).map_err(|_| ())?
+            plugin.render(&request.pcm).map_err(|error| {
+                if matches!(error, moan_plugin::clap::Error::Restart) {
+                    sex_pdx::serial_record!("[moanplug.rejected] format=clap reason=restart");
+                }
+                ()
+            })?
         }
         b"vst3" => unsafe {
             let entry = core::mem::transmute::<

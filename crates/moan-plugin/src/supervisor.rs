@@ -125,6 +125,9 @@ impl OfflineJob {
     pub fn shorten_deadline(&mut self, deadline: u64) {
         self.deadline = self.deadline.min(deadline);
     }
+    pub fn cookie(&self) -> u32 {
+        self.job.cookie()
+    }
     pub fn status(&self) -> Status {
         self.job.status()
     }

@@ -20,6 +20,7 @@ mod guest {
     }
     const SWAP: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/swap.clap"));
     const CRASH: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/crash.clap"));
+    const RESTART: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/restart.clap"));
     const VST: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gain.vst3"));
     const HANG: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/hang.clap"));
     fn nonce() -> Option<[u8; 16]> {
@@ -81,6 +82,8 @@ mod guest {
             app.ui.button(row, "Timeout"),
             app.ui.button(row, "Cancel"),
             app.ui.button(row, "VST3 gain"),
+            app.ui.button(row, "Restart request"),
+            app.ui.button(row, "Receipt wait"),
         ];
         let status = app.ui.label(column, "Ready");
         let alive = app.ui.button(column, "Parent still works");
@@ -88,6 +91,7 @@ mod guest {
         let mut job: Option<OfflineJob> = None;
         let mut closing = false;
         let mut selected = 0;
+        let mut resume_at: Option<u64> = None;
         let mut size = (0, 0);
         app.present();
         sex_pdx::serial_record!(
@@ -112,7 +116,11 @@ mod guest {
                 }
             }
             let now = sex_pdx::get_ticks();
-            if let Some(j) = job.as_mut() {
+            let can_poll = resume_at.is_none_or(|until| now >= until);
+            if can_poll && resume_at.take().is_some() {
+                sex_pdx::serial_record!("[moanrack.window.waited] receipts_pending=1");
+            }
+            if let Some(j) = job.as_mut().filter(|_| can_poll) {
                 j.poll(now);
                 if j.retired() {
                     let st = j.status();
@@ -128,8 +136,9 @@ mod guest {
                         _ => false,
                     };
                     sex_pdx::serial_record!(
-                        "[moanrack.result] mode={} complete={} processed={} retired=1",
+                        "[moanrack.result] mode={} cookie={} complete={} processed={} retired=1",
                         selected,
+                        j.cookie(),
                         (st == Status::Complete) as u8,
                         pass as u8
                     );
@@ -192,7 +201,12 @@ mod guest {
                     let plugin = format!("@/data/moanrack/{hex}.clap");
                     let input = format!("@/data/moanrack/{hex}.in");
                     let output = format!("@/data/moanrack/{hex}.out");
-                    let binary = if i == 4 { VST } else { [SWAP, CRASH, HANG][i] };
+                    let binary = match i {
+                        4 => VST,
+                        5 => RESTART,
+                        6 => SWAP,
+                        _ => [SWAP, CRASH, HANG][i],
+                    };
                     let pcm: Vec<[f32; 2]> = (0..1025)
                         .map(|n| [0.125, if n % 2 == 0 { 0.5 } else { -0.25 }])
                         .collect();
@@ -223,6 +237,9 @@ mod guest {
                         Ok(mut j) => {
                             if i == 2 {
                                 j.shorten_deadline(now.saturating_add(2000));
+                            }
+                            if i == 6 {
+                                resume_at = Some(now.saturating_add(500));
                             }
                             job = Some(j);
                             app.ui.set_text(status, "Offline render running");
