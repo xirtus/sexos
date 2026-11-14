@@ -242,7 +242,12 @@ mod guest {
             for r in responses {
                 studio.set_busy(&mut app.ui, playing || paused || recording.is_some());
                 let outcome = if r == Response::Close {
-                    Ok(studio.request_close_with_pending(&mut app.ui, recording.is_some()))
+                    let action =
+                        studio.request_close_with_pending(&mut app.ui, recording.is_some());
+                    if action.is_none() {
+                        moan::project_io::decline_close(&app);
+                    }
+                    Ok(action)
                 } else {
                     studio.on(&mut app.ui, &r)
                 };

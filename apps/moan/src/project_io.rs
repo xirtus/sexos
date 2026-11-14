@@ -5,6 +5,23 @@ use crate::{project, Studio};
 use alloc::vec::Vec;
 use sex_app::files;
 use weft::sexos::App;
+/// An ordinary program must explicitly decline Shell's pending close, otherwise
+/// its five-second unresponsive-app deadline would bypass the app's dialog.
+pub fn decline_close(app: &App) {
+    loop {
+        match sex_pdx::pdx_call_checked(
+            sex_pdx::SLOT_SHELL,
+            sex_pdx::app_lifecycle::OP_APP_CLOSE_DECLINED,
+            app.window.target as u64,
+            app.window.task as u64,
+            sex_pdx::app_lifecycle::DECLINE_UNSAVED,
+        ) {
+            Ok(_) => break,
+            Err(sex_pdx::ERR_SERVICE_NOT_READY) => sex_pdx::sys_yield(),
+            Err(_) => break,
+        }
+    }
+}
 /// All callers are stopped for file operations. Dirty projects get a standard
 /// discard dialog; a clean project may close immediately without losing edits.
 pub fn close_requested(app: &mut App, studio: &mut Studio) {
@@ -14,6 +31,7 @@ pub fn close_requested(app: &mut App, studio: &mut Studio) {
         sex_pdx::serial_record!("[moan.closed]");
         sex_pdx::task_finish(0);
     }
+    decline_close(app);
 }
 fn events(app: &mut App, studio: &mut Studio) -> Result<(), &'static str> {
     while let Some(event) = app.window.poll() {

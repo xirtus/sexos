@@ -59,6 +59,13 @@ def main():
             start=len(c.text());c.chord('ctrl','shift','t');g['wait'](rf'\[moan.project\] tracks={n} frames=96000',start,60)
         c.drag(surface,70,210);start=len(c.text());c.chord('ctrl','shift','k');g['wait'](r'\[moan.project\] tracks=2 frames=96000 selected=1 clips=3',start,60)
         c.screenshot(surface,'edited-waveform.ppm')
+        # Cancel must defer Shell's five-second force-close deadline, not just
+        # leave a dialog visible while the coordinator silently kills the app.
+        canceled=len(c.text());c.q.key('f11');g['wait'](rf'\[shell.app.close.declined\] target={target} task={task} reason=unsaved',canceled,60)
+        c.q.key('esc');time.sleep(6)
+        assert not re.search(rf'\[app.private.retired\] target={target} task={task} ',c.text()[canceled:])
+        assert '[moan.closed]' not in c.text()[canceled:]
+
         start=len(c.text());c.chord('ctrl','s');g['wait'](r'\[files.app.question\] program=moan mode=Save',start,120)
         c.focus(files_surface);c.chord('ctrl','h');c.chord('ctrl','s')
         # Files' raw SaveAs editor has no Ctrl+A: erase its project.moan hint.
