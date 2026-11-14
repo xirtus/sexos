@@ -107,6 +107,7 @@ members = [
     "crates/gaze-codecs",
     "crates/vellum-edit",
     "crates/loom-core",
+    "crates/loom-remote",
     "crates/aftercare-core",
 ]
 [workspace.package]
