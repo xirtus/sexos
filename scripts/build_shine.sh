@@ -14,6 +14,7 @@ if [[ ! -d "$SRC/.git" ]]; then
   git clone -q --depth=1 --branch 3.1.1 https://github.com/toots/shine.git "$SRC"
 fi
 [[ $(git -C "$SRC" rev-parse HEAD) == "$PIN" ]] || { echo 'Shine source is not the pinned3.1.1 commit' >&2; exit 1; }
+[[ -z $(git -C "$SRC" status --porcelain) ]] || { echo 'Shine source must be a pristine pinned checkout' >&2; exit 1; }
 MATH=-lm
 FLAGS=(-O2 -fPIC -ffunction-sections -fdata-sections -fno-strict-aliasing -fwrapv -fsigned-char -I"$SRC/src/lib")
 if [[ ${SHINE_HOST:-0} != 1 ]]; then

@@ -56,7 +56,7 @@ fi
 # The default profile must match the independently qualified native profile.
 # An explicit FFMPEG_TAG override is developer work, not default qualification.
 FFMPEG_REV=$(git -C "$FFMPEG_SRC" rev-parse HEAD)
-if [[ $FFMPEG_TAG == n7.1.2 && $FFMPEG_REV != "$FFMPEG_PIN" ]]; then
+if [[ $FFMPEG_TAG == n7.1.2 ]] && { [[ $FFMPEG_REV != "$FFMPEG_PIN" ]] || [[ -n $(git -C "$FFMPEG_SRC" status --porcelain) ]]; }; then
   echo 'Default FFmpeg source does not match pinned n7.1.2' >&2; exit 1
 fi
 printf '%s\n' "$FFMPEG_REV" > "$OUT/source-pin"
