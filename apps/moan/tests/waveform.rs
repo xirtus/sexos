@@ -261,3 +261,24 @@ fn open_file_menu_keeps_pointer_ownership_above_waveform_content() {
     );
     assert_eq!(s.session.cursor, original);
 }
+
+#[test]
+fn active_recording_forces_close_confirmation_even_before_audio_is_added() {
+    let mut ui = Ui::new(640, 400, Theme::dark(), Strings::new("en"));
+    let mut s = Studio::build(&mut ui);
+    assert!(!s.session.is_dirty());
+    assert!(s.request_close_with_pending(&mut ui, true).is_none());
+    for response in ui.handle(Event::Key(weft::Key::new(weft::input::code::ESCAPE))) {
+        assert!(s.on(&mut ui, &response).unwrap().is_none());
+    }
+    assert_eq!(s.request_close(&mut ui), Some(Action::Quit));
+}
+#[test]
+fn stereo_opposite_polarity_waveform_is_not_mistaken_for_silence() {
+    let mut s = moan::Session::default();
+    s.add(vec![[10000, -10000]; 96000]).unwrap();
+    s.from = 0;
+    s.to = 0;
+    let (_, pixels) = waveform::render(&s, View::default());
+    assert!(pixels.contains(&0x63D4CD));
+}

@@ -3,6 +3,8 @@
 #![no_std]
 extern crate alloc;
 pub mod project;
+#[cfg(feature = "sexos")]
+pub mod project_io;
 pub mod waveform;
 use alloc::{format, sync::Arc, vec, vec::Vec};
 use moan_core::{Clip, Frame, Track, RATE};
@@ -123,7 +125,12 @@ impl Session {
         if self.tracks.len() >= MAX_TRACKS {
             return Err("Eight tracks maximum");
         }
-        if pcm.is_empty() || pcm.len() > MAX_FRAMES || self.cursor.checked_add(pcm.len()).is_none()
+        if pcm.is_empty()
+            || pcm.len() > MAX_FRAMES
+            || self
+                .cursor
+                .checked_add(pcm.len())
+                .is_none_or(|end| end > project::MAX_TIMELINE)
         {
             return Err("Audio must be 1 frame to 60 seconds");
         }
@@ -382,6 +389,10 @@ impl Studio {
             ("moan.format.flac", "FLAC Export", "Ctrl+Shift+2"),
             ("moan.format.mp3", "MP3 Export", "Ctrl+Shift+3"),
             ("moan.timeline", "Show Waveform Timeline", "Ctrl+T"),
+            ("moan.tone", "Add Tone Track", "Ctrl+Shift+T"),
+            ("moan.split", "Split Clip", "Ctrl+E"),
+            ("moan.cut", "Cut Selected Time", "Ctrl+Shift+K"),
+            ("moan.move-clips", "Drag Clips Mode", "Ctrl+Shift+M"),
         ] {
             ui.commands.add(Command::new(id, label).shortcut(key));
         }
@@ -678,7 +689,26 @@ impl Studio {
         }
     }
     pub fn request_close(&mut self, ui: &mut Ui) -> Option<Action> {
-        self.guard_action(ui, Action::Quit)
+        self.request_close_with_pending(ui, false)
+    }
+    pub fn request_close_with_pending(
+        &mut self,
+        ui: &mut Ui,
+        pending_recording: bool,
+    ) -> Option<Action> {
+        if pending_recording && !self.session.is_dirty() && self.pending.is_none() {
+            let id = ui.message(
+                "Unsaved microphone recording",
+                "Discard the recording and close? Stop keeps it as an editable track.",
+                &["Cancel", "Discard"],
+                0,
+                0,
+            );
+            self.pending = Some((id, Action::Quit));
+            None
+        } else {
+            self.guard_action(ui, Action::Quit)
+        }
     }
     pub fn load_project(&mut self, ui: &mut Ui, bytes: &[u8]) -> Result<(), project::Error> {
         let session = Session::decode_project(bytes)?;
@@ -868,10 +898,10 @@ impl Studio {
             let v = text
                 .parse::<f64>()
                 .map_err(|_| "Enter seconds as a number")?;
-            if !v.is_finite() || v < 0.0 || v > 3600.0 {
-                return Err("Seconds must be 0 to 3600");
+            if !v.is_finite() || v < 0.0 || v > project::MAX_TIMELINE as f64 / RATE as f64 {
+                return Err("Seconds must be 0 to 3660");
             }
-            Ok((v * RATE as f64) as usize)
+            Ok((v * RATE as f64 + 0.5) as usize)
         }
         self.session.cursor = frames(ui.text_of(self.position))?;
         self.session.from = frames(ui.text_of(self.from))?;
@@ -994,6 +1024,10 @@ impl Studio {
                 "moan.format.flac" => "FLAC",
                 "moan.format.mp3" => "MP3",
                 "moan.timeline" => "Show timeline",
+                "moan.tone" => "Tone",
+                "moan.split" => "Split",
+                "moan.cut" => "Cut range",
+                "moan.move-clips" => "Drag clips",
                 _ => return Ok(None),
             }),
             _ => None,
@@ -1001,7 +1035,25 @@ impl Studio {
         let Some(command) = command else {
             return Ok(None);
         };
-        if !["Stop", "Pause", "Undo", "Redo"].contains(&command) {
+        if ![
+            "Stop",
+            "Pause",
+            "Undo",
+            "Redo",
+            "New Project",
+            "Open Project",
+            "WAV",
+            "FLAC",
+            "MP3",
+            "Zoom in",
+            "Zoom out",
+            "Fit audio",
+            "Earlier",
+            "Later",
+            "Show timeline",
+        ]
+        .contains(&command)
+        {
             self.fields(ui)?;
         }
         let action = match command {
@@ -1014,6 +1066,11 @@ impl Studio {
             "Open Project" => self.guard_action(ui, Action::OpenProject),
             "New Project" => self.guard_action(ui, Action::NewProject),
             "Save Project" => Some(Action::SaveProject),
+            "Drag clips" => {
+                self.move_clips = !self.move_clips;
+                ui.set_checked(self.move_mode, self.move_clips);
+                None
+            }
             "Show timeline" => {
                 ui.focus(Some(self.waveform));
                 None
