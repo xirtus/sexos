@@ -49,6 +49,8 @@ jobs:
       run: bash scripts/sound_host_gate.sh
     - name: Qupid keep-watching logic (episodes, skip and up-next cards) on the host
       run: bash scripts/qupid_host_gate.sh
+    - name: Qupid Kodi repositories (addons.xml, versions, dependencies, checksums, addon zips) on the host
+      run: cargo test --locked -p sex-kodi
     - name: Explicit program heap limits with actual Talc
       run: bash scripts/program_heap_limit_host_gate.sh
     - name: Unarmed recorder custody and restart contracts

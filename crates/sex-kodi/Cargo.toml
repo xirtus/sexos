@@ -1,0 +1,10 @@
+[package]
+name = "sex-kodi"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Kodi addon repositories for Qupid: addons.xml, versions, dependencies, checked addon zips"
+
+[dependencies]
+sex-archive = { path = "../sex-archive" }
+sha2 = { version = "=0.10.9", default-features = false, features = ["force-soft"] }
