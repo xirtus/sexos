@@ -13,9 +13,16 @@
 #![no_main]
 extern crate alloc;
 
+mod archive;
+mod compare;
+mod dupes;
 mod jobs;
+mod loom;
+mod meta;
+mod rename;
 mod search;
 mod thumbs;
+mod usage;
 
 use alloc::format;
 use alloc::string::String;
@@ -64,7 +71,9 @@ const HOME: &[u8] = sex_pdx::home_lock::HOME;
 const HOME_MIB: u64 = 256;
 
 /// One step Ctrl+Z can take back.
-enum Undo { Moved { from: Vec<u8>, to: Vec<u8> }, Trashed { from: Vec<u8>, to: Vec<u8>, info: Vec<u8> }, Copied { to: Vec<u8> }, Made { path: Vec<u8> } }
+enum Undo { Moved { from: Vec<u8>, to: Vec<u8> }, Trashed { from: Vec<u8>, to: Vec<u8>, info: Vec<u8> }, Copied { to: Vec<u8> }, Made { path: Vec<u8> },
+    /// A batch rename in `dir`: the moves that take it back, in order.
+    Renamed { dir: Vec<u8>, moves: Vec<(Vec<u8>, Vec<u8>)> } }
 enum Input { Rename(Vec<u8>), NewFolder, SaveAs, Search, Password(Secret) }
 /// What a password typed into Files is for.
 enum Secret { Unlock, New, Repeat(Vec<u8>), Current, ChangeTo(Vec<u8>), ChangeRepeat(Vec<u8>, Vec<u8>) }
@@ -107,6 +116,8 @@ struct App {
     thumbs: Thumbs,
     /// The window shows pixels (the grid), not text.
     showing_pixels: bool,
+    /// Archives, ratings and tags, batch rename, duplicates, disk usage, compare.
+    loom: loom::Loom,
 }
 
 /// The path as Files knows a granted one: `@/absolute/path`.
@@ -145,7 +156,7 @@ impl App {
         match files::list(window, &at(&self.cwd)) {
             Ok(mut list) => {
                 // A copy still being written (or cut short by a pulled stick) is not a file yet.
-                list.retain(|e| e.name != TRASH && !(e.name.first() == Some(&b'.') && e.name.ends_with(b".part")));
+                list.retain(|e| e.name != TRASH && e.name != meta::FILE && !(e.name.first() == Some(&b'.') && e.name.ends_with(b".part")));
                 list.sort_by(|a, b| b.dir.cmp(&a.dir).then_with(|| a.name.to_ascii_lowercase().cmp(&b.name.to_ascii_lowercase())));
                 self.entries = list;
             }
@@ -214,6 +225,7 @@ impl App {
     fn select(&mut self, name: &[u8]) { if let Some(i) = self.entries.iter().position(|e| e.name == name) { self.cursor = i; } }
 
     fn render(&mut self, window: &mut Window) {
+        if self.loom_render(window) { return; }
         if self.thumbs.on && self.input.is_none() && self.search.is_none() && self.question.is_none() {
             let mut head = format!("Files  {}", shown(&self.cwd));
             if let Some(q) = &self.found { head = format!("Found {} for \"{}\" in {}", self.entries.len(), shown(q), shown(&self.cwd)); }
@@ -247,7 +259,8 @@ impl App {
         if self.cursor >= self.top + ROWS { self.top = self.cursor + 1 - ROWS; }
         for (i, e) in self.entries.iter().enumerate().skip(self.top).take(ROWS) {
             let mark = if i == self.cursor { "> " } else { "  " };
-            let from = match self.origins.get(i) { Some(Some(o)) => format!("   from {}", shown(o)), _ => String::new() };
+            let mut from = match self.origins.get(i) { Some(Some(o)) => format!("   from {}", shown(o)), _ => String::new() };
+            from.push_str(&self.loom_badge(&e.name));
             if e.dir { t.push_str(&format!("{}{}/{}\n", mark, shown(&e.name), from)); } else { t.push_str(&format!("{}{}   {}{}\n", mark, shown(&e.name), human(e.size), from)); }
         }
         if self.entries.len() > self.top + ROWS { t.push_str(&format!("  ... {} more\n", self.entries.len() - self.top - ROWS)); }
@@ -262,7 +275,7 @@ impl App {
             t.push_str(&format!("{}: {}|   (Enter confirms, Esc cancels)\n", label, shown_text));
         } else if !self.status.is_empty() { t.push_str(&self.status); t.push('\n'); }
         if let Some(job) = &self.job { t.push_str(&job.progress()); t.push('\n'); }
-        t.push_str("Enter open  Backspace up  F2 rename  Ctrl+I size and checksum\nCtrl+C/X/V copy, cut, paste  Ctrl+N folder\nDel trash  Shift+Del delete for good  Ctrl+T show trash\nIn the trash: Ctrl+R restore  Ctrl+E empty\nOn a stick: Ctrl+E eject  Ctrl+D disks  Ctrl+Z undo  Ctrl+H home\nCtrl+F search names and words in files  Ctrl+G thumbnails  Ctrl+K home lock  Ctrl+Shift+K its password\n");
+        t.push_str("Enter open  Backspace up  F2 rename  Ctrl+I size and checksum\nCtrl+C/X/V copy, cut, paste  Ctrl+N folder\nDel trash  Shift+Del delete for good  Ctrl+T show trash\nIn the trash: Ctrl+R restore  Ctrl+E empty\nOn a stick: Ctrl+E eject  Ctrl+D disks  Ctrl+Z undo  Ctrl+H home\nCtrl+F search names and words in files  Ctrl+G thumbnails  Ctrl+K home lock  Ctrl+Shift+K its password\nEnter on an archive opens it  Ctrl+Shift+X extract  Ctrl+Shift+A zip  Ctrl+0..5 rate  Ctrl+Shift+G tags\nCtrl+Shift+R rename all  Ctrl+Shift+D duplicates  Ctrl+U disk usage  Ctrl+Shift+C compare\n");
         window.show(t.as_bytes());
     }
 
@@ -283,6 +296,7 @@ impl App {
     }
     /// One piece of the background job. True when the window should be drawn again.
     fn work(&mut self, window: &mut Window) -> bool {
+        if self.loom.busy() { return self.loom_work(); }
         if self.search.is_some() { return self.search_step(window); }
         let Some(job) = self.job.as_mut() else { return self.thumbs.on && self.thumbs.step(window) };
         match job.step(window) {
@@ -302,6 +316,7 @@ impl App {
                     Kind::Sum => sex_pdx::serial_record!("[files.app.sum] path={} bytes={} sha256={}", shown(&job.from), job.total, job.sha256().unwrap_or_default()),
                     _ => sex_pdx::serial_record!("[files.app.job.done] kind={:?} what={} from={} to={} bytes={}", kind, shown(&job.what), shown(&job.from), shown(&job.to), job.done),
                 }
+                if kind == Kind::Move { self.meta_moved(window, &job.from, &job.to); }
                 if kind == Kind::Copy || kind == Kind::Move {
                     sex_pdx::serial_record!("[files.app.pasted] from={} to={} cut={}", shown(&job.from), shown(&job.to), (kind == Kind::Move) as u8);
                 }
@@ -402,6 +417,7 @@ impl App {
         match result {
             Ok(()) => {
                 sex_pdx::serial_record!("[files.app.pasted] from={} to={} cut={}", shown(&from), shown(&to), cut as u8);
+                if cut { self.meta_moved(window, &from, &to); }
                 self.status = format!("{} {}.", if cut { "Moved" } else { "Copied" }, shown(base(&to)));
                 self.undo.push(if cut { Undo::Moved { from: from.clone(), to: to.clone() } } else { Undo::Copied { to: to.clone() } });
                 if cut { self.clip = None; }
@@ -425,6 +441,7 @@ impl App {
                 let note = join(&info, base(&to));
                 let _ = files::write(window, &at(&note), &path);
                 sex_pdx::serial_record!("[files.app.trashed] from={} to={}", shown(&path), shown(&to));
+                self.meta_moved(window, &path, &to);
                 self.status = format!("Moved {} to the trash. Ctrl+Z puts it back.", shown(base(&path)));
                 self.undo.push(Undo::Trashed { from: path, to, info: note });
                 let _ = files::sync(window);
@@ -443,6 +460,7 @@ impl App {
             return;
         }
         self.confirm = None;
+        self.meta_removed(window, &path);
         let mut paths = vec![path.clone()];
         // A trash entry's note goes with it.
         if base(&self.cwd) == TRASH { paths.push(join(&join(&self.cwd, b".info"), base(&path))); }
@@ -464,6 +482,8 @@ impl App {
         self.confirm = None;
         let list = files::list(window, &at(&self.cwd)).unwrap_or_default();
         let paths: Vec<Vec<u8>> = list.iter().map(|e| join(&self.cwd, &e.name)).collect();
+        let trash = self.cwd.clone();
+        self.meta_removed(window, &trash);
         sex_pdx::serial_record!("[files.app.emptying] dir={} count={}", shown(&self.cwd), self.entries.len());
         let job = Job::delete(window, b"the trash", &paths);
         self.start(window, job, None, None);
@@ -495,7 +515,7 @@ impl App {
         let Ok(n) = files::read(window, &at(&note), &mut buf) else { self.status = "Where this came from isn't known.".into(); return };
         let back = buf[..n].to_vec();
         match files::rename(window, &at(&path), &at(&back)) {
-            Ok(()) => { let _ = files::remove(window, &at(&note)); sex_pdx::serial_record!("[files.app.restored] from={} to={}", shown(&path), shown(&back)); self.status = format!("Restored {}.", shown(&back)); self.undo.push(Undo::Moved { from: path, to: back }); let _ = files::sync(window); self.load(window); }
+            Ok(()) => { let _ = files::remove(window, &at(&note)); self.meta_moved(window, &path, &back); sex_pdx::serial_record!("[files.app.restored] from={} to={}", shown(&path), shown(&back)); self.status = format!("Restored {}.", shown(&back)); self.undo.push(Undo::Moved { from: path, to: back }); let _ = files::sync(window); self.load(window); }
             Err(e) => self.status = format!("Couldn't restore: {}.", shown(files::message(e))),
         }
     }
@@ -506,9 +526,10 @@ impl App {
             Undo::Trashed { from, to, info } => self.move_path(window, to, from).map(|_| { let _ = files::remove(window, &at(info)); }),
             Undo::Copied { to } => self.remove_all(window, to),
             Undo::Made { path } => files::remove(window, &at(path)),
+            Undo::Renamed { dir, moves } => { let (dir, moves) = (dir.clone(), moves.clone()); self.rename_undo(window, &dir, &moves) }
         };
         match result {
-            Ok(()) => { sex_pdx::serial_record!("[files.app.undone] left={}", self.undo.len()); self.status = "Undone.".into(); let _ = files::sync(window); self.load(window); }
+            Ok(()) => { self.meta_undone(window, &step); sex_pdx::serial_record!("[files.app.undone] left={}", self.undo.len()); self.status = "Undone.".into(); let _ = files::sync(window); self.load(window); }
             Err(e) => { self.status = format!("Couldn't undo: {}.", shown(files::message(e))); self.undo.push(step); }
         }
     }
@@ -572,7 +593,7 @@ impl App {
             Input::Rename(from) => {
                 let to = join(&parent(&from), &text);
                 match files::rename(window, &at(&from), &at(&to)) {
-                    Ok(()) => { self.status = format!("Renamed to {}.", shown(&text)); self.undo.push(Undo::Moved { from, to }); self.load(window); self.select(&text); }
+                    Ok(()) => { self.meta_moved(window, &from, &to); self.status = format!("Renamed to {}.", shown(&text)); self.undo.push(Undo::Moved { from, to }); self.load(window); self.select(&text); }
                     Err(e) => self.status = format!("Couldn't rename: {}.", shown(files::message(e))),
                 }
             }
@@ -630,6 +651,7 @@ impl App {
             }
             return;
         }
+        if self.loom_key(window, key) { return; }
         // Shift+Del and Ctrl+E ask twice; anything else between keeps things.
         let confirming = self.confirm.is_some();
         if let Some(sr) = self.search.take() {
@@ -724,7 +746,7 @@ impl App {
                 }
                 if e.dir { self.go(window, path); }
                 else if matches!(self.question.as_ref().map(|q| q.mode), Some(Pick::Open)) { self.answer(window, Some(path)); }
-                else { self.status = format!("{}: {}. Programs open it with run NAME @{}.", shown(&e.name), human(e.size), shown(&path)); }
+                else { self.status = opens_with(&e.name, e.size, &path); }
             }
             (BACKSPACE, _) => {
                 // Never above what this run was given.
@@ -743,6 +765,19 @@ impl App {
     }
 }
 
+/// What Enter on a file says: the program settings chose for its kind (Default apps).
+fn opens_with(name: &[u8], size: u64, path: &[u8]) -> String {
+    let chosen = sex_config::kind_of(name).and_then(|kind| {
+        let k = sex_config::key(kind)?;
+        let v = sex_app::settings::get(kind).unwrap_or(k.default);
+        match k.kind { sex_config::Kind::Choice(names) => names.get(v as usize).copied(), _ => None }
+    });
+    match chosen {
+        Some(program) => format!("{}: {}. Opens with {}: run {} @{}", shown(name), human(size), program, program, shown(path)),
+        None => format!("{}: {}. Programs open it with run NAME @{}.", shown(name), human(size), shown(path)),
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     let mut window = Window::open();
@@ -758,7 +793,8 @@ pub extern "C" fn _start() -> ! {
     };
     let portal = root == b"/";
     let mut app = App { cwd: root.clone(), root, entries: Vec::new(), cursor: 0, top: 0, clip: None, undo: Vec::new(), input: None, status: String::new(), question: None, portal,
-                        job: None, job_undo: None, job_select: None, last_drawn: 0, last_pct: 0, confirm: None, origins: Vec::new(), watching: None, last_look: 0, index: Index::new(), search: None, found: None, thumbs: Thumbs::new(), showing_pixels: false };
+                        job: None, job_undo: None, job_select: None, last_drawn: 0, last_pct: 0, confirm: None, origins: Vec::new(), watching: None, last_look: 0, index: Index::new(), search: None, found: None, thumbs: Thumbs::new(), showing_pixels: false, loom: loom::Loom::new() };
+    app.meta_load(&mut window);
     let start = app.root.clone();
     app.go(&mut window, start);
     // A locked home asks for its password first: Files opened at login unlocks it.
@@ -774,7 +810,7 @@ pub extern "C" fn _start() -> ! {
     let mut press: Option<(i32, i32)> = None;
     loop {
         // While a job runs, look for keys between its pieces instead of sleeping.
-        let event = if app.job.is_some() || app.search.is_some() || app.thumbs.busy() {
+        let event = if app.job.is_some() || app.search.is_some() || app.thumbs.busy() || app.loom.busy() {
             match window.poll() { Some(e) => Some(e), None => { if app.work(&mut window) { app.render(&mut window); } continue; } }
         } else { window.next_within(400) };
         match event {

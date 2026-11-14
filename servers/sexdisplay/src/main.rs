@@ -141,6 +141,7 @@ mod surface_lifecycle;
 use sex_pdx::app_catalog;
 mod text_transaction;
 mod glyphs;
+mod lock_screen;
 mod bitmap_binding;
 mod bitmap_transaction;
 mod bitmap_stores;
@@ -1920,9 +1921,14 @@ fn civil_clock_lines(clock:&silkbar_model::civil_clock::CivilClock)->[[u8;13];2]
 fn civil_clock_caption(clock:&silkbar_model::civil_clock::CivilClock)->[u8;20]{
     let lines=civil_clock_lines(clock);let mut text=[b' ';20];
     if clock.state()==silkbar_model::civil_clock::State::Snapshot {
-        text[..5].copy_from_slice(&lines[0][4..9]);
-        text[6..9].copy_from_slice(b"UTC");text[10]=b'|';
-        text[12..18].copy_from_slice(&lines[1][..6]);
+        // Local time from the same UTC sample, in the zone the Shell gave (UTC by default).
+        let (offset,abbr)=sex_time::zone::zone(sex_pdx::clock_zone::zone()).offset_at(clock.seconds() as i64);
+        let local=(clock.seconds() as i64+offset as i64).clamp(0,u32::MAX as i64) as u32;
+        let day=local%86_400;
+        for(at,value)in[(0,day/3600),(3,day/60%60)]{text[at]=b'0'+(value/10)as u8;text[at+1]=b'0'+(value%10)as u8;}
+        text[2]=b':';
+        let n=abbr.len().min(5);text[6..6+n].copy_from_slice(&abbr.as_bytes()[..n]);text[7+n]=b'|';
+        text[9+n..15+n].copy_from_slice(&civil_clock_date(local)[..6]);
     }else if clock.state()==silkbar_model::civil_clock::State::Unavailable {
         text[..15].copy_from_slice(b"UTC unavailable");
     }else{text[..13].copy_from_slice(&lines[0]);}
@@ -2051,7 +2057,9 @@ fn publish_frame(fb:*mut u32,w:usize,h:usize,frame:frame_output::Publication<'_>
     // A new night light level repaints every pixel: what the output shows was
     // warmed by the old level, so comparing with the old frame is not enough.
     let night=sex_pdx::desktop_look::night_level();
-    let previous=if sex_pdx::desktop_look::take_night_change(){None}else{frame.previous};
+    // Dim and screen-off shade the finished frame the same way (`screen_state`).
+    let mode=sex_pdx::screen_state::mode();
+    let previous=if sex_pdx::desktop_look::take_night_change()|sex_pdx::screen_state::take_mode_change(){None}else{frame.previous};
     for y in frame.rows.first..frame.rows.end{
         let row=&pixels[y*w..(y+1)*w];
         let (first,end)=match previous{
@@ -2060,7 +2068,9 @@ fn publish_frame(fb:*mut u32,w:usize,h:usize,frame:frame_output::Publication<'_>
                 (first,(first..w).rev().find(|&x|row[x]!=old[x]).unwrap_or(first)+1)}
             None=>(0,w)};
         let out=unsafe{fb.add(y*pitch)};
-        if night==0{
+        if mode!=sex_pdx::screen_state::NORMAL{
+            for(index,pixel)in row[first..end].iter().enumerate(){unsafe{core::ptr::write_volatile(out.add(first+index),sex_pdx::screen_state::shade(sex_pdx::desktop_look::night(*pixel,night),mode));}}
+        }else if night==0{
         for(index,pixel)in row[first..end].iter().enumerate(){unsafe{core::ptr::write_volatile(out.add(first+index),*pixel);}}
         }else{
             // Night light warms the finished frame on its way out.
@@ -2113,6 +2123,8 @@ fn raster_batch(target:&frame_output::Target<'_>,scene: &scene::SceneSnapshot,pl
         draw_window_switcher(fb,w,h,total,scene);
         draw_screenshot_ui(fb,w,h,total,scene);
     }
+    // Locked: the lock surface covers everything the passes above painted.
+    lock_screen::draw(fb,w,h,total);
     draw_cursor_z_top(fb,w,h,total,true,scene);
     true
 }
@@ -4419,6 +4431,27 @@ pub extern "C" fn _start() -> ! {
                             needs_top_strip_redraw = true;
                             sex_pdx::serial_record!("[display.panel.notice] len={}", text.len);
                         }
+                    }
+                }
+                sex_pdx::screen_state::OP_SCREEN_STATE => {
+                    // Only the Shell locks, dims and turns off the screen.
+                    if msg.caller_pd == 3 {
+                        match sex_pdx::screen_state::set(msg.arg0, msg.arg1) {
+                            Some(true) => {
+                                needs_full_redraw = true;
+                                let l = sex_pdx::screen_state::lock();
+                                sex_pdx::serial_record!("[display.screen] mode={} locked={} typed={} say={}", msg.arg0, l.locked as u8, l.typed, l.say);
+                            }
+                            Some(false) => {}
+                            None => sex_pdx::serial_record!("[display.screen.refused] mode={} lock={:#x}", msg.arg0, msg.arg1),
+                        }
+                    }
+                }
+                sex_pdx::clock_zone::OP_CLOCK_ZONE => {
+                    // Only the Shell picks the bar clock's time zone (from settings).
+                    if msg.caller_pd == 3 && sex_pdx::clock_zone::set(msg.arg0) {
+                        needs_top_strip_redraw = true;
+                        sex_pdx::serial_record!("[display.clock.zone] zone={} name={}", msg.arg0, sex_time::zone::zone(msg.arg0 as usize).name);
                     }
                 }
                 sex_pdx::desktop_look::OP_DESKTOP_LOOK => {

@@ -10,7 +10,8 @@ answers LOCKED. On the host the disk image holds no byte of that file's text, an
 Boot 2: Files starts and asks for the password. A wrong one is refused and the file
 stays unreadable; the right one unlocks home and the file reads back. Ctrl+Shift+K
 changes the password (old one, new one twice), home is locked, the old password is
-refused and the new one opens it."""
+refused and the new one opens it. Then home and the session are locked, and typing the
+password on the lock screen opens both."""
 import argparse,os,random,shutil,subprocess,time
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
@@ -97,6 +98,15 @@ def main():
   s=len(t());g['focus'](surface);time.sleep(.5);ctrl('k');g['wait'](r'\[display.text.committed\] ',s,30);time.sleep(.5)
   typed(surface,PASSWORD);g['wait'](r'\[files.home.unlock.refused\] why=WrongPassword',s,300)
   s=len(t());typed(surface,NEWPASS);g['wait'](r'\[files.home.unlocked\] ',s,300)
+  expect('cat /home/secret.txt',r'\[spindle.fs.cat\] '+MARKER.decode())
+  # The lock screen signs in to home too: lock home and the session, type the password there.
+  s=len(t());g['focus'](surface);time.sleep(.5);ctrl('k');g['wait'](r'\[files.home.locked\]',s,60)
+  expect('cat /home/secret.txt',r'\[spindle.fs.result\] kind=7 status=17 ')
+  s=len(t());q.cmd('send-key',{'keys':[{'type':'qcode','data':'meta_l'},{'type':'qcode','data':'esc'}],'hold-time':80});g['wait'](r'\[shell.lock\] locked=1',s,30);time.sleep(1)
+  for k in NEWPASS:q.key(KEYS.get(k,k));time.sleep(.08)
+  s=len(t());q.key('ret')
+  g['wait'](r'\[files.home.unlocked\] ',s,300);g['wait'](r'\[files.password.home\] status=0',s,60)
+  g['wait'](r'\[shell.lock\] locked=0',s,60)
   expect('cat /home/secret.txt',r'\[spindle.fs.cat\] '+MARKER.decode())
  session('home2',second)
  result['ok']=True;print(result)

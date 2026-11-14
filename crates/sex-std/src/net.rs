@@ -38,6 +38,8 @@ struct State {
     error: i32,
     /// Options std may set and read back; they change nothing here.
     options: Vec<(i32, i32, i32)>,
+    /// TLS runs on the connection (sexnet's sessions): sends are flushed as records.
+    tls: bool,
 }
 
 pub(crate) struct Sock { family: i32, kind: i32, state: Mutex<State> }
@@ -141,7 +143,7 @@ pub(crate) fn socket(domain: i32, kind: i32, _protocol: i32) -> Result<Sock, i32
     Ok(Sock { family: domain, kind: base, state: Mutex::new(State {
         socket: None, role: Role::Fresh, local_port: 0, peer: None, nonblocking: kind & abi::SOCK_NONBLOCK != 0,
         receive_timeout: None, send_timeout: None, inbox: VecDeque::new(), datagram: None, pending: None,
-        peer_closed: false, read_shut: false, write_shut: false, error: 0, options: Vec::new(),
+        peer_closed: false, read_shut: false, write_shut: false, error: 0, options: Vec::new(), tls: false,
     }) })
 }
 
@@ -284,7 +286,9 @@ pub(crate) fn send(sock: &Sock, bytes: &[u8]) -> isize {
         if st.role != Role::Stream { return Some(Err(-errno::ENOTCONN)); }
         if st.write_shut { return Some(Err(-errno::EPIPE)); }
         let s = st.socket.as_ref()?;
-        match s.send(bytes) {
+        let sent = s.send(bytes);
+        if st.tls && matches!(sent, Ok(n) if n > 0) { let _ = s.flush(); }
+        match sent {
             Ok(0) => match s.state() {
                 Ok(direct::State::Closed) => Some(Err(-errno::ECONNRESET)),
                 _ => None,
@@ -304,6 +308,54 @@ fn ensure_udp(sock: &Sock) -> Result<(), i32> {
         st.socket = Some(s); st.local_port = got; st.role = Role::Udp;
     }
     Ok(())
+}
+
+/// What `tls_start` returns when the server's certificate was not trusted (Linux's
+/// EKEYREJECTED), so callers can tell it from other failures.
+pub(crate) const TLS_CERTIFICATE: i32 = 129;
+
+/// Turns a connected stream into TLS to `host` (SNI and the certificate's name) and
+/// waits, thirty seconds at most, for the handshake. The network service runs the
+/// session (sex-tls); the socket keeps carrying plain bytes.
+pub(crate) fn tls_start(sock: &Sock, host: &[u8]) -> i32 {
+    let connected = wait(sock, |st| st.send_timeout, |st| match finish_connect(st) {
+        None => None,
+        Some(Err(e)) => Some(Err(e)),
+        Some(Ok(_)) => Some(Ok(())),
+    });
+    if let Err(e) = connected {
+        // A non-blocking socket still connecting: TLS waits for the connection here.
+        if e != -errno::EAGAIN { return e; }
+        let began = sex_pdx::get_ticks();
+        let mut round = 0;
+        loop {
+            let done = { let mut st = sock.state(); finish_connect(&mut st) };
+            match done { None => {}, Some(Err(e)) => return e, Some(Ok(_)) => break }
+            if sex_pdx::get_ticks().saturating_sub(began) > 30_000 { return -errno::ETIMEDOUT; }
+            pause(&mut round);
+        }
+    }
+    {
+        let mut st = sock.state();
+        if st.role != Role::Stream || st.tls { return -errno::EINVAL; }
+        let Some(s) = st.socket.as_ref() else { return -errno::ENOTCONN };
+        if let Err(e) = s.tls_start(host) { return errno_of(e); }
+        st.tls = true;
+    }
+    let began = sex_pdx::get_ticks();
+    let mut round = 0;
+    loop {
+        let stage = { let st = sock.state(); st.socket.as_ref().map(|s| s.tls_stage()) };
+        match stage {
+            Some(Ok(Some(()))) => return 0,
+            Some(Ok(None)) => {}
+            Some(Err(NetError::Certificate)) => return -TLS_CERTIFICATE,
+            Some(Err(e)) => return errno_of(e),
+            None => return -errno::ENOTCONN,
+        }
+        if sex_pdx::get_ticks().saturating_sub(began) > 30_000 { return -errno::ETIMEDOUT; }
+        pause(&mut round);
+    }
 }
 
 pub(crate) fn send_to(sock: &Sock, bytes: &[u8], ip: &IpAddr, port: u16) -> isize {

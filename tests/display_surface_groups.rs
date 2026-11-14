@@ -377,6 +377,7 @@ static mut CURSOR_UNDERLAY_SENTINEL:[u32;4]=[0;4];
 fn restore_cursor_under(_: *mut u32,_:usize,_:usize,_:usize,_:desktop_style::chrome::Metrics){unsafe{DAMAGE_ORDER.push("restore");CURSOR_UNDERLAY_SENTINEL[0]=0;}}
 fn draw_cursor_z_top(_: *mut u32,_:usize,_:usize,_:usize,save:bool,_:&scene::SceneSnapshot){assert!(save);unsafe{DAMAGE_ORDER.push("cursor");CURSOR_UNDERLAY_SENTINEL[1]=0;}}
 fn draw_launcher_panel(_: *mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapshot){unsafe{DAMAGE_ORDER.push("launcher");}}
+mod lock_screen{pub fn draw(_: *mut u32,_:usize,_:usize,_:usize)->bool{false}}
 fn draw_window_switcher(_:*mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapshot){}
 fn draw_screenshot_ui(_:*mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapshot){}
 fn draw_tray_menu(_:*mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapshot){}
