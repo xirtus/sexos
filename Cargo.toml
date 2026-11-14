@@ -133,6 +133,10 @@ members = [
     "apps/bodice",
     "crates/sex-feed",
     "apps/gossip",
+    "crates/sex-kdeconnect",
+    "apps/hookup",
+    "crates/sex-map",
+    "apps/rendezvous",
 ]
 [workspace.package]
 license = "GPL-3.0-only"
