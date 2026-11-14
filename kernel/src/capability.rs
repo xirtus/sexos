@@ -109,6 +109,8 @@ pub enum CapabilityData {
     TrustPolicy(sex_pdx::trust_source::Grant),
     /// Shutting down, restarting, flushing before either, reading power sensors.
     Power(sex_pdx::power::Grant),
+    /// Drag: making virtual machines from the holder's own heap (syscall 110).
+    Machine(sex_pdx::vm::Grant),
     /// Shell's right to start and stop program records. Held once, from BOOT.
     RecordPool,
     InputRing, MessageQueue,

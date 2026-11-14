@@ -1,0 +1,149 @@
+# SPDX-License-Identifier: GPL-3.0-only
+[workspace]
+
+[package]
+name = "sexos-fuzz"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "GPL-3.0-only"
+
+[package.metadata]
+cargo-fuzz = true
+
+[features]
+default = []
+with-sex-torrent = []
+with-sex-kodi = []
+
+[patch.crates-io]
+krilla = { git = "https://github.com/storytold/craft-libs", rev = "6e03f65bf45181db77ba6229716e6624db9eb25b" }
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1.4", features = ["derive"] }
+
+# sexos master crates
+sex-archive = { path = "../crates/sex-archive" }
+vellum-edit = { path = "../crates/vellum-edit" }
+sex-image = { path = "../crates/sex-image" }
+gaze-codecs = { path = "../crates/gaze-codecs" }
+sex-html = { path = "../crates/sex-html" }
+sex-http = { path = "../crates/sex-http" }
+sex-volumes = { path = "../crates/sex-volumes" }
+sex-font = { path = "../crates/sex-font" }
+sex-mail = { path = "../crates/sex-mail" }
+sex-ebook = { path = "../crates/sex-ebook" }
+sex-feed = { path = "../crates/sex-feed" }
+gridcraft-engine = { git = "https://github.com/storytold/gridcraft", rev = "c0ee120ac2d9b59630f5abf1151dd9b471fe2926" }
+wordcraft-engine = { git = "https://github.com/storytold/wordcraft", rev = "a4b898f820eb28626865292fd037a155e4a07aef" }
+serde_json = "1"
+crc32fast = "1.4"
+
+[[bin]]
+name = "fuzz_archive"
+path = "fuzz_targets/fuzz_archive.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_docx_xlsx_ooxml"
+path = "fuzz_targets/fuzz_docx_xlsx_ooxml.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_pdf"
+path = "fuzz_targets/fuzz_pdf.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_volumes"
+path = "fuzz_targets/fuzz_volumes.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_image"
+path = "fuzz_targets/fuzz_image.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_html_css"
+path = "fuzz_targets/fuzz_html_css.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_http_hpack"
+path = "fuzz_targets/fuzz_http_hpack.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_mail"
+path = "fuzz_targets/fuzz_mail.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_font"
+path = "fuzz_targets/fuzz_font.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_torrent"
+path = "fuzz_targets/fuzz_torrent.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_kodi_xml"
+path = "fuzz_targets/fuzz_kodi_xml.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_docx_office"
+path = "fuzz_targets/fuzz_docx_office.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_xlsx_office"
+path = "fuzz_targets/fuzz_xlsx_office.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_spreadeagle_xlsx_ods"
+path = "fuzz_targets/fuzz_spreadeagle_xlsx_ods.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_assuit_docx"
+path = "fuzz_targets/fuzz_assuit_docx.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_bodice_epub"
+path = "fuzz_targets/fuzz_bodice_epub.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_gossip_feed"
+path = "fuzz_targets/fuzz_gossip_feed.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_swingers_bencode"
+path = "fuzz_targets/fuzz_swingers_bencode.rs"
+test = false
+doc = false

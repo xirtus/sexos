@@ -1,0 +1,37 @@
+{
+ "manifest_version": 3,
+ "name": "__MSG_extName__",
+ "version": "1.0",
+ "default_locale": "en",
+ "description": "Recolours pages and blocks a URL",
+ "content_scripts": [
+  {
+   "matches": [
+    "*://*/*"
+   ],
+   "css": [
+    "recolour.css"
+   ],
+   "js": [
+    "mark.js"
+   ],
+   "run_at": "document_end"
+  }
+ ],
+ "declarative_net_request": {
+  "rule_resources": [
+   {
+    "id": "block",
+    "enabled": true,
+    "path": "rules.json"
+   }
+  ]
+ },
+ "permissions": [
+  "declarativeNetRequest",
+  "storage"
+ ],
+ "host_permissions": [
+  "<all_urls>"
+ ]
+}
