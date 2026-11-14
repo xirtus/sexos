@@ -182,10 +182,11 @@ impl Session {
             let line = &self.text[self.next..end];
             self.next = end + 1;
             let Some(e) = r::Entry::decode(line) else { continue };
-            let packages = e.args.split(|b| *b == b' ').any(|t| t == sex_pdx::package::GRANT_TOKEN);
+            // The grant Spindle itself gave the run (`+pkg`, or a terminal's right to start programs).
+            let grant: &[u8] = [sex_pdx::package::GRANT_TOKEN, sex_pdx::console_relay::GRANT_TOKEN].into_iter().find(|g| e.args.split(|b| *b == b' ').any(|t| t == *g)).unwrap_or(b"");
             let flags = r::scene_flags(e.scene) | if e.network { sex_pdx::program_store::RUN_NETWORK } else { 0 };
             sex_pdx::serial_record!("[spindle.session.restore] scene={} path={}", e.scene, core::str::from_utf8(e.path).unwrap_or("?"));
-            unsafe { crate::fs_commands::FS.submit_program_granted(e.path, e.args, flags, 0, packages, sb); }
+            unsafe { crate::fs_commands::FS.submit_program_granted(e.path, e.args, flags, 0, grant, sb); }
             self.waiting = Some(now);
             self.sent_at = now;
             return true;

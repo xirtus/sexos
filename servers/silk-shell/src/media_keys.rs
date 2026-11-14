@@ -33,6 +33,8 @@ pub enum Ask {
     Player(u8),
     /// The panel tray's state or slider: show the new state in the tray.
     Tray,
+    /// The volume from settings: nothing to show.
+    Restore,
 }
 
 const ASKS: usize = 8;
