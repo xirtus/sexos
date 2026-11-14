@@ -6,8 +6,8 @@
 //! Files are found through extent trees (ext4) or classic block maps (ext2/3), small
 //! files and directories may live inside the inode itself (inline data), and htree
 //! directories are read linearly: their index blocks look like empty dirents to a reader
-//! that doesn't care about the hash. Reading never replays the journal or verifies
-//! checksums; a volume with features we can't read
+//! that doesn't care about the hash. A journal Linux left unfinished is replayed at
+//! mount (see `journal`); reading never verifies checksums; a volume with features we can't read
 //! (compression, a journal device, dirdata) is refused at mount, an encrypted file or
 //! directory when it is opened.
 //!
@@ -17,10 +17,15 @@
 use crate::{le16, le32, parts, read_bytes, Disk, Entry, Error, Format, Kind, Result, Stat, Volume};
 use alloc::{string::String, vec, vec::Vec};
 
+mod journal;
 mod write;
 
 const ROOT: u32 = 2;
 const INCOMPAT_FILETYPE: u32 = 0x2;
+const INCOMPAT_RECOVER: u32 = 0x4;
+const COMPAT_HAS_JOURNAL: u32 = 0x4;
+/// 1 + blocks replayed by the last mount that found a journal to replay, else 0.
+pub static RECOVERED: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 const INCOMPAT_META_BG: u32 = 0x10;
 const INCOMPAT_64BIT: u32 = 0x80;
 const INCOMPAT_LARGEDIR: u32 = 0x4000;
@@ -96,13 +101,23 @@ impl Ext4 {
         if desc_size < 32 || !desc_size.is_power_of_two() || desc_size as u64 > bs || (wide && desc_size < 64) { return Err(Error::Corrupt); }
         let name = &sb[0x78..0x88];
         let end = name.iter().position(|b| *b == 0).unwrap_or(16);
-        Ok(Self {
+        let journal = if le32(&sb, 0x5C) & COMPAT_HAS_JOURNAL != 0 && le32(&sb, 0xE0) != 0 { le32(&sb, 0xE0) } else { 0 };
+        let mut v = Self {
             bs, blocks, free, first_block, blocks_per_group, inodes, inodes_per_group, inode_size, desc_size, groups, incompat, ro_compat,
             first_meta_bg: le32(&sb, 0x104) as u64,
             tables: vec![0; groups as usize],
             label: String::from_utf8_lossy(&name[..end]).into_owned(),
             w: write::State::from_super(&sb, bs, incompat, ro_compat, inode_size),
-        })
+        };
+        // Linux left transactions in the journal: put them home first, as Linux would
+        // when mounting. If that can't be done the volume is read as it is, read only.
+        if incompat & INCOMPAT_RECOVER != 0 && journal != 0 {
+            match journal::replay(&mut v, disk, journal) {
+                Ok(n) => { RECOVERED.store(n as u32 + 1, core::sync::atomic::Ordering::Relaxed); return Self::mount(disk); }
+                Err(_) => RECOVERED.store(0, core::sync::atomic::Ordering::Relaxed),
+            }
+        }
+        Ok(v)
     }
 
     fn block(&self, disk: &mut dyn Disk, n: u64) -> Result<Vec<u8>> {
