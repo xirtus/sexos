@@ -6,7 +6,12 @@
 // browser dispatches answers and events here as `ext\tJSON`.
 //
 // Only code the browser wrote can make an API object: it must give the key the browser
-// handed this realm once, before any page script ran.
+// handed this realm once, before any page script ran. Content scripts share the page's
+// realm (no isolated world yet), so this code never hands an API object or a record
+// holding one to anything a page script can replace: built-ins it uses are taken here,
+// before page scripts run, and its records have no prototype (no setter on
+// Object.prototype sees them). What a content script itself does with `chrome` in that
+// shared realm is still visible to the page; isolated worlds are the real fix.
 (function () {
   'use strict';
   const X = globalThis.__sx_ext;
@@ -17,12 +22,15 @@
   const key = H(EXT, 'key');
   if (!key) return;
   const stringify = JSON.stringify, parse = JSON.parse;
+  const apply = Reflect.apply, create = Object.create, hasOwn = Object.prototype.hasOwnProperty;
+  const PromiseC = Promise, then = Promise.prototype.then, resolved = Promise.resolve, rejected = Promise.reject;
+  const own = (o, k) => apply(hasOwn, o, [k]);
   // Message contents cross the browser as JSON text, so they arrive as they were sent
   // (the browser's own JSON would put an object's keys in order).
   const enc = v => (v === undefined ? undefined : stringify(v));
   const dec = t => (typeof t === 'string' ? parse(t) : undefined);
-  const realms = new Map();
-  const waiting = new Map();
+  const realms = create(null);
+  const waiting = create(null);
   let seq = 1;
   let lastError;
 
@@ -40,19 +48,20 @@
   // A Chrome API call: a Promise, or the callback when the last argument is one.
   function finish(p, cb) {
     if (!cb) return p;
-    p.then(v => { try { cb(v); } catch (e) { report(e); } },
-      e => { lastError = { message: String(e && e.message || e) }; try { cb(); } catch (x) { report(x); } finally { lastError = undefined; } });
+    apply(then, p, [v => { try { cb(v); } catch (e) { report(e); } },
+      e => { lastError = { message: String(e && e.message || e) }; try { cb(); } catch (x) { report(x); } finally { lastError = undefined; } }]);
   }
   function api(fn) {
     return function (...a) {
       const cb = typeof a[a.length - 1] === 'function' ? a.pop() : null;
       let p;
-      try { p = Promise.resolve(fn.apply(this, a)); } catch (e) { p = Promise.reject(e); }
+      try { p = apply(resolved, PromiseC, [apply(fn, this, a)]); } catch (e) { p = apply(rejected, PromiseC, [e]); }
       return finish(p, cb);
     };
   }
   // A request the browser answers later.
-  function ask(o) { return new Promise((resolve, reject) => { const n = seq++; o.n = n; waiting.set(n, { resolve, reject }); post(o); }); }
+  function ask(o) { return new PromiseC((resolve, reject) => { const n = seq++; o.n = n; waiting[n] = { resolve, reject }; post(o); }); }
+  const after = (p, f) => apply(then, p, [f]);
   const done = () => undefined;
 
   function storageArea(r, name) {
@@ -97,12 +106,13 @@
   function changed(r, area, changes, here) {
     if (!Object.keys(changes).length) return;
     r.storage.onChanged._fire(changes, area);
-    if (r.storage[area]) r.storage[area].onChanged._fire(changes);
+    if (own(r.storage, area) && area !== 'onChanged') r.storage[area].onChanged._fire(changes);
     if (here) post({ t: 'changed', id: r.id, area, changes: enc(changes) });
   }
 
   function make(id, manifest, messages, where) {
-    const r = { id, where };
+    const r = create(null);
+    r.id = id; r.where = where;
     const url = p => 'kaleidoscope-extension://' + id + '/' + String(p).replace(/^\//, '');
     const tab = () => { try { return parse(H(EXT, 'tab') || 'null'); } catch (e) { return null; } };
     const runtime = {
@@ -137,9 +147,8 @@
       getAcceptLanguages: api(() => ['en-US', 'en']),
       detectLanguage: api(() => ({ isReliable: false, languages: [] })),
     };
-    const storage = { onChanged: event() };
+    const storage = { onChanged: event(), local: storageArea(r, 'local'), sync: storageArea(r, 'sync'), session: storageArea(r, 'session'), managed: storageArea(r, 'managed') };
     r.storage = storage;
-    for (const name of ['local', 'sync', 'session', 'managed']) storage[name] = storageArea(r, name);
     const tabs = {
       TAB_ID_NONE: -1,
       query: api(() => { const t = tab(); return t ? [t] : []; }),
@@ -154,7 +163,7 @@
     };
     const results = () => [{ frameId: 0, documentId: '0', result: null }];
     const scripting = {
-      executeScript: api(o => ask({ t: 'exec', id, files: o.files || [], code: o.func ? '(' + String(o.func) + ')(...' + stringify(o.args || []) + ')' : '' }).then(results)),
+      executeScript: api(o => after(ask({ t: 'exec', id, files: o.files || [], code: o.func ? '(' + String(o.func) + ')(...' + stringify(o.args || []) + ')' : '' }), results)),
       insertCSS: api(o => ask({ t: 'css', id, files: o.files || [], css: o.css || '' })),
       removeCSS: api(done),
       registerContentScripts: api(list => ask({ t: 'register', id, scripts: list || [] })),
@@ -166,11 +175,11 @@
       MAX_NUMBER_OF_ENABLED_STATIC_RULESETS: 50, MAX_NUMBER_OF_STATIC_RULESETS: 100, MAX_NUMBER_OF_DYNAMIC_RULES: 30000,
       MAX_NUMBER_OF_SESSION_RULES: 5000, GUARANTEED_MINIMUM_STATIC_RULES: 30000, MAX_NUMBER_OF_REGEX_RULES: 1000,
       getEnabledRulesets: api(() => ask({ t: 'rulesets', id })),
-      updateEnabledRulesets: api(o => ask({ t: 'rulesets', id, enable: o.enableRulesetIds || [], disable: o.disableRulesetIds || [] }).then(done)),
+      updateEnabledRulesets: api(o => after(ask({ t: 'rulesets', id, enable: o.enableRulesetIds || [], disable: o.disableRulesetIds || [] }), done)),
       getDynamicRules: api(() => ask({ t: 'rules', id, which: 'dynamic' })),
       getSessionRules: api(() => ask({ t: 'rules', id, which: 'session' })),
-      updateDynamicRules: api(o => ask({ t: 'rules', id, which: 'dynamic', add: o.addRules || [], remove: o.removeRuleIds || [] }).then(done)),
-      updateSessionRules: api(o => ask({ t: 'rules', id, which: 'session', add: o.addRules || [], remove: o.removeRuleIds || [] }).then(done)),
+      updateDynamicRules: api(o => after(ask({ t: 'rules', id, which: 'dynamic', add: o.addRules || [], remove: o.removeRuleIds || [] }), done)),
+      updateSessionRules: api(o => after(ask({ t: 'rules', id, which: 'session', add: o.addRules || [], remove: o.removeRuleIds || [] }), done)),
       getAvailableStaticRuleCount: api(() => 30000),
       isRegexSupported: api(() => ({ isSupported: false, reason: 'syntaxError' })),
       setExtensionActionOptions: api(done),
@@ -183,6 +192,7 @@
       onClicked: event(),
     };
     const alarms = new Map();
+    const menus = { create: () => 0, update: api(done), remove: api(done), removeAll: api(done), onClicked: event(), ContextType: {} };
     const chrome = {
       runtime, i18n, storage, tabs, scripting, action, declarativeNetRequest: dnr,
       browserAction: action, pageAction: action,
@@ -203,7 +213,7 @@
           const fire = () => { if (alarms.get(name) !== a) return; a.scheduledTime = Date.now() + period; chrome.alarms.onAlarm._fire({ name, scheduledTime: a.scheduledTime }); if (period) a.timer = setTimeout(fire, period); else alarms.delete(name); };
           a.timer = setTimeout(fire, due);
           alarms.set(name, a);
-          return Promise.resolve();
+          return apply(resolved, PromiseC, []);
         },
         get: api(n => { const a = alarms.get(String(n || '')); return a && { name: a.name, scheduledTime: a.scheduledTime, periodInMinutes: a.periodInMinutes }; }),
         getAll: api(() => [...alarms.values()].map(a => ({ name: a.name, scheduledTime: a.scheduledTime, periodInMinutes: a.periodInMinutes }))),
@@ -211,17 +221,15 @@
         clearAll: api(() => { for (const a of alarms.values()) clearTimeout(a.timer); alarms.clear(); return true; }),
         onAlarm: event(),
       },
-      contextMenus: { create: () => 0, update: api(done), remove: api(done), removeAll: api(done), onClicked: event() },
+      contextMenus: menus, menus,
       commands: { getAll: api(() => []), onCommand: event() },
       webNavigation: { onBeforeNavigate: event(), onCommitted: event(), onDOMContentLoaded: event(), onCompleted: event(), onCreatedNavigationTarget: event(), onHistoryStateUpdated: event(), getFrame: api(() => null), getAllFrames: api(() => []) },
       management: { getSelf: api(() => ({ id, name: manifest.name, version: manifest.version, enabled: true, installType: 'normal', type: 'extension' })) },
       privacy: {},
       windows: { WINDOW_ID_CURRENT: -2, getCurrent: api(() => ({ id: 1, focused: true })), getAll: api(() => [{ id: 1, focused: true }]), onFocusChanged: event(), onRemoved: event(), onCreated: event() },
     };
-    chrome.contextMenus.ContextType = {};
-    chrome.menus = chrome.contextMenus;
     r.chrome = chrome;
-    realms.set(id, r);
+    realms[id] = r;
     return chrome;
   }
 
@@ -230,13 +238,13 @@
     let e;
     try { e = parse(text); } catch (x) { return 0; }
     if (e.k === 'reply') {
-      const w = waiting.get(e.n);
+      const w = own(waiting, e.n) ? waiting[e.n] : undefined;
       if (!w) return 0;
-      waiting.delete(e.n);
+      delete waiting[e.n];
       if (e.e) w.reject(new Error(e.e)); else w.resolve(dec(e.r));
       return 0;
     }
-    const r = realms.get(e.id);
+    const r = typeof e.id === 'string' && own(realms, e.id) ? realms[e.id] : undefined;
     if (!r) { if (e.k === 'msg') post({ t: 'reply', id: e.id, n: e.n, to: e.to, none: true }); return 0; }
     switch (e.k) {
       case 'msg': {
@@ -260,7 +268,7 @@
   Object.defineProperty(globalThis, '__kaleidoscopeExt', {
     value(id, k, manifest, messages, where) {
       if (k !== key || typeof id !== 'string') return undefined;
-      return (realms.get(id) || { chrome: make(id, manifest || {}, messages || {}, where || 'content') }).chrome;
+      return own(realms, id) ? realms[id].chrome : make(id, manifest || {}, messages || {}, where || 'content');
     },
   });
 })();

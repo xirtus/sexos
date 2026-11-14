@@ -108,3 +108,25 @@ fn only_the_browser_key_opens_the_api() {
     ext.eval(&format!("{} chrome.storage.local.set({{x:1}}); console.log('ls', localStorage.length)", api("content")), "x.js").unwrap();
     assert_eq!(logs(&mut ext), ["ls 0"]);
 }
+
+#[test]
+fn a_page_that_replaces_built_ins_gets_no_api_object() {
+    let store = Rc::new(RefCell::new(WebStorage::default()));
+    let mut page = realm("https://a.example/", &store, KEY);
+    // The page runs first (as before a document_idle content script) and lays traps.
+    page.eval(r#"
+      globalThis.stolen = [];
+      const keep = v => { if (v && typeof v === 'object' && (v.runtime || v.storage || v.chrome)) stolen.push(v); };
+      const set = Map.prototype.set; Map.prototype.set = function (k, v) { keep(v); return set.call(this, k, v); };
+      for (const name of ['chrome', 'storage', 'local', 'menus', 'ContextType', 'id', 'where', 'n']) {
+        Object.defineProperty(Object.prototype, name, { configurable: true, set(v) { keep(this); keep(v); Object.defineProperty(this, name, { value: v, writable: true, enumerable: true, configurable: true }); } });
+      }
+      const fapply = Function.prototype.apply; Function.prototype.apply = function (t, a) { keep(t); return fapply.call(this, t, a); };
+      const then = Promise.prototype.then; Promise.prototype.then = function (...a) { return then.apply(this, a); };
+      const resolve = Promise.resolve; Promise.resolve = function (v) { keep(v); return resolve.call(this, v); };
+    "#, "page.js").unwrap();
+    page.eval(&format!("(function(){{{} chrome.storage.local.set({{k:1}}, () => {{}}); chrome.storage.local.get('k').then(() => {{}}); }})()", api("content")), "content.js").unwrap();
+    page.dispatch("tick").unwrap();
+    page.eval("console.log('stolen', stolen.length)", "check.js").unwrap();
+    assert_eq!(logs(&mut page), ["stolen 0"]);
+}

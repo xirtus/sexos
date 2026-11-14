@@ -82,13 +82,17 @@ pub struct Extensions {
     pub key: String,
 }
 
-/// Where a message to or from an extension realm goes.
+/// Where a message to or from an extension realm goes: a page's document (by its
+/// [`Document::owner`], so an answer never lands in another tab's page) or a background.
 #[derive(Clone, PartialEq, Eq)]
-enum Realm { Page, Background(String) }
+enum Realm { Page(u64), Background(String) }
 
 impl Realm {
-    fn tag(&self) -> String { match self { Realm::Page => String::from("page"), Realm::Background(id) => alloc::format!("bg:{}", id) } }
-    fn from_tag(t: &str) -> Realm { match t.strip_prefix("bg:") { Some(id) => Realm::Background(String::from(id)), None => Realm::Page } }
+    fn tag(&self) -> String { match self { Realm::Page(d) => alloc::format!("page:{}", d), Realm::Background(id) => alloc::format!("bg:{}", id) } }
+    fn from_tag(t: &str) -> Option<Realm> {
+        if let Some(id) = t.strip_prefix("bg:") { return Some(Realm::Background(String::from(id))); }
+        t.strip_prefix("page:")?.parse().ok().map(Realm::Page)
+    }
 }
 
 fn read_bytes(window: &mut Window, path: &str) -> Option<Vec<u8>> {
@@ -550,7 +554,8 @@ impl Browser {
         let tab = self.ext_tab();
         for b in self.extensions.backgrounds.iter_mut() { b.script.page_mut().ext_tab = tab.clone(); }
         for _ in 0..ROUNDS {
-            let mut posted: Vec<(Realm, String)> = self.doc.get().ext_outbox.drain(..).map(|t| (Realm::Page, t)).collect();
+            let page = Realm::Page(self.doc.get().owner());
+            let mut posted: Vec<(Realm, String)> = self.doc.get().ext_outbox.drain(..).map(|t| (page.clone(), t)).collect();
             for b in self.extensions.backgrounds.iter_mut() {
                 let id = b.id.clone();
                 posted.extend(b.script.page_mut().ext_outbox.drain(..).map(|t| (Realm::Background(id.clone()), t)));
@@ -570,7 +575,14 @@ impl Browser {
     fn ext_deliver(&mut self, to: &Realm, e: &Value) -> bool {
         let text = alloc::format!("ext\t{}", e);
         match to {
-            Realm::Page => match self.doc.script() { Some(s) => s.dispatch(&text).is_ok(), None => false },
+            Realm::Page(owner) => {
+                // Only the document that asked: after a tab switch or a new page it is gone.
+                if self.doc.get().owner() != *owner { sex_pdx::serial_record!("[web.extension.undelivered] page={}", owner); return false; }
+                let ok = match self.doc.script() { Some(s) => s.dispatch(&text).is_ok(), None => false };
+                // A listener may have set a timer and changed nothing else.
+                self.timers_changed();
+                ok
+            }
             Realm::Background(id) => match self.extensions.backgrounds.iter_mut().find(|b| b.id == *id) {
                 Some(b) => { let ok = b.script.dispatch(&text).is_ok(); b.timer = Some(sex_pdx::get_ticks()); ok }
                 None => false,
@@ -590,9 +602,9 @@ impl Browser {
         sex_pdx::serial_record!("[web.extension.message] id={} t={} from={}", id, t, from.tag());
         match t {
             "send" | "tabsend" => {
-                let to = if t == "send" { Realm::Background(id.clone()) } else { Realm::Page };
+                let to = if t == "send" { Realm::Background(id.clone()) } else { Realm::Page(self.doc.get().owner()) };
                 let sender = match &from {
-                    Realm::Page => json!({ "id": id, "url": self.url, "origin": super::origin_of(&self.url), "frameId": 0, "tab": serde_json::from_str::<Value>(&self.ext_tab()).unwrap_or(Value::Null) }),
+                    Realm::Page(_) => json!({ "id": id, "url": self.url, "origin": super::origin_of(&self.url), "frameId": 0, "tab": serde_json::from_str::<Value>(&self.ext_tab()).unwrap_or(Value::Null) }),
                     Realm::Background(_) => json!({ "id": id, "url": alloc::format!("{}{}/_generated_background_page.html", SCHEME, id) }),
                 };
                 let e = json!({ "k": "msg", "id": id, "n": n, "m": m["m"], "to": from.tag(), "sender": sender });
@@ -601,13 +613,14 @@ impl Browser {
                 }
             }
             "reply" => {
-                let to = Realm::from_tag(m["to"].as_str().unwrap_or("page"));
+                let Some(to) = Realm::from_tag(m["to"].as_str().unwrap_or("")) else { return };
                 let r = if m["none"].as_bool() == Some(true) { json!({ "k": "reply", "n": n }) } else { json!({ "k": "reply", "n": n, "r": m["r"] }) };
                 self.ext_deliver(&to, &r);
             }
             "changed" => {
                 let e = json!({ "k": "changed", "id": id, "area": m["area"], "changes": m["changes"] });
-                if from != Realm::Page { self.ext_deliver(&Realm::Page, &e); }
+                let page = Realm::Page(self.doc.get().owner());
+                if from != page { self.ext_deliver(&page, &e); }
                 let bg = Realm::Background(id.clone());
                 if from != bg { self.ext_deliver(&bg, &e); }
             }
