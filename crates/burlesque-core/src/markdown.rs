@@ -123,11 +123,10 @@ fn parse_slide_markdown(content: &str, slide_id: u64, width: f32, height: f32) -
         }
 
         // Titles
-        if trimmed.starts_with("# ") {
-            title = String::from(&trimmed[2..]);
+        if let Some(t) = trimmed.strip_prefix("# ") {
+            title = String::from(t);
             continue;
-        } else if trimmed.starts_with("## ") {
-            let subtitle = &trimmed[3..];
+        } else if let Some(subtitle) = trimmed.strip_prefix("## ") {
             paragraphs.push(Paragraph::from_text(subtitle, 34.0));
             continue;
         }
@@ -136,8 +135,7 @@ fn parse_slide_markdown(content: &str, slide_id: u64, width: f32, height: f32) -
         let leading_spaces = line.chars().take_while(|c| *c == ' ' || *c == '\t').count();
         let level = (leading_spaces / 2 + 1).min(5) as u8;
 
-        if trimmed.starts_with("- ") || trimmed.starts_with("* ") {
-            let item = &trimmed[2..];
+        if let Some(item) = trimmed.strip_prefix("- ").or_else(|| trimmed.strip_prefix("* ")) {
             paragraphs.push(Paragraph::bullet(item, 26.0, level));
         } else if !trimmed.is_empty() {
             paragraphs.push(Paragraph::from_text(trimmed, 26.0));
@@ -175,10 +173,10 @@ fn parse_slide_markdown(content: &str, slide_id: u64, width: f32, height: f32) -
 
 fn strip_notes_prefix(s: &str) -> &str {
     let lower = s.trim();
-    if lower.starts_with("notes:") || lower.starts_with("Notes:") {
-        lower[6..].trim()
-    } else if lower.starts_with("note:") || lower.starts_with("Note:") {
-        lower[5..].trim()
+    if let Some(rest) = lower.strip_prefix("notes:").or_else(|| lower.strip_prefix("Notes:")) {
+        rest.trim()
+    } else if let Some(rest) = lower.strip_prefix("note:").or_else(|| lower.strip_prefix("Note:")) {
+        rest.trim()
     } else {
         lower
     }

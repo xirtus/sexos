@@ -516,3 +516,119 @@ fn test_malformed_and_fuzz_safety() {
     let garbage_deck = Deck::from_markdown("----\n---\n---\n```\n```\n<!-- notes:\n").expect("malformed md handled");
     assert!(garbage_deck.slide_count() >= 1);
 }
+
+#[test]
+fn test_multibyte_utf8_cjk_emoji_char_boundary_safety() {
+    use burlesque_core::pptx::parse_hex_color;
+    use burlesque_core::xml_utils::{decode_entities, XmlNode};
+
+    // 1. Issue #260 & #261 reproducer: empty attribute name followed by ="..." with non-ASCII bytes
+    // Issue #261: &<K\n=""\xff
+    let issue_261_bytes: &[u8] = &[38, 60, 75, 10, 61, 34, 34, 255];
+    let lossy_str = String::from_utf8_lossy(issue_261_bytes);
+    let _ = XmlNode::parse(&lossy_str);
+
+    // Issue #260: unclosed block with multi-byte char \u{070c}
+    let issue_260_bytes: &[u8] = &[123, 220, 140];
+    let issue_260_str = std::str::from_utf8(issue_260_bytes).unwrap();
+    let _ = Deck::from_markdown(issue_260_str);
+
+    // 2. Multi-byte CJK and Emoji inside XML tags and attributes
+    let cjk_xmls = [
+        "<root 日本語=\"東京\" 🚀=\"宇宙\"><子>本文</子></root>",
+        "<root =\"\" 日本語=\"東京\">",
+        "<tag 日本語>",
+        "<tag 🚀=\"rocket\" / >",
+        "<tag key=\"&#x1F600; &amp; &#12354; 日本語\">",
+        "<!-- 日本語コメント 🚀 --> <root/>",
+        "<root><![CDATA[ 日本語 CDATA 🚀 ]]></root>",
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?> <?pi 日本語?> <root/>",
+        "<unclosed_tag 漢字=\"値\"",
+    ];
+
+    for xml in cjk_xmls {
+        let _ = XmlNode::parse(xml);
+    }
+
+    // 3. parse_hex_color with 6-byte UTF-8 string ("日本" is 6 bytes in UTF-8!)
+    // Must return None safely without panic!
+    assert_eq!(parse_hex_color("日本"), None);
+    assert_eq!(parse_hex_color("🚀"), None);
+    assert_eq!(parse_hex_color("F59E0B"), Some(sex_canvas::Color::rgb(0xF5, 0x9E, 0x0B)));
+    assert_eq!(parse_hex_color("#180828"), Some(sex_canvas::Color::rgb(0x18, 0x08, 0x28)));
+
+    // 4. decode_entities with entities near multi-byte UTF-8
+    let decoded = decode_entities("日本語 &amp; 🚀 &lt;タグ&gt; &#x1F600; &#12354; &notanentity;");
+    assert!(decoded.contains("日本語 & 🚀 <タグ>"));
+
+    // 5. Malformed markdown with CJK, emojis, and unclosed notes
+    let md_cjk = r#"# 日本語タイトル 🚀
+## サブタイトル 🌸
+
+- 箇条書き 1: 漢字とひらがな
+- 箇条書き 2: Emoji 🎉 & symbols: ©®™
+
+<!-- notes:
+発表者ノート: これは日本語のプレゼンテーションです。
+-->
+"#;
+    let deck = Deck::from_markdown(md_cjk).expect("import cjk markdown succeeds");
+    assert_eq!(deck.slide_count(), 1);
+    let slide = deck.get_slide(0).unwrap();
+    assert_eq!(slide.title, "日本語タイトル 🚀");
+    assert!(slide.speaker_notes.contains("発表者ノート"));
+}
+
+#[test]
+fn test_pdf_export_with_parentheses_backslashes_and_utf8() {
+    let mut deck = Deck::new(AspectRatio::Ratio16x9);
+    let slide = deck.add_slide(SlideLayout::TitleSlide);
+    slide.title = String::from("Burlesque (Cabaret) \\ Presentation: 日本語 🚀 — ñoño & (parentheses)");
+    slide.set_speaker_notes("Speaker note with (special) \\ characters: 日本語");
+
+    let mut tb = TextBox::new(sex_canvas::Rect::new(100.0, 200.0, 1000.0, 300.0));
+    let mut p = Paragraph::new();
+    p.push_run(TextRun::plain("Line 1: (nested (parens)) and \\backslashes\\", 32.0).bold());
+    p.push_run(TextRun::plain("Line 2: Multi-byte UTF-8: 東京 / とうきょう / Tokyo 🌸", 28.0));
+    tb.paragraphs.push(p);
+    slide.add_element(SlideElement::TextBox(tb));
+
+    // Export to PDF
+    let pdf_bytes = deck.export_pdf().expect("pdf export with utf8 and escapes succeeds");
+
+    // Verify PDF header and trailer
+    assert!(pdf_bytes.starts_with(b"%PDF-1.4\n"));
+    assert!(pdf_bytes.ends_with(b"%%EOF\n"));
+
+    // Verify with vellum-edit Editor
+    let editor = vellum_edit::Editor::open(pdf_bytes.clone())
+        .expect("vellum-edit must open exported PDF cleanly with UTF-8 and parentheses");
+    assert_eq!(editor.page_count(), 1);
+    assert_eq!(editor.original(), &pdf_bytes[..]);
+}
+
+#[test]
+fn test_zero_and_undersized_render_buffers() {
+    let mut deck = Deck::new(AspectRatio::Ratio16x9);
+    deck.add_slide(SlideLayout::TitleSlide);
+    deck.get_slide_mut(0).unwrap().title = String::from("Buffer Test Slide");
+    let slide = deck.get_slide(0).unwrap();
+
+    let mut small_buf = [0u32; 10];
+
+    // 1. render_slide with 0x0
+    render_slide(slide, &deck.theme, deck.aspect_ratio, &mut small_buf, 0, 0);
+
+    // 2. render_slide with undersized buffer (needs 100*100 = 10,000, given 10)
+    render_slide(slide, &deck.theme, deck.aspect_ratio, &mut small_buf, 100, 100);
+
+    // 3. render_presenter_view with 0x0
+    let session = PresenterSession::new(deck);
+    render_presenter_view(&session, &mut small_buf, 0, 0);
+
+    // 4. render_presenter_view with undersized buffer
+    render_presenter_view(&session, &mut small_buf, 1024, 768);
+
+    // 5. render_presenter_view with tiny dimensions
+    render_presenter_view(&session, &mut small_buf, 100, 100);
+}

@@ -365,8 +365,9 @@ fn escape_pdf_string(s: &str) -> String {
             '\\' => out.push_str("\\\\"),
             '\r' => out.push_str("\\r"),
             '\n' => out.push_str("\\n"),
-            _ if c.is_ascii() => out.push(c),
-            _ => out.push('?'),
+            '\t' => out.push_str("\\t"),
+            '\0' => {}
+            _ => out.push(c),
         }
     }
     out

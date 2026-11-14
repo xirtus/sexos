@@ -21,6 +21,14 @@ pub fn render_slide(
     target_w: u32,
     target_h: u32,
 ) {
+    let needed = match (target_w as usize).checked_mul(target_h as usize) {
+        Some(n) => n,
+        None => return,
+    };
+    if target_w == 0 || target_h == 0 || buffer.len() < needed {
+        return;
+    }
+
     let mut canvas = match Canvas::new(buffer, target_w, target_h) {
         Some(c) => c,
         None => return,
@@ -211,6 +219,11 @@ pub(crate) fn draw_text_run(
     target_w: u32,
     target_h: u32,
 ) -> f32 {
+    let font_size_px = if font_size_px.is_finite() {
+        font_size_px.clamp(4.0, 256.0)
+    } else {
+        16.0
+    };
     let size_arg = (font_size_px * 64.0) as u32;
     let mut cur_x = start_x;
     let mut prev_glyph = None;

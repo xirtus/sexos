@@ -142,6 +142,17 @@ pub fn render_presenter_view(
     width: u32,
     height: u32,
 ) {
+    let needed = match (width as usize).checked_mul(height as usize) {
+        Some(n) => n,
+        None => return,
+    };
+    if width == 0 || height == 0 || buffer.len() < needed {
+        return;
+    }
+    if width < 320 || height < 200 {
+        return;
+    }
+
     let mut canvas = match Canvas::new(buffer, width, height) {
         Some(c) => c,
         None => return,
@@ -291,23 +302,25 @@ pub fn render_presenter_view(
     // Render current slide
     let pw = slide_preview_w as u32;
     let ph = slide_preview_h as u32;
-    if pw > 0 && ph > 0 {
-        let mut slide_buf = vec![0u32; pw as usize * ph as usize];
-        if let Some(slide) = session.current_slide() {
-            render_slide(
-                slide,
-                &session.deck.theme,
-                session.deck.aspect_ratio,
-                &mut slide_buf,
-                pw,
-                ph,
-            );
-        } else {
-            slide_buf.fill(card_bg.premultiplied());
-        }
+    if let Some(pw_len) = (pw as usize).checked_mul(ph as usize) {
+        if pw_len > 0 && pw_len <= 3840 * 2160 {
+            let mut slide_buf = vec![0u32; pw_len];
+            if let Some(slide) = session.current_slide() {
+                render_slide(
+                    slide,
+                    &session.deck.theme,
+                    session.deck.aspect_ratio,
+                    &mut slide_buf,
+                    pw,
+                    ph,
+                );
+            } else {
+                slide_buf.fill(card_bg.premultiplied());
+            }
 
-        // Blit current slide preview
-        blit_sub_buffer(canvas.pixels_mut(), width, height, slide_x as u32, slide_y as u32, &slide_buf, pw, ph);
+            // Blit current slide preview
+            blit_sub_buffer(canvas.pixels_mut(), width, height, slide_x as u32, slide_y as u32, &slide_buf, pw, ph);
+        }
     }
 
     // Right side:
@@ -344,21 +357,23 @@ pub fn render_presenter_view(
 
     let npw = next_w as u32;
     let nph = next_h_fit as u32;
-    if npw > 0 && nph > 0 {
-        let mut next_buf = vec![0u32; npw as usize * nph as usize];
-        if let Some(next_slide) = session.next_slide_preview() {
-            render_slide(
-                next_slide,
-                &session.deck.theme,
-                session.deck.aspect_ratio,
-                &mut next_buf,
-                npw,
-                nph,
-            );
-        } else {
-            next_buf.fill(card_bg.premultiplied());
+    if let Some(npw_len) = (npw as usize).checked_mul(nph as usize) {
+        if npw_len > 0 && npw_len <= 3840 * 2160 {
+            let mut next_buf = vec![0u32; npw_len];
+            if let Some(next_slide) = session.next_slide_preview() {
+                render_slide(
+                    next_slide,
+                    &session.deck.theme,
+                    session.deck.aspect_ratio,
+                    &mut next_buf,
+                    npw,
+                    nph,
+                );
+            } else {
+                next_buf.fill(card_bg.premultiplied());
+            }
+            blit_sub_buffer(canvas.pixels_mut(), width, height, next_x_pos as u32, next_y_pos as u32, &next_buf, npw, nph);
         }
-        blit_sub_buffer(canvas.pixels_mut(), width, height, next_x_pos as u32, next_y_pos as u32, &next_buf, npw, nph);
     }
 
     // Bottom Right: Speaker Notes panel

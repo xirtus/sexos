@@ -13,56 +13,122 @@ use crate::layout::SlideLayout;
 use crate::xml_utils::XmlNode;
 use crate::{Error, Result};
 
-/// Extract entry bytes from a zip archive by path (normalizing separators).
-pub fn extract_archive_file(archive: &sex_archive::Archive<&[u8]>, target_path: &str) -> Option<Vec<u8>> {
+/// Maximum allowed uncompressed size per archive member (32 MiB).
+pub const MAX_ARCHIVE_MEMBER_BYTES: usize = 32 * 1024 * 1024;
+/// Maximum cumulative extracted bytes per archive import (128 MiB).
+pub const MAX_ARCHIVE_TOTAL_BYTES: usize = 128 * 1024 * 1024;
+
+struct BoundedSink<'a> {
+    out: &'a mut Vec<u8>,
+    member_limit: usize,
+    total_extracted: &'a mut usize,
+    total_limit: usize,
+}
+
+impl<'a> sex_archive::Sink for BoundedSink<'a> {
+    fn write_all(&mut self, data: &[u8]) -> core::result::Result<(), sex_archive::IoError> {
+        let new_member = self.out.len().saturating_add(data.len());
+        if new_member > self.member_limit {
+            return Err(sex_archive::IoError("archive member exceeds 32 MiB limit"));
+        }
+        let new_total = (*self.total_extracted).saturating_add(data.len());
+        if new_total > self.total_limit {
+            return Err(sex_archive::IoError("total archive extracted bytes exceed 128 MiB limit"));
+        }
+        *self.total_extracted = new_total;
+        self.out.extend_from_slice(data);
+        Ok(())
+    }
+}
+
+/// Extract entry bytes from a zip archive by path (normalizing separators) with defensive size bounds.
+pub fn extract_archive_file(
+    archive: &sex_archive::Archive<&[u8]>,
+    target_path: &str,
+    total_extracted: &mut usize,
+) -> Option<Vec<u8>> {
     let clean = target_path.replace('\\', "/");
     let trimmed = clean.trim_start_matches('/');
-    if let Some(idx) = archive.find(trimmed) {
+
+    let extract_idx = |idx: usize, total: &mut usize| -> Option<Vec<u8>> {
+        let entry = archive.entries().get(idx)?;
+        if entry.size_known && entry.size > MAX_ARCHIVE_MEMBER_BYTES as u64 {
+            return None;
+        }
         let mut out = Vec::new();
-        if archive.extract(idx, &mut out, &mut sex_archive::no_progress).is_ok() {
-            return Some(out);
+        let mut sink = BoundedSink {
+            out: &mut out,
+            member_limit: MAX_ARCHIVE_MEMBER_BYTES,
+            total_extracted: total,
+            total_limit: MAX_ARCHIVE_TOTAL_BYTES,
+        };
+        if archive.extract(idx, &mut sink, &mut sex_archive::no_progress).is_ok() {
+            Some(out)
+        } else {
+            None
+        }
+    };
+
+    if let Some(idx) = archive.find(trimmed) {
+        if let Some(data) = extract_idx(idx, total_extracted) {
+            return Some(data);
         }
     }
     // Case-insensitive fallback
     for (i, entry) in archive.entries().iter().enumerate() {
         if entry.path.eq_ignore_ascii_case(trimmed) {
-            let mut out = Vec::new();
-            if archive.extract(i, &mut out, &mut sex_archive::no_progress).is_ok() {
-                return Some(out);
+            if let Some(data) = extract_idx(i, total_extracted) {
+                return Some(data);
             }
         }
     }
     None
 }
 
-/// Parse a hex color string like "FF0077" into Color.
+/// Parse a hex color string like "FF0077" into Color safely without char-boundary slice panics.
 pub fn parse_hex_color(hex: &str) -> Option<Color> {
     let clean = hex.trim_start_matches('#');
-    if clean.len() == 6 {
-        let r = u8::from_str_radix(&clean[0..2], 16).ok()?;
-        let g = u8::from_str_radix(&clean[2..4], 16).ok()?;
-        let b = u8::from_str_radix(&clean[4..6], 16).ok()?;
-        Some(Color::rgb(r, g, b))
+    let b = clean.as_bytes();
+    if b.len() == 6 && b.iter().all(|c| c.is_ascii_hexdigit()) {
+        let r = u8::from_str_radix(core::str::from_utf8(&b[0..2]).ok()?, 16).ok()?;
+        let g = u8::from_str_radix(core::str::from_utf8(&b[2..4]).ok()?, 16).ok()?;
+        let b_val = u8::from_str_radix(core::str::from_utf8(&b[4..6]).ok()?, 16).ok()?;
+        Some(Color::rgb(r, g, b_val))
+    } else if b.len() == 8 && b.iter().all(|c| c.is_ascii_hexdigit()) {
+        let a = u8::from_str_radix(core::str::from_utf8(&b[0..2]).ok()?, 16).ok()?;
+        let r = u8::from_str_radix(core::str::from_utf8(&b[2..4]).ok()?, 16).ok()?;
+        let g = u8::from_str_radix(core::str::from_utf8(&b[4..6]).ok()?, 16).ok()?;
+        let b_val = u8::from_str_radix(core::str::from_utf8(&b[6..8]).ok()?, 16).ok()?;
+        Some(Color::rgba(r, g, b_val, a))
     } else {
         None
     }
 }
 
-/// Convert EMU coordinates to deck logical points.
+/// Convert EMU coordinates to deck logical points with overflow and NaN checks.
 fn emu_to_pixels(emu: f32, emu_total: f32, logical_total: f32) -> f32 {
-    if emu_total > 0.0 {
+    if !emu.is_finite() {
+        return 0.0;
+    }
+    let res = if emu_total.is_finite() && emu_total > 0.0 && logical_total.is_finite() && logical_total > 0.0 {
         (emu / emu_total) * logical_total
     } else {
         emu / 9525.0 // fallback 1 pt ~ 12700 emu, 1 px ~ 9525 emu at 96 dpi
+    };
+    if res.is_finite() {
+        res.clamp(-100_000.0, 100_000.0)
+    } else {
+        0.0
     }
 }
 
 /// Import PPTX presentation from raw container bytes.
 pub fn import_pptx(bytes: &[u8]) -> Result<Deck> {
     let archive = sex_archive::Archive::open(bytes).map_err(|_| Error::InvalidFormat)?;
+    let mut total_extracted = 0usize;
 
     // 1. Read ppt/presentation.xml
-    let pres_bytes = extract_archive_file(&archive, "ppt/presentation.xml").ok_or(Error::MalformedDocument)?;
+    let pres_bytes = extract_archive_file(&archive, "ppt/presentation.xml", &mut total_extracted).ok_or(Error::MalformedDocument)?;
     let pres_str = core::str::from_utf8(&pres_bytes).map_err(|_| Error::MalformedDocument)?;
     let pres_xml = XmlNode::parse(pres_str).map_err(|_| Error::MalformedDocument)?;
 
@@ -93,7 +159,7 @@ pub fn import_pptx(bytes: &[u8]) -> Result<Deck> {
 
     // 2. Read presentation relationships to map rId -> slide path
     let mut slide_rels = Vec::new();
-    if let Some(rels_bytes) = extract_archive_file(&archive, "ppt/_rels/presentation.xml.rels") {
+    if let Some(rels_bytes) = extract_archive_file(&archive, "ppt/_rels/presentation.xml.rels", &mut total_extracted) {
         if let Ok(rels_str) = core::str::from_utf8(&rels_bytes) {
             if let Ok(rels_xml) = XmlNode::parse(rels_str) {
                 for rel in rels_xml.children_named("Relationship") {
@@ -144,7 +210,7 @@ pub fn import_pptx(bytes: &[u8]) -> Result<Deck> {
 
     // 3. Parse each slide
     for (slide_idx, slide_path) in ordered_slide_paths.iter().enumerate() {
-        let Some(slide_data) = extract_archive_file(&archive, slide_path) else {
+        let Some(slide_data) = extract_archive_file(&archive, slide_path, &mut total_extracted) else {
             continue;
         };
         let Ok(slide_xml_str) = core::str::from_utf8(&slide_data) else {
@@ -171,7 +237,7 @@ pub fn import_pptx(bytes: &[u8]) -> Result<Deck> {
 
         let mut img_rels = Vec::new();
         let mut notes_slide_path = None;
-        if let Some(slide_rels_data) = extract_archive_file(&archive, &slide_rels_path) {
+        if let Some(slide_rels_data) = extract_archive_file(&archive, &slide_rels_path, &mut total_extracted) {
             if let Ok(slide_rels_str) = core::str::from_utf8(&slide_rels_data) {
                 if let Ok(slide_rels_xml) = XmlNode::parse(slide_rels_str) {
                     for rel in slide_rels_xml.children_named("Relationship") {
@@ -191,7 +257,7 @@ pub fn import_pptx(bytes: &[u8]) -> Result<Deck> {
 
         // Speaker notes
         if let Some(notes_path) = notes_slide_path {
-            if let Some(notes_data) = extract_archive_file(&archive, &notes_path) {
+            if let Some(notes_data) = extract_archive_file(&archive, &notes_path, &mut total_extracted) {
                 if let Ok(notes_str) = core::str::from_utf8(&notes_data) {
                     if let Ok(notes_xml) = XmlNode::parse(notes_str) {
                         let mut notes_text = String::new();
@@ -233,6 +299,7 @@ pub fn import_pptx(bytes: &[u8]) -> Result<Deck> {
                 pic,
                 &img_rels,
                 &archive,
+                &mut total_extracted,
                 slide_emu_w,
                 slide_emu_h,
                 deck.width(),
@@ -299,11 +366,13 @@ fn parse_pptx_shape(
                 .and_then(|v| v.parse::<f32>().ok())
                 .unwrap_or(1000.0);
 
+            let w = emu_to_pixels(cx, emu_w, deck_w).max(0.0);
+            let h = emu_to_pixels(cy, emu_h, deck_h).max(0.0);
             bounds = Rect::new(
                 emu_to_pixels(x, emu_w, deck_w),
                 emu_to_pixels(y, emu_h, deck_h),
-                emu_to_pixels(cx, emu_w, deck_w),
-                emu_to_pixels(cy, emu_h, deck_h),
+                w,
+                h,
             );
         }
     }
@@ -458,6 +527,7 @@ fn parse_pptx_picture(
     pic: &XmlNode,
     img_rels: &[(String, String)],
     archive: &sex_archive::Archive<&[u8]>,
+    total_extracted: &mut usize,
     emu_w: f32,
     emu_h: f32,
     deck_w: f32,
@@ -471,11 +541,13 @@ fn parse_pptx_picture(
             let y = xfrm.child("off").and_then(|o| o.attr("y")).and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0);
             let cx = xfrm.child("ext").and_then(|e| e.attr("cx")).and_then(|v| v.parse::<f32>().ok()).unwrap_or(1000.0);
             let cy = xfrm.child("ext").and_then(|e| e.attr("cy")).and_then(|v| v.parse::<f32>().ok()).unwrap_or(1000.0);
+            let w = emu_to_pixels(cx, emu_w, deck_w).max(0.0);
+            let h = emu_to_pixels(cy, emu_h, deck_h).max(0.0);
             bounds = Rect::new(
                 emu_to_pixels(x, emu_w, deck_w),
                 emu_to_pixels(y, emu_h, deck_h),
-                emu_to_pixels(cx, emu_w, deck_w),
-                emu_to_pixels(cy, emu_h, deck_h),
+                w,
+                h,
             );
         }
     }
@@ -485,7 +557,7 @@ fn parse_pptx_picture(
         if let Some(blip) = blip_fill.child("blip") {
             if let Some(embed_id) = blip.attr("embed") {
                 if let Some((_, img_path)) = img_rels.iter().find(|(id, _)| id == embed_id) {
-                    if let Some(bytes) = extract_archive_file(archive, img_path) {
+                    if let Some(bytes) = extract_archive_file(archive, img_path, total_extracted) {
                         img_data = Some(bytes);
                     }
                 }

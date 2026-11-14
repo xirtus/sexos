@@ -108,6 +108,15 @@ impl<'a> XmlParser<'a> {
         }
     }
 
+    #[inline]
+    fn slice(&self, start: usize, end: usize) -> Result<&'a str, XmlError> {
+        if start <= end && end <= self.chars.len() && self.chars.is_char_boundary(start) && self.chars.is_char_boundary(end) {
+            Ok(&self.chars[start..end])
+        } else {
+            Err(XmlError::MalformedTag)
+        }
+    }
+
     fn peek(&self) -> Option<u8> {
         if self.pos < self.bytes.len() {
             Some(self.bytes[self.pos])
@@ -185,7 +194,7 @@ impl<'a> XmlParser<'a> {
             }
             self.pos += 1;
         }
-        let tag_name_slice = &self.chars[name_start..self.pos];
+        let tag_name_slice = self.slice(name_start, self.pos)?;
         if tag_name_slice.is_empty() {
             return Err(XmlError::MalformedTag);
         }
@@ -212,7 +221,11 @@ impl<'a> XmlParser<'a> {
                 }
                 self.pos += 1;
             }
-            let key = String::from(&self.chars[key_start..self.pos]);
+            if key_start == self.pos {
+                // An attribute MUST have a non-empty name. Without progress, this is malformed XML.
+                return Err(XmlError::MalformedTag);
+            }
+            let key = String::from(self.slice(key_start, self.pos)?);
             self.skip_whitespace();
 
             let mut val = String::new();
@@ -230,9 +243,13 @@ impl<'a> XmlParser<'a> {
                         if self.pos >= self.bytes.len() {
                             return Err(XmlError::UnexpectedEof);
                         }
-                        val = decode_entities(&self.chars[val_start..self.pos]);
+                        val = decode_entities(self.slice(val_start, self.pos)?);
                         self.pos += 1; // skip quote
+                    } else {
+                        return Err(XmlError::MalformedTag);
                     }
+                } else {
+                    return Err(XmlError::UnexpectedEof);
                 }
             }
             if !key.is_empty() {
@@ -269,7 +286,7 @@ impl<'a> XmlParser<'a> {
                 self.pos += 1;
             }
             if text_start < self.pos {
-                let piece = &self.chars[text_start..self.pos];
+                let piece = self.slice(text_start, self.pos)?;
                 text_acc.push_str(&decode_entities(piece));
             }
 
@@ -277,7 +294,7 @@ impl<'a> XmlParser<'a> {
                 return Err(XmlError::UnclosedTag);
             }
 
-            // Check if comment, CDATA, closing tag, or child element
+            // Check if comment, CDATA, processing instruction, doctype, closing tag, or child element
             if self.bytes[self.pos..].starts_with(b"<!--") {
                 self.skip_until(b"-->")?;
             } else if self.bytes[self.pos..].starts_with(b"<![CDATA[") {
@@ -285,7 +302,11 @@ impl<'a> XmlParser<'a> {
                 let cdata_start = self.pos;
                 self.skip_until(b"]]>")?;
                 let cdata_end = self.pos - 3;
-                text_acc.push_str(&self.chars[cdata_start..cdata_end]);
+                text_acc.push_str(self.slice(cdata_start, cdata_end)?);
+            } else if self.bytes[self.pos..].starts_with(b"<?") {
+                self.skip_until(b"?>")?;
+            } else if self.bytes[self.pos..].starts_with(b"<!") {
+                self.skip_until(b">")?;
             } else if self.bytes[self.pos..].starts_with(b"</") {
                 // Closing tag
                 self.pos += 2;
@@ -296,14 +317,14 @@ impl<'a> XmlParser<'a> {
                 if self.pos >= self.bytes.len() {
                     return Err(XmlError::UnexpectedEof);
                 }
-                let close_name = self.chars[close_name_start..self.pos].trim();
+                let close_name = self.slice(close_name_start, self.pos)?.trim();
                 self.pos += 1; // skip '>'
 
                 // Allow matching by full name or prefix
                 if node_name_matches(&tag_name, close_name) || node_name_matches(close_name, &tag_name) {
                     break;
                 }
-                // Graceful fallback for slightly misnested tags: continue or finish
+                // Graceful fallback for slightly misnested tags: finish this node
                 break;
             } else {
                 // Child element
@@ -321,7 +342,7 @@ impl<'a> XmlParser<'a> {
     }
 }
 
-/// Decodes standard XML entities safely.
+/// Decodes standard XML entities safely without non-char boundary slicing.
 pub fn decode_entities(input: &str) -> String {
     if !input.contains('&') {
         return String::from(input);
@@ -333,37 +354,52 @@ pub fn decode_entities(input: &str) -> String {
         let rem = &rest[amp_idx + 1..];
         if let Some(semi_idx) = rem.find(';') {
             let entity = &rem[..semi_idx];
-            match entity {
-                "amp" => out.push('&'),
-                "lt" => out.push('<'),
-                "gt" => out.push('>'),
-                "quot" => out.push('"'),
-                "apos" => out.push('\''),
-                _ if entity.starts_with("#x") || entity.starts_with("#X") => {
-                    if let Ok(code) = u32::from_str_radix(&entity[2..], 16) {
-                        if let Some(ch) = core::char::from_u32(code) {
-                            out.push(ch);
+            // Entity must be reasonably short, contain no tags or whitespace
+            if semi_idx <= 12 && !entity.contains('&') && !entity.contains('<') && !entity.contains(' ') {
+                match entity {
+                    "amp" => out.push('&'),
+                    "lt" => out.push('<'),
+                    "gt" => out.push('>'),
+                    "quot" => out.push('"'),
+                    "apos" => out.push('\''),
+                    _ if entity.starts_with("#x") || entity.starts_with("#X") => {
+                        if let Ok(code) = u32::from_str_radix(&entity[2..], 16) {
+                            if let Some(ch) = core::char::from_u32(code) {
+                                out.push(ch);
+                            } else {
+                                out.push('\u{FFFD}');
+                            }
+                        } else {
+                            out.push('&');
+                            out.push_str(entity);
+                            out.push(';');
                         }
                     }
-                }
-                _ if entity.starts_with('#') => {
-                    if let Ok(code) = entity[1..].parse::<u32>() {
-                        if let Some(ch) = core::char::from_u32(code) {
-                            out.push(ch);
+                    _ if entity.starts_with('#') => {
+                        if let Ok(code) = entity[1..].parse::<u32>() {
+                            if let Some(ch) = core::char::from_u32(code) {
+                                out.push(ch);
+                            } else {
+                                out.push('\u{FFFD}');
+                            }
+                        } else {
+                            out.push('&');
+                            out.push_str(entity);
+                            out.push(';');
                         }
                     }
+                    _ => {
+                        out.push('&');
+                        out.push_str(entity);
+                        out.push(';');
+                    }
                 }
-                _ => {
-                    out.push('&');
-                    out.push_str(entity);
-                    out.push(';');
-                }
+                rest = &rem[semi_idx + 1..];
+                continue;
             }
-            rest = &rem[semi_idx + 1..];
-        } else {
-            out.push('&');
-            rest = rem;
         }
+        out.push('&');
+        rest = rem;
     }
     out.push_str(rest);
     out

@@ -350,6 +350,8 @@ pub struct TableElement {
 
 impl TableElement {
     pub fn new(bounds: Rect, rows: usize, cols: usize) -> Self {
+        let rows = rows.min(100);
+        let cols = cols.min(100);
         let mut cells = Vec::with_capacity(rows);
         for _ in 0..rows {
             let mut row = Vec::with_capacity(cols);

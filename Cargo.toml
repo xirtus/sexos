@@ -57,6 +57,7 @@ members = [
     "crates/sex-imsm",
     "crates/sex-font",
     "crates/quil-core",
+    "crates/burlesque-core",
     "apps/quil",
     "crates/sex-keymap",
     "crates/sex-shape",

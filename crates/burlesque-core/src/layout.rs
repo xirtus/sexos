@@ -48,6 +48,9 @@ impl PlaceholderBox {
 
 /// Resolves placeholder bounding boxes for a given layout and canvas dimensions.
 pub fn resolve_placeholders(layout: SlideLayout, width: f32, height: f32) -> Vec<PlaceholderBox> {
+    if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
+        return Vec::new();
+    }
     let mut boxes = Vec::new();
     let margin_x = width * 0.08;
     let margin_y = height * 0.08;

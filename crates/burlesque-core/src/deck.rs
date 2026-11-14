@@ -23,7 +23,7 @@ impl AspectRatio {
             Self::Ratio16x9 => 1920.0,
             Self::Ratio16x10 => 1920.0,
             Self::Ratio4x3 => 1440.0,
-            Self::Custom { width, .. } => *width,
+            Self::Custom { width, .. } => if width.is_finite() && *width > 0.0 { *width } else { 1920.0 },
         }
     }
 
@@ -32,12 +32,22 @@ impl AspectRatio {
             Self::Ratio16x9 => 1080.0,
             Self::Ratio16x10 => 1200.0,
             Self::Ratio4x3 => 1080.0,
-            Self::Custom { height, .. } => *height,
+            Self::Custom { height, .. } => if height.is_finite() && *height > 0.0 { *height } else { 1080.0 },
         }
     }
 
     pub fn ratio(&self) -> f32 {
-        self.width() / self.height()
+        let h = self.height();
+        if h > 0.0 && h.is_finite() {
+            let w = self.width();
+            if w > 0.0 && w.is_finite() {
+                w / h
+            } else {
+                16.0 / 9.0
+            }
+        } else {
+            16.0 / 9.0
+        }
     }
 }
 

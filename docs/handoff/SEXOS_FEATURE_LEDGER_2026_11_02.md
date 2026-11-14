@@ -386,6 +386,11 @@ native `https_html_gate.py` at both sizes now with the formerly failing
 992-byte page (padding removed): `ticket=2 ... to=Complete`; regressions
 `https_document_gate.py` (12 KB) and `https_asset_gate.py` pass.
 
+## G-10: Burlesque presentations engine (2026-11-14)
+
+- **What runs now.** `burlesque-core` provides pure-Rust presentation slide deck data modeling, standard responsive slide layouts, rich elements (formatted text, vector shapes, embedded pictures, tables, and syntax-highlighted code blocks), undo/redo command stack, OOXML `.pptx`, OpenDocument `.odp`, and Markdown deck import/export, true software rasterizer with proportional Geist fonts, multi-pane presenter view state machine with timer and screen blanking, and vector PDF-1.4 multi-page document export.
+- **Security and bounds.** Hardened against deflate bombs via 32 MiB per-member and 128 MiB global cumulative extraction bounds in `sex-archive`, panic-free UTF-8 char boundary slicing across all XML/markdown/color tokens, bounded `checked_mul` allocation and undersized buffer guards in slide and presenter view rasterizers, and verifiable XRef byte offsets with full character escaping in vector PDF export verified via `vellum-edit`.
+
 ## F12. Numbered, nested and definition lists (2026-11-02)
 
 **What changed.** `<ol>` items are numbered (`start=` honoured), nested lists

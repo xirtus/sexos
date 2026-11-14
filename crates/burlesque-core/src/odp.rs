@@ -14,32 +14,39 @@ use crate::pptx::extract_archive_file;
 use crate::xml_utils::XmlNode;
 use crate::{Error, Result};
 
-/// Parse length with unit (cm, mm, in, pt, px) into points.
+/// Parse length with unit (cm, mm, in, pt, px) into points safely without slice panics.
 fn parse_length_to_pt(val: &str) -> f32 {
     let s = val.trim();
     if s.is_empty() {
         return 0.0;
     }
-    if s.ends_with("cm") {
-        s[..s.len() - 2].trim().parse::<f32>().unwrap_or(0.0) * 28.3465
-    } else if s.ends_with("mm") {
-        s[..s.len() - 2].trim().parse::<f32>().unwrap_or(0.0) * 2.83465
-    } else if s.ends_with("in") {
-        s[..s.len() - 2].trim().parse::<f32>().unwrap_or(0.0) * 72.0
-    } else if s.ends_with("pt") {
-        s[..s.len() - 2].trim().parse::<f32>().unwrap_or(0.0)
-    } else if s.ends_with("px") {
-        s[..s.len() - 2].trim().parse::<f32>().unwrap_or(0.0) * 0.75
+    let (num_str, factor) = if let Some(rest) = s.strip_suffix("cm") {
+        (rest, 28.3465)
+    } else if let Some(rest) = s.strip_suffix("mm") {
+        (rest, 2.83465)
+    } else if let Some(rest) = s.strip_suffix("in") {
+        (rest, 72.0)
+    } else if let Some(rest) = s.strip_suffix("pt") {
+        (rest, 1.0)
+    } else if let Some(rest) = s.strip_suffix("px") {
+        (rest, 0.75)
     } else {
-        s.parse::<f32>().unwrap_or(0.0)
+        (s, 1.0)
+    };
+    let val = num_str.trim().parse::<f32>().unwrap_or(0.0) * factor;
+    if val.is_finite() && val >= 0.0 {
+        val
+    } else {
+        0.0
     }
 }
 
 /// Import OpenDocument Presentation (ODP) from bytes.
 pub fn import_odp(bytes: &[u8]) -> Result<Deck> {
     let archive = sex_archive::Archive::open(bytes).map_err(|_| Error::InvalidFormat)?;
+    let mut total_extracted = 0usize;
 
-    let content_bytes = extract_archive_file(&archive, "content.xml").ok_or(Error::MalformedDocument)?;
+    let content_bytes = extract_archive_file(&archive, "content.xml", &mut total_extracted).ok_or(Error::MalformedDocument)?;
     let content_str = core::str::from_utf8(&content_bytes).map_err(|_| Error::MalformedDocument)?;
     let content_xml = XmlNode::parse(content_str).map_err(|_| Error::MalformedDocument)?;
 
@@ -92,8 +99,8 @@ pub fn import_odp(bytes: &[u8]) -> Result<Deck> {
         for frame in frames {
             let x_pt = frame.attr("x").map(parse_length_to_pt).unwrap_or(0.0);
             let y_pt = frame.attr("y").map(parse_length_to_pt).unwrap_or(0.0);
-            let w_pt = frame.attr("width").map(parse_length_to_pt).unwrap_or(200.0);
-            let h_pt = frame.attr("height").map(parse_length_to_pt).unwrap_or(100.0);
+            let w_pt = frame.attr("width").map(parse_length_to_pt).unwrap_or(200.0).max(0.0);
+            let h_pt = frame.attr("height").map(parse_length_to_pt).unwrap_or(100.0).max(0.0);
 
             let scale_x = deck.width() / page_ref_w;
             let scale_y = deck.height() / page_ref_h;
@@ -144,7 +151,7 @@ pub fn import_odp(bytes: &[u8]) -> Result<Deck> {
             if let Some(img_node) = frame.child("image") {
                 if let Some(href) = img_node.attr("href") {
                     let img_path = href.trim_start_matches("./");
-                    if let Some(img_data) = extract_archive_file(&archive, img_path) {
+                    if let Some(img_data) = extract_archive_file(&archive, img_path, &mut total_extracted) {
                         let elem = ImageElement::new(bounds, img_data, FitMode::Contain);
                         slide.add_element(SlideElement::Image(elem));
                     }
@@ -158,8 +165,8 @@ pub fn import_odp(bytes: &[u8]) -> Result<Deck> {
         for r in rects {
             let x_pt = r.attr("x").map(parse_length_to_pt).unwrap_or(0.0);
             let y_pt = r.attr("y").map(parse_length_to_pt).unwrap_or(0.0);
-            let w_pt = r.attr("width").map(parse_length_to_pt).unwrap_or(100.0);
-            let h_pt = r.attr("height").map(parse_length_to_pt).unwrap_or(100.0);
+            let w_pt = r.attr("width").map(parse_length_to_pt).unwrap_or(100.0).max(0.0);
+            let h_pt = r.attr("height").map(parse_length_to_pt).unwrap_or(100.0).max(0.0);
             let scale_x = deck.width() / page_ref_w;
             let scale_y = deck.height() / page_ref_h;
             let bounds = Rect::new(x_pt * scale_x, y_pt * scale_y, w_pt * scale_x, h_pt * scale_y);
