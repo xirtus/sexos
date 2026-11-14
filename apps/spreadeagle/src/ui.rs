@@ -60,6 +60,8 @@ pub struct Ui {
     /// What the last draw put where, for clicks: (row, y, height) and (col, x, width).
     rows: Vec<(u32, i32, i32)>,
     cols: Vec<(u32, i32, i32)>,
+    /// The grid area's size in the last draw.
+    grid: (i32, i32),
 }
 
 /// Set-1 scan codes Shell passes (with the normalized codes some keyboards send).
@@ -93,7 +95,7 @@ impl Ui {
     pub fn new(book: Book, name: String) -> Ui {
         Ui {
             book, name, row: 0, col: 0, anchor: None, top: 0, left: 0, edit: None, message: String::new(),
-            pen: Pen::sans(13), small: RefCell::new(Vec::new()), rows: Vec::new(), cols: Vec::new(),
+            pen: Pen::sans(13), small: RefCell::new(Vec::new()), rows: Vec::new(), cols: Vec::new(), grid: (i32::MAX, i32::MAX),
         }
     }
 
@@ -115,7 +117,16 @@ impl Ui {
         Range { r0: r, c0: c, r1: self.row, c1: self.col }
     }
 
-    fn frozen(&self) -> (u32, u32) { self.book.frozen().unwrap_or((0, 0)) }
+    /// The frozen rows and columns the view keeps still: the sheet's, unless they would
+    /// take more than half the grid (a small window, or panes frozen far down), when that
+    /// direction scrolls as a whole so the cursor's cells stay in sight.
+    fn frozen(&self) -> (u32, u32) {
+        let (fr, fc) = self.book.frozen().unwrap_or((0, 0));
+        let (w, h) = self.grid;
+        let rows: i32 = (0..fr).map(|r| self.book.row_height(r) as i32).sum();
+        let cols: i32 = (0..fc).map(|c| self.book.col_width(c) as i32).sum();
+        (if rows * 2 > h { 0 } else { fr }, if cols * 2 > w { 0 } else { fc })
+    }
 
     /// The serial record of the cursor's column, so a gate can watch recalculation,
     /// sorting and filtering. Hidden (filtered) rows read as `~`.
@@ -192,6 +203,7 @@ impl Ui {
         let (w, h) = (width as i32, height as i32);
         let grid_w = w - ROW_HEAD_W;
         let grid_h = h - BAR_H - HEAD_H - TABS_H;
+        self.grid = (grid_w, grid_h);
         self.scroll_into_view(grid_w, grid_h);
         let (fr, fc) = self.frozen();
         let mut px = std::mem::take(&mut self.rows);
@@ -424,7 +436,7 @@ impl Ui {
                 self.command("data.filterBy", done, format!("Showing rows where {} is {value}", column_name(col)))
             }
             code::F => {
-                let at = if self.frozen() == (0, 0) && (row, col) != (0, 0) { Some((row, col)) } else { None };
+                let at = if self.book.frozen().is_none() && (row, col) != (0, 0) { Some((row, col)) } else { None };
                 let done = self.book.freeze(at);
                 let said = match at { Some(_) => format!("Froze the rows above and the columns left of {}", self.cell_name()), None => "Panes unfrozen".into() };
                 self.command("view.freezePanes", done, said);
