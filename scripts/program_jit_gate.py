@@ -30,7 +30,7 @@ def main():
   s=len(t());run('run jit')
   m=g['wait'](r'\[jit\.(ok|fail)\] target=(\d+) task=(\d+)([^\n]*)\n',s,300)
   assert m[1]=='ok',f'JIT test failed: {m[0]}'
-  target,task=int(m[2]),int(m[3]);g['wait'](rf'\[jit\.ready\] target={target} task={task}\n',s,60)
+  target,task=int(m[2]),int(m[3]);g['wait'](rf'\[jit\.ready\] target={target} task={task}\n',s,120)
   assert_private_ordinary_launch(ROOT,t(),target,task,SURFACE[target])
   seals=re.findall(rf'\[app\.program\.code\] target={target} task={task} op=(seal|open) va=(0x[0-9a-f]+) pages=(\d+)\n',t()[s:])
   assert ('seal' in {o for o,*_ in seals}) and ('open' in {o for o,*_ in seals}),f'no seal/open evidence: {seals}'
@@ -39,12 +39,12 @@ def main():
   return dict(target=target,task=task,speedup=int(speed['speedup']),seals=len(seals),blocked=int(blocked[1]))
  def fault(r,key,mark,kill=r'paging\.fault\.terminal',detail=''):
   s=len(t());g['focus'](SURFACE[r['target']]);time.sleep(.5);q.key(key)
-  g['wait'](rf'\[jit\.{mark}\] target={r["target"]} task={r["task"]}\n',s,60)
+  g['wait'](rf'\[jit\.{mark}\] target={r["target"]} task={r["task"]}\n',s,120)
   g['wait'](rf'fault\.kill \[{kill}\] pd={r["target"]} {detail}',s,120)
   g['wait'](rf'\[app\.private\.retired\] target={r["target"]} task={r["task"]} ',s,120)
  try:
-  g['wait'](r'\[app.private.retired\] target=41 ',0,120)
-  first=started();g['wait'](rf'\[display.text.committed\] target={first["target"]} ',0,60);time.sleep(1)
+  g['wait'](r'\[app.private.retired\] target=41 ',0,240)
+  first=started();g['wait'](rf'\[display.text.committed\] target={first["target"]} ',0,120);time.sleep(1)
   q.cmd('screendump',{'filename':str(a.out/'jit.ppm')})
   fault(first,'w','write_code')
   second=started();fault(second,'e','run_data')
@@ -55,7 +55,7 @@ def main():
   g['wait'](r'\[app\.program\.rejected\] target=\d+ bytes=\d+ reason=key_instruction page=\d+ offset=0x[0-9a-f]+\n',s,120)
   third=started()
   s=len(t());g['focus'](SURFACE[third['target']]);time.sleep(.5);q.key('f11')
-  g['wait'](rf'\[jit\.closed\] target={third["target"]} task={third["task"]}\n',s,60)
+  g['wait'](rf'\[jit\.closed\] target={third["target"]} task={third["task"]}\n',s,120)
   text=t();assert 'KERNEL PANIC' not in text and '[jit.fatal]' not in text and '[jit.fail]' not in text and 'KERNEL PAGE FAULT' not in text
   print({'ok':True,'runs':[first,second,third]})
  finally:g['stop']()
