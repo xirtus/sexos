@@ -386,7 +386,8 @@ fn mount_name(label: &str, image: &[u8], part: usize) -> String {
         name.push(if c == '/' || (c as u32) < 0x20 { '_' } else { c });
     }
     if name.is_empty() { name.push_str("disk"); }
-    if part > 0 { name.push('-'); name.push((b'1' + part as u8) as char); }
+    // A label names the volume itself; only a name borrowed from the disk needs the part.
+    if part > 0 && label.trim().is_empty() { name.push('-'); name.push((b'1' + part as u8) as char); }
     let taken = |n: &str| mounts().iter().any(|m| m.name == n);
     if !taken(&name) { return name; }
     for k in 2..100u32 {

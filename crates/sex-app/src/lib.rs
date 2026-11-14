@@ -228,7 +228,14 @@ pub mod files {
     /// Shell tells Files where a new run lives just as the run starts, so a first request
     /// can beat it there. A refusal is retried briefly; a program never bound stays refused.
     /// `fill` writes the data area before the request goes; `take` reads it after the answer.
-    fn exchange<R>(mut hold: Hold, kind: u8, path: &[u8], offset: u64, length: u64,
+    fn exchange<R>(hold: Hold, kind: u8, path: &[u8], offset: u64, length: u64,
+                   fill: impl Fn(&mut [u8]), take: impl FnOnce(u32, &[u8]) -> R) -> Result<R, Error> {
+        exchange_tries(hold, kind, path, offset, length, 50, fill, take)
+    }
+    /// As `exchange`, asking again at most `retries` times while Files says DENIED (a
+    /// lock another program holds). A refusal that stands is asked once (`retries` 0).
+    #[allow(clippy::too_many_arguments)]
+    fn exchange_tries<R>(mut hold: Hold, kind: u8, path: &[u8], offset: u64, length: u64, retries: u32,
                    fill: impl Fn(&mut [u8]), take: impl FnOnce(u32, &[u8]) -> R) -> Result<R, Error> {
         if path.len() > w::PATH_BYTES { return Err(w::NAME); }
         let _turn = Turn::take();
@@ -238,7 +245,7 @@ pub mod files {
             region[..path.len()].copy_from_slice(path);
             fill(&mut region[w::PATH_BYTES..]);
             match once(&mut hold, kind, path.len(), offset, length) {
-                Err(w::DENIED) if tries < 50 => { tries += 1; for _ in 0..20 { sex_pdx::sys_yield(); } }
+                Err(w::DENIED) if tries < retries => { tries += 1; for _ in 0..20 { sex_pdx::sys_yield(); } }
                 Ok(value) => return Ok(take(value, &region[w::PATH_BYTES..])),
                 Err(e) => return Err(e),
             }
@@ -672,7 +679,7 @@ pub mod files {
     /// the disk); until they answer it fails with `PENDING`, and with `DENIED` if they said
     /// no. The system disk is never opened.
     pub mod disks {
-        use super::{exchange, request, Error, Window};
+        use super::{exchange, exchange_tries, request, Error, Window};
         use alloc::string::String;
         use alloc::vec::Vec;
         use sex_pdx::disks as d;
@@ -700,13 +707,13 @@ pub mod files {
         pub fn read(window: &mut Window, disk: u16, lba: u64, out: &mut [u8]) -> Result<(), Error> {
             let n = out.len() / SECTOR;
             if n == 0 || out.len() % SECTOR != 0 || n as u64 > IO_SECTORS { return Err(sex_pdx::fs::INVALID); }
-            exchange(Some(window), d::DISK_IO, b"", lba, d::io(disk, false, n as u32), |_| {}, |_, data| out.copy_from_slice(&data[..out.len()]))
+            exchange_tries(Some(window), d::DISK_IO, b"", lba, d::io(disk, false, n as u32), 0, |_| {}, |_, data| out.copy_from_slice(&data[..out.len()]))
         }
         /// `data` (whole sectors, at most `IO_SECTORS`) to the disk from `lba`.
         pub fn write(window: &mut Window, disk: u16, lba: u64, data: &[u8]) -> Result<(), Error> {
             let n = data.len() / SECTOR;
             if n == 0 || data.len() % SECTOR != 0 || n as u64 > IO_SECTORS { return Err(sex_pdx::fs::INVALID); }
-            exchange(Some(window), d::DISK_IO, b"", lba, d::io(disk, true, n as u32), |r| r[..data.len()].copy_from_slice(data), |_, _| ())
+            exchange_tries(Some(window), d::DISK_IO, b"", lba, d::io(disk, true, n as u32), 0, |r| r[..data.len()].copy_from_slice(data), |_, _| ())
         }
         /// Everything written so far is on the medium.
         pub fn flush(window: &mut Window, disk: u16) -> Result<(), Error> { request(window, d::DISK_IO, b"", 0, d::io(disk, true, 0)).map(|_| ()) }
