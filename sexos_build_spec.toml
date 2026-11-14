@@ -73,6 +73,7 @@ crates = [
   "apps/velvet/Cargo.toml",
   "apps/leather-samples/Cargo.toml",
   "apps/chastity/Cargo.toml",
+  "apps/chastity-probe/Cargo.toml",
   "apps/stdnet/Cargo.toml",
   "apps/ssh/Cargo.toml",
   "apps/needle/Cargo.toml",
@@ -474,6 +475,14 @@ target = "x86_64-sex-app.json"
 manifest = "apps/abacus/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/abacus"
 dest_artifact = "iso_root/programs/abacus"
+
+[[stage]]
+id = "build_chastity_probe"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/chastity-probe/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/chastity-probe"
+dest_artifact = "iso_root/programs/chastity-probe"
 
 [[stage]]
 id = "build_chastity"

@@ -27,6 +27,8 @@ pub mod pkce;
 pub mod service;
 pub mod stamps;
 pub mod state;
+#[cfg(feature="sexos")]
+pub mod vault;
 
 use alloc::string::String;
 

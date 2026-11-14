@@ -13,6 +13,8 @@ mod desktop_content;
 mod linen_text_delivery;
 mod launcher;
 mod clipboard;
+mod autofill;
+mod autofill_routes;
 mod app_input;
 mod wm;
 mod launcher_search;
@@ -258,6 +260,7 @@ unsafe fn shell_program_reborn(msg: &sex_pdx::PdxMessage) {
     if let Some(entry)=APP_CUSTODY.iter_mut().flatten().find(|e|e.target==target) {
         if sex_pdx::app_lifecycle::catalog(entry.slot).is_ok_and(|c|c.task_id==task) {
             if entry.task!=task {
+                autofill_routes::retire(sex_pdx::autofill::Subject{pd:entry.target,task:entry.task});
                 *entry=app_custody::Entry::new(entry.slot,target,task,entry.surface);
                 // The old run's frame is Destroyed; the new run registers afresh.
                 let frame=entry.shell_surface().unwrap_or(entry.surface);
@@ -373,6 +376,7 @@ unsafe fn shell_lifecycle_poll() {
         if !entry.retired {
             let subject=sex_pdx::clipboard::Subject{pd:entry.target,task:entry.task};
             CLIPBOARD.retire(subject);
+            autofill_routes::retire(sex_pdx::autofill::Subject{pd:subject.pd,task:subject.task});
             APP_INPUT.retire(subject);
             CLIPBOARD_INTAKE.retire(subject);
             let mut removed = shell_retire_app_surface(entry.surface);
@@ -17241,6 +17245,7 @@ static mut PROGRAM_NETWORK: bool = false;
 /// Files may then serve the program its own folder, and the network service talk to
 /// it if the person asked, for this run alone.
 fn program_bind(target:u32,task:u32){
+    unsafe{autofill_routes::bound(target,task); }
     let _=pdx_call(sex_pdx::program_store::SHELL_ROUTE_SLOT,sex_pdx::program_store::OP_BIND,target as u64,task as u64,0);
     if unsafe{core::mem::take(&mut PROGRAM_NETWORK)}{let _=pdx_call(sex_pdx::web::SHELL_SLOT,sex_pdx::program_store::OP_BIND,target as u64,task as u64,0);}
 }
@@ -25538,7 +25543,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { program_resize_flush(); }
         // Held keys: the repeat goes ahead of the queue drain below.
         unsafe { key_repeat_poll(); }
-        unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); display_scale_poll(); shell_close_poll(); shell_memory_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); notification_poll(); }
+        unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); display_scale_poll(); shell_close_poll(); shell_memory_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); autofill_routes::poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); notification_poll(); }
         // Retain failed notification attempts while continuing normal receives.
         // Success means enqueue only; sexinput validates caller and version.
         if shell_ready_publisher.poll() {
@@ -26213,16 +26218,17 @@ pub extern "C" fn _start() -> ! {
         // drained burst instead of one IPC per HID event.
         config_watch::poll();
         lock::poll();
-        let msg = match pop_startup_message().or_else(|| pdx_try_listen_raw(0)) {
+        let mut msg = match pop_startup_message().or_else(|| pdx_try_listen_raw(0)) {
             Some(m) => m,
             None => {
                 unsafe { flush_pending_cursor_send(); }
                 // A full input ring may recover while the shell has no work.
                 // Return to the publisher instead of blocking in listen.
-                if shell_ready_publisher.is_pending() || unsafe { RECORD_SPAWN_LEFT != 0 || DISPLAY_SCALE.request().is_some() || CURSOR_SEND_PENDING || APP_INPUT.pending() || LAUNCHER_FOCUS.is_some() || CLIPBOARD_INTAKE.pending() || CLIPBOARD.pending() || WORKSPACE_REFRESH_PENDING.iter().any(|p|*p) || linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_POINTER.is_some() || LINEN_ASYNC.can_send() || NOTIFY_NOTICE_UNTIL != 0 || MEMORY_CRITICAL_SINCE != 0 || KEY_REPEAT.pending() } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
+                if shell_ready_publisher.is_pending() || unsafe { RECORD_SPAWN_LEFT != 0 || DISPLAY_SCALE.request().is_some() || CURSOR_SEND_PENDING || APP_INPUT.pending() || LAUNCHER_FOCUS.is_some() || CLIPBOARD_INTAKE.pending() || CLIPBOARD.pending() || autofill_routes::pending() || WORKSPACE_REFRESH_PENDING.iter().any(|p|*p) || linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_POINTER.is_some() || LINEN_ASYNC.can_send() || NOTIFY_NOTICE_UNTIL != 0 || MEMORY_CRITICAL_SINCE != 0 || KEY_REPEAT.pending() } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
                     sys_yield();
                     continue;
                 }
+                if let Some(t)=unsafe{autofill_routes::wake()}{let _=sex_pdx::sys_wait_self_ticks(t);continue;}
                 if let Some(t) = lock::next_wake() { let _ = sex_pdx::sys_wait_self_ticks(t.min(60_000) + 1); continue; }
                 pdx_listen_raw(0)
             }
@@ -26235,6 +26241,7 @@ pub extern "C" fn _start() -> ! {
             if shell_lifecycle_hint(&msg) { continue; }
             if config_watch::receive(&msg) { continue; }
             if lock::receive(&msg) { continue; }
+            if autofill_routes::receive(&mut msg) {continue;}
             if shell_program_message(&msg) { continue; }
             if clipboard_receive(&msg) { continue; }
             if notification_receive(&msg) { continue; }

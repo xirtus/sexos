@@ -69,6 +69,8 @@ jobs:
       run: cargo test --locked -p sex-html
     - name: Leather SDK sample models and real Weft widgets
       run: cargo test --locked -p leather-samples --no-default-features
+    - name: Live autofill capability broker and SDK (host transport)
+      run: bash scripts/autofill_host_gate.sh
     - name: Chastity encrypted vault and Weft UI
       run: bash scripts/chastity_host_gate.sh
     - name: egui backend input and rendering
@@ -496,6 +498,8 @@ jobs:
         python3 scripts/moan_export_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/moan-export"
     - name: Moan editable project waveform save and reopen across reboot
       run: python3 scripts/moan_project_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/moan-project"
+    - name: Live autofill two-app consent and encrypted vault across reboot
+      run: python3 scripts/chastity_autofill_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/chastity-autofill"
     - name: Preserve program evidence
       if: always()
       uses: actions/upload-artifact@v4
