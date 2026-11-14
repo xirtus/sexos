@@ -3124,6 +3124,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-speech"
+version = "0.1.0"
+
+[[package]]
 name = "sex-ssh"
 version = "0.1.0"
 dependencies = [
@@ -4160,6 +4164,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b2878ef029c47c6e8cf779119f20fcf52bde7ad42a731b2a304bc221df17571e"
 dependencies = [
  "rustls-pki-types",
+]
+
+[[package]]
+name = "whisper-voice"
+version = "0.1.0"
+dependencies = [
+ "sex-libc",
+ "sex-speech",
+ "sex-std",
 ]
 
 [[package]]
