@@ -4067,8 +4067,12 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
 - **Evidence:** `settings_host_gate.sh` (password set/check/wipe with real Argon2id,
   state words and shades, Settings password entry); display host gates updated with a
   lock-surface stub; QEMU gate `scripts/lock_screen_gate.py` in CI (devices job).
-- **Not yet:** inhibiting idle while media plays (needs a Bell hint); a salt from the
-  kernel's held entropy source instead of RDRAND.
+- **Media holds idle off (2026-11-14):** before idle dims, locks or blanks, the Shell asks
+  Bell `sound_mixer::STREAMING` (12): is a program's stream open and not paused? A yes
+  restarts the idle clock (`[shell.idle] inhibited=media`). The Shell waits up to 2 s for
+  the answer, and a no holds for 10 s (`servers/silk-shell/src/idle_media.rs`, host-tested
+  in `settings_host_gate.sh`). A short notification sound doesn't count; only streams do.
+- **Not yet:** a salt from the kernel's held entropy source instead of RDRAND.
 
 ## Volume and keyboard settings act (2026-11-14)
 - **Volume:** the Shell keeps the volume in settings (`sound.volume`). After a volume or mute

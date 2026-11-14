@@ -45,6 +45,9 @@ pub const AUTO: u64 = 1 << 8;
 /// word (its PD inside), or `REFUSED` when no program has played. Shell asks; Bell
 /// only names the program, and Shell delivers the key to it as an ordinary key.
 pub const LAST_PLAYER: u64 = 11;
+/// Whether a program's sound stream is playing now (open and not paused): replies
+/// `TAG | 1` if so, `TAG` if not. The Shell asks before idle dims or locks the screen.
+pub const STREAMING: u64 = 12;
 /// Set in the outputs word while Bell follows the headphone jack.
 pub const OUTPUTS_AUTO: u64 = 1 << 12;
 
