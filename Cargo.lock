@@ -3175,6 +3175,7 @@ dependencies = [
 name = "sex-torrent"
 version = "0.1.0"
 dependencies = [
+ "crypto-bigint",
  "sha1",
  "sha2",
 ]
