@@ -44,16 +44,24 @@ create/save/open through both path-patched dependencies.
 
 ## Accounting and limits
 
-This is a **per-stream expansion ceiling**, not a whole-operation or retained
-Database allocation budget. Main KDBX inner payload expansion is at most 16MiB;
-XML compressed attachments each have the same ceiling, but multiple attachments
-can cumulatively exceed it. XML parsing objects, decoded/base64 data, metadata,
-entries and histories add allocations. Compressed ciphertext, decompressed
-payload and XML copies coexist. In the KDBX4 parse path this includes one 16MiB
-capacity output plus its copied XML and decrypted compressed input; Argon2's
-separately admitted workspace also contributes to peak memory. Admitting
-arbitrary imported databases still requires cumulative model/attachment and
-parser-work limits, in addition to ciphertext-size and KDF cost checks.
+Each expanded stream is capped at 16MiB. In addition, XML conversion shares a
+single 16MiB logical attachment budget: all KDBX4 header attachment lengths are
+checked before cloning, then each XML binary consumes remaining bytes. Duplicate
+IDs do not refund budget even when replacing a previous pool entry. Compressed
+XML binaries pass remaining bytes into the gzip decoder before its allocation;
+unprotected/protected raw binaries are checked before database insertion.
+Zeroizing binary decode/decrypt owners wipe temporary bytes on error and when
+replaced during expansion. Success transfers the retained Value to the Database.
+
+This is **not a strict global heap budget**. XML parsing objects, base64 staging,
+metadata, entries and histories add allocations. Compressed ciphertext,
+decompressed payload and XML copies coexist. Decoder allocation capacity may
+exceed the logical retained attachment length, though it never exceeds admitted
+remaining bytes at that decoder's start; later copies do not retroactively
+shrink earlier capacity. Main KDBX4 parse staging includes one 16MiB-capacity
+output plus copied XML and decrypted compressed input, in addition to retained
+attachments and Argon2's separately admitted workspace. Parser/object work and
+whole-operation allocation limits still require separate accounting.
 
 This patch does **not** claim total plaintext erasure. `Value::Unprotected`
 still lacks an erasing destructor; metadata/attachments can remain unprotected.
@@ -67,7 +75,15 @@ not run destructors. Chastity-owned cleanup and these selected staging owners
 must not be described as whole-vault memory wiping.
 
 Validation result: canonical chastity-core17 tests pass through both path
-patches. KeePass library tests:61 pass, including the4 new compression tests;
+patches. KeePass library tests:61 pass, including the 4 new compression tests;
 `db::database_tests::test_xml` cannot run from the published crate archive because
 `tests/resources/test_db_with_password.kdbx` is absent. This missing-fixture
 limitation is not treated as passing evidence.
+
+Cumulative follow-up tests: two individually admissible compressed attachments
+that exceed the aggregate ceiling are rejected (including duplicate IDs); two
+attachments exactly at the budget succeed. Mixed protected header/XML bytes
+share the same counter and excessive headers reject before XML decompression.
+A test-only decoder allocation receipt verifies the second decoder receives
+only remaining budget, rather than allocating another full 16MiB. These 3 tests
+and the 4 stream-admission tests pass, as do 17 canonical Chastity tests.

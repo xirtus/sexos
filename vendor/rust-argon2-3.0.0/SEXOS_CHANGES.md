@@ -75,5 +75,5 @@ from dependency memory hygiene; do not claim whole-vault plaintext wiping.
 
 Follow-up: `../keepass-0.17.0/SEXOS_CHANGES.md` describes the separate
 bounded-decompression/selected KDBX4 staging patch. The original findings above
-are retained as the upstream baseline; cumulative attachment/model limits and
-whole-process erasure remain outside both scoped patches.
+are retained as the upstream baseline; cumulative attachment admission is enforced there; whole-model allocation
+limits and whole-process erasure remain outside both scoped patches.
