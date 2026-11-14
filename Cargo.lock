@@ -2915,6 +2915,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-episodes"
+version = "0.1.0"
+
+[[package]]
 name = "sex-fetch"
 version = "0.1.0"
 dependencies = [
@@ -3055,6 +3059,7 @@ name = "sex-media"
 version = "0.1.0"
 dependencies = [
  "sex-app",
+ "sex-episodes",
  "sex-libc",
  "sex-pdx",
 ]
