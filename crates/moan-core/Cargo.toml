@@ -1,0 +1,6 @@
+[package]
+name = "moan-core"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Moan's non-destructive, frame-accurate audio timeline and mixer"

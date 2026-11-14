@@ -47,6 +47,7 @@ crates = [
   "apps/hello/Cargo.toml",
   "apps/fortune/Cargo.toml",
   "apps/hum/Cargo.toml",
+  "apps/moan-probe/Cargo.toml",
   "apps/jot/Cargo.toml",
   "apps/quil/Cargo.toml",
   "apps/files/Cargo.toml",
@@ -566,6 +567,16 @@ id = "stage_pinball"
 action = "copy_file"
 src = "target/x86_64-sex-app/release/pinball"
 dst = "iso_root/programs/pinball"
+
+
+# Moan engine guest proof; UI follows the shared Weft toolkit.
+[[stage]]
+id = "build_moan_probe"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/moan-probe/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/moan-probe"
+dest_artifact = "iso_root/programs/moan-probe"
 
 [[stage]]
 id = "build_hum"
