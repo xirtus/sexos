@@ -175,6 +175,18 @@ Linen reopen, Display applied the new Quil view a few seconds late.
 route); drafts are not offered automatically on startup; one draft per
 document source per session.
 
+## G18. 12-hour CI-able long-run soak gate (2026-11-14)
+
+**What changed.** Added `scripts/long_soak_gate.py`, unit suite
+`scripts/tests/test_long_soak_gate.py`, and `.github/workflows/long-soak.yml`
+implementing a continuous 12-hour QEMU soak gate (`--hours 12`, chained across
+three 4.25-hour GitHub Actions segments with `nvme.img` + `--resume-report`
+state handoff so no job approaches GitHub's 360-minute runner limit). Every
+round opens and retires a user-space app (`[app.private.retired]`), plays audio
+through Bell (`beep` / `hum` / `play`), fetches/copies/SHA-256-verifies files
+with hourly persisted canaries, and checks `free_pages` drop + post-warmup OLS
+leak slope + key latency.
+
 ## F4. Browser Back key and preformatted text (2026-11-02)
 
 **What changed.** In an HTML page, **Backspace** returns to the page the
@@ -477,6 +489,14 @@ gate GREEN; native `https_html_gate.py` at both sizes with six scripts on the
 page (loop sum `20100`, while countdown, `sq(12)=144`, depth-10 parentheses
 and `fact(2)`, array squares, string split/upper/indexOf/parseInt);
 conversion took 9 ticks; no pager rejections.
+
+## G-12: Climax benchmark and thermal throttling stress engine (2026-11-14)
+- Added `climax-core` crate providing `#![no_std] + alloc` CPU and memory microbenchmarks, sustained torture runner, thermal throttling detection, and visual report generation.
+- Deterministic CPU microbenchmarks: ChaCha20/ARX integer ALU, SHA-256 compression, FMA-free tiled GEMM, and vectorizable DSP biquad IIR filter with bit-exact corruption self-checking.
+- Memory subsystem benchmarks: STREAM bandwidth engine with explicit `max_memory_bytes` quota and `Vec::try_reserve_exact` bounds, plus Sattolo single-cycle permutation pointer-chase latency ladder across L1/L2/L3/DRAM.
+- Sustained torture runner and thermal throttling analyzer: time-series sample acquisition, rolling window throughput evaluation against initial boost baseline, throttling onset detection, and 3DMark-style sustained stability percentage.
+- Report formatter: subsystem scores, geometric composite score with zero/NaN protection, p50/p95/p99 throughput percentiles, and fixed-width ASCII/Unicode bar charts for Spindle and Weft displays.
+- Gate: `scripts/climax_host_gate.sh` passing host unit tests and `x86_64-sex-app.json` target check.
 
 ## F21. Spindle `calc` powers (2026-11-03)
 
