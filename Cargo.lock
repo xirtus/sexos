@@ -4920,6 +4920,7 @@ name = "monitor"
 version = "0.1.0"
 dependencies = [
  "sex-app",
+ "sex-mesh",
  "sex-pdx",
 ]
 
@@ -7397,6 +7398,13 @@ dependencies = [
  "sex-episodes",
  "sex-libc",
  "sex-pdx",
+]
+
+[[package]]
+name = "sex-mesh"
+version = "0.1.0"
+dependencies = [
+ "sex-font",
 ]
 
 [[package]]
