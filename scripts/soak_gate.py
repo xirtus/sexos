@@ -11,8 +11,10 @@ and the workload continues. soak.json is rewritten after every round. The 24 h r
 import argparse,http.server,json,os,re,shutil,threading,time
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
+# The system monitor (Mesh, formerly Monitor); it logs [monitor.*] either way.
+MESH='mesh' if (ROOT/'iso_root/programs/mesh').exists() else 'monitor'
 PAGE=b'<html><head><title>Soak</title></head><body><p>Still here.</p><a href="/">again</a></body></html>'
-FILES={'/':PAGE,'/jot':(ROOT/'iso_root/programs/jot').read_bytes(),'/fortune':(ROOT/'iso_root/programs/fortune').read_bytes(),'/hum':(ROOT/'iso_root/programs/hum').read_bytes(),'/monitor':(ROOT/'iso_root/programs/monitor').read_bytes(),'/blob':bytes(i%251 for i in range(200_000))}
+FILES={'/':PAGE,'/jot':(ROOT/'iso_root/programs/jot').read_bytes(),'/fortune':(ROOT/'iso_root/programs/fortune').read_bytes(),'/hum':(ROOT/'iso_root/programs/hum').read_bytes(),'/'+MESH:(ROOT/'iso_root/programs'/MESH).read_bytes(),'/blob':bytes(i%251 for i in range(200_000))}
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):
   body=FILES.get(self.path)
@@ -54,7 +56,7 @@ def main():
    assert time.monotonic()-t0<30,'a key never reached the screen';time.sleep(.0005)
   ms=(time.monotonic()-t0)*1000;time.sleep(.2);q.key('backspace');return round(ms,1)
  def free_pages():
-  s=len(t());target,task,sid=started('run monitor','monitor')
+  s=len(t());target,task,sid=started('run '+MESH,'monitor')
   m=g['wait'](r'\[monitor\.sample\] [^\n]*free_pages=(\d+)',s,60)
   g['focus'](sid);time.sleep(.3);s=len(t());q.key('f11');g['wait'](rf'\[app.private.retired\] target={target} task={task} ',s,90)
   return int(m[1])
@@ -71,7 +73,7 @@ def main():
  rounds=[];began=time.monotonic()
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
-  for name in ('jot','fortune','hum','monitor'):fetched('/'+name,'/bin/'+name)
+  for name in ('jot','fortune','hum',MESH):fetched('/'+name,'/bin/'+name)
   census0=None
   while time.monotonic()-began<a.hours*3600:
    n=len(rounds)+1;r0=time.monotonic()
