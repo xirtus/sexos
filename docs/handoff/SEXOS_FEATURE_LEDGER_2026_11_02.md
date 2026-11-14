@@ -4391,6 +4391,10 @@ energy. Details: `LAPTOP_POWER_2026_11_13.md` (Sleep section).
   before page scripts run.
 - **Tests:** `cargo test -p sex-js --test extensions`; the extensions gate now installs a
   sample with a service worker (storage, registered script, dynamic rule, messaging).
+- **uBlock Origin Lite runs unmodified:** `scripts/program_web_ubol_gate.py` (not in CI;
+  downloads uBOL-home's `chromium/` build) installs it; its module service worker
+  starts (~7 s), loads 117,194 rules from its six default rulesets, registers 4 content
+  scripts, and with Shields down blocks 7 trackers on the Shields test page.
 - **Not yet:** isolated worlds, popups/options pages as extension pages, `webRequest`,
   `runtime.connect` ports, content scripts in frames hearing messages.
 ## J5 D2: Denim compressed memory, page out and back (2026-11-14)
