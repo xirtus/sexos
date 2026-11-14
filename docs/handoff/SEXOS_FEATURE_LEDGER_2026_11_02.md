@@ -4055,7 +4055,7 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   stays focus-right). While locked the Shell keeps every key, click and move, and
   Display paints only the lock surface over the whole frame: "Locked", one dot per typed
   character, and why the last try failed. Enter sends the password to Files, which
-  keeps only an Argon2id hash (m=4 MiB, t=3, random salt) in `/system/password` and
+  keeps only an Argon2id hash (m=2 MiB, t=4, random salt) in `/system/password` and
   answers match or not (`sex_config::secret`, opcode 0x2F3, reply tag 0xC7). With no
   password set, Enter unlocks. Settings sets the password with Ctrl+P (typed twice; the Shell keeps F-keys and Tab, so Settings pages use PgDn/PgUp).
   Idle: after `session.dim_after_min` the screen dims, after `lock_after_min` it locks
@@ -4069,6 +4069,18 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   lock-surface stub; QEMU gate `scripts/lock_screen_gate.py` in CI (devices job).
 - **Not yet:** inhibiting idle while media plays (needs a Bell hint); a salt from the
   kernel's held entropy source instead of RDRAND.
+
+## Lock screen opens the encrypted home (2026-11-14)
+- **What:** when the Shell's password CHECK passes (or no lock password is set) and the
+  encrypted `/home` (PR #197) is locked, Files tries the typed password on it. Signing in
+  at the lock screen opens `/home` too, like a login. Only the Shell (PD 3) gets this;
+  the staged bytes are copied once and wiped after.
+- **Protocol:** PUT chunks of `sex_config::secret` are no longer answered. Files keeps one
+  unsent reply per caller, so a reply per chunk overwrote the answer that mattered. The
+  Shell's config watch holds its requests while a password check waits; the lock check
+  gives up after 60 s.
+- **Evidence:** `scripts/files_home_gate.py` boot 2 now locks home and the session, types
+  the password on the lock screen, and reads the home file back.
 
 ## First-start setup and default apps, slices B8/B9 (2026-11-13)
 - **B8:** while `setup.done` is off, Settings opens with four questions: keyboard
