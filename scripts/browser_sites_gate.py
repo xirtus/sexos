@@ -25,7 +25,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
   self.end_headers();self.wfile.write(body)
  def do_GET(self):
   path=self.path.split('?')[0]
-  if path=='/web':return self.send(200,(ROOT/'iso_root/programs/web').read_bytes(),'application/octet-stream')
+  if path=='/web':return self.send(200,(ROOT/'iso_root/programs/kaleidoscope').read_bytes(),'application/octet-stream')
   if path=='/sites/github.html':
    # Sent compressed, as GitHub does.
    return self.send(200,(SITES/'github.html.gz').read_bytes(),extra=[('Content-Encoding','gzip'),('Vary','Accept-Encoding')])
@@ -94,14 +94,14 @@ def main():
   s=len(t());q.key('slash');time.sleep(.3);keys(url);q.key('ret');return s
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
-  g['focus'](153);time.sleep(.5);s=len(t());keys(f'fetch {BASE}/web /bin/web');q.key('ret')
+  g['focus'](153);time.sleep(.5);s=len(t());keys(f'fetch {BASE}/web /bin/kaleidoscope');q.key('ret')
   m=g['wait'](r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',s,240);assert m[1].startswith('Saved'),m[1]
   for i,(name,local,live,text,least) in enumerate(SUITE):
    url=live if a.live else local
    if a.live:text,least=LIVE_TEXT[name],1
    began=time.time()
    if i==0:
-    g['focus'](153);time.sleep(.5);s=len(t());keys(f'run +net web {url}');q.key('ret')
+    g['focus'](153);time.sleep(.5);s=len(t());keys(f'run +net kaleidoscope {url}');q.key('ret')
     r=g['wait'](r'\[web.ready\] target=(\d+) task=(\d+)',s,300);target,task=r[1],r[2]
     stats=loaded(s,300)
     launch=g['wait'](rf'\[shell.program.launch\] target={target} task={task} surface=(\d+)',s,60);surface=int(launch[1])

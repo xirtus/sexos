@@ -1,0 +1,8 @@
+[package]
+name = "sex-print"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "Driverless printing and scanning for SexOS (Needle): IPP Everywhere, PWG raster, URF, DNS-SD, eSCL; no I/O"
+
+[dependencies]
