@@ -178,7 +178,7 @@ jobs:
       run: python3 scripts/program_egui_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/egui"
     - name: Velvet playable games (pointer, keyboard, restart, rendered windows)
       run: python3 scripts/velvet_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/velvet"
-    - name: Weft programs (Abacus: typing, keypad clicks, errors, command palette)
+    - name: "Weft programs (Abacus: typing, keypad clicks, errors, command palette)"
       run: python3 scripts/program_weft_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/weft"
     - name: Signed packages, install service and first-run grant question
       run: |
