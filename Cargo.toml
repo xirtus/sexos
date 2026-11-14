@@ -120,6 +120,7 @@ members = [
     "crates/loom-core",
     "crates/loom-remote",
     "crates/aftercare-core",
+    "crates/corset-core",
 ]
 [workspace.package]
 license = "GPL-3.0-only"
