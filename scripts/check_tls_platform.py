@@ -93,6 +93,15 @@ def check_manifests(tls, workspace, app, trust=None):
     # direct manifest policy; a future provider change needs an explicit review.
     if tls.get('target'):
         errors.append('unreviewed target-specific TLS dependencies')
+    errors.extend(check_workspace_patches(workspace))
+    return errors
+
+
+SMOLTCP_PATCH = {'path': 'vendor/smoltcp-0.14.0'}
+
+def check_workspace_patches(workspace):
+    """One shared exact allowlist for production and isolated dependency gates."""
+    errors=[]
     # Reviewed non-TLS replacements: the no_std port of naga's GLSL preprocessor, and
     # virtio-drivers with sound capture for Bell, acpi with embedded-controller region
     # handlers, Notify and whole-buffer compares for sexacpi, ignore's parallel walker on
@@ -114,7 +123,7 @@ def check_manifests(tls, workspace, app, trust=None):
     # Reviewed allocation-free split discovery clocks; this does not replace
     # any TLS provider or alter the required existing patch selections.
     with_neighbor_fix = {'crates-io': {**reviewed_patches['crates-io'],
-                                      'smoltcp': {'path': 'vendor/smoltcp-0.14.0'}}}
+                                      'smoltcp': SMOLTCP_PATCH}}
     if workspace.get('patch') and workspace.get('patch') not in (reviewed_patches, with_neighbor_fix):
         errors.append('workspace dependency replacement needs TLS policy review: patch')
     if workspace.get('replace'):

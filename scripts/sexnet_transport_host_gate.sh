@@ -7,11 +7,10 @@ trap 'rm -rf "$TEST_DIR"' EXIT
 PACKAGE_DIR="$TEST_DIR/crates/sex-net"
 python3 - "$ROOT_DIR" "$PACKAGE_DIR" <<'PY'
 from pathlib import Path
-import shutil,sys
-root,out=map(Path,sys.argv[1:]);out.mkdir(parents=True);shutil.copytree(root/'crates/sex-net/src',out/'src');shutil.copyfile(root/'Cargo.lock',out/'Cargo.lock')
-shutil.copytree(root/'crates/sex-net-config',out.parent/'sex-net-config')
-# Only isolate workspace discovery; production package/dependencies/source intact.
-(out/'Cargo.toml').write_text((root/'crates/sex-net/Cargo.toml').read_text()+'\n[workspace]\n')
+import sys
+sys.path.insert(0,str(Path(sys.argv[1])/'scripts'))
+from sexnet_transport_source import prepare
+prepare(*map(Path,sys.argv[1:]))
 PY
 cargo metadata --manifest-path "$PACKAGE_DIR/Cargo.toml" --offline --format-version 1 > "$PACKAGE_DIR/metadata.json"
 python3 - "$ROOT_DIR" "$PACKAGE_DIR" <<'PY'
@@ -26,7 +25,9 @@ for p in(root/'crates/sex-net/src').rglob('*.rs'):
  assert p.read_bytes()==(out/'src'/p.relative_to(root/'crates/sex-net/src')).read_bytes(),p
 for p in(root/'crates/sex-net-config').rglob('*'):
  if p.is_file():assert p.read_bytes()==(out.parent/'sex-net-config'/p.relative_to(root/'crates/sex-net-config')).read_bytes(),p
-meta=json.loads((out/'metadata.json').read_text());packages={p['id']:p for p in meta['packages']}
+sys.path.insert(0,str(root/'scripts'))
+from sexnet_transport_source import verify_selection
+meta=json.loads((out/'metadata.json').read_text());verify_selection(root,out,meta);packages={p['id']:p for p in meta['packages']}
 stack=[n for n in meta['resolve']['nodes']if packages[n['id']]['name']=='smoltcp'];assert len(stack)==1
 assert packages[stack[0]['id']]['version']=='0.14.0'
 # alloc: the open-internet flows are made as programs ask for them (sexnet's heap grows).
