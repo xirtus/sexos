@@ -10,7 +10,7 @@ from install_program import install
 from quil_autosave_gate import boot
 from program_egui_gate import colours
 from sound_gate import segments
-from moan_gate_geometry import ready, control, discard
+from moan_gate_geometry import ready, control, discard, type_text, spindle
 from program_gate_geometry import current_tile
 ROOT=Path(__file__).resolve().parents[1]
 def main():
@@ -21,9 +21,9 @@ def main():
  if a.microphone:os.environ['SEXOS_GATE_DEVICES']='-audiodev none,id=snd0 -device virtio-sound-pci,audiodev=snd0'
  g=boot(a.iso,disk,out,'moan-app',a.resolution);q=g['q'];text=g['text'];rw,rh=map(int,a.resolution.split('x'))
  def keys(line):
-  for k in line:q.key({' ':'spc','-':'minus','.':'dot'}.get(k,k));time.sleep(.08)
+  type_text(g,line)
  try:
-  g['wait'](r'\[app.private.retired\] target=41 ',0,120);g['wait'](r'\[bell.sound.ready\]',0,120);g['focus'](153);time.sleep(.5);start=len(text());keys('run moan');q.key('ret')
+  g['wait'](r'\[app.private.retired\] target=41 ',0,120);g['wait'](r'\[bell.sound.ready\]',0,120);start=spindle(g,'run moan')
   m=g['wait'](r'\[moan.ready\] target=(\d+) task=(\d+)',start,300);target,task=m[1],m[2]
   launch=g['wait'](rf'\[shell.program.launch\] target={target} task={task} surface=(\d+)',start,60);surface=int(launch[1]);ready(g,surface)
   def click(name):
@@ -38,7 +38,7 @@ def main():
   s=len(text());click('Undo');g['wait'](r'\[moan.project\] tracks=2 frames=96000 selected=1 clips=2',s,60)
   if a.microphone:
    s=len(text());click('Record');asked=g['wait'](r'\[moan.record.request\] row=(\d+)',s,60);row=asked[1];time.sleep(2);assert '[moan.recorded]' not in text()[s:]
-   g['focus'](153);time.sleep(.5);keys(f'volume {row} mic on');q.key('ret');g['wait'](r'\[bell.mic.first\]',s,120);time.sleep(2)
+   spindle(g,f'volume {row} mic on');g['wait'](r'\[bell.mic.first\]',s,120);time.sleep(2)
    g['focus'](surface);s=len(text());click('Stop');saved=g['wait'](r'\[moan.recorded\] frames=(\d+) lost=(\d+)',s,60);assert int(saved[1])>=48000,saved[0]
   screenshot=out/'moan.ppm';q.cmd('screendump',{'filename':str(screenshot)});time.sleep(.5);assert len(colours(screenshot.read_bytes(),current_tile(text(),surface)))>8
   s=len(text());g['focus'](surface);q.key('f11');discard(g,surface,(rw,rh),s);g['wait'](r'\[moan.closed\]',s,60);g['wait'](rf'\[app.private.retired\] target={target} task={task} ',s,120)

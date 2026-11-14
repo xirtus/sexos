@@ -3,6 +3,7 @@
 import re
 import time
 from program_gate_geometry import current_tile, maximize
+from lua_gate import qcodes
 
 
 def chord(g, *keys):
@@ -70,3 +71,30 @@ def discard(g, surface, resolution, since):
     for down in (True, False):
         q.cmd('input-send-event', {'events': [{'type': 'btn', 'data': {'down': down, 'button': 'left'}}]})
         time.sleep(.15)
+
+
+def type_text(g, value):
+    """Use one QMP queue for shifted and plain text, with release spacing."""
+    for ch in value:
+        g['q'].cmd('send-key', {'keys': [{'type': 'qcode', 'data': k} for k in qcodes(ch)], 'hold-time': 40})
+        time.sleep(.12)
+
+
+def spindle(g, line):
+    """Acknowledge each real Shell command character before admitting the next."""
+    assert line and len(line) < 256
+    g['focus'](153)
+    time.sleep(.5)
+    start = len(g['text']())
+    base = None
+    for n, ch in enumerate(line):
+        since = len(g['text']())
+        type_text(g, ch)
+        m = g['wait'](rf'\[spindle\.input\.recv\] key=printable ch={re.escape(ch)} len=(\d+)\n', since, 30)
+        if base is None:
+            base = int(m[1]) - n
+        assert int(m[1]) == base + n, (line[:n+1], m[0])
+    since = len(g['text']())
+    g['q'].key('ret')
+    g['wait'](rf'\[spindle\.input\.recv\] key=enter len={base + len(line) - 1}\n', since, 30)
+    return start
