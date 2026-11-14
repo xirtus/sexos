@@ -4,12 +4,13 @@
 //! It proves the egui backend (crates/sex-egui): every widget in egui's demo, with the
 //! mouse, wheel and keyboard. `run tassel probe` shows a small fixed panel instead,
 //! which the boot gate drives with clicks and keys and reads back from the serial record.
+//! `run tassel trace` keeps the demo and reports each painted frame for diagnostics.
 
 fn main() {
     let probe = std::env::args().any(|a| a == "probe");
     let mut options = sex_egui::Options::new("Tassel");
+    options.trace_frames = probe || std::env::args().any(|a| a == "trace");
     if probe {
-        options.trace_frames = true;
         let mut clicks = 0u32;
         let mut text = String::new();
         let mut checked = false;
