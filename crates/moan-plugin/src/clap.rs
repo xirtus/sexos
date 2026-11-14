@@ -6,6 +6,7 @@ use clap_sys::{
     audio_buffer::*, entry::*, events::*, ext::audio_ports::*, factory::plugin_factory::*, host::*,
     plugin::*, process::*, version::*,
 };
+use core::sync::atomic::{AtomicBool, Ordering};
 use core::{
     ffi::{c_char, c_void},
     ptr,
@@ -23,8 +24,8 @@ pub enum Error {
     Restart,
 }
 struct Context {
-    restart: bool,
-    callback: bool,
+    restart: AtomicBool,
+    callback: AtomicBool,
 }
 pub struct Processor {
     entry: *const clap_plugin_entry,
@@ -39,11 +40,15 @@ unsafe extern "C" fn extension(_: *const clap_host, _: *const c_char) -> *const 
     ptr::null()
 }
 unsafe extern "C" fn restart(h: *const clap_host) {
-    (*((*h).host_data as *mut Context)).restart = true
+    (*((*h).host_data as *const Context))
+        .restart
+        .store(true, Ordering::Release)
 }
 unsafe extern "C" fn request_process(_: *const clap_host) {}
 unsafe extern "C" fn callback(h: *const clap_host) {
-    (*((*h).host_data as *mut Context)).callback = true
+    (*((*h).host_data as *const Context))
+        .callback
+        .store(true, Ordering::Release)
 }
 unsafe extern "C" fn event_count(_: *const clap_input_events) -> u32 {
     0
@@ -63,8 +68,8 @@ impl Processor {
             return Err(Error::Version);
         }
         let mut context = Box::new(Context {
-            restart: false,
-            callback: false,
+            restart: AtomicBool::new(false),
+            callback: AtomicBool::new(false),
         });
         let host = Box::new(clap_host {
             clap_version: CLAP_VERSION,
@@ -173,16 +178,18 @@ impl Processor {
             try_push: Some(output),
         };
         for (block, frames) in input.chunks(BLOCK).enumerate() {
-            if self.context.restart {
+            if self.context.restart.load(Ordering::Acquire) {
                 return Err(Error::Restart);
             }
-            if self.context.callback {
-                self.context.callback = false;
+            if self.context.callback.swap(false, Ordering::AcqRel) {
                 unsafe {
                     if let Some(f) = (*self.plugin).on_main_thread {
                         f(self.plugin)
                     }
                 }
+            }
+            if self.context.restart.load(Ordering::Acquire) {
+                return Err(Error::Restart);
             }
             for (i, f) in frames.iter().enumerate() {
                 ins[0][i] = f[0];
@@ -216,6 +223,9 @@ impl Processor {
             };
             let status =
                 unsafe { (*self.plugin).process.ok_or(Error::Lifecycle)?(self.plugin, &process) };
+            if self.context.restart.load(Ordering::Acquire) {
+                return Err(Error::Restart);
+            }
             if !(CLAP_PROCESS_CONTINUE..=CLAP_PROCESS_SLEEP).contains(&status) {
                 return Err(Error::Process);
             }
@@ -226,6 +236,9 @@ impl Processor {
                 }
                 result.push(frame);
             }
+        }
+        if self.context.restart.load(Ordering::Acquire) {
+            return Err(Error::Restart);
         }
         Ok(result)
     }
@@ -255,5 +268,112 @@ impl Drop for Processor {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::sync::atomic::AtomicUsize;
+    struct Calls {
+        host: *const clap_host,
+        calls: AtomicUsize,
+        restart_at: usize,
+    }
+    unsafe extern "C" fn process(plugin: *const clap_plugin, p: *const clap_process) -> i32 {
+        let state = &*((*plugin).plugin_data.cast::<Calls>());
+        let call = state.calls.fetch_add(1, Ordering::Relaxed) + 1;
+        for channel in 0..2 {
+            for i in 0..(*p).frames_count as usize {
+                let src = *(*(*p).audio_inputs).data32.add(channel);
+                let dst = *(*(*p).audio_outputs).data32.add(channel);
+                *dst.add(i) = *src.add(i);
+            }
+        }
+        if call == state.restart_at {
+            ((*state.host).request_restart.unwrap())(state.host)
+        }
+        CLAP_PROCESS_CONTINUE
+    }
+    unsafe extern "C" fn main_thread(plugin: *const clap_plugin) {
+        let state = &*((*plugin).plugin_data.cast::<Calls>());
+        ((*state.host).request_restart.unwrap())(state.host);
+    }
+    fn run(
+        frames: usize,
+        restart_at: usize,
+        main_callback: bool,
+    ) -> (Result<Vec<[f32; 2]>, Error>, usize) {
+        let mut context = Box::new(Context {
+            restart: AtomicBool::new(false),
+            callback: AtomicBool::new(main_callback),
+        });
+        let host = Box::new(clap_host {
+            clap_version: CLAP_VERSION,
+            host_data: (&mut *context as *mut Context).cast(),
+            name: c"test".as_ptr(),
+            vendor: c"test".as_ptr(),
+            url: c"".as_ptr(),
+            version: c"1".as_ptr(),
+            get_extension: Some(extension),
+            request_restart: Some(restart),
+            request_process: Some(request_process),
+            request_callback: Some(callback),
+        });
+        let calls = Calls {
+            host: &*host,
+            calls: AtomicUsize::new(0),
+            restart_at,
+        };
+        let plugin = clap_plugin {
+            desc: ptr::null(),
+            plugin_data: (&calls as *const Calls).cast_mut().cast(),
+            init: None,
+            destroy: None,
+            activate: None,
+            deactivate: None,
+            start_processing: None,
+            stop_processing: None,
+            reset: None,
+            process: Some(process),
+            get_extension: None,
+            on_main_thread: Some(main_thread),
+        };
+        let mut renderer = Processor {
+            entry: ptr::null(),
+            plugin: &plugin,
+            _host: host,
+            context,
+            initialized: false,
+            active: false,
+            processing: false,
+        };
+        let result = renderer.render(&alloc::vec![[0.25,-0.5];frames]);
+        let n = calls.calls.load(Ordering::Relaxed);
+        (result, n)
+    }
+    #[test]
+    fn one_block_restart_never_publishes() {
+        let (r, n) = run(1, 1, false);
+        assert_eq!(n, 1);
+        assert_eq!(r, Err(Error::Restart));
+    }
+    #[test]
+    fn final_block_restart_never_publishes() {
+        let (r, n) = run(BLOCK + 1, 2, false);
+        assert_eq!(n, 2);
+        assert_eq!(r, Err(Error::Restart));
+    }
+    #[test]
+    fn main_callback_restart_prevents_processing() {
+        let (r, n) = run(1, usize::MAX, true);
+        assert_eq!(n, 0);
+        assert_eq!(r, Err(Error::Restart));
+    }
+    #[test]
+    fn no_restart_control_processes_every_frame() {
+        let (r, n) = run(BLOCK + 1, usize::MAX, false);
+        assert_eq!(n, 2);
+        assert_eq!(r.unwrap(), alloc::vec![[0.25,-0.5];BLOCK+1]);
     }
 }
