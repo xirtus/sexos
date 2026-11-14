@@ -81,7 +81,7 @@ impl Abacus {
                 .shortcut("Escape")
                 .icon("close")
                 .keywords("reset all clear"),
-            Command::new("abacus.recall-last", "Recall Last Calculation").shortcut("Alt+Up"),
+            Command::new("abacus.recall-last", "Recall Last Calculation").shortcut("Ctrl+Up"),
             Command::new("abacus.clear-history", "Clear History").icon("trash"),
             Command::new("abacus.degrees", "Degrees")
                 .checked(true)
