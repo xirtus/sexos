@@ -23,7 +23,7 @@ from quil_autosave_gate import boot
 ROOT=Path(__file__).resolve().parents[1]
 SURFACE={int(a):int(b)for a,b in re.findall(r'app: App::Program, ordinal: \d+, target: (\d+), surface: (\d+)',(ROOT/'crates/sex-pdx/src/app_catalog.rs').read_text())}
 KEYS={' ':'spc','.':'dot','/':'slash','-':'minus','=':'equal',',':'comma',';':'semicolon'}
-SHIFTED={'|':'backslash','~':'grave_accent','>':'dot',':':'semicolon','_':'minus','!':'1','@':'2'}
+SHIFTED={'"':'apostrophe','|':'backslash','~':'grave_accent','>':'dot',':':'semicolon','_':'minus','!':'1','@':'2'}
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
  term=(ROOT/'iso_root/programs/term').read_bytes();assert term[:4]==b'\x7fELF'
@@ -92,7 +92,7 @@ def main():
   term_line('echo left-pane');rows=snapshot();screen='\n'.join(rows.values())
   assert 'left-pane' in screen and 'buy milk' in screen and 'Hello, Pane' not in screen,screen
   # Search and hints over the scrollback (P6).
-  term_line('clear');term_line('echo see https://example.com/x and 1234567')
+  term_line('clear');term_line('echo "see https://example.com/x and 1234567"')
   s=len(t());chord('ctrl','shift','f');g['wait'](r'\[term\.mode\] search',s,30);keys('example')
   m=g['wait'](r'\[term\.search\] query=example matches=(\d+)',s,30);assert int(m[1])>=1,m[0]
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'spindle-search.ppm')});q.key('esc')

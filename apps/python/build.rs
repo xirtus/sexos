@@ -53,6 +53,14 @@ const MODULES: &[&str] = &[
 
 fn main() {
     println!("cargo:rustc-link-arg-bins=-zstack-size=8388608");
+    // The loader refuses code holding WRPKRU/XRSTOR bytes at any offset; a displacement
+    // can hold them by chance (the interpreter is large). The build then links again with
+    // sections in another order (SEX_LAYOUT_SEED), which moves every displacement.
+    println!("cargo:rerun-if-env-changed=SEX_LAYOUT_SEED");
+    if let Some(seed) = env::var("SEX_LAYOUT_SEED").ok().filter(|s| !s.is_empty() && s != "0") {
+        println!("cargo:rustc-link-arg-bins=--shuffle-sections=.rodata*={seed}");
+        println!("cargo:rustc-link-arg-bins=--shuffle-sections=.text*={seed}");
+    }
     let dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let src = dir.join("../../vendor/cpython-3.13.18");
     let port = dir.join("port");
