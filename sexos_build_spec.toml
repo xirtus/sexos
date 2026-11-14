@@ -97,7 +97,9 @@ crates = [
   "apps/rendezvous/Cargo.toml",
   "servers/sexuvc/Cargo.toml",
   "apps/flash/Cargo.toml",
-  "apps/climax/Cargo.toml"
+  "apps/climax/Cargo.toml",
+  "apps/batik/Cargo.toml",
+  "apps/burlesque/Cargo.toml"
 ]
 
 [[stage]]
@@ -775,6 +777,24 @@ target = "x86_64-sex-app.json"
 manifest = "apps/climax/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/climax"
 dest_artifact = "iso_root/programs/climax"
+
+# Batik image editor and digital painting app on Weft.
+[[stage]]
+id = "build_batik"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/batik/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/batik"
+dest_artifact = "iso_root/programs/batik"
+
+# Burlesque presentations app on Weft.
+[[stage]]
+id = "build_burlesque"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/burlesque/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/burlesque"
+dest_artifact = "iso_root/programs/burlesque"
 
 [[stage]]
 id = "build_crush"

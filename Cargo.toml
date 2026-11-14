@@ -119,6 +119,8 @@ members = [
     "apps/sex-calc",
     "crates/sex-calendar",
     "crates/climax-core",
+    "apps/batik",
+    "apps/burlesque",
     "crates/sex-dav",
     "apps/climax",
     "apps/calendar",
