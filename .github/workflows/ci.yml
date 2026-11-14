@@ -57,6 +57,10 @@ jobs:
       run: bash scripts/desktop_capture_host_gate.sh
     - name: HTML containing-block and replaced sizing
       run: cargo test --locked -p sex-html
+    - name: Shields ad and tracker filters (Kaleidoscope, Qupid)
+      run: cargo test --locked -p sex-shields
+    - name: Browser extensions (manifests, match patterns, CRX/ZIP, declarativeNetRequest)
+      run: cargo test --locked -p sex-extensions
     - name: Settings schema, file format, protocol and the Settings program's pages
       run: bash scripts/settings_host_gate.sh
     - name: Signed package format and store catalog
@@ -227,6 +231,10 @@ jobs:
       run: python3 scripts/program_web_download_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-daily.img" --out "$RUNNER_TEMP/sexos-runtime/web-download"
     - name: Browser forms (GET, urlencoded and multipart POST)
       run: python3 scripts/program_web_form_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-daily.img" --out "$RUNNER_TEMP/sexos-runtime/web-form"
+    - name: Kaleidoscope Shields block 12 trackers, Ctrl+Shift+S lets them through
+      run: python3 scripts/program_web_shields_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-daily.img" --out "$RUNNER_TEMP/sexos-runtime/web-shields"
+    - name: Kaleidoscope installs an MV3 extension; its content script and rules apply
+      run: python3 scripts/program_web_extensions_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-daily.img" --out "$RUNNER_TEMP/sexos-runtime/web-extensions"
     - name: Browser site suite (encyclopedia, news, links, GitHub, webmail sign-in)
       run: python3 scripts/browser_sites_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-daily.img" --out "$RUNNER_TEMP/sexos-runtime/web-sites"
     - name: Native screenshot saved as a real PNG file

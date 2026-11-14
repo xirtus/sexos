@@ -131,6 +131,13 @@ fn block_end(b: &[u8], open: usize) -> usize {
     b.len()
 }
 
+/// Where the inside of the block opening at `open` and ending before `close` stops: before
+/// its `}`, or at the end of the text when the block is never closed (the last byte may
+/// then be part of a longer character, so nothing is taken off).
+fn inner_end(b: &[u8], open: usize, close: usize) -> usize {
+    if close > open + 1 && b[close - 1] == b'}' { close - 1 } else { close.max(open + 1) }
+}
+
 /// Where the next `{` or `;` at depth zero is (outside strings and parentheses).
 fn prelude_end(b: &[u8], mut i: usize) -> usize {
     let mut paren = 0;
@@ -164,7 +171,7 @@ fn parse_rules(css: &str, vw: i32, sheet: &mut Sheet) {
         if end >= b.len() { break; }
         if b[end] == b';' { i = end + 1; continue; }
         let close = block_end(b, end);
-        let inner = &css[end + 1..close.saturating_sub(1).max(end + 1)];
+        let inner = &css[end + 1..inner_end(b, end, close)];
         if let Some(at) = prelude.strip_prefix('@') {
             let name = at.split(|c: char| c.is_whitespace() || c == '(').next().unwrap_or("").to_ascii_lowercase();
             match name.as_str() {
@@ -199,7 +206,7 @@ fn parse_frames(css: &str) -> Vec<(i32, Vec<Declaration>)> {
         let end = prelude_end(b, i);
         if end >= b.len() || b[end] != b'{' { break; }
         let close = block_end(b, end);
-        let decls = parse_declarations(&css[end + 1..close.saturating_sub(1).max(end + 1)]);
+        let decls = parse_declarations(&css[end + 1..inner_end(b, end, close)]);
         for sel in css[i..end].split(',') {
             let at = match sel.trim().to_ascii_lowercase().as_str() {
                 "from" => Some(0),

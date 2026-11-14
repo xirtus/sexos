@@ -3925,6 +3925,15 @@ name = "sex-episodes"
 version = "0.1.0"
 
 [[package]]
+name = "sex-extensions"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "sex-shields",
+ "zune-inflate",
+]
+
+[[package]]
 name = "sex-fetch"
 version = "0.1.0"
 dependencies = [
@@ -4152,6 +4161,13 @@ dependencies = [
  "rustybuzz",
  "unicode-bidi",
  "unicode-width",
+]
+
+[[package]]
+name = "sex-shields"
+version = "0.1.0"
+dependencies = [
+ "psl",
 ]
 
 [[package]]
@@ -5522,11 +5538,13 @@ name = "web"
 version = "0.1.0"
 dependencies = [
  "sex-app",
+ "sex-extensions",
  "sex-fetch",
  "sex-gl",
  "sex-js",
  "sex-media",
  "sex-pdx",
+ "sex-shields",
  "sex-web",
 ]
 

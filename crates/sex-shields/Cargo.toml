@@ -1,0 +1,10 @@
+[package]
+name = "sex-shields"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Shields: ad and tracker blocking with Adblock Plus / uBlock filter lists (no_std + alloc, no I/O); shared by Kaleidoscope and Qupid"
+
+[dependencies]
+# Mozilla Public Suffix List (MIT/Apache-2.0, no_std): which requests are third-party.
+psl = "2.1.249"
