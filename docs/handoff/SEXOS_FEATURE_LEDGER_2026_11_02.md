@@ -521,6 +521,11 @@ GREEN; native HTML gate at both sizes with a seventh page script
 (`odd 1+3+5+7+9 = 25` via continue/break/template); native calc gate at
 both sizes incl. `calc sqrt(2)`.
 
+## G-8: Corset disks, partitions, SMART and BDSM encryption engine (2026-11-14)
+
+- **`corset-core` block engine.** GPT editor with 1 MiB alignment, overlap refusal, CRC-32 dual-table recovery, FAT32/exFAT/SexFS formatters and inspector with `sex-volumes` cross-mount verification.
+- **SMART diagnostics & BDSM encryption.** NVMe/ATA health analyzer with thermal and spare degradation tracking, and transparent XTS-AES-256 encrypted partition workflow (`sex-crypt` Argon2id rewrapping and cryptographic header wiping).
+
 ## F27-F28. Script objects and JSON (2026-11-03)
 
 - **F27 objects.** `{a: 1, 'b': x}` literals, `o.a`, `o[key]`, `o.a = v`
