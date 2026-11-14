@@ -2,10 +2,10 @@
 import pathlib,re,sys,unittest,tomllib,tempfile,shutil,subprocess,os
 ROOT=pathlib.Path(__file__).resolve().parents[2];sys.path.insert(0,str(ROOT/'scripts'))
 from input_payload_profile import diagnostic_spec,assert_payload_proof,PROOF_RECEIPTS,wait_releases,STAGES,FLAG
-from input_payload_audit import audit_interval,require_normal_image
+from input_payload_audit import audit_interval,require_normal_image,require_kernel_redaction
 
 class InputPrivacy(unittest.TestCase):
- def test_profile_changes_only_declared_userspace_flags_and_preserves_crypto_flags(self):
+ def test_profile_changes_only_declared_flags_and_preserves_crypto_flags(self):
   source=(ROOT/'sexos_build_spec.toml').read_text();before=tomllib.loads(source);after=tomllib.loads(diagnostic_spec(source))
   self.assertEqual({k:v for k,v in before.items() if k!='stage'},{k:v for k,v in after.items() if k!='stage'})
   self.assertEqual(len(before['stage']),len(after['stage']))
@@ -48,7 +48,7 @@ class InputPrivacy(unittest.TestCase):
   self.assertTrue(audit_interval('[sexinput.key.send] source=1 payload=redacted\n[input.keyboard.keyup.ok] source=ps2 payload=redacted')['userspace_safe'])
  def test_kernel_residual_is_separate_and_never_becomes_a_complete_privacy_claim(self):
   for trace in ['', '[ps2.port60.read] n=1 sc=0x1e','[ps2.input_ring.enqueue] n=1 type=0x201 sc=0x1e','[ps2.input_ring.drop] reason=ring_full sc=0x1e']:
-   result=audit_interval(trace);self.assertTrue(result['userspace_safe']);self.assertFalse(result['complete_keyboard_privacy_proven']);self.assertEqual(bool(result['kernel_payload_lines']),bool(trace))
+   result=audit_interval(trace);self.assertTrue(result['userspace_safe']);self.assertFalse(result['complete_keyboard_privacy_proven']);self.assertEqual(bool(result['kernel_payload_lines']),bool(trace));self.assertEqual(result['kernel_safe'],not bool(trace))
  def test_profile_builder_restores_originals_on_failure_and_normal_after_success(self):
   for fail in (False,True):
    with tempfile.TemporaryDirectory() as temporary:
@@ -56,7 +56,7 @@ class InputPrivacy(unittest.TestCase):
     for name in ('build_input_payload_proof.sh','input_payload_profile.py'):shutil.copyfile(ROOT/'scripts'/name,root/'scripts'/name)
     original=(ROOT/'sexos_build_spec.toml').read_bytes();(root/'sexos_build_spec.toml').write_bytes(original)
     for name in ('sexos-v1.0.0.iso','iso_root/sexos-kernel','iso_root/servers/sexinput','iso_root/servers/silk-shell'):(root/name).write_bytes(b'original')
-    (root/'scripts/master_runtime_gate.sh').write_text('#!/usr/bin/env bash\nset -eu\npython3 -c \'import tomllib; s=tomllib.load(open("sexos_build_spec.toml","rb")); assert all("sexos_input_payload_proof" in x["rustflags"] for x in s["stage"] if x["id"] in ("build_silk_shell","build_sexinput"))\'\nprintf proof > sexos-v1.0.0.iso\nif [[ "${MOCK_INPUT_BUILD_FAIL:-0}" = 1 ]]; then exit 43; fi\n')
+    (root/'scripts/master_runtime_gate.sh').write_text('#!/usr/bin/env bash\nset -eu\npython3 -c \'import tomllib; s=tomllib.load(open("sexos_build_spec.toml","rb")); assert all("sexos_input_payload_proof" in x["rustflags"] for x in s["stage"] if x["id"] in ("build_kernel","build_silk_shell","build_sexinput"))\'\nprintf proof > sexos-v1.0.0.iso\nif [[ "${MOCK_INPUT_BUILD_FAIL:-0}" = 1 ]]; then exit 43; fi\n')
     (root/'scripts/freeze_native_evidence.py').write_text("from pathlib import Path\nimport sys\nassert Path('sexos-v1.0.0.iso').read_bytes()==b'proof'\nout=Path(sys.argv[sys.argv.index('--out')+1]);out.mkdir();(out/'frozen').write_text('proof')\n")
     (root/'scripts/entrypoint_build.sh').write_text("#!/usr/bin/env bash\nset -eu\nif grep -q 'sexos_input_payload_proof' sexos_build_spec.toml; then exit 44; fi\nprintf normal > sexos-v1.0.0.iso\n")
     result=subprocess.run(['bash','scripts/build_input_payload_proof.sh',str(root/'evidence')],cwd=root,env=dict(os.environ,MOCK_INPUT_BUILD_FAIL='1' if fail else '0'),capture_output=True,text=True)
@@ -78,6 +78,12 @@ class InputPrivacy(unittest.TestCase):
   self.assertIn('UNSAFE-keyboard-payload-proof-never-private-input',workflow)
   commands=[line for line in workflow.splitlines() if 'program_chastity_gate.py' in line]
   self.assertEqual(len(commands),1);self.assertIn('--input-privacy',commands[0]);self.assertIn('--iso sexos-v1.0.0.iso',commands[0])
+ def test_normal_kernel_requires_observed_redaction_and_rejects_raw_prior_keys(self):
+  normal='[ps2.port60.read] n=1 payload=redacted\n[ps2.input_ring.enqueue] n=1 type=0x201 payload=redacted\n'
+  self.assertEqual(require_kernel_redaction(normal),2)
+  for line in ('[ps2.port60.read] n=1 sc=0x1e','[ps2.input_ring.enqueue] n=1 type=0x201 sc=0x1e','[ps2.input_ring.drop] reason=ring_full sc=0x1e'):
+   with self.assertRaises(ValueError):require_kernel_redaction(line+'\n'+normal)
+  with self.assertRaises(ValueError):require_kernel_redaction('')
  def test_generic_wrapper_and_usb_errors_never_format_arguments(self):
   wrapper=(ROOT/'crates/sex-pdx/src/lib.rs').read_text();start=wrapper.index('"[pdx.listen.raw.wrapper]');end=wrapper.index(');',start);self.assertNotRegex(wrapper[start:end],r'\ba[012]=|arg[012]')
   usb=(ROOT/'servers/sexusb/src/main.rs').read_text()

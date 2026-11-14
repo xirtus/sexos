@@ -30,7 +30,7 @@ os.environ.setdefault('SEXOS_GATE_BOUND','2400')
 from quil_autosave_gate import boot
 from lua_gate import qcodes,SURFACE
 from program_gate_geometry import maximize
-from input_payload_audit import audit_interval,require_normal_image
+from input_payload_audit import audit_interval,require_normal_image,require_kernel_redaction
 ROOT=Path(__file__).resolve().parents[1]
 
 MASTER='Corr3ct horse!'
@@ -48,7 +48,7 @@ def key_bytes_clean(path):
  return not key_bytes.scan(str(path))
 
 def main():
- p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');p.add_argument('--input-privacy',action='store_true',help='require normal userspace receipts and audit protected typing; kernel scope remains separately reported');a=p.parse_args()
+ p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');p.add_argument('--input-privacy',action='store_true',help='require normal receipts, redacted kernel traces and protected typing audits');a=p.parse_args()
  program=ROOT/'iso_root/programs/chastity'
  elf=program.read_bytes();assert elf[:4]==b'\x7fELF'
  # The loader refuses a program whose code holds WRPKRU/XRSTOR bytes anywhere.
@@ -57,10 +57,14 @@ def main():
  install(disk,[('chastity',elf)])
  results={}
  privacy=[]
- def check_private(trace,tag):
+ def check_private(trace,tag,image_trace):
   if not a.input_privacy:return
-  result=audit_interval(trace);result['interval']=tag;privacy.append(result)
+  result=audit_interval(trace);result['interval']=tag
+  result['kernel_image_payload_lines']=audit_interval(image_trace)['kernel_payload_lines']
+  result['kernel_redacted_records_observed']=len(re.findall(r'\[ps2\.(?:port60\.read|input_ring\.(?:enqueue|drop))\][^\n]*payload=redacted',image_trace))
+  privacy.append(result)
   (a.out/'input-privacy.json').write_text(json.dumps(privacy,indent=2)+'\n')
+  require_kernel_redaction(image_trace)
   assert result['userspace_safe'],'encoded keyboard payload or CLI echo in protected vault interval (see input-privacy.json)'
   assert MASTER not in trace and WRONG not in trace,'literal password in protected vault interval'
 
@@ -86,7 +90,7 @@ def main():
    for ch in text:press(ch)
    q.key('ret')
    match=g['wait'](pattern,s,timeout)
-   check_private(t()[s:],tag+'-field')
+   check_private(t()[s:],tag+'-field',t())
    return match
   def start(vault):
    s=len(t());spindle('run chastity')
@@ -122,7 +126,7 @@ def main():
   q.key('ret');time.sleep(.5)
   typed(MASTER,r'\[chastity\.created\] entries=0\n',UNLOCK)
   g['wait'](r'\[chastity\.saved\] entries=0 bytes=\d+\n',s,10)
-  check_private(t()[s:],'chastity1-create-both-master-fields')
+  check_private(t()[s:],'chastity1-create-both-master-fields',t())
   s=len(t());press('a');time.sleep(.5)
   for name,value in ENTRY:
    if name=='password':typed(value,r'\[chastity\.field\] name=password generated=1\n')
