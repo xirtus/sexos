@@ -82,7 +82,7 @@ def main():
   probe=shot('tassel-probe',tile)
   assert len(probe)>8,'the probe panel looks blank'
   close(target,task,surface)
-  target,task,surface,tile,frame=start('')
+  target,task,surface,tile,frame=start('trace')
   assert int(frame[4])>1000,f'the demo drew too little: {frame[0]}'
   demo=shot('tassel-demo',tile)
   colour_count=len(demo);assert colour_count>40,f'the demo looks blank ({colour_count} colours)'
