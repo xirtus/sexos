@@ -4,7 +4,7 @@
 #[cfg(feature = "sexos")]
 mod program {
     extern crate alloc;
-    use alloc::{format, vec, vec::Vec};
+    use alloc::{format, string::String, vec, vec::Vec};
     use chastity::View;
     use chastity_core::{Error, Random, Vault, MAX_FILE};
     use sex_app::{files, Event};
@@ -88,6 +88,20 @@ mod program {
             .map_err(|_| Error::Limit)?;
         Ok((keeper, knot))
     }
+    fn new_provider(
+        window: &sex_app::Window,
+        rng: &mut impl Random,
+    ) -> Result<sex_app::autofill::Provider, Error> {
+        let mut bytes = [0; 8];
+        for _ in 0..8 {
+            rng.fill(&mut bytes)?;
+            let epoch = u64::from_le_bytes(bytes);
+            if epoch != 0 {
+                return sex_app::autofill::Provider::new(window, epoch).map_err(|_| Error::Format);
+            }
+        }
+        Err(Error::Entropy)
+    }
     fn controls(app: &mut App, view: &View) {
         app.present();
         for (name, id) in [
@@ -103,6 +117,7 @@ mod program {
             ("title", view.title),
             ("origin", view.origin),
             ("username", view.username),
+            ("password", view.password),
         ] {
             let r = app.ui.rect(id).center();
             sex_pdx::serial_record!(
@@ -119,6 +134,10 @@ mod program {
         let mut rng = Entropy;
         let mut master_key: Option<(shibari::Keeper, shibari::Knot)> = None;
         let owner = shibari::Owner(app.window.target);
+        let mut provider: Option<sex_app::autofill::Provider> = None;
+        let mut consent: Option<(weft::DialogId, u32, usize, chastity_core::Caller, String)> = None;
+        let mut shown_token = 0u32;
+        let mut routing_ready = false;
         let mut active = sex_pdx::get_ticks();
         app.present();
         sex_pdx::serial_record!(
@@ -128,10 +147,103 @@ mod program {
         );
         controls(&mut app, &view);
         loop {
+            let now = sex_pdx::get_ticks();
+            if let Some(p) = &mut provider {
+                p.poll(now);
+                if p.registered() && !routing_ready {
+                    routing_ready = true;
+                    app.ui.set_text(
+                        view.status,
+                        "Autofill ready. Each request needs your approval.",
+                    );
+                    sex_pdx::serial_record!("[chastity.autofill.ready]");
+                }
+            }
+            if let Some(p) = &mut provider {
+                if let Some(offer) = p.offer() {
+                    if consent.is_none() && shown_token != offer.token {
+                        shown_token = offer.token;
+                        let selected = app.ui.selected_row(view.list);
+                        let found = view.session.vault().ok().and_then(|v| {
+                            selected
+                                .filter(|i| {
+                                    v.entries()
+                                        .get(*i)
+                                        .is_some_and(|e| e.origin == offer.origin)
+                                })
+                                .or_else(|| {
+                                    v.entries().iter().position(|e| e.origin == offer.origin)
+                                })
+                        });
+                        if let Some(index) = found {
+                            let entry = &view.session.vault().unwrap().entries()[index];
+                            let body = chastity::consent_text(
+                                offer.name,
+                                offer.consumer.pd,
+                                offer.consumer.task,
+                                offer.origin,
+                                &entry.title,
+                            );
+                            if body.is_err() {
+                                p.deny();
+                                app.ui.set_text(view.status,"Autofill refused: origin or entry label is too long to review safely.");
+                            } else {
+                                let dialog = app.ui.message(
+                                    "Chastity autofill request",
+                                    &body.unwrap(),
+                                    &["Deny", "Allow once"],
+                                    0,
+                                    0,
+                                );
+                                consent = Some((
+                                    dialog,
+                                    offer.token,
+                                    index,
+                                    chastity_core::Caller {
+                                        domain: offer.consumer.pd,
+                                        task: offer.consumer.task as u64,
+                                    },
+                                    offer.origin.into(),
+                                ));
+                                sex_pdx::serial_record!(
+                                    "[chastity.autofill.prompt] token={} domain={} task={}",
+                                    offer.token,
+                                    offer.consumer.pd,
+                                    offer.consumer.task
+                                );
+                            }
+                        } else {
+                            p.deny();
+                            app.ui.set_text(
+                                view.status,
+                                "Autofill refused: no entry matches that exact origin.",
+                            );
+                            sex_pdx::serial_record!(
+                                "[chastity.autofill.refused] reason=no_matching_entry"
+                            );
+                        }
+                    }
+                } else if !p.busy() {
+                    if let Some((dialog, ..)) = consent.take() {
+                        app.ui.close_dialog(dialog);
+                    }
+                }
+            }
             app.present();
-            let input = app.window.next_within(1000);
+            let wait = if provider.as_ref().is_some_and(|p| p.busy()) {
+                1
+            } else {
+                100
+            };
+            let input = app.window.next_within(wait);
             let now = sex_pdx::get_ticks();
             if now.saturating_sub(active) >= 300000 && view.session.vault().is_ok() {
+                if let Some(mut p) = provider.take() {
+                    p.close();
+                }
+                if let Some((id, ..)) = consent.take() {
+                    app.ui.close_dialog(id);
+                }
                 view.lock_now(&mut app.ui);
                 master_key = None;
                 sex_pdx::serial_record!("[chastity.locked] reason=idle");
@@ -147,13 +259,55 @@ mod program {
             }
             for response in app.ui.handle(weft::sexos::event(input)) {
                 if response == Response::Close {
+                    if let Some(mut p) = provider.take() {
+                        p.close();
+                    }
+                    if let Some((id, ..)) = consent.take() {
+                        app.ui.close_dialog(id);
+                    }
                     view.lock_now(&mut app.ui);
                     drop(master_key);
                     sex_pdx::task_finish(0);
                 }
                 let result = (|| -> Result<(), Error> {
+                    if let Response::Dialog(id, value) = &response {
+                        if consent.as_ref().is_some_and(|c| c.0 == *id) {
+                            let (_, token, index, caller, origin) = consent.take().unwrap();
+                            let p = provider.as_mut().ok_or(Error::Locked)?;
+                            if *value == weft::DialogValue::Button(1)
+                                && p.offer().is_some_and(|o| o.token == token)
+                            {
+                                let grant = view.session.approve(caller, index, &origin, now)?;
+                                let granted =
+                                    view.session.redeem(caller, grant, now, |user, pass| {
+                                        p.allow(user, pass, now).map_err(|_| Error::Denied)
+                                    });
+                                if !matches!(granted, Ok(Ok(()))) {
+                                    p.deny();
+                                    return Err(Error::Denied);
+                                }
+                                sex_pdx::serial_record!(
+                                    "[chastity.autofill.approved] token={}",
+                                    token
+                                );
+                            } else {
+                                p.deny();
+                                sex_pdx::serial_record!(
+                                    "[chastity.autofill.denied] token={}",
+                                    token
+                                );
+                            }
+                            return Ok(());
+                        }
+                    }
                     if view.local_action(&mut app.ui, &response, &mut rng)? {
                         if response == Response::Clicked(view.lock) {
+                            if let Some(mut p) = provider.take() {
+                                p.close();
+                            }
+                            if let Some((id, ..)) = consent.take() {
+                                app.ui.close_dialog(id);
+                            }
                             master_key = None;
                             sex_pdx::serial_record!("[chastity.locked] reason=user");
                         }
@@ -173,6 +327,8 @@ mod program {
                         }
                         master_key = Some(stash(view.master_secret.as_bytes(), owner, &mut rng)?);
                         view.master_secret.zeroize();
+                        provider = Some(new_provider(&app.window, &mut rng)?);
+                        routing_ready = false;
                         view.opened(&mut app.ui, Vault::default());
                         view.dirty = true;
                         app.ui.set_text(
@@ -191,6 +347,8 @@ mod program {
                         let count = vault.entries().len();
                         master_key = Some(stash(view.master_secret.as_bytes(), owner, &mut rng)?);
                         view.master_secret.zeroize();
+                        provider = Some(new_provider(&app.window, &mut rng)?);
+                        routing_ready = false;
                         view.opened(&mut app.ui, vault);
                         view.dirty = id == view.import;
                         app.ui.set_text(

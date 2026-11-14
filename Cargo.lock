@@ -714,6 +714,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "chastity-probe"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-pdx",
+ "weft",
+]
+
+[[package]]
 name = "chello"
 version = "0.1.0"
 dependencies = [
@@ -4246,6 +4255,7 @@ dependencies = [
  "sex-fetch",
  "sex-pdx",
  "talc",
+ "zeroize",
 ]
 
 [[package]]
@@ -4463,6 +4473,7 @@ dependencies = [
  "p256",
  "serde",
  "serde_json",
+ "sex-app",
  "sha2 0.10.9",
  "shibari",
 ]

@@ -11,6 +11,7 @@ pub mod thread;
 pub mod tls;
 pub mod sound;
 pub mod mailbox;
+pub mod autofill;
 pub mod settings;
 
 /// Runs `main` on a stack of `bytes` taken from the heap, for programs that need more
@@ -128,6 +129,9 @@ impl Window {
         }
     }
     fn event(&mut self, m: &sex_pdx::PdxMessage) -> Option<Event> {
+        // Autofill protocol packets belong to its explicit SDK consumer, never
+        // to toolkit key handling. Preserve them without formatting arguments.
+        if m.caller_pd==SHELL && m.caller_task==SHELL && sex_pdx::autofill::response(m.type_id) {mailbox::put(*m);return None;}
         // Another task's answer, taken while this one waited: it looks in the mailbox.
         if is_answer(m) { mailbox::put(*m); return None; }
         if m.caller_pd != SHELL { return None; }
@@ -157,11 +161,13 @@ impl Window {
     /// The next key or close if one is already waiting, otherwise `None` at once.
     pub fn poll(&mut self) -> Option<Event> {
         if let Some(slot) = self.held.iter_mut().find(|e| e.is_some()) { return slot.take(); }
-        while let Some(m) = mailbox::take(is_shell) {
+        while let Some(m) = mailbox::take(|m|is_shell(m)&&!sex_pdx::autofill::response(m.type_id)) {
             if let Some(event) = self.event(&m) { return Some(event); }
         }
-        while let Some(m) = sex_pdx::pdx_try_listen_raw(0) {
-            if let Some(event) = self.event(&m) { return Some(event); }
+        while let Some(mut m) = sex_pdx::pdx_try_listen_raw(0) {
+            let event=self.event(&m);
+            if sex_pdx::autofill::response(m.type_id){autofill::erase_message(&mut m);}
+            if let Some(event)=event{return Some(event);}
         }
         None
     }

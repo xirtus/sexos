@@ -4337,3 +4337,20 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
 - Remaining scope is explicit: Moan FFmpeg FLAC/MP3 export, project persistence and
   graphical waveforms; Chastity live cross-app autofill transport/consent routing.
   Chastity's tested authorization API is not claimed as a deployed IPC service.
+
+
+## ChatGPT round 179: live Chastity autofill and consent (2026-11-14)
+- Existing-capability Shell broker + register-only protocol and program SDK.
+  Kernel-stamped exact PD/task, fresh held lifecycle checks at every delivery,
+  Files-attested bound program labels, random per-unlock epoch, default-Deny
+  visible per-request consent, exact origin/entry and one-use sequential transfer.
+- Bounded ring/intake/SDK buffers erase actual storage; raw IPC debug excludes
+  credentials. One request, finite deadlines, 8-byte epoch-bound chunks, reserved
+  active-flow capacity under foreign traffic, cancellation/lock/retirement fences.
+- Fourteen production broker/SDK host-model tests plus Chastity consent-spoofing
+  UI regression pass. Guest Chastity/probe build and scan pass; actual Shell/Files
+  server targets and optional Multipass restore adapter build. No kernel edits.
+- Real two-app QEMU gate includes persisted vault reboot, impersonation refusal,
+  no pre-consent result, deny/allow once, fresh consumer run and locked provider.
+  Native runtime evidence is pending CI; no merge until all relevant checks green.
+- Exact consumer/runtime boundary and custody: `CHASTITY_AUTOFILL_2026_11_14.md`.

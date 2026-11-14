@@ -331,7 +331,7 @@ pub fn pdx_listen_raw(slot: u64) -> PdxMessage {
             continue;
         }
         unsafe {
-            if PDX_LISTEN_WRAPPER_BUDGET > 0 {
+            if PDX_LISTEN_WRAPPER_BUDGET > 0 && !autofill::request(type_id) && !autofill::response(type_id) {
                 PDX_LISTEN_WRAPPER_BUDGET -= 1;
                 serial_println!(
                     "[pdx.listen.raw.wrapper] type={:#x} caller={} a0={:#x} a1={:#x}",
@@ -1305,6 +1305,7 @@ pub mod fs;
 pub mod home_lock;
 pub mod web;
 pub mod accounts;
+pub mod autofill;
 pub mod organs;
 pub mod text_selection;
 pub mod text_encoding;

@@ -46,6 +46,7 @@ members = [
     "apps/velvet",
     "apps/leather-samples",
     "apps/chastity",
+    "apps/chastity-probe",
     "apps/tassel",
     "crates/sex-html",
     "crates/sex-js",

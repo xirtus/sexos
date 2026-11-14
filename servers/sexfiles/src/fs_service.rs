@@ -978,3 +978,14 @@ pub fn replace_own(path: &[u8], data: &[u8]) -> bool {
     if let Err(e) = done { let _ = fs.rollback(); forget_stats(None); sex_pdx::serial_record!("[files.own.write.failed] error={:?}", e); }
     done.is_ok()
 }
+
+/// Descriptive identity from Files' exact current run binding, never request text.
+/// Called only for authenticated Shell requests on its held Files route.
+pub fn autofill_identity(subject:sex_pdx::autofill::Subject,part:usize)->u64{
+    let mut bytes=[0u8;3];
+    if part<6 {if let Some(index)=program_index(subject.pd){let bindings=unsafe{&*core::ptr::addr_of!(BINDINGS)};if let Some(b)=bindings[index].filter(|b|b.task==subject.task){
+        let prefix=sex_pdx::program_store::DATA.len();let name=&b.root[prefix..b.len];
+        if name.len()<=16 {for (i,out) in bytes.iter_mut().enumerate(){if let Some(v)=name.get(part*3+i){*out=*v;}}}
+    }}}
+    sex_pdx::autofill::identity_reply(subject.task,part,bytes)
+}

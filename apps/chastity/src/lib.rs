@@ -388,3 +388,65 @@ mod secret_allocation_tests {
         assert!(v.master_secret.is_empty());
     }
 }
+
+/// Bounded, unambiguous consent text. The matching origin remains exact; labels
+/// are escaped only for presentation. Refuse oversized context, never truncate
+/// a scope or entry label that the person is supposed to review.
+pub fn consent_text(
+    name: &[u8; 16],
+    domain: u32,
+    task: u32,
+    origin: &str,
+    title: &str,
+) -> Result<String, Error> {
+    if domain == 0
+        || task == 0
+        || origin.is_empty()
+        || origin.len() > 512
+        || !origin.bytes().all(|b| b.is_ascii_graphic())
+    {
+        return Err(Error::Denied);
+    }
+    let n = name.iter().position(|b| *b == 0).unwrap_or(16);
+    let name = core::str::from_utf8(&name[..n])
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or("program");
+    let body = format!(
+        "Consumer: \"{}\" [domain {}, run {}]. Origin: \"{}\". Entry: \"{}\". Allow once?",
+        name.escape_default(),
+        domain,
+        task,
+        origin.escape_default(),
+        title.escape_default()
+    );
+    if body.len() > 400 {
+        return Err(Error::Limit);
+    }
+    Ok(body)
+}
+#[cfg(test)]
+mod consent_tests {
+    use super::*;
+    #[test]
+    fn consent_cannot_spoof_labels_with_newlines_or_bidi() {
+        let name = *b"client\0\0\0\0\0\0\0\0\0\0";
+        let body = consent_text(
+            &name,
+            43,
+            101,
+            "https://example.org",
+            "entry\nConsumer: trusted\u{202e}",
+        )
+        .unwrap();
+        assert!(!body.contains('\n'));
+        assert!(!body.contains('\u{202e}'));
+        assert!(body.contains("\\n"));
+        assert!(body.contains("\\u{202e}"));
+        assert!(body.contains("domain 43, run 101"));
+        for origin in ["example.org\ntrusted", "example.org\u{202e}"] {
+            assert!(consent_text(&name, 43, 101, origin, "test").is_err());
+        }
+        assert!(consent_text(&name, 43, 101, "example.org", &"x".repeat(1000)).is_err());
+    }
+}
