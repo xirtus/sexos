@@ -140,7 +140,8 @@ jobs:
   boot:
     name: Build, boot and runtime gates
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    # The gates alone now take about 40 minutes; room until the port tests get their own job.
+    timeout-minutes: 60
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
