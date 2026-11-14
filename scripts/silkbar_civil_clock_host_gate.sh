@@ -48,7 +48,7 @@ assert display.count(decision)==1
 (out/'lib.rs').write_text((root/'crates/silkbar-model/src/lib.rs').read_text())
 civil=(root/'crates/silkbar-model/src/civil_clock.rs').read_text();assert '||caller!=expected'in civil
 (out/'civil_clock.rs').write_text(civil.replace('||caller!=expected','',1))
-fixture=(root/'tests/silkbar_civil_clock.rs').read_text().replace('../servers/sexdisplay/src/glyphs.rs',str(root/'servers/sexdisplay/src/glyphs.rs')).replace('../crates/sex-pdx/src/clock_source.rs',str(root/'crates/sex-pdx/src/clock_source.rs')).replace('../crates/sex-pdx/src/desktop_style.rs',str(root/'crates/sex-pdx/src/desktop_style.rs')).replace('../crates/sex-pdx/src/app_catalog.rs',str(root/'crates/sex-pdx/src/app_catalog.rs'))
+fixture=(root/'tests/silkbar_civil_clock.rs').read_text().replace('../servers/sexdisplay/src/glyphs.rs',str(root/'servers/sexdisplay/src/glyphs.rs')).replace('../crates/sex-pdx/src/clock_source.rs',str(root/'crates/sex-pdx/src/clock_source.rs')).replace('../crates/sex-pdx/src/desktop_style.rs',str(root/'crates/sex-pdx/src/desktop_style.rs')).replace('../crates/sex-pdx/src/app_catalog.rs',str(root/'crates/sex-pdx/src/app_catalog.rs')).replace('../crates/sex-pdx/src/clock_zone.rs',str(root/'crates/sex-pdx/src/clock_zone.rs'))
 (out/'mutant.rs').write_text(fixture.replace('../crates/silkbar-model/src/lib.rs',str(out/'lib.rs')))
 PY
 cargo build -q --manifest-path "$CIVIL_ROOT/Cargo.toml" -p sex-font

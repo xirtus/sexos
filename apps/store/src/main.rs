@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Store: the package catalog in a window. `store` in Spindle starts it as
-//! `run +net +pkg store`: the network to download, and packages to install and remove.
+//! sexshop (formerly Store): the package catalog in a window. `sexshop` in Spindle starts it as
+//! `run +net +pkg sexshop`: the network to download, and packages to install and remove.
 //! Files still checks every package's signature and asks nothing of the person here: a
 //! package that asks for the network is asked about on its program's first run, in Spindle.
 //!
@@ -58,7 +58,7 @@ fn ask(window: &mut Window, op: u64, arg: &[u8]) -> Said {
         }
     }
     if status == w::DENIED && said.lines.is_empty() {
-        said.lines.push(b"Not allowed: start the Store with `store` (run +net +pkg store).".to_vec());
+        said.lines.push(b"Not allowed: start sexshop with `sexshop` (run +net +pkg sexshop).".to_vec());
         sex_pdx::serial_record!("[store.line] not allowed op={}", op);
     }
     said
@@ -146,7 +146,7 @@ impl View {
     }
     fn render(&mut self, window: &mut Window, working: Option<&str>) {
         let mut t = String::new();
-        t.push_str(&format!("Store: {} packages", self.items.len()));
+        t.push_str(&format!("sexshop: {} packages", self.items.len()));
         if !self.filter.is_empty() || self.typing { t.push_str(&format!("   search: {}{}", shown(&self.filter), if self.typing { "_" } else { "" })); }
         t.push_str("\n\n");
         let top = self.selected.saturating_sub(SHOWN - 1);
@@ -212,7 +212,7 @@ fn command(mut window: Window, line: &[u8]) -> ! {
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     let mut window = Window::open();
-    window.title(b"Store");
+    window.title(b"sexshop");
     let mut raw = [0u8; w::ARGS_MAX];
     let args = files::args(&mut window, &mut raw);
     let packages = args.split(|b| *b == b' ').any(|t| t == p::GRANT_TOKEN);
@@ -220,7 +220,7 @@ pub extern "C" fn _start() -> ! {
     sex_pdx::serial_record!("[store.ready] target={} task={} packages={} command={}", window.target, window.task, packages as u8, shown(&words));
     if !words.is_empty() { command(window, &words); }
     let mut view = View { items: Vec::new(), selected: 0, filter: Vec::new(), typing: false, status: Vec::new(), renders: 0 };
-    if !packages { view.say(vec![b"This run may not install packages. Start the Store with: store".to_vec()]); }
+    if !packages { view.say(vec![b"This run may not install packages. Start sexshop with: sexshop".to_vec()]); }
     view.reload(&mut window);
     view.render(&mut window, None);
     loop {

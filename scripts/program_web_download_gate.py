@@ -13,7 +13,7 @@ def fnv(b):
  return h
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):
-  if self.path=='/web':body=(ROOT/'iso_root/programs/web').read_bytes();self.send_response(200);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body);return
+  if self.path=='/web':body=(ROOT/'iso_root/programs/kaleidoscope').read_bytes();self.send_response(200);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body);return
   if self.path.startswith('/files/big.bin'):
    self.send_response(200);self.send_header('Content-Type','application/octet-stream');self.send_header('Content-Disposition','attachment; filename="big.bin"');self.send_header('Content-Length',str(len(DATA)));self.end_headers()
    for i in range(0,len(DATA),1<<16):self.wfile.write(DATA[i:i+(1<<16)])
@@ -44,9 +44,9 @@ def main():
  base=f'http://10.0.2.2:{PORT}/files'
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
-  g['focus'](153);time.sleep(.5);s=len(t());keys(f'fetch http://10.0.2.2:{PORT}/web /bin/web');q.key('ret')
+  g['focus'](153);time.sleep(.5);s=len(t());keys(f'fetch http://10.0.2.2:{PORT}/web /bin/kaleidoscope');q.key('ret')
   m=g['wait'](r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',s,240);assert m[1].startswith('Saved'),m[1]
-  g['focus'](153);time.sleep(.5);s=len(t());keys(f'run +net web {base}/big.bin');q.key('ret')
+  g['focus'](153);time.sleep(.5);s=len(t());keys(f'run +net kaleidoscope {base}/big.bin');q.key('ret')
   g['wait'](r'\[web.download.start\] path=Downloads/big.bin ',s,300)
   g['wait'](r'\[web.download.progress\] bytes=\d+ total=20971520',s,300)
   m=g['wait'](r'\[web.download.done\] path=Downloads/big.bin bytes=(\d+) ticks=\d+ fnv=([0-9a-f]+)',s,900)
