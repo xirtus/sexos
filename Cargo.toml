@@ -109,6 +109,8 @@ members = [
     "crates/vellum-edit",
     "crates/loom-core",
     "crates/aftercare-core",
+    "crates/moan-core",
+    "apps/moan-probe",
 ]
 [workspace.package]
 license = "GPL-3.0-only"
