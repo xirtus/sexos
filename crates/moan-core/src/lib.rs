@@ -6,13 +6,26 @@
 #![no_std]
 extern crate alloc;
 pub mod effects;
-use alloc::vec::Vec;
+use alloc::{sync::Arc, vec::Vec};
+#[derive(Clone, Debug)]
+enum Source<'a> {
+    Borrowed(&'a [Frame]),
+    Owned(Arc<[Frame]>),
+}
+impl Source<'_> {
+    fn frames(&self) -> &[Frame] {
+        match self {
+            Self::Borrowed(v) => v,
+            Self::Owned(v) => v,
+        }
+    }
+}
 pub const RATE: u32 = 48_000;
 pub type Frame = [i16; 2];
 
 #[derive(Clone, Debug)]
 pub struct Clip<'a> {
-    source: &'a [Frame],
+    source: Source<'a>,
     offset: usize,
     len: usize,
     start: usize,
@@ -30,7 +43,7 @@ impl<'a> Clip<'a> {
     pub fn new(source: &'a [Frame], start: usize) -> Result<Self, Error> {
         start.checked_add(source.len()).ok_or(Error::Range)?;
         Ok(Self {
-            source,
+            source: Source::Borrowed(source),
             offset: 0,
             len: source.len(),
             start,
@@ -38,6 +51,27 @@ impl<'a> Clip<'a> {
             fade_in: 0,
             fade_out: 0,
         })
+    }
+    /// Shared immutable owned PCM for editable projects without self-references.
+    pub fn owned(source: Arc<[Frame]>, start: usize) -> Result<Clip<'static>, Error> {
+        start.checked_add(source.len()).ok_or(Error::Range)?;
+        Ok(Clip {
+            len: source.len(),
+            source: Source::Owned(source),
+            offset: 0,
+            start,
+            gain: 100,
+            fade_in: 0,
+            fade_out: 0,
+        })
+    }
+    pub fn gain(&self) -> u16 {
+        self.gain
+    }
+    pub fn move_to(&mut self, start: usize) -> Result<(), Error> {
+        start.checked_add(self.len).ok_or(Error::Range)?;
+        self.start = start;
+        Ok(())
     }
     pub fn start(&self) -> usize {
         self.start
@@ -116,10 +150,11 @@ impl<'a> Clip<'a> {
                 scale = scale * envelope / 65536;
             }
         }
-        self.source[self.offset + i].map(|v| v as i64 * scale / 65536)
+        self.source.frames()[self.offset + i].map(|v| v as i64 * scale / 65536)
     }
 }
 
+#[derive(Clone)]
 pub struct Track<'a> {
     pub effects: effects::Rack,
     processed_until: Option<usize>,
@@ -150,6 +185,12 @@ impl<'a> Track<'a> {
     pub fn reset_effects(&mut self) {
         self.effects.reset();
         self.processed_until = None;
+    }
+    pub fn volume(&self) -> u16 {
+        self.volume
+    }
+    pub fn pan(&self) -> i16 {
+        self.pan
     }
     pub fn set_volume(&mut self, percent: u16) -> Result<(), Error> {
         if percent > 400 {

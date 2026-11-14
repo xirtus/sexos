@@ -45,6 +45,8 @@ jobs:
       run: bash scripts/raid_host_gate.sh
     - name: Hardware census table (names, owners, VMD warning) on the host
       run: bash scripts/hwdb_host_gate.sh
+    - name: Moan Weft app and project editing
+      run: cargo test --locked -p moan --no-default-features
     - name: Moan timeline, edits and mixer on the host
       run: bash scripts/moan_host_gate.sh
     - name: Bell sound rate conversion on the host
@@ -449,6 +451,10 @@ jobs:
       run: python3 scripts/moan_gate.py --effects --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/moan-effects"
     - name: Weft programs
       run: python3 scripts/program_weft_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/weft"
+    - name: Moan Weft window, editing and sound
+      run: python3 scripts/moan_app_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/moan-app"
+    - name: Moan microphone permission and captured track
+      run: python3 scripts/moan_app_gate.py --microphone --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/moan-capture"
     - name: Preserve program evidence
       if: always()
       uses: actions/upload-artifact@v4
