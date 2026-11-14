@@ -46,8 +46,10 @@ def wait_serial(text,health,pattern,start=0,timeout=120,*,tag='serial',raw=False
   if match:return match
   time.sleep(.02)
  # CI artifacts are not always reachable: put the end of the serial record in the job log.
- tail=text()[start:].splitlines()[-80:]
- print(f'[{tag}] serial tail after {timeout}s ({len(text())-start} bytes since start):',*tail,sep='\n',flush=True)
+ lines=text()[start:].splitlines()
+ noise=re.compile(r'^\[(clock|silkbar|sched|scheduler|sexdisplay|display|silk\.de|spindle\.view|spindle\.cursor|lifecycle|perf|sexdrive|sexinput|input|bell|service\.memory)[.\]]')
+ kept=[l for l in lines if not noise.match(l)]
+ print(f'[{tag}] after {timeout}s, {len(lines)} serial lines since the wait began; the first 150 that are not routine:',*kept[:150],'[tail]',*lines[-15:],sep='\n',flush=True)
  raise TimeoutError(f'{tag}: {pattern}')
 
 def boot(iso,disk,out,tag,resolution):
