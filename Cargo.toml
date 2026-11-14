@@ -57,6 +57,7 @@ members = [
     "crates/sex-imsm",
     "crates/sex-font",
     "crates/quil-core",
+    "crates/burlesque-core",
     "apps/quil",
     "crates/sex-keymap",
     "crates/sex-shape",
@@ -150,6 +151,7 @@ members = [
     "apps/spreadeagle",
     "apps/assuit",
     "crates/sex-office",
+    "crates/burlesque-core",
 ]
 [workspace.package]
 license = "GPL-3.0-only"
