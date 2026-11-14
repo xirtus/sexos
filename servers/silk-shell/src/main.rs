@@ -17568,6 +17568,10 @@ unsafe fn launch_poll(){
 }
 /// Shell must not sleep while an ended child's status may still come.
 fn launch_waiting()->bool{unsafe{LAUNCH_RUNS.iter().flatten().any(|r|r.ended.is_some())}}
+/// Match the kernel-stamped exact child run, including delayed exit messages.
+fn launch_exit_subject(child:u32,child_task:u32,status:Option<u32>,caller:u32,caller_task:u32)->bool{
+    child==caller && child_task==caller_task && status.is_none()
+}
 /// A program's `OP_LAUNCH`, `OP_KILL` or `OP_EXIT`.
 unsafe fn shell_launch_message(msg:&sex_pdx::PdxMessage)->bool{
     use sex_pdx::{launch,program_store as store};
@@ -17576,7 +17580,7 @@ unsafe fn shell_launch_message(msg:&sex_pdx::PdxMessage)->bool{
     if msg.type_id==launch::OP_EXIT{
         let mut matched=false;
         for run in LAUNCH_RUNS.iter_mut().flatten(){
-            if run.child==msg.caller_pd&&run.status.is_none(){run.status=Some(msg.arg0 as u32);matched=true;}
+            if launch_exit_subject(run.child,run.child_task,run.status,msg.caller_pd,msg.caller_task){run.status=Some(msg.arg0 as u32);matched=true;}
         }
         if matched{sex_pdx::serial_record!("[shell.launch.exit] child={} sender_task={} status={}",msg.caller_pd,msg.caller_task,msg.arg0 as u32);launch_report(sex_pdx::get_ticks());}
         return true;
