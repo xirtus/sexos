@@ -1284,6 +1284,7 @@ pub mod sound_mixer;
 pub mod wifi_status;
 pub mod notify;
 pub mod desktop_look;
+pub mod access_view;
 pub mod window_switcher;
 pub mod document_view;
 

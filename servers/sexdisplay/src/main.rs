@@ -1982,7 +1982,13 @@ fn publish_frame(fb:*mut u32,w:usize,h:usize,frame:frame_output::Publication<'_>
     // warmed by the old level, so comparing with the old frame is not enough.
     let night=sex_pdx::desktop_look::night_level();
     let previous=if sex_pdx::desktop_look::take_night_change(){None}else{frame.previous};
+    // Magnifier and colour filter (access_view): a zoomed view moves every
+    // output pixel, so it is written whole; a filter alone keeps the spans.
+    let previous=if sex_pdx::access_view::take_change(){None}else{previous};
+    let access=sex_pdx::access_view::active();
+    if access{(written,touched_first,touched_end)=write_access_view(fb,w,h,pitch,pixels,night,previous,frame.rows.first..frame.rows.end);}
     for y in frame.rows.first..frame.rows.end{
+        if access{break;}
         let row=&pixels[y*w..(y+1)*w];
         let (first,end)=match previous{
             Some(old)=>{let old=&old[y*w..(y+1)*w];
@@ -2009,6 +2015,40 @@ fn publish_frame(fb:*mut u32,w:usize,h:usize,frame:frame_output::Publication<'_>
     // virtio-gpu: the host shows the changed rows only now, all at once.
     if touched_end>touched_first&&!gpu_present(touched_first,touched_end){return false;}
     true
+}
+
+/// publish_frame's rows for the magnifier and colour filters: each output row
+/// is transformed from the composed frame; under zoom all rows are written.
+fn write_access_view(fb:*mut u32,w:usize,h:usize,pitch:usize,pixels:&[u32],night:u8,previous:Option<&[u32]>,rows:core::ops::Range<usize>)->(usize,usize,usize){
+    use sex_pdx::access_view as av;
+    let zoom=av::zoom();
+    let (px,py)=av::pointer();
+    let view=av::view(zoom,w,h,px,py);
+    let filter=av::filter();
+    let rows=if zoom!=av::ZOOM_ONE{0..h}else{rows};
+    // Display's stack is 64 KiB: the row buffer lives in .bss.
+    static mut ACCESS_LINE:[u32;MAX_FB_W]=[0;MAX_FB_W];
+    let line=unsafe{&mut (&mut *core::ptr::addr_of_mut!(ACCESS_LINE))[..w]};
+    let mut written=0usize;
+    let(mut touched_first,mut touched_end)=(usize::MAX,0usize);
+    for y in rows{
+        let (first,end)=match previous{
+            Some(old) if zoom==av::ZOOM_ONE=>{
+                // A filter alone is per pixel: only the spans that changed.
+                let pairs=||pixels[y*w..(y+1)*w].iter().zip(&old[y*w..(y+1)*w]);
+                let Some(first)=pairs().position(|(a,b)|a!=b) else{continue};
+                (first,w-pairs().rev().position(|(a,b)|a!=b).unwrap_or(0))}
+            _=>(0,w)};
+        av::row(pixels,w,h,y,&view,filter,line);
+        let out=unsafe{fb.add(y*pitch)};
+        for x in first..end{
+            let p=if night==0{line[x]}else{sex_pdx::desktop_look::night(line[x],night)};
+            unsafe{core::ptr::write_volatile(out.add(x),p);}
+        }
+        written+=end-first;
+        if end>first{touched_first=touched_first.min(y);touched_end=y+1;}
+    }
+    (written,touched_first,touched_end)
 }
 
 /// Display scans out from its own virtio-gpu resource (slice L2).
@@ -2771,6 +2811,7 @@ fn draw_cursor_z_top(fb: *mut u32, w: usize, h: usize, total_pixels: usize, save
             // arrow write loop below, read-only against the framebuffer.
             // HiDPI: each arrow bit covers cs x cs pixels.
             let cs = scene.metrics.scale() as usize;
+            sex_pdx::access_view::set_pointer(ox, oy);
             if save_under {
                 CURSOR_UNDER_X = ox;
                 CURSOR_UNDER_Y = oy;
@@ -4164,6 +4205,13 @@ pub extern "C" fn _start() -> ! {
                     if msg.caller_pd == 3 && sex_pdx::desktop_look::set(msg.arg0, msg.arg1) {
                         needs_full_redraw = true;
                         sex_pdx::serial_record!("[display.look] wallpaper={} night={}", msg.arg0, msg.arg1);
+                    }
+                }
+                sex_pdx::access_view::OP_ACCESS_VIEW => {
+                    // Only the Shell sets the magnifier and colour filter.
+                    if msg.caller_pd == 3 && sex_pdx::access_view::set(msg.arg0, msg.arg1) {
+                        needs_full_redraw = true;
+                        sex_pdx::serial_record!("[display.access] zoom={} filter={}", msg.arg0, msg.arg1);
                     }
                 }
                 sex_pdx::window_switcher::OP_WINDOW_SWITCHER => {
