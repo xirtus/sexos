@@ -45,6 +45,9 @@ def wait_serial(text,health,pattern,start=0,timeout=120,*,tag='serial',raw=False
   match=re.search(pattern,now[start:])
   if match:return match
   time.sleep(.02)
+ # CI artifacts are not always reachable: put the end of the serial record in the job log.
+ tail=text()[start:].splitlines()[-80:]
+ print(f'[{tag}] serial tail after {timeout}s ({len(text())-start} bytes since start):',*tail,sep='\n',flush=True)
  raise TimeoutError(f'{tag}: {pattern}')
 
 def boot(iso,disk,out,tag,resolution):

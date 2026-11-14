@@ -21,6 +21,7 @@ pub const EV_WHEEL:u64=app_scroll::CLASS;
 #[path = "../servers/silk-shell/src/browser_input.rs"] mod browser_input;
 // Built with `--extern sex_keymap=...` (scripts/clipboard_host_gate.sh).
 #[path = "../servers/silk-shell/src/keyboard_layout.rs"] mod keyboard_layout;
+#[path = "../servers/silk-shell/src/key_repeat.rs"] mod key_repeat;
 use app_input::{Input, Intake, Item, Queue, CAPACITY, INTAKE_DEFER_TURNS};
 use app_key::{Key, Modifiers};
 use clipboard::{Action, Participant, Subject};
@@ -117,7 +118,8 @@ fn payload(ticket:u32,byte:u8)->clipboard::Packet {clipboard::Request::Write{tic
 
 pub const ERR_SERVICE_NOT_READY:u64=9;
 pub const ERR_CAP_INVALID:u64=0xffff_ffff_ffff_fffc;
-pub fn get_ticks()->u64{1}
+pub static mut TICKS:u64=1;
+pub fn get_ticks()->u64{unsafe{TICKS}}
 #[macro_export] macro_rules! serial_record {($($arg:tt)*)=>{{let _=format_args!($($arg)*);}}}
 mod shell {
     use super::*;
@@ -130,6 +132,9 @@ mod shell {
     static mut CLIPBOARD_INTAKE:Intake=Intake::new();
     static mut CLIPBOARD:broker::Broker=broker::Broker::new();
     static mut APP_MODIFIERS:Modifiers=Modifiers::new();
+    static mut KEY_REPEAT:key_repeat::Repeat=key_repeat::Repeat::new();
+    static mut KEY_REPEATING:bool=false;
+    static mut CAPS_AS_CTRL:bool=false;
     enum InteractionState{Idle,Dragging}
     static mut INTERACTION:InteractionState=InteractionState::Idle;
     static mut POINTER_BUTTONS:u8=0;
@@ -171,7 +176,7 @@ mod shell {
     // The overview is closed in these cases; production returns false then.
     unsafe fn overview_key(_:u8,_:u64)->bool{false}
     include!(env!("APP_INPUT_PRODUCTION"));
-    unsafe fn reset(){keyboard_layout::reset();POINTER_BUTTONS=0;INTERACTION=InteractionState::Idle;DISPLAY_SCALE=desktop_style::chrome::ScaleClient::new();APP_INPUT=Queue::new();CLIPBOARD_INTAKE=Intake::new();CLIPBOARD=broker::Broker::new();APP_MODIFIERS=Modifiers::new();DESKTOP_KEYS=desktop_keys::Keys::new();WM_CHORDS=wm::Chords::new();WM_ACTIONS.clear();FOCUSED_SURFACE_ID=156;COMMAND_PALETTE_OPEN=false;FOCUS_CHANGES=0;PALETTE_TOGGLES=0;for pd in [9,15,16,18]{CLIPBOARD.register(app_lifecycle::CatalogInfo{target_pd:pd,task_id:pd,surface_id:participant(pd,pd).surface,coordinator_pd:3}).unwrap();}LIVE=Some(true);SOURCE_LIVE=None;LIVE_ONCE=None;STATUS=0;SENT.clear();LIVE_QUERIES.clear();VOLUME_STEPS.clear();PLAYER_KEYS.clear();}
+    unsafe fn reset(){keyboard_layout::reset();KEY_REPEAT=key_repeat::Repeat::new();KEY_REPEATING=false;CAPS_AS_CTRL=false;crate::TICKS=1;POINTER_BUTTONS=0;INTERACTION=InteractionState::Idle;DISPLAY_SCALE=desktop_style::chrome::ScaleClient::new();APP_INPUT=Queue::new();CLIPBOARD_INTAKE=Intake::new();CLIPBOARD=broker::Broker::new();APP_MODIFIERS=Modifiers::new();DESKTOP_KEYS=desktop_keys::Keys::new();WM_CHORDS=wm::Chords::new();WM_ACTIONS.clear();FOCUSED_SURFACE_ID=156;COMMAND_PALETTE_OPEN=false;FOCUS_CHANGES=0;PALETTE_TOGGLES=0;for pd in [9,15,16,18]{CLIPBOARD.register(app_lifecycle::CatalogInfo{target_pd:pd,task_id:pd,surface_id:participant(pd,pd).surface,coordinator_pd:3}).unwrap();}LIVE=Some(true);SOURCE_LIVE=None;LIVE_ONCE=None;STATUS=0;SENT.clear();LIVE_QUERIES.clear();VOLUME_STEPS.clear();PLAYER_KEYS.clear();}
     #[test]fn actual_scale_shortcut_retains_admission_and_never_repeats_an_applied_step(){
         let _guard=LOCK.lock().unwrap();unsafe{reset();
             assert!(desktop_shortcut(0x1d,1));assert!(desktop_shortcut(0x38,1));
@@ -283,6 +288,35 @@ mod shell {
         assert_eq!(WM_ACTIONS.last(),Some(&wm::WmAction::KeyboardLayout));
         assert!(desktop_shortcut(0x39,0));assert!(desktop_shortcut(0x1d,0));assert!(desktop_shortcut(0x5b,0));
         while keyboard_layout::active_label()!="US"{keyboard_layout::next();}}
+    }
+    #[test] fn actual_held_keys_repeat_at_the_set_rate_and_stop_on_release(){
+        let _lock=LOCK.lock().unwrap();unsafe{reset();FOCUSED_SURFACE_ID=300;
+        let codes=||SENT.iter().map(|(_,_,a)|Key::decode(a[0],a[1],a[2]).unwrap().code).collect::<Vec<_>>();
+        crate::TICKS=1000;assert!(desktop_shortcut(0x1e,1));assert_eq!(codes(),vec![0x1e]);
+        // A PS/2 keyboard's own typematic presses are dropped.
+        assert!(desktop_shortcut(0x1e,1));assert_eq!(SENT.len(),1);
+        crate::TICKS=1499;key_repeat_poll();assert_eq!(SENT.len(),1);
+        crate::TICKS=1500;key_repeat_poll();crate::TICKS=1533;key_repeat_poll();crate::TICKS=1540;key_repeat_poll();
+        for _ in 0..4{if APP_INPUT.pending(){app_input_poll();}}
+        assert_eq!(codes(),vec![0x1e,0x1e,0x1e]);
+        // Shift held mid-repeat: the repeats are capitals.
+        assert!(desktop_shortcut(0x2a,1));crate::TICKS=3000;
+        assert!(desktop_shortcut(0x1e,1));let n=SENT.len();crate::TICKS=3500;key_repeat_poll();app_input_poll();
+        assert_eq!(SENT.len(),n+1);let(_,_,a)=SENT[n];assert_eq!(Key::decode(a[0],a[1],a[2]).unwrap(),Key::new(0x1e,true,false).typing(Some('A')));
+        assert!(desktop_shortcut(0x2a,0));
+        // Released: no more.
+        assert!(desktop_shortcut(0x1e,0));let n=SENT.len();crate::TICKS=9000;key_repeat_poll();app_input_poll();assert_eq!(SENT.len(),n);
+        // Turned off in Settings: held keys type once.
+        KEY_REPEAT.configure(0,0);assert!(desktop_shortcut(0x1f,1));crate::TICKS=20000;key_repeat_poll();app_input_poll();assert_eq!(SENT.len(),n+1);}
+    }
+    #[test] fn actual_caps_lock_as_ctrl_option(){
+        let _lock=LOCK.lock().unwrap();unsafe{reset();FOCUSED_SURFACE_ID=300;
+        let last=||{let(_,_,a)=*SENT.last().unwrap();Key::decode(a[0],a[1],a[2]).unwrap()};
+        CAPS_AS_CTRL=true;
+        assert!(desktop_shortcut(0x3a,1));assert!(desktop_shortcut(0x2c,1));assert!(desktop_shortcut(0x2c,0));assert!(desktop_shortcut(0x3a,0));
+        let k=last();assert_eq!((k.code,k.control),(0x2c,true));
+        // Caps Lock no longer locks: z stays lower case.
+        assert!(desktop_shortcut(0x2c,1));assert!(desktop_shortcut(0x2c,0));assert_eq!(last().text,app_key::Text::Us);assert!(!last().control);}
     }
     #[test] fn actual_ctrl_shortcuts_follow_the_letter_on_the_key(){
         let _lock=LOCK.lock().unwrap();unsafe{reset();FOCUSED_SURFACE_ID=300;
