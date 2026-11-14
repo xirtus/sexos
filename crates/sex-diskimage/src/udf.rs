@@ -208,6 +208,10 @@ impl<S: ByteSource> Udf<S> {
             match ty {
                 1 => maps.push(Map::Phys { start: start_of(le16(m, 4)).ok_or(Error::Corrupt("partition map names a missing partition"))? }),
                 2 => {
+                    // A type-2 map is 64 bytes (ECMA-167 10.7.3); the fields below reach byte 48.
+                    if ml < 48 {
+                        return Err(Error::Corrupt("bad UDF partition map"));
+                    }
                     let ident = &m[5..28];
                     let num = le16(m, 38);
                     let start = start_of(num).ok_or(Error::Corrupt("partition map names a missing partition"))?;

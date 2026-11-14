@@ -226,4 +226,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 ThreadingHTTPServer.allow_reuse_address = True
-ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
+# Port 0 lets the system pick a free port; it is printed so the test knows where to connect.
+_server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+print(_server.server_address[1], flush=True)
+_server.serve_forever()

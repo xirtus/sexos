@@ -3,6 +3,8 @@
 //! DELETE. Nextcloud and ownCloud serve files at `/remote.php/dav/files/<user>`.
 //! A write goes to a temporary name in the same folder and is moved over the target
 //! (`Overwrite: T`), so a failed upload leaves the old file.
+use core::sync::atomic::{AtomicU32, Ordering};
+static INSTANCES: AtomicU32 = AtomicU32::new(0x5eed);
 use crate::http::{Body, Http, Request, Response};
 use crate::text::{base64, parse_http_date, percent_decode, percent_encode};
 use crate::{components, split_last, temp_name, Abilities, Entry, Error, Kind, Place, Result, Source};
@@ -41,7 +43,10 @@ impl<H: Http> WebDav<H> {
         };
         let base = base.trim_end_matches('/');
         let base = if base.starts_with('/') || base.is_empty() { base.into() } else { format!("/{base}") };
-        Self { http, scheme: scheme.into(), base, auth, temp_counter: 0x5eed }
+        // Each instance starts from a different seed so two writers never pick the same
+        // temporary name; PUT also uses If-None-Match: * so a collision is refused, not shared.
+        let seed = INSTANCES.fetch_add(0x9e37_79b9, Ordering::Relaxed) ^ (&http as *const H as usize as u32).rotate_left(13);
+        Self { http, scheme: scheme.into(), base, auth, temp_counter: seed }
     }
     pub fn http(&mut self) -> &mut H { &mut self.http }
 
@@ -152,13 +157,22 @@ impl<H: Http> Place for WebDav<H> {
         let mut parts = parent.clone();
         parts.push(name);
         match self.stat_parts(&parts) { Ok(e) if e.kind == Kind::Dir => return Err(Error::Exists), Ok(_) | Err(Error::NotFound) => {} Err(e) => return Err(e) }
-        self.temp_counter = self.temp_counter.wrapping_mul(1664525).wrapping_add(1013904223);
-        let tmp_name = temp_name(name, self.temp_counter);
-        let mut tparts = parent.clone();
-        tparts.push(&tmp_name);
-        let tmp = self.target(&tparts, false);
         let target = self.target(&parts, false);
         let mut counted = Counting { src, n: 0 };
+        // Claim a temporary name of our own with an empty exclusive PUT (412 if it exists),
+        // before any bytes are read from the source, then upload into it.
+        let mut tmp = None;
+        for _ in 0..8 {
+            self.temp_counter = self.temp_counter.wrapping_mul(1664525).wrapping_add(1013904223);
+            let tmp_name = temp_name(name, self.temp_counter);
+            let mut tparts = parent.clone();
+            tparts.push(&tmp_name);
+            let t = self.target(&tparts, false);
+            let r = self.send("PUT", &t, vec![("content-type".into(), "application/octet-stream".into()), ("if-none-match".into(), "*".into())], Body::Empty, 4096)?;
+            if r.ok() { tmp = Some(t); break; }
+            if r.status != 412 { return Err(status_error(&r)); }
+        }
+        let tmp = tmp.ok_or(Error::Exists)?;
         let r = self.send("PUT", &tmp, vec![("content-type".into(), "application/octet-stream".into())], Body::Stream { src: &mut counted, len: size }, 4096);
         let n = counted.n;
         let done = match r { Ok(r) if r.ok() => self.move_target(&tmp, &target, true), Ok(r) => Err(status_error(&r)), Err(e) => Err(e) };

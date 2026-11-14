@@ -42,10 +42,13 @@ pub fn python() -> Option<&'static str> {
 /// Starts a fixture server script (tests/fixtures/<script>) on a free port.
 pub fn python_server(script: &str, root: &Path, extra: &[&str]) -> Option<(Server, u16)> {
     let Some(py) = python() else { eprintln!("skipping: no python3"); return None };
-    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-    let child = Command::new(py).arg("-I").arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(script))
-        .arg(port.to_string()).arg(root).args(extra).stdin(Stdio::null()).spawn().unwrap();
+    // The server binds port 0 and prints the port it got, so parallel tests never race for one.
+    let mut child = Command::new(py).arg("-I").arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(script))
+        .arg("0").arg(root).args(extra).stdin(Stdio::null()).stdout(Stdio::piped()).spawn().unwrap();
+    let mut line = String::new();
+    std::io::BufRead::read_line(&mut std::io::BufReader::new(child.stdout.take().unwrap()), &mut line).unwrap();
     let s = Server(child);
+    let port: u16 = line.trim().parse().unwrap_or_else(|_| panic!("{script} did not start: {line:?}"));
     let began = Instant::now();
     while TcpStream::connect(("127.0.0.1", port)).is_err() {
         assert!(began.elapsed() < Duration::from_secs(10), "{script} did not start");

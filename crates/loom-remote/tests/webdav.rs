@@ -142,3 +142,34 @@ mod h2front {
         }
     }
 }
+
+/// Two writers of the same file must not share a temporary name: here the second upload runs
+/// entirely while the first is still streaming, and each publishes its own bytes.
+#[test]
+fn webdav_writers_of_one_file_never_share_a_temporary() {
+    use loom_remote::{Result, Source};
+    struct Nested<'a> { inner: Trickle<'a>, other: Option<(&'a mut dyn Place, &'a [u8])> }
+    impl Source for Nested<'_> {
+        fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
+            if let Some((p, data)) = self.other.take() {
+                let n = p.write("docs/same.txt", &mut Trickle(data, 3), Some(data.len() as u64)).expect("second writer");
+                assert_eq!(n, data.len() as u64);
+            }
+            self.inner.read(buf)
+        }
+    }
+    let root = scratch("webdav-race");
+    std::fs::create_dir_all(root.join("docs")).unwrap();
+    let Some((_server, port)) = python_server("webdav_server.py", &root, &[]) else { return };
+    let mut a = WebDav::new(Http1::new(TcpConnect(port), &format!("127.0.0.1:{port}")), "http", BASE, auth());
+    let mut b = WebDav::new(Http1::new(TcpConnect(port), &format!("127.0.0.1:{port}")), "http", BASE, auth());
+    let (first, second) = (pattern(200_000, 1), pattern(150_000, 2));
+    let mut src = Nested { inner: Trickle(&first, 5), other: Some((&mut b, &second)) };
+    let n = a.write("docs/same.txt", &mut src, Some(first.len() as u64)).expect("first writer");
+    assert_eq!(n, first.len() as u64);
+    // The first writer finished last, so its bytes are the file; nothing temporary is left.
+    assert_eq!(std::fs::read(root.join("docs/same.txt")).unwrap(), first);
+    let left: Vec<_> = std::fs::read_dir(root.join("docs")).unwrap().map(|e| e.unwrap().file_name()).collect();
+    assert_eq!(left.len(), 1, "{left:?}");
+    let _ = std::fs::remove_dir_all(&root);
+}

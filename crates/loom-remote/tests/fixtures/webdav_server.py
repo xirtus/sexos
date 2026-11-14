@@ -152,6 +152,9 @@ class Handler(BaseHTTPRequestHandler):
         if not os.path.isdir(os.path.dirname(local)):
             self.discard_body()
             return self.reply(409)
+        if self.headers.get("If-None-Match", "").strip() == "*" and os.path.exists(local):
+            self.discard_body()
+            return self.reply(412)
         data = self.read_body()
         if data is None:
             self.close_connection = True
@@ -210,4 +213,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 ThreadingHTTPServer.allow_reuse_address = True
-ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
+# Port 0 lets the system pick a free port; it is printed so the test knows where to connect.
+_server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+print(_server.server_address[1], flush=True)
+_server.serve_forever()
