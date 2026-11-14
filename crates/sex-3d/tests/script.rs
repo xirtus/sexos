@@ -298,8 +298,14 @@ fn queries_and_request_ids() {
          exists Nope\n\
          @done end\n",
     );
+    // The Euler angle comes back through quaternion maths whose last bit
+    // depends on the CPU's float contraction; compare it numerically.
+    let mut replies = r.replies.clone();
+    let euler: Vec<f32> = replies[12].trim_start_matches("ok ").split(' ').map(|v| v.parse().unwrap()).collect();
+    assert!(euler[0].abs() < 1e-6 && euler[1].abs() < 1e-6 && (euler[2] - core::f32::consts::FRAC_PI_2).abs() < 1e-6, "{euler:?}");
+    replies[12] = "ok 0 0 1.5707964".into();
     assert_eq!(
-        r.replies,
+        replies,
         [
             "ok polyops 1",
             "@a1 ok Cube.001",
