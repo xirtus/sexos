@@ -15,6 +15,7 @@
 //! - `peer`, `extension`, `picker`, `storage`, `resume`, `session`: the peer wire protocol
 //!   (BEP 3, 6, 10, 11, 9, 21, 52 hash requests), piece picking (rarest first, sequential,
 //!   streaming deadlines), the file layout, resume data, and the session that runs them.
+//! - `stream`: play while downloading, the protocol Qupid uses to read from Swingers.
 //! - `tracker`, `dht`, `lsd`, `webseed`: finding peers (BEP 3, 15, 23, 7, 5, 32, 14, 19).
 //! - `utp`, `ledbat`, `mse`, `portmap`: transport (BEP 29, RFC 6817), protocol encryption,
 //!   NAT-PMP, PCP and UPnP IGD port mapping.
@@ -39,6 +40,7 @@ pub mod picker;
 pub mod storage;
 pub mod resume;
 pub mod session;
+pub mod stream;
 
 pub mod tracker;
 pub mod dht;
