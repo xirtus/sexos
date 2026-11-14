@@ -581,6 +581,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2e93abca9e28e0a1b9877922aacb20576e05d4679ffa78c3d6dc22a26a216659"
 
 [[package]]
+name = "calendar"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-calendar",
+ "sex-font",
+ "sex-pdx",
+]
+
+[[package]]
 name = "cbc"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2115,6 +2125,9 @@ version = "0.1.0"
 dependencies = [
  "sex-app",
  "sex-pdx",
+ "sex-textedit",
+ "sex-vt",
+ "spellbook",
 ]
 
 [[package]]
@@ -2659,6 +2672,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "needle"
+version = "0.1.0"
+dependencies = [
+ "sex-font",
+ "sex-image",
+ "sex-print",
+ "sex-std",
+]
+
+[[package]]
 name = "nix"
 version = "0.30.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2940,6 +2963,7 @@ name = "pdf"
 version = "0.1.0"
 dependencies = [
  "hayro",
+ "sex-font",
  "sex-std",
 ]
 
@@ -3861,6 +3885,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-calc"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-calc-core",
+ "sex-font",
+ "sex-pdx",
+]
+
+[[package]]
+name = "sex-calc-core"
+version = "0.1.0"
+dependencies = [
+ "libm",
+]
+
+[[package]]
+name = "sex-calendar"
+version = "0.1.0"
+
+[[package]]
 name = "sex-canvas"
 version = "0.1.0"
 dependencies = [
@@ -4094,6 +4139,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-print"
+version = "0.1.0"
+
+[[package]]
 name = "sex-rt"
 version = "0.1.0"
 dependencies = [
@@ -4139,7 +4188,12 @@ version = "0.1.0"
 dependencies = [
  "sex-app",
  "sex-pdx",
+ "sex-vt",
 ]
+
+[[package]]
+name = "sex-textedit"
+version = "0.1.0"
 
 [[package]]
 name = "sex-time"
@@ -4184,6 +4238,14 @@ version = "0.1.0"
 [[package]]
 name = "sex-volumes"
 version = "0.1.0"
+
+[[package]]
+name = "sex-vt"
+version = "0.1.0"
+dependencies = [
+ "sex-font",
+ "vte",
+]
 
 [[package]]
 name = "sex-wasm"
@@ -4546,6 +4608,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "spellbook"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d204abcbdf8e88729306a8d0ca01a79d8a49969fe1f84696909d6dbc4321c1a"
+dependencies = [
+ "foldhash",
+ "hashbrown 0.17.1",
+]
+
+[[package]]
 name = "spin"
 version = "0.9.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4756,6 +4828,16 @@ name = "target-features"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c1bbb9f3c5c463a01705937a24fdabc5047929ac764b2d5b9cf681c1f5041ed5"
+
+[[package]]
+name = "term"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-pdx",
+ "sex-vt",
+ "sex-wasm",
+]
 
 [[package]]
 name = "termcolor"
@@ -5283,6 +5365,16 @@ name = "volatile"
 version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "442887c63f2c839b346c192d047a7c87e73d0689c9157b00b53dcc27dd5ea793"
+
+[[package]]
+name = "vte"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a5924018406ce0063cd67f8e008104968b74b563ee1b85dde3ed1f7cb87d3dbd"
+dependencies = [
+ "arrayvec",
+ "memchr",
+]
 
 [[package]]
 name = "walkdir"

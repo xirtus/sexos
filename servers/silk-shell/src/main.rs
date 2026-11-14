@@ -17264,13 +17264,15 @@ unsafe fn shell_program_message(msg:&sex_pdx::PdxMessage)->bool{
         return true;
     }
     if msg.type_id==store::OP_RUN {
-        if !app_catalog::is_spindle(msg.caller_pd){return true}
+        // A terminal's ticket (sex_pdx::console_relay): Files starts it only for the program that prepared it.
+        let by_program=msg.arg0==store::TICKET&&matches!(app_catalog::app_of(msg.caller_pd),Some(app_catalog::App::Program));
+        if !app_catalog::is_spindle(msg.caller_pd)&&!by_program{return true}
         if PROGRAM_READING||PROGRAM_REBIRTH.is_some()||program_free_row().is_none(){
             sex_pdx::serial_record!("[shell.program.denied] reason=no_free_row");program_refused(store::NO_FREE_ROW);return true;
         }
-        let(status,_)=pdx_call(store::SHELL_ROUTE_SLOT,store::OP,msg.arg0,msg.arg1,0);
+        let(status,_)=pdx_call(store::SHELL_ROUTE_SLOT,store::OP,msg.arg0,msg.arg1,if by_program{msg.caller_pd as u64}else{0});
         PROGRAM_READING=status==0;
-        PROGRAM_NETWORK=status==0&&msg.arg2&store::RUN_NETWORK!=0;
+        PROGRAM_NETWORK=status==0&&!by_program&&msg.arg2&store::RUN_NETWORK!=0;
         if status!=0{sex_pdx::serial_record!("[shell.program.denied] reason=files_busy status={}",status);}
         return true;
     }

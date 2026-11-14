@@ -1,0 +1,16 @@
+[package]
+name = "sex-vt"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "A VT100/xterm terminal screen for SexOS: escape parsing, cells, scrollback, selection, keys and drawing"
+
+[dependencies]
+# MIT/Apache-2.0, no_std without its default `std` feature: the escape-sequence state
+# machine (Paul Williams' DEC parser) that Alacritty uses.
+vte = { version = "0.15", default-features = false }
+sex-font = { path = "../sex-font", optional = true }
+
+[features]
+# Drawing cells into a program's pixels with Geist Mono.
+render = ["dep:sex-font"]
