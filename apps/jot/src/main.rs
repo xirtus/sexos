@@ -8,7 +8,11 @@
 //! Ctrl+W close tab, Ctrl+PageUp/PageDown switch tabs, Ctrl+Z undo, Ctrl+Y redo, Ctrl+B
 //! other undo branch, Ctrl+F find, Ctrl+H replace, Ctrl+G next, Ctrl+A select all,
 //! Ctrl+C/X/V copy, cut, paste, Ctrl+L line numbers, Ctrl+K spelling marks, Ctrl+. fixes the
-//! misspelt word at the cursor, F11 closes.
+//! misspelt word at the cursor, Ctrl+R wraps long lines, Ctrl+M previews Markdown, Ctrl+T
+//! switches LF/CRLF, Ctrl+Shift+T cycles the encoding, F11 closes.
+//!
+//! Unsaved work is kept in `.jot-session` a moment after each change and comes back
+//! when Jot starts again, after a crash or a reboot too.
 #![no_std]
 #![no_main]
 
@@ -22,11 +26,18 @@ use alloc::{format, vec};
 use sex_app::{files, Event, Nav, Window};
 use sex_textedit::find::{self, Options};
 use sex_textedit::highlight::{Highlighter, Kind, Lang};
-use sex_textedit::{Doc, Motion};
+use sex_textedit::encoding::{self, Eol, Format};
+use sex_textedit::markdown::{self, Style};
+use sex_textedit::session::{self, Saved};
+use sex_textedit::{wrap, Doc, Motion};
 use sex_vt::render::{cell_for_height, Cache, Painter};
 
 const FILE: &[u8] = b"notes.txt";
-const MAX_FILE: usize = 16 << 20;
+/// Bigger files open read-only, cut here: they belong in Quil.
+const MAX_FILE: usize = 64 << 20;
+const SESSION: &[u8] = b".jot-session";
+/// How long after the last change the session is written.
+const SESSION_MS: u64 = 800;
 static mut CACHE: Cache = Cache::new();
 
 const BG: u32 = 0x1E1E2E;
@@ -64,15 +75,33 @@ struct Tab {
     /// First line and first column shown.
     top: usize,
     left: usize,
+    /// With wrap on: rows of the top line scrolled past, so a line taller than the
+    /// window can still be read to its end.
+    skip: usize,
+    /// How the file is stored on disk; the text in `doc` is always UTF-8 with `\n`.
+    format: Format,
+    /// The format was changed and not yet saved.
+    format_changed: bool,
+    /// Too big to hold whole: shown cut, never saved over the file.
+    readonly: bool,
+    /// Markdown preview instead of the text, and its first row.
+    preview: bool,
+    preview_top: usize,
 }
 impl Tab {
     fn new(path: &[u8], text: Vec<u8>) -> Tab {
         let mut doc = Doc::new(text);
         doc.move_to(Motion::End_, false);
-        Tab { doc, hl: Highlighter::new(Lang::from_name(path)), path: path.to_vec(), top: 0, left: 0 }
+        Tab { doc, hl: Highlighter::new(Lang::from_name(path)), path: path.to_vec(), top: 0, left: 0, skip: 0, format: Format::default(), format_changed: false, readonly: false, preview: false, preview_top: 0 }
     }
     fn name(&self) -> String { String::from_utf8_lossy(base_name(&self.path)).into_owned() }
+    fn unsaved(&self) -> bool { self.doc.modified() || self.format_changed }
 }
+
+/// One screen row of text: its line number and byte range in the document.
+#[derive(Clone, Copy)]
+struct Row { line: usize, start: usize, end: usize, /// Last row of its line.
+    last: bool }
 
 #[derive(PartialEq, Eq, Clone, Copy)]
 enum Bar { None, Find, Replace }
@@ -97,6 +126,13 @@ struct Jot {
     scrolled: bool,
     /// The bar just opened: the first character typed replaces the field, as if selected.
     fresh: bool,
+    /// Long lines wrap at the window's edge.
+    wrap: bool,
+    /// When unsaved work last changed (ticks), until the session is written.
+    dirty_at: Option<u64>,
+    /// Edits across all tabs when the session was last scheduled, so any change by any path
+    /// (typing, find and replace, spelling fixes, undo) schedules the next write.
+    seen_edits: u64,
 }
 
 /// What a key asked for that needs the window.
@@ -108,13 +144,84 @@ impl Jot {
     fn gutter(&self) -> usize { if self.numbers { (self.tabs[self.active].doc.line_count().to_string_len()).max(3) + 1 } else { 0 } }
     fn cols(&self) -> usize { (self.width / self.painter.cell_w).saturating_sub(self.gutter()).max(4) }
 
+    /// The screen rows from the tab's first shown line: whole lines, or wrapped pieces.
+    fn layout(&self, t: &Tab, rows: usize) -> Vec<Row> {
+        let text = t.doc.text();
+        let cols = self.cols();
+        let mut out = Vec::new();
+        let mut start = t.doc.offset_of_line(t.top);
+        let mut line = t.top;
+        while out.len() < rows && line < t.doc.line_count() {
+            let end = t.doc.line_end(start);
+            if self.wrap {
+                let parts = wrap::rows(&text[start..end], cols);
+                let n = parts.len();
+                let skip = if line == t.top { t.skip.min(n - 1) } else { 0 };
+                for (i, (a, b)) in parts.into_iter().enumerate().skip(skip) { out.push(Row { line, start: start + a, end: start + b, last: i + 1 == n }); }
+            } else { out.push(Row { line, start, end, last: true }); }
+            start = (end + 1).min(text.len());
+            line += 1;
+        }
+        out.truncate(rows);
+        out
+    }
+
+    /// Wrapped rows in the tab's line `line`.
+    fn rows_in(&self, t: &Tab, line: usize) -> usize {
+        let start = t.doc.offset_of_line(line);
+        wrap::rows(&t.doc.text()[start..t.doc.line_end(start)], self.cols()).len()
+    }
+    /// Scrolls by screen rows: within a wrapped line, then line to line.
+    fn scroll_rows(&mut self, by: isize) {
+        let i = self.active;
+        if !self.wrap {
+            let t = &mut self.tabs[i];
+            t.top = (t.top as isize + by).clamp(0, t.doc.line_count().saturating_sub(1) as isize) as usize;
+            t.skip = 0;
+            return;
+        }
+        for _ in 0..by.unsigned_abs() {
+            let t = &self.tabs[i];
+            if by > 0 {
+                if t.skip + 1 < self.rows_in(t, t.top) { self.tabs[i].skip += 1; }
+                else if t.top + 1 < t.doc.line_count() { let t = &mut self.tabs[i]; t.top += 1; t.skip = 0; }
+                else { break; }
+            } else if t.skip > 0 { self.tabs[i].skip -= 1; }
+            else if t.top > 0 { let n = self.rows_in(t, t.top - 1); let t = &mut self.tabs[i]; t.top -= 1; t.skip = n - 1; }
+            else { break; }
+        }
+    }
     /// Keeps the cursor on screen.
     fn follow(&mut self) {
         let (rows, cols) = (self.rows(), self.cols());
+        let wrapped = self.wrap;
         let t = &mut self.tabs[self.active];
         let line = t.doc.line_of(t.doc.cursor);
-        if line < t.top { t.top = line; }
-        if line >= t.top + rows { t.top = line + 1 - rows; }
+        if line < t.top { t.top = line; t.skip = 0; }
+        if line >= t.top + rows { t.top = line + 1 - rows; t.skip = 0; }
+        if wrapped {
+            t.left = 0;
+            // Above the shown part of the top line: show from the cursor's row.
+            if line == t.top {
+                let start = t.doc.line_start(t.doc.cursor);
+                let parts = wrap::rows(&t.doc.text()[start..t.doc.line_end(start)], cols);
+                let row = wrap::row_of(&parts, t.doc.cursor - start);
+                if row < t.skip { t.skip = row; }
+            }
+            // Move the top down a row at a time until the cursor's row is on screen.
+            loop {
+                let t = &self.tabs[self.active];
+                let lay = self.layout(t, rows);
+                let c = t.doc.cursor;
+                let shown = lay.iter().any(|r| c >= r.start && (c < r.end || (c == r.end && r.last)));
+                if shown || lay.is_empty() { break; }
+                let was = (t.top, t.skip);
+                self.scroll_rows(1);
+                if was == (self.tabs[self.active].top, self.tabs[self.active].skip) { break; }
+            }
+            return;
+        }
+        t.skip = 0;
         let col = display_col(t.doc.text(), t.doc.line_start(t.doc.cursor), t.doc.cursor);
         if col < t.left { t.left = col.saturating_sub(8); }
         if col >= t.left + cols { t.left = col + 8 - cols; }
@@ -132,7 +239,7 @@ impl Jot {
         // Tabs along the top.
         let mut x = 0;
         for (i, t) in self.tabs.iter().enumerate() {
-            let label = format!(" {}{} ", t.name(), if t.doc.modified() { " •" } else { "" });
+            let label = format!(" {}{}{} ", t.name(), if t.unsaved() { " •" } else { "" }, if t.readonly { " (read-only)" } else { "" });
             let bg = if i == self.active { BG } else { BAR };
             let fg = if i == self.active { FG } else { DIM };
             if x + label.chars().count() * cw > w { break; }
@@ -141,36 +248,44 @@ impl Jot {
         if x < w { for y in 0..ch { pixels[y * w + x..y * w + w].fill(BAR); } }
         for px in 0..w.min(x) { if self.tabs.get(self.active).is_some() { let _ = px; } }
 
-        // The text.
+        // The text, or its Markdown preview.
+        if self.tabs[self.active].preview {
+            self.draw_preview(pixels, rows, cols, gutter);
+        } else {
+        let layout = { let t = &self.tabs[self.active]; self.layout(t, rows) };
         let t = &mut self.tabs[self.active];
         let text = t.doc.text();
         let spans = t.hl.visible(text, t.top, rows);
         let cursor_line = t.doc.line_of(t.doc.cursor);
         let sel = t.doc.selection();
         let hits: Vec<(usize, usize)> = if self.bar != Bar::None && !self.needle.is_empty() { find::all(text, &self.needle, Options { ignore_case: true, whole_word: false }) } else { Vec::new() };
-        let mut start = t.doc.offset_of_line(t.top);
-        for r in 0..rows {
-            let n = t.top + r;
-            if n >= t.doc.line_count() { break; }
-            let end = t.doc.line_end(start);
+        // Prose only: in code the dictionary would mark every identifier.
+        let prose = matches!(t.hl.lang, Lang::Plain | Lang::Markdown);
+        let mut misspelt: Vec<(usize, usize)> = Vec::new();
+        let mut misspelt_line = usize::MAX;
+        for (r, row) in layout.iter().enumerate() {
+            let n = row.line;
+            let line_start = t.doc.line_start(row.start);
             let y0 = (r + 1) * ch;
             let line_bg = if n == cursor_line { CURRENT } else { BG };
             if line_bg != BG { for y in 0..ch { pixels[(y0 + y) * w + gutter * cw..(y0 + y) * w + w].fill(line_bg); } }
-            if gutter > 0 {
+            if gutter > 0 && row.start == line_start {
                 let num = format!("{:>width$} ", n + 1, width = gutter - 1);
                 self.painter.text(cache, pixels, w, 0, y0, &num, if n == cursor_line { FG } else { DIM }, GUTTER);
             }
-            // Prose only: in code the dictionary would mark every identifier.
-            let prose = matches!(t.hl.lang, Lang::Plain | Lang::Markdown);
-            let misspelt = if self.spelling && prose { self.spell.misspelt(&text[start..end]) } else { Vec::new() };
-            let line_spans = spans.get(r).cloned().unwrap_or_default();
-            let mut col = 0;
-            let mut at = start;
-            while at < end {
+            if misspelt_line != n {
+                misspelt_line = n;
+                misspelt = if self.spelling && prose { let e = t.doc.line_end(line_start); self.spell.misspelt(&text[line_start..e]) } else { Vec::new() };
+            }
+            let line_spans = spans.get(n - t.top).cloned().unwrap_or_default();
+            // Columns count from the row's start when wrapped, from the line's start otherwise.
+            let mut col = if self.wrap { 0 } else { display_col(text, line_start, row.start) };
+            let mut at = row.start;
+            while at < row.end {
                 let c_end = sex_textedit::next_char(text, at);
                 let c = core::str::from_utf8(&text[at..c_end]).ok().and_then(|s| s.chars().next()).unwrap_or('?');
                 let width = if c == '\t' { 4 - col % 4 } else { 1 };
-                let rel = at - start;
+                let rel = at - line_start;
                 let fg = line_spans.iter().find(|s| s.start <= rel && rel < s.end).map_or(FG, |s| color(s.kind));
                 let mut bg = line_bg;
                 if hits.iter().any(|h| h.0 <= at && at < h.1) { bg = HIT; }
@@ -190,14 +305,15 @@ impl Jot {
                 at = c_end;
             }
             // The cursor: a bar before its character.
-            if n == cursor_line {
-                let vis = display_col(text, start, t.doc.cursor);
+            let cur = t.doc.cursor;
+            if cur >= row.start && (cur < row.end || (cur == row.end && row.last)) {
+                let vis = if self.wrap { display_col(text, row.start, cur) } else { display_col(text, line_start, cur) };
                 if vis >= t.left && vis <= t.left + cols {
                     let x0 = (gutter + vis - t.left) * cw;
                     for y in 1..ch - 1 { if x0 + 1 < w { pixels[(y0 + y) * w + x0] = ACCENT; pixels[(y0 + y) * w + x0 + 1] = ACCENT; } }
                 }
             }
-            start = (end + 1).min(text.len());
+        }
         }
 
         // The find bar, then the status line.
@@ -219,7 +335,8 @@ impl Jot {
             let t = &self.tabs[self.active];
             let line = t.doc.line_of(t.doc.cursor) + 1;
             let col = t.doc.column(t.doc.cursor) + 1;
-            let right = format!("Ln {}, Col {}  {}  {}{} ", line, col, t.hl.lang.name(), if self.spelling { "ABC✓  " } else { "" }, String::from_utf8_lossy(&t.path));
+            let right = format!("Ln {}, Col {}  {}  {}  {}  {}{}{} ", line, col, t.hl.lang.name(), t.format.encoding.name(), t.format.eol.name(),
+                if self.wrap { "Wrap  " } else { "" }, if self.spelling { "ABC✓  " } else { "" }, String::from_utf8_lossy(&t.path));
             let left = format!(" {}", self.status);
             self.painter.text(cache, pixels, w, 0, y, &left, FG, GUTTER);
             let rx = w.saturating_sub(right.chars().count() * cw);
@@ -232,6 +349,24 @@ impl Jot {
         let (ctrl, shift, code) = (key.control, key.shift, key.code);
         let page = self.rows().saturating_sub(1).max(1);
         if self.bar != Bar::None && self.bar_key(key) { return Ask::Nothing; }
+        if self.tabs[self.active].preview {
+            // The preview scrolls; Ctrl+M or Escape goes back to the text.
+            let t = &mut self.tabs[self.active];
+            match (ctrl, code, sex_app::nav(key)) {
+                (true, 0x32, _) | (_, 0x01, _) => { self.toggle_preview(); }
+                (_, _, Some(Nav::Up)) => t.preview_top = t.preview_top.saturating_sub(1),
+                (_, _, Some(Nav::Down)) => t.preview_top += 1,
+                (false, 0x49 | 0x68, _) => t.preview_top = t.preview_top.saturating_sub(page),
+                (false, 0x51 | 0x6D, _) => t.preview_top += page,
+                (_, _, Some(Nav::Home)) => t.preview_top = 0,
+                (true, 0x1F, _) => return if shift { Ask::SaveAs } else { Ask::Save },
+                (true, 0x11, _) => return Ask::Close,
+                (true, 0x49 | 0x68, _) => { self.active = (self.active + self.tabs.len() - 1) % self.tabs.len(); }
+                (true, 0x51 | 0x6D, _) => { self.active = (self.active + 1) % self.tabs.len(); }
+                _ => {}
+            }
+            return Ask::Nothing;
+        }
         self.status.clear();
         let nav = sex_app::nav(key);
         let tab = &mut self.tabs[self.active];
@@ -242,7 +377,7 @@ impl Jot {
             (true, 0x18, _) => return Ask::Open,
             (true, 0x11, _) => return Ask::Close,
             (true, 0x12, _) => return Ask::Escape,
-            (true, 0x31, _) => { self.tabs.push(Tab::new(b"untitled.txt", Vec::new())); self.active = self.tabs.len() - 1; self.tab_record(); return Ask::Nothing; }
+            (true, 0x31, _) => { let name = untitled(&self.tabs); self.tabs.push(Tab::new(&name, Vec::new())); self.active = self.tabs.len() - 1; self.tab_record(); return Ask::Nothing; }
             (true, 0x49 | 0x68, _) => { self.active = (self.active + self.tabs.len() - 1) % self.tabs.len(); self.tab_record(); return Ask::Nothing; }
             (true, 0x51 | 0x6D, _) => { self.active = (self.active + 1) % self.tabs.len(); self.tab_record(); return Ask::Nothing; }
             (true, 0x2C, _) if shift => { if tab.doc.redo() { self.status = "Redone.".into(); } }
@@ -254,6 +389,23 @@ impl Jot {
             (true, 0x2D, _) => { self.clipboard = tab.doc.cut(); }
             (true, 0x2F, _) => { let c = self.clipboard.clone(); tab.doc.insert(&c); tab.doc.seal(); }
             (true, 0x26, _) => self.numbers = !self.numbers,
+            (true, 0x13, _) => {
+                self.wrap = !self.wrap;
+                if self.wrap { self.tabs[self.active].left = 0; }
+                sex_pdx::serial_record!("[jot.wrap] on={} rows={}", self.wrap as u8, { let t = &self.tabs[self.active]; self.layout(t, self.rows()).len() });
+                self.status = if self.wrap { "Long lines wrap.".into() } else { "Long lines scroll.".into() };
+                return Ask::Nothing;
+            }
+            (true, 0x32, _) => { self.toggle_preview(); return Ask::Nothing; }
+            (true, 0x14, _) => {
+                let t = &mut self.tabs[self.active];
+                if shift { t.format.encoding = t.format.encoding.next(); } else { t.format.eol = if t.format.eol == Eol::Lf { Eol::CrLf } else { Eol::Lf }; }
+                t.format_changed = true;
+                sex_pdx::serial_record!("[jot.format] encoding={} eol={}", t.format.encoding.name(), t.format.eol.name());
+                self.status = format!("Saves as {}, {} line ends.", t.format.encoding.name(), t.format.eol.name());
+                self.dirty_at = Some(sex_pdx::get_ticks());
+                return Ask::Nothing;
+            }
             (true, 0x25, _) => { self.spelling = !self.spelling; self.status = if self.spelling { "Spelling marked.".into() } else { "Spelling off.".into() }; }
             (true, 0x21, _) => { self.bar = Bar::Find; self.field = 0; self.prefill(); self.fresh = true; }
             (true, 0x23, _) => { self.bar = Bar::Replace; self.field = 0; self.prefill(); self.fresh = true; }
@@ -304,6 +456,48 @@ impl Jot {
         tab.hl.invalidate(0);
         sex_pdx::serial_record!("[jot.spell.fixed] from={} to={} others={}", word, best, suggestions.len() - 1);
         self.status = format!("{} → {}   (also: {})", word, best, suggestions[1..].iter().take(4).cloned().collect::<Vec<_>>().join(", "));
+    }
+    fn toggle_preview(&mut self) {
+        let cols = self.cols();
+        let t = &mut self.tabs[self.active];
+        t.preview = !t.preview;
+        if t.preview {
+            let blocks = markdown::parse(&String::from_utf8_lossy(t.doc.text()));
+            // Start at the block holding the cursor's line.
+            let line = t.doc.line_of(t.doc.cursor);
+            let rows = preview_rows(&blocks, cols);
+            t.preview_top = rows.iter().position(|r| r.source >= line).unwrap_or(0).saturating_sub(0);
+            if blocks.iter().all(|b| b.line > line) { t.preview_top = 0; }
+            sex_pdx::serial_record!("[jot.preview] blocks={} rows={} headings={}", blocks.len(), rows.len(), blocks.iter().filter(|b| matches!(b.runs.first(), Some((_, Style::Heading(_))))).count());
+            self.status = "Preview. Ctrl+M or Esc returns to the text.".into();
+        } else { self.status.clear(); }
+    }
+    fn draw_preview(&mut self, pixels: &mut [u32], rows: usize, cols: usize, gutter: usize) {
+        let cache = unsafe { &mut *core::ptr::addr_of_mut!(CACHE) };
+        let (cw, ch, w) = (self.painter.cell_w, self.painter.cell_h, self.width);
+        let cols = cols + gutter;
+        let t = &self.tabs[self.active];
+        let blocks = markdown::parse(&String::from_utf8_lossy(t.doc.text()));
+        let lines = preview_rows(&blocks, cols.saturating_sub(2));
+        let top = t.preview_top.min(lines.len().saturating_sub(1));
+        for (r, line) in lines.iter().skip(top).take(rows).enumerate() {
+            let y0 = (r + 1) * ch;
+            let mut x = 1;
+            for (c, st) in &line.cells {
+                let (fg, bg) = match st {
+                    Style::Plain | Style::Bullet => (FG, BG), Style::Strong => (0xF5E0DC, BG), Style::Emphasis => (0xF5C2E7, BG),
+                    Style::Code => (0x94E2D5, GUTTER), Style::Link => (0x74C7EC, BG), Style::Strike => (DIM, BG),
+                    Style::Heading(_) => (ACCENT, BG), Style::Quote => (0xA6ADC8, BG), Style::Rule => (DIM, BG),
+                };
+                if x < cols {
+                    let x0 = x * cw;
+                    self.painter.glyph(cache, pixels, w, x0, y0, *c, fg, bg);
+                    let under = match st { Style::Link => Some(ch - 2), Style::Heading(1) => Some(ch - 1), Style::Strike => Some(ch / 2), _ => None };
+                    if let Some(dy) = under { for dx in 0..cw { pixels[(y0 + dy) * w + x0 + dx] = fg; } }
+                }
+                x += 1;
+            }
+        }
     }
     fn tab_record(&self) { sex_pdx::serial_record!("[jot.tab] index={} of={} name={}", self.active, self.tabs.len(), self.tabs[self.active].name()); }
     /// The bar starts with the selection, when there is one on a single line.
@@ -369,9 +563,10 @@ fn display_col(text: &[u8], start: usize, at: usize) -> usize {
     col
 }
 
-fn read_all(window: &mut Window, path: &[u8]) -> Result<Vec<u8>, files::Error> {
+fn read_all(window: &mut Window, path: &[u8]) -> Result<Vec<u8>, files::Error> { read_upto(window, path, MAX_FILE) }
+fn read_upto(window: &mut Window, path: &[u8], cap: usize) -> Result<Vec<u8>, files::Error> {
     let st = files::stat(window, path)?;
-    let len = (st.size as usize).min(MAX_FILE);
+    let len = (st.size as usize).min(cap);
     let mut data = vec![0u8; len];
     let mut at = 0;
     while at < len {
@@ -383,18 +578,129 @@ fn read_all(window: &mut Window, path: &[u8]) -> Result<Vec<u8>, files::Error> {
     Ok(data)
 }
 fn load(window: &mut Window, path: &[u8]) -> Tab {
-    let text = match read_all(window, path) {
+    let size = files::stat(window, path).map(|s| s.size as usize).unwrap_or(0);
+    let bytes = match read_all(window, path) {
         Ok(t) => { sex_pdx::serial_record!("[jot.loaded] bytes={} fnv={:016x}", t.len(), fnv(&t)); t }
         Err(e) => { sex_pdx::serial_record!("[jot.loaded] bytes=0 status={}", e); Vec::new() }
     };
-    Tab::new(path, text)
+    let (text, format) = encoding::decode(&bytes);
+    if format != Format::default() { sex_pdx::serial_record!("[jot.format.read] encoding={} eol={}", format.encoding.name(), format.eol.name()); }
+    let mut tab = Tab::new(path, text);
+    tab.format = format;
+    tab.readonly = size > MAX_FILE;
+    tab
 }
-fn save(window: &mut Window, tab: &mut Tab) -> Result<(), files::Error> {
-    let text = tab.doc.text();
-    files::write(window, &tab.path, text)?;
-    sex_pdx::serial_record!("[jot.saved] bytes={} fnv={:016x}", text.len(), fnv(text));
+fn save(window: &mut Window, tab: &mut Tab) -> Result<usize, files::Error> {
+    if tab.readonly { return Err(sex_pdx::fs::DENIED); }
+    let (bytes, lost) = encoding::encode(tab.doc.text(), tab.format);
+    files::write(window, &tab.path, &bytes)?;
+    sex_pdx::serial_record!("[jot.saved] bytes={} fnv={:016x}", bytes.len(), fnv(&bytes));
     tab.doc.mark_saved();
-    Ok(())
+    tab.format_changed = false;
+    Ok(lost)
+}
+fn saved_message(r: Result<usize, files::Error>, tab: &Tab) -> String {
+    match r {
+        Ok(0) => "Saved.".into(),
+        Ok(n) => format!("Saved; {} characters {} cannot hold became ?.", n, tab.format.encoding.name()),
+        Err(_) if tab.readonly => "This file is too big for Jot to save; open it in Quil.".into(),
+        Err(e) => { sex_pdx::serial_record!("[jot.save.failed] status={}", e); String::from_utf8_lossy(files::message(e)).into_owned() }
+    }
+}
+
+/// Writes the unsaved tabs to the session file (or empties it when there are none).
+fn write_session(window: &mut Window, tabs: &[Tab]) {
+    let keep: Vec<Saved> = tabs.iter().filter(|t| t.unsaved() && !t.readonly)
+        .map(|t| Saved { path: t.path.clone(), text: t.doc.text().to_vec(), cursor: t.doc.cursor, format: t.format }).collect();
+    let bytes = session::write(&keep);
+    // Synced, so it is there after a power cut, not only after a crash of Jot itself.
+    match files::write(window, SESSION, &bytes).and_then(|()| files::sync(window)) {
+        Ok(()) => sex_pdx::serial_record!("[jot.session.saved] tabs={} bytes={}", keep.len(), bytes.len()),
+        Err(e) => sex_pdx::serial_record!("[jot.session.failed] status={}", e),
+    }
+}
+/// A name for a new tab that no open tab has: untitled.txt, untitled-2.txt, ...
+fn untitled(tabs: &[Tab]) -> Vec<u8> {
+    (1..).map(|n: usize| if n == 1 { b"untitled.txt".to_vec() } else { format!("untitled-{}.txt", n).into_bytes() })
+        .find(|name| !tabs.iter().any(|t| &t.path == name)).unwrap()
+}
+/// Brings back unsaved work: into the tab of the same file if open, else a new tab.
+fn restore_session(window: &mut Window, tabs: &mut Vec<Tab>) -> usize {
+    // Whole, whatever its size: several large tabs together can pass the one-file cap,
+    // and a session cut short fails its checksum.
+    let Ok(bytes) = read_upto(window, SESSION, usize::MAX) else { return 0 };
+    let Some(saved) = session::read(&bytes) else { return 0 };
+    let mut n = 0;
+    let mut filled: Vec<usize> = Vec::new();
+    for s in saved {
+        // Each entry gets its own tab, even if an older session named two alike.
+        let i = match tabs.iter().enumerate().position(|(i, t)| !s.path.is_empty() && t.path == s.path && !filled.contains(&i)) {
+            Some(i) => i,
+            None if s.path.is_empty() || filled.iter().any(|&i| tabs[i].path == s.path) => { let name = untitled(tabs); tabs.push(Tab::new(&name, Vec::new())); tabs.len() - 1 }
+            None => { let t = load(window, &s.path); tabs.push(t); tabs.len() - 1 }
+        };
+        filled.push(i);
+        let t = &mut tabs[i];
+        // An edit from the file's text to the saved text: unsaved, and undo goes back to disk.
+        let len = t.doc.len();
+        t.doc.replace(0, len, &s.text);
+        t.doc.seal();
+        t.doc.move_to(Motion::To(s.cursor.min(s.text.len())), false);
+        t.format_changed = t.format != s.format;
+        t.format = s.format;
+        t.hl.invalidate(0);
+        n += 1;
+        sex_pdx::serial_record!("[jot.restored] path={} bytes={} fnv={:016x}", String::from_utf8_lossy(&t.path), s.text.len(), fnv(&s.text));
+    }
+    n
+}
+
+/// The preview laid out as rows of styled cells, each remembering its source line.
+struct PreviewRow { cells: Vec<(char, Style)>, source: usize }
+fn preview_rows(blocks: &[markdown::Block], cols: usize) -> Vec<PreviewRow> {
+    let cols = cols.max(8);
+    let mut out: Vec<PreviewRow> = Vec::new();
+    for b in blocks {
+        if !out.is_empty() { out.push(PreviewRow { cells: Vec::new(), source: b.line }); }
+        if b.runs.first().is_some_and(|r| r.1 == Style::Rule) {
+            out.push(PreviewRow { cells: core::iter::repeat(('─', Style::Rule)).take(cols).collect(), source: b.line });
+            continue;
+        }
+        let pad: Vec<(char, Style)> = core::iter::repeat((' ', Style::Plain)).take(b.indent.saturating_sub(b.marker.chars().count())).collect();
+        if b.code {
+            for (i, (l, st)) in b.runs.iter().enumerate() {
+                let mut cells = pad.clone();
+                cells.extend(core::iter::repeat((' ', *st)).take(b.marker.chars().count()));
+                cells.extend(l.chars().map(|c| (if c == '\t' { ' ' } else { c }, *st)).take(cols.saturating_sub(cells.len())));
+                out.push(PreviewRow { cells, source: b.line + 1 + i });
+            }
+            continue;
+        }
+        // Words with their styles, wrapped at `cols`; `\n` is a hard break.
+        let mut row: Vec<(char, Style)> = pad.clone();
+        row.extend(b.marker.chars().map(|c| (c, Style::Bullet)));
+        let start_w = row.len();
+        let mut word: Vec<(char, Style)> = Vec::new();
+        let flush = |row: &mut Vec<(char, Style)>, word: &mut Vec<(char, Style)>, out: &mut Vec<PreviewRow>| {
+            if row.len() + word.len() > cols && row.len() > start_w {
+                while row.last().is_some_and(|c| c.0 == ' ') { row.pop(); }
+                out.push(PreviewRow { cells: core::mem::take(row), source: b.line });
+                row.extend(core::iter::repeat((' ', Style::Plain)).take(start_w));
+                while word.first().is_some_and(|c| c.0 == ' ') { word.remove(0); }
+            }
+            row.append(word);
+        };
+        for (text, st) in &b.runs {
+            for c in text.chars() {
+                if c == '\n' { flush(&mut row, &mut word, &mut out); out.push(PreviewRow { cells: core::mem::take(&mut row), source: b.line }); row.extend(core::iter::repeat((' ', Style::Plain)).take(start_w)); continue; }
+                word.push((c, *st));
+                if c == ' ' { flush(&mut row, &mut word, &mut out); }
+            }
+        }
+        flush(&mut row, &mut word, &mut out);
+        if row.len() > start_w { out.push(PreviewRow { cells: row, source: b.line }); }
+    }
+    out
 }
 
 #[no_mangle]
@@ -408,19 +714,38 @@ extern "C" fn main() -> ! {
     let given = files::args(&mut window, &mut args).to_vec();
     let mut paths: Vec<Vec<u8>> = given.split(|b| *b == b' ').filter(|w| w.first() == Some(&b'@')).map(|w| w.to_vec()).collect();
     if paths.is_empty() { paths.push(FILE.to_vec()); }
-    let tabs: Vec<Tab> = paths.iter().map(|p| load(&mut window, p)).collect();
+    let tabs: Vec<Tab> = paths.iter().map(|p| load(&mut window, p)).collect::<Vec<Tab>>();
     let (w, h) = window.size();
     let (cw, ch) = cell_for_height(18);
     let mut jot = Jot {
         tabs, active: 0, painter: Painter::new(cw, ch), width: w.max(64), height: h.max(64), numbers: true, bar: Bar::None, field: 0,
         needle: Vec::new(), with: Vec::new(), status: "Ctrl+S saves. Ctrl+F finds. Ctrl+Z undoes.".into(), clipboard: Vec::new(),
-        spell: spell::Checker::new(), spelling: true, scrolled: false, fresh: false,
+        spell: spell::Checker::new(), spelling: true, scrolled: false, fresh: false, wrap: false, dirty_at: None, seen_edits: 0,
     };
+    let restored = restore_session(&mut window, &mut jot.tabs);
+    if restored > 0 {
+        jot.active = jot.tabs.iter().position(|t| t.unsaved()).unwrap_or(0);
+        jot.status = format!("Brought back unsaved work in {} tab{}.", restored, if restored == 1 { "" } else { "s" });
+    }
+    if jot.tabs.iter().any(|t| t.readonly) { jot.status = "This file is too big for Jot: shown read-only, cut at 64 MiB. Quil edits files of any size.".into(); }
     jot.draw(&mut window);
     sex_pdx::serial_record!("[jot.ready] target={} task={} tabs={}", window.target, window.task, jot.tabs.len());
+    jot.seen_edits = jot.tabs.iter().fold(jot.tabs.len() as u64, |n, t| n.wrapping_add(t.doc.edits()));
     loop {
-        match window.next() {
+        let edits = jot.tabs.iter().fold(jot.tabs.len() as u64, |n, t| n.wrapping_add(t.doc.edits()));
+        if edits != jot.seen_edits { jot.seen_edits = edits; jot.dirty_at = Some(sex_pdx::get_ticks()); }
+        let Some(event) = window.next_within(250) else {
+            // Quiet for a moment after a change: keep the unsaved work safe.
+            if jot.dirty_at.is_some_and(|t| sex_pdx::get_ticks().saturating_sub(t) >= SESSION_MS) {
+                jot.dirty_at = None;
+                write_session(&mut window, &jot.tabs);
+            }
+            continue;
+        };
+        match event {
             Event::Close => {
+                // Closing keeps unsaved tabs for next time, as the session does after a crash.
+                write_session(&mut window, &jot.tabs);
                 sex_pdx::serial_record!("[jot.closed] target={} task={}", window.target, window.task);
                 window.close()
             }
@@ -429,16 +754,20 @@ extern "C" fn main() -> ! {
                 use sex_pdx::app_pointer::Kind as P;
                 let rows = jot.rows();
                 let (cw, ch, gutter) = (jot.painter.cell_w, jot.painter.cell_h, jot.gutter());
+                let lay = jot.layout(&jot.tabs[jot.active], rows);
+                let wrapped = jot.wrap;
                 let t = jot.tab();
                 match p.kind {
-                    P::Wheel { steps } => { let max = t.doc.line_count().saturating_sub(1); t.top = (t.top as isize - steps as isize * 3).clamp(0, max as isize) as usize; jot.scrolled = true; }
+                    P::Wheel { steps } => { jot.scroll_rows(-(steps as isize) * 3); jot.scrolled = true; }
                     P::Down { button: 0 } | P::Move if p.kind != P::Move || p.buttons & 1 != 0 => {
                         let row = (p.y.max(0) as usize) / ch;
-                        if row == 0 || row > rows { continue; }
-                        let line = (t.top + row - 1).min(t.doc.line_count() - 1);
-                        let start = t.doc.offset_of_line(line);
-                        let want = ((p.x.max(0) as usize) / cw).saturating_sub(gutter) + t.left;
-                        let end = t.doc.line_end(start);
+                        if row == 0 || row > rows || t.preview { continue; }
+                        // The screen row under the pointer, from the same layout the drawing used.
+                        let Some(r) = lay.get(row - 1).or(lay.last()) else { continue };
+                        let start = r.start;
+                        let want = ((p.x.max(0) as usize) / cw).saturating_sub(gutter) + if wrapped { 0 } else { t.left };
+                        // A wrapped row's end is where the next row starts: stop just before it.
+                        let end = if r.last { r.end } else { r.end.saturating_sub(1).max(start) };
                         let mut at = start;
                         while at < end && display_col(t.doc.text(), start, sex_textedit::next_char(t.doc.text(), at)) <= want { at = sex_textedit::next_char(t.doc.text(), at); }
                         t.doc.move_to(Motion::To(at), p.kind == P::Move);
@@ -451,7 +780,8 @@ extern "C" fn main() -> ! {
                 Ask::Nothing => {}
                 Ask::Save => {
                     let r = save(&mut window, &mut jot.tabs[jot.active]);
-                    jot.status = match r { Ok(()) => "Saved.".into(), Err(e) => { sex_pdx::serial_record!("[jot.save.failed] status={}", e); String::from_utf8_lossy(files::message(e)).into_owned() } };
+                    jot.status = saved_message(r, &jot.tabs[jot.active]);
+                    write_session(&mut window, &jot.tabs);
                 }
                 ask @ (Ask::SaveAs | Ask::Open) => {
                     let open = matches!(ask, Ask::Open);
@@ -473,21 +803,28 @@ extern "C" fn main() -> ! {
                                 let tab = &mut jot.tabs[jot.active];
                                 tab.path = path.clone();
                                 tab.hl = Highlighter::new(Lang::from_name(&path));
-                                jot.status = match save(&mut window, tab) { Ok(()) => "Saved.".into(), Err(e) => String::from_utf8_lossy(files::message(e)).into_owned() };
+                                tab.readonly = false;
+                                let r = save(&mut window, tab);
+                                jot.status = saved_message(r, &jot.tabs[jot.active]);
+                                write_session(&mut window, &jot.tabs);
                             }
                         }
                         Err(e) => { sex_pdx::serial_record!("[jot.pick.refused] status={}", e); jot.status = "Nothing chosen.".into(); }
                     }
                 }
                 Ask::Close => {
-                    if jot.tabs[jot.active].doc.modified() && jot.status != "Unsaved changes: Ctrl+W again closes anyway." {
+                    if jot.tabs[jot.active].unsaved() && jot.status != "Unsaved changes: Ctrl+W again closes anyway." {
                         jot.status = "Unsaved changes: Ctrl+W again closes anyway.".into();
                     } else if jot.tabs.len() > 1 {
                         jot.tabs.remove(jot.active);
                         jot.active = jot.active.min(jot.tabs.len() - 1);
+                        write_session(&mut window, &jot.tabs);
                         jot.tab_record();
                         jot.status.clear();
                     } else {
+                        // Closed on purpose, changes discarded: nothing to bring back.
+                        if jot.tabs[jot.active].unsaved() { jot.tabs[jot.active].doc.mark_saved(); jot.tabs[jot.active].format_changed = false; }
+                        write_session(&mut window, &jot.tabs);
                         sex_pdx::serial_record!("[jot.closed] target={} task={}", window.target, window.task);
                         window.close()
                     }
