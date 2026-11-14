@@ -76,7 +76,8 @@ crates = [
   "apps/python/Cargo.toml",
   "apps/store/Cargo.toml",
   "apps/sdltest/Cargo.toml",
-  "apps/driftspark/Cargo.toml"
+  "apps/driftspark/Cargo.toml",
+  "apps/dragtest/Cargo.toml"
 ]
 
 [[stage]]
@@ -477,6 +478,15 @@ build_std = "std,panic_abort"
 manifest = "apps/driftspark/Cargo.toml"
 source_artifact = "target/x86_64-sex-std/release/driftspark"
 dest_artifact = "iso_root/programs/driftspark"
+
+# Drag test: the smallest VMM, a real-mode guest through syscall 110 (sex_pdx::vm).
+[[stage]]
+id = "build_dragtest"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/dragtest/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/dragtest"
+dest_artifact = "iso_root/programs/dragtest"
 
 # PDF: the first ordinary std app, hayro rendering pages into the window.
 [[stage]]
