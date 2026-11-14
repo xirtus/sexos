@@ -74,7 +74,8 @@
 //!
 //! # Limits
 //!
-//! Programs inside `( )` are refused (run them as a stage of their own and `let` the
+//! Inside `( )` a word that is not a built-in is a value (a column in a row condition,
+//! otherwise text), so `(size * 2)` works; programs inside `( )` are refused (run them as a stage of their own and `let` the
 //! result); `=~` is a substring test, not a regex; `open` knows .json .toml .csv .tsv
 //! and .txt (lines), anything else is text or binary; `save` converts .json .csv .tsv
 //! only. Output of a program arrives whole, not streamed into later stages.

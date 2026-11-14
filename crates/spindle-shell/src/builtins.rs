@@ -611,7 +611,13 @@ fn update(ctx: &mut Ctx, a: &Args, input: Value, insert: bool) -> Result<Value, 
         if insert && has {
             return Err(ShellError::at(format!("column `{}` already exists", col), col_expr.span, "exists").help("use `update` to change it"));
         }
-        if !insert && !has { return Err(no_column(&col, col_expr.span, whole).help("use `insert` to add a column")); }
+        if !insert && !has {
+            let err = no_column(&col, col_expr.span, whole);
+            return Err(match &err.help {
+                Some(h) if h.starts_with("did you mean") => err,
+                _ => err.help("use `insert` to add a column"),
+            });
+        }
         let cell = row.get(&col).cloned().unwrap_or(Value::Nothing);
         let row_v = Value::Record(row);
         let v = eval::eval(ctx, value_expr, &cell, Some(&row_v))?;
