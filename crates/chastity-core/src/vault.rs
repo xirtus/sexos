@@ -267,6 +267,23 @@ mod tests {
     }
 
     #[test]
+    fn header_seed_and_ciphertext_tampering_are_refused() {
+        let bytes=sample().save().unwrap();
+        let mut cursor=12;
+        let seed=loop {
+            let field=bytes[cursor];let len=u32::from_le_bytes(bytes[cursor+1..cursor+5].try_into().unwrap()) as usize;
+            cursor+=5;
+            if field==4 {assert_eq!(len,32);break cursor;}
+            assert_ne!(field,0);cursor+=len;
+        };
+        for at in [seed,bytes.len()-1] {
+            let mut changed=bytes.clone();changed[at]^=1;
+            let mut typed=pw("hunter2 is weak");
+            assert!(Vault::open(&changed,&mut typed).is_err());assert!(typed.is_empty());
+        }
+    }
+
+    #[test]
     fn garbage_is_not_a_vault() {
         assert!(matches!(Vault::open(b"hello, this is not kdbx at all", &mut pw("x")), Err(OpenError::NotAVault(_))));
         let mut bytes = sample().save().unwrap();
