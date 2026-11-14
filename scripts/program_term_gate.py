@@ -76,14 +76,23 @@ def main():
   s=len(t());chord('ctrl','shift','e');m=g['wait'](r'\[term\.pane\.split\] from=(\d+) pane=(\d+) across=1',s,30)
   left,right=int(m[1]),int(m[2]);g['wait'](rf'\[term\.panes\] tabs=1 active=0 focus={right} zoomed=0 {left}:\d+x\d+\+0\+0 {right}:',s,30)
   term_line('cd notes');s=len(t());term_line('greet Pane');g['wait'](r'\[term\.job\.start\] name=greet',s,60);time.sleep(3)
-  rows=snapshot();screen='\n'.join(rows.values());assert 'Hello, Pane, from Rust on Wasm.' in screen and 'buy milk' not in screen,screen
   s=len(t());chord('ctrl','shift','left');g['wait'](rf'\[term\.panes\] tabs=1 active=0 focus={left} ',s,30)
   term_line('echo left-pane');rows=snapshot();screen='\n'.join(rows.values())
   assert 'left-pane' in screen and 'buy milk' in screen and 'Hello, Pane' not in screen,screen
+  # Search and hints over the scrollback (P6).
+  term_line('clear');term_line('echo see https://example.com/x and 1234567')
+  s=len(t());chord('ctrl','shift','f');g['wait'](r'\[term\.mode\] search',s,30);keys('example')
+  m=g['wait'](r'\[term\.search\] query=example matches=(\d+)',s,30);assert int(m[1])>=1,m[0]
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'spindle-search.ppm')});q.key('esc')
+  s=len(t());chord('ctrl','shift','spc');m=g['wait'](r'\[term\.hints\] found=(\d+)',s,30);assert int(m[1])>=1,m[0]
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'spindle-hints.ppm')});keys('a')
+  m=g['wait'](r'\[term\.hint\] kind=(\w+) text=(\S+)',s,30);assert m.group(1,2)==('Url','https://example.com/x'),m[0]
   # The guest in the right pane still runs and ends there.
   s=len(t());chord('ctrl','shift','right');g['wait'](rf'\[term\.panes\] tabs=1 active=0 focus={right} ',s,30)
-  q.key('ret');m=g['wait'](r'\[term\.job\.exit\] name=greet code=(-?\d+)',s,120);assert m[1]=='0',m[0]
-  rows=snapshot();screen='\n'.join(rows.values());assert '~/notes >' in screen,screen
+  q.key('ret');m=g['wait'](r'\[term\.job\.exit\] name=greet code=(-?\d+)',s,120);assert m[1]=='5',m[0]
+  # The pane is narrow: long lines wrap over rows, so the rows are joined for the check.
+  rows=snapshot();screen='\n'.join(rows.values());joined=''.join(rows.values())
+  assert '~/notes >' in screen and 'Hello, Pane, from Rust on Wasm.' in joined and 'left-pane' not in joined,screen
   s=len(t());chord('ctrl','shift','z');g['wait'](rf'\[term\.panes\] tabs=1 active=0 focus={right} zoomed=1 {right}:',s,30)
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'spindle-zoomed.ppm')});chord('ctrl','shift','z')
   s=len(t());chord('ctrl','shift','t');m=g['wait'](r'\[term\.tab\.open\] tabs=2 pane=(\d+)',s,30);third=int(m[1])

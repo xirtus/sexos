@@ -69,6 +69,17 @@ struct Job {
 /// How long a program may take to start before Term gives up on it.
 const START_MS: u64 = 20_000;
 
+/// A way of reading the scrollback that takes the keys for a while.
+enum Mode {
+    Normal,
+    /// Ctrl+Shift+F: a search typed at the bottom of the pane; matches are highlighted.
+    Search { query: String, regex: bool, matches: Vec<sex_vt::Match>, current: Option<usize> },
+    /// Ctrl+Shift+Space: labels over URLs, paths, hashes...; typing one copies it.
+    Hints { hints: Vec<sex_vt::hints::Hint>, typed: String },
+    /// Ctrl+Shift+X: a keyboard cursor over the scrollback with vi keys.
+    Copy(sex_vt::copy_mode::CopyMode),
+}
+
 /// One pane: a screen, its own command line and the program running in it.
 struct Pane {
     screen: Screen,
@@ -93,6 +104,13 @@ struct Pane {
     focused_drawn: bool,
     /// The title the program set (OSC 0/2).
     osc_title: Option<String>,
+    /// The folder the program said it is in (OSC 7), and its progress (OSC 9;4).
+    osc_cwd: Option<String>,
+    progress: Option<u8>,
+    /// Search, hints or copy mode, when one is on.
+    mode: Mode,
+    /// Where the command line's prompt starts: absolute row (history + screen), column.
+    prompt_at: (usize, usize),
     last_click: (u64, usize, usize),
     /// A carriage return was the last byte fed, so a following newline is not doubled.
     after_cr: bool,
@@ -107,7 +125,7 @@ impl Pane {
         Pane {
             screen: Screen::new(cols, rows), parser: Parser::new(), painter, width, height, buf: vec![sex_vt::DEFAULT_BG; width * height], cell_h, closed: false,
             cwd: Vec::new(), line: Vec::new(), at: 0, history: Vec::new(), recall: None,
-            job: None, drag: None, focused_drawn: false, osc_title: None, last_click: (0, usize::MAX, usize::MAX), after_cr: false,
+            job: None, drag: None, focused_drawn: false, osc_title: None, osc_cwd: None, progress: None, mode: Mode::Normal, prompt_at: (0, 0), last_click: (0, usize::MAX, usize::MAX), after_cr: false,
         }
     }
     /// Program output: lone newlines become CR LF, as a terminal's output processing does.
@@ -158,13 +176,126 @@ impl Pane {
         // Below the last whole row, the terminal's background.
         let used = self.screen.rows() * self.painter.cell_h;
         if used < h { self.buf[used * w..h * w].fill(sex_vt::DEFAULT_BG); }
+        self.draw_mode(cache);
         true
+    }
+    /// What the current mode shows over the screen: hint labels, or a status line.
+    fn draw_mode(&mut self, cache: &mut Cache) {
+        let (w, cols, rows) = (self.width, self.screen.cols(), self.screen.rows());
+        let status = match &self.mode {
+            Mode::Normal => return,
+            Mode::Hints { hints, typed } => {
+                self.painter.draw_hints(hints, typed, cache, &mut self.buf, w, cols, rows);
+                format!(" hints: type a label to copy it ({} found), Esc leaves ", hints.len())
+            }
+            Mode::Search { query, regex, matches, current } => {
+                let at = current.map(|c| c + 1).unwrap_or(0);
+                format!(" find{}: {}_   {}/{}   Enter older, Shift+Enter newer, Ctrl+R regex, Esc leaves ", if *regex { " (regex)" } else { "" }, query, at, matches.len())
+            }
+            Mode::Copy(c) => match c.search_prompt() {
+                Some((q, fwd)) => format!(" {}{}_ ", if fwd { '/' } else { '?' }, q),
+                None => String::from(" COPY  hjkl/wbe move, v V Ctrl+V select, y copies, / ? n N search, q leaves "),
+            },
+        };
+        // The status line sits on the pane's last row.
+        let y0 = (rows - 1) * self.painter.cell_h;
+        let text: String = status.chars().take(cols).collect();
+        let x = self.painter.text(cache, &mut self.buf, w, 0, y0, &text, 0x11111B, 0xF9E2AF);
+        for y in y0..y0 + self.painter.cell_h { if x < w { self.buf[y * w + x..y * w + w].fill(0xF9E2AF); } }
+    }
+    /// A mode's key. Returns text for the clipboard when the mode yields some.
+    fn mode_key(&mut self, key: sex_pdx::app_key::Key) -> Option<Vec<u8>> {
+        let escape = key.code == 0x01;
+        let mut out = None;
+        let mut leave = escape;
+        match &mut self.mode {
+            Mode::Normal => return None,
+            Mode::Hints { hints, typed } => if let Some(c) = sex_app::text(key).filter(|_| !escape) {
+                typed.push(c);
+                match sex_vt::hints::resolve(hints, typed) {
+                    sex_vt::hints::Resolve::Exact(i) => {
+                        let h = &hints[i];
+                        sex_pdx::serial_record!("[term.hint] kind={:?} text={}", h.kind, h.text);
+                        out = Some(h.text.clone().into_bytes());
+                        leave = true;
+                    }
+                    sex_vt::hints::Resolve::Prefix => {}
+                    _ => leave = true,
+                }
+            },
+            Mode::Search { query, regex, matches, current } => {
+                let mut changed = false;
+                match (key.control, key.code) {
+                    _ if escape => {}
+                    (_, 0x1C) => if !matches.is_empty() {
+                        // Enter goes up to older output; Shift+Enter comes back down.
+                        let n = matches.len();
+                        let c = current.unwrap_or(n);
+                        *current = Some(if key.shift { (c + 1).min(n - 1) } else { c.saturating_sub(1) });
+                    },
+                    (_, 0x0E) => { query.pop(); changed = true; }
+                    (true, 0x13) => { *regex = !*regex; changed = true; }
+                    (false, _) => if let Some(c) = sex_app::text(key) { query.push(c); changed = true; },
+                    _ => {}
+                }
+                if changed {
+                    // Smart case: a capital letter makes the search case-sensitive.
+                    let case = query.chars().any(|c| c.is_uppercase());
+                    *matches = if query.is_empty() { Vec::new() } else { self.screen.search(query, *regex, case) };
+                    *current = matches.len().checked_sub(1);
+                    sex_pdx::serial_record!("[term.search] query={} matches={}", query, matches.len());
+                }
+                let (m, c) = (matches.clone(), *current);
+                if let Some(at) = c.and_then(|c| m.get(c)) { self.screen.scroll_to(at.start.row); }
+                self.screen.set_highlights(m, c);
+            }
+            Mode::Copy(cm) => {
+                let k = sex_app::text(key).filter(|_| !key.control || key.code != 0x1C).map(Key::Char).or_else(|| nav_key(key)).or(if key.code == 0x1C { Some(Key::Enter) } else if key.code == 0x0E { Some(Key::Backspace) } else { None });
+                let k = match (k, key.control) { (None, true) => sex_app::typed(sex_pdx::app_key::Key { control: false, ..key }).map(|c| Key::Char(c as char)), (k, _) => k };
+                if let Some(k) = k {
+                    match cm.key(&mut self.screen, k, Mods { shift: key.shift, control: key.control, alt: false }) {
+                        sex_vt::copy_mode::Action::Yank(t) => { sex_pdx::serial_record!("[term.copy_mode.yank] bytes={}", t.len()); out = Some(t.into_bytes()); }
+                        sex_vt::copy_mode::Action::Exit => leave = true,
+                        _ => {}
+                    }
+                    if out.is_some() { self.mode = Mode::Normal; }
+                }
+            }
+        }
+        if leave { self.leave_mode(); }
+        self.screen.mark_all_dirty();
+        out
+    }
+    fn enter_mode(&mut self, mode: &str) {
+        self.leave_mode();
+        self.mode = match mode {
+            "search" => Mode::Search { query: String::new(), regex: false, matches: Vec::new(), current: None },
+            "hints" => {
+                let hints = sex_vt::hints::find(&self.screen);
+                sex_pdx::serial_record!("[term.hints] found={}", hints.len());
+                if hints.is_empty() { return; }
+                Mode::Hints { hints, typed: String::new() }
+            }
+            _ => Mode::Copy(sex_vt::copy_mode::CopyMode::new(&mut self.screen)),
+        };
+        sex_pdx::serial_record!("[term.mode] {}", mode);
+        self.screen.mark_all_dirty();
+    }
+    fn leave_mode(&mut self) {
+        match core::mem::replace(&mut self.mode, Mode::Normal) {
+            Mode::Copy(mut cm) => cm.exit(&mut self.screen),
+            Mode::Search { .. } => self.screen.clear_highlights(),
+            _ => {}
+        }
+        self.screen.mark_all_dirty();
     }
     /// The pane's title: what its program asked for, else the running program's name,
     /// else its folder.
     fn title(&self) -> String {
-        if let Some(t) = &self.osc_title { return t.clone(); }
-        if let Some(job) = &self.job { return job.name.clone(); }
+        let p = self.progress.map(|p| format!(" [{}%]", p)).unwrap_or_default();
+        if let Some(t) = &self.osc_title { return format!("{}{}", t, p); }
+        if let Some(job) = &self.job { return format!("{}{}", job.name, p); }
+        if let Some(c) = &self.osc_cwd { return c.clone(); }
         format!("~/{}", core::str::from_utf8(&self.cwd).unwrap_or("?"))
     }
 
@@ -175,14 +306,29 @@ impl Pane {
         format!("\x1b[1;34m~/{}\x1b[0m \x1b[1;32m>\x1b[0m ", cwd)
     }
     /// Redraws the line being typed, with the cursor at `self.at`.
+    /// The line may wrap over several rows (narrow panes): it is drawn again from where
+    /// its prompt started, and the cursor is put back by position.
     fn redraw_line(&mut self) {
         let p = self.prompt();
         let line = String::from_utf8_lossy(&self.line).into_owned();
-        let back = self.line.len() - self.at;
-        self.say(&format!("\r\x1b[K{}{}", p, line));
-        if back > 0 { self.say(&format!("\x1b[{}D", back)); }
+        let (abs, col) = self.prompt_at;
+        let row = abs.saturating_sub(self.screen.history_len());
+        self.say(&format!("\x1b[{};{}H\x1b[J{}{}", row + 1, col + 1, p, line));
+        // Where the cursor goes: count cells from the prompt's start (rows may have scrolled).
+        let cols = self.screen.cols();
+        let row = abs.saturating_sub(self.screen.history_len());
+        let plen = core::str::from_utf8(&self.cwd).map(|c| c.chars().count()).unwrap_or(1) + 5;
+        let off = col + plen + String::from_utf8_lossy(&self.line[..self.at]).chars().count();
+        let (r, c) = ((row + off / cols).min(self.screen.rows() - 1), off % cols);
+        self.say(&format!("\x1b[{};{}H", r + 1, c + 1));
     }
-    fn show_prompt(&mut self) { self.line.clear(); self.at = 0; self.recall = None; let p = self.prompt(); self.say(&p); }
+    /// The prompt, marked for shell integration (OSC 133): jumping between prompts and
+    /// selecting a command's output work for Spindle's own command line too.
+    fn show_prompt(&mut self) {
+        self.line.clear(); self.at = 0; self.recall = None; let p = self.prompt();
+        let (x, y) = self.screen.cursor();
+        self.prompt_at = (self.screen.history_len() + y, x); self.say("\x1b]133;A\x07"); self.say(&p); self.say("\x1b]133;B\x07");
+    }
 
     /// A path from the command line, as a path in Term's folder: relative to the current
     /// folder, `/` the folder's root, `..` going up but never above it.
@@ -362,6 +508,7 @@ impl Pane {
         sex_pdx::serial_record!("[term.job.exit] name={} code={}", name, code);
         if code != 0 { self.say(&format!("\x1b[2m[{} exited with {}]\x1b[0m\n", name, code)); }
         if !self.after_cr && self.screen.cursor().0 != 0 { self.say("\n"); }
+        self.say(&format!("\x1b]133;D;{}\x07", code));
         self.show_prompt();
     }
 
@@ -438,7 +585,12 @@ impl Pane {
 
     // ---- Keys and the mouse ----
 
-    fn key(&mut self, window: &mut Window, key: sex_pdx::app_key::Key) {
+    fn key(&mut self, window: &mut Window, key: sex_pdx::app_key::Key) -> Option<Vec<u8>> {
+        if !matches!(self.mode, Mode::Normal) { return self.mode_key(key); }
+        self.key_normal(window, key);
+        None
+    }
+    fn key_normal(&mut self, window: &mut Window, key: sex_pdx::app_key::Key) {
         let (shift, control) = (key.shift, key.control);
         // Terminal-wide keys first.
         match (control, shift, key.code) {
@@ -452,13 +604,14 @@ impl Pane {
         match (control, key.code, sex_app::nav(key), typed) {
             (_, 0x1C, ..) => {
                 let line = core::mem::take(&mut self.line);
-                self.say("\r\n");
+                self.say("\r\n\x1b]133;C\x07");
                 self.run_line(window, &line);
+                if self.job.is_none() { self.say("\x1b]133;D;0\x07"); }
                 if self.job.is_none() { self.show_prompt(); }
                 return;
             }
             (true, 0x2E, ..) => { self.say("^C\r\n"); self.show_prompt(); return; }
-            (true, 0x26, ..) => { self.say("\x1b[H\x1b[2J"); self.redraw_line(); return; }
+            (true, 0x26, ..) => { self.say("\x1b[H\x1b[2J"); self.prompt_at = (self.screen.history_len(), 0); self.redraw_line(); return; }
             (true, 0x20, ..) if self.line.is_empty() => { sex_pdx::serial_record!("[term.pane.closed] how=ctrl-d"); self.closed = true; return; }
             (true, 0x1E, ..) => self.at = 0,
             (true, 0x12, ..) => self.at = self.line.len(),
@@ -508,6 +661,8 @@ impl Pane {
         if add.is_empty() && hits.len() > 1 {
             let list: Vec<String> = hits.iter().map(|h| String::from_utf8_lossy(h).into_owned()).collect();
             self.say(&format!("\r\n{}\r\n", list.join("  ")));
+            let (_, y) = self.screen.cursor();
+            self.prompt_at = (self.screen.history_len() + y, 0);
         }
         for (i, b) in add.iter().enumerate() { self.line.insert(self.at + i, *b); }
         self.at += add.len();
@@ -628,6 +783,28 @@ impl Pane {
             _ => {}
         }
         None
+    }
+}
+
+/// What a program asked of the terminal with an escape sequence.
+fn pane_event(id: PaneId, pane: &mut Pane, e: sex_vt::Event, clipboard: &mut Vec<u8>) {
+    use sex_vt::Event as E;
+    match e {
+        // OSC 52: a program may set the clipboard (remote editors copy this way). Reading
+        // it is refused: a program never learns what else was copied.
+        E::Clipboard { set, .. } => { sex_pdx::serial_record!("[term.osc52.set] pane={} bytes={}", id, set.len()); *clipboard = set; }
+        E::ClipboardQuery { .. } => sex_pdx::serial_record!("[term.osc52.query] pane={} refused=1", id),
+        // OSC 9 / 777: a desktop notification through Bell.
+        E::Notify { title, body } => {
+            let title = if title.is_empty() { pane.title() } else { title };
+            let posted = sex_pdx::notify::post(title.as_bytes(), body.as_bytes(), sex_pdx::notify::URGENCY_NORMAL);
+            sex_pdx::serial_record!("[term.notify] pane={} posted={} title={} body={}", id, posted as u8, title, body);
+        }
+        E::Cwd(c) => pane.osc_cwd = Some(c),
+        E::Progress(p) => {
+            use sex_vt::Progress as P;
+            pane.progress = match p { P::Clear => None, P::Set(v) | P::Error(v) | P::Paused(v) => Some(v), P::Indeterminate => Some(0) };
+        }
     }
 }
 
@@ -853,6 +1030,10 @@ impl Spindle {
             (true, true, 0x2C) => { let t = self.tabs.current_mut(); if t.count() > 1 { t.zoomed = !t.zoomed; self.relayout = true; } }
             (true, true, 0x13) => { self.resizing = true; sex_pdx::serial_record!("[term.resize.mode] on=1"); }
             (true, true, 0x11) => { let id = self.tabs.focus(); self.close_pane(id); }
+            (true, true, 0x21) => self.focused().enter_mode("search"),
+            (true, true, 0x39) => self.focused().enter_mode("hints"),
+            (true, true, 0x2D) => self.focused().enter_mode("copy"),
+            (true, true, c @ (0x25 | 0x24)) => { let p = self.focused(); let r = p.screen.jump_prompt(if c == 0x25 { -1 } else { 1 }); sex_pdx::serial_record!("[term.prompt.jump] row={:?}", r); }
             (true, true, 0x1A) => { self.tabs.current_mut().equalize(); self.relayout = true; }
             (true, true, _) if toward(key).is_some() => {
                 if self.tabs.current_mut().focus_toward(area, toward(key).unwrap()) { self.relayout = true; }
@@ -912,6 +1093,7 @@ impl Spindle {
         for (id, pane) in self.panes.iter_mut() {
             pane.pump();
             if pane.screen.take_bells() > 0 { sex_pdx::serial_record!("[term.bell] pane={}", id); }
+            for e in pane.screen.take_events() { pane_event(*id, pane, e, &mut self.clipboard); }
             if pane.closed { gone.push(*id); }
         }
         for id in gone { self.close_pane(id); }
@@ -1021,7 +1203,7 @@ extern "C" fn main() -> ! {
         match event {
             Some(Event::Close) => { sex_pdx::serial_record!("[term.closed] how=window"); window.close() }
             Some(Event::Resize { width, height }) => { spindle.width = width.max(64); spindle.height = height.max(64); spindle.relayout = true; }
-            Some(Event::Key(key)) => if !spindle.key(&mut window, key) { spindle.focused().key(&mut window, key) },
+            Some(Event::Key(key)) => if !spindle.key(&mut window, key) { if let Some(t) = spindle.focused().key(&mut window, key) { spindle.clipboard = t; } },
             Some(Event::Pointer(p)) => spindle.pointer(p),
             None => {}
         }
