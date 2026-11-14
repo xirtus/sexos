@@ -427,6 +427,7 @@ impl Client {
 /// bare name still runs the program under its new name, for a while.
 pub const RENAMED: &[(&[u8], &[u8])] = &[
     (b"web", b"kaleidoscope"),
+    (b"store", b"sexshop"),
 ];
 /// The program a bare name means now; a path or a current name is kept as given.
 pub fn renamed(target: &[u8]) -> &[u8] {

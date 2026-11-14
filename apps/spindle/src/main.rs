@@ -1014,9 +1014,9 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             unsafe{fs_commands::FS.submit_program_granted(b"kaleidoscope",args,sex_pdx::program_store::RUN_NETWORK,0,false,sb);}
             true
         }
-        // The Store: the package catalog in a window, allowed the network and packages.
-        b"store" => {
-            unsafe{fs_commands::FS.submit_program_granted(b"store",args,sex_pdx::program_store::RUN_NETWORK,0,true,sb);}
+        // sexshop (formerly Store): the package catalog in a window, allowed the network and packages.
+        b"sexshop" | b"store" => {
+            unsafe{fs_commands::FS.submit_program_granted(b"sexshop",args,sex_pdx::program_store::RUN_NETWORK,0,true,sb);}
             true
         }
         b"spawn" if args.split(|b|*b==b' ').next().is_some_and(|w|w.contains(&b'/')) => {

@@ -501,14 +501,14 @@ manifest = "apps/hum/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/hum"
 dest_artifact = "iso_root/programs/hum"
 
-# Store: the package catalog in a window (`store` in Spindle).
+# sexshop (formerly Store): the package catalog in a window (`sexshop` in Spindle).
 [[stage]]
 id = "build_store"
 action = "cargo_manifest"
 target = "x86_64-sex-app.json"
 manifest = "apps/store/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/store"
-dest_artifact = "iso_root/programs/store"
+dest_artifact = "iso_root/programs/sexshop"
 
 [[stage]]
 id = "build_snoop"
