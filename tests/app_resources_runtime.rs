@@ -72,6 +72,9 @@ mod ipc{
 #[path="../crates/sex-pdx/src/program_store.rs"]pub mod program_store;
 #[path="../crates/sex-pdx/src/program_memory.rs"]pub mod program_memory;
 #[path="../crates/sex-pdx/src/program_code.rs"]pub mod program_code;
+#[path="../crates/sex-pdx/src/vm.rs"]pub mod vm;
+// Drag VMs (kernel/src/vmx.rs): retire must end a run's VMs; nothing is lent in these cases.
+mod vmx{pub static REVOKED:crate::Mutex<Vec<u32>>=crate::Mutex::new(Vec::new());pub fn revoke(pd:u32){REVOKED.lock().push(pd)}pub fn lent(_:u32,_:u64)->bool{false}}
 /// The direct map: on the host, frame addresses are host pointers already.
 pub struct Hhdm;pub struct HhdmResponse{pub offset:u64}impl Hhdm{pub fn response(&self)->Option<HhdmResponse>{Some(HhdmResponse{offset:0})}}
 pub static HHDM_REQUEST:Hhdm=Hhdm;
@@ -171,7 +174,7 @@ fn fixture_elf()->Vec<u8>{
  assert_eq!(app_resources::retire(pager,38),[DENIED,0,0,0]);assert_eq!(leaves[0],before[0]);assert!(FLUSHES.lock().is_empty());leaves[16]=before[16]|0x60;
  unsafe{(*target.message_ring).enqueue(messages::MessageType::Empty).unwrap();(*target.signal_ring).enqueue(3).unwrap();}target.incoming_replies.lock().push_back(messages::IpcReply{value:7,caller_pd:13,caller_task:213});assert_eq!(target.reply_credits.lock().grant(13),reply_credit::Grant::Added);
  let held=unsafe{&*target.cap_table};for _ in 0..3{held.insert(capability::CapabilityData::Other);}held.seal();assert!(!held.holds_none(|_|true));
- let result=[0,0x9000_0000,17*4096,15];assert_eq!(app_resources::retire(pager,38),result);assert_eq!(*leaves,[0;17]);assert_eq!(FLUSHES.lock().len(),17);
+ let result=[0,0x9000_0000,17*4096,15];assert_eq!(app_resources::retire(pager,38),result);assert!(vmx::REVOKED.lock().contains(&15),"retire ends the run's VMs");assert_eq!(*leaves,[0;17]);assert_eq!(FLUSHES.lock().len(),17);
  assert_eq!(unsafe{(*target.message_ring).len()},0);assert_eq!(unsafe{(*target.signal_ring).len()},0);assert!(target.incoming_replies.lock().is_empty());assert_eq!(target.reply_credits.lock().outstanding(),0);
  assert!(held.holds_none(|_|true));for id in 1..=4{assert!(held.find(id).is_none());}
  assert_eq!(app_resources::retire(pager,38),result);assert_eq!(FLUSHES.lock().len(),17);
