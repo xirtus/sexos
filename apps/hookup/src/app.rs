@@ -274,7 +274,8 @@ pub fn main() {
                     if row >= 0 && (row as usize) < app.devices.len() { app.picked = row as usize; redraw = true; }
                 }
             }
-            None => {}
+            // No event, or drag and drop: nothing to take yet.
+            _ => {}
         }
         if last_tick.elapsed().as_millis() > 1000 { app.daemon.tick(); last_tick = Instant::now(); }
         redraw |= drain(&mut app, &rx);

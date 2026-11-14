@@ -396,6 +396,8 @@ impl Ui {
                         if col != self.col { self.record_column(); }
                     }
                 }
+                // Drag and drop: nothing to take yet.
+                _ => {}
             }
         }
         sex_std::record("[spreadeagle.closed]");

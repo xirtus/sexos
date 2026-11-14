@@ -410,6 +410,8 @@ pub extern "C" fn _start() -> ! {
             Event::Pointer(p) if matches!(p.kind, Kind::Down { button: 0 } | Kind::Wheel { .. }) => app.pointer(&mut window, p),
             Event::Pointer(_) => continue,
             Event::Resize { .. } => app.relayout(window.size()),
+            // Drag and drop: nothing to take yet.
+            _ => continue,
         }
         render(&mut window, &mut app);
     }

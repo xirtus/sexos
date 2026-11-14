@@ -212,6 +212,8 @@ impl Ui {
                         self.draw(window);
                     }
                 }
+                // Drag and drop: nothing to take yet.
+                _ => {}
             }
         }
         sex_std::record("[assuit.closed]");
