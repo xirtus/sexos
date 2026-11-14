@@ -1,8 +1,8 @@
 name: Rust CI
 
-# Gates run as parallel jobs. Each job sets up from shared caches (rustup,
-# cargo + target, FFmpeg, libc++); jobs that boot SexOS build their own ISO,
-# so no job waits on another. Every gate of the former single job still runs.
+# Gates run as parallel jobs. An `iso` job builds the sealed candidate image
+# once and shares it with downstream boot, device, and program gate jobs.
+# Every gate of the former single job still runs, with zero loss of coverage.
 
 on:
   push:
@@ -13,7 +13,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -29,10 +29,14 @@ jobs:
     - uses: ./.github/actions/setup
       with:
         qemu: "false"
+        media: "false"
+        limine: "false"
     - name: Enforce root allowlist
       run: bash scripts/dev/check_root_allowlist.sh --strict
     - name: Host proof regressions
       run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts/tests -p 'test_*.py'
+    - name: Core models, trust, volumes and crypt on the host
+      run: bash scripts/core_models_host_gate.sh
     - name: Other systems' filesystems (FAT, exFAT, ext4, NTFS) on the host
       run: bash scripts/volumes_host_gate.sh
     - name: IOMMU tables, page tables and lending window on the host
@@ -99,7 +103,6 @@ jobs:
     - name: WireGuard protocol (Python peer interop) and SSH client (real OpenSSH) on the host
       run: |
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends openssh-server
-        # The runner account is password-locked; without PAM sshd refuses locked accounts even for keys.
         sudo usermod -p '*' "$USER"
         cargo test --locked -p sex-wg
         cargo test --locked -p sex-ssh
@@ -152,6 +155,8 @@ jobs:
     - uses: ./.github/actions/setup
       with:
         qemu: "false"
+        media: "false"
+        limine: "false"
     - name: Host kernel-model regressions
       run: python3 scripts/check_architectural_truth.py --run-host --shard ${{ matrix.shard }}/3 --evidence-dir "$RUNNER_TEMP/sexos-truth"
     - name: Preserve evidence
@@ -162,100 +167,168 @@ jobs:
         path: ${{ runner.temp }}/sexos-truth
         if-no-files-found: ignore
 
-  boot:
-    name: Build, boot and runtime gates
+  iso:
+    name: Build sealed candidate image
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 30
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
       with:
         save-cache: "true"
-    - name: Build and boot via single entrypoint (mandatory)
-      run: GATE_DIR="$RUNNER_TEMP/sexos-runtime" bash scripts/master_runtime_gate.sh --probe 60 --keep-log
-    - name: Boots to the desktop with 1, 2, 4 and 32 GiB of RAM
-      run: python3 scripts/ram_sizes_gate.py --iso sexos-v1.0.0.iso --out "$RUNNER_TEMP/sexos-runtime/ram-sizes"
+    - name: Build candidate image via single entrypoint
+      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/build.log"; exit 1)
     - name: Compiled scheduler stack-release boundary
       run: SWITCH_EVIDENCE="$RUNNER_TEMP/sexos-runtime/scheduler-switch.txt" bash scripts/scheduler_switch_boundary_gate.sh
     - name: Timer PKRU save and restore boundary
       run: TIMER_PKRU_EVIDENCE="$RUNNER_TEMP/sexos-runtime/timer-pkru.txt" bash scripts/timer_pkru_return_gate.sh
     - name: Optimized client memory helpers
       run: bash scripts/silk_client_memory_gate.sh target/x86_64-sex/release/kaleidoscope
+    - name: Build experimental web JIT program
+      run: bash scripts/build_web_jit.sh web-jit
+    - name: Upload sealed candidate artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: sexos-sealed-candidate
+        path: |
+          sexos-v1.0.0.iso
+          web-jit
+        retention-days: 1
+    - name: Preserve build evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sexos-build-proof
+        path: |
+          ${{ runner.temp }}/build.log
+          ${{ runner.temp }}/sexos-runtime
+        if-no-files-found: ignore
+
+  boot:
+    name: Boot and runtime gates (${{ matrix.shard }}/2)
+    needs: [iso]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1]
+    steps:
+    - uses: actions/checkout@v4
+    - uses: ./.github/actions/setup
+      with:
+        media: "false"
+        limine: "false"
+    - name: Download sealed candidate artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: sexos-sealed-candidate
+    # Shard 0: Master runtime probe, scheduler, memory authority, paging, RAM sizes, ordinary programs, bench, IPv6, SSH, USB paths
+    - name: Boot via single entrypoint and verify runtime probe
+      if: matrix.shard == 0
+      run: GATE_DIR="$RUNNER_TEMP/sexos-runtime" bash scripts/master_runtime_gate.sh --skip-build --probe 60 --keep-log
     - name: Guest park, detached wake and user resume
+      if: matrix.shard == 0
       run: OWNERSHIP_LOG="$RUNNER_TEMP/sexos-runtime/serial.log" bash scripts/scheduler_ownership_runtime_gate.sh
     - name: Guest immutable memory region authority
+      if: matrix.shard == 0
       run: MEMORY_AUTHORITY_LOG="$RUNNER_TEMP/sexos-runtime/serial.log" bash scripts/memory_authority_runtime_gate.sh
     - name: Guest sext paging and fault recovery
+      if: matrix.shard == 0
       run: PAGING_LOG="$RUNNER_TEMP/sexos-runtime/serial.log" bash scripts/paging_recovery_runtime_gate.sh
+    - name: Boots to the desktop with 1, 2, 4 and 32 GiB of RAM
+      if: matrix.shard == 0
+      run: python3 scripts/ram_sizes_gate.py --iso sexos-v1.0.0.iso --out "$RUNNER_TEMP/sexos-runtime/ram-sizes"
     - name: Ordinary Rust and C programs
+      if: matrix.shard == 0
       run: |
         truncate -s 1G "$RUNNER_TEMP/blank-programs.img"
         python3 scripts/program_std_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/programs-std"
     - name: Large reads must reach the device
+      if: matrix.shard == 0
       run: python3 scripts/program_bench_gate.py --large-read --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/large-read"
     - name: IPv6-only network (SLAAC, RDNSS, DHCPv6, sockets, name lookup)
+      if: matrix.shard == 0
       run: python3 scripts/program_ipv6_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/ipv6"
     - name: ssh program logs in to OpenSSH on the host
+      if: matrix.shard == 0
       run: |
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends openssh-server
         sudo usermod -p '*' "$USER"
         python3 scripts/ssh_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/ssh"
     - name: Needle prints to a fake IPP Everywhere printer and scans from a fake eSCL scanner
+      if: matrix.shard == 0
       run: python3 scripts/needle_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/needle"
+    - name: USB input paths
+      if: matrix.shard == 0
+      run: GATE_DIR="$RUNNER_TEMP/sexos-usb" SKIP_BUILD=1 bash scripts/usb_path_gate.sh
+    # Shard 1: Browser and desktop GUI gates
     - name: Web page JavaScript (native QuickJS tier)
+      if: matrix.shard == 1
       run: |
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends python3-pil
         truncate -s 1G "$RUNNER_TEMP/blank-webjs.img"
         python3 scripts/program_web_js_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-webjs.img" --out "$RUNNER_TEMP/sexos-runtime/web-js"
     - name: Actual Web maximize and restore with full viewport pixels
+      if: matrix.shard == 1
       run: python3 scripts/program_web_viewport_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-webjs.img" --out "$RUNNER_TEMP/sexos-runtime/web-viewport"
     - name: Classic script resources and fetch CORS isolation
+      if: matrix.shard == 1
       run: |
         truncate -s 1G "$RUNNER_TEMP/blank-classic.img"
         python3 scripts/program_web_classic_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-classic.img" --out "$RUNNER_TEMP/sexos-runtime/web-classic"
     - name: Native Promise rejection events and source isolation
+      if: matrix.shard == 1
       run: |
         truncate -s 1G "$RUNNER_TEMP/blank-promise.img"
         python3 scripts/program_web_promise_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-promise.img" --out "$RUNNER_TEMP/sexos-runtime/web-promise"
     - name: Browser tabs, history, bookmarks, lasting storage, find and zoom across a reboot
+      if: matrix.shard == 1
       run: |
         truncate -s 1G "$RUNNER_TEMP/blank-daily.img"
         python3 scripts/program_web_daily_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-daily.img" --out "$RUNNER_TEMP/sexos-runtime/web-daily"
     - name: Browser WebSocket echo (text, binary, 70 KB, ping, clean close)
+      if: matrix.shard == 1
       run: python3 scripts/program_web_websocket_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-daily.img" --out "$RUNNER_TEMP/sexos-runtime/web-websocket"
     - name: Browser downloads (20 MB to Files, hash read back from disk)
+      if: matrix.shard == 1
       run: python3 scripts/program_web_download_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-daily.img" --out "$RUNNER_TEMP/sexos-runtime/web-download"
     - name: Browser forms (GET, urlencoded and multipart POST)
+      if: matrix.shard == 1
       run: python3 scripts/program_web_form_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-daily.img" --out "$RUNNER_TEMP/sexos-runtime/web-form"
     - name: Browser site suite (encyclopedia, news, links, GitHub, webmail sign-in)
+      if: matrix.shard == 1
       run: python3 scripts/browser_sites_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-daily.img" --out "$RUNNER_TEMP/sexos-runtime/web-sites"
     - name: Native screenshot saved as a real PNG file
+      if: matrix.shard == 1
       run: |
         truncate -s 1G "$RUNNER_TEMP/capture-source.img"
         python3 scripts/desktop_capture_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/capture-source.img" --out "$RUNNER_TEMP/sexos-runtime/capture"
     - name: Settings last across a restart
+      if: matrix.shard == 1
       run: |
         truncate -s 1G "$RUNNER_TEMP/settings-source.img"
         python3 scripts/settings_persist_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/settings-source.img" --out "$RUNNER_TEMP/sexos-runtime/settings"
     - name: Alt+Tab window switcher with live thumbnails
+      if: matrix.shard == 1
       run: |
         truncate -s 256M "$RUNNER_TEMP/switcher-source.img"
         python3 scripts/window_switcher_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/switcher-source.img" --out "$RUNNER_TEMP/sexos-runtime/switcher"
     - name: Clipboard history on Super+V
+      if: matrix.shard == 1
       run: |
         truncate -s 256M "$RUNNER_TEMP/cliphist-source.img"
         python3 scripts/clipboard_history_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/cliphist-source.img" --out "$RUNNER_TEMP/sexos-runtime/clipboard-history"
     - name: Screenshot UI on Print
+      if: matrix.shard == 1
       run: |
         truncate -s 256M "$RUNNER_TEMP/screenshot-source.img"
         python3 scripts/screenshot_ui_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/screenshot-source.img" --out "$RUNNER_TEMP/sexos-runtime/screenshot-ui"
-    - name: USB input paths
-      run: GATE_DIR="$RUNNER_TEMP/sexos-usb" SKIP_BUILD=1 bash scripts/usb_path_gate.sh
     - name: Preserve runtime evidence
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: sexos-runtime-proof
+        name: sexos-runtime-proof-${{ matrix.shard }}
         path: |
           ${{ runner.temp }}/sexos-runtime
           ${{ runner.temp }}/sexos-usb
@@ -263,13 +336,19 @@ jobs:
 
   devices:
     name: Disks, power and fuzzing
+    needs: [iso]
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 30
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
-    - name: Build the image
-      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/build.log"; exit 1)
+      with:
+        media: "false"
+        limine: "false"
+    - name: Download sealed candidate artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: sexos-sealed-candidate
     - name: USB sticks in Files
       run: |
         truncate -s 256M "$RUNNER_TEMP/blank-usb.img"
@@ -333,17 +412,23 @@ jobs:
 
   media:
     name: Browser media streaming and seeking
+    needs: [iso]
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 25
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
+      with:
+        media: "false"
+        limine: "false"
     - name: Prepare media host checks
       run: |
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg
         bash scripts/media_source_host_gate.sh
-    - name: Build the FFmpeg-enabled image
-      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/media-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/media-build.log"; exit 1)
+    - name: Download sealed candidate artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: sexos-sealed-candidate
     - name: Progressive playback and Range seek
       run: |
         truncate -s 1G "$RUNNER_TEMP/media-source.img"
@@ -355,22 +440,27 @@ jobs:
       with:
         name: sexos-media-proof
         path: |
-          ${{ runner.temp }}/media-build.log
           ${{ runner.temp }}/sexos-web-stream
           ${{ runner.temp }}/sexos-web-seek
         if-no-files-found: ignore
 
   editor:
     name: Quil code editor
+    needs: [iso]
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
+      with:
+        media: "false"
+        limine: "false"
     - name: Quil engine on the host (1 GB lazy file, multi-cursor, Vim, keymaps, fuzzy, project search)
       run: cargo test --locked --release -p quil-core
-    - name: Build the image
-      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/editor-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/editor-build.log"; exit 1)
+    - name: Download sealed candidate artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: sexos-sealed-candidate
     - name: Quil in QEMU (200 MB file, Go to File, cursors, Vim dd, project search)
       run: |
         truncate -s 256M "$RUNNER_TEMP/editor-source.img"
@@ -381,7 +471,6 @@ jobs:
       with:
         name: sexos-editor-proof
         path: |
-          ${{ runner.temp }}/editor-build.log
           ${{ runner.temp }}/sexos-editor
         if-no-files-found: ignore
 
@@ -421,13 +510,19 @@ jobs:
 
   programs:
     name: Programs, packages and ports
+    needs: [iso]
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 30
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
-    - name: Build the image
-      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/build.log"; exit 1)
+      with:
+        media: "false"
+        limine: "false"
+    - name: Download sealed candidate artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: sexos-sealed-candidate
     - name: Blank program disk
       run: truncate -s 1G "$RUNNER_TEMP/blank-programs.img"
     - name: Lua 5.4 interpreter
@@ -465,7 +560,7 @@ jobs:
   # Single required check: keeps the old "build" check name for branch rules.
   build:
     if: always()
-    needs: [host, truth, boot, devices, programs, media, editor, profiles, js-jit, recording]
+    needs: [host, truth, iso, boot, devices, programs, media, editor, profiles, js-jit, recording]
     runs-on: ubuntu-latest
     steps:
     - run: |
@@ -473,8 +568,9 @@ jobs:
 
   js-jit:
     name: Experimental JS JIT and W^X (${{ matrix.cores }} cores)
+    needs: [iso]
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -484,15 +580,25 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
-    - name: Build sealed ISO from this candidate
-      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/build.log"; exit 1)
+      with:
+        media: "false"
+        limine: "false"
+    - name: Download sealed candidate artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: sexos-sealed-candidate
+    - name: Prepare web-jit binary
+      run: |
+        if [ -f web-jit ]; then
+          cp web-jit "$RUNNER_TEMP/web-jit"
+          chmod +x "$RUNNER_TEMP/web-jit"
+        fi
     - name: Runtime code permissions, blocked instructions and per-run fault isolation
       run: |
         truncate -s 1G "$RUNNER_TEMP/blank-jit.img"
         python3 scripts/program_jit_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-jit.img" --out "$RUNNER_TEMP/js-jit/kernel-code"
     - name: Browser hot bytecode compared to forced interpreter
       run: |
-        bash scripts/build_web_jit.sh "$RUNNER_TEMP/web-jit"
         python3 scripts/program_web_jit_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-jit.img" --program "$RUNNER_TEMP/web-jit" --out "$RUNNER_TEMP/js-jit/browser"
     - name: Retain exact boot media with the opt-in program (one core)
       if: always() && matrix.cores == 1
@@ -510,7 +616,6 @@ jobs:
         name: sexos-js-jit-${{ matrix.cores }}cores
         path: |
           ${{ runner.temp }}/js-jit
-          ${{ runner.temp }}/build.log
           ${{ runner.temp }}/web-jit
         if-no-files-found: ignore
 
