@@ -54,4 +54,18 @@ cacheResults.push(cacheRead(cacheObject));
 let cacheTraps=0;let cacheProxy=new Proxy(cacheObject,{get(t,k){cacheTraps++;return Reflect.get(t,k);}});
 cacheResults.push(cacheRead(cacheProxy),cacheRead(cacheProxy),cacheTraps);
 console.log('jit-object-cache',cacheResults.join('|'));
+// String operations exercise Latin-1, UTF-16, lone surrogates and NUL.
+const stringWords=['','a','é','Ā','\ud800','\udfff','😀','\0'];
+let stringLength=0,stringCodes=0,stringComparisons=[0,0,0,0,0,0,0,0];
+for(const a of stringWords)for(const b of stringWords){
+ const joined=a+b;stringLength+=joined.length;
+ for(let i=0;i<joined.length;i++)stringCodes+=joined.charCodeAt(i);
+ const flags=[a<b,a<=b,a>b,a>=b,a==b,a!=b,a===b,a!==b];
+ for(let i=0;i<8;i++)stringComparisons[i]+=flags[i]?1:0;
+}
+let stringOrder=[];
+const stringLeft={valueOf(){stringOrder.push('left');return 'a';}};
+const stringRight={valueOf(){stringOrder.push('right');return 'b';}};
+const stringCoerced=stringLeft+stringRight;
+console.log('jit-strings',[stringLength,stringCodes,stringComparisons.join(','),stringCoerced,stringOrder.join(',')].join('|'));
 </script>

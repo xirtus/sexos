@@ -1610,3 +1610,59 @@ fn baseline_own_property_cache_guards_mutation_and_effects() {
     candidate.eval("for(let i=0;i<100;i++) read(o);", "disabled-cache.js").unwrap();
     assert_eq!(candidate.own_property_cache_stats().unwrap(), after);
 }
+
+#[cfg(feature = "baseline-jit")]
+#[test]
+fn baseline_string_fast_paths_preserve_utf16_and_coercion() {
+    let source = r#"
+        const words=['','a','b','aa','a\0b','a\0a','é','Ā','\ud800','\udfff','😀','\uffff'];
+        let result=[];
+        for(const a of words) for(const b of words) {
+            result.push(JSON.stringify(a+b),a<b,a<=b,a>b,a>=b,a==b,a!=b,a===b,a!==b);
+        }
+        console.log(JSON.stringify(result));
+        let order=[];
+        const left={valueOf(){order.push('left');return 'a';}};
+        const right={valueOf(){order.push('right');return 'b';}};
+        console.log(left+right,JSON.stringify(order));
+        console.log('2'+2,'2'==2,'2'===2,'2'<10,'2'<'10');
+        console.log(new String('x')+'y',new String('x')=='x');
+        try { 'x'+Symbol('x'); } catch(e) { console.log(e.name); }
+        try { 'x'+{valueOf(){throw Error('conversion');}}; } catch(e) { console.log(e.message); }
+        let retained='a'.repeat(200), alias=retained;
+        for(let i=0;i<100;i++) retained=retained+'b';
+        console.log(alias.length,retained.length,alias===retained);
+    "#;
+    let mut off=page("");off.set_jit_enabled(false);
+    let before=off.guest_fast_path_stats().unwrap();
+    off.eval(source,"strings.js").unwrap();
+    assert_eq!(off.guest_fast_path_stats().unwrap(),before);
+    let expected=logs(&mut off);
+    let mut on=page("");let before=on.guest_fast_path_stats().unwrap();
+    on.eval(source,"strings.js").unwrap();
+    assert_eq!(logs(&mut on),expected);
+    let after=on.guest_fast_path_stats().unwrap();
+    assert!(after[2]>before[2]+100 && after[3]>before[3]+100,"{before:?} -> {after:?}");
+}
+
+#[cfg(feature = "baseline-jit")]
+#[test]
+fn baseline_string_concat_oom_retains_inputs() {
+    let source=r#"
+        let kept='x'.repeat(4*1024*1024), other=kept, caught=false;
+        try { let impossible=kept+other; } catch(e) { caught=true; }
+        console.log(caught,kept.length,other.length,kept.charCodeAt(0));
+        kept=null;other=null;
+        console.log('still'+' alive');
+    "#;
+    for enabled in [false,true] {
+        let limits=Limits {memory_bytes:64<<20,heap_bytes:8<<20,..Limits::default()};
+        let mut script=Script::new(Document::new(sex_html::parse::parse(""),"http://example.test/",(410,330),clock),limits).unwrap();
+        script.set_jit_enabled(enabled);
+        let before=script.guest_fast_path_stats().unwrap();
+        script.eval(source,"concat-oom.js").unwrap();
+        assert_eq!(logs(&mut script),["0:true 4194304 4194304 120","0:still alive"]);
+        let after=script.guest_fast_path_stats().unwrap();
+        if enabled { assert!(after[2]>before[2]); } else { assert_eq!(after,before); }
+    }
+}

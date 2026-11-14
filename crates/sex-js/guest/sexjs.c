@@ -288,7 +288,7 @@ EXPORT("sx_init") int sx_init(int memory_limit) {
     return 0;
 }
 
-extern uint64_t sexos_own_cache_stats[2];
+extern uint64_t sexos_own_cache_stats[4];
 EXPORT("sx_own_cache_stats") const uint64_t *sx_own_cache_stats(void) { return sexos_own_cache_stats; }
 
 EXPORT("sx_alloc") void *sx_alloc(int n) { return malloc((size_t)n); }

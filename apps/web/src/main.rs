@@ -644,8 +644,8 @@ impl Browser {
         }
         #[cfg(feature = "baseline-jit")]
         if let Doc::Scripted(script) = &mut self.doc {
-            if let Ok([hits, misses]) = script.own_property_cache_stats() {
-                sex_pdx::serial_record!("[web.object-cache.departure] hits={} misses={} url={}", hits, misses, self.url);
+            if let Ok([hits, misses, concat, compare]) = script.guest_fast_path_stats() {
+                sex_pdx::serial_record!("[web.object-cache.departure] hits={} misses={} concat={} compare={} url={}", hits, misses, concat, compare, self.url);
             }
             let s = script.jit_stats();
             sex_pdx::serial_record!("[web.jit.departure] enabled={} compiled={} executed={} considered={} non_scalar={} cache_full={} unsupported={} hottest={} captured={} execution_ns={} url={}", self.jit_enabled as u8, s.compiled, s.executed, s.considered, s.non_scalar, s.cache_full, s.unsupported, s.hottest, s.compiled_captured, script.execution_ns(), self.url);
@@ -854,8 +854,8 @@ impl Browser {
         let _ = script.dispatch("ready");
         #[cfg(feature = "baseline-jit")]
         {
-            if let Ok([hits, misses]) = script.own_property_cache_stats() {
-                sex_pdx::serial_record!("[web.object-cache] hits={} misses={}", hits, misses);
+            if let Ok([hits, misses, concat, compare]) = script.guest_fast_path_stats() {
+                sex_pdx::serial_record!("[web.object-cache] hits={} misses={} concat={} compare={}", hits, misses, concat, compare);
             }
             let stats = script.jit_stats();
             if self.jit_enabled {

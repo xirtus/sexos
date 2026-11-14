@@ -173,11 +173,11 @@ impl<P: Page + 'static> Native<P> {
     #[cfg(feature = "baseline-jit")]
     pub fn jit_stats(&self) -> super::baseline::Stats { unsafe { (*self.ctx).jit.stats } }
     #[cfg(feature = "baseline-jit")]
-    pub fn own_property_cache_stats(&mut self) -> Result<[u64; 2], Error> {
+    pub fn guest_fast_path_stats(&mut self) -> Result<[u64; 4], Error> {
         let at = self.run(|i, o| unsafe { sxn_own_cache_stats(i, o) })? as usize;
         let data = unsafe { memory(&*self.ctx) };
-        let bytes = data.get(at..at.saturating_add(16)).ok_or_else(|| Error::Trapped(String::from("cache stats")))?;
-        Ok([u64::from_le_bytes(bytes[..8].try_into().unwrap()), u64::from_le_bytes(bytes[8..].try_into().unwrap())])
+        let bytes = data.get(at..at.saturating_add(32)).ok_or_else(|| Error::Trapped(String::from("cache stats")))?;
+        Ok(core::array::from_fn(|i| u64::from_le_bytes(bytes[i*8..i*8+8].try_into().unwrap())))
     }
     pub fn page(&self) -> &P { unsafe { &*self.page } }
     pub fn page_mut(&mut self) -> &mut P { unsafe { &mut *self.page } }

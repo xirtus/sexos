@@ -1,6 +1,9 @@
 --- a/quickjs.c
 +++ b/quickjs.c
-@@ -7538,3 +7538,54 @@
+@@ -7535,6 +7535,57 @@
+     return 0;
+ }
+ 
 +/* Weak shape identities are never dereferenced. A current slot must still
 +   have the expected atom and an ordinary data descriptor, even after a shape
 +   mutation or allocator address reuse. Cached reads always use fresh values.
@@ -12,7 +15,7 @@
 +    uint32_t slot;
 +} sexos_own_cache[SEXOS_OWN_CACHE_SIZE];
 +extern int sexos_baseline_jit_enabled;
-+uint64_t sexos_own_cache_stats[2];
++uint64_t sexos_own_cache_stats[4];
 +
 +static inline uint32_t sexos_own_cache_index(JSObject *p, JSAtom atom)
 +{
@@ -55,7 +58,7 @@
  static JSValue JS_GetPropertyInternal(JSContext *ctx, JSValueConst obj,
                                        JSAtom prop, JSValueConst this_obj,
                                        bool throw_ref_error)
-@@ -7576,5 +7627,8 @@
+@@ -7576,7 +7627,10 @@
          if (!p)
              return JS_UNDEFINED;
      } else {
@@ -64,6 +67,8 @@
 +        if (sexos_own_cache_read(p, prop, &cached))
 +            return cached;
      }
+ 
+     for(;;) {
 @@ -7605,6 +7659,8 @@
                      continue;
                  }
@@ -73,11 +78,10 @@
                  return js_dup(pr->u.value);
              }
          }
-@@ -16486,6 +16542,26 @@
-                          argv, flags);
+@@ -16487,6 +16543,26 @@
      }
      b = p->u.func.function_bytecode;
-+
+ 
 +    /* The host admits only side-effect-free bytecode. Capture scalar inputs
 +       afresh on every call; no QuickJS pointer is given to generated code. */
 +    extern int sexos_baseline_jit_enabled;
@@ -97,6 +101,49 @@
 +        if (kind == 1) return JS_NewInt32(caller_ctx, result);
 +        if (kind == 2) return JS_NewBool(caller_ctx, result);
 +    }
- 
++
      if (unlikely(argc < b->arg_count || (flags & JS_CALL_FLAG_COPY_ARGV))) {
          arg_allocated_size = b->arg_count;
+     } else {
+@@ -18194,6 +18270,21 @@
+                     sp[-2] = js_float64(JS_VALUE_GET_FLOAT64(op1) +
+                                         JS_VALUE_GET_FLOAT64(op2));
+                     sp--;
++                } else if (sexos_baseline_jit_enabled &&
++                           JS_VALUE_GET_TAG(op1) == JS_TAG_STRING &&
++                           JS_VALUE_GET_TAG(op2) == JS_TAG_STRING) {
++                    /* The normal allocator consumes both input references,
++                       including on failure. Clear both stack slots on failure
++                       so exception unwinding cannot free either input twice. */
++                    sf->cur_pc = pc;
++                    sexos_own_cache_stats[2]++;
++                    sp[-2] = JS_ConcatString(ctx, op1, op2);
++                    if (JS_IsException(sp[-2])) {
++                        sp[-2] = JS_UNDEFINED;
++                        sp[-1] = JS_UNDEFINED;
++                        goto exception;
++                    }
++                    sp--;
+                 } else {
+                 add_slow:
+                     sf->cur_pc = pc;
+@@ -18617,6 +18708,19 @@
+                 if (likely(JS_VALUE_IS_BOTH_INT(op1, op2))) {           \
+                     sp[-2] = js_bool(JS_VALUE_GET_INT(op1) binary_op JS_VALUE_GET_INT(op2)); \
+                     sp--;                                               \
++                } else if (sexos_baseline_jit_enabled &&                 \
++                           JS_VALUE_GET_TAG(op1) == JS_TAG_STRING &&      \
++                           JS_VALUE_GET_TAG(op2) == JS_TAG_STRING) {      \
++                    JSString *s1 = JS_VALUE_GET_STRING(op1);              \
++                    JSString *s2 = JS_VALUE_GET_STRING(op2);              \
++                    int cmp = (opcode == OP_eq || opcode == OP_neq ||     \
++                               opcode == OP_strict_eq || opcode == OP_strict_neq) \
++                        ? !js_string_eq(s1, s2) : js_string_compare(s1, s2); \
++                    sexos_own_cache_stats[3]++;                           \
++                    JS_FreeValue(ctx, op1);                               \
++                    JS_FreeValue(ctx, op2);                               \
++                    sp[-2] = js_bool(cmp binary_op 0);                    \
++                    sp--;                                                \
+                 } else {                                                \
+                     sf->cur_pc = pc;                                    \
+                     if (slow_call)                                      \

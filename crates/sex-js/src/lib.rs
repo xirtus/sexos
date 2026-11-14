@@ -439,15 +439,21 @@ impl<P: Page + 'static> Script<P> {
     /// Guest own-property cache hits and misses; separate from native JIT code.
     #[cfg(feature = "baseline-jit")]
     pub fn own_property_cache_stats(&mut self) -> Result<[u64; 2], Error> {
+        self.guest_fast_path_stats().map(|s| [s[0], s[1]])
+    }
+    /// Own-property hits/misses, string concatenations and string comparisons.
+    /// All four counters describe guest fast paths, not native-compiled functions.
+    #[cfg(feature = "baseline-jit")]
+    pub fn guest_fast_path_stats(&mut self) -> Result<[u64; 4], Error> {
         match &mut self.vm {
             Vm::Wasmi(w) => {
-                let Some(f) = w.own_cache_stats else { return Ok([0; 2]); };
+                let Some(f) = w.own_cache_stats else { return Ok([0; 4]); };
                 let at = f.call(&mut w.store, ()).map_err(trapped)? as usize;
-                let mut bytes = [0; 16];
+                let mut bytes = [0; 32];
                 w.memory.read(&w.store, at, &mut bytes).map_err(|_| Error::Trapped(String::from("cache stats")))?;
-                Ok([u64::from_le_bytes(bytes[..8].try_into().unwrap()), u64::from_le_bytes(bytes[8..].try_into().unwrap())])
+                Ok(core::array::from_fn(|i| u64::from_le_bytes(bytes[i*8..i*8+8].try_into().unwrap())))
             },
-            #[cfg(sexjs_native)] Vm::Native(v) => v.own_property_cache_stats(),
+            #[cfg(sexjs_native)] Vm::Native(v) => v.guest_fast_path_stats(),
         }
     }
 
