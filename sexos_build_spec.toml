@@ -29,6 +29,7 @@ crates = [
   "sex-kernel",
   "servers/sexbell/Cargo.toml",
   "servers/sexacpi/Cargo.toml",
+  "servers/denim/Cargo.toml",
   "servers/sexdisplay/Cargo.toml",
   "apps/sexdrive/Cargo.toml",
   "servers/silk-shell/Cargo.toml",
@@ -93,7 +94,9 @@ crates = [
   "apps/bodice/Cargo.toml",
   "apps/gossip/Cargo.toml",
   "apps/hookup/Cargo.toml",
-  "apps/rendezvous/Cargo.toml"
+  "apps/rendezvous/Cargo.toml",
+  "servers/sexuvc/Cargo.toml",
+  "apps/flash/Cargo.toml"
 ]
 
 [[stage]]
@@ -205,6 +208,14 @@ action = "cargo_manifest"
 manifest = "servers/sexacpi/Cargo.toml"
 source_artifact = "target/x86_64-sex/release/sexacpi"
 dest_artifact = "iso_root/servers/sexacpi"
+rustflags = ""
+
+[[stage]]
+id = "build_denim"
+action = "cargo_manifest"
+manifest = "servers/denim/Cargo.toml"
+source_artifact = "target/x86_64-sex/release/denim"
+dest_artifact = "iso_root/servers/denim"
 rustflags = ""
 
 [[stage]]
@@ -721,6 +732,24 @@ action = "cargo_manifest"
 manifest = "servers/sext/Cargo.toml"
 source_artifact = "target/x86_64-sex/release/sext"
 dest_artifact = "iso_root/servers/sext"
+
+# SexUVC: userspace USB Video Class webcam driver server
+[[stage]]
+id = "build_sexuvc"
+action = "cargo_manifest"
+target = "x86_64-sex.json"
+manifest = "servers/sexuvc/Cargo.toml"
+source_artifact = "target/x86_64-sex/release/sexuvc"
+dest_artifact = "iso_root/servers/sexuvc"
+
+# Flash: UVC camera capture app (photo and Splicy WebM video)
+[[stage]]
+id = "build_flash"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/flash/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/flash"
+dest_artifact = "iso_root/programs/flash"
 
 [[stage]]
 id = "build_sex_calc"

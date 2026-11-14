@@ -24,10 +24,12 @@ struct App {
     /// Arena pages the run's image spans (none for the BOOT image, which lives in its
     /// own slot), and pages it was given past them since it started.
     image_pages:usize,grown:usize,stack_pages:usize,
+    /// Heap pages Denim holds compressed (their leaves are its marker).
+    out:usize,
 }
 impl App {const fn new()->Self{Self{target:0,task:0,main:0,trampoline:0,pkey:0,surface:0,
     pages:alloc::vec::Vec::new(),count:0,captured:false,ready:false,pool:0,
-    coordinator:0,pager:0,services:[0;5],acked:0,identity:Incarnation::EMPTY,predecessor:0,activated:false,retired:false,reusable:false,boot_task:0,generation:0,rebirthing:false,pristine:0,entry:0,forced:false,stack_top:0,boot_pages:[PrivatePage::EMPTY;64],boot_count:0,arena:0,arena_pages:0,image_pages:0,grown:0,stack_pages:0,last_hint:[0;6],hinted:0,kicked:false}}}
+    coordinator:0,pager:0,services:[0;5],acked:0,identity:Incarnation::EMPTY,predecessor:0,activated:false,retired:false,reusable:false,boot_task:0,generation:0,rebirthing:false,pristine:0,entry:0,forced:false,stack_top:0,boot_pages:[PrivatePage::EMPTY;64],boot_count:0,arena:0,arena_pages:0,image_pages:0,grown:0,stack_pages:0,out:0,last_hint:[0;6],hinted:0,kicked:false}}}
 impl App {
     /// Sets manifest entry `i`, growing the manifest by one when `i` is its end.
     fn put(&mut self,i:usize,page:PrivatePage){
@@ -168,7 +170,7 @@ pub fn reserve_successor_from(predecessor:u32,successor:u32,holder:u32,slot:usiz
         assert!(app.count<=app.boot_pages.len(),"PROGRAM_BOOT_MANIFEST");
         app.boot_pages[..app.count].copy_from_slice(&app.pages[..app.count]);app.boot_count=app.count;
         crate::program_tenancy::boot_pages(app.target,&app.pages[..app.count]);
-        app.image_pages=0;app.grown=0;
+        app.image_pages=0;app.grown=0;app.out=0;
     }
     retire_private_pages(&app.pages[..app.count],
         |leaf|unsafe{core::ptr::read_volatile(leaf as *const u64)},
@@ -446,7 +448,7 @@ fn load_program(app:&mut App,elf:&[u8],task:u32)->Result<(),u64>{
         app.put(count,PrivatePage{va,leaf,expected:frame|7|((app.pkey as u64)<<59)|(1<<63)});count+=1;
     }
     let rsp=app.arena+(app.arena_pages*4096) as u64-16+(app.stack_top&15);
-    app.count=count;app.image_pages=image_pages;app.grown=0;app.stack_pages=stack_pages;
+    app.count=count;app.image_pages=image_pages;app.grown=0;app.out=0;app.stack_pages=stack_pages;
     let entry=app.arena+parsed.entry;
     let target=crate::ipc::DOMAIN_REGISTRY.get(app.target).ok_or(DENIED)?;
     let main=target.main_task.load(Ordering::Acquire);
@@ -523,6 +525,8 @@ pub fn spawn_worker(pd:&ProtectionDomain,entry:u64,stack:u64,arg:u64)->Result<u6
     let apps=apps_lock!().ok_or(RETRY)?;
     let app=apps.iter().find(|a|a.ready&&a.target==pd.id).ok_or(DENIED)?;
     let run=live(app,pd)?;
+    // Denim pages come back only to the main task's faults: bring them all back first.
+    if app.out>0{return Err(RECALL)}
     let id=next_run_task()?;
     crate::program_workers::spawn(pd,run,id,entry,stack,arg)
 }
@@ -552,6 +556,7 @@ pub fn code(pd:&ProtectionDomain,op:u64,va:u64,want:u64)->[u64;3]{
         let at=app.count-app.grown+first as usize;
         let pages=&app.pages[at..at+want];
         if pages.iter().enumerate().any(|(i,p)|p.va!=va+(i*4096) as u64){return Err((c::DENIED,0))}
+        if app.out>0{return Err((RECALL,0))}
         let leaf=|p:&PrivatePage|unsafe{&*(p.leaf as *const core::sync::atomic::AtomicU64)};
         if op==c::SEAL{
             let hhdm=crate::HHDM_REQUEST.response().ok_or((c::DENIED,0))?.offset;
@@ -602,7 +607,7 @@ fn rebirth(apps:&mut [App;MAX_APPS],index:usize,image:Option<usize>,source:Optio
         if let Some(copy)=copy{load_program(app,&copy,task)?;}
         else{
             let count=app.boot_count;app.pages.clear();app.pages.extend_from_slice(&app.boot_pages[..count]);app.count=count;
-            app.image_pages=0;app.grown=0;
+            app.image_pages=0;app.grown=0;app.out=0;
             for (i,page) in app.boot_pages[..count].iter().enumerate(){
                 crate::boot_memory::copy_frame(app.pristine+i as u64*4096,page.expected&PHYSICAL_MASK);
             }
@@ -678,9 +683,11 @@ pub fn retire(pd:&ProtectionDomain,slot:u64)->[u64;4]{
             // lent to this run's arena go back for any program to use.
             for i in 0..app.count{
                 let (va,frame)=(app.pages[i].va,app.pages[i].expected&PHYSICAL_MASK);
+                // A page Denim held has no frame here: it went back when the page went out.
+                if sex_pdx::denim::is_out(app.pages[i].expected){continue}
                 if app.in_arena(va){crate::program_frames::give(frame)}else{crate::boot_memory::zero_frame(frame)}
             }
-            app.count=0;
+            app.count=0;app.out=0;
             // Release the manifest's capacity too: a large run must not pin its heap after it ends.
             app.pages=alloc::vec::Vec::new();
             let target=crate::ipc::DOMAIN_REGISTRY.get(app.target).expect("APP_REGISTRY_CHANGED");
@@ -757,4 +764,80 @@ pub fn poll_exit_notifications(){
             }
         }
     }
+}
+/// Denim's view of a live, single-threaded run (`sex_pdx::denim`). The run must be the
+/// row's current one, as for `grow`; its domain is found by target, not by caller.
+fn denim_run(apps:&mut [App;MAX_APPS],target:u32)->Result<&mut App,u64>{
+    let app=apps.iter_mut().find(|a|a.ready&&a.target==target).ok_or(DENIED)?;
+    let pd=crate::ipc::DOMAIN_REGISTRY.get(target).ok_or(DENIED)?;
+    live(app,pd)?;
+    if app.grown==0{return Err(DENIED)}
+    Ok(app)
+}
+/// The heap page at `va`: its manifest index.
+fn heap_index(app:&App,va:u64)->Result<usize,u64>{
+    let heap=app.arena+(app.image_pages*4096) as u64;
+    let i=(va.checked_sub(heap).ok_or(DENIED)?/4096) as usize;
+    if va&0xFFF!=0||i>=app.grown{return Err(DENIED)}
+    Ok(app.count-app.grown+i)
+}
+fn leaf_of(page:&PrivatePage)->&'static core::sync::atomic::AtomicU64{unsafe{&*(page.leaf as *const core::sync::atomic::AtomicU64)}}
+/// SCAN: accessed bits of up to 64 heap pages from `first`, cleared as they are read.
+/// A stale translation may keep a page looking cold for a while; that only costs a
+/// fault later, never data.
+pub fn denim_scan(target:u32,first:u64)->[u64;5]{
+    let result=(||{
+        let mut apps=apps_lock!().ok_or(RETRY)?;
+        let app=denim_run(&mut apps,target)?;
+        let first=usize::try_from(first).map_err(|_|INVALID)?;
+        if first>=app.grown{return Err(INVALID)}
+        let from=app.count-app.grown+first;
+        let (mut seen,mut held)=(0u64,0u64);
+        for (bit,page) in app.pages[from..app.count].iter().take(64).enumerate(){
+            let v=leaf_of(page).fetch_and(!0x20,Ordering::AcqRel);
+            if sex_pdx::denim::is_out(v){continue}
+            if sex_pdx::denim::heap_data(v,app.pkey){held|=1<<bit}
+            if v&0x20!=0{seen|=1<<bit}
+        }
+        Ok([0,seen,held,app.grown as u64|(app.task as u64)<<32,app.arena+(app.image_pages*4096) as u64])
+    })();result.unwrap_or_else(|e|[e,0,0,0,0])
+}
+/// OUT: the page at `va` goes out. Its bytes land in `window` (a frame of Denim's own
+/// memory) once no core can write the page any more, and its frame goes back.
+pub fn denim_out(target:u32,va:u64,window:u64)->[u64;2]{
+    let result=(||{
+        let mut apps=apps_lock!().ok_or(RETRY)?;
+        let app=denim_run(&mut apps,target)?;
+        // A worker could fault on the marker, and only the main task's faults reach Denim.
+        if !crate::program_workers::all_dead(target){return Err(DENIED)}
+        let at=heap_index(app,va)?;
+        let leaf=leaf_of(&app.pages[at]);
+        let frame=take_out(&mut app.pages[at],target,app.pkey,leaf.load(Ordering::Acquire),
+            |old,new|leaf.compare_exchange(old,new,Ordering::AcqRel,Ordering::Acquire).is_ok())?;
+        // After this no core holds the page: the copy is the page's last contents.
+        crate::smp::tlb::flush(va);
+        crate::boot_memory::copy_frame(frame,window);
+        crate::program_frames::give(frame);
+        app.out+=1;
+        Ok([0,app.out as u64])
+    })();result.unwrap_or_else(|e|[e,0])
+}
+/// IN: the page at `va` comes back with `window`'s bytes, where the run's marker still
+/// is. The caller resumes the faulting task, if any.
+pub fn denim_in(target:u32,va:u64,window:u64)->[u64;2]{
+    let result=(||{
+        let mut apps=apps_lock!().ok_or(RETRY)?;
+        let app=denim_run(&mut apps,target)?;
+        let at=heap_index(app,va)?;
+        let leaf=leaf_of(&app.pages[at]).load(Ordering::Acquire);
+        if leaf!=sex_pdx::denim::out_marker(target)||app.pages[at].expected!=leaf{return Err(DENIED)}
+        let frame=crate::program_frames::take().ok_or(sex_pdx::denim::FULL)?;
+        crate::boot_memory::copy_frame(window,frame);
+        if let Err(e)=bring_in(&mut app.pages[at],target,app.pkey,leaf,frame){crate::program_frames::give(frame);return Err(e)}
+        // The leaf was not present, so no core holds a translation for it.
+        crate::program_tenancy::grant(target,app.pages[at]);
+        x86_64::instructions::tlb::flush(VirtAddr::new(va));
+        app.out-=1;
+        Ok([0,app.out as u64])
+    })();result.unwrap_or_else(|e|[e,0])
 }
