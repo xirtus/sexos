@@ -8,6 +8,15 @@
 use sex_pdx::denim as d;
 use core::sync::atomic::Ordering;
 
+// RECALL travels inside the kernel only; it must never pass for a status programs read.
+const _: () = {
+    use crate::app_resource_state::RECALL;
+    use sex_pdx::{program_code as c, program_threads as t};
+    let statuses = [c::OK, c::INVALID, c::RETRY, c::DENIED, c::BLOCKED, t::FULL, t::AGAIN];
+    let mut i = 0;
+    while i < statuses.len() { assert!(statuses[i] != RECALL); i += 1; }
+};
+
 /// The frame behind a present, writable page of Denim's own memory at `va`.
 fn window(va: u64) -> Result<u64, u64> {
     let denim = crate::ipc::DOMAIN_REGISTRY.get(d::DENIM_PD).ok_or(d::DENIED)?;

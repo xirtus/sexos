@@ -114,7 +114,7 @@ c7325b30965ac39376c5f7d5be7bb63a3b32fb08f5214bdf7e0d437ff42a52d6  crates/sex-pdx
 
 a947e57a405316312fe334d17fdfdb2d3e6b59e708b4d61f416a4db6275ee4cb  kernel/src/app_catalog_state.rs
 
-070686914a0eff779f9b22c7c91a4df1a275484dd79883d9cd7ae5c07e2028fa  kernel/src/app_resource_state.rs
+f98b699261ecf21391da37334f24f050d7863d5e5d3c3b5e9626cd1d2aea21c9  kernel/src/app_resource_state.rs
 
 d3360c6877340c2232cb367160cc6d3e7ecc6408607cf80f5f37f2dcb2299f2d  kernel/src/app_resources.rs
 

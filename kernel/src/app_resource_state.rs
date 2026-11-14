@@ -12,8 +12,9 @@ pub const RETRY:u64=2;
 pub const DENIED:u64=3;
 pub const LIVE:u64=5;
 /// The run has pages Denim holds: they come back first (the caller tells Denim, and
-/// the program sees RETRY).
-pub const RECALL:u64=7;
+/// the program sees RETRY). Kernel-internal: never a status a program sees, so it
+/// must not equal any (program_code::BLOCKED is 7).
+pub const RECALL:u64=0xDE_0001;
 pub const PHYSICAL_MASK:u64=0x000f_ffff_ffff_f000;
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub struct LifecycleGrant {pub target_pd:u32,pub task_id:u32,pub holder_pd:u32,pub rights:u8,pub ack_bit:u8}
