@@ -296,7 +296,7 @@ impl KeyboardOutbox {
         // keys share G, J, P and Q's (KEY_PLAY_PAUSE, KEY_STOP, KEY_NEXT, KEY_PREVIOUS).
         // Right Ctrl and right Alt (AltGr) get the codes USB keyboards give them, so
         // layouts can tell AltGr from Alt whichever keyboard it is.
-        if extended {edge.code=match edge.code {0x20=>0x75,0x2E=>0x76,0x30=>0x77,0x22=>0x78,0x24=>0x7A,0x19=>0x7C,0x10=>0x7F,0x1D=>0x61,0x38=>0x64,c=>c};}
+        if extended {edge.code=match edge.code {0x37=>0x54,0x20=>0x75,0x2E=>0x76,0x30=>0x77,0x22=>0x78,0x24=>0x7A,0x19=>0x7C,0x10=>0x7F,0x1D=>0x61,0x38=>0x64,c=>c};}
         self.push(&[edge])
     }
     /// One USB keyboard snapshot: modifiers plus up to six pressed usages packed one per
@@ -474,7 +474,7 @@ fn hid_to_ps2(hid: u8) -> Option<u8> {
         0x3A..=0x43 => hid - 0x3A + 0x3B, // F1..F10
         0x44 => 0x57, // F11
         0x45 => 0x58, // F12
-        0x46 => 0x37, // Print Screen (E0 37)
+        0x46 => 0x54, // Print Screen (sex_pdx::screenshot::KEY_PRINT)
         0x47 => 0x46, // Scroll Lock
         0x49 => 0x52, // Insert
         0x4A => 0x47, // Home

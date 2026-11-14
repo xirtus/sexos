@@ -4028,6 +4028,95 @@ scroll, Alt+Tab swipe and pinch-zoom events. Polled for now. Details:
 Suspend to idle: the lid or the launcher puts the desktop to sleep, the lid or power button
 wakes it. Firmware low-power-idle `_DSM` (Intel and Microsoft), panel dark, cores prefer
 energy. Details: `LAPTOP_POWER_2026_11_13.md` (Sleep section).
+## Settings store, slice B1: `sex-config` kept by Files (2026-11-13)
+- **What:** new `crates/sex-config`: one typed schema of 18 settings (appearance,
+  desktop, display, keyboard, sound, time, session, setup) with stable numbers, ranges
+  and defaults, and a forgiving TOML-subset text form. Files keeps the live table and
+  writes it to `/system/settings.toml` on every change. The Shell watches it by
+  generation and applies what it owns; wallpaper and night light chosen with Super+B
+  and Super+Shift+N now last across restarts (the "not yet" above). Plan:
+  `DAILY_DRIVER_NEXT_100_SLICES.md` workstream B.
+- **Who may change settings:** the Shell (over its program route), Spindle, and the
+  program Files bound to `/data/settings`, all named by the kernel's caller domain.
+  Everyone with a route to Files may read. Files checks every key and range.
+- **Evidence:** `cargo test -p sex-config` (schema, round trip, hand-edited files,
+  protocol and caller rules), in CI. QEMU gate `scripts/settings_persist_gate.py`
+  (two starts on one disk).
+- **ABI:** new PDX opcode `0x2F0` (`sex_pdx::config::OP`) to Files, reply tag `0xC6`.
+  No syscall, no kernel change.
+
+## Settings program, slices B2/B3 (2026-11-13)
+- **What:** new `apps/settings` (`run settings`): a page per schema section
+  (Appearance, Desktop, Display, Keyboard, Sound, Date & time, Lock & idle, System),
+  type-to-search across all settings, Left/Right to change a value within its range
+  (Shift for bigger steps), saved by Files at once. The Shell applies desktop changes
+  live. `sex_app::settings` gives every program `get`, `set` and `generation`.
+- **Evidence:** `scripts/settings_host_gate.sh` (pages, search, steps, render) in CI;
+  `scripts/settings_persist_gate.py` drives the program over a second start and checks
+  a third.
+- **Not yet:** Display scale, keyboard repeat and volume are stored but not yet acted
+  on by Display, Input and Bell (each owner's slice reads `sex_app::settings` or the
+  Shell's copy). A launcher entry for Settings belongs to the desktop workstream.
+
+## Time zones, slice B4 (2026-11-13)
+- **What:** `sex_time::zone`: 59 zones as compiled Rust data (standard offset, abbreviation,
+  and today's daylight-saving rule: EU, US/Canada, south-east Australia, New Zealand,
+  Chile, Israel, Egypt). Current rules only, not history. The Shell sends the zone from
+  settings to Display (`OP_CLOCK_ZONE` 0x2F1), and the bar shows local time and its
+  abbreviation (`14:05 CEST | 13 NOV`) from the same UTC sample. UTC stays the default.
+- **Evidence:** `cargo test -p sex-time` (Berlin, New York, Sydney, Auckland, Israel,
+  Egypt transitions in 2026, table order equals `sex_config::ZONES`), in
+  `settings_host_gate.sh`; `silkbar_clock_gate.py` source contract updated for the
+  zone-aware caption; `settings_persist_gate.py` picks Europe/London in Settings and
+  checks it after a restart.
+- **Not yet:** 12-hour clock display (stored only); programs' own local time.
+
+## Lock screen and idle, slices B6/B7 (2026-11-13)
+- **What:** Super+Esc locks (the binding the window manager already reserved; Super+L
+  stays focus-right). While locked the Shell keeps every key, click and move, and
+  Display paints only the lock surface over the whole frame: "Locked", one dot per typed
+  character, and why the last try failed. Enter sends the password to Files, which
+  keeps only an Argon2id hash (m=2 MiB, t=4, random salt) in `/system/password` and
+  answers match or not (`sex_config::secret`, opcode 0x2F3, reply tag 0xC7). With no
+  password set, Enter unlocks. Settings sets the password with Ctrl+P (typed twice; the Shell keeps F-keys and Tab, so Settings pages use PgDn/PgUp).
+  Idle: after `session.dim_after_min` the screen dims, after `lock_after_min` it locks
+  (if `lock_on_idle`), after `blank_after_min` it goes black; any input wakes it, and
+  the input that wakes it does nothing else. Idle times default to never, so test runs
+  and unconfigured machines never dim; first-start setup will offer times.
+- **Display:** `OP_SCREEN_STATE` 0x2F2 (`sex_pdx::screen_state`) from the Shell only;
+  dim and off shade the finished frame on its way out, as night light does.
+- **Evidence:** `settings_host_gate.sh` (password set/check/wipe with real Argon2id,
+  state words and shades, Settings password entry); display host gates updated with a
+  lock-surface stub; QEMU gate `scripts/lock_screen_gate.py` in CI (devices job).
+- **Not yet:** inhibiting idle while media plays (needs a Bell hint); a salt from the
+  kernel's held entropy source instead of RDRAND.
+
+## Lock screen opens the encrypted home (2026-11-14)
+- **What:** when the Shell's password CHECK passes (or no lock password is set) and the
+  encrypted `/home` (PR #197) is locked, Files tries the typed password on it. Signing in
+  at the lock screen opens `/home` too, like a login. Only the Shell (PD 3) gets this;
+  the staged bytes are copied once and wiped after.
+- **Protocol:** PUT chunks of `sex_config::secret` are no longer answered. Files keeps one
+  unsent reply per caller, so a reply per chunk overwrote the answer that mattered. The
+  Shell's config watch holds its requests while a password check waits; the lock check
+  gives up after 60 s.
+- **Evidence:** `scripts/files_home_gate.py` boot 2 now locks home and the session, types
+  the password on the lock screen, and reads the home file back.
+
+## First-start setup and default apps, slices B8/B9 (2026-11-13)
+- **B8:** while `setup.done` is off, Settings opens with four questions: keyboard
+  layout, time zone (type to narrow the list), a lock password (may be empty), and
+  idle behaviour (dim/lock/off after 5/10/15 or 10/15/30 minutes, or never). Each answer
+  is an ordinary setting; the last turns `setup.done` on. No user accounts yet, so no
+  user name. Launching Settings by itself on a fresh disk waits for programs shipping
+  with the system (packages workstream); `run settings` starts it today.
+- **B9:** `open.pdf`, `open.image`, `open.video`, `open.audio`, `open.page` (Settings page
+  "Default apps") and `sex_config::kind_of` / `Config::program_for` by extension. Files
+  says which program opens a file and the exact `run` line. Opening it from Files with
+  one key needs a Shell "open with" portal (a program may not start another today):
+  noted for the desktop workstream.
+- **Evidence:** `settings_host_gate.sh` (setup walk, zone filter, empty password,
+  associations); the QEMU gates walk the setup first on their fresh disks.
 ## System monitor, slice J1 (2026-11-13)
 - **What:** `run monitor` opens Monitor: every service and program that has used the
   CPU, busiest first, with its share of one core over the last second, the memory an
@@ -4108,3 +4197,33 @@ energy. Details: `LAPTOP_POWER_2026_11_13.md` (Sleep section).
   master and is not guest latency. Gates should time from guest markers.
 - **Next:** Shapes' start is its own drawing, not loading; prelinking and lazy pages
   are not needed yet for the < 100 ms target.
+
+## Multipass, Shibari and Valentine mail core, slices Y1-Y3 core (2026-11-14)
+- **What:** `crates/shibari` (RAM-only secret keeper), `crates/sex-multipass` (Leeloo
+  Multipass nativized: stamp book, Mastodon OAuth, Matrix SSO, Bluesky PAR+PKCE+DPoP,
+  fediverse bio proof, DAV app-password accounts, act-for-account grants),
+  `crates/sex-mail` (IMAP with IDLE, SMTP, MIME, threading, in-memory mail server),
+  `sex_pdx::accounts` (op 0x2B0). Host gates in CI.
+- **Next:** `servers/multipass` in the boot catalog, Tatami page, Valentine program on
+  Weft. Details: `docs/handoff/VALENTINE_MULTIPASS_2026_11_14.md`.
+## J6b: busy programs no longer stall the desktop (2026-11-14)
+- Cause of the 1.5 s key-to-screen stall under load: a Display repaint (~270 ticks under TCG) that used up its time slice went back to the normal queue behind every busy program, so with four `bench spin` programs on two cores a repaint took 1.1-1.6 s and keys waited behind it.
+- Kernel: a task whose time ran out (`Scheduler::tick_sliced`, timer/preempt path) keeps its interactive class for `SLICED_KEEP`=4 turns, then waits behind the normal queue once (the counter resets whenever a normal task runs); a task that yields still drops to the normal queue. No preempt IPI for a re-queued sliced task. An unbounded first version (16:1) starved Bell/pager/Browser at boot in CI. Bell's boot paging probe now defers up to 128 messages (was 32).
+- scripts/latency_gate.py (TCG, 2 cores, 4 spinners): loaded p99 1518 ms -> 103 ms (idle p99 91 ms); repaints under load 1100-1600 -> ~270 ticks. Default --max-p99-ms lowered 2000 -> 400.
+
+## J2: soak with fault injection (2026-11-14)
+- scripts/soak_gate.py (existing workload: files, downloads, Browser, Jot, Fortune, background records) now also: reads free program memory from Monitor each round (`[monitor.sample] ... free_pages=`) and fails on a fall of more than --leak-pages below the first rounds; times a key (--max-key-ms); reads back every note saved so far; with --inject (SEXOS_CRASH_PROBE=1 ISO) stops Files, Network, Bell, Input, Shell, Display in turn each round. soak.json rewritten every round.
+- Kernel: a service gives up after 8 restarts only if each came within 60 s of the last (CRASH_LOOP_TICKS); before, 8 restarts over any uptime left it down for good.
+- Run: 0.6 h, 2 cores, 20 rounds, every restartable service stopped 3-4 times: all notes intact, free program pages 55913 every round, no failures. 24 h: `--hours 24 --inject` (not in CI).
+
+## Fix: USB Ethernet regression from #196 (2026-11-14)
+- usb_net_gate failed on master ("fetch: could not connect"). With MSI-X wakes, sexusb idled 32 ticks between passes. Two gaps: `sleep_ticks` took interrupts for events the main loop had not drained yet, and the network's USB Ethernet transmit ring has no wake. Now `xhci::SLEPT` makes the next wait 1 tick after any sleep in a pass, and the loop polls every tick while an Ethernet adapter is up (`Usb::ether_active`). usb_net_gate passes; idle QEMU CPU 19%.
+
+## J1b: end a program from the system monitor (2026-11-14)
+- Mesh (apps/monitor): Up/Down choose a line (marked `>`), Delete ends that program; the result shows under the list. Logs `[monitor.choose]`, `[monitor.end]`.
+- New PDX op (ABI addition): `system_stats::OP_END_PROGRAM` 0x3A2 to the Shell (SLOT_SHELL), answers OK / NOT_A_PROGRAM 4 / NOT_FOCUSED 5 / NOT_ENDED 6. Only the focused program may ask; only Program rows can be ended, never services. Shell logs `[shell.program.end]`.
+- Fix: Shell's forced ends (OOM policy and this) now also send a confirmed Close, so a program idle in its event wait wakes, faults on its released pages and is retired (before, an idle program stayed parked).
+- Gate: scripts/program_end_gate.py (Files' line refused with status 4, Fortune ended and retired).
+
+## J8 finding: disk reads are not NVMe-queue bound yet (2026-11-14)
+- `run bench read-large` at 4 cores without PKU now logs `[bench.large.cpu]` (Drive, Files, bench, idle cycles per pass). 16 MiB in 64 KiB requests: ~275M cycles; Files ~100M (~390k per request), Drive ~42M (~165k), rest waiting on the serial request chain. Per-core NVMe queues would not help until requests are pipelined (Files readahead / async Drive replies) and Files' per-request CPU drops; deferred until then.

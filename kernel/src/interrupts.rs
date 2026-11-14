@@ -588,7 +588,7 @@ fn reschedule(stack_frame: &mut InterruptStackFrame) {
 
     crate::scheduler::observe_user_entry();
 
-    let (old_ctx_ptr, next_ctx_ptr) = match sched.tick() {
+    let (old_ctx_ptr, next_ctx_ptr) = match sched.tick_sliced() {
         crate::scheduler::ScheduleDecision::NoRunnable => {
             // A task told to end from another core (a program's worker when its run
             // ends) must not keep running user code just because nothing else is
