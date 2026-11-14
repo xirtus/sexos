@@ -1303,6 +1303,7 @@ pub mod power;
 pub mod program_threads;
 pub mod fs;
 pub mod home_lock;
+pub mod disks;
 pub mod web;
 pub mod accounts;
 pub mod organs;
