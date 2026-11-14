@@ -71,6 +71,7 @@ crates = [
   "apps/tassel/Cargo.toml",
   "apps/abacus/Cargo.toml",
   "apps/velvet/Cargo.toml",
+  "apps/leather-samples/Cargo.toml",
   "apps/stdnet/Cargo.toml",
   "apps/ssh/Cargo.toml",
   "apps/chello/Cargo.toml",
@@ -430,6 +431,39 @@ source_artifact = "target/x86_64-sex-app/release/velvet"
 dest_artifact = "iso_root/programs/velvet"
 
 # Abacus, the calculator: the first program on the Weft toolkit (crates/weft).
+
+[[stage]]
+id = "build_leather_hello"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/leather-samples/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/leather-hello"
+dest_artifact = "iso_root/programs/leather-hello"
+
+[[stage]]
+id = "build_leather_stitch"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/leather-samples/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/leather-stitch"
+dest_artifact = "iso_root/programs/leather-stitch"
+
+[[stage]]
+id = "build_leather_lantern"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/leather-samples/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/leather-lantern"
+dest_artifact = "iso_root/programs/leather-lantern"
+
+[[stage]]
+id = "build_leather_postcard"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/leather-samples/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/leather-postcard"
+dest_artifact = "iso_root/programs/leather-postcard"
+
 [[stage]]
 id = "build_abacus"
 action = "cargo_manifest"

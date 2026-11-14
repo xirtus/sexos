@@ -4257,3 +4257,14 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   Shell; QEMU evidence awaits CI. No guest validation claim based on compilation.
 - Depends on Weft PR #220; no Weft/toolkit/shell or other owned-app files changed.
   Contract, commands and evidence: `docs/handoff/VELVET_2026_11_14.md`.
+
+## ChatGPT round 175: Leather Weft SDK template and runnable samples (2026-11-14)
+- Complete independent hello template in `sdk/leather/hello`; four real Weft sample
+  windows in `apps/leather-samples`: Greeting, Stitch line-oriented UTF-8 editor,
+  Lantern bounded image viewer and Postcard HTTP(S) fetch through the held grant.
+- Copy/build/install tutorial: `docs/sdk/LEATHER_WEFT_TUTORIAL.md`. No custom widgets,
+  kernel changes or changes to Claude-owned apps. Depends on Weft PR #220.
+- Host tests exercise document limits/Unicode and actual Weft controls/painting.
+  All four guest binaries build; `scripts/leather_gate.py` checks greet, edit/save/
+  sync/reload hashes, image decode, network fixture hash, screenshots and clean close.
+  Guest runtime validation remains pending until that QEMU gate passes in CI.

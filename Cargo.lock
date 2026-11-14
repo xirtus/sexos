@@ -2371,6 +2371,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "leather-samples"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-image",
+ "sex-pdx",
+ "weft",
+]
+
+[[package]]
 name = "leb128fmt"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

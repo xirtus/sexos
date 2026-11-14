@@ -44,6 +44,7 @@ members = [
     "crates/weft",
     "apps/abacus",
     "apps/velvet",
+    "apps/leather-samples",
     "apps/tassel",
     "crates/sex-html",
     "crates/sex-js",
