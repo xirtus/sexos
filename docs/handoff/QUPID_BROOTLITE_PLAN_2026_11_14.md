@@ -33,7 +33,7 @@ controls and media keys, and gives Music gapless playback.
 | Swarm search across indexers (Nyaa, Torznab/Jackett/Prowlarr, others), seeders shown, results ranked | None | Q11b: indexer search built in. Torznab/Newznab and any indexer the user adds by URL; open catalogues (Internet Archive, Academic Torrents, distribution trackers) listed out of the box; results ranked by seeders and `episodes::similarity` |
 | Multipass end-to-end encrypted sync of library and progress | None | Q12, later, on sex-crypt |
 | Disposable Kodi Python addon helper | None | Not ported: Linux/Kodi-shaped and heavy. SexOS has Python as a program if wanted later |
-| Twitch ad stripping, ad-free logged-in YouTube via InnerTube | None | Not ported: against those services' terms |
+| Ad blocking: Twitch stitched-ad stripping in HLS playlists, ad-free YouTube playback (InnerTube client, sig/nsig solved in sex-js) | None | Q10b: client-side, on by default with a toggle, as Brave and uBlock Origin do. Filter lists for Kaleidoscope; playlist filtering for Qupid's HLS source |
 
 ## How it fits SexOS
 
