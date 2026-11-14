@@ -199,6 +199,7 @@ class FakeUvcCamera:
                     break
 
             # Streaming loop
+            conn.settimeout(30.0)
             frame_num = 0
             packet_size = 1024
             payload_per_pkt = packet_size - 6
@@ -229,6 +230,8 @@ class FakeUvcCamera:
                 frame_num += 1
                 time.sleep(interval)
 
+        except (BrokenPipeError, ConnectionResetError):
+            pass
         except Exception:
             pass
         finally:

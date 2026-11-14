@@ -76,18 +76,66 @@ pub unsafe extern "C" fn memcmp(a: *const u8, b: *const u8, n: usize) -> i32 {
     0
 }
 
+const MAX_FRAME_DIM: usize = 4096;
+const MAX_RX_BUF: usize = 4 * 1024 * 1024;
+const MAX_VIDEO_BYTES: usize = 64 * 1024 * 1024;
+
+fn valid_uvc_dims(w: usize, h: usize) -> bool {
+    (16..=MAX_FRAME_DIM).contains(&w)
+        && (16..=MAX_FRAME_DIM).contains(&h)
+        && (w & 1) == 0
+        && (h & 1) == 0
+}
+
+fn push_rx_bounded(rx_buf: &mut Vec<u8>, chunk: &[u8]) -> bool {
+    if rx_buf.len().saturating_add(chunk.len()) > MAX_RX_BUF {
+        rx_buf.clear();
+        return false;
+    }
+    if rx_buf.try_reserve(chunk.len()).is_err() {
+        rx_buf.clear();
+        return false;
+    }
+    rx_buf.extend_from_slice(chunk);
+    true
+}
+
+fn pop_wire_msg(rx_buf: &mut Vec<u8>) -> Result<Option<WireMessage>, ()> {
+    match WireMessage::decode_one(rx_buf) {
+        Ok(Some((msg, len))) => {
+            rx_buf.drain(..len);
+            Ok(Some(msg))
+        }
+        Ok(None) => Ok(None),
+        Err(_) => {
+            rx_buf.clear();
+            Err(())
+        }
+    }
+}
+
 fn drain_exporter(exp: &mut Exporter, out: &mut Vec<u8>) {
     loop {
         match exp.output() {
             Ok(Drain::Write(w)) => {
                 let token = w.token;
-                let offset = w.offset as usize;
                 let bytes = w.bytes;
-                if offset + bytes.len() > out.len() {
-                    out.resize(offset + bytes.len(), 0);
+                let len = bytes.len();
+                if let Some(end) = usize::try_from(w.offset).ok().and_then(|off| off.checked_add(len)) {
+                    if end <= MAX_VIDEO_BYTES {
+                        if end > out.len() {
+                            if out.try_reserve(end - out.len()).is_ok() {
+                                out.resize(end, 0);
+                            } else {
+                                let _ = exp.acknowledge(token, len);
+                                continue;
+                            }
+                        }
+                        let off = end - len;
+                        out[off..end].copy_from_slice(bytes);
+                    }
                 }
-                out[offset..offset + bytes.len()].copy_from_slice(bytes);
-                let _ = exp.acknowledge(token, bytes.len());
+                let _ = exp.acknowledge(token, len);
             }
             _ => break,
         }
@@ -141,6 +189,10 @@ fn parse_endpoint(text: &[u8]) -> Option<(IpAddr, u16)> {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
+    sex_app::with_stack(2 << 20, flash_main)
+}
+
+extern "C" fn flash_main() -> ! {
     let mut window = Window::open();
     window.title(b"Flash");
     log!("[flash.ready]");
@@ -204,32 +256,54 @@ pub extern "C" fn _start() -> ! {
     let mut synthetic_cam: Option<SyntheticUvcDevice> = None;
 
     if let (Some((ip, port)), false) = (net_endpoint, force_synthetic) {
-        log!("[flash.connect] target={}:{}", ip, port);
-        match Socket::connect(&ip, port) {
-            Ok(sock) => {
-                let start = sex_pdx::get_ticks();
-                let mut connected = false;
-                while sex_pdx::get_ticks().saturating_sub(start) < 5000 {
-                    match sock.state() {
-                        Ok(State::Open) => {
-                            connected = true;
-                            break;
-                        }
-                        Ok(State::Opening) => {
-                            let _ = sex_pdx::sys_wait_self_ticks(2);
-                        }
-                        _ => break,
-                    }
+        log!("[flash.connect] port={}", port);
+        let up_start = sex_pdx::get_ticks();
+        while sex_pdx::get_ticks().saturating_sub(up_start) < 25_000 {
+            match sex_app::net::direct::up() {
+                Ok(true) => break,
+                Ok(false) => {
+                    let _ = sex_pdx::sys_wait_self_ticks(5);
                 }
-
-                if connected {
-                    socket_conn = Some(sock);
-                } else {
-                    log!("[flash.connect.failed] timeout=1");
+                Err(e) => {
+                    log!("[flash.connect.failed] up_error={:?}", e);
+                    break;
                 }
             }
-            Err(_) => {
-                log!("[flash.connect.failed] error=socket");
+        }
+
+        let conn_start = sex_pdx::get_ticks();
+        while socket_conn.is_none() && sex_pdx::get_ticks().saturating_sub(conn_start) < 15_000 {
+            match Socket::connect(&ip, port) {
+                Ok(sock) => {
+                    let start = sex_pdx::get_ticks();
+                    let mut connected = false;
+                    while sex_pdx::get_ticks().saturating_sub(start) < 15_000 {
+                        match sock.state() {
+                            Ok(State::Open) => {
+                                connected = true;
+                                break;
+                            }
+                            Ok(State::Opening) => {
+                                let _ = sex_pdx::sys_wait_self_ticks(2);
+                            }
+                            _ => break,
+                        }
+                    }
+
+                    if connected {
+                        socket_conn = Some(sock);
+                    } else {
+                        log!("[flash.connect.failed] timeout=1");
+                        break;
+                    }
+                }
+                Err(sex_app::net::Error::Offline) => {
+                    let _ = sex_pdx::sys_wait_self_ticks(5);
+                }
+                Err(e) => {
+                    log!("[flash.connect.failed] error={:?}", e);
+                    break;
+                }
             }
         }
     }
@@ -238,32 +312,46 @@ pub extern "C" fn _start() -> ! {
     if let Some(sock) = socket_conn.as_ref() {
         // Wait for Descriptors
         let mut got_desc = false;
+        let mut wire_ok = true;
         let start = sex_pdx::get_ticks();
-        while !got_desc && sex_pdx::get_ticks().saturating_sub(start) < 10000 {
-            while let Ok(Some((msg, len))) = WireMessage::decode_one(&rx_buf) {
-                rx_buf.drain(..len);
-                if let WireMessage::Descriptors(data) = msg {
-                    if let Ok(dev) = parse_descriptors(&data) {
-                        if let Some(stream) = dev.streaming.first() {
-                            if let Some(fmt) = stream.formats.first() {
-                                frame_format = fmt.kind;
-                                if let Some(fr) = fmt.frames.first() {
-                                    frame_w = fr.width as usize;
-                                    frame_h = fr.height as usize;
-                                    frame_fps = fr.default_fps().max(1);
+        while wire_ok && !got_desc && sex_pdx::get_ticks().saturating_sub(start) < 10000 {
+            loop {
+                match pop_wire_msg(&mut rx_buf) {
+                    Ok(Some(WireMessage::Descriptors(data))) => {
+                        if let Ok(dev) = parse_descriptors(&data) {
+                            if let Some(stream) = dev.streaming.first() {
+                                if let Some(fmt) = stream.formats.first() {
+                                    if let Some(fr) = fmt.frames.first() {
+                                        let w = fr.width as usize;
+                                        let h = fr.height as usize;
+                                        if valid_uvc_dims(w, h) {
+                                            frame_format = fmt.kind;
+                                            frame_w = w;
+                                            frame_h = h;
+                                            frame_fps = fr.default_fps().clamp(1, 120);
+                                            got_desc = true;
+                                        }
+                                    }
                                 }
                             }
                         }
+                        break;
                     }
-                    got_desc = true;
-                    break;
+                    Ok(Some(_)) => {}
+                    Ok(None) => break,
+                    Err(()) => {
+                        wire_ok = false;
+                        break;
+                    }
                 }
             }
-            if !got_desc {
+            if wire_ok && !got_desc {
                 let mut tmp = [0u8; 4096];
                 if let Ok(n) = sock.receive(&mut tmp) {
                     if n > 0 {
-                        rx_buf.extend_from_slice(&tmp[..n]);
+                        if !push_rx_bounded(&mut rx_buf, &tmp[..n]) {
+                            wire_ok = false;
+                        }
                     } else {
                         let _ = sex_pdx::sys_wait_self_ticks(2);
                     }
@@ -271,7 +359,7 @@ pub extern "C" fn _start() -> ! {
             }
         }
 
-        if got_desc {
+        if wire_ok && got_desc {
             let mut ctrl = VideoProbeCommitControl::default();
             ctrl.set_fps(frame_fps);
             let _ = send_wire(sock, &WireMessage::ProbeReq(ctrl));
@@ -279,20 +367,29 @@ pub extern "C" fn _start() -> ! {
             // Wait for ProbeResp
             let start = sex_pdx::get_ticks();
             let mut got_probe_resp = false;
-            while !got_probe_resp && sex_pdx::get_ticks().saturating_sub(start) < 5000 {
-                while let Ok(Some((msg, len))) = WireMessage::decode_one(&rx_buf) {
-                    rx_buf.drain(..len);
-                    if let WireMessage::ProbeResp(resp) = msg {
-                        ctrl = resp;
-                        got_probe_resp = true;
-                        break;
+            while wire_ok && !got_probe_resp && sex_pdx::get_ticks().saturating_sub(start) < 5000 {
+                loop {
+                    match pop_wire_msg(&mut rx_buf) {
+                        Ok(Some(WireMessage::ProbeResp(resp))) => {
+                            ctrl = resp;
+                            got_probe_resp = true;
+                            break;
+                        }
+                        Ok(Some(_)) => {}
+                        Ok(None) => break,
+                        Err(()) => {
+                            wire_ok = false;
+                            break;
+                        }
                     }
                 }
-                if !got_probe_resp {
+                if wire_ok && !got_probe_resp {
                     let mut tmp = [0u8; 1024];
                     if let Ok(n) = sock.receive(&mut tmp) {
                         if n > 0 {
-                            rx_buf.extend_from_slice(&tmp[..n]);
+                            if !push_rx_bounded(&mut rx_buf, &tmp[..n]) {
+                                wire_ok = false;
+                            }
                         } else {
                             let _ = sex_pdx::sys_wait_self_ticks(2);
                         }
@@ -304,19 +401,28 @@ pub extern "C" fn _start() -> ! {
             // Wait for CommitAck
             let start = sex_pdx::get_ticks();
             let mut got_commit_ack = false;
-            while !got_commit_ack && sex_pdx::get_ticks().saturating_sub(start) < 5000 {
-                while let Ok(Some((msg, len))) = WireMessage::decode_one(&rx_buf) {
-                    rx_buf.drain(..len);
-                    if let WireMessage::CommitAck(_) = msg {
-                        got_commit_ack = true;
-                        break;
+            while wire_ok && !got_commit_ack && sex_pdx::get_ticks().saturating_sub(start) < 5000 {
+                loop {
+                    match pop_wire_msg(&mut rx_buf) {
+                        Ok(Some(WireMessage::CommitAck(_))) => {
+                            got_commit_ack = true;
+                            break;
+                        }
+                        Ok(Some(_)) => {}
+                        Ok(None) => break,
+                        Err(()) => {
+                            wire_ok = false;
+                            break;
+                        }
                     }
                 }
-                if !got_commit_ack {
+                if wire_ok && !got_commit_ack {
                     let mut tmp = [0u8; 1024];
                     if let Ok(n) = sock.receive(&mut tmp) {
                         if n > 0 {
-                            rx_buf.extend_from_slice(&tmp[..n]);
+                            if !push_rx_bounded(&mut rx_buf, &tmp[..n]) {
+                                wire_ok = false;
+                            }
                         } else {
                             let _ = sex_pdx::sys_wait_self_ticks(2);
                         }
@@ -324,7 +430,11 @@ pub extern "C" fn _start() -> ! {
                 }
             }
 
-            let _ = send_wire(sock, &WireMessage::StartStream);
+            if wire_ok {
+                let _ = send_wire(sock, &WireMessage::StartStream);
+            } else {
+                socket_conn = None;
+            }
         } else {
             // Fallback to synthetic camera if handshake failed
             socket_conn = None;
@@ -332,16 +442,24 @@ pub extern "C" fn _start() -> ! {
     }
 
     if socket_conn.is_none() {
+        if net_endpoint.is_some() && !force_synthetic {
+            log!("[flash.failed] uvc_tcp_unreachable=1");
+            sex_pdx::task_finish(1);
+        }
         let syn = SyntheticUvcDevice::new(640, 480, 30);
         let desc_bytes = syn.binary_descriptors();
         if let Ok(dev) = parse_descriptors(&desc_bytes) {
             if let Some(stream) = dev.streaming.first() {
                 if let Some(fmt) = stream.formats.first() {
-                    frame_format = fmt.kind;
                     if let Some(fr) = fmt.frames.first() {
-                        frame_w = fr.width as usize;
-                        frame_h = fr.height as usize;
-                        frame_fps = fr.default_fps().max(1);
+                        let w = fr.width as usize;
+                        let h = fr.height as usize;
+                        if valid_uvc_dims(w, h) {
+                            frame_format = fmt.kind;
+                            frame_w = w;
+                            frame_h = h;
+                            frame_fps = fr.default_fps().clamp(1, 120);
+                        }
                     }
                 }
             }
@@ -350,6 +468,10 @@ pub extern "C" fn _start() -> ! {
     }
 
     log!(
+        "[flash.uvc.source] kind={}",
+        if socket_conn.is_some() { "tcp" } else { "synthetic" }
+    );
+    log!(
         "[flash.uvc.negotiated] width={} height={} format={:?}",
         frame_w,
         frame_h,
@@ -357,7 +479,13 @@ pub extern "C" fn _start() -> ! {
     );
 
     let mut assembler = UvcStreamAssembler::new(4 * 1024 * 1024);
-    let mut argb_pixels = vec![0u32; frame_w * frame_h];
+    let mut argb_pixels = Vec::new();
+    let pixel_len = frame_w.saturating_mul(frame_h);
+    if argb_pixels.try_reserve_exact(pixel_len).is_err() {
+        log!("[flash.error] frame_alloc_failed={}x{}", frame_w, frame_h);
+        sex_pdx::task_finish(1);
+    }
+    argb_pixels.resize(pixel_len, 0u32);
 
     let mut frame_count = 0u64;
     let mut photo_taken = false;
@@ -462,20 +590,35 @@ pub extern "C" fn _start() -> ! {
         let mut completed_frame = None;
 
         if let Some(sock) = socket_conn.as_ref() {
-            let mut read_buf = [0u8; 8192];
-            if let Ok(n) = sock.receive(&mut read_buf) {
-                if n > 0 {
-                    rx_buf.extend_from_slice(&read_buf[..n]);
-                }
-            }
-
-            while let Ok(Some((msg, len))) = WireMessage::decode_one(&rx_buf) {
-                rx_buf.drain(..len);
-                if let WireMessage::UvcPacket(pkt) = msg {
-                    if let Ok(Some(cf)) = assembler.push_packet(&pkt) {
-                        completed_frame = Some(cf);
-                        break;
+            let mut read_buf = [0u8; 16384];
+            for _ in 0..96 {
+                loop {
+                    match pop_wire_msg(&mut rx_buf) {
+                        Ok(Some(WireMessage::UvcPacket(pkt))) => {
+                            if let Ok(Some(cf)) = assembler.push_packet(&pkt) {
+                                completed_frame = Some(cf);
+                                break;
+                            }
+                        }
+                        Ok(Some(_)) => {}
+                        Ok(None) => break,
+                        Err(()) => {
+                            running = false;
+                            break;
+                        }
                     }
+                }
+                if completed_frame.is_some() || !running {
+                    break;
+                }
+                match sock.receive(&mut read_buf) {
+                    Ok(n) if n > 0 => {
+                        if !push_rx_bounded(&mut rx_buf, &read_buf[..n]) {
+                            running = false;
+                            break;
+                        }
+                    }
+                    _ => break,
                 }
             }
         } else if let Some(syn) = synthetic_cam.as_mut() {
@@ -569,5 +712,6 @@ pub extern "C" fn _start() -> ! {
         );
     }
 
+    log!("[flash.done] total_frames={}", frame_count);
     sex_pdx::task_finish(0)
 }
