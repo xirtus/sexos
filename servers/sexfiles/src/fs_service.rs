@@ -359,7 +359,7 @@ pub fn poll_replies() {
 const PROGRAM_ROWS: usize = sex_pdx::app_catalog::count(sex_pdx::app_catalog::App::Program);
 const ROOT_MAX: usize = 64;
 #[derive(Clone, Copy)]
-struct Binding { task: u32, root: [u8; ROOT_MAX], len: usize, args: [u8; w::ARGS_MAX], args_len: usize, picked: [u8; PICKED_MAX], picked_len: usize }
+struct Binding { task: u32, root: [u8; ROOT_MAX], len: usize, system: bool, args: [u8; w::ARGS_MAX], args_len: usize, picked: [u8; PICKED_MAX], picked_len: usize }
 /// Paths the person chose for a run in the picker, space separated, as `@/path` tokens.
 const PICKED_MAX: usize = 1024;
 /// Constructor only, never admission: the provider installs this after an exact
@@ -369,7 +369,7 @@ fn recording_binding(task:u32)->Option<Binding>{
     const _:()=assert!(sex_pdx::desktop_recording::ROOT.len()<=ROOT_MAX);
     let mut root=[0;ROOT_MAX];let length=sex_pdx::desktop_recording::ROOT.len();
     root[..length].copy_from_slice(sex_pdx::desktop_recording::ROOT);
-    Some(Binding{task,root,len:length,args:[0;w::ARGS_MAX],args_len:0,picked:[0;PICKED_MAX],picked_len:0})
+    Some(Binding{task,root,len:length,system:false,args:[0;w::ARGS_MAX],args_len:0,picked:[0;PICKED_MAX],picked_len:0})
 }
 
 pub(super) fn prepare_recording_root()->sex_pdx::desktop_recording::BindStatus {
@@ -408,6 +408,9 @@ static mut PICK_TICKET: u32 = 0;
 static mut BINDINGS: [Option<Binding>; PROGRAM_ROWS] = [None; PROGRAM_ROWS];
 /// The last program file read, by its base name, waiting for Shell to say where it runs.
 static mut LOADED: ([u8; 32], usize) = ([0; 32], 0);
+/// The program last read came from the system: the disk program store or `/bin/NAME`,
+/// never a file elsewhere that merely has the same base name.
+static mut LOADED_SYSTEM: bool = false;
 /// The arguments typed with the program last read.
 static mut LOADED_ARGS: ([u8; w::ARGS_MAX], usize) = ([0; w::ARGS_MAX], 0);
 /// The target of program row `k`.
@@ -418,6 +421,13 @@ fn program_index(target: u32) -> Option<usize> {
     sex_pdx::app_catalog::INCARNATIONS.iter().filter(|i| i.app == sex_pdx::app_catalog::App::Program).position(|i| i.target == target)
 }
 pub fn loaded(path: &[u8]) {
+    let system = path.strip_prefix(sex_pdx::program_store::BIN).is_some_and(|n| !n.is_empty() && !n.contains(&b'/'));
+    loaded_from(path, system);
+}
+/// The disk program store's own load: always a system program.
+pub fn loaded_from_store(name: &[u8]) { loaded_from(name, true); }
+fn loaded_from(path: &[u8], system: bool) {
+    unsafe { *core::ptr::addr_of_mut!(LOADED_SYSTEM) = system; }
     let name = path.rsplit(|b| *b == b'/').next().unwrap_or(path);
     let loaded = unsafe { &mut *core::ptr::addr_of_mut!(LOADED) };
     let n = name.len().min(loaded.0.len());
@@ -454,7 +464,8 @@ pub fn bind(target: u32, task: u32) {
     let args = unsafe { &mut *core::ptr::addr_of_mut!(LOADED_ARGS) };
     if let Some(cache) = client_cache(w::PROGRAM_INDEX_BASE + index) { w::stat_cache::forget(cache, None); }
     unsafe { (*core::ptr::addr_of_mut!(OFFERS))[index] = None; }
-    bindings[index] = Some(Binding { task, root, len, args: args.0, args_len: core::mem::take(&mut args.1), picked: [0; PICKED_MAX], picked_len: 0 });
+    let system = unsafe { core::mem::take(&mut *core::ptr::addr_of_mut!(LOADED_SYSTEM)) };
+    bindings[index] = Some(Binding { task, root, len, system, args: args.0, args_len: core::mem::take(&mut args.1), picked: [0; PICKED_MAX], picked_len: 0 });
     let launcher = unsafe { core::mem::take(&mut *core::ptr::addr_of_mut!(LOADED_LAUNCHER)) };
     // A pipe run's working folder: its starter held it (SET_CWD checked), and it is the
     // run's own from now on, as a path the person picked for it would be.
@@ -676,7 +687,7 @@ fn PROGRAM_INDEX_BASE_PLUS(k: usize) -> u64 { w::PROVIDER_SLOT_BASE + (w::PROGRA
 /// `/bin/settings` (which no package may install, see `packages::RESERVED`). The same
 /// identity `program_is` gives settings and lock-password writes.
 fn is_settings(binding: &Binding) -> bool {
-    binding.root[..binding.len].strip_prefix(sex_pdx::program_store::DATA) == Some(b"settings")
+    binding.system && binding.root[..binding.len].strip_prefix(sex_pdx::program_store::DATA) == Some(b"settings")
 }
 fn holds_packages(binding: &Binding) -> bool {
     binding.args[..binding.args_len].split(|b| *b == b' ').any(|t| t == sex_pdx::package::GRANT_TOKEN)
@@ -1311,12 +1322,13 @@ fn prepare(fs: &mut Fs<'static, Disk>, r: w::Request, path: &[u8], data: &mut [u
     }
 }
 /// True when `caller` is a live program run from `/data/NAME`: the folder Files
-/// bound it to, never a name the program claims.
+/// bound it to, never a name the program claims; and the program came from the system
+/// (the disk program store or `/bin/NAME`), not another file with the same base name.
 pub fn program_is(caller: u32, name: &[u8]) -> bool {
     let Some(k) = program_index(caller) else { return false };
     let Some(b) = (unsafe { (*core::ptr::addr_of!(BINDINGS))[k] }) else { return false };
     let data = sex_pdx::program_store::DATA;
-    program_live(caller, b.task) && b.root[..b.len].strip_prefix(data) == Some(name)
+    program_live(caller, b.task) && b.system && b.root[..b.len].strip_prefix(data) == Some(name)
 }
 /// Files' own small files (settings): read whole, at most `out.len()` bytes.
 pub fn read_own(path: &[u8], out: &mut [u8]) -> Option<usize> {

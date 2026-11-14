@@ -821,6 +821,10 @@ jobs:
       run: |
         truncate -s 1G "$RUNNER_TEMP/blank-packages.img"
         python3 scripts/package_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-packages.img" --out "$RUNNER_TEMP/sexos-runtime/packages"
+    - name: Settings Privacy page revokes a grant; the next connect is refused
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/blank-privacy.img"
+        python3 scripts/privacy_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-privacy.img" --out "$RUNNER_TEMP/sexos-runtime/privacy"
     - name: ripgrep and fd
       run: python3 scripts/rg_fd_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/rg-fd"
     - name: bat
