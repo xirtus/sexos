@@ -4816,64 +4816,64 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   pass (sets overlap). Original failed captures also pass independent diagnostic
   replay under the corrected predicates, without relabeling the failed runs.
 - The optional passive observer independently qualifies on the unchanged actual
-  HTTPS trace: sampled Net expiry at tick709, then first-epoch Ring3 syscall count
-  483 at774 to695 at1041. This is later continuation, not an exact two-tick envelope
+  HTTPS trace: sampled Net expiry at tick 709, then first-epoch Ring3 syscall count
+  483 at 774 to 695 at 1041. This is later continuation, not an exact two-tick envelope
   or exclusive timer wake cause. The original HTTPS gate passed its existing
   return-envelope proof; both evidence classes remain separately reported.
 - See CANONICAL_STRICT_RUNTIME_V5_2026_11_14.json for result and binding digests.
   Normal v4's nine app proofs remain independently qualified; they are not carried
   wholesale to v5 because normal Shell's ELF changed. Only our PR244 has merged.
 - Moan now has parallel workstation/MIDI and CLAP/VST3 work. ArtCraft SoundCraft is
-  the confirmed reference alongside Audacity4, Logic and released Ableton12.
+  the confirmed reference alongside Audacity 4, Logic and released Ableton 12.
   Candidate additions require their own audible-signal/reboot/crash gates and
   screenshots. Crash containment alone is not hostile plugin isolation. Separate
   minimal exact-child-task exit authentication is under host qualification.
-- User coordination remains: keep author292/293/295 separate, never push their
-  branches, preserve author292's exact daily gate after landing, remove our Fuzz
-  workaround and superseded Term oracle. Actual293 has landed;292/295 remain open.
+- User coordination remains: keep author 292/293/295 separate, never push their
+  branches, preserve author 292's exact daily gate after landing, remove our Fuzz
+  workaround and superseded Term oracle. Actual 293 has landed; 292/295 remain open.
   All new merges require every exact-head leaf plus final aggregator green.
 
 
-## ChatGPT round194: exact child exits and Moan workspaces (2026-11-15)
+## ChatGPT round 194: exact child exits and Moan workspaces (2026-11-15)
 
-- Imported separate8b070e96 as0b9364569: OP_EXIT status mutation now matches both
+- Imported separate 8b070e96 as 0b9364569: OP_EXIT status mutation now matches both
   kernel-stamped child domain and task. The compiled production predicate rejects
   an old-task exit for a reused domain. No kernel change. Updated only the exact
-  reviewed passive-observer Shell pin; all85 ABI pins remain exact.
-- Full root host suite passes1,311tests in167.161s. Canonical PIC/PIE guest Shell
+  reviewed passive-observer Shell pin; all 85 ABI pins remain exact.
+- Full root host suite passes 1,311 tests in 167.161 s. Canonical PIC/PIE guest Shell
   compiles and passes unchanged byte scan. A default-flags preliminary compile is
   preserved separately and is not represented as the canonical artifact.
-- New normal production c327f9ec6 passes60s GREEN_MASTER and freezes all1,848
-  production files. ISO73b662002041b1acf8ec42249d1fd8e7220bdba96500257f02cdbcf82da02afc;
-  Shellfcd4f73d6228a4adeb0e197e1e4537a0b3eb92e1ab10eb5d37417cf1ffb44294.
+- New normal production c327f9ec6 passes a 60 s GREEN_MASTER gate and freezes all 1,848
+  production files. ISO 73b662002041b1acf8ec42249d1fd8e7220bdba96500257f02cdbcf82da02afc;
+  Shell fcd4f73d6228a4adeb0e197e1e4537a0b3eb92e1ab10eb5d37417cf1ffb44294.
   This remains the ba8 kernel cohort, without later master/Denim imports.
-- Actual combined CLAP/VST3 gate passes on that image with preserved924844ee1
+- Actual combined CLAP/VST3 gate passes on that image with preserved 924844ee1
   helper binaries: four processed jobs, actual invalid-opcode child crash,
   timeout/kill, new-task reuse, responsive parent and clean parent retirement.
-  Root independently verifies22 raw artifact digests and the image. See
+  Root independently verifies 22 raw artifact digests and the image. See
   LAUNCH_EXIT_RUNTIME_V6_2026_11_15.json. This qualifies valid exits; no queued
   stale-task guest injection, hostile sandbox or integrated Moan UI is claimed.
 - Reviewer caught a final-block CLAP restart request incorrectly returning audio;
-  separate77d2efff adds post-callback/process rejection and atomic callback flags.
-  Also imported4954023f asd66866fca: Window polling preserves exact3/3 launch
+  separate 77d2efff adds post-callback/process rejection and atomic callback flags.
+  Also imported 4954023f as d66866fca: Window polling preserves exact 3/3 launch
   events instead of dropping them. Twelve classifier/exit/privacy controls and
   seventeen autofill tests pass. Corrected helpers need a fresh source cohort;
   those fixes are not assigned to the older passing binaries.
 - User supplied Logic arrangement/mixer/sampler/drum references and explicitly
   requested Step Sequencer and same-project workspaces. See
   MOAN_WORKSPACES_TARGET_2026_11_15.md. Agents are replacing the stacked-form UI
-  with compact Arrange/Mix/PianoRoll/StepSequencer/Instruments views, real data,
+  with compact Arrange/Mix/Piano Roll/Step Sequencer/Instruments views, real data,
   shared transport/selection/undo and docked/floating panels. MIDI gate exposed
   real audio underruns; feeder/consumed-clock corrections precede new screenshots.
-- Actual author245 landed23090514, including the exact author292 Daily script.
-  Both IPv6 halves pass78 Engine tests on the local actual-master reconciliation.
-  Root independently recomputes the complete139-to140-file kernel trees and reads
-  all8 actual changes; no kernel edits are authored. A separate raw-only Denim
+- Actual author 245 landed 23090514, including the exact author 292 Daily script.
+  Both IPv6 halves pass 78 Engine tests on the local actual-master reconciliation.
+  Root independently recomputes the complete 139 to 140 file kernel trees and reads
+  all 8 actual changes; no kernel edits are authored. A separate raw-only Denim
   source/role auxiliary profile is reviewed on that master cohort, never combined
   speculatively with root privacy/Shell changes or old runtime evidence.
-- PR296 a68/run43641321530 reaches16success but service_custody fails: isolated
+- PR 296 a68/run 43641321530 reaches 16 successes but service_custody fails: isolated
   transport testing loses the workspace smoltcp patch and resolves upstream,
   correctly failing custody. Agent is repairing isolated dependency custody with
-  the exact reviewed134file/2changed-file vendor selection. Original failed job
+  the exact reviewed 134 file / two changed file vendor selection. Original failed job
   and truth artifacts preserved. No merge; all exact-head leaves and aggregator
   remain required, with author branches kept separate.

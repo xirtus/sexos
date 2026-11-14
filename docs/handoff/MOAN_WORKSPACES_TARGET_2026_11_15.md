@@ -1,6 +1,6 @@
 # Moan workspace target
 
-User direction,15 November2026: the four supplied Logic screenshots are the
+User direction, 15 November 2026: the four supplied Logic screenshots are the
 visual target. Moan should be GarageBand-simple with Logic depth, using Weft.
 The source images are retained locally in target/moan-user-ui-references-2026-11-15
 with hashes; they are internal references, not shipped artwork.
@@ -19,13 +19,13 @@ Piano Roll and Step Sequencer use the lower editor area. Instrument, sampler,
 drum-pad and plugin controls open as focused editors within the same workspace.
 Only implemented, data-backed controls and actual tracks are shown.
 
-Step Sequencer edits the same persisted MIDI notes: an initial16step grid,
+Step Sequencer edits the same persisted MIDI notes: an initial 16 step grid,
 note/drum rows, step toggles, playback position and real velocity/gate controls.
 Frame-to-beat/step conversion uses actual BPM without accumulated rounding drift.
 Tempo changes must affect rendered timing before being exposed as functional.
 Note limits stay bounded; future repeat/skip/direction/randomization controls
 require their own implementation and tests. Live Loops-style clip/scene launch,
-shown in reference4, is a separate future performance workspace.
+shown in reference 4, is a separate future performance workspace.
 
 Each step needs a real QEMU gate and source/binary-bound screenshots. Verify
 captured audio continuity, pitch/velocity/onset timing, actual consumed playhead,
