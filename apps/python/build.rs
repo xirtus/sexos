@@ -49,15 +49,42 @@ const MODULES: &[&str] = &[
     "symtablemodule", "_opcode", "mathmodule", "cmathmodule", "_struct", "_randommodule", "_json",
     "_bisectmodule", "_heapqmodule", "binascii", "arraymodule", "_datetimemodule",
     "_contextvarsmodule", "_queuemodule", "_statisticsmodule", "sha2module", "_hacl/Hacl_Hash_SHA2",
+    // hashlib's built-in hashes (no OpenSSL), zlib, select and socket.
+    "md5module", "_hacl/Hacl_Hash_MD5", "sha1module", "_hacl/Hacl_Hash_SHA1", "sha3module",
+    "_hacl/Hacl_Hash_SHA3", "_blake2/blake2module", "_blake2/blake2b_impl", "_blake2/blake2s_impl",
+    "zlibmodule", "selectmodule", "socketmodule", "unicodedata",
+    "_sqlite/blob", "_sqlite/connection", "_sqlite/cursor", "_sqlite/microprotocols",
+    "_sqlite/module", "_sqlite/prepare_protocol", "_sqlite/row", "_sqlite/statement", "_sqlite/util",
+];
+/// SQLite 3.53.4 (vendor/sqlite-3.53.4, public domain) on port/sqlite_vfs.c's file layer.
+const SQLITE_FLAGS: &[&str] = &[
+    "-DSQLITE_OS_OTHER=1", "-DSQLITE_OMIT_WAL", "-DSQLITE_OMIT_LOAD_EXTENSION", "-DSQLITE_THREADSAFE=0",
+    "-DSQLITE_TEMP_STORE=2", "-DSQLITE_DEFAULT_MEMSTATUS=0",
+    "-DSQLITE_MAX_MMAP_SIZE=0", "-DSQLITE_OMIT_DEPRECATED", "-DSQLITE_ENABLE_FTS5", "-DSQLITE_ENABLE_MATH_FUNCTIONS",
+];
+/// zlib 1.3.1 (vendor/zlib-1.3.1, zlib license) for the zlib module.
+const ZLIB: &[&str] = &[
+    "adler32", "compress", "crc32", "deflate", "infback", "inffast", "inflate", "inftrees", "trees",
+    "uncompr", "zutil",
 ];
 
 fn main() {
     println!("cargo:rustc-link-arg-bins=-zstack-size=8388608");
+    // The loader refuses code holding WRPKRU/XRSTOR bytes, and a RIP-relative
+    // displacement can hold them by chance; the build then links again with sections
+    // in another order (SEX_LAYOUT_SEED, scripts/sexos_build_trace.sh).
+    println!("cargo:rerun-if-env-changed=SEX_LAYOUT_SEED");
+    if let Some(seed) = env::var("SEX_LAYOUT_SEED").ok().filter(|s| !s.is_empty() && s != "0") {
+        println!("cargo:rustc-link-arg-bins=--shuffle-sections=.rodata*={seed}");
+        println!("cargo:rustc-link-arg-bins=--shuffle-sections=.text*={seed}");
+    }
     let dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let src = dir.join("../../vendor/cpython-3.13.18");
+    let zlib = dir.join("../../vendor/zlib-1.3.1");
+    let sqlite = dir.join("../../vendor/sqlite-3.53.4");
     let port = dir.join("port");
     let frozen = dir.join("frozen");
-    for d in [&src, &port, &frozen] {
+    for d in [&src, &zlib, &sqlite, &port, &frozen] {
         println!("cargo:rerun-if-changed={}", d.display());
     }
     println!("cargo:rerun-if-env-changed=MUSL_INCLUDE");
@@ -87,6 +114,10 @@ fn main() {
         let flags: &[&str] = if matches!(*n, "main" | "gcmodule" | "getbuildinfo") { CORE } else { BUILTIN };
         jobs.push((src.join(format!("Modules/{n}.c")), flags));
     }
+    for n in ZLIB { jobs.push((zlib.join(format!("{n}.c")), &[])); }
+    jobs.push((sqlite.join("sqlite3.c"), SQLITE_FLAGS));
+    jobs.push((port.join("sqlite_vfs.c"), SQLITE_FLAGS));
+    jobs.push((port.join("sextlsmodule.c"), BUILTIN));
     jobs.push((port.join("config.c"), CORE));
     jobs.push((port.join("sexos_main.c"), CORE));
     jobs.push((frozen_c, CORE));
@@ -101,7 +132,7 @@ fn main() {
             s.spawn(|| loop {
                 let i = { let mut n = next.lock().unwrap(); let i = *n; *n += 1; i };
                 let Some((file, flags)) = jobs.get(i) else { break };
-                let name = file.strip_prefix(&src).or_else(|_| file.strip_prefix(&port)).or_else(|_| file.strip_prefix(&out)).unwrap();
+                let name = file.strip_prefix(&src).or_else(|_| file.strip_prefix(&port)).or_else(|_| file.strip_prefix(&zlib)).or_else(|_| file.strip_prefix(&sqlite)).or_else(|_| file.strip_prefix(&out)).unwrap();
                 let obj = out.join(name.to_string_lossy().replace(['/', '.'], "_") + ".o");
                 let output = Command::new("clang")
                     .args(["--target=x86_64-unknown-none-elf", "-nostdinc", "-std=gnu11", "-O2", "-fPIC", "-ffunction-sections", "-fdata-sections"])
@@ -117,6 +148,8 @@ fn main() {
                     .arg("-I").arg(src.join("Modules/_hacl/include"))
                     .arg("-I").arg(src.join("Modules/_hacl"))
                     .arg("-I").arg(src.join("Python"))
+                    .arg("-I").arg(&zlib)
+                    .arg("-I").arg(&sqlite)
                     .args(*flags)
                     .arg("-c").arg(file).arg("-o").arg(&obj)
                     .output().expect("clang");

@@ -1,0 +1,8 @@
+[package]
+name = "sex-calendar"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Calendar model for SexOS: civil dates, ISO weeks, month grids, recurring events, a line-based event file and an iCalendar (.ics) importer"
+
+[dependencies]
