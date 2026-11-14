@@ -104,7 +104,7 @@ def main():
   step(lambda:q.key('ret'),r'\[files.app.list\] dir=/media/LOOM/docs count=3\b')
   cs('c');time.sleep(.5);keys('/media/LOOM/docs (extracted)/docs')
   m=step(lambda:q.key('ret'),r'\[files.app.compare\] here=/media/LOOM/docs there=/media/LOOM/docs \(extracted\)/docs rows=(\d+) same=(\d+) differs=(\d+) here_only=(\d+) there_only=(\d+)',120)
-  assert m[1]=='4' and m[2]=='4' and m[3:]==('0','0','0'),m[0]
+  assert m.groups()==('4','4','0','0','0'),m[0]
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'compare.ppm')})
   # 3. A tar.gz made by another program browses too (the last row of the top).
   step(lambda:q.key('backspace'),r'\[files.app.list\] dir=/media/LOOM count=5\b')
