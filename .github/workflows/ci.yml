@@ -57,6 +57,8 @@ jobs:
       run: cargo test --locked -p sex-html
     - name: Signed package format and store catalog
       run: cargo test --locked -p sex-pkg
+    - name: Gingham workbook engine and office painting (host)
+      run: cargo test --locked -p gingham -p sex-office
     - name: Disk layouts (GPT, FAT, install beside other systems)
       run: cargo test --locked -p sex-disk --lib
     - name: Keyboard layouts, dead keys and Compose
@@ -166,6 +168,8 @@ jobs:
       run: |
         truncate -s 1G "$RUNNER_TEMP/blank-programs.img"
         python3 scripts/program_std_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/programs-std"
+    - name: Gingham spreadsheet opens, edits, saves and reopens xlsx
+      run: python3 scripts/program_gingham_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/gingham"
     - name: Lua 5.4 interpreter
       run: python3 scripts/lua_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/lua"
     - name: Signed packages, install service and first-run grant question

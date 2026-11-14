@@ -95,6 +95,8 @@ members = [
     "crates/sex-sdl",
     "apps/sdltest",
     "apps/driftspark",
+    "apps/gingham",
+    "crates/sex-office",
 ]
 [workspace.package]
 license = "GPL-3.0-only"
@@ -125,6 +127,32 @@ codegen-units = 1
 opt-level = "z"
 codegen-units = 1
 strip = true
+# Gingham carries GridCraft's whole engine: size-optimised and stripped, it stays well
+# under the 16 MiB program limit.
+[profile.release.package.gingham]
+strip = true
+[profile.release.package.gridcraft-engine]
+opt-level = "s"
+[profile.release.package.gridcraft-functions]
+opt-level = "s"
+[profile.release.package.gridcraft-calc]
+opt-level = "s"
+[profile.release.package.gridcraft-xlsx]
+opt-level = "s"
+[profile.release.package.gridcraft-chart]
+opt-level = "s"
+[profile.release.package.gridcraft-pdf]
+opt-level = "s"
+[profile.release.package.gridcraft-formula]
+opt-level = "s"
+[profile.release.package.gridcraft-model]
+opt-level = "s"
+[profile.release.package.gridcraft-numfmt]
+opt-level = "s"
+[profile.release.package.gridcraft-math]
+opt-level = "s"
+[profile.release.package.gridcraft-core]
+opt-level = "s"
 [profile.release.package.web]
 opt-level = 3
 codegen-units = 1
