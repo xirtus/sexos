@@ -48,6 +48,12 @@ pub enum Event {
     /// The mouse moved, clicked or scrolled over the window's pixel area (positions in
     /// pixels from its top-left; see [`sex_pdx::app_pointer`]).
     Pointer(sex_pdx::app_pointer::Pointer),
+    /// Something was dropped on the window at (x, y) of its pixel area: a file (`kind`
+    /// [`sex_pdx::dnd::FILE`], an absolute path this run may now use) or text
+    /// ([`sex_pdx::dnd::TEXT`]). [`dnd::dropped`] holds the bytes until the next drop.
+    Drop { kind: u8, x: i16, y: i16 },
+    /// A drag this window started is over: `target` is the row that took it, 0 if none.
+    DragEnded { target: u32 },
 }
 
 /// Retries only while the service queue is full; anything else ends the program.
@@ -139,6 +145,7 @@ impl Window {
         if m.type_id == 0x202 {
             if let Some(p) = sex_pdx::app_pointer::Pointer::decode(m.arg0, m.arg1, m.arg2) { return Some(Event::Pointer(p)); }
         }
+        if m.type_id == sex_pdx::dnd::OP_DROP { return dnd::receive(m); }
         if lifecycle::close_requested(m.type_id, m.caller_pd, [m.arg0, m.arg1, m.arg2], self.target, self.task) { return Some(Event::Close); }
         if m.type_id == 0x202 { return Key::decode(m.arg0, m.arg1, m.arg2).map(Event::Key); }
         None
@@ -187,6 +194,65 @@ impl Window {
 /// Starting other programs, and opening files in the program for their type. A run
 /// started here gets only grants this run holds; Shell reports it started, was refused,
 /// or ended (see [`sex_pdx::launch`]).
+/// Drag and drop between programs ([`sex_pdx::dnd`]).
+pub mod dnd {
+    use super::{files, Event, Window};
+    use sex_pdx::dnd as d;
+    static mut INCOMING: Option<d::Payload> = None;
+    static mut DROPPED: d::Payload = d::Payload::new(0, 0, 0);
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum Error { Files(files::Error), TooLong, Shell }
+    /// The bytes of the last [`Event::Drop`].
+    pub fn dropped() -> &'static [u8] { unsafe { (*core::ptr::addr_of!(DROPPED)).as_bytes() } }
+    pub(crate) fn receive(m: &sex_pdx::PdxMessage) -> Option<Event> {
+        let incoming = unsafe { &mut *core::ptr::addr_of_mut!(INCOMING) };
+        match d::Message::decode([m.arg0, m.arg1, m.arg2])? {
+            d::Message::Begin { kind, len, extra } => { *incoming = Some(d::Payload::new(kind, len, extra)); None }
+            d::Message::Data { offset, count, bytes } => {
+                if let Some(p) = incoming.as_mut() { if !p.take(offset, count, &bytes) { *incoming = None; } }
+                None
+            }
+            d::Message::End => {
+                let p = incoming.take().filter(|p| p.valid())?;
+                let (x, y) = d::position(p.extra);
+                unsafe { *core::ptr::addr_of_mut!(DROPPED) = p; }
+                Some(Event::Drop { kind: p.kind, x, y })
+            }
+            d::Message::Done { target } => Some(Event::DragEnded { target }),
+            d::Message::Cancel => { *incoming = None; None }
+        }
+    }
+    fn send(message: d::Message) -> Result<(), Error> {
+        let [a, b, c] = message.wire();
+        for _ in 0..200 {
+            match sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL, d::OP_DRAG, a, b, c) {
+                Ok(_) => return Ok(()),
+                Err(sex_pdx::ERR_SERVICE_NOT_READY) => sex_pdx::sys_yield(),
+                Err(_) => return Err(Error::Shell),
+            }
+        }
+        Err(Error::Shell)
+    }
+    fn start(kind: u8, payload: &[u8], ticket: u64) -> Result<(), Error> {
+        if payload.is_empty() || payload.len() > d::MAX_BYTES { return Err(Error::TooLong); }
+        send(d::Message::Begin { kind, len: payload.len(), extra: ticket })?;
+        for piece in d::pieces(payload) { send(piece)?; }
+        Ok(())
+    }
+    /// Starts dragging a file this run holds (`@/path`, or a name in its own folder).
+    /// Call it while the left button is down in the window; Shell carries the drag to
+    /// wherever the person lets go, and [`Event::DragEnded`] says where it went.
+    pub fn drag_file(window: &mut Window, path: &[u8]) -> Result<(), Error> {
+        let mut abs = [0u8; d::MAX_BYTES];
+        let (ticket, n) = files::offer(window, path, &mut abs).map_err(Error::Files)?;
+        start(d::FILE, &abs[..n], ticket as u64)
+    }
+    /// Starts dragging a piece of text (up to [`sex_pdx::dnd::MAX_BYTES`] bytes).
+    pub fn drag_text(text: &str) -> Result<(), Error> { start(d::TEXT, text.as_bytes(), 0) }
+    /// Takes back a drag before the button comes up.
+    pub fn cancel() { let _ = send(d::Message::Cancel); }
+}
+
 pub mod launch {
     use super::{files, mailbox, SHELL};
     use sex_pdx::launch as l;
@@ -638,6 +704,15 @@ pub mod files {
     /// Asks the person to choose a file (or a folder, or where to save) in the Files
     /// app, and waits. The answer is a path this run may now use, `@/...`, kept in `out`.
     /// Closing the window meanwhile cancels. Errors: DENIED when the person cancelled.
+    /// Offers a path this run holds for a drag ([`crate::dnd::drag_file`]): the ticket,
+    /// and the absolute path written to `out`.
+    pub fn offer(window: &mut Window, path: &[u8], out: &mut [u8; sex_pdx::dnd::MAX_BYTES]) -> Result<(u32, usize), Error> {
+        exchange(Some(window), w::OFFER, path, 0, 0, |_| {}, |ticket, d| {
+            let n = (u16::from_le_bytes([d[0], d[1]]) as usize).min(out.len());
+            out[..n].copy_from_slice(&d[2..2 + n]);
+            (ticket, n)
+        })
+    }
     pub fn pick<'a>(window: &mut Window, mode: Pick, suggestion: &[u8], out: &'a mut [u8; w::PATH_BYTES]) -> Result<&'a [u8], Error> {
         let n = suggestion.len().min(w::PICK_HINT_MAX);
         let code = match mode { Pick::Open => w::PICK_OPEN, Pick::Save => w::PICK_SAVE, Pick::Folder => w::PICK_FOLDER };

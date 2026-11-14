@@ -256,6 +256,10 @@ jobs:
       run: |
         truncate -s 256M "$RUNNER_TEMP/session-source.img"
         python3 scripts/session_restore_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/session-source.img" --out "$RUNNER_TEMP/sexos-runtime/session"
+    - name: Drag and drop between programs
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/dnd-source.img"
+        python3 scripts/drag_drop_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/dnd-source.img" --out "$RUNNER_TEMP/sexos-runtime/dnd"
     - name: USB input paths
       run: GATE_DIR="$RUNNER_TEMP/sexos-usb" SKIP_BUILD=1 bash scripts/usb_path_gate.sh
     - name: Preserve runtime evidence

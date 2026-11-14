@@ -342,6 +342,7 @@ pub fn bind(target: u32, task: u32) {
     }
     let args = unsafe { &mut *core::ptr::addr_of_mut!(LOADED_ARGS) };
     if let Some(cache) = client_cache(w::PROGRAM_INDEX_BASE + index) { w::stat_cache::forget(cache, None); }
+    unsafe { (*core::ptr::addr_of_mut!(OFFERS))[index] = None; }
     bindings[index] = Some(Binding { task, root, len, args: args.0, args_len: core::mem::take(&mut args.1), picked: [0; PICKED_MAX], picked_len: 0 });
     unsafe { (*core::ptr::addr_of_mut!(PICKS))[index] = None; }
     sex_pdx::serial_record!("[files.program.bound] target={} task={} root={}", target, task, core::str::from_utf8(&root[..len]).unwrap_or("?"));
@@ -474,19 +475,56 @@ fn picker(program: Option<usize>, r: w::Request, path: &[u8], data: &mut [u8]) -
                 if confine(&b, &token[..1 + abs.len()], &mut out).is_none() { return (w::DENIED, 0); }
             }
             let Some(target) = bindings[row].as_mut() else { return (w::NOT_FOUND, 0) };
-            let sep = (target.picked_len > 0) as usize;
-            if target.picked_len + sep + 1 + abs.len() > PICKED_MAX { return (w::NO_SPACE, 0); }
-            if sep == 1 { target.picked[target.picked_len] = b' '; }
-            let at = target.picked_len + sep;
-            target.picked[at] = b'@';
-            target.picked[at + 1..at + 1 + abs.len()].copy_from_slice(abs);
-            target.picked_len = at + 1 + abs.len();
+            if !grant_picked(target, abs) { return (w::NO_SPACE, 0); }
             pick.answer = Answer::Chosen;
             sex_pdx::serial_record!("[files.pick.granted] row={} path={}", row, core::str::from_utf8(abs).unwrap_or("?"));
             (w::OK, 0)
         }
         _ => (w::INVALID, 0),
     }
+}
+/// Adds `@abs` to the paths the person gave this run after it started.
+fn grant_picked(target: &mut Binding, abs: &[u8]) -> bool {
+    let sep = (target.picked_len > 0) as usize;
+    if target.picked_len + sep + 1 + abs.len() > PICKED_MAX { return false; }
+    if sep == 1 { target.picked[target.picked_len] = b' '; }
+    let at = target.picked_len + sep;
+    target.picked[at] = b'@';
+    target.picked[at + 1..at + 1 + abs.len()].copy_from_slice(abs);
+    target.picked_len = at + 1 + abs.len();
+    true
+}
+/// What each program row offered for a drag (`fs::OFFER`): ticket and absolute path.
+static mut OFFERS: [Option<(u32, [u8; sex_pdx::dnd::MAX_BYTES], usize)>; PROGRAM_ROWS] = [None; PROGRAM_ROWS];
+fn offer(k: usize, binding: &Binding, path: &[u8], data: &mut [u8]) -> (u8, u32) {
+    let mut out = [0u8; w::PATH_BYTES];
+    let Some(n) = confine(binding, path, &mut out) else { return (w::DENIED, 0) };
+    let abs = &out[..n];
+    if n > sex_pdx::dnd::MAX_BYTES || abs.first() != Some(&b'/') || abs.iter().any(|c| *c == b' ' || *c < 0x20) { return (w::NAME, 0); }
+    let ticket = unsafe { PICK_TICKET = PICK_TICKET % 0xFF_FFFE + 1; PICK_TICKET };
+    let mut kept = [0u8; sex_pdx::dnd::MAX_BYTES];
+    kept[..n].copy_from_slice(abs);
+    unsafe { (*core::ptr::addr_of_mut!(OFFERS))[k] = Some((ticket, kept, n)); }
+    data[..2].copy_from_slice(&(n as u16).to_le_bytes());
+    data[2..2 + n].copy_from_slice(abs);
+    sex_pdx::serial_record!("[files.dnd.offered] row={} ticket={} path={}", k, ticket, core::str::from_utf8(abs).unwrap_or("?"));
+    (w::OK, ticket)
+}
+/// Shell's `dnd::OP_GIVE`: the person dropped `source`'s offered path on `target`'s
+/// window, so `target` may use it from now on, as if picked for it.
+pub fn give(ticket: u64, rows: u64, hash: u64) {
+    let (source, target) = ((rows >> 32) as u32, rows as u32);
+    let refuse = |why: &str| sex_pdx::serial_record!("[files.dnd.refused] from={} to={} why={}", source, target, why);
+    let (Some(s), Some(t)) = (program_index(source), program_index(target)) else { return refuse("rows") };
+    let offers = unsafe { &mut *core::ptr::addr_of_mut!(OFFERS) };
+    let Some((_, path, n)) = offers[s].filter(|o| o.0 as u64 == ticket) else { return refuse("ticket") };
+    if sex_pdx::dnd::hash(&path[..n]) != hash { return refuse("path"); }
+    offers[s] = None;
+    let bindings = unsafe { &mut *core::ptr::addr_of_mut!(BINDINGS) };
+    if bindings[s].is_none() { return refuse("source"); }
+    let Some(b) = bindings[t].as_mut() else { return refuse("target") };
+    if !grant_picked(b, &path[..n]) { return refuse("full"); }
+    sex_pdx::serial_record!("[files.dnd.given] from={} to={} path={}", source, target, core::str::from_utf8(&path[..n]).unwrap_or("?"));
 }
 /// The row is running, and running the very run Shell bound: the kernel names its task.
 /// The run holds `+packages`: Spindle put it in the run's arguments for `run +pkg`, and
@@ -628,6 +666,12 @@ fn handle_request(index: usize, program: Option<usize>, r: w::Request) -> u64 {
     let mut path = [0u8; w::PATH_BYTES];
     let mut path_len = r.path_len as usize;
     path[..path_len].copy_from_slice(&region[..path_len]);
+    if r.kind == w::OFFER {
+        let Some(k) = program else { return w::reply(r.seq, w::DENIED, 0) };
+        let binding = unsafe { (*core::ptr::addr_of!(BINDINGS))[k] }.unwrap();
+        let (status, value) = offer(k, &binding, &path[..path_len], &mut region[w::PATH_BYTES..]);
+        return w::reply(r.seq, status, value);
+    }
     if matches!(r.kind, w::PICK | w::PICKED | w::PICKS | w::ANSWER) {
         let (status, value) = picker(program, r, &path[..path_len], &mut region[w::PATH_BYTES..]);
         return w::reply(r.seq, status, value);

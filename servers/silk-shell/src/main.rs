@@ -10356,8 +10356,69 @@ unsafe fn program_pointer_motion(){
         _ => program_pointer_leave(),
     }
 }
+// ── Drag and drop between programs (`sex_pdx::dnd`) ─────────────────────────
+// A drag belongs to the run holding the pointer; it ends when every button is up.
+struct DndDrag{source:sex_pdx::clipboard::Participant,sid:u64,ticket:u64,payload:sex_pdx::dnd::Payload}
+static mut DND_DRAG:Option<DndDrag>=None;
+fn dnd_send(route:u64,op:u64,m:sex_pdx::dnd::Message)->bool{
+    let [a,b,c]=m.wire();
+    for _ in 0..64{
+        match pdx_call_checked(route,op,a,b,c){Ok(_)=>return true,Err(sex_pdx::ERR_SERVICE_NOT_READY)=>sys_yield(),Err(_)=>return false}
+    }
+    false
+}
+/// A program's `OP_DRAG`.
+unsafe fn shell_dnd_message(msg:&sex_pdx::PdxMessage)->bool{
+    use sex_pdx::dnd::{self as d,Message};
+    if msg.type_id!=d::OP_DRAG{return false}
+    let held=POINTER_CAPTURE;
+    let Some(source)=program_participant(held).filter(|p|p.subject.pd==msg.caller_pd&&p.subject.task==msg.caller_task&&POINTER_BUTTONS&1!=0)else{
+        sex_pdx::serial_record!("[shell.dnd.denied] caller={} task={} reason=not_holding_pointer",msg.caller_pd,msg.caller_task);return true
+    };
+    match Message::decode([msg.arg0,msg.arg1,msg.arg2]){
+        Some(Message::Begin{kind,len,extra})=>{
+            DND_DRAG=Some(DndDrag{source,sid:held,ticket:if kind==d::FILE{extra}else{0},payload:d::Payload::new(kind,len,0)});
+            sex_pdx::serial_record!("[shell.dnd.begin] source={} kind={} len={}",source.subject.pd,kind,len);
+        }
+        Some(Message::Data{offset,count,bytes})=>{
+            if let Some(drag)=DND_DRAG.as_mut().filter(|g|g.source==source){if !drag.payload.take(offset,count,&bytes){DND_DRAG=None;}}
+        }
+        Some(Message::Cancel)=>{if DND_DRAG.as_ref().is_some_and(|g|g.source==source){DND_DRAG=None;}}
+        _=>{}
+    }
+    true
+}
+/// The buttons all came up: the drag lands on the program window under the pointer.
+unsafe fn dnd_release(){
+    use sex_pdx::dnd::{self as d,Message};
+    let Some(drag)=DND_DRAG.take()else{return};
+    let mut taken=0u32;
+    let target=match hit_test_at(POINTER_X,POINTER_Y){HitTarget::Surface(sid) if sid!=drag.sid=>program_participant(sid).map(|p|(sid,p)),_=>None};
+    if let (Some((sid,p)),true)=(target,drag.payload.valid()){
+        if let (Some(fid),Some((x,y,w,h)))=(frame_for_surface(sid),get_surface_bounds(sid)){
+            let body=chrome_metrics().body(w,h);
+            let lx=(POINTER_X-(x+body.x as i32)).clamp(0,body.w as i32-1) as i16;
+            let ly=(POINTER_Y-(y+body.y as i32)).clamp(0,body.h as i32-1) as i16;
+            let bytes=drag.payload.as_bytes();
+            // A file goes to Files first, so the target may open it once it hears of it.
+            if frame_accepts_input(fid){
+                if drag.payload.kind==d::FILE{
+                    let rows=(drag.source.subject.pd as u64)<<32|p.subject.pd as u64;
+                    let _=pdx_call(sex_pdx::program_store::SHELL_ROUTE_SLOT,d::OP_GIVE,drag.ticket,rows,d::hash(bytes));
+                }
+                let mut ok=dnd_send(p.route,d::OP_DROP,Message::Begin{kind:drag.payload.kind,len:bytes.len(),extra:d::at(lx,ly)});
+                for piece in d::pieces(bytes){ok=ok&&dnd_send(p.route,d::OP_DROP,piece);}
+                ok=ok&&dnd_send(p.route,d::OP_DROP,Message::End);
+                if ok{taken=p.subject.pd;}
+            }
+        }
+    }
+    sex_pdx::serial_record!("[shell.dnd.drop] source={} target={} kind={} len={}",drag.source.subject.pd,taken,drag.payload.kind,drag.payload.as_bytes().len());
+    dnd_send(drag.source.route,d::OP_DROP,Message::Done{target:taken});
+}
 /// After a button changed; POINTER_BUTTONS already holds the new state.
 unsafe fn program_pointer_button(button:u8,pressed:bool){
+    if !pressed&&POINTER_BUTTONS&7==0{dnd_release();}
     if button==0 || button>3 {return}
     let b=match button{1=>0,2=>2,_=>1};
     let Some((sid,p,x,y,inside))=program_pointer_target() else {if POINTER_BUTTONS&7==0{POINTER_CAPTURE=0;} return};
@@ -26498,7 +26559,7 @@ pub extern "C" fn _start() -> ! {
                 unsafe { flush_pending_cursor_send(); }
                 // A full input ring may recover while the shell has no work.
                 // Return to the publisher instead of blocking in listen.
-                if shell_ready_publisher.is_pending() || unsafe { RECORD_SPAWN_LEFT != 0 || DISPLAY_SCALE.request().is_some() || CURSOR_SEND_PENDING || APP_INPUT.pending() || LAUNCHER_FOCUS.is_some() || CLIPBOARD_INTAKE.pending() || CLIPBOARD.pending() || WORKSPACE_REFRESH_PENDING.iter().any(|p|*p) || linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || launch_waiting() || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_POINTER.is_some() || LINEN_ASYNC.can_send() || NOTIFY_NOTICE_UNTIL != 0 || MEMORY_CRITICAL_SINCE != 0 || KEY_REPEAT.pending() } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
+                if shell_ready_publisher.is_pending() || unsafe { RECORD_SPAWN_LEFT != 0 || DISPLAY_SCALE.request().is_some() || CURSOR_SEND_PENDING || APP_INPUT.pending() || LAUNCHER_FOCUS.is_some() || CLIPBOARD_INTAKE.pending() || CLIPBOARD.pending() || WORKSPACE_REFRESH_PENDING.iter().any(|p|*p) || linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_POINTER.is_some() || LINEN_ASYNC.can_send() || NOTIFY_NOTICE_UNTIL != 0 || MEMORY_CRITICAL_SINCE != 0 || KEY_REPEAT.pending() || launch_waiting() } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
                     sys_yield();
                     continue;
                 }
@@ -26512,6 +26573,7 @@ pub extern "C" fn _start() -> ! {
         unsafe {
             if shell_lifecycle_hint(&msg) { continue; }
             if shell_launch_message(&msg) { continue; }
+            if shell_dnd_message(&msg) { continue; }
             if shell_program_message(&msg) { continue; }
             if clipboard_receive(&msg) { continue; }
             if notification_receive(&msg) { continue; }
