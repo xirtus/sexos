@@ -44,6 +44,18 @@ is_allowed_crate() {
   grep -Fxq "$value" <<<"$allowed_crates_raw"
 }
 
+# Rust cfg values may contain quotes; parse the TOML string rather than grep it.
+stage_rustflags() {
+  python3 - "$1" <<'PYFLAGS'
+import sys, tomllib
+with open(sys.argv[1], 'rb') as source:
+    value = tomllib.load(source)['stage'][0].get('rustflags', '')
+if not isinstance(value, str) or '\n' in value or '\r' in value:
+    raise SystemExit('invalid stage rustflags')
+print(value)
+PYFLAGS
+}
+
 run_stage() {
   local stage="$1"
   local action
@@ -65,7 +77,7 @@ run_stage() {
       pkg="$(rg -n '^package\s*=\s*"[^"]+"' "$stage" | sed -E 's/.*"([^"]+)".*/\1/')"
       src="$(rg -n '^source_artifact\s*=\s*"[^"]+"' "$stage" | sed -E 's/.*"([^"]+)".*/\1/')"
       dst="$(rg -n '^dest_artifact\s*=\s*"[^"]+"' "$stage" | sed -E 's/.*"([^"]+)".*/\1/')"
-      extra_rustflags="$(rg -n '^rustflags\s*=\s*"[^"]*"' "$stage" | sed -E 's/.*"([^"]*)".*/\1/' || true)"
+      extra_rustflags="$(stage_rustflags "$stage")"
       is_allowed_crate "$pkg" || { echo "[FAIL] package not in whitelist: $pkg"; exit 1; }
       RUSTFLAGS="-C link-arg=-Tkernel/linker.ld ${extra_rustflags:-}" cargo build --locked \
         -Z build-std=core,compiler_builtins,alloc \
@@ -80,7 +92,7 @@ run_stage() {
       manifest="$(rg -n '^manifest\s*=\s*"[^"]+"' "$stage" | sed -E 's/.*"([^"]+)".*/\1/')"
       src="$(rg -n '^source_artifact\s*=\s*"[^"]+"' "$stage" | sed -E 's/.*"([^"]+)".*/\1/')"
       dst="$(rg -n '^dest_artifact\s*=\s*"[^"]+"' "$stage" | sed -E 's/.*"([^"]+)".*/\1/')"
-      extra_rustflags="$(rg -n '^rustflags\s*=\s*"[^"]+"' "$stage" | sed -E 's/.*"([^"]+)".*/\1/' || true)"
+      extra_rustflags="$(stage_rustflags "$stage")"
       # A stage may name its own target (programs use SSE; kernel and servers don't).
       stage_target="$(rg -n '^target\s*=\s*"[^"]+"' "$stage" | sed -E 's/.*"([^"]+)".*/\1/' || true)"
       # Ordinary programs (x86_64-sex-std.json) build the whole standard library.
