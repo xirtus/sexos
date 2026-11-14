@@ -42,6 +42,8 @@ mod program {
                 (c.y * scale) as i32
             );
         }
+        let (w, h) = app.ui.size();
+        sex_pdx::serial_record!("[velvet.layout] w={} h={}", w, h);
         sex_pdx::serial_record!("[velvet.frame] n={}", app.frames);
     }
     extern "C" fn main() -> ! {
@@ -54,8 +56,14 @@ mod program {
             app.window.task
         );
         report(&app, &games);
+        let mut size = app.ui.size();
         loop {
-            for response in app.next() {
+            let responses = app.next();
+            if app.ui.size() != size {
+                size = app.ui.size();
+                report(&app, &games);
+            }
+            for response in responses {
                 if response == Response::Close {
                     sex_pdx::task_finish(0);
                 }
