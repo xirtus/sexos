@@ -9,6 +9,8 @@ use weft::sexos::App;
 /// discard dialog; a clean project may close immediately without losing edits.
 pub fn close_requested(app: &mut App, studio: &mut Studio) {
     if studio.request_close(&mut app.ui) == Some(crate::Action::Quit) {
+        let synced = files::sync(&mut app.window).is_ok();
+        sex_pdx::serial_record!("[moan.io.partial] synced={}", synced as u8);
         sex_pdx::serial_record!("[moan.closed]");
         sex_pdx::task_finish(0);
     }
