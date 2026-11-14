@@ -48,6 +48,7 @@ crates = [
   "apps/fortune/Cargo.toml",
   "apps/hum/Cargo.toml",
   "apps/jot/Cargo.toml",
+  "apps/quil/Cargo.toml",
   "apps/files/Cargo.toml",
   "apps/peek/Cargo.toml",
   "apps/talk/Cargo.toml",
@@ -244,6 +245,14 @@ target = "x86_64-sex-app.json"
 manifest = "apps/jot/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/jot"
 dest_artifact = "iso_root/programs/jot"
+
+[[stage]]
+id = "build_quil_editor"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/quil/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/quil"
+dest_artifact = "iso_root/programs/quil"
 
 [[stage]]
 id = "build_files"

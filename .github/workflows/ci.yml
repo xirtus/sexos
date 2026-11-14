@@ -338,6 +338,31 @@ jobs:
           ${{ runner.temp }}/sexos-web-seek
         if-no-files-found: ignore
 
+  editor:
+    name: Quil code editor
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+    - uses: actions/checkout@v4
+    - uses: ./.github/actions/setup
+    - name: Quil engine on the host (1 GB lazy file, multi-cursor, Vim, keymaps, fuzzy, project search)
+      run: cargo test --locked --release -p quil-core
+    - name: Build the image
+      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/editor-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/editor-build.log"; exit 1)
+    - name: Quil in QEMU (200 MB file, Go to File, cursors, Vim dd, project search)
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/editor-source.img"
+        python3 scripts/program_quil_editor_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/editor-source.img" --out "$RUNNER_TEMP/sexos-editor"
+    - name: Preserve editor evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sexos-editor-proof
+        path: |
+          ${{ runner.temp }}/editor-build.log
+          ${{ runner.temp }}/sexos-editor
+        if-no-files-found: ignore
+
   profiles:
     name: Proof builds (${{ matrix.gate }})
     runs-on: ubuntu-latest
@@ -375,7 +400,7 @@ jobs:
   # Single required check: keeps the old "build" check name for branch rules.
   build:
     if: always()
-    needs: [host, truth, boot, devices, media, profiles, js-jit, recording]
+    needs: [host, truth, boot, devices, media, editor, profiles, js-jit, recording]
     runs-on: ubuntu-latest
     steps:
     - run: |
