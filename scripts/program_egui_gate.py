@@ -89,11 +89,11 @@ def main():
   target,task,surface,tile,frame=start('')
   assert int(frame[4])>1000,f'the demo drew too little: {frame[0]}'
   demo=shot('tassel-demo',tile)
-  colours=len(demo);assert colours>40,f'the demo looks blank ({colours} colours)'
+  colour_count=len(demo);assert colour_count>40,f'the demo looks blank ({colour_count} colours)'
   # A click on the demo's background still takes input without trouble.
   click(tile[0]+tile[2]//2,tile[1]+tile[3]//2);time.sleep(2)
   close(target,task,surface)
   text=t();assert 'KERNEL PANIC' not in text and 'panicked' not in text
-  print({'ok':True,'demo_first_frame':frame[0],'colours':colours})
+  print({'ok':True,'demo_first_frame':frame[0],'colours':colour_count})
  finally:g['stop']()
 if __name__=='__main__':main()
