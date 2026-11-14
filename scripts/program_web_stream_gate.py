@@ -16,7 +16,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
  rate=RATE
  def do_GET(self):
   name=self.path.removeprefix('/site/')
-  if self.path=='/web':body=(ROOT/'iso_root/programs/web').read_bytes()
+  if self.path=='/web':body=(ROOT/'iso_root/programs/kaleidoscope').read_bytes()
   elif name in CLIPS:body=CLIPS[name]
   elif self.path.startswith('/site/') and (SITE/name).is_file():body=(SITE/name).read_bytes()
   else:self.send_response(404);self.end_headers();return
@@ -76,9 +76,9 @@ def main():
  try:
   g['wait'](r'\[bell.sound.ready\]',0,180)
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
-  g['focus'](153);time.sleep(.5);s=len(t());keys(f'fetch {base}/web /bin/web');q.key('ret')
+  g['focus'](153);time.sleep(.5);s=len(t());keys(f'fetch {base}/web /bin/kaleidoscope');q.key('ret')
   m=g['wait'](r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',s,600);assert m[1].startswith('Saved'),m[1]
-  g['focus'](153);time.sleep(.5);s=len(t());keys(f'run +net web {url}');q.key('ret')
+  g['focus'](153);time.sleep(.5);s=len(t());keys(f'run +net kaleidoscope {url}');q.key('ret')
   console('loadstart',s,600)
   st=g['wait'](rf'\[web.media.stream\] node=(\d+) total={total} url=\S+stream.mp4',s,600);node=st[1]
   early=g['wait'](rf'\[web.media.early\] node={node} have=(\d+) done=(\d)',s,300)
