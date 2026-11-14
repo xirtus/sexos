@@ -83,7 +83,8 @@ crates = [
   "apps/python/Cargo.toml",
   "apps/store/Cargo.toml",
   "apps/sdltest/Cargo.toml",
-  "apps/driftspark/Cargo.toml"
+  "apps/driftspark/Cargo.toml",
+  "apps/corset/Cargo.toml"
 ]
 
 [[stage]]
@@ -541,6 +542,15 @@ build_std = "std,panic_abort"
 manifest = "apps/aftercare/Cargo.toml"
 source_artifact = "target/x86_64-sex-std/release/aftercare"
 dest_artifact = "iso_root/programs/aftercare"
+
+# Corset: disks and partitions (crates/corset-core) on removable disks Files hands it.
+[[stage]]
+id = "build_corset"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/corset/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/corset"
+dest_artifact = "iso_root/programs/corset"
 
 [[stage]]
 id = "build_play"
