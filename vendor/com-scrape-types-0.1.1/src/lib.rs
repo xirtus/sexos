@@ -84,6 +84,8 @@
 //! ptr.another_method();
 //! ```
 
+#[cfg(test)]
+extern crate std;
 extern crate alloc;
 mod class;
 mod ptr;
