@@ -4403,3 +4403,13 @@ energy. Details: `LAPTOP_POWER_2026_11_13.md` (Sleep section).
 ## G-20: Fuzz round 3 (2026-11-14)
 - Added 5 `cargo-fuzz` ASan+libFuzzer targets (`fuzz_spreadeagle_xlsx_ods`, `fuzz_assuit_docx`, `fuzz_bodice_epub`, `fuzz_gossip_feed`, `fuzz_swingers_bencode`) with seed corpora and smoke gate coverage (`18/18` targets passing in `scripts/fuzz_smoke_host_gate.sh`).
 - Executed >5.35M ASan+libFuzzer inputs across raw and structured ZIP/XML/bencode payloads; uncovered and filed Issues #301 (`sex-xml` / `Gossip` unbounded nesting stack overflow) and #302 (`sex-ebook` / `Bodice` EPUB `<spine>` amplification DoS) with committed reproducers under `fuzz/repros/round3/` without modifying target crates.
+## G-21: User guide refresh (2026-11-14)
+- Comprehensive user guide refresh across `docs/user/` documenting new apps and system subsystems:
+  - Added dedicated application guides: `spreadeagle.md` (Spreadeagle spreadsheet), `assuit.md` (Assuit rich text word processor), `corset.md` (Corset disk & partition manager), `bodice.md` (Bodice EPUB/MOBI/CBZ document reader), `gossip.md` (Gossip RSS/Atom news aggregator), `rendezvous.md` (Rendezvous offline vector maps), `splicy.md` (Splicy non-linear video editor & media export).
+  - Added system guides: `settings-and-lock-screen.md` (Tatami settings, authentication & lock screen security), `laptop-power.md` (ACPI battery telemetry, backlight stepping, power profiles, and thermal trip protection).
+  - Updated index and suite docs: `docs/user/README.md`, `docs/user/apps/tatami.md`, `docs/user/creative-and-pro-suite.md`, and `docs/user/communication-and-sharing.md`.
+- Captured and verified 10 genuine QEMU gate screenshots under `docs/user/assets/` at 1280x800 and 1024x768 resolutions (all >= 50 colors, range 975-5916 distinct colors, highly compressed PNGs):
+  `spreadeagle-sheet.png`, `assuit-document.png`, `bodice-reader.png`, `gossip-feeds.png`, `rendezvous-maps.png`, `lock-screen.png`, `tatami-settings.png`, `corset-disks.png`, `laptop-power.png`, and `splicy-export.png`.
+- Zero broken relative markdown links verified across all 32 documents (96 relative links checked).
+- Passed root allowlist check with `root-allowlist: clean`.
+
