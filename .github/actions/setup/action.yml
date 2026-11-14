@@ -56,14 +56,16 @@ runs:
         target/ffmpeg/include
         target/ffmpeg/include-c
         target/ffmpeg/sexos-recording-v1
-      key: ffmpeg-${{ inputs.recording }}-${{ hashFiles('scripts/build_ffmpeg.sh') }}
+        target/ffmpeg/sexos-audio-export-v1
+        target/ffmpeg/share/licenses
+      key: ffmpeg-${{ inputs.recording }}-${{ hashFiles('scripts/build_ffmpeg.sh', 'scripts/build_shine.sh') }}
   - name: Build FFmpeg for programs
     if: inputs.media == 'true'
     shell: bash
     run: |
       profile=0
       if [[ "${{ inputs.recording }}" == true ]]; then profile=1; fi
-      if [[ ! -f target/ffmpeg/lib/libavcodec.a ]] || [[ "$(cat target/ffmpeg/sexos-recording-v1 2>/dev/null)" != "$profile" ]]; then
+      if [[ ! -f target/ffmpeg/lib/libavcodec.a ]] || [[ ! -f target/ffmpeg/lib/libshine.a ]] || [[ "$(cat target/ffmpeg/sexos-audio-export-v1 2>/dev/null)" != 1 ]] || [[ "$(cat target/ffmpeg/sexos-recording-v1 2>/dev/null)" != "$profile" ]]; then
         FFMPEG_RECORDING=$profile bash scripts/build_ffmpeg.sh
       fi
   - name: Cache libc++

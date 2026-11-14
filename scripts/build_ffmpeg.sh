@@ -6,9 +6,10 @@
 # Formats: MP4/MOV, Matroska/WebM, Ogg, MP3, ADTS AAC, FLAC and WAV; video H.264,
 # HEVC, VP8, VP9, MPEG-4 Part 2 and AV1 (dav1d, scripts/build_dav1d.sh; AVIF pictures
 # come through the MP4 demuxer); audio AAC, MP3, Opus, Vorbis, FLAC and PCM; plus
-# libswscale and libswresample. C calls go to crates/sex-libc.
+# libswscale and libswresample. Moan export always enables PCM/FLAC and Shine MP3
+# encoding plus WAV/FLAC/MP3 muxing (also in the optional recording profile). C calls go to crates/sex-libc.
 #
-# Output: target/ffmpeg/lib/*.a (libdav1d.a among them) and target/ffmpeg/include.
+# Output: target/ffmpeg/lib/*.a (libdav1d.a and libshine.a among them) and target/ffmpeg/include.
 # Programs that link FFmpeg (apps/play, apps/web) find them through SEXOS_FFMPEG
 # (default: that directory).
 #
@@ -28,7 +29,7 @@ case "$FFMPEG_RECORDING" in 0|1) ;; *) echo 'FFMPEG_RECORDING must be 0 or 1' >&
 OUT=$ROOT/target/ffmpeg
 WORK=$OUT/work
 mkdir -p "$WORK"
-rm -f "$OUT/sexos-recording-v1"
+rm -f "$OUT/sexos-recording-v1" "$OUT/sexos-audio-export-v1"
 RECORDING_FLAGS=()
 if [[ $FFMPEG_RECORDING == 1 ]]; then
   RECORDING_FLAGS=(--enable-encoder=ffv1 --enable-decoder=ffv1 --enable-muxer=matroska)
@@ -52,6 +53,8 @@ fi
 # dav1d first: FFmpeg's configure finds it through its pkg-config file. Its file asks
 # for -ldl, which is Linux's; dav1d is built without dlsym, so drop it.
 MUSL_INCLUDE=$MUSL_INCLUDE bash "$ROOT/scripts/build_dav1d.sh"
+MUSL_INCLUDE=$MUSL_INCLUDE bash "$ROOT/scripts/build_shine.sh"
+SHINE=$ROOT/target/shine
 DAV1D=$ROOT/target/dav1d
 sed -i 's/ -pthread -ldl$//' "$DAV1D/lib/pkgconfig/dav1d.pc"
 
@@ -67,7 +70,7 @@ CFLAGS="--target=x86_64-unknown-none-elf -nostdinc -isystem $RES -isystem $INC \
 
 BUILD=$WORK/build
 rm -rf "$BUILD" && mkdir -p "$BUILD" && cd "$BUILD"
-PKG_CONFIG_LIBDIR=$DAV1D/lib/pkgconfig PKG_CONFIG_PATH= "$FFMPEG_SRC/configure" --prefix="$OUT" \
+PKG_CONFIG_LIBDIR="$DAV1D/lib/pkgconfig:$SHINE/lib/pkgconfig" PKG_CONFIG_PATH= "$FFMPEG_SRC/configure" --prefix="$OUT" \
   --enable-cross-compile --target-os=none --arch=x86_64 \
   --cc=clang --ar=llvm-ar --ranlib=llvm-ranlib --nm=llvm-nm --pkg-config=pkg-config --pkg-config-flags=--static \
   --extra-cflags="$CFLAGS" \
@@ -77,7 +80,8 @@ PKG_CONFIG_LIBDIR=$DAV1D/lib/pkgconfig PKG_CONFIG_PATH= "$FFMPEG_SRC/configure" 
   --disable-everything --disable-autodetect --disable-debug \
   --disable-pthreads --disable-w32threads --disable-os2threads \
   --disable-network --disable-programs --disable-doc --disable-avdevice --disable-avfilter \
-  --enable-static --disable-shared --enable-swscale --enable-swresample --enable-libdav1d \
+  --enable-static --disable-shared --enable-swscale --enable-swresample --enable-libdav1d --enable-libshine \
+  --enable-encoder=pcm_s16le,flac,libshine --enable-muxer=wav,flac,mp3 \
   --enable-demuxer=mov,matroska,ogg,mp3,aac,flac,wav \
   --enable-decoder=h264,hevc,vp8,vp9,mpeg4,aac,aac_fixed,mp3,mp3float,opus,vorbis,flac,pcm_s16le,pcm_f32le,libdav1d \
   --enable-parser=h264,hevc,vp8,vp9,mpeg4video,aac,mpegaudio,opus,vorbis,flac,av1 \
@@ -122,6 +126,9 @@ done
 make -j"$(nproc)" >>make.log
 make install >install.log
 # Programs link dav1d from the same directory as FFmpeg.
-cp "$DAV1D/lib/libdav1d.a" "$OUT/lib/"
+cp "$DAV1D/lib/libdav1d.a" "$SHINE/lib/libshine.a" "$OUT/lib/"
+mkdir -p "$OUT/share/licenses/shine"
+cp "$SHINE/share/licenses/shine/"* "$OUT/share/licenses/shine/"
+printf '%s\n' 1 > "$OUT/sexos-audio-export-v1"
 printf '%s\n' "$FFMPEG_RECORDING" > "$OUT/sexos-recording-v1"
 echo "[ffmpeg] $(ls "$OUT"/lib/*.a | xargs -n1 basename | tr '\n' ' ')-> $OUT"

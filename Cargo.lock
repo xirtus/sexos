@@ -2827,6 +2827,7 @@ name = "moan"
 version = "0.1.0"
 dependencies = [
  "moan-core",
+ "moan-export",
  "sex-app",
  "sex-pdx",
  "weft",
@@ -2835,6 +2836,14 @@ dependencies = [
 [[package]]
 name = "moan-core"
 version = "0.1.0"
+
+[[package]]
+name = "moan-export"
+version = "0.1.0"
+dependencies = [
+ "sex-libc",
+ "sex-pdx",
+]
 
 [[package]]
 name = "moan-probe"
