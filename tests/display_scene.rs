@@ -171,6 +171,7 @@ mod boundary{
 }
 pub fn pdx_reply(target:u32,word:u64)->u64{boundary::reply(target,word)}
 fn scrub_cursor_under(){boundary::cursor();}
+fn motion_place(_:&mut SceneSnapshot){}
 // Controlled publication boundary: obtain/drop an actual scoped Scene lease,
 // then construct the descriptive receipt. No device write/native success is
 // claimed; the actual prepared-output pipeline has its own registered tests.

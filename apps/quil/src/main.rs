@@ -922,7 +922,7 @@ extern "C" fn main() -> ! {
     loop {
         match window.next_within(100) {
             Some(Event::Close) => { sex_pdx::serial_record!("[quil.code.closed] target={} task={}", window.target, window.task); window.close() }
-            Some(Event::Resize { .. }) => {}
+            Some(Event::Resize { .. }) | Some(Event::Drop { .. }) | Some(Event::DragEnded { .. }) => {}
             Some(Event::Pointer(ptr)) => app.pointer(ptr),
             Some(Event::Key(key)) => {
                 // The palette's developer check is the one command that needs a size.
