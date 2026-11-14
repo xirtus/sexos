@@ -8,6 +8,9 @@ extern crate self as sex_pdx;
 pub mod autofill;
 #[path = "../../../servers/silk-shell/src/autofill.rs"]
 pub mod broker;
+use broker as autofill_broker;
+#[path = "../../../servers/silk-shell/src/autofill_routes.rs"]
+mod native_routes;
 #[path = "../../../crates/sex-app/src/autofill.rs"]
 mod sdk;
 use autofill::{Packet, Subject};
@@ -51,6 +54,10 @@ struct Env {
     now: u64,
     live: Vec<Subject>,
     inbox: Vec<(Subject, VecDeque<PdxMessage>)>,
+    admission_failures: usize,
+    native: bool,
+    contended: bool,
+    events: VecDeque<PdxMessage>,
 }
 static ENV: OnceLock<Mutex<Env>> = OnceLock::new();
 fn env<R>(f: impl FnOnce(&mut Env) -> R) -> R {
@@ -67,6 +74,10 @@ fn fresh() -> Env {
         focus: C,
         now: 0,
         live: vec![P, C, X],
+        admission_failures: 0,
+        native: false,
+        contended: false,
+        events: VecDeque::new(),
         inbox: vec![
             (P, VecDeque::new()),
             (C, VecDeque::new()),
@@ -80,16 +91,175 @@ fn reset() {
 fn current(s: Subject) {
     env(|e| e.current = s);
 }
-pub fn pdx_call(_: u64, op: u64, a: u64, b: u64, c: u64) -> (u64, u64) {
-    env(|e| {
-        e.broker.receive(
-            e.current,
-            &Packet::new(op, a, b, c),
-            e.focus == e.current,
-            e.now,
-        );
+pub fn pdx_call(slot: u64, op: u64, a: u64, b: u64, c: u64) -> (u64, u64) {
+    let (native, s, focused, now, fail) = env(|e| {
+        let fail = e.admission_failures > 0 && slot == SLOT_SHELL;
+        if fail {
+            e.admission_failures -= 1;
+        }
+        (e.native, e.current, e.focus == e.current, e.now, fail)
     });
+    if fail {
+        return (u64::MAX, 0);
+    }
+    if native {
+        if slot == SLOT_SHELL {
+            let mut m = PdxMessage {
+                type_id: op,
+                arg0: a,
+                arg1: b,
+                arg2: c,
+                caller_pd: s.pd,
+                caller_task: s.task,
+            };
+            unsafe {
+                native_routes::receive(&mut m);
+            }
+        } else if slot == 256 {
+            let subject = Subject::decode(a).unwrap();
+            let name = endpoint(subject, subject == P).name;
+            let mut bytes = [0; 3];
+            for (i, out) in bytes.iter_mut().enumerate() {
+                if let Some(v) = name.get(b as usize * 3 + i) {
+                    *out = *v;
+                }
+            }
+            let word = autofill::identity_reply(subject.task, b as usize, bytes);
+            env(|e| {
+                e.events.push_back(PdxMessage {
+                    type_id: 1,
+                    arg0: word,
+                    arg1: 0,
+                    arg2: 0,
+                    caller_pd: 11,
+                    caller_task: 11,
+                })
+            });
+        } else {
+            env(|e| {
+                if let Some((_, q)) = e.inbox.iter_mut().find(|(s, _)| s.pd as u64 == slot) {
+                    q.push_back(PdxMessage {
+                        type_id: op,
+                        arg0: a,
+                        arg1: b,
+                        arg2: c,
+                        caller_pd: 3,
+                        caller_task: 3,
+                    });
+                }
+            });
+        }
+    } else {
+        env(|e| {
+            e.broker.receive(s, &Packet::new(op, a, b, c), focused, now);
+        });
+    }
     (0, 0)
+}
+pub const ERR_SERVICE_NOT_READY: u64 = u64::MAX;
+pub fn get_ticks() -> u64 {
+    env(|e| e.now)
+}
+pub mod program_store {
+    pub const SHELL_ROUTE_SLOT: u64 = 256;
+}
+pub mod clipboard {
+    pub use crate::autofill::Subject;
+}
+fn clipboard_live(s: Subject) -> Option<bool> {
+    env(|e| {
+        if e.contended {
+            None
+        } else {
+            Some(e.live.contains(&s))
+        }
+    })
+}
+struct Participant {
+    subject: Subject,
+}
+fn focused_program_participant() -> Option<Participant> {
+    Some(Participant {
+        subject: env(|e| e.focus),
+    })
+}
+pub mod app_catalog {
+    #[derive(PartialEq, Eq)]
+    pub enum App {
+        Program,
+    }
+    pub struct Row {
+        pub app: App,
+        pub lifecycle_slot: usize,
+        pub close_slot: u64,
+        pub surface: u64,
+    }
+    static ROWS: [Row; 3] = [
+        Row {
+            app: App::Program,
+            lifecycle_slot: 42,
+            close_slot: 42,
+            surface: 42,
+        },
+        Row {
+            app: App::Program,
+            lifecycle_slot: 43,
+            close_slot: 43,
+            surface: 43,
+        },
+        Row {
+            app: App::Program,
+            lifecycle_slot: 44,
+            close_slot: 44,
+            surface: 44,
+        },
+    ];
+    pub fn by_target(pd: u32) -> Option<&'static Row> {
+        ROWS.iter().find(|r| r.lifecycle_slot == pd as usize)
+    }
+}
+pub mod app_lifecycle {
+    use super::*;
+    pub const LIVE: u64 = 5;
+    pub struct Catalog {
+        subject: Subject,
+    }
+    impl Catalog {
+        pub fn is_sender(&self, pd: u32, task: u32) -> bool {
+            self.subject == Subject { pd, task }
+        }
+        pub fn is_subject(&self, pd: u32, surface: u64, coordinator: u32) -> bool {
+            self.subject.pd == pd && pd as u64 == surface && coordinator == 3
+        }
+    }
+    pub fn catalog(slot: usize) -> Result<Catalog, u64> {
+        env(|e| {
+            e.live
+                .iter()
+                .find(|s| s.pd as usize == slot)
+                .copied()
+                .map(|subject| Catalog { subject })
+                .ok_or(3)
+        })
+    }
+    pub fn info(_: usize) -> Result<(), u64> {
+        Err(LIVE)
+    }
+}
+fn native_pump() {
+    for _ in 0..32 {
+        unsafe {
+            native_routes::poll();
+        }
+        let event = env(|e| e.events.pop_front());
+        if let Some(mut m) = event {
+            unsafe {
+                native_routes::receive(&mut m);
+            }
+        } else if !unsafe { native_routes::pending() } {
+            break;
+        }
+    }
 }
 pub fn pdx_try_listen_raw(_: u64) -> Option<PdxMessage> {
     env(|e| {
@@ -249,7 +419,11 @@ fn lock_revokes_a_pending_request() {
     offered(&mut p, &mut c);
     current(P);
     p.close();
+    p.poll(200);
     pump();
+    current(P);
+    p.poll(200);
+    assert!(p.revoked());
     current(C);
     assert!(matches!(c.poll(200), Some(Err(sdk::Error::Locked))));
 }
@@ -448,7 +622,10 @@ fn cancellation_before_ready_uses_exact_client_sequence() {
     current(C);
     assert!(c.poll(0).is_none());
     c.cancel();
+    c.poll(1);
     pump();
+    current(C);
+    let _ = c.poll(1);
     current(P);
     p.poll(1);
     assert!(p.offer().is_none());
@@ -469,4 +646,111 @@ fn cancellation_before_ready_uses_exact_client_sequence() {
         }
     }
     panic!("cancelled early request still blocks next client");
+}
+
+#[test]
+fn provider_close_retries_kernel_full_before_reporting_locked() {
+    let (mut p, mut c) = setup();
+    offered(&mut p, &mut c);
+    env(|e| e.admission_failures = 3);
+    current(P);
+    p.close();
+    assert!(p.offer().is_none());
+    assert!(!p.revoked());
+    for tick in 200..203 {
+        p.poll(tick);
+        assert!(!p.revoked());
+        assert!(!p.registered());
+    }
+    p.poll(203);
+    pump();
+    p.poll(204);
+    assert!(p.revoked());
+    current(C);
+    assert!(matches!(c.poll(204), Some(Err(sdk::Error::Locked))));
+}
+#[test]
+fn native_full_intake_and_live_contention_cannot_drop_lock_revocation() {
+    reset();
+    env(|e| e.native = true);
+    unsafe {
+        native_routes::reset_for_host_test();
+        for s in [P, C, X] {
+            native_routes::bound(s.pd, s.task);
+        }
+    }
+    native_pump();
+    current(P);
+    let mut p = sdk::Provider::new(
+        &Window {
+            target: P.pd,
+            task: P.task,
+        },
+        99,
+    )
+    .unwrap();
+    p.poll(0);
+    native_pump();
+    p.poll(1);
+    assert!(p.registered());
+    current(C);
+    let mut c = sdk::Client::request(
+        &Window {
+            target: C.pd,
+            task: C.task,
+        },
+        "https://example.org",
+        0,
+    )
+    .unwrap();
+    for tick in 1..200 {
+        env(|e| e.now = tick);
+        current(P);
+        p.poll(tick);
+        native_pump();
+        current(C);
+        assert!(c.poll(tick).is_none());
+        native_pump();
+        if p.offer().is_some() {
+            break;
+        }
+    }
+    assert!(p.offer().is_some());
+    env(|e| e.focus = P);
+    current(P);
+    p.allow("alice", "a secret that must be revoked", 200)
+        .unwrap();
+    // The approved header is delivered and acknowledged before pausing custody.
+    for tick in 200..204 {
+        current(P);
+        p.poll(tick);
+        native_pump();
+        current(C);
+        assert!(c.poll(tick).is_none());
+        native_pump();
+    }
+    env(|e| {
+        e.contended = true;
+    });
+    current(X);
+    for n in 0..8 {
+        pdx_call(SLOT_SHELL, autofill::BEGIN, 900 + n, 3, 0);
+    }
+    env(|e| e.admission_failures = 3);
+    current(P);
+    p.close();
+    for tick in 204..208 {
+        p.poll(tick);
+        assert!(!p.revoked());
+    }
+    // Even though LIVE is unavailable and the native intake is saturated, the
+    // exact authenticated revocation bypasses it and erases pending DATA.
+    env(|e| e.contended = false);
+    native_pump();
+    p.poll(208);
+    native_pump();
+    p.poll(209);
+    assert!(p.revoked());
+    current(C);
+    assert!(matches!(c.poll(209), Some(Err(sdk::Error::Locked))));
 }

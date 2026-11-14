@@ -70,6 +70,8 @@ pub struct Broker {
     next: u32,
     head: usize,
     queued: usize,
+    revoked: Option<(Subject, u64)>,
+    cancelled: [Option<(Subject, u32, u64)>; ROWS],
 }
 impl Broker {
     pub const fn new() -> Self {
@@ -81,6 +83,8 @@ impl Broker {
             next: 0,
             head: 0,
             queued: 0,
+            revoked: None,
+            cancelled: [None; ROWS],
         }
     }
     /// Called only after Shell attests an active loaded run through its held catalog.
@@ -133,6 +137,74 @@ impl Broker {
         self.queued += 1;
         true
     }
+    fn metadata(&mut self, e: Endpoint, p: Packet) {
+        self.discard_holes();
+        if self.transaction.is_some() && self.queued >= OUTBOX - 3 {
+            return;
+        }
+        self.put(e, p, Effect::None);
+    }
+    fn cancel_receipt(&mut self, e: Endpoint, id: u32, epoch: u64) {
+        if let Some(slot) = self
+            .cancelled
+            .iter_mut()
+            .find(|v| v.is_some_and(|v| v.0 == e.subject) || v.is_none())
+        {
+            *slot = Some((e.subject, id, epoch));
+        }
+        self.metadata(
+            e,
+            Packet::new(CANCELLED, id as u64, epoch, e.subject.word()),
+        );
+    }
+    /// Authenticated right-narrowing revocations need no fresh LIVE query. A
+    /// stale actor can remove only its own exact run/epoch, never release data.
+    /// Some(owners) means wipe their current native intake; None is idempotent
+    /// acknowledgement only and must not disturb a newer epoch's pending work.
+    pub fn revocation_scope(&self, s: Subject, p: &Packet) -> Option<Option<[Subject; 2]>> {
+        let [a, b, c] = p.args;
+        if p.opcode == UNREGISTER && b == 0 && c == 0 {
+            if self
+                .provider
+                .is_some_and(|v| v.endpoint.subject == s && v.epoch == a)
+            {
+                return Some(Some(self.transaction.as_ref().map_or([s, s], |t| {
+                    [t.client.subject, t.provider.endpoint.subject]
+                })));
+            }
+            if self.revoked == Some((s, a)) {
+                return Some(None);
+            }
+        }
+        if let Some(t) = &self.transaction {
+            let owner = s == t.client.subject || s == t.provider.endpoint.subject;
+            let token = a == t.token as u64 && b == t.provider.epoch && c == 0;
+            let seq = s == t.client.subject && a == 0 && b == 0 && c == t.sequence as u64;
+            if (p.opcode == CANCEL && owner && (token || seq))
+                || (p.opcode == DENY && s == t.provider.endpoint.subject && token)
+            {
+                return Some(Some([t.client.subject, t.provider.endpoint.subject]));
+            }
+        }
+        if p.opcode == CANCEL {
+            let (id, epoch) = if a == 0 && b == 0 && c > 0 && c <= u32::MAX as u64 {
+                (c as u32, 0)
+            } else if a > 0 && a <= u32::MAX as u64 && c == 0 {
+                (a as u32, b)
+            } else {
+                return None;
+            };
+            if self
+                .cancelled
+                .iter()
+                .flatten()
+                .any(|v| *v == (s, id, epoch))
+            {
+                return Some(None);
+            }
+        }
+        None
+    }
     fn status(&mut self, e: Endpoint, id: u32, epoch: u64, status: Status) {
         // Unrelated status traffic cannot consume the active transaction's
         // forward+ACK slots. Secret flow always has reserved capacity.
@@ -163,6 +235,11 @@ impl Broker {
         }
     }
     pub fn retire(&mut self, s: Subject) {
+        for item in &mut self.cancelled {
+            if item.is_some_and(|v| v.0 == s) {
+                *item = None;
+            }
+        }
         if self
             .transaction
             .as_ref()
@@ -220,7 +297,7 @@ impl Broker {
             p.args[2]
         };
         if p.opcode == REGISTER {
-            if !e.provider() || a == 0 || b != 0 || c != 0 {
+            if !e.provider() || a == 0 || b != 0 || c != 0 || self.revoked == Some((s, a)) {
                 self.status(e, 0, a, Status::Denied);
                 return Status::Denied;
             }
@@ -246,16 +323,23 @@ impl Broker {
             return Status::Ok;
         }
         if p.opcode == UNREGISTER {
-            if b != 0
-                || c != 0
-                || !self
-                    .provider
-                    .is_some_and(|v| v.endpoint == e && v.epoch == a)
-            {
+            if self.revocation_scope(s, p).is_none() {
                 return Status::Denied;
             }
-            self.stop(Status::Locked);
-            self.provider = None;
+            if self
+                .provider
+                .is_some_and(|v| v.endpoint.subject == s && v.epoch == a)
+            {
+                self.stop(Status::Locked);
+                self.provider = None;
+                self.revoked = Some((s, a));
+            }
+            self.metadata(e, Packet::new(REVOKED, a, s.word(), 0));
+            return Status::Ok;
+        }
+        if p.opcode == CANCEL && self.revocation_scope(s, p) == Some(None) {
+            let (id, epoch) = if a == 0 { (c as u32, 0) } else { (a as u32, b) };
+            self.cancel_receipt(e, id, epoch);
             return Status::Ok;
         }
         if p.opcode == BEGIN {
@@ -330,10 +414,12 @@ impl Broker {
         }
         if p.opcode == CANCEL && s == client.subject && a == 0 && b == 0 && c == t.sequence as u64 {
             self.stop(Status::Declined);
+            self.cancel_receipt(e, c as u32, 0);
             return Status::Ok;
         }
         if p.opcode == CANCEL && a == token as u64 && b == provider.epoch && c == 0 {
             self.stop(Status::Declined);
+            self.cancel_receipt(e, token, provider.epoch);
             return Status::Ok;
         }
         if p.opcode == DENY

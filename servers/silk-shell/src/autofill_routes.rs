@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Native hooks for the pure broker. Only these functions bridge the held BOOT
 //! catalogs/routes to IPC. New protocol is consumed before generic Shell handling.
-use crate::autofill::{Admission, Broker, Endpoint};
+use crate::autofill_broker::{Admission, Broker, Endpoint};
 use sex_pdx::{
     autofill::{self as wire, Packet, Subject},
     PdxMessage,
@@ -108,6 +108,20 @@ pub unsafe fn receive(msg: &mut PdxMessage) -> bool {
     ] {
         core::ptr::write_volatile(v, 0);
     }
+    if matches!(packet.opcode, wire::UNREGISTER | wire::CANCEL | wire::DENY) {
+        if let Some(scope) = BROKER.revocation_scope(subject, &packet) {
+            BROKER.receive(subject, &packet, false, sex_pdx::get_ticks());
+            if let Some(owners) = scope {
+                for slot in &mut INTAKE {
+                    if slot.as_ref().is_some_and(|(s, _)| owners.contains(s)) {
+                        *slot = None;
+                    }
+                }
+            }
+        }
+        poll();
+        return true;
+    }
     if let Some(slot) = INTAKE.iter_mut().find(|s| s.is_none()) {
         *slot = Some((subject, packet));
     }
@@ -209,4 +223,13 @@ pub unsafe fn wake() -> Option<u64> {
     BROKER
         .wake(sex_pdx::get_ticks())
         .or_else(|| IDENTITIES.iter().any(Option::is_some).then_some(100))
+}
+
+#[cfg(test)]
+pub unsafe fn reset_for_host_test() {
+    BROKER = Broker::new();
+    for slot in &mut INTAKE {
+        *slot = None;
+    }
+    IDENTITIES = [None; 16];
 }

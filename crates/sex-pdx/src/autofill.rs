@@ -29,7 +29,8 @@ pub fn request(op: u64) -> bool {
     (REGISTER..=CANCEL).contains(&op)
 }
 pub fn response(op: u64) -> bool {
-    (REGISTERED..=STATUS).contains(&op) || matches!(op, ORIGIN | DATA | FINISH | CANCEL)
+    (REGISTERED..=STATUS).contains(&op)
+        || matches!(op, ORIGIN | DATA | FINISH | CANCEL | REVOKED | CANCELLED)
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Subject {
@@ -199,3 +200,6 @@ pub fn identity_decode(value: u64) -> Option<(u32, usize, [u8; 3])> {
         [value as u8, (value >> 8) as u8, (value >> 16) as u8],
     ))
 }
+
+pub const REVOKED: u64 = 0x3F1;
+pub const CANCELLED: u64 = 0x3F2;
