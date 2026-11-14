@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Corset: disks and partitions. Lists the disks Files offers (USB sticks and disks, disk
 //! images), and on one the person hands it (Files asks them, naming the disk) plans
-//! changes with corset-core: a new GPT, partitions added, deleted or resized, formatted
+//! changes (`corset::plan`, on corset-core): a new GPT, partitions added, deleted or resized, formatted
 //! FAT32, exFAT or sexfs, or encrypted. Nothing is written until the person has read every
 //! step on the confirmation screen, and a plan that destroys data is confirmed by typing
 //! the disk's name. While it applies, a progress line; afterwards Files mounts what the
@@ -18,7 +18,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::cell::{Cell, RefCell};
-use corset_core::{size_text, types, Disk, FsKind, Op, Partition, Plan, Refusal, Secret, ALIGN};
+use corset::plan::{self, size_text, ApplyError, Disk, Fs, Op, Part, Plan, Refusal, Secret, MIB, TYPES};
 use sex_app::files::disks::{self, Disk as Info};
 use sex_app::{Event, Nav, Window};
 use sex_pdx::fs as w;
@@ -41,12 +41,8 @@ const KEY_F: u8 = 0x21;
 const KEY_E: u8 = 0x12;
 const KEY_U: u8 = 0x16;
 const KEY_H: u8 = 0x23;
-/// Sectors in a MiB.
-const MIB: u64 = ALIGN;
 const BAR: usize = 64;
 const ROWS: usize = 12;
-/// Encryption's key derivation: 16 MiB, as a program's memory allows (sex-crypt's SMALL).
-const COST: sex_crypt::Cost = sex_crypt::Cost::SMALL;
 
 /// What the line at the bottom is asking for.
 enum Ask {
@@ -55,11 +51,11 @@ enum Ask {
     AddType { first: u64, sectors: u64, name: String },
     Resize { slot: usize },
     FormatFs { slot: usize },
-    FormatLabel { slot: usize, fs: FsKind },
+    FormatLabel { slot: usize, fs: Fs },
     Password { slot: usize },
     PasswordAgain { slot: usize, first: Secret },
     EncryptFs { slot: usize, password: Secret },
-    EncryptLabel { slot: usize, password: Secret, fs: FsKind },
+    EncryptLabel { slot: usize, password: Secret, fs: Fs },
     /// The disk's name, typed to apply a plan that destroys data.
     Confirm,
 }
@@ -69,7 +65,11 @@ impl Ask {
         match self {
             Ask::AddSize { room, .. } => format!("Size in MiB (Enter alone: all {})", size_text(room * 512)),
             Ask::AddName { .. } => "Partition name (may be empty)".into(),
-            Ask::AddType { .. } => "Type: 1 Basic data (FAT, exFAT)  2 SexOS filesystem  3 SexOS encrypted  4 Linux filesystem  5 EFI System".into(),
+            Ask::AddType { .. } => {
+                let mut t = String::from("Type (Enter alone: 1):");
+                for (i, (_, name)) in TYPES.iter().enumerate() { t.push_str(&format!("  {} {}", i + 1, name)); }
+                t
+            }
             Ask::Resize { .. } => "New size in MiB".into(),
             Ask::FormatFs { .. } | Ask::EncryptFs { .. } => format!("Filesystem: 1 FAT32  2 exFAT  3 sexfs{}", if matches!(self, Ask::EncryptFs { .. }) { "  0 none inside" } else { "" }),
             Ask::FormatLabel { .. } | Ask::EncryptLabel { .. } => "Label (up to 11 letters, may be empty)".into(),
@@ -82,7 +82,7 @@ impl Ask {
 
 /// One line of the disk view: a partition or a run of free space.
 #[derive(Clone)]
-enum Row { Part(Partition), Free { first: u64, sectors: u64 } }
+enum Row { Part(Part), Free { first: u64, sectors: u64 } }
 impl Row { fn first(&self) -> u64 { match self { Row::Part(p) => p.first, Row::Free { first, .. } => *first } } }
 
 struct Open { info: Info, plan: Plan, cursor: usize, review: bool, leaving: bool }
@@ -120,18 +120,16 @@ fn mib(text: &[u8]) -> Option<u64> {
     let n: u64 = s.parse().ok()?;
     n.checked_mul(MIB).filter(|v| *v > 0)
 }
-fn fs_choice(text: &[u8], none: bool) -> Option<Option<FsKind>> {
+fn fs_choice(text: &[u8], none: bool) -> Option<Option<Fs>> {
     match text.first().copied().unwrap_or(b' ') {
-        b'1' => Some(Some(FsKind::Fat32)), b'2' => Some(Some(FsKind::ExFat)), b'3' => Some(Some(FsKind::Sexfs)),
+        b'1' => Some(Some(Fs::Fat32)), b'2' => Some(Some(Fs::ExFat)), b'3' => Some(Some(Fs::Sexfs)),
         b'0' if none => Some(None),
         _ => None,
     }
 }
 fn type_choice(text: &[u8]) -> Option<corset_core::Guid> {
-    Some(match text.first().copied().unwrap_or(b'1') {
-        b'1' => types::BASIC_DATA, b'2' => types::SEXFS, b'3' => types::SEXCRYPT, b'4' => types::LINUX_FS, b'5' => types::ESP,
-        _ => return None,
-    })
+    let n = match core::str::from_utf8(text).ok()?.trim() { "" => 1, t => t.parse::<usize>().ok()? };
+    TYPES.get(n.checked_sub(1)?).map(|(g, _)| *g)
 }
 fn text(b: &[u8]) -> String { String::from_utf8_lossy(b).into_owned() }
 
@@ -189,12 +187,12 @@ impl App {
         let read = Disk::read(&mut dev::Raw { window: &window, id: info.id, sectors: info.sectors, status: &status }, &info.name);
         match read {
             Ok(disk) => {
-                sex_pdx::serial_record!("[corset.opened] disk={} sectors={} table={} parts={} system={}", info.name, disk.sectors, disk.gpt.is_some() as u8, disk.partitions.len(), disk.is_system() as u8);
+                sex_pdx::serial_record!("[corset.opened] disk={} sectors={} table={} parts={} system={}", info.name, disk.sectors, disk.table.is_some() as u8, disk.parts.len(), disk.is_system() as u8);
                 if disk.is_system() { self.status = "This disk holds a SexOS system: Corset leaves its system partitions alone.".into(); }
                 self.open = Some(Open { info, plan: Plan::new(disk), cursor: 0, review: false, leaving: false });
             }
             Err(e) => {
-                self.status = format!("Couldn't read {}: {:?} ({}).", info.name, e, text(w::message(status.get())));
+                self.status = format!("Couldn't read {}: {} ({}).", info.name, e, text(w::message(status.get())));
                 let _ = disks::done(&mut window.borrow_mut(), info.id);
             }
         }
@@ -240,7 +238,7 @@ impl App {
                 None => self.status = "That isn't a size in MiB.".into(),
             },
             Ask::FormatFs { slot } => match fs_choice(&typed, false) {
-                Some(Some(FsKind::Sexfs)) => { self.push(Op::Format { slot, fs: FsKind::Sexfs, label: String::new() }); }
+                Some(Some(Fs::Sexfs)) => { self.push(Op::Format { slot, fs: Fs::Sexfs, label: String::new() }); }
                 Some(Some(fs)) => self.ask = Some((Ask::FormatLabel { slot, fs }, Vec::new())),
                 _ => self.status = "Choose a filesystem by its number.".into(),
             },
@@ -252,12 +250,12 @@ impl App {
                 let mut typed = typed; typed.fill(0);
             }
             Ask::EncryptFs { slot, password } => match fs_choice(&typed, true) {
-                Some(None) => { self.push(Op::Encrypt { slot, password, cost: COST, inner: None }); }
-                Some(Some(FsKind::Sexfs)) => { self.push(Op::Encrypt { slot, password, cost: COST, inner: Some((FsKind::Sexfs, String::new())) }); }
+                Some(None) => { self.push(Op::Encrypt { slot, password, inner: None }); }
+                Some(Some(Fs::Sexfs)) => { self.push(Op::Encrypt { slot, password, inner: Some((Fs::Sexfs, String::new())) }); }
                 Some(Some(fs)) => self.ask = Some((Ask::EncryptLabel { slot, password, fs }, Vec::new())),
                 None => self.status = "Choose a filesystem by its number.".into(),
             },
-            Ask::EncryptLabel { slot, password, fs } => { self.push(Op::Encrypt { slot, password, cost: COST, inner: Some((fs, text(&typed))) }); }
+            Ask::EncryptLabel { slot, password, fs } => { self.push(Op::Encrypt { slot, password, inner: Some((fs, text(&typed))) }); }
             Ask::Confirm => {
                 let o = self.open.as_ref().unwrap();
                 if o.plan.confirms(&text(&typed)) { self.apply(window); } else {
@@ -290,8 +288,8 @@ impl App {
         let mut shown = (0usize, u64::MAX);
         let result = {
             let mut device = dev::Raw { window: &cell, id, sectors: o.info.sectors, status: &status };
-            corset_core::apply(&mut device, &o.plan, &mut *random, &mut |p| {
-                let pct = if p.total == 0 { 100 } else { p.done * 100 / p.total };
+            plan::apply(&mut device, &o.plan, &mut *random, &mut |p| {
+                let pct = p.pct;
                 if (p.step, pct / 10) == shown { return; }
                 shown = (p.step, pct / 10);
                 sex_pdx::serial_record!("[corset.progress] step={} steps={} pct={}", p.step, p.steps, pct);
@@ -304,12 +302,16 @@ impl App {
         let window = cell.into_inner();
         match result {
             Ok(r) => {
-                sex_pdx::serial_record!("[corset.applied] disk={} table={} before={} after={} parts={}", name, r.table_written as u8, r.before_table, r.after_table, r.disk.partitions.len());
+                sex_pdx::serial_record!("[corset.applied] disk={} table={} before={} after={} parts={}", name, r.table_written as u8, r.before_table, r.after_table, r.disk.parts.len());
                 self.status = format!("Applied {} change{} to {}. Files mounts its volumes again.", o.plan.steps().len(), if o.plan.steps().len() == 1 { "" } else { "s" }, name);
             }
-            Err(e) => {
-                sex_pdx::serial_record!("[corset.apply.failed] disk={} error={:?} status={}", name, e, status.get());
-                self.status = format!("Stopped: {:?} ({}). What was written before stays; read the disk again to see it.", e, text(w::message(status.get())));
+            Err(ApplyError::Changed) => {
+                sex_pdx::serial_record!("[corset.apply.failed] disk={} error=changed", name);
+                self.status = format!("{} changed since Corset read it: nothing was written. Open it again to plan on what it holds now.", name);
+            }
+            Err(ApplyError::Engine(e)) => {
+                sex_pdx::serial_record!("[corset.apply.failed] disk={} error={} status={}", name, e, status.get());
+                self.status = format!("Stopped: {} ({}). The old partition table stays until its write; open the disk again to see what it holds.", e, text(w::message(status.get())));
             }
         }
         self.done(window, id, &name);

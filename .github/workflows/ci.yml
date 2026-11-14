@@ -93,6 +93,8 @@ jobs:
       run: cargo test --locked --release -p sexfs --features repair --lib
     - name: Corset disks, GPT editor, FAT32/exFAT/SexFS formatters, SMART and BDSM encryption on the host
       run: bash scripts/corset_host_gate.sh
+    - name: Corset plans (step sentences, typed-name confirmation, re-read before apply, write order) on the host
+      run: cargo test --locked -p corset --lib
     - name: Network stack (IPv6 resolvers, accept backlog, UDP queues) on the host
       run: cargo test --locked -p sex-net --lib
     - name: HTTP/2 client (HPACK, 50 streams) against a real h2 server, plain and over TLS

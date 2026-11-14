@@ -3,7 +3,7 @@
 //! Files (`sex_app::files::disks`), at most `IO_SECTORS` a request.
 use alloc::boxed::Box;
 use core::cell::{Cell, RefCell};
-use corset_core::{BlockDevice, Error};
+use corset_core::{BlockIo, CorsetError, IoError, IoErrorKind};
 use sex_app::files::disks;
 use sex_app::Window;
 use sha2::{Digest, Sha256};
@@ -16,24 +16,41 @@ pub struct Raw<'a, 'b> {
     pub status: &'a Cell<u8>,
 }
 const CHUNK: usize = disks::IO_SECTORS as usize * disks::SECTOR;
-impl BlockDevice for Raw<'_, '_> {
-    fn sectors(&self) -> u64 { self.sectors }
-    fn read(&mut self, lba: u64, buf: &mut [u8]) -> Result<(), Error> {
+impl Raw<'_, '_> {
+    fn failed(&self, status: u8, kind: IoErrorKind, lba: u64, len: usize) -> CorsetError {
+        self.status.set(status);
+        CorsetError::Io(IoError { kind, lba, sectors: (len / disks::SECTOR) as u64 })
+    }
+    fn check(&self, lba: u64, len: usize) -> Result<(), CorsetError> {
+        if len == 0 || len % disks::SECTOR != 0 { return Err(self.failed(0, IoErrorKind::MisalignedBuffer, lba, len)); }
+        match lba.checked_add((len / disks::SECTOR) as u64) {
+            Some(end) if end <= self.sectors => Ok(()),
+            _ => Err(self.failed(0, IoErrorKind::OutOfBounds, lba, len)),
+        }
+    }
+}
+impl BlockIo for Raw<'_, '_> {
+    fn sector_size(&self) -> u32 { disks::SECTOR as u32 }
+    fn sector_count(&self) -> u64 { self.sectors }
+    fn read_sectors(&mut self, lba: u64, buf: &mut [u8]) -> Result<(), CorsetError> {
+        self.check(lba, buf.len())?;
         for (k, chunk) in buf.chunks_mut(CHUNK).enumerate() {
             let at = lba + (k * CHUNK / disks::SECTOR) as u64;
-            disks::read(&mut self.window.borrow_mut(), self.id, at, chunk).map_err(|e| { self.status.set(e); Error::Io })?;
+            let len = chunk.len();
+            disks::read(&mut self.window.borrow_mut(), self.id, at, chunk).map_err(|e| self.failed(e, IoErrorKind::DeviceFailure, at, len))?;
         }
         Ok(())
     }
-    fn write(&mut self, lba: u64, buf: &[u8]) -> Result<(), Error> {
+    fn write_sectors(&mut self, lba: u64, buf: &[u8]) -> Result<(), CorsetError> {
+        self.check(lba, buf.len())?;
         for (k, chunk) in buf.chunks(CHUNK).enumerate() {
             let at = lba + (k * CHUNK / disks::SECTOR) as u64;
-            disks::write(&mut self.window.borrow_mut(), self.id, at, chunk).map_err(|e| { self.status.set(e); Error::Io })?;
+            disks::write(&mut self.window.borrow_mut(), self.id, at, chunk).map_err(|e| self.failed(e, IoErrorKind::DeviceFailure, at, chunk.len()))?;
         }
         Ok(())
     }
-    fn flush(&mut self) -> Result<(), Error> {
-        disks::flush(&mut self.window.borrow_mut(), self.id).map_err(|e| { self.status.set(e); Error::Io })
+    fn flush(&mut self) -> Result<(), CorsetError> {
+        disks::flush(&mut self.window.borrow_mut(), self.id).map_err(|e| { self.status.set(e); CorsetError::Io(IoError { kind: IoErrorKind::FlushFailed, lba: 0, sectors: 0 }) })
     }
 }
 

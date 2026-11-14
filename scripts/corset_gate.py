@@ -10,7 +10,7 @@ Everything is typed as a person would. The gate checks:
   usb0 asks Files; the Files app (started with `files`, the person's picker) shows the
   question naming the disk's product and size, and Y allows it for that run.
 * G makes a GPT; A adds a 100 MiB basic data partition, F formats it FAT32 (CORSETFAT);
-  A adds one over the rest of the disk, F formats it exFAT (CORSETEX). Enter shows the
+  A (Enter for size and type) adds one over the rest of the disk, F formats it exFAT (CORSETEX). Enter shows the
   five steps; Enter applies (a blank disk loses nothing, so no name is typed).
 * Before the first write Files lets go of the disk; when Corset is done Files scans it
   again and mounts both volumes under /media. Spindle writes a file into each and reads
@@ -108,11 +108,11 @@ def main():
    type_app(label);s=len(t());q.key('ret')
    return g['wait'](rf'\[corset\.planned\] steps={steps} destructive=0 text=(Format [^\n]*)\n',s,60)[1]
   first=add('100','SHARED','1',2)
-  assert first=='Add partition 1 "SHARED" (Basic data (FAT, exFAT, NTFS)), 100 MiB from 1 MiB to 101 MiB.',first
+  assert first=='Add partition 1 "SHARED" (Basic data (FAT, exFAT)), 100 MiB from 1 MiB to 101 MiB.',first
   fmt('1','CORSETFAT',3)
   press('down',r'\[corset\.cursor\] row=1\n')
   second=add('','MORE','',4)
-  assert second.startswith('Add partition 2 "MORE" (Basic data (FAT, exFAT, NTFS)), 154 MiB from 101 MiB'),second
+  assert second.startswith('Add partition 2 "MORE" (Basic data (FAT, exFAT)), 154 MiB from 101 MiB'),second
   fmt('2','CORSETEX',5)
   s=len(t());q.key('ret')
   g['wait'](r'\[corset\.review\] disk=usb0 steps=5 destructive=0\n',s,60)
