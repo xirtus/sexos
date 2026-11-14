@@ -732,6 +732,24 @@ mod tests {
     }
 
     #[test]
+    fn refused_existing_input_stays_locked_and_cannot_create_over_it() {
+        let mut host = Fake {
+            file: crate::vault_file::parser_input(crate::vault_file::Loaded::Refused),
+            ..Default::default()
+        };
+        let mut ui = Ui::new(&mut host, Kdf::TEST_ONLY);
+        assert!(matches!(ui.screen, Screen::Unlock));
+        typed(&mut ui, &mut host, "new master");
+        typed(&mut ui, &mut host, "new master");
+        assert!(!ui.unlocked());
+        assert_eq!(host.file, Some(Vec::new()));
+        assert!(!host
+            .records
+            .iter()
+            .any(|r| r.starts_with("[chastity.created]")));
+    }
+
+    #[test]
     fn mismatched_repeat_starts_over() {
         let mut host = Fake::default();
         let mut ui = Ui::new(&mut host, Kdf::TEST_ONLY);

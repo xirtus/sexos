@@ -16,7 +16,11 @@ struct SexOs;
 
 impl Host for SexOs {
     fn load(&mut self) -> Option<Vec<u8>> {
-        std::fs::read(VAULT).ok()
+        let loaded = crate::vault_file::admit(std::fs::File::open(VAULT));
+        if matches!(loaded, crate::vault_file::Loaded::Refused) {
+            sex_std::record("[chastity.load.refused] reason=unreadable_or_oversize");
+        }
+        crate::vault_file::parser_input(loaded)
     }
 
     /// Written whole to a new file, made durable, then put in place: a crash leaves the

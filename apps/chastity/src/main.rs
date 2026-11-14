@@ -20,6 +20,7 @@
 mod consent;
 mod probe;
 mod ui;
+mod vault_file;
 
 #[cfg(target_os = "hermit")]
 mod sexos;
