@@ -1,0 +1,10 @@
+[package]
+name = "spindle-shell"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "Spindle's structured-pipeline shell: typed tables over pipes, built-in commands, table rendering"
+
+[dependencies]
+# GPL-2.0-or-later OR MIT, no_std: the wide-character table for terminal cell widths.
+sex-shape = { path = "../sex-shape" }
