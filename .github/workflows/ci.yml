@@ -553,7 +553,7 @@ jobs:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
     - name: Calculator arithmetic and calendar model on the host
-      run: cargo test --locked -p sex-calc-core -p sex-calendar -p sex-vt -p sex-textedit -p sex-wasm && cargo test --locked -p sex-pdx --test stream --test console_relay
+      run: cargo test --locked -p sex-calc-core -p sex-calendar -p sex-dav -p sex-vcard -p sex-vt -p sex-textedit -p sex-wasm && cargo test --locked -p sex-pdx --test stream --test console_relay
     - name: Build the image
       run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/productivity-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/productivity-build.log"; exit 1)
     - name: Calculator typed, clicked and recalled
@@ -562,6 +562,10 @@ jobs:
         python3 scripts/program_calc_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-productivity.img" --out "$RUNNER_TEMP/sexos-productivity/calc"
     - name: Calendar imports .ics, shows repeats on their days and keeps events
       run: python3 scripts/program_calendar_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-productivity.img" --out "$RUNNER_TEMP/sexos-productivity/calendar"
+    - name: Date syncs both ways with a CalDAV server, answers an invitation and rings a timer and a reminder
+      run: python3 scripts/program_date_caldav_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-productivity.img" --out "$RUNNER_TEMP/sexos-productivity/date"
+    - name: Crush imports vCards, edits, searches and syncs both ways with a CardDAV server
+      run: python3 scripts/program_crush_carddav_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-productivity.img" --out "$RUNNER_TEMP/sexos-productivity/crush"
     - name: Preserve productivity evidence
       if: always()
       uses: actions/upload-artifact@v4

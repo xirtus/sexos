@@ -1,0 +1,8 @@
+[package]
+name = "sex-vcard"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Contacts for SexOS: vCard 3.0 and 4.0 read and written, an address book that searches and keeps CardDAV state (no_std + alloc)"
+
+[dependencies]
