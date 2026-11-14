@@ -88,6 +88,7 @@ members = [
     "apps/stdnet",
     "apps/ssh",
     "apps/pdf",
+    "apps/aftercare",
     "apps/lua",
     "apps/rg",
     "apps/fd",

@@ -77,6 +77,8 @@ jobs:
       run: cargo test --locked -p gaze-codecs --all-features
     - name: Aftercare backups (dedup, encryption, restore, prune, check) on the host
       run: cargo test --locked -p aftercare-core
+    - name: Aftercare app (folder store, restore hashes, settings, schedule) on the host
+      run: cargo test --locked -p aftercare
     - name: Loom archives (zip, tar, 7z, gz, zst, xz) with Python interop on the host
       run: cargo test --locked -p sex-archive --features std
     - name: Pinyin input method
@@ -414,6 +416,8 @@ jobs:
         python3 scripts/sdl_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/sdl"
     - name: SDL2 game (demo score, window, sound, keys)
       run: python3 scripts/driftspark_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/driftspark"
+    - name: Aftercare backup (back up, delete, restore, hashes equal, wrong password refused)
+      run: python3 scripts/aftercare_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/aftercare"
     - name: Preserve program evidence
       if: always()
       uses: actions/upload-artifact@v4
