@@ -99,6 +99,10 @@ jobs:
         cargo test --locked -p sex-ssh
     - name: BitTorrent engine (sex-torrent) goldens and protocol tests on the host
       run: cargo test --locked -p sex-torrent
+    - name: Swingers downloads from and seeds to aria2 on the host
+      run: |
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends aria2
+        bash scripts/swingers_host_gate.sh
     - name: Crash record format host regressions
       run: bash scripts/crash_log_host_gate.sh
     - name: Experimental JS baseline JIT differential and emitted-code gates

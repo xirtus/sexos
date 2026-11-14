@@ -633,15 +633,29 @@ impl PeerConn {
                 }
             }
             Message::Bitfield(b) => {
+                // Some clients (aria2) send `have none` and later a bitfield of what they
+                // got since; treat a late bitfield as a run of `have`s instead of failing.
+                if self.got_pieces && self.num_pieces > 0 {
+                    let late = Bitfield::from_bytes(&b, self.num_pieces).ok_or(PeerError::BadPiece)?;
+                    let new: Vec<u32> = late.ones().collect();
+                    for i in new { if self.have.set(i) { ev.push(PeerEvent::Have(i)); } }
+                    return Ok(());
+                }
                 if self.got_pieces { return Err(PeerError::Protocol); }
                 self.got_pieces = true;
                 if self.num_pieces == 0 { self.pending.bitfield = Some(b); ev.push(PeerEvent::PiecesPending); }
                 else { self.have = Bitfield::from_bytes(&b, self.num_pieces).ok_or(PeerError::BadPiece)?; ev.push(PeerEvent::Pieces); }
             }
             Message::HaveAll | Message::HaveNone => {
-                if !fast || self.got_pieces { return Err(PeerError::Protocol); }
-                self.got_pieces = true;
+                if !fast { return Err(PeerError::Protocol); }
                 let all = m == Message::HaveAll;
+                // Late: `have none` adds nothing; `have all` is every piece.
+                if self.got_pieces && self.num_pieces > 0 {
+                    if all { for i in 0..self.num_pieces { if self.have.set(i) { ev.push(PeerEvent::Have(i)); } } }
+                    return Ok(());
+                }
+                if self.got_pieces { return Err(PeerError::Protocol); }
+                self.got_pieces = true;
                 if self.num_pieces == 0 { self.pending.have_all = all; ev.push(PeerEvent::PiecesPending); }
                 else { self.have = if all { Bitfield::full(self.num_pieces) } else { Bitfield::new(self.num_pieces) }; ev.push(PeerEvent::Pieces); }
             }
@@ -960,9 +974,15 @@ mod tests {
         let ev = a.on_bytes(&b.take_outgoing(), 4).unwrap();
         assert!(matches!(&ev[0], PeerEvent::Block { block, requested: true, data } if *block == blk && data.len() == 16384));
         assert_eq!(a.down.total(), 16384);
-        // Bitfield after pieces is a protocol error.
+        // A late `have none` or bitfield (aria2 sends both) is tolerated: a late bitfield
+        // counts as `have`s, a late `have none` changes nothing.
         b.send_message(&Message::HaveNone, 5);
-        assert_eq!(a.on_bytes(&b.take_outgoing(), 5), Err(PeerError::Protocol));
+        assert_eq!(a.on_bytes(&b.take_outgoing(), 5), Ok(vec![]));
+        let mut late = Bitfield::new(a.have.len());
+        late.set(1);
+        b.send_message(&Message::Bitfield(late.as_bytes().to_vec()), 5);
+        let ev = a.on_bytes(&b.take_outgoing(), 5).unwrap();
+        assert!(ev.contains(&PeerEvent::Have(1)) || a.have.get(1));
     }
 
     #[test]

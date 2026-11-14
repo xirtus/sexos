@@ -734,4 +734,13 @@ mod tests {
         m3[52] ^= 0xF0;
         assert_eq!(b.feed(&m3, &mut lookup).unwrap_err(), Error::Malformed);
     }
+
+    #[test]
+    fn dh_matches_a_reference_value() {
+        // pow(2, 0x0102..14, P) computed independently (Python big integers).
+        let x: [u8; PRIVATE_BYTES] = core::array::from_fn(|i| i as u8 + 1);
+        let want = "1dd8236fd093914b0323c692479daf08e9cf5ff3a87229a63b3abf0e3e44c82ac55742af769a069ea5308eb5923e98ad600047fb532a0e4306d63fb87af8a85a16b126d686a0723a7d5c05e8da6f7187f522acda8f80d5da05066c92d11286c0";
+        assert_eq!(crate::to_hex(&dh_public(&x)), want);
+    }
+
 }
