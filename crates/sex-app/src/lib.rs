@@ -759,6 +759,15 @@ pub mod files {
             w::ReadIoStats::decode(data.get(..n as usize).unwrap_or(&[])).ok_or(w::INVALID)
         })?
     }
+    /// Every bound program run as Files sees it (`sex_pdx::fs::runs` entries), copied
+    /// into `out`; returns the length. Paths only if this run holds the whole filesystem.
+    pub fn runs(window: &mut Window, out: &mut [u8]) -> Result<usize, Error> {
+        exchange(Some(window), w::RUNS, b"", 0, 0, |_| {}, |n, data| {
+            let n = (n as usize).min(out.len()).min(data.len());
+            out[..n].copy_from_slice(&data[..n]);
+            n
+        })
+    }
     /// Reads up to `out.len()` bytes of the file from byte `offset`; fewer at its end.
     pub fn read_at(window: &mut Window, path: &[u8], offset: u64, out: &mut [u8]) -> Result<usize, Error> {
         direct::read_at_held(Some(window), path, offset, out)

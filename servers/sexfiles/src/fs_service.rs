@@ -761,6 +761,31 @@ pub fn handle(caller: u32, caller_task: u32, a: u64, offset: u64, length: u64) -
     }
     answer
 }
+/// Mesh's view of every bound run (`w::RUNS`): its device reads and the grants it
+/// holds. Paths only for Spindle or a run the person gave the whole filesystem.
+fn runs_view(program: Option<usize>, out: &mut [u8]) -> usize {
+    let bindings = unsafe { &*core::ptr::addr_of!(BINDINGS) };
+    let paths = program.map_or(true, |k| bindings[k].as_ref().is_some_and(|b| b.args[..b.args_len].split(|c| *c == b' ').any(|t| t == b"@/")));
+    let rows = sex_pdx::app_catalog::INCARNATIONS.iter().filter(|i| i.app == sex_pdx::app_catalog::App::Program);
+    let mut used = 0;
+    for (k, row) in rows.enumerate() {
+        let Some(b) = bindings.get(k).and_then(|b| b.as_ref()) else { continue };
+        let mut text = [0u8; w::ARGS_MAX + PICKED_MAX + 2];
+        let (mut n, mut grants) = (0usize, 0u8);
+        let tokens = b.args[..b.args_len].split(|c| *c == b' ').chain(b.picked[..b.picked_len].split(|c| *c == b' '));
+        for t in tokens.filter(|t| w::runs::is_grant(t)) {
+            grants = grants.saturating_add(1);
+            if !paths || n + 1 + t.len() > text.len() { continue; }
+            if n > 0 { text[n] = b' '; n += 1; }
+            text[n..n + t.len()].copy_from_slice(t);
+            n += t.len();
+        }
+        let io = unsafe { (*core::ptr::addr_of!(READ_IO)).get(w::PROGRAM_INDEX_BASE + k).copied().unwrap_or(w::ReadIoStats::ZERO) };
+        let run = w::runs::Run { target: row.target, task: b.task, read_calls: io.device_calls, read_bytes: io.device_bytes, grants, text: &text[..n] };
+        match w::runs::put(&mut out[used..], &run) { Some(m) => used += m, None => break }
+    }
+    used
+}
 fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Request) -> u64 {
     let mut r = r;
     let Ok(view) = sex_pdx::memory_region_view(w::PROVIDER_SLOT_BASE + index as u64, 0, w::REGION_BYTES as u64, QUERY_VIEW | READ | WRITE) else { return w::reply(r.seq, w::IO, 0) };
@@ -769,6 +794,11 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
         if r.path_len != 0 || r.offset != 0 || r.length != 0 { return w::reply(r.seq, w::INVALID, 0); }
         unsafe { READ_IO[index] }.encode(&mut region[w::PATH_BYTES..]).unwrap();
         return w::reply(r.seq, w::OK, w::ReadIoStats::BYTES as u32);
+    }
+    if r.kind == w::RUNS {
+        if r.path_len != 0 || r.offset != 0 || r.length != 0 { return w::reply(r.seq, w::INVALID, 0); }
+        let n = runs_view(program, &mut region[w::PATH_BYTES..w::CACHE_AT]);
+        return w::reply(r.seq, w::OK, n as u32);
     }
     // A client found now may have been absent when Files last looked: keep it, so its
     // cache is cleared with the others.
