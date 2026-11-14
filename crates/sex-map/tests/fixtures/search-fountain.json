@@ -1,0 +1,23 @@
+[
+ {
+  "place_id": 1001,
+  "licence": "Fixture data, made up",
+  "osm_type": "node",
+  "osm_id": 1001,
+  "lat": "52.5170304",
+  "lon": "13.3703613",
+  "category": "amenity",
+  "type": "fountain",
+  "place_rank": 30,
+  "importance": 0.3,
+  "addresstype": "amenity",
+  "name": "Fountain Square",
+  "display_name": "Fountain Square, Mill Quarter, Sometown",
+  "boundingbox": [
+   "52.5165304",
+   "52.5175304",
+   "13.3698613",
+   "13.3708613"
+  ]
+ }
+]

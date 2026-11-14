@@ -1914,6 +1914,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "hookup"
+version = "0.1.0"
+dependencies = [
+ "sex-font",
+ "sex-kdeconnect",
+ "sex-std",
+]
+
+[[package]]
 name = "hum"
 version = "0.1.0"
 dependencies = [
@@ -3480,6 +3489,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
+name = "rendezvous"
+version = "0.1.0"
+dependencies = [
+ "sex-image",
+ "sex-map",
+ "sex-std",
+ "tiny-skia 0.11.4",
+]
+
+[[package]]
 name = "resvg"
 version = "0.50.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4012,6 +4031,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-kdeconnect"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "sex-kdeconnect",
+]
+
+[[package]]
 name = "sex-kernel"
 version = "0.1.0"
 dependencies = [
@@ -4063,6 +4090,17 @@ dependencies = [
 [[package]]
 name = "sex-mail"
 version = "0.1.0"
+
+[[package]]
+name = "sex-map"
+version = "0.1.0"
+dependencies = [
+ "libm",
+ "serde_json",
+ "sex-font",
+ "tiny-skia 0.11.4",
+ "zune-inflate",
+]
 
 [[package]]
 name = "sex-media"
