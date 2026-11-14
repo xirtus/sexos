@@ -29,6 +29,9 @@ pub struct Equalizer {
     upper: [i64; 2],
 }
 impl Equalizer {
+    pub fn gains(&self) -> [u16; 3] {
+        self.gains
+    }
     pub fn new(low: u16, mid: u16, high: u16) -> Result<Self, Error> {
         if [low, mid, high].iter().any(|g| *g > 400) {
             return Err(Error::Gain);
@@ -76,6 +79,14 @@ pub struct Compressor {
     envelope: i64,
 }
 impl Compressor {
+    pub fn parameters(&self) -> (u16, u16, u32, u32) {
+        (
+            (self.threshold / Q) as u16,
+            self.ratio as u16,
+            self.attack as u32,
+            self.release as u32,
+        )
+    }
     pub fn new(
         threshold: u16,
         ratio: u16,
@@ -158,6 +169,9 @@ pub struct Reverb {
     wet: i64,
 }
 impl Reverb {
+    pub fn parameters(&self) -> (u16, u16) {
+        (self.feedback as u16, self.wet as u16)
+    }
     pub fn new(feedback: u16, wet: u16) -> Result<Self, Error> {
         if feedback > 90 || wet > 100 {
             return Err(Error::Reverb);
