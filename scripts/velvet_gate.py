@@ -11,6 +11,7 @@ from pathlib import Path
 from install_program import install
 from quil_autosave_gate import boot
 from program_egui_gate import colours
+from program_gate_geometry import maximize, current_tile
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -44,12 +45,18 @@ def main():
         launch = g['wait'](rf'\[shell.program.launch\] target={target} task={task} surface=(\d+)', start, 60)
         surface = int(launch[1])
         g['wait'](r'\[velvet.frame\] n=1\n', start, 300)
-        time.sleep(2)
-        tile = list(map(int, re.findall(rf'\[shell.tile.apply\] sid={surface} x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)', text())[-1]))
-        ox, oy = tile[0] + 8, tile[1] + 36
+        tile, resized = maximize(g, surface)
+        layout = g['wait'](rf'\[velvet.layout\] w=({tile[2]-16}) h=({tile[3]-42})', resized, 120)
+        width, height = map(int, layout.groups())
+        g['focus'](surface)
 
         def click_at(x, y):
-            x, y = x + ox, y + oy
+            assert 0 <= x < width and 0 <= y < height, (x, y, width, height)
+            actual = current_tile(text(), surface)
+            side = (actual[2] - width) // 2
+            top = actual[3] - height - side
+            x, y = x + actual[0] + side, y + actual[1] + top
+            assert 0 <= x < rw and 0 <= y < rh, (x, y, rw, rh)
             q.cmd('input-send-event', {'events': [
                 {'type': 'abs', 'data': {'axis': 'x', 'value': round(x * 32767 / (rw - 1))}},
                 {'type': 'abs', 'data': {'axis': 'y', 'value': round(y * 32767 / (rh - 1))}}]})
@@ -59,12 +66,12 @@ def main():
                 time.sleep(.15)
 
         def cell(i):
-            matches = re.findall(rf'\[velvet.cell\] n={i} x=(-?\d+) y=(-?\d+)', text())
+            matches = re.findall(rf'\[velvet.cell\] n={i} x=(-?\d+) y=(-?\d+)', text()[resized:])
             assert matches, f'no cell {i}'
             click_at(*map(int, matches[-1]))
 
         def control(name):
-            matches = re.findall(rf'\[velvet.control\] name={name} x=(-?\d+) y=(-?\d+)', text())
+            matches = re.findall(rf'\[velvet.control\] name={name} x=(-?\d+) y=(-?\d+)', text()[resized:])
             assert matches, name
             click_at(*map(int, matches[-1]))
 
@@ -77,7 +84,7 @@ def main():
             path = a.out / f'{name}.ppm'
             q.cmd('screendump', {'filename': str(path)})
             time.sleep(.2)
-            n = len(colours(path.read_bytes(), tile))
+            n = len(colours(path.read_bytes(), current_tile(text(), surface)))
             assert n > 8, (name, 'blank window', n)
             return n
 

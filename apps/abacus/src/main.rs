@@ -21,6 +21,16 @@ mod program {
         sex_pdx::task_finish(1);
     }
 
+    fn report(app: &App, calc: &Abacus) {
+        let s = app.ui.theme().scale;
+        for (n, (id, _)) in calc.keys.iter().enumerate() {
+            let c = app.ui.rect(*id).center();
+            sex_pdx::serial_record!("[abacus.key] n={} x={} y={}", n, (c.x * s) as i32, (c.y * s) as i32);
+        }
+        let (w, h) = app.ui.size();
+        sex_pdx::serial_record!("[abacus.layout] w={} h={}", w, h);
+    }
+
     extern "C" fn main() -> ! {
         let mut app = App::open("Abacus", Theme::light(), Strings::new("en"));
         let calc = Abacus::build(&mut app.ui);
@@ -28,15 +38,17 @@ mod program {
         app.present();
         let (target, task) = (app.window.target, app.window.task);
         sex_pdx::serial_record!("[abacus.ready] target={} task={} keys={}", target, task, calc.keys.len());
-        let s = app.ui.theme().scale;
-        for (n, (id, _)) in calc.keys.iter().enumerate() {
-            let c = app.ui.rect(*id).center();
-            sex_pdx::serial_record!("[abacus.key] n={} x={} y={}", n, (c.x * s) as i32, (c.y * s) as i32);
-        }
+        report(&app, &calc);
+        let mut size = app.ui.size();
         let mut reported = false;
         let mut last_focus=None;
         loop {
             let out = app.next();
+            if app.ui.size() != size {
+                size = app.ui.size();
+                report(&app, &calc);
+                last_focus = None;
+            }
             let focused=app.ui.focused();
             if focused!=last_focus {
                 last_focus=focused;

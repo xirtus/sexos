@@ -6,6 +6,7 @@ import argparse,http.server,json,os,re,shutil,threading,time
 from pathlib import Path
 from install_program import install,fnv
 from program_egui_gate import colours
+from program_gate_geometry import maximize, current_tile
 ROOT=Path(__file__).resolve().parents[1]
 BODY=b'Leather reached the network.\n'
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -40,16 +41,20 @@ def main():
         g['focus'](153);time.sleep(.3);start=len(t());type_text('run '+('+net 'if network else '')+'leather-'+name+(' '+args if args else ''));q.key('ret')
         m=g['wait'](rf'\[leather.ready\] app={name} target=(\d+) task=(\d+) frames=([1-9]\d*)',start,300)
         target,task=int(m[1]),int(m[2]);launch=g['wait'](rf'\[shell.program.launch\] target={target} task={task} surface=(\d+)',start,60)
-        surface=int(launch[1]);g['focus'](surface);time.sleep(1)
-        pos={n:(int(x),int(y))for n,x,y in re.findall(rf'\[leather.control\] app={name} name=(\w+) x=(-?\d+) y=(-?\d+)',t()[start:])}
-        tile=list(map(int,re.findall(rf'\[shell.tile.apply\] sid={surface} x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)',t())[-1]))
+        surface=int(launch[1]);tile,resized=maximize(g,surface)
+        layout=g['wait'](rf'\[leather.layout\] app={name} w=({tile[2]-16}) h=({tile[3]-42})',resized,120)
+        width,height=map(int,layout.groups());g['focus'](surface)
+        pos={n:(int(x),int(y))for n,x,y in re.findall(rf'\[leather.control\] app={name} name=(\w+) x=(-?\d+) y=(-?\d+)',t()[resized:])}
         def click(control):
-            x,y=pos[control];x+=tile[0]+8;y+=tile[1]+36
+            x,y=pos[control];assert 0<=x<width and 0<=y<height,(control,x,y,width,height)
+            tile=current_tile(t(),surface);side=(tile[2]-width)//2;top=tile[3]-height-side
+            x+=tile[0]+side;y+=tile[1]+top
+            assert 0<=x<rw and 0<=y<rh,(control,x,y,rw,rh)
             q.cmd('input-send-event',{'events':[{'type':'abs','data':{'axis':'x','value':round(x*32767/(rw-1))}},{'type':'abs','data':{'axis':'y','value':round(y*32767/(rh-1))}}]});time.sleep(.2)
             for down in (True,False):q.cmd('input-send-event',{'events':[{'type':'btn','data':{'down':down,'button':'left'}}]});time.sleep(.2)
         def close():
             time.sleep(.5);path=out/(name+'.ppm');q.cmd('screendump',{'filename':str(path)});time.sleep(.3)
-            n=len(colours(path.read_bytes(),tile));assert n>8,(name,n)
+            n=len(colours(path.read_bytes(),current_tile(t(),surface)));assert n>8,(name,n)
             start=len(t());g['focus'](surface);q.key('f11');g['wait'](rf'\[app.private.retired\] target={target} task={task} ',start,120)
         return start,click,close
     try:
