@@ -505,6 +505,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "bodice"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-ebook",
+ "sex-font",
+ "sex-image",
+ "sex-pdx",
+]
+
+[[package]]
 name = "brotli"
 version = "8.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1596,6 +1607,16 @@ dependencies = [
  "log",
  "regex-automata",
  "regex-syntax",
+]
+
+[[package]]
+name = "gossip"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-feed",
+ "sex-font",
+ "sex-pdx",
 ]
 
 [[package]]
@@ -3921,8 +3942,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-ebook"
+version = "0.1.0"
+dependencies = [
+ "sex-image",
+ "sex-xml",
+ "zune-inflate",
+]
+
+[[package]]
 name = "sex-episodes"
 version = "0.1.0"
+
+[[package]]
+name = "sex-feed"
+version = "0.1.0"
+dependencies = [
+ "sex-xml",
+]
 
 [[package]]
 name = "sex-fetch"
@@ -4271,6 +4308,10 @@ dependencies = [
  "sha1",
  "sha2 0.10.9",
 ]
+
+[[package]]
+name = "sex-xml"
+version = "0.1.0"
 
 [[package]]
 name = "sexacpi"
