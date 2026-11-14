@@ -83,6 +83,8 @@ jobs:
       run: cargo test --locked -p sex-archive --features std
     - name: Pinyin input method
       run: cargo test --locked -p sex-ime
+    - name: RFB (VNC) client and server codec, byte-exact goldens
+      run: cargo test --locked -p sex-rfb
     - name: Multipass accounts, Shibari keeper (link fixtures, tokens never leave)
       run: cargo test --locked -p shibari -p sex-multipass
     - name: Valentine mail (IMAP IDLE + SMTP send-then-receive fixture, MIME, threads)
@@ -200,6 +202,8 @@ jobs:
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends openssh-server
         sudo usermod -p '*' "$USER"
         python3 scripts/ssh_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/ssh"
+    - name: Lurk views a host VNC server and sends it keys
+      run: python3 scripts/lurk_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/lurk"
     - name: Needle prints to a fake IPP Everywhere printer and scans from a fake eSCL scanner
       run: python3 scripts/needle_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/needle"
     - name: Web page JavaScript (native QuickJS tier)

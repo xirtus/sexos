@@ -107,6 +107,8 @@ members = [
     "crates/sex-archive",
     "apps/sdltest",
     "apps/driftspark",
+    "crates/sex-rfb",
+    "apps/lurk",
     "crates/gaze-codecs",
     "crates/vellum-edit",
     "crates/loom-core",

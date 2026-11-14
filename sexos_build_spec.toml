@@ -80,7 +80,8 @@ crates = [
   "apps/python/Cargo.toml",
   "apps/store/Cargo.toml",
   "apps/sdltest/Cargo.toml",
-  "apps/driftspark/Cargo.toml"
+  "apps/driftspark/Cargo.toml",
+  "apps/lurk/Cargo.toml"
 ]
 
 [[stage]]
@@ -607,6 +608,15 @@ target = "x86_64-sex-app.json"
 manifest = "apps/hum/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/doze"
 dest_artifact = "iso_root/programs/doze"
+
+# Lurk: the remote desktop viewer (VNC/RFB client), `run +net lurk HOST:PORT`.
+[[stage]]
+id = "build_lurk"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/lurk/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/lurk"
+dest_artifact = "iso_root/programs/lurk"
 
 [[stage]]
 id = "build_sext"
