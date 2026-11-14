@@ -38,7 +38,22 @@ authorized kernel source review and evidence. No kernel file was changed here.
 Local validation before runtime graft: 1,202 Python regressions passed; 23 normal
 and 23 diagnostic production keyboard-outbox tests plus three HID tests passed.
 Normal Input/Shell/USB and Chastity guest builds passed forbidden-instruction
-scans. Actual v3 vault typing evidence is pending, not claimed by these host tests.
+scans. Actual local v3 two-boot Chastity gate subsequently passed: probe 6/6,
+create, generated entry, TOTP, Lock, wrong-password refusal, persisted reboot
+unlock, search, clipboard refusal and exact run retirement. All 12 focused typing
+intervals had no userspace keyboard payload/CLI echo. Normal Input/Shell/USB mode
+receipts were verified. Zero observed kernel payload lines in those intervals
+**does not establish kernel privacy**, because its first-sixteen budget may already
+have been consumed. Exact image/kernel/serial/audit digests and scope are recorded
+in `INPUT_PAYLOAD_PRIVACY_RUNTIME_2026_11_14.json`.
+
+A separately labeled local UNSAFE diagnostic graft emitted both proof startup
+receipts and the original code=35 physical H-key admission, followed by verified
+DNS/TCP exchange. The full legacy HTTP gate failed its unchanged body pixel oracle
+(rows 11/12/14/15); this is partial diagnostic receipt evidence, not a passing
+full gate or sealed source/image proof. Original logs, screenshots and PCAP remain
+under `target/input-privacy-runtime/UNSAFE-diagnostic/http-proof`. The dedicated
+canonical diagnostic CI build/freeze/gates remain pending.
 
 Normal ELF SHA-256 (source checkpoint accompanying this document):
 
