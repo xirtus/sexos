@@ -1,0 +1,22 @@
+[package]
+name = "gaze-codecs"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Gaze picture formats beyond sex-image: EXIF, orientation, RAW previews, JPEG XL, SVG"
+
+[dependencies]
+sex-image = { path = "../sex-image" }
+jxl-oxide = { version = "=0.12.6", default-features = false, optional = true }
+resvg = { version = "=0.50.0", default-features = false, features = ["text"], optional = true }
+
+[features]
+default = []
+std = []
+jxl = ["std", "dep:jxl-oxide"]
+svg = ["std", "dep:resvg"]
+
+[dev-dependencies]
+# Lossless JPEG XL encoder (MIT OR Apache-2.0 OR Zlib): JXL fixtures are made at test time.
+zune-jpegxl = { version = "=0.5.2", default-features = false }
+zune-core = { version = "=0.5.3", default-features = false }

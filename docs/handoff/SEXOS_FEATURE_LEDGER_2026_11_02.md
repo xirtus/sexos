@@ -4007,6 +4007,83 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   password gets no confirm.
 - **ABI / kernel:** none.
 
+## Settings store, slice B1: `sex-config` kept by Files (2026-11-13)
+- **What:** new `crates/sex-config`: one typed schema of 18 settings (appearance,
+  desktop, display, keyboard, sound, time, session, setup) with stable numbers, ranges
+  and defaults, and a forgiving TOML-subset text form. Files keeps the live table and
+  writes it to `/system/settings.toml` on every change. The Shell watches it by
+  generation and applies what it owns; wallpaper and night light chosen with Super+B
+  and Super+Shift+N now last across restarts (the "not yet" above). Plan:
+  `DAILY_DRIVER_NEXT_100_SLICES.md` workstream B.
+- **Who may change settings:** the Shell (over its program route), Spindle, and the
+  program Files bound to `/data/settings`, all named by the kernel's caller domain.
+  Everyone with a route to Files may read. Files checks every key and range.
+- **Evidence:** `cargo test -p sex-config` (schema, round trip, hand-edited files,
+  protocol and caller rules), in CI. QEMU gate `scripts/settings_persist_gate.py`
+  (two starts on one disk).
+- **ABI:** new PDX opcode `0x2F0` (`sex_pdx::config::OP`) to Files, reply tag `0xC6`.
+  No syscall, no kernel change.
+
+## Settings program, slices B2/B3 (2026-11-13)
+- **What:** new `apps/settings` (`run settings`): a page per schema section
+  (Appearance, Desktop, Display, Keyboard, Sound, Date & time, Lock & idle, System),
+  type-to-search across all settings, Left/Right to change a value within its range
+  (Shift for bigger steps), saved by Files at once. The Shell applies desktop changes
+  live. `sex_app::settings` gives every program `get`, `set` and `generation`.
+- **Evidence:** `scripts/settings_host_gate.sh` (pages, search, steps, render) in CI;
+  `scripts/settings_persist_gate.py` drives the program over a second start and checks
+  a third.
+- **Not yet:** Display scale, keyboard repeat and volume are stored but not yet acted
+  on by Display, Input and Bell (each owner's slice reads `sex_app::settings` or the
+  Shell's copy). A launcher entry for Settings belongs to the desktop workstream.
+
+## Time zones, slice B4 (2026-11-13)
+- **What:** `sex_time::zone`: 59 zones as compiled Rust data (standard offset, abbreviation,
+  and today's daylight-saving rule: EU, US/Canada, south-east Australia, New Zealand,
+  Chile, Israel, Egypt). Current rules only, not history. The Shell sends the zone from
+  settings to Display (`OP_CLOCK_ZONE` 0x2F1), and the bar shows local time and its
+  abbreviation (`14:05 CEST | 13 NOV`) from the same UTC sample. UTC stays the default.
+- **Evidence:** `cargo test -p sex-time` (Berlin, New York, Sydney, Auckland, Israel,
+  Egypt transitions in 2026, table order equals `sex_config::ZONES`), in
+  `settings_host_gate.sh`; `silkbar_clock_gate.py` source contract updated for the
+  zone-aware caption; `settings_persist_gate.py` picks Europe/London in Settings and
+  checks it after a restart.
+- **Not yet:** 12-hour clock display (stored only); programs' own local time.
+
+## Lock screen and idle, slices B6/B7 (2026-11-13)
+- **What:** Super+Esc locks (the binding the window manager already reserved; Super+L
+  stays focus-right). While locked the Shell keeps every key, click and move, and
+  Display paints only the lock surface over the whole frame: "Locked", one dot per typed
+  character, and why the last try failed. Enter sends the password to Files, which
+  keeps only an Argon2id hash (m=4 MiB, t=3, random salt) in `/system/password` and
+  answers match or not (`sex_config::secret`, opcode 0x2F3, reply tag 0xC7). With no
+  password set, Enter unlocks. Settings sets the password with Ctrl+P (typed twice; the Shell keeps F-keys and Tab, so Settings pages use PgDn/PgUp).
+  Idle: after `session.dim_after_min` the screen dims, after `lock_after_min` it locks
+  (if `lock_on_idle`), after `blank_after_min` it goes black; any input wakes it, and
+  the input that wakes it does nothing else. Idle times default to never, so test runs
+  and unconfigured machines never dim; first-start setup will offer times.
+- **Display:** `OP_SCREEN_STATE` 0x2F2 (`sex_pdx::screen_state`) from the Shell only;
+  dim and off shade the finished frame on its way out, as night light does.
+- **Evidence:** `settings_host_gate.sh` (password set/check/wipe with real Argon2id,
+  state words and shades, Settings password entry); display host gates updated with a
+  lock-surface stub; QEMU gate `scripts/lock_screen_gate.py` in CI (devices job).
+- **Not yet:** inhibiting idle while media plays (needs a Bell hint); a salt from the
+  kernel's held entropy source instead of RDRAND.
+
+## First-start setup and default apps, slices B8/B9 (2026-11-13)
+- **B8:** while `setup.done` is off, Settings opens with four questions: keyboard
+  layout, time zone (type to narrow the list), a lock password (may be empty), and
+  idle behaviour (dim/lock/off after 5/10/15 or 10/15/30 minutes, or never). Each answer
+  is an ordinary setting; the last turns `setup.done` on. No user accounts yet, so no
+  user name. Launching Settings by itself on a fresh disk waits for programs shipping
+  with the system (packages workstream); `run settings` starts it today.
+- **B9:** `open.pdf`, `open.image`, `open.video`, `open.audio`, `open.page` (Settings page
+  "Default apps") and `sex_config::kind_of` / `Config::program_for` by extension. Files
+  says which program opens a file and the exact `run` line. Opening it from Files with
+  one key needs a Shell "open with" portal (a program may not start another today):
+  noted for the desktop workstream.
+- **Evidence:** `settings_host_gate.sh` (setup walk, zone filter, empty password,
+  associations); the QEMU gates walk the setup first on their fresh disks.
 ## System monitor, slice J1 (2026-11-13)
 - **What:** `run monitor` opens Monitor: every service and program that has used the
   CPU, busiest first, with its share of one core over the last second, the memory an
