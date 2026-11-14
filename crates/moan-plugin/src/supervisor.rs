@@ -21,7 +21,7 @@ pub struct OfflineJob {
 }
 fn path_ok(p: &[u8]) -> bool {
     p.starts_with(b"@/")
-        && p.len() <= 70
+        && p.len() <= 192
         && !p.iter().any(|b| *b <= 32 || *b == 127)
         && !p.split(|b| *b == b'/').any(|s| s == b"." || s == b"..")
 }
@@ -43,7 +43,7 @@ fn write_new(path: &[u8], bytes: &[u8]) -> Result<(), Error> {
 impl OfflineJob {
     /// Paths must come from a user-granted render folder and use fresh nonce names.
     /// No whole-folder grant is passed to the helper: only these three exact paths.
-    /// `nonce` must come from the parent's OS entropy, never timestamps/counters.
+    /// `nonce` must come from the parent's trusted CSPRNG, never timestamps/counters.
     pub fn start(
         plugin: &[u8],
         input: &[u8],
@@ -92,10 +92,6 @@ impl OfflineJob {
         if files::stat(output).is_ok() {
             return Err(Error::Files);
         }
-        write_new(
-            input,
-            &job::encode_request(nonce, pcm, parameters).map_err(Error::Job)?,
-        )?;
         let mut args = Vec::with_capacity(256);
         for b in nonce {
             args.push(b"0123456789abcdef"[(b >> 4) as usize]);
@@ -110,6 +106,10 @@ impl OfflineJob {
         if args.len() > 256 {
             return Err(Error::Path);
         }
+        write_new(
+            input,
+            &job::encode_request(nonce, pcm, parameters).map_err(Error::Job)?,
+        )?;
         launch::run_hidden(b"moanplug", &args, cookie).map_err(|_| Error::Launch)?;
         Ok(Self {
             job,

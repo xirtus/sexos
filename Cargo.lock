@@ -3047,6 +3047,7 @@ version = "0.1.0"
 dependencies = [
  "moan-core",
  "moan-export",
+ "moan-plugin",
  "sex-app",
  "sex-pdx",
  "weft",

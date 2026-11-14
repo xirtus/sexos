@@ -10,6 +10,8 @@ pub mod job;
     any(target_os = "none", target_os = "hermit")
 ))]
 pub mod mapped;
+#[cfg(all(target_arch = "x86_64", any(target_os = "none", target_os = "hermit")))]
+pub mod nonce;
 #[cfg(all(
     feature = "sexos",
     target_arch = "x86_64",
