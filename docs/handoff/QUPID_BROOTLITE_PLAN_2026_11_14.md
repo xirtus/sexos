@@ -86,6 +86,10 @@ controls and media keys, and gives Music gapless playback.
   program Qupid starts per menu step, granted only the network and its own addon folder.
   It answers with list items or a resolved URL over PDX and exits, so it costs nothing
   while video plays. Addon install from a repository zip, settings dialogs drawn by Qupid.
+  Rust first (Andreas, 2026-11-14): what most addons are used for gets native Rust in
+  Qupid, adapted from brootlite-core (Stremio, Jellyfin, YouTube, creators, swarm), plus
+  native ports of the common link resolvers. The Python helper is the fallback for
+  addons nobody has ported, so the everyday path never starts Python.
 - **Q9-Q12** as in the table, each after a short report where it is large (Q11).
 
 Order: Q2 and Q3 wait for #183 to merge (Play's main loop changes there) and for the
