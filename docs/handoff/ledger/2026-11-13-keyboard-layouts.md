@@ -95,3 +95,24 @@ the physical key. Tests: `crates/sex-keymap/tests/layouts.rs`, `tests/app_input.
 (`actual_ctrl_shortcuts_follow_the_letter_on_the_key`).
 
 **Next.** A10 (key repeat, Caps-as-Ctrl from Settings) after Settings PR #170.
+
+## Key repeat and Caps Lock as Ctrl (A10, first half)
+
+**Key repeat.** Held keys had no repeat at all on USB keyboards, and PS/2 repeated at whatever
+rate the keyboard chose. Shell now repeats the last key that reached a program
+(`servers/silk-shell/src/key_repeat.rs`): 500 ms delay, then every 33 ms (30/s), at most one
+repeat per loop turn so a late turn never bursts. A keyboard's own typematic presses of that key are
+dropped, so one rate applies to every keyboard. Releasing the key, or pressing any other, stops it;
+modifiers held at repeat time apply (Shift turns `a` repeats into `A`). Shell's loop stays awake
+only while a key is held. `Repeat::configure(delay, interval)` clamps to 150–2000 ms and
+10–500 ms; 0 turns repeat off.
+
+**Caps Lock as Ctrl.** `CAPS_AS_CTRL` in Shell turns code 0x3A into Ctrl before anything else sees
+it. Off by default.
+
+**Tests.** `key_repeat` unit tests and `tests/app_input.rs`
+(`actual_held_keys_repeat_at_the_set_rate_and_stop_on_release`, `actual_caps_lock_as_ctrl_option`),
+run by `scripts/clipboard_host_gate.sh`.
+
+**Next.** When the settings store (PR #170) merges, Shell's settings watcher calls
+`KEY_REPEAT.configure` and sets `CAPS_AS_CTRL` from the keyboard settings.

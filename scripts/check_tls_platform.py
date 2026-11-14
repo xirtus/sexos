@@ -95,10 +95,14 @@ def check_manifests(tls, workspace, app, trust=None):
         errors.append('unreviewed target-specific TLS dependencies')
     # Reviewed non-TLS replacements: the no_std port of naga's GLSL preprocessor, and
     # virtio-drivers with sound capture for Bell, and ignore's parallel walker on
-    # std's Hermit target for rg and fd (no network code).
+    # std's Hermit target for rg and fd, and console, path_abs and clircle building
+    # on std's Hermit target for bat (no network code).
     reviewed_patches = {'crates-io': {'pp-rs': {'path': 'vendor/pp-rs-0.2.1'},
                                       'virtio-drivers': {'path': 'vendor/virtio-drivers-0.13.0'},
-                                      'ignore': {'path': 'vendor/ignore-0.4.34'}}}
+                                      'ignore': {'path': 'vendor/ignore-0.4.34'},
+                                      'console': {'path': 'vendor/console-0.16.6'},
+                                      'path_abs': {'path': 'vendor/path_abs-0.5.1'},
+                                      'clircle': {'path': 'vendor/clircle-0.6.1'}}}
     if workspace.get('patch') and workspace.get('patch') != reviewed_patches:
         errors.append('workspace dependency replacement needs TLS policy review: patch')
     if workspace.get('replace'):

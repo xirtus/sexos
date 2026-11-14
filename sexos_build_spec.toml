@@ -75,8 +75,11 @@ crates = [
   "apps/lua/Cargo.toml",
   "apps/rg/Cargo.toml",
   "apps/fd/Cargo.toml",
+  "apps/bat/Cargo.toml",
   "apps/python/Cargo.toml",
-  "apps/store/Cargo.toml"
+  "apps/store/Cargo.toml",
+  "apps/sdltest/Cargo.toml",
+  "apps/driftspark/Cargo.toml"
 ]
 
 [[stage]]
@@ -276,7 +279,7 @@ action = "cargo_manifest"
 target = "x86_64-sex-app.json"
 manifest = "apps/talk/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/talk"
-dest_artifact = "iso_root/programs/talk"
+dest_artifact = "iso_root/programs/flirt"
 
 [[stage]]
 id = "build_view"
@@ -316,7 +319,7 @@ action = "cargo_manifest"
 target = "x86_64-sex-app.json"
 manifest = "apps/shapes/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/shapes"
-dest_artifact = "iso_root/programs/shapes"
+dest_artifact = "iso_root/programs/gestalt"
 
 [[stage]]
 id = "build_monitor"
@@ -324,7 +327,7 @@ action = "cargo_manifest"
 target = "x86_64-sex-app.json"
 manifest = "apps/monitor/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/monitor"
-dest_artifact = "iso_root/programs/monitor"
+dest_artifact = "iso_root/programs/mesh"
 
 [[stage]]
 id = "build_fputest"
@@ -364,7 +367,7 @@ action = "cargo_manifest"
 target = "x86_64-sex-app.json"
 manifest = "apps/web/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/web"
-dest_artifact = "iso_root/programs/web"
+dest_artifact = "iso_root/programs/kaleidoscope"
 
 # Video and sound (sex-media). Without a built FFmpeg (scripts/build_ffmpeg.sh) it
 # builds but refuses every file.
@@ -446,6 +449,17 @@ manifest = "apps/fd/Cargo.toml"
 source_artifact = "target/x86_64-sex-std/release/fd"
 dest_artifact = "iso_root/programs/fd"
 
+# bat 0.26.1 (vendor/bat-0.26.1), upstream source on the published bat library with
+# syntect's pure-Rust regex engine (fancy-regex); no git, no pager.
+[[stage]]
+id = "build_bat"
+action = "cargo_manifest"
+target = "x86_64-sex-std.json"
+build_std = "std,panic_abort"
+manifest = "apps/bat/Cargo.toml"
+source_artifact = "target/x86_64-sex-std/release/bat"
+dest_artifact = "iso_root/programs/bat"
+
 # Python 3.13: CPython (vendor/cpython-3.13.18) on sex-libc, its stdlib frozen in.
 [[stage]]
 id = "build_python"
@@ -455,6 +469,26 @@ build_std = "std,panic_abort"
 manifest = "apps/python/Cargo.toml"
 source_artifact = "target/x86_64-sex-std/release/python"
 dest_artifact = "iso_root/programs/python"
+
+# SDL2 (vendor/SDL2-2.30.9, crates/sex-sdl): a C SDL program, window, sound and keys.
+[[stage]]
+id = "build_sdltest"
+action = "cargo_manifest"
+target = "x86_64-sex-std.json"
+build_std = "std,panic_abort"
+manifest = "apps/sdltest/Cargo.toml"
+source_artifact = "target/x86_64-sex-std/release/sdltest"
+dest_artifact = "iso_root/programs/sdltest"
+
+# Driftspark: an SDL2 arcade game in C (apps/driftspark), window, sound and keys.
+[[stage]]
+id = "build_driftspark"
+action = "cargo_manifest"
+target = "x86_64-sex-std.json"
+build_std = "std,panic_abort"
+manifest = "apps/driftspark/Cargo.toml"
+source_artifact = "target/x86_64-sex-std/release/driftspark"
+dest_artifact = "iso_root/programs/driftspark"
 
 # PDF: the first ordinary std app, hayro rendering pages into the window.
 [[stage]]
@@ -513,14 +547,14 @@ manifest = "apps/hum/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/hum"
 dest_artifact = "iso_root/programs/hum"
 
-# Store: the package catalog in a window (`store` in Spindle).
+# sexshop (formerly Store): the package catalog in a window (`sexshop` in Spindle).
 [[stage]]
 id = "build_store"
 action = "cargo_manifest"
 target = "x86_64-sex-app.json"
 manifest = "apps/store/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/store"
-dest_artifact = "iso_root/programs/store"
+dest_artifact = "iso_root/programs/sexshop"
 
 [[stage]]
 id = "build_snoop"
