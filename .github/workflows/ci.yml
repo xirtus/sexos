@@ -71,6 +71,8 @@ jobs:
       run: cargo test --locked -p vellum-edit
     - name: Gaze decoders (EXIF orientation, JPEG XL, SVG, RAW previews) on the host
       run: cargo test --locked -p gaze-codecs --all-features
+    - name: Aftercare backups (dedup, encryption, restore, prune, check) on the host
+      run: cargo test --locked -p aftercare-core
     - name: Pinyin input method
       run: cargo test --locked -p sex-ime
     - name: SexOS filesystem check and repair (injected faults)
