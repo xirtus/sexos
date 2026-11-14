@@ -53,7 +53,7 @@ def main():
     g=boot(a.iso,disk,out,'project-save',a.resolution)
     try:
         c=Controls(g,out,a.resolution);g['wait'](r'\[app.private.retired\] target=41 ',0,180)
-        start,_,_,files_surface=c.launch('files','run +fs files');g['wait'](r'\[files.app.ready\].*portal=1',start,180)
+        start,_,_,files_surface=c.launch('files','files');g['wait'](r'\[files.app.ready\].*portal=1',start,180)
         start,target,task,surface=c.launch('moan');g['wait'](r'\[moan.ready\]',start,300);c.focus(surface)
         for n in (1,2):
             start=len(c.text());c.chord('ctrl','shift','t');g['wait'](rf'\[moan.project\] tracks={n} frames=96000',start,60)
