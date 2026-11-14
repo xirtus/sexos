@@ -4070,6 +4070,21 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
 - **Not yet:** inhibiting idle while media plays (needs a Bell hint); a salt from the
   kernel's held entropy source instead of RDRAND.
 
+## Volume and keyboard settings act (2026-11-14)
+- **Volume:** the Shell keeps the volume in settings (`sound.volume`). After a volume or mute
+  key, it stores the level Bell answers. When the setting changes (Settings, or a restart
+  that loads it) it gives Bell `SET_MASTER`. The default is now 100%, Bell's own, so a fresh
+  disk changes nothing.
+- **Keyboard:** the Shell's key repeat takes `keyboard.repeat_delay_ms` and
+  `keyboard.repeat_rate`, and Caps Lock acts as Ctrl with `keyboard.caps_as_ctrl`. It reads
+  them on its first walk of the settings and on every change.
+- **Evidence:** `scripts/settings_persist_gate.py`:
+  - Boot 1: volume down twice stores 90%, and the Shell's repeat starts at 400 ms / 40 ms.
+  - Boot 2: Settings lengthens the repeat delay and the Shell follows.
+  - Boot 3: Bell is set to 90% and the delay is back, with no key pressed.
+- **Not yet:** Display scale (workstream L) and the volume set from Spindle's `volume`
+  command (Spindle talks to Bell directly) aren't kept.
+
 ## Lock screen opens the encrypted home (2026-11-14)
 - **What:** when the Shell's password CHECK passes (or no lock password is set) and the
   encrypted `/home` (PR #197) is locked, Files tries the typed password on it. Signing in

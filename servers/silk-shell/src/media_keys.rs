@@ -31,6 +31,8 @@ pub enum Ask {
     Volume,
     /// A player key with this code: deliver it to the program Bell names.
     Player(u8),
+    /// The volume from settings: nothing to show.
+    Restore,
 }
 
 const ASKS: usize = 8;
