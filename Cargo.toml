@@ -57,6 +57,7 @@ members = [
     "apps/quil",
     "crates/sex-keymap",
     "crates/sex-shape",
+    "crates/shuttle",
     "crates/sex-ime",
     "crates/shibari",
     "crates/sex-multipass",
