@@ -59,6 +59,10 @@ mod guest {
             let mut bytes = [0u8; 4096];
             let mut at = 0;
             while at < frames {
+                if matches!(app.window.poll(), Some(sex_app::Event::Close)) {
+                    sex_pdx::serial_record!("[moan.export.cancelled] partial_retained=1");
+                    sex_pdx::task_finish(0);
+                }
                 let n = block.len().min(frames - at);
                 moan_core::render_processed(&mut studio.session.tracks, at, &mut block[..n]);
                 for (f, b) in block[..n].iter().zip(bytes.chunks_exact_mut(4)) {
