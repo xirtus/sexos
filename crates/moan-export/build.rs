@@ -84,12 +84,13 @@ fn main() {
         "avcodec",
         "shine",
         "dav1d",
+        "vpx",
         "swscale",
         "swresample",
         "avutil",
     ] {
         if !prefix.join(format!("lib/lib{name}.a")).exists()
-            && ["dav1d", "swscale", "swresample"].contains(&name)
+            && ["dav1d", "vpx", "swscale", "swresample"].contains(&name)
         {
             continue;
         }
