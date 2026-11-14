@@ -9,7 +9,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
-from moan_gate_geometry import ready, control as control_position
+from moan_gate_geometry import ready, discard, control as control_position
 import re
 import shutil
 import subprocess
@@ -111,7 +111,7 @@ def main():
         assert not re.search(r'\[moan.export\] format=wav ',text()[cursor:]), 'cancelled export reported success'
         # A dirty project shows the standard Cancel/Discard prompt. Explicitly
         # choose Discard, rather than bypassing the unsaved-project guard.
-        time.sleep(.4);q.key('tab');q.key('ret')
+        discard(g,surface,(rw,rh),cursor)
         g['wait'](rf'\[app.private.retired\] target={target} task={task} ',cursor,120)
         q.cmd('screendump',{'filename':str(out/'after-export.ppm')})
         g['stop']();g=None

@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """Moan paint/layout receipts, fenced after actual Shell maximization."""
 import re
+import time
 from program_gate_geometry import current_tile, maximize
 
 
@@ -48,3 +49,24 @@ def control(g, surface, name, resolution):
     rw, rh = resolution
     assert 0 <= x < rw and 0 <= y < rh, (name, x, y, resolution)
     return x, y
+
+
+def discard(g, surface, resolution, since):
+    """Click the actual current Weft confirmation; Shell owns raw Tab."""
+    g['focus'](surface)
+    m = g['wait'](r'\[moan.dialog\] action=Discard x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)', since, 60)
+    tile, size = viewport(g, surface, since)
+    x, y, w, h = map(int, m.groups())
+    assert w > 0 and h > 0 and 0 <= x < size[0] and 0 <= y < size[1], (m[0], size)
+    ox, oy = origin(tile, size)
+    x += ox; y += oy
+    rw, rh = resolution
+    assert 0 <= x < rw and 0 <= y < rh, (x, y, resolution)
+    q = g['q']
+    q.cmd('input-send-event', {'events': [
+        {'type': 'abs', 'data': {'axis': 'x', 'value': round(x * 32767 / (rw - 1))}},
+        {'type': 'abs', 'data': {'axis': 'y', 'value': round(y * 32767 / (rh - 1))}}]})
+    time.sleep(.2)
+    for down in (True, False):
+        q.cmd('input-send-event', {'events': [{'type': 'btn', 'data': {'down': down, 'button': 'left'}}]})
+        time.sleep(.15)

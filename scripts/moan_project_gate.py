@@ -8,7 +8,7 @@ from install_program import install
 from quil_autosave_gate import boot
 from program_egui_gate import colours
 from program_gate_geometry import current_tile
-from moan_gate_geometry import ready, viewport, origin
+from moan_gate_geometry import ready, viewport, origin, discard
 ROOT=Path(__file__).resolve().parents[1]
 class Controls:
     def __init__(self,g,out,resolution):self.g=g;self.q=g['q'];self.text=g['text'];self.out=out;self.rw,self.rh=map(int,resolution.split('x'))
@@ -45,7 +45,7 @@ class Controls:
         self.focus(surface);time.sleep(.5);path=self.out/name;self.q.cmd('screendump',{'filename':str(path)});time.sleep(.3);assert len(colours(path.read_bytes(),self.tile(surface)))>8
     def close(self,surface,target,task,dirty=False):
         self.focus(surface);start=len(self.text());self.q.key('f11')
-        if dirty:time.sleep(.4);self.q.key('tab');self.q.key('ret')
+        if dirty:discard(self.g,surface,(self.rw,self.rh),start)
         self.g['wait'](r'\[moan.closed\]',start,60);self.g['wait'](rf'\[app.private.retired\] target={target} task={task} ',start,120)
 
 def main():
