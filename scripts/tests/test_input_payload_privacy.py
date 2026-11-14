@@ -43,7 +43,7 @@ class InputPrivacy(unittest.TestCase):
    '[sexinput.key.rejected] source=ps2 raw=30','[silk-shell.hid.raw] class=1 a0=0x1e',
    '[silk-shell.hid.recv] class=1 code=30 value=1','[silk-shell.key.recv] code=30',
    '[silk.key.route] surface=359 code=30 printable=1','[shell.browser.input] code=30',
-   '[usb.keyboard.shell.recv] key=30','[shell.media.key] code=30','[spindle.input.recv] key=printable ch=x len=1','[sexusb.input.rejected] op=609 arg0=30','[spindle.line.enter] text="private"']
+   '[silk.text.append] surface=100 len=1 ch=x','[usb.keyboard.shell.recv] key=30','[shell.media.key] code=30','[spindle.input.recv] key=printable ch=x len=1','[sexusb.input.rejected] op=609 arg0=30','[spindle.line.enter] text="private"']
   for line in forbidden:self.assertFalse(audit_interval(line)['userspace_safe'],line)
   self.assertTrue(audit_interval('[sexinput.key.send] source=1 payload=redacted\n[input.keyboard.keyup.ok] source=ps2 payload=redacted')['userspace_safe'])
  def test_kernel_residual_is_separate_and_never_becomes_a_complete_privacy_claim(self):
