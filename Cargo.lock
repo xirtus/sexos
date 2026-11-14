@@ -3717,7 +3717,7 @@ version = "0.1.0"
 dependencies = [
  "crypto-bigint",
  "sha1",
- "sha2",
+ "sha2 0.10.9",
 ]
 
 [[package]]
