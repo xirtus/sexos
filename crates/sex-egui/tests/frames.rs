@@ -108,3 +108,35 @@ fn the_unmodified_demo_paints_text_and_widgets() {
     let distinct = rig.pixels.iter().filter(|p| **p != bg).count();
     assert!(distinct > 20_000, "only {distinct} pixels differ from the background");
 }
+
+#[test]
+fn wheel_steps_scroll_a_scroll_area_under_the_pointer() {
+    let mut rig = Rig::new();
+    let first = std::cell::Cell::new(0usize);
+    // The area keeps its full width (auto_shrink would narrow it to the text, and a
+    // wheel over the blank part would miss it).
+    let mut ui = |u: &mut egui::Ui| { {
+        let mut list = u.new_child(egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(egui::pos2(10.0, 30.0), egui::vec2(300.0, 120.0))));
+        let f = egui::ScrollArea::vertical().id_salt("lines").auto_shrink([false, false]).show(&mut list, |ui| {
+            let mut f = None;
+            for i in 0..60 {
+                let r = ui.label(format!("Line {i}"));
+                if f.is_none() && ui.clip_rect().contains(r.rect.center()) { f = Some(i); }
+            }
+            f.unwrap_or(0)
+        }).inner;
+        first.set(f);
+    } };
+    rig.frame(vec![], &mut ui);
+    let mut e = Vec::new();
+    keys::pointer_events(100, 90, PointerKind::Move, 1.0, egui::Modifiers::NONE, &mut e);
+    rig.frame(e, &mut ui);
+    for _ in 0..4 {
+        let mut e = Vec::new();
+        keys::pointer_events(100, 90, PointerKind::Wheel(-1), 1.0, egui::Modifiers::NONE, &mut e);
+        rig.frame(e, &mut ui);
+    }
+    for _ in 0..20 { rig.frame(vec![], &mut ui); }
+    drop(ui);
+    assert!(first.get() > 0, "first visible line stayed {}", first.get());
+}

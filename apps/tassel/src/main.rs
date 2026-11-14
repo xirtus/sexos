@@ -34,7 +34,7 @@ fn main() {
                     sex_egui::record(&format!("[tassel.checked] value={checked}"));
                 }
                 let mut list = ui.new_child(egui::UiBuilder::new().max_rect(at(10.0, 130.0, 300.0, 120.0)));
-                let first = egui::ScrollArea::vertical().id_salt("lines").show(&mut list, |ui| {
+                let first = egui::ScrollArea::vertical().id_salt("lines").auto_shrink([false, false]).show(&mut list, |ui| {
                     let mut first = None;
                     for i in 0..60 {
                         let r = ui.label(format!("Line {i}"));
