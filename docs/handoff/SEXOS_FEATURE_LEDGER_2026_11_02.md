@@ -4155,6 +4155,10 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
 - **Follow-up:** the Shell spins on `sys_yield` while a panel notice shows (5 s) and while
   memory is critical; a timed wait would be cheaper (workstream C owns that loop).
 
+## G-6: cargo-fuzz parser suite and filed crash reproducers (2026-11-14)
+- Standalone `fuzz/` workspace (`cargo-fuzz` + ASan) covering `sex-archive` (zip, tar, 7z, gz, zst, xz), OOXML (`docx`/`xlsx` containers and XML), `vellum-edit` (PDF), `sex-volumes` (MBR/GPT/FAT/exFAT/ext4/NTFS), `sex-image`/`gaze-codecs`, `sex-html`, `sex-http` (HTTP/1.1 + HPACK), `sex-mail` and `sex-font`, plus `scripts/fuzz_smoke_host_gate.sh` and `fuzz/repros/`.
+- Over 15.2M executions across master and open PR parsers (`sex-ebook`/`sex-xml`, `sex-torrent`); filed 4 reproducible parser panic issues with 3-to-46-byte reproducers (#258, #259, #260, #261).
+
 ## Key-to-pixel latency gate, slice J6 (2026-11-13)
 - **What:** `scripts/latency_gate.py` times each key typed into Spindle from the host's
   key event to Display committing Spindle's new text, first idle, then with four

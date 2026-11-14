@@ -23,7 +23,8 @@ if command -v cargo-fuzz >/dev/null 2>&1; then
     
     for t in "${TARGETS[@]}"; do
         echo "=== [fuzz.smoke.host.gate] Smoke run ($t, 32 runs) ==="
-        (cd "$ROOT_DIR/fuzz" && cargo +nightly fuzz run "$t" "seeds/$t" -- -runs=32 >/dev/null 2>&1 || true)
+        mkdir -p "$ROOT_DIR/fuzz/corpus/$t"
+        (cd "$ROOT_DIR/fuzz" && cargo +nightly fuzz run "$t" "corpus/$t" "seeds/$t" -- -runs=32 >/dev/null 2>&1 || true)
         echo "  $t: PASS"
     done
     rm -rf "$ROOT_DIR/fuzz/corpus" "$ROOT_DIR/fuzz/artifacts"
