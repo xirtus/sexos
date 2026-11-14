@@ -127,13 +127,15 @@ pub fn format_fat32<D: BlockIo + ?Sized>(
     // clusters = data_sectors / spc
     // fat_bytes = (clusters + 2) * 4
     // fat_sectors = ceil(fat_bytes / 512)
+    // Only ever grows, so it settles on a FAT that holds every cluster (an estimate
+    // that moves both ways can stop one sector short).
     let mut fat_sectors: u32 = 128;
     for _ in 0..10 {
         let data_sectors = total_sectors.saturating_sub((reserved_sectors as u64) + (num_fats as u64) * (fat_sectors as u64));
         let clusters = data_sectors / (spc as u64);
         let needed_fat_bytes = (clusters + 2) * 4;
         let new_fat_sectors = needed_fat_bytes.div_ceil(512) as u32;
-        if new_fat_sectors == fat_sectors {
+        if new_fat_sectors <= fat_sectors {
             break;
         }
         fat_sectors = new_fat_sectors;
@@ -308,23 +310,30 @@ pub fn format_exfat<D: BlockIo + ?Sized>(
     }
 
     let bps_shift: u8 = 9; // 2^9 = 512 bytes
-    let spc_shift: u8 = 3; // 2^3 = 8 sectors = 4096 bytes per cluster
-    let cluster_bytes: u64 = 4096;
+    // The allocation bitmap, the up-case table and the root directory take one cluster
+    // each, so a cluster must be large enough for the bitmap of every cluster: the
+    // smallest power of two from 4 KiB (8 sectors) that is.
+    let mut spc_shift: u8 = 3;
+    while spc_shift < 16 && total_sectors / (1u64 << spc_shift) > (512u64 << spc_shift) * 8 {
+        spc_shift += 1;
+    }
+    let spc: u32 = 1 << spc_shift;
+    let cluster_bytes: u64 = 512 << spc_shift;
 
     // Boot region: 24 sectors (12 main + 12 backup)
     let fat_offset: u32 = 24;
 
     // Approximate cluster count to determine FAT length
     let approx_heap_sectors = total_sectors.saturating_sub(64);
-    let approx_clusters = (approx_heap_sectors / 8) as u32;
+    let approx_clusters = (approx_heap_sectors / spc as u64) as u32;
     let fat_length: u32 = ((approx_clusters as u64 + 2) * 4).div_ceil(512) as u32;
 
     // Align cluster heap to multiple of 8 sectors
     let raw_heap_offset = fat_offset + fat_length;
-    let heap_offset = (raw_heap_offset + 7) & !7;
+    let heap_offset = (raw_heap_offset + spc - 1) & !(spc - 1);
 
     let heap_sectors = total_sectors.saturating_sub(heap_offset as u64);
-    let cluster_count = (heap_sectors / 8) as u32;
+    let cluster_count = (heap_sectors / spc as u64) as u32;
     if cluster_count < 16 {
         return Err(CorsetError::VolumeTooSmallForExFat {
             sectors: total_sectors,
@@ -424,7 +433,7 @@ pub fn format_exfat<D: BlockIo + ?Sized>(
 
     // 3. Cluster Heap
     let cluster_offset = |c: u32| -> u64 {
-        heap_offset as u64 + ((c - 2) as u64) * 8
+        heap_offset as u64 + ((c - 2) as u64) * spc as u64
     };
 
     // Cluster 2: Allocation Bitmap (clusters 2, 3, 4 are allocated = bits 0, 1, 2)
