@@ -49,6 +49,7 @@ crates = [
   "apps/hum/Cargo.toml",
   "apps/jot/Cargo.toml",
   "apps/term/Cargo.toml",
+  "apps/quil/Cargo.toml",
   "apps/files/Cargo.toml",
   "apps/peek/Cargo.toml",
   "apps/talk/Cargo.toml",
@@ -73,6 +74,7 @@ crates = [
   "apps/sex-calc/Cargo.toml",
   "apps/calendar/Cargo.toml",
   "apps/settings/Cargo.toml",
+  "apps/aftercare/Cargo.toml",
   "apps/lua/Cargo.toml",
   "apps/rg/Cargo.toml",
   "apps/fd/Cargo.toml",
@@ -257,6 +259,14 @@ target = "x86_64-sex-app.json"
 manifest = "apps/term/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/term"
 dest_artifact = "iso_root/programs/term"
+
+[[stage]]
+id = "build_quil_editor"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/quil/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/quil"
+dest_artifact = "iso_root/programs/quil"
 
 [[stage]]
 id = "build_files"
@@ -508,6 +518,16 @@ build_std = "std,panic_abort"
 manifest = "apps/pdf/Cargo.toml"
 source_artifact = "target/x86_64-sex-std/release/pdf"
 dest_artifact = "iso_root/programs/pdf"
+
+# Aftercare: encrypted, deduplicated backups (crates/aftercare-core) of a granted folder.
+[[stage]]
+id = "build_aftercare"
+action = "cargo_manifest"
+target = "x86_64-sex-std.json"
+build_std = "std,panic_abort"
+manifest = "apps/aftercare/Cargo.toml"
+source_artifact = "target/x86_64-sex-std/release/aftercare"
+dest_artifact = "iso_root/programs/aftercare"
 
 [[stage]]
 id = "build_play"
