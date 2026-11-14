@@ -2859,6 +2859,7 @@ version = "0.1.0"
 name = "sex-vt"
 version = "0.1.0"
 dependencies = [
+ "miniz_oxide 0.8.9",
  "sex-font",
  "vte",
 ]

@@ -15,6 +15,8 @@
 extern crate alloc;
 
 pub mod keys;
+#[allow(dead_code)]
+mod png;
 #[cfg(feature = "render")]
 pub mod render;
 
