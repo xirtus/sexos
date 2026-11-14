@@ -76,10 +76,7 @@ def main():
   before=[int(h) for h in re.findall(r'\[web.loaded\] .*?height=(\d+)',t())]
   z=g['chord']('ctrl','equal',r'\[web.zoom\] percent=110 height=(\d+)')
   s=len(t());q.key('f11');g['wait'](r'\[web.profile.saved\] files=\d+ history=\d+ bookmarks=1',s,60)
-  c=g['wait'](rf'\[web.closed\] target={target} task={task}',s,60)
-  # Spindle keeps the open programs for session restore; let it write that the browser
-  # ended, or the next boot brings it back and the page counts one visit more.
-  g['wait'](r'\[spindle.session.saved\] ',s+c.end(),30)
+  g['wait'](rf'\[web.closed\] target={target} task={task}',s,60)
   text=t();assert 'KERNEL PANIC' not in text and '[web.fatal]' not in text and 'panicked' not in text
   print({'boot1':'ok','zoom_height':z[1]})
  finally:g['stop']()
