@@ -161,7 +161,7 @@ fn every_truncation_trailer_and_checksum_corruption_is_rejected() {
     trailer.push(0);
     assert!(Session::decode_project(&trailer).is_err());
     let mut version = bytes;
-    version[8..10].copy_from_slice(&2u16.to_le_bytes());
+    version[8..10].copy_from_slice(&(moan::project::VERSION + 1).to_le_bytes());
     assert!(matches!(
         Session::decode_project(&version),
         Err(Error::Version)

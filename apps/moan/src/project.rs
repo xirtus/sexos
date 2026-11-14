@@ -5,10 +5,10 @@ use crate::{Session, MAX_FRAMES, MAX_TRACKS};
 use alloc::{sync::Arc, vec::Vec};
 use moan_core::{
     effects::{Compressor, Equalizer, Reverb},
-    Clip, Frame, Track, RATE,
+    Clip, Track, RATE,
 };
 pub const MAGIC: &[u8; 8] = b"MOANPRJ\0";
-pub const VERSION: u16 = 1;
+pub const VERSION: u16 = 2;
 pub const HEADER: usize = 64;
 pub const MAX_BYTES: usize = 96 * 1024 * 1024;
 pub const MAX_CLIPS: usize = 1024;
@@ -92,7 +92,7 @@ pub fn encode(session: &Session) -> Result<Vec<u8>, Error> {
     {
         return Err(Error::Limit);
     }
-    let mut sources: Vec<&[Frame]> = Vec::new();
+    let mut sources: Vec<&Clip<'_>> = Vec::new();
     let mut clips = 0usize;
     let mut total = 0usize;
     for track in &session.tracks {
@@ -105,21 +105,32 @@ pub fn encode(session: &Session) -> Result<Vec<u8>, Error> {
             if source.is_empty() || source.len() > MAX_FRAMES {
                 return Err(Error::Source);
             }
-            if !sources
-                .iter()
-                .any(|s| s.as_ptr() == source.as_ptr() && s.len() == source.len())
-            {
+            if !sources.iter().any(|s| {
+                s.source_frames().as_ptr() == source.as_ptr()
+                    && s.source_frames().len() == source.len()
+            }) {
                 total = total.checked_add(source.len()).ok_or(Error::Limit)?;
                 if total > MAX_PCM {
                     return Err(Error::Limit);
                 }
-                sources.push(source);
+                if let Some(pattern) = clip.midi_pattern() {
+                    pattern.validate().map_err(|_| Error::Metadata)?;
+                    if pattern.frames as usize != source.len() {
+                        return Err(Error::Source);
+                    }
+                }
+                sources.push(clip);
             }
         }
     }
     let mut w = Writer(Vec::new());
     w.bytes(MAGIC)?;
-    w.u16(VERSION)?;
+    let version = if sources.iter().any(|s| s.midi_pattern().is_some()) {
+        VERSION
+    } else {
+        1
+    };
+    w.u16(version)?;
     w.u16(0)?;
     w.u32(RATE as usize)?;
     w.u64(0)?;
@@ -131,11 +142,29 @@ pub fn encode(session: &Session) -> Result<Vec<u8>, Error> {
     for value in [session.cursor, session.from, session.to] {
         w.u64(value)?;
     }
-    for source in &sources {
+    for clip in &sources {
+        let source = clip.source_frames();
         w.u32(source.len())?;
-        for frame in *source {
+        for frame in source {
             for sample in frame {
                 w.bytes(&sample.to_le_bytes())?;
+            }
+        }
+        if version == 2 {
+            if let Some(pattern) = clip.midi_pattern() {
+                w.u16(1)?;
+                w.u16(pattern.instrument as u16)?;
+                w.u16(pattern.bpm)?;
+                w.u16(pattern.notes.len() as u16)?;
+                for note in &pattern.notes {
+                    w.u32(note.start as usize)?;
+                    w.u32(note.frames as usize)?;
+                    w.u16(note.key as u16)?;
+                    w.u16(note.velocity as u16)?;
+                }
+            } else {
+                w.u16(0)?;
+                w.u16(0)?;
             }
         }
     }
@@ -166,7 +195,10 @@ pub fn encode(session: &Session) -> Result<Vec<u8>, Error> {
             let source = clip.source_frames();
             let id = sources
                 .iter()
-                .position(|s| s.as_ptr() == source.as_ptr() && s.len() == source.len())
+                .position(|s| {
+                    s.source_frames().as_ptr() == source.as_ptr()
+                        && s.source_frames().len() == source.len()
+                })
                 .ok_or(Error::Source)?;
             w.u16(id as u16)?;
             w.u16(0)?;
@@ -216,7 +248,8 @@ pub fn decode(bytes: &[u8]) -> Result<Session, Error> {
     if r.bytes(8)? != MAGIC {
         return Err(Error::Header);
     }
-    if r.u16()? != VERSION {
+    let version = r.u16()?;
+    if ![1, VERSION].contains(&version) {
         return Err(Error::Version);
     }
     r.zero()?;
@@ -245,6 +278,10 @@ pub fn decode(bytes: &[u8]) -> Result<Session, Error> {
     source_bytes
         .try_reserve(sources)
         .map_err(|_| Error::Memory)?;
+    let mut source_patterns = Vec::new();
+    source_patterns
+        .try_reserve(sources)
+        .map_err(|_| Error::Memory)?;
     let mut total = 0usize;
     for _ in 0..sources {
         let n = r.u32()?;
@@ -256,6 +293,51 @@ pub fn decode(bytes: &[u8]) -> Result<Session, Error> {
             return Err(Error::Limit);
         }
         source_bytes.push(r.bytes(n.checked_mul(4).ok_or(Error::Limit)?)?);
+        let pattern = if version == 2 {
+            let tag = r.u16()?;
+            let instrument = r.u16()?;
+            match tag {
+                0 => {
+                    if instrument != 0 {
+                        return Err(Error::Metadata);
+                    }
+                    None
+                }
+                1 => {
+                    let instrument = moan_core::midi::Instrument::try_from(
+                        u8::try_from(instrument).map_err(|_| Error::Metadata)?,
+                    )
+                    .map_err(|_| Error::Metadata)?;
+                    let bpm = r.u16()?;
+                    let count = r.u16()? as usize;
+                    if count > moan_core::midi::MAX_NOTES {
+                        return Err(Error::Limit);
+                    }
+                    let mut notes = Vec::new();
+                    notes.try_reserve(count).map_err(|_| Error::Memory)?;
+                    for _ in 0..count {
+                        notes.push(moan_core::midi::Note {
+                            start: r.u32()? as u32,
+                            frames: r.u32()? as u32,
+                            key: u8::try_from(r.u16()?).map_err(|_| Error::Metadata)?,
+                            velocity: u8::try_from(r.u16()?).map_err(|_| Error::Metadata)?,
+                        });
+                    }
+                    let pattern = moan_core::midi::Pattern {
+                        frames: n as u32,
+                        bpm,
+                        instrument,
+                        notes,
+                    };
+                    pattern.validate().map_err(|_| Error::Metadata)?;
+                    Some(pattern)
+                }
+                _ => return Err(Error::Metadata),
+            }
+        } else {
+            None
+        };
+        source_patterns.push(pattern);
     }
     let mut specs = Vec::new();
     specs.try_reserve(tracks).map_err(|_| Error::Memory)?;
@@ -343,9 +425,25 @@ pub fn decode(bytes: &[u8]) -> Result<Session, Error> {
         return Err(Error::Metadata);
     }
     // All structure is validated before PCM allocations or mutating any session.
-    let mut audio: Vec<Arc<[Frame]>> = Vec::new();
+    let mut audio: Vec<Clip<'static>> = Vec::new();
     audio.try_reserve(sources).map_err(|_| Error::Memory)?;
-    for bytes in source_bytes {
+    for (bytes, pattern) in source_bytes.into_iter().zip(source_patterns) {
+        if let Some(pattern) = pattern {
+            let clip = Clip::midi(pattern, 0).map_err(|_| Error::Memory)?;
+            if clip
+                .source_frames()
+                .iter()
+                .zip(bytes.chunks_exact(4))
+                .any(|(f, b)| {
+                    f[0] != i16::from_le_bytes([b[0], b[1]])
+                        || f[1] != i16::from_le_bytes([b[2], b[3]])
+                })
+            {
+                return Err(Error::Source);
+            }
+            audio.push(clip);
+            continue;
+        }
         let mut pcm = Vec::new();
         pcm.try_reserve_exact(bytes.len() / 4)
             .map_err(|_| Error::Memory)?;
@@ -355,7 +453,7 @@ pub fn decode(bytes: &[u8]) -> Result<Session, Error> {
                 i16::from_le_bytes([b[2], b[3]]),
             ]);
         }
-        audio.push(Arc::from(pcm));
+        audio.push(Clip::owned(Arc::from(pcm), 0).map_err(|_| Error::Source)?);
     }
     let mut session = Session::default();
     session.selected = selected;
@@ -383,7 +481,7 @@ pub fn decode(bytes: &[u8]) -> Result<Session, Error> {
                 Some(Reverb::new(spec.reverb.0, spec.reverb.1).map_err(|_| Error::Effect)?);
         }
         for c in spec.clips {
-            let mut clip = Clip::owned(audio[c.id].clone(), 0).map_err(|_| Error::Source)?;
+            let mut clip = audio[c.id].clone();
             clip.trim(c.offset, c.offset + c.len)
                 .map_err(|_| Error::Source)?;
             clip.move_to(c.start).map_err(|_| Error::Source)?;

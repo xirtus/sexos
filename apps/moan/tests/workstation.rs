@@ -1,0 +1,197 @@
+use moan::{piano, Studio};
+use moan_core::midi::Instrument;
+use weft::{Button, Event, Pointer, PointerKind, Response, Strings, Theme, Ui};
+fn studio() -> (Ui, Studio) {
+    let mut ui = Ui::new(1264, 730, Theme::dark(), Strings::new("en"));
+    let s = Studio::build(&mut ui);
+    (ui, s)
+}
+#[test]
+fn original_library_builds_editable_regions_and_piano_pointer_changes_pcm() {
+    let (mut ui, mut s) = studio();
+    s.on(&mut ui, &Response::Command("moan.library.keys".into()))
+        .unwrap();
+    assert_eq!(s.session.tracks.len(), 1);
+    assert_eq!(
+        s.session
+            .midi_clip()
+            .unwrap()
+            .midi_pattern()
+            .unwrap()
+            .instrument,
+        Instrument::SilkTriangle
+    );
+    s.on(&mut ui, &Response::Command("moan.clear-notes".into()))
+        .unwrap();
+    s.on(&mut ui, &Response::Command("moan.piano".into()))
+        .unwrap();
+    ui.layout();
+    let r = ui.rect(s.piano);
+    let key = 69;
+    let y = (piano::LOW + piano::ROWS as u8 - 1 - key) as usize * piano::ROW + 3;
+    let point = (
+        r.x + (piano::KEYBOARD + 10) as f32 * r.w / piano::WIDTH as f32,
+        r.y + y as f32,
+    );
+    for kind in [
+        PointerKind::Down(Button::Left),
+        PointerKind::Up(Button::Left),
+    ] {
+        s.handle_event(
+            &mut ui,
+            Event::Pointer(Pointer {
+                x: point.0,
+                y: point.1,
+                kind,
+            }),
+        );
+    }
+    let p = s.session.midi_clip().unwrap();
+    assert_eq!(p.midi_pattern().unwrap().notes.len(), 1);
+    assert_eq!(p.midi_pattern().unwrap().notes[0].key, key);
+    assert!(p.source_frames().iter().any(|f| f[0] != 0));
+    let edited = s.session.encode_project().unwrap();
+    assert!(s.session.undo());
+    assert!(s
+        .session
+        .midi_clip()
+        .unwrap()
+        .midi_pattern()
+        .unwrap()
+        .notes
+        .is_empty());
+    assert!(s.session.redo());
+    assert_eq!(s.session.encode_project().unwrap(), edited);
+    let pixels = piano::render(s.session.midi_clip().and_then(|c| c.midi_pattern()));
+    assert!(pixels.contains(&0xaff4cf));
+}
+#[test]
+fn busy_library_and_piano_cannot_mutate_the_transport_project() {
+    let (mut ui, mut s) = studio();
+    s.set_busy(&mut ui, true);
+    s.on(&mut ui, &Response::Command("moan.library.kit".into()))
+        .unwrap();
+    assert!(s.session.tracks.is_empty());
+    s.set_busy(&mut ui, false);
+    s.on(&mut ui, &Response::Command("moan.library.kit".into()))
+        .unwrap();
+    let before = s.session.encode_project().unwrap();
+    s.set_busy(&mut ui, true);
+    s.on(&mut ui, &Response::Command("moan.clear-notes".into()))
+        .unwrap();
+    assert_eq!(s.session.encode_project().unwrap(), before);
+}
+#[test]
+fn midi_shortcuts_use_real_weft_key_dispatch() {
+    let (mut ui, mut s) = studio();
+    for response in ui.handle(Event::Key(weft::Key::ctrl(0x17).shift())) {
+        s.on(&mut ui, &response).unwrap();
+    }
+    assert_eq!(s.session.tracks.len(), 1);
+    for response in ui.handle(Event::Key(
+        weft::Key::ctrl(weft::input::code::BACKSPACE).shift(),
+    )) {
+        s.on(&mut ui, &response).unwrap();
+    }
+    assert!(s
+        .session
+        .midi_clip()
+        .unwrap()
+        .midi_pattern()
+        .unwrap()
+        .notes
+        .is_empty());
+    for response in ui.handle(Event::Key(weft::Key::ctrl(0x19))) {
+        s.on(&mut ui, &response).unwrap();
+    }
+    assert_eq!(ui.focused(), Some(s.piano));
+    s.session
+        .edit_midi(|p| {
+            p.notes.push(moan_core::midi::Note {
+                start: 0,
+                frames: 12000,
+                key: 57,
+                velocity: 96,
+            })
+        })
+        .unwrap();
+    for code in [0x22, weft::input::code::UP, 0x2f] {
+        for response in ui.handle(Event::Key(weft::Key::ctrl(code).shift())) {
+            s.on(&mut ui, &response).unwrap();
+        }
+    }
+    let note = &s.session.midi_clip().unwrap().midi_pattern().unwrap().notes[0];
+    assert_eq!((note.frames, note.key, note.velocity), (24000, 69, 48));
+}
+#[test]
+fn workspace_switches_preserve_project_selection_and_undo() {
+    let (mut ui, mut s) = studio();
+    s.on(&mut ui, &Response::Command("moan.library.keys".into()))
+        .unwrap();
+    let original = s.session.encode_project().unwrap();
+    for name in [
+        "Mix",
+        "Piano Roll",
+        "Instruments",
+        "Arrange",
+        "Library",
+        "Library",
+    ] {
+        let id = s.buttons.iter().find(|(_, n)| *n == name).unwrap().0;
+        s.on(&mut ui, &Response::Clicked(id)).unwrap();
+        assert_eq!(s.session.encode_project().unwrap(), original);
+    }
+    assert!(s.session.undo());
+    assert!(
+        s.session.tracks.is_empty(),
+        "view switches must not add musical undo entries"
+    );
+}
+#[test]
+fn hidden_panels_take_no_space_and_real_track_headers_align_at_both_sizes() {
+    for (width, height) in [(1264, 730), (640, 400)] {
+        let mut ui = Ui::new(
+            width,
+            height,
+            Theme::dark().with_density(weft::Density::Compact),
+            Strings::new("en"),
+        );
+        let mut s = Studio::build(&mut ui);
+        s.on(&mut ui, &Response::Command("moan.library.keys".into()))
+            .unwrap();
+        ui.layout();
+        let r = ui.rect(s.waveform);
+        assert!(r.right() <= width as f32 && r.x >= 142.0, "{r:?}");
+        let header = ui.find_text("1 Silk Keys").unwrap();
+        let h = ui.rect(header);
+        assert!(
+            (h.y - r.y - moan::waveform::HEADER as f32).abs() < 0.1,
+            "header {h:?}, lane {r:?}"
+        );
+        assert!((h.h - moan::waveform::ROW as f32).abs() < 0.1);
+        if width >= 1000 {
+            let library = s.buttons.iter().find(|(_, n)| *n == "Library").unwrap().0;
+            s.on(&mut ui, &Response::Clicked(library)).unwrap();
+            ui.layout();
+            assert!((r.x - ui.rect(s.waveform).x - 156.0).abs() < 0.1);
+        }
+        for name in ["Play", "Pause", "Stop", "Record"] {
+            let id = s.buttons.iter().find(|(_, n)| *n == name).unwrap().0;
+            let rect = ui.rect(id);
+            assert!(
+                rect.w > 0.0
+                    && rect.h > 0.0
+                    && rect.right() <= width as f32
+                    && rect.bottom() <= height as f32,
+                "{name} {rect:?}"
+            );
+        }
+    }
+}
+#[test]
+fn pitch_names_are_visible_musical_octaves() {
+    assert_eq!(piano::note_name(57), "A3");
+    assert_eq!(piano::note_name(69), "A4");
+    assert_eq!(piano::note_name(0), "C-1");
+    assert_eq!(piano::note_name(127), "G9");
+}

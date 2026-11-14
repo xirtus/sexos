@@ -19,8 +19,12 @@ mod guest {
         pcm: &mut Vec<Frame>,
         lost: &mut u64,
         block: &mut [Frame],
+        meter: &mut serenade_core::LevelMeter,
     ) -> usize {
         let n = sound.hear(block);
+        for f in &block[..n] {
+            meter.process_frame(&[f[0] as f32 / 32768.0, f[1] as f32 / 32768.0]);
+        }
         let skipped = sound.lost().saturating_sub(*lost) as usize;
         *lost = sound.lost();
         let gap = skipped.min(moan::MAX_FRAMES.saturating_sub(pcm.len()));
@@ -178,7 +182,11 @@ mod guest {
         Ok(())
     }
     extern "C" fn main() -> ! {
-        let mut app = App::open("Moan", Theme::dark(), Strings::new("en"));
+        let mut app = App::open(
+            "Moan",
+            Theme::dark().with_density(weft::Density::Compact),
+            Strings::new("en"),
+        );
         let mut studio = Studio::build(&mut app.ui);
         moan::project_io::startup(&mut app, &mut studio);
         app.present();
@@ -198,6 +206,15 @@ mod guest {
         let mut recording: Option<Vec<Frame>> = None;
         let mut lost = 0u64;
         let mut block = [[0i16; 2]; 1024];
+        let mut meters: [serenade_core::LevelMeter; moan::MAX_TRACKS] =
+            core::array::from_fn(|_| serenade_core::LevelMeter::new(2, RATE, 800, 18.0));
+        let mut meter_due = 0u64;
+        let mut status_due = 0u64;
+        let mut prefill = false;
+        // Twice the maximum queued ring: rendering a new batch cannot overwrite
+        // any not-yet-metered consumed batch. All storage predates playback.
+        let mut history =
+            moan::meter_history::History::new(sex_pdx::sound_ring::FRAMES as usize * 2);
         loop {
             // Poll the existing window with a short bound while sound is active;
             // toolkit App::next can wait indefinitely when there are no UI timers.
@@ -248,12 +265,19 @@ mod guest {
                                 } else {
                                     s.skip();
                                     s.reopen();
+                                    s.pause(true);
+                                    prefill = true;
                                     s.set_rate(RATE);
                                     at = studio.session.cursor;
                                     playback_start = at;
                                     play_ring_start = s.written_total();
+                                    history.reset(at);
+                                    status_due = 0;
                                     for t in &mut studio.session.tracks {
                                         t.reset_effects();
+                                    }
+                                    for meter in &mut meters {
+                                        meter.reset();
                                     }
                                 }
                                 playing = true;
@@ -279,6 +303,11 @@ mod guest {
                             }
                         }
                         Some(Action::Stop) => {
+                            prefill = false;
+                            studio.transport_cursor(&mut app.ui, None);
+                            for meter in &mut meters {
+                                meter.reset();
+                            }
                             playing = false;
                             paused = false;
                             if let Some(s) = &mut sound {
@@ -291,7 +320,18 @@ mod guest {
                                         / block.len()
                                         + 1)
                                     {
-                                        if capture(s, pcm, &mut lost, &mut block) == 0 {
+                                        if capture(
+                                            s,
+                                            pcm,
+                                            &mut lost,
+                                            &mut block,
+                                            &mut meters[studio
+                                                .session
+                                                .tracks
+                                                .len()
+                                                .min(moan::MAX_TRACKS - 1)],
+                                        ) == 0
+                                        {
                                             break;
                                         }
                                     }
@@ -321,6 +361,7 @@ mod guest {
                                 }
                             } else {
                                 studio.message(&mut app.ui, "Stopped");
+                                sex_pdx::serial_record!("[moan.stopped] queued_discarded=1");
                             }
                         }
                         Some(Action::Record) => {
@@ -328,19 +369,28 @@ mod guest {
                                 studio.message(&mut app.ui,"Stop recording first, or start a project with fewer than eight tracks");
                                 continue;
                             }
+                            let mut pcm = Vec::new();
+                            if pcm.try_reserve_exact(moan::MAX_FRAMES).is_err() {
+                                studio.message(&mut app.ui, "Not enough memory to record");
+                                continue;
+                            }
                             if let Some(s) = &mut sound {
+                                studio.transport_cursor(&mut app.ui, None);
                                 playing = false;
                                 paused = false;
                                 s.pause(false);
                                 s.skip();
                                 s.listen(true);
+                                for meter in &mut meters {
+                                    meter.reset();
+                                }
                                 lost = s.lost();
                                 lost_start = lost;
                                 sex_pdx::serial_record!(
                                     "[moan.record.request] row={}",
                                     sex_pdx::sound_ring::index_of(app.window.target).unwrap_or(0)
                                 );
-                                recording = Some(Vec::new());
+                                recording = Some(pcm);
                                 studio.message(
                                     &mut app.ui,
                                     "Microphone permission pending; use Stop to finish",
@@ -431,14 +481,29 @@ mod guest {
                             studio.message(&mut app.ui, "No microphone is available");
                         }
                         sex_pdx::sound_ring::MIC_ON => {
-                            capture(s, pcm, &mut lost, &mut block);
-                            studio.message(
-                                &mut app.ui,
-                                &format!(
-                                    "Recording {:.1} seconds — Stop to keep track",
-                                    pcm.len() as f64 / RATE as f64
-                                ),
-                            );
+                            for _ in 0..64 {
+                                if capture(
+                                    s,
+                                    pcm,
+                                    &mut lost,
+                                    &mut block,
+                                    &mut meters
+                                        [studio.session.tracks.len().min(moan::MAX_TRACKS - 1)],
+                                ) == 0
+                                {
+                                    break;
+                                }
+                            }
+                            if weft::sexos::now() >= status_due {
+                                studio.message(
+                                    &mut app.ui,
+                                    &format!(
+                                        "Recording {:.1} seconds — Stop to keep track",
+                                        pcm.len() as f64 / RATE as f64
+                                    ),
+                                );
+                                status_due = weft::sexos::now().saturating_add(200);
+                            }
                             if pcm.len() == moan::MAX_FRAMES {
                                 s.listen(false);
                                 let data = recording.take().unwrap();
@@ -463,40 +528,77 @@ mod guest {
                 }
                 if playing {
                     let end = studio.session.duration().saturating_add(RATE as usize * 2);
-                    let n = block.len().min(s.room()).min(end.saturating_sub(at));
-                    if n > 0 {
-                        moan_core::render_processed(
+                    let heard =
+                        playback_start + s.played_total().saturating_sub(play_ring_start) as usize;
+                    let lost_meter_frames = history.advance(heard, at, &mut meters);
+                    if lost_meter_frames > 0 {
+                        sex_pdx::serial_record!(
+                            "[moan.meter.overrun] frames={}",
+                            lost_meter_frames
+                        );
+                    }
+                    let mut budget = moan::meter_history::fill_budget(
+                        s.room(),
+                        end.saturating_sub(at),
+                        block.len(),
+                    );
+                    while budget > 0 {
+                        let n = block.len().min(budget);
+                        let start = at;
+                        let mut track_offsets = [0usize; moan::MAX_TRACKS];
+                        moan_core::render_processed_observed(
                             &mut studio.session.tracks,
                             at,
                             &mut block[..n],
+                            |track, frame| {
+                                history.write(track, start + track_offsets[track], frame);
+                                track_offsets[track] += 1;
+                            },
                         );
                         let written = s.write(&block[..n]);
                         assert_eq!(written, n);
                         at += written;
+                        budget -= written;
                     }
-                    let heard =
-                        playback_start + s.played_total().saturating_sub(play_ring_start) as usize;
-                    studio.message(
-                        &mut app.ui,
-                        &format!(
-                            "Playing {:.2} / {:.2} seconds",
-                            heard.min(at) as f64 / RATE as f64,
-                            end as f64 / RATE as f64
-                        ),
-                    );
+                    if prefill {
+                        s.pause(false);
+                        prefill = false;
+                    }
+                    if weft::sexos::now() >= status_due {
+                        studio.transport_cursor(&mut app.ui, Some(heard.min(at)));
+                        studio.message(
+                            &mut app.ui,
+                            &format!(
+                                "Playing {:.2} / {:.2} seconds",
+                                heard.min(at) as f64 / RATE as f64,
+                                end as f64 / RATE as f64
+                            ),
+                        );
+                        status_due = weft::sexos::now().saturating_add(200);
+                    }
                     if at >= end && !s.playing() {
                         playing = false;
                         s.close();
+                        studio.transport_cursor(&mut app.ui, None);
                         studio.message(&mut app.ui, "Finished playing");
                         sex_pdx::serial_record!("[moan.finished] frames={}", at - playback_start);
                     }
                 }
+            }
+            let now = weft::sexos::now();
+            if had_responses || now >= meter_due {
+                studio.publish_meters(&mut app.ui, &mut meters);
+                meter_due = now.saturating_add(100);
             }
             studio.set_busy(&mut app.ui, playing || paused || recording.is_some());
         }
     }
     #[no_mangle]
     pub extern "C" fn _start() -> ! {
+        if sex_app::heap::set_limit(256 * 1024 * 1024).is_err() {
+            sex_pdx::task_finish(1);
+        }
+        sex_pdx::serial_record!("[moan.heap.limit] bytes=268435456");
         sex_app::with_stack(1 << 20, main)
     }
 }

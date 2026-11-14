@@ -45,6 +45,9 @@ fn line(pixels: &mut [u32], height: usize, x: usize, top: usize, bottom: usize, 
     }
 }
 pub fn render(session: &Session, view: View) -> (usize, Vec<u32>) {
+    render_at(session, view, session.cursor)
+}
+pub fn render_at(session: &Session, view: View, cursor: usize) -> (usize, Vec<u32>) {
     let height = HEADER + ROW * session.tracks.len().min(crate::MAX_TRACKS).max(1);
     let mut pixels = vec![0x111923; WIDTH * height];
     for x in 0..WIDTH {
@@ -68,8 +71,18 @@ pub fn render(session: &Session, view: View) -> (usize, Vec<u32>) {
             let right = view.x(clip.end()).max(left + 1).min(WIDTH);
             for x in left..right {
                 let selected = index == session.selected;
-                let color = if selected { 0x22465A } else { 0x213442 };
+                let midi = clip.midi_pattern().is_some();
+                let color = if midi {
+                    [0x284c43, 0x4b345e, 0x5a402a, 0x28445a][index % 4]
+                } else if selected {
+                    0x22465A
+                } else {
+                    0x213442
+                };
                 line(&mut pixels, height, x, top + 3, top + ROW - 3, color);
+                if clip.midi_pattern().is_some() {
+                    continue;
+                }
                 let from = view.frame(x).max(clip.start());
                 let to = view
                     .frame((x + 1).min(WIDTH - 1))
@@ -114,6 +127,29 @@ pub fn render(session: &Session, view: View) -> (usize, Vec<u32>) {
                     if selected { 0x63D4CD } else { 0x91A9CE },
                 );
             }
+            if let Some(pattern) = clip.midi_pattern() {
+                let low = pattern.notes.iter().map(|n| n.key).min().unwrap_or(48);
+                let high = pattern.notes.iter().map(|n| n.key).max().unwrap_or(72);
+                for note in &pattern.notes {
+                    let begin = (note.start as usize).max(clip.source_offset());
+                    let end = ((note.start + note.frames) as usize)
+                        .min(clip.source_offset() + clip.len());
+                    if begin >= end {
+                        continue;
+                    }
+                    let start = clip.start() + begin - clip.source_offset();
+                    let finish = clip.start() + end - clip.source_offset();
+                    if finish <= view.start || start >= view.start.saturating_add(view.span) {
+                        continue;
+                    }
+                    let y = top
+                        + 8
+                        + (high - note.key) as usize * (ROW - 18) / (high - low + 1) as usize;
+                    for x in view.x(start)..view.x(finish).max(view.x(start) + 1).min(WIDTH) {
+                        line(&mut pixels, height, x, y, y + 3, 0xaff4cf);
+                    }
+                }
+            }
             line(&mut pixels, height, left, top + 2, top + ROW - 2, 0xB1C6DB);
             if right < WIDTH {
                 line(&mut pixels, height, right, top + 2, top + ROW - 2, 0xB1C6DB);
@@ -130,8 +166,8 @@ pub fn render(session: &Session, view: View) -> (usize, Vec<u32>) {
             }
         }
     }
-    if session.cursor >= view.start && session.cursor <= view.start.saturating_add(view.span) {
-        let x = view.x(session.cursor);
+    if cursor >= view.start && cursor <= view.start.saturating_add(view.span) {
+        let x = view.x(cursor);
         line(&mut pixels, height, x, 0, height, 0xFFCC66);
     }
     (height, pixels)

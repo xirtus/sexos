@@ -3039,8 +3039,10 @@ version = "0.1.0"
 dependencies = [
  "moan-core",
  "moan-export",
+ "serenade-core",
  "sex-app",
  "sex-pdx",
+ "taffy",
  "weft",
 ]
 
