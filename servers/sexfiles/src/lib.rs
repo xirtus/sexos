@@ -20,6 +20,7 @@ mod installer;
 mod updater;
 mod packages;
 mod volumes;
+mod home;
 mod document;
 mod document_journal;
 pub mod history_journal;

@@ -10513,6 +10513,7 @@ unsafe fn wm_action(action: wm::WmAction) -> bool {
         },
         A::Scratchpad => wm_scratchpad_toggle(),
         A::Overview => overview_toggle(),
+        A::ClipboardHistory => clipboard_history_step(),
         A::Notifications => toggle_bell(),
         A::Wallpaper => desktop_look_step(1, 0),
         A::NightLight => desktop_look_step(0, 1),
@@ -10697,6 +10698,45 @@ unsafe fn switcher_end(keep: bool) {
     if FOCUSED_SURFACE_ID != 0 { SWITCHER_RECENT.touch(FOCUSED_SURFACE_ID); }
     switcher_publish();
     sex_pdx::serial_record!("[shell.switcher.end] keep={} focus={}", keep as u8, FOCUSED_SURFACE_ID);
+}
+
+// ── Clipboard history (Super+V) ─────────────────────────────────────────────
+// The broker keeps the last earlier copies (clipboard.rs). Super+V makes the
+// previous one the clipboard again and names it in the panel; pressed again
+// while that notice shows, it steps one further back, so Ctrl+V pastes it.
+static mut CLIP_CYCLE: (u64, usize) = (0, 0);
+unsafe fn clipboard_history_step() -> bool {
+    let now = sex_pdx::get_ticks();
+    let (last, presses) = CLIP_CYCLE;
+    let total = CLIPBOARD.history_len();
+    let mut text = [0u8; 120];
+    let mut n = 0;
+    fn put(text: &mut [u8; 120], part: &[u8], n: &mut usize) { let take = part.len().min(text.len() - *n); text[*n..*n + take].copy_from_slice(&part[..take]); *n += take; }
+    if total == 0 {
+        put(&mut text, b"Clipboard history is empty", &mut n);
+        if notify_panel(&text[..n]) { NOTIFY_NOTICE_UNTIL = now + NOTIFY_SHOW_TICKS; }
+        sex_pdx::serial_record!("[shell.clipboard.history] empty=1");
+        return false;
+    }
+    let index = if last != 0 && now.wrapping_sub(last) < NOTIFY_SHOW_TICKS { presses.min(total - 1) } else { 0 };
+    let Some(p) = CLIPBOARD.restore(index) else {
+        sex_pdx::serial_record!("[shell.clipboard.history] busy=1");
+        return false;
+    };
+    CLIP_CYCLE = (now, index + 1);
+    put(&mut text, b"Clipboard: ", &mut n);
+    // First line only, cut on a character boundary, with an ellipsis when cut.
+    let body = CLIPBOARD.current_text().unwrap_or(b"");
+    let line = body.iter().position(|&b| b == b'\n' || b == b'\r').map_or(body, |end| &body[..end]);
+    let room = text.len() - n - 3;
+    let mut cut = line.len().min(room);
+    while cut > 0 && cut < line.len() && line[cut] & 0xC0 == 0x80 { cut -= 1; }
+    put(&mut text, &line[..cut], &mut n);
+    if cut < body.len() { put(&mut text, "…".as_bytes(), &mut n); }
+    if notify_panel(&text[..n]) { NOTIFY_NOTICE_UNTIL = now + NOTIFY_SHOW_TICKS; }
+    sex_pdx::serial_record!("[shell.clipboard.history] index={} total={} generation={} len={} owner={} hash={:#x}",
+        index, total, p.generation, p.len, p.owner.pd, p.hash);
+    true
 }
 
 /// A volume key: Bell keeps the volume and answers with the new state, which Shell

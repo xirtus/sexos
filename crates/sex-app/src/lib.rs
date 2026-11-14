@@ -220,6 +220,8 @@ pub mod files {
     }
     impl Drop for Turn { fn drop(&mut self) { BUSY.store(false, Ordering::Release); } }
     static SEQ: AtomicU32 = AtomicU32::new(0);
+    /// The value Files sent with the last refusal (a package report's length).
+    static REFUSED_VALUE: AtomicU32 = AtomicU32::new(0);
     /// Where keys and closes that arrive during a request go.
     type Hold<'a> = Option<&'a mut Window>;
 
@@ -275,6 +277,7 @@ pub mod files {
             };
             if mine(&m, seq) {
                 let (_, status, value) = w::decode_reply(m.arg0).unwrap_or((0, w::INVALID, 0));
+                if status != w::OK { REFUSED_VALUE.store(value, Ordering::Relaxed); }
                 return if status == w::OK { Ok(value) } else { Err(status) };
             }
             if is_answer(&m) { mailbox::put(m); continue; }
@@ -285,6 +288,23 @@ pub mod files {
                 None => if is_shell(&m) { mailbox::put(m) },
             }
         }
+    }
+    /// A package request (`sex_pdx::package`: `op` is INSTALL, SEARCH, ...), for a run the
+    /// person started with `run +pkg`; any other run is refused. Returns Files' status and
+    /// its report, refused or not: lines of text, and lines starting with
+    /// `sex_pdx::package::MACHINE` that hold URLs. Paths are inside this program's folder.
+    pub fn package(window: &mut Window, op: u64, arg: &[u8], length: u64) -> (Error, alloc::vec::Vec<u8>) {
+        if arg.len() > w::PATH_BYTES { return (w::NAME, alloc::vec::Vec::new()); }
+        let _turn = Turn::take();
+        let region = match region() { Ok(r) => r, Err(e) => return (e, alloc::vec::Vec::new()) };
+        region[..arg.len()].copy_from_slice(arg);
+        REFUSED_VALUE.store(0, Ordering::Relaxed);
+        let (status, n) = match once(&mut Some(window), sex_pdx::package::KIND, arg.len(), op, length) {
+            Ok(n) => (w::OK, n),
+            Err(e) => (e, REFUSED_VALUE.load(Ordering::Relaxed)),
+        };
+        let n = (n as usize).min(w::CACHE_AT - w::PATH_BYTES);
+        (status, region[w::PATH_BYTES..w::PATH_BYTES + n].to_vec())
     }
     /// The words typed after the program's name, if it was started with any.
     pub fn args<'a>(window: &mut Window, out: &'a mut [u8; w::ARGS_MAX]) -> &'a [u8] {
@@ -481,6 +501,25 @@ pub mod files {
     /// Writes out and forgets the volume `/media/NAME`; for a USB stick every volume on it
     /// (Eject). Grants into it end with it.
     pub fn eject(window: &mut Window, media_path: &[u8]) -> Result<(), Error> { request(window, w::UNMOUNT, media_path, 0, 0).map(|_| ()) }
+    /// The encrypted home: none, locked or unlocked ([`sex_pdx::home_lock`] states).
+    pub fn home_state(window: &mut Window) -> Result<u32, Error> { request(window, sex_pdx::home_lock::STATE, b"", 0, 0) }
+    fn home_secret(window: &mut Window, kind: u8, mib: u64, password: &[u8]) -> Result<(), Error> {
+        if password.len() > 256 { return Err(w::NAME); }
+        exchange(Some(window), kind, b"", mib, password.len() as u64, |d| d[..password.len()].copy_from_slice(password), |_, _| ()).map(|_| ())
+    }
+    /// Makes `/home` an encrypted volume of `mib` MiB under `password`, unlocked.
+    pub fn home_setup(window: &mut Window, mib: u64, password: &[u8]) -> Result<(), Error> { home_secret(window, sex_pdx::home_lock::SETUP, mib, password) }
+    /// Unlocks `/home`; `home_lock::WRONG_PASSWORD` if it isn't the password.
+    pub fn home_unlock(window: &mut Window, password: &[u8]) -> Result<(), Error> { home_secret(window, sex_pdx::home_lock::UNLOCK, 0, password) }
+    /// A new password for home; `home_lock::WRONG_PASSWORD` if `old` isn't the current one.
+    pub fn home_change(window: &mut Window, old: &[u8], new: &[u8]) -> Result<(), Error> {
+        if old.len() > 256 || new.len() > 256 { return Err(w::NAME); }
+        let len = old.len() + new.len();
+        exchange(Some(window), sex_pdx::home_lock::CHANGE, b"", old.len() as u64, len as u64,
+                 |d| { d[..old.len()].copy_from_slice(old); d[old.len()..len].copy_from_slice(new) }, |_, _| ()).map(|_| ())
+    }
+    /// Writes `/home` out and forgets its key.
+    pub fn home_lock(window: &mut Window) -> Result<(), Error> { request(window, sex_pdx::home_lock::LOCK, b"", 0, 0).map(|_| ()) }
     pub fn create(window: &mut Window, path: &[u8]) -> Result<(), Error> { request(window, w::CREATE, path, 0, 0).map(|_| ()) }
     /// A file, or an empty folder.
     pub fn remove(window: &mut Window, path: &[u8]) -> Result<(), Error> { request(window, w::REMOVE, path, 0, 0).map(|_| ()) }

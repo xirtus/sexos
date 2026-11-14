@@ -1,7 +1,14 @@
 // SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! Packages through Files: install, remove, list, trust, and the person's answers to the
-//! grants a package asks for. One more request kind on the Files protocol (`fs`), Spindle
-//! only, with the sub-operation in `offset`. Replies carry a report in the data area.
+//! grants a package asks for. One more request kind on the Files protocol (`fs`), with the
+//! sub-operation in `offset`. Replies carry a report in the data area.
+//!
+//! Spindle may use every operation. A program may use it only when the person started it
+//! with `run +pkg` (its run's arguments then hold [`GRANT_TOKEN`], which only Spindle can
+//! put there), and then only INSTALL (never [`ALLOW_DOWNGRADE`]), CHECK, REMOVE, LIST,
+//! CATALOG, SEARCH, LOCATE and SOURCE. TRUST and CONSENT stay Spindle's: they are the
+//! person's answers. A program's package paths, [`DOWNLOAD`], [`CATALOG_DOWNLOAD`] and
+//! [`SIG_DOWNLOAD`] are inside its own folder, as all its paths are.
 //!
 //! Installed packages are recorded under `/system/packages/PROGRAM/`: `manifest` (as
 //! signed), `files` (what install wrote, for remove) and `consent` (the person's answers).
@@ -33,6 +40,8 @@ pub const SEARCH: u64 = 7;
 pub const LOCATE: u64 = 8;
 /// The saved store folder URL, as one [`MACHINE`] line.
 pub const SOURCE: u64 = 9;
+/// The run argument Spindle adds for `run +pkg`: this run may use package requests.
+pub const GRANT_TOKEN: &[u8] = b"+packages";
 /// Report lines for Spindle rather than the person start with this byte.
 pub const MACHINE: u8 = 1;
 pub const CATALOG_DOWNLOAD: &[u8] = b"/download.catalog";

@@ -504,7 +504,7 @@ impl Usb {
             self.dev[i].depth, power_ms);
         for p in 1..=ports { let _ = self.set(i, 0x23, 3, 8, p as u16); } // PORT_POWER
         let ticks = (power_ms as u64 / 10 + 2).max(10);
-        let _ = sex_pdx::sys_wait_self_ticks(ticks);
+        crate::xhci::sleep_ticks(ticks);
         self.dev[i].hub_pending = ((1u32 << (ports + 1)) - 1) & !1;
         self.dev[i].intr[k].role = Role::Hub;
         self.arm(i, k, 1);
@@ -537,17 +537,17 @@ impl Usb {
 
     fn reset_hub_port(&mut self, i: usize, p: u16) -> Option<u32> {
         let buf = self.dev[i].mem.unwrap().buf;
-        let _ = sex_pdx::sys_wait_self_ticks(10); // debounce
+        crate::xhci::sleep_ticks(10); // debounce
         self.set(i, 0x23, 3, 4, p).ok()?; // PORT_RESET
         for _ in 0..100 {
-            let _ = sex_pdx::sys_wait_self_ticks(2);
+            crate::xhci::sleep_ticks(2);
             if self.get(i, 0xA3, 0, 0, p, buf.0, 4).ok()? != 4 { continue; }
             let (status, change) = unsafe { (core::ptr::read_volatile(buf.1 as *const u16), core::ptr::read_volatile((buf.1 + 2) as *const u16)) };
             if change & (1 << 4) != 0 || (status & 2 != 0 && status & (1 << 4) == 0) {
                 let _ = self.set(i, 0x23, 1, 20, p); // C_PORT_RESET
                 if self.dev[i].hub_ss { let _ = self.set(i, 0x23, 1, 29, p); }
                 if status & 2 == 0 { return None; }
-                let _ = sex_pdx::sys_wait_self_ticks(2);
+                crate::xhci::sleep_ticks(2);
                 return Some(if self.dev[i].hub_ss { SUPER } else if status & (1 << 9) != 0 { LOW }
                     else if status & (1 << 10) != 0 { HIGH } else { FULL });
             }
@@ -795,7 +795,7 @@ impl Usb {
         for _ in 0..30 {
             match self.scsi(i, &[0, 0, 0, 0, 0, 0], false, 0) {
                 Ok(_) => { ready = true; break; }
-                Err(Scsi::Check) => { let _ = self.scsi(i, &[0x03, 0, 0, 0, 18, 0], true, 18); let _ = sex_pdx::sys_wait_self_ticks(5); }
+                Err(Scsi::Check) => { let _ = self.scsi(i, &[0x03, 0, 0, 0, 18, 0], true, 18); crate::xhci::sleep_ticks(5); }
                 Err(e) => return Err(e),
             }
         }

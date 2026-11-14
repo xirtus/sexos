@@ -12,5 +12,6 @@ sexfs = { path = "../../crates/sexfs", features = ["repair"] }
 sex-disk = { path = "../../crates/sex-disk" }
 sex-pkg = { path = "../../crates/sex-pkg" }
 sex-volumes = { path = "../../crates/sex-volumes" }
+sex-crypt = { path = "../../crates/sex-crypt" }
 sex-rt = { path = "../../sex-rt" }
 sex-object-model = { path = "../../crates/sex-object-model" }

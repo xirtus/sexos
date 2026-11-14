@@ -58,10 +58,16 @@ const KEY_E: u8 = 0x12;
 const KEY_I: u8 = 0x17;
 const KEY_F: u8 = 0x21;
 const KEY_G: u8 = 0x22;
+const KEY_K: u8 = 0x25;
+const HOME: &[u8] = sex_pdx::home_lock::HOME;
+/// Size of the encrypted home Ctrl+K makes.
+const HOME_MIB: u64 = 256;
 
 /// One step Ctrl+Z can take back.
 enum Undo { Moved { from: Vec<u8>, to: Vec<u8> }, Trashed { from: Vec<u8>, to: Vec<u8>, info: Vec<u8> }, Copied { to: Vec<u8> }, Made { path: Vec<u8> } }
-enum Input { Rename(Vec<u8>), NewFolder, SaveAs, Search }
+enum Input { Rename(Vec<u8>), NewFolder, SaveAs, Search, Password(Secret) }
+/// What a password typed into Files is for.
+enum Secret { Unlock, New, Repeat(Vec<u8>), Current, ChangeTo(Vec<u8>), ChangeRepeat(Vec<u8>, Vec<u8>) }
 /// Something that can't be undone, waiting for the same key a second time.
 #[derive(PartialEq, Eq)]
 enum Confirm { DeleteForever(Vec<u8>), EmptyTrash(Vec<u8>) }
@@ -247,11 +253,16 @@ impl App {
         if self.entries.len() > self.top + ROWS { t.push_str(&format!("  ... {} more\n", self.entries.len() - self.top - ROWS)); }
         t.push('\n');
         if let Some((kind, text)) = &self.input {
-            let label = match kind { Input::Rename(_) => "Rename to", Input::NewFolder => "New folder", Input::SaveAs => "Save as", Input::Search => "Search names and words" };
-            t.push_str(&format!("{}: {}|   (Enter confirms, Esc cancels)\n", label, shown(text)));
+            let label = match kind { Input::Rename(_) => "Rename to", Input::NewFolder => "New folder", Input::SaveAs => "Save as", Input::Search => "Search names and words",
+                Input::Password(Secret::Unlock) => "Password for home", Input::Password(Secret::New) => "New password for home (8 or more)", Input::Password(Secret::Repeat(_)) => "The same password again",
+                Input::Password(Secret::Current) => "Current password for home", Input::Password(Secret::ChangeTo(_)) => "New password (8 or more)",
+                Input::Password(Secret::ChangeRepeat(..)) => "The new password again" };
+            // A password shows only how long it is.
+            let shown_text = if matches!(kind, Input::Password(_)) { "*".repeat(text.len()) } else { String::from(shown(text)) };
+            t.push_str(&format!("{}: {}|   (Enter confirms, Esc cancels)\n", label, shown_text));
         } else if !self.status.is_empty() { t.push_str(&self.status); t.push('\n'); }
         if let Some(job) = &self.job { t.push_str(&job.progress()); t.push('\n'); }
-        t.push_str("Enter open  Backspace up  F2 rename  Ctrl+I size and checksum\nCtrl+C/X/V copy, cut, paste  Ctrl+N folder\nDel trash  Shift+Del delete for good  Ctrl+T show trash\nIn the trash: Ctrl+R restore  Ctrl+E empty\nOn a stick: Ctrl+E eject  Ctrl+D disks  Ctrl+Z undo  Ctrl+H home\nCtrl+F search names and words in files  Ctrl+G thumbnails\n");
+        t.push_str("Enter open  Backspace up  F2 rename  Ctrl+I size and checksum\nCtrl+C/X/V copy, cut, paste  Ctrl+N folder\nDel trash  Shift+Del delete for good  Ctrl+T show trash\nIn the trash: Ctrl+R restore  Ctrl+E empty\nOn a stick: Ctrl+E eject  Ctrl+D disks  Ctrl+Z undo  Ctrl+H home\nCtrl+F search names and words in files  Ctrl+G thumbnails  Ctrl+K home lock  Ctrl+Shift+K its password\n");
         window.show(t.as_bytes());
     }
 
@@ -501,8 +512,53 @@ impl App {
             Err(e) => { self.status = format!("Couldn't undo: {}.", shown(files::message(e))); self.undo.push(step); }
         }
     }
+    /// A password typed for home.
+    fn password(&mut self, window: &mut Window, secret: Secret, text: &[u8]) {
+        use sex_pdx::home_lock as h;
+        match secret {
+            Secret::Unlock => match files::home_unlock(window, text) {
+                Ok(()) => {
+                    sex_pdx::serial_record!("[files.app.home.unlocked]");
+                    self.status = "Home unlocked.".into();
+                    self.go(window, HOME.to_vec());
+                }
+                Err(e) => {
+                    sex_pdx::serial_record!("[files.app.home.refused] status={}", e);
+                    self.status = format!("{}: home stays locked.", shown(h::message(e)));
+                    if e == h::WRONG_PASSWORD { self.input = Some((Input::Password(Secret::Unlock), Vec::new())); }
+                }
+            },
+            Secret::New if text.len() < h::PASSWORD_MIN => { self.status = "At least 8 characters.".into(); self.input = Some((Input::Password(Secret::New), Vec::new())); }
+            Secret::New => self.input = Some((Input::Password(Secret::Repeat(text.to_vec())), Vec::new())),
+            Secret::Current => self.input = Some((Input::Password(Secret::ChangeTo(text.to_vec())), Vec::new())),
+            Secret::ChangeTo(mut old) if text.len() < h::PASSWORD_MIN => { old.fill(0); self.status = "At least 8 characters: nothing changed.".into(); }
+            Secret::ChangeTo(old) => self.input = Some((Input::Password(Secret::ChangeRepeat(old, text.to_vec())), Vec::new())),
+            Secret::ChangeRepeat(mut old, mut new) => {
+                let same = new == text;
+                new.fill(0);
+                if !same { old.fill(0); self.status = "The two new passwords differ: nothing changed.".into(); return; }
+                self.status = "Changing the password...".into();
+                let r = files::home_change(window, &old, text);
+                old.fill(0);
+                match r {
+                    Ok(()) => { sex_pdx::serial_record!("[files.app.home.changed]"); self.status = "Home's password is changed.".into(); }
+                    Err(e) => { sex_pdx::serial_record!("[files.app.home.change.refused] status={}", e); self.status = format!("Couldn't change the password: {}.", shown(h::message(e))); }
+                }
+            }
+            Secret::Repeat(mut first) => {
+                if first != text { self.status = "The two passwords differ: nothing changed.".into(); first.fill(0); return; }
+                first.fill(0);
+                self.status = "Encrypting home...".into();
+                match files::home_setup(window, HOME_MIB, text) {
+                    Ok(()) => { sex_pdx::serial_record!("[files.app.home.setup] mib={}", HOME_MIB); self.status = "Home is encrypted and unlocked. Ctrl+K locks it.".into(); self.go(window, HOME.to_vec()); }
+                    Err(e) => self.status = format!("Couldn't encrypt home: {}.", shown(h::message(e))),
+                }
+            }
+        }
+    }
     fn finish_input(&mut self, window: &mut Window) {
-        let Some((kind, text)) = self.input.take() else { return };
+        let Some((kind, mut text)) = self.input.take() else { return };
+        if let Input::Password(secret) = kind { self.password(window, secret, &text); text.fill(0); return; }
         if let Input::Search = kind {
             if text.iter().all(|b| *b == b' ') { return; }
             let base = self.cwd.clone();
@@ -527,7 +583,7 @@ impl App {
                     Err(e) => self.status = format!("Couldn't make the folder: {}.", shown(files::message(e))),
                 }
             }
-            Input::Search => {}
+            Input::Search | Input::Password(_) => {}
             Input::SaveAs => { let path = join(&self.cwd, &text); self.answer(window, Some(path)); }
         }
         let _ = files::sync(window);
@@ -604,6 +660,22 @@ impl App {
                 KEY_E => self.empty_trash(window),
                 KEY_I => self.info(window),
                 KEY_F => self.input = Some((Input::Search, Vec::new())),
+                // Ctrl+Shift+K: a new password for an encrypted home.
+                KEY_K if self.portal && key.shift => match files::home_state(window) {
+                    Ok(sex_pdx::home_lock::STATE_NONE) => self.status = "Home isn't encrypted: Ctrl+K encrypts it.".into(),
+                    Ok(_) => self.input = Some((Input::Password(Secret::Current), Vec::new())),
+                    Err(e) => self.status = format!("Home: {}.", shown(sex_pdx::home_lock::message(e))),
+                },
+                // Ctrl+K: encrypt home, unlock it, or lock it again.
+                KEY_K if self.portal => match files::home_state(window) {
+                    Ok(sex_pdx::home_lock::STATE_NONE) => { self.input = Some((Input::Password(Secret::New), Vec::new())); self.status = format!("Home will be encrypted ({} MiB): only this password opens it, and it can't be recovered.", HOME_MIB); }
+                    Ok(sex_pdx::home_lock::STATE_LOCKED) => self.input = Some((Input::Password(Secret::Unlock), Vec::new())),
+                    Ok(_) => match files::home_lock(window) {
+                        Ok(()) => { sex_pdx::serial_record!("[files.app.home.locked]"); self.status = "Home locked: its files can't be read until the password is given.".into(); if self.cwd.starts_with(HOME) { let r = self.root.clone(); self.go(window, r); } }
+                        Err(e) => self.status = format!("Couldn't lock home: {}.", shown(sex_pdx::home_lock::message(e))),
+                    },
+                    Err(e) => self.status = format!("Home: {}.", shown(sex_pdx::home_lock::message(e))),
+                },
                 KEY_G => {
                     self.thumbs.on = !self.thumbs.on;
                     sex_pdx::serial_record!("[files.app.grid] on={} dir={}", self.thumbs.on as u8, shown(&self.cwd));
@@ -702,6 +774,12 @@ pub extern "C" fn _start() -> ! {
                         job: None, job_undo: None, job_select: None, last_drawn: 0, last_pct: 0, confirm: None, origins: Vec::new(), watching: None, last_look: 0, index: Index::new(), search: None, found: None, thumbs: Thumbs::new(), showing_pixels: false };
     let start = app.root.clone();
     app.go(&mut window, start);
+    // A locked home asks for its password first: Files opened at login unlocks it.
+    if portal && files::home_state(&mut window) == Ok(sex_pdx::home_lock::STATE_LOCKED) {
+        sex_pdx::serial_record!("[files.app.home] state=locked");
+        app.input = Some((Input::Password(Secret::Unlock), Vec::new()));
+        app.status = "Home is locked. Type its password, or Esc to leave it locked.".into();
+    }
     app.poll_questions(&mut window);
     app.render(&mut window);
     sex_pdx::serial_record!("[files.app.ready] target={} task={} root={} portal={}", window.target, window.task, shown(&app.root), portal as u8);

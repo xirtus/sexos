@@ -103,7 +103,10 @@ fn status(r: Response, phase: Phase, expected: Status) {
     assert_eq!(broker::clean(&b),(true,false,true)); let t = read(&mut b,Q,1); assert_eq!(read_all(&mut b,Q,t,body.len(),1),body);
     receive(&mut b,Q,Request::Finish { ticket:t,generation:p.generation,hash:p.hash },1).unwrap(); assert!(b.busy());
     let receipt=admitted(&mut b,1); status(receipt[0].1,Phase::Finish,Status::Ok); assert!(!b.busy()); assert_eq!(broker::clean(&b),(true,false,true));
-    assert!(core::mem::size_of::<Broker>()<3*MAX_BYTES+4096);
+    // Stage, committed and read snapshot, plus the bounded Super+V history
+    // (one buffer per entry); nothing else holds clipboard bytes.
+    assert!(core::mem::size_of::<Broker>()<(3+broker::HISTORY)*MAX_BYTES+4096);
+    assert!(b.history_len()==0 && (0..broker::HISTORY).all(|i| b.history_text(i).is_none()));
 }
 
 #[test] fn full_publish_receipt_is_immutable_and_does_not_block_other_participant() {
@@ -332,4 +335,36 @@ fn broker_step(b: &mut Broker, s: Subject, c: &mut clipboard_client::Client, now
         assert!(!delivered.contains(&p.subject));delivered.push(p.subject);Admission::Accepted
     });assert!((1..=4).contains(&attempts));}
     assert_eq!(delivered.len(),subjects.len());
+}
+
+#[test] fn history_keeps_earlier_copies_restores_them_and_forgets_a_closed_owner() {
+    let mut b = fresh();
+    assert_eq!(b.history_len(), 0);
+    publish(&mut b, Q, b"first", 1, true);
+    assert_eq!(b.history_len(), 0);
+    publish(&mut b, B, b"second", 1, true);
+    publish(&mut b, Q2, b"third", 1, true);
+    // Copying the same bytes again adds nothing.
+    publish(&mut b, Q2, b"third", 1, true);
+    assert_eq!(b.history_len(), 2);
+    assert_eq!(b.history_text(0), Some(&b"second"[..]));
+    assert_eq!(b.history_text(1), Some(&b"first"[..]));
+    // Restoring "first": it pastes under a new generation and its own owner.
+    let before = b.publication().unwrap().generation;
+    let p = b.restore(1).unwrap();
+    assert_eq!((p.owner, p.len, p.generation), (Q, 5, before + 1));
+    assert_eq!(b.current_text(), Some(&b"first"[..]));
+    assert_eq!(b.history_text(0), Some(&b"third"[..]));
+    assert_eq!(b.history_text(1), Some(&b"second"[..]));
+    let t = read(&mut b, Q3, 2); assert_eq!(read_all(&mut b, Q3, t, 5, 2), b"first");
+    receive(&mut b, Q3, Request::Finish { ticket: t, generation: p.generation, hash: hash(b"first") }, 2).unwrap(); admitted(&mut b, 2);
+    // Closing Browser erases its copy from the history too.
+    b.retire(B);
+    assert_eq!(b.history_len(), 1);
+    assert_eq!(b.history_text(0), Some(&b"third"[..]));
+    assert_eq!(b.restore(5), None);
+    // The ring holds HISTORY entries; the oldest falls off and is erased.
+    for i in 0..broker::HISTORY + 3 { publish(&mut b, Q2, format!("copy {i}").as_bytes(), 3, true); }
+    assert_eq!(b.history_len(), broker::HISTORY);
+    assert_eq!(b.history_text(0), Some(format!("copy {}", broker::HISTORY + 1).as_bytes()));
 }
