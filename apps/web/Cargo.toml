@@ -38,6 +38,7 @@ sex-gl = { path = "../../crates/sex-gl" }
 sex-fetch = { path = "../../crates/sex-fetch" }
 sex-shields = { path = "../../crates/sex-shields" }
 sex-extensions = { path = "../../crates/sex-extensions" }
+serde_json = { version = "1.0.154", default-features = false, features = ["alloc"] }
 
 [features]
 baseline-jit = ["sex-js/baseline-jit"]

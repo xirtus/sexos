@@ -60,6 +60,8 @@ pub struct Manifest {
     pub rulesets: Vec<Ruleset>,
     /// MV3 `background.service_worker`, or MV2 `background.scripts` / `page`.
     pub background: Vec<String>,
+    /// MV3 `background.type` is `module`: the service worker is an ES module.
+    pub background_module: bool,
     pub permissions: Vec<String>,
     pub host_permissions: Vec<Pattern>,
     /// The page the toolbar button opens (`action`/`browser_action` `default_popup`).
@@ -121,6 +123,7 @@ impl Manifest {
             background.extend(strings(b.get("page")));
         }
         let background = background.iter().filter_map(|p| clean_path(p)).collect();
+        let background_module = bg.and_then(|b| b.get("type")).and_then(Value::as_str) == Some("module");
         let mut permissions = strings(o.get("permissions"));
         let mut host_permissions: Vec<Pattern> = strings(o.get("host_permissions")).iter().filter_map(|p| Pattern::parse(p)).collect();
         // MV2 lists hosts among the permissions.
@@ -133,7 +136,7 @@ impl Manifest {
             extension_version: String::from(o.get("version").and_then(Value::as_str).unwrap_or("")),
             description: String::from(o.get("description").and_then(Value::as_str).unwrap_or("")),
             default_locale: o.get("default_locale").and_then(Value::as_str).map(String::from),
-            content_scripts, rulesets, background, permissions, host_permissions, popup, options_page,
+            content_scripts, rulesets, background, background_module, permissions, host_permissions, popup, options_page,
         })
     }
 

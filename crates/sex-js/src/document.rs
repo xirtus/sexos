@@ -33,6 +33,12 @@ pub struct Document {
     /// page around this one, else an iframe element of this page; data as JSON;
     /// target origin, `*` for any).
     pub outbox: Vec<(i64, String, String)>,
+    /// What [`op::EXTENSION`] `key` answers once (empty: no extensions here).
+    pub ext_key: String,
+    /// Extension messages for the browser to route, as JSON.
+    pub ext_outbox: Vec<String>,
+    /// The tab extensions see (`chrome.tabs.query`), as JSON.
+    pub ext_tab: String,
     /// Element boxes from the last layout, by node: (x, y, w, h).
     pub rects: Vec<Option<(i32, i32, i32, i32)>>,
     /// Each node's paint layer (higher paints on top), from `Page::layers`.
@@ -187,7 +193,7 @@ fn rough_measure(font: &str, text: &str) -> i32 {
 
 impl Document {
     pub fn new(dom: Dom, url: &str, viewport: (i32, i32), clock: fn() -> u64) -> Self {
-        Self { resource_owner: NEXT_RESOURCE_OWNER.fetch_add(1, Ordering::Relaxed), source_policies: Default::default(), source_policy_overflow: false, dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, navigate_post: None, navigate_type: String::new(), referrer: String::new(), parent_origin: None, outbox: Vec::new(), rects: Vec::new(), layers: Vec::new(), clock, canvas_queue: Vec::new(), measure: rough_measure, gl: Default::default(), pictures: Vec::new(), fetches: Vec::new(), classic_scripts: Vec::new(), bodies: Vec::new(), media: Vec::new(), media_bytes: Vec::new(), heads: Vec::new(), next_fetch: 0, cookies: None, wall: || 0, storage: None, ws_asks: Vec::new(), ws_in: Vec::new(), next_ws: 0, modules: Default::default(), modules_wanted: Vec::new(), import_map: Vec::new() }
+        Self { resource_owner: NEXT_RESOURCE_OWNER.fetch_add(1, Ordering::Relaxed), source_policies: Default::default(), source_policy_overflow: false, dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, navigate_post: None, navigate_type: String::new(), referrer: String::new(), parent_origin: None, outbox: Vec::new(), ext_key: String::new(), ext_outbox: Vec::new(), ext_tab: String::new(), rects: Vec::new(), layers: Vec::new(), clock, canvas_queue: Vec::new(), measure: rough_measure, gl: Default::default(), pictures: Vec::new(), fetches: Vec::new(), classic_scripts: Vec::new(), bodies: Vec::new(), media: Vec::new(), media_bytes: Vec::new(), heads: Vec::new(), next_fetch: 0, cookies: None, wall: || 0, storage: None, ws_asks: Vec::new(), ws_in: Vec::new(), next_ws: 0, modules: Default::default(), modules_wanted: Vec::new(), import_map: Vec::new() }
     }
 
     /// Takes each element's laid-out box from the browser's layout, for
@@ -532,6 +538,33 @@ impl Page for Document {
             }
             op::LOCATION => Some(self.url.clone()),
             op::FRAME => Some(alloc::format!("{}\t{}", self.referrer, self.parent_origin.as_deref().unwrap_or(""))),
+            op::EXTENSION => match *a.first()? {
+                "key" => { let k = core::mem::take(&mut self.ext_key); (!k.is_empty()).then_some(k) }
+                "tab" => (!self.ext_tab.is_empty()).then(|| self.ext_tab.clone()),
+                "post" => { if self.ext_outbox.len() < 1024 { self.ext_outbox.push(String::from(*a.get(1)?)); } None }
+                "store" => {
+                    let store = self.storage.clone()?;
+                    let origin = format!("kaleidoscope-extension://{}", a.get(1)?);
+                    let key = a.get(3).copied().unwrap_or("");
+                    match *a.get(2)? {
+                        "get" => store.borrow().get(&origin, key).map(String::from),
+                        "set" => Some(String::from(if store.borrow_mut().set_within(&origin, key, a.get(4).copied().unwrap_or(""), crate::storage::EXT_QUOTA) { "" } else { "!" })),
+                        "remove" => { store.borrow_mut().remove(&origin, key); Some(String::new()) }
+                        "keys" => {
+                            let s = store.borrow();
+                            let mut out = String::new();
+                            for k in s.area(&origin).into_iter().flat_map(|ar| ar.items.keys()) {
+                                let Some(rest) = k.strip_prefix(key) else { continue };
+                                if !out.is_empty() { out.push('\n'); }
+                                out.push_str(rest);
+                            }
+                            Some(out)
+                        }
+                        _ => None,
+                    }
+                }
+                _ => None,
+            },
             op::POST_MESSAGE => {
                 let to: i64 = a.first()?.parse().ok()?;
                 // A page can't flood the browser with messages it never lets go of.

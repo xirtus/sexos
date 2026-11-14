@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
-"""Kaleidoscope extensions (N7a): an MV3 extension packed as a .crx (from
-scripts/web_site/extensions/sample) is installed from a link on about:extensions. On a
-page served over the network its content script runs, its style sheet turns the page
-pink, and its declarativeNetRequest rule blocks a picture and a script before they
-leave. Turned off on about:extensions, it stays off in the next run and the two
-requests reach the server."""
+"""Kaleidoscope extensions (N7a, N7b): an MV3 extension packed as a .crx (from
+scripts/web_site/extensions/sample) is installed from a link on about:extensions. Its
+service worker starts in a realm of its own and hears onInstalled, keeps a count in
+chrome.storage, registers one more content script and adds a dynamic blocking rule. On a
+page served over the network both content scripts run, one asks the background a
+question over chrome.runtime and gets the answer (with the stored count and the tab),
+its style sheet turns the page pink, and its static and dynamic declarativeNetRequest
+rules block two pictures and a script before they leave. Turned off on
+about:extensions, it stays off in the next run, its background doesn't start and the
+three requests reach the server."""
 import argparse,http.server,io,os,re,shutil,struct,threading,time,zipfile
 from pathlib import Path
 from PIL import Image
@@ -36,7 +40,7 @@ os.environ['SEXOS_GATE_NIC']='-netdev user,id=n0 -device e1000e,netdev=n0'
 from quil_autosave_gate import boot
 KEYS={' ':'spc','/':'slash','.':'dot','-':'minus','=':'equal'}
 SHIFTED={':':'semicolon','?':'slash','+':'equal','_':'minus'}
-BLOCKED=['/site/extensions/blocked-by-extension.png','/site/extensions/blocked-by-extension.js']
+BLOCKED=['/site/extensions/blocked-by-extension.png','/site/extensions/blocked-by-extension.js','/site/extensions/blocked-dynamic.png']
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
@@ -63,14 +67,20 @@ def main():
   assert '[web.extension.' not in t()[s:],'an extension before any was installed'
   hits.clear()
   s=go(f'about:extensions?install={base}/sample.crx')
-  g['wait'](r'\[web.extension.installed\] id=recolour-sample files=5 name=Recolour Sample',s,300)
-  g['wait'](r'\[web.extension.loaded\] id=recolour-sample mv=3 enabled=1 rules=1 skipped=0 content_scripts=1 background=0',s,60)
+  g['wait'](r'\[web.extension.installed\] id=recolour-sample files=7 name=Recolour Sample',s,300)
+  g['wait'](r'\[web.extension.loaded\] id=recolour-sample mv=3 enabled=1 rules=1 skipped=0 content_scripts=1 background=1',s,60)
+  g['wait'](r'\[web.extension.background\] id=recolour-sample scripts=1 module=0 ',s,120)
+  for line in ('background installed install','content script registered','dynamic rule added'):g['wait'](rf'\[web.extension.console\] id=recolour-sample level=0 {line}',s,120)
+  g['wait'](r'\[web.extension.rules\] id=recolour-sample dynamic=1 session=0 rules=2',s,60)
   assert '/sample.crx' in hits,hits
   s=go(page);g['wait'](loaded,s,600)
   g['wait'](r'\[web.console\] level=0 extension content script ran',s,60)
-  g['wait'](r'\[web.extension.content\] css=1 early=0 late=1 url=\S+page.html',s,5)
+  g['wait'](r'\[web.extension.content\] css=1 early=0 late=2 url=\S+page.html',s,5)
+  g['wait'](r'\[web.console\] level=0 registered content script ran recolour-sample',s,60)
+  reply=g['wait'](r'\[web.console\] level=0 extension reply (\{[^\n]*\})',s,120)[1]
+  assert reply==f'{{"ok":true,"host":"10.0.2.2:{PORT}","installs":1,"tab":"{page}"}}',reply
   blocked=re.findall(r'\[web.extension.blocked\] id=recolour-sample kind=(\S+) ',t()[s:])
-  assert sorted(blocked)==['image','script'],blocked
+  assert sorted(blocked)==['image','image','script'],blocked
   assert not [h for h in hits if h in BLOCKED],hits
   time.sleep(2);on=pink('extension-on');assert on>3000,f'page not recoloured ({on} pink pixels)'
   s=go('about:extensions?toggle=recolour-sample');g['wait'](r'\[web.extension.toggle\] id=recolour-sample enabled=0',s,120)
@@ -81,7 +91,7 @@ def main():
   hits.clear();g['focus'](153);time.sleep(.5);s=len(t());keys(f'run +net kaleidoscope {page}');q.key('ret')
   g['wait'](r'\[web.extension.loaded\] id=recolour-sample mv=3 enabled=0 ',s,600);g['wait'](loaded,s,1200)
   g['wait'](r'\[web.console\] level=0 blocked script ran',s,120)
-  assert '[web.extension.blocked]' not in t()[s:] and '[web.extension.content]' not in t()[s:]
+  assert '[web.extension.blocked]' not in t()[s:] and '[web.extension.content]' not in t()[s:] and '[web.extension.background]' not in t()[s:]
   assert sorted(h for h in hits if h in BLOCKED)==sorted(BLOCKED),hits
   time.sleep(2);off=pink('extension-off');assert off<on/10,(on,off)
   text=t();assert 'KERNEL PANIC' not in text and '[web.fatal]' not in text and 'panicked' not in text

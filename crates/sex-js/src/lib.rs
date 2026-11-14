@@ -27,7 +27,7 @@ use wasmi::{Caller, Config, Engine, Extern, Linker, Memory, Module, Store, Store
 /// The engine, as built by `scripts/build_quickjs_wasm.sh`.
 pub static QUICKJS_WASM: &[u8] = include_bytes!("../quickjs.wasm");
 /// The DOM and browser API, written in JavaScript over `__host`.
-pub static PRELUDE: &str = concat!(include_str!("prelude.js"), "\n", include_str!("indexeddb.js"));
+pub static PRELUDE: &str = concat!(include_str!("prelude.js"), "\n", include_str!("indexeddb.js"), "\n", include_str!("extensions.js"));
 
 /// Page operations, `__host`'s first argument. Node ids travel as decimal strings.
 pub mod op {
@@ -130,6 +130,13 @@ pub mod op {
     /// saved form; (`save`, name, text) answers `!` over the quota; (`delete`, name);
     /// (`list`) the names, one per line. Nothing answers without lasting storage.
     pub const IDB: u32 = 34;
+    /// Browser extensions (Kaleidoscope's `chrome.*`): (`key`) the secret that lets
+    /// extension code reach this, once, then nothing; (`tab`) the shown tab as JSON; (`post`, JSON) a message for the
+    /// browser to route (it delivers answers and events as `ext\tJSON`); (`store`, id,
+    /// verb, key, value) the extension's own storage, verb `get`, `set` (answers `!`
+    /// over the quota), `remove` or `keys` (the keys starting with `key`, that part cut,
+    /// one per line).
+    pub const EXTENSION: u32 = 35;
     /// (id): the oldest message not yet taken (text, or with bit 16 an ArrayBuffer).
     pub const WS_TAKE: u32 = 74;
 }

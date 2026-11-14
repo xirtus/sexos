@@ -9,6 +9,8 @@ use alloc::string::String;
 
 /// Bytes (keys plus values, as UTF-8) one origin may keep, as browsers allow.
 pub const QUOTA: usize = 5 << 20;
+/// `chrome.storage` of one extension (Chrome gives `storage.local` 10 MB).
+pub const EXT_QUOTA: usize = 10 << 20;
 /// Bytes of IndexedDB one origin may keep.
 pub const IDB_QUOTA: usize = 64 << 20;
 /// IndexedDB databases are kept as areas named this prefix and the origin.

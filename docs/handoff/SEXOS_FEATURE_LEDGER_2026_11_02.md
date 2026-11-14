@@ -4370,6 +4370,29 @@ energy. Details: `LAPTOP_POWER_2026_11_13.md` (Sleep section).
   `scripting`, `webRequest`, popups and options pages, isolated worlds for content
   scripts, signature checks. uBlock Origin Lite needs these; full uBO (MV2) also needs
   blocking webRequest.
+## Kaleidoscope extensions, slice N7b (2026-11-14)
+- **What:** each extension that is on and has a background (MV3 `service_worker`, as an
+  ES module when `type: module`; MV2 `scripts` or a background page's `<script src>`)
+  runs in a script realm of its own, started with the browser and on install, stopped
+  when turned off or removed. It hears `runtime.onInstalled` / `onStartup`.
+- **`chrome.*`** (`crates/sex-js/src/extensions.js`, op 35 `EXTENSION`): `runtime`
+  (sendMessage/onMessage both ways with async `sendResponse`, getURL, getManifest,
+  lastError), `tabs` (query/get/sendMessage/create/update), `storage.local/sync/session`
+  with `onChanged` across realms (kept with the profile's web storage under origin
+  `kaleidoscope-extension://<id>`, 10 MB), `scripting` (executeScript, insertCSS,
+  register/update/unregister/getRegisteredContentScripts), `declarativeNetRequest`
+  (get/updateEnabledRulesets, dynamic and session rules, rebuilt into the extension's
+  engine), `i18n`, `alarms`, and stubs for action, permissions, contextMenus, commands,
+  webNavigation, windows. Promises and callbacks both.
+- **Browser:** `apps/web/src/extensions.rs` routes realm messages (`ext_pump` in
+  `settle`), serves `kaleidoscope-extension://ID/PATH` to fetch, modules and pages,
+  and keeps run-time state in Files `Web/extensions-state/<id>.json`. Only code the
+  browser wrote gets a `chrome` object: it needs a key handed to each realm once,
+  before page scripts run.
+- **Tests:** `cargo test -p sex-js --test extensions`; the extensions gate now installs a
+  sample with a service worker (storage, registered script, dynamic rule, messaging).
+- **Not yet:** isolated worlds, popups/options pages as extension pages, `webRequest`,
+  `runtime.connect` ports, content scripts in frames hearing messages.
 ## J5 D2: Denim compressed memory, page out and back (2026-11-14)
 - New syscall 88 `SYS_DENIM` (ABI addition, `sex_pdx::denim`), Denim only: SCAN (accessed bits), OUT (heap page leaf becomes a non-present marker naming the row, shootdown, bytes copied to Denim's window, frame freed), IN (fresh frame, leaf restored, parked fault task resumed). Kernel messages OP_FAULT 0x3D1 and OP_RECALL 0x3D2.
 - Page faults on a marker go to Denim instead of the row's pager (`forward_page_fault`). Worker spawn and SEAL/OPEN on a run with pages out return RETRY and recall them; OUT is refused while workers live.

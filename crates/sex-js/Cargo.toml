@@ -21,3 +21,6 @@ baseline-jit = []
 
 [target.'cfg(target_os = "none")'.dependencies]
 sex-app = { path = "../sex-app" }
+
+[dev-dependencies]
+serde_json = "1"
