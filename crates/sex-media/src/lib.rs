@@ -28,6 +28,7 @@ use sex_app::sound::{Sound, RATE};
 mod source;
 pub use source::{Source, Growing, AHEAD, NEAR};
 pub mod recording;
+pub mod export;
 pub mod episodes;
 pub mod segments;
 
