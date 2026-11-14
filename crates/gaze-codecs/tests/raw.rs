@@ -103,7 +103,9 @@ fn raf_preview_and_its_own_exif() {
     assert_eq!(img.pixel(0, 0), plain.pixel(63, 47));
     // Offsets past the end.
     raf[84..88].copy_from_slice(&u32::MAX.to_be_bytes());
-    assert_eq!(decode(&raf, &Limits::PHOTO), Err(Error::NoPreview));
+    // Without a preview the file goes to rawler when it is built in; this fake RAF has no sensor data.
+    let want = if cfg!(feature = "raw") { Error::Raw } else { Error::NoPreview };
+    assert_eq!(decode(&raf, &Limits::PHOTO), Err(want));
 }
 
 fn heif(major: &[u8; 4], compat: &[&[u8; 4]]) -> Vec<u8> {
@@ -156,7 +158,7 @@ fn sniff_every_format() {
         assert_eq!(sniff(&bytes), want, "{:?}", &bytes[..bytes.len().min(16)]);
     }
     assert_eq!(Format::Avif.support(), Support::Detected);
-    assert_eq!(Format::Cr3.support(), Support::Detected);
+    assert_eq!(Format::Cr3.support(), if cfg!(feature = "raw") { Support::Decode } else { Support::Detected });
     assert_eq!(Format::Jpeg.support(), Support::Decode);
     assert_eq!(Format::Heic.media_type(), "image/heic");
     assert_eq!(decode(&heif(b"avif", &[]), &Limits::PHOTO), Err(Error::NoDecoder(Format::Avif)));

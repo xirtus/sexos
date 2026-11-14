@@ -73,17 +73,42 @@ impl Text {
     }
 }
 
-fn render(window: &mut Window, s: &Sample, prev: &Sample, top: usize) -> usize {
+/// What came of the last Delete, shown under the list.
+fn end_note(status: u64) -> &'static [u8] {
+    match status {
+        stats::OK => b"Ended.",
+        stats::NOT_A_PROGRAM => b"Only programs can be ended, not system services.",
+        stats::NOT_FOCUSED => b"The shell did not take the request (focus Mesh and try again).",
+        _ => b"The program could not be ended.",
+    }
+}
+
+/// The chosen line moves by `step` among the rows shown last; with none chosen, the first.
+fn choose(s: &Sample, chosen: Option<u32>, step: isize) -> Option<u32> {
+    let rows = &s.rows[..s.count];
+    if rows.is_empty() { return None; }
+    let at = chosen.and_then(|pd| rows.iter().position(|r| r.pd == pd));
+    let next = match at { Some(i) => (i as isize + step).clamp(0, rows.len() as isize - 1) as usize, None => 0 };
+    Some(rows[next].pd)
+}
+
+fn render(window: &mut Window, s: &Sample, prev: &Sample, top: usize, chosen: Option<u32>, note: &[u8]) -> usize {
     let mut t = Text { buf: [0; 2048], len: 0 };
     let span = s.tsc.saturating_sub(prev.tsc).max(1);
     let all = span.saturating_mul(s.cores);
     let busy = 1000u64.saturating_sub((s.idle.saturating_sub(prev.idle) as u128 * 1000 / all as u128).min(1000) as u64);
     t.put(b"CPU "); t.tenths(busy); t.put(b" of "); t.num(s.cores, 1); t.put(b" cores   free memory");
     t.bytes(s.free_pages); t.put(b"\n\nNAME             DOMAIN    CPU      MEMORY  CALLS/S\n");
-    let top = top.min(s.count.saturating_sub(1));
+    let mut top = top.min(s.count.saturating_sub(1));
+    // Keep the chosen line on screen.
+    if let Some(i) = chosen.and_then(|pd| s.rows[..s.count].iter().position(|r| r.pd == pd)) {
+        if i < top { top = i; } else if i >= top + SHOWN { top = i + 1 - SHOWN; }
+    }
     for r in s.rows[top..s.count].iter().take(SHOWN) {
+        t.put(if Some(r.pd) == chosen { b"> " } else { b"  " });
         t.name(r.pd); t.num(r.pd as u64, 6); t.put(b"  "); t.tenths(r.tenths); t.put(b" "); t.bytes(r.pages); t.num(r.rate, 9); t.put(b"\n");
     }
+    t.put(b"\nUp/Down choose a line, Delete ends that program.\n"); t.put(note);
     window.show(&t.buf[..t.len]);
     if let Some(r) = s.rows[..s.count].first() {
         sex_pdx::serial_record!("[monitor.sample] rows={} busy_tenths={} top_pd={} top_tenths={} top_task={} free_pages={}", s.count, busy, r.pd, r.tenths, r.task, s.free_pages);
@@ -100,21 +125,34 @@ pub extern "C" fn _start() -> ! {
     window.title(b"Mesh");
     let mut prev = sample(&Sample { rows: [Row::default(); MAX], count: 0, tsc: 0, idle: 0, cores: 1, free_pages: 0, ms: 0, span_ms: 0 });
     let mut top = 0usize;
+    let mut chosen: Option<u32> = None;
+    // The sample before `prev`, so a redraw after a key shows the same numbers.
+    let mut older = Sample { rows: [Row::default(); MAX], count: 0, tsc: 0, idle: 0, cores: 1, free_pages: 0, ms: 0, span_ms: 0 };
+    let mut note: &[u8] = b"";
     sex_pdx::serial_record!("[monitor.ready] target={} task={}", window.target, window.task);
     loop {
         match window.next_within(PERIOD_MS) {
             Some(Event::Close) => window.close(),
-            Some(Event::Key(key)) => match nav(key) {
-                Some(Nav::Up) => top = top.saturating_sub(1),
-                Some(Nav::Down) => top += 1,
-                Some(Nav::Home) => top = 0,
-                _ => {}
-            },
+            Some(Event::Key(key)) => {
+                match nav(key) {
+                    Some(Nav::Up) => chosen = choose(&prev, chosen, -1),
+                    Some(Nav::Down) => chosen = choose(&prev, chosen, 1),
+                    Some(Nav::Home) => { top = 0; chosen = choose(&prev, None, 0); }
+                    Some(Nav::Delete) => if let Some(pd) = chosen {
+                        let status = stats::end_program(pd);
+                        sex_pdx::serial_record!("[monitor.end] target={} status={}", pd, status);
+                        note = end_note(status);
+                    },
+                    _ => continue,
+                }
+                if let Some(pd) = chosen { sex_pdx::serial_record!("[monitor.choose] target={}", pd); }
+                top = render(&mut window, &prev, &older, top, chosen, note);
+            }
             Some(_) => {}
             None => {
                 let now = sample(&prev);
-                top = render(&mut window, &now, &prev, top);
-                prev = now;
+                top = render(&mut window, &now, &prev, top, chosen, note);
+                older = core::mem::replace(&mut prev, now);
             }
         }
     }

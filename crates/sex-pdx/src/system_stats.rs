@@ -18,6 +18,20 @@ pub const INVALID: u64 = 1;
 pub const NONE: u64 = 2;
 pub const UNKNOWN: u64 = u64::MAX;
 
+/// To the Shell (`SLOT_SHELL`): end the program in domain `arg0`, as the memory policy
+/// does. Only the focused program may ask (a person is looking at it, as in the system
+/// monitor), and only programs can be ended, never a service.
+pub const OP_END_PROGRAM: u64 = 0x3A2;
+/// Answers to `OP_END_PROGRAM` besides `OK`.
+pub const NOT_A_PROGRAM: u64 = 4;
+pub const NOT_FOCUSED: u64 = 5;
+pub const NOT_ENDED: u64 = 6;
+/// Asks the Shell to end the program in domain `pd`; see `OP_END_PROGRAM`.
+pub fn end_program(pd: u32) -> u64 {
+    let (transport, answer) = crate::pdx_call(crate::SLOT_SHELL, OP_END_PROGRAM, pd as u64, 0, 0);
+    if transport != 0 { NOT_FOCUSED } else { answer }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Overview { pub tsc: u64, pub cores: u64, pub idle_cycles: u64, pub free_pages: u64 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

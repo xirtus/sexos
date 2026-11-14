@@ -314,6 +314,33 @@ unsafe fn shell_close_poll() {
 const _: () = assert!(app_custody::CLOSE_ASK==sex_pdx::app_lifecycle::CLOSE_ASK
     && app_custody::CLOSE_CONFIRMED==sex_pdx::app_lifecycle::CLOSE_CONFIRMED
     && app_custody::DECLINE_UNSAVED==sex_pdx::app_lifecycle::DECLINE_UNSAVED);
+/// Ends a program row now. Its pages are gone, but a program waiting for an event would
+/// not run to notice: a confirmed Close wakes it, it faults, and its run is retired.
+unsafe fn force_end_and_wake(e:&app_custody::Entry)->bool {
+    if sex_pdx::app_lifecycle::force_end(e.slot).is_err() { return false; }
+    if let Some(slot) = e.close_slot() { let _ = pdx_call_checked(slot, sex_pdx::app_lifecycle::OP_APP_CLOSE, e.target as u64, e.task as u64, sex_pdx::app_lifecycle::CLOSE_CONFIRMED); }
+    true
+}
+/// The focused program (the system monitor) asks to end another program now.
+unsafe fn program_end_receive(msg:&sex_pdx::PdxMessage)->bool {
+    use sex_pdx::system_stats as st;
+    if msg.type_id!=st::OP_END_PROGRAM {return false;}
+    let focused=APP_CUSTODY.iter().flatten().any(|e|e.target==msg.caller_pd&&e.task==msg.caller_task&&!e.dead&&e.surface==FOCUSED_SURFACE_ID);
+    let target=msg.arg0 as u32;
+    let status=if !focused {st::NOT_FOCUSED} else {
+        match APP_CUSTODY.iter_mut().flatten().find(|e|e.target==target&&!e.dead&&!e.forced
+            &&app_catalog::by_surface(e.target,e.surface).is_some_and(|r|r.app==app_catalog::App::Program)) {
+            None=>st::NOT_A_PROGRAM,
+            Some(e)=>{
+                e.forced=true;
+                if force_end_and_wake(e){st::OK}else{e.forced=false;st::NOT_ENDED}
+            }
+        }
+    };
+    sex_pdx::serial_record!("[shell.program.end] caller={} target={} status={}",msg.caller_pd,target,status);
+    pdx_reply(msg.caller_pd,status);
+    true
+}
 /// An app's own decline of a pending ordinary close: unsaved work stays open
 /// and the user's next Close is sent as confirmed.
 unsafe fn shell_close_declined_receive(msg:&sex_pdx::PdxMessage)->bool {
@@ -10845,6 +10872,17 @@ unsafe fn volume_key(step:i8) {
     if status==0{MEDIA_ASKS.push(media_keys::Ask::Volume);}
     sex_pdx::serial_record!("[shell.volume] step={} status={:#x}",step,status);
 }
+/// Key repeat and Caps Lock as Ctrl from settings (repeat rate is per second).
+pub unsafe fn keyboard_settings(delay_ms:u64,rate:u64,caps_as_ctrl:bool){
+    KEY_REPEAT.configure(delay_ms,if rate==0{0}else{1000/rate});
+    CAPS_AS_CTRL=caps_as_ctrl;
+    sex_pdx::serial_record!("[shell.keyboard.settings] delay_ms={} interval_ms={} caps_as_ctrl={}",KEY_REPEAT.delay(),KEY_REPEAT.interval(),caps_as_ctrl as u8);
+}
+/// The volume from settings to Bell; false if Bell did not take the request.
+pub unsafe fn volume_restore(volume:u8)->bool{
+    let (status,_)=pdx_call(SLOT_BELL,sex_pdx::sound_mixer::OP_MIXER,sex_pdx::sound_mixer::SET_MASTER,volume.min(100) as u64,0);
+    status==0&&MEDIA_ASKS.push(media_keys::Ask::Restore)
+}
 /// Mixer answers Shell asked for: what each is for, in Bell's answering order.
 static mut MEDIA_ASKS:media_keys::Asks=media_keys::Asks::new();
 /// A player key: Bell names the program it is for (the focused one if it plays).
@@ -10864,6 +10902,8 @@ unsafe fn media_keys_receive(msg:&sex_pdx::PdxMessage)->bool{
             let shown=notify_panel(&text[..n]);
             if shown{NOTIFY_NOTICE_UNTIL=sex_pdx::get_ticks()+media_keys::OSD_TICKS;}
             sex_pdx::serial_record!("[shell.osd] text={} shown={}",core::str::from_utf8(&text[..n]).unwrap_or("?"),shown as u8);
+            // Kept in settings, so the volume lasts across restarts.
+            config_watch::changed_here(sex_config::id::VOLUME,sex_pdx::sound_mixer::state_volume(word) as i32);
         }
         Some(media_keys::Ask::Player(code)) if !media_keys::refused(word)=>{
             let pd=media_keys::stream_pd(word);
@@ -10872,6 +10912,7 @@ unsafe fn media_keys_receive(msg:&sex_pdx::PdxMessage)->bool{
             if sent{app_input_poll();}
             sex_pdx::serial_record!("[shell.media.route] code={:#x} pd={} sent={}",code,pd,sent as u8);
         }
+        Some(media_keys::Ask::Restore) if !media_keys::refused(word)=>{}
         ask=>sex_pdx::serial_record!("[shell.media.refused] ask={:?}",ask),
     }
     true
@@ -16435,7 +16476,7 @@ unsafe fn shell_memory_poll() {
     let Some(e) = APP_CUSTODY[i].as_mut() else { return };
     e.forced = true;
     MEMORY_LAST_END = now;
-    let ok = sex_pdx::app_lifecycle::force_end(e.slot).is_ok();
+    let ok = force_end_and_wake(e);
     let name = sex_pdx::system_stats::name(e.target);
     let name = &name[..name.iter().position(|&c| c == 0).unwrap_or(16)];
     let name = if name.is_empty() { &b"A program"[..] } else { name };
@@ -17237,13 +17278,15 @@ unsafe fn shell_program_message(msg:&sex_pdx::PdxMessage)->bool{
         return true;
     }
     if msg.type_id==store::OP_RUN {
-        if !app_catalog::is_spindle(msg.caller_pd){return true}
+        // A terminal's ticket (sex_pdx::console_relay): Files starts it only for the program that prepared it.
+        let by_program=msg.arg0==store::TICKET&&matches!(app_catalog::app_of(msg.caller_pd),Some(app_catalog::App::Program));
+        if !app_catalog::is_spindle(msg.caller_pd)&&!by_program{return true}
         if PROGRAM_READING||PROGRAM_REBIRTH.is_some()||program_free_row().is_none(){
             sex_pdx::serial_record!("[shell.program.denied] reason=no_free_row");program_refused(store::NO_FREE_ROW);return true;
         }
-        let(status,_)=pdx_call(store::SHELL_ROUTE_SLOT,store::OP,msg.arg0,msg.arg1,0);
+        let(status,_)=pdx_call(store::SHELL_ROUTE_SLOT,store::OP,msg.arg0,msg.arg1,if by_program{msg.caller_pd as u64}else{0});
         PROGRAM_READING=status==0;
-        PROGRAM_NETWORK=status==0&&msg.arg2&store::RUN_NETWORK!=0;
+        PROGRAM_NETWORK=status==0&&!by_program&&msg.arg2&store::RUN_NETWORK!=0;
         if status!=0{sex_pdx::serial_record!("[shell.program.denied] reason=files_busy status={}",status);}
         return true;
     }
@@ -26215,6 +26258,7 @@ pub extern "C" fn _start() -> ! {
             if spindle_history_status_receive(&msg) {continue;}
             if workspace_refresh_receive(&msg) { continue; }
             if shell_close_declined_receive(&msg) { continue; }
+            if program_end_receive(&msg) { continue; }
             if display_scale_receive(&msg) { continue; }
             if desktop_text_receive(&msg) { continue; }
             if linen_async_reply(&msg) { continue; }

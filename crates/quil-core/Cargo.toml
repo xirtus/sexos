@@ -1,0 +1,10 @@
+[package]
+name = "quil-core"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "Quil's editing engine apart from any window: a lazy piece-table buffer for files of any size, multi-cursor editing, Vim/Emacs/VS Code keymaps, a command palette, fuzzy finding and project search"
+
+[dependencies]
+# MIT/Unlicense: SIMD byte and substring search, no_std with alloc.
+memchr = { version = "2", default-features = false, features = ["alloc"] }
