@@ -1,0 +1,15 @@
+[package]
+name = "rendezvous"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+
+[[bin]]
+name = "rendezvous"
+path = "src/main.rs"
+
+[dependencies]
+sex-std = { path = "../../crates/sex-std" }
+sex-map = { path = "../../crates/sex-map" }
+sex-image = { path = "../../crates/sex-image" }
+tiny-skia = { version = "0.11.4", default-features = false, features = ["no-std-float"] }

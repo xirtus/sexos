@@ -1,0 +1,41 @@
+{
+ "code": "Ok",
+ "routes": [
+  {
+   "geometry": "mfp_IwkrpA`D??}^lR?",
+   "legs": [
+    {
+     "steps": [],
+     "summary": "Main Street",
+     "weight": 95.1,
+     "duration": 95.1,
+     "distance": 812.4
+    }
+   ],
+   "weight_name": "routability",
+   "weight": 95.1,
+   "duration": 95.1,
+   "distance": 812.4
+  }
+ ],
+ "waypoints": [
+  {
+   "hint": "",
+   "distance": 1.0,
+   "name": "",
+   "location": [
+    13.370361328125,
+    52.51703043902672
+   ]
+  },
+  {
+   "hint": "",
+   "distance": 1.0,
+   "name": "Main Street",
+   "location": [
+    13.375468254089355,
+    52.513113001639496
+   ]
+  }
+ ]
+}

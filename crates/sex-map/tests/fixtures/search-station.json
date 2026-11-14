@@ -1,0 +1,44 @@
+[
+ {
+  "place_id": 1002,
+  "licence": "Fixture data, made up",
+  "osm_type": "node",
+  "osm_id": 1002,
+  "lat": "52.5131130",
+  "lon": "13.3754683",
+  "category": "railway",
+  "type": "station",
+  "place_rank": 30,
+  "importance": 0.3,
+  "addresstype": "railway",
+  "name": "Old Mill Station",
+  "display_name": "Old Mill Station, Mill Quarter, Sometown",
+  "boundingbox": [
+   "52.5126130",
+   "52.5136130",
+   "13.3749683",
+   "13.3759683"
+  ]
+ },
+ {
+  "place_id": 1003,
+  "licence": "Fixture data, made up",
+  "osm_type": "node",
+  "osm_id": 1003,
+  "lat": "52.5129498",
+  "lon": "13.3760047",
+  "category": "highway",
+  "type": "bus_stop",
+  "place_rank": 30,
+  "importance": 0.3,
+  "addresstype": "highway",
+  "name": "Old Mill Station Bus Stop",
+  "display_name": "Old Mill Station Bus Stop, Sometown",
+  "boundingbox": [
+   "52.5124498",
+   "52.5134498",
+   "13.3755047",
+   "13.3765047"
+  ]
+ }
+]

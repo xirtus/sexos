@@ -1779,6 +1779,7 @@ pub extern "C" fn _start() -> ! {
                 }
                 b.pointer(p);
             }
+            Event::Drop { .. } | Event::DragEnded { .. } => {}
         }
     }
 }

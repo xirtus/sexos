@@ -806,6 +806,8 @@ pub extern "C" fn _start() -> ! {
     app.poll_questions(&mut window);
     app.render(&mut window);
     sex_pdx::serial_record!("[files.app.ready] target={} task={} root={} portal={}", window.target, window.task, shown(&app.root), portal as u8);
+    // Where the left button went down, until a drag starts or it comes up.
+    let mut press: Option<(i32, i32)> = None;
     loop {
         // While a job runs, look for keys between its pieces instead of sleeping.
         let event = if app.job.is_some() || app.search.is_some() || app.thumbs.busy() || app.loom.busy() {
@@ -819,6 +821,34 @@ pub extern "C" fn _start() -> ! {
             }
             Some(Event::Key(key)) => { app.key(&mut window, key); app.render(&mut window); }
             Some(Event::Resize { .. }) if app.thumbs.on => app.render(&mut window),
+            // Dragging out of the window carries the selected item to another program.
+            Some(Event::Pointer(p)) => {
+                use sex_pdx::app_pointer::Kind as K;
+                match p.kind {
+                    K::Down { button: 0 } => press = Some((p.x as i32, p.y as i32)),
+                    K::Move if p.buttons & 1 != 0 => if let Some((x0, y0)) = press {
+                        if (p.x as i32 - x0).abs() + (p.y as i32 - y0).abs() > 8 {
+                            press = None;
+                            if let Some(path) = app.selected() {
+                                let mut token = vec![b'@'];
+                                token.extend_from_slice(&path);
+                                match sex_app::dnd::drag_file(&mut window, &token) {
+                                    Ok(()) => { sex_pdx::serial_record!("[files.app.drag] path={}", shown(&path)); app.status = format!("Drop {} on a program window.", shown(&path)); }
+                                    Err(e) => { sex_pdx::serial_record!("[files.app.drag.refused] why={:?}", e); app.status = "That can't be dragged.".into(); }
+                                }
+                                app.render(&mut window);
+                            }
+                        }
+                    },
+                    K::Up { .. } => press = None,
+                    _ => {}
+                }
+            }
+            Some(Event::DragEnded { target }) => {
+                sex_pdx::serial_record!("[files.app.dropped] target={}", target);
+                app.status = if target != 0 { "Dropped.".into() } else { String::new() };
+                app.render(&mut window);
+            }
             Some(_) => {}
             // Quiet: another program may be asking the person for a file.
             None => {
