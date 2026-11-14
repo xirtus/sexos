@@ -95,6 +95,8 @@ jobs:
       run: cargo test --locked -p aftercare
     - name: Loom archives (zip, tar, 7z, gz, zst, xz) with Python interop on the host
       run: cargo test --locked -p sex-archive --features std
+    - name: Chastity canonical vault
+      run: cargo test --locked -p chastity-core -p chastity
     - name: Pinyin input method
       run: cargo test --locked -p sex-ime
     - name: Multipass accounts, Shibari keeper (link fixtures, tokens never leave)

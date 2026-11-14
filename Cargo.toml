@@ -194,3 +194,7 @@ clircle = { path = "vendor/clircle-0.6.1" }
 opt-level = 3
 [profile.dev.package.naga]
 opt-level = 2
+
+# SHA-2 0.11 at opt3 emits bytes forbidden by the userspace verifier.
+[profile.release.package."sha2@0.11.1"]
+opt-level = "s"
