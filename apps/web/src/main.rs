@@ -543,7 +543,8 @@ impl Browser {
             suggestions: &self.suggestions, chosen: self.chosen,
             find: self.find.as_deref().map(|q| (q, self.find_at, self.matches())), marks: &self.marks,
             zoom: sex_html::style::zoom(),
-            shields: self.url.starts_with("http").then(|| (self.shields.up(&self.url), self.blocked)),
+            // The badge shows once Shields have blocked something on the page, or are down.
+            shields: Some((self.shields.up(&self.url), self.blocked)).filter(|(up, n)| self.url.starts_with("http") && (*n > 0 || !up)),
         };
         sex_web::frame_with(&self.page, &mut self.fonts, pixels, self.surface.w, self.surface.h, self.scroll, self.focus, &chrome);
         self.paint_frames();
