@@ -118,8 +118,9 @@ vault/UI tests preserve the user's original19 plus preflight and consent tests.
 
 The canonical std guest and separate probe build and pass the forbidden-instruction
 scan. The canonical full two-boot QEMU vault gate passes using the updated real
-Shell/Files image. The final live two-app gate is running after the normal scroll
-and QMP chord follow-ups; its success is not yet claimed. No kernel edits. ABI inputs include
+Shell/Files image. The final live two-app gate passes on the same updated real Shell/Files v2 image.
+A fresh Display focus receipt is required before capturing visible consent, and
+Allow is clicked using the actual post-layout Weft control coordinates. No kernel edits. ABI inputs include
 the new protocol file, guarded by the existing pin mechanism.
 
 `scripts/chastity_autofill_gate.py` drives real separate Weft applications: creates
@@ -127,5 +128,6 @@ and saves fictional credentials, reboots, unlocks the persisted snapshot, refuse
 provider impersonation, verifies no result before visible consent, exercises
 Deny then Allow once, restarts the consumer into a new task requiring fresh
 consent, and verifies locking makes the provider unavailable. Screenshots and
-serial are retained by Programs CI. **QEMU runtime proof remains pending until
-this gate passes**; host models and guest compilation are not that proof.
+serial are retained by Programs CI. **Both final QEMU gates pass** at guest source b9241079; exact hashes and local
+artifact paths are recorded in CHASTITY_RUNTIME_2026_11_14.md. Remote CI remains
+required before merge.

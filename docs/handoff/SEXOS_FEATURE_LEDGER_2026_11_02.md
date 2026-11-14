@@ -4439,7 +4439,9 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
 - Updated canonical probe/reboot and two-app consent gates await native QEMU/CI
   proof using updated Shell/Files. Full canonical two-boot vault gate passed;
   actual Close retires the run after local wipe (dead custody cannot receive ACK).
-  Final live consent gate/CI remain pending. No merges until all relevant checks green.
+  Final live2app consent gate also passes: default deny, visible allow once, reused
+  consumer run and Lock unavailable. Exact artifacts/hashes in CHASTITY_RUNTIME_2026_11_14.md.
+  Remote CI remains pending; no merges until all relevant checks green.
 - Details: CHASTITY_2026_11_14.md and CHASTITY_AUTOFILL_2026_11_14.md.
 
 ## ChatGPT round 184: canonical vault boots and integrated runtime fixes (2026-11-14)
