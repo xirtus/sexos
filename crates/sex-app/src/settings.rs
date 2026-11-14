@@ -68,8 +68,11 @@ pub fn password(verb: u8, password: &[u8]) -> Result<u8, Error> {
     use sex_pdx::config::schema::secret as s;
     // Only the verb at the end is answered (`secret::answered`): wait for one reply.
     for (a, b) in s::requests(password, verb) {
+        // An unanswered PUT must not sleep for a reply: wait only on the closing verb.
+        let answered = s::answered(a as u8); // the verb is arg0's low byte
         loop {
-            match sex_pdx::pdx_call_wait(sex_pdx::SLOT_STORAGE, s::OP, a, b, 0) {
+            let call = if answered { sex_pdx::pdx_call_wait } else { sex_pdx::pdx_call };
+            match call(sex_pdx::SLOT_STORAGE, s::OP, a, b, 0) {
                 (0, _) => break,
                 (sex_pdx::ERR_SERVICE_NOT_READY, _) => sex_pdx::sys_yield(),
                 _ => return Err(UNAVAILABLE),
