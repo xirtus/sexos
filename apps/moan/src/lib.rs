@@ -797,6 +797,7 @@ impl Studio {
             if track >= self.session.tracks.len() {
                 return false;
             }
+            ui.focus(None);
             self.session.selected = track;
             self.session.cursor = frame;
             self.session.from = frame;
