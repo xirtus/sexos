@@ -364,7 +364,7 @@ action = "cargo_manifest"
 target = "x86_64-sex-app.json"
 manifest = "apps/web/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/web"
-dest_artifact = "iso_root/programs/web"
+dest_artifact = "iso_root/programs/kaleidoscope"
 
 # Video and sound (sex-media). Without a built FFmpeg (scripts/build_ffmpeg.sh) it
 # builds but refuses every file.

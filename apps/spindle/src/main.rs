@@ -1011,6 +1011,11 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             else { unsafe{fs_commands::FS.submit_program_granted(target,program_args,flags,0,packages,sb);} }
             true
         }
+        // Kaleidoscope, the browser (formerly Web), allowed the network.
+        b"kaleidoscope" | b"web" | b"browser" => {
+            unsafe{fs_commands::FS.submit_program_granted(b"kaleidoscope",args,sex_pdx::program_store::RUN_NETWORK,0,false,sb);}
+            true
+        }
         // The Store: the package catalog in a window, allowed the network and packages.
         b"store" => {
             unsafe{fs_commands::FS.submit_program_granted(b"store",args,sex_pdx::program_store::RUN_NETWORK,0,true,sb);}
@@ -2042,17 +2047,6 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             true
         }
         // ── Browser stub commands ─────────────────────────────────────────
-        b"browser" | b"web" => {
-            sb.push(b"Browser / WebStub -- visible panel (v2):");
-            sb.push(b"  sid=205  frame=8  surface=1  focusable=1");
-            sb.push(b"  launch:  SLOT_SHELL (launch_exec=1)");
-            sb.push(b"  network=0  engine=0  fetched=0  parsed=0");
-            sb.push(b"  html=0  css=0  js=0  readback=0  durable=0");
-            sb.push(b"Commands: browser, browser-status, url, url-status");
-            sb.push(b"Honest: NOT a real web browser. No fetch/parse.");
-            serial_println!("[browser.stub.command] command=browser ok=1 reason=v2_visible_panel");
-            true
-        }
         b"browser-status" => {
             sb.push(b"Browser Stub Status (v2):");
             sb.push(b"  app:       WebStub (label: Browser)");
