@@ -170,6 +170,11 @@ class AssetActualEndpoint(unittest.TestCase):
   self.exercise_open_client('wrong-mime',extra=True)
 
 class AssetPixels(unittest.TestCase):
+ def test_maximized_view_starts_at_approved_bar_and_rejects_overlap(self):
+  text=image_trace(1280,772,x=0,y=28)
+  self.assertTrue(gate.verify_pixels(text,ppm(text))['ok'])
+  invalid=image_trace(1280,772,x=0,y=27)
+  with self.assertRaisesRegex(ValueError,'outside framebuffer'):gate.verify_pixels(invalid,ppm(invalid))
  def test_partial_coverage_and_zero_coverage_pixels_are_mandatory(self):
   font=gate.font_from_source((ROOT/'servers/sexdisplay/src/main.rs').read_text())
   for w,h in ((240,375),(566,375)):
