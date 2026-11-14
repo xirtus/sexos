@@ -17,12 +17,12 @@ const ENTER: u8 = 0x1C;
 const BACKSPACE: u8 = 0x0E;
 const ROWS: usize = 16;
 
-/// Argon2id cost for repositories this app creates: 8 MiB, 2 passes, 1 lane. Under
-/// QEMU's software CPU (TCG) unlocking takes about a second (the gate records it as
-/// `[aftercare.unlock] ... ms=`); on hardware a few milliseconds. The engine's default
-/// (64 MiB, 3 passes) takes many seconds under TCG. Existing repositories keep the cost
-/// stored in their key file.
-pub const KDF: KdfParams = KdfParams { m_cost_kib: 8 * 1024, t_cost: 2, p_cost: 1 };
+/// Argon2id cost for repositories this app creates: 24 MiB, 2 passes, 1 lane. Under
+/// QEMU's software CPU (TCG, the gate's machine) unlocking took 0.43 s (8 MiB
+/// took 0.26 s there; the gate records `[aftercare.unlock] ... ms=`); on hardware tens
+/// of milliseconds. The engine's default (64 MiB, 3 passes) is 8 times the work. Existing
+/// repositories keep the cost stored in their key file.
+pub const KDF: KdfParams = KdfParams { m_cost_kib: 24 * 1024, t_cost: 2, p_cost: 1 };
 
 fn rec(line: &str) {
     sex_std::record(line);

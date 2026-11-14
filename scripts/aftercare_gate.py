@@ -9,7 +9,7 @@ drive Aftercare's window. The gate checks:
   the empty folders /data/backup and /data/restore.
 * `run aftercare @/data/src @/data/backup @/data/restore`: S chooses /data/src as the
   source, D chooses /data/backup as the destination, U creates a repository there with
-  a password typed twice (the Argon2 cost and time are recorded), B backs up: three
+  a password typed twice (Argon2id 24 MiB, 2 passes; unlocking must take under 2 s), B backs up: three
   new files.
 * Spindle's `rm` deletes docs/letter.txt. In Aftercare, L lists the one snapshot and
   Enter browses it down to /data/src/docs; R restores letter.txt where it was. The
@@ -53,9 +53,12 @@ def main():
    assert int(m[1])==base+n,f'Spindle dropped a key before {line[:n+1]!r}'
   s=len(t());q.key('ret')
   g['wait'](rf'\[spindle\.input\.recv\] key=enter len={base+len(line)-1}\n',s,30)
+ # fs.rs request kinds, as `[spindle.fs.result]` names them; `write` first asks
+ # whether the file exists (STAT), so wait for the command's own request.
+ KIND={'mkdir':3,'rm':5,'cat':7,'write':8}
  def shell(line):
   s=len(t());type_line(line)
-  return g['wait'](r'\[spindle\.fs\.result\] kind=\d+ status=(\d+) ',s,60)
+  return g['wait'](rf'\[spindle\.fs\.result\] kind={KIND[line.split()[0]]} status=(\d+) ',s,60)[1]
  app={}
  def start(args):
   s=len(t());type_line(f'run aftercare {args}')
@@ -79,10 +82,11 @@ def main():
  result={}
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120)
+  shell('mkdir /data')   # a fresh disk has no /data until a program runs
   for d in ('/data/src','/data/src/docs','/data/backup','/data/restore'):
-   assert shell(f'mkdir {d}')[1]=='0',d
+   assert shell(f'mkdir {d}')=='0',d
   for name,text in FILES.items():
-   assert shell(f'write /data/src/{name} {text}')[1]=='0',name
+   assert shell(f'write /data/src/{name} {text}')=='0',name
 
   start('@/data/src @/data/backup @/data/restore')
   press('s',r'\[aftercare\.choose\] purpose=source roots=3\n')
@@ -103,7 +107,7 @@ def main():
   result['backup1']=dict(snapshot=m[1],ms=int(m[7]))
 
   # Lose a file.
-  assert shell('rm /data/src/docs/letter.txt')[1]=='0'
+  assert shell('rm /data/src/docs/letter.txt')=='0'
   s=len(t());shell('cat /data/src/docs/letter.txt')
   assert '[spindle.fs.cat]' not in t()[s:],'the file is still there'
 
@@ -165,6 +169,8 @@ def main():
   s=len(t());q.key('ret')
   o=g['wait'](r'\[aftercare\.unlock\] result=(\S+) ms=(\d+)\n',s,300)
   assert o[1]=='ok',o[0]
+  # The app's lowered Argon2 cost keeps unlocking under 2 s on this emulated CPU.
+  assert int(o[2])<2000 and int(w[2])<2000,(o[0],w[0])
   g['wait'](r'\[aftercare\.snapshots\] count=1\n',s,60)
   result['unlock_ms']=int(o[2]);result['wrong_password']='refused'
   close()
