@@ -544,6 +544,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "bodice"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-ebook",
+ "sex-font",
+ "sex-image",
+ "sex-pdx",
+]
+
+[[package]]
 name = "brotli"
 version = "8.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1660,6 +1671,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "gossip"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-feed",
+ "sex-font",
+ "sex-pdx",
+]
+
+[[package]]
 name = "grep"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1978,6 +1999,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6c49c37c09c17a53d937dfbb742eb3a961d65a994e6bcdcf37e7399d0cc8ab5e"
 dependencies = [
  "digest 0.10.7",
+]
+
+[[package]]
+name = "hookup"
+version = "0.1.0"
+dependencies = [
+ "sex-font",
+ "sex-kdeconnect",
+ "sex-std",
 ]
 
 [[package]]
@@ -3612,6 +3642,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
+name = "rendezvous"
+version = "0.1.0"
+dependencies = [
+ "sex-image",
+ "sex-map",
+ "sex-std",
+ "tiny-skia 0.11.4",
+]
+
+[[package]]
 name = "resvg"
 version = "0.50.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4103,8 +4143,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-ebook"
+version = "0.1.0"
+dependencies = [
+ "sex-image",
+ "sex-xml",
+ "zune-inflate",
+]
+
+[[package]]
 name = "sex-episodes"
 version = "0.1.0"
+
+[[package]]
+name = "sex-feed"
+version = "0.1.0"
+dependencies = [
+ "sex-xml",
+]
 
 [[package]]
 name = "sex-fetch"
@@ -4194,6 +4250,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-kdeconnect"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "sex-kdeconnect",
+]
+
+[[package]]
 name = "sex-kernel"
 version = "0.1.0"
 dependencies = [
@@ -4253,6 +4317,17 @@ dependencies = [
 [[package]]
 name = "sex-mail"
 version = "0.1.0"
+
+[[package]]
+name = "sex-map"
+version = "0.1.0"
+dependencies = [
+ "libm",
+ "serde_json",
+ "sex-font",
+ "tiny-skia 0.11.4",
+ "zune-inflate",
+]
 
 [[package]]
 name = "sex-media"
@@ -4350,6 +4425,10 @@ dependencies = [
  "unicode-bidi",
  "unicode-width",
 ]
+
+[[package]]
+name = "sex-splice"
+version = "0.1.0"
 
 [[package]]
 name = "sex-ssh"
@@ -4468,6 +4547,10 @@ dependencies = [
  "sha1",
  "sha2 0.10.9",
 ]
+
+[[package]]
+name = "sex-xml"
+version = "0.1.0"
 
 [[package]]
 name = "sexacpi"
