@@ -553,6 +553,8 @@ fn holds_packages(binding: &Binding) -> bool {
 /// its grant covers given as `@/path`; None if the arguments carry a grant it lacks.
 fn program_prepare(binding: &Binding, path: &[u8], args: &[u8], out: &mut [u8; w::PATH_BYTES]) -> Option<usize> {
     let mut scratch = [0u8; w::PATH_BYTES];
+    // Relay authority may be delegated only by a run that already holds it.
+    if args.split(|b| *b == b' ').any(|t| t == sex_pdx::console_relay::GRANT_TOKEN) && !holds_launch(binding) { return None; }
     if !sex_pdx::launch::args_allowed(args, holds_packages(binding), |t| confine(binding, t, &mut scratch).is_some()) { return None; }
     if path.first() == Some(&b'@') { return confine(binding, path, out); }
     let name = path.strip_prefix(sex_pdx::program_store::BIN)?;
