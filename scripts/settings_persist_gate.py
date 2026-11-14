@@ -23,7 +23,7 @@ def first_start(g,q,t,s):
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
- install(disk,[('settings',(ROOT/'iso_root/programs/settings').read_bytes())])
+ install(disk,[('tatami',(ROOT/'iso_root/programs/tatami').read_bytes())])
  g=boot(a.iso,disk,a.out,'settings-1',a.resolution);t=g['text'];q=g['q']
  def send(down,keys):q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':down,'key':{'type':'qcode','data':k}}}for k in keys]});time.sleep(.06)
  def press(*keys):
@@ -48,7 +48,7 @@ def main():
   g['wait'](r'\[shell.look\] wallpaper=1 name=Dusk night=2 ok=1',0,60)
   g['wait'](r'\[app.private.retired\] target=41 ',0,120)
   g['focus'](153);time.sleep(.5);s=len(t())
-  for k in 'run settings':q.key('spc' if k==' ' else k);time.sleep(.05)
+  for k in 'run tatami':q.key('spc' if k==' ' else k);time.sleep(.05)
   q.key('ret');first_start(g,q,t,s);g['wait'](r'\[settings.open\] generation=\d+',s,120);time.sleep(1)
   # Appearance -> Desktop page, down to night light, one step lower.
   s=len(t());q.key('pgdn');time.sleep(.3);q.key('down');time.sleep(.3);q.key('left')

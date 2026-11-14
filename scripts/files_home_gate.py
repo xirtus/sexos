@@ -28,7 +28,7 @@ def main():
  import http.server,threading
  class Handler(http.server.BaseHTTPRequestHandler):
   def do_GET(self):
-   body={'/secret':SECRET,'/files':(ROOT/'iso_root/programs/files').read_bytes()}.get(self.path)
+   body={'/secret':SECRET,'/files':(ROOT/'iso_root/programs/loom').read_bytes()}.get(self.path)
    if body is None:self.send_response(404);self.end_headers();return
    self.send_response(200);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
   def log_message(self,*x):pass
@@ -61,7 +61,7 @@ def main():
    assert 'KERNEL PANIC' not in t() and 'panicked' not in t() and '[files.app.fatal]' not in t()
   finally:g['stop']()
  def first(g,t,q,expect,ctrl,files,typed):
-  m=expect(f'fetch http://10.0.2.2:{PORT}/files /bin/files',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240);assert m[1].startswith('Saved'),m[1]
+  m=expect(f'fetch http://10.0.2.2:{PORT}/files /bin/loom',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240);assert m[1].startswith('Saved'),m[1]
   surface,_=files()
   s=len(t());g['focus'](surface);time.sleep(.5);ctrl('k')
   g['wait'](r'\[display.text.committed\] ',s,30);time.sleep(.5)

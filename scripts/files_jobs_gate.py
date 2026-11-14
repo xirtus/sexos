@@ -13,7 +13,7 @@ ROOT=Path(__file__).resolve().parents[1]
 SIZE=int(os.environ.get('FILES_JOBS_BYTES',str(32*1024*1024)))
 BIG=random.Random(167).randbytes(SIZE)
 BIG_SHA=hashlib.sha256(BIG).hexdigest()
-FILES={'/files':(ROOT/'iso_root/programs/files').read_bytes(),'/big.bin':BIG}
+FILES={'/files':(ROOT/'iso_root/programs/loom').read_bytes(),'/big.bin':BIG}
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):
   body=FILES.get(self.path)
@@ -47,7 +47,7 @@ def main():
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
   expect('mkdir 0gate',r'\[spindle.fs.result\] kind=3 status=0')
-  for name,dest in [('files','/bin/files'),('big.bin','0gate/big.bin')]:
+  for name,dest in [('files','/bin/loom'),('big.bin','0gate/big.bin')]:
    began=time.monotonic()
    m=expect(f'fetch http://10.0.2.2:{PORT}/{name} {dest}',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',600);assert m[1].startswith('Saved'),m[1]
    result[f'fetch_{name}_s']=round(time.monotonic()-began,1)
