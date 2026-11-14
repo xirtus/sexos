@@ -175,6 +175,18 @@ Linen reopen, Display applied the new Quil view a few seconds late.
 route); drafts are not offered automatically on startup; one draft per
 document source per session.
 
+## G18. 12-hour CI-able long-run soak gate (2026-11-14)
+
+**What changed.** Added `scripts/long_soak_gate.py`, unit suite
+`scripts/tests/test_long_soak_gate.py`, and `.github/workflows/long-soak.yml`
+implementing a continuous 12-hour QEMU soak gate (`--hours 12`, chained across
+three 4.25-hour GitHub Actions segments with `nvme.img` + `--resume-report`
+state handoff so no job approaches GitHub's 360-minute runner limit). Every
+round opens and retires a user-space app (`[app.private.retired]`), plays audio
+through Bell (`beep` / `hum` / `play`), fetches/copies/SHA-256-verifies files
+with hourly persisted canaries, and checks `free_pages` drop + post-warmup OLS
+leak slope + key latency.
+
 ## F4. Browser Back key and preformatted text (2026-11-02)
 
 **What changed.** In an HTML page, **Backspace** returns to the page the
