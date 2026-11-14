@@ -206,11 +206,15 @@ pub mod launch {
     /// Starts `/bin/NAME` (or `@/path` of a program file this run holds) with `args`.
     /// `network` only works for a run that has the network. Events for it carry `cookie`.
     pub fn run(name: &[u8], args: &[u8], network: bool, cookie: u32) -> Result<(), Error> {
+        start(name, args, if network { store::RUN_NETWORK } else { 0 }, cookie)
+    }
+    /// Like [`run`], for a helper the person never sees: no window on any workspace.
+    pub fn run_hidden(name: &[u8], args: &[u8], cookie: u32) -> Result<(), Error> { start(name, args, store::RUN_HIDDEN, cookie) }
+    fn start(name: &[u8], args: &[u8], flags: u64, cookie: u32) -> Result<(), Error> {
         let mut path = [0u8; 64];
         let path: &[u8] = if name.first() == Some(&b'@') { name }
             else { let n = l::bin_path(name, &mut path).ok_or(Error::Files(sex_pdx::fs::NAME))?; &path[..n] };
         let ticket = files::direct::prepare(path, args).map_err(Error::Files)?;
-        let flags = if network { store::RUN_NETWORK } else { 0 };
         sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL, l::OP_LAUNCH, ticket as u64, flags, cookie as u64).map_err(|_| Error::Shell)?;
         Ok(())
     }

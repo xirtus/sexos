@@ -8,7 +8,8 @@
 //!    grant covers, and `+packages` only from a starter that holds it. Files answers
 //!    with a ticket.
 //! 2. The starter sends Shell `OP_LAUNCH`: arg0 = the ticket, arg1 = flags
-//!    (`program_store::RUN_NETWORK` only from a run that has the network itself),
+//!    (`program_store::RUN_NETWORK` only from a run that has the network itself;
+//!    `program_store::RUN_HIDDEN` for a helper with no window on screen),
 //!    arg2 = a cookie, the starter's own name for this run (32 bits).
 //! 3. Shell answers with `OP_EVENT` messages to the starter: `STARTED` with the child's
 //!    row and task, or `REFUSED` with a `program_store` refusal code; later `DONE` with

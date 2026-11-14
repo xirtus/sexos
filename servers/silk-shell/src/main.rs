@@ -13820,6 +13820,8 @@ unsafe fn handle_app_surface_req(surface_id: u64, title_id: u64, arg2: u64, call
         return false;
     }
 
+    // A hidden helper's frame lives off every workspace: no tile, no focus, not drawn.
+    let hidden = launch_hidden(caller_pd);
     // Create the frame with one tab
     FRAMES[slot_idx] = Some(ShellFrame {
         frame_id,
@@ -13834,7 +13836,7 @@ unsafe fn handle_app_surface_req(surface_id: u64, title_id: u64, arg2: u64, call
             });
             t
         },
-        scene_id: ACTIVE_SCENE_IDX,
+        scene_id: if hidden { HIDDEN_SCENE } else { ACTIVE_SCENE_IDX },
         flags: FRAME_FLAG_TOP_BAR, // top bar ON for app surfaces
         normal_x: 200,
         normal_y: 100,
@@ -13846,19 +13848,24 @@ unsafe fn handle_app_surface_req(surface_id: u64, title_id: u64, arg2: u64, call
         e.bounds = Some((200, 100, 600, 400));
     }
     // Register lifecycle as Visible
-    lifecycle_register(frame_surface, LifecycleState::Visible);
+    lifecycle_register(frame_surface, if hidden { LifecycleState::Hidden } else { LifecycleState::Visible });
 
     // Upsert on sexdisplay via 0xEC (geometry packed: arg1=(y<<32)|x, arg2=(h<<32)|w)
-    pdx_call(SLOT_DISPLAY, 0xEC, frame_surface,
-        (100u64) << 32 | 200u64,
-        (400u64) << 32 | 600u64);
+    if hidden {
+        pdx_call(SLOT_DISPLAY, 0xEE, frame_surface, 0, 0);
+        sex_pdx::serial_record!("[shell.launch.hidden] target={} surface={}", caller_pd, frame_surface);
+    } else {
+        pdx_call(SLOT_DISPLAY, 0xEC, frame_surface,
+            (100u64) << 32 | 200u64,
+            (400u64) << 32 | 600u64);
+    }
 
     // V3 Collar: auto-create grants from manifest capability bits.
     collar_auto_grant_from_manifest(&manifest);
 
     // Re-tile and focus the new surface
     tile_active_scene_frames();
-    try_set_focus(frame_surface);
+    if !hidden { try_set_focus(frame_surface); }
 
     sex_pdx::serial_record!("[shell.app_surface.accept] sid={} title_id={} frame={} caps={:#x} app_id={} caller={}",
         manifest.surface_id, manifest.title_id, frame_id,
@@ -17340,7 +17347,7 @@ fn program_bind(target:u32,task:u32){
 /// Tells whoever asked why: the program that started the run, or Spindle, where the
 /// person who typed `run` is looking.
 fn program_refused(code:u32){
-    if let Some((parent,_,cookie))=unsafe{LAUNCH_ASKER.take()}{launch_send(parent,sex_pdx::launch::Event::Refused{cookie,code});return}
+    if let Some((parent,_,cookie))=unsafe{LAUNCH_ASKER.take()}{unsafe{LAUNCH_HIDDEN=false;}launch_send(parent,sex_pdx::launch::Event::Refused{cookie,code});return}
     let _=pdx_call(spindle_route_slot(),sex_pdx::program_store::OP_REFUSED,code as u64,0,0);
 }
 /// A run one program started for another (sex_pdx::launch): who asked, its own name for
@@ -17353,6 +17360,13 @@ const LAUNCH_STATUS_GRACE:u64=250;
 static mut LAUNCH_RUNS:[Option<LaunchRun>;sex_pdx::launch::MAX_RUNS]=[None;sex_pdx::launch::MAX_RUNS];
 /// The program whose run is being read now: (row, task, cookie).
 static mut LAUNCH_ASKER:Option<(u32,u32,u32)>=None;
+/// The run being read now is a hidden helper.
+static mut LAUNCH_HIDDEN:bool=false;
+/// Hidden helper runs: their window is framed off every workspace.
+static mut HIDDEN_RUNS:[Option<(u32,u32)>;sex_pdx::launch::MAX_RUNS]=[None;sex_pdx::launch::MAX_RUNS];
+/// The scene a hidden run's frame lives in: never shown, never switched to.
+const HIDDEN_SCENE:u8=0xFE;
+fn launch_hidden(target:u32)->bool{unsafe{program_run(target).is_some_and(|(_,task)|HIDDEN_RUNS.contains(&Some((target,task))))}}
 /// Runs Shell gave the network, which alone may hand it on.
 static mut NETWORK_RUNS:[Option<(u32,u32)>;sex_pdx::launch::MAX_RUNS]=[None;sex_pdx::launch::MAX_RUNS];
 /// The run a program row has now, if `target` is a program row that is running.
@@ -17370,7 +17384,9 @@ fn launch_send(parent:u32,event:sex_pdx::launch::Event){
 }
 unsafe fn launch_started(target:u32,task:u32,network:bool){
     if network{if let Some(slot)=NETWORK_RUNS.iter_mut().find(|s|s.is_none()){*slot=Some((target,task));}}
+    let hidden=core::mem::take(&mut LAUNCH_HIDDEN);
     let Some((parent,parent_task,cookie))=LAUNCH_ASKER.take()else{return};
+    if hidden{if let Some(slot)=HIDDEN_RUNS.iter_mut().find(|s|s.is_none()){*slot=Some((target,task));}}
     if let Some(slot)=LAUNCH_RUNS.iter_mut().find(|s|s.is_none()){
         *slot=Some(LaunchRun{parent,parent_task,cookie,child:target,child_task:task,status:None,ended:None});
     }
@@ -17379,7 +17395,7 @@ unsafe fn launch_started(target:u32,task:u32,network:bool){
 /// A run ended: what it started is no longer its to end, and its starter hears how it
 /// ended once its status is in, or the grace for it has passed.
 unsafe fn launch_ended(target:u32,task:u32){
-    for slot in NETWORK_RUNS.iter_mut(){if *slot==Some((target,task)){*slot=None;}}
+    for slot in NETWORK_RUNS.iter_mut().chain(HIDDEN_RUNS.iter_mut()){if *slot==Some((target,task)){*slot=None;}}
     let now=sex_pdx::get_ticks();
     for slot in LAUNCH_RUNS.iter_mut(){
         let Some(run)=slot.as_mut()else{continue};
@@ -17442,14 +17458,14 @@ unsafe fn shell_launch_message(msg:&sex_pdx::PdxMessage)->bool{
                 launch_send(caller,launch::Event::Refused{cookie,code});
             };
             let network=flags&store::RUN_NETWORK!=0;
-            if flags&!store::RUN_NETWORK!=0||msg.arg2>u32::MAX as u64{refuse(store::NOT_A_PROGRAM,"flags");return true}
+            if flags&!(store::RUN_NETWORK|store::RUN_HIDDEN)!=0||msg.arg2>u32::MAX as u64{refuse(store::NOT_A_PROGRAM,"flags");return true}
             if network&&!NETWORK_RUNS.contains(&Some((caller,task))){refuse(store::NOT_ALLOWED,"network");return true}
             if LAUNCH_RUNS.iter().flatten().count()>=launch::MAX_RUNS{refuse(store::NO_FREE_ROW,"runs");return true}
             if PROGRAM_READING||PROGRAM_REBIRTH.is_some()||RECORD_SPAWN_LEFT!=0{refuse(store::IMAGE_BUSY,"busy");return true}
             if program_free_row().is_none(){refuse(store::NO_FREE_ROW,"no_free_row");return true}
             let(status,_)=pdx_call(store::SHELL_ROUTE_SLOT,store::OP,store::TICKET,ticket,0);
             if status!=0{refuse(store::IMAGE_BUSY,"files_busy");return true}
-            PROGRAM_READING=true;PROGRAM_NETWORK=network;LAUNCH_ASKER=Some((caller,task,cookie));
+            PROGRAM_READING=true;PROGRAM_NETWORK=network;LAUNCH_ASKER=Some((caller,task,cookie));LAUNCH_HIDDEN=flags&store::RUN_HIDDEN!=0;
             sex_pdx::serial_record!("[shell.launch.asked] parent={} task={} cookie={} network={}",caller,task,cookie,network as u8);
         },
     }

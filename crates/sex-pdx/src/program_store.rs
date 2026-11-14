@@ -45,6 +45,9 @@ pub const OP_REFUSED: u64 = 0x53;
 pub const OP_BIND: u64 = 0x55;
 /// In OP_RUN's third word: the person asked for this run to reach the network.
 pub const RUN_NETWORK: u64 = 1;
+/// In OP_LAUNCH's flags: the run has no window on any workspace and no place in the bar,
+/// for helpers such as thumbnailers (`sex_pdx::launch`).
+pub const RUN_HIDDEN: u64 = 2;
 /// Where each program's folder lives.
 pub const DATA: &[u8] = b"/data/";
 /// Where a bare program name is looked for first.

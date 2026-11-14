@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A program starts another program (sex_pdx::launch): Shuttle, given one picture, opens it in View, which gets that file alone; when View is closed Shuttle hears it ended with status 0; a grant Shuttle does not hold is refused by Files; and a run Shuttle started can be ended by Shuttle."""
+"""A program starts another program (sex_pdx::launch): Shuttle, given one picture, opens it in View, which gets that file alone; when View is closed Shuttle hears it ended with status 0; a grant Shuttle does not hold is refused by Files; a run Shuttle started can be ended by Shuttle; and a hidden helper run gets no window on screen."""
 import argparse,http.server,io,os,shutil,threading,time
 from pathlib import Path
 from PIL import Image
@@ -42,7 +42,7 @@ def main():
   # Shuttle, given pic.png alone, opens it in View: the type picks the program.
   s=len(t());expect('run shuttle @pic.png',r'\[shell.launch.asked\] parent=(\d+) task=(\d+) cookie=1 network=0',240)
   opener=g['wait'](launch,s,60)
-  m=g['wait'](r'\[shuttle.started\] row=(\d+) task=(\d+) kill=0',s,120)
+  m=g['wait'](r'\[shuttle.started\] row=(\d+) task=(\d+) kill=0 hidden=0',s,120)
   g['wait'](r'\[view.shown\] w=\d+ h=\d+',s,120)
   child=g['wait'](rf'\[shell.program.launch\] target={m[1]} task={m[2]} surface=(\d+)',s,30)
   log=t()[s:];assert f'[files.program.bound] target={m[1]} task={m[2]}' in log,'the child was not bound'
@@ -61,6 +61,13 @@ def main():
   g['wait'](r'\[shell.launch.kill\] parent=\d+ child=\d+ task=\d+ ok=1',s,60)
   g['wait'](r'\[shuttle.done\] status=None',s,90)
   close(opener[1],opener[2],opener[3])
+  # A hidden helper runs with no window: framed off every workspace, never tiled or focused.
+  s=len(t());expect('run shuttle -h view @pic.png',r'\[shuttle.started\] row=(\d+) task=(\d+) kill=0 hidden=1',240)
+  child=g['wait'](r'\[shell.launch.hidden\] target=(\d+) surface=(\d+)',s,60)
+  g['wait'](r'\[view.shown\] w=\d+ h=\d+',s,120);time.sleep(3)
+  log=t()[s:];assert f'[shell.tile.apply] sid={child[2]} ' not in log,'the hidden helper was tiled'
+  assert f'[shell.interact.focus] sid={child[2]}' not in log,'the hidden helper took focus'
+  q.cmd('screendump',{'filename':str(a.out/'launch-hidden.ppm')});time.sleep(.5)
   assert 'KERNEL PANIC' not in t() and 'panicked' not in t()
   print({'ok':True})
  finally:g['stop']()
