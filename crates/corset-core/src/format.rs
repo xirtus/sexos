@@ -97,8 +97,31 @@ pub fn format_fat32<D: BlockIo + ?Sized>(
     let reserved_sectors: u16 = 32;
     let num_fats: u8 = 2;
 
-    // Calculate sectors_per_cluster (must be power of 2, typically 1, 2, 4, 8)
-    // such that data_clusters >= 65525
+    // Exact minimum FAT size in sectors for a given `spc`:
+    // Find the smallest `fat_sectors` such that
+    // `fat_sectors * 512 >= (((total_sectors - reserved - num_fats * fat_sectors) / spc) + 2) * 4`.
+    // Note: iterative fixed-point substitution oscillates on 2-cycles at boundaries like 64 MiB
+    // (131072 sectors, spc=1: 1008 <-> 1009), landing 1 sector short on even iteration counts.
+    let fat32_fat_sectors = |spc_val: u64| -> u32 {
+        let r = reserved_sectors as u64;
+        let n = num_fats as u64;
+        let num = total_sectors.saturating_sub(r) + 2 * spc_val;
+        let den = 128 * spc_val + n;
+        let mut fs = num.div_ceil(den).max(1);
+        while fs > 1 {
+            let prev = fs - 1;
+            let prev_data = total_sectors.saturating_sub(r + n * prev);
+            let prev_clusters = prev_data / spc_val;
+            if prev * 128 >= prev_clusters + 2 {
+                fs = prev;
+            } else {
+                break;
+            }
+        }
+        fs as u32
+    };
+
+    // Calculate sectors_per_cluster (power of 2 in 1..=64) such that data_clusters >= 65525
     let spc = match opts.sectors_per_cluster {
         Some(s) => {
             if !matches!(s, 1 | 2 | 4 | 8 | 16 | 32 | 64) {
@@ -109,35 +132,33 @@ pub fn format_fat32<D: BlockIo + ?Sized>(
         None => {
             let mut choice = 1u8;
             for candidate in [8u8, 4, 2, 1] {
-                // Approximate data sectors
-                let approx_fat = ((total_sectors * 4).div_ceil(512 * candidate as u64)) as u64;
-                let data_sec = total_sectors.saturating_sub(reserved_sectors as u64 + (num_fats as u64) * approx_fat);
+                let fs = fat32_fat_sectors(candidate as u64) as u64;
+                let data_sec = total_sectors.saturating_sub(reserved_sectors as u64 + (num_fats as u64) * fs);
                 let clusters = data_sec / candidate as u64;
-                if clusters >= 65525 {
+                if (65525..0x0FFF_FFF5).contains(&clusters) {
                     choice = candidate;
                     break;
+                }
+            }
+            // Scale above 4 KiB clusters only for >1 TiB volumes where spc=8 exceeds max FAT32 clusters
+            let fs_check = fat32_fat_sectors(choice as u64) as u64;
+            let data_check = total_sectors.saturating_sub(reserved_sectors as u64 + (num_fats as u64) * fs_check);
+            if data_check / (choice as u64) >= 0x0FFF_FFF5 {
+                for candidate in [16u8, 32, 64] {
+                    let fs = fat32_fat_sectors(candidate as u64) as u64;
+                    let data_sec = total_sectors.saturating_sub(reserved_sectors as u64 + (num_fats as u64) * fs);
+                    let clusters = data_sec / candidate as u64;
+                    if (65525..0x0FFF_FFF5).contains(&clusters) {
+                        choice = candidate;
+                        break;
+                    }
                 }
             }
             choice
         }
     };
 
-    // Calculate exact FAT size in sectors
-    // Formula: data_sectors = total_sectors - reserved - 2 * fat_sectors
-    // clusters = data_sectors / spc
-    // fat_bytes = (clusters + 2) * 4
-    // fat_sectors = ceil(fat_bytes / 512)
-    let mut fat_sectors: u32 = 128;
-    for _ in 0..10 {
-        let data_sectors = total_sectors.saturating_sub((reserved_sectors as u64) + (num_fats as u64) * (fat_sectors as u64));
-        let clusters = data_sectors / (spc as u64);
-        let needed_fat_bytes = (clusters + 2) * 4;
-        let new_fat_sectors = needed_fat_bytes.div_ceil(512) as u32;
-        if new_fat_sectors == fat_sectors {
-            break;
-        }
-        fat_sectors = new_fat_sectors;
-    }
+    let fat_sectors: u32 = fat32_fat_sectors(spc as u64);
 
     let data_sectors = total_sectors.saturating_sub((reserved_sectors as u64) + (num_fats as u64) * (fat_sectors as u64));
     let total_clusters = (data_sectors / (spc as u64)) as u32;
@@ -308,31 +329,58 @@ pub fn format_exfat<D: BlockIo + ?Sized>(
     }
 
     let bps_shift: u8 = 9; // 2^9 = 512 bytes
-    let spc_shift: u8 = 3; // 2^3 = 8 sectors = 4096 bytes per cluster
-    let cluster_bytes: u64 = 4096;
+    // Scale cluster size with volume capacity so allocation bitmaps stay compact:
+    //   <= 128 MiB  (<= 262,144 sectors):  4 KiB clusters (spc_shift = 3, 8 sectors)
+    //   <= 256 MiB  (<= 524,288 sectors):  8 KiB clusters (spc_shift = 4, 16 sectors)
+    //   <= 32 GiB   (<= 67,108,864 secs): 32 KiB clusters (spc_shift = 6, 64 sectors)
+    //   >  32 GiB:                       128 KiB clusters (spc_shift = 8, 256 sectors)
+    let spc_shift: u8 = if total_sectors <= 262_144 {
+        3
+    } else if total_sectors <= 524_288 {
+        4
+    } else if total_sectors <= 67_108_864 {
+        6
+    } else {
+        8
+    };
+    let spc_sectors: u64 = 1u64 << spc_shift;
+    let cluster_bytes: u64 = 512 * spc_sectors;
 
     // Boot region: 24 sectors (12 main + 12 backup)
     let fat_offset: u32 = 24;
 
-    // Approximate cluster count to determine FAT length
-    let approx_heap_sectors = total_sectors.saturating_sub(64);
-    let approx_clusters = (approx_heap_sectors / 8) as u32;
-    let fat_length: u32 = ((approx_clusters as u64 + 2) * 4).div_ceil(512) as u32;
+    // Upper-bound cluster count from post-boot sectors so `fat_length` is never short
+    let max_clusters = total_sectors.saturating_sub(fat_offset as u64) / spc_sectors;
+    if max_clusters > 0xFFFF_FFF5 {
+        return Err(CorsetError::InvalidParameter("volume exceeds exFAT maximum cluster count"));
+    }
+    let fat_length_u64 = ((max_clusters + 2) * 4).div_ceil(512).max(1);
+    let fat_length = u32::try_from(fat_length_u64)
+        .map_err(|_| CorsetError::InvalidParameter("exFAT FAT length overflows u32"))?;
 
-    // Align cluster heap to multiple of 8 sectors
-    let raw_heap_offset = fat_offset + fat_length;
-    let heap_offset = (raw_heap_offset + 7) & !7;
+    // Align cluster heap to cluster size (at least 8 sectors)
+    let align = spc_sectors.max(8);
+    let raw_heap_offset = (fat_offset as u64) + (fat_length as u64);
+    let heap_offset_u64 = (raw_heap_offset + align - 1) & !(align - 1);
+    let heap_offset = u32::try_from(heap_offset_u64)
+        .map_err(|_| CorsetError::InvalidParameter("exFAT cluster heap offset overflows u32"))?;
 
     let heap_sectors = total_sectors.saturating_sub(heap_offset as u64);
-    let cluster_count = (heap_sectors / 8) as u32;
-    if cluster_count < 16 {
+    let cluster_count = (heap_sectors / spc_sectors) as u32;
+
+    // Dynamic allocation bitmap length & cluster chain (supports multi-cluster bitmaps on huge volumes)
+    let bitmap_len = (cluster_count as u64).div_ceil(8);
+    let bitmap_clusters = bitmap_len.div_ceil(cluster_bytes).max(1) as u32;
+    let upcase_cluster: u32 = 2 + bitmap_clusters;
+    let root_cluster: u32 = upcase_cluster + 1;
+    let used_clusters: u32 = bitmap_clusters + 2;
+
+    if cluster_count < used_clusters.max(16) {
         return Err(CorsetError::VolumeTooSmallForExFat {
             sectors: total_sectors,
             required: 2048,
         });
     }
-
-    let root_cluster: u32 = 4; // Cluster 2 = Bitmap, 3 = Upcase, 4 = Root Directory
 
     // 1. Prepare Main Boot Sector (Sector 0)
     let mut boot_sector = [0u8; 512];
@@ -396,69 +444,108 @@ pub fn format_exfat<D: BlockIo + ?Sized>(
     dev.write_sectors(23, &checksum_sector)?;
 
     // 2. Write FAT (Sectors 24..24+fat_length) using bounded chunks
-    let mut first_fat = [0u8; 512];
-    // Entries 0, 1: Media descriptor and reserved
-    first_fat[0..4].copy_from_slice(&0xFFFF_FFF8u32.to_le_bytes());
-    first_fat[4..8].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
-    // Cluster 2 (Bitmap): End of chain (or 1 cluster run)
-    first_fat[8..12].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
-    // Cluster 3 (Upcase): End of chain
-    first_fat[12..16].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
-    // Cluster 4 (Root Dir): End of chain
-    first_fat[16..20].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
-    dev.write_sectors(fat_offset as u64, &first_fat)?;
+    let init_fat_entries = root_cluster as u64 + 1;
+    let init_fat_sectors = init_fat_entries.saturating_mul(4).div_ceil(512).min(fat_length as u64);
+    for sec_idx in 0..init_fat_sectors {
+        let mut fat_sec = [0u8; 512];
+        for slot in 0..128u64 {
+            let entry = sec_idx * 128 + slot;
+            let val: u32 = if entry == 0 {
+                0xFFFF_FFF8
+            } else if entry == 1 {
+                0xFFFF_FFFF
+            } else if entry >= 2 && entry < 2 + bitmap_clusters as u64 {
+                if entry + 1 < 2 + bitmap_clusters as u64 {
+                    (entry + 1) as u32
+                } else {
+                    0xFFFF_FFFF
+                }
+            } else if entry == upcase_cluster as u64 || entry == root_cluster as u64 {
+                0xFFFF_FFFF
+            } else {
+                0
+            };
+            if val != 0 {
+                let off = (slot as usize) * 4;
+                fat_sec[off..off + 4].copy_from_slice(&val.to_le_bytes());
+            }
+        }
+        dev.write_sectors(fat_offset as u64 + sec_idx, &fat_sec)?;
+    }
 
-    if fat_length > 1 {
-        let chunk_sectors = 64u64.min((fat_length - 1) as u64);
-        let zero_buf = vec![0u8; (chunk_sectors as usize) * 512];
-        let mut remaining = (fat_length - 1) as u64;
-        let mut cur = (fat_offset + 1) as u64;
+    let zero_buf_64 = vec![0u8; 64 * 512];
+    let write_zero_sectors = |dev: &mut D, mut cur: u64, mut remaining: u64| -> Result<(), CorsetError> {
         while remaining > 0 {
-            let to_write = remaining.min(chunk_sectors);
-            let bytes_to_write = (to_write as usize) * 512;
-            dev.write_sectors(cur, &zero_buf[..bytes_to_write])?;
+            let to_write = remaining.min(64);
+            dev.write_sectors(cur, &zero_buf_64[..(to_write as usize) * 512])?;
             cur += to_write;
             remaining -= to_write;
         }
+        Ok(())
+    };
+
+    if (fat_length as u64) > init_fat_sectors {
+        write_zero_sectors(
+            dev,
+            fat_offset as u64 + init_fat_sectors,
+            (fat_length as u64) - init_fat_sectors,
+        )?;
     }
 
     // 3. Cluster Heap
     let cluster_offset = |c: u32| -> u64 {
-        heap_offset as u64 + ((c - 2) as u64) * 8
+        heap_offset as u64 + ((c - 2) as u64) * spc_sectors
     };
 
-    // Cluster 2: Allocation Bitmap (clusters 2, 3, 4 are allocated = bits 0, 1, 2)
-    let mut bitmap_cluster = vec![0u8; cluster_bytes as usize];
-    bitmap_cluster[0] = 0x07; // 0b00000111: clusters 2, 3, 4 used
-    dev.write_sectors(cluster_offset(2), &bitmap_cluster)?;
+    // Clusters 2 .. 2 + bitmap_clusters: Allocation Bitmap (bits 0..used_clusters set)
+    let total_bitmap_sectors = (bitmap_clusters as u64) * spc_sectors;
+    let dirty_bitmap_sectors = (used_clusters as u64).div_ceil(4096).min(total_bitmap_sectors);
+    for sec_idx in 0..dirty_bitmap_sectors {
+        let mut bm_sec = [0u8; 512];
+        let base_bit = sec_idx * 4096;
+        let end_bit = (base_bit + 4096).min(used_clusters as u64);
+        for bit in base_bit..end_bit {
+            let rel = (bit - base_bit) as usize;
+            bm_sec[rel / 8] |= 1u8 << (rel % 8);
+        }
+        dev.write_sectors(cluster_offset(2) + sec_idx, &bm_sec)?;
+    }
+    if total_bitmap_sectors > dirty_bitmap_sectors {
+        write_zero_sectors(
+            dev,
+            cluster_offset(2) + dirty_bitmap_sectors,
+            total_bitmap_sectors - dirty_bitmap_sectors,
+        )?;
+    }
 
-    // Cluster 3: Up-case table
-    // 0xFFFF 0x0100 indicates compressed identity for 256 units (ASCII fallback)
-    let mut upcase_cluster = vec![0u8; cluster_bytes as usize];
-    upcase_cluster[0..4].copy_from_slice(&[0xFF, 0xFF, 0x00, 0x01]);
-    dev.write_sectors(cluster_offset(3), &upcase_cluster)?;
+    // Up-case table cluster: 0xFFFF 0x0100 indicates compressed identity for 256 units (ASCII fallback)
+    let mut upcase_sec0 = [0u8; 512];
+    upcase_sec0[0..4].copy_from_slice(&[0xFF, 0xFF, 0x00, 0x01]);
+    dev.write_sectors(cluster_offset(upcase_cluster), &upcase_sec0)?;
+    if spc_sectors > 1 {
+        write_zero_sectors(dev, cluster_offset(upcase_cluster) + 1, spc_sectors - 1)?;
+    }
 
-    // Cluster 4: Root Directory
-    let mut root_cluster_data = vec![0u8; cluster_bytes as usize];
+    // Root Directory cluster
+    let mut root_sec0 = [0u8; 512];
 
     // Entry 1: Allocation Bitmap (0x81)
-    let bm_entry = &mut root_cluster_data[0..32];
+    let bm_entry = &mut root_sec0[0..32];
     bm_entry[0] = 0x81;
     bm_entry[1] = 0; // BitmapFlags: 1st bitmap
     bm_entry[20..24].copy_from_slice(&2u32.to_le_bytes()); // FirstCluster = 2
-    let bitmap_len = (cluster_count as u64).div_ceil(8);
     bm_entry[24..32].copy_from_slice(&bitmap_len.to_le_bytes()); // DataLength
 
     // Entry 2: Up-case Table (0x82)
-    let up_entry = &mut root_cluster_data[32..64];
+    let up_entry = &mut root_sec0[32..64];
     up_entry[0] = 0x82;
-    up_entry[20..24].copy_from_slice(&3u32.to_le_bytes()); // FirstCluster = 3
+    up_entry[20..24].copy_from_slice(&upcase_cluster.to_le_bytes()); // FirstCluster
     let upcase_len = 4u64;
     up_entry[24..32].copy_from_slice(&upcase_len.to_le_bytes()); // DataLength
 
     // Entry 3: Volume Label (0x83) if label is non-empty
     if !opts.volume_label.is_empty() {
-        let vl_entry = &mut root_cluster_data[64..96];
+        let vl_entry = &mut root_sec0[64..96];
         vl_entry[0] = 0x83;
         let u16_chars: Vec<u16> = opts.volume_label.encode_utf16().take(11).collect();
         vl_entry[1] = u16_chars.len() as u8;
@@ -467,7 +554,10 @@ pub fn format_exfat<D: BlockIo + ?Sized>(
         }
     }
 
-    dev.write_sectors(cluster_offset(4), &root_cluster_data)?;
+    dev.write_sectors(cluster_offset(root_cluster), &root_sec0)?;
+    if spc_sectors > 1 {
+        write_zero_sectors(dev, cluster_offset(root_cluster) + 1, spc_sectors - 1)?;
+    }
 
     dev.flush()?;
 
