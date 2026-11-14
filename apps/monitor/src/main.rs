@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Monitor: what the machine is doing. `run monitor` lists every service and program
+//! Mesh (formerly Monitor): what the machine is doing. `run mesh` lists every service and program
 //! that has used the CPU, busiest first, with its share of one core over the last
 //! second and the memory it holds, and the whole machine's load and free memory.
 //! The numbers come from the kernel's read-only statistics (syscall 87). Up and Down
@@ -97,7 +97,7 @@ fn render(window: &mut Window, s: &Sample, prev: &Sample, top: usize) -> usize {
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     let mut window = Window::open();
-    window.title(b"Monitor");
+    window.title(b"Mesh");
     let mut prev = sample(&Sample { rows: [Row::default(); MAX], count: 0, tsc: 0, idle: 0, cores: 1, free_pages: 0, ms: 0, span_ms: 0 });
     let mut top = 0usize;
     sex_pdx::serial_record!("[monitor.ready] target={} task={}", window.target, window.task);

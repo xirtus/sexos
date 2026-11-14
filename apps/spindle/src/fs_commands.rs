@@ -428,6 +428,7 @@ impl Client {
 pub const RENAMED: &[(&[u8], &[u8])] = &[
     (b"web", b"kaleidoscope"),
     (b"store", b"sexshop"),
+    (b"monitor", b"mesh"),
 ];
 /// The program a bare name means now; a path or a current name is kept as given.
 pub fn renamed(target: &[u8]) -> &[u8] {
