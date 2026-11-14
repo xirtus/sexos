@@ -43,6 +43,11 @@ pub const OP_REFUSED: u64 = 0x53;
 /// Shell to Files: the file Files last read now runs as this row and task. The program
 /// may then use files inside its own folder, and nowhere else.
 pub const OP_BIND: u64 = 0x55;
+/// A terminal to Shell: stop the run it started attached to it (`console_relay`), whose
+/// target is the first word. The person pressed Ctrl+C twice (or Ctrl+\) and the run
+/// did not end. Shell stops only a run the caller started, while both still run, the way
+/// it ends a program that ignores Close.
+pub const OP_STOP_ATTACHED: u64 = 0x56;
 /// In OP_RUN's third word: the person asked for this run to reach the network.
 pub const RUN_NETWORK: u64 = 1;
 /// Where each program's folder lives.
