@@ -102,7 +102,7 @@ c7325b30965ac39376c5f7d5be7bb63a3b32fb08f5214bdf7e0d437ff42a52d6  crates/sex-pdx
 
 1a0fe38cf9766f5cb2f65a66caaa6ff8bd370e85f5a18d143f88efbf9e6f31ab  crates/sex-pdx/src/virtio.rs
 
-13554e3dcb89e0dd5970de1f7bf8c587d2d42bb0212cfad9b9f4b25e479f4426  crates/sex-pdx/src/vm.rs
+f655f8f5d654e156b32f5f680f344d06f34055becbccc48b0b07c1eea3536887  crates/sex-pdx/src/vm.rs
 
 2cd0cedd8bf837aca965d45a147d5251006d0d14521179b1d6c1496a8cffeccd  crates/sex-pdx/src/web.rs
 
@@ -166,5 +166,5 @@ b993467950de4025053070772fd77781793a2a7c38195d19cf1b84239b6dcadc  kernel/src/sys
 
 d96aa774f2c9ddf72f5fca8c9aa31e6127d182038f9bff826faa5e55ef8083eb  kernel/src/trust_source.rs
 
-51b98f83c7aa54fe2ff49554021afdd678ccfb97e6b2e170accb96b405285f79  kernel/src/vmx.rs
+2b3efb48e4f24acee339a9be6450ad240cc14dc41cab9ea073f56b24ebd755bf  kernel/src/vmx.rs
 

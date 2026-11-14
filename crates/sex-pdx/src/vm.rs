@@ -152,7 +152,7 @@ pub struct Segment { pub base: u64, pub limit: u32, pub access: u32, pub selecto
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct State {
     pub regs: Regs,
-    pub cr0: u64, pub cr3: u64, pub cr4: u64, pub efer: u64,
+    pub cr0: u64, pub guest_cr3: u64, pub cr4: u64, pub efer: u64,
     pub segments: [Segment; 8],
     pub gdtr_base: u64, pub idtr_base: u64, pub gdtr_limit: u32, pub idtr_limit: u32,
     pub interruptibility: u32, pub activity: u32,

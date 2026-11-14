@@ -359,9 +359,9 @@ unsafe fn enter(c: &Caps, core: usize, st: &mut abi::State, eptp: u64, event: u3
 unsafe fn load(c: &Caps, st: &abi::State, eptp: u64, event: u32, error: u32, cr0: u64, cr4: u64, bases: [u64; 3]) -> bool {
     let mut ok = true;
     let mut w = |f: u32, v: u64| ok &= vmwrite(f, v);
-    let cr3: u64;
-    core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack));
-    w(HOST_CR0, cr0); w(HOST_CR3, cr3); w(HOST_CR4, cr4);
+    let global_root: u64;
+    core::arch::asm!("mov {}, cr3", out(reg) global_root, options(nomem, nostack));
+    w(HOST_CR0, cr0); w(HOST_CR3, global_root); w(HOST_CR4, cr4);
     w(HOST_CS, selector(0) as u64 & 0xFFF8); w(HOST_SS, selector(1) as u64 & 0xFFF8); w(HOST_TR, selector(2) as u64 & 0xFFF8);
     w(HOST_FS_BASE, rdmsr(0xC000_0100)); w(HOST_GS_BASE, rdmsr(0xC000_0101));
     w(HOST_GDTR_BASE, bases[0]); w(HOST_IDTR_BASE, bases[1]); w(HOST_TR_BASE, bases[2]);
@@ -378,7 +378,7 @@ unsafe fn load(c: &Caps, st: &abi::State, eptp: u64, event: u32, error: u32, cr0
     let forced = c.cr0.0 & !(CR0_PE | CR0_PG);
     w(CR0_MASK, forced); w(CR0_SHADOW, st.cr0); w(GUEST_CR0, (st.cr0 | forced) & c.cr0.1);
     w(CR4_MASK, c.cr4.0); w(CR4_SHADOW, st.cr4); w(GUEST_CR4, (st.cr4 | c.cr4.0) & c.cr4.1);
-    w(GUEST_CR3, st.cr3); w(GUEST_EFER, st.efer); w(GUEST_DR7, 0x400); w(GUEST_DEBUGCTL, 0);
+    w(GUEST_CR3, st.guest_cr3); w(GUEST_EFER, st.efer); w(GUEST_DR7, 0x400); w(GUEST_DEBUGCTL, 0);
     w(GUEST_RSP, st.regs.rsp); w(GUEST_RIP, st.regs.rip); w(GUEST_RFLAGS, (st.regs.rflags & 0x003F_7FD5) | 2);
     for (i, s) in st.segments.iter().enumerate() {
         let f = hw::segment_fields(i as u32);
@@ -397,7 +397,7 @@ unsafe fn save(c: &Caps, st: &mut abi::State, exit: &mut abi::Exit) -> (u32, u32
     let forced = c.cr0.0 & !(CR0_PE | CR0_PG);
     st.cr0 = (vmread(GUEST_CR0) & !forced) | (st.cr0 & forced);
     st.cr4 = (vmread(GUEST_CR4) & !c.cr4.0) | (st.cr4 & c.cr4.0);
-    st.cr3 = vmread(GUEST_CR3); st.efer = vmread(GUEST_EFER);
+    st.guest_cr3 = vmread(GUEST_CR3); st.efer = vmread(GUEST_EFER);
     for (i, s) in st.segments.iter_mut().enumerate() {
         let f = hw::segment_fields(i as u32);
         s.selector = vmread(f[0]) as u16; s.limit = vmread(f[1]) as u32; s.access = vmread(f[2]) as u32; s.base = vmread(f[3]);
