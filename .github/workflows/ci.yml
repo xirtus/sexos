@@ -103,6 +103,15 @@ jobs:
         sudo usermod -p '*' "$USER"
         cargo test --locked -p sex-wg
         cargo test --locked -p sex-ssh
+    - name: Loom network places (SFTP via real OpenSSH, WebDAV, S3 with SigV4) on the host
+      run: |
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends openssh-server openssh-sftp-server
+        sudo usermod -p '*' "$USER"
+        cargo test --locked -p loom-remote
+    - name: Disk and CD images (ISO/UDF/qcow2/VHD/VHDX/VMDK, partitions) on the host
+      run: |
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends xorriso genisoimage udftools qemu-utils gdisk fdisk dosfstools e2fsprogs
+        cargo test --locked -p sex-diskimage
     - name: Crash record format host regressions
       run: bash scripts/crash_log_host_gate.sh
     - name: Experimental JS baseline JIT differential and emitted-code gates
