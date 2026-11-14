@@ -32,7 +32,7 @@ class HostSourceWiring(unittest.TestCase):
 
     def test_actual_validators_accept_original_and_broker_mutable_receive(self):
         for gate in ('display_ready_protocol_gate.sh', 'linen_text_delivery_gate.sh'):
-            self.assertEqual(self.validate(gate), 0)
+            self.assertEqual(self.validate(gate, broker_fixture=True), 0)
             self.assertEqual(self.validate(gate, lambda s: s.replace('let mut msg = match pop_startup_message()', 'let msg = match pop_startup_message()').replace('clipboard_poll(); autofill_routes::poll(); app_input_poll();', 'clipboard_poll(); app_input_poll();')), 0)
 
     def test_readiness_and_fifo_order_cannot_disappear_or_move(self):
