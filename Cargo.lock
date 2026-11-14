@@ -3835,6 +3835,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-3d"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "flate2",
+ "png",
+ "ruzstd",
+ "serde_json",
+ "zune-jpeg",
+]
+
+[[package]]
 name = "sex-app"
 version = "0.1.0"
 dependencies = [

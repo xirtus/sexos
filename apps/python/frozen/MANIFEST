@@ -100,3 +100,8 @@ sqlite3 package
 sqlite3.dbapi2 module
 sqlite3.dump module
 ssl module
+polyamour package
+polyamour.polyops module
+polyamour.types module
+bpy package
+mathutils package

@@ -81,6 +81,8 @@ jobs:
       run: cargo test --locked -p aftercare
     - name: Loom archives (zip, tar, 7z, gz, zst, xz) with Python interop on the host
       run: cargo test --locked -p sex-archive --features std
+    - name: Polyamour 3D core (meshes, modifiers, booleans, path tracer, glTF/OBJ/STL/PLY/.blend, polyops + Python API)
+      run: cargo test --locked --release -p sex-3d
     - name: Pinyin input method
       run: cargo test --locked -p sex-ime
     - name: Multipass accounts, Shibari keeper (link fixtures, tokens never leave)
