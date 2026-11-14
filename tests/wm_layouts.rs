@@ -161,7 +161,8 @@ fn bindings_cover_the_hyprland_and_kde_basics() {
     let s = Mods { shift: true, ctrl: false };
     assert_eq!(binding(code::Q, m), Some(WmAction::Close));
     assert_eq!(binding(code::F, m), Some(WmAction::Fullscreen));
-    assert_eq!(binding(code::V, m), Some(WmAction::ToggleFloating));
+    assert_eq!(binding(code::V, m), Some(WmAction::ClipboardHistory));
+    assert_eq!(binding(code::V, s), Some(WmAction::ToggleFloating));
     assert_eq!(binding(code::SPACE, s), Some(WmAction::ToggleFloating));
     assert_eq!(binding(code::SPACE, m), Some(WmAction::CycleLayout));
     assert_eq!(binding(code::ENTER, m), Some(WmAction::Terminal));

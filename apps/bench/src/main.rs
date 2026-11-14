@@ -121,10 +121,12 @@ pub extern "C" fn _start() -> ! {
         window.show(report.as_bytes());
         loop { if let Event::Close = window.next() { window.close() } }
     }
-    if args == b"spin" {
+    if args == b"spin" || args.starts_with(b"spin ") {
+        // `spin N`: about N billion TSC cycles instead of twenty.
+        let billions = core::str::from_utf8(&args[4..]).ok().and_then(|t| t.trim().parse::<u64>().ok()).unwrap_or(20).clamp(1, 600);
         sex_pdx::serial_record!("[bench.spin.start] target={} task={}", window.target, window.task);
         let (t, mut x) = (tsc(), 1u64);
-        while tsc() - t < 20_000_000_000 { for _ in 0..1000 { x = core::hint::black_box(x.wrapping_mul(6364136223846793005).wrapping_add(1)); } }
+        while tsc() - t < billions * 1_000_000_000 { for _ in 0..1000 { x = core::hint::black_box(x.wrapping_mul(6364136223846793005).wrapping_add(1)); } }
         sex_pdx::serial_record!("[bench.spin.done] target={} task={} x={}", window.target, window.task, x & 1);
         window.show(b"Spun. F11 closes.\n");
         loop { if let Event::Close = window.next() { window.close() } }

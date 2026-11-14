@@ -7,6 +7,9 @@ pub const TOTAL_TURNS: u32 = 65_536;
 pub const STALL_TURNS: u32 = 4_096;
 pub const TOTAL_TICKS: u64 = 15_000;
 pub const STALL_TICKS: u64 = 2_000;
+/// Earlier publications kept for Super+V, newest first (Windows' Win+V,
+/// KDE's Klipper). A retired owner's entries are erased with its publication.
+pub const HISTORY: usize = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Admission { Accepted, Full, Rejected(u64) }
@@ -80,6 +83,8 @@ pub struct Broker {
     ticket: u32,
     generation: u32,
     cursor: usize,
+    history: [Option<Publication>; HISTORY],
+    history_bytes: [[u8; MAX_BYTES]; HISTORY],
 }
 
 fn erase(bytes: &mut [u8]) {
@@ -98,6 +103,7 @@ impl Broker {
             slots: [const { Slot::new() }; DOCUMENT_COUNT], transaction: None, publication: None,
             stage: [0; MAX_BYTES], committed: [0; MAX_BYTES], read_snapshot: [0; MAX_BYTES],
             ticket: 0, generation: 0, cursor: 0,
+            history: [None; HISTORY], history_bytes: [[0; MAX_BYTES]; HISTORY],
         }
     }
     /// Registration never replaces a catalog or clears a retirement fence.
@@ -237,6 +243,7 @@ impl Broker {
                 let publication = Publication { owner: subject, source: t.source, len, generation, hash: supplied };
                 // Old publication and all unused tails are erased before the
                 // replacement becomes readable. No buffer is moved/copied whole.
+                self.keep_history(supplied);
                 erase(&mut self.committed); self.committed[..len].copy_from_slice(&self.stage[..len]);
                 self.generation = generation; self.publication = Some(publication);
                 self.clear_transaction();
@@ -316,6 +323,10 @@ impl Broker {
         self.slots[index].retired = true; self.slots[index].live = false;
         self.slots[index].erase_pending(); self.slots[index].receipt = None;
         if self.publication.is_some_and(|p| p.owner == subject) { erase(&mut self.committed); self.publication = None; }
+        let mut i = 0;
+        while i < HISTORY {
+            if self.history[i].is_some_and(|p| p.owner == subject) { self.history_remove(i); } else { i += 1; }
+        }
         if let Some(t) = self.transaction.as_ref() {
             if t.owner == index { self.clear_transaction(); }
             else if t.mode == Mode::Read && t.producer == index {
@@ -326,9 +337,57 @@ impl Broker {
         true
     }
 }
+impl Broker {
+    /// The publication being replaced goes to the front of the history,
+    /// unless the new one has the same bytes.
+    fn keep_history(&mut self, next_hash: u64) {
+        let Some(old) = self.publication else { return };
+        if old.hash == next_hash { return; }
+        // An equal older entry moves to the front rather than repeating.
+        if let Some(i) = self.history.iter().position(|h| h.is_some_and(|h| h.hash == old.hash && h.len == old.len)) { self.history_remove(i); }
+        erase(&mut self.history_bytes[HISTORY - 1]);
+        self.history.copy_within(0..HISTORY - 1, 1);
+        self.history_bytes.copy_within(0..HISTORY - 1, 1);
+        self.history[0] = Some(old);
+        erase(&mut self.history_bytes[0]);
+        self.history_bytes[0][..old.len].copy_from_slice(&self.committed[..old.len]);
+    }
+    fn history_remove(&mut self, i: usize) {
+        self.history.copy_within(i + 1..HISTORY, i);
+        self.history_bytes.copy_within(i + 1..HISTORY, i);
+        self.history[HISTORY - 1] = None;
+        erase(&mut self.history_bytes[HISTORY - 1]);
+    }
+    pub fn history_len(&self) -> usize { self.history.iter().take_while(|h| h.is_some()).count() }
+    /// Entry `i` (0 is the newest earlier publication).
+    pub fn history_text(&self, i: usize) -> Option<&[u8]> {
+        self.history.get(i).copied().flatten().map(|p| &self.history_bytes[i][..p.len])
+    }
+    /// Makes history entry `i` the clipboard again, under a new generation and
+    /// its original owner; the current publication moves to the front of the
+    /// history. Not while a transfer is in flight.
+    pub fn restore(&mut self, i: usize) -> Option<Publication> {
+        if self.transaction.is_some() { return None; }
+        let entry = self.history.get(i).copied().flatten()?;
+        let generation = self.generation.checked_add(1)?;
+        let mut bytes = [0u8; MAX_BYTES];
+        bytes[..entry.len].copy_from_slice(&self.history_bytes[i][..entry.len]);
+        self.history_remove(i);
+        self.keep_history(entry.hash);
+        erase(&mut self.committed);
+        self.committed[..entry.len].copy_from_slice(&bytes[..entry.len]);
+        erase(&mut bytes);
+        let publication = Publication { generation, ..entry };
+        self.generation = generation; self.publication = Some(publication);
+        Some(publication)
+    }
+    /// The current publication's bytes.
+    pub fn current_text(&self) -> Option<&[u8]> { self.publication.map(|p| &self.committed[..p.len]) }
+}
 impl Drop for Broker {
     fn drop(&mut self) {
         erase(&mut self.stage); erase(&mut self.committed); erase(&mut self.read_snapshot);
+        for bytes in &mut self.history_bytes { erase(bytes); }
         for slot in &mut self.slots { slot.erase_pending(); slot.receipt = None; }
     }
 }
