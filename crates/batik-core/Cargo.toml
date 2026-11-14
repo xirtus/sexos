@@ -1,0 +1,16 @@
+[package]
+name = "batik-core"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Raster image editor and digital painting engine for SexOS"
+
+[features]
+default = []
+std = ["sex-archive/std"]
+
+[dependencies]
+sex-image = { path = "../sex-image" }
+sex-archive = { path = "../sex-archive", default-features = false }
+miniz_oxide = { version = "=0.9.1", default-features = false, features = ["with-alloc"] }
+libm = "0.2"
