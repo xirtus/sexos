@@ -4494,3 +4494,36 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   replayed boot metadata, exact updated Shell/Files modules and installed app ELFs;
   the embedded installer payload was not replaced. This is not install-media proof.
 - No PR merged on incomplete or queued checks. Original dirty checkout untouched.
+
+## ChatGPT round 185: finish runtime proof and required dependency checks (2026-11-14)
+- All four final Moan local QEMU gates pass: app playback/split/undo/dirty Close;
+  exact edited-project save, two-boot held-route reopen and clean undo baseline;
+  actual WAV/FLAC/MP3 Files export with independent decoding and cancellation;
+  microphone permission/capture/stop with149504 frames and zero lost. QEMU input
+  is simulated silence, not physical microphone fidelity. Export/project docs
+  record exact app/image/input hashes and the development-image proof boundary.
+- Final Chastity file-admission two-boot gate and visible two-app consent gate
+  pass. Only NotFound can select Create: unreadable/oversized existing vaults
+  remain locked, and file reads allocate at most16MiB before a one-byte overflow
+  probe.30 core/UI plus17 actual transport tests pass. Compile-time guard rejects
+  a Hermit build missing its secure random backend; configured build/scanner pass.
+- Sealed build trace now parses rustflags as TOML, preserving quoted cfg values.
+  A regression executes the actual trace with recording Cargo for literal,
+  escaped, empty and absent flags. This closes the gap between manually verified
+  entropy flags and CI's image-build invocation. TLS patch-policy negatives and
+  architectural/target/TLS checks pass; the prior1192-test Python suite and the
+  new sealed-trace regression pass.
+- CI now runs the previously excluded dependency regressions using separately
+  locked manifests and the same local Argon2 patch:68 Argon2 unit tests,21 vectors,
+  seven bounded expansion/cumulative-attachment tests. All96 pass under the pinned
+  nightly. Removed an unused upstream dev-only rustfmt edge that selected removed
+  nightly features; production dependency graph unchanged. Full Chastity host gate
+  (30 application/core +96 dependency tests) passes in the integration checkout.
+- Actual Abacus/Weft gate now passes: real first paint is reported before blocking
+  for input; positive frame counts are accepted; mixed QMP key chords are serialized.
+  Pointer/typed arithmetic, scientific/programmer commands, fullu64 hex, unit
+  conversion/rejection, history recall, screenshot and Close retirement pass.
+- Current master794e746d is reconciled locally; its added tests/gate determinism
+  changes do not alter the kernel ABI. No kernel source diff. The superseded root
+  CI candidates were cancelled; their results are not accepted as final green CI.
+  A fresh exact-head full run is required before merging.
