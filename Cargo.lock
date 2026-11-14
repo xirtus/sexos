@@ -2955,7 +2955,9 @@ version = "0.1.0"
 dependencies = [
  "hayro",
  "sex-font",
+ "sex-image",
  "sex-std",
+ "vellum-edit",
 ]
 
 [[package]]

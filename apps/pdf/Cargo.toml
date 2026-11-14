@@ -14,3 +14,7 @@ sex-std = { path = "../../crates/sex-std" }
 hayro = "0.9.0"
 # The find bar's and the outline's text, in the system's own monospaced font.
 sex-font = { path = "../../crates/sex-font" }
+# Annotations, form filling and incremental saves: Vellum's editing engine.
+vellum-edit = { path = "../../crates/vellum-edit" }
+# --thumb's shrinking, shared with Gaze.
+sex-image = { path = "../../crates/sex-image" }
