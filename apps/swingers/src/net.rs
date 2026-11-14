@@ -8,11 +8,11 @@ use sha2::{Digest, Sha256};
 use sex_torrent::metainfo::Metainfo;
 use sex_torrent::mse::{req2_hash, Cipher, Handshake, Policy, Progress};
 use sex_torrent::session::{Action, Session, SessionAction, SessionConfig, Torrent, TorrentKey, TorrentParams, TorrentState};
-use sex_torrent::tracker::{announce_request, parse_announce, AnnounceParams, Event as AnnounceEvent};
+use sex_torrent::tracker::{announce_request, parse_announce, parse_url, AnnounceParams, Event as AnnounceEvent, UdpEvent, UdpRequest, UdpTracker};
 use sex_torrent::{Ip, Millis, PeerAddr, PeerId};
 use std::collections::{HashMap, VecDeque};
 use std::io::{ErrorKind, Read, Write};
-use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream};
+use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::{Duration, Instant};
@@ -343,7 +343,7 @@ impl Client {
                 let tx = self.done_tx.clone();
                 let p = params.clone();
                 std::thread::spawn(move || {
-                    let (peers, interval, error) = match http_announce(&url, &p) { Ok((a, i)) => (a, i, None), Err(e) => (Vec::new(), 300, Some(e)) };
+                    let (peers, interval, error) = match tracker_announce(&url, &p) { Ok((a, i)) => (a, i, None), Err(e) => (Vec::new(), 300, Some(e)) };
                     let _ = tx.send(Done::Announced { torrent: k, url, peers, interval, error });
                 });
             }
@@ -352,11 +352,52 @@ impl Client {
 
     fn stop_announce(&mut self, key: &TorrentKey, now: Millis) {
         let p = self.announce_params(key, AnnounceEvent::Stopped, now);
-        for url in self.jobs[key].trackers.clone() { let _ = http_announce(&url, &p); }
+        // Tell every tracker at once and wait at most a few seconds: a dead UDP tracker
+        // would otherwise hold the exit through its retries.
+        let (tx, rx) = channel();
+        let urls = self.jobs[key].trackers.clone();
+        for url in urls.iter().cloned() { let (tx, p) = (tx.clone(), p.clone()); std::thread::spawn(move || { let _ = tracker_announce(&url, &p); let _ = tx.send(()); }); }
+        let until = Instant::now() + Duration::from_secs(3);
+        for _ in &urls { if rx.recv_timeout(until.saturating_duration_since(Instant::now())).is_err() { break; } }
     }
 }
 
-/// One HTTP announce (plain `http://` trackers; `udp://` and `https://` come next).
+/// One announce to an `http://` or `udp://` tracker (`https://` comes with TLS).
+fn tracker_announce(url: &str, p: &AnnounceParams) -> Result<(Vec<PeerAddr>, u64), String> {
+    if url.starts_with("udp://") { udp_announce(url, p) } else { http_announce(url, p) }
+}
+
+/// A BEP 15 announce: the engine's `UdpTracker` does connect, retries and timeouts; this
+/// thread owns the socket and the clock.
+fn udp_announce(url: &str, p: &AnnounceParams) -> Result<(Vec<PeerAddr>, u64), String> {
+    let u = parse_url(url).ok_or("bad tracker URL")?;
+    let addr = to_socket(crate::resolve(&u.host, u.port).into_iter().next().ok_or("no address")?);
+    let sock = UdpSocket::bind(if addr.is_ipv6() { "[::]:0" } else { "0.0.0.0:0" }).map_err(|e| e.to_string())?;
+    sock.connect(addr).map_err(|e| e.to_string())?;
+    let mut t = UdpTracker::new(&u, addr.is_ipv6()).with_max_retries(3);
+    let start = Instant::now();
+    let now = || start.elapsed().as_millis() as Millis;
+    let mut rng = |b: &mut [u8]| crate::random(b);
+    sock.send(&t.request(UdpRequest::Announce(p.clone()), now(), &mut rng)).map_err(|e| e.to_string())?;
+    let mut buf = [0u8; 2048];
+    loop {
+        let wait = t.next_deadline().map(|d| d.saturating_sub(now()).max(1)).unwrap_or(1000);
+        let _ = sock.set_read_timeout(Some(Duration::from_millis(wait)));
+        let ev = match sock.recv(&mut buf) {
+            Ok(n) => t.on_packet(&buf[..n], now(), &mut rng),
+            Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted) => t.on_tick(now(), &mut rng),
+            Err(e) => return Err(e.to_string()),
+        };
+        match ev {
+            Some(UdpEvent::Send(b)) => { let _ = sock.send(&b); }
+            Some(UdpEvent::Announced(r)) => return Ok((r.peers, r.interval.unwrap_or(1800) as u64)),
+            Some(UdpEvent::Failed(e)) => return Err(format!("{e:?}")),
+            Some(UdpEvent::Scraped(_)) | None => {}
+        }
+    }
+}
+
+/// One HTTP announce.
 fn http_announce(url: &str, p: &AnnounceParams) -> Result<(Vec<PeerAddr>, u64), String> {
     let target = announce_request(url, p).map_err(|e| format!("{e:?}"))?;
     if target.tls { return Err("https trackers are not supported yet".into()); }

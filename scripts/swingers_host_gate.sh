@@ -2,7 +2,8 @@
 # Swingers against a real BitTorrent client (aria2) on the host:
 #  1. aria2 seeds a torrent Swingers made; Swingers downloads it (file hash equal).
 #  2. The same through a magnet link (metadata from aria2 over ut_metadata).
-#  3. Swingers seeds; aria2 finds it through a local tracker and downloads it.
+#  3. Swingers seeds; aria2 finds it through a local tracker and downloads it; another
+#     Swingers finds it through the same tracker over UDP (BEP 15).
 #  4. The daemon takes the magnet over Transmission's RPC (transmission-remote), downloads
 #     it from that seeder, and lists, stops and removes it with its data.
 set -euo pipefail
@@ -32,6 +33,9 @@ sleep 3
 timeout 120 "${aria[@]}" --seed-time=0 --listen-port=16882 -d t4 film.torrent
 got=$(sha256sum t4/film.bin | cut -c1-64); [[ "$got" == "$want" ]] || { echo "FAIL aria2 from Swingers"; exit 1; }
 echo "ok aria2 downloads from Swingers"
+timeout 120 "$B" get "magnet:?xt=urn:btih:$hash&tr=udp%3A%2F%2F127.0.0.1%3A16970" --dir t6 --port 16895 > t6.log
+grep -q "udp://127.0.0.1:16970 peers=" t6.log || { echo "FAIL no UDP tracker answer"; tail -20 t6.log; exit 1; }
+check t6.log "download from Swingers found through a UDP tracker (magnet)"
 
 "$B" daemon --dir t5 --port 16894 --rpc 16991 --user u --password p > t5.log 2>&1 &
 sleep 1
