@@ -53,15 +53,22 @@ Weft design (proposal; the toolkit choice is the one item here worth Andreas's l
   write the SexOS adapter, a PDX protocol `sex_pdx::a11y` that the screen reader (S7)
   subscribes to with the program's consent.
 - Theme from `sex-config` (B1): light/dark/auto, accent, font scale, density, high contrast.
-- egui is already vendored (`crates/egui-hello`) and stays the quick path for tools and
-  games; Weft is for the apps people live in.
+- egui (MIT/Apache) gets a SexOS backend too (M11), because the ArtCraft "Craft" apps that
+  T and V port are all egui 0.37 programs. (`crates/egui-hello` is only a name today: it has
+  no egui in it.) Weft is for SexOS's own apps; egui runs ported ones.
+- **One tab model for every app (M12).** Andreas, 2026-11-14: tabs belong in Loom, Quil and
+  other apps, not only the browser. Weft's tab strip comes with drag to reorder, tear off
+  into a new window, drag between windows of the same app, pinned tabs, tab groups and
+  restore on reopen (with C10 session restore). Kaleidoscope, Loom, Quil, Jot, Spindle,
+  Vellum and the office apps all use the same one, so the keys (Ctrl+T/W/Tab,
+  Ctrl+Shift+T) and the behaviour match everywhere.
 
 ## 2. Gap report, app by app
 
 Each table: what the app does now, what the class leader has that we lack, and the slice that
 closes it. "owned: X#" means an existing slice already covers it.
 
-### Kaleidoscope (browser) vs Firefox and Brave
+### Kaleidoscope (browser) vs Firefox, Brave and Helium
 
 Now: sex-html layout with flex, grid, floats, tables, sticky, transforms, `@keyframes`,
 `@font-face`; QuickJS (wasmi or wasm2c) with DOM, fetch, canvas, WebGL 2, WebGPU, MSE,
@@ -77,7 +84,8 @@ downloads, multipart forms; mouse; per-window confinement.
 | Reader mode | separate Peek program | N5 (folds Peek in) |
 | PDF inline | no | N5 (embeds Vellum's renderer) |
 | Developer tools: inspector, console, network | serial log only | N6 |
-| Extensions (WebExtensions) | none | N7 |
+| Extensions that run unmodified: uBlock Origin, Bitwarden, Dark Reader, SponsorBlock | none | N7 |
+| Helium's lessons: private by default (no telemetry, no sponsored anything), uBlock Origin built in, compact UI, vertical tabs, split view, tab groups | none | N13 |
 | HTTP cache, WOFF2/Brotli, service workers, installable web apps | none | N8 |
 | Print and save as PDF | none | N9 |
 | Notifications API, Media Session, picture-in-picture, Gamepad | none | N10 |
@@ -133,7 +141,7 @@ are not told the window size.
 | Pipelines between programs, job control | Spindle commands only | P8 (structured pipelines, nushell-like, not Unix pipes) |
 | SSH domains (remote tabs) | K7 SSH client | P9 |
 
-### Loom (files) vs Dolphin
+### Loom (files) vs Dolphin, Total Commander and Finder
 
 Now (master): background copy/move with cancel, trash with restore, undo, thumbnails, indexed
 name and content search, safe eject, encrypted `/home`, ext4/FAT/exFAT/NTFS, open/save picker
@@ -279,7 +287,7 @@ Classes a Linux/Windows/macOS desktop has where SexOS has nothing. Names are pro
 | Feeds and podcasts | Liferea / gPodder | **Gossip** | | U7 |
 | Phone link | KDE Connect | **Hookup** | | U8 |
 | Maps | GNOME Maps / OsmAnd | **Rendezvous** | where you meet | U9 |
-| BitTorrent client | qBittorrent | **Swingers** | everyone swaps with everyone | U10 (Qupid's indexer search, Q11b, hands it magnets) |
+| BitTorrent client | qBittorrent / Transmission / BiglyBT | **Swingers** | everyone swaps with everyone | X1–X10 (Qupid's indexer search, Q11b, hands it magnets) |
 | Bluetooth | BlueZ + manager | **Cufflinks** | paired links; goes with Tuxedo | W1–W3 |
 | Printing and scanning | CUPS / SANE | **Needle** | a free fabric word | W4–W5 |
 | Remote desktop | Remmina / RDP | **Lurk** | a free word | W6 |
@@ -295,7 +303,7 @@ Every slice ends in one PR with a behaviour test that fails before and passes af
 gate (`scripts/*_gate.py`) or a host test. Licences named are those of crates we would vendor;
 all are compatible with GPL-3 programs.
 
-### M. Weft toolkit and app foundations (10)
+### M. Weft toolkit and app foundations (12)
 
 Write set: new `crates/weft`, new `crates/sex-pdx/src/a11y.rs`, `crates/sex-app` (small hooks).
 
@@ -311,8 +319,10 @@ Write set: new `crates/weft`, new `crates/sex-pdx/src/a11y.rs`, `crates/sex-app`
 | M8 | AccessKit tree from every Weft widget, served over `sex_pdx::a11y` only to a consented reader | host: tree of the demo matches golden |
 | M9 | Strings and translation: Fluent (`fluent-rs`, Apache/MIT) catalogues, language from settings, plural rules | host: German catalogue renders the demo |
 | M10 | Port the small apps to Weft as references: Abacus, Mesh, sexshop (with their owners' consent; one PR each) | their existing gates still pass, plus a mouse step |
+| M11 | `sex-egui`: egui 0.37 on `sex-app` (input, clipboard, IME, HiDPI) with a CPU mesh rasterizer and optional sex-gl path; shims for craft-libs (`craft-window`, `craft-update` off, `craft-print` → Needle) | gate: an unmodified egui demo app runs with mouse and keys |
+| M12 | Shared tabs: tab strip with reorder, tear-off, drag between windows, pinned tabs, groups, restore; adopted first by Loom and Quil | gate: tear a tab off into a new window, drag it back |
 
-### N. Kaleidoscope to Firefox/Brave class (12)
+### N. Kaleidoscope to Firefox/Brave/Helium class (13)
 
 Write set: `apps/web` (renamed `apps/kaleidoscope` by #212), `crates/sex-html`, `crates/sex-web`,
 `crates/sex-js/src/prelude.js` (small PRs, rebase often; YouTube thread shares it), new
@@ -326,12 +336,13 @@ Write set: `apps/web` (renamed `apps/kaleidoscope` by #212), `crates/sex-html`, 
 | N4 | Private windows (memory-only profile) and container tabs (separate cookie jars per container) | gate: cookie set in container A invisible in B and in private |
 | N5 | Reader mode (Peek folded in and retired) and inline PDF via Vellum's renderer | gate: article fixture shows reader view; PDF link renders page 1 |
 | N6 | DevTools: element inspector with computed style, JS console, network log; F12 | gate: console shows `console.log` output and a failed request |
-| N7 | Extensions: WebExtensions subset (content scripts, storage, tabs, webRequest blocking via Shields), each extension a confined run | gate: sample extension recolours a page and blocks a URL |
+| N7 | Extensions: WebExtensions (Manifest V2 **and** V3: content scripts, background pages and service workers, storage, tabs, `webRequest` blocking, `declarativeNetRequest`, context menus, popups), installed from `.xpi`/`.crx` files or the AMO and Chrome Web Store catalogues. Each extension is its own confined run holding only the grants its manifest asks for and the person allows. Goal: uBlock Origin, Bitwarden and Dark Reader run unmodified | gate: sample extension recolours a page and blocks a URL; uBlock Origin fixture blocks a tracker |
 | N8 | HTTP cache (Files-backed), Brotli and WOFF2, service workers with offline cache, install a site as an app in the launcher | gate: second load served from cache offline; installed app opens standalone |
 | N9 | Print and save as PDF (paged layout, `@page`, `@media print`), through Needle when printing exists | host: PDF output parses in hayro with expected text |
 | N10 | Notification API → Bell, Media Session → media keys (G1), picture-in-picture window, Gamepad API (USB HID) | gate: page notification appears in Bell's panel |
 | N11 | WebRTC: ICE/STUN/TURN, DTLS-SRTP, Opus and VP8 via FFmpeg, data channels (webrtc-rs, MIT/Apache); mic and camera through grants | gate: loopback call between two tabs, audio frames arrive |
 | N12 | Spell check in text fields (spellbook, as Jot) and form autofill of addresses | gate: misspelled word in a textarea is underlined |
+| N13 | Helium/Brave chrome: vertical tabs, split view (two sites side by side), tab groups and workspaces on M12, compact mode, private-by-default settings (no telemetry, strict third-party cookies, HTTPS-only, fingerprinting noise as in Brave) | gate: split view shows two tabs; third-party cookie blocked by default |
 
 ### O. Quil workstation and Jot polish (12)
 
@@ -371,7 +382,7 @@ Write set: `apps/term` (from #182; becomes Spindle's terminal window), `crates/s
 | P8 | Structured pipelines in Spindle's shell: commands pass typed tables (nushell-like) over F2 streams; byte streams for ported CLIs; background jobs | host: pipeline goldens; gate: `ls | where size > 1mb | sort-by name` |
 | P9 | SSH domains: a tab or pane running on another machine via K7 | gate: pane on QEMU host sshd runs `echo` |
 
-### Q. Files, documents and storage apps (15)
+### Q. Files, documents and storage apps (23)
 
 Write set: `apps/files` (Loom), `apps/pdf` (Vellum), `apps/view` (Gaze), new `apps/aftercare`,
 new `apps/corset`, `crates/sexfs` (snapshots only, with E). Coordinate with E for Files.
@@ -392,6 +403,14 @@ new `apps/corset`, `crates/sexfs` (snapshots only, with E). Coordinate with E fo
 | Q12 | Gaze: AVIF and HEIC (FFmpeg decoders), JPEG XL (jxl-oxide, MIT/Apache), RAW (rawler; licence checked), SVG (resvg); EXIF and auto-orientation | host: decoder goldens; gate: rotated-EXIF JPEG shows upright |
 | Q13 | Gaze library: albums, timeline, tags, search; non-destructive edits (crop, straighten, exposure, filters) and set as wallpaper | gate: crop saved as sidecar, original hash unchanged |
 | Q14 | **Aftercare**: scheduled, encrypted, deduplicated backups (rustic, MIT/Apache, restic format) to USB or SFTP, browse and restore, system snapshot before updates | gate: back up, delete, restore, hashes equal |
+| Q16 | Loom tags, ratings and smart folders (saved searches over the E4 index), recent files and frecency, per-folder view memory | gate: tag 3 files, smart folder lists them after reboot |
+| Q17 | Commander mode: two-pane keyboard workflow (Total Commander / Midnight Commander), compare and sync two folders, checksum verify | gate: folder compare marks the one changed file |
+| Q18 | Mount anything: ISO and disk images, phones (MTP over sexusb, and Hookup), cameras (PTP) | gate: ISO fixture browses as a folder |
+| Q19 | Cloud drives: WebDAV/Nextcloud, S3-compatible storage, Google Drive and OneDrive through their HTTP APIs, with offline copies | gate: S3 fixture (MinIO) copy both ways |
+| Q20 | Folder sync between machines: the Syncthing protocol (BEP) written natively in Rust, conflict copies, versioning, works with stock Syncthing peers | gate: two QEMU machines sync a folder; host Syncthing peer agrees |
+| Q21 | Previews for office documents, fonts, 3D models and archives; Git status column in folders that are repositories | gate: docx preview shows its first page |
+| Q22 | Scripting and actions: user actions on selections (Wasm or Spindle pipelines from P8), bulk operations, a command palette in Loom | gate: custom action converts 5 images |
+| Q23 | Share: send a file or folder to Hookup, Flirt, Valentine; a temporary local HTTPS share link under a revocable grant | gate: share link serves the file, then refuses after revoke |
 | Q15 | **Corset**: disks and partitions (GPT create/resize/format sexfs/FAT/exFAT/ext4), SMART/NVMe health, encryption setup | gate: partition a blank QEMU disk, format, mount in Loom |
 
 ### R. System apps: Tatami, Mesh, sexshop, Voyeur, Abacus, Chastity (10)
@@ -429,23 +448,43 @@ Write set: new modules in `servers/silk-shell/src/` (C owns `main.rs`; hooks und
 | S7 | Screen reader (proposed **Whisper**): reads the AccessKit tree (M8), speech by espeak-ng (GPL-3.0) as a confined program, focus tracking, review keys; Tatami Accessibility page | gate: focusing a button speaks its label (audio buffer contains speech frames; text log equals label) |
 | S8 | Magnifier, high contrast, sticky/slow keys, on-screen keyboard | gate: magnifier zooms 2× around pointer |
 
-### T. Office suite: Gingham, Brocade, Burlesque (6)
+### T. Office suite: Gingham, Brocade, Burlesque and the Craft apps (8)
 
 Write set: new `apps/gingham`, `apps/brocade`, `apps/burlesque`, new `crates/sex-office`.
 
+**Base: port the ArtCraft "Craft" apps (Andreas, 2026-11-14).** `github.com/storytold` publishes
+a clean-room office and creative suite in pure Rust, Apache-2.0 (compatible with our GPL-3
+programs), all on egui 0.37: WordCraft (word processor), GridCraft (spreadsheet), DeckCraft
+(presentations), PdfCraft (PDF reader/editor), PhotoCraft (photo editor, Photoshop-like),
+LightCraft (non-destructive photo development), VectorCraft (Illustrator-like), DesignCraft
+(page layout, InDesign-like; `indd-utils` reads INDD), FigCraft (interface design), FilmCraft
+(video editor), EffectCraft (motion graphics), SoundCraft (DAW), AniCraft (2D animation),
+CADCraft, TextureCraft and MaterialCraft (3D texturing and materials). With M11 (egui on
+SexOS) each port is mostly a platform layer, so T and V port these instead of writing from
+zero, keep the upstream crate names inside, and ship under our themed names. We send
+platform fixes upstream. The ArtCraft AI features (cloud image/video models) stay optional
+and off by default, with keys held by Shibari.
+
+**OnlyOffice's lessons:** Microsoft formats as the native format (DOCX/XLSX/PPTX fidelity is
+the product, not an export), all documents as tabs in one window (M12), a familiar ribbon
+layout, a built-in PDF editor and fillable forms, and real-time co-editing. T adds those on
+top of the Craft ports (T7–T8).
+
 | # | Slice | Test |
 | --- | --- | --- |
-| T1 | **Gingham** spreadsheet on IronCalc (MIT/Apache, Rust engine with xlsx): grid on Weft (M3), formulas, formats, multiple sheets, xlsx open/save, CSV | host: IronCalc formula suite; gate: open xlsx fixture, edit, save, reopen on host equal |
+| T1 | **Gingham** spreadsheet: port GridCraft on M11 (compare its engine with IronCalc, MIT/Apache, and keep the stronger one for formulas and xlsx); formulas, formats, sheets, xlsx open/save, CSV | host: formula suite; gate: open xlsx fixture, edit, save, reopen on host equal |
 | T2 | Gingham: charts, sort/filter, freeze panes, ODS (calamine read, MIT), conditional formats | gate: chart renders from a range |
-| T3 | **Brocade** word processor model: rich text (paragraph and character styles, lists, tables, images) on sex-textedit, paged layout with sex-shape | host: layout goldens |
+| T3 | **Brocade** word processor: port WordCraft on M11; rich text, styles, lists, tables, images, paged layout with sex-shape for every script | host: layout goldens; gate: type, style, save, reopen |
 | T4 | Brocade: DOCX open/save (docx-rs, MIT; the old Kaleidoscope importer reused), ODT read, PDF export | host: round trip keeps styles; PDF parses |
 | T5 | Brocade: spelling (spellbook), track changes, comments, headers/footers, page numbers, print | gate: tracked insert accepted |
-| T6 | **Burlesque** presentations: slides, layouts, text/images/shapes, PPTX/ODP open, presenter view, PDF export | gate: open pptx fixture, present, export PDF |
+| T6 | **Burlesque** presentations: port DeckCraft; layouts, text/images/shapes, PPTX/ODP open, presenter view, PDF export | gate: open pptx fixture, present, export PDF |
+| T7 | OnlyOffice-style shell: one window with every document as a tab (M12), ribbon layout, OOXML fidelity suite (100 real-world DOCX/XLSX/PPTX files compared page by page with reference renders) | gate: fidelity suite above a recorded threshold, raised each PR |
+| T8 | Co-editing: real-time collaboration on one document between machines (CRDT, e.g. yrs, MIT), comments and presence; a local relay server program | gate: two QEMU machines edit one document, both converge |
 
-### U. Communication and reading: Valentine, Flirt, Date, Crush, Bodice, Gossip, Hookup (10)
+### U. Communication and reading: Valentine, Flirt, Date, Crush, Bodice, Gossip, Hookup (9)
 
 Write set: new `apps/valentine`, `apps/flirt` (from #216), `apps/calendar` (Date), new
-`apps/crush`, `apps/bodice`, `apps/gossip`, `apps/hookup`, `apps/rendezvous`, `apps/swingers`;
+`apps/crush`, `apps/bodice`, `apps/gossip`, `apps/hookup`, `apps/rendezvous`;
 new `crates/sex-mail`, `crates/sex-dav`.
 
 | # | Slice | Test |
@@ -459,21 +498,29 @@ new `crates/sex-mail`, `crates/sex-dav`.
 | U7 | **Bodice** e-books (EPUB 2/3 via sex-html, CBZ, FB2; library, reading position, fonts, night mode) and **Gossip** feeds (RSS/Atom, podcasts played by Qupid) | gate: EPUB fixture opens at saved page; feed fixture lists items |
 | U8 | **Hookup** phone link (KDE Connect protocol, written from its open spec): notifications, clipboard, file send, media control | gate: protocol test peer pairs and sends a file |
 | U9 | **Rendezvous** maps: OpenStreetMap vector tiles, search (Nominatim), routing (OSRM API), offline regions | gate: local tile fixture renders; search finds a place |
-| U10 | **Swingers** BitTorrent (librqbit, Apache-2.0): magnet links from Qupid/Kaleidoscope, sequential download for streaming into Qupid, per-program bandwidth via Choke | gate: local tracker fixture, file hash equal |
+| U10 | Swingers moved to its own workstream X (Andreas wants it world-class) | – |
 
-### V. Creative apps: Batik, Gestalt, Strip, Serenade, Flash (7)
+### V. Creative apps: Batik, Gestalt, Strip, Serenade, Flash and the Craft ports (10)
+
+V ports the Craft creative apps on M11 (see T): PhotoCraft becomes Batik, VectorCraft Gestalt,
+FilmCraft Strip, SoundCraft Serenade. LightCraft's non-destructive development feeds Gaze's
+edits (Q13), and PdfCraft's editor feeds Vellum (Q10). New names for the other Craft apps are
+proposals.
 
 Write set: new `apps/batik`, `apps/shapes` (Gestalt, from #216), new `apps/strip`,
 `apps/serenade`, `apps/flash`; new `crates/sex-raster` (layers and filters, shared).
 
 | # | Slice | Test |
 | --- | --- | --- |
-| V1 | **Batik** image editor core: layers, selections, brushes with pressure, undo, PNG/JPEG/WebP/ORA save | gate: draw stroke, save, pixels equal reference |
+| V1 | **Batik** image editor: port PhotoCraft on M11; layers, selections, brushes with pressure, undo, PNG/JPEG/WebP/ORA save | gate: draw stroke, save, pixels equal reference |
 | V2 | Batik: adjustments and filters (levels, curves, blur, sharpen) non-destructively, text layers, transforms | host: filter goldens |
 | V3 | Batik: PSD and XCF import, tablet input (USB HID digitizer in sexusb) | host: PSD fixture layers equal |
-| V4 | **Gestalt** vector editor: SVG open/edit/save (usvg/resvg), paths, nodes, text, export PNG/PDF | gate: edit node, saved SVG renders as reference |
-| V5 | **Strip** video editor: timeline, cuts, transitions, titles, audio tracks, export through FFmpeg encoders | gate: cut two clips, export, duration and hash of frames correct |
-| V6 | **Serenade** audio recorder/editor: record (mic grant), waveform, cut, effects, export | gate: record test tone via QEMU audio, trim, export |
+| V4 | **Gestalt** vector editor: port VectorCraft (Shapes retired into it); SVG open/edit/save, paths, nodes, text, export PNG/PDF | gate: edit node, saved SVG renders as reference |
+| V5 | **Strip** video editor: port FilmCraft, decoding and encoding through our FFmpeg; timeline, cuts, transitions, titles, audio tracks | gate: cut two clips, export, duration and hash of frames correct |
+| V6 | **Serenade** audio: port SoundCraft (a DAW) on Bell, with a simple record-and-trim mode | gate: record test tone via QEMU audio, trim, export |
+| V8 | Page layout and design: port DesignCraft (proposed **Lace**: patterned, laid-out fabric) and FigCraft (proposed **Mannequin**: where designs are tried on) | gate: open an IDML fixture, export PDF |
+| V9 | Motion and animation: port EffectCraft (proposed **Velvet**) and AniCraft (proposed **Tease**: frames revealed one at a time) | gate: render a 2 s composition to video |
+| V10 | 3D and technical: port CADCraft (proposed **Pattern**, as in a sewing pattern), TextureCraft and MaterialCraft (proposed **Dye** and **Weave**) | gate: open a DXF fixture; paint a texture on a cube |
 | V7 | **Flash** camera: USB Video Class driver in sexusb, photo and video capture to Loom, camera grant | gate: QEMU `usb-video`-style fixture frames arrive |
 
 ### W. Hardware services and guests: Cufflinks, Needle, Lurk, Drag (7)
@@ -491,18 +538,40 @@ scanner transports only, with the USB owner).
 | W6 | **Lurk** remote desktop: VNC client and server (RFB), RDP client later; screen and input grants | gate: VNC client views the QEMU host test server |
 | W7 | **Drag** guests: a VT-x/SVM virtual machine monitor as a confined server running Linux or Windows guests with virtio devices. Needs a kernel mechanism (VMX root, EPT), so it is a **major change for Andreas to approve**; start with a design doc | review only, then gates per phase |
 
+### X. Swingers, a world-class BitTorrent client (10)
+
+Goal: better than qBittorrent, Transmission and BiglyBT, using what SexOS has that they lack:
+a torrent is a confined run, so a hostile peer or file can never reach the rest of the
+system, and "only through the VPN" is a grant, not a setting that can leak.
+
+Write set: new `apps/swingers`, new `crates/sex-torrent` (engine as a library so Qupid and
+Kaleidoscope can embed it), `crates/sex-net` only through its public API.
+
+| # | Slice | Test |
+| --- | --- | --- |
+| X1 | Engine: BitTorrent v1, v2 and hybrid torrents, magnet links, trackers (HTTP/UDP), piece picking, verification, resume data, preallocation on sexfs. Start from librqbit (Apache-2.0) or write our own after comparing | host: piece and bencode goldens; gate: local tracker fixture, file hash equal |
+| X2 | Peers without trackers: DHT (BEP 5) with IPv6, PEX, Local Service Discovery, web seeds (BEP 19) | gate: two QEMU machines find each other only through DHT |
+| X3 | Transport: uTP (BEP 29) with LEDBAT so torrents never swamp the line, protocol encryption, UPnP and NAT-PMP/PCP port mapping | gate: uTP transfer between two machines; port mapping fixture |
+| X4 | Window on Weft: list with sort and filter, per-file selection and priorities, peers, trackers, pieces map, speed graphs, categories and tags, queue, watch folder | gate: add torrent, deselect a file, it is not written |
+| X5 | Streaming: sequential and "play while downloading" into Qupid (piece deadlines around the play position, seek moves them), like Popcorn-style players | gate: Qupid plays a video before the torrent finishes; seek fetches ahead |
+| X6 | Automation: RSS feeds (shared with Gossip) and Qupid's Torznab indexers with filters, episode rules and smart episode detection (Qupid's `episodes` parser) | gate: feed fixture auto-adds the matching episode only |
+| X7 | Network control: bandwidth scheduler and per-torrent limits through Choke, seeding ratio and time rules, and **binding to a WireGuard tunnel (K6) as a grant**: with the tunnel down, Swingers has no network at all | gate: tunnel down → zero packets leave; up → transfer resumes |
+| X8 | Create and share: make torrents (v1/v2/hybrid) from Loom, magnet link to clipboard, seed from any Loom folder | gate: create, seed, second machine downloads equal hash |
+| X9 | Remote control: a Web UI and a JSON API (Transmission-compatible RPC, so existing phone apps work), behind a grant and a password | gate: Transmission RPC client lists torrents |
+| X10 | Scale and privacy: 10,000 torrents in one session, disk cache tuned for NVMe, I2P as an optional transport, anonymous mode (no client ID, no DHT) | bench: 10 k torrents load under 2 s on host; gate: anonymous mode sends no peer ID string |
+
 ## 5. Priority
 
 1. **First wave (start now):** M (Weft) — every other UI slice benefits; O (Quil, the
    furthest from its leader); N (Kaleidoscope: shields, passwords, isolation, devtools); T1
    (Gingham on IronCalc: the fastest big win, a real spreadsheet in one or two PRs).
-2. **Second wave (when M3–M5 land):** Q (Loom, Vellum, Gaze, Aftercare, Corset), R (system
-   apps, starting with the Privacy page), P (Spindle tabs/splits/sessions), U1–U5 (mail,
-   chat, calendar).
+2. **Second wave (when M3–M5 land):** Q (Loom, Vellum, Gaze, Aftercare, Corset), X
+   (Swingers), R (system apps, starting with the Privacy page), P (Spindle
+   tabs/splits/sessions), U1–U5 (mail, chat, calendar).
 3. **Third wave:** rest of T and U, S (shell extras and accessibility), V (creative), W
    (Bluetooth and printing need x17 receipts; Drag needs Andreas's decision).
 
 ## 6. Count
 
-M 10, N 12, O 12, P 9, Q 15, R 10, S 8, T 6, U 10, V 7, W 7 = **106 slices**, in 11
+M 12, N 13, O 12, P 9, Q 23, R 10, S 8, T 8, U 9, V 10, W 7, X 10 = **131 slices**, in 12
 workstreams. All new app names in this document are proposals pending Andreas's OK.
