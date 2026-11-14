@@ -4206,3 +4206,14 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
 
 ## J8 finding: disk reads are not NVMe-queue bound yet (2026-11-14)
 - `run bench read-large` at 4 cores without PKU now logs `[bench.large.cpu]` (Drive, Files, bench, idle cycles per pass). 16 MiB in 64 KiB requests: ~275M cycles; Files ~100M (~390k per request), Drive ~42M (~165k), rest waiting on the serial request chain. Per-core NVMe queues would not help until requests are pipelined (Files readahead / async Drive replies) and Files' per-request CPU drops; deferred until then.
+
+## ChatGPT round 175: Leather Weft SDK template and runnable samples (2026-11-14)
+- Complete independent hello template in `sdk/leather/hello`; four real Weft sample
+  windows in `apps/leather-samples`: Greeting, Stitch line-oriented UTF-8 editor,
+  Lantern bounded image viewer and Postcard HTTP(S) fetch through the held grant.
+- Copy/build/install tutorial: `docs/sdk/LEATHER_WEFT_TUTORIAL.md`. No custom widgets,
+  kernel changes or changes to Claude-owned apps. Depends on Weft PR #220.
+- Host tests exercise document limits/Unicode and actual Weft controls/painting.
+  All four guest binaries build; `scripts/leather_gate.py` checks greet, edit/save/
+  sync/reload hashes, image decode, network fixture hash, screenshots and clean close.
+  Guest runtime validation remains pending until that QEMU gate passes in CI.
