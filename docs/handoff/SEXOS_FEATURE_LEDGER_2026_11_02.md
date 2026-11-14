@@ -175,6 +175,18 @@ Linen reopen, Display applied the new Quil view a few seconds late.
 route); drafts are not offered automatically on startup; one draft per
 document source per session.
 
+## G18. 12-hour CI-able long-run soak gate (2026-11-14)
+
+**What changed.** Added `scripts/long_soak_gate.py`, unit suite
+`scripts/tests/test_long_soak_gate.py`, and `.github/workflows/long-soak.yml`
+implementing a continuous 12-hour QEMU soak gate (`--hours 12`, chained across
+three 4.25-hour GitHub Actions segments with `nvme.img` + `--resume-report`
+state handoff so no job approaches GitHub's 360-minute runner limit). Every
+round opens and retires a user-space app (`[app.private.retired]`), plays audio
+through Bell (`beep` / `hum` / `play`), fetches/copies/SHA-256-verifies files
+with hourly persisted canaries, and checks `free_pages` drop + post-warmup OLS
+leak slope + key latency.
+
 ## F4. Browser Back key and preformatted text (2026-11-02)
 
 **What changed.** In an HTML page, **Backspace** returns to the page the
@@ -478,6 +490,14 @@ page (loop sum `20100`, while countdown, `sq(12)=144`, depth-10 parentheses
 and `fact(2)`, array squares, string split/upper/indexOf/parseInt);
 conversion took 9 ticks; no pager rejections.
 
+## G-12: Climax benchmark and thermal throttling stress engine (2026-11-14)
+- Added `climax-core` crate providing `#![no_std] + alloc` CPU and memory microbenchmarks, sustained torture runner, thermal throttling detection, and visual report generation.
+- Deterministic CPU microbenchmarks: ChaCha20/ARX integer ALU, SHA-256 compression, FMA-free tiled GEMM, and vectorizable DSP biquad IIR filter with bit-exact corruption self-checking.
+- Memory subsystem benchmarks: STREAM bandwidth engine with explicit `max_memory_bytes` quota and `Vec::try_reserve_exact` bounds, plus Sattolo single-cycle permutation pointer-chase latency ladder across L1/L2/L3/DRAM.
+- Sustained torture runner and thermal throttling analyzer: time-series sample acquisition, rolling window throughput evaluation against initial boost baseline, throttling onset detection, and 3DMark-style sustained stability percentage.
+- Report formatter: subsystem scores, geometric composite score with zero/NaN protection, p50/p95/p99 throughput percentiles, and fixed-width ASCII/Unicode bar charts for Spindle and Weft displays.
+- Gate: `scripts/climax_host_gate.sh` passing host unit tests and `x86_64-sex-app.json` target check.
+
 ## F21. Spindle `calc` powers (2026-11-03)
 
 `a ** n` for whole `n` up to 64 (right-associative, tighter than unary
@@ -631,6 +651,11 @@ older focus thousands of records later, and the run ends before it reaches
 153. Spindle's pending text and the late Quil paints (F3/F6) are the same
 backlog. The fix is Display throughput (repaint cost under TCG), which is
 the concurrent session's area; not changed here.
+
+## G-9: Batik layered image editor and digital painting engine (2026-11-14)
+
+- **Engine and Compositor:** Layered canvas composition with 12 straight-alpha Porter-Duff blend modes, non-destructive adjustment layers (Levels, Curves, HSL), spatial filters (separable Gaussian/box blur, unsharp mask, pixelate), feathered 8-bit selection masks, pressure-sensitive brush engine with dynamics, and memory-bounded undo/redo history journaling.
+- **Interchange and Hardening:** Multi-layer Adobe Photoshop (.psd) parsing with RLE PackBits decompression and OpenRaster (.ora) reading/writing backed by zipped stack.xml and PNGs, fully hardened against integer overflow, denial-of-service allocations, and path traversal under untrusted input in SexOS confined address spaces.
 
 ## G1-G5. Script: assignment operators, do/switch, array and string methods, callbacks, arrows (2026-11-03)
 
@@ -4020,6 +4045,27 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   password gets no confirm.
 - **ABI / kernel:** none.
 
+## Laptop power: battery, lid, brightness, profiles, thermal (2026-11-13)
+
+Embedded controller driver and firmware events in sexacpi (vendored acpi crate now calls region
+handlers and `Notify`), battery percent and time left in the panel, lid and power-button events
+to the Shell (power dialog), ACPI brightness with Fn keys and launcher commands, HWP/CPPC power
+profiles, clean shut down on a critical thermal zone or battery. Touchpad protocol, descriptor
+parser and gestures as a host-tested crate. Details: `LAPTOP_POWER_2026_11_13.md`.
+
+## Laptop touchpad over I2C (2026-11-13)
+
+DesignWare I2C master crate (`sex-i2c-dw`), BOOT lease of Intel Serial IO I2C functions to
+Input, sexacpi describes the `PNP0C50` touchpad (`_CRS`, `_DSM`, `_ADR`, `FMCN`) and hands it
+to Input, which brings the pad into touchpad mode and turns frames into pointer, click,
+scroll, Alt+Tab swipe and pinch-zoom events. Polled for now. Details:
+`LAPTOP_POWER_2026_11_13.md` (Touchpad section).
+
+## Sleep: lid close and launcher Sleep (2026-11-13)
+
+Suspend to idle: the lid or the launcher puts the desktop to sleep, the lid or power button
+wakes it. Firmware low-power-idle `_DSM` (Intel and Microsoft), panel dark, cores prefer
+energy. Details: `LAPTOP_POWER_2026_11_13.md` (Sleep section).
 ## Settings store, slice B1: `sex-config` kept by Files (2026-11-13)
 - **What:** new `crates/sex-config`: one typed schema of 18 settings (appearance,
   desktop, display, keyboard, sound, time, session, setup) with stable numbers, ranges

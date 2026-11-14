@@ -67,7 +67,7 @@ fn on_deep_stack(f: &mut dyn FnMut()) {
 /// One request; the word to reply with.
 /// Serves one request; the reply word, or None for a PUT (which gets none).
 pub fn handle(caller: u32, arg0: u64, arg1: u64) -> Option<u64> {
-    let may_set = crate::fs_service::program_is(caller, b"settings");
+    let may_set = crate::fs_service::program_is(caller, b"tatami");
     let mut status = s::INVALID;
     // The lock screen's password also opens the encrypted home: keep a copy before
     // CHECK wipes the staged bytes.

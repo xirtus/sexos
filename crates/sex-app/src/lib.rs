@@ -591,10 +591,6 @@ pub mod files {
             /// Shell to start it attached here. Needs the `+launch` grant (Spindle's `spindle` command).
             pub fn start(name: &[u8], args: &[u8]) -> Result<(), Error> { start_at(0, name, args) }
             pub fn start_at(slot: usize, name: &[u8], args: &[u8]) -> Result<(), Error> {
-                // Any program may prepare a run of its own (`sex_pdx::launch`), so the grant is
-                // asked first: Files refuses a terminal without `+launch` here (DENIED), and a
-                // run still going in this slot (PENDING).
-                op(c::at_slot(c::RELEASE, slot), 0)?;
                 let bin = sex_pdx::program_store::BIN;
                 let mut path = alloc::vec::Vec::with_capacity(bin.len() + name.len());
                 path.extend_from_slice(bin); path.extend_from_slice(name);
@@ -668,7 +664,7 @@ pub mod files {
         /// grants in `args` this run does not hold itself.
         pub fn prepare(path: &[u8], args: &[u8]) -> Result<u32, Error> {
             if args.len() > w::ARGS_MAX { return Err(w::NAME); }
-            exchange(None, w::PREPARE, path, 0, args.len() as u64, |d| d[..args.len()].copy_from_slice(args), |ticket, _| ticket)
+            exchange(None, w::PREPARE, path, w::PREPARE_LAUNCH, args.len() as u64, |d| d[..args.len()].copy_from_slice(args), |ticket, _| ticket)
         }
         /// Everything in the folder `path` (`b""` for the program's own folder).
         pub fn list(path: &[u8]) -> Result<alloc::vec::Vec<Entry>, Error> {

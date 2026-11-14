@@ -349,20 +349,28 @@ class RetainedPresentation(unittest.TestCase):
   shots=copy.deepcopy(frames);shots[-1].update(serial_end=len(extra),serial_sha256=hashlib.sha256(extra.encode()).hexdigest())
   with self.assertRaises(ValueError):gate.validate_frame_stages(extra,'ready',shots)
 
+def zoom_path():
+ """The palette walk to Zoom Toggle in the live catalog, as the gate derives it."""
+ from quil_workflow_gate import palette_commands
+ commands=palette_commands(ROOT);count=len(commands);target=next(i for i,(c,_)in enumerate(commands)if c=='ZoomToggle')
+ step,code=(1,'j')if target<=count-target else(-1,'k');path=[];selected=0
+ while selected!=target:following=(selected+step)%count;path.append((selected,following));selected=following
+ return count,code,path
+
 def key_fixture(mode='ready',post=True,compact=False):
- trace='';actions=[];tick=1;menu_k=0
+ trace='';actions=[];tick=1;menu_k=0;count,menu_code,path=zoom_path();zoom=['grave_accent']+[menu_code]*len(path)+['ret']
  if compact:
   for code in ('down','ret'):actions.append(dict(key=code,code=gate.KEY_CODES[code],kind='boot',transport='send-key',serial_start=0,serial_qmp_return=0,serial_end=0,host_start=tick,host_qmp_return=tick+.1,host_end=tick+.2));tick+=1
- keys=['g','a','f','i','q','g','grave_accent','k','k','k','k','k','k','ret','a','grave_accent','k','k','k','k','k','k','ret','f']if mode=='ready'else['g','q']if mode=='partial-clear'else['g','f11']if mode=='partial-close'else['g']
+ keys=['g','a','f','i','q','g']+zoom+['a']+zoom+['f']if mode=='ready'else['g','q']if mode=='partial-clear'else['g','f11']if mode=='partial-close'else['g']
  for code in keys:
   start=len(trace);number=gate.KEY_CODES[code];trace+=f'[sexinput.ps2.scancode] raw={hex(number)}\n'
   if code in gate.BROWSER_EFFECTS:
    effects={'g':'[browser.asset.intent] accepted=1 explicit=1 public_internet=0\n','a':'[browser.asset.presentation.intent] generation=5 mode=Actual viewport=7 ticket=2 network=0\n','f':'[browser.asset.presentation.intent] generation=6 mode=Fit viewport=7 ticket=2 network=0\n','i':'[browser.import.rejected] reason=asset_not_text effects=0\n','q':'[browser.asset.clear.intent] pending=1 owned_storage=erased\n'}
    held=f'[shell.browser.input] code={number} down=1 slot=43 accepted=1\n';trace+=effects[code]+held if post else held+effects[code]
   else:
-   if code=='k':
-    old,new=((0,13),(13,12),(12,11),(11,10),(10,9),(9,8))[menu_k%6];trace+=f'[shell.palette.select] old={old} new={new}\n';menu_k+=1
-   else:trace+=dict(grave_accent='[shell.palette.open] ok=1 selected=0 count=14\n',k='[shell.palette.select] old=0 new=9\n',ret='[shell.window.action] action=ZoomToggle frame=9 sid=300 ok=1\n',f11='[sext.app.pool.ready] target=15 task=15 bytes=1 ok=1\n')[code]
+   if code==menu_code:
+    old,new=path[menu_k%len(path)];trace+=f'[shell.palette.select] old={old} new={new}\n';menu_k+=1
+   else:trace+=dict(grave_accent=f'[shell.palette.open] ok=1 selected=0 count={count}\n',k='[shell.palette.select] old=0 new=9\n',ret='[shell.window.action] action=ZoomToggle frame=9 sid=300 ok=1\n',f11='[sext.app.pool.ready] target=15 task=15 bytes=1 ok=1\n')[code]
   trace+=f'[sexinput.ps2.scancode] raw={hex(number|128)}\n';actions.append(dict(key=code,code=number,kind='browser'if code in gate.BROWSER_EFFECTS else'close'if code=='f11'else'menu',transport='input-send-event',serial_start=start,serial_qmp_return=start,serial_end=len(trace),host_start=tick,host_qmp_return=tick+.1,host_end=tick+.2));tick+=1
  return trace,[dict(serial_end=len(trace))],actions
 
@@ -381,7 +389,8 @@ class PhysicalKeyCausality(unittest.TestCase):
  def test_old_palette_count_or_transition_cannot_authorize_zoom(self):
   for compact in(False,True):
    trace,_,actions=key_fixture('ready',compact=compact)
-   for action_index,old,new in[(6,'count=14','count=13'),(7,'old=0 new=13','old=0 new=11')]:
+   count,_,path=zoom_path()
+   for action_index,old,new in[(6,f'count={count}',f'count={count-1}'),(7,f'old=0 new={path[0][1]}',f'old=0 new={path[0][1]+2}')]:
     index=action_index+(2 if compact else 0)
     self.assertIn(old,trace[actions[index]['serial_start']:actions[index]['serial_end']])
     changed,frames,rows=change_key_fixture(trace,actions,index,lambda chunk:chunk.replace(old,new))
