@@ -145,6 +145,7 @@ members = [
     "apps/spreadeagle",
     "apps/assuit",
     "crates/sex-office",
+    "crates/burlesque-core",
 ]
 [workspace.package]
 license = "GPL-3.0-only"

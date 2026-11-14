@@ -632,6 +632,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 
 [[package]]
+name = "burlesque-core"
+version = "0.1.0"
+dependencies = [
+ "crc32fast",
+ "libm",
+ "miniz_oxide 0.9.1",
+ "sex-archive",
+ "sex-canvas",
+ "sex-font",
+ "sex-image",
+ "vellum-edit",
+]
+
+[[package]]
 name = "byte-slice-cast"
 version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
