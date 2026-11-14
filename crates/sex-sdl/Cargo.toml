@@ -1,0 +1,11 @@
+[package]
+name = "sex-sdl"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "SDL2 (vendor/SDL2-2.30.9, zlib) for SexOS programs, with video, sound and input on sex-app"
+links = "SDL2"
+
+[dependencies]
+sex-std = { path = "../sex-std" }
+sex-libc = { path = "../sex-libc" }
