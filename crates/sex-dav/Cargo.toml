@@ -1,0 +1,8 @@
+[package]
+name = "sex-dav"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "WebDAV, CalDAV and CardDAV for SexOS programs without I/O: request bodies, a small XML reader, multistatus replies and two-way sync with ctag/etag/sync-token and conflict notes"
+
+[dependencies]

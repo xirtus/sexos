@@ -92,6 +92,7 @@ members = [
     "crates/sex-calc-core",
     "apps/sex-calc",
     "crates/sex-calendar",
+    "crates/sex-dav",
     "apps/calendar",
     "apps/lua",
     "apps/rg",

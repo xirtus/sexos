@@ -377,6 +377,8 @@ version = "0.1.0"
 dependencies = [
  "sex-app",
  "sex-calendar",
+ "sex-dav",
+ "sex-fetch",
  "sex-font",
  "sex-pdx",
 ]
@@ -2580,6 +2582,10 @@ dependencies = [
  "argon2",
  "sha2",
 ]
+
+[[package]]
+name = "sex-dav"
+version = "0.1.0"
 
 [[package]]
 name = "sex-disk"
