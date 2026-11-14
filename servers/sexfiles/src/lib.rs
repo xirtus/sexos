@@ -17,6 +17,7 @@ mod recording_runtime;
 mod installer;
 mod updater;
 mod packages;
+mod console_relay;
 mod volumes;
 mod document;
 mod document_journal;

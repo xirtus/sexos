@@ -22,6 +22,21 @@ fn main() {
         println!("\n[stdhello.vt] reply={reply}");
         return;
     }
+    // `stdhello echo`: lines in, lines out, until the end of input (Term's Ctrl+D).
+    if args.get(1).map(String::as_str) == Some("echo") {
+        let mut lines = 0;
+        for line in std::io::BufRead::lines(std::io::stdin().lock()) {
+            let Ok(line) = line else { break };
+            lines += 1;
+            println!("got: {}", line.to_uppercase());
+        }
+        println!("[stdhello.echo] lines={lines}");
+        std::process::exit(3);
+    }
+    // `stdhello count`: output until stopped (Term's Ctrl+C).
+    if args.get(1).map(String::as_str) == Some("count") {
+        for i in 0u64.. { println!("count {i}"); std::thread::sleep(std::time::Duration::from_millis(20)); }
+    }
     println!("Hello from Rust std on SexOS.");
     println!("arguments: {:?}", &args[1..]);
     let mut passed = 0;

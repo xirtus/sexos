@@ -453,7 +453,7 @@ jobs:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
     - name: Calculator arithmetic and calendar model on the host
-      run: cargo test --locked -p sex-calc-core -p sex-calendar -p sex-vt -p sex-textedit -p sex-wasm && cargo test --locked -p sex-pdx --test stream
+      run: cargo test --locked -p sex-calc-core -p sex-calendar -p sex-vt -p sex-textedit -p sex-wasm && cargo test --locked -p sex-pdx --test stream --test console_relay
     - name: Build the image
       run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/productivity-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/productivity-build.log"; exit 1)
     - name: Calculator typed, clicked and recalled
@@ -485,6 +485,8 @@ jobs:
       run: |
         truncate -s 256M "$RUNNER_TEMP/blank-term.img"
         python3 scripts/program_term_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-term.img" --out "$RUNNER_TEMP/sexos-term/term"
+    - name: Programs of their own (std, C) run inside Term with it as their console
+      run: python3 scripts/program_term_native_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-term.img" --out "$RUNNER_TEMP/sexos-term/term-native"
     - name: Jot undo tree, save and reopen, find and replace, spelling, tabs
       run: python3 scripts/program_jot_edit_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-term.img" --out "$RUNNER_TEMP/sexos-term/jot-edit"
     - name: Jot as a notepad in its own folder (original gate)

@@ -1312,3 +1312,4 @@ pub mod app_pointer;
 pub mod app_scroll;
 pub mod bitmap_batch;
 pub mod stream;
+pub mod console_relay;

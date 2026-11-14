@@ -10,6 +10,12 @@
 //! the person types reaches its standard input a line at a time. The guest gets the
 //! current folder and nothing else; it holds no authority Term does not, and less.
 //!
+//! Any other name is a program of its own (`/bin/NAME`: Rust std, C on sex-libc, Python,
+//! Lua, ripgrep...) started with Term as its console, when Spindle's `spindle` command opened this
+//! Term (the `+launch` grant). Its output and input go through Files
+//! (`sex_pdx::console_relay`), it opens no window, gets only its own plain words as
+//! arguments and no network, Ctrl+C stops it and Ctrl+D ends its input.
+//!
 //! Keys: Ctrl+Shift+C copies the selection, Ctrl+Shift+V pastes, Shift+PageUp/PageDown
 //! and the wheel scroll back, Ctrl+= and Ctrl+- change the text size, Ctrl+C stops the
 //! running program's input, Ctrl+D ends it, Ctrl+L clears. F11 closes.
@@ -41,15 +47,23 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 }
 
 /// A guest running on a worker, and the stream between it and the screen.
-struct Job {
-    name: String,
+struct Guest {
     stream: Stream,
     _memory: Vec<u64>,
     handle: sex_app::thread::JoinHandle,
     result: &'static core::sync::atomic::AtomicI64,
-    /// The line being typed for the guest, echoed here and sent on Enter.
+}
+/// What runs: a Wasm guest here, or a program of its own whose console is this terminal
+/// (through Files, `sex_pdx::console_relay`).
+enum Runner { Guest(Guest), Native { since: u64 } }
+struct Job {
+    name: String,
+    runner: Runner,
+    /// The line being typed for it, echoed here and sent on Enter.
     line: Vec<u8>,
 }
+/// How long a program may take to start before Term gives up on it.
+const START_MS: u64 = 20_000;
 
 struct Term {
     screen: Screen,
@@ -103,7 +117,7 @@ impl Term {
         self.height = height.max(32);
         let (cols, rows) = self.painter.grid(self.width, self.height);
         self.screen.resize(cols, rows);
-        if let Some(job) = &self.job { job.stream.set_size(cols as u32, rows as u32); }
+        if let Some(Job { runner: Runner::Guest(g), .. }) = &self.job { g.stream.set_size(cols as u32, rows as u32); }
         self.screen.mark_all_dirty();
     }
     fn zoom(&mut self, step: isize) {
@@ -242,6 +256,7 @@ impl Term {
             if !path.ends_with(b".wasm") { path.extend_from_slice(b".wasm"); }
             match read_all(window, &path, MODULE_MAX) {
                 Ok(m) => m,
+                Err(files::NOT_FOUND) if !cmd.contains(&b'/') && !cmd.ends_with(b".wasm") => { self.start_native(cmd, args); return; }
                 Err(files::NOT_FOUND) => {
                     let n = String::from_utf8_lossy(cmd).into_owned();
                     self.say(&format!("\x1b[31m{}: no such command or program\x1b[0m (type help)\n", n));
@@ -277,7 +292,7 @@ impl Term {
         match sex_app::thread::spawn_with_stack(2 << 20, job) {
             Ok(handle) => {
                 sex_pdx::serial_record!("[term.job.start] name={}", core::str::from_utf8(name).unwrap_or("?"));
-                self.job = Some(Job { name: String::from_utf8_lossy(name).into_owned(), stream, _memory: memory, handle, result, line: Vec::new() });
+                self.job = Some(Job { name: String::from_utf8_lossy(name).into_owned(), runner: Runner::Guest(Guest { stream, _memory: memory, handle, result }), line: Vec::new() });
             }
             Err(_) => self.say("\x1b[31mrun: no worker is free to run it\x1b[0m\n"),
         }
@@ -285,7 +300,8 @@ impl Term {
     /// Takes what the guest wrote; ends the job when it has finished. True if the screen changed.
     fn pump(&mut self) -> bool {
         let Some(job) = &self.job else { return false };
-        let stream = job.stream;
+        let Runner::Guest(guest) = &job.runner else { return self.pump_native() };
+        let stream = guest.stream;
         let mut buf = [0u8; 4096];
         let mut changed = false;
         loop {
@@ -296,18 +312,73 @@ impl Term {
         }
         let replies = self.screen.take_replies();
         if !replies.is_empty() { let _ = stream.write(Side::Host, &replies); }
-        let job = self.job.as_ref().unwrap();
-        if job.handle.finished() && stream.readable(Side::Host) == 0 {
+        let Some(Job { runner: Runner::Guest(guest), .. }) = &self.job else { return changed };
+        if guest.handle.finished() && stream.readable(Side::Host) == 0 {
             let job = self.job.take().unwrap();
-            let code = job.result.load(core::sync::atomic::Ordering::Acquire);
-            sex_pdx::serial_record!("[term.job.exit] name={} code={}", job.name, code);
-            if code != 0 { self.say(&format!("\x1b[2m[{} exited with {}]\x1b[0m\n", job.name, code)); }
-            if !self.after_cr && self.screen.cursor().0 != 0 { self.say("\n"); }
-            job.handle.join();
-            self.show_prompt();
+            let Runner::Guest(guest) = job.runner else { return changed };
+            let code = guest.result.load(core::sync::atomic::Ordering::Acquire);
+            guest.handle.join();
+            self.job_ended(&job.name, code);
             changed = true;
         }
         changed
+    }
+    fn job_ended(&mut self, name: &str, code: i64) {
+        sex_pdx::serial_record!("[term.job.exit] name={} code={}", name, code);
+        if code != 0 { self.say(&format!("\x1b[2m[{} exited with {}]\x1b[0m\n", name, code)); }
+        if !self.after_cr && self.screen.cursor().0 != 0 { self.say("\n"); }
+        self.show_prompt();
+    }
+
+    /// Starts `/bin/NAME`, a program of its own (Rust std, C, Python, Lua...), with this
+    /// terminal as its console. Only a Term started with Spindle's `spindle` command may.
+    fn start_native(&mut self, cmd: &[u8], args: &[&[u8]]) {
+        let relay = files::direct::relay::release;
+        let _ = relay();
+        let words = args.join(&b' ');
+        let n = String::from_utf8_lossy(cmd).into_owned();
+        match files::direct::relay::start(cmd, &words) {
+            Ok(()) => {
+                sex_pdx::serial_record!("[term.native.start] name={}", n);
+                self.job = Some(Job { name: n, runner: Runner::Native { since: sex_pdx::get_ticks() }, line: Vec::new() });
+            }
+            Err(e) if { sex_pdx::serial_record!("[term.native.refused] name={} status={}", n, e); false } => {}
+            Err(files::NOT_FOUND) => self.say(&format!("\x1b[31m{}: no such command or program\x1b[0m (type help)\n", n)),
+            Err(sex_pdx::fs::DENIED) => self.say(&format!("\x1b[31m{}: this Term may not start programs\x1b[0m (open it with Spindle's \x1b[1mspindle\x1b[0m command)\n", n)),
+            Err(sex_pdx::fs::PENDING) => self.say("\x1b[31mrun: a program is still running here\x1b[0m\n"),
+            Err(e) => self.fail(&n, e),
+        }
+    }
+    /// The native program's output and whether it ended.
+    fn pump_native(&mut self) -> bool {
+        use sex_pdx::console_relay as c;
+        let Ok((status, bytes)) = files::direct::relay::take() else { return false };
+        let changed = !bytes.is_empty();
+        if changed { self.out(&bytes); }
+        let replies = self.screen.take_replies();
+        if !replies.is_empty() { let _ = files::direct::relay::put(&replies); }
+        let Some(Job { runner: Runner::Native { since }, name, .. }) = &self.job else { return changed };
+        let (since, name) = (*since, name.clone());
+        let ended = match status.state {
+            c::ENDED if status.code == c::NOT_STARTED => {
+                self.say(&format!("\x1b[31m{}: no such command or program\x1b[0m (type help)\n", name));
+                Some(-2)
+            }
+            c::ENDED => Some(if status.code == c::CRASHED { -1 } else { status.code as i64 }),
+            c::STARTING if sex_pdx::get_ticks().saturating_sub(since) > START_MS => {
+                self.say(&format!("\x1b[31m{}: it did not start\x1b[0m (too many programs open?)\n", name));
+                Some(-2)
+            }
+            _ => None,
+        };
+        let Some(code) = ended else { return changed };
+        // What it wrote last may still be on its way.
+        if let Ok((_, rest)) = files::direct::relay::take() { self.out(&rest); }
+        self.job = None;
+        let _ = files::direct::relay::release();
+        if code == -1 { self.say(&format!("\x1b[31m[{} stopped: it failed]\x1b[0m\n", name)); }
+        self.job_ended(&name, code);
+        true
     }
 
     /// A built-in fixture in the spirit of vttest's first screens: a frame drawn with
@@ -413,7 +484,8 @@ impl Term {
     /// sent whole on Enter.
     fn job_key(&mut self, key: sex_pdx::app_key::Key) {
         let job = self.job.as_mut().unwrap();
-        let stream = job.stream;
+        let Runner::Guest(guest) = &job.runner else { return self.native_key(key) };
+        let stream = guest.stream;
         match (key.control, key.code) {
             (true, 0x2E) => {
                 // Ctrl+C: tell the guest, drop the typed line and end its input.
@@ -442,6 +514,43 @@ impl Term {
             _ => {}
         }
     }
+    /// Keys while a program of its own runs: the same line discipline, through Files.
+    fn native_key(&mut self, key: sex_pdx::app_key::Key) {
+        use files::direct::relay;
+        let job = self.job.as_mut().unwrap();
+        match (key.control, key.code) {
+            (true, 0x2E) => {
+                let _ = relay::interrupt();
+                job.line.clear();
+                sex_pdx::serial_record!("[term.job.interrupt] name={}", job.name);
+                self.say("^C");
+            }
+            (true, 0x20) => { let _ = relay::hang_up(); }
+            (_, 0x1C) => {
+                let mut line = core::mem::take(&mut job.line);
+                line.push(b'\n');
+                let _ = relay::put(&line);
+                self.say("\r\n");
+            }
+            (_, 0x0E) => {
+                let mut gone = false;
+                while let Some(b) = job.line.pop() { gone = true; if b & 0xC0 != 0x80 { break; } }
+                if gone { self.say("\x08 \x08"); }
+            }
+            (false, _) => {
+                if let Some(c) = sex_app::text(key) {
+                    let mut utf8 = [0; 4];
+                    let bytes = c.encode_utf8(&mut utf8).as_bytes();
+                    job.line.extend_from_slice(bytes);
+                    self.out(bytes);
+                } else if let Some(k) = nav_key(key) {
+                    let bytes = keys::encode(k, Mods { shift: key.shift, control: key.control, alt: false }, self.screen.app_cursor);
+                    let _ = relay::put(&bytes);
+                }
+            }
+            _ => {}
+        }
+    }
     fn copy(&mut self) {
         let text = self.screen.selection_text();
         if text.is_empty() { return; }
@@ -453,7 +562,7 @@ impl Term {
         sex_pdx::serial_record!("[term.paste] bytes={}", text.len());
         if let Some(job) = self.job.as_mut() {
             let bytes = keys::paste(&text, false);
-            for b in bytes { if b == b'\r' { job.line.push(b'\n'); let l = core::mem::take(&mut job.line); let _ = job.stream.write(Side::Host, &l); } else { job.line.push(b); } }
+            for b in bytes { if b == b'\r' { job.line.push(b'\n'); let l = core::mem::take(&mut job.line); match &job.runner { Runner::Guest(g) => { let _ = g.stream.write(Side::Host, &l); } Runner::Native { .. } => { let _ = files::direct::relay::put(&l); } } } else { job.line.push(b); } }
             let shown = job.line.clone();
             self.out(&shown);
             return;
@@ -579,7 +688,8 @@ const BUILTINS: &[&[u8]] = &[b"cat", b"cd", b"clear", b"colors", b"echo", b"exit
 const HELP: &str = "\x1b[1mTerm\x1b[0m: a VT100/xterm terminal for SexOS.\n\
   ls cd pwd cat mkdir rm mv touch write FILE TEXT   files in Term's folder\n\
   echo history clear colors vtcheck snapshot exit\n\
-  NAME [ARGS]    runs NAME.wasm from this folder (a WASI command-line program)\n\
+  NAME [ARGS]    runs NAME.wasm from this folder (a WASI command-line program), else\n\
+                 the program NAME (python, lua, rg, fd...) with this terminal as its console\n\
   greet [NAME]   a built-in Rust program, compiled to Wasm\n\
 Keys: Tab completes, Up/Down recall, Ctrl+Shift+C/V copy/paste, Shift+PgUp/PgDn scroll,\n\
   Ctrl+=/- text size, Ctrl+C stop, Ctrl+D end input, Ctrl+L clear, F11 close.\n";
@@ -595,7 +705,9 @@ extern "C" fn main() -> ! {
     term.say("\x1b[1mTerm\x1b[0m. Type \x1b[1mhelp\x1b[0m for commands. Wasm programs run here.\n");
     // `run term CMD...` runs that command first.
     let mut args = [0u8; sex_pdx::fs::ARGS_MAX];
-    let given = files::args(&mut window, &mut args).to_vec();
+    // Spindle's grant (`spindle` adds `+launch`) is not a command.
+    let given: Vec<u8> = files::args(&mut window, &mut args).split(|b| *b == b' ')
+        .filter(|w| !w.is_empty() && *w != sex_pdx::console_relay::GRANT_TOKEN).collect::<Vec<_>>().join(&b' ');
     term.show_prompt();
     if !given.is_empty() {
         term.line = given.clone();

@@ -12,6 +12,10 @@
 //! (`sex-vt`) drawn in the window's pixels, with what was printed before carried over,
 //! scrollback on the wheel and Shift+PageUp, and the terminal's answers (a cursor
 //! position report, say) arriving on standard input as they would from a terminal.
+//!
+//! A run that a terminal started (`sex_pdx::console_relay`) has no window at all: its
+//! output and input go through Files to that terminal, Ctrl+C there ends it (at its next
+//! read or write) and Ctrl+D ends its input.
 use sex_app::{Event, Window};
 use sex_pdx::text_region::BYTES as SHOWN;
 use std::sync::Mutex;
@@ -125,11 +129,53 @@ impl Console {
 }
 
 /// Writes `bytes` to standard output (`stream` 0) or standard error (1).
+/// Whether a terminal holds this run's console: asked of Files once.
+fn attached() -> bool {
+    use std::sync::atomic::{AtomicU8, Ordering};
+    static ATTACHED: AtomicU8 = AtomicU8::new(0);
+    match ATTACHED.load(Ordering::Acquire) {
+        0 => { let yes = sex_app::files::direct::relay::attached(); ATTACHED.store(1 + yes as u8, Ordering::Release); yes }
+        n => n == 2,
+    }
+}
+/// Ctrl+C in the terminal: the run ends as a terminal's interrupt would end it.
+fn interrupted() -> ! {
+    sex_pdx::serial_record!("[std.interrupted]");
+    crate::sys::sys_exit(130)
+}
+/// All of `bytes` to the terminal, waiting while it is behind.
+fn relay_write(bytes: &[u8]) {
+    use sex_pdx::console_relay as r;
+    let (mut done, mut round) = (0, 0);
+    while done < bytes.len() {
+        match sex_app::files::direct::relay::write(&bytes[done..]) {
+            Ok(0) => { sex_app::thread::pause(round); round += 1; }
+            Ok(n) => { done += n; round = 0; }
+            Err(r::INTERRUPTED) => interrupted(),
+            Err(_) => return,
+        }
+    }
+}
+/// Typed input from the terminal: waits for some; 0 at the end of input.
+fn relay_read(out: &mut [u8], wait: bool) -> usize {
+    use sex_pdx::console_relay as r;
+    let mut round = 0;
+    loop {
+        match sex_app::files::direct::relay::read(out) {
+            Ok(0) if wait => { sex_app::thread::pause(round); round += 1; }
+            Ok(n) => return n,
+            Err(r::INTERRUPTED) => interrupted(),
+            Err(_) => { if let Ok(mut c) = CONSOLE.lock() { c.closed = true; } return 0; }
+        }
+    }
+}
+
 pub(crate) fn write(stream: usize, bytes: &[u8]) {
     let Ok(mut c) = CONSOLE.lock() else { return };
     for &b in bytes {
         if b == b'\n' { c.record(stream); } else if c.lines[stream].len() < 400 { c.lines[stream].push(b); } else { c.record(stream); c.lines[stream].push(b); }
     }
+    if !taken() && attached() { drop(c); relay_write(bytes); return; }
     if c.vt.is_none() && !taken() && bytes.contains(&0x1b) {
         // The first escape sequence: from here on the window is a terminal, starting
         // with what was printed before.
@@ -163,6 +209,13 @@ static TYPING: Mutex<Vec<u8>> = Mutex::new(Vec::new());
 /// 0 when the window was closed.
 pub(crate) fn read(out: &mut [u8]) -> usize {
     let mut pending = PENDING.lock().unwrap_or_else(|e| e.into_inner());
+    if pending.is_empty() && !taken() && attached() {
+        if closed() { return 0; }
+        let mut got = vec![0u8; out.len().clamp(1, sex_pdx::console_relay::INPUT_BYTES)];
+        let n = relay_read(&mut got, true);
+        if n == 0 { return 0; }
+        pending.extend_from_slice(&got[..n]);
+    }
     if pending.is_empty() {
         if let Ok(mut c) = CONSOLE.lock() { c.show(); }
         loop {
@@ -185,6 +238,12 @@ pub(crate) fn input_ready() -> bool {
     if taken() { return false; }
     let mut pending = PENDING.lock().unwrap_or_else(|e| e.into_inner());
     if !pending.is_empty() || closed() { return true; }
+    if attached() {
+        let mut got = [0u8; 512];
+        let n = relay_read(&mut got, false);
+        pending.extend_from_slice(&got[..n]);
+        return n > 0 || closed();
+    }
     if let Ok(mut c) = CONSOLE.lock() { if !c.opened { c.show(); } }
     while let Some(event) = window_mut().poll() {
         if let Some(line) = take(event) { *pending = line; return true; }
@@ -250,8 +309,13 @@ fn take(event: Event) -> Option<Vec<u8>> {
 
 /// When the program ends: a console that showed output stays until the person has read
 /// it and closes the window, with how the program ended as its last line.
+/// The run ends with `code`: a terminal holding its console is told.
+pub(crate) fn ended(code: i32) {
+    if !taken() && attached() { sex_app::files::direct::relay::exit(code as u32 & 0xFFFF); }
+}
 pub(crate) fn finish(how: &str) {
     flush();
+    if attached() { return; }
     let wait = {
         let Ok(mut c) = CONSOLE.lock() else { return };
         if !c.opened || c.closed || taken() { false } else {

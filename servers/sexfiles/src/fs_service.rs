@@ -341,6 +341,7 @@ pub fn bind(target: u32, task: u32) {
     let args = unsafe { &mut *core::ptr::addr_of_mut!(LOADED_ARGS) };
     if let Some(cache) = client_cache(w::PROGRAM_INDEX_BASE + index) { w::stat_cache::forget(cache, None); }
     bindings[index] = Some(Binding { task, root, len, args: args.0, args_len: core::mem::take(&mut args.1), picked: [0; PICKED_MAX], picked_len: 0 });
+    crate::console_relay::bound(unsafe { core::mem::take(&mut *core::ptr::addr_of_mut!(LOADED_LAUNCHER)) }, index, target, task);
     unsafe { (*core::ptr::addr_of_mut!(PICKS))[index] = None; }
     sex_pdx::serial_record!("[files.program.bound] target={} task={} root={}", target, task, core::str::from_utf8(&root[..len]).unwrap_or("?"));
 }
@@ -489,6 +490,11 @@ fn picker(program: Option<usize>, r: w::Request, path: &[u8], data: &mut [u8]) -
 /// The row is running, and running the very run Shell bound: the kernel names its task.
 /// The run holds `+packages`: Spindle put it in the run's arguments for `run +pkg`, and
 /// only Spindle prepares runs, so a program cannot give it to itself.
+fn holds_launch(binding: &Binding) -> bool {
+    binding.args[..binding.args_len].split(|b| *b == b' ').any(|t| t == sex_pdx::console_relay::GRANT_TOKEN)
+}
+#[allow(non_snake_case)]
+fn PROGRAM_INDEX_BASE_PLUS(k: usize) -> u64 { w::PROVIDER_SLOT_BASE + (w::PROGRAM_INDEX_BASE + k) as u64 }
 fn holds_packages(binding: &Binding) -> bool {
     binding.args[..binding.args_len].split(|b| *b == b' ').any(|t| t == sex_pdx::package::GRANT_TOKEN)
 }
@@ -511,6 +517,8 @@ fn program_package(binding: &Binding, r: w::Request, arg: &[u8], out: &mut [u8; 
         _ => refuse("unknown"),
     }
 }
+/// Whether `target` still runs `task` (for `console_relay`).
+pub fn live_run(target: u32, task: u32) -> bool { program_live(target, task) }
 fn program_live(target: u32, task: u32) -> bool {
     let Some(row) = sex_pdx::app_catalog::by_target(target) else { return false };
     matches!(sex_pdx::app_lifecycle::catalog(row.lifecycle_slot), Ok(c) if c.is_subject(target, row.surface, 3) && c.task_id == task)
@@ -531,7 +539,13 @@ pub fn handle(caller: u32, a: u64, offset: u64, length: u64) -> u64 {
             let bound = unsafe { (*core::ptr::addr_of!(BINDINGS))[k] };
             // A program may eject (UNMOUNT) a volume its grant covers whole, checked with
             // its other paths below; mounting stays Spindle's.
-            if !bound.is_some_and(|b| program_live(caller, b.task)) || matches!(r.kind, w::PREPARE | w::INSTALL | w::UPDATE | w::MOUNT) { return w::reply(r.seq, w::DENIED, 0); }
+            if !bound.is_some_and(|b| program_live(caller, b.task)) || matches!(r.kind, w::INSTALL | w::UPDATE | w::MOUNT) { return w::reply(r.seq, w::DENIED, 0); }
+            // A terminal the person started with Spindle's `spindle` command may start programs
+            // attached to it (`console_relay`); no other program prepares a run.
+            if r.kind == w::PREPARE && !bound.is_some_and(|b| holds_launch(&b)) { return w::reply(r.seq, w::DENIED, 0); }
+            if r.kind == sex_pdx::console_relay::KIND {
+                return crate::console_relay::handle(k, bound.map_or(false, |b| holds_launch(&b)), r, PROGRAM_INDEX_BASE_PLUS(k));
+            }
             // Packages only for a run the person started with `run +pkg` (see `program_package`).
             if r.kind == sex_pdx::package::KIND && !bound.is_some_and(|b| holds_packages(&b)) {
                 sex_pdx::serial_record!("[files.pkg.denied] target={} op={} why=no_grant", caller, r.offset);
@@ -555,6 +569,7 @@ pub fn handle(caller: u32, a: u64, offset: u64, length: u64) -> u64 {
     answer
 }
 fn handle_request(index: usize, program: Option<usize>, r: w::Request) -> u64 {
+    let mut r = r;
     let Ok(view) = sex_pdx::memory_region_view(w::PROVIDER_SLOT_BASE + index as u64, 0, w::REGION_BYTES as u64, QUERY_VIEW | READ | WRITE) else { return w::reply(r.seq, w::IO, 0) };
     let region = unsafe { core::slice::from_raw_parts_mut(view.virtual_address as *mut u8, w::REGION_BYTES) };
     if r.kind == w::READ_IO_STATS {
@@ -626,7 +641,18 @@ fn handle_request(index: usize, program: Option<usize>, r: w::Request) -> u64 {
         region[w::PATH_BYTES..w::PATH_BYTES + binding.args_len].copy_from_slice(&binding.args[..binding.args_len]);
         return w::reply(r.seq, w::OK, binding.args_len as u32);
     }
-    if let Some(k) = program {
+    if let (Some(k), w::PREPARE) = (program, r.kind) {
+        // A terminal's run: only `/bin/NAME`, with its own words and nothing granted.
+        let name = path[..path_len].strip_prefix(sex_pdx::program_store::BIN);
+        if !name.is_some_and(|n| !n.is_empty() && !n.contains(&b'/')) { return w::reply(r.seq, w::DENIED, 0); }
+        if !crate::console_relay::may_prepare(k) { return w::reply(r.seq, w::PENDING, 0); }
+        let given = (r.length as usize).min(w::ARGS_MAX);
+        let mut words = [0u8; w::ARGS_MAX];
+        words[..given].copy_from_slice(&region[w::PATH_BYTES..w::PATH_BYTES + given]);
+        let n = sex_pdx::console_relay::plain_args(&words[..given], &mut region[w::PATH_BYTES..w::PATH_BYTES + w::ARGS_MAX]);
+        r.length = n as u64;
+        unsafe { PREPARING_FOR = Some(k); }
+    } else if let Some(k) = program {
         // Every path, both halves of a rename too, lands inside the program's folder.
         let binding = unsafe { (*core::ptr::addr_of!(BINDINGS))[k] }.unwrap();
         let mut own = [0u8; w::PATH_BYTES];
@@ -716,6 +742,12 @@ fn handle_request(index: usize, program: Option<usize>, r: w::Request) -> u64 {
 /// One path waiting for Shell to ask for it, and the ticket that names it.
 static mut PREPARED: ([u8; w::PATH_BYTES], usize, u32) = ([0; w::PATH_BYTES], 0, 0);
 static mut PREPARED_ARGS: ([u8; w::ARGS_MAX], usize) = ([0; w::ARGS_MAX], 0);
+/// The terminal (program row) a PREPARE in progress is for; None for Spindle.
+static mut PREPARING_FOR: Option<usize> = None;
+/// Who prepared the waiting ticket: a terminal's row, or None for Spindle.
+static mut PREPARED_LAUNCHER: Option<usize> = None;
+/// The terminal the program just read was prepared by, until Shell binds it.
+static mut LOADED_LAUNCHER: Option<usize> = None;
 static mut NEXT_TICKET: u32 = 0;
 pub enum Program { Absent, Failed(u32), Loaded(u32) }
 /// Copies a file into `image`. A disk with no filesystem has no such file.
@@ -747,7 +779,7 @@ fn read_program(path: &[u8], image: &mut [u8], remember: bool) -> Program {
 }
 /// A bare name looks in the program directory.
 pub fn read_named(name: &[u8], image: &mut [u8]) -> Program {
-    unsafe { (*core::ptr::addr_of_mut!(LOADED)).1 = 0; (*core::ptr::addr_of_mut!(LOADED_ARGS)).1 = 0; }
+    unsafe { (*core::ptr::addr_of_mut!(LOADED)).1 = 0; (*core::ptr::addr_of_mut!(LOADED_ARGS)).1 = 0; *core::ptr::addr_of_mut!(LOADED_LAUNCHER) = None; }
     use sex_pdx::program_store as store;
     let mut path = [0u8; 32];
     let at = store::BIN.len();
@@ -769,10 +801,20 @@ pub fn read_named_unbound(name:&[u8], image:&mut [u8])->Program {
 /// The prepared path, once. A stale ticket finds nothing. When the path is
 /// `/bin/NAME` and no such file exists, the packed NAME comes back too, so the disk
 /// program store can serve it with the same arguments.
-pub fn read_ticket(ticket: u64, image: &mut [u8]) -> (Program, Option<[u64; 2]>) {
-    unsafe { (*core::ptr::addr_of_mut!(LOADED)).1 = 0; }
+/// The program just asked for could not be loaded: a terminal waiting for it hears so.
+pub fn load_failed() {
+    if let Some(k) = unsafe { core::mem::take(&mut *core::ptr::addr_of_mut!(LOADED_LAUNCHER)) } { crate::console_relay::not_started(k); }
+}
+/// `requester` is the program Shell starts it for (0 for Spindle): a ticket runs only
+/// for whoever prepared it.
+pub fn read_ticket(ticket: u64, requester: u32, image: &mut [u8]) -> (Program, Option<[u64; 2]>) {
+    unsafe { (*core::ptr::addr_of_mut!(LOADED)).1 = 0; *core::ptr::addr_of_mut!(LOADED_LAUNCHER) = None; }
     let prepared = unsafe { &mut *core::ptr::addr_of_mut!(PREPARED) };
     if prepared.1 == 0 || prepared.2 as u64 != ticket { return (Program::Absent, None); }
+    let by = unsafe { PREPARED_LAUNCHER };
+    let asker = if requester == 0 { None } else { match program_index(requester) { Some(k) => Some(k), None => return (Program::Absent, None) } };
+    if by != asker { sex_pdx::serial_record!("[files.ticket.denied] requester={}", requester); return (Program::Absent, None); }
+    unsafe { LOADED_LAUNCHER = by; }
     let len = core::mem::take(&mut prepared.1);
     unsafe { *core::ptr::addr_of_mut!(LOADED_ARGS) = *core::ptr::addr_of!(PREPARED_ARGS); }
     let path = &prepared.0[..len];
@@ -869,6 +911,9 @@ fn run(fs: &mut Fs<'static, Disk>, r: w::Request, path: &[u8], data: &mut [u8]) 
             // Never zero, and within the reply's 24 bits.
             let ticket = unsafe { NEXT_TICKET = NEXT_TICKET % 0xFF_FFFE + 1; NEXT_TICKET };
             prepared.2 = ticket;
+            let by = unsafe { core::mem::take(&mut *core::ptr::addr_of_mut!(PREPARING_FOR)) };
+            unsafe { PREPARED_LAUNCHER = by; }
+            if let Some(k) = by { crate::console_relay::prepared(k); }
             // A program a package installed: what it asks for and what the person said.
             let note = path.strip_prefix(sex_pdx::program_store::BIN).and_then(|name| crate::packages::note(fs, name));
             match note { Some(n) => n.encode(data), None => data[..sex_pdx::package::NOTE_BYTES].fill(0) }

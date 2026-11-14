@@ -326,7 +326,7 @@ pub extern "C" fn trampoline_main() {
             continue;
         }
         if msg.type_id==sex_pdx::program_store::OP{
-            if caller==3{let word=if crate::recording_runtime::image_busy(){sex_pdx::program_store::failed(sex_pdx::program_store::IMAGE_BUSY)}else{crate::program_store::load([msg.arg0,msg.arg1])};crate::fs_service::reply_later(caller,word);}
+            if caller==3{let word=if crate::recording_runtime::image_busy(){sex_pdx::program_store::failed(sex_pdx::program_store::IMAGE_BUSY)}else{crate::program_store::load([msg.arg0,msg.arg1],msg.arg2 as u32)};crate::fs_service::reply_later(caller,word);}
             continue;
         }
         if msg.type_id==sex_pdx::document::OP{
