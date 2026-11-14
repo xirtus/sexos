@@ -4783,3 +4783,52 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   Only PR244 has merged. All merges still require every exact-head leaf and final
   aggregator green. Original dirty checkout and frozen failure artifacts remain
   untouched; our authored kernel change remains the approved nine logging lines.
+
+
+## ChatGPT round 193: frozen v5 strict workflows and causal checker repairs (2026-11-14)
+
+- Diagnostic production remains c84dc5f8 on reviewed ba8ebc28. The tested ISO is
+  7c71deec260745122520f97b0495ba57a459080c79b1c434d5907661d1d7483b.
+  All 1,848 production files remain identical across separate checker freezes;
+  no new kernel instrumentation or production rebuild was used to fix checkers.
+- HTTPS asset, Browser reserve and connected desktop now all pass. Connected
+  desktop proves 15 live and two cold frames across two actual boots of the same
+  image and terminal disk, exact 2,049-byte document recovery, durable Spindle
+  history and all three ordered app retirements on both boots. This is finite
+  representative acceptance, not sustained alpha or physical/SMP qualification.
+- Actual failures exposed five checker/input assumptions: the reader's bottom
+  resize rim was counted as Browser background; selected ASCII still used a ROM
+  mask; workspace clicks used old coordinates; local Alt+Tab visited only two MRU
+  frames; and clipboard replay recognized only Alt+Tab focus. Each original run,
+  serial, capture, disk, PCAP and binding remains immutable. No unchanged-logic
+  retry or transformed trace was accepted. Final checker is 4fd16236a.
+- Source-bound content clipping retains exact last-content-pixel corruption
+  rejection. ASCII selected text now checks every antialias blend, highlight,
+  padding and stale spare cell. Non-ASCII remains explicitly legacy-scalar-ROM;
+  these changes do not qualify native Unicode shaping.
+- Connected input now reuses current workspace geometry and causal shared focus.
+  Clipboard joins bind the exact positive target result after its specific make,
+  with paired Input edges. Wrong-target, pre-make target, later wrong-reason or
+  zero-frame result, missing-release and wrong-action controls reject. Independent
+  agent review caught and closed mixed-receipt ambiguities before final QEMU.
+- Focused validation: 116 reader/HTTP/HTTPS/wheel, 59 clipboard/connected, 56
+  workspace/launcher/origin, 34 focus/connected, then 70 final exact-target tests
+  pass (sets overlap). Original failed captures also pass independent diagnostic
+  replay under the corrected predicates, without relabeling the failed runs.
+- The optional passive observer independently qualifies on the unchanged actual
+  HTTPS trace: sampled Net expiry at tick709, then first-epoch Ring3 syscall count
+  483 at774 to695 at1041. This is later continuation, not an exact two-tick envelope
+  or exclusive timer wake cause. The original HTTPS gate passed its existing
+  return-envelope proof; both evidence classes remain separately reported.
+- See CANONICAL_STRICT_RUNTIME_V5_2026_11_14.json for result and binding digests.
+  Normal v4's nine app proofs remain independently qualified; they are not carried
+  wholesale to v5 because normal Shell's ELF changed. Only our PR244 has merged.
+- Moan now has parallel workstation/MIDI and CLAP/VST3 work. ArtCraft SoundCraft is
+  the confirmed reference alongside Audacity4, Logic and released Ableton12.
+  Candidate additions require their own audible-signal/reboot/crash gates and
+  screenshots. Crash containment alone is not hostile plugin isolation. Separate
+  minimal exact-child-task exit authentication is under host qualification.
+- User coordination remains: keep author292/293/295 separate, never push their
+  branches, preserve author292's exact daily gate after landing, remove our Fuzz
+  workaround and superseded Term oracle. Actual293 has landed;292/295 remain open.
+  All new merges require every exact-head leaf plus final aggregator green.
