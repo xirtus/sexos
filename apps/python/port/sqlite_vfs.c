@@ -1,9 +1,11 @@
 /* SPDX-License-Identifier: GPL-3.0-only
  * SQLite's file layer for SexOS (SQLITE_OS_OTHER): files through sex-libc's
  * open/pread/pwrite, which reach only what the program was granted. A program's files
- * are its own (Files hands each grant to one program), so locks are bookkeeping only;
- * WAL and shared memory are compiled out (SQLITE_OMIT_WAL), so journals are the
- * classic rollback kind. */
+ * are its own (Files hands each grant to one program), so locks only have to keep the
+ * program's own connections apart: one table per database path, shared by every
+ * connection to it, with SQLite's shared/reserved/pending/exclusive rules. This build
+ * is single-threaded (SQLITE_THREADSAFE=0). WAL and shared memory are compiled out
+ * (SQLITE_OMIT_WAL), so journals are the classic rollback kind. */
 #include "sqlite3.h"
 #include <errno.h>
 #include <fcntl.h>
@@ -13,16 +15,55 @@
 #include <time.h>
 #include <unistd.h>
 
-typedef struct SexFile {
+typedef struct SexFile SexFile;
+
+/* Locks on one database file, across every connection that has it open. */
+typedef struct SexLocks {
+    char *path;
+    int refs;
+    int shared;        /* handles at SHARED or above */
+    SexFile *writer;   /* the one handle at RESERVED, PENDING or EXCLUSIVE */
+    struct SexLocks *next;
+} SexLocks;
+
+struct SexFile {
     sqlite3_file base;
     int fd;
     int lock;
     int delete_on_close;
     char *path;
-} SexFile;
+    SexLocks *locks;
+};
+
+static SexLocks *all_locks;
+
+static SexLocks *locks_for(const char *path) {
+    for (SexLocks *l = all_locks; l; l = l->next)
+        if (strcmp(l->path, path) == 0) { l->refs++; return l; }
+    SexLocks *l = sqlite3_malloc(sizeof *l);
+    if (!l) return 0;
+    memset(l, 0, sizeof *l);
+    l->path = sqlite3_mprintf("%s", path);
+    if (!l->path) { sqlite3_free(l); return 0; }
+    l->refs = 1;
+    l->next = all_locks;
+    all_locks = l;
+    return l;
+}
+
+static void locks_release(SexLocks *l) {
+    if (--l->refs) return;
+    for (SexLocks **at = &all_locks; *at; at = &(*at)->next)
+        if (*at == l) { *at = l->next; break; }
+    sqlite3_free(l->path);
+    sqlite3_free(l);
+}
+
+static int sexUnlock(sqlite3_file *f, int level);
 
 static int sexClose(sqlite3_file *f) {
     SexFile *p = (SexFile *)f;
+    if (p->locks) { sexUnlock(f, SQLITE_LOCK_NONE); locks_release(p->locks); p->locks = 0; }
     close(p->fd);
     if (p->delete_on_close && p->path) unlink(p->path);
     sqlite3_free(p->path);
@@ -70,9 +111,45 @@ static int sexFileSize(sqlite3_file *f, sqlite3_int64 *size) {
     return SQLITE_OK;
 }
 
-static int sexLock(sqlite3_file *f, int level) { ((SexFile *)f)->lock = level; return SQLITE_OK; }
-static int sexUnlock(sqlite3_file *f, int level) { ((SexFile *)f)->lock = level; return SQLITE_OK; }
-static int sexCheckReservedLock(sqlite3_file *f, int *out) { (void)f; *out = 0; return SQLITE_OK; }
+/* SQLite's lock ladder. A reader is refused while another connection is pending or
+ * exclusive; only one connection may be a writer (reserved and up); a writer becomes
+ * exclusive once it is the only reader left, and waits at pending until then. */
+static int sexLock(sqlite3_file *f, int level) {
+    SexFile *p = (SexFile *)f;
+    SexLocks *l = p->locks;
+    if (p->lock >= level) return SQLITE_OK;
+    if (!l) { p->lock = level; return SQLITE_OK; }
+    if (p->lock == SQLITE_LOCK_NONE) {
+        if (l->writer && l->writer != p && l->writer->lock >= SQLITE_LOCK_PENDING) return SQLITE_BUSY;
+        l->shared++;
+        p->lock = SQLITE_LOCK_SHARED;
+        if (level == SQLITE_LOCK_SHARED) return SQLITE_OK;
+    }
+    if (l->writer && l->writer != p) return SQLITE_BUSY;
+    l->writer = p;
+    if (level == SQLITE_LOCK_RESERVED) { p->lock = SQLITE_LOCK_RESERVED; return SQLITE_OK; }
+    if (l->shared > 1) { p->lock = SQLITE_LOCK_PENDING; return SQLITE_BUSY; }
+    p->lock = level;
+    return SQLITE_OK;
+}
+
+static int sexUnlock(sqlite3_file *f, int level) {
+    SexFile *p = (SexFile *)f;
+    SexLocks *l = p->locks;
+    if (p->lock <= level) return SQLITE_OK;
+    if (l) {
+        if (p->lock > SQLITE_LOCK_SHARED && l->writer == p) l->writer = 0;
+        if (level == SQLITE_LOCK_NONE && p->lock >= SQLITE_LOCK_SHARED) l->shared--;
+    }
+    p->lock = level;
+    return SQLITE_OK;
+}
+
+static int sexCheckReservedLock(sqlite3_file *f, int *out) {
+    SexLocks *l = ((SexFile *)f)->locks;
+    *out = l && l->writer != 0;
+    return SQLITE_OK;
+}
 static int sexFileControl(sqlite3_file *f, int op, void *arg) { (void)f; (void)op; (void)arg; return SQLITE_NOTFOUND; }
 static int sexSectorSize(sqlite3_file *f) { (void)f; return 4096; }
 static int sexDeviceCharacteristics(sqlite3_file *f) { (void)f; return SQLITE_IOCAP_SAFE_APPEND | SQLITE_IOCAP_POWERSAFE_OVERWRITE; }
@@ -109,6 +186,10 @@ static int sexOpen(sqlite3_vfs *vfs, sqlite3_filename name, sqlite3_file *f, int
     p->fd = fd;
     p->delete_on_close = (flags & SQLITE_OPEN_DELETEONCLOSE) != 0;
     if (p->delete_on_close) p->path = sqlite3_mprintf("%s", path);
+    if (flags & SQLITE_OPEN_MAIN_DB) {
+        p->locks = locks_for(path);
+        if (!p->locks) { close(fd); sqlite3_free(p->path); p->path = 0; p->fd = -1; return SQLITE_NOMEM; }
+    }
     p->base.pMethods = &sex_io;
     if (out_flags) *out_flags = flags;
     return SQLITE_OK;

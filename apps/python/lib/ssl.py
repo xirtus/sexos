@@ -8,6 +8,7 @@ always uses TLS 1.2 or 1.3: options that would weaken it are accepted and ignore
 and servers (wrapping an accepted socket) are not offered. Enough for http.client,
 urllib.request and the like.
 """
+import errno
 import socket as _socket
 import _sextls
 
@@ -159,6 +160,50 @@ class SSLSocket(_socket.socket):
         except OSError as e:
             raise SSLError(e.errno, f'TLS handshake with {self.server_hostname} failed: {e.strerror}') from None
         self._tls = True
+
+    # No application byte moves before TLS is up: a socket wrapped with
+    # do_handshake_on_connect=False shakes hands on its first read or write.
+    # makefile() goes through recv_into and send, so it is covered too.
+    def _ready(self):
+        if not self._tls:
+            self.do_handshake()
+
+    def send(self, data, flags=0):
+        self._ready()
+        return super().send(data, flags)
+
+    def sendall(self, data, flags=0):
+        self._ready()
+        return super().sendall(data, flags)
+
+    def sendto(self, *args):
+        raise OSError(errno.ENOTCONN, 'sendto on a TLS socket')
+
+    def recv(self, bufsize, flags=0):
+        self._ready()
+        return super().recv(bufsize, flags)
+
+    def recv_into(self, buffer, nbytes=0, flags=0):
+        self._ready()
+        return super().recv_into(buffer, nbytes, flags)
+
+    def recvfrom(self, bufsize, flags=0):
+        self._ready()
+        return super().recvfrom(bufsize, flags)
+
+    def recvfrom_into(self, buffer, nbytes=0, flags=0):
+        self._ready()
+        return super().recvfrom_into(buffer, nbytes, flags)
+
+    def sendmsg(self, *args):
+        raise NotImplementedError('sendmsg on a TLS socket')
+
+    def recvmsg(self, *args):
+        raise NotImplementedError('recvmsg on a TLS socket')
+
+    def sendfile(self, file, offset=0, count=None):
+        self._ready()
+        return self._sendfile_use_send(file, offset, count)
 
     def read(self, len=1024, buffer=None):
         if buffer is not None:
