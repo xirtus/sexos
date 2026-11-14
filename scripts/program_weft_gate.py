@@ -11,6 +11,7 @@ from pathlib import Path
 from install_program import install
 from quil_autosave_gate import boot
 from program_egui_gate import colours
+from program_gate_geometry import maximize, current_tile
 ROOT=Path(__file__).resolve().parents[1]
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
@@ -32,21 +33,28 @@ def main():
   g['wait'](r'\[app.private.retired\] target=41 ',0,120)
   s=len(t());run('run abacus')
   m=g['wait'](r'\[abacus.ready\] target=(\d+) task=(\d+) keys=(\d+)',s,300);target,task=m[1],m[2];assert int(m[3])==30,m[0]
-  g['wait'](r'\[abacus.frame\] n=1\n',s,300)
+  g['wait'](r'\[abacus.frame\] n=[1-9]\d*\n',s,300)
   launch=g['wait'](rf'\[shell.program.launch\] target={target} task={task} surface=(\d+)',s,60);surface=int(launch[1])
-  time.sleep(3)
+  tile,resized=maximize(g,surface)
+  layout=g['wait'](rf'\[abacus.layout\] w=({tile[2]-16}) h=({tile[3]-42})',resized,120)
+  width,height=map(int,layout.groups());g['focus'](surface)
   # Keys in abacus::KEYS order: C ⌫ ( ) % / sin cos tan √ ^ / 7 8 9 ÷ π / 4 5 6 × ln / 1 2 3 − log / 0 . ans + =
   labels=['C','bs','(',')','%','sin','cos','tan','sqrt','^','7','8','9','div','pi','4','5','6','mul','ln','1','2','3','minus','log','0','.','ans','+','=']
-  pos={labels[int(n)]:(int(x),int(y)) for n,x,y in re.findall(r'\[abacus.key\] n=(\d+) x=(-?\d+) y=(-?\d+)',t()[s:])}
+  pos={labels[int(n)]:(int(x),int(y)) for n,x,y in re.findall(r'\[abacus.key\] n=(\d+) x=(-?\d+) y=(-?\d+)',t()[resized:])}
   assert len(pos)==30,pos
-  tile=list(map(int,re.findall(rf'\[shell.tile.apply\] sid={surface} x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)',t())[-1]))
-  ox,oy=tile[0]+8,tile[1]+36
-  def key(label):x,y=pos[label];click(ox+x,oy+y)
+  def key(label):
+   # Tab is Shell window navigation. Click the actual keypad inside the
+   # maximized client; expression typing and palette shortcuts still use keys.
+   x,y=pos[label];assert 0<=x<width and 0<=y<height,(label,x,y,width,height)
+   tile=current_tile(t(),surface);side=(tile[2]-width)//2;top=tile[3]-height-side
+   x+=tile[0]+side;y+=tile[1]+top
+   assert 0<=x<rw and 0<=y<rh,(label,x,y,rw,rh)
+   click(x,y)
   # Typed digits, a clicked +, typed digits, Enter.
   g['focus'](surface);time.sleep(.3)
   s=len(t());keys(['1','2']);key('+');keys(['3','0']);q.key('ret')
   g['wait'](r'\[abacus.result\] expr=12\+30 value=42\n',s,60)
-  # The keypad alone.
+  # Actual keypad buttons clicked at their fresh maximized layout positions.
   s=len(t())
   for k in ['7','mul','6','=']:key(k)
   g['wait'](r'\[abacus.result\] expr=7\*6 value=42\n',s,60)
@@ -59,7 +67,7 @@ def main():
   g['wait'](r'\[abacus.command\] id=abacus.radians\n',s,60)
   time.sleep(1)
   path=a.out/'abacus.ppm';q.cmd('screendump',{'filename':str(path)});time.sleep(.5)
-  n=len(colours(path.read_bytes(),tile));assert n>8,f'the window looks blank ({n} colours)'
+  n=len(colours(path.read_bytes(),current_tile(t(),surface)));assert n>8,f'the window looks blank ({n} colours)'
   s=len(t());g['focus'](surface);time.sleep(.3);q.key('f11')
   g['wait'](rf'\[app.private.retired\] target={target} task={task} ',s,120)
   text=t();assert 'KERNEL PANIC' not in text and 'abacus.fatal' not in text
