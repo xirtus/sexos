@@ -286,7 +286,7 @@ fn render(window: &mut Window, app: &App, small: &mut Face, tiny: &mut Face, big
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     let mut window = Window::open();
-    window.title(b"Calendar");
+    window.title(b"Date");
     let mut small = Face::new(10, 20);
     let mut tiny = Face::new(8, 16);
     let mut big = Face::new(16, 30);
