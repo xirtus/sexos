@@ -66,7 +66,7 @@ fn secret_reply(m: &sex_pdx::PdxMessage) -> bool {
 /// Settings may SET. The password never leaves Files once sent.
 pub fn password(verb: u8, password: &[u8]) -> Result<u8, Error> {
     use sex_pdx::config::schema::secret as s;
-    let mut sent = 0;
+    // Only the verb at the end is answered (`secret::answered`): wait for one reply.
     for (a, b) in s::requests(password, verb) {
         loop {
             match sex_pdx::pdx_call_wait(sex_pdx::SLOT_STORAGE, s::OP, a, b, 0) {
@@ -75,11 +75,9 @@ pub fn password(verb: u8, password: &[u8]) -> Result<u8, Error> {
                 _ => return Err(UNAVAILABLE),
             }
         }
-        sent += 1;
     }
     let give_up = sex_pdx::get_ticks().saturating_add(30_000);
-    let mut last = UNAVAILABLE;
-    while sent > 0 {
+    loop {
         let m = match mailbox::take(secret_reply).or_else(|| sex_pdx::pdx_try_listen_raw(0)) {
             Some(m) => m,
             None => {
@@ -88,10 +86,9 @@ pub fn password(verb: u8, password: &[u8]) -> Result<u8, Error> {
                 continue;
             }
         };
-        if secret_reply(&m) { last = s::decode_reply(m.arg0).unwrap_or(UNAVAILABLE); sent -= 1; continue; }
+        if secret_reply(&m) { return Ok(s::decode_reply(m.arg0).unwrap_or(UNAVAILABLE)); }
         if is_answer(&m) || m.caller_pd == super::SHELL { mailbox::put(m); }
     }
-    Ok(last)
 }
 /// Whether a lock password is set.
 pub fn password_set() -> Result<bool, Error> {

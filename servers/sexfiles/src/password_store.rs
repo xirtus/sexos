@@ -63,12 +63,17 @@ fn on_deep_stack(f: &mut dyn FnMut()) {
 }
 
 /// One request; the word to reply with.
-pub fn handle(caller: u32, arg0: u64, arg1: u64) -> u64 {
+/// Serves one request; the reply word, or None for a PUT (which gets none).
+pub fn handle(caller: u32, arg0: u64, arg1: u64) -> Option<u64> {
     let may_set = crate::fs_service::program_is(caller, b"settings");
     let mut status = s::INVALID;
     on_deep_stack(&mut || status = s::serve(stage(caller), may_set, arg0, arg1, &mut Disk));
-    if let Some((verb, _)) = sex_config::wire::decode_request(arg0).filter(|(v, _)| *v != s::PUT) {
-        sex_pdx::serial_record!("[files.password] caller={} verb={} status={}", caller, verb, status);
+    match sex_config::wire::decode_request(arg0) {
+        Some((verb, _)) if !s::answered(verb) => None,
+        decoded => {
+            let verb = decoded.map_or(0, |(v, _)| v);
+            sex_pdx::serial_record!("[files.password] caller={} verb={} status={}", caller, verb, status);
+            Some(s::reply(status))
+        }
     }
-    s::reply(status)
 }

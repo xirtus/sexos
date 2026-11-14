@@ -60,6 +60,8 @@ pub fn poll() {
     // Files restarted or lost the request: ask again after a while.
     if w.asked != Asked::Nothing && now.saturating_sub(w.asked_at) > 5 * POLL_TICKS { w.asked = Asked::Nothing; }
     if w.asked != Asked::Nothing { return; }
+    // A lock-screen password check is waiting: its reply must not be overwritten.
+    if crate::lock::busy() { return; }
     if w.queued > 0 {
         let (key, value) = w.queue[0];
         ask(w, Asked::Set, c::SET, key, value as u32 as u64);

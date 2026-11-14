@@ -23,12 +23,14 @@ const SHIFT_L: u8 = 0x2A;
 const SHIFT_R: u8 = 0x36;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Asked { Nothing, State, Check { left: u8 } }
+enum Asked { Nothing, State, Check }
 
 struct Session {
     lock: Lock,
     typed: [u8; p::MAX],
     asked: Asked,
+    /// When the request in `asked` went out.
+    asked_at: u64,
     shift: bool,
     mode: u8,
     last_input: u64,
@@ -38,11 +40,18 @@ struct Session {
 
 static mut SESSION: Session = Session {
     lock: Lock { locked: false, typed: 0, say: s::SAY_PROMPT },
-    typed: [0; p::MAX], asked: Asked::Nothing, shift: false, mode: s::NORMAL, last_input: 0, shown: None,
+    typed: [0; p::MAX], asked: Asked::Nothing, asked_at: 0, shift: false, mode: s::NORMAL, last_input: 0, shown: None,
 };
 fn session() -> &'static mut Session { unsafe { &mut *core::ptr::addr_of_mut!(SESSION) } }
 
 pub fn locked() -> bool { session().lock.locked }
+
+/// A password request is waiting for Files' answer. Files keeps one unsent reply per
+/// caller, so other Shell requests to Files wait until it is answered.
+pub fn busy() -> bool { session().asked != Asked::Nothing }
+
+/// Files lost the request or restarted: give up waiting after this long.
+const ANSWER_TICKS: u64 = 10_000;
 
 fn show(se: &mut Session) {
     let want = (se.mode, se.lock.word());
@@ -68,7 +77,7 @@ pub fn lock() -> bool {
         se.lock = Lock { locked: true, typed: 0, say: s::SAY_PROMPT };
         wipe(se);
         // Ask whether a password is set, to say so on the lock surface.
-        if se.asked == Asked::Nothing && files(sex_config::wire::request(p::STATE, 0), 0) { se.asked = Asked::State; }
+        if se.asked == Asked::Nothing && files(sex_config::wire::request(p::STATE, 0), 0) { se.asked = Asked::State; se.asked_at = sex_pdx::get_ticks(); }
         sex_pdx::serial_record!("[shell.lock] locked=1");
     }
     show(se);
@@ -93,8 +102,7 @@ pub fn receive(msg: &sex_pdx::PdxMessage) -> bool {
             se.asked = Asked::Nothing;
             if se.lock.locked && status == p::NO_PASSWORD { se.lock.say = s::SAY_NO_PASSWORD; show(se); }
         }
-        Asked::Check { left } if left > 1 => se.asked = Asked::Check { left: left - 1 },
-        Asked::Check { .. } => {
+        Asked::Check => {
             se.asked = Asked::Nothing;
             sex_pdx::serial_record!("[shell.lock.check] status={}", status);
             match status {
@@ -123,11 +131,11 @@ fn key(se: &mut Session, code: u8, value: u64) {
     match code {
         ENTER | ENTER_PAD => {
             let n = se.lock.typed as usize;
-            let mut sent = 0u8;
             let mut all = true;
-            for (a, b) in p::requests(&se.typed[..n], p::CHECK) { all &= files(a, b); sent += 1; }
+            // Only the CHECK at the end is answered (`secret::answered`).
+            for (a, b) in p::requests(&se.typed[..n], p::CHECK) { all &= files(a, b); }
             wipe(se);
-            if all { se.asked = Asked::Check { left: sent }; se.lock.say = s::SAY_CHECKING; } else { se.lock.say = s::SAY_WRONG; }
+            if all { se.asked = Asked::Check; se.asked_at = sex_pdx::get_ticks(); se.lock.say = s::SAY_CHECKING; } else { se.lock.say = s::SAY_WRONG; }
         }
         BACKSPACE => { if se.lock.typed > 0 { se.lock.typed -= 1; se.typed[se.lock.typed as usize] = 0; } }
         ESC => wipe(se),
@@ -164,6 +172,11 @@ fn minutes(key: u16) -> u64 { crate::config_watch::value(key).max(0) as u64 * MI
 pub fn poll() {
     let se = session();
     let now = sex_pdx::get_ticks();
+    if se.asked != Asked::Nothing && now.saturating_sub(se.asked_at) > ANSWER_TICKS {
+        sex_pdx::serial_record!("[shell.lock.check] status=timeout");
+        if se.asked == Asked::Check { se.lock.say = s::SAY_WRONG; show(se); }
+        se.asked = Asked::Nothing;
+    }
     if se.last_input == 0 { se.last_input = now; }
     let idle = now.saturating_sub(se.last_input);
     let (dim, lock_at, off) = (minutes(id::DIM_AFTER), minutes(id::LOCK_AFTER), minutes(id::BLANK_AFTER));
@@ -180,9 +193,11 @@ pub fn poll() {
 /// Ticks until the idle policy next has something to do, for the Shell's wait.
 pub fn next_wake() -> Option<u64> {
     let se = session();
-    let idle = sex_pdx::get_ticks().saturating_sub(se.last_input);
+    let now = sex_pdx::get_ticks();
+    let idle = now.saturating_sub(se.last_input);
+    let answer = (se.asked != Asked::Nothing).then(|| (se.asked_at + ANSWER_TICKS + 1).saturating_sub(now).max(1));
     [minutes(id::DIM_AFTER), minutes(id::LOCK_AFTER), minutes(id::BLANK_AFTER)].iter()
-        .filter(|t| **t != 0 && **t > idle).map(|t| t - idle).min()
+        .filter(|t| **t != 0 && **t > idle).map(|t| t - idle).chain(answer).min()
 }
 
 /// Display started again: show it the lock and screen state.

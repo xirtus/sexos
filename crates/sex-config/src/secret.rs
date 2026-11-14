@@ -8,7 +8,9 @@
 //! each CHECK or SET. The Shell checks passwords for the lock screen.
 //!
 //! Request: `type_id` [`OP`], arg0 = verb | chunk << 8, arg1 = 8 bytes (PUT) or the
-//! length (CHECK, SET). Reply: tag 0xC7 << 56 | status.
+//! length (CHECK, SET). Reply: tag 0xC7 << 56 | status, sent only for CHECK, SET and
+//! STATE: PUT gets none, so each request sequence brings exactly one reply. (Files
+//! keeps one unsent reply per caller, so a reply per chunk could overwrite another.)
 
 pub const OP: u64 = 0x2F3;
 
@@ -30,6 +32,8 @@ pub const MAX: usize = 64;
 const TAG: u64 = 0xC7;
 
 pub const fn reply(status: u8) -> u64 { TAG << 56 | status as u64 }
+/// Whether Files answers this verb; PUT is not answered.
+pub const fn answered(verb: u8) -> bool { verb != PUT }
 pub const fn decode_reply(word: u64) -> Option<u8> {
     if word >> 56 != TAG || word >> 8 & 0xFFFF_FFFF_FFFF != 0 { return None; }
     Some(word as u8)
@@ -208,5 +212,7 @@ mod tests {
         assert_eq!(send(&mut stage, &mut store, false, b"x", CHECK), NO_PASSWORD, "an unreadable hash is no password");
         assert_eq!(decode_reply(reply(WRONG)), Some(WRONG));
         assert_eq!(decode_reply(0xC6 << 56), None);
+        // One reply per sequence: chunks are not answered, the closing verb is.
+        assert!(!answered(PUT) && answered(CHECK) && answered(SET) && answered(STATE));
     }
 }
