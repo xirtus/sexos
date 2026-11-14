@@ -283,7 +283,7 @@ Classes a Linux/Windows/macOS desktop has where SexOS has nothing. Names are pro
 | Image editor | GIMP / Krita | **Batik** | painting with dye on cloth | V1–V3 |
 | Vector drawing | Inkscape | Gestalt (exists as Shapes) | already Andreas's pick | V4 |
 | Video editor | Kdenlive / Shotcut / Scarlet | **Splicy** | splicing film, and a pun (Andreas) | V5 |
-| Audio recorder/editor and DAW | REAPER / Ardour / Audacity / LMMS | **Serenade** | | V6, V13–V15 |
+| Audio recorder/editor and DAW | Logic Pro / REAPER / Ardour / Audacity / LMMS | **Moan** | (Andreas) | V6, V13–V15 |
 | 3D creation suite | Blender | **Polyamour** | many polygons, many loves (Andreas) | Z1–Z9 |
 | Camera | Cheese | **Flash** | camera flash, and a pun | V7 (needs UVC driver) |
 | Password manager | KeePassXC / Bitwarden | **Chastity** | locked away; built on Shibari | R7 |
@@ -544,16 +544,16 @@ service instead of a Node/PostgreSQL web service:
 | Y10 | Flirt calls: Matrix VoIP and group calls, WebRTC from N11, video with Flash's camera (V7), screen share from Display under a grant | gate: loopback call between two QEMU machines carries audio frames |
 
 
-### V. Creative apps: Batik, Gestalt, Splicy, Serenade, Flash and the Craft ports (16)
+### V. Creative apps: Batik, Gestalt, Splicy, Moan, Flash and the Craft ports (16)
 
 Andreas (2026-11-14): the Craft apps are the starting point, improved as we go. Learn from
-their UI, list what is not perfect, and fill the blanks from the leaders: **REAPER, Audacity,
-Ardour and LMMS** for Serenade; **Kdenlive and Shotcut** (FilmCraft's layout is good) and
+their UI, list what is not perfect, and fill the blanks from the leaders: **Logic Pro, REAPER, Audacity,
+Ardour and LMMS** for Moan; **Kdenlive and Shotcut** (FilmCraft's layout is good) and
 **[Scarlet](https://github.com/Forward-Future/scarlet)** (MIT, AI transcript-based editing)
 for Splicy; Blender gets its own workstream (Z). V16 is that audit.
 
 V ports the Craft creative apps on M11 (see T): PhotoCraft becomes Batik, VectorCraft Gestalt,
-FilmCraft Splicy, SoundCraft Serenade. LightCraft's non-destructive development feeds Gaze's
+FilmCraft Splicy, SoundCraft Moan. LightCraft's non-destructive development feeds Gaze's
 edits (Q13), and PdfCraft's editor feeds Vellum (Q10). New names for the other Craft apps are
 proposals.
 
@@ -567,16 +567,16 @@ Write set: new `apps/batik`, `apps/shapes` (Gestalt, from #216), new `apps/strip
 | V3 | Batik: PSD and XCF import, tablet input (USB HID digitizer in sexusb) | host: PSD fixture layers equal |
 | V4 | **Gestalt** vector editor: port VectorCraft (Shapes retired into it); SVG open/edit/save, paths, nodes, text, export PNG/PDF | gate: edit node, saved SVG renders as reference |
 | V5 | **Splicy** video editor: port FilmCraft, decoding and encoding through our FFmpeg; timeline, cuts, transitions, titles, audio tracks | gate: cut two clips, export, duration and hash of frames correct |
-| V6 | **Serenade** audio: port SoundCraft (a DAW) on Bell, with a simple record-and-trim mode | gate: record test tone via QEMU audio, trim, export |
+| V6 | **Moan** audio: port SoundCraft (a DAW) on Bell, with a simple record-and-trim mode | gate: record test tone via QEMU audio, trim, export |
 | V8 | Page layout and design: port DesignCraft (proposed **Lace**: patterned, laid-out fabric) and FigCraft (proposed **Mannequin**: where designs are tried on) | gate: open an IDML fixture, export PDF |
 | V9 | Motion and animation: port EffectCraft (proposed **Velvet**) and AniCraft (proposed **Tease**: frames revealed one at a time) | gate: render a 2 s composition to video |
 | V10 | 3D and technical: port CADCraft (proposed **Pattern**, as in a sewing pattern), TextureCraft and MaterialCraft (proposed **Dye** and **Weave**) | gate: open a DXF fixture; paint a texture on a cube |
 | V7 | **Flash** camera: USB Video Class driver in sexusb, photo and video capture to Loom, camera grant | gate: QEMU `usb-video`-style fixture frames arrive |
 | V11 | Splicy pro editing, the Kdenlive/Shotcut list: unlimited tracks, keyframes on every parameter, proxy clips, nested sequences, speed ramps, stabilisation, chroma key, colour grading with scopes (waveform, vectorscope, histogram) and LUTs, titles, OpenTimelineIO import/export, render queue | gate: keyframed opacity renders the expected frames; OTIO round trip |
 | V12 | Splicy edits by transcript, the Scarlet way: local transcription (Whisper on candle, MIT/Apache, as a confined program), edit the video by editing its text, remove pauses, filler words and retakes, an assistant (Claude API, off by default) proposes edits as suggestions on a working timeline, renders only the changed section to preview, original footage never touched | host: transcript-to-cut goldens; gate: deleting a sentence removes its frames and audio |
-| V13 | Serenade as a DAW, the REAPER/Ardour list: any-to-any routing, buses and sends, automation lanes, takes and comping, punch recording, low-latency monitoring on a Bell fast path, session files | gate: two tracks through a bus with automation render to the reference WAV |
-| V14 | Serenade plugins and MIDI: CLAP plugin hosting (MIT spec) with each plugin a confined run, LV2 later; MIDI piano roll, USB MIDI class in sexusb, controller mapping | gate: sample CLAP plugin processes audio; USB MIDI fixture notes arrive |
-| V15 | Serenade instruments and editing, the LMMS/Audacity list: pattern and step sequencer, built-in synth and sampler, SoundFont/SFZ, destructive waveform editing, spectral view, noise reduction, effect chains and batch macros | host: synth and noise-reduction goldens |
+| V13 | Moan as a DAW, the REAPER/Ardour list: any-to-any routing, buses and sends, automation lanes, takes and comping, punch recording, low-latency monitoring on a Bell fast path, session files | gate: two tracks through a bus with automation render to the reference WAV |
+| V14 | Moan plugins and MIDI: CLAP plugin hosting (MIT spec) with each plugin a confined run, LV2 later; MIDI piano roll, USB MIDI class in sexusb, controller mapping | gate: sample CLAP plugin processes audio; USB MIDI fixture notes arrive |
+| V15 | Moan instruments and editing, the LMMS/Audacity list: pattern and step sequencer, built-in synth and sampler, SoundFont/SFZ, destructive waveform editing, spectral view, noise reduction, effect chains and batch macros | host: synth and noise-reduction goldens |
 | V16 | Craft UI audit: each ported Craft app against its leader (Photoshop/GIMP/Krita, Illustrator/Inkscape, Kdenlive/Shotcut, REAPER/Ardour), with a list of gaps fixed here or upstream | review: audit doc in `docs/handoff/` |
 
 ### W. Hardware services and guests: Cufflinks, Needle, Lurk, Drag (7)
