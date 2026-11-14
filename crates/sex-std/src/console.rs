@@ -15,7 +15,8 @@
 //!
 //! A run that a terminal started (`sex_pdx::console_relay`) has no window at all: its
 //! output and input go through Files to that terminal, Ctrl+C there ends it (at its next
-//! read or write) and Ctrl+D ends its input.
+//! read or write, sleep or [`crate::terminal::interrupted`] look) and Ctrl+D ends its
+//! input. Its size and mode (raw, echo) are the terminal's: see [`crate::terminal`].
 use sex_app::{Event, Window};
 use sex_pdx::text_region::BYTES as SHOWN;
 use std::sync::Mutex;
@@ -139,8 +140,8 @@ fn attached() -> bool {
     }
 }
 /// Ctrl+C in the terminal: the run ends as a terminal's interrupt would end it.
-fn interrupted() -> ! {
-    sex_pdx::serial_record!("[std.interrupted]");
+fn interrupted_exit() -> ! {
+    sex_pdx::serial_record!("[std.interrupted] ms={}", sex_pdx::get_ticks());
     crate::sys::sys_exit(130)
 }
 /// All of `bytes` to the terminal, waiting while it is behind.
@@ -151,7 +152,7 @@ fn relay_write(bytes: &[u8]) {
         match sex_app::files::direct::relay::write(&bytes[done..]) {
             Ok(0) => { sex_app::thread::pause(round); round += 1; }
             Ok(n) => { done += n; round = 0; }
-            Err(r::INTERRUPTED) => interrupted(),
+            Err(r::INTERRUPTED) => interrupted_exit(),
             Err(_) => return,
         }
     }
@@ -164,10 +165,53 @@ fn relay_read(out: &mut [u8], wait: bool) -> usize {
         match sex_app::files::direct::relay::read(out) {
             Ok(0) if wait => { sex_app::thread::pause(round); round += 1; }
             Ok(n) => return n,
-            Err(r::INTERRUPTED) => interrupted(),
+            Err(r::INTERRUPTED) => interrupted_exit(),
             Err(_) => { if let Ok(mut c) = CONSOLE.lock() { c.closed = true; } return 0; }
         }
     }
+}
+
+/// The console's size in cells and how many times it changed: the terminal's when one
+/// holds the console (80 by 24 until it says), else the window's.
+pub(crate) fn size() -> (u16, u16, u32) {
+    if !taken() && attached() {
+        return match sex_app::files::direct::relay::size() {
+            Ok(s) if s.known() => (s.cols, s.rows, s.changes),
+            Ok(s) => (80, 24, s.changes),
+            Err(_) => (80, 24, 0),
+        };
+    }
+    let Ok(c) = CONSOLE.lock() else { return (80, 24, 0) };
+    if let Some(vt) = c.vt.as_ref() { return (vt.screen.cols() as u16, vt.screen.rows() as u16, RESIZES.load(std::sync::atomic::Ordering::Relaxed)); }
+    drop(c);
+    let (w, h) = window_mut().size();
+    let (cw, ch) = sex_vt::render::cell_for_height(18);
+    let (cols, rows) = sex_vt::render::Painter::new(cw, ch).grid(w.max(32), h.max(32));
+    (cols as u16, rows as u16, RESIZES.load(std::sync::atomic::Ordering::Relaxed))
+}
+/// Resizes of the program's own console window, for [`size`].
+static RESIZES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+/// The terminal mode (`sex_pdx::console_relay::RAW` and the rest) this run asked for.
+static MODE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+pub(crate) fn mode() -> u8 { MODE.load(std::sync::atomic::Ordering::Relaxed) }
+/// Asks the terminal for `mode`; false when no terminal holds the console (the program's
+/// own window keeps its cooked line).
+pub(crate) fn set_mode(mode: u8) -> bool {
+    MODE.store(mode & sex_pdx::console_relay::MODES, std::sync::atomic::Ordering::Relaxed);
+    !taken() && attached() && sex_app::files::direct::relay::set_mode(mode).is_ok()
+}
+/// Whether Ctrl+C was pressed in the terminal since the last look (it is taken).
+pub(crate) fn interrupted() -> bool {
+    !taken() && attached() && sex_app::files::direct::relay::poll() == Err(sex_pdx::console_relay::INTERRUPTED)
+}
+/// A place where Ctrl+C may end the run: a sleep. Looks at most every 20 ms.
+pub(crate) fn interrupt_point() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static LAST: AtomicU64 = AtomicU64::new(0);
+    let now = sex_pdx::get_ticks();
+    if now.saturating_sub(LAST.load(Ordering::Relaxed)) < 20 { return; }
+    LAST.store(now, Ordering::Relaxed);
+    if mode() & sex_pdx::console_relay::NO_SIGNALS == 0 && interrupted() { interrupted_exit(); }
 }
 
 pub(crate) fn write(stream: usize, bytes: &[u8]) {
@@ -274,6 +318,7 @@ fn take(event: Event) -> Option<Vec<u8>> {
         Event::Resize { width, height } => {
             let mut c = CONSOLE.lock().ok()?;
             if let Some(vt) = c.vt.as_mut() { vt.resize(width, height); }
+            RESIZES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             c.show();
             None
         }
