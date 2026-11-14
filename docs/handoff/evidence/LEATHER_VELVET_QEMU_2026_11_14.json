@@ -1,0 +1,93 @@
+{
+  "date": "2026-11-14",
+  "scope": "Development ISO actual QEMU; final candidate GitHub CI remains separate",
+  "iso": {
+    "path": "/Users/xmacbookm5/Projects/sexos-plan/target/chastity-runtime/sexos-autofill-v2.iso",
+    "bytes": 183042048,
+    "sha256": "4cb7e33127e88bb44d9b2f13139ddc41f58c4db80a41b56b5f8bd298286547b5"
+  },
+  "velvet": {
+    "inputs": [
+      {
+        "path": "/Users/xmacbookm5/Projects/sexos-plan/iso_root/programs/velvet",
+        "bytes": 1576432,
+        "sha256": "6ad4bee4293df27a4354cd820cd8063e1dcea7f7f205e07ceeba3adddbaa855e"
+      },
+      {
+        "path": "/Users/xmacbookm5/Projects/sexos-plan/scripts/velvet_gate.py",
+        "bytes": 5909,
+        "sha256": "0246fbf2871b99f3eb630e0c6fa765e1ad248ce37e33a0a3fbb63faceff9cb62"
+      },
+      {
+        "path": "/Users/xmacbookm5/Projects/sexos-plan/scripts/program_gate_geometry.py",
+        "bytes": 1716,
+        "sha256": "fcc871db63f6807297171b698c77ae60511e070e5a74954db6fc52ec6e096042"
+      }
+    ],
+    "result": {
+      "ok": true,
+      "opened": 6,
+      "colours": {
+        "snags": 511,
+        "mingle": 552,
+        "twins": 473
+      }
+    },
+    "evidence_directory": "/Users/xmacbookm5/Projects/sexos-moan-projects/target/other-app-proof/velvet-v1"
+  },
+  "leather": {
+    "source_head": "4ba6ffc3c5df9b5beeb560f2ff94c502051e564c",
+    "inputs": [
+      {
+        "path": "/Users/xmacbookm5/Projects/sexos-plan/iso_root/programs/leather-hello",
+        "bytes": 2152696,
+        "sha256": "b3b37185a6479dd2b68bd10d54ffc8070859e071991ee9bab293e113b6790451"
+      },
+      {
+        "path": "/Users/xmacbookm5/Projects/sexos-plan/iso_root/programs/leather-stitch",
+        "bytes": 2152704,
+        "sha256": "9fe143d95f07666d041d85e6b297f03f65453ce4c334fc405bec116d1567cc68"
+      },
+      {
+        "path": "/Users/xmacbookm5/Projects/sexos-plan/iso_root/programs/leather-lantern",
+        "bytes": 2152704,
+        "sha256": "eef6764dcbee7b314869688c20fb5c59b8d7244a0581a822b4781859359ee5f7"
+      },
+      {
+        "path": "/Users/xmacbookm5/Projects/sexos-plan/iso_root/programs/leather-postcard",
+        "bytes": 2152704,
+        "sha256": "e7721ec3ce44ae17b37a16b09c72d18d9aa1dfa8739515b417020ea6812e54ab"
+      },
+      {
+        "path": "/Users/xmacbookm5/Projects/sexos-plan/scripts/leather_gate.py",
+        "bytes": 6751,
+        "sha256": "178b757451e264f65da1be8d45b14b4a001ebad027aa2c2c32d5ae75afc5e6d5"
+      },
+      {
+        "path": "/Users/xmacbookm5/Projects/sexos-plan/scripts/program_gate_geometry.py",
+        "bytes": 1716,
+        "sha256": "fcc871db63f6807297171b698c77ae60511e070e5a74954db6fc52ec6e096042"
+      }
+    ],
+    "result": {
+      "ok": true,
+      "apps": [
+        "hello",
+        "stitch",
+        "lantern",
+        "postcard"
+      ],
+      "text_bytes": 26,
+      "http_bytes": 29
+    },
+    "expected_text_fnv1a": "0x15bc73702140ed4c",
+    "expected_http_fnv1a": "0x9a3ea7cdedf7a255",
+    "http_requests": 1,
+    "evidence_directory": "/Users/xmacbookm5/Projects/sexos-moan-projects/target/other-app-proof/leather-v2"
+  },
+  "notes": [
+    "Input seeds were blank1GiB files opened read-only; each gate owns its writable copy.",
+    "Leather-v1 failed due to unfenced QMP typing; retained separately, superseded by model-receipted Leather-v2.",
+    "No production boot-media rebuild or all-green CI is implied."
+  ]
+}
