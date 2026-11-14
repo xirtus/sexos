@@ -29,7 +29,7 @@ Not taken: Tauri/TypeScript/web UI, PostHog telemetry, cloud transcription.
 | **S2a (this PR)** | `sex_splice::export`: timeline to frames (rounded up so each lands in its own source frame) and sample-exact sound pieces | 3 host tests |
 | **S2b (this PR)** | `sex_media::export`: WebM VP9+Opus, MP4 H.264+AAC, MP4 AV1+Opus (Andreas: all three). Export profile `FFMPEG_RECORDING=2` builds libvpx (`scripts/build_libvpx.sh`) for SexOS | host gate `scripts/splicy_export_host_gate.py`: all three formats, 60 frames, 2 s sound, the cut on exactly frame 30 |
 | **S2c (done)** | libaom for SexOS (`scripts/build_libaom.sh`, official release tarball checked by SHA-256), so AV1 MP4 export works on SexOS | export-profile FFmpeg builds; Play links at 21 MB (limit 32 MiB) |
-| S2d | x264 for SexOS (FFmpeg `--enable-gpl`), once code.videolan.org is reachable from the build environment | build + guest gate |
+| **S2d (done)** | x264 for SexOS (`scripts/build_x264.sh`, commit-pinned archive from code.videolan.org; Andreas supplied the source); the export profile's FFmpeg is GPL | export-profile FFmpeg builds; Play links at 22 MB (limit 32 MiB), clean layout |
 | S3 | The Splicy program: transcript pane (delete text to cut), timeline strip, player, suggestion cards, `\` to hear the cut and the join | gate: delete a sentence on screen, its frames and audio are gone |
 | S4 | Local transcription: Whisper on candle (MIT/Apache) as a confined program writing `Transcript` | host: transcript goldens on a generated tone/speech fixture |
 | S5 | Assistant (Claude API, off by default, confined): reads transcript, stages `Suggestion`s only | host: scripted assistant replies become pending suggestions |
