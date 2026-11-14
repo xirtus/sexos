@@ -18,6 +18,7 @@ mod wm;
 mod launcher_search;
 mod session;
 mod config_watch;
+mod idle_media;
 mod lock;
 mod keyboard_layout;
 mod key_repeat;
@@ -10942,6 +10943,11 @@ pub unsafe fn keyboard_settings(delay_ms:u64,rate:u64,caps_as_ctrl:bool){
     CAPS_AS_CTRL=caps_as_ctrl;
     sex_pdx::serial_record!("[shell.keyboard.settings] delay_ms={} interval_ms={} caps_as_ctrl={}",KEY_REPEAT.delay(),KEY_REPEAT.interval(),caps_as_ctrl as u8);
 }
+/// Asks Bell whether a program's sound plays; false if the request did not go out.
+pub unsafe fn media_streaming_ask()->bool{
+    let (status,_)=pdx_call(SLOT_BELL,sex_pdx::sound_mixer::OP_MIXER,sex_pdx::sound_mixer::STREAMING,0,0);
+    status==0
+}
 /// The volume from settings to Bell; false if Bell did not take the request.
 pub unsafe fn volume_restore(volume:u8)->bool{
     let (status,_)=pdx_call(SLOT_BELL,sex_pdx::sound_mixer::OP_MIXER,sex_pdx::sound_mixer::SET_MASTER,volume.min(100) as u64,0);
@@ -11091,6 +11097,8 @@ unsafe fn tray_key(code: u8, value: u64) -> bool {
 }
 /// Bell's answer to a volume key (shown in the panel) or a player key (delivered).
 unsafe fn media_keys_receive(msg:&sex_pdx::PdxMessage)->bool{
+    // The idle policy's question carries its own tag: never one of the asks in order.
+    if msg.type_id==1&&msg.caller_pd==NOTIFY_BELL_PD&&sex_pdx::sound_mixer::is_streaming_reply(msg.arg0){lock::media_answer(msg.arg0&1!=0);return true}
     if msg.type_id!=1||msg.caller_pd!=NOTIFY_BELL_PD||!media_keys::is_mixer_answer(msg.arg0)||!MEDIA_ASKS.pending(){return false}
     let word=msg.arg0;
     match MEDIA_ASKS.pop(){
