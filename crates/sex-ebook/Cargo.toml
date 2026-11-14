@@ -1,0 +1,13 @@
+[package]
+name = "sex-ebook"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "E-book model for Bodice: ZIP reading, EPUB 2/3 (OPF spine, NCX and nav TOC), FictionBook 2, comic book archives, text reflow into pages and saved reading positions (no_std + alloc)"
+
+[dependencies]
+sex-xml = { path = "../sex-xml" }
+zune-inflate = { version = "0.2.54", default-features = false }
+
+[dev-dependencies]
+sex-image = { path = "../sex-image" }
