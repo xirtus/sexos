@@ -1,5 +1,5 @@
 """Normal diagnostics, declared proof mode and protected-interval negative tests."""
-import pathlib,re,sys,unittest,tomllib
+import pathlib,re,sys,unittest,tomllib,tempfile,shutil,subprocess,os
 ROOT=pathlib.Path(__file__).resolve().parents[2];sys.path.insert(0,str(ROOT/'scripts'))
 from input_payload_profile import diagnostic_spec,assert_payload_proof,PROOF_RECEIPTS,wait_releases,STAGES,FLAG
 from input_payload_audit import audit_interval,require_normal_image
@@ -49,6 +49,23 @@ class InputPrivacy(unittest.TestCase):
  def test_kernel_residual_is_separate_and_never_becomes_a_complete_privacy_claim(self):
   for trace in ['', '[ps2.port60.read] n=1 sc=0x1e','[ps2.input_ring.enqueue] n=1 type=0x201 sc=0x1e','[ps2.input_ring.drop] reason=ring_full sc=0x1e']:
    result=audit_interval(trace);self.assertTrue(result['userspace_safe']);self.assertFalse(result['complete_keyboard_privacy_proven']);self.assertEqual(bool(result['kernel_payload_lines']),bool(trace))
+ def test_profile_builder_restores_originals_on_failure_and_normal_after_success(self):
+  for fail in (False,True):
+   with tempfile.TemporaryDirectory() as temporary:
+    root=pathlib.Path(temporary);(root/'scripts').mkdir();(root/'iso_root/servers').mkdir(parents=True)
+    for name in ('build_input_payload_proof.sh','input_payload_profile.py'):shutil.copyfile(ROOT/'scripts'/name,root/'scripts'/name)
+    original=(ROOT/'sexos_build_spec.toml').read_bytes();(root/'sexos_build_spec.toml').write_bytes(original)
+    for name in ('sexos-v1.0.0.iso','iso_root/sexos-kernel','iso_root/servers/sexinput','iso_root/servers/silk-shell'):(root/name).write_bytes(b'original')
+    (root/'scripts/master_runtime_gate.sh').write_text('#!/usr/bin/env bash\nset -eu\npython3 -c \'import tomllib; s=tomllib.load(open("sexos_build_spec.toml","rb")); assert all("sexos_input_payload_proof" in x["rustflags"] for x in s["stage"] if x["id"] in ("build_silk_shell","build_sexinput"))\'\nprintf proof > sexos-v1.0.0.iso\nif [[ "${MOCK_INPUT_BUILD_FAIL:-0}" = 1 ]]; then exit 43; fi\n')
+    (root/'scripts/freeze_native_evidence.py').write_text("from pathlib import Path\nimport sys\nassert Path('sexos-v1.0.0.iso').read_bytes()==b'proof'\nout=Path(sys.argv[sys.argv.index('--out')+1]);out.mkdir();(out/'frozen').write_text('proof')\n")
+    (root/'scripts/entrypoint_build.sh').write_text("#!/usr/bin/env bash\nset -eu\nif grep -q 'sexos_input_payload_proof' sexos_build_spec.toml; then exit 44; fi\nprintf normal > sexos-v1.0.0.iso\n")
+    result=subprocess.run(['bash','scripts/build_input_payload_proof.sh',str(root/'evidence')],cwd=root,env=dict(os.environ,MOCK_INPUT_BUILD_FAIL='1' if fail else '0'),capture_output=True,text=True)
+    self.assertEqual(result.returncode,43 if fail else 0,result.stderr)
+    self.assertEqual((root/'sexos_build_spec.toml').read_bytes(),original)
+    self.assertEqual((root/'sexos-v1.0.0.iso').read_bytes(),b'original' if fail else b'normal')
+    if not fail:
+     self.assertEqual((root/'evidence/UNSAFE-input-payload-proof.iso').read_bytes(),b'proof')
+     self.assertEqual((root/'evidence/normal.iso').read_bytes(),b'normal')
  def test_diagnostic_ci_keeps_frozen_proof_separate_and_restores_normal(self):
   builder=(ROOT/'scripts/build_input_payload_proof.sh').read_text()
   self.assertLess(builder.index('master_runtime_gate.sh --probe'),builder.index('freeze_native_evidence.py'))
