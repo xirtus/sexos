@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""IPv6 and program sockets: `run +net talk check ADDRESS 7` on a network that has only
+"""IPv6 and program sockets: `run +net flirt check ADDRESS 7` on a network that has only
 IPv6. The machine takes a global address by SLAAC from a router advertisement, then
 the program connects by TCP to an echo server on the link and gets its bytes back,
 does a UDP echo round trip, and takes a TCP connection on port 7070 and echoes it. Then `run +net peek http://[ADDRESS]/`
@@ -167,7 +167,7 @@ def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
  with disk.open('r+b') as f:f.truncate(1024**3)
- programs=[(n,(ROOT/'iso_root/programs'/n).read_bytes()) for n in ('talk','peek')];assert all(e[:4]==b'\x7fELF' for _,e in programs)
+ programs=[(n,(ROOT/'iso_root/programs'/n).read_bytes()) for n in ('flirt','peek')];assert all(e[:4]==b'\x7fELF' for _,e in programs)
  install(disk,programs)
  g=boot(a.iso,disk,a.out,'ipv6',a.resolution);t=g['text'];q=g['q']
  def keys(text):
@@ -179,7 +179,7 @@ def main():
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
   g['focus'](153);time.sleep(.5);s=len(t())
-  keys(f'run +net talk check {text6(PEER)} 7');q.key('ret')
+  keys(f'run +net flirt check {text6(PEER)} 7');q.key('ret')
   m=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,120)
   address=g['wait'](r'\[talk.address\] (fd00:5e:0:1:[0-9a-f:]+)/64',s,120)[1]
   assert address==text6(GUEST),f'SLAAC address {address}, wanted {text6(GUEST)}'

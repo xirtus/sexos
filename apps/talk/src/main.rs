@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Talk: TCP and UDP by hand, over IPv4 or IPv6. `run +net talk tcp HOST PORT TEXT`
+//! Flirt (formerly Talk): TCP and UDP by hand, over IPv4 or IPv6. `run +net flirt tcp HOST PORT TEXT`
 //! sends a line and shows the reply; `udp HOST PORT TEXT` does the same with one
 //! datagram; `listen PORT` answers one connection by echoing it; `addresses` shows the
 //! machine's addresses; `check ADDRESS PORT` does all of these against an echo server.
@@ -143,7 +143,7 @@ fn run(window: &mut Window, screen: &mut Screen, w: &[&[u8]]) -> Result<(), net:
             sex_pdx::serial_record!("[talk.accepted] peer={} port={} echoed={}", peer, peer_port, n);
             let _ = write!(s, "accepted {} and echoed {} bytes", peer, n); screen.line(window, &s);
         }
-        _ => screen.line(window, "Usage: run +net talk (addresses | tcp HOST PORT TEXT | udp HOST PORT TEXT | listen PORT | check ADDRESS PORT)"),
+        _ => screen.line(window, "Usage: run +net flirt (addresses | tcp HOST PORT TEXT | udp HOST PORT TEXT | listen PORT | check ADDRESS PORT)"),
     }
     Ok(())
 }
@@ -151,7 +151,7 @@ fn run(window: &mut Window, screen: &mut Screen, w: &[&[u8]]) -> Result<(), net:
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     let mut window = Window::open();
-    window.title(b"Talk");
+    window.title(b"Flirt");
     let mut args = [0u8; sex_pdx::fs::ARGS_MAX];
     let args = files::args(&mut window, &mut args).to_vec();
     let mut screen = Screen(alloc::string::String::from("Talk. F11 closes.\n"));

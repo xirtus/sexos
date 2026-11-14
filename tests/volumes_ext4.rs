@@ -116,8 +116,10 @@ fn ext4_errors_and_read_only() {
     assert_eq!(v.read(&mut d, b"docs", 0, &mut [0; 8]).unwrap_err(), Error::IsDir);
     assert_eq!(v.stat(&mut d, b"link/x").unwrap_err(), Error::Unsupported);
     assert_eq!(v.stat(&mut d, b"docs/../hello.txt").unwrap_err(), Error::Name);
-    // New names don't go into an htree directory; ext2 (no extents) stays read only.
-    assert_eq!(v.create(&mut d, b"many/new").unwrap_err(), Error::Unsupported);
+    // An htree directory takes new names (it becomes a plain one); ext2 (no extents)
+    // stays read only.
+    v.create(&mut d, b"many/new").unwrap();
+    assert_eq!(v.list(&mut d, b"many").unwrap().len(), 151);
     let (mut d2, mut old) = mount("ext2");
     assert!(old.read_only());
     assert_eq!(old.write(&mut d2, b"small.txt", 0, b"x").unwrap_err(), Error::ReadOnly);
