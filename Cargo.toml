@@ -58,6 +58,7 @@ members = [
     "crates/sex-ime",
     "crates/sexfs",
     "crates/sex-volumes",
+    "crates/sex-crypt",
     "crates/sex-hwdb",
     "crates/sex-net",
     "crates/sex-net-config",
@@ -89,8 +90,12 @@ members = [
     "apps/lua",
     "apps/rg",
     "apps/fd",
+    "apps/bat",
     "apps/python",
     "apps/store",
+    "crates/sex-sdl",
+    "apps/sdltest",
+    "apps/driftspark",
 ]
 [workspace.package]
 license = "GPL-3.0-only"
@@ -151,6 +156,12 @@ pp-rs = { path = "vendor/pp-rs-0.2.1" }
 virtio-drivers = { path = "vendor/virtio-drivers-0.13.0" }
 # rg and fd: ignore's parallel walker on std's Hermit target (vendor/ignore-0.4.34/src/walk.rs, `SexOS:`).
 ignore = { path = "vendor/ignore-0.4.34" }
+# bat: console's stand-in terminal on std's Hermit target (vendor/console-0.16.6/src/lib.rs, `SexOS:`).
+console = { path = "vendor/console-0.16.6" }
+# bat: path_abs builds on std's Hermit target, without symbolic links (vendor/path_abs-0.5.1/src/dir.rs, `SexOS:`).
+path_abs = { path = "vendor/path_abs-0.5.1" }
+# bat: clircle builds on std's Hermit target, where it identifies no file (vendor/clircle-0.6.1/src/clircle_other.rs).
+clircle = { path = "vendor/clircle-0.6.1" }
 # The shader interpreter runs per vertex and per pixel; keep it fast in tests too.
 [profile.dev.package.sex-gl]
 opt-level = 3
