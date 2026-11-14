@@ -75,7 +75,7 @@ impl<'a> Entry<'a> {
     /// Appends the entry at `out[at..]`; the new end, or None if it does not fit.
     pub fn encode(&self, out: &mut [u8], at: usize) -> Option<usize> {
         let (name, product) = (&self.name[..self.name.len().min(NAME_MAX)], &self.product[..self.product.len().min(PRODUCT_MAX)]);
-        let end = at + ENTRY_HEAD + 1 + name.len() + product.len();
+        let end = at + ENTRY_HEAD + 2 + name.len() + product.len();
         let o = out.get_mut(at..end)?;
         o[..2].copy_from_slice(&self.id.to_le_bytes());
         o[2] = self.flags;
