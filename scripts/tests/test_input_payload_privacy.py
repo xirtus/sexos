@@ -76,6 +76,8 @@ class InputPrivacy(unittest.TestCase):
    self.assertIn('"$runner/'+gate+'" --iso "$iso" --binding "$binding"',workflow)
   self.assertIn('runner="$evidence/frozen/source/scripts"',workflow)
   self.assertIn('UNSAFE-keyboard-payload-proof-never-private-input',workflow)
+  commands=[line for line in workflow.splitlines() if 'program_chastity_gate.py' in line]
+  self.assertEqual(len(commands),1);self.assertIn('--input-privacy',commands[0]);self.assertIn('--iso sexos-v1.0.0.iso',commands[0])
  def test_generic_wrapper_and_usb_errors_never_format_arguments(self):
   wrapper=(ROOT/'crates/sex-pdx/src/lib.rs').read_text();start=wrapper.index('"[pdx.listen.raw.wrapper]');end=wrapper.index(');',start);self.assertNotRegex(wrapper[start:end],r'\ba[012]=|arg[012]')
   usb=(ROOT/'servers/sexusb/src/main.rs').read_text()
