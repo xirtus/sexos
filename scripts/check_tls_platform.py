@@ -102,7 +102,13 @@ def check_manifests(tls, workspace, app, trust=None):
                                       'ignore': {'path': 'vendor/ignore-0.4.34'},
                                       'console': {'path': 'vendor/console-0.16.6'},
                                       'path_abs': {'path': 'vendor/path_abs-0.5.1'},
-                                      'clircle': {'path': 'vendor/clircle-0.6.1'}}}
+                                      'clircle': {'path': 'vendor/clircle-0.6.1'},
+                                      # Assuit (WordCraft): Hermit-target fixes, and the PDF writer
+                                      # fork WordCraft's own workspace patches in. None does TLS.
+                                      'filetime': {'path': 'vendor/filetime-0.2.29'},
+                                      'tar': {'path': 'vendor/tar-0.4.46'},
+                                      'krilla': {'git': 'https://github.com/storytold/craft-libs',
+                                                 'rev': '6e03f65bf45181db77ba6229716e6624db9eb25b'}}}
     if workspace.get('patch') and workspace.get('patch') != reviewed_patches:
         errors.append('workspace dependency replacement needs TLS policy review: patch')
     if workspace.get('replace'):

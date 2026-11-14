@@ -65,7 +65,7 @@ pub const IMAGE_BUSY:u32=8;
 pub fn refusal(code: u64) -> &'static [u8] {
     match code as u32 {
         NOT_FOUND => b"No program by that name.",
-        TOO_LARGE => b"That program is over the 16 MiB limit.",
+        TOO_LARGE => b"That program is over the 32 MiB limit.",
         IO => b"The disk failed while reading the program.",
         CORRUPT => b"The program file is damaged.",
         NOT_A_PROGRAM => b"That file is not a program SexOS can run.",

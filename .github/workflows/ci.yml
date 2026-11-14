@@ -61,6 +61,8 @@ jobs:
       run: bash scripts/settings_host_gate.sh
     - name: Signed package format and store catalog
       run: cargo test --locked -p sex-pkg
+    - name: Spreadeagle workbook engine and office painting (host)
+      run: cargo test --locked -p spreadeagle -p assuit -p sex-office
     - name: Disk layouts (GPT, FAT, install beside other systems)
       run: cargo test --locked -p sex-disk --lib
     - name: Keyboard layouts, dead keys and Compose
@@ -423,6 +425,10 @@ jobs:
       run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/build.log"; exit 1)
     - name: Blank program disk
       run: truncate -s 1G "$RUNNER_TEMP/blank-programs.img"
+    - name: Spreadeagle spreadsheet opens, edits, saves and reopens xlsx
+      run: python3 scripts/program_spreadeagle_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/spreadeagle"
+    - name: Assuit word processor opens, edits, saves and reopens docx
+      run: python3 scripts/program_assuit_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/assuit"
     - name: Lua 5.4 interpreter
       run: python3 scripts/lua_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/lua"
     - name: Signed packages, install service and first-run grant question
