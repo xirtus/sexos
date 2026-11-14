@@ -3,6 +3,8 @@ from pathlib import Path
 import json
 import tempfile
 import unittest
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import syscall_fuzz_gate as gate
 
 LINE='run fuzz 20000 4 proto'
