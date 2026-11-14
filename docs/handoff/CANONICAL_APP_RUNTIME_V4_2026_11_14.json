@@ -1,0 +1,189 @@
+{
+  "production_source": "011af342132bcb32d27adf371b18de437e8c6052",
+  "baseline": "Reviewed ba8ebc28, excludes c209 laptop kernel changes",
+  "normal_iso": {
+    "path": "/Users/xmacbookm5/Projects/sexos-plan/target/canonical-input-proof-011af342-v4/normal.iso",
+    "bytes": 310949888,
+    "sha256": "448fb30d1d02a645b52c6952828d71ce8939b8da8f685586f6c65291597f3fab"
+  },
+  "all_nine_normal_app_gates_pass": true,
+  "moan": {
+    "moan-app": {
+      "ok": true,
+      "tone_seconds": 1.99,
+      "edited_tracks": 2,
+      "split_undo": true,
+      "microphone": false
+    },
+    "moan-project": {
+      "ok": true,
+      "bytes": 768228,
+      "hash": "0xe166f756ce3b4f54",
+      "tracks": 2,
+      "clips": 3,
+      "reboot_reopen": true,
+      "pointer_cut": true,
+      "edit_undo_baseline": true
+    },
+    "moan-export": {
+      "ok": true,
+      "formats": {
+        "wav": {
+          "expected_bytes": 768044,
+          "expected_frames": 192000,
+          "codec": "pcm_s16le",
+          "decoded_frames": 192000,
+          "bytes": 768044,
+          "sha256": "1937c53402ede53692125291dfdd597145f4b1a7d1ea2f6555f0376b56e48bfa",
+          "decoded_sha256": "0cc03b924009e6f982b8de5daaf1228b20e93a0f1e36d04eaed96ddf01ba6cb3"
+        },
+        "flac": {
+          "expected_bytes": 74099,
+          "expected_frames": 192000,
+          "codec": "flac",
+          "decoded_frames": 192000,
+          "bytes": 74099,
+          "sha256": "204c25ef7820fc2950122554263dca01df76a0b95824e975b24969a1e54d3bff",
+          "decoded_sha256": "0cc03b924009e6f982b8de5daaf1228b20e93a0f1e36d04eaed96ddf01ba6cb3"
+        },
+        "mp3": {
+          "expected_bytes": 96788,
+          "expected_frames": 192000,
+          "codec": "mp3",
+          "decoded_frames": 191855,
+          "bytes": 96788,
+          "sha256": "34ceb8c8461a409c260faee5fc4c3e8d3ef1c663b0e3d18f52102b19a5bdf6c4",
+          "decoded_sha256": "aaa039229fd3e97911c92a0fd54d3a4471d32dd4bd2375712b0198b1fad48019"
+        }
+      },
+      "close_cancelled": true,
+      "partial_bytes": 32812
+    },
+    "moan-microphone": {
+      "ok": true,
+      "tone_seconds": null,
+      "edited_tracks": 2,
+      "split_undo": true,
+      "microphone": true
+    }
+  },
+  "vault": {
+    "ok": true,
+    "kdf": {
+      "memory_mib": 32,
+      "save_ms": 1071,
+      "open_ms": 977
+    },
+    "clipboard": "refused (ordinary programs)"
+  },
+  "vault_privacy": {
+    "protected_intervals": 12,
+    "all_observed_intervals_safe": true,
+    "serials": {
+      "chastity1-serial.log": {
+        "path": "/Users/xmacbookm5/Projects/sexos-plan/target/canonical-input-proof-011af342-v4/vault-proof/chastity1-serial.log",
+        "bytes": 760137,
+        "sha256": "4f200f2137480f50eebf9001f837fcb4ee0817ed0baf39874b6f55fda9d7c46d",
+        "redacted_kernel_records": 32,
+        "raw_kernel_records": 0
+      },
+      "chastity2-serial.log": {
+        "path": "/Users/xmacbookm5/Projects/sexos-plan/target/canonical-input-proof-011af342-v4/vault-proof/chastity2-serial.log",
+        "bytes": 556396,
+        "sha256": "18f22e90177543ebf66a15c1f7bec1ff166fcac356edeebeae5a0bc45f417dcb",
+        "redacted_kernel_records": 32,
+        "raw_kernel_records": 0
+      }
+    }
+  },
+  "live_autofill": {
+    "ok": true,
+    "persisted_vault": true,
+    "denied_first": true,
+    "approved_once": true,
+    "consumer_run_changed": true,
+    "locked_unavailable": true,
+    "secret_serial_leak": false
+  },
+  "other_apps": {
+    "abacus": {
+      "ok": true,
+      "colours": 1475
+    },
+    "velvet": {
+      "ok": true,
+      "opened": 10,
+      "colours": {
+        "snags": 652,
+        "mingle": 692,
+        "twins": 613
+      }
+    },
+    "leather": {
+      "ok": true,
+      "apps": [
+        "hello",
+        "stitch",
+        "lantern",
+        "postcard"
+      ],
+      "text_bytes": 26,
+      "http_bytes": 29
+    }
+  },
+  "source_receipts": {
+    "moan-normal-summary.json": {
+      "path": "/Users/xmacbookm5/Projects/sexos-plan/target/canonical-input-proof-011af342-v4/moan-normal-summary.json",
+      "bytes": 2298,
+      "sha256": "99d275beae3a8245e33a8c13e6b816651f5563321582282beafb22cd11c995bf"
+    },
+    "moan-export-inputs.json": {
+      "path": "/Users/xmacbookm5/Projects/sexos-plan/target/canonical-input-proof-011af342-v4/moan-export-inputs.json",
+      "bytes": 1481,
+      "sha256": "1f801e2b072f1967bf468634ade6c5f5a0aa0c317e467d348bc5e579ca4a662d"
+    },
+    "moan-remaining-inputs.json": {
+      "path": "/Users/xmacbookm5/Projects/sexos-plan/target/canonical-input-proof-011af342-v4/moan-remaining-inputs.json",
+      "bytes": 1678,
+      "sha256": "4d28b1d5ec434870d3c72477f8fc80664006e2cbf4a65ee2f17fa54b343f0fe1"
+    },
+    "vault-proof-inputs.json": {
+      "path": "/Users/xmacbookm5/Projects/sexos-plan/target/canonical-input-proof-011af342-v4/vault-proof-inputs.json",
+      "bytes": 1093,
+      "sha256": "98f557bde6ea025d973a7fe030f216110ca3518b3b9bb8f342c4783cf23fa9bf"
+    },
+    "autofill-proof-inputs.json": {
+      "path": "/Users/xmacbookm5/Projects/sexos-plan/target/canonical-input-proof-011af342-v4/autofill-proof-inputs.json",
+      "bytes": 1379,
+      "sha256": "3face86695b5054fdb3710bdbfbfc26ec9f0fc3a5180a1ab1f73dcca32836859"
+    },
+    "other-app-proof/inputs.json": {
+      "path": "/Users/xmacbookm5/Projects/sexos-plan/target/canonical-input-proof-011af342-v4/other-app-proof/inputs.json",
+      "bytes": 60930,
+      "sha256": "7ee997459c91d0dcd9efefb7978729f565659f60ecdec084c8f4df0323f40951"
+    },
+    "other-app-proof/result.json": {
+      "path": "/Users/xmacbookm5/Projects/sexos-plan/target/canonical-input-proof-011af342-v4/other-app-proof/result.json",
+      "bytes": 3173,
+      "sha256": "448be655d55d13884e8212e9d16fd1196c0f236e80e2986a97411656a76ceabf"
+    },
+    "normal-elf-comparison.json": {
+      "path": "/Users/xmacbookm5/Projects/sexos-plan/target/canonical-input-proof-011af342-v4/normal-elf-comparison.json",
+      "bytes": 6102,
+      "sha256": "3677da114f1b3e1139941c148bcdf25c1df68e4866a336c428f0a24a9c364f1b"
+    },
+    "strict-gates-summary.json": {
+      "path": "/Users/xmacbookm5/Projects/sexos-plan/target/canonical-input-proof-011af342-v4/strict-gates-summary.json",
+      "bytes": 1891,
+      "sha256": "a78372840a1c00fd4e0ad0e616e615b39a994052250fb8ff208e09a0144547ce"
+    }
+  },
+  "limitations": [
+    "Microphone uses QEMU none backend; capture lifecycle and silence, not physical fidelity.",
+    "Live routing uses two real generic SDK/provider programs. Multipass/Valentine sign-in adapters are not integrated.",
+    "Strict diagnostic acceptance is incomplete: both original failed captures remain unchanged; no sufficient Net timer continuation witness in the second capture.",
+    "No additional PR merged; exact-head full CI including aggregator required.",
+    "Kernel source is unchanged from v3 except previously approved logging patch; rebuilt kernel byte identity is not claimed.",
+    "No hostile, physical, SMP, suspend, crash/power-loss or complete keyboard confidentiality claim."
+  ]
+}

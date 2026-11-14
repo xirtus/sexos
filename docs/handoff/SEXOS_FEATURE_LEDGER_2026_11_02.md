@@ -4731,3 +4731,55 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   Component repair sets remain staged and tested locally. Only #244 has merged;
   exact-head full CI and its aggregator remain mandatory. Original dirty checkout
   and historical artifacts remain untouched; authored kernel delta stays +9 logs.
+
+## ChatGPT round 191: all nine normal v4 gates and author coordination (2026-11-14)
+- All nine app gates pass on normal v4 (production011af342, reviewed ba8 baseline):
+  Moan app/project/export/microphone, Chastity vault/privacy, live generic SDK
+  autofill, Abacus extras, Velvet, and Leather. Root independently verifies image,
+  staged/extracted ELF comparisons, other-app artifacts and twelve protected vault
+  intervals. `CANONICAL_APP_RUNTIME_V4_2026_11_14.json` records exact receipts and
+  limitations; historical cohorts remain unchanged.
+- WAV/FLAC decode to exactly 192,000 stereo frames and expected PCM; real MP3
+  decodes to 191,855 frames and passes signal checks. Close synchronizes a 32,812
+  byte partial without a success receipt. The 768,228-byte project reopens across
+  reboot with two tracks/three clips. Microphone captures 145,408 frames, lost0,
+  using simulated silence: no physical fidelity claim.
+- Both vault boots show exactly 32 redacted kernel startup records and zero raw
+  PS/2 payload records; all twelve observed protected intervals pass. Live consent
+  remains default deny/allow once, rejects reused-run authority, and is unavailable
+  after locking. These are two real generic programs, not integrated Multipass or
+  Valentine sign-in adapters.
+- All 1,292 Python regressions pass (131.765s). A separately reviewed raw-c209
+  source cohort admits only its exact init/SDK declaration/tree hashes. Its six
+  deadline owners are unchanged; no future combined logging/broker cohort is
+  admitted. No kernel source edit is part of that checker review.
+- The first v4 strict capture passes all nine image states but samples ACPI50/64,
+  previously unrecognized. Exact ACPI main/power source pairs plus the unique prior
+  BOOT role now admit that interval only; Net inference remains unchanged. A new
+  checker freeze verifies all 1,847 production hashes and identical ISO/kernel.
+- The corrected-checker capture again passes all nine image states, but lacks a
+  qualifying Net timer continuation: its sole sampled Net expiry follows its last
+  sampled Net return. Rejection is retained, not retried for sampling coincidence.
+  A diagnostic-only passive userspace stats observer is being reviewed as a new,
+  explicitly different continuation witness. No new kernel instrumentation or
+  blanket strict acceptance claim is made.
+- User coordination takes precedence: preserve author PR292's Web daily script if
+  integrating second; author PR295 owns queued launches during session save, so
+  our Fuzz retry workaround is being removed from future integrated cohorts.
+  PR293/295 restore early Term refusal and supersede the downstream-only oracle.
+  Exact author changes are tested in an isolated compatibility preview, never by
+  editing their branches or importing PR245's unrelated Denim kernel work.
+- Both IPv6 halves pass together: 78 Engine and seven neighbor tests. The separate
+  counterfactual keeps PR245's reset-debt regression green but fails our active
+  unanswered-ARP regression against untouched upstream smoltcp, then both pass
+  with the reviewed per-family patch. Both fixes remain necessary.
+- Compatibility review also finds that unheld +launch passes generic argument
+  validation before a child's binding trusts it as a relay grant. This is an exact
+  host predicate/source-flow finding, not a reproduced guest exploit. Separately,
+  PR292's Needle failure is a focus-helper race: pending open focus acknowledges a
+  queued Tab, so F11 closes Quil. Needle and the author Web script stay unchanged;
+  the shared helper repair will preserve normal input-payload redaction.
+- PR296 a68e57da/run43641321530 is queued while dependency reconciliation proceeds.
+  Only PR244 has merged. All merges still require every exact-head leaf and final
+  aggregator green. Original dirty checkout and frozen failure artifacts remain
+  untouched; our authored kernel change remains the approved nine logging lines.
