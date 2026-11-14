@@ -65,6 +65,7 @@ crates = [
   "apps/play/Cargo.toml",
   "apps/cpp/Cargo.toml",
   "apps/stdhello/Cargo.toml",
+  "apps/tassel/Cargo.toml",
   "apps/stdnet/Cargo.toml",
   "apps/ssh/Cargo.toml",
   "apps/chello/Cargo.toml",
@@ -386,6 +387,16 @@ build_std = "std,panic_abort"
 manifest = "apps/stdnet/Cargo.toml"
 source_artifact = "target/x86_64-sex-std/release/stdnet"
 dest_artifact = "iso_root/programs/stdnet"
+
+# egui's own demo app, unmodified, on the egui backend (crates/sex-egui).
+[[stage]]
+id = "build_tassel"
+action = "cargo_manifest"
+target = "x86_64-sex-std.json"
+build_std = "std,panic_abort"
+manifest = "apps/tassel/Cargo.toml"
+source_artifact = "target/x86_64-sex-std/release/tassel"
+dest_artifact = "iso_root/programs/tassel"
 
 # SSH client: log in to other machines (keys, known hosts, exec and shell).
 [[stage]]
