@@ -26,6 +26,9 @@ PAGE=b'<html><body><h1>Hello over IPv6</h1><p>Fetched by a program, by address.<
 ALL_NODES=bytes.fromhex('ff02'+'00'*13+'01')
 ALL_DHCP=bytes.fromhex('ff02'+'00'*11+'010002')
 NAME=b'six.test'
+TIME_SERVER=b'pool.ntp.org'
+# The peer's clock is the host's, shifted by this (s): network_time_gate sets it.
+TIME_SHIFT=0.0
 def text6(a):return socket.inet_ntop(socket.AF_INET6,a) if hasattr(socket,'inet_ntop') else a.hex()
 
 def checksum(data):
@@ -45,7 +48,7 @@ class Peer:
  """One end of QEMU's socket backend: length-prefixed Ethernet frames."""
  def __init__(self):
   self.server=socket.socket();self.server.bind(('127.0.0.1',0));self.server.listen(1);self.port=self.server.getsockname()[1]
-  self.conn=None;self.lock=threading.Lock();self.log=[];self.tcp={};self.client=None;self.udp=[];self.ra_sent=0;self.rs_seen=0;self.ns_seen=0;self.dhcp6=[];self.dns=[]
+  self.conn=None;self.lock=threading.Lock();self.log=[];self.tcp={};self.client=None;self.udp=[];self.ra_sent=0;self.rs_seen=0;self.ns_seen=0;self.dhcp6=[];self.dns=[];self.ntp=[]
   threading.Thread(target=self.serve,daemon=True).start()
  def send(self,frame):
   frame=frame.ljust(60,b'\0')
@@ -86,6 +89,7 @@ class Peer:
    elif kind==128 and dst==PEER:self.send(ether(f[6:12],ip6(PEER,src,58,b'\x81'+body[1:])))
   elif nh==17 and dst==ALL_DHCP and struct.unpack('!H',body[2:4])[0]==547:self.dhcpv6(f[6:12],src,body[8:])
   elif nh==17 and dst==PEER and struct.unpack('!H',body[2:4])[0]==53:self.resolve(f[6:12],src,struct.unpack('!H',body[:2])[0],body[8:])
+  elif nh==17 and dst==PEER and struct.unpack('!H',body[2:4])[0]==123:self.time(f[6:12],src,struct.unpack('!H',body[:2])[0],body[8:])
   elif nh==17 and dst==PEER:
    sport,dport=struct.unpack('!HH',body[:4]);payload=body[8:]
    self.udp.append((text6(src),sport,payload))
@@ -107,11 +111,18 @@ class Peer:
   name=[];at=12
   while q[at]:name.append(q[at+1:at+1+q[at]]);at+=1+q[at]
   kind=struct.unpack('!H',q[at+1:at+3])[0];question=q[12:at+5];self.dns.append((b'.'.join(name),kind))
-  known=b'.'.join(name).lower()==NAME
+  known=b'.'.join(name).lower() in(NAME,TIME_SERVER)
   answer=struct.pack('!HHHIH',0xc00c,28,1,60,16)+PEER if known and kind==28 else b''
   head=q[:2]+struct.pack('!HHHHH',0x8180 if known else 0x8183,1,1 if answer else 0,0,0)
   r=head+question+answer
   self.send(ether(mac,ip6(PEER,src,17,struct.pack('!HHHH',53,sport,8+len(r),0)+r)))
+ def time(self,mac,src,sport,q):
+  # SNTP (RFC 4330): a stratum-2 server whose clock is the host's.
+  def stamp(t):t+=2208988800+TIME_SHIFT;return struct.pack('!II',int(t),int((t%1)*2**32))
+  if len(q)<48 or q[0]&7!=3:return
+  received=time.time();self.ntp.append((received,q[40:48]))
+  r=bytes([4<<3|4,2,6,0xEC])+bytes(8)+b'GATE'+stamp(received)+q[40:48]+stamp(received)+stamp(time.time())
+  self.send(ether(mac,ip6(PEER,src,17,struct.pack('!HHHH',123,sport,8+len(r),0)+r)))
  def tcp_out(self,mac,src,dst,sport,dport,seq,ack,flags,payload=b''):
   head=struct.pack('!HHIIBBHHH',sport,dport,seq,ack,5<<4,flags,65535,0,0)
   self.send(ether(mac,ip6(src,dst,6,head+payload)))

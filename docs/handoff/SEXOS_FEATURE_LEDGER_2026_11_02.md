@@ -4346,3 +4346,15 @@ energy. Details: `LAPTOP_POWER_2026_11_13.md` (Sleep section).
 - No kernel or owned app changes. This is the engine slice, not a complete DAW;
   Weft UI, capture UX, effects, project persistence and export follow. Contract and
   next steps: `docs/handoff/MOAN_2026_11_14.md`.
+
+## B5: network time by SNTP (2026-11-14)
+
+- The clock comes right from the network. Once the open side is up, sexnet asks pool.ntp.org over SNTP, then again every hour, and sooner after a failure (1 min, doubling).
+- The reply is checked by `crates/sex-ntp`, a no_std codec licensed GPL-2.0-or-later OR MIT, with host tests. A reply must echo our random transmit stamp, come from a synchronized server, and arrive within 5 s. A kiss-o'-death is told apart.
+- **ABI:** syscall 76 gains `civil::SET` (`rdi = 1`, `rsi = ms`). Only the time keeper may call it, which is sexnet, recorded at boot. The kernel never writes the CMOS; later civil readings are offset.
+- New `sex_pdx::network_time` (op 0x2E9):
+  - Shell turns network time on or off from `time.network_time`, or asks for a sync now.
+  - Anyone may read the status: state, last step, and minutes since the sync.
+- sexnet's own name lookup steps aside for programs' lookups.
+- Gate `scripts/network_time_gate.py`: QEMU's RTC starts in March 2024. The IPv6 peer, which now also answers SNTP and `pool.ntp.org`, gives the host's time. Civil time lands 26 ms from the host's.
+- Not yet: TLS certificate checks still use the CMOS reading, and there is no Settings "Sync now" button or status line.

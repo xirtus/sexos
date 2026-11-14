@@ -821,6 +821,8 @@ pub fn init() {
     serial_println!("[kernel.sexnet.passive] spawned={} id={} slot_net_grant=0 browser_network=0",
         if sexnet_id != 0 { 1u64 } else { 0u64 }, sexnet_id as u64);
     serial_println!("[bootgraph.phase25.complete]");
+    // sexnet asks the network for the time (SNTP) and alone may set civil time.
+    crate::clock_source::KEEPER.store(sexnet_id,core::sync::atomic::Ordering::Release);
     crate::boot_network::init(sexnet_id);
 
     // Hand framebuffer to sexdisplay: Limine fb.address is ALREADY VIRTUAL.

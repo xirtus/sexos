@@ -146,8 +146,14 @@ pub fn sample(mut pairprovider: impl FnMut() -> Option<(Raw, Raw)>) -> Result<Sn
 /// Unix epoch (UTC). The kernel reads the same CMOS profile at most once a minute and
 /// carries it forward with its millisecond tick between reads. It is data, not a
 /// grant: it reaches no device and names no holder. Answers `[0, ms]` or `[error, 0]`.
+///
+/// `rdi = SET`, `rsi = ms` sets civil time instead (the CMOS is not written; later
+/// readings are offset). Only the time keeper (sexnet, which asks the network) may:
+/// others get `DENIED`; a time outside 2020..=2099 is `INVALID`.
 pub mod civil {
     pub const SYS: u64 = 76;
+    pub const READ: u64 = 0;
+    pub const SET: u64 = 1;
     /// How long a CMOS reading is carried forward by the tick before another.
     pub const RESAMPLE_MS: u64 = 60_000;
 }
