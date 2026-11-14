@@ -109,6 +109,12 @@ jobs:
       run: cargo test --locked --release -p sex-3d
     - name: Pinyin input method
       run: cargo test --locked -p sex-ime
+    - name: Splicy editing core (timeline, edit by transcript, suggestions, render plan, OTIO)
+      run: cargo test --locked -p sex-splice
+    - name: Splicy export (WebM VP9+Opus, MP4 H.264+AAC, MP4 AV1+Opus) through system FFmpeg
+      run: |
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg pkg-config libavcodec-dev libavformat-dev libavutil-dev libswscale-dev
+        python3 scripts/splicy_export_host_gate.py "$RUNNER_TEMP/splicy-export"
     - name: RFB (VNC) client and server codec, byte-exact goldens
       run: cargo test --locked -p sex-rfb
     - name: Serenade audio recorder engine (VOX, dBFS meters, waveform mipmaps, WAV/cue) on the host
