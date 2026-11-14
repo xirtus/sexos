@@ -1,8 +1,9 @@
 # Drag: virtual machines on SexOS (W7 design, awaiting Andreas's decision)
 
-Status: design only. Nothing here is implemented. Drag needs a new kernel mechanism, which
-DAILY_DRIVER_NEXT_100_SLICES.md and DESIGN_GUARDRAILS.md treat as a major change, so the
-first step is Andreas's yes or no on section 3.
+Status: approved. Andreas approved the `SYS_VM` mechanism in section 3 and a kernel line
+budget raise of about 1,200 lines for it on 2026-11-14. This is an exception to the
+"only J and L touch `kernel/`" rule in DAILY_DRIVER_NEXT_100_SLICES.md, limited to the VM
+mechanism. D1 is next; the budget row lands with the D1 code.
 
 ## 1. Goal
 
@@ -79,7 +80,7 @@ All of this stays out of the kernel, in a confined server per guest:
 - Linux via Tuxedo is not a VM and does not run Linux userspace programs; it stays a driver
   bridge only.
 
-## 7. What to ask Andreas
+## 7. Decision
 
-Approve (a) the `SYS_VM` mechanism in section 3 and (b) a kernel budget raise of about
-1,200 lines for it. With a yes, D1 starts; with a no, Drag stays as fallback F.
+2026-11-14: Andreas approved (a) the `SYS_VM` mechanism in section 3 and (b) a kernel budget
+raise of about 1,200 lines for it. D1 starts.
