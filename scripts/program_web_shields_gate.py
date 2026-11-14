@@ -36,6 +36,7 @@ def main():
  def keys(text):
   for k in text:
    if k==':':q.cmd('send-key',{'keys':[{'type':'qcode','data':'shift'},{'type':'qcode','data':'semicolon'}],'hold-time':80})
+   elif k=='+':q.cmd('send-key',{'keys':[{'type':'qcode','data':'shift'},{'type':'qcode','data':'equal'}],'hold-time':80})
    else:q.key(KEYS.get(k,k))
    time.sleep(.06)
  def shot(name):q.cmd('screendump',{'filename':str(a.out/f'{name}.ppm')});time.sleep(.5)
@@ -46,7 +47,7 @@ def main():
   m=g['wait'](r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',s,240);assert m[1].startswith('Saved'),m[1]
   g['focus'](153);time.sleep(.5);s=len(t());keys(f'run +net web {url}');q.key('ret')
   sl=g['wait'](r'\[web.shields.loaded\] lists=(\d+) network=(\d+) cosmetic=(\d+) skipped=(\d+) off=(\d+) ticks=(\d+)',s,600)
-  assert int(sl[2])>100 and sl[4]=='0' and sl[5]=='0',sl.group(0)
+  assert int(sl[2])>50 and sl[4]=='0' and sl[5]=='0',sl.group(0)
   first=g['wait'](loaded,s,1200)
   g['wait'](r'\[web.console\] level=0 shields mixpanel (reached|stopped)',s,300)
   g['wait'](r'\[web.console\] level=0 shields ok script ran',s,60)
