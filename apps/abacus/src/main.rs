@@ -36,11 +36,12 @@ mod program {
         let calc = Abacus::build(&mut app.ui);
         let mut calc = calc;
         app.present();
+        let mut reported = app.frames > 0;
+        if reported { sex_pdx::serial_record!("[abacus.frame] n={}", app.frames); }
         let (target, task) = (app.window.target, app.window.task);
         sex_pdx::serial_record!("[abacus.ready] target={} task={} keys={}", target, task, calc.keys.len());
         report(&app, &calc);
         let mut size = app.ui.size();
-        let mut reported = false;
         let mut last_focus=None;
         loop {
             let out = app.next();
