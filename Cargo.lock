@@ -3862,6 +3862,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-codecs"
+version = "0.1.0"
+dependencies = [
+ "image-webp",
+ "sex-image",
+]
+
+[[package]]
 name = "sex-config"
 version = "0.1.0"
 dependencies = [

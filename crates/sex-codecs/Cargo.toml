@@ -1,0 +1,14 @@
+[package]
+name = "sex-codecs"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Fast, fuzzed pure-Rust decoders for WebP, AVIF, HEIC and GIF animation for SexOS"
+
+[dependencies]
+sex-image = { path = "../sex-image" }
+image-webp = { path = "../../vendor/image-webp-0.2.4" }
+
+[features]
+default = []
+std = []
