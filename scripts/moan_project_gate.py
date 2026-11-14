@@ -8,21 +8,15 @@ from install_program import install
 from quil_autosave_gate import boot
 from program_egui_gate import colours
 from program_gate_geometry import current_tile
-from moan_gate_geometry import ready, viewport, origin, discard
+from moan_gate_geometry import ready, viewport, origin, discard, type_text, spindle
 ROOT=Path(__file__).resolve().parents[1]
 class Controls:
     def __init__(self,g,out,resolution):self.g=g;self.q=g['q'];self.text=g['text'];self.out=out;self.rw,self.rh=map(int,resolution.split('x'))
     def chord(self,*keys):
         self.q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':down,'key':{'type':'qcode','data':key}}}for down,group in ((True,keys),(False,tuple(reversed(keys))))for key in group]})
         time.sleep(.15)
-    def type(self,text):
-        for c in text:
-            if c=='+':self.chord('shift','equal')
-            elif c=='@':self.chord('shift','2')
-            else:self.q.key({' ':'spc','-':'minus','.':'dot','/':'slash'}.get(c,c))
-            time.sleep(.07)
-    def run(self,line):
-        self.g['focus'](153);time.sleep(.3);start=len(self.text());self.type(line);self.q.key('ret');return start
+    def type(self,text):type_text(self.g,text)
+    def run(self,line):return spindle(self.g,line)
     def launch(self,name,line=None):
         start=self.run(line or 'run '+name);m=self.g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',start,120)
         return start,int(m[1]),int(m[2]),int(m[3])

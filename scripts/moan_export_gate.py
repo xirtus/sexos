@@ -9,7 +9,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
-from moan_gate_geometry import ready, discard, control as control_position
+from moan_gate_geometry import ready, discard, type_text, spindle, control as control_position
 import re
 import shutil
 import subprocess
@@ -63,14 +63,12 @@ def main():
     subprocess.run(['rustc','--edition=2021','-O','-A','dead_code','-A','unused_attributes',str(ROOT/'scripts/sexfs_extract.rs'),'-o',str(extractor)],check=True)
     os.environ.setdefault('SEXOS_GATE_BOUND','1200')
     g=boot(a.iso.resolve(),disk,out,'moan-export',a.resolution);q=g['q'];text=g['text'];rw,rh=map(int,a.resolution.split('x'))
-    def keys(value):
-        for c in value:
-            q.key({' ':'spc','/':'slash','.':'dot','-':'minus'}.get(c,c));time.sleep(.06)
+    def keys(value):type_text(g,value)
     def chord(*names):
         q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':down,'key':{'type':'qcode','data':name}}}
             for down,part in ((True,names),(False,tuple(reversed(names)))) for name in part]})
     def say(value):
-        g['focus'](153);time.sleep(.3);start=len(text());keys(value);q.key('ret');return start
+        return spindle(g,value)
     try:
         g['wait'](r'\[app.private.retired\] target=41 ',0,180)
         start=say('files')
