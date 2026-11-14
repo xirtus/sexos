@@ -37,6 +37,7 @@ sex-media = { path = "../../crates/sex-media" }
 sex-gl = { path = "../../crates/sex-gl" }
 sex-fetch = { path = "../../crates/sex-fetch" }
 sex-shields = { path = "../../crates/sex-shields" }
+sex-extensions = { path = "../../crates/sex-extensions" }
 
 [features]
 baseline-jit = ["sex-js/baseline-jit"]

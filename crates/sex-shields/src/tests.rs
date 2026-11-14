@@ -101,6 +101,14 @@ fn unsupported_filters_are_skipped() {
 }
 
 #[test]
+fn to_option() {
+    let e = engine("/collect$to=stats.net|~ok.stats.net");
+    assert!(blocked(&e, "https://a.stats.net/collect", "https://x.org/", Kind::Xhr));
+    assert!(!blocked(&e, "https://ok.stats.net/collect", "https://x.org/", Kind::Xhr));
+    assert!(!blocked(&e, "https://other.net/collect", "https://x.org/", Kind::Xhr));
+}
+
+#[test]
 fn hosts_and_badfilter() {
     let e = engine("0.0.0.0 tracker.io\n127.0.0.1 localhost\n||ads.net^$script\n||ads.net^$script,badfilter");
     assert!(blocked(&e, "https://tracker.io/x", "https://a.b/", Kind::Image));

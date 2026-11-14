@@ -74,6 +74,7 @@ members = [
     "crates/sex-ssh",
     "crates/sex-fetch",
     "crates/sex-shields",
+    "crates/sex-extensions",
     "crates/sex-trust-config",
     "crates/sex-graphics",
     "crates/sex-canvas",

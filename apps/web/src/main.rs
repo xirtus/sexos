@@ -21,6 +21,7 @@ mod mse;
 mod keys;
 mod profile;
 mod shields;
+mod extensions;
 mod tabs;
 mod viewport;
 mod websocket;
@@ -240,6 +241,8 @@ struct Browser {
     download_status: Option<String>,
     /// Ad and tracker blocking.
     shields: shields::Shields,
+    /// Installed extensions.
+    extensions: extensions::Extensions,
     /// Requests Shields blocked for the shown page (and its frames).
     blocked: u32,
     /// What the next request is for, when the code making it knows (see `send`).
@@ -608,7 +611,7 @@ impl Browser {
         let kind = p.kind.unwrap_or(sex_shields::Kind::Other);
         if kind != sex_shields::Kind::Document {
             let page = if kind == sex_shields::Kind::Subdocument && self.nav_from.is_some() { self.parent.clone().unwrap_or_default() } else { self.url.clone() };
-            if self.shields.blocks(&p.url, &page, kind) { self.blocked += 1; return Err(shields::BLOCKED); }
+            if self.shields.blocks(&p.url, &page, kind) || self.extensions.blocks(&p.url, &page, kind).is_some() { self.blocked += 1; return Err(shields::BLOCKED); }
         }
         if p.secure_only && !target.secure { return Err(b"An HTTPS page cannot load an insecure script."); }
         let cross = p.script.as_deref().filter(|o| *o != target.origin());
@@ -688,6 +691,8 @@ impl Browser {
             (self.downloads_page(), String::from(url))
         } else if url == "about:shields" || url == "about:shields?update" {
             (self.shields_page(url), String::from("about:shields"))
+        } else if url == "about:extensions" || url.starts_with("about:extensions?") {
+            (self.extensions_page(url), String::from("about:extensions"))
         } else if let Some(page) = built_in(if url.is_empty() { "about:welcome" } else { url }) {
             (String::from(page), String::from(if url.is_empty() { "about:welcome" } else { url }))
         } else if let Some(file) = url.strip_prefix('@') {
@@ -759,7 +764,13 @@ impl Browser {
         }
         // Shields' hiding rules for what is on this page.
         if let Some(css) = self.shields.css(&base, &dom) { sheets.push(css); }
-        let scripts = self.scripts(&dom, &base);
+        // Extensions' content scripts: their style sheets, and scripts before (at
+        // `document_start`) or after the page's own.
+        let (ext_css, early, late) = self.extensions.content(&mut self.window, &base, self.in_frame.is_some());
+        sheets.extend(ext_css);
+        let mut scripts = early;
+        scripts.extend(self.scripts(&dom, &base));
+        scripts.extend(late);
         // Inline handlers (`onclick="..."`), `javascript:` links and forms need the engine too.
         let handlers = dom.descendants(sex_html::dom::Dom::ROOT).into_iter().any(|n| match &dom.nodes[n].kind {
             sex_html::dom::Kind::Element { tag, attrs, .. } => matches!(tag.as_str(), "input" | "textarea" | "select" | "form")
@@ -1776,9 +1787,10 @@ pub extern "C" fn _start() -> ! {
     let mut b = Browser { #[cfg(feature = "baseline-jit")] jit_enabled: !given.split_ascii_whitespace().any(|a| a == "--no-jit"), window, surface, reported_size: (width, height), fonts, page, doc, sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), media_asked: false, media_loads: Vec::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None, import_map: Vec::new(), view, parent: None, frames: Vec::new(), in_frame: None, frame_dirty: false, referrer_next: None, nav_from: None, frames_check: false,
         tabs: Vec::new(), active: 0, forward: Vec::new(), profile: Default::default(), suggestions: Vec::new(), chosen: None,
         find: None, find_at: 0, marks: Vec::new(), finding: false, laid_zoom: 100, sockets: Vec::new(), downloads: Vec::new(), download_status: None, web_fonts: Vec::new(),
-        shields: shields::Shields::empty(), blocked: 0, next_kind: None };
+        shields: shields::Shields::empty(), extensions: Default::default(), blocked: 0, next_kind: None };
     b.profile = profile::Profile::load(&mut b.window, &mut b.jar.borrow_mut(), wall());
     b.shields = shields::Shields::load(&mut b.window);
+    b.extensions = extensions::Extensions::load(&mut b.window);
     let first_tab = tabs::Tab::blank(&b);
     b.tabs.push(first_tab);
     // Big WebGL draws spread over the cores, a band of rows each.

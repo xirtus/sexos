@@ -121,6 +121,8 @@ struct Net {
     /// `Some(true)`: third-party requests only; `Some(false)`: first-party only.
     third: Option<bool>,
     domains: Domains,
+    /// `$to=`: the request's own host must be (or not be) one of these.
+    to: Domains,
     /// Exceptions only: `$elemhide`, `$generichide`.
     elemhide: bool,
     generichide: bool,
@@ -250,7 +252,7 @@ impl Engine {
         if pattern.len() > 1 && pattern.starts_with('/') && pattern.ends_with('/') { return false; }
         let mut f = Net {
             pattern: Vec::new(), host_anchor: false, start_anchor: false, end_anchor: false, match_case: false,
-            exception, important: false, kinds: 0, third: None, domains: Domains::default(),
+            exception, important: false, kinds: 0, third: None, domains: Domains::default(), to: Domains::default(),
             elemhide: false, generichide: false, text: 0,
         };
         let (mut on, mut off) = (0u16, 0u16);
@@ -284,6 +286,7 @@ impl Engine {
                     ("third-party" | "3p", false) | ("first-party" | "1p", true) => f.third = Some(true),
                     ("third-party" | "3p", true) | ("first-party" | "1p", false) => f.third = Some(false),
                     ("domain" | "from", false) => f.domains = Domains::parse(value.unwrap_or(""), '|'),
+                    ("to", false) => f.to = Domains::parse(value.unwrap_or(""), '|'),
                     ("match-case", false) => f.match_case = true,
                     ("important", false) => f.important = true,
                     ("elemhide" | "ehide", false) if exception => f.elemhide = true,
@@ -313,7 +316,7 @@ impl Engine {
         if let Some(p) = pattern.strip_suffix('|') { f.end_anchor = true; pattern = p; }
         let pattern = pattern.trim_start_matches('*');
         let pattern = if f.end_anchor { pattern } else { pattern.trim_end_matches('*') };
-        if pattern.is_empty() && f.domains.is_empty() && f.third.is_none() && !(f.elemhide || f.generichide) { return false; }
+        if pattern.is_empty() && f.domains.is_empty() && f.to.is_empty() && f.third.is_none() && !(f.elemhide || f.generichide) { return false; }
         f.pattern = if f.match_case { Vec::from(pattern.as_bytes()) } else { pattern.as_bytes().to_ascii_lowercase() };
         let id = self.nets.len() as u32;
         match best_token(&f.pattern.to_ascii_lowercase(), f.host_anchor || f.start_anchor, f.end_anchor) {
@@ -383,6 +386,7 @@ impl Engine {
             if f.exception && except.is_some() || !f.exception && block.is_some() && !f.important { continue; }
             if f.third.is_some_and(|t| t != third) { continue; }
             if !f.domains.is_empty() && !f.domains.applies(&page_host) { continue; }
+            if !f.to.is_empty() && !f.to.applies(url.host()) { continue; }
             if !f.matches(&url) { continue; }
             if f.exception { except = Some(id) } else if f.important { important = Some(id); break } else { block = Some(id) }
         }

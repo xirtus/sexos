@@ -4231,3 +4231,20 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
 
 ## J8 finding: disk reads are not NVMe-queue bound yet (2026-11-14)
 - `run bench read-large` at 4 cores without PKU now logs `[bench.large.cpu]` (Drive, Files, bench, idle cycles per pass). 16 MiB in 64 KiB requests: ~275M cycles; Files ~100M (~390k per request), Drive ~42M (~165k), rest waiting on the serial request chain. Per-core NVMe queues would not help until requests are pipelined (Files readahead / async Drive replies) and Files' per-request CPU drops; deferred until then.
+
+## Kaleidoscope extensions, slice N7a (2026-11-14)
+- **What:** Chrome/Firefox extensions install from a `.crx` (v2/v3) or `.zip` link on
+  `about:extensions` (`?install=URL`), unpacked into Files `Web/extensions/<id>/`; off
+  switch and removal on the same page (`Web/extensions-off.tsv`).
+- **Runs now:** content scripts (CSS into the page's sheets; JS before the page's
+  scripts at `document_start`, after them otherwise, with `chrome.runtime.id/getURL/
+  getManifest`) and declarativeNetRequest static rulesets, turned into Shields filters
+  (`crates/sex-extensions/src/dnr.rs`; new `$to=` option in sex-shields), judged in
+  `send` beside Shields.
+- **Crate:** `crates/sex-extensions` (no_std): MV2/MV3 manifests with `_locales`,
+  Chrome match patterns, CRX/ZIP unpacking (zune-inflate), DNR conversion. Host tests
+  `cargo test -p sex-extensions`; boot gate `scripts/program_web_extensions_gate.py`.
+- **Not yet (N7b):** background pages/service workers, `chrome.storage`, messaging,
+  `scripting`, `webRequest`, popups and options pages, isolated worlds for content
+  scripts, signature checks. uBlock Origin Lite needs these; full uBO (MV2) also needs
+  blocking webRequest.

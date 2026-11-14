@@ -15,7 +15,7 @@ hits=[]
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):
   hits.append(self.path)
-  if self.path=='/web':body=(ROOT/'iso_root/programs/web').read_bytes();self.send_response(200);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body);return
+  if self.path=='/web':body=(ROOT/'iso_root/programs/kaleidoscope').read_bytes();self.send_response(200);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body);return
   if self.path in TRACKERS:body=b'/* tracker */';self.send_response(200);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body);return
   f=SITE/self.path.removeprefix('/site/') if self.path.startswith('/site/') else None
   if f is None or not f.is_file():self.send_response(404);self.send_header('Content-Length','0');self.end_headers();return
@@ -43,9 +43,9 @@ def main():
  loaded=r'\[web.loaded\] bytes_ok=1 items=(\d+) links=(\d+) height=(\d+) sheets=(\d+) images=(\d+) '
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
-  g['focus'](153);time.sleep(.5);s=len(t());keys(f'fetch {base}/web /bin/web');q.key('ret')
+  g['focus'](153);time.sleep(.5);s=len(t());keys(f'fetch {base}/web /bin/kaleidoscope');q.key('ret')
   m=g['wait'](r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',s,240);assert m[1].startswith('Saved'),m[1]
-  g['focus'](153);time.sleep(.5);s=len(t());keys(f'run +net web {url}');q.key('ret')
+  g['focus'](153);time.sleep(.5);s=len(t());keys(f'run +net kaleidoscope {url}');q.key('ret')
   sl=g['wait'](r'\[web.shields.loaded\] lists=(\d+) network=(\d+) cosmetic=(\d+) skipped=(\d+) off=(\d+) ticks=(\d+)',s,600)
   assert int(sl[2])>50 and sl[4]=='0' and sl[5]=='0',sl.group(0)
   first=g['wait'](loaded,s,1200)
@@ -75,7 +75,7 @@ def main():
   assert sorted(h for h in hits if h in TRACKERS)==sorted(TRACKERS),hits
   s=len(t());q.key('f11');g['wait'](rf'\[web.closed\] target={target} task={task}',s,60)
   # The next run remembers the site is off.
-  g['focus'](153);time.sleep(.5);s=len(t());keys(f'run +net web {url}');q.key('ret')
+  g['focus'](153);time.sleep(.5);s=len(t());keys(f'run +net kaleidoscope {url}');q.key('ret')
   sl=g['wait'](r'\[web.shields.loaded\] lists=\d+ network=\d+ cosmetic=\d+ skipped=\d+ off=(\d+) ',s,600);assert sl[1]=='1',sl.group(0)
   text=t();assert 'KERNEL PANIC' not in text and '[web.fatal]' not in text and 'panicked' not in text
   print({'ok':True,'blocked':[(k,u) for k,_,u in blocked],'hide_rules':int(hide[1])})
