@@ -15,8 +15,8 @@
 //! Annotating (Vellum, through vellum-edit): Ctrl+H highlights the found word, or the
 //! region chosen with Ctrl+R (arrows move it, Shift+arrows size it, Enter highlights);
 //! Ctrl+N writes a sticky note there (type, Enter); Ctrl+L lists the page's annotations
-//! (Up, Down, Delete removes one). Ctrl+E fills the form: Tab or Ctrl+Down for the next
-//! field, Shift+Tab or Ctrl+Up for the one before, type into text fields, Space ticks a
+//! (Up, Down, Delete removes one). Ctrl+E fills the form: Ctrl+Down for the next
+//! field (or Tab, where Shell passes it on), Ctrl+Up for the one before, type into text fields, Space ticks a
 //! checkbox, Escape ends. Ctrl+S saves every change as an incremental update appended
 //! to the file (its original bytes stay as they were) and shows the file as saved.
 //!

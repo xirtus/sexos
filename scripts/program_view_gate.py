@@ -68,6 +68,8 @@ server=Quiet(('127.0.0.1',0),Handler);PORT=server.server_address[1]
 threading.Thread(target=server.serve_forever,daemon=True).start()
 os.environ['SEXOS_GATE_NIC']='-netdev user,id=n0 -device e1000e,netdev=n0'
 from quil_autosave_gate import boot
+# Eight pictures, a slideshow, an EXIF photo, an SVG and three thumbnails under emulation.
+os.environ.setdefault('SEXOS_GATE_BOUND','1200')
 KEYS={' ':'spc','/':'slash','.':'dot','-':'minus'}
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()

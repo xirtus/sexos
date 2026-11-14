@@ -2,8 +2,8 @@
 """Vellum edits a PDF and saves it: `run pdf @form.pdf` opens a one-page form; Ctrl+F
 finds PARAKEET and Ctrl+H highlights it; Ctrl+N adds a typed sticky note; Ctrl+R
 chooses a region with the arrows and Enter highlights it; Ctrl+L lists the three and
-Delete removes the region's highlight; Ctrl+E fills the text field, Tab moves to the
-checkbox and Space ticks it; Ctrl+S appends everything as an incremental update and
+Delete removes the region's highlight; Ctrl+E fills the text field, Ctrl+Down moves to the
+checkbox (Shell keeps Tab) and Space ticks it; Ctrl+S appends everything as an incremental update and
 shows the file as read back. Opened again, the file still holds two annotations.
 
 `pdf --thumb @form.pdf @form.thumb 96` writes the first page as a thumbnail with no
@@ -100,7 +100,8 @@ def main():
   # The form: type the name, Tab to the checkbox, Space ticks it, Escape ends.
   step(lambda:chord('ctrl','e'),r'\[pdf\.form\] fields=2 first=name\n')
   keys(NAME)
-  s=len(t());q.key('tab')
+  # Shell keeps Tab (it moves focus between windows): Ctrl+Down is the next field.
+  s=len(t());chord('ctrl','down')
   g['wait'](rf'\[pdf\.field\] name=name kind=text value={NAME}\n',s);g['wait'](r'\[pdf\.field\.focus\] name=agree index=2 page=1\n',s)
   step(lambda:q.key('spc'),r'\[pdf\.field\] name=agree kind=checkbox value=Yes\n')
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'pdf-filled.ppm')})
