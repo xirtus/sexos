@@ -46,6 +46,8 @@ pub extern "C" fn sys_exit(status: i32) -> ! {
     sex_pdx::serial_record!("[std.exit] target={} task={} status={}", me.0, me.1, status);
     console::ended(status);
     console::finish(&if status == 0 { "Finished".to_string() } else { format!("Finished with status {status}") });
+    // Whoever started this run hears how it ended (`sex_pdx::launch`).
+    sex_app::launch::report(status as u32);
     sex_pdx::task_finish(status as u32 as u64)
 }
 
