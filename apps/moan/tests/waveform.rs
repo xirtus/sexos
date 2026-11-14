@@ -149,3 +149,115 @@ fn fit_zoom_and_export_format_controls_use_standard_weft_buttons() {
     let mut pixels = vec![0; 640 * 400];
     assert!(ui.paint(&mut pixels).is_some());
 }
+
+#[test]
+fn moving_a_clip_with_pointer_is_one_undoable_edit_and_preserves_shared_audio() {
+    let (mut ui, mut s) = studio();
+    s.session.mark_saved();
+    let id = ui.find_text("Drag clips").unwrap();
+    ui.set_checked(id, true);
+    s.on(&mut ui, &Response::Toggled(id, true)).unwrap();
+    reveal(&mut ui, &s);
+    let r = ui.rect(s.waveform);
+    let y = r.y + waveform::HEADER as f32 + 10.;
+    let source = s.session.tracks[0].clips[0].source_frames().as_ptr();
+    pointer(
+        &mut ui,
+        &mut s,
+        r.x + 70.,
+        y,
+        PointerKind::Down(Button::Left),
+    );
+    pointer(&mut ui, &mut s, r.x + 100., y, PointerKind::Move);
+    pointer(
+        &mut ui,
+        &mut s,
+        r.x + 140.,
+        y,
+        PointerKind::Up(Button::Left),
+    );
+    assert_eq!(
+        s.session.tracks[0].clips[0].start(),
+        s.view.frame(140) - s.view.frame(70)
+    );
+    assert!(s.session.is_dirty());
+    assert_eq!(
+        s.session.tracks[0].clips[0].source_frames().as_ptr(),
+        source
+    );
+    s.session.undo();
+    assert_eq!(s.session.tracks[0].clips[0].start(), 0);
+    assert!(!s.session.is_dirty());
+}
+#[test]
+fn palette_owns_pointer_input_and_timeline_command_reveals_canvas_at_640_by_400() {
+    let (mut ui, mut s) = studio();
+    s.on(&mut ui, &Response::Command("moan.timeline".into()))
+        .unwrap();
+    ui.layout();
+    let r = ui.rect(s.waveform);
+    assert!(r.y >= 32. && r.bottom() <= 400.);
+    ui.handle(Event::Key(weft::Key::ctrl(0x19).shift()));
+    let before = s.session.cursor;
+    pointer(
+        &mut ui,
+        &mut s,
+        r.x + 100.,
+        r.y + 30.,
+        PointerKind::Down(Button::Left),
+    );
+    assert_eq!(s.session.cursor, before);
+}
+#[test]
+fn dirty_discard_dialog_cancel_and_confirm_are_actual_weft_responses() {
+    let (mut ui, mut s) = studio();
+    assert!(s
+        .on(&mut ui, &Response::Command("moan.new-project".into()))
+        .unwrap()
+        .is_none());
+    let mut canceled = false;
+    for response in ui.handle(Event::Key(weft::Key::new(weft::input::code::ENTER))) {
+        if matches!(response, Response::Dialog(..)) {
+            canceled = true;
+        }
+        assert!(s.on(&mut ui, &response).unwrap().is_none());
+    }
+    assert!(canceled);
+    assert_eq!(s.session.tracks.len(), 1);
+    s.on(&mut ui, &Response::Command("moan.new-project".into()))
+        .unwrap();
+    ui.handle(Event::Key(weft::Key::new(weft::input::code::TAB)));
+    let mut action = None;
+    for response in ui.handle(Event::Key(weft::Key::new(weft::input::code::ENTER))) {
+        action = action.or(s.on(&mut ui, &response).unwrap());
+    }
+    assert_eq!(action, Some(Action::NewProject));
+}
+#[test]
+fn format_shortcuts_dispatch_through_weft() {
+    let (mut ui, mut s) = studio();
+    for (code, expected) in [(0x02, 0), (0x03, 1), (0x04, 2)] {
+        for response in ui.handle(Event::Key(weft::Key::ctrl(code).shift())) {
+            s.on(&mut ui, &response).unwrap();
+        }
+        assert_eq!(s.export_format, expected);
+    }
+}
+
+#[test]
+fn open_file_menu_keeps_pointer_ownership_above_waveform_content() {
+    let (mut ui, mut s) = studio();
+    reveal(&mut ui, &s);
+    let r = ui.rect(s.waveform);
+    let original = s.session.cursor;
+    ui.handle(Event::Key(weft::Key::new(weft::input::code::F10)));
+    assert!(!ui.find_kind("menurow").is_empty());
+    pointer(
+        &mut ui,
+        &mut s,
+        r.x + 100.,
+        r.y + 30.,
+        PointerKind::Down(Button::Left),
+    );
+    assert_eq!(s.session.cursor, original);
+}
