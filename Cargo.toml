@@ -120,6 +120,7 @@ members = [
     "crates/loom-core",
     "crates/aftercare-core",
     "crates/moan-core",
+    "crates/moan-export",
     "apps/moan-probe",
     "apps/moan",
 ]

@@ -29,6 +29,51 @@ mod guest {
         pcm.extend_from_slice(&block[..keep]);
         n
     }
+    /// Drain codec writes in the file owner's main thread. AVIO callbacks never
+    /// perform IPC. Ordered header rewrites are as important as appended packets.
+    fn export_drain(
+        app: &mut App,
+        studio: &mut Studio,
+        encoder: &mut moan_export::Encoder,
+        path: &[u8],
+    ) -> Result<bool, &'static str> {
+        loop {
+            while let Some(event) = app.window.poll() {
+                match event {
+                    sex_app::Event::Close => {
+                        sex_pdx::serial_record!("[moan.export.cancelled] partial_retained=1");
+                        moan::project_io::close_requested(app, studio);
+                        return Err("Export cancelled; partial new file retained");
+                    }
+                    sex_app::Event::Resize { width, height } => {
+                        app.ui.handle(weft::Event::Resize {
+                            width: width as u32,
+                            height: height as u32,
+                        });
+                    }
+                    _ => {}
+                }
+            }
+            match encoder
+                .output()
+                .map_err(|_| "Encoder output failed; partial file retained")?
+            {
+                moan_export::Drain::NeedFrames => return Ok(false),
+                moan_export::Drain::End => return Ok(true),
+                moan_export::Drain::Write(write) => {
+                    let (token, offset, length) = (write.token, write.offset, write.bytes.len());
+                    let wrote = files::write_at(&mut app.window, path, offset, write.bytes)
+                        .map_err(|_| "Export write failed; partial file retained")?;
+                    if wrote != length {
+                        return Err("Short export write; partial file retained");
+                    }
+                    encoder
+                        .acknowledge(token, wrote)
+                        .map_err(|_| "Export acknowledgement failed; partial file retained")?;
+                }
+            }
+        }
+    }
     fn export(app: &mut App, studio: &mut Studio) -> Result<(), &'static str> {
         let frames = studio
             .session
@@ -38,60 +83,80 @@ mod guest {
         if studio.session.tracks.is_empty() {
             return Err("Add audio first");
         }
-        let header = moan::wav_header(frames)?;
+        let format = moan_export::Format::try_from(studio.export_format)
+            .map_err(|_| "Choose WAV, FLAC or MP3")?;
+        // Verify a real codec is available before creating any destination.
+        let mut encoder = moan_export::Encoder::new(format, frames as u64)
+            .map_err(|_| "Audio encoder could not start")?;
         let mut path = [0u8; sex_pdx::fs::PATH_BYTES];
-        let chosen = files::pick(&mut app.window, files::Pick::Save, b"mix.wav", &mut path)
-            .map_err(|_| "Export cancelled")?;
-        // Exclusive create prevents an export from overwriting another file.
+        let suggestion = format!("mix.{}", format.extension());
+        let chosen = files::pick(
+            &mut app.window,
+            files::Pick::Save,
+            suggestion.as_bytes(),
+            &mut path,
+        )
+        .map_err(|_| "Export cancelled")?;
         files::create(&mut app.window, chosen)
             .map_err(|_| "Choose a new filename; destination exists or is unavailable")?;
+        studio.set_busy(&mut app.ui, true);
+        for t in &mut studio.session.tracks {
+            t.reset_effects();
+        }
+        sex_pdx::serial_record!(
+            "[moan.export.started] format={} frames={}",
+            format.extension(),
+            frames
+        );
         let result = (|| {
-            if files::write_at(&mut app.window, chosen, 0, &header)
-                .map_err(|_| "Cannot write WAV")?
-                != header.len()
-            {
-                return Err("Short WAV header write");
-            }
-            for t in &mut studio.session.tracks {
-                t.reset_effects();
-            }
-            let mut block = [[0i16; 2]; 1024];
-            let mut bytes = [0u8; 4096];
+            export_drain(app, studio, &mut encoder, chosen)?;
+            let mut block = vec![[0i16; 2]; encoder.frame_capacity()];
             let mut at = 0;
+            let mut next_progress = 0;
             while at < frames {
-                if matches!(app.window.poll(), Some(sex_app::Event::Close)) {
-                    sex_pdx::serial_record!("[moan.export.cancelled] partial_retained=1");
-                    sex_pdx::task_finish(0);
-                }
                 let n = block.len().min(frames - at);
                 moan_core::render_processed(&mut studio.session.tracks, at, &mut block[..n]);
-                for (f, b) in block[..n].iter().zip(bytes.chunks_exact_mut(4)) {
-                    b[..2].copy_from_slice(&f[0].to_le_bytes());
-                    b[2..].copy_from_slice(&f[1].to_le_bytes());
-                }
-                if files::write_at(
-                    &mut app.window,
-                    chosen,
-                    44 + (at * 4) as u64,
-                    &bytes[..n * 4],
-                )
-                .map_err(|_| "WAV write failed; partial file retained")?
-                    != n * 4
-                {
-                    return Err("Disk full; partial WAV retained");
-                }
+                encoder
+                    .push(&block[..n])
+                    .map_err(|_| "Audio encoding failed; partial file retained")?;
+                export_drain(app, studio, &mut encoder, chosen)?;
                 at += n;
+                if at >= next_progress || at == frames {
+                    studio.message(
+                        &mut app.ui,
+                        &format!(
+                            "Exporting {}: {:.0}%",
+                            format.extension(),
+                            at as f64 * 100. / frames as f64
+                        ),
+                    );
+                    app.present();
+                    next_progress = at + RATE as usize;
+                }
             }
-            files::sync(&mut app.window).map_err(|_| "WAV sync failed")?;
+            encoder
+                .finish()
+                .map_err(|_| "Encoder finalization failed; partial file retained")?;
+            if !export_drain(app, studio, &mut encoder, chosen)? {
+                return Err("Encoder did not finish; partial file retained");
+            }
+            files::sync(&mut app.window)
+                .map_err(|_| "Export sync failed; partial file retained")?;
             sex_pdx::serial_record!(
-                "[moan.export] frames={} bytes={} synced=1",
+                "[moan.export] format={} frames={} bytes={} synced=1",
+                format.extension(),
                 frames,
-                44 + frames * 4
+                encoder.length()
             );
             Ok(())
         })();
         for t in &mut studio.session.tracks {
             t.reset_effects();
+        }
+        studio.set_busy(&mut app.ui, false);
+        if result.is_err() {
+            let synced = files::sync(&mut app.window).is_ok();
+            sex_pdx::serial_record!("[moan.export.partial] synced={}", synced as u8);
         }
         result
     }
@@ -115,7 +180,9 @@ mod guest {
     extern "C" fn main() -> ! {
         let mut app = App::open("Moan", Theme::dark(), Strings::new("en"));
         let mut studio = Studio::build(&mut app.ui);
+        moan::project_io::startup(&mut app, &mut studio);
         app.present();
+        moan::project_io::log(&mut app, &studio);
         sex_pdx::serial_record!(
             "[moan.ready] target={} task={}",
             app.window.target,
@@ -161,27 +228,25 @@ mod guest {
                 app.ui.tick(weft::sexos::now());
                 let mut out = Vec::new();
                 if let Some(e) = app.window.next_within(4) {
-                    out.extend(app.ui.handle(weft::sexos::event(e)));
+                    out.extend(studio.handle_event(&mut app.ui, weft::sexos::event(e)));
                 }
                 for _ in 0..64 {
                     let Some(e) = app.window.poll() else { break };
-                    out.extend(app.ui.handle(weft::sexos::event(e)));
+                    out.extend(studio.handle_event(&mut app.ui, weft::sexos::event(e)));
                 }
                 out
             } else {
-                app.next()
+                studio.next(&mut app)
             };
+            let had_responses = !responses.is_empty();
             for r in responses {
                 studio.set_busy(&mut app.ui, playing || paused || recording.is_some());
-                if r == Response::Close {
-                    if let Some(s) = &mut sound {
-                        s.listen(false);
-                        s.skip();
-                    }
-                    sex_pdx::serial_record!("[moan.closed]");
-                    sex_pdx::task_finish(0);
-                }
-                match studio.on(&mut app.ui, &r) {
+                let outcome = if r == Response::Close {
+                    Ok(studio.request_close_with_pending(&mut app.ui, recording.is_some()))
+                } else {
+                    studio.on(&mut app.ui, &r)
+                };
+                match outcome {
                     Err(e) => studio.message(&mut app.ui, e),
                     Ok(action) => match action {
                         Some(Action::Play) => {
@@ -320,6 +385,40 @@ mod guest {
                                 },
                             );
                         }
+                        Some(Action::OpenProject) | Some(Action::SaveProject) => {
+                            if playing || paused || recording.is_some() {
+                                studio.message(
+                                    &mut app.ui,
+                                    "Stop transport before project operations",
+                                );
+                                continue;
+                            }
+                            let result = if action == Some(Action::OpenProject) {
+                                moan::project_io::open(&mut app, &mut studio)
+                            } else {
+                                moan::project_io::save(&mut app, &mut studio)
+                            };
+                            studio.message(
+                                &mut app.ui,
+                                match result {
+                                    Ok(()) => "Editable project operation complete",
+                                    Err(error) => error,
+                                },
+                            );
+                        }
+                        Some(Action::NewProject) => {
+                            studio.new_project(&mut app.ui);
+                            studio.message(&mut app.ui, "New editable project");
+                            sex_pdx::serial_record!("[moan.project.new] tracks=0 clean=1");
+                        }
+                        Some(Action::Quit) => {
+                            if let Some(s) = &mut sound {
+                                s.listen(false);
+                                s.skip();
+                            }
+                            sex_pdx::serial_record!("[moan.closed]");
+                            sex_pdx::task_finish(0);
+                        }
                         None => {
                             sex_pdx::serial_record!(
                                 "[moan.project] tracks={} frames={} selected={} clips={}",
@@ -336,6 +435,9 @@ mod guest {
                         }
                     },
                 }
+            }
+            if had_responses {
+                moan::project_io::log(&mut app, &studio);
             }
             if let Some(s) = &mut sound {
                 if let Some(pcm) = &mut recording {

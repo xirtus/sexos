@@ -7,6 +7,7 @@ license.workspace = true
 default = ["sexos"]
 sexos = ["dep:sex-app", "dep:sex-pdx", "weft/sexos"]
 [dependencies]
+moan-export = { path = "../../crates/moan-export" }
 moan-core = { path = "../../crates/moan-core" }
 weft = { path = "../../crates/weft" }
 sex-app = { path = "../../crates/sex-app", optional = true }

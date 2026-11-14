@@ -4337,3 +4337,18 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
 - Remaining scope is explicit: Moan FFmpeg FLAC/MP3 export, project persistence and
   graphical waveforms; Chastity live cross-app autofill transport/consent routing.
   Chastity's tested authorization API is not claimed as a deployed IPC service.
+
+## ChatGPT round 180: Moan editable projects and graphical waveform editing (2026-11-14)
+- Self-contained versioned `.moan` codec preserves shared source IDs/PCM, clips,
+  positions, gains/fades, tracks, mixer/effect settings and selection. Bounded
+  preflight validates malformed data before PCM allocation or session replacement.
+- Actual Weft waveform image content, clamped pointer selection/cut/clip dragging,
+  zoom/fit/pan controls, overlay ownership and compact-window scrolling. Saved
+  revision baselines survive undo/redo; reopening starts clean with fresh history.
+- Runtime uses existing Files/Shell-held routes for startup/open and exclusive
+  save-as plus sync. Cancel/Discard protects unsaved edits and active recording;
+  Close during export/I/O no longer bypasses that guard. No toolkit/kernel edits.
+- 28 Moan host tests pass; real FFmpeg-enabled guest build and instruction scan
+  pass. New QEMU gate saves an edited project, reboots, reopens exact bytes, edits/
+  undoes and retains waveform screenshots. Runtime result remains pending CI.
+- Details and exact format/bounds: `docs/handoff/MOAN_2026_11_14.md` round180.
