@@ -946,11 +946,12 @@ fn make_thumb(r: &thumb::Request) -> Result<(usize, usize), String> {
     let scale = (tw as f32 / pw.max(1.0)).min(th as f32 / ph.max(1.0)).min(1.0);
     let (pixels, w, h) = render_page(&pdf, 0, scale).ok_or("the page could not be drawn")?;
     let image = sex_image::Image { width: w, height: h, pixels: pixels.into_iter().map(|p| p | 0xFF00_0000).collect() };
-    let small = thumb::shrink(image, r.size).map_err(|e| format!("cannot shrink: {e:?}"))?;
+    // The renderer rounds the page's sides its own way: the fitted size is the promise.
+    let small = thumb::resize(image, tw, th).map_err(|e| format!("cannot shrink: {e:?}"))?;
     let out = thumb::encode(&small).ok_or("cannot encode")?;
     thumb::write_whole(&r.output, &out).map_err(|e| format!("cannot write {}: {e}", r.output))?;
     let _ = sex_std::sex_app::files::direct::sync();
-    sex_std::record(&format!("[pdf.thumb] status=0 w={} h={} bytes={} ms={}", small.width, small.height, out.len(), started.elapsed().as_millis()));
+    sex_std::record(&format!("[pdf.thumb] status=0 w={} h={} bytes={} ms={} out={}", small.width, small.height, out.len(), started.elapsed().as_millis(), r.output));
     Ok((small.width, small.height))
 }
 

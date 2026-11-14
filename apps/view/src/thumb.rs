@@ -57,8 +57,17 @@ pub fn fit(w: usize, h: usize, size: usize) -> (usize, usize) {
 /// Shrinks `image` to [`fit`] inside `size` by `size`, averaging each source box.
 pub fn shrink(image: Image, size: usize) -> Result<Image, sex_image::Error> {
     let (w, h) = fit(image.width, image.height, size);
+    resize(image, w, h)
+}
+
+/// `image` at exactly `w` by `h`: each output pixel the average of its source box
+/// (at least one source pixel, so a side one pixel longer repeats a row or column).
+pub fn resize(image: Image, w: usize, h: usize) -> Result<Image, sex_image::Error> {
     if (w, h) == (image.width, image.height) {
         return Ok(image);
+    }
+    if w == 0 || h == 0 || image.width == 0 || image.height == 0 {
+        return Err(sex_image::Error::TooLarge);
     }
     let (sw, sh) = (image.width, image.height);
     let mut out = Vec::new();
@@ -180,6 +189,10 @@ mod tests {
         let tiny = Image { width: 5, height: 4, pixels: vec![0xFF000000; 20] };
         let same = shrink(tiny, 64).unwrap();
         assert_eq!((same.width, same.height), (5, 4));
+        // One row short (a renderer rounding down): the last row repeats.
+        let short = Image { width: 3, height: 2, pixels: vec![1 << 24, 2 << 24, 3 << 24, 4 << 24, 5 << 24, 6 << 24] };
+        let tall = resize(short, 3, 3).unwrap();
+        assert_eq!(tall.pixels.iter().map(|p| p >> 24).collect::<Vec<_>>(), [1, 2, 3, 1, 2, 3, 4, 5, 6]);
     }
 
     #[test]

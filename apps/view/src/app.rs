@@ -511,7 +511,7 @@ fn make_thumb(r: &thumb::Request) -> Result<(usize, usize, usize), String> {
     let out = thumb::encode(&small).ok_or("cannot encode")?;
     thumb::write_whole(&r.output, &out).map_err(|e| format!("cannot write {}: {e}", r.output))?;
     let _ = files::direct::sync();
-    sex_pdx::serial_record!("[view.thumb] status=0 w={} h={} bytes={} ms={}", small.width, small.height, out.len(), started.elapsed().as_millis());
+    sex_pdx::serial_record!("[view.thumb] status=0 w={} h={} bytes={} ms={} out={}", small.width, small.height, out.len(), started.elapsed().as_millis(), r.output);
     Ok((small.width, small.height, out.len()))
 }
 
