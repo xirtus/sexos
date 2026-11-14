@@ -324,6 +324,10 @@ output: Spindle admitted its display batches early in the run but no later
 paint was applied before capture. Together with the Quil paint lag seen in
 F3/F6, this points at Display applying app paints late under these gates.
 
+## G-7: Fix Zip64 EOCD locator subtraction underflow in `sex-archive` (#258) (2026-11-14)
+- `crates/sex-archive/src/zip.rs`: guard `find_eocd`, central-directory bounds and local-file-header offset math with `checked_sub`/`checked_add` so truncated or corrupt Zip64 locators (`20 <= eocd_abs < 76`) return `Err(Error::Corrupt(...))` instead of panicking on unsigned underflow.
+- Regression: `zip_eocd_underflow_issue_258` in `crates/sex-archive/tests/archive.rs` covering the 46-byte `cargo-fuzz` reproducer and boundary lengths `0..=128`.
+
 ## F10. Bounded inline script subset in the Browser (2026-11-02)
 
 **What changed.** First step toward scripting. Inline `<script>` blocks in an
