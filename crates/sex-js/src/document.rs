@@ -416,6 +416,18 @@ impl Page for Document {
                     _ => None,
                 };
             }
+            op::ADOPTED_STYLES => {
+                let root = self.node(a.first())?;
+                if root != Dom::ROOT && self.dom.tag(root) != Some("sx-shadow") { return Some(String::from("!")); }
+                let text = *a.get(1)?;
+                // One bounded page-wide budget, including detached shadow roots.
+                let other: usize = self.dom.adopted_styles.iter().filter(|(r, _)| **r != root).map(|(_, s)| s.len()).sum();
+                if text.len() > 2 * 1024 * 1024 || other.saturating_add(text.len()) > 2 * 1024 * 1024 { return Some(String::from("!")); }
+                if text.is_empty() { self.dom.adopted_styles.remove(&root); }
+                else { self.dom.adopted_styles.insert(root, String::from(text)); }
+                self.dirty = true;
+                Some(none())
+            }
             op::BY_ID => {
                 let want = *a.first()?;
                 self.dom.descendants(Dom::ROOT).into_iter().find(|&n| self.dom.attr(n, "id") == Some(want)).map(|n| format!("{n}"))

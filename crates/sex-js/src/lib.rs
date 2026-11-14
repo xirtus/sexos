@@ -76,6 +76,8 @@ pub mod op {
     /// (control, caret in characters): focuses a text control and places its caret;
     /// (): no text control has focus.
     pub const CARET: u32 = 28;
+    /// (document/shadow root, CSS text): replace its adopted constructed sheets.
+    pub const ADOPTED_STYLES: u32 = 35;
     /// (video or audio element, verb, argument): play, pause, seek SECONDS, load,
     /// volume 0..1, muted 0/1, loop 0/1; queued for the browser. The browser answers
     /// with `media` dispatches carrying the element's state and its events.

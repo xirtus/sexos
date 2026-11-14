@@ -399,6 +399,7 @@ impl<'a> Cascade<'a> {
         let mut found: Vec<Applied> = Vec::new();
         let mut consider = |list: Option<&Vec<(u16, u32, u16)>>| {
             for &(si, ri, xi) in list.into_iter().flatten() {
+                if self.sheets[si as usize].scope.is_some_and(|root| dom.style_scope(node) != root) { continue; }
                 let sel = &self.sheets[si as usize].rules[ri as usize].selectors[xi as usize];
                 if css::matches(dom, node, sel) {
                     let origin = if si == 0 { 0u64 } else { 1 };

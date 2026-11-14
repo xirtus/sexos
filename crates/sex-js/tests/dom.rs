@@ -1443,3 +1443,51 @@ fn pointer_default_link_follows_hit_target_and_ancestor() {
     let styles=sex_html::styles(&d.dom,&["#over {pointer-events:auto !important}"],410,330);d.set_pointer_styles(&styles);
     assert_eq!(d.pointer_link_at(10,80,&links),Some(over));
 }
+
+#[test]
+fn constructed_styles_apply_update_remove_and_stay_out_of_dom() {
+    let mut s = page("<html><head><style>.target {font-size:11px}</style></head><body><p id=outside class=target>x</p><div id=host></div></body></html>");
+    s.eval(r#"
+      const sheet = new CSSStyleSheet();
+      sheet.replaceSync('.target {font-size:23px}');
+      document.adoptedStyleSheets = [sheet, ...document.adoptedStyleSheets];
+      const shadow = document.getElementById('host').attachShadow({mode:'open'});
+      shadow.innerHTML = '<p id="inside" class="target">y</p>';
+      shadow.adoptedStyleSheets.push(sheet);
+      console.log(document.adoptedStyleSheets.length, document.styleSheets.length, document.querySelectorAll('style').length);
+      try { document.adoptedStyleSheets.push(document.querySelector('style').sheet); } catch(e) { console.log(e.name); }
+    "#, "adopt.js").unwrap();
+    assert_eq!(logs(&mut s), ["0:1 1 1", "0:NotAllowedError"]);
+    fn sizes(s: &Script<Document>) -> Vec<i32> {
+        let d = &s.page().dom;
+        let styles = sex_html::styles(d, &[], 410, 330);
+        d.descendants(0).into_iter().filter(|&n| matches!(d.attr(n,"id"),Some("outside"|"inside"))).map(|n| styles[n].as_ref().unwrap().font_size).collect()
+    }
+    assert_eq!(sizes(&s), [23,23]);
+    s.eval("sheet.replaceSync('.target {font-size:31px}'); document.adoptedStyleSheets.pop();", "adopt.js").unwrap();
+    assert_eq!(sizes(&s), [11,31]);
+    s.eval("shadow.innerHTML = '<p id=inside class=target>new</p>'; sheet.insertRule('.target {font-size:37px}',1);", "adopt.js").unwrap();
+    assert_eq!(sizes(&s), [11,37]);
+    s.eval("sheet.disabled = true", "adopt.js").unwrap();
+    assert_eq!(sizes(&s), [11,11]);
+    s.eval("sheet.disabled = false; shadow.adoptedStyleSheets.length = 0", "adopt.js").unwrap();
+    assert_eq!(sizes(&s), [11,11]);
+    assert!(s.page().dom.adopted_styles.is_empty());
+}
+
+#[test]
+fn wikipedia_popup_complex_exclusions_and_selector_alternatives() {
+    let mut s = page("<div id=mw-content-text><a id=ok href=/wiki/A title=A>A</a><span class=mw-cite-backlink><a id=no href=/wiki/B title=B>B</a></span><a id=new class=new href=/wiki/C title=C>C</a></div>");
+    s.eval(r##"
+      const sel = '#mw-content-text a[href][title]:not(.extiw, .mw-selflink, .image, .new, .internal, .external, .mw-cite-backlink a, .oo-ui-buttonElement-button, .ve-ce-surface a, .ext-discussiontools-init-timestamplink, .cancelLink a, .mw-selflink-fragment, [href^="#"])';
+      console.log(document.querySelectorAll(sel).map(e=>e.id).join(','));
+      console.log(document.getElementById('ok').closest(sel).id, document.getElementById('no').closest(sel));
+      console.log(document.querySelectorAll('a:is(.missing, .mw-cite-backlink a)').map(e=>e.id).join(','));
+      console.log(document.querySelectorAll('a:where(.missing, .new)').map(e=>e.id).join(','));
+    "##,"popups.js").unwrap();
+    assert_eq!(logs(&mut s), ["0:ok", "0:ok null", "0:no", "0:new"]);
+    assert_eq!(sex_html::css::parse_selector("a:where(#x)").unwrap().specificity, 1);
+    assert_eq!(sex_html::css::parse_selector("a:is(.x,#y)").unwrap().specificity, 65537);
+    let nested = format!("{}a{}", ":not(".repeat(40), ")".repeat(40));
+    assert!(sex_html::css::parse_selector(&nested).is_none());
+}
