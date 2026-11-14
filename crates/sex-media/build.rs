@@ -13,6 +13,7 @@ fn main() {
     println!("cargo:rerun-if-changed={}", ff.join("lib/libavcodec.a").display());
     println!("cargo::rustc-check-cfg=cfg(ffmpeg)");
     println!("cargo::rustc-check-cfg=cfg(ffmpeg_recording)");
+    println!("cargo::rustc-check-cfg=cfg(ffmpeg_export)");
     let recording_marker = ff.join("sexos-recording-v1");
     if recording_marker.exists() { println!("cargo:rerun-if-changed={}", recording_marker.display()); }
     let target = env::var("TARGET").unwrap_or_default();
@@ -24,8 +25,12 @@ fn main() {
         return;
     }
     println!("cargo:rustc-cfg=ffmpeg");
-    let recording = std::fs::read(&recording_marker).is_ok_and(|bytes| bytes == b"1\n");
+    // 1: the recorder (FFV1/Matroska); 2: that and Splicy's export (WebM/MP4).
+    let profile = std::fs::read(&recording_marker).unwrap_or_default();
+    let export = profile == b"2\n";
+    let recording = export || profile == b"1\n";
     if recording { println!("cargo:rustc-cfg=ffmpeg_recording"); }
+    if export { println!("cargo:rustc-cfg=ffmpeg_export"); }
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
     let resource = String::from_utf8(Command::new("clang").arg("-print-resource-dir").output().unwrap().stdout).unwrap();
     let obj = out.join("ffmpeg_bridge.o");
@@ -54,13 +59,26 @@ fn main() {
             .status().expect("clang recording bridge").success());
         objects.push(object);
     }
+    if export {
+        println!("cargo:rerun-if-changed=src/export/bridge.c");
+        let object = out.join("export_bridge.o");
+        assert!(Command::new("clang")
+            .args(["--target=x86_64-unknown-none-elf", "-nostdinc", "-std=c17", "-O2", "-fPIC", "-ffunction-sections", "-fdata-sections"])
+            .args(["-msse2", "-mno-avx", "-mno-red-zone", "-fno-stack-protector", "-Wall", "-Werror", "-D_GNU_SOURCE"])
+            .arg("-isystem").arg(format!("{}/include", resource.trim()))
+            .arg("-isystem").arg(ff.join("include-c"))
+            .arg("-I").arg(ff.join("include"))
+            .args(["-c", "src/export/bridge.c", "-o"]).arg(&object)
+            .status().expect("clang export bridge").success());
+        objects.push(object);
+    }
     assert!(Command::new("llvm-ar").arg("crs").arg(&lib).args(&objects).status().unwrap().success());
     println!("cargo:rustc-link-search=native={}", out.display());
     println!("cargo:rustc-link-search=native={}", ff.join("lib").display());
     // dav1d (AV1) sits beside FFmpeg's archives when it was built with them.
-    let dav1d = ff.join("lib/libdav1d.a").exists();
-    for l in ["mediabridge", "avformat", "avcodec", "dav1d", "swscale", "swresample", "avutil"] {
-        if l == "dav1d" && !dav1d { continue; }
+    // So do libvpx (VP9 export) and the other export encoders in the export profile.
+    for l in ["mediabridge", "avformat", "avcodec", "dav1d", "vpx", "swscale", "swresample", "avutil"] {
+        if matches!(l, "dav1d" | "vpx") && !ff.join(format!("lib/lib{l}.a")).exists() { continue; }
         println!("cargo:rustc-link-lib=static={l}");
     }
 }

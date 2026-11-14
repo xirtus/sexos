@@ -81,6 +81,12 @@ jobs:
       run: cargo test --locked -p sex-archive --features std
     - name: Pinyin input method
       run: cargo test --locked -p sex-ime
+    - name: Splicy editing core (timeline, edit by transcript, suggestions, render plan, OTIO)
+      run: cargo test --locked -p sex-splice
+    - name: Splicy export (WebM VP9+Opus, MP4 H.264+AAC, MP4 AV1+Opus) through system FFmpeg
+      run: |
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg pkg-config libavcodec-dev libavformat-dev libavutil-dev libswscale-dev
+        python3 scripts/splicy_export_host_gate.py "$RUNNER_TEMP/splicy-export"
     - name: Multipass accounts, Shibari keeper (link fixtures, tokens never leave)
       run: cargo test --locked -p shibari -p sex-multipass
     - name: Valentine mail (IMAP IDLE + SMTP send-then-receive fixture, MIME, threads)
