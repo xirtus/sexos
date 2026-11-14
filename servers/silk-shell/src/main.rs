@@ -268,6 +268,7 @@ unsafe fn shell_program_reborn(msg: &sex_pdx::PdxMessage) {
 unsafe fn shell_lifecycle_hint(msg: &sex_pdx::PdxMessage) -> bool {
     if msg.type_id == sex_pdx::app_lifecycle::OP_APP_REBORN { shell_program_reborn(msg); return true; }
     if msg.type_id != sex_pdx::app_lifecycle::OP_APP_EXIT { return false; }
+    if msg.caller_pd == 0 { launch_ended(msg.arg0 as u32, msg.arg1 as u32); }
     for e in APP_CUSTODY.iter_mut().flatten() { e.hint(msg.caller_pd, msg.arg0, msg.arg1, msg.arg2); }
     shell_lifecycle_poll();
     true
@@ -17332,10 +17333,128 @@ static mut PROGRAM_NETWORK: bool = false;
 /// it if the person asked, for this run alone.
 fn program_bind(target:u32,task:u32){
     let _=pdx_call(sex_pdx::program_store::SHELL_ROUTE_SLOT,sex_pdx::program_store::OP_BIND,target as u64,task as u64,0);
-    if unsafe{core::mem::take(&mut PROGRAM_NETWORK)}{let _=pdx_call(sex_pdx::web::SHELL_SLOT,sex_pdx::program_store::OP_BIND,target as u64,task as u64,0);}
+    let network=unsafe{core::mem::take(&mut PROGRAM_NETWORK)};
+    if network{let _=pdx_call(sex_pdx::web::SHELL_SLOT,sex_pdx::program_store::OP_BIND,target as u64,task as u64,0);}
+    unsafe{launch_started(target,task,network);}
 }
-/// Tells Spindle why, since the person who asked is looking there.
-fn program_refused(code:u32){let _=pdx_call(spindle_route_slot(),sex_pdx::program_store::OP_REFUSED,code as u64,0,0);}
+/// Tells whoever asked why: the program that started the run, or Spindle, where the
+/// person who typed `run` is looking.
+fn program_refused(code:u32){
+    if let Some((parent,_,cookie))=unsafe{LAUNCH_ASKER.take()}{launch_send(parent,sex_pdx::launch::Event::Refused{cookie,code});return}
+    let _=pdx_call(spindle_route_slot(),sex_pdx::program_store::OP_REFUSED,code as u64,0,0);
+}
+/// A run one program started for another (sex_pdx::launch): who asked, its own name for
+/// the run, the child once it runs, and the status the child reported.
+#[derive(Clone,Copy)]
+struct LaunchRun{parent:u32,parent_task:u32,cookie:u32,child:u32,child_task:u32,status:Option<u32>,ended:Option<u64>}
+/// How long an ended child's status may still arrive: its last word can reach Shell
+/// after the kernel's notice that it ended.
+const LAUNCH_STATUS_GRACE:u64=250;
+static mut LAUNCH_RUNS:[Option<LaunchRun>;sex_pdx::launch::MAX_RUNS]=[None;sex_pdx::launch::MAX_RUNS];
+/// The program whose run is being read now: (row, task, cookie).
+static mut LAUNCH_ASKER:Option<(u32,u32,u32)>=None;
+/// Runs Shell gave the network, which alone may hand it on.
+static mut NETWORK_RUNS:[Option<(u32,u32)>;sex_pdx::launch::MAX_RUNS]=[None;sex_pdx::launch::MAX_RUNS];
+/// The run a program row has now, if `target` is a program row that is running.
+fn program_run(target:u32)->Option<(&'static app_catalog::Incarnation,u32)>{
+    use sex_pdx::app_lifecycle as a;
+    let row=app_catalog::by_target(target).filter(|r|r.app==app_catalog::App::Program)?;
+    let info=a::activation(row.activation_slot?,false).ok().filter(|i|i.state==a::ACTIVATION_ACTIVE&&i.successor==target)?;
+    Some((row,info.task))
+}
+fn launch_send(parent:u32,event:sex_pdx::launch::Event){
+    let Some((row,_))=program_run(parent)else{return};
+    let [a0,a1,a2]=event.wire();
+    let status=pdx_call(row.route_slot,sex_pdx::launch::OP_EVENT,a0,a1,a2).0;
+    sex_pdx::serial_record!("[shell.launch.event] parent={} event={:?} sent={}",parent,event,(status==0)as u8);
+}
+unsafe fn launch_started(target:u32,task:u32,network:bool){
+    if network{if let Some(slot)=NETWORK_RUNS.iter_mut().find(|s|s.is_none()){*slot=Some((target,task));}}
+    let Some((parent,parent_task,cookie))=LAUNCH_ASKER.take()else{return};
+    if let Some(slot)=LAUNCH_RUNS.iter_mut().find(|s|s.is_none()){
+        *slot=Some(LaunchRun{parent,parent_task,cookie,child:target,child_task:task,status:None,ended:None});
+    }
+    launch_send(parent,sex_pdx::launch::Event::Started{cookie,row:target,task});
+}
+/// A run ended: what it started is no longer its to end, and its starter hears how it
+/// ended once its status is in, or the grace for it has passed.
+unsafe fn launch_ended(target:u32,task:u32){
+    for slot in NETWORK_RUNS.iter_mut(){if *slot==Some((target,task)){*slot=None;}}
+    let now=sex_pdx::get_ticks();
+    for slot in LAUNCH_RUNS.iter_mut(){
+        let Some(run)=slot.as_mut()else{continue};
+        if run.parent==target&&run.parent_task==task{*slot=None;continue}
+        if run.child==target&&run.child_task==task&&run.ended.is_none(){run.ended=Some(now);}
+    }
+    launch_report(now);
+}
+unsafe fn launch_report(now:u64){
+    for slot in LAUNCH_RUNS.iter_mut(){
+        let Some(run)=*slot else{continue};
+        let Some(at)=run.ended else{continue};
+        if run.status.is_none()&&now.saturating_sub(at)<LAUNCH_STATUS_GRACE{continue}
+        *slot=None;
+        if program_run(run.parent).is_some_and(|(_,t)|t==run.parent_task){
+            launch_send(run.parent,sex_pdx::launch::Event::Done{cookie:run.cookie,row:run.child,task:run.child_task,status:run.status});
+        }
+        sex_pdx::serial_record!("[shell.launch.done] parent={} child={} task={} status={:?}",run.parent,run.child,run.child_task,run.status);
+    }
+}
+/// Ends whose notice Shell missed, and statuses whose grace has passed.
+unsafe fn launch_poll(){
+    for index in 0..LAUNCH_RUNS.len(){
+        let Some(run)=LAUNCH_RUNS[index]else{continue};
+        if run.ended.is_some(){continue}
+        if !program_run(run.child).is_some_and(|(_,t)|t==run.child_task){launch_ended(run.child,run.child_task);}
+        else if !program_run(run.parent).is_some_and(|(_,t)|t==run.parent_task){LAUNCH_RUNS[index]=None;}
+    }
+    launch_report(sex_pdx::get_ticks());
+}
+/// Shell must not sleep while an ended child's status may still come.
+fn launch_waiting()->bool{unsafe{LAUNCH_RUNS.iter().flatten().any(|r|r.ended.is_some())}}
+/// A program's `OP_LAUNCH`, `OP_KILL` or `OP_EXIT`.
+unsafe fn shell_launch_message(msg:&sex_pdx::PdxMessage)->bool{
+    use sex_pdx::{launch,program_store as store};
+    if !matches!(msg.type_id,launch::OP_LAUNCH|launch::OP_KILL|launch::OP_EXIT){return false}
+    // A child's last word may come after its run ended: the kernel stamps who sent it.
+    if msg.type_id==launch::OP_EXIT{
+        let mut matched=false;
+        for run in LAUNCH_RUNS.iter_mut().flatten(){
+            if run.child==msg.caller_pd&&run.status.is_none(){run.status=Some(msg.arg0 as u32);matched=true;}
+        }
+        if matched{sex_pdx::serial_record!("[shell.launch.exit] child={} sender_task={} status={}",msg.caller_pd,msg.caller_task,msg.arg0 as u32);launch_report(sex_pdx::get_ticks());}
+        return true;
+    }
+    let Some((_,task))=program_run(msg.caller_pd)else{sex_pdx::serial_record!("[shell.launch.stale] caller={} op={:#x}",msg.caller_pd,msg.type_id);return true};
+    let caller=msg.caller_pd;
+    match msg.type_id{
+        launch::OP_KILL=>{
+            let cookie=msg.arg0 as u32;
+            let Some(run)=LAUNCH_RUNS.iter().flatten().find(|r|r.parent==caller&&r.parent_task==task&&r.cookie==cookie).copied()else{return true};
+            let Some(entry)=APP_CUSTODY.iter().flatten().find(|e|e.target==run.child&&e.task==run.child_task)else{return true};
+            let ok=sex_pdx::app_lifecycle::force_end(entry.slot).is_ok();
+            sex_pdx::serial_record!("[shell.launch.kill] parent={} child={} task={} ok={}",caller,run.child,run.child_task,ok as u8);
+        },
+        _=>{
+            let(ticket,flags,cookie)=(msg.arg0,msg.arg1,msg.arg2 as u32);
+            let refuse=|code:u32,why:&str|{
+                sex_pdx::serial_record!("[shell.launch.denied] parent={} cookie={} reason={}",caller,cookie,why);
+                launch_send(caller,launch::Event::Refused{cookie,code});
+            };
+            let network=flags&store::RUN_NETWORK!=0;
+            if flags&!store::RUN_NETWORK!=0||msg.arg2>u32::MAX as u64{refuse(store::NOT_A_PROGRAM,"flags");return true}
+            if network&&!NETWORK_RUNS.contains(&Some((caller,task))){refuse(store::NOT_ALLOWED,"network");return true}
+            if LAUNCH_RUNS.iter().flatten().count()>=launch::MAX_RUNS{refuse(store::NO_FREE_ROW,"runs");return true}
+            if PROGRAM_READING||PROGRAM_REBIRTH.is_some()||RECORD_SPAWN_LEFT!=0{refuse(store::IMAGE_BUSY,"busy");return true}
+            if program_free_row().is_none(){refuse(store::NO_FREE_ROW,"no_free_row");return true}
+            let(status,_)=pdx_call(store::SHELL_ROUTE_SLOT,store::OP,store::TICKET,ticket,0);
+            if status!=0{refuse(store::IMAGE_BUSY,"files_busy");return true}
+            PROGRAM_READING=true;PROGRAM_NETWORK=network;LAUNCH_ASKER=Some((caller,task,cookie));
+            sex_pdx::serial_record!("[shell.launch.asked] parent={} task={} cookie={} network={}",caller,task,cookie,network as u8);
+        },
+    }
+    true
+}
 /// Spindle's `run NAME`, and Files' answer once it has read the file.
 unsafe fn shell_program_message(msg:&sex_pdx::PdxMessage)->bool{
     use sex_pdx::{app_lifecycle as a,program_store as store};
@@ -17381,7 +17500,7 @@ unsafe fn shell_program_message(msg:&sex_pdx::PdxMessage)->bool{
     let loaded=a::load_program(slot,len);
     if let Err(status)=loaded{sex_pdx::serial_record!("[shell.program.denied] reason=rejected status={}",status);program_refused(store::NOT_A_PROGRAM);return true}
     if state==a::ACTIVATION_READY{
-        let Ok(active)=a::activation(slot,true)else{sex_pdx::serial_record!("[shell.program.denied] reason=commit");return true};
+        let Ok(active)=a::activation(slot,true)else{sex_pdx::serial_record!("[shell.program.denied] reason=commit");if LAUNCH_ASKER.is_some(){program_refused(store::NOT_A_PROGRAM);}return true};
         sex_pdx::serial_record!("[shell.program.launch] target={} task={} surface={}",active.successor,active.task,active.surface);
         program_bind(active.successor,active.task);
         launcher_action_record(active.successor,row.frame(),launcher::LiveAction::Open,ACTIVE_SCENE_IDX,true,true);
@@ -17402,7 +17521,7 @@ unsafe fn program_rebirth_poll(){
             launcher_action_record(active.successor,row.frame(),launcher::LiveAction::Open,ACTIVE_SCENE_IDX,true,true);
         },
         Ok(_)|Err(a::RETRY)=>{},
-        Err(status)=>{PROGRAM_REBIRTH=None;PROGRAM_BIND_PENDING=false;sex_pdx::serial_record!("[shell.program.rebirth.denied] slot={} status={}",slot,status);},
+        Err(status)=>{PROGRAM_REBIRTH=None;PROGRAM_BIND_PENDING=false;sex_pdx::serial_record!("[shell.program.rebirth.denied] slot={} status={}",slot,status);if LAUNCH_ASKER.is_some(){program_refused(sex_pdx::program_store::NO_FREE_ROW);}},
     }
 }
 unsafe fn open_browser_in_active_scene()->bool{
@@ -25624,7 +25743,7 @@ pub extern "C" fn _start() -> ! {
                 }
             }
         }
-        unsafe { program_rebirth_poll(); }
+        unsafe { program_rebirth_poll(); launch_poll(); }
         unsafe { session::save(); }
         unsafe { record_spawn_poll(); }
         unsafe { program_resize_flush(); }
@@ -26307,7 +26426,7 @@ pub extern "C" fn _start() -> ! {
                 unsafe { flush_pending_cursor_send(); }
                 // A full input ring may recover while the shell has no work.
                 // Return to the publisher instead of blocking in listen.
-                if shell_ready_publisher.is_pending() || unsafe { RECORD_SPAWN_LEFT != 0 || DISPLAY_SCALE.request().is_some() || CURSOR_SEND_PENDING || APP_INPUT.pending() || LAUNCHER_FOCUS.is_some() || CLIPBOARD_INTAKE.pending() || CLIPBOARD.pending() || WORKSPACE_REFRESH_PENDING.iter().any(|p|*p) || linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_POINTER.is_some() || LINEN_ASYNC.can_send() || NOTIFY_NOTICE_UNTIL != 0 || MEMORY_CRITICAL_SINCE != 0 } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
+                if shell_ready_publisher.is_pending() || unsafe { RECORD_SPAWN_LEFT != 0 || DISPLAY_SCALE.request().is_some() || CURSOR_SEND_PENDING || APP_INPUT.pending() || LAUNCHER_FOCUS.is_some() || CLIPBOARD_INTAKE.pending() || CLIPBOARD.pending() || WORKSPACE_REFRESH_PENDING.iter().any(|p|*p) || linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || launch_waiting() || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_POINTER.is_some() || LINEN_ASYNC.can_send() || NOTIFY_NOTICE_UNTIL != 0 || MEMORY_CRITICAL_SINCE != 0 } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
                     sys_yield();
                     continue;
                 }
@@ -26320,6 +26439,7 @@ pub extern "C" fn _start() -> ! {
         if msg.type_id == sex_pdx::program_memory::OP_PRESSURE && msg.caller_pd == 0 { unsafe { MEMORY_LAST_LOOK = 0; } continue; }
         unsafe {
             if shell_lifecycle_hint(&msg) { continue; }
+            if shell_launch_message(&msg) { continue; }
             if shell_program_message(&msg) { continue; }
             if clipboard_receive(&msg) { continue; }
             if notification_receive(&msg) { continue; }

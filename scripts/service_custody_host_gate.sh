@@ -241,6 +241,8 @@ rustc --edition=2021 -A dead_code --test tests/screenshot.rs -o "$TEST_DIR/scree
 rustc --edition=2021 -A dead_code --test tests/tray.rs -o "$TEST_DIR/tray"
 "$TEST_DIR/tray"
 rustc --edition=2021 -A dead_code --test tests/window_motion.rs -o "$TEST_DIR/window-motion"
+rustc --edition=2021 -A dead_code --test tests/launch.rs -o "$TEST_DIR/launch"
+"$TEST_DIR/launch"
 "$TEST_DIR/window-motion"
 "$TEST_DIR/desktop-look"
 "$TEST_DIR/desktop-keys"

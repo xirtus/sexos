@@ -24,6 +24,7 @@ members = [
     "apps/jot",
     "apps/files",
     "apps/peek",
+    "apps/shuttle",
     "apps/talk",
     "apps/bench",
     "apps/view",

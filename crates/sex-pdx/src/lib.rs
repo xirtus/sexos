@@ -1288,6 +1288,7 @@ pub mod window_switcher;
 pub mod screenshot;
 pub mod tray;
 pub mod window_motion;
+pub mod launch;
 pub mod document_view;
 
 pub mod display_boot;

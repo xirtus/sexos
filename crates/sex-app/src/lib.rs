@@ -36,9 +36,9 @@ const NET: u32 = 13;
 /// reaches its inbox wakes it at once.
 const MAILBOX_LOOK_TICKS: u64 = 4;
 
-fn is_answer(m: &sex_pdx::PdxMessage) -> bool { m.type_id == 1 && (m.caller_pd == FILES || m.caller_pd == NET) }
+fn is_answer(m: &sex_pdx::PdxMessage) -> bool { m.type_id == 1 && (m.caller_pd == FILES || m.caller_pd == NET) || launch::is_event(m) }
 /// A message from Shell: keys, pointer, resizes and closes for the main task's window.
-fn is_shell(m: &sex_pdx::PdxMessage) -> bool { m.caller_pd == SHELL }
+fn is_shell(m: &sex_pdx::PdxMessage) -> bool { m.caller_pd == SHELL && !launch::is_event(m) }
 
 pub enum Event {
     Key(Key),
@@ -175,7 +175,7 @@ impl Window {
         }
     }
     /// Ends the program. Nothing it saved is lost: files are on disk once written.
-    pub fn close(self) -> ! { sex_pdx::task_finish(0) }
+    pub fn close(self) -> ! { launch::exit(0) }
 }
 
 /// Files in the program's own folder. Paths are relative to it; `..` is refused.
@@ -184,6 +184,80 @@ impl Window {
 /// wait for it. Those in [`files::direct`] need no window: any task of the program may
 /// call them, and what arrives meanwhile waits in the [`mailbox`] for its owner. One
 /// request is in flight at a time per program; others wait their turn.
+/// Starting other programs, and opening files in the program for their type. A run
+/// started here gets only grants this run holds; Shell reports it started, was refused,
+/// or ended (see [`sex_pdx::launch`]).
+pub mod launch {
+    use super::{files, mailbox, SHELL};
+    use sex_pdx::launch as l;
+    pub use l::Event;
+    use sex_pdx::program_store as store;
+
+    pub(crate) fn is_event(m: &sex_pdx::PdxMessage) -> bool { m.caller_pd == SHELL && m.type_id == l::OP_EVENT }
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum Error {
+        /// Files refused: no such program, or a grant this run does not hold (a `files` code).
+        Files(files::Error),
+        /// No program opens files of this type.
+        NoProgram,
+        /// Shell could not be asked.
+        Shell,
+    }
+    /// Starts `/bin/NAME` (or `@/path` of a program file this run holds) with `args`.
+    /// `network` only works for a run that has the network. Events for it carry `cookie`.
+    pub fn run(name: &[u8], args: &[u8], network: bool, cookie: u32) -> Result<(), Error> {
+        let mut path = [0u8; 64];
+        let path: &[u8] = if name.first() == Some(&b'@') { name }
+            else { let n = l::bin_path(name, &mut path).ok_or(Error::Files(sex_pdx::fs::NAME))?; &path[..n] };
+        let ticket = files::direct::prepare(path, args).map_err(Error::Files)?;
+        let flags = if network { store::RUN_NETWORK } else { 0 };
+        sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL, l::OP_LAUNCH, ticket as u64, flags, cookie as u64).map_err(|_| Error::Shell)?;
+        Ok(())
+    }
+    /// Opens the file at absolute `path` in the program for its type, handing it only
+    /// that file. This run must hold `path` itself.
+    pub fn open(path: &[u8], cookie: u32) -> Result<(), Error> {
+        let program = l::program_for(path).ok_or(Error::NoProgram)?;
+        let mut args = [0u8; sex_pdx::fs::ARGS_MAX];
+        let n = l::open_args(path, &mut args).ok_or(Error::Files(sex_pdx::fs::NAME))?;
+        run(program, &args[..n], false, cookie)
+    }
+    /// Ends the run started with `cookie`.
+    pub fn kill(cookie: u32) { let _ = sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL, l::OP_KILL, cookie as u64, 0, 0); }
+    /// The next event for `cookie` if one has come, without waiting.
+    pub fn poll(cookie: u32) -> Option<Event> {
+        let mine = |m: &sex_pdx::PdxMessage| is_event(m) && Event::decode(m.type_id, [m.arg0, m.arg1, m.arg2]).is_some_and(|e| e.cookie() == cookie);
+        if let Some(m) = mailbox::take(mine) { return Event::decode(m.type_id, [m.arg0, m.arg1, m.arg2]); }
+        while let Some(m) = sex_pdx::pdx_try_listen_raw(0) {
+            if mine(&m) { return Event::decode(m.type_id, [m.arg0, m.arg1, m.arg2]); }
+            // Keys, closes and others' answers wait for their owners.
+            mailbox::put(m);
+        }
+        None
+    }
+    /// Waits for the next event for `cookie`.
+    pub fn wait(cookie: u32) -> Event {
+        loop {
+            if let Some(e) = poll(cookie) { return e; }
+            let _ = sex_pdx::sys_wait_self_ticks(4);
+        }
+    }
+    /// Ends this run with `status`, telling whoever started it.
+    pub fn exit(status: u32) -> ! {
+        report(status);
+        sex_pdx::task_finish(status as u64)
+    }
+    /// Tells Shell how this run ends, waiting out a full queue for a while.
+    pub fn report(status: u32) {
+        for _ in 0..200 {
+            match sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL, l::OP_EXIT, status as u64, 0, 0) {
+                Err(sex_pdx::ERR_SERVICE_NOT_READY) => sex_pdx::sys_yield(),
+                _ => return,
+            }
+        }
+    }
+}
+
 pub mod files {
     use super::{is_answer, is_shell, mailbox, Window, FILES};
     use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -436,6 +510,13 @@ pub mod files {
         }
         /// Makes everything written so far durable.
         pub fn sync() -> Result<(), Error> { simple(w::SYNC, b"", 0) }
+        /// Asks Files to hold a run of the program file `path` with argument line `args`,
+        /// for Shell to start (`sex_pdx::launch`); answers its ticket. Files refuses
+        /// grants in `args` this run does not hold itself.
+        pub fn prepare(path: &[u8], args: &[u8]) -> Result<u32, Error> {
+            if args.len() > w::ARGS_MAX { return Err(w::NAME); }
+            exchange(None, w::PREPARE, path, 0, args.len() as u64, |d| d[..args.len()].copy_from_slice(args), |ticket, _| ticket)
+        }
         /// Everything in the folder `path` (`b""` for the program's own folder).
         pub fn list(path: &[u8]) -> Result<alloc::vec::Vec<Entry>, Error> {
             let mut all = alloc::vec::Vec::new();

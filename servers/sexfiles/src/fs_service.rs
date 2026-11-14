@@ -492,6 +492,15 @@ fn picker(program: Option<usize>, r: w::Request, path: &[u8], data: &mut [u8]) -
 fn holds_packages(binding: &Binding) -> bool {
     binding.args[..binding.args_len].split(|b| *b == b' ').any(|t| t == sex_pdx::package::GRANT_TOKEN)
 }
+/// The program file a program may PREPARE for a run of its own: `/bin/NAME`, or a path
+/// its grant covers given as `@/path`; None if the arguments carry a grant it lacks.
+fn program_prepare(binding: &Binding, path: &[u8], args: &[u8], out: &mut [u8; w::PATH_BYTES]) -> Option<usize> {
+    let mut scratch = [0u8; w::PATH_BYTES];
+    if !sex_pdx::launch::args_allowed(args, holds_packages(binding), |t| confine(binding, t, &mut scratch).is_some()) { return None; }
+    if path.first() == Some(&b'@') { return confine(binding, path, out); }
+    let name = path.strip_prefix(sex_pdx::program_store::BIN)?;
+    sex_pdx::launch::bin_path(name, out)
+}
 /// A package request from a program holding `+packages`: the argument Files acts on, or
 /// None (refused, logged). Trusting a publisher and the person's answers to grants stay
 /// Spindle's; no downgrades; package files only from the program's own folder.
@@ -531,7 +540,7 @@ pub fn handle(caller: u32, a: u64, offset: u64, length: u64) -> u64 {
             let bound = unsafe { (*core::ptr::addr_of!(BINDINGS))[k] };
             // A program may eject (UNMOUNT) a volume its grant covers whole, checked with
             // its other paths below; mounting stays Spindle's.
-            if !bound.is_some_and(|b| program_live(caller, b.task)) || matches!(r.kind, w::PREPARE | w::INSTALL | w::UPDATE | w::MOUNT) { return w::reply(r.seq, w::DENIED, 0); }
+            if !bound.is_some_and(|b| program_live(caller, b.task)) || matches!(r.kind, w::INSTALL | w::UPDATE | w::MOUNT) { return w::reply(r.seq, w::DENIED, 0); }
             // Packages only for a run the person started with `run +pkg` (see `program_package`).
             if r.kind == sex_pdx::package::KIND && !bound.is_some_and(|b| holds_packages(&b)) {
                 sex_pdx::serial_record!("[files.pkg.denied] target={} op={} why=no_grant", caller, r.offset);
@@ -631,7 +640,16 @@ fn handle_request(index: usize, program: Option<usize>, r: w::Request) -> u64 {
         let binding = unsafe { (*core::ptr::addr_of!(BINDINGS))[k] }.unwrap();
         let mut own = [0u8; w::PATH_BYTES];
         let raw = path;
-        let n = if r.kind == w::RENAME {
+        let n = if r.kind == w::PREPARE {
+            // A program starting a program (`sex_pdx::launch`): a /bin name or a program
+            // file it holds, with only grants it holds itself in the argument line.
+            let args = &region[w::PATH_BYTES..w::PATH_BYTES + (r.length as usize).min(w::ARGS_MAX)];
+            let Some(n) = program_prepare(&binding, &raw[..path_len], args, &mut own) else {
+                sex_pdx::serial_record!("[files.launch.denied] row={}", k);
+                return w::reply(r.seq, w::DENIED, 0);
+            };
+            n
+        } else if r.kind == w::RENAME {
             let Some(split) = raw[..path_len].iter().position(|b| *b == 0) else { return w::reply(r.seq, w::NAME, 0) };
             let mut second = [0u8; w::PATH_BYTES];
             let (Some(a), Some(b)) = (confine(&binding, &raw[..split], &mut own), confine(&binding, &raw[split + 1..path_len], &mut second)) else { return w::reply(r.seq, w::NAME, 0) };

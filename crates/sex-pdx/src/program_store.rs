@@ -62,6 +62,8 @@ pub const NOT_A_PROGRAM: u32 = 5;
 pub const NO_FREE_ROW: u32 = 6;
 pub const NO_MORE_RECORDS: u32 = 7;
 pub const IMAGE_BUSY:u32=8;
+/// A program asked to hand on a grant it does not hold.
+pub const NOT_ALLOWED: u32 = 9;
 pub fn refusal(code: u64) -> &'static [u8] {
     match code as u32 {
         NOT_FOUND => b"No program by that name.",
@@ -72,6 +74,7 @@ pub fn refusal(code: u64) -> &'static [u8] {
         NO_FREE_ROW => b"All program windows are in use. Close one first.",
         NO_MORE_RECORDS => b"This machine has room for no more background programs.",
         IMAGE_BUSY=>b"Another program is still preparing. Try again.",
+        NOT_ALLOWED => b"A program may pass on only what it holds itself.",
         _ => b"The program did not start.",
     }
 }
