@@ -4,6 +4,7 @@
 This is functional BOOT/provider/broker/client/glyph qualification, never a
 randomness-quality, opcode-exclusivity, replay-security or hardware certificate.
 """
+from input_payload_profile import require_payload_proof
 import argparse,ast,hashlib,json,os,re,shutil,socket,subprocess,threading,time
 from pathlib import Path
 import browser_source_evidence as source_evidence
@@ -223,6 +224,7 @@ def main():
    time.sleep(.05)
   q=QMP(sock)
   if a.resolution=='1024x768':wait(r'SexOS compact 1024x768',timeout=10);q.key('down');q.key('ret')
+  require_payload_proof(dict(text=text,wait=wait))
   wait(r'\[shell.app.registered.reply\] target=15 .*committed=1');wait(r'\[browser.net.job.released\] ticket=1 view=Verified private_job=0');focus_surface(300,text,key)
   from quil_workflow_gate import palette_commands,palette_select
   palette_select(key,'ZoomToggle',palette_commands(root))

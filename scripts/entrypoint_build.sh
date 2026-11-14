@@ -42,6 +42,7 @@ ABI_INPUTS=(
   crates/sex-pdx/src/display_frames.rs
   kernel/src/history_recovery.rs
   crates/sex-pdx/src/lib.rs
+  crates/sex-pdx/src/input_diagnostics.rs
   crates/sex-pdx/src/autofill.rs
   crates/sex-pdx/src/uiir.rs
   crates/sex-pdx/src/app_catalog.rs

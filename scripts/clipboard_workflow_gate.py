@@ -4,6 +4,7 @@
 Fixtures are a finite loopback endpoint. Guest authority remains its held BOOT
 routes in one GLOBAL_VAS. Synthetic tests exercise this checker, not the guest.
 """
+from input_payload_profile import require_payload_proof
 import argparse,ast,gzip,hashlib,json,os,re,shutil,socket,subprocess,threading,time
 from pathlib import Path
 import http_content_gate as http
@@ -607,6 +608,7 @@ def run_boot(root,iso,binding,seed,out,contract,model,resolution_text,recovery=F
    time.sleep(.02)
   q=QMP(sock)
   if resolution_text=='1024x768':wait(r'SexOS compact 1024x768',timeout=15);press('down');press('ret')
+  require_payload_proof(dict(text=text,wait=wait))
   wait(r'\[shell.app.registered.reply\] target=15 .*committed=1');wait(r'\[browser.net.job.released\] ticket=1 view=Verified private_job=0');wait(r'\[linen.disk.publish.done\]')
   start=len(text());q.cmd('input-send-event',{'events':[{'type':'abs','data':{'axis':'x','value':32700}},{'type':'abs','data':{'axis':'y','value':30000}}]});wait(r'\[shell.abs.normalize\] raw_x=32700 raw_y=30000 .*reason=(?:ok|duplicate_sample)',start)
   if recovery:reopen(expected['object']);picture('quil-cold-reopened','quil')

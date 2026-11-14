@@ -4,6 +4,7 @@
 Never builds. Endpoint sockets are public lab fixtures, not a forwarding proxy.
 State-publication ACKs are joined to raw framebuffer pixels, never called pixels.
 """
+from input_payload_profile import assert_payload_proof, require_payload_proof
 from clock_source_evidence import browser_clock_sources
 import argparse,ast,hashlib,json,os,re,shutil,socket,subprocess,time
 from pathlib import Path
@@ -160,11 +161,11 @@ HELD_INPUT_FUNCTIONS = {
  'document_view_sender': '2715dd56b62c3c164587b3e2e4dea49ad6e416a73f945718cf5d406c537990bc',
  'focused_clipboard_participant': 'fdc67ea118bfc1237104f056139cb5de45416b595337c18706c935a6faf32a84',
  'clipboard_live': '1a801645af4f7f94acdc55fec353ffe663a01a12968fbddd403686a63648f275',
- 'app_input_poll': '74c04ba18e88e452c29ac3efae76891af173521e5b8bf0b445557d7935e9eea7',
+ 'app_input_poll': 'b3338ee5a3a9fc7cb74951b2bf612791f9aeb052d960e0e78c5c269404164ec2',
  'browser_wheel_destination': '66ccbc15c66cbe2bdf13ac916a00e97382c1afd0ae56b222eeb325c2b37fa35f',
  'frame_accepts_input': '6fdf754c25b68e8f13f6d3c71c9ead28b4768d8e5948407e2c9fd638c6e9bd08',
 }
-HELD_INPUT_DEPENDENCIES = ('crates/sex-pdx/src/app_catalog.rs',
+HELD_INPUT_DEPENDENCIES = ('crates/sex-pdx/src/input_diagnostics.rs','crates/sex-pdx/build.rs','crates/sex-pdx/src/app_catalog.rs',
  'crates/sex-pdx/src/app_lifecycle.rs','crates/sex-pdx/src/clipboard.rs',
  'servers/silk-shell/src/app_custody.rs','servers/silk-shell/src/app_input.rs',
  'servers/silk-shell/src/browser_input.rs')
@@ -206,7 +207,8 @@ def source_contract(root):
    raise ValueError('actual stamped custody task guard changed')
  for literal in ('(raw * (screen_dim - 1) / TABLET_RAW_MAX).clamp(0, screen_dim - 1)','const TABLET_RAW_MAX: i32 = 32767;','[shell.abs.normalize] raw_x={} raw_y={} sx={} sy={} accepted={} reason={}'):
   if literal not in shell:raise ValueError('source-bound pointer normalization changed')
- input_source=sources['servers/sexinput/src/main.rs'].decode();physical='sex_pdx::serial_record!("[sexinput.ps2.scancode] raw={:#x}", scancode);'
+ sources['crates/sex-pdx/src/input_diagnostics.rs']=(root/'crates/sex-pdx/src/input_diagnostics.rs').read_bytes()
+ input_source=sources['servers/sexinput/src/main.rs'].decode();physical='sex_pdx::serial_input_record!(("[sexinput.ps2.scancode] payload=redacted"); ("[sexinput.ps2.scancode] raw={:#x}", scancode));'
  retained='input_arrival.ps2(&mut keyboard_outbox,scancode)'
  if physical not in input_source or retained not in input_source or input_source.index(physical)>=input_source.index(retained):raise ValueError('physical PS2 make receipt must be atomic and precede retained key admission')
  for literal in ('code:(raw&0x7f)as u8,down:(raw&0x80==0)as u8','send(edge.code as u64,edge.down as u64,EV_KEY)','poll_input_delivery(&mut keyboard_outbox,&mut pointer_outbox,send_shell_hid_event)','pdx_call_checked(SLOT_SHELL, OP_HID_EVENT, arg0, arg1, arg2)'):
@@ -525,6 +527,7 @@ def capture_key_action(q,code,pattern,text,wait,record):
  result=wait(pattern,start);action.update(serial_end=len(text()),host_end=time.monotonic());return result
 
 def verify_key_actions(trace,frames,actions,mode,resolution,*,root=None):
+ assert_payload_proof(trace)
  """Actual QMP window -> pre-forward PS2 make -> handler; return may race.
 
  Shell logs accepted after pdx_call. Its callee may already have run: the
@@ -691,6 +694,7 @@ def main():
    time.sleep(.05)
   q=QMP(sock)
   if a.resolution=='1024x768':wait(r'SexOS compact 1024x768',timeout=10);boot_key('down');boot_key('ret')
+  require_payload_proof(dict(text=text,wait=wait))
   wait(r'\[shell.app.registered.reply\] target=15 .*committed=1');wait(r'\[browser.net.job.released\] ticket=1 view=Verified private_job=0');focus_surface(300,text,key)
   boundary=len(text());key('g',r'\[shell.browser.input\] code=34 down=1 slot=43 accepted=1');wait(r'\[browser.asset.intent\] accepted=1 explicit=1 public_internet=0',boundary)
   if a.mode=='ready':

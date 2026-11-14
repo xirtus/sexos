@@ -59,6 +59,7 @@ pub enum AuthLayer {
 pub struct SerialWriter;
 
 mod serial_record_buffer;
+pub mod input_diagnostics;
 
 /// A complete bounded line uses one raw-print invocation. On the current BSP
 /// syscall entry masks interrupts, so timer diagnostics cannot split its fields.
@@ -334,8 +335,8 @@ pub fn pdx_listen_raw(slot: u64) -> PdxMessage {
             if PDX_LISTEN_WRAPPER_BUDGET > 0 && !autofill::request(type_id) && !autofill::response(type_id) {
                 PDX_LISTEN_WRAPPER_BUDGET -= 1;
                 serial_println!(
-                    "[pdx.listen.raw.wrapper] type={:#x} caller={} a0={:#x} a1={:#x}",
-                    type_id, caller_pd, arg0, arg1
+                    "[pdx.listen.raw.wrapper] type={:#x} caller={} task={} payload=redacted",
+                    type_id, caller_pd, caller_task
                 );
             }
         }

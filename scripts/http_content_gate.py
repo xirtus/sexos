@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Real app HTTP intent, controlled loopback bytes, TCP capture and body pixels."""
+from input_payload_profile import require_payload_proof
 import argparse,ast,hashlib,json,os,re,shutil,socket,struct,subprocess,threading,time
 from pathlib import Path
 from desktop_close_gate import QMP
@@ -994,6 +995,7 @@ def main():
   q=QMP(qmp)
   if a.resolution=='1024x768':
    wait(r'SexOS compact 1024x768',timeout=10);q.key('down');q.key('ret');actions.append(dict(action='actual_compact_boot_menu',requested_resolution=[1024,768]))
+  require_payload_proof(dict(text=text,wait=wait))
   wait(r'\[app.surface.presented\] target=15 surface=300');wait(r'\[browser.net.job.released\] ticket=1 view=Verified private_job=0')
   focus(q);start=len(text());began=time.monotonic();q.key('h')
   deadline=time.monotonic()+60

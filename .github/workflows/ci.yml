@@ -513,7 +513,7 @@ jobs:
   # Single required check: keeps the old "build" check name for branch rules.
   build:
     if: always()
-    needs: [host, truth, boot, devices, programs, media, editor, profiles, js-jit, recording, productivity, terminal-editor, documents-pictures]
+    needs: [host, truth, boot, devices, programs, media, editor, profiles, input-payload-proof, js-jit, recording, productivity, terminal-editor, documents-pictures]
     runs-on: ubuntu-latest
     steps:
     - run: |
@@ -675,4 +675,32 @@ jobs:
         path: |
           ${{ runner.temp }}/productivity-build.log
           ${{ runner.temp }}/sexos-productivity
+        if-no-files-found: ignore
+
+  # Deliberately unsafe fixture-only image; every other job builds normal flags.
+  input-payload-proof:
+    name: Diagnostic keyboard payload proof (UNSAFE)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+    - uses: actions/checkout@v4
+    - uses: ./.github/actions/setup
+    - name: Build and freeze diagnostic image, then rebuild normal image
+      run: bash scripts/build_input_payload_proof.sh "$RUNNER_TEMP/input-payload-proof"
+    - name: Strict physical-key oracles on the labeled diagnostic image only
+      run: |
+        evidence="$RUNNER_TEMP/input-payload-proof"
+        runner="$evidence/frozen/source/scripts"
+        iso="$evidence/frozen/tested.iso"
+        binding="$evidence/frozen/source-binding.json"
+        truncate -s 256M "$RUNNER_TEMP/input-proof-seed.img"
+        python3 "$runner/https_asset_gate.py" --iso "$iso" --binding "$binding" --source-disk "$RUNNER_TEMP/input-proof-seed.img" --out "$evidence/https-asset"
+        python3 "$runner/connected_desktop_gate.py" --iso "$iso" --binding "$binding" --source-disk "$RUNNER_TEMP/input-proof-seed.img" --out "$evidence/connected-desktop"
+        python3 "$runner/browser_reserve_gate.py" --iso "$iso" --binding "$binding" --source-disk "$RUNNER_TEMP/input-proof-seed.img" --out "$evidence/browser-reserve"
+    - name: Preserve labeled diagnostic and normal evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: UNSAFE-keyboard-payload-proof-never-private-input
+        path: ${{ runner.temp }}/input-payload-proof
         if-no-files-found: ignore

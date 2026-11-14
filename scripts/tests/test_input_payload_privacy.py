@@ -1,0 +1,57 @@
+"""Normal diagnostics, declared proof mode and protected-interval negative tests."""
+import pathlib,re,sys,unittest,tomllib
+ROOT=pathlib.Path(__file__).resolve().parents[2];sys.path.insert(0,str(ROOT/'scripts'))
+from input_payload_profile import diagnostic_spec,assert_payload_proof,PROOF_RECEIPTS,wait_releases,STAGES,FLAG
+from input_payload_audit import audit_interval
+
+class InputPrivacy(unittest.TestCase):
+ def test_profile_changes_only_declared_userspace_flags_and_preserves_crypto_flags(self):
+  source=(ROOT/'sexos_build_spec.toml').read_text();before=tomllib.loads(source);after=tomllib.loads(diagnostic_spec(source))
+  self.assertEqual({k:v for k,v in before.items() if k!='stage'},{k:v for k,v in after.items() if k!='stage'})
+  self.assertEqual(len(before['stage']),len(after['stage']))
+  for a,b in zip(before['stage'],after['stage']):
+   expected=dict(a)
+   if a['id'] in STAGES:expected['rustflags']=' '.join(filter(None,[a.get('rustflags',''),FLAG]))
+   self.assertEqual(expected,b)
+  with self.assertRaises(ValueError):diagnostic_spec(diagnostic_spec(source))
+ def test_normal_missing_duplicate_and_conflicting_images_cannot_claim_payload_proof(self):
+  assert_payload_proof(PROOF_RECEIPTS)
+  for trace in ['',PROOF_RECEIPTS.replace('proof','redacted'),PROOF_RECEIPTS*2,PROOF_RECEIPTS+'[input.payload.mode] component=shell mode=redacted\n']:
+   with self.assertRaises(ValueError):assert_payload_proof(trace)
+ def test_ctrl_fence_uses_both_admitted_releases_without_key_contents(self):
+  trace='[app.actual.ack]\n[input.keyboard.keyup.ok] source=ps2 payload=redacted\n[other]\n[input.keyboard.keyup.ok] source=ps2 payload=redacted\n'
+  seen=[]
+  def wait(pattern,start):
+   seen.append(start);found=re.search(pattern,trace[start:]);self.assertIsNotNone(found);return found
+  end=wait_releases(wait,0)
+  self.assertEqual(len(seen),2);self.assertGreater(end,seen[1])
+ def test_every_known_key_encoding_is_rejected_in_a_protected_interval(self):
+  forbidden=['[pdx.listen.raw.wrapper] type=0x202 caller=3 a0=0x1e a1=1',
+   '[sexinput.ps2.scancode] raw=0x1e','[sexinput.key.send] code=30 down=1 mod=0 source=1',
+   '[input.keyboard.keydown.ok] code=30 source=usb','[sexinput.kbd.recv] key=0x4 mod=0x2',
+   '[sexinput.key.rejected] source=ps2 raw=30','[silk-shell.hid.raw] class=1 a0=0x1e',
+   '[silk-shell.hid.recv] class=1 code=30 value=1','[silk-shell.key.recv] code=30',
+   '[silk.key.route] surface=359 code=30 printable=1','[shell.browser.input] code=30',
+   '[usb.keyboard.shell.recv] key=30','[shell.media.key] code=30','[spindle.input.recv] key=printable ch=x len=1','[sexusb.input.rejected] op=609 arg0=30','[spindle.line.enter] text="private"']
+  for line in forbidden:self.assertFalse(audit_interval(line)['userspace_safe'],line)
+  self.assertTrue(audit_interval('[sexinput.key.send] source=1 payload=redacted\n[input.keyboard.keyup.ok] source=ps2 payload=redacted')['userspace_safe'])
+ def test_kernel_residual_is_separate_and_never_becomes_a_complete_privacy_claim(self):
+  for trace in ['', '[ps2.port60.read] n=1 sc=0x1e','[ps2.input_ring.enqueue] n=1 type=0x201 sc=0x1e','[ps2.input_ring.drop] reason=ring_full sc=0x1e']:
+   result=audit_interval(trace);self.assertTrue(result['userspace_safe']);self.assertFalse(result['complete_keyboard_privacy_proven']);self.assertEqual(bool(result['kernel_payload_lines']),bool(trace))
+ def test_diagnostic_ci_keeps_frozen_proof_separate_and_restores_normal(self):
+  builder=(ROOT/'scripts/build_input_payload_proof.sh').read_text()
+  self.assertLess(builder.index('master_runtime_gate.sh --probe'),builder.index('freeze_native_evidence.py'))
+  self.assertLess(builder.index('freeze_native_evidence.py'),builder.index('bash scripts/entrypoint_build.sh > "$EVIDENCE_DIR/normal-build.log"'))
+  workflow=(ROOT/'.github/workflows/ci.yml').read_text()
+  self.assertIn('profiles, input-payload-proof, js-jit',workflow)
+  for gate in ('https_asset_gate.py','connected_desktop_gate.py','browser_reserve_gate.py'):
+   self.assertIn('"$runner/'+gate+'" --iso "$iso" --binding "$binding"',workflow)
+  self.assertIn('runner="$evidence/frozen/source/scripts"',workflow)
+  self.assertIn('UNSAFE-keyboard-payload-proof-never-private-input',workflow)
+ def test_generic_wrapper_and_usb_errors_never_format_arguments(self):
+  wrapper=(ROOT/'crates/sex-pdx/src/lib.rs').read_text();start=wrapper.index('"[pdx.listen.raw.wrapper]');end=wrapper.index(');',start);self.assertNotRegex(wrapper[start:end],r'\ba[012]=|arg[012]')
+  usb=(ROOT/'servers/sexusb/src/main.rs').read_text()
+  for line in usb.splitlines():
+   if '[sexusb.input.rejected]' in line:self.assertNotIn('arg0=',line);self.assertNotIn('arg1=',line);self.assertNotIn('arg2=',line)
+
+if __name__=='__main__':unittest.main()

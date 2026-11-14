@@ -21,7 +21,7 @@ Second boot on the same disk:
   programs yet). Closing the window locks and zeroizes.
 
 The serial record must never hold the master password, and the program must not abort."""
-import argparse,re,shutil,time
+import argparse,json,re,shutil,time
 from pathlib import Path
 from install_program import install
 import os
@@ -30,6 +30,7 @@ os.environ.setdefault('SEXOS_GATE_BOUND','2400')
 from quil_autosave_gate import boot
 from lua_gate import qcodes,SURFACE
 from program_gate_geometry import maximize
+from input_payload_audit import audit_interval,require_normal_image
 ROOT=Path(__file__).resolve().parents[1]
 
 MASTER='Corr3ct horse!'
@@ -47,7 +48,7 @@ def key_bytes_clean(path):
  return not key_bytes.scan(str(path))
 
 def main():
- p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
+ p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');p.add_argument('--input-privacy',action='store_true',help='require normal userspace receipts and audit protected typing; kernel scope remains separately reported');a=p.parse_args()
  program=ROOT/'iso_root/programs/chastity'
  elf=program.read_bytes();assert elf[:4]==b'\x7fELF'
  # The loader refuses a program whose code holds WRPKRU/XRSTOR bytes anywhere.
@@ -55,9 +56,17 @@ def main():
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
  install(disk,[('chastity',elf)])
  results={}
+ privacy=[]
+ def check_private(trace,tag):
+  if not a.input_privacy:return
+  result=audit_interval(trace);result['interval']=tag;privacy.append(result)
+  (a.out/'input-privacy.json').write_text(json.dumps(privacy,indent=2)+'\n')
+  assert result['userspace_safe'],'encoded keyboard payload or CLI echo in protected vault interval (see input-privacy.json)'
+  assert MASTER not in trace and WRONG not in trace,'literal password in protected vault interval'
 
  def session(tag):
   g=boot(a.iso,disk,a.out,tag,a.resolution);t=g['text'];q=g['q']
+  if a.input_privacy:require_normal_image(g)
   def press(ch):
    q.cmd('send-key',{'keys':[{'type':'qcode','data':k}for k in qcodes(ch)],'hold-time':40});time.sleep(.12)
   def spindle(line):
@@ -76,7 +85,9 @@ def main():
    s=len(t())
    for ch in text:press(ch)
    q.key('ret')
-   return g['wait'](pattern,s,timeout)
+   match=g['wait'](pattern,s,timeout)
+   check_private(t()[s:],tag+'-field')
+   return match
   def start(vault):
    s=len(t());spindle('run chastity')
    w=g['wait'](r'\[chastity\.window\] target=(\d+) task=(\d+)\n',s,600)
@@ -111,6 +122,7 @@ def main():
   q.key('ret');time.sleep(.5)
   typed(MASTER,r'\[chastity\.created\] entries=0\n',UNLOCK)
   g['wait'](r'\[chastity\.saved\] entries=0 bytes=\d+\n',s,10)
+  check_private(t()[s:],'chastity1-create-both-master-fields')
   s=len(t());press('a');time.sleep(.5)
   for name,value in ENTRY:
    if name=='password':typed(value,r'\[chastity\.field\] name=password generated=1\n')

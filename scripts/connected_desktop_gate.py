@@ -4,6 +4,7 @@
 This finite workflow does not replace alpha_session's 1800s/12-cycle policy.
 All app input is real QMP hardware, never an injected application operation.
 """
+from input_payload_profile import assert_payload_proof, require_payload_proof
 import argparse,gzip,hashlib,json,os,re,shutil,socket,subprocess,threading,time
 from pathlib import Path
 import clipboard_workflow_gate as clip
@@ -82,6 +83,7 @@ def history_join(trace,expected,recovery=False):
  return dict(handle=handle,receipt=receipt.start(),effect=effect.start(),generation=expected['generation'])
 
 def verify_keys(trace,actions):
+ assert_payload_proof(trace)
  previous=0;makes=[]
  for action in actions:
   if action['kind']!='key':continue
@@ -558,6 +560,7 @@ def run_boot(root,iso,binding,seed,out,c,model,resolution_text,recovery=False,ex
    time.sleep(.02)
   q=QMP(sock)
   if resolution_text=='1024x768':wait(r'SexOS compact 1024x768',timeout=15);q.key('down');q.key('ret')
+  require_payload_proof(dict(text=text,wait=wait))
   wait(r'\[browser.net.job.released\] ticket=1 view=Verified private_job=0');wait(r'\[linen.disk.publish.done\]');wait(r'\[spindle.history.receipt\] target=12 task=12 kind=(?:loaded|missing) [^\n]*error=\d+')
   if not recovery:
    focus(201);key('ctrl','n',pattern=r'\[quil.new.ok\] bytes=0');focus(300);key('g',pattern=r'\[browser.asset.authenticated\] ticket=2 ')

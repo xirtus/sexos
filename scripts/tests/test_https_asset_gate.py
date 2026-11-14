@@ -109,7 +109,7 @@ class AssetFixture(unittest.TestCase):
   c=gate.source_contract(ROOT);self.assertEqual(set(c['source_sha256']),set(gate.SOURCE_FILES)|set(gate.HELD_INPUT_DEPENDENCIES)|set(gate.https.palette_source_hashes(ROOT)));self.assertEqual(c['pixel_hash'],hex(gate.PIXEL_HASH))
  def test_contract_rejects_disconnected_raw_key_retention_or_held_drain(self):
   path=ROOT/'servers/sexinput/src/main.rs';read=Path.read_bytes;original=read(path)
-  for old,new in [(b'sex_pdx::serial_record!("[sexinput.ps2.scancode]',b'serial_println!("[sexinput.ps2.scancode]'),(b'input_arrival.ps2(&mut keyboard_outbox,scancode)',b'fake_key_admission(scancode)'),(b'code:(raw&0x7f)as u8,down:(raw&0x80==0)as u8',b'code:raw as u8,down:1'),(b'send(edge.code as u64,edge.down as u64,EV_KEY)',b'send(edge.code as u64,edge.down as u64,2)')]:
+  for old,new in [(b'sex_pdx::serial_input_record!(("[sexinput.ps2.scancode]',b'serial_println!("[sexinput.ps2.scancode]'),(b'input_arrival.ps2(&mut keyboard_outbox,scancode)',b'fake_key_admission(scancode)'),(b'code:(raw&0x7f)as u8,down:(raw&0x80==0)as u8',b'code:raw as u8,down:1'),(b'send(edge.code as u64,edge.down as u64,EV_KEY)',b'send(edge.code as u64,edge.down as u64,2)')]:
    self.assertIn(old,original);mutated=original.replace(old,new)
    with patch.object(Path,'read_bytes',lambda p:mutated if p==path else read(p)):
     with self.assertRaises(ValueError):gate.source_contract(ROOT)
@@ -350,7 +350,8 @@ class RetainedPresentation(unittest.TestCase):
   with self.assertRaises(ValueError):gate.validate_frame_stages(extra,'ready',shots)
 
 def key_fixture(mode='ready',post=True,compact=False):
- trace='';actions=[];tick=1;menu_k=0
+ from input_payload_profile import PROOF_RECEIPTS
+ trace=PROOF_RECEIPTS;actions=[];tick=1;menu_k=0
  if compact:
   for code in ('down','ret'):actions.append(dict(key=code,code=gate.KEY_CODES[code],kind='boot',transport='send-key',serial_start=0,serial_qmp_return=0,serial_end=0,host_start=tick,host_qmp_return=tick+.1,host_end=tick+.2));tick+=1
  keys=['g','a','f','i','q','g','grave_accent','k','k','k','k','k','k','ret','a','grave_accent','k','k','k','k','k','k','ret','f']if mode=='ready'else['g','q']if mode=='partial-clear'else['g','f11']if mode=='partial-close'else['g']
