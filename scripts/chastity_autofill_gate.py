@@ -30,6 +30,9 @@ def main():
  def chord(key):g['q'].cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':key}],'hold-time':80})
  def launch(name,marker):
   g['focus'](153);time.sleep(.4);s=len(g['text']());keys('run '+name);g['q'].key('ret');m=g['wait'](marker,s,300);target,task=int(m[1]),int(m[2]);r=g['wait'](rf'\[shell.program.launch\] target={target} task={task} surface=(\d+)',s,60);sid=int(r[1]);g['focus'](sid);time.sleep(.6);return target,task,sid
+ def focus_provider():
+  start=len(g['text']());g['focus'](vault)
+  g['wait'](rf'\[display.focus.drawn\] focus={vault} ',start,60);time.sleep(.5)
  def click(name,sid,probe=False):
   text=g['text']();prefix='chastity.probe.control'if probe else'chastity.consent.control';pattern=r'\['+re.escape(prefix)+r'\] '+(''if probe else r'token=\d+ ')+r'name=(\w+) x=(-?\d+) y=(-?\d+)';pos={n:(int(x),int(y))for n,x,y in re.findall(pattern,text)};assert name in pos,pos
   tile=current_tile(text,sid);x,y=pos[name];x+=tile[0]+8;y+=tile[1]+36
@@ -47,8 +50,8 @@ def main():
   tile,resize=maximize(g,vault);g['wait'](r'\[chastity.layout\] width=\d+ height=\d+',resize,60);assert tile[2]>=816 and tile[3]>=642,tile
   def request():
    g['focus'](consumer);time.sleep(.2);s=len(g['text']());chord('r');g['wait'](r'\[chastity.probe.requested\]',s,60);m=g['wait'](rf'\[chastity.autofill.prompt\] token=(\d+) domain={target} task={task}',s,120);assert '[chastity.probe.received]'not in g['text']()[s:];return s,int(m[1])
-  s,first=request();g['focus'](vault);time.sleep(.5);g['q'].cmd('screendump',{'filename':str(out/'consent-default-deny.ppm')});g['q'].key('ret');g['wait'](rf'\[chastity.autofill.denied\] token={first}',s,60);g['wait'](r'\[chastity.probe.refused\] reason=Declined',s,60);assert '[chastity.probe.received]'not in g['text']()
-  s,second=request();assert second!=first;g['focus'](vault);time.sleep(.3);g['wait'](rf'\[chastity.consent.control\] token={second} name=allow x=\d+ y=\d+ enabled=1',s,60);click('allow',vault);g['wait'](rf'\[chastity.autofill.approved\] token={second}',s,60);g['wait'](r'\[chastity.probe.received\] expected=1',s,120)
+  s,first=request();focus_provider();g['q'].cmd('screendump',{'filename':str(out/'consent-default-deny.ppm')});g['q'].key('ret');g['wait'](rf'\[chastity.autofill.denied\] token={first}',s,60);g['wait'](r'\[chastity.probe.refused\] reason=Declined',s,60);assert '[chastity.probe.received]'not in g['text']()
+  s,second=request();assert second!=first;focus_provider();g['wait'](rf'\[chastity.consent.control\] token={second} name=allow x=\d+ y=\d+ enabled=1',s,60);g['q'].cmd('screendump',{'filename':str(out/'consent-before-allow.ppm')});click('allow',vault);g['wait'](rf'\[chastity.autofill.approved\] token={second}',s,60);g['wait'](r'\[chastity.probe.received\] expected=1',s,120)
   # A reused consumer row/task cannot inherit the previous approval.
   g['focus'](consumer);s=len(g['text']());g['q'].key('f11');g['wait'](rf'\[app.private.retired\] target={target} task={task} ',s,120);old_task=task
   target,task,consumer=launch('chastity-probe',r'\[chastity.probe.ready\] target=(\d+) task=(\d+)');assert task!=old_task
