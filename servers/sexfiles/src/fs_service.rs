@@ -504,12 +504,13 @@ fn program_package(binding: &Binding, r: w::Request, arg: &[u8], out: &mut [u8; 
     match r.offset {
         p::INSTALL if r.length & p::ALLOW_DOWNGRADE != 0 => refuse("downgrade"),
         p::INSTALL | p::CHECK => match confine(binding, arg, out) { Some(n) => Some(n), None => refuse("path") },
-        p::REMOVE | p::LIST | p::CATALOG | p::SEARCH | p::LOCATE | p::SOURCE => {
+        p::REMOVE | p::LIST | p::CATALOG | p::SEARCH | p::LOCATE | p::SOURCE | p::REPO_REMOVE | p::REPOS | p::DETAILS => {
             if arg.len() > out.len() { return refuse("length"); }
             out[..arg.len()].copy_from_slice(arg);
             Some(arg.len())
         }
-        p::TRUST | p::CONSENT => refuse("spindle_only"),
+        // Whom to trust, what to allow and going back a version are the person's answers.
+        p::TRUST | p::CONSENT | p::REPO_ADD | p::ROLLBACK => refuse("spindle_only"),
         _ => refuse("unknown"),
     }
 }

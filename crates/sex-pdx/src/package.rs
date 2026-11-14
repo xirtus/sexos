@@ -6,12 +6,15 @@
 //! Spindle may use every operation. A program may use it only when the person started it
 //! with `run +pkg` (its run's arguments then hold [`GRANT_TOKEN`], which only Spindle can
 //! put there), and then only INSTALL (never [`ALLOW_DOWNGRADE`]), CHECK, REMOVE, LIST,
-//! CATALOG, SEARCH, LOCATE and SOURCE. TRUST and CONSENT stay Spindle's: they are the
-//! person's answers. A program's package paths, [`DOWNLOAD`], [`CATALOG_DOWNLOAD`] and
+//! CATALOG, SEARCH, LOCATE, SOURCE, REPO_REMOVE, REPOS and DETAILS. TRUST, CONSENT,
+//! REPO_ADD and ROLLBACK stay Spindle's: they are the person's answers (whom to trust,
+//! what to allow, going back to an older version). A program's package paths, [`DOWNLOAD`], [`CATALOG_DOWNLOAD`] and
 //! [`SIG_DOWNLOAD`] are inside its own folder, as all its paths are.
 //!
 //! Installed packages are recorded under `/system/packages/PROGRAM/`: `manifest` (as
-//! signed), `files` (what install wrote, for remove) and `consent` (the person's answers).
+//! signed), `files` (what install wrote, for remove), `consent` (the person's answers),
+//! `repo` (the repository it came from; missing means the main store) and `prev/` (the
+//! version the last upgrade replaced, for ROLLBACK). Repositories are listed in [`REPOS_FILE`].
 //! Programs never reach `/system`: their paths are confined to their own folder.
 
 /// The request kind (`fs::Request::kind`). Far from the core kinds on purpose.
@@ -38,8 +41,24 @@ pub const SEARCH: u64 = 7;
 /// Where to download packages from: the path names one package, or is empty for every
 /// installed package the catalog has newer. Report lines starting with [`MACHINE`] hold URLs.
 pub const LOCATE: u64 = 8;
-/// The saved store folder URL, as one [`MACHINE`] line.
+/// The saved store folder URL, as one [`MACHINE`] line, then one `URL NAME` line for each
+/// third-party repository. CATALOG takes such a line: a bare URL is the main store, checked
+/// against the trusted keys; `URL NAME` is that repository, checked against its own key.
 pub const SOURCE: u64 = 9;
+/// Add a third-party repository: the path is `NAME URL KEY`. Its key then signs that
+/// repository's catalog and packages. The person's trust decision: Spindle only.
+pub const REPO_ADD: u64 = 10;
+/// Remove the repository named by the path (its installed packages stay).
+pub const REPO_REMOVE: u64 = 11;
+/// One line per repository: `NAME URL KEY16 packages=N`, and the updates waiting.
+pub const REPOS: u64 = 12;
+/// Put back the version the last upgrade of the package (the path) replaced, keeping the
+/// current one in its place. A downgrade, so Spindle only.
+pub const ROLLBACK: u64 = 13;
+/// For the store's window: every catalog entry matching the path's words, one [`MACHINE`]
+/// line each in `sex_pkg::index::Listing` form (repository, installed and kept versions,
+/// category, pictures and their hashes, description).
+pub const DETAILS: u64 = 14;
 /// The run argument Spindle adds for `run +pkg`: this run may use package requests.
 pub const GRANT_TOKEN: &[u8] = b"+packages";
 /// Report lines for Spindle rather than the person start with this byte.
@@ -49,6 +68,8 @@ pub const SIG_DOWNLOAD: &[u8] = b"/download.catalog.sig";
 
 pub const ROOT: &[u8] = b"/system/packages";
 pub const TRUSTED: &[u8] = b"/system/packages/trusted";
+/// Third-party repositories, `NAME URL KEY` per line (`sex_pkg::repo`).
+pub const REPOS_FILE: &[u8] = b"/system/packages/repos.txt";
 /// Where `pkg install URL` downloads to. Files removes it once it has looked at it.
 pub const DOWNLOAD: &[u8] = b"/download.sexpkg";
 
