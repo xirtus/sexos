@@ -51,3 +51,25 @@ postdated logs, zero/early/pre-handoff expiry, wrong/missing/duplicate identitie
 no counter growth, resets, malformed samples, epochs/routes/tasks and source
 mutations. These are host/control results; acceptance still requires independent
 review and an actual newly built diagnostic cohort. No kernel source is edited.
+
+
+## Reviewed Shell exit-subject correction
+
+After the sealed c84dc5f8 runtime cohort, commit 0b9364569 adds one pure
+`launch_exit_subject` predicate and changes only the OP_EXIT status-mutation
+condition to compare both the child's domain and task. This prevents a delayed
+old-task message from setting a reused domain's status. It does not change the
+observer call, sampling, route262, Net service identity, stats accounting, clocks,
+waits, wakeups or any kernel source. The complete Shell source fingerprint is now
+`b27da0f06b6c81b624a2ad78f35fb9e8a00738c60bc3917bd06df7aa9d84c97a`;
+all other observer and causal-core pins remain unchanged. The actual production
+predicate is compiled in the host negative test. This review permits the new
+source cohort; it does not carry the old runtime results onto a changed image.
+The c84 proof and its own frozen checker retain their original fingerprints.
+Shell main is not an entry in spec/abi_inputs.sha256; no ABI pin is fabricated.
+
+
+Validation after the correction: all 1,311 Python regressions pass in167.161s,
+including the compiled production exit predicate and passive-observer negative
+controls. All85 existing ABI input digests remain exact; no ABI manifest change
+is necessary. The new Shell source still requires its own guest qualification.
