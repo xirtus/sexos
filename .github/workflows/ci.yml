@@ -69,6 +69,8 @@ jobs:
       run: cargo test --locked -p sex-font --test fallback
     - name: Shaping (rustybuzz vs hb-shape), Arabic joining and bidi
       run: cargo test --locked -p sex-shape --features shaping
+    - name: Shuttle userspace font fallback, RTL/BiDi shaping and font picker on the host
+      run: bash scripts/shuttle_host_gate.sh
     - name: Loom engines (batch rename, duplicates, usage map, tags, compare) on the host
       run: cargo test --locked -p loom-core
     - name: Vellum annotations, forms and incremental PDF saves on the host

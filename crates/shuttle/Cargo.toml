@@ -1,0 +1,14 @@
+[package]
+name = "shuttle"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "Shuttle: text shaping, bidirectional layout, font fallback and font picker for SexOS"
+
+[dependencies]
+sex-font = { path = "../sex-font" }
+sex-shape = { path = "../sex-shape", features = ["shaping"] }
+ttf-parser = { version = "0.25", default-features = false, features = ["no-std-float", "opentype-layout"] }
+unicode-script = { version = "0.5", default-features = false }
+rustybuzz = { version = "0.20", default-features = false }
+libm = "0.2"

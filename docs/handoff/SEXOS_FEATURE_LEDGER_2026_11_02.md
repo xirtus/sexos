@@ -4195,6 +4195,10 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
 - Kernel: a service gives up after 8 restarts only if each came within 60 s of the last (CRASH_LOOP_TICKS); before, 8 restarts over any uptime left it down for good.
 - Run: 0.6 h, 2 cores, 20 rounds, every restartable service stopped 3-4 times: all notes intact, free program pages 55913 every round, no failures. 24 h: `--hours 24 --inject` (not in CI).
 
+## G-3: Shuttle userspace font fallback, RTL/BiDi shaping and font picker (2026-11-14)
+- New `#![no_std]` (`#![forbid(unsafe_code)]`) userspace crate `crates/shuttle` (plus scaled emoji coverage in `sex-font`): multi-paragraph UAX #9 BiDi with L2 visual run reordering, `unicode-script` itemization, `rustybuzz` OpenType shaping for Arabic/Hebrew/Indic, CJK line-breaking, emoji scaling/blending, cursor/hit-testing, and shared `FontCatalog`/`FontPicker`.
+- Gate: `scripts/shuttle_host_gate.sh` (43+ host tests and `x86_64-sex-app` confined target build).
+
 ## Fix: USB Ethernet regression from #196 (2026-11-14)
 - usb_net_gate failed on master ("fetch: could not connect"). With MSI-X wakes, sexusb idled 32 ticks between passes. Two gaps: `sleep_ticks` took interrupts for events the main loop had not drained yet, and the network's USB Ethernet transmit ring has no wake. Now `xhci::SLEPT` makes the next wait 1 tick after any sleep in a pass, and the loop polls every tick while an Ethernet adapter is up (`Usb::ether_active`). usb_net_gate passes; idle QEMU CPU 19%.
 
