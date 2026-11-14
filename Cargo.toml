@@ -63,6 +63,7 @@ members = [
     "crates/sex-net-config",
     "crates/sex-tls",
     "crates/sex-wifi",
+    "crates/sex-bt",
     "crates/sex-http",
     "crates/sex-wg",
     "crates/sex-ssh",
