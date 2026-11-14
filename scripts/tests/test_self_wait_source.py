@@ -22,6 +22,13 @@ SAMPLED=BASE+EXPIRY+RETURN
 OBSERVED=BASE+'[scheduler.self_wait.park] task=13 ticks=2 deadline=102 count=2\n'+EXPIRY+RETURN
 
 
+def copy_causal_sources(root):
+    names=set(APPROVED_TIMED_WAIT_SOURCES)
+    names.update(path.relative_to(ROOT).as_posix()for path in (ROOT/'kernel').rglob('*.rs'))
+    for name in names:
+        target=root/name;target.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(ROOT/name,target)
+
+
 class SourceBoundSelfWaitTests(unittest.TestCase):
     def check(self,text,root=ROOT):
         return inspect(text,source_root=root)
@@ -113,8 +120,7 @@ class SourceBoundSelfWaitTests(unittest.TestCase):
         ]
         with tempfile.TemporaryDirectory()as directory:
             root=Path(directory)
-            for name in APPROVED_TIMED_WAIT_SOURCES:
-                target=root/name;target.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(ROOT/name,target)
+            copy_causal_sources(root)
             self.assertTrue(source_contract(root)['ok'])
             for name,before,after in mutations:
                 with self.subTest(file=name,mutation=before):
@@ -132,8 +138,7 @@ class SourceBoundSelfWaitTests(unittest.TestCase):
                     'crate::scheduler::wake_record_if_due(task,99);')
         with tempfile.TemporaryDirectory()as directory:
             root=Path(directory)
-            for name in APPROVED_TIMED_WAIT_SOURCES:
-                path=root/name;path.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(ROOT/name,path)
+            copy_causal_sources(root)
             self.assertTrue(source_contract(root)['ok'])
             for reference in references:
                 path=root/'kernel/src/new_unreviewed_writer.rs'
@@ -143,6 +148,14 @@ class SourceBoundSelfWaitTests(unittest.TestCase):
                 self.assertFalse(result['source_contract']['ok'])
                 self.assertIn('unreviewed kernel deadline reference owner',result['source_contract']['errors'][0])
                 path.unlink()
+            # Even a new module without recognized tokens requires review;
+            # the complete Rust tree requires review even for unrecognized syntax.
+            path.write_text('fn unrelated_new_module(){}')
+            self.assertFalse(self.check(SAMPLED,root)['ok']);path.unlink()
+            name=next(p.relative_to(ROOT).as_posix()for p in (ROOT/'kernel').rglob('*.rs')
+                      if p.relative_to(ROOT).as_posix()not in APPROVED_TIMED_WAIT_SOURCES)
+            path=root/name;original=path.read_text();path.write_text(original+'\n// changed outside causal owners\n')
+            self.assertFalse(self.check(SAMPLED,root)['ok']);path.write_text(original)
             result=source_contract(ROOT)
             self.assertEqual(set(result['deadline_reference_closure']['owner_sha256']),DEADLINE_REFERENCE_OWNERS)
             self.assertGreater(result['deadline_reference_closure']['files'],len(DEADLINE_REFERENCE_OWNERS))
