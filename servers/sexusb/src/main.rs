@@ -344,6 +344,14 @@ pub extern "C" fn _start() -> ! {
         usb.net_region = v.virtual_address;
     }
     serial_println!("[sexusb.ether.route] region={}", net_view.is_some() as u8);
+    // Bluetooth controllers: HCI packets to and from Cufflinks (sex_pdx::bt_hci).
+    if let Ok(v) = sex_pdx::memory_region_full_view(sex_pdx::bt_hci::SLOT, sex_pdx::memory_region::QUERY_VIEW | sex_pdx::memory_region::READ | sex_pdx::memory_region::WRITE) {
+        if v.length >= sex_pdx::bt_hci::BYTES && v.virtual_address != 0 {
+            unsafe { sex_pdx::bt_hci::Shared::at(v.virtual_address as *mut u8) }.set_link(None);
+            usb.bt_region = v.virtual_address;
+        }
+    }
+    serial_println!("[sexusb.bt.route] region={}", (usb.bt_region != 0) as u8);
     let ports = usb.x.ports;
     let (connected, first) = usb.scan();
     if connected == 0 {
@@ -383,6 +391,7 @@ pub extern "C" fn _start() -> ! {
         }
         usb.service();
         busy |= usb.ether_pump();
+        busy |= usb.bt_pump();
         if usb.changed && files != 0 {
             usb.changed = false;
             let (status, _) = sex_pdx::pdx_call(sex_pdx::usb_disk::SLOT, sex_pdx::usb_disk::OP_CHANGED, usb.generation, 0, 0);

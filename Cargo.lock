@@ -977,6 +977,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cufflinks"
+version = "0.1.0"
+dependencies = [
+ "linked_list_allocator",
+ "sex-bt",
+ "sex-pdx",
+]
+
+[[package]]
 name = "darling"
 version = "0.24.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3841,6 +3850,14 @@ dependencies = [
  "lzma-rust2",
  "miniz_oxide 0.9.1",
  "ruzstd",
+]
+
+[[package]]
+name = "sex-bt"
+version = "0.1.0"
+dependencies = [
+ "aes 0.8.4",
+ "p256",
 ]
 
 [[package]]

@@ -79,7 +79,8 @@ crates = [
   "apps/python/Cargo.toml",
   "apps/store/Cargo.toml",
   "apps/sdltest/Cargo.toml",
-  "apps/driftspark/Cargo.toml"
+  "apps/driftspark/Cargo.toml",
+  "servers/cufflinks/Cargo.toml"
 ]
 
 [[stage]]
@@ -603,6 +604,16 @@ action = "cargo_manifest"
 manifest = "servers/sext/Cargo.toml"
 source_artifact = "target/x86_64-sex/release/sext"
 dest_artifact = "iso_root/servers/sext"
+
+# Cufflinks (Bluetooth host stack): built, not started by BOOT yet (needs a BOOT row
+# and the sex_pdx::bt_hci region grants). docs/handoff/CUFFLINKS_BLUETOOTH_2026_11_14.md
+[[stage]]
+id = "build_cufflinks"
+action = "cargo_manifest"
+manifest = "servers/cufflinks/Cargo.toml"
+source_artifact = "target/x86_64-sex/release/cufflinks"
+dest_artifact = "iso_root/servers/cufflinks"
+rustflags = "--cfg aes_force_soft"
 
 [[stage]]
 id = "copy_limine_cfg"

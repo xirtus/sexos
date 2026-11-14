@@ -131,6 +131,8 @@ jobs:
         cargo test --locked -p sex-web --test viewport
     - name: Intel Wi-Fi driver core (crypto vectors, handshakes, firmware files, power-up)
       run: bash scripts/wifi_host_gate.sh
+    - name: Cufflinks Bluetooth host stack (HCI goldens, SMP vectors, Intel firmware load, pairing)
+      run: bash scripts/bt_host_gate.sh
     - name: Power off and restart through ACPI (host half)
       run: bash scripts/power_host_gate.sh
 
