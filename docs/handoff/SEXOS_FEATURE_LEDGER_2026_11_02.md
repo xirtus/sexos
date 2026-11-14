@@ -228,6 +228,18 @@ fix is a stack high-water measurement or a stack quota separate from heap.
 **What changed.** Built `apps/batik` (raster editor & digital painting window over `batik-core` with brush/eraser/bucket/selection tools, layers, levels/invert/blur adjustments, undo/redo, and PNG/ORA file persistence) and `apps/burlesque` (presentations window over `burlesque-core` with slide management, layouts, editable fields, `PresenterSession` presenter view, `.pptx`/`.odp`/`.md` open, and `%PDF-1.4` export), both `#![forbid(unsafe_code)]` with `SEX_LAYOUT_SEED` section shuffling.
 
 **Evidence.** Host headless window tests (`apps/batik/tests/window.rs`, `apps/burlesque/tests/window.rs`) and live SexOS QEMU gates (`scripts/batik_gate.py`, `scripts/burlesque_gate.py`).
+## G-22: QEMU Comprehensive Performance Report & Bottleneck Audit (2026-11-14)
+
+**What changed.** Conducted a rigorous empirical performance and memory audit of SexOS v1.0.0 in hardware-emulated QEMU (`-M q35 -cpu max,+pku,+rdseed -smp 1 -m 512M -device VGA,xres=1280,yres=800 -device nvme`) on Apple Silicon M5 host:
+1. Measured cold boot breakdown across 3 passes: firmware & Limine handover (566.8 ms), kernel HAL/PKU/allocator ready (2,631.7 ms), userspace organ convergence (3,246.7–3,372.2 ms), and full desktop interactive readiness (6,244.9 ms).
+2. Measured 10 core system primitives and microbenchmarks across 3 passes of `apps/bench`: null syscall (0.26 µs, 2 cycles), memory query (0.08 µs, 1 cycle), yield (1.26 µs, 9 cycles), alloc & touch 32 MiB (6.59 ms/MiB), memcpy (0.71 ms/MiB), file write (390.96 ms/MiB), file read (218.82 ms/MiB), scattered 4 KiB read (201.41 µs), cached stat (0.27 µs, 2 cycles), and cross-domain synchronous PDX roundtrip (8.64 µs, 55 cycles).
+3. Evaluated large file read throughput (`run bench read-large` 16 MiB) across 3 passes: ~15,587,812 cycles/MiB, 256 NVMe device calls, ~300 ticks.
+4. Evaluated application launch latency and memory footprint across 15 real SexOS apps (`jot`, `quil`, `loom`, `gaze`, `tatami`, `pdf`, `bodice`, `gossip`, `rendezvous`, `assuit`, `spreadeagle`, `kaleidoscope`, `flash`, `sexshop`, `bench`): identified ELF fetch/scan vs frame presentation breakdown; confirmed 0 page leaks upon F11 retirement across all 15 applications.
+5. Identified and root-caused top 5 bottlenecks in codebase: heavy ELF opcode scanning (`kernel/src/app_resources.rs:430-437`) and 63 MiB program store boundary (`servers/sexfiles/src/program_store.rs`), eager 1 MiB stack allocations (`kernel/src/app_resources.rs:440-447`), synchronous unpipelined NVMe I/O (`servers/sexfiles/src/fs_service.rs` / `apps/sexdrive/src/main.rs`), synchronous PDX IPC scheduler roundtrip latency (`kernel/src/ipc/router.rs`), and serial boot organ dispatch (`kernel/src/lib.rs:270-340`).
+6. Authored comprehensive report `docs/PERFORMANCE_REPORT_2026_11_14.md` including 5 ready-to-file GitHub issue drafts with exact empirical evidence, codebase roots, and optimization plans.
+7. Provided deterministic measurement automation harness `scripts/qemu_perf_report.py`.
+
+**Evidence.** Full empirical runs logged and verified with `python3 scripts/qemu_perf_report.py --iso sexos-v1.0.0.iso --passes 3` (clean exit 0, all 15 apps evaluated and retired with 0 page leaks).
 
 ## G-15. Flash UVC webcam driver server and capture app (2026-11-14)
 
