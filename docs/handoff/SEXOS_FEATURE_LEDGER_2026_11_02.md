@@ -4575,3 +4575,28 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
 - Moan core PR #244 merged only after independently verified 16/16 successful checks
   including the final build aggregator and exact head. All remaining merges
   remain gated on complete exact-head CI. The original dirty checkout is untouched.
+
+## ChatGPT round 187: reconcile current desktop APIs (2026-11-14)
+- Reconciled the integration with upstream master `1dc3382f`, retaining both the
+  live autofill poll/pending/identity paths and upstream launch, drag, session,
+  tray and window-motion behavior. The upstream five-line kernel init grant is
+  inherited unchanged; the only authored kernel change remains round 186's
+  separately approved diagnostic redaction.
+- Preserved the complete Moan engine, effects, projects, waveform, recording and
+  FFmpeg export implementation when reconciling the already merged base engine.
+  Workspace/lock/spec and CI retain the union of upstream and handoff programs:
+  146 workspace members, 17 workflow jobs, all 16 dependencies of the aggregator,
+  and the sha2 0.11.1 size-optimization exception. All 85 ABI source pins verify.
+- Upstream introduced Drop and DragEnded window events. Weft forwards their
+  metadata as application events; its generic widgets deliberately leave them
+  unhandled. A real focused-field regression verifies no text, focus, activation
+  or size changes. The egui loop explicitly ignores these unsupported events;
+  Chastity's private adapter forwards them without synthesizing keyboard input.
+  All 33 Weft host tests and guest checks of both adapters and Chastity pass.
+- Reused the upstream author's four-line compatibility fix from PR #290 for
+  Bodice, Gossip, Hookup and Rendezvous. No feature work in those owned apps was
+  taken over. That PR was not merged by this task.
+- The reconciled source passes all 1,208 Python regressions and the actual autofill
+  broker/SDK host transport gate. Canonical normal/diagnostic images, strict input
+  gates and full exact-head CI remain required. The original dirty checkout and
+  historical boot artifacts remain untouched.
