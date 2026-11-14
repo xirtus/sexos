@@ -5,6 +5,7 @@
 //! No allocation in render: the caller supplies a block and the playhead.
 #![no_std]
 extern crate alloc;
+pub mod effects;
 use alloc::vec::Vec;
 pub const RATE: u32 = 48_000;
 pub type Frame = [i16; 2];
@@ -120,6 +121,8 @@ impl<'a> Clip<'a> {
 }
 
 pub struct Track<'a> {
+    pub effects: effects::Rack,
+    processed_until: Option<usize>,
     pub clips: Vec<Clip<'a>>,
     volume: u16,
     pan: i16,
@@ -130,6 +133,8 @@ impl Default for Track<'_> {
     fn default() -> Self {
         Self {
             clips: Vec::new(),
+            effects: effects::Rack::default(),
+            processed_until: None,
             volume: 100,
             pan: 0,
             muted: false,
@@ -140,6 +145,11 @@ impl Default for Track<'_> {
 impl<'a> Track<'a> {
     pub fn new() -> Self {
         Self::default()
+    }
+    /// Flush tails after edits, changing projects, or restarting transport.
+    pub fn reset_effects(&mut self) {
+        self.effects.reset();
+        self.processed_until = None;
     }
     pub fn set_volume(&mut self, percent: u16) -> Result<(), Error> {
         if percent > 400 {
@@ -159,7 +169,7 @@ impl<'a> Track<'a> {
     }
 }
 
-/// Render an arbitrary block, including silence, with one final saturating PCM
+/// Render a dry block (effects bypassed), including silence, with one final saturating PCM
 /// conversion after all clips/tracks are summed. Splitting blocks does not change
 /// samples. Positions beyond usize's timeline limit render silence.
 pub fn render(tracks: &[Track<'_>], start: usize, out: &mut [Frame]) {
@@ -191,5 +201,54 @@ pub fn render(tracks: &[Track<'_>], start: usize, out: &mut [Frame]) {
             }
         }
         *dest = mix.map(|v| v.clamp(i16::MIN as i64, i16::MAX as i64) as i16);
+    }
+}
+
+/// Stateful per-track effects, before volume/balance and final summing. Sequential
+/// blocks preserve tails; a discontinuous start resets all filter/delay state.
+/// Muted/non-solo tracks still advance their DSP but do not enter the output.
+/// Pausing means making no calls. Empty blocks do not alter DSP or position.
+/// This processes indefinitely beyond clip ends so reverberation can decay.
+pub fn render_processed(tracks: &mut [Track<'_>], start: usize, out: &mut [Frame]) {
+    if out.is_empty() {
+        return;
+    }
+    let solo = tracks.iter().any(|t| t.solo && !t.muted);
+    for t in tracks.iter_mut() {
+        if t.processed_until != Some(start) {
+            t.effects.reset();
+        }
+    }
+    for (i, dest) in out.iter_mut().enumerate() {
+        *dest = [0; 2];
+        let Some(at) = start.checked_add(i) else {
+            continue;
+        };
+        let mut mix = [0i64; 2];
+        for t in tracks.iter_mut() {
+            let mut sum = [0i64; 2];
+            for clip in &t.clips {
+                let f = clip.sample(at);
+                for c in 0..2 {
+                    sum[c] = sum[c].saturating_add(f[c]);
+                }
+            }
+            let f = t.effects.frame(sum);
+            if t.muted || (solo && !t.solo) {
+                continue;
+            }
+            let balance = [100 - t.pan.max(0) as i64, 100 + t.pan.min(0) as i64];
+            for c in 0..2 {
+                mix[c] = mix[c].saturating_add(
+                    f[c].saturating_mul(t.volume as i64)
+                        .saturating_mul(balance[c])
+                        / 10000,
+                );
+            }
+        }
+        *dest = mix.map(|v| v.clamp(i16::MIN as i64, i16::MAX as i64) as i16);
+    }
+    for t in tracks {
+        t.processed_until = start.checked_add(out.len());
     }
 }
