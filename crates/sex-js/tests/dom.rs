@@ -1390,3 +1390,41 @@ fn svg_elements_have_their_namespace_and_class() {
     "#, "t.js").unwrap();
     assert_eq!(logs(&mut s), ["0:true true false true true path true false true linearGradient true http://www.w3.org/1999/xhtml true true", "0:true svg true 1 4"]);
 }
+
+#[test]
+fn pointer_events_overlay_inheritance_override_and_restyle() {
+    use sex_html::layout::{self, FontKey, Host};
+    struct Fixed;
+    impl Host for Fixed {
+        fn text_width(&self, text: &str, f: FontKey) -> i32 { text.len() as i32 * f.size / 2 }
+        fn metrics(&self, f: FontKey) -> (i32, i32) { (f.size * 4 / 5, f.size / 5) }
+    }
+    let mut s = page("<body style='margin:0'><button id=under style='width:200px;height:100px'>Under</button><div id=overlay style='position:absolute;left:0;top:0;width:200px;height:100px;pointer-events:none'><span id=inherited>Decoration</span><button id=child style='position:absolute;left:100px;top:0;width:100px;height:40px;pointer-events:auto'>Child</button></div></body>");
+    let id = |d: &Document, name: &str| d.dom.descendants(0).into_iter().find(|&n| d.dom.attr(n,"id") == Some(name)).unwrap();
+    let under=id(s.page_mut(),"under"); let overlay=id(s.page_mut(),"overlay");
+    let child=id(s.page_mut(),"child"); let inherited=id(s.page_mut(),"inherited");
+    fn layout_doc(d: &mut Document, css: &str) {
+        let styles=sex_html::styles(&d.dom,&[css],410,330);
+        let p=layout::layout_in(&d.dom,&styles,410,330,&Fixed);
+        d.set_boxes(&p.boxes); d.set_layers(&p.layers); d.set_pointer_styles(&styles);
+    }
+    layout_doc(s.page_mut(), "");
+    assert!(!s.page_mut().accepts_pointer(overlay));
+    assert!(!s.page_mut().accepts_pointer(inherited));
+    assert_eq!(s.page_mut().node_at(10,60),Some(under));
+    assert_eq!(s.page_mut().node_at(150,20),Some(child));
+    // Exclusion from hit testing does not remove geometry or event bubbling.
+    assert!(s.page_mut().rects[overlay].is_some());
+    s.eval("document.getElementById('overlay').addEventListener('click',()=>console.log('bubble')); document.getElementById('child').addEventListener('click',()=>console.log('child'));", "events.js").unwrap();
+    s.dispatch(&format!("mouse\tdown\t{child}\t150\t20\t0\t1\t0")).unwrap();
+    s.dispatch(&format!("mouse\tup\t{child}\t150\t20\t0\t0\t0")).unwrap();
+    assert_eq!(logs(&mut s), ["0:child", "0:bubble"]);
+    layout_doc(s.page_mut(), "#overlay { pointer-events: auto !important }");
+    assert_eq!(s.page_mut().node_at(10,60),Some(overlay));
+    layout_doc(s.page_mut(), "#child { pointer-events: inherit !important }");
+    assert_eq!(s.page_mut().node_at(150,20),Some(under));
+    layout_doc(s.page_mut(), "#child { pointer-events: unset !important }");
+    assert_eq!(s.page_mut().node_at(150,20),Some(under));
+    layout_doc(s.page_mut(), "#child { pointer-events: initial !important }");
+    assert_eq!(s.page_mut().node_at(150,20),Some(child));
+}

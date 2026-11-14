@@ -847,7 +847,7 @@ impl Browser {
         #[cfg(feature = "baseline-jit")]
         {
             let stats = script.jit_stats();
-            sex_pdx::serial_record!("[web.jit] enabled={} compiled={} executed={} bailouts={} refused={} ticks={} script_ticks={}", self.jit_enabled as u8, stats.compiled, stats.executed, stats.bailouts, stats.refused, sex_pdx::get_ticks() - started, sex_pdx::get_ticks() - scripts_started);
+            sex_pdx::serial_record!("[web.jit] enabled={} compiled={} executed={} bailouts={} refused={} ticks={} script_ticks={} native={} url={}", self.jit_enabled as u8, stats.compiled, stats.executed, stats.bailouts, stats.refused, sex_pdx::get_ticks() - started, sex_pdx::get_ticks() - scripts_started, Script::<Document>::NATIVE as u8, self.url);
         }
         self.script_scroll = 0;
         self.doc = Doc::Scripted(alloc::boxed::Box::new(script));
@@ -933,6 +933,7 @@ impl Browser {
         sex_web::svg::draw_inline(&self.page, &doc.dom, &styles, &mut self.fonts);
         doc.set_boxes(&self.page.boxes);
         doc.set_layers(&self.page.layers);
+        doc.set_pointer_styles(&styles);
         if self.in_frame.is_none() { self.frames_check = true; }
         self.scroll = self.scroll.min(self.max_scroll());
         if self.focus.map_or(false, |f| f >= self.page.links.len()) { self.focus = None; }
@@ -1565,7 +1566,7 @@ impl Browser {
         let (px, py) = (x, y + self.scroll);
         // Over a frame: the frame's page has the pointer, in its own coordinates.
         if y >= 0 && self.in_frame.is_none() {
-            if let Some(i) = self.frames.iter().position(|f| px >= f.rect[0] && px < f.rect[0] + f.rect[2] && py >= f.rect[1] && py < f.rect[1] + f.rect[3]) {
+            if let Some(i) = self.frames.iter().position(|f| self.doc.get().accepts_pointer(f.node) && px >= f.rect[0] && px < f.rect[0] + f.rect[2] && py >= f.rect[1] && py < f.rect[1] + f.rect[3]) {
                 let [fx, fy, _, _] = self.frames[i].rect;
                 let q = sex_pdx::app_pointer::Pointer { x: (px - fx) as i16, y: (py - fy + BAR) as i16, buttons: p.buttons, kind: p.kind };
                 self.enter(i);
@@ -1575,7 +1576,7 @@ impl Browser {
             }
         }
         // Links are named by node: a script's relayout rebuilds the list.
-        let link = if y >= 0 { self.page.links.iter().find(|l| px >= l.x && px < l.x + l.w && py >= l.y && py < l.y + l.h).map(|l| l.node) } else { None };
+        let link = if y >= 0 { self.page.links.iter().find(|l| self.doc.get().accepts_pointer(l.node) && px >= l.x && px < l.x + l.w && py >= l.y && py < l.y + l.h).map(|l| l.node) } else { None };
         if let (Kind::Down { button: 1 }, Some(n), None) = (p.kind, link, self.in_frame) {
             let href = self.page.links.iter().find(|l| l.node == n).map(|l| l.href.clone()).unwrap_or_default();
             if let Some(t) = (!href.starts_with("javascript:") && !href.is_empty()).then(|| sex_html::url::resolve(&self.url, &href)).flatten() {

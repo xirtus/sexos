@@ -209,6 +209,8 @@ jobs:
         python3 scripts/program_web_js_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-webjs.img" --out "$RUNNER_TEMP/sexos-runtime/web-js"
     - name: Actual Web maximize and restore with full viewport pixels
       run: python3 scripts/program_web_viewport_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-webjs.img" --out "$RUNNER_TEMP/sexos-runtime/web-viewport"
+    - name: Browser pointer input through decorative overlays
+      run: python3 scripts/program_web_pointer_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-webjs.img" --out "$RUNNER_TEMP/sexos-runtime/web-pointer"
     - name: Classic script resources and fetch CORS isolation
       run: |
         truncate -s 1G "$RUNNER_TEMP/blank-classic.img"
