@@ -227,6 +227,21 @@ class ClipboardWorkflow(unittest.TestCase):
   for bad in(t.replace(marker,''),t.replace('new=201 live=1 shortcut=alt_tab','new=201 live=0 shortcut=alt_tab'),t.replace('shortcut=alt_tab','shortcut=tab'),marker+t.replace(marker,'')):
    with self.assertRaises(ValueError):gate.clipboard_join(bad)
 
+ def test_access_focus_join_requires_exact_quil_result_and_completed_input_edges(self):
+  t=self.join_trace();marker='[shell.app.switch] old=300 new=201 live=1 shortcut=alt_tab\n'
+  action=('[input.keyboard.keydown.ok] code=15 source=ps2\n'
+          '[shell.kbd.ui.action] scancode=15 action=AccessFocusNext focused=300 frame=3 sid=300\n'
+          '[shell.kbd.ui.result] action=AccessFocusNext ok=1 reason=ok frame=3 sid=201\n'
+          '[input.keyboard.keyup.ok] code=15 source=ps2\n')
+  early='[shell.kbd.ui.result] action=AccessFocusNext ok=1 reason=ok frame=3 sid=201\n'
+  for wrong in(action.replace('sid=201','sid=200'),action.replace('reason=ok','reason=other'),action.replace('frame=3 sid=201','frame=0 sid=201')):
+   mixed=t.replace(marker,early+wrong)
+   with self.assertRaises(ValueError):gate.clipboard_join(mixed)
+  valid=t.replace(marker,action);r=gate.clipboard_join(valid)
+  self.assertEqual(r['focus_method'],'access_focus_next');self.assertIsNone(r['alt_tab_offset'])
+  self.assertGreater(r['focus_offset'],r['published_offset'])
+  for bad in(valid.replace('sid=201','sid=200'),valid.replace('ok=1 reason=ok frame=3','ok=0 reason=ok frame=3'),valid.replace('code=15 source=ps2\n','code=14 source=ps2\n'),valid.replace('[input.keyboard.keyup.ok]','[input.keyboard.other]'),valid.replace('scancode=15 action=AccessFocusNext','scancode=15 action=AccessClose'),action+t.replace(marker,'')):
+   with self.assertRaises(ValueError):gate.clipboard_join(bad)
  def test_canonical_desktop_boundary_accepts_y28_and_rejects_y27(self):
   self.assertEqual(self.c['desktop_top'],28);f=self.frame();image=self.screen(f,base_y=28)
   good=self.check(f,image,trace=self.trace(f,y=28));self.assertTrue(good['ok'],good)

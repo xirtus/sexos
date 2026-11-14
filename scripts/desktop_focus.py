@@ -8,7 +8,7 @@ _TAB_RESULT = (r'\[shell\.kbd\.ui\.result\] action=AccessFocusNext ok=1 reason=\
 _SPINDLE_RESULT = r'\[shell\.kbd\.ui\.result\] action=ToggleSpindle ok=1 reason=\S+ frame=\d+ sid=\d+'
 
 
-def _completed(trace, code, action, proof=False):
+def _completed(trace, code, action, proof=False, target_sid=None):
     # Input's send receipt may race Shell's handling, so do not impose ordering
     # between producers. Normal images preserve edges without secret key codes.
     raw = proof or re.search(r'\[input\.keyboard\.key(?:down|up)\.ok\] code=', trace) is not None
@@ -25,15 +25,20 @@ def _completed(trace, code, action, proof=False):
             break
     if not paired:
         return False
-    if action == 'AccessFocusNext' and re.search(
-            r'\[shell\.app\.switch\] old=\d+ new=\d+ live=1 shortcut=alt_tab\r?\n', trace):
+    target = str(target_sid) if type(target_sid) is int and target_sid > 0 else r'\d+'
+    if target_sid is not None and target == r'\d+':
+        return False
+    if target_sid is None and action == 'AccessFocusNext' and re.search(
+            rf'\[shell\.app\.switch\] old=\d+ new={target} live=1 shortcut=alt_tab\r?\n', trace):
         return True  # Clipboard supplies one explicit Alt+Tab packet.
     if raw:
         make = re.search(rf'\[shell\.kbd\.ui\.action\] scancode={code} action={action}(?:\s|$)', trace)
         if not make:
             return False
         trace = trace[make.end():]
-    return re.search(rf'\[shell\.kbd\.ui\.result\] action={action} ok=1 reason=\S+ frame=\d+ sid=\d+\r?\n', trace) is not None
+    reason = 'ok' if target_sid is not None else r'\S+'
+    frame = r'[1-9][0-9]*' if target_sid is not None else r'\d+'
+    return re.search(rf'\[shell\.kbd\.ui\.result\] action={action} ok=1 reason={reason} frame={frame} sid={target}\r?\n', trace) is not None
 
 
 def focus_surface(sid, text, key):

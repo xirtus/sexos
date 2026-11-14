@@ -11,7 +11,7 @@ import http_content_gate as http
 import https_import_gate as storage
 import tls_responsiveness_gate as desktop
 from desktop_close_gate import QMP
-from desktop_focus import focus_surface
+from desktop_focus import focus_surface, _completed as focus_completed
 from network_contention_gate import frozen_binding,cleanup_receipts,MAX_PCAP
 from tls_exchange_gate import reassemble
 from check_document_disk import recover,fnv
@@ -364,12 +364,16 @@ def clipboard_join(trace,body=BODY):
  intent=re.search(rf'\[quil.clipboard.intent\] ticket={dt} action=paste generation=\d+ revision=\d+ start=(\d+) end=(\d+)',trace)
  selections=list(re.finditer(r'\[quil.selection\] generation=(\d+) revision=(\d+) bytes=(\d+) anchor=(\d+) caret=(\d+)',trace[:intent.start()if intent else 0]))
  if not intent or not selections:raise ValueError('paste lacks exact selected replacement snapshot')
- switches=list(re.finditer(r'\[shell.app.switch\] old=\d+ new=201 live=1 shortcut=alt_tab',trace[pub.end():intent.start()]))
- if not switches:raise ValueError('cross-app paste lacks actual live Alt+Tab switch to Quil after publication')
- switch_offset=pub.end()+switches[-1].start()
+ focus_trace=trace[pub.end():intent.start()]
+ switches=list(re.finditer(r'\[shell.app.switch\] old=\d+ new=201 live=1 shortcut=alt_tab',focus_trace))
+ traversal=list(re.finditer(r'^\[shell.kbd.ui.result\] action=AccessFocusNext ok=1 reason=ok frame=[1-9][0-9]* sid=201\r?\n',focus_trace,re.M))
+ if switches:focus_method='alt_tab';switch_offset=pub.end()+switches[-1].start()
+ elif traversal and focus_completed(focus_trace,15,'AccessFocusNext',proof=True,target_sid=201):
+  focus_method='access_focus_next';switch_offset=pub.end()+traversal[-1].start()
+ else:raise ValueError('cross-app paste lacks completed live focus to Quil after publication')
  old=selections[-1];oldlen,anchor,caret=map(int,old.groups()[2:])
  if oldlen==0 or sorted((anchor,caret))!=[0,oldlen]or tuple(map(int,intent.groups()))!=(0,oldlen):raise ValueError('Quil paste did not atomically replace whole existing buffer')
- return dict(producer=dict(pd=15,task=15,ticket=ticket,source_generation=generation,revision=revision),consumer=dict(pd=9,task=9,ticket=dt,replaced_bytes=oldlen),publication_generation=pg,alt_tab_offset=switch_offset,bytes=len(body),hash=value,copy_offset=cp.start(),published_offset=pub.start(),paste_offset=dest.start(),receiver_shell_subject=dict(pd=3,task=3,proof='positive workflow plus sealed exact Client::receive sender check'))
+ return dict(producer=dict(pd=15,task=15,ticket=ticket,source_generation=generation,revision=revision),consumer=dict(pd=9,task=9,ticket=dt,replaced_bytes=oldlen),publication_generation=pg,focus_method=focus_method,focus_offset=switch_offset,alt_tab_offset=switch_offset if focus_method=='alt_tab'else None,bytes=len(body),hash=value,copy_offset=cp.start(),published_offset=pub.start(),paste_offset=dest.start(),receiver_shell_subject=dict(pd=3,task=3,proof='positive workflow plus sealed exact Client::receive sender check'))
 
 
 def unchanged_quil(before,after):
