@@ -287,6 +287,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
 
 [[package]]
+name = "assert_matches"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9b34d609dfbaf33d6889b2b7106d3ca345eacad44200913df5ba02bfd31d2ba9"
+
+[[package]]
 name = "assuit"
 version = "0.1.0"
 dependencies = [
@@ -298,10 +304,43 @@ dependencies = [
 ]
 
 [[package]]
+name = "atomig"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cd0f41f4bb89f5c6450325e283fb78c4a3d042181b54f3855ee2f872919f9863"
+dependencies = [
+ "atomig-macro",
+]
+
+[[package]]
+name = "atomig-macro"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "49c98dba06b920588de7d63f6acc23f1e6a9fade5fd6198e564506334fb5a4f5"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
+
+[[package]]
+name = "av-data"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fca67ba5d317924c02180c576157afd54babe48a76ebc66ce6d34bb8ba08308e"
+dependencies = [
+ "byte-slice-cast",
+ "bytes",
+ "num-derive",
+ "num-rational",
+ "num-traits",
+]
 
 [[package]]
 name = "backtrace"
@@ -537,6 +576,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "bodice"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-ebook",
+ "sex-font",
+ "sex-image",
+ "sex-pdx",
+]
+
+[[package]]
 name = "brotli"
 version = "8.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -584,6 +634,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 
 [[package]]
+name = "byte-slice-cast"
+version = "1.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7575182f7272186991736b70173b0ea045398f984bf5ebbb3804736ce1330c9d"
+
+[[package]]
 name = "bytemuck"
 version = "1.25.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -626,6 +682,16 @@ name = "bytesize"
 version = "1.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2e93abca9e28e0a1b9877922aacb20576e05d4679ffa78c3d6dc22a26a216659"
+
+[[package]]
+name = "calendar"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-calendar",
+ "sex-font",
+ "sex-pdx",
+]
 
 [[package]]
 name = "cbc"
@@ -922,6 +988,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77745e017f5edba1a9c1d854f6f3a52dac8a12dd5af5d2f54aecf61e43d80d30"
 dependencies = [
  "libm",
+]
+
+[[package]]
+name = "corset-core"
+version = "0.1.0"
+dependencies = [
+ "sex-crypt",
+ "sex-disk",
+ "sex-volumes",
+ "sexfs",
 ]
 
 [[package]]
@@ -2012,6 +2088,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "gossip"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-feed",
+ "sex-font",
+ "sex-pdx",
+]
+
+[[package]]
 name = "grep"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2256,7 +2342,7 @@ dependencies = [
  "cfg-if",
  "crunchy",
  "num-traits",
- "zerocopy",
+ "zerocopy 0.8.63",
 ]
 
 [[package]]
@@ -2446,6 +2532,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
+name = "heic-rs"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8883c3bfa6b4ff19a40e52a6dc051c5612cbe21bf408fc6d4875e8dfd777cb66"
+
+[[package]]
 name = "hello"
 version = "0.1.0"
 dependencies = [
@@ -2483,6 +2575,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6303bc9732ae41b04cb554b844a762b4115a61bfaa81e3e83050991eeb56863f"
 dependencies = [
  "digest 0.11.3",
+]
+
+[[package]]
+name = "hookup"
+version = "0.1.0"
+dependencies = [
+ "sex-font",
+ "sex-kdeconnect",
+ "sex-std",
 ]
 
 [[package]]
@@ -2724,6 +2825,9 @@ version = "0.1.0"
 dependencies = [
  "sex-app",
  "sex-pdx",
+ "sex-textedit",
+ "sex-vt",
+ "spellbook",
 ]
 
 [[package]]
@@ -3147,6 +3251,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lurk"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-pdx",
+ "sex-rfb",
+]
+
+[[package]]
 name = "lzma-rust2"
 version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3231,6 +3344,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "moan-core"
+version = "0.1.0"
+
+[[package]]
+name = "moan-probe"
+version = "0.1.0"
+dependencies = [
+ "moan-core",
+ "sex-app",
+ "sex-pdx",
+]
+
+[[package]]
 name = "monitor"
 version = "0.1.0"
 dependencies = [
@@ -3312,6 +3438,16 @@ dependencies = [
  "indexmap",
  "rustc-hash 1.1.0",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "needle"
+version = "0.1.0"
+dependencies = [
+ "sex-font",
+ "sex-image",
+ "sex-print",
+ "sex-std",
 ]
 
 [[package]]
@@ -3428,6 +3564,17 @@ name = "num-conv"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "521739c6d2bac4aa25192232afe6841231376b2b26d4d9fae5ecf8ca5772e441"
+
+[[package]]
+name = "num-derive"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ed3955f1a9c7c0c15e092f9c887db08b1fc683305fdf6eb6684f22555355e202"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
 
 [[package]]
 name = "num-integer"
@@ -3596,6 +3743,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "parking_lot"
+version = "0.12.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "93857453250e3077bd71ff98b6a65ea6621a19bb0f559a85248955ac12c45a1a"
+dependencies = [
+ "lock_api",
+ "parking_lot_core",
+]
+
+[[package]]
+name = "parking_lot_core"
+version = "0.9.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2621685985a2ebf1c516881c026032ac7deafcda1a2c9b7850dc81e3dfcb64c1"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "redox_syscall",
+ "smallvec",
+ "windows-link",
+]
+
+[[package]]
 name = "parlance"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3640,6 +3810,7 @@ name = "pdf"
 version = "0.1.0"
 dependencies = [
  "hayro",
+ "sex-font",
  "sex-std",
 ]
 
@@ -3916,7 +4087,7 @@ version = "0.2.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "85eae3c4ed2f50dcfe72643da4befc30deadb458a9b590d720cde2f2b1e97da9"
 dependencies = [
- "zerocopy",
+ "zerocopy 0.8.63",
 ]
 
 [[package]]
@@ -4234,7 +4405,7 @@ dependencies = [
  "toml 0.8.23",
  "uuid",
  "weezl 0.1.12",
- "zerocopy",
+ "zerocopy 0.8.63",
 ]
 
 [[package]]
@@ -4315,6 +4486,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "redox_syscall"
+version = "0.5.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ed2bf2547551a7053d6fdfafda3f938979645c44812fbfcda098faae3f1a362d"
+dependencies = [
+ "bitflags 2.13.1",
+]
+
+[[package]]
 name = "regex"
 version = "1.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4348,6 +4528,16 @@ name = "regex-syntax"
 version = "0.8.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
+
+[[package]]
+name = "rendezvous"
+version = "0.1.0"
+dependencies = [
+ "sex-image",
+ "sex-map",
+ "sex-std",
+ "tiny-skia 0.11.4",
+]
 
 [[package]]
 name = "resvg"
@@ -4531,6 +4721,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
+name = "rusty_av1d"
+version = "1.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9af56536f07b275509d08654be29737c2b4f911cf74dbaa35d68b662fe15b35f"
+dependencies = [
+ "assert_matches",
+ "atomig",
+ "av-data",
+ "bitflags 2.13.1",
+ "cc",
+ "cfg-if",
+ "parking_lot",
+ "paste",
+ "raw-cpuid 11.6.0",
+ "static_assertions",
+ "strum",
+ "to_method",
+ "zerocopy 0.7.35",
+]
+
+[[package]]
 name = "rustybuzz"
 version = "0.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4569,7 +4780,7 @@ version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e885ed64c91774b671612cb99dda2ede3738b0aa2d39a85a1471b20bf09eabe0"
 dependencies = [
- "zerocopy",
+ "zerocopy 0.8.63",
 ]
 
 [[package]]
@@ -4712,12 +4923,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "serenade-core"
+version = "0.1.0"
+dependencies = [
+ "libm",
+]
+
+[[package]]
 name = "settings"
 version = "0.1.0"
 dependencies = [
  "sex-app",
  "sex-config",
  "sex-pdx",
+]
+
+[[package]]
+name = "sex-3d"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "flate2",
+ "png",
+ "ruzstd",
+ "serde_json",
+ "zune-jpeg",
 ]
 
 [[package]]
@@ -4740,11 +4970,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-calc"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-calc-core",
+ "sex-font",
+ "sex-pdx",
+]
+
+[[package]]
+name = "sex-calc-core"
+version = "0.1.0"
+dependencies = [
+ "libm",
+]
+
+[[package]]
+name = "sex-calendar"
+version = "0.1.0"
+
+[[package]]
 name = "sex-canvas"
 version = "0.1.0"
 dependencies = [
  "libm",
  "tiny-skia 0.11.4",
+]
+
+[[package]]
+name = "sex-codecs"
+version = "0.1.0"
+dependencies = [
+ "heic-rs",
+ "image-webp 0.2.4",
+ "rusty_av1d",
+ "sex-image",
 ]
 
 [[package]]
@@ -4772,8 +5033,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-ebook"
+version = "0.1.0"
+dependencies = [
+ "sex-image",
+ "sex-xml",
+ "zune-inflate",
+]
+
+[[package]]
 name = "sex-episodes"
 version = "0.1.0"
+
+[[package]]
+name = "sex-feed"
+version = "0.1.0"
+dependencies = [
+ "sex-xml",
+]
 
 [[package]]
 name = "sex-fetch"
@@ -4863,6 +5140,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-kdeconnect"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "sex-kdeconnect",
+]
+
+[[package]]
 name = "sex-kernel"
 version = "0.1.0"
 dependencies = [
@@ -4903,6 +5188,14 @@ name = "sex-kms"
 version = "0.1.0"
 
 [[package]]
+name = "sex-kodi"
+version = "0.1.0"
+dependencies = [
+ "sex-archive",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "sex-libc"
 version = "0.1.0"
 dependencies = [
@@ -4914,6 +5207,17 @@ dependencies = [
 [[package]]
 name = "sex-mail"
 version = "0.1.0"
+
+[[package]]
+name = "sex-map"
+version = "0.1.0"
+dependencies = [
+ "libm",
+ "serde_json",
+ "sex-font",
+ "tiny-skia 0.11.4",
+ "zune-inflate",
+]
 
 [[package]]
 name = "sex-media"
@@ -4980,6 +5284,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-print"
+version = "0.1.0"
+
+[[package]]
+name = "sex-rfb"
+version = "0.1.0"
+dependencies = [
+ "miniz_oxide 0.8.9",
+]
+
+[[package]]
 name = "sex-rt"
 version = "0.1.0"
 dependencies = [
@@ -5025,7 +5340,12 @@ version = "0.1.0"
 dependencies = [
  "sex-app",
  "sex-pdx",
+ "sex-vt",
 ]
+
+[[package]]
+name = "sex-textedit"
+version = "0.1.0"
 
 [[package]]
 name = "sex-time"
@@ -5072,6 +5392,14 @@ name = "sex-volumes"
 version = "0.1.0"
 
 [[package]]
+name = "sex-vt"
+version = "0.1.0"
+dependencies = [
+ "sex-font",
+ "vte",
+]
+
+[[package]]
 name = "sex-wasm"
 version = "0.1.0"
 dependencies = [
@@ -5114,6 +5442,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-xml"
+version = "0.1.0"
+
+[[package]]
 name = "sexacpi"
 version = "0.1.0"
 dependencies = [
@@ -5129,7 +5461,7 @@ dependencies = [
  "linked_list_allocator",
  "sex-pdx",
  "virtio-drivers",
- "zerocopy",
+ "zerocopy 0.8.63",
 ]
 
 [[package]]
@@ -5316,6 +5648,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
+name = "shuttle"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-pdx",
+]
+
+[[package]]
 name = "signature"
 version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5466,6 +5806,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "spellbook"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d204abcbdf8e88729306a8d0ca01a79d8a49969fe1f84696909d6dbc4321c1a"
+dependencies = [
+ "foldhash",
+ "hashbrown 0.17.1",
+]
+
+[[package]]
 name = "spin"
 version = "0.9.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5537,6 +5887,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
+name = "static_assertions"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
+
+[[package]]
 name = "std_prelude"
 version = "0.2.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5589,6 +5945,27 @@ name = "strsim"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
+
+[[package]]
+name = "strum"
+version = "0.27.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "af23d6f6c1a224baef9d3f61e287d2761385a5b88fdab4eb4c6f11aeb54c4bcf"
+dependencies = [
+ "strum_macros",
+]
+
+[[package]]
+name = "strum_macros"
+version = "0.27.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7695ce3845ea4b33927c055a39dc438a45b059f7c1b3d91d38d10355fb8cbca7"
+dependencies = [
+ "heck",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
 
 [[package]]
 name = "subsetter"
@@ -5706,6 +6083,16 @@ name = "target-features"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c1bbb9f3c5c463a01705937a24fdabc5047929ac764b2d5b9cf681c1f5041ed5"
+
+[[package]]
+name = "term"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-pdx",
+ "sex-vt",
+ "sex-wasm",
+]
 
 [[package]]
 name = "termcolor"
@@ -5917,6 +6304,12 @@ name = "tinyvec"
 version = "1.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
+
+[[package]]
+name = "to_method"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7c4ceeeca15c8384bbc3e011dbd8fccb7f068a440b752b7d9b32ceb0ca0e2e8"
 
 [[package]]
 name = "toml"
@@ -6363,7 +6756,7 @@ dependencies = [
  "log",
  "safe-mmio",
  "thiserror 2.0.21",
- "zerocopy",
+ "zerocopy 0.8.63",
 ]
 
 [[package]]
@@ -6371,6 +6764,16 @@ name = "volatile"
 version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "442887c63f2c839b346c192d047a7c87e73d0689c9157b00b53dcc27dd5ea793"
+
+[[package]]
+name = "vte"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a5924018406ce0063cd67f8e008104968b74b563ee1b85dde3ed1f7cb87d3dbd"
+dependencies = [
+ "arrayvec",
+ "memchr",
+]
 
 [[package]]
 name = "walkdir"
@@ -7224,11 +7627,32 @@ dependencies = [
 
 [[package]]
 name = "zerocopy"
+version = "0.7.35"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b9b4fd18abc82b8136838da5d50bae7bdea537c574d8dc1a34ed098d6c166f0"
+dependencies = [
+ "byteorder",
+ "zerocopy-derive 0.7.35",
+]
+
+[[package]]
+name = "zerocopy"
 version = "0.8.63"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e5fe1f8f1b06191a00962174c61aa5005e0bb391a6d80d07e24d115c01a92ed8"
 dependencies = [
- "zerocopy-derive",
+ "zerocopy-derive 0.8.63",
+]
+
+[[package]]
+name = "zerocopy-derive"
+version = "0.7.35"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fa4f8080344d4671fb4e831a13ad1e68092748387dfc4f55e356242fae12ce3e"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
