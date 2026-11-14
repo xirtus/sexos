@@ -4639,3 +4639,44 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   propagated to component branches alongside the upstream author's four-line Drop
   compatibility fix. A new font-complete canonical freeze and exact-head full CI
   remain required. No additional PR has merged; the original dirty tree is untouched.
+
+
+## ChatGPT round 189: deterministic CI repairs and real lifecycle proof (2026-11-14)
+- Reproduced the IPv6 CI failure with the real Engine and a deterministic clock:
+  an unresolved IPv4 BOOT connection monopolized smoltcp's shared neighbor
+  discovery window. The pinned 0.14.0 vendor patch uses separate IPv4/IPv6
+  discovery windows, retaining each family's existing one-second limit and the
+  pending IPv4 connection. Only the neighbor implementation and its caller differ
+  from the verified upstream archive. All 77 Engine and seven neighbor tests pass;
+  the unchanged full IPv6 gate passes on its first patched runtime attempt.
+- Native gates now use the approved 28-pixel desktop bar and accept the exact
+  source-selected typed PCI model label. The TLS manifest policy admits only the
+  exact reviewed smoltcp patch path, preserving existing TLS patch restrictions.
+- Timer evidence distinguishes observed joins from inferred joins. An inference
+  requires an unambiguous single-core trace, the actual Net task, an enclosing
+  pair of progressing Net ticks, and exact fingerprints of the complete reviewed
+  kernel Rust tree and causal userspace sources. SMP, unknown sources, extra
+  writers, ambiguous records and premature expiry reject inference. The original
+  exact observed park/expiry/return path remains accepted. No kernel logic changed.
+- Reading and Phone workflow build commands retain their actual newlines through
+  YAML literal block scalars; parser and shell-syntax regressions cover the defect.
+- The egui gate waits for actual client scanout after the frame receipt. Its real
+  run reproduced two three-color captures before a 1,089-color frame; thresholds,
+  triangle counts, controls and retirement checks remain unchanged.
+- Daily Web now waits for its matching run END, private retirement and a durable
+  empty session before reboot. The corrected real two-boot gate passes count 1
+  then exactly count 2, with no restored duplicate run. All original failed
+  evidence is retained, including the initial retirement-format checker failure.
+- Term's unchanged full native runtime gate passes. Its ungranted launch is
+  proven denied by the exact ordered Files/Shell/Spindle ticket receipts, followed
+  by two progressing scheduler observations without a child or relay. Term's
+  missing user-facing refusal feedback remains explicitly unqualified; positive
+  Std, C, Lua and Python gates retain their assertions.
+- These are bounded repairs with negative controls, not retries of unchanged
+  failing logic. Only PR #244 has merged. A minimal prerequisite PR against master
+  is being validated separately from the unmerged Weft/Tassel foundation. Fresh
+  canonical images and all exact-head CI checks remain required before merges.
+- The user-approved kernel change remains exactly nine added logging lines in
+  interrupts.rs relative to current master; it only redacts normal PS/2 payloads.
+  Diagnostic records retain the explicit proof profile. The original dirty
+  checkout and all historical image/source bindings remain untouched.
