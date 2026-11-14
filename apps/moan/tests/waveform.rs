@@ -282,3 +282,37 @@ fn stereo_opposite_polarity_waveform_is_not_mistaken_for_silence() {
     let (_, pixels) = waveform::render(&s, View::default());
     assert!(pixels.contains(&0x63D4CD));
 }
+
+#[test]
+fn tiled_550_by_144_canvas_fits_and_pointer_uses_the_scaled_time_axis() {
+    let (mut ui, mut s) = studio();
+    s.session.add(vec![[1000; 2]; 48000]).unwrap();
+    s.handle_event(
+        &mut ui,
+        Event::Resize {
+            width: 550,
+            height: 144,
+        },
+    );
+    s.refresh(&mut ui);
+    ui.layout();
+    reveal(&mut ui, &s);
+    let r = ui.rect(s.waveform);
+    assert!(r.right() <= 550. && r.w <= 518., "{r:?}");
+    let y = r.y + waveform::HEADER as f32 + waveform::ROW as f32 + 25.;
+    assert!((32.0..144.0).contains(&y), "second track y={y}");
+    pointer(
+        &mut ui,
+        &mut s,
+        r.x + r.w / 2.,
+        y,
+        PointerKind::Down(Button::Left),
+    );
+    assert_eq!(s.session.selected, 1);
+    assert!(
+        s.session.cursor.abs_diff(s.view.span / 2) < 500,
+        "cursor={}, span={}",
+        s.session.cursor,
+        s.view.span
+    );
+}
