@@ -378,6 +378,10 @@ impl Studio {
             ("moan.open-project", "Open Project", "Ctrl+Shift+O"),
             ("moan.save-project", "Save Project", "Ctrl+S"),
             ("moan.new-project", "New Project", "Ctrl+N"),
+            ("moan.format.wav", "WAV Export", "Ctrl+Shift+1"),
+            ("moan.format.flac", "FLAC Export", "Ctrl+Shift+2"),
+            ("moan.format.mp3", "MP3 Export", "Ctrl+Shift+3"),
+            ("moan.timeline", "Show Waveform Timeline", "Ctrl+T"),
         ] {
             ui.commands.add(Command::new(id, label).shortcut(key));
         }
@@ -421,7 +425,17 @@ impl Studio {
             "Import WAV",
             "Export WAV",
         ] {
-            buttons.push((ui.button(row, name), name));
+            buttons.push((
+                ui.button(
+                    row,
+                    if name == "Export WAV" {
+                        "Export Audio"
+                    } else {
+                        name
+                    },
+                ),
+                name,
+            ));
         }
         let status = ui.text(
             body,
@@ -726,6 +740,7 @@ impl Studio {
         // Weft appends popup/dialog/palette controls after the retained app tree.
         // Their focused widget keeps ownership of pointer input above the canvas.
         if self.busy
+            || !ui.find_kind("menurow").is_empty()
             || self.pending.is_some()
             || ui
                 .focused()
@@ -975,6 +990,10 @@ impl Studio {
                 "moan.open-project" => "Open Project",
                 "moan.save-project" => "Save Project",
                 "moan.new-project" => "New Project",
+                "moan.format.wav" => "WAV",
+                "moan.format.flac" => "FLAC",
+                "moan.format.mp3" => "MP3",
+                "moan.timeline" => "Show timeline",
                 _ => return Ok(None),
             }),
             _ => None,
@@ -995,6 +1014,10 @@ impl Studio {
             "Open Project" => self.guard_action(ui, Action::OpenProject),
             "New Project" => self.guard_action(ui, Action::NewProject),
             "Save Project" => Some(Action::SaveProject),
+            "Show timeline" => {
+                ui.focus(Some(self.waveform));
+                None
+            }
             "WAV" | "FLAC" | "MP3" => {
                 self.export_format = match command {
                     "FLAC" => 1,
