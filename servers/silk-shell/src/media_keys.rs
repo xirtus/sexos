@@ -35,6 +35,8 @@ pub enum Ask {
     Master,
     /// Row k's stream word, for the sound panel.
     Row(u8),
+    /// The volume from settings: nothing to show.
+    Restore,
 }
 
 const ASKS: usize = 32;
