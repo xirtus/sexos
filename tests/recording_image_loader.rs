@@ -68,6 +68,7 @@ mod backends {
     }
 }
 mod console_relay {
+    pub const SLOTS: usize = 8;
     pub fn not_started(_: usize) {}
 }
 mod fs_service {
