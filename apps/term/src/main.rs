@@ -73,6 +73,10 @@ struct Job {
     runner: Runner,
     /// The line being typed for it, echoed here and sent on Enter.
     line: Vec<u8>,
+    /// Input it has not taken yet (its buffer was full), sent as it reads.
+    pending: Vec<u8>,
+    /// The end of its input, sent once `pending` is gone.
+    eof: bool,
 }
 /// How long a program may take to start before Term gives up on it.
 const START_MS: u64 = 20_000;
@@ -541,11 +545,32 @@ impl Pane {
     }
     /// Bytes piped into the running program, then the end of its input.
     fn job_input(&mut self, input: &[u8]) {
+        if let Some(job) = self.job.as_mut() { job.eof = true; }
+        self.send(input);
+    }
+    /// Input for the running program, in order: what it cannot take yet waits in the job.
+    fn send(&mut self, bytes: &[u8]) {
+        if let Some(job) = self.job.as_mut() { job.pending.extend_from_slice(bytes); }
+        self.feed();
+    }
+    /// Hands the program as much waiting input as it takes, then its end when all is taken.
+    fn feed(&mut self) {
         let slot = self.slot as usize;
-        let Some(job) = &self.job else { return };
-        match &job.runner {
-            Runner::Guest(g) => { let _ = g.stream.write(Side::Host, input); g.stream.hang_up(Side::Host); }
-            Runner::Native(_) => { let _ = files::direct::relay::put_at(slot, input); let _ = files::direct::relay::hang_up_at(slot); }
+        let Some(job) = self.job.as_mut() else { return };
+        while !job.pending.is_empty() {
+            let n = match &job.runner {
+                Runner::Guest(g) => g.stream.write(Side::Host, &job.pending),
+                Runner::Native(_) => files::direct::relay::put_at(slot, &job.pending).unwrap_or(0),
+            };
+            if n == 0 { break; }
+            job.pending.drain(..n);
+        }
+        if job.eof && job.pending.is_empty() {
+            job.eof = false;
+            match &job.runner {
+                Runner::Guest(g) => g.stream.hang_up(Side::Host),
+                Runner::Native(_) => { let _ = files::direct::relay::hang_up_at(slot); }
+            }
         }
     }
     /// What a running program wrote: the screen's, or the shell's when it takes it.
@@ -604,13 +629,14 @@ impl Pane {
         match sex_app::thread::spawn_with_stack(2 << 20, job) {
             Ok(handle) => {
                 sex_pdx::serial_record!("[term.job.start] name={}", core::str::from_utf8(name).unwrap_or("?"));
-                self.job = Some(Job { name: String::from_utf8_lossy(name).into_owned(), runner: Runner::Guest(Guest { stream, _memory: memory, handle, result }), line: Vec::new() });
+                self.job = Some(Job { name: String::from_utf8_lossy(name).into_owned(), runner: Runner::Guest(Guest { stream, _memory: memory, handle, result }), line: Vec::new(), pending: Vec::new(), eof: false });
             }
             Err(_) => self.say("\x1b[31mrun: no worker is free to run it\x1b[0m\n"),
         }
     }
     /// Takes what the guest wrote; ends the job when it has finished. True if the screen changed.
     fn pump(&mut self) -> bool {
+        self.feed();
         let Some(job) = &self.job else { return false };
         let Runner::Guest(guest) = &job.runner else { return self.pump_native() };
         let stream = guest.stream;
@@ -664,7 +690,7 @@ impl Pane {
         match files::direct::relay::start_at(self.slot as usize, cmd, &words) {
             Ok(()) => {
                 sex_pdx::serial_record!("[term.native.start] name={}", n);
-                self.job = Some(Job { name: n, runner: Runner::Native(Native { since: sex_pdx::get_ticks(), mode: 0, target: 0, interrupted_at: None, stopping: false }), line: Vec::new() });
+                self.job = Some(Job { name: n, runner: Runner::Native(Native { since: sex_pdx::get_ticks(), mode: 0, target: 0, interrupted_at: None, stopping: false }), line: Vec::new(), pending: Vec::new(), eof: false });
                 self.native_size();
             }
             Err(e) if { sex_pdx::serial_record!("[term.native.refused] name={} status={}", n, e); false } => {}
@@ -884,16 +910,15 @@ impl Pane {
     }
     /// Keys while a program of its own runs: the same line discipline, through Files.
     fn native_key(&mut self, key: sex_pdx::app_key::Key) {
-        use files::direct::relay;
         if self.native_direct_key(key) { return; }
         let echo = self.native_mode() & sex_pdx::console_relay::NO_ECHO == 0;
         let job = self.job.as_mut().unwrap();
         match (key.control, key.code) {
-            (true, 0x20) => { let _ = relay::hang_up_at(self.slot as usize); }
+            (true, 0x20) => { job.eof = true; self.feed(); }
             (_, 0x1C) => {
                 let mut line = core::mem::take(&mut job.line);
                 line.push(b'\n');
-                let _ = relay::put_at(self.slot as usize, &line);
+                self.send(&line);
                 if echo { self.say("\r\n"); }
             }
             (_, 0x0E) => {
@@ -909,7 +934,7 @@ impl Pane {
                     if echo { self.out(bytes); }
                 } else if let Some(k) = nav_key(key) {
                     let bytes = keys::encode(k, Mods { shift: key.shift, control: key.control, alt: false }, self.screen.app_cursor);
-                    let _ = relay::put_at(self.slot as usize, &bytes);
+                    self.send(&bytes);
                 }
             }
             _ => {}
@@ -939,7 +964,7 @@ impl Pane {
     /// since a program computing without asking anything never sees the interrupt.
     fn native_interrupt(&mut self, stop: bool) {
         use files::direct::relay;
-        let Some(Job { runner: Runner::Native(n), name, line }) = self.job.as_mut() else { return };
+        let Some(Job { runner: Runner::Native(n), name, line, .. }) = self.job.as_mut() else { return };
         let now = sex_pdx::get_ticks();
         line.clear();
         if (stop || n.interrupted_at.is_some_and(|at| now.saturating_sub(at) < 1000)) && n.target != 0 {
@@ -970,7 +995,7 @@ impl Pane {
             .or_else(|| if key.control { us() } else { sex_app::text(key).map(Key::Char) });
         if let Some(k) = k {
             let bytes = keys::encode(k, Mods { shift: key.shift, control: key.control, alt: false }, self.screen.app_cursor);
-            let _ = files::direct::relay::put_at(self.slot as usize, &bytes);
+            self.send(&bytes);
         }
         true
     }
@@ -983,11 +1008,27 @@ impl Pane {
     }
     fn paste(&mut self, text: Vec<u8>) {
         sex_pdx::serial_record!("[term.paste] bytes={}", text.len());
-        if let Some(job) = self.job.as_mut() {
-            let bytes = keys::paste(&text, false);
-            for b in bytes { if b == b'\r' { job.line.push(b'\n'); let l = core::mem::take(&mut job.line); match &job.runner { Runner::Guest(g) => { let _ = g.stream.write(Side::Host, &l); } Runner::Native(_) => { let _ = files::direct::relay::put_at(self.slot as usize, &l); } } } else { job.line.push(b); } }
-            let shown = job.line.clone();
-            self.out(&shown);
+        if self.job.is_some() {
+            let mode = self.native_mode();
+            // Raw mode: the program reads the paste as it comes, bracketed if it asked.
+            if mode & sex_pdx::console_relay::RAW != 0 {
+                let bytes = keys::paste(&text, self.screen.bracketed_paste);
+                self.send(&bytes);
+                return;
+            }
+            // Cooked: each pasted line goes as if typed and Enter pressed; the rest waits
+            // on the line. Echoed unless the program turned echo off (a password).
+            let mut shown = Vec::new();
+            for b in keys::paste(&text, false) {
+                let job = self.job.as_mut().unwrap();
+                if b == b'\r' {
+                    job.line.push(b'\n');
+                    let l = core::mem::take(&mut job.line);
+                    shown.extend_from_slice(b"\r\n");
+                    self.send(&l);
+                } else { job.line.push(b); shown.push(b); }
+            }
+            if mode & sex_pdx::console_relay::NO_ECHO == 0 { self.out(&shown); }
             return;
         }
         // Pasted text never runs on its own: newlines become spaces on the command line.
