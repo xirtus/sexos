@@ -20,6 +20,10 @@ use core::sync::atomic::{AtomicU32, Ordering};
 pub const SLOT: u64 = 1003;
 pub const REGION_ID: u32 = 0x4402;
 pub const BYTES: u64 = 128 * 1024;
+/// Reserved for Cufflinks's read-only firmware pack (`sex_bt::pack` layout), when BOOT
+/// grants one. Not granted yet: Cufflinks then logs the firmware as missing.
+pub const FIRMWARE_SLOT: u64 = 1004;
+pub const FIRMWARE_REGION_ID: u32 = 0x4403;
 /// Packets each ring holds.
 pub const SLOTS: u32 = 30;
 /// Bytes a ring slot takes: a 4-byte length, then the packet.
