@@ -437,6 +437,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "batik"
+version = "0.1.0"
+dependencies = [
+ "batik-core",
+ "libm",
+ "sex-app",
+ "sex-canvas",
+ "sex-font",
+ "sex-image",
+ "sex-pdx",
+]
+
+[[package]]
 name = "batik-core"
 version = "0.1.0"
 dependencies = [
@@ -640,6 +653,18 @@ name = "bumpalo"
 version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
+
+[[package]]
+name = "burlesque"
+version = "0.1.0"
+dependencies = [
+ "burlesque-core",
+ "libm",
+ "sex-app",
+ "sex-canvas",
+ "sex-font",
+ "sex-pdx",
+]
 
 [[package]]
 name = "burlesque-core"
@@ -887,6 +912,17 @@ name = "clap_lex"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1c133bc6a41be0d194c306b5506d15e6feeea7b1d6604bd3f8310dfb2ca96486"
+
+[[package]]
+name = "climax"
+version = "0.1.0"
+dependencies = [
+ "climax-core",
+ "sex-app",
+ "sex-canvas",
+ "sex-font",
+ "sex-pdx",
+]
 
 [[package]]
 name = "climax-core"
@@ -5118,6 +5154,15 @@ name = "sex-episodes"
 version = "0.1.0"
 
 [[package]]
+name = "sex-extensions"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "sex-shields",
+ "zune-inflate",
+]
+
+[[package]]
 name = "sex-feed"
 version = "0.1.0"
 dependencies = [
@@ -5405,6 +5450,13 @@ dependencies = [
  "rustybuzz",
  "unicode-bidi",
  "unicode-width",
+]
+
+[[package]]
+name = "sex-shields"
+version = "0.1.0"
+dependencies = [
+ "psl",
 ]
 
 [[package]]
@@ -7068,11 +7120,13 @@ name = "web"
 version = "0.1.0"
 dependencies = [
  "sex-app",
+ "sex-extensions",
  "sex-fetch",
  "sex-gl",
  "sex-js",
  "sex-media",
  "sex-pdx",
+ "sex-shields",
  "sex-web",
 ]
 

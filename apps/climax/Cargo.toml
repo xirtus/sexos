@@ -1,0 +1,21 @@
+[package]
+name = "climax"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "Climax: benchmark and thermal torture suite"
+
+[[bin]]
+name = "climax"
+path = "src/main.rs"
+
+[features]
+default = ["sexos"]
+sexos = ["dep:sex-pdx", "dep:sex-app"]
+
+[dependencies]
+climax-core = { path = "../../crates/climax-core" }
+sex-font = { path = "../../crates/sex-font" }
+sex-canvas = { path = "../../crates/sex-canvas" }
+sex-pdx = { path = "../../crates/sex-pdx", optional = true }
+sex-app = { path = "../../crates/sex-app", optional = true }
