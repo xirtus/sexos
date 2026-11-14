@@ -120,7 +120,12 @@ fn stop(window: &mut Window, why: &str) -> ! {
 }
 
 fn run(window: &mut Window, host: &[u8], port: u16, password: Option<&[u8]>) -> Result<(), &'static str> {
-    let mut stream = TcpStream::connect(window, host, port).map_err(|e| text(net::message(e)))?;
+    // An address skips the name lookup, which is what waits for the network; a run
+    // started right after boot would ask for a connection before the DHCP lease and
+    // be refused. So wait for the network first (thirty seconds at most).
+    let failed = |stage: &str, e: net::Error| { sex_pdx::serial_record!("[lurk.net] stage={} error={:?}", stage, e); text(net::message(e)) };
+    net::up(window).map_err(|e| failed("up", e))?;
+    let mut stream = TcpStream::connect(window, host, port).map_err(|e| failed("connect", e))?;
     sex_pdx::serial_record!("[lurk.tcp] host={} port={}", text(host), port);
     let mut client = Client::new(password);
     let mut buf = alloc::vec![0u8; 32 * 1024];
