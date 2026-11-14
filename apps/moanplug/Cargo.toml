@@ -1,0 +1,9 @@
+[package]
+name="moanplug"
+version="0.1.0"
+edition="2021"
+license.workspace=true
+[dependencies]
+moan-plugin={path="../../crates/moan-plugin",features=["sexos"]}
+sex-app={path="../../crates/sex-app"}
+sex-pdx={path="../../crates/sex-pdx"}
