@@ -59,7 +59,12 @@ fn main() {
     println!("cargo:rustc-link-search=native={}", ff.join("lib").display());
     // dav1d (AV1) sits beside FFmpeg's archives when it was built with them.
     let dav1d = ff.join("lib/libdav1d.a").exists();
-    for l in ["mediabridge", "avformat", "avcodec", "dav1d", "swscale", "swresample", "avutil"] {
+    // The shared export profile also enables libshine. FFmpeg's codec registry
+    // references its encoder even in a decoding consumer such as Web.
+    let shine = ff.join("lib/libshine.a");
+    if shine.exists() { println!("cargo:rerun-if-changed={}", shine.display()); }
+    for l in ["mediabridge", "avformat", "avcodec", "shine", "dav1d", "swscale", "swresample", "avutil"] {
+        if l == "shine" && !shine.exists() { continue; }
         if l == "dav1d" && !dav1d { continue; }
         println!("cargo:rustc-link-lib=static={l}");
     }
