@@ -9,6 +9,9 @@ description = "A VT100/xterm terminal screen for SexOS: escape parsing, cells, s
 # MIT/Apache-2.0, no_std without its default `std` feature: the escape-sequence state
 # machine (Paul Williams' DEC parser) that Alacritty uses.
 vte = { version = "0.15", default-features = false }
+# MIT/Zlib/Apache-2.0, no_std + alloc without default features: inflate for kitty
+# graphics `o=z` payloads and PNG image data (the PNG container itself is parsed here).
+miniz_oxide = { version = "0.8", default-features = false, features = ["with-alloc"] }
 sex-font = { path = "../sex-font", optional = true }
 # MIT/Apache-2.0, no_std + alloc without default features: regular expressions for
 # scrollback search (the lazy DFA and PikeVM behind its `meta` regex).

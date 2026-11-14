@@ -14,7 +14,11 @@
 #![no_std]
 extern crate alloc;
 
+pub mod images;
+mod kitty;
 pub mod keys;
+mod png;
+mod sixel;
 #[cfg(feature = "render")]
 pub mod render;
 pub mod copy_mode;
@@ -160,6 +164,8 @@ pub struct Screen {
     last_char: char,
     selection: Option<(Point, Point)>,
     ext: Extras,
+    /// Inline images (kitty graphics, sixel) and their placements.
+    images: images::ImageStore,
 }
 
 impl Screen {
@@ -174,6 +180,7 @@ impl Screen {
             mouse: 0, mouse_sgr: false, title: Vec::new(), title_changed: false, replies: Vec::new(), view: 0,
             dirty: vec![true; rows], all_dirty: true, bells: 0, last_char: ' ', selection: None,
             ext: Extras::default(),
+            images: images::ImageStore::new(),
         }
     }
     pub fn cols(&self) -> usize { self.cols }
@@ -188,7 +195,19 @@ impl Screen {
     pub fn feed(&mut self, parser: &mut Parser, bytes: &[u8]) {
         // New output brings the view back to the bottom, as every terminal does.
         if self.view != 0 && !bytes.is_empty() { self.view = 0; self.all_dirty = true; }
-        parser.0.advance(&mut Performer(self), bytes);
+        // kitty graphics arrive as APC strings, which `vte` drops: lift them out first.
+        let mut rest = bytes;
+        loop {
+            let (used, step) = parser.1.step(rest);
+            match step {
+                kitty::Step::Vt(n) => parser.0.advance(&mut Performer(self), &rest[..n]),
+                kitty::Step::Esc => parser.0.advance(&mut Performer(self), b"\x1b"),
+                kitty::Step::Apc => { let apc = parser.1.take(); self.kitty_apc(&apc); }
+                kitty::Step::Nothing => {}
+            }
+            rest = &rest[used..];
+            if rest.is_empty() { break; }
+        }
     }
 
     /// What the terminal answers the program (cursor reports, device attributes).
@@ -363,6 +382,7 @@ impl Screen {
         let over = self.history.len().saturating_sub(self.history_max);
         if over == 0 { return; }
         self.history.drain(..over);
+        for _ in 0..over { self.images_trimmed(); }
         self.rows_dropped(over);
     }
     /// `n` lines left the top of the history: everything kept in absolute rows moves up.
@@ -391,6 +411,7 @@ impl Screen {
             if top == 0 && !self.alternate() { self.push_history(line); }
             self.lines.insert(bottom, blank.clone());
         }
+        self.images_scrolled(top, bottom, n, true, top == 0 && !self.alternate());
         self.touch_all();
     }
     fn scroll_down(&mut self, n: usize) {
@@ -401,6 +422,7 @@ impl Screen {
             self.lines.remove(bottom);
             self.lines.insert(top, blank.clone());
         }
+        self.images_scrolled(top, bottom, n, false, false);
         self.touch_all();
     }
     fn linefeed(&mut self) {
@@ -448,8 +470,8 @@ impl Screen {
         match mode {
             0 => { self.erase_cells(y, x, cols); for r in y + 1..rows { self.erase_cells(r, 0, cols); } }
             1 => { for r in 0..y { self.erase_cells(r, 0, cols); } self.erase_cells(y, 0, x + 1); }
-            2 => { for r in 0..rows { self.erase_cells(r, 0, cols); } }
-            3 => { let h = self.history.len(); self.history.clear(); self.rows_dropped(h); self.view = 0; self.selection = None; self.touch_all(); }
+            2 => { for r in 0..rows { self.erase_cells(r, 0, cols); } self.images_erased(2); }
+            3 => { let h = self.history.len(); self.history.clear(); self.rows_dropped(h); self.view = 0; self.selection = None; self.images_erased(3); self.touch_all(); }
             _ => {}
         }
     }
@@ -465,6 +487,7 @@ impl Screen {
             if save_cursor { self.x = cursor.x; self.y = cursor.y; self.pen = cursor.pen; self.origin = cursor.origin; }
         }
         self.pending_wrap = false;
+        self.images_alt_switched();
         self.touch_all();
     }
     fn mode(&mut self, private: bool, n: u16, on: bool) {
@@ -555,9 +578,9 @@ fn extended(p: &[u16]) -> Option<Color> {
 pub(crate) const OSC_MAX: usize = 16 * 1024;
 
 /// The parser state between calls: a sequence or UTF-8 character may arrive split.
-/// Boxed: the OSC buffer is large.
-pub struct Parser(alloc::boxed::Box<vte::Parser<OSC_MAX>>);
-impl Parser { pub fn new() -> Self { Parser(alloc::boxed::Box::new(vte::Parser::new_with_size())) } }
+/// Boxed: the OSC buffer is large. The second part lifts kitty's APC strings out first.
+pub struct Parser(alloc::boxed::Box<vte::Parser<OSC_MAX>>, kitty::ApcScan);
+impl Parser { pub fn new() -> Self { Parser(alloc::boxed::Box::new(vte::Parser::new_with_size()), kitty::ApcScan::default()) } }
 impl Default for Parser { fn default() -> Self { Self::new() } }
 
 struct Performer<'a>(&'a mut Screen);
@@ -627,6 +650,7 @@ impl vte::Perform for Performer<'_> {
                     let n = a(0, 1).min(s.bottom - s.y + 1);
                     let blank = Line { cells: vec![Cell::erased(&s.pen); s.cols], wrapped: false };
                     for _ in 0..n { s.lines.remove(s.y); s.lines.insert(s.bottom, blank.clone()); }
+                    s.images_scrolled(s.y, s.bottom, n, true, false);
                     s.touch_all();
                 }
                 s.top = top;
@@ -661,7 +685,10 @@ impl vte::Perform for Performer<'_> {
                 _ => {}
             },
             // A VT220 with colour, which is what `TERM=xterm-256color` programs expect.
-            ('c', []) => s.replies.extend_from_slice(b"\x1b[?62;22c"),
+            // `4`: sixel graphics.
+            ('c', []) => s.replies.extend_from_slice(b"\x1b[?62;4;22c"),
+            ('S', [b'?']) => s.xtsmgraphics(params),
+            ('t', []) if matches!(arg(params, 0, 0), 14 | 16) => s.report_pixels(arg(params, 0, 0)),
             ('c', [b'>']) => s.replies.extend_from_slice(b"\x1b[>1;10;0c"),
             ('t', []) if arg(params, 0, 0) == 18 => {
                 let (rows, cols) = (s.rows, s.cols);
@@ -690,6 +717,12 @@ impl vte::Perform for Performer<'_> {
             _ => {}
         }
     }
+    // DCS: sixel images (`DCS P1;P2;P3 q ... ST`).
+    fn hook(&mut self, params: &vte::Params, intermediates: &[u8], ignore: bool, action: char) {
+        if action == 'q' && intermediates.is_empty() && !ignore { self.0.sixel_start(params); }
+    }
+    fn put(&mut self, byte: u8) { self.0.sixel_put(byte); }
+    fn unhook(&mut self) { self.0.sixel_end(); }
     fn osc_dispatch(&mut self, params: &[&[u8]], _bell: bool) {
         let s = &mut *self.0;
         if let [kind, title, ..] = params {
