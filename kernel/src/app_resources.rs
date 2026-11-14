@@ -512,6 +512,25 @@ fn live(app:&App,pd:&ProtectionDomain)->Result<u32,u64>{
     if task.id!=app.task||task.state.snapshot().exited{return Err(DENIED)}
     Ok(app.task)
 }
+/// Frames of the caller's live run's own heap pages `[va, va+pages*4096)`, for a VM loan
+/// (`vmx`). Only pages `grow` gave this run, still mapped as given; writable ones when
+/// the guest may write. Never the image, the stack, BOOT pages or anything shared.
+pub fn heap_frames(pd:&ProtectionDomain,va:u64,pages:usize,writable:bool,out:&mut alloc::vec::Vec<u64>)->Result<(),u64>{
+    use sex_pdx::vm as v;
+    let apps=apps_lock!().ok_or(v::BUSY)?;
+    let app=apps.iter().find(|a|a.ready&&a.target==pd.id).ok_or(v::DENIED)?;
+    live(app,pd).map_err(|_|v::DENIED)?;
+    let heap=app.arena+(app.image_pages*4096) as u64;
+    let first=(va.checked_sub(heap).ok_or(v::DENIED)?/4096) as usize;
+    if va&0xFFF!=0||first.checked_add(pages).map_or(true,|end|end>app.grown){return Err(v::DENIED)}
+    let at=app.count-app.grown+first;
+    for (i,p) in app.pages[at..at+pages].iter().enumerate(){
+        let pte=unsafe{core::ptr::read_volatile(p.leaf as *const u64)};
+        if p.va!=va+(i*4096) as u64||pte!=p.expected||(writable&&pte&2==0){return Err(v::DENIED)}
+        out.push(p.expected&PHYSICAL_MASK);
+    }
+    Ok(())
+}
 pub fn live_run(pd:&ProtectionDomain)->Result<u32,u64>{
     let apps=apps_lock!().ok_or(RETRY)?;
     let app=apps.iter().find(|a|a.ready&&a.target==pd.id).ok_or(DENIED)?;
@@ -554,6 +573,8 @@ pub fn code(pd:&ProtectionDomain,op:u64,va:u64,want:u64)->[u64;3]{
         if pages.iter().enumerate().any(|(i,p)|p.va!=va+(i*4096) as u64){return Err((c::DENIED,0))}
         let leaf=|p:&PrivatePage|unsafe{&*(p.leaf as *const core::sync::atomic::AtomicU64)};
         if op==c::SEAL{
+            // A page a VM may write never becomes this program's code.
+            if pages.iter().any(|p|crate::vmx::lent(pd.id,p.expected&PHYSICAL_MASK)){return Err((c::DENIED,0))}
             let hhdm=crate::HHDM_REQUEST.response().ok_or((c::DENIED,0))?.offset;
             let bytes=|p:&PrivatePage|unsafe{core::slice::from_raw_parts(((p.expected&PHYSICAL_MASK)+hhdm) as *const u8,4096)};
             // A code neighbour on either side, by address, joins the check, so an
@@ -666,6 +687,8 @@ pub fn retire(pd:&ProtectionDomain,slot:u64)->[u64;4]{
         if app.acked!=REQUIRED || !crate::paging::target_cleanup_complete(app.target)?{return Err(RETRY)}
         TERMINAL[index].store(true,Ordering::Release);
         let id=app.target;crate::program_tenancy::release(id);
+        // The run's VMs end before any of its frames can go to another run.
+        crate::vmx::revoke(id);
         // A forced run's leaves are already clear.
         let count=if app.forced {app.count} else {retire_private_pages(&app.pages[..app.count],
             |leaf|crate::program_tenancy::read(id,leaf),

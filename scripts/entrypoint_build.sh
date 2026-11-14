@@ -89,6 +89,8 @@ ABI_INPUTS=(
   kernel/src/ipc/reply_credit.rs
   kernel/src/ipc/sender.rs
   kernel/src/ipc/router.rs
+  kernel/src/vmx.rs
+  crates/sex-pdx/src/vm.rs
 )
 
 if [[ "$#" -ne 0 ]]; then

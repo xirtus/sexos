@@ -1029,6 +1029,9 @@ pub fn init() {
         let pd=crate::ipc::DOMAIN_REGISTRY.get(row.target).expect("BOOT_PROGRAM_NETWORK_SUBJECT");
         assert!(pd.find_capability(sex_pdx::SLOT_NET as u32).is_none(),"BOOT_PROGRAM_NETWORK_COLLISION");
         pd.grant_capability(sex_pdx::SLOT_NET,crate::capability::CapabilityData::Domain(sexnet_id));
+        // Drag: a program run may make VMs from its own heap pages (sex_pdx::vm, syscall 110).
+        assert!(pd.find_capability(sex_pdx::vm::SLOT as u32).is_none(),"BOOT_PROGRAM_VM_COLLISION");
+        pd.grant_capability(sex_pdx::vm::SLOT,crate::capability::CapabilityData::Machine(sex_pdx::vm::Grant{holder_pd:row.target}));
         // Bell plays a program's sound from that program's own ring; the edge carries
         // only "my ring has sound" and Bell's own tone and notice calls.
         if sexbell_id!=0 {

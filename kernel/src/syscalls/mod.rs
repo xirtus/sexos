@@ -652,6 +652,8 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
 
         86 => crate::device_irq::syscall(regs), // SYS_DEVICE: own leases, own vectors, own bits.
 
+        110 => crate::vmx::syscall(regs), // SYS_VM: Drag virtual machines, Machine capability only.
+
         100 => { // PDX_CALL_WAIT: syscall 0 to a slot, then syscall 53, in one entry.
             // The callee runs next on this core if it lives here (a handoff).
             let sched = &crate::scheduler::SCHEDULERS[crate::core_local::CoreLocal::get().core_id as usize];

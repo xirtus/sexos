@@ -35,6 +35,7 @@ members = [
     "apps/shapes",
     "apps/monitor",
     "apps/fputest",
+    "apps/dragtest",
     "apps/fuzz",
     "apps/play",
     "apps/cpp",
