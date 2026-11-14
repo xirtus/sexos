@@ -21,6 +21,8 @@ ROOT=Path(__file__).resolve().parents[1]
 
 PRINTER=FakePrinter();SCANNER=FakeScanner();DNS=FakeResponder(PRINTER.port,SCANNER.port)
 os.environ['SEXOS_GATE_NIC']='-netdev user,id=n0 -device e1000e,netdev=n0'
+# Six program runs in one boot.
+os.environ.setdefault('SEXOS_GATE_BOUND','1200')
 from quil_autosave_gate import boot
 KEYS={' ':'spc','.':'dot','-':'minus','/':'slash'}
 SHIFTED={'+':'equal','@':'2',':':'semicolon','_':'minus'}
