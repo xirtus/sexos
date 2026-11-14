@@ -10,8 +10,8 @@ ROOT=Path(__file__).resolve().parents[2]
 class HttpPixels(unittest.TestCase):
  @classmethod
  def setUpClass(cls):cls.contract=load_pixel_contract(ROOT)
- def trace(self,length=105,w=640,h=640):
-  return f'[shell.tile.apply] sid=300 x=600 y=100 w={w} h={h}\n[browser.preview.layout] bytes={length} newline=1 cached_or_sample=1\n[browser.net.job.view] state=Verified web=0\n'
+ def trace(self,length=105,w=640,h=640,x=600,y=100):
+  return f'[shell.tile.apply] sid=300 x={x} y={y} w={w} h={h}\n[browser.preview.layout] bytes={length} newline=1 cached_or_sample=1\n[browser.net.job.view] state=Verified web=0\n'
  def framebuffer(self,text,view='Ready',body=BODY,shift=0):
   g=http_status_geometry(text,view,body,self.contract);pixels=bytearray(self.contract['background'].to_bytes(3,'big')*(1280*800))
   for row in g['rows']:
@@ -72,6 +72,14 @@ class HttpPixels(unittest.TestCase):
   for view in ('Ready','Unavailable','Cancelled','Uncertain'):
    with self.subTest(view=view):
     text=self.trace();result=verify_http_pixels(text,self.framebuffer(text,view),view,BODY,self.contract);self.assertTrue(result['ok'],result)
+ def test_maximized_status_at_actual_bar28_and_above_bar_rejection(self):
+  self.assertEqual(self.contract['bar'],28)
+  text=self.trace(w=1280,h=772,x=0,y=28);image=self.framebuffer(text)
+  self.assertTrue(verify_http_pixels(text,image,'Ready',BODY,self.contract)['ok'])
+  bad=verify_http_pixels(text.replace('y=28','y=27'),image,'Ready',BODY,self.contract)
+  self.assertFalse(bad['ok']);self.assertIn('outside framebuffer',' '.join(bad['errors']))
+  archived=dict(self.contract);archived.pop('bar')
+  self.assertFalse(verify_http_pixels(text,image,'Ready',BODY,archived)['ok'])
  def test_ready_prefix_without_full_body_cannot_pass(self):
   text=self.trace();self.assertFalse(verify_http_pixels(text,self.framebuffer(text,body=BODY[:-1]),'Ready',BODY,self.contract)['ok'])
  def test_previous_ready_body_must_be_erased_for_failure_or_cancel(self):
