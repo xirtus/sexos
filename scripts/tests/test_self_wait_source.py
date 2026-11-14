@@ -1,5 +1,7 @@
 """Source-bound UP inference is separate from the original observed receipt proof."""
 from pathlib import Path
+import hashlib
+import json
 import shutil
 import sys
 import tempfile
@@ -7,7 +9,7 @@ import unittest
 
 ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT/'scripts'))
-from check_self_wait import inspect,source_contract,APPROVED_TIMED_WAIT_SOURCES,DEADLINE_REFERENCE_OWNERS
+from check_self_wait import inspect,source_contract,APPROVED_TIMED_WAIT_SOURCES,DEADLINE_REFERENCE_OWNERS,APPROVED_KERNEL_RUST_TREES
 
 BASE='''[kernel.spawn.sexnet] id=13 path=/servers/sexnet
 [smp.online] cores=1 present=1
@@ -159,6 +161,25 @@ class SourceBoundSelfWaitTests(unittest.TestCase):
             result=source_contract(ROOT)
             self.assertEqual(set(result['deadline_reference_closure']['owner_sha256']),DEADLINE_REFERENCE_OWNERS)
             self.assertGreater(result['deadline_reference_closure']['files'],len(DEADLINE_REFERENCE_OWNERS))
+
+    def test_exact_c209_review_receipt_preserves_all_deadline_owners(self):
+        receipt=json.loads((ROOT/'docs/handoff/SELF_WAIT_C209_REVIEW.json').read_text())
+        closure=receipt['deadline_reference_closure']
+        hashes=closure['kernel_rust_sha256']
+        self.assertEqual(len(hashes),139)
+        digest=hashlib.sha256(json.dumps(hashes,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+        self.assertEqual(digest,closure['tree_sha256'])
+        self.assertIn(digest,APPROVED_KERNEL_RUST_TREES)
+        self.assertEqual(set(closure['owner_sha256']),DEADLINE_REFERENCE_OWNERS)
+        for name,digest in closure['owner_sha256'].items():
+            self.assertEqual(digest,hashes[name])
+            self.assertIn(digest,APPROVED_TIMED_WAIT_SOURCES[name])
+        for name,digest in receipt['source_sha256'].items():
+            self.assertIn(digest,APPROVED_TIMED_WAIT_SOURCES[name])
+        # No arbitrary extension of the audited tree can inherit its identity.
+        hashes['kernel/src/unreviewed.rs']='0'*64
+        mutated=hashlib.sha256(json.dumps(hashes,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+        self.assertNotIn(mutated,APPROVED_KERNEL_RUST_TREES)
 
     def test_missing_source_does_not_enable_inference(self):
         with tempfile.TemporaryDirectory()as directory:
