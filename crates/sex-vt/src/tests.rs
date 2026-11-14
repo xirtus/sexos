@@ -115,7 +115,7 @@ fn tabs_stop_every_eight_columns() {
 #[test]
 fn cursor_report_and_device_attributes() {
     let mut s = run(10, 5, b"\x1b[3;7H\x1b[6n\x1b[c");
-    assert_eq!(s.take_replies(), b"\x1b[3;7R\x1b[?62;22c".to_vec());
+    assert_eq!(s.take_replies(), b"\x1b[3;7R\x1b[?62;4;22c".to_vec());
     assert!(s.take_replies().is_empty());
 }
 
