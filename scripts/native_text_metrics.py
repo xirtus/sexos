@@ -9,7 +9,7 @@ import re
 def source_metrics(root=None):
     root = Path(root) if root is not None else Path(__file__).resolve().parents[1]
     source = (root / 'crates/sex-pdx/src/desktop_style.rs').read_text()
-    approved = dict(title=26, inset=8, resize=8, advance=6, line=9,
+    approved = dict(bar=28, title=26, inset=8, resize=8, advance=6, line=9,
                     glyph_width=5, glyph_height=7)
     result = {}
     for key, expected in approved.items():
@@ -19,6 +19,7 @@ def source_metrics(root=None):
         result[key] = int(values[0])
     compact = re.sub(r'\s+', '', source)
     for required in ('pubconstfntitle(self)->u32{self.px(TITLE)}',
+                     'pubconstfnbar(self)->u32{self.px(BAR)}',
                      'pubconstfnpx(self,logical:u32)->u32{logical.saturating_mul(self.scale)}',
                      'letside=self.px(RESIZE);',
                      'lettop=self.title().saturating_add(side);',

@@ -54,6 +54,12 @@ def reader_pixels(frame,contract,width=1280,height=800):
  return b'P6\n'+f'{width} {height}\n255\n'.encode()+raw
 
 class HTTPSReaderPixels(unittest.TestCase):
+ def test_fullscreen_reader_begins_at_actual_bar28_but_not27(self):
+  contract=gate.http.load_pixel_contract(ROOT);contract.update(request=gate.REQUEST,reader_header=gate.HEADER)
+  frame=gate.http.reader_frame(gate.BODY,1280,772,contract,0,b'/welcome');frame.update(tile=dict(x=0,y=28,w=1280,h=772));image=reader_pixels(frame,contract)
+  self.assertTrue(gate.frame_pixels(image,frame,contract)['ok'])
+  frame['tile']['y']=27
+  with self.assertRaisesRegex(ValueError,'outside framebuffer'):gate.frame_pixels(image,frame,contract)
  def test_maximized_https_reader_checks_far_right_padding_after_column_80(self):
   contract=gate.http.load_pixel_contract(ROOT);contract.update(request=gate.REQUEST,reader_header=gate.HEADER)
   frame=gate.http.reader_frame(gate.BODY,1280,706,contract,0,b'/welcome');frame.update(tile=dict(x=0,y=70,w=1280,h=706));image=bytearray(reader_pixels(frame,contract))
@@ -163,6 +169,15 @@ class HTTPSBoundReader(unittest.TestCase):
      draw_cell(raw,width,row['x']+col*c['advance']*factor,row['y'],ch,factor,color,c['font'])
    image=b'P6\n1280 800\n255\n'+raw;result=gate.verify_status_pixels(text,image,state,mode,c,(1280,800));self.assertTrue(result['ok'],(state,mode,result))
    self.assertFalse(gate.verify_status_pixels(text.replace('[browser.view.applied]','[missing.applied]'),image,state,mode,c)['ok'])
+ def test_fullscreen_https_status_at_bar28_and_y27_rejection(self):
+  c=self.contract();text=fixture.trace('Verified',c,w=1280,h=772).replace('x=20 y=100','x=0 y=28').replace('browser.tls.peer.layout','browser.https.layout')
+  g=gate.status_geometry(text,'Verified','ready',c);raw=bytearray(c['background'].to_bytes(3,'big')*(1280*800));color=c['color'].to_bytes(3,'big')
+  for row in g['rows']:
+   for column,char in enumerate(row['text']):draw_cell(raw,1280,row['x']+column*c['advance']*g['scale'],row['y'],char,g['scale'],color,c['font'])
+  image=b'P6\n1280 800\n255\n'+raw
+  self.assertTrue(gate.verify_status_pixels(text,image,'Verified','ready',c,(1280,800))['ok'])
+  bad=gate.verify_status_pixels(text.replace('y=28','y=27'),image,'Verified','ready',c,(1280,800))
+  self.assertFalse(bad['ok']);self.assertIn('outside framebuffer',' '.join(bad['errors']))
 
 class HTTPSActualEndpoint(unittest.TestCase):
  def exercise(self,mode):
