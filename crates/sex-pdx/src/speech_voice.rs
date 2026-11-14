@@ -17,7 +17,7 @@
 //! [`MAX_TEXT`] bytes is dropped. The voice only accepts these from Shell's PD; a
 //! piece that does not continue the utterance being gathered is ignored.
 //!
-//! Opcode 0x2DE is reserved for this (0x2DD is Display's screen-reader wire).
+//! Opcode 0x2DE (0x2DD is Display's magnifier and colour filters, access_view).
 
 pub const OP_SPEAK: u64 = 0x2DE;
 pub const PIECE_BYTES: usize = 16;
