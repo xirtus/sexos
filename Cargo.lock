@@ -1308,6 +1308,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "gossip"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-feed",
+ "sex-font",
+ "sex-pdx",
+]
+
+[[package]]
 name = "grep"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2932,6 +2942,13 @@ dependencies = [
  "sex-image",
  "sex-xml",
  "zune-inflate",
+]
+
+[[package]]
+name = "sex-feed"
+version = "0.1.0"
+dependencies = [
+ "sex-xml",
 ]
 
 [[package]]

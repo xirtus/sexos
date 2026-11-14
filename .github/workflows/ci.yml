@@ -379,14 +379,16 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
-    - name: E-book model (EPUB, FictionBook, CBZ, reflow) on the host
-      run: cargo test --locked -p sex-xml -p sex-ebook
+    - name: E-book and feed models (EPUB, FictionBook, CBZ, reflow, RSS, Atom, OPML) on the host
+      run: cargo test --locked -p sex-xml -p sex-ebook -p sex-feed
     - name: Build the image
       run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/reading-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/reading-build.log"; exit 1)
     - name: Bodice opens an EPUB, turns pages and reopens at the saved page
       run: |
         truncate -s 256M "$RUNNER_TEMP/blank-reading.img"
         python3 scripts/program_bodice_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-reading.img" --out "$RUNNER_TEMP/sexos-reading/bodice"
+    - name: Gossip imports OPML, lists a feed's items and keeps one read across a restart
+      run: python3 scripts/program_gossip_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-reading.img" --out "$RUNNER_TEMP/sexos-reading/gossip"
     - name: Preserve reading evidence
       if: always()
       uses: actions/upload-artifact@v4

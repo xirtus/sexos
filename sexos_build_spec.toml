@@ -77,7 +77,8 @@ crates = [
   "apps/store/Cargo.toml",
   "apps/sdltest/Cargo.toml",
   "apps/driftspark/Cargo.toml",
-  "apps/bodice/Cargo.toml"
+  "apps/bodice/Cargo.toml",
+  "apps/gossip/Cargo.toml"
 ]
 
 [[stage]]
@@ -487,6 +488,15 @@ target = "x86_64-sex-app.json"
 manifest = "apps/bodice/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/bodice"
 dest_artifact = "iso_root/programs/bodice"
+
+# Gossip: feeds and podcasts (RSS, Atom, OPML), on sex-app with sex-feed.
+[[stage]]
+id = "build_gossip"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/gossip/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/gossip"
+dest_artifact = "iso_root/programs/gossip"
 
 # PDF: the first ordinary std app, hayro rendering pages into the window.
 [[stage]]

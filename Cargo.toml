@@ -98,6 +98,8 @@ members = [
     "crates/sex-xml",
     "crates/sex-ebook",
     "apps/bodice",
+    "crates/sex-feed",
+    "apps/gossip",
 ]
 [workspace.package]
 license = "GPL-3.0-only"
