@@ -7,7 +7,7 @@ document was never saved and stays dirty, then cut power (QEMU kill, no
 shutdown). Boot 2 on the same disk: open Linen, select the draft by name and
 load it in Quil; the loaded bytes/hash must equal the last drafted buffer.
 """
-import argparse,hashlib,json,os,re,shutil,subprocess,time
+import sys,argparse,hashlib,json,os,re,shutil,subprocess,time
 from pathlib import Path
 from desktop_close_gate import QMP
 from desktop_focus import focus_surface
@@ -45,11 +45,9 @@ def wait_serial(text,health,pattern,start=0,timeout=120,*,tag='serial',raw=False
   match=re.search(pattern,now[start:])
   if match:return match
   time.sleep(.02)
- # CI artifacts are not always reachable: put the end of the serial record in the job log.
- lines=text()[start:].splitlines()
- noise=re.compile(r'^\[(clock|silkbar|sched|scheduler|sexdisplay|display|silk\.de|spindle\.view|spindle\.cursor|lifecycle|perf|sexdrive|sexinput|input|bell|service\.memory)[.\]]')
- kept=[l for l in lines if not noise.match(l)]
- print(f'[{tag}] after {timeout}s, {len(lines)} serial lines since the wait began; the first 150 that are not routine:',*kept[:150],'[tail]',*lines[-15:],sep='\n',flush=True)
+ # What the system said meanwhile, for CI logs (the serial file may not be kept).
+ tail=[l for l in text()[start:].splitlines() if 'view.bytes' not in l and 'view.text' not in l][-40:]
+ print(f'--- {tag}: last serial lines before the timeout ---',*tail,sep='\n',file=sys.stderr)
  raise TimeoutError(f'{tag}: {pattern}')
 
 def boot(iso,disk,out,tag,resolution):
