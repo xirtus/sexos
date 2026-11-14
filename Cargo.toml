@@ -80,6 +80,7 @@ members = [
     "crates/sex-libc",
     "crates/sex-media",
     "crates/sex-episodes",
+    "crates/sex-kodi",
     "crates/silkbar-model",
     "crates/sex-object-model",
     "crates/sex-time",
