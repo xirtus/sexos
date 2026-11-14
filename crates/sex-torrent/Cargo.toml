@@ -8,3 +8,4 @@ description = "BitTorrent engine for SexOS (Swingers, Qupid, Kaleidoscope): v1/v
 [dependencies]
 sha1 = { version = "=0.10.7", default-features = false }
 sha2 = { version = "=0.10.9", default-features = false }
+crypto-bigint = { version = "=0.5.5", default-features = false }
