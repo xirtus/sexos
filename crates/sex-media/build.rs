@@ -77,8 +77,8 @@ fn main() {
     println!("cargo:rustc-link-search=native={}", ff.join("lib").display());
     // dav1d (AV1) sits beside FFmpeg's archives when it was built with them.
     // So do libvpx (VP9 export) and the other export encoders in the export profile.
-    for l in ["mediabridge", "avformat", "avcodec", "dav1d", "vpx", "swscale", "swresample", "avutil"] {
-        if matches!(l, "dav1d" | "vpx") && !ff.join(format!("lib/lib{l}.a")).exists() { continue; }
+    for l in ["mediabridge", "avformat", "avcodec", "dav1d", "vpx", "aom", "swscale", "swresample", "avutil"] {
+        if matches!(l, "dav1d" | "vpx" | "aom") && !ff.join(format!("lib/lib{l}.a")).exists() { continue; }
         println!("cargo:rustc-link-lib=static={l}");
     }
 }

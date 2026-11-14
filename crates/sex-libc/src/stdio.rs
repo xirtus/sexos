@@ -196,6 +196,25 @@ pub unsafe extern "C" fn fread(_p: *mut c_void, _size: usize, _count: usize, _st
     0
 }
 
+// `fopen` never opens a file here, so no stream reaches these; libaom names them for
+// its two-pass statistics files, which Splicy's export does not use.
+#[cfg_attr(target_os = "none", no_mangle)]
+pub unsafe extern "C" fn feof(_stream: *mut FILE) -> c_int {
+    1
+}
+
+#[cfg_attr(target_os = "none", no_mangle)]
+pub unsafe extern "C" fn fseek(_stream: *mut FILE, _offset: core::ffi::c_long, _whence: c_int) -> c_int {
+    set_errno(crate::EBADF);
+    -1
+}
+
+/// No stream can be read here: end of input before any field.
+#[cfg_attr(target_os = "none", no_mangle)]
+pub unsafe extern "C" fn fscanf(_stream: *mut FILE, _fmt: *const c_char, _ap: ...) -> c_int {
+    -1
+}
+
 /// `sscanf` for the few numeric patterns C libraries parse with it: `%d %i %u %x
 /// %ld %lld %lu %llu %f %lf %s %c %n` and literal text. Returns fields assigned.
 #[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
