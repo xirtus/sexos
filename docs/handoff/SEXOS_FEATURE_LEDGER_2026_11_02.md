@@ -4832,3 +4832,48 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   branches, preserve author292's exact daily gate after landing, remove our Fuzz
   workaround and superseded Term oracle. Actual293 has landed;292/295 remain open.
   All new merges require every exact-head leaf plus final aggregator green.
+
+
+## ChatGPT round194: exact child exits and Moan workspaces (2026-11-15)
+
+- Imported separate8b070e96 as0b9364569: OP_EXIT status mutation now matches both
+  kernel-stamped child domain and task. The compiled production predicate rejects
+  an old-task exit for a reused domain. No kernel change. Updated only the exact
+  reviewed passive-observer Shell pin; all85 ABI pins remain exact.
+- Full root host suite passes1,311tests in167.161s. Canonical PIC/PIE guest Shell
+  compiles and passes unchanged byte scan. A default-flags preliminary compile is
+  preserved separately and is not represented as the canonical artifact.
+- New normal production c327f9ec6 passes60s GREEN_MASTER and freezes all1,848
+  production files. ISO73b662002041b1acf8ec42249d1fd8e7220bdba96500257f02cdbcf82da02afc;
+  Shellfcd4f73d6228a4adeb0e197e1e4537a0b3eb92e1ab10eb5d37417cf1ffb44294.
+  This remains the ba8 kernel cohort, without later master/Denim imports.
+- Actual combined CLAP/VST3 gate passes on that image with preserved924844ee1
+  helper binaries: four processed jobs, actual invalid-opcode child crash,
+  timeout/kill, new-task reuse, responsive parent and clean parent retirement.
+  Root independently verifies22 raw artifact digests and the image. See
+  LAUNCH_EXIT_RUNTIME_V6_2026_11_15.json. This qualifies valid exits; no queued
+  stale-task guest injection, hostile sandbox or integrated Moan UI is claimed.
+- Reviewer caught a final-block CLAP restart request incorrectly returning audio;
+  separate77d2efff adds post-callback/process rejection and atomic callback flags.
+  Also imported4954023f asd66866fca: Window polling preserves exact3/3 launch
+  events instead of dropping them. Twelve classifier/exit/privacy controls and
+  seventeen autofill tests pass. Corrected helpers need a fresh source cohort;
+  those fixes are not assigned to the older passing binaries.
+- User supplied Logic arrangement/mixer/sampler/drum references and explicitly
+  requested Step Sequencer and same-project workspaces. See
+  MOAN_WORKSPACES_TARGET_2026_11_15.md. Agents are replacing the stacked-form UI
+  with compact Arrange/Mix/PianoRoll/StepSequencer/Instruments views, real data,
+  shared transport/selection/undo and docked/floating panels. MIDI gate exposed
+  real audio underruns; feeder/consumed-clock corrections precede new screenshots.
+- Actual author245 landed23090514, including the exact author292 Daily script.
+  Both IPv6 halves pass78 Engine tests on the local actual-master reconciliation.
+  Root independently recomputes the complete139-to140-file kernel trees and reads
+  all8 actual changes; no kernel edits are authored. A separate raw-only Denim
+  source/role auxiliary profile is reviewed on that master cohort, never combined
+  speculatively with root privacy/Shell changes or old runtime evidence.
+- PR296 a68/run43641321530 reaches16success but service_custody fails: isolated
+  transport testing loses the workspace smoltcp patch and resolves upstream,
+  correctly failing custody. Agent is repairing isolated dependency custody with
+  the exact reviewed134file/2changed-file vendor selection. Original failed job
+  and truth artifacts preserved. No merge; all exact-head leaves and aggregator
+  remain required, with author branches kept separate.
