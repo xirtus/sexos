@@ -103,6 +103,41 @@ pub fn syscall(regs: &mut crate::interrupts::SyscallRegs) -> u64 {
             NAMES[caller as usize][1].store(arg2, Ordering::Relaxed);
             wire::OK
         }
+        wire::OP_CORE => {
+            let core = arg as usize;
+            if core >= cores() { return wire::INVALID; }
+            let since = SINCE[core].load(Ordering::Relaxed);
+            let running = RUNNING[core].load(Ordering::Relaxed);
+            let live = if running == IDLE && since != 0 && t > since { t - since } else { 0 };
+            regs.rsi = IDLE_CYCLES[core].load(Ordering::Relaxed) + live;
+            regs.rdx = if running == IDLE { 0 } else { running as u64 };
+            regs.r10 = t;
+            wire::OK
+        }
+        wire::OP_MEMORY => {
+            regs.rsi = crate::program_frames::lent();
+            regs.rdx = crate::program_frames::peak();
+            regs.r10 = crate::program_frames::base();
+            wire::OK
+        }
+        // Who holds what, as numbers: a domain's PKU key, how many capabilities it holds,
+        // and which domains those let it call. Never the capabilities themselves.
+        wire::OP_ORGAN | wire::OP_LINK => {
+            let Some(pd) = crate::ipc::DOMAIN_REGISTRY.get(arg as u32).filter(|_| arg != 0 && arg < DOMAINS as u64) else { return wire::INVALID };
+            let table = unsafe { &*pd.cap_table };
+            let held = (1..=1024).filter_map(|id| table.find(id));
+            if op == wire::OP_ORGAN {
+                regs.rsi = pd.pku_key as u64;
+                regs.rdx = held.count() as u64;
+                return wire::OK;
+            }
+            let next = held.filter_map(|c| match c.data {
+                crate::capability::CapabilityData::IPC(ipc) => Some(ipc.target_pd_id as u64),
+                crate::capability::CapabilityData::Domain(d) => Some(d as u64),
+                _ => None,
+            }).filter(|&d| d > arg2).min();
+            match next { Some(d) => { regs.rsi = d; wire::OK } None => wire::NONE }
+        }
         _ => wire::INVALID,
     }
 }

@@ -4,7 +4,7 @@
 //! Single runtime enforcement point. No inter-domain interaction bypasses this crate.
 //! Capability slots are the only sanctioned access paths.
 
-#![no_std]
+#![cfg_attr(not(test), no_std)]
 
 pub mod mem;
 pub mod ipc_recv;

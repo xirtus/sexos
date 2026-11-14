@@ -118,3 +118,13 @@ pub fn parse_consent(text: &[u8]) -> (u32, u32) {
     }
     (answered, allowed)
 }
+
+#[cfg(test)]
+mod runs_wire_tests {
+    #[test]
+    fn files_runs_kind_and_grant_token_agree() {
+        use crate::home_lock as h;
+        assert_eq!(crate::fs::runs::PACKAGES, super::GRANT_TOKEN);
+        assert!(![h::SETUP, h::UNLOCK, h::LOCK, h::STATE, h::CHANGE, super::KIND].contains(&crate::fs::RUNS));
+    }
+}
