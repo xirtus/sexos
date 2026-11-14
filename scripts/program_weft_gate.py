@@ -84,7 +84,7 @@ def main():
   expression('18446744073709551615','0xFFFFFFFFFFFFFFFF')
   q.cmd('screendump',{'filename':str(a.out/'abacus-programmer.ppm')})
   command('Unit Conversion','abacus.convert');expression('32 F to C','0 C')
-  command('Recall Last Calculation','abacus.recall-last')
+  start=len(t());chord('ctrl','up');g['wait'](r'\[abacus.command\] id=abacus.recall-last\n',start,60)
   start=len(t());q.key('ret');g['wait'](r'\[abacus.result\] expr=32 F to C value=0 C\n',start,60)
   expression('1 MiB to KiB','1024 KiB')
   start=len(t());text('1 m to kg');q.key('ret');g['wait'](r'\[abacus.error\] what=Units: Dimension\n',start,60)

@@ -4222,3 +4222,5 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   conversion values are retained; bounded Weft scroll makes all controls reachable
   at 640x400. Thirteen host tests now include actual operators and compact Tab/
   scroll access. QEMU clicks the focused button's current scrolled coordinates.
+- Round176 shortcut follow-up: Recall Last uses supported Ctrl+Up, verified through
+  actual Weft key dispatch (fourteen host tests). Guest gate now uses that chord.

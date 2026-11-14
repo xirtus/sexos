@@ -162,3 +162,19 @@ fn compact_window_scrolls_bottom_keypad_and_programmer_controls_into_view() {
         );
     }
 }
+
+#[test]
+fn recall_shortcut_runs_through_actual_weft_key_dispatch() {
+    let mut ui = Ui::new(640, 400, Theme::light(), Strings::new("en"));
+    let mut a = Abacus::build(&mut ui);
+    assert_eq!(result(&mut a, &mut ui, "6*7"), "42");
+    ui.set_text(a.expr, "replace this");
+    let responses = ui.handle(weft::Event::Key(weft::Key::ctrl(weft::input::code::UP)));
+    assert!(responses
+        .iter()
+        .any(|r| *r == Response::Command("abacus.recall-last".into())));
+    for response in responses {
+        a.on(&mut ui, &response);
+    }
+    assert_eq!(ui.text_of(a.expr), "42");
+}

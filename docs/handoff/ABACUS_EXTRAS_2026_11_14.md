@@ -27,7 +27,7 @@ Convert mode accepts `VALUE FROM to TO`, for example `32 F to C` or
 - Storage: B, kB, MB, GB (decimal); KiB, MiB, GiB (binary).
 
 The bounded 500-row history retains each result's mode and programmer word/radix
-context. Double-click/Enter on a row, or Recall Last Calculation (`Alt+Up`), restores
+context. Double-click/Enter on a row, or Recall Last Calculation (`Ctrl+Up`), restores
 that context and places a reusable value in the expression. Conversion recalls the
 original conversion expression. Recall replaces existing input. Clear History
 clears contexts too. History is session-local; it is not persisted across reboot.
