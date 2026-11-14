@@ -1,0 +1,9 @@
+[package]
+name = "denim"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later OR MIT"
+description = "Denim: page compression for SexOS compressed RAM (LZ4-style blocks, zero and same-filled pages)"
+
+[lib]
+path = "src/lib.rs"
