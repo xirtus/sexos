@@ -1010,9 +1010,14 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             else { unsafe{fs_commands::FS.submit_program_granted(target,program_args,flags,0,if packages{sex_pdx::package::GRANT_TOKEN}else{b""},sb);} }
             true
         }
-        // The Store: the package catalog in a window, allowed the network and packages.
-        b"store" => {
-            unsafe{fs_commands::FS.submit_program_granted(b"store",args,sex_pdx::program_store::RUN_NETWORK,0,sex_pdx::package::GRANT_TOKEN,sb);}
+        // Kaleidoscope, the browser (formerly Web), allowed the network.
+        b"kaleidoscope" | b"web" | b"browser" => {
+            unsafe{fs_commands::FS.submit_program_granted(b"kaleidoscope",args,sex_pdx::program_store::RUN_NETWORK,0,b"",sb);}
+            true
+        }
+        // sexshop (formerly Store): the package catalog in a window, allowed the network and packages.
+        b"sexshop" | b"store" => {
+            unsafe{fs_commands::FS.submit_program_granted(b"sexshop",args,sex_pdx::program_store::RUN_NETWORK,0,sex_pdx::package::GRANT_TOKEN,sb);}
             true
         }
         // A Spindle terminal window (apps/term), allowed to start programs whose console it is.
@@ -2046,17 +2051,6 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             true
         }
         // ── Browser stub commands ─────────────────────────────────────────
-        b"browser" | b"web" => {
-            sb.push(b"Browser / WebStub -- visible panel (v2):");
-            sb.push(b"  sid=205  frame=8  surface=1  focusable=1");
-            sb.push(b"  launch:  SLOT_SHELL (launch_exec=1)");
-            sb.push(b"  network=0  engine=0  fetched=0  parsed=0");
-            sb.push(b"  html=0  css=0  js=0  readback=0  durable=0");
-            sb.push(b"Commands: browser, browser-status, url, url-status");
-            sb.push(b"Honest: NOT a real web browser. No fetch/parse.");
-            serial_println!("[browser.stub.command] command=browser ok=1 reason=v2_visible_panel");
-            true
-        }
         b"browser-status" => {
             sb.push(b"Browser Stub Status (v2):");
             sb.push(b"  app:       WebStub (label: Browser)");
@@ -2817,6 +2811,12 @@ pub extern "C" fn _start() -> ! {
         if msg.type_id==1&&msg.caller_pd==11&&unsafe{fs_commands::FS.receive(msg.arg0,sb)}{unsafe{content_render(&line,sb);}continue;}
         if let Some(r)=unsafe{DISPLAY_IO.receive(msg.caller_pd,msg.arg0)}{
             sex_pdx::serial_record!("[spindle.display.batch.admitted] target={} sid={} sequence={} paint={} bytes={}",instance_pd(),r.surface,r.stamp.sequence,r.stamp.paint,r.bytes);
+            continue;
+        }
+        if msg.type_id==sex_pdx::screenshot::OP_SCREENSHOT_TAKE&&msg.caller_pd==3{
+            let region=sex_pdx::screenshot::Rect::decode(msg.arg0);
+            sex_pdx::serial_record!("[spindle.screenshot.take] x={} y={} w={} h={} full={}",region.x,region.y,region.w,region.h,region.is_full() as u8);
+            unsafe{capture_command::CAPTURE.take(region,sb);content_render(&line,sb);}
             continue;
         }
         if msg.type_id==sex_pdx::program_store::OP_REFUSED&&msg.caller_pd==3{

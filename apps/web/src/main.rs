@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Web: the graphical browser. `run web` shows its welcome page, `run +net web
-//! https://example.com` opens a site, `run web @page.html` a file in its folder.
+//! Kaleidoscope (formerly Web): the graphical browser. `run kaleidoscope` shows its welcome page, `run +net kaleidoscope
+//! https://example.com` opens a site, `run kaleidoscope @page.html` a file in its folder.
 //!
 //! Pages are parsed, styled and laid out here by sex-html and drawn by sex-web
 //! (Geist text, boxes, PNG/JPEG pictures) into the window's pixel surface. All of it
@@ -760,7 +760,7 @@ impl Browser {
         self.profile.visit(&self.url);
         self.profile.titled(&self.url, &self.page.title);
         let title: Vec<u8> = self.page.title.bytes().take(16).collect();
-        self.window.title(if title.is_empty() { b"Web" } else { &title });
+        self.window.title(if title.is_empty() { b"Kaleidoscope" } else { &title });
         self.scroll_to(frag);
         self.sync_frames();
     }
@@ -1719,11 +1719,11 @@ impl Browser {
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     let mut window = Window::open();
-    window.title(b"Web");
+    window.title(b"Kaleidoscope");
     sex_web::set_avif_decoder(media::decode_avif);
     let mut args = [0u8; sex_pdx::fs::ARGS_MAX];
     let given = String::from(core::str::from_utf8(files::args(&mut window, &mut args)).unwrap_or("").trim());
-    let Some(fonts) = Fonts::new() else { window.show(b"Web: the fonts could not be loaded."); loop { if let Event::Close = window.next() { window.close() } } };
+    let Some(fonts) = Fonts::new() else { window.show(b"Kaleidoscope: the fonts could not be loaded."); loop { if let Event::Close = window.next() { window.close() } } };
     let (width, height) = window.size();
     let surface = viewport::Surface::checked(width, height, window.pixels().len())
         .unwrap_or(viewport::Surface::EMPTY);

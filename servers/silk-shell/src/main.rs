@@ -17,7 +17,10 @@ mod app_input;
 mod wm;
 mod launcher_search;
 mod session;
+mod config_watch;
+mod lock;
 mod keyboard_layout;
+mod key_repeat;
 use alloc::vec::Vec;
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -42,6 +45,11 @@ static mut CLIPBOARD: clipboard::Broker = clipboard::Broker::new();
 static mut APP_INPUT: app_input::Queue = app_input::Queue::new();
 static mut CLIPBOARD_INTAKE:app_input::Intake=app_input::Intake::new();
 static mut APP_MODIFIERS: sex_pdx::app_key::Modifiers = sex_pdx::app_key::Modifiers::new();
+// Held keys repeat at Shell's rate, for PS/2 and USB alike (key_repeat.rs).
+static mut KEY_REPEAT: key_repeat::Repeat = key_repeat::Repeat::new();
+static mut KEY_REPEATING: bool = false;
+/// Settings option: Caps Lock is another Ctrl key (off by default).
+static mut CAPS_AS_CTRL: bool = false;
 /// Fresh held-catalog and lifecycle checks, never a numeric target as authority.
 /// None is transient contention and must not turn into terminal retirement.
 unsafe fn clipboard_live(subject:sex_pdx::clipboard::Subject)->Option<bool> {
@@ -306,6 +314,33 @@ unsafe fn shell_close_poll() {
 const _: () = assert!(app_custody::CLOSE_ASK==sex_pdx::app_lifecycle::CLOSE_ASK
     && app_custody::CLOSE_CONFIRMED==sex_pdx::app_lifecycle::CLOSE_CONFIRMED
     && app_custody::DECLINE_UNSAVED==sex_pdx::app_lifecycle::DECLINE_UNSAVED);
+/// Ends a program row now. Its pages are gone, but a program waiting for an event would
+/// not run to notice: a confirmed Close wakes it, it faults, and its run is retired.
+unsafe fn force_end_and_wake(e:&app_custody::Entry)->bool {
+    if sex_pdx::app_lifecycle::force_end(e.slot).is_err() { return false; }
+    if let Some(slot) = e.close_slot() { let _ = pdx_call_checked(slot, sex_pdx::app_lifecycle::OP_APP_CLOSE, e.target as u64, e.task as u64, sex_pdx::app_lifecycle::CLOSE_CONFIRMED); }
+    true
+}
+/// The focused program (the system monitor) asks to end another program now.
+unsafe fn program_end_receive(msg:&sex_pdx::PdxMessage)->bool {
+    use sex_pdx::system_stats as st;
+    if msg.type_id!=st::OP_END_PROGRAM {return false;}
+    let focused=APP_CUSTODY.iter().flatten().any(|e|e.target==msg.caller_pd&&e.task==msg.caller_task&&!e.dead&&e.surface==FOCUSED_SURFACE_ID);
+    let target=msg.arg0 as u32;
+    let status=if !focused {st::NOT_FOCUSED} else {
+        match APP_CUSTODY.iter_mut().flatten().find(|e|e.target==target&&!e.dead&&!e.forced
+            &&app_catalog::by_surface(e.target,e.surface).is_some_and(|r|r.app==app_catalog::App::Program)) {
+            None=>st::NOT_A_PROGRAM,
+            Some(e)=>{
+                e.forced=true;
+                if force_end_and_wake(e){st::OK}else{e.forced=false;st::NOT_ENDED}
+            }
+        }
+    };
+    sex_pdx::serial_record!("[shell.program.end] caller={} target={} status={}",msg.caller_pd,target,status);
+    pdx_reply(msg.caller_pd,status);
+    true
+}
 /// An app's own decline of a pending ordinary close: unsaved work stays open
 /// and the user's next Close is sent as confirmed.
 unsafe fn shell_close_declined_receive(msg:&sex_pdx::PdxMessage)->bool {
@@ -10312,7 +10347,7 @@ fn is_pointer_move(word:u64)->bool{
 /// The program window under the pointer (or holding its capture), with the pointer
 /// relative to its pixel area, and whether the pointer is inside that area.
 unsafe fn program_pointer_target()->Option<(u64,sex_pdx::clipboard::Participant,i16,i16,bool)>{
-    if OVERVIEW.is_open() || COMMAND_PALETTE_OPEN || ATLAS_MODE_ENABLED || LAUNCHER_ACTIVE || CLOCK_ACTIVE || STATUS_ACTIVE || BELL_ACTIVE || SCENE_SETTINGS_ACTIVE {return None}
+    if OVERVIEW.is_open() || SCREENSHOT.is_open() || COMMAND_PALETTE_OPEN || ATLAS_MODE_ENABLED || LAUNCHER_ACTIVE || CLOCK_ACTIVE || STATUS_ACTIVE || BELL_ACTIVE || SCENE_SETTINGS_ACTIVE {return None}
     let sid=if POINTER_CAPTURE!=0 {POINTER_CAPTURE} else {
         if matches!(INTERACTION,InteractionState::Dragging{..}){return None}
         match hit_test_at(POINTER_X,POINTER_Y){HitTarget::Surface(sid)=>sid,_=>return None}
@@ -10340,6 +10375,7 @@ unsafe fn program_pointer_leave(){
 }
 /// After the pointer moved.
 unsafe fn program_pointer_motion(){
+    if SCREENSHOT.motion(POINTER_X,POINTER_Y) {screenshot_ui(true);}
     match program_pointer_target(){
         Some((sid,p,x,y,inside)) if inside || POINTER_CAPTURE==sid => {
             if POINTER_HOVER!=sid {program_pointer_leave();POINTER_HOVER=sid;}
@@ -10515,7 +10551,7 @@ unsafe fn wm_action(action: wm::WmAction) -> bool {
         A::Notifications => toggle_bell(),
         A::Wallpaper => desktop_look_step(1, 0),
         A::NightLight => desktop_look_step(0, 1),
-        A::Lock => false,
+        A::Lock => lock::lock(),
         A::KeyboardLayout => { let (label, title) = keyboard_layout::next(); keyboard_layout_notice(label, title) }
     };
     sex_pdx::serial_record!("[shell.wm.action] action={:?} done={} scene={}->{} focus={}->{} layout={}",
@@ -10524,7 +10560,19 @@ unsafe fn wm_action(action: wm::WmAction) -> bool {
 }
 /// Runs before native text routing in both HID paths. Alt remains owned by
 /// the desktop, so changing focus cannot leave a modifier held in the old app.
+/// Presses the held key again when its repeat is due (key_repeat.rs). A key
+/// that no longer reaches a program stops repeating.
+unsafe fn key_repeat_poll() {
+    let Some(code)=KEY_REPEAT.due(sex_pdx::get_ticks()) else{return};
+    KEY_REPEATING=true;let delivered=desktop_shortcut(code,1);KEY_REPEATING=false;
+    if !delivered{KEY_REPEAT.cancel();}
+}
 unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
+    let code=if CAPS_AS_CTRL && code==0x3a {0x1d} else {code};
+    // A keyboard's own typematic press of the repeating key is dropped; any
+    // other press stops the repeat until it reaches a program itself.
+    if value==0 {KEY_REPEAT.release(code);}
+    else if !KEY_REPEATING {if KEY_REPEAT.is_held(code){return true;}KEY_REPEAT.cancel();}
     match WM_CHORDS.event(code,value) {
         wm::Chord::Pass=>{}
         wm::Chord::Consume=>return true,
@@ -10536,6 +10584,7 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
     if overview_key(code,value) {return true;}
     if media_keys::is_player_key(code){if value==1{player_key(code);}return true;}
     let modifier=APP_MODIFIERS.observe(code,value)|keyboard_layout::observe(code,value);
+    if screenshot_key(code,value) {return true;}
     match DESKTOP_KEYS.event(code,value) {
         desktop_keys::Action::Pass=>{
             if !COMMAND_PALETTE_OPEN {
@@ -10555,7 +10604,7 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
                     }else{app_input::Input::Key(key)};
                     if !APP_INPUT.push(app_input::Item{destination,input}){
                         sex_pdx::serial_record!("[shell.app.input.full] capacity=32 pd={} task={} accepted=0",destination.subject.pd,destination.subject.task);
-                    }
+                    }else if !KEY_REPEATING{KEY_REPEAT.press(code,sex_pdx::get_ticks());}
                     app_input_poll();return true;
                 }
                 if let Some(destination)=focused_program_participant(){
@@ -10567,7 +10616,7 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
                     }
                     if !APP_INPUT.push(app_input::Item{destination,input:app_input::Input::Key(keyboard_layout::typing(APP_MODIFIERS.key(shortcut),code))}){
                         sex_pdx::serial_record!("[shell.app.input.full] capacity=32 pd={} task={} accepted=0",destination.subject.pd,destination.subject.task);
-                    }
+                    }else if !KEY_REPEATING{KEY_REPEAT.press(code,sex_pdx::get_ticks());}
                     app_input_poll();return true;
                 }
             }
@@ -10679,6 +10728,83 @@ unsafe fn overview_click(px: i32, py: i32) {
         None => overview_close(false),
     }
 }
+// ── Screenshot UI (Print): drag a region, click a window, Enter for the whole
+// screen, Escape to cancel; Shift+Print takes the whole screen at once. The
+// selection lives in sex_pdx::screenshot (host-tested); Display draws it and
+// the first Spindle terminal, which holds the capture grant, saves the PNG.
+static mut SCREENSHOT: sex_pdx::screenshot::Selector = sex_pdx::screenshot::Selector::new();
+unsafe fn screenshot_ui(show: bool) {
+    let sel = SCREENSHOT.selection();
+    let (status, _) = pdx_call(SLOT_DISPLAY, sex_pdx::screenshot::OP_SCREENSHOT_UI, sel.wire(), show as u64, 0);
+    sex_pdx::serial_record!("[shell.screenshot.ui] show={} x={} y={} w={} h={} status={:#x}", show as u8, sel.x, sel.y, sel.w, sel.h, status);
+}
+unsafe fn screenshot_open() {
+    if OVERVIEW.is_open() { overview_close(false); }
+    if SWITCHER.is_open() { switcher_end(true); }
+    if COMMAND_PALETTE_OPEN { toggle_command_palette(); }
+    SCREENSHOT.open();
+    screenshot_ui(true);
+}
+unsafe fn screenshot_take(region: sex_pdx::screenshot::Rect) {
+    let (status, _) = pdx_call(spindle_route_slot(), sex_pdx::screenshot::OP_SCREENSHOT_TAKE, region.wire(), 0, 0);
+    sex_pdx::serial_record!("[shell.screenshot.take] x={} y={} w={} h={} full={} status={:#x}", region.x, region.y, region.w, region.h, region.is_full() as u8, status);
+    if status != 0 {
+        notify_panel(b"Screenshot needs the terminal: open it with Scroll Lock");
+        NOTIFY_NOTICE_UNTIL = sex_pdx::get_ticks() + NOTIFY_SHOW_TICKS;
+    }
+}
+unsafe fn screenshot_finish(pick: sex_pdx::screenshot::Pick) {
+    use sex_pdx::screenshot::{Pick, Rect};
+    // Hide the selection first so Display paints the capture without it.
+    screenshot_ui(false);
+    let region = match pick {
+        Pick::Cancel => { sex_pdx::serial_record!("[shell.screenshot.cancel]"); return; }
+        Pick::Full => Rect::FULL,
+        Pick::Region(r) => r,
+        Pick::WindowAt(x, y) => match hit_test_at(x, y) {
+            HitTarget::Surface(sid) => match get_surface_bounds(sid) {
+                Some((wx, wy, ww, wh)) => {
+                    let r = Rect::span(wx, wy, wx + ww as i32, wy + wh as i32);
+                    sex_pdx::serial_record!("[shell.screenshot.window] sid={} x={} y={} w={} h={}", sid, r.x, r.y, r.w, r.h);
+                    r
+                }
+                None => Rect::FULL,
+            },
+            _ => Rect::FULL,
+        },
+    };
+    screenshot_take(region);
+}
+/// Print and the keys of an open selection; modifiers pass so their state stays true.
+unsafe fn screenshot_key(code: u8, value: u64) -> bool {
+    use sex_pdx::screenshot::KEY_PRINT;
+    if SCREENSHOT.is_open() {
+        if matches!(code, 0x1D | 0x2A | 0x36 | 0x38 | 0x5B | 0x5C | 0x61 | 0x64) { return false; }
+        if value != 1 { return true; }
+        match code {
+            0x01 => { if let Some(p) = SCREENSHOT.key(false) { screenshot_finish(p); } }
+            0x1C | KEY_PRINT => { if let Some(p) = SCREENSHOT.key(true) { screenshot_finish(p); } }
+            _ => {}
+        }
+        return true;
+    }
+    if code != KEY_PRINT { return false; }
+    if value == 1 {
+        if APP_MODIFIERS.key(0).shift { screenshot_take(sex_pdx::screenshot::Rect::FULL); } else { screenshot_open(); }
+    }
+    true
+}
+/// A button while the selection shows: true when the selection took it.
+unsafe fn screenshot_button(button: u8, pressed: bool) -> bool {
+    if !SCREENSHOT.is_open() { return false; }
+    if button == 1 {
+        if pressed { SCREENSHOT.press(POINTER_X, POINTER_Y); screenshot_ui(true); }
+        else if let Some(p) = SCREENSHOT.release(POINTER_X, POINTER_Y) { screenshot_finish(p); }
+    } else if pressed && button == 3 {
+        if let Some(p) = SCREENSHOT.key(false) { screenshot_finish(p); }
+    }
+    true
+}
 unsafe fn switcher_step(dir: i8) {
     if OVERVIEW.is_open() { overview_close(false); }
     let mut ordered = [0u64; sex_pdx::window_switcher::MAX_ENTRIES];
@@ -10781,6 +10907,7 @@ unsafe fn media_keys_receive(msg:&sex_pdx::PdxMessage)->bool{
 /// main OP_HID_EVENT dispatch.  Used by linen_sync_reply and before-linen
 /// drain so button click/focus works even during blocking Linen fetch.
 unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
+    if lock::input(event_class, arg0 as u8, arg1) { return; }
     // A scale starts only with no held buttons/drag. Consume pointer events
     // during its bounded publication handshake, so old hit geometry cannot
     // target newly painted controls; unrelated keyboard input remains live.
@@ -11432,7 +11559,7 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
         }
         sex_pdx::serial_record!("[silk-shell.pointer.recv] class=EV_BTN btn={} pressed={}",
             button, pressed);
-        if !ATLAS_MODE_ENABLED && (ABS_SEEN_VALID || POINTER_USB_STATE_INIT) { program_pointer_button(button, pressed); }
+        if screenshot_button(button, pressed) {} else if !ATLAS_MODE_ENABLED && (ABS_SEEN_VALID || POINTER_USB_STATE_INIT) { program_pointer_button(button, pressed); }
         if button == 1 {
             serial_println!(
                 "[usb.hid.pointer.click.recv] left=1 value={} ok=1",
@@ -16274,6 +16401,14 @@ unsafe fn desktop_look_step(wallpaper: u8, night: u8) -> bool {
     use sex_pdx::desktop_look as look;
     let (w, n) = DESKTOP_LOOK;
     let next = ((w + wallpaper) % look::WALLPAPERS.len() as u8, (n + night) % look::NIGHT_LEVELS);
+    let ok = desktop_look_apply(next.0, next.1);
+    if ok { use sex_pdx::config::schema::id; config_watch::changed_here(id::WALLPAPER, next.0 as i32); config_watch::changed_here(id::NIGHT_LIGHT, next.1 as i32); }
+    ok
+}
+/// Shows a wallpaper and night light level (from a key or from settings).
+unsafe fn desktop_look_apply(wallpaper: u8, night: u8) -> bool {
+    use sex_pdx::desktop_look as look;
+    let next = (wallpaper % look::WALLPAPERS.len() as u8, night % look::NIGHT_LEVELS);
     let ok = pdx_call(SLOT_DISPLAY, look::OP_DESKTOP_LOOK, next.0 as u64, next.1 as u64, 0).0 == 0;
     if ok { DESKTOP_LOOK = next; }
     sex_pdx::serial_record!("[shell.look] wallpaper={} name={} night={} ok={}", next.0, look::WALLPAPERS[next.0 as usize].0, next.1, ok as u8);
@@ -16327,7 +16462,7 @@ unsafe fn shell_memory_poll() {
     let Some(e) = APP_CUSTODY[i].as_mut() else { return };
     e.forced = true;
     MEMORY_LAST_END = now;
-    let ok = sex_pdx::app_lifecycle::force_end(e.slot).is_ok();
+    let ok = force_end_and_wake(e);
     let name = sex_pdx::system_stats::name(e.target);
     let name = &name[..name.iter().position(|&c| c == 0).unwrap_or(16)];
     let name = if name.is_empty() { &b"A program"[..] } else { name };
@@ -24102,6 +24237,7 @@ fn hit_target_label(target: HitTarget, silkbar_handled: bool) -> (&'static str, 
 unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTarget, bool) {
     // The overview takes every click while it is open.
     if OVERVIEW.is_open() { overview_click(px, py); return (HitTarget::None, true); }
+    if SCREENSHOT.is_open() { return (HitTarget::None, true); }
     let old_focus = FOCUSED_SURFACE_ID;
     serial_println!("[shell.click_focus.down] x={} y={} buttons={:#x}", px, py, buttons_val);
     // ── Atlas intercept: if Atlas mode is enabled, hit-test scene cards ──
@@ -25402,6 +25538,8 @@ pub extern "C" fn _start() -> ! {
         unsafe { session::save(); }
         unsafe { record_spawn_poll(); }
         unsafe { program_resize_flush(); }
+        // Held keys: the repeat goes ahead of the queue drain below.
+        unsafe { key_repeat_poll(); }
         unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); display_scale_poll(); shell_close_poll(); shell_memory_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); notification_poll(); }
         // Retain failed notification attempts while continuing normal receives.
         // Success means enqueue only; sexinput validates caller and version.
@@ -26075,25 +26213,30 @@ pub extern "C" fn _start() -> ! {
         // empty, flush the coalesced cursor position (latest wins) before
         // blocking — the display gets exactly one current-state update per
         // drained burst instead of one IPC per HID event.
+        config_watch::poll();
+        lock::poll();
         let msg = match pop_startup_message().or_else(|| pdx_try_listen_raw(0)) {
             Some(m) => m,
             None => {
                 unsafe { flush_pending_cursor_send(); }
                 // A full input ring may recover while the shell has no work.
                 // Return to the publisher instead of blocking in listen.
-                if shell_ready_publisher.is_pending() || unsafe { RECORD_SPAWN_LEFT != 0 || DISPLAY_SCALE.request().is_some() || CURSOR_SEND_PENDING || APP_INPUT.pending() || LAUNCHER_FOCUS.is_some() || CLIPBOARD_INTAKE.pending() || CLIPBOARD.pending() || WORKSPACE_REFRESH_PENDING.iter().any(|p|*p) || linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_POINTER.is_some() || LINEN_ASYNC.can_send() || NOTIFY_NOTICE_UNTIL != 0 || MEMORY_CRITICAL_SINCE != 0 } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
+                if shell_ready_publisher.is_pending() || unsafe { RECORD_SPAWN_LEFT != 0 || DISPLAY_SCALE.request().is_some() || CURSOR_SEND_PENDING || APP_INPUT.pending() || LAUNCHER_FOCUS.is_some() || CLIPBOARD_INTAKE.pending() || CLIPBOARD.pending() || WORKSPACE_REFRESH_PENDING.iter().any(|p|*p) || linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_POINTER.is_some() || LINEN_ASYNC.can_send() || NOTIFY_NOTICE_UNTIL != 0 || MEMORY_CRITICAL_SINCE != 0 || KEY_REPEAT.pending() } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
                     sys_yield();
                     continue;
                 }
+                if let Some(t) = lock::next_wake() { let _ = sex_pdx::sys_wait_self_ticks(t.min(60_000) + 1); continue; }
                 pdx_listen_raw(0)
             }
         };
         // Display started again after a crash: it knows nothing of the desktop, so show it again.
-        if sex_pdx::display_ready::is_display_ready(&msg) { unsafe { display_came_back(); } continue; }
+        if sex_pdx::display_ready::is_display_ready(&msg) { unsafe { display_came_back(); } config_watch::display_restarted(); lock::display_restarted(); continue; }
         // The kernel's critical-memory word: the poll above acts on it.
         if msg.type_id == sex_pdx::program_memory::OP_PRESSURE && msg.caller_pd == 0 { unsafe { MEMORY_LAST_LOOK = 0; } continue; }
         unsafe {
             if shell_lifecycle_hint(&msg) { continue; }
+            if config_watch::receive(&msg) { continue; }
+            if lock::receive(&msg) { continue; }
             if shell_program_message(&msg) { continue; }
             if clipboard_receive(&msg) { continue; }
             if notification_receive(&msg) { continue; }
@@ -26101,6 +26244,7 @@ pub extern "C" fn _start() -> ! {
             if spindle_history_status_receive(&msg) {continue;}
             if workspace_refresh_receive(&msg) { continue; }
             if shell_close_declined_receive(&msg) { continue; }
+            if program_end_receive(&msg) { continue; }
             if display_scale_receive(&msg) { continue; }
             if desktop_text_receive(&msg) { continue; }
             if linen_async_reply(&msg) { continue; }
@@ -26325,6 +26469,7 @@ pub extern "C" fn _start() -> ! {
                 OP_HID_EVENT => {
                     // Fixed BOOT sexinput main task, authenticated by IPC metadata.
                     if msg.caller_pd!=sex_pdx::shell_ready::INPUT_PD_ID || msg.caller_task!=sex_pdx::shell_ready::INPUT_PD_ID {continue;}
+                    if lock::input(msg.arg2, msg.arg0 as u8, msg.arg1) { continue; }
                     let scancode = msg.arg0 as u8;
                     let value = msg.arg1; // 1=pressed, 0=released
                     let event_class = msg.arg2; // EV_KEY, EV_REL, EV_ABS, EV_BTN
@@ -27847,7 +27992,7 @@ pub extern "C" fn _start() -> ! {
                             // ── Click/focus proof marker: pointer event received ──
                             sex_pdx::serial_record!("[silk-shell.pointer.recv] class=EV_BTN btn={} pressed={}",
                                 button, pressed);
-                            if !ATLAS_MODE_ENABLED && (ABS_SEEN_VALID || POINTER_USB_STATE_INIT) { program_pointer_button(button, pressed); }
+                            if screenshot_button(button, pressed) {} else if !ATLAS_MODE_ENABLED && (ABS_SEEN_VALID || POINTER_USB_STATE_INIT) { program_pointer_button(button, pressed); }
                             serial_println!("[silk-shell] Pointer BTN {} {} buttons={:#x}",
                                 button, if pressed { "dn" } else { "up" }, POINTER_BUTTONS);
 
