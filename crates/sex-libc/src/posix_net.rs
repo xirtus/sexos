@@ -24,6 +24,7 @@ extern "C" {
     fn sys_send(s: i32, buf: *const c_void, len: usize, flags: i32) -> isize;
     fn sys_sendto(s: i32, buf: *const c_void, len: usize, flags: i32, addr: *const u8, alen: u32) -> isize;
     fn sys_shutdown(s: i32, how: i32) -> i32;
+    fn sys_tls_start(s: i32, host: *const u8, len: usize) -> i32;
     fn sys_getpeername(s: i32, addr: *mut u8, len: *mut u32) -> i32;
     fn sys_getsockname(s: i32, addr: *mut u8, len: *mut u32) -> i32;
     fn sys_getsockopt(s: i32, level: i32, name: i32, value: *mut c_void, len: *mut u32) -> i32;
@@ -155,6 +156,58 @@ pub unsafe extern "C" fn sendto(s: c_int, buf: *const c_void, len: usize, _flags
         Ok((h, n)) => ret(unsafe { sys_sendto(s, buf, len, 0, h.as_ptr(), n) } as i64) as isize,
         Err(e) => { set_errno(e); -1 }
     }
+}
+/// musl's `struct iovec` and `struct msghdr` (x86-64).
+#[repr(C)]
+pub struct IoVec { base: *mut c_void, len: usize }
+#[repr(C)]
+pub struct MsgHdr {
+    name: *mut c_void, namelen: u32, iov: *mut IoVec, iovlen: c_int,
+    control: *mut c_void, controllen: u32, flags: c_int,
+}
+fn iov_total(m: &MsgHdr) -> usize {
+    (0..m.iovlen.max(0) as usize).map(|i| unsafe { (*m.iov.add(i)).len }).sum()
+}
+/// `sendmsg` without ancillary data: the pieces gathered and sent as one datagram or run.
+#[no_mangle]
+pub unsafe extern "C" fn sendmsg(s: c_int, msg: *const MsgHdr, flags: c_int) -> isize {
+    let m = unsafe { &*msg };
+    if m.controllen != 0 { set_errno(95 /* EOPNOTSUPP */); return -1; }
+    let mut buf = alloc::vec::Vec::with_capacity(iov_total(m));
+    for i in 0..m.iovlen.max(0) as usize {
+        let v = unsafe { &*m.iov.add(i) };
+        buf.extend_from_slice(unsafe { core::slice::from_raw_parts(v.base as *const u8, v.len) });
+    }
+    unsafe { sendto(s, buf.as_ptr() as *const c_void, buf.len(), flags, m.name, if m.name.is_null() { 0 } else { m.namelen }) }
+}
+/// `recvmsg` without ancillary data: one receive scattered over the pieces.
+#[no_mangle]
+pub unsafe extern "C" fn recvmsg(s: c_int, msg: *mut MsgHdr, flags: c_int) -> isize {
+    let m = unsafe { &mut *msg };
+    let mut buf = alloc::vec![0u8; iov_total(m)];
+    let mut alen = m.namelen;
+    let n = unsafe { recvfrom(s, buf.as_mut_ptr() as *mut c_void, buf.len(), flags, m.name, if m.name.is_null() { null_mut() } else { &mut alen }) };
+    if n < 0 { return n; }
+    if !m.name.is_null() { m.namelen = alen; }
+    m.controllen = 0;
+    m.flags = 0;
+    let mut at = 0usize;
+    for i in 0..m.iovlen.max(0) as usize {
+        let v = unsafe { &*m.iov.add(i) };
+        let k = v.len.min(n as usize - at);
+        unsafe { core::ptr::copy_nonoverlapping(buf.as_ptr().add(at), v.base as *mut u8, k) };
+        at += k;
+    }
+    n
+}
+/// SexOS's own: TLS on a connected TCP socket to `host` (its name for SNI and the
+/// certificate check), done by the network service. Afterwards `send`/`recv` carry
+/// plain bytes. -1 with errno set on failure; errno 129 (EKEYREJECTED) means the
+/// certificate was not trusted.
+#[no_mangle]
+pub unsafe extern "C" fn sexos_tls_start(s: c_int, host: *const c_char) -> c_int {
+    let host = c_bytes(host);
+    ret(unsafe { sys_tls_start(s, host.as_ptr(), host.len()) } as i64) as c_int
 }
 #[no_mangle]
 pub extern "C" fn shutdown(s: c_int, how: c_int) -> c_int { ret(unsafe { sys_shutdown(s, how) } as i64) as c_int }

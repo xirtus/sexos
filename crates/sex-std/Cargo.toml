@@ -9,3 +9,5 @@ description = "Rust std for SexOS programs: the system calls std makes, answered
 sex-pdx = { path = "../sex-pdx" }
 # The SDK without its #[global_allocator]: std's allocator comes through sys_malloc here.
 sex-app = { path = "../sex-app", default-features = false }
+# The console becomes a VT100/xterm terminal once a program prints an escape sequence.
+sex-vt = { path = "../sex-vt", features = ["render"] }

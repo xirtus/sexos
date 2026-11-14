@@ -50,8 +50,9 @@ pub fn locked() -> bool { session().lock.locked }
 /// caller, so other Shell requests to Files wait until it is answered.
 pub fn busy() -> bool { session().asked != Asked::Nothing }
 
-/// Files lost the request or restarted: give up waiting after this long.
-const ANSWER_TICKS: u64 = 10_000;
+/// Files lost the request or restarted: give up waiting after this long (a check may
+/// also open the encrypted home, which takes a key derivation of its own).
+const ANSWER_TICKS: u64 = 60_000;
 
 fn show(se: &mut Session) {
     let want = (se.mode, se.lock.word());

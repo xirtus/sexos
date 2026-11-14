@@ -1,0 +1,19 @@
+[package]
+name = "needle"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+
+[[bin]]
+name = "needle"
+path = "src/main.rs"
+
+[dependencies]
+sex-print = { path = "../../crates/sex-print" }
+sex-font = { path = "../../crates/sex-font" }
+sex-image = { path = "../../crates/sex-image" }
+
+# The SexOS standard library; on the build host Needle also runs as a plain program
+# (scripts/needle_host_test.py drives it against the gate's fakes).
+[target.'cfg(target_os = "hermit")'.dependencies]
+sex-std = { path = "../../crates/sex-std" }
