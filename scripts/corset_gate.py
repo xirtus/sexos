@@ -7,7 +7,7 @@ Everything is typed as a person would. The gate checks:
 * `run corset --probe-system`: Corset's raw write to the system disk is refused by Files
   (`[files.disks.refused] disk=system ... why=system`) and Corset is told so (DENIED).
 * A blank 256 MiB QEMU usb-storage disk is plugged in after boot. In Corset, Enter on
-  usb0 asks Files; the Files app (started with `files`, the person's picker) shows the
+  usb0 asks Files; the Files app (started with `loom`, the person's picker) shows the
   question naming the disk's product and size, and Y allows it for that run.
 * G makes a GPT; A adds a 100 MiB basic data partition, F formats it FAT32 (CORSETFAT);
   A (Enter for size and type) adds one over the rest of the disk, F formats it exFAT (CORSETEX). Enter shows the
@@ -30,7 +30,7 @@ MIB=1024*1024
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
  programs=[]
- for name in ('corset','files'):
+ for name in ('corset','loom'):
   elf=(ROOT/'iso_root/programs'/name).read_bytes();assert elf[:4]==b'\x7fELF',name;programs.append((name,elf))
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
  install(disk,programs)
@@ -72,7 +72,7 @@ def main():
   g['wait'](r'\[files\.media\.usb\.unknown\] disk=0 ',s,60)
 
   # The person's picker: Files holding the whole filesystem shows the questions.
-  files=launch('files',r'\[files\.app\.ready\] target=\d+ task=\d+ root=/ portal=1')
+  files=launch('loom',r'\[files\.app\.ready\] target=\d+ task=\d+ root=/ portal=1')
   # The system disk, never opened raw, whatever is asked.
   s=len(t());corset=launch('run corset --probe-system',r'\[corset\.ready\] target=\d+ task=\d+ disks=2\n')
   probe=re.search(r'\[corset\.probe\] disk=system status=(\d+) message=([^\n]*)\n',t()[s:]);assert probe and probe[1]=='11',probe and probe[0]
