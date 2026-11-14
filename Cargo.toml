@@ -94,6 +94,7 @@ members = [
     "crates/sex-wasm",
     "crates/sex-vt",
     "crates/sex-textedit",
+    "crates/serenade-core",
     "apps/spindle",
     "crates/sex-std",
     "apps/stdhello",

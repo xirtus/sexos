@@ -91,6 +91,8 @@ jobs:
       run: cargo test --locked -p sex-ime
     - name: RFB (VNC) client and server codec, byte-exact goldens
       run: cargo test --locked -p sex-rfb
+    - name: Serenade audio recorder engine (VOX, dBFS meters, waveform mipmaps, WAV/cue) on the host
+      run: bash scripts/serenade_host_gate.sh
     - name: Multipass accounts, Shibari keeper (link fixtures, tokens never leave)
       run: cargo test --locked -p shibari -p sex-multipass
     - name: Valentine mail (IMAP IDLE + SMTP send-then-receive fixture, MIME, threads)
