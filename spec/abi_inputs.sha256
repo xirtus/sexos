@@ -22,6 +22,8 @@ e45f86d95f464bcbefe222acdb7ea565dda7f35301c54dd22ca1a71ba3e86f04  crates/sex-pdx
 
 98357d79e617b3cf3a9895e8e4eaa38ca8d2510ce02a432229aff6698b87c621  crates/sex-pdx/src/crash_log.rs
 
+1c4224481339a54ed14854d9fa014bf2141605c639d3b7239eadc3bf5bb33681  crates/sex-pdx/src/denim.rs
+
 ab8817143b15e29969990957e5c465b5a703ee4812ae21c399de2ce55fa83aa2  crates/sex-pdx/src/desktop_recording.rs
 
 801e34b49d8bd9daf55068e6f75398599193e2d9b702a0f2a8680dbff16d2f85  crates/sex-pdx/src/desktop_style.rs
@@ -52,7 +54,7 @@ e1a8e5b73c48cfd4cc079510a2c51eacd7f371f00dffabb5968962ca9f462e30  crates/sex-pdx
 
 a0f555cd3af59954d4dce9ae913d16ac90089c8fa1dd61ecfda1a25a85de899d  crates/sex-pdx/src/history_recovery.rs
 
-86406fe0f6d9fcaa0db98ab5507c35312f87ecde001067845b0feaeec5b26f47  crates/sex-pdx/src/lib.rs
+609aac66debe1757a6604e0c6d5e5a84cd94af348d25ef00a54125fc028459b7  crates/sex-pdx/src/lib.rs
 
 b02d602feb5f239687f1a450e8c0ec2b932c366df85ae4f2a5dc67df3f5edcef  crates/sex-pdx/src/memory_region.rs
 
@@ -112,9 +114,9 @@ c7325b30965ac39376c5f7d5be7bb63a3b32fb08f5214bdf7e0d437ff42a52d6  crates/sex-pdx
 
 a947e57a405316312fe334d17fdfdb2d3e6b59e708b4d61f416a4db6275ee4cb  kernel/src/app_catalog_state.rs
 
-cbee8915b1b99dd33248184dc85732256173ad4bc93b3a5f2a8507da396f113c  kernel/src/app_resource_state.rs
+070686914a0eff779f9b22c7c91a4df1a275484dd79883d9cd7ae5c07e2028fa  kernel/src/app_resource_state.rs
 
-a67de7a802a360093d1461bc84a878827d06dc02c0093aaf762afbc243948409  kernel/src/app_resources.rs
+d3360c6877340c2232cb367160cc6d3e7ecc6408607cf80f5f37f2dcb2299f2d  kernel/src/app_resources.rs
 
 f6246b2ba9d3c3aa8354736e5a1f51f9b55972b078efa2008a9e3d0e259125b3  kernel/src/boot_display_state.rs
 
@@ -160,7 +162,7 @@ a6cec3ea15190f7bbebebca78444a4cf2c190597bc7c1596165b3693dd798b96  kernel/src/pci
 
 c8899b8f71ab65b431a7c2f05380ec7562d398857ebbbde97787b11fedf63b5e  kernel/src/service_restart.rs
 
-aa6169383696167b349be8f37819f61fb896239b3ff7aa489f4ffac1a4e11524  kernel/src/syscalls/mod.rs
+57b8a9e06666144ec68b4160ec5f13fea0212734023e6aabc5d06d9bc8f45d0c  kernel/src/syscalls/mod.rs
 
 d96aa774f2c9ddf72f5fca8c9aa31e6127d182038f9bff826faa5e55ef8083eb  kernel/src/trust_source.rs
 

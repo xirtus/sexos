@@ -169,6 +169,8 @@ pub fn call(regs: &mut crate::interrupts::SyscallRegs, op: u64, a: u64, b: u64, 
     match op {
         t::SPAWN => match crate::app_resources::spawn_worker(pd, a, b, c) {
             Ok(id) => reply(regs, t::OK, id),
+            // Denim's pages come back first; the program's spawn tries again.
+            Err(crate::app_resource_state::RECALL) => { crate::denim::recall(pd.id); reply(regs, t::RETRY, 0) }
             Err(e) => reply(regs, e, 0),
         },
         t::CORES => {

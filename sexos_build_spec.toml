@@ -29,6 +29,7 @@ crates = [
   "sex-kernel",
   "servers/sexbell/Cargo.toml",
   "servers/sexacpi/Cargo.toml",
+  "servers/denim/Cargo.toml",
   "servers/sexdisplay/Cargo.toml",
   "apps/sexdrive/Cargo.toml",
   "servers/silk-shell/Cargo.toml",
@@ -190,6 +191,14 @@ action = "cargo_manifest"
 manifest = "servers/sexacpi/Cargo.toml"
 source_artifact = "target/x86_64-sex/release/sexacpi"
 dest_artifact = "iso_root/servers/sexacpi"
+rustflags = ""
+
+[[stage]]
+id = "build_denim"
+action = "cargo_manifest"
+manifest = "servers/denim/Cargo.toml"
+source_artifact = "target/x86_64-sex/release/denim"
+dest_artifact = "iso_root/servers/denim"
 rustflags = ""
 
 [[stage]]

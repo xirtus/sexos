@@ -207,6 +207,18 @@ pub fn init() {
         }
     }
 
+    // Denim, compressed memory: a program's cold heap pages packed in Denim's own
+    // memory. Optional: without it no page ever goes out.
+    let mut denim_id=0;
+    if let Some(module)=modules.modules().iter().find(|m|m.path().ends_with("/denim")) {
+        let id=sex_pdx::denim::DENIM_PD;
+        match crate::pd::create::create_boot_domain(module.path(),Some(id),id as u8,sex_pdx::denim::DENIM_KEY) {
+            Ok(created)=>{assert_eq!(created,id,"BOOT_DENIM_IDENTITY");denim_id=created;
+                serial_println!("[kernel.spawn.denim] id={} key={} organ=memory",created,sex_pdx::denim::DENIM_KEY);}
+            Err(e)=>{serial_println!("[kernel.spawn.denim] failed={}",e);}
+        }
+    }
+
     // Grant Phase 25 well-known capabilities
     serial_println!("[bootgraph.phase25.begin]");
     // Static BOOT_DAG return edges for authenticated display-ready messages.
@@ -874,6 +886,8 @@ pub fn init() {
     crate::boot_memory::init_sound_rings(sexbell_id);
     crate::boot_memory::init_program_image(sexfiles_id);
     crate::boot_memory::init_fs_regions(sexfiles_id);
+    // Denim's store grows with what it holds.
+    crate::service_memory::reserve(denim_id);
     crate::boot_memory::init_boot_image(sexfiles_id);
     crate::boot_memory::init_boot_facts(sexfiles_id);
     crate::boot_memory::init_web_regions(sexnet_id);
@@ -1124,6 +1138,7 @@ pub fn init() {
                     14 => "sext",
                     15 => "kaleidoscope",
                     50 => "sexacpi",
+                    51 => "denim",
                     _ => "unknown",
                 };
                 let entry = unsafe { (*task_ptr).context.rip };

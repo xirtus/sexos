@@ -6,6 +6,7 @@ members = [
     "crates/denim",
     "servers/sexbell",
     "servers/sexacpi",
+    "servers/denim",
     "servers/sexdisplay",
     "servers/sexshop",
     "servers/silk-shell",

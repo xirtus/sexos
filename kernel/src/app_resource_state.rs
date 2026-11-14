@@ -11,6 +11,9 @@ pub const INVALID:u64=1;
 pub const RETRY:u64=2;
 pub const DENIED:u64=3;
 pub const LIVE:u64=5;
+/// The run has pages Denim holds: they come back first (the caller tells Denim, and
+/// the program sees RETRY).
+pub const RECALL:u64=7;
 pub const PHYSICAL_MASK:u64=0x000f_ffff_ffff_f000;
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub struct LifecycleGrant {pub target_pd:u32,pub task_id:u32,pub holder_pd:u32,pub rights:u8,pub ack_bit:u8}
@@ -34,8 +37,11 @@ pub fn retire_private_pages(pages:&[PrivatePage],mut read:impl FnMut(u64)->u64,
     mut clear:impl FnMut(u64),mut flush:impl FnMut(u64))->Result<usize,u64>{
     if pages.is_empty() || pages.len()>MAX_PAGES{return Err(INVALID)}
     for page in pages{
-        if page.va==0 || page.va%4096!=0 || page.leaf==0 || page.expected&5!=5
-            || read(page.leaf)&!0x60 != page.expected&!0x60 {return Err(DENIED)}
+        // A page Denim holds keeps its exact marker; any other must still be the page lent.
+        let leaf=read(page.leaf);
+        let exact=if sex_pdx::denim::is_out(page.expected){leaf==page.expected}
+            else{page.expected&5==5 && leaf&!0x60==page.expected&!0x60};
+        if page.va==0 || page.va%4096!=0 || page.leaf==0 || !exact {return Err(DENIED)}
     }
     if !distinct(pages){return Err(DENIED)}
     for page in pages {clear(page.leaf);flush(page.va);}
@@ -48,7 +54,7 @@ pub fn distinct(pages:&[PrivatePage])->bool{
     let unique=|mut keys:alloc::vec::Vec<u64>|{keys.sort_unstable();keys.windows(2).all(|w|w[0]!=w[1])};
     unique(pages.iter().map(|p|p.va).collect())
         && unique(pages.iter().map(|p|p.leaf).collect())
-        && unique(pages.iter().map(|p|p.expected&PHYSICAL_MASK).collect())
+        && unique(pages.iter().filter(|p|!sex_pdx::denim::is_out(p.expected)).map(|p|p.expected&PHYSICAL_MASK).collect())
 }
 /// A successor restores only BOOT-reserved, non-present exact leaves. All
 /// checks precede publication; backing never comes from a retired workspace.
@@ -104,4 +110,25 @@ impl ActivationGrant {
             || self.successor!=successor || self.successor_task!=successor_task{return Err(DENIED)}
         Ok(())
     }
+}
+/// Denim takes a heap page: its leaf, if it still holds the page lent (accessed and
+/// dirty aside) and that is writable data on the row's key, becomes the row's marker.
+/// `swap(old,new)` is the leaf's compare-exchange. Returns the frame, which the caller
+/// may read only after every core dropped the translation.
+pub fn take_out(page:&mut PrivatePage,target:u32,pkey:u8,leaf:u64,swap:impl FnOnce(u64,u64)->bool)->Result<u64,u64>{
+    use sex_pdx::denim as d;
+    if d::is_out(page.expected) || !d::heap_data(leaf,pkey) || leaf&!0x60!=page.expected&!0x60{return Err(DENIED)}
+    let marker=d::out_marker(target);
+    if !swap(leaf,marker){return Err(RETRY)}
+    let frame=page.expected&PHYSICAL_MASK;page.expected=marker;
+    Ok(frame)
+}
+/// Denim brings a page back into `frame` (already holding its bytes): only where the
+/// row's marker still is. Returns the leaf to write.
+pub fn bring_in(page:&mut PrivatePage,target:u32,pkey:u8,leaf:u64,frame:u64)->Result<u64,u64>{
+    use sex_pdx::denim as d;
+    let marker=d::out_marker(target);
+    if page.expected!=marker || leaf!=marker || frame&!PHYSICAL_MASK!=0 || frame==0{return Err(DENIED)}
+    page.expected=frame|7|((pkey as u64)<<59)|(1<<63);
+    Ok(page.expected)
 }

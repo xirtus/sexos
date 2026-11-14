@@ -49,10 +49,29 @@ The kernel keeps mechanism, Denim keeps policy (DESIGN_GUARDRAILS):
 | # | Slice | Proof |
 |---|---|---|
 | D1 | `crates/denim` codec, host tests in CI | done in this PR |
-| D2 | Kernel: accessed-bit scan op, page-out op with non-present marker, page-in forward | host model + guest gate: a page out/in round trip keeps a program's data |
+| D2 | Kernel: accessed-bit scan op, page-out op with non-present marker, page-in forward; a first Denim server | done: host model (`tests/app_resource_state.rs`) + `scripts/denim_gate.py` (8 MiB of mixed pages out and back, eager build) |
 | D3 | `servers/denim`: store, clock scan, pressure-driven page-out | gate: `heaptest` 2x RAM with a slow access pattern completes |
 | D4 | Mesh shows compressed memory per program and the machine's ratio | monitor gate |
 | D5 | Soak with Denim on (J2 `--inject` includes Denim) | soak gate |
 
 D2 is the risky part: it touches the page-fault path and TLB shootdown for program
 rows, so it gets its own PR with a host model of the PTE states before any guest gate.
+
+## D2 as built (SYS 88, `sex_pdx::denim`)
+
+- New syscall 88, callable only by Denim (BOOT pd 51, key 14, the Memory organ with the
+  pager). Ops: `SCAN` (accessed bits of 64 heap pages, cleared as read), `OUT` (leaf
+  becomes the marker `pd << 12 | 0x600`, global shootdown, bytes copied to Denim's window
+  page, frame freed), `IN` (fresh frame, bytes from the window, leaf restored; with a
+  fault token the parked task goes on). Kernel messages to Denim: `OP_FAULT`, `OP_RECALL`.
+- Only writable, non-executable `grow` pages of a live run go out. `OUT` is refused while
+  the run has a live worker; a worker spawn or a SEAL/OPEN on a run with pages out returns
+  RETRY and recalls them, so only the main task can fault on a marker.
+- Retire and force-end accept marker leaves; their frames went back at page-out.
+- The kernel copies through the direct map: Denim never maps a program's page.
+- Default builds page out only at `PRESSURE_LOW` or worse; `SEXOS_DENIM_EAGER=1` takes
+  every page cold for two 0.5 s scans (the gate).
+
+Left for D3: Denim restart (today its parked faults would wait forever: end those runs),
+faults from worker tasks, slab compaction and returning store pages, a recall when
+pressure falls, and the 2x RAM `heaptest` gate.
