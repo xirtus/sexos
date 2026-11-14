@@ -2,7 +2,7 @@
 import pathlib,re,sys,unittest,tomllib
 ROOT=pathlib.Path(__file__).resolve().parents[2];sys.path.insert(0,str(ROOT/'scripts'))
 from input_payload_profile import diagnostic_spec,assert_payload_proof,PROOF_RECEIPTS,wait_releases,STAGES,FLAG
-from input_payload_audit import audit_interval
+from input_payload_audit import audit_interval,require_normal_image
 
 class InputPrivacy(unittest.TestCase):
  def test_profile_changes_only_declared_userspace_flags_and_preserves_crypto_flags(self):
@@ -18,6 +18,17 @@ class InputPrivacy(unittest.TestCase):
   assert_payload_proof(PROOF_RECEIPTS)
   for trace in ['',PROOF_RECEIPTS.replace('proof','redacted'),PROOF_RECEIPTS*2,PROOF_RECEIPTS+'[input.payload.mode] component=shell mode=redacted\n']:
    with self.assertRaises(ValueError):assert_payload_proof(trace)
+ def test_private_input_refuses_diagnostic_missing_and_ambiguous_mode(self):
+  normal=''.join('[input.payload.mode] component='+c+' mode=redacted\n' for c in ('sexinput','shell','sexusb'))
+  def check(trace):
+   def wait(pattern,start,timeout):
+    match=re.search(pattern,trace[start:])
+    if match is None:raise TimeoutError('no receipt')
+    return match
+   require_normal_image(dict(wait=wait,text=lambda:trace))
+  check(normal)
+  for trace in (normal.replace('redacted','proof'),normal*2,normal+'[keyboard_cursor.gate] enabled=1',normal.replace('component=sexusb','component=missing')):
+   with self.assertRaises((ValueError,TimeoutError)):check(trace)
  def test_ctrl_fence_uses_both_admitted_releases_without_key_contents(self):
   trace='[app.actual.ack]\n[input.keyboard.keyup.ok] source=ps2 payload=redacted\n[other]\n[input.keyboard.keyup.ok] source=ps2 payload=redacted\n'
   seen=[]
