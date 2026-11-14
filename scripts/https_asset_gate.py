@@ -426,7 +426,7 @@ def verify_pixels(trace,ppm,visible=True,resolution=None,contract=None):
  g=geometry(trace,visible,m);width,height,pixels=ppm_rgb(ppm,min_width=1,min_height=1)
  if resolution and(width,height)!=tuple(resolution):raise ValueError('framebuffer resolution differs')
  tile=g['tile'];data=decode_fixture(BODY);checked=colored=erased=0
- if tile['x']<0 or tile['y']<50 or tile['w']<=0 or tile['h']<=0 or tile['x']+tile['w']>width or tile['y']+tile['h']>height:raise ValueError('actual Browser frame lies outside framebuffer')
+ if tile['x']<0 or tile['y']<m['bar'] or tile['w']<=0 or tile['h']<=0 or tile['x']+tile['w']>width or tile['y']+tile['h']>height:raise ValueError('actual Browser frame lies outside framebuffer')
  coordinates={(tile['x']+x,tile['y']+y)for y in range(g['y']-1,g['y']+48*g['scale']+1)for x in range(g['x']-1,g['x']+48*g['scale']+1)}
  # Inspect every historic image rectangle intersecting the CURRENT owned image
  # area. Pixels outside this live Browser body may belong to another surface.

@@ -93,7 +93,7 @@ def load_pixel_contract(root):
  return dict(text_raster='source-coverage',background=0x303860,reader_encoding='utf-8-scalars',reader_max_rows=number('reader',r'const MAX_ROWS: usize = (\d+)'),reader_tab_cells=1,reader_replacement=0xfffd,reader_max_columns=number('reader',r'pub const MAX_COLUMNS: usize = (\d+)'),reader_controls=controls,reader_https_headers=https_headers,wire_max_body=number('wire',r'pub const MAX_BODY: usize = (\d+)'),wire_max_headers=number('wire',r'pub const MAX_HEADERS: usize = (\d+)'),stream_ring=number('network_abi',r'pub const STREAM_RING_BYTES: usize = (\d+)'),stream_max_wire=number('network_abi',r'pub const MAX_STREAM_BYTES: usize = ([0-9_ +]+);'),stream_total_ticks=number('network_abi',r'pub const STREAM_TOTAL_TICKS: u64 = ([0-9_]+)'),stream_idle_ticks=number('network_abi',r'pub const STREAM_IDLE_TICKS: u64 = ([0-9_]+)'),dynamic_reader_path=dynamic_path,reader_max_path=number('wire',r'pub const MAX_PATH: usize = (\d+)')if dynamic_path else 48,reader_max_ticket=number('network_abi',r'pub const MAX_TICKET: u32 = ([0-9_]+)'),reader_header=reader_header,reader_footers=reader_footers,https_reader_footers=https_reader_footers,reader_path=literal('reader',r'const PATH: &\[u8\] = (b"[^"\n]*")'),reader_capacity=number('reader',r'const CAPACITY: usize = (\d+)'),reader_max_body=number('reader',r'const MAX_BODY: usize = (\d+)'),glyph_height=number('reader',r'const GLYPH_HEIGHT: u32 = (\d+)'),font=font_from_source(sources['renderer']),prefix=literal('preview',r'preview\.append\((b"[^"\n]*")\)'),echo=echo,dns=dns,http=http,
   dns_prefix=literal('compose',r'append\([^;\n]*,(b"\\n\\nControlled DNS: ")\)'),dns_footer=literal('compose',r'append\([^;\n]*,(b"\\nD query  X cancel")\)'),
   http_prefix=literal('compose',r'append\([^;\n]*,(b"\\n\\nPlain HTTP / no TLS: ")\)'),http_footer=literal('compose',r'append\([^;\n]*,(b"\\nH fetch[^"\n]*")\)'),
-  inset=metrics['inset'],advance=metrics['advance'],line=metrics['line'],scale_threshold=metrics['scale_threshold'],title=metrics['title'],top=metrics['top'],glyph_width=metrics['glyph_width'],renderer_max_columns=renderer_max_columns,max_rows=number('surface',r'TEXT_MAX_ROWS: usize = (\d+)'),capacity=number('surface',r'TEXT_BUF_CAP: usize = (\d+)'),
+  inset=metrics['inset'],advance=metrics['advance'],line=metrics['line'],scale_threshold=metrics['scale_threshold'],title=metrics['title'],bar=metrics['bar'],top=metrics['top'],glyph_width=metrics['glyph_width'],renderer_max_columns=renderer_max_columns,max_rows=number('surface',r'TEXT_MAX_ROWS: usize = (\d+)'),capacity=number('surface',r'TEXT_BUF_CAP: usize = (\d+)'),
   request=literal('wire',r'const REQUEST: &\[u8\] = (b"[^"\n]*")'),color=number('app',r'self\.ui\.queue(?:_selected)?\(&text\.bytes\[\.\.text\.len\],(0x[0-9A-Fa-f]+)'),
   source_sha256={**{paths[key]:hashlib.sha256(value.encode()).hexdigest()for key,value in sources.items()},**font_closure})
 
@@ -568,7 +568,7 @@ def verify_reader_pixels(trace,ppm,body,contract,anchor=0,resolution=None,expect
  try:
   expected=reader_geometry(trace,body,contract,anchor,expected_path);tile=expected['tile'];width,height,pixels=ppm_rgb(ppm,min_width=1,min_height=1)
   if resolution and (width,height)!=tuple(resolution):raise ValueError('wrong actual framebuffer resolution')
-  if tile['x']<0 or tile['y']<50 or tile['x']+tile['w']>width or tile['y']+tile['h']>height:raise ValueError('reader tile outside framebuffer')
+  if tile['x']<0 or tile['y']<contract.get('bar',50) or tile['x']+tile['w']>width or tile['y']+tile['h']>height:raise ValueError('reader tile outside framebuffer')
   layouts=list(re.finditer(r'\[browser.reader.layout\] first=(\d+) end=(\d+) body_rows=(\d+) rows=(\d+) cols=(\d+) total_lines=(\d+) source_bytes=(\d+) viewport=(\d+) origin=validated_body tls=0 pixels=unconfirmed',trace))
   wanted=tuple(expected[key]for key in ['first','end','body_rows','rows','cols','total_lines','source_bytes','viewport'])
   if not layouts or tuple(map(int,layouts[-1].groups()))!=wanted:raise ValueError('reader layout receipt differs from independent document/geometry/navigation model')
@@ -646,7 +646,7 @@ def verify_http_pixels(text,ppm,expected,body,contract,resolution=None):
  try:
   geometry=http_status_geometry(text,expected,body,contract);width,height,pixels=ppm_rgb(ppm,min_width=1,min_height=1);tile=geometry['tile'];scale=geometry['scale'];errors=[];checked=0;ink=0;body_checked=0;color=contract['color'].to_bytes(3,'big')
   if resolution and (width,height)!=tuple(resolution):raise ValueError('wrong actual framebuffer resolution')
-  if tile['x']<0 or tile['y']<50 or tile['x']+tile['w']>width or tile['y']+tile['h']>height:raise ValueError('actual Browser tile outside framebuffer')
+  if tile['x']<0 or tile['y']<contract.get('bar',50) or tile['x']+tile['w']>width or tile['y']+tile['h']>height:raise ValueError('actual Browser tile outside framebuffer')
   for row in geometry['rows']:
    mismatch=0
    for column in range(geometry['columns']):

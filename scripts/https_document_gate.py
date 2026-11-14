@@ -191,7 +191,7 @@ def frame_pixels(ppm,expected,contract,resolution=None):
  """Pure complete text-band oracle; separate caller binds authenticated receipt."""
  width,height,pixels=ppm_rgb(ppm,min_width=1,min_height=1);tile=expected['tile'];factor=expected['scale'];color=contract['color'].to_bytes(3,'big');checked=ink=mismatches=0
  if resolution and(width,height)!=tuple(resolution):raise ValueError('wrong actual framebuffer resolution')
- if tile['x']<0 or tile['y']<50 or tile['x']+tile['w']>width or tile['y']+tile['h']>height:raise ValueError('reader tile outside framebuffer')
+ if tile['x']<0 or tile['y']<contract.get('bar',50) or tile['x']+tile['w']>width or tile['y']+tile['h']>height:raise ValueError('reader tile outside framebuffer')
  columns=min(contract.get('renderer_max_columns',80),max(0,(tile['w']-2*contract['inset'])//(contract['advance']*factor)));band_rows=min(contract['max_rows'],max(0,(tile['h']-contract['top']+contract['line']*factor-1)//(contract['line']*factor)))
  for row in range(band_rows):
   line=expected['lines'][row]if row<expected['rows']else b''
@@ -302,7 +302,7 @@ def verify_status_pixels(trace,ppm,expected,mode,contract,resolution=None):
  try:
   g=status_geometry(trace,expected,mode,contract);width,height,pixels=ppm_rgb(ppm,min_width=1,min_height=1);tile=g['tile'];scale=g['scale'];color=contract['color'].to_bytes(3,'big');checked=ink=mismatch=0
   if resolution and(width,height)!=tuple(resolution):raise ValueError('wrong framebuffer resolution')
-  if tile['x']<0 or tile['y']<50 or tile['x']+tile['w']>width or tile['y']+tile['h']>height:raise ValueError('peer tile outside framebuffer')
+  if tile['x']<0 or tile['y']<contract.get('bar',50) or tile['x']+tile['w']>width or tile['y']+tile['h']>height:raise ValueError('peer tile outside framebuffer')
   for row in g['rows']:
    for col in range(g['columns']):
     char=row['text'][col]if col<len(row['text'])else' '
