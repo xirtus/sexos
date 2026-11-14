@@ -26,6 +26,7 @@ use core::ffi::{c_char, c_int, c_void};
 use sex_app::sound::{Sound, RATE};
 
 mod source;
+pub mod subtitles;
 pub use source::{Source, Growing, AHEAD, NEAR};
 pub mod recording;
 pub use sex_episodes::{episodes, segments};
@@ -124,6 +125,9 @@ mod ffi {
         pub fn sx_next(s: *mut c_void, out: *mut u32, w: c_int, h: c_int, pcm: *mut i16, cap: c_int,
                        frames: *mut c_int, at_ms: *mut i64) -> c_int;
         pub fn sx_seek(s: *mut c_void, ms: i64) -> c_int;
+        pub fn sx_tag(s: *mut c_void, key: *const c_char, out: *mut c_char, cap: c_int) -> c_int;
+        pub fn sx_audio_tracks(s: *mut c_void, current: *mut c_int) -> c_int;
+        pub fn sx_set_audio_track(s: *mut c_void, n: c_int) -> c_int;
         pub fn sx_close(s: *mut c_void);
         fn sx_error(err: c_int, buf: *mut c_char, len: c_int);
     }
@@ -326,6 +330,44 @@ impl Decoder {
     }
     #[cfg(not(ffmpeg))]
     pub fn seek(&mut self, _: u64) -> Result<(), Error> { Err(Error::UNSUPPORTED) }
+
+    /// The file's tag `key` ("title", "artist", "album", "track"...), if it has one.
+    pub fn tag(&self, key: &str) -> Option<alloc::string::String> {
+        #[cfg(ffmpeg)]
+        if !self.s.is_null() {
+            let mut k = [0u8; 32];
+            let n = key.len().min(31);
+            k[..n].copy_from_slice(&key.as_bytes()[..n]);
+            let mut out = [0u8; 128];
+            let got = unsafe { ffi::sx_tag(self.s, k.as_ptr().cast(), out.as_mut_ptr().cast(), out.len() as c_int) };
+            if got < 0 { return None; }
+            return Some(alloc::string::String::from_utf8_lossy(&out[..got as usize]).into_owned());
+        }
+        let _ = key;
+        None
+    }
+
+    /// How many sound tracks the stream has, and which plays (None for none).
+    pub fn audio_tracks(&self) -> (usize, Option<usize>) {
+        #[cfg(ffmpeg)]
+        if !self.s.is_null() {
+            let mut current: c_int = -1;
+            let n = unsafe { ffi::sx_audio_tracks(self.s, &mut current) };
+            return (n.max(0) as usize, (current >= 0).then_some(current as usize));
+        }
+        (0, None)
+    }
+
+    /// Decode sound track `n` instead; seek next so it starts in step.
+    pub fn set_audio_track(&mut self, n: usize) -> Result<(), Error> {
+        #[cfg(ffmpeg)]
+        if !self.s.is_null() {
+            let r = unsafe { ffi::sx_set_audio_track(self.s, n as c_int) };
+            return if r < 0 { Err(Error(r)) } else { Ok(()) };
+        }
+        let _ = n;
+        Err(Error::UNSUPPORTED)
+    }
 }
 
 impl Drop for Decoder {
@@ -410,6 +452,9 @@ struct Clock {
     last_ms: i64,
     last_tick: u64,
     paused: bool,
+    /// Playback speed in percent: time on ticks runs this much faster. Sound sets its
+    /// own pace (the ring's rate is raised by as much), so its clock needs no change.
+    speed: u32,
 }
 
 /// Why sound stopped, when it did.
@@ -422,7 +467,7 @@ pub enum Silence {
 impl Clock {
     fn new() -> Clock {
         let t = sex_pdx::get_ticks();
-        Clock { moved: t, last_played: 0, started: false, base_ms: 0, played_base: 0, last_ms: 0, last_tick: t, paused: false }
+        Clock { moved: t, last_played: 0, started: false, base_ms: 0, played_base: 0, last_ms: 0, last_tick: t, paused: false, speed: 100 }
     }
 
     /// Media time now, in ms. It never goes backwards, except by `set`.
@@ -433,7 +478,7 @@ impl Clock {
             self.moved = ticks;
             return (self.last_ms, None);
         }
-        let mut at = self.last_ms + (ticks - self.last_tick) as i64;
+        let mut at = self.last_ms + ((ticks - self.last_tick) * self.speed as u64 / 100) as i64;
         let mut silence = None;
         if let (Some(s), true) = (sound.as_ref(), self.started) {
             let played = s.played_total();
@@ -446,7 +491,7 @@ impl Clock {
                 silence = Some(Silence::Stalled { played, pending });
             } else if pending > 0 {
                 let heard = self.base_ms + (played.saturating_sub(self.played_base) * 1000 / RATE as u64) as i64;
-                at = heard + ((ticks - self.moved) as i64).min(43);
+                at = heard + (((ticks - self.moved) * self.speed as u64 / 100) as i64).min(43 * self.speed as i64 / 100);
             }
             // With nothing queued (before the first sound, or a gap), ticks carry on.
         }
@@ -643,6 +688,7 @@ impl Player {
         self.sound = Sound::open();
         if self.sound.is_none() { self.wants_sound = false; return false; }
         self.apply_volume();
+        if self.clock.speed != 100 { let r = RATE * self.clock.speed / 100; if let Some(s) = self.sound.as_mut() { s.set_rate(r); } }
         self.clock.started = false;
         self.prime();
         true
@@ -693,6 +739,28 @@ impl Player {
             if let Some(s) = self.sound.as_mut() { s.pause(false); }
         }
         false
+    }
+
+    /// Playback speed in percent, 25..=400 (sound at 48 kHz stays within Bell's rates).
+    /// Sound is played faster or slower as it is, so its pitch moves with it.
+    pub fn set_speed(&mut self, percent: u32) {
+        let percent = percent.clamp(25, 400);
+        let _ = self.time_ms();
+        self.clock.speed = percent;
+        if let Some(s) = self.sound.as_mut() { s.set_rate(RATE * percent / 100); }
+    }
+    pub fn speed(&self) -> u32 { self.clock.speed }
+
+    /// Sound tracks: how many, and which plays.
+    pub fn audio_tracks(&self) -> (usize, Option<usize>) {
+        match self.audio.as_ref() { Some(a) => a.audio_tracks(), None => self.dec.audio_tracks() }
+    }
+    /// Play sound track `n` from where playback is now.
+    pub fn set_audio_track(&mut self, n: usize) -> Result<(), Error> {
+        let at = self.time_ms().max(0) as u64;
+        match self.audio.as_mut() { Some(a) => a.set_audio_track(n)?, None => self.dec.set_audio_track(n)? }
+        self.seek(at);
+        Ok(())
     }
 
     /// 0..=100.

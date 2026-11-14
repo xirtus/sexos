@@ -2612,6 +2612,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "743fb55ba31b18fb1ecef6bdc9aa2743314978ac084044301a7eee33fb99a20d"
 
 [[package]]
+name = "music"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-media",
+ "sex-pdx",
+]
+
+[[package]]
 name = "naga"
 version = "30.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3055,6 +3064,7 @@ name = "play"
 version = "0.1.0"
 dependencies = [
  "sex-app",
+ "sex-font",
  "sex-media",
  "sex-pdx",
 ]

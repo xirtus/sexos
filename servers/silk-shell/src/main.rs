@@ -10583,6 +10583,7 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
     }
     if overview_key(code,value) {return true;}
     if media_keys::is_player_key(code){if value==1{player_key(code);}return true;}
+    if FOCUSED_SURFACE_ID==SURFACE_ID_BELL_PLACEHOLDER&&sound_panel_key(code,value){return true;}
     let modifier=APP_MODIFIERS.observe(code,value)|keyboard_layout::observe(code,value);
     if screenshot_key(code,value) {return true;}
     match DESKTOP_KEYS.event(code,value) {
@@ -10899,9 +10900,40 @@ unsafe fn media_keys_receive(msg:&sex_pdx::PdxMessage)->bool{
             if sent{app_input_poll();}
             sex_pdx::serial_record!("[shell.media.route] code={:#x} pd={} sent={}",code,pd,sent as u8);
         }
+        Some(ask@(media_keys::Ask::Master|media_keys::Ask::Row(_)))=>{
+            SOUND_PANEL.answer(ask,word);
+            // The whole refresh is in: show it.
+            if !MEDIA_ASKS.pending()&&SOUND_PANEL_NEXT.is_none()&&bell_frame_id().is_some(){bell_render_lane_text();}
+        }
         ask=>sex_pdx::serial_record!("[shell.media.refused] ask={:?}",ask),
     }
     true
+}
+/// The sound panel in the notifications window: Bell's volumes, asked afresh.
+static mut SOUND_PANEL:media_keys::SoundPanel=media_keys::SoundPanel::new();
+/// The next of the panel's asks (0 the master, then each row): Bell keeps one answer
+/// waiting for Shell, so they go one at a time, from the main loop.
+static mut SOUND_PANEL_NEXT:Option<u8>=None;
+unsafe fn sound_panel_refresh(){SOUND_PANEL_NEXT=Some(0);sound_panel_poll();}
+unsafe fn sound_panel_poll(){
+    use sex_pdx::sound_mixer as mixer;
+    let Some(n)=SOUND_PANEL_NEXT else{return};
+    if MEDIA_ASKS.pending(){return}
+    let (ask,action,a)=if n==0{(media_keys::Ask::Master,mixer::STATE,0)}else{(media_keys::Ask::Row(n-1),mixer::STREAM,(n-1) as u64)};
+    if pdx_call(SLOT_BELL,mixer::OP_MIXER,action,a,0).0!=0{return}
+    MEDIA_ASKS.push(ask);
+    SOUND_PANEL_NEXT=if (n as usize)<media_keys::ROWS{Some(n+1)}else{None};
+}
+/// A key while the notifications window has the focus; true when the panel took it.
+unsafe fn sound_panel_key(code:u8,value:u64)->bool{
+    if value==0{return matches!(code,0x48|0x50|0x4B|0x4D|0x32);}
+    let (handled,change)=SOUND_PANEL.key(code);
+    if let Some((row,b))=change{
+        let status=pdx_call(SLOT_BELL,sex_pdx::sound_mixer::OP_MIXER,sex_pdx::sound_mixer::SET_STREAM,row as u64,b).0;
+        if status==0{MEDIA_ASKS.push(media_keys::Ask::Row(row));}
+        sex_pdx::serial_record!("[shell.sound.panel.set] row={} volume={} muted={} status={:#x}",row,b&0xFF,(b>>8)&1,status);
+    }else if handled&&bell_frame_id().is_some(){bell_render_lane_text();}
+    handled
 }
 
 /// main OP_HID_EVENT dispatch.  Used by linen_sync_reply and before-linen
@@ -16070,7 +16102,9 @@ unsafe fn focus_or_open_bell() -> bool {
             }
         }
     }
-    open_bell_in_active_scene()
+    let opened = open_bell_in_active_scene();
+    if opened { sound_panel_refresh(); }
+    opened
 }
 
 /// Toggle Bell visibility. Minimize if visible, open if not.
@@ -16096,7 +16130,9 @@ unsafe fn toggle_bell() -> bool {
             }
         }
     }
-    open_bell_in_active_scene()
+    let opened = open_bell_in_active_scene();
+    if opened { sound_panel_refresh(); }
+    opened
 }
 
 /// Return Bell's frame_id, if its frame exists.
@@ -16577,7 +16613,13 @@ unsafe fn bell_render_lane_text() {
     let mut history = [0u8; 512];
     let history_len = if NOTIFY_TOTAL > 0 { notify_history_text(&mut history) } else { 0 };
     let text: &[u8] = if history_len > 0 { &history[..history_len] } else { &buf };
-    let (_drawn, ok) = shell_draw_text(SURFACE_ID_BELL_PLACEHOLDER, text, 0x00E8FFFF);
+    // The sound panel above the notifications.
+    let mut all = [0u8; 1024];
+    let panel = SOUND_PANEL.text(&mut all);
+    let n = (panel + text.len()).min(all.len());
+    all[panel..n].copy_from_slice(&text[..n - panel]);
+    sex_pdx::serial_record!("[shell.sound.panel] {}", core::str::from_utf8(&all[..panel]).unwrap_or("?").replace('\n', " | "));
+    let (_drawn, ok) = shell_draw_text(SURFACE_ID_BELL_PLACEHOLDER, &all[..n], 0x00E8FFFF);
     if history_len > 0 { sex_pdx::serial_record!("[shell.notify.history] count={} bytes={}", NOTIFY_TOTAL.min(NOTIFY_HISTORY), history_len); }
     static mut BELL_LANE_TEXT_BUDGET: u32 = 8;
     if BELL_LANE_TEXT_BUDGET > 0 {
@@ -25539,6 +25581,7 @@ pub extern "C" fn _start() -> ! {
         // Held keys: the repeat goes ahead of the queue drain below.
         unsafe { key_repeat_poll(); }
         unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); display_scale_poll(); shell_close_poll(); shell_memory_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); notification_poll(); }
+        unsafe { sound_panel_poll(); }
         // Retain failed notification attempts while continuing normal receives.
         // Success means enqueue only; sexinput validates caller and version.
         if shell_ready_publisher.poll() {

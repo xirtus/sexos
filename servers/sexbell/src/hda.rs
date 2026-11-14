@@ -122,7 +122,9 @@ pub const MAX_OUTPUTS: usize = 8;
 /// `device` is the jack's default-configuration device: 0 line out, 1 speaker,
 /// 2 headphones.
 #[derive(Clone, Copy)]
-struct Route { codec: u32, pin: u32, dac: u32, path: [u32; 6], len: usize, rank: u32, device: u32, sense: bool }
+struct Route { codec: u32, pin: u32, dac: u32, path: [u32; 6], len: usize, rank: u32, device: u32, sense: bool,
+    /// A monitor over HDMI or DisplayPort rather than an analog jack.
+    display: Option<crate::hdmi::Display> }
 
 impl Hda {
     fn reg<T>(&self, offset: u32) -> *mut T {
@@ -278,13 +280,14 @@ impl Hda {
             let caps = self.param(nid, P_WIDGET);
             if caps >> 20 & 0xf != WIDGET_PIN { continue; }
             let pin = self.param(nid, P_PIN);
-            // Output capable; not HDMI or DisplayPort (those go to the monitor).
-            if pin & 0x10 == 0 || pin & (1 << 7 | 1 << 24) != 0 { continue; }
+            if pin & 0x10 == 0 { continue; }
             let config = self.verb(nid, GET_CONFIG_DEFAULT, 0).unwrap_or(0);
             if config >> 30 == 1 { continue; } // nothing is wired to this jack
             let device = config >> 20 & 0xf;
-            let rank = match device { 1 => 0, 2 => 1, 0 => 2, 0xf | 5 => continue, _ => 3 };
-            let mut route = Route { codec: self.codec, pin: nid, dac: 0, path: [0; 6], len: 0, rank, device, sense: pin & 1 << 2 != 0 };
+            // HDMI and DisplayPort pins send sound to a monitor; they come last.
+            let display = crate::hdmi::display_pin(pin, config);
+            let rank = if display.is_some() { 4 } else { match device { 1 => 0, 2 => 1, 0 => 2, 0xf | 5 => continue, _ => 3 } };
+            let mut route = Route { codec: self.codec, pin: nid, dac: 0, path: [0; 6], len: 0, rank, device, sense: pin & 1 << 2 != 0, display };
             if self.find_dac(nid, 0, &mut route) && n < out.len() { out[n] = Some(route); n += 1; }
         }
         n
@@ -308,6 +311,44 @@ impl Hda {
         let control = 0x40 | if self.verb(pin, GET_CONFIG_DEFAULT, 0).unwrap_or(0) >> 20 & 0xf == 2 { 0x80 } else { 0 };
         let _ = self.verb(pin, SET_PIN_CONTROL, control);
         if caps & 1 << 16 != 0 { let _ = self.verb(pin, SET_EAPD, 0x02); }
+        if route.display.is_some() { self.open_display(route); }
+    }
+
+    /// The digital half of a monitor route: two channels on the converter, digital
+    /// output on, the monitor's ELD read (for its name and formats) and the audio
+    /// InfoFrame loaded and sent.
+    fn open_display(&mut self, route: &Route) {
+        use crate::hdmi as d;
+        let (pin, cvt) = (route.pin, route.dac);
+        let _ = self.verb(cvt, d::SET_CVT_CHAN_COUNT, 1);
+        let _ = self.verb(cvt, d::SET_DIGI_CONVERT_1, d::DIGITAL_ENABLE);
+        let sense = self.verb(pin, GET_PIN_SENSE, 0).unwrap_or(0);
+        let mut channels = 2u8;
+        if sense & d::SENSE_PRESENT != 0 && sense & d::SENSE_ELD_VALID != 0 {
+            let size = (self.verb(pin, d::GET_HDMI_DIP_SIZE, 0x08).unwrap_or(0) & 0xff) as usize;
+            let mut eld = [0u8; 256];
+            let size = size.min(eld.len());
+            for (i, b) in eld[..size].iter_mut().enumerate() {
+                let v = self.verb(pin, d::GET_HDMI_ELDD, i as u32).unwrap_or(0);
+                if v & 1 << 31 == 0 { break; }
+                *b = v as u8;
+            }
+            match d::parse_eld(&eld[..size]) {
+                Some(e) => {
+                    channels = 2.min(e.pcm_channels);
+                    sex_pdx::serial_record!("[bell.hdmi.monitor] codec={} pin={} name={} channels={} rates={:#x} dp={} plays_48k={}",
+                        route.codec, pin, core::str::from_utf8(e.name()).unwrap_or("?"), e.pcm_channels, e.pcm_rates, e.displayport as u8, e.plays_48k() as u8);
+                }
+                None => sex_pdx::serial_record!("[bell.hdmi.monitor] codec={} pin={} eld=invalid size={}", route.codec, pin, size),
+            }
+        } else {
+            sex_pdx::serial_record!("[bell.hdmi.monitor] codec={} pin={} present={} eld_valid=0", route.codec, pin, (sense & d::SENSE_PRESENT != 0) as u8);
+        }
+        let frame = d::audio_infoframe(channels);
+        let _ = self.verb(pin, d::SET_HDMI_DIP_INDEX, 0);
+        for b in frame { let _ = self.verb(pin, d::SET_HDMI_DIP_DATA, b as u32); }
+        // Send it every frame ("best effort").
+        let _ = self.verb(pin, d::SET_HDMI_DIP_XMIT, 0xc0);
     }
 
     fn stream(&mut self) -> Result<(), &'static str> {
@@ -369,6 +410,13 @@ impl Hda {
             if codecs & 1 << cad == 0 { continue; }
             h.codec = cad;
             let vendor = h.param(0, P_VENDOR);
+            // Intel display codecs show their monitor pins only once asked to.
+            if crate::hdmi::is_intel_display_codec(vendor) {
+                let v = h.verb(crate::hdmi::INTEL_VENDOR_NODE, crate::hdmi::INTEL_GET_VENDOR, 0).unwrap_or(0);
+                if v & crate::hdmi::INTEL_ALL_PINS == 0 {
+                    let _ = h.verb(crate::hdmi::INTEL_VENDOR_NODE, crate::hdmi::INTEL_SET_VENDOR, v | crate::hdmi::INTEL_ALL_PINS);
+                }
+            }
             let root = h.param(0, P_NODES);
             sex_pdx::serial_record!("[bell.hda.probe] address={} vendor={:#010x} nodes={:#x} corbrp={} rirbwp={} rirbsts={:#x}",
                 cad, vendor, root, h.r16(CORBRP), h.r16(RIRBWP), h.r8(RIRBSTS));
@@ -380,11 +428,19 @@ impl Hda {
                 sex_pdx::serial_record!("[bell.hda.codec] address={} vendor={:#010x} function={} outputs={}", cad, vendor, afg, n);
                 for r in routes[..n].iter().flatten() {
                     if h.outputs < MAX_OUTPUTS { h.routes[h.outputs] = Some(*r); h.outputs += 1; }
+                    if let Some(d) = r.display {
+                        sex_pdx::serial_record!("[bell.hda.display] codec={} pin={} converter={} kind={:?}", cad, r.pin, r.dac, d);
+                    }
                 }
-                if n > 0 && first_vendor.is_none() { first_vendor = Some((vendor, cad)); }
+                // Sound goes to the first codec with an analog output; a monitor plays
+                // by default only when there is no analog output at all.
+                if routes[..n].iter().flatten().any(|r| r.display.is_none()) && first_vendor.is_none() { first_vendor = Some((vendor, cad)); }
             }
         }
-        let (vendor, first) = first_vendor.ok_or("no_analog_output")?;
+        let (vendor, first) = match first_vendor {
+            Some(f) => f,
+            None => h.routes[..h.outputs].iter().flatten().next().map(|r| (0, r.codec)).ok_or("no_output")?,
+        };
         h.vendor = vendor;
         let best = h.routes[..h.outputs].iter().flatten().filter(|r| r.codec == first)
             .min_by_key(|r| r.rank).copied().ok_or("no_route")?;
@@ -462,6 +518,10 @@ impl Hda {
     /// codec address and pin.
     pub fn output(&self, k: usize) -> Option<(u32, u32, u32)> {
         self.routes.get(k).copied().flatten().map(|r| (r.device, r.codec, r.pin))
+    }
+    /// Whether output `k` is a monitor, and over which.
+    pub fn display(&self, k: usize) -> Option<crate::hdmi::Display> {
+        self.routes.get(k).copied().flatten().and_then(|r| r.display)
     }
 
     /// The period the controller is reading now.

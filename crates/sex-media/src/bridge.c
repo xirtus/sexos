@@ -39,15 +39,17 @@ struct sx {
     struct SwsContext *scale;
     SwrContext *resample;
     int draining;
+    // The resampler's tail has been given out at the end.
+    int flushed;
     int absolute;               // times are the stream's own (Media Source), not from its start
     int scale_w, scale_h, scale_from_w, scale_from_h, scale_fmt;
 };
 
 void sx_close(struct sx *s);
 
-static int open_decoder(struct sx *s, enum AVMediaType type, struct decoder *d, const char **name) {
+static int open_decoder(struct sx *s, enum AVMediaType type, struct decoder *d, const char **name, int wanted) {
     const AVCodec *codec = NULL;
-    d->stream = av_find_best_stream(s->format, type, -1, -1, &codec, 0);
+    d->stream = av_find_best_stream(s->format, type, wanted, -1, &codec, 0);
     d->done = 1;
     if (d->stream < 0 || !codec) { d->stream = -1; return 0; }
     AVStream *st = s->format->streams[d->stream];
@@ -93,8 +95,8 @@ struct sx *sx_open(void *opaque, sx_read_fn rd, sx_seek_fn sk, struct sx_info *i
     // parser loses its place there. Its header (an fMP4 moov) names the codecs.
     if (!growing && (*err = avformat_find_stream_info(s->format, NULL)) < 0) { sx_close(s); return NULL; }
     const char *vname = NULL, *aname = NULL;
-    if ((*err = open_decoder(s, AVMEDIA_TYPE_VIDEO, &s->video, &vname)) < 0) { sx_close(s); return NULL; }
-    if ((*err = open_decoder(s, AVMEDIA_TYPE_AUDIO, &s->audio, &aname)) < 0) { sx_close(s); return NULL; }
+    if ((*err = open_decoder(s, AVMEDIA_TYPE_VIDEO, &s->video, &vname, -1)) < 0) { sx_close(s); return NULL; }
+    if ((*err = open_decoder(s, AVMEDIA_TYPE_AUDIO, &s->audio, &aname, -1)) < 0) { sx_close(s); return NULL; }
     if (s->video.stream < 0 && s->audio.stream < 0) { *err = AVERROR_DECODER_NOT_FOUND; sx_close(s); return NULL; }
     s->packet = av_packet_alloc();
     s->frame = av_frame_alloc();
@@ -169,6 +171,15 @@ static int sound(struct sx *s, int16_t *pcm, int cap, int *frames) {
 // frame they hold); the caller may open again on what follows.
 int sx_next(struct sx *s, uint32_t *out, int out_w, int out_h, int16_t *pcm, int cap, int *frames, int64_t *at_ms) {
     *frames = 0;
+    // Sound the resampler kept back (a decoded frame larger than `cap`) goes out
+    // before anything new, so none is lost and the sound never falls behind.
+    if (s->resample && swr_get_out_samples(s->resample, 0) > 0) {
+        const uint8_t *none[1] = { NULL };
+        uint8_t *dst[1] = { (uint8_t *)pcm };
+        int n = swr_convert(s->resample, dst, cap, none, 0);
+        if (n < 0) return n;
+        if (n > 0) { *frames = n; *at_ms = -1; return 2; }
+    }
     for (;;) {
         // Sound first: it is small, and its ring must never run dry while pictures wait.
         struct decoder *order[2] = { &s->audio, &s->video };
@@ -184,7 +195,16 @@ int sx_next(struct sx *s, uint32_t *out, int out_w, int out_h, int16_t *pcm, int
             av_frame_unref(s->frame);
             return r;
         }
-        if (s->audio.done && s->video.done) return 0;
+        if (s->audio.done && s->video.done) {
+            // The end: whatever the resampler still holds plays too.
+            if (s->resample && !s->flushed) {
+                uint8_t *dst[1] = { (uint8_t *)pcm };
+                int n = swr_convert(s->resample, dst, cap, NULL, 0);
+                if (n <= 0) s->flushed = 1;
+                if (n > 0) { *frames = n; *at_ms = -1; return 2; }
+            }
+            return 0;
+        }
         // Both decoders were told the end and neither has a frame left.
         if (s->draining) return 0;
         // A growing source (Media Source) answers EIO for bytes that have not arrived
@@ -225,6 +245,7 @@ int sx_seek(struct sx *s, int64_t ms) {
     }
     if (s->resample) swr_init(s->resample);
     s->draining = 0;
+    s->flushed = 0;
     return 0;
 }
 
@@ -239,6 +260,53 @@ void sx_close(struct sx *s) {
     if (s->format) avformat_close_input(&s->format);
     if (s->io) { av_freep(&s->io->buffer); avio_context_free(&s->io); }
     av_free(s);
+}
+
+// The sound tracks (a film's languages, a commentary): how many there are, and in
+// *current which of them plays (counted among sound tracks), or -1 for none.
+int sx_audio_tracks(struct sx *s, int *current) {
+    int n = 0;
+    *current = -1;
+    for (unsigned i = 0; i < s->format->nb_streams; i++) {
+        if (s->format->streams[i]->codecpar->codec_type != AVMEDIA_TYPE_AUDIO) continue;
+        if ((int)i == s->audio.stream) *current = n;
+        n++;
+    }
+    return n;
+}
+
+// Play sound track `n` (counted among sound tracks) instead. The caller seeks next,
+// so the new track starts in step with the pictures. Returns 0 or an AVERROR.
+int sx_set_audio_track(struct sx *s, int n) {
+    int stream = -1;
+    for (unsigned i = 0, k = 0; i < s->format->nb_streams; i++) {
+        if (s->format->streams[i]->codecpar->codec_type != AVMEDIA_TYPE_AUDIO) continue;
+        if ((int)k++ == n) { stream = (int)i; break; }
+    }
+    if (stream < 0) return AVERROR(EINVAL);
+    if (stream == s->audio.stream) return 0;
+    struct decoder d = { 0 };
+    const char *name = NULL;
+    int r = open_decoder(s, AVMEDIA_TYPE_AUDIO, &d, &name, stream);
+    if (r < 0) return r;
+    if (d.stream != stream) { avcodec_free_context(&d.codec); return AVERROR_DECODER_NOT_FOUND; }
+    avcodec_free_context(&s->audio.codec);
+    s->audio = d;
+    swr_free(&s->resample);
+    return 0;
+}
+
+// A tag of the file (title, artist, album, track, date...), from the container or,
+// failing that, the sound stream. Returns its length (cut to cap-1), or -1 for none.
+int sx_tag(struct sx *s, const char *key, char *out, int cap) {
+    AVDictionaryEntry *e = av_dict_get(s->format->metadata, key, NULL, 0);
+    if (!e && s->audio.stream >= 0) e = av_dict_get(s->format->streams[s->audio.stream]->metadata, key, NULL, 0);
+    if (!e || cap <= 0) return -1;
+    int n = (int)strlen(e->value);
+    if (n > cap - 1) n = cap - 1;
+    memcpy(out, e->value, n);
+    out[n] = 0;
+    return n;
 }
 
 // FFmpeg's error text, for the window.

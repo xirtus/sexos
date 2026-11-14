@@ -159,6 +159,8 @@ mod shell {
     unsafe fn keyboard_preedit_notice()->bool{PREEDIT_NOTICES+=1;true}
     static mut PLAYER_KEYS:Vec<u8>=Vec::new();
     unsafe fn player_key(code:u8){PLAYER_KEYS.push(code);}
+    const SURFACE_ID_BELL_PLACEHOLDER:u64=204;
+    unsafe fn sound_panel_key(_:u8,_:u64)->bool{false}
     unsafe fn clipboard_live(subject:Subject)->Option<bool>{LIVE_QUERIES.push(subject);if let Some((source,value))=LIVE_ONCE{if source==subject{LIVE_ONCE=None;return value}}match SOURCE_LIVE{Some((source,value))if source==subject=>value,_=>LIVE}}
     unsafe fn pdx_call(route:u64,op:u64,a:u64,b:u64,c:u64)->(u64,u64){SENT.push((route,op,[a,b,c]));(STATUS,0)}
     // Declared syscall boundary; the retained admission logic is production.
