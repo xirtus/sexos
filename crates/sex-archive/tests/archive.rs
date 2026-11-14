@@ -631,3 +631,29 @@ fn std_file_source() {
     a.extract(a.find("hello.txt").unwrap(), &mut out, &mut no_progress).unwrap();
     assert_eq!(out.0, b"hello world\n");
 }
+
+/// Fuzz #258: a zip64 locator right at the start must be an error, not an underflow.
+#[test]
+fn zip64_locator_near_start_is_an_error() {
+    let data: &[u8] = &[
+        80, 75, 0, 0, 80, 75, 6, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 116, 101, 115, 116, 46, 116, 120, 116, 80, 75, 5, 6, 0,
+        0, 0, 0, 1, 0, 1, 0, 54, 0, 0, 0, 53, 0, 0, 0, 0, 0,
+    ];
+    assert!(Archive::open(data).is_err());
+    assert!(Archive::open_named(data, Some("test.zip")).is_err());
+    // The same shape with the locator exactly 20 bytes before the end record, which is what
+    // reached the underflow: 10 bytes, a zip64 locator pointing past the end, then the EOCD.
+    let mut z = vec![0u8; 10];
+    z.extend_from_slice(b"PK\x06\x07");
+    z.extend_from_slice(&0u32.to_le_bytes());
+    z.extend_from_slice(&1000u64.to_le_bytes());
+    z.extend_from_slice(&1u32.to_le_bytes());
+    z.extend_from_slice(b"PK\x05\x06");
+    z.extend_from_slice(&[0, 0, 0, 0, 1, 0, 1, 0]);
+    z.extend_from_slice(&[0xff; 8]);
+    z.extend_from_slice(&[0, 0]);
+    assert!(Archive::open(z.as_slice()).is_err());
+    // And a z64 offset so large that adding the record size would overflow.
+    z[18..26].copy_from_slice(&u64::MAX.to_le_bytes());
+    assert!(Archive::open(z.as_slice()).is_err());
+}

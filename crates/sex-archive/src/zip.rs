@@ -133,13 +133,15 @@ fn find_eocd<S: ByteSource + ?Sized>(src: &S) -> Result<Eocd> {
             let z64_off = u64le(&loc, 8);
             let mut rec = [0u8; 56];
             // The record may also be displaced by a prefix; try both.
-            let guess = eocd_abs - 20 - 56;
-            let at = if z64_off + 56 <= len && {
+            // A locator too close to the start leaves no room for the record (fuzz #258).
+            let guess = eocd_abs.checked_sub(20 + 56);
+            let at = if z64_off.checked_add(56).is_some_and(|e| e <= len) && {
                 read_exact_at(src, z64_off, &mut rec)?;
                 u32le(&rec, 0) == Z64_EOCD_SIG
             } {
                 z64_off
             } else {
+                let guess = guess.ok_or(Error::Corrupt("zip64 end record missing"))?;
                 read_exact_at(src, guess, &mut rec)?;
                 if u32le(&rec, 0) != Z64_EOCD_SIG {
                     return Err(Error::Corrupt("zip64 end record missing"));

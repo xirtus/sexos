@@ -1383,12 +1383,16 @@ name = "files"
 version = "0.1.0"
 dependencies = [
  "loom-core",
+ "loom-remote",
  "sex-app",
  "sex-archive",
  "sex-config",
+ "sex-diskimage",
  "sex-font",
  "sex-image",
  "sex-pdx",
+ "sex-ssh",
+ "sex-volumes",
  "sha2 0.10.9",
 ]
 
@@ -2460,6 +2464,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "loom-remote"
+version = "0.1.0"
+dependencies = [
+ "hmac",
+ "sex-http",
+ "sex-ssh",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "lopdf"
 version = "0.47.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2955,7 +2969,9 @@ version = "0.1.0"
 dependencies = [
  "hayro",
  "sex-font",
+ "sex-image",
  "sex-std",
+ "vellum-edit",
 ]
 
 [[package]]
@@ -3918,6 +3934,15 @@ version = "0.1.0"
 dependencies = [
  "ed25519-compact",
  "sha2 0.10.9",
+]
+
+[[package]]
+name = "sex-diskimage"
+version = "0.1.0"
+dependencies = [
+ "miniz_oxide 0.9.1",
+ "sex-archive",
+ "sex-disk",
 ]
 
 [[package]]
@@ -5326,9 +5351,10 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 name = "view"
 version = "0.1.0"
 dependencies = [
- "sex-app",
+ "gaze-codecs",
+ "sex-font",
  "sex-image",
- "sex-pdx",
+ "sex-std",
 ]
 
 [[package]]

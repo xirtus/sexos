@@ -112,11 +112,13 @@ members = [
     "apps/store",
     "crates/sex-sdl",
     "crates/sex-archive",
+    "crates/sex-diskimage",
     "apps/sdltest",
     "apps/driftspark",
     "crates/gaze-codecs",
     "crates/vellum-edit",
     "crates/loom-core",
+    "crates/loom-remote",
     "crates/aftercare-core",
 ]
 [workspace.package]

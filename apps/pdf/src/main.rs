@@ -11,7 +11,23 @@
 //! the whole page, 1 shows it at 100 %. Ctrl+F finds text (Enter, Ctrl+G or F3 for the
 //! next hit, Shift for the one before, Escape closes the bar); T shows page thumbnails and
 //! O the document's outline, where Up, Down and Enter choose.
+//!
+//! Annotating (Vellum, through vellum-edit): Ctrl+H highlights the found word, or the
+//! region chosen with Ctrl+R (arrows move it, Shift+arrows size it, Enter highlights);
+//! Ctrl+N writes a sticky note there (type, Enter); Ctrl+L lists the page's annotations
+//! (Up, Down, Delete removes one). Ctrl+E fills the form: Ctrl+Down for the next
+//! field (or Tab, where Shell passes it on), Ctrl+Up for the one before, type into text fields, Space ticks a
+//! checkbox, Escape ends. Ctrl+S saves every change as an incremental update appended
+//! to the file (its original bytes stay as they were) and shows the file as saved.
+//!
+//! `pdf --thumb @IN @OUT SIZE` opens no window: it writes the first page, on white, as
+//! a thumbnail (the format is in Gaze's `thumb` module, shared here).
 mod sample;
+#[cfg_attr(not(target_os = "hermit"), allow(dead_code))]
+mod marks;
+#[cfg_attr(not(target_os = "hermit"), allow(dead_code))]
+#[path = "../../view/src/thumb.rs"]
+mod thumb;
 // The pure parts, and those that need only hayro, build and are tested on the host too.
 #[cfg_attr(not(target_os = "hermit"), allow(dead_code))]
 mod search;
