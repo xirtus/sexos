@@ -227,6 +227,7 @@ pub fn main() {
     let mut fonts = Fonts::new();
     let mut view = scene(window.size(), None, false);
     let mut ready_logged = false;
+    let mut control_receipt = None;
     loop {
         let now = sex_pdx::get_ticks();
         if model.unlocked() && provider.is_none() {
@@ -337,6 +338,24 @@ pub fn main() {
                 &text,
                 Color(0xff202020),
             );
+        }
+        if let Some(c) = &consent {
+            if control_receipt != Some((c.token, w, h)) {
+                for (name, id) in [("deny", view.deny), ("allow", view.allow)] {
+                    let center = view.ui.rect(id).center();
+                    sex_std::record(&format!(
+                        "[chastity.consent.control] token={} name={} x={} y={} enabled={}",
+                        c.token,
+                        name,
+                        center.x as i32,
+                        center.y as i32,
+                        view.ui.is_enabled(id) as u8
+                    ));
+                }
+                control_receipt = Some((c.token, w, h));
+            }
+        } else {
+            control_receipt = None;
         }
         window.show_pixels(w, h);
         let event = window.next_within(
