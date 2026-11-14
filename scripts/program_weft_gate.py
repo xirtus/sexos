@@ -43,12 +43,9 @@ def main():
   pos={labels[int(n)]:(int(x),int(y)) for n,x,y in re.findall(r'\[abacus.key\] n=(\d+) x=(-?\d+) y=(-?\d+)',t()[resized:])}
   assert len(pos)==30,pos
   def key(label):
-   # Focus scrolls the button into view; click its current, scrolled position.
-   # Each keypad action restores expression focus, so its tab offset is stable.
-   start=len(t());index=labels.index(label)
-   for _ in range(index+1):q.key('tab');time.sleep(.06)
-   focused=g['wait'](rf'\[abacus.focus\] key={index} x=(-?\d+) y=(-?\d+)',start,60)
-   x,y=int(focused[1]),int(focused[2]);assert 0<=x<width and 0<=y<height,(label,x,y,width,height)
+   # Tab is Shell window navigation. Click the actual keypad inside the
+   # maximized client; expression typing and palette shortcuts still use keys.
+   x,y=pos[label];assert 0<=x<width and 0<=y<height,(label,x,y,width,height)
    tile=current_tile(t(),surface);side=(tile[2]-width)//2;top=tile[3]-height-side
    x+=tile[0]+side;y+=tile[1]+top
    assert 0<=x<rw and 0<=y<rh,(label,x,y,rw,rh)
@@ -57,7 +54,7 @@ def main():
   g['focus'](surface);time.sleep(.3)
   s=len(t());keys(['1','2']);key('+');keys(['3','0']);q.key('ret')
   g['wait'](r'\[abacus.result\] expr=12\+30 value=42\n',s,60)
-  # Actual keypad buttons activated through Tab/Space, including compact scrolling.
+  # Actual keypad buttons clicked at their fresh maximized layout positions.
   s=len(t())
   for k in ['7','mul','6','=']:key(k)
   g['wait'](r'\[abacus.result\] expr=7\*6 value=42\n',s,60)
