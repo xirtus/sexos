@@ -83,3 +83,8 @@ typing module
 warnings module
 weakref module
 this module
+polyamour package
+polyamour.polyops module
+polyamour.types module
+bpy package
+mathutils package
