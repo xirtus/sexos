@@ -10,8 +10,9 @@
 * `stdhello count` prints until Ctrl+C in Term stops it (status 130).
 * `chello one two`: a C program on sex-libc, the same way; it is refused the network.
 * Lua 5.4 (`lua -e`, then its interactive prompt until Ctrl+D) and CPython (`python -c`).
-* A Term started with plain `run term` holds no grant: Files refuses its run (DENIED)."""
-import argparse,os,re,shutil,time
+* A Term started with plain `run term` holds no relay grant: Files rejects its
+  legacy relay ticket downstream. Term's missing refusal feedback is not qualified."""
+import argparse,hashlib,json,os,re,shutil,time
 from pathlib import Path
 from install_program import install
 # A network to refuse: a run Term starts never gets it (chello checks connect is EACCES).
@@ -22,6 +23,50 @@ ROOT=Path(__file__).resolve().parents[1]
 SURFACE={int(a):int(b)for a,b in re.findall(r'app: App::Program, ordinal: \d+, target: (\d+), surface: (\d+)',(ROOT/'crates/sex-pdx/src/app_catalog.rs').read_text())}
 KEYS={' ':'spc','.':'dot','/':'slash','-':'minus','=':'equal',',':'comma',';':'semicolon'}
 SHIFTED={'(':'9',')':'0','*':'8','+':'equal'}
+def denial_sources(root):
+ """Record the checked legacy relay route, separately from native behavior."""
+ files=(root/'servers/sexfiles/src/fs_service.rs').read_text()
+ sdk=(root/'crates/sex-app/src/lib.rs').read_text()
+ shell=(root/'servers/silk-shell/src/main.rs').read_text()
+ facts=[('live Files binding','program_live(caller, b.task)' in files),
+        ('grant-specific relay prepare','if let (Some(k), w::PREPARE, true)' in files and 'PREPARING_FOR = Some(k)' in files),
+        ('requester ticket check','if by != asker' in files and '[files.ticket.denied] requester={}' in files),
+        ('legacy relay request','sex_pdx::program_store::OP_RUN, sex_pdx::program_store::TICKET, ticket as u64' in sdk),
+        ('Shell forwards requester','if by_program{msg.caller_pd as u64}else{0}' in shell)]
+ if not all(ok for _,ok in facts):raise ValueError('legacy relay source contract changed: '+str(facts))
+ paths=('servers/sexfiles/src/fs_service.rs','crates/sex-app/src/lib.rs','servers/silk-shell/src/main.rs')
+ return {name:hashlib.sha256((root/name).read_bytes()).hexdigest()for name in paths}
+
+def downstream_denial(trace,launch_start,action_start,end,target,task,source_hashes):
+ """Exact negative action window; an enqueue receipt is never launch success."""
+ if not 0<=launch_start<action_start<end<=len(trace):raise ValueError('invalid denial boundaries')
+ setup=trace[launch_start:action_start];window=trace[action_start:end]
+ bound=rf'\[files.program.bound\] target={target} task={task} root=/data/term\n'
+ ready=rf'\[term.ready\] target={target} task={task} cols=\d+ rows=\d+\n'
+ b=list(re.finditer('^'+bound,setup,re.M));r=list(re.finditer('^'+ready,setup,re.M))
+ if len(b)!=1 or len(r)!=1 or b[0].end()>r[0].start():raise ValueError('missing exact current Term run')
+ # A replacement ready/binding cannot be silently accepted as the same run.
+ forbidden=('shell.program.launch','files.program.bound','files.console.attached',
+            'shell.launch.asked','shell.launch.event','app.activation.committed',
+            'term.ready','term.job.exit','std.out','stdhello.ok','stdhello.fail')
+ if any('['+tag+']'in window for tag in forbidden):raise ValueError('child, relay or run replacement in denial window')
+ expected=[r'\[term.command\] stdhello\n',r'\[term.native.start\] name=stdhello\n',
+           rf'\[files.ticket.denied\] requester={target}\n',
+           r'\[shell.program.denied\] reason=store error=1\n',r'\[spindle.program.refused\] code=1\n']
+ matches=[]
+ for pattern in expected:
+  found=list(re.finditer('^'+pattern,window,re.M))
+  if len(found)!=1:raise ValueError('missing/duplicate downstream denial receipt: '+pattern)
+  matches.append(found[0])
+ if any(a.end()>b.start()for a,b in zip(matches,matches[1:])):raise ValueError('denial receipt order differs')
+ if window.count('[files.ticket.denied]')!=1 or window.count('[shell.program.denied]')!=1:raise ValueError('unrelated requester/store denial')
+ if window.count('[term.command]')!=1 or window.count('[term.native.start]')!=1 or window.count('[spindle.program.refused]')!=1:raise ValueError('nonexclusive Term action')
+ ticks=[int(m[1])for m in re.finditer(r'^\[sched.active\] tick=(\d+) [^\n]*\n',window[matches[-1].end():],re.M)]
+ if len(ticks)<2 or any(b<=a for a,b in zip(ticks,ticks[1:])):raise ValueError('missing progressing post-denial observation window')
+ return dict(ok=True,target=target,task=task,launch_start=launch_start,action_start=action_start,end=end,
+             serial_sha256=hashlib.sha256(trace[:end].encode()).hexdigest(),source_sha256=source_hashes,
+             downstream_denied=True,child_started=False,relay_attached=False,feedback_qualified=False,
+             observation_ticks=[ticks[0],ticks[-1]],scope='Exact legacy relay ticket denial; Term refusal feedback remains unqualified.')
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
  progs=[(n,(ROOT/'iso_root/programs'/n).read_bytes()) for n in ('term','stdhello','chello','lua','python')]
@@ -47,12 +92,12 @@ def main():
   target,task=int(m[1]),int(m[2])
   g['wait'](rf'\[display\.app\.title\] target={target} ',s,60);time.sleep(1)
   g['focus'](SURFACE[target]);time.sleep(.5)
-  return target,task
+  return target,task,s
  def ran(name,code,s,timeout=300):
   m=g['wait'](rf'\[term\.job\.exit\] name={name} code=(-?\d+)\n',s,timeout);assert m[1]==str(code),m[0];time.sleep(1)
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
-  target,task=start('spindle')
+  target,task,_=start('spindle')
   # An ordinary std program, its console in Term.
   s=len(t());term_line('stdhello alpha beta')
   g['wait'](r'\[term\.native\.start\] name=stdhello',s,60)
@@ -93,9 +138,18 @@ def main():
   q.cmd('screendump',{'filename':str(a.out/'term-native-lua-python.ppm')})
   s=len(t());q.key('f11');g['wait'](rf'\[app\.private\.retired\] target={target} task={task} ',s,120)
   # Without the grant, Files refuses.
-  target,task=start('run term')
-  s=len(t());term_line('stdhello');g['wait'](r'\[term\.native\.refused\] name=stdhello status=11\n',s,60)
-  assert '[files.console.attached]' not in t()[s:]
+  source_hashes=denial_sources(ROOT)
+  target,task,launch_start=start('run term')
+  s=len(t());term_line('stdhello')
+  g['wait'](rf'\[files\.ticket\.denied\] requester={target}\n',s,60)
+  refusal=g['wait'](r'\[spindle\.program\.refused\] code=1\n',s,60)
+  cursor=s+refusal.end()
+  first=g['wait'](r'\[sched.active\] tick=(\d+) [^\n]*\n',cursor,60)
+  cursor+=first.end()
+  g['wait'](r'\[sched.active\] tick=(\d+) [^\n]*\n',cursor,60)
+  assert denial_sources(ROOT)==source_hashes,'source changed during denial capture'
+  proof=downstream_denial(t(),launch_start,s,len(t()),target,task,source_hashes)
+  (a.out/'ungranted-denial.json').write_text(json.dumps(proof,indent=2)+'\n')
   s=len(t());q.key('f11');g['wait'](rf'\[app\.private\.retired\] target={target} task={task} ',s,120)
   assert 'KERNEL PANIC' not in t() and 'panicked' not in t() and '[term.fatal]' not in t()
  finally:g['stop']()
