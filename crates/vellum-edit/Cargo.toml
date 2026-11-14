@@ -1,0 +1,16 @@
+[package]
+name = "vellum-edit"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Annotations, form filling and incremental saving for Vellum, the SexOS PDF viewer"
+
+[dependencies]
+# Pure Rust deflate/inflate (MIT OR Zlib OR Apache-2.0); already in the tree via hayro/flate2.
+miniz_oxide = { version = "=0.9.1", default-features = false, features = ["with-alloc"] }
+
+[dev-dependencies]
+# The renderer Vellum (apps/pdf) uses (Apache-2.0 OR MIT): proves annotations and fields draw.
+hayro = "=0.9.0"
+# An independent parser (MIT) to reopen what we write. Host tests only.
+lopdf = { version = "=0.47.0", default-features = false }

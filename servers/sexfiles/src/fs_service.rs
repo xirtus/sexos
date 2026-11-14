@@ -173,6 +173,17 @@ fn memory() -> Memory<'static> {
         }
     }
 }
+/// The lock screen's password, tried on the encrypted home if it is locked: OK, or
+/// why not. None when there is no filesystem or no locked home.
+pub fn home_unlock_from_lock_screen(password: &[u8]) -> Option<u8> {
+    let state = unsafe { &mut *core::ptr::addr_of_mut!(STATE) };
+    if matches!(state, State::Untried) { *state = bring_up(); }
+    let State::Ready(fs) = state else { return None };
+    if crate::home::control(fs, sex_pdx::home_lock::STATE, 0, &[]) != Ok(sex_pdx::home_lock::STATE_LOCKED) { return None; }
+    if writes_pending() { commit_writes(fs); }
+    forget_stats(None);
+    Some(match crate::home::control(fs, sex_pdx::home_lock::UNLOCK, 0, password) { Ok(_) => w::OK, Err(st) => st })
+}
 fn bring_up() -> State {
     let sectors = DiskFs::diskfs_block_call(sex_pdx::BLOCK_CAPACITY, 0, 0, 0);
     let state = bring_up_on(sectors);
@@ -927,4 +938,43 @@ fn prepare(fs: &mut Fs<'static, Disk>, r: w::Request, path: &[u8], data: &mut [u
             Ok(ticket)
         }
     }
+}
+/// True when `caller` is a live program run from `/data/NAME`: the folder Files
+/// bound it to, never a name the program claims.
+pub fn program_is(caller: u32, name: &[u8]) -> bool {
+    let Some(k) = program_index(caller) else { return false };
+    let Some(b) = (unsafe { (*core::ptr::addr_of!(BINDINGS))[k] }) else { return false };
+    let data = sex_pdx::program_store::DATA;
+    program_live(caller, b.task) && b.root[..b.len].strip_prefix(data) == Some(name)
+}
+/// Files' own small files (settings): read whole, at most `out.len()` bytes.
+pub fn read_own(path: &[u8], out: &mut [u8]) -> Option<usize> {
+    let state = unsafe { &mut *core::ptr::addr_of_mut!(STATE) };
+    if matches!(state, State::Untried) { *state = bring_up(); }
+    let State::Ready(fs) = state else { return None };
+    let st = fs.open(path).ok()?;
+    let mut n = 0;
+    while n < out.len() {
+        match fs.read(st.id, n as u64, &mut out[n..]) { Ok(0) => break, Ok(got) => n += got, Err(_) => return None }
+    }
+    Some(n)
+}
+/// Replaces Files' own file `path` (its folder is made if missing) and commits at once.
+pub fn replace_own(path: &[u8], data: &[u8]) -> bool {
+    let state = unsafe { &mut *core::ptr::addr_of_mut!(STATE) };
+    if matches!(state, State::Untried) { *state = bring_up(); }
+    let State::Ready(fs) = state else { return false };
+    // Writes waiting for other clients commit first, so a failure here undoes only ours.
+    if writes_pending() { commit_writes(fs); }
+    let folder = &path[..path.iter().rposition(|b| *b == b'/').unwrap_or(0)];
+    let done = (|| -> Result<(), Error> {
+        if !folder.is_empty() && fs.open(folder).is_err() { fs.mkdir(folder, 0)?; }
+        let id = match fs.open(path) { Ok(st) => st.id, Err(_) => fs.create(path, 0)? };
+        fs.truncate(id, 0, 0)?;
+        let mut at = 0;
+        while at < data.len() { at += fs.write(id, at as u64, &data[at..], 0)?; }
+        fs.commit()
+    })();
+    if let Err(e) = done { let _ = fs.rollback(); forget_stats(None); sex_pdx::serial_record!("[files.own.write.failed] error={:?}", e); }
+    done.is_ok()
 }

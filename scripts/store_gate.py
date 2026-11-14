@@ -9,9 +9,9 @@ disk program store. In Spindle:
 * `pkg trust KEY` and `pkg refresh URL` once, so Files keeps a catalog and its source;
 * `run +net store get chello`, without `+pkg`: Files refuses the package request
   (DENIED, logged as `[files.pkg.denied]`) and nothing is installed;
-* `run +net +pkg store refresh` downloads the catalog into Store's own folder and Files
-  checks it; `run +pkg +net store search C library` finds chello;
-  `run +net +pkg store get chello` installs 1.0;
+* `run +net +pkg sexshop refresh` downloads the catalog into Store's own folder and Files
+  checks it; `run +pkg +net sexshop search C library` finds chello;
+  `run +net +pkg sexshop get chello` installs 1.0;
 * `run chello one two` still asks the person the package's grant question in Spindle;
   the answer `no` runs it without the network (its own 21 checks pass);
 * the catalog then offers 1.1: `store refresh` and `store upgrade` upgrade it;
@@ -31,7 +31,7 @@ def main():
  a.out.mkdir(parents=True,exist_ok=True)
  elf=ROOT/'iso_root/programs/chello';data=elf.read_bytes();assert data[:4]==b'\x7fELF'
  if b'This build has no C compiler output' in data:raise SystemExit('chello is the no-compiler fallback: install musl headers and rebuild')
- store_elf=(ROOT/'iso_root/programs/store').read_bytes();assert store_elf[:4]==b'\x7fELF'
+ store_elf=(ROOT/'iso_root/programs/sexshop').read_bytes();assert store_elf[:4]==b'\x7fELF'
  serve=a.out/'serve';shutil.rmtree(serve,ignore_errors=True);serve.mkdir()
  (serve/'README').write_text('chello from the Store\n')
  for v in ['1.0','1.1']:
@@ -43,7 +43,7 @@ def main():
  web=http.server.ThreadingHTTPServer(('127.0.0.1',0),functools.partial(Quiet,directory=str(serve)));threading.Thread(target=web.serve_forever,daemon=True).start()
  base=f'http://10.0.2.2:{web.server_address[1]}/'
  disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
- install(disk,[('store',store_elf)])
+ install(disk,[('sexshop',store_elf)])
  g=boot(a.iso,disk,a.out,'store',a.resolution);t=g['text'];q=g['q']
  def type_line(line):
   g['focus'](153);time.sleep(.5)
@@ -83,11 +83,11 @@ def main():
   status,text,granted=store_run('run +net store +packages get chello','get')
   assert granted=='0' and status=='denied',f'a typed +packages was taken as the grant: status={status}'
   out['refused_without_pkg']=True
-  status,text,granted=store_run('run +net +pkg store refresh','refresh')
+  status,text,granted=store_run('run +net +pkg sexshop refresh','refresh')
   assert granted=='1' and status=='ok' and '[files.pkg.catalog] packages=1' in text,f'refresh: {status}'
-  status,text,_=store_run('run +pkg +net store search C library','search')
+  status,text,_=store_run('run +pkg +net sexshop search C library','search')
   assert status=='ok' and re.search(r'\[store\.line\] chello 1\.0  C library checks',text),f'search: {status}'
-  status,text,_=store_run('run +net +pkg store get chello','get')
+  status,text,_=store_run('run +net +pkg sexshop get chello','get')
   assert status=='ok' and re.search(r'\[files\.pkg\.installed\] name=chello version=1\.0 program=chello upgrade=0',text),f'get: {status}'
   out['installed']='chello 1.0'
   # The program it installed: its first run still asks the person, in Spindle.

@@ -12,7 +12,7 @@ SITE=ROOT/'scripts/web_site'
 BAR=30
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):
-  if self.path=='/web':body=(ROOT/'iso_root/programs/web').read_bytes();self.send_response(200);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body);return
+  if self.path=='/web':body=(ROOT/'iso_root/programs/kaleidoscope').read_bytes();self.send_response(200);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body);return
   f=SITE/self.path.removeprefix('/site/') if self.path.startswith('/site/') else None
   if f is None or not f.is_file():self.send_response(404);self.end_headers();return
   body=f.read_bytes();self.send_response(200);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
@@ -38,9 +38,9 @@ def main():
    time.sleep(.06)
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
-  g['focus'](153);time.sleep(.5);s=len(t());keys(f'fetch {base}/web /bin/web');q.key('ret')
+  g['focus'](153);time.sleep(.5);s=len(t());keys(f'fetch {base}/web /bin/kaleidoscope');q.key('ret')
   m=g['wait'](r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',s,240);assert m[1].startswith('Saved'),m[1]
-  g['focus'](153);time.sleep(.5);s=len(t());keys(f'run +net web {url}');q.key('ret')
+  g['focus'](153);time.sleep(.5);s=len(t());keys(f'run +net kaleidoscope {url}');q.key('ret')
   g['wait'](r'\[web.console\] level=0 viewport size \d+x\d+ count=\d+',s,300)
   m=g['wait'](r'\[web.ready\] target=(\d+) task=(\d+)',s,120);target,task=m[1],m[2]
   launch=g['wait'](rf'\[shell.program.launch\] target={target} task={task} surface=(\d+)',s,60);surface=int(launch[1])
@@ -100,7 +100,7 @@ def main():
     else:assert (item['width'],item['height'])==(first['width'],first['height']),item
   s=len(t());q.key('f11');g['wait'](rf'\[web.closed\] target={target} task={task}',s,60)
   text=t();assert 'KERNEL PANIC' not in text and '[web.fatal]' not in text and 'panicked' not in text
-  result=dict(ok=True,iso_sha256=hashlib.sha256(a.iso.read_bytes()).hexdigest(),web_sha256=hashlib.sha256((ROOT/'iso_root/programs/web').read_bytes()).hexdigest(),samples=samples)
+  result=dict(ok=True,iso_sha256=hashlib.sha256(a.iso.read_bytes()).hexdigest(),web_sha256=hashlib.sha256((ROOT/'iso_root/programs/kaleidoscope').read_bytes()).hexdigest(),samples=samples)
   (a.out/'result.json').write_text(json.dumps(result,indent=2)+'\n');print(result)
  finally:g['stop']()
 if __name__=='__main__':main()

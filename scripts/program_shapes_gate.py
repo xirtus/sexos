@@ -16,8 +16,8 @@ def reference(out,dx,dy):
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
- elf=(ROOT/'iso_root/programs/shapes').read_bytes();assert elf[:4]==b'\x7fELF'
- install(disk,[('shapes',elf)])
+ elf=(ROOT/'iso_root/programs/gestalt').read_bytes();assert elf[:4]==b'\x7fELF'
+ install(disk,[('gestalt',elf)])
  refs={(0,0):reference(a.out,0,0),(12,0):reference(a.out,12,0)}
  g=boot(a.iso,disk,a.out,'shapes',a.resolution);t=g['text'];q=g['q']
  def run(line):
@@ -38,7 +38,7 @@ def main():
   return checked,worst
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120)
-  s=len(t());run('run shapes')
+  s=len(t());run('run gestalt')
   m=g['wait'](r'\[shapes.ready\] target=(\d+) task=(\d+)',s,180);target,task=m[1],m[2]
   first=g['wait'](rf'\[shapes.shown\] w={W} h={H} dx=0 dy=0 ticks=(\d+)',s,60)
   launch=g['wait'](rf'\[shell.program.launch\] target={target} task={task} surface=(\d+)',s,60);surface=int(launch[1])

@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 sex-pdx = { path = "../../crates/sex-pdx" }
+sex-config = { path = "../../crates/sex-config" }
 sex-keymap = { path = "../../crates/sex-keymap" }
 sex-ime = { path = "../../crates/sex-ime" }
 sex-rt = { path = "../../sex-rt" }
