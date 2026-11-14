@@ -583,12 +583,12 @@ def run_boot(root,iso,binding,seed,out,c,model,resolution_text,recovery=False,ex
    launcher('Open')
    for index,char in enumerate(COMMAND,1):key('spc'if char==' 'else char,pattern=rf'\[spindle.cursor.view\] target=12 sequence=\d+ pos={index} len={index}(?=\s|$)')
    key('ret',pattern=r'\[spindle.instance.command\] target=12 task=12 name=echo ok=1');wait(r'\[spindle.history.receipt\] target=12 task=12 kind=saved [^\n]*error=0');key('up',pattern=rf'\[spindle.history.nav\] dir=up idx=0 len={len(COMMAND)} ok=1');picture('spindle-recalled','spindle')
-   start=len(text());launch.pointer_click(q,c['launcher']['workspace_x'][1]+10,c['launcher']['workspace_y']+10,resolution,text,wait,actions.append);wait(r'\[shell.scene.switch\] from=0 to=1',start);launcher('BringHere');picture('spindle-brought','spindle')
+   start=len(text());launch.pointer_click(q,*launch.workspace_point(text(),1,c['launcher']),resolution,text,wait,actions.append);wait(r'\[shell.scene.switch\] from=0 to=1',start);launcher('BringHere');picture('spindle-brought','spindle')
   else:
    reopen();picture('quil-cold','quil');launcher('Open');key('up',pattern=rf'\[spindle.history.nav\] dir=up idx=0 len={len(COMMAND)} ok=1');picture('spindle-cold','spindle')
   close(12,153)
   if not recovery:
-   start=len(text());launch.pointer_click(q,c['launcher']['workspace_x'][0]+10,c['launcher']['workspace_y']+10,resolution,text,wait,actions.append);wait(r'\[shell.scene.switch\] from=1 to=0',start)
+   start=len(text());launch.pointer_click(q,*launch.workspace_point(text(),0,c['launcher']),resolution,text,wait,actions.append);wait(r'\[shell.scene.switch\] from=1 to=0',start)
   close(15,300);close(9,201)
  except Exception as exc:failure=clip.failure_summary(exc)
  finally:
