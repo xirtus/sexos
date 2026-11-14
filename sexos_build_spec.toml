@@ -76,6 +76,8 @@ crates = [
   "apps/pdf/Cargo.toml",
   "apps/sex-calc/Cargo.toml",
   "apps/calendar/Cargo.toml",
+  "apps/spreadeagle/Cargo.toml",
+  "apps/assuit/Cargo.toml",
   "apps/settings/Cargo.toml",
   "apps/aftercare/Cargo.toml",
   "apps/crush/Cargo.toml",
@@ -283,7 +285,7 @@ action = "cargo_manifest"
 target = "x86_64-sex-app.json"
 manifest = "apps/files/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/files"
-dest_artifact = "iso_root/programs/files"
+dest_artifact = "iso_root/programs/loom"
 
 [[stage]]
 id = "build_peek"
@@ -315,7 +317,7 @@ action = "cargo_manifest"
 target = "x86_64-sex-app.json"
 manifest = "apps/view/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/view"
-dest_artifact = "iso_root/programs/view"
+dest_artifact = "iso_root/programs/gaze"
 
 [[stage]]
 id = "build_settings"
@@ -323,7 +325,7 @@ action = "cargo_manifest"
 target = "x86_64-sex-app.json"
 manifest = "apps/settings/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/settings"
-dest_artifact = "iso_root/programs/settings"
+dest_artifact = "iso_root/programs/tatami"
 
 [[stage]]
 id = "build_heaptest"
@@ -593,6 +595,26 @@ build_std = "std,panic_abort"
 manifest = "apps/rendezvous/Cargo.toml"
 source_artifact = "target/x86_64-sex-std/release/rendezvous"
 dest_artifact = "iso_root/programs/rendezvous"
+
+# Spreadeagle: the spreadsheet, GridCraft's engine (formulas, xlsx) under a native grid.
+[[stage]]
+id = "build_spreadeagle"
+action = "cargo_manifest"
+target = "x86_64-sex-std.json"
+build_std = "std,panic_abort"
+manifest = "apps/spreadeagle/Cargo.toml"
+source_artifact = "target/x86_64-sex-std/release/spreadeagle"
+dest_artifact = "iso_root/programs/spreadeagle"
+
+# Assuit: the word processor, WordCraft's engine (docx, Word layout, undo) drawing its pages.
+[[stage]]
+id = "build_assuit"
+action = "cargo_manifest"
+target = "x86_64-sex-std.json"
+build_std = "std,panic_abort"
+manifest = "apps/assuit/Cargo.toml"
+source_artifact = "target/x86_64-sex-std/release/assuit"
+dest_artifact = "iso_root/programs/assuit"
 
 [[stage]]
 id = "build_play"
