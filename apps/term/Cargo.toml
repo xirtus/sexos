@@ -1,0 +1,15 @@
+[package]
+name = "term"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+
+[[bin]]
+name = "term"
+path = "src/main.rs"
+
+[dependencies]
+sex-pdx = { path = "../../crates/sex-pdx" }
+sex-app = { path = "../../crates/sex-app" }
+sex-vt = { path = "../../crates/sex-vt", features = ["render"] }
+sex-wasm = { path = "../../crates/sex-wasm" }
