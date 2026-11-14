@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import connected_desktop_gate as gate
+from input_payload_profile import PROOF_RECEIPTS
 ROOT=Path(__file__).resolve().parents[2]
 
 def history_disk(commands=('old note',),generation=3,bank=0):
@@ -17,7 +18,7 @@ def history_trace(meta,cold=False):
  result+=f'[files.history.close] target=12 handle=7 seq=3 ok=1\n[spindle.history.receipt] target=12 task=12 kind={"loaded"if cold else"saved"} handle=7 bytes={n} count={count} hash={h} error=0\n';return result
 
 def key_fixture(keys=('ctrl','a')):
- trace='before\n';start=len(trace)
+ trace=PROOF_RECEIPTS+'before\n';start=len(trace)
  for key in keys:trace+=f'[sexinput.ps2.scancode] raw={hex(gate.KEY_CODES[key])}\n'
  for key in reversed(keys):trace+=f'[sexinput.ps2.scancode] raw={hex(gate.KEY_CODES[key]|0x80)}\n'
  row=dict(kind='key',keys=list(keys),serial_start=start,serial_qmp_return=start,serial_end=len(trace),host_start=1,host_qmp_return=2,host_end=3,transport='input-send-event',events=[{'type':'key','data':{'down':down,'key':{'type':'qcode','data':k}}}for down,ks in((True,keys),(False,tuple(reversed(keys))))for k in ks]);return trace,row

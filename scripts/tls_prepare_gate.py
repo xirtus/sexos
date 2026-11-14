@@ -4,6 +4,7 @@
 No TLS records leave the guest. Metadata and status pixels prove only this
 bounded foundation; they do not prove an authenticated or encrypted connection.
 """
+from input_payload_profile import require_payload_proof
 from clock_source_evidence import browser_clock_sources
 import browser_source_evidence as source_evidence
 import argparse,hashlib,json,math,os,re,shutil,socket,subprocess,threading,time
@@ -380,6 +381,7 @@ def main():
    time.sleep(.05)
   q=QMP(sock)
   if a.resolution=='1024x768':wait(r'SexOS compact 1024x768',timeout=10);q.key('down');q.key('ret')
+  require_payload_proof(dict(text=text,wait=wait))
   wait(r'\[shell.app.registered.reply\] target=15 .*committed=1');wait(r'\[browser.net.job.released\] ticket=1 view=Verified private_job=0')
   # Move the real cursor into the bar before checking the entire content canvas.
   # Nonzero raw coordinates activate absolute input; (0,0) is the HID zero-init sample.

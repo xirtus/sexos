@@ -10,6 +10,7 @@ from unittest.mock import patch
 ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT/'scripts'));sys.path.insert(0,str(Path(__file__).resolve().parent))
 import browser_reserve_gate as p
+from input_payload_profile import PROOF_RECEIPTS
 import browser_source_evidence as e
 from test_browser_source_evidence import inventory,clock,success
 
@@ -27,7 +28,7 @@ def cleanup_lines(row):
  return text+f'[sext.app.pool.ready] target={t} task={k} bytes=8192 zeroed=8192 workspace_records=0 reused=1 zero_owner=sext ok=1\n'
 
 def fixture(mode='quiesced'):
- text=inventory(e.FUTURE_PLANS,True);at=text.index('[net.source.binding.held]')
+ text=PROOF_RECEIPTS+inventory(e.FUTURE_PLANS,True);at=text.index('[net.source.binding.held]')
  text=text[:at]+'[boot.app.catalog.complete] rows=3 actual_grants=1 runtime_mint=0\n[boot.memory.authority.sealed] runtime_alloc=0 runtime_map=capability_leaf runtime_mint=0\n[bootgraph.boot.handoff] target=sexdisplay id=1 entry=0x4000\n'+text[at:]
  result={'evidence_version':2,'mode':mode,'chain':[]};tasks={15:150,30:300,31:310}
  for i,base in enumerate(ROWS):
@@ -219,7 +220,7 @@ class BrowserReserve(unittest.TestCase):
   frame=dict(serial_end=2,serial_sha256=p.sha('ab'.encode()));self.assertEqual(p.frame_prefix('abcd',frame),'ab');frame['serial_end']=3
   with self.assertRaises(ValueError):p.frame_prefix('abcd',frame)
  def test_key_release_and_fresh_hardware_order_required(self):
-  text='[sexinput.ps2.scancode] raw=0x26\n[sexinput.ps2.scancode] raw=0xa6\n';action=dict(kind='key',key='l',start=0,end=len(text),transport='input-send-event')
+  text=PROOF_RECEIPTS+'[sexinput.ps2.scancode] raw=0x26\n[sexinput.ps2.scancode] raw=0xa6\n';action=dict(kind='key',key='l',start=0,end=len(text),transport='input-send-event')
   self.assertTrue(p.verify_keys(text,[action])['ok'])
   for bad in[text.replace('raw=0xa6','raw=0x26'),text.replace('raw=0x26','raw=0x24')]:
    with self.assertRaises(ValueError):p.verify_keys(bad,[dict(action,end=len(bad))])

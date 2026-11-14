@@ -4,6 +4,7 @@
 The host is the endpoint itself, with deliberately public laboratory fixtures.
 No proxy, key log, public-Internet trust or transport-EOF inference is used.
 """
+from input_payload_profile import require_payload_proof
 from clock_source_evidence import browser_clock_sources
 import browser_source_evidence as source_evidence
 import argparse,ast,hashlib,json,math,os,re,shutil,socket,ssl,subprocess,threading,time
@@ -371,6 +372,7 @@ def main():
    time.sleep(.05)
   q=QMP(sock)
   if a.resolution=='1024x768':wait(r'SexOS compact 1024x768',timeout=10);q.key('down');q.key('ret')
+  require_payload_proof(dict(text=text,wait=wait))
   wait(r'\[shell.app.registered.reply\] target=15 .*committed=1');wait(r'\[browser.net.job.released\] ticket=1 view=Verified private_job=0');start=len(text());q.cmd('input-send-event',{'events':[{'type':'abs','data':{'axis':'x','value':32700}},{'type':'abs','data':{'axis':'y','value':30000}}]});wait(r'\[shell.abs.normalize\] raw_x=32700 raw_y=30000 .*reason=(?:ok|duplicate_sample)',start);focus_surface(300,text,key);palette_select(key,'ZoomToggle',palette_commands(root))
   boundary=len(text());q.key('ret');wait(r'\[shell.window.action\] action=ZoomToggle frame=\d+ sid=300 ok=1',boundary);wait(r'\[browser.viewport\] target=15 task=15 sequence=\d+ w=\d+ h=\d+ origin=held_shell',boundary)
   boundary=len(text());q.key('b');wait(r'\[shell.browser.input\] code=48 down=1 slot=43 accepted=1',boundary);wait(r'\[browser.https.intent\] accepted=1 explicit=1 public_internet=0',boundary)

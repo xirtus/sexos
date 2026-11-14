@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Finite actual desktop progress during local TLS work and held HTTPS."""
+from input_payload_profile import require_payload_proof
 from clock_source_evidence import browser_clock_sources
 from silkbar_clock_gate import source_contract as civil_contract,verify_pixels as civil_pixels
 import argparse,gzip,hashlib,json,math,os,re,shutil,struct,subprocess,time
@@ -330,6 +331,7 @@ def main():
    time.sleep(.02)
   q=QMP(sock)
   if a.resolution=='1024x768':wait(r'SexOS compact 1024x768',timeout=10);q.key('down');q.key('ret')
+  require_payload_proof(dict(text=text,wait=wait))
   wait(r'\[shell.app.registered.reply\] target=15 .*committed=1');wait(r'\[browser.net.job.released\] ticket=1 view=Verified private_job=0');wait(r'\[linen.disk.publish.done\]');focus_surface(201,text,key);key('esc',r'\[quil.palette.action\] kind=esc clear=1');focus_surface(300,text,key);zoom();picture('clock-before','clock');click_clock()
   for attempt in(1,2):
    start=len(text());sent=time.monotonic();q.key('l');wait(r'\[browser.tls.view\] state=HelloPending authenticated=0 network=0',start);record('L'+str(attempt),start,sent);picture('local-'+str(attempt),'private','HelloPending');start=len(text());sent=time.monotonic();q.key_sequence(['q']);wait(r'\[browser.tls.view\] state=Cancelled authenticated=0 network=0',start);wait(r'\[browser.resources\] reason=clear heap_used=0 heap_free=65536 heap_total=65536 tls_payload=0 ',start);record('Q'+str(attempt),start,sent);picture('cleared-'+str(attempt),'private','Cancelled')

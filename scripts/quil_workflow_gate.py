@@ -4,6 +4,7 @@ import argparse,pathlib,hashlib,json,subprocess,time,re,shutil,os,math
 from alpha_evidence import Captures,contract,require_inputs,verify_frame,finish,replay,RTC,serial_text
 from network_contention_gate import frozen_binding
 from desktop_close_gate import QMP
+from input_payload_profile import wait_releases
 
 def palette_commands(root):
  """Read descriptive command order from the sealed Shell source."""
@@ -112,7 +113,7 @@ def main():
    # The chord's effect can precede its release under emulation. Wait for the
    # actual Ctrl break edge so later keys are never sent as Ctrl chords.
    start=len(text());q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':k}],'hold-time':80});found=wait(pattern,start)
-   wait(r'\[sexinput.ps2.scancode\] raw=0x9d(?=\n|$)',start);return found
+   wait_releases(wait,start);return found
   def park_pointer():
    start=len(text())
    q.cmd('input-send-event',{'events':[{'type':'abs','data':{'axis':'x','value':32700}},{'type':'abs','data':{'axis':'y','value':30000}}]})
@@ -157,7 +158,7 @@ def main():
    key('esc',r'\[quil.find.mode\] on=0 reason=escape');capture('replaced','first memo#')
    # One undo restores the document for the rest of the workflow.
    start=len(text());q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'z'}],'hold-time':80})
-   wait(r'\[sexinput.ps2.scancode\] raw=0x9d(?=\n|$)',start);capture('find-closed','first note#')
+   wait_releases(wait,start);capture('find-closed','first note#')
    # Typing over a selection would replace it; collapse to the end.
    key('end',r'\[quil.cursor.move\] .* dir=end ok=1')
    find=dict(prompt=True,forward=dict(start=6,end=10,wrapped=False),repeat=dict(start=6,end=10,wrapped=True),missing='notez',replace=dict(query='note',replacement='memo',start=6,undone=True),pixels_checked=['find-prompt','replace-prompt','replaced','find-closed'])

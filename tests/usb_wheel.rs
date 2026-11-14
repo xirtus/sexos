@@ -3,13 +3,15 @@
 //! data preservation and bounds, not native hardware/IPC authority or pixels.
 #![allow(dead_code)]
 extern crate self as sex_pdx;
+#[path="../crates/sex-pdx/src/input_diagnostics.rs"]pub mod input_diagnostics;
 #[path="../crates/sex-pdx/src/app_scroll.rs"]pub mod app_scroll;
 const ERR_SERVICE_NOT_READY:u64=9;const OP_USB_MOUSE_REPORT:u64=0x260;const OP_USB_KEYBOARD_REPORT:u64=0x261;const EV_KEY:u64=1;
 const EV_REL:u64=2;const EV_ABS:u64=3;const EV_BTN:u64=4;const EV_WHEEL:u64=5;
-#[macro_export]macro_rules! serial_record{($($arg:tt)*)=>{{let _=format_args!($($arg)*);}}}
+#[macro_export]macro_rules! serial_record{($($arg:tt)*)=>{{crate::KEY_LOG.with(|log|log.borrow_mut().push(format!($($arg)*)));}}}
 macro_rules! serial_println{($($arg:tt)*)=>{{let _=format_args!($($arg)*);}}}
 struct PdxMessage {caller_pd:u32,caller_task:u32}
 use std::cell::RefCell;
+thread_local! { static KEY_LOG:RefCell<Vec<String>>=RefCell::new(Vec::new()); }
 #[derive(Default)]struct Transport { replies:std::collections::VecDeque<Result<bool,u64>>, calls:Vec<(u64,u64,u64,u64)> }
 thread_local! { static TRANSPORT:RefCell<Transport>=RefCell::new(Transport::default()); }
 fn send_report_once(op:u64,a:u64,b:u64,c:u64)->Result<bool,u64> {
@@ -218,4 +220,26 @@ fn batch(report:HidPointerRawReport,last:&mut u8)->Vec<(u64,u64,u64)> {
  assert_eq!(sent,vec![(0x1e,1,EV_KEY),(0x1f,1,EV_KEY),(0x1e,0,EV_KEY),(0x1f,0,EV_KEY)]);
  // Digits and arrows reach their PS/2 set-1 codes (arrows as their keypad twins).
  assert_eq!([0x1e,0x27,0x52,0x51,0x50,0x4f].map(hid_to_ps2),[Some(0x02),Some(0x0b),Some(0x48),Some(0x50),Some(0x4b),Some(0x4d)]);
+}
+
+#[test]
+fn actual_keyboard_outbox_diagnostics_do_not_disclose_key_identity_in_normal_builds() {
+    let mut previous=None;
+    for raw in 1..128 {
+        KEY_LOG.with(|log|log.borrow_mut().clear());
+        let mut keys=KeyboardOutbox::new();
+        let mut arrival=InputArrival::new();
+        assert!(arrival.ps2(&mut keys,raw));
+        let mut delivered=Vec::new();
+        keys.poll(&mut 4,|code,down,class|{delivered.push((code,down,class));Ok(true)});
+        assert_eq!(delivered,vec![(raw,1,EV_KEY)],"logging must never change delivery");
+        let log=KEY_LOG.with(|log|log.borrow().clone());
+        assert!(!log.is_empty());
+        if !input_diagnostics::PAYLOAD_PROOF {
+            assert!(log.iter().all(|line|line.contains("payload=redacted")));
+            assert!(log.iter().all(|line|!line.contains("code=")&&!line.contains("mod=")));
+            if let Some(prior)=previous {assert_eq!(prior,log,"different keys must have indistinguishable normal diagnostics");}
+            previous=Some(log);
+        }else{assert!(log.iter().any(|line|line.contains(&format!("code={raw} "))));}
+    }
 }
