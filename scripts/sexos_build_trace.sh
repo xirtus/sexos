@@ -95,7 +95,7 @@ run_stage() {
       # Programs: the loader refuses code holding WRPKRU/XRSTOR bytes at any offset.
       # A displacement that holds them by chance moves when the program links with its
       # read-only data in another order (programs that read SEX_LAYOUT_SEED).
-      if [[ ${stage_target:-$TARGET} == x86_64-sex-app.json || -n ${stage_std:-} ]]; then
+      if [[ ${stage_target:-$TARGET} == x86_64-sex-app.json || ${stage_target:-$TARGET} == x86_64-sex-std.json ]]; then
         local seed=0
         while ! python3 scripts/key_bytes.py "$src"; do
           seed=$((seed + 1))

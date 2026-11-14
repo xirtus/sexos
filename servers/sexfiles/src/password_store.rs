@@ -6,6 +6,8 @@ use sex_config::secret::{self as s, Staging, Store, STORED_MAX};
 
 pub const PATH: &[u8] = b"/system/password";
 const CALLERS: usize = 8;
+/// The Shell, whose lock screen may also open the encrypted home.
+const SHELL: u32 = 3;
 static mut STAGES: [(u32, Staging); CALLERS] = [const { (0, Staging::new()) }; CALLERS];
 
 struct Disk;
@@ -67,7 +69,20 @@ fn on_deep_stack(f: &mut dyn FnMut()) {
 pub fn handle(caller: u32, arg0: u64, arg1: u64) -> Option<u64> {
     let may_set = crate::fs_service::program_is(caller, b"settings");
     let mut status = s::INVALID;
+    // The lock screen's password also opens the encrypted home: keep a copy before
+    // CHECK wipes the staged bytes.
+    let check = sex_config::wire::decode_request(arg0).is_some_and(|(v, _)| v == s::CHECK);
+    let mut home = [0u8; s::MAX];
+    let n = (arg1 as usize).min(s::MAX);
+    let for_home = check && caller == SHELL && n > 0;
+    if for_home { home[..n].copy_from_slice(stage(caller).staged(n)); }
     on_deep_stack(&mut || status = s::serve(stage(caller), may_set, arg0, arg1, &mut Disk));
+    if for_home && matches!(status, s::OK | s::NO_PASSWORD) {
+        if let Some(st) = crate::fs_service::home_unlock_from_lock_screen(&home[..n]) {
+            sex_pdx::serial_record!("[files.password.home] status={}", st);
+        }
+    }
+    for b in home.iter_mut() { unsafe { core::ptr::write_volatile(b, 0) }; }
     match sex_config::wire::decode_request(arg0) {
         Some((verb, _)) if !s::answered(verb) => None,
         decoded => {

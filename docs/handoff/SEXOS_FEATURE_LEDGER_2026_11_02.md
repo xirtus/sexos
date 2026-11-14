@@ -4055,7 +4055,7 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   stays focus-right). While locked the Shell keeps every key, click and move, and
   Display paints only the lock surface over the whole frame: "Locked", one dot per typed
   character, and why the last try failed. Enter sends the password to Files, which
-  keeps only an Argon2id hash (m=4 MiB, t=3, random salt) in `/system/password` and
+  keeps only an Argon2id hash (m=2 MiB, t=4, random salt) in `/system/password` and
   answers match or not (`sex_config::secret`, opcode 0x2F3, reply tag 0xC7). With no
   password set, Enter unlocks. Settings sets the password with Ctrl+P (typed twice; the Shell keeps F-keys and Tab, so Settings pages use PgDn/PgUp).
   Idle: after `session.dim_after_min` the screen dims, after `lock_after_min` it locks
@@ -4069,6 +4069,18 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   lock-surface stub; QEMU gate `scripts/lock_screen_gate.py` in CI (devices job).
 - **Not yet:** inhibiting idle while media plays (needs a Bell hint); a salt from the
   kernel's held entropy source instead of RDRAND.
+
+## Lock screen opens the encrypted home (2026-11-14)
+- **What:** when the Shell's password CHECK passes (or no lock password is set) and the
+  encrypted `/home` (PR #197) is locked, Files tries the typed password on it. Signing in
+  at the lock screen opens `/home` too, like a login. Only the Shell (PD 3) gets this;
+  the staged bytes are copied once and wiped after.
+- **Protocol:** PUT chunks of `sex_config::secret` are no longer answered. Files keeps one
+  unsent reply per caller, so a reply per chunk overwrote the answer that mattered. The
+  Shell's config watch holds its requests while a password check waits; the lock check
+  gives up after 60 s.
+- **Evidence:** `scripts/files_home_gate.py` boot 2 now locks home and the session, types
+  the password on the lock screen, and reads the home file back.
 
 ## First-start setup and default apps, slices B8/B9 (2026-11-13)
 - **B8:** while `setup.done` is off, Settings opens with four questions: keyboard
@@ -4165,6 +4177,14 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
 - **Next:** Shapes' start is its own drawing, not loading; prelinking and lazy pages
   are not needed yet for the < 100 ms target.
 
+## Multipass, Shibari and Valentine mail core, slices Y1-Y3 core (2026-11-14)
+- **What:** `crates/shibari` (RAM-only secret keeper), `crates/sex-multipass` (Leeloo
+  Multipass nativized: stamp book, Mastodon OAuth, Matrix SSO, Bluesky PAR+PKCE+DPoP,
+  fediverse bio proof, DAV app-password accounts, act-for-account grants),
+  `crates/sex-mail` (IMAP with IDLE, SMTP, MIME, threading, in-memory mail server),
+  `sex_pdx::accounts` (op 0x2B0). Host gates in CI.
+- **Next:** `servers/multipass` in the boot catalog, Tatami page, Valentine program on
+  Weft. Details: `docs/handoff/VALENTINE_MULTIPASS_2026_11_14.md`.
 ## J6b: busy programs no longer stall the desktop (2026-11-14)
 - Cause of the 1.5 s key-to-screen stall under load: a Display repaint (~270 ticks under TCG) that used up its time slice went back to the normal queue behind every busy program, so with four `bench spin` programs on two cores a repaint took 1.1-1.6 s and keys waited behind it.
 - Kernel: a task whose time ran out (`Scheduler::tick_sliced`, timer/preempt path) keeps its interactive class for `SLICED_KEEP`=4 turns, then waits behind the normal queue once (the counter resets whenever a normal task runs); a task that yields still drops to the normal queue. No preempt IPI for a re-queued sliced task. An unbounded first version (16:1) starved Bell/pager/Browser at boot in CI. Bell's boot paging probe now defers up to 128 messages (was 32).
@@ -4177,3 +4197,12 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
 
 ## Fix: USB Ethernet regression from #196 (2026-11-14)
 - usb_net_gate failed on master ("fetch: could not connect"). With MSI-X wakes, sexusb idled 32 ticks between passes. Two gaps: `sleep_ticks` took interrupts for events the main loop had not drained yet, and the network's USB Ethernet transmit ring has no wake. Now `xhci::SLEPT` makes the next wait 1 tick after any sleep in a pass, and the loop polls every tick while an Ethernet adapter is up (`Usb::ether_active`). usb_net_gate passes; idle QEMU CPU 19%.
+
+## J1b: end a program from the system monitor (2026-11-14)
+- Mesh (apps/monitor): Up/Down choose a line (marked `>`), Delete ends that program; the result shows under the list. Logs `[monitor.choose]`, `[monitor.end]`.
+- New PDX op (ABI addition): `system_stats::OP_END_PROGRAM` 0x3A2 to the Shell (SLOT_SHELL), answers OK / NOT_A_PROGRAM 4 / NOT_FOCUSED 5 / NOT_ENDED 6. Only the focused program may ask; only Program rows can be ended, never services. Shell logs `[shell.program.end]`.
+- Fix: Shell's forced ends (OOM policy and this) now also send a confirmed Close, so a program idle in its event wait wakes, faults on its released pages and is retired (before, an idle program stayed parked).
+- Gate: scripts/program_end_gate.py (Files' line refused with status 4, Fortune ended and retired).
+
+## J8 finding: disk reads are not NVMe-queue bound yet (2026-11-14)
+- `run bench read-large` at 4 cores without PKU now logs `[bench.large.cpu]` (Drive, Files, bench, idle cycles per pass). 16 MiB in 64 KiB requests: ~275M cycles; Files ~100M (~390k per request), Drive ~42M (~165k), rest waiting on the serial request chain. Per-core NVMe queues would not help until requests are pipelined (Files readahead / async Drive replies) and Files' per-request CPU drops; deferred until then.
