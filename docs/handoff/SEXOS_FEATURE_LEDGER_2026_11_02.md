@@ -4087,3 +4087,8 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   master and is not guest latency. Gates should time from guest markers.
 - **Next:** Shapes' start is its own drawing, not loading; prelinking and lazy pages
   are not needed yet for the < 100 ms target.
+
+## J6b: busy programs no longer stall the desktop (2026-11-14)
+- Cause of the 1.5 s key-to-screen stall under load: a Display repaint (~270 ticks under TCG) that used up its time slice went back to the normal queue behind every busy program, so with four `bench spin` programs on two cores a repaint took 1.1-1.6 s and keys waited behind it.
+- Kernel: a task whose time ran out (`Scheduler::tick_sliced`, timer/preempt path) keeps its interactive class; a task that yields still drops to the normal queue, and `URGENT_STREAK` still gives normal tasks one turn in 17. No preempt IPI for a re-queued sliced task.
+- scripts/latency_gate.py (TCG, 2 cores, 4 spinners): loaded p99 1518 ms -> 95 ms (idle p99 85 ms); repaints under load 1100-1600 -> ~270 ticks. Default --max-p99-ms lowered 2000 -> 400.
