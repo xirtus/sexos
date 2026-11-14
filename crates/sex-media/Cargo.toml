@@ -10,3 +10,4 @@ description = "Video and sound for SexOS programs: FFmpeg decoding, paced by the
 sex-pdx = { path = "../sex-pdx" }
 sex-app = { path = "../sex-app" }
 sex-libc = { path = "../sex-libc" }
+sex-episodes = { path = "../sex-episodes" }

@@ -1,0 +1,8 @@
+[package]
+name = "sex-episodes"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Episodes from file names and skip/Up next cards for Qupid; no dependencies, so the torrent client and the library can share it"
+
+[dependencies]

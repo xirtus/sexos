@@ -13,7 +13,6 @@ path = "../../vendor/ripgrep-15.2.0/crates/core/main.rs"
 
 # ripgrep 15.2.0's own dependency list (its Cargo.toml), plus sex-std.
 [dependencies]
-sex-std = { path = "../../crates/sex-std" }
 anyhow = "1.0.75"
 bstr = "1.7.0"
 grep = "0.4.1"
@@ -23,6 +22,9 @@ log = "0.4.5"
 serde_json = "1.0.23"
 termcolor = "1.4.0"
 textwrap = { version = "0.16.0", default-features = false }
+
+[target.'cfg(target_os = "hermit")'.dependencies]
+sex-std = { path = "../../crates/sex-std" }
 
 # ripgrep without PCRE2 (a C library): its `pcre2` feature stays off.
 [lints.rust]

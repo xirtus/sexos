@@ -22,6 +22,7 @@ VERSION=(3,13)
 # importlib's bootstrap (required by the interpreter itself), what startup imports
 # (encodings, site, os, io...), the traceback printer, and a working everyday set:
 # json, re, collections, functools, random, datetime, decimal, typing, argparse...
+# hashlib, socket, selectors, gzip and urllib.parse for network programs (Qupid's Kodi addons).
 MODULES='''
 importlib._bootstrap importlib._bootstrap_external zipimport
 abc codecs io _collections_abc _sitebuiltins genericpath ntpath posixpath os site stat
@@ -34,7 +35,12 @@ heapq inspect json json.decoder json.encoder json.scanner keyword linecache loca
 opcode operator pprint random re re._casefix re._compiler re._constants re._parser
 reprlib shlex statistics string struct textwrap token tokenize traceback types typing
 warnings weakref this
+hashlib hmac secrets socket selectors _compression gzip urllib urllib.parse ipaddress encodings.idna encodings.punycode stringprep
+sqlite3 sqlite3.dbapi2 sqlite3.dump
+ssl
 '''.split()
+# SexOS's own versions, from apps/python/lib (ssl: TLS through the network service).
+OWN={'ssl'}
 
 def main():
     if sys.version_info[:2]!=VERSION:raise SystemExit(f'run this with Python {VERSION[0]}.{VERSION[1]}')
@@ -42,7 +48,7 @@ def main():
     for old in OUT.glob('*.bin'):old.unlink()
     manifest=[]
     for name in MODULES:
-        path=lib.joinpath(*name.split('.'))
+        path=(OUT.parent/'lib' if name in OWN else lib).joinpath(*name.split('.'))
         package=(path/'__init__.py').exists()
         source=path/'__init__.py' if package else path.with_suffix('.py')
         code=compile(source.read_bytes(),f'<frozen {name}>','exec',optimize=0,dont_inherit=True)
