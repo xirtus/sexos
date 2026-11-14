@@ -103,6 +103,7 @@ members = [
     "crates/loom-core",
     "crates/aftercare-core",
     "apps/spreadeagle",
+    "apps/assuit",
     "crates/sex-office",
 ]
 [workspace.package]
@@ -135,7 +136,7 @@ opt-level = "z"
 codegen-units = 1
 strip = true
 # Spreadeagle carries GridCraft's whole engine: size-optimised and stripped, it stays well
-# under the 16 MiB program limit.
+# under the 32 MiB program limit.
 [profile.release.package.spreadeagle]
 strip = true
 [profile.release.package."sha2@0.11.1"]
@@ -164,6 +165,56 @@ opt-level = "s"
 [profile.release.package.gridcraft-math]
 opt-level = "s"
 [profile.release.package.gridcraft-core]
+opt-level = "s"
+# Assuit carries WordCraft's whole engine: size-optimised and stripped, it fits the
+# 32 MiB program image (sex_pdx::program_store::IMAGE_BYTES).
+[profile.release.package.assuit]
+strip = true
+[profile.release.package.craft-atomic]
+opt-level = "s"
+[profile.release.package.craft-cfb]
+opt-level = "s"
+[profile.release.package.craft-codepage]
+opt-level = "s"
+[profile.release.package.craft-doc-binary]
+opt-level = "s"
+[profile.release.package.craft-font-catalog]
+opt-level = "s"
+[profile.release.package.craft-font-store]
+opt-level = "s"
+[profile.release.package.craft-math]
+opt-level = "s"
+[profile.release.package.craft-pdf]
+opt-level = "s"
+[profile.release.package.craft-proof]
+opt-level = "s"
+[profile.release.package.craft-wordmodel]
+opt-level = "s"
+[profile.release.package.craft-xml]
+opt-level = "s"
+[profile.release.package.wordcraft-doc]
+opt-level = "s"
+[profile.release.package.wordcraft-docbin]
+opt-level = "s"
+[profile.release.package.wordcraft-docx]
+opt-level = "s"
+[profile.release.package.wordcraft-engine]
+opt-level = "s"
+[profile.release.package.wordcraft-fonts]
+opt-level = "s"
+[profile.release.package.wordcraft-formats]
+opt-level = "s"
+[profile.release.package.wordcraft-geom]
+opt-level = "s"
+[profile.release.package.wordcraft-layout]
+opt-level = "s"
+[profile.release.package.wordcraft-metafile]
+opt-level = "s"
+[profile.release.package.wordcraft-pdf]
+opt-level = "s"
+[profile.release.package.wordcraft-render]
+opt-level = "s"
+[profile.release.package.krilla]
 opt-level = "s"
 [profile.release.package.web]
 opt-level = 3
@@ -202,6 +253,13 @@ path_abs = { path = "vendor/path_abs-0.5.1" }
 # bat: clircle builds on std's Hermit target, where it identifies no file (vendor/clircle-0.6.1/src/clircle_other.rs).
 clircle = { path = "vendor/clircle-0.6.1" }
 # The shader interpreter runs per vertex and per pixel; keep it fast in tests too.
+# Assuit: filetime (via tar in craft-font-store) builds on std's Hermit target (vendor/filetime-0.2.29/src/hermit.rs).
+filetime = { path = "vendor/filetime-0.2.29" }
+# Assuit: tar (craft-font-store) treats std's Hermit target like wasm32: no unix paths, links or modes (vendor/tar-0.4.46).
+tar = { path = "vendor/tar-0.4.46" }
+# Assuit: WordCraft's PDF writer needs storytold's krilla fork, as WordCraft's own workspace patches it.
+krilla = { git = "https://github.com/storytold/craft-libs", rev = "6e03f65bf45181db77ba6229716e6624db9eb25b" }
+
 [profile.dev.package.sex-gl]
 opt-level = 3
 [profile.dev.package.naga]
