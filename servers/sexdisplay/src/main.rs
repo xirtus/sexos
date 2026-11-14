@@ -178,6 +178,7 @@ impl SceneLease {
             let frame = RENDER_FRAME_COUNTER.load(core::sync::atomic::Ordering::Relaxed);
             if !destination.capture(&SURFACES, &FRAME_GROUPS, &BITMAP_STORES, &TEXT_STAGES, bar,
                 DISPLAY_TOKENS, FOCUSED_SURFACE_ID, frame, w, h) { return None; }
+            motion_place(destination);
         }
         Some(Self { _single_task: core::marker::PhantomData })
     }
@@ -191,6 +192,22 @@ impl Drop for SceneLease {
     }
 }
 static mut FOCUSED_SURFACE_ID: u64 = 0;
+/// Window animations (sex_pdx::window_motion): opens, tiling moves, workspace slides.
+static mut MOTION: sex_pdx::window_motion::Motion<32> = sex_pdx::window_motion::Motion::new();
+/// Draws moving windows at their tweened geometry in this frame's scene.
+fn motion_place(scene: &mut scene::SceneSnapshot) {
+    let now = sex_pdx::get_ticks();
+    let motion = unsafe { &*core::ptr::addr_of!(MOTION) };
+    if motion.active(now) {
+        scene.place(|s| motion.current(s.surface_id, now).map(|g| (g.x, g.y, g.w, g.h)));
+    }
+}
+/// Windows animate; their content, the cursor and the Shell's panels follow or stay.
+fn animates(s: &surface_lifecycle::Surface) -> bool {
+    let groups = unsafe { &*core::ptr::addr_of!(FRAME_GROUPS) };
+    s.active && s.surface_id != CURSOR_SURFACE_ID
+        && (groups.is_frame(s) || (groups.independent(s) && app_catalog::by_surface(s.owner_pd, s.surface_id).is_some()))
+}
 static mut APP_PRESENT_BITS: u64 = 0;
 static APP300_PRESENTED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
@@ -949,16 +966,69 @@ fn workspace_color(x:usize,y:usize,bar:&SilkBar,scene: &scene::SceneSnapshot)->O
     }
     let _=scene;None
 }
+/// The tray state the Shell last sent (`sex_pdx::tray`).
+static mut TRAY_STATUS: sex_pdx::tray::Status = sex_pdx::tray::Status::UNKNOWN;
+static mut TRAY_LABEL: u64 = 0;
+static mut TRAY_VIEW: sex_pdx::tray::View = sex_pdx::tray::View { menu: sex_pdx::tray::Menu::None, month_offset: 0 };
+const TRAY_FG: u32 = 0x00CDD6F4;
+const TRAY_DIM: u32 = 0x006C7086;
+const TRAY_WARN: u32 = 0x00F38BA8;
+const TRAY_GOOD: u32 = 0x00A6E3A1;
+/// One tray icon on a 16-unit grid: 0 network, 1 volume, 2 battery.
+fn tray_icon(slot: usize, gx: usize, gy: usize, s: &sex_pdx::tray::Status) -> Option<u32> {
+    match slot {
+        0 => {
+            // Four rising bars; bright when connected (or wired), dim otherwise.
+            let on = matches!(s.wifi, 0 | 10) ;
+            for (i, top) in [11usize, 8, 5, 2].iter().enumerate() {
+                let x0 = 1 + i * 4;
+                if gx >= x0 && gx < x0 + 3 && gy >= *top && gy < 14 { return Some(if on { TRAY_FG } else { TRAY_DIM }); }
+            }
+            None
+        }
+        1 => {
+            let c = if s.muted { TRAY_DIM } else { TRAY_FG };
+            if gx >= 1 && gx < 4 && gy >= 6 && gy < 10 { return Some(c); }
+            if gx >= 4 && gx < 8 { let spread = gx - 4; if gy + spread >= 5 && gy <= 10 + spread { return Some(c); } }
+            if s.muted {
+                let (a, b) = (gx as isize - 9, gy as isize - 5);
+                if (0..6).contains(&a) && (0..6).contains(&b) && (a == b || a == 5 - b) { return Some(TRAY_WARN); }
+                return None;
+            }
+            let waves = if s.volume == 0 { 0 } else if s.volume <= 33 { 1 } else if s.volume <= 66 { 2 } else { 3 };
+            for k in 0..waves { let x = 9 + k * 2; let r = 2 + k * 2; if gx == x && gy + r >= 8 && gy <= 7 + r { return Some(c); } }
+            None
+        }
+        _ => match s.battery {
+            Some(p) => {
+                let colour = if s.charging { TRAY_GOOD } else if p <= 20 { TRAY_WARN } else { TRAY_FG };
+                let outline = (gy == 4 || gy == 12) && gx >= 1 && gx <= 13 || (gx == 1 || gx == 13) && gy >= 4 && gy <= 12;
+                if outline { return Some(TRAY_FG); }
+                if gx >= 14 && gx < 16 && gy >= 6 && gy < 11 { return Some(TRAY_FG); }
+                let fill = 3 + (p as usize * 9 + 50) / 100;
+                if gx >= 3 && gx < fill && gy >= 6 && gy <= 10 { return Some(colour); }
+                None
+            }
+            None => {
+                // A plug: two prongs, a body and a cord.
+                if (gx == 5 || gx == 10) && gy >= 1 && gy < 5 { return Some(TRAY_FG); }
+                if gx >= 3 && gx < 13 && gy >= 5 && gy < 10 { return Some(TRAY_FG); }
+                if gx >= 7 && gx < 9 && gy >= 10 && gy < 15 { return Some(TRAY_FG); }
+                None
+            }
+        },
+    }
+}
 fn chip_color(x:usize,y:usize,bar:&SilkBar,scene: &scene::SceneSnapshot)->Option<u32>{
+    // Tray icons in the three status chips: network, volume, battery.
     for (idx,slot) in [ModuleSlot::Chip0,ModuleSlot::Chip1,ModuleSlot::Chip2].iter().enumerate(){
         let(cx,cy,cw,ch)=module_rect(bar,*slot);
-        let size=scene.metrics.px(12)as usize;
+        let size=scene.metrics.px(16)as usize;
         let left=cx+cw.saturating_sub(size)/2;let top=cy+ch.saturating_sub(size)/2;
         if !in_rect(x,y,left,top,size,size){continue;}
-        let chip=&bar.chips[idx];
-        if !chip.visible{return Some(DEFAULT_THEME.muted);}
-        return Some(match chip.kind{ChipKind::Net=>glass_over_bg(DEFAULT_THEME.chip_fill,x,y,212,scene),
-            ChipKind::Wifi=>0x0038D6C8,ChipKind::Battery=>0x00FFB84D,ChipKind::Clock=>DEFAULT_THEME.chip_border});
+        if !bar.chips[idx].visible{return None;}
+        let unit=(size/16).max(1);
+        return tray_icon(idx,(x-left)/unit,(y-top)/unit,unsafe{&*core::ptr::addr_of!(TRAY_STATUS)});
     }
     None
 }
@@ -2049,6 +2119,7 @@ fn raster_batch(target:&frame_output::Target<'_>,scene: &scene::SceneSnapshot,pl
             draw_atlas_frame_previews_pass(fb,w,h,total,scene);
         }
         draw_launcher_panel(fb,w,h,total,scene);
+        draw_tray_menu(fb,w,h,total,scene);
         draw_window_switcher(fb,w,h,total,scene);
         draw_screenshot_ui(fb,w,h,total,scene);
     }
@@ -2927,6 +2998,136 @@ fn draw_window_switcher(fb: *mut u32, w: usize, h: usize, total_pixels: usize, s
     }
 }
 
+/// Text at (x0, y0) over `bg`, cut at `max_w`; returns its width.
+fn tray_text(fb: *mut u32, w: usize, h: usize, total: usize, text: &[u8], x0: usize, y0: usize, bg: u32, scale: u32, max_w: usize) -> usize {
+    let tw = glyphs::ui_width(text, scale).unwrap_or(0).min(max_w);
+    let line = glyphs::UI_H * scale as usize;
+    for y in 0..line {
+        for x in 0..tw {
+            if let Some(c) = ui_label_at_scaled(text, x, y, bg, scale) {
+                let (px, py) = (x0 + x, y0 + y);
+                let i = py * w + px;
+                if px < w && py < h && i < total { unsafe { core::ptr::write_volatile(fb.add(i), c); } }
+            }
+        }
+    }
+    tw
+}
+fn tray_fill(fb: *mut u32, w: usize, h: usize, total: usize, r: (usize, usize, usize, usize), c: u32) {
+    for y in r.1..(r.1 + r.3).min(h) {
+        for x in r.0..(r.0 + r.2).min(w) {
+            let i = y * w + x;
+            if i < total { unsafe { core::ptr::write_volatile(fb.add(i), c); } }
+        }
+    }
+}
+/// The tray menu the Shell opened: quick settings or the calendar.
+fn draw_tray_menu(fb: *mut u32, w: usize, h: usize, total: usize, scene: &scene::SceneSnapshot) {
+    use sex_pdx::tray::{self, Menu};
+    let view = unsafe { TRAY_VIEW };
+    if view.menu == Menu::None { return; }
+    let scale = scene.metrics.scale();
+    let s = scale as usize;
+    let bar = scene.metrics.bar() as usize;
+    let line = glyphs::UI_H * s;
+    const BG: u32 = 0x00181825;
+    const RIM: u32 = 0x0045475A;
+    const TRACK: u32 = 0x00313244;
+    let ring = sex_pdx::desktop_style::FOCUS;
+    let panel = |r: (usize, usize, usize, usize)| {
+        tray_fill(fb, w, h, total, r, RIM);
+        tray_fill(fb, w, h, total, (r.0 + s, r.1 + s, r.2 - 2 * s, r.3 - 2 * s), BG);
+    };
+    let status = unsafe { TRAY_STATUS };
+    match view.menu {
+        Menu::Quick => {
+            let Some(q) = tray::Quick::new(w, bar, s) else { return };
+            panel(q.panel);
+            let mid = |r: (usize, usize, usize, usize)| r.1 + r.3.saturating_sub(line) / 2;
+            let r0 = q.rows[0];
+            tray_text(fb, w, h, total, b"Volume", r0.0, mid(r0), BG, scale, 80 * s);
+            let (sx, sy, sw, sh) = q.slider;
+            tray_fill(fb, w, h, total, (sx, sy + sh / 3, sw, sh / 3), TRACK);
+            let filled = sw * status.volume as usize / 100;
+            tray_fill(fb, w, h, total, (sx, sy + sh / 3, filled, sh / 3), if status.muted { TRAY_DIM } else { ring });
+            tray_fill(fb, w, h, total, (sx + filled.min(sw.saturating_sub(sh / 2)), sy, sh / 2, sh), TRAY_FG);
+            let m = q.mute;
+            let mbg = if status.muted { 0x005A2A35 } else { TRACK };
+            tray_fill(fb, w, h, total, m, mbg);
+            let word: &[u8] = if status.muted { b"Muted" } else { b"Mute" };
+            let tw = glyphs::ui_width(word, scale).unwrap_or(0);
+            tray_text(fb, w, h, total, word, m.0 + m.2.saturating_sub(tw) / 2, mid(m), mbg, scale, m.2);
+            let r1 = q.rows[1];
+            tray_text(fb, w, h, total, tray::wifi_text(status.wifi).as_bytes(), r1.0, mid(r1), BG, scale, r1.2);
+            let r2 = q.rows[2];
+            let mut text = [0u8; 32];
+            let n = tray::battery_text(&status, &mut text);
+            tray_text(fb, w, h, total, &text[..n], r2.0, mid(r2), BG, scale, r2.2);
+            let r3 = q.rows[3];
+            let mut label = [0u8; 8];
+            let ln = tray::label_decode(unsafe { TRAY_LABEL }, &mut label);
+            let x = r3.0 + tray_text(fb, w, h, total, b"Keyboard: ", r3.0, mid(r3), BG, scale, r3.2);
+            let x = x + tray_text(fb, w, h, total, &label[..ln], x, mid(r3), BG, scale, r3.2);
+            tray_text(fb, w, h, total, b"  (click to switch)", x, mid(r3), BG, scale, (r3.0 + r3.2).saturating_sub(x));
+            for r in &q.rows[1..] { tray_fill(fb, w, h, total, (r.0, r.1, r.2, s), TRACK); }
+        }
+        Menu::Calendar => {
+            let Some(c) = tray::Calendar::new(w, bar, s) else { return };
+            panel(c.panel);
+            let today = if scene.bar.civil_enabled && scene.bar.civil_clock.seconds() != 0 {
+                sex_time::SexTimestamp::from_unix(scene.bar.civil_clock.seconds() as i64, 0).and_then(sex_time::Gregorian::from_timestamp)
+            } else { None };
+            let Some(today) = today else {
+                tray_text(fb, w, h, total, b"Date unknown", c.header.0, c.header.1, BG, scale, c.header.2);
+                return;
+            };
+            let (year, month) = tray::shift_month(today.year, today.month, view.month_offset as i32);
+            // Header: < Month Year >
+            let mut head = [0u8; 24];
+            let name = tray::MONTH_NAMES[month as usize - 1].as_bytes();
+            head[..name.len()].copy_from_slice(name);
+            let mut n = name.len();
+            head[n] = b' '; n += 1;
+            let y4 = year.clamp(0, 9999) as u32;
+            for d in [1000, 100, 10, 1] { head[n] = b'0' + (y4 / d % 10) as u8; n += 1; }
+            let hm = c.header.1 + c.header.3.saturating_sub(line) / 2;
+            let tw = glyphs::ui_width(&head[..n], scale).unwrap_or(0);
+            tray_text(fb, w, h, total, &head[..n], c.header.0 + c.header.2.saturating_sub(tw) / 2, hm, BG, scale, c.header.2);
+            for (r, t) in [(c.prev, b"<"), (c.next, b">")] {
+                tray_fill(fb, w, h, total, r, TRACK);
+                let tw = glyphs::ui_width(t, scale).unwrap_or(0);
+                tray_text(fb, w, h, total, t, r.0 + r.2.saturating_sub(tw) / 2, hm, TRACK, scale, r.2);
+            }
+            let (cw, ch) = c.cell;
+            for (i, d) in tray::WEEKDAYS.iter().enumerate() {
+                let tw = glyphs::ui_width(d.as_bytes(), scale).unwrap_or(0);
+                tray_text(fb, w, h, total, d.as_bytes(), c.grid.0 + i * cw + cw.saturating_sub(tw) / 2, c.grid.1 - ch + ch.saturating_sub(line) / 2, BG, scale, cw);
+            }
+            let first = tray::weekday(year, month, 1);
+            let days = tray::days_in_month(year, month);
+            let this_month = view.month_offset == 0;
+            for day in 1..=days {
+                let r = c.day_cell(first, day);
+                let is_today = this_month && day == today.day;
+                let bg = if is_today { ring } else { BG };
+                if is_today { tray_fill(fb, w, h, total, (r.0 + 2 * s, r.1 + s, r.2 - 4 * s, r.3 - 2 * s), ring); }
+                let digits = [b'0' + day / 10, b'0' + day % 10];
+                let t: &[u8] = if day < 10 { &digits[1..] } else { &digits };
+                let tw = glyphs::ui_width(t, scale).unwrap_or(0);
+                tray_text(fb, w, h, total, t, r.0 + r.2.saturating_sub(tw) / 2, r.1 + r.3.saturating_sub(line) / 2, bg, scale, r.2);
+            }
+            unsafe {
+                static mut CAL_BUDGET: u32 = 8;
+                if CAL_BUDGET > 0 { CAL_BUDGET -= 1; sex_pdx::serial_record!("[display.tray.calendar] year={} month={} first={} days={} today={}", year, month, first, days, if this_month { today.day } else { 0 }); }
+            }
+        }
+        Menu::None => {}
+    }
+    unsafe {
+        static mut TRAY_DRAW_BUDGET: u32 = 16;
+        if TRAY_DRAW_BUDGET > 0 { TRAY_DRAW_BUDGET -= 1; sex_pdx::serial_record!("[display.tray.draw] menu={} volume={} muted={}", view.wire() & 0xFF, status.volume, status.muted as u8); }
+    }
+}
 /// The Print selection the Shell asked for: `Some(selection)` while it shows.
 static mut SCREENSHOT_UI: Option<sex_pdx::screenshot::Rect> = None;
 /// Print: the desktop dimmed except the selection, which is ringed, and a hint
@@ -4270,6 +4471,28 @@ pub extern "C" fn _start() -> ! {
                         }
                     }
                 }
+                sex_pdx::window_motion::OP_MOTION => {
+                    // Only the Shell turns animations on or off and hints a workspace slide.
+                    if msg.caller_pd == 3 {
+                        let motion = unsafe { &mut *core::ptr::addr_of_mut!(MOTION) };
+                        motion.set_enabled(msg.arg0 != 0);
+                        let dir = msg.arg1 as u8 as i8;
+                        if dir != 0 { motion.workspace(dir, unsafe { FB_W } as u32 / 8, sex_pdx::get_ticks()); }
+                        sex_pdx::serial_record!("[display.motion] on={} dir={}", motion.enabled() as u8, dir);
+                    }
+                }
+                sex_pdx::tray::OP_TRAY => {
+                    // Only the Shell reports tray state and opens its menus.
+                    if msg.caller_pd == 3 {
+                        if let Some(view) = sex_pdx::tray::View::decode(msg.arg2) {
+                            let status = sex_pdx::tray::Status::decode(msg.arg0);
+                            unsafe { TRAY_STATUS = status; TRAY_LABEL = msg.arg1; TRAY_VIEW = view; }
+                            needs_top_strip_redraw = true;
+                            needs_full_redraw = true;
+                            sex_pdx::serial_record!("[display.tray] menu={} offset={} volume={} muted={} battery={} wifi={}", msg.arg2 & 0xFF, view.month_offset, status.volume, status.muted as u8, status.battery.map_or(-1, |b| b as i32), status.wifi);
+                        }
+                    }
+                }
                 sex_pdx::screenshot::OP_SCREENSHOT_UI => {
                     // Only the Shell shows, moves and hides the screenshot selection.
                     if msg.caller_pd == 3 {
@@ -4655,6 +4878,25 @@ pub extern "C" fn _start() -> ! {
                             let after = SURFACES.iter().find(|s|s.active && s.surface_id==surface_id)
                                 .map(|s|(s.x,s.y,s.w,s.h,s.color));
                             if before==after { REPAINT_FITTED_NOOPS+=1; }
+                            // Opens rise in and tiling moves glide; small steps (a
+                            // resize drag) follow the pointer at once.
+                            if let Some(s) = SURFACES.iter().find(|s| s.active && s.surface_id == surface_id).filter(|s| animates(s)) {
+                                use sex_pdx::window_motion::Geom;
+                                let to = Geom { x: s.x, y: s.y, w: s.w, h: s.h };
+                                let motion = &mut *core::ptr::addr_of_mut!(MOTION);
+                                let now = sex_pdx::get_ticks();
+                                match before {
+                                    None => motion.opened(surface_id, to, now),
+                                    Some((bx, by, bw, bh, _)) => {
+                                        let far = (bx - to.x).abs() > 24 || (by - to.y).abs() > 24 || bw.abs_diff(to.w) > 24 || bh.abs_diff(to.h) > 24;
+                                        if far { motion.moved(surface_id, Geom { x: bx, y: by, w: bw, h: bh }, to, now); } else { motion.forget(surface_id); }
+                                    }
+                                }
+                                if motion.current(surface_id, now).is_some() {
+                                    static mut MOTION_START_BUDGET: u32 = 32;
+                                    if MOTION_START_BUDGET > 0 { MOTION_START_BUDGET -= 1; sex_pdx::serial_record!("[display.motion.start] surface={} kind={} x={} y={} w={} h={} tick={}", surface_id, if before.is_none() { "open" } else { "move" }, to.x, to.y, to.w, to.h, now); }
+                                }
+                            }
                             for child in SURFACES.iter_mut().filter(|s| s.active) { recompute_text_lines(child); }
                             if let Some(surface) = SURFACES.iter_mut().find(|s| s.active && s.surface_id == surface_id) {
                                 recompute_text_lines(surface);
@@ -4795,6 +5037,7 @@ pub extern "C" fn _start() -> ! {
                     let target_id = msg.arg0;
                     if target_id == 0 { continue; }
                     unsafe {
+                        (*core::ptr::addr_of_mut!(MOTION)).forget(target_id);
                         let mut found = false;
                         for (index,slot) in SURFACES.iter_mut().enumerate() {
                             if slot.active && slot.surface_id == target_id {
@@ -5156,6 +5399,23 @@ pub extern "C" fn _start() -> ! {
         let transaction_full_render=unsafe{BITMAP_STORES.needs_publication()}||lifecycle.needs_presentation()
             ||(0..surface_lifecycle::CATALOG_CAPACITY).any(|i|lifecycle.phase(i)==Some(surface_lifecycle::Phase::Prepared));
         let (w,h)=unsafe{(FB_W as usize,FB_H as usize)};
+        // A window still moving: draw the next frame of its animation.
+        let motion_now = sex_pdx::get_ticks();
+        // On the damage path: each frame redraws only where moving windows
+        // pass, and the frame after the last tween ends lands them exactly.
+        let motion = unsafe { &mut *core::ptr::addr_of_mut!(MOTION) };
+        let motion_damage = motion.span().map(|(l, t, r, b)| {
+            let pad = 16;
+            damage::Rect { x: (l - pad).max(0) as usize, y: (t - pad).max(0) as usize, right: (r + pad).max(0) as usize, bottom: (b + pad).max(0) as usize }
+        });
+        if let Some(rect) = motion_damage { pending_paint.request_damage(rect, w, h, bar_height()); }
+        if motion.active(motion_now) {
+            static mut MOTION_FRAME_BUDGET: u32 = 96;
+            unsafe { if MOTION_FRAME_BUDGET > 0 { MOTION_FRAME_BUDGET -= 1; sex_pdx::serial_record!("[display.motion.frame] tick={} progress={}", motion_now, motion.progress(motion_now).unwrap_or(1024)); } }
+        } else if motion_damage.is_some() {
+            motion.clear_finished(motion_now);
+            sex_pdx::serial_record!("[display.motion.end] tick={}", motion_now);
+        }
         if needs_full_redraw||transaction_full_render||scale_receipts.needs_publication(){pending_paint.request_full();}
         if needs_surface_redraw{pending_paint.request_area();}
         if let Some(rect)=text_damage.rect(){pending_paint.request_damage(rect,w,h,bar_height());}
