@@ -35,7 +35,8 @@ observed Net fault/worker/lifecycle ambiguity fail closed. The exact positive
 BOOT restart-registration line is not mistaken for a runtime restart.
 
 The evidence type is `source_bound_up_expiry_later_ring3_syscall_continuation`,
-with `exact_two_tick_envelope=false`. It establishes later continuation of that
+with `exact_two_tick_envelope=false`, in `passive_continuation_joins`.
+The legacy `timer_user_joins` remains only observed/return-envelope joins. It establishes later continuation of that
 first-epoch BOOT task, not the exact two-tick return envelope, a wake reason from
 the syscall ABI, fault-free execution between snapshots, NIC IRQ behavior,
 physical/SMP behavior or a general Rust verifier. Recoverable fault history is

@@ -27,6 +27,7 @@ class PassiveProof(unittest.TestCase):
         result=self.inspect();self.assertTrue(result['ok'],result)
         self.assertEqual(result['observed_timer_user_joins'],[])
         self.assertEqual(result['inferred_timer_user_joins'],[])
+        self.assertEqual(result['timer_user_joins'],[])
         witness=result['passive_continuation_joins'][0]
         self.assertEqual(witness['evidence_type'],'source_bound_up_expiry_later_ring3_syscall_continuation')
         self.assertFalse(witness['exact_two_tick_envelope'])
