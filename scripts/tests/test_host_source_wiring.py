@@ -8,7 +8,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
 class HostSourceWiring(unittest.TestCase):
-    def validate(self, gate, transform=lambda value: value):
+    def validate(self, gate, transform=lambda value: value, *, broker_fixture=False):
         script = (ROOT / 'scripts' / gate).read_text()
         marker = "<<'PYCODE'" if 'linen' in gate else "<<'PY'"
         end = '\nPYCODE\n' if 'linen' in gate else '\nPY\n'
@@ -22,7 +22,11 @@ class HostSourceWiring(unittest.TestCase):
                 target = root / relative
                 target.parent.mkdir(parents=True, exist_ok=True)
                 source = (ROOT / relative).read_text()
-                target.write_text(transform(source) if relative == 'servers/silk-shell/src/main.rs' else source)
+                if relative == 'servers/silk-shell/src/main.rs':
+                    if broker_fixture:
+                        source = source.replace('let msg = match pop_startup_message()', 'let mut msg = match pop_startup_message()').replace('clipboard_poll(); app_input_poll();', 'clipboard_poll(); autofill_routes::poll(); app_input_poll();')
+                    source = transform(source)
+                target.write_text(source)
             return subprocess.run(['python3', '-c', code, str(root), str(root / 'production.rs')],
                                   cwd=root, capture_output=True, text=True).returncode
 
@@ -39,7 +43,7 @@ class HostSourceWiring(unittest.TestCase):
             lambda s: s.replace('let mut msg = match pop_startup_message()', 'let unrelated = match pop_startup_message()'),
         )
         for mutate in mutations:
-            self.assertNotEqual(self.validate('display_ready_protocol_gate.sh', mutate), 0)
+            self.assertNotEqual(self.validate('display_ready_protocol_gate.sh', mutate, broker_fixture=True), 0)
 
     def test_every_original_poll_and_order_remain_required(self):
         calls = ('shell_registration_reply_poll', 'clipboard_intake_poll', 'clipboard_poll',
@@ -48,11 +52,11 @@ class HostSourceWiring(unittest.TestCase):
                  'linen_text_poll', 'linen_async_poll')
         for call in calls:
             with self.subTest(call=call):
-                self.assertNotEqual(self.validate('linen_text_delivery_gate.sh', lambda s: s.replace(call + '();', '')), 0)
+                self.assertNotEqual(self.validate('linen_text_delivery_gate.sh', lambda s: s.replace(call + '();', ''), broker_fixture=True), 0)
         for replacement in ('app_input_poll(); autofill_routes::poll(); clipboard_poll();',
                             'clipboard_poll(); unrelated(); app_input_poll();',
                             'clipboard_poll(); if false { autofill_routes::poll(); } app_input_poll();'):
-            self.assertNotEqual(self.validate('linen_text_delivery_gate.sh', lambda s: s.replace('clipboard_poll(); autofill_routes::poll(); app_input_poll();', replacement)), 0)
+            self.assertNotEqual(self.validate('linen_text_delivery_gate.sh', lambda s: s.replace('clipboard_poll(); autofill_routes::poll(); app_input_poll();', replacement), broker_fixture=True), 0)
 
 
 if __name__ == '__main__':
