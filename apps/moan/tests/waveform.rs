@@ -60,8 +60,16 @@ fn pointer_selects_time_range_and_cut_undo_edit_actual_pcm() {
         y,
         PointerKind::Up(Button::Left),
     );
-    assert_eq!(s.session.from, s.view.frame(70));
-    assert_eq!(s.session.to, s.view.frame(210));
+    assert_eq!(
+        s.session.from,
+        s.view
+            .frame((70.0 / (r.w - 1.0) * (waveform::WIDTH - 1) as f32).round() as usize)
+    );
+    assert_eq!(
+        s.session.to,
+        s.view
+            .frame((210.0 / (r.w - 1.0) * (waveform::WIDTH - 1) as f32).round() as usize)
+    );
     let before = s.session.duration();
     let id = s
         .buttons
@@ -178,7 +186,10 @@ fn moving_a_clip_with_pointer_is_one_undoable_edit_and_preserves_shared_audio() 
     );
     assert_eq!(
         s.session.tracks[0].clips[0].start(),
-        s.view.frame(140) - s.view.frame(70)
+        s.view
+            .frame((140.0 / (r.w - 1.0) * (waveform::WIDTH - 1) as f32).round() as usize)
+            - s.view
+                .frame((70.0 / (r.w - 1.0) * (waveform::WIDTH - 1) as f32).round() as usize)
     );
     assert!(s.session.is_dirty());
     assert_eq!(

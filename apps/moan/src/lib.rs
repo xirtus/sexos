@@ -2,6 +2,8 @@
 //! Moan's editable project and Weft window, shared by guest and host UI tests.
 #![no_std]
 extern crate alloc;
+pub mod meter_history;
+pub mod piano;
 pub mod project;
 #[cfg(feature = "sexos")]
 pub mod project_io;
@@ -17,8 +19,68 @@ struct Snapshot {
     cursor: usize,
     from: usize,
     to: usize,
-    tracks: Vec<Track<'static>>,
+    tracks: Vec<ArchivedTrack>,
     selected: usize,
+}
+#[derive(Clone)]
+struct ArchivedTrack {
+    skeleton: Track<'static>,
+    clips: Vec<ArchivedClip>,
+}
+#[derive(Clone)]
+enum ArchivedClip {
+    Audio(Clip<'static>),
+    Midi {
+        source: usize,
+        pattern: Arc<moan_core::midi::Pattern>,
+        start: usize,
+        offset: usize,
+        len: usize,
+        gain: u16,
+        fades: (usize, usize),
+    },
+}
+impl Snapshot {
+    fn materialize(&self) -> Result<Vec<Track<'static>>, &'static str> {
+        let mut sources: Vec<(usize, Clip<'static>)> = Vec::new();
+        let mut tracks = Vec::new();
+        for archived in &self.tracks {
+            let mut track = archived.skeleton.clone();
+            for clip in &archived.clips {
+                let clip = match clip {
+                    ArchivedClip::Audio(clip) => clip.clone(),
+                    ArchivedClip::Midi {
+                        source,
+                        pattern,
+                        start,
+                        offset,
+                        len,
+                        gain,
+                        fades,
+                    } => {
+                        let mut clip =
+                            if let Some((_, clip)) = sources.iter().find(|(id, _)| id == source) {
+                                clip.clone()
+                            } else {
+                                let clip = Clip::midi((**pattern).clone(), 0)
+                                    .map_err(|_| "Cannot restore MIDI cache")?;
+                                sources.push((*source, clip.clone()));
+                                clip
+                            };
+                        clip.trim(*offset, *offset + *len)
+                            .map_err(|_| "MIDI trim")?;
+                        clip.move_to(*start).map_err(|_| "MIDI start")?;
+                        clip.set_gain(*gain).map_err(|_| "MIDI gain")?;
+                        clip.set_fades(fades.0, fades.1).map_err(|_| "MIDI fades")?;
+                        clip
+                    }
+                };
+                track.clips.push(clip);
+            }
+            tracks.push(track);
+        }
+        Ok(tracks)
+    }
 }
 pub struct Session {
     revision: u64,
@@ -62,9 +124,38 @@ impl Session {
         project::decode(bytes)
     }
     fn snapshot(&self) -> Snapshot {
-        let mut tracks = self.tracks.clone();
-        for t in &mut tracks {
-            t.reset_effects();
+        let mut tracks = Vec::new();
+        let mut patterns: Vec<(usize, Arc<moan_core::midi::Pattern>)> = Vec::new();
+        for track in &self.tracks {
+            let mut skeleton = track.clone();
+            skeleton.clips.clear();
+            skeleton.reset_effects();
+            let mut clips = Vec::new();
+            for clip in &track.clips {
+                if let Some(pattern) = clip.midi_pattern() {
+                    let source = clip.source_frames().as_ptr() as usize;
+                    let pattern =
+                        if let Some((_, p)) = patterns.iter().find(|(id, _)| *id == source) {
+                            p.clone()
+                        } else {
+                            let p = Arc::new(pattern.clone());
+                            patterns.push((source, p.clone()));
+                            p
+                        };
+                    clips.push(ArchivedClip::Midi {
+                        source,
+                        pattern,
+                        start: clip.start(),
+                        offset: clip.source_offset(),
+                        len: clip.len(),
+                        gain: clip.gain(),
+                        fades: clip.fades(),
+                    });
+                } else {
+                    clips.push(ArchivedClip::Audio(clip.clone()));
+                }
+            }
+            tracks.push(ArchivedTrack { skeleton, clips });
         }
         Snapshot {
             revision: self.revision,
@@ -89,18 +180,26 @@ impl Session {
         let Some(s) = self.undo.pop() else {
             return false;
         };
+        let Ok(tracks) = s.materialize() else {
+            self.undo.push(s);
+            return false;
+        };
         let current = self.snapshot();
         self.redo.push(current);
         self.revision = s.revision;
         self.cursor = s.cursor;
         self.from = s.from;
         self.to = s.to;
-        self.tracks = s.tracks;
+        self.tracks = tracks;
         self.selected = s.selected;
         true
     }
     pub fn redo(&mut self) -> bool {
         let Some(s) = self.redo.pop() else {
+            return false;
+        };
+        let Ok(tracks) = s.materialize() else {
+            self.redo.push(s);
             return false;
         };
         let current = self.snapshot();
@@ -109,7 +208,7 @@ impl Session {
         self.cursor = s.cursor;
         self.from = s.from;
         self.to = s.to;
-        self.tracks = s.tracks;
+        self.tracks = tracks;
         self.selected = s.selected;
         true
     }
@@ -144,6 +243,53 @@ impl Session {
         self.to = self.duration();
         Ok(())
     }
+    pub fn add_midi(&mut self, pattern: moan_core::midi::Pattern) -> Result<(), &'static str> {
+        if self.tracks.len() >= MAX_TRACKS {
+            return Err("Eight tracks maximum");
+        }
+        let clip = Clip::midi(pattern, self.cursor)
+            .map_err(|_| "MIDI pattern exceeds note, voice or memory bounds")?;
+        if clip.end() > project::MAX_TIMELINE {
+            return Err("Timeline overflow");
+        }
+        self.remember();
+        let mut track = Track::new();
+        track.clips.push(clip);
+        self.tracks.push(track);
+        self.selected = self.tracks.len() - 1;
+        self.from = self.cursor;
+        self.to = self.duration();
+        Ok(())
+    }
+    pub fn midi_clip(&self) -> Option<&Clip<'static>> {
+        let track = self.tracks.get(self.selected)?;
+        track
+            .clips
+            .iter()
+            .find(|c| {
+                c.midi_pattern().is_some() && self.cursor >= c.start() && self.cursor < c.end()
+            })
+            .or_else(|| track.clips.iter().find(|c| c.midi_pattern().is_some()))
+    }
+    pub fn edit_midi(
+        &mut self,
+        edit: impl FnOnce(&mut moan_core::midi::Pattern),
+    ) -> Result<(), &'static str> {
+        let source = self.midi_clip().ok_or("Choose a MIDI region")?;
+        let old = source.source_frames().as_ptr();
+        let mut pattern = source.midi_pattern().unwrap().clone();
+        edit(&mut pattern);
+        let replacement = Clip::midi(pattern, 0).map_err(|_| "MIDI edit exceeds bounds")?;
+        self.remember();
+        for clip in &mut self.tracks[self.selected].clips {
+            if clip.source_frames().as_ptr() == old {
+                clip.replace_midi_source(&replacement)
+                    .map_err(|_| "MIDI cache mismatch")?;
+            }
+        }
+        self.tracks[self.selected].reset_effects();
+        Ok(())
+    }
     pub fn tone(&mut self) -> Result<(), &'static str> {
         let period = 120usize.saturating_sub(self.tracks.len() * 8).max(40);
         self.add(
@@ -153,6 +299,9 @@ impl Session {
         )
     }
     pub fn split(&mut self) -> Result<(), &'static str> {
+        if self.tracks.iter().map(|t| t.clips.len()).sum::<usize>() >= project::MAX_CLIPS {
+            return Err("Project region limit reached");
+        }
         let t = self.tracks.get(self.selected).ok_or("Select a track")?;
         if !t
             .clips
@@ -346,10 +495,37 @@ enum Drag {
         remembered: bool,
     },
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Workspace {
+    Arrange,
+    Mix,
+    PianoRoll,
+    Instruments,
+}
 pub struct Studio {
     pub export_format: u8,
     pub waveform: Id,
+    pub piano: Id,
+    arrange: Id,
+    navigation: Id,
+    library: Id,
+    smart: Id,
+    console: Id,
+    piano_panel: Id,
+    track_buttons: Vec<Id>,
+    mixer_strips: Vec<Id>,
+    workspace: Workspace,
+    library_open: bool,
+    piano_label: Id,
+    velocity: Id,
+    note_velocity: u8,
+    app_end: Id,
+    meter_names: Vec<Id>,
+    meter_values: Vec<Id>,
+    mixer_volume: Vec<Id>,
+    mixer_pan: Vec<Id>,
     pub view: waveform::View,
+    transport_cursor: Option<usize>,
     viewport: Id,
     scale_label: Id,
     move_mode: Id,
@@ -376,6 +552,20 @@ pub struct Studio {
 impl Studio {
     pub fn build(ui: &mut Ui) -> Self {
         for (id, label, key) in [
+            ("moan.library.keys", "Silk Keys MIDI", "Ctrl+Shift+I"),
+            ("moan.library.bass", "Satin Bass MIDI", "Ctrl+Shift+B"),
+            ("moan.library.kit", "Velvet Kit MIDI", "Ctrl+Shift+D"),
+            ("moan.piano", "Show Piano Roll", "Ctrl+P"),
+            ("moan.tracks", "Focus Track List", "Ctrl+Shift+R"),
+            ("moan.mixer", "Show Mixer", "Ctrl+M"),
+            ("moan.octave", "Raise MIDI Octave", "Ctrl+Shift+Up"),
+            ("moan.lengthen", "Lengthen MIDI Notes", "Ctrl+Shift+G"),
+            ("moan.velocity-half", "Soften MIDI Notes", "Ctrl+Shift+V"),
+            (
+                "moan.clear-notes",
+                "Clear MIDI Notes",
+                "Ctrl+Shift+Backspace",
+            ),
             ("moan.play", "Play", "Ctrl+Space"),
             ("moan.stop", "Stop", "Escape"),
             ("moan.undo", "Undo Edit", "Ctrl+Z"),
@@ -410,23 +600,23 @@ impl Studio {
                     .command("moan.import")
                     .command("moan.export"),
                 Menu::new("Edit").command("moan.undo").command("moan.redo"),
+                Menu::new("MIDI")
+                    .command("moan.library.keys")
+                    .command("moan.library.bass")
+                    .command("moan.library.kit")
+                    .separator()
+                    .command("moan.piano")
+                    .command("moan.clear-notes")
+                    .command("moan.octave")
+                    .command("moan.velocity-half"),
                 Menu::new("Transport")
                     .command("moan.play")
                     .command("moan.stop"),
             ],
         );
-        let scroll = ui.scroll(root);
-        ui.set_layout(scroll, Layout::column().fill());
-        let body = ui.group(
-            scroll,
-            Layout::column()
-                .gap(8.0)
-                .padding(10.0)
-                .fill_width()
-                .shrink(0.0),
-        );
-        ui.text(body, "Moan", TextStyle::Title);
-        let row = ui.row(body);
+        // Transport and workspace navigation never scroll out of reach.
+        let transport = ui.group(root, Layout::row().gap(4.0).padding(4.0).wrap().shrink(0.0));
+        ui.text(transport, "MOAN", TextStyle::Heading);
         let mut buttons = Vec::new();
         for name in [
             "Play",
@@ -439,7 +629,7 @@ impl Studio {
         ] {
             buttons.push((
                 ui.button(
-                    row,
+                    transport,
                     if name == "Export WAV" {
                         "Export Audio"
                     } else {
@@ -449,37 +639,17 @@ impl Studio {
                 name,
             ));
         }
-        let status = ui.text(
-            body,
-            "Add a tone, import a 48 kHz PCM WAV, or record a track.",
-            TextStyle::Caption,
+        let navigation = ui.group(
+            root,
+            Layout::row()
+                .gap(4.0)
+                .padding_xy(4.0, 0.0)
+                .wrap()
+                .shrink(0.0),
         );
-        let time = ui.row(body);
-        ui.text(time, "Playhead (seconds)", TextStyle::Caption);
-        let position = ui.field(time, "0", "Seconds");
-        ui.text(time, "Range", TextStyle::Caption);
-        let from = ui.field(time, "0", "Start seconds");
-        let to = ui.field(time, "1", "End seconds");
-        for field in [position, from, to] {
-            ui.set_layout(field, Layout::default().width(85.0));
+        for name in ["Arrange", "Mix", "Piano Roll", "Instruments", "Library"] {
+            buttons.push((ui.button(navigation, name), name));
         }
-        let timeline = ui.list_with(
-            body,
-            alloc::boxed::Box::new(Rows::default()),
-            vec![
-                Column::new("Track / clip", 130.0),
-                Column::new("Start (s)", 80.0),
-                Column::new("End (s)", 80.0),
-                Column::new("Gain", 65.0),
-            ],
-        );
-        ui.set_layout(timeline, Layout::default().fill_width().min_height(100.0));
-        let edits = ui.row(body);
-        for name in ["Split", "Cut range", "Fade edges", "Undo", "Redo"] {
-            buttons.push((ui.button(edits, name), name));
-        }
-        let project_row = ui.row(body);
-        ui.set_layout(project_row, Layout::row().gap(6.0).wrap());
         for name in [
             "New Project",
             "Open Project",
@@ -488,42 +658,218 @@ impl Studio {
             "FLAC",
             "MP3",
         ] {
-            buttons.push((ui.button(project_row, name), name));
+            buttons.push((ui.button(navigation, name), name));
         }
-        let view_row = ui.row(body);
-        ui.set_layout(view_row, Layout::row().gap(6.0).wrap());
+        let status = ui.text(
+            root,
+            "Original instruments, audio tracks and editable MIDI regions",
+            TextStyle::Caption,
+        );
+        let scroll = ui.scroll(root);
+        ui.set_layout(scroll, Layout::column().fill());
+        let body = ui.group(
+            scroll,
+            Layout::column()
+                .gap(4.0)
+                .padding(4.0)
+                .fill_width()
+                .shrink(0.0),
+        );
+        let workspace = ui.group(
+            body,
+            Layout::row()
+                .gap(6.0)
+                .fill_width()
+                .align_items(taffy::AlignItems::START),
+        );
+        let library = ui.panel(
+            workspace,
+            weft::Fill::Surface,
+            Layout::column()
+                .gap(4.0)
+                .padding(6.0)
+                .width(150.0)
+                .shrink(0.0),
+        );
+        ui.text(library, "Library", TextStyle::Heading);
+        for name in ["Silk Keys", "Satin Bass", "Velvet Kit"] {
+            buttons.push((ui.button(library, name), name));
+        }
+        ui.text(
+            library,
+            "Original patches\n+ two-bar loops",
+            TextStyle::Caption,
+        );
+        let arrange = ui.panel(
+            workspace,
+            weft::Fill::Surface,
+            Layout::column().gap(4.0).padding(4.0).fill(),
+        );
+        let view_row = ui.group(arrange, Layout::row().gap(4.0).wrap().fill_width());
         for name in ["Zoom in", "Zoom out", "Fit audio", "Earlier", "Later"] {
             buttons.push((ui.button(view_row, name), name));
         }
         let move_mode = ui.checkbox(view_row, "Drag clips", false);
-        let scale_label = ui.text(
-            body,
-            "0.00s — 4.00s. Drag to select time; enable Drag clips to move audio.",
-            TextStyle::Caption,
-        );
+        let scale_label = ui.text(arrange, "Timeline · 0.00s — 4.00s", TextStyle::Caption);
+        let lanes = ui.group(arrange, Layout::row().gap(0.0).fill_width());
+        let track_headers = ui.group(lanes, Layout::column().gap(0.0).width(142.0).shrink(0.0));
+        let ruler = ui.text(track_headers, "TRACK / REGION", TextStyle::Caption);
+        ui.set_layout(ruler, Layout::default().height(waveform::HEADER as f32));
+        let mut track_buttons = Vec::new();
+        for _ in 0..MAX_TRACKS {
+            let id = ui.button(track_headers, "");
+            ui.set_layout(
+                id,
+                Layout::default()
+                    .fill_width()
+                    .height(waveform::ROW as f32)
+                    .shrink(0.0),
+            );
+            ui.set_visible(id, false);
+            track_buttons.push(id);
+        }
         let (height, pixels) = waveform::render(&Session::default(), waveform::View::default());
-        let waveform = ui.image(body, waveform::WIDTH, height, pixels);
+        let waveform = ui.image(lanes, waveform::WIDTH, height, pixels);
         ui.set_label(
             waveform,
-            "Audio waveform timeline. Track rows, selected time range and playhead.",
+            "Timeline: aligned track lanes, real audio waveforms and MIDI regions",
         );
-        let mixer = ui.row(body);
-        ui.text(mixer, "Volume", TextStyle::Caption);
-        let volume = ui.slider(mixer, 0.0, 200.0, 100.0);
-        ui.text(mixer, "Pan", TextStyle::Caption);
-        let pan = ui.slider(mixer, -100.0, 100.0, 0.0);
-        ui.text(mixer, "Clip gain", TextStyle::Caption);
-        let gain = ui.slider(mixer, 0.0, 200.0, 100.0);
-        let fx = ui.row(body);
-        let mute = ui.checkbox(fx, "Mute", false);
-        let solo = ui.checkbox(fx, "Solo", false);
-        let eq = ui.checkbox(fx, "Warm EQ", false);
-        let compressor = ui.checkbox(fx, "Compressor", false);
-        let reverb = ui.checkbox(fx, "Reverb", false);
-        Self {
+        let smart = ui.panel(
+            workspace,
+            weft::Fill::Surface,
+            Layout::column()
+                .gap(4.0)
+                .padding(6.0)
+                .width(196.0)
+                .min_width(0.0)
+                .shrink(0.0),
+        );
+        ui.text(smart, "Smart Controls", TextStyle::Heading);
+        let time = ui.group(smart, Layout::column().gap(2.0));
+        ui.text(time, "Position / range (seconds)", TextStyle::Caption);
+        let position = ui.field(time, "0", "Playhead seconds");
+        let from = ui.field(time, "0", "Start seconds");
+        let to = ui.field(time, "1", "End seconds");
+        let edits = ui.group(smart, Layout::row().gap(4.0).wrap().fill_width());
+        for name in ["Split", "Cut range", "Fade edges", "Undo", "Redo"] {
+            buttons.push((ui.button(edits, name), name));
+        }
+        ui.text(smart, "Regions", TextStyle::Caption);
+        let timeline = ui.list_with(
+            smart,
+            alloc::boxed::Box::new(Rows::default()),
+            vec![Column::new("Region", 160.0)],
+        );
+        ui.set_layout(
+            timeline,
+            Layout::default().fill_width().height(90.0).shrink(0.0),
+        );
+        ui.text(smart, "Volume / pan / region gain", TextStyle::Caption);
+        let volume = ui.slider(smart, 0.0, 200.0, 100.0);
+        let pan = ui.slider(smart, -100.0, 100.0, 0.0);
+        let gain = ui.slider(smart, 0.0, 200.0, 100.0);
+        let flags = ui.group(smart, Layout::row().gap(4.0).wrap().fill_width());
+        let mute = ui.checkbox(flags, "Mute", false);
+        let solo = ui.checkbox(flags, "Solo", false);
+        let eq = ui.checkbox(flags, "Warm EQ", false);
+        let compressor = ui.checkbox(flags, "Compressor", false);
+        let reverb = ui.checkbox(flags, "Reverb", false);
+        let console = ui.panel(
+            root,
+            weft::Fill::Surface,
+            Layout::column().gap(4.0).padding(4.0).fill_width(),
+        );
+        ui.text(
+            console,
+            "Mixer · consumed post-fader Peak / RMS",
+            TextStyle::Caption,
+        );
+        let strips = ui.group(console, Layout::row().gap(4.0).wrap().fill_width());
+        let mut meter_names = Vec::new();
+        let mut meter_values = Vec::new();
+        let mut mixer_volume = Vec::new();
+        let mut mixer_pan = Vec::new();
+        let mut mixer_strips = Vec::new();
+        for _ in 0..MAX_TRACKS {
+            let strip = ui.panel(
+                strips,
+                weft::Fill::Control,
+                Layout::column()
+                    .gap(3.0)
+                    .padding(4.0)
+                    .width(126.0)
+                    .shrink(0.0),
+            );
+            mixer_strips.push(strip);
+            meter_names.push(ui.text(strip, "", TextStyle::Caption));
+            meter_values.push(ui.progress(strip, Some(0.0)));
+            ui.text(strip, "Level / Pan", TextStyle::Caption);
+            mixer_volume.push(ui.slider(strip, 0.0, 200.0, 100.0));
+            mixer_pan.push(ui.slider(strip, -100.0, 100.0, 0.0));
+            ui.set_visible(strip, false);
+        }
+        let piano_panel = ui.panel(
+            root,
+            weft::Fill::Surface,
+            Layout::column().gap(4.0).padding(4.0).fill_width(),
+        );
+        let piano_label = ui.text(
+            piano_panel,
+            "Piano Roll · C3–B4 · 16 steps",
+            TextStyle::Caption,
+        );
+        let piano = ui.image(
+            piano_panel,
+            piano::WIDTH,
+            piano::HEIGHT,
+            piano::render(None),
+        );
+        ui.set_label(piano, "Piano roll with pitch ruler: C3–B4, 16 steps");
+        let midi_edits = ui.group(piano_panel, Layout::row().gap(4.0).wrap().fill_width());
+        for name in [
+            "Clear notes",
+            "Quantize",
+            "Transpose -",
+            "Transpose +",
+            "Set velocity",
+            "Length +",
+        ] {
+            buttons.push((ui.button(midi_edits, name), name));
+        }
+        ui.text(midi_edits, "Velocity", TextStyle::Caption);
+        let velocity = ui.slider(midi_edits, 1.0, 127.0, 96.0);
+        ui.set_layout(velocity, Layout::default().width(110.0));
+        let app_end = ui.text(
+            body,
+            "48 kHz stereo · Stop to edit · bounded immutable instrument cache",
+            TextStyle::Caption,
+        );
+        ui.set_visible(smart, false);
+        ui.set_visible(piano_panel, false);
+        let studio = Self {
             export_format: 0,
             waveform,
+            piano,
+            arrange,
+            navigation,
+            library,
+            smart,
+            console,
+            piano_panel,
+            track_buttons,
+            mixer_strips,
+            workspace: Workspace::Arrange,
+            library_open: true,
+            piano_label,
+            velocity,
+            note_velocity: 96,
+            app_end,
+            meter_names,
+            meter_values,
+            mixer_volume,
+            mixer_pan,
             view: waveform::View::default(),
+            transport_cursor: None,
             viewport: scroll,
             scale_label,
             move_mode,
@@ -546,7 +892,9 @@ impl Studio {
             reverb,
             mute,
             solo,
-        }
+        };
+        studio.refresh(ui);
+        studio
     }
     pub fn set_busy(&mut self, ui: &mut Ui, busy: bool) {
         if self.busy == busy {
@@ -558,6 +906,8 @@ impl Studio {
         }
         for id in [
             self.waveform,
+            self.piano,
+            self.velocity,
             self.move_mode,
             self.position,
             self.from,
@@ -574,8 +924,27 @@ impl Studio {
         ] {
             ui.set_enabled(id, !busy);
         }
+        for (index, id) in self
+            .mixer_volume
+            .iter()
+            .chain(self.mixer_pan.iter())
+            .enumerate()
+        {
+            ui.set_enabled(*id, !busy && index % MAX_TRACKS < self.session.tracks.len());
+        }
         for (id, name) in &self.buttons {
-            if !["Play", "Pause", "Stop"].contains(name) {
+            if ![
+                "Play",
+                "Pause",
+                "Stop",
+                "Arrange",
+                "Mix",
+                "Piano Roll",
+                "Instruments",
+                "Library",
+            ]
+            .contains(name)
+            {
                 ui.set_enabled(*id, !busy);
             }
         }
@@ -587,26 +956,190 @@ impl Studio {
             "moan.open-project",
             "moan.save-project",
             "moan.new-project",
+            "moan.library.keys",
+            "moan.library.bass",
+            "moan.library.kit",
+            "moan.clear-notes",
         ] {
             ui.commands.set_enabled(command, !busy);
+        }
+    }
+    pub fn publish_meters(
+        &self,
+        ui: &mut Ui,
+        meters: &mut [serenade_core::LevelMeter; MAX_TRACKS],
+    ) {
+        for (i, meter) in meters.iter_mut().enumerate() {
+            let values = meter.snapshot();
+            let peak = values[0].peak.max(values[1].peak);
+            let rms = values[0].rms.max(values[1].rms);
+            ui.set_value(
+                self.meter_values[i],
+                ((serenade_core::linear_to_dbfs(peak) + 60.0) / 60.0).clamp(0.0, 1.0),
+            );
+            if let Some(track) = self.session.tracks.get(i) {
+                let name = track
+                    .clips
+                    .iter()
+                    .find_map(Clip::midi_pattern)
+                    .map_or("Audio", |p| p.instrument.name());
+                ui.set_text(
+                    self.meter_names[i],
+                    &format!(
+                        "{} {} · P{} R{} dB",
+                        i + 1,
+                        name,
+                        serenade_core::linear_to_dbfs_approx(peak),
+                        serenade_core::linear_to_dbfs_approx(rms)
+                    ),
+                );
+            }
         }
     }
     pub fn message(&self, ui: &mut Ui, text: &str) {
         ui.set_text(self.status, text);
     }
-    pub fn refresh(&self, ui: &mut Ui) {
-        let (height, pixels) = waveform::render(&self.session, self.view);
-        ui.set_image(self.waveform, waveform::WIDTH, height, pixels);
+    fn visible_layout(ui: &mut Ui, id: Id, visible: bool, mut layout: Layout) {
+        ui.set_visible(id, visible);
+        if !visible {
+            layout.style().display = taffy::Display::None;
+        }
+        ui.set_layout(id, layout);
+    }
+    fn layout_document(&self, ui: &mut Ui) {
+        let available = ui.size().0 as f32 / ui.theme().scale;
+        let short = ui.size().1 as f32 / ui.theme().scale < 300.0;
+        Self::visible_layout(
+            ui,
+            self.navigation,
+            !short,
+            Layout::row()
+                .gap(4.0)
+                .padding_xy(4.0, 0.0)
+                .wrap()
+                .fill_width()
+                .shrink(0.0),
+        );
+        Self::visible_layout(ui, self.status, !short, Layout::default());
+        for (id, name) in &self.buttons {
+            if ["Tone", "Import WAV", "Export WAV"].contains(name) {
+                Self::visible_layout(ui, *id, !short, Layout::default());
+            }
+        }
+        let wide = available >= 1000.0;
+        let show_library = self.library_open && available >= 800.0;
+        Self::visible_layout(
+            ui,
+            self.library,
+            show_library,
+            Layout::column()
+                .gap(4.0)
+                .padding(6.0)
+                .width(150.0)
+                .shrink(0.0),
+        );
+        Self::visible_layout(
+            ui,
+            self.smart,
+            self.workspace == Workspace::Instruments,
+            Layout::column()
+                .gap(4.0)
+                .padding(6.0)
+                .width(196.0)
+                .min_width(0.0)
+                .shrink(0.0),
+        );
+        Self::visible_layout(
+            ui,
+            self.console,
+            !short && matches!(self.workspace, Workspace::Arrange | Workspace::Mix),
+            Layout::column().gap(4.0).padding(4.0).fill_width(),
+        );
+        Self::visible_layout(
+            ui,
+            self.piano_panel,
+            self.workspace == Workspace::PianoRoll,
+            Layout::column().gap(4.0).padding(4.0).fill_width(),
+        );
+        let sidebar = if show_library { 156.0 } else { 0.0 }
+            + if self.workspace == Workspace::Instruments {
+                202.0
+            } else {
+                0.0
+            };
+        let width = (available - 26.0 - sidebar).max(230.0);
+        ui.set_layout(
+            self.arrange,
+            Layout::column()
+                .gap(4.0)
+                .padding(4.0)
+                .width(width)
+                .min_width(0.0)
+                .shrink(0.0),
+        );
+        let content = (width - 150.0).max(80.0);
+        let height =
+            waveform::HEADER + waveform::ROW * self.session.tracks.len().min(MAX_TRACKS).max(1);
         ui.set_layout(
             self.waveform,
             Layout::default()
-                .width(
-                    (ui.size().0 as f32 / ui.theme().scale - 32.0)
-                        .clamp(80.0, waveform::WIDTH as f32),
-                )
+                .width(content)
                 .height(height as f32)
                 .shrink(0.0),
         );
+        ui.set_layout(
+            self.piano,
+            Layout::default()
+                .width((available - 24.0).max(100.0))
+                .height(piano::HEIGHT as f32)
+                .shrink(0.0),
+        );
+        for strip in &self.mixer_strips {
+            Self::visible_layout(
+                ui,
+                *strip,
+                self.mixer_strips
+                    .iter()
+                    .position(|item| item == strip)
+                    .unwrap()
+                    < self.session.tracks.len(),
+                Layout::column()
+                    .gap(3.0)
+                    .padding(4.0)
+                    .width(if wide { 126.0 } else { 116.0 })
+                    .shrink(0.0),
+            );
+        }
+    }
+    fn show_workspace(&mut self, ui: &mut Ui, workspace: Workspace) {
+        self.workspace = workspace;
+        ui.set_visible(
+            self.console,
+            matches!(workspace, Workspace::Arrange | Workspace::Mix),
+        );
+        ui.set_visible(self.piano_panel, workspace == Workspace::PianoRoll);
+        self.layout_document(ui);
+        ui.invalidate();
+    }
+    pub fn transport_cursor(&mut self, ui: &mut Ui, cursor: Option<usize>) {
+        if self.transport_cursor != cursor {
+            self.transport_cursor = cursor;
+            let (height, pixels) = waveform::render_at(
+                &self.session,
+                self.view,
+                cursor.unwrap_or(self.session.cursor),
+            );
+            ui.set_image(self.waveform, waveform::WIDTH, height, pixels);
+        }
+    }
+    pub fn refresh(&self, ui: &mut Ui) {
+        let (height, pixels) = waveform::render_at(
+            &self.session,
+            self.view,
+            self.transport_cursor.unwrap_or(self.session.cursor),
+        );
+        ui.set_image(self.waveform, waveform::WIDTH, height, pixels);
+        self.layout_document(ui);
         ui.set_text(
             self.scale_label,
             &format!(
@@ -635,6 +1168,82 @@ impl Studio {
             }
         }
 
+        ui.set_image(
+            self.piano,
+            piano::WIDTH,
+            piano::HEIGHT,
+            piano::render(self.session.midi_clip().and_then(Clip::midi_pattern)),
+        );
+        ui.set_text(
+            self.piano_label,
+            &self
+                .session
+                .midi_clip()
+                .and_then(Clip::midi_pattern)
+                .map_or_else(
+                    || "Choose an instrument from Library. Piano roll: C3–B4, 16 steps.".into(),
+                    |p| {
+                        format!(
+                            "{} · {} notes · {} BPM · {} · velocity {}",
+                            p.instrument.name(),
+                            p.notes.len(),
+                            p.bpm,
+                            p.notes
+                                .last()
+                                .map_or_else(|| "C3–B4".into(), |note| piano::note_name(note.key)),
+                            self.note_velocity
+                        )
+                    },
+                ),
+        );
+        for i in 0..MAX_TRACKS {
+            Self::visible_layout(
+                ui,
+                self.track_buttons[i],
+                i < self.session.tracks.len(),
+                Layout::default()
+                    .fill_width()
+                    .height(waveform::ROW as f32)
+                    .shrink(0.0),
+            );
+            ui.set_visible(self.mixer_strips[i], i < self.session.tracks.len());
+            if let Some(track) = self.session.tracks.get(i) {
+                let name = track
+                    .clips
+                    .iter()
+                    .find_map(Clip::midi_pattern)
+                    .map_or("Audio", |p| p.instrument.name());
+                ui.set_text(self.track_buttons[i], &format!("{} {}", i + 1, name));
+                ui.set_button_style(
+                    self.track_buttons[i],
+                    if i == self.session.selected {
+                        weft::ButtonStyle::Primary
+                    } else {
+                        weft::ButtonStyle::Normal
+                    },
+                );
+                ui.set_text(self.meter_names[i], &format!("{} {}", i + 1, name));
+                ui.set_color(
+                    self.meter_names[i],
+                    Some(weft::Color::hex(
+                        [0x72d6b5, 0xb29ae3, 0xe4b579, 0x82c5eb][i % 4],
+                    )),
+                );
+                ui.set_value(self.mixer_volume[i], track.volume() as f32);
+                ui.set_value(self.mixer_pan[i], track.pan() as f32);
+            } else {
+                ui.set_text(self.meter_names[i], "Empty");
+                ui.set_value(self.meter_values[i], 0.0);
+            }
+            ui.set_enabled(
+                self.mixer_volume[i],
+                !self.busy && i < self.session.tracks.len(),
+            );
+            ui.set_enabled(
+                self.mixer_pan[i],
+                !self.busy && i < self.session.tracks.len(),
+            );
+        }
         let mut rows = Vec::new();
         for (n, t) in self.session.tracks.iter().enumerate() {
             if t.clips.is_empty() {
@@ -646,12 +1255,16 @@ impl Studio {
                 ]);
             }
             for (i, c) in t.clips.iter().enumerate() {
-                rows.push(vec![
-                    format!("{} / {}", n + 1, i + 1),
-                    format!("{:.3}", c.start() as f64 / RATE as f64),
-                    format!("{:.3}", c.end() as f64 / RATE as f64),
-                    format!("{}%", c.gain()),
-                ]);
+                rows.push(vec![format!(
+                    "{} {} / {}",
+                    n + 1,
+                    if c.midi_pattern().is_some() {
+                        "MIDI"
+                    } else {
+                        "Audio"
+                    },
+                    i + 1
+                )]);
             }
         }
         ui.set_rows(self.timeline, Rows(rows));
@@ -774,18 +1387,7 @@ impl Studio {
         let resized = matches!(event, weft::Event::Resize { .. });
         let mut responses = ui.handle(event);
         if resized {
-            let height =
-                waveform::HEADER + waveform::ROW * self.session.tracks.len().min(MAX_TRACKS).max(1);
-            ui.set_layout(
-                self.waveform,
-                Layout::default()
-                    .width(
-                        (ui.size().0 as f32 / ui.theme().scale - 32.0)
-                            .clamp(80.0, waveform::WIDTH as f32),
-                    )
-                    .height(height as f32)
-                    .shrink(0.0),
-            );
+            self.layout_document(ui);
             ui.layout();
             responses.push(Response::Command("moan.layout".into()));
         }
@@ -800,7 +1402,7 @@ impl Studio {
             || self.pending.is_some()
             || ui
                 .focused()
-                .is_some_and(|id| id.index() > self.reverb.index())
+                .is_some_and(|id| id.index() > self.app_end.index())
         {
             self.drag = None;
             return false;
@@ -810,6 +1412,56 @@ impl Studio {
             return false;
         }
         ui.layout();
+        let piano_rect = ui.rect(self.piano);
+        if pointer.kind == PointerKind::Down(Button::Left) {
+            let p = Point::new(pointer.x / ui.theme().scale, pointer.y / ui.theme().scale);
+            if self.workspace == Workspace::PianoRoll
+                && piano_rect
+                    .intersect(&weft::Rect::new(
+                        0.0,
+                        0.0,
+                        ui.size().0 as f32 / ui.theme().scale,
+                        ui.size().1 as f32 / ui.theme().scale,
+                    ))
+                    .contains(p)
+                && self.session.midi_clip().is_some()
+            {
+                let x =
+                    ((p.x - piano_rect.x) / piano_rect.w * piano::WIDTH as f32).max(0.0) as usize;
+                let y =
+                    ((p.y - piano_rect.y) / piano_rect.h * piano::HEIGHT as f32).max(0.0) as usize;
+                if x < piano::KEYBOARD {
+                    return false;
+                }
+                let step = piano::step(x);
+                let key = piano::key(y);
+                let velocity = self.note_velocity;
+                ui.focus(None);
+                if let Err(message) = self.session.edit_midi(|p| {
+                    let grid = (p.frames / piano::STEPS as u32).max(1);
+                    let start = (step as u32 * grid).min(p.frames - 1);
+                    if let Some(i) = p
+                        .notes
+                        .iter()
+                        .position(|n| n.key == key && n.start / grid == step as u32)
+                    {
+                        p.notes.remove(i);
+                    } else {
+                        p.notes.push(moan_core::midi::Note {
+                            start,
+                            frames: grid.min(p.frames - start),
+                            key,
+                            velocity,
+                        });
+                    }
+                }) {
+                    self.message(ui, message);
+                } else {
+                    self.refresh(ui);
+                }
+                return true;
+            }
+        }
         let rect = ui.rect(self.waveform);
         let p = Point::new(pointer.x / ui.theme().scale, pointer.y / ui.theme().scale);
         let visible = rect.intersect(&ui.rect(self.viewport));
@@ -957,13 +1609,39 @@ impl Studio {
             return Ok(None);
         }
 
+        if let Response::Clicked(id) = r {
+            if let Some(track) = self.track_buttons.iter().position(|item| item == id) {
+                if !self.busy && track < self.session.tracks.len() {
+                    self.session.selected = track;
+                    self.refresh(ui);
+                }
+                return Ok(None);
+            }
+        }
         if self.busy {
             let allowed = match r {
-                Response::Clicked(id) => self
-                    .buttons
-                    .iter()
-                    .any(|(b, name)| b == id && ["Play", "Pause", "Stop"].contains(name)),
-                Response::Command(c) => c == "moan.play" || c == "moan.stop",
+                Response::Clicked(id) => self.buttons.iter().any(|(b, name)| {
+                    b == id
+                        && [
+                            "Play",
+                            "Pause",
+                            "Stop",
+                            "Arrange",
+                            "Mix",
+                            "Piano Roll",
+                            "Instruments",
+                            "Library",
+                        ]
+                        .contains(name)
+                }),
+                Response::Command(c) => [
+                    "moan.play",
+                    "moan.stop",
+                    "moan.mixer",
+                    "moan.piano",
+                    "moan.timeline",
+                ]
+                .contains(&c.as_str()),
                 _ => false,
             };
             if !allowed {
@@ -987,6 +1665,31 @@ impl Studio {
             }
         }
         if let Response::Changed(id) = r {
+            if *id == self.velocity {
+                self.note_velocity = ui.value(*id) as u8;
+                self.refresh(ui);
+                return Ok(None);
+            }
+            if let Some(index) = self.mixer_volume.iter().position(|v| v == id) {
+                if index < self.session.tracks.len() {
+                    self.session.remember();
+                    self.session.tracks[index]
+                        .set_volume(ui.value(*id) as u16)
+                        .map_err(|_| "Volume")?;
+                    self.refresh(ui);
+                }
+                return Ok(None);
+            }
+            if let Some(index) = self.mixer_pan.iter().position(|v| v == id) {
+                if index < self.session.tracks.len() {
+                    self.session.remember();
+                    self.session.tracks[index]
+                        .set_pan(ui.value(*id) as i16)
+                        .map_err(|_| "Pan")?;
+                    self.refresh(ui);
+                }
+                return Ok(None);
+            }
             if *id == self.gain {
                 self.session.gain(ui.value(*id) as u16)?;
                 self.refresh(ui);
@@ -1040,6 +1743,16 @@ impl Studio {
         let command = match r {
             Response::Clicked(id) => self.buttons.iter().find(|(b, _)| b == id).map(|(_, s)| *s),
             Response::Command(c) => Some(match c.as_str() {
+                "moan.library.keys" => "Silk Keys",
+                "moan.library.bass" => "Satin Bass",
+                "moan.library.kit" => "Velvet Kit",
+                "moan.clear-notes" => "Clear notes",
+                "moan.piano" => "Show piano",
+                "moan.tracks" => "Show tracks",
+                "moan.mixer" => "Show mixer",
+                "moan.octave" => "Octave up",
+                "moan.lengthen" => "Length +",
+                "moan.velocity-half" => "Half velocity",
                 "moan.play" => "Play",
                 "moan.stop" => "Stop",
                 "moan.undo" => "Undo",
@@ -1080,12 +1793,119 @@ impl Studio {
             "Earlier",
             "Later",
             "Show timeline",
+            "Show piano",
+            "Show mixer",
+            "Show tracks",
         ]
         .contains(&command)
         {
             self.fields(ui)?;
         }
         let action = match command {
+            "Silk Keys" | "Satin Bass" | "Velvet Kit" => {
+                let instrument = match command {
+                    "Satin Bass" => moan_core::midi::Instrument::SatinPulse,
+                    "Velvet Kit" => moan_core::midi::Instrument::VelvetSampler,
+                    _ => moan_core::midi::Instrument::SilkTriangle,
+                };
+                self.session
+                    .add_midi(moan_core::midi::Pattern::preset(instrument))?;
+                None
+            }
+            "Show tracks" => {
+                self.show_workspace(ui, Workspace::Instruments);
+                ui.invalidate();
+                ui.focus(Some(self.timeline));
+                None
+            }
+            "Show piano" | "Piano Roll" => {
+                self.show_workspace(ui, Workspace::PianoRoll);
+                ui.invalidate();
+                ui.focus(Some(self.piano));
+                None
+            }
+            "Show mixer" | "Mix" => {
+                self.show_workspace(ui, Workspace::Mix);
+                ui.invalidate();
+                ui.focus(Some(self.meter_values[0]));
+                None
+            }
+            "Arrange" => {
+                self.show_workspace(ui, Workspace::Arrange);
+                None
+            }
+            "Instruments" => {
+                self.show_workspace(ui, Workspace::Instruments);
+                None
+            }
+            "Library" => {
+                self.library_open = !self.library_open;
+                self.layout_document(ui);
+                ui.invalidate();
+                None
+            }
+            "Clear notes" => {
+                self.session.edit_midi(|p| p.notes.clear())?;
+                None
+            }
+            "Octave up" => {
+                self.session.edit_midi(|p| {
+                    for n in &mut p.notes {
+                        n.key = n.key.saturating_add(12).min(127);
+                    }
+                })?;
+                None
+            }
+            "Half velocity" => {
+                self.note_velocity = (self.note_velocity / 2).max(1);
+                let velocity = self.note_velocity;
+                ui.set_value(self.velocity, velocity as f32);
+                self.session.edit_midi(|p| {
+                    for n in &mut p.notes {
+                        n.velocity = velocity;
+                    }
+                })?;
+                None
+            }
+            "Length +" => {
+                self.session.edit_midi(|p| {
+                    for n in &mut p.notes {
+                        n.frames = n.frames.saturating_mul(2).min(p.frames - n.start);
+                    }
+                })?;
+                None
+            }
+            "Set velocity" => {
+                let velocity = self.note_velocity;
+                self.session.edit_midi(|p| {
+                    for n in &mut p.notes {
+                        n.velocity = velocity;
+                    }
+                })?;
+                None
+            }
+            "Quantize" => {
+                self.session.edit_midi(|p| {
+                    let grid = (p.frames / piano::STEPS as u32).max(1);
+                    for n in &mut p.notes {
+                        n.start = ((n.start + grid / 2) / grid * grid).min(p.frames - 1);
+                        n.frames = n.frames.min(p.frames - n.start);
+                    }
+                })?;
+                None
+            }
+            "Transpose -" | "Transpose +" => {
+                self.session.edit_midi(|p| {
+                    for n in &mut p.notes {
+                        n.key = if command == "Transpose -" {
+                            n.key.saturating_sub(1)
+                        } else {
+                            (n.key + 1).min(127)
+                        };
+                    }
+                })?;
+                None
+            }
             "Play" => Some(Action::Play),
             "Pause" => Some(Action::Pause),
             "Stop" => Some(Action::Stop),
@@ -1101,6 +1921,7 @@ impl Studio {
                 None
             }
             "Show timeline" => {
+                self.show_workspace(ui, Workspace::Arrange);
                 ui.focus(Some(self.waveform));
                 None
             }

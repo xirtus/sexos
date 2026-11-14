@@ -207,6 +207,46 @@ pub fn log(app: &mut App, studio: &Studio) {
             (rect.h * scale) as i32
         );
     }
+    let piano = app.ui.rect(studio.piano);
+    sex_pdx::serial_record!(
+        "[moan.piano] x={} y={} w={} h={}",
+        (piano.x * scale) as i32,
+        (piano.y * scale) as i32,
+        (piano.w * scale) as i32,
+        (piano.h * scale) as i32
+    );
+    if let Some(pattern) = studio
+        .session
+        .midi_clip()
+        .and_then(moan_core::Clip::midi_pattern)
+    {
+        sex_pdx::serial_record!(
+            "[moan.midi] track={} instrument={} notes={} frames={} bpm={} hash={:#x}",
+            studio.session.selected,
+            pattern.instrument as u8,
+            pattern.notes.len(),
+            pattern.frames,
+            pattern.bpm,
+            pattern.fingerprint()
+        );
+    }
+    for (track, id) in studio
+        .meter_values
+        .iter()
+        .enumerate()
+        .take(studio.session.tracks.len())
+    {
+        let rect = app.ui.rect(*id);
+        sex_pdx::serial_record!(
+            "[moan.meter] track={} x={} y={} w={} h={} level={}",
+            track,
+            (rect.x * scale) as i32,
+            (rect.y * scale) as i32,
+            (rect.w * scale) as i32,
+            (rect.h * scale) as i32,
+            (app.ui.value(*id) * 10000.0) as u32
+        );
+    }
     let (w, h) = app.ui.size();
     sex_pdx::serial_record!("[moan.viewport] w={} h={} frame={}", w, h, app.frames);
     sex_pdx::serial_record!(
