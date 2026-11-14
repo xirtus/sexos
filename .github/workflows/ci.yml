@@ -166,20 +166,6 @@ jobs:
       run: |
         truncate -s 1G "$RUNNER_TEMP/blank-programs.img"
         python3 scripts/program_std_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/programs-std"
-    - name: Lua 5.4 interpreter
-      run: python3 scripts/lua_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/lua"
-    - name: Signed packages, install service and first-run grant question
-      run: |
-        truncate -s 1G "$RUNNER_TEMP/blank-packages.img"
-        python3 scripts/package_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-packages.img" --out "$RUNNER_TEMP/sexos-runtime/packages"
-    - name: ripgrep and fd
-      run: python3 scripts/rg_fd_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/rg-fd"
-    - name: Python 3.13 interpreter (CPython)
-      run: python3 scripts/python_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/python"
-    - name: Store program and the +pkg run grant
-      run: |
-        truncate -s 1G "$RUNNER_TEMP/blank-store.img"
-        python3 scripts/store_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-store.img" --out "$RUNNER_TEMP/sexos-runtime/store"
     - name: Large reads must reach the device
       run: python3 scripts/program_bench_gate.py --large-read --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/large-read"
     - name: IPv6-only network (SLAAC, RDNSS, DHCPv6, sockets, name lookup)
@@ -364,10 +350,43 @@ jobs:
         path: ${{ runner.temp }}/sexos-proof
         if-no-files-found: ignore
 
+  programs:
+    name: Programs, packages and ports
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+    - uses: actions/checkout@v4
+    - uses: ./.github/actions/setup
+    - name: Build the image
+      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/build.log"; exit 1)
+    - name: Blank program disk
+      run: truncate -s 1G "$RUNNER_TEMP/blank-programs.img"
+    - name: Lua 5.4 interpreter
+      run: python3 scripts/lua_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/lua"
+    - name: Signed packages, install service and first-run grant question
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/blank-packages.img"
+        python3 scripts/package_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-packages.img" --out "$RUNNER_TEMP/sexos-runtime/packages"
+    - name: ripgrep and fd
+      run: python3 scripts/rg_fd_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/rg-fd"
+    - name: Python 3.13 interpreter (CPython)
+      run: python3 scripts/python_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/python"
+    - name: Store program and the +pkg run grant
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/blank-store.img"
+        python3 scripts/store_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-store.img" --out "$RUNNER_TEMP/sexos-runtime/store"
+    - name: Preserve program evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sexos-programs-proof
+        path: ${{ runner.temp }}/sexos-runtime
+        if-no-files-found: ignore
+
   # Single required check: keeps the old "build" check name for branch rules.
   build:
     if: always()
-    needs: [host, truth, boot, devices, media, profiles, js-jit, recording]
+    needs: [host, truth, boot, devices, programs, media, profiles, js-jit, recording]
     runs-on: ubuntu-latest
     steps:
     - run: |
