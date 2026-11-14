@@ -62,7 +62,8 @@ runs:
     shell: bash
     run: |
       profile=0
-      if [[ "${{ inputs.recording }}" == true ]]; then profile=1; fi
+      # The recording profile is also Splicy's export profile (VP9, Opus, AAC; WebM, MP4).
+      if [[ "${{ inputs.recording }}" == true ]]; then profile=2; fi
       if [[ ! -f target/ffmpeg/lib/libavcodec.a ]] || [[ "$(cat target/ffmpeg/sexos-recording-v1 2>/dev/null)" != "$profile" ]]; then
         FFMPEG_RECORDING=$profile bash scripts/build_ffmpeg.sh
       fi
