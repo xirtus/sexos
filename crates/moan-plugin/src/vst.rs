@@ -6,6 +6,7 @@ use core::{ffi::c_void, ptr};
 use vst3::{Class, ComPtr, ComWrapper, Interface, Steinberg::Vst::*, Steinberg::*};
 #[derive(Debug)]
 pub enum Error {
+    Memory,
     Factory,
     Component,
     Ports,
@@ -159,7 +160,7 @@ impl Processor {
         let changes = ComWrapper::new(Changes(queues))
             .to_com_ptr::<IParameterChanges>()
             .unwrap();
-        let mut out = Vec::with_capacity(input.len());
+        let mut out = crate::job::buffer(input.len()).map_err(|_| Error::Memory)?;
         let mut ins = [[0f32; BLOCK]; 2];
         let mut outs = [[0f32; BLOCK]; 2];
         for (block, frames) in input.chunks(BLOCK).enumerate() {

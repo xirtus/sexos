@@ -9,6 +9,7 @@ pub const MAX_STATE: usize = 64 * 1024;
 pub const HEADER: usize = 40;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
+    Memory,
     Header,
     Bounds,
     Nonce,
@@ -110,6 +111,9 @@ impl Job {
 /// A fixed-size header followed by exactly `frames` interleaved stereo f32 frames.
 /// No optional chunks, trailing data, state or extension lengths are trusted.
 pub fn encode(nonce: [u8; 16], frames: &[[f32; 2]]) -> Result<Vec<u8>, Error> {
+    encode_inner(nonce, frames, 0)
+}
+fn encode_inner(nonce: [u8; 16], frames: &[[f32; 2]], extra: usize) -> Result<Vec<u8>, Error> {
     if nonce == [0; 16] || frames.is_empty() || frames.len() > MAX_FRAMES as usize {
         return Err(Error::Bounds);
     }
@@ -120,7 +124,7 @@ pub fn encode(nonce: [u8; 16], frames: &[[f32; 2]]) -> Result<Vec<u8>, Error> {
     {
         return Err(Error::Audio);
     }
-    let mut out = Vec::with_capacity(HEADER + frames.len() * 8);
+    let mut out = buffer(HEADER + frames.len() * 8 + extra)?;
     out.extend_from_slice(b"MOANPCM1");
     out.extend_from_slice(&nonce);
     out.extend_from_slice(&RATE.to_le_bytes());
@@ -149,7 +153,7 @@ pub fn decode(bytes: &[u8], nonce: [u8; 16], frames: u32) -> Result<Vec<[f32; 2]
     if nonce == [0; 16] || bytes[8..24] != nonce {
         return Err(Error::Nonce);
     }
-    let mut out = Vec::with_capacity(frames as usize);
+    let mut out = buffer(frames as usize)?;
     for c in bytes[HEADER..].chunks_exact(8) {
         let a = f32::from_le_bytes(c[..4].try_into().unwrap());
         let b = f32::from_le_bytes(c[4..].try_into().unwrap());
@@ -233,8 +237,7 @@ pub fn encode_request(
     if !valid_parameters(parameters) {
         return Err(Error::Bounds);
     }
-    let mut out = encode(nonce, pcm)?;
-    out.reserve_exact(parameters.len() * 16);
+    let mut out = encode_inner(nonce, pcm, parameters.len() * 16)?;
     out[..8].copy_from_slice(b"MOANREQ1");
     out[36..40].copy_from_slice(&(parameters.len() as u32).to_le_bytes());
     for p in parameters {
@@ -264,7 +267,7 @@ pub fn decode_request(bytes: &[u8], nonce: [u8; 16]) -> Result<Request, Error> {
     if bytes[24..28] != RATE.to_le_bytes() || bytes[32..36] != 2u32.to_le_bytes() {
         return Err(Error::Header);
     }
-    let mut pcm = Vec::with_capacity(frames as usize);
+    let mut pcm = buffer(frames as usize)?;
     for c in bytes[HEADER..end].chunks_exact(8) {
         let a = f32::from_le_bytes(c[..4].try_into().unwrap());
         let b = f32::from_le_bytes(c[4..].try_into().unwrap());
@@ -273,7 +276,7 @@ pub fn decode_request(bytes: &[u8], nonce: [u8; 16]) -> Result<Request, Error> {
         }
         pcm.push([a, b]);
     }
-    let mut parameters = Vec::with_capacity(count);
+    let mut parameters = buffer(count)?;
     for c in bytes[end..].chunks_exact(16) {
         if c[4..8] != [0; 4] {
             return Err(Error::Header);
@@ -343,4 +346,10 @@ impl Format {
             Self::Vst3 => b"vst3",
         }
     }
+}
+
+pub(crate) fn buffer<T>(count: usize) -> Result<Vec<T>, Error> {
+    let mut result = Vec::new();
+    result.try_reserve_exact(count).map_err(|_| Error::Memory)?;
+    Ok(result)
 }

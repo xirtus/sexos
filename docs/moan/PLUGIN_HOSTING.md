@@ -83,3 +83,32 @@ round-trip and CPU on actual supported hardware/guest, keep p99 processing+trans
 within one block for an insert, bound queued blocks and discard stale responses.
 Sustained overload must choose a documented bypass/mute and recover without
 blocking Moan's UI/audio thread. These are requirements, not achieved measurements.
+
+## Parent memory budget and recoverable large allocations
+
+For a60s48k stereo job: PCM i16 is11,520,000bytes (10.99MiB), f32 PCM or
+serialized PCM is23,040,000bytes (21.97MiB). Eight full i16 track caches alone
+are87.89MiB. Starting a job temporarily holds the float conversion and serialized
+request (~43.95MiB), in addition to existing project/undo/UI allocations. Result
+read+float decode similarly peaks near43.95MiB; quantization then holds float+
+i16 near32.96MiB. Helper image/process allocations belong to the separate helper
+heap, still consuming system memory. These numbers are buffer accounting, not a
+promise that every legal project fits Moan's256MiB heap.
+
+The parent float conversion, PCM quantization, request/result codecs and result
+read staging use try_reserve_exact. Request encoding reserves header+PCM+params
+once, avoiding a second23MBallocation when appending parameters. A forced-OOM
+regression compiles the actual production codec/adapter with a controlled allocator,
+keeps a60s original and completed-result bytes alive, refuses the large allocations,
+and verifies original samples/status remain unchanged and a later retry succeeds.
+It also verifies request construction has exactly one large allocation.
+
+The adapter retains the completed job/nonce/output path on Memory failure and
+enters WaitingForMemory. It does not retry every UI poll. retry_result() requests
+one more attempt; cancel() explicitly discards that pending import. A completed
+helper is already retired, so Close need not wait for a nonexistent process.
+Moan hooks must preserve same-project association, use compact undo that shares
+immutable PCM, and reject a ninth track before committing import. Large allocator
+refusals are recoverable; small metadata/Box/Arc allocations and arbitrary native
+plugin allocations are not all claimed recoverable. The original region is never
+mutated by the adapter.
