@@ -1,10 +1,12 @@
 [workspace]
 resolver = "2"
-exclude = ["vendor/embedded-tls-0.19.0", "vendor/pp-rs-0.2.1", "vendor/image-webp-0.2.4", "vendor/virtio-drivers-0.13.0"]
+exclude = ["vendor/embedded-tls-0.19.0", "vendor/pp-rs-0.2.1", "vendor/image-webp-0.2.4", "vendor/virtio-drivers-0.13.0", "vendor/acpi-6.1.1"]
 members = [
     "kernel",
+    "crates/denim",
     "servers/sexbell",
     "servers/sexacpi",
+    "servers/denim",
     "servers/sexdisplay",
     "servers/sexshop",
     "servers/silk-shell",
@@ -17,6 +19,7 @@ members = [
     "servers/sexstore",
     "servers/sexnet",
     "servers/sext",
+    "servers/cufflinks",
     "apps/sexdrive",
     "apps/kaleidoscope",
     "apps/hello",
@@ -37,6 +40,7 @@ members = [
     "apps/shapes",
     "apps/monitor",
     "apps/fputest",
+    "apps/dragtest",
     "apps/fuzz",
     "apps/play",
     "apps/cpp",
@@ -57,9 +61,11 @@ members = [
     "crates/sex-imsm",
     "crates/sex-font",
     "crates/quil-core",
+    "crates/burlesque-core",
     "apps/quil",
     "crates/sex-keymap",
     "crates/sex-shape",
+    "crates/shuttle",
     "crates/sex-ime",
     "crates/shibari",
     "crates/sex-multipass",
@@ -69,19 +75,26 @@ members = [
     "crates/sex-crypt",
     "crates/corset-core",
     "crates/sex-hwdb",
+    "crates/sex-laptop",
+    "crates/sex-hid-touch",
+    "crates/sex-i2c-dw",
     "crates/sex-net",
     "crates/sex-net-config",
     "crates/sex-tls",
     "crates/sex-wifi",
+    "crates/sex-bt",
     "crates/sex-http",
     "crates/sex-wg",
     "crates/sex-ssh",
     "crates/sex-print",
     "crates/sex-fetch",
+    "crates/sex-shields",
+    "crates/sex-extensions",
     "crates/sex-trust-config",
     "crates/sex-graphics",
     "crates/sex-canvas",
     "crates/sex-image",
+    "crates/batik-core",
     "crates/sex-libc",
     "crates/sex-media",
     "crates/sex-splice",
@@ -109,8 +122,15 @@ members = [
     "crates/sex-calc-core",
     "apps/sex-calc",
     "crates/sex-calendar",
+    "crates/climax-core",
+    "apps/batik",
+    "apps/burlesque",
+    "crates/sex-dav",
+    "apps/climax",
     "apps/calendar",
     "apps/aftercare",
+    "crates/sex-vcard",
+    "apps/crush",
     "apps/lua",
     "apps/rg",
     "apps/fd",
@@ -139,6 +159,13 @@ members = [
     "apps/hookup",
     "crates/sex-map",
     "apps/rendezvous",
+    "apps/spreadeagle",
+    "apps/assuit",
+    "crates/sex-office",
+    "crates/burlesque-core",
+    "crates/sex-uvc",
+    "servers/sexuvc",
+    "apps/flash",
 ]
 [workspace.package]
 license = "GPL-3.0-only"
@@ -169,6 +196,87 @@ codegen-units = 1
 opt-level = "z"
 codegen-units = 1
 strip = true
+# Spreadeagle carries GridCraft's whole engine: size-optimised and stripped, it stays well
+# under the 32 MiB program limit.
+[profile.release.package.spreadeagle]
+strip = true
+[profile.release.package."sha2@0.11.1"]
+# SHA-256 at opt-level 3 compiles `rol $0xf` + `add %ebp,%edi`, which holds WRPKRU
+# (0f 01 ef) and makes the loader refuse Spreadeagle (scripts/key_bytes.py). Only the
+# version GridCraft uses; the build also relinks std programs in another layout.
+opt-level = "s"
+[profile.release.package.gridcraft-engine]
+opt-level = "s"
+[profile.release.package.gridcraft-functions]
+opt-level = "s"
+[profile.release.package.gridcraft-calc]
+opt-level = "s"
+[profile.release.package.gridcraft-xlsx]
+opt-level = "s"
+[profile.release.package.gridcraft-chart]
+opt-level = "s"
+[profile.release.package.gridcraft-pdf]
+opt-level = "s"
+[profile.release.package.gridcraft-formula]
+opt-level = "s"
+[profile.release.package.gridcraft-model]
+opt-level = "s"
+[profile.release.package.gridcraft-numfmt]
+opt-level = "s"
+[profile.release.package.gridcraft-math]
+opt-level = "s"
+[profile.release.package.gridcraft-core]
+opt-level = "s"
+# Assuit carries WordCraft's whole engine: size-optimised and stripped, it fits the
+# 32 MiB program image (sex_pdx::program_store::IMAGE_BYTES).
+[profile.release.package.assuit]
+strip = true
+[profile.release.package.craft-atomic]
+opt-level = "s"
+[profile.release.package.craft-cfb]
+opt-level = "s"
+[profile.release.package.craft-codepage]
+opt-level = "s"
+[profile.release.package.craft-doc-binary]
+opt-level = "s"
+[profile.release.package.craft-font-catalog]
+opt-level = "s"
+[profile.release.package.craft-font-store]
+opt-level = "s"
+[profile.release.package.craft-math]
+opt-level = "s"
+[profile.release.package.craft-pdf]
+opt-level = "s"
+[profile.release.package.craft-proof]
+opt-level = "s"
+[profile.release.package.craft-wordmodel]
+opt-level = "s"
+[profile.release.package.craft-xml]
+opt-level = "s"
+[profile.release.package.wordcraft-doc]
+opt-level = "s"
+[profile.release.package.wordcraft-docbin]
+opt-level = "s"
+[profile.release.package.wordcraft-docx]
+opt-level = "s"
+[profile.release.package.wordcraft-engine]
+opt-level = "s"
+[profile.release.package.wordcraft-fonts]
+opt-level = "s"
+[profile.release.package.wordcraft-formats]
+opt-level = "s"
+[profile.release.package.wordcraft-geom]
+opt-level = "s"
+[profile.release.package.wordcraft-layout]
+opt-level = "s"
+[profile.release.package.wordcraft-metafile]
+opt-level = "s"
+[profile.release.package.wordcraft-pdf]
+opt-level = "s"
+[profile.release.package.wordcraft-render]
+opt-level = "s"
+[profile.release.package.krilla]
+opt-level = "s"
 [profile.release.package.web]
 opt-level = 3
 codegen-units = 1
@@ -197,6 +305,8 @@ opt-level = 3
 pp-rs = { path = "vendor/pp-rs-0.2.1" }
 # Bell captures sound: virtio-snd input transfers added (vendor/virtio-drivers-0.13.0/SEXOS_CHANGES.md).
 virtio-drivers = { path = "vendor/virtio-drivers-0.13.0" }
+# sexacpi drives the embedded controller and hears Notify (vendor/acpi-6.1.1/SEXOS_CHANGES.md).
+acpi = { path = "vendor/acpi-6.1.1" }
 # rg and fd: ignore's parallel walker on std's Hermit target (vendor/ignore-0.4.34/src/walk.rs, `SexOS:`).
 ignore = { path = "vendor/ignore-0.4.34" }
 # bat: console's stand-in terminal on std's Hermit target (vendor/console-0.16.6/src/lib.rs, `SexOS:`).
@@ -206,6 +316,13 @@ path_abs = { path = "vendor/path_abs-0.5.1" }
 # bat: clircle builds on std's Hermit target, where it identifies no file (vendor/clircle-0.6.1/src/clircle_other.rs).
 clircle = { path = "vendor/clircle-0.6.1" }
 # The shader interpreter runs per vertex and per pixel; keep it fast in tests too.
+# Assuit: filetime (via tar in craft-font-store) builds on std's Hermit target (vendor/filetime-0.2.29/src/hermit.rs).
+filetime = { path = "vendor/filetime-0.2.29" }
+# Assuit: tar (craft-font-store) treats std's Hermit target like wasm32: no unix paths, links or modes (vendor/tar-0.4.46).
+tar = { path = "vendor/tar-0.4.46" }
+# Assuit: WordCraft's PDF writer needs storytold's krilla fork, as WordCraft's own workspace patches it.
+krilla = { git = "https://github.com/storytold/craft-libs", rev = "6e03f65bf45181db77ba6229716e6624db9eb25b" }
+
 [profile.dev.package.sex-gl]
 opt-level = 3
 [profile.dev.package.naga]

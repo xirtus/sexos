@@ -646,7 +646,7 @@ pub mod files {
         /// grants in `args` this run does not hold itself.
         pub fn prepare(path: &[u8], args: &[u8]) -> Result<u32, Error> {
             if args.len() > w::ARGS_MAX { return Err(w::NAME); }
-            exchange(None, w::PREPARE, path, 0, args.len() as u64, |d| d[..args.len()].copy_from_slice(args), |ticket, _| ticket)
+            exchange(None, w::PREPARE, path, w::PREPARE_LAUNCH, args.len() as u64, |d| d[..args.len()].copy_from_slice(args), |ticket, _| ticket)
         }
         /// Everything in the folder `path` (`b""` for the program's own folder).
         pub fn list(path: &[u8]) -> Result<alloc::vec::Vec<Entry>, Error> {
