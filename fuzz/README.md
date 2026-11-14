@@ -17,6 +17,10 @@ Uses `libfuzzer-sys` with AddressSanitizer (`-Zsanitizer=address`) and LLVM cove
 | `fuzz_http_hpack` | `crates/sex-http` | HTTP/1.1 wire framing and headers, HTTP/2 HPACK header block decompression, HTTP/2 connection and stream frames |
 | `fuzz_mail` | `crates/sex-mail` | RFC 5322 email headers, MIME multipart boundaries and parts, RFC 2047 encoded words, base64 decoding |
 | `fuzz_font` | `crates/sex-font` | TrueType and OpenType font SFNT tables (head, hhea, hmtx, cmap, glyf, loca, GPOS), metrics, and outline rasterization |
+| `fuzz_torrent` | `sex-torrent` (PR #236) | Bencode decoding, integer overflow bounds, list/dict recursion limits, Magnet URI parsing, wire protocol packet framing |
+| `fuzz_kodi_xml` | `sex-kodi` (PR #251) | Kodi addon XML unescaping, element/attribute parsing, Debian/Kodi version comparator, zip addon package unpack |
+| `fuzz_docx_office` | `crates/sex-office`<br>`wordcraft-engine` (PR #224) | DOCX OOXML ZIP part extraction, Office Pen/Canvas rendering coordinates, integer overflow checks (`x * 256`, `cx + cw`), alpha blending |
+| `fuzz_xlsx_office` | `crates/sex-office`<br>`apps/spreadeagle`<br>`gridcraft-engine` (PR #219) | XLSX OOXML ZIP part extraction, spreadsheet column name arithmetic (`col + 1` overflow checks), formula tokenization |
 
 ## Usage
 

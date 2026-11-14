@@ -290,6 +290,10 @@ html_text 15 host tests; sealed build and master gate GREEN; native
 `https_html_gate.py` at both sizes with a page containing title, quote, rule
 and image (reader text/pixels, link refusal, follow, Back all pass).
 
+## G-17. Fuzz Round 2 campaign (`sex-torrent`, `sex-kodi`, `docx`/`xlsx`) and reproducers (2026-11-14)
+
+**What changed.** Added 4 standalone `cargo-fuzz` targets (`fuzz_torrent`, `fuzz_kodi_xml`, `fuzz_docx_office`, `fuzz_xlsx_office`), seed corpora, and minimized crash reproducers (`fuzz/repros/round2/`), bringing `scripts/fuzz_smoke_host_gate.sh` to 13 targets. Ran >3.0M AddressSanitizer + libFuzzer executions across PR #236 (`crates/sex-torrent`: 1.61M execs, 0 crashes), PR #251 (`crates/sex-kodi`: 1.34M execs, 0 crashes), and `origin/claude/project-thread-o08hes` (`docx`/`xlsx`/`sex-office`/`spreadeagle`), filing Issue #281 (`sex-office::Pen::text` fixed-point `x * 256` & `mix` overflow/underflow) and Issue #282 (`spreadeagle::book::column_name` `u32::MAX + 1` overflow).
+
 ## F9. Spindle Shift key and `calc` (2026-11-02)
 
 **What changed.** Spindle had no Shift: capitals and symbols such as

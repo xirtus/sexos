@@ -19,6 +19,10 @@ if command -v cargo-fuzz >/dev/null 2>&1; then
         fuzz_http_hpack
         fuzz_mail
         fuzz_font
+        fuzz_torrent
+        fuzz_kodi_xml
+        fuzz_docx_office
+        fuzz_xlsx_office
     )
     
     for t in "${TARGETS[@]}"; do
