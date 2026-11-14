@@ -599,7 +599,10 @@ impl Studio {
         ui.set_layout(
             self.waveform,
             Layout::default()
-                .width(waveform::WIDTH as f32)
+                .width(
+                    (ui.size().0 as f32 / ui.theme().scale - 32.0)
+                        .clamp(80.0, waveform::WIDTH as f32),
+                )
                 .height(height as f32)
                 .shrink(0.0),
         );
@@ -767,7 +770,24 @@ impl Studio {
                 return vec![Response::Command("moan.selection".into())];
             }
         }
-        ui.handle(event)
+        let resized = matches!(event, weft::Event::Resize { .. });
+        let responses = ui.handle(event);
+        if resized {
+            let height =
+                waveform::HEADER + waveform::ROW * self.session.tracks.len().min(MAX_TRACKS).max(1);
+            ui.set_layout(
+                self.waveform,
+                Layout::default()
+                    .width(
+                        (ui.size().0 as f32 / ui.theme().scale - 32.0)
+                            .clamp(80.0, waveform::WIDTH as f32),
+                    )
+                    .height(height as f32)
+                    .shrink(0.0),
+            );
+            ui.layout();
+        }
+        responses
     }
     fn pointer(&mut self, ui: &mut Ui, pointer: weft::Pointer) -> bool {
         use weft::{Button, Point, PointerKind};
@@ -791,7 +811,9 @@ impl Studio {
         let rect = ui.rect(self.waveform);
         let p = Point::new(pointer.x / ui.theme().scale, pointer.y / ui.theme().scale);
         let visible = rect.intersect(&ui.rect(self.viewport));
-        let x = ((p.x - rect.x).max(0.0) as usize).min(waveform::WIDTH - 1);
+        let x = (((p.x - rect.x).max(0.0) / (rect.w - 1.0).max(1.0) * (waveform::WIDTH - 1) as f32)
+            as usize)
+            .min(waveform::WIDTH - 1);
         let frame = self.view.frame(x);
         if pointer.kind == PointerKind::Down(Button::Left)
             && visible.contains(p)
