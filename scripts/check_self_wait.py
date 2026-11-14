@@ -98,6 +98,31 @@ def source_contract(root):
         return dict(ok=False,contract='reviewed-up-self-wait-v1',source_sha256=sources,errors=[str(error)])
 
 
+# Optional auxiliary role profile; it never establishes the Net timer join.
+ACPI_AUX_SOURCES=('servers/sexacpi/src/main.rs','crates/sex-pdx/src/power.rs')
+ACPI_AUX_COHORTS=(
+ ('822bebd1f4048d35105a0c7fae00b3112b4c11a6013501cf8de528dc5e42dbf6','b13e5f3e739b0000837a81c9ae7212f0356c5d507d04d0f100a421f2ea05ddd6'),
+ ('24446427547d1f80eeb557e928b5854c27edc8b0caa45d5aebd7a5e6b460e531','227ca3f652dd675bca14b52f9f287c70139dd1b999d1db3ffe462f0183682616'))
+
+def _acpi_wait_profile(text,root,source,seals):
+    result=dict(ok=False,task=50,ticks=64,source_sha256={},scope='optional sampled ACPI wait-role admission; no inferred park or user-return proof')
+    if source is None or not source['ok'] or len(seals)!=1:return result
+    try:
+        root=Path(root).resolve(strict=True);texts=[]
+        for name in ACPI_AUX_SOURCES:
+            path=(root/name).resolve(strict=True)
+            if not path.is_relative_to(root)or not path.is_file()or path.stat().st_size>2*1024*1024:raise ValueError('invalid auxiliary source')
+            data=path.read_bytes();result['source_sha256'][name]=hashlib.sha256(data).hexdigest();texts.append(re.sub(r'\s+','',data.decode()))
+        if tuple(result['source_sha256'].values())not in ACPI_AUX_COHORTS:raise ValueError('unreviewed auxiliary ACPI source cohort')
+        if 'let_=sex_pdx::sys_wait_self_ticks(64);'not in texts[0]or 'pubconstACPI_SERVICE_PD:u32=50;'not in texts[1]or 'pubconstACPI_SERVICE_KEY:u8=4;'not in texts[1]:raise ValueError('changed ACPI fixed wait/identity')
+        markers=list(re.finditer(re.escape('[kernel.spawn.sexacpi'),text))
+        roles=list(re.finditer(r'^\[kernel.spawn.sexacpi\] id=50 key=4 organ=senses\r?\n',text,re.M))
+        if len(markers)!=len(roles)or len(roles)!=1 or roles[0].start()>=seals[0].start():raise ValueError('missing unique prior BOOT ACPI role')
+        result.update(ok=True,receipt_offset=roles[0].start())
+    except (OSError,ValueError,UnicodeError,RuntimeError)as error:result['errors']=[str(error)]
+    return result
+
+
 def _up_topology(text):
     markers=list(re.finditer(re.escape('[smp.online'),text))
     matches=list(re.finditer(r'^\[smp.online\] cores=1 present=1\r?\n',text,re.M))
@@ -143,6 +168,8 @@ def inspect(text,active=True,*,browser_tasks=(15,),source_root=None):
  expiries=list(re.finditer(r'\[scheduler.self_wait.expired\] task=(\d+) deadline=(\d+) now=(\d+) count=(\d+)',text))
  returns=list(re.finditer(r'\[sexnet.receive.wait\] before=(\d+) after=(\d+) ticks=2 count=(\d+) kind=timer_assisted_poll irq=0',text))
  valid_seal=len(markers)==len(seals)==1 and 1<=int(seals[0][1])<=EXPECTED_BOOT_MAIN_CAPACITY
+ acpi=_acpi_wait_profile(text,source_root,source,seals)
+ auxiliary=((50,64),)if acpi['ok']else()
  if not valid_seal:errors.append('missing/invalid unique complete BOOT timer inventory (capacity must be 64)')
  if len(authority)!=1:errors.append('missing unique real Ring3 invalid-argument probes')
  if seals and any(m.start()<seals[0].start()for m in parks+expiries+authority):errors.append('timed wait precedes BOOT seal')
@@ -152,9 +179,9 @@ def inspect(text,active=True,*,browser_tasks=(15,),source_root=None):
   # sexdrive main task (2) waits 1 tick for NVMe completions. Park records
   # are sampled (first four, then powers of two), so either may appear.
   # Idle Display (1) and SilkBar (6) sleep 8 ticks; polled sexinput (4) and sexusb (5) sleep 1.
-  if (int(p[1]),int(p[2]))not in((13,2),(2,1),(1,8),(6,8),(4,1),(5,1))+(((5,32),)if source_ok else())+tuple((task,2)for task in selected) or int(p[3])==0:errors.append('unexpected timed-poll task/interval/deadline')
+  if (int(p[1]),int(p[2]))not in((13,2),(2,1),(1,8),(6,8),(4,1),(5,1))+(((5,32),)if source_ok else())+tuple((task,2)for task in selected)+auxiliary or int(p[3])==0:errors.append('unexpected timed-poll task/interval/deadline')
  for e in expiries:
-  if int(e[1])not in(13,2,1,6,4,5)+selected or int(e[3])<int(e[2]):errors.append('foreign task or early timer expiry')
+  if int(e[1])not in(13,2,1,6,4,5)+selected+((50,)if acpi['ok']else()) or int(e[3])<int(e[2]):errors.append('foreign task or early timer expiry')
  for r in returns:
   if int(r[2])<int(r[1]):errors.append('backward Ring3 clock')
  for group,index in [(parks,4),(expiries,4),(returns,3)]:
@@ -192,7 +219,7 @@ def inspect(text,active=True,*,browser_tasks=(15,),source_root=None):
  if not active and(any(int(p[1])==13 for p in parks)or any(int(e[1])==13 for e in expiries)or returns):
   if not returns or any(not text[r.end():].startswith(' device=0 reply_pending=1')for r in returns):errors.append('unsupported NIC unexpectedly entered device polling without retained reply work')
  if re.search(r'TIMED_WAIT_WITHOUT_ATTACHED_OWNER|BOOT_SELF_WAIT_AUTHORITY|SELF_WAIT_FRONTEND_PROBE|KERNEL PANIC|KERNEL PAGE FAULT|DOUBLE FAULT|panicked at',text):errors.append('guest self-wait failure')
- return dict(ok=not errors,errors=errors,browser_tasks=list(selected),boot_tasks=int(seals[0][1])if valid_seal else None,parks_observed=len(parks),expiries_observed=len(expiries),returns_observed=len(returns),timer_user_joins=joined,observed_timer_user_joins=observed,inferred_timer_user_joins=inferred,source_contract=source,up_topology=topology,net_boot_identity=net_identity,scope='Sampled real BOOT/main-task/park/timer/Ring3 receipts with explicitly caller-selected observed Browser task IDs; no identity autodiscovery or authority grant. Native peer and desktop gates separately establish useful progress. Nominal timer-assisted polling, not NIC IRQ, CPU/power bound, physical or SMP proof. Inferred park requires reviewed unchanged causal source, exact observed UP topology and one-to-one expiry/Net-return envelopes; caller separately verifies frozen source/image binding.')
+ return dict(ok=not errors,errors=errors,browser_tasks=list(selected),boot_tasks=int(seals[0][1])if valid_seal else None,parks_observed=len(parks),expiries_observed=len(expiries),returns_observed=len(returns),timer_user_joins=joined,observed_timer_user_joins=observed,inferred_timer_user_joins=inferred,source_contract=source,auxiliary_wait_profiles={'acpi':acpi},up_topology=topology,net_boot_identity=net_identity,scope='Sampled real BOOT/main-task/park/timer/Ring3 receipts with explicitly caller-selected observed Browser task IDs; no identity autodiscovery or authority grant. Native peer and desktop gates separately establish useful progress. Nominal timer-assisted polling, not NIC IRQ, CPU/power bound, physical or SMP proof. Inferred park requires reviewed unchanged causal source, exact observed UP topology and one-to-one expiry/Net-return envelopes; caller separately verifies frozen source/image binding.')
 
 def main():
  p=argparse.ArgumentParser();p.add_argument('log',type=Path);p.add_argument('--inactive',action='store_true');p.add_argument('--source-root',type=Path,help='reviewed causal source for sampled UP equivalence and quiet USB32');a=p.parse_args();r=inspect(a.log.read_text(errors='replace'),not a.inactive,source_root=a.source_root);print(json.dumps(r,indent=2));raise SystemExit(0 if r['ok']else 1)
