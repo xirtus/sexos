@@ -13,6 +13,7 @@ use flow::{Kind, Op};
 
 const HOT: u16 = 32;
 const CACHE: usize = 64;
+const WARM_SLOTS: usize = 256;
 const MAX_BYTECODE: usize = 128;
 const STACK: usize = 16;
 
@@ -36,6 +37,7 @@ pub(crate) struct Jit {
     pub enabled: bool,
     pub stats: Stats,
     entries: Vec<Entry>,
+    warm: [(u64, u16); WARM_SLOTS],
 }
 struct Entry {
     bytecode: Vec<u8>,
@@ -51,6 +53,7 @@ impl Default for Jit {
             enabled: true,
             stats: Stats::default(),
             entries: Vec::new(),
+            warm: [(0, 0); WARM_SLOTS],
         }
     }
 }
@@ -113,7 +116,19 @@ impl Jit {
         {
             Some(i) => i,
             None => {
-                let entry = Entry { bytecode: bc.to_vec(), argc, closures, bool_mask, calls: 0, code: None };
+                // Track cold calls without allocating bytecode or occupying an
+                // entry. Hash collisions can only change warm-up timing: cache
+                // identity and compilation still use the full checked bytecode.
+                let mut signature = 0xcbf29ce484222325u64;
+                for byte in [argc as u8, closures as u8, bool_mask].iter().chain(bc.iter()) {
+                    signature = (signature ^ *byte as u64).wrapping_mul(0x100000001b3);
+                }
+                let warm = &mut self.warm[signature as usize % WARM_SLOTS];
+                if warm.0 != signature { *warm = (signature, 0); }
+                warm.1 = warm.1.saturating_add(1);
+                self.stats.hottest = self.stats.hottest.max(warm.1);
+                if warm.1 < HOT { return 0; }
+                let entry = Entry { bytecode: bc.to_vec(), argc, closures, bool_mask, calls: HOT - 1, code: None };
                 if self.entries.len() == CACHE {
                     self.stats.cache_full += 1;
                     // Cold one-shot functions must not permanently exclude later
@@ -391,6 +406,29 @@ impl Executable {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn rejected_hot_functions_do_not_starve_new_useful_code() {
+        let mut jit = Jit::default();
+        let mut data = [0u8; 32];
+        // A real page mixes recurring unsupported helpers with cold one-offs.
+        for n in 0..CACHE {
+            data[..2].copy_from_slice(&[255, n as u8]);
+            for _ in 0..HOT { jit.run_v3(&mut data, 0, 2, 8, 0, 16); }
+        }
+        assert_eq!(jit.stats.unsupported, CACHE as u64);
+        for n in 0..HOT {
+            data[..2].copy_from_slice(&[op::PUSH_1, op::RETURN]);
+            jit.run_v3(&mut data, 0, 2, 8, 0, 16);
+            data[..2].copy_from_slice(&[255, CACHE as u8 + n as u8]);
+            jit.run_v3(&mut data, 0, 2, 8, 0, 16);
+        }
+        // Even hosts without native execution must reach the executable admission.
+        assert_eq!(jit.stats.compiled + jit.stats.refused, 1);
+        assert!(jit.entries.len() <= CACHE);
+        #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+        { assert_eq!(jit.stats.executed, 1); assert_eq!(i32::from_le_bytes(data[16..20].try_into().unwrap()), 1); }
+    }
+
     #[test]
     fn closure_admission_checks_shape_and_rejects_writes() {
         assert!(compile_typed(&[op::GET_VAR_REF0, op::RETURN], 0, 1, 1).is_some());
