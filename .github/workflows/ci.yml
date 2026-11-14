@@ -107,6 +107,8 @@ jobs:
       run: cargo test --locked -p sex-rfb
     - name: Serenade audio recorder engine (VOX, dBFS meters, waveform mipmaps, WAV/cue) on the host
       run: bash scripts/serenade_host_gate.sh
+    - name: Flash UVC webcam protocol, server and capture app on the host
+      run: bash scripts/flash_host_gate.sh
     - name: Multipass accounts, Shibari keeper (link fixtures, tokens never leave)
       run: cargo test --locked -p shibari -p sex-multipass
     - name: Valentine mail (IMAP IDLE + SMTP send-then-receive fixture, MIME, threads)
@@ -655,6 +657,10 @@ jobs:
         rustc --edition=2021 -O -A dead_code -A unused_attributes scripts/sexfs_extract.rs -o "$RUNNER_TEMP/sexfs-extract"
         truncate -s 1G "$RUNNER_TEMP/recording-source.img"
         python3 scripts/recording_guest_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/recording-source.img" --extractor "$RUNNER_TEMP/sexfs-extract" --out "$RUNNER_TEMP/recording"
+    - name: Flash UVC camera photo and Splicy WebM video guest proof
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/flash-source.img"
+        python3 scripts/flash_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/flash-source.img" --require-video --out "$RUNNER_TEMP/recording/flash"
     - name: Preserve encoder evidence
       if: always()
       uses: actions/upload-artifact@v4

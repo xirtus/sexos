@@ -223,6 +223,12 @@ text, wheel) OK; sealed `make full` green. No runtime behaviour changed.
 **Limit.** This bounds one big stack object, not total stack depth. A real
 fix is a stack high-water measurement or a stack quota separate from heap.
 
+## G-15. Flash UVC webcam driver server and capture app (2026-11-14)
+
+**What changed.** Added `crates/sex-uvc` (`#![no_std]`, `#![forbid(unsafe_code)]` USB Video Class 1.1/1.5 descriptor parser, 26/34-byte Probe/Commit control negotiation, bounded `FID`/`EOF`/`ERR` payload reassembler, and `YUY2`/`NV12`/`MJPEG` frame decoders), `servers/sexuvc` (ring-3 userspace UVC webcam driver server with per-client capability grants), and `apps/flash` (camera capture app saving PNG stills and encoding WebM VP9 video directly through Splicy's `sex_media::export::Exporter` without duplicating an encoder).
+
+**Evidence.** `scripts/flash_host_gate.sh` (unit + adversarial fuzz tests + host UVC loopback smoke) and `scripts/flash_gate.py` (QEMU guest UVC negotiation, PNG photo capture, and Splicy WebM video export).
+
 ## F6. Quil shows "DRAFT KEPT"; HTML images show alt text (2026-11-02)
 
 **What changed.** When Quil has unsaved edits that are already held in the

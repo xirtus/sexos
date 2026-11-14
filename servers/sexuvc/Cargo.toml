@@ -1,0 +1,11 @@
+[package]
+name = "sexuvc"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "SexUVC: SexOS native USB Video Class (UVC) webcam driver server"
+
+[dependencies]
+sex-pdx = { path = "../../crates/sex-pdx" }
+sex-uvc = { path = "../../crates/sex-uvc" }
+linked_list_allocator = "0.10.5"

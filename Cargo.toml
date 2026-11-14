@@ -152,6 +152,9 @@ members = [
     "apps/assuit",
     "crates/sex-office",
     "crates/burlesque-core",
+    "crates/sex-uvc",
+    "servers/sexuvc",
+    "apps/flash",
 ]
 [workspace.package]
 license = "GPL-3.0-only"
