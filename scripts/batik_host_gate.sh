@@ -7,8 +7,10 @@ cd "$(dirname "$0")/.."
 
 echo "[batik.host.gate] Running host test suite..."
 cargo test --locked -p batik-core
+cargo test --locked -p batik --no-default-features
 
 echo "[batik.host.gate] Verifying x86_64-sex-app.json target build..."
 cargo check --locked -Zbuild-std=core,alloc --target x86_64-sex-app.json -p batik-core
+cargo check --locked -Zbuild-std=core,alloc --target x86_64-sex-app.json -p batik
 
 echo "[batik.host.gate] PASS"
