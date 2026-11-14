@@ -510,7 +510,8 @@ jobs:
     - name: E-book and feed models (EPUB, FictionBook, CBZ, reflow, RSS, Atom, OPML) on the host
       run: cargo test --locked -p sex-xml -p sex-ebook -p sex-feed
     - name: Build the image
-      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/reading-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/reading-build.log"; exit 1)
+      run: |
+        ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/reading-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/reading-build.log"; exit 1)
     - name: Bodice opens an EPUB, turns pages and reopens at the saved page
       run: |
         truncate -s 256M "$RUNNER_TEMP/blank-reading.img"
@@ -538,7 +539,8 @@ jobs:
     - name: Hookup protocol (KDE Connect) on the host, against the Python test peer; map tiles, search and routes
       run: cargo test --locked -p sex-kdeconnect -p sex-map
     - name: Build the image
-      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/places-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/places-build.log"; exit 1)
+      run: |
+        ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/places-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/places-build.log"; exit 1)
     - name: Hookup pairs with a test phone, receives and sends files, media keys
       run: |
         truncate -s 256M "$RUNNER_TEMP/blank-places.img"
