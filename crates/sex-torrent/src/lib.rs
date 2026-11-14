@@ -41,6 +41,7 @@ pub mod storage;
 pub mod resume;
 pub mod session;
 pub mod stream;
+pub mod adapt;
 
 pub mod tracker;
 pub mod dht;
