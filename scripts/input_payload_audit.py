@@ -17,7 +17,7 @@ KERNEL=r'\[ps2\.(?:port60\.read|input_ring\.(?:enqueue|drop))\][^\n]*\bsc='
 def audit_interval(trace):
     userspace=[line for line in trace.splitlines() if any(re.search(pattern,line) for pattern in USERSPACE)]
     kernel=[line for line in trace.splitlines() if re.search(KERNEL,line)]
-    return dict(userspace_safe=not userspace,userspace_payload_lines=userspace,kernel_payload_lines=kernel,
+    return dict(userspace_safe=not userspace,kernel_safe=not kernel,userspace_payload_lines=userspace,kernel_payload_lines=kernel,
                 # A clean interval cannot prove the startup-budget kernel policy safe.
                 complete_keyboard_privacy_proven=False,kernel_policy='separate source exception/review required')
 
@@ -28,3 +28,11 @@ def require_normal_image(g):
         if values!=['redacted']:raise ValueError('private typing requires an explicitly normal metadata-only userspace image')
     if re.search(r'\[(?:keyboard_cursor\.gate|proof\.gate\.state)\] enabled=1',g['text']()):
         raise ValueError('private typing cannot use synthetic-input/keyboard-cursor diagnostic profiles')
+
+def require_kernel_redaction(trace):
+    """Validate this image's observed bounded receipts; not whole-kernel secrecy."""
+    if audit_interval(trace)['kernel_payload_lines']:
+        raise ValueError('raw kernel keyboard payload in normal image')
+    records=re.findall(r'\[ps2\.(?:port60\.read|input_ring\.(?:enqueue|drop))\][^\n]*payload=redacted',trace)
+    if not records:raise ValueError('normal kernel keyboard metadata receipt missing')
+    return len(records)

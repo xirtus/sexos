@@ -4527,3 +4527,28 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   changes do not alter the kernel ABI. No kernel source diff. The superseded root
   CI candidates were cancelled; their results are not accepted as final green CI.
   A fresh exact-head full run is required before merging.
+
+## ChatGPT round 186: redact keyboard diagnostics by default (2026-11-14)
+- Normal Input, Shell, USB and SDK diagnostics omit keyboard payloads while
+  preserving delivery, routing and admission metadata. An explicit unsafe build
+  profile retains the strict physical-input gate records; the profile builder
+  freezes diagnostic evidence and restores/rebuilds normal artifacts.
+- The user explicitly authorized the reviewed logging-only kernel exception.
+  Exactly three PS/2 startup/overflow log sites retain their counters, event/type
+  and reason metadata, redact scancodes normally, and disclose them only under
+  `sexos_input_payload_proof`. No queue, wake, interrupt or capability behavior
+  changes. Kernel source grows by 9 nonblank lines to 19,273/21,500.
+- A regression compiles the actual six cfg-guarded statements in both modes,
+  checks three distinct scancodes and exact metadata, and rejects removed/swapped
+  guards. Both tests and all six kernel guardrail tests pass. The 85 ABI source
+  hashes are re-pinned; wire definitions are unchanged.
+- The earlier normal v3 two-boot vault gate passed 12 protected typing intervals
+  without userspace payload records. Its unchanged kernel and consumed startup
+  budget cannot establish kernel privacy. New normal/proof kernel builds and
+  v4 runtime evidence remain separate required checks; no blanket claim is made.
+- All 1,208 Python regressions pass after the kernel/profile/audit changes. The shared FFmpeg link list now
+  includes optional static Shine after avcodec; a real Web guest build and the
+  unchanged instruction scanner pass against the export-enabled codec profile.
+- Moan core PR #244 merged only after independently verified 16/16 successful checks
+  including the final build aggregator and exact head. All remaining merges
+  remain gated on complete exact-head CI. The original dirty checkout is untouched.

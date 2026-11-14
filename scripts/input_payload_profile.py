@@ -2,14 +2,14 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """Declare an UNSAFE keyboard-payload proof profile; never for private input.
 
-This changes only reviewed userspace stage flags. Build it through the canonical
+This changes only reviewed input-diagnostic stage flags. Build it through the canonical
 entrypoint, preserve its manifest/trace, then restore and rebuild normal artifacts.
-Kernel diagnostics remain a separately reviewed/authorized source change.
+The kernel logging-only change has a separately reviewed authorization.
 """
 import argparse,json,re,tomllib
 from pathlib import Path
 FLAG='--cfg sexos_input_payload_proof'
-STAGES=('build_silk_shell','build_sexinput')
+STAGES=('build_kernel','build_silk_shell','build_sexinput')
 
 def diagnostic_spec(text):
     parsed=tomllib.loads(text);rows={row['id']:row for row in parsed['stage']}
