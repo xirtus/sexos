@@ -36,11 +36,15 @@ def main():
  def line(text):g['focus'](153);time.sleep(.5);keys(text);q.key('ret')
  def fetch(name):
   # Spindle can drop the first keys while it opens; the command is retried.
-  for attempt in range(3):
+  for attempt in range(5):
    s=len(t());line(f'fetch http://10.0.2.2:{port}/blob {name}')
-   try:m=g['wait'](r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',s,120);break
+   try:
+    m=g['wait'](r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',s,120)
+    if m[1]==f'Saved {len(BODY)} bytes':
+     break
+    time.sleep(1.0)
    except TimeoutError:
-    if attempt==2:raise
+    if attempt==4:raise
   assert m[1]==f'Saved {len(BODY)} bytes',m[1]
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
