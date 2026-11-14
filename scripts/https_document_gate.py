@@ -191,19 +191,13 @@ def frame_pixels(ppm,expected,contract,resolution=None):
  width,height,pixels=ppm_rgb(ppm,min_width=1,min_height=1);tile=expected['tile'];factor=expected['scale'];color=contract['color'].to_bytes(3,'big');checked=ink=mismatches=0
  if resolution and(width,height)!=tuple(resolution):raise ValueError('wrong actual framebuffer resolution')
  if tile['x']<0 or tile['y']<50 or tile['x']+tile['w']>width or tile['y']+tile['h']>height:raise ValueError('reader tile outside framebuffer')
- columns=min(80,max(0,(tile['w']-2*contract['inset'])//(contract['advance']*factor)));band_rows=min(contract['max_rows'],max(0,(tile['h']-contract['top']+contract['line']*factor-1)//(contract['line']*factor)))
+ columns=min(contract.get('renderer_max_columns',80),max(0,(tile['w']-2*contract['inset'])//(contract['advance']*factor)));band_rows=min(contract['max_rows'],max(0,(tile['h']-contract['top']+contract['line']*factor-1)//(contract['line']*factor)))
  for row in range(band_rows):
   line=expected['lines'][row]if row<expected['rows']else b''
   for column in range(columns):
-   bitmap=glyph(contract['font'],chr(line[column]))if column<len(line)else(0,)*7
-   for gy in range(contract['line']):
-    for gx in range(contract['advance']):
-     on=gy<contract['glyph_height']and gx<5 and bool(bitmap[gy]&(1<<(4-gx)))
-     for dy in range(factor):
-      py=tile['y']+contract['top']+(row*contract['line']+gy)*factor+dy
-      if py>=tile['y']+tile['h']:continue
-      for dx in range(factor):
-       px=tile['x']+contract['inset']+(column*contract['advance']+gx)*factor+dx;actual=pixels[(py*width+px)*3:(py*width+px)*3+3]==color;checked+=1;ink+=on;mismatches+=actual!=on
+   char=chr(line[column])if column<len(line)else' '
+   c,i,m=http.check_text_cell(pixels,width,tile['x']+contract['inset']+column*contract['advance']*factor,tile['y']+contract['top']+row*contract['line']*factor,char,factor,contract,tile['y']+tile['h'])
+   checked+=c;ink+=i;mismatches+=m
  if mismatches or not ink:raise ValueError('whole HTTPS reader glyph/padding/stale-erasure mismatches='+str(mismatches))
  return dict(ok=True,errors=[],checked_pixels=checked,expected_ink_pixels=ink,geometry={k:v for k,v in expected.items()if k not in('starts','lines')},expected_rows=[line.decode('ascii')for line in expected['lines']])
 
@@ -285,7 +279,7 @@ def status_geometry(trace,expected,mode,contract):
  label=(b'certificate rejected'if mode=='wrong-name'else b'invalid document')if expected=='Unavailable'else LABELS[expected]
  status=(b'\n\nHTTPS / lab root: '+label+b'\nB fetch V read Q clear').ljust(64,b' ')
  if len(status)!=64:raise ValueError('controlled TLS panel exceeds64bytes')
- data=preceding+status;scale=2 if w>=contract['scale_threshold']else 1;cols=min(80,max(1,(w-2*contract['inset'])//(contract['advance']*scale)));starts=[0];column=0
+ data=preceding+status;scale=2 if w>=contract['scale_threshold']else 1;cols=min(contract.get('renderer_max_columns',80),max(1,(w-2*contract['inset'])//(contract['advance']*scale)));starts=[0];column=0
  for index,byte in enumerate(data):
   if byte==10:starts.append(index+1);column=0
   else:
@@ -310,13 +304,9 @@ def verify_status_pixels(trace,ppm,expected,mode,contract,resolution=None):
   if tile['x']<0 or tile['y']<50 or tile['x']+tile['w']>width or tile['y']+tile['h']>height:raise ValueError('peer tile outside framebuffer')
   for row in g['rows']:
    for col in range(g['columns']):
-    bits=glyph(contract['font'],row['text'][col])if col<len(row['text'])else(0,)*7
-    for gy in range(contract['line']):
-     for gx in range(contract['advance']):
-      on=gy<7 and gx<5 and bool(bits[gy]&(1<<(4-gx)))
-      for dy in range(scale):
-       for dx in range(scale):
-        px=row['x']+(col*contract['advance']+gx)*scale+dx;py=row['y']+gy*scale+dy;actual=pixels[(py*width+px)*3:(py*width+px)*3+3]==color;mismatch+=actual!=on;checked+=1;ink+=on
+    char=row['text'][col]if col<len(row['text'])else' '
+    c,i,m=http.check_text_cell(pixels,width,row['x']+col*contract['advance']*scale,row['y'],char,scale,contract)
+    mismatch+=m;checked+=c;ink+=i
   if mismatch or not ink:raise ValueError('whole peer glyph/padding/trailing-erasure mismatches='+str(mismatch))
   return dict(ok=True,errors=[],expected=expected,geometry=g,checked_pixels=checked,expected_ink_pixels=ink)
  except(ValueError,KeyError,IndexError,UnicodeError)as exc:return dict(ok=False,errors=[str(exc)],expected=expected)
