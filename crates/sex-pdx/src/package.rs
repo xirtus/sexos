@@ -8,7 +8,11 @@
 //! put there), and then only INSTALL (never [`ALLOW_DOWNGRADE`]), CHECK, REMOVE, LIST,
 //! CATALOG, SEARCH, LOCATE, SOURCE, REPO_REMOVE, REPOS and DETAILS. TRUST, CONSENT,
 //! REPO_ADD and ROLLBACK stay Spindle's: they are the person's answers (whom to trust,
-//! what to allow, going back to an older version). A program's package paths, [`DOWNLOAD`], [`CATALOG_DOWNLOAD`] and
+//! what to allow, going back to an older version). One exception for CONSENT: Settings
+//! (the system's `settings` program, run from `/data/settings`, the identity Files already
+//! trusts with settings and the lock password) may send [`GRANTS`], LIST and CONSENT, and
+//! nothing else, so the person can review and revoke grants from its Privacy page. No
+//! other program can. A program's package paths, [`DOWNLOAD`], [`CATALOG_DOWNLOAD`] and
 //! [`SIG_DOWNLOAD`] are inside its own folder, as all its paths are.
 //!
 //! Installed packages are recorded under `/system/packages/PROGRAM/`: `manifest` (as
@@ -59,6 +63,10 @@ pub const ROLLBACK: u64 = 13;
 /// line each in `sex_pkg::index::Listing` form (repository, installed and kept versions,
 /// category, pictures and their hashes, description).
 pub const DETAILS: u64 = 14;
+/// Every installed program's grants, one [`MACHINE`] line each:
+/// `PROGRAM ASKED ANSWERED ALLOWED USED` (decimal bits; USED is the Unix second Files last
+/// prepared a run of it holding an allowed grant since Files started, 0 if never).
+pub const GRANTS: u64 = 15;
 /// The run argument Spindle adds for `run +pkg`: this run may use package requests.
 pub const GRANT_TOKEN: &[u8] = b"+packages";
 /// Report lines for Spindle rather than the person start with this byte.

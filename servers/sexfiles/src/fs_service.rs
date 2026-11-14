@@ -672,6 +672,12 @@ fn holds_launch(binding: &Binding) -> bool {
 }
 #[allow(non_snake_case)]
 fn PROGRAM_INDEX_BASE_PLUS(k: usize) -> u64 { w::PROVIDER_SLOT_BASE + (w::PROGRAM_INDEX_BASE + k) as u64 }
+/// The run is Settings': bound to `/data/settings`, the folder Files gave the run of
+/// `/bin/settings` (which no package may install, see `packages::RESERVED`). The same
+/// identity `program_is` gives settings and lock-password writes.
+fn is_settings(binding: &Binding) -> bool {
+    binding.root[..binding.len].strip_prefix(sex_pdx::program_store::DATA) == Some(b"settings")
+}
 fn holds_packages(binding: &Binding) -> bool {
     binding.args[..binding.args_len].split(|b| *b == b' ').any(|t| t == sex_pdx::package::GRANT_TOKEN)
 }
@@ -693,6 +699,15 @@ fn program_package(binding: &Binding, r: w::Request, arg: &[u8], out: &mut [u8; 
     use sex_pdx::package as p;
     let program = core::str::from_utf8(&binding.root[sex_pdx::program_store::DATA.len()..binding.len]).unwrap_or("?");
     let refuse = |why: &str| { sex_pdx::serial_record!("[files.pkg.denied] program={} op={} why={}", program, r.offset, why); None };
+    // Settings' Privacy page: the person reviews and changes grants there. Only these
+    // three, and the argument is a program name, never a path.
+    if is_settings(binding) && matches!(r.offset, p::GRANTS | p::LIST | p::CONSENT) {
+        if arg.len() > out.len() { return refuse("length"); }
+        out[..arg.len()].copy_from_slice(arg);
+        sex_pdx::serial_record!("[files.pkg.settings] op={} arg={}", r.offset, core::str::from_utf8(arg).unwrap_or("?"));
+        return Some(arg.len());
+    }
+    if !holds_packages(binding) { return refuse("no_grant"); }
     match r.offset {
         p::INSTALL if r.length & p::ALLOW_DOWNGRADE != 0 => refuse("downgrade"),
         p::INSTALL | p::CHECK => match confine(binding, arg, out) { Some(n) => Some(n), None => refuse("path") },
@@ -740,7 +755,7 @@ pub fn handle(caller: u32, caller_task: u32, a: u64, offset: u64, length: u64) -
                 return crate::console_relay::handle(k, holds_launch(&b), r, PROGRAM_INDEX_BASE_PLUS(k), |path, out| held_folder(&b, path, out));
             }
             // Packages only for a run the person started with `run +pkg` (see `program_package`).
-            if r.kind == sex_pdx::package::KIND && !bound.is_some_and(|b| holds_packages(&b)) {
+            if r.kind == sex_pdx::package::KIND && !bound.is_some_and(|b| holds_packages(&b) || is_settings(&b)) {
                 sex_pdx::serial_record!("[files.pkg.denied] target={} op={} why=no_grant", caller, r.offset);
                 return w::reply(r.seq, w::DENIED, 0);
             }
@@ -1283,7 +1298,13 @@ fn prepare(fs: &mut Fs<'static, Disk>, r: w::Request, path: &[u8], data: &mut [u
                 crate::console_relay::prepared(id, pipe);
             }
             // A program a package installed: what it asks for and what the person said.
-            let note = path.strip_prefix(sex_pdx::program_store::BIN).and_then(|name| crate::packages::note(fs, name));
+            // Unasked grants take the person's default answer; a run holding an allowed
+            // grant is its last use.
+            let name = path.strip_prefix(sex_pdx::program_store::BIN);
+            let note = name.and_then(|name| crate::packages::note(fs, name)).map(crate::packages::with_defaults);
+            if let (Some(name), Some(n)) = (name, note) {
+                if n.allowed != 0 { crate::packages::mark_used(name, sex_pdx::civil_time_ms().map_or(0, |ms| ms / 1000)); }
+            }
             match note { Some(n) => n.encode(data), None => data[..sex_pdx::package::NOTE_BYTES].fill(0) }
             Ok(ticket)
         }
