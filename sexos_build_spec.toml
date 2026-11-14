@@ -29,6 +29,7 @@ crates = [
   "sex-kernel",
   "servers/sexbell/Cargo.toml",
   "servers/sexacpi/Cargo.toml",
+  "servers/denim/Cargo.toml",
   "servers/sexdisplay/Cargo.toml",
   "apps/sexdrive/Cargo.toml",
   "servers/silk-shell/Cargo.toml",
@@ -80,6 +81,7 @@ crates = [
   "apps/assuit/Cargo.toml",
   "apps/settings/Cargo.toml",
   "apps/aftercare/Cargo.toml",
+  "apps/crush/Cargo.toml",
   "apps/lua/Cargo.toml",
   "apps/rg/Cargo.toml",
   "apps/fd/Cargo.toml",
@@ -89,11 +91,17 @@ crates = [
   "apps/sdltest/Cargo.toml",
   "apps/driftspark/Cargo.toml",
   "servers/cufflinks/Cargo.toml",
+  "apps/dragtest/Cargo.toml",
   "apps/lurk/Cargo.toml",
   "apps/bodice/Cargo.toml",
   "apps/gossip/Cargo.toml",
   "apps/hookup/Cargo.toml",
-  "apps/rendezvous/Cargo.toml"
+  "apps/rendezvous/Cargo.toml",
+  "servers/sexuvc/Cargo.toml",
+  "apps/flash/Cargo.toml",
+  "apps/climax/Cargo.toml",
+  "apps/batik/Cargo.toml",
+  "apps/burlesque/Cargo.toml"
 ]
 
 [[stage]]
@@ -205,6 +213,14 @@ action = "cargo_manifest"
 manifest = "servers/sexacpi/Cargo.toml"
 source_artifact = "target/x86_64-sex/release/sexacpi"
 dest_artifact = "iso_root/servers/sexacpi"
+rustflags = ""
+
+[[stage]]
+id = "build_denim"
+action = "cargo_manifest"
+manifest = "servers/denim/Cargo.toml"
+source_artifact = "target/x86_64-sex/release/denim"
+dest_artifact = "iso_root/servers/denim"
 rustflags = ""
 
 [[stage]]
@@ -538,6 +554,15 @@ manifest = "apps/driftspark/Cargo.toml"
 source_artifact = "target/x86_64-sex-std/release/driftspark"
 dest_artifact = "iso_root/programs/driftspark"
 
+# Drag test: the smallest VMM, a real-mode guest through syscall 110 (sex_pdx::vm).
+[[stage]]
+id = "build_dragtest"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/dragtest/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/dragtest"
+dest_artifact = "iso_root/programs/dragtest"
+
 # Bodice: e-books (EPUB, FictionBook, comics), on sex-app with sex-ebook.
 [[stage]]
 id = "build_bodice"
@@ -732,6 +757,24 @@ source_artifact = "target/x86_64-sex/release/cufflinks"
 dest_artifact = "iso_root/servers/cufflinks"
 rustflags = "--cfg aes_force_soft"
 
+# SexUVC: userspace USB Video Class webcam driver server
+[[stage]]
+id = "build_sexuvc"
+action = "cargo_manifest"
+target = "x86_64-sex.json"
+manifest = "servers/sexuvc/Cargo.toml"
+source_artifact = "target/x86_64-sex/release/sexuvc"
+dest_artifact = "iso_root/servers/sexuvc"
+
+# Flash: UVC camera capture app (photo and Splicy WebM video)
+[[stage]]
+id = "build_flash"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/flash/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/flash"
+dest_artifact = "iso_root/programs/flash"
+
 [[stage]]
 id = "build_sex_calc"
 action = "cargo_manifest"
@@ -747,6 +790,40 @@ target = "x86_64-sex-app.json"
 manifest = "apps/calendar/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/calendar"
 dest_artifact = "iso_root/programs/calendar"
+# Climax: benchmark and thermal torture suite window.
+[[stage]]
+id = "build_climax"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/climax/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/climax"
+dest_artifact = "iso_root/programs/climax"
+
+# Batik image editor and digital painting app on Weft.
+[[stage]]
+id = "build_batik"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/batik/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/batik"
+dest_artifact = "iso_root/programs/batik"
+
+# Burlesque presentations app on Weft.
+[[stage]]
+id = "build_burlesque"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/burlesque/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/burlesque"
+dest_artifact = "iso_root/programs/burlesque"
+
+[[stage]]
+id = "build_crush"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/crush/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/crush"
+dest_artifact = "iso_root/programs/crush"
 
 [[stage]]
 id = "copy_limine_cfg"

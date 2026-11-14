@@ -437,6 +437,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "batik"
+version = "0.1.0"
+dependencies = [
+ "batik-core",
+ "libm",
+ "sex-app",
+ "sex-canvas",
+ "sex-font",
+ "sex-image",
+ "sex-pdx",
+]
+
+[[package]]
+name = "batik-core"
+version = "0.1.0"
+dependencies = [
+ "libm",
+ "miniz_oxide 0.9.1",
+ "sex-archive",
+ "sex-image",
+]
+
+[[package]]
 name = "bench"
 version = "0.1.0"
 dependencies = [
@@ -632,6 +655,32 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 
 [[package]]
+name = "burlesque"
+version = "0.1.0"
+dependencies = [
+ "burlesque-core",
+ "libm",
+ "sex-app",
+ "sex-canvas",
+ "sex-font",
+ "sex-pdx",
+]
+
+[[package]]
+name = "burlesque-core"
+version = "0.1.0"
+dependencies = [
+ "crc32fast",
+ "libm",
+ "miniz_oxide 0.9.1",
+ "sex-archive",
+ "sex-canvas",
+ "sex-font",
+ "sex-image",
+ "vellum-edit",
+]
+
+[[package]]
 name = "byte-slice-cast"
 version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -687,6 +736,8 @@ version = "0.1.0"
 dependencies = [
  "sex-app",
  "sex-calendar",
+ "sex-dav",
+ "sex-fetch",
  "sex-font",
  "sex-pdx",
 ]
@@ -861,6 +912,24 @@ name = "clap_lex"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1c133bc6a41be0d194c306b5506d15e6feeea7b1d6604bd3f8310dfb2ca96486"
+
+[[package]]
+name = "climax"
+version = "0.1.0"
+dependencies = [
+ "climax-core",
+ "sex-app",
+ "sex-canvas",
+ "sex-font",
+ "sex-pdx",
+]
+
+[[package]]
+name = "climax-core"
+version = "0.1.0"
+dependencies = [
+ "libm",
+]
 
 [[package]]
 name = "clircle"
@@ -1285,6 +1354,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
 
 [[package]]
+name = "crush"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-dav",
+ "sex-fetch",
+ "sex-font",
+ "sex-pdx",
+ "sex-vcard",
+]
+
+[[package]]
 name = "crypto-bigint"
 version = "0.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1431,6 +1512,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "denim"
+version = "0.1.0"
+
+[[package]]
+name = "denim-server"
+version = "0.1.0"
+dependencies = [
+ "denim",
+ "linked_list_allocator",
+ "sex-pdx",
+]
+
+[[package]]
 name = "der"
 version = "0.7.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1500,6 +1594,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab8ecd87370524b461f8557c119c405552c396ed91fc0a8eec68679eab26f94a"
 dependencies = [
  "libloading",
+]
+
+[[package]]
+name = "dragtest"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-pdx",
 ]
 
 [[package]]
@@ -1816,6 +1918,18 @@ name = "find-msvc-tools"
 version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1c66915cc5391097de7a2b0b972e8505aa33c0df401fd3a6811dbdb32881ba48"
+
+[[package]]
+name = "flash"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-graphics",
+ "sex-image",
+ "sex-media",
+ "sex-pdx",
+ "sex-uvc",
+]
 
 [[package]]
 name = "flate2"
@@ -5040,6 +5154,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-dav"
+version = "0.1.0"
+
+[[package]]
 name = "sex-disk"
 version = "0.1.0"
 dependencies = [
@@ -5059,6 +5177,15 @@ dependencies = [
 [[package]]
 name = "sex-episodes"
 version = "0.1.0"
+
+[[package]]
+name = "sex-extensions"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "sex-shields",
+ "zune-inflate",
+]
 
 [[package]]
 name = "sex-feed"
@@ -5351,6 +5478,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-shields"
+version = "0.1.0"
+dependencies = [
+ "psl",
+]
+
+[[package]]
 name = "sex-splice"
 version = "0.1.0"
 
@@ -5412,6 +5546,17 @@ dependencies = [
 
 [[package]]
 name = "sex-trust-config"
+version = "0.1.0"
+
+[[package]]
+name = "sex-uvc"
+version = "0.1.0"
+dependencies = [
+ "sex-image",
+]
+
+[[package]]
+name = "sex-vcard"
 version = "0.1.0"
 
 [[package]]
@@ -5610,6 +5755,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sexuvc"
+version = "0.1.0"
+dependencies = [
+ "linked_list_allocator",
+ "sex-pdx",
+ "sex-uvc",
+]
+
+[[package]]
 name = "sha1"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5683,6 +5837,18 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
 name = "shuttle"
+version = "0.1.0"
+dependencies = [
+ "libm",
+ "rustybuzz",
+ "sex-font",
+ "sex-shape",
+ "ttf-parser",
+ "unicode-script",
+]
+
+[[package]]
+name = "shuttle-app"
 version = "0.1.0"
 dependencies = [
  "sex-app",
@@ -6981,11 +7147,13 @@ name = "web"
 version = "0.1.0"
 dependencies = [
  "sex-app",
+ "sex-extensions",
  "sex-fetch",
  "sex-gl",
  "sex-js",
  "sex-media",
  "sex-pdx",
+ "sex-shields",
  "sex-web",
 ]
 

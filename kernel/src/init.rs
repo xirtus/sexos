@@ -207,6 +207,18 @@ pub fn init() {
         }
     }
 
+    // Denim, compressed memory: a program's cold heap pages packed in Denim's own
+    // memory. Optional: without it no page ever goes out.
+    let mut denim_id=0;
+    if let Some(module)=modules.modules().iter().find(|m|m.path().ends_with("/denim")) {
+        let id=sex_pdx::denim::DENIM_PD;
+        match crate::pd::create::create_boot_domain(module.path(),Some(id),id as u8,sex_pdx::denim::DENIM_KEY) {
+            Ok(created)=>{assert_eq!(created,id,"BOOT_DENIM_IDENTITY");denim_id=created;
+                serial_println!("[kernel.spawn.denim] id={} key={} organ=memory",created,sex_pdx::denim::DENIM_KEY);}
+            Err(e)=>{serial_println!("[kernel.spawn.denim] failed={}",e);}
+        }
+    }
+
     // Grant Phase 25 well-known capabilities
     serial_println!("[bootgraph.phase25.begin]");
     // Static BOOT_DAG return edges for authenticated display-ready messages.
@@ -879,6 +891,8 @@ pub fn init() {
     crate::boot_memory::init_sound_rings(sexbell_id);
     crate::boot_memory::init_program_image(sexfiles_id);
     crate::boot_memory::init_fs_regions(sexfiles_id);
+    // Denim's store grows with what it holds.
+    crate::service_memory::reserve(denim_id);
     crate::boot_memory::init_boot_image(sexfiles_id);
     crate::boot_memory::init_boot_facts(sexfiles_id);
     crate::boot_memory::init_web_regions(sexnet_id);
@@ -1041,6 +1055,9 @@ pub fn init() {
         let pd=crate::ipc::DOMAIN_REGISTRY.get(row.target).expect("BOOT_PROGRAM_NETWORK_SUBJECT");
         assert!(pd.find_capability(sex_pdx::SLOT_NET as u32).is_none(),"BOOT_PROGRAM_NETWORK_COLLISION");
         pd.grant_capability(sex_pdx::SLOT_NET,crate::capability::CapabilityData::Domain(sexnet_id));
+        // Drag: a program run may make VMs from its own heap pages (sex_pdx::vm, syscall 110).
+        assert!(pd.find_capability(sex_pdx::vm::SLOT as u32).is_none(),"BOOT_PROGRAM_VM_COLLISION");
+        pd.grant_capability(sex_pdx::vm::SLOT,crate::capability::CapabilityData::Machine(sex_pdx::vm::Grant{holder_pd:row.target}));
         // Bell plays a program's sound from that program's own ring; the edge carries
         // only "my ring has sound" and Bell's own tone and notice calls.
         if sexbell_id!=0 {
@@ -1136,6 +1153,7 @@ pub fn init() {
                     14 => "sext",
                     15 => "kaleidoscope",
                     50 => "sexacpi",
+                    51 => "denim",
                     _ => "unknown",
                 };
                 let entry = unsafe { (*task_ptr).context.rip };

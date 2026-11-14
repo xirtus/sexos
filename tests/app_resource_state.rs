@@ -3,6 +3,7 @@ extern crate alloc;
 extern crate self as sex_pdx;
 #[path="../crates/sex-pdx/src/app_catalog.rs"]pub mod app_catalog;
 #[path="../crates/sex-pdx/src/program_store.rs"]pub mod program_store;
+#[path="../crates/sex-pdx/src/denim.rs"]pub mod denim;
 #[path="../kernel/src/app_resource_state.rs"] mod production;
 use production::*;
 use std::cell::RefCell;
@@ -96,4 +97,30 @@ fn page(va:u64,leaf:u64,pa:u64)->PrivatePage{PrivatePage{va,leaf,expected:pa|5|(
  assert!(!source.matches(&APPROVED[..APPROVED.len()-1]));
  let mut longer=APPROVED.to_vec();longer.push(0);assert!(!source.matches(&longer));
  for i in 0..APPROVED.len(){let mut changed=APPROVED.to_vec();changed[i]^=1;assert!(!source.matches(&changed));}
+}
+/// Host model of a heap page's leaf through Denim: lent, out (marker), back, retired.
+#[test]fn denim_page_goes_out_and_back_and_retires_in_either_state(){
+ use sex_pdx::denim::{out_marker,is_out};
+ let heap=|pa:u64|PrivatePage{va:0x4000,leaf:1,expected:pa|7|(8u64<<59)|(1<<63)};
+ let mut p=heap(0x9000);let mut leaf=p.expected|0x60;
+ // Code, another key and a changed frame stay.
+ for bad in [p.expected&!(1<<63),p.expected&!2,(p.expected&!(15<<59))|(5<<59),p.expected^0x1000]{
+  let mut q=p;assert_eq!(take_out(&mut q,42,8,bad,|_,_|panic!("no swap")),Err(DENIED));assert_eq!(q,p);}
+ // A dirty bit set under the call retries, with nothing changed.
+ let mut q=p;assert_eq!(take_out(&mut q,42,8,leaf,|_,_|false),Err(RETRY));assert_eq!(q,p);
+ assert_eq!(take_out(&mut p,42,8,leaf,|old,new|{assert_eq!(old,leaf);leaf=new;true}),Ok(0x9000));
+ assert!(is_out(p.expected)&&leaf==out_marker(42)&&leaf&1==0);
+ // Out twice, or back into another row's marker, is refused.
+ assert_eq!(take_out(&mut p,42,8,leaf,|_,_|panic!("no swap")),Err(DENIED));
+ let mut q=p;assert_eq!(bring_in(&mut q,43,8,leaf,0xA000),Err(DENIED));
+ // Retire finds the exact marker; two pages out at once are still distinct.
+ let mut r=heap(0xB000);r.va=0x5000;r.leaf=2;let mut leaf2=r.expected;
+ take_out(&mut r,42,8,leaf2,|_,new|{leaf2=new;true}).unwrap();
+ assert_eq!(retire_private_pages(&[p,r],|l|if l==1{leaf}else{leaf2},|_|{},|_|{}),Ok(2));
+ assert_eq!(retire_private_pages(&[p],|_|0,|_|panic!("cleared marker"),|_|{}),Err(DENIED));
+ // Back in a new frame: the leaf is the page lent again, and retires as one.
+ let value=bring_in(&mut p,42,8,leaf,0xA000).unwrap();leaf=value;
+ assert_eq!(value,0xA000|7|(8u64<<59)|(1<<63));assert!(!is_out(p.expected));
+ assert_eq!(retire_private_pages(&[p,r],|l|if l==1{leaf|0x20}else{leaf2},|_|{},|_|{}),Ok(2));
+ assert_eq!(bring_in(&mut p,42,8,leaf,0xC000),Err(DENIED));
 }
