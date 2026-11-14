@@ -256,7 +256,9 @@ fn sfdisk_mbr_logical_partitions() {
     c.arg("-q").arg(&f).stdin(std::process::Stdio::piped());
     let mut child = c.spawn().unwrap();
     use std::io::Write;
-    child.stdin.take().unwrap().write_all(b"label: dos\n2048,4096,c,*\n6144,20000,5\n8192,4096,83\n,4096,82\n").unwrap();
+    // Explicit starts inside the extended partition make both Linux entries logical (5, 6);
+    // with a default start sfdisk places the last one after the extended as primary 3.
+    child.stdin.take().unwrap().write_all(b"label: dos\n2048,4096,c,*\n6144,20000,5\n8192,4096,83\n12800,4096,82\n").unwrap();
     assert!(child.wait().unwrap().success());
     let img = Image::open(fs::read(&f).unwrap()).unwrap();
     let got: Vec<_> = img.partitions().unwrap().iter().map(|p| (p.index, p.type_label, p.bootable)).collect();
