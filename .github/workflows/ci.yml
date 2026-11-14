@@ -89,6 +89,8 @@ jobs:
       run: cargo test --locked -p gaze-codecs --all-features
     - name: Aftercare backups (dedup, encryption, restore, prune, check) on the host
       run: cargo test --locked -p aftercare-core
+    - name: Aftercare app (folder store, restore hashes, settings, schedule) on the host
+      run: cargo test --locked -p aftercare
     - name: Loom archives (zip, tar, 7z, gz, zst, xz) with Python interop on the host
       run: cargo test --locked -p sex-archive --features std
     - name: Pinyin input method
@@ -113,6 +115,11 @@ jobs:
         sudo usermod -p '*' "$USER"
         cargo test --locked -p sex-wg
         cargo test --locked -p sex-ssh
+    - name: Needle printing and scanning protocols (IPP, PWG raster, DNS-SD, eSCL goldens)
+      run: |
+        cargo test --locked -p sex-print
+        cargo build --locked -p needle
+        python3 scripts/needle_host_test.py
     - name: Crash record format host regressions
       run: bash scripts/crash_log_host_gate.sh
     - name: Experimental JS baseline JIT differential and emitted-code gates
@@ -205,6 +212,8 @@ jobs:
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends openssh-server
         sudo usermod -p '*' "$USER"
         python3 scripts/ssh_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/ssh"
+    - name: Needle prints to a fake IPP Everywhere printer and scans from a fake eSCL scanner
+      run: python3 scripts/needle_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/needle"
     - name: Web page JavaScript (native QuickJS tier)
       run: |
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends python3-pil
@@ -283,6 +292,8 @@ jobs:
       run: python3 scripts/files_eject_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-eject"
     - name: Files thumbnails for a folder of 50 pictures, cached
       run: python3 scripts/files_thumbs_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-thumbs"
+    - name: Files archives, batch rename, ratings, duplicates, disk usage and compare
+      run: python3 scripts/files_loom_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-loom"
     - name: ext4 stick written from SexOS, e2fsck clean
       run: python3 scripts/files_ext4_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-ext4"
     - name: Encrypted home unlocks with its password, unreadable without it
@@ -321,6 +332,8 @@ jobs:
           ${{ runner.temp }}/sexos-files-jobs/*.log
           ${{ runner.temp }}/sexos-files-eject/*.ppm
           ${{ runner.temp }}/sexos-files-eject/*.log
+          ${{ runner.temp }}/sexos-files-loom/*.ppm
+          ${{ runner.temp }}/sexos-files-loom/*.log
           ${{ runner.temp }}/sexos-fs-repair/*.log
           ${{ runner.temp }}/sexos-raid
           ${{ runner.temp }}/sexos-power
@@ -421,7 +434,7 @@ jobs:
   programs:
     name: Programs, packages and ports
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
@@ -467,6 +480,8 @@ jobs:
       run: python3 scripts/leather_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/leather"
     - name: Chastity vault UI and encrypted snapshot across reboot
       run: python3 scripts/chastity_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/chastity"
+    - name: Aftercare backup (back up, delete, restore, hashes equal, wrong password refused)
+      run: python3 scripts/aftercare_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/aftercare"
     - name: Preserve program evidence
       if: always()
       uses: actions/upload-artifact@v4

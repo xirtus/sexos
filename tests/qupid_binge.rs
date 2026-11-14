@@ -2,8 +2,8 @@
 //! Qupid's "Keep watching" logic on the host: episodes from names, the next file,
 //! skip cards from chapters and the "Up next" countdown.
 extern crate alloc;
-#[path = "../crates/sex-media/src/episodes.rs"] mod episodes;
-#[path = "../crates/sex-media/src/segments.rs"] mod segments;
+#[path = "../crates/sex-episodes/src/episodes.rs"] mod episodes;
+#[path = "../crates/sex-episodes/src/segments.rs"] mod segments;
 use episodes::*;
 use segments::*;
 

@@ -61,6 +61,8 @@ impl Format {
             Format::Png | Format::Jpeg | Format::Webp | Format::Gif => Support::Decode,
             Format::Jxl if cfg!(feature = "jxl") => Support::Decode,
             Format::Svg if cfg!(feature = "svg") => Support::Decode,
+            // CR3 has no preview extraction here; rawler (feature `raw`) develops it.
+            Format::Cr3 if cfg!(feature = "raw") => Support::Decode,
             Format::Cr3 => Support::Detected,
             f if f.is_raw() => Support::Preview,
             _ => Support::Detected,
