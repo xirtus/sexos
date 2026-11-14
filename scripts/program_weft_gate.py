@@ -41,12 +41,18 @@ def main():
   assert len(pos)==30,pos
   tile=list(map(int,re.findall(rf'\[shell.tile.apply\] sid={surface} x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)',t())[-1]))
   ox,oy=tile[0]+8,tile[1]+36
-  def key(label):x,y=pos[label];click(ox+x,oy+y)
+  def key(label):
+   # Focus scrolls the button into view; click its current, scrolled position.
+   # Each keypad action restores expression focus, so its tab offset is stable.
+   start=len(t());index=labels.index(label)
+   for _ in range(index+1):q.key('tab');time.sleep(.06)
+   focused=g['wait'](rf'\[abacus.focus\] key={index} x=(-?\d+) y=(-?\d+)',start,60)
+   click(ox+int(focused[1]),oy+int(focused[2]))
   # Typed digits, a clicked +, typed digits, Enter.
   g['focus'](surface);time.sleep(.3)
   s=len(t());keys(['1','2']);key('+');keys(['3','0']);q.key('ret')
   g['wait'](r'\[abacus.result\] expr=12\+30 value=42\n',s,60)
-  # The keypad alone.
+  # Actual keypad buttons activated through Tab/Space, including compact scrolling.
   s=len(t())
   for k in ['7','mul','6','=']:key(k)
   g['wait'](r'\[abacus.result\] expr=7\*6 value=42\n',s,60)

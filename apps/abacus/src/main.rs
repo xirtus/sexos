@@ -34,8 +34,19 @@ mod program {
             sex_pdx::serial_record!("[abacus.key] n={} x={} y={}", n, (c.x * s) as i32, (c.y * s) as i32);
         }
         let mut reported = false;
+        let mut last_focus=None;
         loop {
             let out = app.next();
+            let focused=app.ui.focused();
+            if focused!=last_focus {
+                last_focus=focused;
+                if let Some(id)=focused {
+                    if let Some((n,_))=calc.keys.iter().enumerate().find(|(_, (key,_))|*key==id) {
+                        let center=app.ui.rect(id).center();let scale=app.ui.theme().scale;
+                        sex_pdx::serial_record!("[abacus.focus] key={} x={} y={}",n,(center.x*scale)as i32,(center.y*scale)as i32);
+                    }
+                }
+            }
             if !reported && app.frames > 0 { reported = true; sex_pdx::serial_record!("[abacus.frame] n={}", app.frames); }
             for r in out {
                 if r == Response::Close { sex_pdx::task_finish(0); }

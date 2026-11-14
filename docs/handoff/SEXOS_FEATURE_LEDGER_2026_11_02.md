@@ -4304,3 +4304,7 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   use exclusive CREATE, and replacement requires a successfully loaded/currently
   created exact route. Seven host tests include preservation of an existing unseen
   file; QEMU gate attempts a blocked overwrite and verifies the original hash.
+- Round176 review follow-up: programmer keypad glyphs normalize to ASCII; tiny
+  conversion values are retained; bounded Weft scroll makes all controls reachable
+  at 640x400. Thirteen host tests now include actual operators and compact Tab/
+  scroll access. QEMU clicks the focused button's current scrolled coordinates.

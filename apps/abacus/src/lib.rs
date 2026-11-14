@@ -127,7 +127,16 @@ impl Abacus {
                 Menu::new("Help").command("abacus.about"),
             ],
         );
-        let body = ui.group(root, Layout::column().gap(10.0).padding(12.0).fill());
+        let scroll = ui.scroll(root);
+        ui.set_layout(scroll, Layout::column().fill());
+        let body = ui.group(
+            scroll,
+            Layout::column()
+                .gap(10.0)
+                .padding(12.0)
+                .fill_width()
+                .shrink(0.0),
+        );
         let mode_row = ui.row(body);
         let modes = [
             (ui.button(mode_row, "Scientific"), Mode::Scientific),
@@ -365,6 +374,14 @@ impl Abacus {
                     }
                     "√" => self.put(ui, "√("),
                     "ans" => self.put(ui, "ans"),
+                    "×" | "÷" | "−" if self.mode == Mode::Programmer => self.put(
+                        ui,
+                        match k {
+                            "×" => "*",
+                            "÷" => "/",
+                            _ => "-",
+                        },
+                    ),
                     "−" => self.put(ui, "−"),
                     k => self.put(ui, k),
                 }

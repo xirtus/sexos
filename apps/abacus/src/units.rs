@@ -192,11 +192,25 @@ pub fn convert(value: f64, from: &str, to: &str) -> Result<f64, Error> {
     if from.dimension == 3 && base < -1e-10 {
         return Err(Error::Range);
     }
-    let value = (base - to.offset) / to.scale;
+    let value = if from.symbol == to.symbol {
+        value
+    } else {
+        (base - to.offset) / to.scale
+    };
     if !value.is_finite() {
         return Err(Error::Range);
     }
-    Ok(if value.abs() < 1e-12 { 0. } else { value })
+    Ok(
+        if from.dimension == 3
+            && from.symbol != to.symbol
+            && (from.offset != 0. || to.offset != 0.)
+            && value.abs() < 1e-12
+        {
+            0.
+        } else {
+            value
+        },
+    )
 }
 pub fn eval(text: &str) -> Result<alloc::string::String, Error> {
     let mut words = text.split_whitespace();
