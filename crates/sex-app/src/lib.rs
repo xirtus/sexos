@@ -228,7 +228,14 @@ pub mod files {
     /// Shell tells Files where a new run lives just as the run starts, so a first request
     /// can beat it there. A refusal is retried briefly; a program never bound stays refused.
     /// `fill` writes the data area before the request goes; `take` reads it after the answer.
-    fn exchange<R>(mut hold: Hold, kind: u8, path: &[u8], offset: u64, length: u64,
+    fn exchange<R>(hold: Hold, kind: u8, path: &[u8], offset: u64, length: u64,
+                   fill: impl Fn(&mut [u8]), take: impl FnOnce(u32, &[u8]) -> R) -> Result<R, Error> {
+        exchange_tries(hold, kind, path, offset, length, 50, fill, take)
+    }
+    /// As `exchange`, asking again at most `retries` times while Files says DENIED (a
+    /// lock another program holds). A refusal that stands is asked once (`retries` 0).
+    #[allow(clippy::too_many_arguments)]
+    fn exchange_tries<R>(mut hold: Hold, kind: u8, path: &[u8], offset: u64, length: u64, retries: u32,
                    fill: impl Fn(&mut [u8]), take: impl FnOnce(u32, &[u8]) -> R) -> Result<R, Error> {
         if path.len() > w::PATH_BYTES { return Err(w::NAME); }
         let _turn = Turn::take();
@@ -238,7 +245,7 @@ pub mod files {
             region[..path.len()].copy_from_slice(path);
             fill(&mut region[w::PATH_BYTES..]);
             match once(&mut hold, kind, path.len(), offset, length) {
-                Err(w::DENIED) if tries < 50 => { tries += 1; for _ in 0..20 { sex_pdx::sys_yield(); } }
+                Err(w::DENIED) if tries < retries => { tries += 1; for _ in 0..20 { sex_pdx::sys_yield(); } }
                 Ok(value) => return Ok(take(value, &region[w::PATH_BYTES..])),
                 Err(e) => return Err(e),
             }
@@ -665,6 +672,78 @@ pub mod files {
     /// Answers a question with `path` (`@/...`), or cancels it with `None`.
     pub fn answer(window: &mut Window, q: &Question, path: Option<&[u8]>) -> Result<(), Error> {
         request(window, w::ANSWER, path.unwrap_or(b""), q.row as u64, q.ticket as u64).map(|_| ())
+    }
+
+    /// Raw removable disks (`sex_pdx::disks`), for a program that reshapes them. The first
+    /// read or write of a disk asks the person (the Files app shows the question, naming
+    /// the disk); until they answer it fails with `PENDING`, and with `DENIED` if they said
+    /// no. The system disk is never opened.
+    pub mod disks {
+        use super::{exchange, exchange_tries, request, Error, Window};
+        use alloc::string::String;
+        use alloc::vec::Vec;
+        use sex_pdx::disks as d;
+        pub use d::{FLAG_GRANTED, FLAG_READ_ONLY, FLAG_SYSTEM, IO_SECTORS, KIND_IMAGE, KIND_SYSTEM, KIND_USB, SECTOR};
+
+        #[derive(Clone, Debug, PartialEq, Eq)]
+        pub struct Disk { pub id: u16, pub flags: u8, pub sectors: u64, pub name: String, pub product: String }
+        impl Disk {
+            pub fn system(&self) -> bool { self.flags & FLAG_SYSTEM != 0 }
+            pub fn read_only(&self) -> bool { self.flags & FLAG_READ_ONLY != 0 }
+        }
+        pub fn list(window: &mut Window) -> Result<Vec<Disk>, Error> {
+            exchange(Some(window), d::DISKS, b"", 0, 0, |_| {}, |used, data| {
+                let data = &data[..(used as usize).min(data.len())];
+                let mut out = Vec::new();
+                let mut at = 0;
+                while let Some((e, next)) = d::Entry::decode(data, at) {
+                    out.push(Disk { id: e.id, flags: e.flags, sectors: e.sectors, name: String::from_utf8_lossy(e.name).into_owned(), product: String::from_utf8_lossy(e.product).into_owned() });
+                    at = next;
+                }
+                out
+            })
+        }
+        /// Sectors from `lba` into `out` (whole sectors, at most `IO_SECTORS`).
+        pub fn read(window: &mut Window, disk: u16, lba: u64, out: &mut [u8]) -> Result<(), Error> {
+            let n = out.len() / SECTOR;
+            if n == 0 || out.len() % SECTOR != 0 || n as u64 > IO_SECTORS { return Err(sex_pdx::fs::INVALID); }
+            exchange_tries(Some(window), d::DISK_IO, b"", lba, d::io(disk, false, n as u32), 0, |_| {}, |_, data| out.copy_from_slice(&data[..out.len()]))
+        }
+        /// `data` (whole sectors, at most `IO_SECTORS`) to the disk from `lba`.
+        pub fn write(window: &mut Window, disk: u16, lba: u64, data: &[u8]) -> Result<(), Error> {
+            let n = data.len() / SECTOR;
+            if n == 0 || data.len() % SECTOR != 0 || n as u64 > IO_SECTORS { return Err(sex_pdx::fs::INVALID); }
+            exchange_tries(Some(window), d::DISK_IO, b"", lba, d::io(disk, true, n as u32), 0, |r| r[..data.len()].copy_from_slice(data), |_, _| ())
+        }
+        /// Everything written so far is on the medium.
+        pub fn flush(window: &mut Window, disk: u16) -> Result<(), Error> { request(window, d::DISK_IO, b"", 0, d::io(disk, true, 0)).map(|_| ()) }
+        /// Ends this run's use of the disk: Files mounts what it holds now.
+        pub fn done(window: &mut Window, disk: u16) -> Result<(), Error> { request(window, d::DISK_DONE, b"", 0, disk as u64).map(|_| ()) }
+
+        /// A question waiting for the person: may `program` use `disk`?
+        #[derive(Clone, Debug, PartialEq, Eq)]
+        pub struct Question { pub row: u8, pub ticket: u32, pub program: Vec<u8>, pub disk: Vec<u8> }
+        /// Questions waiting. Only a run given the whole filesystem may ask.
+        pub fn questions(window: &mut Window) -> Result<Vec<Question>, Error> {
+            exchange(Some(window), d::DISK_ASKS, b"", 0, 0, |_| {}, |used, r| {
+                let used = (used as usize).min(r.len());
+                let mut out = Vec::new();
+                let mut at = 0;
+                while at + 6 <= used {
+                    let ticket = u32::from_le_bytes(r[at + 1..at + 5].try_into().unwrap_or([0; 4]));
+                    let n = r[at + 5] as usize;
+                    let program = r[at + 6..at + 6 + n].to_vec();
+                    let k = r[at + 6 + n] as usize;
+                    let disk = r[at + 7 + n..at + 7 + n + k].to_vec();
+                    out.push(Question { row: r[at], ticket, program, disk });
+                    at += 7 + n + k;
+                }
+                out
+            })
+        }
+        pub fn answer(window: &mut Window, q: &Question, yes: bool) -> Result<(), Error> {
+            request(window, d::DISK_ANSWER, b"", q.row as u64, q.ticket as u64 | if yes { d::YES } else { 0 }).map(|_| ())
+        }
     }
 }
 
