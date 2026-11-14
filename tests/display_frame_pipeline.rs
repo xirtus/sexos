@@ -48,6 +48,7 @@ pub const ERR_SERVICE_NOT_READY:u64=u64::MAX-1;
 #[path="../crates/sex-pdx/src/bitmap_batch.rs"]pub mod bitmap_batch;
 #[path="../crates/sex-pdx/src/desktop_style.rs"]pub mod desktop_style;
 #[path="../crates/sex-pdx/src/desktop_look.rs"]pub mod desktop_look;
+#[path="../crates/sex-pdx/src/screen_state.rs"]pub mod screen_state;
 #[path="../crates/sex-pdx/src/spindle_view.rs"]pub mod spindle_view;
 #[path="../servers/sexdisplay/src/surface_lifecycle.rs"]mod surface_lifecycle;
 #[path="../servers/sexdisplay/src/surface_groups.rs"]mod surface_groups;
@@ -134,6 +135,7 @@ fn restore_cursor_under(_fb:*mut u32,_w:usize,_h:usize,_len:usize,_:desktop_styl
 fn draw_atlas_cards_pass(_fb:*mut u32,_w:usize,_h:usize,_len:usize,s:&scene::SceneSnapshot){observe_scene(s);event("atlas");}
 fn draw_atlas_frame_previews_pass(_fb:*mut u32,_w:usize,_h:usize,_len:usize,s:&scene::SceneSnapshot){observe_scene(s);event("preview");}
 fn draw_launcher_panel(fb:*mut u32,_w:usize,_h:usize,len:usize,s:&scene::SceneSnapshot){observe_scene(s);unsafe{fb.add(len-2).write(0xdd);}event("launcher");}
+mod lock_screen{pub fn draw(_: *mut u32,_:usize,_:usize,_:usize)->bool{false}}
 fn draw_window_switcher(_:*mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapshot){}
 fn draw_screenshot_ui(_:*mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapshot){}
 fn draw_cursor_z_top(fb:*mut u32,_w:usize,_h:usize,len:usize,save:bool,s:&scene::SceneSnapshot){observe_scene(s);assert!(save);unsafe{

@@ -47,6 +47,8 @@ jobs:
       run: bash scripts/hwdb_host_gate.sh
     - name: Bell sound rate conversion on the host
       run: bash scripts/sound_host_gate.sh
+    - name: Qupid keep-watching logic (episodes, skip and up-next cards) on the host
+      run: bash scripts/qupid_host_gate.sh
     - name: Explicit program heap limits with actual Talc
       run: bash scripts/program_heap_limit_host_gate.sh
     - name: Unarmed recorder custody and restart contracts
@@ -55,6 +57,8 @@ jobs:
       run: bash scripts/desktop_capture_host_gate.sh
     - name: HTML containing-block and replaced sizing
       run: cargo test --locked -p sex-html
+    - name: Settings schema, file format, protocol and the Settings program's pages
+      run: bash scripts/settings_host_gate.sh
     - name: Signed package format and store catalog
       run: cargo test --locked -p sex-pkg
     - name: Disk layouts (GPT, FAT, install beside other systems)
@@ -65,6 +69,16 @@ jobs:
       run: cargo test --locked -p sex-font --test fallback
     - name: Shaping (rustybuzz vs hb-shape), Arabic joining and bidi
       run: cargo test --locked -p sex-shape --features shaping
+    - name: Loom engines (batch rename, duplicates, usage map, tags, compare) on the host
+      run: cargo test --locked -p loom-core
+    - name: Vellum annotations, forms and incremental PDF saves on the host
+      run: cargo test --locked -p vellum-edit
+    - name: Gaze decoders (EXIF orientation, JPEG XL, SVG, RAW previews) on the host
+      run: cargo test --locked -p gaze-codecs --all-features
+    - name: Aftercare backups (dedup, encryption, restore, prune, check) on the host
+      run: cargo test --locked -p aftercare-core
+    - name: Loom archives (zip, tar, 7z, gz, zst, xz) with Python interop on the host
+      run: cargo test --locked -p sex-archive --features std
     - name: Pinyin input method
       run: cargo test --locked -p sex-ime
     - name: Multipass accounts, Shibari keeper (link fixtures, tokens never leave)
@@ -210,6 +224,10 @@ jobs:
       run: |
         truncate -s 1G "$RUNNER_TEMP/capture-source.img"
         python3 scripts/desktop_capture_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/capture-source.img" --out "$RUNNER_TEMP/sexos-runtime/capture"
+    - name: Settings last across a restart
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/settings-source.img"
+        python3 scripts/settings_persist_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/settings-source.img" --out "$RUNNER_TEMP/sexos-runtime/settings"
     - name: Alt+Tab window switcher with live thumbnails
       run: |
         truncate -s 256M "$RUNNER_TEMP/switcher-source.img"
@@ -269,6 +287,10 @@ jobs:
       run: python3 scripts/power_acpi_gate.py --iso sexos-v1.0.0.iso --out "$RUNNER_TEMP/sexos-power"
     - name: Discrete GPU powered off through ACPI
       run: python3 scripts/dgpu_power_gate.py --iso sexos-v1.0.0.iso --out "$RUNNER_TEMP/sexos-dgpu"
+    - name: Lock screen, password and idle dim
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/lock-source.img"
+        python3 scripts/lock_screen_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/lock-source.img" --out "$RUNNER_TEMP/sexos-lock"
     - name: Display drives a virtio-gpu (EDID, takeover, tear-free flips)
       run: python3 scripts/virtio_gpu_gate.py --iso sexos-v1.0.0.iso --out "$RUNNER_TEMP/sexos-virtio-gpu"
     - name: Reboot persistence and rendering
@@ -291,6 +313,7 @@ jobs:
           ${{ runner.temp }}/sexos-raid
           ${{ runner.temp }}/sexos-power
           ${{ runner.temp }}/sexos-dgpu
+          ${{ runner.temp }}/sexos-lock
           ${{ runner.temp }}/sexos-persistence
           ${{ runner.temp }}/sexos-fuzz
         if-no-files-found: ignore

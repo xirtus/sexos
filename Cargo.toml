@@ -23,6 +23,7 @@ members = [
     "apps/fortune",
     "apps/jot",
     "apps/files",
+    "apps/settings",
     "apps/peek",
     "apps/talk",
     "apps/bench",
@@ -79,6 +80,7 @@ members = [
     "crates/silkbar-model",
     "crates/sex-object-model",
     "crates/sex-time",
+    "crates/sex-config",
     "crates/sex-disk",
     "crates/sex-pkg",
     "crates/sex-wasm",
@@ -96,8 +98,13 @@ members = [
     "apps/python",
     "apps/store",
     "crates/sex-sdl",
+    "crates/sex-archive",
     "apps/sdltest",
     "apps/driftspark",
+    "crates/gaze-codecs",
+    "crates/vellum-edit",
+    "crates/loom-core",
+    "crates/aftercare-core",
 ]
 [workspace.package]
 license = "GPL-3.0-only"
