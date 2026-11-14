@@ -186,6 +186,8 @@ fn weft_event(e: Event) -> weft::input::Event {
             text: k.char(),
         }),
         Event::Close => E::Close,
+        Event::Drop { kind, x, y } => E::Drop { kind, x, y },
+        Event::DragEnded { target } => E::DragEnded { target },
         Event::Resize { width, height } => E::Resize {
             width: width as u32,
             height: height as u32,
