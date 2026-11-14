@@ -261,7 +261,11 @@ def verify(trace,result,root,mode='quiesced'):
 
 
 def palette(c):
- c['key']('grave_accent',r'\[shell.palette.open\] ok=1 selected=0 count=11'+END)
+ from quil_workflow_gate import palette_commands
+ commands=palette_commands(c.get('root',ROOT))
+ if len(commands)<=10 or commands[10]!=('FocusBrowser','Open Browser'):
+  raise ValueError('source Browser palette row10 changed')
+ c['key']('grave_accent',rf'\[shell.palette.open\] ok=1 selected=0 count={len(commands)}'+END)
  for old in range(10):c['key']('j',rf'\[shell.palette.select\] old={old} new={old+1}'+END)
 def launch(c,row):
  """Use index10 and return the fresh launch start; row includes actual held task."""

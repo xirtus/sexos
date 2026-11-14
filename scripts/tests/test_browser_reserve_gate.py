@@ -259,4 +259,49 @@ class CapturedPaintBoundaries(unittest.TestCase):
   for invalid in ([],actions*2,[dict(kind='key',key='ret',start=len(view+zoom),end=len(text))]):
    with self.subTest(actions=invalid),self.assertRaises(ValueError):p.resize_evidence(text,row,0,len(text),geometry,invalid)
 
+
+class SourceBoundBrowserPalette(unittest.TestCase):
+ def catalog(self,commands):
+  from test_palette_commands import catalog
+  directory=tempfile.TemporaryDirectory();self.addCleanup(directory.cleanup)
+  root=Path(directory.name);path=root/'servers/silk-shell/src/main.rs'
+  path.parent.mkdir(parents=True);path.write_text(catalog(commands));return root
+ def test_exact_catalog_count_and_browser_action_stay_bound(self):
+  import re
+  from test_palette_commands import ACTUAL
+  for commands in(ACTUAL,ACTUAL+(('FutureCommand','Future command'),)):
+   root=self.catalog(commands);calls=[]
+   def key(code,pattern):
+    index=len(calls)
+    receipt=(f'[shell.palette.open] ok=1 selected=0 count={len(commands)}\n' if index==0 else
+             f'[shell.palette.select] old={index-1} new={index}\n')
+    self.assertIsNotNone(re.search(pattern,receipt));calls.append(code)
+   p.palette(dict(root=root,key=key))
+   self.assertEqual(calls,['grave_accent']+['j']*10)
+ def test_wrong_or_partial_open_receipt_never_advances(self):
+  import re
+  from test_palette_commands import ACTUAL
+  root=self.catalog(ACTUAL)
+  for receipt in('[shell.palette.open] ok=1 selected=0 count=11\n',
+                  '[shell.palette.open] ok=1 selected=0 count=140\n',
+                  '[shell.palette.open] ok=1 selected=1 count=14\n',
+                  '[shell.palette.open] ok=1 selected=0 count=14'):
+   calls=[]
+   def key(code,pattern):
+    calls.append(code)
+    if re.search(pattern,receipt) is None:raise TimeoutError('receipt mismatch')
+   with self.subTest(receipt=receipt),self.assertRaises(TimeoutError):p.palette(dict(root=root,key=key))
+   self.assertEqual(calls,['grave_accent'])
+ def test_changed_browser_row_and_malformed_catalog_fail_before_input(self):
+  from test_palette_commands import ACTUAL
+  changed=ACTUAL[:10]+(ACTUAL[11],ACTUAL[10])+ACTUAL[12:]
+  root=self.catalog(changed);calls=[]
+  with self.assertRaises(ValueError):p.palette(dict(root=root,key=lambda *args:calls.append(args)))
+  self.assertEqual(calls,[])
+  root=self.catalog(ACTUAL);path=root/'servers/silk-shell/src/main.rs'
+  path.write_text(path.read_text().replace('[CommandDef; 14]','[CommandDef; 15]'))
+  with self.assertRaises(ValueError):p.palette(dict(root=root,key=lambda *args:calls.append(args)))
+  self.assertEqual(calls,[])
+
+
 if __name__=='__main__':unittest.main()
