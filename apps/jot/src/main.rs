@@ -447,6 +447,25 @@ extern "C" fn main() -> ! {
                     _ => continue,
                 }
             }
+            Event::DragEnded { .. } => continue,
+            // A file dropped on the window opens in a new tab; dropped text goes in at the cursor.
+            Event::Drop { kind, .. } => {
+                let bytes = sex_app::dnd::dropped().to_vec();
+                if kind == sex_pdx::dnd::FILE {
+                    let mut path = vec![b'@'];
+                    path.extend_from_slice(&bytes);
+                    let tab = load(&mut window, &path);
+                    sex_pdx::serial_record!("[jot.dropped] kind=file bytes={} path={}", tab.doc.text().len(), core::str::from_utf8(&bytes).unwrap_or("?"));
+                    jot.tabs.push(tab);
+                    jot.active = jot.tabs.len() - 1;
+                    jot.status = "Opened the dropped file.".into();
+                } else {
+                    let tab = jot.tab();
+                    tab.doc.insert(&bytes);
+                    tab.doc.seal();
+                    sex_pdx::serial_record!("[jot.dropped] kind=text bytes={}", bytes.len());
+                }
+            }
             Event::Key(key) => match { jot.scrolled = false; jot.key(key) } {
                 Ask::Nothing => {}
                 Ask::Save => {
