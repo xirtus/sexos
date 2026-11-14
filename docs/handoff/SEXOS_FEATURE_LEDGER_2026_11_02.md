@@ -417,6 +417,14 @@ result in that Spindle session (`calc 2*(3+4)/5` then `calc ans*10` gives
 tests (3 groups); sealed build and master gate GREEN; native
 `spindle_calc_gate.py` at both sizes: `calc ans` -> `NoAnswer`, then `2.8`,
 then `ans*10` -> `28`, plus the earlier cases.
+## G-11: Serenade audio recorder engine (2026-11-14)
+- Added `serenade-core` crate providing `#![no_std] + alloc` audio recording, sample-accurate Peak & RMS level metering, progressive multi-resolution waveform mipmaps, non-destructive editing, and bounds-checked RIFF/WAVE parsing.
+- Bounded capture sessions enforce explicit `max_samples` quotas with `Vec::try_reserve` OOM protection, idle/pause/recording/stopped state machine, and configurable VOX (voice-activated recording) with pre-roll attack preservation and hangover decay.
+- Real-time Peak & RMS metering with decaying peak-hold, fast pure-integer dBFS approximations, and sample-accurate clipping counters.
+- Progressive 6-level waveform mipmap pyramid (`WaveformMipmap`) for constant $O(1)$-per-column timeline queries at arbitrary zoom levels.
+- Non-destructive clip editing: trim, marker-based splitting, DC-offset cancellation, silence trimming, linear and cosine S-curve fades, and peak normalization on silence.
+- Bounds-checked RIFF/WAVE container reader/writer supporting PCM16, PCM24, IEEE Float32, cue markers, `LIST`/`adtl`/`labl`, and `LIST`/`INFO` metadata, verified against adversarial malformed/overflow inputs.
+- Gate: `scripts/serenade_host_gate.sh` passing unit/integration tests and `x86_64-sex-app.json` target check.
 
 ## F15. Inline emphasis and code markers (2026-11-02)
 
@@ -4175,6 +4183,10 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
 - **Follow-up:** the Shell spins on `sys_yield` while a panel notice shows (5 s) and while
   memory is critical; a timed wait would be cheaper (workstream C owns that loop).
 
+## G-6: cargo-fuzz parser suite and filed crash reproducers (2026-11-14)
+- Standalone `fuzz/` workspace (`cargo-fuzz` + ASan) covering `sex-archive` (zip, tar, 7z, gz, zst, xz), OOXML (`docx`/`xlsx` containers and XML), `vellum-edit` (PDF), `sex-volumes` (MBR/GPT/FAT/exFAT/ext4/NTFS), `sex-image`/`gaze-codecs`, `sex-html`, `sex-http` (HTTP/1.1 + HPACK), `sex-mail` and `sex-font`, plus `scripts/fuzz_smoke_host_gate.sh` and `fuzz/repros/`.
+- Over 15.2M executions across master and open PR parsers (`sex-ebook`/`sex-xml`, `sex-torrent`); filed 4 reproducible parser panic issues with 3-to-46-byte reproducers (#258, #259, #260, #261).
+
 ## Key-to-pixel latency gate, slice J6 (2026-11-13)
 - **What:** `scripts/latency_gate.py` times each key typed into Spindle from the host's
   key event to Display committing Spindle's new text, first idle, then with four
@@ -4235,6 +4247,10 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
 ## Fix: USB Ethernet regression from #196 (2026-11-14)
 - usb_net_gate failed on master ("fetch: could not connect"). With MSI-X wakes, sexusb idled 32 ticks between passes. Two gaps: `sleep_ticks` took interrupts for events the main loop had not drained yet, and the network's USB Ethernet transmit ring has no wake. Now `xhci::SLEPT` makes the next wait 1 tick after any sleep in a pass, and the loop polls every tick while an Ethernet adapter is up (`Usb::ether_active`). usb_net_gate passes; idle QEMU CPU 19%.
 
+## G-4: Image codecs crate for WebP, animated GIF, AVIF and HEIC (2026-11-14)
+- New `#![forbid(unsafe_code)]` library crate `crates/sex-codecs` (`sex_image::{Image, Limits}` compatible, `#![no_std]` on `x86_64-sex-app` for WebP/GIF/HEIC/ISOBMFF plus `rusty_av1d` AVIF): still and animated WebP (`ANIM`/`ANMF`), streaming GIF89a (`AnimationDecoder`, 4 disposal modes), ISOBMFF/MIAF demuxer (`grid`, `auxC` alpha, `irot`, `imir`, `clap`), AVIF (`rusty_av1d`) and HEIC (`heic-rs`).
+- Gate: `scripts/sex_codecs_host_gate.sh` (4-quadrant pixel-fidelity tests across all 4 formats, 50k mutation fuzz suite, and `x86_64-sex-app` target check).
+
 ## J1b: end a program from the system monitor (2026-11-14)
 - Mesh (apps/monitor): Up/Down choose a line (marked `>`), Delete ends that program; the result shows under the list. Logs `[monitor.choose]`, `[monitor.end]`.
 - New PDX op (ABI addition): `system_stats::OP_END_PROGRAM` 0x3A2 to the Shell (SLOT_SHELL), answers OK / NOT_A_PROGRAM 4 / NOT_FOCUSED 5 / NOT_ENDED 6. Only the focused program may ask; only Program rows can be ended, never services. Shell logs `[shell.program.end]`.
@@ -4247,3 +4263,14 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
 
 ## J8 finding: disk reads are not NVMe-queue bound yet (2026-11-14)
 - `run bench read-large` at 4 cores without PKU now logs `[bench.large.cpu]` (Drive, Files, bench, idle cycles per pass). 16 MiB in 64 KiB requests: ~275M cycles; Files ~100M (~390k per request), Drive ~42M (~165k), rest waiting on the serial request chain. Per-core NVMe queues would not help until requests are pipelined (Files readahead / async Drive replies) and Files' per-request CPU drops; deferred until then.
+## ChatGPT round 171: Moan timeline and mixer core (2026-11-14)
+- `crates/moan-core`: frame-accurate 48 kHz stereo timeline, non-destructive split
+  and trim, linear fades, clip gain, per-track volume/balance, mute/solo and final
+  saturating mix. Borrowed immutable PCM, no allocation during render.
+- Ten host integration tests pass. `apps/moan-probe` builds for the SexOS program
+  target; the guest sends an edited two-track mix through the existing Bell ring.
+- `scripts/moan_gate.py` checks QEMU's recorded stereo waveform (pitch, duration,
+  amplitude, continuity). Both gates are wired into CI; QEMU must pass before merge.
+- No kernel or owned app changes. This is the engine slice, not a complete DAW;
+  Weft UI, capture UX, effects, project persistence and export follow. Contract and
+  next steps: `docs/handoff/MOAN_2026_11_14.md`.
