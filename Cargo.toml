@@ -113,6 +113,7 @@ members = [
     "crates/aftercare-core",
     "crates/moan-core",
     "apps/moan-probe",
+    "apps/moan",
 ]
 [workspace.package]
 license = "GPL-3.0-only"

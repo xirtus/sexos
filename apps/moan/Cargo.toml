@@ -1,0 +1,13 @@
+[package]
+name = "moan"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+[features]
+default = ["sexos"]
+sexos = ["dep:sex-app", "dep:sex-pdx", "weft/sexos"]
+[dependencies]
+moan-core = { path = "../../crates/moan-core" }
+weft = { path = "../../crates/weft" }
+sex-app = { path = "../../crates/sex-app", optional = true }
+sex-pdx = { path = "../../crates/sex-pdx", optional = true }
