@@ -74,7 +74,7 @@ def main():
   # The scanned frame is dark, its inside light: the copy has both.
   dark=sum(1 for b in copy if b<64);assert dark>500,dark
   out,r=run(f'jobs {printer}',r'jobs\] count=(\d+)')
-  assert r[1]=='2' and out.count('state=completed')==2,out
+  assert r[1]=='2' and len(re.findall(r'^\[needle.job\] id=\d+ state=completed',out,re.M))==2,out
   q.cmd('screendump',{'filename':str(a.out/'needle.ppm')});time.sleep(.5)
   assert 'KERNEL PANIC' not in t() and 'panicked' not in t()
   print({'ok':True,'jobs':[(j['id'],j['format'],len(j['data'])) for j in PRINTER.jobs],'scans':SCANNER.served})
