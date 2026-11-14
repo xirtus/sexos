@@ -12,18 +12,24 @@ EXPECTED_BOOT_MAIN_CAPACITY=64
 # SerialIO/power setup. That review leaves every deadline owner unchanged.
 # Any new causal source requires explicit review.
 APPROVED_TIMED_WAIT_SOURCES = {'kernel/src/program_records.rs': ('37561f94116d2c3c44b1bf88b8f22927ebd57eeec7630cd6e40a8d38150fb2a8',),
-'kernel/src/pd/create.rs': ('3fff0e0483f767e2e8509515874d0b320496cea0671c85b21c4aa368bbdf9b1e',),
-'kernel/src/init.rs': ('784b18c238608b124ed2f2e2cd8d1d0eeaf6933b7bf9291fbc07b230688f0f64', 'a977d60363a05adb60083b90bc6d898913c4efcd81a80209d0b9a4946340e334',),
-'kernel/src/scheduler.rs': ('0b75bce2639de6891a9ed4b7e3e0f871f9a5110bc23b9002b2912316e4ef7f64',),
+ 'kernel/src/pd/create.rs': ('3fff0e0483f767e2e8509515874d0b320496cea0671c85b21c4aa368bbdf9b1e',),
+ 'kernel/src/init.rs': ('784b18c238608b124ed2f2e2cd8d1d0eeaf6933b7bf9291fbc07b230688f0f64',
+                        'a977d60363a05adb60083b90bc6d898913c4efcd81a80209d0b9a4946340e334',
+                        '38119a1a085e1f3e2358c4a4f17484a81ddcfd3e8a316d1b60f5c19cd071bd3a'),
+ 'kernel/src/scheduler.rs': ('0b75bce2639de6891a9ed4b7e3e0f871f9a5110bc23b9002b2912316e4ef7f64',),
  'kernel/src/self_wait.rs': ('0e7b60adbce245427e67bf1bb0ba20ddb929c304efbad13ce078fa79e43e4eaf',),
  'kernel/src/task_ownership.rs': ('57e00d7269315b5810adb7d43bcc75e92a140b6fa02b1c2dd8c15533757564f6',),
  'kernel/src/smp.rs': ('bd523573ed7c9576665af35b7f0d598ddccb5b9a44f21d5d85fb21a15d961325',),
  'kernel/src/interrupts.rs': ('c686d2ff054854086e2f27e872b1c0d0eafd3c9aa88636b716775b33288afd0d',
                               'dac8806ada26bbf32518d7a835d009c96bfd4787aa724a9fd29eefccc6fac62d'),
- 'kernel/src/syscalls/mod.rs': ('aa6169383696167b349be8f37819f61fb896239b3ff7aa489f4ffac1a4e11524',),
- 'kernel/src/program_workers.rs': ('6180ef3fb5702e6bd63e1649b07df8ce39390c8fe69a6a9c93b2e199686dbe8e',),
+ 'kernel/src/syscalls/mod.rs': ('aa6169383696167b349be8f37819f61fb896239b3ff7aa489f4ffac1a4e11524',
+                                '57b8a9e06666144ec68b4160ec5f13fea0212734023e6aabc5d06d9bc8f45d0c'),
+ 'kernel/src/program_workers.rs': ('6180ef3fb5702e6bd63e1649b07df8ce39390c8fe69a6a9c93b2e199686dbe8e',
+                                   '82050a7bd043822bd1593d798dbdf14381d5efba4122a71a63a0948287251f6a'),
  'crates/sex-pdx/src/lib.rs': ('8477d3326af90b744f72d300aa26af3b4b8ae7075527ca1b3aa622ea9ec5ccde',
-                               'f76238b37b9a35de5bdf5e7e62c95e6788e30e86411ef4ec77d8638b4b82ef05', 'f9dd629e5cdda6ba58fb130e988d33f0d3a88948278d2f414bf612dca02fc166'),
+                               'f76238b37b9a35de5bdf5e7e62c95e6788e30e86411ef4ec77d8638b4b82ef05',
+                               'f9dd629e5cdda6ba58fb130e988d33f0d3a88948278d2f414bf612dca02fc166',
+                               '5662a0f683b362f359838bbca424b8902b24054a8bf077e550c4bcd8d3256d40'),
  'servers/sexnet/src/main.rs': ('00da2ed6f93bb473e3944a8a4bc7e38f887676083cfe8cf9195c821cba4fc725',),
  'servers/sexusb/src/main.rs': ('3fb9341fda71262a023114c8115407949ce700c604c7c3327464e79a68af3a81',
                                 'adc83a02655343df1b83d99dedd252a7e9ee06164055a54420b5e9207b3dba06')}
@@ -36,7 +42,22 @@ DEADLINE_REFERENCE_OWNERS=frozenset((
     'kernel/src/scheduler.rs','kernel/src/self_wait.rs','kernel/src/interrupts.rs',
     'kernel/src/program_workers.rs','kernel/src/program_records.rs','kernel/src/syscalls/mod.rs'))
 # c209 raw-master only; no speculative combined privacy/kernel cohort.
-APPROVED_KERNEL_RUST_TREES=('91e41656109be5dd659d70a70718e0640f68372f35762c34d95a28260b807e92', 'dd69100da62b94d190510e266327094b2990443442b2a59326b4e60afd2792dc', '1e5f9a4228d4f0342d7d54c4cbc2cba37b9c59ba1923e0d82b1afa50a687dbcb')
+# Raw merged 23090514 only; never an unreviewed combined kernel.
+DENIM_KERNEL_TREE='ec491c66362f4805a6e21dfca995ddc1bb987eafbd28eec748b336309f7a32a9'
+APPROVED_KERNEL_RUST_TREES=(DENIM_KERNEL_TREE,'91e41656109be5dd659d70a70718e0640f68372f35762c34d95a28260b807e92', 'dd69100da62b94d190510e266327094b2990443442b2a59326b4e60afd2792dc', '1e5f9a4228d4f0342d7d54c4cbc2cba37b9c59ba1923e0d82b1afa50a687dbcb')
+DENIM_CAUSAL_SOURCES = {'kernel/src/program_records.rs': '37561f94116d2c3c44b1bf88b8f22927ebd57eeec7630cd6e40a8d38150fb2a8',
+ 'kernel/src/pd/create.rs': '3fff0e0483f767e2e8509515874d0b320496cea0671c85b21c4aa368bbdf9b1e',
+ 'kernel/src/init.rs': '38119a1a085e1f3e2358c4a4f17484a81ddcfd3e8a316d1b60f5c19cd071bd3a',
+ 'kernel/src/scheduler.rs': '0b75bce2639de6891a9ed4b7e3e0f871f9a5110bc23b9002b2912316e4ef7f64',
+ 'kernel/src/self_wait.rs': '0e7b60adbce245427e67bf1bb0ba20ddb929c304efbad13ce078fa79e43e4eaf',
+ 'kernel/src/task_ownership.rs': '57e00d7269315b5810adb7d43bcc75e92a140b6fa02b1c2dd8c15533757564f6',
+ 'kernel/src/smp.rs': 'bd523573ed7c9576665af35b7f0d598ddccb5b9a44f21d5d85fb21a15d961325',
+ 'kernel/src/interrupts.rs': 'dac8806ada26bbf32518d7a835d009c96bfd4787aa724a9fd29eefccc6fac62d',
+ 'kernel/src/syscalls/mod.rs': '57b8a9e06666144ec68b4160ec5f13fea0212734023e6aabc5d06d9bc8f45d0c',
+ 'kernel/src/program_workers.rs': '82050a7bd043822bd1593d798dbdf14381d5efba4122a71a63a0948287251f6a',
+ 'crates/sex-pdx/src/lib.rs': '5662a0f683b362f359838bbca424b8902b24054a8bf077e550c4bcd8d3256d40',
+ 'servers/sexnet/src/main.rs': '00da2ed6f93bb473e3944a8a4bc7e38f887676083cfe8cf9195c821cba4fc725',
+ 'servers/sexusb/src/main.rs': 'adc83a02655343df1b83d99dedd252a7e9ee06164055a54420b5e9207b3dba06'}
 DEADLINE_REFERENCE=re.compile(r'\b(?:wait_deadline|poll_self_wait_deadlines|take_due|wait_for_message_ticks|wake_record_if_due)\b|\bself_wait\s*::\s*Deadline\b')
 
 
@@ -76,6 +97,8 @@ def source_contract(root):
             if digest not in approved:raise ValueError('unreviewed timed-wait source: '+name)
             texts[name]=re.sub(r'\s+','',data.decode())
         closure=deadline_source_closure(root)
+        if closure['tree_sha256']==DENIM_KERNEL_TREE and sources!=DENIM_CAUSAL_SOURCES:
+            raise ValueError('unreviewed mixed Denim causal source cohort')
         scheduler=texts['kernel/src/scheduler.rs']
         wait=scheduler.split('pubunsafefnwait_for_message_ticks(',1)[1].split('pubfnpoll_self_wait_deadlines(',1)[0]
         order=['interrupts::disable();','SELF_WAIT_TASKS.contains(task)','wait_deadline.arm(now,ticks)','state.park(core.core_id)']
@@ -120,6 +143,55 @@ def _acpi_wait_profile(text,root,source,seals):
         if len(markers)!=len(roles)or len(roles)!=1 or roles[0].start()>=seals[0].start():raise ValueError('missing unique prior BOOT ACPI role')
         result.update(ok=True,receipt_offset=roles[0].start())
     except (OSError,ValueError,UnicodeError,RuntimeError)as error:result['errors']=[str(error)]
+    return result
+
+
+# Separate auxiliary role qualification; this never establishes a Net timer join.
+DENIM_AUX_SOURCES = {'servers/denim/src/main.rs': '4af15a9802126f329fcc1be9a847d66f3d3502e745d95a37bb62ad4cf804b12b', 'crates/sex-pdx/src/denim.rs': '1c4224481339a54ed14854d9fa014bf2141605c639d3b7239eadc3bf5bb33681', 'kernel/src/init.rs': '38119a1a085e1f3e2358c4a4f17484a81ddcfd3e8a316d1b60f5c19cd071bd3a', 'crates/sex-pdx/src/lib.rs': '5662a0f683b362f359838bbca424b8902b24054a8bf077e550c4bcd8d3256d40'}
+
+def _denim_wait_profile(text,root,source,seals):
+    result=dict(ok=False,task=51,ticks=(8,64),source_sha256={},scope='optional exact raw23090514 BOOT Denim role; no inferred park or user-return proof')
+    if source is None or not source['ok'] or len(seals)!=1:return result
+    try:
+        if source['deadline_reference_closure']['tree_sha256']!=DENIM_KERNEL_TREE:raise ValueError('unreviewed auxiliary Denim kernel cohort')
+        if not _up_topology(text)['ok']:raise ValueError('Denim auxiliary profile requires observed UP topology')
+        root=Path(root).resolve(strict=True)
+        for name,digest in DENIM_AUX_SOURCES.items():
+            path=(root/name).resolve(strict=True)
+            if not path.is_relative_to(root) or not path.is_file() or path.stat().st_size>2*1024*1024:raise ValueError('invalid auxiliary Denim source')
+            actual=hashlib.sha256(path.read_bytes()).hexdigest();result['source_sha256'][name]=actual
+            if actual!=digest:raise ValueError('unreviewed auxiliary Denim source: '+name)
+        markers=list(re.finditer(re.escape('[kernel.spawn.denim'),text))
+        roles=list(re.finditer(r'^\[kernel.spawn.denim\] id=51 key=14 organ=memory\r?\n',text,re.M))
+        if len(markers)!=len(roles) or len(roles)!=1 or roles[0].start()>=seals[0].start():raise ValueError('missing unique prior BOOT Denim role')
+        markers=list(re.finditer(r'\[bootgraph.boot.handoff\] target=denim\b',text))
+        handoffs=list(re.finditer(r'^\[bootgraph.boot.handoff\] target=denim id=51 entry=0x[0-9a-f]+\r?\n',text,re.M))
+        if len(markers)!=len(handoffs) or len(handoffs)!=1 or handoffs[0].start()<=seals[0].start():raise ValueError('missing unique post-seal BOOT Denim handoff')
+        candidates=re.finditer(r'\[scheduler\.self_wait\.(park|expired)\] task=([0-9]+)\b',text)
+        waits=[]
+        for marker in candidates:
+            raw=marker[2]
+            # Inspect's parsed records compare integer identities. Include zero-
+            # prefixed candidates here, without interpreting task510 as task51.
+            if len(raw)>10:
+                if raw.lstrip('0')=='51':raise ValueError('noncanonical Denim task identity')
+                continue
+            if int(raw)!=51:continue
+            if raw!='51':raise ValueError('noncanonical Denim task identity')
+            waits.append(marker)
+        for marker in waits:
+            if marker.start()<=handoffs[0].start():raise ValueError('Denim wait precedes actual BOOT handoff')
+            suffix=(r' ticks=(8|64) deadline=([1-9][0-9]{0,19}) count=([1-9][0-9]{0,19})\r?\n'if marker[1]=='park'
+                    else r' deadline=([1-9][0-9]{0,19}) now=([1-9][0-9]{0,19}) count=([1-9][0-9]{0,19})\r?\n')
+            record=re.match(suffix,text[marker.end():])
+            if record is None:raise ValueError('incomplete or malformed Denim timer record')
+            values=tuple(int(v)for v in record.groups())
+            if any(v>0xffff_ffff_ffff_ffff for v in values)or values[2]==0:raise ValueError('out-of-range Denim timer record')
+            if marker[1]=='park':
+                if values[1]<values[0]:raise ValueError('impossible Denim park deadline')
+            elif values[0]==0 or values[1]<values[0]:raise ValueError('zero or early Denim expiry')
+        result.update(ok=True,receipt_offset=roles[0].start(),handoff_offset=handoffs[0].start())
+    except (OSError,ValueError,UnicodeError,RuntimeError,KeyError)as error:result['errors']=[str(error)]
     return result
 
 
@@ -169,7 +241,8 @@ def inspect(text,active=True,*,browser_tasks=(15,),source_root=None):
  returns=list(re.finditer(r'\[sexnet.receive.wait\] before=(\d+) after=(\d+) ticks=2 count=(\d+) kind=timer_assisted_poll irq=0',text))
  valid_seal=len(markers)==len(seals)==1 and 1<=int(seals[0][1])<=EXPECTED_BOOT_MAIN_CAPACITY
  acpi=_acpi_wait_profile(text,source_root,source,seals)
- auxiliary=((50,64),)if acpi['ok']else()
+ denim=_denim_wait_profile(text,source_root,source,seals)
+ auxiliary=(((50,64),)if acpi['ok']else())+(((51,8),(51,64))if denim['ok']else())
  if not valid_seal:errors.append('missing/invalid unique complete BOOT timer inventory (capacity must be 64)')
  if len(authority)!=1:errors.append('missing unique real Ring3 invalid-argument probes')
  if seals and any(m.start()<seals[0].start()for m in parks+expiries+authority):errors.append('timed wait precedes BOOT seal')
@@ -181,7 +254,7 @@ def inspect(text,active=True,*,browser_tasks=(15,),source_root=None):
   # Idle Display (1) and SilkBar (6) sleep 8 ticks; polled sexinput (4) and sexusb (5) sleep 1.
   if (int(p[1]),int(p[2]))not in((13,2),(2,1),(1,8),(6,8),(4,1),(5,1))+(((5,32),)if source_ok else())+tuple((task,2)for task in selected)+auxiliary or int(p[3])==0:errors.append('unexpected timed-poll task/interval/deadline')
  for e in expiries:
-  if int(e[1])not in(13,2,1,6,4,5)+selected+((50,)if acpi['ok']else()) or int(e[3])<int(e[2]):errors.append('foreign task or early timer expiry')
+  if int(e[1])not in(13,2,1,6,4,5)+selected+((50,)if acpi['ok']else())+((51,)if denim['ok']else()) or int(e[3])<int(e[2]):errors.append('foreign task or early timer expiry')
  for r in returns:
   if int(r[2])<int(r[1]):errors.append('backward Ring3 clock')
  for group,index in [(parks,4),(expiries,4),(returns,3)]:
@@ -219,7 +292,7 @@ def inspect(text,active=True,*,browser_tasks=(15,),source_root=None):
  if not active and(any(int(p[1])==13 for p in parks)or any(int(e[1])==13 for e in expiries)or returns):
   if not returns or any(not text[r.end():].startswith(' device=0 reply_pending=1')for r in returns):errors.append('unsupported NIC unexpectedly entered device polling without retained reply work')
  if re.search(r'TIMED_WAIT_WITHOUT_ATTACHED_OWNER|BOOT_SELF_WAIT_AUTHORITY|SELF_WAIT_FRONTEND_PROBE|KERNEL PANIC|KERNEL PAGE FAULT|DOUBLE FAULT|panicked at',text):errors.append('guest self-wait failure')
- return dict(ok=not errors,errors=errors,browser_tasks=list(selected),boot_tasks=int(seals[0][1])if valid_seal else None,parks_observed=len(parks),expiries_observed=len(expiries),returns_observed=len(returns),timer_user_joins=joined,observed_timer_user_joins=observed,inferred_timer_user_joins=inferred,source_contract=source,auxiliary_wait_profiles={'acpi':acpi},up_topology=topology,net_boot_identity=net_identity,scope='Sampled real BOOT/main-task/park/timer/Ring3 receipts with explicitly caller-selected observed Browser task IDs; no identity autodiscovery or authority grant. Native peer and desktop gates separately establish useful progress. Nominal timer-assisted polling, not NIC IRQ, CPU/power bound, physical or SMP proof. Inferred park requires reviewed unchanged causal source, exact observed UP topology and one-to-one expiry/Net-return envelopes; caller separately verifies frozen source/image binding.')
+ return dict(ok=not errors,errors=errors,browser_tasks=list(selected),boot_tasks=int(seals[0][1])if valid_seal else None,parks_observed=len(parks),expiries_observed=len(expiries),returns_observed=len(returns),timer_user_joins=joined,observed_timer_user_joins=observed,inferred_timer_user_joins=inferred,source_contract=source,auxiliary_wait_profiles={'acpi':acpi,'denim':denim},up_topology=topology,net_boot_identity=net_identity,scope='Sampled real BOOT/main-task/park/timer/Ring3 receipts with explicitly caller-selected observed Browser task IDs; no identity autodiscovery or authority grant. Native peer and desktop gates separately establish useful progress. Nominal timer-assisted polling, not NIC IRQ, CPU/power bound, physical or SMP proof. Inferred park requires reviewed unchanged causal source, exact observed UP topology and one-to-one expiry/Net-return envelopes; caller separately verifies frozen source/image binding.')
 
 def main():
  p=argparse.ArgumentParser();p.add_argument('log',type=Path);p.add_argument('--inactive',action='store_true');p.add_argument('--source-root',type=Path,help='reviewed causal source for sampled UP equivalence and quiet USB32');a=p.parse_args();r=inspect(a.log.read_text(errors='replace'),not a.inactive,source_root=a.source_root);print(json.dumps(r,indent=2));raise SystemExit(0 if r['ok']else 1)
