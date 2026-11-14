@@ -93,6 +93,7 @@ members = [
     "apps/python",
     "apps/store",
     "crates/sex-sdl",
+    "crates/sex-archive",
     "apps/sdltest",
     "apps/driftspark",
     "crates/gaze-codecs",

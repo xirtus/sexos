@@ -73,6 +73,8 @@ jobs:
       run: cargo test --locked -p gaze-codecs --all-features
     - name: Aftercare backups (dedup, encryption, restore, prune, check) on the host
       run: cargo test --locked -p aftercare-core
+    - name: Loom archives (zip, tar, 7z, gz, zst, xz) with Python interop on the host
+      run: cargo test --locked -p sex-archive --features std
     - name: Pinyin input method
       run: cargo test --locked -p sex-ime
     - name: SexOS filesystem check and repair (injected faults)
