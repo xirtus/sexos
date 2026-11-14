@@ -67,6 +67,10 @@ jobs:
       run: cargo test --locked -p sex-shape --features shaping
     - name: Pinyin input method
       run: cargo test --locked -p sex-ime
+    - name: Multipass accounts, Shibari keeper (link fixtures, tokens never leave)
+      run: cargo test --locked -p shibari -p sex-multipass
+    - name: Valentine mail (IMAP IDLE + SMTP send-then-receive fixture, MIME, threads)
+      run: cargo test --locked -p sex-mail
     - name: SexOS filesystem check and repair (injected faults)
       run: cargo test --locked --release -p sexfs --features repair --lib
     - name: Network stack (IPv6 resolvers, accept backlog, UDP queues) on the host

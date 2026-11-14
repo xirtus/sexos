@@ -4087,3 +4087,12 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   master and is not guest latency. Gates should time from guest markers.
 - **Next:** Shapes' start is its own drawing, not loading; prelinking and lazy pages
   are not needed yet for the < 100 ms target.
+
+## Multipass, Shibari and Valentine mail core, slices Y1-Y3 core (2026-11-14)
+- **What:** `crates/shibari` (RAM-only secret keeper), `crates/sex-multipass` (Leeloo
+  Multipass nativized: stamp book, Mastodon OAuth, Matrix SSO, Bluesky PAR+PKCE+DPoP,
+  fediverse bio proof, DAV app-password accounts, act-for-account grants),
+  `crates/sex-mail` (IMAP with IDLE, SMTP, MIME, threading, in-memory mail server),
+  `sex_pdx::accounts` (op 0x2B0). Host gates in CI.
+- **Next:** `servers/multipass` in the boot catalog, Tatami page, Valentine program on
+  Weft. Details: `docs/handoff/VALENTINE_MULTIPASS_2026_11_14.md`.
