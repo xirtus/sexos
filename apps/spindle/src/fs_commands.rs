@@ -185,11 +185,12 @@ impl Client {
     /// A bare name means the program directory. `args` reach the program, and `flags`
     /// carry what the person allowed this run, such as the network.
     pub fn submit_program(&mut self, target: &[u8], args: &[u8], flags: u64, count: u64, sb: &mut Scrollback) {
-        self.submit_program_granted(target, args, flags, count, false, sb)
+        self.submit_program_granted(target, args, flags, count, b"", sb)
     }
-    /// `packages`: the run may install and remove packages (`run +pkg`). Files sees that as
-    /// the argument `+packages`, which only this adds: a typed one is dropped.
-    pub fn submit_program_granted(&mut self, target: &[u8], args: &[u8], flags: u64, count: u64, packages: bool, sb: &mut Scrollback) {
+    /// `grant`: a run argument only this adds (a typed one is dropped), or empty:
+    /// `+packages` lets the run install and remove packages (`run +pkg`), `+launch` lets a
+    /// terminal start programs attached to it (`spindle`).
+    pub fn submit_program_granted(&mut self, target: &[u8], args: &[u8], flags: u64, count: u64, grant: &[u8], sb: &mut Scrollback) {
         if self.busy() { sb.push(b"The disk is busy with the last command."); return; }
         let Some(region) = region() else { sb.push(b"The disk is not available."); return };
         if args.len() > w::ARGS_MAX { sb.push(b"Arguments too long."); return; }
@@ -209,9 +210,9 @@ impl Client {
         // `@PATH` gives the program that one file or folder: it travels as `@/absolute/path`.
         let mut given = [0u8; w::ARGS_MAX];
         let mut m = 0;
-        let token = sex_pdx::package::GRANT_TOKEN;
-        if packages { given[..token.len()].copy_from_slice(token); m = token.len(); }
-        for word in args.split(|b| *b == b' ').filter(|w| !w.is_empty() && *w != token) {
+        given[..grant.len()].copy_from_slice(grant); m = grant.len();
+        let granted = [sex_pdx::package::GRANT_TOKEN, sex_pdx::console_relay::GRANT_TOKEN];
+        for word in args.split(|b| *b == b' ').filter(|w| !w.is_empty() && !granted.contains(w)) {
             let mut piece = [0u8; w::ARGS_MAX];
             let word: &[u8] = match word.strip_prefix(b"@") {
                 Some(file) => {
@@ -231,6 +232,8 @@ impl Client {
         }
         region[..n].copy_from_slice(&path[..n]);
         region[w::PATH_BYTES..w::PATH_BYTES + m].copy_from_slice(&given[..m]);
+        // The session keeps this run's line, to open it again after a restart.
+        if count == 0 { unsafe { crate::session_command::SESSION.submitted(&path[..n], &given[..m], flags); } }
         self.start(Cmd::Program(count, flags), w::PREPARE, n, 0, m as u64);
     }
     /// Delivers the current request. Retries a full queue on the next pass.
@@ -415,6 +418,7 @@ impl Client {
                 let Some(flags) = (unsafe { crate::pkg_command::PKG.before_run(note, name, value, flags, count, sb) }) else { self.cmd = None; return true };
                 let (op, third) = if count == 0 { (store::OP_RUN, flags) } else { (store::OP_SPAWN, count) };
                 let asked = sex_pdx::pdx_call_checked(crate::SLOT_SHELL, op, store::TICKET, value as u64, third).is_ok();
+                if asked && count == 0 { unsafe { crate::session_command::SESSION.asked(value); } }
                 say!(sb, "{}", if !asked { "Could not reach the shell." } else if count == 0 { "Asked for the program. A window opens if it starts." } else { "Asked for background programs. Check with: records" });
             }
         }

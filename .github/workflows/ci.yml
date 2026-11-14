@@ -45,10 +45,14 @@ jobs:
       run: bash scripts/raid_host_gate.sh
     - name: Hardware census table (names, owners, VMD warning) on the host
       run: bash scripts/hwdb_host_gate.sh
+    - name: Moan timeline, edits and mixer on the host
+      run: bash scripts/moan_host_gate.sh
     - name: Bell sound rate conversion on the host
       run: bash scripts/sound_host_gate.sh
     - name: Qupid keep-watching logic (episodes, skip and up-next cards) on the host
       run: bash scripts/qupid_host_gate.sh
+    - name: Qupid Kodi repositories (addons.xml, versions, dependencies, checksums, addon zips) on the host
+      run: cargo test --locked -p sex-kodi
     - name: Explicit program heap limits with actual Talc
       run: bash scripts/program_heap_limit_host_gate.sh
     - name: Unarmed recorder custody and restart contracts
@@ -75,20 +79,30 @@ jobs:
       run: cargo test --locked -p vellum-edit
     - name: Gaze decoders (EXIF orientation, JPEG XL, SVG, RAW previews) on the host
       run: cargo test --locked -p gaze-codecs --all-features
+    - name: Image codecs (WebP, animated GIF, AVIF, HEIC, 4-quadrant fidelity, 50k fuzzer) on the host
+      run: bash scripts/sex_codecs_host_gate.sh
     - name: Aftercare backups (dedup, encryption, restore, prune, check) on the host
       run: cargo test --locked -p aftercare-core
     - name: Aftercare app (folder store, restore hashes, settings, schedule) on the host
       run: cargo test --locked -p aftercare
     - name: Loom archives (zip, tar, 7z, gz, zst, xz) with Python interop on the host
       run: cargo test --locked -p sex-archive --features std
+    - name: Polyamour 3D core (meshes, modifiers, booleans, path tracer, glTF/OBJ/STL/PLY/.blend, polyops + Python API)
+      run: cargo test --locked --release -p sex-3d
     - name: Pinyin input method
       run: cargo test --locked -p sex-ime
+    - name: RFB (VNC) client and server codec, byte-exact goldens
+      run: cargo test --locked -p sex-rfb
+    - name: Serenade audio recorder engine (VOX, dBFS meters, waveform mipmaps, WAV/cue) on the host
+      run: bash scripts/serenade_host_gate.sh
     - name: Multipass accounts, Shibari keeper (link fixtures, tokens never leave)
       run: cargo test --locked -p shibari -p sex-multipass
     - name: Valentine mail (IMAP IDLE + SMTP send-then-receive fixture, MIME, threads)
       run: cargo test --locked -p sex-mail
     - name: SexOS filesystem check and repair (injected faults)
       run: cargo test --locked --release -p sexfs --features repair --lib
+    - name: Corset disks, GPT editor, FAT32/exFAT/SexFS formatters, SMART and BDSM encryption on the host
+      run: bash scripts/corset_host_gate.sh
     - name: Network stack (IPv6 resolvers, accept backlog, UDP queues) on the host
       run: cargo test --locked -p sex-net --lib
     - name: HTTP/2 client (HPACK, 50 streams) against a real h2 server, plain and over TLS
@@ -210,6 +224,8 @@ jobs:
       run: |
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends aria2
         python3 scripts/swingers_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/swingers"
+    - name: Lurk views a host VNC server and sends it keys
+      run: python3 scripts/lurk_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/lurk"
     - name: Needle prints to a fake IPP Everywhere printer and scans from a fake eSCL scanner
       run: python3 scripts/needle_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/needle"
     - name: Web page JavaScript (native QuickJS tier)
@@ -259,6 +275,26 @@ jobs:
       run: |
         truncate -s 256M "$RUNNER_TEMP/screenshot-source.img"
         python3 scripts/screenshot_ui_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/screenshot-source.img" --out "$RUNNER_TEMP/sexos-runtime/screenshot-ui"
+    - name: Panel tray and calendar
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/tray-source.img"
+        python3 scripts/tray_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/tray-source.img" --out "$RUNNER_TEMP/sexos-runtime/tray"
+    - name: Window animations
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/motion-source.img"
+        python3 scripts/window_motion_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/motion-source.img" --out "$RUNNER_TEMP/sexos-runtime/motion"
+    - name: Programs starting programs
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/launch-source.img"
+        python3 scripts/shuttle_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/launch-source.img" --out "$RUNNER_TEMP/sexos-runtime/launch"
+    - name: Session restore across a restart
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/session-source.img"
+        python3 scripts/session_restore_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/session-source.img" --out "$RUNNER_TEMP/sexos-runtime/session"
+    - name: Drag and drop between programs
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/dnd-source.img"
+        python3 scripts/drag_drop_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/dnd-source.img" --out "$RUNNER_TEMP/sexos-runtime/dnd"
     - name: USB input paths
       run: GATE_DIR="$RUNNER_TEMP/sexos-usb" SKIP_BUILD=1 bash scripts/usb_path_gate.sh
     - name: Preserve runtime evidence
@@ -464,18 +500,72 @@ jobs:
       run: python3 scripts/driftspark_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/driftspark"
     - name: Aftercare backup (back up, delete, restore, hashes equal, wrong password refused)
       run: python3 scripts/aftercare_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/aftercare"
+    - name: Moan edited multitrack mix through Bell (stereo waveform proof)
+      run: python3 scripts/moan_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/moan"
     - name: Preserve program evidence
       if: always()
       uses: actions/upload-artifact@v4
       with:
         name: sexos-programs-proof
         path: ${{ runner.temp }}/sexos-runtime
+  reading:
+    name: Reading programs
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+    - uses: actions/checkout@v4
+    - uses: ./.github/actions/setup
+    - name: E-book and feed models (EPUB, FictionBook, CBZ, reflow, RSS, Atom, OPML) on the host
+      run: cargo test --locked -p sex-xml -p sex-ebook -p sex-feed
+    - name: Build the image
+      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/reading-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/reading-build.log"; exit 1)
+    - name: Bodice opens an EPUB, turns pages and reopens at the saved page
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/blank-reading.img"
+        python3 scripts/program_bodice_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-reading.img" --out "$RUNNER_TEMP/sexos-reading/bodice"
+    - name: Gossip imports OPML, lists a feed's items and keeps one read across a restart
+      run: python3 scripts/program_gossip_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-reading.img" --out "$RUNNER_TEMP/sexos-reading/gossip"
+    - name: Preserve reading evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sexos-reading-proof
+        path: |
+          ${{ runner.temp }}/reading-build.log
+          ${{ runner.temp }}/sexos-reading
         if-no-files-found: ignore
 
   # Single required check: keeps the old "build" check name for branch rules.
+  places:
+    name: Phone link and maps
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+    - uses: actions/checkout@v4
+    - uses: ./.github/actions/setup
+    - name: Hookup protocol (KDE Connect) on the host, against the Python test peer; map tiles, search and routes
+      run: cargo test --locked -p sex-kdeconnect -p sex-map
+    - name: Build the image
+      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/places-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/places-build.log"; exit 1)
+    - name: Hookup pairs with a test phone, receives and sends files, media keys
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/blank-places.img"
+        python3 scripts/program_hookup_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-places.img" --out "$RUNNER_TEMP/sexos-places/hookup"
+    - name: Rendezvous draws a vector tile, finds places, draws a route and works offline
+      run: python3 scripts/program_rendezvous_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-places.img" --out "$RUNNER_TEMP/sexos-places/rendezvous"
+    - name: Preserve places evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sexos-places
+        path: |
+          ${{ runner.temp }}/sexos-places
+          ${{ runner.temp }}/places-build.log
+        if-no-files-found: ignore
+
   build:
     if: always()
-    needs: [host, truth, boot, devices, programs, media, editor, profiles, js-jit, recording]
+    needs: [host, truth, boot, devices, programs, media, editor, profiles, js-jit, recording, productivity, terminal-editor, documents-pictures, reading, places]
     runs-on: ubuntu-latest
     steps:
     - run: |
@@ -553,4 +643,88 @@ jobs:
         path: |
           ${{ runner.temp }}/recording
           ${{ runner.temp }}/recording-build.log
+        if-no-files-found: ignore
+
+  productivity:
+    name: Productivity programs
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+    - uses: actions/checkout@v4
+    - uses: ./.github/actions/setup
+    - name: Calculator arithmetic and calendar model on the host
+      run: cargo test --locked -p sex-calc-core -p sex-calendar -p sex-vt -p sex-textedit -p sex-wasm && cargo test --locked -p sex-pdx --test stream --test console_relay
+    - name: Build the image
+      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/productivity-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/productivity-build.log"; exit 1)
+    - name: Calculator typed, clicked and recalled
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/blank-productivity.img"
+        python3 scripts/program_calc_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-productivity.img" --out "$RUNNER_TEMP/sexos-productivity/calc"
+    - name: Calendar imports .ics, shows repeats on their days and keeps events
+      run: python3 scripts/program_calendar_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-productivity.img" --out "$RUNNER_TEMP/sexos-productivity/calendar"
+    - name: Preserve productivity evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sexos-productivity-proof
+        path: |
+          ${{ runner.temp }}/productivity-build.log
+          ${{ runner.temp }}/sexos-productivity
+        if-no-files-found: ignore
+
+  terminal-editor:
+    name: Terminal and editor
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+    - uses: actions/checkout@v4
+    - uses: ./.github/actions/setup
+    - name: Build the image
+      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/term-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/term-build.log"; exit 1)
+    - name: Term draws the VT fixture, runs a Wasm program behind a stream; std consoles become terminals
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/blank-term.img"
+        python3 scripts/program_term_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-term.img" --out "$RUNNER_TEMP/sexos-term/term"
+    - name: Programs of their own (std, C) run inside Term with it as their console
+      run: python3 scripts/program_term_native_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-term.img" --out "$RUNNER_TEMP/sexos-term/term-native"
+    - name: Jot undo tree, save and reopen, find and replace, spelling, tabs
+      run: python3 scripts/program_jot_edit_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-term.img" --out "$RUNNER_TEMP/sexos-term/jot-edit"
+    - name: Jot as a notepad in its own folder (original gate)
+      run: python3 scripts/program_jot_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-term.img" --out "$RUNNER_TEMP/sexos-term/jot"
+    - name: Preserve terminal and editor evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sexos-terminal-editor-proof
+        path: |
+          ${{ runner.temp }}/term-build.log
+          ${{ runner.temp }}/sexos-term
+        if-no-files-found: ignore
+
+  documents-pictures:
+    name: Documents and pictures
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+    - uses: actions/checkout@v4
+    - uses: ./.github/actions/setup
+    - name: Build the image
+      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/productivity-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/productivity-build.log"; exit 1)
+    - name: PDF finds a word on page 7, outline, thumbnails and zoom
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/blank-pdf.img"
+        python3 scripts/program_pdf_find_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-pdf.img" --out "$RUNNER_TEMP/sexos-productivity/pdf-find"
+    - name: View pictures, turns, zoom, animated WebP and a folder slideshow
+      run: |
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends python3-pil
+        truncate -s 256M "$RUNNER_TEMP/blank-view.img"
+        python3 scripts/program_view_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-view.img" --out "$RUNNER_TEMP/sexos-productivity/view"
+    - name: Preserve document and picture evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sexos-documents-proof
+        path: |
+          ${{ runner.temp }}/productivity-build.log
+          ${{ runner.temp }}/sexos-productivity
         if-no-files-found: ignore

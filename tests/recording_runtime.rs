@@ -22,7 +22,7 @@ pub mod program_store {
     pub fn load_unbound(name: [u64; 2]) -> u64 {
         crate::unbound_backend::load_unbound(name)
     }
-    pub fn load(_name: [u64; 2]) -> u64 {
+    pub fn load(_name: [u64; 2], _requester: u32) -> u64 {
         crate::nested_io();
         crate::WORLD
             .lock()
