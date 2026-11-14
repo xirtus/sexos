@@ -4100,3 +4100,12 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
 
 ## Fix: USB Ethernet regression from #196 (2026-11-14)
 - usb_net_gate failed on master ("fetch: could not connect"). With MSI-X wakes, sexusb idled 32 ticks between passes. Two gaps: `sleep_ticks` took interrupts for events the main loop had not drained yet, and the network's USB Ethernet transmit ring has no wake. Now `xhci::SLEPT` makes the next wait 1 tick after any sleep in a pass, and the loop polls every tick while an Ethernet adapter is up (`Usb::ether_active`). usb_net_gate passes; idle QEMU CPU 19%.
+
+## J1b: end a program from the system monitor (2026-11-14)
+- Mesh (apps/monitor): Up/Down choose a line (marked `>`), Delete ends that program; the result shows under the list. Logs `[monitor.choose]`, `[monitor.end]`.
+- New PDX op (ABI addition): `system_stats::OP_END_PROGRAM` 0x3A2 to the Shell (SLOT_SHELL), answers OK / NOT_A_PROGRAM 4 / NOT_FOCUSED 5 / NOT_ENDED 6. Only the focused program may ask; only Program rows can be ended, never services. Shell logs `[shell.program.end]`.
+- Fix: Shell's forced ends (OOM policy and this) now also send a confirmed Close, so a program idle in its event wait wakes, faults on its released pages and is retired (before, an idle program stayed parked).
+- Gate: scripts/program_end_gate.py (Files' line refused with status 4, Fortune ended and retired).
+
+## J8 finding: disk reads are not NVMe-queue bound yet (2026-11-14)
+- `run bench read-large` at 4 cores without PKU now logs `[bench.large.cpu]` (Drive, Files, bench, idle cycles per pass). 16 MiB in 64 KiB requests: ~275M cycles; Files ~100M (~390k per request), Drive ~42M (~165k), rest waiting on the serial request chain. Per-core NVMe queues would not help until requests are pipelined (Files readahead / async Drive replies) and Files' per-request CPU drops; deferred until then.
