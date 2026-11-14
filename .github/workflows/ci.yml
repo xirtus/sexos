@@ -57,12 +57,12 @@ jobs:
       run: bash scripts/desktop_capture_host_gate.sh
     - name: HTML containing-block and replaced sizing
       run: cargo test --locked -p sex-html
-    - name: egui backend input and rendering
-      run: cargo test --locked -p sex-egui
-    - name: Weft toolkit and Abacus
-      run: cargo test --locked -p weft && cargo test --locked -p abacus --no-default-features
     - name: Settings schema, file format, protocol and the Settings program's pages
       run: bash scripts/settings_host_gate.sh
+    - name: egui backend (input mapping, CPU rasterizer, whole frames of the egui demo)
+      run: cargo test --locked -p sex-egui
+    - name: Weft toolkit and Abacus (layout, input, menus, palette, dialogs, tabs, accessibility)
+      run: cargo test --locked -p weft && cargo test --locked -p abacus --no-default-features
     - name: Signed package format and store catalog
       run: cargo test --locked -p sex-pkg
     - name: Disk layouts (GPT, FAT, install beside other systems)
@@ -438,6 +438,10 @@ jobs:
       run: truncate -s 1G "$RUNNER_TEMP/blank-programs.img"
     - name: Lua 5.4 interpreter
       run: python3 scripts/lua_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/lua"
+    - name: egui programs (the unmodified egui demo, clicks, keys and wheel)
+      run: python3 scripts/program_egui_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/egui"
+    - name: Weft programs (Abacus typing, keypad clicks, errors, command palette)
+      run: python3 scripts/program_weft_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/weft"
     - name: Signed packages, install service and first-run grant question
       run: |
         truncate -s 1G "$RUNNER_TEMP/blank-packages.img"
