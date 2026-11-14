@@ -11,7 +11,15 @@
 //!   pkg refresh [URL]      download and check the store's signed catalog (URL is kept)
 //!   pkg search WORDS       find packages in the catalog
 //!   pkg get NAME           download and install one from the store
-//!   pkg upgrade            download and install every newer version the catalog has
+//!   pkg upgrade            download and install every newer version the catalogs have
+//!   pkg rollback NAME      put back the version the last upgrade replaced (again: forward)
+//!   pkg repo add NAME URL KEY   add a third-party repository signed by its own key
+//!   pkg repo remove NAME   remove one (its installed packages stay)
+//!   pkg repo               list the repositories and the updates waiting
+//!
+//! `pkg refresh` without a URL downloads every catalog: the main store's and each
+//! repository's, each checked against its own key. `pkg get REPO/NAME` takes a package
+//! from one repository.
 //!
 //! The first run of a program whose package asks for the network stops to ask the person.
 //! The answer is kept; a "no" runs it without the network, so its network calls are refused.
@@ -96,6 +104,17 @@ impl Pkg {
                 self.advance(sb);
             }
             b"search" | b"find" => self.queue(p::SEARCH, rest, 0),
+            b"rollback" if !rest.is_empty() => self.queue(p::ROLLBACK, rest, 0),
+            b"repo" | b"repos" => {
+                let mut w = rest.splitn(2, |b| *b == b' ');
+                let (what, more) = (w.next().unwrap_or(b""), w.next().unwrap_or(b"").trim_ascii());
+                match what {
+                    b"" | b"list" => self.queue(p::REPOS, b"", 0),
+                    b"add" if !more.is_empty() => self.queue(p::REPO_ADD, more, 0),
+                    b"remove" | b"rm" if !more.is_empty() => self.queue(p::REPO_REMOVE, more, 0),
+                    _ => sb.push(b"Usage: pkg repo [add NAME URL KEY | remove NAME]"),
+                }
+            }
             b"get" if !rest.is_empty() => { self.plan_len = 0; self.plan_at = 0; self.queue(p::LOCATE, rest, 0) }
             b"upgrade" => { self.plan_len = 0; self.plan_at = 0; self.queue(p::LOCATE, b"", 0) }
             b"allow" | b"deny" => {
@@ -108,7 +127,8 @@ impl Pkg {
                 sb.push(b"pkg install FILE|URL   install or upgrade a signed package");
                 sb.push(b"pkg check FILE   pkg remove NAME   pkg list   pkg trust KEY");
                 sb.push(b"pkg allow|deny PROGRAM network|microphone");
-                sb.push(b"pkg refresh [URL]   pkg search WORDS   pkg get NAME   pkg upgrade");
+                sb.push(b"pkg refresh [URL]   pkg search WORDS   pkg get [REPO/]NAME   pkg upgrade");
+                sb.push(b"pkg rollback NAME   pkg repo [add NAME URL KEY | remove NAME]");
             }
         }
     }
@@ -134,10 +154,12 @@ impl Pkg {
         a.a[..a.len].copy_from_slice(&arg[..a.len]);
         self.push(a)
     }
-    fn plan_catalog(&mut self, url: &[u8]) {
+    /// `line` is a store folder URL, or `URL NAME` for a third-party repository.
+    fn plan_catalog(&mut self, line: &[u8]) {
+        let url = line.split(|b| *b == b' ').next().unwrap_or(line);
         self.push_fetch(url, b"sexos-store.txt", p::CATALOG_DOWNLOAD);
         self.push_fetch(url, b"sexos-store.sig", p::SIG_DOWNLOAD);
-        self.push_files(p::CATALOG, url);
+        self.push_files(p::CATALOG, line);
     }
     /// Starts the job's next step, if any.
     fn advance(&mut self, sb: &mut Scrollback) {
