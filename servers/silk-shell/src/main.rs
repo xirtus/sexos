@@ -10318,7 +10318,7 @@ fn is_pointer_move(word:u64)->bool{
 /// The program window under the pointer (or holding its capture), with the pointer
 /// relative to its pixel area, and whether the pointer is inside that area.
 unsafe fn program_pointer_target()->Option<(u64,sex_pdx::clipboard::Participant,i16,i16,bool)>{
-    if OVERVIEW.is_open() || COMMAND_PALETTE_OPEN || ATLAS_MODE_ENABLED || LAUNCHER_ACTIVE || CLOCK_ACTIVE || STATUS_ACTIVE || BELL_ACTIVE || SCENE_SETTINGS_ACTIVE {return None}
+    if OVERVIEW.is_open() || SCREENSHOT.is_open() || COMMAND_PALETTE_OPEN || ATLAS_MODE_ENABLED || LAUNCHER_ACTIVE || CLOCK_ACTIVE || STATUS_ACTIVE || BELL_ACTIVE || SCENE_SETTINGS_ACTIVE {return None}
     let sid=if POINTER_CAPTURE!=0 {POINTER_CAPTURE} else {
         if matches!(INTERACTION,InteractionState::Dragging{..}){return None}
         match hit_test_at(POINTER_X,POINTER_Y){HitTarget::Surface(sid)=>sid,_=>return None}
@@ -10346,6 +10346,7 @@ unsafe fn program_pointer_leave(){
 }
 /// After the pointer moved.
 unsafe fn program_pointer_motion(){
+    if SCREENSHOT.motion(POINTER_X,POINTER_Y) {screenshot_ui(true);}
     match program_pointer_target(){
         Some((sid,p,x,y,inside)) if inside || POINTER_CAPTURE==sid => {
             if POINTER_HOVER!=sid {program_pointer_leave();POINTER_HOVER=sid;}
@@ -10554,6 +10555,7 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
     if overview_key(code,value) {return true;}
     if media_keys::is_player_key(code){if value==1{player_key(code);}return true;}
     let modifier=APP_MODIFIERS.observe(code,value)|keyboard_layout::observe(code,value);
+    if screenshot_key(code,value) {return true;}
     match DESKTOP_KEYS.event(code,value) {
         desktop_keys::Action::Pass=>{
             if !COMMAND_PALETTE_OPEN {
@@ -10696,6 +10698,83 @@ unsafe fn overview_click(px: i32, py: i32) {
         Some(_) => overview_close(true),
         None => overview_close(false),
     }
+}
+// ── Screenshot UI (Print): drag a region, click a window, Enter for the whole
+// screen, Escape to cancel; Shift+Print takes the whole screen at once. The
+// selection lives in sex_pdx::screenshot (host-tested); Display draws it and
+// the first Spindle terminal, which holds the capture grant, saves the PNG.
+static mut SCREENSHOT: sex_pdx::screenshot::Selector = sex_pdx::screenshot::Selector::new();
+unsafe fn screenshot_ui(show: bool) {
+    let sel = SCREENSHOT.selection();
+    let (status, _) = pdx_call(SLOT_DISPLAY, sex_pdx::screenshot::OP_SCREENSHOT_UI, sel.wire(), show as u64, 0);
+    sex_pdx::serial_record!("[shell.screenshot.ui] show={} x={} y={} w={} h={} status={:#x}", show as u8, sel.x, sel.y, sel.w, sel.h, status);
+}
+unsafe fn screenshot_open() {
+    if OVERVIEW.is_open() { overview_close(false); }
+    if SWITCHER.is_open() { switcher_end(true); }
+    if COMMAND_PALETTE_OPEN { toggle_command_palette(); }
+    SCREENSHOT.open();
+    screenshot_ui(true);
+}
+unsafe fn screenshot_take(region: sex_pdx::screenshot::Rect) {
+    let (status, _) = pdx_call(spindle_route_slot(), sex_pdx::screenshot::OP_SCREENSHOT_TAKE, region.wire(), 0, 0);
+    sex_pdx::serial_record!("[shell.screenshot.take] x={} y={} w={} h={} full={} status={:#x}", region.x, region.y, region.w, region.h, region.is_full() as u8, status);
+    if status != 0 {
+        notify_panel(b"Screenshot needs the terminal: open it with Scroll Lock");
+        NOTIFY_NOTICE_UNTIL = sex_pdx::get_ticks() + NOTIFY_SHOW_TICKS;
+    }
+}
+unsafe fn screenshot_finish(pick: sex_pdx::screenshot::Pick) {
+    use sex_pdx::screenshot::{Pick, Rect};
+    // Hide the selection first so Display paints the capture without it.
+    screenshot_ui(false);
+    let region = match pick {
+        Pick::Cancel => { sex_pdx::serial_record!("[shell.screenshot.cancel]"); return; }
+        Pick::Full => Rect::FULL,
+        Pick::Region(r) => r,
+        Pick::WindowAt(x, y) => match hit_test_at(x, y) {
+            HitTarget::Surface(sid) => match get_surface_bounds(sid) {
+                Some((wx, wy, ww, wh)) => {
+                    let r = Rect::span(wx, wy, wx + ww as i32, wy + wh as i32);
+                    sex_pdx::serial_record!("[shell.screenshot.window] sid={} x={} y={} w={} h={}", sid, r.x, r.y, r.w, r.h);
+                    r
+                }
+                None => Rect::FULL,
+            },
+            _ => Rect::FULL,
+        },
+    };
+    screenshot_take(region);
+}
+/// Print and the keys of an open selection; modifiers pass so their state stays true.
+unsafe fn screenshot_key(code: u8, value: u64) -> bool {
+    use sex_pdx::screenshot::KEY_PRINT;
+    if SCREENSHOT.is_open() {
+        if matches!(code, 0x1D | 0x2A | 0x36 | 0x38 | 0x5B | 0x5C | 0x61 | 0x64) { return false; }
+        if value != 1 { return true; }
+        match code {
+            0x01 => { if let Some(p) = SCREENSHOT.key(false) { screenshot_finish(p); } }
+            0x1C | KEY_PRINT => { if let Some(p) = SCREENSHOT.key(true) { screenshot_finish(p); } }
+            _ => {}
+        }
+        return true;
+    }
+    if code != KEY_PRINT { return false; }
+    if value == 1 {
+        if APP_MODIFIERS.key(0).shift { screenshot_take(sex_pdx::screenshot::Rect::FULL); } else { screenshot_open(); }
+    }
+    true
+}
+/// A button while the selection shows: true when the selection took it.
+unsafe fn screenshot_button(button: u8, pressed: bool) -> bool {
+    if !SCREENSHOT.is_open() { return false; }
+    if button == 1 {
+        if pressed { SCREENSHOT.press(POINTER_X, POINTER_Y); screenshot_ui(true); }
+        else if let Some(p) = SCREENSHOT.release(POINTER_X, POINTER_Y) { screenshot_finish(p); }
+    } else if pressed && button == 3 {
+        if let Some(p) = SCREENSHOT.key(false) { screenshot_finish(p); }
+    }
+    true
 }
 unsafe fn switcher_step(dir: i8) {
     if OVERVIEW.is_open() { overview_close(false); }
@@ -11450,7 +11529,7 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
         }
         sex_pdx::serial_record!("[silk-shell.pointer.recv] class=EV_BTN btn={} pressed={}",
             button, pressed);
-        if !ATLAS_MODE_ENABLED && (ABS_SEEN_VALID || POINTER_USB_STATE_INIT) { program_pointer_button(button, pressed); }
+        if screenshot_button(button, pressed) {} else if !ATLAS_MODE_ENABLED && (ABS_SEEN_VALID || POINTER_USB_STATE_INIT) { program_pointer_button(button, pressed); }
         if button == 1 {
             serial_println!(
                 "[usb.hid.pointer.click.recv] left=1 value={} ok=1",
@@ -24118,6 +24197,7 @@ fn hit_target_label(target: HitTarget, silkbar_handled: bool) -> (&'static str, 
 unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTarget, bool) {
     // The overview takes every click while it is open.
     if OVERVIEW.is_open() { overview_click(px, py); return (HitTarget::None, true); }
+    if SCREENSHOT.is_open() { return (HitTarget::None, true); }
     let old_focus = FOCUSED_SURFACE_ID;
     serial_println!("[shell.click_focus.down] x={} y={} buttons={:#x}", px, py, buttons_val);
     // ── Atlas intercept: if Atlas mode is enabled, hit-test scene cards ──
@@ -27865,7 +27945,7 @@ pub extern "C" fn _start() -> ! {
                             // ── Click/focus proof marker: pointer event received ──
                             sex_pdx::serial_record!("[silk-shell.pointer.recv] class=EV_BTN btn={} pressed={}",
                                 button, pressed);
-                            if !ATLAS_MODE_ENABLED && (ABS_SEEN_VALID || POINTER_USB_STATE_INIT) { program_pointer_button(button, pressed); }
+                            if screenshot_button(button, pressed) {} else if !ATLAS_MODE_ENABLED && (ABS_SEEN_VALID || POINTER_USB_STATE_INIT) { program_pointer_button(button, pressed); }
                             serial_println!("[silk-shell] Pointer BTN {} {} buttons={:#x}",
                                 button, if pressed { "dn" } else { "up" }, POINTER_BUTTONS);
 
