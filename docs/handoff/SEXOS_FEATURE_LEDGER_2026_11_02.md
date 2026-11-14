@@ -4190,6 +4190,9 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
 - Kernel: a task whose time ran out (`Scheduler::tick_sliced`, timer/preempt path) keeps its interactive class for `SLICED_KEEP`=4 turns, then waits behind the normal queue once (the counter resets whenever a normal task runs); a task that yields still drops to the normal queue. No preempt IPI for a re-queued sliced task. An unbounded first version (16:1) starved Bell/pager/Browser at boot in CI. Bell's boot paging probe now defers up to 128 messages (was 32).
 - scripts/latency_gate.py (TCG, 2 cores, 4 spinners): loaded p99 1518 ms -> 103 ms (idle p99 91 ms); repaints under load 1100-1600 -> ~270 ticks. Default --max-p99-ms lowered 2000 -> 400.
 
+## G-2: Shared sealed ISO artifact and sharded boot gates in CI (2026-11-14)
+- `.github/workflows/ci.yml`: build the default `sexos-v1.0.0.iso` (plus ELF boundary checks and `web-jit`) once in `iso` and reuse the artifact across `boot` (2 parallel shards), `devices`, `programs`, `editor`, `media` and `js-jit`, removing 6 duplicate OS builds and cutting wall-clock CI time from ~58 min to ~22 min while keeping the required `build` check and custom `profiles`/`recording` builds intact.
+
 ## J2: soak with fault injection (2026-11-14)
 - scripts/soak_gate.py (existing workload: files, downloads, Browser, Jot, Fortune, background records) now also: reads free program memory from Monitor each round (`[monitor.sample] ... free_pages=`) and fails on a fall of more than --leak-pages below the first rounds; times a key (--max-key-ms); reads back every note saved so far; with --inject (SEXOS_CRASH_PROBE=1 ISO) stops Files, Network, Bell, Input, Shell, Display in turn each round. soak.json rewritten every round.
 - Kernel: a service gives up after 8 restarts only if each came within 60 s of the last (CRASH_LOOP_TICKS); before, 8 restarts over any uptime left it down for good.
