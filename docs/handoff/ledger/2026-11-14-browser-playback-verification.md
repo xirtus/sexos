@@ -92,7 +92,10 @@ Each output directory must be fresh. The webmail step remains a local fixture,
 explicitly separate from the four real sites. Live network runs alone do not
 control resource bytes or cache state and must not be reported as JIT speedups.
 
-## Local results after preparation
+## Initial local results after preparation
+
+Historical baseline below; subsequent fixes and current measurements are in
+`2026-11-14-browser-compat-jit3.md`. The x17 acceptance above remains pending.
 
 The native pointer gate passed with a real decorative `pointer-events: none`
 overlay over its canvas, including click, context menu, wheel and navigation.

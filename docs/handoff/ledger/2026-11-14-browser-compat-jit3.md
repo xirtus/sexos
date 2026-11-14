@@ -58,8 +58,16 @@ Guest SHA256: f12de79556fbcac8d9d14e2c00f8a55e2211f074606c65f03f92ebacf5132241
 - Screenshots exposed a further Wikipedia failure: root height 114 despite article
   boxes extending beyond 21,000 px. Visible descendant overflow must contribute to
   document scroll height; fixed subtrees and clipping boundaries must not.
-  The generic extent fix passes all 55 sex-html integration tests. Native physical
-  scroll/visible article verification is in progress; the earlier text-find pass
-  alone does not qualify Wikipedia as readable.
+  The generic extent fix passes all 55 sex-html integration tests. Native off/on
+  runs report height 22,112 and accept real Page Down input; inspected screenshots
+  show article paragraphs and links. The earlier text-find pass alone did not
+  establish this. Both runs also complete the separate local webmail workflow.
+- Corrected-build Wikipedia measurement, same binary/ISO and 31 Page Down inputs:
+  interpreter 11.705 s, JIT 12.018 s cumulative VM time. JIT compiled 2 functions
+  and executed 154 times (captured helpers 0). This single live pair is slower;
+  asynchronous workload variation is visible in execution counts across runs.
+  No acceleration claim. Inputs, results, serial and screenshots are sealed in
+  target/browser-evidence/wiki-scroll-measurements.json. The earlier table above
+  describes the prior no-scroll revision, not this workload.
 - CI, including the aggregate build and safety gates, must pass on the exact head
   before merge. Visible YouTube playback remains reserved for x17.
