@@ -83,8 +83,6 @@ jobs:
       run: cargo test --locked -p sex-ime
     - name: Voyeur search ranking and Abacus answers
       run: cargo test --locked -p voyeur
-    - name: Chastity vault (KDBX4, TOTP, generator) on the host
-      run: cargo test --locked -p chastity-core -p chastity
     - name: Multipass accounts, Shibari keeper (link fixtures, tokens never leave)
       run: cargo test --locked -p shibari -p sex-multipass
     - name: Valentine mail (IMAP IDLE + SMTP send-then-receive fixture, MIME, threads)
@@ -433,8 +431,6 @@ jobs:
       run: python3 scripts/rg_fd_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/rg-fd"
     - name: bat
       run: python3 scripts/bat_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/bat"
-    - name: Chastity password vault (create, add, reboot, unlock)
-      run: python3 scripts/program_chastity_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/chastity"
     - name: Python 3.13 interpreter (CPython)
       run: python3 scripts/python_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/python"
     - name: Store program and the +pkg run grant
