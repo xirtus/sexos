@@ -2659,6 +2659,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "needle"
+version = "0.1.0"
+dependencies = [
+ "sex-font",
+ "sex-image",
+ "sex-print",
+ "sex-std",
+]
+
+[[package]]
 name = "nix"
 version = "0.30.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4084,6 +4094,10 @@ dependencies = [
  "ed25519-compact",
  "sha2 0.10.9",
 ]
+
+[[package]]
+name = "sex-print"
+version = "0.1.0"
 
 [[package]]
 name = "sex-rfb"
