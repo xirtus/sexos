@@ -845,27 +845,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "corset"
-version = "0.1.0"
-dependencies = [
- "corset-core",
- "sex-app",
- "sex-crypt",
- "sex-pdx",
- "sha2 0.10.9",
-]
-
-[[package]]
-name = "corset-core"
-version = "0.1.0"
-dependencies = [
- "sex-crypt",
- "sex-disk",
- "sex-volumes",
- "sexfs",
-]
-
-[[package]]
 name = "cpp"
 version = "0.1.0"
 dependencies = [

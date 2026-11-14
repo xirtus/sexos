@@ -120,7 +120,6 @@ members = [
     "crates/loom-core",
     "crates/loom-remote",
     "crates/aftercare-core",
-    "crates/corset-core",
     "apps/corset",
 ]
 [workspace.package]
