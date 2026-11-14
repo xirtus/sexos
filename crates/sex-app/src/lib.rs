@@ -138,6 +138,9 @@ impl Window {
         // Autofill protocol packets belong to its explicit SDK consumer, never
         // to toolkit key handling. Preserve them without formatting arguments.
         if m.caller_pd==SHELL && m.caller_task==SHELL && sex_pdx::autofill::response(m.type_id) {mailbox::put(*m);return None;}
+        // Launch receipts belong to their explicit supervisor, not UI dispatch.
+        // is_shell excludes these from the UI mailbox scan, so they are stashed once.
+        if launch::is_event(m) { mailbox::put(*m); return None; }
         // Another task's answer, taken while this one waited: it looks in the mailbox.
         if is_answer(m) { mailbox::put(*m); return None; }
         if m.caller_pd != SHELL { return None; }
@@ -266,7 +269,7 @@ pub mod launch {
     pub use l::Event;
     use sex_pdx::program_store as store;
 
-    pub(crate) fn is_event(m: &sex_pdx::PdxMessage) -> bool { m.caller_pd == SHELL && m.type_id == l::OP_EVENT }
+    pub(crate) fn is_event(m: &sex_pdx::PdxMessage) -> bool { m.caller_pd == SHELL && m.caller_task == SHELL && m.type_id == l::OP_EVENT }
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub enum Error {
         /// Files refused: no such program, or a grant this run does not hold (a `files` code).
