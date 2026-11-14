@@ -61,6 +61,7 @@ pub const COMMANDS: &[&[u8]] = &[
     b"history-status",
     b"input",
     b"install",
+    b"kaleidoscope",
     b"keys",
     b"launch",
     b"launch-outcomes",

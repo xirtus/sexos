@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Web pages in a program: `run web` parses, styles and lays out its welcome page with
+"""Web pages in a program: `run kaleidoscope` parses, styles and lays out its welcome page with
 sex-html and draws it with Geist (sex-web) into its pixel surface. The screen must match
 the same page rendered on the host by `cargo run -p sex-web --example page`, pixel for
 pixel, before and after scrolling with Down and after Right focuses a link."""
@@ -13,7 +13,7 @@ from quil_autosave_gate import boot
 ROOT=Path(__file__).resolve().parents[1]
 W,H=410,330
 PAGE=ROOT/'apps/web/src/welcome.html'
-BAR_TEXT='Welcome to Web — about:welcome'
+BAR_TEXT='Welcome to Kaleidoscope — about:welcome'
 def reference(out,scroll,focus):
  path=out/f'reference-{scroll}-{focus}.ppm'
  subprocess.run(['cargo','run','-q','-p','sex-web','--example','page','--',str(PAGE),str(path),str(W),str(H),str(scroll),str(focus),BAR_TEXT],cwd=ROOT,check=True)
@@ -22,8 +22,8 @@ def main():
  global W,H
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
- elf=(ROOT/'iso_root/programs/web').read_bytes();assert elf[:4]==b'\x7fELF'
- install(disk,[('web',elf)])
+ elf=(ROOT/'iso_root/programs/kaleidoscope').read_bytes();assert elf[:4]==b'\x7fELF'
+ install(disk,[('kaleidoscope',elf)])
  g=boot(a.iso,disk,a.out,'web',a.resolution);t=g['text'];q=g['q']
  def run(line):
   g['focus'](153);time.sleep(.5)
@@ -47,7 +47,7 @@ def main():
   return int(m[1]),int(m[2]),int(m[4])
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120)
-  s=len(t());run('run web')
+  s=len(t());run('run kaleidoscope')
   m=g['wait'](r'\[web.ready\] target=(\d+) task=(\d+)',s,240);target,task=m[1],m[2]
   loaded=g['wait'](r'\[web.loaded\] .*items=(\d+) links=(\d+) height=(\d+).*layout_ticks=(\d+)',s,60)
   launch=g['wait'](rf'\[shell.program.launch\] target={target} task={task} surface=(\d+)',s,60);surface=int(launch[1])

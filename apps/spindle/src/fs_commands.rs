@@ -195,6 +195,7 @@ impl Client {
         if args.len() > w::ARGS_MAX { sb.push(b"Arguments too long."); return; }
         let mut path = [0u8; w::PATH_BYTES];
         let mut named = [0u8; 64];
+        let target = renamed(target);
         self.bare_len = 0;
         if !target.contains(&b'/') && target.len() <= self.bare.len() { self.bare[..target.len()].copy_from_slice(target); self.bare_len = target.len(); }
         let target = if target.contains(&b'/') { target } else {
@@ -420,4 +421,14 @@ impl Client {
         self.cmd = None;
         true
     }
+}
+
+/// Programs renamed to the SexOS themes (docs/DESIGN_GUARDRAILS.md section 6): the old
+/// bare name still runs the program under its new name, for a while.
+pub const RENAMED: &[(&[u8], &[u8])] = &[
+    (b"web", b"kaleidoscope"),
+];
+/// The program a bare name means now; a path or a current name is kept as given.
+pub fn renamed(target: &[u8]) -> &[u8] {
+    RENAMED.iter().find(|(old, _)| *old == target).map_or(target, |(_, new)| *new)
 }
