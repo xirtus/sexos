@@ -108,6 +108,7 @@ members = [
     "apps/sdltest",
     "apps/driftspark",
     "crates/gaze-codecs",
+    "crates/sex-codecs",
     "crates/vellum-edit",
     "crates/loom-core",
     "crates/aftercare-core",
