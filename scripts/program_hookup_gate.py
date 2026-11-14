@@ -92,7 +92,7 @@ def main():
   assert phone['paired'] and phone['taken'],phone
   assert phone['media']['action']=='PlayPause' and phone['media']['player']=='Radio',phone['media']
   name,data=phone['file'];assert name=='note.txt' and data==NOTE,(name,len(data))
-  assert 'kdeconnect.share.request' in phone['hook']['incoming'],phone['hook']
+  assert 'kdeconnect.share.request' in phone['hook']['incomingCapabilities'],phone['hook']
   close(target,task,sid)
   # Trusted is kept in Hookup's folder: the next run links already paired.
   target,task,sid,s,th=start(False)
