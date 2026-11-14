@@ -724,7 +724,7 @@ impl App {
                 }
                 if e.dir { self.go(window, path); }
                 else if matches!(self.question.as_ref().map(|q| q.mode), Some(Pick::Open)) { self.answer(window, Some(path)); }
-                else { self.status = format!("{}: {}. Programs open it with run NAME @{}.", shown(&e.name), human(e.size), shown(&path)); }
+                else { self.status = opens_with(&e.name, e.size, &path); }
             }
             (BACKSPACE, _) => {
                 // Never above what this run was given.
@@ -740,6 +740,19 @@ impl App {
             (F5, _) => self.load(window),
             _ => {}
         }
+    }
+}
+
+/// What Enter on a file says: the program settings chose for its kind (Default apps).
+fn opens_with(name: &[u8], size: u64, path: &[u8]) -> String {
+    let chosen = sex_config::kind_of(name).and_then(|kind| {
+        let k = sex_config::key(kind)?;
+        let v = sex_app::settings::get(kind).unwrap_or(k.default);
+        match k.kind { sex_config::Kind::Choice(names) => names.get(v as usize).copied(), _ => None }
+    });
+    match chosen {
+        Some(program) => format!("{}: {}. Opens with {}: run {} @{}", shown(name), human(size), program, program, shown(path)),
+        None => format!("{}: {}. Programs open it with run NAME @{}.", shown(name), human(size), shown(path)),
     }
 }
 

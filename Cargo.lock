@@ -1155,6 +1155,7 @@ name = "files"
 version = "0.1.0"
 dependencies = [
  "sex-app",
+ "sex-config",
  "sex-font",
  "sex-image",
  "sex-pdx",
@@ -2881,6 +2882,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "settings"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-config",
+ "sex-pdx",
+]
+
+[[package]]
 name = "sex-app"
 version = "0.1.0"
 dependencies = [
@@ -2895,6 +2905,13 @@ version = "0.1.0"
 dependencies = [
  "libm",
  "tiny-skia",
+]
+
+[[package]]
+name = "sex-config"
+version = "0.1.0"
+dependencies = [
+ "argon2",
 ]
 
 [[package]]
@@ -3080,6 +3097,7 @@ name = "sex-pdx"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "sex-config",
  "sex-net-config",
  "sex-trust-config",
  "spin",
@@ -3145,6 +3163,9 @@ dependencies = [
 [[package]]
 name = "sex-time"
 version = "0.1.0"
+dependencies = [
+ "sex-config",
+]
 
 [[package]]
 name = "sex-tls"
@@ -3272,6 +3293,7 @@ dependencies = [
 name = "sexfiles"
 version = "0.1.0"
 dependencies = [
+ "sex-config",
  "sex-crypt",
  "sex-disk",
  "sex-object-model",
@@ -3411,6 +3433,7 @@ dependencies = [
 name = "silk-shell"
 version = "0.1.0"
 dependencies = [
+ "sex-config",
  "sex-ime",
  "sex-keymap",
  "sex-pdx",

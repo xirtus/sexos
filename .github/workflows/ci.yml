@@ -55,6 +55,8 @@ jobs:
       run: bash scripts/desktop_capture_host_gate.sh
     - name: HTML containing-block and replaced sizing
       run: cargo test --locked -p sex-html
+    - name: Settings schema, file format, protocol and the Settings program's pages
+      run: bash scripts/settings_host_gate.sh
     - name: Signed package format and store catalog
       run: cargo test --locked -p sex-pkg
     - name: Disk layouts (GPT, FAT, install beside other systems)
@@ -206,6 +208,10 @@ jobs:
       run: |
         truncate -s 1G "$RUNNER_TEMP/capture-source.img"
         python3 scripts/desktop_capture_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/capture-source.img" --out "$RUNNER_TEMP/sexos-runtime/capture"
+    - name: Settings last across a restart
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/settings-source.img"
+        python3 scripts/settings_persist_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/settings-source.img" --out "$RUNNER_TEMP/sexos-runtime/settings"
     - name: Alt+Tab window switcher with live thumbnails
       run: |
         truncate -s 256M "$RUNNER_TEMP/switcher-source.img"
@@ -265,6 +271,10 @@ jobs:
       run: python3 scripts/power_acpi_gate.py --iso sexos-v1.0.0.iso --out "$RUNNER_TEMP/sexos-power"
     - name: Discrete GPU powered off through ACPI
       run: python3 scripts/dgpu_power_gate.py --iso sexos-v1.0.0.iso --out "$RUNNER_TEMP/sexos-dgpu"
+    - name: Lock screen, password and idle dim
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/lock-source.img"
+        python3 scripts/lock_screen_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/lock-source.img" --out "$RUNNER_TEMP/sexos-lock"
     - name: Display drives a virtio-gpu (EDID, takeover, tear-free flips)
       run: python3 scripts/virtio_gpu_gate.py --iso sexos-v1.0.0.iso --out "$RUNNER_TEMP/sexos-virtio-gpu"
     - name: Reboot persistence and rendering
@@ -287,6 +297,7 @@ jobs:
           ${{ runner.temp }}/sexos-raid
           ${{ runner.temp }}/sexos-power
           ${{ runner.temp }}/sexos-dgpu
+          ${{ runner.temp }}/sexos-lock
           ${{ runner.temp }}/sexos-persistence
           ${{ runner.temp }}/sexos-fuzz
         if-no-files-found: ignore

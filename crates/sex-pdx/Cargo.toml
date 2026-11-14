@@ -6,6 +6,7 @@ license = "GPL-2.0-or-later OR MIT"
 
 [dependencies]
 sex-net-config = { path = "../sex-net-config" }
+sex-config = { path = "../sex-config" }
 sex-trust-config = { path = "../sex-trust-config" }
 serde = { version = "1.0.228", optional = true, default-features = false, features = ["derive", "alloc"] }
 x86_64 = "0.15.4"
