@@ -59,7 +59,7 @@ def main():
    while True:
     frame=g['wait'](r'\[egui.frame\] n=\d+ w=(\d+) h=(\d+) meshes=(\d+) triangles=(\d+) pixels=(\d+) ms=(\d+)',cursor,max(1,deadline-time.monotonic()))
     cursor+=frame.end()
-    if int(frame[1])>=320 and int(frame[2])>=250:break
+    if int(frame[1])==tile[2]-16 and int(frame[2])==tile[3]-42:break
     assert time.monotonic()<deadline,'probe never painted a usable viewport'
    assert tile[0]>=0 and tile[1]>=0 and tile[0]+tile[2]<=rw and tile[1]+tile[3]<=rh,tile
   return target,task,surface,tile,frame
@@ -72,7 +72,7 @@ def main():
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120)
   target,task,surface,tile,frame=start('probe')
-  ox,oy=tile[0]+8,tile[1]+36
+  side=(tile[2]-int(frame[1]))//2;ox,oy=tile[0]+side,tile[1]+tile[3]-int(frame[2])-side
   s=len(t());click(ox+60,oy+24);g['wait'](r'\[tassel.clicked\] count=1\n',s,60)
   s=len(t());click(ox+60,oy+24);g['wait'](r'\[tassel.clicked\] count=2\n',s,60)
   s=len(t());click(ox+110,oy+64);time.sleep(.5)

@@ -112,15 +112,7 @@ mod guest {
         studio.refresh(&mut app.ui);
         Ok(())
     }
-    extern "C" fn main() -> ! {
-        let mut app = App::open("Moan", Theme::dark(), Strings::new("en"));
-        let mut studio = Studio::build(&mut app.ui);
-        app.present();
-        sex_pdx::serial_record!(
-            "[moan.ready] target={} task={}",
-            app.window.target,
-            app.window.task
-        );
+    fn report(app: &App, studio: &Studio) {
         for (id, name) in &studio.buttons {
             let p = app.ui.rect(*id).center();
             sex_pdx::serial_record!(
@@ -143,6 +135,20 @@ mod guest {
                 p.y as i32
             );
         }
+        let (w, h) = app.ui.size();
+        sex_pdx::serial_record!("[moan.layout] w={} h={}", w, h);
+    }
+    extern "C" fn main() -> ! {
+        let mut app = App::open("Moan", Theme::dark(), Strings::new("en"));
+        let mut studio = Studio::build(&mut app.ui);
+        app.present();
+        sex_pdx::serial_record!(
+            "[moan.ready] target={} task={}",
+            app.window.target,
+            app.window.task
+        );
+        report(&app, &studio);
+        let mut reported_size = app.ui.size();
         let mut sound = Sound::open();
         let mut playing = false;
         let mut paused = false;
@@ -171,6 +177,11 @@ mod guest {
             } else {
                 app.next()
             };
+            if app.ui.size() != reported_size {
+                app.present();
+                report(&app, &studio);
+                reported_size = app.ui.size();
+            }
             for r in responses {
                 studio.set_busy(&mut app.ui, playing || paused || recording.is_some());
                 if r == Response::Close {
