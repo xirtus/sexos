@@ -5,7 +5,7 @@ from pathlib import Path
 from PIL import Image
 ROOT=Path(__file__).resolve().parents[1]
 img=Image.new('RGB',(300,200),(200,80,40));b=io.BytesIO();img.save(b,'PNG')
-FILES={'/view':(ROOT/'iso_root/programs/view').read_bytes(),'/pic.png':b.getvalue()}
+FILES={'/view':(ROOT/'iso_root/programs/gaze').read_bytes(),'/pic.png':b.getvalue()}
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):
   body=FILES.get(self.path)

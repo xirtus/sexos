@@ -7,7 +7,7 @@ import argparse,http.server,os,re,shutil,threading,time
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 NOTE=b'Dropped from Files into Jot.\n'
-FILES={'/files':(ROOT/'iso_root/programs/files').read_bytes(),'/jot':(ROOT/'iso_root/programs/jot').read_bytes(),'/note.txt':NOTE}
+FILES={'/files':(ROOT/'iso_root/programs/loom').read_bytes(),'/jot':(ROOT/'iso_root/programs/jot').read_bytes(),'/note.txt':NOTE}
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):
   body=FILES.get(self.path)
