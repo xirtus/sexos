@@ -199,7 +199,7 @@ class ClipboardWorkflow(unittest.TestCase):
    nonlocal stream,calls
    calls+=1;self.assertEqual(start,len(stream));self.assertEqual(actions,[('alt','tab')]);self.assertEqual(order[-1][0],'hardware')
    event=order[-1][2]['events'];self.assertEqual([(e['data']['key']['data'],e['data']['down'])for e in event],[('alt',True),('tab',True),('tab',False),('alt',False)])
-   stream+='[shell.focus.set] id=201\n[shell.app.switch] old=300 new=201 live=1 shortcut=alt_tab\n';order.append(('focus_barrier',));return 'actual focus'
+   stream+='[input.keyboard.keydown.ok] code=15 source=ps2\n[shell.focus.set] id=201\n[shell.app.switch] old=300 new=201 live=1 shortcut=alt_tab\n[input.keyboard.keyup.ok] code=15 source=ps2\n';order.append(('focus_barrier',));return 'actual focus'
   def key(code,pattern):return gate.qualified_key(q,code,pattern,text,wait,actions.append)
   gate.focus_surface(201,text,key)
   self.assertEqual(calls,1);self.assertEqual(actions,[('alt','tab')]);self.assertEqual([row[0]for row in order],['hardware','focus_barrier'])
