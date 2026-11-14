@@ -2026,6 +2026,12 @@ fn write_access_view(fb:*mut u32,w:usize,h:usize,pitch:usize,pixels:&[u32],night
     let view=av::view(zoom,w,h,px,py);
     let filter=av::filter();
     let rows=if zoom!=av::ZOOM_ONE{0..h}else{rows};
+    if previous.is_none(){unsafe{
+        // Receipt for gates: the view each whole-frame write used.
+        static mut VIEW_LOG_BUDGET:u32=256;
+        if VIEW_LOG_BUDGET>0{VIEW_LOG_BUDGET-=1;
+            sex_pdx::serial_record!("[display.access.view] zoom={} filter={} px={} py={} ox={} oy={} step={}",zoom,filter as u8,px,py,view.origin_x,view.origin_y,view.step);}
+    }}
     // Display's stack is 64 KiB: the row buffer lives in .bss.
     static mut ACCESS_LINE:[u32;MAX_FB_W]=[0;MAX_FB_W];
     let line=unsafe{&mut (&mut *core::ptr::addr_of_mut!(ACCESS_LINE))[..w]};

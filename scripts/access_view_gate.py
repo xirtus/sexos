@@ -97,14 +97,21 @@ def main():
         wait(r'\[shell.access\] change=View \{ zoom: 8, filter: 0 \}', start)
         wait(r'\[display.access\] zoom=8 filter=0', start)
         zoomed = shot('01-magnifier-2x')
+        # Display's receipt names the pointer it centred on; the screen must
+        # be the frame seen through that view.
+        views = re.findall(r'\[display.access.view\] zoom=8 filter=0 px=(\d+) py=(\d+) ', text()[start:])
+        if not views: raise RuntimeError('no magnifier view receipt')
+        px0, py0 = map(int, views[-1])
+        if abs(px0 - pointer[0]) > 2 or abs(py0 - pointer[1]) > 2: print(f'note: Display pointer {px0},{py0} vs QMP {pointer}')
         # Samples away from the arrow (which is drawn into the frame and so is
         # magnified too): output (x, y) shows source ((p + x) / 2, (p + y) / 2).
-        px0, py0 = pointer
         samples = [(x, y) for y in range(60, H - 4, 23) for x in range(4, W - 4, 29)
                    if not (px0 - 8 <= x <= px0 + 48 and py0 - 8 <= y <= py0 + 72)]
         match = sum(px(zoomed, x, y) == px(before, (px0 + x) // 2, (py0 + y) // 2) for x, y in samples)
         changed = sum(px(zoomed, x, y) != px(before, x, y) for x, y in samples)
-        if match < len(samples) * 0.9: raise RuntimeError(f'2x view does not match the frame: {match}/{len(samples)}')
+        if match < len(samples) * 0.9:
+            for x, y in samples[::100]: print('sample', (x, y), px(zoomed, x, y), 'want', px(before, (px0 + x) // 2, (py0 + y) // 2), 'plain', px(before, x, y))
+            raise RuntimeError(f'2x view does not match the frame: {match}/{len(samples)}')
         if changed < len(samples) * 0.05: raise RuntimeError(f'magnifier did not change the screen: {changed}/{len(samples)}')
 
         start = len(text()); chord('8')
