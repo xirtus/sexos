@@ -111,6 +111,8 @@ mod shim {
                 e.x = width as i32;
                 e.y = height as i32;
             }
+            // SDL games take no drops.
+            Event::Drop { .. } | Event::DragEnded { .. } => return 0,
         }
         unsafe { out.write(e) };
         1
