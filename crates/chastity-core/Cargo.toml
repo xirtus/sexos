@@ -1,0 +1,17 @@
+[package]
+name = "chastity-core"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+
+[dependencies]
+argon2 = { version = "=0.5.3", default-features = false, features = ["alloc", "zeroize"] }
+chacha20poly1305 = { version = "=0.10.1", default-features = false, features = ["alloc"] }
+zeroize = { version = "=1.9.1", default-features = false, features = ["alloc"] }
+sha2 = { version = "=0.10.9", default-features = false }
+hmac = { version = "=0.12.1", default-features = false }
+aes = { version = "=0.8.4", default-features = false, features = ["zeroize"] }
+chacha20 = { version = "=0.9.1", default-features = false, features = ["zeroize"] }
+base64 = { version = "=0.22.1", default-features = false, features = ["alloc"] }
+roxmltree = { version = "=0.21.2", default-features = false, features = ["positions"] }
+miniz_oxide = { version = "=0.8.9", default-features = false, features = ["with-alloc"] }

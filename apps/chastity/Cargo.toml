@@ -1,0 +1,17 @@
+[package]
+name = "chastity"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+
+[features]
+default = ["sexos"]
+sexos = ["dep:sex-pdx", "dep:sex-app", "weft/sexos"]
+
+[dependencies]
+shibari = { path = "../../crates/shibari" }
+chastity-core = { path = "../../crates/chastity-core" }
+weft = { path = "../../crates/weft" }
+zeroize = { version = "=1.9.1", default-features = false, features = ["alloc"] }
+sex-pdx = { path = "../../crates/sex-pdx", optional = true }
+sex-app = { path = "../../crates/sex-app", optional = true }
