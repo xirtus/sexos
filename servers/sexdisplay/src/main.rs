@@ -177,6 +177,7 @@ impl SceneLease {
             let frame = RENDER_FRAME_COUNTER.load(core::sync::atomic::Ordering::Relaxed);
             if !destination.capture(&SURFACES, &FRAME_GROUPS, &BITMAP_STORES, &TEXT_STAGES, bar,
                 DISPLAY_TOKENS, FOCUSED_SURFACE_ID, frame, w, h) { return None; }
+            motion_place(destination);
         }
         Some(Self { _single_task: core::marker::PhantomData })
     }
@@ -190,6 +191,22 @@ impl Drop for SceneLease {
     }
 }
 static mut FOCUSED_SURFACE_ID: u64 = 0;
+/// Window animations (sex_pdx::window_motion): opens, tiling moves, workspace slides.
+static mut MOTION: sex_pdx::window_motion::Motion<32> = sex_pdx::window_motion::Motion::new();
+/// Draws moving windows at their tweened geometry in this frame's scene.
+fn motion_place(scene: &mut scene::SceneSnapshot) {
+    let now = sex_pdx::get_ticks();
+    let motion = unsafe { &*core::ptr::addr_of!(MOTION) };
+    if motion.active(now) {
+        scene.place(|s| motion.current(s.surface_id, now).map(|g| (g.x, g.y, g.w, g.h)));
+    }
+}
+/// Windows animate; their content, the cursor and the Shell's panels follow or stay.
+fn animates(s: &surface_lifecycle::Surface) -> bool {
+    let groups = unsafe { &*core::ptr::addr_of!(FRAME_GROUPS) };
+    s.active && s.surface_id != CURSOR_SURFACE_ID
+        && (groups.is_frame(s) || (groups.independent(s) && app_catalog::by_surface(s.owner_pd, s.surface_id).is_some()))
+}
 static mut APP_PRESENT_BITS: u64 = 0;
 static APP300_PRESENTED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
@@ -4421,6 +4438,16 @@ pub extern "C" fn _start() -> ! {
                         }
                     }
                 }
+                sex_pdx::window_motion::OP_MOTION => {
+                    // Only the Shell turns animations on or off and hints a workspace slide.
+                    if msg.caller_pd == 3 {
+                        let motion = unsafe { &mut *core::ptr::addr_of_mut!(MOTION) };
+                        motion.set_enabled(msg.arg0 != 0);
+                        let dir = msg.arg1 as u8 as i8;
+                        if dir != 0 { motion.workspace(dir, unsafe { FB_W } as u32 / 8, sex_pdx::get_ticks()); }
+                        sex_pdx::serial_record!("[display.motion] on={} dir={}", motion.enabled() as u8, dir);
+                    }
+                }
                 sex_pdx::tray::OP_TRAY => {
                     // Only the Shell reports tray state and opens its menus.
                     if msg.caller_pd == 3 {
@@ -4818,6 +4845,25 @@ pub extern "C" fn _start() -> ! {
                             let after = SURFACES.iter().find(|s|s.active && s.surface_id==surface_id)
                                 .map(|s|(s.x,s.y,s.w,s.h,s.color));
                             if before==after { REPAINT_FITTED_NOOPS+=1; }
+                            // Opens rise in and tiling moves glide; small steps (a
+                            // resize drag) follow the pointer at once.
+                            if let Some(s) = SURFACES.iter().find(|s| s.active && s.surface_id == surface_id).filter(|s| animates(s)) {
+                                use sex_pdx::window_motion::Geom;
+                                let to = Geom { x: s.x, y: s.y, w: s.w, h: s.h };
+                                let motion = &mut *core::ptr::addr_of_mut!(MOTION);
+                                let now = sex_pdx::get_ticks();
+                                match before {
+                                    None => motion.opened(surface_id, to, now),
+                                    Some((bx, by, bw, bh, _)) => {
+                                        let far = (bx - to.x).abs() > 24 || (by - to.y).abs() > 24 || bw.abs_diff(to.w) > 24 || bh.abs_diff(to.h) > 24;
+                                        if far { motion.moved(surface_id, Geom { x: bx, y: by, w: bw, h: bh }, to, now); } else { motion.forget(surface_id); }
+                                    }
+                                }
+                                if motion.current(surface_id, now).is_some() {
+                                    static mut MOTION_START_BUDGET: u32 = 32;
+                                    if MOTION_START_BUDGET > 0 { MOTION_START_BUDGET -= 1; sex_pdx::serial_record!("[display.motion.start] surface={} kind={} x={} y={} w={} h={} tick={}", surface_id, if before.is_none() { "open" } else { "move" }, to.x, to.y, to.w, to.h, now); }
+                                }
+                            }
                             for child in SURFACES.iter_mut().filter(|s| s.active) { recompute_text_lines(child); }
                             if let Some(surface) = SURFACES.iter_mut().find(|s| s.active && s.surface_id == surface_id) {
                                 recompute_text_lines(surface);
@@ -4958,6 +5004,7 @@ pub extern "C" fn _start() -> ! {
                     let target_id = msg.arg0;
                     if target_id == 0 { continue; }
                     unsafe {
+                        (*core::ptr::addr_of_mut!(MOTION)).forget(target_id);
                         let mut found = false;
                         for (index,slot) in SURFACES.iter_mut().enumerate() {
                             if slot.active && slot.surface_id == target_id {
@@ -5319,6 +5366,23 @@ pub extern "C" fn _start() -> ! {
         let transaction_full_render=unsafe{BITMAP_STORES.needs_publication()}||lifecycle.needs_presentation()
             ||(0..surface_lifecycle::CATALOG_CAPACITY).any(|i|lifecycle.phase(i)==Some(surface_lifecycle::Phase::Prepared));
         let (w,h)=unsafe{(FB_W as usize,FB_H as usize)};
+        // A window still moving: draw the next frame of its animation.
+        let motion_now = sex_pdx::get_ticks();
+        // On the damage path: each frame redraws only where moving windows
+        // pass, and the frame after the last tween ends lands them exactly.
+        let motion = unsafe { &mut *core::ptr::addr_of_mut!(MOTION) };
+        let motion_damage = motion.span().map(|(l, t, r, b)| {
+            let pad = 16;
+            damage::Rect { x: (l - pad).max(0) as usize, y: (t - pad).max(0) as usize, right: (r + pad).max(0) as usize, bottom: (b + pad).max(0) as usize }
+        });
+        if let Some(rect) = motion_damage { pending_paint.request_damage(rect, w, h, bar_height()); }
+        if motion.active(motion_now) {
+            static mut MOTION_FRAME_BUDGET: u32 = 96;
+            unsafe { if MOTION_FRAME_BUDGET > 0 { MOTION_FRAME_BUDGET -= 1; sex_pdx::serial_record!("[display.motion.frame] tick={} progress={}", motion_now, motion.progress(motion_now).unwrap_or(1024)); } }
+        } else if motion_damage.is_some() {
+            motion.clear_finished(motion_now);
+            sex_pdx::serial_record!("[display.motion.end] tick={}", motion_now);
+        }
         if needs_full_redraw||transaction_full_render||scale_receipts.needs_publication(){pending_paint.request_full();}
         if needs_surface_redraw{pending_paint.request_area();}
         if let Some(rect)=text_damage.rect(){pending_paint.request_damage(rect,w,h,bar_height());}

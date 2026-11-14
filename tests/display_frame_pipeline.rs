@@ -137,6 +137,7 @@ fn draw_launcher_panel(fb:*mut u32,_w:usize,_h:usize,len:usize,s:&scene::SceneSn
 fn draw_window_switcher(_:*mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapshot){}
 fn draw_screenshot_ui(_:*mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapshot){}
 fn draw_tray_menu(_:*mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapshot){}
+fn motion_place(_:&mut scene::SceneSnapshot){}
 fn draw_cursor_z_top(fb:*mut u32,_w:usize,_h:usize,len:usize,save:bool,s:&scene::SceneSnapshot){observe_scene(s);assert!(save);unsafe{
  CURSORS+=1;assert_eq!(device(),BEFORE);fb.add(len-1).write(0xee);mutate_bookkeeping();}event("cursor-raster");}
 fn rect()->damage::Rect{damage::Rect{x:1,y:28,right:4,bottom:30}}

@@ -10515,6 +10515,7 @@ unsafe fn wm_action(action: wm::WmAction) -> bool {
         A::ClipboardHistory => clipboard_history_step(),
         A::Notifications => toggle_bell(),
         A::Wallpaper => desktop_look_step(1, 0),
+        A::Animations => { MOTION_ON = !MOTION_ON; motion_hint(0); let on: &[u8] = if MOTION_ON { b"Animations on" } else { b"Animations off" }; if notify_panel(on) { NOTIFY_NOTICE_UNTIL = sex_pdx::get_ticks() + NOTIFY_SHOW_TICKS; } true }
         A::NightLight => desktop_look_step(0, 1),
         A::Lock => false,
         A::KeyboardLayout => { let (label, title) = keyboard_layout::next(); keyboard_layout_notice(label, title) }
@@ -13417,10 +13418,19 @@ unsafe fn atlas_apply_scene_accent_to_chrome(scene_idx: u8) {
 
 /// Switch active scene to a specific index. Safe: clamps to WORKSPACE_COUNT-1.
 /// Calls sync_scene_visibility(), clears focus/drag/hover, re-tiles visible frames.
+/// Window animations (Super+Shift+A toggles); Display runs them.
+static mut MOTION_ON: bool = true;
+/// Tells Display whether to animate and, for a workspace switch, which side
+/// the next windows come from (-1 left, 1 right).
+unsafe fn motion_hint(dir: i8) {
+    let (status, _) = pdx_call(SLOT_DISPLAY, sex_pdx::window_motion::OP_MOTION, MOTION_ON as u64, dir as u8 as u64, 0);
+    sex_pdx::serial_record!("[shell.motion] on={} dir={} status={:#x}", MOTION_ON as u8, dir, status);
+}
 unsafe fn switch_scene(scene_idx: u8) {
     let idx = scene_idx.min(WORKSPACE_COUNT - 1);
     if idx == ACTIVE_SCENE_IDX { return; }
     let prev = ACTIVE_SCENE_IDX;
+    motion_hint(if idx > prev { 1 } else { -1 });
     // Each workspace remembers the window that had focus there.
     WM_SCENE_FOCUS[(prev as usize).min(ATLAS_MAX_SCENES - 1)] = FOCUSED_SURFACE_ID;
     ACTIVE_SCENE_IDX = idx;
@@ -24942,6 +24952,7 @@ fn handle_silkbar_click(px: i32, py: i32) -> bool {
             unsafe {
                 let prev = ACTIVE_SCENE_IDX;
                 if prev != ws_idx as u8 {
+                    motion_hint(if ws_idx as u8 > prev { 1 } else { -1 });
                     ACTIVE_SCENE_IDX = ws_idx as u8;
                     sync_scene_visibility();
                     clear_focus_if_wrong_scene();

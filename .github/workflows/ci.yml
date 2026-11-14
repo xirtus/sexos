@@ -236,6 +236,10 @@ jobs:
       run: |
         truncate -s 256M "$RUNNER_TEMP/tray-source.img"
         python3 scripts/tray_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/tray-source.img" --out "$RUNNER_TEMP/sexos-runtime/tray"
+    - name: Window animations
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/motion-source.img"
+        python3 scripts/window_motion_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/motion-source.img" --out "$RUNNER_TEMP/sexos-runtime/motion"
     - name: USB input paths
       run: GATE_DIR="$RUNNER_TEMP/sexos-usb" SKIP_BUILD=1 bash scripts/usb_path_gate.sh
     - name: Preserve runtime evidence
