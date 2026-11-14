@@ -34,6 +34,7 @@ APPROVED_TIMED_WAIT_SOURCES = {'kernel/src/program_records.rs': ('37561f94116d2c
 DEADLINE_REFERENCE_OWNERS=frozenset((
     'kernel/src/scheduler.rs','kernel/src/self_wait.rs','kernel/src/interrupts.rs',
     'kernel/src/program_workers.rs','kernel/src/program_records.rs','kernel/src/syscalls/mod.rs'))
+APPROVED_KERNEL_RUST_TREES=('91e41656109be5dd659d70a70718e0640f68372f35762c34d95a28260b807e92', 'dd69100da62b94d190510e266327094b2990443442b2a59326b4e60afd2792dc')
 DEADLINE_REFERENCE=re.compile(r'\b(?:wait_deadline|poll_self_wait_deadlines|take_due|wait_for_message_ticks|wake_record_if_due)\b|\bself_wait\s*::\s*Deadline\b')
 
 
@@ -55,8 +56,10 @@ def deadline_source_closure(root):
             if name not in DEADLINE_REFERENCE_OWNERS:raise ValueError('unreviewed kernel deadline reference owner: '+name)
             owners[name]=hashes[name]
     if set(owners)!=DEADLINE_REFERENCE_OWNERS:raise ValueError('reviewed kernel deadline reference owner missing')
-    return dict(scope='bounded textual Rust deadline writer/poller references; not a general Rust verifier',
-                files=len(hashes),bytes=total,owner_sha256=owners,kernel_rust_sha256=hashes)
+    tree=hashlib.sha256(json.dumps(hashes,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+    if tree not in APPROVED_KERNEL_RUST_TREES:raise ValueError('unreviewed kernel Rust source tree')
+    return dict(scope='reviewed complete kernel Rust tree plus bounded named-reference scan; not macro expansion or general Rust verification',
+                files=len(hashes),bytes=total,tree_sha256=tree,owner_sha256=owners,kernel_rust_sha256=hashes)
 
 
 def source_contract(root):
