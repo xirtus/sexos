@@ -69,6 +69,12 @@ class ReaderPixels(unittest.TestCase):
   self.assertTrue(verify_reader_pixels(trace,bytes(raw),READER_BODY,self.contract)['ok'])
   x=self.contract['inset']+100*self.contract['advance']*frame['scale'];y=70+self.contract['top'];at=raw.index(b'\n255\n')+5+(y*1280+x)*3;raw[at]=(raw[at]+1)%256
   self.assertFalse(verify_reader_pixels(trace,bytes(raw),READER_BODY,self.contract)['ok'])
+ def test_maximized_reader_at_actual_bar28_and_above_bar_rejection(self):
+  self.assertEqual(self.contract['bar'],28);frame=self.frame(w=1280,h=772)
+  trace=self.trace(frame,w=1280,h=772,x=0,y=28);image=self.screen(frame,x=0,y=28)
+  self.assertTrue(verify_reader_pixels(trace,image,READER_BODY,self.contract)['ok'])
+  bad=verify_reader_pixels(trace.replace('y=28','y=27'),image,READER_BODY,self.contract)
+  self.assertFalse(bad['ok']);self.assertIn('outside framebuffer',' '.join(bad['errors']))
  def test_header_host_and_footer_are_required(self):
   frame=self.frame()
   for row in [0,1,frame['rows']-1]:
