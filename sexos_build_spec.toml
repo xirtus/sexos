@@ -264,7 +264,7 @@ action = "cargo_manifest"
 target = "x86_64-sex-app.json"
 manifest = "apps/talk/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/talk"
-dest_artifact = "iso_root/programs/talk"
+dest_artifact = "iso_root/programs/flirt"
 
 [[stage]]
 id = "build_view"
@@ -304,7 +304,7 @@ action = "cargo_manifest"
 target = "x86_64-sex-app.json"
 manifest = "apps/shapes/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/shapes"
-dest_artifact = "iso_root/programs/shapes"
+dest_artifact = "iso_root/programs/gestalt"
 
 [[stage]]
 id = "build_monitor"
