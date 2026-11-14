@@ -85,7 +85,7 @@ def sshd(d):
  for k in ('host','user'):subprocess.run(['ssh-keygen','-q','-t','ed25519','-N','','-f',str(d/k)],check=True)
  (d/'authorized_keys').write_text((d/'user.pub').read_text())
  sk=socket.socket();sk.bind(('127.0.0.1',0));port=sk.getsockname()[1];sk.close()
- (d/'sshd_config').write_text(f"Port {port}\nListenAddress 127.0.0.1\nHostKey {d/'host'}\nAuthorizedKeysFile {d/'authorized_keys'}\nStrictModes no\nUsePAM no\nPermitRootLogin yes\nPasswordAuthentication no\nPidFile {d/'pid'}\nSubsystem sftp internal-sftp\n")
+ (d/'sshd_config').write_text(f"Port {port}\nListenAddress 127.0.0.1\nHostKey {d/'host'}\nAuthorizedKeysFile {d/'authorized_keys'}\nStrictModes no\nUsePAM {'no' if os.geteuid()==0 else 'yes'}\nPermitRootLogin yes\nPasswordAuthentication no\nPidFile {d/'pid'}\nSubsystem sftp internal-sftp\n")
  root=os.geteuid()==0
  if root:os.makedirs('/run/sshd',exist_ok=True)
  else:subprocess.run(['sudo','-n','mkdir','-p','/run/sshd'])
@@ -314,6 +314,11 @@ def main():
    step(lambda:q.key('f11'),r'\[files.app.closed\]');time.sleep(2)
    assert 'pw1234' not in t(),'a password reached the log'
   assert 'KERNEL PANIC' not in t() and 'panicked' not in t() and '[files.app.fatal]' not in t()
+ except BaseException:
+  # What the guest and the host servers said about the places, for a failed run.
+  print('\n'.join(l for l in t().split('\n') if '[files.app.places' in l)[-4000:])
+  if srv and (srv[2]/'sshd.log').exists():print('--- sshd.log ---\n'+(srv[2]/'sshd.log').read_text()[-4000:])
+  raise
  finally:g['stop']();sshd_stop(srv);dav[0].kill()
  # On the host: the zip reads back, the names changed, the metadata is on the stick.
  z=zipfile.ZipFile(io.BytesIO(mread(stick,'docs.zip')))
