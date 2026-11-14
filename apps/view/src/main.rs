@@ -361,7 +361,7 @@ impl State {
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     let mut window = Window::open();
-    window.title(b"View");
+    window.title(b"Gaze");
     let mut args = [0u8; sex_pdx::fs::ARGS_MAX];
     let given = files::args(&mut window, &mut args);
     let file = given.split(|b| *b == b' ').find(|w| !w.is_empty()).map(|f| f.to_vec());
