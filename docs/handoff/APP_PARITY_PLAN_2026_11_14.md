@@ -222,12 +222,15 @@ Now (#202/#213): signed catalog, search, install/upgrade/remove, first-run grant
 | Third-party repositories with their own keys, rollback of one package | R6 |
 | Publish flow for developers: build, sign and upload with the Leather SDK | I-follow-up (packages thread) |
 
-### Flirt (chat) vs Element / Signal / Discord
+### Valentine and Flirt (mail, messaging, voice) vs Thunderbird, Element, Beeper, Discord
 
-Now: Flirt is the old Talk, a TCP/UDP test tool (#216). There is no chat program.
+Now: no mail or chat program. Flirt is the old Talk, a TCP/UDP test tool (#216).
 
-→ U3–U4: Flirt becomes a messenger (IRC, Matrix with end-to-end encryption, later XMPP); the
-TCP/UDP tool becomes a Spindle command.
+Andreas (2026-11-14): Valentine is the mail **and** messaging system: email, Matrix, and other
+services too (Mumble; Discord the way Dorion and GoofCord do it), with his Leeloo Multipass
+nativized for the system. → workstream Y. Valentine becomes one inbox for every network
+(as Beeper and Thunderbird's chat do); Flirt becomes the voice and video side (calls, voice
+rooms, screen share). Talk's TCP/UDP tool becomes a Spindle command.
 
 ### Date (calendar) vs GNOME Calendar / Thunderbird
 
@@ -270,7 +273,9 @@ Classes a Linux/Windows/macOS desktop has where SexOS has nothing. Names are pro
 
 | Class | Leader | Proposed name | Why the name | Slices |
 | --- | --- | --- | --- | --- |
-| Mail | Thunderbird | **Valentine** | a love letter | U1–U2 |
+| Mail and messaging | Thunderbird + Element + Beeper | **Valentine** | a love letter | Y3–Y8 |
+| Voice and video calls | Mumble / Discord voice / Jitsi Meet | **Flirt** (exists as Talk) | Andreas's pick | Y9–Y10 |
+| Online accounts and identity | GNOME Online Accounts / macOS Internet Accounts | **Multipass** (Andreas's Leeloo Multipass, nativized) | his own project | Y1–Y2 |
 | Contacts | GNOME Contacts | **Crush** | the people you keep | U6 |
 | Word processor | LibreOffice Writer | **Brocade** | rich woven fabric for rich text | T3–T5 |
 | Spreadsheet | LibreOffice Calc / Excel | **Gingham** | a checkered fabric: a grid | T1–T2 |
@@ -481,24 +486,62 @@ top of the Craft ports (T7–T8).
 | T7 | OnlyOffice-style shell: one window with every document as a tab (M12), ribbon layout, OOXML fidelity suite (100 real-world DOCX/XLSX/PPTX files compared page by page with reference renders) | gate: fidelity suite above a recorded threshold, raised each PR |
 | T8 | Co-editing: real-time collaboration on one document between machines (CRDT, e.g. yrs, MIT), comments and presence; a local relay server program | gate: two QEMU machines edit one document, both converge |
 
-### U. Communication and reading: Valentine, Flirt, Date, Crush, Bodice, Gossip, Hookup (9)
+### U. Calendar, contacts, reading and places: Date, Crush, Bodice, Gossip, Hookup, Rendezvous (5)
 
-Write set: new `apps/valentine`, `apps/flirt` (from #216), `apps/calendar` (Date), new
+Mail and messaging moved to workstream Y. Write set: `apps/calendar` (Date), new
 `apps/crush`, `apps/bodice`, `apps/gossip`, `apps/hookup`, `apps/rendezvous`;
-new `crates/sex-mail`, `crates/sex-dav`.
+new `crates/sex-dav`.
 
 | # | Slice | Test |
 | --- | --- | --- |
-| U1 | **Valentine** mail: IMAP (IDLE), SMTP, JMAP; accounts, folders, threads, search; HTML mail drawn by sex-html with remote content blocked; attachments through Loom | gate: local IMAP/SMTP server fixture, send then receive |
-| U2 | Valentine: OpenPGP (rPGP, MIT/Apache) sign/encrypt/verify, OAuth2 sign-in for big providers, offline cache, notifications | gate: encrypted mail round trip |
-| U3 | **Flirt** messenger: IRC (TLS, SASL) and the UI on Weft; Talk's TCP/UDP tool becomes a Spindle command | gate: join a local IRC server, exchange messages |
-| U4 | Flirt: Matrix with end-to-end encryption (vodozemac, Apache-2.0), rooms, media, notifications | gate: local Matrix test server (conduit) round trip, encrypted room |
 | U5 | **Date**: month/week/day views, RRULE recurrence, reminders via Bell, several calendars, CalDAV sync (`sex-dav`), invitations; world clock, alarms, timers | gate: CalDAV fixture sync both ways; alarm fires |
 | U6 | **Crush** contacts: CardDAV sync, vCard import/export, used by Valentine, Flirt and Voyeur | gate: CardDAV fixture sync |
 | U7 | **Bodice** e-books (EPUB 2/3 via sex-html, CBZ, FB2; library, reading position, fonts, night mode) and **Gossip** feeds (RSS/Atom, podcasts played by Qupid) | gate: EPUB fixture opens at saved page; feed fixture lists items |
 | U8 | **Hookup** phone link (KDE Connect protocol, written from its open spec): notifications, clipboard, file send, media control | gate: protocol test peer pairs and sends a file |
 | U9 | **Rendezvous** maps: OpenStreetMap vector tiles, search (Nominatim), routing (OSRM API), offline regions | gate: local tile fixture renders; search finds a place |
 | U10 | Swingers moved to its own workstream X (Andreas wants it world-class) | – |
+
+U1–U4 moved to workstream Y; the numbers are not reused.
+
+### Y. Valentine, Flirt and Multipass: one inbox for every network (11)
+
+Write set: new `servers/multipass`, `crates/sex-pdx/src/accounts.rs`, new `apps/valentine`,
+`apps/flirt` (from #216), new `crates/sex-mail`, `crates/sex-chat` (one trait per network).
+
+**Multipass, nativized.** Andreas's [Leeloo Multipass](https://github.com/xirtus/leeloo-multipass)
+(MIT) is an account-linking passport: a stamp book of a person's identities on Bluesky/AT
+Protocol (OAuth with PKCE and DPoP), Mastodon-compatible instances, Matrix (homeserver SSO)
+and Threads/ActivityPub (public-profile proof by WebFinger and a code in the bio), with
+solid stamps for verified ownership and dashed stamps for saved addresses. Its
+[SDK](https://github.com/xirtus/leeloo-multipass-sdk) (MIT) opens that passport from another
+app without the app ever receiving credentials. On SexOS the same design becomes a system
+service instead of a Node/PostgreSQL web service:
+
+- `servers/multipass` keeps the stamp book in Files and every token in **Shibari** (RAM-only,
+  never on disk unencrypted). The Fastify routes become a PDX protocol, the stamp-book UI a
+  Tatami page and a Weft view (navy cover, pastel network stamps, Geist), and the SDK's
+  "open the trusted passport, receive no credentials" rule becomes a grant: an app asks
+  Multipass to act for an account (send, fetch) and gets results, never the token.
+- Accounts added once serve every app: Valentine (mail, Matrix, fediverse DMs), Flirt
+  (Mumble, Matrix calls), Date and Crush (CalDAV/CardDAV), Loom cloud drives (Q19),
+  Kaleidoscope sign-in, Swingers' private trackers.
+- The planned Multipass adapters (Misskey MiAuth, IndieAuth, Nostr signer proofs, profile
+  sync, encrypted vault) land here natively; the vault is Chastity's (R7).
+
+| # | Slice | Test |
+| --- | --- | --- |
+| Y1 | **Multipass** service: stamp book (verified vs saved), Bluesky OAuth (PKCE + DPoP), Mastodon OAuth, Matrix SSO, ActivityPub bio proof, tokens in Shibari, `sex_pdx::accounts` act-for-account grants; Tatami page | host: proof and state-expiry goldens ported from leeloo-multipass tests; gate: Mastodon fixture links an account, a program asking for the raw token is refused |
+| Y2 | Multipass adapters: mail accounts (IMAP/SMTP/JMAP, OAuth2 for Gmail/Outlook), Misskey MiAuth, IndieAuth, Nostr signer, CalDAV/CardDAV, WebDAV/S3, Mumble certificates, profile sync with preview | gate: each adapter links a fixture account |
+| Y3 | **Valentine** mail: IMAP (IDLE), SMTP, JMAP; folders, threads, search (E4 index); HTML mail by sex-html with remote content blocked; attachments through Loom | gate: local IMAP/SMTP fixture, send then receive |
+| Y4 | Valentine mail depth: OpenPGP (rPGP, MIT/Apache) and S/MIME, filters and rules, offline cache, snooze, send later, templates, unified inbox across accounts | gate: encrypted mail round trip; rule files a message |
+| Y5 | Valentine chat core: one conversation list across networks (`sex-chat` trait: rooms, messages, reactions, read receipts, typing, media), notifications through Bell with inline reply (S2) | host: trait conformance suite on a fake network |
+| Y6 | Matrix with end-to-end encryption (vodozemac, Apache-2.0), spaces, threads, key backup and device verification | gate: local Matrix server (conduit) round trip in an encrypted room |
+| Y7 | IRC (TLS, SASL, bouncers) and XMPP (OMEMO); fediverse and Bluesky direct messages through Multipass | gate: local IRC server and XMPP fixture exchange messages |
+| Y8 | Discord, the Dorion/GoofCord way: Discord's own web client in a Kaleidoscope engine view inside Valentine, client mods (Vencord, Shelter) as confined extensions (N7), trackers blocked by Shields, notifications into Bell. No reverse-engineered API client by default. Andreas also named **Yapfast**, a Rust Discord client, as a reference: compare it (licence, how it talks to Discord) before choosing between the web-client view and a native Rust client (its source link is still needed). Discord's terms forbid client mods and third-party clients, so these stay off by default and the person chooses | gate: Discord-like fixture web app loads in the view and its notification reaches Bell |
+| Y9 | **Flirt** voice: Mumble client (protocol and Opus over sex-net, positional audio, push-to-talk on a global key, certificates from Multipass) | gate: local Murmur server, two clients hear each other's test tone |
+| Y11 | Flirt meetings: join and host **Jitsi Meet** rooms natively (XMPP + Jingle signalling, WebRTC media from N11, simulcast, chat, raise hand, screen share), plus a confined Jitsi-compatible server program so a SexOS machine can host a room. Zoom/Meet/Teams join through their web clients in Kaleidoscope | gate: local Jitsi fixture, two clients join one room and exchange audio |
+| Y10 | Flirt calls: Matrix VoIP and group calls, WebRTC from N11, video with Flash's camera (V7), screen share from Display under a grant | gate: loopback call between two QEMU machines carries audio frames |
+
 
 ### V. Creative apps: Batik, Gestalt, Strip, Serenade, Flash and the Craft ports (10)
 
@@ -566,12 +609,13 @@ Kaleidoscope can embed it), `crates/sex-net` only through its public API.
    furthest from its leader); N (Kaleidoscope: shields, passwords, isolation, devtools); T1
    (Gingham on IronCalc: the fastest big win, a real spreadsheet in one or two PRs).
 2. **Second wave (when M3–M5 land):** Q (Loom, Vellum, Gaze, Aftercare, Corset), X
-   (Swingers), R (system apps, starting with the Privacy page), P (Spindle
-   tabs/splits/sessions), U1–U5 (mail, chat, calendar).
+   (Swingers), Y (Multipass, Valentine, Flirt; Y1–Y3 need no toolkit and can start now),
+   R (system apps, starting with the Privacy page), P (Spindle tabs/splits/sessions),
+   U5–U6 (calendar, contacts).
 3. **Third wave:** rest of T and U, S (shell extras and accessibility), V (creative), W
    (Bluetooth and printing need x17 receipts; Drag needs Andreas's decision).
 
 ## 6. Count
 
-M 12, N 13, O 12, P 9, Q 23, R 10, S 8, T 8, U 9, V 10, W 7, X 10 = **131 slices**, in 12
+M 12, N 13, O 12, P 9, Q 23, R 10, S 8, T 8, U 5, V 10, W 7, X 10, Y 11 = **138 slices**, in 13
 workstreams. All new app names in this document are proposals pending Andreas's OK.
