@@ -49,6 +49,29 @@ impl Store for FilesStore<'_> {
         files::sync(self.0).map_err(|_| "Cannot sync file")
     }
 }
+fn report(app: &App, sample: &Sample, kind: Kind) {
+    for (name, id) in [
+        ("primary", sample.primary),
+        ("load", sample.secondary),
+        ("previous", sample.previous),
+        ("next", sample.next),
+        ("add", sample.add),
+        ("path", sample.path),
+        ("content", sample.content),
+    ] {
+        let p = app.ui.rect(id).center();
+        let scale = app.ui.theme().scale;
+        sex_pdx::serial_record!(
+            "[leather.control] app={} name={} x={} y={}",
+            kind.name(),
+            name,
+            (p.x * scale) as i32,
+            (p.y * scale) as i32
+        );
+    }
+    let (w, h) = app.ui.size();
+    sex_pdx::serial_record!("[leather.layout] app={} w={} h={}", kind.name(), w, h);
+}
 pub fn run(kind: Kind) -> ! {
     let mut app = App::open(kind.title(), Theme::light(), Strings::new("en"));
     let mut sample = Sample::build(&mut app.ui, kind);
@@ -93,31 +116,33 @@ pub fn run(kind: Kind) -> ! {
         app.window.task,
         app.frames
     );
-    for (name, id) in [
-        ("primary", sample.primary),
-        ("load", sample.secondary),
-        ("previous", sample.previous),
-        ("next", sample.next),
-        ("add", sample.add),
-        ("path", sample.path),
-        ("content", sample.content),
-    ] {
-        let p = app.ui.rect(id).center();
-        let scale = app.ui.theme().scale;
-        sex_pdx::serial_record!(
-            "[leather.control] app={} name={} x={} y={}",
-            kind.name(),
-            name,
-            (p.x * scale) as i32,
-            (p.y * scale) as i32
-        );
-    }
+    report(&app, &sample, kind);
+    let mut size = app.ui.size();
     loop {
-        for response in app.next() {
+        let responses = app.next();
+        if app.ui.size() != size {
+            size = app.ui.size();
+            report(&app, &sample, kind);
+        }
+        for response in responses {
             if response == Response::Close {
                 sex_pdx::task_finish(0);
             }
             let Some(action) = sample.on(&mut app.ui, &response) else {
+                if kind == Kind::Stitch
+                    && (response == Response::Clicked(sample.add)
+                        || response == Response::Changed(sample.content))
+                {
+                    let lines = &sample.document.lines;
+                    let bytes = lines.iter().map(String::len).sum::<usize>()
+                        + lines.len().saturating_sub(1);
+                    sex_pdx::serial_record!(
+                        "[leather.edit] line={} lines={} bytes={}",
+                        sample.document.line + 1,
+                        lines.len(),
+                        bytes
+                    );
+                }
                 if response == Response::Clicked(sample.primary) && kind == Kind::Hello {
                     sex_pdx::serial_record!("[leather.greet] ok=1");
                 }
