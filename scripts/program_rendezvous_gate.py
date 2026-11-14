@@ -51,7 +51,7 @@ os.environ['SEXOS_GATE_NIC']='-netdev user,id=n0 -device e1000e,netdev=n0'
 os.environ.setdefault('SEXOS_GATE_BOUND','1200')
 from install_program import install
 from quil_autosave_gate import boot
-KEYS={' ':'spc','/':'slash','.':'dot','-':'minus',':':('shift','semicolon'),'+':('shift','equal')}
+KEYS={' ':'spc','/':'slash','.':'dot',',':'comma','-':'minus',':':('shift','semicolon'),'+':('shift','equal')}
 def colours(ppm):
  data=ppm.read_bytes();parts=data.split(b'\n',3);w,h=map(int,parts[1].split());px=parts[3]
  count={}
@@ -94,14 +94,14 @@ def main():
   time.sleep(.5);s=len(t());q.key('ret');return g['wait'](rf'\[rendezvous.place\] name={re.escape(first)} lat=(\S+) lon=(\S+)\n',s,30)
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
-  r,sid,s=start(f' http://10.0.2.2:{PORT}')
+  r,sid,s=start(f' http://10.0.2.2:{PORT} 52.5170,13.3704,15')
   assert r[3]==f'http://10.0.2.2:{PORT}/tiles/{{z}}/{{x}}/{{y}}.mvt' and r[4]=='0',r[0]
   g['wait'](r'\[rendezvous.tile\] id=14/8800/5373 kind=vector source=network layers=8 features=13\n',s,300)
   g['wait'](r'\[rendezvous.tile\] id=14/\d+/\d+ kind=raster source=network size=256x256\n',s,300)
   # The whole desktop for the map (Super+M).
   s2=len(t());q.cmd('send-key',{'keys':[{'type':'qcode','data':'meta_l'},{'type':'qcode','data':'m'}],'hold-time':80})
   g['wait'](r'\[shell.wm.action\] action=ToggleMonocle done=1',s2,30)
-  f=frame(s2,300,lambda d:d['vector']==1 and d['raster']>0)
+  f=frame(s2,300,lambda d:d['vector']==1 and d['raster']>=3)
   assert f['water']>5000 and f['road']>1000 and f['building']>1000 and f['labels']>=2,f
   time.sleep(1);shot=a.out/'rendezvous-map.ppm';q.cmd('screendump',{'filename':str(shot)});time.sleep(1)
   c=colours(shot);assert c[WATER]>5000 and c[MAJOR_ROAD]>1000 and c[BUILDING]>1000,c
