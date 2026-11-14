@@ -341,7 +341,8 @@ fn roll_back(fs: &mut F, arg: &[u8], r: &mut Report) -> u8 {
     match result {
         Ok(()) => {
             let repo = origin_of(fs, &program, "repo");
-            sex_pdx::serial_record!("[files.pkg.rollback] name={} program={} from={} to={} repo={}", cur.name, program, cur.version, prev.version, repo);
+            let bin_bytes = fs.open(&bin(&program)).map(|st| st.size).unwrap_or(0);
+            sex_pdx::serial_record!("[files.pkg.rollback] name={} program={} from={} to={} repo={} bin_bytes={}", cur.name, program, cur.version, prev.version, repo, bin_bytes);
             r.line(&format!("Rolled {} back from {} to {}. {} is kept: pkg rollback {} again goes forward.", cur.name, cur.version, prev.version, cur.version, cur.name));
             w::OK
         }
