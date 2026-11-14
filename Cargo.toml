@@ -66,6 +66,7 @@ members = [
     "crates/sex-http",
     "crates/sex-wg",
     "crates/sex-ssh",
+    "crates/sex-torrent",
     "crates/sex-fetch",
     "crates/sex-trust-config",
     "crates/sex-graphics",

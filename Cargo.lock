@@ -3172,6 +3172,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-torrent"
+version = "0.1.0"
+dependencies = [
+ "sha1",
+ "sha2",
+]
+
+[[package]]
 name = "sex-trust-config"
 version = "0.1.0"
 

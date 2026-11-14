@@ -83,6 +83,8 @@ jobs:
         sudo usermod -p '*' "$USER"
         cargo test --locked -p sex-wg
         cargo test --locked -p sex-ssh
+    - name: BitTorrent engine (sex-torrent) goldens and protocol tests on the host
+      run: cargo test --locked -p sex-torrent
     - name: Crash record format host regressions
       run: bash scripts/crash_log_host_gate.sh
     - name: Experimental JS baseline JIT differential and emitted-code gates
