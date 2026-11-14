@@ -236,6 +236,10 @@ jobs:
       run: |
         truncate -s 256M "$RUNNER_TEMP/cliphist-source.img"
         python3 scripts/clipboard_history_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/cliphist-source.img" --out "$RUNNER_TEMP/sexos-runtime/clipboard-history"
+    - name: Screenshot UI on Print
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/screenshot-source.img"
+        python3 scripts/screenshot_ui_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/screenshot-source.img" --out "$RUNNER_TEMP/sexos-runtime/screenshot-ui"
     - name: USB input paths
       run: GATE_DIR="$RUNNER_TEMP/sexos-usb" SKIP_BUILD=1 bash scripts/usb_path_gate.sh
     - name: Preserve runtime evidence

@@ -1285,6 +1285,7 @@ pub mod wifi_status;
 pub mod notify;
 pub mod desktop_look;
 pub mod window_switcher;
+pub mod screenshot;
 pub mod document_view;
 
 pub mod display_boot;

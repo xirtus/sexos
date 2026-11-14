@@ -2807,6 +2807,12 @@ pub extern "C" fn _start() -> ! {
             sex_pdx::serial_record!("[spindle.display.batch.admitted] target={} sid={} sequence={} paint={} bytes={}",instance_pd(),r.surface,r.stamp.sequence,r.stamp.paint,r.bytes);
             continue;
         }
+        if msg.type_id==sex_pdx::screenshot::OP_SCREENSHOT_TAKE&&msg.caller_pd==3{
+            let region=sex_pdx::screenshot::Rect::decode(msg.arg0);
+            sex_pdx::serial_record!("[spindle.screenshot.take] x={} y={} w={} h={} full={}",region.x,region.y,region.w,region.h,region.is_full() as u8);
+            unsafe{capture_command::CAPTURE.take(region,sb);content_render(&line,sb);}
+            continue;
+        }
         if msg.type_id==sex_pdx::program_store::OP_REFUSED&&msg.caller_pd==3{
             sb.push(sex_pdx::program_store::refusal(msg.arg0));
             sex_pdx::serial_record!("[spindle.program.refused] code={}",msg.arg0);
