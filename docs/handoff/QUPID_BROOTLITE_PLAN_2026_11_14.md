@@ -29,10 +29,11 @@ controls and media keys, and gives Music gapless playback.
 | Jellyfin multi-server: LAN discovery (UDP 7359), QuickConnect, direct play, progress reports, segments, Similar | None | Q8 |
 | Stremio v3 addon protocol (catalog, meta, stream, subtitles), Continue Watching sync | None | Q9: addons the user adds by URL; nothing bundled |
 | YouTube: SponsorBlock, DeArrow, ReturnYouTubeDislike | YouTube plays in Kaleidoscope (Web) | Q10, with the YouTube/browser thread |
-| Torrent sliding-window streaming (header/footer pinned, deadline window ahead of the playhead) | None | Q11: report first; a `Source` fed by a BitTorrent client program, magnet links the user gives |
+| Torrent sliding-window streaming (header/footer pinned, deadline window ahead of the playhead) | None | Q11: report first; a `Source` fed by a confined BitTorrent client program |
+| Swarm search across indexers (Nyaa, Torznab/Jackett/Prowlarr, others), seeders shown, results ranked | None | Q11b: indexer search built in. Torznab/Newznab and any indexer the user adds by URL; open catalogues (Internet Archive, Academic Torrents, distribution trackers) listed out of the box; results ranked by seeders and `episodes::similarity` |
 | Multipass end-to-end encrypted sync of library and progress | None | Q12, later, on sex-crypt |
 | Disposable Kodi Python addon helper | None | Not ported: Linux/Kodi-shaped and heavy. SexOS has Python as a program if wanted later |
-| Twitch ad stripping, ad-free logged-in YouTube via InnerTube, bundled torrent indexer search | None | Not ported: against those services' terms, or about finding pirated copies |
+| Twitch ad stripping, ad-free logged-in YouTube via InnerTube | None | Not ported: against those services' terms |
 
 ## How it fits SexOS
 
@@ -75,6 +76,10 @@ controls and media keys, and gives Music gapless playback.
 - **Q7: URLs.** `run qupid https://...` streams with Range seek; HLS media playlists.
 - **Q8: Jellyfin.** Add server (URL, user/password, QuickConnect), LAN discovery,
   libraries, direct play, progress reports, media segments into `segments`.
+- **Q11b: indexer search.** A search box in Qupid's library that queries every indexer
+  configured (Torznab/Newznab APIs, plus indexers added by URL), merges and dedupes by
+  info-hash, ranks by seeders, size and `episodes::similarity`, and hands a result's
+  magnet to Q11's client.
 - **Q9-Q12** as in the table, each after a short report where it is large (Q11).
 
 Order: Q2 and Q3 wait for #183 to merge (Play's main loop changes there) and for the
