@@ -86,6 +86,7 @@ members = [
     "crates/sex-image",
     "crates/sex-libc",
     "crates/sex-media",
+    "crates/sex-splice",
     "crates/sex-episodes",
     "crates/sex-kodi",
     "crates/silkbar-model",
@@ -130,6 +131,15 @@ members = [
     "crates/aftercare-core",
     "crates/moan-core",
     "apps/moan-probe",
+    "crates/sex-xml",
+    "crates/sex-ebook",
+    "apps/bodice",
+    "crates/sex-feed",
+    "apps/gossip",
+    "crates/sex-kdeconnect",
+    "apps/hookup",
+    "crates/sex-map",
+    "apps/rendezvous",
 ]
 [workspace.package]
 license = "GPL-3.0-only"

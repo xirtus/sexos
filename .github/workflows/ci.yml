@@ -91,6 +91,12 @@ jobs:
       run: cargo test --locked --release -p sex-3d
     - name: Pinyin input method
       run: cargo test --locked -p sex-ime
+    - name: Splicy editing core (timeline, edit by transcript, suggestions, render plan, OTIO)
+      run: cargo test --locked -p sex-splice
+    - name: Splicy export (WebM VP9+Opus, MP4 H.264+AAC, MP4 AV1+Opus) through system FFmpeg
+      run: |
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg pkg-config libavcodec-dev libavformat-dev libavutil-dev libswscale-dev
+        python3 scripts/splicy_export_host_gate.py "$RUNNER_TEMP/splicy-export"
     - name: RFB (VNC) client and server codec, byte-exact goldens
       run: cargo test --locked -p sex-rfb
     - name: Serenade audio recorder engine (VOX, dBFS meters, waveform mipmaps, WAV/cue) on the host
@@ -500,12 +506,64 @@ jobs:
       with:
         name: sexos-programs-proof
         path: ${{ runner.temp }}/sexos-runtime
+  reading:
+    name: Reading programs
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+    - uses: actions/checkout@v4
+    - uses: ./.github/actions/setup
+    - name: E-book and feed models (EPUB, FictionBook, CBZ, reflow, RSS, Atom, OPML) on the host
+      run: cargo test --locked -p sex-xml -p sex-ebook -p sex-feed
+    - name: Build the image
+      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/reading-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/reading-build.log"; exit 1)
+    - name: Bodice opens an EPUB, turns pages and reopens at the saved page
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/blank-reading.img"
+        python3 scripts/program_bodice_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-reading.img" --out "$RUNNER_TEMP/sexos-reading/bodice"
+    - name: Gossip imports OPML, lists a feed's items and keeps one read across a restart
+      run: python3 scripts/program_gossip_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-reading.img" --out "$RUNNER_TEMP/sexos-reading/gossip"
+    - name: Preserve reading evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sexos-reading-proof
+        path: |
+          ${{ runner.temp }}/reading-build.log
+          ${{ runner.temp }}/sexos-reading
         if-no-files-found: ignore
 
   # Single required check: keeps the old "build" check name for branch rules.
+  places:
+    name: Phone link and maps
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+    - uses: actions/checkout@v4
+    - uses: ./.github/actions/setup
+    - name: Hookup protocol (KDE Connect) on the host, against the Python test peer; map tiles, search and routes
+      run: cargo test --locked -p sex-kdeconnect -p sex-map
+    - name: Build the image
+      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/places-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/places-build.log"; exit 1)
+    - name: Hookup pairs with a test phone, receives and sends files, media keys
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/blank-places.img"
+        python3 scripts/program_hookup_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-places.img" --out "$RUNNER_TEMP/sexos-places/hookup"
+    - name: Rendezvous draws a vector tile, finds places, draws a route and works offline
+      run: python3 scripts/program_rendezvous_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-places.img" --out "$RUNNER_TEMP/sexos-places/rendezvous"
+    - name: Preserve places evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sexos-places
+        path: |
+          ${{ runner.temp }}/sexos-places
+          ${{ runner.temp }}/places-build.log
+        if-no-files-found: ignore
+
   build:
     if: always()
-    needs: [host, truth, boot, devices, programs, media, editor, profiles, js-jit, recording, productivity, terminal-editor, documents-pictures]
+    needs: [host, truth, boot, devices, programs, media, editor, profiles, js-jit, recording, productivity, terminal-editor, documents-pictures, reading, places]
     runs-on: ubuntu-latest
     steps:
     - run: |
@@ -631,6 +689,8 @@ jobs:
       run: python3 scripts/program_jot_edit_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-term.img" --out "$RUNNER_TEMP/sexos-term/jot-edit"
     - name: Jot as a notepad in its own folder (original gate)
       run: python3 scripts/program_jot_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-term.img" --out "$RUNNER_TEMP/sexos-term/jot"
+    - name: Jot brings unsaved work back after a crash, keeps CRLF, previews Markdown, wraps
+      run: python3 scripts/program_jot_restore_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-term.img" --out "$RUNNER_TEMP/sexos-term/jot-restore"
     - name: Preserve terminal and editor evidence
       if: always()
       uses: actions/upload-artifact@v4
