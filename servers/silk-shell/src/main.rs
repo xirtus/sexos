@@ -315,6 +315,33 @@ unsafe fn shell_close_poll() {
 const _: () = assert!(app_custody::CLOSE_ASK==sex_pdx::app_lifecycle::CLOSE_ASK
     && app_custody::CLOSE_CONFIRMED==sex_pdx::app_lifecycle::CLOSE_CONFIRMED
     && app_custody::DECLINE_UNSAVED==sex_pdx::app_lifecycle::DECLINE_UNSAVED);
+/// Ends a program row now. Its pages are gone, but a program waiting for an event would
+/// not run to notice: a confirmed Close wakes it, it faults, and its run is retired.
+unsafe fn force_end_and_wake(e:&app_custody::Entry)->bool {
+    if sex_pdx::app_lifecycle::force_end(e.slot).is_err() { return false; }
+    if let Some(slot) = e.close_slot() { let _ = pdx_call_checked(slot, sex_pdx::app_lifecycle::OP_APP_CLOSE, e.target as u64, e.task as u64, sex_pdx::app_lifecycle::CLOSE_CONFIRMED); }
+    true
+}
+/// The focused program (the system monitor) asks to end another program now.
+unsafe fn program_end_receive(msg:&sex_pdx::PdxMessage)->bool {
+    use sex_pdx::system_stats as st;
+    if msg.type_id!=st::OP_END_PROGRAM {return false;}
+    let focused=APP_CUSTODY.iter().flatten().any(|e|e.target==msg.caller_pd&&e.task==msg.caller_task&&!e.dead&&e.surface==FOCUSED_SURFACE_ID);
+    let target=msg.arg0 as u32;
+    let status=if !focused {st::NOT_FOCUSED} else {
+        match APP_CUSTODY.iter_mut().flatten().find(|e|e.target==target&&!e.dead&&!e.forced
+            &&app_catalog::by_surface(e.target,e.surface).is_some_and(|r|r.app==app_catalog::App::Program)) {
+            None=>st::NOT_A_PROGRAM,
+            Some(e)=>{
+                e.forced=true;
+                if force_end_and_wake(e){st::OK}else{e.forced=false;st::NOT_ENDED}
+            }
+        }
+    };
+    sex_pdx::serial_record!("[shell.program.end] caller={} target={} status={}",msg.caller_pd,target,status);
+    pdx_reply(msg.caller_pd,status);
+    true
+}
 /// An app's own decline of a pending ordinary close: unsaved work stays open
 /// and the user's next Close is sent as confirmed.
 unsafe fn shell_close_declined_receive(msg:&sex_pdx::PdxMessage)->bool {
@@ -16443,7 +16470,7 @@ unsafe fn shell_memory_poll() {
     let Some(e) = APP_CUSTODY[i].as_mut() else { return };
     e.forced = true;
     MEMORY_LAST_END = now;
-    let ok = sex_pdx::app_lifecycle::force_end(e.slot).is_ok();
+    let ok = force_end_and_wake(e);
     let name = sex_pdx::system_stats::name(e.target);
     let name = &name[..name.iter().position(|&c| c == 0).unwrap_or(16)];
     let name = if name.is_empty() { &b"A program"[..] } else { name };
@@ -26226,6 +26253,7 @@ pub extern "C" fn _start() -> ! {
             if spindle_history_status_receive(&msg) {continue;}
             if workspace_refresh_receive(&msg) { continue; }
             if shell_close_declined_receive(&msg) { continue; }
+            if program_end_receive(&msg) { continue; }
             if display_scale_receive(&msg) { continue; }
             if desktop_text_receive(&msg) { continue; }
             if linen_async_reply(&msg) { continue; }

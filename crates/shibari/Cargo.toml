@@ -1,0 +1,9 @@
+[package]
+name = "shibari"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "Shibari, SexOS's RAM-only secret keeper: secrets are tied to an owner, used in place, never handed out"
+
+[dependencies]
+zeroize = { version = "=1.9.1", default-features = false, features = ["alloc"] }
