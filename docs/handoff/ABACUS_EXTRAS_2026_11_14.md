@@ -39,3 +39,9 @@ remain intact. The QEMU Weft gate additionally switches modes through the palett
 checks 8-bit overflow, full-width hexadecimal output, temperature/storage conversion,
 recall, a dimension error and a scientific function, preserving screenshots.
 A guest build does not establish runtime success: that gate must pass in CI.
+
+Review follow-up: programmer keypad glyphs normalize to the exact parser's ASCII
+operators; tiny conversions retain nonzero results outside affine-temperature
+cancellation. The entire content uses a bounded Weft scroll viewport, with a
+non-shrinking content group, so Tab/wheel can reach the bottom keypad and expanded
+programmer controls in a 640×400 window. Host regressions cover those three cases.

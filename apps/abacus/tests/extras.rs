@@ -108,3 +108,57 @@ fn real_mode_buttons_and_history_preserve_exact_programmer_context() {
     let mut pixels = vec![0; 800 * 700];
     assert!(ui.paint(&mut pixels).is_some());
 }
+
+#[test]
+fn programmer_visible_operator_buttons_work() {
+    let mut ui = Ui::new(640, 400, Theme::light(), Strings::new("en"));
+    let mut a = Abacus::build(&mut ui);
+    a.set_mode(&mut ui, Mode::Programmer);
+    for (label, input, want) in [("×", "6", "42"), ("÷", "2", "3"), ("−", "2", "4")] {
+        ui.set_text(a.expr, if label == "×" { "7" } else { "6" });
+        let id = a.keys.iter().find(|(_, k)| *k == label).unwrap().0;
+        a.on(&mut ui, &Response::Clicked(id));
+        let mut text = ui.text_of(a.expr).to_owned();
+        text.push_str(input);
+        assert_eq!(result(&mut a, &mut ui, &text), want);
+    }
+}
+#[test]
+fn tiny_non_temperature_units_do_not_round_to_zero() {
+    assert_eq!(units::convert(1e-13, "m", "m").unwrap(), 1e-13);
+    assert_eq!(units::convert(1e-13, "K", "K").unwrap(), 1e-13);
+    assert_eq!(units::convert(1e-10, "mm", "m").unwrap(), 1e-13);
+    assert_eq!(units::eval("1e-13 m to m").unwrap(), "1e-13 m");
+}
+#[test]
+fn compact_window_scrolls_bottom_keypad_and_programmer_controls_into_view() {
+    let mut ui = Ui::new(640, 400, Theme::light(), Strings::new("en"));
+    let mut a = Abacus::build(&mut ui);
+    ui.layout();
+    let eq = a.keys.iter().find(|(_, k)| *k == "=").unwrap().0;
+    assert!(!ui.find_kind("scroll").is_empty());
+    for _ in 0..30 {
+        ui.handle(weft::Event::Key(weft::Key::new(weft::input::code::TAB)));
+        ui.layout();
+    }
+    assert_eq!(ui.focused(), Some(eq));
+    ui.layout();
+    let rect = ui.rect(eq);
+    assert!(rect.y >= 0. && rect.bottom() <= 400., "equals: {rect:?}");
+    a.set_mode(&mut ui, Mode::Programmer);
+    ui.layout();
+    for id in a
+        .extra_keys
+        .iter()
+        .map(|(id, _)| *id)
+        .chain(core::iter::once(eq))
+    {
+        ui.focus(Some(id));
+        ui.layout();
+        let rect = ui.rect(id);
+        assert!(
+            rect.y >= 0. && rect.bottom() <= 400.,
+            "programmer: {rect:?}"
+        );
+    }
+}

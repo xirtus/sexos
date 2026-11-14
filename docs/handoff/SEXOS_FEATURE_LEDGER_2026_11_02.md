@@ -4218,3 +4218,7 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   actual palette/keyboard controls, checks results/errors and retains screenshots.
   QEMU runtime result remains pending CI. Depends on Weft #220; no kernel changes.
 - Details: `docs/handoff/ABACUS_EXTRAS_2026_11_14.md`.
+- Round176 review follow-up: programmer keypad glyphs normalize to ASCII; tiny
+  conversion values are retained; bounded Weft scroll makes all controls reachable
+  at 640x400. Thirteen host tests now include actual operators and compact Tab/
+  scroll access. QEMU clicks the focused button's current scrolled coordinates.
