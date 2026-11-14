@@ -35,7 +35,9 @@ impl Painter {
     /// when `focused`. Returns how many rows were drawn.
     pub fn draw(&mut self, screen: &Screen, dirty: &[bool], cache: &mut Cache, pixels: &mut [u32], stride: usize, focused: bool) -> usize {
         let (cw, ch) = (self.cell_w, self.cell_h);
+        screen.set_cell_pixels(cw, ch);
         let mut drawn = 0;
+        let mut painted = alloc::vec![false; screen.rows()];
         let (cx, cy) = screen.cursor();
         let show_cursor = screen.cursor_visible && screen.view_offset() == 0;
         let old_cursor = self.cursor_row.take();
@@ -44,6 +46,7 @@ impl Painter {
             if !dirty.is_empty() && !dirty.get(row).copied().unwrap_or(true) && !(show_cursor && row == cy) && old_cursor != Some(row) { continue; }
             if (row + 1) * ch > pixels.len() / stride.max(1) { break; }
             drawn += 1;
+            painted[row] = true;
             for col in 0..screen.cols() {
                 if (col + 1) * cw > stride { break; }
                 let cell = screen.visible(col, row);
@@ -67,6 +70,8 @@ impl Painter {
             let used = screen.cols() * cw;
             if used < stride { for y in 0..ch { let at = (row * ch + y) * stride; pixels[at + used..at + stride].fill(crate::DEFAULT_BG); } }
         }
+        // Inline images over (or under) the text of the rows just drawn.
+        crate::images::composite(screen, cw, ch, &painted, pixels, stride);
         drawn
     }
 }
