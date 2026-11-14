@@ -3,7 +3,8 @@
 //!
 //! Before the idle policy dims, locks or blanks, the Shell asks Bell whether a program's
 //! sound stream is playing (`sound_mixer::STREAMING`). A yes counts as input: the idle
-//! clock starts again. Bell's answer comes back later, so the step waits for it, but
+//! clock starts again. Bell's answer comes back later, under its own tag (so a lost one
+//! never shifts other mixer answers), and the step waits for it, but
 //! not for long: with no answer the policy goes ahead. An answer holds for a while, so
 //! the Shell asks at most once per `RECHECK_MS` while nothing plays.
 

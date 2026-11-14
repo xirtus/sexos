@@ -33,8 +33,6 @@ pub enum Ask {
     Player(u8),
     /// The volume from settings: nothing to show.
     Restore,
-    /// Whether a program's sound plays, for the idle policy.
-    Streaming,
 }
 
 const ASKS: usize = 8;

@@ -4069,7 +4069,8 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   lock-surface stub; QEMU gate `scripts/lock_screen_gate.py` in CI (devices job).
 - **Media holds idle off (2026-11-14):** before idle dims, locks or blanks, the Shell asks
   Bell `sound_mixer::STREAMING` (12): is a program's stream open and not paused? A yes
-  restarts the idle clock (`[shell.idle] inhibited=media`). The Shell waits up to 2 s for
+  restarts the idle clock (`[shell.idle] inhibited=media`). The answer has its own tag
+  (`STREAMING_TAG` 0x4E), so a lost one never shifts the Shell's in-order mixer asks. The Shell waits up to 2 s for
   the answer, and a no holds for 10 s (`servers/silk-shell/src/idle_media.rs`, host-tested
   in `settings_host_gate.sh`). A short notification sound doesn't count; only streams do.
 - **Not yet:** a salt from the kernel's held entropy source instead of RDRAND.
