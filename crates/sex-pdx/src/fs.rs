@@ -90,6 +90,11 @@ pub const PICKS: u8 = 19;
 pub const ANSWER: u8 = 20;
 /// Answers OK at once and does nothing: what one call and its reply cost.
 pub const PING: u8 = 21;
+/// Drag and drop (`dnd`): a program offers a path it holds (`@/path`, or one in its own
+/// folder) for Shell to hand to the window it is dropped on. Answers with a ticket; the
+/// data area holds the absolute path (u16 LE length, then the bytes). A newer offer
+/// replaces the older one. Programs only.
+pub const OFFER: u8 = 29;
 /// Completed file-payload device reads charged only to this live client's READ requests.
 /// Empty path/offset/length; data is three little-endian u64 values. Metadata
 /// reads are excluded; controller/host caches are outside this measurement.

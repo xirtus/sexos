@@ -319,7 +319,7 @@ pub extern "C" fn _start() -> ! {
                 let day = MonthGrid::of(app.selected).cell(i);
                 if day == app.selected { app.open_day(); } else { app.mode = Mode::Month; app.select(day); }
             }
-            Event::Pointer(_) => continue,
+            Event::Pointer(_) | Event::Drop { .. } | Event::DragEnded { .. } => continue,
             Event::Resize { .. } => {}
         }
         render(&mut window, &app, &mut small, &mut tiny, &mut big);
