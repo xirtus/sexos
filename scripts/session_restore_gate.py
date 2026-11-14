@@ -34,15 +34,15 @@ def main():
   g['focus'](153);time.sleep(.5);s=len(t());keys(text);q.key('ret');return g['wait'](pattern,s,timeout)
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
-  for url,name in [('/view','/bin/view'),('/pic.png','pic.png')]:
+  for url,name in [('/view','/bin/gaze'),('/pic.png','pic.png')]:
    m=expect(f'fetch http://10.0.2.2:{PORT}{url} {name}',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',300);assert m[1].startswith('Saved'),m[1]
   # The first window goes to workspace 3 (Super+Shift+3); the second stays.
-  s=len(t());expect('run view @pic.png',r'\[spindle.session.started\] target=(\d+) task=(\d+) scene=0',240)
+  s=len(t());expect('run gaze @pic.png',r'\[spindle.session.started\] target=(\d+) task=(\d+) scene=0',240)
   first=g['wait'](launch,s,60);g['wait'](r'\[view.shown\]',s,120);time.sleep(1)
   g['focus'](int(first[3]));time.sleep(.5);s=len(t())
   q.cmd('send-key',{'keys':[{'type':'qcode','data':'meta_l'},{'type':'qcode','data':'shift'},{'type':'qcode','data':'3'}],'hold-time':120})
   g['wait'](rf'\[spindle.session.placed\] target={first[1]} task={first[2]} scene=2',s,60)
-  s=len(t());expect('run view @pic.png',r'\[spindle.session.started\] target=(\d+) task=(\d+) scene=0',240)
+  s=len(t());expect('run gaze @pic.png',r'\[spindle.session.started\] target=(\d+) task=(\d+) scene=0',240)
   second=g['wait'](launch,s,60);g['wait'](r'\[view.shown\]',s,120)
   g['wait'](r'\[spindle.session.saved\] bytes=(\d+) status=0',s,60);time.sleep(1)
  finally:g['stop']()
@@ -50,14 +50,14 @@ def main():
  g=boot(a.iso,disk,a.out,'session2',a.resolution);t=g['text'];q=g['q']
  try:
   g['wait'](r'\[spindle.session.read\] status=0 programs=2',0,240)
-  restored=[g['wait'](r'\[spindle.session.restore\] scene=(\d) path=/bin/view',0,120)]
+  restored=[g['wait'](r'\[spindle.session.restore\] scene=(\d) path=/bin/gaze',0,120)]
   g['wait'](r'\[spindle.session.started\] target=\d+ task=\d+ scene=\d',0,240)
   g['wait'](r'\[spindle.session.restored\]',0,300)
-  log=t();scenes=sorted(int(x) for x in __import__('re').findall(r'\[spindle.session.restore\] scene=(\d) path=/bin/view',log))
+  log=t();scenes=sorted(int(x) for x in __import__('re').findall(r'\[spindle.session.restore\] scene=(\d) path=/bin/gaze',log))
   assert scenes==[0,2],scenes
   assert len(__import__('re').findall(r'\[spindle.session.started\]',log))==2,'both did not start'
   g['wait'](r'\[shell.launch.placed\] target=\d+ surface=\d+ scene=2',0,60)
-  assert len(__import__('re').findall(r'\[files.program.bound\] target=\d+ task=\d+ root=/data/view',log))==2
+  assert len(__import__('re').findall(r'\[files.program.bound\] target=\d+ task=\d+ root=/data/gaze',log))==2
   time.sleep(3);q.cmd('screendump',{'filename':str(a.out/'session-restored.ppm')});time.sleep(.5)
   assert 'KERNEL PANIC' not in log and 'panicked' not in log
   print({'ok':True,'scenes':scenes})
