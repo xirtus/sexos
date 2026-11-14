@@ -417,6 +417,14 @@ result in that Spindle session (`calc 2*(3+4)/5` then `calc ans*10` gives
 tests (3 groups); sealed build and master gate GREEN; native
 `spindle_calc_gate.py` at both sizes: `calc ans` -> `NoAnswer`, then `2.8`,
 then `ans*10` -> `28`, plus the earlier cases.
+## G-11: Serenade audio recorder engine (2026-11-14)
+- Added `serenade-core` crate providing `#![no_std] + alloc` audio recording, sample-accurate Peak & RMS level metering, progressive multi-resolution waveform mipmaps, non-destructive editing, and bounds-checked RIFF/WAVE parsing.
+- Bounded capture sessions enforce explicit `max_samples` quotas with `Vec::try_reserve` OOM protection, idle/pause/recording/stopped state machine, and configurable VOX (voice-activated recording) with pre-roll attack preservation and hangover decay.
+- Real-time Peak & RMS metering with decaying peak-hold, fast pure-integer dBFS approximations, and sample-accurate clipping counters.
+- Progressive 6-level waveform mipmap pyramid (`WaveformMipmap`) for constant $O(1)$-per-column timeline queries at arbitrary zoom levels.
+- Non-destructive clip editing: trim, marker-based splitting, DC-offset cancellation, silence trimming, linear and cosine S-curve fades, and peak normalization on silence.
+- Bounds-checked RIFF/WAVE container reader/writer supporting PCM16, PCM24, IEEE Float32, cue markers, `LIST`/`adtl`/`labl`, and `LIST`/`INFO` metadata, verified against adversarial malformed/overflow inputs.
+- Gate: `scripts/serenade_host_gate.sh` passing unit/integration tests and `x86_64-sex-app.json` target check.
 
 ## F15. Inline emphasis and code markers (2026-11-02)
 

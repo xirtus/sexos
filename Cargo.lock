@@ -3872,6 +3872,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "serenade-core"
+version = "0.1.0"
+dependencies = [
+ "libm",
+]
+
+[[package]]
 name = "settings"
 version = "0.1.0"
 dependencies = [
