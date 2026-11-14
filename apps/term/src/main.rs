@@ -14,7 +14,9 @@
 //! Lua, ripgrep...) started with Term as its console, when Spindle's `spindle` command opened this
 //! Term (the `+launch` grant). Its output and input go through Files
 //! (`sex_pdx::console_relay`), it opens no window, gets only its own plain words as
-//! arguments and no network, Ctrl+C stops it and Ctrl+D ends its input.
+//! arguments and no network, Ctrl+C stops it and Ctrl+D ends its input. It reads the
+//! screen's size, may ask for raw keys or no echo (an editor, a password), and a second
+//! Ctrl+C within a second (or Ctrl+\) stops a run that ignores the first, through Shell.
 //!
 //! Keys: Ctrl+Shift+C copies the selection, Ctrl+Shift+V pastes, Shift+PageUp/PageDown
 //! and the wheel scroll back, Ctrl+= and Ctrl+- change the text size, Ctrl+C stops the
@@ -55,7 +57,10 @@ struct Guest {
 }
 /// What runs: a Wasm guest here, or a program of its own whose console is this terminal
 /// (through Files, `sex_pdx::console_relay`).
-enum Runner { Guest(Guest), Native { since: u64 } }
+enum Runner { Guest(Guest), Native(Native) }
+/// A program of its own: when it started, its terminal mode (`console_relay::RAW` and the
+/// rest, from TAKE), its target, and when Ctrl+C last interrupted it.
+struct Native { since: u64, mode: u8, target: u32, interrupted_at: Option<u64>, stopping: bool }
 struct Job {
     name: String,
     runner: Runner,
@@ -118,6 +123,7 @@ impl Term {
         let (cols, rows) = self.painter.grid(self.width, self.height);
         self.screen.resize(cols, rows);
         if let Some(Job { runner: Runner::Guest(g), .. }) = &self.job { g.stream.set_size(cols as u32, rows as u32); }
+        if let Some(Job { runner: Runner::Native(_), .. }) = &self.job { self.native_size(); }
         self.screen.mark_all_dirty();
     }
     fn zoom(&mut self, step: isize) {
@@ -340,7 +346,8 @@ impl Term {
         match files::direct::relay::start(cmd, &words) {
             Ok(()) => {
                 sex_pdx::serial_record!("[term.native.start] name={}", n);
-                self.job = Some(Job { name: n, runner: Runner::Native { since: sex_pdx::get_ticks() }, line: Vec::new() });
+                self.job = Some(Job { name: n, runner: Runner::Native(Native { since: sex_pdx::get_ticks(), mode: 0, target: 0, interrupted_at: None, stopping: false }), line: Vec::new() });
+                self.native_size();
             }
             Err(e) if { sex_pdx::serial_record!("[term.native.refused] name={} status={}", n, e); false } => {}
             Err(files::NOT_FOUND) => self.say(&format!("\x1b[31m{}: no such command or program\x1b[0m (type help)\n", n)),
@@ -353,17 +360,20 @@ impl Term {
     fn pump_native(&mut self) -> bool {
         use sex_pdx::console_relay as c;
         let Ok((status, bytes)) = files::direct::relay::take() else { return false };
+        self.native_status(status);
         let changed = !bytes.is_empty();
         if changed { self.out(&bytes); }
         let replies = self.screen.take_replies();
         if !replies.is_empty() { let _ = files::direct::relay::put(&replies); }
-        let Some(Job { runner: Runner::Native { since }, name, .. }) = &self.job else { return changed };
-        let (since, name) = (*since, name.clone());
+        let Some(Job { runner: Runner::Native(Native { since, stopping, .. }), name, .. }) = &self.job else { return changed };
+        let (since, stopping, name) = (*since, *stopping, name.clone());
         let ended = match status.state {
             c::ENDED if status.code == c::NOT_STARTED => {
                 self.say(&format!("\x1b[31m{}: no such command or program\x1b[0m (type help)\n", name));
                 Some(-2)
             }
+            // Stopped on the person's second Ctrl+C: 128 + 9, as a killed Unix program.
+            c::ENDED if status.code == c::CRASHED && stopping => Some(137),
             c::ENDED => Some(if status.code == c::CRASHED { -1 } else { status.code as i64 }),
             c::STARTING if sex_pdx::get_ticks().saturating_sub(since) > START_MS => {
                 self.say(&format!("\x1b[31m{}: it did not start\x1b[0m (too many programs open?)\n", name));
@@ -517,32 +527,28 @@ impl Term {
     /// Keys while a program of its own runs: the same line discipline, through Files.
     fn native_key(&mut self, key: sex_pdx::app_key::Key) {
         use files::direct::relay;
+        if self.native_direct_key(key) { return; }
+        let echo = self.native_mode() & sex_pdx::console_relay::NO_ECHO == 0;
         let job = self.job.as_mut().unwrap();
         match (key.control, key.code) {
-            (true, 0x2E) => {
-                let _ = relay::interrupt();
-                job.line.clear();
-                sex_pdx::serial_record!("[term.job.interrupt] name={}", job.name);
-                self.say("^C");
-            }
             (true, 0x20) => { let _ = relay::hang_up(); }
             (_, 0x1C) => {
                 let mut line = core::mem::take(&mut job.line);
                 line.push(b'\n');
                 let _ = relay::put(&line);
-                self.say("\r\n");
+                if echo { self.say("\r\n"); }
             }
             (_, 0x0E) => {
                 let mut gone = false;
                 while let Some(b) = job.line.pop() { gone = true; if b & 0xC0 != 0x80 { break; } }
-                if gone { self.say("\x08 \x08"); }
+                if gone && echo { self.say("\x08 \x08"); }
             }
             (false, _) => {
                 if let Some(c) = sex_app::text(key) {
                     let mut utf8 = [0; 4];
                     let bytes = c.encode_utf8(&mut utf8).as_bytes();
                     job.line.extend_from_slice(bytes);
-                    self.out(bytes);
+                    if echo { self.out(bytes); }
                 } else if let Some(k) = nav_key(key) {
                     let bytes = keys::encode(k, Mods { shift: key.shift, control: key.control, alt: false }, self.screen.app_cursor);
                     let _ = relay::put(&bytes);
@@ -550,6 +556,65 @@ impl Term {
             }
             _ => {}
         }
+    }
+
+    // ---- A program of its own: its size, its terminal mode, Ctrl+C and stopping ----
+
+    /// The screen's size in cells, for the program (`TIOCGWINSZ`, `sex_std::terminal::size`).
+    fn native_size(&self) {
+        let (cols, rows) = (self.screen.cols() as u16, self.screen.rows() as u16);
+        let ok = files::direct::relay::set_size(cols, rows).is_ok();
+        sex_pdx::serial_record!("[term.native.size] cols={} rows={} ok={}", cols, rows, ok as u8);
+    }
+    fn native_mode(&self) -> u8 {
+        match &self.job { Some(Job { runner: Runner::Native(n), .. }) => n.mode, _ => 0 }
+    }
+    /// What TAKE said: the mode the program asked for, and its target once it runs.
+    fn native_status(&mut self, status: sex_pdx::console_relay::Status) {
+        let Some(Job { runner: Runner::Native(n), name, .. }) = self.job.as_mut() else { return };
+        if n.mode != status.mode { sex_pdx::serial_record!("[term.native.mode] name={} mode={}", name, status.mode); }
+        n.mode = status.mode;
+        if status.target != 0 { n.target = status.target; }
+    }
+    /// Ctrl+C: an interrupt, which the run sees at its next read, write, sleep or look.
+    /// Pressed again within a second (or Ctrl+\ at once), the run is stopped through Shell,
+    /// since a program computing without asking anything never sees the interrupt.
+    fn native_interrupt(&mut self, stop: bool) {
+        use files::direct::relay;
+        let Some(Job { runner: Runner::Native(n), name, line }) = self.job.as_mut() else { return };
+        let now = sex_pdx::get_ticks();
+        line.clear();
+        if (stop || n.interrupted_at.is_some_and(|at| now.saturating_sub(at) < 1000)) && n.target != 0 {
+            let ok = relay::stop(n.target).is_ok();
+            n.stopping = true;
+            sex_pdx::serial_record!("[term.job.stop] name={} target={} ok={} ms={}", name, n.target, ok as u8, now);
+            self.say("^\\");
+        } else {
+            let _ = relay::interrupt();
+            n.interrupted_at = Some(now);
+            sex_pdx::serial_record!("[term.job.interrupt] name={} ms={}", name, now);
+            self.say("^C");
+        }
+    }
+    /// Keys that skip the line: Ctrl+\ and Ctrl+C (unless the run takes Ctrl+C as a byte),
+    /// and in raw mode every key, sent at once as a terminal encodes it, unechoed.
+    /// True when the key was handled here.
+    fn native_direct_key(&mut self, key: sex_pdx::app_key::Key) -> bool {
+        use sex_pdx::console_relay as c;
+        let mode = self.native_mode();
+        if key.control && key.code == 0x2B { self.native_interrupt(true); return true; }
+        let ctrl_c = key.control && key.code == 0x2E;
+        if ctrl_c && mode & c::NO_SIGNALS == 0 { self.native_interrupt(false); return true; }
+        if mode & c::RAW == 0 && !ctrl_c { return false; }
+        let us = || sex_pdx::app_key::us_char(sex_pdx::app_key::Key { control: false, ..key }).map(|b| Key::Char(b as char));
+        let k = match key.code { 0x1C => Some(Key::Enter), 0x0E => Some(Key::Backspace), _ => None }
+            .or_else(|| nav_key(key))
+            .or_else(|| if key.control { us() } else { sex_app::text(key).map(Key::Char) });
+        if let Some(k) = k {
+            let bytes = keys::encode(k, Mods { shift: key.shift, control: key.control, alt: false }, self.screen.app_cursor);
+            let _ = files::direct::relay::put(&bytes);
+        }
+        true
     }
     fn copy(&mut self) {
         let text = self.screen.selection_text();
@@ -562,7 +627,7 @@ impl Term {
         sex_pdx::serial_record!("[term.paste] bytes={}", text.len());
         if let Some(job) = self.job.as_mut() {
             let bytes = keys::paste(&text, false);
-            for b in bytes { if b == b'\r' { job.line.push(b'\n'); let l = core::mem::take(&mut job.line); match &job.runner { Runner::Guest(g) => { let _ = g.stream.write(Side::Host, &l); } Runner::Native { .. } => { let _ = files::direct::relay::put(&l); } } } else { job.line.push(b); } }
+            for b in bytes { if b == b'\r' { job.line.push(b'\n'); let l = core::mem::take(&mut job.line); match &job.runner { Runner::Guest(g) => { let _ = g.stream.write(Side::Host, &l); } Runner::Native(_) => { let _ = files::direct::relay::put(&l); } } } else { job.line.push(b); } }
             let shown = job.line.clone();
             self.out(&shown);
             return;
