@@ -23,6 +23,8 @@ pub enum Error {
     /// A member outside `<id>/`, a link, or an unsafe path.
     Outside(String),
     Encrypted(String),
+    /// Two members with the same path: which one is meant is unclear.
+    Duplicate(String),
     TooBig,
     /// No `<id>/addon.xml`, or one that does not parse.
     NoAddonXml,
@@ -47,21 +49,25 @@ pub fn unpack(zip: Vec<u8>, id: &str, version: Option<&str>) -> Result<Package, 
     let prefix = alloc::format!("{id}/");
     let mut total = 0u64;
     let mut files = Vec::new();
+    let mut seen = alloc::collections::BTreeSet::new();
     let entries = archive.entries();
     if entries.len() > MAX_FILES { return Err(Error::TooBig); }
     for (index, e) in entries.iter().enumerate() {
-        if !e.safe || !(e.path == id || e.path.starts_with(&prefix)) { return Err(Error::Outside(e.raw_path.clone())); }
+        // The addon's own folder may be listed; every file must be inside it.
+        let inside = e.path.len() > prefix.len() && e.path.starts_with(&prefix);
         match e.kind {
-            EntryKind::Dir => continue,
-            EntryKind::File => {}
+            EntryKind::Dir if e.safe && (e.path == id || inside) => continue,
+            EntryKind::File if e.safe && inside => {}
             _ => return Err(Error::Outside(e.raw_path.clone())),
         }
+        let rel = &e.path[prefix.len()..];
+        if !seen.insert(rel) { return Err(Error::Duplicate(String::from(rel))); }
         if e.encrypted { return Err(Error::Encrypted(e.path.clone())); }
         total = total.saturating_add(e.size);
         if total > MAX_BYTES { return Err(Error::TooBig); }
         let mut data = Vec::with_capacity(e.size.min(MAX_BYTES) as usize);
         archive.extract(index, &mut data, &mut sex_archive::no_progress).map_err(archive_error)?;
-        files.push((String::from(&e.path[prefix.len()..]), data));
+        files.push((String::from(rel), data));
     }
     let xml = files.iter().find(|(p, _)| p == "addon.xml").ok_or(Error::NoAddonXml)?;
     let text = core::str::from_utf8(&xml.1).map_err(|_| Error::NoAddonXml)?;

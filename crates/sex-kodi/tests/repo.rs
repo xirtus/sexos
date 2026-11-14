@@ -183,6 +183,16 @@ fn catalogue_picks_newest_that_runs_and_plans_dependencies() {
     assert!(matches!(cat.plan("inputstream.adaptive", &[]), Err(PlanError::NotInstallable { .. })));
     assert!(matches!(cat.plan("plugin.video.dead", &[]), Err(PlanError::Broken { .. })));
     assert!(matches!(cat.plan("plugin.video.nope", &[]), Err(PlanError::Missing { .. })));
+    // Two imports of one module with different minimums: the plan installs one
+    // version, and every import must accept it.
+    let mut two = Catalogue::new();
+    two.add(0, Addon::parse_list(r#"<addons>
+<addon id="plugin.video.two" version="1" name="Two"><requires><import addon="script.module.a"/><import addon="script.module.b"/></requires><extension point="xbmc.python.pluginsource" library="a.py"/></addon>
+<addon id="script.module.a" version="1" name="a"><requires><import addon="script.module.c" version="1.0"/></requires><extension point="xbmc.python.module"/></addon>
+<addon id="script.module.b" version="1" name="b"><requires><import addon="script.module.c" version="2.0"/></requires><extension point="xbmc.python.module"/></addon>
+<addon id="script.module.c" version="1.5" name="c"><extension point="xbmc.python.module"/></addon>
+</addons>"#).unwrap());
+    assert!(matches!(two.plan("plugin.video.two", &[]), Err(PlanError::TooOld { ref id, ref needed_by, .. }) if id == "script.module.c" && needed_by == "script.module.b"));
 
     let videos: Vec<&str> = cat.plugins(content::VIDEO).iter().map(|e| e.addon.name.as_str()).collect();
     assert_eq!(videos, ["Dead", "Example Video", "Gone"]);
@@ -231,6 +241,10 @@ fn addon_zips() {
         if &escape[i..i + 5] == b"QQ/QQ" { escape[i..i + 5].copy_from_slice(b"../.."); }
     }
     assert!(matches!(sex_kodi::package::unpack(escape, "plugin.video.example", None), Err(Error::Outside(_))));
+    let bare = zip(&[("plugin.video.example", b"x")]);
+    assert!(matches!(sex_kodi::package::unpack(bare, "plugin.video.example", None), Err(Error::Outside(_))));
+    let twice = zip(&[("plugin.video.example/addon.xml", xml), ("plugin.video.example/addon.xml", b"<addon id='plugin.video.example' version='9'/>")]);
+    assert!(matches!(sex_kodi::package::unpack(twice, "plugin.video.example", Some("3.0.0")), Err(Error::Duplicate(_))));
     let none = zip(&[("plugin.video.example/addon.py", b"x")]);
     assert!(matches!(sex_kodi::package::unpack(none, "plugin.video.example", None), Err(Error::NoAddonXml)));
     assert!(matches!(sex_kodi::package::unpack(b"not a zip".to_vec(), "x", None), Err(Error::Archive(_))));

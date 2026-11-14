@@ -150,15 +150,17 @@ impl Catalogue {
         }
         // Already planned, or an import cycle (some repositories have them; Kodi
         // installs both): nothing more to add.
-        if out.iter().any(|e| e.addon.id == id) || visiting.iter().any(|v| v == id) { return Ok(()); }
         let Some(entry) = self.get(id) else {
             return if optional { Ok(()) } else { Err(PlanError::Missing { id: id.into(), needed_by: err_by() }) };
         };
         let a = &entry.addon;
+        // Every import is checked against the one version the plan installs, also
+        // when an earlier import already planned it.
         if !wanted.is_empty() && !version::at_least(&a.version, wanted) {
             if optional { return Ok(()); }
             return Err(PlanError::TooOld { id: id.into(), wanted: wanted.into(), have: a.version.clone(), needed_by: err_by() });
         }
+        if out.iter().any(|e| e.addon.id == id) || visiting.iter().any(|v| v == id) { return Ok(()); }
         if let Some(why) = &a.broken {
             if optional { return Ok(()); }
             return Err(PlanError::Broken { id: id.into(), why: why.clone() });
