@@ -32,6 +32,11 @@ if [[ -z "${LIBAOM_SRC:-}" ]]; then
   fi
 fi
 
+# libaom checks nasm for -Ox by grepping `nasm -hf`, whose output newer nasm releases
+# changed (CI's runners fail it). Every nasm since 2.x does multipass; keep it a warning.
+sed -i 's/FATAL_ERROR "Unsupported nasm: multipass optimization not supported."/WARNING "nasm -hf does not mention -Ox; assuming multipass support"/' \
+  "$LIBAOM_SRC/build/cmake/aom_optimization.cmake"
+
 RES=$(clang -print-resource-dir)/include
 CFLAGS="--target=x86_64-unknown-none-elf -nostdinc -isystem $RES -isystem $MUSL_INCLUDE \
  -msse2 -mno-avx -mno-red-zone -fPIC -ffunction-sections -fdata-sections -fno-stack-protector -D_GNU_SOURCE"
