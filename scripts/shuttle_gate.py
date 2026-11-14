@@ -63,7 +63,7 @@ def main():
   close(opener[1],opener[2],opener[3])
   # A hidden helper runs with no window: framed off every workspace, never tiled or focused.
   s=len(t());expect('run shuttle -h view @pic.png',r'\[shuttle.started\] row=(\d+) task=(\d+) kill=0 hidden=1',240)
-  child=g['wait'](r'\[shell.launch.hidden\] target=(\d+) surface=(\d+)',s,60)
+  child=g['wait'](r'\[shell.launch.placed\] target=(\d+) surface=(\d+) scene=254',s,60)
   g['wait'](r'\[view.shown\] w=\d+ h=\d+',s,120);time.sleep(3)
   log=t()[s:];assert f'[shell.tile.apply] sid={child[2]} ' not in log,'the hidden helper was tiled'
   assert f'[shell.interact.focus] sid={child[2]}' not in log,'the hidden helper took focus'

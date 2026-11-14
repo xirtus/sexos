@@ -13839,7 +13839,9 @@ unsafe fn handle_app_surface_req(surface_id: u64, title_id: u64, arg2: u64, call
     }
 
     // A hidden helper's frame lives off every workspace: no tile, no focus, not drawn.
-    let hidden = launch_hidden(caller_pd);
+    let place = launch_place(caller_pd);
+    let scene = place.unwrap_or(ACTIVE_SCENE_IDX);
+    let hidden = scene != ACTIVE_SCENE_IDX;
     // Create the frame with one tab
     FRAMES[slot_idx] = Some(ShellFrame {
         frame_id,
@@ -13854,7 +13856,7 @@ unsafe fn handle_app_surface_req(surface_id: u64, title_id: u64, arg2: u64, call
             });
             t
         },
-        scene_id: if hidden { HIDDEN_SCENE } else { ACTIVE_SCENE_IDX },
+        scene_id: scene,
         flags: FRAME_FLAG_TOP_BAR, // top bar ON for app surfaces
         normal_x: 200,
         normal_y: 100,
@@ -13871,7 +13873,7 @@ unsafe fn handle_app_surface_req(surface_id: u64, title_id: u64, arg2: u64, call
     // Upsert on sexdisplay via 0xEC (geometry packed: arg1=(y<<32)|x, arg2=(h<<32)|w)
     if hidden {
         pdx_call(SLOT_DISPLAY, 0xEE, frame_surface, 0, 0);
-        sex_pdx::serial_record!("[shell.launch.hidden] target={} surface={}", caller_pd, frame_surface);
+        sex_pdx::serial_record!("[shell.launch.placed] target={} surface={} scene={}", caller_pd, frame_surface, scene);
     } else {
         pdx_call(SLOT_DISPLAY, 0xEC, frame_surface,
             (100u64) << 32 | 200u64,
@@ -13884,6 +13886,7 @@ unsafe fn handle_app_surface_req(surface_id: u64, title_id: u64, arg2: u64, call
     // Re-tile and focus the new surface
     tile_active_scene_frames();
     if !hidden { try_set_focus(frame_surface); }
+    if scene != HIDDEN_SCENE { session_placed(frame_surface, scene); }
 
     sex_pdx::serial_record!("[shell.app_surface.accept] sid={} title_id={} frame={} caps={:#x} app_id={} caller={}",
         manifest.surface_id, manifest.title_id, frame_id,
@@ -17384,7 +17387,30 @@ static mut LAUNCH_HIDDEN:bool=false;
 static mut HIDDEN_RUNS:[Option<(u32,u32)>;sex_pdx::launch::MAX_RUNS]=[None;sex_pdx::launch::MAX_RUNS];
 /// The scene a hidden run's frame lives in: never shown, never switched to.
 const HIDDEN_SCENE:u8=0xFE;
-fn launch_hidden(target:u32)->bool{unsafe{program_run(target).is_some_and(|(_,task)|HIDDEN_RUNS.contains(&Some((target,task))))}}
+/// The Files ticket and workspace of the run Spindle asked for, being read now.
+static mut PROGRAM_TICKET:u64=0;
+static mut PROGRAM_SCENE:Option<u8>=None;
+/// Restored runs and the workspace each window opens on.
+static mut PLACED_RUNS:[Option<(u32,u32,u8)>;sex_pdx::launch::MAX_RUNS]=[None;sex_pdx::launch::MAX_RUNS];
+/// Where a launched run's window opens, if not the active workspace: off every
+/// workspace for a hidden helper, its own workspace for a restored run.
+fn launch_place(target:u32)->Option<u8>{
+    let (_,task)=program_run(target)?;
+    unsafe{
+        if HIDDEN_RUNS.contains(&Some((target,task))){return Some(HIDDEN_SCENE)}
+        PLACED_RUNS.iter().flatten().find(|p|p.0==target&&p.1==task).map(|p|p.2)
+    }
+}
+/// Tells Spindle, which keeps the session, about a program run (`sex_pdx::session_restore`).
+fn session_tell(kind:u64,target:u32,task:u32,value:u64){
+    if app_catalog::by_target(target).is_none_or(|r|r.app!=app_catalog::App::Program){return}
+    let _=pdx_call(spindle_route_slot(),sex_pdx::session_restore::OP_SESSION,kind,(target as u64)<<32|task as u64,value);
+}
+/// A program window moved to `scene`: Spindle's session follows it.
+unsafe fn session_placed(frame_surface:u64,scene:u8){
+    let Some(e)=APP_CUSTODY.iter().flatten().find(|e|e.shell_surface().unwrap_or(e.surface)==frame_surface)else{return};
+    session_tell(sex_pdx::session_restore::PLACED,e.target,e.task,scene as u64);
+}
 /// Runs Shell gave the network, which alone may hand it on.
 static mut NETWORK_RUNS:[Option<(u32,u32)>;sex_pdx::launch::MAX_RUNS]=[None;sex_pdx::launch::MAX_RUNS];
 /// The run a program row has now, if `target` is a program row that is running.
@@ -17403,7 +17429,13 @@ fn launch_send(parent:u32,event:sex_pdx::launch::Event){
 unsafe fn launch_started(target:u32,task:u32,network:bool){
     if network{if let Some(slot)=NETWORK_RUNS.iter_mut().find(|s|s.is_none()){*slot=Some((target,task));}}
     let hidden=core::mem::take(&mut LAUNCH_HIDDEN);
-    let Some((parent,parent_task,cookie))=LAUNCH_ASKER.take()else{return};
+    let scene=PROGRAM_SCENE.take();
+    let Some((parent,parent_task,cookie))=LAUNCH_ASKER.take()else{
+        // Spindle's run: it keeps the session, and a restored run opens on its workspace.
+        if let Some(scene)=scene{if let Some(slot)=PLACED_RUNS.iter_mut().find(|s|s.is_none()){*slot=Some((target,task,scene));}}
+        session_tell(sex_pdx::session_restore::STARTED,target,task,core::mem::take(&mut PROGRAM_TICKET));
+        return
+    };
     if hidden{if let Some(slot)=HIDDEN_RUNS.iter_mut().find(|s|s.is_none()){*slot=Some((target,task));}}
     if let Some(slot)=LAUNCH_RUNS.iter_mut().find(|s|s.is_none()){
         *slot=Some(LaunchRun{parent,parent_task,cookie,child:target,child_task:task,status:None,ended:None});
@@ -17414,6 +17446,8 @@ unsafe fn launch_started(target:u32,task:u32,network:bool){
 /// ended once its status is in, or the grace for it has passed.
 unsafe fn launch_ended(target:u32,task:u32){
     for slot in NETWORK_RUNS.iter_mut().chain(HIDDEN_RUNS.iter_mut()){if *slot==Some((target,task)){*slot=None;}}
+    for slot in PLACED_RUNS.iter_mut(){if slot.is_some_and(|p|p.0==target&&p.1==task){*slot=None;}}
+    session_tell(sex_pdx::session_restore::ENDED,target,task,0);
     let now=sex_pdx::get_ticks();
     for slot in LAUNCH_RUNS.iter_mut(){
         let Some(run)=slot.as_mut()else{continue};
@@ -17514,6 +17548,7 @@ unsafe fn shell_program_message(msg:&sex_pdx::PdxMessage)->bool{
         let(status,_)=pdx_call(store::SHELL_ROUTE_SLOT,store::OP,msg.arg0,msg.arg1,0);
         PROGRAM_READING=status==0;
         PROGRAM_NETWORK=status==0&&msg.arg2&store::RUN_NETWORK!=0;
+        PROGRAM_TICKET=msg.arg1;PROGRAM_SCENE=sex_pdx::session_restore::scene_of(msg.arg2).filter(|s|(*s as usize)<ATLAS_MAX_SCENES);
         if status!=0{sex_pdx::serial_record!("[shell.program.denied] reason=files_busy status={}",status);}
         return true;
     }
@@ -19286,6 +19321,7 @@ unsafe fn reparent_frame_to_scene(frame_id: u32, target_scene: u8, reason: &str)
             if let Some(ref mut frame) = slot {
                 if frame.frame_id == frame_id {
                     frame.scene_id = target_scene;
+                    if let Some(t) = frame.tabs[0] { session_placed(t.surface_id, target_scene); }
                     break;
                 }
             }
