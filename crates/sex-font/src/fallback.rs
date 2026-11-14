@@ -46,6 +46,36 @@ impl<'a> Emoji<'a> {
         None
     }
     pub fn has(&self, scalar: u32) -> bool { self.index(scalar).is_some() }
+    pub fn size(&self) -> usize { self.size }
+    pub fn count(&self) -> usize { self.scalars.len() / 4 }
+    pub fn scalar_at(&self, idx: usize) -> Option<u32> {
+        let s = self.scalars.get(idx * 4..idx * 4 + 4)?;
+        Some(u32::from_le_bytes(s.try_into().ok()?))
+    }
+    /// Bilinearly scales `scalar` into a square `side x side` coverage bitmap in `out`.
+    pub fn rasterize_scaled(&self, scalar: u32, side: usize, out: &mut [u8]) -> bool {
+        let Some(i) = self.index(scalar) else { return false };
+        let Some(need) = side.checked_mul(side) else { return false };
+        if out.len() < need { return false; }
+        if side == 0 { return true; }
+        let n = self.size * self.size / 2;
+        let bitmap = &self.bitmaps[i * n..(i + 1) * n];
+        let s = self.size as u64;
+        for y in 0..side {
+            let sy = ((2 * y as u64 + 1) * s * 128 / side as u64).saturating_sub(128).min((s - 1) * 256);
+            let (y0, fy) = ((sy / 256) as usize, (sy % 256) as u32);
+            let y1 = (y0 + 1).min(self.size - 1);
+            for x in 0..side {
+                let sx = ((2 * x as u64 + 1) * s * 128 / side as u64).saturating_sub(128).min((s - 1) * 256);
+                let (x0, fx) = ((sx / 256) as usize, (sx % 256) as u32);
+                let x1 = (x0 + 1).min(self.size - 1);
+                let top = self.level(bitmap, x0, y0) * (256 - fx) + self.level(bitmap, x1, y0) * fx;
+                let bottom = self.level(bitmap, x0, y1) * (256 - fx) + self.level(bitmap, x1, y1) * fx;
+                out[y * side + x] = ((top * (256 - fy) + bottom * fy) >> 16) as u8;
+            }
+        }
+        true
+    }
     /// Source level 0..=255 at (x, y) in the emoji's own pixels.
     fn level(&self, bitmap: &[u8], x: usize, y: usize) -> u32 {
         let i = y * self.size + x;

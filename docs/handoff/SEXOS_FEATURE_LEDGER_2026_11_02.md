@@ -175,6 +175,18 @@ Linen reopen, Display applied the new Quil view a few seconds late.
 route); drafts are not offered automatically on startup; one draft per
 document source per session.
 
+## G18. 12-hour CI-able long-run soak gate (2026-11-14)
+
+**What changed.** Added `scripts/long_soak_gate.py`, unit suite
+`scripts/tests/test_long_soak_gate.py`, and `.github/workflows/long-soak.yml`
+implementing a continuous 12-hour QEMU soak gate (`--hours 12`, chained across
+three 4.25-hour GitHub Actions segments with `nvme.img` + `--resume-report`
+state handoff so no job approaches GitHub's 360-minute runner limit). Every
+round opens and retires a user-space app (`[app.private.retired]`), plays audio
+through Bell (`beep` / `hum` / `play`), fetches/copies/SHA-256-verifies files
+with hourly persisted canaries, and checks `free_pages` drop + post-warmup OLS
+leak slope + key latency.
+
 ## F4. Browser Back key and preformatted text (2026-11-02)
 
 **What changed.** In an HTML page, **Backspace** returns to the page the
@@ -210,6 +222,12 @@ text, wheel) OK; sealed `make full` green. No runtime behaviour changed.
 
 **Limit.** This bounds one big stack object, not total stack depth. A real
 fix is a stack high-water measurement or a stack quota separate from heap.
+
+## G-15. Flash UVC webcam driver server and capture app (2026-11-14)
+
+**What changed.** Added `crates/sex-uvc` (`#![no_std]`, `#![forbid(unsafe_code)]` USB Video Class 1.1/1.5 descriptor parser, 26/34-byte Probe/Commit control negotiation, bounded `FID`/`EOF`/`ERR` payload reassembler, and `YUY2`/`NV12`/`MJPEG` frame decoders), `servers/sexuvc` (ring-3 userspace UVC webcam driver server with per-client capability grants), and `apps/flash` (camera capture app saving PNG stills and encoding WebM VP9 video directly through Splicy's `sex_media::export::Exporter` without duplicating an encoder).
+
+**Evidence.** `scripts/flash_host_gate.sh` (unit + adversarial fuzz tests + host UVC loopback smoke) and `scripts/flash_gate.py` (QEMU guest UVC negotiation, PNG photo capture, and Splicy WebM video export).
 
 ## F6. Quil shows "DRAFT KEPT"; HTML images show alt text (2026-11-02)
 
@@ -278,6 +296,10 @@ html_text 15 host tests; sealed build and master gate GREEN; native
 `https_html_gate.py` at both sizes with a page containing title, quote, rule
 and image (reader text/pixels, link refusal, follow, Back all pass).
 
+## G-17. Fuzz Round 2 campaign (`sex-torrent`, `sex-kodi`, `docx`/`xlsx`) and reproducers (2026-11-14)
+
+**What changed.** Added 4 standalone `cargo-fuzz` targets (`fuzz_torrent`, `fuzz_kodi_xml`, `fuzz_docx_office`, `fuzz_xlsx_office`), seed corpora, and minimized crash reproducers (`fuzz/repros/round2/`), bringing `scripts/fuzz_smoke_host_gate.sh` to 13 targets. Ran >3.0M AddressSanitizer + libFuzzer executions across PR #236 (`crates/sex-torrent`: 1.61M execs, 0 crashes), PR #251 (`crates/sex-kodi`: 1.34M execs, 0 crashes), and `origin/claude/project-thread-o08hes` (`docx`/`xlsx`/`sex-office`/`spreadeagle`), filing Issue #281 (`sex-office::Pen::text` fixed-point `x * 256` & `mix` overflow/underflow) and Issue #282 (`spreadeagle::book::column_name` `u32::MAX + 1` overflow).
+
 ## F9. Spindle Shift key and `calc` (2026-11-02)
 
 **What changed.** Spindle had no Shift: capitals and symbols such as
@@ -307,6 +329,10 @@ keyboard events with Shift and checks each result record;
 output: Spindle admitted its display batches early in the run but no later
 paint was applied before capture. Together with the Quil paint lag seen in
 F3/F6, this points at Display applying app paints late under these gates.
+
+## G-7: Fix Zip64 EOCD locator subtraction underflow in `sex-archive` (#258) (2026-11-14)
+- `crates/sex-archive/src/zip.rs`: guard `find_eocd`, central-directory bounds and local-file-header offset math with `checked_sub`/`checked_add` so truncated or corrupt Zip64 locators (`20 <= eocd_abs < 76`) return `Err(Error::Corrupt(...))` instead of panicking on unsigned underflow.
+- Regression: `zip_eocd_underflow_issue_258` in `crates/sex-archive/tests/archive.rs` covering the 46-byte `cargo-fuzz` reproducer and boundary lengths `0..=128`.
 
 ## F10. Bounded inline script subset in the Browser (2026-11-02)
 
@@ -374,6 +400,11 @@ native `https_html_gate.py` at both sizes now with the formerly failing
 992-byte page (padding removed): `ticket=2 ... to=Complete`; regressions
 `https_document_gate.py` (12 KB) and `https_asset_gate.py` pass.
 
+## G-10: Burlesque presentations engine (2026-11-14)
+
+- **What runs now.** `burlesque-core` provides pure-Rust presentation slide deck data modeling, standard responsive slide layouts, rich elements (formatted text, vector shapes, embedded pictures, tables, and syntax-highlighted code blocks), undo/redo command stack, OOXML `.pptx`, OpenDocument `.odp`, and Markdown deck import/export, true software rasterizer with proportional Geist fonts, multi-pane presenter view state machine with timer and screen blanking, and vector PDF-1.4 multi-page document export.
+- **Security and bounds.** Hardened against deflate bombs via 32 MiB per-member and 128 MiB global cumulative extraction bounds in `sex-archive`, panic-free UTF-8 char boundary slicing across all XML/markdown/color tokens, bounded `checked_mul` allocation and undersized buffer guards in slide and presenter view rasterizers, and verifiable XRef byte offsets with full character escaping in vector PDF export verified via `vellum-edit`.
+
 ## F12. Numbered, nested and definition lists (2026-11-02)
 
 **What changed.** `<ol>` items are numbered (`start=` honoured), nested lists
@@ -385,6 +416,10 @@ blank line, and `<dl>` shows terms with indented definitions.
 `https_html_gate.py` at both sizes with an ordered list containing a nested
 bulleted list (released text hash equals the expected text; the page is
 1029 bytes, again a two-record response that closes cleanly after F11).
+
+## G-16. Climax vs Linux QEMU benchmark comparison (2026-11-14)
+
+**What changed.** Added reproducible cross-OS benchmark harness `scripts/climax_vs_linux_bench.py` and published `docs/CLIMAX_VS_LINUX_2026_11_14.md` comparing 3-pass medians and min/max ranges of the exact same `climax-core` kernels (`-C opt-level=3 -C codegen-units=1`, bit-exact checksums across all 9 tiers) on SexOS (`x86_64-sex-app.json`) and Alpine Linux 6.6 LTS (`x86_64-unknown-linux-musl` static `/init`) under identical `qemu-system-x86_64 -M q35 -cpu max,+pku -smp 2 -m 1G`.
 
 ## F13. Script subset: branches, comparisons, booleans, helpers (2026-11-02)
 
@@ -477,6 +512,14 @@ gate GREEN; native `https_html_gate.py` at both sizes with six scripts on the
 page (loop sum `20100`, while countdown, `sq(12)=144`, depth-10 parentheses
 and `fact(2)`, array squares, string split/upper/indexOf/parseInt);
 conversion took 9 ticks; no pager rejections.
+
+## G-12: Climax benchmark and thermal throttling stress engine (2026-11-14)
+- Added `climax-core` crate providing `#![no_std] + alloc` CPU and memory microbenchmarks, sustained torture runner, thermal throttling detection, and visual report generation.
+- Deterministic CPU microbenchmarks: ChaCha20/ARX integer ALU, SHA-256 compression, FMA-free tiled GEMM, and vectorizable DSP biquad IIR filter with bit-exact corruption self-checking.
+- Memory subsystem benchmarks: STREAM bandwidth engine with explicit `max_memory_bytes` quota and `Vec::try_reserve_exact` bounds, plus Sattolo single-cycle permutation pointer-chase latency ladder across L1/L2/L3/DRAM.
+- Sustained torture runner and thermal throttling analyzer: time-series sample acquisition, rolling window throughput evaluation against initial boost baseline, throttling onset detection, and 3DMark-style sustained stability percentage.
+- Report formatter: subsystem scores, geometric composite score with zero/NaN protection, p50/p95/p99 throughput percentiles, and fixed-width ASCII/Unicode bar charts for Spindle and Weft displays.
+- Gate: `scripts/climax_host_gate.sh` passing host unit tests and `x86_64-sex-app.json` target check.
 
 ## F21. Spindle `calc` powers (2026-11-03)
 
@@ -631,6 +674,11 @@ older focus thousands of records later, and the run ends before it reaches
 153. Spindle's pending text and the late Quil paints (F3/F6) are the same
 backlog. The fix is Display throughput (repaint cost under TCG), which is
 the concurrent session's area; not changed here.
+
+## G-9: Batik layered image editor and digital painting engine (2026-11-14)
+
+- **Engine and Compositor:** Layered canvas composition with 12 straight-alpha Porter-Duff blend modes, non-destructive adjustment layers (Levels, Curves, HSL), spatial filters (separable Gaussian/box blur, unsharp mask, pixelate), feathered 8-bit selection masks, pressure-sensitive brush engine with dynamics, and memory-bounded undo/redo history journaling.
+- **Interchange and Hardening:** Multi-layer Adobe Photoshop (.psd) parsing with RLE PackBits decompression and OpenRaster (.ora) reading/writing backed by zipped stack.xml and PNGs, fully hardened against integer overflow, denial-of-service allocations, and path traversal under untrusted input in SexOS confined address spaces.
 
 ## G1-G5. Script: assignment operators, do/switch, array and string methods, callbacks, arrows (2026-11-03)
 
@@ -4020,6 +4068,27 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   password gets no confirm.
 - **ABI / kernel:** none.
 
+## Laptop power: battery, lid, brightness, profiles, thermal (2026-11-13)
+
+Embedded controller driver and firmware events in sexacpi (vendored acpi crate now calls region
+handlers and `Notify`), battery percent and time left in the panel, lid and power-button events
+to the Shell (power dialog), ACPI brightness with Fn keys and launcher commands, HWP/CPPC power
+profiles, clean shut down on a critical thermal zone or battery. Touchpad protocol, descriptor
+parser and gestures as a host-tested crate. Details: `LAPTOP_POWER_2026_11_13.md`.
+
+## Laptop touchpad over I2C (2026-11-13)
+
+DesignWare I2C master crate (`sex-i2c-dw`), BOOT lease of Intel Serial IO I2C functions to
+Input, sexacpi describes the `PNP0C50` touchpad (`_CRS`, `_DSM`, `_ADR`, `FMCN`) and hands it
+to Input, which brings the pad into touchpad mode and turns frames into pointer, click,
+scroll, Alt+Tab swipe and pinch-zoom events. Polled for now. Details:
+`LAPTOP_POWER_2026_11_13.md` (Touchpad section).
+
+## Sleep: lid close and launcher Sleep (2026-11-13)
+
+Suspend to idle: the lid or the launcher puts the desktop to sleep, the lid or power button
+wakes it. Firmware low-power-idle `_DSM` (Intel and Microsoft), panel dark, cores prefer
+energy. Details: `LAPTOP_POWER_2026_11_13.md` (Sleep section).
 ## Settings store, slice B1: `sex-config` kept by Files (2026-11-13)
 - **What:** new `crates/sex-config`: one typed schema of 18 settings (appearance,
   desktop, display, keyboard, sound, time, session, setup) with stable numbers, ranges
@@ -4080,8 +4149,13 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
 - **Evidence:** `settings_host_gate.sh` (password set/check/wipe with real Argon2id,
   state words and shades, Settings password entry); display host gates updated with a
   lock-surface stub; QEMU gate `scripts/lock_screen_gate.py` in CI (devices job).
-- **Not yet:** inhibiting idle while media plays (needs a Bell hint); a salt from the
-  kernel's held entropy source instead of RDRAND.
+- **Media holds idle off (2026-11-14):** before idle dims, locks or blanks, the Shell asks
+  Bell `sound_mixer::STREAMING` (12): is a program's stream open and not paused? A yes
+  restarts the idle clock (`[shell.idle] inhibited=media`). The answer has its own tag
+  (`STREAMING_TAG` 0x4E), so a lost one never shifts the Shell's in-order mixer asks. The Shell waits up to 2 s for
+  the answer, and a no holds for 10 s (`servers/silk-shell/src/idle_media.rs`, host-tested
+  in `settings_host_gate.sh`). A short notification sound doesn't count; only streams do.
+- **Not yet:** a salt from the kernel's held entropy source instead of RDRAND.
 
 ## Volume and keyboard settings act (2026-11-14)
 - **Volume:** the Shell keeps the volume in settings (`sound.volume`). After a volume or mute
@@ -4230,6 +4304,10 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
 - scripts/soak_gate.py (existing workload: files, downloads, Browser, Jot, Fortune, background records) now also: reads free program memory from Monitor each round (`[monitor.sample] ... free_pages=`) and fails on a fall of more than --leak-pages below the first rounds; times a key (--max-key-ms); reads back every note saved so far; with --inject (SEXOS_CRASH_PROBE=1 ISO) stops Files, Network, Bell, Input, Shell, Display in turn each round. soak.json rewritten every round.
 - Kernel: a service gives up after 8 restarts only if each came within 60 s of the last (CRASH_LOOP_TICKS); before, 8 restarts over any uptime left it down for good.
 - Run: 0.6 h, 2 cores, 20 rounds, every restartable service stopped 3-4 times: all notes intact, free program pages 55913 every round, no failures. 24 h: `--hours 24 --inject` (not in CI).
+
+## G-3: Shuttle userspace font fallback, RTL/BiDi shaping and font picker (2026-11-14)
+- New `#![no_std]` (`#![forbid(unsafe_code)]`) userspace crate `crates/shuttle` (plus scaled emoji coverage in `sex-font`): multi-paragraph UAX #9 BiDi with L2 visual run reordering, `unicode-script` itemization, `rustybuzz` OpenType shaping for Arabic/Hebrew/Indic, CJK line-breaking, emoji scaling/blending, cursor/hit-testing, and shared `FontCatalog`/`FontPicker`.
+- Gate: `scripts/shuttle_host_gate.sh` (43+ host tests and `x86_64-sex-app` confined target build).
 
 ## Fix: USB Ethernet regression from #196 (2026-11-14)
 - usb_net_gate failed on master ("fetch: could not connect"). With MSI-X wakes, sexusb idled 32 ticks between passes. Two gaps: `sleep_ticks` took interrupts for events the main loop had not drained yet, and the network's USB Ethernet transmit ring has no wake. Now `xhci::SLEPT` makes the next wait 1 tick after any sleep in a pass, and the loop polls every tick while an Ethernet adapter is up (`Usb::ether_active`). usb_net_gate passes; idle QEMU CPU 19%.

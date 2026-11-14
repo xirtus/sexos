@@ -1,0 +1,213 @@
+name: 12-Hour Long-Run Soak Gate
+
+'on':
+  workflow_dispatch:
+    inputs:
+      hours:
+        description: 'Total soak duration in hours'
+        required: false
+        default: '12'
+      leak_pages:
+        description: 'Maximum permitted memory leak in pages (256 pages = 1 MiB)'
+        required: false
+        default: '256'
+      cores:
+        description: 'Number of QEMU CPU cores'
+        required: false
+        default: '2'
+  schedule:
+    # Run weekly every Sunday at 00:00 UTC
+    - cron: '0 0 * * 0'
+
+concurrency:
+  group: soak-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-iso:
+    name: Build Sealed ISO
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+        with:
+          qemu: "false"
+      - name: Build the image
+        run: ./scripts/entrypoint_build.sh
+      - name: Upload ISO and user-space binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: sexos-soak-iso
+          path: |
+            sexos-v1.0.0.iso
+            iso_root/programs
+          retention-days: 7
+
+  soak-segment-1:
+    name: Soak Segment 1 (0h - 4.25h)
+    runs-on: ubuntu-latest
+    needs: [build-iso]
+    timeout-minutes: 300
+    env:
+      SOAK_HOURS: ${{ inputs.hours || '12' }}
+      SOAK_LEAK_PAGES: ${{ inputs.leak_pages || '256' }}
+      SOAK_CORES: ${{ inputs.cores || '2' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+        with:
+          qemu: "true"
+      - name: Download ISO artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: sexos-soak-iso
+      - name: Run Soak Segment 1
+        run: |
+          mkdir -p "$RUNNER_TEMP/soak1"
+          truncate -s 1024M "$RUNNER_TEMP/source.img"
+          python3 scripts/long_soak_gate.py \
+            --iso sexos-v1.0.0.iso \
+            --source-disk "$RUNNER_TEMP/source.img" \
+            --out "$RUNNER_TEMP/soak1" \
+            --hours "$SOAK_HOURS" \
+            --max-segment-hours 4.25 \
+            --segment-id 1 \
+            --leak-pages "$SOAK_LEAK_PAGES" \
+            --cores "$SOAK_CORES"
+          cp "$RUNNER_TEMP/soak1/long-soak.json" "$RUNNER_TEMP/soak1/long-soak-segment1.json"
+      - name: Save Segment 1 Summary
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/soak1/long-soak-summary.md" ]; then
+            cat "$RUNNER_TEMP/soak1/long-soak-summary.md" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload Segment 1 State and Evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: soak-segment-1-state
+          path: |
+            ${{ runner.temp }}/soak1/nvme.img
+            ${{ runner.temp }}/soak1/long-soak-segment1.json
+            ${{ runner.temp }}/soak1/long-soak.json
+            ${{ runner.temp }}/soak1/long-soak-summary.md
+            ${{ runner.temp }}/soak1/*.log
+            ${{ runner.temp }}/soak1/*.ppm
+          retention-days: 7
+
+  soak-segment-2:
+    name: Soak Segment 2 (4.25h - 8.5h)
+    runs-on: ubuntu-latest
+    needs: [build-iso, soak-segment-1]
+    if: ${{ always() && needs.soak-segment-1.result == 'success' && fromJSON(inputs.hours || '12') > 4.25 }}
+    timeout-minutes: 300
+    env:
+      SOAK_HOURS: ${{ inputs.hours || '12' }}
+      SOAK_LEAK_PAGES: ${{ inputs.leak_pages || '256' }}
+      SOAK_CORES: ${{ inputs.cores || '2' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+        with:
+          qemu: "true"
+      - name: Download ISO artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: sexos-soak-iso
+      - name: Download Segment 1 State
+        uses: actions/download-artifact@v4
+        with:
+          name: soak-segment-1-state
+          path: segment1_state
+      - name: Run Soak Segment 2
+        run: |
+          mkdir -p "$RUNNER_TEMP/soak2"
+          python3 scripts/long_soak_gate.py \
+            --iso sexos-v1.0.0.iso \
+            --source-disk segment1_state/nvme.img \
+            --resume-report segment1_state/long-soak-segment1.json \
+            --out "$RUNNER_TEMP/soak2" \
+            --hours "$SOAK_HOURS" \
+            --max-segment-hours 4.25 \
+            --segment-id 2 \
+            --leak-pages "$SOAK_LEAK_PAGES" \
+            --cores "$SOAK_CORES"
+          cp "$RUNNER_TEMP/soak2/long-soak.json" "$RUNNER_TEMP/soak2/long-soak-segment2.json"
+      - name: Save Segment 2 Summary
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/soak2/long-soak-summary.md" ]; then
+            cat "$RUNNER_TEMP/soak2/long-soak-summary.md" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload Segment 2 State and Evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: soak-segment-2-state
+          path: |
+            ${{ runner.temp }}/soak2/nvme.img
+            ${{ runner.temp }}/soak2/long-soak-segment2.json
+            ${{ runner.temp }}/soak2/long-soak.json
+            ${{ runner.temp }}/soak2/long-soak-summary.md
+            ${{ runner.temp }}/soak2/*.log
+            ${{ runner.temp }}/soak2/*.ppm
+          retention-days: 7
+
+  soak-segment-3:
+    name: Soak Segment 3 (8.5h - 12h)
+    runs-on: ubuntu-latest
+    needs: [build-iso, soak-segment-2]
+    if: ${{ always() && needs.soak-segment-2.result == 'success' && fromJSON(inputs.hours || '12') > 8.5 }}
+    timeout-minutes: 300
+    env:
+      SOAK_HOURS: ${{ inputs.hours || '12' }}
+      SOAK_LEAK_PAGES: ${{ inputs.leak_pages || '256' }}
+      SOAK_CORES: ${{ inputs.cores || '2' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+        with:
+          qemu: "true"
+      - name: Download ISO artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: sexos-soak-iso
+      - name: Download Segment 2 State
+        uses: actions/download-artifact@v4
+        with:
+          name: soak-segment-2-state
+          path: segment2_state
+      - name: Run Soak Segment 3
+        run: |
+          mkdir -p "$RUNNER_TEMP/soak3"
+          python3 scripts/long_soak_gate.py \
+            --iso sexos-v1.0.0.iso \
+            --source-disk segment2_state/nvme.img \
+            --resume-report segment2_state/long-soak-segment2.json \
+            --out "$RUNNER_TEMP/soak3" \
+            --hours "$SOAK_HOURS" \
+            --max-segment-hours 4.25 \
+            --segment-id 3 \
+            --leak-pages "$SOAK_LEAK_PAGES" \
+            --cores "$SOAK_CORES"
+      - name: Publish Final 12-Hour Summary
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/soak3/long-soak-summary.md" ]; then
+            cat "$RUNNER_TEMP/soak3/long-soak-summary.md" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload Final 12-Hour Report & Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: soak-final-report
+          path: |
+            ${{ runner.temp }}/soak3/long-soak.json
+            ${{ runner.temp }}/soak3/long-soak-summary.md
+            ${{ runner.temp }}/soak3/*.log
+            ${{ runner.temp }}/soak3/*.ppm
+          retention-days: 14
