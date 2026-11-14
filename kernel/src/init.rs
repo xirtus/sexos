@@ -322,6 +322,11 @@ pub fn init() {
                     silkshell_id
                 );
             }
+            // The panel tray reads Wi-Fi state (sex_pdx::wifi_status admits the Shell).
+            if sexnet_id != 0 {
+                pd.grant_capability(sex_pdx::SLOT_NET, CapabilityData::Domain(sexnet_id));
+                serial_println!("[bootgraph.cap.grant] from=kernel to={} slot=SLOT_NET target={} ok=1 optional=1", silkshell_id, sexnet_id);
+            }
             serial_println!("✓ Phase 25: Capabilities granted to silk-shell");
         } else {
             serial_println!(

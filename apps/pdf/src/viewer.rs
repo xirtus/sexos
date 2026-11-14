@@ -492,6 +492,7 @@ pub fn main() {
             Event::Resize { .. } => true,
             Event::Key(key) => viewer.key(key, window.size()),
             Event::Pointer(p) => viewer.pointer(p, window.size()),
+            Event::Drop { .. } | Event::DragEnded { .. } => false,
         };
         if changed { viewer.draw(window); }
     }
