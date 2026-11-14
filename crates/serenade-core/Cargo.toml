@@ -1,0 +1,12 @@
+[package]
+name = "serenade-core"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Serenade's audio recording, metering, waveform mipmap, non-destructive editing and WAV engine"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+libm = { version = "=0.2.16", default-features = false }

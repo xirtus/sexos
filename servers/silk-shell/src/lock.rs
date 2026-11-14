@@ -9,9 +9,11 @@
 //!
 //! Idle: with no input for the times in settings (`session.*`), the screen dims, then
 //! locks (if `session.lock_on_idle`), then goes off. Any input brings it back; the
-//! input that wakes a dimmed or dark screen does nothing else.
+//! input that wakes a dimmed or dark screen does nothing else. While a program's sound
+//! plays (Bell says so), idle starts again instead (`idle_media`).
 use sex_config::{id, secret as p};
 use sex_pdx::screen_state::{self as s, Lock};
+use crate::idle_media::{Inhibit, Step};
 
 const FILES_PD: u32 = 11;
 const MINUTE: u64 = 60_000;
@@ -167,6 +169,18 @@ pub fn input(class: u64, code: u8, value: u64) -> bool {
     woke && !(class == sex_pdx::EV_KEY && value == 0)
 }
 
+static mut INHIBIT: Inhibit = Inhibit::new();
+
+/// Bell's answer to whether a program's sound plays: if so, idle starts again.
+pub fn media_answer(playing: bool) {
+    let se = session();
+    let now = sex_pdx::get_ticks();
+    if unsafe { (*core::ptr::addr_of_mut!(INHIBIT)).answer(now, playing) } {
+        se.last_input = now;
+        sex_pdx::serial_record!("[shell.idle] inhibited=media");
+    }
+}
+
 fn minutes(key: u16) -> u64 { crate::config_watch::value(key).max(0) as u64 * MINUTE }
 
 /// Steps the idle policy. Called whenever the Shell wakes.
@@ -181,8 +195,16 @@ pub fn poll() {
     if se.last_input == 0 { se.last_input = now; }
     let idle = now.saturating_sub(se.last_input);
     let (dim, lock_at, off) = (minutes(id::DIM_AFTER), minutes(id::LOCK_AFTER), minutes(id::BLANK_AFTER));
-    if lock_at != 0 && idle >= lock_at && !se.lock.locked && crate::config_watch::value(id::LOCK_ON_IDLE) != 0 { lock(); }
+    let lock_due = lock_at != 0 && idle >= lock_at && !se.lock.locked && crate::config_watch::value(id::LOCK_ON_IDLE) != 0;
     let mode = if off != 0 && idle >= off { s::OFF } else if dim != 0 && idle >= dim { s::DIM } else { se.mode };
+    // Media playing holds idle off: ask Bell before a step, and wait briefly for it.
+    let inhibit = unsafe { &mut *core::ptr::addr_of_mut!(INHIBIT) };
+    match inhibit.step(now, lock_due || mode != se.mode) {
+        Step::Proceed => {}
+        Step::Wait => return,
+        Step::Ask => { if unsafe { crate::media_streaming_ask() } { inhibit.asked(now); return; } }
+    }
+    if lock_due { lock(); }
     if mode != se.mode {
         se.mode = mode;
         sex_pdx::serial_record!("[shell.idle] state={} idle_ms={}", if mode == s::OFF { "off" } else { "dim" }, idle);
@@ -197,8 +219,9 @@ pub fn next_wake() -> Option<u64> {
     let now = sex_pdx::get_ticks();
     let idle = now.saturating_sub(se.last_input);
     let answer = (se.asked != Asked::Nothing).then(|| (se.asked_at + ANSWER_TICKS + 1).saturating_sub(now).max(1));
+    let media = unsafe { (*core::ptr::addr_of!(INHIBIT)).waiting() }.then_some(crate::idle_media::ANSWER_MS + 1);
     [minutes(id::DIM_AFTER), minutes(id::LOCK_AFTER), minutes(id::BLANK_AFTER)].iter()
-        .filter(|t| **t != 0 && **t > idle).map(|t| t - idle).chain(answer).min()
+        .filter(|t| **t != 0 && **t > idle).map(|t| t - idle).chain(answer).chain(media).min()
 }
 
 /// Display started again: show it the lock and screen state.
