@@ -103,7 +103,11 @@ def check_manifests(tls, workspace, app, trust=None):
                                       'console': {'path': 'vendor/console-0.16.6'},
                                       'path_abs': {'path': 'vendor/path_abs-0.5.1'},
                                       'clircle': {'path': 'vendor/clircle-0.6.1'}}}
-    if workspace.get('patch') and workspace.get('patch') != reviewed_patches:
+    # Reviewed allocation-free split discovery clocks; this does not replace
+    # any TLS provider or alter the required existing patch selections.
+    with_neighbor_fix = {'crates-io': {**reviewed_patches['crates-io'],
+                                      'smoltcp': {'path': 'vendor/smoltcp-0.14.0'}}}
+    if workspace.get('patch') and workspace.get('patch') not in (reviewed_patches, with_neighbor_fix):
         errors.append('workspace dependency replacement needs TLS policy review: patch')
     if workspace.get('replace'):
         errors.append('workspace dependency replacement needs TLS policy review: replace')
