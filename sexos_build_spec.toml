@@ -54,6 +54,7 @@ crates = [
   "apps/quil/Cargo.toml",
   "apps/files/Cargo.toml",
   "apps/peek/Cargo.toml",
+  "apps/shuttle/Cargo.toml",
   "apps/talk/Cargo.toml",
   "apps/view/Cargo.toml",
   "apps/heaptest/Cargo.toml",
@@ -87,7 +88,12 @@ crates = [
   "apps/python/Cargo.toml",
   "apps/store/Cargo.toml",
   "apps/sdltest/Cargo.toml",
-  "apps/driftspark/Cargo.toml"
+  "apps/driftspark/Cargo.toml",
+  "apps/lurk/Cargo.toml",
+  "apps/bodice/Cargo.toml",
+  "apps/gossip/Cargo.toml",
+  "apps/hookup/Cargo.toml",
+  "apps/rendezvous/Cargo.toml"
 ]
 
 [[stage]]
@@ -288,6 +294,14 @@ target = "x86_64-sex-app.json"
 manifest = "apps/peek/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/peek"
 dest_artifact = "iso_root/programs/peek"
+
+[[stage]]
+id = "build_shuttle"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/shuttle/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/shuttle"
+dest_artifact = "iso_root/programs/shuttle"
 
 [[stage]]
 id = "build_talk"
@@ -543,6 +557,24 @@ manifest = "apps/driftspark/Cargo.toml"
 source_artifact = "target/x86_64-sex-std/release/driftspark"
 dest_artifact = "iso_root/programs/driftspark"
 
+# Bodice: e-books (EPUB, FictionBook, comics), on sex-app with sex-ebook.
+[[stage]]
+id = "build_bodice"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/bodice/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/bodice"
+dest_artifact = "iso_root/programs/bodice"
+
+# Gossip: feeds and podcasts (RSS, Atom, OPML), on sex-app with sex-feed.
+[[stage]]
+id = "build_gossip"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/gossip/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/gossip"
+dest_artifact = "iso_root/programs/gossip"
+
 # PDF: the first ordinary std app, hayro rendering pages into the window.
 [[stage]]
 id = "build_pdf"
@@ -562,6 +594,26 @@ build_std = "std,panic_abort"
 manifest = "apps/aftercare/Cargo.toml"
 source_artifact = "target/x86_64-sex-std/release/aftercare"
 dest_artifact = "iso_root/programs/aftercare"
+
+# Hookup: the phone link (KDE Connect protocol, crates/sex-kdeconnect) over std::net.
+[[stage]]
+id = "build_hookup"
+action = "cargo_manifest"
+target = "x86_64-sex-std.json"
+build_std = "std,panic_abort"
+manifest = "apps/hookup/Cargo.toml"
+source_artifact = "target/x86_64-sex-std/release/hookup"
+dest_artifact = "iso_root/programs/hookup"
+
+# Rendezvous: maps (vector tiles, search, routes, offline regions; crates/sex-map).
+[[stage]]
+id = "build_rendezvous"
+action = "cargo_manifest"
+target = "x86_64-sex-std.json"
+build_std = "std,panic_abort"
+manifest = "apps/rendezvous/Cargo.toml"
+source_artifact = "target/x86_64-sex-std/release/rendezvous"
+dest_artifact = "iso_root/programs/rendezvous"
 
 [[stage]]
 id = "build_play"
@@ -660,6 +712,15 @@ target = "x86_64-sex-app.json"
 manifest = "apps/hum/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/doze"
 dest_artifact = "iso_root/programs/doze"
+
+# Lurk: the remote desktop viewer (VNC/RFB client), `run +net lurk HOST:PORT`.
+[[stage]]
+id = "build_lurk"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/lurk/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/lurk"
+dest_artifact = "iso_root/programs/lurk"
 
 [[stage]]
 id = "build_sext"

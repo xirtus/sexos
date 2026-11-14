@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <atom:link href="http://10.0.2.2/feed.xml" rel="self" type="application/rss+xml"/>
+    <title>Gossip Fixture Radio</title>
+    <link>http://example.org/</link>
+    <description>A small feed for the Gossip tests.</description>
+    <item>
+      <title>Episode 3: Lanterns &amp; Ferries</title>
+      <link>http://example.org/3</link>
+      <guid isPermaLink="false">fixture-3</guid>
+      <pubDate>Sat, 14 Nov 2026 09:00:00 GMT</pubDate>
+      <description>&lt;p&gt;The &lt;b&gt;third&lt;/b&gt; episode.&lt;/p&gt;&lt;p&gt;Second paragraph.&lt;/p&gt;</description>
+      <enclosure url="http://10.0.2.2/episode3.mp3" length="16" type="audio/mpeg"/>
+    </item>
+    <item>
+      <title>A post with full content</title>
+      <link>http://example.org/2</link>
+      <guid>http://example.org/2</guid>
+      <dc:date>2026-11-13T08:00:00Z</dc:date>
+      <description>Teaser only.</description>
+      <content:encoded><![CDATA[<h2>Full text</h2><p>Everything, with <a href="x">a link</a>.</p>]]></content:encoded>
+    </item>
+    <item>
+      <title>No guid here</title>
+      <link>http://example.org/1</link>
+      <description>Plain words.</description>
+    </item>
+  </channel>
+</rss>
