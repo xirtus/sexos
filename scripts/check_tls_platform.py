@@ -107,7 +107,11 @@ def check_manifests(tls, workspace, app, trust=None):
                                       # neither package occurs in sex-tls's target graph.
                                       'keepass': {'path': 'vendor/keepass-0.17.0'},
                                       'rust-argon2': {'path': 'vendor/rust-argon2-3.0.0'}}}
-    if workspace.get('patch') and workspace.get('patch') != reviewed_patches:
+    # Reviewed allocation-free split discovery clocks; this does not replace
+    # any TLS provider or alter the required existing patch selections.
+    with_neighbor_fix = {'crates-io': {**reviewed_patches['crates-io'],
+                                      'smoltcp': {'path': 'vendor/smoltcp-0.14.0'}}}
+    if workspace.get('patch') and workspace.get('patch') not in (reviewed_patches, with_neighbor_fix):
         errors.append('workspace dependency replacement needs TLS policy review: patch')
     if workspace.get('replace'):
         errors.append('workspace dependency replacement needs TLS policy review: replace')
