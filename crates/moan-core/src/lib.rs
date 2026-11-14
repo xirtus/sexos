@@ -6,17 +6,23 @@
 #![no_std]
 extern crate alloc;
 pub mod effects;
+pub mod midi;
 use alloc::{sync::Arc, vec::Vec};
 #[derive(Clone, Debug)]
 enum Source<'a> {
     Borrowed(&'a [Frame]),
     Owned(Arc<[Frame]>),
+    Midi {
+        pattern: Arc<midi::Pattern>,
+        pcm: Arc<Vec<Frame>>,
+    },
 }
 impl Source<'_> {
     fn frames(&self) -> &[Frame] {
         match self {
             Self::Borrowed(v) => v,
             Self::Owned(v) => v,
+            Self::Midi { pcm, .. } => pcm,
         }
     }
 }
@@ -64,6 +70,47 @@ impl<'a> Clip<'a> {
             fade_in: 0,
             fade_out: 0,
         })
+    }
+    /// Editable MIDI source with an immutable audio cache, built outside render.
+    pub fn midi(pattern: midi::Pattern, start: usize) -> Result<Clip<'static>, midi::Error> {
+        let pcm = pattern.bake()?;
+        start.checked_add(pcm.len()).ok_or(midi::Error::Range)?;
+        Ok(Clip {
+            len: pcm.len(),
+            source: Source::Midi {
+                pattern: Arc::new(pattern),
+                pcm,
+            },
+            offset: 0,
+            start,
+            gain: 100,
+            fade_in: 0,
+            fade_out: 0,
+        })
+    }
+    pub fn midi_pattern(&self) -> Option<&midi::Pattern> {
+        match &self.source {
+            Source::Midi { pattern, .. } => Some(pattern),
+            _ => None,
+        }
+    }
+    /// Share a rebaked source while retaining every clip's trim, position and fades.
+    pub fn replace_midi_source(&mut self, source: &Clip<'_>) -> Result<(), midi::Error> {
+        if self.midi_pattern().is_none()
+            || source.midi_pattern().is_none()
+            || self.source_frames().len() != source.source_frames().len()
+        {
+            return Err(midi::Error::Range);
+        }
+        if let Source::Midi { pattern, pcm } = &source.source {
+            self.source = Source::Midi {
+                pattern: pattern.clone(),
+                pcm: pcm.clone(),
+            };
+            Ok(())
+        } else {
+            Err(midi::Error::Range)
+        }
     }
     /// Immutable source view, shared by project clips; never mutable audio.
     pub fn source_frames(&self) -> &[Frame] {
@@ -261,6 +308,16 @@ pub fn render(tracks: &[Track<'_>], start: usize, out: &mut [Frame]) {
 /// Pausing means making no calls. Empty blocks do not alter DSP or position.
 /// This processes indefinitely beyond clip ends so reverberation can decay.
 pub fn render_processed(tracks: &mut [Track<'_>], start: usize, out: &mut [Frame]) {
+    render_processed_observed(tracks, start, out, |_, _| {});
+}
+/// Tap the actual post-effects/post-fader track samples once, without a second DSP
+/// pass or allocation. The caller may feed a preallocated meter; muted tracks tap silence.
+pub fn render_processed_observed(
+    tracks: &mut [Track<'_>],
+    start: usize,
+    out: &mut [Frame],
+    mut sample: impl FnMut(usize, Frame),
+) {
     if out.is_empty() {
         return;
     }
@@ -276,7 +333,7 @@ pub fn render_processed(tracks: &mut [Track<'_>], start: usize, out: &mut [Frame
             continue;
         };
         let mut mix = [0i64; 2];
-        for t in tracks.iter_mut() {
+        for (index, t) in tracks.iter_mut().enumerate() {
             let mut sum = [0i64; 2];
             for clip in &t.clips {
                 let f = clip.sample(at);
@@ -286,16 +343,22 @@ pub fn render_processed(tracks: &mut [Track<'_>], start: usize, out: &mut [Frame
             }
             let f = t.effects.frame(sum);
             if t.muted || (solo && !t.solo) {
+                sample(index, [0; 2]);
                 continue;
             }
             let balance = [100 - t.pan.max(0) as i64, 100 + t.pan.min(0) as i64];
+            let mut post = [0i64; 2];
             for c in 0..2 {
-                mix[c] = mix[c].saturating_add(
-                    f[c].saturating_mul(t.volume as i64)
-                        .saturating_mul(balance[c])
-                        / 10000,
-                );
+                post[c] = f[c]
+                    .saturating_mul(t.volume as i64)
+                    .saturating_mul(balance[c])
+                    / 10000;
+                mix[c] = mix[c].saturating_add(post[c]);
             }
+            sample(
+                index,
+                post.map(|v| v.clamp(i16::MIN as i64, i16::MAX as i64) as i16),
+            );
         }
         *dest = mix.map(|v| v.clamp(i16::MIN as i64, i16::MAX as i64) as i16);
     }
