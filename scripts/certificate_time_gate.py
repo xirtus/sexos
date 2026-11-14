@@ -237,7 +237,7 @@ def replay_evidence(root,iso,binding_path,out):
   if hashlib.sha256(gzip.decompress((out/name).read_bytes())).hexdigest()!=expected:raise ValueError('clock disk hash differs')
  trace=clock_serial_text(out/'serial.log');raw=(out/'wire.pcap').read_bytes();endpoints=json.loads((out/'endpoint-exchanges.json').read_text())['public_baseline'];actions=json.loads((out/'actions.json').read_text())
  if len(endpoints)!=1 or re.search(r'KERNEL PANIC|KERNEL PAGE FAULT|DOUBLE FAULT|GP FAULT|panicked at|serial.record.overflow|\[fault.kill\]',trace):raise ValueError('clock guest/endpoint failure')
- clock=inspect_clock(trace,mode,command,manifest['host_utc_start'],manifest['host_utc_end'],root=root);wire=tcp_capture(raw,endpoints,guest_ports=range(48001,65536),initiator='guest');owners=owner_joins(trace,raw,[(15,15)]);authority=nic_check(trace,expected=1,preparation=True,ethernet=True,network_config=True,routing=True);waiting=wait_check(trace)
+ clock=inspect_clock(trace,mode,command,manifest['host_utc_start'],manifest['host_utc_end'],root=root);wire=tcp_capture(raw,endpoints,guest_ports=range(48001,65536),initiator='guest');owners=owner_joins(trace,raw,[(15,15)]);authority=nic_check(trace,expected=1,preparation=True,ethernet=True,network_config=True,routing=True);waiting=wait_check(trace,source_root=root)
  for check in(clock,wire,owners,authority,waiting):
   if not check['ok']:raise ValueError('clock replay join failed: '+str(check.get('errors')))
  for frame in frames(raw):
@@ -361,7 +361,7 @@ def main():
    try:proc.wait(timeout=5)
    except subprocess.TimeoutExpired:proc.kill();proc.wait()
   sock.unlink(missing_ok=True)
- manifest['host_utc_end']=host_end;raw=pcap.read_bytes()if pcap.exists()else b'';trace=text();wire=tcp_capture(raw,rows,guest_ports=range(48001,65536),initiator='guest')if raw else dict(ok=False,errors=['missing actual wire capture']);owners=owner_joins(trace,raw,[(15,15)]);clock=inspect_clock(trace,a.mode,command,host_start,host_end,root=root);authority=nic_check(trace,expected=1,preparation=True,ethernet=True,network_config=True,routing=True);waiting=wait_check(trace)
+ manifest['host_utc_end']=host_end;raw=pcap.read_bytes()if pcap.exists()else b'';trace=text();wire=tcp_capture(raw,rows,guest_ports=range(48001,65536),initiator='guest')if raw else dict(ok=False,errors=['missing actual wire capture']);owners=owner_joins(trace,raw,[(15,15)]);clock=inspect_clock(trace,a.mode,command,host_start,host_end,root=root);authority=nic_check(trace,expected=1,preparation=True,ethernet=True,network_config=True,routing=True);waiting=wait_check(trace,source_root=root)
  try:
   for frame in frames(raw):
    if len(frame)>=42 and frame[12:14]==b'\x08\0'and frame[23]==17 and frame[26:30]==bytes([10,0,2,15]):
