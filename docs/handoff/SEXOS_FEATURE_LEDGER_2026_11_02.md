@@ -4087,3 +4087,29 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   master and is not guest latency. Gates should time from guest markers.
 - **Next:** Shapes' start is its own drawing, not loading; prelinking and lazy pages
   are not needed yet for the < 100 ms target.
+
+## Kaleidoscope Shields, slice N1 (2026-11-14)
+- **What:** ad and tracker blocking on by default, as in Brave. New `crates/sex-shields`
+  (no_std, GPL-3.0, our own engine) reads Adblock Plus / uBlock filter syntax: `||host^`,
+  `|` anchors, `*`, `^`, `@@` exceptions, `$script/$image/...`, `$third-party`,
+  `$domain=` (with `google.*`), `$important`, `$badfilter`, `$document/$elemhide/
+  $generichide` exceptions, hosts files, and element hiding (`##`, `domain##`, `#@#`).
+  Regex filters, `$csp`, `$removeparam`, scriptlets and procedural cosmetics are left
+  out and counted, never guessed at.
+- **Speed (host, release):** EasyList + EasyPrivacy (135 k lines) parse in 77 ms into
+  106 k network filters and 24 k hiding rules; a request costs about 5 µs (token index:
+  each filter is filed under its longest whole token). Generic hiding selectors are
+  filed by the class or id they need, so a page gets only those whose class or id it has.
+- **In Kaleidoscope (`apps/web`):** every request (`send`, every redirect hop) is judged
+  with its kind (style sheet, picture, script, module, font, frame, media, fetch);
+  blocked frames stay empty boxes. The hiding sheet joins the page's sheets. Orange
+  shield badge with the page's blocked count in the bar (grey "off" when down).
+  Ctrl+Shift+S toggles Shields for the site (kept in `Web/shields-off.tsv`) and
+  reloads. `about:shields` shows counts, lists, sites turned down, the last 40 blocked
+  requests, and downloads EasyList/EasyPrivacy into `Web/shields-*.txt` (from the
+  easylist GitHub mirror). Until then a built-in starter list (~120 rules) is used.
+- **Tests:** `cargo test -p sex-shields` (13 goldens; `SEXOS_SHIELDS_LISTS=dir` also
+  checks the real lists); boot gate `scripts/program_web_shields_gate.py` (12 trackers
+  on a fixture page, none reach the server; toggle lets 4 through; remembered next run).
+- **Next:** Qupid uses the same crate for media requests (Q10b); N7 runs uBlock Origin
+  itself as an extension; cache the parsed lists so start-up skips parsing.

@@ -3124,6 +3124,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-shields"
+version = "0.1.0"
+dependencies = [
+ "psl",
+]
+
+[[package]]
 name = "sex-ssh"
 version = "0.1.0"
 dependencies = [
@@ -4150,6 +4157,7 @@ dependencies = [
  "sex-js",
  "sex-media",
  "sex-pdx",
+ "sex-shields",
  "sex-web",
 ]
 

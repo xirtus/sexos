@@ -1,0 +1,25 @@
+<!doctype html>
+<title>Shields test</title>
+<link rel="stylesheet" href="/site/style.css">
+<link rel="stylesheet" href="http://static.hotjar.com/c/hotjar.css">
+<body>
+<h1>Shields test</h1>
+<p>Twelve ad and tracker requests; none may leave.</p>
+<img src="/site/logo.png" alt="logo">
+<div class="adsbygoogle">AD SLOT SHOULD BE HIDDEN</div>
+<div class="ad-banner">BANNER SHOULD BE HIDDEN</div>
+<p class="story">The story stays.</p>
+<script src="/pagead/js/adsbygoogle.js"></script>
+<script src="/ads.js"></script>
+<script src="/prebid.js"></script>
+<img src="/track.gif" alt="">
+<script src="http://www.google-analytics.com/analytics.js"></script>
+<script src="http://www.googletagmanager.com/gtag/js?id=G-1"></script>
+<img src="http://www.facebook.com/tr?id=1&amp;ev=PageView" alt="">
+<iframe src="http://googleads.g.doubleclick.net/pagead/ads" width="100" height="40"></iframe>
+<img src="http://sb.scorecardresearch.com/p?c1=2" alt="">
+<script src="http://cdn.taboola.com/libtrc/loader.js"></script>
+<script src="/site/shields/ok.js"></script>
+<script>
+fetch('http://api.mixpanel.com/track?data=1').then(() => console.log('shields mixpanel reached'), () => console.log('shields mixpanel stopped'));
+</script>

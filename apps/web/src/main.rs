@@ -20,6 +20,7 @@ mod media;
 mod mse;
 mod keys;
 mod profile;
+mod shields;
 mod tabs;
 mod viewport;
 mod websocket;
@@ -118,6 +119,8 @@ struct Pending {
     secure_only: bool,
     id: u32, asked: String, since: u64, begun: u64, hops: usize,
     method: String, url: String, headers: Vec<(String, String)>, body: Vec<u8>, max: usize, script: Option<String>,
+    /// What the request is for, for Shields; worked out at its first hop when `None`.
+    kind: Option<sex_shields::Kind>,
 }
 impl Pending {
     fn new(id: u32, method: &str, url: &str, headers: &[(&str, &str)], body: &[u8], max: usize, script: Option<&str>) -> Pending {
@@ -125,6 +128,7 @@ impl Pending {
             id, asked: String::from(url), since: sex_pdx::get_ticks(), begun: 0, hops: 0, secure_only: false,
             method: String::from(if method.is_empty() { "GET" } else { method }), url: String::from(sex_html::url::fragment(url).0),
             headers: headers.iter().map(|(k, v)| (String::from(*k), String::from(*v))).collect(), body: Vec::from(body), max, script: script.map(String::from),
+            kind: None,
         }
     }
 }
@@ -234,6 +238,12 @@ struct Browser {
     /// Web font files loaded, by address, with their font number (None: unreadable).
     web_fonts: Vec<(String, Option<u8>)>,
     download_status: Option<String>,
+    /// Ad and tracker blocking.
+    shields: shields::Shields,
+    /// Requests Shields blocked for the shown page (and its frames).
+    blocked: u32,
+    /// What the next request is for, when the code making it knows (see `send`).
+    next_kind: Option<sex_shields::Kind>,
 }
 
 /// Most iframes a page loads; more show as empty boxes.
@@ -533,6 +543,7 @@ impl Browser {
             suggestions: &self.suggestions, chosen: self.chosen,
             find: self.find.as_deref().map(|q| (q, self.find_at, self.matches())), marks: &self.marks,
             zoom: sex_html::style::zoom(),
+            shields: self.url.starts_with("http").then(|| (self.shields.up(&self.url), self.blocked)),
         };
         sex_web::frame_with(&self.page, &mut self.fonts, pixels, self.surface.w, self.surface.h, self.scroll, self.focus, &chrome);
         self.paint_frames();
@@ -582,6 +593,22 @@ impl Browser {
     fn send(&mut self, p: &mut Pending, patient: bool) -> Result<net::Exchange, &'static [u8]> {
         if p.hops >= MAX_REDIRECTS { return Err(b"Too many redirects."); }
         let target = sex_fetch::Url::parse(&p.url).map_err(|_| net::message(net::Error::Address))?;
+        if p.hops == 0 && p.kind.is_none() {
+            let hint = self.next_kind.take();
+            p.kind = Some(match hint {
+                Some(k) => k,
+                // A page itself loading: a tab's page, or a frame's.
+                None if self.nav_from.is_some() => if self.in_frame.is_some() { sex_shields::Kind::Subdocument } else { sex_shields::Kind::Document },
+                None if p.script.is_some() => sex_shields::Kind::Xhr,
+                None => sex_shields::Kind::guess(&p.url),
+            });
+        }
+        // Every hop is judged: a first-party address may redirect to a tracker.
+        let kind = p.kind.unwrap_or(sex_shields::Kind::Other);
+        if kind != sex_shields::Kind::Document {
+            let page = if kind == sex_shields::Kind::Subdocument && self.nav_from.is_some() { self.parent.clone().unwrap_or_default() } else { self.url.clone() };
+            if self.shields.blocks(&p.url, &page, kind) { self.blocked += 1; return Err(shields::BLOCKED); }
+        }
         if p.secure_only && !target.secure { return Err(b"An HTTPS page cannot load an insecure script."); }
         let cross = p.script.as_deref().filter(|o| *o != target.origin());
         let cookie = if cross.is_some() { None } else { self.jar.borrow().header(&target, wall()) };
@@ -655,8 +682,11 @@ impl Browser {
         let begun = sex_pdx::get_ticks();
         let referrer = from.as_deref().zip(sex_fetch::Url::parse(url).ok()).and_then(|(f, t)| sex_fetch::referrer(f, &t)).unwrap_or_default();
         self.nav_from = Some(from);
+        if self.in_frame.is_none() { self.blocked = 0; }
         let (html, base) = if url == "about:downloads" {
             (self.downloads_page(), String::from(url))
+        } else if url == "about:shields" || url == "about:shields?update" {
+            (self.shields_page(url), String::from("about:shields"))
         } else if let Some(page) = built_in(if url.is_empty() { "about:welcome" } else { url }) {
             (String::from(page), String::from(if url.is_empty() { "about:welcome" } else { url }))
         } else if let Some(file) = url.strip_prefix('@') {
@@ -676,6 +706,8 @@ impl Browser {
             match got {
                 Ok((done, _)) if done == "about:downloads" => { self.url = done.clone(); (self.downloads_page(), done) }
                 Ok((final_url, body)) => { let t = text_of(&self.buf[body]); (t, final_url) }
+                // A frame Shields stopped stays an empty box.
+                Err(why) if why == shields::BLOCKED => (String::from("<title></title>"), String::from(url)),
                 Err(why) => (message_page("Can't open this page", core::str::from_utf8(why).unwrap_or(""), url), String::from(url)),
             }
         } else {
@@ -699,6 +731,7 @@ impl Browser {
             for (i, link) in links.iter().enumerate() {
                 self.status = Some("Loading style…");
                 if i == 0 { self.draw(); }
+                self.next_kind = Some(sex_shields::Kind::Stylesheet);
                 if let Ok((_, body)) = self.fetch(link) {
                     let text = text_of(&self.buf[body]);
                     faces.extend(sex_html::font_faces(&text, self.view.0).into_iter().map(|f| (link.clone(), f)));
@@ -714,6 +747,7 @@ impl Browser {
                 seen.push(src);
                 let Some(abs) = sex_html::url::resolve(&base, src) else { continue };
                 self.status = Some("Loading pictures…");
+                self.next_kind = Some(sex_shields::Kind::Image);
                 if let Ok((_, body)) = self.fetch(&abs) {
                     let bytes = core::mem::take(&mut self.buf);
                     self.fonts.add_picture(src, &bytes[body], self.view.0.saturating_sub(16).max(1) as usize, 2000);
@@ -722,6 +756,8 @@ impl Browser {
             }
             self.buf = Vec::new();
         }
+        // Shields' hiding rules for what is on this page.
+        if let Some(css) = self.shields.css(&base, &dom) { sheets.push(css); }
         let scripts = self.scripts(&dom, &base);
         // Inline handlers (`onclick="..."`), `javascript:` links and forms need the engine too.
         let handlers = dom.descendants(sex_html::dom::Dom::ROOT).into_iter().any(|n| match &dom.nodes[n].kind {
@@ -795,6 +831,7 @@ impl Browser {
                     let Some(abs) = sex_html::url::resolve(base, src) else { continue };
                     if !abs.starts_with("http") { continue; }
                     self.status = Some("Loading scripts…");
+                    self.next_kind = Some(sex_shields::Kind::Script);
                     let r = self.fetch_up_to(&abs, SCRIPT_MAX).ok().map(|(url, body)| (text_of(&self.buf[body]), url));
                     self.buf = Vec::new();
                     r
@@ -865,6 +902,7 @@ impl Browser {
             for url in need {
                 if script.page().modules.len() >= MAX_MODULES { return; }
                 self.status = Some("Loading scripts…");
+                self.next_kind = Some(sex_shields::Kind::Script);
                 let body = if url.starts_with("http") {
                     self.fetch_up_to(&url, SCRIPT_MAX).ok().map(|(final_url, b)| {
                         script.page_mut().keep_source_policy(&url, &final_url);
@@ -1000,6 +1038,7 @@ impl Browser {
             let m = media::Media::new(&self.doc.get().dom, node);
             let poster = if m.audio { None } else { self.doc.get().dom.attr(node, "poster").map(String::from) };
             if let Some(poster) = poster.filter(|p| !p.trim().is_empty()) {
+                self.next_kind = Some(sex_shields::Kind::Image);
                 let (status, body) = self.load_get(poster.trim());
                 if (200..300).contains(&status) {
                     if let Some(img) = sex_web::decode_image(&body, media::MAX_W, media::MAX_H) { media::Media::poster(&mut self.fonts, &m.picture_name(), img); }
@@ -1058,6 +1097,7 @@ impl Browser {
                     p.max = MEDIA_MAX;
                     // An element's load, not a script's: no CORS, and the site's cookies go.
                     p.script = None;
+                    p.kind = Some(sex_shields::Kind::Media);
                     match self.send(&mut p, false) {
                         Ok(ex) => {
                             self.media[i].state = media::State::Loading;
@@ -1146,6 +1186,7 @@ impl Browser {
             if wanted.is_empty() { return; }
             for url in wanted {
                 let full = matches!(&self.doc, Doc::Scripted(s) if s.page().modules.len() >= MAX_MODULES);
+                self.next_kind = Some(sex_shields::Kind::Script);
                 let body = if url.starts_with("http") && !full { self.fetch_up_to(&url, SCRIPT_MAX).ok().map(|(_, b)| text_of(&self.buf[b])) } else { None };
                 self.buf = Vec::new();
                 sex_pdx::serial_record!("[web.module] import=1 ok={} bytes={} url={}", body.is_some() as u8, body.as_ref().map_or(0, |b| b.len()), url);
@@ -1174,6 +1215,7 @@ impl Browser {
                 let origin = ask.cors.then(|| sex_fetch::Url::parse(&base).map(|u| u.origin()).unwrap_or_else(|_| String::from("null")));
                 let mut p = Pending::new(0, "GET", &abs, &[], &[], SCRIPT_MAX, origin.as_deref());
                 p.secure_only = sex_fetch::Url::parse(&base).is_ok_and(|u| u.secure);
+                p.kind = Some(sex_shields::Kind::Script);
                 self.http_pending(p).ok().filter(|r| {
                     (200..300).contains(&r.status) && sex_fetch::script::allowed(&base, &r.url, &r.headers, ask.cors)
                 })
@@ -1732,8 +1774,10 @@ pub extern "C" fn _start() -> ! {
     let doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", view, clock));
     let mut b = Browser { #[cfg(feature = "baseline-jit")] jit_enabled: !given.split_ascii_whitespace().any(|a| a == "--no-jit"), window, surface, reported_size: (width, height), fonts, page, doc, sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), media_asked: false, media_loads: Vec::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None, import_map: Vec::new(), view, parent: None, frames: Vec::new(), in_frame: None, frame_dirty: false, referrer_next: None, nav_from: None, frames_check: false,
         tabs: Vec::new(), active: 0, forward: Vec::new(), profile: Default::default(), suggestions: Vec::new(), chosen: None,
-        find: None, find_at: 0, marks: Vec::new(), finding: false, laid_zoom: 100, sockets: Vec::new(), downloads: Vec::new(), download_status: None, web_fonts: Vec::new() };
+        find: None, find_at: 0, marks: Vec::new(), finding: false, laid_zoom: 100, sockets: Vec::new(), downloads: Vec::new(), download_status: None, web_fonts: Vec::new(),
+        shields: shields::Shields::empty(), blocked: 0, next_kind: None };
     b.profile = profile::Profile::load(&mut b.window, &mut b.jar.borrow_mut(), wall());
+    b.shields = shields::Shields::load(&mut b.window);
     let first_tab = tabs::Tab::blank(&b);
     b.tabs.push(first_tab);
     // Big WebGL draws spread over the cores, a band of rows each.
