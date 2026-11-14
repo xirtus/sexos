@@ -157,10 +157,11 @@ pub fn quantize(pcm: &[[f32; 2]], format: Format) -> Result<Audio, Error> {
 #[cfg(all(feature = "sexos", target_arch = "x86_64", target_os = "none"))]
 pub mod guest {
     use super::*;
+    use core::sync::atomic::{AtomicU32, Ordering};
     use moan_plugin::{job, supervisor::OfflineJob};
+    static NEXT_COOKIE: AtomicU32 = AtomicU32::new(1);
     pub struct Render {
         active: Option<OfflineJob>,
-        next_cookie: u32,
         status: Status,
         result: Option<Audio>,
         format: Format,
@@ -169,7 +170,6 @@ pub mod guest {
         fn default() -> Self {
             Self {
                 active: None,
-                next_cookie: 1,
                 status: Status::Idle,
                 result: None,
                 format: Format::Clap,
@@ -201,14 +201,19 @@ pub mod guest {
             if self.result.is_some() {
                 return Err(Error::PendingResult);
             }
-            if self.next_cookie > 65535 {
-                return Err(Error::Exhausted);
-            }
             let nonce = moan_plugin::nonce::fresh().ok_or(Error::Entropy)?;
             let paths = Paths::new(plugin, folder, nonce, format)?;
             let pcm = float_input(input)?;
-            let cookie = 0x504c_0000 | self.next_cookie;
-            self.next_cookie += 1;
+            let sequence = NEXT_COOKIE
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                    if value <= 65535 {
+                        Some(value + 1)
+                    } else {
+                        None
+                    }
+                })
+                .map_err(|_| Error::Exhausted)?;
+            let cookie = 0x504c_0000 | sequence;
             let job = OfflineJob::start_with(
                 &paths.plugin,
                 &paths.input,
