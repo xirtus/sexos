@@ -4268,3 +4268,15 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   All four guest binaries build; `scripts/leather_gate.py` checks greet, edit/save/
   sync/reload hashes, image decode, network fixture hash, screenshots and clean close.
   Guest runtime validation remains pending until that QEMU gate passes in CI.
+
+## ChatGPT round 176: Abacus programmer, conversion and scientific extras (2026-11-14)
+- Actual Weft mode buttons/menus for Scientific, Programmer and Convert. Exact
+  unsigned 8/16/32/64-bit wrapping integer parser with bitwise ops, shifts and radix
+  formats; dimension-checked length/mass/time/temperature/storage conversion.
+- Scientific hyperbolic/exp/log2/cbrt/trunc functions, finite-result/input bounds.
+  Session history recalls mode and programmer context; Recall Last is in palette.
+- Ten host tests cover existing functions/keypad and extras, real widgets/history.
+  Guest build and instruction scan required; extended `program_weft_gate.py` uses
+  actual palette/keyboard controls, checks results/errors and retains screenshots.
+  QEMU runtime result remains pending CI. Depends on Weft #220; no kernel changes.
+- Details: `docs/handoff/ABACUS_EXTRAS_2026_11_14.md`.
