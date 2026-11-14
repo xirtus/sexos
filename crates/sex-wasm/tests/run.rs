@@ -323,3 +323,31 @@ fn hello_guest_is_current() {
     assert_eq!(h.titles, vec![b"Hello".to_vec()]);
     assert_eq!(h.logs, vec![b"hello.ready".to_vec()]);
 }
+
+/// A terminal host (Term): raw bytes out, its own input stream in, nothing shown.
+#[derive(Default)]
+struct Tty { out: Vec<u8>, input: Vec<u8>, shown: usize }
+impl Host for Tty {
+    fn show(&mut self, _text: &[u8]) { self.shown += 1; }
+    fn console(&mut self, bytes: &[u8]) -> bool { self.out.extend_from_slice(bytes); true }
+    fn input(&mut self, out: &mut [u8]) -> Option<usize> {
+        let n = out.len().min(self.input.len());
+        out[..n].copy_from_slice(&self.input[..n]);
+        self.input.drain(..n);
+        Some(n)
+    }
+    fn now(&mut self) -> u64 { 42_000_000 }
+}
+
+#[test]
+fn a_terminal_host_gets_raw_bytes_and_supplies_input() {
+    let g = Guest { name: b"t", args: &[b"one", b"two"], grants: Grants::default(), limits: Limits::default() };
+    let (o, h) = run(&wat::parse_str(WASI).unwrap(), &g, Tty { input: b"\x1b[31mred\n".to_vec(), ..Default::default() });
+    assert_eq!(o, Outcome::Exited(3));
+    // No echo from the guest side: the terminal echoes what the person types itself.
+    assert_eq!(h.out, b"one\x1b[31mred\n");
+    assert_eq!(h.shown, 0);
+    // End of input reads as zero bytes.
+    let (o, h) = run(&wat::parse_str(WASI).unwrap(), &g, Tty::default());
+    assert_eq!((o, h.out), (Outcome::Exited(3), b"one".to_vec()));
+}

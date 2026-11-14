@@ -44,6 +44,7 @@ pub unsafe extern "C" fn _start() -> ! {
 pub extern "C" fn sys_exit(status: i32) -> ! {
     let me = sex_pdx::app_lifecycle::catalog(sex_pdx::app_lifecycle::SELF_CATALOG_SLOT).map_or((0, 0), |i| (i.target_pd, i.task_id));
     sex_pdx::serial_record!("[std.exit] target={} task={} status={}", me.0, me.1, status);
+    console::ended(status);
     console::finish(&if status == 0 { "Finished".to_string() } else { format!("Finished with status {status}") });
     sex_pdx::task_finish(status as u32 as u64)
 }
@@ -51,6 +52,7 @@ pub extern "C" fn sys_exit(status: i32) -> ! {
 #[no_mangle]
 pub extern "C" fn sys_abort() -> ! {
     sex_pdx::serial_record!("[std.abort]");
+    console::ended(134);
     console::finish("Stopped: the program failed");
     sex_pdx::task_finish(134)
 }

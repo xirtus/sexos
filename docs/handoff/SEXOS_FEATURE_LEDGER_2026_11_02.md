@@ -4204,5 +4204,9 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
 - Fix: Shell's forced ends (OOM policy and this) now also send a confirmed Close, so a program idle in its event wait wakes, faults on its released pages and is retired (before, an idle program stayed parked).
 - Gate: scripts/program_end_gate.py (Files' line refused with status 4, Fortune ended and retired).
 
+## G-5: User guide in docs/user/ (2026-11-14)
+- Added modular user guide under `docs/user/` (`README.md`, desktop navigation, capabilities/Collar/Shibari, UEFI installation/A-B updates, creative/communication suites, and 17 per-app guides) using canonical themed names (`Silk`, `Atlas`, `Spindle`, `Loom`, `Kaleidoscope`, `Quil`, `Jot`, `Tatami`, `Qupid`, `sexshop`, `Mesh`, `Vellum`, `Gaze`, `Abacus`, `Voyeur`, `Date`, `Chastity`, `Gestalt`, `Flirt`).
+- Included 10 curated 1280x800 and 1024x768 QEMU gate screenshots (`docs/user/assets/`, 300 KiB total); verified all 53 relative links and kernel/naming guardrails.
+
 ## J8 finding: disk reads are not NVMe-queue bound yet (2026-11-14)
 - `run bench read-large` at 4 cores without PKU now logs `[bench.large.cpu]` (Drive, Files, bench, idle cycles per pass). 16 MiB in 64 KiB requests: ~275M cycles; Files ~100M (~390k per request), Drive ~42M (~165k), rest waiting on the serial request chain. Per-core NVMe queues would not help until requests are pipelined (Files readahead / async Drive replies) and Files' per-request CPU drops; deferred until then.
