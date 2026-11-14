@@ -216,6 +216,10 @@ pub fn class_of(pd: u64) -> usize {
 }
 /// Interactive tasks may run this many times in a row ahead of a waiting normal one.
 const URGENT_STREAK: u32 = 16;
+/// An interactive task whose time ran out keeps its class this many turns in a row,
+/// then waits behind the normal queue once: a long repaint gets most of its core, and
+/// services still get a fair share while the desktop draws (boot, busy screens).
+const SLICED_KEEP: u32 = 4;
 pub type UrgentQueue = scheduler_queue::BoundedQueue<Task, 64>;
 /// Wake-to-run latency per class: wakes, total and worst TSC cycles, and a histogram
 /// by powers of two from 1024 cycles (bucket i holds waits below 1024 << i).
@@ -265,6 +269,9 @@ pub struct Scheduler {
     handoff_armed: AtomicBool,
     /// The outgoing task's time ran out (timer or preemption), as opposed to a yield.
     sliced: AtomicBool,
+    /// Turns an interactive task kept its class after its time ran out since a normal
+    /// task last ran here (see `SLICED_KEEP`).
+    kept: AtomicU32,
     pub core_id: u32,
 }
 /// Partners may take turns ahead of the queue this many times in a row; then
@@ -313,6 +320,7 @@ impl Scheduler {
             handoff_streak: AtomicU32::new(0),
             handoff_armed: AtomicBool::new(false),
             sliced: AtomicBool::new(false),
+            kept: AtomicU32::new(0),
             core_id,
         }
     }
@@ -503,7 +511,7 @@ impl Scheduler {
         }
         self.urgent_streak.store(0, Ordering::Relaxed);
         let task = self.runqueue.steal();
-        if task.is_null() { self.urgent.steal() } else { task }
+        if task.is_null() { self.urgent.steal() } else { self.kept.store(0, Ordering::Relaxed); task }
     }
 
     /// The waiting partner's turn, unless partners have had too many in a row: then it
@@ -536,7 +544,7 @@ impl Scheduler {
     /// `woken` is false for a task that was switched out still runnable. One that
     /// yielded waits in the normal queue whatever its class, so an interactive task that
     /// polls cannot keep the rest of its core from running. One whose time ran out
-    /// (`sliced`) keeps its class; `URGENT_STREAK` still gives normal tasks their turn.
+    /// (`sliced`) keeps its class for `SLICED_KEEP` turns.
     fn admit(&self, task: *mut Task, woken: bool, sliced: bool) -> Admission {
         if task.is_null() { return Admission::NotRunnable; }
         // A task's queue is decided by the task, not by the core that woke it.
@@ -551,7 +559,9 @@ impl Scheduler {
             // Wake latency counts real wakes, not a turn given up by yielding.
             if woken { unsafe { (*task).woken_at.store(core::arch::x86_64::_rdtsc(), Ordering::Relaxed) }; }
             if handoff && self.handoff.compare_exchange(ptr::null_mut(), task, Ordering::AcqRel, Ordering::Acquire).is_ok() { return Ok(()); }
-            if (woken || sliced) && class_of(unsafe { (*task).context.pd_id }) == CLASS_INTERACTIVE && home.urgent.try_push(task).is_ok() { urgent = true; return Ok(()); }
+            let interactive = class_of(unsafe { (*task).context.pd_id }) == CLASS_INTERACTIVE;
+            let keep = sliced && interactive && home.kept.fetch_add(1, Ordering::Relaxed) < SLICED_KEEP;
+            if (woken || keep) && interactive && home.urgent.try_push(task).is_ok() { urgent = true; return Ok(()); }
             home.runqueue.try_push(task)
         }) };
         // That core may be halted, and its next tick is up to a millisecond away.

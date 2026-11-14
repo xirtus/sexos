@@ -86,7 +86,7 @@ fn render(window: &mut Window, s: &Sample, prev: &Sample, top: usize) -> usize {
     }
     window.show(&t.buf[..t.len]);
     if let Some(r) = s.rows[..s.count].first() {
-        sex_pdx::serial_record!("[monitor.sample] rows={} busy_tenths={} top_pd={} top_tenths={} top_task={}", s.count, busy, r.pd, r.tenths, r.task);
+        sex_pdx::serial_record!("[monitor.sample] rows={} busy_tenths={} top_pd={} top_tenths={} top_task={} free_pages={}", s.count, busy, r.pd, r.tenths, r.task, s.free_pages);
         for r in s.rows[..s.count].iter().take(4) {
             sex_pdx::serial_record!("[monitor.row] pd={} tenths={} pages={} calls_per_s={}", r.pd, r.tenths, r.pages, r.rate);
         }
