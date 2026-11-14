@@ -5882,10 +5882,13 @@ dependencies = [
 name = "spreadeagle"
 version = "0.1.0"
 dependencies = [
+ "gridcraft-chart",
  "gridcraft-engine",
+ "quick-xml 0.41.0",
  "serde_json",
  "sex-office",
  "sex-std",
+ "zip 3.0.0",
 ]
 
 [[package]]
