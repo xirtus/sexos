@@ -124,10 +124,24 @@ pub fn page(pool: &mut DmaRegionPool, pages: u64) -> Result<(u64, u64), Failure>
     Ok((b.physical_address, b.virtual_address))
 }
 
+/// Sleeps `ticks` whole ticks. Once the controller's interrupt is unmasked, a pending
+/// interrupt bit makes every self-wait return at once until it is taken, so take it
+/// and keep waiting until the time is really up: polling loops that count ticks would
+/// otherwise spin through their whole budget in microseconds and time out.
+pub fn sleep_ticks(ticks: u64) {
+    let end = sex_pdx::get_ticks().saturating_add(ticks);
+    loop {
+        let _ = sex_pdx::device::irq_take();
+        let now = sex_pdx::get_ticks();
+        if now >= end { return; }
+        let _ = sex_pdx::sys_wait_self_ticks(end - now);
+    }
+}
+
 fn wait(base: u64, off: u64, mask: u32, set: bool, polls: u32) -> bool {
     for i in 0..polls {
         if (mmio_read32(base, off) & mask != 0) == set { return true; }
-        if i < 64 { sys_yield(); } else { let _ = sex_pdx::sys_wait_self_ticks(1); }
+        if i < 64 { sys_yield(); } else { sleep_ticks(1); }
     }
     false
 }
@@ -241,7 +255,7 @@ impl Xhci {
         if self.port_major[port as usize] == 3 || (self.port_major[port as usize] == 0 && s & 2 != 0) {
             for _ in 0..200 {
                 if self.portsc(port) & 2 != 0 { return true; }
-                let _ = sex_pdx::sys_wait_self_ticks(1);
+                sleep_ticks(1);
             }
             return self.portsc(port) & 2 != 0;
         }
@@ -252,7 +266,7 @@ impl Xhci {
                 self.set_portsc(port, (s & PORT_KEEP) | (1 << 21));
                 return s & 2 != 0;
             }
-            let _ = sex_pdx::sys_wait_self_ticks(1);
+            sleep_ticks(1);
         }
         false
     }
@@ -299,7 +313,7 @@ impl Xhci {
                 if want(&e) { return Some(e); }
                 self.keep(e);
             }
-            if i < 256 { sys_yield(); } else { let _ = sex_pdx::sys_wait_self_ticks(1); }
+            if i < 256 { sys_yield(); } else { sleep_ticks(1); }
         }
         None
     }
@@ -424,7 +438,7 @@ fn handoff(cap: u64, ext: u64) -> Result<(), Failure> {
         let mut released = false;
         for _ in 0..1000 {
             if mmio_read32(cap, ext) & (1 << 16) == 0 { released = true; break; }
-            let _ = sex_pdx::sys_wait_self_ticks(1);
+            sleep_ticks(1);
         }
         log!("[sexusb.xhci.handoff] firmware_owned=1 released={}", released as u8);
         if !released {
