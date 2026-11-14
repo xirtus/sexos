@@ -4221,3 +4221,16 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
 - No kernel or owned app changes. This is the engine slice, not a complete DAW;
   Weft UI, capture UX, effects, project persistence and export follow. Contract and
   next steps: `docs/handoff/MOAN_2026_11_14.md`.
+
+## ChatGPT round 172: Moan per-track EQ, compressor and reverb (2026-11-14)
+- `moan-core::effects`: three-band EQ, stereo-linked peak compression and a small
+  Schroeder reverb. No allocation during processing, validated controls and bounded
+  integer arithmetic. `render_processed` keeps per-track state, drains tails after
+  clips end and flushes state on seeks; muted tracks advance silently.
+- 21 host integration tests pass, plus an actual DSP-rendered host WAV qualifies
+  the waveform checker. Guest release build and forbidden-instruction scan pass.
+- The guest `moan-probe fx` and CI `moan_gate.py --effects` check compressed stereo
+  pitch/level and a decaying reverb tail. QEMU validation awaits CI; no playback
+  claim is based on compilation or the host reference alone.
+- This slice stacks on round 171 (#244); no kernel, Weft or owned app changes.
+  The DAW window, capture UX, persistence and export remain future slices.
