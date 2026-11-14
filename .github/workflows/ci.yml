@@ -67,6 +67,16 @@ jobs:
       run: cargo test --locked -p sex-font --test fallback
     - name: Shaping (rustybuzz vs hb-shape), Arabic joining and bidi
       run: cargo test --locked -p sex-shape --features shaping
+    - name: Loom engines (batch rename, duplicates, usage map, tags, compare) on the host
+      run: cargo test --locked -p loom-core
+    - name: Vellum annotations, forms and incremental PDF saves on the host
+      run: cargo test --locked -p vellum-edit
+    - name: Gaze decoders (EXIF orientation, JPEG XL, SVG, RAW previews) on the host
+      run: cargo test --locked -p gaze-codecs --all-features
+    - name: Aftercare backups (dedup, encryption, restore, prune, check) on the host
+      run: cargo test --locked -p aftercare-core
+    - name: Loom archives (zip, tar, 7z, gz, zst, xz) with Python interop on the host
+      run: cargo test --locked -p sex-archive --features std
     - name: Pinyin input method
       run: cargo test --locked -p sex-ime
     - name: SexOS filesystem check and repair (injected faults)
