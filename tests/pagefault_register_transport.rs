@@ -6,6 +6,13 @@ extern crate self as sex_pdx;
 #[path = "../crates/sex-pdx/src/paging.rs"] pub mod paging;
 #[path = "../kernel/src/task_ownership.rs"] pub mod ownership;
 #[path = "../kernel/src/fault_transaction.rs"] pub mod fault_transaction;
+/// Denim's half of the route (kernel `denim` and `sex_pdx::denim` share this crate root).
+mod denim {
+ pub const DENIM_PD:u32=51;
+ thread_local!{pub static HOLDS:std::cell::Cell<bool>=const{std::cell::Cell::new(false)};pub static NOTICES:std::cell::RefCell<Vec<(u32,u64,u64)>>=const{std::cell::RefCell::new(Vec::new())};}
+ pub fn holds(_:u32,_:u64)->bool{HOLDS.with(|h|h.get())}
+ pub fn notify(target:u32,page:u64,token:u64)->Result<(),u64>{NOTICES.with(|n|n.borrow_mut().push((target,page,token)));Ok(())}
+}
 pub const SLOT_SEXT:u64=2;
 #[macro_export] macro_rules! serial_println { ($($arg:tt)*) => { let _ = format_args!($($arg)*); }; }
 use pagefault::{is_canonical_fault_address,PageFaultError,PageFaultRequest,OP_PAGE_FAULT};
@@ -186,4 +193,18 @@ fn rejects_empty_wrong_opcode_truncation_and_forged_identity() {
  assert_eq!(kernel_pagefault::retire_dead_fault(7,9,7),Err(DENIED));assert_eq!(kernel_pagefault::retire_dead_fault(7,8,0x80000007),Err(DENIED));
  kernel_pagefault::retire_dead_fault(7,9,0x80000007).unwrap();kernel_pagefault::retire_dead_fault(7,9,0x80000007).unwrap();
  assert_eq!(kernel_pagefault::complete_fault(7,9,token),Err(INVALID));assert_eq!(RESUMES.load(Ordering::Relaxed),0);
+}
+
+#[test]
+fn a_page_denim_holds_faults_to_denim_not_the_pager(){
+ let _serial=SERIAL.lock().unwrap_or_else(|e|e.into_inner());
+ let task=setup();denim::HOLDS.with(|h|h.set(true));
+ let token=forward(0x4000_1234,4,7).unwrap();
+ denim::HOLDS.with(|h|h.set(false));
+ assert!(ROUTE.with(|r|r.borrow().invocations.is_empty()),"the row's pager heard a Denim fault");
+ assert_eq!(denim::NOTICES.with(|n|n.borrow_mut().pop()),Some((7,0x4000_1000,token)));
+ // Only Denim may complete it; the pager is refused.
+ assert!(kernel_pagefault::query_fault(7,9,token).is_err());
+ let record=kernel_pagefault::query_fault(7,51,token).unwrap();assert_eq!(record.page_addr,0x4000_1000);
+ let _=task;
 }
