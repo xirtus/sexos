@@ -4544,8 +4544,15 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   hashes are re-pinned; wire definitions are unchanged.
 - The earlier normal v3 two-boot vault gate passed 12 protected typing intervals
   without userspace payload records. Its unchanged kernel and consumed startup
-  budget cannot establish kernel privacy. New normal/proof kernel builds and
-  v4 runtime evidence remain separate required checks; no blanket claim is made.
+  budget cannot establish kernel privacy. After the authorized exception, both
+  normal/proof kernels built successfully. Normal v4 passed the actual two-boot
+  vault gate and all 12 protected intervals; each boot recorded all 16 redacted
+  port and 16 redacted enqueue events with no raw kernel payloads anywhere.
+  The UNSAFE diagnostic boot's public make/break sequence was independently
+  qualified; its first small driver had an incorrect counter expectation, retained
+  as a failure artifact. Runtime drop was not induced; actual guarded drop-site
+  statements pass host tests in both modes. Exact hashes/scope are in the v4
+  privacy manifest. Graft evidence does not replace canonical sealed/full CI.
 - All 1,208 Python regressions pass after the kernel/profile/audit changes. The shared FFmpeg link list now
   includes optional static Shine after avcodec; a real Web guest build and the
   unchanged instruction scanner pass against the export-enabled codec profile.
