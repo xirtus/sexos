@@ -631,3 +631,54 @@ fn std_file_source() {
     a.extract(a.find("hello.txt").unwrap(), &mut out, &mut no_progress).unwrap();
     assert_eq!(out.0, b"hello world\n");
 }
+
+#[test]
+fn zip_eocd_underflow_issue_258() {
+    // Exact 46-byte minimal reproducer for Issue #258:
+    // Base64: "UEsAAFBLBgcAAAAAAAAAAHRlc3QudHh0UEsFBgAAAAABAAEANgAAADUAAAAAAA=="
+    const REPRODUCER_46: [u8; 46] = [
+        0x50, 0x4b, 0x00, 0x00, // "PK\0\0"
+        0x50, 0x4b, 0x06, 0x07, // "PK\x06\x07" (Z64_LOC_SIG)
+        0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00,
+        0x74, 0x65, 0x73, 0x74, 0x2e, 0x74, 0x78, 0x74, // "test.txt"
+        0x50, 0x4b, 0x05, 0x06, // "PK\x05\x06" (EOCD_SIG)
+        0x00, 0x00, 0x00, 0x00,
+        0x01, 0x00, 0x01, 0x00,
+        0x36, 0x00, 0x00, 0x00,
+        0x35, 0x00, 0x00, 0x00,
+        0x00, 0x00,
+    ];
+
+    // 1. Exact 46-byte minimal reproducer returns Err cleanly without panic.
+    let res = Archive::open(REPRODUCER_46.to_vec());
+    assert!(res.is_err(), "expected Err from minimal reproducer, got Ok");
+    let res_slice = Archive::open(&REPRODUCER_46[..]);
+    assert!(res_slice.is_err(), "expected Err from slice, got Ok");
+
+    // 2. Boundary lengths 0..=128 across various corrupt/empty patterns.
+    for len in 0..=128 {
+        // Zero-filled bytes
+        let zeros = vec![0u8; len];
+        assert!(Archive::open(zeros.clone()).is_err(), "panic or ok on zeros len={len}");
+        assert!(Archive::open(&zeros[..]).is_err(), "panic or ok on zeros slice len={len}");
+
+        // 0xFF-filled bytes
+        let ones = vec![0xffu8; len];
+        assert!(Archive::open(ones.clone()).is_err(), "panic or ok on 0xff len={len}");
+        assert!(Archive::open(&ones[..]).is_err(), "panic or ok on 0xff slice len={len}");
+
+        // Truncated or zero-padded reproducer bytes
+        let mut rep_variant = vec![0u8; len];
+        let copy_len = len.min(REPRODUCER_46.len());
+        rep_variant[..copy_len].copy_from_slice(&REPRODUCER_46[..copy_len]);
+        assert!(Archive::open(rep_variant.clone()).is_err(), "panic or ok on rep variant len={len}");
+        assert!(Archive::open(&rep_variant[..]).is_err(), "panic or ok on rep variant slice len={len}");
+
+        // Incremental ramp bytes (0, 1, 2, ...)
+        let ramp: Vec<u8> = (0..len).map(|b| b as u8).collect();
+        assert!(Archive::open(ramp.clone()).is_err(), "panic or ok on ramp len={len}");
+        assert!(Archive::open(&ramp[..]).is_err(), "panic or ok on ramp slice len={len}");
+    }
+}
+
