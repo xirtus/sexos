@@ -4171,6 +4171,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-torrent"
+version = "0.1.0"
+dependencies = [
+ "crypto-bigint",
+ "sex-episodes",
+ "sha1",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "sex-trust-config"
 version = "0.1.0"
 
@@ -4671,6 +4681,15 @@ checksum = "9f12b12995e3638c70618c1facb1ce65302f6a6f706b675f07c58a5d7391120e"
 dependencies = [
  "kurbo",
  "siphasher",
+]
+
+[[package]]
+name = "swingers"
+version = "0.1.0"
+dependencies = [
+ "sex-std",
+ "sex-torrent",
+ "sha2 0.10.9",
 ]
 
 [[package]]

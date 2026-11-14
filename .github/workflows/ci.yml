@@ -103,6 +103,12 @@ jobs:
         sudo usermod -p '*' "$USER"
         cargo test --locked -p sex-wg
         cargo test --locked -p sex-ssh
+    - name: BitTorrent engine (sex-torrent) goldens and protocol tests on the host
+      run: cargo test --locked -p sex-torrent
+    - name: Swingers downloads from and seeds to aria2 on the host
+      run: |
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends aria2 transmission-cli
+        bash scripts/swingers_host_gate.sh
     - name: Needle printing and scanning protocols (IPP, PWG raster, DNS-SD, eSCL goldens)
       run: |
         cargo test --locked -p sex-print
@@ -200,6 +206,10 @@ jobs:
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends openssh-server
         sudo usermod -p '*' "$USER"
         python3 scripts/ssh_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/ssh"
+    - name: Swingers downloads a torrent from aria2 on the host
+      run: |
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends aria2
+        python3 scripts/swingers_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/swingers"
     - name: Needle prints to a fake IPP Everywhere printer and scans from a fake eSCL scanner
       run: python3 scripts/needle_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/needle"
     - name: Web page JavaScript (native QuickJS tier)
