@@ -21,6 +21,17 @@ pub mod fs;
 pub mod png_encode;
 #[path = "../crates/sex-pdx/src/screen_capture.rs"]
 pub mod screen_capture;
+#[path = "../crates/sex-pdx/src/screenshot.rs"]
+pub mod screenshot;
+/// Notifications the client posted (summary, body).
+pub mod notify {
+    pub const URGENCY_NORMAL: u8 = 1;
+    thread_local! { pub static POSTED: std::cell::RefCell<Vec<(Vec<u8>, Vec<u8>)>> = std::cell::RefCell::new(Vec::new()); }
+    pub fn post(summary: &[u8], body: &[u8], _urgency: u8) -> bool {
+        POSTED.with(|p| p.borrow_mut().push((summary.to_vec(), body.to_vec())));
+        true
+    }
+}
 #[path = "../servers/sexdisplay/src/screen_capture.rs"]
 mod server;
 pub mod app_catalog {
@@ -364,8 +375,20 @@ fn run_client(
     queue_full: bool,
     restart_before_ack: bool,
 ) -> (Vec<u8>, Scrollback) {
+    let (mut files, sb) = run_with(short_write, queue_full, restart_before_ack, None, HashMap::new());
+    (files.remove(&b"/screen.png"[..]).unwrap_or_default(), sb)
+}
+/// `take`: the Shell's screenshot UI asks for this region instead of a typed path.
+fn run_with(
+    short_write: bool,
+    queue_full: bool,
+    restart_before_ack: bool,
+    take: Option<screenshot::Rect>,
+    mut files: HashMap<Vec<u8>, Vec<u8>>,
+) -> (HashMap<Vec<u8>, Vec<u8>>, Scrollback) {
     use screen_capture as c;
     reset();
+    notify::POSTED.with(|p| p.borrow_mut().clear());
     WORLD.with(|w| w.borrow_mut().reject_write = queue_full);
     let pixels: Vec<u32> = (0..129 * 173)
         .map(|i| {
@@ -379,8 +402,10 @@ fn run_client(
     let mut client = client::Capture::new();
     let mut sb = Scrollback::default();
     let l = live();
-    let mut files = HashMap::<Vec<u8>, Vec<u8>>::new();
-    client.start(b"screen.png", &mut sb);
+    match take {
+        Some(region) => client.take(region, &mut sb),
+        None => client.start(b"screen.png", &mut sb),
+    }
     for _ in 0..5000 {
         client.step(&mut sb, true);
         while let Some((slot, op, a)) = WORLD.with(|w| w.borrow_mut().calls.pop_front()) {
@@ -448,10 +473,42 @@ fn run_client(
         }
         if !client.busy() {
             erased();
-            return (files.remove(&b"/screen.png"[..]).unwrap_or_default(), sb);
+            return (files, sb);
         }
     }
     panic!("capture never finished")
+}
+/// Width, height and RGB of pixel (0, 0) of an uncompressed-check PNG.
+fn png_size(bytes: &[u8]) -> (u32, u32) {
+    assert!(bytes.starts_with(b"\x89PNG"));
+    (u32::from_be_bytes(bytes[16..20].try_into().unwrap()), u32::from_be_bytes(bytes[20..24].try_into().unwrap()))
+}
+#[test]
+fn screenshot_ui_crops_region_and_takes_next_free_name() {
+    let mut existing = HashMap::new();
+    existing.insert(b"/Screenshot-1.png".to_vec(), b"old".to_vec());
+    existing.insert(b"/Screenshot-2.png".to_vec(), b"old".to_vec());
+    let region = screenshot::Rect { x: 10, y: 20, w: 40, h: 30 };
+    let (files, sb) = run_with(false, false, false, Some(region), existing);
+    assert_eq!(files.get(&b"/Screenshot-1.png"[..]).unwrap(), b"old");
+    let shot = files.get(&b"/Screenshot-3.png"[..]).expect("next free name");
+    assert_eq!(png_size(shot), (40, 30));
+    assert!(sb.lines.iter().any(|s| s.starts_with(b"Screenshot saved in Files")));
+    let posted = notify::POSTED.with(|p| p.borrow().clone());
+    assert_eq!(posted, vec![(b"Screenshot saved".to_vec(), b"Saved in Files as Screenshot-3.png".to_vec())]);
+    // A region past the picture's edge is cut to it; the whole desktop is zero.
+    let (files, _) = run_with(false, false, false, Some(screenshot::Rect { x: 100, y: 150, w: 400, h: 400 }), HashMap::new());
+    assert_eq!(png_size(&files[&b"/Screenshot-1.png"[..]]), (29, 23));
+    let (files, _) = run_with(false, false, false, Some(screenshot::Rect::FULL), HashMap::new());
+    assert_eq!(png_size(&files[&b"/Screenshot-1.png"[..]]), (129, 173));
+}
+#[test]
+fn screenshot_ui_failure_is_notified() {
+    let (files, _) = run_with(true, false, false, Some(screenshot::Rect::FULL), HashMap::new());
+    assert!(!files.is_empty());
+    let posted = notify::POSTED.with(|p| p.borrow().clone());
+    assert_eq!(posted.len(), 1);
+    assert_eq!(posted[0].0, b"Screenshot not saved");
 }
 #[test]
 fn complete_stream_file_and_queue_retry() {

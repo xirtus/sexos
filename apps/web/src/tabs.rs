@@ -113,7 +113,7 @@ impl Browser {
         }
         self.timers_changed();
         let title: Vec<u8> = self.page.title.bytes().take(16).collect();
-        self.window.title(if title.is_empty() { b"Web" } else { &title });
+        self.window.title(if title.is_empty() { b"Kaleidoscope" } else { &title });
         sex_pdx::serial_record!("[web.tab.shown] index={} count={} url={}", i, self.tabs.len(), self.url);
         self.draw();
     }
