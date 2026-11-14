@@ -74,6 +74,8 @@ def main():
   assert not [h for h in hits if h in BLOCKED],hits
   time.sleep(2);on=pink('extension-on');assert on>3000,f'page not recoloured ({on} pink pixels)'
   s=go('about:extensions?toggle=recolour-sample');g['wait'](r'\[web.extension.toggle\] id=recolour-sample enabled=0',s,120)
+  # Let the page finish before closing: a close that lands mid-load is not this gate's subject.
+  g['wait'](r'\[web.loaded\] ',s,120);time.sleep(1)
   s=len(t());q.key('f11');g['wait'](rf'\[web.closed\] target={target} task={task}',s,60)
   # The next run: still installed, still off; nothing blocked or recoloured.
   hits.clear();g['focus'](153);time.sleep(.5);s=len(t());keys(f'run +net kaleidoscope {page}');q.key('ret')
