@@ -4244,3 +4244,16 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   gates added, pending CI. Weft #220 and Moan #244/#246 are dependencies.
 - Remaining: FFmpeg FLAC/MP3 export, persistent projects and graphical waveforms.
   No kernel, shell, toolkit or Claude-owned app code was edited.
+## ChatGPT round 174: Velvet original games pack (2026-11-14)
+- `apps/velvet`: three playable games on shared Weft widgets: Snags (safe-first-click
+  minefield with flags/flood reveal), Mingle (4x4 number merging) and Twin Flames
+  (matching pairs). Pointer and keyboard controls, clear win/loss, score/turns and
+  New Game. No borrowed art, game engine, custom widget drawing or kernel changes.
+- Twelve host tests cover game rules, real Weft pointer/shortcut responses and the
+  default 640x400 layout. Host previews of all games were rendered and inspected.
+  Guest release build and forbidden-instruction scan pass.
+- Build/install stage and CI host/QEMU gates added. `scripts/velvet_gate.py` plays
+  through real pointer and keyboard paths, checks rendered windows and closes via
+  Shell; QEMU evidence awaits CI. No guest validation claim based on compilation.
+- Depends on Weft PR #220; no Weft/toolkit/shell or other owned-app files changed.
+  Contract, commands and evidence: `docs/handoff/VELVET_2026_11_14.md`.

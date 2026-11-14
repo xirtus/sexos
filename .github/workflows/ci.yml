@@ -45,6 +45,8 @@ jobs:
       run: bash scripts/raid_host_gate.sh
     - name: Hardware census table (names, owners, VMD warning) on the host
       run: bash scripts/hwdb_host_gate.sh
+    - name: Velvet game rules and Weft input integration
+      run: cargo test --locked -p velvet --no-default-features
     - name: Moan Weft app and project editing
       run: cargo test --locked -p moan --no-default-features
     - name: Moan timeline, edits and mixer on the host
@@ -455,6 +457,8 @@ jobs:
       run: python3 scripts/moan_app_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/moan-app"
     - name: Moan microphone permission and captured track
       run: python3 scripts/moan_app_gate.py --microphone --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/moan-capture"
+    - name: Velvet playable games
+      run: python3 scripts/velvet_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/velvet"
     - name: Preserve program evidence
       if: always()
       uses: actions/upload-artifact@v4
