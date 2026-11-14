@@ -90,6 +90,11 @@ controls and media keys, and gives Music gapless playback.
   Qupid, adapted from brootlite-core (Stremio, Jellyfin, YouTube, creators, swarm), plus
   native ports of the common link resolvers. The Python helper is the fallback for
   addons nobody has ported, so the everyday path never starts Python.
+  Kodi repositories are the main point (Andreas: "would solve 99% of what Kodi
+  offered"): repository handling is Rust in Qupid (repository addon zips, `addons.xml`
+  with its `.md5`, version picks, `<requires>` dependency resolution incl.
+  `script.module.*`, updates), and only running a plugin needs the Python helper.
+  Priority: Q13 goes right after Q3, with the Python modules work started in parallel.
 - **Q9-Q12** as in the table, each after a short report where it is large (Q11).
 
 Order: Q2 and Q3 wait for #183 to merge (Play's main loop changes there) and for the
