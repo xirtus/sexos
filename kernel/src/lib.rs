@@ -61,6 +61,7 @@ pub mod program_records;
 pub mod program_tenancy;
 pub mod program_frames;
 pub mod program_workers;
+pub mod denim;
 pub mod service_memory;
 pub mod service_restart;
 pub mod history_recovery;

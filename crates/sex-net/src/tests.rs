@@ -605,3 +605,16 @@ fn queries(e:&mut Engine<'static>,now:&mut u64)->Vec<(u16,Vec<u8>)>{let mut v=Ve
  e.open_resolve_all(b"four.example").unwrap();assert_eq!(queries(&mut e,&mut now).len(),2);
  e.open_cache_flush();assert_eq!(e.open_cache_len(),0);
 }
+/// One IPv4 flow whose peer never answers ARP (it timed out, or was let go) must not keep
+/// the interface's one neighbor discovery slot: an IPv6 connect after SLAAC still sends
+/// its neighbor solicitation and SYN. (The IPv6 gate's `[talk.failed] error=Connect`.)
+#[test]fn an_ipv4_flow_to_a_silent_peer_does_not_starve_ipv6_neighbor_discovery(){
+ for abort in[false,true]{
+  let(mut e,mut now)=slaac();e.begin_client(1).unwrap();
+  for _ in 0..if abort{1500}else{6000}{tick(&mut e,&mut now);}
+  if abort{assert_eq!(e.client_state(),State::SynSent);e.client_abort();}
+  let flow=e.open_add_flow().unwrap();e.open_connect(flow,Address::V6(PEER6),7).unwrap();
+  let syn=run6(&mut e,&mut now,4000).into_iter().find(|s|s.next==6);
+  assert!(syn.is_some_and(|s|s.dst==PEER6&&s.body[13]&0x12==2),"abort={abort}: no IPv6 SYN");
+ }
+}

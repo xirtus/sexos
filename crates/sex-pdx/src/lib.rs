@@ -1305,6 +1305,7 @@ pub mod system_stats;
 pub mod program_memory;
 pub mod program_code;
 pub mod power;
+pub mod denim;
 pub mod touchpad;
 pub mod program_threads;
 pub mod fs;

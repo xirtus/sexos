@@ -223,6 +223,12 @@ text, wheel) OK; sealed `make full` green. No runtime behaviour changed.
 **Limit.** This bounds one big stack object, not total stack depth. A real
 fix is a stack high-water measurement or a stack quota separate from heap.
 
+## G-15. Flash UVC webcam driver server and capture app (2026-11-14)
+
+**What changed.** Added `crates/sex-uvc` (`#![no_std]`, `#![forbid(unsafe_code)]` USB Video Class 1.1/1.5 descriptor parser, 26/34-byte Probe/Commit control negotiation, bounded `FID`/`EOF`/`ERR` payload reassembler, and `YUY2`/`NV12`/`MJPEG` frame decoders), `servers/sexuvc` (ring-3 userspace UVC webcam driver server with per-client capability grants), and `apps/flash` (camera capture app saving PNG stills and encoding WebM VP9 video directly through Splicy's `sex_media::export::Exporter` without duplicating an encoder).
+
+**Evidence.** `scripts/flash_host_gate.sh` (unit + adversarial fuzz tests + host UVC loopback smoke) and `scripts/flash_gate.py` (QEMU guest UVC negotiation, PNG photo capture, and Splicy WebM video export).
+
 ## F6. Quil shows "DRAFT KEPT"; HTML images show alt text (2026-11-02)
 
 **What changed.** When Quil has unsaved edits that are already held in the
@@ -290,6 +296,10 @@ html_text 15 host tests; sealed build and master gate GREEN; native
 `https_html_gate.py` at both sizes with a page containing title, quote, rule
 and image (reader text/pixels, link refusal, follow, Back all pass).
 
+## G-17. Fuzz Round 2 campaign (`sex-torrent`, `sex-kodi`, `docx`/`xlsx`) and reproducers (2026-11-14)
+
+**What changed.** Added 4 standalone `cargo-fuzz` targets (`fuzz_torrent`, `fuzz_kodi_xml`, `fuzz_docx_office`, `fuzz_xlsx_office`), seed corpora, and minimized crash reproducers (`fuzz/repros/round2/`), bringing `scripts/fuzz_smoke_host_gate.sh` to 13 targets. Ran >3.0M AddressSanitizer + libFuzzer executions across PR #236 (`crates/sex-torrent`: 1.61M execs, 0 crashes), PR #251 (`crates/sex-kodi`: 1.34M execs, 0 crashes), and `origin/claude/project-thread-o08hes` (`docx`/`xlsx`/`sex-office`/`spreadeagle`), filing Issue #281 (`sex-office::Pen::text` fixed-point `x * 256` & `mix` overflow/underflow) and Issue #282 (`spreadeagle::book::column_name` `u32::MAX + 1` overflow).
+
 ## F9. Spindle Shift key and `calc` (2026-11-02)
 
 **What changed.** Spindle had no Shift: capitals and symbols such as
@@ -319,6 +329,10 @@ keyboard events with Shift and checks each result record;
 output: Spindle admitted its display batches early in the run but no later
 paint was applied before capture. Together with the Quil paint lag seen in
 F3/F6, this points at Display applying app paints late under these gates.
+
+## G-7: Fix Zip64 EOCD locator subtraction underflow in `sex-archive` (#258) (2026-11-14)
+- `crates/sex-archive/src/zip.rs`: guard `find_eocd`, central-directory bounds and local-file-header offset math with `checked_sub`/`checked_add` so truncated or corrupt Zip64 locators (`20 <= eocd_abs < 76`) return `Err(Error::Corrupt(...))` instead of panicking on unsigned underflow.
+- Regression: `zip_eocd_underflow_issue_258` in `crates/sex-archive/tests/archive.rs` covering the 46-byte `cargo-fuzz` reproducer and boundary lengths `0..=128`.
 
 ## F10. Bounded inline script subset in the Browser (2026-11-02)
 
@@ -386,6 +400,11 @@ native `https_html_gate.py` at both sizes now with the formerly failing
 992-byte page (padding removed): `ticket=2 ... to=Complete`; regressions
 `https_document_gate.py` (12 KB) and `https_asset_gate.py` pass.
 
+## G-10: Burlesque presentations engine (2026-11-14)
+
+- **What runs now.** `burlesque-core` provides pure-Rust presentation slide deck data modeling, standard responsive slide layouts, rich elements (formatted text, vector shapes, embedded pictures, tables, and syntax-highlighted code blocks), undo/redo command stack, OOXML `.pptx`, OpenDocument `.odp`, and Markdown deck import/export, true software rasterizer with proportional Geist fonts, multi-pane presenter view state machine with timer and screen blanking, and vector PDF-1.4 multi-page document export.
+- **Security and bounds.** Hardened against deflate bombs via 32 MiB per-member and 128 MiB global cumulative extraction bounds in `sex-archive`, panic-free UTF-8 char boundary slicing across all XML/markdown/color tokens, bounded `checked_mul` allocation and undersized buffer guards in slide and presenter view rasterizers, and verifiable XRef byte offsets with full character escaping in vector PDF export verified via `vellum-edit`.
+
 ## F12. Numbered, nested and definition lists (2026-11-02)
 
 **What changed.** `<ol>` items are numbered (`start=` honoured), nested lists
@@ -397,6 +416,10 @@ blank line, and `<dl>` shows terms with indented definitions.
 `https_html_gate.py` at both sizes with an ordered list containing a nested
 bulleted list (released text hash equals the expected text; the page is
 1029 bytes, again a two-record response that closes cleanly after F11).
+
+## G-16. Climax vs Linux QEMU benchmark comparison (2026-11-14)
+
+**What changed.** Added reproducible cross-OS benchmark harness `scripts/climax_vs_linux_bench.py` and published `docs/CLIMAX_VS_LINUX_2026_11_14.md` comparing 3-pass medians and min/max ranges of the exact same `climax-core` kernels (`-C opt-level=3 -C codegen-units=1`, bit-exact checksums across all 9 tiers) on SexOS (`x86_64-sex-app.json`) and Alpine Linux 6.6 LTS (`x86_64-unknown-linux-musl` static `/init`) under identical `qemu-system-x86_64 -M q35 -cpu max,+pku -smp 2 -m 1G`.
 
 ## F13. Script subset: branches, comparisons, booleans, helpers (2026-11-02)
 
@@ -4282,6 +4305,10 @@ energy. Details: `LAPTOP_POWER_2026_11_13.md` (Sleep section).
 - Kernel: a service gives up after 8 restarts only if each came within 60 s of the last (CRASH_LOOP_TICKS); before, 8 restarts over any uptime left it down for good.
 - Run: 0.6 h, 2 cores, 20 rounds, every restartable service stopped 3-4 times: all notes intact, free program pages 55913 every round, no failures. 24 h: `--hours 24 --inject` (not in CI).
 
+## G-3: Shuttle userspace font fallback, RTL/BiDi shaping and font picker (2026-11-14)
+- New `#![no_std]` (`#![forbid(unsafe_code)]`) userspace crate `crates/shuttle` (plus scaled emoji coverage in `sex-font`): multi-paragraph UAX #9 BiDi with L2 visual run reordering, `unicode-script` itemization, `rustybuzz` OpenType shaping for Arabic/Hebrew/Indic, CJK line-breaking, emoji scaling/blending, cursor/hit-testing, and shared `FontCatalog`/`FontPicker`.
+- Gate: `scripts/shuttle_host_gate.sh` (43+ host tests and `x86_64-sex-app` confined target build).
+
 ## Fix: USB Ethernet regression from #196 (2026-11-14)
 - usb_net_gate failed on master ("fetch: could not connect"). With MSI-X wakes, sexusb idled 32 ticks between passes. Two gaps: `sleep_ticks` took interrupts for events the main loop had not drained yet, and the network's USB Ethernet transmit ring has no wake. Now `xhci::SLEPT` makes the next wait 1 tick after any sleep in a pass, and the loop polls every tick while an Ethernet adapter is up (`Usb::ether_active`). usb_net_gate passes; idle QEMU CPU 19%.
 
@@ -4301,6 +4328,13 @@ energy. Details: `LAPTOP_POWER_2026_11_13.md` (Sleep section).
 
 ## J8 finding: disk reads are not NVMe-queue bound yet (2026-11-14)
 - `run bench read-large` at 4 cores without PKU now logs `[bench.large.cpu]` (Drive, Files, bench, idle cycles per pass). 16 MiB in 64 KiB requests: ~275M cycles; Files ~100M (~390k per request), Drive ~42M (~165k), rest waiting on the serial request chain. Per-core NVMe queues would not help until requests are pipelined (Files readahead / async Drive replies) and Files' per-request CPU drops; deferred until then.
+
+## J5 D2: Denim compressed memory, page out and back (2026-11-14)
+- New syscall 88 `SYS_DENIM` (ABI addition, `sex_pdx::denim`), Denim only: SCAN (accessed bits), OUT (heap page leaf becomes a non-present marker naming the row, shootdown, bytes copied to Denim's window, frame freed), IN (fresh frame, leaf restored, parked fault task resumed). Kernel messages OP_FAULT 0x3D1 and OP_RECALL 0x3D2.
+- Page faults on a marker go to Denim instead of the row's pager (`forward_page_fault`). Worker spawn and SEAL/OPEN on a run with pages out return RETRY and recall them; OUT is refused while workers live.
+- New BOOT service `servers/denim` (pd 51, key 14): clock scan, slabs 256 B to 4 KiB, LZ4-style codec from `crates/denim`. Pages out only at memory pressure LOW or worse, or always in a `SEXOS_DENIM_EAGER=1` build.
+- heaptest: K keeps 8 MiB of mixed pages, V reads them back. Gate `scripts/denim_gate.py` (Proof builds, matrix `denim`): 2279 pages out held in 477 store pages; all 2048 kept pages read back exact through faults; Close retires the run with pages out.
+- Kernel +~200 lines (19,463 of 21,500).
 ## ChatGPT round 171: Moan timeline and mixer core (2026-11-14)
 - `crates/moan-core`: frame-accurate 48 kHz stereo timeline, non-destructive split
   and trim, linear fades, clip gain, per-track volume/balance, mute/solo and final

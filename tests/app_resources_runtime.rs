@@ -70,6 +70,7 @@ mod ipc{
  impl Registry{pub fn get(&self,id:u32)->Option<&'static crate::capability::ProtectionDomain>{crate::REGISTRY.get(id as usize).and_then(|p|unsafe{p.load(crate::Ordering::Acquire).as_ref()})}}
 }
 #[path="../crates/sex-pdx/src/program_store.rs"]pub mod program_store;
+#[path="../crates/sex-pdx/src/denim.rs"]pub mod denim;
 #[path="../crates/sex-pdx/src/program_memory.rs"]pub mod program_memory;
 #[path="../crates/sex-pdx/src/program_code.rs"]pub mod program_code;
 /// The direct map: on the host, frame addresses are host pointers already.

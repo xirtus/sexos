@@ -11,6 +11,11 @@ license = "GPL-3.0-only"
 [package.metadata]
 cargo-fuzz = true
 
+[features]
+default = []
+with-sex-torrent = []
+with-sex-kodi = []
+
 [dependencies]
 libfuzzer-sys = "0.4"
 arbitrary = { version = "1.4", features = ["derive"] }
@@ -77,5 +82,29 @@ doc = false
 [[bin]]
 name = "fuzz_font"
 path = "fuzz_targets/fuzz_font.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_torrent"
+path = "fuzz_targets/fuzz_torrent.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_kodi_xml"
+path = "fuzz_targets/fuzz_kodi_xml.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_docx_office"
+path = "fuzz_targets/fuzz_docx_office.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_xlsx_office"
+path = "fuzz_targets/fuzz_xlsx_office.rs"
 test = false
 doc = false
