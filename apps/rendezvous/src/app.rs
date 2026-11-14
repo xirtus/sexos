@@ -372,8 +372,7 @@ pub fn main() {
             Some(Event::Resize { .. }) => { app.reported = false; redraw = true; }
             Some(Event::Key(k)) => { app.key(k); redraw = true; }
             Some(Event::Pointer(p)) => redraw |= app.pointer(p),
-            // No event, or drag and drop: nothing to take yet.
-            _ => {}
+            None => {}
         }
         // Results arriving one after another are drawn together, a few times a second.
         if redraw || (!app.reported && last.elapsed().as_millis() > 400) { app.draw(window); last = Instant::now(); }

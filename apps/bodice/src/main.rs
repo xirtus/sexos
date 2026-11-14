@@ -411,8 +411,6 @@ pub extern "C" fn _start() -> ! {
             Event::Pointer(_) => continue,
             Event::Drop { .. } | Event::DragEnded { .. } => continue,
             Event::Resize { .. } => app.relayout(window.size()),
-            // Drag and drop: nothing to take yet.
-            _ => continue,
         }
         render(&mut window, &mut app);
     }

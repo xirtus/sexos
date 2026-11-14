@@ -415,8 +415,6 @@ pub extern "C" fn _start() -> ! {
             },
             Event::Drop { .. } | Event::DragEnded { .. } => continue,
             Event::Resize { .. } => {}
-            // Drag and drop: nothing to take yet.
-            _ => {}
         }
         render(&mut window, &app, &mut small, &mut big);
     }
