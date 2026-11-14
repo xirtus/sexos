@@ -80,7 +80,9 @@ fn get(args: &[String]) {
             _ => usage(),
         }
     }
-    let source = source.unwrap_or_else(|| usage());
+    let mut source = source.unwrap_or_else(|| usage());
+    // A bare 40-hex info-hash is a magnet link without trackers.
+    if source.len() == 40 && sex_torrent::from_hex::<20>(&source).is_some() { source = format!("magnet:?xt=urn:btih:{source}"); }
     let peer_id = PeerId::generate(anonymous, &mut |b: &mut [u8]| random(b));
     let mut config = TorrentConfig { listen_port: Some(port), anonymous, ..TorrentConfig::default() };
     if anonymous { config.pex = false; config.client = String::new(); }
