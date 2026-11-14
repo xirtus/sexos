@@ -17,3 +17,5 @@ sex-font = { path = "../../crates/sex-font" }
 sha2 = { version = "=0.10.9", default-features = false, features = ["force-soft"] }
 sex-archive = { path = "../../crates/sex-archive" }
 loom-core = { path = "../../crates/loom-core" }
+sex-diskimage = { path = "../../crates/sex-diskimage" }
+sex-volumes = { path = "../../crates/sex-volumes" }

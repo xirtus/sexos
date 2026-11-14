@@ -1376,9 +1376,11 @@ dependencies = [
  "sex-app",
  "sex-archive",
  "sex-config",
+ "sex-diskimage",
  "sex-font",
  "sex-image",
  "sex-pdx",
+ "sex-volumes",
  "sha2 0.10.9",
 ]
 

@@ -15,6 +15,7 @@ extern crate alloc;
 
 mod archive;
 mod compare;
+mod diskimg;
 mod dupes;
 mod jobs;
 mod loom;

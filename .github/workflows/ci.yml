@@ -282,7 +282,7 @@ jobs:
       run: python3 scripts/files_eject_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-eject"
     - name: Files thumbnails for a folder of 50 pictures, cached
       run: python3 scripts/files_thumbs_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-thumbs"
-    - name: Files archives, batch rename, ratings, duplicates, disk usage and compare
+    - name: Files archives, disk and CD images, batch rename, ratings, duplicates, disk usage and compare
       run: python3 scripts/files_loom_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-loom"
     - name: ext4 stick written from SexOS, e2fsck clean
       run: python3 scripts/files_ext4_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-ext4"

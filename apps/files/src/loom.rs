@@ -5,6 +5,8 @@
 //! Keys: Enter on an archive browses into it, Ctrl+Shift+X extracts, Ctrl+Shift+A packs
 //! a zip; Ctrl+0..Ctrl+5 rate, Ctrl+Shift+G tags; Ctrl+Shift+R batch renames;
 //! Ctrl+Shift+D finds duplicates; Ctrl+U maps disk usage; Ctrl+Shift+C compares folders.
+//! Enter on a disk or CD image (`.iso`, `.img`, `.qcow2`, `.vhd(x)`, `.vmdk`, ...) browses it
+//! the same way, its partitions as folders (see `diskimg`).
 
 use alloc::format;
 use alloc::string::String;
@@ -12,7 +14,7 @@ use alloc::vec::Vec;
 use sex_app::files::Pick;
 use sex_app::Window;
 
-use crate::{archive, compare, dupes, meta, rename, shown, usage, App, BACKSPACE, ENTER, ESC};
+use crate::{archive, compare, diskimg, dupes, meta, rename, shown, usage, App, BACKSPACE, ENTER, ESC};
 
 // Letters and digits, PS/2 set 1, used with Ctrl (and Shift).
 pub const KEY_A: u8 = 0x1E;
@@ -31,12 +33,13 @@ pub enum Prompt { Tags(Vec<u8>), Compare }
 pub struct Loom {
     pub meta: meta::Meta,
     pub inside: Option<archive::Inside>,
+    pub image: Option<diskimg::Inside>,
     pub mode: Mode,
     pub prompt: Option<(Prompt, Vec<u8>)>,
     pub marks: Option<compare::Marks>,
 }
 impl Loom {
-    pub fn new() -> Self { Loom { meta: meta::Meta::new(), inside: None, mode: Mode::None, prompt: None, marks: None } }
+    pub fn new() -> Self { Loom { meta: meta::Meta::new(), inside: None, image: None, mode: Mode::None, prompt: None, marks: None } }
     /// Work is waiting between keys.
     pub fn busy(&self) -> bool {
         match &self.mode { Mode::Dupes(d) => d.busy(), Mode::Usage(u) => u.busy(), _ => false }
@@ -68,6 +71,7 @@ impl App {
             Mode::None => {}
         }
         if self.loom.inside.is_some() { return self.archive_key(window, key); }
+        if self.loom.image.is_some() { return self.image_key(window, key); }
         if self.job.is_some() || self.search.is_some() { return false; }
         if key.control && key.shift {
             match key.code {
@@ -79,7 +83,7 @@ impl App {
                     None => self.status = "Select something to tag.".into(),
                 },
                 KEY_A => self.make_zip(window),
-                KEY_X => self.extract(window),
+                KEY_X => self.extract_any(window),
                 _ => return false,
             }
             return true;
@@ -101,6 +105,7 @@ impl App {
                     self.archive_open(window, p);
                     return true;
                 }
+                if !e.dir && self.image_enter(window, &e.name.clone()) { return true; }
             }
         }
         false
@@ -134,7 +139,7 @@ impl App {
     }
     /// What a row shows after its name: rating, tags, compare mark.
     pub(crate) fn loom_badge(&self, name: &[u8]) -> String {
-        if self.loom.inside.is_some() { return String::new(); }
+        if self.loom.inside.is_some() || self.loom.image.is_some() { return String::new(); }
         let mut s = self.meta_badge(name);
         s.push_str(&self.compare_badge(name));
         s
