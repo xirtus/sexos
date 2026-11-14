@@ -4399,3 +4399,7 @@ energy. Details: `LAPTOP_POWER_2026_11_13.md` (Sleep section).
 - No kernel or owned app changes. This is the engine slice, not a complete DAW;
   Weft UI, capture UX, effects, project persistence and export follow. Contract and
   next steps: `docs/handoff/MOAN_2026_11_14.md`.
+
+## G-20: Fuzz round 3 (2026-11-14)
+- Added 5 `cargo-fuzz` ASan+libFuzzer targets (`fuzz_spreadeagle_xlsx_ods`, `fuzz_assuit_docx`, `fuzz_bodice_epub`, `fuzz_gossip_feed`, `fuzz_swingers_bencode`) with seed corpora and smoke gate coverage (`18/18` targets passing in `scripts/fuzz_smoke_host_gate.sh`).
+- Executed >5.35M ASan+libFuzzer inputs across raw and structured ZIP/XML/bencode payloads; uncovered and filed Issues #301 (`sex-xml` / `Gossip` unbounded nesting stack overflow) and #302 (`sex-ebook` / `Bodice` EPUB `<spine>` amplification DoS) with committed reproducers under `fuzz/repros/round3/` without modifying target crates.
