@@ -4337,3 +4337,13 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
 - Remaining scope is explicit: Moan FFmpeg FLAC/MP3 export, project persistence and
   graphical waveforms; Chastity live cross-app autofill transport/consent routing.
   Chastity's tested authorization API is not claimed as a deployed IPC service.
+
+## ChatGPT round 182: unblock the Weft dependency's CI (2026-11-14)
+- PR #265 reconciles #220 with current master, replacing the invalid unquoted
+  `Abacus: typing` workflow name and retaining egui/Weft gates in the split job
+  layout alongside current master gates. YAML parses before dispatch.
+- The egui manifest now scopes the existing `sex-std` runtime dependency to the
+  Hermit guest target, matching its runtime code. This prevents x86 register
+  assembly from entering Apple Silicon host tests; no renderer/widget changes.
+- 47 Weft/egui/Abacus host tests pass, and the guest standard-library target passes
+  a release compile check. Full QEMU CI is queued; no dependency PR was merged.
