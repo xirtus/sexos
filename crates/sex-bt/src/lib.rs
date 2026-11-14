@@ -13,12 +13,14 @@
 //! - `smp` + `crypto`: LE Secure Connections pairing (P-256, AES-CMAC f4/f5/f6/g2).
 //! - `ssp`: classic Secure Simple Pairing event flow.
 //! - `pack`: firmware pack lookup.
+//! - `host`: all of the above composed into one packet-in/packet-out host stack.
 #![no_std]
 extern crate alloc;
 
 pub mod controller;
 pub mod crypto;
 pub mod hci;
+pub mod host;
 pub mod intel;
 pub mod l2cap;
 pub mod pack;
