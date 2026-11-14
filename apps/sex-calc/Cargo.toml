@@ -1,9 +1,15 @@
 [package]
 name = "sex-calc"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
+license.workspace = true
+
+[[bin]]
+name = "sex-calc"
+path = "src/main.rs"
 
 [dependencies]
-silkclient = { path = "../../crates/silk-client" }
 sex-pdx = { path = "../../crates/sex-pdx" }
-sex-graphics = { path = "../../crates/sex-graphics" }
+sex-app = { path = "../../crates/sex-app" }
+sex-font = { path = "../../crates/sex-font" }
+sex-calc-core = { path = "../../crates/sex-calc-core" }

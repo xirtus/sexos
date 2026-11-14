@@ -465,7 +465,7 @@ jobs:
   # Single required check: keeps the old "build" check name for branch rules.
   build:
     if: always()
-    needs: [host, truth, boot, devices, programs, media, editor, profiles, js-jit, recording]
+    needs: [host, truth, boot, devices, programs, media, editor, profiles, js-jit, recording, productivity, terminal-editor, documents-pictures]
     runs-on: ubuntu-latest
     steps:
     - run: |
@@ -543,4 +543,88 @@ jobs:
         path: |
           ${{ runner.temp }}/recording
           ${{ runner.temp }}/recording-build.log
+        if-no-files-found: ignore
+
+  productivity:
+    name: Productivity programs
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+    - uses: actions/checkout@v4
+    - uses: ./.github/actions/setup
+    - name: Calculator arithmetic and calendar model on the host
+      run: cargo test --locked -p sex-calc-core -p sex-calendar -p sex-vt -p sex-textedit -p sex-wasm && cargo test --locked -p sex-pdx --test stream --test console_relay
+    - name: Build the image
+      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/productivity-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/productivity-build.log"; exit 1)
+    - name: Calculator typed, clicked and recalled
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/blank-productivity.img"
+        python3 scripts/program_calc_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-productivity.img" --out "$RUNNER_TEMP/sexos-productivity/calc"
+    - name: Calendar imports .ics, shows repeats on their days and keeps events
+      run: python3 scripts/program_calendar_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-productivity.img" --out "$RUNNER_TEMP/sexos-productivity/calendar"
+    - name: Preserve productivity evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sexos-productivity-proof
+        path: |
+          ${{ runner.temp }}/productivity-build.log
+          ${{ runner.temp }}/sexos-productivity
+        if-no-files-found: ignore
+
+  terminal-editor:
+    name: Terminal and editor
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+    - uses: actions/checkout@v4
+    - uses: ./.github/actions/setup
+    - name: Build the image
+      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/term-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/term-build.log"; exit 1)
+    - name: Term draws the VT fixture, runs a Wasm program behind a stream; std consoles become terminals
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/blank-term.img"
+        python3 scripts/program_term_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-term.img" --out "$RUNNER_TEMP/sexos-term/term"
+    - name: Programs of their own (std, C) run inside Term with it as their console
+      run: python3 scripts/program_term_native_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-term.img" --out "$RUNNER_TEMP/sexos-term/term-native"
+    - name: Jot undo tree, save and reopen, find and replace, spelling, tabs
+      run: python3 scripts/program_jot_edit_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-term.img" --out "$RUNNER_TEMP/sexos-term/jot-edit"
+    - name: Jot as a notepad in its own folder (original gate)
+      run: python3 scripts/program_jot_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-term.img" --out "$RUNNER_TEMP/sexos-term/jot"
+    - name: Preserve terminal and editor evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sexos-terminal-editor-proof
+        path: |
+          ${{ runner.temp }}/term-build.log
+          ${{ runner.temp }}/sexos-term
+        if-no-files-found: ignore
+
+  documents-pictures:
+    name: Documents and pictures
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+    - uses: actions/checkout@v4
+    - uses: ./.github/actions/setup
+    - name: Build the image
+      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/productivity-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/productivity-build.log"; exit 1)
+    - name: PDF finds a word on page 7, outline, thumbnails and zoom
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/blank-pdf.img"
+        python3 scripts/program_pdf_find_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-pdf.img" --out "$RUNNER_TEMP/sexos-productivity/pdf-find"
+    - name: View pictures, turns, zoom, animated WebP and a folder slideshow
+      run: |
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends python3-pil
+        truncate -s 256M "$RUNNER_TEMP/blank-view.img"
+        python3 scripts/program_view_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-view.img" --out "$RUNNER_TEMP/sexos-productivity/view"
+    - name: Preserve document and picture evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sexos-documents-proof
+        path: |
+          ${{ runner.temp }}/productivity-build.log
+          ${{ runner.temp }}/sexos-productivity
         if-no-files-found: ignore
