@@ -67,6 +67,7 @@ crates = [
   "apps/stdhello/Cargo.toml",
   "apps/stdnet/Cargo.toml",
   "apps/ssh/Cargo.toml",
+  "apps/needle/Cargo.toml",
   "apps/chello/Cargo.toml",
   "apps/pdf/Cargo.toml",
   "apps/lua/Cargo.toml",
@@ -396,6 +397,16 @@ build_std = "std,panic_abort"
 manifest = "apps/ssh/Cargo.toml"
 source_artifact = "target/x86_64-sex-std/release/ssh"
 dest_artifact = "iso_root/programs/ssh"
+
+# Needle: driverless printing (IPP Everywhere, PWG raster) and scanning (eSCL).
+[[stage]]
+id = "build_needle"
+action = "cargo_manifest"
+target = "x86_64-sex-std.json"
+build_std = "std,panic_abort"
+manifest = "apps/needle/Cargo.toml"
+source_artifact = "target/x86_64-sex-std/release/needle"
+dest_artifact = "iso_root/programs/needle"
 
 # Ordinary C programs: main(argc, argv) on sex-libc's POSIX guest layer over sex-std.
 [[stage]]

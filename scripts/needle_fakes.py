@@ -197,7 +197,7 @@ def dnssd_answer(qid,question,printer_port,scanner_port,addr=(10,0,2,2)):
  return struct.pack('>HHHHHH',qid,0x8400,1 if question else 0,len(an),0,len(ad))+question+b''.join(an+ad)
 class FakeResponder:
  """Answers any DNS query on 127.0.0.1:port (legacy unicast DNS-SD)."""
- def __init__(self,printer_port,scanner_port):
+ def __init__(self,printer_port,scanner_port,addr=(10,0,2,2)):
   self.sock=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);self.sock.bind(('127.0.0.1',0));self.port=self.sock.getsockname()[1];self.queries=[]
   def run():
    while True:
@@ -212,10 +212,10 @@ class FakeResponder:
       at+=5
     except IndexError:continue
     self.sock.sendto(self.reply(q,at),src)
-  self.printer_port,self.scanner_port=printer_port,scanner_port
+  self.printer_port,self.scanner_port,self.addr=printer_port,scanner_port,addr
   threading.Thread(target=run,daemon=True).start()
  def reply(self,q,at):
   qid,=struct.unpack('>H',q[:2]);n,=struct.unpack('>H',q[4:6])
-  r=dnssd_answer(qid,q[12:at],self.printer_port,self.scanner_port)
+  r=dnssd_answer(qid,q[12:at],self.printer_port,self.scanner_port,self.addr)
   return r[:4]+struct.pack('>H',n)+r[6:]
  def stop(self):self.sock.close()
