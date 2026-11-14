@@ -77,7 +77,8 @@ crates = [
   "apps/store/Cargo.toml",
   "apps/sdltest/Cargo.toml",
   "apps/driftspark/Cargo.toml",
-  "apps/hookup/Cargo.toml"
+  "apps/hookup/Cargo.toml",
+  "apps/rendezvous/Cargo.toml"
 ]
 
 [[stage]]
@@ -498,6 +499,16 @@ build_std = "std,panic_abort"
 manifest = "apps/hookup/Cargo.toml"
 source_artifact = "target/x86_64-sex-std/release/hookup"
 dest_artifact = "iso_root/programs/hookup"
+
+# Rendezvous: maps (vector tiles, search, routes, offline regions; crates/sex-map).
+[[stage]]
+id = "build_rendezvous"
+action = "cargo_manifest"
+target = "x86_64-sex-std.json"
+build_std = "std,panic_abort"
+manifest = "apps/rendezvous/Cargo.toml"
+source_artifact = "target/x86_64-sex-std/release/rendezvous"
+dest_artifact = "iso_root/programs/rendezvous"
 
 [[stage]]
 id = "build_play"
