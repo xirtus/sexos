@@ -94,6 +94,8 @@ members = [
     "crates/sex-calendar",
     "crates/sex-dav",
     "apps/calendar",
+    "crates/sex-vcard",
+    "apps/crush",
     "apps/lua",
     "apps/rg",
     "apps/fd",

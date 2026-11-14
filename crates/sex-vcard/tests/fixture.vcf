@@ -1,0 +1,32 @@
+BEGIN:VCARD
+VERSION:3.0
+PRODID:-//Apple Inc.//iPhone OS 17.0//EN
+N:Lovelace;Ada;Augusta;Countess;
+FN:Ada Lovelace
+ORG:Analytical Engines Ltd;Research
+TITLE:Programmer
+item1.EMAIL;type=INTERNET;type=WORK;type=pref:ada@engines.example
+item1.X-ABLabel:_$!<Work>!$_
+TEL;type=CELL;type=VOICE;type=pref:+44 20 7946 0018
+ADR;TYPE=HOME:;;12 St James's Square;London;;SW1Y 4JH;United Kingdom
+BDAY:1815-12-10
+NOTE:Wrote the first program\, notes on the engine\nand more
+CATEGORIES:Friends,Science
+X-SOCIALPROFILE;type=twitter:x-apple:ada
+UID:ada-1815@example.org
+END:VCARD
+BEGIN:VCARD
+VERSION:4.0
+UID:urn:uuid:4fbe8971-0bc3-424c-9c26-36c3e1eff6b1
+FN:Grace Hopper
+N:Hopper;Grace;Brewster Murray;Rear Admiral;
+EMAIL;TYPE=home:grace@navy.example
+TEL;VALUE=uri;TYPE="voice,work":tel:+1-202-555-0143
+URL:https://example.org/grace
+END:VCARD
+BEGIN:VCARD
+VERSION:2.1
+N;ENCODING=QUOTED-PRINTABLE;CHARSET=UTF-8:G=C3=B6del;Kurt
+FN;ENCODING=QUOTED-PRINTABLE;CHARSET=UTF-8:Kurt G=C3=B6del
+TEL;WORK;VOICE:+43 1 4277 0
+END:VCARD
