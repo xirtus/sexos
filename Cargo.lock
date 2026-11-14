@@ -845,6 +845,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "corset-core"
+version = "0.1.0"
+dependencies = [
+ "sex-crypt",
+ "sex-disk",
+ "sex-volumes",
+ "sexfs",
+]
+
+[[package]]
 name = "cpp"
 version = "0.1.0"
 dependencies = [
@@ -2514,6 +2524,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lurk"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-pdx",
+ "sex-rfb",
+]
+
+[[package]]
 name = "lzma-rust2"
 version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4141,6 +4160,13 @@ dependencies = [
 [[package]]
 name = "sex-print"
 version = "0.1.0"
+
+[[package]]
+name = "sex-rfb"
+version = "0.1.0"
+dependencies = [
+ "miniz_oxide 0.8.9",
+]
 
 [[package]]
 name = "sex-rt"
