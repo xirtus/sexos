@@ -79,6 +79,7 @@ def main():
  def keys(text):
   for k in text:
    shifted={':':'semicolon','+':'equal','?':'slash','_':'minus'}.get(k)
+   if k.isascii() and k.isupper():shifted=k.lower()
    if shifted:q.cmd('send-key',{'keys':[{'type':'qcode','data':'shift'},{'type':'qcode','data':shifted}],'hold-time':80})
    else:q.key(KEYS.get(k,k))
    time.sleep(.06)

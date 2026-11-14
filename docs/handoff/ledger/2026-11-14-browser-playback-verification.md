@@ -51,7 +51,7 @@ If a failure occurs, retain the raw log and screen evidence and identify the
 last successful boundary: HTTPS, script, MSE append, decoder, frame delivery,
 Display presentation. Never substitute the local tube fixture as a pass.
 
-## Real-page performance (unmeasured)
+## Real-page performance protocol
 
 Use the same opt-in `baseline-jit` browser binary for both modes, launching with
 `--no-jit` and without it. The production default remains off. Keep identical
@@ -75,7 +75,7 @@ Pages executing no JIT code still belong in the results, with zero coverage.
 
 Report cold and interactive timings separately, sample dispersion, fallback
 counts, correctness differences and environment (QEMU versus x17). No real-page
-speedup has been measured in this work block; no speedup is claimed.
+speedup is established; no speedup is claimed.
 
 For local real-site diagnostics, the existing site runner accepts a separately
 built opt-in browser and records its hash, boot ISO hash, requested mode and
@@ -91,3 +91,38 @@ python3 scripts/browser_sites_gate.py --live --iso "$ISO" \
 Each output directory must be fresh. The webmail step remains a local fixture,
 explicitly separate from the four real sites. Live network runs alone do not
 control resource bytes or cache state and must not be reported as JIT speedups.
+
+## Local results after preparation
+
+The native pointer gate passed with a real decorative `pointer-events: none`
+overlay over its canvas, including click, context menu, wheel and navigation.
+The isolated worktree's `target/browser-evidence/real-page-comparison.json`
+seals the inputs, raw serial logs and the following live HTTPS results.
+
+| Page | JIT-off script ms | JIT-on script ms | Visible-text matches (both) | Startup compiled/executed (both) |
+|---|---:|---:|---:|---|
+| Wikipedia Microkernel | 1205 | 2098 | 81 | 0/0 |
+| NPR text | 0 | 0 | 2 | No script receipt |
+| Hacker News | 261 | 714 | 31 | 0/0 |
+| GitHub repository | 24205 | 44924 | 21 | 0/0 |
+
+These are one sequential off/on pair under QEMU with uncontrolled live resource
+bytes and host scheduling. On was slower in this sample; neither a causal JIT
+regression nor a speedup is established. Zero startup compilation means these
+results cannot demonstrate useful JIT acceleration. The guest imports the
+current `jit_v2` and `jit_available` protocol. Async work is outside these counters.
+
+Visible-text checks do not prove full page behavior: Wikipedia throws a selector
+DOMException, and GitHub's popover bootstrap throws while spreading the missing
+`document.adoptedStyleSheets`. The fetched GitHub asset is retained with its hash;
+proper stylesheet adoption remains unimplemented. Do not substitute an empty
+property that discards styles. Wikipedia's height of 114 also needs investigation.
+
+An initial live pilot failed because the QMP runner passed uppercase `M` as a
+keycode. Its evidence is retained. The runner now types uppercase ASCII with
+Shift plus the lowercase key, and both subsequent full site runs completed.
+The local webmail fixture is excluded from the real-page table.
+
+The local image intentionally lacks FFmpeg: it validates pointer behavior and
+script workloads, not decoded playback. x17 visible playback, audio and `/watch`
+remain pending. PR #274 remains draft until exact-head CI and remaining review.
