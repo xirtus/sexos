@@ -521,6 +521,11 @@ GREEN; native HTML gate at both sizes with a seventh page script
 (`odd 1+3+5+7+9 = 25` via continue/break/template); native calc gate at
 both sizes incl. `calc sqrt(2)`.
 
+## G-8: Corset disks, partitions, SMART and BDSM encryption engine (2026-11-14)
+
+- **`corset-core` block engine.** GPT editor with 1 MiB alignment, overlap refusal, CRC-32 dual-table recovery, FAT32/exFAT/SexFS formatters and inspector with `sex-volumes` cross-mount verification.
+- **SMART diagnostics & BDSM encryption.** NVMe/ATA health analyzer with thermal and spare degradation tracking, and transparent XTS-AES-256 encrypted partition workflow (`sex-crypt` Argon2id rewrapping and cryptographic header wiping).
+
 ## F27-F28. Script objects and JSON (2026-11-03)
 
 - **F27 objects.** `{a: 1, 'b': x}` literals, `o.a`, `o[key]`, `o.a = v`
@@ -4070,6 +4075,21 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
 - **Not yet:** inhibiting idle while media plays (needs a Bell hint); a salt from the
   kernel's held entropy source instead of RDRAND.
 
+## Volume and keyboard settings act (2026-11-14)
+- **Volume:** the Shell keeps the volume in settings (`sound.volume`). After a volume or mute
+  key, it stores the level Bell answers. When the setting changes (Settings, or a restart
+  that loads it) it gives Bell `SET_MASTER`. The default is now 100%, Bell's own, so a fresh
+  disk changes nothing.
+- **Keyboard:** the Shell's key repeat takes `keyboard.repeat_delay_ms` and
+  `keyboard.repeat_rate`, and Caps Lock acts as Ctrl with `keyboard.caps_as_ctrl`. It reads
+  them on its first walk of the settings and on every change.
+- **Evidence:** `scripts/settings_persist_gate.py`:
+  - Boot 1: volume down twice stores 90%, and the Shell's repeat starts at 400 ms / 40 ms.
+  - Boot 2: Settings lengthens the repeat delay and the Shell follows.
+  - Boot 3: Bell is set to 90% and the delay is back, with no key pressed.
+- **Not yet:** Display scale (workstream L) and the volume set from Spindle's `volume`
+  command (Spindle talks to Bell directly) aren't kept.
+
 ## Lock screen opens the encrypted home (2026-11-14)
 - **What:** when the Shell's password CHECK passes (or no lock password is set) and the
   encrypted `/home` (PR #197) is locked, Files tries the typed password on it. Signing in
@@ -4185,6 +4205,10 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   `sex_pdx::accounts` (op 0x2B0). Host gates in CI.
 - **Next:** `servers/multipass` in the boot catalog, Tatami page, Valentine program on
   Weft. Details: `docs/handoff/VALENTINE_MULTIPASS_2026_11_14.md`.
+## G-1: Core model host unit tests and QEMU gate retry determinism (2026-11-14)
+- Added 20 host unit tests across `silkbar-model`, `sex-object-model`, `sex-trust-config`, `sex-volumes` and `sex-crypt`, plus `scripts/core_models_host_gate.sh` (also running `sex-canvas` and `sex-gl` host suites). No production behaviour changes.
+- Fixed `scripts/usb_net_gate.py` so transient early `fetch: could not connect` responses sleep 1s and retry instead of breaking on attempt 0, and raised multi-core TCG timeouts in `scripts/program_jit_gate.py` for 2-vCPU CI runners.
+
 ## J6b: busy programs no longer stall the desktop (2026-11-14)
 - Cause of the 1.5 s key-to-screen stall under load: a Display repaint (~270 ticks under TCG) that used up its time slice went back to the normal queue behind every busy program, so with four `bench spin` programs on two cores a repaint took 1.1-1.6 s and keys waited behind it.
 - Kernel: a task whose time ran out (`Scheduler::tick_sliced`, timer/preempt path) keeps its interactive class for `SLICED_KEEP`=4 turns, then waits behind the normal queue once (the counter resets whenever a normal task runs); a task that yields still drops to the normal queue. No preempt IPI for a re-queued sliced task. An unbounded first version (16:1) starved Bell/pager/Browser at boot in CI. Bell's boot paging probe now defers up to 128 messages (was 32).
