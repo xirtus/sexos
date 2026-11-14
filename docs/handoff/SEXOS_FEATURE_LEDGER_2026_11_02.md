@@ -4380,3 +4380,27 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   pass. New QEMU gate saves an edited project, reboots, reopens exact bytes, edits/
   undoes and retains waveform screenshots. Runtime result remains pending CI.
 - Details and exact format/bounds: `docs/handoff/MOAN_2026_11_14.md` round180.
+
+## ChatGPT round 183: repair integrated build and gate failures (2026-11-14)
+- First integrated CI passed host regressions and all three kernel model shards,
+  but image jobs stopped on the unchanged loader's forbidden-instruction scan:
+  RG contained a CALL displacement matching WRPKRU bytes. Its build script now
+  honors `SEX_LAYOUT_SEED` using the existing Play section-shuffle approach;
+  seed 1 passes the scanner and eight native functional fixtures. The scanner
+  and kernel are unchanged.
+- Tassel's wheel gate clicked outside a 550x144 client. A shared Shell maximize
+  helper now supplies actual tile geometry; Tassel, Velvet, Leather, Abacus and
+  all three Moan gates wait for fresh client layout/control receipts before
+  interaction. Pointer offsets use the measured x8/y34 client origin. Moan's
+  waveform scales to the initial tiled client and maps pointer coordinates to
+  the resized timeline.
+- Unsaved Moan Close explicitly declines Shell's timed force-close while its
+  Cancel-default prompt is open, including during project I/O. Project gate
+  checks that Cancel remains alive beyond the existing five-second timeout.
+- Current combined host suite: 127 tests pass across Moan app/core, Velvet,
+  Leather, Abacus, Weft and sex-egui. Workflow YAML parses; no kernel diff.
+  Fresh-head QEMU results are still required. No PR merged on partial results.
+- Chastity's earlier custom vault is being replaced with the requested canonical
+  KDBX foundation at `37471138`, retaining `sha2@0.11.1` release opt-level `s`.
+  Its original gate has not yet produced a boot result; neither KDBX runtime nor
+  live autofill is claimed proven by host tests.
