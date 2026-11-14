@@ -17,6 +17,8 @@ mod app_input;
 mod wm;
 mod launcher_search;
 mod session;
+mod config_watch;
+mod lock;
 mod keyboard_layout;
 mod key_repeat;
 use alloc::vec::Vec;
@@ -312,6 +314,33 @@ unsafe fn shell_close_poll() {
 const _: () = assert!(app_custody::CLOSE_ASK==sex_pdx::app_lifecycle::CLOSE_ASK
     && app_custody::CLOSE_CONFIRMED==sex_pdx::app_lifecycle::CLOSE_CONFIRMED
     && app_custody::DECLINE_UNSAVED==sex_pdx::app_lifecycle::DECLINE_UNSAVED);
+/// Ends a program row now. Its pages are gone, but a program waiting for an event would
+/// not run to notice: a confirmed Close wakes it, it faults, and its run is retired.
+unsafe fn force_end_and_wake(e:&app_custody::Entry)->bool {
+    if sex_pdx::app_lifecycle::force_end(e.slot).is_err() { return false; }
+    if let Some(slot) = e.close_slot() { let _ = pdx_call_checked(slot, sex_pdx::app_lifecycle::OP_APP_CLOSE, e.target as u64, e.task as u64, sex_pdx::app_lifecycle::CLOSE_CONFIRMED); }
+    true
+}
+/// The focused program (the system monitor) asks to end another program now.
+unsafe fn program_end_receive(msg:&sex_pdx::PdxMessage)->bool {
+    use sex_pdx::system_stats as st;
+    if msg.type_id!=st::OP_END_PROGRAM {return false;}
+    let focused=APP_CUSTODY.iter().flatten().any(|e|e.target==msg.caller_pd&&e.task==msg.caller_task&&!e.dead&&e.surface==FOCUSED_SURFACE_ID);
+    let target=msg.arg0 as u32;
+    let status=if !focused {st::NOT_FOCUSED} else {
+        match APP_CUSTODY.iter_mut().flatten().find(|e|e.target==target&&!e.dead&&!e.forced
+            &&app_catalog::by_surface(e.target,e.surface).is_some_and(|r|r.app==app_catalog::App::Program)) {
+            None=>st::NOT_A_PROGRAM,
+            Some(e)=>{
+                e.forced=true;
+                if force_end_and_wake(e){st::OK}else{e.forced=false;st::NOT_ENDED}
+            }
+        }
+    };
+    sex_pdx::serial_record!("[shell.program.end] caller={} target={} status={}",msg.caller_pd,target,status);
+    pdx_reply(msg.caller_pd,status);
+    true
+}
 /// An app's own decline of a pending ordinary close: unsaved work stays open
 /// and the user's next Close is sent as confirmed.
 unsafe fn shell_close_declined_receive(msg:&sex_pdx::PdxMessage)->bool {
@@ -10522,7 +10551,7 @@ unsafe fn wm_action(action: wm::WmAction) -> bool {
         A::Notifications => toggle_bell(),
         A::Wallpaper => desktop_look_step(1, 0),
         A::NightLight => desktop_look_step(0, 1),
-        A::Lock => false,
+        A::Lock => lock::lock(),
         A::KeyboardLayout => { let (label, title) = keyboard_layout::next(); keyboard_layout_notice(label, title) }
     };
     sex_pdx::serial_record!("[shell.wm.action] action={:?} done={} scene={}->{} focus={}->{} layout={}",
@@ -10878,6 +10907,7 @@ unsafe fn media_keys_receive(msg:&sex_pdx::PdxMessage)->bool{
 /// main OP_HID_EVENT dispatch.  Used by linen_sync_reply and before-linen
 /// drain so button click/focus works even during blocking Linen fetch.
 unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
+    if lock::input(event_class, arg0 as u8, arg1) { return; }
     // A scale starts only with no held buttons/drag. Consume pointer events
     // during its bounded publication handshake, so old hit geometry cannot
     // target newly painted controls; unrelated keyboard input remains live.
@@ -16371,6 +16401,14 @@ unsafe fn desktop_look_step(wallpaper: u8, night: u8) -> bool {
     use sex_pdx::desktop_look as look;
     let (w, n) = DESKTOP_LOOK;
     let next = ((w + wallpaper) % look::WALLPAPERS.len() as u8, (n + night) % look::NIGHT_LEVELS);
+    let ok = desktop_look_apply(next.0, next.1);
+    if ok { use sex_pdx::config::schema::id; config_watch::changed_here(id::WALLPAPER, next.0 as i32); config_watch::changed_here(id::NIGHT_LIGHT, next.1 as i32); }
+    ok
+}
+/// Shows a wallpaper and night light level (from a key or from settings).
+unsafe fn desktop_look_apply(wallpaper: u8, night: u8) -> bool {
+    use sex_pdx::desktop_look as look;
+    let next = (wallpaper % look::WALLPAPERS.len() as u8, night % look::NIGHT_LEVELS);
     let ok = pdx_call(SLOT_DISPLAY, look::OP_DESKTOP_LOOK, next.0 as u64, next.1 as u64, 0).0 == 0;
     if ok { DESKTOP_LOOK = next; }
     sex_pdx::serial_record!("[shell.look] wallpaper={} name={} night={} ok={}", next.0, look::WALLPAPERS[next.0 as usize].0, next.1, ok as u8);
@@ -16424,7 +16462,7 @@ unsafe fn shell_memory_poll() {
     let Some(e) = APP_CUSTODY[i].as_mut() else { return };
     e.forced = true;
     MEMORY_LAST_END = now;
-    let ok = sex_pdx::app_lifecycle::force_end(e.slot).is_ok();
+    let ok = force_end_and_wake(e);
     let name = sex_pdx::system_stats::name(e.target);
     let name = &name[..name.iter().position(|&c| c == 0).unwrap_or(16)];
     let name = if name.is_empty() { &b"A program"[..] } else { name };
@@ -26173,6 +26211,8 @@ pub extern "C" fn _start() -> ! {
         // empty, flush the coalesced cursor position (latest wins) before
         // blocking — the display gets exactly one current-state update per
         // drained burst instead of one IPC per HID event.
+        config_watch::poll();
+        lock::poll();
         let msg = match pop_startup_message().or_else(|| pdx_try_listen_raw(0)) {
             Some(m) => m,
             None => {
@@ -26183,15 +26223,18 @@ pub extern "C" fn _start() -> ! {
                     sys_yield();
                     continue;
                 }
+                if let Some(t) = lock::next_wake() { let _ = sex_pdx::sys_wait_self_ticks(t.min(60_000) + 1); continue; }
                 pdx_listen_raw(0)
             }
         };
         // Display started again after a crash: it knows nothing of the desktop, so show it again.
-        if sex_pdx::display_ready::is_display_ready(&msg) { unsafe { display_came_back(); } continue; }
+        if sex_pdx::display_ready::is_display_ready(&msg) { unsafe { display_came_back(); } config_watch::display_restarted(); lock::display_restarted(); continue; }
         // The kernel's critical-memory word: the poll above acts on it.
         if msg.type_id == sex_pdx::program_memory::OP_PRESSURE && msg.caller_pd == 0 { unsafe { MEMORY_LAST_LOOK = 0; } continue; }
         unsafe {
             if shell_lifecycle_hint(&msg) { continue; }
+            if config_watch::receive(&msg) { continue; }
+            if lock::receive(&msg) { continue; }
             if shell_program_message(&msg) { continue; }
             if clipboard_receive(&msg) { continue; }
             if notification_receive(&msg) { continue; }
@@ -26199,6 +26242,7 @@ pub extern "C" fn _start() -> ! {
             if spindle_history_status_receive(&msg) {continue;}
             if workspace_refresh_receive(&msg) { continue; }
             if shell_close_declined_receive(&msg) { continue; }
+            if program_end_receive(&msg) { continue; }
             if display_scale_receive(&msg) { continue; }
             if desktop_text_receive(&msg) { continue; }
             if linen_async_reply(&msg) { continue; }
@@ -26423,6 +26467,7 @@ pub extern "C" fn _start() -> ! {
                 OP_HID_EVENT => {
                     // Fixed BOOT sexinput main task, authenticated by IPC metadata.
                     if msg.caller_pd!=sex_pdx::shell_ready::INPUT_PD_ID || msg.caller_task!=sex_pdx::shell_ready::INPUT_PD_ID {continue;}
+                    if lock::input(msg.arg2, msg.arg0 as u8, msg.arg1) { continue; }
                     let scancode = msg.arg0 as u8;
                     let value = msg.arg1; // 1=pressed, 0=released
                     let event_class = msg.arg2; // EV_KEY, EV_REL, EV_ABS, EV_BTN

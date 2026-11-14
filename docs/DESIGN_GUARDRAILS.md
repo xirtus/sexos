@@ -115,7 +115,8 @@ The themes:
   Linux driver bridge, is dressed for visiting.
 - **Romance and love.** Qupid, the media player.
 - **Psychedelic.** Kaleidoscope, the browser.
-- **Sex puns.** sexdrive (storage drivers), sexfiles, sexshop (the app store).
+- **Sex puns.** sexdrive (storage drivers), BDSM (the Block Device Storage Manager), sexfiles,
+  sexnet, sexshop (the app store).
 
 When a newer program and an older themed one do the same job, the better implementation
 keeps the themed name and absorbs the other's features and plans. The loser is removed,
@@ -140,7 +141,9 @@ while, so scripts and habits keep working; aliases are dropped once nothing uses
 | Qupid | The media player | `apps/play` (to become `apps/qupid`) |
 | sexshop | The app store | `apps/store` (to become the `sexshop` program) |
 | sexfiles | The filesystem service | `servers/sexfiles` |
+| sexnet | The network service (TCP/IP, DNS, Wi-Fi, Ethernet) | `servers/sexnet` |
 | sexdrive | Storage drivers (NVMe, AHCI, VMD) | `apps/sexdrive`, `servers/sexdrive` |
+| BDSM | Block Device Storage Manager: the block layer between sexdrive and sexfiles (partitions, the disk lens and write policy, RAID volumes, encryption at rest) | today spread over `crates/sex-disk`, `crates/sex-crypt`, `crates/sex-vmd`, sexdrive's disk lens and sexfiles' volumes; to be gathered under the name |
 | Tuxedo | The temporary Linux driver bridge (see section 3) | `servers/tuxedo` |
 
 The name table for apps without a canon name, and the state of each rename, is kept in

@@ -110,6 +110,7 @@ pub const COMMANDS: &[&[u8]] = &[
     b"search",
     b"servers",
     b"session",
+    b"sexshop",
     b"sextime",
     b"status",
     b"store",

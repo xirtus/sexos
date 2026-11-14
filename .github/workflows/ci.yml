@@ -47,6 +47,8 @@ jobs:
       run: bash scripts/hwdb_host_gate.sh
     - name: Bell sound rate conversion on the host
       run: bash scripts/sound_host_gate.sh
+    - name: Qupid keep-watching logic (episodes, skip and up-next cards) on the host
+      run: bash scripts/qupid_host_gate.sh
     - name: Explicit program heap limits with actual Talc
       run: bash scripts/program_heap_limit_host_gate.sh
     - name: Unarmed recorder custody and restart contracts
@@ -55,6 +57,8 @@ jobs:
       run: bash scripts/desktop_capture_host_gate.sh
     - name: HTML containing-block and replaced sizing
       run: cargo test --locked -p sex-html
+    - name: Settings schema, file format, protocol and the Settings program's pages
+      run: bash scripts/settings_host_gate.sh
     - name: Signed package format and store catalog
       run: cargo test --locked -p sex-pkg
     - name: Disk layouts (GPT, FAT, install beside other systems)
@@ -65,8 +69,24 @@ jobs:
       run: cargo test --locked -p sex-font --test fallback
     - name: Shaping (rustybuzz vs hb-shape), Arabic joining and bidi
       run: cargo test --locked -p sex-shape --features shaping
+    - name: Loom engines (batch rename, duplicates, usage map, tags, compare) on the host
+      run: cargo test --locked -p loom-core
+    - name: Vellum annotations, forms and incremental PDF saves on the host
+      run: cargo test --locked -p vellum-edit
+    - name: Gaze decoders (EXIF orientation, JPEG XL, SVG, RAW previews) on the host
+      run: cargo test --locked -p gaze-codecs --all-features
+    - name: Aftercare backups (dedup, encryption, restore, prune, check) on the host
+      run: cargo test --locked -p aftercare-core
+    - name: Aftercare app (folder store, restore hashes, settings, schedule) on the host
+      run: cargo test --locked -p aftercare
+    - name: Loom archives (zip, tar, 7z, gz, zst, xz) with Python interop on the host
+      run: cargo test --locked -p sex-archive --features std
     - name: Pinyin input method
       run: cargo test --locked -p sex-ime
+    - name: Multipass accounts, Shibari keeper (link fixtures, tokens never leave)
+      run: cargo test --locked -p shibari -p sex-multipass
+    - name: Valentine mail (IMAP IDLE + SMTP send-then-receive fixture, MIME, threads)
+      run: cargo test --locked -p sex-mail
     - name: SexOS filesystem check and repair (injected faults)
       run: cargo test --locked --release -p sexfs --features repair --lib
     - name: Network stack (IPv6 resolvers, accept backlog, UDP queues) on the host
@@ -168,28 +188,6 @@ jobs:
       run: |
         truncate -s 1G "$RUNNER_TEMP/blank-programs.img"
         python3 scripts/program_std_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/programs-std"
-    - name: Lua 5.4 interpreter
-      run: python3 scripts/lua_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/lua"
-    - name: Signed packages, install service and first-run grant question
-      run: |
-        truncate -s 1G "$RUNNER_TEMP/blank-packages.img"
-        python3 scripts/package_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-packages.img" --out "$RUNNER_TEMP/sexos-runtime/packages"
-    - name: ripgrep and fd
-      run: python3 scripts/rg_fd_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/rg-fd"
-    - name: bat
-      run: python3 scripts/bat_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/bat"
-    - name: Python 3.13 interpreter (CPython)
-      run: python3 scripts/python_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/python"
-    - name: Store program and the +pkg run grant
-      run: |
-        truncate -s 1G "$RUNNER_TEMP/blank-store.img"
-        python3 scripts/store_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-store.img" --out "$RUNNER_TEMP/sexos-runtime/store"
-    - name: SDL2 program (video, sound, keys)
-      run: |
-        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends python3-pil
-        python3 scripts/sdl_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/sdl"
-    - name: SDL2 game (demo score, window, sound, keys)
-      run: python3 scripts/driftspark_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/driftspark"
     - name: Large reads must reach the device
       run: python3 scripts/program_bench_gate.py --large-read --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/large-read"
     - name: IPv6-only network (SLAAC, RDNSS, DHCPv6, sockets, name lookup)
@@ -230,6 +228,10 @@ jobs:
       run: |
         truncate -s 1G "$RUNNER_TEMP/capture-source.img"
         python3 scripts/desktop_capture_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/capture-source.img" --out "$RUNNER_TEMP/sexos-runtime/capture"
+    - name: Settings last across a restart
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/settings-source.img"
+        python3 scripts/settings_persist_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/settings-source.img" --out "$RUNNER_TEMP/sexos-runtime/settings"
     - name: Alt+Tab window switcher with live thumbnails
       run: |
         truncate -s 256M "$RUNNER_TEMP/switcher-source.img"
@@ -273,6 +275,8 @@ jobs:
       run: python3 scripts/files_eject_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-eject"
     - name: Files thumbnails for a folder of 50 pictures, cached
       run: python3 scripts/files_thumbs_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-thumbs"
+    - name: Files archives, batch rename, ratings, duplicates, disk usage and compare
+      run: python3 scripts/files_loom_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-loom"
     - name: ext4 stick written from SexOS, e2fsck clean
       run: python3 scripts/files_ext4_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-ext4"
     - name: Encrypted home unlocks with its password, unreadable without it
@@ -289,6 +293,10 @@ jobs:
       run: python3 scripts/power_acpi_gate.py --iso sexos-v1.0.0.iso --out "$RUNNER_TEMP/sexos-power"
     - name: Discrete GPU powered off through ACPI
       run: python3 scripts/dgpu_power_gate.py --iso sexos-v1.0.0.iso --out "$RUNNER_TEMP/sexos-dgpu"
+    - name: Lock screen, password and idle dim
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/lock-source.img"
+        python3 scripts/lock_screen_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/lock-source.img" --out "$RUNNER_TEMP/sexos-lock"
     - name: Display drives a virtio-gpu (EDID, takeover, tear-free flips)
       run: python3 scripts/virtio_gpu_gate.py --iso sexos-v1.0.0.iso --out "$RUNNER_TEMP/sexos-virtio-gpu"
     - name: Reboot persistence and rendering
@@ -311,10 +319,13 @@ jobs:
           ${{ runner.temp }}/sexos-files-jobs/*.log
           ${{ runner.temp }}/sexos-files-eject/*.ppm
           ${{ runner.temp }}/sexos-files-eject/*.log
+          ${{ runner.temp }}/sexos-files-loom/*.ppm
+          ${{ runner.temp }}/sexos-files-loom/*.log
           ${{ runner.temp }}/sexos-fs-repair/*.log
           ${{ runner.temp }}/sexos-raid
           ${{ runner.temp }}/sexos-power
           ${{ runner.temp }}/sexos-dgpu
+          ${{ runner.temp }}/sexos-lock
           ${{ runner.temp }}/sexos-persistence
           ${{ runner.temp }}/sexos-fuzz
           ${{ runner.temp }}/sexos-drag
@@ -347,6 +358,31 @@ jobs:
           ${{ runner.temp }}/media-build.log
           ${{ runner.temp }}/sexos-web-stream
           ${{ runner.temp }}/sexos-web-seek
+        if-no-files-found: ignore
+
+  editor:
+    name: Quil code editor
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+    - uses: actions/checkout@v4
+    - uses: ./.github/actions/setup
+    - name: Quil engine on the host (1 GB lazy file, multi-cursor, Vim, keymaps, fuzzy, project search)
+      run: cargo test --locked --release -p quil-core
+    - name: Build the image
+      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/editor-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/editor-build.log"; exit 1)
+    - name: Quil in QEMU (200 MB file, Go to File, cursors, Vim dd, project search)
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/editor-source.img"
+        python3 scripts/program_quil_editor_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/editor-source.img" --out "$RUNNER_TEMP/sexos-editor"
+    - name: Preserve editor evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sexos-editor-proof
+        path: |
+          ${{ runner.temp }}/editor-build.log
+          ${{ runner.temp }}/sexos-editor
         if-no-files-found: ignore
 
   profiles:
@@ -383,10 +419,53 @@ jobs:
         path: ${{ runner.temp }}/sexos-proof
         if-no-files-found: ignore
 
+  programs:
+    name: Programs, packages and ports
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+    - uses: actions/checkout@v4
+    - uses: ./.github/actions/setup
+    - name: Build the image
+      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/build.log"; exit 1)
+    - name: Blank program disk
+      run: truncate -s 1G "$RUNNER_TEMP/blank-programs.img"
+    - name: Lua 5.4 interpreter
+      run: python3 scripts/lua_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/lua"
+    - name: Signed packages, install service and first-run grant question
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/blank-packages.img"
+        python3 scripts/package_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-packages.img" --out "$RUNNER_TEMP/sexos-runtime/packages"
+    - name: ripgrep and fd
+      run: python3 scripts/rg_fd_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/rg-fd"
+    - name: bat
+      run: python3 scripts/bat_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/bat"
+    - name: Python 3.13 interpreter (CPython)
+      run: python3 scripts/python_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/python"
+    - name: Store program and the +pkg run grant
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/blank-store.img"
+        python3 scripts/store_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-store.img" --out "$RUNNER_TEMP/sexos-runtime/store"
+    - name: SDL2 program (video, sound, keys)
+      run: |
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends python3-pil
+        python3 scripts/sdl_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/sdl"
+    - name: SDL2 game (demo score, window, sound, keys)
+      run: python3 scripts/driftspark_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/driftspark"
+    - name: Aftercare backup (back up, delete, restore, hashes equal, wrong password refused)
+      run: python3 scripts/aftercare_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/aftercare"
+    - name: Preserve program evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sexos-programs-proof
+        path: ${{ runner.temp }}/sexos-runtime
+        if-no-files-found: ignore
+
   # Single required check: keeps the old "build" check name for branch rules.
   build:
     if: always()
-    needs: [host, truth, boot, devices, media, profiles, js-jit, recording]
+    needs: [host, truth, boot, devices, programs, media, editor, profiles, js-jit, recording]
     runs-on: ubuntu-latest
     steps:
     - run: |
