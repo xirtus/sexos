@@ -110,6 +110,8 @@ jobs:
         python3 scripts/needle_host_test.py
     - name: Crash record format host regressions
       run: bash scripts/crash_log_host_gate.sh
+    - name: Climax benchmark, torture runner and thermal throttling analyzer on the host
+      run: bash scripts/climax_host_gate.sh
     - name: Experimental JS baseline JIT differential and emitted-code gates
       run: |
         SEXJS_NATIVE=0 cargo test --release -p sex-js --features baseline-jit -- --test-threads=1 --nocapture

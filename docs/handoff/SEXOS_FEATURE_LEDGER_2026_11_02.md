@@ -470,6 +470,14 @@ page (loop sum `20100`, while countdown, `sq(12)=144`, depth-10 parentheses
 and `fact(2)`, array squares, string split/upper/indexOf/parseInt);
 conversion took 9 ticks; no pager rejections.
 
+## G-12: Climax benchmark and thermal throttling stress engine (2026-11-14)
+- Added `climax-core` crate providing `#![no_std] + alloc` CPU and memory microbenchmarks, sustained torture runner, thermal throttling detection, and visual report generation.
+- Deterministic CPU microbenchmarks: ChaCha20/ARX integer ALU, SHA-256 compression, FMA-free tiled GEMM, and vectorizable DSP biquad IIR filter with bit-exact corruption self-checking.
+- Memory subsystem benchmarks: STREAM bandwidth engine with explicit `max_memory_bytes` quota and `Vec::try_reserve_exact` bounds, plus Sattolo single-cycle permutation pointer-chase latency ladder across L1/L2/L3/DRAM.
+- Sustained torture runner and thermal throttling analyzer: time-series sample acquisition, rolling window throughput evaluation against initial boost baseline, throttling onset detection, and 3DMark-style sustained stability percentage.
+- Report formatter: subsystem scores, geometric composite score with zero/NaN protection, p50/p95/p99 throughput percentiles, and fixed-width ASCII/Unicode bar charts for Spindle and Weft displays.
+- Gate: `scripts/climax_host_gate.sh` passing host unit tests and `x86_64-sex-app.json` target check.
+
 ## F21. Spindle `calc` powers (2026-11-03)
 
 `a ** n` for whole `n` up to 64 (right-associative, tighter than unary
