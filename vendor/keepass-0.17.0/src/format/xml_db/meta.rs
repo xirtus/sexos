@@ -5,7 +5,6 @@ use serde::{Deserialize, Serialize};
 use base64::{engine::general_purpose as base64_engine, Engine as _};
 
 use crate::{
-    compression::Compression,
     db::Color,
     format::xml_db::{
         custom_serde::{cs_base64, cs_opt_bool, cs_opt_fromstr, cs_opt_string},
@@ -18,19 +17,39 @@ use crate::{
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct Meta {
-    #[serde(default, with = "cs_opt_string", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        with = "cs_opt_string",
+        skip_serializing_if = "Option::is_none"
+    )]
     generator: Option<String>,
 
-    #[serde(default, with = "cs_opt_string", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        with = "cs_opt_string",
+        skip_serializing_if = "Option::is_none"
+    )]
     database_name: Option<String>,
 
-    #[serde(default, with = "cs_opt_string", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        with = "cs_opt_string",
+        skip_serializing_if = "Option::is_none"
+    )]
     database_name_changed: Option<Timestamp>,
 
-    #[serde(default, with = "cs_opt_string", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        with = "cs_opt_string",
+        skip_serializing_if = "Option::is_none"
+    )]
     database_description: Option<String>,
 
-    #[serde(default, with = "cs_opt_string", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        with = "cs_opt_string",
+        skip_serializing_if = "Option::is_none"
+    )]
     database_description_changed: Option<Timestamp>,
 
     #[serde(
@@ -49,19 +68,39 @@ pub struct Meta {
     )]
     default_username_changed: Option<Timestamp>,
 
-    #[serde(default, with = "cs_opt_fromstr", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        with = "cs_opt_fromstr",
+        skip_serializing_if = "Option::is_none"
+    )]
     maintenance_history_days: Option<usize>,
 
-    #[serde(default, with = "cs_opt_string", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        with = "cs_opt_string",
+        skip_serializing_if = "Option::is_none"
+    )]
     color: Option<Color>,
 
-    #[serde(default, with = "cs_opt_string", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        with = "cs_opt_string",
+        skip_serializing_if = "Option::is_none"
+    )]
     master_key_changed: Option<Timestamp>,
 
-    #[serde(default, with = "cs_opt_fromstr", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        with = "cs_opt_fromstr",
+        skip_serializing_if = "Option::is_none"
+    )]
     master_key_change_rec: Option<isize>,
 
-    #[serde(default, with = "cs_opt_fromstr", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        with = "cs_opt_fromstr",
+        skip_serializing_if = "Option::is_none"
+    )]
     master_key_change_force: Option<isize>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -81,28 +120,60 @@ pub struct Meta {
     )]
     recycle_bin_uuid: Option<UUID>,
 
-    #[serde(default, with = "cs_opt_string", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        with = "cs_opt_string",
+        skip_serializing_if = "Option::is_none"
+    )]
     recycle_bin_changed: Option<Timestamp>,
 
-    #[serde(default, with = "cs_opt_string", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        with = "cs_opt_string",
+        skip_serializing_if = "Option::is_none"
+    )]
     entry_templates_group: Option<UUID>,
 
-    #[serde(default, with = "cs_opt_string", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        with = "cs_opt_string",
+        skip_serializing_if = "Option::is_none"
+    )]
     entry_templates_group_changed: Option<Timestamp>,
 
-    #[serde(default, with = "cs_opt_string", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        with = "cs_opt_string",
+        skip_serializing_if = "Option::is_none"
+    )]
     last_selected_group: Option<UUID>,
 
-    #[serde(default, with = "cs_opt_string", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        with = "cs_opt_string",
+        skip_serializing_if = "Option::is_none"
+    )]
     last_top_visible_group: Option<UUID>,
 
-    #[serde(default, with = "cs_opt_fromstr", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        with = "cs_opt_fromstr",
+        skip_serializing_if = "Option::is_none"
+    )]
     history_max_items: Option<isize>,
 
-    #[serde(default, with = "cs_opt_fromstr", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        with = "cs_opt_fromstr",
+        skip_serializing_if = "Option::is_none"
+    )]
     history_max_size: Option<isize>,
 
-    #[serde(default, with = "cs_opt_string", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        with = "cs_opt_string",
+        skip_serializing_if = "Option::is_none"
+    )]
     settings_changed: Option<Timestamp>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -156,7 +227,10 @@ impl From<crate::db::Meta> for Meta {
             database_name: db.database_name.clone(),
             database_name_changed: db.database_name_changed.as_ref().map(|t| (*t).into()),
             database_description: db.database_description.clone(),
-            database_description_changed: db.database_description_changed.as_ref().map(|t| (*t).into()),
+            database_description_changed: db
+                .database_description_changed
+                .as_ref()
+                .map(|t| (*t).into()),
             default_username: db.default_username.clone(),
             default_username_changed: db.default_username_changed.as_ref().map(|t| (*t).into()),
             maintenance_history_days: db.maintenance_history_days,
@@ -170,7 +244,10 @@ impl From<crate::db::Meta> for Meta {
             recycle_bin_uuid: db.recyclebin_uuid.map(UUID),
             recycle_bin_changed: db.recyclebin_changed.as_ref().map(|t| (*t).into()),
             entry_templates_group: db.entry_templates_group.map(UUID),
-            entry_templates_group_changed: db.entry_templates_group_changed.as_ref().map(|t| (*t).into()),
+            entry_templates_group_changed: db
+                .entry_templates_group_changed
+                .as_ref()
+                .map(|t| (*t).into()),
             last_selected_group: db.last_selected_group.map(UUID),
             last_top_visible_group: db.last_top_visible_group.map(UUID),
             history_max_items: db.history_max_items,
@@ -214,29 +291,39 @@ pub struct Binary {
 }
 
 impl Binary {
+    #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn xml_to_db(
         self,
         inner_decryptor: &mut dyn crate::crypt::ciphers::Cipher,
     ) -> Result<crate::db::Value<Vec<u8>>, UnprotectError> {
-        let mut data = base64_engine::STANDARD.decode(self.value)?;
+        self.xml_to_db_limited(inner_decryptor, crate::compression::MAX_DECOMPRESSED_BYTES)
+    }
+    pub(crate) fn xml_to_db_limited(
+        self,
+        inner_decryptor: &mut dyn crate::crypt::ciphers::Cipher,
+        remaining: usize,
+    ) -> Result<crate::db::Value<Vec<u8>>, UnprotectError> {
+        let mut data = zeroize::Zeroizing::new(base64_engine::STANDARD.decode(self.value)?);
         let protected = self.protected.unwrap_or(false);
-
         if protected {
-            data = inner_decryptor.decrypt(&data)?;
+            data = zeroize::Zeroizing::new(inner_decryptor.decrypt(&data)?);
         }
-
-        // A self-closing element carries no gzip stream even when marked Compressed.
+        // Enforce remaining budget inside the decoder before its output allocation.
         if self.compressed.unwrap_or(false) && !data.is_empty() {
-            data = crate::compression::GZipCompression.decompress(&data)?;
+            data = zeroize::Zeroizing::new(
+                crate::compression::GZipCompression.decompress_limited(&data, remaining)?,
+            );
         }
-
-        let data = if protected {
+        if data.len() > remaining {
+            return Err(crate::compression::attachment_size_error().into());
+        }
+        let data = std::mem::take(&mut *data);
+        Ok(if protected {
             crate::db::Value::protected(data)
         } else {
             crate::db::Value::unprotected(data)
-        };
-
-        Ok(data)
+        })
     }
 }
 
@@ -278,7 +365,8 @@ impl CustomData {
                     .map(|v| v.clone().into())
                     .unwrap_or(CustomDataValue::String(String::new()));
 
-                let last_modification_time = item.last_modification_time.as_ref().map(|t| (*t).into());
+                let last_modification_time =
+                    item.last_modification_time.as_ref().map(|t| (*t).into());
 
                 CustomDataItem {
                     key: key.clone(),
@@ -303,7 +391,8 @@ impl From<HashMap<String, crate::db::CustomDataItem>> for CustomData {
                     .map(|v| v.clone().into())
                     .unwrap_or(CustomDataValue::String(String::new()));
 
-                let last_modification_time = item.last_modification_time.as_ref().map(|t| (*t).into());
+                let last_modification_time =
+                    item.last_modification_time.as_ref().map(|t| (*t).into());
 
                 CustomDataItem {
                     key,
@@ -344,7 +433,11 @@ struct CustomDataItem {
     key: String,
     value: CustomDataValue,
 
-    #[serde(default, with = "cs_opt_string", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        with = "cs_opt_string",
+        skip_serializing_if = "Option::is_none"
+    )]
     last_modification_time: Option<Timestamp>,
 }
 
@@ -590,7 +683,8 @@ mod tests {
     fn test_serialize_icon() {
         let icon = Icon {
             uuid: UUID(Uuid::from_bytes([
-                0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+                0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,
+                0x0e, 0x0f,
             ])),
             name: Some("my-icon".to_string()),
             last_modification_time: None,
@@ -613,7 +707,10 @@ mod tests {
         let icon: Icon = quick_xml::de::from_str(xml).unwrap();
         assert_eq!(
             icon.uuid.0.as_bytes(),
-            &[0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f]
+            &[
+                0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,
+                0x0e, 0x0f
+            ]
         );
         assert_eq!(icon.data, vec![1, 2, 3, 4, 5]);
     }
@@ -651,8 +748,8 @@ mod tests {
             custom_icons: Some(CustomIcons {
                 icons: vec![Icon {
                     uuid: UUID(Uuid::from_bytes([
-                        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,
-                        0x0e, 0x0f,
+                        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b,
+                        0x0c, 0x0d, 0x0e, 0x0f,
                     ])),
                     name: None,
                     last_modification_time: None,
@@ -661,22 +758,26 @@ mod tests {
             }),
             recycle_bin_enabled: Some(true),
             recycle_bin_uuid: Some(UUID(Uuid::from_bytes([
-                0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
+                0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d,
+                0x1e, 0x1f,
             ]))),
             recycle_bin_changed: Some(Timestamp::new_iso8601(
                 NaiveDateTime::from_str("2023-10-05T12:34:56").unwrap(),
             )),
             entry_templates_group: Some(UUID(Uuid::from_bytes([
-                0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f,
+                0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d,
+                0x2e, 0x2f,
             ]))),
             entry_templates_group_changed: Some(Timestamp::new_base64(
                 NaiveDateTime::from_str("2023-10-05T12:34:56").unwrap(),
             )),
             last_selected_group: Some(UUID(Uuid::from_bytes([
-                0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f,
+                0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d,
+                0x3e, 0x3f,
             ]))),
             last_top_visible_group: Some(UUID(Uuid::from_bytes([
-                0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4a, 0x4b, 0x4c, 0x4d, 0x4e, 0x4f,
+                0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4a, 0x4b, 0x4c, 0x4d,
+                0x4e, 0x4f,
             ]))),
             history_max_items: Some(10),
             history_max_size: Some(1048576),
@@ -722,11 +823,15 @@ mod tests {
         println!("{}", serialized);
         assert!(serialized.contains("<Generator>TestGenerator</Generator>"));
         assert!(serialized.contains("<DatabaseName>TestDB</DatabaseName>"));
-        assert!(serialized.contains("<DatabaseNameChanged>2023-10-05T12:34:56Z</DatabaseNameChanged>"));
+        assert!(
+            serialized.contains("<DatabaseNameChanged>2023-10-05T12:34:56Z</DatabaseNameChanged>")
+        );
         assert!(serialized.contains("<DatabaseDescription>A test database</DatabaseDescription>"));
-        assert!(serialized.contains("<DatabaseDescriptionChanged>cKSw3A4AAAA=</DatabaseDescriptionChanged>"));
+        assert!(serialized
+            .contains("<DatabaseDescriptionChanged>cKSw3A4AAAA=</DatabaseDescriptionChanged>"));
         assert!(serialized.contains("<DefaultUserName>admin</DefaultUserName>"));
-        assert!(serialized.contains("<DefaultUserNameChanged>2023-10-05T12:34:56Z</DefaultUserNameChanged>"));
+        assert!(serialized
+            .contains("<DefaultUserNameChanged>2023-10-05T12:34:56Z</DefaultUserNameChanged>"));
         assert!(serialized.contains("<MaintenanceHistoryDays>30</MaintenanceHistoryDays>"));
         assert!(serialized.contains("<Color>#FF0000</Color>"));
         assert!(serialized.contains("<MasterKeyChanged>cKSw3A4AAAA=</MasterKeyChanged>"));
@@ -737,16 +842,23 @@ mod tests {
         assert!(serialized.contains("<RecycleBinEnabled>True</RecycleBinEnabled>"));
         assert!(serialized.contains("<RecycleBinUUID>EBESExQVFhcYGRobHB0eHw==</RecycleBinUUID>"));
         assert!(serialized.contains("<RecycleBinChanged>2023-10-05T12:34:56Z</RecycleBinChanged>"));
-        assert!(serialized.contains("<EntryTemplatesGroup>ICEiIyQlJicoKSorLC0uLw==</EntryTemplatesGroup>"));
-        assert!(serialized.contains("<EntryTemplatesGroupChanged>cKSw3A4AAAA=</EntryTemplatesGroupChanged>"));
-        assert!(serialized.contains("<LastSelectedGroup>MDEyMzQ1Njc4OTo7PD0+Pw==</LastSelectedGroup>"));
-        assert!(serialized.contains("<LastTopVisibleGroup>QEFCQ0RFRkdISUpLTE1OTw==</LastTopVisibleGroup>"));
+        assert!(serialized
+            .contains("<EntryTemplatesGroup>ICEiIyQlJicoKSorLC0uLw==</EntryTemplatesGroup>"));
+        assert!(serialized
+            .contains("<EntryTemplatesGroupChanged>cKSw3A4AAAA=</EntryTemplatesGroupChanged>"));
+        assert!(
+            serialized.contains("<LastSelectedGroup>MDEyMzQ1Njc4OTo7PD0+Pw==</LastSelectedGroup>")
+        );
+        assert!(serialized
+            .contains("<LastTopVisibleGroup>QEFCQ0RFRkdISUpLTE1OTw==</LastTopVisibleGroup>"));
         assert!(serialized.contains("<HistoryMaxItems>10</HistoryMaxItems>"));
         assert!(serialized.contains("<HistoryMaxSize>1048576</HistoryMaxSize>"));
         assert!(serialized.contains("<SettingsChanged>2023-10-05T12:34:56Z</SettingsChanged>"));
         assert!(serialized.contains("<Binaries>"));
-        assert!(serialized.contains(r#"<Binary ID="0" Compressed="False" Protected="False">AQIDBAU=</Binary>"#));
-        assert!(serialized.contains(r#"<Binary ID="1" Compressed="True" Protected="True">ChQeKDI=</Binary>"#));
+        assert!(serialized
+            .contains(r#"<Binary ID="0" Compressed="False" Protected="False">AQIDBAU=</Binary>"#));
+        assert!(serialized
+            .contains(r#"<Binary ID="1" Compressed="True" Protected="True">ChQeKDI=</Binary>"#));
         assert!(serialized.contains("<CustomData>"));
     }
 
@@ -841,13 +953,19 @@ mod tests {
         assert_eq!(icons.icons.len(), 1);
         assert_eq!(
             icons.icons[0].uuid.0.as_bytes(),
-            &[0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f]
+            &[
+                0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,
+                0x0e, 0x0f
+            ]
         );
         assert_eq!(icons.icons[0].data, vec![1, 2, 3, 4, 5]);
         assert!(meta.recycle_bin_enabled.unwrap());
         assert_eq!(
             meta.recycle_bin_uuid.unwrap().0.as_bytes(),
-            &[0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f]
+            &[
+                0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d,
+                0x1e, 0x1f
+            ]
         );
         assert_eq!(
             meta.recycle_bin_changed.unwrap().time,
@@ -855,7 +973,10 @@ mod tests {
         );
         assert_eq!(
             meta.entry_templates_group.unwrap().0.as_bytes(),
-            &[0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f]
+            &[
+                0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d,
+                0x2e, 0x2f
+            ]
         );
         assert_eq!(
             meta.entry_templates_group_changed.unwrap().time,
@@ -863,11 +984,17 @@ mod tests {
         );
         assert_eq!(
             meta.last_selected_group.unwrap().0.as_bytes(),
-            &[0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f]
+            &[
+                0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d,
+                0x3e, 0x3f
+            ]
         );
         assert_eq!(
             meta.last_top_visible_group.unwrap().0.as_bytes(),
-            &[0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4a, 0x4b, 0x4c, 0x4d, 0x4e, 0x4f]
+            &[
+                0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4a, 0x4b, 0x4c, 0x4d,
+                0x4e, 0x4f
+            ]
         );
         assert_eq!(meta.history_max_items.unwrap(), 10);
         assert_eq!(meta.history_max_size.unwrap(), 1048576);

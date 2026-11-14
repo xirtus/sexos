@@ -15,13 +15,25 @@ fn size_error() -> Error {
     )
 }
 
-fn bounded_decode(mut reader: impl Read) -> Result<Vec<u8>, Error> {
+pub(crate) fn attachment_size_error() -> Error {
+    Error::new(
+        ErrorKind::InvalidData,
+        "KeePass cumulative attachments exceed 16MiB",
+    )
+}
+#[cfg(test)]
+std::thread_local! { pub(crate) static DECODE_LIMITS: std::cell::RefCell<Vec<usize>> = const { std::cell::RefCell::new(Vec::new()) }; }
+
+fn bounded_decode(mut reader: impl Read, limit: usize) -> Result<Vec<u8>, Error> {
+    let limit = limit.min(MAX_DECOMPRESSED_BYTES);
+    #[cfg(test)]
+    DECODE_LIMITS.with(|limits| limits.borrow_mut().push(limit));
     // Reserve once: growing a Vec can release an unwiped plaintext allocation.
     // Read fixed-size pieces, with only a one-byte probe beyond the ceiling.
-    let mut output = Zeroizing::new(vec![0u8; MAX_DECOMPRESSED_BYTES]);
+    let mut output = Zeroizing::new(vec![0u8; limit]);
     let mut used = 0;
     loop {
-        if used == MAX_DECOMPRESSED_BYTES {
+        if used == limit {
             let mut probe = Zeroizing::new([0u8; 1]);
             return if reader.read(&mut probe[..])? == 0 {
                 Ok(std::mem::take(&mut *output))
@@ -29,7 +41,7 @@ fn bounded_decode(mut reader: impl Read) -> Result<Vec<u8>, Error> {
                 Err(size_error())
             };
         }
-        let end = (used + 8192).min(MAX_DECOMPRESSED_BYTES);
+        let end = (used + 8192).min(limit);
         let n = reader.read(&mut output[used..end])?;
         if n == 0 {
             output.truncate(used);
@@ -67,6 +79,11 @@ impl Compression for NoCompression {
 }
 
 pub struct GZipCompression;
+impl GZipCompression {
+    pub(crate) fn decompress_limited(&self, input: &[u8], limit: usize) -> Result<Vec<u8>, Error> {
+        bounded_decode(GzDecoder::new(input), limit)
+    }
+}
 
 impl Compression for GZipCompression {
     #[cfg(feature = "save_kdbx4")]
@@ -82,7 +99,7 @@ impl Compression for GZipCompression {
         Ok(std::mem::take(&mut *res))
     }
     fn decompress(&self, in_buffer: &[u8]) -> Result<Vec<u8>, std::io::Error> {
-        bounded_decode(GzDecoder::new(in_buffer))
+        self.decompress_limited(in_buffer, MAX_DECOMPRESSED_BYTES)
     }
 }
 
@@ -132,7 +149,7 @@ mod sexos_tests {
             }
         }
         let mut reader = Endless(0);
-        assert!(bounded_decode(&mut reader).is_err());
+        assert!(bounded_decode(&mut reader, MAX_DECOMPRESSED_BYTES).is_err());
         assert_eq!(reader.0, MAX_DECOMPRESSED_BYTES + 1);
     }
     #[test]

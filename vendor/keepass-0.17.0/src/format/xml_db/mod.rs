@@ -24,7 +24,8 @@ use crate::{
     crypt::ciphers::Cipher,
     db::{GroupId, Value},
     format::xml_db::{
-        custom_serde::cs_opt_string, entry::UnprotectError, group::Group, meta::Meta, timestamp::Timestamp,
+        custom_serde::cs_opt_string, entry::UnprotectError, group::Group, meta::Meta,
+        timestamp::Timestamp,
     },
 };
 #[cfg(feature = "save_kdbx4")]
@@ -100,9 +101,17 @@ impl KeePassFile {
         inner_decryptor: &mut dyn Cipher,
         header_attachments: &[Value<Vec<u8>>],
     ) -> Result<crate::db::Database, UnprotectError> {
-        let mut db = crate::db::Database::new_with_root_id(GroupId::from_uuid(self.root.group.uuid.0));
+        let mut db =
+            crate::db::Database::new_with_root_id(GroupId::from_uuid(self.root.group.uuid.0));
 
         let mut attachments = HashMap::new();
+        // Charge every input, including duplicate IDs, before cloning header data.
+        let mut remaining = crate::compression::MAX_DECOMPRESSED_BYTES;
+        for attachment in header_attachments {
+            remaining = remaining
+                .checked_sub(attachment.len())
+                .ok_or_else(crate::compression::attachment_size_error)?;
+        }
 
         // convert header attachments (KDBX4-style) to database attachments
         for (i, header_attachment) in header_attachments.iter().enumerate() {
@@ -120,7 +129,10 @@ impl KeePassFile {
                 // Entries point at the pool by the ID attribute (`<Value Ref="N"/>`),
                 // so the attachment has to keep that ID.
                 let id = crate::db::AttachmentId::new(binary.id);
-                let data = binary.xml_to_db(inner_decryptor)?;
+                let data = binary.xml_to_db_limited(inner_decryptor, remaining)?;
+                remaining = remaining
+                    .checked_sub(data.len())
+                    .ok_or_else(crate::compression::attachment_size_error)?;
 
                 attachments.insert(
                     id,
@@ -162,9 +174,12 @@ impl KeePassFile {
             })
             .unwrap_or_default();
 
-        self.root
-            .group
-            .xml_to_db_handle(db.root_mut(), &attachments, &custom_icons, inner_decryptor)?;
+        self.root.group.xml_to_db_handle(
+            db.root_mut(),
+            &attachments,
+            &custom_icons,
+            inner_decryptor,
+        )?;
 
         db.attachments = attachments;
         db.custom_icons = custom_icons;
@@ -191,9 +206,12 @@ impl KeePassFile {
                 let history_len = entry.history.as_ref().map_or(0, |h| h.entries.len());
 
                 for i in 0..history_len {
-                    #[allow(clippy::indexing_slicing)] // We just checked that the index is in bounds
-                    if let Some(crate::db::Icon::Custom(icon_id)) =
-                        entry.history.as_ref().and_then(|h| h.entries[i].icon.as_ref())
+                    #[allow(clippy::indexing_slicing)]
+                    // We just checked that the index is in bounds
+                    if let Some(crate::db::Icon::Custom(icon_id)) = entry
+                        .history
+                        .as_ref()
+                        .and_then(|h| h.entries[i].icon.as_ref())
                     {
                         if let Some(icon) = db.custom_icons.get_mut(icon_id) {
                             icon.entries.insert((entry_id, Some(i)));
@@ -219,7 +237,10 @@ impl KeePassFile {
 
     /// Convert from database representation to XML representation.
     #[cfg(feature = "save_kdbx4")]
-    fn db_to_xml(db: &crate::db::Database, inner_cipher: &mut dyn Cipher) -> Result<Self, CryptographyError> {
+    fn db_to_xml(
+        db: &crate::db::Database,
+        inner_cipher: &mut dyn Cipher,
+    ) -> Result<Self, CryptographyError> {
         use crate::format::xml_db::meta::Icon;
 
         let group = Group::db_to_xml(db.root(), inner_cipher)?;
@@ -328,14 +349,18 @@ mod tests {
         let uuid: UUID = quick_xml::de::from_str(uuid_str).unwrap();
         assert_eq!(
             uuid.0.as_bytes(),
-            &[0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f]
+            &[
+                0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,
+                0x0e, 0x0f
+            ]
         );
     }
 
     #[test]
     fn test_serialize_uuid() {
         let uuid = UUID(Uuid::from_bytes([
-            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,
+            0x0e, 0x0f,
         ]));
         let serialized = quick_xml::se::to_string(&Test(uuid)).unwrap();
         assert_eq!(serialized, "<Test>AAECAwQFBgcICQoLDA0ODw==</Test>");
@@ -346,11 +371,13 @@ mod tests {
         let deleted_object = DeletedObject {
             uuid: UUID(Uuid::nil()),
             deletion_time: Some(Timestamp::new_iso8601(
-                chrono::NaiveDateTime::parse_from_str("2026-08-15T12:34:56", "%Y-%m-%dT%H:%M:%S").unwrap(),
+                chrono::NaiveDateTime::parse_from_str("2026-08-15T12:34:56", "%Y-%m-%dT%H:%M:%S")
+                    .unwrap(),
             )),
         };
 
-        let serialized = quick_xml::se::to_string_with_root("DeletedObject", &deleted_object).unwrap();
+        let serialized =
+            quick_xml::se::to_string_with_root("DeletedObject", &deleted_object).unwrap();
 
         assert!(serialized.contains("<DeletionTime>"));
         assert!(!serialized.contains("<deletion_time>"));
@@ -381,10 +408,78 @@ mod tests {
                </DeletedObjects>
             </Root>
         </KeePassFile>"#;
-        let mut cipher = crate::config::InnerCipherConfig::Plain.get_cipher(&[]).unwrap();
+        let mut cipher = crate::config::InnerCipherConfig::Plain
+            .get_cipher(&[])
+            .unwrap();
         let db = parse_xml(xml.as_bytes(), &[], &mut *cipher).unwrap();
         let kdbx = KeePassFile::db_to_xml(&db, &mut *cipher).unwrap();
-        let xml = quick_xml::se::to_string_with_root("DeletedObjects", &kdbx.root.deleted_objects).unwrap();
+        let xml = quick_xml::se::to_string_with_root("DeletedObjects", &kdbx.root.deleted_objects)
+            .unwrap();
         assert!(xml.contains("<DeletionTime>io8Y4g4AAAA=</DeletionTime>"));
+    }
+}
+
+#[cfg(test)]
+mod sexos_attachment_tests {
+    use super::*;
+    use base64::engine::general_purpose::STANDARD;
+    use flate2::{write::GzEncoder, Compression};
+    use std::io::Write;
+    fn binary(id: usize, len: usize) -> String {
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
+        let chunk = [0x41; 8192];
+        for _ in 0..len / chunk.len() {
+            encoder.write_all(&chunk).unwrap();
+        }
+        encoder.write_all(&chunk[..len % chunk.len()]).unwrap();
+        format!(
+            "<Binary ID=\"{id}\" Compressed=\"True\">{}</Binary>",
+            STANDARD.encode(encoder.finish().unwrap())
+        )
+    }
+    fn xml(binaries: &str) -> String {
+        format!("<KeePassFile><Meta><Binaries>{binaries}</Binaries></Meta><Root><Group><UUID>tP/vJ/3uSHyomfPZ4dXVlg==</UUID><Name></Name></Group></Root></KeePassFile>")
+    }
+    fn decode(xml: &str, header: &[Value<Vec<u8>>]) -> Result<crate::db::Database, ParseXmlError> {
+        let mut cipher = crate::config::InnerCipherConfig::Plain
+            .get_cipher(&[])
+            .unwrap();
+        parse_xml(xml.as_bytes(), header, &mut *cipher)
+    }
+    #[test]
+    fn cumulative_compressed_attachments_reject_duplicate_id_overflow() {
+        let cap = crate::compression::MAX_DECOMPRESSED_BYTES;
+        // Each stream is individually admissible. Duplicate IDs must not refund budget.
+        let xml = xml(&(binary(0, cap / 2) + &binary(0, cap / 2 + 1)));
+        crate::compression::DECODE_LIMITS.with(|v| v.borrow_mut().clear());
+        assert!(decode(&xml, &[]).is_err());
+        // Second decoder allocates only remaining budget, never another full 16MiB.
+        crate::compression::DECODE_LIMITS.with(|v| assert_eq!(&*v.borrow(), &[cap, cap / 2]));
+    }
+    #[test]
+    fn cumulative_compressed_attachments_accept_exact_budget() {
+        let cap = crate::compression::MAX_DECOMPRESSED_BYTES;
+        let xml = xml(&(binary(0, cap / 2) + &binary(1, cap / 2)));
+        let db = decode(&xml, &[]).unwrap();
+        assert_eq!(db.attachments.len(), 2);
+        assert_eq!(
+            db.attachments.values().map(|a| a.data.len()).sum::<usize>(),
+            cap
+        );
+    }
+    #[test]
+    fn header_and_xml_share_budget_and_header_overflow_precedes_decode() {
+        let cap = crate::compression::MAX_DECOMPRESSED_BYTES;
+        let xml = xml(&binary(0, 2));
+        let header = [Value::protected(vec![0; cap - 1])];
+        assert!(decode(&xml, &header).is_err());
+        crate::compression::DECODE_LIMITS.with(|v| assert_eq!(v.borrow().last(), Some(&1)));
+        crate::compression::DECODE_LIMITS.with(|v| v.borrow_mut().clear());
+        let header = [
+            Value::unprotected(vec![0; cap]),
+            Value::protected(vec![0; 1]),
+        ];
+        assert!(decode(&xml, &header).is_err());
+        crate::compression::DECODE_LIMITS.with(|v| assert!(v.borrow().is_empty()));
     }
 }
