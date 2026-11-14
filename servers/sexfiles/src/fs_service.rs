@@ -676,13 +676,16 @@ fn handle_request(index: usize, program: Option<usize>, r: w::Request) -> u64 {
         // A terminal's run: only `/bin/NAME`, with its own words and nothing granted.
         let name = path[..path_len].strip_prefix(sex_pdx::program_store::BIN);
         if !name.is_some_and(|n| !n.is_empty() && !n.contains(&b'/')) { return w::reply(r.seq, w::DENIED, 0); }
-        if !crate::console_relay::may_prepare(k) { return w::reply(r.seq, w::PENDING, 0); }
+        // The terminal's slot (tab or pane) rides in `offset`, as on its relay requests.
+        let Some((0, slot)) = sex_pdx::console_relay::split(r.offset) else { return w::reply(r.seq, w::INVALID, 0) };
+        let relay = crate::console_relay::relay_id(k, slot);
+        if let Err(status) = crate::console_relay::may_prepare(relay) { return w::reply(r.seq, status, 0); }
         let given = (r.length as usize).min(w::ARGS_MAX);
         let mut words = [0u8; w::ARGS_MAX];
         words[..given].copy_from_slice(&region[w::PATH_BYTES..w::PATH_BYTES + given]);
         let n = sex_pdx::console_relay::plain_args(&words[..given], &mut region[w::PATH_BYTES..w::PATH_BYTES + w::ARGS_MAX]);
         r.length = n as u64;
-        unsafe { PREPARING_FOR = Some(k); }
+        unsafe { PREPARING_FOR = Some(relay); }
     } else if let Some(k) = program {
         // Every path, both halves of a rename too, lands inside the program's folder.
         let binding = unsafe { (*core::ptr::addr_of!(BINDINGS))[k] }.unwrap();
@@ -788,11 +791,12 @@ fn handle_request(index: usize, program: Option<usize>, r: w::Request) -> u64 {
 /// One path waiting for Shell to ask for it, and the ticket that names it.
 static mut PREPARED: ([u8; w::PATH_BYTES], usize, u32) = ([0; w::PATH_BYTES], 0, 0);
 static mut PREPARED_ARGS: ([u8; w::ARGS_MAX], usize) = ([0; w::ARGS_MAX], 0);
-/// The terminal (program row) a PREPARE in progress is for; None for Spindle.
+/// The terminal relay (`console_relay::relay_id`: program row and slot) a PREPARE in
+/// progress is for; None for Spindle.
 static mut PREPARING_FOR: Option<usize> = None;
-/// Who prepared the waiting ticket: a terminal's row, or None for Spindle.
+/// Who prepared the waiting ticket: a terminal's relay (row and slot), or None for Spindle.
 static mut PREPARED_LAUNCHER: Option<usize> = None;
-/// The terminal the program just read was prepared by, until Shell binds it.
+/// The terminal relay the program just read was prepared by, until Shell binds it.
 static mut LOADED_LAUNCHER: Option<usize> = None;
 static mut NEXT_TICKET: u32 = 0;
 pub enum Program { Absent, Failed(u32), Loaded(u32) }
@@ -859,7 +863,7 @@ pub fn read_ticket(ticket: u64, requester: u32, image: &mut [u8]) -> (Program, O
     if prepared.1 == 0 || prepared.2 as u64 != ticket { return (Program::Absent, None); }
     let by = unsafe { PREPARED_LAUNCHER };
     let asker = if requester == 0 { None } else { match program_index(requester) { Some(k) => Some(k), None => return (Program::Absent, None) } };
-    if by != asker { sex_pdx::serial_record!("[files.ticket.denied] requester={}", requester); return (Program::Absent, None); }
+    if by.map(|id| id / sex_pdx::console_relay::SLOTS) != asker { sex_pdx::serial_record!("[files.ticket.denied] requester={}", requester); return (Program::Absent, None); }
     unsafe { LOADED_LAUNCHER = by; }
     let len = core::mem::take(&mut prepared.1);
     unsafe { *core::ptr::addr_of_mut!(LOADED_ARGS) = *core::ptr::addr_of!(PREPARED_ARGS); }

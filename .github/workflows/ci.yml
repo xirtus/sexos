@@ -553,7 +553,7 @@ jobs:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
     - name: Calculator arithmetic and calendar model on the host
-      run: cargo test --locked -p sex-calc-core -p sex-calendar -p sex-vt -p sex-textedit -p sex-wasm && cargo test --locked -p sex-pdx --test stream --test console_relay
+      run: cargo test --locked -p sex-calc-core -p sex-calendar -p sex-vt -p spindle-panes -p spindle-shell -p sex-textedit -p sex-wasm && cargo test --locked -p sex-pdx --test stream --test console_relay
     - name: Build the image
       run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/productivity-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/productivity-build.log"; exit 1)
     - name: Calculator typed, clicked and recalled

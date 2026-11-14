@@ -48,6 +48,36 @@ pub mod process;
 pub use sex_app;
 pub use sex_pdx;
 
+/// The terminal this program's console is: its size, a raw or cooked keyboard, echo,
+/// and Ctrl+C for a program that never reads or writes. A run started in Spindle's
+/// terminal asks it through Files (`sex_pdx::console_relay`); a program in its own window
+/// gets that window's size and keeps its cooked line.
+#[cfg(target_os = "hermit")]
+pub mod terminal {
+    use sex_pdx::console_relay as c;
+    /// Columns and rows (80 by 24 until the terminal says).
+    pub fn size() -> (u16, u16) { let (cols, rows, _) = crate::console::size(); (cols, rows) }
+    /// A count that moves on every resize: look now and then to notice one (where a Unix
+    /// program would wait for SIGWINCH).
+    pub fn size_changes() -> u32 { crate::console::size().2 }
+    /// Keys as they are typed, unbuffered, without the terminal's echo, with Ctrl+C a byte
+    /// (an editor), or back to a cooked line. False without a terminal.
+    pub fn set_raw(on: bool) -> bool { crate::console::set_mode(if on { c::RAW | c::NO_ECHO | c::NO_SIGNALS } else { 0 }) }
+    /// The terminal shows typed text, or not (a password).
+    pub fn set_echo(on: bool) -> bool {
+        let m = crate::console::mode();
+        crate::console::set_mode(if on { m & !c::NO_ECHO } else { m | c::NO_ECHO })
+    }
+    /// The mode bits now (`console_relay::RAW`, `NO_ECHO`, `NO_SIGNALS`), and setting them.
+    pub fn mode() -> u8 { crate::console::mode() }
+    pub fn set_mode(mode: u8) -> bool { crate::console::set_mode(mode) }
+    /// Whether Ctrl+C was pressed since the last look. Reading, writing and sleeping look
+    /// on their own (and end the run with status 130); a long computation that does none
+    /// of them calls this now and then. One that never does is stopped by a second Ctrl+C,
+    /// which Spindle's terminal sends to Shell: nothing can interrupt it sooner from outside.
+    pub fn interrupted() -> bool { crate::console::interrupted() }
+}
+
 /// The program's window, for a program that draws or reads keys itself. After the
 /// first call, standard output still goes to the serial record but no longer replaces
 /// what the window shows. Call it from one task.

@@ -9,6 +9,9 @@ wasm32-wasip1) running behind a terminal stream, reading lines typed into it.
 * `write`, `cat`, `mkdir`, `cd`, `ls`: files in Term's own folder, seen on screen.
 * `greet Andreas`: the guest prints, reads words until an empty line, counts them and
   exits 5; its output reaches the screen through the stream.
+* Tabs and split panes (P1): Ctrl+Shift+E splits, each pane keeps its own output and
+  folder, Ctrl+Shift+arrows move the focus, Ctrl+Shift+T opens a tab and Ctrl+PageUp goes
+  back, Ctrl+Shift+Z zooms, Ctrl+Shift+W closes a pane, `exit` closes another.
 * Closing the window ends Term; a second run starts clean.
 * `run stdhello vt`: an ordinary Rust std program prints escape sequences, so its console
   window becomes the same terminal; the cursor position report it asks for comes back on
@@ -20,7 +23,7 @@ from quil_autosave_gate import boot
 ROOT=Path(__file__).resolve().parents[1]
 SURFACE={int(a):int(b)for a,b in re.findall(r'app: App::Program, ordinal: \d+, target: (\d+), surface: (\d+)',(ROOT/'crates/sex-pdx/src/app_catalog.rs').read_text())}
 KEYS={' ':'spc','.':'dot','/':'slash','-':'minus','=':'equal',',':'comma',';':'semicolon'}
-SHIFTED={'>':'dot',':':'semicolon','_':'minus','!':'1','@':'2'}
+SHIFTED={'"':'apostrophe','|':'backslash','~':'grave_accent','>':'dot',':':'semicolon','_':'minus','!':'1','@':'2'}
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
  term=(ROOT/'iso_root/programs/term').read_bytes();assert term[:4]==b'\x7fELF'
@@ -34,6 +37,7 @@ def main():
    if k in SHIFTED or k.isupper():q.cmd('send-key',{'keys':[{'type':'qcode','data':'shift'},{'type':'qcode','data':SHIFTED.get(k,k.lower())}],'hold-time':80})
    else:q.key(KEYS.get(k,k))
    time.sleep(.05)
+ def chord(*names):q.cmd('send-key',{'keys':[{'type':'qcode','data':n} for n in names],'hold-time':80});time.sleep(.3)
  def spindle(line):g['focus'](153);time.sleep(.5);keys(line);q.key('ret')
  def term_line(line):keys(line);q.key('ret')
  def snapshot():
@@ -61,6 +65,18 @@ def main():
   term_line('cat todo.txt');term_line('cd ..');term_line('ls notes')
   rows=snapshot();screen='\n'.join(rows.values())
   assert 'buy milk' in screen and 'todo.txt' in screen and '~/notes >' in screen,screen
+  # Structured pipelines (P8): typed tables through `|`.
+  s=len(t());term_line('seq 1 10 | math sum');g['wait'](r'\[term\.shell\.done\] exit=0 error=0',s,30)
+  s=len(t());term_line('ls notes | where type == file | sort-by name | get name');g['wait'](r'\[term\.shell\.done\] exit=0 error=0',s,30)
+  s=len(t());term_line('ls | where type == dir | length');g['wait'](r'\[term\.shell\.done\] exit=0 error=0',s,30)
+  rows=snapshot();screen='\n'.join(rows.values())
+  assert '55' in screen and 'todo.txt' in screen,screen
+  q.cmd('screendump',{'filename':str(a.out/'spindle-pipelines.ppm')})
+  # Themes and settings (P7): `theme nord` saves spindle.conf; the window reloads it.
+  s=len(t());term_line('theme nord');g['wait'](r'\[term\.theme\.saved\] name=nord ok=1',s,30)
+  g['wait'](r'\[term\.config\] theme=nord font=18 padding=4 ',s,30);time.sleep(1)
+  q.cmd('screendump',{'filename':str(a.out/'spindle-theme-nord.ppm')})
+  s=len(t());term_line('theme mocha');g['wait'](r'\[term\.config\] theme=mocha ',s,30)
   # A Wasm program behind the stream: Rust std's println and stdin.
   s=len(t());term_line('greet Andreas');g['wait'](r'\[term\.job\.start\] name=greet',s,60);time.sleep(3)
   term_line('b a b');time.sleep(1);q.key('ret')
@@ -68,6 +84,38 @@ def main():
   time.sleep(1);rows=snapshot();screen='\n'.join(rows.values())
   for want in ['Hello, Andreas, from Rust on Wasm.','a: 1','b: 2','[greet exited with 5]']:assert want in screen,(want,screen)
   q.cmd('screendump',{'filename':str(a.out/'term-greet.ppm')})
+  # Tabs and split panes: two programs side by side, each pane keeps its output.
+  s=len(t());chord('ctrl','shift','e');m=g['wait'](r'\[term\.pane\.split\] from=(\d+) pane=(\d+) across=1',s,30)
+  left,right=int(m[1]),int(m[2]);g['wait'](rf'\[term\.panes\] tabs=1 active=0 focus={right} zoomed=0 {left}:\d+x\d+\+0\+0 {right}:',s,30)
+  term_line('cd notes');s=len(t());term_line('greet Pane');g['wait'](r'\[term\.job\.start\] name=greet',s,60);time.sleep(3)
+  s=len(t());chord('ctrl','shift','left');g['wait'](rf'\[term\.panes\] tabs=1 active=0 focus={left} ',s,30)
+  term_line('echo left-pane');rows=snapshot();screen='\n'.join(rows.values())
+  assert 'left-pane' in screen and 'buy milk' in screen and 'Hello, Pane' not in screen,screen
+  # Search and hints over the scrollback (P6).
+  term_line('clear');term_line('echo "see https://example.com/x and 1234567"')
+  s=len(t());chord('ctrl','shift','f');g['wait'](r'\[term\.mode\] search',s,30);keys('example')
+  m=g['wait'](r'\[term\.search\] query=example matches=(\d+)',s,30);assert int(m[1])>=1,m[0]
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'spindle-search.ppm')});q.key('esc')
+  s=len(t());chord('ctrl','shift','spc');m=g['wait'](r'\[term\.hints\] found=(\d+)',s,30);assert int(m[1])>=1,m[0]
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'spindle-hints.ppm')});keys('a')
+  m=g['wait'](r'\[term\.hint\] kind=(\w+) text=(\S+)',s,30);assert m.group(1,2)==('Url','https://example.com/x'),m[0]
+  # The guest in the right pane still runs and ends there.
+  s=len(t());chord('ctrl','shift','right');g['wait'](rf'\[term\.panes\] tabs=1 active=0 focus={right} ',s,30)
+  q.key('ret');m=g['wait'](r'\[term\.job\.exit\] name=greet code=(-?\d+)',s,120);assert m[1]=='5',m[0]
+  # The pane is narrow: long lines wrap over rows, so the rows are joined for the check.
+  rows=snapshot();screen='\n'.join(rows.values());joined=''.join(rows.values())
+  assert '~/notes >' in screen and 'Hello, Pane, from Rust on Wasm.' in joined and 'left-pane' not in joined,screen
+  s=len(t());chord('ctrl','shift','z');g['wait'](rf'\[term\.panes\] tabs=1 active=0 focus={right} zoomed=1 {right}:',s,30)
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'spindle-zoomed.ppm')});chord('ctrl','shift','z')
+  s=len(t());chord('ctrl','shift','t');m=g['wait'](r'\[term\.tab\.open\] tabs=2 pane=(\d+)',s,30);third=int(m[1])
+  g['wait'](rf'\[term\.panes\] tabs=2 active=1 focus={third} ',s,30);term_line('echo third-tab');time.sleep(1)
+  q.cmd('screendump',{'filename':str(a.out/'spindle-tabs.ppm')})
+  s=len(t());chord('ctrl','pgup');g['wait'](rf'\[term\.panes\] tabs=2 active=0 focus={right} ',s,30)
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'spindle-split.ppm')})
+  s=len(t());chord('ctrl','shift','w');g['wait'](rf'\[term\.pane\.gone\] pane={right} panes=2 tabs=2',s,30)
+  g['wait'](rf'\[term\.panes\] tabs=2 active=0 focus={left} zoomed=0 {left}:\d+x\d+\+0\+\d+$',s,30) if False else g['wait'](rf'\[term\.panes\] tabs=2 active=0 focus={left} zoomed=0 {left}:',s,30)
+  s=len(t());chord('ctrl','pgdn');g['wait'](rf'\[term\.panes\] tabs=2 active=1 focus={third} ',s,30)
+  term_line('exit');g['wait'](rf'\[term\.pane\.gone\] pane={third} panes=1 tabs=1',s,30)
   s=len(t());q.key('f11');g['wait'](r'\[term\.closed\] how=window',s,60);g['wait'](rf'\[app\.private\.retired\] target={target} task={task} ',s,120)
   # A second run starts clean.
   target,task=start();rows=snapshot();assert any('Type help' in r or 'Type' in r for r in rows.values()),rows

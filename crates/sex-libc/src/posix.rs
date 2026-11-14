@@ -42,6 +42,8 @@ extern "C" {
     fn sys_mkdir(name: *const i8, mode: u32) -> i32;
     fn sys_rmdir(name: *const c_char) -> i32;
     fn sys_isatty(fd: i32) -> i32;
+    fn sys_ioctl(fd: i32, cmd: i32, argp: *mut c_void) -> i32;
+    fn sys_console_mode(fd: i32, mode: i32) -> i32;
     fn sys_getdents64(fd: i32, dirp: *mut u8, count: usize) -> i64;
     fn sys_clock_gettime(clock: i32, tp: *mut [i64; 2]) -> i32;
     fn sys_exit(status: i32) -> !;
@@ -113,6 +115,53 @@ pub unsafe extern "C" fn fsync(fd: c_int) -> c_int { ret(unsafe { sys_fsync(fd) 
 pub unsafe extern "C" fn ftruncate(fd: c_int, size: i64) -> c_int { ret(unsafe { sys_ftruncate(fd, size) } as i64) as c_int }
 #[no_mangle]
 pub unsafe extern "C" fn isatty(fd: c_int) -> c_int { unsafe { sys_isatty(fd) } }
+
+// ---- the terminal ------------------------------------------------------------------------
+// termios over the console's mode (`sex_pdx::console_relay`): ICANON, ECHO and ISIG
+// choose a raw or cooked keyboard, echo and Ctrl+C; the terminal does the rest as a
+// terminal emulator does. The other flags are kept as the program set them.
+
+use crate::posix_util::Termios;
+static mut TERMIOS: Termios = Termios::cooked();
+
+#[no_mangle]
+pub unsafe extern "C" fn tcgetattr(fd: c_int, t: *mut Termios) -> c_int {
+    let mode = unsafe { sys_console_mode(fd, -1) };
+    if mode < 0 { set_errno(-mode); return -1; }
+    if t.is_null() { set_errno(14); return -1; }
+    unsafe { *t = (*core::ptr::addr_of!(TERMIOS)).with_mode(mode as u8); }
+    0
+}
+#[no_mangle]
+pub unsafe extern "C" fn tcsetattr(fd: c_int, _when: c_int, t: *const Termios) -> c_int {
+    if t.is_null() { set_errno(14); return -1; }
+    let wanted = unsafe { *t };
+    let r = unsafe { sys_console_mode(fd, wanted.mode() as i32) };
+    if r < 0 { set_errno(-r); return -1; }
+    unsafe { *core::ptr::addr_of_mut!(TERMIOS) = wanted; }
+    0
+}
+#[no_mangle]
+pub unsafe extern "C" fn cfmakeraw(t: *mut Termios) { if let Some(t) = unsafe { t.as_mut() } { t.make_raw(); } }
+#[no_mangle]
+pub unsafe extern "C" fn cfgetospeed(t: *const Termios) -> u32 { unsafe { t.as_ref() }.map_or(0, |t| t.c_ospeed) }
+#[no_mangle]
+pub unsafe extern "C" fn cfgetispeed(t: *const Termios) -> u32 { unsafe { t.as_ref() }.map_or(0, |t| t.c_ispeed) }
+#[no_mangle]
+pub unsafe extern "C" fn cfsetospeed(t: *mut Termios, speed: u32) -> c_int { if let Some(t) = unsafe { t.as_mut() } { t.c_ospeed = speed; } 0 }
+#[no_mangle]
+pub unsafe extern "C" fn cfsetispeed(t: *mut Termios, speed: u32) -> c_int { if let Some(t) = unsafe { t.as_mut() } { t.c_ispeed = speed; } 0 }
+/// `ioctl` for what a terminal program asks: TIOCGWINSZ (the console's size in cells),
+/// TCGETS and TCSETS* (termios), FIONBIO (sockets). Anything else is ENOTTY or EINVAL.
+#[no_mangle]
+pub unsafe extern "C" fn ioctl(fd: c_int, request: core::ffi::c_ulong, mut ap: ...) -> c_int {
+    let arg = unsafe { ap.next_arg::<*mut c_void>() };
+    match request as u32 {
+        0x5401 => unsafe { tcgetattr(fd, arg.cast()) },
+        0x5402..=0x5404 => unsafe { tcsetattr(fd, 0, arg.cast()) },
+        r => ret(unsafe { sys_ioctl(fd, r as i32, arg) } as i64) as c_int,
+    }
+}
 #[no_mangle]
 pub unsafe extern "C" fn unlink(path: *const c_char) -> c_int { ret(unsafe { sys_unlink(path) } as i64) as c_int }
 #[no_mangle]

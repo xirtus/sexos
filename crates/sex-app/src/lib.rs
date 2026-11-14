@@ -411,7 +411,9 @@ pub mod files {
         }
 
         /// A console attached to a terminal, and a terminal's side of it
-        /// (`sex_pdx::console_relay`): bytes through Files, no window.
+        /// (`sex_pdx::console_relay`): bytes through Files, no window. A terminal names
+        /// the slot (tab or pane, below `c::SLOTS`) of each call in the `*_at` forms; the
+        /// plain forms are slot 0.
         pub mod relay {
             use super::{exchange, w, Error};
             use sex_pdx::console_relay as c;
@@ -429,37 +431,61 @@ pub mod files {
                 let want = out.len().min(c::INPUT_BYTES);
                 exchange(None, c::KIND, b"", c::READ, want as u64, |_| {}, |n, d| { let n = (n as usize).min(want); out[..n].copy_from_slice(&d[..n]); n })
             }
+            /// How many input bytes wait, taking none. `Err(c::INTERRUPTED)` (once) after
+            /// Ctrl+C, `Err(c::HUNG_UP)` at the end of input: a long computation's look.
+            pub fn poll() -> Result<usize, Error> { op(c::POLL, 0).map(|n| n as usize) }
+            /// The terminal's size in cells and how often it changed (0 by 0: not known).
+            pub fn size() -> Result<c::Size, Error> {
+                exchange(None, c::KIND, b"", c::SIZE, c::SIZE_BYTES as u64, |_| {}, |_, d| c::Size::decode(d))
+            }
+            /// This run's terminal mode (`c::RAW`, `c::NO_ECHO`, `c::NO_SIGNALS`); the one before.
+            pub fn set_mode(mode: u8) -> Result<u8, Error> { op(c::SET_MODE, (mode & c::MODES) as u64).map(|m| m as u8) }
             /// The run ends with `code`.
             pub fn exit(code: u32) { let _ = op(c::EXIT, code as u64); }
 
             /// Terminal: prepares `/bin/NAME` with `args` (only plain words reach it) and asks
             /// Shell to start it attached here. Needs the `+launch` grant (Spindle's `spindle` command).
-            pub fn start(name: &[u8], args: &[u8]) -> Result<(), Error> {
+            pub fn start(name: &[u8], args: &[u8]) -> Result<(), Error> { start_at(0, name, args) }
+            pub fn start_at(slot: usize, name: &[u8], args: &[u8]) -> Result<(), Error> {
                 let bin = sex_pdx::program_store::BIN;
                 let mut path = alloc::vec::Vec::with_capacity(bin.len() + name.len());
                 path.extend_from_slice(bin); path.extend_from_slice(name);
                 let n = args.len().min(w::ARGS_MAX);
-                let ticket = exchange(None, w::PREPARE, &path, 0, n as u64, |d| d[..n].copy_from_slice(&args[..n]), |t, _| t)?;
+                let ticket = exchange(None, w::PREPARE, &path, c::at_slot(0, slot), n as u64, |d| d[..n].copy_from_slice(&args[..n]), |t, _| t)?;
                 sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL, sex_pdx::program_store::OP_RUN, sex_pdx::program_store::TICKET, ticket as u64, 0)
                     .map(|_| ()).map_err(|_| w::UNAVAILABLE)
             }
             /// Terminal: input for the run; how many bytes it took.
-            pub fn put(bytes: &[u8]) -> Result<usize, Error> {
+            pub fn put(bytes: &[u8]) -> Result<usize, Error> { put_at(0, bytes) }
+            pub fn put_at(slot: usize, bytes: &[u8]) -> Result<usize, Error> {
                 let n = bytes.len().min(c::INPUT_BYTES);
-                exchange(None, c::KIND, b"", c::PUT, n as u64, |d| d[..n].copy_from_slice(&bytes[..n]), |n, _| n as usize)
+                exchange(None, c::KIND, b"", c::at_slot(c::PUT, slot), n as u64, |d| d[..n].copy_from_slice(&bytes[..n]), |n, _| n as usize)
             }
             /// Terminal: the run's state and its output since the last call.
-            pub fn take() -> Result<(c::Status, alloc::vec::Vec<u8>), Error> {
+            pub fn take() -> Result<(c::Status, alloc::vec::Vec<u8>), Error> { take_at(0) }
+            pub fn take_at(slot: usize) -> Result<(c::Status, alloc::vec::Vec<u8>), Error> {
                 let want = c::STATUS_BYTES + c::OUTPUT_BYTES;
-                exchange(None, c::KIND, b"", c::TAKE, want as u64, |_| {}, |n, d| {
+                exchange(None, c::KIND, b"", c::at_slot(c::TAKE, slot), want as u64, |_| {}, |n, d| {
                     let n = (n as usize).min(c::OUTPUT_BYTES);
                     (c::Status::decode(d), d[c::STATUS_BYTES..c::STATUS_BYTES + n].to_vec())
                 })
             }
-            pub fn interrupt() -> Result<(), Error> { op(c::INTERRUPT, 0).map(|_| ()) }
-            pub fn hang_up() -> Result<(), Error> { op(c::HANG_UP, 0).map(|_| ()) }
+            pub fn interrupt() -> Result<(), Error> { interrupt_at(0) }
+            pub fn interrupt_at(slot: usize) -> Result<(), Error> { op(c::at_slot(c::INTERRUPT, slot), 0).map(|_| ()) }
+            pub fn hang_up() -> Result<(), Error> { hang_up_at(0) }
+            pub fn hang_up_at(slot: usize) -> Result<(), Error> { op(c::at_slot(c::HANG_UP, slot), 0).map(|_| ()) }
             /// Terminal: forget the run that ended, so another can start.
-            pub fn release() -> Result<(), Error> { op(c::RELEASE, 0).map(|_| ()) }
+            pub fn release() -> Result<(), Error> { release_at(0) }
+            pub fn release_at(slot: usize) -> Result<(), Error> { op(c::at_slot(c::RELEASE, slot), 0).map(|_| ()) }
+            /// Terminal: its size in cells, for the run to read (on start and on every resize).
+            pub fn set_size(cols: u16, rows: u16) -> Result<(), Error> { set_size_at(0, cols, rows) }
+            pub fn set_size_at(slot: usize, cols: u16, rows: u16) -> Result<(), Error> { op(c::at_slot(c::SET_SIZE, slot), c::size_word(cols, rows)).map(|_| ()) }
+            /// Terminal: stop the run with `target` (TAKE's `Status::target`) that it started,
+            /// when Ctrl+C did not end it: Shell ends it as it ends a program ignoring Close.
+            pub fn stop(target: u32) -> Result<(), Error> {
+                sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL, sex_pdx::program_store::OP_STOP_ATTACHED, target as u64, 0, 0)
+                    .map(|_| ()).map_err(|_| w::UNAVAILABLE)
+            }
         }
 
         /// The words typed after the program's name, if it was started with any.

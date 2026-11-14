@@ -18,6 +18,8 @@
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/mman.h>
+#include <sys/ioctl.h>
+#include <termios.h>
 #include <sys/select.h>
 
 static int passed, total;
@@ -148,6 +150,19 @@ int main(int argc, char **argv) {
     free(big);
     check("strtol", strtol("-0x1F", NULL, 16) == -31);
     check("time", time(NULL) > 1767225600);
+
+    // The console is a terminal: its size in cells, and echo off and back on.
+    struct winsize ws = {0};
+    int sized = ioctl(1, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0 && ws.ws_row > 0;
+    printf("winsize cols=%d rows=%d\n", ws.ws_col, ws.ws_row);
+    check("ioctl TIOCGWINSZ", sized);
+    struct termios tio, tio_back;
+    int tty = tcgetattr(0, &tio) == 0 && (tio.c_lflag & ICANON) && (tio.c_lflag & ECHO);
+    tio.c_lflag &= ~ECHO;
+    tty = tty && tcsetattr(0, TCSANOW, &tio) == 0 && tcgetattr(0, &tio_back) == 0 && !(tio_back.c_lflag & ECHO);
+    tio_back.c_lflag |= ECHO;
+    tty = tty && tcsetattr(0, TCSANOW, &tio_back) == 0 && tcgetattr(0, &tio) == 0 && (tio.c_lflag & ECHO);
+    check("tcgetattr and tcsetattr", tty);
 
     /* Sockets: what works without the network, then, in a run given it
        (`run +net chello net HOST PORT`), a TCP and a UDP echo. */
