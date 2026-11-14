@@ -14,3 +14,4 @@ sex-app = { path = "../../crates/sex-app" }
 sex-vt = { path = "../../crates/sex-vt", features = ["render"] }
 sex-wasm = { path = "../../crates/sex-wasm" }
 spindle-panes = { path = "../../crates/spindle-panes" }
+spindle-shell = { path = "../../crates/spindle-shell" }

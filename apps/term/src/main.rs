@@ -38,6 +38,7 @@ use sex_pdx::stream::{Side, Stream};
 use sex_vt::keys::{self, Key, Mods};
 use sex_vt::render::{cell_for_height, Cache, Painter};
 use sex_vt::{Parser, Screen};
+mod shell_host;
 use spindle_panes::{Divider, PaneId, Rect, Split, Tabs, Toward};
 
 /// `crates/sex-wasm/guests/greet`: Rust's std built for wasm32-wasip1.
@@ -73,6 +74,12 @@ struct Job {
 }
 /// How long a program may take to start before Term gives up on it.
 const START_MS: u64 = 20_000;
+
+/// A program the shell started and waits on.
+struct ShellWait { capture: bool, output: Vec<u8>, line: String }
+
+/// Commands of the terminal itself, before the shell: they draw on its screen or close it.
+const OWN: &[&[u8]] = &[b"help", b"clear", b"history", b"colors", b"vtcheck", b"snapshot", b"exit", b"write", b"cat"];
 
 /// A way of reading the scrollback that takes the keys for a while.
 enum Mode {
@@ -116,6 +123,10 @@ struct Pane {
     mode: Mode,
     /// Where the command line's prompt starts: absolute row (history + screen), column.
     prompt_at: (usize, usize),
+    /// The pipeline shell (`spindle-shell`) and what it waits for: a program it started,
+    /// whose output it takes (`capture`) or leaves on the screen.
+    engine: spindle_shell::Engine,
+    shell_wait: Option<ShellWait>,
     /// Which of the window's console relay slots this pane's programs use (one per pane,
     /// up to `console_relay::SLOTS` panes running programs of their own at once).
     slot: u8,
@@ -133,7 +144,7 @@ impl Pane {
         Pane {
             screen: Screen::new(cols, rows), parser: Parser::new(), painter, width, height, buf: vec![sex_vt::DEFAULT_BG; width * height], cell_h, closed: false,
             cwd: Vec::new(), line: Vec::new(), at: 0, history: Vec::new(), recall: None,
-            job: None, drag: None, focused_drawn: false, osc_title: None, osc_cwd: None, progress: None, mode: Mode::Normal, prompt_at: (0, 0), slot: 0, last_click: (0, usize::MAX, usize::MAX), after_cr: false,
+            job: None, drag: None, focused_drawn: false, osc_title: None, osc_cwd: None, progress: None, mode: Mode::Normal, prompt_at: (0, 0), slot: 0, engine: spindle_shell::Engine::new(), shell_wait: None, last_click: (0, usize::MAX, usize::MAX), after_cr: false,
         }
     }
     /// Program output: lone newlines become CR LF, as a terminal's output processing does.
@@ -315,11 +326,30 @@ impl Pane {
         format!("\x1b[1;34m~/{}\x1b[0m \x1b[1;32m>\x1b[0m ", cwd)
     }
     /// Redraws the line being typed, with the cursor at `self.at`.
+    /// The line being typed, coloured as the shell reads it (commands, strings, numbers,
+    /// variables, operators, errors).
+    fn coloured_line(&self) -> String {
+        let Ok(text) = core::str::from_utf8(&self.line) else { return String::from_utf8_lossy(&self.line).into_owned() };
+        let first = text.split(' ').next().unwrap_or("").as_bytes();
+        if OWN.contains(&first) { return String::from(text); }
+        let mut out = String::new();
+        let mut at = 0;
+        for (r, style) in self.engine.highlight(text) {
+            if r.start < at || r.end > text.len() || !text.is_char_boundary(r.start) || !text.is_char_boundary(r.end) { continue; }
+            out.push_str(&text[at..r.start]);
+            out.push_str(style.ansi());
+            out.push_str(&text[r.start..r.end]);
+            out.push_str("\x1b[0m");
+            at = r.end;
+        }
+        out.push_str(&text[at..]);
+        out
+    }
     /// The line may wrap over several rows (narrow panes): it is drawn again from where
     /// its prompt started, and the cursor is put back by position.
     fn redraw_line(&mut self) {
         let p = self.prompt();
-        let line = String::from_utf8_lossy(&self.line).into_owned();
+        let line = self.coloured_line();
         let (abs, col) = self.prompt_at;
         let row = abs.saturating_sub(self.screen.history_len());
         self.say(&format!("\x1b[{};{}H\x1b[J{}{}", row + 1, col + 1, p, line));
@@ -356,6 +386,18 @@ impl Pane {
         if self.history.len() > 500 { self.history.remove(0); }
         let words: Vec<&[u8]> = line.split(|b| *b == b' ').filter(|w| !w.is_empty()).collect();
         let (cmd, args) = (words[0], &words[1..]);
+        // Everything but the terminal's own commands is the shell's: pipelines, tables,
+        // files, and programs as stages.
+        if !OWN.contains(&cmd) || (cmd == b"help" && !args.is_empty()) {
+            let _ = window;
+            let text = String::from_utf8_lossy(line).into_owned();
+            let text = if cmd == b"help" && args == [b"commands"] { String::from("help") } else { text };
+            sex_pdx::serial_record!("[term.shell] {}", text);
+            let cols = self.screen.cols();
+            let step = self.engine.run(&text, &mut shell_host::TermHost { cwd: &mut self.cwd }, cols);
+            self.shell_step(step, text);
+            return;
+        }
         sex_pdx::serial_record!("[term.command] {}", core::str::from_utf8(cmd).unwrap_or("?"));
         match cmd {
             b"help" => self.say(HELP),
@@ -419,7 +461,7 @@ impl Pane {
                 sex_pdx::serial_record!("[term.snapshot] rows={} history={}", self.screen.rows(), self.screen.history_len());
             }
             b"exit" => { sex_pdx::serial_record!("[term.pane.closed] how=exit"); self.closed = true; }
-            _ => self.start(window, cmd, args),
+            _ => { let _ = window; self.start_program(cmd, args) }
         }
     }
     /// The pane is closing: whatever runs in it is told to stop and loses its input.
@@ -440,18 +482,67 @@ impl Pane {
             }
         }
     }
+    /// Carries out what the shell asks next: show its output, or start a program.
+    fn shell_step(&mut self, step: spindle_shell::Step, line: String) {
+        use spindle_shell::Step;
+        match step {
+            Step::Done(out) => {
+                sex_pdx::serial_record!("[term.shell.done] exit={} error={}", out.exit_code, out.error.is_some() as u8);
+                self.out(out.text.as_bytes());
+                self.shell_wait = None;
+            }
+            Step::WaitJob { print, .. } => {
+                // Background jobs come with Yarn sessions; nothing is ever waiting.
+                self.out(print.as_bytes());
+                let step = self.engine.resume(spindle_shell::ExternalResult { output: Vec::new(), exit_code: 1 }, &mut shell_host::TermHost { cwd: &mut self.cwd });
+                self.shell_step(step, line);
+            }
+            Step::RunExternal { print, request } => {
+                self.out(print.as_bytes());
+                let name = request.name.clone();
+                let args: Vec<Vec<u8>> = request.args.iter().map(|a| a.as_bytes().to_vec()).collect();
+                let args: Vec<&[u8]> = args.iter().map(|a| a.as_slice()).collect();
+                sex_pdx::serial_record!("[term.shell.run] name={} capture={} input={}", name, request.capture as u8, request.input.as_ref().map_or(0, |i| i.len()));
+                self.shell_wait = Some(ShellWait { capture: request.capture, output: Vec::new(), line });
+                self.start_program(name.as_bytes(), &args);
+                if self.job.is_none() {
+                    // It did not start: the shell hears it failed.
+                    let step = self.engine.resume(spindle_shell::ExternalResult { output: Vec::new(), exit_code: 127 }, &mut shell_host::TermHost { cwd: &mut self.cwd });
+                    let line = self.shell_wait.take().map(|w| w.line).unwrap_or_default();
+                    return self.shell_step(step, line);
+                }
+                if let Some(input) = request.input { self.job_input(&input); }
+            }
+        }
+    }
+    /// Bytes piped into the running program, then the end of its input.
+    fn job_input(&mut self, input: &[u8]) {
+        let slot = self.slot as usize;
+        let Some(job) = &self.job else { return };
+        match &job.runner {
+            Runner::Guest(g) => { let _ = g.stream.write(Side::Host, input); g.stream.hang_up(Side::Host); }
+            Runner::Native(_) => { let _ = files::direct::relay::put_at(slot, input); let _ = files::direct::relay::hang_up_at(slot); }
+        }
+    }
+    /// What a running program wrote: the screen's, or the shell's when it takes it.
+    fn job_out(&mut self, bytes: &[u8]) {
+        match &mut self.shell_wait {
+            Some(w) if w.capture => w.output.extend_from_slice(bytes),
+            _ => self.out(bytes),
+        }
+    }
     fn fail(&mut self, what: &str, e: files::Error) {
         let why = String::from_utf8_lossy(files::message(e)).into_owned();
         self.say(&format!("\x1b[31m{}: {}\x1b[0m\n", what, why));
     }
 
     /// Starts `NAME.wasm` (or the built-in guest) on a worker with a stream to the screen.
-    fn start(&mut self, window: &mut Window, cmd: &[u8], args: &[&[u8]]) {
+    fn start_program(&mut self, cmd: &[u8], args: &[&[u8]]) {
         let name = cmd.strip_suffix(b".wasm").unwrap_or(cmd);
         let module: Vec<u8> = if cmd == b"greet" { GREET.to_vec() } else {
             let mut path = self.resolve(cmd);
             if !path.ends_with(b".wasm") { path.extend_from_slice(b".wasm"); }
-            match read_all(window, &path, MODULE_MAX) {
+            match read_all_direct(&path, MODULE_MAX) {
                 Ok(m) => m,
                 Err(files::NOT_FOUND) if !cmd.contains(&b'/') && !cmd.ends_with(b".wasm") => { self.start_native(cmd, args); return; }
                 Err(files::NOT_FOUND) => {
@@ -504,7 +595,7 @@ impl Pane {
         loop {
             let n = stream.read(Side::Host, &mut buf);
             if n == 0 { break; }
-            self.out(&buf[..n]);
+            self.job_out(&buf[..n]);
             changed = true;
         }
         let replies = self.screen.take_replies();
@@ -522,6 +613,14 @@ impl Pane {
     }
     fn job_ended(&mut self, name: &str, code: i64) {
         sex_pdx::serial_record!("[term.job.exit] name={} code={}", name, code);
+        // A program the shell started: the shell goes on with the rest of the line.
+        if let Some(w) = self.shell_wait.take() {
+            let output = if w.capture { w.output } else { Vec::new() };
+            if !w.capture && !self.after_cr && self.screen.cursor().0 != 0 { self.say("\n"); }
+            let step = self.engine.resume(spindle_shell::ExternalResult { output, exit_code: code as i32 }, &mut shell_host::TermHost { cwd: &mut self.cwd });
+            self.shell_step(step, w.line);
+            if self.job.is_some() { return; }
+        }
         if code != 0 { self.say(&format!("\x1b[2m[{} exited with {}]\x1b[0m\n", name, code)); }
         if !self.after_cr && self.screen.cursor().0 != 0 { self.say("\n"); }
         self.say(&format!("\x1b]133;D;{}\x07", code));
@@ -557,7 +656,7 @@ impl Pane {
         let Ok((status, bytes)) = files::direct::relay::take_at(self.slot as usize) else { return false };
         self.native_status(status);
         let changed = !bytes.is_empty();
-        if changed { self.out(&bytes); }
+        if changed { self.job_out(&bytes); }
         let replies = self.screen.take_replies();
         if !replies.is_empty() { let _ = files::direct::relay::put_at(self.slot as usize, &replies); }
         let Some(Job { runner: Runner::Native(Native { since, stopping, .. }), name, .. }) = &self.job else { return changed };
@@ -578,7 +677,7 @@ impl Pane {
         };
         let Some(code) = ended else { return changed };
         // What it wrote last may still be on its way.
-        if let Ok((_, rest)) = files::direct::relay::take_at(self.slot as usize) { self.out(&rest); }
+        if let Ok((_, rest)) = files::direct::relay::take_at(self.slot as usize) { self.job_out(&rest); }
         self.job = None;
         let _ = files::direct::relay::release_at(self.slot as usize);
         if code == -1 { self.say(&format!("\x1b[31m[{} stopped: it failed]\x1b[0m\n", name)); }
@@ -665,8 +764,43 @@ impl Pane {
         }
         self.redraw_line();
     }
+    /// Tab through the shell: commands, flags, `$variables`, columns and paths. False
+    /// when it has nothing to offer.
+    fn complete_shell(&mut self) -> bool {
+        let Ok(text) = core::str::from_utf8(&self.line) else { return false };
+        let text = String::from(text);
+        let host = shell_host::TermHost { cwd: &mut self.cwd };
+        let hits = self.engine.complete(&text, self.at, &host);
+        let Some(first) = hits.first() else { return false };
+        let range = first.replace.clone();
+        if hits.iter().any(|h| h.replace != range) || range.end > text.len() { return false; }
+        // The longest common prefix of the offers.
+        let mut common = first.text.clone();
+        for h in &hits[1..] {
+            let n = common.char_indices().zip(h.text.chars()).take_while(|((_, a), b)| a == b).count();
+            let end = common.char_indices().nth(n).map_or(common.len(), |(i, _)| i);
+            common.truncate(end);
+        }
+        let current = &text[range.clone()];
+        if common.len() <= current.len() && hits.len() > 1 {
+            let list: Vec<&str> = hits.iter().take(40).map(|h| h.text.as_str()).collect();
+            self.say(&format!("\r\n{}\r\n", list.join("  ")));
+            let (_, y) = self.screen.cursor();
+            self.prompt_at = (self.screen.history_len() + y, 0);
+            return true;
+        }
+        let mut new = String::from(&text[..range.start]);
+        new.push_str(&common);
+        if hits.len() == 1 && !common.ends_with('/') { new.push(' '); }
+        let at = new.len();
+        new.push_str(&text[range.end..]);
+        self.line = new.into_bytes();
+        self.at = at;
+        true
+    }
     /// Completes the last word from the names in its folder (and the built-ins first).
     fn complete(&mut self, window: &mut Window) {
+        if self.complete_shell() { return; }
         let start = self.line[..self.at].iter().rposition(|b| *b == b' ').map_or(0, |i| i + 1);
         let word = self.line[start..self.at].to_vec();
         let (dir, stem) = match word.iter().rposition(|b| *b == b'/') { Some(i) => (word[..=i].to_vec(), word[i + 1..].to_vec()), None => (Vec::new(), word.clone()) };
@@ -944,6 +1078,20 @@ fn nav_key(key: sex_pdx::app_key::Key) -> Option<Key> {
     })
 }
 
+fn read_all_direct(path: &[u8], max: usize) -> Result<Vec<u8>, files::Error> {
+    let st = files::direct::stat(path)?;
+    if st.dir { return Err(sex_pdx::fs::IS_DIR); }
+    let len = (st.size as usize).min(max);
+    let mut data = vec![0u8; len];
+    let mut at = 0;
+    while at < len {
+        let n = files::direct::read_at(path, at as u64, &mut data[at..])?;
+        if n == 0 { break; }
+        at += n;
+    }
+    data.truncate(at);
+    Ok(data)
+}
 fn read_all(window: &mut Window, path: &[u8], max: usize) -> Result<Vec<u8>, files::Error> {
     let st = files::stat(window, path)?;
     if st.dir { return Err(sex_pdx::fs::IS_DIR); }

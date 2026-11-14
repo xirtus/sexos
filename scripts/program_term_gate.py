@@ -23,7 +23,7 @@ from quil_autosave_gate import boot
 ROOT=Path(__file__).resolve().parents[1]
 SURFACE={int(a):int(b)for a,b in re.findall(r'app: App::Program, ordinal: \d+, target: (\d+), surface: (\d+)',(ROOT/'crates/sex-pdx/src/app_catalog.rs').read_text())}
 KEYS={' ':'spc','.':'dot','/':'slash','-':'minus','=':'equal',',':'comma',';':'semicolon'}
-SHIFTED={'>':'dot',':':'semicolon','_':'minus','!':'1','@':'2'}
+SHIFTED={'|':'backslash','~':'grave_accent','>':'dot',':':'semicolon','_':'minus','!':'1','@':'2'}
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
  term=(ROOT/'iso_root/programs/term').read_bytes();assert term[:4]==b'\x7fELF'
@@ -65,6 +65,13 @@ def main():
   term_line('cat todo.txt');term_line('cd ..');term_line('ls notes')
   rows=snapshot();screen='\n'.join(rows.values())
   assert 'buy milk' in screen and 'todo.txt' in screen and '~/notes >' in screen,screen
+  # Structured pipelines (P8): typed tables through `|`.
+  s=len(t());term_line('seq 1 10 | math sum');g['wait'](r'\[term\.shell\.done\] exit=0 error=0',s,30)
+  s=len(t());term_line('ls notes | where name =~ todo | sort-by name | get name');g['wait'](r'\[term\.shell\.done\] exit=0 error=0',s,30)
+  s=len(t());term_line('ls | where type == dir | length');g['wait'](r'\[term\.shell\.done\] exit=0 error=0',s,30)
+  rows=snapshot();screen='\n'.join(rows.values())
+  assert '55' in screen and 'todo.txt' in screen,screen
+  q.cmd('screendump',{'filename':str(a.out/'spindle-pipelines.ppm')})
   # A Wasm program behind the stream: Rust std's println and stdin.
   s=len(t());term_line('greet Andreas');g['wait'](r'\[term\.job\.start\] name=greet',s,60);time.sleep(3)
   term_line('b a b');time.sleep(1);q.key('ret')
