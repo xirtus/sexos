@@ -652,6 +652,11 @@ older focus thousands of records later, and the run ends before it reaches
 backlog. The fix is Display throughput (repaint cost under TCG), which is
 the concurrent session's area; not changed here.
 
+## G-9: Batik layered image editor and digital painting engine (2026-11-14)
+
+- **Engine and Compositor:** Layered canvas composition with 12 straight-alpha Porter-Duff blend modes, non-destructive adjustment layers (Levels, Curves, HSL), spatial filters (separable Gaussian/box blur, unsharp mask, pixelate), feathered 8-bit selection masks, pressure-sensitive brush engine with dynamics, and memory-bounded undo/redo history journaling.
+- **Interchange and Hardening:** Multi-layer Adobe Photoshop (.psd) parsing with RLE PackBits decompression and OpenRaster (.ora) reading/writing backed by zipped stack.xml and PNGs, fully hardened against integer overflow, denial-of-service allocations, and path traversal under untrusted input in SexOS confined address spaces.
+
 ## G1-G5. Script: assignment operators, do/switch, array and string methods, callbacks, arrows (2026-11-03)
 
 - **G1.** `*=`, `/=`, `%=`; `do ... while (...)` (with the JavaScript

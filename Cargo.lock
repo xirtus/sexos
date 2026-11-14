@@ -437,6 +437,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "batik-core"
+version = "0.1.0"
+dependencies = [
+ "libm",
+ "miniz_oxide 0.9.1",
+ "sex-archive",
+ "sex-image",
+]
+
+[[package]]
 name = "bench"
 version = "0.1.0"
 dependencies = [

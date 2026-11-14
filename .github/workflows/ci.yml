@@ -160,6 +160,8 @@ jobs:
         cargo test --locked -p sex-web --test viewport
     - name: Intel Wi-Fi driver core (crypto vectors, handshakes, firmware files, power-up)
       run: bash scripts/wifi_host_gate.sh
+    - name: Batik layered image editor engine (12 blend modes, brush, adjustments, PSD, ORA) on the host
+      run: bash scripts/batik_host_gate.sh
     - name: Power off and restart through ACPI (host half)
       run: bash scripts/power_host_gate.sh
     - name: Laptop power model (embedded controller, battery, backlight, thermal, _CRS)
