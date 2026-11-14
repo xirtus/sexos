@@ -97,6 +97,7 @@ members = [
     "apps/driftspark",
     "crates/gaze-codecs",
     "crates/vellum-edit",
+    "crates/loom-core",
 ]
 [workspace.package]
 license = "GPL-3.0-only"
