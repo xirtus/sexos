@@ -587,6 +587,10 @@ pub mod files {
             /// Terminal: prepares `/bin/NAME` with `args` (only plain words reach it) and asks
             /// Shell to start it attached here. Needs the `+launch` grant (Spindle's `spindle` command).
             pub fn start(name: &[u8], args: &[u8]) -> Result<(), Error> {
+                // Every program may PREPARE `/bin/NAME` for `sex_app::launch`, so the grant
+                // is asked here: without `+launch` Files answers DENIED, and a run still
+                // attached answers PENDING, before any ticket is made.
+                release()?;
                 let bin = sex_pdx::program_store::BIN;
                 let mut path = alloc::vec::Vec::with_capacity(bin.len() + name.len());
                 path.extend_from_slice(bin); path.extend_from_slice(name);
