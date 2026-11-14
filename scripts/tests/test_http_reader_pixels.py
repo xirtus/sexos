@@ -27,6 +27,24 @@ class ReaderPixels(unittest.TestCase):
   return b'P6\n1280 800\n255\n'+pixels
  def result(self,frame,body=READER_BODY,w=624,h=706,anchor=0,screen=None,trace=None):
   return verify_reader_pixels(trace or self.trace(frame,body,w,h),screen or self.screen(frame),body,self.contract,anchor)
+ def test_short_tile_checks_content_through_last_pixel_without_claiming_resize_chrome(self):
+  # Real connected-desktop geometry: the last partial text cell crosses
+  # the compositor's eight-pixel bottom resize band (UI1, text scale2).
+  w,h,x,y=566,375,706,417;frame=self.frame(w=w,h=h)
+  image=bytearray(self.screen(frame,x=x,y=y));offset=image.index(b'255\n')+4
+  bottom=y+h-self.contract['content_bottom_inset']
+  for row in range(bottom,y+h):
+   start=offset+(row*1280+x)*3;image[start:start+w*3]=b'\x21\x32\x43'*w
+  trace=self.trace(frame,w=w,h=h,x=x,y=y)
+  result=verify_reader_pixels(trace,bytes(image),READER_BODY,self.contract)
+  self.assertTrue(result['ok'],result)
+  # The last actual content pixel is still checked, including blank erasure.
+  bad=bytearray(image);point=offset+((bottom-1)*1280+x+self.contract['inset'])*3
+  bad[point:point+3]=b'\xff\x00\xff'
+  self.assertFalse(verify_reader_pixels(trace,bytes(bad),READER_BODY,self.contract)['ok'])
+  # Historical contracts keep their original full-height predicate.
+  legacy=dict(self.contract);legacy.pop('content_bottom_inset')
+  self.assertFalse(verify_reader_pixels(trace,bytes(image),READER_BODY,legacy)['ok'])
  def test_exact_2048_fixture_complete_home_chrome_and_body(self):
   self.assertEqual(len(READER_BODY),2048);self.assertTrue(READER_BODY.endswith(READER_TAIL));self.assertTrue(all(b==10 or 32<=b<=126 for b in READER_BODY))
   frame=self.frame();self.assertEqual((frame['cols'],frame['rows'],frame['body_rows'],frame['bytes']),(49,37,34,1849));self.assertTrue(self.result(frame)['ok'])

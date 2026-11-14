@@ -192,12 +192,13 @@ def frame_pixels(ppm,expected,contract,resolution=None):
  width,height,pixels=ppm_rgb(ppm,min_width=1,min_height=1);tile=expected['tile'];factor=expected['scale'];color=contract['color'].to_bytes(3,'big');checked=ink=mismatches=0
  if resolution and(width,height)!=tuple(resolution):raise ValueError('wrong actual framebuffer resolution')
  if tile['x']<0 or tile['y']<contract.get('bar',50) or tile['x']+tile['w']>width or tile['y']+tile['h']>height:raise ValueError('reader tile outside framebuffer')
- columns=min(contract.get('renderer_max_columns',80),max(0,(tile['w']-2*contract['inset'])//(contract['advance']*factor)));band_rows=min(contract['max_rows'],max(0,(tile['h']-contract['top']+contract['line']*factor-1)//(contract['line']*factor)))
+ content_bottom=tile['y']+tile['h']-contract.get('content_bottom_inset',0)
+ columns=min(contract.get('renderer_max_columns',80),max(0,(tile['w']-2*contract['inset'])//(contract['advance']*factor)));band_rows=min(contract['max_rows'],max(0,(content_bottom-tile['y']-contract['top']+contract['line']*factor-1)//(contract['line']*factor)))
  for row in range(band_rows):
   line=expected['lines'][row]if row<expected['rows']else b''
   for column in range(columns):
    char=chr(line[column])if column<len(line)else' '
-   c,i,m=http.check_text_cell(pixels,width,tile['x']+contract['inset']+column*contract['advance']*factor,tile['y']+contract['top']+row*contract['line']*factor,char,factor,contract,tile['y']+tile['h'])
+   c,i,m=http.check_text_cell(pixels,width,tile['x']+contract['inset']+column*contract['advance']*factor,tile['y']+contract['top']+row*contract['line']*factor,char,factor,contract,content_bottom)
    checked+=c;ink+=i;mismatches+=m
  if mismatches or not ink:raise ValueError('whole HTTPS reader glyph/padding/stale-erasure mismatches='+str(mismatches))
  return dict(ok=True,errors=[],checked_pixels=checked,expected_ink_pixels=ink,geometry={k:v for k,v in expected.items()if k not in('starts','lines')},expected_rows=[line.decode('ascii')for line in expected['lines']])

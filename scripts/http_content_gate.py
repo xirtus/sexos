@@ -53,6 +53,8 @@ def load_pixel_contract(root):
  if slim:
   compact=re.sub(r'\s+','',sources['renderer'])
   if '(sex_pdx::desktop_style::chrome::Metrics::new(ui_scale).title()asusize)+(sex_pdx::desktop_style::chrome::Metrics::new(ui_scale).px(8)asusize)'not in compact:raise ValueError('renderer shared text origin changed')
+  for token in ('letrim_bottom=sh.saturating_sub((scene.metrics.px(8)asusize));','||lx>=rim_right||ly>=rim_bottom','ly>=sh.saturating_sub((scene.metrics.px(8)asusize))'):
+   if token not in compact:raise ValueError('renderer resize rim content clipping changed')
  else:
   if 'FRAME_TOP_BAR_HEIGHT_PX + 8'not in sources['renderer']:raise ValueError('renderer text origin changed')
  if 'let dns_start=preview.len()+64'not in compose or 'let http_start=dns_start+64'not in compose or 'let body_start=http_start+64'not in compose:raise ValueError('production status extent layout changed')
@@ -90,7 +92,7 @@ def load_pixel_contract(root):
  if number('reader',r'const GLYPH_HEIGHT: u32 = (\d+)')!=metrics['glyph_height']:raise ValueError('reader glyph height differs from approved shared metrics')
  renderer_max_columns=number('renderer',r'\(surf\.w\.saturating_sub\(chrome_metrics\(\)\.px\(16\)\) / advance\)\.clamp\(1, (\d+)\)')
  if renderer_max_columns!=160:raise ValueError('approved renderer column cap changed')
- return dict(text_raster='source-coverage',background=0x303860,reader_encoding='utf-8-scalars',reader_max_rows=number('reader',r'const MAX_ROWS: usize = (\d+)'),reader_tab_cells=1,reader_replacement=0xfffd,reader_max_columns=number('reader',r'pub const MAX_COLUMNS: usize = (\d+)'),reader_controls=controls,reader_https_headers=https_headers,wire_max_body=number('wire',r'pub const MAX_BODY: usize = (\d+)'),wire_max_headers=number('wire',r'pub const MAX_HEADERS: usize = (\d+)'),stream_ring=number('network_abi',r'pub const STREAM_RING_BYTES: usize = (\d+)'),stream_max_wire=number('network_abi',r'pub const MAX_STREAM_BYTES: usize = ([0-9_ +]+);'),stream_total_ticks=number('network_abi',r'pub const STREAM_TOTAL_TICKS: u64 = ([0-9_]+)'),stream_idle_ticks=number('network_abi',r'pub const STREAM_IDLE_TICKS: u64 = ([0-9_]+)'),dynamic_reader_path=dynamic_path,reader_max_path=number('wire',r'pub const MAX_PATH: usize = (\d+)')if dynamic_path else 48,reader_max_ticket=number('network_abi',r'pub const MAX_TICKET: u32 = ([0-9_]+)'),reader_header=reader_header,reader_footers=reader_footers,https_reader_footers=https_reader_footers,reader_path=literal('reader',r'const PATH: &\[u8\] = (b"[^"\n]*")'),reader_capacity=number('reader',r'const CAPACITY: usize = (\d+)'),reader_max_body=number('reader',r'const MAX_BODY: usize = (\d+)'),glyph_height=number('reader',r'const GLYPH_HEIGHT: u32 = (\d+)'),font=font_from_source(sources['renderer']),prefix=literal('preview',r'preview\.append\((b"[^"\n]*")\)'),echo=echo,dns=dns,http=http,
+ return dict(text_raster='source-coverage',content_bottom_inset=metrics['inset']if slim else 0,background=0x303860,reader_encoding='utf-8-scalars',reader_max_rows=number('reader',r'const MAX_ROWS: usize = (\d+)'),reader_tab_cells=1,reader_replacement=0xfffd,reader_max_columns=number('reader',r'pub const MAX_COLUMNS: usize = (\d+)'),reader_controls=controls,reader_https_headers=https_headers,wire_max_body=number('wire',r'pub const MAX_BODY: usize = (\d+)'),wire_max_headers=number('wire',r'pub const MAX_HEADERS: usize = (\d+)'),stream_ring=number('network_abi',r'pub const STREAM_RING_BYTES: usize = (\d+)'),stream_max_wire=number('network_abi',r'pub const MAX_STREAM_BYTES: usize = ([0-9_ +]+);'),stream_total_ticks=number('network_abi',r'pub const STREAM_TOTAL_TICKS: u64 = ([0-9_]+)'),stream_idle_ticks=number('network_abi',r'pub const STREAM_IDLE_TICKS: u64 = ([0-9_]+)'),dynamic_reader_path=dynamic_path,reader_max_path=number('wire',r'pub const MAX_PATH: usize = (\d+)')if dynamic_path else 48,reader_max_ticket=number('network_abi',r'pub const MAX_TICKET: u32 = ([0-9_]+)'),reader_header=reader_header,reader_footers=reader_footers,https_reader_footers=https_reader_footers,reader_path=literal('reader',r'const PATH: &\[u8\] = (b"[^"\n]*")'),reader_capacity=number('reader',r'const CAPACITY: usize = (\d+)'),reader_max_body=number('reader',r'const MAX_BODY: usize = (\d+)'),glyph_height=number('reader',r'const GLYPH_HEIGHT: u32 = (\d+)'),font=font_from_source(sources['renderer']),prefix=literal('preview',r'preview\.append\((b"[^"\n]*")\)'),echo=echo,dns=dns,http=http,
   dns_prefix=literal('compose',r'append\([^;\n]*,(b"\\n\\nControlled DNS: ")\)'),dns_footer=literal('compose',r'append\([^;\n]*,(b"\\nD query  X cancel")\)'),
   http_prefix=literal('compose',r'append\([^;\n]*,(b"\\n\\nPlain HTTP / no TLS: ")\)'),http_footer=literal('compose',r'append\([^;\n]*,(b"\\nH fetch[^"\n]*")\)'),
   inset=metrics['inset'],advance=metrics['advance'],line=metrics['line'],scale_threshold=metrics['scale_threshold'],title=metrics['title'],bar=metrics['bar'],top=metrics['top'],glyph_width=metrics['glyph_width'],renderer_max_columns=renderer_max_columns,max_rows=number('surface',r'TEXT_MAX_ROWS: usize = (\d+)'),capacity=number('surface',r'TEXT_BUF_CAP: usize = (\d+)'),
@@ -578,12 +580,15 @@ def verify_reader_pixels(trace,ppm,body,contract,anchor=0,resolution=None,expect
   columns=min(contract.get('renderer_max_columns',80),max(0,(tile['w']-2*contract['inset'])//(contract['advance']*scale)))
   # Inspect the entire former text band, including the spare column and all
   # rows below the bounded reader snapshot. Stale overview/body ink must erase.
-  band_rows=min(contract['max_rows'],max(0,(tile['h']-contract['top']+contract['line']*scale-1)//(contract['line']*scale)))
+  # The source-bound bottom resize rim belongs to frame chrome, not Browser.
+  # UI1 chrome pixels are independent of the reader's automatic text scale.
+  content_bottom=tile['y']+tile['h']-contract.get('content_bottom_inset',0)
+  band_rows=min(contract['max_rows'],max(0,(content_bottom-tile['y']-contract['top']+contract['line']*scale-1)//(contract['line']*scale)))
   for row in range(band_rows):
    line=expected['lines'][row]if row<expected['rows']else b''
    for column in range(columns):
     char=chr(line[column])if column<len(line)else' '
-    c,i,m=check_text_cell(pixels,width,tile['x']+contract['inset']+column*contract['advance']*scale,tile['y']+contract['top']+row*contract['line']*scale,char,scale,contract,tile['y']+tile['h'])
+    c,i,m=check_text_cell(pixels,width,tile['x']+contract['inset']+column*contract['advance']*scale,tile['y']+contract['top']+row*contract['line']*scale,char,scale,contract,content_bottom)
     checked+=c;ink+=i;mismatch+=m
   errors=[]if not mismatch else[f'whole reader glyph/padding/erasure mismatches={mismatch}']
   if not ink:errors.append('reader frame contains no checked ink')
