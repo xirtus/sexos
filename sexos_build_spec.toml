@@ -72,8 +72,11 @@ crates = [
   "apps/lua/Cargo.toml",
   "apps/rg/Cargo.toml",
   "apps/fd/Cargo.toml",
+  "apps/bat/Cargo.toml",
   "apps/python/Cargo.toml",
-  "apps/store/Cargo.toml"
+  "apps/store/Cargo.toml",
+  "apps/sdltest/Cargo.toml",
+  "apps/driftspark/Cargo.toml"
 ]
 
 [[stage]]
@@ -193,6 +196,8 @@ action = "cargo_manifest"
 manifest = "servers/sexfiles/Cargo.toml"
 source_artifact = "target/x86_64-sex/release/sexfiles"
 dest_artifact = "iso_root/servers/sexfiles"
+# The encrypted home's AES: the software one, servers keep no SSE state.
+rustflags = "--cfg aes_force_soft"
 
 [[stage]]
 id = "build_spindle"
@@ -432,6 +437,17 @@ manifest = "apps/fd/Cargo.toml"
 source_artifact = "target/x86_64-sex-std/release/fd"
 dest_artifact = "iso_root/programs/fd"
 
+# bat 0.26.1 (vendor/bat-0.26.1), upstream source on the published bat library with
+# syntect's pure-Rust regex engine (fancy-regex); no git, no pager.
+[[stage]]
+id = "build_bat"
+action = "cargo_manifest"
+target = "x86_64-sex-std.json"
+build_std = "std,panic_abort"
+manifest = "apps/bat/Cargo.toml"
+source_artifact = "target/x86_64-sex-std/release/bat"
+dest_artifact = "iso_root/programs/bat"
+
 # Python 3.13: CPython (vendor/cpython-3.13.18) on sex-libc, its stdlib frozen in.
 [[stage]]
 id = "build_python"
@@ -441,6 +457,26 @@ build_std = "std,panic_abort"
 manifest = "apps/python/Cargo.toml"
 source_artifact = "target/x86_64-sex-std/release/python"
 dest_artifact = "iso_root/programs/python"
+
+# SDL2 (vendor/SDL2-2.30.9, crates/sex-sdl): a C SDL program, window, sound and keys.
+[[stage]]
+id = "build_sdltest"
+action = "cargo_manifest"
+target = "x86_64-sex-std.json"
+build_std = "std,panic_abort"
+manifest = "apps/sdltest/Cargo.toml"
+source_artifact = "target/x86_64-sex-std/release/sdltest"
+dest_artifact = "iso_root/programs/sdltest"
+
+# Driftspark: an SDL2 arcade game in C (apps/driftspark), window, sound and keys.
+[[stage]]
+id = "build_driftspark"
+action = "cargo_manifest"
+target = "x86_64-sex-std.json"
+build_std = "std,panic_abort"
+manifest = "apps/driftspark/Cargo.toml"
+source_artifact = "target/x86_64-sex-std/release/driftspark"
+dest_artifact = "iso_root/programs/driftspark"
 
 # PDF: the first ordinary std app, hayro rendering pages into the window.
 [[stage]]
