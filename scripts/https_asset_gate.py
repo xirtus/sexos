@@ -609,6 +609,17 @@ def verify_parking(trace,frames,actions,resolution):
   checks.append(dict(capture=shot['name'],x=sx,y=sy,receipt_offset=start+receipt[-1].start()));previous=boundary
  return dict(ok=True,captures=len(checks),checks=checks)
 
+def browser_wait_tasks(trace):
+ # This asset gate already proves the fixed BOOT Browser15/surface300 route.
+ # Require its actual BOOT receipts rather than discovering arbitrary wait IDs.
+ markers=list(re.finditer(re.escape('[kernel.spawn.kaleidoscope'),trace))
+ spawn=list(re.finditer(r'^\[kernel.spawn.kaleidoscope\] id=15 domain_id=15\r?\n',trace,re.M))
+ handoff=list(re.finditer(r'^\[bootgraph.boot.handoff\] target=kaleidoscope id=15 entry=0x[0-9a-f]+\r?\n',trace,re.M))
+ handoff_markers=list(re.finditer(r'^\[bootgraph.boot.handoff\] target=kaleidoscope\b',trace,re.M))
+ seals=list(re.finditer(r'^\[boot.self_wait.sealed\] ',trace,re.M))
+ if len(markers)!=len(spawn)or len(spawn)!=1 or len(handoff_markers)!=len(handoff)or len(handoff)!=1 or len(seals)!=1 or not(spawn[0].start()<seals[0].start()<handoff[0].start()):raise ValueError('missing exact BOOT Browser15 spawn/seal/handoff identity')
+ return (15,)
+
 def verify_evidence(root,iso,binding,evidence):
  evidence=Path(evidence);bound=binding_check(root,iso,binding);manifest=json.loads((evidence/'manifest.json').read_text());contract=source_contract(root)
  if manifest['binding']!=bound or manifest['source_sha256']!=contract['source_sha256']or manifest['keylog_enabled']is not False:raise ValueError('evidence/source/image binding differs')
@@ -638,7 +649,7 @@ def verify_evidence(root,iso,binding,evidence):
   if shot['name']=='cleared-image'and '[browser.asset.cleared]'not in prefix:raise ValueError('erasure frame lacks positive CLEAR')
   shots.append(verify_pixels(prefix,(evidence/shot['file']).read_bytes(),shot['visible'],tuple(map(int,manifest['resolution'].split('x'))),contract))
  if mode=='ready'and shots[0]['geometry']['viewport']==shots[-1]['geometry']['viewport']:raise ValueError('actual viewport/scale transition missing')
- authority=nic_check(trace,expected=1,preparation=True,ethernet=True,network_config=True,routing=True);waiting=wait_check(trace,source_root=root);target=target_check(Path(root))
+ authority=nic_check(trace,expected=1,preparation=True,ethernet=True,network_config=True,routing=True);waiting=wait_check(trace,browser_tasks=browser_wait_tasks(trace),source_root=root);target=target_check(Path(root))
  if not all(r['ok']for r in(authority,waiting,target)):raise ValueError('native authority/self-wait/non-Unix target check failed')
  return dict(ok=True,binding=bound,mode=mode,wire=wire,trace=joins,pixels=shots,pointer_parking=parking,key_actions=key_actions,authority=authority,self_wait=waiting,target=target,scope=SCOPE)
 
