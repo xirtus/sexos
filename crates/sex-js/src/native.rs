@@ -119,20 +119,23 @@ extern "C" fn w2c_wasi__snapshot__preview1_fd_fdstat_get(_: *mut Ctx, _fd: u32, 
 extern "C" fn w2c_wasi__snapshot__preview1_fd_seek(_: *mut Ctx, _fd: u32, _o: u64, _w: u32, _at: u32) -> u32 { 8 }
 
 #[no_mangle]
-extern "C" fn w2c_dom_jit_available(_: *mut Ctx) -> u32 { if cfg!(feature = "baseline-jit") {2} else {0} }
+extern "C" fn w2c_dom_jit_available(_: *mut Ctx) -> u32 { if cfg!(feature = "baseline-jit") {3} else {0} }
 
-// An older guest understands only integer results. Keep its import but never
-// enter protocol-2 code through it; an accidental stale pair uses interpreter fallback.
+// Older guests have a different result or input protocol. Keep their imports
+// but decline compilation, so a stale guest uses interpreter fallback.
 #[no_mangle]
 extern "C" fn w2c_dom_jit(_: *mut Ctx, _: u32, _: u32, _: u32, _: u32, _: u32) -> u32 { 0 }
 
 #[no_mangle]
-unsafe extern "C" fn w2c_dom_jit_v2(ctx: *mut Ctx, pc: u32, len: u32, argv: u32, argc: u32, out: u32) -> u32 {
+extern "C" fn w2c_dom_jit_v2(_: *mut Ctx, _: u32, _: u32, _: u32, _: u32, _: u32) -> u32 { 0 }
+
+#[no_mangle]
+unsafe extern "C" fn w2c_dom_jit_v3(ctx: *mut Ctx, pc: u32, len: u32, argv: u32, argc: u32, out: u32) -> u32 {
     #[cfg(feature = "baseline-jit")]
     {
         let ctx = unsafe { &mut *ctx };
         let data = unsafe { memory(ctx) };
-        return ctx.jit.run(data, pc, len, argv, argc, out) as u32;
+        return ctx.jit.run_v3(data, pc, len, argv, argc, out) as u32;
     }
     #[cfg(not(feature = "baseline-jit"))]
     { let _ = (ctx, pc, len, argv, argc, out); 0 }

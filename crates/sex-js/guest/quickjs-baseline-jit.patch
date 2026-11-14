@@ -1,21 +1,26 @@
 --- a/quickjs.c
 +++ b/quickjs.c
-@@ -16486,6 +16486,21 @@
+@@ -16486,6 +16486,26 @@
                           argv, flags);
      }
      b = p->u.func.function_bytecode;
 +
-+    /* SexOS baseline tier: only ordinary, side-effect-free bytecode is accepted
-+       by the host. Polling above still runs for every call. No native heap or
-+       QuickJS pointers cross the linear-memory boundary. */
++    /* The host admits only side-effect-free bytecode. Capture scalar inputs
++       afresh on every call; no QuickJS pointer is given to generated code. */
 +    extern int sexos_baseline_jit_enabled;
-+    if (sexos_baseline_jit_enabled && flags == 0 && b->func_kind == JS_FUNC_NORMAL &&
-+        b->has_simple_parameter_list && !b->var_count && !b->closure_var_count &&
-+        argc == b->arg_count && argc <= 8 && b->byte_code_len <= 128) {
-+        __attribute__((import_module("dom"), import_name("jit_v2")))
++    if (sexos_baseline_jit_enabled && !(flags & ~JS_CALL_FLAG_COPY_ARGV) &&
++        b->func_kind == JS_FUNC_NORMAL && b->has_simple_parameter_list &&
++        argc >= b->arg_count && b->arg_count + b->closure_var_count <= 8 &&
++        b->byte_code_len <= 128) {
++        __attribute__((import_module("dom"), import_name("jit_v3")))
 +        extern int sexos_jit(const uint8_t *, int, JSValueConst *, int, int32_t *);
++        JSValue snapshot[8];
++        for (int j = 0; j < b->arg_count; j++) snapshot[j] = argv[j];
++        for (int j = 0; j < b->closure_var_count; j++)
++            snapshot[b->arg_count + j] = *p->u.func.var_refs[j]->pvalue;
 +        int32_t result;
-+        int kind = sexos_jit(b->byte_code_buf, b->byte_code_len, argv, argc, &result);
++        int shape = b->arg_count | (b->closure_var_count << 8);
++        int kind = sexos_jit(b->byte_code_buf, b->byte_code_len, snapshot, shape, &result);
 +        if (kind == 1) return JS_NewInt32(caller_ctx, result);
 +        if (kind == 2) return JS_NewBool(caller_ctx, result);
 +    }

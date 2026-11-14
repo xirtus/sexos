@@ -1646,6 +1646,11 @@
     constructor(tag) { super(+check(H(OP.CREATE_ELEMENT, tag || 'sx-fragment'))); if (!tag) nodes.set(this._id, this); }
     get nodeType() { return 11; }
     get nodeName() { return '#document-fragment'; }
+    cloneNode(deep) {
+      const copy = new DocumentFragment();
+      if (deep) for (const child of this.childNodes) copy.appendChild(child.cloneNode(true));
+      return copy;
+    }
     get innerHTML() { return H(OP.GET_HTML, this._id, '0'); }
     set innerHTML(v) { H(OP.SET_HTML, this._id, String(v)); }
     getElementById(id) { return this.querySelector('#' + CSS.escape(String(id))); }
@@ -1716,6 +1721,11 @@
       let t = this.querySelector('title');
       if (!t) { t = this.createElement('title'); const h = this.head; if (h) h.appendChild(t); }
       t.textContent = v;
+    }
+    get domain() { return location.hostname; }
+    set domain(v) {
+      // This engine keeps each frame in its own domain; do not relax origins.
+      if (String(v).toLowerCase() !== location.hostname.toLowerCase()) throw domError('Origin relaxation is unavailable.', 'SecurityError');
     }
     get URL() { return location.href; }
     get location() { return location; }

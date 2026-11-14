@@ -1491,3 +1491,68 @@ fn wikipedia_popup_complex_exclusions_and_selector_alternatives() {
     let nested = format!("{}a{}", ":not(".repeat(40), ")".repeat(40));
     assert!(sex_html::css::parse_selector(&nested).is_none());
 }
+
+#[test]
+fn github_fragment_clone_and_document_domain() {
+    let mut s = page("<template id=copy><div><button value=copy>Copy</button></div></template>");
+    s.eval(r#"
+      const content = document.getElementById('copy').content;
+      const cloned = content.cloneNode(true);
+      console.log(cloned instanceof DocumentFragment, cloned.children.length, cloned.children[0].children[0].value);
+      cloned.children[0].children[0].value = 'changed';
+      console.log(content.children[0].children[0].value, content.cloneNode(false).childNodes.length);
+      document.body.appendChild(cloned);
+      console.log(cloned.childNodes.length, document.body.lastElementChild.children[0].value);
+      console.log(document.domain);
+      document.domain = 'example.test';
+      try { document.domain = 'test'; } catch(e) { console.log(e.name); }
+    "#, "github.js").unwrap();
+    assert_eq!(logs(&mut s), ["0:true 1 copy", "0:copy 0", "0:0 changed", "0:example.test", "0:SecurityError"]);
+}
+
+#[cfg(feature = "baseline-jit")]
+#[test]
+fn baseline_captured_scalars_refresh_and_keep_types() {
+    let source = r#"
+      function counter() {
+        let state = 1;
+        return {read() {return state;}, set(v) {state=v;}, equal(v) {return state===v;}};
+      }
+      const c=counter();
+      for (let i=0;i<96;i++) {c.read(); c.equal(i);}
+      c.set(true);
+      for (let i=0;i<96;i++) {c.read(); c.equal(true);}
+      console.log(c.read(),typeof c.read(),c.equal(true),c.equal(1));
+      c.set(17); console.log(c.read(),typeof c.read(),c.equal(17));
+      const obj={x:42}; c.set(obj); console.log(c.read()===obj,c.equal(obj));
+      c.set(-0); console.log(Object.is(c.read(),-0));
+      c.set(undefined); console.log(c.read(),c.equal(undefined));
+      c.set(9n); console.log(c.read()===9n);
+      // Writes still use the interpreter and execute exactly once.
+      let x=0; function effect() {return ++x;}
+      for(let i=0;i<96;i++) effect(); console.log(x);
+      function extra(a) {let unused; return a+1;}
+      for(let i=0;i<96;i++) extra(i,'ignored');
+      console.log(extra(4,5),extra());
+    "#;
+    let mut off=page(""); off.set_jit_enabled(false); off.eval(source,"captured.js").unwrap();
+    let expected=logs(&mut off);
+    let mut on=page(""); on.eval(source,"captured.js").unwrap();
+    assert_eq!(logs(&mut on),expected);
+    #[cfg(all(target_arch="x86_64",target_os="linux"))]
+    { assert!(on.jit_stats().compiled>=4,"{:?}",on.jit_stats()); assert!(on.jit_stats().executed>128); }
+}
+
+#[cfg(feature = "baseline-jit")]
+#[test]
+fn baseline_cold_functions_do_not_exclude_later_hot_code() {
+    let mut source=String::new();
+    for i in 0..96 { source.push_str(&format!("(function(){{return {};}})();",i+100)); }
+    source.push_str("function hot(a){return (a+7)^3;} let sum=0; for(let i=0;i<128;i++)sum+=hot(i);console.log(sum);");
+    let mut off=page(""); off.set_jit_enabled(false); off.eval(&source,"cold.js").unwrap();
+    let expected=logs(&mut off);
+    let mut on=page(""); on.eval(&source,"cold.js").unwrap();
+    assert_eq!(logs(&mut on),expected);
+    #[cfg(all(target_arch="x86_64",target_os="linux"))]
+    { assert!(on.jit_stats().compiled>=1,"{:?}",on.jit_stats()); assert!(on.jit_stats().executed>90); }
+}

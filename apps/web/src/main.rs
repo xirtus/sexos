@@ -642,6 +642,11 @@ impl Browser {
             self.scroll_to(frag);
             return;
         }
+        #[cfg(feature = "baseline-jit")]
+        if let Doc::Scripted(script) = &self.doc {
+            let s = script.jit_stats();
+            sex_pdx::serial_record!("[web.jit.departure] enabled={} compiled={} executed={} considered={} non_scalar={} cache_full={} unsupported={} hottest={} url={}", self.jit_enabled as u8, s.compiled, s.executed, s.considered, s.non_scalar, s.cache_full, s.unsupported, s.hottest, self.url);
+        }
         if self.in_frame.is_none() { self.status = Some("Loading…"); }
         self.url = String::from(url);
         // Leaving the page stops its sound and pictures, and their downloads, and its
@@ -847,6 +852,9 @@ impl Browser {
         #[cfg(feature = "baseline-jit")]
         {
             let stats = script.jit_stats();
+            if self.jit_enabled {
+                sex_pdx::serial_record!("[web.jit.admission] considered={} non_scalar={} cache_full={} unsupported={} hottest={} rejected_len={} prefix={:?}", stats.considered, stats.non_scalar, stats.cache_full, stats.unsupported, stats.hottest, stats.rejected_len, stats.rejected_prefix);
+            }
             sex_pdx::serial_record!("[web.jit] enabled={} compiled={} executed={} bailouts={} refused={} ticks={} script_ticks={} native={} url={}", self.jit_enabled as u8, stats.compiled, stats.executed, stats.bailouts, stats.refused, sex_pdx::get_ticks() - started, sex_pdx::get_ticks() - scripts_started, Script::<Document>::NATIVE as u8, self.url);
         }
         self.script_scroll = 0;

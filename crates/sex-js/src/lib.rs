@@ -440,16 +440,17 @@ fn link<P: Page + 'static>(linker: &mut Linker<State<P>>) -> Result<(), wasmi::e
         let at = out as u32 as usize;
         if let Some(dst) = data.get_mut(at..at + r.len()) { dst.copy_from_slice(&r); }
     })?;
-    // Protocol 2 carries an int32/boolean result kind. Legacy guests must fall
-    // back rather than reinterpret a boolean result as an integer.
-    linker.func_wrap("dom", "jit_available", |_: C<'_, P>| -> i32 { if cfg!(feature = "baseline-jit") {2} else {0} })?;
+    // Protocol 3 supplies scalar argument/closure snapshots. Older guests
+    // keep interpreter fallback rather than passing a different input shape.
+    linker.func_wrap("dom", "jit_available", |_: C<'_, P>| -> i32 { if cfg!(feature = "baseline-jit") {3} else {0} })?;
     linker.func_wrap("dom", "jit", |_: C<'_, P>, _: i32, _: i32, _: i32, _: i32, _: i32| -> i32 { 0 })?;
-    linker.func_wrap("dom", "jit_v2", |mut c: C<'_, P>, pc: i32, len: i32, argv: i32, argc: i32, out: i32| -> i32 {
+    linker.func_wrap("dom", "jit_v2", |_: C<'_, P>, _: i32, _: i32, _: i32, _: i32, _: i32| -> i32 { 0 })?;
+    linker.func_wrap("dom", "jit_v3", |mut c: C<'_, P>, pc: i32, len: i32, argv: i32, argc: i32, out: i32| -> i32 {
         #[cfg(feature = "baseline-jit")]
         {
             let Some(m) = mem(&c) else { return 0 };
             let (data, state) = m.data_and_store_mut(&mut c);
-            return state.jit.run(data, pc as u32, len as u32, argv as u32, argc as u32, out as u32) as i32;
+            return state.jit.run_v3(data, pc as u32, len as u32, argv as u32, argc as u32, out as u32) as i32;
         }
         #[cfg(not(feature = "baseline-jit"))]
         { let _ = (&mut c, pc, len, argv, argc, out); 0 }

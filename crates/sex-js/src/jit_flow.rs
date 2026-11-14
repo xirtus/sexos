@@ -40,8 +40,8 @@ fn branch(at: usize, next: usize, delta: i32, len: usize) -> Option<usize> {
     let target = at.checked_add(1)?.checked_add_signed(delta as isize)?;
     (target >= next && target < len).then_some(target)
 }
-pub(super) fn validate(bc: &[u8], argc: usize) -> Option<Plan> {
-    if argc > 8 || bc.is_empty() || bc.len() > MAX_BYTECODE { return None; }
+pub(super) fn validate_typed(bc: &[u8], argc: usize, closures: usize, bool_mask: u8) -> Option<Plan> {
+    if argc.saturating_add(closures) > 8 || bc.is_empty() || bc.len() > MAX_BYTECODE { return None; }
     let mut instructions = Vec::new();
     let mut boundary = [usize::MAX; MAX_BYTECODE + 1];
     let mut pc = 0;
@@ -53,8 +53,16 @@ pub(super) fn validate(bc: &[u8], argc: usize) -> Option<Plan> {
             op::PUSH_I8 => { let n = *bc.get(pc)? as i8 as i32; pc += 1; Op::Constant(n, Kind::Int) },
             op::PUSH_I16 => { let n = i16::from_le_bytes(bc.get(pc..pc+2)?.try_into().ok()?) as i32; pc += 2; Op::Constant(n, Kind::Int) },
             op::PUSH_I32 => { let n = i32::from_le_bytes(bc.get(pc..pc+4)?.try_into().ok()?); pc += 4; Op::Constant(n, Kind::Int) },
-            op::GET_ARG => { let n = u16::from_le_bytes(bc.get(pc..pc+2)?.try_into().ok()?) as usize; pc += 2; Op::Argument(n) },
-            op::GET_ARG0..=op::GET_ARG3 => Op::Argument((code-op::GET_ARG0) as usize),
+            op::GET_VAR_REF | op::GET_VAR_REF_CHECK => {
+                let n = u16::from_le_bytes(bc.get(pc..pc+2)?.try_into().ok()?) as usize; pc += 2;
+                if n >= closures { return None; } Op::Argument(argc + n)
+            },
+            op::GET_VAR_REF0..=op::GET_VAR_REF3 => {
+                let n = (code-op::GET_VAR_REF0) as usize;
+                if n >= closures { return None; } Op::Argument(argc + n)
+            },
+            op::GET_ARG => { let n = u16::from_le_bytes(bc.get(pc..pc+2)?.try_into().ok()?) as usize; pc += 2; if n >= argc { return None; } Op::Argument(n) },
+            op::GET_ARG0..=op::GET_ARG3 => { let n=(code-op::GET_ARG0) as usize; if n >= argc { return None; } Op::Argument(n) },
             op::ADD | op::SUB | op::MUL | op::AND | op::XOR | op::OR |
             op::LT | op::LTE | op::GT | op::GTE | op::EQ | op::NEQ | op::STRICT_EQ | op::STRICT_NEQ => Op::Binary(code),
             op::LNOT => Op::Not, op::DUP => Op::Dup, op::DROP => Op::Drop,
@@ -80,7 +88,7 @@ pub(super) fn validate(bc: &[u8], argc: usize) -> Option<Plan> {
         let mut state = incoming[i]?; states.push(state);
         match instruction.op {
             Op::Constant(_,kind) => state.push(kind)?,
-            Op::Argument(arg) => { if arg >= argc { return None; } state.push(Kind::Int)?; },
+            Op::Argument(arg) => { if arg >= argc + closures { return None; } state.push(if bool_mask & (1 << arg) != 0 {Kind::Bool} else {Kind::Int})?; },
             Op::Binary(code) => {
                 state.pop()?; state.pop()?;
                 let comparison = matches!(code,op::LT|op::LTE|op::GT|op::GTE|op::EQ|op::NEQ|op::STRICT_EQ|op::STRICT_NEQ);

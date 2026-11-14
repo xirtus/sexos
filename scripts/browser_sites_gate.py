@@ -133,6 +133,8 @@ def main():
   print(outcomes[-1],flush=True)
   s=len(t());q.key('f11');g['wait'](rf'\[web.closed\] target={target} task={task}',s,60)
   text=t();assert 'KERNEL PANIC' not in text and '[web.fatal]' not in text and 'panicked' not in text
+  for outcome in outcomes:
+   outcome['jit_departure_receipts']=[r for r in re.findall(r'\[web.jit.departure\] ([^\r\n]+)',text) if r.endswith('url='+outcome['url'])]
   (a.out/'sites.json').write_text(json.dumps(outcomes,indent=1))
   print({'ok':True,'sites':len(outcomes)})
  finally:g['stop']()
