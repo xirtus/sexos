@@ -29,18 +29,22 @@ Installed executable integrity remains the existing loader/package trust model.
 The request and approval messages must come from the currently focused consumer
 and provider respectively. The dialog identifies the canonical consumer label and
 exact domain/run, the exact requested origin/account scope, and the matching entry.
-The currently selected matching entry is used, otherwise the first exact match;
-no match is refused. The consumer cannot choose another entry by guessing an index.
+The first matching entry is shown; Next matching entry cycles in the provider
+window and resets focus to Deny. No match is refused. The consumer cannot choose another entry by guessing an index.
 Origin scopes are nonempty printable ASCII, up to 512 bytes; use punycode for
 international hostnames. Titles and labels are escaped to ASCII for presentation,
 so newline/bidi/control characters cannot impersonate dialog labels. Oversized
-consent context is refused, never silently truncated. There is no credential copy
+consent context is refused, never silently truncated. Approval requires a client
+area of at least800x600, with the full escaped scope in bounded64-column lines.
+Small tiles disable Allow, and token/origin/geometry are rechecked on action and
+resize. A550x144 actual Weft Tab/Enter regression prevents hidden approval. There is no credential copy
 to the system clipboard, notification history or file-open side channel.
 
 ## Protocol and secret custody
 
 `sex_pdx::autofill` defines operations 0x3E0..0x3EF; 0x3F0 is Files' descriptive
-binding query. It is register-only: no pointer or shared-memory exchange. Shell is
+binding query, and0x3F1/0x3F2 acknowledge provider revocation/client cancellation.
+It is register-only: no pointer or shared-memory exchange. Shell is
 a **trusted broker and sees credential registers**; this is not an end-to-end
 confidential channel hiding passwords from the desktop's trusted Shell.
 
@@ -54,7 +58,8 @@ transfer after thirty seconds. Clock regression is a refusal. A cancellation bef
 READY uses the exact authenticated client and its monotonically allocated request
 sequence; it cannot leave an orphan prompt or cancel another run's request.
 
-Chastity consumes its core one-use grant only on approval, then passes borrowed
+Chastity revalidates the chosen entry against the canonical exact-origin
+candidates only on approval, then passes borrowed
 credentials into the provider SDK's preallocated zeroizing buffer. The client
 returns a non-Debug/non-Clone `Credentials` only after complete, valid UTF-8 data
 and FINISH. `Credentials::with` borrows the strings; dropping it wipes the buffer.
@@ -73,7 +78,11 @@ compiler-generated temporary. Kernel IPC queues already erase dequeued backing a
 are drained before a row is reused; those mechanisms are unchanged.
 
 Lock closes the provider, wipes its outgoing state, clears the visible prompt and
-revokes core grants. Revocation takes effect when the broker observes it or detects
+drops the canonical vault. Local buffers wipe immediately; visible Lock completion
+and unlock are fenced until the broker acknowledges the exact provider epoch/run.
+UNREGISTER is retried on kernel queue Full; authenticated right-narrowing revocations
+bypass native intake saturation and custody contention. Revocation takes effect
+when the broker observes it or detects
 lifecycle loss; it cannot retract credentials already delivered by an approved,
 completed request. A restarted Shell fails closed until the provider is relaunched
 and unlocked. No automatic provider relaunch or ambient credential discovery.
@@ -86,30 +95,29 @@ route. Poll it alongside the window, with one-tick waits while a transfer is act
 Window preserves protocol messages for the explicit SDK consumer without adding a
 new Event variant or changing other applications' widget input handling.
 
-`sex-multipass` exposes optional feature `sexos` and `vault::Restore`: from a focused
-sign-in action, request an exact validated DAV base URL, wait for Chastity consent,
-then feed borrowed credentials to the existing `add_server_account` authentication
-path. Multipass retains its session in Shibari; credentials are never added to the
-stamp file. This adapter does not invent a missing Multipass server/window or alter
-Valentine's policy of receiving an already-authenticated mail flow. Their owners
-can call the adapter or the reusable SDK when their runtime UI is present.
+Multipass/Valentine do not yet call this transport. The optional restore adapter
+was withdrawn because the legacy HTTP authentication path makes ordinary BasicAuth
+copies. The reusable SDK and actual separate fixture app demonstrate the transport;
+callers own all credential handling after approved handoff. No live browser form
+injection, account-service restore or clipboard integration is claimed.
 
 ## Verification
 
 `scripts/autofill_host_gate.sh` compiles the **unchanged production protocol, broker
 and SDK** with only native catalog/route/inbox transport replaced by a host model.
-Fourteen tests cover no data before approval, deny, lock, both focus checks,
+Sixteen tests cover no data before approval, deny, lock, both focus checks,
 provider/approval impersonation, stale epoch/replay, exact run reuse, cancellation
 before READY, malformed padding/bounds, expiry/clock rollback, multiline/bidi
-origin refusal, full task/part identity words, and an 8192-byte transfer under
-foreign status flooding within the transfer deadline. Chastity UI adds a separate
-consent-label spoofing/oversize regression; the prior 13 vault-core tests remain.
+origin refusal, full task/part identity words, and an8192-byte transfer under
+foreign status flooding within the transfer deadline. Production native intake
+is also compiled unchanged: full intake plus unavailable custody cannot drop Lock;
+SDK transport-admission Full retries until the exact epoch/run ACK. Canonical
+vault/UI tests preserve the user's original19 plus preflight and consent tests.
 
-The Chastity and separate `chastity-probe` guest binaries build and pass the
-forbidden-instruction scan. Shell and Files build for the actual no-SSE server
-target (Files uses the existing `aes_force_soft` setting); the optional Multipass
-adapter also builds for the guest. ABI inputs include the new protocol file and
-pins are regenerated with the existing guard tool, with no kernel hash changes.
+The canonical std guest builds and passes the forbidden-instruction scan. The
+separate probe and Shell/Files built before the canonical UI replacement; final
+integration rebuilds all targets together. No kernel edits. ABI inputs include
+the new protocol file, guarded by the existing pin mechanism.
 
 `scripts/chastity_autofill_gate.py` drives real separate Weft applications: creates
 and saves fictional credentials, reboots, unlocks the persisted snapshot, refuses

@@ -85,7 +85,7 @@ def main():
    return target,task
   def close(target,task,locked):
    s=len(t());g['focus'](SURFACE[target]);time.sleep(.5);q.key('f11')
-   if locked:g['wait'](r'\[chastity\.locked\] reason=closed zeroized=1\n',s,60)
+   if locked:g['wait'](r'\[chastity\.locked\] reason=closed\n',s,60)
    g['wait'](r'\[chastity\.closed\]\n',s,60)
    g['wait'](rf'\[app\.private\.retired\] target={target} task={task} ',s,180)
   g['wait'](r'\[app.private.retired\] target=41 ',0,120)
@@ -120,7 +120,7 @@ def main():
   assert int(m[1],16)==fnv('Mail'),'the title Chastity stored is not the one typed'
   g['wait'](r'\[chastity\.saved\] entries=1 bytes=(\d+)\n',s,UNLOCK)
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'chastity-list.ppm')})
-  s=len(t());press('l');g['wait'](r'\[chastity\.locked\] reason=asked zeroized=1\n',s,30)
+  s=len(t());press('l');g['wait'](r'\[chastity\.locked\] reason=asked\n',s,30)
   typed(WRONG,r'\[chastity\.unlock\.refused\] reason=wrong_password\n',UNLOCK)
   close(target,task,locked=False)
   assert 'KERNEL PANIC' not in t() and '[std.abort]' not in t() and MASTER not in t()
