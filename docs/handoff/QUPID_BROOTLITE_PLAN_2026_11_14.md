@@ -95,6 +95,12 @@ controls and media keys, and gives Music gapless playback.
   with its `.md5`, version picks, `<requires>` dependency resolution incl.
   `script.module.*`, updates), and only running a plugin needs the Python helper.
   Priority: Q13 goes right after Q3, with the Python modules work started in parallel.
+  Done so far: the Python modules (#242), and Q13a, `crates/sex-kodi` (no_std): XML
+  reader, Kodi version order, `addon.xml`/`addons.xml` entries, repository `<dir>`s for
+  Kodi 21, a catalogue (newest version that runs here wins; `xbmc.python` 2 addons are
+  refused), an install plan through `<requires>`, MD5/SHA checksums and checked zip
+  unpacking. Next, Q13b: Qupid adds a repository from its zip or URL, fetches and
+  checks `addons.xml`, browses plugins, installs a plan into its addon folder.
 - **Q9-Q12** as in the table, each after a short report where it is large (Q11).
 
 Order: Q2 and Q3 wait for #183 to merge (Play's main loop changes there) and for the

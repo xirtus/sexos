@@ -52,6 +52,9 @@ fn run_inner(options: Options, frame: &mut dyn FnMut(&egui::Context, egui::RawIn
             match event {
                 WinEvent::Close => closing = true,
                 WinEvent::Resize { .. } => resized = true,
+                // This backend has no drop target bridge yet. Do not turn a
+                // Shell drag notification into a pointer or keyboard event.
+                WinEvent::Drop { .. } | WinEvent::DragEnded { .. } => {},
                 WinEvent::Key(key) => {
                     modifiers = keys::modifiers(key.shift, key.control);
                     keys::key_events(key.code, key.shift, key.control, sex_app::text(key), &clipboard, &mut events);
