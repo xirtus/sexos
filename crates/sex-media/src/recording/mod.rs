@@ -3,7 +3,7 @@
 //! through the caller's normal main loop before submitting another frame.
 use alloc::boxed::Box;
 use core::ffi::{c_int, c_void};
-mod output;
+pub(crate) mod output;
 pub use output::{Write, MAX_FILE_BYTES, TURN_BYTES};
 
 pub const MAX_PIXELS: usize = 4 * 1024 * 1024;
@@ -57,9 +57,9 @@ pub enum Drain<'a> {
     NeedFrame,
     End,
 }
-struct Writer {
-    output: output::Output,
-    failure: Option<Error>,
+pub(crate) struct Writer {
+    pub(crate) output: output::Output,
+    pub(crate) failure: Option<Error>,
 }
 
 /// A single-thread-owned encoder. Its C allocator must be provisioned by a
@@ -243,7 +243,7 @@ unsafe extern "C" {
     fn sx_record_free(s: *mut c_void);
 }
 #[cfg(ffmpeg_recording)]
-unsafe extern "C" fn write_bytes(opaque: *mut c_void, bytes: *const u8, size: c_int) -> c_int {
+pub(crate) unsafe extern "C" fn write_bytes(opaque: *mut c_void, bytes: *const u8, size: c_int) -> c_int {
     if opaque.is_null() || size < 0 || (size != 0 && bytes.is_null()) {
         return -22;
     }
@@ -269,7 +269,7 @@ unsafe extern "C" fn write_bytes(opaque: *mut c_void, bytes: *const u8, size: c_
     }
 }
 #[cfg(ffmpeg_recording)]
-unsafe extern "C" fn seek_bytes(opaque: *mut c_void, offset: i64, whence: c_int) -> i64 {
+pub(crate) unsafe extern "C" fn seek_bytes(opaque: *mut c_void, offset: i64, whence: c_int) -> i64 {
     if opaque.is_null() {
         return -22;
     }

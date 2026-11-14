@@ -1011,6 +1011,7 @@ pub fn main() {
                 changed
             }
             Event::Pointer(p) => viewer.pointer(p, window.size()),
+            Event::Drop { .. } | Event::DragEnded { .. } => false,
         };
         if changed { viewer.draw(window); }
     }
