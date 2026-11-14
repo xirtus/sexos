@@ -6,6 +6,7 @@ USERSPACE=[
  r'\[(?:sexinput\.(?:ps2\.scancode|key\.(?:send|rejected)|kbd\.recv)|input\.keyboard\.key(?:down|up)\.ok)\][^\n]*\b(?:raw|key|code|mod|modifiers)=',
  r'\[(?:silk-shell\.(?:hid\.(?:raw|recv)|key\.(?:recv|route))|silk\.key\.route|shell\.(?:key\.ev_key\.received|browser\.input|key\.action|kbd\.ui\.(?:consume|action)))[^\n]*\b(?:a[012]|key|code|scancode|mod|value|printable)=',
  r'\[(?:usb\.keyboard\.shell\.recv|shell\.media\.key|(?:bell|atlas|collar)\.key\.recv)\][^\n]*\b(?:key|code|mod)=',
+ r'\[silk\.text\.append\][^\n]*\bch=',
  r'\[sexusb\.input\.rejected\][^\n]*\barg[012]=',
  r'\[(?:keyboard_cursor\.key|keyboard\.cursor\.debug\.(?:keytrace|move|click))\][^\n]*\b(?:key|code)=',
  # CLI echo remains intentionally useful, but can never receive vault-focused keys.

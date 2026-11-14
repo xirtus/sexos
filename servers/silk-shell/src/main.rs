@@ -3802,8 +3802,7 @@ unsafe fn silk_text_sink_key(scancode: u8, value: u64) -> bool {
         if SILK_TEXT_LEN < SILK_TEXT_SINK_CAP {
             SILK_TEXT_BUF[SILK_TEXT_LEN] = ch;
             SILK_TEXT_LEN += 1;
-            serial_println!("[silk.text.append] surface={} len={} ch={}",
-                SILK_TEXT_SINK_SID, SILK_TEXT_LEN, ch as char);
+            sex_pdx::serial_input_record!(("[silk.text.append] surface={} len={} payload=redacted",SILK_TEXT_SINK_SID,SILK_TEXT_LEN); ("[silk.text.append] surface={} len={} ch={}",SILK_TEXT_SINK_SID,SILK_TEXT_LEN,ch as char));
             let ok = silk_text_sink_redraw();
             if ok && !SILK_TEXT_PROOF_DONE_EMITTED {
                 SILK_TEXT_PROOF_DONE_EMITTED = true;
