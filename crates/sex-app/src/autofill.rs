@@ -102,6 +102,7 @@ enum ClientPhase {
     Origin,
     Consent,
     Data,
+    Cancelling,
     Done,
 }
 pub struct Client {
@@ -119,6 +120,7 @@ pub struct Client {
     deadline: u64,
     last: u64,
     failed: Option<Error>,
+    cancel_at: u64,
 }
 static SEQUENCE: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 impl Client {
@@ -149,18 +151,23 @@ impl Client {
             deadline: now.saturating_add(w::CONSENT_TICKS),
             last: now,
             failed: None,
+            cancel_at: 0,
         })
     }
     pub fn active(&self) -> bool {
         self.phase != ClientPhase::Done
     }
+    /// Wipe immediately and retain this object/poll until the broker confirms
+    /// cancellation. A close/retired run is also revoked by native lifecycle.
     pub fn cancel(&mut self) {
-        if self.token != 0 {
-            send(&w::Packet::new(w::CANCEL, self.token as u64, self.epoch, 0));
-        } else {
-            send(&w::Packet::new(w::CANCEL, 0, 0, self.sequence as u64));
+        if self.phase == ClientPhase::Done {
+            return;
         }
-        self.fail(Error::Declined);
+        self.bytes.as_mut_slice().zeroize();
+        self.origin.as_mut_slice().zeroize();
+        self.phase = ClientPhase::Cancelling;
+        self.failed = None;
+        self.cancel_at = 0;
     }
     fn fail(&mut self, error: Error) {
         self.bytes.as_mut_slice().zeroize();
@@ -192,7 +199,20 @@ impl Client {
             } else {
                 p.args[2]
             };
-            if p.opcode == w::STATUS {
+            if p.opcode == w::CANCELLED
+                && self.phase == ClientPhase::Cancelling
+                && w::Subject::decode(c) == Some(self.subject)
+            {
+                let (id, epoch) = if self.token == 0 {
+                    (self.sequence, 0)
+                } else {
+                    (self.token, self.epoch)
+                };
+                if a == id as u64 && b == epoch {
+                    self.fail(Error::Declined);
+                    break;
+                }
+            } else if p.opcode == w::STATUS {
                 let id = if self.token == 0 {
                     self.sequence
                 } else {
@@ -282,7 +302,18 @@ impl Client {
         if let Some(e) = self.failed.take() {
             return Some(Err(e));
         }
-        if self.phase == ClientPhase::Begin {
+        if self.phase == ClientPhase::Cancelling {
+            if now >= self.cancel_at {
+                let packet = if self.token == 0 {
+                    w::Packet::new(w::CANCEL, 0, 0, self.sequence as u64)
+                } else {
+                    w::Packet::new(w::CANCEL, self.token as u64, self.epoch, 0)
+                };
+                if send(&packet) {
+                    self.cancel_at = now.saturating_add(100);
+                }
+            }
+        } else if self.phase == ClientPhase::Begin {
             if send(&w::Packet::new(
                 w::BEGIN,
                 self.sequence as u64,
@@ -340,6 +371,9 @@ pub struct Provider {
     header_acked: bool,
     waiting: bool,
     finishing: bool,
+    closing: bool,
+    closed: bool,
+    revoke_at: u64,
     last: u64,
 }
 impl Provider {
@@ -361,6 +395,9 @@ impl Provider {
             header_acked: false,
             waiting: false,
             finishing: false,
+            closing: false,
+            closed: false,
+            revoke_at: 0,
             last: 0,
         })
     }
@@ -406,10 +443,20 @@ impl Provider {
         }
         self.clear();
     }
+    /// Local secrets are wiped now; keep polling this provider until revoked()
+    /// before reporting completed Lock or opening a new provider epoch.
     pub fn close(&mut self) {
-        send(&w::Packet::new(w::UNREGISTER, self.epoch, 0, 0));
         self.clear();
         self.registered = false;
+        self.closing = true;
+        self.closed = false;
+        self.revoke_at = 0;
+    }
+    pub fn revoked(&self) -> bool {
+        self.closed
+    }
+    pub fn closing(&self) -> bool {
+        self.closing
     }
     pub fn allow(&mut self, username: &str, password: &str, now: u64) -> Result<(), Error> {
         if self.offer().is_none()
@@ -429,8 +476,11 @@ impl Provider {
         Ok(())
     }
     pub fn poll(&mut self, now: u64) {
+        if self.closed {
+            return;
+        }
         if now < self.last {
-            self.deny();
+            self.close();
         }
         self.last = now;
         if self.request.as_ref().is_some_and(|r| now >= r.deadline) {
@@ -447,6 +497,13 @@ impl Provider {
             } else {
                 p.args[2]
             };
+            if self.closing {
+                if p.opcode == w::REVOKED && a == self.epoch && b == self.subject.word() && c == 0 {
+                    self.closing = false;
+                    self.closed = true;
+                }
+                continue;
+            }
             if p.opcode == w::REGISTERED && a == self.epoch && b == self.subject.word() && c == 0 {
                 self.registered = true;
             } else if p.opcode == w::OFFER
@@ -516,6 +573,15 @@ impl Provider {
                     }
                 }
             }
+        }
+        if self.closed {
+            return;
+        }
+        if self.closing {
+            if now >= self.revoke_at && send(&w::Packet::new(w::UNREGISTER, self.epoch, 0, 0)) {
+                self.revoke_at = now.saturating_add(100);
+            }
+            return;
         }
         if !self.registered && now >= self.register_at {
             if send(&w::Packet::new(w::REGISTER, self.epoch, 0, 0)) {

@@ -14,6 +14,7 @@ mod linen_text_delivery;
 mod launcher;
 mod clipboard;
 mod autofill;
+use autofill as autofill_broker;
 mod autofill_routes;
 mod app_input;
 mod wm;
