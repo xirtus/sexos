@@ -6,11 +6,77 @@
 //! as many as the window's text holds. The window opens with the first output or read,
 //! so a program that never prints opens none. Input is a line typed into the window,
 //! echoed as it is typed, with Backspace; closing the window ends input.
+//!
+//! A program that writes an escape sequence (colours, cursor movement, clearing: what
+//! command-line ports print) turns the window into a real terminal: a VT100/xterm screen
+//! (`sex-vt`) drawn in the window's pixels, with what was printed before carried over,
+//! scrollback on the wheel and Shift+PageUp, and the terminal's answers (a cursor
+//! position report, say) arriving on standard input as they would from a terminal.
+//!
+//! A run that a terminal started (`sex_pdx::console_relay`) has no window at all: its
+//! output and input go through Files to that terminal, Ctrl+C there ends it (at its next
+//! read or write) and Ctrl+D ends its input.
 use sex_app::{Event, Window};
 use sex_pdx::text_region::BYTES as SHOWN;
 use std::sync::Mutex;
 
+/// The window as a terminal, once the program wrote an escape sequence.
+struct Vt {
+    screen: sex_vt::Screen,
+    parser: sex_vt::Parser,
+    painter: sex_vt::render::Painter,
+    cache: Box<sex_vt::render::Cache>,
+    size: (usize, usize),
+    after_cr: bool,
+}
+impl Vt {
+    fn new() -> Box<Vt> {
+        let (w, h) = window_mut().size();
+        let (cw, ch) = sex_vt::render::cell_for_height(18);
+        let painter = sex_vt::render::Painter::new(cw, ch);
+        let (cols, rows) = painter.grid(w, h);
+        // An empty cache is all zeroes; building it on the stack would not fit.
+        let cache = unsafe { Box::<sex_vt::render::Cache>::new_zeroed().assume_init() };
+        Box::new(Vt { screen: sex_vt::Screen::new(cols, rows), parser: sex_vt::Parser::new(), painter, cache, size: (w.max(32), h.max(32)), after_cr: false })
+    }
+    /// Output, with lone newlines as CR LF (a terminal's output processing).
+    fn feed(&mut self, bytes: &[u8]) {
+        let mut start = 0;
+        for (i, &b) in bytes.iter().enumerate() {
+            if b == b'\n' && !(if i == 0 { self.after_cr } else { bytes[i - 1] == b'\r' }) {
+                self.screen.feed(&mut self.parser, &bytes[start..i]);
+                self.screen.feed(&mut self.parser, b"\r\n");
+                start = i + 1;
+            }
+        }
+        self.screen.feed(&mut self.parser, &bytes[start..]);
+        if let Some(&last) = bytes.last() { self.after_cr = last == b'\r'; }
+        // The terminal's answers are input, as from a real terminal.
+        let replies = self.screen.take_replies();
+        if !replies.is_empty() { PENDING.lock().unwrap_or_else(|e| e.into_inner()).extend_from_slice(&replies); }
+    }
+    fn resize(&mut self, w: usize, h: usize) {
+        self.size = (w.max(32), h.max(32));
+        let (cols, rows) = self.painter.grid(self.size.0, self.size.1);
+        self.screen.resize(cols, rows);
+    }
+    fn draw(&mut self) {
+        let window = window_mut();
+        if let Some(title) = self.screen.take_title() { let t = title.to_vec(); window.title(&t); }
+        let dirty = self.screen.take_dirty();
+        if !dirty.iter().any(|d| *d) { return; }
+        let (w, h) = self.size;
+        let pixels = window.pixels();
+        if pixels.len() < w * h { return; }
+        self.painter.draw(&self.screen, &dirty, &mut self.cache, &mut pixels[..w * h], w, true);
+        let used = self.screen.rows() * self.painter.cell_h;
+        if used < h { pixels[used * w..h * w].fill(sex_vt::DEFAULT_BG); }
+        window.show_pixels(w, h);
+    }
+}
+
 struct Console {
+    vt: Option<Box<Vt>>,
     /// What the window shows (when it is a console): the newest output.
     text: Vec<u8>,
     /// The line each stream is gathering for the serial record.
@@ -20,7 +86,7 @@ struct Console {
     closed: bool,
 }
 
-static CONSOLE: Mutex<Console> = Mutex::new(Console { text: Vec::new(), lines: [Vec::new(), Vec::new()], opened: false, closed: false });
+static CONSOLE: Mutex<Console> = Mutex::new(Console { vt: None, text: Vec::new(), lines: [Vec::new(), Vec::new()], opened: false, closed: false });
 static mut WINDOW: Option<Window> = None;
 /// Set once the program has the window for itself.
 static TAKEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -45,6 +111,7 @@ impl Console {
     fn show(&mut self) {
         if taken() || self.closed { return; }
         self.opened = true;
+        if let Some(vt) = self.vt.as_mut() { vt.draw(); return; }
         let cap = SHOWN as usize - 64;
         if self.text.len() > cap {
             // Keep whole lines.
@@ -62,12 +129,68 @@ impl Console {
 }
 
 /// Writes `bytes` to standard output (`stream` 0) or standard error (1).
+/// Whether a terminal holds this run's console: asked of Files once.
+fn attached() -> bool {
+    use std::sync::atomic::{AtomicU8, Ordering};
+    static ATTACHED: AtomicU8 = AtomicU8::new(0);
+    match ATTACHED.load(Ordering::Acquire) {
+        0 => { let yes = sex_app::files::direct::relay::attached(); ATTACHED.store(1 + yes as u8, Ordering::Release); yes }
+        n => n == 2,
+    }
+}
+/// Ctrl+C in the terminal: the run ends as a terminal's interrupt would end it.
+fn interrupted() -> ! {
+    sex_pdx::serial_record!("[std.interrupted]");
+    crate::sys::sys_exit(130)
+}
+/// All of `bytes` to the terminal, waiting while it is behind.
+fn relay_write(bytes: &[u8]) {
+    use sex_pdx::console_relay as r;
+    let (mut done, mut round) = (0, 0);
+    while done < bytes.len() {
+        match sex_app::files::direct::relay::write(&bytes[done..]) {
+            Ok(0) => { sex_app::thread::pause(round); round += 1; }
+            Ok(n) => { done += n; round = 0; }
+            Err(r::INTERRUPTED) => interrupted(),
+            Err(_) => return,
+        }
+    }
+}
+/// Typed input from the terminal: waits for some; 0 at the end of input.
+fn relay_read(out: &mut [u8], wait: bool) -> usize {
+    use sex_pdx::console_relay as r;
+    let mut round = 0;
+    loop {
+        match sex_app::files::direct::relay::read(out) {
+            Ok(0) if wait => { sex_app::thread::pause(round); round += 1; }
+            Ok(n) => return n,
+            Err(r::INTERRUPTED) => interrupted(),
+            Err(_) => { if let Ok(mut c) = CONSOLE.lock() { c.closed = true; } return 0; }
+        }
+    }
+}
+
 pub(crate) fn write(stream: usize, bytes: &[u8]) {
     let Ok(mut c) = CONSOLE.lock() else { return };
     for &b in bytes {
         if b == b'\n' { c.record(stream); } else if c.lines[stream].len() < 400 { c.lines[stream].push(b); } else { c.record(stream); c.lines[stream].push(b); }
     }
-    c.text.extend_from_slice(bytes);
+    if !taken() && attached() { drop(c); relay_write(bytes); return; }
+    if c.vt.is_none() && !taken() && bytes.contains(&0x1b) {
+        // The first escape sequence: from here on the window is a terminal, starting
+        // with what was printed before.
+        let mut vt = Vt::new();
+        let before = core::mem::take(&mut c.text);
+        vt.feed(&before);
+        c.vt = Some(vt);
+    }
+    match c.vt.as_mut() { Some(vt) => vt.feed(bytes), None => c.text.extend_from_slice(bytes) }
+    c.show();
+}
+
+/// Echo of typed input, through the terminal when there is one.
+fn echo(c: &mut Console, bytes: &[u8]) {
+    match c.vt.as_mut() { Some(vt) => vt.feed(bytes), None => c.text.extend_from_slice(bytes) }
     c.show();
 }
 
@@ -86,6 +209,13 @@ static TYPING: Mutex<Vec<u8>> = Mutex::new(Vec::new());
 /// 0 when the window was closed.
 pub(crate) fn read(out: &mut [u8]) -> usize {
     let mut pending = PENDING.lock().unwrap_or_else(|e| e.into_inner());
+    if pending.is_empty() && !taken() && attached() {
+        if closed() { return 0; }
+        let mut got = vec![0u8; out.len().clamp(1, sex_pdx::console_relay::INPUT_BYTES)];
+        let n = relay_read(&mut got, true);
+        if n == 0 { return 0; }
+        pending.extend_from_slice(&got[..n]);
+    }
     if pending.is_empty() {
         if let Ok(mut c) = CONSOLE.lock() { c.show(); }
         loop {
@@ -108,6 +238,12 @@ pub(crate) fn input_ready() -> bool {
     if taken() { return false; }
     let mut pending = PENDING.lock().unwrap_or_else(|e| e.into_inner());
     if !pending.is_empty() || closed() { return true; }
+    if attached() {
+        let mut got = [0u8; 512];
+        let n = relay_read(&mut got, false);
+        pending.extend_from_slice(&got[..n]);
+        return n > 0 || closed();
+    }
     if let Ok(mut c) = CONSOLE.lock() { if !c.opened { c.show(); } }
     while let Some(event) = window_mut().poll() {
         if let Some(line) = take(event) { *pending = line; return true; }
@@ -125,12 +261,37 @@ fn take(event: Event) -> Option<Vec<u8>> {
             // One character back, with every byte of it.
             if !line.is_empty() {
                 let mut c = CONSOLE.lock().ok()?;
+                let mut gone = 0;
                 while let Some(b) = line.pop() {
-                    c.text.pop();
+                    gone += 1;
                     if b & 0xC0 != 0x80 { break; }
                 }
+                if c.vt.is_some() { echo(&mut c, b"\x08 \x08"); } else { for _ in 0..gone { c.text.pop(); } }
                 c.show();
             }
+            None
+        }
+        Event::Resize { width, height } => {
+            let mut c = CONSOLE.lock().ok()?;
+            if let Some(vt) = c.vt.as_mut() { vt.resize(width, height); }
+            c.show();
+            None
+        }
+        Event::Pointer(p) => {
+            if let sex_pdx::app_pointer::Kind::Wheel { steps } = p.kind {
+                let mut c = CONSOLE.lock().ok()?;
+                if let Some(vt) = c.vt.as_mut() { vt.screen.scroll_view(steps as isize * 3); }
+                c.show();
+            }
+            None
+        }
+        Event::Key(key) if key.shift && matches!(key.code, 0x49 | 0x68 | 0x51 | 0x6D) => {
+            let mut c = CONSOLE.lock().ok()?;
+            if let Some(vt) = c.vt.as_mut() {
+                let page = vt.screen.rows() as isize - 1;
+                vt.screen.scroll_view(if matches!(key.code, 0x49 | 0x68) { page } else { -page });
+            }
+            c.show();
             None
         }
         Event::Key(key) => {
@@ -139,8 +300,7 @@ fn take(event: Event) -> Option<Vec<u8>> {
             let bytes = ch.encode_utf8(&mut utf8).as_bytes();
             line.extend_from_slice(bytes);
             let mut c = CONSOLE.lock().ok()?;
-            c.text.extend_from_slice(bytes);
-            c.show();
+            echo(&mut c, bytes);
             if ch == '\n' { Some(std::mem::take(&mut *line)) } else { None }
         }
         _ => None,
@@ -149,14 +309,18 @@ fn take(event: Event) -> Option<Vec<u8>> {
 
 /// When the program ends: a console that showed output stays until the person has read
 /// it and closes the window, with how the program ended as its last line.
+/// The run ends with `code`: a terminal holding its console is told.
+pub(crate) fn ended(code: i32) {
+    if !taken() && attached() { sex_app::files::direct::relay::exit(code as u32 & 0xFFFF); }
+}
 pub(crate) fn finish(how: &str) {
     flush();
+    if attached() { return; }
     let wait = {
         let Ok(mut c) = CONSOLE.lock() else { return };
         if !c.opened || c.closed || taken() { false } else {
             let line = format!("\n[{how}. Close the window to dismiss.]");
-            c.text.extend_from_slice(line.as_bytes());
-            c.show();
+            echo(&mut c, line.as_bytes());
             true
         }
     };

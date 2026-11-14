@@ -33,9 +33,9 @@ python3 - "$ROOT_DIR" "$TEST_DIR" <<'PY_IMAGE'
 from pathlib import Path
 import sys
 root,out=map(Path,sys.argv[1:]);text=(root/'servers/sexfiles/src/fs_service.rs').read_text();parts=[]
-for prefix in ['static mut LOADED:', 'static mut LOADED_ARGS:', 'static mut PREPARED:', 'static mut PREPARED_ARGS:', 'pub enum Program ']:
+for prefix in ['static mut LOADED:', 'static mut LOADED_ARGS:', 'static mut PREPARED:', 'static mut PREPARED_ARGS:', 'static mut PREPARED_LAUNCHER:', 'static mut LOADED_LAUNCHER:', 'pub enum Program ']:
  parts.append(next(line for line in text.splitlines()if line.startswith(prefix)))
-for name in ['loaded','read_program','read_named','read_named_unbound','read_ticket']:
+for name in ['loaded','read_program','read_named','read_named_unbound','load_failed','read_ticket']:
  a=text.index('fn '+name+'(');a=text.rfind('\n',0,a)+1;i=text.index('{',a)+1;depth=1
  while depth:depth+=(text[i]=='{')-(text[i]=='}');i+=1
  parts.append(text[a:i])

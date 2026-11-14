@@ -116,6 +116,13 @@ pub trait Host {
     fn fetch(&mut self, _url: &[u8], _out: &mut [u8]) -> Result<(u32, usize), Refusal> { Err(Refusal::NotAllowed) }
     /// Nanoseconds since boot.
     fn now(&mut self) -> u64 { 0 }
+    /// A terminal host takes the guest's stdout and stderr as raw bytes, escape
+    /// sequences and all, and returns `true`; then nothing goes to [`Host::show`].
+    fn console(&mut self, _bytes: &[u8]) -> bool { false }
+    /// A terminal host supplies standard input itself (its own line editing and echo):
+    /// `Some(n)` bytes placed in `out` (0 is end of input). `None`, the default, keeps
+    /// the built-in line editor over [`Host::next`].
+    fn input(&mut self, _out: &mut [u8]) -> Option<usize> { None }
     /// Random bytes. The default is a non-cryptographic generator seeded from the clock;
     /// a host with a hardware source should override it.
     fn random(&mut self, out: &mut [u8]) {
@@ -216,6 +223,7 @@ impl<H: Host> State<H> {
         Ok(full)
     }
     fn print(&mut self, bytes: &[u8]) {
+        if self.host.console(bytes) { return; }
         self.console.extend_from_slice(bytes);
         let keep = self.limits.console_bytes;
         if self.console.len() > keep * 2 { let cut = self.console.len() - keep; self.console.drain(..cut); }
@@ -385,6 +393,16 @@ fn link_wasi<H: Host + 'static>(linker: &mut Linker<State<H>>) -> Result<(), was
             let vecs = iovecs(d, iovs, count)?;
             // A read with nowhere to put bytes takes no input.
             if vecs.iter().all(|r| r.is_empty()) { put_u32(d, read, 0)?; return Ok(errno::SUCCESS); }
+            // A terminal host fills the first buffer straight from its input stream.
+            if s.pending.is_empty() {
+                if let Some(first) = vecs.iter().find(|r| !r.is_empty()) {
+                    if let Some(n) = s.host.input(&mut d[first.clone()]) {
+                        if n == 0 { s.closed = true; }
+                        put_u32(d, read, n as u32)?;
+                        return Ok(errno::SUCCESS);
+                    }
+                }
+            }
             if s.pending.is_empty() && !s.closed {
                 let mut line = Vec::new();
                 loop {

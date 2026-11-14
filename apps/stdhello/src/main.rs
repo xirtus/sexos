@@ -11,6 +11,32 @@ use sex_std as _;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    // `run stdhello vt`: the console as a terminal. Colours, a cursor move, and a cursor
+    // position report whose answer arrives on standard input, as from any terminal.
+    if args.get(1).map(String::as_str) == Some("vt") {
+        print!("\x1b[2J\x1b[H\x1b[1;31mred\x1b[0m \x1b[42mgreen\x1b[0m\x1b[3;5Hthird row\x1b[6n");
+        let _ = std::io::Write::flush(&mut std::io::stdout());
+        let mut reply = [0u8; 32];
+        let n = std::io::Read::read(&mut std::io::stdin(), &mut reply).unwrap_or(0);
+        let reply = String::from_utf8_lossy(&reply[..n]).replace('\x1b', "ESC");
+        println!("\n[stdhello.vt] reply={reply}");
+        return;
+    }
+    // `stdhello echo`: lines in, lines out, until the end of input (Term's Ctrl+D).
+    if args.get(1).map(String::as_str) == Some("echo") {
+        let mut lines = 0;
+        for line in std::io::BufRead::lines(std::io::stdin().lock()) {
+            let Ok(line) = line else { break };
+            lines += 1;
+            println!("got: {}", line.to_uppercase());
+        }
+        println!("[stdhello.echo] lines={lines}");
+        std::process::exit(3);
+    }
+    // `stdhello count`: output until stopped (Term's Ctrl+C).
+    if args.get(1).map(String::as_str) == Some("count") {
+        for i in 0u64.. { println!("count {i}"); std::thread::sleep(std::time::Duration::from_millis(20)); }
+    }
     println!("Hello from Rust std on SexOS.");
     println!("arguments: {:?}", &args[1..]);
     let mut passed = 0;
