@@ -1,0 +1,1 @@
+<?xml version="1.0" encoding="UTF-8"?><addon id="plugin.video.sample" version="1.2.3" name="Sample" provider-name="Team"><requires><import addon="xbmc.python" version="3.0.0"/></requires><extension point="xbmc.python.pluginsource" library="default.py"/></addon>
