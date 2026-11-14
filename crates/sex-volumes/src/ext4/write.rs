@@ -402,7 +402,8 @@ impl Ext4 {
 
     fn check_dir(dir: &Inode, adding: bool) -> Result<()> {
         if dir.kind() != S_IFDIR { return Err(Error::NotDir); }
-        if dir.flags & FL_EXTENTS == 0 || dir.flags & (FL_INLINE | FL_ENCRYPT | FL_CASEFOLD) != 0 || adding && dir.flags & FL_INDEX != 0 { return Err(Error::Unsupported); }
+        if dir.flags & FL_EXTENTS == 0 || dir.flags & (FL_INLINE | FL_ENCRYPT | FL_CASEFOLD) != 0 { return Err(Error::Unsupported); }
+        let _ = adding;
         Ok(())
     }
     fn tail(&self, dno: u32, dir_raw: &[u8], b: &mut [u8]) {
@@ -439,6 +440,7 @@ impl Ext4 {
     fn link(&mut self, disk: &mut dyn Disk, dno: u32, name: &[u8], ino: u32, ftype: u8) -> Result<()> {
         let mut dir = self.inode(disk, dno)?;
         Self::check_dir(&dir, true)?;
+        if dir.flags & FL_INDEX != 0 { self.unindex(disk, dno, &mut dir)?; }
         let need = rec_for(name.len());
         let put_entry = |b: &mut [u8], at: usize, rec: usize| {
             put32(b, at, ino);
@@ -476,6 +478,34 @@ impl Ext4 {
         Self::set_size(&mut dir.raw, (l + 1) * self.bs);
         self.touch(&mut dir.raw);
         self.put_inode(disk, dno, &mut dir.raw)
+    }
+    /// An indexed (htree) directory becomes a plain one, so a name can go anywhere: its
+    /// index blocks become empty entry blocks and the flag goes. Every name stays where
+    /// it was. Linux reads it as it is, and `e2fsck -D` indexes it again.
+    fn unindex(&mut self, disk: &mut dyn Disk, dno: u32, dir: &mut Inode) -> Result<()> {
+        let limit = self.bs as usize - if self.w.csum { 12 } else { 0 };
+        for (l, p) in self.dir_blocks(disk, dir)? {
+            let mut b = self.block(disk, p)?;
+            if self.chain(&b).is_some() && l != 0 { continue; }
+            if l == 0 {
+                // The root: ".", then ".." whose record ran over the index to the end.
+                if &b[8..9] != b"." || le16(&b, 4) != 12 || &b[20..22] != b".." { return Err(Error::Corrupt); }
+                b[24..].fill(0);
+                put16(&mut b, 16, (limit - 12) as u16);
+            } else {
+                // An interior index node: an unused entry over the whole block.
+                if le32(&b, 0) != 0 || le16(&b, 4) as u64 != self.bs { return Err(Error::Corrupt); }
+                b.fill(0);
+                put16(&mut b, 4, limit as u16);
+            }
+            self.tail(dno, &dir.raw, &mut b);
+            write_bytes(disk, p * self.bs, &b)?;
+        }
+        dir.flags &= !FL_INDEX;
+        put32(&mut dir.raw, 0x20, dir.flags);
+        self.put_inode(disk, dno, &mut dir.raw)?;
+        *dir = self.inode(disk, dno)?;
+        Ok(())
     }
     /// Takes `name` out of directory `dno`; returns its inode number.
     fn unlink(&mut self, disk: &mut dyn Disk, dno: u32, name: &[u8]) -> Result<u32> {
