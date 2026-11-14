@@ -4300,3 +4300,7 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   runtime validation is pending before merge. Independent review fixes are included.
 - Snapshots require a new filename (existing files are never replaced). Exact
   compatibility, security boundary and limitations: `CHASTITY_2026_11_14.md`.
+- Round175 review follow-up: editor startup loads supplied documents; unseen paths
+  use exclusive CREATE, and replacement requires a successfully loaded/currently
+  created exact route. Seven host tests include preservation of an existing unseen
+  file; QEMU gate attempts a blocked overwrite and verifies the original hash.
