@@ -410,6 +410,58 @@ pub mod files {
             exchange(None, kind, path, offset, 0, |_| {}, |_, _| ())
         }
 
+        /// A console attached to a terminal, and a terminal's side of it
+        /// (`sex_pdx::console_relay`): bytes through Files, no window.
+        pub mod relay {
+            use super::{exchange, w, Error};
+            use sex_pdx::console_relay as c;
+            fn op(offset: u64, length: u64) -> Result<u32, Error> { exchange(None, c::KIND, b"", offset, length, |_| {}, |n, _| n) }
+            /// Whether this run's console belongs to a terminal.
+            pub fn attached() -> bool { op(c::ATTACHED, 0).is_ok() }
+            /// Output: how many bytes the terminal took (fewer when it is behind).
+            pub fn write(bytes: &[u8]) -> Result<usize, Error> {
+                let n = bytes.len().min(c::OUTPUT_BYTES);
+                exchange(None, c::KIND, b"", c::WRITE, n as u64, |d| d[..n].copy_from_slice(&bytes[..n]), |n, _| n as usize)
+            }
+            /// Input typed so far (0 bytes: none yet). `Err(c::INTERRUPTED)` after Ctrl+C,
+            /// `Err(c::HUNG_UP)` at the end of input.
+            pub fn read(out: &mut [u8]) -> Result<usize, Error> {
+                let want = out.len().min(c::INPUT_BYTES);
+                exchange(None, c::KIND, b"", c::READ, want as u64, |_| {}, |n, d| { let n = (n as usize).min(want); out[..n].copy_from_slice(&d[..n]); n })
+            }
+            /// The run ends with `code`.
+            pub fn exit(code: u32) { let _ = op(c::EXIT, code as u64); }
+
+            /// Terminal: prepares `/bin/NAME` with `args` (only plain words reach it) and asks
+            /// Shell to start it attached here. Needs the `+launch` grant (Spindle's `spindle` command).
+            pub fn start(name: &[u8], args: &[u8]) -> Result<(), Error> {
+                let bin = sex_pdx::program_store::BIN;
+                let mut path = alloc::vec::Vec::with_capacity(bin.len() + name.len());
+                path.extend_from_slice(bin); path.extend_from_slice(name);
+                let n = args.len().min(w::ARGS_MAX);
+                let ticket = exchange(None, w::PREPARE, &path, 0, n as u64, |d| d[..n].copy_from_slice(&args[..n]), |t, _| t)?;
+                sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL, sex_pdx::program_store::OP_RUN, sex_pdx::program_store::TICKET, ticket as u64, 0)
+                    .map(|_| ()).map_err(|_| w::UNAVAILABLE)
+            }
+            /// Terminal: input for the run; how many bytes it took.
+            pub fn put(bytes: &[u8]) -> Result<usize, Error> {
+                let n = bytes.len().min(c::INPUT_BYTES);
+                exchange(None, c::KIND, b"", c::PUT, n as u64, |d| d[..n].copy_from_slice(&bytes[..n]), |n, _| n as usize)
+            }
+            /// Terminal: the run's state and its output since the last call.
+            pub fn take() -> Result<(c::Status, alloc::vec::Vec<u8>), Error> {
+                let want = c::STATUS_BYTES + c::OUTPUT_BYTES;
+                exchange(None, c::KIND, b"", c::TAKE, want as u64, |_| {}, |n, d| {
+                    let n = (n as usize).min(c::OUTPUT_BYTES);
+                    (c::Status::decode(d), d[c::STATUS_BYTES..c::STATUS_BYTES + n].to_vec())
+                })
+            }
+            pub fn interrupt() -> Result<(), Error> { op(c::INTERRUPT, 0).map(|_| ()) }
+            pub fn hang_up() -> Result<(), Error> { op(c::HANG_UP, 0).map(|_| ()) }
+            /// Terminal: forget the run that ended, so another can start.
+            pub fn release() -> Result<(), Error> { op(c::RELEASE, 0).map(|_| ()) }
+        }
+
         /// The words typed after the program's name, if it was started with any.
         pub fn args(out: &mut [u8; w::ARGS_MAX]) -> usize { args_into(None, out) }
         /// Reads up to `out.len()` bytes from byte `offset`; fewer at the file's end.
@@ -1044,6 +1096,23 @@ pub mod net {
             }
             /// Sends this side's FIN after what is queued.
             pub fn shutdown(&self) -> Result<(), Error> { ok(simple(self.flow, w::SHUTDOWN, 0)?).map(|_| ()) }
+            /// Starts TLS on an open connection to `host` (its name for SNI and the
+            /// certificate check). Sends and receives carry plain bytes from then on.
+            pub fn tls_start(&self, host: &[u8]) -> Result<(), Error> {
+                if host.is_empty() || host.len() > 253 { return Err(Error::Address); }
+                ok(exchange(self.flow, w::TLS_START, host.len() as u64, |d| d[..host.len()].copy_from_slice(host), |r, _| r)?).map(|_| ())
+            }
+            /// Where the TLS handshake is: `None` while it runs, then ready or failed.
+            pub fn tls_stage(&self) -> Result<Option<()>, Error> {
+                match ok(simple(self.flow, w::TLS_STAGE, 0)?)? {
+                    w::TLS_READY => Ok(Some(())),
+                    w::TLS_HANDSHAKE => Ok(None),
+                    w::TLS_FAILED_CERTIFICATE => Err(Error::Certificate),
+                    _ => Err(Error::Secure),
+                }
+            }
+            /// Moves what was sent over TLS on to the wire now.
+            pub fn flush(&self) -> Result<(), Error> { ok(simple(self.flow, w::FINISH_REQUEST, 0)?).map(|_| ()) }
             /// Queues one datagram: false when there is no room yet.
             pub fn send_to(&self, bytes: &[u8], to: &IpAddr, port: u16) -> Result<bool, Error> {
                 if bytes.len() > w::REGION_BYTES - w::ENDPOINT_BYTES { return Err(Error::TooLarge); }
