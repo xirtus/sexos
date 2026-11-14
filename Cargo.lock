@@ -75,6 +75,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "aftercare"
+version = "0.1.0"
+dependencies = [
+ "aftercare-core",
+ "rand_chacha",
+ "rand_core 0.6.4",
+ "sex-std",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "aftercare-core"
 version = "0.1.0"
 dependencies = [
