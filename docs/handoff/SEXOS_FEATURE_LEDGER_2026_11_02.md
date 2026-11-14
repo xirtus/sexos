@@ -4600,3 +4600,42 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   broker/SDK host transport gate. Canonical normal/diagnostic images, strict input
   gates and full exact-head CI remain required. The original dirty checkout and
   historical boot artifacts remain untouched.
+
+## ChatGPT round 188: canonical app proof and native checker repair (2026-11-14)
+- All nine requested app gates pass on the canonical normal image built from
+  `11a94a53`: Moan app/project/export/microphone; Chastity vault and live autofill;
+  Abacus extras; Velvet; and Leather samples. Exact inputs and output hashes were
+  rechecked independently. Moan reopens the exact 768,228-byte edited project after
+  reboot; WAV/FLAC decode sample-exactly and real MP3 passes its signal oracle.
+  Microphone permission/stop/wipe passes with simulated silence, not physical
+  fidelity. Both vault boots and all 12 protected typing intervals pass; the full
+  serial traces contain all 16 redacted read/enqueue records and no raw kernel key records.
+- `CANONICAL_APP_RUNTIME_2026_11_14.json` records exact image/ELF/serial/artifact
+  hashes and limitations. The initial vault launcher stopped before boot because
+  LLVM tools were missing from its command PATH; its original failure is retained.
+  The corrected environment passes without changing source or runtime assertions.
+- The first canonical diagnostic build/boot passes, but all three newly required
+  strict gates expose stale checker assumptions: old title/text origin and bitmap
+  font, an unformatted input disk, and a hardcoded palette count. Original failed
+  frames, serial, bindings and driver output remain unchanged. The captured image
+  now passes every image/guard pixel and every antialiased glyph pixel under the
+  corrected source-selected oracle; that offline check is not a full-gate pass.
+- Native text checks retain approved 26/34-pixel logical title/body metrics and
+  derive source layout, including the renderer's 160-column cap. Every Geist
+  coverage pixel, blank cell, padding and erasure pixel is checked exactly; partial
+  alpha is not skipped. New negatives corrupt partial/zero coverage, old offsets
+  and far-right padding. A compiled production Rust asset-view harness independently
+  checks 24 view/mode combinations and rejects an unapproved title mutation.
+- Literal Rust include assets now enter before/after build source capture and the
+  frozen snapshot: 54 previously omitted inputs, including the actual fonts.
+  Bounds, path confinement, internal aliases, mutation during build and real frozen
+  Rust compilation have regressions. This closes an evidence gap; old snapshots
+  are not retroactively relabeled as complete. Existing TLS vendor checks remain.
+- The diagnostic job copies the genuinely formatted disk from its GREEN canonical
+  boot, verifies the existing workspace/checksums, records hashes and makes the
+  source seed readonly. It never synthesizes headers. Palette checks use the exact
+  declared source count while retaining Browser row 10 and all action/pixel checks.
+- All 1,232 Python regressions pass after the combined repairs. Shared repairs are
+  propagated to component branches alongside the upstream author's four-line Drop
+  compatibility fix. A new font-complete canonical freeze and exact-head full CI
+  remain required. No additional PR has merged; the original dirty tree is untouched.
