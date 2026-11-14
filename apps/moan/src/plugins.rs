@@ -8,6 +8,7 @@ use moan_plugin::job::Parameter;
 use moan_plugin::job::{Format, MAX_FRAMES};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
+    Memory,
     Busy,
     PendingResult,
     Path,
@@ -21,10 +22,11 @@ pub enum Error {
 impl Error {
     pub fn message(self) -> &'static str {
         match self {
+            Self::Memory => "Not enough memory for offline render; free memory and retry",
             Self::Busy => "An offline render is already running",
             Self::PendingResult => "Import the finished render first",
             Self::Path => "Choose a shorter plugin path and render folder without spaces",
-            Self::Frames => "Select audio up to60seconds",
+            Self::Frames => "Select audio up to 60 seconds",
             Self::Entropy => "Random source unavailable; render was not started",
             Self::Launch => "The offline plugin helper could not start",
             Self::Failed => "Offline render failed; original audio kept",
@@ -35,6 +37,7 @@ impl Error {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Status {
+    WaitingForMemory,
     Idle,
     Rendering,
     Cancelling,
@@ -44,6 +47,7 @@ pub enum Status {
 impl Status {
     pub fn label(self) -> &'static str {
         match self {
+            Self::WaitingForMemory => "Completed offline render kept; free memory and retry",
             Self::Idle => "Offline render ready",
             Self::Rendering => "Offline render running",
             Self::Cancelling => "Cancelling offline render; waiting for helper retirement",
@@ -111,16 +115,24 @@ pub fn float_input(pcm: &[Frame]) -> Result<Vec<[f32; 2]>, Error> {
     if pcm.is_empty() || pcm.len() > MAX_FRAMES as usize {
         return Err(Error::Frames);
     }
-    Ok(pcm
-        .iter()
-        .map(|f| [f[0] as f32 / 32768.0, f[1] as f32 / 32768.0])
-        .collect())
+    let mut result = Vec::new();
+    result
+        .try_reserve_exact(pcm.len())
+        .map_err(|_| Error::Memory)?;
+    result.extend(
+        pcm.iter()
+            .map(|f| [f[0] as f32 / 32768.0, f[1] as f32 / 32768.0]),
+    );
+    Ok(result)
 }
 pub fn quantize(pcm: &[[f32; 2]], format: Format) -> Result<Audio, Error> {
     if pcm.is_empty() || pcm.len() > MAX_FRAMES as usize {
         return Err(Error::Frames);
     }
-    let mut frames = Vec::with_capacity(pcm.len());
+    let mut frames = Vec::new();
+    frames
+        .try_reserve_exact(pcm.len())
+        .map_err(|_| Error::Memory)?;
     let mut clipped_samples = 0;
     for f in pcm {
         let mut out = [0; 2];
@@ -172,7 +184,7 @@ pub mod guest {
             self.active.is_some()
         }
         pub fn retired(&self) -> bool {
-            self.active.is_none()
+            self.active.as_ref().is_none_or(|job| job.retired())
         }
         pub fn start(
             &mut self,
@@ -208,7 +220,11 @@ pub mod guest {
                 format,
                 now,
             )
-            .map_err(|_| Error::Launch)?;
+            .map_err(|error| match error {
+                moan_plugin::supervisor::Error::Memory
+                | moan_plugin::supervisor::Error::Job(job::Error::Memory) => Error::Memory,
+                _ => Error::Launch,
+            })?;
             self.active = Some(job);
             self.format = format;
             self.status = Status::Rendering;
@@ -216,6 +232,9 @@ pub mod guest {
         }
         /// Continue polling during cancellation and defer final app exit until retired.
         pub fn poll(&mut self, now: u64) -> bool {
+            if self.status == Status::WaitingForMemory {
+                return false;
+            }
             let before = self.status;
             let Some(job) = self.active.as_mut() else {
                 return false;
@@ -228,21 +247,40 @@ pub mod guest {
                 self.status = Status::Cancelling;
             }
             if job.retired() {
-                self.result = match job.take_result() {
-                    Ok(Some(pcm)) => quantize(&pcm, self.format).ok(),
-                    _ => None,
+                let result = match job.read_result() {
+                    Ok(Some(pcm)) => quantize(&pcm, self.format),
+                    Err(moan_plugin::supervisor::Error::Memory)
+                    | Err(moan_plugin::supervisor::Error::Job(job::Error::Memory)) => {
+                        Err(Error::Memory)
+                    }
+                    _ => Err(Error::Failed),
                 };
-                self.status = if self.result.is_some() {
-                    Status::Ready
-                } else {
-                    Status::Failed
-                };
-                self.active = None;
+                match result {
+                    Ok(audio) => {
+                        job.accept_result();
+                        self.result = Some(audio);
+                        self.status = Status::Ready;
+                        self.active = None;
+                    }
+                    Err(Error::Memory) => self.status = Status::WaitingForMemory,
+                    Err(_) => {
+                        self.status = Status::Failed;
+                        self.active = None;
+                    }
+                }
             }
             before != self.status
         }
+        pub fn retry_result(&mut self) {
+            if self.status == Status::WaitingForMemory {
+                self.status = Status::Rendering;
+            }
+        }
         pub fn cancel(&mut self) {
-            if let Some(job) = self.active.as_mut() {
+            if self.active.as_ref().is_some_and(|job| job.retired()) {
+                self.active = None;
+                self.status = Status::Idle;
+            } else if let Some(job) = self.active.as_mut() {
                 job.cancel();
                 self.status = Status::Cancelling;
             }

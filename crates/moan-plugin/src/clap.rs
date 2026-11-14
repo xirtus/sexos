@@ -13,6 +13,7 @@ use core::{
 };
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
+    Memory,
     Version,
     Factory,
     Plugin,
@@ -165,7 +166,7 @@ impl Processor {
         {
             return Err(Error::Audio);
         }
-        let mut result = Vec::with_capacity(input.len());
+        let mut result = crate::job::buffer(input.len()).map_err(|_| Error::Memory)?;
         let mut ins = [[0f32; BLOCK]; 2];
         let mut outs = [[0f32; BLOCK]; 2];
         let incoming = clap_input_events {

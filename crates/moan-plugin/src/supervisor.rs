@@ -1,10 +1,11 @@
 //! Parent-side offline adapter. Call poll at least once per UI loop and continue
 //! polling after cancel until retired()==true; dropping is only best-effort kill.
 use crate::job::{self, Identity, Job, Status};
-use alloc::{vec, vec::Vec};
+use alloc::vec::Vec;
 use sex_app::{files::direct as files, launch};
 #[derive(Debug)]
 pub enum Error {
+    Memory,
     Job(job::Error),
     Path,
     Files,
@@ -175,16 +176,19 @@ impl OfflineJob {
         }
     }
     /// Consumes at most one result, only after the matching successful retirement.
-    pub fn take_result(&mut self) -> Result<Option<Vec<[f32; 2]>>, Error> {
+    pub fn read_result(&self) -> Result<Option<Vec<[f32; 2]>>, Error> {
         if self.published || !self.retired || self.job.status() != Status::Complete {
             return Ok(None);
         }
-        self.published = true;
         let s = files::stat(&self.output).map_err(|_| Error::Files)?;
         if s.dir || s.size > job::HEADER as u64 + job::MAX_FRAMES as u64 * 8 {
             return Err(Error::Result);
         }
-        let mut bytes = vec![0; s.size as usize];
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(s.size as usize)
+            .map_err(|_| Error::Memory)?;
+        bytes.resize(s.size as usize, 0);
         let mut at = 0;
         while at < bytes.len() {
             let n = files::read_at(&self.output, at as u64, &mut bytes[at..])
@@ -199,6 +203,16 @@ impl OfflineJob {
             return Err(Error::Result);
         }
         self.job.result(&bytes).map(Some).map_err(Error::Job)
+    }
+    pub fn accept_result(&mut self) {
+        self.published = true;
+    }
+    pub fn take_result(&mut self) -> Result<Option<Vec<[f32; 2]>>, Error> {
+        let result = self.read_result()?;
+        if result.is_some() {
+            self.accept_result();
+        }
+        Ok(result)
     }
 }
 impl Drop for OfflineJob {
