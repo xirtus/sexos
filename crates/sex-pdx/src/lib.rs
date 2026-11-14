@@ -1285,6 +1285,7 @@ pub mod wifi_status;
 pub mod notify;
 pub mod desktop_look;
 pub mod window_switcher;
+pub mod screenshot;
 pub mod document_view;
 
 pub mod display_boot;
@@ -1310,5 +1311,8 @@ pub mod clipboard;
 pub mod clipboard_client;
 pub mod app_key;
 pub mod app_pointer;
+pub mod config;
+pub mod clock_zone;
+pub mod screen_state;
 pub mod app_scroll;
 pub mod bitmap_batch;

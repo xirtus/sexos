@@ -17,7 +17,7 @@ def pct(xs,p):
  xs=sorted(xs);return xs[min(len(xs)-1,int(round(p*(len(xs)-1))))]
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800')
- p.add_argument('--keys',type=int,default=40);p.add_argument('--busy',type=int,default=4);p.add_argument('--max-p99-ms',type=float,default=2000.0);a=p.parse_args()
+ p.add_argument('--keys',type=int,default=40);p.add_argument('--busy',type=int,default=4);p.add_argument('--max-p99-ms',type=float,default=400.0);a=p.parse_args()
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
  install(disk,[('bench',(ROOT/'iso_root/programs/bench').read_bytes())])
  g=boot(a.iso,disk,a.out,'latency',a.resolution);t=g['text'];q=g['q']
