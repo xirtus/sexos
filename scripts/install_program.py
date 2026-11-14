@@ -19,7 +19,7 @@ def install(disk,programs):
   for i,program in enumerate(programs):
    name,data=program[0].encode(),program[1];stored=program[2] if len(program)>2 else fnv(data)
    assert 0<len(name)<=16,'name'
-   assert data and len(data)<=16*1024*1024,'size'
+   assert data and len(data)<=32*1024*1024,'size'
    at=(i//PER_SECTOR)*SECTOR+16+(i%PER_SECTOR)*ENTRY
    directory[at:at+ENTRY]=name.ljust(16,b'\0')+struct.pack('<IIQ',lba,len(data),stored)
    f.seek(lba*SECTOR);f.write(data.ljust((len(data)+SECTOR-1)//SECTOR*SECTOR,b'\0'))

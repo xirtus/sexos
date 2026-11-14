@@ -45,7 +45,7 @@ def main():
  with disk.open('r+b') as f:f.truncate(1024**3)
  scratch=a.out/'host';scratch.mkdir();stick=a.out/'loom.img';make_stick(stick,scratch)
  import http.server,threading
- FILES={'/files':(ROOT/'iso_root/programs/files').read_bytes()}
+ FILES={'/files':(ROOT/'iso_root/programs/loom').read_bytes()}
  class Handler(http.server.BaseHTTPRequestHandler):
   def do_GET(self):
    body=FILES.get(self.path)
@@ -71,13 +71,13 @@ def main():
  cs=lambda k:chord(k,'ctrl','shift')
  E=re.escape
  def open_files():
-  s=len(t());line('files /media/LOOM');m=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60)
+  s=len(t());line('loom /media/LOOM');m=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60)
   g['wait'](r'\[files.app.list\] dir=/media/LOOM count=\d+',s,60);g['wait'](rf'\[display.text.committed\] target={m[1]} ',s,60);time.sleep(1)
   g['focus'](int(m[3]));time.sleep(.5);return s
  result={}
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
-  m=expect(f'fetch http://10.0.2.2:{PORT}/files /bin/files',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240);assert m[1].startswith('Saved'),m[1]
+  m=expect(f'fetch http://10.0.2.2:{PORT}/files /bin/loom',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240);assert m[1].startswith('Saved'),m[1]
   q.cmd('blockdev-add',{'driver':'raw','node-name':'loomdrive','file':{'driver':'file','filename':str(stick)}})
   s=len(t())
   for _ in range(40):

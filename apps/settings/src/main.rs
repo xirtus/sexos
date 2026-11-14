@@ -87,7 +87,7 @@ fn window_close() -> ! { sex_pdx::task_finish(0) }
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     let mut window = Window::open();
-    window.title(b"Settings");
+    window.title(b"Tatami");
     if settings::get(sex_config::id::SETUP_DONE).is_ok_and(|done| done == 0) { first_start(&mut window); }
     let (values, mut generation) = load();
     let mut m = Model::new(values);

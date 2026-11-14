@@ -36,7 +36,7 @@ def anim_webp():
  frames=[Image.new('RGB',(120,80),c) for c in ANIM_COLOURS]
  b=io.BytesIO();frames[0].save(b,'WEBP',save_all=True,append_images=frames[1:],duration=300,loop=0,lossless=True);return b.getvalue()
 WEBP_ANIM_BYTES=anim_webp()
-FILES={'/view':(ROOT/'iso_root/programs/view').read_bytes(),'/pic.png':PIC_BYTES,'/big.png':BIG_BYTES,'/pic.jpg':JPG_BYTES,'/pic.webp':WEBP_BYTES,'/anim.gif':GIF_BYTES,'/anim.webp':WEBP_ANIM_BYTES,'/note.txt':b'not a picture\n'}
+FILES={'/view':(ROOT/'iso_root/programs/gaze').read_bytes(),'/pic.png':PIC_BYTES,'/big.png':BIG_BYTES,'/pic.jpg':JPG_BYTES,'/pic.webp':WEBP_BYTES,'/anim.gif':GIF_BYTES,'/anim.webp':WEBP_ANIM_BYTES,'/note.txt':b'not a picture\n'}
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):
   body=FILES.get(self.path)
@@ -65,7 +65,7 @@ def main():
  def opened(name,w,h):
   # The desktop may tile a new window smaller than the picture: zoom it through Shell's
   # palette first, then View shows the picture whole at its new size.
-  s=len(t());expect(f'run view @{name}',r'\[view.ready\]')
+  s=len(t());expect(f'run gaze @{name}',r'\[view.ready\]')
   m=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60);time.sleep(1)
   full_viewport(g,ROOT,int(m[3]),w,h)
   g['wait'](rf'\[view.shown\] w={w} h={h} bytes=\d+ scaled=0',s,120)
@@ -74,7 +74,7 @@ def main():
   m=expect(f'fetch http://10.0.2.2:{PORT}{url} {name}',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',300);assert m[1].startswith('Saved'),m[1]
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
-  fetched('/view','/bin/view');fetched('/pic.png','pic.png');fetched('/big.png','big.png');fetched('/pic.jpg','pic.jpg');fetched('/pic.webp','pic.webp');fetched('/anim.gif','anim.gif');fetched('/anim.webp','anim.webp');fetched('/note.txt','note.txt')
+  fetched('/view','/bin/gaze');fetched('/pic.png','pic.png');fetched('/big.png','big.png');fetched('/pic.jpg','pic.jpg');fetched('/pic.webp','pic.webp');fetched('/anim.gif','anim.gif');fetched('/anim.webp','anim.webp');fetched('/note.txt','note.txt')
   m,s=opened('pic.png',300,200);g['wait'](r'\[display.app.pixels\] target=\d+ surface=\d+ w=300 h=200',s,60);time.sleep(3)
   shot=a.out/'view.ppm';q.cmd('screendump',{'filename':str(shot)});time.sleep(.5)
   x,y,w,h=latest_frame(t(),int(m[3]))
@@ -123,7 +123,7 @@ def main():
   close(m)
   # 900x700 is shrunk to fit the window's pixel area, and fitted again when Shell
   # gives the window its place: the last picture fits the last size Shell reported.
-  s=len(t());expect('run view @big.png',r'\[view.shown\] w=\d+ h=\d+ bytes=\d+ scaled=1')
+  s=len(t());expect('run gaze @big.png',r'\[view.shown\] w=\d+ h=\d+ bytes=\d+ scaled=1')
   m=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60);time.sleep(4)
   resized=re.findall(rf'\[shell.program.resize\] pd={m[1]} task={m[2]} w=(\d+) h=(\d+) status=0',t()[s:])
   assert resized,'View was never told its window size'
@@ -152,7 +152,7 @@ def main():
   assert wchecked>100 and wbad==0,f'WebP: {wbad} of {wchecked} pixels differ'
   close(m)
   # Animated GIF: three frames, 400 ms each, looping forever; each colour reaches the screen.
-  s=len(t());expect('run view @anim.gif',r'\[view.animated\] frames=3 loops=-1')
+  s=len(t());expect('run gaze @anim.gif',r'\[view.animated\] frames=3 loops=-1')
   m=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60)
   g['wait'](r'\[view.frame\] n=4 delay=400',s,60)
   x,y,w,h=latest_frame(t(),int(m[3]))
@@ -165,14 +165,14 @@ def main():
   assert seen=={0,1,2},f'animation colours seen: {sorted(seen)}'
   close(m)
   # Animated WebP: three frames, 300 ms each, looping; the fourth frame is the first again.
-  s=len(t());expect('run view @anim.webp',r'\[view.animated\] frames=3 loops=-1')
+  s=len(t());expect('run gaze @anim.webp',r'\[view.animated\] frames=3 loops=-1')
   m=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60)
   for n in range(1,5):g['wait'](rf'\[view.frame\] n={n} delay=300',s,60)
   close(m)
   # A folder: its pictures in name order, N and P, then a slideshow moving by itself.
   expect('mkdir slides',r'\[spindle.fs.result\] kind=\d+ status=0')
   fetched('/pic.png','slides/a.png');fetched('/pic.webp','slides/b.webp');fetched('/anim.gif','slides/c.gif');fetched('/note.txt','slides/d.txt')
-  s=len(t());expect('run view @slides',r'\[view.slide\] index=1 of=3 name=a.png\n')
+  s=len(t());expect('run gaze @slides',r'\[view.slide\] index=1 of=3 name=a.png\n')
   m=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60);time.sleep(1)
   g['focus'](int(m[3]));time.sleep(.5)
   press('n',r'\[view.slide\] index=2 of=3 name=b.webp\n')
@@ -182,7 +182,7 @@ def main():
   g['wait'](r'\[view.slide\] index=1 of=3 name=a.png\n',s,60);g['wait'](r'\[view.slide\] index=2 of=3 name=b.webp\n',s,60)
   press('spc',r'\[view.slideshow\] on=0 ms=2500\n')
   close(m)
-  expect('run view @note.txt',r'\[view.failed\] That file is not a PNG, JPEG, WebP or GIF picture.')
+  expect('run gaze @note.txt',r'\[view.failed\] That file is not a PNG, JPEG, WebP or GIF picture.')
   assert 'KERNEL PANIC' not in t() and 'panicked' not in t()
   print({'ok':True,'big':big,'pixels_checked':checked,'webp_pixels_checked':wchecked,'gif_colours':len(seen),'jpeg_pixels_checked':jchecked,'jpeg_worst':worst})
  finally:g['stop']()

@@ -65,6 +65,8 @@ jobs:
       run: bash scripts/settings_host_gate.sh
     - name: Signed package format and store catalog
       run: cargo test --locked -p sex-pkg
+    - name: Spreadeagle workbook engine and office painting (host)
+      run: cargo test --locked -p spreadeagle -p assuit -p sex-office
     - name: Disk layouts (GPT, FAT, install beside other systems)
       run: cargo test --locked -p sex-disk --lib
     - name: Keyboard layouts, dead keys and Compose
@@ -132,6 +134,8 @@ jobs:
         python3 scripts/needle_host_test.py
     - name: Crash record format host regressions
       run: bash scripts/crash_log_host_gate.sh
+    - name: Climax benchmark, torture runner and thermal throttling analyzer on the host
+      run: bash scripts/climax_host_gate.sh
     - name: Experimental JS baseline JIT differential and emitted-code gates
       run: |
         SEXJS_NATIVE=0 cargo test --release -p sex-js --features baseline-jit -- --test-threads=1 --nocapture
@@ -160,6 +164,12 @@ jobs:
       run: bash scripts/wifi_host_gate.sh
     - name: Power off and restart through ACPI (host half)
       run: bash scripts/power_host_gate.sh
+    - name: Laptop power model (embedded controller, battery, backlight, thermal, _CRS)
+      run: cargo test --locked -p sex-laptop
+    - name: Touchpad model (I2C HID, report descriptors, contacts, gestures)
+      run: cargo test --locked -p sex-hid-touch
+    - name: DesignWare I2C bus (simulated controller)
+      run: cargo test --locked -p sex-i2c-dw
 
   truth:
     name: Host kernel-model regressions (${{ matrix.shard }}/3)
@@ -330,6 +340,8 @@ jobs:
       run: python3 scripts/files_ext4_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-ext4"
     - name: Encrypted home unlocks with its password, unreadable without it
       run: python3 scripts/files_home_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-home"
+    - name: Files opens a file in its program
+      run: python3 scripts/files_open_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-open"
     - name: Power cuts while Files writes (QEMU killed, disk checked each time)
       run: python3 scripts/powercut_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-powercut"
     - name: Files repairs a damaged disk at start
@@ -342,6 +354,8 @@ jobs:
       run: python3 scripts/power_acpi_gate.py --iso sexos-v1.0.0.iso --out "$RUNNER_TEMP/sexos-power"
     - name: Discrete GPU powered off through ACPI
       run: python3 scripts/dgpu_power_gate.py --iso sexos-v1.0.0.iso --out "$RUNNER_TEMP/sexos-dgpu"
+    - name: Laptop battery, lid, brightness, power profiles and thermal trip through ACPI
+      run: python3 scripts/laptop_power_gate.py --iso sexos-v1.0.0.iso --out "$RUNNER_TEMP/sexos-laptop"
     - name: Lock screen, password and idle dim
       run: |
         truncate -s 1G "$RUNNER_TEMP/lock-source.img"
@@ -480,6 +494,10 @@ jobs:
       run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/build.log"; exit 1)
     - name: Blank program disk
       run: truncate -s 1G "$RUNNER_TEMP/blank-programs.img"
+    - name: Spreadeagle spreadsheet opens, edits, saves and reopens xlsx
+      run: python3 scripts/program_spreadeagle_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/spreadeagle"
+    - name: Assuit word processor opens, edits, saves and reopens docx
+      run: python3 scripts/program_assuit_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/assuit"
     - name: Lua 5.4 interpreter
       run: python3 scripts/lua_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/lua"
     - name: Signed packages, install service and first-run grant question
