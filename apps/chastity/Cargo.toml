@@ -1,0 +1,17 @@
+[package]
+name = "chastity"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Chastity, the SexOS password vault (KDBX4, interchangeable with KeePassXC)"
+
+[[bin]]
+name = "chastity"
+path = "src/main.rs"
+
+[dependencies]
+chastity-core = { path = "../../crates/chastity-core" }
+zeroize = "1"
+
+[target.'cfg(target_os = "hermit")'.dependencies]
+sex-std = { path = "../../crates/sex-std" }
