@@ -7,7 +7,8 @@
 //!
 //! Unlocked, the vault (entries and master password) lives only in this run's memory,
 //! behind `chastity_core::keeper` (the seam for Shibari, the RAM-only secret keeper to
-//! come). Locking (`l`), five idle minutes, or closing the window zeroizes it.
+//! come). Locking (`l`), five idle minutes, or closing the window releases it and wipes application-owned secret buffers.
+//! Dependency/compiler copies are not covered by an all-memory erasure guarantee.
 //!
 //! `run chastity probe` checks the vault code on this machine (a KDBX4 file written,
 //! read back and refused with the wrong password; TOTP; the generator; entropy) and
@@ -16,6 +17,7 @@
 //! Keys: type and Enter; in the list, Up/Down, Enter opens, `a` adds, `/` searches,
 //! `c` copies the password, `u` the user name, Delete deletes, `l` locks; in an entry,
 //! `r` reveals the password and `t` copies the TOTP code.
+mod consent;
 mod probe;
 mod ui;
 
@@ -26,13 +28,18 @@ fn main() {
     if std::env::args().nth(1).as_deref() == Some("probe") {
         let (passed, total) = probe::run(&mut |line| record(line));
         println!("Chastity probe: {passed} of {total} checks passed.");
-        record(&format!("[chastity.probe.{}] passed={passed}/{total}", if passed == total { "ok" } else { "fail" }));
+        record(&format!(
+            "[chastity.probe.{}] passed={passed}/{total}",
+            if passed == total { "ok" } else { "fail" }
+        ));
         std::process::exit(if passed == total { 0 } else { 1 });
     }
     #[cfg(target_os = "hermit")]
     sexos::main();
     #[cfg(not(target_os = "hermit"))]
-    eprintln!("Chastity runs on SexOS; on this host use `cargo test -p chastity` or `chastity probe`.");
+    eprintln!(
+        "Chastity runs on SexOS; on this host use `cargo test -p chastity` or `chastity probe`."
+    );
 }
 
 fn record(line: &str) {

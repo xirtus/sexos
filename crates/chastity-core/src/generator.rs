@@ -48,7 +48,7 @@ impl Options {
 
 /// A password from the system's entropy.
 pub fn generate(options: &Options) -> Result<Zeroizing<String>, GenerateError> {
-    generate_with(options, &mut |buf| getrandom::fill(buf).map_err(|_| GenerateError::Entropy))
+    generate_with(options, &mut |buf| crate::entropy::fill(buf).map_err(|_| GenerateError::Entropy))
 }
 
 /// A password, with random bytes from `fill` (the tests give their own).

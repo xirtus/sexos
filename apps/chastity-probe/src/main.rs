@@ -20,12 +20,12 @@ extern "C" fn main() -> ! {
         root,
         "Autofill transport fixture — fictional credentials only",
     );
-    let origin = app.ui.field(root, "example.org", "Exact origin");
+    let origin = app.ui.field(root, "https://example.org", "Exact origin");
     let request = app.ui.button(root, "Request login");
     let forged = app.ui.button(root, "Try provider impersonation");
     let status = app.ui.paragraph(
         root,
-        "No credentials received. Chastity must ask for explicit consent.",
+        "Ctrl+R requests a login; Ctrl+I tests impersonation. Chastity must ask for explicit consent.",
     );
     let mut client: Option<Client> = None;
     app.present();
@@ -94,7 +94,16 @@ extern "C" fn main() -> ! {
         else {
             continue;
         };
-        for r in app.ui.handle(weft::sexos::event(input)) {
+        let responses = match &input {
+            sex_app::Event::Key(k) if k.control && k.code == 0x13 => {
+                alloc::vec![Response::Clicked(request)]
+            }
+            sex_app::Event::Key(k) if k.control && k.code == 0x17 => {
+                alloc::vec![Response::Clicked(forged)]
+            }
+            _ => app.ui.handle(weft::sexos::event(input)),
+        };
+        for r in responses {
             match r {
                 Response::Close => {
                     if let Some(c) = &mut client {
@@ -105,6 +114,7 @@ extern "C" fn main() -> ! {
                 Response::Clicked(id) if id == request => {
                     if let Some(c) = &mut client {
                         c.cancel();
+                        continue;
                     }
                     match Client::request(&app.window, app.ui.text_of(origin), now) {
                         Ok(c) => {

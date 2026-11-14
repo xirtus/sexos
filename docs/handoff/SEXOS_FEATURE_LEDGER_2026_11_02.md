@@ -4340,17 +4340,20 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
 
 
 ## ChatGPT round 179: live Chastity autofill and consent (2026-11-14)
-- Existing-capability Shell broker + register-only protocol and program SDK.
-  Kernel-stamped exact PD/task, fresh held lifecycle checks at every delivery,
-  Files-attested bound program labels, random per-unlock epoch, default-Deny
-  visible per-request consent, exact origin/entry and one-use sequential transfer.
-- Bounded ring/intake/SDK buffers erase actual storage; raw IPC debug excludes
-  credentials. One request, finite deadlines, 8-byte epoch-bound chunks, reserved
-  active-flow capacity under foreign traffic, cancellation/lock/retirement fences.
-- Fourteen production broker/SDK host-model tests plus Chastity consent-spoofing
-  UI regression pass. Guest Chastity/probe build and scan pass; actual Shell/Files
-  server targets and optional Multipass restore adapter build. No kernel edits.
-- Real two-app QEMU gate includes persisted vault reboot, impersonation refusal,
-  no pre-consent result, deny/allow once, fresh consumer run and locked provider.
-  Native runtime evidence is pending CI; no merge until all relevant checks green.
-- Exact consumer/runtime boundary and custody: `CHASTITY_AUTOFILL_2026_11_14.md`.
+- Reused user canonical37471138 (KDBX/TOTP/generator/keyboard model), replacing
+  round173 custom vault. Weft provides real screen/controls/layout and consent;
+  no duplicate vault format. Canonical std target and sha2@0.11.1 opt="s" retained.
+- Existing-capability Shell broker, Files-attested labels, exact kernel caller/run,
+  focused request/approval, random provider epoch, bounded register-only chunks,
+  one-use consent, replay/runreuse/expiry/closure fences. No kernel edits.
+- Local Lock wipes owned buffers immediately; provider revocation is ACK/retry
+  fenced before visible completion or unlock, even at full native intake/transport.
+  Small550x144 tiles cannot approve hidden scope; full context/resize rechecked.
+-25 canonical app/core and16 routing/native-wrapper host tests pass; std guest
+  builds/scans. Scoped fail-closed entropy covers all KDBX random values. Header/KDF
+  preflight precedes allocations. Reviewed dependency hardening is a required follow-up.
+- Optional Multipass restore adapter removed: legacy HTTP credential copies are
+  not hardened. Reusable live SDK + real separate fixture app only; no browser fill claim.
+- Updated canonical probe/reboot and two-app consent gates await native QEMU/CI
+  proof using updated Shell/Files. No merges until all relevant checks green.
+- Details: CHASTITY_2026_11_14.md and CHASTITY_AUTOFILL_2026_11_14.md.

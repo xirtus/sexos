@@ -20,7 +20,7 @@ use crate::keeper::Keeper;
 use crate::totp::Totp;
 
 /// How hard a new vault's key is to derive (Argon2id). Opening a vault uses whatever
-/// the file says.
+/// the file says, within Chastity's bounded resource policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Kdf {
     pub memory_bytes: u64,
@@ -118,6 +118,7 @@ impl Vault {
     /// whether or not it opens).
     pub fn open(bytes: &[u8], password: &mut String) -> Result<Vault, OpenError> {
         let keeper = Keeper::hold(password);
+        crate::preflight::check(bytes).map_err(|e| OpenError::NotAVault(e.into()))?;
         let key = keeper.database_key().expect("held");
         match Database::parse(bytes, key) {
             Ok(db) => Ok(Vault { db, keeper }),
@@ -133,7 +134,9 @@ impl Vault {
         Ok(out)
     }
 
-    /// Locks: the password and every decrypted field are zeroized and freed.
+    /// Locks: release the database and wipe the held master password. Protected
+    /// fields wipe on drop; upstream unprotected fields and allocator/compiler
+    /// copies do not provide a complete memory-erasure guarantee.
     pub fn lock(mut self) { self.keeper.lock(); drop(self); }
 
     pub fn name(&self) -> &str { self.db.meta.database_name.as_deref().unwrap_or("Vault") }

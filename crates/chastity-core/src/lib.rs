@@ -13,9 +13,11 @@
 //! (`x86_64-sex-std.json`, with `apps/chastity`).
 pub mod autofill;
 pub mod generator;
+pub mod entropy;
 pub mod keeper;
 pub mod totp;
 pub mod vault;
+mod preflight;
 
 pub use vault::{Kdf, NewEntry, OpenError, Summary, Vault};
 

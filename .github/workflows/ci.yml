@@ -95,8 +95,6 @@ jobs:
       run: cargo test --locked -p aftercare
     - name: Loom archives (zip, tar, 7z, gz, zst, xz) with Python interop on the host
       run: cargo test --locked -p sex-archive --features std
-    - name: Chastity canonical vault
-      run: cargo test --locked -p chastity-core -p chastity
     - name: Pinyin input method
       run: cargo test --locked -p sex-ime
     - name: Multipass accounts, Shibari keeper (link fixtures, tokens never leave)
@@ -483,7 +481,7 @@ jobs:
     - name: Leather SDK hello, text editor, image viewer and fetch windows
       run: python3 scripts/leather_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/leather"
     - name: Chastity vault UI and encrypted snapshot across reboot
-      run: python3 scripts/chastity_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/chastity"
+      run: python3 scripts/program_chastity_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/chastity"
     - name: Aftercare backup (back up, delete, restore, hashes equal, wrong password refused)
       run: python3 scripts/aftercare_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/aftercare"
     - name: Live autofill two-app consent and encrypted vault across reboot

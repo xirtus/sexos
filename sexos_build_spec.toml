@@ -72,7 +72,6 @@ crates = [
   "apps/abacus/Cargo.toml",
   "apps/velvet/Cargo.toml",
   "apps/leather-samples/Cargo.toml",
-  "apps/chastity/Cargo.toml",
   "apps/chastity-probe/Cargo.toml",
   "apps/stdnet/Cargo.toml",
   "apps/ssh/Cargo.toml",
@@ -558,6 +557,7 @@ dest_artifact = "iso_root/programs/bat"
 # Chastity, the password vault: KDBX4 vaults (keepass-rs, pure Rust) in its folder.
 [[stage]]
 id = "build_chastity"
+rustflags = '--cfg getrandom_backend="custom" --cfg aes_force_soft --cfg chacha20_force_soft'
 action = "cargo_manifest"
 target = "x86_64-sex-std.json"
 build_std = "std,panic_abort"
