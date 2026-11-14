@@ -184,3 +184,17 @@ fn close(stack: &[Open], open: Open) -> Result<Element, Error> {
     let attrs = open.attrs.into_iter().map(|(k, v)| (String::from(split(&k).1), v)).collect();
     Ok(Element { ns, name: String::from(name), attrs, children: open.children })
 }
+
+#[cfg(test)]
+mod boundary_tests {
+    /// Server replies are untrusted: no prefix of odd, multibyte markup may panic
+    /// (the bug fuzzing found in sex-xml, issue #261).
+    #[test]
+    fn multibyte_and_stray_quotes_never_panic() {
+        let bytes: &[u8] = &[38, 60, 75, 10, 61, 34, 34, 255];
+        let _ = super::parse(&alloc::string::String::from_utf8_lossy(bytes));
+        let messy = "<d:a =\"\"\"é ='x'ü \"ä\" b=ö xmlns:d=\"DAV:\"/>текст<d:p 日本=\"語\" \"\"\"€>x</d:p><![CDATA[ü]]><!--é-->&#xé;&é;";
+        for (n, _) in messy.char_indices() { let _ = super::parse(&messy[..n]); }
+        let _ = super::parse(messy);
+    }
+}
