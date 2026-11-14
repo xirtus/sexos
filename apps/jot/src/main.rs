@@ -75,6 +75,9 @@ struct Tab {
     /// First line and first column shown.
     top: usize,
     left: usize,
+    /// With wrap on: rows of the top line scrolled past, so a line taller than the
+    /// window can still be read to its end.
+    skip: usize,
     /// How the file is stored on disk; the text in `doc` is always UTF-8 with `\n`.
     format: Format,
     /// The format was changed and not yet saved.
@@ -89,7 +92,7 @@ impl Tab {
     fn new(path: &[u8], text: Vec<u8>) -> Tab {
         let mut doc = Doc::new(text);
         doc.move_to(Motion::End_, false);
-        Tab { doc, hl: Highlighter::new(Lang::from_name(path)), path: path.to_vec(), top: 0, left: 0, format: Format::default(), format_changed: false, readonly: false, preview: false, preview_top: 0 }
+        Tab { doc, hl: Highlighter::new(Lang::from_name(path)), path: path.to_vec(), top: 0, left: 0, skip: 0, format: Format::default(), format_changed: false, readonly: false, preview: false, preview_top: 0 }
     }
     fn name(&self) -> String { String::from_utf8_lossy(base_name(&self.path)).into_owned() }
     fn unsaved(&self) -> bool { self.doc.modified() || self.format_changed }
@@ -127,6 +130,9 @@ struct Jot {
     wrap: bool,
     /// When unsaved work last changed (ticks), until the session is written.
     dirty_at: Option<u64>,
+    /// Edits across all tabs when the session was last scheduled, so any change by any path
+    /// (typing, find and replace, spelling fixes, undo) schedules the next write.
+    seen_edits: u64,
 }
 
 /// What a key asked for that needs the window.
@@ -150,7 +156,8 @@ impl Jot {
             if self.wrap {
                 let parts = wrap::rows(&text[start..end], cols);
                 let n = parts.len();
-                for (i, (a, b)) in parts.into_iter().enumerate() { out.push(Row { line, start: start + a, end: start + b, last: i + 1 == n }); }
+                let skip = if line == t.top { t.skip.min(n - 1) } else { 0 };
+                for (i, (a, b)) in parts.into_iter().enumerate().skip(skip) { out.push(Row { line, start: start + a, end: start + b, last: i + 1 == n }); }
             } else { out.push(Row { line, start, end, last: true }); }
             start = (end + 1).min(text.len());
             line += 1;
@@ -159,27 +166,62 @@ impl Jot {
         out
     }
 
+    /// Wrapped rows in the tab's line `line`.
+    fn rows_in(&self, t: &Tab, line: usize) -> usize {
+        let start = t.doc.offset_of_line(line);
+        wrap::rows(&t.doc.text()[start..t.doc.line_end(start)], self.cols()).len()
+    }
+    /// Scrolls by screen rows: within a wrapped line, then line to line.
+    fn scroll_rows(&mut self, by: isize) {
+        let i = self.active;
+        if !self.wrap {
+            let t = &mut self.tabs[i];
+            t.top = (t.top as isize + by).clamp(0, t.doc.line_count().saturating_sub(1) as isize) as usize;
+            t.skip = 0;
+            return;
+        }
+        for _ in 0..by.unsigned_abs() {
+            let t = &self.tabs[i];
+            if by > 0 {
+                if t.skip + 1 < self.rows_in(t, t.top) { self.tabs[i].skip += 1; }
+                else if t.top + 1 < t.doc.line_count() { let t = &mut self.tabs[i]; t.top += 1; t.skip = 0; }
+                else { break; }
+            } else if t.skip > 0 { self.tabs[i].skip -= 1; }
+            else if t.top > 0 { let n = self.rows_in(t, t.top - 1); let t = &mut self.tabs[i]; t.top -= 1; t.skip = n - 1; }
+            else { break; }
+        }
+    }
     /// Keeps the cursor on screen.
     fn follow(&mut self) {
         let (rows, cols) = (self.rows(), self.cols());
         let wrapped = self.wrap;
         let t = &mut self.tabs[self.active];
         let line = t.doc.line_of(t.doc.cursor);
-        if line < t.top { t.top = line; }
-        if line >= t.top + rows { t.top = line + 1 - rows; }
+        if line < t.top { t.top = line; t.skip = 0; }
+        if line >= t.top + rows { t.top = line + 1 - rows; t.skip = 0; }
         if wrapped {
             t.left = 0;
-            // Move the top down until the cursor's row is on screen.
+            // Above the shown part of the top line: show from the cursor's row.
+            if line == t.top {
+                let start = t.doc.line_start(t.doc.cursor);
+                let parts = wrap::rows(&t.doc.text()[start..t.doc.line_end(start)], cols);
+                let row = wrap::row_of(&parts, t.doc.cursor - start);
+                if row < t.skip { t.skip = row; }
+            }
+            // Move the top down a row at a time until the cursor's row is on screen.
             loop {
                 let t = &self.tabs[self.active];
                 let lay = self.layout(t, rows);
                 let c = t.doc.cursor;
                 let shown = lay.iter().any(|r| c >= r.start && (c < r.end || (c == r.end && r.last)));
-                if shown || t.top >= line { break; }
-                self.tabs[self.active].top += 1;
+                if shown || lay.is_empty() { break; }
+                let was = (t.top, t.skip);
+                self.scroll_rows(1);
+                if was == (self.tabs[self.active].top, self.tabs[self.active].skip) { break; }
             }
             return;
         }
+        t.skip = 0;
         let col = display_col(t.doc.text(), t.doc.line_start(t.doc.cursor), t.doc.cursor);
         if col < t.left { t.left = col.saturating_sub(8); }
         if col >= t.left + cols { t.left = col + 8 - cols; }
@@ -335,7 +377,7 @@ impl Jot {
             (true, 0x18, _) => return Ask::Open,
             (true, 0x11, _) => return Ask::Close,
             (true, 0x12, _) => return Ask::Escape,
-            (true, 0x31, _) => { self.tabs.push(Tab::new(b"untitled.txt", Vec::new())); self.active = self.tabs.len() - 1; self.tab_record(); return Ask::Nothing; }
+            (true, 0x31, _) => { let name = untitled(&self.tabs); self.tabs.push(Tab::new(&name, Vec::new())); self.active = self.tabs.len() - 1; self.tab_record(); return Ask::Nothing; }
             (true, 0x49 | 0x68, _) => { self.active = (self.active + self.tabs.len() - 1) % self.tabs.len(); self.tab_record(); return Ask::Nothing; }
             (true, 0x51 | 0x6D, _) => { self.active = (self.active + 1) % self.tabs.len(); self.tab_record(); return Ask::Nothing; }
             (true, 0x2C, _) if shift => { if tab.doc.redo() { self.status = "Redone.".into(); } }
@@ -391,7 +433,6 @@ impl Jot {
         }
         // Colouring below the first changed line may differ now.
         let tab = &mut self.tabs[self.active];
-        if tab.doc.len() != len_before || ctrl { self.dirty_at = Some(sex_pdx::get_ticks()); }
         if tab.doc.len() != len_before || ctrl { let from = before.min(tab.doc.line_of(tab.doc.cursor)); tab.hl.invalidate(from.saturating_sub(1)); }
         Ask::Nothing
     }
@@ -522,9 +563,10 @@ fn display_col(text: &[u8], start: usize, at: usize) -> usize {
     col
 }
 
-fn read_all(window: &mut Window, path: &[u8]) -> Result<Vec<u8>, files::Error> {
+fn read_all(window: &mut Window, path: &[u8]) -> Result<Vec<u8>, files::Error> { read_upto(window, path, MAX_FILE) }
+fn read_upto(window: &mut Window, path: &[u8], cap: usize) -> Result<Vec<u8>, files::Error> {
     let st = files::stat(window, path)?;
-    let len = (st.size as usize).min(MAX_FILE);
+    let len = (st.size as usize).min(cap);
     let mut data = vec![0u8; len];
     let mut at = 0;
     while at < len {
@@ -577,17 +619,27 @@ fn write_session(window: &mut Window, tabs: &[Tab]) {
         Err(e) => sex_pdx::serial_record!("[jot.session.failed] status={}", e),
     }
 }
+/// A name for a new tab that no open tab has: untitled.txt, untitled-2.txt, ...
+fn untitled(tabs: &[Tab]) -> Vec<u8> {
+    (1..).map(|n: usize| if n == 1 { b"untitled.txt".to_vec() } else { format!("untitled-{}.txt", n).into_bytes() })
+        .find(|name| !tabs.iter().any(|t| &t.path == name)).unwrap()
+}
 /// Brings back unsaved work: into the tab of the same file if open, else a new tab.
 fn restore_session(window: &mut Window, tabs: &mut Vec<Tab>) -> usize {
-    let Ok(bytes) = read_all(window, SESSION) else { return 0 };
+    // Whole, whatever its size: several large tabs together can pass the one-file cap,
+    // and a session cut short fails its checksum.
+    let Ok(bytes) = read_upto(window, SESSION, usize::MAX) else { return 0 };
     let Some(saved) = session::read(&bytes) else { return 0 };
     let mut n = 0;
+    let mut filled: Vec<usize> = Vec::new();
     for s in saved {
-        let i = match tabs.iter().position(|t| !s.path.is_empty() && t.path == s.path) {
+        // Each entry gets its own tab, even if an older session named two alike.
+        let i = match tabs.iter().enumerate().position(|(i, t)| !s.path.is_empty() && t.path == s.path && !filled.contains(&i)) {
             Some(i) => i,
-            None if s.path.is_empty() => { tabs.push(Tab::new(b"untitled.txt", Vec::new())); tabs.len() - 1 }
+            None if s.path.is_empty() || filled.iter().any(|&i| tabs[i].path == s.path) => { let name = untitled(tabs); tabs.push(Tab::new(&name, Vec::new())); tabs.len() - 1 }
             None => { let t = load(window, &s.path); tabs.push(t); tabs.len() - 1 }
         };
+        filled.push(i);
         let t = &mut tabs[i];
         // An edit from the file's text to the saved text: unsaved, and undo goes back to disk.
         let len = t.doc.len();
@@ -668,7 +720,7 @@ extern "C" fn main() -> ! {
     let mut jot = Jot {
         tabs, active: 0, painter: Painter::new(cw, ch), width: w.max(64), height: h.max(64), numbers: true, bar: Bar::None, field: 0,
         needle: Vec::new(), with: Vec::new(), status: "Ctrl+S saves. Ctrl+F finds. Ctrl+Z undoes.".into(), clipboard: Vec::new(),
-        spell: spell::Checker::new(), spelling: true, scrolled: false, fresh: false, wrap: false, dirty_at: None,
+        spell: spell::Checker::new(), spelling: true, scrolled: false, fresh: false, wrap: false, dirty_at: None, seen_edits: 0,
     };
     let restored = restore_session(&mut window, &mut jot.tabs);
     if restored > 0 {
@@ -678,7 +730,10 @@ extern "C" fn main() -> ! {
     if jot.tabs.iter().any(|t| t.readonly) { jot.status = "This file is too big for Jot: shown read-only, cut at 64 MiB. Quil edits files of any size.".into(); }
     jot.draw(&mut window);
     sex_pdx::serial_record!("[jot.ready] target={} task={} tabs={}", window.target, window.task, jot.tabs.len());
+    jot.seen_edits = jot.tabs.iter().fold(jot.tabs.len() as u64, |n, t| n.wrapping_add(t.doc.edits()));
     loop {
+        let edits = jot.tabs.iter().fold(jot.tabs.len() as u64, |n, t| n.wrapping_add(t.doc.edits()));
+        if edits != jot.seen_edits { jot.seen_edits = edits; jot.dirty_at = Some(sex_pdx::get_ticks()); }
         let Some(event) = window.next_within(250) else {
             // Quiet for a moment after a change: keep the unsaved work safe.
             if jot.dirty_at.is_some_and(|t| sex_pdx::get_ticks().saturating_sub(t) >= SESSION_MS) {
@@ -703,7 +758,7 @@ extern "C" fn main() -> ! {
                 let wrapped = jot.wrap;
                 let t = jot.tab();
                 match p.kind {
-                    P::Wheel { steps } => { let max = t.doc.line_count().saturating_sub(1); t.top = (t.top as isize - steps as isize * 3).clamp(0, max as isize) as usize; jot.scrolled = true; }
+                    P::Wheel { steps } => { jot.scroll_rows(-(steps as isize) * 3); jot.scrolled = true; }
                     P::Down { button: 0 } | P::Move if p.kind != P::Move || p.buttons & 1 != 0 => {
                         let row = (p.y.max(0) as usize) / ch;
                         if row == 0 || row > rows || t.preview { continue; }

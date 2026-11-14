@@ -29,11 +29,13 @@ pub struct Doc {
     saved_at: usize,
     /// The column Up and Down try to keep.
     want_col: Option<usize>,
+    /// Changes to the text so far, counting undo and redo: a cheap "did it change?".
+    edits: u64,
 }
 
 impl Doc {
     pub fn new(text: Vec<u8>) -> Doc {
-        Doc { text, cursor: 0, anchor: None, undo: UndoTree::new(), saved_at: 0, want_col: None }
+        Doc { text, cursor: 0, anchor: None, undo: UndoTree::new(), saved_at: 0, want_col: None, edits: 0 }
     }
     pub fn text(&self) -> &[u8] { &self.text }
     pub fn len(&self) -> usize { self.text.len() }
@@ -42,6 +44,8 @@ impl Doc {
     pub fn modified(&self) -> bool { self.undo.current() != self.saved_at }
     pub fn mark_saved(&mut self) { self.saved_at = self.undo.current(); }
     pub fn undo_tree(&self) -> &UndoTree { &self.undo }
+    /// Grows with every change to the text, by any path (typing, replace, undo, redo).
+    pub fn edits(&self) -> u64 { self.edits }
 
     // ---- Lines ----
 
@@ -123,6 +127,7 @@ impl Doc {
     pub fn replace(&mut self, from: usize, to: usize, with: &[u8]) {
         let removed = self.text[from..to].to_vec();
         self.text.splice(from..to, with.iter().copied());
+        self.edits += 1;
         self.undo.record(Edit { at: from, removed, inserted: with.to_vec(), cursor_before: self.cursor });
         self.cursor = from + with.len();
         self.anchor = None;
@@ -171,6 +176,7 @@ impl Doc {
     pub fn undo(&mut self) -> bool {
         let Some(e) = self.undo.undo() else { return false };
         self.text.splice(e.at..e.at + e.inserted.len(), e.removed.iter().copied());
+        self.edits += 1;
         self.cursor = e.cursor_before.min(self.text.len());
         self.anchor = None;
         true
@@ -179,6 +185,7 @@ impl Doc {
     pub fn redo(&mut self) -> bool {
         let Some(e) = self.undo.redo() else { return false };
         self.text.splice(e.at..e.at + e.removed.len(), e.inserted.iter().copied());
+        self.edits += 1;
         self.cursor = e.at + e.inserted.len();
         self.anchor = None;
         true

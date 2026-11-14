@@ -328,3 +328,18 @@ fn sessions_survive_and_reject_damage() {
     assert_eq!(read(&bad), None);
     assert_eq!(read(&write(&[])), Some(Vec::new()));
 }
+
+#[test]
+fn edits_count_every_change() {
+    let mut d = Doc::new(b"abc".to_vec());
+    let e0 = d.edits();
+    d.select(0, 3);
+    d.insert(b"xyz"); // same length: still a change
+    assert!(d.edits() > e0);
+    let e1 = d.edits();
+    d.undo();
+    assert!(d.edits() > e1);
+    let e2 = d.edits();
+    d.move_to(Motion::End_, false);
+    assert_eq!(d.edits(), e2);
+}

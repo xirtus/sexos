@@ -71,10 +71,14 @@ def main():
   q.key('esc');s=len(t());chord('ctrl','r');g['wait'](r'\[jot\.wrap\] on=1 rows=\d+\n',s,60)
   s=len(t());chord('ctrl','end');keys(TYPED)
   g['wait'](r'\[jot\.session\.saved\] tabs=1 bytes=\d+\n',s,60)
+  # A change made by find and replace is kept too, not only typing.
+  time.sleep(1.5);s=len(t());chord('ctrl','h');keys('too');q.key('ret');keys('also');chord('ctrl','a')
+  g['wait'](r'\[jot\.replaced\] n=1\n',s,60);q.key('esc')
+  g['wait'](r'\[jot\.session\.saved\] tabs=1 bytes=\d+\n',s,60)
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'jot-unsaved.ppm')});time.sleep(.3)
   assert 'KERNEL PANIC' not in t() and 'panicked' not in t() and '[jot.fatal]' not in t()
  finally:g['stop']()  # Killed, not closed: Jot gets no chance to save anything more.
- restored=MD+TYPED.encode()
+ restored=MD+TYPED.replace('too','also').encode()
  g,t,q,keys,chord,spindle,start,close=session('jotrestore2')
  try:
   target,task,s=start('edit list.md')
