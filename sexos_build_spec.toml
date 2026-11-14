@@ -73,7 +73,9 @@ crates = [
   "apps/rg/Cargo.toml",
   "apps/fd/Cargo.toml",
   "apps/python/Cargo.toml",
-  "apps/store/Cargo.toml"
+  "apps/store/Cargo.toml",
+  "apps/sdltest/Cargo.toml",
+  "apps/driftspark/Cargo.toml"
 ]
 
 [[stage]]
@@ -443,6 +445,26 @@ build_std = "std,panic_abort"
 manifest = "apps/python/Cargo.toml"
 source_artifact = "target/x86_64-sex-std/release/python"
 dest_artifact = "iso_root/programs/python"
+
+# SDL2 (vendor/SDL2-2.30.9, crates/sex-sdl): a C SDL program, window, sound and keys.
+[[stage]]
+id = "build_sdltest"
+action = "cargo_manifest"
+target = "x86_64-sex-std.json"
+build_std = "std,panic_abort"
+manifest = "apps/sdltest/Cargo.toml"
+source_artifact = "target/x86_64-sex-std/release/sdltest"
+dest_artifact = "iso_root/programs/sdltest"
+
+# Driftspark: an SDL2 arcade game in C (apps/driftspark), window, sound and keys.
+[[stage]]
+id = "build_driftspark"
+action = "cargo_manifest"
+target = "x86_64-sex-std.json"
+build_std = "std,panic_abort"
+manifest = "apps/driftspark/Cargo.toml"
+source_artifact = "target/x86_64-sex-std/release/driftspark"
+dest_artifact = "iso_root/programs/driftspark"
 
 # PDF: the first ordinary std app, hayro rendering pages into the window.
 [[stage]]

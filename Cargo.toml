@@ -91,6 +91,9 @@ members = [
     "apps/fd",
     "apps/python",
     "apps/store",
+    "crates/sex-sdl",
+    "apps/sdltest",
+    "apps/driftspark",
 ]
 [workspace.package]
 license = "GPL-3.0-only"
