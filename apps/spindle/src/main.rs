@@ -2803,7 +2803,10 @@ pub extern "C" fn _start() -> ! {
         {
             let idle=unsafe{!fs_commands::FS.busy()&&!capture_command::CAPTURE.busy()&&!fetch_command::FETCH.busy()&&!update_command::UPDATE.busy()&&!pkg_command::PKG.busy()&&!record_command::RECORD.sending()};
             if unsafe{session_command::SESSION.step(idle,sb)}{unsafe{content_render(&line,sb);}}
-            while let Some((queued,n))=unsafe{session_command::SESSION.take_queued()}{let _=dispatch(&queued[..n],sb,hist,&mut ev);unsafe{content_render(&line,sb);}}
+            // One kept line a turn, and only while nothing else holds the Files region: the
+            // line it starts may make it busy, and the next one waits for that.
+            let idle=unsafe{!fs_commands::FS.busy()&&!capture_command::CAPTURE.busy()&&!fetch_command::FETCH.busy()&&!update_command::UPDATE.busy()&&!pkg_command::PKG.busy()&&!record_command::RECORD.sending()};
+            if idle{if let Some((queued,n))=unsafe{session_command::SESSION.take_queued()}{let _=dispatch(&queued[..n],sb,hist,&mut ev);unsafe{content_render(&line,sb);}}}
         }
         if unsafe{fs_commands::FS.expired(sex_pdx::get_ticks(),sb)}{unsafe{content_render(&line,sb);}}
         if unsafe{fetch_command::FETCH.step(sb)}{unsafe{content_render(&line,sb);}}
