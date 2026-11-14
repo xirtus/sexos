@@ -69,7 +69,7 @@ SUITE=[
 LIVE_TEXT={'news':'npr','links':'comments','encyclopedia':'microkernel','github':'sexos'}
 def main():
  global PROGRAM
- p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');p.add_argument('--live',action='store_true');p.add_argument('--program',type=Path,default=PROGRAM);p.add_argument('--no-jit',action='store_true');a=p.parse_args();PROGRAM=a.program.resolve()
+ p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');p.add_argument('--live',action='store_true');p.add_argument('--program',type=Path,default=PROGRAM);p.add_argument('--no-jit',action='store_true');p.add_argument('--site',choices=[r[0] for r in SUITE]);a=p.parse_args();PROGRAM=a.program.resolve()
  a.out.mkdir(parents=True,exist_ok=True)
  (a.out/'inputs.json').write_text(json.dumps({'iso_sha256':hashlib.sha256(a.iso.read_bytes()).hexdigest(),'program_sha256':hashlib.sha256(PROGRAM.read_bytes()).hexdigest(),'live':a.live,'forced_interpreter':a.no_jit,'resolution':a.resolution,'timing_scope':'page initial fetch/layout/scripts, not asynchronous work or playback','speedup_claim':False},indent=2)+'\n')
  disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
@@ -101,7 +101,7 @@ def main():
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
   g['focus'](153);time.sleep(.5);s=len(t());keys(f'fetch {BASE}/web /bin/kaleidoscope');q.key('ret')
   m=g['wait'](r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',s,240);assert m[1].startswith('Saved'),m[1]
-  for i,(name,local,live,text,least) in enumerate(SUITE):
+  for i,(name,local,live,text,least) in enumerate([row for row in SUITE if not a.site or row[0]==a.site]):
    url=live if a.live else local
    if a.live:text,least=LIVE_TEXT[name],1
    began=time.time()
@@ -120,6 +120,14 @@ def main():
    stats['jit_startup_receipts']=re.findall(r'\[web.jit\] ([^\r\n]+)',t()[s:])
    outcomes.append({'site':name,'url':url,'text':text,'matches':found,'seconds':round(time.time()-began,1),**stats})
    print(outcomes[-1],flush=True)
+   q.cmd('screendump',{'filename':str((a.out/(name+'.ppm')).resolve())})
+   if a.live and name=='encyclopedia':
+    # Physical keyboard scrolling must reach the article, not just index its text.
+    s_scroll=len(t());q.key('pgdn')
+    m_scroll=g['wait'](r'\[web.shown\] w=\d+ h=\d+ scroll=([1-9]\d*) ',s_scroll,30)
+    outcomes[-1]['physical_scroll_y']=int(m_scroll[1])
+    for _ in range(30):q.key('pgdn');time.sleep(.15)
+    q.cmd('screendump',{'filename':str((a.out/(name+'-scrolled.ppm')).resolve())})
   # Webmail: sign in, follow the redirect with the new cookie, read the inbox.
   began=time.time();s=go(f'{BASE}/mail/');loaded(s);time.sleep(1.5)
   tile,pw,ph=live_viewport(g,ROOT,surface);bx,by,_,_=canvas_box(ROOT,tile,pw,ph);ox,oy=bx,by+BAR

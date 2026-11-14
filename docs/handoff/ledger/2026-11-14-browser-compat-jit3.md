@@ -46,6 +46,20 @@ Guest SHA256: f12de79556fbcac8d9d14e2c00f8a55e2211f074606c65f03f92ebacf5132241
   `target/browser-evidence/native-jit-v3/result.json`.
 - The bounded private profiler is retained only under target/browser-evidence;
   profiling hooks are absent from the shipped guest and source patch.
-- Real-page v3 coverage and timings are still being measured. No speedup claimed.
+- Real-page v3 compiles/executes Wikipedia (2 / 1,157) and GitHub (3 / 142).
+  Both measured runs report zero compiled captured helpers: the closure path is
+  native-fixture demonstrated, not yet demonstrated on these real pages.
+- One sequential interpreter/JIT live pair measured cumulative elapsed time inside
+  VM execution: Wikipedia 5.365 / 5.466 s; GitHub 30.157 / 29.679 s; Hacker News
+  0.287 / 0.277 s (no JIT execution). This includes host calls/compilation, excludes
+  network waits outside VM calls, and is neither host CPU nor full page-load time.
+  Live inputs/scheduling were uncontrolled; no speedup is established or claimed.
+  Exact inputs/raw logs are sealed in target/browser-evidence/real-page-measurements.json.
+- Screenshots exposed a further Wikipedia failure: root height 114 despite article
+  boxes extending beyond 21,000 px. Visible descendant overflow must contribute to
+  document scroll height; fixed subtrees and clipping boundaries must not.
+  The generic extent fix passes all 55 sex-html integration tests. Native physical
+  scroll/visible article verification is in progress; the earlier text-find pass
+  alone does not qualify Wikipedia as readable.
 - CI, including the aggregate build and safety gates, must pass on the exact head
   before merge. Visible YouTube playback remains reserved for x17.
