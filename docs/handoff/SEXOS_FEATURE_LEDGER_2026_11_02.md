@@ -4314,3 +4314,26 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   scroll access. QEMU clicks the focused button's current scrolled coordinates.
 - Round176 shortcut follow-up: Recall Last uses supported Ctrl+Up, verified through
   actual Weft key dispatch (fourteen host tests). Guest gate now uses that chord.
+
+## ChatGPT round 178: handoff apps integrated and reviewed (2026-11-14)
+- All five handoff workstreams have app implementations: Moan workstation #253
+  (engine #244, effects #246), Chastity vault #256, Velvet games #250, Leather SDK
+  #249 and Abacus extras #254. Feature PRs remain separate and depend on Weft #220.
+- `codex/handoff-integration` combines the app commits and review follow-ups on
+  current master plus the unchanged Weft dependency. All 79 app/core tests and
+  1,191 repository Python regressions pass locally. A single combined guest build
+  produces Moan, Chastity, Velvet, Abacus and the four Leather samples; all eight
+  pass the forbidden-instruction scan. Workspace members and stage IDs are unique.
+- Independent review fixes: Moan response-batch busy state, empty-track selection
+  and unread capture drain; Chastity explicit wiped Argon workspaces, bounded
+  plaintext buffers/decompression and expired grants; Leather loaded-route save
+  safety and startup load; Abacus Unicode keypad, tiny conversions, compact-window
+  scrolling and the supported history-recall shortcut. No remaining review blocker.
+- QEMU: round 171's edited stereo playback gate passed in the earlier #244 run.
+  New heads/integrated app gates still require CI; no app PR was merged. Integrated
+  Programs CI allows 60 minutes for the expanded set of real boots and interactions.
+- No kernel diff against current master. Original dirty checkout preserved; app,
+  dependency and integration work used separate worktrees.
+- Remaining scope is explicit: Moan FFmpeg FLAC/MP3 export, project persistence and
+  graphical waveforms; Chastity live cross-app autofill transport/consent routing.
+  Chastity's tested authorization API is not claimed as a deployed IPC service.
