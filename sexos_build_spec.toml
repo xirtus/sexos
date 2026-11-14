@@ -76,8 +76,11 @@ crates = [
   "apps/pdf/Cargo.toml",
   "apps/sex-calc/Cargo.toml",
   "apps/calendar/Cargo.toml",
+  "apps/spreadeagle/Cargo.toml",
+  "apps/assuit/Cargo.toml",
   "apps/settings/Cargo.toml",
   "apps/aftercare/Cargo.toml",
+  "apps/crush/Cargo.toml",
   "apps/lua/Cargo.toml",
   "apps/rg/Cargo.toml",
   "apps/fd/Cargo.toml",
@@ -593,6 +596,26 @@ manifest = "apps/rendezvous/Cargo.toml"
 source_artifact = "target/x86_64-sex-std/release/rendezvous"
 dest_artifact = "iso_root/programs/rendezvous"
 
+# Spreadeagle: the spreadsheet, GridCraft's engine (formulas, xlsx) under a native grid.
+[[stage]]
+id = "build_spreadeagle"
+action = "cargo_manifest"
+target = "x86_64-sex-std.json"
+build_std = "std,panic_abort"
+manifest = "apps/spreadeagle/Cargo.toml"
+source_artifact = "target/x86_64-sex-std/release/spreadeagle"
+dest_artifact = "iso_root/programs/spreadeagle"
+
+# Assuit: the word processor, WordCraft's engine (docx, Word layout, undo) drawing its pages.
+[[stage]]
+id = "build_assuit"
+action = "cargo_manifest"
+target = "x86_64-sex-std.json"
+build_std = "std,panic_abort"
+manifest = "apps/assuit/Cargo.toml"
+source_artifact = "target/x86_64-sex-std/release/assuit"
+dest_artifact = "iso_root/programs/assuit"
+
 [[stage]]
 id = "build_play"
 action = "cargo_manifest"
@@ -714,6 +737,14 @@ target = "x86_64-sex-app.json"
 manifest = "apps/calendar/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/calendar"
 dest_artifact = "iso_root/programs/date"
+
+[[stage]]
+id = "build_crush"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/crush/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/crush"
+dest_artifact = "iso_root/programs/crush"
 
 [[stage]]
 id = "copy_limine_cfg"
