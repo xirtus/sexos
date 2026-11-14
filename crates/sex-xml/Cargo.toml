@@ -1,0 +1,8 @@
+[package]
+name = "sex-xml"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "A small forgiving XML/XHTML tokenizer, entity decoding and HTML-to-text for SexOS readers (no_std + alloc)"
+
+[dependencies]

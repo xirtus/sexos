@@ -372,10 +372,35 @@ jobs:
         path: ${{ runner.temp }}/sexos-proof
         if-no-files-found: ignore
 
+  reading:
+    name: Reading programs
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+    - uses: actions/checkout@v4
+    - uses: ./.github/actions/setup
+    - name: E-book model (EPUB, FictionBook, CBZ, reflow) on the host
+      run: cargo test --locked -p sex-xml -p sex-ebook
+    - name: Build the image
+      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/reading-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/reading-build.log"; exit 1)
+    - name: Bodice opens an EPUB, turns pages and reopens at the saved page
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/blank-reading.img"
+        python3 scripts/program_bodice_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-reading.img" --out "$RUNNER_TEMP/sexos-reading/bodice"
+    - name: Preserve reading evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sexos-reading-proof
+        path: |
+          ${{ runner.temp }}/reading-build.log
+          ${{ runner.temp }}/sexos-reading
+        if-no-files-found: ignore
+
   # Single required check: keeps the old "build" check name for branch rules.
   build:
     if: always()
-    needs: [host, truth, boot, devices, media, profiles, js-jit, recording]
+    needs: [host, truth, boot, devices, media, profiles, js-jit, recording, reading]
     runs-on: ubuntu-latest
     steps:
     - run: |
