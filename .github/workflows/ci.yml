@@ -45,6 +45,8 @@ jobs:
       run: bash scripts/raid_host_gate.sh
     - name: Hardware census table (names, owners, VMD warning) on the host
       run: bash scripts/hwdb_host_gate.sh
+    - name: Moan timeline, edits and mixer on the host
+      run: bash scripts/moan_host_gate.sh
     - name: Bell sound rate conversion on the host
       run: bash scripts/sound_host_gate.sh
     - name: Qupid keep-watching logic (episodes, skip and up-next cards) on the host
@@ -439,6 +441,8 @@ jobs:
         python3 scripts/sdl_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/sdl"
     - name: SDL2 game (demo score, window, sound, keys)
       run: python3 scripts/driftspark_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/driftspark"
+    - name: Moan edited multitrack mix through Bell (stereo waveform proof)
+      run: python3 scripts/moan_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/moan"
     - name: Preserve program evidence
       if: always()
       uses: actions/upload-artifact@v4
