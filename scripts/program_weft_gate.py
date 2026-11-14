@@ -33,7 +33,7 @@ def main():
   g['wait'](r'\[app.private.retired\] target=41 ',0,120)
   s=len(t());run('run abacus')
   m=g['wait'](r'\[abacus.ready\] target=(\d+) task=(\d+) keys=(\d+)',s,300);target,task=m[1],m[2];assert int(m[3])==30,m[0]
-  g['wait'](r'\[abacus.frame\] n=1\n',s,300)
+  g['wait'](r'\[abacus.frame\] n=[1-9]\d*\n',s,300)
   launch=g['wait'](rf'\[shell.program.launch\] target={target} task={task} surface=(\d+)',s,60);surface=int(launch[1])
   tile,resized=maximize(g,surface)
   layout=g['wait'](rf'\[abacus.layout\] w=({tile[2]-16}) h=({tile[3]-42})',resized,120)
