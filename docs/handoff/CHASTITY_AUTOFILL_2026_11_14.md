@@ -128,6 +128,8 @@ and saves fictional credentials, reboots, unlocks the persisted snapshot, refuse
 provider impersonation, verifies no result before visible consent, exercises
 Deny then Allow once, restarts the consumer into a new task requiring fresh
 consent, and verifies locking makes the provider unavailable. Screenshots and
-serial are retained by Programs CI. **Both final QEMU gates pass** at guest source b9241079; exact hashes and local
+serial are retained by Programs CI. **Both QEMU gates pass** at guest source b9241079; the subsequent file-admission
+fix897ff617 also passes all30 vault/UI tests and the full two-boot baseline gate.
+That fix changes encrypted file admission, with no routing/consent change. Exact hashes and local
 artifact paths are recorded in CHASTITY_RUNTIME_2026_11_14.md. Remote CI remains
 required before merge.

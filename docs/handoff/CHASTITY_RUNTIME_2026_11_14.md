@@ -1,12 +1,13 @@
 # Canonical Chastity and live autofill runtime evidence
 
-Both full QEMU gates pass with final guest source b9241079 (canonical37471138 reused,
+Both full QEMU gates pass with guest source b9241079 (canonical37471138 reused,
 reviewed dependency patches and Close/scroll/focus-driver fixes included). This is
 local native runtime proof; combined remote CI must still be green before merging.
 
 | Artifact | SHA256 |
 | --- | --- |
-| Chastity std ELF | c00775e49cb73995e25c728b41dfe9d48b9f44dcf20b8bf515d58ced6fd5c19f |
+| Chastity live-proof std ELF | c00775e49cb73995e25c728b41dfe9d48b9f44dcf20b8bf515d58ced6fd5c19f |
+| Final file-admission baseline ELF | 5dcbd6ff02a91c7da96d8b507a9631526a9981e09325a2e4c2c48fdafd716f41 |
 | Separate consumer ELF | e0fc74523fdc6ff8cea8fcfc262691ded144c6e1b24b1df6085263c32e8d1524 |
 | Real Shell/Files v2 ISO | 4cb7e33127e88bb44d9b2f13139ddc41f58c4db80a41b56b5f8bd298286547b5 |
 
@@ -35,7 +36,13 @@ capturing consent (Shell focus alone can precede compositor repaint). Its final
 reviewable captures live in target/chastity-live-visible-proof-v2. No app authority
 or credential-handling code changed for this evidence timing fix.
 
-Host:26 canonical core/UI tests,17 unchanged production broker/SDK/native-wrapper
+The final file-admission follow-up897ff617 also passes the complete two-boot
+baseline with ELF5dcbd6ff above; artifacts under target/chastity-file-admission-proof-v2.
+KDF32MiB/4pass save1149ms/open1054ms. Only NotFound permits Create; fixed-size
+reads reject overflow/unreadable input while preserving existing-vault Unlock mode.
+No routing or consent code changes follow the live proof.
+
+Host:30 canonical core/UI tests,17 unchanged production broker/SDK/native-wrapper
 tests. The native wrapper tests include full intake, transport Full retries,
 Close tombstone/retirement, reused row and old-token/epoch replay. Both binaries pass
 scripts/key_bytes.py. These tests do not promise complete compiler/allocator memory
