@@ -4441,3 +4441,41 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   actual Close retires the run after local wipe (dead custody cannot receive ACK).
   Final live consent gate/CI remain pending. No merges until all relevant checks green.
 - Details: CHASTITY_2026_11_14.md and CHASTITY_AUTOFILL_2026_11_14.md.
+
+## ChatGPT round 184: canonical vault boots and integrated runtime fixes (2026-11-14)
+- Reused canonical Chastity commit37471138, including KDBX4, TOTP, generator and
+  original host coverage; preserved sha2@0.11.1 release opt-level `s`. Replaced
+  the earlier custom vault and removed the optional Multipass credential adapter.
+- Scoped vendored rust-argon2 wipes owned workspace/staging; scoped keepass bounds
+  decompression and cumulative attachments to16MiB, and wipes selected KDBX4
+  staging. Original licences, archive provenance, patch scope and remaining
+  erasure/model-allocation limits are recorded beside each vendor. Allocation-free
+  outer-header admission caps KDF work before keepass performs it. Chastity-only
+  entropy fails closed; salts, IVs, UUIDs and generated passwords use it.
+- Native integration:153 app/core tests,17 actual production transport/native
+  wrapper tests,22 Shell cleanup tests and compiled negative controls pass.
+  Final Moan guest+PKU scan pass using pinned FFmpeg/Shine archives. Shell and
+  Files build for their actual no-SSE target with Files software AES.
+- Chastity's previously unbooted canonical gate completed its actual two-boot
+  sequence with all three vendor patches: six target probes, real32MiB/4pass KDF,
+  create/add/generator/TOTP, acknowledged Lock, wrong-password refusal, persisted
+  reopen/search and actual Close retirement. Subsequent presentation/gate changes
+  and live two-app consent are undergoing final reruns; no broad runtime claim.
+- Actual Moan boot exposed a Shell Close defect: ordinary program surfaces were
+  removed before unsaved dialogs could be used. Narrow Program deferral now keeps
+  the existing surface until decline or attested retirement; the existing five-
+  second force fence remains. Live Chastity Close instead retires the run after
+  wiping because close-pending custody cannot receive a revocation ACK; visible
+  Lock continues to require that ACK. Reviewed queued-data/reused-run tests pass.
+- Gates now click actual freshly painted Weft confirmation controls: Shell owns
+  raw Tab, so it cannot serve as client focus traversal. Moan/Abacus/Chastity gates
+  use measured viewport origins, preserving product input policy.
+- Merged current upstream masterbfb95ce0 locally, retaining its newly implemented
+  calculator and console relay. No kernel diff. Workflow YAML and84 ABI pins
+  verify. Updated exact TLS patch policy after the Python suite found two vault-
+  patch admission failures; all21 focused TLS policy tests now pass, including
+  override-negative regressions. A final exact-head CI run remains required.
+- Local boot ISO proof is deliberately scoped: verified unchanged upstream kernel,
+  replayed boot metadata, exact updated Shell/Files modules and installed app ELFs;
+  the embedded installer payload was not replaced. This is not install-media proof.
+- No PR merged on incomplete or queued checks. Original dirty checkout untouched.
