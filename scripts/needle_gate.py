@@ -54,8 +54,8 @@ def main():
   assert DNS.queries,'no DNS-SD query reached the responder'
   assert re.search(rf'\[needle.printer\] name=Needle_Test uri={re.escape(printer)} formats=application/pdf,image/pwg-raster,image/urf color=T duplex=T',out),out
   assert f'[needle.scanner] name=Needle_Test uri=http://10.0.2.2:{SCANNER.port}/eSCL' in out,out
-  out,_=run('printers',r'printer\] name=needle-test [^\n]*\n')
-  assert re.search(rf'\[needle.printer\] name=needle-test uri={re.escape(printer)} state=idle formats=application/pdf,image/pwg-raster,image/urf,application/octet-stream media=iso_a4_210x297mm .* raster=75dpi',out),out
+  out,_=run('printers',r'printer\] name=needle-test ')
+  assert re.search(rf'\[needle.printer\] name=needle-test uri={re.escape(printer)} state=idle raster=75dpi media=iso_a4_210x297mm formats=application/pdf,image/pwg-raster,image/urf,application/octet-stream',out),out
   out,r=run(f'print {printer} --test-page',r'job\] id=(\d+) state=(\w+)')
   assert r[2]=='completed',r[0]
   assert [op for op,_ in PRINTER.requests].count(0x04)>=1,'no Validate-Job'

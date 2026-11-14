@@ -23,7 +23,7 @@ def main():
   assert re.search(rf'\[needle.printer\] name=Needle_Test uri={re.escape(uri)} formats=application/pdf,image/pwg-raster,image/urf color=T duplex=T',out),out
   assert f'[needle.scanner] name=Needle_Test uri=http://127.0.0.1:{scanner.port}/eSCL' in out and '[needle.discover] found=2' in out,out
   out=run('printers')
-  assert re.search(rf'\[needle.printer\] name=needle-test uri={re.escape(uri)} state=idle formats=application/pdf,image/pwg-raster,image/urf,application/octet-stream media=iso_a4_210x297mm .* raster=75dpi',out),out
+  assert re.search(rf'\[needle.printer\] name=needle-test uri={re.escape(uri)} state=idle raster=75dpi media=iso_a4_210x297mm formats=application/pdf,image/pwg-raster,image/urf,application/octet-stream',out),out
   out=run('print',uri,'--test-page')
   assert '[needle.job] id=1 state=completed' in out,out
   job=printer.jobs[0];assert job['format']=='image/pwg-raster'

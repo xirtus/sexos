@@ -154,10 +154,11 @@ fn printers(uris: &[String]) {
     for u in &list {
         let url = printer_url(u);
         let c = get_caps(&url, &mut Client::new(u, "needle"));
+        // Serial records stop at 255 bytes: the long lists go last.
         rec(&format!(
-            "[needle.printer] name={} uri={u} state={} formats={} media={} sides={} color={} raster={}dpi",
-            c.name.replace(' ', "_"), c.state_name(), c.formats.join(","), c.media_choice(), c.sides.join(","),
-            c.color_modes.join(","), c.raster_dpi()
+            "[needle.printer] name={} uri={u} state={} raster={}dpi media={} formats={} sides={} color={}",
+            c.name.replace(' ', "_"), c.state_name(), c.raster_dpi(), c.media_choice(), c.formats.join(","),
+            c.sides.join(","), c.color_modes.join(",")
         ));
         if !c.make_and_model.is_empty() { println!("  {} ({})", c.make_and_model, c.info); }
     }
