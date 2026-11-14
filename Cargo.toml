@@ -53,6 +53,8 @@ members = [
     "crates/sex-vmd",
     "crates/sex-imsm",
     "crates/sex-font",
+    "crates/quil-core",
+    "apps/quil",
     "crates/sex-keymap",
     "crates/sex-shape",
     "crates/sex-ime",
