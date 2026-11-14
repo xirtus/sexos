@@ -14,6 +14,7 @@ struct Parser<'a> { s: &'a [u8], at: usize, ans: f64, angle: Angle }
 
 /// The value of `text`; `ans` is the last answer.
 pub fn eval(text: &str, ans: f64, angle: Angle) -> Result<f64, Error> {
+    if text.len()>512 || text.bytes().filter(|c|*c==b'(').count()>64 {return Err(Error::Syntax(0));}
     // Accept the display's own symbols.
     let mut norm = String::with_capacity(text.len());
     for c in text.chars() {
@@ -23,7 +24,7 @@ pub fn eval(text: &str, ans: f64, angle: Angle) -> Result<f64, Error> {
     let v = p.sum()?;
     p.space();
     if p.at != p.s.len() { return Err(Error::Syntax(p.at)); }
-    if v.is_nan() { return Err(Error::Domain); }
+    if !v.is_finite() { return Err(Error::Domain); }
     Ok(v)
 }
 
@@ -82,6 +83,7 @@ impl<'a> Parser<'a> {
             }
             Some(c) if c.is_ascii_alphabetic() => {
                 while self.at < self.s.len() && self.s[self.at].is_ascii_alphabetic() { self.at += 1; }
+                if matches!(&self.s[start..self.at],b"log"|b"exp") && self.s.get(self.at)==Some(&b'2') {self.at+=1;}
                 let name = core::str::from_utf8(&self.s[start..self.at]).unwrap();
                 let to_rad = |x: f64, a: Angle| if a == Angle::Degrees { x * core::f64::consts::PI / 180.0 } else { x };
                 let from_rad = |x: f64, a: Angle| if a == Angle::Degrees { x * 180.0 / core::f64::consts::PI } else { x };
@@ -95,6 +97,14 @@ impl<'a> Parser<'a> {
                 let a = self.angle;
                 Ok(match name {
                     "sqrt" => { if x < 0.0 { return Err(Error::Domain); } libm::sqrt(x) }
+                    "sinh" => libm::sinh(x),
+                    "cosh" => libm::cosh(x),
+                    "tanh" => libm::tanh(x),
+                    "exp" => libm::exp(x),
+                    "exp2" => libm::exp2(x),
+                    "log2" | "logtwo" => {if x<=0.0{return Err(Error::Domain);}libm::log2(x)},
+                    "cbrt" => libm::cbrt(x),
+                    "trunc" => libm::trunc(x),
                     "sin" => libm::sin(to_rad(x, a)),
                     "cos" => libm::cos(to_rad(x, a)),
                     "tan" => libm::tan(to_rad(x, a)),
