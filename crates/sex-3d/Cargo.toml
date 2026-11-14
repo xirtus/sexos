@@ -9,3 +9,4 @@ description = "Polyamour's 3D core for SexOS: scenes, half-edge meshes, modifier
 serde_json = "1"
 base64 = "0.23"
 flate2 = "1"
+ruzstd = { version = "0.9.1", default-features = false, features = ["std"] }
