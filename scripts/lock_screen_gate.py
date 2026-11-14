@@ -42,7 +42,7 @@ def main():
   # Locked: a key meant for Settings changes nothing.
   s=len(t());press('meta_l','esc');g['wait'](r'\[display.screen\] mode=0 locked=1 typed=0 say=0',s,30)
   q.key('right');time.sleep(1);assert '[settings.set]' not in t()[s:],'a key reached Settings while locked'
-  typ('wrong');g['wait'](r'\[display.screen\] mode=0 locked=1 typed=6 say=0',s,30);shot('01-locked-typing')
+  typ('wrong');g['wait'](r'\[display.screen\] mode=0 locked=1 typed=5 say=0',s,30);shot('01-locked-typing')
   s=len(t());q.key('ret');g['wait'](r'\[shell.lock.check\] status=1',s,120);g['wait'](r'\[display.screen\] mode=0 locked=1 typed=0 say=1',s,30)
   shot('02-wrong-password')
   s=len(t());typ('opensesame');q.key('ret');g['wait'](r'\[shell.lock.check\] status=0',s,120);g['wait'](r'\[shell.lock\] locked=0',s,30)
