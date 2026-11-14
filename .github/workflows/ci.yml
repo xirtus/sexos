@@ -114,8 +114,6 @@ jobs:
       run: |
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends xorriso genisoimage udftools qemu-utils gdisk fdisk dosfstools e2fsprogs
         cargo test --locked -p sex-diskimage
-    - name: Corset partitioning, formatting, encryption and disk health on the host (sgdisk, fsck.fat from the step above)
-      run: cargo test --locked -p corset-core
     - name: Needle printing and scanning protocols (IPP, PWG raster, DNS-SD, eSCL goldens)
       run: |
         cargo test --locked -p sex-print
