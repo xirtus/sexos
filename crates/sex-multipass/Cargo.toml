@@ -1,0 +1,14 @@
+[package]
+name = "sex-multipass"
+version = "0.1.0"
+edition = "2021"
+# Ported from Andreas's leeloo-multipass and leeloo-multipass-sdk (MIT); SexOS code is GPL-3.0.
+license = "GPL-3.0-only"
+description = "Multipass, the SexOS accounts service core: a stamp book of linked network identities, OAuth/SSO/bio-proof linking, tokens held by Shibari, act-for-account grants"
+
+[dependencies]
+shibari = { path = "../shibari" }
+sha2 = { version = "=0.10.9", default-features = false, features = ["force-soft"] }
+p256 = { version = "=0.13.2", default-features = false, features = ["ecdsa"] }
+serde = { version = "1.0.228", default-features = false, features = ["derive", "alloc"] }
+serde_json = { version = "1.0.154", default-features = false, features = ["alloc"] }

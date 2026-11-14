@@ -1,0 +1,8 @@
+[package]
+name = "sex-textedit"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "Text editing for SexOS programs: a buffer with an undo tree, find and replace, and syntax colouring"
+
+[dependencies]

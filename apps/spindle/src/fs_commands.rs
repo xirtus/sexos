@@ -185,11 +185,12 @@ impl Client {
     /// A bare name means the program directory. `args` reach the program, and `flags`
     /// carry what the person allowed this run, such as the network.
     pub fn submit_program(&mut self, target: &[u8], args: &[u8], flags: u64, count: u64, sb: &mut Scrollback) {
-        self.submit_program_granted(target, args, flags, count, false, sb)
+        self.submit_program_granted(target, args, flags, count, b"", sb)
     }
-    /// `packages`: the run may install and remove packages (`run +pkg`). Files sees that as
-    /// the argument `+packages`, which only this adds: a typed one is dropped.
-    pub fn submit_program_granted(&mut self, target: &[u8], args: &[u8], flags: u64, count: u64, packages: bool, sb: &mut Scrollback) {
+    /// `grant`: a run argument only this adds (a typed one is dropped), or empty:
+    /// `+packages` lets the run install and remove packages (`run +pkg`), `+launch` lets a
+    /// terminal start programs attached to it (`spindle`).
+    pub fn submit_program_granted(&mut self, target: &[u8], args: &[u8], flags: u64, count: u64, grant: &[u8], sb: &mut Scrollback) {
         if self.busy() { sb.push(b"The disk is busy with the last command."); return; }
         let Some(region) = region() else { sb.push(b"The disk is not available."); return };
         if args.len() > w::ARGS_MAX { sb.push(b"Arguments too long."); return; }
@@ -209,9 +210,9 @@ impl Client {
         // `@PATH` gives the program that one file or folder: it travels as `@/absolute/path`.
         let mut given = [0u8; w::ARGS_MAX];
         let mut m = 0;
-        let token = sex_pdx::package::GRANT_TOKEN;
-        if packages { given[..token.len()].copy_from_slice(token); m = token.len(); }
-        for word in args.split(|b| *b == b' ').filter(|w| !w.is_empty() && *w != token) {
+        given[..grant.len()].copy_from_slice(grant); m = grant.len();
+        let granted = [sex_pdx::package::GRANT_TOKEN, sex_pdx::console_relay::GRANT_TOKEN];
+        for word in args.split(|b| *b == b' ').filter(|w| !w.is_empty() && !granted.contains(w)) {
             let mut piece = [0u8; w::ARGS_MAX];
             let word: &[u8] = match word.strip_prefix(b"@") {
                 Some(file) => {
@@ -427,6 +428,10 @@ impl Client {
 /// bare name still runs the program under its new name, for a while.
 pub const RENAMED: &[(&[u8], &[u8])] = &[
     (b"web", b"kaleidoscope"),
+    (b"store", b"sexshop"),
+    (b"monitor", b"mesh"),
+    (b"talk", b"flirt"),
+    (b"shapes", b"gestalt"),
 ];
 /// The program a bare name means now; a path or a current name is kept as given.
 pub fn renamed(target: &[u8]) -> &[u8] {
