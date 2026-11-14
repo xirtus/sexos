@@ -181,3 +181,87 @@ fn ext4_many_names_and_full_disk() {
     fsck(&d, &path, "full disk emptied");
     let _ = std::fs::remove_file(&path);
 }
+
+/// A folder Linux indexed (htree) takes new names: it becomes a plain folder, and Linux
+/// finds every name, old and new.
+#[test]
+fn ext4_indexed_folder_takes_new_names() {
+    let Some(debugfs) = tool("debugfs") else { return };
+    let seed = temp("ext4w-htree-seed");
+    let _ = std::fs::remove_dir_all(&seed);
+    std::fs::create_dir_all(seed.join("big")).unwrap();
+    for i in 0..300 { std::fs::write(seed.join(format!("big/linux file {i:03}.txt")), format!("{i}")).unwrap(); }
+    let Some((_, path)) = fresh("htree", 32, &["-d", seed.to_str().unwrap()]) else { return };
+    // Index every folder, as a Linux machine that ran `e2fsck -D` would have.
+    let _ = run(&tool("e2fsck").unwrap(), &["-fyD", path.to_str().unwrap()]);
+    let flags = String::from_utf8_lossy(&run(&debugfs, &["-R", "stat /big", path.to_str().unwrap()]).stdout).to_string();
+    assert!(flags.contains("Flags: 0x81000") || flags.contains("Flags: 0x1001000"), "big isn't indexed:\n{flags}");
+    let mut d = MemDisk::from_file(&path);
+    let mut v = sv::ext4::Ext4::mount(&mut d).unwrap();
+    v.set_now(1_763_000_000);
+    for i in 0..60 { v.create(&mut d, format!("big/sexos file {i:02}").as_bytes()).unwrap(); }
+    v.write(&mut d, b"big/sexos file 07", 0, b"hello").unwrap();
+    v.remove(&mut d, b"big/linux file 010.txt").unwrap();
+    v.create(&mut d, b"outside").unwrap();
+    v.rename(&mut d, b"outside", b"big/moved in").unwrap();
+    v.sync(&mut d).unwrap();
+    fsck(&d, &path, "indexed folder with new names");
+    assert_eq!(v.list(&mut d, b"big").unwrap().len(), 300 + 60 - 1 + 1);
+    let ls = String::from_utf8_lossy(&run(&debugfs, &["-R", "ls -l /big", path.to_str().unwrap()]).stdout).to_string();
+    assert!(ls.contains("sexos file 59") && ls.contains("linux file 299.txt") && ls.contains("moved in") && !ls.contains("linux file 010.txt"), "{ls}");
+    assert_eq!(debugfs_cat(&path, "big/sexos file 07"), b"hello");
+    assert_eq!(debugfs_cat(&path, "big/linux file 123.txt"), b"123");
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_dir_all(&seed);
+}
+
+/// A stick Linux left with transactions in its journal: mounting puts them home (and
+/// leaves out what a later transaction revoked), the journal is empty, the volume is
+/// writable and `e2fsck -fn` finds it clean.
+fn journal_replay(tag: &str, checksums: bool) {
+    let Some(debugfs) = tool("debugfs") else { return };
+    let seed = temp(&format!("ext4w-{tag}-seed"));
+    let _ = std::fs::remove_dir_all(&seed);
+    std::fs::create_dir_all(&seed).unwrap();
+    std::fs::write(seed.join("kept.txt"), vec![b'o'; 4096]).unwrap();
+    std::fs::write(seed.join("revoked.txt"), vec![b'r'; 4096]).unwrap();
+    let Some((_, path)) = fresh(tag, 32, &["-b", "4096", "-d", seed.to_str().unwrap()]) else { return };
+    let p = path.to_str().unwrap();
+    let block = |f: &str| -> u64 { String::from_utf8_lossy(&run(&debugfs, &["-R", &format!("bmap /{f} 0"), p]).stdout).trim().parse().unwrap() };
+    let (kept, revoked) = (block("kept.txt"), block("revoked.txt"));
+    let mut new = vec![b'n'; 4096];
+    // A block that starts with the journal's magic is stored escaped in the log.
+    new[..4].copy_from_slice(&0xC03B_3998u32.to_be_bytes());
+    std::fs::write(seed.join("new.blk"), [new.clone(), new.clone()].concat()).unwrap();
+    std::fs::write(seed.join("junk.blk"), vec![b'j'; 4096]).unwrap();
+    let nb = seed.join("new.blk");
+    let jb = seed.join("junk.blk");
+    let script = seed.join("cmds");
+    std::fs::write(&script, format!("jo{}\njw -b {kept},{revoked} {}\njw -r {revoked}\njc\n",
+        if checksums { " -c" } else { "" }, nb.to_str().unwrap())).unwrap();
+    let out = run(&debugfs, &["-w", "-f", script.to_str().unwrap(), p]);
+    let _ = jb;
+    let dump = String::from_utf8_lossy(&run(&tool("dumpe2fs").unwrap(), &["-h", p]).stdout).to_string();
+    assert!(dump.contains("needs_recovery"), "debugfs left no journal to replay:\n{}\n{dump}", String::from_utf8_lossy(&out.stderr));
+    let mut d = MemDisk::from_file(&path);
+    let mut v = sv::ext4::Ext4::mount(&mut d).unwrap();
+    assert!(sv::ext4::RECOVERED.load(std::sync::atomic::Ordering::Relaxed) >= 2, "{tag}: nothing replayed");
+    assert!(!v.read_only(), "{tag}: still read only after replay");
+    let got = read_all(&mut v, &mut d, "kept.txt");
+    assert!(got == new, "{tag}: the journalled block isn't home");
+    assert_eq!(read_all(&mut v, &mut d, "revoked.txt"), vec![b'r'; 4096], "{tag}: a revoked block was replayed");
+    v.set_now(1_763_000_000);
+    v.create(&mut d, b"after.txt").unwrap();
+    v.write(&mut d, b"after.txt", 0, b"written after replay").unwrap();
+    v.sync(&mut d).unwrap();
+    fsck(&d, &path, &format!("{tag}: replayed"));
+    let dump = String::from_utf8_lossy(&run(&tool("dumpe2fs").unwrap(), &["-h", p]).stdout).to_string();
+    assert!(!dump.contains("needs_recovery"), "{tag}: still needs recovery");
+    assert_eq!(debugfs_cat(&path, "after.txt"), b"written after replay");
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_dir_all(&seed);
+}
+#[test]
+fn ext4_journal_replayed() { journal_replay("journal", false); }
+#[test]
+fn ext4_journal_replayed_with_checksums() { journal_replay("journal-csum", true); }

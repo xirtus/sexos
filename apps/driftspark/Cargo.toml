@@ -1,0 +1,14 @@
+[package]
+name = "driftspark"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+
+[[bin]]
+name = "driftspark"
+path = "src/main.rs"
+
+[dependencies]
+sex-std = { path = "../../crates/sex-std" }
+sex-libc = { path = "../../crates/sex-libc" }
+sex-sdl = { path = "../../crates/sex-sdl" }

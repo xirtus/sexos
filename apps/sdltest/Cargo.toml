@@ -1,0 +1,14 @@
+[package]
+name = "sdltest"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+
+[[bin]]
+name = "sdltest"
+path = "src/main.rs"
+
+[dependencies]
+sex-std = { path = "../../crates/sex-std" }
+sex-libc = { path = "../../crates/sex-libc" }
+sex-sdl = { path = "../../crates/sex-sdl" }

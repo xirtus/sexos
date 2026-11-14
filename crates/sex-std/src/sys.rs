@@ -606,6 +606,13 @@ pub extern "C" fn sys_socket(domain: i32, kind: i32, protocol: i32) -> i32 {
 pub unsafe extern "C" fn sys_bind(s: i32, addr: *const abi::sockaddr, len: abi::socklen_t) -> i32 { on_sock!(s, k => unsafe { net::bind(&k, addr, len) }) }
 #[no_mangle]
 pub extern "C" fn sys_listen(s: i32, _backlog: i32) -> i32 { on_sock!(s, k => net::listen(&k)) }
+/// SexOS's own: TLS on a connected socket, to `host` (see net::tls_start).
+#[no_mangle]
+pub unsafe extern "C" fn sys_tls_start(s: i32, host: *const u8, len: usize) -> i32 {
+    if host.is_null() { return -errno::EFAULT; }
+    let host = unsafe { core::slice::from_raw_parts(host, len) };
+    on_sock!(s, k => net::tls_start(&k, host))
+}
 #[no_mangle]
 pub unsafe extern "C" fn sys_connect(s: i32, addr: *const abi::sockaddr, len: abi::socklen_t) -> i32 { on_sock!(s, k => unsafe { net::connect(&k, addr, len) }) }
 #[no_mangle]
