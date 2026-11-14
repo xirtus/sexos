@@ -2969,7 +2969,9 @@ version = "0.1.0"
 dependencies = [
  "hayro",
  "sex-font",
+ "sex-image",
  "sex-std",
+ "vellum-edit",
 ]
 
 [[package]]
@@ -5349,9 +5351,10 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 name = "view"
 version = "0.1.0"
 dependencies = [
- "sex-app",
+ "gaze-codecs",
+ "sex-font",
  "sex-image",
- "sex-pdx",
+ "sex-std",
 ]
 
 [[package]]

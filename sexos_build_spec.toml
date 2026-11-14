@@ -293,12 +293,14 @@ manifest = "apps/talk/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/talk"
 dest_artifact = "iso_root/programs/flirt"
 
+# Gaze (View): an ordinary std program, as JPEG XL and SVG need the standard library.
 [[stage]]
 id = "build_view"
 action = "cargo_manifest"
-target = "x86_64-sex-app.json"
+target = "x86_64-sex-std.json"
+build_std = "std,panic_abort"
 manifest = "apps/view/Cargo.toml"
-source_artifact = "target/x86_64-sex-app/release/view"
+source_artifact = "target/x86_64-sex-std/release/view"
 dest_artifact = "iso_root/programs/view"
 
 [[stage]]

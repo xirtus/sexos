@@ -75,6 +75,8 @@ jobs:
       run: cargo test --locked -p vellum-edit
     - name: Gaze decoders (EXIF orientation, JPEG XL, SVG, RAW previews) on the host
       run: cargo test --locked -p gaze-codecs --all-features
+    - name: Vellum and Gaze apps (annotation geometry, form order, thumbnails, EXIF panel) on the host
+      run: cargo test --locked -p pdf -p view
     - name: Aftercare backups (dedup, encryption, restore, prune, check) on the host
       run: cargo test --locked -p aftercare-core
     - name: Aftercare app (folder store, restore hashes, settings, schedule) on the host
@@ -623,7 +625,12 @@ jobs:
       run: |
         truncate -s 256M "$RUNNER_TEMP/blank-pdf.img"
         python3 scripts/program_pdf_find_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-pdf.img" --out "$RUNNER_TEMP/sexos-productivity/pdf-find"
-    - name: View pictures, turns, zoom, animated WebP and a folder slideshow
+    - name: Vellum highlights, notes, fills a form, saves an incremental update; pdf --thumb
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/blank-pdf-edit.img"
+        python3 -m pip install --quiet --user --break-system-packages pypdf==6.1.3 || true
+        python3 scripts/program_pdf_edit_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-pdf-edit.img" --out "$RUNNER_TEMP/sexos-productivity/pdf-edit"
+    - name: View pictures, turns, zoom, animated WebP, a folder slideshow, EXIF upright and details, SVG, --thumb
       run: |
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends python3-pil
         truncate -s 256M "$RUNNER_TEMP/blank-view.img"
