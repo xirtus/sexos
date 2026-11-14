@@ -19,6 +19,8 @@ mod launcher_search;
 mod session;
 mod keyboard_layout;
 mod key_repeat;
+mod access;
+mod access_glue;
 use alloc::vec::Vec;
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -10539,6 +10541,8 @@ unsafe fn key_repeat_poll() {
     if !delivered{KEY_REPEAT.cancel();}
 }
 unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
+    // Accessibility first: magnifier/filter chords, sticky, slow and bounce keys.
+    if access_glue::key(code,value){return true;}
     let code=if CAPS_AS_CTRL && code==0x3a {0x1d} else {code};
     // A keyboard's own typematic press of the repeating key is dropped; any
     // other press stops the repeat until it reaches a program itself.
@@ -25500,6 +25504,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { program_resize_flush(); }
         // Held keys: the repeat goes ahead of the queue drain below.
         unsafe { key_repeat_poll(); }
+        unsafe { access_glue::poll(); }
         unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); display_scale_poll(); shell_close_poll(); shell_memory_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); notification_poll(); }
         // Retain failed notification attempts while continuing normal receives.
         // Success means enqueue only; sexinput validates caller and version.

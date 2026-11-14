@@ -234,6 +234,10 @@ rustc --edition=2021 -A dead_code --test tests/launcher_search.rs -o "$TEST_DIR/
 rustc --edition=2021 -A dead_code --test tests/notify.rs -o "$TEST_DIR/notify"
 "$TEST_DIR/notify"
 rustc --edition=2021 -A dead_code --test tests/desktop_look.rs -o "$TEST_DIR/desktop-look"
+rustc --edition=2021 -A dead_code --test tests/access_view.rs -o "$TEST_DIR/access-view"
+"$TEST_DIR/access-view" --test-threads=1
+rustc --edition=2021 -A dead_code --test tests/access_keys.rs -o "$TEST_DIR/access-keys"
+"$TEST_DIR/access-keys"
 rustc --edition=2021 -A dead_code --test tests/window_switcher.rs -o "$TEST_DIR/window-switcher"
 "$TEST_DIR/window-switcher"
 rustc --edition=2021 -A dead_code --test tests/screenshot.rs -o "$TEST_DIR/screenshot"

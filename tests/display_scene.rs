@@ -31,6 +31,7 @@ pub mod app_lifecycle{
 #[path="../crates/sex-pdx/src/bitmap_batch.rs"]pub mod bitmap_batch;
 #[path="../crates/sex-pdx/src/desktop_style.rs"]pub mod desktop_style;
 #[path="../crates/sex-pdx/src/desktop_look.rs"]pub mod desktop_look;
+#[path="../crates/sex-pdx/src/access_view.rs"]pub mod access_view;
 #[path="../crates/sex-pdx/src/spindle_view.rs"]pub mod spindle_view;
 #[path="../servers/sexdisplay/src/surface_lifecycle.rs"]mod surface_lifecycle;
 #[path="../servers/sexdisplay/src/surface_groups.rs"]mod surface_groups;
