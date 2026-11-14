@@ -4007,6 +4007,14 @@ name = "sex-kms"
 version = "0.1.0"
 
 [[package]]
+name = "sex-kodi"
+version = "0.1.0"
+dependencies = [
+ "sex-archive",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "sex-libc"
 version = "0.1.0"
 dependencies = [
