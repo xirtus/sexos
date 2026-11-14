@@ -69,6 +69,8 @@ jobs:
       run: cargo test --locked -p sex-shape --features shaping
     - name: Pinyin input method
       run: cargo test --locked -p sex-ime
+    - name: Splicy editing core (timeline, edit by transcript, suggestions, render plan, OTIO)
+      run: cargo test --locked -p sex-splice
     - name: SexOS filesystem check and repair (injected faults)
       run: cargo test --locked --release -p sexfs --features repair --lib
     - name: Network stack (IPv6 resolvers, accept backlog, UDP queues) on the host
