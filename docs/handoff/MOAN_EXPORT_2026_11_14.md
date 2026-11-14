@@ -88,3 +88,28 @@ lossless source PCM and MP3 waveform/length, checks retained partial size and
 absence of a false saved receipt, and writes `result.json`. QEMU validation must
 pass in CI before merge. The host fixture and a guest compile do not establish
 that this guest file-export path passed.
+
+
+## Actual local QEMU result
+
+On 2026-11-14 the actual export gate passed with the integrated Moan app,
+standard format controls and Files picker. The guest produced WAV 768044 bytes,
+FLAC 74099 bytes and MP3 96788 bytes. Independent host decoding returned exactly
+192000 frames for both lossless formats, byte-identical to the rendered input;
+MP3 returned 191855 frames and passed stereo pitch, level and silent-tail checks.
+Close cancelled a long export, retained a 4140-byte partial and emitted no success
+receipt. The standard Discard button was clicked through its real widget rectangle.
+
+Machine-readable results and exact input hashes are retained in
+`docs/handoff/evidence/MOAN_EXPORT_QEMU_2026_11_14.json`. The Moan guest ELF hash is
+`a5b25b66b1657891dbc3b4598821ad3915faf77dbbf9c94641377021dd58cfab`; the tested gate
+was integration commit `70d125fd`. Detailed serial logs, exported files and the
+result are under `target/moan-final-proof/export` in the export worktree.
+
+This local development ISO grafted the newly built Shell and Files services into
+a verified existing ISO. The embedded kernel matched the current kernel source
+and binary; its ABI/catalog and unchanged boot metadata were checked. The other
+base boot modules and embedded installer payload were retained. This establishes
+real app/file/codec/Close behavior on that image. It does not replace the final
+combined-candidate CI or certify a rebuilt installer. All CI checks must still
+pass before merge.

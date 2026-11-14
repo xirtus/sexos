@@ -4383,7 +4383,9 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   MP3 pitch/level/duration,13-byte short acknowledgements, seek/header patches,
   bounded frames/output, invalid acknowledgements and abort. Full guest Moan links
   successfully (about11MiB) and passes forbidden-instruction scan. QEMU all3format
-  Files-export and Close/partial gate added; actual guest result awaits CI.
+  Files-export and Close/partial gate passed in actual local QEMU: lossless PCM
+  exact, real Shine MP3 validated, 4140-byte cancellation partial retained. Exact
+  hashes/scope: `evidence/MOAN_EXPORT_QEMU_2026_11_14.json`; final CI still required.
 - Contract, source/license references and exact evidence commands:
   `docs/handoff/MOAN_EXPORT_2026_11_14.md`.
 ## ChatGPT round 180: Moan editable projects and graphical waveform editing (2026-11-14)
