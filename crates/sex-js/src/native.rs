@@ -11,6 +11,8 @@ extern "C" {
     fn sxn_instantiate(i: *mut c_void, ctx: *mut c_void, max_bytes: u64) -> i32;
     fn sxn_free(i: *mut c_void);
     fn sxn_memory(i: *mut c_void, size: *mut u64) -> *mut u8;
+    #[cfg(feature = "baseline-jit")]
+    fn sxn_own_cache_stats(i: *mut c_void, out: *mut u32) -> i32;
     fn sxn_init(i: *mut c_void, heap: u32, out: *mut u32) -> i32;
     fn sxn_alloc(i: *mut c_void, n: u32, out: *mut u32) -> i32;
     fn sxn_release(i: *mut c_void, p: u32) -> i32;
@@ -119,7 +121,10 @@ extern "C" fn w2c_wasi__snapshot__preview1_fd_fdstat_get(_: *mut Ctx, _fd: u32, 
 extern "C" fn w2c_wasi__snapshot__preview1_fd_seek(_: *mut Ctx, _fd: u32, _o: u64, _w: u32, _at: u32) -> u32 { 8 }
 
 #[no_mangle]
-extern "C" fn w2c_dom_jit_available(_: *mut Ctx) -> u32 { if cfg!(feature = "baseline-jit") {3} else {0} }
+unsafe extern "C" fn w2c_dom_jit_available(ctx: *mut Ctx) -> u32 {
+    #[cfg(feature = "baseline-jit")] { if unsafe { (*ctx).jit.enabled } {3} else {0} }
+    #[cfg(not(feature = "baseline-jit"))] { let _ = ctx; 0 }
+}
 
 // Older guests have a different result or input protocol. Keep their imports
 // but decline compilation, so a stale guest uses interpreter fallback.
@@ -167,6 +172,13 @@ impl<P: Page + 'static> Native<P> {
     pub fn set_jit_enabled(&mut self, enabled: bool) { unsafe { (*self.ctx).jit.enabled = enabled; } }
     #[cfg(feature = "baseline-jit")]
     pub fn jit_stats(&self) -> super::baseline::Stats { unsafe { (*self.ctx).jit.stats } }
+    #[cfg(feature = "baseline-jit")]
+    pub fn own_property_cache_stats(&mut self) -> Result<[u64; 2], Error> {
+        let at = self.run(|i, o| unsafe { sxn_own_cache_stats(i, o) })? as usize;
+        let data = unsafe { memory(&*self.ctx) };
+        let bytes = data.get(at..at.saturating_add(16)).ok_or_else(|| Error::Trapped(String::from("cache stats")))?;
+        Ok([u64::from_le_bytes(bytes[..8].try_into().unwrap()), u64::from_le_bytes(bytes[8..].try_into().unwrap())])
+    }
     pub fn page(&self) -> &P { unsafe { &*self.page } }
     pub fn page_mut(&mut self) -> &mut P { unsafe { &mut *self.page } }
 

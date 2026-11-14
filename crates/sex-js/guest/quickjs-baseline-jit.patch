@@ -1,6 +1,79 @@
 --- a/quickjs.c
 +++ b/quickjs.c
-@@ -16486,6 +16486,26 @@
+@@ -7538,3 +7538,54 @@
++/* Weak shape identities are never dereferenced. A current slot must still
++   have the expected atom and an ordinary data descriptor, even after a shape
++   mutation or allocator address reuse. Cached reads always use fresh values.
++   Prototype walks, accessors, proxies and exotic objects retain the slow path. */
++#define SEXOS_OWN_CACHE_SIZE 256
++static struct {
++    uintptr_t shape;
++    JSAtom atom;
++    uint32_t slot;
++} sexos_own_cache[SEXOS_OWN_CACHE_SIZE];
++extern int sexos_baseline_jit_enabled;
++uint64_t sexos_own_cache_stats[2];
++
++static inline uint32_t sexos_own_cache_index(JSObject *p, JSAtom atom)
++{
++    return (((uintptr_t)p->shape >> 4) ^ atom) & (SEXOS_OWN_CACHE_SIZE - 1);
++}
++
++static inline bool sexos_own_cache_read(JSObject *p, JSAtom atom, JSValue *out)
++{
++    uint32_t index, slot;
++    JSShapeProperty *prs;
++    if (!sexos_baseline_jit_enabled || p->is_exotic || p->class_id != JS_CLASS_OBJECT)
++        return false;
++    index = sexos_own_cache_index(p, atom);
++    slot = sexos_own_cache[index].slot;
++    if (sexos_own_cache[index].shape == (uintptr_t)p->shape &&
++        sexos_own_cache[index].atom == atom && slot < p->shape->prop_count) {
++        prs = &p->shape->prop[slot];
++        if (prs->atom == atom && !(prs->flags & JS_PROP_TMASK)) {
++            *out = js_dup(p->prop[slot].u.value);
++            sexos_own_cache_stats[0]++;
++            return true;
++        }
++    }
++    sexos_own_cache_stats[1]++;
++    return false;
++}
++
++static inline void sexos_own_cache_remember(JSObject *p, JSAtom atom,
++                                           JSShapeProperty *prs)
++{
++    uint32_t index;
++    if (!sexos_baseline_jit_enabled || p->is_exotic || p->class_id != JS_CLASS_OBJECT)
++        return;
++    index = sexos_own_cache_index(p, atom);
++    sexos_own_cache[index].shape = (uintptr_t)p->shape;
++    sexos_own_cache[index].atom = atom;
++    sexos_own_cache[index].slot = prs - p->shape->prop;
++}
++
+ static JSValue JS_GetPropertyInternal(JSContext *ctx, JSValueConst obj,
+                                       JSAtom prop, JSValueConst this_obj,
+                                       bool throw_ref_error)
+@@ -7576,5 +7627,8 @@
+         if (!p)
+             return JS_UNDEFINED;
+     } else {
++        JSValue cached;
+         p = JS_VALUE_GET_OBJ(obj);
++        if (sexos_own_cache_read(p, prop, &cached))
++            return cached;
+     }
+@@ -7605,6 +7659,8 @@
+                     continue;
+                 }
+             } else {
++                if (tag == JS_TAG_OBJECT && p == JS_VALUE_GET_OBJ(obj))
++                    sexos_own_cache_remember(p, prop, prs);
+                 return js_dup(pr->u.value);
+             }
+         }
+@@ -16486,6 +16542,26 @@
                           argv, flags);
      }
      b = p->u.func.function_bytecode;

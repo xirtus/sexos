@@ -1556,3 +1556,57 @@ fn baseline_cold_functions_do_not_exclude_later_hot_code() {
     #[cfg(all(target_arch="x86_64",target_os="linux"))]
     { assert!(on.jit_stats().compiled>=1,"{:?}",on.jit_stats()); assert!(on.jit_stats().executed>90); }
 }
+
+#[cfg(feature = "baseline-jit")]
+#[test]
+fn baseline_own_property_cache_guards_mutation_and_effects() {
+    let source = r#"
+        function read(o) { return o.value; }
+        let o={value:1, other:2}, sum=0;
+        for(let i=0;i<500;i++) { o.value=i; sum+=read(o); }
+        console.log(sum);
+        o.value={nested:'retained'};
+        let held=read(o); o.value='replacement';
+        console.log(held.nested,read(o));
+        delete o.value;
+        Object.setPrototypeOf(o,{value:'inherited'});
+        console.log(read(o));
+        let calls=0;
+        Object.defineProperty(o,'value',{configurable:true,get(){calls++;return 'getter';}});
+        console.log(read(o),read(o),calls);
+        Object.defineProperty(o,'value',{configurable:true,writable:true,value:'data'});
+        console.log(read(o));
+        delete o.value; o.reused='wrong'; o.value='right';
+        console.log(read(o));
+        let traps=0, proxy=new Proxy(o,{get(t,k){traps++;return Reflect.get(t,k);}});
+        console.log(read(proxy),read(proxy),traps);
+        let revoked=Proxy.revocable(o,{}); revoked.revoke();
+        try { read(revoked.proxy); } catch(e) { console.log(e.name); }
+        const a=Symbol('same'), b=Symbol('same');
+        let symbols={[a]:'first',[b]:'second'};
+        for(let i=0;i<100;i++) { if(symbols[a]!=='first'||symbols[b]!=='second') throw Error('symbol'); }
+        console.log(symbols[a],symbols[b]);
+        for(let i=0;i<2000;i++) {
+            let fresh=i&1?{value:i,pad:0}:{pad:0,value:i};
+            if(read(fresh)!==i) throw Error('shape');
+            delete fresh.value; fresh.other=i; fresh.value='changed';
+            if(read(fresh)!=='changed') throw Error('reused slot');
+        }
+        console.log('cache guards complete');
+    "#;
+    let mut interpreter = page("");
+    interpreter.set_jit_enabled(false);
+    let before = interpreter.own_property_cache_stats().unwrap();
+    interpreter.eval(source, "own-cache.js").unwrap();
+    assert_eq!(interpreter.own_property_cache_stats().unwrap(), before);
+    let expected = logs(&mut interpreter);
+    let mut candidate = page("");
+    let before = candidate.own_property_cache_stats().unwrap();
+    candidate.eval(source, "own-cache.js").unwrap();
+    assert_eq!(logs(&mut candidate), expected);
+    let after = candidate.own_property_cache_stats().unwrap();
+    assert!(after[0] > before[0] + 100, "cache must actually execute: {before:?} -> {after:?}");
+    candidate.set_jit_enabled(false);
+    candidate.eval("for(let i=0;i<100;i++) read(o);", "disabled-cache.js").unwrap();
+    assert_eq!(candidate.own_property_cache_stats().unwrap(), after);
+}

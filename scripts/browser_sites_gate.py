@@ -69,9 +69,9 @@ SUITE=[
 LIVE_TEXT={'news':'npr','links':'comments','encyclopedia':'microkernel','github':'sexos'}
 def main():
  global PROGRAM
- p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');p.add_argument('--live',action='store_true');p.add_argument('--program',type=Path,default=PROGRAM);p.add_argument('--no-jit',action='store_true');p.add_argument('--site',choices=[r[0] for r in SUITE]);a=p.parse_args();PROGRAM=a.program.resolve()
+ p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');p.add_argument('--live',action='store_true');p.add_argument('--program',type=Path,default=PROGRAM);p.add_argument('--no-jit',action='store_true');p.add_argument('--site',action='append',choices=[r[0] for r in SUITE]);a=p.parse_args();PROGRAM=a.program.resolve()
  a.out.mkdir(parents=True,exist_ok=True)
- (a.out/'inputs.json').write_text(json.dumps({'iso_sha256':hashlib.sha256(a.iso.read_bytes()).hexdigest(),'program_sha256':hashlib.sha256(PROGRAM.read_bytes()).hexdigest(),'live':a.live,'forced_interpreter':a.no_jit,'resolution':a.resolution,'timing_scope':'page initial fetch/layout/scripts, not asynchronous work or playback','speedup_claim':False},indent=2)+'\n')
+ (a.out/'inputs.json').write_text(json.dumps({'runner_sha256':hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),'loadavg_before':os.getloadavg(),'iso_sha256':hashlib.sha256(a.iso.read_bytes()).hexdigest(),'program_sha256':hashlib.sha256(PROGRAM.read_bytes()).hexdigest(),'live':a.live,'forced_interpreter':a.no_jit,'resolution':a.resolution,'timing_scope':'initial fetch/layout/scripts plus departure cumulative VM time including host calls; not CPU time or playback','speedup_claim':False},indent=2)+'\n')
  disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
  with disk.open('r+b') as f:f.truncate(1024**3)
  rw,rh=map(int,a.resolution.split('x'))
@@ -101,7 +101,7 @@ def main():
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
   g['focus'](153);time.sleep(.5);s=len(t());keys(f'fetch {BASE}/web /bin/kaleidoscope');q.key('ret')
   m=g['wait'](r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',s,240);assert m[1].startswith('Saved'),m[1]
-  for i,(name,local,live,text,least) in enumerate([row for row in SUITE if not a.site or row[0]==a.site]):
+  for i,(name,local,live,text,least) in enumerate([row for row in SUITE if not a.site or row[0] in a.site]):
    url=live if a.live else local
    if a.live:text,least=LIVE_TEXT[name],1
    began=time.time()
@@ -143,6 +143,7 @@ def main():
   text=t();assert 'KERNEL PANIC' not in text and '[web.fatal]' not in text and 'panicked' not in text
   for outcome in outcomes:
    outcome['jit_departure_receipts']=[r for r in re.findall(r'\[web.jit.departure\] ([^\r\n]+)',text) if r.endswith('url='+outcome['url'])]
+   outcome['object_cache_departure_receipts']=[r for r in re.findall(r'\[web.object-cache.departure\] ([^\r\n]+)',text) if r.endswith('url='+outcome['url'])]
   (a.out/'sites.json').write_text(json.dumps(outcomes,indent=1))
   print({'ok':True,'sites':len(outcomes)})
  finally:g['stop']()

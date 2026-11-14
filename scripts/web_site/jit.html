@@ -36,4 +36,22 @@ for(let i=0;i<96;i++)new Function('return '+(i+100))();
 function later(a){return (a+7)^3;}
 let sum=0;for(let i=0;i<128;i++)sum+=later(i);capture.push(sum);
 console.log('jit-captured',capture.join('|'));
+// Own-property cache: fresh values and descriptor/slot changes, never getters.
+let cacheObject={value:0,pad:1}, cacheSum=0;
+function cacheRead(o){return o.value;}
+for(let i=0;i<500;i++){cacheObject.value=i;cacheSum+=cacheRead(cacheObject);}
+let cacheResults=[cacheSum];
+cacheObject.value={name:'retained'};let cacheHeld=cacheRead(cacheObject);
+cacheObject.value='replacement';cacheResults.push(cacheHeld.name,cacheRead(cacheObject));
+delete cacheObject.value;Object.setPrototypeOf(cacheObject,{value:'prototype'});
+cacheResults.push(cacheRead(cacheObject));
+let cacheGets=0;Object.defineProperty(cacheObject,'value',{configurable:true,get(){cacheGets++;return 'getter';}});
+cacheResults.push(cacheRead(cacheObject),cacheRead(cacheObject),cacheGets);
+Object.defineProperty(cacheObject,'value',{configurable:true,writable:true,value:'own'});
+cacheResults.push(cacheRead(cacheObject));
+delete cacheObject.value;cacheObject.other='wrong';cacheObject.value='right';
+cacheResults.push(cacheRead(cacheObject));
+let cacheTraps=0;let cacheProxy=new Proxy(cacheObject,{get(t,k){cacheTraps++;return Reflect.get(t,k);}});
+cacheResults.push(cacheRead(cacheProxy),cacheRead(cacheProxy),cacheTraps);
+console.log('jit-object-cache',cacheResults.join('|'));
 </script>

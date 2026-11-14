@@ -206,6 +206,8 @@ struct Wasmi<P: Page + 'static> {
     module: TypedFunc<(i32, i32, i32, i32, i32, i32), i32>,
     ready: TypedFunc<i32, i32>,
     dispatch: TypedFunc<(i32, i32, i32), i32>,
+    #[cfg(feature = "baseline-jit")]
+    own_cache_stats: Option<TypedFunc<(), i32>>,
 }
 
 fn trapped(x: wasmi::Error) -> Error { Error::Trapped(format!("{x}")) }
@@ -307,6 +309,8 @@ impl<P: Page + 'static> Script<P> {
             module: instance.get_typed_func(&store, "sx_module").map_err(|_| e("sx_module"))?,
             ready: instance.get_typed_func(&store, "sx_modules_ready").map_err(|_| e("sx_modules_ready"))?,
             dispatch: instance.get_typed_func(&store, "sx_dispatch").map_err(|_| e("sx_dispatch"))?,
+            #[cfg(feature = "baseline-jit")]
+            own_cache_stats: instance.get_typed_func(&store, "sx_own_cache_stats").ok(),
             store, memory,
         };
         if start.call(&mut w.store, limits.heap_bytes as i32).map_err(|x| Error::Engine(format!("{x}")))? != 0 { return Err(e("init")); }
@@ -432,6 +436,21 @@ impl<P: Page + 'static> Script<P> {
         }
     }
 
+    /// Guest own-property cache hits and misses; separate from native JIT code.
+    #[cfg(feature = "baseline-jit")]
+    pub fn own_property_cache_stats(&mut self) -> Result<[u64; 2], Error> {
+        match &mut self.vm {
+            Vm::Wasmi(w) => {
+                let Some(f) = w.own_cache_stats else { return Ok([0; 2]); };
+                let at = f.call(&mut w.store, ()).map_err(trapped)? as usize;
+                let mut bytes = [0; 16];
+                w.memory.read(&w.store, at, &mut bytes).map_err(|_| Error::Trapped(String::from("cache stats")))?;
+                Ok([u64::from_le_bytes(bytes[..8].try_into().unwrap()), u64::from_le_bytes(bytes[8..].try_into().unwrap())])
+            },
+            #[cfg(sexjs_native)] Vm::Native(v) => v.own_property_cache_stats(),
+        }
+    }
+
     /// Bytes of linear memory the engine holds.
     pub fn memory_bytes(&self) -> usize { self.vm.memory_bytes() }
 }
@@ -461,7 +480,10 @@ fn link<P: Page + 'static>(linker: &mut Linker<State<P>>) -> Result<(), wasmi::e
     })?;
     // Protocol 3 supplies scalar argument/closure snapshots. Older guests
     // keep interpreter fallback rather than passing a different input shape.
-    linker.func_wrap("dom", "jit_available", |_: C<'_, P>| -> i32 { if cfg!(feature = "baseline-jit") {3} else {0} })?;
+    linker.func_wrap("dom", "jit_available", |c: C<'_, P>| -> i32 {
+        #[cfg(feature = "baseline-jit")] { if c.data().jit.enabled {3} else {0} }
+        #[cfg(not(feature = "baseline-jit"))] { let _ = c; 0 }
+    })?;
     linker.func_wrap("dom", "jit", |_: C<'_, P>, _: i32, _: i32, _: i32, _: i32, _: i32| -> i32 { 0 })?;
     linker.func_wrap("dom", "jit_v2", |_: C<'_, P>, _: i32, _: i32, _: i32, _: i32, _: i32| -> i32 { 0 })?;
     linker.func_wrap("dom", "jit_v3", |mut c: C<'_, P>, pc: i32, len: i32, argv: i32, argc: i32, out: i32| -> i32 {
