@@ -40,6 +40,8 @@ members = [
     "apps/web",
     "crates/sex-app",
     "crates/sex-egui",
+    "crates/weft",
+    "apps/abacus",
     "apps/tassel",
     "crates/sex-html",
     "crates/sex-js",

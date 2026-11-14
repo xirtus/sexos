@@ -9,6 +9,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "366ffbaa4442f4684d91e2cd7c5ea7c4ed8add41959a31447066e279e432b618"
 
 [[package]]
+name = "abacus"
+version = "0.1.0"
+dependencies = [
+ "libm",
+ "sex-app",
+ "sex-pdx",
+ "weft",
+]
+
+[[package]]
 name = "accesskit"
 version = "0.25.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3851,6 +3861,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "slotmap"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bdd58c3c93c3d278ca835519292445cb4b0d4dc59ccfdf7ceadaab3f8aeb4038"
+dependencies = [
+ "version_check",
+]
+
+[[package]]
 name = "smallvec"
 version = "1.16.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4039,6 +4058,16 @@ dependencies = [
  "serde_derive",
  "thiserror",
  "walkdir",
+]
+
+[[package]]
+name = "taffy"
+version = "0.15.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "31f7bd2d97198df05186f93a3a3c306845f40e8b3c22bf9279cdd7e5cf5fea7d"
+dependencies = [
+ "slotmap",
+ "smallvec",
 ]
 
 [[package]]
@@ -4637,6 +4666,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b2878ef029c47c6e8cf779119f20fcf52bde7ad42a731b2a304bc221df17571e"
 dependencies = [
  "rustls-pki-types",
+]
+
+[[package]]
+name = "weft"
+version = "0.1.0"
+dependencies = [
+ "accesskit",
+ "libm",
+ "png 0.18.1",
+ "sex-app",
+ "sex-font",
+ "sex-pdx",
+ "taffy",
+ "tiny-skia",
 ]
 
 [[package]]
