@@ -57,6 +57,10 @@ pub struct SearchQuery {
     pub cats: Vec<u32>,
     pub limit: Option<u32>,
     pub offset: Option<u32>,
+    /// The release the person watched last (the previous episode's file name): results
+    /// from the same group, resolution and codec rank higher (`sex_episodes::similarity`).
+    /// Not sent to indexers.
+    pub like: Option<String>,
 }
 
 /// Percent-encodes a query value (RFC 3986 unreserved characters kept).
@@ -318,6 +322,7 @@ fn score(r: &IndexerResult, q: &SearchQuery) -> i32 {
         let ep_ok = match q.ep { None => true, Some(e) => rel.episodes.contains(&e) || (rel.season.is_some() && rel.episodes.is_empty()) };
         s += if season_ok && ep_ok { if rel.episodes.is_empty() && q.ep.is_some() { 50 } else { 150 } } else { -300 };
     }
+    if let Some(prev) = q.like.as_deref() { s += sex_episodes::episodes::similarity(prev, &r.title).clamp(-100, 150); }
     s += match r.seeders {
         Some(0) => -200,
         Some(n) => ((32 - (n.min(1 << 20) + 1).leading_zeros()) as i32 * 30).min(300),
@@ -537,4 +542,13 @@ mod tests {
         assert!(title_similarity("name", "A Much Longer Different Show Name") < 100);
         assert_eq!(title_similarity("", "x"), 100);
     }
+
+    #[test]
+    fn like_prefers_the_same_release_group() {
+        let mk = |t: &str| IndexerResult { title: String::from(t), seeders: Some(50), ..IndexerResult::default() };
+        let q = SearchQuery { like: Some(String::from("Show.S01E01.1080p.WEB.h264-GRP")), ..SearchQuery::tv("Show", Some(1), Some(2)) };
+        let out = merge_and_rank(alloc::vec![alloc::vec![mk("Show.S01E02.720p.HDTV.x265-OTHER"), mk("Show.S01E02.1080p.WEB.h264-GRP")]], &q);
+        assert_eq!(out[0].title, "Show.S01E02.1080p.WEB.h264-GRP");
+    }
+
 }
