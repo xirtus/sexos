@@ -65,6 +65,16 @@ impl<'a> Clip<'a> {
             fade_out: 0,
         })
     }
+    /// Immutable source view, shared by project clips; never mutable audio.
+    pub fn source_frames(&self) -> &[Frame] {
+        self.source.frames()
+    }
+    pub fn source_offset(&self) -> usize {
+        self.offset
+    }
+    pub fn fades(&self) -> (usize, usize) {
+        (self.fade_in, self.fade_out)
+    }
     pub fn gain(&self) -> u16 {
         self.gain
     }
