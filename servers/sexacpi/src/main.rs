@@ -36,6 +36,9 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use sex_pdx::power as w;
 use sex_pdx::serial_println;
 
+mod laptop;
+mod touchpad;
+
 // ── Memory ─────────────────────────────────────────────────────────────────
 
 const HEAP_BYTES: usize = 3 * 1024 * 1024;
@@ -102,7 +105,7 @@ fn calibrate() {
     let per_us = (rdtsc() - c0) / 20_000;
     TSC_PER_US.store(per_us.clamp(100, 10_000), Ordering::Relaxed);
 }
-fn stall_us(us: u64) {
+pub(crate) fn stall_us(us: u64) {
     let end = rdtsc().saturating_add(us.saturating_mul(TSC_PER_US.load(Ordering::Relaxed)));
     while rdtsc() < end { core::hint::spin_loop(); }
 }
@@ -115,13 +118,13 @@ fn stall_us(us: u64) {
 static BUDGET: AtomicU64 = AtomicU64::new(u64::MAX);
 /// About ten seconds of register access and stalls, `_INI` included.
 const PASS_BUDGET: u64 = 10_000_000;
-fn spend(units: u64) {
+pub(crate) fn spend(units: u64) {
     let left = BUDGET.load(Ordering::Relaxed);
     if left == u64::MAX { return; }
     if left < units { BUDGET.store(u64::MAX, Ordering::Relaxed); panic!("AML work budget spent"); }
     BUDGET.store(left - units, Ordering::Relaxed);
 }
-fn bounded<R>(f: impl FnOnce() -> R) -> R {
+pub(crate) fn bounded<R>(f: impl FnOnce() -> R) -> R {
     BUDGET.store(PASS_BUDGET, Ordering::Relaxed);
     let r = on_aml_stack(f);
     BUDGET.store(u64::MAX, Ordering::Relaxed);
@@ -138,7 +141,7 @@ fn window(reply: [u64; 5], what: &str, at: u64) -> u64 {
     }
     reply[1]
 }
-fn io(port: u16, width: u64, write: Option<u64>) -> u64 {
+pub(crate) fn io(port: u16, width: u64, write: Option<u64>) -> u64 {
     spend(1);
     let arg = port as u64 | width << 16 | (write.is_some() as u64) << 24;
     window(w::call4(w::FW_IO, arg, write.unwrap_or(0), 0), "port", port as u64)
@@ -194,6 +197,7 @@ impl acpi::Handler for Fw {
     fn create_mutex(&self) -> Handle { static NEXT: AtomicU64 = AtomicU64::new(1); Handle(NEXT.fetch_add(1, Ordering::Relaxed) as u32) }
     fn acquire(&self, _: Handle, _: u16) -> Result<(), AmlError> { Ok(()) }
     fn release(&self, _: Handle) {}
+    fn handle_notify(&self, target: &WrappedObject, value: u64) { laptop::on_notify(target, value) }
     fn handle_fatal_error(&self, kind: u8, code: u32, arg: u64) {
         serial_println!("[sexacpi.aml.fatal] type={} code={:#x} arg={:#x}", kind, code, arg);
     }
@@ -221,14 +225,14 @@ fn table(index: u64) -> Option<(u32, Vec<u8>)> {
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-type Aml = Interpreter<Fw>;
-fn name(path: &str) -> Option<AmlName> { AmlName::from_str(path).ok() }
-fn int_of(o: &WrappedObject) -> Option<u64> { if let Object::Integer(v) = **o { Some(v) } else { None } }
-fn eval(aml: &Aml, path: &AmlName, method: &str, args: Vec<WrappedObject>) -> Option<WrappedObject> {
+pub(crate) type Aml = Interpreter<Fw>;
+pub(crate) fn name(path: &str) -> Option<AmlName> { AmlName::from_str(path).ok() }
+pub(crate) fn int_of(o: &WrappedObject) -> Option<u64> { if let Object::Integer(v) = **o { Some(v) } else { None } }
+pub(crate) fn eval(aml: &Aml, path: &AmlName, method: &str, args: Vec<WrappedObject>) -> Option<WrappedObject> {
     let full = name(method)?.resolve(path).ok()?;
     aml.evaluate_if_present(full, args).ok().flatten()
 }
-fn eval_int(aml: &Aml, path: &AmlName, method: &str) -> Option<u64> { eval(aml, path, method, Vec::new()).and_then(|o| int_of(&o)) }
+pub(crate) fn eval_int(aml: &Aml, path: &AmlName, method: &str) -> Option<u64> { eval(aml, path, method, Vec::new()).and_then(|o| int_of(&o)) }
 fn id_string(o: &WrappedObject) -> Option<String> {
     match &**o {
         Object::Integer(v) => Some(String::from_utf8_lossy(&w::eisa_id(*v as u32)).into_owned()),
@@ -236,7 +240,7 @@ fn id_string(o: &WrappedObject) -> Option<String> {
         _ => None,
     }
 }
-fn ids_of(aml: &Aml, path: &AmlName) -> Vec<String> {
+pub(crate) fn ids_of(aml: &Aml, path: &AmlName) -> Vec<String> {
     let mut ids = Vec::new();
     if let Some(h) = eval(aml, path, "_HID", Vec::new()).and_then(|o| id_string(&o)) { ids.push(h); }
     if let Some(c) = eval(aml, path, "_CID", Vec::new()) {
@@ -247,13 +251,13 @@ fn ids_of(aml: &Aml, path: &AmlName) -> Vec<String> {
 fn present(aml: &Aml, path: &AmlName) -> bool { eval_int(aml, path, "_STA").map_or(true, |s| s & 1 != 0) }
 
 #[derive(Default)]
-struct Devices {
-    batteries: Vec<AmlName>,
-    ac: Vec<AmlName>,
-    lids: Vec<AmlName>,
-    thermal: Vec<AmlName>,
-    processors: Vec<AmlName>,
-    i2c_hid: Vec<AmlName>,
+pub(crate) struct Devices {
+    pub batteries: Vec<AmlName>,
+    pub ac: Vec<AmlName>,
+    pub lids: Vec<AmlName>,
+    pub thermal: Vec<AmlName>,
+    pub processors: Vec<AmlName>,
+    pub i2c_hid: Vec<AmlName>,
 }
 
 fn inventory(aml: &Aml) -> Devices {
@@ -281,7 +285,7 @@ fn inventory(aml: &Aml) -> Devices {
                 else if has("ACPI0003") { d.ac.push(path); }
                 else if has("PNP0C0D") { d.lids.push(path); }
                 else if has("PNP0C50") || has("ACPI0C50") {
-                    serial_println!("[sexacpi.i2c_hid] path={} ids={:?} driver=later", path, ids);
+                    serial_println!("[sexacpi.i2c_hid] path={} ids={:?}", path, ids);
                     d.i2c_hid.push(path);
                 }
             }
@@ -306,30 +310,6 @@ fn choose_cstate(aml: &Aml, cpu: &AmlName) -> Option<(u8, u16, u32)> {
         if latency <= 200 && best.map_or(true, |(k, _, _)| kind as u8 > k) { best = Some((kind as u8, latency as u16, hint)); }
     }
     best
-}
-
-fn read_sensors(aml: &Aml, d: &Devices) -> w::Sensors {
-    let mut s = w::Sensors::default();
-    let (mut now, mut full, mut charging) = (0u64, 0u64, false);
-    for b in d.batteries.iter() {
-        if eval_int(aml, b, "_STA").map_or(true, |v| v & 0x10 == 0) { continue; }
-        let bst = eval(aml, b, "_BST", Vec::new());
-        let (bix, shift) = match eval(aml, b, "_BIX", Vec::new()) { Some(o) => (Some(o), 1), None => (eval(aml, b, "_BIF", Vec::new()), 0) };
-        if let (Some(bst), Some(bix)) = (bst, bix) {
-            if let (Object::Package(st), Object::Package(info)) = (&*bst, &*bix) {
-                let remaining = st.get(2).and_then(int_of).unwrap_or(0);
-                let last_full = info.get(2 + shift).and_then(int_of).filter(|v| *v != 0 && *v != 0xFFFF_FFFF)
-                    .or_else(|| info.get(1 + shift).and_then(int_of)).unwrap_or(0);
-                if remaining != 0xFFFF_FFFF && last_full != 0 && last_full != 0xFFFF_FFFF { now += remaining; full += last_full; }
-                charging |= st.first().and_then(int_of).map_or(false, |v| v & 2 != 0);
-            }
-        }
-    }
-    if full != 0 { s.battery_percent = Some(((now * 100) / full).min(100) as u8); s.charging = charging; }
-    if let Some(ac) = d.ac.first() { s.on_ac = eval_int(aml, ac, "_PSR").map(|v| v != 0); }
-    if let Some(lid) = d.lids.first() { s.lid_open = eval_int(aml, lid, "_LID").map(|v| v != 0); }
-    s.hottest_decikelvin = d.thermal.iter().filter_map(|t| eval_int(aml, t, "_TMP")).filter(|v| *v > 0 && *v < 6000).max().map(|v| v as u32);
-    s
 }
 
 // ── Discrete GPU power (D3cold) ────────────────────────────────────────────
@@ -363,7 +343,7 @@ fn adr_matches(adr: u64, b: Bdf) -> bool {
     (adr >> 16) as u8 == b.dev && (adr & 0xFFFF == b.func as u64 || adr & 0xFFFF == 0xFFFF)
 }
 /// Every ACPI device.
-fn acpi_devices(aml: &Aml) -> Vec<AmlName> {
+pub(crate) fn acpi_devices(aml: &Aml) -> Vec<AmlName> {
     let mut found = Vec::new();
     let mut ns = aml.namespace.lock().clone();
     let _ = ns.traverse(|path, level| { if matches!(level.kind, NamespaceLevelKind::Device) { found.push(path.clone()); } Ok(true) });
@@ -543,10 +523,13 @@ pub extern "C" fn _start() -> ! {
         let _ = w::call4(w::FW_INVENTORY, 0, u64::MAX, 1);
         loop { let _ = sex_pdx::sys_wait_self_ticks(64); }
     };
-    let (devices, s5, cstate) = bounded(|| {
+    let (devices, s5, cstate, ec, mut light) = bounded(|| {
+        // The embedded controller first: `_INI` and `_REG` may already read it.
+        let ec = laptop::ec_install(aml, &acpi_devices(aml));
         // Interrupts go through the APIC: tell the firmware before _INI runs.
         if let Some(pic) = name("\\_PIC") { let _ = aml.evaluate_if_present(pic, alloc::vec![WrappedObject::new(Object::Integer(1))]); }
         aml.initialize_namespace();
+        if let Some(dev) = &ec { laptop::ec_connect(aml, dev); }
         let mut s5 = u64::MAX;
         if let Some(o) = eval(aml, &AmlName::root(), "\\_S5", Vec::new()) {
             if let Object::Package(items) = &*o {
@@ -555,19 +538,22 @@ pub extern "C" fn _start() -> ! {
         }
         let devices = inventory(aml);
         let cstate = devices.processors.first().and_then(|cpu| choose_cstate(aml, cpu));
-        (devices, s5, cstate)
+        let light = laptop::Backlight::find(aml, &acpi_devices(aml));
+        (devices, s5, cstate, ec, light)
     });
     let counts = devices.batteries.len().min(255) as u64 | (devices.lids.len().min(255) as u64) << 8
         | (devices.thermal.len().min(255) as u64) << 16 | (devices.i2c_hid.len().min(255) as u64) << 24 | 1 << 32;
     let _ = w::call4(w::FW_INVENTORY, counts, s5, 0);
     let idle = cstate.map_or(u64::MAX, |(kind, latency, hint)| w::call4(w::FW_IDLE, kind as u64 | (latency as u64) << 8 | (hint as u64) << 32, 0, 0)[0]);
-    serial_println!("[sexacpi.ready] aml=1 batteries={} ac={} lids={} thermal={} processors={} i2c_hid={} s5={:#x} idle={}",
+    serial_println!("[sexacpi.ready] aml=1 batteries={} ac={} lids={} thermal={} processors={} i2c_hid={} s5={:#x} idle={} ec={} backlight={}",
         devices.batteries.len(), devices.ac.len(), devices.lids.len(), devices.thermal.len(), devices.processors.len(), devices.i2c_hid.len(),
-        s5, if idle == w::OK { "mwait" } else { "hlt" });
+        s5, if idle == w::OK { "mwait" } else { "hlt" }, ec.is_some() as u8, light.output.is_some() as u8);
 
     power_off_gpus(aml);
+    let mut touchpads = bounded(|| touchpad::find(aml, &devices.i2c_hid));
 
     let mut next_read = 0u64;
+    let mut last = w::Sensors::default();
     loop {
         while let Some(msg) = sex_pdx::pdx_try_listen_raw(0) {
             if msg.type_id == w::OP_PREPARE && msg.caller_pd == 0 {
@@ -578,11 +564,32 @@ pub extern "C" fn _start() -> ! {
                 }
             }
         }
+        if !touchpads.is_empty() { touchpad::send(&mut touchpads); }
+        // Firmware events: EC queries run `_Qxx`, which notify devices.
+        if let Some(dev) = &ec { laptop::ec_events(aml, dev); }
+        let mut refresh = laptop::controls(aml, &mut light);
+        for event in laptop::notifications(aml, &devices, &light) {
+            match event {
+                laptop::Event::Brightness(up) => { light.step(aml, up, "key"); refresh = true; }
+                laptop::Event::Refresh => refresh = true,
+                laptop::Event::None => {}
+            }
+        }
         let now = sex_pdx::get_ticks();
-        if now >= next_read {
-            let words = bounded(|| read_sensors(aml, &devices)).encode();
+        if refresh || now >= next_read {
+            let s = bounded(|| { light.refresh(aml); laptop::read(aml, &devices, &light) });
+            // Notifications raised while reading (firmware often notifies from _BST) wait
+            // for the next pass.
+            if s != last {
+                serial_println!("[sexacpi.sensors] battery={} charging={} minutes={} health={} ac={} lid={} temp_dk={} crit_dk={} brightness={} critical={}",
+                    s.battery_percent.map_or(-1, |v| v as i32), s.charging as u8, s.battery_minutes.map_or(-1, |v| v as i32), s.battery_health.map_or(-1, |v| v as i32),
+                    s.on_ac.map_or(-1, |v| v as i32), s.lid_open.map_or(-1, |v| v as i32), s.hottest_decikelvin.map_or(0, |v| v),
+                    s.critical_decikelvin.map_or(0, |v| v as u32), s.brightness.map_or(-1, |v| v as i32), (s.battery_critical || s.thermal_critical) as u8);
+                last = s;
+            }
+            let words = s.encode();
             let _ = w::call4(w::FW_SENSORS, words[1], words[2], words[3]);
-            next_read = now + 2000;
+            next_read = now + 1000;
         }
         let _ = sex_pdx::sys_wait_self_ticks(64);
     }
