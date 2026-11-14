@@ -1014,9 +1014,9 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             unsafe{fs_commands::FS.submit_program_granted(b"kaleidoscope",args,sex_pdx::program_store::RUN_NETWORK,0,false,sb);}
             true
         }
-        // The Store: the package catalog in a window, allowed the network and packages.
-        b"store" => {
-            unsafe{fs_commands::FS.submit_program_granted(b"store",args,sex_pdx::program_store::RUN_NETWORK,0,true,sb);}
+        // sexshop (formerly Store): the package catalog in a window, allowed the network and packages.
+        b"sexshop" | b"store" => {
+            unsafe{fs_commands::FS.submit_program_granted(b"sexshop",args,sex_pdx::program_store::RUN_NETWORK,0,true,sb);}
             true
         }
         b"spawn" if args.split(|b|*b==b' ').next().is_some_and(|w|w.contains(&b'/')) => {
@@ -2805,6 +2805,12 @@ pub extern "C" fn _start() -> ! {
         if msg.type_id==1&&msg.caller_pd==11&&unsafe{fs_commands::FS.receive(msg.arg0,sb)}{unsafe{content_render(&line,sb);}continue;}
         if let Some(r)=unsafe{DISPLAY_IO.receive(msg.caller_pd,msg.arg0)}{
             sex_pdx::serial_record!("[spindle.display.batch.admitted] target={} sid={} sequence={} paint={} bytes={}",instance_pd(),r.surface,r.stamp.sequence,r.stamp.paint,r.bytes);
+            continue;
+        }
+        if msg.type_id==sex_pdx::screenshot::OP_SCREENSHOT_TAKE&&msg.caller_pd==3{
+            let region=sex_pdx::screenshot::Rect::decode(msg.arg0);
+            sex_pdx::serial_record!("[spindle.screenshot.take] x={} y={} w={} h={} full={}",region.x,region.y,region.w,region.h,region.is_full() as u8);
+            unsafe{capture_command::CAPTURE.take(region,sb);content_render(&line,sb);}
             continue;
         }
         if msg.type_id==sex_pdx::program_store::OP_REFUSED&&msg.caller_pd==3{
