@@ -196,6 +196,17 @@ pub fn log(app: &mut App, studio: &Studio) {
             (p.y * scale) as i32
         );
     }
+    if let Some(id) = app.ui.find_text("Discard") {
+        let rect = app.ui.rect(id);
+        let p = rect.center();
+        sex_pdx::serial_record!(
+            "[moan.dialog] action=Discard x={} y={} w={} h={}",
+            (p.x * scale) as i32,
+            (p.y * scale) as i32,
+            (rect.w * scale) as i32,
+            (rect.h * scale) as i32
+        );
+    }
     let (w, h) = app.ui.size();
     sex_pdx::serial_record!("[moan.viewport] w={} h={} frame={}", w, h, app.frames);
     sex_pdx::serial_record!(

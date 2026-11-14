@@ -10,7 +10,7 @@ from install_program import install
 from quil_autosave_gate import boot
 from program_egui_gate import colours
 from sound_gate import segments
-from moan_gate_geometry import ready, control
+from moan_gate_geometry import ready, control, discard
 from program_gate_geometry import current_tile
 ROOT=Path(__file__).resolve().parents[1]
 def main():
@@ -41,7 +41,7 @@ def main():
    g['focus'](153);time.sleep(.5);keys(f'volume {row} mic on');q.key('ret');g['wait'](r'\[bell.mic.first\]',s,120);time.sleep(2)
    g['focus'](surface);s=len(text());click('Stop');saved=g['wait'](r'\[moan.recorded\] frames=(\d+) lost=(\d+)',s,60);assert int(saved[1])>=48000,saved[0]
   screenshot=out/'moan.ppm';q.cmd('screendump',{'filename':str(screenshot)});time.sleep(.5);assert len(colours(screenshot.read_bytes(),current_tile(text(),surface)))>8
-  s=len(text());g['focus'](surface);q.key('f11');time.sleep(.5);q.key('tab');q.key('ret');g['wait'](r'\[moan.closed\]',s,60);g['wait'](rf'\[app.private.retired\] target={target} task={task} ',s,120)
+  s=len(text());g['focus'](surface);q.key('f11');discard(g,surface,(rw,rh),s);g['wait'](r'\[moan.closed\]',s,60);g['wait'](rf'\[app.private.retired\] target={target} task={task} ',s,120)
   q.cmd('quit');g['proc'].wait(30);duration=None
   if not a.microphone:
    found=segments(wav);duration=sum(f[1] for f in found if abs(f[2]-400)<8);assert 1.9<duration<2.1,found
