@@ -4206,3 +4206,10 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
 
 ## J8 finding: disk reads are not NVMe-queue bound yet (2026-11-14)
 - `run bench read-large` at 4 cores without PKU now logs `[bench.large.cpu]` (Drive, Files, bench, idle cycles per pass). 16 MiB in 64 KiB requests: ~275M cycles; Files ~100M (~390k per request), Drive ~42M (~165k), rest waiting on the serial request chain. Per-core NVMe queues would not help until requests are pipelined (Files readahead / async Drive replies) and Files' per-request CPU drops; deferred until then.
+
+## J5 D2: Denim compressed memory, page out and back (2026-11-14)
+- New syscall 88 `SYS_DENIM` (ABI addition, `sex_pdx::denim`), Denim only: SCAN (accessed bits), OUT (heap page leaf becomes a non-present marker naming the row, shootdown, bytes copied to Denim's window, frame freed), IN (fresh frame, leaf restored, parked fault task resumed). Kernel messages OP_FAULT 0x3D1 and OP_RECALL 0x3D2.
+- Page faults on a marker go to Denim instead of the row's pager (`forward_page_fault`). Worker spawn and SEAL/OPEN on a run with pages out return RETRY and recall them; OUT is refused while workers live.
+- New BOOT service `servers/denim` (pd 51, key 14): clock scan, slabs 256 B to 4 KiB, LZ4-style codec from `crates/denim`. Pages out only at memory pressure LOW or worse, or always in a `SEXOS_DENIM_EAGER=1` build.
+- heaptest: K keeps 8 MiB of mixed pages, V reads them back. Gate `scripts/denim_gate.py` (Proof builds, matrix `denim`): 2279 pages out held in 477 store pages; all 2048 kept pages read back exact through faults; Close retires the run with pages out.
+- Kernel +~200 lines (19,463 of 21,500).

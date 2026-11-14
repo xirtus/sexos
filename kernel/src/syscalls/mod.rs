@@ -524,8 +524,14 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
 
         82 => { // SYS_PROGRAM_CODE: self-only, the run's own heap pages become code or data.
             let pd=crate::core_local::CoreLocal::get().current_pd_ref();
-            let reply=crate::app_resources::code(pd,rdi,rsi,rdx);
+            let mut reply=crate::app_resources::code(pd,rdi,rsi,rdx);
+            if reply[0]==crate::app_resource_state::RECALL{crate::denim::recall(pd.id);reply[0]=sex_pdx::program_code::RETRY;}
             regs.rsi=reply[1];regs.rdx=reply[2];reply[0]
+        },
+        88 => { // SYS_DENIM: compressed memory, Denim only (sex_pdx::denim).
+            let pd=crate::core_local::CoreLocal::get().current_pd_ref();
+            let reply=crate::denim::call(pd.id,rdi,rsi,rdx,r10,r8);
+            regs.rsi=reply[1];regs.rdx=reply[2];regs.r10=reply[3];regs.r8=reply[4];reply[0]
         },
 
         84 => { // SYS_POWER: shut down, restart, Files' flush answer, power sensors.

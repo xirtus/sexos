@@ -83,6 +83,8 @@ jobs:
       run: cargo test --locked -p sex-archive --features std
     - name: Pinyin input method
       run: cargo test --locked -p sex-ime
+    - name: Denim page compression (compressed RAM codec)
+      run: cargo test --locked -p denim
     - name: Multipass accounts, Shibari keeper (link fixtures, tokens never leave)
       run: cargo test --locked -p shibari -p sex-multipass
     - name: Valentine mail (IMAP IDLE + SMTP send-then-receive fixture, MIME, threads)
@@ -385,7 +387,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        gate: [cleanup, app-resource, crash]
+        gate: [cleanup, app-resource, crash, denim]
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
@@ -401,6 +403,12 @@ jobs:
         SEXOS_CRASH_PROBE=1 SEXOS_STOP_RESTART_SECONDS=8 ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/crash-probe-build.log" 2>&1 || (tail -50 "$RUNNER_TEMP/crash-probe-build.log"; exit 1)
         truncate -s 1G "$RUNNER_TEMP/crash-source.img"
         python3 scripts/crash_screen_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/crash-source.img" --out "$RUNNER_TEMP/sexos-proof"
+    - name: Compressed memory, Denim pages out and back (eager build)
+      if: matrix.gate == 'denim'
+      run: |
+        SEXOS_DENIM_EAGER=1 ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/denim-build.log" 2>&1 || (tail -50 "$RUNNER_TEMP/denim-build.log"; exit 1)
+        truncate -s 1G "$RUNNER_TEMP/denim-source.img"
+        python3 scripts/denim_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/denim-source.img" --out "$RUNNER_TEMP/sexos-proof/denim"
     - name: Cap-scoped peer epochs across same-task service restart
       if: matrix.gate == 'crash'
       run: SEXOS_GATE_CORES=4 python3 scripts/service_peer_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/crash-source.img" --out "$RUNNER_TEMP/sexos-proof/service-peer"

@@ -91,6 +91,18 @@ fn run(task: u32) -> Result<(String, usize, usize, usize), &'static str> {
     Ok((text_of(used, peak, full), used, peak, full))
 }
 
+/// Page `p` of the kept set: zero, same-filled, text or noise, so compressed memory
+/// meets every kind of page.
+fn kept_page(p: usize, page: &mut [u8]) {
+    match p % 4 {
+        0 => page.fill(0),
+        1 => page.fill(p as u8 | 1),
+        2 => { let line = alloc::format!("page {p} of the kept set, a line of ordinary text. "); for (i, b) in page.iter_mut().enumerate() { *b = line.as_bytes()[i % line.len()]; } }
+        _ => { let mut x = p as u64 * 0x9E37_79B9_7F4A_7C15 | 1; for b in page.iter_mut() { x ^= x << 13; x ^= x >> 7; x ^= x << 17; *b = x as u8; } }
+    }
+}
+const KEPT_PAGES: usize = 2048;
+
 fn text_of(used: usize, peak: usize, full: usize) -> String {
     let mut s = String::new();
     let _ = write!(s, "Heap test. F11 closes.\n\nThis run started with no memory and was given zeroed pages.\nVec, Box, BTreeMap and String: {} KiB.\nFilled {} MiB more.\nPeak: {} KiB.\n\nAll checks passed.\n",
@@ -114,8 +126,27 @@ pub extern "C" fn _start() -> ! {
         }
     }
     sex_pdx::serial_record!("[heaptest.ready] target={} task={}", target, task);
+    let mut kept: Vec<Vec<u8>> = Vec::new();
     loop {
         match window.next() {
+            // K: keep 8 MiB of mixed pages, untouched until V reads them back.
+            Event::Key(key) if key.code == 0x25 && kept.is_empty() => {
+                for p in 0..KEPT_PAGES {
+                    let mut page = Vec::new();
+                    if page.try_reserve_exact(4096).is_err() { break; }
+                    page.resize(4096, 0);
+                    kept_page(p, &mut page);
+                    kept.push(page);
+                }
+                sex_pdx::serial_record!("[heaptest.kept] target={} task={} pages={}", target, task, kept.len());
+            }
+            // V: every kept page must read back exactly.
+            Event::Key(key) if key.code == 0x2F => {
+                let start = sex_pdx::get_ticks();
+                let mut expect = alloc::vec![0u8; 4096];
+                let bad = kept.iter().enumerate().filter(|(p, page)| { kept_page(*p, &mut expect); page[..] != expect[..] }).count();
+                sex_pdx::serial_record!("[heaptest.verify] target={} task={} pages={} bad={} ticks={}", target, task, kept.len(), bad, sex_pdx::get_ticks() - start);
+            }
             Event::Close => { sex_pdx::serial_record!("[heaptest.closed] target={} task={}", target, task); window.close() }
             // A: take all the memory programs may have.
             Event::Key(key) if key.code == 0x1E => {

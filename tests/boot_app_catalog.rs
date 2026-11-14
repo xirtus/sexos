@@ -6,6 +6,8 @@ extern crate self as sex_pdx;
 extern crate alloc;
 #[path = "../crates/sex-pdx/src/program_store.rs"]
 pub mod program_store;
+#[path = "../crates/sex-pdx/src/denim.rs"]
+pub mod denim;
 #[path = "../crates/sex-pdx/src/app_catalog.rs"]
 pub mod app_catalog;
 #[path = "../kernel/src/app_resource_state.rs"]

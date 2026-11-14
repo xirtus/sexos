@@ -3,8 +3,10 @@ resolver = "2"
 exclude = ["vendor/embedded-tls-0.19.0", "vendor/pp-rs-0.2.1", "vendor/image-webp-0.2.4", "vendor/virtio-drivers-0.13.0"]
 members = [
     "kernel",
+    "crates/denim",
     "servers/sexbell",
     "servers/sexacpi",
+    "servers/denim",
     "servers/sexdisplay",
     "servers/sexshop",
     "servers/silk-shell",
