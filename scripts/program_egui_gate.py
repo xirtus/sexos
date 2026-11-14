@@ -8,10 +8,25 @@ egui's own demo app, unmodified, which must paint its windows (thousands of tria
 and take a click. Screenshots of both are kept."""
 import argparse,re,shutil,time
 from pathlib import Path
-from PIL import Image
 from install_program import install
 from quil_autosave_gate import boot
 ROOT=Path(__file__).resolve().parents[1]
+def colours(data,tile):
+ """The distinct colours inside a window tile of a binary PPM (P6) screendump."""
+ fields=[];i=0
+ while len(fields)<4:
+  while data[i:i+1].isspace():i+=1
+  if data[i:i+1]==b'#':i=data.index(b'\n',i);continue
+  j=i
+  while not data[j:j+1].isspace():j+=1
+  fields.append(data[i:j]);i=j
+ assert fields[0]==b'P6' and int(fields[3])<256,fields
+ width,height=int(fields[1]),int(fields[2]);i+=1
+ x,y,w,h=tile;seen=set()
+ for row in range(max(0,y+36),min(height,y+h-8)):
+  base=i+(row*width)*3;line=data[base+max(0,x+8)*3:base+min(width,x+w-8)*3]
+  seen.update(line[k:k+3] for k in range(0,len(line),3))
+ return seen
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
@@ -37,7 +52,7 @@ def main():
   return target,task,surface,tile,frame
  def shot(name,tile):
   path=a.out/f'{name}.ppm';q.cmd('screendump',{'filename':str(path)});time.sleep(.5)
-  x,y,w,h=tile;img=Image.open(path).convert('RGB').crop((x+8,y+36,x+w-8,y+h-8));img.save(a.out/f'{name}.png');return img
+  return colours(path.read_bytes(),tile)
  def close(target,task,surface):
   s=len(t());g['focus'](surface);time.sleep(.3);q.key('f11')
   g['wait'](rf'\[app.private.retired\] target={target} task={task} ',s,120)
@@ -56,12 +71,12 @@ def main():
   for _ in range(4):button('wheel-down',True);button('wheel-down',False)
   m=g['wait'](r'\[tassel.scrolled\] first=(\d+)\n',s,60);assert int(m[1])>0,m[0]
   probe=shot('tassel-probe',tile)
-  assert len(set(probe.getdata()))>8,'the probe panel looks blank'
+  assert len(probe)>8,'the probe panel looks blank'
   close(target,task,surface)
   target,task,surface,tile,frame=start('')
   assert int(frame[4])>1000,f'the demo drew too little: {frame[0]}'
   demo=shot('tassel-demo',tile)
-  colours=len(set(demo.getdata()));assert colours>40,f'the demo looks blank ({colours} colours)'
+  colours=len(demo);assert colours>40,f'the demo looks blank ({colours} colours)'
   # A click on the demo's background still takes input without trouble.
   click(tile[0]+tile[2]//2,tile[1]+tile[3]//2);time.sleep(2)
   close(target,task,surface)
