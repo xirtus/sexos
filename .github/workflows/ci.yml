@@ -77,6 +77,8 @@ jobs:
       run: cargo test --locked -p gaze-codecs --all-features
     - name: Aftercare backups (dedup, encryption, restore, prune, check) on the host
       run: cargo test --locked -p aftercare-core
+    - name: Aftercare app (folder store, restore hashes, settings, schedule) on the host
+      run: cargo test --locked -p aftercare
     - name: Loom archives (zip, tar, 7z, gz, zst, xz) with Python interop on the host
       run: cargo test --locked -p sex-archive --features std
     - name: Pinyin input method
@@ -271,6 +273,8 @@ jobs:
       run: python3 scripts/files_eject_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-eject"
     - name: Files thumbnails for a folder of 50 pictures, cached
       run: python3 scripts/files_thumbs_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-thumbs"
+    - name: Files archives, batch rename, ratings, duplicates, disk usage and compare
+      run: python3 scripts/files_loom_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-loom"
     - name: ext4 stick written from SexOS, e2fsck clean
       run: python3 scripts/files_ext4_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-ext4"
     - name: Encrypted home unlocks with its password, unreadable without it
@@ -309,6 +313,8 @@ jobs:
           ${{ runner.temp }}/sexos-files-jobs/*.log
           ${{ runner.temp }}/sexos-files-eject/*.ppm
           ${{ runner.temp }}/sexos-files-eject/*.log
+          ${{ runner.temp }}/sexos-files-loom/*.ppm
+          ${{ runner.temp }}/sexos-files-loom/*.log
           ${{ runner.temp }}/sexos-fs-repair/*.log
           ${{ runner.temp }}/sexos-raid
           ${{ runner.temp }}/sexos-power
@@ -439,6 +445,8 @@ jobs:
         python3 scripts/sdl_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/sdl"
     - name: SDL2 game (demo score, window, sound, keys)
       run: python3 scripts/driftspark_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/driftspark"
+    - name: Aftercare backup (back up, delete, restore, hashes equal, wrong password refused)
+      run: python3 scripts/aftercare_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/aftercare"
     - name: Preserve program evidence
       if: always()
       uses: actions/upload-artifact@v4

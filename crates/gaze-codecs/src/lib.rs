@@ -8,8 +8,10 @@
 //! * [`extract_preview`]: the embedded JPEG preview of camera RAW files.
 //! * [`decode`]: one entry point that returns upright pixels in sex-image's
 //!   [`Image`] layout (`u32` 0xAARRGGBB, straight alpha, rows top to bottom).
-//! * JPEG XL (feature `jxl`) and SVG (feature `svg`). Both need std, so each
-//!   turns on the `std` feature; without them the crate is `no_std` + alloc.
+//! * JPEG XL (feature `jxl`), SVG (feature `svg`) and full camera RAW
+//!   development through rawler (feature `raw`, LGPL-2.1). All three need
+//!   std, so each turns on the `std` feature; without them the crate is
+//!   `no_std` + alloc.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
@@ -21,6 +23,8 @@ mod format;
 mod jxl;
 mod orient;
 mod raw;
+#[cfg(feature = "raw")]
+mod raw_decode;
 #[cfg(feature = "svg")]
 mod svg;
 mod tiff;
@@ -31,6 +35,8 @@ pub use format::{sniff, Format, Support};
 pub use jxl::{decode_jxl, jxl_dimensions};
 pub use orient::{apply_orientation, orient_image, swaps_axes};
 pub use raw::{extract_preview, Preview};
+#[cfg(feature = "raw")]
+pub use raw_decode::{decode_raw, raw_orientation, RawSize};
 pub use sex_image::{Image, Limits};
 #[cfg(feature = "svg")]
 pub use svg::{render_svg, svg_fit, svg_size, SVG_MAX_SIDE};
@@ -46,6 +52,8 @@ pub enum Error {
     NoPreview,
     /// sex-image refused the file (or the RAW preview).
     Image(sex_image::Error),
+    /// rawler could not develop the RAW file (feature `raw`).
+    Raw,
     /// The JPEG XL decoder refused the file.
     Jxl,
     /// The SVG could not be parsed.
@@ -86,11 +94,22 @@ pub struct Options<'a> {
     pub auto_orient: bool,
     /// Font files for SVG text (feature `svg`); empty leaves text out.
     pub fonts: &'a [&'a [u8]],
+    /// Camera RAW (feature `raw`): `None` (default) shows the embedded JPEG
+    /// preview, the fast path; `Some(size)` develops the sensor data. A RAW
+    /// file without a usable preview is developed at half size either way.
+    #[cfg(feature = "raw")]
+    pub raw_develop: Option<RawSize>,
 }
 
 impl Default for Options<'_> {
     fn default() -> Self {
-        Options { limits: Limits::PHOTO, auto_orient: true, fonts: &[] }
+        Options {
+            limits: Limits::PHOTO,
+            auto_orient: true,
+            fonts: &[],
+            #[cfg(feature = "raw")]
+            raw_develop: None,
+        }
     }
 }
 
@@ -123,7 +142,14 @@ pub fn decode_with(bytes: &[u8], opt: &Options<'_>) -> Result<Image, Error> {
             let image = sex_image::decode(bytes, limits)?;
             orient(image, Exif::read(bytes).and_then(|e| e.orientation))
         }
+        #[cfg(not(feature = "raw"))]
         Format::Cr3 => Err(Error::NoDecoder(format)),
+        #[cfg(feature = "raw")]
+        f if f.is_raw() && (opt.raw_develop.is_some() || f == Format::Cr3 || extract_preview(bytes).is_none()) => {
+            let image = decode_raw(bytes, limits, opt.raw_develop.unwrap_or(RawSize::Half))?;
+            let orientation = Exif::read(bytes).and_then(|e| e.orientation).or_else(|| raw_orientation(bytes));
+            orient(image, orientation)
+        }
         f if f.is_raw() => {
             let preview = extract_preview(bytes).ok_or(Error::NoPreview)?;
             let image = sex_image::decode(preview.jpeg, limits)?;
