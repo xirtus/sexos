@@ -11,7 +11,9 @@ os.environ.setdefault('SEXOS_GATE_BOUND','1800')
 from install_program import install
 from quil_autosave_gate import boot
 ROOT=Path(__file__).resolve().parents[1]
-PROGRAMS=['fortune','monitor','shapes','jot']
+PROGRAMS=['fortune','mesh','shapes','jot']
+# The serial tag a program says it is ready with, where it differs from its name.
+TAG={'mesh':'monitor'}
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800')
  p.add_argument('--runs',type=int,default=3);p.add_argument('--max-ms',type=float,default=30000.0);a=p.parse_args()
@@ -33,7 +35,7 @@ def main():
     while True:
      txt=t()[s:]
      if entered is None and '[spindle.enter]' in txt:entered=time.monotonic()
-     m=re.search(rf'\[{name}\.ready\] target=(\d+) task=(\d+)',txt)
+     m=re.search(rf'\[{TAG.get(name,name)}\.ready\] target=(\d+) task=(\d+)',txt)
      if m:break
      assert time.monotonic()<deadline,f'{name} never became ready'
      time.sleep(.001)

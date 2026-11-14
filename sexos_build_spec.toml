@@ -312,7 +312,7 @@ action = "cargo_manifest"
 target = "x86_64-sex-app.json"
 manifest = "apps/monitor/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/monitor"
-dest_artifact = "iso_root/programs/monitor"
+dest_artifact = "iso_root/programs/mesh"
 
 [[stage]]
 id = "build_fputest"
