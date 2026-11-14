@@ -59,6 +59,14 @@ jobs:
       run: cargo test --locked -p sex-pkg
     - name: Disk layouts (GPT, FAT, install beside other systems)
       run: cargo test --locked -p sex-disk --lib
+    - name: Keyboard layouts, dead keys and Compose
+      run: cargo test --locked -p sex-keymap
+    - name: Fallback fonts reach Cyrillic, Greek, CJK, emoji and symbols
+      run: cargo test --locked -p sex-font --test fallback
+    - name: Shaping (rustybuzz vs hb-shape), Arabic joining and bidi
+      run: cargo test --locked -p sex-shape --features shaping
+    - name: Pinyin input method
+      run: cargo test --locked -p sex-ime
     - name: SexOS filesystem check and repair (injected faults)
       run: cargo test --locked --release -p sexfs --features repair --lib
     - name: Network stack (IPv6 resolvers, accept backlog, UDP queues) on the host
@@ -146,6 +154,8 @@ jobs:
         save-cache: "true"
     - name: Build and boot via single entrypoint (mandatory)
       run: GATE_DIR="$RUNNER_TEMP/sexos-runtime" bash scripts/master_runtime_gate.sh --probe 60 --keep-log
+    - name: Boots to the desktop with 1, 2, 4 and 32 GiB of RAM
+      run: python3 scripts/ram_sizes_gate.py --iso sexos-v1.0.0.iso --out "$RUNNER_TEMP/sexos-runtime/ram-sizes"
     - name: Compiled scheduler stack-release boundary
       run: SWITCH_EVIDENCE="$RUNNER_TEMP/sexos-runtime/scheduler-switch.txt" bash scripts/scheduler_switch_boundary_gate.sh
     - name: Timer PKRU save and restore boundary
@@ -170,6 +180,12 @@ jobs:
         python3 scripts/package_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-packages.img" --out "$RUNNER_TEMP/sexos-runtime/packages"
     - name: ripgrep and fd
       run: python3 scripts/rg_fd_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/rg-fd"
+    - name: Python 3.13 interpreter (CPython)
+      run: python3 scripts/python_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/python"
+    - name: Store program and the +pkg run grant
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/blank-store.img"
+        python3 scripts/store_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-store.img" --out "$RUNNER_TEMP/sexos-runtime/store"
     - name: Large reads must reach the device
       run: python3 scripts/program_bench_gate.py --large-read --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/large-read"
     - name: IPv6-only network (SLAAC, RDNSS, DHCPv6, sockets, name lookup)
@@ -214,6 +230,10 @@ jobs:
       run: |
         truncate -s 256M "$RUNNER_TEMP/switcher-source.img"
         python3 scripts/window_switcher_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/switcher-source.img" --out "$RUNNER_TEMP/sexos-runtime/switcher"
+    - name: Clipboard history on Super+V
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/cliphist-source.img"
+        python3 scripts/clipboard_history_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/cliphist-source.img" --out "$RUNNER_TEMP/sexos-runtime/clipboard-history"
     - name: USB input paths
       run: GATE_DIR="$RUNNER_TEMP/sexos-usb" SKIP_BUILD=1 bash scripts/usb_path_gate.sh
     - name: Preserve runtime evidence

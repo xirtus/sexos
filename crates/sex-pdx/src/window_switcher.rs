@@ -6,8 +6,12 @@
 //! scaled from its own pixels with the window's title under it, the way
 //! KDE's and GNOME's switchers do. A count of zero hides the switcher.
 //!
+//! The same message draws the window overview (Super+W, like GNOME's
+//! Activities and KDE's Present Windows): every window of the workspace as a
+//! live thumbnail in a grid over a dimmed desktop.
+//!
 //! Wire: arg0 and arg1 carry four 16-bit surface ids each (entry 0 in the low
-//! bits of arg0), arg2 = count (bits 0-3) | selected (bits 8-11).
+//! bits of arg0), arg2 = count (bits 0-3) | selected (bits 8-11) | grid (bit 16).
 
 /// Shell -> Display.
 pub const OP_WINDOW_SWITCHER: u64 = 0x2E1;
@@ -19,10 +23,12 @@ pub struct State {
     pub entries: [u16; MAX_ENTRIES],
     pub count: u8,
     pub selected: u8,
+    /// The overview grid rather than the Alt+Tab row.
+    pub grid: bool,
 }
 
 impl State {
-    pub const HIDDEN: Self = Self { entries: [0; MAX_ENTRIES], count: 0, selected: 0 };
+    pub const HIDDEN: Self = Self { entries: [0; MAX_ENTRIES], count: 0, selected: 0, grid: false };
 
     /// None when an id does not fit the wire or there are too many windows.
     pub fn new(ids: &[u64], selected: usize) -> Option<Self> {
@@ -32,7 +38,7 @@ impl State {
             if id == 0 || id > u16::MAX as u64 { return None; }
             *slot = id as u16;
         }
-        Some(Self { entries, count: ids.len() as u8, selected: selected as u8 })
+        Some(Self { entries, count: ids.len() as u8, selected: selected as u8, grid: false })
     }
 
     pub fn visible(&self) -> bool { self.count != 0 }
@@ -46,11 +52,13 @@ impl State {
         for (i, &id) in self.entries.iter().enumerate() {
             words[i / 4] |= (id as u64) << ((i % 4) * 16);
         }
-        [words[0], words[1], self.count as u64 | (self.selected as u64) << 8]
+        [words[0], words[1], self.count as u64 | (self.selected as u64) << 8 | (self.grid as u64) << 16]
     }
 
     pub fn decode(arg0: u64, arg1: u64, arg2: u64) -> Option<Self> {
-        if arg2 >> 12 != 0 || arg2 & 0xF0 != 0 { return None; }
+        if arg2 >> 17 != 0 || arg2 & 0xF0F0 != 0 { return None; }
+        let grid = arg2 >> 16 & 1 != 0;
+        if grid && arg2 & 0xF == 0 { return None; }
         let count = (arg2 & 0xF) as usize;
         let selected = ((arg2 >> 8) & 0xF) as usize;
         if count > MAX_ENTRIES || (count != 0 && selected >= count) || (count == 0 && selected != 0) { return None; }
@@ -61,24 +69,28 @@ impl State {
             let used = i < count;
             if used == (*slot == 0) { return None; }
         }
-        Some(Self { entries, count: count as u8, selected: selected as u8 })
+        Some(Self { entries, count: count as u8, selected: selected as u8, grid })
     }
 }
 
-/// Where the switcher and its cards go on a `width` x `height` screen, in
-/// pixels, for `count` cards at interface scale `scale`.
+/// Where the switcher or overview and its cards go on a `width` x `height`
+/// screen, in pixels, for `count` cards at interface scale `scale`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Layout {
-    /// The panel behind the cards.
+    /// The panel (switcher) or dimmed area (overview) behind the cards.
     pub panel: (usize, usize, usize, usize),
     pub card_w: usize,
     pub thumb_h: usize,
     pub label_h: usize,
     pub gap: usize,
     pub count: usize,
+    pub cols: usize,
+    /// Top of the first row of cards.
+    top: usize,
 }
 
 impl Layout {
+    /// The Alt+Tab row, centred on the screen.
     pub fn new(width: usize, height: usize, count: usize, scale: u32) -> Option<Self> {
         if count == 0 || count > MAX_ENTRIES { return None; }
         let s = scale.max(1) as usize;
@@ -92,13 +104,45 @@ impl Layout {
         let panel_w = count * card_w + (count + 1) * gap;
         let panel_h = thumb_h + label_h + 3 * gap;
         if panel_w > width || panel_h > height { return None; }
-        Some(Self { panel: ((width - panel_w) / 2, (height - panel_h) / 2, panel_w, panel_h), card_w, thumb_h, label_h, gap, count })
+        let (px, py) = ((width - panel_w) / 2, (height - panel_h) / 2);
+        Some(Self { panel: (px, py, panel_w, panel_h), card_w, thumb_h, label_h, gap, count, cols: count, top: py + gap })
+    }
+
+    /// The overview: the area below the `bar`, with the cards in the grid that
+    /// makes them largest, centred, each row centred too.
+    pub fn grid(width: usize, height: usize, bar: usize, count: usize, scale: u32) -> Option<Self> {
+        if count == 0 || count > MAX_ENTRIES || bar >= height { return None; }
+        let s = scale.max(1) as usize;
+        let (gap, label_h, margin) = (20 * s, 22 * s, 32 * s);
+        let area_h = height - bar;
+        let (room_w, room_h) = (width.saturating_sub(2 * margin), area_h.saturating_sub(2 * margin));
+        let mut best: Option<(usize, usize)> = None;
+        for cols in 1..=count {
+            let rows = (count + cols - 1) / cols;
+            let by_w = room_w.saturating_sub(gap * (cols - 1)) / cols;
+            // card height = thumb + gap + label; thumb keeps the screen's shape.
+            let per_row = room_h.saturating_sub(gap * (rows - 1)) / rows;
+            let by_h = per_row.saturating_sub(gap + label_h) * width / height.max(1);
+            let w = by_w.min(by_h).min(width / 2);
+            if best.map_or(true, |(_, bw)| w > bw) { best = Some((cols, w)); }
+        }
+        let (cols, card_w) = best?;
+        let thumb_h = card_w * height / width.max(1);
+        if card_w < 32 || thumb_h < 16 { return None; }
+        let rows = (count + cols - 1) / cols;
+        let block_h = rows * (thumb_h + gap + label_h) + (rows - 1) * gap;
+        let top = bar + (area_h - block_h.min(area_h)) / 2;
+        Some(Self { panel: (0, bar, width, area_h), card_w, thumb_h, label_h, gap, count, cols, top })
     }
 
     /// Card `i` (thumbnail plus its title) in screen pixels.
     pub fn card(&self, i: usize) -> (usize, usize, usize, usize) {
-        let (px, py, _, _) = self.panel;
-        (px + self.gap + i * (self.card_w + self.gap), py + self.gap, self.card_w, self.thumb_h + self.gap + self.label_h)
+        let (px, _, pw, _) = self.panel;
+        let (row, col) = (i / self.cols, i % self.cols);
+        let in_row = (self.count - row * self.cols).min(self.cols);
+        let row_w = in_row * self.card_w + (in_row - 1) * self.gap;
+        let card_h = self.thumb_h + self.gap + self.label_h;
+        (px + (pw - row_w) / 2 + col * (self.card_w + self.gap), self.top + row * (card_h + self.gap), self.card_w, card_h)
     }
 
     /// The card under screen point (x, y), if any.
@@ -165,10 +209,11 @@ pub struct Session {
     /// The window focused when the switcher opened; Escape returns to it.
     origin: u64,
     open: bool,
+    grid: bool,
 }
 
 impl Session {
-    pub const fn new() -> Self { Self { ids: [0; MAX_ENTRIES], count: 0, selected: 0, origin: 0, open: false } }
+    pub const fn new() -> Self { Self { ids: [0; MAX_ENTRIES], count: 0, selected: 0, origin: 0, open: false, grid: false } }
     pub fn is_open(&self) -> bool { self.open }
 
     /// Opens with `ordered` (most recent first) while `current` has focus and
@@ -182,11 +227,28 @@ impl Session {
             self.count = n;
             self.open = true;
             self.origin = current;
+            self.grid = false;
             // Focus outside the list (a panel): the first step lands on the most recent.
             self.selected = if ordered[0] == current || dir < 0 { 0 } else { n - 1 };
         }
         let n = self.count as isize;
         self.selected = (self.selected as isize + if dir < 0 { -1 } else { 1 }).rem_euclid(n) as usize;
+        Some(self.ids[self.selected])
+    }
+
+    /// Opens the overview grid over `ordered`, the focused window selected.
+    pub fn open_grid(&mut self, ordered: &[u64], current: u64) -> bool {
+        let n = ordered.len().min(MAX_ENTRIES);
+        if n == 0 { return false; }
+        self.ids[..n].copy_from_slice(&ordered[..n]);
+        *self = Self { ids: self.ids, count: n, selected: 0, origin: current, open: true, grid: true };
+        true
+    }
+
+    /// Moves the selection by `delta` cards, wrapping.
+    pub fn move_by(&mut self, delta: isize) -> Option<u64> {
+        if !self.open { return None; }
+        self.selected = (self.selected as isize + delta).rem_euclid(self.count as isize) as usize;
         Some(self.ids[self.selected])
     }
 
@@ -217,6 +279,6 @@ impl Session {
 
     pub fn state(&self) -> State {
         if !self.open { return State::HIDDEN; }
-        State::new(&self.ids[..self.count], self.selected).unwrap_or(State::HIDDEN)
+        State::new(&self.ids[..self.count], self.selected).map_or(State::HIDDEN, |s| State { grid: self.grid, ..s })
     }
 }

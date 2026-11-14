@@ -71,7 +71,9 @@ crates = [
   "apps/pdf/Cargo.toml",
   "apps/lua/Cargo.toml",
   "apps/rg/Cargo.toml",
-  "apps/fd/Cargo.toml"
+  "apps/fd/Cargo.toml",
+  "apps/python/Cargo.toml",
+  "apps/store/Cargo.toml"
 ]
 
 [[stage]]
@@ -430,6 +432,16 @@ manifest = "apps/fd/Cargo.toml"
 source_artifact = "target/x86_64-sex-std/release/fd"
 dest_artifact = "iso_root/programs/fd"
 
+# Python 3.13: CPython (vendor/cpython-3.13.18) on sex-libc, its stdlib frozen in.
+[[stage]]
+id = "build_python"
+action = "cargo_manifest"
+target = "x86_64-sex-std.json"
+build_std = "std,panic_abort"
+manifest = "apps/python/Cargo.toml"
+source_artifact = "target/x86_64-sex-std/release/python"
+dest_artifact = "iso_root/programs/python"
+
 # PDF: the first ordinary std app, hayro rendering pages into the window.
 [[stage]]
 id = "build_pdf"
@@ -486,6 +498,15 @@ target = "x86_64-sex-app.json"
 manifest = "apps/hum/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/hum"
 dest_artifact = "iso_root/programs/hum"
+
+# Store: the package catalog in a window (`store` in Spindle).
+[[stage]]
+id = "build_store"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/store/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/store"
+dest_artifact = "iso_root/programs/store"
 
 [[stage]]
 id = "build_snoop"

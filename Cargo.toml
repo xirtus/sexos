@@ -52,6 +52,9 @@ members = [
     "crates/sex-vmd",
     "crates/sex-imsm",
     "crates/sex-font",
+    "crates/sex-keymap",
+    "crates/sex-shape",
+    "crates/sex-ime",
     "crates/sexfs",
     "crates/sex-volumes",
     "crates/sex-hwdb",
@@ -88,6 +91,8 @@ members = [
     "apps/lua",
     "apps/rg",
     "apps/fd",
+    "apps/python",
+    "apps/store",
 ]
 [workspace.package]
 license = "GPL-3.0-only"

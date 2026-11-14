@@ -1,0 +1,9 @@
+[package]
+name = "sex-ime"
+version = "0.1.0"
+edition = "2021"
+# The dictionary is GPL-3.0-or-later data (pyim-basedict, from libpinyin).
+license = "GPL-3.0-only"
+description = "Input methods for SexOS: Pinyin to Chinese characters, with a pre-edit string and candidates"
+
+[dependencies]

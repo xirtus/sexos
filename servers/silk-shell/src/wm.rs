@@ -104,8 +104,10 @@ pub enum WmAction {
     Close,
     /// Super+F.
     Fullscreen,
-    /// Super+V or Super+Shift+Space.
+    /// Super+Shift+V or Super+Shift+Space.
     ToggleFloating,
+    /// Super+V: the previous clipboard entry; pressed again soon, the one before.
+    ClipboardHistory,
     /// Super+Space: the next layout on this workspace.
     CycleLayout,
     /// Super+M: monocle on this workspace, or back to the previous layout.
@@ -127,6 +129,8 @@ pub enum WmAction {
     Wallpaper,
     /// Super+Shift+N: night light off, low, medium, high.
     NightLight,
+    /// Super+Ctrl+Space: the next keyboard layout.
+    KeyboardLayout,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -153,6 +157,7 @@ pub fn binding(key: u8, m: Mods) -> Option<WmAction> {
         return match key {
             code::RIGHT | code::L => Some(WmAction::NextWorkspace),
             code::LEFT | code::H => Some(WmAction::PrevWorkspace),
+            code::SPACE => Some(WmAction::KeyboardLayout),
             _ => None,
         };
     }
@@ -166,7 +171,8 @@ pub fn binding(key: u8, m: Mods) -> Option<WmAction> {
         (code::D, _) => WmAction::Launcher,
         (code::Q, _) => WmAction::Close,
         (code::F, _) => WmAction::Fullscreen,
-        (code::V, _) | (code::SPACE, true) => WmAction::ToggleFloating,
+        (code::V, false) => WmAction::ClipboardHistory,
+        (code::V, true) | (code::SPACE, true) => WmAction::ToggleFloating,
         (code::SPACE, false) => WmAction::CycleLayout,
         (code::M, _) => WmAction::ToggleMonocle,
         (code::BRACKET_RIGHT, _) => WmAction::GrowMaster,

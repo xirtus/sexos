@@ -49,9 +49,9 @@ def main():
   swapped=tiles(s);assert swapped,'no retile after swap';results['swap']=swapped
   shot('03-swapped')
   # Super+V: float the focused window, centred.
-  r=chord(['meta_l','v'],'ToggleFloating');assert r['done'],r
+  r=chord(['meta_l','shift','v'],'ToggleFloating');assert r['done'],r
   shot('04-floating')
-  r=chord(['meta_l','v'],'ToggleFloating');assert r['done'],r
+  r=chord(['meta_l','shift','v'],'ToggleFloating');assert r['done'],r
   # Super+] grows the master column.
   r=chord(['meta_l','spc'],'CycleLayout');r=chord(['meta_l','spc'],'CycleLayout');r=chord(['meta_l','spc'],'CycleLayout')
   assert r['layout']=='master',r

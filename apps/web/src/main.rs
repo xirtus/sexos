@@ -1488,7 +1488,7 @@ impl Browser {
             (_, 0x39) => " ".into(),
             (_, 0x49) => "PageUp".into(),
             (_, 0x51) => "PageDown".into(),
-            _ => match sex_app::typed(key) { Some(c) => (c as char).to_string(), None => return false },
+            _ => match sex_app::text(key) { Some(c) => c.to_string(), None => return false },
         };
         let control = if key.control { "1" } else { "0" };
         self.sync_scroll();
@@ -1679,7 +1679,7 @@ impl Browser {
                 _ => match nav(key) {
                     Some(Nav::Down) if !self.suggestions.is_empty() => { typed = false; self.chosen = Some(self.chosen.map_or(0, |c| (c + 1).min(self.suggestions.len() - 1))); }
                     Some(Nav::Up) => { typed = false; self.chosen = self.chosen.and_then(|c| c.checked_sub(1)); }
-                    _ => match sex_app::typed(key) { Some(c) => text.push(c as char), None => return },
+                    _ => match sex_app::text(key) { Some(c) => text.push(c), None => return },
                 },
             }
             if typed {
