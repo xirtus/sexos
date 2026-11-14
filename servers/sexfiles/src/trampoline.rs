@@ -329,6 +329,10 @@ pub extern "C" fn trampoline_main() {
             }
             continue;
         }
+        if msg.type_id==sex_pdx::dnd::OP_GIVE{
+            if caller==3{crate::fs_service::give(msg.arg0,msg.arg1,msg.arg2);}
+            continue;
+        }
         if msg.type_id==sex_pdx::program_store::OP_BIND{
             if caller==3{crate::fs_service::bind(msg.arg0 as u32,msg.arg1 as u32);}
             continue;

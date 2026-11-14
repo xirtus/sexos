@@ -40,7 +40,7 @@ pub extern "C" fn _start() -> ! {
                 sex_pdx::serial_record!("[shapes.closed] target={} task={}", window.target, window.task);
                 window.close()
             }
-            Event::Resize { .. } | Event::Pointer(_) => {}
+            Event::Resize { .. } | Event::Pointer(_) | Event::Drop { .. } | Event::DragEnded { .. } => {}
             Event::Key(key) => {
                 let (x, y) = match nav(key) {
                     Some(Nav::Left) => (-STEP, 0.0),
