@@ -13,7 +13,7 @@ SITE=ROOT/'scripts/web_site'
 BAR=30
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):
-  if self.path=='/web':body=(ROOT/'iso_root/programs/web').read_bytes();self.send_response(200);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body);return
+  if self.path=='/web':body=(ROOT/'iso_root/programs/kaleidoscope').read_bytes();self.send_response(200);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body);return
   path=self.path.split('?')[0]  # a submitted form's query names the same file
   f=SITE/path.removeprefix('/site/') if path.startswith('/site/') else None
   if f is None or not f.is_file():self.send_response(404);self.end_headers();return
@@ -40,9 +40,9 @@ def main():
  def frames(s,target):return len(re.findall(r'\[web.shown\] w=\d+ h=\d+ ',t()[s:]))
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
-  g['focus'](153);time.sleep(.5);s=len(t());keys(f'fetch {base}/web /bin/web');q.key('ret')
+  g['focus'](153);time.sleep(.5);s=len(t());keys(f'fetch {base}/web /bin/kaleidoscope');q.key('ret')
   m=g['wait'](r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',s,240);assert m[1].startswith('Saved'),m[1]
-  g['focus'](153);time.sleep(.5);s=len(t());keys(f'run +net web {url}');q.key('ret')
+  g['focus'](153);time.sleep(.5);s=len(t());keys(f'run +net kaleidoscope {url}');q.key('ret')
   m=g['wait'](r'\[web.ready\] target=(\d+) task=(\d+)',s,300);target,task=m[1],m[2]
   launch=g['wait'](rf'\[shell.program.launch\] target={target} task={task} surface=(\d+)',s,60);surface=int(launch[1])
   g['wait'](rf'\[display.app.pixels\] target={target} surface={surface} ',s,60);time.sleep(.5)
