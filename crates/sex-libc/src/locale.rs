@@ -36,6 +36,57 @@ pub extern "C" fn isupper_l(c: c_int, _l: locale_t) -> c_int { ascii(c, u8::is_a
 #[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub extern "C" fn iswlower_l(c: u32, _l: locale_t) -> c_int { char::from_u32(c).is_some_and(|c| c.is_lowercase()) as c_int }
 
+// The plain `<ctype.h>` tests, in the C locale (musl's header turns some into macros;
+// these are the functions behind them, for code that takes their address).
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub extern "C" fn isalnum(c: c_int) -> c_int { ascii(c, u8::is_ascii_alphanumeric) }
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub extern "C" fn isalpha(c: c_int) -> c_int { ascii(c, u8::is_ascii_alphabetic) }
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub extern "C" fn iscntrl(c: c_int) -> c_int { ascii(c, u8::is_ascii_control) }
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub extern "C" fn isdigit(c: c_int) -> c_int { ascii(c, u8::is_ascii_digit) }
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub extern "C" fn isgraph(c: c_int) -> c_int { ascii(c, u8::is_ascii_graphic) }
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub extern "C" fn islower(c: c_int) -> c_int { ascii(c, u8::is_ascii_lowercase) }
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub extern "C" fn isprint(c: c_int) -> c_int { ((0x20..0x7F).contains(&c)) as c_int }
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub extern "C" fn ispunct(c: c_int) -> c_int { ascii(c, u8::is_ascii_punctuation) }
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub extern "C" fn isspace(c: c_int) -> c_int { (c == 0x0B || ascii(c, u8::is_ascii_whitespace) != 0) as c_int }
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub extern "C" fn isupper(c: c_int) -> c_int { ascii(c, u8::is_ascii_uppercase) }
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub extern "C" fn isxdigit(c: c_int) -> c_int { ascii(c, u8::is_ascii_hexdigit) }
+
+/// `setlocale`: the one locale answers to "C", "POSIX", "C.UTF-8" and "" (the
+/// default); asking for any other is refused with NULL, as C allows.
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub unsafe extern "C" fn setlocale(_category: c_int, name: *const c_char) -> *mut c_char {
+    static C: &[u8] = b"C\0";
+    if !name.is_null() {
+        let n = unsafe { core::slice::from_raw_parts(name.cast::<u8>(), crate::string::strnlen(name, 64)) };
+        if !matches!(n, b"" | b"C" | b"POSIX" | b"C.UTF-8" | b"C.utf8") { return core::ptr::null_mut(); }
+    }
+    C.as_ptr() as *mut c_char
+}
+
+/// musl's `struct lconv`: ten strings, then fourteen `char` fields.
+#[repr(C)]
+pub struct lconv { strings: [*const c_char; 10], chars: [c_char; 14] }
+struct Lconv(lconv);
+unsafe impl Sync for Lconv {}
+static C_LCONV: Lconv = {
+    const DOT: *const c_char = b".\0".as_ptr().cast();
+    const EMPTY: *const c_char = b"\0".as_ptr().cast();
+    Lconv(lconv { strings: [DOT, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY], chars: [127; 14] })
+};
+/// `localeconv`: the C locale's numbers ('.' for the decimal point).
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub extern "C" fn localeconv() -> *mut lconv { core::ptr::addr_of!(C_LCONV.0) as *mut lconv }
+
 #[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn strtod_l(s: *const c_char, end: *mut *mut c_char, _l: locale_t) -> f64 { unsafe { crate::stdlib::strtod(s, end) } }
 #[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
@@ -224,6 +275,99 @@ pub unsafe extern "C" fn wmemchr(s: *const wchar_t, c: wchar_t, n: usize) -> *mu
     core::ptr::null_mut()
 }
 
+// ---- the rest of <wchar.h> that CPython uses (its strings and paths are wchar_t) ----------
+
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub unsafe extern "C" fn wcscmp(a: *const wchar_t, b: *const wchar_t) -> c_int { unsafe { wcsncmp(a, b, usize::MAX) } }
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub unsafe extern "C" fn wcsncmp(a: *const wchar_t, b: *const wchar_t, n: usize) -> c_int {
+    for i in 0..n {
+        let (x, y) = unsafe { (*a.add(i), *b.add(i)) };
+        if x != y { return if x < y { -1 } else { 1 }; }
+        if x == 0 { break; }
+    }
+    0
+}
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub unsafe extern "C" fn wcscpy(d: *mut wchar_t, s: *const wchar_t) -> *mut wchar_t {
+    unsafe { core::ptr::copy(s, d, wcslen(s) + 1) };
+    d
+}
+/// Copies at most `n` characters and pads the rest of `d` with zeros, like `strncpy`.
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub unsafe extern "C" fn wcsncpy(d: *mut wchar_t, s: *const wchar_t, n: usize) -> *mut wchar_t {
+    let mut i = 0;
+    while i < n && unsafe { *s.add(i) } != 0 { unsafe { *d.add(i) = *s.add(i) }; i += 1; }
+    while i < n { unsafe { *d.add(i) = 0 }; i += 1; }
+    d
+}
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub unsafe extern "C" fn wcschr(s: *const wchar_t, c: wchar_t) -> *mut wchar_t {
+    let mut p = s;
+    loop {
+        if unsafe { *p } == c { return p as *mut wchar_t; }
+        if unsafe { *p } == 0 { return core::ptr::null_mut(); }
+        p = unsafe { p.add(1) };
+    }
+}
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub unsafe extern "C" fn wcsrchr(s: *const wchar_t, c: wchar_t) -> *mut wchar_t {
+    let n = unsafe { wcslen(s) };
+    (0..=n).rev().find(|&i| unsafe { *s.add(i) } == c).map_or(core::ptr::null_mut(), |i| unsafe { s.add(i) } as *mut wchar_t)
+}
+/// Splits `s` at any character of `delim`, keeping its place in `*save`.
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub unsafe extern "C" fn wcstok(s: *mut wchar_t, delim: *const wchar_t, save: *mut *mut wchar_t) -> *mut wchar_t {
+    let is_delim = |c: wchar_t| c != 0 && !unsafe { wcschr(delim, c) }.is_null();
+    let mut p = if s.is_null() { unsafe { *save } } else { s };
+    if p.is_null() { return core::ptr::null_mut(); }
+    while is_delim(unsafe { *p }) { p = unsafe { p.add(1) }; }
+    if unsafe { *p } == 0 { unsafe { *save = core::ptr::null_mut() }; return core::ptr::null_mut(); }
+    let start = p;
+    while unsafe { *p } != 0 && !is_delim(unsafe { *p }) { p = unsafe { p.add(1) }; }
+    unsafe {
+        if *p == 0 { *save = core::ptr::null_mut(); } else { *p = 0; *save = p.add(1); }
+    }
+    start
+}
+/// `strtol` over wide characters: digits are ASCII, so the ASCII prefix is parsed.
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub unsafe extern "C" fn wcstol(s: *const wchar_t, end: *mut *mut wchar_t, base: c_int) -> c_long {
+    let mut narrow = [0 as c_char; 80];
+    let mut n = 0;
+    while n < narrow.len() - 1 {
+        let c = unsafe { *s.add(n) };
+        if !(1..128).contains(&c) { break; }
+        narrow[n] = c as c_char;
+        n += 1;
+    }
+    let mut stop: *mut c_char = core::ptr::null_mut();
+    let v = unsafe { crate::stdlib::strtol(narrow.as_ptr(), &mut stop, base) };
+    if !end.is_null() { unsafe { *end = s.add(stop.offset_from(narrow.as_ptr()) as usize) as *mut wchar_t }; }
+    v
+}
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub unsafe extern "C" fn mbstowcs(d: *mut wchar_t, s: *const c_char, n: usize) -> usize {
+    let mut src = s;
+    let mut st: State = [0; 8];
+    unsafe { mbsrtowcs(d, &mut src, n, st.as_mut_ptr().cast()) }
+}
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub unsafe extern "C" fn wcstombs(d: *mut c_char, s: *const wchar_t, n: usize) -> usize {
+    let mut src = s;
+    unsafe { wcsnrtombs(d, &mut src, usize::MAX, n, core::ptr::null_mut()) }
+}
+
+/// `<langinfo.h>` for the one locale: UTF-8 text, a `.` radix and no grouping;
+/// anything else is the empty string.
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub extern "C" fn nl_langinfo(item: c_int) -> *mut c_char {
+    const CODESET: c_int = 14;
+    const RADIXCHAR: c_int = 0x10000;
+    let s: &'static [u8] = match item { CODESET => b"UTF-8\0", RADIXCHAR => b".\0", _ => b"\0" };
+    s.as_ptr() as *mut c_char
+}
+
 /// `assert()` failed: say where, then end the program.
 #[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn __assert_fail(expr: *const c_char, file: *const c_char, line: u32, _func: *const c_char) -> ! {
@@ -255,6 +399,32 @@ pub unsafe extern "C" fn syscall(n: c_long, mut args: ...) -> c_long {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn wide(s: &str) -> alloc::vec::Vec<wchar_t> { s.chars().map(|c| c as wchar_t).chain([0]).collect() }
+    #[test]
+    fn wide_strings() {
+        let (a, b) = (wide("/lib:/x"), wide("/lib"));
+        unsafe {
+            assert_eq!(wcsncmp(a.as_ptr(), b.as_ptr(), 4), 0);
+            assert!(wcscmp(a.as_ptr(), b.as_ptr()) > 0);
+            assert_eq!(wcsrchr(a.as_ptr(), '/' as wchar_t).offset_from(a.as_ptr()), 5);
+            assert!(wcschr(b.as_ptr(), ':' as wchar_t).is_null());
+            let mut copy = a.clone();
+            let mut save = core::ptr::null_mut();
+            let first = wcstok(copy.as_mut_ptr(), wide(":").as_ptr(), &mut save);
+            assert_eq!(wcscmp(first, b.as_ptr()), 0);
+            let second = wcstok(core::ptr::null_mut(), wide(":").as_ptr(), &mut save);
+            assert_eq!(wcscmp(second, wide("/x").as_ptr()), 0);
+            assert!(wcstok(core::ptr::null_mut(), wide(":").as_ptr(), &mut save).is_null());
+            let n = wide("-42z");
+            let mut end = core::ptr::null_mut();
+            assert_eq!(wcstol(n.as_ptr(), &mut end, 10), -42);
+            assert_eq!(end.offset_from(n.as_ptr()), 3);
+            let mut out = [0 as wchar_t; 4];
+            assert_eq!(mbstowcs(out.as_mut_ptr(), "h\u{e9}\0".as_ptr().cast(), 4), 2);
+            assert_eq!(out[..3], [b'h' as wchar_t, 0xE9, 0]);
+            assert_eq!(wcstombs(core::ptr::null_mut(), out.as_ptr(), 0), 3);
+        }
+    }
     #[test]
     fn split_utf8_resumes() {
         let mut st: State = [0; 8];

@@ -276,7 +276,7 @@ impl Jot {
             (_, 0x1C, _) => tab.doc.newline(),
             (_, 0x0E, _) => tab.doc.backspace(),
             (false, 0x0F, _) => tab.doc.insert(b"    "),
-            (false, ..) => match sex_app::typed(key) { Some(c) => tab.doc.insert(&[c]), None => return Ask::Nothing },
+            (false, ..) => match sex_app::text(key) { Some(c) => tab.doc.insert(c.encode_utf8(&mut [0; 4]).as_bytes()), None => return Ask::Nothing },
             _ => return Ask::Nothing,
         }
         // Colouring below the first changed line may differ now.
@@ -343,9 +343,9 @@ impl Jot {
                 self.tabs[self.active].hl.invalidate(0);
             }
             (_, 0x1C) => self.find(key.shift),
-            (_, 0x0E) => { field.pop(); }
-            (false, _) => match sex_app::typed(key) {
-                Some(c) => { if self.fresh { field.clear(); } field.push(c); }
+            (_, 0x0E) => { while let Some(b) = field.pop() { if b & 0xC0 != 0x80 { break; } } }
+            (false, _) => match sex_app::text(key) {
+                Some(c) => { if self.fresh { field.clear(); } field.extend_from_slice(c.encode_utf8(&mut [0; 4]).as_bytes()); }
                 None => return false,
             },
             _ => return false,

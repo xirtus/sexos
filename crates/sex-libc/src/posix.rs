@@ -55,6 +55,7 @@ extern "C" {
     fn sys_pwrite(fd: i32, buf: *const u8, len: usize, offset: i64) -> isize;
     fn sys_dup(fd: i32) -> i32;
     fn sys_yield();
+    fn sys_read_entropy(buf: *mut u8, len: usize, flags: u32) -> isize;
 }
 
 /// A negative error number becomes `errno` and -1.
@@ -362,9 +363,81 @@ pub unsafe extern "C" fn fclose(f: *mut FILE) -> c_int {
         open.swap_remove(i);
         drop(unsafe { Box::from_raw(f) });
         unsafe { sys_close(fd) };
+        // A `tmpfile` stream's file goes with it.
+        let temps = unsafe { &mut *core::ptr::addr_of_mut!(TEMPS) };
+        if let Some(i) = temps.iter().position(|(p, _)| *p == f) {
+            let (_, name) = temps.swap_remove(i);
+            unsafe { sys_unlink(name.as_ptr().cast()) };
+        }
     }
     r
 }
+
+/// Streams `tmpfile` made, with their file names (NUL-terminated).
+static mut TEMPS: Vec<(*mut FILE, Vec<u8>)> = Vec::new();
+static mut TEMP_COUNT: u32 = 0;
+
+/// A name no file in the program's folder has yet: `tmp` and a number, within
+/// musl's `L_tmpnam` (20 bytes). With no shared `/tmp`, temporary files live in the
+/// program's own folder like every other file it makes.
+unsafe fn fresh_name(out: &mut [u8; 20]) -> bool {
+    for _ in 0..1000 {
+        let n = unsafe { TEMP_COUNT = TEMP_COUNT.wrapping_add(1); TEMP_COUNT };
+        let salt = (clock().1 as u32) & 0xFFFF;
+        let value = ((salt as u64) << 32) | n as u64;
+        out[..3].copy_from_slice(b"tmp");
+        for i in 0..12 {
+            out[3 + i] = b"0123456789abcdef"[((value >> (44 - 4 * i)) & 0xF) as usize];
+        }
+        out[15] = 0;
+        let mut st: HStat = unsafe { core::mem::zeroed() };
+        if unsafe { sys_stat(out.as_ptr().cast(), &mut st) } < 0 { return true; }
+    }
+    false
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn tmpnam(buf: *mut c_char) -> *mut c_char {
+    static mut NAME: [u8; 20] = [0; 20];
+    let mut name = [0u8; 20];
+    if !unsafe { fresh_name(&mut name) } { return null_mut(); }
+    let out = if buf.is_null() { core::ptr::addr_of_mut!(NAME).cast::<c_char>() } else { buf };
+    unsafe { core::ptr::copy_nonoverlapping(name.as_ptr().cast(), out, 20) };
+    out
+}
+
+/// A stream on a new file in the program's folder, removed when the stream closes.
+#[no_mangle]
+pub unsafe extern "C" fn tmpfile() -> *mut FILE {
+    let mut name = [0u8; 20];
+    if !unsafe { fresh_name(&mut name) } { set_errno(17); return null_mut(); }
+    let f = unsafe { fopen(name.as_ptr().cast(), b"w+x\0".as_ptr().cast()) };
+    if !f.is_null() {
+        let len = name.iter().position(|&b| b == 0).unwrap_or(19) + 1;
+        unsafe { (*core::ptr::addr_of_mut!(TEMPS)).push((f, name[..len].to_vec())) };
+    }
+    f
+}
+
+/// There is no shell and no other process to run: `system(NULL)` says so (0), and a
+/// command fails with ENOSYS.
+#[no_mangle]
+pub unsafe extern "C" fn system(command: *const c_char) -> c_int {
+    if command.is_null() { return 0; }
+    set_errno(crate::ENOSYS);
+    -1
+}
+
+/// Signals do not exist for a program (no other process can send one, and faults end
+/// the program). A handler is accepted and never called; the previous one is
+/// reported as SIG_DFL.
+#[no_mangle]
+pub unsafe extern "C" fn signal(_sig: c_int, _handler: usize) -> usize { 0 }
+
+/// `raise`: with no handlers, the default action of every signal C programs raise
+/// (SIGABRT, SIGTERM, SIGINT...) ends the program.
+#[no_mangle]
+pub unsafe extern "C" fn raise(sig: c_int) -> c_int { unsafe { exit(128 + sig) } }
 #[no_mangle]
 pub unsafe extern "C" fn fflush(f: *mut FILE) -> c_int {
     if !f.is_null() { return unsafe { flush_stream(f) }; }
@@ -563,6 +636,42 @@ pub unsafe extern "C" fn truncate(path: *const c_char, size: i64) -> c_int {
     unsafe { sys_close(fd) };
     ret(r as i64) as c_int
 }
+
+// ---- what CPython also asks for -----------------------------------------------------------
+
+/// Random bytes from the program's entropy source (RDRAND where the processor has it).
+#[no_mangle]
+pub unsafe extern "C" fn getrandom(buf: *mut c_void, len: usize, flags: u32) -> isize {
+    ret(unsafe { sys_read_entropy(buf.cast(), len, flags) } as i64) as isize
+}
+#[no_mangle]
+pub unsafe extern "C" fn getentropy(buf: *mut c_void, len: usize) -> c_int {
+    if len > 256 { set_errno(5); return -1; }
+    if unsafe { getrandom(buf, len, 0) } != len as isize { return -1; }
+    0
+}
+/// `dup2` where the descriptor table allows it: `new` is closed, and the duplicate
+/// must land on it (the table hands out the lowest free number); otherwise EBUSY.
+#[no_mangle]
+pub unsafe extern "C" fn dup2(old: c_int, new: c_int) -> c_int {
+    if old == new { return new; }
+    unsafe { sys_close(new) };
+    let d = unsafe { sys_dup(old) };
+    if d < 0 { return ret(d as i64) as c_int; }
+    if d != new { unsafe { sys_close(d) }; set_errno(16); return -1; }
+    new
+}
+/// File times are kept by the store, not set by programs.
+#[no_mangle]
+pub unsafe extern "C" fn utime(_path: *const c_char, _times: *const c_void) -> c_int { set_errno(crate::ENOSYS); -1 }
+/// No signal ever arrives, so waiting for one would never end.
+#[no_mangle]
+pub unsafe extern "C" fn pause() -> c_int { set_errno(crate::ENOSYS); -1 }
+/// musl's real-time signal numbers (`SIGRTMIN`/`SIGRTMAX`), though none is delivered.
+#[no_mangle]
+pub extern "C" fn __libc_current_sigrtmin() -> c_int { 35 }
+#[no_mangle]
+pub extern "C" fn __libc_current_sigrtmax() -> c_int { 64 }
 
 // ---- mmap, as a library ------------------------------------------------------------------
 //

@@ -1373,3 +1373,20 @@ fn resize_observes_host_viewport_and_does_not_supply_dimensions_from_script_mess
     s.dispatch("resize\t99999\t99999").unwrap();
     assert_eq!(logs(&mut s),["0:resize true 0 0","0:property 0 0"]);
 }
+
+#[test]
+fn svg_elements_have_their_namespace_and_class() {
+    let mut s = page("<div id=d><svg id=s viewBox='0 0 24 24'><path id=p d='M0 0'/><title id=t>x</title></svg><title>doc</title></div>");
+    s.eval(r#"
+        const NS = 'http://www.w3.org/2000/svg';
+        const svg = document.getElementById('s'), path = document.getElementById('p'), t = document.getElementById('t');
+        const made = document.createElementNS(NS, 'linearGradient'), use = document.createElementNS(NS, 'a');
+        const div = document.getElementById('d'), html = document.createElementNS('http://www.w3.org/1999/xhtml', 'span');
+        console.log(svg instanceof SVGSVGElement, path instanceof SVGElement, path instanceof HTMLElement, path instanceof Element,
+            path.namespaceURI === NS, path.tagName, t instanceof SVGElement, document.querySelector('div > title') instanceof SVGElement,
+            made instanceof SVGElement, made.tagName, use instanceof SVGElement, div.namespaceURI, html instanceof HTMLElement, path.ownerSVGElement === svg);
+        // YouTube's check: an element's nodeType is Node.ELEMENT_NODE.
+        console.log(path.nodeType === Node.ELEMENT_NODE, svg.nodeName, document.createTextNode('x').nodeType === Node.TEXT_NODE, div.ELEMENT_NODE, Node.DOCUMENT_POSITION_FOLLOWING);
+    "#, "t.js").unwrap();
+    assert_eq!(logs(&mut s), ["0:true true false true true path true false true linearGradient true http://www.w3.org/1999/xhtml true true", "0:true svg true 1 4"]);
+}

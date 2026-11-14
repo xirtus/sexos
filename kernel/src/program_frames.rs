@@ -58,6 +58,17 @@ pub fn pressure() -> u64 {
     let level = level_of(free, base).max(now.min(level_of(free - free / 5, base)));
     if level != now && LEVEL.compare_exchange(now, level, Ordering::Relaxed, Ordering::Relaxed).is_ok() {
         crate::serial_println!("[memory.pressure] level={} free_pages={} base_pages={}", level, free, base);
+        // The Shell sleeps when it has no work; critical pressure is work (its
+        // out-of-memory policy), so wake it as a message would.
+        if level == CRITICAL {
+            if let Some(shell) = crate::ipc::DOMAIN_REGISTRY.get(sex_pdx::uiir::SHELL_PD) {
+                let msg = crate::ipc::messages::MessageType::IpcCall { func_id: sex_pdx::program_memory::OP_PRESSURE,
+                    arg0: level, arg1: free, arg2: 0, caller_pd: 0, caller_task: 0 };
+                if unsafe { (*shell.message_ring).enqueue(msg) }.is_ok() {
+                    crate::scheduler::unpark_thread(shell.main_task.load(Ordering::Acquire));
+                }
+            }
+        }
     }
     level
 }

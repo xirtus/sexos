@@ -32,6 +32,10 @@ pub enum Lease {
     Virtio,
     /// Display controller: identity only, no BAR view yet (firmware framebuffer).
     Display,
+    /// Intel display engine (Gen12 Tiger Lake): a view of BAR0's display registers
+    /// (`sex_pdx::display_frames::INTEL_REGISTERS` bytes, not the GTT half), no command
+    /// grant and no DMA pool. Display reads what firmware lit (workstream L, slice L3).
+    IntelDisplay,
     /// Intel Wi-Fi: BAR0, command grant, its own 4 MiB DMA pool and the firmware pack.
     Wifi,
 }
@@ -94,7 +98,7 @@ pub const DRIVE: Manifest = Manifest {
 
 /// sexusb: xHCI host controllers (USB 3; USB4 hosts expose xHCI too).
 pub const USB: Manifest = Manifest {
-    service: Service::Usb, max_devices: 0, vectors: 0,
+    service: Service::Usb, max_devices: 0, vectors: 1,
     matches: &[Match::class(0x0c_03_30, EXACT, Lease::Xhci, 8)],
 };
 
@@ -121,10 +125,21 @@ pub const BELL: Manifest = Manifest {
     ],
 };
 
-/// sexdisplay: every display controller, as identity only.
+/// sexdisplay: virtio-gpu as a driven device (slice L2), Tiger Lake display
+/// registers (slice L3), every other display controller as identity only.
 pub const DISPLAY: Manifest = Manifest {
     service: Service::Display, max_devices: 0, vectors: 0,
-    matches: &[Match::class(0x03_00_00, BASE, Lease::Display, 0)],
+    matches: &[
+        Match::id(0x1af4, 0x1050, Lease::Virtio, 25),
+        // Tiger Lake UHD/Iris Xe (sex-gpu-intel's TIGER_LAKE list).
+        Match::id(0x8086, 0x9a40, Lease::IntelDisplay, 27),
+        Match::id(0x8086, 0x9a49, Lease::IntelDisplay, 27),
+        Match::id(0x8086, 0x9a60, Lease::IntelDisplay, 27),
+        Match::id(0x8086, 0x9a68, Lease::IntelDisplay, 27),
+        Match::id(0x8086, 0x9a70, Lease::IntelDisplay, 27),
+        Match::id(0x8086, 0x9a78, Lease::IntelDisplay, 27),
+        Match::class(0x03_00_00, BASE, Lease::Display, 0),
+    ],
 };
 
 /// Every manifest, in the order BOOT consults them.

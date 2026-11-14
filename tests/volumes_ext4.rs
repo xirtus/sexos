@@ -52,7 +52,7 @@ fn names(mut l: Vec<Entry>) -> Vec<(String, Kind, u64)> {
 #[test]
 fn ext4_root_and_metadata() {
     let (mut d, mut v) = mount("ext4");
-    assert_eq!((v.format(), v.label().as_str(), v.read_only()), (Format::Ext4, "LINUXDATA", true));
+    assert_eq!((v.format(), v.label().as_str(), v.read_only()), (Format::Ext4, "LINUXDATA", false));
     let (total, free) = v.statfs(&mut d).unwrap();
     assert_eq!(total, 16 << 20);
     assert!(free > 0 && free < total);
@@ -116,10 +116,14 @@ fn ext4_errors_and_read_only() {
     assert_eq!(v.read(&mut d, b"docs", 0, &mut [0; 8]).unwrap_err(), Error::IsDir);
     assert_eq!(v.stat(&mut d, b"link/x").unwrap_err(), Error::Unsupported);
     assert_eq!(v.stat(&mut d, b"docs/../hello.txt").unwrap_err(), Error::Name);
-    assert_eq!(v.write(&mut d, b"hello.txt", 0, b"x").unwrap_err(), Error::ReadOnly);
-    assert_eq!(v.create(&mut d, b"new").unwrap_err(), Error::ReadOnly);
-    assert_eq!(v.mkdir(&mut d, b"newdir").unwrap_err(), Error::ReadOnly);
-    assert_eq!(v.remove(&mut d, b"hello.txt").unwrap_err(), Error::ReadOnly);
+    // New names don't go into an htree directory; ext2 (no extents) stays read only.
+    assert_eq!(v.create(&mut d, b"many/new").unwrap_err(), Error::Unsupported);
+    let (mut d2, mut old) = mount("ext2");
+    assert!(old.read_only());
+    assert_eq!(old.write(&mut d2, b"small.txt", 0, b"x").unwrap_err(), Error::ReadOnly);
+    assert_eq!(old.create(&mut d2, b"new").unwrap_err(), Error::ReadOnly);
+    assert_eq!(old.mkdir(&mut d2, b"newdir").unwrap_err(), Error::ReadOnly);
+    assert_eq!(old.remove(&mut d2, b"small.txt").unwrap_err(), Error::ReadOnly);
 }
 
 #[test]

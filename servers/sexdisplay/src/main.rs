@@ -154,6 +154,10 @@ use surface_lifecycle::{Surface, MAX_SURFACES, TEXT_BUF_CAP, TEXT_MAX_ROWS, TEXT
 static mut SURFACES: [Surface; MAX_SURFACES] = [SURFACE_EMPTY; MAX_SURFACES];
 mod scene;
 mod frame_output;
+mod virtio_gpu;
+mod intel;
+/// The virtio-gpu that took the screen over from firmware, if BOOT leased one.
+static mut GPU: Option<virtio_gpu::Gpu> = None;
 mod screen_capture;
 static mut SCREEN_CAPTURE:screen_capture::Server=screen_capture::Server::new();
 mod paint_batch;
@@ -659,24 +663,28 @@ fn text_run(row:*mut u32,x0:usize,x1:usize,y:usize,surf:&Surface,metrics:sex_pdx
         let index=surf.cell_starts[ordinal] as usize;
         let Some((scalar,end))=sex_pdx::text_encoding::cell(&surf.text_buf[..len],index)else{continue;};
         if scalar==10{continue;}
+        let scalar=sex_shape::cells::shown(&surf.text_buf[..len],index,scalar);
         let selected=index<surf.selection_end as usize&&end>surf.selection_start as usize
             &&surf.selection_end as usize<=surf.text_len as usize;
         let left=tx+col*advance;
+        // A wide character (CJK, emoji) spans two cells; its second draws the right half.
+        let span=if sex_shape::cells::is_wide(scalar){2}else{1};
+        let half=(span==2&&ordinal>row_start&&surf.cell_starts[ordinal-1] as usize==index) as usize;
         // Geist Mono drawn for this cell size, as surface_text_fg_at draws it.
         {
             let line_h=(GLYPH_H+2)*scale;
-            if let Some(cell)=glyphs::mono_cell(scalar,advance,line_h){
+            if let Some(cell)=glyphs::mono_cell(scalar,advance*span,line_h){
                 let gy=(y-ty)%line_h;
                 let back=if selected{0xff36577c}else{surf.color};
                 for x in left.max(x0)..(left+advance).min(x1){
-                    let alpha=cell[gy*advance+(x-left)];
+                    let alpha=cell[gy*advance*span+half*advance+(x-left)];
                     if alpha!=0{unsafe{core::ptr::write_volatile(row.add(x),coverage_blend(surf.text_color,back,alpha));}}
                     else if selected{unsafe{core::ptr::write_volatile(row.add(x),back);}}
                 }
                 continue;
             }
         }
-        let bits=if py<GLYPH_H{scalar_glyph(scalar)[py]}else{0};
+        let bits=if py<GLYPH_H&&half==0{scalar_glyph(scalar)[py]}else{0};
         if bits==0&&!selected{continue;}
         for x in left.max(x0)..(left+advance).min(x1){
             let px=(x-left)/scale;
@@ -1539,8 +1547,19 @@ fn recompute_text_lines(surf: &mut Surface) {
     surf.line_cells[0] = 0;
     surf.line_count = 1;
     while let Some((scalar,end)) = sex_pdx::text_encoding::cell(&surf.text_buf[..len],i) {
+        // CJK and emoji take two cells: the same offset twice. One never splits
+        // across rows. (A wide character is 3 or 4 bytes, so cells never outnumber bytes.)
+        let wide=scalar!=10&&sex_shape::cells::is_wide(scalar);
+        if wide&&col>0&&col+1>=cols {
+            if (surf.line_count as usize) >= TEXT_MAX_ROWS { break; }
+            surf.line_starts[surf.line_count as usize] = i as u16;
+            surf.line_cells[surf.line_count as usize] = surf.cell_count;
+            surf.line_count += 1;
+            col = 0;
+        }
         surf.cell_starts[surf.cell_count as usize]=i as u16;
         surf.cell_count+=1;
+        if wide{surf.cell_starts[surf.cell_count as usize]=i as u16;surf.cell_count+=1;col+=1;}
         i=end;
         if scalar == 10 {
             if (surf.line_count as usize) >= TEXT_MAX_ROWS { break; }
@@ -1558,7 +1577,8 @@ fn recompute_text_lines(surf: &mut Surface) {
                 col = 0;
             }
         }
-    }
+    }    // Rows with Hebrew or Arabic show their cells in visual order (Unicode bidi).
+    sex_shape::cells::reorder_lines(&surf.text_buf[..len],&mut surf.cell_starts,&surf.line_cells[..surf.line_count as usize],surf.cell_count as usize);
 }
 
 // These mutate text data only; dispatch admits the exact live surface owner.
@@ -1759,6 +1779,7 @@ fn surface_text_fg_at_scaled(x: usize, y: usize, surf: &Surface, ui_scale:u32) -
     let char_idx=surf.cell_starts[ordinal] as usize;
     let (scalar,char_end)=sex_pdx::text_encoding::cell(&surf.text_buf[..(surf.text_len as usize).min(TEXT_BUF_CAP)],char_idx)?;
     if scalar==10 { return None; }
+    let scalar=sex_shape::cells::shown(&surf.text_buf[..(surf.text_len as usize).min(TEXT_BUF_CAP)],char_idx,scalar);
     // Selection belongs to this committed surface text. Paint the whole cell,
     // including spaces and inter-glyph spacing, beneath existing foreground ink.
     let selected = char_idx < surf.selection_end as usize
@@ -1768,15 +1789,18 @@ fn surface_text_fg_at_scaled(x: usize, y: usize, surf: &Surface, ui_scale:u32) -
     // Geist Mono is the default at every scale, including the compact 6x9 grid.
     // Keep the legacy glyph only for missing font coverage or a cache failure.
     let advance = (GLYPH_W + CHAR_SPACING) * scale;
+    // A wide character (CJK, emoji) spans two cells; its second shows the right half.
+    let span = if sex_shape::cells::is_wide(scalar) { 2 } else { 1 };
+    let half = (span == 2 && ordinal > surf.line_cells[row] as usize && surf.cell_starts[ordinal - 1] as usize == char_idx) as usize;
     {
-        if let Some(cell) = glyphs::mono_cell(scalar, advance, line_h) {
+        if let Some(cell) = glyphs::mono_cell(scalar, advance * span, line_h) {
             let (gx, gy) = ((x - tx) % advance, (y - ty) % line_h);
-            let alpha = cell[gy * advance + gx];
+            let alpha = cell[gy * advance * span + half * advance + gx];
             if alpha == 0 { return background; }
             return Some(coverage_blend(surf.text_color, background.unwrap_or(surf.color), alpha));
         }
     }
-    if px >= GLYPH_W || py >= GLYPH_H { return background; }
+    if px >= GLYPH_W || py >= GLYPH_H || half != 0 { return background; }
     let glyph_row = scalar_glyph(scalar)[py];
     let bit = (glyph_row >> (GLYPH_W - 1 - px)) & 1;
     if bit != 0 { Some(surf.text_color) } else { background }
@@ -1937,7 +1961,9 @@ impl Drop for OutputBackup{fn drop(&mut self){for pixel in &mut self.saved{unsaf
 fn valid_scanout(fb:*mut u32,w:usize,h:usize)->bool{
     let Some(bytes)=w.checked_mul(h).and_then(|n|n.checked_mul(4))else{return false;};
     let address=fb as u64;
-    if address<HIGH_HALF_BASE || address.checked_add(bytes as u64).is_none(){return false;}
+    // BOOT's framebuffer is a high-half alias; a virtio-gpu scanout buffer is
+    // this service's own region, checked once when the device took over.
+    if (address<HIGH_HALF_BASE&&!gpu_scanout_active()) || address.checked_add(bytes as u64).is_none(){return false;}
     unsafe{address==FB_PTR&&w==FB_W as usize&&h==FB_H as usize&&w!=0&&h!=0&&w<=MAX_FB_W&&h<=MAX_FB_H}
 }
 
@@ -1951,6 +1977,7 @@ fn publish_frame(fb:*mut u32,w:usize,h:usize,frame:frame_output::Publication<'_>
     if frame.previous.is_some_and(|old|old.len()!=pixels.len())||frame.rows.end>h{return false;}
     let pitch=unsafe{FB_PITCH} as usize;
     let mut written=0usize;
+    let(mut touched_first,mut touched_end)=(usize::MAX,0usize);
     // A new night light level repaints every pixel: what the output shows was
     // warmed by the old level, so comparing with the old frame is not enough.
     let night=sex_pdx::desktop_look::night_level();
@@ -1970,6 +1997,7 @@ fn publish_frame(fb:*mut u32,w:usize,h:usize,frame:frame_output::Publication<'_>
             for(index,pixel)in row[first..end].iter().enumerate(){unsafe{core::ptr::write_volatile(out.add(first+index),sex_pdx::desktop_look::night(*pixel,night));}}
         }
         written+=end-first;
+        if end>first{touched_first=touched_first.min(y);touched_end=y+1;}
     }
     unsafe{PUBLISHED_PIXELS=PUBLISHED_PIXELS.wrapping_add(written as u64);LAST_WRITTEN=written as u64;}
     // Order posted/write-combining CPU stores before releasing presentation
@@ -1978,6 +2006,19 @@ fn publish_frame(fb:*mut u32,w:usize,h:usize,frame:frame_output::Publication<'_>
     unsafe{core::arch::asm!("sfence",options(nostack,preserves_flags));}
     #[cfg(not(target_arch="x86_64"))]
     core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+    // virtio-gpu: the host shows the changed rows only now, all at once.
+    if touched_end>touched_first&&!gpu_present(touched_first,touched_end){return false;}
+    true
+}
+
+/// Display scans out from its own virtio-gpu resource (slice L2).
+fn gpu_scanout_active()->bool{unsafe{(*core::ptr::addr_of!(GPU)).is_some()}}
+
+/// Show rows `first..end` of the scanout buffer: one fenced flip. True without a GPU.
+fn gpu_present(first:usize,end:usize)->bool{
+    let Some(gpu)=(unsafe{(*core::ptr::addr_of_mut!(GPU)).as_mut()})else{return true};
+    if gpu.present(first as u32,end as u32).is_err(){return false;}
+    virtio_gpu::flip_receipt(gpu,first,end);
     true
 }
 
@@ -1998,6 +2039,7 @@ fn raster_batch(target:&frame_output::Target<'_>,scene: &scene::SceneSnapshot,pl
             draw_atlas_frame_previews_pass(fb,w,h,total,scene);
         }
         draw_launcher_panel(fb,w,h,total,scene);
+        draw_window_switcher(fb,w,h,total,scene);
     }
     draw_cursor_z_top(fb,w,h,total,true,scene);
     true
@@ -2774,6 +2816,104 @@ fn draw_cursor_z_top(fb: *mut u32, w: usize, h: usize, total_pixels: usize, save
 /// app surfaces but under the cursor. Renders a solid rect with a thin border.
 /// Only active when the launcher surface is active (toggled by shell).
 /// Does not affect the top-strip render proof (y<50 area).
+/// The Alt+Tab switcher the Shell asked for, hidden when it sent none.
+static mut WINDOW_SWITCHER: sex_pdx::window_switcher::State = sex_pdx::window_switcher::State::HIDDEN;
+/// The name a switcher card shows: a program's own title, else its family's.
+fn switcher_title(surface_id: u64) -> &'static [u8] {
+    app_catalog::INCARNATIONS.iter()
+        .find(|row| row.surface == surface_id || row.shell_surface == Some(surface_id))
+        .and_then(|row| program_title(row.surface))
+        .or_else(|| surface_title(surface_id))
+        .unwrap_or(b"Window")
+}
+/// Alt+Tab (and the Super+W overview grid over a dimmed desktop): a glass
+/// panel over the desktop with one card per window, each a
+/// live thumbnail scaled from the window's own composed pixels (so windows
+/// hidden behind others or by monocle still show) and its title, the
+/// selected card ringed in the focus colour. Drawn after every body pass while
+/// shown; the publisher writes out only the spans that changed.
+fn draw_window_switcher(fb: *mut u32, w: usize, h: usize, total_pixels: usize, scene: &scene::SceneSnapshot) {
+    use sex_pdx::window_switcher::Layout;
+    let state = unsafe { WINDOW_SWITCHER };
+    if !state.visible() { return; }
+    let scale = scene.metrics.scale();
+    let layout = if state.grid { Layout::grid(w, h, scene.metrics.bar() as usize, state.count as usize, scale) }
+        else { Layout::new(w, h, state.count as usize, scale) };
+    let Some(layout) = layout else { return; };
+    const PANEL: u32 = 0x00121726;
+    const CARD: u32 = 0x001E2536;
+    const CARD_SELECTED: u32 = 0x002C3650;
+    let ring = sex_pdx::desktop_style::FOCUS;
+    let at = |x: usize, y: usize| -> Option<usize> { let i = y * w + x; (x < w && y < h && i < total_pixels).then_some(i) };
+    let (px, py, pw, ph) = layout.panel;
+    // The overview dims the whole desktop below the panel; the switcher is a rounded glass panel.
+    let (radius, shade) = if state.grid { (0, 200) } else { (10 * scale as usize, 225) };
+    for y in py..py + ph {
+        for x in px..px + pw {
+            // Rounded corners: skip pixels outside the corner circles.
+            let dx = if x < px + radius { px + radius - x } else if x >= px + pw - radius { x + radius + 1 - (px + pw) } else { 0 };
+            let dy = if y < py + radius { py + radius - y } else if y >= py + ph - radius { y + radius + 1 - (py + ph) } else { 0 };
+            if radius != 0 && dx * dx + dy * dy > radius * radius { continue; }
+            let Some(i) = at(x, y) else { continue };
+            unsafe {
+                let under = core::ptr::read_volatile(fb.add(i));
+                core::ptr::write_volatile(fb.add(i), alpha_blend_xrgb_over_xrgb(PANEL, under, shade));
+            }
+        }
+    }
+    for (index, sid) in state.ids().enumerate() {
+        let selected = index == state.selected as usize;
+        let (cx, cy, cw, ch) = layout.card(index);
+        let card = if selected { CARD_SELECTED } else { CARD };
+        let rim = if selected { 3 * scale as usize } else { 0 };
+        for y in cy..cy + ch {
+            for x in cx..cx + cw {
+                let edge = x < cx + rim || x >= cx + cw - rim || y < cy + rim || y >= cy + ch - rim;
+                if let Some(i) = at(x, y) { unsafe { core::ptr::write_volatile(fb.add(i), if edge { ring } else { card }); } }
+            }
+        }
+        // Thumbnail: the window's rectangle fitted into the card's top, keeping its shape.
+        let pad = 6 * scale as usize;
+        let (bx, by, bw, bh) = (cx + pad, cy + pad, cw.saturating_sub(2 * pad), layout.thumb_h.saturating_sub(pad));
+        let source = scene.surfaces.iter().find(|s| s.active && s.surface_id == sid);
+        if let Some(surf) = source {
+            let (sx, sy, sw, sh) = scene.groups.rect(surf, w, h);
+            if sw > 0 && sh > 0 && bw > 0 && bh > 0 {
+                let (tw, th) = if sw * bh >= sh * bw { (bw, (sh * bw / sw).max(1)) } else { ((sw * bh / sh).max(1), bh) };
+                let (ox, oy) = (bx + (bw - tw) / 2, by + (bh - th) / 2);
+                for ty in 0..th {
+                    let src_y = sy + ty * sh / th;
+                    for tx in 0..tw {
+                        let src_x = sx + tx * sw / tw;
+                        let c = composite_pixel_selected(src_x, src_y, w, h, card, sid, Some(sid), scene);
+                        if let Some(i) = at(ox + tx, oy + ty) { unsafe { core::ptr::write_volatile(fb.add(i), c); } }
+                    }
+                }
+            }
+        }
+        // Title, centred under the thumbnail and cut to the card.
+        let title = switcher_title(sid);
+        let line = glyphs::UI_H * scale as usize;
+        let ly = cy + layout.thumb_h + layout.gap + (layout.label_h.saturating_sub(line)) / 2;
+        let tw = glyphs::ui_width(title, scale).unwrap_or(0).min(cw.saturating_sub(2 * pad));
+        let lx = cx + (cw - tw) / 2;
+        for y in 0..line {
+            for x in 0..tw {
+                if let Some(c) = ui_label_at_scaled(title, x, y, card, scale) {
+                    if let Some(i) = at(lx + x, ly + y) { unsafe { core::ptr::write_volatile(fb.add(i), c); } }
+                }
+            }
+        }
+    }
+    unsafe {
+        static mut SWITCHER_DRAW_BUDGET: u32 = 16;
+        if SWITCHER_DRAW_BUDGET > 0 {
+            SWITCHER_DRAW_BUDGET -= 1;
+            sex_pdx::serial_record!("[display.switcher.draw] count={} selected={} grid={} cols={} panel={}x{}+{}+{}", state.count, state.selected, state.grid as u8, layout.cols, pw, ph, px, py);
+        }
+    }
+}
+
 fn draw_launcher_panel(fb: *mut u32, w: usize, h: usize, total_pixels: usize, scene: &scene::SceneSnapshot) {
     unsafe {
         for surf in scene.surfaces.iter() {
@@ -3217,7 +3357,8 @@ fn handle_primary_fb(ptr: u64, packed: u64) -> bool {
         return false;
     }
     unsafe {
-        FB_PTR = ptr;
+        // After a virtio-gpu takeover the scanout buffer is the output, not BOOT's.
+        if (*core::ptr::addr_of!(GPU)).is_none() { FB_PTR = ptr; }
         FB_W = w as u32;
         FB_H = h as u32;
     }
@@ -3494,6 +3635,16 @@ pub extern "C" fn _start() -> ! {
     assert!(geometry.pitch>=geometry.width*4&&geometry.pitch%4==0,"DISPLAY_PITCH");
     assert!(address>=HIGH_HALF_BASE,"BOOT_DISPLAY_ADDRESS");
     unsafe{FB_PTR=address;FB_W=geometry.width;FB_H=geometry.height;FB_PITCH=geometry.pitch/4;}
+    match virtio_gpu::open(geometry.width,geometry.height,address,geometry.pitch/4){
+        Ok(gpu)=>{
+            virtio_gpu::report(&gpu);
+            unsafe{FB_PTR=gpu.scanout_address();FB_PITCH=geometry.width;GPU=Some(gpu);}
+        }
+        Err(reason)=>sex_pdx::serial_record!("[display.kms.virtio] takeover=0 reason={}",reason),
+    }
+    // Intel display engine: read-only receipt of what firmware lit (slice L3).
+    let _=intel::report();
+    glyphs::warm();
     // Private frames are packed; publication steps rows at the scanout pitch.
     let frame_layout=sex_pdx::display_frames::Layout::new(geometry.width as u64,geometry.height as u64,geometry.width as u64*4)
         .expect("DISPLAY_FRAME_LAYOUT");
@@ -4013,6 +4164,16 @@ pub extern "C" fn _start() -> ! {
                     if msg.caller_pd == 3 && sex_pdx::desktop_look::set(msg.arg0, msg.arg1) {
                         needs_full_redraw = true;
                         sex_pdx::serial_record!("[display.look] wallpaper={} night={}", msg.arg0, msg.arg1);
+                    }
+                }
+                sex_pdx::window_switcher::OP_WINDOW_SWITCHER => {
+                    // Only the Shell opens, steps and hides the Alt+Tab switcher.
+                    if msg.caller_pd == 3 {
+                        if let Some(state) = sex_pdx::window_switcher::State::decode(msg.arg0, msg.arg1, msg.arg2) {
+                            unsafe { WINDOW_SWITCHER = state; }
+                            needs_full_redraw = true;
+                            sex_pdx::serial_record!("[display.switcher] count={} selected={} grid={}", state.count, state.selected, state.grid as u8);
+                        }
                     }
                 }
                 sex_pdx::app_lifecycle::OP_APP_TITLE => {

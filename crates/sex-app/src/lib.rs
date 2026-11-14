@@ -219,6 +219,8 @@ pub mod files {
     }
     impl Drop for Turn { fn drop(&mut self) { BUSY.store(false, Ordering::Release); } }
     static SEQ: AtomicU32 = AtomicU32::new(0);
+    /// The value Files sent with the last refusal (a package report's length).
+    static REFUSED_VALUE: AtomicU32 = AtomicU32::new(0);
     /// Where keys and closes that arrive during a request go.
     type Hold<'a> = Option<&'a mut Window>;
 
@@ -274,6 +276,7 @@ pub mod files {
             };
             if mine(&m, seq) {
                 let (_, status, value) = w::decode_reply(m.arg0).unwrap_or((0, w::INVALID, 0));
+                if status != w::OK { REFUSED_VALUE.store(value, Ordering::Relaxed); }
                 return if status == w::OK { Ok(value) } else { Err(status) };
             }
             if is_answer(&m) { mailbox::put(m); continue; }
@@ -284,6 +287,23 @@ pub mod files {
                 None => if is_shell(&m) { mailbox::put(m) },
             }
         }
+    }
+    /// A package request (`sex_pdx::package`: `op` is INSTALL, SEARCH, ...), for a run the
+    /// person started with `run +pkg`; any other run is refused. Returns Files' status and
+    /// its report, refused or not: lines of text, and lines starting with
+    /// `sex_pdx::package::MACHINE` that hold URLs. Paths are inside this program's folder.
+    pub fn package(window: &mut Window, op: u64, arg: &[u8], length: u64) -> (Error, alloc::vec::Vec<u8>) {
+        if arg.len() > w::PATH_BYTES { return (w::NAME, alloc::vec::Vec::new()); }
+        let _turn = Turn::take();
+        let region = match region() { Ok(r) => r, Err(e) => return (e, alloc::vec::Vec::new()) };
+        region[..arg.len()].copy_from_slice(arg);
+        REFUSED_VALUE.store(0, Ordering::Relaxed);
+        let (status, n) = match once(&mut Some(window), sex_pdx::package::KIND, arg.len(), op, length) {
+            Ok(n) => (w::OK, n),
+            Err(e) => (e, REFUSED_VALUE.load(Ordering::Relaxed)),
+        };
+        let n = (n as usize).min(w::CACHE_AT - w::PATH_BYTES);
+        (status, region[w::PATH_BYTES..w::PATH_BYTES + n].to_vec())
     }
     /// The words typed after the program's name, if it was started with any.
     pub fn args<'a>(window: &mut Window, out: &'a mut [u8; w::ARGS_MAX]) -> &'a [u8] {
@@ -477,6 +497,9 @@ pub mod files {
         }
     }
     pub fn mkdir(window: &mut Window, path: &[u8]) -> Result<(), Error> { request(window, w::MKDIR, path, 0, 0).map(|_| ()) }
+    /// Writes out and forgets the volume `/media/NAME`; for a USB stick every volume on it
+    /// (Eject). Grants into it end with it.
+    pub fn eject(window: &mut Window, media_path: &[u8]) -> Result<(), Error> { request(window, w::UNMOUNT, media_path, 0, 0).map(|_| ()) }
     pub fn create(window: &mut Window, path: &[u8]) -> Result<(), Error> { request(window, w::CREATE, path, 0, 0).map(|_| ()) }
     /// A file, or an empty folder.
     pub fn remove(window: &mut Window, path: &[u8]) -> Result<(), Error> { request(window, w::REMOVE, path, 0, 0).map(|_| ()) }
@@ -583,14 +606,13 @@ pub fn nav(key: Key) -> Option<Nav> {
         _ => return None,
     })
 }
-/// The character a key types, if any, on the keyboard codes Shell passes through.
+/// The ASCII character a key types, if any. Programs that take any text use [`text`].
 pub fn typed(key: Key) -> Option<u8> {
-    let plain: &[u8; 58] = b"\0\x001234567890-=\0\0qwertyuiop[]\0\0asdfghjkl;'`\0\\zxcvbnm,./\0*\0 ";
-    let upper: &[u8; 58] = b"\0\0!@#$%^&*()_+\0\0QWERTYUIOP{}\0\0ASDFGHJKL:\"~\0|ZXCVBNM<>?\0*\0 ";
-    if key.control { return None; }
-    let c = *if key.shift { upper } else { plain }.get(key.code as usize)?;
-    (c != 0).then_some(c)
+    key.char().filter(char::is_ascii).map(|c| c as u8)
 }
+/// The character a key typed under the person's keyboard layout, if any: `ü` on a
+/// German keyboard, `é` after a dead `´`, `€` from Compose `=` `e`.
+pub fn text(key: Key) -> Option<char> { key.char() }
 
 /// The network, for a run the person started with `run +net`. Otherwise every call is
 /// refused. HTTP and HTTPS through the network service's checked TLS, and TCP and UDP
