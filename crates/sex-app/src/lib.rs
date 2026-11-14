@@ -585,6 +585,25 @@ pub mod files {
     /// Writes out and forgets the volume `/media/NAME`; for a USB stick every volume on it
     /// (Eject). Grants into it end with it.
     pub fn eject(window: &mut Window, media_path: &[u8]) -> Result<(), Error> { request(window, w::UNMOUNT, media_path, 0, 0).map(|_| ()) }
+    /// The encrypted home: none, locked or unlocked ([`sex_pdx::home_lock`] states).
+    pub fn home_state(window: &mut Window) -> Result<u32, Error> { request(window, sex_pdx::home_lock::STATE, b"", 0, 0) }
+    fn home_secret(window: &mut Window, kind: u8, mib: u64, password: &[u8]) -> Result<(), Error> {
+        if password.len() > 256 { return Err(w::NAME); }
+        exchange(Some(window), kind, b"", mib, password.len() as u64, |d| d[..password.len()].copy_from_slice(password), |_, _| ()).map(|_| ())
+    }
+    /// Makes `/home` an encrypted volume of `mib` MiB under `password`, unlocked.
+    pub fn home_setup(window: &mut Window, mib: u64, password: &[u8]) -> Result<(), Error> { home_secret(window, sex_pdx::home_lock::SETUP, mib, password) }
+    /// Unlocks `/home`; `home_lock::WRONG_PASSWORD` if it isn't the password.
+    pub fn home_unlock(window: &mut Window, password: &[u8]) -> Result<(), Error> { home_secret(window, sex_pdx::home_lock::UNLOCK, 0, password) }
+    /// A new password for home; `home_lock::WRONG_PASSWORD` if `old` isn't the current one.
+    pub fn home_change(window: &mut Window, old: &[u8], new: &[u8]) -> Result<(), Error> {
+        if old.len() > 256 || new.len() > 256 { return Err(w::NAME); }
+        let len = old.len() + new.len();
+        exchange(Some(window), sex_pdx::home_lock::CHANGE, b"", old.len() as u64, len as u64,
+                 |d| { d[..old.len()].copy_from_slice(old); d[old.len()..len].copy_from_slice(new) }, |_, _| ()).map(|_| ())
+    }
+    /// Writes `/home` out and forgets its key.
+    pub fn home_lock(window: &mut Window) -> Result<(), Error> { request(window, sex_pdx::home_lock::LOCK, b"", 0, 0).map(|_| ()) }
     pub fn create(window: &mut Window, path: &[u8]) -> Result<(), Error> { request(window, w::CREATE, path, 0, 0).map(|_| ()) }
     /// A file, or an empty folder.
     pub fn remove(window: &mut Window, path: &[u8]) -> Result<(), Error> { request(window, w::REMOVE, path, 0, 0).map(|_| ()) }

@@ -41,6 +41,8 @@ pub fn commit_when_idle() {
 }
 fn commit_writes(fs: &mut Fs<'static, Disk>) {
     let bytes = unsafe { core::mem::replace(&mut *core::ptr::addr_of_mut!(UNCOMMITTED), 0) };
+    // Home's own commit first: its blocks then go out with the system's.
+    crate::home::sync(fs);
     if let Err(e) = fs.commit() { forget_stats(None); sex_pdx::serial_record!("[files.fs.commit.failed] bytes={} error={:?}", bytes, e); }
 }
 /// Clients' regions, found once: (address, 0 until looked up, u64::MAX if absent).
@@ -630,6 +632,24 @@ fn handle_request(index: usize, program: Option<usize>, r: w::Request) -> u64 {
         let (status, value) = picker(program, r, &path[..path_len], &mut region[w::PATH_BYTES..]);
         return w::reply(r.seq, status, value);
     }
+    if matches!(r.kind, sex_pdx::home_lock::SETUP | sex_pdx::home_lock::UNLOCK | sex_pdx::home_lock::LOCK | sex_pdx::home_lock::STATE | sex_pdx::home_lock::CHANGE) {
+        // Only Spindle, Shell or a run holding the whole filesystem.
+        if let Some(k) = program {
+            let b = unsafe { (*core::ptr::addr_of!(BINDINGS))[k] }.unwrap();
+            if !b.args[..b.args_len].split(|c| *c == b' ').any(|t| t == b"@/") { return w::reply(r.seq, w::DENIED, 0); }
+        }
+        let Some(fs) = fs else { return w::reply(r.seq, w::UNAVAILABLE, 0) };
+        if writes_pending() { commit_writes(fs); }
+        let n = (r.length as usize).min(512);
+        let mut secret = [0u8; 512];
+        secret[..n].copy_from_slice(&region[w::PATH_BYTES..w::PATH_BYTES + n]);
+        // The password doesn't stay in the client's region either.
+        region[w::PATH_BYTES..w::PATH_BYTES + n].fill(0);
+        forget_stats(None);
+        let result = crate::home::control(fs, r.kind, r.offset, &secret[..n]);
+        secret.fill(0);
+        return match result { Ok(v) => w::reply(r.seq, w::OK, v), Err(st) => w::reply(r.seq, st, 0) };
+    }
     if let (Some(k), true) = (program, r.kind == w::ARGS) {
         let binding = unsafe { (*core::ptr::addr_of!(BINDINGS))[k] }.unwrap();
         region[w::PATH_BYTES..w::PATH_BYTES + binding.args_len].copy_from_slice(&binding.args[..binding.args_len]);
@@ -705,11 +725,26 @@ fn handle_request(index: usize, program: Option<usize>, r: w::Request) -> u64 {
     if let Some(result) = media {
         return match result { Ok(value) => w::reply(r.seq, w::OK, value), Err(status) => w::reply(r.seq, status, 0) };
     }
+    // The encrypted home: its own filesystem, reached only once unlocked.
+    let home = match (r.kind, rename_halves) {
+        (w::RENAME, Some((a, b))) if crate::home::crosses(a, b) => Some(Err(w::OTHER_DISK)),
+        (w::RENAME, Some((a, _))) if crate::home::owns(a) => Some(crate::home::run(&mut *fs, r, path, data)),
+        (w::RENAME, _) => None,
+        (w::PREPARE | w::MOUNT | w::UNMOUNT, _) if crate::home::owns(path) => Some(Err(w::UNSUPPORTED)),
+        _ if crate::home::owns(path) => Some(crate::home::run(&mut *fs, r, path, data)),
+        _ => None,
+    };
+    if let Some(result) = home {
+        if !read_only { forget_stats(None); }
+        return match result { Ok(value) => w::reply(r.seq, w::OK, value), Err(status) => w::reply(r.seq, status, 0) };
+    }
+    // Its sealed file changes only through it.
+    if !read_only && (path == sex_pdx::home_lock::IMAGE || rename_halves.is_some_and(|(_, b)| b == sex_pdx::home_lock::IMAGE)) { return w::reply(r.seq, w::DENIED, 0); }
     // A mounted image changes only through its volume.
     if matches!(r.kind, w::WRITE | w::TRUNCATE | w::REMOVE) && fs.open(path).is_ok_and(|st| crate::volumes::busy(st.id)) {
         return w::reply(r.seq, w::DENIED, 0);
     }
-    if r.kind == w::SYNC { crate::volumes::sync_all(fs); }
+    if r.kind == w::SYNC { crate::volumes::sync_all(fs); crate::home::sync(fs); }
     let result = run(fs, r, path, data);
     if r.kind == w::STAT && result.is_ok() {
         let word = |i: usize| u64::from_le_bytes(data[i * 8..i * 8 + 8].try_into().unwrap());
@@ -801,13 +836,18 @@ pub fn read_ticket(ticket: u64, image: &mut [u8]) -> (Program, Option<[u64; 2]>)
     match found { Program::Absent => (Program::Absent, store_name), other => (other, None) }
 }
 fn run(fs: &mut Fs<'static, Disk>, r: w::Request, path: &[u8], data: &mut [u8]) -> Result<u32, Error> {
-    // Modification times: Unix seconds from the civil clock (0 if it is unknown).
-    let now = sex_pdx::civil_time_ms().map(|ms| ms / 1000).unwrap_or(0);
     // Test builds only: a path that makes Files fall over, to show it comes back.
     if option_env!("SEXOS_FILES_CRASH_PROBE").is_some() && path == b"/crash.probe" {
         sex_pdx::serial_record!("[files.crash.probe]");
         unsafe { core::ptr::write_volatile(8 as *mut u8, 1) };
     }
+    if r.kind == w::PREPARE { return prepare(fs, r, path, data); }
+    run_on(fs, r, path, data)
+}
+/// The requests every SexOS filesystem answers alike: the system disk's, and home's.
+pub fn run_on<D: sexfs::Device>(fs: &mut Fs<'static, D>, r: w::Request, path: &[u8], data: &mut [u8]) -> Result<u32, Error> {
+    // Modification times: Unix seconds from the civil clock (0 if it is unknown).
+    let now = sex_pdx::civil_time_ms().map(|ms| ms / 1000).unwrap_or(0);
     match r.kind {
         w::STAT => {
             let st = fs.open(path)?;
@@ -865,7 +905,19 @@ fn run(fs: &mut Fs<'static, Disk>, r: w::Request, path: &[u8], data: &mut [u8]) 
         }
         w::TRUNCATE => { let st = fs.open(path)?; fs.truncate(st.id, r.offset, now)?; fs.commit()?; Ok(0) }
         w::SYNC => { fs.commit()?; Ok(0) }
-        w::PREPARE => {
+        w::STATFS => {
+            let s = fs.statfs();
+            data[..8].copy_from_slice(&s.total.to_le_bytes());
+            data[8..16].copy_from_slice(&s.free.to_le_bytes());
+            data[16..24].copy_from_slice(&s.generation.to_le_bytes());
+            Ok(24)
+        }
+        _ => Err(Error::Name),
+    }
+}
+fn prepare(fs: &mut Fs<'static, Disk>, r: w::Request, path: &[u8], data: &mut [u8]) -> Result<u32, Error> {
+    {
+        {
             // `/bin/NAME` with no such file may still be the disk program store's NAME:
             // the load looks there, and refuses then if neither has it.
             let store_name = path.strip_prefix(sex_pdx::program_store::BIN)
@@ -892,13 +944,5 @@ fn run(fs: &mut Fs<'static, Disk>, r: w::Request, path: &[u8], data: &mut [u8]) 
             match note { Some(n) => n.encode(data), None => data[..sex_pdx::package::NOTE_BYTES].fill(0) }
             Ok(ticket)
         }
-        w::STATFS => {
-            let s = fs.statfs();
-            data[..8].copy_from_slice(&s.total.to_le_bytes());
-            data[8..16].copy_from_slice(&s.free.to_le_bytes());
-            data[16..24].copy_from_slice(&s.generation.to_le_bytes());
-            Ok(24)
-        }
-        _ => Err(Error::Name),
     }
 }
