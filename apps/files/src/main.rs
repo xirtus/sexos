@@ -20,6 +20,7 @@ mod dupes;
 mod jobs;
 mod loom;
 mod meta;
+mod places;
 mod rename;
 mod search;
 mod thumbs;

@@ -19,3 +19,5 @@ sex-archive = { path = "../../crates/sex-archive" }
 loom-core = { path = "../../crates/loom-core" }
 sex-diskimage = { path = "../../crates/sex-diskimage" }
 sex-volumes = { path = "../../crates/sex-volumes" }
+loom-remote = { path = "../../crates/loom-remote" }
+sex-ssh = { path = "../../crates/sex-ssh" }

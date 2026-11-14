@@ -17,7 +17,13 @@ stick:
    folder's file out of it (Ctrl+Shift+X) and extracts it whole; then a GPT disk image
    (named without an extension, so Files knows it by its content) with a FAT32 EFI System
    partition, an ext4 one and a swap one: it enters the first two and copies a file out of
-   each, and copies the swap partition, which it can't open, out whole as a .img.
+   each, and copies the swap partition, which it can't open, out whole as a .img;
+8. started again with the network (`run +net files`), adds an SFTP place (Ctrl+Shift+P) on
+   an OpenSSH server the gate runs on the host (reached at 10.0.2.2, logging in with an
+   ed25519 key file from the stick), copies a remote file down (Ctrl+Shift+X) and uploads
+   a local one (Ctrl+C, then Ctrl+V in the place). Skipped when the host has no sshd.
+   Then a WebDAV place (loom-remote's test server, plain HTTP, Nextcloud's layout, a
+   user and password): a file comes down and one goes up.
 On the host the stick then holds a zip that Python reads back byte for byte, the renamed
 files, and the metadata file; the second stick holds the files copied out of the images,
 byte for byte (SHA-256) as they are in them."""
@@ -25,7 +31,7 @@ import argparse,hashlib,io,os,random,re,shutil,subprocess,tarfile,time,zipfile
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 KEYS={' ':'spc','/':'slash','.':'dot','-':'minus','[':'bracket_left',']':'bracket_right',',':'comma'}
-SHIFTED={':':'semicolon','_':'minus','(':'9',')':'0'}
+SHIFTED={':':'semicolon','_':'minus','(':'9',')':'0','+':'equal','@':'2'}
 MT={**os.environ,'MTOOLS_SKIP_CHECK':'1'}
 CONTENT={'docs/alpha.txt':b'alpha: the first file\n'*40,'docs/beta.txt':b'beta, the second one\n'*7,'docs/sub/gamma.bin':random.Random(5).randbytes(300*1024)}
 REN={'one.txt':b'one\n','two.txt':b'two two\n','three.txt':b'three three three\n'}
@@ -69,6 +75,44 @@ def make_images(stick,scratch):
  for f in (iso,disk):subprocess.run(['mcopy','-i',str(stick),str(f),'::'+f.name],check=True,env=MT)
  return disk
 def sha(b):return hashlib.sha256(b).hexdigest()
+REMOTE={'remote.bin':random.Random(11).randbytes(300*1024+5)}
+def sshd(d):
+ """OpenSSH on 127.0.0.1 (QEMU's 10.0.2.2) with internal-sftp and one ed25519 key; None without sshd."""
+ if not Path('/usr/sbin/sshd').exists():print('no /usr/sbin/sshd: skipping the SFTP place');return None
+ import socket
+ d.mkdir(parents=True,exist_ok=True);(d/'share').mkdir()
+ for name,data in REMOTE.items():(d/'share'/name).write_bytes(data)
+ for k in ('host','user'):subprocess.run(['ssh-keygen','-q','-t','ed25519','-N','','-f',str(d/k)],check=True)
+ (d/'authorized_keys').write_text((d/'user.pub').read_text())
+ sk=socket.socket();sk.bind(('127.0.0.1',0));port=sk.getsockname()[1];sk.close()
+ (d/'sshd_config').write_text(f"Port {port}\nListenAddress 127.0.0.1\nHostKey {d/'host'}\nAuthorizedKeysFile {d/'authorized_keys'}\nStrictModes no\nUsePAM no\nPermitRootLogin yes\nPasswordAuthentication no\nPidFile {d/'pid'}\nSubsystem sftp internal-sftp\n")
+ root=os.geteuid()==0
+ if root:os.makedirs('/run/sshd',exist_ok=True)
+ else:subprocess.run(['sudo','-n','mkdir','-p','/run/sshd'])
+ proc=subprocess.Popen((['/usr/sbin/sshd'] if root else ['sudo','-n','/usr/sbin/sshd'])+['-D','-e','-f',str(d/'sshd_config')],stderr=(d/'sshd.log').open('w'))
+ for _ in range(200):
+  try:socket.create_connection(('127.0.0.1',port),1).close();break
+  except OSError:time.sleep(.05)
+ return proc,port,d
+DAV={'shared.txt':b'on the WebDAV share\n'*50}
+def webdav(d):
+ import socket
+ d.mkdir(parents=True,exist_ok=True)
+ for name,data in DAV.items():(d/name).write_bytes(data)
+ sk=socket.socket();sk.bind(('127.0.0.1',0));port=sk.getsockname()[1];sk.close()
+ proc=subprocess.Popen(['python3',str(ROOT/'crates/loom-remote/tests/fixtures/webdav_server.py'),str(port),str(d),'alice','pw1234'],stderr=subprocess.DEVNULL)
+ for _ in range(200):
+  try:socket.create_connection(('127.0.0.1',port),1).close();break
+  except OSError:time.sleep(.05)
+ return proc,port,d
+def sshd_stop(srv):
+ if not srv:return
+ proc,port,d=srv
+ try:
+  pid=(d/'pid').read_text().strip()
+  subprocess.run(['kill',pid] if os.geteuid()==0 else ['sudo','-n','kill',pid])
+ except OSError:pass
+ proc.kill()
 def mread(stick,name):return subprocess.run(['mtype','-i',str(stick),'::'+name],check=True,env=MT,capture_output=True).stdout
 def mlist(stick,d):
  out=subprocess.run(['mdir','-b','-i',str(stick),'::'+d],check=True,env=MT,capture_output=True,text=True).stdout
@@ -79,6 +123,8 @@ def main():
  with disk.open('r+b') as f:f.truncate(1024**3)
  scratch=a.out/'host';scratch.mkdir();stick=a.out/'loom.img';make_stick(stick,scratch)
  imgs=a.out/'imgs.img';gptdisk=make_images(imgs,scratch)
+ srv=sshd(a.out/'sftp');dav=webdav(a.out/'dav')
+ if srv:subprocess.run(['mcopy','-i',str(imgs),str(srv[2]/'user'),'::id_ed25519'],check=True,env=MT)
  import http.server,threading
  FILES={'/files':(ROOT/'iso_root/programs/files').read_bytes()}
  class Handler(http.server.BaseHTTPRequestHandler):
@@ -105,8 +151,8 @@ def main():
  ctrl=lambda k:chord(k,'ctrl')
  cs=lambda k:chord(k,'ctrl','shift')
  E=re.escape
- def open_files(where='/media/LOOM'):
-  s=len(t());line('files '+where);m=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60)
+ def open_files(where='/media/LOOM',command=None):
+  s=len(t());line(command or 'files '+where);m=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60)
   g['wait'](rf'\[files.app.list\] dir={E(where)} count=\d+',s,60);g['wait'](rf'\[display.text.committed\] target={m[1]} ',s,60);time.sleep(1)
   g['focus'](int(m[3]));time.sleep(.5);return s
  result={}
@@ -191,7 +237,7 @@ def main():
    except RuntimeError:time.sleep(.5)
   g['wait'](r'\[files\.media\.mounted\] name=IMGS format=FAT32 [^\n]*source=usb',s,120)
   s=open_files('/media/IMGS')
-  g['wait'](r'\[files.app.list\] dir=/media/IMGS count=2\b',s,10)
+  g['wait'](rf'\[files.app.list\] dir=/media/IMGS count={2+bool(srv)}\b',s,10)
   step(lambda:q.key('home'),r'\[display.text.committed\]',10)
   step(lambda:q.key('ret'),r'\[files.app.image.opened\] path=/media/IMGS/cd.iso kind=ISO 9660 CD image partitions=0')
   g['wait'](r'\[files.app.image.list\] image=/media/IMGS/cd.iso dir=/ count=2\b',0,10)
@@ -204,11 +250,11 @@ def main():
   m=step(lambda:cs('x'),r'\[files.app.image.copied\] image=/media/IMGS/cd.iso member=big.bin to=/media/IMGS/big.bin files=1 bytes=(\d+)',120)
   assert int(m[1])==len(ISO['big.bin']),m[0]
   step(lambda:q.key('esc'),r'\[files.app.image.left\] path=/media/IMGS/cd.iso')
-  g['wait'](r'\[files.app.list\] dir=/media/IMGS count=4\b',0,10)
+  g['wait'](rf'\[files.app.list\] dir=/media/IMGS count={4+bool(srv)}\b',0,10)
   m=step(lambda:cs('x'),r'\[files.app.image.copied\] image=/media/IMGS/cd.iso member=\* to=/media/IMGS/cd files=(\d+) bytes=(\d+)',120)
   assert int(m[1])==2 and int(m[2])==sum(map(len,ISO.values())),m[0]
   # The GPT disk: cd/ big.bin cd.iso gptdisk readme.txt.
-  g['wait'](r'\[files.app.list\] dir=/media/IMGS count=5\b',0,10)
+  g['wait'](rf'\[files.app.list\] dir=/media/IMGS count={5+bool(srv)}\b',0,10)
   step(lambda:q.key('home'),r'\[display.text.committed\]',10)
   for _ in range(3):q.key('down');time.sleep(.3)
   step(lambda:q.key('ret'),r'\[files.app.image.opened\] path=/media/IMGS/gptdisk kind=raw disk image partitions=3')
@@ -233,8 +279,42 @@ def main():
   step(lambda:cs('x'),r'\[files.app.image.copied\] image=/media/IMGS/gptdisk member=3 · Linux swap[^\n]* to=/media/IMGS/gptdisk partition 3.img files=1 bytes=%d'%PARTS[2][2],120)
   step(lambda:q.key('esc'),r'\[files.app.image.left\] path=/media/IMGS/gptdisk')
   step(lambda:q.key('f11'),r'\[files.app.closed\]');time.sleep(2)
+  # 8. An SFTP place, with the network given at launch.
+  if srv:
+   s=open_files('/media/IMGS','run +net files @/media/IMGS')
+   step(lambda:q.key('end'),r'\[display.text.committed\]',10)
+   ctrl('c');time.sleep(.5)
+   step(lambda:cs('p'),r'\[files.app.places.list\] place=- dir=/ count=3\b')
+   q.key('ret');time.sleep(.5)
+   user=subprocess.run(['id','-un'],capture_output=True,text=True).stdout.strip()
+   for value,clear in (('10.0.2.2',0),(str(srv[1]),2),(user,0),(str(srv[2]/'share'),0),('/media/IMGS/id_ed25519',0)):
+    for _ in range(clear):q.key('backspace');time.sleep(.05)
+    keys(value);q.key('ret');time.sleep(.3)
+   step(lambda:q.key('ret'),r'\[files.app.places.connected\] place=0 proto=SFTP',120)
+   g['wait'](r'\[files.app.places.hostkey\] host=10.0.2.2:\d+ algorithm=ssh-ed25519 fingerprint=SHA256:',0,10)
+   g['wait'](r'\[files.app.places.list\] place=0 dir=/ count=1\b',0,30)
+   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'sftp-place.ppm')})
+   n=len(REMOTE['remote.bin'])
+   step(lambda:cs('x'),rf'\[files.app.places.downloaded\] place=0 member=remote.bin to=/media/IMGS/remote.bin files=1 bytes={n}',180)
+   step(lambda:ctrl('v'),r'\[files.app.places.uploaded\] place=0 from=/media/IMGS/readme.txt to=readme.txt files=1 bytes=%d'%len(ISO['notes/readme.txt']),180)
+   g['wait'](r'\[files.app.places.list\] place=0 dir=/ count=2\b',0,30)
+   step(lambda:q.key('esc'),r'\[files.app.places.left\]')
+   # The WebDAV place: the second row adds one; the first saved place stays listed.
+   step(lambda:cs('p'),r'\[files.app.places.list\] place=- dir=/ count=4\b')
+   q.key('down');time.sleep(.3);q.key('ret');time.sleep(.5)
+   for value,clear in (('http://10.0.2.2',0),(str(dav[1]),3),('alice',0),('/remote.php/dav/files/alice',1)):
+    for _ in range(clear):q.key('backspace');time.sleep(.05)
+    keys(value);q.key('ret');time.sleep(.3)
+   keys('pw1234')
+   step(lambda:q.key('ret'),r'\[files.app.places.connected\] place=1 proto=WebDAV',120)
+   g['wait'](r'\[files.app.places.list\] place=1 dir=/ count=1\b',0,30)
+   step(lambda:cs('x'),r'\[files.app.places.downloaded\] place=1 member=shared.txt to=/media/IMGS/shared.txt files=1 bytes=%d'%len(DAV['shared.txt']),180)
+   step(lambda:ctrl('v'),r'\[files.app.places.uploaded\] place=1 from=/media/IMGS/readme.txt to=readme.txt files=1 bytes=%d'%len(ISO['notes/readme.txt']),180)
+   step(lambda:q.key('esc'),r'\[files.app.places.left\]')
+   step(lambda:q.key('f11'),r'\[files.app.closed\]');time.sleep(2)
+   assert 'pw1234' not in t(),'a password reached the log'
   assert 'KERNEL PANIC' not in t() and 'panicked' not in t() and '[files.app.fatal]' not in t()
- finally:g['stop']()
+ finally:g['stop']();sshd_stop(srv);dav[0].kill()
  # On the host: the zip reads back, the names changed, the metadata is on the stick.
  z=zipfile.ZipFile(io.BytesIO(mread(stick,'docs.zip')))
  assert z.testzip() is None
@@ -248,5 +328,12 @@ def main():
   'hello.txt':ESP['hello.txt'],'data.bin':EXT['data.bin'],'gptdisk partition 3.img':gptdisk.read_bytes()[PARTS[2][1]*512:PARTS[2][1]*512+PARTS[2][2]]}
  for name,data in want.items():got=mread(imgs,name);assert sha(got)==sha(data),(name,len(got),len(data))
  result['image_files']=len(want)
+ if srv:
+  assert sha(mread(imgs,'remote.bin'))==sha(REMOTE['remote.bin'])
+  assert sha((srv[2]/'share'/'readme.txt').read_bytes())==sha(ISO['notes/readme.txt'])
+  result['sftp']=True
+  assert sha(mread(imgs,'shared.txt'))==sha(DAV['shared.txt'])
+  assert sha((dav[2]/'readme.txt').read_bytes())==sha(ISO['notes/readme.txt'])
+  result['webdav']=True
  result['ok']=True;print(result)
 if __name__=='__main__':main()

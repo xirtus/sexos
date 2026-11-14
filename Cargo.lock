@@ -1373,6 +1373,7 @@ name = "files"
 version = "0.1.0"
 dependencies = [
  "loom-core",
+ "loom-remote",
  "sex-app",
  "sex-archive",
  "sex-config",
@@ -1380,6 +1381,7 @@ dependencies = [
  "sex-font",
  "sex-image",
  "sex-pdx",
+ "sex-ssh",
  "sex-volumes",
  "sha2 0.10.9",
 ]
