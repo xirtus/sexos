@@ -4877,3 +4877,28 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   the exact reviewed 134 file / two changed file vendor selection. Original failed job
   and truth artifacts preserved. No merge; all exact-head leaves and aggregator
   remain required, with author branches kept separate.
+## ChatGPT round 192: Moan MIDI workstation first slice (2026-11-15)
+
+- Original bounded synth/sampler patterns and MIDI sources, compact note-only undo,
+  no allocation/file I/O/cache rebuild in audio fill, and a v2 project codec retaining
+  exact audio-only v1 encoding and v1 decoding. Limits: eight tracks, 60s/source,
+  128 notes/source and 32 voices. No kernel or shared-toolkit edits.
+- Fixed transport and shared-project Arrange/Mix/Piano Roll/Instruments workspaces,
+  aligned real track headers/colored regions, optional library/inspector, readable
+  pitches and actual Serenade Peak/RMS after Bell consumption. No fake channels or
+  unsupported vertical fader/plugin controls. Step Sequencer remains next work.
+- The first actual run exposed real 1024-frame feeder underruns. The fix snapshots
+  room once and fills at most 64 preallocated blocks, prefills while paused, throttles
+  UI updates, and measures playhead/meters from actual consumed frames. Recording
+  preallocates the one-minute buffer and drains bounded batches.
+- 68 Moan/core tests, six audio-oracle tests, actual guest build and unchanged
+  forbidden-byte scanner pass. Fresh two-boot `workstation-proof-v3` passes six
+  exact screenshots, continuous 220/440 Hz synth/velocity, actual sampler octave
+  energy/decay scaling, independently extracted 2,304,490 B three-track MIDI project,
+  cold reopen/edit/undo-clean and durable retirement. No prompt Stop-silence claim
+  yet. Initial v1/v2 failures and source snapshots remain untouched.
+- Full artifact/source/ELF/ISO/disk/runner digests are tracked in
+  `MOAN_WORKSTATION_RUNTIME_2026_11_15.json`; parity/source/license audit and toolkit
+  limitations are in `MOAN_WORKSTATION_PARITY_2026_11_14.md`. References are not
+  claims of full Audacity/Logic/Ableton/ArtCraft SoundCraft parity. Offline external
+  plugins remain a separately owned boundary, not live insert hosting.
