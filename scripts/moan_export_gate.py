@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from moan_gate_geometry import ready, control as control_position
 import re
 import shutil
 import subprocess
@@ -78,10 +79,9 @@ def main():
         start=say('run moan')
         m=g['wait'](r'\[moan.ready\] target=(\d+) task=(\d+)',start,300);target,task=m[1],m[2]
         surface=int(g['wait'](rf'\[shell.program.launch\] target={target} task={task} surface=(\d+)',start,60)[1])
-        g['wait'](r'\[moan.control\] name=range_end ',start,60);time.sleep(1)
+        ready(g,surface)
         def control(name):
-            positions=re.findall(rf'\[moan.control\] name={name} x=(-?\d+) y=(-?\d+)',text()[start:]);assert positions,name
-            x,y=map(int,positions[-1]);tile=list(map(int,re.findall(rf'\[shell.tile.apply\] sid={surface} x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)',text())[-1]));x+=tile[0]+8;y+=tile[1]+36
+            x,y=control_position(g,surface,name,(rw,rh))
             q.cmd('input-send-event',{'events':[{'type':'abs','data':{'axis':'x','value':round(x*32767/(rw-1))}},{'type':'abs','data':{'axis':'y','value':round(y*32767/(rh-1))}}]});time.sleep(.2)
             for down in (True,False):q.cmd('input-send-event',{'events':[{'type':'btn','data':{'down':down,'button':'left'}}]});time.sleep(.15)
         def choose(filename):

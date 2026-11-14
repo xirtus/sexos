@@ -188,28 +188,6 @@ mod guest {
             app.window.target,
             app.window.task
         );
-        for (id, name) in &studio.buttons {
-            let p = app.ui.rect(*id).center();
-            sex_pdx::serial_record!(
-                "[moan.control] name={} x={} y={}",
-                name.replace(' ', "_"),
-                p.x as i32,
-                p.y as i32
-            );
-        }
-        for (name, id) in [
-            ("position", studio.position),
-            ("range_start", studio.from),
-            ("range_end", studio.to),
-        ] {
-            let p = app.ui.rect(id).center();
-            sex_pdx::serial_record!(
-                "[moan.control] name={} x={} y={}",
-                name,
-                p.x as i32,
-                p.y as i32
-            );
-        }
         let mut sound = Sound::open();
         let mut playing = false;
         let mut paused = false;

@@ -162,6 +162,7 @@ pub fn startup(app: &mut App, studio: &mut Studio) {
 /// for guest pointer gates; the document data itself is not logged.
 pub fn log(app: &mut App, studio: &Studio) {
     app.ui.layout();
+    app.present();
     let rect = app.ui.rect(studio.waveform);
     let scale = app.ui.theme().scale;
     sex_pdx::serial_record!(
@@ -173,6 +174,30 @@ pub fn log(app: &mut App, studio: &Studio) {
         studio.view.start,
         studio.view.span
     );
+    for (id, name) in &studio.buttons {
+        let p = app.ui.rect(*id).center();
+        sex_pdx::serial_record!(
+            "[moan.control] name={} x={} y={}",
+            name.replace(' ', "_"),
+            (p.x * scale) as i32,
+            (p.y * scale) as i32
+        );
+    }
+    for (name, id) in [
+        ("position", studio.position),
+        ("range_start", studio.from),
+        ("range_end", studio.to),
+    ] {
+        let p = app.ui.rect(id).center();
+        sex_pdx::serial_record!(
+            "[moan.control] name={} x={} y={}",
+            name,
+            (p.x * scale) as i32,
+            (p.y * scale) as i32
+        );
+    }
+    let (w, h) = app.ui.size();
+    sex_pdx::serial_record!("[moan.viewport] w={} h={} frame={}", w, h, app.frames);
     sex_pdx::serial_record!(
         "[moan.selection] track={} cursor={} from={} to={} dirty={}",
         studio.session.selected,
