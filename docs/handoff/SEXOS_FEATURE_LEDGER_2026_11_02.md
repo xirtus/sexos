@@ -4206,3 +4206,21 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
 
 ## J8 finding: disk reads are not NVMe-queue bound yet (2026-11-14)
 - `run bench read-large` at 4 cores without PKU now logs `[bench.large.cpu]` (Drive, Files, bench, idle cycles per pass). 16 MiB in 64 KiB requests: ~275M cycles; Files ~100M (~390k per request), Drive ~42M (~165k), rest waiting on the serial request chain. Per-core NVMe queues would not help until requests are pipelined (Files readahead / async Drive replies) and Files' per-request CPU drops; deferred until then.
+
+## ChatGPT round 176: Abacus programmer, conversion and scientific extras (2026-11-14)
+- Actual Weft mode buttons/menus for Scientific, Programmer and Convert. Exact
+  unsigned 8/16/32/64-bit wrapping integer parser with bitwise ops, shifts and radix
+  formats; dimension-checked length/mass/time/temperature/storage conversion.
+- Scientific hyperbolic/exp/log2/cbrt/trunc functions, finite-result/input bounds.
+  Session history recalls mode and programmer context; Recall Last is in palette.
+- Ten host tests cover existing functions/keypad and extras, real widgets/history.
+  Guest build and instruction scan required; extended `program_weft_gate.py` uses
+  actual palette/keyboard controls, checks results/errors and retains screenshots.
+  QEMU runtime result remains pending CI. Depends on Weft #220; no kernel changes.
+- Details: `docs/handoff/ABACUS_EXTRAS_2026_11_14.md`.
+- Round176 review follow-up: programmer keypad glyphs normalize to ASCII; tiny
+  conversion values are retained; bounded Weft scroll makes all controls reachable
+  at 640x400. Thirteen host tests now include actual operators and compact Tab/
+  scroll access. QEMU clicks the focused button's current scrolled coordinates.
+- Round176 shortcut follow-up: Recall Last uses supported Ctrl+Up, verified through
+  actual Weft key dispatch (fourteen host tests). Guest gate now uses that chord.

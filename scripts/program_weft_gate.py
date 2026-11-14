@@ -41,12 +41,18 @@ def main():
   assert len(pos)==30,pos
   tile=list(map(int,re.findall(rf'\[shell.tile.apply\] sid={surface} x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)',t())[-1]))
   ox,oy=tile[0]+8,tile[1]+36
-  def key(label):x,y=pos[label];click(ox+x,oy+y)
+  def key(label):
+   # Focus scrolls the button into view; click its current, scrolled position.
+   # Each keypad action restores expression focus, so its tab offset is stable.
+   start=len(t());index=labels.index(label)
+   for _ in range(index+1):q.key('tab');time.sleep(.06)
+   focused=g['wait'](rf'\[abacus.focus\] key={index} x=(-?\d+) y=(-?\d+)',start,60)
+   click(ox+int(focused[1]),oy+int(focused[2]))
   # Typed digits, a clicked +, typed digits, Enter.
   g['focus'](surface);time.sleep(.3)
   s=len(t());keys(['1','2']);key('+');keys(['3','0']);q.key('ret')
   g['wait'](r'\[abacus.result\] expr=12\+30 value=42\n',s,60)
-  # The keypad alone.
+  # Actual keypad buttons activated through Tab/Space, including compact scrolling.
   s=len(t())
   for k in ['7','mul','6','=']:key(k)
   g['wait'](r'\[abacus.result\] expr=7\*6 value=42\n',s,60)
@@ -57,6 +63,33 @@ def main():
   q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':dn,'key':{'type':'qcode','data':x}}}for dn,ks in((True,('ctrl','shift','p')),(False,('p','shift','ctrl')))for x in ks]});time.sleep(.5)
   keys(['r','a','d','i']);q.key('ret')
   g['wait'](r'\[abacus.command\] id=abacus.radians\n',s,60)
+  # Extras use real palette commands and keyboard input in the same Weft window.
+  def chord(*codes):
+   q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':dn,'key':{'type':'qcode','data':x}}}for dn,ks in((True,codes),(False,tuple(reversed(codes))))for x in ks]})
+  def text(value):
+   symbols={'+':('shift','equal'),'*':('shift','8'),'(':('shift','9'),')':('shift','0')}
+   for c in value:
+    if c in symbols:chord(*symbols[c])
+    elif c.isupper():chord('shift',c.lower())
+    else:q.key({' ':'spc','-':'minus','.':'dot','/':'slash'}.get(c,c))
+    time.sleep(.08)
+  def command(query,identity):
+   start=len(t());chord('ctrl','shift','p');time.sleep(.3);text(query);q.key('ret')
+   g['wait'](rf'\[abacus.command\] id={identity}\n',start,60);time.sleep(.2)
+  def expression(value,result):
+   start=len(t());chord('ctrl','a');text(value);q.key('ret')
+   g['wait'](rf'\[abacus.result\] expr={re.escape(value)} value={re.escape(result)}\n',start,60)
+  command('8-bit Words','abacus.bits8');expression('255+1','0')
+  command('64-bit Words','abacus.bits64');command('Hexadecimal Output','abacus.hex')
+  expression('18446744073709551615','0xFFFFFFFFFFFFFFFF')
+  q.cmd('screendump',{'filename':str(a.out/'abacus-programmer.ppm')})
+  command('Unit Conversion','abacus.convert');expression('32 F to C','0 C')
+  start=len(t());chord('ctrl','up');g['wait'](r'\[abacus.command\] id=abacus.recall-last\n',start,60)
+  start=len(t());q.key('ret');g['wait'](r'\[abacus.result\] expr=32 F to C value=0 C\n',start,60)
+  expression('1 MiB to KiB','1024 KiB')
+  start=len(t());text('1 m to kg');q.key('ret');g['wait'](r'\[abacus.error\] what=Units: Dimension\n',start,60)
+  q.cmd('screendump',{'filename':str(a.out/'abacus-converter.ppm')})
+  command('Scientific Mode','abacus.scientific');expression('cbrt(-27)','-3')
   time.sleep(1)
   path=a.out/'abacus.ppm';q.cmd('screendump',{'filename':str(path)});time.sleep(.5)
   n=len(colours(path.read_bytes(),tile));assert n>8,f'the window looks blank ({n} colours)'
