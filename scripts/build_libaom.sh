@@ -56,8 +56,10 @@ make -j"$(nproc)" aom >make.log
 bad=$(for o in $(find . -name '*.o' | sort); do python3 "$ROOT/scripts/key_bytes.py" "$o" >/dev/null || echo "$o"; done)
 if [[ -n $bad ]]; then
   echo "[libaom] objects holding refused instructions, rebuilt with a frame pointer:" $bad >&2
+  # CMake's makefiles take flags from the cache, not from make's CFLAGS: reconfigure.
+  cmake . -DCMAKE_C_FLAGS="$CFLAGS -fno-omit-frame-pointer" >>configure.log
   for o in $bad; do rm -f "$o"; done
-  make -j"$(nproc)" aom CFLAGS="$CFLAGS -fno-omit-frame-pointer" >>make.log
+  make -j"$(nproc)" aom >>make.log
   for o in $bad; do python3 "$ROOT/scripts/key_bytes.py" "$o" >/dev/null || { echo "[libaom] $o still refused" >&2; exit 1; }; done
 fi
 make install >install.log
