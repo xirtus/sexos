@@ -141,7 +141,7 @@ dependencies = [
  "cfg-if",
  "once_cell",
  "version_check",
- "zerocopy",
+ "zerocopy 0.8.63",
 ]
 
 [[package]]
@@ -4362,9 +4362,9 @@ dependencies = [
 name = "sex-3d"
 version = "0.1.0"
 dependencies = [
- "base64",
+ "base64 0.23.1",
  "flate2",
- "png",
+ "png 0.18.1",
  "ruzstd",
  "serde_json",
  "zune-jpeg",
@@ -4453,6 +4453,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-ebook"
+version = "0.1.0"
+dependencies = [
+ "sex-image",
+ "sex-xml",
+ "zune-inflate",
+]
+
+[[package]]
 name = "sex-egui"
 version = "0.1.0"
 dependencies = [
@@ -4462,15 +4471,6 @@ dependencies = [
  "image",
  "png 0.18.1",
  "sex-std",
-]
-
-[[package]]
-name = "sex-ebook"
-version = "0.1.0"
-dependencies = [
- "sex-image",
- "sex-xml",
- "zune-inflate",
 ]
 
 [[package]]
