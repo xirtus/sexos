@@ -697,6 +697,7 @@ pub fn mixer_request(action: u64, a: u64, b: u64, write: bool) -> u64 {
             sex_pdx::serial_record!("[bell.mixer.player] focused={} row={} pd={}", a, k, played()[k]);
             return row(m, k);
         }
+        mixer::STREAMING => mixer::STREAMING_TAG | player().is_some_and(|p| p.streaming()) as u64,
         _ if !write => return mixer::REFUSED,
         mixer::SET_MASTER if a <= 100 => { m.master = a as u8; state(m) }
         mixer::MUTE_MASTER if a <= 2 => { m.muted = if a == 2 { !m.muted } else { a == 1 }; state(m) }
