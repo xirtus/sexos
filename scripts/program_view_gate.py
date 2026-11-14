@@ -23,7 +23,7 @@ def anim():
  frames=[Image.new('RGB',(120,80),c) for c in ANIM_COLOURS]
  b=io.BytesIO();frames[0].save(b,'GIF',save_all=True,append_images=frames[1:],duration=400,loop=0);return b.getvalue()
 GIF_BYTES=anim()
-FILES={'/view':(ROOT/'iso_root/programs/view').read_bytes(),'/pic.png':PIC_BYTES,'/big.png':BIG_BYTES,'/pic.jpg':JPG_BYTES,'/pic.webp':WEBP_BYTES,'/anim.gif':GIF_BYTES,'/note.txt':b'not a picture\n'}
+FILES={'/view':(ROOT/'iso_root/programs/gaze').read_bytes(),'/pic.png':PIC_BYTES,'/big.png':BIG_BYTES,'/pic.jpg':JPG_BYTES,'/pic.webp':WEBP_BYTES,'/anim.gif':GIF_BYTES,'/note.txt':b'not a picture\n'}
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):
   body=FILES.get(self.path)
@@ -53,8 +53,8 @@ def main():
   m=expect(f'fetch http://10.0.2.2:{PORT}{url} {name}',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',300);assert m[1].startswith('Saved'),m[1]
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
-  fetched('/view','/bin/view');fetched('/pic.png','pic.png');fetched('/big.png','big.png');fetched('/pic.jpg','pic.jpg');fetched('/pic.webp','pic.webp');fetched('/anim.gif','anim.gif');fetched('/note.txt','note.txt')
-  s=len(t());expect('run view @pic.png',r'\[view.shown\] w=300 h=200 bytes=\d+ scaled=0')
+  fetched('/view','/bin/gaze');fetched('/pic.png','pic.png');fetched('/big.png','big.png');fetched('/pic.jpg','pic.jpg');fetched('/pic.webp','pic.webp');fetched('/anim.gif','anim.gif');fetched('/note.txt','note.txt')
+  s=len(t());expect('run gaze @pic.png',r'\[view.shown\] w=300 h=200 bytes=\d+ scaled=0')
   m=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60);g['wait'](r'\[display.app.pixels\] target=\d+ surface=\d+ w=300 h=200',s,60);time.sleep(3)
   shot=a.out/'view.ppm';q.cmd('screendump',{'filename':str(shot)});time.sleep(.5)
   tile=re.findall(rf'\[shell.tile.apply\] sid={m[3]} x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)',t());x,y,w,h=map(int,tile[-1])
@@ -69,7 +69,7 @@ def main():
    s2=len(t());g['focus'](int(m[3]));time.sleep(.3);q.key('f11');g['wait'](rf'\[app.private.retired\] target={m[1]} task={m[2]} ',s2,90)
   close(m)
   # JPEG: lossy, so each sampled pixel within a small distance of the source.
-  s=len(t());expect('run view @pic.jpg',r'\[view.shown\] w=240 h=160 bytes=\d+ scaled=0')
+  s=len(t());expect('run gaze @pic.jpg',r'\[view.shown\] w=240 h=160 bytes=\d+ scaled=0')
   m=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60);g['wait'](r'\[display.app.pixels\] target=\d+ surface=\d+ w=240 h=160',s,60);time.sleep(3)
   shot=a.out/'view-jpeg.ppm';q.cmd('screendump',{'filename':str(shot)});time.sleep(.5)
   tile=re.findall(rf'\[shell.tile.apply\] sid={m[3]} x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)',t());x,y,w,h=map(int,tile[-1])
@@ -83,7 +83,7 @@ def main():
   close(m)
   # 900x700 is shrunk to fit the window's pixel area, and fitted again when Shell
   # gives the window its place: the last picture fits the last size Shell reported.
-  s=len(t());expect('run view @big.png',r'\[view.shown\] w=\d+ h=\d+ bytes=\d+ scaled=1')
+  s=len(t());expect('run gaze @big.png',r'\[view.shown\] w=\d+ h=\d+ bytes=\d+ scaled=1')
   m=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60);time.sleep(4)
   resized=re.findall(rf'\[shell.program.resize\] pd={m[1]} task={m[2]} w=(\d+) h=(\d+) status=0',t()[s:])
   assert resized,'View was never told its window size'
@@ -95,7 +95,7 @@ def main():
   big=(bw,bh,aw,ah)
   close(m)
   # Lossless WebP: exact, like the PNG.
-  s=len(t());expect('run view @pic.webp',r'\[view.shown\] w=300 h=200 bytes=\d+ scaled=0')
+  s=len(t());expect('run gaze @pic.webp',r'\[view.shown\] w=300 h=200 bytes=\d+ scaled=0')
   m=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60);g['wait'](r'\[display.app.pixels\] target=\d+ surface=\d+ w=300 h=200',s,60);time.sleep(3)
   shot=a.out/'view-webp.ppm';q.cmd('screendump',{'filename':str(shot)});time.sleep(.5)
   tile=re.findall(rf'\[shell.tile.apply\] sid={m[3]} x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)',t());x,y,w,h=map(int,tile[-1])
@@ -108,7 +108,7 @@ def main():
   assert wchecked>100 and wbad==0,f'WebP: {wbad} of {wchecked} pixels differ'
   close(m)
   # Animated GIF: three frames, 400 ms each, looping forever; each colour reaches the screen.
-  s=len(t());expect('run view @anim.gif',r'\[view.animated\] frames=3 loops=-1')
+  s=len(t());expect('run gaze @anim.gif',r'\[view.animated\] frames=3 loops=-1')
   m=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60)
   g['wait'](r'\[view.frame\] n=4 delay=400',s,60)
   tile=re.findall(rf'\[shell.tile.apply\] sid={m[3]} x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)',t());x,y,w,h=map(int,tile[-1])
@@ -120,7 +120,7 @@ def main():
     if max(abs(p-q2) for p,q2 in zip(c,want))<=2:seen.add(k)
   assert seen=={0,1,2},f'animation colours seen: {sorted(seen)}'
   close(m)
-  expect('run view @note.txt',r'\[view.failed\] That file is not a PNG, JPEG, WebP or GIF picture.')
+  expect('run gaze @note.txt',r'\[view.failed\] That file is not a PNG, JPEG, WebP or GIF picture.')
   assert 'KERNEL PANIC' not in t() and 'panicked' not in t()
   print({'ok':True,'big':big,'pixels_checked':checked,'webp_pixels_checked':wchecked,'gif_colours':len(seen),'jpeg_pixels_checked':jchecked,'jpeg_worst':worst})
  finally:g['stop']()

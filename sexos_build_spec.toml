@@ -252,7 +252,7 @@ action = "cargo_manifest"
 target = "x86_64-sex-app.json"
 manifest = "apps/files/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/files"
-dest_artifact = "iso_root/programs/files"
+dest_artifact = "iso_root/programs/loom"
 
 [[stage]]
 id = "build_peek"
@@ -276,7 +276,7 @@ action = "cargo_manifest"
 target = "x86_64-sex-app.json"
 manifest = "apps/view/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/view"
-dest_artifact = "iso_root/programs/view"
+dest_artifact = "iso_root/programs/gaze"
 
 [[stage]]
 id = "build_settings"
@@ -284,7 +284,7 @@ action = "cargo_manifest"
 target = "x86_64-sex-app.json"
 manifest = "apps/settings/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/settings"
-dest_artifact = "iso_root/programs/settings"
+dest_artifact = "iso_root/programs/tatami"
 
 [[stage]]
 id = "build_heaptest"

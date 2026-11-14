@@ -759,7 +759,7 @@ fn opens_with(name: &[u8], size: u64, path: &[u8]) -> String {
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     let mut window = Window::open();
-    window.title(b"Files");
+    window.title(b"Loom");
     // The folder the person gave: `@/` is everything.
     let mut args = [0u8; w::ARGS_MAX];
     let given = files::args(&mut window, &mut args);

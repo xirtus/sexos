@@ -111,11 +111,11 @@ pub mod id {
 }
 
 /// Programs that open each kind of file, the default first. Append-only.
-pub const PDF_PROGRAMS: &[&str] = &["pdf", "web"];
-pub const IMAGE_PROGRAMS: &[&str] = &["view", "web"];
+pub const PDF_PROGRAMS: &[&str] = &["pdf", "kaleidoscope"];
+pub const IMAGE_PROGRAMS: &[&str] = &["gaze", "kaleidoscope"];
 pub const VIDEO_PROGRAMS: &[&str] = &["play"];
 pub const AUDIO_PROGRAMS: &[&str] = &["play"];
-pub const PAGE_PROGRAMS: &[&str] = &["web"];
+pub const PAGE_PROGRAMS: &[&str] = &["kaleidoscope"];
 
 /// The `open.*` setting for a file name, by its extension.
 pub fn kind_of(name: &[u8]) -> Option<u16> {
@@ -467,14 +467,14 @@ mod tests {
     fn files_open_with_the_chosen_program() {
         let mut c = Config::new();
         assert_eq!(c.program_for(b"report.PDF"), Some("pdf"));
-        assert_eq!(c.program_for(b"cat.jpeg"), Some("view"));
+        assert_eq!(c.program_for(b"cat.jpeg"), Some("gaze"));
         assert_eq!(c.program_for(b"film.mkv"), Some("play"));
         assert_eq!(c.program_for(b"song.flac"), Some("play"));
-        assert_eq!(c.program_for(b"index.html"), Some("web"));
+        assert_eq!(c.program_for(b"index.html"), Some("kaleidoscope"));
         assert_eq!(c.program_for(b"notes"), None);
         assert_eq!(c.program_for(b"archive.tar.gz"), None);
         c.set(id::OPEN_PDF, 1).unwrap();
-        assert_eq!(c.program_for(b"report.pdf"), Some("web"));
+        assert_eq!(c.program_for(b"report.pdf"), Some("kaleidoscope"));
     }
 
     #[test]

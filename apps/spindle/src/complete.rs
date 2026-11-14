@@ -71,6 +71,7 @@ pub const COMMANDS: &[&[u8]] = &[
     b"linen-search",
     b"linen-status",
     b"load",
+    b"loom",
     b"ls",
     b"mesh-graph",
     b"mesh-graph-status",

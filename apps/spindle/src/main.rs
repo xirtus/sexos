@@ -1474,13 +1474,13 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
         b"update" => {unsafe{update_command::UPDATE.start(args,sb);}true},
         b"pkg" => {unsafe{pkg_command::PKG.command(args,sb);}true},
         b"cd"|b"pwd"|b"mkdir"|b"rm"|b"mv"|b"cat"|b"write"|b"append"|b"touch"|b"df"|b"install"|b"mount"|b"unmount" => unsafe{fs_commands::FS.submit_line(cmd,args,sb)},
-        // The Files app, given a folder (the whole filesystem by default) to look after.
-        b"files" => {
+        // Loom (formerly Files), given a folder (the whole filesystem by default) to look after.
+        b"loom" | b"files" => {
             let mut given = [0u8; 256];
             let dir: &[u8] = if args.is_empty() { b"/" } else { args };
             let n = dir.len().min(255);
             given[0] = b'@'; given[1..1 + n].copy_from_slice(&dir[..n]);
-            unsafe{fs_commands::FS.submit_program(b"files",&given[..1 + n],0,0,sb);}
+            unsafe{fs_commands::FS.submit_program(b"loom",&given[..1 + n],0,0,sb);}
             true
         }
         b"ls"=>{let accepted=unsafe{!HISTORY_IO.fenced()&&STORAGE_PROBE.submit(storage_probe::Job::List)};sb.push(if accepted{b"Object listing queued."}else{b"Object listing unavailable."});true}
