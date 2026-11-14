@@ -22,6 +22,27 @@ pub fn key_char(code: u8) -> Option<u8> {
     }
 }
 
+/// Like [`key_char`], plus the symbols arithmetic needs so Voyeur's Abacus
+/// answers `2+2`: - = . / and, with Shift, + * ( ) ^ %; keypad + - *.
+/// Shifted letters give the letter (the query is lowercase).
+pub fn key_char_shifted(code: u8, shift: bool) -> Option<u8> {
+    match (code, shift) {
+        (0x0D, true) => Some(b'+'),
+        (0x09, true) | (0x37, _) => Some(b'*'),
+        (0x0A, true) => Some(b'('),
+        (0x0B, true) => Some(b')'),
+        (0x07, true) => Some(b'^'),
+        (0x06, true) => Some(b'%'),
+        (0x4E, _) => Some(b'+'),
+        (0x0C, false) | (0x4A, _) => Some(b'-'),
+        (0x0D, false) => Some(b'='),
+        (0x34, false) => Some(b'.'),
+        (0x35, false) => Some(b'/'),
+        (0x02..=0x0B, true) => None,
+        _ => key_char(code),
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Query { buf: [u8; QUERY_MAX], len: u8 }
 impl Query {

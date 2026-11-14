@@ -75,6 +75,7 @@ members = [
     "crates/sex-libc",
     "crates/sex-media",
     "crates/silkbar-model",
+    "crates/voyeur",
     "crates/sex-object-model",
     "crates/sex-time",
     "crates/sex-config",

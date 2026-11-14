@@ -16,6 +16,7 @@ mod clipboard;
 mod app_input;
 mod wm;
 mod launcher_search;
+mod voyeur;
 mod session;
 mod config_watch;
 mod lock;
@@ -14903,11 +14904,17 @@ unsafe fn palette_order() -> ([usize; COMMAND_LIST.len()], usize) {
 unsafe fn palette_search_intercept(scancode: u8) -> bool {
     // Enter with nothing matching does nothing, with or without Ctrl: the
     // hidden earlier selection must never run.
+    // Voyeur's rows show once a search begins: Enter runs a command row through
+    // the launcher's own path below and carries out any other result itself.
+    if scancode==0x1C && !PALETTE_QUERY.is_empty() && !APP_MODIFIERS.key(scancode).control {
+        match voyeur::enter() {voyeur::Enter::Command(i)=>COMMAND_PALETTE_SELECTED=i,voyeur::Enter::Done=>{toggle_command_palette();return true;},voyeur::Enter::NotShowing=>{}}
+    }
     if scancode==0x1C && !PALETTE_QUERY.is_empty() && palette_order().1==0 {return true;}
     if APP_MODIFIERS.key(scancode).control {return false;}
     let nav=matches!(scancode,0x24|0x25) && PALETTE_QUERY.is_empty();
     if !nav && palette_search_key(scancode) {return true;}
     if matches!(scancode,0x48|0x50) {
+        if voyeur::step(if scancode==0x50 {1} else {-1}) {palette_render_list();return true;}
         if scancode==0x50 {palette_select_next();} else {palette_select_prev();}
         return true;
     }
@@ -14923,12 +14930,13 @@ unsafe fn palette_search_intercept(scancode: u8) -> bool {
 /// select the best match. Returns false for keys search does not take.
 unsafe fn palette_search_key(code: u8) -> bool {
     let changed = if code == 0x0E { PALETTE_QUERY.pop() }
-        else if let Some(c) = launcher_search::key_char(code) { PALETTE_QUERY.push(c) }
+        else if let Some(c) = launcher_search::key_char_shifted(code, APP_MODIFIERS.key(code).shift) { PALETTE_QUERY.push(c) }
         else { return false };
     let (order, n) = palette_order();
     if n > 0 { COMMAND_PALETTE_SELECTED = order[0] as u8; }
     sex_pdx::serial_record!("[shell.launcher.search] query={} matches={} top={} changed={}",
         PALETTE_QUERY.as_str(), n, if n > 0 { COMMAND_LIST[order[0]].name } else { "-" }, changed as u8);
+    voyeur::refresh(PALETTE_QUERY.as_str());
     palette_render_list();
     true
 }
@@ -16705,6 +16713,7 @@ unsafe fn palette_render_list() {
     let mut shown=[launcher::Row{name:"",status:""};COMMAND_LIST.len()];
     for (slot,&index) in shown.iter_mut().zip(order[..matches].iter()) {*slot=rows[index];}
     let selected=order[..matches].iter().position(|&i|i==COMMAND_PALETTE_SELECTED as usize).unwrap_or(0);
+    let (matches,selected)=voyeur::rows(&rows,&mut shown).unwrap_or((matches,selected));
     let mut head=[0u8;40];let mut head_len=0;
     for &b in b"SEARCH: ".iter().chain(PALETTE_QUERY.as_str().as_bytes()).chain(b"_") {head[head_len]=b;head_len+=1;}
     let none=[launcher::Row{name:"No match",status:"BACKSPACE TO EDIT"}];
@@ -17414,6 +17423,7 @@ unsafe fn palette_execute_selected() -> bool {
         return false;
     }
     sex_pdx::serial_record!("[command_palette.execute] cmd={} name={}", cmd as u8, COMMAND_LIST[idx].name);
+    voyeur::launched(idx);
 
     // Route to existing SurfaceAction handler paths.
     // Each of these reuses the same match arms as keyboard-triggered actions.
@@ -26210,6 +26220,7 @@ pub extern "C" fn _start() -> ! {
             if lock::receive(&msg) { continue; }
             if shell_program_message(&msg) { continue; }
             if clipboard_receive(&msg) { continue; }
+            if voyeur::receive(&msg) { continue; }
             if notification_receive(&msg) { continue; }
             if media_keys_receive(&msg) { continue; }
             if spindle_history_status_receive(&msg) {continue;}

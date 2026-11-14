@@ -66,3 +66,4 @@ LAUNCHER_WORKSPACE_PRODUCTION="$TEST_DIR/production.rs.workspace" rustc --editio
 "$TEST_DIR/workspace"
 echo '[launcher.workspace.host] PASS scope=actual_shell_action_reparent_scene_and_admission_callbacks_only_not_native_pixels'
 PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/scripts/check_browser_launch.py" --root "$ROOT_DIR" --out "$TEST_DIR/browser-launch"
+bash "$ROOT_DIR/scripts/voyeur_host_gate.sh"
