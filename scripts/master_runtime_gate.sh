@@ -145,7 +145,7 @@ print_gate() {
 # covers untracked new modules; a concurrent source edit invalidates the bind.
 capture_production_sources() {
     python3 - "$1" <<'PYSOURCES'
-import hashlib,json,pathlib,subprocess,sys,tomllib
+import hashlib,json,os,pathlib,re,subprocess,sys,tomllib
 root=pathlib.Path('.').resolve()
 files=[]
 # libsys is a live workspace path dependency despite its historical parent
@@ -182,6 +182,41 @@ for package in metadata['packages']:
             if p.stat().st_size!=entry['bytes'] or hashlib.sha256(p.read_bytes()).hexdigest()!=entry['sha256']:
                 raise ValueError('changed pinned TLS vendor input: '+str(relative))
             files.append(p)
+# Literal Rust assets are production inputs too (notably the native Geist atlas).
+# Scope: quoted/raw literal include_bytes!/include_str! paths in captured Rust.
+# Generated concat!/OUT_DIR and other nonliteral forms are deliberately excluded;
+# this is not a claim to reconstruct arbitrary build-script/environment inputs.
+include = re.compile(r'\binclude_(?:bytes|str)\s*!\s*(?P<open>[({\[])\s*(?:"(?P<quoted>(?:[^"\\]|\\.)*)"|r(?P<hashes>#{0,16})"(?P<raw>.*?)"(?P=hashes))\s*,?\s*(?P<close>[)}\]])', re.S)
+MAX_LITERAL_ASSETS=4096
+MAX_LITERAL_ASSET_BYTES=64*1024*1024
+MAX_LITERAL_ASSET_TOTAL=256*1024*1024
+pending=[p for p in files if p.suffix=='.rs']
+scanned=set();assets=set();asset_bytes=0
+while pending:
+    source=pending.pop()
+    if source in scanned:continue
+    scanned.add(source)
+    for match in include.finditer(source.read_text()):
+        if {'(':')','[':']','{':'}'}[match['open']]!=match['close']:
+            raise ValueError('mismatched literal Rust asset delimiter')
+        name=match['quoted'] if match['quoted'] is not None else match['raw']
+        if not name or len(name)>4096 or any(c in name for c in ('\\','\0','\n','\r')):
+            raise ValueError('unsupported literal Rust asset path in '+str(source))
+        relative=pathlib.Path(name)
+        if relative.is_absolute() or re.match(r'^[A-Za-z]:',name):
+            raise ValueError('external literal Rust asset path in '+str(source))
+        # Normalize dot components while preserving an in-repository symlink's
+        # lexical path: the frozen snapshot must satisfy the original include.
+        asset=pathlib.Path(os.path.abspath(source.parent/relative))
+        resolved=asset.resolve(strict=True)
+        if not asset.is_relative_to(root) or not resolved.is_relative_to(root) or not resolved.is_file():
+            raise ValueError('external/non-file literal Rust asset in '+str(source))
+        if asset in assets:continue
+        size=asset.stat().st_size
+        if len(assets)>=MAX_LITERAL_ASSETS or size>MAX_LITERAL_ASSET_BYTES or asset_bytes+size>MAX_LITERAL_ASSET_TOTAL:
+            raise ValueError('literal Rust asset closure exceeds bound')
+        assets.add(asset);asset_bytes+=size;files.append(asset)
+        if asset.suffix=='.rs':pending.append(asset)
 result={p.relative_to(root).as_posix():hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(set(files))}
 pathlib.Path(sys.argv[1]).write_text(json.dumps(result,sort_keys=True,indent=2)+"\n")
 PYSOURCES
