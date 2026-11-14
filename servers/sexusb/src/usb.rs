@@ -159,6 +159,8 @@ const FULL: u32 = 1; const LOW: u32 = 2; const HIGH: u32 = 3; const SUPER: u32 =
 fn speed_name(s: u32) -> &'static str { match s { FULL => "full", LOW => "low", HIGH => "high", SUPER => "super", 5 => "super_plus", _ => "unknown" } }
 
 impl Usb {
+    /// A USB Ethernet adapter is up (its transmit ring has no wake of its own).
+    pub fn ether_active(&self) -> bool { self.ether.is_some() }
     pub fn new(x: Xhci) -> Usb {
         Usb { x, dev: [Device::empty(); MAX_DEVICES], slot_dev: [0; 256], root_pending: 0, sent_keys: 0,
             sent_modifiers: 0, stats: Stats::default(), bounce: (0, 0), disks: [0; sex_pdx::usb_disk::MAX_DISKS as usize],
