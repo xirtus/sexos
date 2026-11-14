@@ -115,6 +115,8 @@ def source_contract(root,text_profile='ascii'):
  c['desktop_top']=int(boundary[1])
  reader=source['apps/kaleidoscope/src/document_reader.rs']
  if text_profile=='utf8'and not all(x in reader for x in ('encoded_row_cost','source_geometry','text::cell(body,offset)','replace_footer','CAPACITY-(3*cols+2)')):raise ValueError('scalar reader byte-budget/source binding changed')
+ # These ASCII clipboard qualification frames do not claim a Unicode shaping
+ # model. UTF8 retains its explicit historical scalar-cell oracle below.
  c['source_sha256'].update({p:sha(value.encode())for p,value in source.items()})
  return c
 
@@ -210,6 +212,24 @@ def verify_browser(trace,ppm,body,c,anchor,selection,status='Selected',resolutio
   width,height,pixels=ppm_rgb(ppm,min_width=1,min_height=1)
   if resolution and(width,height)!=tuple(resolution):raise ValueError('actual framebuffer resolution differs')
   if tile['x']<0 or tile['y']<c['desktop_top'] or tile['x']+tile['w']>width or tile['y']+tile['h']>height:raise ValueError('actual reader tile outside framebuffer')
+  if c.get('text_raster')=='source-coverage'and all(byte<128 for line in f['lines']for byte in line):
+   factor=f['scale'];a,b=f['selection'];checked=ink=highlight=mismatch=0
+   bottom=tile['y']+tile['h']-c.get('content_bottom_inset',0)
+   columns=min(c.get('renderer_max_columns',80),max(0,(tile['w']-2*c['inset'])//(c['advance']*factor)))
+   rows=min(c['max_rows'],max(0,(bottom-tile['y']-c['top']+c['line']*factor-1)//(c['line']*factor)))
+   for row in range(rows):
+    line=f['lines'][row]if row<f['rows']else b''
+    row_start=f.get('row_offsets',[i*(f['cols']+1)for i in range(f['rows'])])[row]if row<f['rows']else 0
+    for col in range(columns):
+     char=chr(line[col])if col<len(line)else' '
+     selected=row<f['rows']and col<f['cols']and col<len(line)and a<=row_start+col<row_start+col+1<=b
+     cell_contract=dict(c,background=c['selection_color'])if selected else c
+     count,nonzero,bad=http.check_text_cell(pixels,width,tile['x']+c['inset']+col*c['advance']*factor,tile['y']+c['top']+row*c['line']*factor,char,factor,cell_contract,bottom)
+     checked+=count;ink+=nonzero;mismatch+=bad
+     if selected:highlight+=count-nonzero
+   if mismatch:raise ValueError(f'whole Browser exact coverage/selection/erasure mismatches={mismatch}')
+   if not ink or a!=b and not highlight:raise ValueError('missing checked text/highlight pixels')
+   return dict(ok=True,errors=[],text_raster='source-coverage-ascii',checked_pixels=checked,highlight_pixels=highlight,selection=list(f['selection']),source_selection=list(selection),expected_rows=[line.decode('ascii')for line in f['lines']],geometry={k:v for k,v in f.items()if k not in('starts','lines')})
   factor=f['scale'];fg=c['color'].to_bytes(3,'big');bg=c['selection_color'].to_bytes(3,'big');a,b=f['selection'];mismatch=ink=highlight=checked=0
   columns=min(80,max(0,(tile['w']-2*c['inset'])//(c['advance']*factor)))
   rows=min(c['max_rows'],max(0,(tile['h']-c['top']+c['line']*factor-1)//(c['line']*factor)))
@@ -232,7 +252,7 @@ def verify_browser(trace,ppm,body,c,anchor,selection,status='Selected',resolutio
         mismatch+=(value!=fg)if on else(value!=bg)if selected else(value in(fg,bg))
   if mismatch:raise ValueError(f'whole Browser text/highlight/stale-band pixel mismatches={mismatch}')
   if not ink or a!=b and not highlight:raise ValueError('missing checked text/highlight pixels')
-  return dict(ok=True,errors=[],checked_pixels=checked,highlight_pixels=highlight,selection=list(f['selection']),source_selection=list(selection),expected_rows=[line.decode('utf8')for line in f['lines']],geometry={k:v for k,v in f.items()if k not in('starts','lines')})
+  return dict(ok=True,errors=[],text_raster='legacy-scalar-rom',checked_pixels=checked,highlight_pixels=highlight,selection=list(f['selection']),source_selection=list(selection),expected_rows=[line.decode('utf8')for line in f['lines']],geometry={k:v for k,v in f.items()if k not in('starts','lines')})
  except(ValueError,KeyError,IndexError,OverflowError,UnicodeError)as exc:return dict(ok=False,errors=[str(exc)])
 
 
