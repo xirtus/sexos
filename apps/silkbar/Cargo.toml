@@ -1,9 +1,0 @@
-[package]
-name = "silkbar"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-silkclient = { path = "../../crates/silk-client" }
-sex-pdx = { path = "../../crates/sex-pdx" }
-sex-graphics = { path = "../../crates/sex-graphics" }
