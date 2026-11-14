@@ -77,3 +77,7 @@ Follow-up: `../keepass-0.17.0/SEXOS_CHANGES.md` describes the separate
 bounded-decompression/selected KDBX4 staging patch. The original findings above
 are retained as the upstream baseline; cumulative attachment admission is enforced there; whole-model allocation
 limits and whole-process erasure remain outside both scoped patches.
+
+The pinned CI entry point is `scripts/vault_dependency_host_gate.sh`, called by
+Chastity's host gate. Both standalone vendor lockfiles are checked in; the gate
+uses `--locked` and passes an explicit local Argon2 patch to KeePass's test build.
