@@ -115,3 +115,8 @@ __pycache__/
 
 # The one public key builds trust for signed updates.
 !keys/release.pub
+
+# Optional local Qupid provider seed packs (never committed to public git).
+crates/sex-episodes/qupid_seed_pack.json
+qupid-pack.local.json
+

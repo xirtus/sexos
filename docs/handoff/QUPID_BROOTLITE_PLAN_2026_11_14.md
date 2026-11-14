@@ -101,7 +101,23 @@ controls and media keys, and gives Music gapless playback.
   refused), an install plan through `<requires>`, MD5/SHA checksums and checked zip
   unpacking. Next, Q13b: Qupid adds a repository from its zip or URL, fetches and
   checks `addons.xml`, browses plugins, installs a plan into its addon folder.
+- **Q1b: projector sound DSP, non-truncated stream telemetry and external `ProviderPack`.**
+  All `#![no_std]` with zero dependencies in `crates/sex-episodes` (so `#183` merges cleanly):
+  - `sex_episodes::audio_dsp`: `50%..=300%` Kodi-style volume amplification (`toggle_boost_200`),
+    3-band RBJ biquad EQ (`100 Hz` low-shelf, `1.8 kHz` voice peaking, `7.5 kHz` high-shelf),
+    `5.1`/`7.1` -> stereo downmix with `+3.2 dB` `FC` dialogue lift, upward/downward dialogue
+    DRC (`-54 dBFS` noise gate), Padé `tanh` peak limiter, and scrub-bar labels (`osd_button_label`).
+  - `sex_episodes::streams`: Stremio v3, RSS/Torznab, `json_array_btih` and `json_movies_torrents`
+    stream parsers that surface `👤` seeders, `AV1`/`HEVC`, `DV`/`HDR10+`, `💾` size and `⚙️`
+    source without truncation (`telemetry_header` + `full_release_label`), match multi-file season
+    packs (`matches_episode`), rank by viability + codec + size cap + `episodes::similarity`, and
+    build deduplicated tracker-enriched magnets.
+  - `sex_episodes::pack` + `scripts/qupid_pack.sh`: clean open defaults (`Cinemeta`, `Internet Archive`,
+    `Academic Torrents`, FOSS trackers, official Kodi Omega `<dir>`) in public git, with optional
+    gitignored compile-time `crates/sex-episodes/qupid_seed_pack.json` and runtime `/cfg/qupid/provider-pack.json`
+    hydration feeding Stremio addons, swarm indexers, featured feeds and `sex_kodi` repositories.
 - **Q9-Q12** as in the table, each after a short report where it is large (Q11).
 
 Order: Q2 and Q3 wait for #183 to merge (Play's main loop changes there) and for the
-Play-to-Qupid rename; Q1 does not touch Play and goes now.
+Play-to-Qupid rename; Q1 and Q1b do not touch Play and go now.
+
