@@ -4337,3 +4337,23 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
 - Remaining scope is explicit: Moan FFmpeg FLAC/MP3 export, project persistence and
   graphical waveforms; Chastity live cross-app autofill transport/consent routing.
   Chastity's tested authorization API is not claimed as a deployed IPC service.
+
+## ChatGPT round 181: real Moan WAV/FLAC/MP3 export (2026-11-14)
+- `crates/moan-export`: bounded FFmpeg audio encoder with ordered, acknowledged
+  output and explicit seek patches. Native PCM/WAV and FLAC plus pinned Shine3.1.1
+  MP3,192kbps. Encoders run in the caller's organ; callbacks never perform IPC.
+- Existing Moan export uses actual codecs through its Files Save picker, exclusive
+  create, partial retention, Close polling, exact writes and final sync. Standard
+  Weft format controls come from the coordinated editable-project workstream.
+- Default guest/native FFmpeg7.1.2 source pins match. Shine GNU Library GPL2 sec3
+  expressly permits the GPL3 selection; original licence, GPL3 and provenance
+  notice retained beside downloaded source and built archives. No kernel or
+  Qupid changes. Both FFmpeg profiles include export; cache markers prevent stale
+  archives silently disabling codecs.
+- Four native tests pass with real ffprobe/decode oracles: exact WAV/FLAC PCM,
+  MP3 pitch/level/duration,13-byte short acknowledgements, seek/header patches,
+  bounded frames/output, invalid acknowledgements and abort. Full guest Moan links
+  successfully (about11MiB) and passes forbidden-instruction scan. QEMU all3format
+  Files-export and Close/partial gate added; actual guest result awaits CI.
+- Contract, source/license references and exact evidence commands:
+  `docs/handoff/MOAN_EXPORT_2026_11_14.md`.

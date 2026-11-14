@@ -49,6 +49,10 @@ jobs:
       run: cargo test --locked -p velvet --no-default-features
     - name: Moan Weft app and project editing
       run: cargo test --locked -p moan --no-default-features
+    - name: Moan native FFmpeg WAV, FLAC and Shine MP3 export oracle
+      run: |
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg
+        bash scripts/moan_export_host_gate.sh
     - name: Moan timeline, edits and mixer on the host
       run: bash scripts/moan_host_gate.sh
     - name: Bell sound rate conversion on the host
@@ -482,6 +486,10 @@ jobs:
       run: python3 scripts/chastity_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/chastity"
     - name: Aftercare backup (back up, delete, restore, hashes equal, wrong password refused)
       run: python3 scripts/aftercare_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/aftercare"
+    - name: Moan actual WAV, FLAC and MP3 Files exports
+      run: |
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg
+        python3 scripts/moan_export_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/moan-export"
     - name: Preserve program evidence
       if: always()
       uses: actions/upload-artifact@v4

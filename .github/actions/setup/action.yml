@@ -58,6 +58,7 @@ runs:
         target/ffmpeg/sexos-recording-v1
         target/ffmpeg/sexos-audio-export-v1
         target/ffmpeg/share/licenses
+        target/ffmpeg/source-pin
       key: ffmpeg-${{ inputs.recording }}-${{ hashFiles('scripts/build_ffmpeg.sh', 'scripts/build_shine.sh') }}
   - name: Build FFmpeg for programs
     if: inputs.media == 'true'

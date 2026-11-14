@@ -13,8 +13,10 @@
 # Programs that link FFmpeg (apps/play, apps/web) find them through SEXOS_FFMPEG
 # (default: that directory).
 #
-# Needs clang, nasm, llvm-ar/ranlib/nm, make, and musl's headers. FFmpeg is LGPL-2.1+
-# here (no GPL parts enabled); dav1d is BSD-2-Clause; musl's headers are MIT.
+# Needs clang, nasm, llvm-ar/ranlib/nm, make, and musl's headers. FFmpeg's own
+# enabled source remains LGPL-2.1+ (no FFmpeg GPL components enabled); dav1d is
+# BSD-2-Clause and musl headers MIT. The combined Moan program is GPL-3: Shine
+# uses the GPL-3 selection expressly permitted by upstream LGPL2 COPYING sec3.
 # Also needs meson and pkg-config for dav1d.
 #
 #   MUSL_INCLUDE   musl's include directory (default: found below)
@@ -24,6 +26,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT=$PWD
 FFMPEG_TAG=${FFMPEG_TAG:-n7.1.2}
+FFMPEG_PIN=f893221c8d89cb798b829bebe71d55e1a3f242fd
 FFMPEG_RECORDING=${FFMPEG_RECORDING:-0}
 case "$FFMPEG_RECORDING" in 0|1) ;; *) echo 'FFMPEG_RECORDING must be 0 or 1' >&2; exit 1;; esac
 OUT=$ROOT/target/ffmpeg
@@ -49,6 +52,14 @@ if [[ -z "${FFMPEG_SRC:-}" ]]; then
   FFMPEG_SRC=$WORK/ffmpeg-$FFMPEG_TAG
   [[ -d $FFMPEG_SRC ]] || git clone -q --depth=1 --branch "$FFMPEG_TAG" https://github.com/FFmpeg/FFmpeg.git "$FFMPEG_SRC"
 fi
+
+# The default profile must match the independently qualified native profile.
+# An explicit FFMPEG_TAG override is developer work, not default qualification.
+FFMPEG_REV=$(git -C "$FFMPEG_SRC" rev-parse HEAD)
+if [[ $FFMPEG_TAG == n7.1.2 && $FFMPEG_REV != "$FFMPEG_PIN" ]]; then
+  echo 'Default FFmpeg source does not match pinned n7.1.2' >&2; exit 1
+fi
+printf '%s\n' "$FFMPEG_REV" > "$OUT/source-pin"
 
 # dav1d first: FFmpeg's configure finds it through its pkg-config file. Its file asks
 # for -ldl, which is Linux's; dav1d is built without dlsym, so drop it.

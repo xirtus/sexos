@@ -27,5 +27,8 @@ PKG_CONFIG_LIBDIR="$SHINE/lib/pkgconfig" PKG_CONFIG_PATH= "$SRC/configure" --pre
 make -j"$(getconf _NPROCESSORS_ONLN)" > make.log
 make install > install.log
 cp "$SHINE/lib/libshine.a" "$OUT/lib/"
+mkdir -p "$OUT/share/licenses/shine"
+cp "$SHINE/share/licenses/shine/"* "$OUT/share/licenses/shine/"
+printf '%s\n' "$PIN" > "$OUT/source-pin"
 printf '%s\n' '1' > "$OUT/sexos-audio-export-v1"
 echo "[moan.host.ffmpeg] $PIN -> $OUT"

@@ -72,6 +72,20 @@ fn real_codecs_probe_and_decode_with_ordered_header_patches_and_short_writes() {
             "container did not exercise seek-based final metadata patches"
         );
         assert_eq!(encoder.push(&[[0; 2]]), Err(Error::Closed));
+        match format {
+            Format::Wav => {
+                assert_eq!(&file[..4], b"RIFF");
+                assert_eq!(&file[8..12], b"WAVE");
+                assert_eq!(
+                    u32::from_le_bytes(file[4..8].try_into().unwrap()) as usize + 8,
+                    file.len()
+                );
+            }
+            Format::Flac => assert_eq!(&file[..4], b"fLaC"),
+            Format::Mp3 => {
+                assert!(file.starts_with(b"ID3") || (file[0] == 0xff && file[1] & 0xe0 == 0xe0))
+            }
+        }
         let path = path(format.extension());
         std::fs::write(&path, &file).unwrap();
         let probe = Command::new("ffprobe")
