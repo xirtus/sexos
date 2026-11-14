@@ -408,7 +408,7 @@ pub extern "C" fn _start() -> ! {
             }
             Event::Key(key) => { app.status.clear(); app.key(&mut window, key); }
             Event::Pointer(p) if matches!(p.kind, Kind::Down { button: 0 } | Kind::Wheel { .. }) => app.pointer(&mut window, p),
-            Event::Pointer(_) => continue,
+            Event::Pointer(_) | Event::Drop { .. } | Event::DragEnded { .. } => continue,
             Event::Resize { .. } => app.relayout(window.size()),
         }
         render(&mut window, &mut app);
