@@ -1582,6 +1582,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "hookup"
+version = "0.1.0"
+dependencies = [
+ "sex-font",
+ "sex-kdeconnect",
+ "sex-std",
+]
+
+[[package]]
 name = "hum"
 version = "0.1.0"
 dependencies = [
@@ -2999,6 +3008,14 @@ dependencies = [
  "sex-html",
  "sex-image",
  "wasmi",
+]
+
+[[package]]
+name = "sex-kdeconnect"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "sex-kdeconnect",
 ]
 
 [[package]]

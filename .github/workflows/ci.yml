@@ -454,3 +454,28 @@ jobs:
           ${{ runner.temp }}/recording
           ${{ runner.temp }}/recording-build.log
         if-no-files-found: ignore
+
+  places:
+    name: Phone link and maps
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+    - uses: actions/checkout@v4
+    - uses: ./.github/actions/setup
+    - name: Hookup protocol (KDE Connect) on the host, against the Python test peer
+      run: cargo test --locked -p sex-kdeconnect
+    - name: Build the image
+      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/places-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/places-build.log"; exit 1)
+    - name: Hookup pairs with a test phone, receives and sends files, media keys
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/blank-places.img"
+        python3 scripts/program_hookup_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-places.img" --out "$RUNNER_TEMP/sexos-places/hookup"
+    - name: Preserve places evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sexos-places
+        path: |
+          ${{ runner.temp }}/sexos-places
+          ${{ runner.temp }}/places-build.log
+        if-no-files-found: ignore

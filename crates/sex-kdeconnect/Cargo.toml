@@ -1,0 +1,17 @@
+[package]
+name = "sex-kdeconnect"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "KDE Connect protocol for SexOS (Hookup), written from the public protocol description: identity, discovery, pairing, notifications, clipboard, file share and media control"
+
+[dependencies]
+serde_json = { version = "1", default-features = false, features = ["alloc"] }
+
+[features]
+# The device runtime over std::net (UDP discovery, TCP links, payload transfers).
+std = []
+
+[dev-dependencies]
+sex-kdeconnect = { path = ".", features = ["std"] }
+serde_json = "1"

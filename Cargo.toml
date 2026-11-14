@@ -95,6 +95,8 @@ members = [
     "crates/sex-sdl",
     "apps/sdltest",
     "apps/driftspark",
+    "crates/sex-kdeconnect",
+    "apps/hookup",
 ]
 [workspace.package]
 license = "GPL-3.0-only"

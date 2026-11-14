@@ -76,7 +76,8 @@ crates = [
   "apps/python/Cargo.toml",
   "apps/store/Cargo.toml",
   "apps/sdltest/Cargo.toml",
-  "apps/driftspark/Cargo.toml"
+  "apps/driftspark/Cargo.toml",
+  "apps/hookup/Cargo.toml"
 ]
 
 [[stage]]
@@ -487,6 +488,16 @@ build_std = "std,panic_abort"
 manifest = "apps/pdf/Cargo.toml"
 source_artifact = "target/x86_64-sex-std/release/pdf"
 dest_artifact = "iso_root/programs/pdf"
+
+# Hookup: the phone link (KDE Connect protocol, crates/sex-kdeconnect) over std::net.
+[[stage]]
+id = "build_hookup"
+action = "cargo_manifest"
+target = "x86_64-sex-std.json"
+build_std = "std,panic_abort"
+manifest = "apps/hookup/Cargo.toml"
+source_artifact = "target/x86_64-sex-std/release/hookup"
+dest_artifact = "iso_root/programs/hookup"
 
 [[stage]]
 id = "build_play"
