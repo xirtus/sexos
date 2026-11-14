@@ -6,28 +6,49 @@ text field then typed keys fill the field, a click toggles its checkbox and whee
 scroll its list, each read back from the program's serial record. `run tassel` then runs
 egui's own demo app, unmodified, which must paint its windows (thousands of triangles)
 and take a click. Screenshots of both are kept."""
-import argparse,re,shutil,time
+import argparse,json,re,shutil,time
 from pathlib import Path
 from install_program import install
 from quil_autosave_gate import boot
 from program_gate_geometry import maximize
+from check_disk_persistence import ppm_rgb
 ROOT=Path(__file__).resolve().parents[1]
-def colours(data,tile):
- """The distinct colours inside a window tile of a binary PPM (P6) screendump."""
- fields=[];i=0
- while len(fields)<4:
-  while data[i:i+1].isspace():i+=1
-  if data[i:i+1]==b'#':i=data.index(b'\n',i);continue
-  j=i
-  while not data[j:j+1].isspace():j+=1
-  fields.append(data[i:j]);i=j
- assert fields[0]==b'P6' and int(fields[3])<256,fields
- width,height=int(fields[1]),int(fields[2]);i+=1
- x,y,w,h=tile;seen=set()
- for row in range(max(0,y+36),min(height,y+h-8)):
-  base=i+(row*width)*3;line=data[base+max(0,x+8)*3:base+min(width,x+w-8)*3]
+def client_rect(tile,width,height):
+ """The client of the actual full-viewport frame; never include its chrome."""
+ x,y,w,h=tile;side=(w-width)//2;top=h-height-side
+ assert (side,top,w-width,h-height)==(8,34,16,42),(tile,width,height)
+ return x+side,y+top,width,height
+
+def colours(data,rect):
+ """Distinct colours inside only the published client rectangle."""
+ width,height,pixels=ppm_rgb(data,min_width=1,min_height=1)
+ x,y,w,h=rect;seen=set()
+ assert w>0 and h>0 and x>=0 and y>=0 and x+w<=width and y+h<=height,rect
+ for row in range(y,y+h):
+  base=(row*width)*3;line=pixels[base+x*3:base+(x+w)*3]
   seen.update(line[k:k+3] for k in range(0,len(line),3))
  return seen
+
+def capture_pixels(q,out,name,rect,minimum,published,timeout=30):
+ """Qualify fresh scanout, not merely an application's completed CPU paint.
+
+ The publication must belong to this run's surface and full viewport. Poll
+ pacing is not evidence: only a fresh screenshot satisfying the same colour
+ predicate can pass. Keep every unsuccessful capture for diagnosis.
+ """
+ deadline=time.monotonic()+timeout;attempts=[]
+ while time.monotonic()<deadline:
+  path=out/f'{name}-capture-{len(attempts)+1:03d}.ppm'
+  q.cmd('screendump',{'filename':str(path)})
+  seen=colours(path.read_bytes(),rect);ready=bool(published())
+  attempts.append(dict(file=path.name,colours=len(seen),published=ready))
+  if ready and len(seen)>minimum:
+   shutil.copyfile(path,out/f'{name}.ppm')
+   (out/f'{name}-captures.json').write_text(json.dumps(dict(ok=True,client=rect,minimum_exclusive=minimum,attempts=attempts),indent=2)+'\n')
+   return seen
+  time.sleep(.05)
+ (out/f'{name}-captures.json').write_text(json.dumps(dict(ok=False,client=rect,minimum_exclusive=minimum,attempts=attempts),indent=2)+'\n')
+ raise AssertionError(f'{name} never published fresh client pixels with >{minimum} colours before deadline; attempts={attempts}')
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
@@ -58,17 +79,18 @@ def main():
    if (int(frame[1]),int(frame[2]))==(tile[2]-16,tile[3]-42):break
    assert time.monotonic()<deadline,'client never painted its maximized viewport'
   assert tile[0]>=0 and tile[1]>=0 and tile[0]+tile[2]<=rw and tile[1]+tile[3]<=rh,tile
-  return target,task,surface,tile,frame
- def shot(name,tile):
-  path=a.out/f'{name}.ppm';q.cmd('screendump',{'filename':str(path)});time.sleep(.5)
-  return colours(path.read_bytes(),tile)
+  return target,task,surface,tile,frame,before
+ def shot(name,tile,frame,target,surface,before,minimum):
+  width,height=int(frame[1]),int(frame[2]);rect=client_rect(tile,width,height)
+  pattern=rf'\[display.app.pixels\] target={target} surface={surface} w={width} h={height}(?:\r?\n|$)'
+  return capture_pixels(q,a.out,name,rect,minimum,lambda:re.search(pattern,t()[before:]))
  def close(target,task,surface):
   s=len(t());g['focus'](surface);time.sleep(.3);q.key('f11')
   g['wait'](rf'\[app.private.retired\] target={target} task={task} ',s,120)
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120)
-  target,task,surface,tile,frame=start('probe')
-  ox,oy=tile[0]+8,tile[1]+36
+  target,task,surface,tile,frame,before=start('probe')
+  ox,oy,_,_=client_rect(tile,int(frame[1]),int(frame[2]))
   s=len(t());click(ox+60,oy+24);g['wait'](r'\[tassel.clicked\] count=1\n',s,60)
   s=len(t());click(ox+60,oy+24);g['wait'](r'\[tassel.clicked\] count=2\n',s,60)
   s=len(t());click(ox+110,oy+64);time.sleep(.5)
@@ -79,12 +101,12 @@ def main():
   s=len(t());move(ox+100,oy+190)
   for _ in range(4):button('wheel-down',True);button('wheel-down',False)
   m=g['wait'](r'\[tassel.scrolled\] first=(\d+)\n',s,60);assert int(m[1])>0,m[0]
-  probe=shot('tassel-probe',tile)
+  probe=shot('tassel-probe',tile,frame,target,surface,before,8)
   assert len(probe)>8,'the probe panel looks blank'
   close(target,task,surface)
-  target,task,surface,tile,frame=start('trace')
+  target,task,surface,tile,frame,before=start('trace')
   assert int(frame[4])>1000,f'the demo drew too little: {frame[0]}'
-  demo=shot('tassel-demo',tile)
+  demo=shot('tassel-demo',tile,frame,target,surface,before,40)
   colour_count=len(demo);assert colour_count>40,f'the demo looks blank ({colour_count} colours)'
   # A click on the demo's background still takes input without trouble.
   click(tile[0]+tile[2]//2,tile[1]+tile[3]//2);time.sleep(2)
