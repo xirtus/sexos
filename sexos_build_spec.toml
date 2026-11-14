@@ -196,6 +196,8 @@ action = "cargo_manifest"
 manifest = "servers/sexfiles/Cargo.toml"
 source_artifact = "target/x86_64-sex/release/sexfiles"
 dest_artifact = "iso_root/servers/sexfiles"
+# The encrypted home's AES: the software one, servers keep no SSE state.
+rustflags = "--cfg aes_force_soft"
 
 [[stage]]
 id = "build_spindle"

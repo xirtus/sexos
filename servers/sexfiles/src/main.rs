@@ -26,6 +26,7 @@ mod updater;
 mod packages;
 mod console_relay;
 mod volumes;
+mod home;
 mod document;
 mod document_journal;
 mod history_journal;
