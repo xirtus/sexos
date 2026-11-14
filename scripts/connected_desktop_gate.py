@@ -17,6 +17,7 @@ import spindle_durable_reboot_gate as history
 import tls_exchange_gate as tls
 import tls_responsiveness_gate as desktop
 from desktop_close_gate import QMP
+from desktop_focus import focus_surface
 from check_document_disk import recover,fnv
 from check_desktop_pixels import final_view,verify as linen_pixels
 from check_quil_ui_pixels import view as quil_view,verify as quil_pixels
@@ -36,7 +37,7 @@ SCOPE=('Representative connected session, not full alpha acceptance: one live bo
        'All authority remains existing BOOT routes in GLOBAL_VAS. No publicweb/publicCA, arbitrary endpoint, Unix/POSIX, sustained1800s alpha, power-loss/crash, physical/SMP or hostile-isolation claim.')
 sha=launch.sha
 KEY_CODES={char:code for base,letters in((0x10,'qwertyuiop'),(0x1e,'asdfghjkl'),(0x2c,'zxcvbnm'),(2,'1234567890'))for code,char in enumerate(letters,base)}
-KEY_CODES.update(ctrl=0x1d,shift=0x2a,alt=0x38,tab=0x0f,ret=0x1c,spc=0x39,grave_accent=0x29,up=0x48,down=0x50,end=0x4f,home=0x47,f11=0x57)
+KEY_CODES.update(ctrl=0x1d,shift=0x2a,alt=0x38,tab=0x0f,ret=0x1c,spc=0x39,grave_accent=0x29,up=0x48,down=0x50,end=0x4f,home=0x47,f11=0x57,scroll_lock=0x46)
 
 def source_contract(root):
  root=Path(root);parts=dict(text=clip.source_contract(root),wheel=http.load_wheel_contract(root),image=asset.source_contract(root),launcher=launch.source_contract(root),quil=readability.source_contract(root),import_view=storage.source_contract(root));hashes={}
@@ -512,11 +513,9 @@ def run_boot(root,iso,binding,seed,out,c,model,resolution_text,recovery=False,ex
   wait(rf'\[sexinput.ps2.scancode\] raw={hex(KEY_CODES[keys[0]]|0x80)}(?=\n|$)',start)
   found=wait(pattern,start)if pattern else None;event.update(serial_end=len(text()),host_end=time.monotonic());return found
  def focus(sid):
-  for _ in range(24):
-   current=re.findall(r'\[shell.focus.set\] id=(\d+)',text())
-   if current and int(current[-1])==sid:return
-   key('alt','tab',pattern=r'\[shell.app.switch\] old=\d+ new=\d+ live=1 shortcut=alt_tab')
-  raise ValueError('bounded actual AltTab failed to focus '+str(sid))
+  # Alt+Tab toggles the two most recent frames; accessibility Tab traverses
+  # every live frame and observes completed make/action/release causality.
+  focus_surface(sid,text,lambda name,pattern:key(name,pattern=pattern))
  def picture(name,kind,anchor=0,mode=None):
   nonlocal park_phase
   launch.pointer_park(q,resolution,text,wait,actions.append,park_phase);park_phase+=1;actions[-1].update(capture=name,serial_end=len(text()));path=out/(name+'.ppm');deadline=time.monotonic()+30;error='no complete frame';frame=dict(name=name,kind=kind,anchor=anchor,requested_anchor=anchor if kind in('reader','copied')else None,mode=mode,screenshot=path.name)
