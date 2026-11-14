@@ -110,11 +110,15 @@ pub extern "C" fn _start() -> ! {
             _ => continue,
         };
         sex_pdx::serial_record!("[settings.key] code={} page={} row={}", key.code, m.page, m.row);
-        const F2: u8 = 0x3C;
+        // Ctrl+P: the Shell keeps F-keys and Tab for itself, so Settings uses keys a
+        // program receives.
+        const KEY_P: u8 = 0x19;
+        const PAGE_UP: u8 = 0x49;
+        const PAGE_DOWN: u8 = 0x51;
         let change = if m.entering() {
             let c = match key.code { ENTER => 13, ESC => 27, BACKSPACE => 8, _ => sex_app::typed(key).unwrap_or(0) };
             m.password_key(c)
-        } else if key.code == F2 {
+        } else if key.control && key.code == KEY_P {
             m.start_password();
             Change::None
         } else { match (sex_app::nav(key), key.code) {
@@ -122,7 +126,8 @@ pub extern "C" fn _start() -> ! {
             (Some(Nav::Down), _) => { m.move_row(true); Change::None }
             (Some(Nav::Left), _) => m.step(false, key.shift),
             (Some(Nav::Right), _) | (_, ENTER) => m.step(true, key.shift),
-            (_, TAB) => { m.next_page(!key.shift); Change::None }
+            (_, TAB) | (_, PAGE_DOWN) => { m.next_page(!(key.shift && key.code == TAB)); Change::None }
+            (_, PAGE_UP) => { m.next_page(false); Change::None }
             (_, ESC) => { m.clear_search(); Change::None }
             (_, BACKSPACE) => { m.backspace(); Change::None }
             _ => {

@@ -2,7 +2,7 @@
 """Lock screen and idle (workstream B6/B7).
 
 With no password set, Super+Esc locks and Enter unlocks. Settings sets a password
-(F2, typed twice). Locked again: keys meant for Settings never reach it, a wrong
+(Ctrl+P, typed twice). Locked again: keys meant for Settings never reach it, a wrong
 password is refused, the right one unlocks. Then Settings sets "dim after" to one
 minute and the screen dims after a quiet minute; a key wakes it."""
 import argparse,re,shutil,time
@@ -37,7 +37,7 @@ def main():
   s=len(t());q.key('ret');g['wait'](r'\[shell.lock.check\] status=2',s,60);g['wait'](r'\[shell.lock\] locked=0',s,30)
   # Settings sets a password.
   g['focus'](153);time.sleep(.5);s=len(t());typ('run settings');q.key('ret');first_start(g,q,t,s);g['wait'](r'\[settings.open\] generation=\d+',s,120);time.sleep(1)
-  s=len(t());q.key('f2');typ('opensesame');q.key('ret');typ('opensesame');q.key('ret')
+  s=len(t());press('ctrl','p');typ('opensesame');q.key('ret');typ('opensesame');q.key('ret')
   g['wait'](r'\[files.password\] caller=\d+ verb=3 status=0',s,120);g['wait'](r'\[settings.password\] status=0',s,60)
   # Locked: a key meant for Settings changes nothing.
   s=len(t());press('meta_l','esc');g['wait'](r'\[display.screen\] mode=0 locked=1 typed=0 say=0',s,30)

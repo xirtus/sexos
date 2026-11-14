@@ -4057,7 +4057,7 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   character, and why the last try failed. Enter sends the password to Files, which
   keeps only an Argon2id hash (m=4 MiB, t=3, random salt) in `/system/password` and
   answers match or not (`sex_config::secret`, opcode 0x2F3, reply tag 0xC7). With no
-  password set, Enter unlocks. Settings sets the password with F2 (typed twice).
+  password set, Enter unlocks. Settings sets the password with Ctrl+P (typed twice; the Shell keeps F-keys and Tab, so Settings pages use PgDn/PgUp).
   Idle: after `session.dim_after_min` the screen dims, after `lock_after_min` it locks
   (if `lock_on_idle`), after `blank_after_min` it goes black; any input wakes it, and
   the input that wakes it does nothing else. Idle times default to never, so test runs

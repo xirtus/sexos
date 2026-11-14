@@ -41,7 +41,7 @@ pub struct Model {
     /// One line about the last change: saved, refused, or why.
     pub status: [u8; 64],
     pub status_len: usize,
-    /// Typing a new lock password (F2), if under way.
+    /// Typing a new lock password (Ctrl+P), if under way.
     pub entry: Option<Entry>,
 }
 
@@ -99,7 +99,7 @@ impl Model {
     }
     pub fn backspace(&mut self) { self.query_len = self.query_len.saturating_sub(1); self.row = 0; }
     pub fn clear_search(&mut self) { self.query_len = 0; self.row = 0; }
-    /// F2: start typing a new lock password.
+    /// Ctrl+P: start typing a new lock password.
     pub fn start_password(&mut self) { self.entry = Some(Entry::new()); }
     pub fn entering(&self) -> bool { self.entry.is_some() }
     /// A key while typing a password: a character, Backspace (8), Esc (27) or Enter (13).
@@ -118,7 +118,7 @@ impl Model {
                 e.wipe();
                 self.entry = None;
                 if same { return Change::Password(out.0, out.1); }
-                self.say("The two passwords differ. Press F2 to try again.");
+                self.say("The two passwords differ. Press Ctrl+P to try again.");
             }
             c if (0x20..0x7F).contains(&c) && e.len < 64 => { e.typed[e.len] = c; e.len += 1; }
             _ => {}
@@ -195,7 +195,7 @@ impl Out<'_> {
 /// The whole window as text, into `out`; returns its length.
 pub fn render(m: &Model, out: &mut [u8]) -> usize {
     let mut w = Out { buf: out, at: 0 };
-    w.put("Settings    Tab: next page   type: search   F2: lock password   F11: close\n\n");
+    w.put("Settings    PgDn/PgUp: pages   type: search   Ctrl+P: lock password   F11: close\n\n");
     if let Some(e) = &m.entry {
         w.put(if e.confirming { "Type the new lock password again: " } else { "New lock password: " });
         for _ in 0..e.len { w.byte(b'*'); }

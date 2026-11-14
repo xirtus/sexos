@@ -51,7 +51,7 @@ def main():
   for k in 'run settings':q.key('spc' if k==' ' else k);time.sleep(.05)
   q.key('ret');first_start(g,q,t,s);g['wait'](r'\[settings.open\] generation=\d+',s,120);time.sleep(1)
   # Appearance -> Desktop page, down to night light, one step lower.
-  s=len(t());q.key('tab');time.sleep(.3);q.key('down');time.sleep(.3);q.key('left')
+  s=len(t());q.key('pgdn');time.sleep(.3);q.key('down');time.sleep(.3);q.key('left')
   g['wait'](r'\[settings.set\] key=3 value=1 status=0',s,30)
   g['wait'](r'\[files.config.set\] caller=\d+ key=3 value=1 status=0',s,30)
   # Any key wakes the Shell, which then sees the new generation.
