@@ -821,7 +821,8 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
     }
     if cmd.is_empty() { return true; }
     if unsafe{capture_command::CAPTURE.busy()}&&cmd!=b"capture-cancel"&&cmd!=b"record-stop"{sb.push(b"Capture owns the file buffer. Escape cancels; Close stays available.");return true}
-    if unsafe{session_command::SESSION.io_busy()}{sb.push(b"The disk is saving the session for a moment. Try again.");return true}
+    // The session file has the Files region for a moment: the command runs once it is free.
+    if unsafe{session_command::SESSION.io_busy()}{if !unsafe{session_command::SESSION.queue(line)}{sb.push(b"The disk is saving the session for a moment. Try again.");}return true}
     let recognized = match cmd {
         b"record"=>{unsafe{record_command::RECORD.start(args,sb);}true},
         b"record-stop"=>{unsafe{record_command::RECORD.stop(args,sb);}true},
@@ -2802,6 +2803,7 @@ pub extern "C" fn _start() -> ! {
         {
             let idle=unsafe{!fs_commands::FS.busy()&&!capture_command::CAPTURE.busy()&&!fetch_command::FETCH.busy()&&!update_command::UPDATE.busy()&&!pkg_command::PKG.busy()&&!record_command::RECORD.sending()};
             if unsafe{session_command::SESSION.step(idle,sb)}{unsafe{content_render(&line,sb);}}
+            while let Some((queued,n))=unsafe{session_command::SESSION.take_queued()}{let _=dispatch(&queued[..n],sb,hist,&mut ev);unsafe{content_render(&line,sb);}}
         }
         if unsafe{fs_commands::FS.expired(sex_pdx::get_ticks(),sb)}{unsafe{content_render(&line,sb);}}
         if unsafe{fetch_command::FETCH.step(sb)}{unsafe{content_render(&line,sb);}}
