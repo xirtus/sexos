@@ -133,6 +133,12 @@ jobs:
       run: bash scripts/wifi_host_gate.sh
     - name: Power off and restart through ACPI (host half)
       run: bash scripts/power_host_gate.sh
+    - name: Laptop power model (embedded controller, battery, backlight, thermal, _CRS)
+      run: cargo test --locked -p sex-laptop
+    - name: Touchpad model (I2C HID, report descriptors, contacts, gestures)
+      run: cargo test --locked -p sex-hid-touch
+    - name: DesignWare I2C bus (simulated controller)
+      run: cargo test --locked -p sex-i2c-dw
 
   truth:
     name: Host kernel-model regressions (${{ matrix.shard }}/3)
@@ -291,6 +297,8 @@ jobs:
       run: python3 scripts/power_acpi_gate.py --iso sexos-v1.0.0.iso --out "$RUNNER_TEMP/sexos-power"
     - name: Discrete GPU powered off through ACPI
       run: python3 scripts/dgpu_power_gate.py --iso sexos-v1.0.0.iso --out "$RUNNER_TEMP/sexos-dgpu"
+    - name: Laptop battery, lid, brightness, power profiles and thermal trip through ACPI
+      run: python3 scripts/laptop_power_gate.py --iso sexos-v1.0.0.iso --out "$RUNNER_TEMP/sexos-laptop"
     - name: Lock screen, password and idle dim
       run: |
         truncate -s 1G "$RUNNER_TEMP/lock-source.img"

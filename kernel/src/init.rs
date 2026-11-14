@@ -433,7 +433,7 @@ pub fn init() {
     // Hardware discovery and driver lease routing.
     // Includes XHCI discovery + lease to sexusb (slot SLOT_USB_HOST) when present.
     if sexdrive_id != 0 && sexdisp_id != 0 {
-        crate::devmgr::init(sexdrive_id, sexdisp_id, sexusb_id, sexnet_id, sexbell_id);
+        crate::devmgr::init(sexdrive_id, sexdisp_id, sexusb_id, sexnet_id, sexbell_id, sexinput_id);
     }
 
     // SilkBar delivery path: grant display capability independently of silk-shell.
@@ -986,9 +986,10 @@ pub fn init() {
     // Independent, exact BOOT source for the status-bar publisher. Its bounded
     // read mechanism supplies explicit snapshots; neither timer cadence nor
     // renderer fallback confers civil-time authority.
-    // Power: Shell may ask to shut down or restart, Files flushes first, the bar reads sensors.
+    // Power: Shell may ask to shut down or restart, Files flushes first, the bar and the
+    // panel (Display draws the battery) read sensors.
     for (holder,rights,role) in [(silkshell_id,sex_pdx::power::REQUEST|sex_pdx::power::SENSE,"shell"),
-        (sexfiles_id,sex_pdx::power::FLUSH,"files"),(silkbar_id,sex_pdx::power::SENSE,"bar"),
+        (sexfiles_id,sex_pdx::power::FLUSH,"files"),(silkbar_id,sex_pdx::power::SENSE,"bar"),(sexdisp_id,sex_pdx::power::SENSE,"panel"),
         (sexacpi_id,sex_pdx::power::FIRMWARE,"acpi")] {
         let Some(pd)=(holder!=0).then(||crate::ipc::DOMAIN_REGISTRY.get(holder)).flatten() else {continue};
         assert!(pd.find_capability(sex_pdx::power::SLOT as u32).is_none(),"BOOT_POWER_SLOT_COLLISION");
@@ -996,6 +997,12 @@ pub fn init() {
         if rights&sex_pdx::power::FLUSH!=0 {crate::hal::acpi::set_flusher(holder);}
         if rights&sex_pdx::power::FIRMWARE!=0 {crate::hal::acpi::set_firmware(holder);}
         serial_println!("[boot.power.grant] holder={} role={} slot={} rights={:#x} runtime_mint=0",holder,role,sex_pdx::power::SLOT,rights);
+    }
+    // ACPI finds the touchpad (firmware alone knows its bus and address) and tells Input.
+    if let (true,Some(pd))=(sexinput_id!=0,(sexacpi_id!=0).then(||crate::ipc::DOMAIN_REGISTRY.get(sexacpi_id)).flatten()) {
+        assert!(pd.find_capability(sex_pdx::touchpad::ROUTE_SLOT as u32).is_none(),"BOOT_TOUCHPAD_ROUTE_COLLISION");
+        pd.grant_capability(sex_pdx::touchpad::ROUTE_SLOT,crate::capability::CapabilityData::Domain(sexinput_id));
+        serial_println!("[boot.touchpad.route] from={} to={} slot={}",sexacpi_id,sexinput_id,sex_pdx::touchpad::ROUTE_SLOT);
     }
     let bar_holder=crate::ipc::DOMAIN_REGISTRY.get(silkbar_id).expect("BOOT_BAR_CLOCK_HOLDER");
     let bar_task=bar_holder.main_task.load(core::sync::atomic::Ordering::Acquire);

@@ -2,6 +2,7 @@
 #![no_main]
 
 use sex_pdx::*;
+mod touchpad;
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicBool, Ordering};
 
@@ -606,6 +607,11 @@ pub extern "C" fn _start() -> ! {
             pop_startup_message().or_else(|| pdx_try_listen_raw(0))
         }else{None}) {
             'input_message: {
+            if req.type_id == sex_pdx::touchpad::OP_FOUND {
+                if req.caller_pd == sex_pdx::power::ACPI_SERVICE_PD { touchpad::found([req.arg0, req.arg1, req.arg2]); }
+                else { sex_pdx::serial_record!("[sexinput.touchpad.reject] caller={} reason=sender", req.caller_pd); }
+                break 'input_message;
+            }
             serial_println!("[sexinput.usb_mouse.recv] type={:#x}", req.type_id);
             if (req.type_id == OP_USB_MOUSE_REPORT || req.type_id == OP_USB_KEYBOARD_REPORT)
                 && !usb_report_sender(&req) {
@@ -1269,11 +1275,26 @@ pub extern "C" fn _start() -> ! {
             pdx_call(SLOT_SHELL, OP_AUTODEMO_TICK, 0, 0, 0);
         }
 
+        // The laptop touchpad, when one was found.
+        if pointer_outbox.available() > 0 && keyboard_outbox.available() >= 20 {
+            touchpad::poll(sex_pdx::get_ticks(), |o| match o {
+                touchpad::Out::Pointer(words) => { let _ = input_arrival.pointer(&mut pointer_outbox, &words); }
+                touchpad::Out::Chord(usage, modifiers) => unsafe {
+                    static mut PAD_KEYS: u64 = 0;
+                    static mut PAD_MODIFIERS: u8 = 0;
+                    let (keys, mods) = (&mut *core::ptr::addr_of_mut!(PAD_KEYS), &mut *core::ptr::addr_of_mut!(PAD_MODIFIERS));
+                    let _ = input_arrival.usb(&mut keyboard_outbox, usage as u64, modifiers, keys, mods)
+                        && input_arrival.usb(&mut keyboard_outbox, 0, 0, keys, mods);
+                },
+            });
+        }
+
         // Every source wakes this task: messages (USB reports from the USB service)
         // and PS/2 scancodes (the kernel wakes the input ring's listener). So once
         // boot's timed proofs are over and nothing waits to go to Shell, sleep long;
         // the deadline only bounds a lost wake.
         let idle=tick>IDLE_AFTER_TICKS&&keyboard_outbox.len==0&&pointer_outbox.len==0;
-        let _=sex_pdx::sys_wait_self_ticks(if idle {IDLE_WAIT_TICKS} else {1});
+        // A touchpad is polled: never sleep past its next read.
+        let _=sex_pdx::sys_wait_self_ticks(if idle {touchpad::wait_bound(sex_pdx::get_ticks(),IDLE_WAIT_TICKS)} else {1});
     }
 }

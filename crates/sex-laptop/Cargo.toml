@@ -1,0 +1,9 @@
+[package]
+name = "sex-laptop"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "Laptop power model: embedded controller protocol, battery, backlight, thermal and CPU power profiles"
+
+[lib]
+path = "src/lib.rs"

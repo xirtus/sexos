@@ -14862,6 +14862,12 @@ enum Command {
     FocusProgram = 11,
     ShutDown = 12,
     Restart = 13,
+    BrightnessUp = 14,
+    BrightnessDown = 15,
+    PowerSaver = 16,
+    PowerBalanced = 17,
+    PowerPerformance = 18,
+    Sleep = 19,
 }
 
 /// Static display info for each command in the palette.
@@ -14871,7 +14877,7 @@ struct CommandDef {
 }
 
 /// Daily-driver commands available in the command palette.
-const COMMAND_LIST: [CommandDef; 14] = [
+const COMMAND_LIST: [CommandDef; 20] = [
     CommandDef { command: Command::FocusSpindle, name: "Open Spindle" },
     CommandDef { command: Command::FocusQuil, name: "Open Quil" },
     CommandDef { command: Command::FocusLinen, name: "Open Linen" },
@@ -14886,6 +14892,12 @@ const COMMAND_LIST: [CommandDef; 14] = [
     CommandDef { command: Command::FocusProgram, name: "Run Hello" },
     CommandDef { command: Command::ShutDown, name: "Shut Down" },
     CommandDef { command: Command::Restart, name: "Restart" },
+    CommandDef { command: Command::BrightnessUp, name: "Brightness Up" },
+    CommandDef { command: Command::BrightnessDown, name: "Brightness Down" },
+    CommandDef { command: Command::PowerSaver, name: "Power Saver" },
+    CommandDef { command: Command::PowerBalanced, name: "Balanced Power" },
+    CommandDef { command: Command::PowerPerformance, name: "Performance Power" },
+    CommandDef { command: Command::Sleep, name: "Sleep" },
 ];
 
 /// Whether the command palette overlay is currently open.
@@ -14910,7 +14922,13 @@ fn command_words(cmd: Command) -> &'static str {
         Command::FocusBrowser => "web internet html",
         Command::FocusProgram => "hello app program",
         Command::ShutDown => "power off halt",
-        Command::Restart => "reboot",
+        Command::Restart => "power reboot",
+        Command::BrightnessUp => "screen backlight brighter display",
+        Command::BrightnessDown => "screen backlight dimmer darker display",
+        Command::PowerSaver => "battery profile energy quiet",
+        Command::PowerBalanced => "battery profile energy normal",
+        Command::PowerPerformance => "battery profile fast speed",
+        Command::Sleep => "suspend standby lid power",
     }
 }
 /// COMMAND_LIST indexes that match the query, best first.
@@ -16646,6 +16664,8 @@ fn command_kind_color(cmd: Command) -> u32 {
         Command::FocusBrowser => 0x00205550,        // native Browser teal
         Command::FocusProgram => 0x00504818,
         Command::ShutDown | Command::Restart => 0x00603030,
+        Command::BrightnessUp | Command::BrightnessDown => 0x00605820,
+        Command::PowerSaver | Command::PowerBalanced | Command::PowerPerformance | Command::Sleep => 0x00305830,
     }
 }
 
@@ -16671,6 +16691,8 @@ fn command_palette_selected_accent() -> u32 {
             Command::FocusBrowser => 0x005ED9C3,        // native Browser teal
             Command::FocusProgram => 0x00F9E2AF,
             Command::ShutDown | Command::Restart => 0x00F38BA8,
+            Command::BrightnessUp | Command::BrightnessDown => 0x00F9E2AF,
+            Command::PowerSaver | Command::PowerBalanced | Command::PowerPerformance | Command::Sleep => 0x00A6E3A1,
         }
     }
 }
@@ -16706,6 +16728,7 @@ unsafe fn palette_render_list() {
             Command::MinimizeFocused=>"HIDE CURRENT WINDOW",
             Command::ShutDown=>"SAVE FILES, POWER OFF",
             Command::Restart=>"SAVE FILES, START AGAIN",
+            Command::BrightnessUp|Command::BrightnessDown|Command::PowerSaver|Command::PowerBalanced|Command::PowerPerformance|Command::Sleep=>status,
             _=>status,
         };
         let app=match item.command {
@@ -17374,6 +17397,99 @@ fn power_launcher_status(cmd: Command) -> (bool, &'static str, &'static str) {
     let need = if cmd == Command::Restart { sex_pdx::power::CAN_RESTART } else { sex_pdx::power::CAN_OFF };
     if flags & need != 0 { (true, "ready", "acpi_power") } else { (false, "NOT ON THIS MACHINE", "acpi_power_unavailable") }
 }
+/// Brightness and power profiles: offered where the firmware has ACPI backlight, and where
+/// the CPU takes an energy-performance preference (HWP or CPPC).
+fn laptop_launcher_status(cmd: Command) -> (bool, &'static str, &'static str) {
+    let s = sex_pdx::power::sensors().unwrap_or_default();
+    let flags = sex_pdx::power::info().map_or(0, |i| i.flags);
+    match cmd {
+        Command::Sleep => if s.sleeping { (true, "ASLEEP", "sleeping") } else { (true, "SCREEN OFF, WAKE WITH LID OR POWER", "sleep_available") },
+        Command::BrightnessUp | Command::BrightnessDown => {
+            if s.brightness.is_some() { (true, "SCREEN BRIGHTNESS", "acpi_backlight") } else { (false, "NO ACPI BACKLIGHT", "acpi_backlight_unavailable") }
+        }
+        _ => {
+            let current = match cmd { Command::PowerSaver => sex_pdx::power::PROFILE_SAVER, Command::PowerPerformance => sex_pdx::power::PROFILE_PERFORMANCE, _ => sex_pdx::power::PROFILE_BALANCED };
+            if flags & (sex_pdx::power::HWP | sex_pdx::power::CPPC) == 0 { (true, "CPU HAS NO PREFERENCE", "profile_without_hwp") }
+            else if s.profile == Some(current) { (true, "IN USE", "profile_current") } else { (true, "CPU POWER PROFILE", "profile_available") }
+        }
+    }
+}
+fn laptop_command(cmd: Command) -> bool {
+    use sex_pdx::power as p;
+    if cmd == Command::Sleep { return unsafe { sleep_enter("launcher") }; }
+    let (what, result) = match cmd {
+        Command::BrightnessUp => ("brightness_up", p::control(p::CTL_BRIGHTNESS_STEP, 1)),
+        Command::BrightnessDown => ("brightness_down", p::control(p::CTL_BRIGHTNESS_STEP, 0xFF)),
+        Command::PowerSaver => ("profile_saver", p::control(p::CTL_PROFILE, p::PROFILE_SAVER)),
+        Command::PowerPerformance => ("profile_performance", p::control(p::CTL_PROFILE, p::PROFILE_PERFORMANCE)),
+        _ => ("profile_balanced", p::control(p::CTL_PROFILE, p::PROFILE_BALANCED)),
+    };
+    sex_pdx::serial_record!("[shell.laptop.command] what={} ok={} status={:#x}", what, result.is_ok() as u8, result.err().unwrap_or(0));
+    result.is_ok()
+}
+
+/// Lid and power button. The Shell holds the power button: a press opens the launcher on
+/// the power commands (Shut Down, Restart) instead of turning the machine off at once; a
+/// second press the Shell never took still shuts down (the kernel's fallback).
+static mut LAPTOP_NEXT_POLL: u64 = 0;
+static mut LAPTOP_CLAIMED: bool = false;
+static mut LAPTOP_LID: Option<bool> = None;
+unsafe fn laptop_poll() {
+    let now = sex_pdx::get_ticks();
+    if now < LAPTOP_NEXT_POLL { return; }
+    LAPTOP_NEXT_POLL = now + 250;
+    if !LAPTOP_CLAIMED {
+        LAPTOP_CLAIMED = true;
+        let r = sex_pdx::power::control(sex_pdx::power::CTL_CLAIM_BUTTON, 0);
+        sex_pdx::serial_record!("[shell.power.button.claim] ok={}", r.is_ok() as u8);
+    }
+    let Ok(s) = sex_pdx::power::sensors() else { return };
+    if s.lid_open != LAPTOP_LID {
+        if let (Some(was), Some(open)) = (LAPTOP_LID, s.lid_open) {
+            if was != open { lid_changed(open); }
+        }
+        LAPTOP_LID = s.lid_open;
+    }
+    if s.button_pressed {
+        if LAPTOP_SLEEPING { sleep_exit("power_button"); } else { power_button_dialog(); }
+    }
+}
+
+/// Suspend to idle: the ACPI service runs the firmware's low-power-idle entry (screen
+/// off, then sleep entry), the panel goes dark, the CPUs prefer saving energy. The lid
+/// opening or the power button wakes the desktop.
+static mut LAPTOP_SLEEPING: bool = false;
+unsafe fn sleep_enter(by: &str) -> bool {
+    if LAPTOP_SLEEPING { return true; }
+    if COMMAND_PALETTE_OPEN { toggle_command_palette(); }
+    let r = sex_pdx::power::control(sex_pdx::power::CTL_SLEEP, 1);
+    LAPTOP_SLEEPING = r.is_ok();
+    sex_pdx::serial_record!("[shell.sleep] enter=1 by={} ok={}", by, r.is_ok() as u8);
+    r.is_ok()
+}
+unsafe fn sleep_exit(by: &str) {
+    if !LAPTOP_SLEEPING { return; }
+    let r = sex_pdx::power::control(sex_pdx::power::CTL_SLEEP, 0);
+    LAPTOP_SLEEPING = false;
+    sex_pdx::serial_record!("[shell.sleep] enter=0 by={} ok={}", by, r.is_ok() as u8);
+}
+/// The lid closed or opened. A lock screen (when there is one) locks here; until then the
+/// launcher closes so nothing typed blind runs, and the change is logged.
+unsafe fn lid_changed(open: bool) {
+    let closed_launcher = !open && COMMAND_PALETTE_OPEN && toggle_command_palette();
+    sex_pdx::serial_record!("[shell.lid] open={} launcher_closed={}", open as u8, closed_launcher as u8);
+    if open { sleep_exit("lid"); } else { sleep_enter("lid"); }
+}
+/// The power dialog: the launcher opens with Shut Down selected (Restart is the next row);
+/// Enter shuts down, Esc closes it.
+unsafe fn power_button_dialog() {
+    if !COMMAND_PALETTE_OPEN { toggle_command_palette(); }
+    PALETTE_QUERY.clear();
+    if let Some(i) = COMMAND_LIST.iter().position(|c| c.command == Command::ShutDown) { COMMAND_PALETTE_SELECTED = i as u8; }
+    palette_render_list();
+    sex_pdx::serial_record!("[shell.power.dialog] open=1 selected={}", COMMAND_LIST[COMMAND_PALETTE_SELECTED as usize % COMMAND_LIST.len()].name);
+}
+
 /// Set while the palette runs a command because the user pressed Enter.
 static mut PALETTE_FROM_KEY: bool = false;
 unsafe fn palette_execute_from_key() -> bool {
@@ -17396,6 +17512,7 @@ fn palette_item_status(cmd: Command) -> (bool, &'static str, &'static str) {
         Command::FocusBrowser => browser_launcher_status(),
         Command::FocusProgram => program_launcher_status(),
         Command::ShutDown | Command::Restart => power_launcher_status(cmd),
+        Command::BrightnessUp | Command::BrightnessDown | Command::PowerSaver | Command::PowerBalanced | Command::PowerPerformance | Command::Sleep => laptop_launcher_status(cmd),
         Command::FocusLinen => {
             (true, "nonblocking_ready", "linen_fast_paint_nonblocking")
         }
@@ -17483,6 +17600,7 @@ unsafe fn palette_execute_selected() -> bool {
             false
         }
         Command::ShutDown | Command::Restart => palette_power(cmd),
+        Command::BrightnessUp | Command::BrightnessDown | Command::PowerSaver | Command::PowerBalanced | Command::PowerPerformance | Command::Sleep => laptop_command(cmd),
         Command::FocusProgram => {
             let open_ok=open_program_in_active_scene();
             sex_pdx::serial_record!("[shell.palette.focus.result] target=PROGRAM ok={}",open_ok as u8);
@@ -20743,7 +20861,8 @@ unsafe fn maybe_run_palette_rejects_app_open_batch_proof() {
 
     for idx in 0..COMMAND_LIST.len() {
         // The proof opens and closes apps; it never turns the machine off.
-        if matches!(COMMAND_LIST[idx].command, Command::ShutDown | Command::Restart) {
+        if matches!(COMMAND_LIST[idx].command, Command::ShutDown | Command::Restart | Command::BrightnessUp | Command::BrightnessDown
+            | Command::PowerSaver | Command::PowerBalanced | Command::PowerPerformance | Command::Sleep) {
             skipped = skipped.saturating_add(1);
             continue;
         }
@@ -20824,7 +20943,8 @@ unsafe fn maybe_run_palette_rejects_app_open_batch_proof() {
             Command::FocusProgram => {
                 palette_batch_emit_app_focus("Program",0,ok,if ok{"ok"}else{"open_or_focus_reject"});
             }
-            Command::ZoomToggle | Command::MinimizeFocused | Command::ShutDown | Command::Restart => {}
+            Command::ZoomToggle | Command::MinimizeFocused | Command::ShutDown | Command::Restart | Command::BrightnessUp | Command::BrightnessDown
+            | Command::PowerSaver | Command::PowerBalanced | Command::PowerPerformance | Command::Sleep => {}
         }
 
         if ok { passed = passed.saturating_add(1); } else { rejected = rejected.saturating_add(1); }
@@ -25538,7 +25658,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { program_resize_flush(); }
         // Held keys: the repeat goes ahead of the queue drain below.
         unsafe { key_repeat_poll(); }
-        unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); display_scale_poll(); shell_close_poll(); shell_memory_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); notification_poll(); }
+        unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); display_scale_poll(); shell_close_poll(); shell_memory_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); notification_poll(); laptop_poll(); }
         // Retain failed notification attempts while continuing normal receives.
         // Success means enqueue only; sexinput validates caller and version.
         if shell_ready_publisher.poll() {
@@ -26229,6 +26349,8 @@ pub extern "C" fn _start() -> ! {
         };
         // Display started again after a crash: it knows nothing of the desktop, so show it again.
         if sex_pdx::display_ready::is_display_ready(&msg) { unsafe { display_came_back(); } config_watch::display_restarted(); lock::display_restarted(); continue; }
+        // The kernel: the power button or the lid. Read the sensors now.
+        if msg.type_id == sex_pdx::power::OP_EVENT && msg.caller_pd == 0 { unsafe { LAPTOP_NEXT_POLL = 0; laptop_poll(); } continue; }
         // The kernel's critical-memory word: the poll above acts on it.
         if msg.type_id == sex_pdx::program_memory::OP_PRESSURE && msg.caller_pd == 0 { unsafe { MEMORY_LAST_LOOK = 0; } continue; }
         unsafe {

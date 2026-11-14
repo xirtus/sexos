@@ -4007,6 +4007,27 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   password gets no confirm.
 - **ABI / kernel:** none.
 
+## Laptop power: battery, lid, brightness, profiles, thermal (2026-11-13)
+
+Embedded controller driver and firmware events in sexacpi (vendored acpi crate now calls region
+handlers and `Notify`), battery percent and time left in the panel, lid and power-button events
+to the Shell (power dialog), ACPI brightness with Fn keys and launcher commands, HWP/CPPC power
+profiles, clean shut down on a critical thermal zone or battery. Touchpad protocol, descriptor
+parser and gestures as a host-tested crate. Details: `LAPTOP_POWER_2026_11_13.md`.
+
+## Laptop touchpad over I2C (2026-11-13)
+
+DesignWare I2C master crate (`sex-i2c-dw`), BOOT lease of Intel Serial IO I2C functions to
+Input, sexacpi describes the `PNP0C50` touchpad (`_CRS`, `_DSM`, `_ADR`, `FMCN`) and hands it
+to Input, which brings the pad into touchpad mode and turns frames into pointer, click,
+scroll, Alt+Tab swipe and pinch-zoom events. Polled for now. Details:
+`LAPTOP_POWER_2026_11_13.md` (Touchpad section).
+
+## Sleep: lid close and launcher Sleep (2026-11-13)
+
+Suspend to idle: the lid or the launcher puts the desktop to sleep, the lid or power button
+wakes it. Firmware low-power-idle `_DSM` (Intel and Microsoft), panel dark, cores prefer
+energy. Details: `LAPTOP_POWER_2026_11_13.md` (Sleep section).
 ## Settings store, slice B1: `sex-config` kept by Files (2026-11-13)
 - **What:** new `crates/sex-config`: one typed schema of 18 settings (appearance,
   desktop, display, keyboard, sound, time, session, setup) with stable numbers, ranges
