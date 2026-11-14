@@ -29,6 +29,7 @@ crates = [
   "sex-kernel",
   "servers/sexbell/Cargo.toml",
   "servers/sexacpi/Cargo.toml",
+  "servers/denim/Cargo.toml",
   "servers/sexdisplay/Cargo.toml",
   "apps/sexdrive/Cargo.toml",
   "servers/silk-shell/Cargo.toml",
@@ -47,11 +48,13 @@ crates = [
   "apps/hello/Cargo.toml",
   "apps/fortune/Cargo.toml",
   "apps/hum/Cargo.toml",
+  "apps/moan-probe/Cargo.toml",
   "apps/jot/Cargo.toml",
   "apps/term/Cargo.toml",
   "apps/quil/Cargo.toml",
   "apps/files/Cargo.toml",
   "apps/peek/Cargo.toml",
+  "apps/shuttle/Cargo.toml",
   "apps/talk/Cargo.toml",
   "apps/view/Cargo.toml",
   "apps/heaptest/Cargo.toml",
@@ -74,8 +77,11 @@ crates = [
   "apps/pdf/Cargo.toml",
   "apps/sex-calc/Cargo.toml",
   "apps/calendar/Cargo.toml",
+  "apps/spreadeagle/Cargo.toml",
+  "apps/assuit/Cargo.toml",
   "apps/settings/Cargo.toml",
   "apps/aftercare/Cargo.toml",
+  "apps/crush/Cargo.toml",
   "apps/lua/Cargo.toml",
   "apps/rg/Cargo.toml",
   "apps/fd/Cargo.toml",
@@ -83,7 +89,19 @@ crates = [
   "apps/python/Cargo.toml",
   "apps/store/Cargo.toml",
   "apps/sdltest/Cargo.toml",
-  "apps/driftspark/Cargo.toml"
+  "apps/driftspark/Cargo.toml",
+  "servers/cufflinks/Cargo.toml",
+  "apps/dragtest/Cargo.toml",
+  "apps/lurk/Cargo.toml",
+  "apps/bodice/Cargo.toml",
+  "apps/gossip/Cargo.toml",
+  "apps/hookup/Cargo.toml",
+  "apps/rendezvous/Cargo.toml",
+  "servers/sexuvc/Cargo.toml",
+  "apps/flash/Cargo.toml",
+  "apps/climax/Cargo.toml",
+  "apps/batik/Cargo.toml",
+  "apps/burlesque/Cargo.toml"
 ]
 
 [[stage]]
@@ -198,6 +216,14 @@ dest_artifact = "iso_root/servers/sexacpi"
 rustflags = ""
 
 [[stage]]
+id = "build_denim"
+action = "cargo_manifest"
+manifest = "servers/denim/Cargo.toml"
+source_artifact = "target/x86_64-sex/release/denim"
+dest_artifact = "iso_root/servers/denim"
+rustflags = ""
+
+[[stage]]
 id = "build_sexfiles"
 action = "cargo_manifest"
 manifest = "servers/sexfiles/Cargo.toml"
@@ -275,7 +301,7 @@ action = "cargo_manifest"
 target = "x86_64-sex-app.json"
 manifest = "apps/files/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/files"
-dest_artifact = "iso_root/programs/files"
+dest_artifact = "iso_root/programs/loom"
 
 [[stage]]
 id = "build_peek"
@@ -284,6 +310,14 @@ target = "x86_64-sex-app.json"
 manifest = "apps/peek/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/peek"
 dest_artifact = "iso_root/programs/peek"
+
+[[stage]]
+id = "build_shuttle"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/shuttle/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/shuttle"
+dest_artifact = "iso_root/programs/shuttle"
 
 [[stage]]
 id = "build_talk"
@@ -299,7 +333,7 @@ action = "cargo_manifest"
 target = "x86_64-sex-app.json"
 manifest = "apps/view/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/view"
-dest_artifact = "iso_root/programs/view"
+dest_artifact = "iso_root/programs/gaze"
 
 [[stage]]
 id = "build_settings"
@@ -307,7 +341,7 @@ action = "cargo_manifest"
 target = "x86_64-sex-app.json"
 manifest = "apps/settings/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/settings"
-dest_artifact = "iso_root/programs/settings"
+dest_artifact = "iso_root/programs/tatami"
 
 [[stage]]
 id = "build_heaptest"
@@ -520,6 +554,33 @@ manifest = "apps/driftspark/Cargo.toml"
 source_artifact = "target/x86_64-sex-std/release/driftspark"
 dest_artifact = "iso_root/programs/driftspark"
 
+# Drag test: the smallest VMM, a real-mode guest through syscall 110 (sex_pdx::vm).
+[[stage]]
+id = "build_dragtest"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/dragtest/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/dragtest"
+dest_artifact = "iso_root/programs/dragtest"
+
+# Bodice: e-books (EPUB, FictionBook, comics), on sex-app with sex-ebook.
+[[stage]]
+id = "build_bodice"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/bodice/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/bodice"
+dest_artifact = "iso_root/programs/bodice"
+
+# Gossip: feeds and podcasts (RSS, Atom, OPML), on sex-app with sex-feed.
+[[stage]]
+id = "build_gossip"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/gossip/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/gossip"
+dest_artifact = "iso_root/programs/gossip"
+
 # PDF: the first ordinary std app, hayro rendering pages into the window.
 [[stage]]
 id = "build_pdf"
@@ -539,6 +600,46 @@ build_std = "std,panic_abort"
 manifest = "apps/aftercare/Cargo.toml"
 source_artifact = "target/x86_64-sex-std/release/aftercare"
 dest_artifact = "iso_root/programs/aftercare"
+
+# Hookup: the phone link (KDE Connect protocol, crates/sex-kdeconnect) over std::net.
+[[stage]]
+id = "build_hookup"
+action = "cargo_manifest"
+target = "x86_64-sex-std.json"
+build_std = "std,panic_abort"
+manifest = "apps/hookup/Cargo.toml"
+source_artifact = "target/x86_64-sex-std/release/hookup"
+dest_artifact = "iso_root/programs/hookup"
+
+# Rendezvous: maps (vector tiles, search, routes, offline regions; crates/sex-map).
+[[stage]]
+id = "build_rendezvous"
+action = "cargo_manifest"
+target = "x86_64-sex-std.json"
+build_std = "std,panic_abort"
+manifest = "apps/rendezvous/Cargo.toml"
+source_artifact = "target/x86_64-sex-std/release/rendezvous"
+dest_artifact = "iso_root/programs/rendezvous"
+
+# Spreadeagle: the spreadsheet, GridCraft's engine (formulas, xlsx) under a native grid.
+[[stage]]
+id = "build_spreadeagle"
+action = "cargo_manifest"
+target = "x86_64-sex-std.json"
+build_std = "std,panic_abort"
+manifest = "apps/spreadeagle/Cargo.toml"
+source_artifact = "target/x86_64-sex-std/release/spreadeagle"
+dest_artifact = "iso_root/programs/spreadeagle"
+
+# Assuit: the word processor, WordCraft's engine (docx, Word layout, undo) drawing its pages.
+[[stage]]
+id = "build_assuit"
+action = "cargo_manifest"
+target = "x86_64-sex-std.json"
+build_std = "std,panic_abort"
+manifest = "apps/assuit/Cargo.toml"
+source_artifact = "target/x86_64-sex-std/release/assuit"
+dest_artifact = "iso_root/programs/assuit"
 
 [[stage]]
 id = "build_play"
@@ -578,6 +679,16 @@ id = "stage_pinball"
 action = "copy_file"
 src = "target/x86_64-sex-app/release/pinball"
 dst = "iso_root/programs/pinball"
+
+
+# Moan engine guest proof; UI follows the shared Weft toolkit.
+[[stage]]
+id = "build_moan_probe"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/moan-probe/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/moan-probe"
+dest_artifact = "iso_root/programs/moan-probe"
 
 [[stage]]
 id = "build_hum"
@@ -620,12 +731,49 @@ manifest = "apps/hum/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/doze"
 dest_artifact = "iso_root/programs/doze"
 
+# Lurk: the remote desktop viewer (VNC/RFB client), `run +net lurk HOST:PORT`.
+[[stage]]
+id = "build_lurk"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/lurk/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/lurk"
+dest_artifact = "iso_root/programs/lurk"
+
 [[stage]]
 id = "build_sext"
 action = "cargo_manifest"
 manifest = "servers/sext/Cargo.toml"
 source_artifact = "target/x86_64-sex/release/sext"
 dest_artifact = "iso_root/servers/sext"
+
+# Cufflinks (Bluetooth host stack): built, not started by BOOT yet (needs a BOOT row
+# and the sex_pdx::bt_hci region grants). docs/handoff/CUFFLINKS_BLUETOOTH_2026_11_14.md
+[[stage]]
+id = "build_cufflinks"
+action = "cargo_manifest"
+manifest = "servers/cufflinks/Cargo.toml"
+source_artifact = "target/x86_64-sex/release/cufflinks"
+dest_artifact = "iso_root/servers/cufflinks"
+rustflags = "--cfg aes_force_soft"
+
+# SexUVC: userspace USB Video Class webcam driver server
+[[stage]]
+id = "build_sexuvc"
+action = "cargo_manifest"
+target = "x86_64-sex.json"
+manifest = "servers/sexuvc/Cargo.toml"
+source_artifact = "target/x86_64-sex/release/sexuvc"
+dest_artifact = "iso_root/servers/sexuvc"
+
+# Flash: UVC camera capture app (photo and Splicy WebM video)
+[[stage]]
+id = "build_flash"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/flash/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/flash"
+dest_artifact = "iso_root/programs/flash"
 
 [[stage]]
 id = "build_sex_calc"
@@ -642,6 +790,40 @@ target = "x86_64-sex-app.json"
 manifest = "apps/calendar/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/calendar"
 dest_artifact = "iso_root/programs/calendar"
+# Climax: benchmark and thermal torture suite window.
+[[stage]]
+id = "build_climax"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/climax/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/climax"
+dest_artifact = "iso_root/programs/climax"
+
+# Batik image editor and digital painting app on Weft.
+[[stage]]
+id = "build_batik"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/batik/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/batik"
+dest_artifact = "iso_root/programs/batik"
+
+# Burlesque presentations app on Weft.
+[[stage]]
+id = "build_burlesque"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/burlesque/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/burlesque"
+dest_artifact = "iso_root/programs/burlesque"
+
+[[stage]]
+id = "build_crush"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/crush/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/crush"
+dest_artifact = "iso_root/programs/crush"
 
 [[stage]]
 id = "copy_limine_cfg"

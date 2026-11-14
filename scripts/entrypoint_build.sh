@@ -63,6 +63,7 @@ ABI_INPUTS=(
   crates/sex-pdx/src/program_store.rs
   crates/sex-pdx/src/crash_log.rs
   crates/sex-pdx/src/program_memory.rs
+  crates/sex-pdx/src/denim.rs
   crates/sex-pdx/src/fs.rs
   crates/sex-pdx/src/web.rs
   crates/sex-pdx/src/text_selection.rs
@@ -89,6 +90,8 @@ ABI_INPUTS=(
   kernel/src/ipc/reply_credit.rs
   kernel/src/ipc/sender.rs
   kernel/src/ipc/router.rs
+  kernel/src/vmx.rs
+  crates/sex-pdx/src/vm.rs
 )
 
 if [[ "$#" -ne 0 ]]; then
