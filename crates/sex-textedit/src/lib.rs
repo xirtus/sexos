@@ -6,7 +6,11 @@
 #![no_std]
 extern crate alloc;
 
+pub mod encoding;
 pub mod find;
+pub mod markdown;
+pub mod session;
+pub mod wrap;
 pub mod highlight;
 pub mod undo;
 
@@ -186,6 +190,8 @@ impl Doc {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Motion { Left, Right, WordLeft, WordRight, Up, Down, Home, End, PageUp(usize), PageDown(usize), Start, End_, To(usize) }
 
+/// FNV-1a, for checksums and save markers.
+pub fn fnv(bytes: &[u8]) -> u64 { bytes.iter().fold(0xcbf29ce484222325u64, |h, b| (h ^ *b as u64).wrapping_mul(0x100000001b3)) }
 pub fn chars(s: &[u8]) -> usize { s.iter().filter(|b| (**b & 0xC0) != 0x80).count() }
 pub fn next_char(s: &[u8], at: usize) -> usize {
     if at >= s.len() { return s.len(); }
