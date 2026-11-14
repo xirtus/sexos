@@ -58,6 +58,16 @@ class TLSPlatform(unittest.TestCase):
         workspace['patch'] = {'crates-io': {'embedded-tls': {'path': '/tmp/replacement'}}}
         self.assertTrue(gate.check_manifests(TLS, workspace, APP))
 
+    def test_vault_patch_paths_remain_exact_and_cannot_add_tls_override(self):
+        for name in ('keepass', 'rust-argon2'):
+            for replacement in ({'path': '/tmp/replacement'}, {'git': 'https://example.org/fork'}):
+                workspace = copy.deepcopy(WORKSPACE)
+                workspace['patch']['crates-io'][name] = replacement
+                self.assertTrue(gate.check_manifests(TLS, workspace, APP, TRUST))
+        workspace = copy.deepcopy(WORKSPACE)
+        workspace['patch']['crates-io']['embedded-tls'] = {'path': '/tmp/replacement'}
+        self.assertTrue(gate.check_manifests(TLS, workspace, APP, TRUST))
+
     def test_workspace_or_app_cannot_bypass_reviewed_crate(self):
         workspace = copy.deepcopy(WORKSPACE)
         workspace['workspace']['members'].remove('crates/sex-tls')

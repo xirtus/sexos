@@ -102,7 +102,11 @@ def check_manifests(tls, workspace, app, trust=None):
                                       'ignore': {'path': 'vendor/ignore-0.4.34'},
                                       'console': {'path': 'vendor/console-0.16.6'},
                                       'path_abs': {'path': 'vendor/path_abs-0.5.1'},
-                                      'clircle': {'path': 'vendor/clircle-0.6.1'}}}
+                                      'clircle': {'path': 'vendor/clircle-0.6.1'},
+                                      # Chastity-only KDF wiping and bounded KDBX expansion;
+                                      # neither package occurs in sex-tls's target graph.
+                                      'keepass': {'path': 'vendor/keepass-0.17.0'},
+                                      'rust-argon2': {'path': 'vendor/rust-argon2-3.0.0'}}}
     if workspace.get('patch') and workspace.get('patch') != reviewed_patches:
         errors.append('workspace dependency replacement needs TLS policy review: patch')
     if workspace.get('replace'):
