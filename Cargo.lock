@@ -3202,6 +3202,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "spindle-panes"
+version = "0.1.0"
+
+[[package]]
 name = "spinning_top"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3349,6 +3353,7 @@ dependencies = [
  "sex-pdx",
  "sex-vt",
  "sex-wasm",
+ "spindle-panes",
 ]
 
 [[package]]

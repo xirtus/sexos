@@ -9,6 +9,9 @@ wasm32-wasip1) running behind a terminal stream, reading lines typed into it.
 * `write`, `cat`, `mkdir`, `cd`, `ls`: files in Term's own folder, seen on screen.
 * `greet Andreas`: the guest prints, reads words until an empty line, counts them and
   exits 5; its output reaches the screen through the stream.
+* Tabs and split panes (P1): Ctrl+Shift+E splits, each pane keeps its own output and
+  folder, Ctrl+Shift+arrows move the focus, Ctrl+Shift+T opens a tab and Ctrl+PageUp goes
+  back, Ctrl+Shift+Z zooms, Ctrl+Shift+W closes a pane, `exit` closes another.
 * Closing the window ends Term; a second run starts clean.
 * `run stdhello vt`: an ordinary Rust std program prints escape sequences, so its console
   window becomes the same terminal; the cursor position report it asks for comes back on
@@ -34,6 +37,7 @@ def main():
    if k in SHIFTED or k.isupper():q.cmd('send-key',{'keys':[{'type':'qcode','data':'shift'},{'type':'qcode','data':SHIFTED.get(k,k.lower())}],'hold-time':80})
    else:q.key(KEYS.get(k,k))
    time.sleep(.05)
+ def chord(*names):q.cmd('send-key',{'keys':[{'type':'qcode','data':n} for n in names],'hold-time':80});time.sleep(.3)
  def spindle(line):g['focus'](153);time.sleep(.5);keys(line);q.key('ret')
  def term_line(line):keys(line);q.key('ret')
  def snapshot():
@@ -68,6 +72,29 @@ def main():
   time.sleep(1);rows=snapshot();screen='\n'.join(rows.values())
   for want in ['Hello, Andreas, from Rust on Wasm.','a: 1','b: 2','[greet exited with 5]']:assert want in screen,(want,screen)
   q.cmd('screendump',{'filename':str(a.out/'term-greet.ppm')})
+  # Tabs and split panes: two programs side by side, each pane keeps its output.
+  s=len(t());chord('ctrl','shift','e');m=g['wait'](r'\[term\.pane\.split\] from=(\d+) pane=(\d+) across=1',s,30)
+  left,right=int(m[1]),int(m[2]);g['wait'](rf'\[term\.panes\] tabs=1 active=0 focus={right} zoomed=0 {left}:\d+x\d+\+0\+0 {right}:',s,30)
+  term_line('cd notes');s=len(t());term_line('greet Pane');g['wait'](r'\[term\.job\.start\] name=greet',s,60);time.sleep(3)
+  rows=snapshot();screen='\n'.join(rows.values());assert 'Hello, Pane, from Rust on Wasm.' in screen and 'buy milk' not in screen,screen
+  s=len(t());chord('ctrl','shift','left');g['wait'](rf'\[term\.panes\] tabs=1 active=0 focus={left} ',s,30)
+  term_line('echo left-pane');rows=snapshot();screen='\n'.join(rows.values())
+  assert 'left-pane' in screen and 'buy milk' in screen and 'Hello, Pane' not in screen,screen
+  # The guest in the right pane still runs and ends there.
+  s=len(t());chord('ctrl','shift','right');g['wait'](rf'\[term\.panes\] tabs=1 active=0 focus={right} ',s,30)
+  q.key('ret');m=g['wait'](r'\[term\.job\.exit\] name=greet code=(-?\d+)',s,120);assert m[1]=='0',m[0]
+  rows=snapshot();screen='\n'.join(rows.values());assert '~/notes >' in screen,screen
+  s=len(t());chord('ctrl','shift','z');g['wait'](rf'\[term\.panes\] tabs=1 active=0 focus={right} zoomed=1 {right}:',s,30)
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'spindle-zoomed.ppm')});chord('ctrl','shift','z')
+  s=len(t());chord('ctrl','shift','t');m=g['wait'](r'\[term\.tab\.open\] tabs=2 pane=(\d+)',s,30);third=int(m[1])
+  g['wait'](rf'\[term\.panes\] tabs=2 active=1 focus={third} ',s,30);term_line('echo third-tab');time.sleep(1)
+  q.cmd('screendump',{'filename':str(a.out/'spindle-tabs.ppm')})
+  s=len(t());chord('ctrl','pgup');g['wait'](rf'\[term\.panes\] tabs=2 active=0 focus={right} ',s,30)
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'spindle-split.ppm')})
+  s=len(t());chord('ctrl','shift','w');g['wait'](rf'\[term\.pane\.gone\] pane={right} panes=2 tabs=2',s,30)
+  g['wait'](rf'\[term\.panes\] tabs=2 active=0 focus={left} zoomed=0 {left}:\d+x\d+\+0\+\d+$',s,30) if False else g['wait'](rf'\[term\.panes\] tabs=2 active=0 focus={left} zoomed=0 {left}:',s,30)
+  s=len(t());chord('ctrl','pgdn');g['wait'](rf'\[term\.panes\] tabs=2 active=1 focus={third} ',s,30)
+  term_line('exit');g['wait'](rf'\[term\.pane\.gone\] pane={third} panes=1 tabs=1',s,30)
   s=len(t());q.key('f11');g['wait'](r'\[term\.closed\] how=window',s,60);g['wait'](rf'\[app\.private\.retired\] target={target} task={task} ',s,120)
   # A second run starts clean.
   target,task=start();rows=snapshot();assert any('Type help' in r or 'Type' in r for r in rows.values()),rows

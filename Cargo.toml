@@ -81,6 +81,7 @@ members = [
     "crates/sex-pkg",
     "crates/sex-wasm",
     "crates/sex-vt",
+    "crates/spindle-panes",
     "crates/sex-textedit",
     "apps/spindle",
     "crates/sex-std",

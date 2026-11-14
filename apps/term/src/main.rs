@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Term: a terminal. A VT100/xterm screen (crates/sex-vt) drawn in Geist Mono, with
-//! scrollback, mouse selection, copy and paste, and a small command line of its own for
-//! the files in its folder.
+//! Spindle's terminal window (the `term` program): tabs of split panes, each a
+//! VT100/xterm screen (crates/sex-vt) drawn in Geist Mono, with scrollback, mouse
+//! selection, copy and paste, and a small command line of its own for the files in its
+//! folder. The tabs and the split tree are `spindle-panes`; each pane draws into its own
+//! pixels, which the window copies into place.
 //!
 //! Command-line programs run inside it as Wasm guests (crates/sex-wasm): `NAME.wasm`
 //! files in the current folder, or the built-in `greet`. A guest runs on a worker and
@@ -24,6 +26,7 @@
 
 extern crate alloc;
 
+use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::{format, vec};
@@ -33,6 +36,7 @@ use sex_pdx::stream::{Side, Stream};
 use sex_vt::keys::{self, Key, Mods};
 use sex_vt::render::{cell_for_height, Cache, Painter};
 use sex_vt::{Parser, Screen};
+use spindle_panes::{Divider, PaneId, Rect, Split, Tabs, Toward};
 
 /// `crates/sex-wasm/guests/greet`: Rust's std built for wasm32-wasip1.
 const GREET: &[u8] = include_bytes!("../../../crates/sex-wasm/tests/greet.wasm");
@@ -65,37 +69,45 @@ struct Job {
 /// How long a program may take to start before Term gives up on it.
 const START_MS: u64 = 20_000;
 
-struct Term {
+/// One pane: a screen, its own command line and the program running in it.
+struct Pane {
     screen: Screen,
     parser: Parser,
     painter: Painter,
+    /// The pane's size in pixels, and its pixels (drawn here, then copied into the window).
     width: usize,
     height: usize,
+    buf: Vec<u32>,
     cell_h: usize,
+    /// `exit` or Ctrl+D on an empty line: the window closes this pane.
+    closed: bool,
     cwd: Vec<u8>,
     line: Vec<u8>,
     at: usize,
     history: Vec<Vec<u8>>,
     recall: Option<usize>,
-    clipboard: Vec<u8>,
     job: Option<Job>,
     /// Where a mouse drag started.
     drag: Option<sex_vt::Point>,
+    /// Whether the last drawing showed the cursor as focused.
+    focused_drawn: bool,
+    /// The title the program set (OSC 0/2).
+    osc_title: Option<String>,
     last_click: (u64, usize, usize),
     /// A carriage return was the last byte fed, so a following newline is not doubled.
     after_cr: bool,
 }
 
-impl Term {
-    fn new(width: usize, height: usize) -> Term {
-        let cell_h = 18;
+impl Pane {
+    fn new(width: usize, height: usize, cell_h: usize) -> Pane {
         let (cw, ch) = cell_for_height(cell_h);
         let painter = Painter::new(cw, ch);
+        let (width, height) = (width.max(32), height.max(32));
         let (cols, rows) = painter.grid(width, height);
-        Term {
-            screen: Screen::new(cols, rows), parser: Parser::new(), painter, width, height, cell_h,
-            cwd: Vec::new(), line: Vec::new(), at: 0, history: Vec::new(), recall: None, clipboard: Vec::new(),
-            job: None, drag: None, last_click: (0, usize::MAX, usize::MAX), after_cr: false,
+        Pane {
+            screen: Screen::new(cols, rows), parser: Parser::new(), painter, width, height, buf: vec![sex_vt::DEFAULT_BG; width * height], cell_h, closed: false,
+            cwd: Vec::new(), line: Vec::new(), at: 0, history: Vec::new(), recall: None,
+            job: None, drag: None, focused_drawn: false, osc_title: None, last_click: (0, usize::MAX, usize::MAX), after_cr: false,
         }
     }
     /// Program output: lone newlines become CR LF, as a terminal's output processing does.
@@ -113,15 +125,18 @@ impl Term {
     }
     fn say(&mut self, text: &str) { self.out(text.as_bytes()); }
     fn resize(&mut self, width: usize, height: usize) {
-        self.width = width.max(32);
-        self.height = height.max(32);
+        let (width, height) = (width.max(32), height.max(32));
+        if (width, height) == (self.width, self.height) { return; }
+        self.width = width;
+        self.height = height;
+        self.buf = vec![sex_vt::DEFAULT_BG; width * height];
         let (cols, rows) = self.painter.grid(self.width, self.height);
         self.screen.resize(cols, rows);
         if let Some(Job { runner: Runner::Guest(g), .. }) = &self.job { g.stream.set_size(cols as u32, rows as u32); }
         self.screen.mark_all_dirty();
     }
-    fn zoom(&mut self, step: isize) {
-        let h = (self.cell_h as isize + step).clamp(10, 48) as usize;
+    /// A new text size: `h` pixels per cell.
+    fn set_cell_height(&mut self, h: usize) {
         if h == self.cell_h { return; }
         self.cell_h = h;
         let (cw, ch) = cell_for_height(h);
@@ -130,18 +145,27 @@ impl Term {
         self.width = 0;
         self.resize(w, h);
     }
-    fn draw(&mut self, window: &mut Window, focused: bool) {
-        if let Some(title) = self.screen.take_title() { let t: Vec<u8> = title.to_vec(); window.title(&t); }
+    /// Draws the rows that changed into the pane's pixels. True if any did.
+    fn draw(&mut self, focused: bool) -> bool {
+        if let Some(t) = self.screen.take_title() { self.osc_title = Some(String::from_utf8_lossy(t).into_owned()); }
         let dirty = self.screen.take_dirty();
-        if !dirty.iter().any(|d| *d) { return; }
-        let pixels = window.pixels();
+        if !dirty.iter().any(|d| *d) && self.focused_drawn == focused { return false; }
+        let dirty = if self.focused_drawn != focused { Vec::new() } else { dirty };
+        self.focused_drawn = focused;
         let (w, h) = (self.width, self.height);
         let cache = unsafe { &mut *core::ptr::addr_of_mut!(CACHE) };
-        self.painter.draw(&self.screen, &dirty, cache, &mut pixels[..w * h], w, focused);
+        self.painter.draw(&self.screen, &dirty, cache, &mut self.buf[..w * h], w, focused);
         // Below the last whole row, the terminal's background.
         let used = self.screen.rows() * self.painter.cell_h;
-        if used < h { pixels[used * w..h * w].fill(sex_vt::DEFAULT_BG); }
-        window.show_pixels(w, h);
+        if used < h { self.buf[used * w..h * w].fill(sex_vt::DEFAULT_BG); }
+        true
+    }
+    /// The pane's title: what its program asked for, else the running program's name,
+    /// else its folder.
+    fn title(&self) -> String {
+        if let Some(t) = &self.osc_title { return t.clone(); }
+        if let Some(job) = &self.job { return job.name.clone(); }
+        format!("~/{}", core::str::from_utf8(&self.cwd).unwrap_or("?"))
     }
 
     // ---- The command line ----
@@ -239,8 +263,19 @@ impl Term {
                 }
                 sex_pdx::serial_record!("[term.snapshot] rows={} history={}", self.screen.rows(), self.screen.history_len());
             }
-            b"exit" => { sex_pdx::serial_record!("[term.closed] how=exit"); sex_pdx::task_finish(0) }
+            b"exit" => { sex_pdx::serial_record!("[term.pane.closed] how=exit"); self.closed = true; }
             _ => self.start(window, cmd, args),
+        }
+    }
+    /// The pane is closing: whatever runs in it is told to stop and loses its input.
+    fn stop(&mut self) {
+        let Some(job) = self.job.take() else { return };
+        sex_pdx::serial_record!("[term.job.stop] name={}", job.name);
+        match job.runner {
+            // The worker finishes on its own once its input is gone; its memory stays
+            // until then (the stream lives in it), so it is left behind on purpose.
+            Runner::Guest(g) => { g.stream.interrupt(); g.stream.hang_up(Side::Host); core::mem::forget(g); }
+            Runner::Native { .. } => { let _ = files::direct::relay::interrupt(); let _ = files::direct::relay::hang_up(); }
         }
     }
     fn fail(&mut self, what: &str, e: files::Error) {
@@ -344,7 +379,7 @@ impl Term {
             }
             Err(e) if { sex_pdx::serial_record!("[term.native.refused] name={} status={}", n, e); false } => {}
             Err(files::NOT_FOUND) => self.say(&format!("\x1b[31m{}: no such command or program\x1b[0m (type help)\n", n)),
-            Err(sex_pdx::fs::DENIED) => self.say(&format!("\x1b[31m{}: this Term may not start programs\x1b[0m (open it with Spindle's \x1b[1mspindle\x1b[0m command)\n", n)),
+            Err(sex_pdx::fs::DENIED) => self.say(&format!("\x1b[31m{}: this window may not start programs\x1b[0m (open it with Spindle's \x1b[1mspindle\x1b[0m command)\n", n)),
             Err(sex_pdx::fs::PENDING) => self.say("\x1b[31mrun: a program is still running here\x1b[0m\n"),
             Err(e) => self.fail(&n, e),
         }
@@ -392,9 +427,10 @@ impl Term {
         let colors = check::COLORS.iter().all(|&(x, y, fg, bg)| sex_vt::colors(&s.visible(x, y)) == (fg, bg));
         // Then the pixels: the middle-left of each checked cell after drawing is its background.
         self.screen.mark_all_dirty();
-        self.draw(window, true);
+        self.draw(true);
+        let _ = window;
         let (cw, ch, w) = (self.painter.cell_w, self.painter.cell_h, self.width);
-        let pixels = window.pixels();
+        let pixels = &self.buf;
         let drawn = check::COLORS.iter().all(|&(x, y, _, bg)| pixels[(y * ch + 1) * w + x * cw] == bg);
         sex_pdx::serial_record!("[term.vtcheck] frame={} colors={} pixels={} cols={} rows={}", frame as u8, colors as u8, drawn as u8, self.screen.cols(), self.screen.rows());
         self.say(if frame && colors && drawn { "vtcheck: \x1b[32mok\x1b[0m\n" } else { "vtcheck: \x1b[31mFAILED\x1b[0m\n" });
@@ -406,10 +442,6 @@ impl Term {
         let (shift, control) = (key.shift, key.control);
         // Terminal-wide keys first.
         match (control, shift, key.code) {
-            (true, true, 0x2E) => { self.copy(); return; }
-            (true, true, 0x2F) => { self.paste(); return; }
-            (true, false, 0x0D) => { self.zoom(2); return; }
-            (true, false, 0x0C) => { self.zoom(-2); return; }
             (false, true, 0x49 | 0x68) => { let r = self.screen.rows() as isize - 1; self.screen.scroll_view(r); return; }
             (false, true, 0x51 | 0x6D) => { let r = self.screen.rows() as isize - 1; self.screen.scroll_view(-r); return; }
             _ => {}
@@ -427,7 +459,7 @@ impl Term {
             }
             (true, 0x2E, ..) => { self.say("^C\r\n"); self.show_prompt(); return; }
             (true, 0x26, ..) => { self.say("\x1b[H\x1b[2J"); self.redraw_line(); return; }
-            (true, 0x20, ..) if self.line.is_empty() => { sex_pdx::serial_record!("[term.closed] how=ctrl-d"); sex_pdx::task_finish(0) }
+            (true, 0x20, ..) if self.line.is_empty() => { sex_pdx::serial_record!("[term.pane.closed] how=ctrl-d"); self.closed = true; return; }
             (true, 0x1E, ..) => self.at = 0,
             (true, 0x12, ..) => self.at = self.line.len(),
             (true, 0x16, ..) => { self.line.drain(..self.at); self.at = 0; }
@@ -551,14 +583,14 @@ impl Term {
             _ => {}
         }
     }
-    fn copy(&mut self) {
+    /// The selection, for the window's clipboard.
+    fn copy(&mut self) -> Option<Vec<u8>> {
         let text = self.screen.selection_text();
-        if text.is_empty() { return; }
+        if text.is_empty() { return None; }
         sex_pdx::serial_record!("[term.copy] bytes={}", text.len());
-        self.clipboard = text.into_bytes();
+        Some(text.into_bytes())
     }
-    fn paste(&mut self) {
-        let text = self.clipboard.clone();
+    fn paste(&mut self, text: Vec<u8>) {
         sex_pdx::serial_record!("[term.paste] bytes={}", text.len());
         if let Some(job) = self.job.as_mut() {
             let bytes = keys::paste(&text, false);
@@ -571,7 +603,8 @@ impl Term {
         for b in text { self.line.insert(self.at, if b == b'\n' || b == b'\r' { b' ' } else { b }); self.at += 1; }
         self.redraw_line();
     }
-    fn pointer(&mut self, p: sex_pdx::app_pointer::Pointer) {
+    /// The mouse, at a point inside the pane. Returns text to put on the clipboard.
+    fn pointer(&mut self, p: sex_pdx::app_pointer::Pointer, clipboard: &[u8]) -> Option<Vec<u8>> {
         let (cw, ch) = (self.painter.cell_w, self.painter.cell_h);
         let (col, row) = ((p.x.max(0) as usize) / cw, (p.y.max(0) as usize) / ch);
         let at = self.screen.point_at(col, row);
@@ -588,12 +621,13 @@ impl Term {
             Kind::Up { button: 0 } => {
                 self.drag = None;
                 // Selecting copies, as X terminals do; Ctrl+Shift+V pastes it.
-                self.copy();
+                return self.copy();
             }
             // The middle button pastes.
-            Kind::Down { button: 1 } => self.paste(),
+            Kind::Down { button: 1 } => self.paste(clipboard.to_vec()),
             _ => {}
         }
+        None
     }
 }
 
@@ -685,29 +719,289 @@ fn colors() -> String {
 }
 
 const BUILTINS: &[&[u8]] = &[b"cat", b"cd", b"clear", b"colors", b"echo", b"exit", b"greet", b"help", b"history", b"ls", b"mkdir", b"mv", b"pwd", b"rm", b"snapshot", b"touch", b"vtcheck", b"write"];
-const HELP: &str = "\x1b[1mTerm\x1b[0m: a VT100/xterm terminal for SexOS.\n\
-  ls cd pwd cat mkdir rm mv touch write FILE TEXT   files in Term's folder\n\
+const HELP: &str = "\x1b[1mSpindle\x1b[0m: the SexOS terminal. Each pane has its own command line.\n\
+  ls cd pwd cat mkdir rm mv touch write FILE TEXT   files in this folder\n\
   echo history clear colors vtcheck snapshot exit\n\
   NAME [ARGS]    runs NAME.wasm from this folder (a WASI command-line program), else\n\
-                 the program NAME (python, lua, rg, fd...) with this terminal as its console\n\
+                 the program NAME (python, lua, rg, fd...) with this pane as its console\n\
   greet [NAME]   a built-in Rust program, compiled to Wasm\n\
 Keys: Tab completes, Up/Down recall, Ctrl+Shift+C/V copy/paste, Shift+PgUp/PgDn scroll,\n\
-  Ctrl+=/- text size, Ctrl+C stop, Ctrl+D end input, Ctrl+L clear, F11 close.\n";
+  Ctrl+=/- text size, Ctrl+C stop, Ctrl+D end input (closes an idle pane), Ctrl+L clear.\n\
+Tabs: Ctrl+Shift+T new, Ctrl+PgUp/PgDn switch, Ctrl+Shift+PgUp/PgDn move, Ctrl+Shift+1..9 pick,\n\
+  click a tab to pick it, middle-click to close it.\n\
+Panes: Ctrl+Shift+E split side by side, Ctrl+Shift+O split below, Ctrl+Shift+arrows move,\n\
+  Ctrl+Shift+Z zoom, Ctrl+Shift+R then arrows resize (any other key ends), Ctrl+Shift+[ even out,\n\
+  Ctrl+Shift+W close; drag a divider with the mouse. F11 closes the window.\n";
+
+/// Spindle's terminal window: tabs of split panes, a clipboard they share, and the text
+/// size they all use.
+struct Spindle {
+    panes: BTreeMap<PaneId, Pane>,
+    tabs: Tabs,
+    next_id: PaneId,
+    width: usize,
+    height: usize,
+    cell_h: usize,
+    clipboard: Vec<u8>,
+    /// The layout changed: every pane is drawn and copied again.
+    relayout: bool,
+    /// A divider being dragged.
+    dragging: Option<Divider>,
+    /// Resize mode (Ctrl+Shift+R): arrows move the focused pane's dividers.
+    resizing: bool,
+    title: String,
+    painter: Painter,
+}
+
+/// Pixels between panes, and the colours of the window's own parts.
+const GAP: usize = 2;
+const DIVIDER: u32 = 0x313244;
+const DIVIDER_FOCUS: u32 = 0x89B4FA;
+const TAB_BG: u32 = 0x181825;
+const TAB_ACTIVE: u32 = 0x313244;
+const TAB_TEXT: u32 = 0xA6ADC8;
+const TAB_TEXT_ACTIVE: u32 = 0xCDD6F4;
+
+impl Spindle {
+    fn new(width: usize, height: usize) -> Spindle {
+        let cell_h = 18;
+        let (cw, ch) = cell_for_height(14);
+        let mut s = Spindle {
+            panes: BTreeMap::new(), tabs: Tabs::new(1), next_id: 2, width: width.max(64), height: height.max(64), cell_h,
+            clipboard: Vec::new(), relayout: true, dragging: None, resizing: false, title: String::new(), painter: Painter::new(cw, ch),
+        };
+        let area = s.area();
+        s.panes.insert(1, Pane::new(area.w, area.h, cell_h));
+        s
+    }
+    /// The height of the tab bar: shown once there are two tabs.
+    fn bar_h(&self) -> usize { if self.tabs.len() > 1 { self.painter.cell_h + 8 } else { 0 } }
+    /// Where the panes go.
+    fn area(&self) -> Rect { let b = self.bar_h(); Rect::new(0, b, self.width, self.height.saturating_sub(b)) }
+    fn focused(&mut self) -> &mut Pane { let id = self.tabs.focus(); self.panes.get_mut(&id).expect("the focused pane exists") }
+    fn new_pane(&mut self, cwd: Vec<u8>) -> PaneId {
+        let id = self.next_id;
+        self.next_id += 1;
+        let area = self.area();
+        let mut pane = Pane::new(area.w / 2, area.h / 2, self.cell_h);
+        pane.cwd = cwd;
+        pane.show_prompt();
+        self.panes.insert(id, pane);
+        id
+    }
+    fn open_tab(&mut self) {
+        let cwd = self.focused().cwd.clone();
+        let id = self.new_pane(cwd);
+        self.tabs.open(id);
+        self.relayout = true;
+        sex_pdx::serial_record!("[term.tab.open] tabs={} pane={}", self.tabs.len(), id);
+    }
+    fn split(&mut self, split: Split) {
+        let (from, cwd) = (self.tabs.focus(), self.focused().cwd.clone());
+        let id = self.new_pane(cwd);
+        self.tabs.current_mut().split(from, split, id);
+        self.relayout = true;
+        sex_pdx::serial_record!("[term.pane.split] from={} pane={} across={}", from, id, (split == Split::Across) as u8);
+    }
+    /// Closes a pane, stopping what runs in it. The window closes with its last pane.
+    fn close_pane(&mut self, id: PaneId) {
+        if let Some(mut pane) = self.panes.remove(&id) { pane.stop(); }
+        let area = self.area();
+        self.tabs.remove_pane(id, area);
+        sex_pdx::serial_record!("[term.pane.gone] pane={} panes={} tabs={}", id, self.panes.len(), self.tabs.len());
+        if self.tabs.is_empty() { sex_pdx::serial_record!("[term.closed] how=last-pane"); sex_pdx::task_finish(0) }
+        self.relayout = true;
+    }
+    fn set_text_size(&mut self, step: isize) {
+        let h = (self.cell_h as isize + step).clamp(10, 48) as usize;
+        if h == self.cell_h { return; }
+        self.cell_h = h;
+        for pane in self.panes.values_mut() { pane.set_cell_height(h); }
+        self.relayout = true;
+    }
+
+    /// The window's own keys; false when the key belongs to the focused pane.
+    fn key(&mut self, window: &mut Window, key: sex_pdx::app_key::Key) -> bool {
+        let area = self.area();
+        if self.resizing {
+            let toward = match sex_app::nav(key) { Some(Nav::Left) => Some(Toward::Left), Some(Nav::Right) => Some(Toward::Right), Some(Nav::Up) => Some(Toward::Up), Some(Nav::Down) => Some(Toward::Down), _ => None };
+            match toward {
+                Some(t) => { if self.tabs.current_mut().resize(t, 50) { self.relayout = true; } }
+                None => { self.resizing = false; sex_pdx::serial_record!("[term.resize.mode] on=0"); }
+            }
+            return true;
+        }
+        let toward = |key: sex_pdx::app_key::Key| match sex_app::nav(key) { Some(Nav::Left) => Some(Toward::Left), Some(Nav::Right) => Some(Toward::Right), Some(Nav::Up) => Some(Toward::Up), Some(Nav::Down) => Some(Toward::Down), _ => None };
+        match (key.control, key.shift, key.code) {
+            (true, true, 0x2E) => { if let Some(t) = self.focused().copy() { self.clipboard = t; } }
+            (true, true, 0x2F) => { let c = self.clipboard.clone(); self.focused().paste(c); }
+            (true, false, 0x0D) => self.set_text_size(2),
+            (true, false, 0x0C) => self.set_text_size(-2),
+            // Tabs: Ctrl+Shift+T opens, Ctrl+PageUp/PageDown switch, with Shift they move,
+            // Ctrl+Shift+1..9 pick one.
+            (true, true, 0x14) => self.open_tab(),
+            (true, false, 0x49 | 0x68) => { self.tabs.next(false); self.relayout = true; }
+            (true, false, 0x51 | 0x6D) => { self.tabs.next(true); self.relayout = true; }
+            (true, true, 0x49 | 0x68) => { self.tabs.shift(false); self.relayout = true; }
+            (true, true, 0x51 | 0x6D) => { self.tabs.shift(true); self.relayout = true; }
+            (true, true, c @ 0x02..=0x0A) => { self.tabs.select((c - 2) as usize); self.relayout = true; }
+            // Panes: Ctrl+Shift+E splits side by side, Ctrl+Shift+O one above the other,
+            // Ctrl+Shift+arrows move between them, Ctrl+Shift+Z zooms one, Ctrl+Shift+R
+            // resizes with the arrows, Ctrl+Shift+W closes one.
+            (true, true, 0x12) => self.split(Split::Across),
+            (true, true, 0x18) => self.split(Split::Down),
+            (true, true, 0x2C) => { let t = self.tabs.current_mut(); if t.count() > 1 { t.zoomed = !t.zoomed; self.relayout = true; } }
+            (true, true, 0x13) => { self.resizing = true; sex_pdx::serial_record!("[term.resize.mode] on=1"); }
+            (true, true, 0x11) => { let id = self.tabs.focus(); self.close_pane(id); }
+            (true, true, 0x1A) => { self.tabs.current_mut().equalize(); self.relayout = true; }
+            (true, true, _) if toward(key).is_some() => {
+                if self.tabs.current_mut().focus_toward(area, toward(key).unwrap()) { self.relayout = true; }
+            }
+            _ => { let _ = window; return false; }
+        }
+        true
+    }
+
+    /// The mouse: the tab bar, dividers, and the panes (which get the pointer in their
+    /// own coordinates; pressing in a pane focuses it).
+    fn pointer(&mut self, mut p: sex_pdx::app_pointer::Pointer) {
+        let (x, y) = (p.x.max(0) as usize, p.y.max(0) as usize);
+        let area = self.area();
+        if y < self.bar_h() {
+            if let Kind::Down { button } = p.kind {
+                if let Some(i) = self.tab_at(x) {
+                    if button == 1 { let panes = self.tabs.close(i); for id in panes { if let Some(mut pane) = self.panes.remove(&id) { pane.stop(); } } if self.tabs.is_empty() { sex_pdx::task_finish(0) } }
+                    else { self.tabs.select(i); }
+                    self.relayout = true;
+                } else if button == 0 { self.open_tab(); }
+            }
+            return;
+        }
+        if let Some(d) = &self.dragging {
+            match p.kind {
+                Kind::Move => { let d = d.clone(); self.tabs.current_mut().drag_divider(&d, x, y); self.relayout = true; }
+                Kind::Up { .. } => self.dragging = None,
+                _ => {}
+            }
+            return;
+        }
+        if let Kind::Down { button: 0 } = p.kind {
+            if let Some(d) = self.tabs.current().divider_at(area, GAP, x, y, 3) { self.dragging = Some(d); return; }
+        }
+        let tab = self.tabs.current();
+        // A press picks the pane; moves and releases go to the pane being dragged in.
+        let target = if matches!(p.kind, Kind::Down { .. } | Kind::Wheel { .. }) { tab.pane_at(area, GAP, x, y) } else { Some(tab.focus) };
+        let Some(id) = target else { return };
+        if matches!(p.kind, Kind::Down { .. }) && id != self.tabs.focus() { self.tabs.current_mut().focus = id; self.relayout = true; }
+        let Some(r) = self.tabs.current().rect_of(id, area, GAP) else { return };
+        p.x = x.saturating_sub(r.x) as i32 as _;
+        p.y = y.saturating_sub(r.y) as i32 as _;
+        let clip = self.clipboard.clone();
+        if let Some(pane) = self.panes.get_mut(&id) { if let Some(t) = pane.pointer(p, &clip) { self.clipboard = t; } }
+    }
+    /// The tab under `x` in the tab bar, or None past the last (the "new tab" space).
+    fn tab_at(&self, x: usize) -> Option<usize> {
+        let n = self.tabs.len();
+        let w = (self.width / n.max(1)).min(240).max(1);
+        (x / w < n).then_some(x / w)
+    }
+
+    /// Pumps every pane's program; closes panes whose shell ended.
+    fn pump(&mut self) {
+        let mut gone = Vec::new();
+        for (id, pane) in self.panes.iter_mut() {
+            pane.pump();
+            if pane.screen.take_bells() > 0 { sex_pdx::serial_record!("[term.bell] pane={}", id); }
+            if pane.closed { gone.push(*id); }
+        }
+        for id in gone { self.close_pane(id); }
+    }
+    fn running(&self) -> bool { self.panes.values().any(|p| p.job.is_some()) }
+
+    fn draw(&mut self, window: &mut Window) {
+        let area = self.area();
+        let (w, h) = (self.width, self.height);
+        let pixels = window.pixels();
+        if pixels.len() < w * h { return; }
+        let relayout = core::mem::take(&mut self.relayout);
+        let tab = self.tabs.current().clone();
+        let layout = tab.layout(area, GAP);
+        let mut changed = relayout;
+        if relayout {
+            pixels[..w * h].fill(sex_vt::DEFAULT_BG);
+            let rects: Vec<String> = layout.iter().map(|(id, r)| format!("{}:{}x{}+{}+{}", id, r.w, r.h, r.x, r.y)).collect();
+            sex_pdx::serial_record!("[term.panes] tabs={} active={} focus={} zoomed={} {}", self.tabs.len(), self.tabs.active, tab.focus, tab.zoomed as u8, rects.join(" "));
+        }
+        for (id, r) in &layout {
+            let Some(pane) = self.panes.get_mut(id) else { continue };
+            if relayout { pane.resize(r.w, r.h); pane.screen.mark_all_dirty(); }
+            let focused = *id == tab.focus;
+            if !pane.draw(focused) { continue; }
+            changed = true;
+            // Copy the pane's pixels into its place.
+            let (pw, ph) = (pane.width.min(r.w), pane.height.min(r.h));
+            for row in 0..ph {
+                let at = (r.y + row) * w + r.x;
+                if at + pw > pixels.len() { break; }
+                pixels[at..at + pw].copy_from_slice(&pane.buf[row * pane.width..row * pane.width + pw]);
+            }
+        }
+        if changed {
+            // The dividers, the one beside the focused pane highlighted.
+            let focus_rect = tab.rect_of(tab.focus, area, GAP);
+            for d in tab.dividers(area, GAP) {
+                let near = focus_rect.is_some_and(|f| d.x + d.w >= f.x && d.x <= f.x + f.w && d.y + d.h >= f.y && d.y <= f.y + f.h);
+                for row in d.y..(d.y + d.h).min(h) { let at = row * w; pixels[at + d.x..at + (d.x + d.w).min(w)].fill(if near && layout.len() > 1 { DIVIDER_FOCUS } else { DIVIDER }); }
+            }
+            if relayout { self.draw_tab_bar(pixels); }
+            window.show_pixels(w, h);
+        }
+        // The window's title: the focused pane's, and how many tabs there are.
+        let focused = self.panes.get(&tab.focus).map(|p| p.title()).unwrap_or_default();
+        let title = if self.tabs.len() > 1 { format!("Spindle [{}/{}]: {}", self.tabs.active + 1, self.tabs.len(), focused) } else { format!("Spindle: {}", focused) };
+        if title != self.title { window.title(title.as_bytes()); self.title = title; }
+    }
+    fn draw_tab_bar(&mut self, pixels: &mut [u32]) {
+        let bar = self.bar_h();
+        if bar == 0 { return; }
+        let w = self.width;
+        pixels[..bar * w].fill(TAB_BG);
+        let n = self.tabs.len();
+        let tw = (w / n).min(240);
+        let cache = unsafe { &mut *core::ptr::addr_of_mut!(CACHE) };
+        for i in 0..n {
+            let active = i == self.tabs.active;
+            let x0 = i * tw;
+            let bg = if active { TAB_ACTIVE } else { TAB_BG };
+            for row in 2..bar { pixels[row * w + x0..row * w + (x0 + tw - 2).min(w)].fill(bg); }
+            let tab = &self.tabs.tabs[i];
+            let title = self.panes.get(&tab.focus).map(|p| p.title()).unwrap_or_default();
+            let panes = tab.count();
+            let label = if panes > 1 { format!("{} {} [{}]", i + 1, title, panes) } else { format!("{} {}", i + 1, title) };
+            let fit = (tw.saturating_sub(16)) / self.painter.cell_w;
+            let label: String = label.chars().take(fit).collect();
+            self.painter.text(cache, pixels, w, x0 + 8, 5, &label, if active { TAB_TEXT_ACTIVE } else { TAB_TEXT }, bg);
+            if active { pixels[(bar - 2) * w + x0..(bar - 2) * w + (x0 + tw - 2).min(w)].fill(DIVIDER_FOCUS); }
+        }
+    }
+}
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! { sex_app::with_stack(1 << 20, main) }
 
 extern "C" fn main() -> ! {
     let mut window = Window::open();
-    window.title(b"Term");
+    window.title(b"Spindle");
     let (w, h) = window.size();
-    let mut term = Term::new(w, h);
-    term.say("\x1b[1mTerm\x1b[0m. Type \x1b[1mhelp\x1b[0m for commands. Wasm programs run here.\n");
+    let mut spindle = Spindle::new(w, h);
+    let term = spindle.focused();
+    term.say("\x1b[1mSpindle\x1b[0m. Type \x1b[1mhelp\x1b[0m for commands and keys. Ctrl+Shift+T opens a tab, Ctrl+Shift+E splits.\n");
     // `run term CMD...` runs that command first.
     let mut args = [0u8; sex_pdx::fs::ARGS_MAX];
     // Spindle's grant (`spindle` adds `+launch`) is not a command.
     let given: Vec<u8> = files::args(&mut window, &mut args).split(|b| *b == b' ')
         .filter(|w| !w.is_empty() && *w != sex_pdx::console_relay::GRANT_TOKEN).collect::<Vec<_>>().join(&b' ');
+    let term = spindle.focused();
     term.show_prompt();
     if !given.is_empty() {
         term.line = given.clone();
@@ -718,20 +1012,20 @@ extern "C" fn main() -> ! {
         term.run_line(&mut window, &line);
         if term.job.is_none() { term.show_prompt(); }
     }
-    term.draw(&mut window, true);
-    sex_pdx::serial_record!("[term.ready] target={} task={} cols={} rows={}", window.target, window.task, term.screen.cols(), term.screen.rows());
+    spindle.draw(&mut window);
+    let (cols, rows) = (spindle.focused().screen.cols(), spindle.focused().screen.rows());
+    sex_pdx::serial_record!("[term.ready] target={} task={} cols={} rows={}", window.target, window.task, cols, rows);
     loop {
-        // While a guest runs, look at its output often; otherwise sleep until an event.
-        let event = if term.job.is_some() { window.next_within(16) } else { Some(window.next()) };
+        // While a program runs, look at its output often; otherwise sleep until an event.
+        let event = if spindle.running() { window.next_within(16) } else { Some(window.next()) };
         match event {
             Some(Event::Close) => { sex_pdx::serial_record!("[term.closed] how=window"); window.close() }
-            Some(Event::Resize { width, height }) => term.resize(width, height),
-            Some(Event::Key(key)) => term.key(&mut window, key),
-            Some(Event::Pointer(p)) => term.pointer(p),
+            Some(Event::Resize { width, height }) => { spindle.width = width.max(64); spindle.height = height.max(64); spindle.relayout = true; }
+            Some(Event::Key(key)) => if !spindle.key(&mut window, key) { spindle.focused().key(&mut window, key) },
+            Some(Event::Pointer(p)) => spindle.pointer(p),
             None => {}
         }
-        term.pump();
-        if term.screen.take_bells() > 0 { sex_pdx::serial_record!("[term.bell]"); }
-        term.draw(&mut window, true);
+        spindle.pump();
+        spindle.draw(&mut window);
     }
 }
