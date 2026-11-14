@@ -2,7 +2,7 @@
 #![no_std]
 #![no_main]
 extern crate alloc;
-use alloc::{vec, vec::Vec};
+use alloc::vec::Vec;
 use moan_plugin::{clap::Processor, elf, job, mapped::Mapped};
 use sex_app::files::direct as files;
 #[panic_handler]
@@ -15,7 +15,11 @@ fn read(path: &[u8], limit: usize) -> Result<Vec<u8>, ()> {
     if stat.dir || stat.size == 0 || stat.size > limit as u64 {
         return Err(());
     }
-    let mut bytes = vec![0; stat.size as usize];
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(stat.size as usize)
+        .map_err(|_| ())?;
+    bytes.resize(stat.size as usize, 0);
     let mut at = 0;
     while at < bytes.len() {
         let n = files::read_at(path, at as u64, &mut bytes[at..]).map_err(|_| ())?;
