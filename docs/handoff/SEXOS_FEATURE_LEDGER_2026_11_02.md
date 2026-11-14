@@ -398,6 +398,10 @@ blank line, and `<dl>` shows terms with indented definitions.
 bulleted list (released text hash equals the expected text; the page is
 1029 bytes, again a two-record response that closes cleanly after F11).
 
+## G-16. Climax vs Linux QEMU benchmark comparison (2026-11-14)
+
+**What changed.** Added reproducible cross-OS benchmark harness `scripts/climax_vs_linux_bench.py` and published `docs/CLIMAX_VS_LINUX_2026_11_14.md` comparing 3-pass medians and min/max ranges of the exact same `climax-core` kernels (`-C opt-level=3 -C codegen-units=1`, bit-exact checksums across all 9 tiers) on SexOS (`x86_64-sex-app.json`) and Alpine Linux 6.6 LTS (`x86_64-unknown-linux-musl` static `/init`) under identical `qemu-system-x86_64 -M q35 -cpu max,+pku -smp 2 -m 1G`.
+
 ## F13. Script subset: branches, comparisons, booleans, helpers (2026-11-02)
 
 **What changed.** The inline script subset (F10) now has `true`/`false`,
