@@ -282,8 +282,9 @@ Classes a Linux/Windows/macOS desktop has where SexOS has nothing. Names are pro
 | Presentations | Impress / Keynote | **Burlesque** | a show on a stage | T6 |
 | Image editor | GIMP / Krita | **Batik** | painting with dye on cloth | V1–V3 |
 | Vector drawing | Inkscape | Gestalt (exists as Shapes) | already Andreas's pick | V4 |
-| Video editor | Kdenlive | **Strip** | film strip, and a pun | V5 |
-| Audio recorder/editor | Audacity | **Serenade** | | V6 |
+| Video editor | Kdenlive / Shotcut / Scarlet | **Strip** | film strip, and a pun | V5 |
+| Audio recorder/editor and DAW | REAPER / Ardour / Audacity / LMMS | **Serenade** | | V6, V13–V15 |
+| 3D creation suite | Blender | **Tapestry** | a whole scene woven in one piece | Z1–Z9 |
 | Camera | Cheese | **Flash** | camera flash, and a pun | V7 (needs UVC driver) |
 | Password manager | KeePassXC / Bitwarden | **Chastity** | locked away; built on Shibari | R7 |
 | Backup and restore | Déjà Dup / Timeshift / Borg | **Aftercare** | what comes after something goes wrong | Q14 |
@@ -543,7 +544,13 @@ service instead of a Node/PostgreSQL web service:
 | Y10 | Flirt calls: Matrix VoIP and group calls, WebRTC from N11, video with Flash's camera (V7), screen share from Display under a grant | gate: loopback call between two QEMU machines carries audio frames |
 
 
-### V. Creative apps: Batik, Gestalt, Strip, Serenade, Flash and the Craft ports (10)
+### V. Creative apps: Batik, Gestalt, Strip, Serenade, Flash and the Craft ports (16)
+
+Andreas (2026-11-14): the Craft apps are the starting point, improved as we go. Learn from
+their UI, list what is not perfect, and fill the blanks from the leaders: **REAPER, Audacity,
+Ardour and LMMS** for Serenade; **Kdenlive and Shotcut** (FilmCraft's layout is good) and
+**[Scarlet](https://github.com/Forward-Future/scarlet)** (MIT, AI transcript-based editing)
+for Strip; Blender gets its own workstream (Z). V16 is that audit.
 
 V ports the Craft creative apps on M11 (see T): PhotoCraft becomes Batik, VectorCraft Gestalt,
 FilmCraft Strip, SoundCraft Serenade. LightCraft's non-destructive development feeds Gaze's
@@ -565,6 +572,12 @@ Write set: new `apps/batik`, `apps/shapes` (Gestalt, from #216), new `apps/strip
 | V9 | Motion and animation: port EffectCraft (proposed **Velvet**) and AniCraft (proposed **Tease**: frames revealed one at a time) | gate: render a 2 s composition to video |
 | V10 | 3D and technical: port CADCraft (proposed **Pattern**, as in a sewing pattern), TextureCraft and MaterialCraft (proposed **Dye** and **Weave**) | gate: open a DXF fixture; paint a texture on a cube |
 | V7 | **Flash** camera: USB Video Class driver in sexusb, photo and video capture to Loom, camera grant | gate: QEMU `usb-video`-style fixture frames arrive |
+| V11 | Strip pro editing, the Kdenlive/Shotcut list: unlimited tracks, keyframes on every parameter, proxy clips, nested sequences, speed ramps, stabilisation, chroma key, colour grading with scopes (waveform, vectorscope, histogram) and LUTs, titles, OpenTimelineIO import/export, render queue | gate: keyframed opacity renders the expected frames; OTIO round trip |
+| V12 | Strip edits by transcript, the Scarlet way: local transcription (Whisper on candle, MIT/Apache, as a confined program), edit the video by editing its text, remove pauses, filler words and retakes, an assistant (Claude API, off by default) proposes edits as suggestions on a working timeline, renders only the changed section to preview, original footage never touched | host: transcript-to-cut goldens; gate: deleting a sentence removes its frames and audio |
+| V13 | Serenade as a DAW, the REAPER/Ardour list: any-to-any routing, buses and sends, automation lanes, takes and comping, punch recording, low-latency monitoring on a Bell fast path, session files | gate: two tracks through a bus with automation render to the reference WAV |
+| V14 | Serenade plugins and MIDI: CLAP plugin hosting (MIT spec) with each plugin a confined run, LV2 later; MIDI piano roll, USB MIDI class in sexusb, controller mapping | gate: sample CLAP plugin processes audio; USB MIDI fixture notes arrive |
+| V15 | Serenade instruments and editing, the LMMS/Audacity list: pattern and step sequencer, built-in synth and sampler, SoundFont/SFZ, destructive waveform editing, spectral view, noise reduction, effect chains and batch macros | host: synth and noise-reduction goldens |
+| V16 | Craft UI audit: each ported Craft app against its leader (Photoshop/GIMP/Krita, Illustrator/Inkscape, Kdenlive/Shotcut, REAPER/Ardour), with a list of gaps fixed here or upstream | review: audit doc in `docs/handoff/` |
 
 ### W. Hardware services and guests: Cufflinks, Needle, Lurk, Drag (7)
 
@@ -603,6 +616,31 @@ Kaleidoscope can embed it), `crates/sex-net` only through its public API.
 | X9 | Remote control: a Web UI and a JSON API (Transmission-compatible RPC, so existing phone apps work), behind a grant and a password | gate: Transmission RPC client lists torrents |
 | X10 | Scale and privacy: 10,000 torrents in one session, disk cache tuned for NVMe, I2P as an optional transport, anonymous mode (no client ID, no DHT) | bench: 10 k torrents load under 2 s on host; gate: anonymous mode sends no peer ID string |
 
+### Z. Tapestry: a native Blender-class 3D suite (9)
+
+Andreas (2026-11-14): Blender deserves a native version or alternative. Proposed name
+**Tapestry** (a whole scene woven in one piece). Built in Rust on our stack, not a port of
+Blender's C/C++ (GPL-2.0-or-later, so reading it as reference is fine; copying into a GPL-3
+program is legal too, but we want a native design). References: Fyrox's editor and Bevy's
+renderer (MIT/Apache), Rapier physics (Apache), and the Craft 3D apps (TextureCraft,
+MaterialCraft, CADCraft). Real-time viewports want a GPU: until the Intel/NVIDIA 3D work
+(L8) lands, the viewport uses sex-gl's software rasteriser across all cores.
+
+Write set: new `apps/tapestry`, new `crates/sex-3d` (mesh, scene, render), `crates/sex-gl`
+(with its owners).
+
+| # | Slice | Test |
+| --- | --- | --- |
+| Z1 | Scene and mesh core (half-edge meshes, objects, collections, undo), viewport with orbit/pan/zoom, glTF 2.0, OBJ, STL and PLY import/export | host: glTF round-trip goldens; gate: imported model renders as reference |
+| Z2 | Modelling: extrude, inset, bevel, loop cut, knife, booleans, a non-destructive modifier stack (mirror, subdivision, array, solidify) | host: modifier goldens |
+| Z3 | Sculpting (dynamic topology, multires, brushes with pen pressure) and texture painting (TextureCraft) with UV unwrapping | host: UV unwrap goldens; gate: brush stroke displaces vertices |
+| Z4 | Materials: node editor and PBR shading (MaterialCraft), image textures, HDRI lighting | gate: node graph renders the reference sphere |
+| Z5 | Renderer: a Cycles-class path tracer on every CPU core, denoising, and a render farm over several SexOS machines | host: reference scene converges within tolerance; gate: two-machine farm render equals single |
+| Z6 | Animation: keyframes, graph editor, armatures and skinning, shape keys, NLA; video out through Strip | gate: animated glTF plays and renders frames |
+| Z7 | Geometry nodes and scripting: node-based procedural modelling; Python API on our CPython (a `bpy`-like module), add-ons as confined runs | gate: script creates and modifies a mesh |
+| Z8 | Simulation: rigid bodies (Rapier), cloth, particles; fluids later | host: rigid-body drop goldens |
+| Z9 | 2D in 3D (Grease Pencil-style strokes, shared with AniCraft) and USD/FBX import | gate: USD fixture scene loads |
+
 ## 5. Priority
 
 1. **First wave (start now):** M (Weft) — every other UI slice benefits; O (Quil, the
@@ -612,10 +650,11 @@ Kaleidoscope can embed it), `crates/sex-net` only through its public API.
    (Swingers), Y (Multipass, Valentine, Flirt; Y1–Y3 need no toolkit and can start now),
    R (system apps, starting with the Privacy page), P (Spindle tabs/splits/sessions),
    U5–U6 (calendar, contacts).
-3. **Third wave:** rest of T and U, S (shell extras and accessibility), V (creative), W
+3. **Third wave:** rest of T and U, S (shell extras and accessibility), V (creative), Z
+   (Tapestry; its fast viewport waits on GPU work), W
    (Bluetooth and printing need x17 receipts; Drag needs Andreas's decision).
 
 ## 6. Count
 
-M 12, N 13, O 12, P 9, Q 23, R 10, S 8, T 8, U 5, V 10, W 7, X 10, Y 11 = **138 slices**, in 13
+M 12, N 13, O 12, P 9, Q 23, R 10, S 8, T 8, U 5, V 16, W 7, X 10, Y 11, Z 9 = **153 slices**, in 14
 workstreams. All new app names in this document are proposals pending Andreas's OK.
