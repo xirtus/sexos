@@ -96,7 +96,8 @@ crates = [
   "apps/hookup/Cargo.toml",
   "apps/rendezvous/Cargo.toml",
   "servers/sexuvc/Cargo.toml",
-  "apps/flash/Cargo.toml"
+  "apps/flash/Cargo.toml",
+  "apps/climax/Cargo.toml"
 ]
 
 [[stage]]
@@ -766,6 +767,14 @@ target = "x86_64-sex-app.json"
 manifest = "apps/calendar/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/calendar"
 dest_artifact = "iso_root/programs/calendar"
+# Climax: benchmark and thermal torture suite window.
+[[stage]]
+id = "build_climax"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/climax/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/climax"
+dest_artifact = "iso_root/programs/climax"
 
 [[stage]]
 id = "build_crush"

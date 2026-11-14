@@ -513,6 +513,12 @@ page (loop sum `20100`, while countdown, `sq(12)=144`, depth-10 parentheses
 and `fact(2)`, array squares, string split/upper/indexOf/parseInt);
 conversion took 9 ticks; no pager rejections.
 
+## G-14. Climax benchmark and thermal torture application (2026-11-14)
+
+**What changed.** Built `apps/climax` (`#![forbid(unsafe_code)]`, `GPL-3.0-only` window over `climax-core` with `SEX_LAYOUT_SEED` section shuffling), exposing interactive **Benchmarks** (`Run Suite` + `--json` telemetry across Integer ARX, SHA-256, Tiled 64x64 GEMM FP32, Biquad DSP, STREAM Triad, and Sattolo Cache/DRAM Pointer-Chase Ladder) and **Thermal Torture** (`Start Step`, `Run Burst`, `Reset`, composite/subsystem score bars, `ThrottleState`, stability %, and bit-exact corruption verification).
+
+**Evidence.** Host headless window tests (`apps/climax/tests/window.rs`) and live SexOS QEMU gate (`scripts/climax_gate.py`).
+
 ## G-12: Climax benchmark and thermal throttling stress engine (2026-11-14)
 - Added `climax-core` crate providing `#![no_std] + alloc` CPU and memory microbenchmarks, sustained torture runner, thermal throttling detection, and visual report generation.
 - Deterministic CPU microbenchmarks: ChaCha20/ARX integer ALU, SHA-256 compression, FMA-free tiled GEMM, and vectorizable DSP biquad IIR filter with bit-exact corruption self-checking.

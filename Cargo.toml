@@ -120,6 +120,7 @@ members = [
     "crates/sex-calendar",
     "crates/climax-core",
     "crates/sex-dav",
+    "apps/climax",
     "apps/calendar",
     "apps/aftercare",
     "crates/sex-vcard",
