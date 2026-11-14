@@ -52,6 +52,9 @@ members = [
     "crates/sex-vmd",
     "crates/sex-imsm",
     "crates/sex-font",
+    "crates/sex-keymap",
+    "crates/sex-shape",
+    "crates/sex-ime",
     "crates/sexfs",
     "crates/sex-volumes",
     "crates/sex-crypt",
@@ -84,6 +87,10 @@ members = [
     "apps/ssh",
     "apps/pdf",
     "apps/lua",
+    "apps/rg",
+    "apps/fd",
+    "apps/python",
+    "apps/store",
 ]
 [workspace.package]
 license = "GPL-3.0-only"
@@ -142,6 +149,8 @@ opt-level = 3
 pp-rs = { path = "vendor/pp-rs-0.2.1" }
 # Bell captures sound: virtio-snd input transfers added (vendor/virtio-drivers-0.13.0/SEXOS_CHANGES.md).
 virtio-drivers = { path = "vendor/virtio-drivers-0.13.0" }
+# rg and fd: ignore's parallel walker on std's Hermit target (vendor/ignore-0.4.34/src/walk.rs, `SexOS:`).
+ignore = { path = "vendor/ignore-0.4.34" }
 # The shader interpreter runs per vertex and per pixel; keep it fast in tests too.
 [profile.dev.package.sex-gl]
 opt-level = 3

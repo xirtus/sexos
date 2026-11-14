@@ -626,7 +626,7 @@ impl App {
                 ENTER => self.finish_input(window),
                 ESC => { self.input = None; }
                 BACKSPACE => { while let Some(b) = text.pop() { if b & 0xC0 != 0x80 { break; } } }
-                _ => if let Some(c) = sex_app::typed(key) { if text.len() < 255 { text.push(c); } },
+                _ => if let Some(c) = sex_app::text(key) { if text.len() + c.len_utf8() <= 255 { text.extend_from_slice(c.encode_utf8(&mut [0; 4]).as_bytes()); } },
             }
             return;
         }

@@ -5,6 +5,7 @@
 #![no_main]
 
 use sex_app::{files, Event, Nav, Window};
+use sex_pdx::text_encoding;
 
 const FILE: &[u8] = b"notes.txt";
 const HEAD: &[u8] = b"Jot. Arrows move, Ctrl+S saves, Ctrl+O opens, Ctrl+Shift+S saves as, F11 closes.\n\n";
@@ -20,6 +21,8 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 }
 
 fn base_name(path: &[u8]) -> &[u8] { path.rsplit(|b| *b == b'/').next().unwrap_or(path) }
+/// The start of the character holding byte `at`.
+fn boundary(note: &[u8], mut at: usize) -> usize { while at > 0 && at < note.len() && note[at] & 0xC0 == 0x80 { at -= 1; } at }
 fn line_start(note: &[u8], at: usize) -> usize { note[..at].iter().rposition(|b| *b == b'\n').map_or(0, |i| i + 1) }
 fn line_end(note: &[u8], at: usize) -> usize { note[at..].iter().position(|b| *b == b'\n').map_or(note.len(), |i| at + i) }
 fn render(window: &mut Window, note: &[u8], cursor: usize, status: &[u8]) {
@@ -100,15 +103,20 @@ pub extern "C" fn _start() -> ! {
                 b"Only this program's folder is reachable."
             }
             Event::Key(key) if key.code == 0x0E => {
-                if cursor > 0 { note.copy_within(cursor..len, cursor - 1); cursor -= 1; len -= 1; }
+                // One character back, however many bytes it takes.
+                let from = text_encoding::previous(&note[..len], cursor);
+                note.copy_within(cursor..len, from); len -= cursor - from; cursor = from;
                 b""
             }
             Event::Key(key) => {
-                let typed = if key.code == 0x1C { Some(b'\n') } else { sex_app::typed(key) };
+                let typed = if key.code == 0x1C { Some('\n') } else { sex_app::text(key) };
                 match (sex_app::nav(key), typed) {
-                    (Some(Nav::Delete), _) => { if cursor < len { note.copy_within(cursor + 1..len, cursor); len -= 1; } }
-                    (Some(Nav::Left), _) => cursor = cursor.saturating_sub(1),
-                    (Some(Nav::Right), _) => cursor = (cursor + 1).min(len),
+                    (Some(Nav::Delete), _) => {
+                        let to = text_encoding::next(&note[..len], cursor);
+                        note.copy_within(to..len, cursor); len -= to - cursor;
+                    }
+                    (Some(Nav::Left), _) => cursor = text_encoding::previous(&note[..len], cursor),
+                    (Some(Nav::Right), _) => cursor = text_encoding::next(&note[..len], cursor),
                     (Some(Nav::Home), _) => cursor = line_start(&note[..len], cursor),
                     (Some(Nav::End), _) => cursor = line_end(&note[..len], cursor),
                     (Some(dir @ (Nav::Up | Nav::Down)), _) => {
@@ -118,11 +126,13 @@ pub extern "C" fn _start() -> ! {
                         let column = cursor - start;
                         let target = if dir == Nav::Up { if start == 0 { None } else { Some(line_start(text, start - 1)) } }
                             else { let end = line_end(text, cursor); (end < len).then_some(end + 1) };
-                        if let Some(t) = target { cursor = (t + column).min(line_end(text, t)); }
+                        if let Some(t) = target { cursor = boundary(text, (t + column).min(line_end(text, t))); }
                     }
-                    (None, Some(c)) if len < note.len() => {
-                        note.copy_within(cursor..len, cursor + 1);
-                        note[cursor] = c; cursor += 1; len += 1;
+                    (None, Some(c)) if len + c.len_utf8() <= note.len() => {
+                        // Any character the keyboard layout typed, as UTF-8.
+                        let n = c.len_utf8();
+                        note.copy_within(cursor..len, cursor + n);
+                        c.encode_utf8(&mut note[cursor..cursor + n]); cursor += n; len += n;
                     }
                     _ => {}
                 }

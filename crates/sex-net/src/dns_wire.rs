@@ -2,7 +2,7 @@
 //! Narrow, allocation-free DNS A codec for the canonical `probe.sexos.test`.
 //! This module carries protocol data only. It grants no endpoint or app authority.
 //! Supported replies bind one case-insensitive canonical A/IN question, at most
-//! eight answer records and eight combined authority/additional records. Bounded
+//! 32 answer records and 16 combined authority/additional records. Bounded
 //! registered-boundary backward compression and up to four CNAME links are
 //! supported. Extra sections accept only IN A/CNAME/NS/SOA/AAAA with known RDATA
 //! structure; they never supply the selected address. No EDNS, TCP fallback,
@@ -10,7 +10,9 @@
 //! UDP source/destination endpoint binding belongs to the private transport job.
 
 pub const MAX_BYTES: usize = 512;
-pub const MAX_ANSWERS: usize = 8;
+/// Big sites answer with an alias and many addresses (a CNAME and 9 A records
+/// for www.youtube-nocookie.com); a 512-byte reply holds at most about 30.
+pub const MAX_ANSWERS: usize = 32;
 pub const QUERY_BYTES: usize = 12+sex_net_config::DNS_QUESTION.len();
 const NAME: &[u8] = sex_net_config::DNS_NAME;
 const QUESTION: &[u8] = sex_net_config::DNS_QUESTION;
@@ -93,7 +95,7 @@ fn u16_at(bytes: &[u8], offset: usize) -> Result<u16, Error> {
 // compression. RFC2181 §§5/8/10: RRset TTL minimum, high-bit TTL→zero and
 // exclusive CNAME ownership. https://www.rfc-editor.org/rfc/rfc1035.html
 // https://www.rfc-editor.org/rfc/rfc2181.html
-const MAX_EXTRA: usize = 8;
+const MAX_EXTRA: usize = 16;
 const MAX_RECORDS: usize = MAX_ANSWERS + MAX_EXTRA;
 const MAX_NAME: usize = 255;
 const MAX_HOPS: usize = 16;
@@ -389,9 +391,9 @@ mod tests {
         for qd in [0, 2, 255] {
             let mut packet = valid(true); packet[5] = qd; assert_eq!(parse(ID, &packet), Err(Error::Malformed));
         }
-        let mut packet = valid(true); packet[7] = 9; assert_eq!(parse(ID, &packet), Err(Error::Unsupported));
+        let mut packet = valid(true); packet[7] = 33; assert_eq!(parse(ID, &packet), Err(Error::Unsupported));
         for field in [9, 11] {
-            let mut packet = valid(true); packet[field] = 9; assert_eq!(parse(ID, &packet), Err(Error::Unsupported));
+            let mut packet = valid(true); packet[field] = 17; assert_eq!(parse(ID, &packet), Err(Error::Unsupported));
         }
         let mut packet = valid(true); packet.resize(513, 0); assert_eq!(parse(ID, &packet), Err(Error::Oversized));
         let mut packet = valid(true); packet.push(0); assert_eq!(parse(ID, &packet), Err(Error::Malformed));
@@ -431,6 +433,14 @@ mod tests {
             rr(&mut packet, 0, &owner, 5, &target, 50-n as u32); owner = target;
         }
         rr(&mut packet, 0, &owner, 1, &ADDRESS, 60); packet
+    }
+    #[test] fn alias_with_many_addresses_like_big_sites() {
+        // www.youtube-nocookie.com answers with a CNAME and nine A records.
+        let mut packet = response();
+        let target = wire("youtube-ui.l.google.com");
+        let (_, data) = rr(&mut packet, 0, &pointer(12), 5, &target, 300);
+        for n in 0..9u8 { rr(&mut packet, 0, &pointer(data), 1, &[142, 250, 185, n], 60 + n as u32); }
+        assert_eq!(parse(ID, &packet), Ok(Some(Answer { address: [142, 250, 185, 0], ttl: 60 })));
     }
     #[test] fn casefold_question_owner_and_alias_target_without_changing_wire_query() {
         let mut packet = response();
@@ -544,9 +554,9 @@ mod tests {
             assert!(parse(ID,&packet).is_err(),"kind={kind}");
         }
     }
-    #[test] fn sixteen_total_records_and_eight_extra_cap_are_explicit() {
+    #[test] fn record_caps_are_explicit() {
         let mut packet=response();for _ in 0..8 {rr(&mut packet,0,&pointer(12),1,&ADDRESS,60);}
-        for _ in 0..8 {rr(&mut packet,2,&pointer(12),1,&[192,0,2,1],0);}
+        for _ in 0..16 {rr(&mut packet,2,&pointer(12),1,&[192,0,2,1],0);}
         assert_eq!(parse(ID,&packet),Ok(Some(Answer{address:ADDRESS,ttl:60})));
         rr(&mut packet,2,&pointer(12),1,&ADDRESS,60);assert_eq!(parse(ID,&packet),Err(Error::Unsupported));
     }

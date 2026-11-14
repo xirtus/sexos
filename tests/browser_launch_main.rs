@@ -138,7 +138,7 @@ fn spindle_active_frame()->Option<(u32,u64)>{None}
 }}
 #[cfg(browser_launch_catalog)]#[test]fn full_focus_and_old_input_close_view_custody_never_retarget_to_new_instance(){let _l=LOCK.lock().unwrap();unsafe{reset();
  let old=clipboard::Participant::from_catalog(held(15,150,300)).unwrap();let next=clipboard::Participant::from_catalog(held(30,300,343)).unwrap();assert_eq!((old.route,next.route),(43,155));
- let mut input=app_input::Queue::new();let key=app_key::Key{code:0x22,shift:false,control:false};
+ let mut input=app_input::Queue::new();let key=app_key::Key::new(0x22,false,false);
  assert!(input.push(app_input::Item{destination:old,input:app_input::Input::Key(key)}));let front=input.front();
  dead(0,31);ACTIVATION[0]=receipt(30,300,343,2);install(1,343);FOCUS_STATUS=ERR_SERVICE_NOT_READY;assert!(open_browser_in_active_scene());assert!(EFFECTS.contains(&Effect::Queued(30,300,343)));assert_eq!(input.front(),front);
  assert!(input.push(app_input::Item{destination:next,input:app_input::Input::Key(key)}));assert_eq!(input.retire(old.subject),1);assert_eq!(input.front().unwrap().destination,next);

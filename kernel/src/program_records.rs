@@ -87,10 +87,19 @@ pub fn init(shell:u32){
     assert_eq!(crate::ipc::BOOT_PHASE.load(Ordering::Acquire),crate::ipc::BootPhase::RegistryBuild as u8,"RECORDS_AFTER_BOOT");
     let free=crate::memory::allocator::debug_global_free_frames()*PAGE;
     let (count,pool_bytes)=sizing(free);
-    let physical=crate::boot_memory::backing(pool_bytes);
+    // The pool is a stack of frames, so it need not be one block: a 2 GiB machine may have
+    // no 512 MiB block left whole. Take the largest blocks there are, each a BOOT region.
     let frames=(pool_bytes/PAGE) as usize;
     let mut pool=alloc::vec::Vec::<u32>::with_capacity(frames);
-    for i in 0..frames{pool.push(((physical+(i as u64)*PAGE)/PAGE) as u32);}
+    let (mut chunk,mut physical,mut blocks)=(pool_bytes,0,0);
+    while pool.len()<frames{
+        let want=chunk.min((frames-pool.len()) as u64*PAGE);
+        let Some(p)=crate::boot_memory::try_backing(want) else{
+            assert!(chunk>2*1024*1024,"RECORDS_POOL_NO_FRAMES");chunk/=2;continue};
+        if physical==0{physical=p;}
+        blocks+=1;
+        for i in 0..want/PAGE{pool.push(((p+i*PAGE)/PAGE) as u32);}
+    }
     unsafe{POOL=pool.leak().as_mut_ptr();}
     POOL_FREE.store(frames,Ordering::Release);POOL_TOTAL.store(frames,Ordering::Release);
     let table=Box::into_raw(Box::new(crate::capability::CapabilityTable::new()));
@@ -110,7 +119,7 @@ pub fn init(shell:u32){
     COUNT.store(count,Ordering::Release);
     let shell=crate::ipc::DOMAIN_REGISTRY.get(shell).expect("RECORDS_NO_SHELL");
     shell.grant_capability(store::RECORD_SLOT_SHELL,crate::capability::CapabilityData::RecordPool);
-    crate::serial_println!("[boot.records] capacity={} pool_bytes={} free_bytes={} kstack={} key={}",count,pool_bytes,free,KSTACK_BYTES,RECORD_KEY);
+    crate::serial_println!("[boot.records] capacity={} pool_bytes={} blocks={} free_bytes={} kstack={} key={}",count,pool_bytes,blocks,free,KSTACK_BYTES,RECORD_KEY);
 }
 
 fn pool_take()->Option<u64>{

@@ -293,7 +293,9 @@ impl KeyboardOutbox {
         // Media keys share their byte with D, C and B: give them their own codes
         // (sex_pdx::app_key::KEY_MUTE, KEY_VOLUME_DOWN, KEY_VOLUME_UP), and the player
         // keys share G, J, P and Q's (KEY_PLAY_PAUSE, KEY_STOP, KEY_NEXT, KEY_PREVIOUS).
-        if extended {edge.code=match edge.code {0x20=>0x75,0x2E=>0x76,0x30=>0x77,0x22=>0x78,0x24=>0x7A,0x19=>0x7C,0x10=>0x7F,c=>c};}
+        // Right Ctrl and right Alt (AltGr) get the codes USB keyboards give them, so
+        // layouts can tell AltGr from Alt whichever keyboard it is.
+        if extended {edge.code=match edge.code {0x20=>0x75,0x2E=>0x76,0x30=>0x77,0x22=>0x78,0x24=>0x7A,0x19=>0x7C,0x10=>0x7F,0x1D=>0x61,0x38=>0x64,c=>c};}
         self.push(&[edge])
     }
     /// One USB keyboard snapshot: modifiers plus up to six pressed usages packed one per

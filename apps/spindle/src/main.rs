@@ -843,7 +843,8 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  calc x = 2   name a value (up to 8)");
             sb.push(b"  calc 255 in hex   also in bin / in oct");
             sb.push(b"  calc ln(2)   exp ln log sin cos tan, 2**0.5");
-            sb.push(b"  run [+net] NAME [ARGS]  start a program from /bin or a path");
+            sb.push(b"  run [+net] [+pkg] NAME [ARGS]  start a program from /bin or a path");
+            sb.push(b"  store [refresh|search WORDS|get NAME|upgrade|remove NAME]  the package Store");
             sb.push(b"  edit FILE    open a file in Jot; @FILE gives any program that file");
             sb.push(b"  install [go] [GIB] [IMG] put SexOS beside the other systems on this disk; without go, only plans");
             sb.push(b"  update [URL]           get the newest signed release into the other system slot, tried once");
@@ -987,15 +988,30 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             unsafe{fs_commands::FS.submit_program(b"jot",&given[..1 + n],0,0,sb);}
             true
         }
-        // `+net` first lets this run reach the network. Words after the name are its arguments.
+        // `+net` first lets this run reach the network; `+pkg` lets it install and remove
+        // packages (either order). Words after the name are its arguments.
         // Every run goes through Files, so a package's grants are checked; with no
         // filesystem a bare name still reaches the disk program store.
         b"run" if !args.is_empty() => {
-            let (flags, rest) = match args.strip_prefix(b"+net") { Some(r) => (sex_pdx::program_store::RUN_NETWORK, r.trim_ascii_start()), None => (0, args) };
+            let (mut flags, mut packages, mut rest) = (0, false, args);
+            loop {
+                let word = rest.split(|b| *b == b' ').next().unwrap_or(b"");
+                match word {
+                    b"+net" => flags |= sex_pdx::program_store::RUN_NETWORK,
+                    b"+pkg" => packages = true,
+                    _ => break,
+                }
+                rest = rest[word.len()..].trim_ascii_start();
+            }
             let mut words = rest.splitn(2, |b| *b == b' ');
             let (target, program_args) = (words.next().unwrap_or(b""), words.next().unwrap_or(b"").trim_ascii_start());
-            if target.is_empty() { sb.push(b"Usage: run [+net] NAME|PATH [ARGS]"); }
-            else { unsafe{fs_commands::FS.submit_program(target,program_args,flags,0,sb);} }
+            if target.is_empty() { sb.push(b"Usage: run [+net] [+pkg] NAME|PATH [ARGS]"); }
+            else { unsafe{fs_commands::FS.submit_program_granted(target,program_args,flags,0,packages,sb);} }
+            true
+        }
+        // The Store: the package catalog in a window, allowed the network and packages.
+        b"store" => {
+            unsafe{fs_commands::FS.submit_program_granted(b"store",args,sex_pdx::program_store::RUN_NETWORK,0,true,sb);}
             true
         }
         b"spawn" if args.split(|b|*b==b' ').next().is_some_and(|w|w.contains(&b'/')) => {

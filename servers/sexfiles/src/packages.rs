@@ -6,7 +6,8 @@
 //! Trusted keys: the release key this system was built with, and the keys the person
 //! added with `pkg trust` (`/system/packages/trusted`). Records of what each package
 //! installed, and the person's answers to its grants, live in `/system/packages/PROGRAM/`.
-//! Only Spindle, the person's terminal, reaches these operations.
+//! Spindle, the person's terminal, reaches these operations, and programs the person
+//! started with `run +pkg` reach the ones `fs_service::program_package` lets through.
 use crate::fs_service::Disk;
 use alloc::format;
 use alloc::string::String;
@@ -85,16 +86,26 @@ impl Report<'_> {
     }
 }
 
-/// One package request. Returns the reply status and the report's length.
-pub fn handle(fs: &mut F, op: u64, arg: &[u8], length: u64, out: &mut [u8]) -> (u8, u32) {
+/// A download's path: at the root for Spindle, in the program's own folder for a program.
+fn downloaded(folder: Option<&[u8]>, leaf: &[u8]) -> Vec<u8> {
+    let mut path = folder.unwrap_or(b"").to_vec();
+    path.extend_from_slice(leaf);
+    path
+}
+
+/// One package request. Returns the reply status and the report's length. `folder` is the
+/// asking program's own folder (`/data/NAME`), or None for Spindle; the caller has
+/// already checked the program may ask this and confined its paths.
+pub fn handle(fs: &mut F, op: u64, arg: &[u8], length: u64, out: &mut [u8], folder: Option<&[u8]>) -> (u8, u32) {
     let mut r = Report { out, n: 0 };
     let status = match op {
         p::INSTALL | p::CHECK => {
             let st = install(fs, arg, op == p::INSTALL, length & p::ALLOW_DOWNGRADE != 0, &mut r);
             // A download is used once, whatever came of it.
-            if arg == p::DOWNLOAD && op == p::INSTALL {
+            let download = downloaded(folder, p::DOWNLOAD);
+            if arg == &download[..] && op == p::INSTALL {
                 if st != w::OK && fs.has_changes() { let _ = fs.rollback(); }
-                if fs.remove_path(p::DOWNLOAD).is_ok() && st != w::OK { let _ = fs.commit(); }
+                if fs.remove_path(&download).is_ok() && st != w::OK { let _ = fs.commit(); }
             }
             st
         }
@@ -102,7 +113,7 @@ pub fn handle(fs: &mut F, op: u64, arg: &[u8], length: u64, out: &mut [u8]) -> (
         p::LIST => list(fs, &mut r),
         p::TRUST => trust(fs, arg, &mut r),
         p::CONSENT => consent(fs, arg, length, &mut r),
-        p::CATALOG => catalog(fs, arg, &mut r),
+        p::CATALOG => catalog(fs, arg, folder, &mut r),
         p::SEARCH => search(fs, arg, &mut r),
         p::LOCATE => locate(fs, arg, &mut r),
         p::SOURCE => { match read_all(fs, &store_file("source"), 1024) { Ok(u) => { r.machine(core::str::from_utf8(&u).unwrap_or("")); w::OK } Err(_) => { r.line("No store set. Use: pkg refresh URL"); w::NOT_FOUND } } }
@@ -291,11 +302,12 @@ fn kept_catalog(fs: &mut F) -> Option<Vec<sex_pkg::index::Item>> {
     sex_pkg::index::parse(core::str::from_utf8(&text).ok()?).ok()
 }
 
-fn catalog(fs: &mut F, url: &[u8], r: &mut Report) -> u8 {
-    let text = read_all(fs, p::CATALOG_DOWNLOAD, sex_pkg::index::MAX_BYTES);
-    let sig = read_all(fs, p::SIG_DOWNLOAD, 512);
-    let _ = fs.remove_path(p::CATALOG_DOWNLOAD);
-    let _ = fs.remove_path(p::SIG_DOWNLOAD);
+fn catalog(fs: &mut F, url: &[u8], folder: Option<&[u8]>, r: &mut Report) -> u8 {
+    let (text_at, sig_at) = (downloaded(folder, p::CATALOG_DOWNLOAD), downloaded(folder, p::SIG_DOWNLOAD));
+    let text = read_all(fs, &text_at, sex_pkg::index::MAX_BYTES);
+    let sig = read_all(fs, &sig_at, 512);
+    let _ = fs.remove_path(&text_at);
+    let _ = fs.remove_path(&sig_at);
     let (Ok(text), Ok(sig)) = (text, sig) else { r.line("The catalog did not download."); let _ = fs.commit(); return w::NOT_FOUND };
     let keys = trusted(fs);
     let items = match sex_pkg::index::verify(&text, sig.trim_ascii(), &keys) { Ok(i) => i, Err(e) => { let _ = fs.commit(); return refused(r, e.why()) } };

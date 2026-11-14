@@ -84,6 +84,14 @@ pub fn canonical(path: &[u8]) -> io::Result<PathBuf> {
         crate::path::Refused::AboveFolder => io::Error::from(io::ErrorKind::PermissionDenied),
         crate::path::Refused::NotUtf8OrNul => io::Error::from(io::ErrorKind::InvalidInput),
     })?;
+    // A path the person granted this run (`@/absolute/path`) stays one: Files
+    // names it that way, and `..` never climbs out of it.
+    if path.starts_with(b"@/") {
+        if path.split(|b| *b == b'/').any(|p| p == b"..") { return Err(io::Error::from(io::ErrorKind::PermissionDenied)); }
+        let rest = r.strip_prefix(b"@").unwrap_or(&r);
+        let rest = rest.strip_prefix(b"/").unwrap_or(rest);
+        return Ok(PathBuf::from(format!("@/{}", String::from_utf8_lossy(rest))));
+    }
     let mut s = String::from("/");
     s.push_str(&String::from_utf8_lossy(&r));
     Ok(PathBuf::from(s))
