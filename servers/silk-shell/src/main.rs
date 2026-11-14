@@ -16,6 +16,8 @@ mod clipboard;
 mod autofill;
 use autofill as autofill_broker;
 mod autofill_routes;
+#[cfg(sexos_input_payload_proof)]
+mod wait_observer;
 mod app_input;
 mod wm;
 mod launcher_search;
@@ -25916,6 +25918,8 @@ pub extern "C" fn _start() -> ! {
         unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); display_scale_poll(); shell_close_poll(); shell_memory_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); autofill_routes::poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); notification_poll(); tray_tick(); }
         // Retain failed notification attempts while continuing normal receives.
         // Success means enqueue only; sexinput validates caller and version.
+        #[cfg(sexos_input_payload_proof)]
+        wait_observer::poll();
         if shell_ready_publisher.poll() {
             serial_println!("[silk-shell.ready.notify] to=sexinput");
         }

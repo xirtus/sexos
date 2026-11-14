@@ -148,6 +148,90 @@ def _complete(text,match,suffix):
 def _sampled(count,initial):
     return count>0 and(count<=initial or count&(count-1)==0)
 
+# The optional passive diagnostic observer never grants authority or causes a wake.
+# Only this actual reviewed Shell/API/kernel cohort is admitted; future merge
+# combinations need independent review and an exact new fingerprint.
+PASSIVE_OBSERVER_SOURCES = {'servers/silk-shell/src/wait_observer.rs': '99900d657e10aa0aca89e34bdd2b632207aebe2e1655eeb5bc0a16a03b73c5fc',
+ 'servers/silk-shell/src/main.rs': '956663a4a9598ace2aac27df1ccefc0a28b4edfda63d9bf57da3e9078d76a6c8',
+ 'crates/sex-pdx/src/system_stats.rs': '6f77139bfab17ed0f01a7a30b59854596ac53e679171a004b88be54ee00dc197',
+ 'crates/sex-pdx/src/crash_log.rs': '98357d79e617b3cf3a9895e8e4eaa38ca8d2510ce02a432229aff6698b87c621',
+ 'crates/sex-pdx/src/web.rs': '2cd0cedd8bf837aca965d45a147d5251006d0d14521179b1d6c1496a8cffeccd',
+ 'kernel/src/cpu_account.rs': 'c2e3f65a5aa411d2872d34f87ddfb9f9d9e0f56b41e3d1eeaa7d03bb1d4777b8',
+ 'kernel/src/core_local.rs': '62ece205111acc3deba4a41854a9ed632ff99742a54283bce094d1295025a300',
+ 'kernel/src/app_resources.rs': 'a67de7a802a360093d1461bc84a878827d06dc02c0093aaf762afbc243948409',
+ 'kernel/src/service_restart.rs': 'c8899b8f71ab65b431a7c2f05380ec7562d398857ebbbde97787b11fedf63b5e',
+ 'kernel/src/crash_log.rs': '4a6a0f5312fdbec23efa0d5497b820105ba244c35cc878f27db04ba98cedc3ae',
+ 'crates/sex-pdx/src/app_catalog.rs': '07b846017c83b1662fc66dbdffd14dd09374b7a58454ebf0cbbc06954757e0f3'}
+
+
+def passive_observer_source(root,core):
+    result=dict(ok=False,source_sha256={},scope='reviewed passive public-counter/peer-epoch observer; not a general Rust verifier')
+    if core is None or not core['ok']:return result
+    try:
+        root=Path(root).resolve(strict=True)
+        for name,expected in PASSIVE_OBSERVER_SOURCES.items():
+            path=(root/name).resolve(strict=True)
+            if not path.is_relative_to(root)or not path.is_file()or path.stat().st_size>2*1024*1024:raise ValueError('invalid passive observer source')
+            digest=hashlib.sha256(path.read_bytes()).hexdigest();result['source_sha256'][name]=digest
+            if digest!=expected:raise ValueError('unreviewed passive observer source: '+name)
+        result['core_source_sha256']=core['source_sha256']
+        result.update(ok=True,conditions=['diagnostic-only-Shell-main-loop-call','public-counter-indexes-current-pd-not-query-target',
+          'read-only-domain13-counter-and-held-route262-epoch/life','BOOT-Net13-single-main-no-program-workers',
+          'UP-tick-read-before-peer/counter/peer-read','monotonic-first-boot-epoch-and-counter'])
+    except (OSError,ValueError,RuntimeError)as error:result['errors']=[str(error)]
+    return result
+
+
+def passive_observer_joins(text,root,core,topology,identity,seals,expiries):
+    proof=dict(ok=False,source_contract=passive_observer_source(root,core),samples=0,scope='sampled UP expiry then later Ring3 syscall continuation; not an exact two-tick return envelope')
+    if not proof['source_contract']['ok']or not topology['ok']or not identity['ok']or len(seals)!=1:return [],proof
+    def fail(reason):proof['errors']=[reason];return [],proof
+    # The diagnostic cfg must be observed, never inferred from an image name.
+    mode_markers=list(re.finditer(r'\[input.payload.mode\] component=shell\b',text))
+    modes=list(re.finditer(r'^\[input.payload.mode\] component=shell mode=proof\r?\n',text,re.M))
+    ready_markers=list(re.finditer(re.escape('[shell.wait_observer.ready]'),text))
+    ready=list(re.finditer(r'^\[shell.wait_observer.ready\] mode=proof target=13 sys=87 period=250 limit=512\r?\n',text,re.M))
+    if len(mode_markers)!=len(modes)or len(modes)!=1 or len(ready_markers)!=len(ready)or len(ready)!=1:return fail('missing unique diagnostic observer startup/mode')
+    handoff_markers=list(re.finditer(r'^\[bootgraph.boot.handoff\] target=sexnet\b',text,re.M))
+    handoff=list(re.finditer(r'^\[bootgraph.boot.handoff\] target=sexnet id=13 entry=0x[0-9a-f]+\r?\n',text,re.M))
+    if len(handoff_markers)!=len(handoff)or len(handoff)!=1 or not(identity['receipt_offset']<seals[0].start()<handoff[0].start()):return fail('missing unique BOOT Net13 spawn/seal/handoff')
+    registrations=list(re.finditer(r'^\[boot.service.restartable\] pd=13 task=13 pages=[1-9][0-9]* entry=0x[0-9a-f]+\r?\n',text,re.M))
+    registration_markers=list(re.finditer(r'\[boot.service.restartable\] pd=13\b',text))
+    if len(registrations)!=1 or len(registration_markers)!=1 or not(identity['receipt_offset']<registrations[0].start()<seals[0].start()):return fail('missing unique initial Net restart-registration identity')
+    # A fixed-domain counter must never be attributed to another task/incarnation.
+    for line in text.splitlines():
+        if line==registrations[0].group().rstrip('\r\n'):continue
+        if re.search(r'fault|panic|restart|retir|rebirth|worker|thread.start',line,re.I)and re.search(r'\b(?:target|pd|caller_pd|owner|logical|task)=13\b',line):return fail('Net fault/lifecycle/worker ambiguity')
+    number=r'(?:0|[1-9][0-9]{0,19})'
+    records=list(re.finditer(re.escape('[shell.wait_observer]'),text))
+    samples=list(re.finditer(r'^\[shell.wait_observer\] seq=('+number+r') target=13 before=('+number+r') after=('+number+r') syscalls=('+number+r') task=0 slot=262 epoch_before=1 life_before=1 epoch_after=1 life_after=1 ok=1\r?\n',text,re.M))
+    if len(records)!=len(samples)or not 2<=len(samples)<=512:return fail('missing/malformed/budget-exceeded observer samples')
+    proof['samples']=len(samples)
+    if not(modes[0].start()<ready[0].start()<samples[0].start()and handoff[0].start()<samples[0].start()):return fail('observer samples precede diagnostic/BOOT identity')
+    previous=None
+    for i,sample in enumerate(samples,1):
+        seq,before,after,counter=map(int,sample.groups())
+        if seq!=i or max(before,after,counter)>0xffff_ffff_ffff_ffff or after<before:return fail('invalid observer sequence/clock/counter')
+        if previous is not None:
+            _,old_before,old_after,old_counter=previous
+            if before<old_before+250 or before<old_after or counter<old_counter:return fail('observer clock/counter reset or throttle violation')
+        previous=(seq,before,after,counter)
+    for expiry in expiries:
+        if int(expiry[1])!=13 or not _complete(text,expiry,r'\r?\n')or not _sampled(int(expiry[4]),4):continue
+        if not(handoff[0].start()<expiry.start()and topology['receipt_offset']<expiry.start()and 2<=int(expiry[2])<=int(expiry[3])):continue
+        for first,second in zip(samples,samples[1:]):
+            aseq,abefore,aafter,acount=map(int,first.groups());bseq,bbefore,bafter,bcount=map(int,second.groups())
+            # BOTH reads are causally post-expiry: serial order alone is not a
+            # clock fence, nor may an after-only clock straddle the actual read.
+            if first.start()<=expiry.start()or second.start()<=expiry.start()or min(abefore,bbefore)<int(expiry[3])or bcount<=acount:continue
+            proof.update(ok=True,expiry_offset=expiry.start(),baseline_offset=first.start(),continuation_offset=second.start())
+            return [dict(task=13,deadline=int(expiry[2]),expired_at=int(expiry[3]),expiry_count=int(expiry[4]),
+              baseline=dict(sequence=aseq,before=abefore,after=aafter,syscalls=acount,peer_epoch=1),
+              continuation=dict(sequence=bseq,before=bbefore,after=bafter,syscalls=bcount,peer_epoch=1),
+              evidence_type='source_bound_up_expiry_later_ring3_syscall_continuation',exact_two_tick_envelope=False)],proof
+    return fail('no strictly increasing post-expiry Net counter pair')
+
+
 def inspect(text,active=True,*,browser_tasks=(15,),source_root=None):
  errors=[]
  source=source_contract(source_root)if source_root is not None else None
@@ -214,12 +298,15 @@ def inspect(text,active=True,*,browser_tasks=(15,),source_root=None):
    inferred.append(dict(task=13,deadline=int(e[2]),expired_at=int(e[3]),returned_at=int(r[2]),
                         before=int(r[1]),expiry_count=int(e[4]),return_count=int(r[3]),
                         evidence_type='source_bound_up_expiry_return_inferred_park'))
- joined=observed+inferred
+ continued=[];observer=dict(ok=False,scope='not needed by existing observed/return-envelope proof')
+ if active and not observed and not inferred and source_ok and topology['ok'] and net_identity['ok'] and valid_seal:
+  continued,observer=passive_observer_joins(text,source_root,source,topology,net_identity,seals,expiries)
+ joined=observed+inferred+continued
  if active and(not parks or not expiries or not returns or not joined):errors.append('missing actual park→timer expiry→user return join or reviewed UP equivalent')
  if not active and(any(int(p[1])==13 for p in parks)or any(int(e[1])==13 for e in expiries)or returns):
   if not returns or any(not text[r.end():].startswith(' device=0 reply_pending=1')for r in returns):errors.append('unsupported NIC unexpectedly entered device polling without retained reply work')
  if re.search(r'TIMED_WAIT_WITHOUT_ATTACHED_OWNER|BOOT_SELF_WAIT_AUTHORITY|SELF_WAIT_FRONTEND_PROBE|KERNEL PANIC|KERNEL PAGE FAULT|DOUBLE FAULT|panicked at',text):errors.append('guest self-wait failure')
- return dict(ok=not errors,errors=errors,browser_tasks=list(selected),boot_tasks=int(seals[0][1])if valid_seal else None,parks_observed=len(parks),expiries_observed=len(expiries),returns_observed=len(returns),timer_user_joins=joined,observed_timer_user_joins=observed,inferred_timer_user_joins=inferred,source_contract=source,auxiliary_wait_profiles={'acpi':acpi},up_topology=topology,net_boot_identity=net_identity,scope='Sampled real BOOT/main-task/park/timer/Ring3 receipts with explicitly caller-selected observed Browser task IDs; no identity autodiscovery or authority grant. Native peer and desktop gates separately establish useful progress. Nominal timer-assisted polling, not NIC IRQ, CPU/power bound, physical or SMP proof. Inferred park requires reviewed unchanged causal source, exact observed UP topology and one-to-one expiry/Net-return envelopes; caller separately verifies frozen source/image binding.')
+ return dict(ok=not errors,errors=errors,browser_tasks=list(selected),boot_tasks=int(seals[0][1])if valid_seal else None,parks_observed=len(parks),expiries_observed=len(expiries),returns_observed=len(returns),timer_user_joins=joined,observed_timer_user_joins=observed,inferred_timer_user_joins=inferred,passive_continuation_joins=continued,passive_observer_contract=observer,source_contract=source,auxiliary_wait_profiles={'acpi':acpi},up_topology=topology,net_boot_identity=net_identity,scope='Sampled real BOOT/main-task/park/timer/Ring3 receipts with explicitly caller-selected observed Browser task IDs; no identity autodiscovery or authority grant. Native peer and desktop gates separately establish useful progress. Nominal timer-assisted polling, not NIC IRQ, CPU/power bound, physical or SMP proof. Inferred park requires reviewed unchanged causal source, exact observed UP topology and one-to-one expiry/Net-return envelopes; caller separately verifies frozen source/image binding.')
 
 def main():
  p=argparse.ArgumentParser();p.add_argument('log',type=Path);p.add_argument('--inactive',action='store_true');p.add_argument('--source-root',type=Path,help='reviewed causal source for sampled UP equivalence and quiet USB32');a=p.parse_args();r=inspect(a.log.read_text(errors='replace'),not a.inactive,source_root=a.source_root);print(json.dumps(r,indent=2));raise SystemExit(0 if r['ok']else 1)
