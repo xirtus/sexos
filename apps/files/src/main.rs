@@ -15,10 +15,12 @@ extern crate alloc;
 
 mod archive;
 mod compare;
+mod diskimg;
 mod dupes;
 mod jobs;
 mod loom;
 mod meta;
+mod places;
 mod rename;
 mod search;
 mod thumbs;
