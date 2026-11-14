@@ -120,7 +120,7 @@ fn sleep_ms(ms: u64) {
 
 #[no_mangle]
 pub extern "C" fn sys_usleep(usecs: u64) {
-    if usecs < 1000 { sex_pdx::sys_yield(); } else { sleep_ms(usecs.div_ceil(1000)); }
+    if usecs < 1000 { sex_pdx::sys_yield(); } else { console::interrupt_point(); sleep_ms(usecs.div_ceil(1000)); }
 }
 #[no_mangle]
 pub unsafe extern "C" fn sys_nanosleep(req: *const timespec) -> i32 {
@@ -545,6 +545,16 @@ pub unsafe extern "C" fn sys_pwrite(fd: i32, buf: *const u8, len: usize, offset:
 #[no_mangle]
 pub extern "C" fn sys_isatty(fd: i32) -> i32 { matches!(table().get(fd as usize), Some(Some(Open::Console(_)))) as i32 }
 
+/// The console's terminal mode (`sex_pdx::console_relay::RAW`, `NO_ECHO`,
+/// `NO_SIGNALS`) for the C library's termios: `mode` < 0 asks, else sets it. Returns the
+/// mode (before, when setting), `-ENOTTY` for a descriptor that is not the console.
+#[no_mangle]
+pub extern "C" fn sys_console_mode(fd: i32, mode: i32) -> i32 {
+    if !matches!(table().get(fd as usize), Some(Some(Open::Console(_)))) { return -errno::ENOTTY; }
+    let before = console::mode() as i32;
+    if mode >= 0 { console::set_mode(mode as u8); }
+    before
+}
 #[no_mangle]
 pub extern "C" fn sys_dup(fd: i32) -> i32 {
     let copy = match table().get(fd as usize) {
@@ -641,6 +651,15 @@ pub extern "C" fn sys_getsockopt(s: i32, level: i32, name: i32, value: *mut core
 pub extern "C" fn sys_setsockopt(s: i32, level: i32, name: i32, value: *const core::ffi::c_void, len: abi::socklen_t) -> i32 { on_sock!(s, k => net::set_option(&k, level, name, value, len)) }
 #[no_mangle]
 pub extern "C" fn sys_ioctl(s: i32, cmd: i32, argp: *mut core::ffi::c_void) -> i32 {
+    // The console's size in cells, as `struct winsize` (rows, columns, then pixels, 0).
+    const TIOCGWINSZ: i32 = 0x5413;
+    if cmd == TIOCGWINSZ {
+        if !matches!(table().get(s as usize), Some(Some(Open::Console(_)))) { return -errno::ENOTTY; }
+        if argp.is_null() { return -errno::EFAULT; }
+        let (cols, rows, _) = console::size();
+        unsafe { *(argp as *mut [u16; 4]) = [rows, cols, 0, 0]; }
+        return 0;
+    }
     if cmd != abi::FIONBIO { return -errno::EINVAL; }
     if argp.is_null() { return -errno::EFAULT; }
     let on = unsafe { *(argp as *const i32) } != 0;
