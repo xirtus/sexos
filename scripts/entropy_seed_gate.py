@@ -242,7 +242,7 @@ def main():
    try:proc.wait(timeout=5)
    except subprocess.TimeoutExpired:proc.kill();proc.wait()
   sock.unlink(missing_ok=True)
- raw=pcap.read_bytes()if pcap.exists()else b'';trace=text();wire=tcp_capture(raw,peer_rows,guest_ports=range(48001,65536),initiator='guest')if raw else dict(ok=False,errors=['missing baseline wire capture']);owners=owner_joins(trace,raw,[(15,15)]);metadata=inspect_seed(trace,a.mode,command,root=root);authority=nic_check(trace,expected=1,preparation=True,ethernet=True,network_config=True,routing=True);waiting=wait_check(trace)
+ raw=pcap.read_bytes()if pcap.exists()else b'';trace=text();wire=tcp_capture(raw,peer_rows,guest_ports=range(48001,65536),initiator='guest')if raw else dict(ok=False,errors=['missing baseline wire capture']);owners=owner_joins(trace,raw,[(15,15)]);metadata=inspect_seed(trace,a.mode,command,root=root);authority=nic_check(trace,expected=1,preparation=True,ethernet=True,network_config=True,routing=True);waiting=wait_check(trace,source_root=root)
  try:
   for frame in frames(raw):
    if len(frame)>=42 and frame[12:14]==b'\x08\0'and frame[23]==17 and frame[26:30]==bytes([10,0,2,15]):
