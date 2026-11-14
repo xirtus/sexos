@@ -58,6 +58,18 @@ class TLSPlatform(unittest.TestCase):
         workspace['patch'] = {'crates-io': {'embedded-tls': {'path': '/tmp/replacement'}}}
         self.assertTrue(gate.check_manifests(TLS, workspace, APP))
 
+    def test_neighbor_patch_requires_exact_path_and_preserves_tls_policy(self):
+        workspace = copy.deepcopy(WORKSPACE)
+        workspace['patch']['crates-io']['smoltcp'] = {'path': 'vendor/smoltcp-0.14.0'}
+        self.assertEqual(gate.check_manifests(TLS, workspace, APP, TRUST), [])
+        for value in ({'path': '/tmp/unreviewed'}, {'path': 'vendor/smoltcp-0.14.0', 'version': '*'},
+                      {'git': 'https://example.invalid/smoltcp'}):
+            changed = copy.deepcopy(workspace)
+            changed['patch']['crates-io']['smoltcp'] = value
+            self.assertTrue(gate.check_manifests(TLS, changed, APP, TRUST))
+        workspace['patch']['crates-io']['embedded-tls'] = {'path': '/tmp/unreviewed'}
+        self.assertTrue(gate.check_manifests(TLS, workspace, APP, TRUST))
+
     def test_workspace_or_app_cannot_bypass_reviewed_crate(self):
         workspace = copy.deepcopy(WORKSPACE)
         workspace['workspace']['members'].remove('crates/sex-tls')
