@@ -29,8 +29,7 @@ mod source;
 pub mod subtitles;
 pub use source::{Source, Growing, AHEAD, NEAR};
 pub mod recording;
-pub mod episodes;
-pub mod segments;
+pub use sex_episodes::{episodes, segments};
 
 /// FFmpeg's error number, with its text through [`Error::text`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

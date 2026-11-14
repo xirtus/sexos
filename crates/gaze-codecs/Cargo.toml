@@ -3,18 +3,23 @@ name = "gaze-codecs"
 version = "0.1.0"
 edition = "2021"
 license.workspace = true
-description = "Gaze picture formats beyond sex-image: EXIF, orientation, RAW previews, JPEG XL, SVG"
+description = "Gaze picture formats beyond sex-image: EXIF, orientation, camera RAW, JPEG XL, SVG"
 
 [dependencies]
 sex-image = { path = "../sex-image" }
 jxl-oxide = { version = "=0.12.6", default-features = false, optional = true }
 resvg = { version = "=0.50.0", default-features = false, features = ["text"], optional = true }
+# Camera RAW development. LICENCE: LGPL-2.1 (dnglab project), the only
+# non-permissive dependency here; allowed for SexOS, where only our own code
+# must be GPL-3.0 (see README.md). Pure Rust, needs std.
+rawler = { version = "=0.8.0", default-features = false, optional = true }
 
 [features]
 default = []
 std = []
 jxl = ["std", "dep:jxl-oxide"]
 svg = ["std", "dep:resvg"]
+raw = ["std", "dep:rawler"]
 
 [dev-dependencies]
 # Lossless JPEG XL encoder (MIT OR Apache-2.0 OR Zlib): JXL fixtures are made at test time.
