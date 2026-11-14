@@ -20993,9 +20993,13 @@ unsafe fn close_surface_from_frame_light(surface_id: u64) -> bool {
         }
     }
     shell_request_app_close(surface_id);
-    // A document app may decline a Close to keep unsaved work. Its window
-    // stays until it agrees and dies; retirement then removes its tabs.
-    if APP_CUSTODY.iter().flatten().any(|e|e.owns_surface(surface_id)&&sex_pdx::app_catalog::is_document_app(e.target)&&e.close_pending&&!e.dead) {
+    // Document and ordinary programs may decline Close for unsaved work. Keep
+    // their surfaces until attested retirement; a decline restores input to the
+    // existing dialog. Programs that ignore Close retain the five-second fence.
+    if APP_CUSTODY.iter().flatten().any(|e|e.owns_surface(surface_id)
+        && (app_catalog::is_document_app(e.target)
+            || app_catalog::by_surface(e.target,e.surface).is_some_and(|row|row.app==app_catalog::App::Program))
+        &&e.close_pending&&!e.dead) {
         sex_pdx::serial_record!("[silk.close.deferred] sid={} reason=app_decides",surface_id);
         return true;
     }
