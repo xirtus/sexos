@@ -494,6 +494,8 @@ jobs:
       run: |
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg
         python3 scripts/moan_export_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/moan-export"
+    - name: Moan editable project waveform save and reopen across reboot
+      run: python3 scripts/moan_project_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/moan-project"
     - name: Preserve program evidence
       if: always()
       uses: actions/upload-artifact@v4
