@@ -173,6 +173,17 @@ fn memory() -> Memory<'static> {
         }
     }
 }
+/// The lock screen's password, tried on the encrypted home if it is locked: OK, or
+/// why not. None when there is no filesystem or no locked home.
+pub fn home_unlock_from_lock_screen(password: &[u8]) -> Option<u8> {
+    let state = unsafe { &mut *core::ptr::addr_of_mut!(STATE) };
+    if matches!(state, State::Untried) { *state = bring_up(); }
+    let State::Ready(fs) = state else { return None };
+    if crate::home::control(fs, sex_pdx::home_lock::STATE, 0, &[]) != Ok(sex_pdx::home_lock::STATE_LOCKED) { return None; }
+    if writes_pending() { commit_writes(fs); }
+    forget_stats(None);
+    Some(match crate::home::control(fs, sex_pdx::home_lock::UNLOCK, 0, password) { Ok(_) => w::OK, Err(st) => st })
+}
 fn bring_up() -> State {
     let sectors = DiskFs::diskfs_block_call(sex_pdx::BLOCK_CAPACITY, 0, 0, 0);
     let state = bring_up_on(sectors);

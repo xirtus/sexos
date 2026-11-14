@@ -1096,6 +1096,23 @@ pub mod net {
             }
             /// Sends this side's FIN after what is queued.
             pub fn shutdown(&self) -> Result<(), Error> { ok(simple(self.flow, w::SHUTDOWN, 0)?).map(|_| ()) }
+            /// Starts TLS on an open connection to `host` (its name for SNI and the
+            /// certificate check). Sends and receives carry plain bytes from then on.
+            pub fn tls_start(&self, host: &[u8]) -> Result<(), Error> {
+                if host.is_empty() || host.len() > 253 { return Err(Error::Address); }
+                ok(exchange(self.flow, w::TLS_START, host.len() as u64, |d| d[..host.len()].copy_from_slice(host), |r, _| r)?).map(|_| ())
+            }
+            /// Where the TLS handshake is: `None` while it runs, then ready or failed.
+            pub fn tls_stage(&self) -> Result<Option<()>, Error> {
+                match ok(simple(self.flow, w::TLS_STAGE, 0)?)? {
+                    w::TLS_READY => Ok(Some(())),
+                    w::TLS_HANDSHAKE => Ok(None),
+                    w::TLS_FAILED_CERTIFICATE => Err(Error::Certificate),
+                    _ => Err(Error::Secure),
+                }
+            }
+            /// Moves what was sent over TLS on to the wire now.
+            pub fn flush(&self) -> Result<(), Error> { ok(simple(self.flow, w::FINISH_REQUEST, 0)?).map(|_| ()) }
             /// Queues one datagram: false when there is no room yet.
             pub fn send_to(&self, bytes: &[u8], to: &IpAddr, port: u16) -> Result<bool, Error> {
                 if bytes.len() > w::REGION_BYTES - w::ENDPOINT_BYTES { return Err(Error::TooLarge); }

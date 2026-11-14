@@ -5,7 +5,9 @@
 //! asks Files to `CHECK` it against the stored hash, or (Settings only) to `SET` it
 //! as the new password. Files keeps an Argon2id hash with a random salt in
 //! `/system/password`; nobody can read it back. The staged bytes are wiped after
-//! each CHECK or SET. The Shell checks passwords for the lock screen.
+//! each CHECK or SET. The Shell checks passwords for the lock screen; when the Shell's
+//! CHECK passes (or no password is set) and the encrypted home is locked, Files tries
+//! the same password on it, so signing in at the lock screen also opens `/home`.
 //!
 //! Request: `type_id` [`OP`], arg0 = verb | chunk << 8, arg1 = 8 bytes (PUT) or the
 //! length (CHECK, SET). Reply: tag 0xC7 << 56 | status, sent only for CHECK, SET and
@@ -54,6 +56,9 @@ pub struct Staging { bytes: [u8; MAX] }
 impl Default for Staging { fn default() -> Self { Self::new() } }
 impl Staging {
     pub const fn new() -> Self { Staging { bytes: [0; MAX] } }
+    /// The first `n` staged bytes (at most [`MAX`]): what the next CHECK or SET takes.
+    /// Files uses them once more for the encrypted home when the lock screen asks.
+    pub fn staged(&self, n: usize) -> &[u8] { &self.bytes[..n.min(MAX)] }
     fn wipe(&mut self) { for b in self.bytes.iter_mut() { unsafe { core::ptr::write_volatile(b, 0) }; } }
 }
 
