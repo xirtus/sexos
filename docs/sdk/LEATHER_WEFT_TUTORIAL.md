@@ -106,3 +106,6 @@ Review follow-up: the host save-policy regressions preserve an existing unobserv
 file byte-for-byte and verify explicit loaded/new routes. The QEMU gate attempts
 a blocked path-switch overwrite, reloads the original hash and verifies startup
 autoload on a second run.
+
+Actual development-image QEMU pass and exact input hashes are recorded in
+[the 2026-11-14 runtime proof](../handoff/LEATHER_VELVET_RUNTIME_2026_11_14.md). Full candidate CI remains required.
