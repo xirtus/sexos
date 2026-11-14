@@ -17,6 +17,13 @@ extern crate alloc;
 pub mod keys;
 #[cfg(feature = "render")]
 pub mod render;
+pub mod copy_mode;
+pub mod hints;
+mod osc;
+mod search;
+
+pub use osc::{CommandMark, Event, Progress};
+pub use search::{Highlight, Match};
 
 use alloc::collections::VecDeque;
 use alloc::string::String;
@@ -39,17 +46,21 @@ pub const INVERSE: u8 = 16;
 pub const HIDDEN: u8 = 32;
 pub const STRIKE: u8 = 64;
 
+/// One character cell: 16 bytes, so a long scrollback stays affordable.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Cell {
     pub ch: char,
     pub fg: Color,
     pub bg: Color,
     pub flags: u8,
+    /// The OSC 8 hyperlink this cell belongs to: 0 for none, otherwise an index into the
+    /// screen's link table ([`Screen::link`]).
+    pub link: u16,
 }
 impl Cell {
-    pub const BLANK: Cell = Cell { ch: ' ', fg: Color::Default, bg: Color::Default, flags: 0 };
+    pub const BLANK: Cell = Cell { ch: ' ', fg: Color::Default, bg: Color::Default, flags: 0, link: 0 };
     /// A blank in the current background, as erasing leaves (xterm's "background colour erase").
-    fn erased(pen: &Pen) -> Cell { Cell { ch: ' ', fg: Color::Default, bg: pen.bg, flags: 0 } }
+    fn erased(pen: &Pen) -> Cell { Cell { ch: ' ', fg: Color::Default, bg: pen.bg, flags: 0, link: 0 } }
 }
 
 /// The attributes new text is written with.
@@ -77,6 +88,38 @@ impl Line {
 /// A point on the whole history: `row` counts from the oldest scrollback line.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Point { pub row: usize, pub col: usize }
+
+/// How a selection's two corners are read: a run of text, whole lines, or a rectangle.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SelectionMode {
+    #[default]
+    Char,
+    Line,
+    Block,
+}
+
+/// What the text protocols, search and copy mode keep on a screen. Rows that must survive
+/// the history being trimmed are stored as "global" rows (absolute row plus `dropped`),
+/// so trimming is O(1) and they are converted when read.
+#[derive(Default)]
+struct Extras {
+    /// Lines ever dropped off the top of the history.
+    dropped: usize,
+    /// The hyperlink new text is written with (0: none). Not part of the pen: SGR 0 keeps it.
+    link: u16,
+    links: Vec<Option<osc::Link>>,
+    link_gc_at: usize,
+    events: Vec<Event>,
+    commands: VecDeque<osc::Mark>,
+    highlights: Vec<Match>,
+    /// `dropped` when the highlights were set.
+    highlights_base: usize,
+    current: Option<usize>,
+    /// Copy mode's cursor, as a global row and column.
+    copy_cursor: Option<(usize, usize)>,
+    selection_mode: SelectionMode,
+    cwd: Option<String>,
+}
 
 pub struct Screen {
     cols: usize,
@@ -116,6 +159,7 @@ pub struct Screen {
     bells: u32,
     last_char: char,
     selection: Option<(Point, Point)>,
+    ext: Extras,
 }
 
 impl Screen {
@@ -129,6 +173,7 @@ impl Screen {
             app_cursor: false, app_keypad: false, bracketed_paste: false, autowrap: true, origin: false, insert: false,
             mouse: 0, mouse_sgr: false, title: Vec::new(), title_changed: false, replies: Vec::new(), view: 0,
             dirty: vec![true; rows], all_dirty: true, bells: 0, last_char: ' ', selection: None,
+            ext: Extras::default(),
         }
     }
     pub fn cols(&self) -> usize { self.cols }
@@ -196,21 +241,55 @@ impl Screen {
         let h = self.history.len();
         Point { row: h - self.view.min(h) + row.min(self.rows - 1), col: col.min(self.cols - 1) }
     }
-    pub fn select(&mut self, from: Point, to: Point) {
+    pub fn select(&mut self, from: Point, to: Point) { self.select_mode(from, to, SelectionMode::Char); }
+    /// A selection read as text, whole lines or a rectangle between two corners.
+    pub fn select_mode(&mut self, from: Point, to: Point, mode: SelectionMode) {
         let (a, b) = if from <= to { (from, to) } else { (to, from) };
         self.selection = Some((a, b));
+        self.ext.selection_mode = mode;
         self.all_dirty = true;
     }
     pub fn clear_selection(&mut self) { if self.selection.take().is_some() { self.all_dirty = true; } }
+    /// Copy mode's cursor, drawn as a hollow box (absolute rows; `None` hides it).
+    pub fn set_copy_cursor(&mut self, p: Option<Point>) {
+        self.ext.copy_cursor = p.map(|p| (p.row + self.ext.dropped, p.col));
+        self.all_dirty = true;
+    }
+    pub fn copy_cursor(&self) -> Option<Point> {
+        let (row, col) = self.ext.copy_cursor?;
+        Some(Point { row: row.checked_sub(self.ext.dropped)?, col })
+    }
+    /// The selection's corners (ordered) and mode.
+    pub fn selection(&self) -> Option<(Point, Point, SelectionMode)> { self.selection.map(|(a, b)| (a, b, self.ext.selection_mode)) }
     pub fn selected(&self, col: usize, row: usize) -> bool {
         let Some((a, b)) = self.selection else { return false };
         let p = self.point_at(col, row);
-        p >= a && p <= b
+        match self.ext.selection_mode {
+            SelectionMode::Char => p >= a && p <= b,
+            SelectionMode::Line => p.row >= a.row && p.row <= b.row,
+            SelectionMode::Block => p.row >= a.row && p.row <= b.row && p.col >= a.col.min(b.col) && p.col <= a.col.max(b.col),
+        }
     }
     /// The selected text, soft-wrapped rows joined, trailing blanks of each line dropped.
+    /// A block selection is one line per row; a line selection takes whole rows.
     pub fn selection_text(&self) -> String {
-        let Some((a, b)) = self.selection else { return String::new() };
+        let Some((mut a, mut b)) = self.selection else { return String::new() };
         let mut out = String::new();
+        match self.ext.selection_mode {
+            SelectionMode::Char => {}
+            SelectionMode::Line => { a.col = 0; b.col = self.cols - 1; }
+            SelectionMode::Block => {
+                let (l, r) = (a.col.min(b.col), a.col.max(b.col));
+                for row in a.row..=b.row {
+                    let Some(line) = self.abs_line(row) else { break };
+                    let to = (r + 1).min(line.cells.len());
+                    let piece: String = line.cells[l.min(to)..to].iter().map(|c| c.ch).collect();
+                    out.push_str(piece.trim_end_matches(' '));
+                    if row != b.row { out.push('\n'); }
+                }
+                return out;
+            }
+        }
         for row in a.row..=b.row {
             let Some(line) = self.abs_line(row) else { break };
             let from = if row == a.row { a.col } else { 0 };
@@ -223,7 +302,7 @@ impl Screen {
         }
         out
     }
-    fn abs_line(&self, row: usize) -> Option<&Line> {
+    pub(crate) fn abs_line(&self, row: usize) -> Option<&Line> {
         let h = self.history.len();
         if row < h { self.history.get(row) } else { self.lines.get(row - h) }
     }
@@ -281,15 +360,26 @@ impl Screen {
         self.trim_history();
     }
     fn trim_history(&mut self) {
-        while self.history.len() > self.history_max {
-            self.history.pop_front();
-            // Selections are in absolute rows: they move up with the history.
-            if let Some((a, b)) = self.selection.as_mut() {
-                if a.row == 0 { self.selection = None; break; }
-                a.row -= 1; b.row -= 1;
-            }
-        }
+        let over = self.history.len().saturating_sub(self.history_max);
+        if over == 0 { return; }
+        self.history.drain(..over);
+        self.rows_dropped(over);
     }
+    /// `n` lines left the top of the history: everything kept in absolute rows moves up.
+    fn rows_dropped(&mut self, n: usize) {
+        if n == 0 { return; }
+        // Selections are in absolute rows: they move up with the history.
+        if let Some((a, b)) = self.selection.as_mut() {
+            if a.row < n { self.selection = None; } else { a.row -= n; b.row -= n; }
+        }
+        self.ext.dropped = self.ext.dropped.wrapping_add(n);
+        // Marks are kept in global rows; forget the ones that left.
+        let dropped = self.ext.dropped;
+        while self.ext.commands.front().is_some_and(|m| m.prompt.0 < dropped) { self.ext.commands.pop_front(); }
+    }
+    /// Lines ever dropped off the top of the history. Something holding absolute rows
+    /// across output (copy mode does) subtracts the change.
+    pub fn rows_dropped_total(&self) -> usize { self.ext.dropped }
     /// Moves rows `top..=bottom` up by `n`; what leaves the top of a full-screen region
     /// goes into the history.
     fn scroll_up(&mut self, n: usize) {
@@ -331,7 +421,7 @@ impl Screen {
             }
             self.pending_wrap = false;
         }
-        let cell = Cell { ch: c, fg: self.pen.fg, bg: self.pen.bg, flags: self.pen.flags };
+        let cell = Cell { ch: c, fg: self.pen.fg, bg: self.pen.bg, flags: self.pen.flags, link: self.ext.link };
         let (x, y, cols) = (self.x, self.y, self.cols);
         let row = &mut self.lines[y].cells;
         if self.insert { row.insert(x, cell); row.truncate(cols); } else { row[x] = cell; }
@@ -359,7 +449,7 @@ impl Screen {
             0 => { self.erase_cells(y, x, cols); for r in y + 1..rows { self.erase_cells(r, 0, cols); } }
             1 => { for r in 0..y { self.erase_cells(r, 0, cols); } self.erase_cells(y, 0, x + 1); }
             2 => { for r in 0..rows { self.erase_cells(r, 0, cols); } }
-            3 => { self.history.clear(); self.view = 0; self.selection = None; self.touch_all(); }
+            3 => { let h = self.history.len(); self.history.clear(); self.rows_dropped(h); self.view = 0; self.selection = None; self.touch_all(); }
             _ => {}
         }
     }
@@ -400,8 +490,11 @@ impl Screen {
     }
     fn reset(&mut self) {
         let (cols, rows, max) = (self.cols, self.rows, self.history_max);
+        // Keep the global row count moving forward for anyone holding absolute rows.
+        let dropped = self.ext.dropped.wrapping_add(self.history.len());
         *self = Screen::new(cols, rows);
         self.history_max = max;
+        self.ext.dropped = dropped;
     }
     fn sgr(&mut self, params: &vte::Params) {
         let mut it = params.iter();
@@ -458,9 +551,13 @@ fn extended(p: &[u16]) -> Option<Color> {
     }
 }
 
+/// The longest OSC string kept (an OSC 52 clipboard set is base64, so about 12 KiB of text).
+pub(crate) const OSC_MAX: usize = 16 * 1024;
+
 /// The parser state between calls: a sequence or UTF-8 character may arrive split.
-pub struct Parser(vte::Parser);
-impl Parser { pub fn new() -> Self { Parser(vte::Parser::new()) } }
+/// Boxed: the OSC buffer is large.
+pub struct Parser(alloc::boxed::Box<vte::Parser<OSC_MAX>>);
+impl Parser { pub fn new() -> Self { Parser(alloc::boxed::Box::new(vte::Parser::new_with_size())) } }
 impl Default for Parser { fn default() -> Self { Self::new() } }
 
 struct Performer<'a>(&'a mut Screen);
@@ -601,6 +698,8 @@ impl vte::Perform for Performer<'_> {
                 s.title_changed = true;
             }
         }
+        // Hyperlinks, clipboard, notifications, working directory, shell marks: osc.rs.
+        s.osc(params);
     }
 }
 
@@ -642,6 +741,8 @@ pub fn colors(cell: &Cell) -> (u32, u32) {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_text;
 
 /// A fixed screen in the spirit of vttest's first pages: a frame drawn with absolute
 /// moves, colours from all three palettes, and character insert, delete and erase. Term's

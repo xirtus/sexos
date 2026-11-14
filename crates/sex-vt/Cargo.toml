@@ -10,7 +10,13 @@ description = "A VT100/xterm terminal screen for SexOS: escape parsing, cells, s
 # machine (Paul Williams' DEC parser) that Alacritty uses.
 vte = { version = "0.15", default-features = false }
 sex-font = { path = "../sex-font", optional = true }
+# MIT/Apache-2.0, no_std + alloc without default features: regular expressions for
+# scrollback search (the lazy DFA and PikeVM behind its `meta` regex).
+regex-automata = { version = "0.4", default-features = false, features = ["alloc", "syntax", "meta", "nfa-pikevm", "hybrid", "unicode-case", "unicode-perl"], optional = true }
 
 [features]
+default = ["regex"]
+# Regex scrollback search; plain-text search works without it.
+regex = ["dep:regex-automata"]
 # Drawing cells into a program's pixels with Geist Mono.
 render = ["dep:sex-font"]
