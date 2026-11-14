@@ -6,6 +6,7 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import https_document_gate as gate
 import tls_exchange_gate as tls
 import test_tls_exchange_gate as fixture
+from check_desktop_pixels import draw_cell,cell_coverage
 ROOT=Path(__file__).resolve().parents[2]
 
 def capture(mode='ready',plaintext=False):
@@ -46,18 +47,26 @@ class HTTPSDocumentOracle(unittest.TestCase):
   self.assertEqual(gate.response('duplicate-length').count(b'Content-Length:'),2);self.assertIn(b'Content-Length: 12289\r\n',gate.response('oversize'));self.assertIn(b'Content-Type: image/png\r\n',gate.response('unsupported-mime'));head,body=gate.response('partial-cancel').split(b'\r\n\r\n',1);self.assertEqual(len(body),1024);self.assertIn(b'Content-Length: 12288',head);self.assertNotIn(gate.TAIL,body)
 
 def reader_pixels(frame,contract,width=1280,height=800):
- raw=bytearray(width*height*3);tile=frame['tile'];factor=frame['scale'];color=contract['color'].to_bytes(3,'big')
+ raw=bytearray(contract['background'].to_bytes(3,'big')*(width*height));tile=frame['tile'];factor=frame['scale'];color=contract['color'].to_bytes(3,'big')
  for row,line in enumerate(frame['lines']):
   for col,ch in enumerate(line):
-   for gy,bits in enumerate(gate.glyph(contract['font'],chr(ch))):
-    for gx in range(5):
-     if bits&(1<<(4-gx)):
-      for dy in range(factor):
-       for dx in range(factor):
-        x=tile['x']+contract['inset']+(col*contract['advance']+gx)*factor+dx;y=tile['y']+contract['top']+(row*contract['line']+gy)*factor+dy;at=(y*width+x)*3;raw[at:at+3]=color
+   draw_cell(raw,width,tile['x']+contract['inset']+col*contract['advance']*factor,tile['y']+contract['top']+row*contract['line']*factor,chr(ch),factor,color,contract['font'])
  return b'P6\n'+f'{width} {height}\n255\n'.encode()+raw
 
 class HTTPSReaderPixels(unittest.TestCase):
+ def test_maximized_https_reader_checks_far_right_padding_after_column_80(self):
+  contract=gate.http.load_pixel_contract(ROOT);contract.update(request=gate.REQUEST,reader_header=gate.HEADER)
+  frame=gate.http.reader_frame(gate.BODY,1280,706,contract,0,b'/welcome');frame.update(tile=dict(x=0,y=70,w=1280,h=706));image=bytearray(reader_pixels(frame,contract))
+  self.assertTrue(gate.frame_pixels(bytes(image),frame,contract)['ok'])
+  x=contract['inset']+100*contract['advance']*frame['scale'];y=70+contract['top'];at=image.index(b'\n255\n')+5+(y*1280+x)*3;image[at]=(image[at]+1)%256
+  with self.assertRaisesRegex(ValueError,'glyph/padding'):gate.frame_pixels(bytes(image),frame,contract)
+ def test_fractional_coverage_pixel_corruption_cannot_pass_full_https_reader(self):
+  contract=gate.http.load_pixel_contract(ROOT);contract.update(request=gate.REQUEST,reader_header=gate.HEADER)
+  for tile_width in (250,900):
+   frame=gate.http.reader_frame(gate.BODY,tile_width,650,contract,0,b'/welcome');frame.update(tile=dict(x=20,y=100,w=tile_width,h=650));image=bytearray(reader_pixels(frame,contract));scale=frame['scale']
+   coverage=cell_coverage(contract['font'],chr(frame['lines'][0][0]),scale);index=next(i for i,a in enumerate(coverage)if 0<a<255)
+   x=20+contract['inset']+index%(6*scale);y=100+contract['top']+index//(6*scale);at=image.index(b'\n255\n')+5+(y*1280+x)*3;image[at]=(image[at]+1)%256
+   with self.assertRaisesRegex(ValueError,'glyph/padding'):gate.frame_pixels(bytes(image),frame,contract)
  def test_entire_https_reader_chrome_body_and_end_marker(self):
   contract=gate.http.load_pixel_contract(ROOT);contract.update(request=gate.REQUEST,reader_header=gate.HEADER)
   for width,height in((900,650),(504,600)):
@@ -148,15 +157,10 @@ class HTTPSBoundReader(unittest.TestCase):
  def test_https_status_panels_have_exact_full_glyphs_and_erasure(self):
   c=self.contract()
   for mode,state in(('ready','Verified'),('partial-cancel','Pending'),('partial-cancel','Cancelled'),('wrong-name','Unavailable'),('duplicate-length','Unavailable')):
-   text=fixture.trace(state,c).replace('browser.tls.peer.layout','browser.https.layout');g=gate.status_geometry(text,state,mode,c);width=1280;height=800;raw=bytearray(width*height*3);color=c['color'].to_bytes(3,'big');factor=g['scale']
+   text=fixture.trace(state,c).replace('browser.tls.peer.layout','browser.https.layout');g=gate.status_geometry(text,state,mode,c);width=1280;height=800;raw=bytearray(c['background'].to_bytes(3,'big')*(width*height));color=c['color'].to_bytes(3,'big');factor=g['scale']
    for row in g['rows']:
     for col,ch in enumerate(row['text']):
-     for gy,bits in enumerate(gate.glyph(c['font'],ch)):
-      for gx in range(5):
-       if bits&(1<<(4-gx)):
-        for dy in range(factor):
-         for dx in range(factor):
-          x=row['x']+(col*c['advance']+gx)*factor+dx;y=row['y']+gy*factor+dy;at=(y*width+x)*3;raw[at:at+3]=color
+     draw_cell(raw,width,row['x']+col*c['advance']*factor,row['y'],ch,factor,color,c['font'])
    image=b'P6\n1280 800\n255\n'+raw;result=gate.verify_status_pixels(text,image,state,mode,c,(1280,800));self.assertTrue(result['ok'],(state,mode,result))
    self.assertFalse(gate.verify_status_pixels(text.replace('[browser.view.applied]','[missing.applied]'),image,state,mode,c)['ok'])
 
