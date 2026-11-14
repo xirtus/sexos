@@ -475,7 +475,7 @@ def replay_boot(root,iso,binding,out,c=None):
    if end<action['serial_end']or frame['anchor']!=action['after']:raise ValueError('wheel pixel frame predates actual input/retained anchor')
   pixels.append(verify_frame(prefix,(out/frame['screenshot']).read_bytes(),frame,c,tuple(map(int,m['resolution'].split('x'))),joined['document']));previous=end
  parks=[a for a in actions if a['kind']=='park'];asset.verify_parking(trace,frames,parks,tuple(map(int,m['resolution'].split('x'))))
- for check in(nic_check(trace,expected=1,preparation=True,ethernet=True,network_config=True,routing=True),wait_check(trace)):
+ for check in(nic_check(trace,expected=1,preparation=True,ethernet=True,network_config=True,routing=True),wait_check(trace,source_root=root)):
   if not check['ok']:raise ValueError('connected NIC/self-wait regression: '+str(check.get('errors')))
  return dict(ok=True,acceptance='representative_connected_only',full_alpha_acceptance=False,binding=bound,boots=1,frames=len(frames),recovery=cold,wire=wire,keys=keys,wheel=wheel,joins=joined,scope=SCOPE)
 

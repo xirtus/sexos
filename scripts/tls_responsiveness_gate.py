@@ -365,7 +365,7 @@ def main():
  manifest['host_utc_end']=host_end;(out/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n');raw=pcap.read_bytes()if pcap.exists()else b'';trace=text();wire=https.inspect_wire(raw,peer.rows,'partial-close');dns=dns_capture(raw,'echo',attempts=peer.attempts,expected=peer.dns)if peer.dns else dict(ok=False,errors=['missing actual DNS']);progress=inspect_progress(trace,wire,dns,raw,host_start,host_end,contract,root=root);panel_check=dict(ok=False,errors=['workflow incomplete'])
  try:panel_check=dict(ok=True,errors=[],joins=clock_panel(trace,contract,resolution))
  except(AssertionError,ValueError,KeyError,IndexError)as exc:panel_check['errors']=[str(exc)]
- authority=nic_check(trace,expected=1,preparation=True,ethernet=True,network_config=True,routing=True);waiting=wait_check(trace)
+ authority=nic_check(trace,expected=1,preparation=True,ethernet=True,network_config=True,routing=True);waiting=wait_check(trace,source_root=root)
  (out/'peer-exchanges.json').write_text(json.dumps(dict(tls=peer.rows,dns=peer.dns,dns_send_attempts=peer.attempts,keylog_enabled=False),indent=2)+'\n');result=dict(ok=failure is None and not peer.errors and all(v['ok']for v in(wire,dns,progress,panel_check,authority,waiting)),error=failure,server_errors=peer.errors,binding=bound,wire=wire,dns=dns,progress=progress,clock_panel=panel_check,authority=authority,self_wait=waiting,pixels=pixels,actions=actions,durable=durable,cleanup=cleanup,scope=SCOPE);(out/'result.json').write_text(json.dumps(result,indent=2)+'\n')
  if not result['ok']:raise RuntimeError(json.dumps(result))
  print(json.dumps(dict(ok=True,actions=actions,cleanup=cleanup)))
