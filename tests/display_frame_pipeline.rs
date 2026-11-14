@@ -137,6 +137,7 @@ fn draw_atlas_frame_previews_pass(_fb:*mut u32,_w:usize,_h:usize,_len:usize,s:&s
 fn draw_launcher_panel(fb:*mut u32,_w:usize,_h:usize,len:usize,s:&scene::SceneSnapshot){observe_scene(s);unsafe{fb.add(len-2).write(0xdd);}event("launcher");}
 mod lock_screen{pub fn draw(_: *mut u32,_:usize,_:usize,_:usize)->bool{false}}
 fn draw_window_switcher(_:*mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapshot){}
+fn draw_screenshot_ui(_:*mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapshot){}
 fn draw_cursor_z_top(fb:*mut u32,_w:usize,_h:usize,len:usize,save:bool,s:&scene::SceneSnapshot){observe_scene(s);assert!(save);unsafe{
  CURSORS+=1;assert_eq!(device(),BEFORE);fb.add(len-1).write(0xee);mutate_bookkeeping();}event("cursor-raster");}
 fn rect()->damage::Rect{damage::Rect{x:1,y:28,right:4,bottom:30}}
