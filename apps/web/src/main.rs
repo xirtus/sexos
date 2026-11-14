@@ -645,7 +645,7 @@ impl Browser {
         #[cfg(feature = "baseline-jit")]
         if let Doc::Scripted(script) = &self.doc {
             let s = script.jit_stats();
-            sex_pdx::serial_record!("[web.jit.departure] enabled={} compiled={} executed={} considered={} non_scalar={} cache_full={} unsupported={} hottest={} url={}", self.jit_enabled as u8, s.compiled, s.executed, s.considered, s.non_scalar, s.cache_full, s.unsupported, s.hottest, self.url);
+            sex_pdx::serial_record!("[web.jit.departure] enabled={} compiled={} executed={} considered={} non_scalar={} cache_full={} unsupported={} hottest={} captured={} execution_ns={} url={}", self.jit_enabled as u8, s.compiled, s.executed, s.considered, s.non_scalar, s.cache_full, s.unsupported, s.hottest, s.compiled_captured, script.execution_ns(), self.url);
         }
         if self.in_frame.is_none() { self.status = Some("Loading…"); }
         self.url = String::from(url);

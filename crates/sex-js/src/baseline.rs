@@ -19,6 +19,7 @@ const STACK: usize = 16;
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Stats {
     pub compiled: u64,
+    pub compiled_captured: u64,
     pub executed: u64,
     pub bailouts: u64,
     pub refused: u64,
@@ -134,6 +135,7 @@ impl Jit {
                 e.code = Executable::new(&bytes);
                 if e.code.is_some() {
                     self.stats.compiled += 1;
+                    if closures != 0 { self.stats.compiled_captured += 1; }
                 } else {
                     self.stats.refused += 1;
                 }

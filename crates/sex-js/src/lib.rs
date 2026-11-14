@@ -185,6 +185,8 @@ pub struct Script<P: Page + 'static> {
     vm: Vm<P>,
     budget_ms: i32,
     load_budget_ms: i32,
+    #[cfg(feature = "baseline-jit")]
+    execution_ns: u64,
 }
 
 /// The engine's two tiers: machine code (`cfg(sexjs_native)`, see build.rs) or the
@@ -268,7 +270,7 @@ impl<P: Page + 'static> Script<P> {
     pub const NATIVE: bool = cfg!(sexjs_native);
 
     fn start(vm: Vm<P>, limits: Limits) -> Result<Self, Error> {
-        let mut script = Self { vm, budget_ms: 0, load_budget_ms: 0 };
+        let mut script = Self { vm, budget_ms: 0, load_budget_ms: 0, #[cfg(feature = "baseline-jit")] execution_ns: 0 };
         // The prelude is ours: no time budget, which a slow machine could exceed.
         #[cfg(feature = "baseline-jit")]
         script.set_jit_enabled(false);
@@ -314,6 +316,20 @@ impl<P: Page + 'static> Script<P> {
     pub fn page(&self) -> &P { self.vm.page() }
     pub fn page_mut(&mut self) -> &mut P { self.vm.page_mut() }
 
+    /// Elapsed guest execution time (including host calls), excluding network
+    /// waits outside the VM. This is not host CPU time or total page-load time.
+    #[cfg(feature = "baseline-jit")]
+    pub fn execution_ns(&self) -> u64 { self.execution_ns }
+
+    fn timed<T>(&mut self, f: impl FnOnce(&mut Vm<P>) -> Result<T, Error>) -> Result<T, Error> {
+        #[cfg(feature = "baseline-jit")]
+        let before = self.vm.page_mut().now_ns();
+        let result = f(&mut self.vm);
+        #[cfg(feature = "baseline-jit")]
+        { self.execution_ns = self.execution_ns.saturating_add(self.vm.page_mut().now_ns().saturating_sub(before)); }
+        result
+    }
+
     fn put(&mut self, bytes: &[u8]) -> Result<i32, Error> {
         let p = self.vm.alloc(bytes.len().max(1) as i32)?;
         if p == 0 { return Err(Error::Trapped(String::from("out of memory"))); }
@@ -336,7 +352,8 @@ impl<P: Page + 'static> Script<P> {
     fn eval_reporting(&mut self, source: &str, name: &str, mode: i32) -> Result<(), Error> {
         let src = self.put(source.as_bytes())?;
         let nm = self.put(name.as_bytes())?;
-        let r = self.vm.eval((src, source.len() as i32, nm, name.len() as i32, self.load_budget_ms, mode));
+        let budget = self.load_budget_ms;
+        let r = self.timed(|vm| vm.eval((src, source.len() as i32, nm, name.len() as i32, budget, mode)));
         self.vm.free(src);
         self.vm.free(nm);
         let r = match r { Ok(0) => Ok(()), Ok(_) => Err(Error::Thrown), Err(x) => Err(x) };
@@ -371,7 +388,8 @@ impl<P: Page + 'static> Script<P> {
     /// Runs the waiting `import()` calls whose module graphs are now all given (asking
     /// for more where they import further modules). Returns how many still wait.
     pub fn modules_ready(&mut self) -> Result<usize, Error> {
-        let r = self.vm.ready(self.budget_ms)?;
+        let budget = self.budget_ms;
+        let r = self.timed(|vm| vm.ready(budget))?;
         self.dispatch("flush")?;
         Ok(r.max(0) as usize)
     }
@@ -379,7 +397,8 @@ impl<P: Page + 'static> Script<P> {
     fn module_call(&mut self, source: &str, name: &str, discover: bool) -> Result<(), Error> {
         let src = self.put(source.as_bytes())?;
         let nm = self.put(name.as_bytes())?;
-        let r = self.vm.module((src, source.len() as i32, nm, name.len() as i32, self.load_budget_ms, discover as i32));
+        let budget = self.load_budget_ms;
+        let r = self.timed(|vm| vm.module((src, source.len() as i32, nm, name.len() as i32, budget, discover as i32)));
         self.vm.free(src);
         self.vm.free(nm);
         match r { Ok(0) => Ok(()), Ok(_) => Err(Error::Thrown), Err(x) => Err(x) }
@@ -392,7 +411,7 @@ impl<P: Page + 'static> Script<P> {
         // A fetch's arrival may run a script the page inserted (a player's multi-megabyte
         // bundle): that gets the load budget, as the page's own scripts do.
         let budget = if message.starts_with("fetched\t") { self.load_budget_ms.max(self.budget_ms) } else { self.budget_ms };
-        let r = self.vm.dispatch((m, message.len() as i32, budget));
+        let r = self.timed(|vm| vm.dispatch((m, message.len() as i32, budget)));
         self.vm.free(m);
         r
     }
