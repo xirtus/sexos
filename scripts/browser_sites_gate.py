@@ -8,12 +8,13 @@ finds its text in what was laid out. The outcomes go to OUT/sites.json.
 
 --live loads the real sites instead (needs the guest to reach the internet); the
 webmail step stays local."""
-import argparse,gzip,http.server,json,os,re,shutil,threading,time
+import argparse,hashlib,gzip,http.server,json,os,re,shutil,threading,time
 from pathlib import Path
 from browser_gate_viewport import live_viewport
 from web_surface_geometry import canvas_box
 ROOT=Path(__file__).resolve().parents[1]
 SITES=ROOT/'scripts/web_site/sites'
+PROGRAM=ROOT/'iso_root/programs/kaleidoscope'
 BAR=30
 SESSION='s3ss10n'
 logins=[]
@@ -25,7 +26,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
   self.end_headers();self.wfile.write(body)
  def do_GET(self):
   path=self.path.split('?')[0]
-  if path=='/web':return self.send(200,(ROOT/'iso_root/programs/kaleidoscope').read_bytes(),'application/octet-stream')
+  if path=='/web':return self.send(200,PROGRAM.read_bytes(),'application/octet-stream')
   if path=='/sites/github.html':
    # Sent compressed, as GitHub does.
    return self.send(200,(SITES/'github.html.gz').read_bytes(),extra=[('Content-Encoding','gzip'),('Vary','Accept-Encoding')])
@@ -67,8 +68,11 @@ SUITE=[
 ]
 LIVE_TEXT={'news':'npr','links':'comments','encyclopedia':'microkernel','github':'sexos'}
 def main():
- p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');p.add_argument('--live',action='store_true');a=p.parse_args()
- a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
+ global PROGRAM
+ p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');p.add_argument('--live',action='store_true');p.add_argument('--program',type=Path,default=PROGRAM);p.add_argument('--no-jit',action='store_true');a=p.parse_args();PROGRAM=a.program.resolve()
+ a.out.mkdir(parents=True,exist_ok=True)
+ (a.out/'inputs.json').write_text(json.dumps({'iso_sha256':hashlib.sha256(a.iso.read_bytes()).hexdigest(),'program_sha256':hashlib.sha256(PROGRAM.read_bytes()).hexdigest(),'live':a.live,'forced_interpreter':a.no_jit,'resolution':a.resolution,'timing_scope':'page initial fetch/layout/scripts, not asynchronous work or playback','speedup_claim':False},indent=2)+'\n')
+ disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
  with disk.open('r+b') as f:f.truncate(1024**3)
  rw,rh=map(int,a.resolution.split('x'))
  g=boot(a.iso,disk,a.out,'websites',a.resolution);t=g['text'];q=g['q']
@@ -101,7 +105,7 @@ def main():
    if a.live:text,least=LIVE_TEXT[name],1
    began=time.time()
    if i==0:
-    g['focus'](153);time.sleep(.5);s=len(t());keys(f'run +net kaleidoscope {url}');q.key('ret')
+    g['focus'](153);time.sleep(.5);s=len(t());keys(f'run +net kaleidoscope {url}'+(' --no-jit' if a.no_jit else ''));q.key('ret')
     r=g['wait'](r'\[web.ready\] target=(\d+) task=(\d+)',s,300);target,task=r[1],r[2]
     stats=loaded(s,300)
     launch=g['wait'](rf'\[shell.program.launch\] target={target} task={task} surface=(\d+)',s,60);surface=int(launch[1])
@@ -112,6 +116,7 @@ def main():
     # The masthead's web font (WOFF; the WOFF2 source is skipped).
     g['wait'](r'\[web.font\] family=Ledger Display loaded=1 ',s,60)
    found=find(text,least)
+   stats['jit_startup_receipts']=re.findall(r'\[web.jit\] ([^\r\n]+)',t()[s:])
    outcomes.append({'site':name,'url':url,'text':text,'matches':found,'seconds':round(time.time()-began,1),**stats})
    print(outcomes[-1],flush=True)
   # Webmail: sign in, follow the redirect with the new cookie, read the inbox.

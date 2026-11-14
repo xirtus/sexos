@@ -76,3 +76,18 @@ Pages executing no JIT code still belong in the results, with zero coverage.
 Report cold and interactive timings separately, sample dispersion, fallback
 counts, correctness differences and environment (QEMU versus x17). No real-page
 speedup has been measured in this work block; no speedup is claimed.
+
+For local real-site diagnostics, the existing site runner accepts a separately
+built opt-in browser and records its hash, boot ISO hash, requested mode and
+per-page startup JIT receipts alongside the normal timing/outcome results:
+
+```sh
+python3 scripts/browser_sites_gate.py --live --iso "$ISO" \
+  --source-disk "$SEED" --program "$JIT_BROWSER" --no-jit --out "$OUT/off"
+python3 scripts/browser_sites_gate.py --live --iso "$ISO" \
+  --source-disk "$SEED" --program "$JIT_BROWSER" --out "$OUT/on"
+```
+
+Each output directory must be fresh. The webmail step remains a local fixture,
+explicitly separate from the four real sites. Live network runs alone do not
+control resource bytes or cache state and must not be reported as JIT speedups.

@@ -1428,3 +1428,18 @@ fn pointer_events_overlay_inheritance_override_and_restyle() {
     layout_doc(s.page_mut(), "#child { pointer-events: initial !important }");
     assert_eq!(s.page_mut().node_at(150,20),Some(child));
 }
+
+#[test]
+fn pointer_default_link_follows_hit_target_and_ancestor() {
+    let mut d = Document::new(sex_html::parse::parse("<body><a id=under href='/under'>Under</a><a id=over href='/over' style='pointer-events:none'><span id=child style='pointer-events:auto'>Child</span></a></body>"), "https://example.test/", (410,330), clock);
+    let id=|name: &str| d.dom.descendants(0).into_iter().find(|&n|d.dom.attr(n,"id")==Some(name)).unwrap();
+    let (under,over,child)=(id("under"),id("over"),id("child"));
+    d.rects=vec![None;d.dom.nodes.len()];
+    d.rects[under]=Some((0,0,100,100));d.rects[over]=Some((0,0,100,100));d.rects[child]=Some((50,0,50,50));
+    let styles=sex_html::styles(&d.dom,&[],410,330);d.set_pointer_styles(&styles);
+    let links=[under,over].map(|node|sex_html::layout::Link{x:0,y:0,w:100,h:100,href:String::new(),node});
+    assert_eq!(d.pointer_link_at(10,80,&links),Some(under));
+    assert_eq!(d.pointer_link_at(75,25,&links),Some(over));
+    let styles=sex_html::styles(&d.dom,&["#over {pointer-events:auto !important}"],410,330);d.set_pointer_styles(&styles);
+    assert_eq!(d.pointer_link_at(10,80,&links),Some(over));
+}

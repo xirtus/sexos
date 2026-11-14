@@ -1576,7 +1576,7 @@ impl Browser {
             }
         }
         // Links are named by node: a script's relayout rebuilds the list.
-        let link = if y >= 0 { self.page.links.iter().find(|l| self.doc.get().accepts_pointer(l.node) && px >= l.x && px < l.x + l.w && py >= l.y && py < l.y + l.h).map(|l| l.node) } else { None };
+        let link = if y >= 0 { self.doc.get().pointer_link_at(px, py, &self.page.links) } else { None };
         if let (Kind::Down { button: 1 }, Some(n), None) = (p.kind, link, self.in_frame) {
             let href = self.page.links.iter().find(|l| l.node == n).map(|l| l.href.clone()).unwrap_or_default();
             if let Some(t) = (!href.starts_with("javascript:") && !href.is_empty()).then(|| sex_html::url::resolve(&self.url, &href)).flatten() {

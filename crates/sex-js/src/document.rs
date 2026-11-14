@@ -225,6 +225,16 @@ impl Document {
         }
         best.map(|(_, n)| n)
     }
+    /// Native default activation follows the same hit target as DOM events. A
+    /// clickable descendant can activate an ancestor link excluded from hit testing.
+    pub fn pointer_link_at(&self, x: i32, y: i32, links: &[sex_html::layout::Link]) -> Option<NodeId> {
+        let mut node = self.node_at(x, y);
+        while let Some(n) = node {
+            if links.iter().any(|link| link.node == n) { return Some(n); }
+            node = self.dom.nodes[n].parent;
+        }
+        None
+    }
     fn node(&self, s: Option<&&str>) -> Option<NodeId> {
         let id: NodeId = s?.parse().ok()?;
         (id < self.dom.nodes.len()).then_some(id)
