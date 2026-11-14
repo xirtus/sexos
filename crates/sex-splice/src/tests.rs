@@ -246,3 +246,92 @@ fn otio_export_names_each_clip_and_gap_in_frames() {
     assert!(doc.contains("\"target_url\":\"/home/clips/interview.mp4\""));
     assert_eq!(doc.matches("Clip.2").count(), 4);
 }
+
+mod export_tests {
+    use super::*;
+    use crate::export::*;
+
+    /// A source whose every pixel names the media and the source frame (at 30 fps).
+    struct Synthetic {
+        seeks: u32,
+        last: Option<(u32, Micros)>,
+    }
+    impl Pictures for Synthetic {
+        type Error = ();
+        fn picture(&mut self, media: u32, source: Micros, out: &mut [u32]) -> Result<(), ()> {
+            if self.last.map_or(true, |(m, s)| m != media || source < s || source - s > S) {
+                self.seeks += 1;
+            }
+            self.last = Some((media, source));
+            out.fill(media << 24 | (source * 30 / S) as u32);
+            Ok(())
+        }
+    }
+    #[derive(Default)]
+    struct Collect {
+        frames: std::vec::Vec<(u32, Micros)>,
+        hash: FrameHash,
+    }
+    impl Frames for Collect {
+        type Error = ();
+        fn frame(&mut self, px: &[u32], at: Micros) -> Result<(), ()> {
+            self.hash.add(px);
+            self.frames.push((px[0], at));
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn exported_frames_follow_the_cut() {
+        let (mut tl, m, _, _) = interview();
+        tl.apply(&Op::RippleDelete { range: Range::new(5 * S, 9 * S) }).unwrap();
+        let mut src = Synthetic { seeks: 0, last: None };
+        let mut out = Collect::default();
+        let n = export_pictures(&tl, None, 4, &mut src, &mut out).unwrap();
+        assert_eq!(n, 480);
+        let tag = m << 24;
+        assert_eq!(out.frames[149], (tag | 149, 4_966_667));
+        // The frame after the join shows source frame 270 (9 s).
+        assert_eq!(out.frames[150], (tag | 270, 5 * S));
+        assert_eq!(out.frames[479].0, tag | 599);
+        // One seek to open, one at the join; everything else decodes straight on.
+        assert_eq!(src.seeks, 2);
+        // The same edit exports the same frames every time.
+        let mut again = Collect::default();
+        export_pictures(&tl, None, 4, &mut Synthetic { seeks: 0, last: None }, &mut again).unwrap();
+        assert_eq!(again.hash.0, out.hash.0);
+    }
+
+    #[test]
+    fn range_export_gaps_and_overlays() {
+        let (mut tl, m, v, _) = interview();
+        let logo = tl.add_media(MediaKind::Image, "/home/clips/logo.png", 0);
+        let over = tl.add_track(TrackKind::Video, "Overlay");
+        tl.apply(&Op::AddClip { track: over, media: logo, at: 2 * S, source: Range::new(0, S) }).unwrap();
+        let first = tl.tracks.iter().find(|t| t.id == v).unwrap().clips[0].id;
+        tl.apply(&Op::SetEnabled { clip: first, enabled: false }).unwrap();
+        let mut out = Collect::default();
+        let n = export_pictures(&tl, Some(Range::new(1_990_000, 3_050_000)), 1, &mut Synthetic { seeks: 0, last: None }, &mut out).unwrap();
+        // Frames 60..=91 of the timeline fall in the range.
+        assert_eq!(n, 32);
+        assert_eq!(out.frames[0], (logo << 24, 10_000));
+        assert_eq!(out.frames[30].0, 0, "black: the picture clip is disabled and the logo has ended");
+        let _ = m;
+        assert_eq!(
+            export_pictures(&tl, Some(Range::new(30 * S, 40 * S)), 1, &mut Synthetic { seeks: 0, last: None }, &mut out),
+            Err(ExportError::Empty)
+        );
+    }
+
+    #[test]
+    fn sound_pieces_meet_sample_exactly() {
+        let (tl, m, _, a) = interview();
+        let t = script(m);
+        let tl = tl.apply_all(&ripple_ops(&tl, &t.filler_cuts())).unwrap();
+        let p = sound_pieces(&tl, 48_000);
+        assert_eq!(p.len(), 2);
+        assert_eq!((p[0].track, p[0].at, p[0].samples, p[0].source), (a, 0, 48_000, 0));
+        assert_eq!((p[1].at, p[1].source), (48_000, 76_800));
+        assert_eq!(p[1].at + p[1].samples, 19_400_000 * 48 / 1000);
+    }
+}

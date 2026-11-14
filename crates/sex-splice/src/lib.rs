@@ -20,6 +20,7 @@ extern crate alloc;
 #[cfg(test)]
 extern crate std;
 
+pub mod export;
 pub mod history;
 pub mod otio;
 pub mod render;
