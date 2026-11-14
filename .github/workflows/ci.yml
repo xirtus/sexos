@@ -67,6 +67,8 @@ jobs:
       run: cargo test --locked -p leather-samples --no-default-features
     - name: Chastity encrypted vault and Weft UI
       run: bash scripts/chastity_host_gate.sh
+    - name: egui backend input and rendering
+      run: cargo test --locked -p sex-egui
     - name: Weft toolkit and Abacus
       run: cargo test --locked -p weft && cargo test --locked -p abacus --no-default-features
     - name: Settings schema, file format, protocol and the Settings program's pages
@@ -482,6 +484,10 @@ jobs:
       run: python3 scripts/chastity_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/chastity"
     - name: Aftercare backup (back up, delete, restore, hashes equal, wrong password refused)
       run: python3 scripts/aftercare_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/aftercare"
+    - name: egui programs
+      run: python3 scripts/program_egui_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/egui"
+    - name: Weft programs
+      run: python3 scripts/program_weft_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/weft"
     - name: Preserve program evidence
       if: always()
       uses: actions/upload-artifact@v4
