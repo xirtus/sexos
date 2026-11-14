@@ -1,0 +1,11 @@
+[package]
+name = "sex-3d"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "Polyamour's 3D core for SexOS: scenes, half-edge meshes, modifiers, a CPU path tracer and glTF/OBJ/STL/PLY/.blend files"
+
+[dependencies]
+serde_json = "1"
+base64 = "0.23"
+flate2 = "1"
