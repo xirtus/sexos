@@ -86,10 +86,7 @@ url = { version = "2.2", optional = true }
 base32 = { version = "0.5", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-# rustfmt is only needed for native targets; compiling it (and its syntex_*) for
-# wasm32 causes build failures, so we keep it as a dev-dependency but exclude it
-# on wasm.
-rustfmt = "0.10"
+# SexOS: unused rustfmt0.10 dev tool removed; it fails on pinned nightly.
 tempfile = "3"
 rand = "0.10"
 test-with = { version = "0.17", default-features = false, features = ["executable"] }

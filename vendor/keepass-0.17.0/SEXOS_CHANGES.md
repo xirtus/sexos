@@ -87,3 +87,21 @@ share the same counter and excessive headers reject before XML decompression.
 A test-only decoder allocation receipt verifies the second decoder receives
 only remaining budget, rather than allocating another full 16MiB. These 3 tests
 and the 4 stream-admission tests pass, as do 17 canonical Chastity tests.
+
+### Pinned CI regression entry point
+
+`scripts/chastity_host_gate.sh` calls `scripts/vault_dependency_host_gate.sh`.
+The dependency gate uses standalone manifests with checked-in vendor Cargo.lock
+files and `--locked`, since workspace package selection cannot resolve excluded
+crates' test-only dependencies from the root lock. Its explicit Cargo config
+patches standalone KeePass's rust-argon2 dependency to the repository's local
+vendored Argon2. No registry Argon2 substitutes for the erasure patch. It runs
+Argon2's unit/integration suites and all seven `sexos` compression/attachment
+regressions, omitting the known unpublished XML fixture rather than counting it
+as passing evidence. It builds host tests only and does not modify guest media.
+
+The published manifest's unused native dev-only `rustfmt0.10` dependency is
+removed from both manifests: it pulls extprim1.7 whose nightly-channel cfg
+requests removed `llvm_asm`/`const_fn` features. No packaged library test uses
+this old formatter. Removing this test-tool edge makes the gate compile on the
+project's pinned nightly without changing application dependencies or features.
