@@ -1,0 +1,10 @@
+[package]
+name = "sex-calc-core"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "The calculator's arithmetic: an expression parser with precedence, functions, angle modes, memory and history"
+
+[dependencies]
+# Float functions without std (MIT/Apache-2.0): the same answers on the host and on SexOS.
+libm = "0.2.16"
