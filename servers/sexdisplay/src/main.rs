@@ -2080,6 +2080,7 @@ fn raster_batch(target:&frame_output::Target<'_>,scene: &scene::SceneSnapshot,pl
         }
         draw_launcher_panel(fb,w,h,total,scene);
         draw_window_switcher(fb,w,h,total,scene);
+        draw_screenshot_ui(fb,w,h,total,scene);
     }
     draw_cursor_z_top(fb,w,h,total,true,scene);
     true
@@ -2951,6 +2952,66 @@ fn draw_window_switcher(fb: *mut u32, w: usize, h: usize, total_pixels: usize, s
         if SWITCHER_DRAW_BUDGET > 0 {
             SWITCHER_DRAW_BUDGET -= 1;
             sex_pdx::serial_record!("[display.switcher.draw] count={} selected={} grid={} cols={} panel={}x{}+{}+{}", state.count, state.selected, state.grid as u8, layout.cols, pw, ph, px, py);
+        }
+    }
+}
+
+/// The Print selection the Shell asked for: `Some(selection)` while it shows.
+static mut SCREENSHOT_UI: Option<sex_pdx::screenshot::Rect> = None;
+/// Print: the desktop dimmed except the selection, which is ringed, and a hint
+/// pill at the top. Before a drag starts the whole desktop is dimmed.
+fn draw_screenshot_ui(fb: *mut u32, w: usize, h: usize, total_pixels: usize, scene: &scene::SceneSnapshot) {
+    let Some(sel) = (unsafe { SCREENSHOT_UI }) else { return };
+    let scale = scene.metrics.scale() as usize;
+    let at = |x: usize, y: usize| -> Option<usize> { let i = y * w + x; (x < w && y < h && i < total_pixels).then_some(i) };
+    let empty = sel.w == 0 || sel.h == 0;
+    let (sx, sy) = (sel.x as usize, sel.y as usize);
+    let (ex, ey) = (sx + sel.w as usize, sy + sel.h as usize);
+    for y in 0..h {
+        for x in 0..w {
+            if !empty && x >= sx && x < ex && y >= sy && y < ey { continue; }
+            let Some(i) = at(x, y) else { continue };
+            unsafe {
+                let under = core::ptr::read_volatile(fb.add(i));
+                core::ptr::write_volatile(fb.add(i), alpha_blend_xrgb_over_xrgb(0, under, 110));
+            }
+        }
+    }
+    if !empty {
+        let ring = sex_pdx::desktop_style::FOCUS;
+        let t = 2 * scale;
+        for y in sy.saturating_sub(t)..ey + t {
+            for x in sx.saturating_sub(t)..ex + t {
+                let inside = x >= sx && x < ex && y >= sy && y < ey;
+                if inside { continue; }
+                if let Some(i) = at(x, y) { unsafe { core::ptr::write_volatile(fb.add(i), ring); } }
+            }
+        }
+    }
+    const HINT: &[u8] = b"Screenshot: drag a region, click a window, Enter for the whole screen, Esc to cancel";
+    const PILL: u32 = 0x00121726;
+    let line = glyphs::UI_H * scale;
+    let tw = glyphs::ui_width(HINT, scale as u32).unwrap_or(0).min(w.saturating_sub(16 * scale));
+    let pad = 10 * scale;
+    let (pw, ph) = (tw + 2 * pad, line + pad);
+    let (px, py) = (w.saturating_sub(pw) / 2, scene.metrics.bar() as usize + 12 * scale);
+    for y in py..py + ph {
+        for x in px..px + pw {
+            if let Some(i) = at(x, y) { unsafe { core::ptr::write_volatile(fb.add(i), PILL); } }
+        }
+    }
+    for y in 0..line {
+        for x in 0..tw {
+            if let Some(c) = ui_label_at_scaled(HINT, x, y, PILL, scale as u32) {
+                if let Some(i) = at(px + pad + x, py + pad / 2 + y) { unsafe { core::ptr::write_volatile(fb.add(i), c); } }
+            }
+        }
+    }
+    unsafe {
+        static mut SCREENSHOT_DRAW_BUDGET: u32 = 16;
+        if SCREENSHOT_DRAW_BUDGET > 0 {
+            SCREENSHOT_DRAW_BUDGET -= 1;
+            sex_pdx::serial_record!("[display.screenshot.draw] x={} y={} w={} h={} hint={}x{}+{}+{}", sel.x, sel.y, sel.w, sel.h, pw, ph, px, py);
         }
     }
 }
@@ -4222,6 +4283,15 @@ pub extern "C" fn _start() -> ! {
                             needs_full_redraw = true;
                             sex_pdx::serial_record!("[display.switcher] count={} selected={} grid={}", state.count, state.selected, state.grid as u8);
                         }
+                    }
+                }
+                sex_pdx::screenshot::OP_SCREENSHOT_UI => {
+                    // Only the Shell shows, moves and hides the screenshot selection.
+                    if msg.caller_pd == 3 {
+                        let sel = sex_pdx::screenshot::Rect::decode(msg.arg0);
+                        unsafe { SCREENSHOT_UI = (msg.arg1 == 1).then_some(sel); }
+                        needs_full_redraw = true;
+                        sex_pdx::serial_record!("[display.screenshot] show={} x={} y={} w={} h={}", (msg.arg1 == 1) as u8, sel.x, sel.y, sel.w, sel.h);
                     }
                 }
                 sex_pdx::app_lifecycle::OP_APP_TITLE => {

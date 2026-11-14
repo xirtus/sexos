@@ -42,6 +42,6 @@ fn cap_scoped_epoch_lifecycle_matrix_and_real_same_task_rearm(){
  assert_eq!(state(holder),PeerState{epoch:2,life:L::Live});assert!(peer.incoming_replies.lock().is_empty());assert!(peer.reply_credits.lock().is_empty());
  unsafe{let pd=(*main).context.pd_ptr;(*main).context.pd_ptr=other;assert_eq!(peer_state(holder,6),Err(crate::wire::INVALID));(*main).context.pd_ptr=pd;let pd_id=(*main).context.pd_id;(*main).context.pd_id=99;assert_eq!(peer_state(holder,6),Err(crate::wire::INVALID));(*main).context.pd_id=pd_id;let id=(*main).id;(*main).id=0;assert_eq!(peer_state(holder,6),Err(crate::wire::INVALID));(*main).id=id;}
  peer.main_task.store(std::ptr::null_mut(),Ordering::Release);assert_eq!(peer_state(holder,6),Err(crate::wire::INVALID));peer.main_task.store(main,Ordering::Release);
- unsafe{(*main).state.exit();}RESTARTS[0].store(MAX_RESTARTS,Ordering::Release);poll_one(0);assert_eq!(state(holder),PeerState{epoch:9,life:L::GaveUp});assert!(!state(holder).live());
+ unsafe{(*main).state.exit();}RESTARTS[0].store(MAX_RESTARTS,Ordering::Release);LOOP[0].store(MAX_RESTARTS,Ordering::Release);poll_one(0);assert_eq!(state(holder),PeerState{epoch:9,life:L::GaveUp});assert!(!state(holder).live());
 }
 #[test]fn decoder_refuses_unknown_and_zero_epoch(){for life in 0..10{assert_eq!(PeerState::decode(0,life),Err(crate::wire::INVALID));}for life in [0,8,255,u64::MAX]{assert_eq!(PeerState::decode(1,life),Err(crate::wire::INVALID));}}

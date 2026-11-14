@@ -240,6 +240,8 @@ rustc --edition=2021 -A dead_code --test tests/access_keys.rs -o "$TEST_DIR/acce
 "$TEST_DIR/access-keys"
 rustc --edition=2021 -A dead_code --test tests/window_switcher.rs -o "$TEST_DIR/window-switcher"
 "$TEST_DIR/window-switcher"
+rustc --edition=2021 -A dead_code --test tests/screenshot.rs -o "$TEST_DIR/screenshot"
+"$TEST_DIR/screenshot"
 "$TEST_DIR/desktop-look"
 "$TEST_DIR/desktop-keys"
 python3 - "$TEST_DIR/cursor.rs" "$TEST_DIR/cursor_status.rs" <<'PYCURSOR'
