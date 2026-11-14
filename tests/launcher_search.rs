@@ -89,3 +89,20 @@ fn selection_steps_within_matches() {
     assert_eq!(step(&order, 2, 1), Some(4));
     assert_eq!(step(&[], 0, 1), None);
 }
+
+#[test]
+fn shifted_keys_type_arithmetic_for_voyeur() {
+    // 2 Shift+= 2 is "2+2"; Shift+digits that are not operators type nothing.
+    assert_eq!(key_char_shifted(0x03, false), Some(b'2'));
+    assert_eq!(key_char_shifted(0x0D, true), Some(b'+'));
+    assert_eq!(key_char_shifted(0x0D, false), Some(b'='));
+    assert_eq!(key_char_shifted(0x09, true), Some(b'*'));
+    assert_eq!(key_char_shifted(0x35, false), Some(b'/'));
+    assert_eq!(key_char_shifted(0x0A, true), Some(b'('));
+    assert_eq!(key_char_shifted(0x02, true), None);
+    assert_eq!(key_char_shifted(0x1E, true), Some(b'a'));
+    assert_eq!(key_char_shifted(0x4E, false), Some(b'+'));
+    let mut q = Query::new();
+    for c in [0x03, 0x0D, 0x03].iter().zip([false, true, false]).filter_map(|(&k, s)| key_char_shifted(k, s)) { q.push(c); }
+    assert_eq!(q.as_str(), "2+2");
+}

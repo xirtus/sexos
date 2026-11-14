@@ -75,6 +75,7 @@ crates = [
   "apps/rg/Cargo.toml",
   "apps/fd/Cargo.toml",
   "apps/bat/Cargo.toml",
+  "apps/chastity/Cargo.toml",
   "apps/python/Cargo.toml",
   "apps/store/Cargo.toml",
   "apps/sdltest/Cargo.toml",
@@ -465,6 +466,16 @@ build_std = "std,panic_abort"
 manifest = "apps/bat/Cargo.toml"
 source_artifact = "target/x86_64-sex-std/release/bat"
 dest_artifact = "iso_root/programs/bat"
+
+# Chastity, the password vault: KDBX4 vaults (keepass-rs, pure Rust) in its folder.
+[[stage]]
+id = "build_chastity"
+action = "cargo_manifest"
+target = "x86_64-sex-std.json"
+build_std = "std,panic_abort"
+manifest = "apps/chastity/Cargo.toml"
+source_artifact = "target/x86_64-sex-std/release/chastity"
+dest_artifact = "iso_root/programs/chastity"
 
 # Python 3.13: CPython (vendor/cpython-3.13.18) on sex-libc, its stdlib frozen in.
 [[stage]]

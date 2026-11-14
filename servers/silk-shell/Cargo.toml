@@ -10,3 +10,4 @@ sex-keymap = { path = "../../crates/sex-keymap" }
 sex-ime = { path = "../../crates/sex-ime" }
 sex-rt = { path = "../../sex-rt" }
 silkbar-model = { path = "../../crates/silkbar-model" }
+voyeur = { path = "../../crates/voyeur" }
