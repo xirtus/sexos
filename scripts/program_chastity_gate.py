@@ -29,6 +29,7 @@ import os
 os.environ.setdefault('SEXOS_GATE_BOUND','2400')
 from quil_autosave_gate import boot
 from lua_gate import qcodes,SURFACE
+from program_gate_geometry import maximize
 ROOT=Path(__file__).resolve().parents[1]
 
 MASTER='Corr3ct horse!'
@@ -82,10 +83,11 @@ def main():
    g['wait'](rf'\[chastity\.start\] vault={vault}\n',s,120)
    target,task=int(w[1]),int(w[2])
    time.sleep(1);g['focus'](SURFACE[target]);time.sleep(.5)
+   tile,resize=maximize(g,SURFACE[target]);g['wait'](r'\[chastity.layout\] width=\d+ height=\d+',resize,60)
    return target,task
   def close(target,task,locked):
    s=len(t());g['focus'](SURFACE[target]);time.sleep(.5);q.key('f11')
-   if locked:g['wait'](r'\[chastity\.locked\] reason=closed\n',s,60)
+   if locked:g['wait'](r'\[chastity\.local_locked\] reason=closed\n',s,60)
    g['wait'](r'\[chastity\.closed\]\n',s,60)
    g['wait'](rf'\[app\.private\.retired\] target={target} task={task} ',s,180)
   g['wait'](r'\[app.private.retired\] target=41 ',0,120)

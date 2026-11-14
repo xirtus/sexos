@@ -669,8 +669,8 @@ fn provider_close_retries_kernel_full_before_reporting_locked() {
     current(C);
     assert!(matches!(c.poll(204), Some(Err(sdk::Error::Locked))));
 }
-#[test]
-fn native_full_intake_and_live_contention_cannot_drop_lock_revocation() {
+#[cfg(test)]
+fn native_revoke_under_contention(retirement: bool) {
     reset();
     env(|e| e.native = true);
     unsafe {
@@ -743,6 +743,9 @@ fn native_full_intake_and_live_contention_cannot_drop_lock_revocation() {
         p.poll(tick);
         assert!(!p.revoked());
     }
+    if retirement {
+        env(|e| e.live.retain(|s| *s != P));
+    }
     // Even though LIVE is unavailable and the native intake is saturated, the
     // exact authenticated revocation bypasses it and erases pending DATA.
     env(|e| e.contended = false);
@@ -750,7 +753,37 @@ fn native_full_intake_and_live_contention_cannot_drop_lock_revocation() {
     p.poll(208);
     native_pump();
     p.poll(209);
-    assert!(p.revoked());
-    current(C);
-    assert!(matches!(c.poll(209), Some(Err(sdk::Error::Locked))));
+    if retirement {
+        // Close tombstones custody before the app receives its close event. The
+        // dead run cannot receive an ACK, but actual retirement is the fence.
+        unsafe {
+            native_routes::retire(P);
+        }
+        native_pump();
+        assert!(!p.revoked());
+        env(|e| {
+            assert!(e
+                .inbox
+                .iter()
+                .find(|(s, _)| *s == C)
+                .unwrap()
+                .1
+                .iter()
+                .all(|m| m.type_id != autofill::DATA))
+        });
+        current(C);
+        assert!(!matches!(c.poll(209), Some(Ok(_))));
+    } else {
+        assert!(p.revoked());
+        current(C);
+        assert!(matches!(c.poll(209), Some(Err(sdk::Error::Locked))));
+    }
+}
+#[test]
+fn native_full_intake_and_live_contention_cannot_drop_lock_revocation() {
+    native_revoke_under_contention(false);
+}
+#[test]
+fn native_close_tombstone_and_retirement_erase_queued_data_at_full_intake() {
+    native_revoke_under_contention(true);
 }

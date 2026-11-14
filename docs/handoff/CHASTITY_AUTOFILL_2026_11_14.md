@@ -105,18 +105,21 @@ injection, account-service restore or clipboard integration is claimed.
 
 `scripts/autofill_host_gate.sh` compiles the **unchanged production protocol, broker
 and SDK** with only native catalog/route/inbox transport replaced by a host model.
-Sixteen tests cover no data before approval, deny, lock, both focus checks,
+Seventeen tests cover no data before approval, deny, lock, both focus checks,
 provider/approval impersonation, stale epoch/replay, exact run reuse, cancellation
 before READY, malformed padding/bounds, expiry/clock rollback, multiline/bidi
 origin refusal, full task/part identity words, and an8192-byte transfer under
 foreign status flooding within the transfer deadline. Production native intake
 is also compiled unchanged: full intake plus unavailable custody cannot drop Lock;
-SDK transport-admission Full retries until the exact epoch/run ACK. Canonical
+SDK transport-admission Full retries until the exact epoch/run ACK. A tombstoned
+Close intentionally cannot receive that ACK: explicit actual run retirement
+revokes it and the native full-intake regression verifies no queued DATA survives. Canonical
 vault/UI tests preserve the user's original19 plus preflight and consent tests.
 
-The canonical std guest builds and passes the forbidden-instruction scan. The
-separate probe and Shell/Files built before the canonical UI replacement; final
-integration rebuilds all targets together. No kernel edits. ABI inputs include
+The canonical std guest and separate probe build and pass the forbidden-instruction
+scan. The canonical full two-boot QEMU vault gate passes using the updated real
+Shell/Files image. The final live two-app gate is running after the normal scroll
+and QMP chord follow-ups; its success is not yet claimed. No kernel edits. ABI inputs include
 the new protocol file, guarded by the existing pin mechanism.
 
 `scripts/chastity_autofill_gate.py` drives real separate Weft applications: creates

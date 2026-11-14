@@ -101,7 +101,22 @@ fn scene(size: (usize, usize), consent: Option<&Consent>, pending: bool) -> Scen
         Strings::new("en"),
     );
     let root = ui.root();
-    ui.set_layout(root, Layout::column().padding(16.0).gap(10.0));
+    ui.set_layout(root, Layout::column());
+    let root = if consent.is_none() {
+        let scroll = ui.scroll(root);
+        ui.set_layout(scroll, Layout::column().fill());
+        ui.group(
+            scroll,
+            Layout::column()
+                .padding(16.0)
+                .gap(10.0)
+                .fill_width()
+                .shrink(0.0),
+        )
+    } else {
+        ui.set_layout(root, Layout::column().padding(16.0).gap(10.0));
+        root
+    };
     ui.label(root, "Chastity — KeePass vault");
     let lock = ui.button(
         root,
@@ -207,7 +222,6 @@ pub fn main() {
     let mut model = Ui::new(&mut host, Kdf::STANDARD);
     let mut provider: Option<Provider> = None;
     let mut consent: Option<Consent> = None;
-    let mut closing = false;
     let mut lock_reason = "asked";
     let mut last_key = Instant::now();
     let mut fonts = Fonts::new();
@@ -231,8 +245,6 @@ pub fn main() {
                     view = scene(window.size(), None, true);
                     window.pixels().fill(0);
                 }
-            } else if closing {
-                break;
             }
         }
         if let Some(p) = &mut provider {
@@ -246,9 +258,6 @@ pub fn main() {
                 consent = None;
                 ready_logged = false;
                 sex_std::record(&format!("[chastity.locked] reason={lock_reason}"));
-                if closing {
-                    break;
-                }
                 view = scene(window.size(), None, false);
             }
         }
@@ -339,10 +348,16 @@ pub fn main() {
         );
         if let Some(event) = event {
             if matches!(event, Event::Close) {
-                lock_reason = "closed";
                 model.lock(&mut host, "closed");
-                closing = true;
-                continue;
+                // Shell closes custody before delivering Close, so it cannot
+                // admit a receipt back to this dying run. Retire this run as
+                // the lifecycle revocation fence; ordinary Lock still waits ACK.
+                if let Some(p) = &mut provider {
+                    p.close();
+                    p.poll(now);
+                }
+                window.pixels().fill(0);
+                break;
             }
             if let Event::Resize { .. } = event {
                 view = scene(
