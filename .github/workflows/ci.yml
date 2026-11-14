@@ -59,6 +59,8 @@ jobs:
       run: bash scripts/desktop_capture_host_gate.sh
     - name: HTML containing-block and replaced sizing
       run: cargo test --locked -p sex-html
+    - name: Weft toolkit and Abacus
+      run: cargo test --locked -p weft && cargo test --locked -p abacus --no-default-features
     - name: Settings schema, file format, protocol and the Settings program's pages
       run: bash scripts/settings_host_gate.sh
     - name: Signed package format and store catalog
@@ -445,6 +447,8 @@ jobs:
       run: python3 scripts/moan_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/moan"
     - name: Moan EQ, compressor and decaying reverb through Bell
       run: python3 scripts/moan_gate.py --effects --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/moan-effects"
+    - name: Weft programs
+      run: python3 scripts/program_weft_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/weft"
     - name: Preserve program evidence
       if: always()
       uses: actions/upload-artifact@v4
