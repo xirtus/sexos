@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""HTTPS the way public sites offer it, through the network service's TLS: `run +net web`
+"""HTTPS the way public sites offer it, through the network service's TLS: `run +net kaleidoscope`
 loads a page from a TLS 1.3-only server, and the page's script fetches from two TLS
 1.2-only servers held to one suite and one curve each (ECDHE-RSA-AES256-GCM-SHA384
 on P-384 with an RSA certificate; ECDHE-ECDSA-CHACHA20-POLY1305 on P-256). Each
@@ -65,7 +65,7 @@ def main():
  # The program itself comes over plain HTTP, as in the other web gates.
  class Bin(http.server.BaseHTTPRequestHandler):
   def do_GET(self):
-   b=(ROOT/'iso_root/programs/web').read_bytes();self.send_response(200);self.send_header('Content-Length',str(len(b)));self.end_headers();self.wfile.write(b)
+   b=(ROOT/'iso_root/programs/kaleidoscope').read_bytes();self.send_response(200);self.send_header('Content-Length',str(len(b)));self.end_headers();self.wfile.write(b)
   def log_message(self,*a):pass
  bins=http.server.ThreadingHTTPServer(('127.0.0.1',0),Bin);threading.Thread(target=bins.serve_forever,daemon=True).start()
  os.environ['SEXOS_GATE_NIC']='-netdev user,id=n0 -device e1000e,netdev=n0'
@@ -81,9 +81,9 @@ def main():
    time.sleep(.06)
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
-  g['focus'](153);time.sleep(.5);s=len(t());keys(f'fetch http://{HOST}:{bins.server_address[1]}/web /bin/web');q.key('ret')
+  g['focus'](153);time.sleep(.5);s=len(t());keys(f'fetch http://{HOST}:{bins.server_address[1]}/web /bin/kaleidoscope');q.key('ret')
   m=g['wait'](r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',s,240);assert m[1].startswith('Saved'),m[1]
-  g['focus'](153);time.sleep(.5);s=len(t());keys(f'run +net web https://{HOST}:{pa}/');q.key('ret')
+  g['focus'](153);time.sleep(.5);s=len(t());keys(f'run +net kaleidoscope https://{HOST}:{pa}/');q.key('ret')
   got=g['wait'](r'\[web.http\] method=GET status=(\d+) bytes=(\d+)[^\n]*url=https://[^\n]*:'+str(pa)+r'/\n',s,300)
   assert got[1]=='200' and int(got[2])==len(page),got[0]
   bee=g['wait'](r'\[web.console\] level=0 tls bee ([^\n]*)\n',s,300);assert bee[1]=='200 bee',bee[1]

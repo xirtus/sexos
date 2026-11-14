@@ -20,6 +20,7 @@ mod session;
 mod config_watch;
 mod lock;
 mod keyboard_layout;
+mod key_repeat;
 use alloc::vec::Vec;
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -44,6 +45,11 @@ static mut CLIPBOARD: clipboard::Broker = clipboard::Broker::new();
 static mut APP_INPUT: app_input::Queue = app_input::Queue::new();
 static mut CLIPBOARD_INTAKE:app_input::Intake=app_input::Intake::new();
 static mut APP_MODIFIERS: sex_pdx::app_key::Modifiers = sex_pdx::app_key::Modifiers::new();
+// Held keys repeat at Shell's rate, for PS/2 and USB alike (key_repeat.rs).
+static mut KEY_REPEAT: key_repeat::Repeat = key_repeat::Repeat::new();
+static mut KEY_REPEATING: bool = false;
+/// Settings option: Caps Lock is another Ctrl key (off by default).
+static mut CAPS_AS_CTRL: bool = false;
 /// Fresh held-catalog and lifecycle checks, never a numeric target as authority.
 /// None is transient contention and must not turn into terminal retirement.
 unsafe fn clipboard_live(subject:sex_pdx::clipboard::Subject)->Option<bool> {
@@ -10526,7 +10532,19 @@ unsafe fn wm_action(action: wm::WmAction) -> bool {
 }
 /// Runs before native text routing in both HID paths. Alt remains owned by
 /// the desktop, so changing focus cannot leave a modifier held in the old app.
+/// Presses the held key again when its repeat is due (key_repeat.rs). A key
+/// that no longer reaches a program stops repeating.
+unsafe fn key_repeat_poll() {
+    let Some(code)=KEY_REPEAT.due(sex_pdx::get_ticks()) else{return};
+    KEY_REPEATING=true;let delivered=desktop_shortcut(code,1);KEY_REPEATING=false;
+    if !delivered{KEY_REPEAT.cancel();}
+}
 unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
+    let code=if CAPS_AS_CTRL && code==0x3a {0x1d} else {code};
+    // A keyboard's own typematic press of the repeating key is dropped; any
+    // other press stops the repeat until it reaches a program itself.
+    if value==0 {KEY_REPEAT.release(code);}
+    else if !KEY_REPEATING {if KEY_REPEAT.is_held(code){return true;}KEY_REPEAT.cancel();}
     match WM_CHORDS.event(code,value) {
         wm::Chord::Pass=>{}
         wm::Chord::Consume=>return true,
@@ -10557,7 +10575,7 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
                     }else{app_input::Input::Key(key)};
                     if !APP_INPUT.push(app_input::Item{destination,input}){
                         sex_pdx::serial_record!("[shell.app.input.full] capacity=32 pd={} task={} accepted=0",destination.subject.pd,destination.subject.task);
-                    }
+                    }else if !KEY_REPEATING{KEY_REPEAT.press(code,sex_pdx::get_ticks());}
                     app_input_poll();return true;
                 }
                 if let Some(destination)=focused_program_participant(){
@@ -10569,7 +10587,7 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
                     }
                     if !APP_INPUT.push(app_input::Item{destination,input:app_input::Input::Key(keyboard_layout::typing(APP_MODIFIERS.key(shortcut),code))}){
                         sex_pdx::serial_record!("[shell.app.input.full] capacity=32 pd={} task={} accepted=0",destination.subject.pd,destination.subject.task);
-                    }
+                    }else if !KEY_REPEATING{KEY_REPEAT.press(code,sex_pdx::get_ticks());}
                     app_input_poll();return true;
                 }
             }
@@ -25411,6 +25429,8 @@ pub extern "C" fn _start() -> ! {
         unsafe { session::save(); }
         unsafe { record_spawn_poll(); }
         unsafe { program_resize_flush(); }
+        // Held keys: the repeat goes ahead of the queue drain below.
+        unsafe { key_repeat_poll(); }
         unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); display_scale_poll(); shell_close_poll(); shell_memory_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); notification_poll(); }
         // Retain failed notification attempts while continuing normal receives.
         // Success means enqueue only; sexinput validates caller and version.
@@ -26092,7 +26112,7 @@ pub extern "C" fn _start() -> ! {
                 unsafe { flush_pending_cursor_send(); }
                 // A full input ring may recover while the shell has no work.
                 // Return to the publisher instead of blocking in listen.
-                if shell_ready_publisher.is_pending() || unsafe { RECORD_SPAWN_LEFT != 0 || DISPLAY_SCALE.request().is_some() || CURSOR_SEND_PENDING || APP_INPUT.pending() || LAUNCHER_FOCUS.is_some() || CLIPBOARD_INTAKE.pending() || CLIPBOARD.pending() || WORKSPACE_REFRESH_PENDING.iter().any(|p|*p) || linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_POINTER.is_some() || LINEN_ASYNC.can_send() || NOTIFY_NOTICE_UNTIL != 0 || MEMORY_CRITICAL_SINCE != 0 } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
+                if shell_ready_publisher.is_pending() || unsafe { RECORD_SPAWN_LEFT != 0 || DISPLAY_SCALE.request().is_some() || CURSOR_SEND_PENDING || APP_INPUT.pending() || LAUNCHER_FOCUS.is_some() || CLIPBOARD_INTAKE.pending() || CLIPBOARD.pending() || WORKSPACE_REFRESH_PENDING.iter().any(|p|*p) || linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_POINTER.is_some() || LINEN_ASYNC.can_send() || NOTIFY_NOTICE_UNTIL != 0 || MEMORY_CRITICAL_SINCE != 0 || KEY_REPEAT.pending() } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
                     sys_yield();
                     continue;
                 }

@@ -99,3 +99,54 @@ owns the device. A PR that adopts a Linux design says what it changed to fit Sex
   has a bridge ledger row.
 - Reviews of PRs that touch `kernel/` read section 1. Reviews of driver PRs read
   section 3 and update the ledger.
+
+## 6. Names follow the SexOS themes
+
+Rule set by Andreas on 2026-11-14. Every app, service and user-facing component has a
+themed name. Plain names ("Files", "Settings", "Web", "Player") are not allowed; the one
+exception is **Jot**, the notepad.
+
+The themes:
+
+- **Fabric.** Spindle is the core everything is spun under; what it makes are fabrics:
+  Silk (the UI system), Linen, Atlas, Collar, Mesh, Bell, Quil, Yarn, and Andreas's
+  further words loom, needle, thread, weft, shuttle, denim and leather. Tuxedo, the
+  Linux driver bridge, is dressed for visiting.
+- **Romance and love.** Qupid, the media player.
+- **Psychedelic.** Kaleidoscope, the browser.
+- **Sex puns.** sexdrive (storage drivers), sexfiles, sexshop (the app store).
+
+When a newer program and an older themed one do the same job, the better implementation
+keeps the themed name and absorbs the other's features and plans. The loser is removed,
+not kept beside it. Renamed programs keep their old command as an alias in Spindle for a
+while, so scripts and habits keep working; aliases are dropped once nothing uses them.
+
+### Canon names and roles
+
+| Name | What it is | Code |
+|---|---|---|
+| Spindle | The terminal and command surface everything is spun under | `apps/spindle` |
+| Yarn | Spindle's command session | silk-shell `YarnSession` |
+| Silk | The UI system: shell, panel (silkbar), client library | `servers/silk-shell`, `servers/silkbar`, `crates/silk-client` |
+| Quil | The code editor and workstation | `servers/quil` |
+| Jot | The notepad (the one plain-name exception) | `apps/jot` |
+| Linen | The object system | `servers/linen` |
+| Atlas | Desktop overview and workspaces | silk-shell |
+| Bell | The notification system | `servers/sexbell` |
+| Collar | Authority: grants and app permissions | silk-shell, sexfiles |
+| Mesh | The capability graph and the system overview | silk-shell |
+| Kaleidoscope | The browser | `apps/web` (to become `apps/kaleidoscope`) |
+| Qupid | The media player | `apps/play` (to become `apps/qupid`) |
+| sexshop | The app store | `apps/store` (to become the `sexshop` program) |
+| sexfiles | The filesystem service | `servers/sexfiles` |
+| sexdrive | Storage drivers (NVMe, AHCI, VMD) | `apps/sexdrive`, `servers/sexdrive` |
+| Tuxedo | The temporary Linux driver bridge (see section 3) | `servers/tuxedo` |
+
+The name table for apps without a canon name, and the state of each rename, is kept in
+`docs/handoff/APP_NAMES_2026_11_14.md`.
+
+Exempt: developer fixtures and tests (`hello`, `fortune`, `bench`, `heaptest`, `fputest`,
+`fuzz`, `threads`, `stdhello`, `stdnet`, `chello`, `cpp`, `jit`, `wasm`, `hum` and its
+`snoop`/`spin`/`doze`), and ports that keep their upstream names (`lua`, `python`, `rg`,
+`fd`, `bat`, `ssh`, SDL2). Crate and directory names may lag a rename while other work is
+in flight; what the person sees (window titles, launcher rows, commands) changes first.
