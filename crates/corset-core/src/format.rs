@@ -90,6 +90,9 @@ pub fn format_fat32<D: BlockIo + ?Sized>(
             required: 66000,
         });
     }
+    if total_sectors > 0xFFFF_FFFF {
+        return Err(CorsetError::InvalidParameter("volume exceeds FAT32 maximum capacity (2 TiB)"));
+    }
 
     let reserved_sectors: u16 = 32;
     let num_fats: u8 = 2;
@@ -143,6 +146,9 @@ pub fn format_fat32<D: BlockIo + ?Sized>(
             sectors: total_sectors,
             required: (65525 * spc as u64) + (reserved_sectors as u64) + (num_fats as u64) * (fat_sectors as u64),
         });
+    }
+    if total_clusters >= 0x0FFF_FFF5 {
+        return Err(CorsetError::InvalidParameter("too many clusters for FAT32 (exceeds 0x0FFFFFFF5)"));
     }
 
     // Prepare Volume Label (11 ASCII bytes, space padded)
@@ -201,19 +207,36 @@ pub fn format_fat32<D: BlockIo + ?Sized>(
     dev.write_sectors(6, &boot_sector)?;
     dev.write_sectors(7, &fsinfo)?;
 
-    // 3. Clear and initialize FAT 1 and FAT 2
-    let mut fat_buf = vec![0u8; (fat_sectors as usize) * 512];
+    // 3. Clear and initialize FAT 1 and FAT 2 using bounded 32 KiB chunks
+    let mut first_fat_sector = [0u8; 512];
     // Entry 0: 0x0FFF_FFF8 (Media descriptor in lower byte)
-    fat_buf[0..4].copy_from_slice(&0x0FFF_FFF8u32.to_le_bytes());
+    first_fat_sector[0..4].copy_from_slice(&0x0FFF_FFF8u32.to_le_bytes());
     // Entry 1: 0x0FFF_FFFF (End of chain marker)
-    fat_buf[4..8].copy_from_slice(&0x0FFF_FFFFu32.to_le_bytes());
+    first_fat_sector[4..8].copy_from_slice(&0x0FFF_FFFFu32.to_le_bytes());
     // Entry 2: 0x0FFF_FFFF (Root directory cluster end of chain)
-    fat_buf[8..12].copy_from_slice(&0x0FFF_FFFFu32.to_le_bytes());
+    first_fat_sector[8..12].copy_from_slice(&0x0FFF_FFFFu32.to_le_bytes());
 
     let fat1_lba = reserved_sectors as u64;
     let fat2_lba = fat1_lba + fat_sectors as u64;
-    dev.write_sectors(fat1_lba, &fat_buf)?;
-    dev.write_sectors(fat2_lba, &fat_buf)?;
+    dev.write_sectors(fat1_lba, &first_fat_sector)?;
+    dev.write_sectors(fat2_lba, &first_fat_sector)?;
+
+    if fat_sectors > 1 {
+        let chunk_sectors = 64u64.min((fat_sectors - 1) as u64);
+        let zero_buf = vec![0u8; (chunk_sectors as usize) * 512];
+        let mut remaining = (fat_sectors - 1) as u64;
+        let mut cur1 = fat1_lba + 1;
+        let mut cur2 = fat2_lba + 1;
+        while remaining > 0 {
+            let to_write = remaining.min(chunk_sectors);
+            let bytes_to_write = (to_write as usize) * 512;
+            dev.write_sectors(cur1, &zero_buf[..bytes_to_write])?;
+            dev.write_sectors(cur2, &zero_buf[..bytes_to_write])?;
+            cur1 += to_write;
+            cur2 += to_write;
+            remaining -= to_write;
+        }
+    }
 
     // 4. Initialize Root Directory Cluster (Cluster 2)
     let root_lba = fat2_lba + fat_sectors as u64;
@@ -372,18 +395,32 @@ pub fn format_exfat<D: BlockIo + ?Sized>(
     }
     dev.write_sectors(23, &checksum_sector)?;
 
-    // 2. Write FAT (Sectors 24..24+fat_length)
-    let mut fat = vec![0u8; (fat_length as usize) * 512];
+    // 2. Write FAT (Sectors 24..24+fat_length) using bounded chunks
+    let mut first_fat = [0u8; 512];
     // Entries 0, 1: Media descriptor and reserved
-    fat[0..4].copy_from_slice(&0xFFFF_FFF8u32.to_le_bytes());
-    fat[4..8].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+    first_fat[0..4].copy_from_slice(&0xFFFF_FFF8u32.to_le_bytes());
+    first_fat[4..8].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
     // Cluster 2 (Bitmap): End of chain (or 1 cluster run)
-    fat[8..12].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+    first_fat[8..12].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
     // Cluster 3 (Upcase): End of chain
-    fat[12..16].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+    first_fat[12..16].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
     // Cluster 4 (Root Dir): End of chain
-    fat[16..20].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
-    dev.write_sectors(fat_offset as u64, &fat)?;
+    first_fat[16..20].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+    dev.write_sectors(fat_offset as u64, &first_fat)?;
+
+    if fat_length > 1 {
+        let chunk_sectors = 64u64.min((fat_length - 1) as u64);
+        let zero_buf = vec![0u8; (chunk_sectors as usize) * 512];
+        let mut remaining = (fat_length - 1) as u64;
+        let mut cur = (fat_offset + 1) as u64;
+        while remaining > 0 {
+            let to_write = remaining.min(chunk_sectors);
+            let bytes_to_write = (to_write as usize) * 512;
+            dev.write_sectors(cur, &zero_buf[..bytes_to_write])?;
+            cur += to_write;
+            remaining -= to_write;
+        }
+    }
 
     // 3. Cluster Heap
     let cluster_offset = |c: u32| -> u64 {

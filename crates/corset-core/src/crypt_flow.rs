@@ -23,6 +23,9 @@ pub fn format_encrypted_volume<D: BlockIo + ?Sized>(
     master_key: Option<&[u8; MASTER_KEY_BYTES]>,
     cost: Option<Cost>,
 ) -> Result<[u8; MASTER_KEY_BYTES], CorsetError> {
+    if passphrase.is_empty() {
+        return Err(CorsetError::InvalidParameter("passphrase cannot be empty"));
+    }
     let sector_size = dev.sector_size();
     let header_sectors = (CRYPT_HEADER_BYTES as u64).div_ceil(sector_size as u64);
     if dev.sector_count() <= header_sectors {
@@ -46,11 +49,12 @@ pub fn format_encrypted_volume<D: BlockIo + ?Sized>(
         }
     };
 
-    let header_bytes = sex_crypt::header(passphrase, salt, &master, cost)?;
+    let mut header_bytes = sex_crypt::header(passphrase, salt, &master, cost)?;
 
     // Write 4096-byte header to LBA 0
     dev.write_bytes_at(0, &header_bytes)?;
     dev.flush()?;
+    header_bytes.fill(0);
 
     Ok(master)
 }
@@ -64,8 +68,11 @@ pub fn unlock_encrypted_volume<'a, D: BlockIo + ?Sized>(
     let mut header_buf = [0u8; CRYPT_HEADER_BYTES];
     dev.read_bytes_at(0, &mut header_buf)?;
 
-    let master_key = sex_crypt::unlock(&header_buf, passphrase)?;
-    EncryptedBlockIo::new(dev, &master_key)
+    let mut master_key = sex_crypt::unlock(&header_buf, passphrase)?;
+    header_buf.fill(0);
+    let res = EncryptedBlockIo::new(dev, &master_key);
+    master_key.fill(0);
+    res
 }
 
 /// Changes the passphrase on an encrypted volume by rewrapping the master key in place.
@@ -78,16 +85,19 @@ pub fn rewrap_passphrase<D: BlockIo + ?Sized>(
     let mut header_buf = [0u8; CRYPT_HEADER_BYTES];
     dev.read_bytes_at(0, &mut header_buf)?;
 
-    let new_header = sex_crypt::rewrap(&header_buf, old_passphrase, new_passphrase, new_salt)?;
+    let mut new_header = sex_crypt::rewrap(&header_buf, old_passphrase, new_passphrase, new_salt)?;
+    header_buf.fill(0);
     dev.write_bytes_at(0, &new_header)?;
     dev.flush()?;
+    new_header.fill(0);
     Ok(())
 }
 
 /// Cryptographically erases the encrypted volume header by overwriting it with zeros.
 /// Guarantees that subsequent unlock attempts will fail with `CryptNotEncrypted`.
 pub fn erase_encrypted_header<D: BlockIo + ?Sized>(dev: &mut D) -> Result<(), CorsetError> {
-    let wipe_buf = [0u8; CRYPT_HEADER_BYTES];
+    let mut wipe_buf = [0u8; CRYPT_HEADER_BYTES];
+    wipe_buf.fill(0);
     dev.write_bytes_at(0, &wipe_buf)?;
     dev.flush()?;
     Ok(())
@@ -135,7 +145,7 @@ impl<'a, D: BlockIo + ?Sized> core::fmt::Debug for EncryptedBlockIo<'a, D> {
             .field("sector_count", &self.sector_count)
             .field("sector_size", &self.sector_size)
             .finish()
-    }
+        }
 }
 
 impl<'a, D: BlockIo + ?Sized> BlockIo for EncryptedBlockIo<'a, D> {
@@ -149,6 +159,13 @@ impl<'a, D: BlockIo + ?Sized> BlockIo for EncryptedBlockIo<'a, D> {
 
     fn read_sectors(&mut self, lba: u64, buf: &mut [u8]) -> Result<(), CorsetError> {
         let ss = self.sector_size as usize;
+        if ss == 0 || buf.is_empty() || buf.len() % ss != 0 {
+            return Err(CorsetError::Io(IoError {
+                kind: IoErrorKind::MisalignedBuffer,
+                lba,
+                sectors: if ss > 0 { (buf.len() / ss) as u64 } else { 0 },
+            }));
+        }
         let sectors = (buf.len() / ss) as u64;
         let end = lba.checked_add(sectors).ok_or(CorsetError::Io(IoError {
             kind: IoErrorKind::OutOfBounds,
@@ -163,12 +180,33 @@ impl<'a, D: BlockIo + ?Sized> BlockIo for EncryptedBlockIo<'a, D> {
             }));
         }
 
-        let physical_lba = self.header_sectors + lba;
+        let physical_lba = self.header_sectors.checked_add(lba).ok_or(CorsetError::Io(IoError {
+            kind: IoErrorKind::OutOfBounds,
+            lba,
+            sectors,
+        }))?;
+        let phys_end = physical_lba.checked_add(sectors).ok_or(CorsetError::Io(IoError {
+            kind: IoErrorKind::OutOfBounds,
+            lba,
+            sectors,
+        }))?;
+        if phys_end > self.dev.sector_count() {
+            return Err(CorsetError::Io(IoError {
+                kind: IoErrorKind::OutOfBounds,
+                lba,
+                sectors,
+            }));
+        }
+
         self.dev.read_sectors(physical_lba, buf)?;
 
         // Decrypt each sector in-place using its relative logical sector as the XTS data unit
         for (i, chunk) in buf.chunks_exact_mut(ss).enumerate() {
-            let unit = lba + i as u64;
+            let unit = lba.checked_add(i as u64).ok_or(CorsetError::Io(IoError {
+                kind: IoErrorKind::OutOfBounds,
+                lba,
+                sectors,
+            }))?;
             self.xts.decrypt(unit, chunk);
         }
 
@@ -177,6 +215,13 @@ impl<'a, D: BlockIo + ?Sized> BlockIo for EncryptedBlockIo<'a, D> {
 
     fn write_sectors(&mut self, lba: u64, buf: &[u8]) -> Result<(), CorsetError> {
         let ss = self.sector_size as usize;
+        if ss == 0 || buf.is_empty() || buf.len() % ss != 0 {
+            return Err(CorsetError::Io(IoError {
+                kind: IoErrorKind::MisalignedBuffer,
+                lba,
+                sectors: if ss > 0 { (buf.len() / ss) as u64 } else { 0 },
+            }));
+        }
         let sectors = (buf.len() / ss) as u64;
         let end = lba.checked_add(sectors).ok_or(CorsetError::Io(IoError {
             kind: IoErrorKind::OutOfBounds,
@@ -184,6 +229,24 @@ impl<'a, D: BlockIo + ?Sized> BlockIo for EncryptedBlockIo<'a, D> {
             sectors,
         }))?;
         if end > self.sector_count {
+            return Err(CorsetError::Io(IoError {
+                kind: IoErrorKind::OutOfBounds,
+                lba,
+                sectors,
+            }));
+        }
+
+        let physical_lba = self.header_sectors.checked_add(lba).ok_or(CorsetError::Io(IoError {
+            kind: IoErrorKind::OutOfBounds,
+            lba,
+            sectors,
+        }))?;
+        let phys_end = physical_lba.checked_add(sectors).ok_or(CorsetError::Io(IoError {
+            kind: IoErrorKind::OutOfBounds,
+            lba,
+            sectors,
+        }))?;
+        if phys_end > self.dev.sector_count() {
             return Err(CorsetError::Io(IoError {
                 kind: IoErrorKind::OutOfBounds,
                 lba,
@@ -195,12 +258,16 @@ impl<'a, D: BlockIo + ?Sized> BlockIo for EncryptedBlockIo<'a, D> {
         let mut encrypted = vec![0u8; buf.len()];
         encrypted.copy_from_slice(buf);
         for (i, chunk) in encrypted.chunks_exact_mut(ss).enumerate() {
-            let unit = lba + i as u64;
+            let unit = lba.checked_add(i as u64).ok_or(CorsetError::Io(IoError {
+                kind: IoErrorKind::OutOfBounds,
+                lba,
+                sectors,
+            }))?;
             self.xts.encrypt(unit, chunk);
         }
 
-        let physical_lba = self.header_sectors + lba;
         self.dev.write_sectors(physical_lba, &encrypted)?;
+        encrypted.fill(0);
 
         Ok(())
     }

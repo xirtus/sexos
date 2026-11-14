@@ -248,25 +248,28 @@ impl NvmeSmartLog {
             });
         }
 
-        // 3. Temperature Thresholds
-        if temp_c >= 75 {
-            if overall < OverallHealth::Critical {
-                overall = OverallHealth::Critical;
+        // 3. Temperature Thresholds (only evaluated if temperature is reported by device)
+        let temp_reported = self.composite_temperature_kelvin > 0;
+        if temp_reported {
+            if temp_c >= 75 {
+                if overall < OverallHealth::Critical {
+                    overall = OverallHealth::Critical;
+                }
+                findings.push(HealthFinding {
+                    severity: FindingSeverity::Critical,
+                    code: "TEMPERATURE_HIGH",
+                    description: alloc::format!("Controller temperature is critically high ({}°C)", temp_c),
+                });
+            } else if temp_c >= 60 {
+                if overall < OverallHealth::Warning {
+                    overall = OverallHealth::Warning;
+                }
+                findings.push(HealthFinding {
+                    severity: FindingSeverity::Warning,
+                    code: "TEMPERATURE_ELEVATED",
+                    description: alloc::format!("Controller temperature is elevated ({}°C)", temp_c),
+                });
             }
-            findings.push(HealthFinding {
-                severity: FindingSeverity::Critical,
-                code: "TEMPERATURE_HIGH",
-                description: alloc::format!("Controller temperature is critically high ({}°C)", temp_c),
-            });
-        } else if temp_c >= 60 {
-            if overall < OverallHealth::Warning {
-                overall = OverallHealth::Warning;
-            }
-            findings.push(HealthFinding {
-                severity: FindingSeverity::Warning,
-                code: "TEMPERATURE_ELEVATED",
-                description: alloc::format!("Controller temperature is elevated ({}°C)", temp_c),
-            });
         }
 
         // 4. Media & Integrity Errors
@@ -294,7 +297,7 @@ impl NvmeSmartLog {
             protocol: DeviceProtocol::Nvme,
             overall,
             wear_percent: Some(self.percentage_used),
-            temperature_celsius: Some(temp_c),
+            temperature_celsius: if temp_reported { Some(temp_c) } else { None },
             power_on_hours: Some(self.power_on_hours as u64),
             power_cycles: Some(self.power_cycles as u64),
             unsafe_shutdowns: Some(self.unsafe_shutdowns as u64),

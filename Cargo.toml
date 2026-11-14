@@ -65,6 +65,7 @@ members = [
     "crates/sexfs",
     "crates/sex-volumes",
     "crates/sex-crypt",
+    "crates/corset-core",
     "crates/sex-hwdb",
     "crates/sex-net",
     "crates/sex-net-config",
@@ -118,7 +119,6 @@ members = [
     "crates/vellum-edit",
     "crates/loom-core",
     "crates/aftercare-core",
-    "crates/corset-core",
 ]
 [workspace.package]
 license = "GPL-3.0-only"

@@ -268,6 +268,13 @@ impl<'a, D: BlockIo + ?Sized> BlockIo for PartitionIo<'a, D> {
 
     fn read_sectors(&mut self, lba: u64, buf: &mut [u8]) -> Result<(), CorsetError> {
         let ss = self.sector_size() as usize;
+        if ss == 0 || buf.is_empty() || buf.len() % ss != 0 {
+            return Err(CorsetError::Io(IoError {
+                kind: IoErrorKind::MisalignedBuffer,
+                lba,
+                sectors: if ss > 0 { (buf.len() / ss) as u64 } else { 0 },
+            }));
+        }
         let sectors = (buf.len() / ss) as u64;
         let end = lba.checked_add(sectors).ok_or(CorsetError::Io(IoError {
             kind: IoErrorKind::OutOfBounds,
@@ -281,11 +288,35 @@ impl<'a, D: BlockIo + ?Sized> BlockIo for PartitionIo<'a, D> {
                 sectors,
             }));
         }
-        self.dev.read_sectors(self.base_lba + lba, buf)
+        let phys_lba = self.base_lba.checked_add(lba).ok_or(CorsetError::Io(IoError {
+            kind: IoErrorKind::OutOfBounds,
+            lba,
+            sectors,
+        }))?;
+        let phys_end = phys_lba.checked_add(sectors).ok_or(CorsetError::Io(IoError {
+            kind: IoErrorKind::OutOfBounds,
+            lba,
+            sectors,
+        }))?;
+        if phys_end > self.dev.sector_count() {
+            return Err(CorsetError::Io(IoError {
+                kind: IoErrorKind::OutOfBounds,
+                lba,
+                sectors,
+            }));
+        }
+        self.dev.read_sectors(phys_lba, buf)
     }
 
     fn write_sectors(&mut self, lba: u64, buf: &[u8]) -> Result<(), CorsetError> {
         let ss = self.sector_size() as usize;
+        if ss == 0 || buf.is_empty() || buf.len() % ss != 0 {
+            return Err(CorsetError::Io(IoError {
+                kind: IoErrorKind::MisalignedBuffer,
+                lba,
+                sectors: if ss > 0 { (buf.len() / ss) as u64 } else { 0 },
+            }));
+        }
         let sectors = (buf.len() / ss) as u64;
         let end = lba.checked_add(sectors).ok_or(CorsetError::Io(IoError {
             kind: IoErrorKind::OutOfBounds,
@@ -299,7 +330,24 @@ impl<'a, D: BlockIo + ?Sized> BlockIo for PartitionIo<'a, D> {
                 sectors,
             }));
         }
-        self.dev.write_sectors(self.base_lba + lba, buf)
+        let phys_lba = self.base_lba.checked_add(lba).ok_or(CorsetError::Io(IoError {
+            kind: IoErrorKind::OutOfBounds,
+            lba,
+            sectors,
+        }))?;
+        let phys_end = phys_lba.checked_add(sectors).ok_or(CorsetError::Io(IoError {
+            kind: IoErrorKind::OutOfBounds,
+            lba,
+            sectors,
+        }))?;
+        if phys_end > self.dev.sector_count() {
+            return Err(CorsetError::Io(IoError {
+                kind: IoErrorKind::OutOfBounds,
+                lba,
+                sectors,
+            }));
+        }
+        self.dev.write_sectors(phys_lba, buf)
     }
 
     fn flush(&mut self) -> Result<(), CorsetError> {

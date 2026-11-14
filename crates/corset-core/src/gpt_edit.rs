@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Non-destructive GPT partition editor with 1 MiB alignment, overlap checks, and atomic dual-table commits.
 
-use crate::device::{BlockIo, SECTOR_512};
+use crate::device::BlockIo;
 use crate::error::CorsetError;
 use crate::layout::{
     create_protective_mbr, crc32, read_entries, GptHeader, Guid, PartitionEntry,
@@ -133,7 +133,7 @@ impl GptEditor {
 
         let entry_count = DEFAULT_ENTRY_COUNT;
         let entry_size = DEFAULT_ENTRY_SIZE;
-        let entry_sectors = ((entry_count as u64) * (entry_size as u64)).div_ceil(SECTOR_512 as u64);
+        let entry_sectors = ((entry_count as u64) * (entry_size as u64)).div_ceil(sector_size as u64);
 
         let first_usable = 1 + 1 + entry_sectors; // LBA 0 (MBR) + LBA 1 (Primary Header) + entries
         let last_usable = total_sectors - 1 - entry_sectors - 1; // backup header + backup entries
@@ -447,7 +447,7 @@ impl GptEditor {
     /// Recomputes entry array CRC32 and writes Backup GPT first, then Primary GPT and protective MBR.
     pub fn commit<D: BlockIo + ?Sized>(&mut self, dev: &mut D) -> Result<(), CorsetError> {
         let total_sectors = dev.sector_count();
-        let entry_sectors = self.header.entry_sectors();
+        let entry_sectors = self.header.entry_sectors_for(self.sector_size);
         let entry_size = self.header.size_of_partition_entry as usize;
         let entry_count = self.header.number_of_partition_entries as usize;
 

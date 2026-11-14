@@ -288,7 +288,8 @@ pub struct GptHeader {
 impl GptHeader {
     /// Parse and verify a GPT header from a 512-byte sector.
     pub fn parse(sector: &[u8], expected_lba: u64) -> Result<Self, CorsetError> {
-        if sector.len() < SECTOR_512 as usize {
+        let sector_size = sector.len() as u32;
+        if sector_size < SECTOR_512 {
             return Err(CorsetError::GptCorrupt("sector buffer too small"));
         }
         if &sector[..8] != GPT_SIGNATURE {
@@ -302,16 +303,17 @@ impl GptHeader {
             return Err(CorsetError::GptCorrupt("unsupported GPT revision"));
         }
         let header_size = read_u32(12);
-        if !(GPT_HEADER_SIZE..=SECTOR_512).contains(&header_size) {
+        if header_size < GPT_HEADER_SIZE || header_size > sector_size {
             return Err(CorsetError::GptCorrupt("invalid header size"));
         }
 
-        // Verify Header CRC-32 (with CRC field at 16..20 zeroed out)
+        // Verify Header CRC-32 (with CRC field at 16..20 zeroed out) without heap allocation
         let stored_crc = read_u32(16);
-        let mut check_buf = [0u8; SECTOR_512 as usize];
-        check_buf[..header_size as usize].copy_from_slice(&sector[..header_size as usize]);
-        check_buf[16..20].fill(0);
-        let computed_crc = crc32(&check_buf[..header_size as usize]);
+        let mut crc = Crc32::new();
+        crc.update(&sector[..16]);
+        crc.update(&[0u8; 4]);
+        crc.update(&sector[20..header_size as usize]);
+        let computed_crc = crc.finish();
         if stored_crc != computed_crc {
             return Err(CorsetError::GptCorrupt("header CRC32 mismatch"));
         }
@@ -321,6 +323,9 @@ impl GptHeader {
             return Err(CorsetError::GptCorrupt("header MyLBA does not match physical LBA"));
         }
         let alternate_lba = read_u64(32);
+        if my_lba == alternate_lba {
+            return Err(CorsetError::GptCorrupt("MyLBA cannot equal AlternateLBA"));
+        }
         let first_usable_lba = read_u64(40);
         let last_usable_lba = read_u64(48);
         if first_usable_lba > last_usable_lba {
@@ -339,8 +344,47 @@ impl GptHeader {
         if size_of_partition_entry < 128 || size_of_partition_entry % 8 != 0 || size_of_partition_entry > 1024 {
             return Err(CorsetError::GptCorrupt("invalid partition entry size"));
         }
-        if number_of_partition_entries == 0 || number_of_partition_entries > 1024 {
+        if number_of_partition_entries == 0 || number_of_partition_entries > 4096 {
             return Err(CorsetError::GptCorrupt("invalid partition entry count"));
+        }
+
+        let total_entry_bytes = (number_of_partition_entries as u64)
+            .checked_mul(size_of_partition_entry as u64)
+            .ok_or(CorsetError::GptCorrupt("partition entry array size overflow"))?;
+        let entry_sectors = total_entry_bytes.div_ceil(sector_size as u64);
+
+        if expected_lba == 1 {
+            // Primary GPT
+            if partition_entry_lba != 2 {
+                return Err(CorsetError::GptCorrupt("primary GPT partition entries must start at LBA 2"));
+            }
+            if alternate_lba <= my_lba {
+                return Err(CorsetError::GptCorrupt("primary GPT AlternateLBA must be greater than MyLBA"));
+            }
+            let entries_end = partition_entry_lba.checked_add(entry_sectors)
+                .ok_or(CorsetError::GptCorrupt("primary partition entries overflow"))?;
+            if first_usable_lba < entries_end {
+                return Err(CorsetError::GptCorrupt("first usable LBA overlaps primary partition entries"));
+            }
+            if last_usable_lba >= alternate_lba {
+                return Err(CorsetError::GptCorrupt("last usable LBA exceeds alternate LBA"));
+            }
+        } else {
+            // Backup GPT
+            if alternate_lba != 1 {
+                return Err(CorsetError::GptCorrupt("backup GPT AlternateLBA must point to LBA 1"));
+            }
+            if partition_entry_lba == 2 {
+                return Err(CorsetError::GptCorrupt("backup GPT partition_entry_lba cannot be at LBA 2"));
+            }
+            let expected_backup_entries = my_lba.checked_sub(entry_sectors)
+                .ok_or(CorsetError::GptCorrupt("backup partition entries underflow"))?;
+            if partition_entry_lba != expected_backup_entries {
+                return Err(CorsetError::GptCorrupt("backup GPT partition entries must sit immediately before backup header"));
+            }
+            if last_usable_lba >= partition_entry_lba {
+                return Err(CorsetError::GptCorrupt("last usable LBA overlaps backup partition entries"));
+            }
         }
 
         Ok(Self {
@@ -356,11 +400,17 @@ impl GptHeader {
         })
     }
 
-    /// Number of 512-byte sectors occupied by the partition entry array.
+    /// Number of sectors occupied by the partition entry array (defaults to 512-byte sectors).
     pub fn entry_sectors(&self) -> u64 {
+        self.entry_sectors_for(SECTOR_512)
+    }
+
+    /// Number of sectors occupied by the partition entry array given logical sector size.
+    pub fn entry_sectors_for(&self, sector_size: u32) -> u64 {
+        let ss = if sector_size == 0 { SECTOR_512 as u64 } else { sector_size as u64 };
         let total_bytes = (self.number_of_partition_entries as u64)
             .saturating_mul(self.size_of_partition_entry as u64);
-        total_bytes.div_ceil(SECTOR_512 as u64)
+        total_bytes.div_ceil(ss)
     }
 
     /// Encode into a 512-byte sector, recomputing the header CRC32.
@@ -420,6 +470,18 @@ impl PartitionEntry {
 
     /// Parse from raw bytes of one entry.
     pub fn parse(index: usize, raw: &[u8]) -> Self {
+        if raw.len() < 128 {
+            return Self {
+                index,
+                type_guid: Guid::ZERO,
+                partition_guid: Guid::ZERO,
+                first_lba: 0,
+                last_lba: 0,
+                attributes: 0,
+                name: String::new(),
+                raw: raw.to_vec(),
+            };
+        }
         let mut type_guid_bytes = [0u8; 16];
         let mut part_guid_bytes = [0u8; 16];
         type_guid_bytes.copy_from_slice(&raw[0..16]);
@@ -631,16 +693,29 @@ pub fn read_entries<D: BlockIo + ?Sized>(
     dev: &mut D,
     header: &GptHeader,
 ) -> Result<Vec<PartitionEntry>, CorsetError> {
-    let entry_sectors = header.entry_sectors();
-    let total_bytes = (entry_sectors as usize) * (dev.sector_size() as usize);
-    let mut raw_bytes = vec![0u8; total_bytes];
+    if header.number_of_partition_entries == 0 || header.number_of_partition_entries > 4096 {
+        return Err(CorsetError::GptCorrupt("absurd partition entry count"));
+    }
+    if header.size_of_partition_entry < 128 || header.size_of_partition_entry > 1024 || header.size_of_partition_entry % 8 != 0 {
+        return Err(CorsetError::GptCorrupt("invalid partition entry size"));
+    }
 
-    dev.read_sectors(header.partition_entry_lba, &mut raw_bytes)?;
+    let used_bytes = (header.number_of_partition_entries as usize)
+        .checked_mul(header.size_of_partition_entry as usize)
+        .ok_or(CorsetError::GptCorrupt("partition entry array size overflow"))?;
 
-    let used_bytes = (header.number_of_partition_entries as usize) * (header.size_of_partition_entry as usize);
-    if used_bytes > raw_bytes.len() {
+    let entry_sectors = header.entry_sectors_for(dev.sector_size());
+    let total_bytes = usize::try_from(entry_sectors)
+        .map_err(|_| CorsetError::GptCorrupt("entry array sector count too large"))?
+        .checked_mul(dev.sector_size() as usize)
+        .ok_or(CorsetError::GptCorrupt("entry array byte length overflow"))?;
+
+    if used_bytes > total_bytes {
         return Err(CorsetError::GptCorrupt("entry array exceeds allocated sectors"));
     }
+
+    let mut raw_bytes = vec![0u8; total_bytes];
+    dev.read_sectors(header.partition_entry_lba, &mut raw_bytes)?;
 
     let actual_crc = crc32(&raw_bytes[..used_bytes]);
     if actual_crc != header.partition_entry_array_crc32 {
@@ -760,7 +835,7 @@ pub fn scan_disk_map<D: BlockIo + ?Sized>(dev: &mut D) -> Result<DiskMap, Corset
     });
 
     // LBA 2..first_usable-1: Primary GPT Entries
-    let entry_sectors = active_header.entry_sectors();
+    let entry_sectors = active_header.entry_sectors_for(sector_size);
     let entries_start = active_header.partition_entry_lba;
     let entries_end = entries_start + entry_sectors - 1;
     regions.push(DiskRegion {
