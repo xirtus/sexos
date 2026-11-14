@@ -280,11 +280,11 @@ class SourceBoundBrowserPalette(unittest.TestCase):
  def test_wrong_or_partial_open_receipt_never_advances(self):
   import re
   from test_palette_commands import ACTUAL
-  root=self.catalog(ACTUAL)
+  root=self.catalog(ACTUAL);count=len(ACTUAL)
   for receipt in('[shell.palette.open] ok=1 selected=0 count=11\n',
-                  '[shell.palette.open] ok=1 selected=0 count=140\n',
-                  '[shell.palette.open] ok=1 selected=1 count=14\n',
-                  '[shell.palette.open] ok=1 selected=0 count=14'):
+                  f'[shell.palette.open] ok=1 selected=0 count={count}0\n',
+                  f'[shell.palette.open] ok=1 selected=1 count={count}\n',
+                  f'[shell.palette.open] ok=1 selected=0 count={count}'):
    calls=[]
    def key(code,pattern):
     calls.append(code)
@@ -298,7 +298,10 @@ class SourceBoundBrowserPalette(unittest.TestCase):
   with self.assertRaises(ValueError):p.palette(dict(root=root,key=lambda *args:calls.append(args)))
   self.assertEqual(calls,[])
   root=self.catalog(ACTUAL);path=root/'servers/silk-shell/src/main.rs'
-  path.write_text(path.read_text().replace('[CommandDef; 14]','[CommandDef; 15]'))
+  original=path.read_text()
+  malformed=original.replace(f'[CommandDef; {len(ACTUAL)}]',f'[CommandDef; {len(ACTUAL)+1}]')
+  self.assertNotEqual(original,malformed)
+  path.write_text(malformed)
   with self.assertRaises(ValueError):p.palette(dict(root=root,key=lambda *args:calls.append(args)))
   self.assertEqual(calls,[])
 
