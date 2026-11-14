@@ -48,6 +48,7 @@ crates = [
   "apps/fortune/Cargo.toml",
   "apps/hum/Cargo.toml",
   "apps/jot/Cargo.toml",
+  "apps/quil/Cargo.toml",
   "apps/files/Cargo.toml",
   "apps/peek/Cargo.toml",
   "apps/talk/Cargo.toml",
@@ -71,6 +72,7 @@ crates = [
   "apps/ssh/Cargo.toml",
   "apps/chello/Cargo.toml",
   "apps/pdf/Cargo.toml",
+  "apps/settings/Cargo.toml",
   "apps/lua/Cargo.toml",
   "apps/rg/Cargo.toml",
   "apps/fd/Cargo.toml",
@@ -248,6 +250,14 @@ source_artifact = "target/x86_64-sex-app/release/jot"
 dest_artifact = "iso_root/programs/jot"
 
 [[stage]]
+id = "build_quil_editor"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/quil/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/quil"
+dest_artifact = "iso_root/programs/quil"
+
+[[stage]]
 id = "build_files"
 action = "cargo_manifest"
 target = "x86_64-sex-app.json"
@@ -269,7 +279,7 @@ action = "cargo_manifest"
 target = "x86_64-sex-app.json"
 manifest = "apps/talk/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/talk"
-dest_artifact = "iso_root/programs/talk"
+dest_artifact = "iso_root/programs/flirt"
 
 [[stage]]
 id = "build_view"
@@ -278,6 +288,14 @@ target = "x86_64-sex-app.json"
 manifest = "apps/view/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/view"
 dest_artifact = "iso_root/programs/view"
+
+[[stage]]
+id = "build_settings"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/settings/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/settings"
+dest_artifact = "iso_root/programs/settings"
 
 [[stage]]
 id = "build_heaptest"
@@ -309,7 +327,7 @@ action = "cargo_manifest"
 target = "x86_64-sex-app.json"
 manifest = "apps/shapes/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/shapes"
-dest_artifact = "iso_root/programs/shapes"
+dest_artifact = "iso_root/programs/gestalt"
 
 [[stage]]
 id = "build_monitor"
@@ -317,7 +335,7 @@ action = "cargo_manifest"
 target = "x86_64-sex-app.json"
 manifest = "apps/monitor/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/monitor"
-dest_artifact = "iso_root/programs/monitor"
+dest_artifact = "iso_root/programs/mesh"
 
 [[stage]]
 id = "build_fputest"
@@ -357,7 +375,7 @@ action = "cargo_manifest"
 target = "x86_64-sex-app.json"
 manifest = "apps/web/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/web"
-dest_artifact = "iso_root/programs/web"
+dest_artifact = "iso_root/programs/kaleidoscope"
 
 # Video and sound (sex-media). Without a built FFmpeg (scripts/build_ffmpeg.sh) it
 # builds but refuses every file.
@@ -556,14 +574,14 @@ manifest = "apps/hum/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/hum"
 dest_artifact = "iso_root/programs/hum"
 
-# Store: the package catalog in a window (`store` in Spindle).
+# sexshop (formerly Store): the package catalog in a window (`sexshop` in Spindle).
 [[stage]]
 id = "build_store"
 action = "cargo_manifest"
 target = "x86_64-sex-app.json"
 manifest = "apps/store/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/store"
-dest_artifact = "iso_root/programs/store"
+dest_artifact = "iso_root/programs/sexshop"
 
 [[stage]]
 id = "build_snoop"

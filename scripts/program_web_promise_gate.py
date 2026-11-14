@@ -12,7 +12,7 @@ def main():
     p = argparse.ArgumentParser()
     for n in ('iso', 'source-disk', 'out'):
         p.add_argument('--' + n, required=True, type=Path)
-    p.add_argument('--program', type=Path, default=ROOT / 'iso_root/programs/web')
+    p.add_argument('--program', type=Path, default=ROOT / 'iso_root/programs/kaleidoscope')
     p.add_argument('--resolution', default='1280x800')
     a = p.parse_args()
     a.out.mkdir(parents=True, exist_ok=True)
@@ -110,10 +110,10 @@ def main():
 
     try:
         g['wait'](r'\[app.private.retired\] target=41 ', 0, 120)
-        start = len(t()); command(f'fetch {abase}/web /bin/web')
+        start = len(t()); command(f'fetch {abase}/web /bin/kaleidoscope')
         saved = g['wait'](r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)', start, 240)
         assert saved[1].startswith('Saved'), saved[1]
-        start = len(t()); command(f'run +net web {abase}/page')
+        start = len(t()); command(f'run +net kaleidoscope {abase}/page')
         for mark in ('promise body false true function', 'promise following true',
                      'promise initializer true true true', 'promise late true',
                      'promise handled true true false true', 'promise default false',
@@ -132,7 +132,7 @@ def main():
         assert readable[0]['origin'] == abase and opaque[0]['origin'] is None
         assert readable[0]['referer'] == opaque[0]['referer'] == abase + '/'
         close(start)
-        start = len(t()); command(f'run +net web {abase}/cancel')
+        start = len(t()); command(f'run +net kaleidoscope {abase}/cancel')
         g['wait'](r'\[web.console\] level=0 promise replacement new document\r?\n', start, 300)
         time.sleep(3)
         assert '[web.console] level=0 FAIL' not in t()[start:]
