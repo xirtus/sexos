@@ -10,7 +10,7 @@ import argparse,re,shutil,time
 from pathlib import Path
 from install_program import install
 from quil_autosave_gate import boot
-from quil_workflow_gate import palette_commands,palette_select
+from program_gate_geometry import maximize
 ROOT=Path(__file__).resolve().parents[1]
 def colours(data,tile):
  """The distinct colours inside a window tile of a binary PPM (P6) screendump."""
@@ -54,11 +54,7 @@ def main():
    # Starter windows can tile the new program down to144client pixels high.
    # The wheel target is y190: maximize via the real Shell action, then wait
    # for the client's resized paint before using the fixed probe coordinates.
-   g['focus'](surface)
-   palette_select(g['key'],'ZoomToggle',palette_commands(ROOT))
-   before=len(t());g['key']('ret',rf'\[shell.window.action\] action=ZoomToggle frame=\d+ sid={surface} ok=1')
-   z=g['wait'](rf'\[silk.lifecycle.zoom.active\] frame=\d+ sid={surface} zx=(-?\d+) zy=(-?\d+) zw=(\d+) zh=(\d+)',before,60)
-   tile=list(map(int,z.groups()))
+   tile,before=maximize(g,surface)
    cursor=before;deadline=time.monotonic()+120
    while True:
     frame=g['wait'](r'\[egui.frame\] n=\d+ w=(\d+) h=(\d+) meshes=(\d+) triangles=(\d+) pixels=(\d+) ms=(\d+)',cursor,max(1,deadline-time.monotonic()))
