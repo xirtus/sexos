@@ -84,6 +84,10 @@ struct Run {
     task: u32,
     /// How it ended, once it has: the status it reported, if any.
     ended: Option<Option<u32>>,
+    /// False until Shell said the run started (or ended); `spawn` is still waiting.
+    started: bool,
+    /// Shell's refusal code, when it refused the start.
+    refused: Option<u32>,
 }
 
 static RUNS: Mutex<Vec<Run>> = Mutex::new(Vec::new());
@@ -94,10 +98,20 @@ static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0)
 fn runs() -> std::sync::MutexGuard<'static, Vec<Run>> { RUNS.lock().unwrap_or_else(|e| e.into_inner()) }
 fn ours(cookie: u32) -> bool { cookie >= COOKIE_BASE }
 
-/// Puts what an event says into the table.
+/// Puts what an event says into the table. Whichever task hears an event records it
+/// here, so a `wait` never loses a start another task's `spawn` is waiting for.
 fn note(event: Event) {
-    if let Event::Done { cookie, status, .. } = event {
-        if let Some(run) = runs().iter_mut().find(|r| r.cookie == cookie) { run.ended = Some(status); }
+    let mut runs = runs();
+    match event {
+        Event::Started { cookie, task, .. } => {
+            if let Some(run) = runs.iter_mut().find(|r| r.cookie == cookie) { run.task = task; run.started = true; }
+        }
+        Event::Refused { cookie, code } => {
+            if let Some(run) = runs.iter_mut().find(|r| r.cookie == cookie) { run.refused = Some(code); }
+        }
+        Event::Done { cookie, task, status, .. } => {
+            if let Some(run) = runs.iter_mut().find(|r| r.cookie == cookie) { run.task = task; run.started = true; run.ended = Some(status); }
+        }
     }
 }
 
@@ -141,45 +155,58 @@ pub fn spawn(program: &[u8], words: &[&[u8]], network: bool, windowed: bool) -> 
     line.extend_from_slice(&joined);
     if line.len() > w::ARGS_MAX { return Err(errno::E2BIG); }
     let cookie = COOKIE_BASE + (NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) & 0x00FF_FFFF);
+    // Known before Shell can answer, so any task that hears the answer records it.
+    runs().push(Run { cookie, task: 0, ended: None, started: false, refused: None });
+    let result = start(cookie, name, &line, network, windowed);
+    if result.is_err() { forget_cookie(cookie); }
+    result
+}
+
+/// Asks Shell to start the run `cookie` names and waits for its answer.
+fn start(cookie: u32, name: &[u8], line: &[u8], network: bool, windowed: bool) -> Result<(u32, u32), i32> {
     // Shell reads one program at a time: a start refused as busy is asked again.
     let mut busy = 0u32;
     loop {
-        match launch::run_with(name, &line, network, !windowed, cookie) {
+        match launch::run_with(name, line, network, !windowed, cookie) {
             Ok(()) => {}
             Err(launch::Error::Files(code)) => return Err(files_errno(code)),
             Err(launch::Error::Shell) if busy < 200 => { busy += 1; pause(busy); continue; }
             Err(_) => return Err(errno::EAGAIN),
         }
         let mut round = 0;
-        let event = loop {
-            match launch::poll(cookie) {
-                Some(e) => break e,
-                None => { round += 1; pause(round); }
-            }
+        let answer = loop {
+            while let Some(e) = launch::poll_where(ours) { note(e); }
+            let answer = {
+                let mut runs = runs();
+                let run = runs.iter_mut().find(|r| r.cookie == cookie).ok_or(errno::EIO)?;
+                if run.started { Some(Ok(run.task)) } else { run.refused.take().map(Err) }
+            };
+            if let Some(a) = answer { break a; }
+            round += 1;
+            pause(round);
         };
-        match event {
-            Event::Started { task, .. } => {
-                runs().push(Run { cookie, task, ended: None });
+        match answer {
+            Ok(task) => {
                 sex_pdx::serial_record!("[std.process.spawn] cookie={:#x} task={} hidden={} network={}", cookie, task, !windowed as u8, network as u8);
                 return Ok((cookie, task));
             }
-            Event::Refused { code, .. } if code == store::IMAGE_BUSY && busy < 200 => { busy += 1; for r in 0..20 { pause(r + busy); } }
-            Event::Refused { code, .. } => {
+            Err(code) if code == store::IMAGE_BUSY && busy < 200 => { busy += 1; for r in 0..20 { pause(r + busy); } }
+            Err(code) => {
                 sex_pdx::serial_record!("[std.process.refused] cookie={:#x} code={} why={}", cookie, code, String::from_utf8_lossy(store::refusal(code as u64)));
                 return Err(refusal_errno(code));
-            }
-            // A run that ended before its start was heard: nothing to follow.
-            Event::Done { task, status, .. } => {
-                runs().push(Run { cookie, task, ended: Some(status) });
-                return Ok((cookie, task));
             }
         }
     }
 }
 
+fn forget_cookie(cookie: u32) {
+    let mut runs = runs();
+    if let Some(at) = runs.iter().position(|r| r.cookie == cookie) { runs.remove(at); }
+}
+
 /// The run `id` names: its cookie or its task.
 fn find(runs: &[Run], id: i64) -> Option<usize> {
-    runs.iter().position(|r| id == r.cookie as i64 || id == r.task as i64)
+    runs.iter().position(|r| r.started && (id == r.cookie as i64 || id == r.task as i64))
 }
 
 /// How a run ended. `id` is a cookie or task, or -1 for any run started here. Returns
@@ -191,7 +218,7 @@ pub fn wait(id: i64, block: bool) -> Result<Option<(u32, Option<u32>)>, i32> {
         {
             let runs = runs();
             if id == -1 {
-                if runs.is_empty() { return Err(errno::ECHILD); }
+                if !runs.iter().any(|r| r.started) { return Err(errno::ECHILD); }
                 if let Some(r) = runs.iter().find(|r| r.ended.is_some()) { return Ok(Some((r.task, r.ended.unwrap()))); }
             } else {
                 let at = find(&runs, id).ok_or(errno::ECHILD)?;
@@ -235,7 +262,8 @@ pub fn task() -> u32 { crate::identity().1 }
 pub unsafe extern "C" fn sys_process_spawn(program: *const u8, program_len: usize, args: *const u8, args_len: usize, flags: u32, task: *mut u32) -> i64 {
     let program = unsafe { core::slice::from_raw_parts(program, program_len) };
     let args = if args_len == 0 { &[][..] } else { unsafe { core::slice::from_raw_parts(args, args_len) } };
-    let mut words: Vec<&[u8]> = args.split(|b| *b == 0).collect();
+    // An empty buffer is no words at all, not one empty word.
+    let mut words: Vec<&[u8]> = if args.is_empty() { Vec::new() } else { args.split(|b| *b == 0).collect() };
     // The last word's NUL leaves an empty piece after it.
     if args.last() == Some(&0) { words.pop(); }
     match spawn(program, &words, flags & 1 != 0, flags & 2 != 0) {
