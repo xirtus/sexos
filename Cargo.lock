@@ -2886,7 +2886,9 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "flate2",
+ "png",
  "serde_json",
+ "zune-jpeg",
 ]
 
 [[package]]
