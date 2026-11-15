@@ -65,6 +65,7 @@ run_stage() {
   case "$action" in
     prep_iso_root)
       rm -rf iso_root 2>/dev/null || true
+      rm -rf target/build-consumed-inputs
       mkdir -p iso_root/servers iso_root/apps iso_root/programs iso_root/boot/limine
       ;;
     copy_limine)
@@ -98,6 +99,7 @@ run_stage() {
       # Ordinary programs (x86_64-sex-std.json) build the whole standard library.
       stage_std="$(rg -n '^build_std\s*=\s*"[^"]+"' "$stage" | sed -E 's/.*"([^"]+)".*/\1/' || true)"
       is_allowed_crate "$manifest" || { echo "[FAIL] manifest not in whitelist: $manifest"; exit 1; }
+      python3 scripts/build_input_receipt.py begin "$stage"
       RUSTFLAGS="-C relocation-model=pic -C link-arg=-pie ${extra_rustflags:-}" cargo build --locked \
         -Z build-std="${stage_std:-core,compiler_builtins,alloc}" \
         -Z build-std-features=compiler-builtins-mem \
@@ -122,6 +124,7 @@ run_stage() {
         done
       fi
       cp "$src" "$dst"
+      python3 scripts/build_input_receipt.py finish "$stage"
       ;;
     copy_file)
       local src dst

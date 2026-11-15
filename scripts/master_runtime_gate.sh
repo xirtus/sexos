@@ -244,7 +244,8 @@ else
     if capture_production_sources "$SOURCE_BEFORE" >"$BUILD_LOG" 2>&1 \
         && ./scripts/entrypoint_build.sh >>"$BUILD_LOG" 2>&1 \
         && capture_production_sources "$SOURCE_AFTER" >>"$BUILD_LOG" 2>&1 \
-        && cmp -s "$SOURCE_BEFORE" "$SOURCE_AFTER"; then
+        && cmp -s "$SOURCE_BEFORE" "$SOURCE_AFTER" \
+        && python3 scripts/build_input_receipt.py collect sexos_build_spec.toml --out "$GATE_DIR/build-consumed-inputs.json" >>"$BUILD_LOG" 2>&1; then
         BUILD_GATE="PASS"
         echo "[gate] BUILD: PASS"
     else
@@ -311,9 +312,9 @@ fi
 
 # Record what was actually tested. With --skip-build the source/image
 # relationship is deliberately unverified; hashes identify evidence, not origin.
-python3 - "$PROVENANCE_PATH" "$ISO" "$SKIP_BUILD" "$RUN_STARTED_UTC" "$BUILD_GATE" "$SOURCE_BEFORE" <<'PYPROVENANCE'
+python3 - "$PROVENANCE_PATH" "$ISO" "$SKIP_BUILD" "$RUN_STARTED_UTC" "$BUILD_GATE" "$SOURCE_BEFORE" "$GATE_DIR/build-consumed-inputs.json" <<'PYPROVENANCE'
 import hashlib, json, os, pathlib, subprocess, sys
-out, iso, skip, started, build_gate, source_manifest = sys.argv[1:]
+out, iso, skip, started, build_gate, source_manifest, consumed_manifest = sys.argv[1:]
 def git(*args):
     return subprocess.check_output(["git", *args])
 image = pathlib.Path(iso)
@@ -336,7 +337,8 @@ for raw in git("ls-files", "--others", "--exclude-standard", "-z").split(b"\0"):
 production_sources=json.loads(pathlib.Path(source_manifest).read_text()) if build_gate=="PASS" else None
 kernel=pathlib.Path('target/x86_64-sex/release/sex-kernel')
 kernel_hash=sha256_file(kernel) if build_gate=="PASS" and kernel.is_file() else None
-data = dict(production_source_sha256=production_sources,kernel_sha256=kernel_hash,
+consumed=json.loads(pathlib.Path(consumed_manifest).read_text()) if build_gate=="PASS" else None
+data = dict(production_source_sha256=production_sources,kernel_sha256=kernel_hash,consumed_build_inputs=consumed,
             sources_unchanged_during_build=build_gate=="PASS",started_utc=started, git_revision=revision, git_status=status,
             tracked_diff_sha256=hashlib.sha256(source_diff).hexdigest(),
             untracked_file_sha256=untracked, build_gate=build_gate,

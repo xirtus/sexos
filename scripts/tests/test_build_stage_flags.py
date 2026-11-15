@@ -18,6 +18,7 @@ class BuildStageFlags(unittest.TestCase):
             (root / 'bin').mkdir()
             (root / 'out').mkdir()
             shutil.copy(ROOT / 'scripts/sexos_build_trace.sh', root / 'scripts/trace.sh')
+            shutil.copy(ROOT / 'scripts/build_input_receipt.py', root / 'scripts/build_input_receipt.py')
             (root / 'artifact').write_bytes(b'fixture')
             cargo = root / 'bin/cargo'
             cargo.write_text('#!/usr/bin/env python3\nimport os,json\n'
