@@ -433,12 +433,36 @@ fn run_queued(s: &mut State, d: &mut Doc) {
 /// Enum properties picked from dropdowns.
 fn set_enum(s: &mut State, d: &mut Doc, obj: Option<usize>, key: &str, v: &str) {
     use crate::settings::{Engine, RotationMode, UnitSystem};
-    use sex_3d::render::ViewTransform;
+    use sex_3d::render::{MistFalloff, ShutterPosition, ViewTransform};
+    use sex_3d::scene::{AreaShape, PanoramaType, SensorFit};
     let st = &mut d.settings;
     match key {
         "engine" => st.engine = if v == Engine::Workbench.label() { Engine::Workbench } else { Engine::PathTracer },
-        "view_transform" => st.view_transform = if v == "Standard" { ViewTransform::Standard } else if v == "AgX" { ViewTransform::AgX } else { return d.report = format!("{v} view transform is not available yet") },
-        "look" => st.look = v.into(),
+        "view_transform" => {
+            let Some(t) = ViewTransform::from_label(v) else { return d.report = format!("{v} view transform is not available") };
+            d.push_undo("View Transform");
+            d.settings.view_transform = t;
+        }
+        "look" => {
+            d.push_undo("Look");
+            d.settings.look = v.into();
+        }
+        "shutter_position" => {
+            d.push_undo("Shutter Position");
+            d.settings.shutter_position = match v {
+                "Start on Frame" => ShutterPosition::Start,
+                "End on Frame" => ShutterPosition::End,
+                _ => ShutterPosition::Center,
+            };
+        }
+        "mist_falloff" => {
+            d.push_undo("Mist Falloff");
+            d.settings.mist_falloff = match v {
+                "Linear" => MistFalloff::Linear,
+                "Inverse Quadratic" => MistFalloff::InverseQuadratic,
+                _ => MistFalloff::Quadratic,
+            };
+        }
         "units" => st.unit_system = UnitSystem::ALL.into_iter().find(|u| u.label() == v).unwrap_or(UnitSystem::Metric),
         "rotation_units" => st.degrees = v == "Degrees",
         "file_format" => st.file_format = v.into(),
@@ -491,18 +515,73 @@ fn set_enum(s: &mut State, d: &mut Doc, obj: Option<usize>, key: &str, v: &str) 
         "lens_type" => {
             if let Some(o) = obj {
                 let aspect = d.settings.resolution_y as f32 / d.settings.resolution_x.max(1) as f32;
-                if let ObjectData::Camera(c) = &mut d.scene.objects[o].data {
-                    let ortho = v == "Orthographic";
-                    if v == "Panoramic" {
-                        return d.report = "Panoramic cameras are not available yet".into();
-                    }
-                    if ortho != c.ortho_scale.is_some() {
-                        let mut nc = *c;
-                        nc.ortho_scale = if ortho { Some(6.0 * aspect.min(1.0)) } else { None };
-                        d.push_undo("Lens Type");
-                        if let ObjectData::Camera(c) = &mut d.scene.objects[o].data {
-                            *c = nc;
+                if let ObjectData::Camera(c) = &d.scene.objects[o].data {
+                    let mut nc = *c;
+                    match v {
+                        "Orthographic" => {
+                            nc.panorama = None;
+                            if nc.ortho_scale.is_none() {
+                                nc.ortho_scale = Some(6.0 * aspect.min(1.0));
+                            }
                         }
+                        "Panoramic" => {
+                            nc.ortho_scale = None;
+                            nc.panorama = Some(nc.panorama.unwrap_or_default());
+                        }
+                        _ => {
+                            nc.ortho_scale = None;
+                            nc.panorama = None;
+                        }
+                    }
+                    if nc != *c {
+                        d.push_undo("Lens Type");
+                        d.scene.objects[o].data = ObjectData::Camera(nc);
+                    }
+                }
+            }
+        }
+        "panorama_type" | "sensor_fit" | "dof_focus_object" => {
+            if let Some(o) = obj {
+                let focus = d.scene.find_object(v);
+                if let ObjectData::Camera(c) = &d.scene.objects[o].data {
+                    let mut nc = *c;
+                    match key {
+                        "panorama_type" => {
+                            nc.panorama = Some(match v {
+                                "Fisheye Equidistant" => PanoramaType::FisheyeEquidistant,
+                                "Fisheye Equisolid" => PanoramaType::FisheyeEquisolid,
+                                _ => PanoramaType::Equirectangular,
+                            })
+                        }
+                        "sensor_fit" => {
+                            nc.sensor_fit = match v {
+                                "Horizontal" => SensorFit::Horizontal,
+                                "Vertical" => SensorFit::Vertical,
+                                _ => SensorFit::Auto,
+                            }
+                        }
+                        _ => nc.dof.focus_object = focus.filter(|f| *f != o),
+                    }
+                    if nc != *c {
+                        d.push_undo("Camera");
+                        d.scene.objects[o].data = ObjectData::Camera(nc);
+                    }
+                }
+            }
+        }
+        "area_shape" => {
+            if let Some(o) = obj {
+                if let ObjectData::Light(l) = &d.scene.objects[o].data {
+                    let mut nl = *l;
+                    nl.shape = match v {
+                        "Rectangle" => AreaShape::Rectangle,
+                        "Disk" => AreaShape::Disk,
+                        "Ellipse" => AreaShape::Ellipse,
+                        _ => AreaShape::Square,
+                    };
+                    if nl != *l {
+                        d.push_undo("Light Shape");
+                        d.scene.objects[o].data = ObjectData::Light(nl);
                     }
                 }
             }

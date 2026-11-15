@@ -826,7 +826,7 @@ fn rich_scene() -> Scene {
     cam.transform.rotation = Quat::from_axis_angle(Vec3::X, 1.3);
     let cam = s.add_object(cam);
     // A light under the camera (child of a turned frame).
-    let mut spot = Object::new("Spot", ObjectData::Light(Light { kind: LightKind::Spot { angle: 1.0, blend: 0.25 }, power: 250.0, color: Vec3::new(1.0, 0.9, 0.8), radius: 0.0 }));
+    let mut spot = Object::new("Spot", ObjectData::Light(Light { kind: LightKind::Spot { angle: 1.0, blend: 0.25 }, power: 250.0, color: Vec3::new(1.0, 0.9, 0.8), radius: 0.0, ..Default::default() }));
     spot.parent = Some(cam);
     spot.transform.location = Vec3::new(0.5, 0.0, 0.0);
     spot.transform.rotation = Quat::from_axis_angle(Vec3::Y, 0.3);

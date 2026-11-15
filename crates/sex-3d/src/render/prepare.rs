@@ -1,13 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Scene preparation: flatten visible mesh objects into a world-space triangle
-//! BVH with shading data, resolve materials, and build the light list (lights,
-//! emissive triangles, world) with its power-based selection distribution.
+//! BVH with shading data (objects moving during the shutter get their own
+//! BVH placed at each ray's time), resolve materials and their media, record
+//! per-object ray visibility, and build the light list (lights, emissive
+//! triangles, world) with its power-based selection distribution.
 use super::bvh::{Bvh, Hit, TriGeom};
 use super::luminance;
 use super::rng::Rng;
 use super::sampling::{concentric_disk, onb, uniform_cone, uniform_sphere, Distribution1D};
 use crate::math::{Aabb, Mat4, Vec2, Vec3};
-use crate::scene::{Camera, Image, LightKind, Material, ObjectData, Scene};
+use super::camera::{CameraRig, MotionChain};
+use super::volume::VolumeCoeffs;
+use crate::scene::{AreaShape, Camera, Image, LightKind, Material, ObjectData, RayVisibility, Scene};
 use core::f32::consts::{FRAC_1_PI, PI, TAU};
 
 /// Per-triangle shading data (in BVH order).
@@ -56,7 +60,8 @@ pub(crate) enum LightShape {
     Point { pos: Vec3, radius: f32, intensity: Vec3, spot: Option<(Vec3, f32, f32)> },
     Sun { to_light: Vec3, cos_max: f32, irradiance: Vec3 },
     /// One-sided parallelogram `center ± u ± v`, emitting along `normal`.
-    Area { center: Vec3, u: Vec3, v: Vec3, normal: Vec3, area: f32, radiance: Vec3 },
+    /// `ellipse`: the ellipse inscribed in it instead. `spread`: see [`spread_params`].
+    Area { center: Vec3, u: Vec3, v: Vec3, normal: Vec3, area: f32, radiance: Vec3, ellipse: bool, spread: Option<(f32, f32)> },
     /// Emissive triangle (two-sided), by BVH triangle index.
     Tri { prim: u32, area: f32, radiance: Vec3 },
     World,
@@ -207,43 +212,58 @@ impl EnvDistribution {
     }
 }
 
-/// Camera rig for generating primary rays.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct CameraRig {
-    pub origin: Vec3,
-    pub right: Vec3,
-    pub up: Vec3,
-    pub forward: Vec3,
-    pub tan_half: f32,
-    pub ortho: Option<f32>,
+/// Ray-type bits for [`crate::scene::RayVisibility`].
+pub(crate) const VIS_CAMERA: u8 = 1;
+pub(crate) const VIS_DIFFUSE: u8 = 2;
+pub(crate) const VIS_GLOSSY: u8 = 4;
+pub(crate) const VIS_TRANSMISSION: u8 = 8;
+pub(crate) const VIS_VOLUME: u8 = 16;
+pub(crate) const VIS_SHADOW: u8 = 32;
+pub(crate) const VIS_ALL: u8 = 63;
+
+fn vis_mask(v: &RayVisibility) -> u8 {
+    let b = |on: bool, bit: u8| if on { bit } else { 0 };
+    b(v.camera, VIS_CAMERA) | b(v.diffuse, VIS_DIFFUSE) | b(v.glossy, VIS_GLOSSY) | b(v.transmission, VIS_TRANSMISSION) | b(v.volume_scatter, VIS_VOLUME) | b(v.shadow, VIS_SHADOW)
 }
 
-impl CameraRig {
-    fn new(m: &Mat4, cam: &Camera) -> CameraRig {
-        CameraRig {
-            origin: m.transform_point(Vec3::ZERO),
-            right: m.transform_vector(Vec3::X).normalize(),
-            up: m.transform_vector(Vec3::Y).normalize(),
-            forward: m.transform_vector(-Vec3::Z).normalize(),
-            tan_half: (cam.fov_y.clamp(1e-4, 3.1) * 0.5).tan(),
-            ortho: cam.ortho_scale.filter(|s| *s > 0.0),
-        }
-    }
+/// Per-light settings beyond its shape.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct LightInfo {
+    /// Scene object index (light object, or the emissive mesh).
+    pub object: u32,
+    pub max_bounces: u32,
+    pub cast_shadow: bool,
+    pub use_mis: bool,
+}
 
-    /// Ray through film position (`fx`, `fy`) in pixels of a `w` x `h` frame.
-    pub fn ray(&self, fx: f32, fy: f32, w: u32, h: u32) -> (Vec3, Vec3) {
-        let aspect = w as f32 / h.max(1) as f32;
-        let sx = 2.0 * fx / w as f32 - 1.0;
-        let sy = 1.0 - 2.0 * fy / h as f32;
-        match self.ortho {
-            Some(scale) => {
-                let o = self.origin + self.right * (sx * scale * 0.5 * aspect) + self.up * (sy * scale * 0.5);
-                (o, self.forward)
+/// A mesh object that moves during the shutter: its own BVH in object space,
+/// placed by its transform chain at the ray's time.
+#[derive(Clone, Debug)]
+pub(crate) struct MotionInstance {
+    bvh: Bvh,
+    /// Global index of its first triangle in [`PreparedScene::shade`].
+    base: u32,
+    chain: MotionChain,
+}
+
+/// The media a path is inside (material indices), innermost last.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct MediumStack {
+    ids: [u32; 4],
+    n: u8,
+}
+
+impl MediumStack {
+    /// Cross the boundary of material `m`'s medium: enter when `entering`.
+    pub fn cross(&mut self, m: u32, entering: bool) {
+        if entering {
+            if (self.n as usize) < self.ids.len() {
+                self.ids[self.n as usize] = m;
+                self.n += 1;
             }
-            None => {
-                let d = self.forward + self.right * (sx * self.tan_half * aspect) + self.up * (sy * self.tan_half);
-                (self.origin, d.normalize())
-            }
+        } else if let Some(i) = self.ids[..self.n as usize].iter().rposition(|&x| x == m) {
+            self.ids.copy_within(i + 1..self.n as usize, i);
+            self.n -= 1;
         }
     }
 }
@@ -253,16 +273,31 @@ impl CameraRig {
 #[derive(Clone, Debug)]
 pub struct PreparedScene {
     pub(crate) bvh: Bvh,
+    /// Shading data of every triangle: the static BVH's, then each motion instance's.
     pub(crate) shade: Vec<TriShade>,
     pub(crate) materials: Vec<ShadeMaterial>,
+    /// Homogeneous medium of each material (same indices as `materials`).
+    pub(crate) material_volume: Vec<Option<VolumeCoeffs>>,
+    pub(crate) material_pass_index: Vec<u32>,
     pub(crate) images: Vec<Image>,
     pub(crate) lights: Vec<LightShape>,
+    pub(crate) light_info: Vec<LightInfo>,
     pub(crate) light_dist: Option<Distribution1D>,
     /// Indices of [`LightShape::Area`] lights, which rays can hit.
     pub(crate) area_lights: Vec<u32>,
     pub(crate) world_light: Option<u32>,
     pub(crate) env: Environment,
+    pub(crate) world_volume: Option<VolumeCoeffs>,
     pub(crate) camera: CameraRig,
+    /// Per scene object: ray visibility bits, holdout, pass index.
+    pub(crate) object_vis: Vec<u8>,
+    pub(crate) object_holdout: Vec<bool>,
+    pub(crate) object_pass_index: Vec<u32>,
+    /// Some object hides from some ray type (rays must skip it).
+    pub(crate) any_hidden: bool,
+    /// Some material has a medium (rays must track volumes).
+    pub(crate) any_volume: bool,
+    instances: Vec<MotionInstance>,
     bounds: Aabb,
 }
 
@@ -273,44 +308,94 @@ pub(crate) enum SceneHit {
     Area(u32, f32),
 }
 
+/// Triangles of one object in world space at time 0, with shading data.
+fn object_triangles(scene: &Scene, oi: usize, mesh_to: Option<&Mat4>, default_mat: u32) -> (Vec<TriGeom>, Vec<TriShade>) {
+    let mut geoms = Vec::new();
+    let mut shades = Vec::new();
+    let Some(mut mesh) = scene.evaluated_mesh(oi) else { return (geoms, shades) };
+    if let Some(m) = mesh_to {
+        mesh.transform(m);
+    }
+    let slots = &scene.objects[oi].materials;
+    let smooth = mesh.faces.iter().any(|f| f.smooth);
+    let vn = if smooth { mesh.vertex_normals() } else { Vec::new() };
+    for t in mesh.triangulate() {
+        let face = &mesh.faces[t.face as usize];
+        let p = t.verts.map(|v| mesh.positions[v as usize]);
+        let g = TriGeom::new(p[0], p[1], p[2]);
+        let ng = g.e1.cross(g.e2).normalize();
+        if ng == Vec3::ZERO || !(p[0].x.is_finite() && p[1].x.is_finite() && p[2].x.is_finite()) {
+            continue; // degenerate
+        }
+        let n = if face.smooth { t.verts.map(|v| if vn[v as usize] == Vec3::ZERO { ng } else { vn[v as usize] }) } else { [ng; 3] };
+        let uv = if face.uvs.len() == face.verts.len() { t.corners.map(|c| face.uvs[c as usize]) } else { [Vec2::ZERO; 3] };
+        let material = slots.get(face.material as usize).copied().filter(|&m| m < scene.materials.len()).map_or(default_mat, |m| m as u32);
+        geoms.push(g);
+        shades.push(TriShade { n, uv, material, light: u32::MAX, object: oi as u32 });
+    }
+    (geoms, shades)
+}
+
 impl PreparedScene {
     /// Flatten `scene` for rendering from its active camera.
     pub fn new(scene: &Scene) -> PreparedScene {
         let mut materials: Vec<ShadeMaterial> = scene.materials.iter().map(|m| ShadeMaterial::from(m, scene.images.len())).collect();
         let default_mat = materials.len() as u32;
         materials.push(ShadeMaterial::from(&Material::default(), 0));
+        let mut material_volume: Vec<Option<VolumeCoeffs>> = scene.materials.iter().map(|m| m.volume.as_ref().map(VolumeCoeffs::from_settings)).collect();
+        material_volume.push(None);
+        let mut material_pass_index: Vec<u32> = scene.materials.iter().map(|m| m.pass_index).collect();
+        material_pass_index.push(0);
+        let any_volume = material_volume.iter().any(Option::is_some);
+
+        let object_vis: Vec<u8> = scene.objects.iter().map(|o| vis_mask(&o.visibility)).collect();
+        let object_holdout: Vec<bool> = scene.objects.iter().map(|o| o.holdout).collect();
+        let object_pass_index: Vec<u32> = scene.objects.iter().map(|o| o.pass_index).collect();
+        let any_hidden = scene.objects.iter().enumerate().any(|(i, o)| scene.is_visible(i) && (object_vis[i] != VIS_ALL || o.holdout));
 
         let mut geoms = Vec::new();
         let mut shades = Vec::new();
+        let mut moving = Vec::new();
         for oi in 0..scene.objects.len() {
-            if !scene.is_visible(oi) {
+            if !scene.is_visible(oi) || !matches!(scene.objects[oi].data, ObjectData::Mesh(_)) {
                 continue;
             }
-            let Some((mesh, slots)) = scene.world_mesh(oi) else { continue };
-            let smooth = mesh.faces.iter().any(|f| f.smooth);
-            let vn = if smooth { mesh.vertex_normals() } else { Vec::new() };
-            for t in mesh.triangulate() {
-                let face = &mesh.faces[t.face as usize];
-                let p = t.verts.map(|v| mesh.positions[v as usize]);
-                let g = TriGeom::new(p[0], p[1], p[2]);
-                let ng = g.e1.cross(g.e2).normalize();
-                if ng == Vec3::ZERO || !(p[0].x.is_finite() && p[1].x.is_finite() && p[2].x.is_finite()) {
-                    continue; // degenerate
-                }
-                let n = if face.smooth { t.verts.map(|v| if vn[v as usize] == Vec3::ZERO { ng } else { vn[v as usize] }) } else { [ng; 3] };
-                let uv = if face.uvs.len() == face.verts.len() { t.corners.map(|c| face.uvs[c as usize]) } else { [Vec2::ZERO; 3] };
-                let material = slots.get(face.material as usize).copied().filter(|&m| m < scene.materials.len()).map_or(default_mat, |m| m as u32);
-                geoms.push(g);
-                shades.push(TriShade { n, uv, material, light: u32::MAX, object: oi as u32 });
+            if scene.has_motion(oi) {
+                moving.push(oi);
+                continue;
             }
+            let (g, s) = object_triangles(scene, oi, Some(&scene.world_matrix(oi)), default_mat);
+            geoms.extend(g);
+            shades.extend(s);
         }
         let (bvh, order) = Bvh::build(geoms);
         let mut shade: Vec<TriShade> = order.iter().map(|&i| shades[i as usize]).collect();
-        let bounds = bvh.bounds();
+        let mut instances = Vec::new();
+        let mut bounds = bvh.bounds();
+        for oi in moving {
+            let (g, s) = object_triangles(scene, oi, None, default_mat);
+            if g.is_empty() {
+                continue;
+            }
+            let (ib, iorder) = Bvh::build(g);
+            let base = shade.len() as u32;
+            shade.extend(iorder.iter().map(|&i| s[i as usize]));
+            let chain = MotionChain::from_scene(scene, oi);
+            let lb = ib.bounds();
+            for t in [0.0, 1.0] {
+                let m = chain.matrix(t);
+                for c in 0..8 {
+                    let p = Vec3::new(if c & 1 == 0 { lb.min.x } else { lb.max.x }, if c & 2 == 0 { lb.min.y } else { lb.max.y }, if c & 4 == 0 { lb.min.z } else { lb.max.z });
+                    bounds.grow(m.transform_point(p));
+                }
+            }
+            instances.push(MotionInstance { bvh: ib, base, chain });
+        }
         let radius = if bounds.is_empty() { 1.0 } else { (bounds.size().length() * 0.5).max(1e-3) };
 
         // Lights and their selection weights (estimated emitted power).
         let mut lights = Vec::new();
+        let mut light_info = Vec::new();
         let mut power = Vec::new();
         for oi in 0..scene.objects.len() {
             let ObjectData::Light(l) = &scene.objects[oi].data else { continue };
@@ -322,6 +407,7 @@ impl PreparedScene {
             let axis = m.transform_vector(-Vec3::Z).normalize();
             let color = l.color.max(Vec3::ZERO);
             let lum = luminance(color);
+            let info = LightInfo { object: oi as u32, max_bounces: l.max_bounces, cast_shadow: l.cast_shadow, use_mis: l.use_mis };
             match l.kind {
                 LightKind::Point | LightKind::Spot { .. } => {
                     let intensity = color * (l.power / (4.0 * PI));
@@ -340,19 +426,23 @@ impl PreparedScene {
                     lights.push(LightShape::Sun { to_light: -axis, cos_max: half.cos(), irradiance: color * l.power });
                     power.push(l.power * lum * PI * radius * radius);
                 }
-                LightKind::Area { size } => {
-                    let u = m.transform_vector(Vec3::X) * (size * 0.5);
-                    let v = m.transform_vector(Vec3::Y) * (size * 0.5);
-                    let area = 4.0 * u.cross(v).length();
-                    if area <= 0.0 {
+                LightKind::Area { .. } => {
+                    let (sx, sy) = l.area_size();
+                    let u = m.transform_vector(Vec3::X) * (sx * 0.5);
+                    let v = m.transform_vector(Vec3::Y) * (sy * 0.5);
+                    let ellipse = matches!(l.shape, AreaShape::Disk | AreaShape::Ellipse);
+                    let area = u.cross(v).length() * if ellipse { PI } else { 4.0 };
+                    if !(area > 0.0) || !area.is_finite() {
                         continue;
                     }
-                    lights.push(LightShape::Area { center: pos, u, v, normal: axis, area, radiance: color * (l.power / (area * PI)) });
+                    let spread = spread_params(l.spread);
+                    lights.push(LightShape::Area { center: pos, u, v, normal: axis, area, radiance: color * (l.power / (area * PI)), ellipse, spread });
                     power.push(l.power * lum);
                 }
             }
+            light_info.push(info);
         }
-        for (prim, s) in shade.iter_mut().enumerate() {
+        for (prim, s) in shade.iter_mut().enumerate().take(bvh.tris.len()) {
             let e = materials[s.material as usize].emission;
             if e == Vec3::ZERO {
                 continue;
@@ -361,6 +451,7 @@ impl PreparedScene {
             let area = 0.5 * g.e1.cross(g.e2).length();
             s.light = lights.len() as u32;
             lights.push(LightShape::Tri { prim: prim as u32, area, radiance: e });
+            light_info.push(LightInfo { object: s.object, max_bounces: u32::MAX, cast_shadow: true, use_mis: true });
             // Two-sided emitter: power = L * A * pi per side.
             power.push(luminance(e) * area * 2.0 * PI);
         }
@@ -368,11 +459,13 @@ impl PreparedScene {
         let env_avg = env.average();
         let world_light = (env_avg > 0.0).then(|| {
             lights.push(LightShape::World);
+            light_info.push(LightInfo { object: u32::MAX, max_bounces: u32::MAX, cast_shadow: true, use_mis: true });
             power.push(env_avg * 4.0 * PI * PI * radius * radius);
             lights.len() as u32 - 1
         });
         let area_lights = lights.iter().enumerate().filter(|(_, l)| matches!(l, LightShape::Area { .. })).map(|(i, _)| i as u32).collect();
         let light_dist = Distribution1D::new(&power);
+        let world_volume = scene.world.volume.as_ref().map(VolumeCoeffs::from_settings).filter(|v| !v.is_empty());
 
         let camera = match scene.active_camera.filter(|&c| c < scene.objects.len()) {
             Some(ci) => {
@@ -380,12 +473,36 @@ impl PreparedScene {
                     ObjectData::Camera(c) => *c,
                     _ => Camera::default(),
                 };
-                CameraRig::new(&scene.world_matrix(ci), &cam)
+                let focus = cam.dof.focus_object.filter(|&f| f < scene.objects.len()).map(|f| scene.world_matrix(f).transform_point(Vec3::ZERO));
+                let motion = scene.has_motion(ci).then(|| MotionChain::from_scene(scene, ci));
+                CameraRig::new(&scene.world_matrix(ci), &cam, focus, motion)
             }
-            None => CameraRig::new(&Mat4::look_at(Vec3::new(7.36, -6.93, 4.96), Vec3::ZERO, Vec3::Z).inverse(), &Camera::default()),
+            None => CameraRig::new(&Mat4::look_at(Vec3::new(7.36, -6.93, 4.96), Vec3::ZERO, Vec3::Z).inverse(), &Camera::default(), None, None),
         };
 
-        PreparedScene { bvh, shade, materials, images: scene.images.clone(), lights, light_dist, area_lights, world_light, env, camera, bounds }
+        PreparedScene {
+            bvh,
+            shade,
+            materials,
+            material_volume,
+            material_pass_index,
+            images: scene.images.clone(),
+            lights,
+            light_info,
+            light_dist,
+            area_lights,
+            world_light,
+            env,
+            world_volume,
+            camera,
+            object_vis,
+            object_holdout,
+            object_pass_index,
+            any_hidden,
+            any_volume: any_volume || world_volume.is_some(),
+            instances,
+            bounds,
+        }
     }
 
     /// World-space bounds of the renderable geometry.
@@ -393,23 +510,90 @@ impl PreparedScene {
         self.bounds
     }
 
-    /// Number of triangles in the BVH.
+    /// Number of triangles (static and moving).
     pub fn triangle_count(&self) -> usize {
-        self.bvh.tris.len()
+        self.shade.len()
     }
 
     /// Object index of the nearest surface along a ray, if any.
     pub fn pick_ray(&self, o: Vec3, d: Vec3) -> Option<usize> {
-        self.bvh.intersect(o, d.normalize(), f32::INFINITY).map(|h| self.shade[h.prim as usize].object as usize)
+        self.nearest_tri(o, d.normalize(), f32::INFINITY, 0.0).map(|h| self.shade[h.prim as usize].object as usize)
     }
 
-    /// Nearest hit: triangles or the front of an area light.
-    pub(crate) fn intersect(&self, o: Vec3, d: Vec3) -> Option<SceneHit> {
-        let tri = self.bvh.intersect(o, d, f32::INFINITY);
+    /// Nearest triangle (static or moving at `time`).
+    fn nearest_tri(&self, o: Vec3, d: Vec3, tmax: f32, time: f32) -> Option<Hit> {
+        let mut best = self.bvh.intersect(o, d, tmax);
+        let mut tmax = best.map_or(tmax, |h| h.t);
+        for inst in &self.instances {
+            let inv = inst.chain.matrix(time).inverse();
+            // Unnormalised local direction keeps t in world units.
+            if let Some(h) = inst.bvh.intersect(inv.transform_point(o), inv.transform_vector(d), tmax) {
+                tmax = h.t;
+                best = Some(Hit { prim: inst.base + h.prim, ..h });
+            }
+        }
+        best
+    }
+
+    /// The world-space triangle and shading data of global triangle `prim` at `time`.
+    pub(crate) fn triangle(&self, prim: u32, time: f32) -> (TriGeom, TriShade) {
+        let sh = self.shade[prim as usize];
+        if (prim as usize) < self.bvh.tris.len() {
+            return (self.bvh.tris[prim as usize], sh);
+        }
+        let inst = self.instances.iter().rev().find(|i| prim >= i.base).expect("motion instance");
+        let g = inst.bvh.tris[(prim - inst.base) as usize];
+        let m = inst.chain.matrix(time);
+        let nm = m.inverse().transpose();
+        let v0 = m.transform_point(g.v0);
+        let wg = TriGeom::new(v0, m.transform_point(g.v0 + g.e1), m.transform_point(g.v0 + g.e2));
+        let n = sh.n.map(|n| nm.transform_vector(n).normalize());
+        (wg, TriShade { n, ..sh })
+    }
+
+    /// Visibility of whatever `h` is for ray-type bits `mask`.
+    fn hit_visible(&self, h: &SceneHit, mask: u8) -> bool {
+        let object = match h {
+            SceneHit::Tri(h) => self.shade[h.prim as usize].object,
+            SceneHit::Area(li, _) => self.light_info[*li as usize].object,
+        };
+        self.object_vis.get(object as usize).is_none_or(|v| v & mask != 0)
+    }
+
+    /// Nearest hit within `tmax` visible to rays of type `mask` (objects
+    /// hidden from it are passed through).
+    pub(crate) fn intersect_ray(&self, o: Vec3, d: Vec3, tmax: f32, time: f32, mask: u8) -> Option<SceneHit> {
+        let mut origin = o;
+        let mut travelled = 0.0f32;
+        for _ in 0..256 {
+            let h = self.nearest_any(origin, d, tmax - travelled, time)?;
+            if !self.any_hidden || self.hit_visible(&h, mask) {
+                return Some(match h {
+                    SceneHit::Tri(mut hit) => {
+                        hit.t += travelled;
+                        SceneHit::Tri(hit)
+                    }
+                    SceneHit::Area(li, t) => SceneHit::Area(li, t + travelled),
+                });
+            }
+            let t = match h {
+                SceneHit::Tri(hit) => hit.t,
+                SceneHit::Area(_, t) => t,
+            };
+            let p = origin + d * t;
+            let step = 1e-4 * (1.0 + p.abs().max_elem());
+            origin = p + d * step;
+            travelled += t + step;
+        }
+        None
+    }
+
+    fn nearest_any(&self, o: Vec3, d: Vec3, tmax: f32, time: f32) -> Option<SceneHit> {
+        let tri = self.nearest_tri(o, d, tmax, time);
         let mut best = tri.map(SceneHit::Tri);
-        let mut tmax = tri.map_or(f32::INFINITY, |h| h.t);
+        let mut tmax = tri.map_or(tmax, |h| h.t);
         for &li in &self.area_lights {
-            if let LightShape::Area { center, u, v, normal, .. } = &self.lights[li as usize] {
+            if let LightShape::Area { center, u, v, normal, ellipse, .. } = &self.lights[li as usize] {
                 let dn = d.dot(*normal);
                 if dn >= 0.0 {
                     continue; // back side
@@ -419,7 +603,9 @@ impl PreparedScene {
                     continue;
                 }
                 let q = o + d * t - *center;
-                if q.dot(*u).abs() <= u.length_squared() && q.dot(*v).abs() <= v.length_squared() {
+                let (a, b) = (q.dot(*u) / u.length_squared(), q.dot(*v) / v.length_squared());
+                let inside = if *ellipse { a * a + b * b <= 1.0 } else { a.abs() <= 1.0 && b.abs() <= 1.0 };
+                if inside {
                     tmax = t;
                     best = Some(SceneHit::Area(li, t));
                 }
@@ -428,8 +614,67 @@ impl PreparedScene {
         best
     }
 
-    pub(crate) fn occluded(&self, o: Vec3, d: Vec3, tmax: f32) -> bool {
-        self.bvh.occluded(o, d, tmax)
+    /// Whether the material's surface is a pass-through boundary of its medium.
+    pub(crate) fn null_surface(&self, material: u32) -> bool {
+        self.material_volume.get(material as usize).is_some_and(Option::is_some)
+    }
+
+    /// Combined coefficients of the media in `stack` and the world's.
+    pub(crate) fn medium(&self, stack: &MediumStack) -> Option<VolumeCoeffs> {
+        let mut m = self.world_volume;
+        for &id in &stack.ids[..stack.n as usize] {
+            if let Some(Some(v)) = self.material_volume.get(id as usize) {
+                m = Some(match m {
+                    Some(a) => a.add(v),
+                    None => *v,
+                });
+            }
+        }
+        m
+    }
+
+    /// Transmittance of a shadow ray: zero when an opaque surface blocks it,
+    /// else the product of medium transmittances through volume boundaries
+    /// and objects hidden from shadows (at most `max_transparent` crossings).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn shadow(&self, o: Vec3, d: Vec3, tmax: f32, time: f32, stack: MediumStack, max_transparent: u32) -> Vec3 {
+        if !self.any_hidden && !self.any_volume && self.instances.is_empty() {
+            return if self.bvh.occluded(o, d, tmax) { Vec3::ZERO } else { Vec3::ONE };
+        }
+        let mut stack = stack;
+        let mut origin = o;
+        let mut left = tmax;
+        let mut tr = Vec3::ONE;
+        let mut crossings = 0;
+        loop {
+            let hit = self.nearest_tri(origin, d, left, time);
+            let seg = hit.map_or(left, |h| h.t);
+            if let Some(m) = self.medium(&stack) {
+                tr = tr.mul_elem(m.transmittance(seg));
+            }
+            let Some(h) = hit else { return tr };
+            let sh = &self.shade[h.prim as usize];
+            let hidden = self.object_vis.get(sh.object as usize).is_some_and(|v| v & VIS_SHADOW == 0);
+            let null = self.null_surface(sh.material);
+            if !hidden && !null {
+                return Vec3::ZERO;
+            }
+            crossings += 1;
+            if crossings > max_transparent || tr.max_elem() <= 1e-6 {
+                return Vec3::ZERO;
+            }
+            if null && !hidden {
+                let (g, _) = self.triangle(h.prim, time);
+                stack.cross(sh.material, g.e1.cross(g.e2).dot(d) < 0.0);
+            }
+            let p = origin + d * h.t;
+            let step = 1e-4 * (1.0 + p.abs().max_elem());
+            origin = p + d * step;
+            left -= h.t + step;
+            if left <= 0.0 {
+                return tr;
+            }
+        }
     }
 
     fn select_pmf(&self, light: u32) -> f32 {
@@ -461,11 +706,12 @@ impl PreparedScene {
     }
 
     /// Pick a light by power and sample a point on it as seen from `p`.
-    pub(crate) fn sample_light(&self, p: Vec3, rng: &mut Rng) -> Option<LightSample> {
+    /// Returns the light index with the sample.
+    pub(crate) fn sample_light(&self, p: Vec3, rng: &mut Rng) -> Option<(u32, LightSample)> {
         let dist = self.light_dist.as_ref()?;
         let (li, sel) = dist.sample_discrete(rng.f32());
         let (u1, u2) = (rng.f32(), rng.f32());
-        match &self.lights[li] {
+        let s = match &self.lights[li] {
             LightShape::Point { pos, radius, intensity, spot } => {
                 let mut target = *pos;
                 if *radius > 0.0 {
@@ -499,9 +745,13 @@ impl PreparedScene {
                 };
                 Some(LightSample { wi, dist: f32::INFINITY, li: *irradiance, pdf: sel, delta: true })
             }
-            LightShape::Area { center, u, v, normal, area, radiance } => {
-                let q = *center + *u * (2.0 * u1 - 1.0) + *v * (2.0 * u2 - 1.0);
-                self.area_sample(p, q, *normal, *area, *radiance, sel, false)
+            LightShape::Area { center, u, v, normal, area, radiance, ellipse, spread } => {
+                let (a, b) = if *ellipse { concentric_disk(u1, u2) } else { (2.0 * u1 - 1.0, 2.0 * u2 - 1.0) };
+                let q = *center + *u * a + *v * b;
+                self.area_sample(p, q, *normal, *area, *radiance, sel, false).map(|mut s| {
+                    s.li *= spread_attenuation(*spread, -s.wi.dot(*normal));
+                    s
+                })
             }
             LightShape::Tri { prim, area, radiance } => {
                 let g = &self.bvh.tris[*prim as usize];
@@ -513,7 +763,8 @@ impl PreparedScene {
                 let (wi, pdf) = self.env.sample(u1, u2);
                 (pdf > 0.0).then(|| LightSample { wi, dist: f32::INFINITY, li: self.env.eval(wi), pdf: pdf * sel, delta: false })
             }
-        }
+        };
+        s.map(|s| (li as u32, s))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -531,5 +782,33 @@ impl PreparedScene {
             return None;
         }
         Some(LightSample { wi, dist, li: radiance, pdf: sel * d2 / (area * cos), delta: false })
+    }
+}
+
+/// Spread of an area light: (tan of half the spread, normalisation), or
+/// `None` for the full Lambertian hemisphere. The normalisation keeps the
+/// emitted power: the attenuated cosine lobe integrates to pi.
+fn spread_params(spread: f32) -> Option<(f32, f32)> {
+    if !spread.is_finite() || spread >= PI - 1e-4 {
+        return None;
+    }
+    let half = (spread.max(1e-3) * 0.5).min(PI * 0.5 - 1e-4);
+    let t = half.tan();
+    // 2 pi k [t sin²θm / 2 - θm / 2 + sin 2θm / 4] = pi, θm = atan t = half.
+    let i = t * half.sin().powi(2) * 0.5 - half * 0.5 + (2.0 * half).sin() * 0.25;
+    Some((t, 1.0 / (2.0 * i.max(1e-9))))
+}
+
+/// Cycles' soft-box spread falloff for emission at angle `cos` from the normal.
+pub(crate) fn spread_attenuation(spread: Option<(f32, f32)>, cos: f32) -> f32 {
+    match spread {
+        None => 1.0,
+        Some((tan_half, norm)) => {
+            if cos <= 0.0 {
+                return 0.0;
+            }
+            let tan_a = (1.0 - cos * cos).max(0.0).sqrt() / cos;
+            ((tan_half - tan_a) * norm).max(0.0)
+        }
     }
 }

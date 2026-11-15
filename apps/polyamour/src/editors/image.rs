@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Blender's Image Editor and UV Editor.
 //!
-//! The Image Editor shows the last F12 render ("Render Result") through the AgX
-//! view transform, fitted to the area, over a checkerboard where it is
+//! The Image Editor shows the last F12 render ("Render Result") through the
+//! scene's colour management, fitted to the area, over a checkerboard where it is
 //! transparent; the wheel zooms at the pointer, middle-drag pans, Home fits and
 //! Numpad 1 shows it 1:1. Image > Save As writes it as a PNG with the small
 //! encoder below (stored deflate: no compression crate on SexOS).
@@ -24,7 +24,7 @@ use crate::editors::EditorKind;
 use crate::input::{Button, Input, Key, Mods};
 use crate::theme as t;
 use crate::ui::{MenuItem, Op, Ui};
-use sex_3d::render::{to_srgb8_with, ViewTransform};
+use sex_3d::render::to_display8;
 use sex_3d::scene::ObjectData;
 use sex_3d::uv::{self as uvops, Corner};
 use sex_3d::{Mesh, Vec2};
@@ -185,9 +185,10 @@ fn render_key(img: &sex_3d::scene::Image) -> u64 {
 
 fn render_rgba(s: &mut State, d: &Doc) -> Option<(u32, u32)> {
     let img = d.render.as_ref()?;
-    let key = render_key(img);
+    let cm = d.settings.color_management();
+    let key = render_key(img) ^ (cm.view as u64) << 3 ^ (cm.look as u64) << 9 ^ (cm.exposure.to_bits() as u64) << 17 ^ (cm.gamma.to_bits() as u64) << 31;
     if s.cache.as_ref().map(|c| c.0) != Some(key) {
-        s.cache = Some((key, img.width, img.height, to_srgb8_with(img, ViewTransform::AgX, 0.0)));
+        s.cache = Some((key, img.width, img.height, to_display8(img, &cm)));
         s.fit = true;
     }
     s.cache.as_ref().map(|c| (c.1, c.2))

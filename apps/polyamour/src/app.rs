@@ -208,6 +208,7 @@ impl App {
             (Key::Char('n'), Mods::CTRL) => Op::new("wm.read_homefile"),
             (Key::Char('q'), Mods::CTRL) => Op::new("wm.quit_blender"),
             (Key::F(12), Mods::NONE) => Op::new("render.render"),
+            (Key::F(12), Mods::CTRL) => Op::new("render.render_animation"),
             (Key::F(3), Mods::NONE) => Op::new("wm.search_menu"),
             (Key::Space, Mods::CTRL) => Op::new("screen.screen_full_area"),
             (Key::PageUp, Mods::CTRL) => Op::with("screen.workspace_cycle", "PREV"),
@@ -269,6 +270,7 @@ impl App {
                 "wm.save_mainfile" | "wm.save_as_mainfile" => self.save(None),
                 "wm.export" => self.save(Some(op.arg.clone())),
                 "render.render" => self.render(),
+                "render.render_animation" => self.render_animation(),
                 "wm.search_menu" => {
                     let (mx, my) = self.ui.mouse;
                     self.popup = Some(Popup::new("Search", search_items(), mx - 100, my - 10));
@@ -316,12 +318,55 @@ impl App {
     fn render(&mut self) {
         // Render Properties (engine, samples, bounces, denoise, clamp) and Output
         // Properties (resolution and %), with render visibility applied.
-        let settings = self.doc.settings.render_settings();
-        let scene = self.doc.settings.render_scene(&self.doc.scene);
+        let settings = sex_3d::render::RenderSettings { frame: self.doc.frame, ..self.doc.settings.render_settings() };
+        let base = self.doc.settings.render_scene(&self.doc.scene);
+        let scene = crate::anim::scene_at(&self.doc.anim, &base, self.doc.frame as f32, self.doc.settings.motion_blur);
         let r = sex_3d::render::render(&scene, &settings);
+        let n = r.passes.len();
+        let passes = if n > 0 { format!(", {n} passes") } else { String::new() };
+        self.doc.report = format!("Rendered {}x{}, {} samples{passes}", r.color.width, r.color.height, r.samples);
         self.doc.render = Some(r.color);
-        self.doc.report = format!("Rendered {}x{}, {} samples", settings.width, settings.height, settings.samples);
         self.doc.want_workspace = Some("Rendering".into());
+    }
+
+    /// Ctrl F12: render the frame range (Output Properties), writing each
+    /// frame as `<output path><frame>.png`, colour managed as on screen.
+    fn render_animation(&mut self) {
+        let d = &self.doc;
+        let settings = d.settings.render_settings();
+        let base = d.settings.render_scene(&d.scene);
+        let cm = d.settings.color_management();
+        let motion = d.settings.motion_blur;
+        let frames: Vec<i32> = (d.scene.frame_start..=d.scene.frame_end).step_by(d.settings.frame_step.max(1) as usize).collect();
+        let stem = if d.settings.output_path.is_empty() { "/tmp/".to_string() } else { d.settings.output_path.clone() };
+        let (mut written, mut error, mut last) = (Vec::new(), None, None);
+        let anim = &d.anim;
+        sex_3d::render::render_frames(
+            frames.iter().copied(),
+            &settings,
+            |f| crate::anim::scene_at(anim, &base, f as f32, motion),
+            |f, r| {
+                let name = format!("{stem}{f:04}.png");
+                let png = crate::editors::image::encode_png(r.color.width, r.color.height, &sex_3d::render::to_display8(&r.color, &cm));
+                match std::fs::write(&name, png) {
+                    Ok(()) => written.push(name),
+                    Err(e) => error = Some(format!("Cannot write {name}: {e}")),
+                }
+                last = Some(r.color);
+                error.is_none()
+            },
+            None,
+        );
+        if let Some(img) = last {
+            self.doc.render = Some(img);
+            self.doc.want_workspace = Some("Rendering".into());
+        }
+        self.doc.report = match (error, written.as_slice()) {
+            (Some(e), _) => e,
+            (None, []) => "No frames to render".into(),
+            (None, [one]) => format!("Rendered 1 frame to \"{one}\""),
+            (None, w) => format!("Rendered {} frames to \"{}\" .. \"{}\"", w.len(), w[0], w[w.len() - 1]),
+        };
     }
 }
 

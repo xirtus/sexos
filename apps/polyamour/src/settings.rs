@@ -8,8 +8,7 @@
 //! like Blender's); renaming through the Outliner or Properties carries them
 //! over with [`Settings::rename_object`].
 use sex_3d::modifiers::Modifier;
-use sex_3d::render::ViewTransform;
-use sex_3d::render::RenderSettings;
+use sex_3d::render::{ColorManagement, LightPaths, Look, MistFalloff, MistSettings, MotionBlur, Pass, Passes, RenderBorder, RenderSettings, ShutterPosition, ViewTransform};
 use sex_3d::scene::Scene;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -85,15 +84,44 @@ pub struct Settings {
     pub engine: Engine,
     pub viewport_samples: u32,
     pub render_samples: u32,
+    /// Adaptive sampling for F12 renders, its threshold and minimum samples
+    /// (0 = automatic).
     pub noise_threshold: bool,
+    pub adaptive_threshold: f32,
+    pub adaptive_min_samples: u32,
+    /// Adaptive sampling in the Rendered viewport.
+    pub viewport_noise_threshold: bool,
+    pub viewport_adaptive_threshold: f32,
+    /// Seconds (0 = no limit).
+    pub time_limit: f32,
     pub max_bounces: u32,
+    pub diffuse_bounces: u32,
+    pub glossy_bounces: u32,
+    pub transmission_bounces: u32,
+    pub volume_bounces: u32,
+    pub transparent_bounces: u32,
     pub denoise: bool,
     pub viewport_denoise: bool,
-    /// Clamp indirect light (0 = off).
+    /// Clamp direct and indirect light (0 = off).
+    pub clamp_direct: f32,
     pub clamp_indirect: f32,
+    pub caustics_reflective: bool,
+    pub caustics_refractive: bool,
+    pub filter_glossy: f32,
     pub seed: u32,
+    pub animated_seed: bool,
     pub film_transparent: bool,
     pub filter_width: f32,
+    /// Worker threads (0 = auto-detect).
+    pub threads: u32,
+    pub motion_blur: bool,
+    /// Shutter in frames.
+    pub shutter: f32,
+    pub shutter_position: ShutterPosition,
+    /// Render region (Blender's border, 0..1 with y up) and cropping.
+    pub use_border: bool,
+    pub border: [f32; 4],
+    pub crop_to_border: bool,
     pub resolution_x: u32,
     pub resolution_y: u32,
     pub resolution_pct: u32,
@@ -113,9 +141,11 @@ pub struct Settings {
     pub gamma: f32,
     /// View layer and passes.
     pub use_for_rendering: bool,
-    pub pass_z: bool,
-    pub pass_normal: bool,
-    pub pass_denoising: bool,
+    pub passes: Passes,
+    pub mist_start: f32,
+    pub mist_depth: f32,
+    pub mist_falloff: MistFalloff,
+    pub ao_distance: f32,
     /// Objects whose camera toggle is off ("Disable in Renders").
     pub hide_render: BTreeSet<String>,
     /// Collections by index: excluded from the view layer (outliner checkbox).
@@ -140,14 +170,36 @@ impl Default for Settings {
             // Blender's Cycles defaults are 1024/4096, far beyond a CPU tracer
             // on SexOS; these keep F12 interactive.
             render_samples: 16,
-            noise_threshold: false,
+            noise_threshold: true,
+            adaptive_threshold: 0.01,
+            adaptive_min_samples: 0,
+            viewport_noise_threshold: true,
+            viewport_adaptive_threshold: 0.1,
+            time_limit: 0.0,
             max_bounces: 12,
+            diffuse_bounces: 4,
+            glossy_bounces: 4,
+            transmission_bounces: 12,
+            volume_bounces: 0,
+            transparent_bounces: 8,
             denoise: true,
             viewport_denoise: false,
+            clamp_direct: 0.0,
             clamp_indirect: 10.0,
+            caustics_reflective: true,
+            caustics_refractive: true,
+            filter_glossy: 1.0,
             seed: 0,
+            animated_seed: false,
             film_transparent: false,
             filter_width: 1.5,
+            threads: 0,
+            motion_blur: false,
+            shutter: 0.5,
+            shutter_position: ShutterPosition::Center,
+            use_border: false,
+            border: [0.0, 0.0, 1.0, 1.0],
+            crop_to_border: false,
             resolution_x: 1920,
             resolution_y: 1080,
             resolution_pct: 50,
@@ -165,9 +217,11 @@ impl Default for Settings {
             exposure: 0.0,
             gamma: 1.0,
             use_for_rendering: true,
-            pass_z: true,
-            pass_normal: false,
-            pass_denoising: false,
+            passes: Passes::NONE.with(Pass::Depth),
+            mist_start: 5.0,
+            mist_depth: 25.0,
+            mist_falloff: MistFalloff::Quadratic,
+            ao_distance: 10.0,
             hide_render: BTreeSet::new(),
             excluded: BTreeSet::new(),
             collection_hidden: BTreeSet::new(),
@@ -187,22 +241,69 @@ impl Settings {
         (f(self.resolution_x), f(self.resolution_y))
     }
 
+    /// Light Paths as the renderer takes them.
+    pub fn light_paths(&self) -> LightPaths {
+        LightPaths {
+            diffuse_bounces: self.diffuse_bounces,
+            glossy_bounces: self.glossy_bounces,
+            transmission_bounces: self.transmission_bounces,
+            volume_bounces: self.volume_bounces,
+            transparent_bounces: self.transparent_bounces,
+            clamp_direct: self.clamp_direct.max(0.0),
+            caustics_reflective: self.caustics_reflective,
+            caustics_refractive: self.caustics_refractive,
+            filter_glossy: self.filter_glossy.max(0.0),
+        }
+    }
+
+    /// Settings shared by F12 and the Rendered viewport.
+    fn path_tracer(&self, width: u32, height: u32) -> RenderSettings {
+        RenderSettings {
+            width,
+            height,
+            max_bounces: self.max_bounces,
+            threads: self.threads as usize,
+            clamp: self.clamp_indirect.max(0.0),
+            seed: self.seed,
+            light_paths: self.light_paths(),
+            animated_seed: self.animated_seed,
+            film_transparent: self.film_transparent,
+            filter_width: self.filter_width,
+            mist: MistSettings { start: self.mist_start, depth: self.mist_depth, falloff: self.mist_falloff },
+            ao_distance: self.ao_distance,
+            motion_blur: self.motion_blur.then_some(MotionBlur { shutter: self.shutter, position: self.shutter_position }),
+            ..Default::default()
+        }
+    }
+
     /// The path tracer's settings for an F12 render.
     pub fn render_settings(&self) -> RenderSettings {
         let (width, height) = self.output_size();
+        let border = self.use_border.then_some(RenderBorder { min_x: self.border[0], min_y: self.border[1], max_x: self.border[2], max_y: self.border[3], crop: self.crop_to_border });
         match self.engine {
             Engine::PathTracer => RenderSettings {
-                width,
-                height,
                 samples: self.render_samples.max(1),
-                max_bounces: self.max_bounces,
                 denoise: self.denoise,
-                clamp: self.clamp_indirect.max(0.0),
-                seed: self.seed,
-                ..Default::default()
+                noise_threshold: if self.noise_threshold { self.adaptive_threshold.max(0.0) } else { 0.0 },
+                min_samples: self.adaptive_min_samples,
+                time_limit: self.time_limit.max(0.0),
+                passes: if self.use_for_rendering { self.passes } else { Passes::NONE },
+                border,
+                ..self.path_tracer(width, height)
             },
-            Engine::Workbench => RenderSettings { width, height, samples: 1, max_bounces: 0, denoise: false, clamp: 0.0, seed: self.seed, ..Default::default() },
+            Engine::Workbench => RenderSettings { width, height, samples: 1, max_bounces: 0, denoise: false, clamp: 0.0, seed: self.seed, film_transparent: self.film_transparent, border, light_paths: LightPaths::unlimited(), ..Default::default() },
         }
+    }
+
+    /// Settings for the Rendered viewport at `w` x `h` (samples are added
+    /// progressively up to [`Settings::viewport_samples`]).
+    pub fn viewport_render_settings(&self, w: u32, h: u32) -> RenderSettings {
+        RenderSettings { samples: 1, denoise: false, ..self.path_tracer(w, h) }
+    }
+
+    /// Colour management for display.
+    pub fn color_management(&self) -> ColorManagement {
+        ColorManagement { view: self.view_transform, look: Look::from_label(&self.look).unwrap_or_default(), exposure: self.exposure, gamma: self.gamma }
     }
 
     /// The scene as the renderer should see it: render visibility instead of
@@ -223,6 +324,17 @@ impl Settings {
     }
     pub fn sensor_width(&self, camera: &str) -> f32 {
         self.sensor.get(camera).copied().unwrap_or(36.0)
+    }
+
+    /// Move sensor sizes kept here by older files onto the cameras.
+    pub fn migrate_sensors(&mut self, scene: &mut Scene) {
+        for (name, w) in std::mem::take(&mut self.sensor) {
+            if let Some(o) = scene.objects.iter_mut().find(|o| o.name == name) {
+                if let sex_3d::scene::ObjectData::Camera(c) = &mut o.data {
+                    c.sensor_width = w;
+                }
+            }
+        }
     }
 
     /// Carry per-object entries over to a new name.

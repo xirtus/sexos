@@ -134,7 +134,7 @@
 use crate::math::{Mat4, Quat, Vec2, Vec3};
 use crate::mesh::{Face, Mesh};
 use crate::modifiers::{BooleanOp, CastType, DecimateMode, Modifier, RemeshMode, ShrinkwrapMethod, SimpleDeformMode};
-use crate::scene::{Camera, Light, LightKind, Material, Object, ObjectData, Scene, Transform};
+use crate::scene::{AreaShape, Camera, Light, LightKind, Material, Object, ObjectData, PanoramaType, RayVisibility, Scene, SensorFit, Transform};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
@@ -1024,6 +1024,16 @@ impl<'f, 'a> Importer<'f, 'a> {
         };
         let mut o = Object::new(&ob.id_name(), od);
         o.transform = basis(ob);
+        // visibility_flag: OB_HIDE_CAMERA 1<<3 .. OB_HIDE_SHADOW 1<<8, OB_HOLDOUT 1<<9.
+        if let Some(v) = ob.num("visibility_flag") {
+            let v = v as i64;
+            let shown = |bit: i64| v & (1 << bit) == 0;
+            o.visibility = sex_vis(shown(3), shown(4), shown(5), shown(6), shown(7), shown(8));
+            o.holdout = v & (1 << 9) != 0;
+        }
+        if let Some(i) = ob.num("index") {
+            o.pass_index = i.max(0.0) as u32;
+        }
         o.materials = self.slots(ob, mesh_view.as_ref());
         if mesh_view.is_some() {
             o.modifiers = modifiers(f, ob);
@@ -1086,11 +1096,44 @@ impl<'f, 'a> Importer<'f, 'a> {
         if let Some(n) = ca.num_any(&["clip_end", "clipend"]) {
             c.far = n as f32;
         }
+        c.sensor_width = sx;
+        c.sensor_height = sy;
+        c.sensor_fit = match ca.num("sensor_fit").unwrap_or(0.0) as i64 {
+            1 => SensorFit::Horizontal,
+            2 => SensorFit::Vertical,
+            _ => SensorFit::Auto,
+        };
+        c.shift_x = ca.f32("shiftx").unwrap_or(0.0);
+        c.shift_y = ca.f32("shifty").unwrap_or(0.0);
+        if ca.num("type").unwrap_or(0.0) as i64 == 2 {
+            c.panorama = Some(match ca.num("panorama_type").unwrap_or(0.0) as i64 {
+                1 => PanoramaType::FisheyeEquidistant,
+                2 => PanoramaType::FisheyeEquisolid,
+                _ => PanoramaType::Equirectangular,
+            });
+            c.ortho_scale = None;
+            for (name, dst) in [("fisheye_fov", &mut c.fisheye_fov), ("fisheye_lens", &mut c.fisheye_lens), ("latitude_min", &mut c.latitude_min), ("latitude_max", &mut c.latitude_max), ("longitude_min", &mut c.longitude_min), ("longitude_max", &mut c.longitude_max)] {
+                if let Some(v) = ca.f32(name) {
+                    *dst = v;
+                }
+            }
+        }
+        if let Some(dof) = ca.sub("dof") {
+            c.dof.enabled = dof.num("flag").unwrap_or(0.0) as i64 & 1 != 0;
+            c.dof.focus_distance = dof.f32("focus_distance").unwrap_or(c.dof.focus_distance);
+            c.dof.fstop = dof.f32("aperture_fstop").unwrap_or(c.dof.fstop);
+            c.dof.rotation = dof.f32("aperture_rotation").unwrap_or(0.0);
+            c.dof.ratio = dof.f32("aperture_ratio").unwrap_or(1.0);
+            c.dof.blades = dof.num("aperture_blades").unwrap_or(0.0).max(0.0) as u32;
+        }
         c
     }
 
     fn material(&self, ma: &View<'f, 'a>) -> Material {
         let mut m = Material { name: ma.id_name(), ..Material::default() };
+        if let Some(i) = ma.num("index") {
+            m.pass_index = i.max(0.0) as u32;
+        }
         if let (Some(r), Some(g), Some(b)) = (ma.f32("r"), ma.f32("g"), ma.f32("b")) {
             m.base_color = [r, g, b, ma.f32("a").unwrap_or(1.0)];
         }
@@ -1457,9 +1500,28 @@ fn light(la: &View<'_, '_>) -> Light {
                 l.radius = r;
             }
         }
-        LightKind::Area { .. } => {}
+        LightKind::Area { .. } => {
+            // Square 0, Rectangle 1, Disk 4, Ellipse 5.
+            l.shape = match la.num("area_shape").unwrap_or(0.0) as i64 {
+                1 => AreaShape::Rectangle,
+                4 => AreaShape::Disk,
+                5 => AreaShape::Ellipse,
+                _ => AreaShape::Square,
+            };
+            l.size_y = la.f32("area_sizey").unwrap_or(l.size_y);
+            l.spread = la.f32("area_spread").unwrap_or(l.spread);
+        }
+    }
+    // LA_SHADOW.
+    if let Some(m) = la.num("mode") {
+        l.cast_shadow = m as i64 & 1 != 0;
     }
     l
+}
+
+#[allow(clippy::fn_params_excessive_bools)]
+fn sex_vis(camera: bool, diffuse: bool, glossy: bool, transmission: bool, volume_scatter: bool, shadow: bool) -> RayVisibility {
+    RayVisibility { camera, diffuse, glossy, transmission, volume_scatter, shadow }
 }
 
 /// Euler rotation with Blender's rotation-mode axis order (first letter applied first).

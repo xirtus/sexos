@@ -11,6 +11,7 @@
 use crate::doc::Doc;
 use crate::ui::Op;
 use sex_3d::script::quat_to_euler_xyz;
+use sex_3d::scene::Scene;
 use sex_3d::{Quat, Transform, Vec3};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -331,11 +332,37 @@ pub fn insert_keys(doc: &mut Doc, frame: i32, only: Option<Prop>) -> usize {
 /// Pose every animated object for the current frame. Returns true when a
 /// transform changed.
 pub fn evaluate(doc: &mut Doc) -> bool {
-    let f = doc.frame as f32;
+    let changed = pose_scene(&doc.anim, &mut doc.scene, doc.frame as f32);
+    if changed {
+        doc.touch();
+    }
+    changed
+}
+
+/// A copy of `scene` posed at `frame`, for rendering. With `motion`, animated
+/// objects also carry their pose one frame later (for motion blur).
+pub fn scene_at(anim: &Anim, scene: &Scene, frame: f32, motion: bool) -> Scene {
+    let mut s = scene.clone();
+    pose_scene(anim, &mut s, frame);
+    if motion {
+        let mut next = s.clone();
+        pose_scene(anim, &mut next, frame + 1.0);
+        for (o, n) in s.objects.iter_mut().zip(&next.objects) {
+            if n.transform != o.transform {
+                o.motion = Some(n.transform);
+            }
+        }
+    }
+    s
+}
+
+/// Pose the animated objects of `scene` at `frame`. Returns true when a
+/// transform changed.
+pub fn pose_scene(anim: &Anim, scene: &mut Scene, f: f32) -> bool {
     let mut changed = false;
-    for oa in &doc.anim.objects {
-        let Some(i) = doc.scene.find_object(&oa.object) else { continue };
-        let t = &mut doc.scene.objects[i].transform;
+    for oa in &anim.objects {
+        let Some(i) = scene.find_object(&oa.object) else { continue };
+        let t = &mut scene.objects[i].transform;
         let mut v = channel_values(t);
         let mut rot = false;
         for c in oa.curves.iter().filter(|c| !c.keys.is_empty()) {
@@ -352,9 +379,6 @@ pub fn evaluate(doc: &mut Doc) -> bool {
             *t = nt;
             changed = true;
         }
-    }
-    if changed {
-        doc.touch();
     }
     changed
 }
