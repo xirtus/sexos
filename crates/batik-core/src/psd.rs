@@ -9,7 +9,7 @@ use crate::admit_limits;
 use crate::blend::{pack_argb, BlendMode};
 use crate::document::{BackgroundMode, Document};
 use crate::error::BatikError;
-use crate::layer::{Layer, RasterLayer};
+use crate::layer::{Layer, LayerKind, RasterLayer};
 
 struct Cursor<'a> {
     data: &'a [u8],
@@ -240,6 +240,7 @@ pub fn parse_psd(data: &[u8], limits: &Limits) -> Result<Document, BatikError> {
                 let mut green_channel = Vec::new();
                 let mut blue_channel = Vec::new();
                 let mut alpha_channel = Vec::new();
+                let mut mask_channel = Vec::new();
 
                 for ch in &rec.channels {
                     let ch_data = decompress_channel(&mut cursor, layer_w, layer_h)?;
@@ -248,7 +249,8 @@ pub fn parse_psd(data: &[u8], limits: &Limits) -> Result<Document, BatikError> {
                         1 => green_channel = ch_data,
                         2 => blue_channel = ch_data,
                         -1 => alpha_channel = ch_data,
-                        _ => {} // Ignore user masks (-2) or other channels
+                        -2 => mask_channel = ch_data,
+                        _ => {} // Ignore unknown extra channels
                     }
                 }
 
@@ -279,13 +281,19 @@ pub fn parse_psd(data: &[u8], limits: &Limits) -> Result<Document, BatikError> {
                         pixels.push(pack_argb(a, r, g, b));
                     }
 
+                    let mask = if !mask_channel.is_empty() && mask_channel.len() == total {
+                        Some(mask_channel)
+                    } else {
+                        None
+                    };
+
                     let raster = RasterLayer {
                         width: layer_w,
                         height: layer_h,
                         offset_x: rec.left,
                         offset_y: rec.top,
                         pixels,
-                        mask: None,
+                        mask,
                         alpha_lock: false,
                         pixel_lock: false,
                     };
@@ -487,3 +495,160 @@ fn decompress_packbits_line(
 
     Ok(())
 }
+
+/// Encodes a Batik `Document` into a valid multi-layer Adobe Photoshop (.psd) file.
+pub fn encode_psd(doc: &Document) -> Result<Vec<u8>, BatikError> {
+    let width = doc.width;
+    let height = doc.height;
+    if width == 0 || height == 0 {
+        return Err(BatikError::InvalidDimensions);
+    }
+    admit_limits(&doc.limits, width, height)?;
+
+    let mut out = Vec::new();
+    let est_size = 26 + 8 + 8 + (width * height * 4);
+    out.try_reserve(est_size).map_err(|_| BatikError::OutOfMemory)?;
+
+    // 1. Header (26 bytes)
+    out.extend_from_slice(b"8BPS");
+    out.extend_from_slice(&1u16.to_be_bytes()); // version 1
+    out.extend_from_slice(&[0u8; 6]); // reserved
+    out.extend_from_slice(&4u16.to_be_bytes()); // 4 channels (RGBA)
+    out.extend_from_slice(&(height as u32).to_be_bytes());
+    out.extend_from_slice(&(width as u32).to_be_bytes());
+    out.extend_from_slice(&8u16.to_be_bytes()); // depth 8
+    out.extend_from_slice(&3u16.to_be_bytes()); // color mode 3 (RGB)
+
+    // 2. Color Mode Data (length 0)
+    out.extend_from_slice(&0u32.to_be_bytes());
+
+    // 3. Image Resources (length 0)
+    out.extend_from_slice(&0u32.to_be_bytes());
+
+    // 4. Layer and Mask Information section
+    let raster_layers: Vec<(&Layer, &RasterLayer)> = doc
+        .layers
+        .iter()
+        .filter_map(|l| match &l.kind {
+            LayerKind::Raster(ref r) => Some((l, r)),
+            _ => None,
+        })
+        .collect();
+
+    let layer_count = raster_layers.len();
+    let mut layer_info = Vec::new();
+    layer_info.extend_from_slice(&(layer_count as i16).to_be_bytes());
+
+    let mut all_channel_data = Vec::new();
+
+    for (l, r) in &raster_layers {
+        let top = r.offset_y;
+        let left = r.offset_x;
+        let bottom = r.offset_y + r.height as i32;
+        let right = r.offset_x + r.width as i32;
+        layer_info.extend_from_slice(&top.to_be_bytes());
+        layer_info.extend_from_slice(&left.to_be_bytes());
+        layer_info.extend_from_slice(&bottom.to_be_bytes());
+        layer_info.extend_from_slice(&right.to_be_bytes());
+
+        let has_mask = r.mask.as_ref().map_or(false, |m| m.len() == r.width * r.height);
+        let num_channels: u16 = if has_mask { 5 } else { 4 };
+        layer_info.extend_from_slice(&num_channels.to_be_bytes());
+
+        let total_pixels = r.width * r.height;
+        let ch_len = 2 + total_pixels as u32;
+
+        // Channel headers: 0=R, 1=G, 2=B, -1=A, -2=Mask
+        layer_info.extend_from_slice(&0i16.to_be_bytes());
+        layer_info.extend_from_slice(&ch_len.to_be_bytes());
+        layer_info.extend_from_slice(&1i16.to_be_bytes());
+        layer_info.extend_from_slice(&ch_len.to_be_bytes());
+        layer_info.extend_from_slice(&2i16.to_be_bytes());
+        layer_info.extend_from_slice(&ch_len.to_be_bytes());
+        layer_info.extend_from_slice(&(-1i16).to_be_bytes());
+        layer_info.extend_from_slice(&ch_len.to_be_bytes());
+        if has_mask {
+            layer_info.extend_from_slice(&(-2i16).to_be_bytes());
+            layer_info.extend_from_slice(&ch_len.to_be_bytes());
+        }
+
+        // Blend signature and key
+        layer_info.extend_from_slice(b"8BIM");
+        layer_info.extend_from_slice(&l.blend_mode.to_psd_key());
+        layer_info.push(l.opacity);
+        layer_info.push(0); // clipping
+        layer_info.push(if l.visible { 0 } else { 2 }); // flags
+        layer_info.push(0); // filler
+
+        // Extra data: mask_len + blend_ranges_len + Pascal string name
+        let name_bytes = l.name.as_bytes();
+        let name_len = name_bytes.len().min(255);
+        let total_name_bytes = 1 + name_len;
+        let pad = (4 - (total_name_bytes % 4)) % 4;
+        let extra_len = 4 + 4 + total_name_bytes + pad;
+
+        layer_info.extend_from_slice(&(extra_len as u32).to_be_bytes());
+        layer_info.extend_from_slice(&0u32.to_be_bytes()); // mask_len
+        layer_info.extend_from_slice(&0u32.to_be_bytes()); // blend_ranges_len
+        layer_info.push(name_len as u8);
+        layer_info.extend_from_slice(&name_bytes[..name_len]);
+        for _ in 0..pad {
+            layer_info.push(0);
+        }
+
+        // Channel image data (comp 0: Raw)
+        // Red
+        all_channel_data.extend_from_slice(&0u16.to_be_bytes());
+        for p in &r.pixels {
+            all_channel_data.push(((p >> 16) & 0xFF) as u8);
+        }
+        // Green
+        all_channel_data.extend_from_slice(&0u16.to_be_bytes());
+        for p in &r.pixels {
+            all_channel_data.push(((p >> 8) & 0xFF) as u8);
+        }
+        // Blue
+        all_channel_data.extend_from_slice(&0u16.to_be_bytes());
+        for p in &r.pixels {
+            all_channel_data.push((p & 0xFF) as u8);
+        }
+        // Alpha
+        all_channel_data.extend_from_slice(&0u16.to_be_bytes());
+        for p in &r.pixels {
+            all_channel_data.push(((p >> 24) & 0xFF) as u8);
+        }
+        // Mask
+        if has_mask {
+            all_channel_data.extend_from_slice(&0u16.to_be_bytes());
+            all_channel_data.extend_from_slice(r.mask.as_ref().unwrap());
+        }
+    }
+
+    layer_info.extend_from_slice(&all_channel_data);
+
+    let mut layer_section = Vec::new();
+    layer_section.extend_from_slice(&(layer_info.len() as u32).to_be_bytes());
+    layer_section.extend_from_slice(&layer_info);
+
+    out.extend_from_slice(&(layer_section.len() as u32).to_be_bytes());
+    out.extend_from_slice(&layer_section);
+
+    // 5. Composite Image Data Section (flattened preview)
+    let flat = doc.flatten()?;
+    out.extend_from_slice(&0u16.to_be_bytes()); // comp 0 (Raw)
+    for p in &flat.pixels {
+        out.push(((p >> 16) & 0xFF) as u8);
+    }
+    for p in &flat.pixels {
+        out.push(((p >> 8) & 0xFF) as u8);
+    }
+    for p in &flat.pixels {
+        out.push((p & 0xFF) as u8);
+    }
+    for p in &flat.pixels {
+        out.push(((p >> 24) & 0xFF) as u8);
+    }
+
+    Ok(out)
+}
+

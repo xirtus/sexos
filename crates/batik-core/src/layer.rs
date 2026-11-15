@@ -7,9 +7,10 @@ use sex_image::Limits;
 
 use crate::admit_limits;
 use crate::adjust::Adjustment;
-use crate::blend::BlendMode;
+use crate::blend::{pack_argb, split_argb, BlendMode};
 use crate::error::BatikError;
 use crate::geom::Rect;
+use crate::selection::SelectionMask;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct RasterLayer {
@@ -78,6 +79,73 @@ impl RasterLayer {
         } else {
             None
         }
+    }
+
+    pub fn pixels(&self) -> &[u32] {
+        &self.pixels
+    }
+
+    pub fn pixels_mut(&mut self) -> &mut [u32] {
+        &mut self.pixels
+    }
+
+    pub fn mask(&self) -> Option<&[u8]> {
+        self.mask.as_deref()
+    }
+
+    pub fn mask_mut(&mut self) -> Option<&mut [u8]> {
+        self.mask.as_deref_mut()
+    }
+
+    /// Adds an 8-bit layer mask buffer initialized to `default_val` (e.g. 255 for reveal-all, 0 for hide-all).
+    pub fn add_mask(&mut self, default_val: u8) -> Result<(), BatikError> {
+        let total = self.width.checked_mul(self.height).ok_or(BatikError::TooLarge)?;
+        let mut mask = Vec::new();
+        mask.try_reserve_exact(total).map_err(|_| BatikError::OutOfMemory)?;
+        mask.resize(total, default_val);
+        self.mask = Some(mask);
+        Ok(())
+    }
+
+    /// Initializes or replaces the layer mask from an active selection mask.
+    pub fn mask_from_selection(&mut self, selection: &SelectionMask) -> Result<(), BatikError> {
+        let total = self.width.checked_mul(self.height).ok_or(BatikError::TooLarge)?;
+        let mut mask = Vec::new();
+        mask.try_reserve_exact(total).map_err(|_| BatikError::OutOfMemory)?;
+        for y in 0..self.height {
+            let doc_y = (y as i32 + self.offset_y).max(0) as usize;
+            for x in 0..self.width {
+                let doc_x = (x as i32 + self.offset_x).max(0) as usize;
+                mask.push(selection.sample(doc_x, doc_y));
+            }
+        }
+        self.mask = Some(mask);
+        Ok(())
+    }
+
+    /// Inverts the current layer mask (0 becomes 255, 255 becomes 0).
+    pub fn invert_mask(&mut self) {
+        if let Some(ref mut mask) = self.mask {
+            for m in mask.iter_mut() {
+                *m = 255 - *m;
+            }
+        }
+    }
+
+    /// Bakes the layer mask into the layer's alpha channel and removes the mask.
+    pub fn apply_mask(&mut self) {
+        if let Some(mask) = self.mask.take() {
+            for (p, &m) in self.pixels.iter_mut().zip(mask.iter()) {
+                let (a, r, g, b) = split_argb(*p);
+                let new_a = ((a as u16 * m as u16) / 255) as u8;
+                *p = pack_argb(new_a, r, g, b);
+            }
+        }
+    }
+
+    /// Deletes the layer mask without modifying layer pixels.
+    pub fn delete_mask(&mut self) {
+        self.mask = None;
     }
 }
 
@@ -159,6 +227,20 @@ impl Layer {
             opacity,
             blend_mode,
             kind: LayerKind::Group(group),
+        }
+    }
+
+    pub fn raster(&self) -> Option<&RasterLayer> {
+        match &self.kind {
+            LayerKind::Raster(ref r) => Some(r),
+            _ => None,
+        }
+    }
+
+    pub fn raster_mut(&mut self) -> Option<&mut RasterLayer> {
+        match &mut self.kind {
+            LayerKind::Raster(ref mut r) => Some(r),
+            _ => None,
         }
     }
 }
