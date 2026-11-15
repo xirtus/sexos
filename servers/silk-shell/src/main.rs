@@ -11184,6 +11184,7 @@ unsafe fn media_keys_receive(msg:&sex_pdx::PdxMessage)->bool{
     if msg.type_id!=1||msg.caller_pd!=NOTIFY_BELL_PD||!media_keys::is_mixer_answer(msg.arg0)||!MEDIA_ASKS.pending(){return false}
     let word=msg.arg0;
     match MEDIA_ASKS.pop(){
+        // An answer from before a change still waiting is not what the person chose.
         Some(media_keys::Ask::Tray) if !media_keys::refused(word)=>tray_volume(word),
         Some(media_keys::Ask::Volume) if !media_keys::refused(word)=>{
             tray_volume(word);
