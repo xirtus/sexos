@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Abacus on a SexOS window. `run abacus`.
 //!
-//! Serial record: `[abacus.ready] target= task= keys=`, one `[abacus.key] n= x= y=`
-//! per keypad key (in `abacus::KEYS` order) (window pixels, for gates), `[abacus.result] expr= value=`,
+//! Serial record: `[abacus.ready] target= task= keys=`, then after `[abacus.layout] w= h=`
+//! (again after each resize) one `[abacus.key] n= x= y=` per keypad key (in `abacus::KEYS` order) (window pixels, for gates), `[abacus.result] expr= value=`,
 //! `[abacus.error] what=`, `[abacus.command] id=` and `[abacus.frame] n=` for the first
 //! frame.
 #![cfg_attr(feature = "sexos", no_std)]
@@ -28,14 +28,13 @@ mod program {
         app.present();
         let (target, task) = (app.window.target, app.window.task);
         sex_pdx::serial_record!("[abacus.ready] target={} task={} keys={}", target, task, calc.keys.len());
-        let s = app.ui.theme().scale;
-        for (n, (id, _)) in calc.keys.iter().enumerate() {
-            let c = app.ui.rect(*id).center();
-            sex_pdx::serial_record!("[abacus.key] n={} x={} y={}", n, (c.x * s) as i32, (c.y * s) as i32);
-        }
+        let mut laid = app.window.size();
+        keys(&app, &calc, laid);
         let mut reported = false;
         loop {
             let out = app.next();
+            // A resize lays the keypad out again: say where the keys went.
+            if app.window.size() != laid { laid = app.window.size(); keys(&app, &calc, laid); }
             if !reported && app.frames > 0 { reported = true; sex_pdx::serial_record!("[abacus.frame] n={}", app.frames); }
             for r in out {
                 if r == Response::Close { sex_pdx::task_finish(0); }
@@ -47,6 +46,16 @@ mod program {
                     None => {}
                 }
             }
+        }
+    }
+
+    /// `[abacus.layout] w= h=` and then each key's centre in window pixels.
+    fn keys(app: &App, calc: &Abacus, (w, h): (usize, usize)) {
+        sex_pdx::serial_record!("[abacus.layout] w={} h={}", w, h);
+        let s = app.ui.theme().scale;
+        for (n, (id, _)) in calc.keys.iter().enumerate() {
+            let c = app.ui.rect(*id).center();
+            sex_pdx::serial_record!("[abacus.key] n={} x={} y={}", n, (c.x * s) as i32, (c.y * s) as i32);
         }
     }
 

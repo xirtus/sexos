@@ -11,6 +11,7 @@ from pathlib import Path
 from install_program import install
 from quil_autosave_gate import boot
 from program_egui_gate import colours
+from program_gate_geometry import maximize
 ROOT=Path(__file__).resolve().parents[1]
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
@@ -35,11 +36,14 @@ def main():
   g['wait'](r'\[abacus.frame\] n=1\n',s,300)
   launch=g['wait'](rf'\[shell.program.launch\] target={target} task={task} surface=(\d+)',s,60);surface=int(launch[1])
   time.sleep(3)
+  # The keypad needs room: zoom the window, then read where the keys went.
+  tile,before=maximize(g,surface)
+  lay=g['wait'](r'\[abacus.layout\] w=(\d+) h=(\d+)\n',before,60);s=before+t()[before:].index(lay[0])
+  g['wait'](r'\[abacus.key\] n=29 x=(-?\d+) y=(-?\d+)\n',s,60);time.sleep(1)
   # Keys in abacus::KEYS order: C ⌫ ( ) % / sin cos tan √ ^ / 7 8 9 ÷ π / 4 5 6 × ln / 1 2 3 − log / 0 . ans + =
   labels=['C','bs','(',')','%','sin','cos','tan','sqrt','^','7','8','9','div','pi','4','5','6','mul','ln','1','2','3','minus','log','0','.','ans','+','=']
   pos={labels[int(n)]:(int(x),int(y)) for n,x,y in re.findall(r'\[abacus.key\] n=(\d+) x=(-?\d+) y=(-?\d+)',t()[s:])}
   assert len(pos)==30,pos
-  tile=list(map(int,re.findall(rf'\[shell.tile.apply\] sid={surface} x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)',t())[-1]))
   ox,oy=tile[0]+8,tile[1]+36
   def key(label):x,y=pos[label];click(ox+x,oy+y)
   # Typed digits, a clicked +, typed digits, Enter.
