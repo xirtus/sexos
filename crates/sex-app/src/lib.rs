@@ -38,9 +38,9 @@ const NET: u32 = 13;
 /// reaches its inbox wakes it at once.
 const MAILBOX_LOOK_TICKS: u64 = 4;
 
-fn is_answer(m: &sex_pdx::PdxMessage) -> bool { m.type_id == 1 && (m.caller_pd == FILES || m.caller_pd == NET) || launch::is_event(m) }
+fn is_answer(m: &sex_pdx::PdxMessage) -> bool { m.type_id == 1 && (m.caller_pd == FILES || m.caller_pd == NET) || launch::is_event(m) || restricted_status::is_event(m) }
 /// A message from Shell: keys, pointer, resizes and closes for the main task's window.
-fn is_shell(m: &sex_pdx::PdxMessage) -> bool { m.caller_pd == SHELL && !launch::is_event(m) }
+fn is_shell(m: &sex_pdx::PdxMessage) -> bool { m.caller_pd == SHELL && !launch::is_event(m) && !restricted_status::is_event(m) }
 
 pub enum Event {
     Key(Key),
@@ -141,6 +141,7 @@ impl Window {
         // Launch receipts belong to their explicit supervisor, not UI dispatch.
         // is_shell excludes these from the UI mailbox scan, so they are stashed once.
         if launch::is_event(m) { mailbox::put(*m); return None; }
+        if restricted_status::is_event(m) { mailbox::put(*m); return None; }
         // Another task's answer, taken while this one waited: it looks in the mailbox.
         if is_answer(m) { mailbox::put(*m); return None; }
         if m.caller_pd != SHELL { return None; }
@@ -263,6 +264,7 @@ pub mod dnd {
     pub fn cancel() { let _ = send(d::Message::Cancel); }
 }
 
+pub mod restricted_status;
 pub mod launch {
     use super::{files, mailbox, SHELL};
     use sex_pdx::launch as l;
