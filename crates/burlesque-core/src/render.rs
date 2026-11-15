@@ -2,12 +2,14 @@
 //! Software rasterizer for slides, vector shapes, typography, and images.
 
 use alloc::vec;
+use alloc::vec::Vec;
 use sex_canvas::{Canvas, Color, Rect};
 use sex_font::raster::scratch_len;
 use sex_font::{Font, GEIST_MONO, GEIST_SANS};
+use crate::animation::BuildEffect;
 use crate::deck::AspectRatio;
 use crate::elements::{
-    Background, ShapeKind, SlideElement, TextBox,
+    Background, ShapeKind, SlideElement, StrokeStyle, TextBox, Transition,
 };
 use crate::theme::Theme;
 use crate::Slide;
@@ -17,6 +19,29 @@ pub fn render_slide(
     slide: &Slide,
     theme: &Theme,
     aspect_ratio: AspectRatio,
+    buffer: &mut [u32],
+    target_w: u32,
+    target_h: u32,
+) {
+    render_slide_at_build(
+        slide,
+        theme,
+        aspect_ratio,
+        usize::MAX,
+        None,
+        buffer,
+        target_w,
+        target_h,
+    );
+}
+
+/// Render a slide at a specific intra-slide build animation stage.
+pub fn render_slide_at_build(
+    slide: &Slide,
+    theme: &Theme,
+    aspect_ratio: AspectRatio,
+    completed_builds: usize,
+    active_build_progress: Option<f32>,
     buffer: &mut [u32],
     target_w: u32,
     target_h: u32,
@@ -53,84 +78,325 @@ pub fn render_slide(
         None => canvas.clear(theme.palette.background),
     }
 
-    // 2. Elements
-    for elem in &slide.elements {
-        match elem {
-            SlideElement::Shape(s) => {
-                let rect = scale_rect(s.bounds, sx, sy);
-                match s.kind {
-                    ShapeKind::Rect => {
-                        if let Some(fill) = s.fill {
-                            canvas.fill_rect(rect, fill);
-                        }
-                        if let Some(st) = s.stroke {
-                            canvas.stroke_round_rect(rect, 0.0, st.width * sx, st.color);
-                        }
-                    }
-                    ShapeKind::RoundedRect { radius } => {
-                        let r = radius * sx;
-                        if let Some(fill) = s.fill {
-                            canvas.fill_round_rect(rect, r, fill);
-                        }
-                        if let Some(st) = s.stroke {
-                            canvas.stroke_round_rect(rect, r, st.width * sx, st.color);
-                        }
-                    }
-                    ShapeKind::Ellipse => {
-                        let cx = rect.x + rect.w / 2.0;
-                        let cy = rect.y + rect.h / 2.0;
-                        let r = (rect.w.min(rect.h) / 2.0).max(1.0);
-                        if let Some(fill) = s.fill {
-                            canvas.fill_circle(cx, cy, r, fill);
-                        }
-                        if let Some(st) = s.stroke {
-                            canvas.stroke_circle(cx, cy, r, st.width * sx, st.color);
-                        }
-                    }
-                    ShapeKind::Line => {
-                        if let Some(st) = s.stroke {
-                            let x0 = rect.x;
-                            let y0 = rect.y;
-                            let x1 = rect.right();
-                            let y1 = rect.bottom();
-                            canvas.line(x0, y0, x1, y1, st.width * sx, st.color);
-                        }
-                    }
-                    ShapeKind::Arrow => {
-                        if let Some(st) = s.stroke {
-                            let x0 = rect.x;
-                            let y0 = rect.y + rect.h / 2.0;
-                            let x1 = rect.right();
-                            let y1 = rect.y + rect.h / 2.0;
-                            canvas.line(x0, y0, x1, y1, st.width * sx, st.color);
-                            // Arrowhead
-                            let head_len = (rect.h * 0.4).max(6.0);
-                            canvas.line(x1, y1, x1 - head_len, y1 - head_len, st.width * sx, st.color);
-                            canvas.line(x1, y1, x1 - head_len, y1 + head_len, st.width * sx, st.color);
-                        }
-                    }
+    // 2. Master chrome (top accent ribbon, subtle card accents, styled slide number)
+    if theme.show_master_chrome {
+        render_master_chrome(&mut canvas, theme, slide.id, target_w, target_h, sx, sy);
+    }
+
+    // 3. Elements with intra-slide builds
+    if slide.builds.is_empty() {
+        for elem in &slide.elements {
+            render_single_element(elem, None, None, theme, sx, sy, &mut canvas, target_w, target_h);
+        }
+        return;
+    }
+
+    for (elem_idx, elem) in slide.elements.iter().enumerate() {
+        let whole_step = slide
+            .builds
+            .iter()
+            .enumerate()
+            .find(|(_, b)| b.element_index == elem_idx && b.paragraph_index.is_none());
+
+        if let Some((step_k, step)) = whole_step {
+            if step_k < completed_builds {
+                if !step.effect.is_build_out() {
+                    render_single_element(elem, None, None, theme, sx, sy, &mut canvas, target_w, target_h);
                 }
+            } else if step_k == completed_builds {
+                if let Some(progress) = active_build_progress {
+                    render_element_build_animation(
+                        elem,
+                        None,
+                        step.effect,
+                        progress,
+                        theme,
+                        sx,
+                        sy,
+                        canvas.pixels_mut(),
+                        target_w,
+                        target_h,
+                    );
+                } else if step.effect.is_build_out() {
+                    render_single_element(elem, None, None, theme, sx, sy, &mut canvas, target_w, target_h);
+                }
+            } else if step.effect.is_build_out() {
+                render_single_element(elem, None, None, theme, sx, sy, &mut canvas, target_w, target_h);
             }
-            SlideElement::TextBox(tb) => {
+        } else if let SlideElement::TextBox(tb) = elem {
+            let has_any_para_step = slide
+                .builds
+                .iter()
+                .any(|b| b.element_index == elem_idx && b.paragraph_index.is_some());
+
+            if has_any_para_step {
+                let para_filter = |p_idx: usize| -> bool {
+                    let para_step = slide
+                        .builds
+                        .iter()
+                        .enumerate()
+                        .find(|(_, b)| b.element_index == elem_idx && b.paragraph_index == Some(p_idx));
+                    match para_step {
+                        None => true,
+                        Some((k, s)) => {
+                            if k < completed_builds {
+                                !s.effect.is_build_out()
+                            } else if k == completed_builds {
+                                active_build_progress.is_none() && s.effect.is_build_out()
+                            } else {
+                                s.effect.is_build_out()
+                            }
+                        }
+                    }
+                };
+
                 let rect = scale_rect(tb.bounds, sx, sy);
                 if let Some(bg) = tb.background {
                     canvas.fill_round_rect(rect, 8.0 * sx, bg);
                 }
-                render_text_box(tb, rect, theme, sx, sy, canvas.pixels_mut(), target_w, target_h);
+                render_text_box(tb, rect, theme, sx, sy, canvas.pixels_mut(), target_w, target_h, Some(&para_filter));
+
+                if let Some(progress) = active_build_progress {
+                    if let Some(active_step) = slide.builds.get(completed_builds) {
+                        if active_step.element_index == elem_idx {
+                            if let Some(active_p_idx) = active_step.paragraph_index {
+                                let single_p_filter = move |p_idx: usize| p_idx == active_p_idx;
+                                render_element_build_animation(
+                                    elem,
+                                    Some(&single_p_filter),
+                                    active_step.effect,
+                                    progress,
+                                    theme,
+                                    sx,
+                                    sy,
+                                    canvas.pixels_mut(),
+                                    target_w,
+                                    target_h,
+                                );
+                            }
+                        }
+                    }
+                }
+            } else {
+                render_single_element(elem, None, None, theme, sx, sy, &mut canvas, target_w, target_h);
             }
-            SlideElement::Image(img) => {
-                let rect = scale_rect(img.bounds, sx, sy);
-                render_image(img, rect, canvas.pixels_mut(), target_w, target_h);
+        } else {
+            render_single_element(elem, None, None, theme, sx, sy, &mut canvas, target_w, target_h);
+        }
+    }
+}
+
+pub(crate) fn render_single_element(
+    elem: &SlideElement,
+    override_bounds: Option<Rect>,
+    para_filter: Option<&dyn Fn(usize) -> bool>,
+    theme: &Theme,
+    sx: f32,
+    sy: f32,
+    canvas: &mut Canvas<'_>,
+    target_w: u32,
+    target_h: u32,
+) {
+    let rect = override_bounds.unwrap_or_else(|| scale_rect(elem.bounds(), sx, sy));
+    match elem {
+        SlideElement::Shape(s) => match s.kind {
+            ShapeKind::Rect => {
+                if let Some(fill) = s.fill {
+                    canvas.fill_rect(rect, fill);
+                }
+                if let Some(st) = s.stroke {
+                    canvas.stroke_round_rect(rect, 0.0, st.width * sx, st.color);
+                }
             }
-            SlideElement::Table(t) => {
-                let rect = scale_rect(t.bounds, sx, sy);
-                render_table(t, rect, theme, sx, sy, canvas.pixels_mut(), target_w, target_h);
+            ShapeKind::RoundedRect { radius } => {
+                let r = radius * sx;
+                if let Some(fill) = s.fill {
+                    canvas.fill_round_rect(rect, r, fill);
+                }
+                if let Some(st) = s.stroke {
+                    canvas.stroke_round_rect(rect, r, st.width * sx, st.color);
+                }
             }
-            SlideElement::Code(c) => {
-                let rect = scale_rect(c.bounds, sx, sy);
-                render_code_block(c, rect, theme, sx, sy, canvas.pixels_mut(), target_w, target_h);
+            ShapeKind::Ellipse => {
+                let cx = rect.x + rect.w / 2.0;
+                let cy = rect.y + rect.h / 2.0;
+                let r = (rect.w.min(rect.h) / 2.0).max(1.0);
+                if let Some(fill) = s.fill {
+                    canvas.fill_circle(cx, cy, r, fill);
+                }
+                if let Some(st) = s.stroke {
+                    canvas.stroke_circle(cx, cy, r, st.width * sx, st.color);
+                }
+            }
+            ShapeKind::Line => {
+                if let Some(st) = s.stroke {
+                    let x0 = rect.x;
+                    let y0 = rect.y;
+                    let x1 = rect.right();
+                    let y1 = rect.bottom();
+                    canvas.line(x0, y0, x1, y1, st.width * sx, st.color);
+                }
+            }
+            ShapeKind::Arrow => {
+                if let Some(st) = s.stroke {
+                    let x0 = rect.x;
+                    let y0 = rect.y + rect.h / 2.0;
+                    let x1 = rect.right();
+                    let y1 = rect.y + rect.h / 2.0;
+                    canvas.line(x0, y0, x1, y1, st.width * sx, st.color);
+                    let head_len = (rect.h * 0.4).max(6.0);
+                    canvas.line(x1, y1, x1 - head_len, y1 - head_len, st.width * sx, st.color);
+                    canvas.line(x1, y1, x1 - head_len, y1 + head_len, st.width * sx, st.color);
+                }
+            }
+        },
+        SlideElement::TextBox(tb) => {
+            if let Some(bg) = tb.background {
+                canvas.fill_round_rect(rect, 8.0 * sx, bg);
+            }
+            render_text_box(tb, rect, theme, sx, sy, canvas.pixels_mut(), target_w, target_h, para_filter);
+        }
+        SlideElement::Image(img) => {
+            render_image(img, rect, canvas.pixels_mut(), target_w, target_h);
+        }
+        SlideElement::Table(t) => {
+            render_table(t, rect, theme, sx, sy, canvas.pixels_mut(), target_w, target_h);
+        }
+        SlideElement::Code(c) => {
+            render_code_block(c, rect, theme, sx, sy, canvas.pixels_mut(), target_w, target_h);
+        }
+    }
+}
+
+fn render_element_build_animation(
+    elem: &SlideElement,
+    para_filter: Option<&dyn Fn(usize) -> bool>,
+    effect: BuildEffect,
+    progress: f32,
+    theme: &Theme,
+    sx: f32,
+    sy: f32,
+    dst_buf: &mut [u32],
+    w: u32,
+    h: u32,
+) {
+    let t = progress.clamp(0.0, 1.0);
+    let ease = 1.0 - (1.0 - t) * (1.0 - t) * (1.0 - t);
+
+    let len = (w * h) as usize;
+    let mut scratch = vec![0u32; len];
+    let mut canvas = match Canvas::new(&mut scratch, w, h) {
+        Some(c) => c,
+        None => return,
+    };
+
+    let orig_bounds = elem.bounds();
+    let scaled_bounds = scale_rect(orig_bounds, sx, sy);
+
+    match effect {
+        BuildEffect::Appear => {
+            if t > 0.0 {
+                render_single_element(elem, None, para_filter, theme, sx, sy, &mut canvas, w, h);
+                blend_buffer_over(&scratch, dst_buf, 1.0, None, w, h);
             }
         }
+        BuildEffect::DissolveIn => {
+            render_single_element(elem, None, para_filter, theme, sx, sy, &mut canvas, w, h);
+            blend_buffer_over(&scratch, dst_buf, ease, None, w, h);
+        }
+        BuildEffect::FlyInLeft => {
+            let offset_x = (scaled_bounds.right().max(250.0 * sx)) * (1.0 - ease);
+            let translated = Rect::new(
+                scaled_bounds.x - offset_x,
+                scaled_bounds.y,
+                scaled_bounds.w,
+                scaled_bounds.h,
+            );
+            render_single_element(elem, Some(translated), para_filter, theme, sx, sy, &mut canvas, w, h);
+            blend_buffer_over(&scratch, dst_buf, ease, None, w, h);
+        }
+        BuildEffect::FlyInBottom => {
+            let offset_y = ((h as f32 - scaled_bounds.y).max(180.0 * sy)) * (1.0 - ease);
+            let translated = Rect::new(
+                scaled_bounds.x,
+                scaled_bounds.y + offset_y,
+                scaled_bounds.w,
+                scaled_bounds.h,
+            );
+            render_single_element(elem, Some(translated), para_filter, theme, sx, sy, &mut canvas, w, h);
+            blend_buffer_over(&scratch, dst_buf, ease, None, w, h);
+        }
+        BuildEffect::PopScale => {
+            let s = 0.35 + 0.65 * ease;
+            let cx = scaled_bounds.x + scaled_bounds.w * 0.5;
+            let cy = scaled_bounds.y + scaled_bounds.h * 0.5;
+            let new_w = scaled_bounds.w * s;
+            let new_h = scaled_bounds.h * s;
+            let scaled_rect = Rect::new(cx - new_w * 0.5, cy - new_h * 0.5, new_w, new_h);
+            render_single_element(elem, Some(scaled_rect), para_filter, theme, sx * s, sy * s, &mut canvas, w, h);
+            blend_buffer_over(&scratch, dst_buf, ease, None, w, h);
+        }
+        BuildEffect::WipeRight => {
+            render_single_element(elem, None, para_filter, theme, sx, sy, &mut canvas, w, h);
+            let clip_x = scaled_bounds.x + scaled_bounds.w * ease;
+            blend_buffer_over(&scratch, dst_buf, 1.0, Some(clip_x), w, h);
+        }
+        BuildEffect::FadeOut => {
+            render_single_element(elem, None, para_filter, theme, sx, sy, &mut canvas, w, h);
+            blend_buffer_over(&scratch, dst_buf, 1.0 - ease, None, w, h);
+        }
+    }
+}
+
+fn blend_buffer_over(
+    src_buf: &[u32],
+    dst_buf: &mut [u32],
+    opacity: f32,
+    clip_x_max: Option<f32>,
+    w: u32,
+    _h: u32,
+) {
+    let opacity = opacity.clamp(0.0, 1.0);
+    if opacity <= 0.0 {
+        return;
+    }
+    let alpha_mul = (opacity * 255.0 + 0.5) as u32;
+
+    let len = src_buf.len().min(dst_buf.len());
+    let w_usize = w as usize;
+
+    for i in 0..len {
+        let src = src_buf[i];
+        let sa = (src >> 24) & 0xFF;
+        if sa == 0 {
+            continue;
+        }
+        if let Some(clip_x) = clip_x_max {
+            let x = (i % w_usize) as f32;
+            if x >= clip_x {
+                continue;
+            }
+        }
+        let eff_a = ((sa * alpha_mul) / 255).min(255);
+        if eff_a == 0 {
+            continue;
+        }
+
+        let sr = (src >> 16) & 0xFF;
+        let sg = (src >> 8) & 0xFF;
+        let sb = src & 0xFF;
+
+        let dst = dst_buf[i];
+        let dr = (dst >> 16) & 0xFF;
+        let dg = (dst >> 8) & 0xFF;
+        let db = dst & 0xFF;
+
+        let inv_a = 255 - eff_a;
+        let out_r = ((sr * eff_a + dr * inv_a) / 255).min(255);
+        let out_g = ((sg * eff_a + dg * inv_a) / 255).min(255);
+        let out_b = ((sb * eff_a + db * inv_a) / 255).min(255);
+
+        dst_buf[i] = (0xFF << 24) | (out_r << 16) | (out_g << 8) | out_b;
     }
 }
 
@@ -147,6 +413,7 @@ fn render_text_box(
     pixels: &mut [u32],
     target_w: u32,
     target_h: u32,
+    para_filter: Option<&dyn Fn(usize) -> bool>,
 ) {
     let sans_font = match Font::new(GEIST_SANS) {
         Some(f) => f,
@@ -159,9 +426,19 @@ fn render_text_box(
 
     let mut cursor_y = bounds.y + tb.padding * sy;
 
-    for paragraph in &tb.paragraphs {
+    for (p_idx, paragraph) in tb.paragraphs.iter().enumerate() {
         if cursor_y >= bounds.bottom() {
             break;
+        }
+
+        let first_fs = paragraph.runs.first().map(|r| r.font_size).unwrap_or(24.0);
+        let line_max_h = (first_fs * sy * paragraph.line_spacing).max(24.0 * sy);
+
+        if let Some(ref filter) = para_filter {
+            if !filter(p_idx) {
+                cursor_y += line_max_h;
+                continue;
+            }
         }
 
         let default_color = theme.palette.foreground;
@@ -546,3 +823,579 @@ fn draw_v_line(target: &mut [u32], target_w: u32, target_h: u32, y0: f32, y1: f3
         }
     }
 }
+
+fn render_master_chrome(
+    canvas: &mut Canvas<'_>,
+    theme: &Theme,
+    slide_id: u64,
+    target_w: u32,
+    target_h: u32,
+    sx: f32,
+    sy: f32,
+) {
+    let w = target_w as f32;
+    let h = target_h as f32;
+    let ribbon_h = (4.0 * sy).max(2.0);
+
+    // Top accent ribbon (65% primary accent, 35% secondary accent)
+    let p_w = w * 0.65;
+    canvas.fill_rect(Rect::new(0.0, 0.0, p_w, ribbon_h), theme.palette.primary_accent);
+    canvas.fill_rect(Rect::new(p_w, 0.0, w - p_w, ribbon_h), theme.palette.secondary_accent);
+
+    // Slide number at bottom-right
+    if let Some(font) = Font::new(GEIST_SANS) {
+        let num_str = alloc::format!("{:02}", slide_id);
+        let font_sz = (14.0 * sy).max(9.0);
+        let num_w = font_sz * 1.5;
+        let num_x = w - (24.0 * sx) - num_w;
+        let num_y = h - (16.0 * sy);
+        draw_text_run(
+            &font,
+            &num_str,
+            font_sz,
+            num_x,
+            num_y,
+            theme.palette.muted,
+            false,
+            false,
+            canvas.pixels_mut(),
+            target_w,
+            target_h,
+        );
+    }
+}
+
+/// Interpolate a single transition frame from `from` buffer to `to` buffer at progress `t` (0.0..=1.0).
+pub fn render_transition_frame(
+    from: &[u32],
+    to: &[u32],
+    out: &mut [u32],
+    width: u32,
+    height: u32,
+    transition: Transition,
+    t: f32,
+) {
+    let len = match (width as usize).checked_mul(height as usize) {
+        Some(l) => l,
+        None => return,
+    };
+    if width == 0 || height == 0 || from.len() < len || to.len() < len || out.len() < len {
+        return;
+    }
+
+    let t = if t.is_finite() { t.clamp(0.0, 1.0) } else { 0.0 };
+    let w = width as usize;
+    let h = height as usize;
+
+    match transition {
+        Transition::None => {
+            if t < 1.0 {
+                out[..len].copy_from_slice(&from[..len]);
+            } else {
+                out[..len].copy_from_slice(&to[..len]);
+            }
+        }
+        Transition::Dissolve | Transition::Fade | Transition::MagicMove => {
+            let t_u32 = (t * 256.0).min(256.0) as u32;
+            let inv_u32 = 256 - t_u32;
+
+            for i in 0..len {
+                let f = from[i];
+                let d = to[i];
+
+                let fa = (f >> 24) & 0xFF;
+                let fr = (f >> 16) & 0xFF;
+                let fg = (f >> 8) & 0xFF;
+                let fb = f & 0xFF;
+
+                let da = (d >> 24) & 0xFF;
+                let dr = (d >> 16) & 0xFF;
+                let dg = (d >> 8) & 0xFF;
+                let db = d & 0xFF;
+
+                let a = ((fa * inv_u32 + da * t_u32) >> 8).min(255);
+                let r = ((fr * inv_u32 + dr * t_u32) >> 8).min(255);
+                let g = ((fg * inv_u32 + dg * t_u32) >> 8).min(255);
+                let b = ((fb * inv_u32 + db * t_u32) >> 8).min(255);
+
+                out[i] = (a << 24) | (r << 16) | (g << 8) | b;
+            }
+        }
+        Transition::PushLeft | Transition::SlideLeft => {
+            let shift_x = (((width as f32) * t) + 0.5) as usize;
+            let shift_x = shift_x.min(w);
+
+            for y in 0..h {
+                let row = y * w;
+                for x in 0..w {
+                    if x + shift_x < w {
+                        out[row + x] = from[row + x + shift_x];
+                    } else {
+                        out[row + x] = to[row + (x + shift_x - w)];
+                    }
+                }
+            }
+        }
+        Transition::PushRight => {
+            let shift_x = (((width as f32) * t) + 0.5) as usize;
+            let shift_x = shift_x.min(w);
+
+            for y in 0..h {
+                let row = y * w;
+                for x in 0..w {
+                    if x < shift_x {
+                        out[row + x] = to[row + (w - shift_x + x)];
+                    } else {
+                        out[row + x] = from[row + (x - shift_x)];
+                    }
+                }
+            }
+        }
+        Transition::WipeRight => {
+            let split_x = (((width as f32) * t) + 0.5) as usize;
+            let split_x = split_x.min(w);
+
+            for y in 0..h {
+                let row = y * w;
+                for x in 0..w {
+                    if x < split_x {
+                        out[row + x] = to[row + x];
+                    } else {
+                        out[row + x] = from[row + x];
+                    }
+                }
+            }
+        }
+        Transition::SlideUp => {
+            let shift_y = (((height as f32) * t) + 0.5) as usize;
+            let shift_y = shift_y.min(h);
+
+            for y in 0..h {
+                let out_row = y * w;
+                if y + shift_y < h {
+                    let from_row = (y + shift_y) * w;
+                    out[out_row..out_row + w].copy_from_slice(&from[from_row..from_row + w]);
+                } else {
+                    let to_row = (y + shift_y - h) * w;
+                    out[out_row..out_row + w].copy_from_slice(&to[to_row..to_row + w]);
+                }
+            }
+        }
+        Transition::ZoomIn => {
+            let scale = 0.2 + 0.8 * t;
+            let sw = (((w as f32 * scale) + 0.5) as usize).max(1);
+            let sh = (((h as f32 * scale) + 0.5) as usize).max(1);
+            let ox = (w.saturating_sub(sw)) / 2;
+            let oy = (h.saturating_sub(sh)) / 2;
+
+            let t_u32 = (t * 256.0).min(256.0) as u32;
+            let inv_u32 = 256 - t_u32;
+
+            for y in 0..h {
+                let row = y * w;
+                for x in 0..w {
+                    let f = from[row + x];
+                    if x >= ox && x < ox + sw && y >= oy && y < oy + sh {
+                        let sx = ((x - ox) * w) / sw;
+                        let sy = ((y - oy) * h) / sh;
+                        let d = to[sy.min(h - 1) * w + sx.min(w - 1)];
+
+                        let fa = (f >> 24) & 0xFF;
+                        let fr = (f >> 16) & 0xFF;
+                        let fg = (f >> 8) & 0xFF;
+                        let fb = f & 0xFF;
+
+                        let da = (d >> 24) & 0xFF;
+                        let dr = (d >> 16) & 0xFF;
+                        let dg = (d >> 8) & 0xFF;
+                        let db = d & 0xFF;
+
+                        let a = ((fa * inv_u32 + da * t_u32) >> 8).min(255);
+                        let r = ((fr * inv_u32 + dr * t_u32) >> 8).min(255);
+                        let g = ((fg * inv_u32 + dg * t_u32) >> 8).min(255);
+                        let b = ((fb * inv_u32 + db * t_u32) >> 8).min(255);
+
+                        out[row + x] = (a << 24) | (r << 16) | (g << 8) | b;
+                    } else {
+                        out[row + x] = f;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Canvas-oriented transition helper.
+pub fn render_transition_canvas<'a>(
+    from: &Canvas<'_>,
+    to: &Canvas<'_>,
+    out: &'a mut [u32],
+    transition: Transition,
+    t: f32,
+) -> Option<Canvas<'a>> {
+    let w = from.width();
+    let h = from.height();
+    if to.width() != w || to.height() != h {
+        return None;
+    }
+    render_transition_frame(from.pixels(), to.pixels(), out, w, h, transition, t);
+    Canvas::new(out, w, h)
+}
+
+/// Render an animated slide transition between two slides into target buffer.
+pub fn render_deck_transition(
+    from_slide: &Slide,
+    to_slide: &Slide,
+    theme: &Theme,
+    aspect_ratio: AspectRatio,
+    transition: Transition,
+    t: f32,
+    out: &mut [u32],
+    width: u32,
+    height: u32,
+) {
+    if transition == Transition::MagicMove {
+        render_magic_move_frame(from_slide, to_slide, theme, aspect_ratio, t, out, width, height);
+        return;
+    }
+    let len = match (width as usize).checked_mul(height as usize) {
+        Some(l) => l,
+        None => return,
+    };
+    if width == 0 || height == 0 || out.len() < len {
+        return;
+    }
+
+    let mut buf_from = vec![0u32; len];
+    let mut buf_to = vec![0u32; len];
+    render_slide(from_slide, theme, aspect_ratio, &mut buf_from, width, height);
+    render_slide(to_slide, theme, aspect_ratio, &mut buf_to, width, height);
+    render_transition_frame(&buf_from, &buf_to, out, width, height, transition, t);
+}
+
+/// Render a Keynote-grade Magic Move frame with object interpolation.
+pub fn render_magic_move_frame(
+    from_slide: &Slide,
+    to_slide: &Slide,
+    theme: &Theme,
+    aspect_ratio: AspectRatio,
+    progress: f32,
+    buffer: &mut [u32],
+    target_w: u32,
+    target_h: u32,
+) {
+    let needed = match (target_w as usize).checked_mul(target_h as usize) {
+        Some(n) => n,
+        None => return,
+    };
+    if target_w == 0 || target_h == 0 || buffer.len() < needed {
+        return;
+    }
+
+    let mut canvas = match Canvas::new(buffer, target_w, target_h) {
+        Some(c) => c,
+        None => return,
+    };
+
+    let deck_w = aspect_ratio.width();
+    let deck_h = aspect_ratio.height();
+    let sx = target_w as f32 / deck_w;
+    let sy = target_h as f32 / deck_h;
+
+    // Smooth cubic ease-in-out: 3t² - 2t³
+    let t = progress.clamp(0.0, 1.0);
+    let ease = 3.0 * t * t - 2.0 * t * t * t;
+
+    // 1. Background interpolation
+    let bg_from = match from_slide.background_override {
+        Some(Background::Solid(c)) => c,
+        Some(Background::Gradient(c1, _)) => c1,
+        None => theme.palette.background,
+    };
+    let bg_to = match to_slide.background_override {
+        Some(Background::Solid(c)) => c,
+        Some(Background::Gradient(c1, _)) => c1,
+        None => theme.palette.background,
+    };
+    let interp_bg = lerp_color(bg_from, bg_to, ease);
+    canvas.clear(interp_bg);
+
+    // 2. Master chrome
+    if theme.show_master_chrome {
+        let active_id = if ease < 0.5 { from_slide.id } else { to_slide.id };
+        render_master_chrome(&mut canvas, theme, active_id, target_w, target_h, sx, sy);
+    }
+
+    // 3. Match elements between from_slide and to_slide
+    let from_elems = &from_slide.elements;
+    let to_elems = &to_slide.elements;
+    let n_from = from_elems.len();
+    let n_to = to_elems.len();
+
+    let mut matched_from = vec![false; n_from];
+    let mut matched_to = vec![false; n_to];
+    let mut pairs = Vec::new();
+
+    // Match Rule 1: Explicit magic_key
+    for (i, ef) in from_elems.iter().enumerate() {
+        if let Some(kf) = ef.magic_key() {
+            for (j, et) in to_elems.iter().enumerate() {
+                if !matched_to[j] {
+                    if let Some(kt) = et.magic_key() {
+                        if kf == kt {
+                            matched_from[i] = true;
+                            matched_to[j] = true;
+                            pairs.push((i, j));
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Match Rule 2: Title & Text content matching
+    for (i, ef) in from_elems.iter().enumerate() {
+        if matched_from[i] { continue; }
+        if let SlideElement::TextBox(tbf) = ef {
+            let tf = tbf.plain_text();
+            let tf_clean = tf.trim();
+            if !tf_clean.is_empty() {
+                for (j, et) in to_elems.iter().enumerate() {
+                    if matched_to[j] { continue; }
+                    if let SlideElement::TextBox(tbt) = et {
+                        let tt = tbt.plain_text();
+                        let tt_clean = tt.trim();
+                        if tf_clean == tt_clean || (tf_clean == from_slide.title.trim() && tt_clean == to_slide.title.trim()) {
+                            matched_from[i] = true;
+                            matched_to[j] = true;
+                            pairs.push((i, j));
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Match Rule 3: Shapes of same kind in ordinal order
+    for (i, ef) in from_elems.iter().enumerate() {
+        if matched_from[i] { continue; }
+        if let SlideElement::Shape(sf) = ef {
+            for (j, et) in to_elems.iter().enumerate() {
+                if matched_to[j] { continue; }
+                if let SlideElement::Shape(st) = et {
+                    let kind_match = match (sf.kind, st.kind) {
+                        (ShapeKind::Rect, ShapeKind::Rect) => true,
+                        (ShapeKind::RoundedRect { .. }, ShapeKind::RoundedRect { .. }) => true,
+                        (ShapeKind::Ellipse, ShapeKind::Ellipse) => true,
+                        (ShapeKind::Line, ShapeKind::Line) => true,
+                        (ShapeKind::Arrow, ShapeKind::Arrow) => true,
+                        _ => false,
+                    };
+                    if kind_match {
+                        matched_from[i] = true;
+                        matched_to[j] = true;
+                        pairs.push((i, j));
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    // Match Rule 4: Remaining elements of same enum kind by ordinal
+    for (i, ef) in from_elems.iter().enumerate() {
+        if matched_from[i] { continue; }
+        for (j, et) in to_elems.iter().enumerate() {
+            if matched_to[j] { continue; }
+            let same_kind = core::mem::discriminant(ef) == core::mem::discriminant(et);
+            if same_kind {
+                matched_from[i] = true;
+                matched_to[j] = true;
+                pairs.push((i, j));
+                break;
+            }
+        }
+    }
+
+    // 4. Render unmatched from_slide elements (fading out: 1.0 - ease)
+    let len = (target_w * target_h) as usize;
+    if ease < 1.0 {
+        for (i, ef) in from_elems.iter().enumerate() {
+            if !matched_from[i] {
+                let mut scratch = vec![0u32; len];
+                if let Some(mut sc) = Canvas::new(&mut scratch, target_w, target_h) {
+                    render_single_element(ef, None, None, theme, sx, sy, &mut sc, target_w, target_h);
+                    blend_buffer_over(&scratch, canvas.pixels_mut(), 1.0 - ease, None, target_w, target_h);
+                }
+            }
+        }
+    }
+
+    // 5. Render matched elements (smoothly interpolating position, size, color)
+    for (i, j) in pairs {
+        let ef = &from_elems[i];
+        let et = &to_elems[j];
+
+        let rf = scale_rect(ef.bounds(), sx, sy);
+        let rt = scale_rect(et.bounds(), sx, sy);
+        let r_interp = Rect::new(
+            lerp(rf.x, rt.x, ease),
+            lerp(rf.y, rt.y, ease),
+            lerp(rf.w, rt.w, ease),
+            lerp(rf.h, rt.h, ease),
+        );
+
+        match (ef, et) {
+            (SlideElement::Shape(sf), SlideElement::Shape(st)) => {
+                let fill_interp = lerp_color_opt(sf.fill, st.fill, ease);
+                let stroke_interp = lerp_stroke_opt(sf.stroke, st.stroke, ease);
+
+                match (sf.kind, st.kind) {
+                    (ShapeKind::RoundedRect { radius: rf }, ShapeKind::RoundedRect { radius: rt }) => {
+                        let rad = lerp(rf * sx, rt * sx, ease);
+                        if let Some(fill) = fill_interp {
+                            canvas.fill_round_rect(r_interp, rad, fill);
+                        }
+                        if let Some(stk) = stroke_interp {
+                            canvas.stroke_round_rect(r_interp, rad, stk.width * sx, stk.color);
+                        }
+                    }
+                    (ShapeKind::Ellipse, ShapeKind::Ellipse) => {
+                        let cx = r_interp.x + r_interp.w / 2.0;
+                        let cy = r_interp.y + r_interp.h / 2.0;
+                        let r = (r_interp.w.min(r_interp.h) / 2.0).max(1.0);
+                        if let Some(fill) = fill_interp {
+                            canvas.fill_circle(cx, cy, r, fill);
+                        }
+                        if let Some(stk) = stroke_interp {
+                            canvas.stroke_circle(cx, cy, r, stk.width * sx, stk.color);
+                        }
+                    }
+                    _ => {
+                        if let Some(fill) = fill_interp {
+                            canvas.fill_rect(r_interp, fill);
+                        }
+                        if let Some(stk) = stroke_interp {
+                            canvas.stroke_round_rect(r_interp, 0.0, stk.width * sx, stk.color);
+                        }
+                    }
+                }
+            }
+            (SlideElement::TextBox(tbf), SlideElement::TextBox(tbt)) => {
+                let bg_interp = lerp_color_opt(tbf.background, tbt.background, ease);
+                if let Some(bg) = bg_interp {
+                    canvas.fill_round_rect(r_interp, 8.0 * sx, bg);
+                }
+
+                let fs_f = tbf.paragraphs.first().and_then(|p| p.runs.first()).map(|r| r.font_size).unwrap_or(24.0);
+                let fs_t = tbt.paragraphs.first().and_then(|p| p.runs.first()).map(|r| r.font_size).unwrap_or(24.0);
+                let interp_fs = lerp(fs_f, fs_t, ease);
+
+                let col_f = tbf.paragraphs.first().and_then(|p| p.runs.first()).and_then(|r| r.color).unwrap_or(theme.palette.foreground);
+                let col_t = tbt.paragraphs.first().and_then(|p| p.runs.first()).and_then(|r| r.color).unwrap_or(theme.palette.foreground);
+                let interp_col = lerp_color(col_f, col_t, ease);
+
+                let active_tb = if ease < 0.5 { tbf } else { tbt };
+                let mut interp_tb = active_tb.clone();
+                for p in &mut interp_tb.paragraphs {
+                    for r in &mut p.runs {
+                        r.font_size = interp_fs;
+                        r.color = Some(interp_col);
+                    }
+                }
+                render_text_box(&interp_tb, r_interp, theme, sx, sy, canvas.pixels_mut(), target_w, target_h, None);
+            }
+            (SlideElement::Image(img_f), SlideElement::Image(img_t)) => {
+                let active_img = if ease < 0.5 { img_f } else { img_t };
+                render_image(active_img, r_interp, canvas.pixels_mut(), target_w, target_h);
+            }
+            (SlideElement::Code(cf), SlideElement::Code(ct)) => {
+                let active_c = if ease < 0.5 { cf } else { ct };
+                let fs = lerp(cf.font_size, ct.font_size, ease);
+                let mut c_clone = active_c.clone();
+                c_clone.font_size = fs;
+                render_code_block(&c_clone, r_interp, theme, sx, sy, canvas.pixels_mut(), target_w, target_h);
+            }
+            _ => {
+                let mut scratch = vec![0u32; len];
+                if let Some(mut sc) = Canvas::new(&mut scratch, target_w, target_h) {
+                    render_single_element(ef, Some(r_interp), None, theme, sx, sy, &mut sc, target_w, target_h);
+                    blend_buffer_over(&scratch, canvas.pixels_mut(), 1.0 - ease, None, target_w, target_h);
+                }
+                scratch.fill(0);
+                if let Some(mut sc) = Canvas::new(&mut scratch, target_w, target_h) {
+                    render_single_element(et, Some(r_interp), None, theme, sx, sy, &mut sc, target_w, target_h);
+                    blend_buffer_over(&scratch, canvas.pixels_mut(), ease, None, target_w, target_h);
+                }
+            }
+        }
+    }
+
+    // 6. Render unmatched to_slide elements (fading in: ease)
+    if ease > 0.0 {
+        for (j, et) in to_elems.iter().enumerate() {
+            if !matched_to[j] {
+                let mut scratch = vec![0u32; len];
+                if let Some(mut sc) = Canvas::new(&mut scratch, target_w, target_h) {
+                    render_single_element(et, None, None, theme, sx, sy, &mut sc, target_w, target_h);
+                    blend_buffer_over(&scratch, canvas.pixels_mut(), ease, None, target_w, target_h);
+                }
+            }
+        }
+    }
+}
+
+fn lerp(a: f32, b: f32, t: f32) -> f32 {
+    a + (b - a) * t
+}
+
+fn lerp_color(a: Color, b: Color, t: f32) -> Color {
+    let t = t.clamp(0.0, 1.0);
+    let r = ((a.r() as f32) + ((b.r() as f32) - (a.r() as f32)) * t + 0.5) as u8;
+    let g = ((a.g() as f32) + ((b.g() as f32) - (a.g() as f32)) * t + 0.5) as u8;
+    let bl = ((a.b() as f32) + ((b.b() as f32) - (a.b() as f32)) * t + 0.5) as u8;
+    let al = ((a.a() as f32) + ((b.a() as f32) - (a.a() as f32)) * t + 0.5) as u8;
+    Color::rgba(r, g, bl, al)
+}
+
+fn lerp_color_opt(a: Option<Color>, b: Option<Color>, t: f32) -> Option<Color> {
+    match (a, b) {
+        (Some(ca), Some(cb)) => Some(lerp_color(ca, cb, t)),
+        (Some(ca), None) => {
+            let new_a = ((ca.a() as f32) * (1.0 - t) + 0.5) as u8;
+            Some(ca.with_alpha(new_a))
+        }
+        (None, Some(cb)) => {
+            let new_a = ((cb.a() as f32) * t + 0.5) as u8;
+            Some(cb.with_alpha(new_a))
+        }
+        (None, None) => None,
+    }
+}
+
+fn lerp_stroke_opt(a: Option<StrokeStyle>, b: Option<StrokeStyle>, t: f32) -> Option<StrokeStyle> {
+    match (a, b) {
+        (Some(sa), Some(sb)) => Some(StrokeStyle {
+            color: lerp_color(sa.color, sb.color, t),
+            width: lerp(sa.width, sb.width, t),
+        }),
+        (Some(sa), None) => {
+            let new_a = ((sa.color.a() as f32) * (1.0 - t) + 0.5) as u8;
+            Some(StrokeStyle {
+                color: sa.color.with_alpha(new_a),
+                width: sa.width,
+            })
+        }
+        (None, Some(sb)) => {
+            let new_a = ((sb.color.a() as f32) * t + 0.5) as u8;
+            Some(StrokeStyle {
+                color: sb.color.with_alpha(new_a),
+                width: sb.width,
+            })
+        }
+        (None, None) => None,
+    }
+}
+

@@ -21,7 +21,7 @@
   delete globalThis.__host;
   const OP = { LOG: 1, BY_ID: 2, QUERY: 3, INFO: 4, GET_ATTR: 5, SET_ATTR: 6, REMOVE_ATTR: 7, GET_TEXT: 8, SET_TEXT: 9,
     GET_HTML: 10, SET_HTML: 11, CREATE_ELEMENT: 12, CREATE_TEXT: 13, INSERT: 14, DETACH: 15, PARENT: 16, CHILDREN: 17,
-    ATTR_NAMES: 18, VIEWPORT: 19, NAVIGATE: 20, CLICKABLE: 21, RECT: 22, LOCATION: 23, CANVAS: 24, MEASURE: 25, HIT: 26, VALUE: 27, CARET: 28, MEDIA: 48, GL: 64, GL_QUERY: 65, FETCH: 66, FETCH_BODY: 67, FETCH_HEAD: 68, COOKIE: 69, MEDIA_APPEND: 70, CLASSIC_SCRIPT: 71, FRAME: 31, POST_MESSAGE: 32, STORAGE: 33, IDB: 34, WS: 73, WS_TAKE: 74 };
+    ATTR_NAMES: 18, VIEWPORT: 19, NAVIGATE: 20, CLICKABLE: 21, RECT: 22, LOCATION: 23, CANVAS: 24, MEASURE: 25, HIT: 26, VALUE: 27, CARET: 28, MEDIA: 48, GL: 64, GL_QUERY: 65, FETCH: 66, FETCH_BODY: 67, FETCH_HEAD: 68, COOKIE: 69, MEDIA_APPEND: 70, CLASSIC_SCRIPT: 71, FRAME: 31, POST_MESSAGE: 32, STORAGE: 33, IDB: 34, ADOPTED_STYLES: 35, MATCHES: 36, WS: 73, WS_TAKE: 74 };
   const nodes = new Map();
   const defaultChecked = new WeakMap();
 
@@ -636,8 +636,8 @@
     before(...xs) { const p = this.parentNode; if (p) for (const x of xs) p.insertBefore(toNode(x), this); }
     after(...xs) { const p = this.parentNode; if (!p) return; const next = this.nextSibling; for (const x of xs) p.insertBefore(toNode(x), next); }
     replaceWith(...xs) { this.before(...xs); this.remove(); }
-    matches(sel) { const p = this.parentNode || document; return p.querySelectorAll(sel).includes(this) || document.querySelectorAll(sel).includes(this); }
-    closest(sel) { for (let n = this; n && n.nodeType === 1; n = n.parentNode) if (n.matches(sel)) return n; return null; }
+    matches(sel) { return check(H(OP.MATCHES, this._id, String(sel))) === '1'; }
+    closest(sel) { sel = String(sel); for (let n = this; n && n.nodeType === 1; n = n.parentNode) if (n.matches(sel)) return n; return null; }
     getBoundingClientRect() {
       const [x, y, w, h] = H(OP.RECT, this._id).split(',').map(Number);
       return new DOMRect(x, y - window.scrollY, w, h);
@@ -1445,8 +1445,56 @@
   reflect(HTMLScriptElement, ['type', 'async', 'defer', 'crossOrigin', 'integrity', 'noModule']);
   // A style sheet object over a <style> element. Rules the page inserts (as CSS-in-JS
   // libraries do) are added to the element's text, so the browser styles with them.
+  const sheetState = new WeakMap(), adoptionState = new WeakMap();
+  function adoption(root) {
+    let state = adoptionState.get(root);
+    if (state) return state;
+    const list = [];
+    function publish(next) {
+      for (const sheet of next) {
+        const info = sheetState.get(sheet);
+        if (!info || !info.constructed) throw domError('Only constructed sheets can be adopted.', 'NotAllowedError');
+      }
+      if (next.length > 256) throw domError('Too many adopted sheets.', 'QuotaExceededError');
+      const css = next.filter(s => !s.disabled).map(s => s.cssRules.map(r => r.cssText).join('\n')).join('\n');
+      if (H(OP.ADOPTED_STYLES, root._id, css) === '!') throw domError('Adopted styles exceed the page budget.', 'QuotaExceededError');
+      for (const sheet of list) sheetState.get(sheet).roots.delete(root);
+      list.splice(0, list.length, ...next);
+      for (const sheet of list) sheetState.get(sheet).roots.add(root);
+    }
+    const methods = new Set(['push', 'pop', 'shift', 'unshift', 'splice', 'reverse', 'sort', 'fill', 'copyWithin']);
+    let proxy;
+    proxy = new Proxy(list, {
+      get(target, key, receiver) {
+        if (methods.has(key)) return (...args) => {
+          const next = target.slice(), result = Array.prototype[key].apply(next, args);
+          publish(next); return result === next ? proxy : result;
+        };
+        return Reflect.get(target, key, receiver);
+      },
+      set(target, key, value) {
+        const next = target.slice();
+        if (key === 'length') {
+          if (!Number.isInteger(value) || value < 0 || value > target.length) throw new RangeError('Invalid adopted sheet length');
+          next.length = value;
+        } else if (/^(0|[1-9][0-9]*)$/.test(String(key)) && Number(key) <= target.length) next[key] = value;
+        else throw new TypeError('Invalid adopted sheet index');
+        publish(next); return true;
+      },
+      defineProperty() { throw new TypeError('Cannot redefine adopted sheet entries'); },
+      deleteProperty(target, key) {
+        if (/^(0|[1-9][0-9]*)$/.test(String(key)) && Number(key) < target.length) {
+          const next = target.slice(); next.splice(Number(key), 1); publish(next);
+        }
+        return true;
+      }
+    });
+    state = { list, proxy, publish }; adoptionState.set(root, state); return state;
+  }
   class CSSStyleSheet {
-    constructor(owner) { this.ownerNode = owner || null; this.cssRules = []; this.disabled = false; this.media = []; this.title = null; this.type = 'text/css'; }
+    constructor(options, owner) { this.ownerNode = owner || null; this.cssRules = []; sheetState.set(this, { constructed: !owner, roots: new Set(), disabled: !!(options && options.disabled) }); this.media = []; this.title = null; this.type = 'text/css'; }
+    get disabled() { return sheetState.get(this).disabled; }
+    set disabled(v) { sheetState.get(this).disabled = !!v; this._write(); }
     get rules() { return this.cssRules; }
     get href() { return this.ownerNode && this.ownerNode.localName === 'link' ? this.ownerNode.href : null; }
     insertRule(rule, i) {
@@ -1462,6 +1510,7 @@
     replaceSync(text) { this.cssRules = [{ cssText: String(text), parentStyleSheet: this }]; this._write(); }
     replace(text) { this.replaceSync(text); return Promise.resolve(this); }
     _write() {
+      for (const root of Array.from(sheetState.get(this).roots)) { const a = adoption(root); a.publish(a.list.slice()); }
       const o = this.ownerNode;
       if (!o || o.localName !== 'style') return;
       if (this._base === undefined) this._base = o.textContent;
@@ -1469,7 +1518,7 @@
     }
   }
   class HTMLStyleElement extends HTMLElement {
-    get sheet() { return this.isConnected ? this._sheet || (this._sheet = new CSSStyleSheet(this)) : null; }
+    get sheet() { return this.isConnected ? this._sheet || (this._sheet = new CSSStyleSheet(null, this)) : null; }
   }
   class HTMLSlotElement extends HTMLElement {
     get name() { return this.getAttribute('name') || ''; }
@@ -1597,6 +1646,11 @@
     constructor(tag) { super(+check(H(OP.CREATE_ELEMENT, tag || 'sx-fragment'))); if (!tag) nodes.set(this._id, this); }
     get nodeType() { return 11; }
     get nodeName() { return '#document-fragment'; }
+    cloneNode(deep) {
+      const copy = new DocumentFragment();
+      if (deep) for (const child of this.childNodes) copy.appendChild(child.cloneNode(true));
+      return copy;
+    }
     get innerHTML() { return H(OP.GET_HTML, this._id, '0'); }
     set innerHTML(v) { H(OP.SET_HTML, this._id, String(v)); }
     getElementById(id) { return this.querySelector('#' + CSS.escape(String(id))); }
@@ -1624,6 +1678,8 @@
     }
     get textContent() { return H(OP.GET_TEXT, this._id); }
     get activeElement() { const a = document._active; return a && this.contains(a) ? a : null; }
+    get adoptedStyleSheets() { return adoption(this).proxy; }
+    set adoptedStyleSheets(v) { adoption(this).publish(Array.from(v)); }
     get styleSheets() { return this.querySelectorAll('style').map(s => s.sheet); }
     getHTML() { return this.innerHTML; }
     setHTMLUnsafe(h) { this.innerHTML = h; }
@@ -1638,6 +1694,8 @@
     exitFullscreen() { return Promise.resolve(); }
     get pictureInPictureEnabled() { return false; }
     get pictureInPictureElement() { return null; }
+    get adoptedStyleSheets() { return adoption(this).proxy; }
+    set adoptedStyleSheets(v) { adoption(this).publish(Array.from(v)); }
     get styleSheets() { return this.querySelectorAll('style').map(s => s.sheet); }
     get timeline() { return documentTimeline; }
     getAnimations() { return animations.filter(a => a.playState === 'running' || a.playState === 'paused'); }
@@ -1663,6 +1721,11 @@
       let t = this.querySelector('title');
       if (!t) { t = this.createElement('title'); const h = this.head; if (h) h.appendChild(t); }
       t.textContent = v;
+    }
+    get domain() { return location.hostname; }
+    set domain(v) {
+      // This engine keeps each frame in its own domain; do not relax origins.
+      if (String(v).toLowerCase() !== location.hostname.toLowerCase()) throw domError('Origin relaxation is unavailable.', 'SecurityError');
     }
     get URL() { return location.href; }
     get location() { return location; }

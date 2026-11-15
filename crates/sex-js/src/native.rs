@@ -11,6 +11,8 @@ extern "C" {
     fn sxn_instantiate(i: *mut c_void, ctx: *mut c_void, max_bytes: u64) -> i32;
     fn sxn_free(i: *mut c_void);
     fn sxn_memory(i: *mut c_void, size: *mut u64) -> *mut u8;
+    #[cfg(feature = "baseline-jit")]
+    fn sxn_own_cache_stats(i: *mut c_void, out: *mut u32) -> i32;
     fn sxn_init(i: *mut c_void, heap: u32, out: *mut u32) -> i32;
     fn sxn_alloc(i: *mut c_void, n: u32, out: *mut u32) -> i32;
     fn sxn_release(i: *mut c_void, p: u32) -> i32;
@@ -39,6 +41,8 @@ unsafe extern "C" fn sexjs_rt_realloc(ptr: *mut u8, old: usize, new: usize) -> *
 
 /// What the guest's imports reach: the instance (for its memory) and the page.
 struct Ctx {
+    #[cfg(feature = "jit-profile")]
+    profile: super::ExecutionProfile,
     instance: *mut c_void,
     page: *mut dyn Page,
     result: Vec<u8>,
@@ -60,10 +64,14 @@ unsafe extern "C" fn w2c_dom_call(ctx: *mut Ctx, op: u32, ptr: u32, len: u32) ->
     let data = unsafe { memory(ctx) };
     let page = unsafe { &mut *ctx.page };
     let Some(args) = args_of(data, ptr as i32, len as i32) else { return u32::MAX };
+    #[cfg(feature = "jit-profile")]
+    let before = page.now_ns();
     let r = if op >= BYTE_OPS { page.call_bytes(op, &args) } else {
         let Some(text) = args.iter().map(|a| core::str::from_utf8(a).ok()).collect::<Option<Vec<&str>>>() else { return u32::MAX };
         page.call(op, &text).map(String::into_bytes)
     };
+    #[cfg(feature = "jit-profile")]
+    ctx.profile.host(op, page.now_ns().saturating_sub(before));
     match r {
         Some(r) => { let n = r.len() as u32; ctx.result = r; n }
         None => u32::MAX,
@@ -119,20 +127,31 @@ extern "C" fn w2c_wasi__snapshot__preview1_fd_fdstat_get(_: *mut Ctx, _fd: u32, 
 extern "C" fn w2c_wasi__snapshot__preview1_fd_seek(_: *mut Ctx, _fd: u32, _o: u64, _w: u32, _at: u32) -> u32 { 8 }
 
 #[no_mangle]
-extern "C" fn w2c_dom_jit_available(_: *mut Ctx) -> u32 { if cfg!(feature = "baseline-jit") {2} else {0} }
+unsafe extern "C" fn w2c_dom_jit_available(ctx: *mut Ctx) -> u32 {
+    #[cfg(feature = "baseline-jit")] { if unsafe { (*ctx).jit.enabled } {3} else {0} }
+    #[cfg(not(feature = "baseline-jit"))] { let _ = ctx; 0 }
+}
 
-// An older guest understands only integer results. Keep its import but never
-// enter protocol-2 code through it; an accidental stale pair uses interpreter fallback.
+// Older guests have a different result or input protocol. Keep their imports
+// but decline compilation, so a stale guest uses interpreter fallback.
 #[no_mangle]
 extern "C" fn w2c_dom_jit(_: *mut Ctx, _: u32, _: u32, _: u32, _: u32, _: u32) -> u32 { 0 }
 
 #[no_mangle]
-unsafe extern "C" fn w2c_dom_jit_v2(ctx: *mut Ctx, pc: u32, len: u32, argv: u32, argc: u32, out: u32) -> u32 {
+extern "C" fn w2c_dom_jit_v2(_: *mut Ctx, _: u32, _: u32, _: u32, _: u32, _: u32) -> u32 { 0 }
+
+#[no_mangle]
+unsafe extern "C" fn w2c_dom_jit_v3(ctx: *mut Ctx, pc: u32, len: u32, argv: u32, argc: u32, out: u32) -> u32 {
     #[cfg(feature = "baseline-jit")]
     {
         let ctx = unsafe { &mut *ctx };
         let data = unsafe { memory(ctx) };
-        return ctx.jit.run(data, pc, len, argv, argc, out) as u32;
+        #[cfg(feature = "jit-profile")]
+        let before = unsafe { (*ctx.page).now_ns() };
+        let result = ctx.jit.run_v3(data, pc, len, argv, argc, out) as u32;
+        #[cfg(feature = "jit-profile")]
+        ctx.profile.jit(unsafe { (*ctx.page).now_ns() }.saturating_sub(before));
+        return result;
     }
     #[cfg(not(feature = "baseline-jit"))]
     { let _ = (ctx, pc, len, argv, argc, out); 0 }
@@ -149,11 +168,14 @@ pub(crate) struct Native<P: Page + 'static> {
 fn trap(code: i32) -> Error { Error::Trapped(format!("native trap {code}")) }
 
 impl<P: Page + 'static> Native<P> {
+    #[cfg(feature = "jit-profile")]
+    pub fn execution_profile(&self) -> super::ExecutionProfile { unsafe { (*self.ctx).profile } }
+
     pub fn new(page: P, memory_bytes: usize) -> Result<Self, Error> {
         let page = alloc::boxed::Box::into_raw(alloc::boxed::Box::new(page));
         let size = unsafe { sxn_size() };
         let instance = unsafe { alloc_zeroed(Layout::from_size_align(size, ALIGN).unwrap()) } as *mut c_void;
-        let ctx = alloc::boxed::Box::into_raw(alloc::boxed::Box::new(Ctx { instance, page: page as *mut dyn Page, result: Vec::new(), #[cfg(feature = "baseline-jit")] jit: super::baseline::Jit::default() }));
+        let ctx = alloc::boxed::Box::into_raw(alloc::boxed::Box::new(Ctx { #[cfg(feature = "jit-profile")] profile: super::ExecutionProfile::default(), instance, page: page as *mut dyn Page, result: Vec::new(), #[cfg(feature = "baseline-jit")] jit: super::baseline::Jit::default() }));
         let mut me = Self { instance, ctx, page, dead: true };
         let r = unsafe { sxn_instantiate(instance, ctx as *mut c_void, memory_bytes as u64) };
         if r != 0 { return Err(Error::Engine(format!("native start trapped ({r})"))); }
@@ -164,6 +186,13 @@ impl<P: Page + 'static> Native<P> {
     pub fn set_jit_enabled(&mut self, enabled: bool) { unsafe { (*self.ctx).jit.enabled = enabled; } }
     #[cfg(feature = "baseline-jit")]
     pub fn jit_stats(&self) -> super::baseline::Stats { unsafe { (*self.ctx).jit.stats } }
+    #[cfg(feature = "baseline-jit")]
+    pub fn guest_fast_path_stats(&mut self) -> Result<[u64; 4], Error> {
+        let at = self.run(|i, o| unsafe { sxn_own_cache_stats(i, o) })? as usize;
+        let data = unsafe { memory(&*self.ctx) };
+        let bytes = data.get(at..at.saturating_add(32)).ok_or_else(|| Error::Trapped(String::from("cache stats")))?;
+        Ok(core::array::from_fn(|i| u64::from_le_bytes(bytes[i*8..i*8+8].try_into().unwrap())))
+    }
     pub fn page(&self) -> &P { unsafe { &*self.page } }
     pub fn page_mut(&mut self) -> &mut P { unsafe { &mut *self.page } }
 

@@ -3,6 +3,7 @@
 
 use burlesque_core::*;
 use sex_archive::{ArchiveBuilder, OutputFormat};
+use sex_canvas::Rect;
 
 /// A minimal valid 2x2 red PNG image.
 fn make_test_png() -> Vec<u8> {
@@ -632,3 +633,217 @@ fn test_zero_and_undersized_render_buffers() {
     // 5. render_presenter_view with tiny dimensions
     render_presenter_view(&session, &mut small_buf, 100, 100);
 }
+
+#[test]
+fn test_six_keynote_themes() {
+    let themes = Theme::all_themes();
+    assert_eq!(themes.len(), 6, "Must provide exactly 6 Keynote themes");
+
+    let expected_names = [
+        "Burlesque Velvet",
+        "Editorial Light",
+        "Midnight Slate",
+        "Champagne Ivory",
+        "Cyber Prism",
+        "Swiss Modern",
+    ];
+
+    for name in &expected_names {
+        let found = Theme::by_name(name);
+        assert!(found.is_some(), "Theme '{}' must exist via by_name", name);
+        let t = found.unwrap();
+        assert_eq!(t.name, *name);
+        assert_ne!(t.palette.background, t.palette.foreground);
+        assert_ne!(t.palette.primary_accent, t.palette.secondary_accent);
+    }
+
+    let mut deck = Deck::new(AspectRatio::Ratio16x9);
+    deck.add_slide(SlideLayout::TitleSlide);
+    deck.set_theme(Theme::cyber_prism());
+    assert_eq!(deck.theme.name, "Cyber Prism");
+}
+
+#[test]
+fn test_transitions_rendering_and_interpolation() {
+    let transitions = [
+        Transition::None,
+        Transition::Dissolve,
+        Transition::PushLeft,
+        Transition::PushRight,
+        Transition::WipeRight,
+        Transition::SlideUp,
+        Transition::ZoomIn,
+        Transition::Fade,
+        Transition::SlideLeft,
+    ];
+
+    for tr in &transitions {
+        assert_eq!(*tr, Transition::from_str_loose(tr.kind_str()));
+    }
+
+    let w = 320usize;
+    let h = 180usize;
+    let from_pixels = vec![0xFF112233u32; w * h];
+    let to_pixels = vec![0xFF99AABBu32; w * h];
+    let mut out = vec![0u32; w * h];
+
+    for tr in &transitions {
+        for &t in &[0.0f32, 0.25f32, 0.5f32, 0.75f32, 1.0f32] {
+            render_transition_frame(&from_pixels, &to_pixels, &mut out, w as u32, h as u32, *tr, t);
+            assert!(out[0] != 0, "Rendered transition pixel should be non-zero");
+        }
+    }
+}
+
+#[test]
+fn test_presenter_view_dual_card_and_speaker_notes() {
+    let mut deck = Deck::new(AspectRatio::Ratio16x9);
+    deck.add_slide(SlideLayout::TitleSlide);
+    deck.get_slide_mut(0).unwrap().title = String::from("Keynote Deck Title");
+    deck.get_slide_mut(0).unwrap().set_speaker_notes("Keynote Intro: Welcome investors and team members to SexOS.");
+
+    deck.add_slide(SlideLayout::TitleAndBody);
+    deck.get_slide_mut(1).unwrap().title = String::from("Market Opportunity");
+    deck.get_slide_mut(1).unwrap().set_speaker_notes("Emphasize 10x memory safety performance and PKU hardware isolation.");
+
+    let mut session = PresenterSession::new(deck);
+    assert_eq!(session.current_slide, 0);
+    assert_eq!(session.current_notes(), "Keynote Intro: Welcome investors and team members to SexOS.");
+
+    // Advance
+    assert!(session.next_slide());
+    assert_eq!(session.current_slide, 1);
+    assert_eq!(session.current_notes(), "Emphasize 10x memory safety performance and PKU hardware isolation.");
+
+    // Timer controls
+    assert!(session.timer_running);
+    session.toggle_timer();
+    assert!(!session.timer_running);
+    session.tick(5000);
+    assert_eq!(session.timer_text(), "00:00");
+    session.toggle_timer();
+    assert!(session.timer_running);
+    session.tick(65000);
+    assert_eq!(session.timer_text(), "01:05");
+    session.reset_timer();
+    assert_eq!(session.timer_text(), "00:00");
+
+    // Render presenter view at 1280x800
+    let pw = 1280u32;
+    let ph = 800u32;
+    let mut buf = vec![0u32; (pw * ph) as usize];
+    render_presenter_view(&session, &mut buf, pw, ph);
+
+    let non_zero = buf.iter().filter(|&&p| p != 0).count();
+    assert!(non_zero > 10_000, "Presenter view at 1280x800 must render rich UI (got {} pixels)", non_zero);
+}
+
+#[test]
+fn test_pptx_odp_export_roundtrip() {
+    let mut deck = Deck::new(AspectRatio::Ratio16x9);
+    deck.theme = Theme::burlesque_velvet();
+
+    deck.add_slide(SlideLayout::TitleSlide);
+    let s0 = deck.get_slide_mut(0).unwrap();
+    s0.title = String::from("Burlesque Keynote Roundtrip");
+    s0.set_speaker_notes("Speaker notes on slide 0: Welcome to the future of presentation engines.");
+    s0.transition = Transition::Dissolve;
+
+    deck.add_slide(SlideLayout::TitleAndBody);
+    let s1 = deck.get_slide_mut(1).unwrap();
+    s1.title = String::from("Performance Metrics");
+    s1.set_speaker_notes("Speaker notes on slide 1: Notice zero-copy serialization.");
+    s1.transition = Transition::PushLeft;
+
+    // Add a table element
+    let mut table = TableElement::new(Rect::new(100.0, 100.0, 800.0, 400.0), 3, 2);
+    table.set_cell(0, 0, TableCell::new("Benchmark"));
+    table.set_cell(0, 1, TableCell::new("Speedup"));
+    table.set_cell(1, 0, TableCell::new("IPC Context Switch"));
+    table.set_cell(1, 1, TableCell::new("4.2x"));
+    table.set_cell(2, 0, TableCell::new("Frame Render"));
+    table.set_cell(2, 1, TableCell::new("12.8x"));
+    s1.add_element(SlideElement::Table(table));
+
+    // Export to PPTX
+    let pptx_bytes = deck.export_pptx().expect("export_pptx succeeds");
+    assert!(pptx_bytes.len() > 100, "PPTX file must be non-empty");
+
+    // Re-import PPTX
+    let imported_pptx = Deck::open_pptx(&pptx_bytes).expect("open_pptx on exported pptx succeeds");
+    assert_eq!(imported_pptx.slide_count(), 2);
+    assert_eq!(imported_pptx.get_slide(0).unwrap().title, "Burlesque Keynote Roundtrip");
+    assert_eq!(imported_pptx.get_slide(0).unwrap().speaker_notes, "Speaker notes on slide 0: Welcome to the future of presentation engines.");
+    assert_eq!(imported_pptx.get_slide(0).unwrap().transition, Transition::Dissolve);
+
+    let imp_s1 = imported_pptx.get_slide(1).unwrap();
+    assert_eq!(imp_s1.title, "Performance Metrics");
+    assert_eq!(imp_s1.speaker_notes, "Speaker notes on slide 1: Notice zero-copy serialization.");
+    assert_eq!(imp_s1.transition, Transition::PushLeft);
+    // Verify table element survived roundtrip
+    let has_table = imp_s1.elements.iter().any(|el| matches!(el, SlideElement::Table(_)));
+    assert!(has_table, "Imported PPTX slide 1 must contain Table element");
+
+    // Export to ODP
+    let odp_bytes = deck.export_odp().expect("export_odp succeeds");
+    assert!(odp_bytes.len() > 100, "ODP file must be non-empty");
+
+    // Re-import ODP
+    let imported_odp = Deck::open_odp(&odp_bytes).expect("open_odp on exported odp succeeds");
+    assert_eq!(imported_odp.slide_count(), 2);
+    assert_eq!(imported_odp.get_slide(0).unwrap().title, "Burlesque Keynote Roundtrip");
+    assert_eq!(imported_odp.get_slide(0).unwrap().speaker_notes, "Speaker notes on slide 0: Welcome to the future of presentation engines.");
+    assert_eq!(imported_odp.get_slide(1).unwrap().title, "Performance Metrics");
+    assert_eq!(imported_odp.get_slide(1).unwrap().speaker_notes, "Speaker notes on slide 1: Notice zero-copy serialization.");
+}
+
+#[test]
+fn test_pdf_export_with_and_without_notes() {
+    let mut deck = Deck::new(AspectRatio::Ratio16x9);
+    deck.add_slide(SlideLayout::TitleSlide);
+    deck.get_slide_mut(0).unwrap().title = String::from("Slide One");
+    deck.get_slide_mut(0).unwrap().set_speaker_notes("Notes for slide one.");
+
+    deck.add_slide(SlideLayout::TitleAndBody);
+    deck.get_slide_mut(1).unwrap().title = String::from("Slide Two");
+    deck.get_slide_mut(1).unwrap().set_speaker_notes("Notes for slide two.");
+
+    // PDF without notes: 2 slides -> 2 pages
+    let pdf_no_notes = deck.export_pdf_with_notes(false).expect("export_pdf without notes succeeds");
+    let ed_no_notes = vellum_edit::Editor::open(pdf_no_notes).expect("open pdf without notes");
+    assert_eq!(ed_no_notes.page_count(), 2);
+
+    // PDF with notes: 2 slides with notes -> 4 pages
+    let pdf_with_notes = deck.export_pdf_with_notes(true).expect("export_pdf with notes succeeds");
+    let ed_with_notes = vellum_edit::Editor::open(pdf_with_notes).expect("open pdf with notes");
+    assert_eq!(ed_with_notes.page_count(), 4);
+}
+
+#[test]
+fn test_issue_322_pptx_bullet_lvl_255_no_overflow() {
+    let repro = include_bytes!("../../../fuzz/repros/round4/burlesque-pptx-bullet-lvl-overflow.bin");
+    let deck = Deck::open_pptx(repro).expect("Issue #322 reproducer PPTX must open cleanly without u8 overflow");
+    assert!(deck.slide_count() >= 1);
+
+    let slide = deck.get_slide(0).expect("slide 0 exists");
+    let mut found_clamped_bullet = false;
+    for el in &slide.elements {
+        if let SlideElement::TextBox(tb) = el {
+            for p in &tb.paragraphs {
+                assert!(
+                    p.bullet_level <= 9,
+                    "bullet_level must be clamped to OOXML 0..=9 (got {})",
+                    p.bullet_level
+                );
+                if p.bullet_level == 9 {
+                    found_clamped_bullet = true;
+                }
+            }
+        }
+    }
+    assert!(found_clamped_bullet, "lvl=\"255\" paragraph must clamp cleanly to bullet_level 9");
+
+    let mut pixels = vec![0u32; 320 * 180];
+    render_slide(slide, &deck.theme, deck.aspect_ratio, &mut pixels, 320, 180);
+}
+

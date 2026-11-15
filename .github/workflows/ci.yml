@@ -137,6 +137,12 @@ jobs:
         sudo usermod -p '*' "$USER"
         cargo test --locked -p sex-wg
         cargo test --locked -p sex-ssh
+    - name: BitTorrent engine (sex-torrent) goldens and protocol tests on the host
+      run: cargo test --locked -p sex-torrent
+    - name: Swingers downloads from and seeds to aria2 on the host
+      run: |
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends aria2 transmission-cli
+        bash scripts/swingers_host_gate.sh
     - name: Needle printing and scanning protocols (IPP, PWG raster, DNS-SD, eSCL goldens)
       run: |
         cargo test --locked -p sex-print
@@ -172,10 +178,14 @@ jobs:
         cargo test --locked -p sex-web --test viewport
     - name: Intel Wi-Fi driver core (crypto vectors, handshakes, firmware files, power-up)
       run: bash scripts/wifi_host_gate.sh
+    - name: Cufflinks Bluetooth host stack (HCI goldens, SMP vectors, Intel firmware load, pairing)
+      run: bash scripts/bt_host_gate.sh
     - name: Batik layered image editor engine (12 blend modes, brush, adjustments, PSD, ORA) on the host
       run: bash scripts/batik_host_gate.sh
     - name: Power off and restart through ACPI (host half)
       run: bash scripts/power_host_gate.sh
+    - name: Drag VM ABI layouts and VMX/EPT encodings (host half)
+      run: bash scripts/drag_host_gate.sh
     - name: Laptop power model (embedded controller, battery, backlight, thermal, _CRS)
       run: cargo test --locked -p sex-laptop
     - name: Touchpad model (I2C HID, report descriptors, contacts, gestures)
@@ -244,6 +254,10 @@ jobs:
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends openssh-server
         sudo usermod -p '*' "$USER"
         python3 scripts/ssh_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/ssh"
+    - name: Swingers downloads a torrent from aria2 on the host
+      run: |
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends aria2
+        python3 scripts/swingers_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/swingers"
     - name: Lurk views a host VNC server and sends it keys
       run: python3 scripts/lurk_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/lurk"
     - name: Needle prints to a fake IPP Everywhere printer and scans from a fake eSCL scanner
@@ -255,6 +269,8 @@ jobs:
         python3 scripts/program_web_js_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-webjs.img" --out "$RUNNER_TEMP/sexos-runtime/web-js"
     - name: Actual Web maximize and restore with full viewport pixels
       run: python3 scripts/program_web_viewport_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-webjs.img" --out "$RUNNER_TEMP/sexos-runtime/web-viewport"
+    - name: Browser pointer input through decorative overlays
+      run: python3 scripts/program_web_pointer_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-webjs.img" --out "$RUNNER_TEMP/sexos-runtime/web-pointer"
     - name: Classic script resources and fetch CORS isolation
       run: |
         truncate -s 1G "$RUNNER_TEMP/blank-classic.img"
@@ -384,6 +400,10 @@ jobs:
       run: |
         truncate -s 1G "$RUNNER_TEMP/fuzz-source.img"
         python3 scripts/syscall_fuzz_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/fuzz-source.img" --out "$RUNNER_TEMP/sexos-fuzz"
+    - name: Drag VM syscall 110 refused cleanly without VMX (QEMU TCG; the guest path needs --accel kvm)
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/drag-source.img"
+        python3 scripts/drag_gate.py --accel tcg --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/drag-source.img" --out "$RUNNER_TEMP/sexos-drag"
     - name: Preserve evidence
       if: always()
       uses: actions/upload-artifact@v4
@@ -403,6 +423,7 @@ jobs:
           ${{ runner.temp }}/sexos-lock
           ${{ runner.temp }}/sexos-persistence
           ${{ runner.temp }}/sexos-fuzz
+          ${{ runner.temp }}/sexos-drag
         if-no-files-found: ignore
 
   media:
