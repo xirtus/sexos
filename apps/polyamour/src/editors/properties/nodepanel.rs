@@ -135,7 +135,9 @@ fn input_row(l: &mut L, d: &mut Doc, pk: &mut Picker, r: TreeRef, n: usize, i: u
             return;
         }
         // A linked input expands into the inputs of the node feeding it.
-        l.panel(d, &format!("{rk}/open"), &format!("{}: {}", s.name, shown), false, &mut |l, d| node_rows(l, d, pk, r, from_node, key, depth + 1));
+        let title = format!("{}: {}", s.name, shown);
+        l.fields.push((title.clone(), Rect::new(l.x, l.y, l.w, 24)));
+        l.panel(d, &format!("{rk}/open"), &title, false, &mut |l, d| node_rows(l, d, pk, r, from_node, key, depth + 1));
         return;
     }
     if s.hide_value || !crate::editors::node::layout::has_value(s.ty) {
