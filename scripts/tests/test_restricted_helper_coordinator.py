@@ -55,7 +55,7 @@ impl Platform for Fake{
  fn kill(&mut self,child:Subject){self.kills.push(child);}fn retired(&mut self,child:Subject)->bool{self.retired&&child==self.child}
 }
 #[test]fn full_four_provider_exchange_copy_and_ready_are_causally_ordered(){
- let mut f=Fake::new();let mut c=Coordinator::new();let parent=f.parent;assert!(c.begin(parent,7,9,1,&mut f));f.run(&mut c);assert_eq!(f.active,1);assert_eq!(f.copy,1);assert_eq!(f.reserved,1);assert_eq!(f.refused,0);c.poll(&mut f);assert_eq!(f.started,1);
+ let mut f=Fake::new();let mut c=Coordinator::new();let parent=f.parent;assert!(c.begin(parent,7,9,1,&mut f));f.run(&mut c);assert_eq!(f.active,1);assert_eq!(f.copy,1);assert_eq!(f.reserved,1);assert_eq!(f.refused,0);assert!(c.copied_cookie(parent,9));assert!(!c.copied_cookie(s(42,100),9));assert!(!c.copied_cookie(parent,10));c.poll(&mut f);assert_eq!(f.started,1);
  assert!(c.begin(parent,7,9,1,&mut f));assert!(!c.begin(parent,8,9,1,&mut f));assert_eq!(f.reserved,1);
  assert!(!c.ready(s(43,55),[1,0x0707070707070707;2],&mut f));
  assert!(!c.ready(f.child,[2,0x0707070707070707,0x0707070707070707],&mut f));assert!(!c.ready(f.child,[1,0,0],&mut f));

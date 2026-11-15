@@ -540,6 +540,19 @@ pub fn receive(msg: &PdxMessage) -> bool {
             .cancel(actor, ticket, cookie, files_epoch, &mut Kernel);
         return true;
     }
+    // A conflicting/repeated request cannot manufacture Refused for a job
+    // whose private child still needs exact retirement. A retained pre-copy
+    // refusal also prevents retry admission before that notice is delivered.
+    if Turn::enter().core().copied_cookie(actor, cookie)
+        || unsafe {
+            (*core::ptr::addr_of!(OUTBOX))
+                .iter()
+                .flatten()
+                .any(|n| n.parent == actor && n.event.cookie() == cookie)
+        }
+    {
+        return true;
+    }
     let admissible = crate::restricted_pool::normal()
         && unsafe {
             !crate::PROGRAM_READING
