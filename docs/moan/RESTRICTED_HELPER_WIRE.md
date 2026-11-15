@@ -1,7 +1,10 @@
 # Restricted helper policy wire
 
-Proposed userspace protocol; no handlers or permissions below are active yet.
-The existing image pin and staging guard are separate prerequisites.
+Implemented userspace protocol and provider hooks, with immutable Files job
+snapshots, attested image staging, persistent Shell row reservations and dormant
+five-provider admission. Host controls and guest compilation qualify the current
+implementation; actual restricted-role QEMU qualification remains pending. The
+older offline GUI proof qualifies crash containment only.
 
 ## Existing authority and insertion points
 
@@ -28,7 +31,8 @@ fully retired), exact task and retirement; payload metadata does not.
 No provider executes a policy operation received from a parent or plugin. Files
 alone accepts a parent job proposal through an existing explicit file grant;
 Shell obtains the resulting immutable single-use ticket from Files. Shell derives
-the target from program_free_row, never a parent-supplied target. The first
+the target from its durable two-row restricted pool, never a parent-supplied
+target. Former helper rows remain excluded from the ordinary allocator. The first
 quarantine phase is admitted only for that catalogued, fully retired reservation.
 
 ## Bounded transcript
@@ -335,3 +339,39 @@ Kernel sender stamps identify the exact run's main-task subject. Existing live
 workers are normalized to that same subject; these checks are NOT per-thread
 isolation. Same-role workers may use the run's immutable job rights, and never
 obtain ambient or another run's rights by doing so.
+
+
+## Native lifecycle and evidence boundary
+
+The parent START and CANCEL words are `[ticket24 | cookie32<<24, FilesEpoch64,
+ShellEpoch64]`, with the upper eight bits of word0 zero. The live authenticated
+parent and both full held provider epochs are checked before admission. Queued
+old-epoch START cannot create a replacement job after Shell restart. Exact
+provider replies use the disjoint tagged namespace; unrelated normal Files,
+Display and Bell receipts continue through the existing decoders.
+
+A copied child is recorded before subsequent checks. Failure retains exact-child
+cleanup until actual retirement; an accepted force-end request is not retirement.
+The supervisor receives Started before Done even under reply backpressure. A
+never-activated uncertain dormant copy may remain quarantined and unavailable
+until reboot; there is no invented kernel reclaim or unrestricted fallback.
+
+The read-only STATUS request carries `[cookie32, knownStartedSubject64 | 0,
+currentShellEpoch64]`. Its authenticated reply reports the exact current catalog
+subject and epoch, plus Unknown, Live, Retired or Unavailable. Retired requires
+same-task REUSABLE or a different task produced by the existing rebirth guard
+(which requires the predecessor to have retired). The client must supply its own
+authenticated Started subject. An unknown/no-Started job never becomes retired
+because recovery completed or a timeout elapsed. These observations confer no
+launch, file, network or kill authority.
+
+Metadata-only native witnesses are `moan.role.reserved`, `moan.role.policy`
+(service/phase/subject/generation only, after all accepted reply credits),
+`moan.role.copied`, `moan.role.active`, and `moan.role.ready`. Trusted bootstrap
+emits `moanplug.bootstrap` only after full owned Display grant erasure and exact
+private-input hash validation, then `moanplug.native` after the authenticated
+Ready acknowledgment and before plugin entry. No nonce, challenge, input hash,
+PCM, path or credential is logged. Native plugin code can write its own public
+serial output; serial text after native entry is not an authentication mechanism.
+Actual QEMU proof must retain its source/build binding and classify processing,
+crash containment and restricted-role lifecycle evidence separately.

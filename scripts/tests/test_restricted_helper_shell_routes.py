@@ -19,6 +19,7 @@ class NativeShellRole(unittest.TestCase):
     text+='#[path="'+str(ROOT/path)+'"]mod '+name+';\n'
    pool=(ROOT/'servers/silk-shell/src/restricted_pool.rs').read_text().replace('#[cfg(target_os = "none")]','').replace('//!','//')
    text+='mod restricted_pool{'+pool+'}\n'
+   text+='#[macro_export]macro_rules! serial_record { ($($arg:tt)*) => {{let _=format_args!($($arg)*);}}; }\n'
    text+=r'''
 use core::sync::atomic::{AtomicBool,AtomicU32,Ordering};use restricted_helper::Subject;use restricted_coordinator::Platform;
 const SLOT_DISPLAY:u64=5;const SLOT_BELL:u64=12;mod web{pub const SHELL_SLOT:u64=262;}mod package{pub const GRANT_TOKEN:&[u8]=b"+pkg";}
