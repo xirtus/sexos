@@ -13,7 +13,7 @@ from quil_autosave_gate import boot
 ROOT=Path(__file__).resolve().parents[1]
 PROGRAMS=['fortune','mesh','gestalt','jot']
 # The serial tag a program says it is ready with, where it differs from its name.
-TAG={'mesh':'monitor','gestalt':'shapes'}
+TAG={'mesh':'monitor'}
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800')
  p.add_argument('--runs',type=int,default=3);p.add_argument('--max-ms',type=float,default=30000.0);a=p.parse_args()

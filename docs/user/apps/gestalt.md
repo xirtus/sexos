@@ -1,35 +1,55 @@
-# Gestalt (Vector Canvas & Graphics)
+# Gestalt (vector drawing)
 
-> **Identity Note**: **Gestalt** (`apps/shapes`, `/bin/gestalt`) is the SexOS 2D vector graphics and canvas rendering showcase, named under Andreas's design philosophy ("the whole from its shapes"). In Spindle, typing `gestalt` or `shapes` opens Gestalt.
+**Gestalt** (`apps/gestalt`, `/bin/gestalt`) is the SexOS vector editor, in the spirit of
+Illustrator and Inkscape. It runs VectorCraft's engine (storytold/vectorcraft): the document,
+the tools, Smart Guides, Pathfinder, undo, the renderer and the file formats are VectorCraft's
+own, under a canvas Gestalt draws itself. In Spindle, `shapes` still opens it.
 
-**Gestalt** demonstrates the high-performance 2D rasterization capabilities of the SexOS graphics subsystem (`sex-canvas` and tiny-skia). It showcases real-time subpixel anti-aliasing, rounded geometry, soft Gaussian drop shadows, linear/radial gradients, and parametric Bézier curves rendered directly on the Silk desktop.
+## Opening a drawing
 
----
+```text
+run gestalt                # opens welcome.svg, writing it first if it is missing
+run gestalt poster.svg     # opens poster.svg, or starts an 800 x 600 pt artboard saved there
+```
 
-## Launching Gestalt
+Gestalt opens SVG, PDF, Illustrator `.ai`, EPS and `.vectorcraft` files, and saves in the format
+the file name asks for (SVG unless it says otherwise).
 
-- **From Spindle**:
-  ```text
-  run gestalt
-  ```
-- **From Voyeur**: Press **`Super+D`**, type `gestalt` or `shapes`, and press **`Enter`**.
+## Tools
 
----
+The strip on the left shows the tools; click one or press its key.
 
-## Interactive Features
+| Key | Tool |
+|---|---|
+| V | Selection: click, drag to move, drag on the desk for a marquee |
+| A | Direct Selection: anchors and handles |
+| P | Pen |
+| N | Pencil |
+| M | Rectangle |
+| L | Ellipse |
+| \ | Line Segment |
+| T | Type (Esc ends the text) |
+| I | Eyedropper |
+| H | Hand (the middle button pans with any tool) |
+| Shift+M | Shape Builder |
 
-### 1. Vector Primitives & Geometry
-Gestalt renders smooth, resolution-independent vector shapes:
-- Rounded rectangles with continuous curvature.
-- Circles, ellipses, polygons, and complex stars.
-- Cubic and quadratic Bézier splines.
+## Keys
 
-### 2. High-Fidelity Shadows & Gradients
-- Demonstrates real-time box blur and Gaussian shadow algorithms used across the **Silk** window manager for window elevation and active frame focus highlights.
-- Multi-stop color gradients with high-precision dithered transitions.
+| Keys | Does |
+|---|---|
+| Arrows (Shift ×10) | Nudge the selection one point |
+| Delete, Backspace | Delete the selection |
+| Ctrl+Z, Ctrl+Shift+Z or Ctrl+Y | Undo, redo |
+| Ctrl+C, Ctrl+X, Ctrl+V, Ctrl+D | Copy, cut, paste, duplicate |
+| Ctrl+A | Select all |
+| Ctrl+G, Ctrl+Shift+G | Group, ungroup |
+| Ctrl+Shift+1 … 4 | Pathfinder: unite, minus front, intersect, exclude |
+| Ctrl+=, Ctrl+-, Ctrl+0, Ctrl+1 | Zoom in, out, fit the artboard, 100% |
+| Wheel | Scroll |
+| Ctrl+S | Save |
+| Ctrl+E, Ctrl+Shift+E | Export PNG, PDF beside the drawing |
 
-### 3. Mouse & Pointer Interaction
-- **Click & Drag**: Move shapes freely across the canvas to observe live anti-aliasing re-rasterization without screen tearing or frame stutter.
-- **Scroll Wheel**: Scale vector shapes dynamically.
-- **Space**: Toggle animation mode to demonstrate continuous 60 FPS procedural rotation and translation.
-- **Q / Esc**: Close Gestalt.
+## Not yet
+
+VectorCraft's panels (Layers, Appearance, Swatches, Properties), its menus and Image Trace come
+with its egui interface. Shift- and Alt-drags (constrain, copy) wait for pointer modifiers.

@@ -46,7 +46,7 @@ the SexOS style, borrowing Craft's layouts where they are good. It does not copy
 | Spreadeagle (sheets) | GridCraft | Excel, LibreOffice Calc | engine crates as dependencies; own grid UI | T1 + T2 + this PR | office thread (T) |
 | Assuit (words) | WordCraft | Word, Writer | engine crates as dependencies; own page view | T3 + pages + this PR | office thread (T) |
 | Batik (images) | PhotoCraft (plan) | Photoshop, GIMP, Krita, Pixelmator | native `batik-core`, PhotoCraft not used | layers, masks, brushes, selections, adjustments, PSD/ORA | Gemini |
-| Gestalt (vector) | VectorCraft (plan) | Illustrator, Inkscape | not started (`apps/shapes` is a 59-line demo) | none | office thread (T) |
+| Gestalt (vector) | VectorCraft | Illustrator, Inkscape | engine ported; native canvas, 11 tools, SVG/PDF/.ai/EPS open, SVG save, PNG/PDF export | host tests, `program_gestalt_gate.py` | office thread (T) |
 | Splicy (video) | FilmCraft (plan) | Premiere, Kdenlive, Shotcut, Scarlet | native `sex-splice` core and export | core and export; no editor window | Splicy thread |
 | Moan (DAW) | SoundCraft (plan) | REAPER, Ardour, Logic, Audacity, LMMS | native `moan-core` and `serenade-core` | engine slices and a probe; no window | ChatGPT |
 | Burlesque (slides) | none in V16 | Keynote, PowerPoint, Impress | native `burlesque-core` | decks, PPTX/ODP, presenter, rehearse | Gemini |
@@ -189,10 +189,11 @@ are its own top-five gaps. Its menus (628 items) copy Photoshop's.
 
 ## Gestalt and VectorCraft (Illustrator, Inkscape)
 
-Gestalt has not started: `apps/shapes` draws `sex-canvas`'s demo scene. VectorCraft is the most
-complete Craft app (breadth ~88%, tools 89/92), and its roadmap sees beta at ~170–270 agent-hours,
-so V4 should **port VectorCraft's engine crates**: `doc`, `geom`, `pathops`, `svg`, `render`,
-`text` and `pdf`. Write the canvas and tools natively.
+Gestalt now runs VectorCraft's whole engine (2026-11-15) instead of `apps/shapes`' demo scene:
+the canvas, tool strip, overlays and keys are native (`apps/gestalt/src/ui.rs`), and every edit
+is an engine command or tool event, so undo, Smart Guides, Pathfinder and the formats are
+VectorCraft's. The engine is 59 MB of code even size-optimised, so the program image limit
+went from 32 to 64 MiB (`sex_pdx::program_store::IMAGE_BYTES`, `sex_pkg::PROGRAM_MAX`).
 
 **Take:** Smart Guides, Shape Builder, the Appearance panel (live effects as a stack), Pathfinder,
 and Image Trace.
@@ -206,8 +207,11 @@ snapping) and `.ai` files from real users as its first two gaps.
 
 | Gap | Owner |
 |---|---|
-| The whole app (V4): SVG open, edit, save; paths and nodes; text; PNG/PDF export | office thread (T), from 2026-11-15 |
-| SVG as the native file format, Inkscape-style, with `.ai` and PDF import | V4 |
+| ~~The whole app (V4): SVG open, edit, save; paths and nodes; text; PNG/PDF export~~ | fixed 2026-11-15 (office thread) |
+| ~~SVG as the native file format, Inkscape-style, with `.ai` and PDF import~~ | fixed 2026-11-15 |
+| Panels: Layers, Appearance, Swatches, Properties with artboards | office thread (T), with egui on sex-app |
+| Shift- and Alt-drags (constrain, copy) | after the shell's pointer modifiers (PR #299) |
+| Image Trace, Shape Builder polish, `.ai` files from real users | office thread (T) |
 
 ## Splicy and FilmCraft (Premiere, Kdenlive, Shotcut, Scarlet)
 

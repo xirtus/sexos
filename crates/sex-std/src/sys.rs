@@ -169,6 +169,21 @@ pub unsafe extern "C" fn sys_read_entropy(buf: *mut u8, len: usize, _flags: u32)
     }
     len as isize
 }
+/// `getrandom`'s whole-word calls, over [`sys_read_entropy`] as Hermit's own are.
+#[no_mangle]
+pub unsafe extern "C" fn sys_secure_rand32(value: *mut u32) -> i32 {
+    let mut b = [0u8; 4];
+    unsafe { sys_read_entropy(b.as_mut_ptr(), 4, 0) };
+    unsafe { *value = u32::from_le_bytes(b) };
+    0
+}
+#[no_mangle]
+pub unsafe extern "C" fn sys_secure_rand64(value: *mut u64) -> i32 {
+    let mut b = [0u8; 8];
+    unsafe { sys_read_entropy(b.as_mut_ptr(), 8, 0) };
+    unsafe { *value = u64::from_le_bytes(b) };
+    0
+}
 fn rdrand(v: &mut u64) -> bool {
     let ok: u8;
     unsafe { core::arch::asm!("rdrand {v}", "setc {ok}", v = out(reg) *v, ok = out(reg_byte) ok, options(nomem, nostack)) };

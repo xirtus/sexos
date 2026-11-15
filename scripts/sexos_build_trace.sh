@@ -106,7 +106,7 @@ run_stage() {
         local seed=0
         while ! python3 scripts/key_bytes.py "$src"; do
           seed=$((seed + 1))
-          [[ $seed -le 24 ]] || { echo "[FAIL] $src holds a refused instruction at every layout tried"; exit 1; }
+          [[ $seed -le 64 ]] || { echo "[FAIL] $src holds a refused instruction at every layout tried"; exit 1; }
           echo "[layout] $src: linking again with SEX_LAYOUT_SEED=$seed"
           SEX_LAYOUT_SEED=$seed RUSTFLAGS="-C relocation-model=pic -C link-arg=-pie ${extra_rustflags:-}" cargo build --locked \
             -Z build-std="${stage_std:-core,compiler_builtins,alloc}" \

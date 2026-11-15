@@ -342,6 +342,8 @@ impl Ui {
     /// A click puts the caret where it lands; dragging with the button held selects;
     /// the wheel scrolls.
     fn pointer(&mut self, p: Pointer) -> bool {
+        // The style list is modal: the pages under it do not take clicks.
+        if self.picker.is_some() { return false; }
         let extend = match p.kind {
             Kind::Wheel { steps } => { self.scroll -= steps as i32 * 60; return true; }
             Kind::Down { button: 0 } => false,
