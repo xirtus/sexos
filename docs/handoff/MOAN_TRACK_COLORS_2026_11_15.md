@@ -45,3 +45,13 @@ fresh directory, pass it as `--label-oracle` to `scripts/moan_track_colors_gate.
 and use `scripts/moan_narrow_workspace_gate.py` with the explicitly derived
 640×480 image. Both gates require fresh output directories. Final project/export/
 microphone/Close regression is a separately recorded check of this new ELF.
+
+Root integration independently verified 106 hashes across the preserved wide and
+narrow artifacts, immutable app sources and independent label oracle. A fresh
+oracle build in `target/root-palette-oracle-review` reproduced the exact expected
+table SHA-256 `eb32f5a44d5d91cdf0acb1eb03d43facb2788b717de81e7e16a56f65cfb99af5`.
+All eight actual raw-PPM mixer label rectangles match every expected RGB byte.
+Review logs are `/tmp/sexos-root-palette-custody-review.log`,
+`/tmp/sexos-root-palette-oracle-review.log`, and
+`/tmp/sexos-root-palette-pixel-review.log`. This review does not transfer these
+app-install proofs to the newer combined provider/Shell image.
