@@ -12,9 +12,8 @@ use sex_pdx::session_restore as r;
 const PATH_MAX: usize = 96;
 const ARGS_MAX: usize = 256;
 const FILE_MAX: usize = 4096;
-/// Command lines typed while the session file is being read or saved, run once it is done.
-const QUEUE: usize = 4;
-const QUEUED_MAX: usize = 512;
+/// Programs the person ran before the session came back.
+const TYPED: usize = 4;
 
 #[derive(Clone, Copy)]
 struct Line { path: [u8; PATH_MAX], path_len: usize, args: [u8; ARGS_MAX], args_len: usize, network: bool, scene: u8 }
@@ -54,10 +53,8 @@ pub struct Session {
     /// A restored run asked for, and when; a refusal it may retry.
     waiting: Option<u64>,
     retries: u8,
-    queued: [([u8; QUEUED_MAX], usize); QUEUE],
-    queued_len: usize,
     /// Programs the person ran before the session came back: restore does not open them again.
-    typed: [Option<Line>; QUEUE],
+    typed: [Option<Line>; TYPED],
     /// The run being submitted is a restored one.
     restoring: bool,
 }
@@ -72,7 +69,7 @@ fn region() -> Option<&'static mut [u8]> {
 impl Session {
     pub const fn new() -> Self {
         Self { on: false, submitted: None, asked: [None; 4], runs: [None; r::MAX_RUNS], dirty: false, changed_at: 0, io: Io::Idle, seq: 0x7A0000, sent_at: 0, len: 0,
-            restore: Restore::NotYet, text: [0; FILE_MAX], text_len: 0, next: 0, waiting: None, retries: 0, queued: [([0; QUEUED_MAX], 0); QUEUE], queued_len: 0, typed: [None; QUEUE], restoring: false }
+            restore: Restore::NotYet, text: [0; FILE_MAX], text_len: 0, next: 0, waiting: None, retries: 0, typed: [None; TYPED], restoring: false }
     }
     /// The boot terminal keeps the session; a later one, or one started again late, does not restore.
     pub fn init(&mut self, me: u32) {
@@ -81,26 +78,8 @@ impl Session {
     }
     /// The Files region is in use for the session file.
     pub fn io_busy(&self) -> bool { self.io != Io::Idle }
-    /// Keeps a command line typed while the session file is busy; false if there is no room.
-    pub fn queue(&mut self, line: &[u8]) -> bool {
-        if self.queued_len == QUEUE || line.len() > QUEUED_MAX { return false; }
-        let q = &mut self.queued[self.queued_len];
-        q.0[..line.len()].copy_from_slice(line);
-        q.1 = line.len();
-        self.queued_len += 1;
-        sex_pdx::serial_record!("[spindle.session.queued] len={} waiting={}", line.len(), self.queued_len);
-        true
-    }
-    /// The oldest kept command line, once the session file is free.
-    pub fn take_queued(&mut self) -> Option<([u8; QUEUED_MAX], usize)> {
-        if self.io_busy() || self.queued_len == 0 { return None; }
-        let first = self.queued[0];
-        self.queued.copy_within(1..self.queued_len, 0);
-        self.queued_len -= 1;
-        Some(first)
-    }
     /// The main loop should keep turning rather than wait for a message.
-    pub fn wants_turn(&self) -> bool { self.queued_len > 0 || self.on && (self.io != Io::Idle || self.dirty || matches!(self.restore, Restore::NotYet | Restore::Reading | Restore::Running)) }
+    pub fn wants_turn(&self) -> bool { self.on && (self.io != Io::Idle || self.dirty || matches!(self.restore, Restore::NotYet | Restore::Reading | Restore::Running)) }
 
     /// A `run` whose ticket Files is about to prepare.
     pub fn submitted(&mut self, path: &[u8], args: &[u8], flags: u64) {
@@ -205,8 +184,7 @@ impl Session {
             if now.saturating_sub(at) < 20_000 { return false; }
             self.waiting = None;
         }
-        // What the person typed while the session file was read goes first.
-        if !idle || self.submitted.is_some() || self.queued_len > 0 { return false; }
+        if !idle || self.submitted.is_some() { return false; }
         // A refused run waits a little before it tries again.
         if self.retries > 0 && now.saturating_sub(self.sent_at) < 2_000 { return false; }
         while self.next < self.text_len {

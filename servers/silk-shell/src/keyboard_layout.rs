@@ -70,7 +70,7 @@ pub fn compose(key: Key, raw: u8, mut push: impl FnMut(Key)) -> Option<bool> {
         Outcome::Changed => Some(true),
         Outcome::Commit => {
             for c in ime.committed().chars() {
-                push(Key { code: sex_pdx::app_key::KEY_TEXT, shift: false, control: false, text: sex_pdx::app_key::Text::Char(c) });
+                push(Key { code: sex_pdx::app_key::KEY_TEXT, shift: false, control: false, alt: false, text: sex_pdx::app_key::Text::Char(c) });
             }
             Some(true)
         }
