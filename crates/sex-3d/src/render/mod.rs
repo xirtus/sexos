@@ -38,6 +38,7 @@ mod camera;
 mod denoise;
 mod film;
 mod integrator;
+mod physics;
 mod prepare;
 mod rng;
 mod sampling;

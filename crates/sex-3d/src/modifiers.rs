@@ -235,6 +235,9 @@ pub enum Modifier {
     /// displacement (see [`multires`]). `levels` is shown in the viewport,
     /// `sculpt_levels` is sculpted, `render_levels` is rendered.
     Multires { levels: u32, sculpt_levels: u32, render_levels: u32, optimal_display: bool, data: MultiresData },
+    /// Cloth, Soft Body, Collision, Particle System and Fluid: the
+    /// simulation's place in the stack (see [`crate::physics`]).
+    Physics(crate::physics::PhysicsModifier),
 }
 
 /// What a modifier may need from outside its own mesh.
@@ -274,7 +277,8 @@ impl Modifier {
     /// Every polyops/Blender type [`Modifier::with_defaults`] knows.
     pub const TYPE_NAMES: &'static str = "Mirror, Subdivision, Array, Solidify, Bevel, Triangulate, Weld, Displace, Smooth, Decimate, Remesh, Screw, \
 Wireframe, EdgeSplit, Build, Boolean, SimpleDeform, Cast, Wave, Shrinkwrap, LaplacianSmooth, CorrectiveSmooth, WeightedNormal, \
-Armature, Hook, Lattice, Warp, VertexWeightEdit, VertexWeightMix, VertexWeightProximity, Nodes, Multires";
+Armature, Hook, Lattice, Warp, VertexWeightEdit, VertexWeightMix, VertexWeightProximity, Nodes, Multires, \
+Cloth, Softbody, Collision, ParticleSystem, Fluid";
 
     /// The name Blender shows on the modifier's panel.
     pub fn name(&self) -> &'static str {
@@ -311,6 +315,7 @@ Armature, Hook, Lattice, Warp, VertexWeightEdit, VertexWeightMix, VertexWeightPr
             Modifier::VertexWeightProximity { .. } => "Vertex Weight Proximity",
             Modifier::Nodes { .. } => "Geometry Nodes",
             Modifier::Multires { .. } => "Multires",
+            Modifier::Physics(p) => p.name(),
         }
     }
 
@@ -438,13 +443,13 @@ Armature, Hook, Lattice, Warp, VertexWeightEdit, VertexWeightMix, VertexWeightPr
                 mask_constant: 1.0,
             },
             "multires" | "multiresolution" => Modifier::Multires { levels: 0, sculpt_levels: 0, render_levels: 0, optimal_display: true, data: MultiresData::default() },
-            _ => return None,
+            _ => return crate::physics::PhysicsModifier::with_defaults(&key).map(Modifier::Physics),
         })
     }
 
     /// True when the result changes with the frame.
     pub fn is_animated(&self) -> bool {
-        matches!(self, Modifier::Wave { .. } | Modifier::Build { .. } | Modifier::Nodes { .. })
+        matches!(self, Modifier::Wave { .. } | Modifier::Build { .. } | Modifier::Nodes { .. } | Modifier::Physics(_))
     }
 
     /// The other object this modifier reads, if any (Warp: the "from" object).
@@ -606,6 +611,7 @@ Armature, Hook, Lattice, Warp, VertexWeightEdit, VertexWeightMix, VertexWeightPr
             Modifier::Armature { .. } => rig::armature(self, m, cx, prev),
             Modifier::Hook { .. } => rig::hook(self, m, cx),
             Modifier::Lattice { .. } => rig::lattice(self, m, cx),
+            Modifier::Physics(p) => p.apply(self, m, cx),
             Modifier::Warp { .. } => rig::warp(self, m, cx),
             Modifier::VertexWeightEdit { .. } | Modifier::VertexWeightMix { .. } | Modifier::VertexWeightProximity { .. } => rig::weights(self, m, cx),
             Modifier::Nodes { group, inputs } => match cx.scene {

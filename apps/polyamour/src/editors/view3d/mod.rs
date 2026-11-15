@@ -20,6 +20,7 @@
 pub mod icons;
 pub mod menus;
 mod overlay;
+mod physview;
 pub mod proj;
 pub mod raster;
 pub mod render;
@@ -552,6 +553,7 @@ fn ensure_cache(s: &mut State, d: &mut Doc) {
         armature_names: d.scene.armature_names.clone(),
         lattices: d.scene.lattices.clone(),
         lattice_names: d.scene.lattice_names.clone(),
+        physics: d.scene.physics.clone(),
     };
     let empty = ViewportScene::new(&shell);
     d.scene.selected = saved;
@@ -975,6 +977,7 @@ fn signature(s: &State, d: &Doc) -> (u64, [u32; 8], u32, [u32; 3], u8) {
 fn draw_all(s: &mut State, d: &mut Doc, ui: &mut Ui, r: Rect, lay: &Layout) {
     let proj = Proj::new(&s.cam, r);
     overlay::scene_image(s, d, ui, r);
+    physview::draw(d, ui, &proj);
     rigview::draw_weights(d, ui, &proj);
     sculptview::draw_texture(d, ui, &proj);
     if s.camera_view {

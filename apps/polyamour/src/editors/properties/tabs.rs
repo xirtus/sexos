@@ -467,27 +467,11 @@ pub fn scene(l: &mut L, d: &mut Doc) {
             l.enumeration("Temperature", "temp_unit", "Kelvin", &[]);
         });
     });
-    let on = d.settings.gravity_on;
-    let mut hit = None;
-    l.panel_with(d, "scene.gravity", "", true, &mut |l, _, r| hit = check_header(l, "Gravity", on, r), &mut |l, d| {
-        let was = l.inactive;
-        l.inactive = !d.settings.gravity_on;
-        for (i, n) in ["Gravity X", "Y", "Z"].iter().enumerate() {
-            let mut v = d.settings.gravity[i];
-            if l.number(n, &format!("gravity{i}"), &mut v, NumOpts { step: 0.1, unit: "m/s²", ..NumOpts::default() }) {
-                l.commit(d, "Gravity");
-                d.settings.gravity[i] = v;
-            }
-        }
-        l.inactive = was;
-    });
-    if let Some(v) = hit {
-        l.commit(d, "Gravity");
-        d.settings.gravity_on = v;
-    }
-    for (k, t) in [("scene.simulation", "Simulation"), ("scene.audio", "Audio"), ("scene.keying_sets", "Keying Sets"), ("scene.rigid_body", "Rigid Body World")] {
+    super::physics::gravity_panel(l, d);
+    for (k, t) in [("scene.simulation", "Simulation"), ("scene.audio", "Audio"), ("scene.keying_sets", "Keying Sets")] {
         l.panel(d, k, t, false, &mut |l, _| l.note("Not available yet"));
     }
+    super::physics::world_panel(l, d);
 }
 
 pub fn world(l: &mut L, d: &mut Doc, c: &mut Ctx) {
@@ -617,32 +601,11 @@ pub fn collection(l: &mut L, d: &mut Doc) {
 }
 
 pub fn particles(l: &mut L, d: &mut Doc) {
-    l.space(4);
-    let (b, _) = l.list_box(&[], 0, 3);
-    if b != 0 {
-        d.report = "Particle systems are not available yet".into();
-    }
+    super::physics::particles(l, d);
 }
 
 pub fn physics(l: &mut L, d: &mut Doc) {
-    l.space(4);
-    l.panel(d, "physics.enable", "Enable Physics For:", true, &mut |l, d| {
-        let names = ["Force Field", "Collision", "Cloth", "Dynamic Paint", "Soft Body", "Fluid", "Rigid Body", "Rigid Body Constraint"];
-        for pair in names.chunks(2) {
-            if !l.band(ROW) {
-                continue;
-            }
-            let (x, w) = l.inner();
-            let half = (w - 4) / 2;
-            for (i, n) in pair.iter().enumerate() {
-                let r = Rect::new(x + i as i32 * (half + 4), l.y, half, ROW);
-                if l.ui.button(r, n) {
-                    d.report = format!("{n} physics is not available yet");
-                }
-            }
-            l.y += ROW + super::layout::GAP;
-        }
-    });
+    super::physics::physics(l, d);
 }
 
 pub fn constraints(l: &mut L, _d: &mut Doc) {

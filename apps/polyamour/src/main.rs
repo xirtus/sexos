@@ -6,6 +6,8 @@
 //! `--rig-demo` poses a skinned, keyed armature in the Animation workspace
 //! with the Graph Editor below; `--sculpt-demo` shows a sculpted sphere with
 //! a mask and face sets in the Sculpting workspace.
+//! `--physics-demo` steps falling boxes, a
+//! draped cloth, particles and smoke to frame 40 with the Physics tab open.
 use polyamour::input::Input;
 #[cfg(target_os = "hermit")]
 use polyamour::input::{Button, Key, Mods};
@@ -31,6 +33,7 @@ fn main() {
     let mut out = None;
     let mut rig_demo = false;
     let mut sculpt_demo = false;
+    let mut physics_demo = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -47,6 +50,10 @@ fn main() {
             "--sculpt-demo" => {
                 polyamour::sculpt::demo(&mut app.doc);
                 sculpt_demo = true;
+            }
+            "--physics-demo" => {
+                polyamour::physics::demo(&mut app.doc);
+                physics_demo = true;
             }
             "--rig-demo" => {
                 polyamour::rig::demo(&mut app.doc);
@@ -76,8 +83,17 @@ fn main() {
         }
         app.frame(Input::Tick);
     }
+    if physics_demo {
+        let ws = app.active_ws;
+        for area in app.workspaces[ws].areas_mut() {
+            if let polyamour::editors::Editor::Properties(s) = &mut area.editor {
+                s.tab = polyamour::editors::properties::Tab::Physics;
+            }
+        }
+        app.frame(Input::Tick);
+    }
     let Some(out) = out else {
-        eprintln!("usage: polyamour --screenshot out.png [--workspace Name] [--node-demo] [--rig-demo] [--sculpt-demo] [scene file]");
+        eprintln!("usage: polyamour --screenshot out.png [--workspace Name] [--node-demo] [--rig-demo] [--sculpt-demo] [--physics-demo] [scene file]");
         return;
     };
     let f = std::fs::File::create(&out).expect("create png");

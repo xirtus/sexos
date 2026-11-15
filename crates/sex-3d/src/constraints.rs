@@ -1587,6 +1587,22 @@ impl Scene {
     /// World matrix with parenting and object constraints, limited to
     /// `depth` levels of references.
     pub(crate) fn world_matrix_depth(&self, idx: usize, depth: u32) -> Mat4 {
+        let m = self.base_world_matrix_depth(idx, depth);
+        if self.objects[idx].physics.rigid_body.is_some() {
+            if let Some(r) = crate::physics::rigid::override_matrix(self, idx, &m) {
+                return r;
+            }
+        }
+        m
+    }
+
+    /// World matrix from parenting and constraints only, ignoring the rigid
+    /// body simulation (where a simulation starts from).
+    pub fn base_world_matrix(&self, idx: usize) -> Mat4 {
+        self.base_world_matrix_depth(idx, 0)
+    }
+
+    fn base_world_matrix_depth(&self, idx: usize, depth: u32) -> Mat4 {
         let o = &self.objects[idx];
         let parent = self.parent_matrix_depth(idx, depth);
         let local = o.transform.matrix();

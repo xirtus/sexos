@@ -21,6 +21,7 @@ pub mod input;
 pub mod nodetree;
 pub mod persist;
 pub mod python;
+pub mod physics;
 pub mod rig;
 pub mod sculpt;
 pub mod screen;

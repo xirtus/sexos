@@ -314,6 +314,10 @@ pub struct PreparedScene {
     pub(crate) materials: Vec<ShadeMaterial>,
     /// Homogeneous medium of each material (same indices as `materials`).
     pub(crate) material_volume: Vec<Option<VolumeCoeffs>>,
+    /// Smoke domains' grids, by material (their boxes are volume
+    /// boundaries with a zero homogeneous part).
+    pub(crate) material_grid: Vec<Option<Arc<super::physics::GridMedium>>>,
+    pub(crate) any_grid: bool,
     pub(crate) material_pass_index: Vec<u32>,
     pub(crate) images: Vec<Image>,
     pub(crate) lights: Vec<LightShape>,
@@ -418,8 +422,34 @@ impl PreparedScene {
         let mut geoms = Vec::new();
         let mut shades = Vec::new();
         let mut moving = Vec::new();
+        // Simulations: smoke domains become media, particles add geometry.
+        let hidden_emitters = super::physics::hidden_emitters(scene);
+        let domains = super::physics::domains(scene);
+        let mut material_grid: Vec<Option<Arc<super::physics::GridMedium>>> = vec![None; materials.len()];
+        let mut domain_mat = std::collections::HashMap::new();
+        for (oi, g) in domains {
+            domain_mat.insert(oi, materials.len() as u32);
+            materials.push(ShadeMaterial::from(&Material::default(), 0));
+            material_volume.push(Some(VolumeCoeffs::default()));
+            material_pass_index.push(0);
+            material_grid.push(Some(Arc::new(g)));
+        }
+        let any_grid = !domain_mat.is_empty();
+        let any_volume = any_volume || any_grid;
+        {
+            let (g, s) = super::physics::particle_triangles(scene, default_mat, &|src, m| object_triangles(scene, src, Some(m), default_mat));
+            geoms.extend(g);
+            shades.extend(s);
+        }
         for oi in 0..scene.objects.len() {
-            if !scene.is_visible(oi) || !matches!(scene.objects[oi].data, ObjectData::Mesh(_)) {
+            if !scene.is_visible(oi) || !matches!(scene.objects[oi].data, ObjectData::Mesh(_)) || hidden_emitters[oi] {
+                continue;
+            }
+            if let Some(&dm) = domain_mat.get(&oi) {
+                let (g, mut s) = object_triangles(scene, oi, Some(&scene.world_matrix(oi)), default_mat);
+                s.iter_mut().for_each(|x| x.material = dm);
+                geoms.extend(g);
+                shades.extend(s);
                 continue;
             }
             if scene.has_motion(oi) {
@@ -561,6 +591,8 @@ impl PreparedScene {
             shade,
             materials,
             material_volume,
+            material_grid,
+            any_grid,
             material_pass_index,
             images: scene.images.clone(),
             lights,
@@ -711,6 +743,89 @@ impl PreparedScene {
         m
     }
 
+    /// Smoke grids among the media in `stack`.
+    fn stack_grids<'a>(&'a self, stack: &MediumStack) -> impl Iterator<Item = &'a super::physics::GridMedium> + 'a {
+        let ids = stack.ids;
+        ids.into_iter().take(stack.n as usize).filter_map(move |id| self.material_grid.get(id as usize).and_then(|g| g.as_deref()))
+    }
+
+    /// The part of `[0, tmax]` along the ray where `stack`'s grids may have
+    /// smoke, and the majorant there; `None` without grids.
+    fn grid_span(&self, stack: &MediumStack, base: &VolumeCoeffs, o: Vec3, d: Vec3, tmax: f32) -> Option<(f32, f32)> {
+        if !self.any_grid {
+            return None;
+        }
+        let mut maj = base.sigma_t().max_elem();
+        let mut any = false;
+        let mut end = 0.0f32;
+        for g in self.stack_grids(stack) {
+            any = true;
+            maj += g.majorant();
+            if let Some((_, t1)) = g.clip(o, d, tmax) {
+                end = end.max(t1);
+            }
+        }
+        if !any {
+            return None;
+        }
+        // Past every grid only the homogeneous part remains.
+        let end = if base.sigma_t().max_elem() > 0.0 || base.emission != Vec3::ZERO { tmax } else { end.min(tmax) };
+        Some((maj, end))
+    }
+
+    /// Coefficients at `p` of the media in `stack` (homogeneous part `base`).
+    fn medium_at(&self, stack: &MediumStack, base: &VolumeCoeffs, p: Vec3) -> VolumeCoeffs {
+        let mut m = *base;
+        for g in self.stack_grids(stack) {
+            let c = g.at(p);
+            m = VolumeCoeffs { sigma_a: m.sigma_a + c.sigma_a, sigma_s: m.sigma_s + c.sigma_s, emission: m.emission + c.emission, anisotropy: m.anisotropy };
+        }
+        m
+    }
+
+    /// Track a path segment through the media in `stack` when it holds
+    /// smoke grids: (emission gathered, outcome, coefficients where it
+    /// scattered). `None` means the media are homogeneous.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn grid_track(&self, stack: &MediumStack, base: &VolumeCoeffs, o: Vec3, d: Vec3, tmax: f32, terminate: bool, rng: &mut super::rng::Rng) -> Option<(Vec3, super::volume::Track, VolumeCoeffs)> {
+        use super::volume::Track;
+        let (maj, end) = self.grid_span(stack, base, o, d, tmax)?;
+        let at = |t: f32| self.medium_at(stack, base, o + d * t);
+        if terminate || maj <= 0.0 {
+            let (tr, le) = self.march_grid(stack, base, o, d, end);
+            return Some((le, Track::Pass(tr), *base));
+        }
+        let (track, le) = super::volume::delta_track_fn(maj, end, rng, &mut |t| at(t));
+        let m = match track {
+            Track::Scatter(t, _) => at(t),
+            _ => *base,
+        };
+        Some((le, track, m))
+    }
+
+    /// Transmittance and emission through grids by ray marching (shadow
+    /// rays; paths past their last bounce).
+    fn march_grid(&self, stack: &MediumStack, base: &VolumeCoeffs, o: Vec3, d: Vec3, end: f32) -> (Vec3, Vec3) {
+        let dx = self.stack_grids(stack).map(|g| g.grid.dx).fold(f32::MAX, f32::min);
+        if !end.is_finite() || end <= 0.0 {
+            return (base.transmittance(end.max(0.0)), base.emission_integral(end.max(0.0)));
+        }
+        let steps = ((end / (dx * 0.5).max(1e-4)).ceil() as usize).clamp(4, 512);
+        super::volume::march(end, steps, &mut |t| self.medium_at(stack, base, o + d * t))
+    }
+
+    /// Transmittance of `[0, t]` along a ray through the media in `stack`.
+    fn segment_transmittance(&self, stack: &MediumStack, m: &VolumeCoeffs, o: Vec3, d: Vec3, t: f32) -> Vec3 {
+        match self.grid_span(stack, m, o, d, t) {
+            Some((_, end)) => {
+                let (tr, _) = self.march_grid(stack, m, o, d, end);
+                // Past the grids, the homogeneous part alone.
+                tr.mul_elem(m.transmittance((t - end).max(0.0)))
+            }
+            None => m.transmittance(t),
+        }
+    }
+
     /// Transmittance of a shadow ray: zero when an opaque surface blocks it,
     /// else the product of medium transmittances through volume boundaries
     /// and objects hidden from shadows (at most `max_transparent` crossings).
@@ -728,7 +843,7 @@ impl PreparedScene {
             let hit = self.nearest_tri(origin, d, left, time);
             let seg = hit.map_or(left, |h| h.t);
             if let Some(m) = self.medium(&stack) {
-                tr = tr.mul_elem(m.transmittance(seg));
+                tr = tr.mul_elem(self.segment_transmittance(&stack, &m, origin, d, seg));
             }
             let Some(h) = hit else { return tr };
             let sh = &self.shade[h.prim as usize];

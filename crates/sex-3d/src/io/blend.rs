@@ -184,6 +184,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::Read;
 mod geonodes;
 mod nodes;
+mod physics;
 
 mod rig;
 
@@ -976,6 +977,7 @@ impl<'f, 'a> Importer<'f, 'a> {
         if let Some(sc) = sc {
             self.collections(&sc, &by_ptr);
             self.world(&sc);
+            physics::scene(f, &sc, &mut self.scene.physics);
         }
         self.resolve_object_refs(&by_ptr);
         Ok((self.scene, self.actions))
@@ -1133,8 +1135,13 @@ impl<'f, 'a> Importer<'f, 'a> {
             o.pass_index = i.max(0.0) as u32;
         }
         o.materials = self.slots(ob, mesh_view.as_ref());
+        o.physics = physics::object(f, ob);
         if mesh_view.is_some() {
-            o.modifiers = modifiers(f, ob);
+            let groups = match o.data {
+                ObjectData::Mesh(mi) => self.scene.meshes[mi].vertex_groups.clone(),
+                _ => Vec::new(),
+            };
+            o.modifiers = modifiers(f, ob, &groups);
             self.modifier_groups(ob);
         }
         o.constraints = rig::constraints(f, ob.sub("constraints"));
@@ -1364,7 +1371,7 @@ fn fcurve(f: &BlendFile<'_>, fc: &View<'_, '_>) -> Option<BlendFCurve> {
 /// `*ModifierData` structs, each starting with a `ModifierData modifier`
 /// header). Stack entries switched off in the viewport (`mode` bit 0) and
 /// types Polyamour lacks are skipped.
-fn modifiers(f: &BlendFile<'_>, ob: &View<'_, '_>) -> Vec<Modifier> {
+fn modifiers(f: &BlendFile<'_>, ob: &View<'_, '_>, groups: &[String]) -> Vec<Modifier> {
     let mut out = Vec::new();
     let mut seen = HashSet::new();
     let mut p = ob.sub("modifiers").map_or(0, |l| l.ptr("first"));
@@ -1375,7 +1382,7 @@ fn modifiers(f: &BlendFile<'_>, ob: &View<'_, '_>) -> Vec<Modifier> {
         if md.num("mode").is_some_and(|m| (m as i64) & 1 == 0) {
             continue;
         }
-        if let Some(m) = modifier(f, &v) {
+        if let Some(m) = physics::modifier(f, ob, &v, groups).or_else(|| modifier(f, &v)) {
             out.push(m);
         }
     }
