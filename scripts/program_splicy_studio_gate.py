@@ -1,19 +1,42 @@
 #!/usr/bin/env python3
 """Splicy Studio on SexOS: FilmCraft's editor in a SexOS window, painted by sex-egui.
 
-`run splicy-studio --demo` opens FilmCraft's demo project and shows FilmCraft's own
-interface: menus, Program monitor with the picture, project bin, timeline with clips.
+`run splicy-studio @talk.webm @talk.words` imports the clip Splicy's own gate uses (VP9 and
+Opus, decoded by FilmCraft's pure-Rust decoders), makes it a sequence, and turns
+talk.words into the clip's FilmCraft transcript (11 words), which the Text panel's
+Transcript tab edits. FilmCraft's own interface shows it: menus, Program monitor with
+the picture, project bin, timeline with filmstrip and waveform.
 The window is zoomed and photographed (splicy-studio.png); the picture must hold
 FilmCraft's dark panels, its blue accent, and a lit Program monitor. Then a click on the
 Program monitor's play button must keep frames coming. Build it first:
 scripts/build_splicy_studio.sh."""
-import argparse,http.server,os,re,shutil,sys,threading,time
+import argparse,http.server,os,re,shutil,subprocess,sys,tempfile,threading,time
 from collections import Counter
 from pathlib import Path
 from PIL import Image
 ROOT=Path(__file__).resolve().parents[1]
 STUDIO=os.environ.get('SEXOS_SPLICY_STUDIO',str(ROOT/'apps/splicy-studio/target/x86_64-sex-std/release/splicy-studio'))
-FILES={'/splicy-studio':Path(STUDIO).read_bytes()}
+# The clip and transcript program_splicy_gate.py uses.
+WORDS="""# START_MS END_MS WORD
+0 400 Hello
+500 900 there
+1000 1600 friends.
+2000 2300 Cut
+2400 2700 this
+2800 3300 sentence
+3400 3800 out.
+4000 4400 Keep
+4500 4800 the
+4900 5400 ending
+5500 5900 here.
+"""
+def make_clip():
+ d=Path(tempfile.mkdtemp());out=d/'talk.webm'
+ subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i','testsrc2=size=320x180:rate=30:duration=6',
+  '-f','lavfi','-i','sine=frequency=440:sample_rate=48000:duration=6',
+  '-af',"volume='0.1+0.9*mod(t,1)':eval=frame",'-c:v','libvpx-vp9','-b:v','300k','-c:a','libopus','-ac','2',str(out)],check=True)
+ return out.read_bytes()
+FILES={'/splicy-studio':Path(STUDIO).read_bytes(),'/talk.webm':make_clip(),'/talk.words':WORDS.encode()}
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):
   body=FILES.get(self.path)
@@ -44,9 +67,13 @@ def main():
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
   m=expect(f'fetch http://10.0.2.2:{PORT}/splicy-studio /bin/splicy-studio',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',900);assert m[1].startswith('Saved'),m[1]
+  for name in('talk.webm','talk.words'):
+   m=expect(f'fetch http://10.0.2.2:{PORT}/{name} {name}',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',300);assert m[1].startswith('Saved'),m[1]
   s=len(t())
-  expect('run splicy-studio --demo',r'\[splicy.studio.ready\]',600)
-  g['wait'](r'\[splicy.studio.demo\] opened',s,60)
+  expect('run splicy-studio @talk.webm @talk.words',r'\[splicy.studio.ready\]',900)
+  imp=g['wait'](r'\[splicy.studio.(imported\] items=1 errors=\[\]|import.failed\][^\n]*)',s,60);assert imp[1].startswith('imported'),imp[0]
+  g['wait'](r'\[splicy.studio.sequence\] made',s,60)
+  g['wait'](r'\[splicy.studio.transcript\] words=11',s,60)
   launch=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60)
   first=g['wait'](r'\[egui.frame\] n=1 w=(\d+) h=(\d+) meshes=(\d+) triangles=(\d+) pixels=(\d+) ms=(\d+)',s,600)
   (x,y,w,h),before=maximize(g,launch[3])

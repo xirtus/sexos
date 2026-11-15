@@ -19,6 +19,7 @@ path = "src/main.rs"
 [dependencies]
 # FilmCraft (storytold/filmcraft, MIT OR Apache-2.0), unchanged.
 filmcraft-engine = { git = "https://github.com/storytold/filmcraft", rev = "e63e1d790c8e59f208f8ff31de6f6847a1bb206b" }
+filmcraft-time = { git = "https://github.com/storytold/filmcraft", rev = "e63e1d790c8e59f208f8ff31de6f6847a1bb206b" }
 filmcraft-ui-egui = { git = "https://github.com/storytold/filmcraft", rev = "e63e1d790c8e59f208f8ff31de6f6847a1bb206b" }
 egui = "0.37"
 serde_json = "1"

@@ -10,17 +10,69 @@ extern crate sex_std;
 use eframe::App;
 use filmcraft_engine::Session;
 use filmcraft_ui_egui::FilmcraftApp;
+use serde_json::{Value, json};
 
-/// FilmCraft's session; with `--demo` among the arguments, holding FilmCraft's demo project.
+/// FilmCraft's session. With `--demo` it holds FilmCraft's demo project. Otherwise each
+/// media file named (`run splicy-studio @talk.webm @talk.words`) is imported, the first
+/// gets a sequence of its own, and a `.words` transcript (`START_MS END_MS WORD` lines,
+/// Splicy's format) becomes that clip's FilmCraft transcript, which the Text panel's
+/// Transcript tab edits: select words, then extract (ripple delete) or lift.
 fn session() -> Session {
     let mut session = Session::default();
-    if std::env::args().any(|a| a == "--demo") {
-        match session.execute("file.openDemoProject", serde_json::json!({})) {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|a| a == "--demo") {
+        match session.execute("file.openDemoProject", json!({})) {
             Ok(_) => say("[splicy.studio.demo] opened"),
             Err(e) => say(&format!("[splicy.studio.demo.failed] {e}")),
         }
+        return session;
+    }
+    let media: Vec<&String> = args.iter().filter(|a| !a.starts_with("--") && !a.ends_with(".words") && !a.ends_with(".png") && a.parse::<usize>().is_err()).collect();
+    if media.is_empty() {
+        return session;
+    }
+    let first = match session.execute("file.import", json!({ "paths": media })) {
+        Ok(r) => {
+            let items: Vec<u64> = r["items"].as_array().map(|a| a.iter().filter_map(Value::as_u64).collect()).unwrap_or_default();
+            say(&format!("[splicy.studio.imported] items={} errors={}", items.len(), r["errors"]));
+            items.first().copied()
+        }
+        Err(e) => {
+            say(&format!("[splicy.studio.import.failed] {e}"));
+            None
+        }
+    };
+    let Some(item) = first else { return session };
+    match session.execute("file.newSequenceFromClip", json!({ "items": [item] })) {
+        Ok(_) => say("[splicy.studio.sequence] made"),
+        Err(e) => say(&format!("[splicy.studio.sequence.failed] {e}")),
+    }
+    if let Some(words) = args.iter().find(|a| a.ends_with(".words")) {
+        match std::fs::read_to_string(words).map(|text| transcript(&text)) {
+            Ok(t) => match session.execute("transcript.set", json!({ "item": item, "transcript": t })) {
+                Ok(r) => say(&format!("[splicy.studio.transcript] words={}", r["words"])),
+                Err(e) => say(&format!("[splicy.studio.transcript.failed] {e}")),
+            },
+            Err(e) => say(&format!("[splicy.studio.transcript.failed] {words}: {e}")),
+        }
     }
     session
+}
+
+/// Splicy's `.words` lines as a FilmCraft transcript (times in FilmCraft's ticks).
+fn transcript(text: &str) -> Value {
+    let tick = |ms: i64| ms * (filmcraft_time::TICKS_PER_SECOND as i64 / 1000);
+    let words: Vec<Value> = text
+        .lines()
+        .filter(|l| !l.trim_start().starts_with('#'))
+        .filter_map(|l| {
+            let mut f = l.split_whitespace();
+            let (start, end) = (f.next()?.parse::<i64>().ok()?, f.next()?.parse::<i64>().ok()?);
+            let word = f.collect::<Vec<_>>().join(" ");
+            (!word.is_empty() && end > start).then(|| json!({ "text": word, "start": tick(start), "end": tick(end) }))
+        })
+        .collect();
+    json!({ "language": "en", "source": "imported", "words": words })
 }
 
 fn say(line: &str) {
@@ -48,7 +100,7 @@ fn main() {
 
 #[cfg(not(target_os = "hermit"))]
 fn main() {
-    let args: Vec<String> = std::env::args().skip(1).filter(|a| a != "--demo").collect();
+    let args: Vec<String> = std::env::args().skip(1).filter(|a| !a.starts_with("--") && (a.ends_with(".png") || a.parse::<usize>().is_ok())).collect();
     let out = args.first().cloned().unwrap_or_else(|| "splicy-studio.png".into());
     let width: usize = args.get(1).and_then(|a| a.parse().ok()).unwrap_or(1280);
     let height: usize = args.get(2).and_then(|a| a.parse().ok()).unwrap_or(800);

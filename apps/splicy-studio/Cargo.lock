@@ -1987,6 +1987,7 @@ dependencies = [
  "eframe",
  "egui",
  "filmcraft-engine",
+ "filmcraft-time",
  "filmcraft-ui-egui",
  "png",
  "serde_json",

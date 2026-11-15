@@ -758,7 +758,7 @@ jobs:
       run: |
         bash scripts/build_splicy_probe.sh
         python3 scripts/program_splicy_probe_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/splicy-source.img" --out "$RUNNER_TEMP/recording/splicy-probe"
-    - name: Splicy Studio shows FilmCraft's editor with its demo project in a SexOS window
+    - name: Splicy Studio opens a clip and its transcript in FilmCraft's editor in a SexOS window
       run: |
         bash scripts/build_splicy_studio.sh
         python3 scripts/program_splicy_studio_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/splicy-source.img" --out "$RUNNER_TEMP/recording/splicy-studio"
