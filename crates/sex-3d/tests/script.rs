@@ -685,3 +685,128 @@ fn python_reads_the_scene_snapshot() {
     assert_eq!(s.meshes[m].positions[0], Vec3::splat(-2.0));
     assert_eq!(s.materials[0].roughness, 0.9);
 }
+
+// --- Shader node trees ------------------------------------------------------------
+
+const NODES: &str = "polyops 1\n\
+     material_new Wood as=$m\n\
+     add_empty Probe\n\
+     node_tree group Half\n\
+     node_interface group Half input In float default=1 min=0 max=10\n\
+     node_interface group Half output Out float\n\
+     node_add group Half NodeGroupInput name=In location=-200,0\n\
+     node_add group Half ShaderNodeMath name=Mul\n\
+     node_set group Half Mul prop:operation MULTIPLY\n\
+     node_set group Half Mul in:Value_001 0.5\n\
+     node_add group Half NodeGroupOutput name=Out location=200,0\n\
+     node_link group Half In Socket_0 Mul Value\n\
+     node_link group Half Mul Value Out Socket_1\n\
+     node_tree material $m\n\
+     node_add material $m ShaderNodeOutputMaterial location=300,0\n\
+     node_add material $m ShaderNodeBsdfPrincipled label=Shiny width=240 select=1\n\
+     node_set material $m \"Principled BSDF\" \"in:Base Color\" 0.8,0.2,0.1\n\
+     node_set material $m \"Principled BSDF\" hide:in:Weight 1\n\
+     node_add material $m ShaderNodeValToRGB name=Ramp\n\
+     node_set material $m Ramp prop:color_ramp CONSTANT;RGB;0,0,0,0,1;0.5,1,0.5,0,1\n\
+     node_add material $m ShaderNodeRGBCurve name=Curves\n\
+     node_set material $m Curves prop:mapping 0,0,1,0.5;0,0,1,1;0,0,1,1;0,0,1,1\n\
+     node_add material $m ShaderNodeTexCoord name=Coords\n\
+     node_set material $m Coords prop:object Probe\n\
+     node_add material $m ShaderNodeGroup name=G\n\
+     node_set material $m G prop:node_tree Half\n\
+     node_set material $m G in:Socket_0 0.25\n\
+     node_add material $m NodeFrame name=Box label=Textures color=0.1,0.2,0.3\n\
+     node_set material $m Ramp parent Box\n\
+     node_add material $m ShaderNodeMix name=Mix mute=1 hide=1\n\
+     node_set material $m Mix prop:blend_type MULTIPLY\n\
+     node_add material $m ShaderNodeFromTheFuture name=Future unknown=1\n\
+     node_socket material $m Future in Thing float name=\"The Thing\"\n\
+     node_socket material $m Future out Out color\n\
+     node_set material $m Future in:Thing 2\n\
+     node_set material $m Future prop:flavour SOUR type=enum\n\
+     node_link material $m Future Out Mix A_Color\n\
+     node_link material $m Ramp Color \"Principled BSDF\" \"Base Color\"\n\
+     node_link material $m G Socket_1 \"Principled BSDF\" Roughness muted=1\n\
+     node_link material $m \"Principled BSDF\" BSDF \"Material Output\" Surface\n\
+     node_tree material $m active=Ramp\n\
+     node_tree world name=Sky\n\
+     node_add world ShaderNodeBackground\n\
+     node_set world Background in:Strength 3\n\
+     node_add world ShaderNodeOutputWorld\n\
+     node_link world Background Background \"World Output\" Surface\n";
+
+#[test]
+fn node_trees_from_commands() {
+    use sex_3d::nodes::{Prop, Value};
+    let mut s = Scene::startup();
+    ok(&mut s, NODES);
+    let m = s.materials.iter().find(|m| m.name == "Wood").unwrap();
+    let t = m.node_tree.as_ref().unwrap();
+    assert_eq!(t.nodes.len(), 9);
+    let n = |name: &str| &t.nodes[t.find(name).unwrap_or_else(|| panic!("no {name}"))];
+    let p = n("Principled BSDF");
+    assert_eq!((p.label.as_str(), p.width, p.select), ("Shiny", 240.0, true));
+    assert_eq!(p.inputs[p.input("Base Color").unwrap()].value, Value::Color([0.8, 0.2, 0.1, 1.0]));
+    assert!(p.inputs[p.input("Weight").unwrap()].hide);
+    let Some(Prop::Ramp(r)) = n("Ramp").prop("color_ramp") else { panic!() };
+    assert_eq!((r.interpolation.as_str(), r.elements.len(), r.elements[1]), ("CONSTANT", 2, (0.5, [1.0, 0.5, 0.0, 1.0])));
+    let Some(Prop::Curve(c)) = n("Curves").prop("mapping") else { panic!() };
+    assert_eq!(c.curves[0], vec![[0.0, 0.0], [1.0, 0.5]]);
+    assert_eq!(n("Coords").prop("object"), Some(&Prop::Id(s.find_object("Probe"))));
+    let g = n("G");
+    assert_eq!(g.prop("node_tree"), Some(&Prop::Id(Some(0))));
+    assert_eq!((g.inputs.len(), g.outputs.len(), g.inputs[0].value.clone()), (1, 1, Value::Float(0.25)));
+    assert_eq!(n("Ramp").parent, t.find("Box"));
+    assert_eq!(n("Box").color, Some([0.1, 0.2, 0.3]));
+    assert!(n("Mix").mute && n("Mix").hide);
+    let f = n("Future");
+    assert_eq!((f.inputs[0].name.as_str(), f.inputs[0].value.clone()), ("The Thing", Value::Float(2.0)));
+    assert_eq!(f.prop("flavour"), Some(&Prop::Enum("SOUR".into())));
+    assert_eq!(t.links.len(), 4);
+    assert!(t.links.iter().any(|l| l.muted && l.to_node == t.find("Principled BSDF").unwrap()));
+    assert_eq!(t.active, t.find("Ramp"));
+    let half = &s.node_groups[0];
+    assert_eq!((half.name.as_str(), half.inputs[0].default.clone(), half.inputs[0].max), ("Half", Value::Float(1.0), 10.0));
+    assert_eq!(half.links.len(), 2);
+    let w = s.world.node_tree.as_ref().unwrap();
+    assert_eq!((w.name.as_str(), w.nodes.len(), w.links.len()), ("Sky", 2, 1));
+
+    // Written back and run again: the same trees, and the same text.
+    let text = scene_to_polyops(&s);
+    let mut back = Scene::new();
+    ok(&mut back, &text);
+    assert_eq!(back, s, "--- text ---\n{text}");
+    assert_eq!(scene_to_polyops(&back), text);
+
+    // Interface changes reach the Group nodes that use the group.
+    ok(&mut s, "polyops 1\nnode_interface group Half input Gain float default=2\n");
+    let t = s.materials.iter().find(|m| m.name == "Wood").unwrap().node_tree.as_ref().unwrap();
+    let g = &t.nodes[t.find("G").unwrap()];
+    assert_eq!(g.inputs.len(), 2);
+    assert_eq!(g.inputs[0].value, Value::Float(0.25), "kept by name");
+    assert_eq!(g.inputs[1].value, Value::Float(2.0));
+}
+
+#[test]
+fn node_command_errors() {
+    let base = "polyops 1\nnode_tree material Material\n";
+    for (src, want) in [
+        ("node_add material Material ShaderNodeNope", "unknown node type"),
+        ("node_add material Nope ShaderNodeMath", "no material"),
+        ("node_add world ShaderNodeMath", "no node tree"),
+        ("node_add group Nope ShaderNodeMath", "no node group"),
+        ("node_add material Material ShaderNodeMath\nnode_set material Material Math in:Nope 1", "no input socket"),
+        ("node_add material Material ShaderNodeMath\nnode_set material Material Math in:Value red", "not a finite number"),
+        ("node_add material Material ShaderNodeMath\nnode_set material Material Math prop:nope 1", "no property"),
+        ("node_add material Material ShaderNodeMath\nnode_set material Material Math wobble 1", "cannot set"),
+        ("node_add material Material ShaderNodeMath\nnode_link material Material Math Value Math Value", "itself"),
+        ("node_add material Material ShaderNodeMath\nnode_add material Material ShaderNodeMath\nnode_link material Material Math Value Math.001 Value\nnode_link material Material Math.001 Value Math Value", "cycle"),
+        ("node_add material Material NodeFrame\nnode_add material Material NodeFrame\nnode_set material Material Frame parent Frame.001\nnode_set material Material Frame.001 parent Frame", "cycle"),
+        ("node_interface material Material input X float", "group"),
+        ("node_set material Material Math prop:operation ADD", "no node named"),
+        ("node_tree object Cube", "material NAME"),
+    ] {
+        let e = err(&format!("{base}{src}\n"));
+        assert!(e.message.contains(want), "{src}: {e}");
+    }
+}

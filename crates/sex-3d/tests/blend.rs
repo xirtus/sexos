@@ -639,3 +639,27 @@ fn corrupted_node_files_never_panic() {
         }
     }
 }
+
+/// Imported trees survive the polyops text round trip (images are not
+/// written, so the Image Texture's image comes back empty).
+#[test]
+fn imported_node_trees_round_trip_through_polyops() {
+    use sex_3d::nodes::Prop;
+    for c in [ALL[0], ALL[5], ALL[10]] {
+        let mut s = import_blend(&blendgen::nodes_file(c)).unwrap();
+        let text = sex_3d::script::scene_to_polyops(&s);
+        let mut back = Scene::new();
+        sex_3d::script::run(&mut back, &text).unwrap_or_else(|e| panic!("{c:?}: {e}\n{text}"));
+        for m in &mut s.materials {
+            for n in m.node_tree.iter_mut().flat_map(|t| t.nodes.iter_mut()) {
+                if n.idname == "ShaderNodeTexImage" {
+                    n.set_prop("image", Prop::Id(None));
+                }
+            }
+        }
+        let nodes = |s: &Scene| s.materials.iter().find(|m| m.name == "Nodes").and_then(|m| m.node_tree.clone());
+        assert_eq!(nodes(&back), nodes(&s), "{c:?}");
+        assert_eq!(back.node_groups, s.node_groups, "{c:?}");
+        assert_eq!(back.world.node_tree, s.world.node_tree, "{c:?}");
+    }
+}
