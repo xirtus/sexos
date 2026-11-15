@@ -12,6 +12,7 @@ mod program_store;
 mod restricted_image;
 mod restricted_runtime;
 mod restricted_job;
+mod restricted_storage;
 mod fs_service;
 mod config_store;
 mod password_store;
