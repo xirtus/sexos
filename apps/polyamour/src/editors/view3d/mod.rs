@@ -712,6 +712,22 @@ fn run_view_op(s: &mut State, d: &mut Doc, ui: &mut Ui, id: &str, arg: &str, r: 
                 mark_undo_recorded(s);
             }
         }
+        "mesh.extrude_region_shrink_fatten" => extrude_move(s, d, m, r),
+        "mesh.extrude_manifold" => {
+            if d.mode == Mode::Edit {
+                if let Some(n) = crate::edit_ops::extrude_manifold(d) {
+                    move_after_op(s, d, m, r, Some(n));
+                }
+            }
+        }
+        "mesh.rip_move" | "mesh.rip_move_fill" | "mesh.rip_edge_move" => {
+            if d.mode == Mode::Edit {
+                let ok = if id == "mesh.rip_edge_move" { crate::edit_ops::rip_edge(d) } else { crate::edit_ops::rip(d, id == "mesh.rip_move_fill") };
+                if ok {
+                    move_after_op(s, d, m, r, None);
+                }
+            }
+        }
         "mesh.inset" => start_mesh_tool(s, d, MeshToolKind::Inset, m, r),
         "mesh.bevel" => start_mesh_tool(s, d, MeshToolKind::Bevel, m, r),
         "mesh.loopcut_slide" => {
@@ -760,6 +776,20 @@ fn extrude_move(s: &mut State, d: &mut Doc, m: (f32, f32), r: Rect) {
         return;
     }
     let Some(dir) = edit::extrude(d) else { return };
+    let p = Proj::new(&s.cam, r);
+    if let Some(mut t) = transform::Modal::start(d, TMode::Translate, &p, m) {
+        if let Some(n) = dir {
+            t.constraint = Constraint::Dir(n);
+        }
+        t.undo_recorded = true;
+        t.apply(d, &p);
+        s.modal = Modal::Transform(Box::new(t));
+    }
+}
+
+/// Start a move of what an edit operator just made (it recorded its own
+/// undo step), along `dir` when given.
+fn move_after_op(s: &mut State, d: &mut Doc, m: (f32, f32), r: Rect, dir: Option<Vec3>) {
     let p = Proj::new(&s.cam, r);
     if let Some(mut t) = transform::Modal::start(d, TMode::Translate, &p, m) {
         if let Some(n) = dir {
