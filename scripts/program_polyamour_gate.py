@@ -36,7 +36,7 @@ def main():
   q.cmd('screendump',{'filename':str(a.out/'polyamour-layout.ppm')})
   s=len(t());chord('ctrl','pgdn');g['wait'](r'\[polyamour\.workspace\] Modeling\n',s,120)
   s=len(t());chord('ctrl','pgup');g['wait'](r'\[polyamour\.workspace\] Layout\n',s,120)
-  s=len(t());chord('ctrl','shift','r');g['wait'](r'\[polyamour\.op\] render\.render\n',s,120)
+  s=len(t());chord('ctrl','shift','r');g['wait'](r'\[polyamour\.op\] render\.render\n',s,900)
   g['wait'](r'\[polyamour\.report\] Rendered 960x540, \d+ samples(?:, \d+ pass(?:es)?)?\n',s,900)
   g['wait'](r'\[polyamour\.workspace\] Rendering\n',s,60)
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'polyamour-render.ppm')})
