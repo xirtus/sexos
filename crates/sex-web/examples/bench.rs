@@ -17,11 +17,10 @@ use std::time::Instant;
 
 static SKIPPED_NS: AtomicU64 = AtomicU64::new(0);
 
-/// Real elapsed time plus the waits that were skipped.
-fn clock() -> u64 {
-    static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
-    START.get_or_init(Instant::now).elapsed().as_nanos() as u64 + SKIPPED_NS.load(Ordering::Relaxed)
-}
+/// Page time, independent of how fast this machine or engine is: each reading moves
+/// it on by a microsecond (so loops that wait on the clock end), and the main loop
+/// jumps it to the next timer. Host durations are measured with `Instant` instead.
+fn clock() -> u64 { SKIPPED_NS.fetch_add(1_000, Ordering::Relaxed) + 1_000 }
 
 /// ROOT/HOST/PATH, `index.html` for a path ending in `/`, and the query (when there
 /// is one) folded into the file name, since load.php-style addresses differ only there.
@@ -102,9 +101,9 @@ fn visit(root: &Path, url: &str, page_seconds: u64, cache: Option<std::rc::Rc<st
         let item = match dom.attr(n, "src") {
             Some(src) => {
                 let Some(abs) = sex_html::url::resolve(&url, src) else { continue };
-                match load(&root, &abs) { Some(b) => (text(b), abs, module), None => { eprintln!("script missing: {abs}"); continue } }
+                match load(&root, &abs) { Some(b) => (text(b), abs, module, n, true), None => { eprintln!("script missing: {abs}"); continue } }
             }
-            None => (dom.text_content(n), format!("{}#script{}", url, now.len() + later.len() + 1), module),
+            None => (dom.text_content(n), format!("{}#script{}", url, now.len() + later.len() + 1), module, n, false),
         };
         if deferred { later.push(item) } else { now.push(item) }
     }
@@ -123,7 +122,7 @@ fn visit(root: &Path, url: &str, page_seconds: u64, cache: Option<std::rc::Rc<st
         }
     };
     let t = Instant::now();
-    for (src, name, module) in &now {
+    for (src, name, module, node, external) in &now {
         let ts = Instant::now();
         let r = if *module {
             for _ in 0..64 {
@@ -133,7 +132,14 @@ fn visit(root: &Path, url: &str, page_seconds: u64, cache: Option<std::rc::Rc<st
             }
             if verbose { eprintln!("module graph found in {:.1} ms", ms(ts.elapsed().as_nanos() as u64)); }
             script.eval_module(src, name)
-        } else { script.eval(src, name) };
+        } else {
+            // As apps/web run_scripts: currentScript while it runs, then its load event.
+            let _ = script.dispatch(&format!("script\t{node}"));
+            let r = script.eval(src, name);
+            let _ = script.dispatch("script\t");
+            if *external && !matches!(&r, Err(sex_js::Error::Trapped(_))) { let _ = script.dispatch(&format!("scriptload\t{node}")); }
+            r
+        };
         if verbose { eprintln!("ran {:?} in {:.1} ms: {}", r.err(), ms(ts.elapsed().as_nanos() as u64), name.chars().take(120).collect::<String>()); }
     }
     script.dispatch("ready").unwrap();

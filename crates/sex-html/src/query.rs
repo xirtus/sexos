@@ -31,9 +31,11 @@ struct Keys {
 
 struct Order { rank: Vec<usize>, end: Vec<usize>, order: Vec<NodeId> }
 
+/// Callers add a node under a key at most once (a node is indexed when it is made, and
+/// an attribute's old tokens are taken before its new ones are put), so no scan here.
 fn put(map: &mut BTreeMap<String, Vec<NodeId>>, key: &str, n: NodeId) {
     match map.get_mut(key) {
-        Some(v) => if !v.contains(&n) { v.push(n) },
+        Some(v) => v.push(n),
         None => { map.insert(String::from(key), vec![n]); }
     }
 }
@@ -70,7 +72,11 @@ impl Keys {
         };
         match name {
             "id" => each(&mut self.ids, value, &mut self.tokens, &mut self.bytes),
-            "class" => for c in value.split_ascii_whitespace() { each(&mut self.classes, c, &mut self.tokens, &mut self.bytes) },
+            "class" => for (i, c) in value.split_ascii_whitespace().enumerate() {
+                // A token repeated in one class attribute counts once.
+                if value.split_ascii_whitespace().take(i).any(|p| p == c) { continue; }
+                each(&mut self.classes, c, &mut self.tokens, &mut self.bytes)
+            },
             _ => {}
         }
     }
