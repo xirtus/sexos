@@ -4,7 +4,8 @@
 //! A clean-room reader written from the publicly documented structure of the
 //! format (the "blend file" chapter of Blender's developer docs, the
 //! `mystery of the blend` write-up and observation of the files themselves).
-//! No Blender source code is used. Everything is bounds-checked: corrupt or
+//! No Blender source code is used (the modifier mapping only relies on the
+//! DNA member names and flag values noted below). Everything is bounds-checked: corrupt or
 //! truncated input yields `Err`, never a panic.
 //!
 //! # Format knowledge this reader relies on
@@ -93,10 +94,20 @@
 //!   `yasp`, `sfra`, `efra`, `frs_sec`, `frs_sec_base`). The current scene is
 //!   `FileGlobal.curscene` in the `GLOB` block, else the first `SC` block.
 //!
-//! Not imported yet: modifiers, collections and visibility, shape keys,
-//! textures/images, world, animation, library links, custom split normals.
+//! - Modifiers: `Object.modifiers` is a ListBase of per-type structs
+//!   (`SubsurfModifierData`, `DecimateModifierData`, ...), each starting with
+//!   a `ModifierData modifier` header (`next`, `type`, `mode`, `name`); the
+//!   block's SDNA struct name says which type it is. Field names and flag
+//!   bits are those of Blender's `DNA_modifier_types.h` (GPL-2+); types
+//!   Polyamour has no equivalent for are skipped, as are entries switched off
+//!   in the viewport (`mode` bit 0 clear).
+//!
+//! Not imported yet: collections and visibility, shape keys,
+//! textures/images, world, animation, library links, custom split normals,
+//! modifier vertex groups and textures.
 use crate::math::{Mat4, Quat, Vec2, Vec3};
 use crate::mesh::{Face, Mesh};
+use crate::modifiers::{BooleanOp, CastType, DecimateMode, Modifier, RemeshMode, ShrinkwrapMethod, SimpleDeformMode};
 use crate::scene::{Camera, Light, LightKind, Material, Object, ObjectData, Scene, Transform};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
@@ -308,6 +319,8 @@ struct Member {
 struct StructDef {
     size: usize,
     members: HashMap<String, Member>,
+    /// The struct's type name (`SubsurfModifierData`, ...).
+    name: String,
 }
 
 #[derive(Debug)]
@@ -427,7 +440,7 @@ impl Sdna {
             }
             struct_of_type[ty] = Some(si);
             by_name.entry(types[ty].clone()).or_insert(si);
-            structs.push(StructDef { size, members });
+            structs.push(StructDef { size, members, name: types[ty].clone() });
         }
         Ok(Sdna { structs, struct_of_type, by_name })
     }
@@ -742,6 +755,7 @@ impl<'f, 'a> Importer<'f, 'a> {
                 if let (Some(s), Some(e)) = (r.num("sfra"), r.num("efra")) {
                     self.scene.frame_start = s as i32;
                     self.scene.frame_end = e as i32;
+                    self.scene.frame_current = r.num("cfra").map_or(s as i32, |c| c as i32);
                 }
                 if let Some(fps) = r.num("frs_sec") {
                     let base = r.num("frs_sec_base").filter(|b| *b > 0.0).unwrap_or(1.0);
@@ -808,6 +822,9 @@ impl<'f, 'a> Importer<'f, 'a> {
         let mut o = Object::new(&ob.id_name(), od);
         o.transform = basis(ob);
         o.materials = self.slots(ob, mesh_view.as_ref());
+        if mesh_view.is_some() {
+            o.modifiers = modifiers(f, ob);
+        }
         Ok(self.scene.add_object(o))
     }
 
@@ -931,6 +948,185 @@ impl<'f, 'a> Importer<'f, 'a> {
 enum Fit {
     Horizontal(f32),
     Vertical(f32),
+}
+
+/// The object's modifier stack (`Object.modifiers`, a ListBase of
+/// `*ModifierData` structs, each starting with a `ModifierData modifier`
+/// header). Stack entries switched off in the viewport (`mode` bit 0) and
+/// types Polyamour lacks are skipped.
+fn modifiers(f: &BlendFile<'_>, ob: &View<'_, '_>) -> Vec<Modifier> {
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    let mut p = ob.sub("modifiers").map_or(0, |l| l.ptr("first"));
+    while p != 0 && seen.insert(p) && out.len() < 1000 {
+        let Some(v) = f.block(p).and_then(|b| f.block_view(b)) else { break };
+        let Some(md) = v.sub("modifier") else { break };
+        p = md.ptr("next");
+        if md.num("mode").is_some_and(|m| (m as i64) & 1 == 0) {
+            continue;
+        }
+        if let Some(m) = modifier(f, &v) {
+            out.push(m);
+        }
+    }
+    out
+}
+
+/// One `*ModifierData` struct as a [`Modifier`], by its DNA struct name.
+/// Member names and flag bits follow Blender's `DNA_modifier_types.h`.
+fn modifier(f: &BlendFile<'_>, v: &View<'_, '_>) -> Option<Modifier> {
+    let flag = |name: &str| v.num(name).unwrap_or(0.0) as i64;
+    let fl = |name: &str, d: f32| v.f32(name).filter(|x| x.is_finite()).unwrap_or(d);
+    let int = |name: &str, d: u32| v.num(name).filter(|x| x.is_finite() && *x >= 0.0).map_or(d, |x| x.min(u32::MAX as f64) as u32);
+    let bit = |name: &str, b: i64| flag(name) & b != 0;
+    let object_name = |name: &str| f.view_ptr(v.ptr(name), &["Object"]).map(|o| o.id_name()).unwrap_or_default();
+    let mut m = match f.sdna.structs[v.s].name.as_str() {
+        "SubsurfModifierData" => Modifier::Subdivision { levels: int("levels", 1).min(6), simple: flag("subdivType") == 1 },
+        "MirrorModifierData" => {
+            let fg = flag("flag");
+            let (mut x, y, z) = (fg & (1 << 3) != 0, fg & (1 << 4) != 0, fg & (1 << 5) != 0);
+            if !(x || y || z) {
+                x = true;
+            }
+            Modifier::Mirror { x, y, z, merge: fg & (1 << 7) == 0, merge_distance: fl("tolerance", 0.001) }
+        }
+        "ArrayModifierData" => {
+            let ot = flag("offset_type");
+            let rel = if ot & 2 != 0 { v.vec::<3>("scale").unwrap_or([1.0, 0.0, 0.0]) } else { [0.0; 3] };
+            let con = if ot & 1 != 0 { v.vec::<3>("offset").unwrap_or([0.0; 3]) } else { [0.0; 3] };
+            Modifier::Array { count: int("count", 2).clamp(1, 10_000), relative: rel, constant: con, merge: bit("flags", 1) }
+        }
+        "SolidifyModifierData" => Modifier::Solidify { thickness: fl("offset", 0.01), offset: fl("offset_fac", -1.0) },
+        "BevelModifierData" => Modifier::Bevel { width: fl("value", 0.1), segments: int("res", 1).max(1), angle: if bit("lim_flags", 1 << 3) { fl("bevel_angle", 0.5236) } else { 0.0 } },
+        "TriangulateModifierData" => Modifier::Triangulate,
+        "WeldModifierData" => Modifier::Weld { distance: fl("merge_dist", 0.001) },
+        "DisplaceModifierData" => Modifier::Displace { strength: fl("strength", 1.0) },
+        "SmoothModifierData" => Modifier::Smooth { factor: fl("fac", 0.5), iterations: int("repeat", 1) },
+        "DecimateModifierData" => Modifier::Decimate {
+            mode: match flag("mode") {
+                1 => DecimateMode::Unsubdivide,
+                2 => DecimateMode::Planar,
+                _ => DecimateMode::Collapse,
+            },
+            ratio: fl("percent", 1.0),
+            iterations: int("iter", 0),
+            angle: fl("angle", 0.0873),
+            triangulate: bit("flag", 1 << 1),
+        },
+        "RemeshModifierData" => Modifier::Remesh {
+            mode: match flag("mode") {
+                0 => RemeshMode::Blocks,
+                1 | 2 => RemeshMode::Smooth,
+                _ => RemeshMode::Voxel,
+            },
+            voxel_size: fl("voxel_size", 0.1),
+            octree_depth: int("depth", 4).clamp(1, 12),
+            scale: fl("scale", 0.9),
+            smooth_shade: bit("flag", 1 << 1),
+        },
+        "ScrewModifierData" => Modifier::Screw {
+            axis: int("axis", 2).min(2) as u8,
+            angle: fl("angle", std::f32::consts::TAU),
+            steps: int("steps", 16).clamp(1, 10_000),
+            screw_offset: fl("screw_ofs", 0.0),
+            iterations: int("iter", 1).clamp(1, 10_000),
+            merge: bit("flag", 1 << 8),
+            merge_distance: fl("merge_dist", 0.01),
+            flip: bit("flag", 1),
+            smooth_shade: bit("flag", 1 << 5),
+        },
+        "WireframeModifierData" => Modifier::Wireframe {
+            thickness: fl("offset", 0.02),
+            offset: fl("offset_fac", -1.0),
+            even: bit("flag", 1 << 3),
+            relative: bit("flag", 1 << 4),
+            boundary: bit("flag", 1 << 2),
+            replace: bit("flag", 1 << 1),
+        },
+        "EdgeSplitModifierData" => Modifier::EdgeSplit { angle: fl("split_angle", 0.5236), use_angle: bit("flags", 1 << 1) },
+        "BuildModifierData" => Modifier::Build { start: fl("start", 1.0), length: fl("length", 100.0), reverse: bit("flag", 1 << 1), random: bit("flag", 1), seed: int("seed", 0) },
+        "BooleanModifierData" => Modifier::Boolean {
+            object: object_name("object"),
+            operation: match flag("operation") {
+                0 => BooleanOp::Intersect,
+                1 => BooleanOp::Union,
+                _ => BooleanOp::Difference,
+            },
+        },
+        "SimpleDeformModifierData" => Modifier::SimpleDeform {
+            mode: match flag("mode") {
+                2 => SimpleDeformMode::Bend,
+                3 => SimpleDeformMode::Taper,
+                4 => SimpleDeformMode::Stretch,
+                _ => SimpleDeformMode::Twist,
+            },
+            axis: int("deform_axis", 2).min(2) as u8,
+            factor: fl("factor", 0.7854),
+            limits: v.vec::<2>("limit").unwrap_or([0.0, 1.0]),
+            lock: [bit("axis", 1), bit("axis", 2), bit("axis", 4)],
+        },
+        "CastModifierData" => Modifier::Cast {
+            kind: match flag("type") {
+                1 => CastType::Cylinder,
+                2 => CastType::Cuboid,
+                _ => CastType::Sphere,
+            },
+            factor: fl("fac", 0.5),
+            radius: fl("radius", 0.0),
+            size: fl("size", 0.0),
+            axes: [bit("flag", 1 << 1), bit("flag", 1 << 2), bit("flag", 1 << 3)],
+            size_from_radius: bit("flag", 1 << 5),
+        },
+        "WaveModifierData" => Modifier::Wave {
+            x: bit("flag", 1 << 1),
+            y: bit("flag", 1 << 2),
+            cyclic: bit("flag", 1 << 3),
+            normals: bit("flag", 1 << 4),
+            falloff: fl("falloff", 0.0),
+            height: fl("height", 0.5),
+            width: fl("width", 1.5),
+            narrowness: fl("narrow", 1.5),
+            speed: fl("speed", 0.25),
+            time_offset: fl("timeoffs", 0.0),
+            lifetime: fl("lifetime", 0.0),
+            damping: fl("damp", 10.0),
+            start: [fl("startx", 0.0), fl("starty", 0.0)],
+        },
+        "ShrinkwrapModifierData" => Modifier::Shrinkwrap {
+            target: object_name("target"),
+            method: match flag("shrinkType") {
+                1 | 3 => ShrinkwrapMethod::Project,
+                2 => ShrinkwrapMethod::NearestVertex,
+                _ => ShrinkwrapMethod::NearestSurfacePoint,
+            },
+            offset: fl("keepDist", 0.0),
+            axes: [bit("projAxis", 1), bit("projAxis", 2), bit("projAxis", 4)],
+            positive: bit("shrinkOpts", 1),
+            negative: bit("shrinkOpts", 2),
+        },
+        "LaplacianSmoothModifierData" => Modifier::LaplacianSmooth {
+            iterations: int("repeat", 1),
+            factor: fl("lambda", 0.01),
+            border: fl("lambda_border", 0.01),
+            axes: [bit("flag", 1 << 1), bit("flag", 1 << 2), bit("flag", 1 << 3)],
+            preserve_volume: bit("flag", 1 << 4),
+            normalized: bit("flag", 1 << 5),
+        },
+        "CorrectiveSmoothModifierData" => Modifier::CorrectiveSmooth {
+            factor: fl("lambda", 0.5),
+            iterations: int("repeat", 5),
+            scale: fl("scale", 1.0),
+            length_weighted: flag("smooth_type") == 1,
+            only_smooth: bit("flag", 1 << 1),
+        },
+        "WeightedNormalModifierData" => Modifier::WeightedNormal { keep_sharp: bit("flag", 1) },
+        _ => return None,
+    };
+    // Keep counts in the ranges the UI and polyops accept.
+    if let Modifier::Smooth { iterations, .. } | Modifier::LaplacianSmooth { iterations, .. } | Modifier::CorrectiveSmooth { iterations, .. } = &mut m {
+        *iterations = (*iterations).min(10_000);
+    }
+    Some(m)
 }
 
 fn light(la: &View<'_, '_>) -> Light {

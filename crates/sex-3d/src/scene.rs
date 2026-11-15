@@ -214,6 +214,8 @@ pub struct Scene {
     pub frame_start: i32,
     pub frame_end: i32,
     pub fps: f32,
+    /// The current frame, for modifiers that animate (Wave, Build).
+    pub frame_current: i32,
 }
 
 impl Default for Scene {
@@ -233,6 +235,7 @@ impl Default for Scene {
             frame_start: 1,
             frame_end: 250,
             fps: 24.0,
+            frame_current: 1,
         }
     }
 }
@@ -338,10 +341,39 @@ impl Scene {
 
     /// The object's mesh after its modifier stack, in object space.
     pub fn evaluated_mesh(&self, idx: usize) -> Option<Mesh> {
+        self.evaluated_mesh_depth(idx, 0)
+    }
+
+    /// Apply `stack` to `mesh` as if it were object `idx`'s stack: at the
+    /// current frame, with other objects (Boolean, Shrinkwrap) resolved by
+    /// name to their evaluated meshes in this object's space.
+    pub fn apply_modifiers(&self, idx: usize, mesh: &Mesh, stack: &[Modifier]) -> Mesh {
+        self.apply_modifiers_depth(idx, mesh, stack, 0)
+    }
+
+    /// Objects referring to each other (A booleans B, B shrinkwraps to A)
+    /// are cut off at this depth instead of recursing forever.
+    const MAX_MODIFIER_DEPTH: u32 = 4;
+
+    fn evaluated_mesh_depth(&self, idx: usize, depth: u32) -> Option<Mesh> {
         match self.objects[idx].data {
-            ObjectData::Mesh(mi) => Some(crate::modifiers::apply_stack(&self.meshes[mi], &self.objects[idx].modifiers)),
+            ObjectData::Mesh(mi) => Some(self.apply_modifiers_depth(idx, &self.meshes[mi], &self.objects[idx].modifiers, depth)),
             _ => None,
         }
+    }
+
+    fn apply_modifiers_depth(&self, idx: usize, mesh: &Mesh, stack: &[Modifier], depth: u32) -> Mesh {
+        let lookup = |name: &str| -> Option<Mesh> {
+            let j = self.find_object(name)?;
+            if j == idx || depth >= Self::MAX_MODIFIER_DEPTH {
+                return None;
+            }
+            let mut m = self.evaluated_mesh_depth(j, depth + 1)?;
+            m.transform(&(self.world_matrix(idx).inverse() * self.world_matrix(j)));
+            Some(m)
+        };
+        let cx = crate::modifiers::EvalContext { frame: self.frame_current as f32, object: Some(&lookup), rest: None };
+        crate::modifiers::apply_stack_with(mesh, stack, &cx)
     }
 
     /// Evaluated mesh in world space with face materials resolved to scene

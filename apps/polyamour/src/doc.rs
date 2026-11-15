@@ -446,18 +446,8 @@ impl Doc {
             }
             "object.modifier_add" => {
                 let Some(a) = self.active() else { return };
-                let m = match arg {
-                    "SUBSURF" => Modifier::Subdivision { levels: 1, simple: false },
-                    "MIRROR" => Modifier::Mirror { x: true, y: false, z: false, merge: true, merge_distance: 0.001 },
-                    "ARRAY" => Modifier::Array { count: 2, relative: [1.0, 0.0, 0.0], constant: [0.0; 3], merge: false },
-                    "SOLIDIFY" => Modifier::Solidify { thickness: 0.01, offset: -1.0 },
-                    "BEVEL" => Modifier::Bevel { width: 0.1, segments: 1, angle: 30f32.to_radians() },
-                    "TRIANGULATE" => Modifier::Triangulate,
-                    "WELD" => Modifier::Weld { distance: 0.001 },
-                    "DISPLACE" => Modifier::Displace { strength: 1.0 },
-                    "SMOOTH" => Modifier::Smooth { factor: 0.5, iterations: 1 },
-                    _ => return self.unknown(op),
-                };
+                // Blender identifiers: SUBSURF, DECIMATE, SIMPLE_DEFORM, ...
+                let Some(m) = Modifier::with_defaults(arg) else { return self.unknown(op) };
                 if !matches!(self.scene.objects[a].data, ObjectData::Mesh(_)) {
                     self.report = "Modifiers need a mesh object".into();
                     return;

@@ -266,3 +266,68 @@ fn rotation_modes_agree() {
         }
     }
 }
+
+#[test]
+fn modifier_stacks_import() {
+    use blendgen::{n, nv, p, s, Dna, Writer, V};
+    use sex_3d::modifiers::{BooleanOp, DecimateMode, Modifier, SimpleDeformMode};
+    for (ptr, big) in [(8, false), (4, true)] {
+        let mut d = Dna::new(ptr);
+        d.def("ListBase", &[("void", "*first"), ("void", "*last")]);
+        d.def("ID", &[("void", "*next"), ("void", "*prev"), ("char", "name[66]"), ("short", "flag"), ("int", "us")]);
+        d.def("MVert", &[("float", "co[3]")]);
+        d.def("Mesh", &[("ID", "id"), ("MVert", "*mvert"), ("int", "totvert"), ("int", "totpoly"), ("int", "totloop"), ("char", "_pad[4]")]);
+        d.def("Object", &[("ID", "id"), ("short", "type"), ("char", "_pad0[6]"), ("void", "*data"), ("float", "loc[3]"), ("float", "scale[3]"), ("short", "rotmode"), ("char", "_pad1[2]"), ("ListBase", "modifiers")]);
+        d.def("ModifierData", &[("ModifierData", "*next"), ("ModifierData", "*prev"), ("int", "type"), ("int", "mode"), ("short", "flag"), ("char", "_pad[6]"), ("char", "name[64]")]);
+        d.def("SubsurfModifierData", &[("ModifierData", "modifier"), ("short", "subdivType"), ("short", "levels"), ("short", "renderLevels"), ("short", "flags")]);
+        d.def("DecimateModifierData", &[("ModifierData", "modifier"), ("float", "percent"), ("short", "iter"), ("char", "delimit"), ("char", "symmetry_axis"), ("float", "angle"), ("char", "defgrp_name[64]"), ("short", "flag"), ("short", "mode")]);
+        d.def("BooleanModifierData", &[("ModifierData", "modifier"), ("Object", "*object"), ("Collection", "*collection"), ("float", "double_threshold"), ("char", "operation"), ("char", "solver"), ("char", "_pad[2]")]);
+        d.def("SimpleDeformModifierData", &[("ModifierData", "modifier"), ("Object", "*origin"), ("char", "vgroup_name[64]"), ("float", "factor"), ("float", "limit[2]"), ("char", "mode"), ("char", "axis"), ("char", "deform_axis"), ("char", "flag")]);
+        d.def("NoiseModifierData", &[("ModifierData", "modifier"), ("float", "x")]);
+        let mut w = Writer::new(d, big, false, 402);
+        let (me, ob, cutter) = (w.alloc(), w.alloc(), w.alloc());
+        let mods: Vec<u64> = (0..6).map(|_| w.alloc()).collect();
+        let vert = w.add("DATA", "MVert", &[("co", nv(&[0., 0., 1.]))]);
+        let m = w.inst("Mesh", &[("id.name", s("MEMesh")), ("mvert", p(vert)), ("totvert", n(1.))]);
+        w.put(me, "ME", "Mesh", 1, m);
+        let o = w.inst("Object", &[("id.name", s("OBCube")), ("type", n(1.)), ("data", p(me)), ("scale", nv(&[1., 1., 1.])), ("rotmode", n(1.)), ("modifiers.first", p(mods[0])), ("modifiers.last", p(mods[5]))]);
+        w.put(ob, "OB", "Object", 1, o);
+        let o = w.inst("Object", &[("id.name", s("OBCutter")), ("type", n(1.)), ("data", p(me)), ("scale", nv(&[1., 1., 1.])), ("rotmode", n(1.))]);
+        w.put(cutter, "OB", "Object", 1, o);
+        // The ModifierData header: list links, enabled in viewport and render.
+        let with = |i: usize, mode: f64, extra: Vec<(&str, V)>| -> Vec<(String, V)> {
+            let mut f = vec![("modifier.next".to_string(), p(mods.get(i + 1).copied().unwrap_or(0))), ("modifier.mode".to_string(), n(mode))];
+            if i > 0 {
+                f.push(("modifier.prev".to_string(), p(mods[i - 1])));
+            }
+            f.extend(extra.into_iter().map(|(k, v)| (k.to_string(), v)));
+            f
+        };
+        let b = w.inst("SubsurfModifierData", &with(0, 3., vec![("levels", n(2.)), ("subdivType", n(1.))]));
+        w.put(mods[0], "DATA", "SubsurfModifierData", 1, b);
+        let b = w.inst("DecimateModifierData", &with(1, 3., vec![("percent", n(0.25)), ("mode", n(0.)), ("flag", n(2.)), ("angle", n(0.1))]));
+        w.put(mods[1], "DATA", "DecimateModifierData", 1, b);
+        let b = w.inst("BooleanModifierData", &with(2, 3., vec![("object", p(cutter)), ("operation", n(1.))]));
+        w.put(mods[2], "DATA", "BooleanModifierData", 1, b);
+        // Switched off in the viewport: skipped.
+        let b = w.inst("SubsurfModifierData", &with(3, 2., vec![("levels", n(1.))]));
+        w.put(mods[3], "DATA", "SubsurfModifierData", 1, b);
+        let b = w.inst("SimpleDeformModifierData", &with(4, 1., vec![("factor", n(0.5)), ("limit", nv(&[0.25, 0.75])), ("mode", n(2.)), ("deform_axis", n(0.)), ("axis", n(4.))]));
+        w.put(mods[4], "DATA", "SimpleDeformModifierData", 1, b);
+        // A type Polyamour does not have: skipped.
+        let b = w.inst("NoiseModifierData", &with(5, 3., vec![]));
+        w.put(mods[5], "DATA", "NoiseModifierData", 1, b);
+        let scene = import_blend(&w.finish()).unwrap();
+        let cube = &scene.objects[scene.find_object("Cube").unwrap()];
+        assert_eq!(
+            cube.modifiers,
+            vec![
+                Modifier::Subdivision { levels: 2, simple: true },
+                Modifier::Decimate { mode: DecimateMode::Collapse, ratio: 0.25, iterations: 0, angle: 0.1, triangulate: true },
+                Modifier::Boolean { object: "Cutter".into(), operation: BooleanOp::Union },
+                Modifier::SimpleDeform { mode: SimpleDeformMode::Bend, axis: 0, factor: 0.5, limits: [0.25, 0.75], lock: [false, false, true] },
+            ],
+            "ptr {ptr} big {big}"
+        );
+    }
+}

@@ -154,10 +154,59 @@ fn add_modifier_menu_adds_subdivision_and_levels_edit_it() {
     let (x, y) = menu_item_y(&mut app, &pop, "Generate");
     app.frame(Input::Move { x, y });
     let sub = app.popup.as_ref().unwrap().sub.as_ref().unwrap().1.as_ref().clone();
-    let (x, y) = menu_item_y(&mut app, &sub, "Boolean");
+    let (x, y) = menu_item_y(&mut app, &sub, "Skin");
     click(&mut app, x, y);
-    assert!(app.doc.report.contains("Boolean modifier is not available"), "{}", app.doc.report);
+    assert!(app.doc.report.contains("Skin modifier is not available"), "{}", app.doc.report);
     assert_eq!(app.doc.scene.objects[cube].modifiers.len(), 1);
+}
+
+#[test]
+fn ported_modifiers_menu_panels_and_object_fields() {
+    use sex_3d::modifiers::{BooleanOp, DecimateMode, SimpleDeformMode};
+    let mut app = app();
+    let cube = app.doc.active().unwrap();
+    app.doc.scene.add_mesh_object("Cutter", sex_3d::primitives::cube(1.0));
+    open_tab(&mut app, Tab::Modifiers);
+    // Deform > Simple Deform from the Add Modifier menu.
+    let r = field(&app, "add_modifier");
+    click_rect(&mut app, r);
+    let pop = app.popup.clone().unwrap();
+    let (x, y) = menu_item_y(&mut app, &pop, "Deform");
+    app.frame(Input::Move { x, y });
+    let sub = app.popup.as_ref().unwrap().sub.as_ref().expect("Deform submenu").1.as_ref().clone();
+    let (x, y) = menu_item_y(&mut app, &sub, "Simple Deform");
+    click(&mut app, x, y);
+    assert!(matches!(app.doc.scene.objects[cube].modifiers[0], Modifier::SimpleDeform { mode: SimpleDeformMode::Twist, axis: 2, .. }));
+    super::object::modifier_op(&mut app.doc, cube, "object.modifier_remove", 0);
+    // Decimate's ratio and Boolean's object dropdown.
+    app.doc.run(&crate::ui::Op::with("object.modifier_add", "DECIMATE"));
+    app.doc.run(&crate::ui::Op::with("object.modifier_add", "BOOLEAN"));
+    app.frame(Input::Tick);
+    set_field(&mut app, "m0/ratio", "0.5");
+    assert!(matches!(app.doc.scene.objects[cube].modifiers[0], Modifier::Decimate { mode: DecimateMode::Collapse, ratio, .. } if ratio == 0.5));
+    let r = field(&app, "modobj/1");
+    click_rect(&mut app, r);
+    let pop = app.popup.clone().expect("object dropdown");
+    let (x, y) = menu_item_y(&mut app, &pop, "Cutter");
+    click(&mut app, x, y);
+    app.frame(Input::Tick);
+    assert_eq!(app.doc.scene.objects[cube].modifiers[1], Modifier::Boolean { object: "Cutter".into(), operation: BooleanOp::Difference });
+    // Renaming the operand keeps the modifier pointing at it.
+    let cutter = app.doc.scene.find_object("Cutter").unwrap();
+    super::rename_object(&mut app.doc, cutter, "Knife");
+    assert_eq!(app.doc.scene.objects[cube].modifiers[1].object_ref(), Some("Knife"));
+    // Every ported modifier adds and draws (one at a time: stacked, they
+    // multiply the geometry).
+    for id in ["REMESH", "SCREW", "WIREFRAME", "EDGE_SPLIT", "BUILD", "CAST", "WAVE", "SHRINKWRAP", "LAPLACIANSMOOTH", "CORRECTIVE_SMOOTH", "WEIGHTED_NORMAL"] {
+        app.doc.run(&crate::ui::Op::with("object.modifier_add", id));
+        app.frame(Input::Tick);
+        assert_eq!(app.doc.scene.objects[cube].modifiers.len(), 3, "{id}");
+        super::object::modifier_op(&mut app.doc, cube, "object.modifier_remove", 2);
+    }
+    // Wave follows the timeline's frame.
+    app.doc.frame = 40;
+    app.frame(Input::Tick);
+    assert_eq!(app.doc.scene.frame_current, 40);
 }
 
 #[test]

@@ -33,7 +33,7 @@
 //! rebuilds an equal scene (images and textures excepted).
 use crate::math::{Quat, Vec2, Vec3};
 use crate::mesh::{Face, Mesh};
-use crate::modifiers::Modifier;
+use crate::modifiers::{BooleanOp, CastType, DecimateMode, Modifier, RemeshMode, ShrinkwrapMethod, SimpleDeformMode};
 use crate::scene::{unique_name, Camera, Light, LightKind, Material, Object, ObjectData, Scene, Transform};
 use base64::Engine;
 use std::collections::{BTreeMap, HashMap};
@@ -1101,6 +1101,9 @@ impl Session {
                 }
                 let new = unique_name(&new, |n| scene.objects.iter().enumerate().any(|(j, x)| j != i && x.name == n));
                 scene.objects[i].name = new.clone();
+                for ob in &mut scene.objects {
+                    ob.modifiers.iter_mut().for_each(|m| m.rename_object_ref(&old, &new));
+                }
                 self.rename_handles(&old, &new);
             }
             "collection" => {
@@ -1154,7 +1157,7 @@ impl Session {
                 _ => "0".into(),
             },
             "materials" => o.materials.iter().map(|&m| quote(&scene.materials[m].name)).collect::<Vec<_>>().join(" "),
-            "modifiers" => o.modifiers.iter().map(|m| m.name()).collect::<Vec<_>>().join(" "),
+            "modifiers" => o.modifiers.iter().map(|m| m.type_name()).collect::<Vec<_>>().join(" "),
             _ => match &o.data {
                 ObjectData::Light(l) => match prop.as_str() {
                     "power" => fmt_f(l.power),
@@ -1293,18 +1296,31 @@ fn set_material_opts(cmd: &mut Cmd, m: &mut Material) -> Res<()> {
 
 /// A modifier with Blender's defaults, by polyops or Blender type name.
 fn default_modifier(ty: &str) -> Res<Modifier> {
-    Ok(match ty.to_ascii_lowercase().as_str() {
-        "mirror" => Modifier::Mirror { x: true, y: false, z: false, merge: true, merge_distance: 0.001 },
-        "subdivision" | "subsurf" | "subdivision_surface" => Modifier::Subdivision { levels: 1, simple: false },
-        "array" => Modifier::Array { count: 2, relative: [1.0, 0.0, 0.0], constant: [0.0; 3], merge: false },
-        "solidify" => Modifier::Solidify { thickness: 0.01, offset: -1.0 },
-        "bevel" => Modifier::Bevel { width: 0.1, segments: 1, angle: 30f32.to_radians() },
-        "triangulate" => Modifier::Triangulate,
-        "weld" => Modifier::Weld { distance: 0.001 },
-        "displace" => Modifier::Displace { strength: 1.0 },
-        "smooth" => Modifier::Smooth { factor: 0.5, iterations: 1 },
-        _ => return Err(format!("unknown modifier type '{ty}' (Mirror, Subdivision, Array, Solidify, Bevel, Triangulate, Weld, Displace, Smooth)")),
-    })
+    Modifier::with_defaults(ty).ok_or_else(|| format!("unknown modifier type '{ty}' ({})", Modifier::TYPE_NAMES))
+}
+
+/// Pick one of `names` (case-insensitive) for option `key`.
+fn choice<T: Copy>(cmd: &mut Cmd, key: &str, names: &[(&str, T)], into: &mut T) -> Res<()> {
+    if let Some(t) = cmd.opt(key) {
+        let w = t.text.to_ascii_lowercase();
+        *into = names.iter().find(|(n, _)| *n == w).map(|(_, v)| *v).ok_or_else(|| {
+            let all: Vec<&str> = names.iter().map(|(n, _)| *n).collect();
+            format!("{key}: '{}' is not one of {}", t.text, all.join(", "))
+        })?;
+    }
+    Ok(())
+}
+
+const AXES: [(&str, u8); 3] = [("x", 0), ("y", 1), ("z", 2)];
+const DECIMATE_MODES: [(&str, DecimateMode); 3] = [("collapse", DecimateMode::Collapse), ("unsubdivide", DecimateMode::Unsubdivide), ("planar", DecimateMode::Planar)];
+const REMESH_MODES: [(&str, RemeshMode); 3] = [("blocks", RemeshMode::Blocks), ("smooth", RemeshMode::Smooth), ("voxel", RemeshMode::Voxel)];
+const BOOLEAN_OPS: [(&str, BooleanOp); 3] = [("intersect", BooleanOp::Intersect), ("union", BooleanOp::Union), ("difference", BooleanOp::Difference)];
+const DEFORM_MODES: [(&str, SimpleDeformMode); 4] = [("twist", SimpleDeformMode::Twist), ("bend", SimpleDeformMode::Bend), ("taper", SimpleDeformMode::Taper), ("stretch", SimpleDeformMode::Stretch)];
+const CAST_TYPES: [(&str, CastType); 3] = [("sphere", CastType::Sphere), ("cylinder", CastType::Cylinder), ("cuboid", CastType::Cuboid)];
+const WRAP_METHODS: [(&str, ShrinkwrapMethod); 3] = [("nearest_surface", ShrinkwrapMethod::NearestSurfacePoint), ("project", ShrinkwrapMethod::Project), ("nearest_vertex", ShrinkwrapMethod::NearestVertex)];
+
+fn name_of<T: PartialEq + Copy>(names: &[(&'static str, T)], v: T) -> &'static str {
+    names.iter().find(|(_, x)| *x == v).map_or("", |(n, _)| n)
 }
 
 fn modifier_opts(cmd: &mut Cmd, mut m: Modifier) -> Res<Modifier> {
@@ -1313,6 +1329,29 @@ fn modifier_opts(cmd: &mut Cmd, mut m: Modifier) -> Res<Modifier> {
             *into = v.to_array();
         }
         Ok(())
+    }
+    fn f(cmd: &mut Cmd, key: &str, into: &mut f32) -> Res<()> {
+        *into = cmd.f(key)?.unwrap_or(*into);
+        Ok(())
+    }
+    fn u(cmd: &mut Cmd, key: &str, into: &mut u32) -> Res<()> {
+        *into = cmd.u(key)?.unwrap_or(*into);
+        Ok(())
+    }
+    fn b(cmd: &mut Cmd, key: &str, into: &mut bool) -> Res<()> {
+        *into = cmd.b(key)?.unwrap_or(*into);
+        Ok(())
+    }
+    fn bools3(cmd: &mut Cmd, keys: [&str; 3], into: &mut [bool; 3]) -> Res<()> {
+        for (k, v) in keys.iter().zip(into.iter_mut()) {
+            b(cmd, k, v)?;
+        }
+        Ok(())
+    }
+    fn s(cmd: &mut Cmd, key: &str, into: &mut String) {
+        if let Some(t) = cmd.opt(key) {
+            *into = t.text;
+        }
     }
     match &mut m {
         Modifier::Mirror { x, y, z, merge, merge_distance } => {
@@ -1354,6 +1393,124 @@ fn modifier_opts(cmd: &mut Cmd, mut m: Modifier) -> Res<Modifier> {
             *factor = cmd.f("factor")?.unwrap_or(*factor);
             *iterations = cmd.u("iterations")?.unwrap_or(*iterations);
         }
+        Modifier::Decimate { mode, ratio, iterations, angle, triangulate } => {
+            choice(cmd, "mode", &DECIMATE_MODES, mode)?;
+            f(cmd, "ratio", ratio)?;
+            u(cmd, "iterations", iterations)?;
+            f(cmd, "angle", angle)?;
+            b(cmd, "triangulate", triangulate)?;
+        }
+        Modifier::Remesh { mode, voxel_size, octree_depth, scale, smooth_shade } => {
+            choice(cmd, "mode", &REMESH_MODES, mode)?;
+            f(cmd, "voxel_size", voxel_size)?;
+            u(cmd, "octree_depth", octree_depth)?;
+            if *octree_depth > 12 {
+                return Err("remesh octree_depth must be 12 or less".into());
+            }
+            f(cmd, "scale", scale)?;
+            b(cmd, "smooth_shade", smooth_shade)?;
+        }
+        Modifier::Screw { axis, angle, steps, screw_offset, iterations, merge, merge_distance, flip, smooth_shade } => {
+            choice(cmd, "axis", &AXES, axis)?;
+            f(cmd, "angle", angle)?;
+            u(cmd, "steps", steps)?;
+            f(cmd, "screw_offset", screw_offset)?;
+            u(cmd, "iterations", iterations)?;
+            if *steps > 10_000 || *iterations > 10_000 {
+                return Err("screw steps and iterations must be 10000 or fewer".into());
+            }
+            b(cmd, "merge", merge)?;
+            f(cmd, "merge_distance", merge_distance)?;
+            b(cmd, "flip", flip)?;
+            b(cmd, "smooth_shade", smooth_shade)?;
+        }
+        Modifier::Wireframe { thickness, offset, even, relative, boundary, replace } => {
+            f(cmd, "thickness", thickness)?;
+            f(cmd, "offset", offset)?;
+            b(cmd, "even", even)?;
+            b(cmd, "relative", relative)?;
+            b(cmd, "boundary", boundary)?;
+            b(cmd, "replace", replace)?;
+        }
+        Modifier::EdgeSplit { angle, use_angle } => {
+            f(cmd, "angle", angle)?;
+            b(cmd, "use_angle", use_angle)?;
+        }
+        Modifier::Build { start, length, reverse, random, seed } => {
+            f(cmd, "start", start)?;
+            f(cmd, "length", length)?;
+            b(cmd, "reverse", reverse)?;
+            b(cmd, "random", random)?;
+            u(cmd, "seed", seed)?;
+        }
+        Modifier::Boolean { object, operation } => {
+            s(cmd, "object", object);
+            choice(cmd, "operation", &BOOLEAN_OPS, operation)?;
+        }
+        Modifier::SimpleDeform { mode, axis, factor, limits, lock } => {
+            choice(cmd, "mode", &DEFORM_MODES, mode)?;
+            choice(cmd, "axis", &AXES, axis)?;
+            f(cmd, "factor", factor)?;
+            if let Some(l) = cmd.list("limits")? {
+                if l.len() != 2 {
+                    return Err("limits= takes two numbers".into());
+                }
+                *limits = [l[0], l[1]];
+            }
+            bools3(cmd, ["lock_x", "lock_y", "lock_z"], lock)?;
+        }
+        Modifier::Cast { kind, factor, radius, size, axes, size_from_radius } => {
+            choice(cmd, "type", &CAST_TYPES, kind)?;
+            f(cmd, "factor", factor)?;
+            f(cmd, "radius", radius)?;
+            f(cmd, "size", size)?;
+            bools3(cmd, ["x", "y", "z"], axes)?;
+            b(cmd, "size_from_radius", size_from_radius)?;
+        }
+        Modifier::Wave { x, y, cyclic, normals, falloff, height, width, narrowness, speed, time_offset, lifetime, damping, start } => {
+            b(cmd, "x", x)?;
+            b(cmd, "y", y)?;
+            b(cmd, "cyclic", cyclic)?;
+            b(cmd, "normals", normals)?;
+            f(cmd, "falloff", falloff)?;
+            f(cmd, "height", height)?;
+            f(cmd, "width", width)?;
+            f(cmd, "narrowness", narrowness)?;
+            f(cmd, "speed", speed)?;
+            f(cmd, "time_offset", time_offset)?;
+            f(cmd, "lifetime", lifetime)?;
+            f(cmd, "damping", damping)?;
+            if let Some(l) = cmd.list("start")? {
+                if l.len() != 2 {
+                    return Err("start= takes two numbers".into());
+                }
+                *start = [l[0], l[1]];
+            }
+        }
+        Modifier::Shrinkwrap { target, method, offset, axes, positive, negative } => {
+            s(cmd, "target", target);
+            choice(cmd, "method", &WRAP_METHODS, method)?;
+            f(cmd, "offset", offset)?;
+            bools3(cmd, ["x", "y", "z"], axes)?;
+            b(cmd, "positive", positive)?;
+            b(cmd, "negative", negative)?;
+        }
+        Modifier::LaplacianSmooth { iterations, factor, border, axes, preserve_volume, normalized } => {
+            u(cmd, "iterations", iterations)?;
+            f(cmd, "factor", factor)?;
+            f(cmd, "border", border)?;
+            bools3(cmd, ["x", "y", "z"], axes)?;
+            b(cmd, "preserve_volume", preserve_volume)?;
+            b(cmd, "normalized", normalized)?;
+        }
+        Modifier::CorrectiveSmooth { factor, iterations, scale, length_weighted, only_smooth } => {
+            f(cmd, "factor", factor)?;
+            u(cmd, "iterations", iterations)?;
+            f(cmd, "scale", scale)?;
+            b(cmd, "length_weighted", length_weighted)?;
+            b(cmd, "only_smooth", only_smooth)?;
+        }
+        Modifier::WeightedNormal { keep_sharp } => b(cmd, "keep_sharp", keep_sharp)?,
     }
     Ok(m)
 }
@@ -1461,6 +1618,7 @@ pub fn mesh_to_options(m: &Mesh) -> String {
 
 fn modifier_to_options(m: &Modifier) -> String {
     let b = |v: bool| v as u8;
+    let f = |v: f32| fmt_f(v);
     match m {
         Modifier::Mirror { x, y, z, merge, merge_distance } => format!(" x={} y={} z={} merge={} merge_distance={}", b(*x), b(*y), b(*z), b(*merge), fmt_f(*merge_distance)),
         Modifier::Subdivision { levels, simple } => format!(" levels={levels} simple={}", b(*simple)),
@@ -1471,6 +1629,90 @@ fn modifier_to_options(m: &Modifier) -> String {
         Modifier::Weld { distance } => format!(" distance={}", fmt_f(*distance)),
         Modifier::Displace { strength } => format!(" strength={}", fmt_f(*strength)),
         Modifier::Smooth { factor, iterations } => format!(" factor={} iterations={iterations}", fmt_f(*factor)),
+        Modifier::Decimate { mode, ratio, iterations, angle, triangulate } => {
+            format!(" mode={} ratio={} iterations={iterations} angle={} triangulate={}", name_of(&DECIMATE_MODES, *mode), f(*ratio), f(*angle), b(*triangulate))
+        }
+        Modifier::Remesh { mode, voxel_size, octree_depth, scale, smooth_shade } => {
+            format!(" mode={} voxel_size={} octree_depth={octree_depth} scale={} smooth_shade={}", name_of(&REMESH_MODES, *mode), f(*voxel_size), f(*scale), b(*smooth_shade))
+        }
+        Modifier::Screw { axis, angle, steps, screw_offset, iterations, merge, merge_distance, flip, smooth_shade } => format!(
+            " axis={} angle={} steps={steps} screw_offset={} iterations={iterations} merge={} merge_distance={} flip={} smooth_shade={}",
+            name_of(&AXES, *axis),
+            f(*angle),
+            f(*screw_offset),
+            b(*merge),
+            f(*merge_distance),
+            b(*flip),
+            b(*smooth_shade)
+        ),
+        Modifier::Wireframe { thickness, offset, even, relative, boundary, replace } => {
+            format!(" thickness={} offset={} even={} relative={} boundary={} replace={}", f(*thickness), f(*offset), b(*even), b(*relative), b(*boundary), b(*replace))
+        }
+        Modifier::EdgeSplit { angle, use_angle } => format!(" angle={} use_angle={}", f(*angle), b(*use_angle)),
+        Modifier::Build { start, length, reverse, random, seed } => format!(" start={} length={} reverse={} random={} seed={seed}", f(*start), f(*length), b(*reverse), b(*random)),
+        Modifier::Boolean { object, operation } => format!(" object={} operation={}", quote(object), name_of(&BOOLEAN_OPS, *operation)),
+        Modifier::SimpleDeform { mode, axis, factor, limits, lock } => format!(
+            " mode={} axis={} factor={} limits={} lock_x={} lock_y={} lock_z={}",
+            name_of(&DEFORM_MODES, *mode),
+            name_of(&AXES, *axis),
+            f(*factor),
+            fmt_list(limits),
+            b(lock[0]),
+            b(lock[1]),
+            b(lock[2])
+        ),
+        Modifier::Cast { kind, factor, radius, size, axes, size_from_radius } => format!(
+            " type={} factor={} radius={} size={} x={} y={} z={} size_from_radius={}",
+            name_of(&CAST_TYPES, *kind),
+            f(*factor),
+            f(*radius),
+            f(*size),
+            b(axes[0]),
+            b(axes[1]),
+            b(axes[2]),
+            b(*size_from_radius)
+        ),
+        Modifier::Wave { x, y, cyclic, normals, falloff, height, width, narrowness, speed, time_offset, lifetime, damping, start } => format!(
+            " x={} y={} cyclic={} normals={} falloff={} height={} width={} narrowness={} speed={} time_offset={} lifetime={} damping={} start={}",
+            b(*x),
+            b(*y),
+            b(*cyclic),
+            b(*normals),
+            f(*falloff),
+            f(*height),
+            f(*width),
+            f(*narrowness),
+            f(*speed),
+            f(*time_offset),
+            f(*lifetime),
+            f(*damping),
+            fmt_list(start)
+        ),
+        Modifier::Shrinkwrap { target, method, offset, axes, positive, negative } => format!(
+            " target={} method={} offset={} x={} y={} z={} positive={} negative={}",
+            quote(target),
+            name_of(&WRAP_METHODS, *method),
+            f(*offset),
+            b(axes[0]),
+            b(axes[1]),
+            b(axes[2]),
+            b(*positive),
+            b(*negative)
+        ),
+        Modifier::LaplacianSmooth { iterations, factor, border, axes, preserve_volume, normalized } => format!(
+            " iterations={iterations} factor={} border={} x={} y={} z={} preserve_volume={} normalized={}",
+            f(*factor),
+            f(*border),
+            b(axes[0]),
+            b(axes[1]),
+            b(axes[2]),
+            b(*preserve_volume),
+            b(*normalized)
+        ),
+        Modifier::CorrectiveSmooth { factor, iterations, scale, length_weighted, only_smooth } => {
+            format!(" factor={} iterations={iterations} scale={} length_weighted={} only_smooth={}", f(*factor), f(*scale), b(*length_weighted), b(*only_smooth))
+        }
+        Modifier::WeightedNormal { keep_sharp } => format!(" keep_sharp={}", b(*keep_sharp)),
     }
 }
 
@@ -1557,7 +1799,7 @@ pub fn scene_to_polyops(scene: &Scene) -> String {
             let _ = writeln!(o, "material_assign {name} {} slot={slot}", quote(&scene.materials[m].name));
         }
         for m in &ob.modifiers {
-            let _ = writeln!(o, "modifier_add {name} {}{}", m.name(), modifier_to_options(m));
+            let _ = writeln!(o, "modifier_add {name} {}{}", m.type_name(), modifier_to_options(m));
         }
     }
     let names = |v: &[usize]| v.iter().map(|&i| format!(" {}", quote(&scene.objects[i].name))).collect::<String>();
