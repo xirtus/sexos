@@ -62,10 +62,13 @@ impl Drawing {
     pub fn command(&mut self, id: &str, params: Value) -> Result<Value, String> { self.s.execute(id, &params).map_err(err) }
 
     /// Saves to [`Self::path`] in the format its name asks for; returns the bytes written.
+    /// Gestalt writes the file itself: the engine's own save writes a temporary file and
+    /// renames it, and SexOS std files have no rename yet.
     pub fn save(&mut self) -> Result<usize, String> {
-        let format = format_of(&self.path);
-        self.s.execute("document.save", &json!({ "path": self.path, "format": format, "acknowledgeLoss": true })).map_err(err)?;
-        std::fs::metadata(&self.path).map(|m| m.len() as usize).map_err(|e| format!("Could not save {}: {e}", self.path))
+        let data = self.serialize(format_of(&self.path))?;
+        std::fs::write(&self.path, &data).map_err(|e| format!("Could not save {}: {e}", self.path))?;
+        if let Ok(d) = self.s.doc_mut() { d.mark_saved(); }
+        Ok(data.len())
     }
 
     /// The document in `format` (svg, png, pdf, vectorcraft, …).

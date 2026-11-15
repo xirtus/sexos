@@ -2,7 +2,8 @@
 """Gestalt, the vector editor (VectorCraft's engine, built for x86_64-sex-std.json):
 
 * `run gestalt` writes welcome.svg into its folder, opens it (four objects on an 800 x 600 pt
-  artboard) and draws it: the screendump shows its red, blue and yellow.
+  artboard) and draws it; maximized, it fits the drawing again, and the screendump shows its
+  red, blue and yellow.
 * M picks the Rectangle tool; a drag on the canvas draws a fifth object, selected.
 * Ctrl+Z takes it away and Ctrl+Shift+Z puts it back.
 * V, Ctrl+A selects all five; Ctrl+G groups them into one object.
@@ -15,7 +16,7 @@ from pathlib import Path
 from install_program import install
 os.environ.setdefault('SEXOS_GATE_BOUND','1500')
 from quil_autosave_gate import boot
-from program_gate_geometry import colours,current_tile
+from program_gate_geometry import colours,current_tile,maximize
 ROOT=Path(__file__).resolve().parents[1]
 SURFACE={int(a):int(b)for a,b in re.findall(r'app: App::Program, ordinal: \d+, target: (\d+), surface: (\d+)',(ROOT/'crates/sex-pdx/src/app_catalog.rs').read_text())}
 STRIP=40
@@ -45,6 +46,9 @@ def main():
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120)
   o=opened(4)
+  # Maximized, the drawing fits the bigger window again.
+  _,s=maximize(g,SURFACE[int(o[1])])
+  g['wait'](r'\[gestalt\.render\] width=(\d{3,}) height=(\d{3,}) zoom=[\d.]+ objects=4 ms=\d+\n',s,300)
   time.sleep(1.5);shot=a.out/'gestalt-opened.ppm';q.cmd('screendump',{'filename':str(shot)});time.sleep(.5)
   tile=current_tile(t(),SURFACE[int(o[1])])
   seen=colours(shot.read_bytes(),tile)

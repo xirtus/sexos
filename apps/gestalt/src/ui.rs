@@ -146,8 +146,8 @@ impl Ui {
         canvas.fill(0, ch, w, 1, LINE);
         let tool = TOOLS.iter().find(|t| t.1 == active).map_or(active, |t| t.2);
         let status = if self.message.is_empty() {
-            format!("{}{}   {tool}   {:.0}%   {} objects, {} selected   Ctrl+S save  Ctrl+E PNG  Ctrl+Shift+E PDF  Ctrl+Z undo  Ctrl+G group  Ctrl+Shift+1-4 Pathfinder",
-                self.name, if self.d.dirty() { " (changed)" } else { "" }, self.zoom * 100.0, self.d.objects(), self.d.selected())
+            format!("{}{}   {tool}   {:.0}%   {} object{}, {} selected   Ctrl+S save  Ctrl+E PNG  Ctrl+Shift+E PDF  Ctrl+Z undo  Ctrl+G group  Ctrl+Shift+1-4 Pathfinder",
+                self.name, if self.d.dirty() { " (changed)" } else { "" }, self.zoom * 100.0, self.d.objects(), if self.d.objects() == 1 { "" } else { "s" }, self.d.selected())
         } else {
             self.message.clone()
         };

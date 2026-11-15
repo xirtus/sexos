@@ -56,7 +56,19 @@ pub fn init_program_image(files: u32) {
     grant(pd, IMAGE_SLOT_FILES, RegionGrant { region_id: IMAGE_REGION_ID, virtual_base, length,
         rights: QUERY_VIEW | READ | WRITE, dma_base: None, peer_pd: None });
     PROGRAM_IMAGE_PHYSICAL.store(physical, core::sync::atomic::Ordering::Release);
+    // A kernel-only window as large as the region, for the copy each load makes. Its tables
+    // are made now (mapped over the region itself); a load points its leaves at single
+    // frames, so the copy never needs one large free block, which fragmentation takes away.
+    let window = crate::memory::va_allocator::allocate_va(length as usize).expect("BOOT_PROGRAM_COPY_NO_VA");
+    let flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::NO_EXECUTE;
+    crate::memory::manager::GLOBAL_VAS.lock().as_mut().expect("BOOT_REGION_NO_VAS")
+        .map_physical_range(VirtAddr::new(window), physical, length, flags, 0).expect("BOOT_PROGRAM_COPY_MAP");
+    PROGRAM_COPY_WINDOW.store(window, core::sync::atomic::Ordering::Release);
 }
+static PROGRAM_COPY_WINDOW: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+/// One load at a time uses the window.
+static PROGRAM_COPY: spin::Mutex<()> = spin::Mutex::new(());
+const LEAF_FRAME: u64 = 0x000f_ffff_ffff_f000;
 /// The boot image Limine loaded beside the kernel, if any, mapped read-only into Files
 /// so `install` can write the very system that is running. It grants only reading it.
 pub fn init_boot_image(files: u32) {
@@ -140,26 +152,48 @@ pub fn init_fs_regions(files: u32) {
 }
 /// The file Files last read, as a copy only the kernel can reach: Files keeps write
 /// access to its region, and a checked file must stay the file that gets used. The copy
-/// is borrowed from free memory for one load and returned when it drops.
-pub struct ImageCopy { physical: u64, order: usize, len: usize }
+/// is in single frames lent for one load, seen through the kernel's copy window, and the
+/// window points back at the region when it drops.
+pub struct ImageCopy { frames: alloc::vec::Vec<u64>, len: usize, _held: spin::MutexGuard<'static, ()> }
 impl core::ops::Deref for ImageCopy {
     type Target = [u8];
     fn deref(&self) -> &[u8] {
-        let hhdm = crate::HHDM_REQUEST.response().expect("IMAGE_COPY_NO_HHDM").offset;
-        unsafe { core::slice::from_raw_parts((self.physical + hhdm) as *const u8, self.len) }
+        let window = PROGRAM_COPY_WINDOW.load(core::sync::atomic::Ordering::Acquire);
+        unsafe { core::slice::from_raw_parts(window as *const u8, self.len) }
     }
 }
 impl Drop for ImageCopy {
-    fn drop(&mut self) { crate::memory::allocator::GLOBAL_ALLOCATOR.free(self.physical, self.order); }
+    fn drop(&mut self) { copy_window_restore(&self.frames); }
+}
+/// Points the window's first `frames.len()` leaves back at the region and returns the frames.
+fn copy_window_restore(frames: &[u64]) {
+    let window = PROGRAM_COPY_WINDOW.load(core::sync::atomic::Ordering::Acquire);
+    let physical = PROGRAM_IMAGE_PHYSICAL.load(core::sync::atomic::Ordering::Acquire);
+    for i in 0..frames.len() {
+        let leaf = existing_leaf_address(window + i as u64 * 4096).expect("PROGRAM_COPY_LEAF") as *mut u64;
+        unsafe { leaf.write_volatile((leaf.read_volatile() & !LEAF_FRAME) | (physical + i as u64 * 4096)); }
+    }
+    crate::smp::tlb::flush_pages(frames.len(), (0..frames.len()).map(|i| window + i as u64 * 4096));
+    for &frame in frames { crate::program_frames::give(frame); }
 }
 pub fn program_image(len: usize) -> Option<ImageCopy> {
     let physical = PROGRAM_IMAGE_PHYSICAL.load(core::sync::atomic::Ordering::Acquire);
-    if physical == 0 || len == 0 || len > sex_pdx::program_store::IMAGE_BYTES { return None; }
-    let order = (len.div_ceil(4096)).next_power_of_two().trailing_zeros() as usize;
-    let private = crate::memory::allocator::GLOBAL_ALLOCATOR.alloc(order)?;
+    let window = PROGRAM_COPY_WINDOW.load(core::sync::atomic::Ordering::Acquire);
+    if physical == 0 || window == 0 || len == 0 || len > sex_pdx::program_store::IMAGE_BYTES { return None; }
+    let held = PROGRAM_COPY.try_lock()?;
+    let pages = len.div_ceil(4096);
+    let mut frames = alloc::vec::Vec::new();
+    frames.try_reserve_exact(pages).ok()?;
+    for i in 0..pages {
+        let Some(frame) = crate::program_frames::take() else { copy_window_restore(&frames); return None };
+        let leaf = existing_leaf_address(window + i as u64 * 4096).expect("PROGRAM_COPY_LEAF") as *mut u64;
+        unsafe { leaf.write_volatile((leaf.read_volatile() & !LEAF_FRAME) | frame); }
+        frames.push(frame);
+    }
+    crate::smp::tlb::flush_pages(pages, (0..pages).map(|i| window + i as u64 * 4096));
     let hhdm = crate::HHDM_REQUEST.response()?.offset;
-    unsafe { core::ptr::copy_nonoverlapping((physical + hhdm) as *const u8, (private + hhdm) as *mut u8, len); }
-    Some(ImageCopy { physical: private, order, len })
+    unsafe { core::ptr::copy_nonoverlapping((physical + hhdm) as *const u8, window as *mut u8, len); }
+    Some(ImageCopy { frames, len, _held: held })
 }
 /// The page table for a 2 MiB span, with all of its entries clear.
 pub fn reserve_table(base: u64, pkey: u8, any_frame: u64) -> *mut u64 {
