@@ -16,6 +16,7 @@ mod clipboard;
 mod autofill;
 use autofill as autofill_broker;
 mod autofill_routes;
+mod restricted_pool;
 #[cfg(sexos_input_payload_proof)]
 mod wait_observer;
 mod app_input;
@@ -5717,7 +5718,7 @@ unsafe fn adopt_running_apps() {
     let mut adopted = 0u32;
     for index in 0..APP_CUSTODY.len() {
         let Some(entry) = APP_CUSTODY[index].as_ref() else { continue };
-        if entry.dead || entry.close_pending { continue; }
+        if entry.dead || entry.close_pending || restricted_pool::reserved(entry.target) { continue; }
         if sex_pdx::app_lifecycle::info(entry.slot) != Err(sex_pdx::app_lifecycle::LIVE) { continue; }
         // A row the person never opened is running but has no window: leave it be.
         let Some(row) = app_catalog::by_target(entry.target) else { continue };
@@ -17383,6 +17384,7 @@ static mut PROGRAM_REBIRTH: Option<usize> = None;
 /// What each program row can do right now, from the rows' own held grants.
 fn program_rows()->impl Iterator<Item=(&'static app_catalog::Incarnation,usize,u64)>{
     app_catalog::INCARNATIONS.iter().filter(|row|row.app==app_catalog::App::Program&&row.ordinal!=0)
+        .filter(|row|restricted_pool::normal()&&!restricted_pool::reserved(row.target))
         .filter(|row|!sex_pdx::desktop_recording::ENABLED||row.target!=sex_pdx::desktop_recording::TARGET)
         .filter_map(|row|{let slot=row.activation_slot?;let info=sex_pdx::app_lifecycle::activation(slot,false).ok()?;Some((row,slot,info.state))})
 }
@@ -25553,6 +25555,7 @@ pub extern "C" fn _start() -> ! {
         .expect("shell display-ready inbox full");
     serial_println!("[display.ready.accepted] client=silk-shell caller=1 version=1");
     sex_rt::heap_init();
+    restricted_pool::initialize();
     sex_pdx::serial_record!("[input.payload.mode] component=shell mode={}",sex_pdx::input_diagnostics::mode());
     // Started again after a crash: notices to apps carry sequence numbers the apps
     // check, so number them after every earlier run's.
@@ -25919,6 +25922,7 @@ pub extern "C" fn _start() -> ! {
                 }
             }
         }
+        restricted_pool::recover();
         unsafe { program_rebirth_poll(); launch_poll(); }
         unsafe { session::save(); }
         unsafe { record_spawn_poll(); }
@@ -26623,6 +26627,7 @@ pub extern "C" fn _start() -> ! {
         if msg.type_id == sex_pdx::program_memory::OP_PRESSURE && msg.caller_pd == 0 { unsafe { MEMORY_LAST_LOOK = 0; } continue; }
         unsafe {
             if shell_lifecycle_hint(&msg) { continue; }
+            if restricted_pool::blocks(&msg){continue;}
             if shell_launch_message(&msg) { continue; }
             if shell_dnd_message(&msg) { continue; }
             if config_watch::receive(&msg) { continue; }

@@ -69,6 +69,10 @@ impl Ledger {
         });
         true
     }
+    /// Descriptive bounded identities for a coordinator's closed-row validation.
+    pub fn subjects(&self) -> impl Iterator<Item = Subject> + '_ {
+        self.entries.iter().flatten().map(|e| e.subject)
+    }
     pub fn maximum_generation(&self) -> u64 {
         self.entries
             .iter()
