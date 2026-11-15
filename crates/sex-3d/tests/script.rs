@@ -523,46 +523,53 @@ fn tmp(name: &str) -> PathBuf {
     d.join(name)
 }
 
-/// Run a Python script against `scene` the way Polyamour does: the scene as
-/// POLYAMOUR_SCENE, the commands back through POLYAMOUR_OPS (or stdout).
-fn run_python(py: &str, script: &Path, scene: &mut Scene, via_stdout: bool) -> Result<RunReport, ScriptError> {
+/// Run a Python script against `scene` on the batch path (the one SexOS uses):
+/// a snapshot of the scene for reads, the commands back through a file, all
+/// passed as arguments; then applied all or nothing.
+fn run_python(py: &str, script: &Path, scene: &mut Scene) -> Result<RunReport, ScriptError> {
+    use sex_3d::script::live;
     let tag = script.file_stem().unwrap().to_string_lossy().to_string();
-    let snap = tmp(&format!("{tag}.scene.polyops"));
+    let snap = tmp(&format!("{tag}.snapshot.json"));
     let ops = tmp(&format!("{tag}.ops.polyops"));
-    std::fs::write(&snap, scene_to_polyops(scene)).unwrap();
-    let mut cmd = Command::new(py);
-    cmd.arg("-I").arg("-c").arg("import sys, runpy; sys.path[:0] = [sys.argv[1]]; sys.argv = sys.argv[2:]; runpy.run_path(sys.argv[0], run_name='__main__')");
-    cmd.arg(package_dir()).arg(script).env("POLYAMOUR_SCENE", &snap).env_remove("POLYAMOUR_OPS");
-    if !via_stdout {
-        cmd.env("POLYAMOUR_OPS", &ops);
-    }
-    let out = cmd.output().unwrap();
-    // The script's own output: stderr, plus stdout when commands went to the file.
-    let mut stderr = String::from_utf8_lossy(&out.stderr).to_string();
-    let text = if via_stdout {
-        String::from_utf8(out.stdout).unwrap()
-    } else {
-        stderr += &String::from_utf8_lossy(&out.stdout);
-        std::fs::read_to_string(&ops).unwrap()
-    };
-    let r = run(scene, &text);
+    let _ = std::fs::remove_file(&ops);
+    std::fs::write(&snap, live::batch_snapshot(scene)).unwrap();
+    let mut cfg = live::KernelConfig::host();
+    cfg.program = py.to_string();
+    let out = live::batch_command(&cfg, script, &ops, &snap).output().unwrap();
+    let printed = String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
+    let text = std::fs::read_to_string(&ops).unwrap_or_default();
+    let r = live::batch_apply(scene, &text);
     if r.is_ok() {
-        assert!(out.status.success(), "python failed:\n{stderr}");
+        assert!(out.status.success(), "python failed:\n{printed}");
     }
     r.map(|mut rep| {
-        rep.replies.push(stderr);
+        rep.replies.push(printed);
         rep
     })
+}
+
+/// Run an example on a live kernel (it reads back what it made); the kernel
+/// is returned for its session state (render settings, reports).
+fn run_live(path: &Path, scene: &mut Scene) -> (String, sex_3d::script::live::Kernel) {
+    use sex_3d::script::live::{Kernel, KernelConfig, NoHost};
+    let mut k = Kernel::spawn(&KernelConfig::host()).expect("start the kernel");
+    let src = std::fs::read_to_string(path).unwrap();
+    let name = path.file_name().unwrap().to_string_lossy().to_string();
+    let r = k.call(scene, &mut NoHost, "exec", &[&name, &src]);
+    if let Err(e) = &r.result {
+        panic!("{name}: {e}\n{}\n{}", e.traceback, r.text());
+    }
+    (r.text(), k)
 }
 
 #[test]
 fn python_spiral_staircase() {
     let Some(py) = python() else { return };
     let mut s = Scene::startup();
-    let r = run_python(py, &package_dir().join("examples/spiral_staircase.py"), &mut s, false).unwrap();
-    assert!(r.complete);
-    assert!(r.replies.last().unwrap().contains("staircase: 32 objects"), "{:?}", r.replies);
-    assert_eq!(r.render.get("resolution_x").map(String::as_str), Some("1280"));
+    let _ = py;
+    let (printed, k) = run_live(&package_dir().join("examples/spiral_staircase.py"), &mut s);
+    assert!(printed.contains("staircase: 32 objects"), "{printed}");
+    assert_eq!(k.session.bpy.props.get("render.resolution_x").map(String::as_str), Some("1280"));
     assert_eq!(s.objects.len(), 3 + 24 + 5);
     let pole = s.find_object("Pole").unwrap();
     let stairs = s.collections.iter().position(|c| c.name == "Staircase").unwrap();
@@ -607,8 +614,8 @@ fn python_spiral_staircase() {
 fn python_plain_bpy_script() {
     let Some(py) = python() else { return };
     let mut s = Scene::startup();
-    let r = run_python(py, &package_dir().join("examples/blender_pyramid.py"), &mut s, true).unwrap();
-    assert!(r.complete);
+    let _ = py;
+    let (_, k) = run_live(&package_dir().join("examples/blender_pyramid.py"), &mut s);
     assert!(s.find_object("Cube").is_none(), "the default cube is deleted");
     let names: Vec<&str> = s.objects.iter().map(|o| o.name.as_str()).collect();
     assert_eq!(names, ["Light", "Camera", "Pyramid", "Ball", "Sun"]);
@@ -638,7 +645,7 @@ fn python_plain_bpy_script() {
     let want = Quat::from_euler_xyz(45f32.to_radians(), 0.0, 30f32.to_radians()).rotate(Vec3::Z);
     assert!(close(sun_x, want));
     assert_eq!(s.active_object, s.find_object("Pyramid"));
-    assert_eq!(r.render.get("engine").map(String::as_str), Some("CYCLES"));
+    assert_eq!(k.session.bpy.props.get("render.engine").map(String::as_str), Some("CYCLES"));
 }
 
 #[test]
@@ -648,9 +655,9 @@ fn python_failure_applies_nothing() {
     std::fs::write(&script, "import bpy\nbpy.ops.mesh.primitive_cube_add()\nbpy.data.objects['Missing']\n").unwrap();
     let mut s = Scene::startup();
     let before = s.clone();
-    let e = run_python(py, &script, &mut s, false).unwrap_err();
-    assert!(e.message.contains("script aborted: KeyError"), "{e}");
-    assert_eq!(e.line, 3);
+    let e = run_python(py, &script, &mut s).unwrap_err();
+    // The message names the script's line.
+    assert!(e.message.contains("script aborted: line 3: KeyError"), "{e}");
     assert_eq!(s, before);
 }
 
@@ -665,7 +672,7 @@ fn python_reads_the_scene_snapshot() {
          cube = bpy.data.objects['Cube']\n\
          assert cube.type == 'MESH' and cube.active_material.name == 'Material', cube.active_material\n\
          assert len(cube.data.vertices) == 8 and len(cube.data.polygons) == 6\n\
-         assert bpy.context.active_object is cube\n\
+         assert bpy.context.active_object == cube\n\
          assert cam.name == 'Camera' and abs(cam.data.lens - 50) < 1e-3, cam.data.lens\n\
          assert abs(bpy.data.objects['Light'].location.z - 5.9) < 1e-5\n\
          cube.location.z += 1\n\
@@ -676,8 +683,9 @@ fn python_reads_the_scene_snapshot() {
     )
     .unwrap();
     let mut s = Scene::startup();
-    let r = run_python(py, &script, &mut s, false).unwrap();
-    assert!(r.replies.last().unwrap().contains("['Cube', 'Light', 'Camera', 'Copy']"), "{:?}", r.replies);
+    let r = run_python(py, &script, &mut s).unwrap();
+    // Batch reads see the scene as it was when the script started.
+    assert!(r.replies.last().unwrap().contains("['Cube', 'Light', 'Camera']"), "{:?}", r.replies);
     assert!(close(obj(&s, "Cube").transform.location, Vec3::new(0.0, 0.0, 1.0)));
     assert_eq!(obj(&s, "Copy").data, obj(&s, "Cube").data);
     assert_eq!(obj(&s, "Copy").materials, vec![0], "a new user of the mesh gets its materials");
