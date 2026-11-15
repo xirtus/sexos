@@ -269,6 +269,11 @@ fn tokenize(line: &str) -> Result<Vec<Token>, String> {
                     }
                 }
                 '=' if tok.key.is_none() && !tok.quoted && is_ident(&tok.text) => tok.key = Some(std::mem::take(&mut tok.text)),
+                // Nodes modifier inputs: `input:Name=v`, `input:"Some Name"=v`.
+                '=' if tok.key.is_none() && tok.text.starts_with("input:") => {
+                    tok.key = Some(std::mem::take(&mut tok.text));
+                    tok.quoted = false;
+                }
                 c => tok.text.push(c),
             }
         }
@@ -1862,6 +1867,19 @@ fn modifier_opts(cmd: &mut Cmd, mut m: Modifier) -> Res<Modifier> {
             b(cmd, "only_smooth", only_smooth)?;
         }
         Modifier::WeightedNormal { keep_sharp } => b(cmd, "keep_sharp", keep_sharp)?,
+        Modifier::Nodes { group, inputs } => {
+            s(cmd, "group", group);
+            let keys: Vec<String> = cmd.opts.iter().filter(|o| o.0.starts_with("input:")).map(|o| o.0.clone()).collect();
+            for k in keys {
+                let Some(t) = cmd.opt(&k) else { continue };
+                let name = k["input:".len()..].to_string();
+                let v = node_value(&t);
+                match inputs.iter_mut().find(|x| x.0 == name) {
+                    Some(x) => x.1 = v,
+                    None => inputs.push((name, v)),
+                }
+            }
+        }
         _ => {}
     }
     Ok(m)
@@ -2085,7 +2103,59 @@ fn modifier_base_options(m: &Modifier) -> String {
             format!(" factor={} iterations={iterations} scale={} length_weighted={} only_smooth={}", f(*factor), f(*scale), b(*length_weighted), b(*only_smooth))
         }
         Modifier::WeightedNormal { keep_sharp } => format!(" keep_sharp={}", b(*keep_sharp)),
+        Modifier::Nodes { group, inputs } => {
+            let mut o = format!(" group={}", quote(group));
+            for (name, v) in inputs {
+                let text = match v {
+                    crate::nodes::Value::Float(x) => {
+                        let t = fmt_f(*x);
+                        if t.contains(['.', 'e', 'i', 'N']) {
+                            t
+                        } else {
+                            t + ".0"
+                        }
+                    }
+                    crate::nodes::Value::Int(i) => i.to_string(),
+                    crate::nodes::Value::Bool(x) => x.to_string(),
+                    crate::nodes::Value::Vector(x) => fmt_list(x),
+                    crate::nodes::Value::Color(x) => fmt_list(x),
+                    crate::nodes::Value::String(s) => format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"")),
+                    _ => continue,
+                };
+                let key = if is_ident(name) { name.clone() } else { format!("\"{}\"", name.replace('\\', "\\\\").replace('"', "\\\"")) };
+                let _ = write!(o, " input:{key}={text}");
+            }
+            o
+        }
         _ => String::new(),
+    }
+}
+
+/// A Nodes modifier input value as polyops writes it: a quoted string,
+/// `true`/`false`, a whole number (Int), a number with a point (Float),
+/// three numbers (Vector) or four (Color).
+fn node_value(t: &Token) -> crate::nodes::Value {
+    use crate::nodes::Value;
+    if t.quoted {
+        return Value::String(t.text.clone());
+    }
+    let s = t.text.trim();
+    match s {
+        "true" => return Value::Bool(true),
+        "false" => return Value::Bool(false),
+        _ => {}
+    }
+    if !s.contains(',') {
+        if let Ok(i) = s.parse::<i32>() {
+            return Value::Int(i);
+        }
+    }
+    let nums: Option<Vec<f32>> = s.split(',').map(|x| x.trim().parse::<f32>().ok()).collect();
+    match nums.as_deref() {
+        Some([x]) => Value::Float(*x),
+        Some([x, y, z]) => Value::Vector([*x, *y, *z]),
+        Some([r, g, b, a]) => Value::Color([*r, *g, *b, *a]),
+        _ => Value::String(t.text.clone()),
     }
 }
 

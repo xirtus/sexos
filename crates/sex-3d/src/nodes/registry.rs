@@ -1270,8 +1270,11 @@ static LEGACY: &[NodeType] = &[
 
 /// Every registered node type (the Add menu's).
 pub fn node_types() -> &'static [NodeType] {
-    TYPES
+    static ALL: std::sync::OnceLock<Vec<NodeType>> = std::sync::OnceLock::new();
+    ALL.get_or_init(|| TYPES.iter().chain(super::geo_registry::GEO_TYPES).copied().collect())
 }
+
+pub use super::geo_registry::is_multi_input;
 
 /// Deprecated types kept for reading older files.
 pub fn legacy_node_types() -> &'static [NodeType] {
@@ -1279,7 +1282,7 @@ pub fn legacy_node_types() -> &'static [NodeType] {
 }
 
 pub fn node_type(idname: &str) -> Option<&'static NodeType> {
-    TYPES.iter().chain(LEGACY).find(|t| t.idname == idname)
+    node_types().iter().chain(LEGACY).find(|t| t.idname == idname)
 }
 
 /// A new node of type `idname` with its default name, sockets and props.
@@ -1288,16 +1291,24 @@ pub fn new_node(idname: &str) -> Option<Node> {
 }
 
 /// The Add-menu categories for a tree kind, in Blender's order, each with
-/// its node types. Layout nodes (Frame, Reroute) appear in every tree.
+/// its node types. Layout nodes (Frame, Reroute) appear in every tree;
+/// geometry trees also list the shared shader math, colour and texture
+/// nodes (evaluated as fields) and the Group Input/Output nodes.
 pub fn categories(kind: TreeKind) -> Vec<(Category, Vec<&'static NodeType>)> {
     let mut out: Vec<(Category, Vec<&'static NodeType>)> = Vec::new();
-    for t in TYPES {
-        if t.tree != kind && t.category != Category::Layout {
-            continue;
-        }
-        match out.iter_mut().find(|c| c.0 == t.category) {
-            Some(c) => c.1.push(t),
-            None => out.push((t.category, vec![t])),
+    let mut push = |cat: Category, t: &'static NodeType| match out.iter_mut().find(|c| c.0 == cat) {
+        Some(c) => c.1.push(t),
+        None => out.push((cat, vec![t])),
+    };
+    for t in node_types() {
+        if t.tree == kind || t.category == Category::Layout {
+            push(t.category, t);
+        } else if kind == TreeKind::Geometry {
+            if let Some((_, cat)) = super::geo_registry::GEO_SHARED.iter().find(|x| x.0 == t.idname) {
+                push(*cat, t);
+            } else if matches!(t.idname, "NodeGroupInput" | "NodeGroupOutput") {
+                push(Category::Group, t);
+            }
         }
     }
     out
@@ -1324,7 +1335,8 @@ pub fn math_inputs(op: &str) -> usize {
 /// property change (Math's operation, Noise's dimensions, Mix's data type, ...).
 /// Hidden-by-user flags are left alone.
 pub fn update_sockets(node: &mut Node) {
-    let en = |node: &mut Node, id: &str, on: bool| {
+    super::geo_registry::geo_update(node);
+    let en =|node: &mut Node, id: &str, on: bool| {
         if let Some(s) = node.inputs.iter_mut().find(|s| s.identifier == id) {
             s.enabled = on;
         }

@@ -34,6 +34,7 @@ pub mod uv;
 pub mod armature;
 pub mod constraints;
 pub mod lattice;
+pub mod geometry;
 
 pub use math::{Aabb, Mat4, Quat, Vec2, Vec3};
 pub use mesh::{Face, HalfEdgeMesh, Mesh};

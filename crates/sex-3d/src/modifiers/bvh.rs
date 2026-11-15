@@ -17,6 +17,8 @@ struct Node {
 
 pub struct TriBvh {
     tris: Vec<[Vec3; 3]>,
+    /// Index of each (reordered) triangle in `Mesh::triangulate` order.
+    ids: Vec<u32>,
     nodes: Vec<Node>,
 }
 
@@ -26,17 +28,20 @@ pub struct Hit {
     pub point: Vec3,
     pub normal: Vec3,
     pub dist: f32,
+    /// The triangle hit, in `Mesh::triangulate` order.
+    pub tri: usize,
 }
 
 impl TriBvh {
     pub fn new(m: &Mesh) -> TriBvh {
         let tris: Vec<[Vec3; 3]> = m.triangulate().iter().map(|t| t.verts.map(|v| m.positions[v as usize])).collect();
-        let mut bvh = TriBvh { tris, nodes: Vec::new() };
+        let mut bvh = TriBvh { tris, ids: Vec::new(), nodes: Vec::new() };
         if !bvh.tris.is_empty() {
             let mut order: Vec<usize> = (0..bvh.tris.len()).collect();
             bvh.nodes.push(Node { min: Vec3::ZERO, max: Vec3::ZERO, start: 0, count: 0 });
             bvh.build(0, &mut order, 0);
             bvh.tris = order.iter().map(|&i| bvh.tris[i]).collect();
+            bvh.ids = order.iter().map(|&i| i as u32).collect();
         }
         bvh
     }
@@ -95,12 +100,13 @@ impl TriBvh {
                 continue;
             }
             if n.count > 0 {
-                for t in &self.tris[n.start as usize..(n.start + n.count) as usize] {
+                for k in n.start as usize..(n.start + n.count) as usize {
+                    let t = &self.tris[k];
                     let q = closest_on_triangle(p, t[0], t[1], t[2]);
                     let d = (q - p).length_squared();
                     if d < best {
                         best = d;
-                        hit = Some((q, *t));
+                        hit = Some((q, *t, k));
                     }
                 }
             } else {
@@ -115,7 +121,7 @@ impl TriBvh {
                 }
             }
         }
-        hit.map(|(q, t)| Hit { point: q, normal: (t[1] - t[0]).cross(t[2] - t[0]).normalize(), dist: best.sqrt() })
+        hit.map(|(q, t, k)| Hit { point: q, normal: (t[1] - t[0]).cross(t[2] - t[0]).normalize(), dist: best.sqrt(), tri: self.ids[k] as usize })
     }
 
     /// The nearest hit along `o + t d` for `t` in `(0, max)`.
@@ -133,11 +139,12 @@ impl TriBvh {
                 continue;
             }
             if n.count > 0 {
-                for t in &self.tris[n.start as usize..(n.start + n.count) as usize] {
+                for k in n.start as usize..(n.start + n.count) as usize {
+                    let t = &self.tris[k];
                     if let Some(s) = ray_triangle(o, d, t) {
                         if s > 0.0 && s < best {
                             best = s;
-                            hit = Some(*t);
+                            hit = Some((*t, k));
                         }
                     }
                 }
@@ -146,7 +153,7 @@ impl TriBvh {
                 stack.push(n.start as usize + 1);
             }
         }
-        hit.map(|t| Hit { point: o + d * best, normal: (t[1] - t[0]).cross(t[2] - t[0]).normalize(), dist: best })
+        hit.map(|(t, k)| Hit { point: o + d * best, normal: (t[1] - t[0]).cross(t[2] - t[0]).normalize(), dist: best, tri: self.ids[k] as usize })
     }
 }
 

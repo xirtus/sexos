@@ -42,7 +42,7 @@ pub(crate) mod ops;
 mod sky;
 pub(crate) mod surface;
 pub(crate) mod tex;
-mod vm;
+pub(crate) mod vm;
 
 pub(crate) use compile::{compile_material, compile_world};
 pub(crate) use vm::{Closures, Op};

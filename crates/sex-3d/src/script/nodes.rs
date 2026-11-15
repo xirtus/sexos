@@ -313,7 +313,7 @@ fn resync_group(scene: &mut Scene, g: usize) {
     let group = scene.node_groups[g].clone();
     let fix = |t: &mut NodeTree, own: bool| {
         for n in &mut t.nodes {
-            let uses = n.idname == "ShaderNodeGroup" && n.prop("node_tree") == Some(&Prop::Id(Some(g)));
+            let uses = crate::nodes::edit::is_group_node(n) && n.prop("node_tree") == Some(&Prop::Id(Some(g)));
             if uses || (own && (n.idname == "NodeGroupInput" || n.idname == "NodeGroupOutput")) {
                 sync_group_sockets(n, &group);
             }
@@ -380,6 +380,15 @@ impl Session {
                 if let Some(slot) = slot {
                     slot.get_or_insert_with(|| NodeTree::new("Shader Nodetree", TreeKind::Shader));
                 }
+                if let Some(kind) = cmd.opt("kind") {
+                    let Owner::Group(g) = owner else { return Err("kind= is only for node groups".into()) };
+                    scene.node_groups[g].kind = match kind.text.to_ascii_lowercase().as_str() {
+                        "shader" => TreeKind::Shader,
+                        "compositor" => TreeKind::Compositor,
+                        "geometry" => TreeKind::Geometry,
+                        o => return Err(format!("kind is shader, compositor or geometry, not '{o}'")),
+                    };
+                }
                 if let (Some(t), Owner::Group(g)) = (cmd.opt("name"), owner) {
                     if scene.node_groups.iter().enumerate().any(|(j, x)| j != g && x.name == t.text) {
                         return Err(format!("a node group named '{}' exists", t.text));
@@ -439,11 +448,23 @@ impl Session {
             }
             "node_socket" => {
                 cmd.max_args(k + 4)?;
+                // `node_socket OWNER NODE clear` drops every socket (before
+                // re-adding a known node's dynamic sockets).
+                if cmd.pos.len() == k + 2 && cmd.arg(k + 1, "clear")?.is_word("clear") {
+                    let node = cmd.arg(k, "a node")?.clone();
+                    let t = tree(scene, owner)?;
+                    let i = node_index(t, &node)?;
+                    t.nodes[i].inputs.clear();
+                    t.nodes[i].outputs.clear();
+                    t.links.retain(|l| l.from_node != i && l.to_node != i);
+                    return Ok(None);
+                }
                 let (node, side, id, ty) = (cmd.arg(k, "a node")?.clone(), cmd.arg(k + 1, "in or out")?.text.clone(), cmd.arg(k + 2, "an identifier")?.text.clone(), socket_type(&cmd.arg(k + 3, "a socket type")?.text)?);
                 let label = cmd.opt("name").map_or_else(|| id.clone(), |t| t.text);
                 let t = tree(scene, owner)?;
                 let i = node_index(t, &node)?;
-                let s = Socket::new(&label, ty, Value::None).ident(&id);
+                let value = if new_node(&t.nodes[i].idname).is_some() { crate::nodes::geo_registry::socket_default(ty) } else { Value::None };
+                let s = Socket::new(&label, ty, value).ident(&id);
                 match side.as_str() {
                     "in" => t.nodes[i].inputs.push(s),
                     "out" => t.nodes[i].outputs.push(s),
@@ -475,7 +496,7 @@ impl Session {
                     };
                     let n = &mut tree(scene, owner)?.nodes[i];
                     n.set_prop(p, v);
-                    if let (Some(g), "ShaderNodeGroup") = (&group, n.idname.as_str()) {
+                    if let (Some(g), true) = (&group, crate::nodes::edit::is_group_node(n)) {
                         sync_group_sockets(n, g);
                     }
                     update_sockets(n);
@@ -594,7 +615,12 @@ pub(super) fn write_node_trees(o: &mut String, scene: &Scene) {
     let groups: Vec<String> = scene.node_groups.iter().map(|g| format!("group {}", quote(&g.name))).collect();
     // Every group and its interface first: trees may use any group.
     for (g, owner) in scene.node_groups.iter().zip(&groups) {
-        let _ = writeln!(o, "node_tree {owner}");
+        let kind = match g.kind {
+            TreeKind::Shader => "",
+            TreeKind::Compositor => " kind=compositor",
+            TreeKind::Geometry => " kind=geometry",
+        };
+        let _ = writeln!(o, "node_tree {owner}{kind}");
         for (side, list) in [("input", &g.inputs), ("output", &g.outputs)] {
             for s in list.iter() {
                 let mut extra = String::new();
@@ -662,6 +688,32 @@ fn write_tree(o: &mut String, scene: &Scene, owner: &str, t: &NodeTree) {
             }
             let ty = if old.is_none() && id_kind_of_prop(key).is_none() { format!(" type={}", prop_type(p, key)) } else { String::new() };
             let _ = writeln!(o, "node_set {owner} {name} {} {}{ty}", quote(&format!("prop:{key}")), prop_text(scene, p, key));
+        }
+        // Known nodes with sockets of their own (zone items, Capture
+        // Attribute items, switch items): write the socket lists.
+        let mut fresh = fresh;
+        if let Some(f) = &mut fresh {
+            for (k, p) in &n.props {
+                f.set_prop(k, p.clone());
+            }
+            if let Some(g) = crate::nodes::edit::group_of(f).and_then(|g| scene.node_groups.get(g)) {
+                sync_group_sockets(f, g);
+            } else if f.idname == "NodeGroupInput" || f.idname == "NodeGroupOutput" {
+                // The interface of the tree being written (a group's own).
+                sync_group_sockets(f, t);
+            }
+            update_sockets(f);
+            let sig = |l: &[Socket]| l.iter().map(|s| (s.identifier.clone(), s.ty, s.name.clone())).collect::<Vec<_>>();
+            if sig(&f.inputs) != sig(&n.inputs) || sig(&f.outputs) != sig(&n.outputs) {
+                let _ = writeln!(o, "node_socket {owner} {name} clear");
+                for (side, list) in [("in", &n.inputs), ("out", &n.outputs)] {
+                    for s in list.iter() {
+                        let label = if s.name != s.identifier { format!(" name={}", quote(&s.name)) } else { String::new() };
+                        let _ = writeln!(o, "node_socket {owner} {name} {side} {} {}{label}", quote(&s.identifier), socket_type_name(s.ty));
+                    }
+                }
+                fresh = None;
+            }
         }
         for (side, list, flist) in [("in", &n.inputs, fresh.as_ref().map(|f| &f.inputs)), ("out", &n.outputs, fresh.as_ref().map(|f| &f.outputs))] {
             for s in list.iter() {
