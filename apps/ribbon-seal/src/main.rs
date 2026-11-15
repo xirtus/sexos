@@ -28,8 +28,8 @@ mod guest {
     static WORK_READY: AtomicU32 = AtomicU32::new(0);
     static WORK_RELEASE: AtomicU32 = AtomicU32::new(0);
     #[panic_handler]
-    fn panic(_: &core::panic::PanicInfo) -> ! {
-        sex_pdx::serial_record!("[ribbon.failed] invariant=1");
+    fn panic(info: &core::panic::PanicInfo) -> ! {
+        sex_pdx::serial_record!("[ribbon.failed] invariant=1 detail={}", info);
         launch::exit(1)
     }
     fn pause() {
