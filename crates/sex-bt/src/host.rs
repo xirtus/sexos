@@ -61,6 +61,8 @@ pub enum Note {
     /// A device seen for the first time, or seen again with its name.
     Device(Found),
     Connected { handle: u16, addr: Addr, le: bool },
+    /// A connection we asked for did not come up (HCI status, e.g. 0x04 page timeout).
+    ConnectFailed { addr: Addr, status: u8 },
     Disconnected { handle: u16, reason: u8 },
     /// Ask the user whether this six-digit value matches the other device's screen.
     Compare { handle: u16, addr: Addr, value: u32 },
@@ -191,9 +193,13 @@ impl Host {
 
     /// Forget a device's keys (and drop its link).
     pub fn forget(&mut self, addr: Addr) {
+        // Live links of this device, including an LE device connected from a newer
+        // private address that resolves to the bond (looked up before the keys go).
+        let handles: Vec<u16> = self.conns.iter()
+            .filter(|c| c.addr == addr || self.bonds.le_for(&c.addr).is_some_and(|b| b.addr == addr))
+            .map(|c| c.handle).collect();
         self.ssp.bonds.retain(|b| b.addr != addr);
         if self.bonds.forget(&addr) { self.notes.push_back(Note::BondsChanged); }
-        let handles: Vec<u16> = self.conns.iter().filter(|c| c.addr == addr).map(|c| c.handle).collect();
         for h in handles { self.disconnect(h); }
     }
 
@@ -558,7 +564,12 @@ impl Host {
                 self.found(f);
             }
             Event::ConnectionComplete { status, handle, addr, .. } => {
-                if status != 0 { self.wanted.retain(|a| *a != addr); return; }
+                if status != 0 {
+                    if self.wanted.contains(&addr) { self.notes.push_back(Note::ConnectFailed { addr, status }); }
+                    self.wanted.retain(|a| *a != addr);
+                    self.audio_wanted.retain(|a| *a != addr);
+                    return;
+                }
                 let ours = self.wanted.contains(&addr);
                 let audio = self.audio_wanted.contains(&addr);
                 let hid = self.hid_wanted(&addr) && !audio;
@@ -572,7 +583,12 @@ impl Host {
             }
             Event::LeConnectionComplete { status, handle, role, peer_type, peer } => {
                 self.le_connecting = None;
-                if status != 0 { self.wanted.retain(|a| *a != peer); self.next_le(); return; }
+                if status != 0 {
+                    if self.wanted.contains(&peer) { self.notes.push_back(Note::ConnectFailed { addr: peer, status }); }
+                    self.wanted.retain(|a| *a != peer);
+                    self.next_le();
+                    return;
+                }
                 let hid = self.hid_wanted(&peer);
                 self.conns.push(Conn::new(handle, peer, peer_type & 1, true, role == 0, hid));
                 self.notes.push_back(Note::Connected { handle, addr: peer, le: true });

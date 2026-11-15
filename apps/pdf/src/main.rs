@@ -20,7 +20,7 @@
 //! checkbox, Escape ends. Ctrl+S saves every change as an incremental update appended
 //! to the file (its original bytes stay as they were) and shows the file as saved.
 //!
-//! `pdf --thumb @IN @OUT SIZE` opens no window: it writes the first page, on white, as
+//! `vellum --thumb @IN @OUT SIZE` opens no window: it writes the first page, on white, as
 //! a thumbnail (the format is in the `thumb` module).
 mod sample;
 #[cfg_attr(not(target_os = "hermit"), allow(dead_code))]

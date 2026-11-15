@@ -22,6 +22,7 @@ mod idle_media;
 mod lock;
 mod keyboard_layout;
 mod key_repeat;
+mod bt_panel;
 use alloc::vec::Vec;
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -10671,6 +10672,7 @@ unsafe fn wm_action(action: wm::WmAction) -> bool {
         A::NightLight => desktop_look_step(0, 1),
         A::Lock => lock::lock(),
         A::KeyboardLayout => { let (label, title) = keyboard_layout::next(); keyboard_layout_notice(label, title) }
+        A::Bluetooth => bt_panel::toggle(),
     };
     sex_pdx::serial_record!("[shell.wm.action] action={:?} done={} scene={}->{} focus={}->{} layout={}",
         action, done as u8, before.0, ACTIVE_SCENE_IDX, before.1, FOCUSED_SURFACE_ID, wm_tiling().layout.name());
@@ -10700,6 +10702,7 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
         }
     }
     if overview_key(code,value) {return true;}
+    if bt_panel::key(code,value) {return true;}
     if media_keys::is_player_key(code){if value==1{player_key(code);}return true;}
     let modifier=APP_MODIFIERS.observe(code,value)|keyboard_layout::observe(code,value);
     if screenshot_key(code,value) {return true;}
@@ -11184,6 +11187,7 @@ unsafe fn media_keys_receive(msg:&sex_pdx::PdxMessage)->bool{
     if msg.type_id!=1||msg.caller_pd!=NOTIFY_BELL_PD||!media_keys::is_mixer_answer(msg.arg0)||!MEDIA_ASKS.pending(){return false}
     let word=msg.arg0;
     match MEDIA_ASKS.pop(){
+        // An answer from before a change still waiting is not what the person chose.
         Some(media_keys::Ask::Tray) if !media_keys::refused(word)=>tray_volume(word),
         Some(media_keys::Ask::Volume) if !media_keys::refused(word)=>{
             tray_volume(word);
@@ -17587,6 +17591,7 @@ static mut PROGRAM_NETWORK: bool = false;
 /// Files may then serve the program its own folder, and the network service talk to
 /// it if the person asked, for this run alone.
 fn program_bind(target:u32,task:u32){
+    attached_record(target,task);
     let _=pdx_call(sex_pdx::program_store::SHELL_ROUTE_SLOT,sex_pdx::program_store::OP_BIND,target as u64,task as u64,0);
     let network=unsafe{core::mem::take(&mut PROGRAM_NETWORK)};
     if network{let _=pdx_call(sex_pdx::web::SHELL_SLOT,sex_pdx::program_store::OP_BIND,target as u64,task as u64,0);}
@@ -17750,6 +17755,37 @@ unsafe fn shell_launch_message(msg:&sex_pdx::PdxMessage)->bool{
     }
     true
 }
+/// The terminal (target, task) whose ticket is being read, until its run is bound.
+static mut PROGRAM_LAUNCHER: Option<(u32,u32)> = None;
+/// Runs a terminal started attached to it (`sex_pdx::console_relay`): (run target, run
+/// task, terminal target, terminal task). Only that terminal may stop the run.
+static mut ATTACHED_RUNS: [Option<(u32,u32,u32,u32)>;16] = [None;16];
+/// The task `target`'s row runs now, if it runs.
+fn running_task(target:u32)->Option<u32>{
+    let row=app_catalog::by_target(target)?;
+    let c=sex_pdx::app_lifecycle::catalog(row.lifecycle_slot).ok()?;
+    (c.target_pd==target&&sex_pdx::app_lifecycle::info(row.lifecycle_slot)==Err(sex_pdx::app_lifecycle::LIVE)).then_some(c.task_id)
+}
+fn attached_record(target:u32,task:u32){
+    let runs=unsafe{&mut *core::ptr::addr_of_mut!(ATTACHED_RUNS)};
+    // The row's earlier run is no one's now.
+    for r in runs.iter_mut(){if r.is_some_and(|r|r.0==target){*r=None;}}
+    let Some((by,by_task))=(unsafe{core::mem::take(&mut *core::ptr::addr_of_mut!(PROGRAM_LAUNCHER))})else{return};
+    let free=runs.iter().position(|r|r.is_none_or(|r|running_task(r.0)!=Some(r.1)||running_task(r.2)!=Some(r.3)));
+    if let Some(i)=free{runs[i]=Some((target,task,by,by_task));}
+}
+/// A terminal's second Ctrl+C: its attached run did not end, so it is ended the way a
+/// program that ignores Close is (`app_lifecycle::force_end`). Only the terminal run that
+/// started it may ask, while both still run.
+unsafe fn attached_stop(caller:u32,target:u64){
+    let runs=&mut *core::ptr::addr_of_mut!(ATTACHED_RUNS);
+    let found=runs.iter().flatten().copied().find(|r|r.0 as u64==target&&r.2==caller);
+    let ok=found.is_some_and(|r|running_task(r.2)==Some(r.3)&&running_task(r.0)==Some(r.1));
+    let Some(r)=found.filter(|_|ok)else{sex_pdx::serial_record!("[shell.attached.stop.denied] caller={} target={}",caller,target);return};
+    let Some(row)=app_catalog::by_target(r.0)else{return};
+    let result=sex_pdx::app_lifecycle::force_end(row.lifecycle_slot);
+    sex_pdx::serial_record!("[shell.attached.stop] terminal={} target={} task={} ok={}",caller,r.0,r.1,result.is_ok() as u8);
+}
 /// Spindle's `run NAME`, and Files' answer once it has read the file.
 unsafe fn shell_program_message(msg:&sex_pdx::PdxMessage)->bool{
     use sex_pdx::{app_lifecycle as a,program_store as store};
@@ -17767,6 +17803,10 @@ unsafe fn shell_program_message(msg:&sex_pdx::PdxMessage)->bool{
         RECORD_SPAWN_WANTED=if status==0{msg.arg2}else{0};
         return true;
     }
+    if msg.type_id==store::OP_STOP_ATTACHED {
+        if matches!(app_catalog::app_of(msg.caller_pd),Some(app_catalog::App::Program)){attached_stop(msg.caller_pd,msg.arg0);}
+        return true;
+    }
     if msg.type_id==store::OP_RUN {
         // A terminal's ticket (sex_pdx::console_relay): Files starts it only for the program that prepared it.
         let by_program=msg.arg0==store::TICKET&&matches!(app_catalog::app_of(msg.caller_pd),Some(app_catalog::App::Program));
@@ -17777,6 +17817,7 @@ unsafe fn shell_program_message(msg:&sex_pdx::PdxMessage)->bool{
         let(status,_)=pdx_call(store::SHELL_ROUTE_SLOT,store::OP,msg.arg0,msg.arg1,if by_program{msg.caller_pd as u64}else{0});
         PROGRAM_READING=status==0;
         PROGRAM_NETWORK=status==0&&!by_program&&msg.arg2&store::RUN_NETWORK!=0;
+        PROGRAM_LAUNCHER=if status==0&&by_program{running_task(msg.caller_pd).map(|t|(msg.caller_pd,t))}else{None};
         // A restored run's workspace, and the ticket Spindle keeps the session by: Spindle's runs only.
         PROGRAM_TICKET=if by_program{0}else{msg.arg1};PROGRAM_SCENE=if by_program{None}else{sex_pdx::session_restore::scene_of(msg.arg2).filter(|s|(*s as usize)<ATLAS_MAX_SCENES)};
         if status!=0{sex_pdx::serial_record!("[shell.program.denied] reason=files_busy status={}",status);}
@@ -24843,6 +24884,7 @@ unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTar
     if OVERVIEW.is_open() { overview_click(px, py); return (HitTarget::None, true); }
     if SCREENSHOT.is_open() { return (HitTarget::None, true); }
     if TRAY_VIEW.menu != sex_pdx::tray::Menu::None && py >= desktop_bar_height() { tray_click(px, py); return (HitTarget::None, true); }
+    if bt_panel::click(px, py, desktop_width(), desktop_bar_height()) { return (HitTarget::None, true); }
     let old_focus = FOCUSED_SURFACE_ID;
     serial_println!("[shell.click_focus.down] x={} y={} buttons={:#x}", px, py, buttons_val);
     // ── Atlas intercept: if Atlas mode is enabled, hit-test scene cards ──
@@ -26147,6 +26189,7 @@ pub extern "C" fn _start() -> ! {
         // Held keys: the repeat goes ahead of the queue drain below.
         unsafe { key_repeat_poll(); }
         unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); display_scale_poll(); shell_close_poll(); shell_memory_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); notification_poll(); tray_tick(); laptop_poll(); }
+        bt_panel::poll();
         // Retain failed notification attempts while continuing normal receives.
         // Success means enqueue only; sexinput validates caller and version.
         if shell_ready_publisher.poll() {
@@ -26836,7 +26879,7 @@ pub extern "C" fn _start() -> ! {
             }
         };
         // Display started again after a crash: it knows nothing of the desktop, so show it again.
-        if sex_pdx::display_ready::is_display_ready(&msg) { unsafe { display_came_back(); } config_watch::display_restarted(); lock::display_restarted(); continue; }
+        if sex_pdx::display_ready::is_display_ready(&msg) { unsafe { display_came_back(); } config_watch::display_restarted(); lock::display_restarted(); bt_panel::display_restarted(); continue; }
         // The kernel: the power button or the lid. Read the sensors now.
         if msg.type_id == sex_pdx::power::OP_EVENT && msg.caller_pd == 0 { unsafe { LAPTOP_NEXT_POLL = 0; laptop_poll(); } continue; }
         // The kernel's critical-memory word: the poll above acts on it.
@@ -26848,6 +26891,7 @@ pub extern "C" fn _start() -> ! {
             if shell_clip_message(&msg) { continue; }
             if config_watch::receive(&msg) { continue; }
             if lock::receive(&msg) { continue; }
+            if bt_panel::receive(&msg) { continue; }
             if shell_program_message(&msg) { continue; }
             if clipboard_receive(&msg) { continue; }
             if notification_receive(&msg) { continue; }

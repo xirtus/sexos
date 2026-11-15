@@ -67,6 +67,10 @@ jobs:
       run: cargo test --locked -p sex-extensions
     - name: Settings schema, file format, protocol and the Settings program's pages
       run: bash scripts/settings_host_gate.sh
+    - name: egui backend (input mapping, CPU rasterizer, whole frames of the egui demo)
+      run: cargo test --locked -p sex-egui
+    - name: Weft toolkit and Abacus (layout, input, menus, palette, dialogs, tabs, accessibility)
+      run: cargo test --locked -p weft && cargo test --locked -p abacus --no-default-features
     - name: Signed package format and store catalog
       run: cargo test --locked -p sex-pkg
     - name: Spreadeagle workbook engine and office painting (host)
@@ -75,8 +79,8 @@ jobs:
       run: cargo test --locked -p sex-disk --lib
     - name: Keyboard layouts, dead keys and Compose
       run: cargo test --locked -p sex-keymap
-    - name: Fallback fonts reach Cyrillic, Greek, CJK, emoji and symbols
-      run: cargo test --locked -p sex-font --test fallback
+    - name: Fallback fonts reach Cyrillic, Greek, CJK, emoji and symbols; bold and italic faces
+      run: cargo test --locked -p sex-font --test fallback --test styles
     - name: Shaping (rustybuzz vs hb-shape), Arabic joining and bidi
       run: cargo test --locked -p sex-shape --features shaping
     - name: Shuttle userspace font fallback, RTL/BiDi shaping and font picker on the host
@@ -335,7 +339,7 @@ jobs:
   devices:
     name: Disks, power and fuzzing
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    timeout-minutes: 60
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
@@ -526,6 +530,10 @@ jobs:
       run: python3 scripts/program_assuit_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/assuit"
     - name: Lua 5.4 interpreter
       run: python3 scripts/lua_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/lua"
+    - name: egui programs (the unmodified egui demo, clicks, keys and wheel)
+      run: python3 scripts/program_egui_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/egui"
+    - name: Weft programs (Abacus typing, keypad clicks, errors, command palette)
+      run: python3 scripts/program_weft_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/weft"
     - name: Signed packages, install service and first-run grant question
       run: |
         truncate -s 1G "$RUNNER_TEMP/blank-packages.img"
@@ -648,6 +656,10 @@ jobs:
       run: |
         truncate -s 256M "$RUNNER_TEMP/tray-source.img"
         python3 scripts/tray_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/tray-source.img" --out "$RUNNER_TEMP/sexos-desktop/tray"
+    - name: Bluetooth panel
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/bt-panel-source.img"
+        python3 scripts/bt_panel_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/bt-panel-source.img" --out "$RUNNER_TEMP/sexos-desktop/bt-panel"
     - name: Window animations
       run: |
         truncate -s 256M "$RUNNER_TEMP/motion-source.img"
@@ -770,7 +782,7 @@ jobs:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
     - name: Calculator arithmetic and calendar model on the host
-      run: cargo test --locked -p sex-calc-core -p sex-calendar -p sex-dav -p sex-vcard -p sex-vt -p sex-textedit -p sex-wasm && cargo test --locked -p sex-pdx --test stream --test console_relay
+      run: cargo test --locked -p sex-calc-core -p sex-calendar -p sex-dav -p sex-vcard -p sex-vt -p spindle-panes -p spindle-shell -p sex-textedit -p sex-wasm && cargo test --locked -p sex-pdx --test stream --test console_relay
     - name: Build the image
       run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/productivity-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/productivity-build.log"; exit 1)
     - name: Calculator typed, clicked and recalled

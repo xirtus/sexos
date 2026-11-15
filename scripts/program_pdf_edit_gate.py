@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Vellum edits a PDF and saves it: `run pdf @form.pdf` opens a one-page form; Ctrl+F
+"""Vellum edits a PDF and saves it: `run vellum @form.pdf` opens a one-page form; Ctrl+F
 finds PARAKEET and Ctrl+H highlights it; Ctrl+N adds a typed sticky note; Ctrl+R
 chooses a region with the arrows and Enter highlights it; Ctrl+L lists the three and
 Delete removes the region's highlight; Ctrl+E fills the text field, Ctrl+Down moves to the
@@ -42,10 +42,10 @@ def thumb_ok(data,want_w,want_h):
  return w,h
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
- pdf=(ROOT/'iso_root/programs/pdf').read_bytes();assert pdf[:4]==b'\x7fELF'
+ pdf=(ROOT/'iso_root/programs/vellum').read_bytes();assert pdf[:4]==b'\x7fELF'
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
  with disk.open('r+b') as f:f.truncate(1024**3)
- install(disk,[('pdf',pdf)])
+ install(disk,[('vellum',pdf)])
  extractor=a.out/'sexfs-extract';subprocess.run(['rustc','--edition=2021','-O','-A','dead_code','-A','unused_attributes',str(ROOT/'scripts/sexfs_extract.rs'),'-o',str(extractor)],check=True)
  g=boot(a.iso,disk,a.out,'pdf-edit',a.resolution);t=g['text'];q=g['q']
  def chord(*k):q.cmd('send-key',{'keys':[{'type':'qcode','data':x} for x in k],'hold-time':80});time.sleep(.15)
@@ -66,14 +66,14 @@ def main():
   s=len(t());line(f'fetch http://10.0.2.2:{PORT}/form.pdf form.pdf')
   m=g['wait'](r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',s,300);assert m[1].startswith('Saved'),m[1]
   # The thumbnail first: no window, the header and the page's shape.
-  s=len(t());line('run pdf --thumb @form.pdf @form.thumb 96')
+  s=len(t());line('run vellum --thumb @form.pdf @form.thumb 96')
   th=g['wait'](r'\[pdf\.thumb\] status=(\d+)([^\n]*)\n',s,300);assert th[1]=='0',th[0]
   tw,thh=map(int,re.search(r'w=(\d+) h=(\d+)',th[2]).groups());assert (tw,thh)==(74,96),th[0]
   thumb_ms=int(re.search(r'ms=(\d+)',th[2])[1])
   g['wait'](r'\[std\.exit\] target=\d+ task=\d+ status=0\n',s,120)
-  s=len(t());line('run pdf --thumb @missing.pdf @missing.thumb 96')
+  s=len(t());line('run vellum --thumb @missing.pdf @missing.thumb 96')
   g['wait'](r'\[pdf\.thumb\] status=1 [^\n]*\n',s,300);g['wait'](r'\[std\.exit\] target=\d+ task=\d+ status=1\n',s,120)
-  s=len(t());line('run pdf @form.pdf')
+  s=len(t());line('run vellum @form.pdf')
   o=g['wait'](r'\[pdf\.open\] target=(\d+) task=(\d+) name=form\.pdf pages=1\n',s,600)
   g['wait'](r'\[pdf\.page\] page=1 pages=1 width=\d+ height=\d+ ink=\d+ ms=\d+\n',s,900)
   launch=re.findall(rf'\[shell.program.launch\] target={o[1]} task={o[2]} surface=(\d+)',t()[s:])
@@ -115,7 +115,7 @@ def main():
   s=len(t());q.key('f11');g['wait'](r'\[pdf\.closed\]\n',s,60)
   g['wait'](rf'\[app\.private\.retired\] target={o[1]} task={o[2]} ',s,180)
   # Opened again from the disk: the two annotations are there.
-  s=len(t());line('run pdf @form.pdf')
+  s=len(t());line('run vellum @form.pdf')
   o=g['wait'](r'\[pdf\.open\] target=(\d+) task=(\d+) name=form\.pdf pages=1\n',s,600)
   g['wait'](r'\[pdf\.page\] page=1 pages=1 ',s,900)
   sid=int(re.findall(rf'\[shell.program.launch\] target={o[1]} task={o[2]} surface=(\d+)',t()[s:])[-1]);time.sleep(1);g['focus'](sid);time.sleep(.5)
