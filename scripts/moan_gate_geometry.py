@@ -36,7 +36,7 @@ def refresh(g, surface):
     # A viewport alone can finish a burst that started before this command.
     # Require a fresh burst's first timeline record, then its closing viewport.
     opened = g['wait'](r'\[moan.timeline\] x=-?\d+ y=-?\d+ w=\d+ h=\d+ start=\d+ span=\d+', since, 120)
-    since = opened.start()
+    since += opened.start()
     tile, size = viewport(g, surface, since)
     return since, tile, size
 

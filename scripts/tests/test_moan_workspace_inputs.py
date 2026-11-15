@@ -17,7 +17,7 @@ class Inputs(unittest.TestCase):
  def setUp(self):
   self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
   wav=Path(self.tmp.name)/'test.wav';wav.write_bytes(bytes(444))
-  self.clock=Clock();ns=dict(Probe=Probe,re=re,time=self.clock,wav=wav)
+  self.clock=Clock();ns=dict(Probe=Probe,re=re,time=self.clock,wav=wav);self.ns=ns
   tree=ast.parse(SCRIPT.read_text());node=next(n for n in tree.body if isinstance(n,ast.ClassDef)and n.name=='Driver')
   exec(compile(ast.Module(body=[node],type_ignores=[]),str(SCRIPT),'exec'),ns)
   self.d=ns['Driver']();self.d.q=Queue();self.d.refresh=lambda surface:(0,(8,62),(1264,730));self.moves=[];self.buttons=[]
@@ -29,6 +29,14 @@ class Inputs(unittest.TestCase):
  def test_latest_matching_value_is_no_op_despite_queued_old_value(self):
   self.d.text=lambda:'[moan.mixer.control] name=master_level x=20 y=30 w=118 h=26 value=9800\n[moan.mixer.control] name=master_level x=20 y=30 w=118 h=26 value=10000\n'
   self.assertEqual(self.d.mix(3,None,'master_level',100),100);self.assertEqual(self.moves,[]);self.assertEqual(self.d.q.events,[])
+ def test_driver_refresh_converts_relative_wait_match_to_absolute_offset(self):
+  prefix='old partial telemetry';trace=prefix+'\n[moan.viewport] w=624 h=410 frame=12\n[moan.timeline] x=2 y=3 w=600 h=200 start=0 span=192000\n[moan.viewport] w=624 h=410 frame=13\n';state={'text':prefix}
+  self.d.text=lambda:state['text'];self.d.chord=lambda*keys:state.update(text=trace)
+  self.d.g={'wait':lambda pattern,start,timeout:re.search(pattern,state['text'][start:])}
+  expected=trace.index('[moan.timeline]')
+  def viewport(g,surface,since):self.assertEqual(since,expected);return(0,28,640,452),(624,410)
+  self.ns.update(viewport=viewport,origin=lambda tile,size:(8,62))
+  self.assertEqual(self.ns['Driver'].refresh(self.d,360)[0],expected)
  def test_odd_pointer_value_uses_acknowledged_even_keyboard_origin(self):
   state={'value':49};acks=[]
   self.d.text=lambda:f"[moan.mixer.track] track=0 name=volume x=8 y=455 w=118 h=26 value={state['value']}\n"
@@ -57,7 +65,7 @@ class LegacyFrameFence(unittest.TestCase):
   reads=[prefix,trace];calls=[]
   def text():return reads.pop(0)if len(reads)>1 else reads[0]
   def wait(pattern,since,timeout):
-   calls.append((pattern,since));return re.compile(pattern).search(trace,since)
+   calls.append((pattern,since));return re.compile(pattern).search(trace[since:])
   start=trace.index('[moan.timeline]')
   def viewport(g,surface,since):
    self.assertEqual(since,start);return(0,28,640,452),(624,410)
