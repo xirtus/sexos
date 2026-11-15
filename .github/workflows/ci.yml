@@ -684,14 +684,14 @@ jobs:
   recording:
     name: Lossless encoder guest proof
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
       with:
         recording: "true"
     - name: Independent decoder
-      run: sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg
+      run: sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg python3-pil
     - name: Build recording-profile candidate
       run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/recording-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/recording-build.log"; exit 1)
     - name: Output ownership and actual guest encoder
@@ -706,6 +706,11 @@ jobs:
       run: |
         truncate -s 1G "$RUNNER_TEMP/flash-source.img"
         python3 scripts/flash_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/flash-source.img" --require-video --out "$RUNNER_TEMP/recording/flash"
+    - name: Splicy editor opens a clip, shows filmstrip and waveform, cuts a sentence and exports
+      run: |
+        bash scripts/build_splicy.sh
+        truncate -s 1G "$RUNNER_TEMP/splicy-source.img"
+        python3 scripts/program_splicy_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/splicy-source.img" --require-export --out "$RUNNER_TEMP/recording/splicy"
     - name: Preserve encoder evidence
       if: always()
       uses: actions/upload-artifact@v4
