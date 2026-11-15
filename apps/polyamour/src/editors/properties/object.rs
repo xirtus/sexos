@@ -326,7 +326,7 @@ pub fn add_modifier_menu() -> Vec<MenuItem> {
                 ("Geometry Nodes", ""),
                 ("Mask", ""),
                 ("Mirror", "MIRROR"),
-                ("Multiresolution", ""),
+                ("Multiresolution", "MULTIRES"),
                 ("Remesh", "REMESH"),
                 ("Screw", "SCREW"),
                 ("Skin", ""),
@@ -992,6 +992,34 @@ fn modifier_body(l: &mut L, d: &mut Doc, o: usize, si: usize, m: &Modifier, live
                 l.check("", "Face Influence", &mut f);
             });
             l.note("Smooth shading, area-weighted normals");
+        }
+        Modifier::Multires { levels, sculpt_levels, render_levels, optimal_display, data } => {
+            let total = data.total_levels();
+            ch |= l.uint("Level Viewport", &k("levels"), levels, 0, total);
+            ch |= l.uint("Sculpt", &k("sculpt_levels"), sculpt_levels, 0, total);
+            ch |= l.uint("Render", &k("render_levels"), render_levels, 0, total);
+            ch |= l.check("", "Optimal Display", optimal_display);
+            // The operators work on the active object's Multires.
+            let mut op = None;
+            for (label, id, arg) in [
+                ("Subdivide", "object.multires_subdivide", "CATMULL_CLARK"),
+                ("Simple", "object.multires_subdivide", "SIMPLE"),
+                ("Linear", "object.multires_subdivide", "LINEAR"),
+                ("Unsubdivide", "object.multires_unsubdivide", ""),
+                ("Delete Higher", "object.multires_higher_levels_delete", ""),
+                ("Apply Base", "object.multires_base_apply", ""),
+            ] {
+                if l.button(label) {
+                    op = Some(Op::with(id, arg));
+                }
+            }
+            if let Some(op) = op {
+                if d.active() != Some(o) {
+                    d.select_only(Some(o));
+                }
+                d.run(&op);
+                return;
+            }
         }
         // Rigging modifiers have no panel yet.
         _ => {}

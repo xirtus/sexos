@@ -267,3 +267,54 @@ fn texture_slot_image_survives_a_poly_round_trip() {
     assert_eq!(slots.len(), 1, "the material's image node still names the image");
     assert_eq!(e.scene.images[slots[0].image].width, 1024);
 }
+
+#[test]
+fn image_editor_paints_in_2d_and_saves() {
+    let mut app = App::new(1600, 900);
+    app.frame(Input::Tick);
+    let c = app.doc.scene.objects.iter().position(|o| o.name == "Cube").unwrap();
+    app.doc.select_only(Some(c));
+    run(&mut app.doc, "paint.add_texture_paint_slot", "Base Color");
+    let img = crate::sculpt::texture_slots(&app.doc, c)[0].image;
+    app.doc.want_workspace = Some("Texture Paint".into());
+    app.frame(Input::Tick);
+    assert_eq!(app.doc.mode, Mode::TexturePaint);
+    // The Image Editor shows the slot's texture; switch it to Paint.
+    let mut rect = None;
+    for a in app.workspaces[app.active_ws].areas_mut() {
+        if let crate::editors::Editor::Image(s) = &mut a.editor {
+            if s.kind == crate::editors::EditorKind::ImageEditor {
+                s.paint = true;
+                rect = Some(a.rect);
+            }
+        }
+    }
+    let r = rect.expect("an Image Editor");
+    run(&mut app.doc, "paint.color_set", "1 0 0");
+    app.doc.sculpt.tp.radius = 30.0;
+    app.doc.sculpt.tp.strength = 1.0;
+    app.doc.sculpt.dirty_images.clear();
+    app.frame(Input::Tick);
+    let before = app.doc.scene.images[img].pixels.clone();
+    drag(&mut app, (r.x + r.w / 2, r.y + r.h / 2), 40);
+    let px = &app.doc.scene.images[img].pixels;
+    let red = px.iter().filter(|p| p[0] > 0.9 && p[1] < 0.1).count();
+    assert!(red > 100, "{red} texels painted red");
+    // The middle of the image, under the press, is red.
+    let (w, h) = (app.doc.scene.images[img].width as usize, app.doc.scene.images[img].height as usize);
+    assert!(px[(h / 2) * w + w / 2][0] > 0.9);
+    assert!(app.doc.sculpt.dirty_images.contains(&img));
+    run(&mut app.doc, "ed.undo", "");
+    assert_eq!(app.doc.scene.images[img].pixels, before);
+    // Image > Save writes a PNG and clears the dirty mark.
+    let dir = std::env::temp_dir().join(format!("poly-img-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("tex.png");
+    app.doc.sculpt.dirty_images.insert(img);
+    run(&mut app.doc, "image.save", &format!("{img}\t{}", path.display()));
+    let bytes = std::fs::read(&path).unwrap();
+    let back = sex_3d::io::decode_image("tex.png", &bytes).unwrap();
+    assert_eq!((back.width as usize, back.height as usize), (w, h));
+    assert!(!app.doc.sculpt.dirty_images.contains(&img));
+    let _ = std::fs::remove_dir_all(&dir);
+}
