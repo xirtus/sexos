@@ -63,6 +63,18 @@ fn test_climax_mode_switching_and_buttons() {
     click(&mut ui, &mut climax, torture_tab);
     assert_eq!(climax.mode, ClimaxMode::Thermal);
 
+    // Click Compare with Linux tab
+    let compare_tab = climax.choices[2];
+    click(&mut ui, &mut climax, compare_tab);
+    assert_eq!(climax.mode, ClimaxMode::CompareLinux);
+    assert!(climax.linux_doc.is_some());
+    assert_eq!(climax.linux_doc.as_ref().unwrap().comparison_rows.len(), 9);
+
+    // Click Reload Doc
+    let reload_btn = climax.reload_doc;
+    click(&mut ui, &mut climax, reload_btn);
+    assert_eq!(climax.mode, ClimaxMode::CompareLinux);
+
     // Click Benchmarks tab
     let bench_tab = climax.choices[0];
     click(&mut ui, &mut climax, bench_tab);
@@ -100,6 +112,7 @@ fn test_climax_run_suite_and_json_generation() {
     assert!(res.json_payload.contains("\"scores\":"));
 
     ui.paint(&mut pixels);
+    assert!(pixels.iter().any(|px| *px != 0));
 }
 
 #[test]
@@ -136,13 +149,54 @@ fn test_controls_fit_within_window_geometry() {
     for id in [
         climax.choices[0],
         climax.choices[1],
+        climax.choices[2],
         climax.run_suite,
         climax.start_step,
         climax.run_burst,
         climax.reset,
+        climax.reload_doc,
     ] {
         let r = ui.rect(id);
         assert!(r.x >= 0.0 && r.y >= 0.0, "control rect {r:?} must have positive coordinates");
         assert!(r.x + r.w <= 800.0, "control rect {r:?} exceeds window width");
     }
+}
+
+#[test]
+fn test_render_and_export_charts() {
+    use climax_core::charts::{render_linux_comparison_chart, render_torture_realtime_chart};
+    use climax_core::stress::Sample;
+    use climax_core::thermal::ThermalAnalyzer;
+    use climax_core::LinuxComparisonDoc;
+    use std::io::Write;
+
+    let md = include_str!("../../../docs/CLIMAX_VS_LINUX_2026_11_14.md");
+    let doc = LinuxComparisonDoc::parse_markdown(md).unwrap();
+    let cmp_pixels = render_linux_comparison_chart(&doc, Some(4106.5), Some(1299.6), 820, 260);
+
+    let samples = vec![
+        Sample { elapsed_ms: 100, ops_completed: 1000, ops_per_sec: 124500.0, temp_celsius: Some(52), power_mw: Some(14000), corruption_detected: false },
+        Sample { elapsed_ms: 200, ops_completed: 1000, ops_per_sec: 125100.0, temp_celsius: Some(54), power_mw: Some(14500), corruption_detected: false },
+        Sample { elapsed_ms: 300, ops_completed: 1000, ops_per_sec: 123800.0, temp_celsius: Some(56), power_mw: Some(15000), corruption_detected: false },
+        Sample { elapsed_ms: 400, ops_completed: 1000, ops_per_sec: 124200.0, temp_celsius: Some(58), power_mw: Some(15200), corruption_detected: false },
+        Sample { elapsed_ms: 500, ops_completed: 1000, ops_per_sec: 123900.0, temp_celsius: Some(59), power_mw: Some(15300), corruption_detected: false },
+        Sample { elapsed_ms: 600, ops_completed: 1000, ops_per_sec: 124000.0, temp_celsius: Some(60), power_mw: Some(15400), corruption_detected: false },
+    ];
+    let analysis = ThermalAnalyzer::new().analyze(&samples);
+    let rt_pixels = render_torture_realtime_chart(&samples, &analysis, 820, 260);
+
+    let save_ppm = |path: &str, w: usize, h: usize, px: &[u32]| {
+        if let Ok(mut f) = std::fs::File::create(path) {
+            let _ = write!(f, "P6\n{} {}\n255\n", w, h);
+            for &p in px {
+                let r = ((p >> 16) & 0xFF) as u8;
+                let g = ((p >> 8) & 0xFF) as u8;
+                let b = (p & 0xFF) as u8;
+                let _ = f.write_all(&[r, g, b]);
+            }
+        }
+    };
+
+    save_ppm("/tmp/climax-realtime-charts.ppm", 820, 260, &rt_pixels);
+    save_ppm("/tmp/climax-compare-linux.ppm", 820, 260, &cmp_pixels);
 }
