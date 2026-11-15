@@ -3,6 +3,7 @@
 
 use alloc::string::String;
 use alloc::vec::Vec;
+use crate::animation::BuildStep;
 use crate::elements::{Background, SlideElement, Transition};
 use crate::layout::SlideLayout;
 use crate::theme::Theme;
@@ -79,6 +80,8 @@ pub struct Slide {
     pub transition_duration_ms: u32,
     pub hidden: bool,
     pub background_override: Option<Background>,
+    pub builds: Vec<BuildStep>,
+    pub rehearsed_dwell_ms: Option<u32>,
 }
 
 impl Slide {
@@ -94,11 +97,21 @@ impl Slide {
             transition_duration_ms: 0,
             hidden: false,
             background_override: None,
+            builds: Vec::new(),
+            rehearsed_dwell_ms: None,
         }
     }
 
     pub fn add_element(&mut self, element: SlideElement) {
         self.elements.push(element);
+    }
+
+    pub fn add_build(&mut self, build: BuildStep) {
+        self.builds.push(build);
+    }
+
+    pub fn builds(&self) -> &[BuildStep] {
+        &self.builds
     }
 
     pub fn set_speaker_notes(&mut self, notes: impl Into<String>) {

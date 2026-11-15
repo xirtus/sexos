@@ -610,6 +610,7 @@ fn parse_pptx_shape(
                 bounds,
                 fill: fill_color,
                 stroke,
+                magic_key: None,
             }));
         }
     }
