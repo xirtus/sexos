@@ -41,7 +41,29 @@ def _completed(trace, code, action, proof=False, target_sid=None):
     return re.search(rf'\[shell\.kbd\.ui\.result\] action={action} ok=1 reason={reason} frame={frame} sid={target}\r?\n', trace) is not None
 
 
+def _spindle_arrival(trace):
+    """One completed toggle may focus its asynchronous window after its result."""
+    results = list(re.finditer(
+        r'\[shell\.kbd\.ui\.result\] action=ToggleSpindle ok=1 reason=ok frame=([1-9][0-9]*) sid=(\d+)\r?\n', trace))
+    if len(results) != 1:
+        return None
+    result = results[0]
+    # Existing-window activation focuses synchronously; first activation has an
+    # old result SID, then the new window's later focus record. Both are real.
+    focus_trace = trace if result[2] == '153' else trace[result.end():]
+    arrived = re.search(r'\[shell.focus.set\] id=153\r?\n', focus_trace)
+    focus = re.findall(r'\[shell.focus.set\] id=(\d+)', trace)
+    if arrived and focus and focus[-1] == '153':
+        return 'focused'
+    # A shown but unfocused Spindle is genuinely minimized by ToggleSpindle.
+    # Only that explicit action permits the one additional restore toggle.
+    if re.search(r'\[shell.interact.minimize\] frame=[1-9][0-9]* sid=153\r?\n', trace[:result.start()]):
+        return 'minimized'
+    return None
+
+
 def focus_surface(sid, text, key):
+    spindle_restore_used = False
     for _ in range(24):
         ids = re.findall(r'\[shell.focus.set\] id=(\d+)', text())
         current = int(ids[-1]) if ids else 0
@@ -59,4 +81,20 @@ def focus_surface(sid, text, key):
             if time.monotonic() >= end:
                 raise RuntimeError('missing completed keyboard focus action: ' + action)
             time.sleep(.01)
+        if sid == 153:
+            # Do not turn a successful asynchronous open into another toggle.
+            # Own Input pair/action completion above stays mandatory; this waits
+            # for the target window, with no repeated input as a timeout policy.
+            while True:
+                arrival = _spindle_arrival(text()[start:])
+                if arrival == 'focused':
+                    return
+                if arrival == 'minimized':
+                    if spindle_restore_used:
+                        raise RuntimeError('Spindle restore toggle did not focus target')
+                    spindle_restore_used = True
+                    break
+                if time.monotonic() >= end:
+                    raise RuntimeError('missing eventual Spindle target focus after toggle')
+                time.sleep(.01)
     raise RuntimeError('bounded focus traversal failed for ' + str(sid))
