@@ -160,7 +160,7 @@ HELD_INPUT_FUNCTIONS = {
  'document_view_sender': '2715dd56b62c3c164587b3e2e4dea49ad6e416a73f945718cf5d406c537990bc',
  'focused_clipboard_participant': 'fdc67ea118bfc1237104f056139cb5de45416b595337c18706c935a6faf32a84',
  'clipboard_live': '1a801645af4f7f94acdc55fec353ffe663a01a12968fbddd403686a63648f275',
- 'app_input_poll': '970f4b0fc88564dcb1b55d2690b3a4868a8feb74e5ddddcd2dd565db463e4030',
+ 'app_input_poll': '5557f11d18507e3f46920d63eefabbce704918a47a9101b1afa0b5a5a309a983',
  'browser_wheel_destination': '66ccbc15c66cbe2bdf13ac916a00e97382c1afd0ae56b222eeb325c2b37fa35f',
  'frame_accepts_input': '6fdf754c25b68e8f13f6d3c71c9ead28b4768d8e5948407e2c9fd638c6e9bd08',
 }

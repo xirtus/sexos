@@ -368,7 +368,7 @@ pub fn main() {
         while let Ok(d) = done_rx.try_recv() { app.done(d); redraw = true; }
         match window.next_within(50) {
             Some(Event::Close) => break,
-            Some(Event::Drop { .. } | Event::DragEnded { .. }) => {}
+            Some(Event::Drop { .. } | Event::DragEnded { .. } | Event::KeyUp(_)) => {}
             Some(Event::Resize { .. }) => { app.reported = false; redraw = true; }
             Some(Event::Key(k)) => { app.key(k); redraw = true; }
             Some(Event::Pointer(p)) => redraw |= app.pointer(p),

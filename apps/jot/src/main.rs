@@ -779,7 +779,7 @@ extern "C" fn main() -> ! {
                     _ => continue,
                 }
             }
-            Event::DragEnded { .. } => continue,
+            Event::DragEnded { .. } | Event::KeyUp(_) => continue,
             // A file dropped on the window opens in a new tab; dropped text goes in at the cursor.
             Event::Drop { kind, .. } => {
                 let bytes = sex_app::dnd::dropped().to_vec();

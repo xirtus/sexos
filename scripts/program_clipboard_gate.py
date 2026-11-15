@@ -6,7 +6,8 @@ held during a click (app_pointer mods).
    person just used, and it becomes the clipboard.
 2. Ctrl+N, Ctrl+V in Jot: the text comes back from Shell (not Jot's own copy).
 3. Quil (a document view) pastes what the program copied.
-4. A Shift-click and an Alt-click in Jot reach it with those keys in the pointer word."""
+4. A Shift-click and an Alt-click in Jot reach it with those keys in the pointer word.
+5. A key going up reaches Jot as the press's word with down=0."""
 import argparse,http.server,os,re,shutil,threading,time
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
@@ -77,6 +78,9 @@ def main():
    s=len(t());click_holding(key,x,y)
    w=g['wait'](rf'\[shell.program.pointer\] pd={jot[1]} task={jot[2]} word=(0x[0-9a-f]+) status=0',s,30)
    mods=(int(w[1],16)>>52)&7;words.append((key,hex(int(w[1],16))));assert mods==bit,(key,w[0])
+  # 5. A key going up reaches the focused program (Jot drops it, as older programs do).
+  s=len(t());q.key('a')
+  g['wait'](rf'\[shell.program.key.up\] pd={jot[1]} task={jot[2]} code=0x1e status=0',s,30)
   assert 'KERNEL PANIC' not in t() and 'panicked' not in t()
   print({'ok':True,'copied':len(TEXT),'pointer':words})
  finally:g['stop']()

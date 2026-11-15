@@ -88,6 +88,9 @@ fn drain(queue: &mut Queue) -> Vec<Item> {
         assert!(Key::decode(key.wire()|(0xfc_u64<<32),1,1).is_none());
         assert!(Key::decode(key.wire()|1<<17|(0xd800_u64<<32),1,1).is_none());
         for (down,class) in [(0,1),(2,1),(1,0),(1,2),(u64::MAX,1),(1,u64::MAX)] {assert!(Key::decode(key.wire(),down,class).is_none());}
+        // A release is the press's word with down=0: only decode_release takes it.
+        assert_eq!(Key::decode_release(key.wire(),0,1),Some(key));
+        for (down,class) in [(1,1),(2,1),(0,0),(0,7)] {assert!(Key::decode_release(key.wire(),down,class).is_none());}
     }}}}
     for word in [0,1,255,1<<16,(1<<16)|256,u64::MAX] {assert!(Key::decode(word,1,1).is_none());}
 }

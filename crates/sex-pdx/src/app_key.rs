@@ -47,6 +47,12 @@ impl Key {
         let key = Self { code: word as u8, shift: word & 256 != 0, control: word & 512 != 0, alt: word & 1024 != 0, text };
         (key.code != 0 && key.wire() == word).then_some(key)
     }
+    /// A key going up: Shell sends the word of the press with `down` = 0 to the focused
+    /// program. [`Key::decode`] refuses it, so programs that ignore releases see nothing.
+    pub fn decode_release(word: u64, down: u64, class: u64) -> Option<Self> {
+        if down != 0 { return None; }
+        Self::decode(word, 1, class)
+    }
     /// This key with what the layout typed; [`Text::Us`] when that is what a US
     /// keyboard types anyway.
     pub fn typing(self, typed: Option<char>) -> Self {

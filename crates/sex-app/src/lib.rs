@@ -43,6 +43,9 @@ fn is_shell(m: &sex_pdx::PdxMessage) -> bool { m.caller_pd == SHELL && !launch::
 
 pub enum Event {
     Key(Key),
+    /// A key went up while the window had focus (a modifier's too). Losing focus
+    /// sends none, so treat that as every key up.
+    KeyUp(Key),
     Close,
     /// The window's pixel area is now this many pixels wide and high: redraw to fit.
     Resize { width: usize, height: usize },
@@ -148,6 +151,7 @@ impl Window {
         }
         if m.type_id == sex_pdx::dnd::OP_DROP { return dnd::receive(m); }
         if lifecycle::close_requested(m.type_id, m.caller_pd, [m.arg0, m.arg1, m.arg2], self.target, self.task) { return Some(Event::Close); }
+        if m.type_id == 0x202 { if let Some(k) = Key::decode_release(m.arg0, m.arg1, m.arg2) { return Some(Event::KeyUp(k)); } }
         if m.type_id == 0x202 { return Key::decode(m.arg0, m.arg1, m.arg2).map(Event::Key); }
         None
     }

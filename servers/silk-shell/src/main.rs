@@ -208,6 +208,12 @@ unsafe fn app_input_poll(){
                 sex_pdx::serial_record!("[shell.browser.input] code={} down=1 slot={} accepted=1",key.code,item.destination.route);
             }
         },
+        app_input::Input::KeyUp(key)=>{
+            let(status,_)=pdx_call(item.destination.route,OP_HID_EVENT,key.wire(),0,EV_KEY);
+            if status==sex_pdx::ERR_SERVICE_NOT_READY{return}
+            APP_INPUT.pop();
+            sex_pdx::serial_record!("[shell.program.key.up] pd={} task={} code={:#x} status={}",item.destination.subject.pd,item.destination.subject.task,key.code,status);
+        },
         app_input::Input::Resize(wire)=>{
             let(status,_)=pdx_call(item.destination.route,OP_HID_EVENT,wire,0,app_input::RESIZE_CLASS);
             if status==sex_pdx::ERR_SERVICE_NOT_READY{return}
@@ -10727,8 +10733,17 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
                     app_input_poll();return true;
                 }
                 if let Some(destination)=focused_program_participant(){
+                    let desktop_key=matches!(code,0x0f|0x29|0x3b..=0x44|0x46|0x52|0x57|0x58|0x59);
+                    // A key going up, a modifier's too, reaches the program as the press's
+                    // word with down=0 (walk keys, hold-to-act tools); older programs drop it.
+                    if value==0 && !desktop_key{
+                        if !APP_INPUT.push(app_input::Item{destination,input:app_input::Input::KeyUp(APP_MODIFIERS.key(code))}){
+                            sex_pdx::serial_record!("[shell.app.input.full] capacity=32 pd={} task={} accepted=0",destination.subject.pd,destination.subject.task);
+                        }
+                        app_input_poll();return true;
+                    }
                     if modifier || value!=1{return true;}
-                    if matches!(code,0x0f|0x29|0x3b..=0x44|0x46|0x52|0x57|0x58|0x59){return false;}
+                    if desktop_key{return false;}
                     let shortcut=if APP_MODIFIERS.key(code).control{keyboard_layout::shortcut_code(code)}else{code};
                     if let Some(changed)=keyboard_layout::compose(APP_MODIFIERS.key(shortcut),code,|k|{APP_INPUT.push(app_input::Item{destination,input:app_input::Input::Key(k)});}){
                         if changed{keyboard_preedit_notice();}app_input_poll();return true;

@@ -728,7 +728,7 @@ extern "C" fn main() -> ! {
             Some(Event::Resize { width, height }) => term.resize(width, height),
             Some(Event::Key(key)) => term.key(&mut window, key),
             Some(Event::Pointer(p)) => term.pointer(p),
-            Some(Event::Drop { .. } | Event::DragEnded { .. }) => {}
+            Some(Event::Drop { .. } | Event::DragEnded { .. } | Event::KeyUp(_)) => {}
             None => {}
         }
         term.pump();
