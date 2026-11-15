@@ -343,7 +343,7 @@ pub(crate) fn linear_to_srgb(c: f32) -> f32 {
 
 /// Decode a PNG or JPEG (detected by signature) into a linear-light image.
 /// Colour channels are treated as sRGB, alpha as linear.
-pub(crate) fn decode_image(name: &str, bytes: &[u8]) -> Result<Image, String> {
+pub fn decode_image(name: &str, bytes: &[u8]) -> Result<Image, String> {
     let (w, h, channels, data) = if bytes.starts_with(b"\x89PNG") {
         decode_png(bytes)?
     } else if bytes.starts_with(&[0xff, 0xd8]) {

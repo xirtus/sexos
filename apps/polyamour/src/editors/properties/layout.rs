@@ -222,6 +222,26 @@ impl<'a, 'b> L<'a, 'b> {
         });
         self.advance(ROW);
     }
+    /// A dropdown showing `value` whose menu is `items` (operators of the
+    /// caller's choosing). Returns the field when drawn.
+    pub fn dropdown_row(&mut self, label: &str, key: &str, value: &str, items: &dyn Fn() -> Vec<MenuItem>) -> Option<Rect> {
+        let hit = self.matches(label);
+        if !self.band(ROW) {
+            return None;
+        }
+        let (lr, fr) = self.split();
+        let fr = if label.is_empty() { Rect::new(self.inner().0, fr.y, self.inner().1, fr.h) } else { fr };
+        self.fields.push((key.to_string(), fr));
+        self.fields.push((label.to_string(), fr));
+        self.guarded(ROW, |l| {
+            l.draw_label(lr, label, hit);
+            if l.ui.dropdown(fr, value) {
+                l.ui.open_menu(fr, label, items());
+            }
+        });
+        self.advance(ROW);
+        Some(fr)
+    }
     /// A row of joined toggle buttons (Point / Sun / Spot / Area). Returns the
     /// newly picked index.
     pub fn expand(&mut self, label: &str, items: &[&str], current: usize) -> Option<usize> {

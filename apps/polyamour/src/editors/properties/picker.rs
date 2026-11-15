@@ -52,6 +52,7 @@ pub fn get(d: &Doc, t: ColorTarget) -> Option<[f32; 3]> {
             Some(ObjectData::Light(l)) => Some(v3(l.color)),
             _ => None,
         },
+        ColorTarget::Node(r, n, c) => crate::nodetree::get_color(&d.scene, r, n, c),
     }
 }
 
@@ -74,6 +75,7 @@ pub fn set(d: &mut Doc, t: ColorTarget, c: [f32; 3]) {
                 l.color = v;
             }
         }
+        ColorTarget::Node(r, n, nc) => crate::nodetree::set_color(&mut d.scene, r, n, nc, c),
     }
     d.touch();
 }

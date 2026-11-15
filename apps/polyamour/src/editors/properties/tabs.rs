@@ -435,7 +435,23 @@ pub fn scene(l: &mut L, d: &mut Doc) {
 
 pub fn world(l: &mut L, d: &mut Doc, c: &mut Ctx) {
     l.id_block(Icon::World, "World", None);
+    if d.scene.world.node_tree.is_some() {
+        super::nodepanel::world(l, d, &mut c.open_picker);
+    } else {
+        world_legacy(l, d, c);
+    }
+    l.panel(d, "world.viewport_display", "Viewport Display", false, &mut |l, d| {
+        let w = d.scene.world.color;
+        if let Some(r) = l.color("Color", [w.x, w.y, w.z]) {
+            c.open_picker = Some((ColorTarget::World, r));
+        }
+    });
+}
+
+/// The World tab without a node tree: colour, strength and Use Nodes.
+fn world_legacy(l: &mut L, d: &mut Doc, c: &mut Ctx) {
     l.panel(d, "world.surface", "Surface", true, &mut |l, d| {
+        super::nodepanel::use_nodes_button(l, d, crate::nodetree::TreeRef::World);
         l.info("Surface", "Background");
         match d.scene.world.hdri {
             Some(i) => {
@@ -456,12 +472,6 @@ pub fn world(l: &mut L, d: &mut Doc, c: &mut Ctx) {
         }
     });
     l.panel(d, "world.volume", "Volume", false, &mut |l, _| l.info("Volume", "None"));
-    l.panel(d, "world.viewport_display", "Viewport Display", false, &mut |l, d| {
-        let w = d.scene.world.color;
-        if let Some(r) = l.color("Color", [w.x, w.y, w.z]) {
-            c.open_picker = Some((ColorTarget::World, r));
-        }
-    });
 }
 
 pub fn collection(l: &mut L, d: &mut Doc) {

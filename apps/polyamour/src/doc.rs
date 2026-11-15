@@ -221,7 +221,17 @@ pub struct Doc {
 
 impl Default for Doc {
     fn default() -> Self {
-        Doc::new(Scene::startup())
+        // Blender's startup material and world use nodes.
+        let mut s = Scene::startup();
+        for m in &mut s.materials {
+            if m.node_tree.is_none() {
+                m.node_tree = Some(crate::nodetree::seed_material_tree(m));
+            }
+        }
+        if s.world.node_tree.is_none() {
+            s.world.node_tree = Some(crate::nodetree::seed_world_tree(&s.world));
+        }
+        Doc::new(s)
     }
 }
 
@@ -336,7 +346,7 @@ impl Doc {
     /// Run an operator by its Blender-style name. Unknown names are reported,
     /// not ignored, so missing features show up in the status bar.
     pub fn run(&mut self, op: &Op) {
-        if self.run_view3d(op) || crate::edit::run(self, op) || crate::uvedit::run(self, op) {
+        if self.run_view3d(op) || crate::edit::run(self, op) || crate::uvedit::run(self, op) || crate::nodetree::run(self, op) {
             return;
         }
         let arg = op.arg.as_str();

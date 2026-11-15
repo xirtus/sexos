@@ -254,7 +254,7 @@ fn material_base_color_edit_changes_the_material() {
     // Esc closes the picker; then Roughness typed.
     app.frame(Input::key(Key::Esc));
     assert!(props(&app).picker.is_none());
-    set_field(&mut app, "roughness", "0.1");
+    set_field(&mut app, "Roughness", "0.1");
     assert!((app.doc.scene.materials[mi].roughness - 0.1).abs() < 1e-6);
     app.frame(Input::key_mods(Key::Char('z'), Mods::CTRL));
     assert_eq!(app.doc.scene.materials[mi].roughness, 0.5);
