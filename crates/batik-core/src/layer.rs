@@ -6,11 +6,13 @@ use alloc::vec::Vec;
 use sex_image::Limits;
 
 use crate::admit_limits;
-use crate::adjust::Adjustment;
+use crate::adjust::AdjustmentKind;
 use crate::blend::{pack_argb, split_argb, BlendMode};
 use crate::error::BatikError;
+use crate::filters::FilterNode;
 use crate::geom::Rect;
 use crate::selection::SelectionMask;
+use crate::text::TextLayer;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct RasterLayer {
@@ -151,8 +153,30 @@ impl RasterLayer {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct AdjustmentLayer {
-    pub adjustment: Adjustment,
+    pub kind: AdjustmentKind,
     pub mask: Option<Vec<u8>>,
+}
+
+impl AdjustmentLayer {
+    pub fn new(kind: AdjustmentKind) -> Self {
+        Self { kind, mask: None }
+    }
+
+    pub fn with_mask(kind: AdjustmentKind, mask: Vec<u8>) -> Self {
+        Self { kind, mask: Some(mask) }
+    }
+
+    pub fn apply_pixel(&self, pixel: u32) -> u32 {
+        self.kind.apply_pixel(pixel)
+    }
+
+    pub fn mask(&self) -> Option<&[u8]> {
+        self.mask.as_deref()
+    }
+
+    pub fn mask_mut(&mut self) -> Option<&mut [u8]> {
+        self.mask.as_deref_mut()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -165,7 +189,14 @@ pub struct GroupLayer {
 pub enum LayerKind {
     Raster(RasterLayer),
     Adjustment(AdjustmentLayer),
+    Text(TextLayer),
     Group(GroupLayer),
+}
+
+impl From<AdjustmentKind> for LayerKind {
+    fn from(kind: AdjustmentKind) -> Self {
+        LayerKind::Adjustment(AdjustmentLayer::new(kind))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -176,6 +207,7 @@ pub struct Layer {
     pub opacity: u8,
     pub blend_mode: BlendMode,
     pub kind: LayerKind,
+    pub filter_stack: Vec<FilterNode>,
 }
 
 impl Layer {
@@ -193,6 +225,7 @@ impl Layer {
             opacity,
             blend_mode,
             kind: LayerKind::Raster(raster),
+            filter_stack: Vec::new(),
         }
     }
 
@@ -210,6 +243,25 @@ impl Layer {
             opacity,
             blend_mode,
             kind: LayerKind::Adjustment(adjustment),
+            filter_stack: Vec::new(),
+        }
+    }
+
+    pub fn new_text(
+        id: u64,
+        name: String,
+        text: TextLayer,
+        blend_mode: BlendMode,
+        opacity: u8,
+    ) -> Self {
+        Self {
+            id,
+            name,
+            visible: true,
+            opacity,
+            blend_mode,
+            kind: LayerKind::Text(text),
+            filter_stack: Vec::new(),
         }
     }
 
@@ -227,6 +279,7 @@ impl Layer {
             opacity,
             blend_mode,
             kind: LayerKind::Group(group),
+            filter_stack: Vec::new(),
         }
     }
 
@@ -241,6 +294,66 @@ impl Layer {
         match &mut self.kind {
             LayerKind::Raster(ref mut r) => Some(r),
             _ => None,
+        }
+    }
+
+    pub fn text(&self) -> Option<&TextLayer> {
+        match &self.kind {
+            LayerKind::Text(ref t) => Some(t),
+            _ => None,
+        }
+    }
+
+    pub fn text_mut(&mut self) -> Option<&mut TextLayer> {
+        match &mut self.kind {
+            LayerKind::Text(ref mut t) => Some(t),
+            _ => None,
+        }
+    }
+
+    pub fn adjustment(&self) -> Option<&AdjustmentLayer> {
+        match &self.kind {
+            LayerKind::Adjustment(ref a) => Some(a),
+            _ => None,
+        }
+    }
+
+    pub fn adjustment_mut(&mut self) -> Option<&mut AdjustmentLayer> {
+        match &mut self.kind {
+            LayerKind::Adjustment(ref mut a) => Some(a),
+            _ => None,
+        }
+    }
+
+    pub fn group(&self) -> Option<&GroupLayer> {
+        match &self.kind {
+            LayerKind::Group(ref g) => Some(g),
+            _ => None,
+        }
+    }
+
+    pub fn group_mut(&mut self) -> Option<&mut GroupLayer> {
+        match &mut self.kind {
+            LayerKind::Group(ref mut g) => Some(g),
+            _ => None,
+        }
+    }
+
+    pub fn mask(&self) -> Option<&[u8]> {
+        match &self.kind {
+            LayerKind::Raster(ref r) => r.mask(),
+            LayerKind::Adjustment(ref a) => a.mask(),
+            LayerKind::Text(ref t) => t.mask.as_deref(),
+            LayerKind::Group(_) => None,
+        }
+    }
+
+    pub fn mask_mut(&mut self) -> Option<&mut [u8]> {
+        match &mut self.kind {
+            LayerKind::Raster(ref mut r) => r.mask_mut(),
+            LayerKind::Adjustment(ref mut a) => a.mask_mut(),
+            LayerKind::Text(ref mut t) => t.mask.as_deref_mut(),
+            LayerKind::Group(_) => None,
         }
     }
 }

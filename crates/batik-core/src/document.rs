@@ -8,11 +8,14 @@ use alloc::vec::Vec;
 use sex_image::{Image, Limits};
 
 use crate::admit_limits;
+use crate::adjust::{AdjustmentKind, CurvesAdjustment, CurvesPreset, HueSatAdjustment};
 use crate::blend::{blend_pixel, BlendMode};
 use crate::error::BatikError;
+use crate::filters::{apply_filter_stack, FilterNode, FilterSpec};
 use crate::geom::Rect;
-use crate::layer::{Layer, LayerKind, RasterLayer};
+use crate::layer::{AdjustmentLayer, Layer, LayerKind, RasterLayer};
 use crate::selection::SelectionMask;
+use crate::text::TextLayer;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BackgroundMode {
@@ -70,6 +73,310 @@ impl Document {
             opacity,
         ));
         Ok(id)
+    }
+
+    pub fn add_curves_layer(
+        &mut self,
+        name: &str,
+        curves: CurvesAdjustment,
+        opacity: u8,
+    ) -> u64 {
+        let id = self.next_layer_id;
+        self.next_layer_id += 1;
+        let adj = AdjustmentLayer::new(AdjustmentKind::Curves(curves));
+        self.layers.push(Layer::new_adjustment(
+            id,
+            String::from(name),
+            adj,
+            BlendMode::Normal,
+            opacity,
+        ));
+        id
+    }
+
+    pub fn add_curves_preset_layer(
+        &mut self,
+        name: &str,
+        preset: CurvesPreset,
+        opacity: u8,
+    ) -> u64 {
+        self.add_curves_layer(name, preset.to_curves(), opacity)
+    }
+
+    pub fn add_hue_saturation_layer(
+        &mut self,
+        name: &str,
+        hue_deg: i16,
+        sat_pct: i16,
+        light_pct: i16,
+        opacity: u8,
+    ) -> u64 {
+        let id = self.next_layer_id;
+        self.next_layer_id += 1;
+        let hs = HueSatAdjustment::new(hue_deg, sat_pct, light_pct);
+        let adj = AdjustmentLayer::new(AdjustmentKind::HueSaturation(hs));
+        self.layers.push(Layer::new_adjustment(
+            id,
+            String::from(name),
+            adj,
+            BlendMode::Normal,
+            opacity,
+        ));
+        id
+    }
+
+    pub fn update_adjustment_layer(
+        &mut self,
+        id: u64,
+        new_kind: AdjustmentKind,
+    ) -> Result<(), BatikError> {
+        let layer = self
+            .get_layer_mut(id)
+            .ok_or(BatikError::LayerNotFound(id))?;
+        if let LayerKind::Adjustment(ref mut adj) = layer.kind {
+            adj.kind = new_kind;
+            Ok(())
+        } else {
+            Err(BatikError::LayerNotFound(id))
+        }
+    }
+
+    pub fn add_text_layer(
+        &mut self,
+        name: &str,
+        text: &str,
+        x: i32,
+        y: i32,
+        font_px: f32,
+        color: u32,
+        blend_mode: BlendMode,
+        opacity: u8,
+    ) -> Result<u64, BatikError> {
+        let id = self.next_layer_id;
+        self.next_layer_id += 1;
+        let text_layer = TextLayer::new(text, x, y, font_px, color);
+        self.layers.push(Layer::new_text(
+            id,
+            String::from(name),
+            text_layer,
+            blend_mode,
+            opacity,
+        ));
+        Ok(id)
+    }
+
+    pub fn set_text_layer_content(&mut self, id: u64, text: &str) -> Result<(), BatikError> {
+        let layer = self
+            .get_layer_mut(id)
+            .ok_or(BatikError::LayerNotFound(id))?;
+        if let LayerKind::Text(ref mut t) = layer.kind {
+            t.text = String::from(text);
+            Ok(())
+        } else {
+            Err(BatikError::LayerNotFound(id))
+        }
+    }
+
+    pub fn set_text_layer_style(
+        &mut self,
+        id: u64,
+        font_px: f32,
+        color: u32,
+        bold: bool,
+    ) -> Result<(), BatikError> {
+        let layer = self
+            .get_layer_mut(id)
+            .ok_or(BatikError::LayerNotFound(id))?;
+        if let LayerKind::Text(ref mut t) = layer.kind {
+            if font_px.is_finite() && font_px > 0.0 {
+                t.font_px = font_px;
+            }
+            t.color = color;
+            t.bold = bold;
+            Ok(())
+        } else {
+            Err(BatikError::LayerNotFound(id))
+        }
+    }
+
+    pub fn move_text_layer(&mut self, id: u64, x: i32, y: i32) -> Result<(), BatikError> {
+        let layer = self
+            .get_layer_mut(id)
+            .ok_or(BatikError::LayerNotFound(id))?;
+        if let LayerKind::Text(ref mut t) = layer.kind {
+            t.x = x;
+            t.y = y;
+            Ok(())
+        } else {
+            Err(BatikError::LayerNotFound(id))
+        }
+    }
+
+    /// Explicitly converts a TextLayer to a RasterLayer baked with current dimensions.
+    pub fn rasterize_layer(&mut self, id: u64) -> Result<(), BatikError> {
+        let doc_w = self.width;
+        let doc_h = self.height;
+        let layer = self
+            .get_layer_mut(id)
+            .ok_or(BatikError::LayerNotFound(id))?;
+        if let LayerKind::Text(ref t) = layer.kind {
+            let raster = t.to_raster_layer(doc_w, doc_h)?;
+            layer.kind = LayerKind::Raster(raster);
+            Ok(())
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn push_filter(&mut self, layer_id: u64, spec: FilterSpec) -> Result<usize, BatikError> {
+        let layer = self
+            .get_layer_mut(layer_id)
+            .ok_or(BatikError::LayerNotFound(layer_id))?;
+        layer.filter_stack.push(FilterNode::new(spec));
+        Ok(layer.filter_stack.len() - 1)
+    }
+
+    pub fn set_filter_enabled(
+        &mut self,
+        layer_id: u64,
+        index: usize,
+        enabled: bool,
+    ) -> Result<(), BatikError> {
+        let layer = self
+            .get_layer_mut(layer_id)
+            .ok_or(BatikError::LayerNotFound(layer_id))?;
+        if let Some(node) = layer.filter_stack.get_mut(index) {
+            node.enabled = enabled;
+            Ok(())
+        } else {
+            Err(BatikError::LayerNotFound(layer_id))
+        }
+    }
+
+    pub fn remove_filter(
+        &mut self,
+        layer_id: u64,
+        index: usize,
+    ) -> Result<FilterNode, BatikError> {
+        let layer = self
+            .get_layer_mut(layer_id)
+            .ok_or(BatikError::LayerNotFound(layer_id))?;
+        if index < layer.filter_stack.len() {
+            Ok(layer.filter_stack.remove(index))
+        } else {
+            Err(BatikError::LayerNotFound(layer_id))
+        }
+    }
+
+    pub fn clear_filter_stack(&mut self, layer_id: u64) -> Result<(), BatikError> {
+        let layer = self
+            .get_layer_mut(layer_id)
+            .ok_or(BatikError::LayerNotFound(layer_id))?;
+        layer.filter_stack.clear();
+        Ok(())
+    }
+
+    pub fn move_filter(
+        &mut self,
+        layer_id: u64,
+        from: usize,
+        to: usize,
+    ) -> Result<(), BatikError> {
+        let layer = self
+            .get_layer_mut(layer_id)
+            .ok_or(BatikError::LayerNotFound(layer_id))?;
+        if from < layer.filter_stack.len() && to < layer.filter_stack.len() {
+            let item = layer.filter_stack.remove(from);
+            layer.filter_stack.insert(to, item);
+            Ok(())
+        } else {
+            Err(BatikError::LayerNotFound(layer_id))
+        }
+    }
+
+    pub fn add_layer_mask(&mut self, layer_id: u64, default_val: u8) -> Result<(), BatikError> {
+        let doc_w = self.width;
+        let doc_h = self.height;
+        let layer = self
+            .get_layer_mut(layer_id)
+            .ok_or(BatikError::LayerNotFound(layer_id))?;
+        match &mut layer.kind {
+            LayerKind::Raster(ref mut r) => r.add_mask(default_val),
+            LayerKind::Adjustment(ref mut a) => {
+                let total = doc_w.checked_mul(doc_h).ok_or(BatikError::TooLarge)?;
+                let mut mask = Vec::new();
+                mask.try_reserve_exact(total).map_err(|_| BatikError::OutOfMemory)?;
+                mask.resize(total, default_val);
+                a.mask = Some(mask);
+                Ok(())
+            }
+            LayerKind::Text(ref mut t) => {
+                let total = doc_w.checked_mul(doc_h).ok_or(BatikError::TooLarge)?;
+                let mut mask = Vec::new();
+                mask.try_reserve_exact(total).map_err(|_| BatikError::OutOfMemory)?;
+                mask.resize(total, default_val);
+                t.mask = Some(mask);
+                Ok(())
+            }
+            LayerKind::Group(_) => Ok(()),
+        }
+    }
+
+    pub fn apply_selection_to_mask(&mut self, layer_id: u64) -> Result<(), BatikError> {
+        let doc_w = self.width;
+        let doc_h = self.height;
+        let total = doc_w.checked_mul(doc_h).ok_or(BatikError::TooLarge)?;
+        let mut mask_data = Vec::new();
+        mask_data.try_reserve_exact(total).map_err(|_| BatikError::OutOfMemory)?;
+        for y in 0..doc_h {
+            for x in 0..doc_w {
+                mask_data.push(self.selection.sample(x, y));
+            }
+        }
+
+        let layer = self
+            .get_layer_mut(layer_id)
+            .ok_or(BatikError::LayerNotFound(layer_id))?;
+        match &mut layer.kind {
+            LayerKind::Raster(ref mut r) => {
+                r.mask = Some(mask_data);
+                Ok(())
+            }
+            LayerKind::Adjustment(ref mut a) => {
+                a.mask = Some(mask_data);
+                Ok(())
+            }
+            LayerKind::Text(ref mut t) => {
+                t.mask = Some(mask_data);
+                Ok(())
+            }
+            LayerKind::Group(_) => Ok(()),
+        }
+    }
+
+    pub fn invert_layer_mask(&mut self, layer_id: u64) -> Result<(), BatikError> {
+        let layer = self
+            .get_layer_mut(layer_id)
+            .ok_or(BatikError::LayerNotFound(layer_id))?;
+        if let Some(mask) = layer.mask_mut() {
+            for m in mask.iter_mut() {
+                *m = 255 - *m;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn delete_layer_mask(&mut self, layer_id: u64) -> Result<(), BatikError> {
+        let layer = self
+            .get_layer_mut(layer_id)
+            .ok_or(BatikError::LayerNotFound(layer_id))?;
+        match &mut layer.kind {
+            LayerKind::Raster(ref mut r) => r.delete_mask(),
+            LayerKind::Adjustment(ref mut a) => a.mask = None,
+            LayerKind::Text(ref mut t) => t.mask = None,
+            LayerKind::Group(_) => {}
+        }
+        Ok(())
     }
 
     pub fn add_layer(&mut self, mut layer: Layer) -> u64 {
@@ -183,6 +490,52 @@ impl Document {
         false
     }
 
+    /// Produces baked raster layer representations of all layers for multi-layer export (e.g. PSD, ORA).
+    /// TextLayers and layers with FilterStacks are rasterized with their non-destructive effects baked.
+    pub fn exportable_raster_layers(&self) -> Vec<(Layer, RasterLayer)> {
+        let mut list = Vec::new();
+        for l in &self.layers {
+            match &l.kind {
+                LayerKind::Raster(r) => {
+                    let mut pixels = r.pixels.clone();
+                    if l.filter_stack.iter().any(|f| f.enabled) {
+                        apply_filter_stack(&l.filter_stack, &mut pixels, r.width, r.height);
+                    }
+                    let baked_raster = RasterLayer {
+                        width: r.width,
+                        height: r.height,
+                        offset_x: r.offset_x,
+                        offset_y: r.offset_y,
+                        pixels,
+                        mask: r.mask.clone(),
+                        alpha_lock: r.alpha_lock,
+                        pixel_lock: r.pixel_lock,
+                    };
+                    list.push((l.clone(), baked_raster));
+                }
+                LayerKind::Text(t) => {
+                    let mut pixels = t.render_to_buffer(self.width, self.height);
+                    if l.filter_stack.iter().any(|f| f.enabled) {
+                        apply_filter_stack(&l.filter_stack, &mut pixels, self.width, self.height);
+                    }
+                    let baked_raster = RasterLayer {
+                        width: self.width,
+                        height: self.height,
+                        offset_x: 0,
+                        offset_y: 0,
+                        pixels,
+                        mask: t.mask.clone(),
+                        alpha_lock: false,
+                        pixel_lock: false,
+                    };
+                    list.push((l.clone(), baked_raster));
+                }
+                _ => {}
+            }
+        }
+        list
+    }
+
     /// Creates a single-layer Document from an already-decoded `sex_image::Image`.
     pub fn from_image(image: Image, limits: Limits) -> Result<Self, BatikError> {
         let (w, h) = (image.width, image.height);
@@ -242,7 +595,7 @@ impl Document {
         }
 
         // Composite layers
-        Self::composite_layer_slice(&self.layers, clamped, out_buf, stride);
+        Self::composite_layer_slice(&self.layers, clamped, out_buf, stride, self.width, self.height);
     }
 
     /// Renders all visible layers into a freshly allocated flat RGBA buffer.
@@ -252,7 +605,14 @@ impl Document {
         out
     }
 
-    fn composite_layer_slice(layers: &[Layer], roi: Rect, out_buf: &mut [u32], stride: usize) {
+    fn composite_layer_slice(
+        layers: &[Layer],
+        roi: Rect,
+        out_buf: &mut [u32],
+        stride: usize,
+        doc_width: usize,
+        doc_height: usize,
+    ) {
         for layer in layers {
             if !layer.visible || layer.opacity == 0 {
                 continue;
@@ -260,6 +620,19 @@ impl Document {
 
             match &layer.kind {
                 LayerKind::Raster(raster) => {
+                    let has_fx = layer.filter_stack.iter().any(|f| f.enabled);
+                    let filtered_storage;
+                    let pixels_ref: &[u32] = if has_fx {
+                        filtered_storage = {
+                            let mut p = raster.pixels.clone();
+                            apply_filter_stack(&layer.filter_stack, &mut p, raster.width, raster.height);
+                            p
+                        };
+                        &filtered_storage
+                    } else {
+                        &raster.pixels
+                    };
+
                     let layer_bounds = raster.bounds();
                     let inter = match layer_bounds.intersect(&roi) {
                         Some(i) => i,
@@ -275,7 +648,7 @@ impl Document {
                             let out_col = (x - roi.x) as usize;
                             let src_lx = (x - raster.offset_x) as usize;
                             let src_idx = src_row + src_lx;
-                            let src_pixel = match raster.pixels.get(src_idx) {
+                            let src_pixel = match pixels_ref.get(src_idx) {
                                 Some(&p) => p,
                                 None => continue,
                             };
@@ -299,7 +672,56 @@ impl Document {
                         }
                     }
                 }
+                LayerKind::Text(text) => {
+                    let mut text_buf = text.render_to_buffer(doc_width, doc_height);
+                    if layer.filter_stack.iter().any(|f| f.enabled) {
+                        apply_filter_stack(&layer.filter_stack, &mut text_buf, doc_width, doc_height);
+                    }
+
+                    let text_bounds = Rect::new(0, 0, doc_width, doc_height);
+                    let inter = match text_bounds.intersect(&roi) {
+                        Some(i) => i,
+                        None => continue,
+                    };
+
+                    for y in inter.y..inter.bottom() {
+                        let out_row = ((y - roi.y) as usize) * stride;
+                        let src_row = (y as usize) * doc_width;
+
+                        for x in inter.x..inter.right() {
+                            let out_col = (x - roi.x) as usize;
+                            let src_idx = src_row + (x as usize);
+                            let src_pixel = match text_buf.get(src_idx) {
+                                Some(&p) => p,
+                                None => continue,
+                            };
+
+                            let mask_val = match &text.mask {
+                                Some(m) => m.get(src_idx).copied().unwrap_or(255),
+                                None => 255,
+                            };
+
+                            let out_idx = out_row + out_col;
+                            if out_idx < out_buf.len() {
+                                let backdrop = out_buf[out_idx];
+                                out_buf[out_idx] = blend_pixel(
+                                    backdrop,
+                                    src_pixel,
+                                    layer.blend_mode,
+                                    layer.opacity,
+                                    mask_val,
+                                );
+                            }
+                        }
+                    }
+                }
                 LayerKind::Adjustment(adj) => {
+                    let curves_luts = if let AdjustmentKind::Curves(ref c) = adj.kind {
+                        Some(c.build_all_luts())
+                    } else {
+                        None
+                    };
+
                     for y in 0..roi.height {
                         let row_offset = y * stride;
                         let abs_y = (roi.y + y as i32) as usize;
@@ -314,8 +736,8 @@ impl Document {
 
                             let mask_val = match &adj.mask {
                                 Some(m) => {
-                                    if abs_x < roi.width && abs_y < roi.height {
-                                        m.get(abs_y * roi.width + abs_x).copied().unwrap_or(255)
+                                    if abs_x < doc_width && abs_y < doc_height {
+                                        m.get(abs_y * doc_width + abs_x).copied().unwrap_or(255)
                                     } else {
                                         255
                                     }
@@ -323,7 +745,12 @@ impl Document {
                                 None => 255,
                             };
 
-                            let adjusted = adj.adjustment.apply_pixel(backdrop);
+                            let adjusted = if let Some((ref lm, ref lr, ref lg, ref lb)) = curves_luts {
+                                crate::adjust::CurvesAdjustment::apply_with_luts(backdrop, lm, lr, lg, lb)
+                            } else {
+                                adj.apply_pixel(backdrop)
+                            };
+
                             out_buf[idx] = blend_pixel(
                                 backdrop,
                                 adjusted,
@@ -336,12 +763,12 @@ impl Document {
                 }
                 LayerKind::Group(group) => {
                     if group.pass_through {
-                        Self::composite_layer_slice(&group.layers, roi, out_buf, stride);
+                        Self::composite_layer_slice(&group.layers, roi, out_buf, stride, doc_width, doc_height);
                     } else {
                         // Isolated group compositing
                         let group_len = roi.width * roi.height;
                         let mut group_buf = vec![0u32; group_len];
-                        Self::composite_layer_slice(&group.layers, roi, &mut group_buf, roi.width);
+                        Self::composite_layer_slice(&group.layers, roi, &mut group_buf, roi.width, doc_width, doc_height);
 
                         for y in 0..roi.height {
                             let out_row = y * stride;
@@ -405,6 +832,9 @@ impl Document {
             if let LayerKind::Raster(ref mut raster) = layer.kind {
                 raster.offset_x -= clamped.x;
                 raster.offset_y -= clamped.y;
+            } else if let LayerKind::Text(ref mut text) = layer.kind {
+                text.x -= clamped.x;
+                text.y -= clamped.y;
             }
         }
 

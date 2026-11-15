@@ -265,3 +265,141 @@ fn test_math_safety_zero_durations_and_empty_samples() {
     let rendered = extreme_report.render_terminal_report();
     assert!(rendered.contains("CLIMAX BENCHMARK REPORT"));
 }
+
+#[test]
+fn test_linux_comparison_doc_parse_real_doc() {
+    let md = include_str!("../../../docs/CLIMAX_VS_LINUX_2026_11_14.md");
+    let doc = climax_core::LinuxComparisonDoc::parse_markdown(md).expect("markdown parses cleanly");
+
+    // Metadata
+    assert!(doc.qemu_machine.is_some());
+    assert!(doc.cpu_model.is_some());
+    assert!(doc.cpu_topology.is_some());
+    assert!(doc.physical_memory.is_some());
+
+    // Section 2: 9 Checksum rows
+    assert_eq!(doc.checksum_rows.len(), 9);
+    assert_eq!(doc.checksum_verified_count(), 9);
+    for row in &doc.checksum_rows {
+        assert!(row.sexos_match);
+        assert!(row.linux_match);
+        assert!(!row.golden_checksum.is_empty());
+    }
+
+    // Section 3: 9 Comparison rows
+    assert_eq!(doc.comparison_rows.len(), 9);
+    assert_eq!(doc.comparison_rows[0].subsystem, "Integer ARX Throughput");
+    assert_eq!(doc.comparison_rows[0].ratio_percent, 107.2);
+    assert!((doc.comparison_rows[0].sexos_median - 4106.47).abs() < 0.01);
+    assert!((doc.comparison_rows[0].linux_median - 3832.34).abs() < 0.01);
+
+    assert_eq!(doc.comparison_rows[1].subsystem, "SHA-256 Digest Compression");
+    assert_eq!(doc.comparison_rows[1].ratio_percent, 120.4);
+
+    assert_eq!(doc.comparison_rows[2].subsystem, "GEMM 64x64 Matrix Multiply");
+    assert_eq!(doc.comparison_rows[2].ratio_percent, 110.8);
+
+    assert_eq!(doc.comparison_rows[3].subsystem, "Biquad DSP Audio Filter");
+    assert_eq!(doc.comparison_rows[3].ratio_percent, 114.0);
+
+    assert_eq!(doc.comparison_rows[4].subsystem, "STREAM Triad Bandwidth");
+    assert_eq!(doc.comparison_rows[4].ratio_percent, 108.0);
+
+    assert_eq!(doc.comparison_rows[5].subsystem, "Sattolo L1 Cache (4 KiB)");
+    assert_eq!(doc.comparison_rows[5].ratio_percent, 118.2);
+
+    assert_eq!(doc.comparison_rows[6].subsystem, "Sattolo L2 Cache (256 KiB)");
+    assert_eq!(doc.comparison_rows[6].ratio_percent, 106.3);
+
+    // Peak advantage: Sattolo L3 Cache (4 MiB) at 365.8%!
+    assert_eq!(doc.comparison_rows[7].subsystem, "Sattolo L3 Cache (4 MiB)");
+    assert_eq!(doc.comparison_rows[7].ratio_percent, 365.8);
+
+    assert_eq!(doc.comparison_rows[8].subsystem, "Sattolo DRAM (16 MiB)");
+    assert_eq!(doc.comparison_rows[8].ratio_percent, 181.2);
+
+    let fastest = doc.fastest_advantage_row().expect("fastest row exists");
+    assert_eq!(fastest.subsystem, "Sattolo L3 Cache (4 MiB)");
+    assert_eq!(fastest.ratio_percent, 365.8);
+
+    let geomean = doc.geometric_mean_ratio_pct();
+    assert!((geomean - 134.77).abs() < 0.1, "geomean was {}", geomean);
+
+    // Test overlay live suite
+    let overlays = doc.overlay_live_suite(&[("ARX", 4200.0), ("STREAM", 1320.0)]);
+    assert_eq!(overlays.len(), 9);
+    assert_eq!(overlays[0].1, Some(4200.0));
+    assert_eq!(overlays[4].1, Some(1320.0));
+    assert_eq!(overlays[1].1, None);
+}
+
+#[test]
+fn test_linux_comparison_doc_fuzz_and_malformed() {
+    use climax_core::LinuxComparisonDoc;
+
+    // Empty doc fails cleanly
+    assert!(LinuxComparisonDoc::parse_markdown("").is_err());
+    assert!(LinuxComparisonDoc::parse_markdown("Random text with no tables").is_err());
+    assert!(LinuxComparisonDoc::parse_markdown("# Header\n| Broken | Table |").is_err());
+
+    // Table with corrupt values
+    let corrupt_table = "
+| Benchmark Subsystem | Metric | SexOS (Median) | SexOS (Min – Max) | Linux (Median) | Linux (Min – Max) | Ratio (SexOS / Linux) |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: |
+| ARX | Mops | not_a_number | 100 - 200 | corrupt | 200 - 300 | not_pct |
+";
+    let doc = LinuxComparisonDoc::parse_markdown(corrupt_table).unwrap();
+    assert_eq!(doc.comparison_rows.len(), 1);
+    assert_eq!(doc.comparison_rows[0].sexos_median, 0.0);
+    assert_eq!(doc.comparison_rows[0].ratio_percent, 100.0);
+    assert!((doc.geometric_mean_ratio_pct() - 100.0).abs() < 1e-4);
+}
+
+#[test]
+fn test_chart_rendering_all_modes_and_bounds() {
+    use climax_core::charts::{
+        render_benchmark_charts, render_linux_comparison_chart, render_torture_realtime_chart,
+    };
+    use climax_core::LinuxComparisonDoc;
+
+    let md = include_str!("../../../docs/CLIMAX_VS_LINUX_2026_11_14.md");
+    let doc = LinuxComparisonDoc::parse_markdown(md).unwrap();
+
+    // 1. Zero and tiny dimensions must not panic
+    assert!(render_benchmark_charts(None, &[], &[], 0, 0).is_empty());
+    assert!(render_benchmark_charts(None, &[], &[], 820, 0).is_empty());
+    assert_eq!(render_benchmark_charts(None, &[], &[], 50, 50).len(), 2500);
+
+    assert!(render_torture_realtime_chart(&[], &ThermalAnalyzer::new().analyze(&[]), 0, 0).is_empty());
+    assert!(render_linux_comparison_chart(&doc, None, None, 0, 0).is_empty());
+
+    // 2. Benchmark chart (ready state)
+    let p_bench_ready = render_benchmark_charts(None, &[], &[], 820, 260);
+    assert_eq!(p_bench_ready.len(), 820 * 260);
+    let distinct_ready: alloc::collections::BTreeSet<u32> = p_bench_ready.iter().copied().collect();
+    assert!(distinct_ready.len() > 10, "colours: {}", distinct_ready.len());
+
+    // 3. Benchmark chart (completed state)
+    let scores = SubsystemScores::compute(10000, 2000, 500, 1000, 409600, 20000);
+    let ladder = [(4, 219.7), (256, 193.3), (4096, 46.7), (16384, 14.2)];
+    let history = [1200.0, 1350.0, 1420.0];
+    let p_bench_done = render_benchmark_charts(Some(&scores), &ladder, &history, 820, 260);
+    let distinct_done: alloc::collections::BTreeSet<u32> = p_bench_done.iter().copied().collect();
+    assert!(distinct_done.len() > 15, "colours: {}", distinct_done.len());
+
+    // 4. Torture real-time chart (with samples)
+    let samples = vec![
+        Sample { elapsed_ms: 100, ops_completed: 1000, ops_per_sec: 100000.0, temp_celsius: Some(55), power_mw: Some(15000), corruption_detected: false },
+        Sample { elapsed_ms: 200, ops_completed: 1000, ops_per_sec: 102000.0, temp_celsius: Some(57), power_mw: Some(15500), corruption_detected: false },
+        Sample { elapsed_ms: 300, ops_completed: 1000, ops_per_sec: 99000.0, temp_celsius: Some(60), power_mw: Some(16000), corruption_detected: false },
+    ];
+    let analysis = ThermalAnalyzer::new().analyze(&samples);
+    let p_torture = render_torture_realtime_chart(&samples, &analysis, 820, 260);
+    let distinct_torture: alloc::collections::BTreeSet<u32> = p_torture.iter().copied().collect();
+    assert!(distinct_torture.len() > 15, "colours: {}", distinct_torture.len());
+
+    // 5. Linux comparison chart
+    let p_linux = render_linux_comparison_chart(&doc, Some(4106.0), Some(1300.0), 820, 260);
+    let distinct_linux: alloc::collections::BTreeSet<u32> = p_linux.iter().copied().collect();
+    assert!(distinct_linux.len() > 15, "colours: {}", distinct_linux.len());
+}
