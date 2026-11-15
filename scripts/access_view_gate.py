@@ -20,10 +20,15 @@ W, H = 1280, 800
 
 
 def ppm(path):
+    # QEMU writes "P6\n<w> <h>\n255\n" then the pixels. The pixels are taken
+    # from the end: bytes.split() would also eat leading pixel bytes that
+    # happen to be whitespace (a dark blue 0x0C1420 starts with form feed).
     data = path.read_bytes()
-    parts = data.split(maxsplit=4)
-    w, h = int(parts[1]), int(parts[2])
-    return w, h, parts[4][-w * h * 3:]
+    _, size, _, _ = data.split(b'\n', 3)
+    w, h = map(int, size.split())
+    pixels = data[-w * h * 3:]
+    assert len(pixels) == w * h * 3
+    return w, h, pixels
 
 
 def px(img, x, y):
