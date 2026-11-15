@@ -18,6 +18,59 @@ use ttf_parser::{Face, OutlineBuilder};
 /// Geist Mono and Geist Sans by Vercel, SIL Open Font License 1.1 (assets/fonts/geist/OFL.txt).
 pub static GEIST_MONO: &[u8] = include_bytes!("../../../assets/fonts/geist/GeistMono-Regular.ttf");
 pub static GEIST_SANS: &[u8] = include_bytes!("../../../assets/fonts/geist/Geist-Regular.ttf");
+/// The bold and italic faces of both. A program pays only for the faces it names:
+/// the linker drops the rest.
+pub static GEIST_SANS_BOLD: &[u8] = include_bytes!("../../../assets/fonts/geist/Geist-Bold.ttf");
+pub static GEIST_SANS_ITALIC: &[u8] = include_bytes!("../../../assets/fonts/geist/Geist-Italic.ttf");
+pub static GEIST_SANS_BOLD_ITALIC: &[u8] = include_bytes!("../../../assets/fonts/geist/Geist-BoldItalic.ttf");
+pub static GEIST_MONO_BOLD: &[u8] = include_bytes!("../../../assets/fonts/geist/GeistMono-Bold.ttf");
+pub static GEIST_MONO_ITALIC: &[u8] = include_bytes!("../../../assets/fonts/geist/GeistMono-Italic.ttf");
+pub static GEIST_MONO_BOLD_ITALIC: &[u8] = include_bytes!("../../../assets/fonts/geist/GeistMono-BoldItalic.ttf");
+
+/// Weight and slant of a face.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Style { pub bold: bool, pub italic: bool }
+
+impl Style {
+    pub const REGULAR: Style = Style { bold: false, italic: false };
+    pub const BOLD: Style = Style { bold: true, italic: false };
+    pub const ITALIC: Style = Style { bold: false, italic: true };
+    pub const BOLD_ITALIC: Style = Style { bold: true, italic: true };
+    /// 0 regular, 1 bold, 2 italic, 3 bold italic.
+    pub fn index(self) -> usize { self.bold as usize | (self.italic as usize) << 1 }
+}
+
+/// The Geist file for a face: Sans or Mono (`mono`) in `style`.
+pub fn geist(mono: bool, style: Style) -> &'static [u8] {
+    match (mono, style.bold, style.italic) {
+        (false, false, false) => GEIST_SANS,
+        (false, true, false) => GEIST_SANS_BOLD,
+        (false, false, true) => GEIST_SANS_ITALIC,
+        (false, true, true) => GEIST_SANS_BOLD_ITALIC,
+        (true, false, false) => GEIST_MONO,
+        (true, true, false) => GEIST_MONO_BOLD,
+        (true, false, true) => GEIST_MONO_ITALIC,
+        (true, true, true) => GEIST_MONO_BOLD_ITALIC,
+    }
+}
+
+/// Bold and italic made from a regular face, for fonts that have no such faces
+/// (the Noto fallbacks): italic leans the outline, bold smears it sideways.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Synthetic {
+    /// Horizontal lean per unit of height, in 1/1024 (a 12-degree slant is 218).
+    pub slant: i32,
+    /// Extra stroke width in 1/1024 of an em (bold is about 32).
+    pub embolden: i32,
+}
+
+impl Synthetic {
+    pub const NONE: Synthetic = Synthetic { slant: 0, embolden: 0 };
+    /// What `style` asks of a font that is itself regular.
+    pub fn for_style(style: Style) -> Synthetic {
+        Synthetic { slant: if style.italic { 218 } else { 0 }, embolden: if style.bold { 32 } else { 0 } }
+    }
+}
 
 /// A parsed font. Sizes are in 1/64 pixel per em, positions in 1/256 pixel.
 pub struct Font<'a> {
@@ -46,6 +99,17 @@ impl<'a> Font<'a> {
     pub fn advance(&self, glyph: GlyphId, size: u32) -> i32 {
         self.fx(self.face.glyph_hor_advance(glyph).unwrap_or(0) as i64, size)
     }
+
+    /// The advance of a glyph drawn with `synth`: emboldening widens it by the smear.
+    pub fn advance_synthetic(&self, glyph: GlyphId, size: u32, synth: Synthetic) -> i32 {
+        self.advance(glyph, size) + Self::smear(size, synth)
+    }
+
+    /// The emboldening smear in 1/256 pixel.
+    fn smear(size: u32, synth: Synthetic) -> i32 { (synth.embolden.max(0) as i64 * size as i64 * 4 / 1024) as i32 }
+
+    /// What the face says of itself (OS/2 and head flags).
+    pub fn style(&self) -> Style { Style { bold: self.face.is_bold(), italic: self.face.is_italic() || self.face.is_oblique() } }
     pub fn ascender(&self, size: u32) -> i32 { self.fx(self.face.ascender() as i64, size) }
     pub fn descender(&self, size: u32) -> i32 { self.fx(self.face.descender() as i64, size) }
 
@@ -93,10 +157,26 @@ impl<'a> Font<'a> {
     /// (`x`, `baseline`) in 1/256 pixel from the bitmap's top left. Ink outside the
     /// bitmap is clipped. `acc` needs [`raster::scratch_len`]`(w, h)` cells.
     pub fn draw(&self, glyph: GlyphId, size: u32, x: i32, baseline: i32, w: usize, h: usize, acc: &mut [i32], out: &mut [u8]) -> bool {
+        self.draw_synthetic(glyph, size, x, baseline, w, h, acc, out, Synthetic::NONE)
+    }
+
+    /// [`Font::draw`] with a synthetic slant and weight. The lean pivots on the
+    /// baseline, so ascenders move right and descenders left of the pen; emboldening
+    /// draws the outline again at each step of the smear, and the coverage of the
+    /// overlapping copies saturates, so strokes thicken and counters narrow.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_synthetic(&self, glyph: GlyphId, size: u32, x: i32, baseline: i32, w: usize, h: usize, acc: &mut [i32], out: &mut [u8], synth: Synthetic) -> bool {
         let Some(raster) = Raster::new(w, h, acc) else { return false };
         if out.len() < w * h { return false; }
-        let mut pen = Pen { raster, font: self, size, x, baseline, start: (0, 0), at: (0, 0) };
-        self.face.outline_glyph(glyph, &mut pen);
+        let smear = Self::smear(size, synth);
+        // Copies a quarter pixel apart at most, so the smear stays solid.
+        let copies = if smear > 0 { (smear / 64).clamp(1, 16) + 1 } else { 1 };
+        let mut pen = Pen { raster, font: self, size, x, baseline, slant: synth.slant, start: (0, 0), at: (0, 0) };
+        for n in 0..copies {
+            pen.x = x + if copies > 1 { smear * n / (copies - 1) } else { 0 };
+            self.face.outline_glyph(glyph, &mut pen);
+            pen.close();
+        }
         pen.raster.finish(out);
         true
     }
@@ -109,6 +189,8 @@ struct Pen<'f, 'a, 'r> {
     size: u32,
     x: i32,
     baseline: i32,
+    /// Lean in 1/1024 per unit of height.
+    slant: i32,
     start: (i32, i32),
     at: (i32, i32),
 }
@@ -118,7 +200,8 @@ impl Pen<'_, '_, '_> {
         // Sixteenths of a font unit keep composite-glyph offsets exact enough.
         let units = |v: f32| (v * 16.0 + if v < 0.0 { -0.5 } else { 0.5 }) as i64;
         let scale = |v: f32| div_round(units(v) * self.size as i64 * 4, self.font.upem * 16) as i32;
-        (self.x + scale(x), self.baseline - scale(y))
+        let (sx, sy) = (scale(x), scale(y));
+        (self.x + sx + (sy as i64 * self.slant as i64 / 1024) as i32, self.baseline - sy)
     }
 }
 
