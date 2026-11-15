@@ -601,6 +601,10 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
+    - name: Install image tools for gates
+      run: |
+        sudo apt-get update -qq
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends python3-pil
     - name: Build the image
       run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/desktop-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/desktop-build.log"; exit 1)
     - name: Settings last across a restart
