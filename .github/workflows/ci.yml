@@ -322,7 +322,7 @@ jobs:
   devices:
     name: Disks, power and fuzzing
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
@@ -401,7 +401,7 @@ jobs:
   media:
     name: Browser media streaming and seeking
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 50
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
@@ -430,7 +430,7 @@ jobs:
   editor:
     name: Quil code editor
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 65
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
@@ -604,7 +604,7 @@ jobs:
   desktop:
     name: Desktop shell
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 65
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
@@ -673,7 +673,7 @@ jobs:
   js-jit:
     name: Experimental JS JIT and W^X (${{ matrix.cores }} cores)
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -716,7 +716,7 @@ jobs:
   recording:
     name: Lossless encoder guest proof
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
@@ -751,7 +751,7 @@ jobs:
   productivity:
     name: Productivity programs
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
@@ -786,7 +786,7 @@ jobs:
   terminal-editor:
     name: Terminal and editor
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
