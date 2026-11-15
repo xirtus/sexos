@@ -44,6 +44,8 @@ static TASK:AtomicU32=AtomicU32::new(99);static EPOCH:AtomicU64=AtomicU64::new(1
 #[repr(align(4096))]struct Region([u8;256*1024]);static mut REGION:Region=Region([0;256*1024]);static mut REGION_CHILD:Region=Region([0;256*1024]);static CHILD_TASK:AtomicU32=AtomicU32::new(0);static JOB_LIVE:AtomicBool=AtomicBool::new(false);static SCRUBS:AtomicU32=AtomicU32::new(0);
 mod crash_log{pub fn self_epoch()->Result<u64,()>{Ok(super::EPOCH.load(super::Ordering::SeqCst))}}
 fn civil_time_ms()->Option<u64>{Some(1000)}
+#[macro_export]macro_rules! serial_record{($($t:tt)*)=>{{let _=format_args!($($t)*);}}}
+
 fn get_ticks()->u64{NOW.load(Ordering::SeqCst)}
 fn pdx_reply(_:u32,word:u64)->u64{if FULL.load(Ordering::SeqCst){return 1}LAST.store(word,Ordering::SeqCst);SENDS.fetch_add(1,Ordering::SeqCst);0}
 fn memory_region_info(slot:u64)->Result<memory_region::Info,()>{let image=slot==100;let child=slot==fs::PROVIDER_SLOT_BASE+1;Ok(memory_region::Info{peer_pd:if image{None}else{Some(if child{43}else{42})},region_id:if image{0x4000}else{fs::REGION_ID_BASE+child as u32},length:if image{32*1024*1024}else{fs::REGION_BYTES as u64},rights:7})}
@@ -136,7 +138,9 @@ fn ready(job:&mut Job)->Vec<u8>{let words=|h:[u8;32]|core::array::from_fn(|i|u64
  for i in 0..16{unsafe{core::ptr::write_volatile((core::ptr::addr_of_mut!(REGION)as *mut u8).add(fs::PATH_BYTES+i),1)}}
  let result=fs::Request{seq:6,kind:wire::KIND,path_len:0,offset:1<<8|wire::RESULT,length:16}.args();assert!(native_io::message(fs::OP,actor,result));native_io::poll();assert_eq!(fs::decode_reply(LAST.load(Ordering::SeqCst)),Some((6,fs::OK,176)));let info=unsafe{core::slice::from_raw_parts((core::ptr::addr_of!(REGION)as *const u8).add(fs::PATH_BYTES),176)};assert_eq!(&info[..8],b"MOANINF2");{use sha2::Digest;assert_eq!(&info[104..136],sha2::Sha256::digest(&output).as_slice());}
  let p2=wire::Prepare{paths:[b"@/plugin",b"@/input",b"@/renders/second"],..p};assert_eq!(p2.encode(&mut input),Some(n));for i in 0..n{unsafe{core::ptr::write_volatile((core::ptr::addr_of_mut!(REGION)as *mut u8).add(fs::PATH_BYTES+i),input[i])}}
- FULL.store(true,Ordering::SeqCst);assert!(native_io::message(fs::OP,child,child_request(9,fs::READ,b"@/plugin",15)));native_io::poll();let sent=SENDS.load(Ordering::SeqCst);JOB_LIVE.store(false,Ordering::SeqCst);FULL.store(false,Ordering::SeqCst);native_io::poll();assert_eq!(SENDS.load(Ordering::SeqCst),sent);assert!(native_io::retire(child));assert_eq!(SCRUBS.load(Ordering::SeqCst),1);
+ FULL.store(true,Ordering::SeqCst);assert!(native_io::message(fs::OP,child,child_request(9,fs::READ,b"@/plugin",15)));native_io::poll();let sent=SENDS.load(Ordering::SeqCst);JOB_LIVE.store(false,Ordering::SeqCst);FULL.store(false,Ordering::SeqCst);native_io::poll();
+ // The ended job's data reply is never delivered; the parked helper is woken with a bare denial.
+ assert_eq!(SENDS.load(Ordering::SeqCst),sent+1);assert_eq!(fs::decode_reply(LAST.load(Ordering::SeqCst)),Some((9,fs::DENIED,0)));assert!(native_io::retire(child));assert_eq!(SCRUBS.load(Ordering::SeqCst),1);
  assert!(native_io::message(fs::OP,actor,req(2)));native_io::poll();assert_eq!(fs::decode_reply(LAST.load(Ordering::SeqCst)),Some((2,fs::OK,2)));
  // A consumed proof from job1 must not block the next claimed job until timeout.
  assert!(native_io::message(wire::OP_CLAIM,shell,[2,actor.word(),9]));native_io::poll();assert_eq!(LAST.load(Ordering::SeqCst),0xd1<<56|2<<32);

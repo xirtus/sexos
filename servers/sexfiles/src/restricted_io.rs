@@ -61,6 +61,25 @@ struct ChildReply {
     waiting: bool,
 }
 static mut CHILD: [Option<ChildReply>; 2] = [None, None];
+/// A helper blocked on a reply must never be dropped silently: Shell's force-end only
+/// takes its pages, so it ends at its next instruction, which a task parked in a call
+/// never reaches. Wake it with a denial (no data) before forgetting the slot.
+fn release_child(slot: &mut Option<ChildReply>) {
+    if let Some(reply) = slot.as_ref() {
+        if reply.waiting && live(reply.actor) {
+            if let Some((seq, _, _)) = f::decode_reply(reply.word) {
+                let _ = sex_pdx::pdx_reply(reply.actor.pd, f::reply(seq, f::DENIED, 0));
+                sex_pdx::serial_record!(
+                    "[files.restricted.child.released] pd={} task={} seq={}",
+                    reply.actor.pd,
+                    reply.actor.task,
+                    seq
+                );
+            }
+        }
+    }
+    *slot = None;
+}
 static mut REPLIES: [Option<Reply>; 16] = [None; 16];
 fn clear(slot: &mut Option<Reply>) {
     if let Some(reply) = slot.as_mut() {
@@ -341,7 +360,7 @@ pub fn retire(actor: Subject) -> bool {
                 .as_ref()
                 .is_some_and(|r| r.actor == actor || r.binding.parent == actor)
             {
-                *slot = None;
+                release_child(slot);
             }
         }
         let current = unsafe { &mut *core::ptr::addr_of_mut!(CONTROL) };
@@ -527,7 +546,8 @@ fn poll_children() {
                 .child(reply.actor)
                 .is_none_or(|e| !e.live(now, own_epoch) || e.job.binding() != Some(reply.binding))
         {
-            *slot = None;
+            drop(turn);
+            release_child(slot);
             continue;
         }
         let reply = slot.as_mut().unwrap();
@@ -547,7 +567,7 @@ fn poll_children() {
             || !live(reply.actor)
             || !crate::restricted_runtime::job_live(reply.binding, sex_pdx::get_ticks())
         {
-            *slot = None;
+            release_child(slot);
             continue;
         }
         if sex_pdx::pdx_reply(reply.actor.pd, reply.word) == 0 {
