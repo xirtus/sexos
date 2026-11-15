@@ -300,15 +300,28 @@ impl Usb {
                     if let Some(at) = at { self.bt_keys[at] = (d, modifiers, keys); }
                     self.send_keys();
                 }
-                HidInput::Pointer { buttons, dx, dy, wheel, .. } => self.send_relative(0, 0, buttons & 7, dx as i32, dy as i32, wheel),
+                HidInput::Pointer { device, buttons, dx, dy, wheel } => {
+                    let d = device.max(1);
+                    let at = self.bt_buttons.iter().position(|b| b.0 == d).or_else(|| self.bt_buttons.iter().position(|b| b.0 == 0));
+                    if let Some(at) = at { self.bt_buttons[at] = if buttons & 7 == 0 { (0, 0) } else { (d, buttons & 7) }; }
+                    self.send_relative(0, 0, self.bt_held(), dx as i32, dy as i32, wheel);
+                }
                 HidInput::Gone { device } => {
                     for k in self.bt_keys.iter_mut().filter(|k| k.0 == device.max(1)) { *k = (0, 0, 0); }
                     self.send_keys();
+                    // A mouse that left with a button down: release it.
+                    if self.bt_buttons.iter().any(|b| b.0 == device.max(1)) {
+                        for b in self.bt_buttons.iter_mut().filter(|b| b.0 == device.max(1)) { *b = (0, 0); }
+                        self.send_relative(0, 0, self.bt_held(), 0, 0, 0);
+                    }
                 }
             }
         }
         moved
     }
+
+    /// Buttons held across all Bluetooth pointing devices.
+    fn bt_held(&self) -> u8 { self.bt_buttons.iter().fold(0, |m, b| m | b.1) }
 
     /// Bluetooth keyboards or mice are connected: input may arrive at any time.
     pub fn bt_hid_active(&self) -> bool {
@@ -323,6 +336,7 @@ impl Usb {
             log!("[sexusb.bt.gone] slot={}", self.dev[i].slot);
             // Keys held on Bluetooth keyboards go up with the controller.
             if self.bt_keys.iter().any(|k| k.0 != 0) { self.bt_keys = [(0, 0, 0); 8]; self.send_keys(); }
+            if self.bt_buttons.iter().any(|b| b.0 != 0) { self.bt_buttons = [(0, 0); 8]; self.send_relative(0, 0, 0, 0, 0, 0); }
         }
     }
 }

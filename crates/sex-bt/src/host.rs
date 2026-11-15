@@ -327,6 +327,15 @@ impl Host {
         }
     }
 
+    /// Start the next LE device that waited while another connection was pending.
+    fn next_le(&mut self) {
+        if self.le_connecting.is_some() { return; }
+        let next = self.wanted.iter()
+            .filter(|a| !self.conns.iter().any(|c| c.addr == **a))
+            .find_map(|a| self.seen.iter().find(|s| s.addr == *a && s.transport == Transport::Le).map(|s| (s.addr, s.addr_type)));
+        if let Some((addr, addr_type)) = next { self.connect_le(addr, addr_type); }
+    }
+
     fn hid_wanted(&self, addr: &Addr) -> bool {
         self.wanted.contains(addr) || self.bonds.le_for(addr).is_some() || self.bonds.classic_for(addr).is_some()
     }
@@ -386,12 +395,13 @@ impl Host {
                 let hid = self.hid_wanted(&addr);
                 self.conns.push(Conn::new(handle, addr, 0, false, ours, hid));
                 self.notes.push_back(Note::Connected { handle, addr, le: false });
-                // We paged it for HID: authenticate, then encrypt, then open the channels.
-                if ours { self.send_command(Ssp::authenticate(handle)); }
+                // We paged it for HID, or a bonded device paged us: authenticate (proving it
+                // holds the link key), then encrypt, then open or accept the channels.
+                if ours || self.bonds.classic_for(&addr).is_some() { self.send_command(Ssp::authenticate(handle)); }
             }
             Event::LeConnectionComplete { status, handle, role, peer_type, peer } => {
                 self.le_connecting = None;
-                if status != 0 { self.wanted.retain(|a| *a != peer); return; }
+                if status != 0 { self.wanted.retain(|a| *a != peer); self.next_le(); return; }
                 let hid = self.hid_wanted(&peer);
                 self.conns.push(Conn::new(handle, peer, peer_type & 1, true, role == 0, hid));
                 self.notes.push_back(Note::Connected { handle, addr: peer, le: true });
@@ -402,6 +412,7 @@ impl Host {
                         None => self.pair(handle),
                     }
                 }
+                self.next_le();
             }
             Event::DisconnectionComplete { status: 0, handle, reason } => {
                 if let Some(c) = self.conns.iter().find(|c| c.handle == handle) { let a = c.addr; self.wanted.retain(|w| *w != a); }
@@ -445,8 +456,10 @@ impl Host {
                     let mut p = handle.to_le_bytes().to_vec();
                     p.push(1);
                     self.send_command(hci::command(code::SET_CONNECTION_ENCRYPTION, &p));
-                } else if let Some(addr) = self.conns.iter().find(|c| c.handle == handle).map(|c| c.addr) {
+                } else if let Some((addr, central)) = self.conns.iter().find(|c| c.handle == handle).map(|c| (c.addr, c.central)) {
                     self.notes.push_back(Note::PairingFailed { addr, reason: params[0] });
+                    // A device that paged us claiming a bond but cannot prove the key: drop it.
+                    if !central { self.disconnect(handle); }
                 }
             }
             _ => {}
@@ -557,7 +570,8 @@ impl Host {
                 let (addr, encrypted) = self.conns.iter().find(|c| c.handle == handle).map(|c| (c.addr, c.encrypted)).unwrap();
                 let bonded = self.bonds.classic_for(&addr).is_some();
                 // HID channels to us: only from a bonded device, on an encrypted link or one
-                // that will be (the link key is known).
+                // that will be (the link key is known). Input on them is ignored until the
+                // link is encrypted, so a peer that only spoofs the address injects nothing.
                 let allow = move |psm: u16| -> Result<(), u16> {
                     if psm != hidp::PSM_CONTROL && psm != hidp::PSM_INTERRUPT { return Err(l2cap::PSM_NOT_SUPPORTED); }
                     if bonded || encrypted { Ok(()) } else { Err(l2cap::SECURITY_BLOCK) }
@@ -590,6 +604,7 @@ impl Host {
                 // Classic HID channels.
                 let Some(c) = self.conns.iter().find(|c| c.handle == handle) else { return };
                 let Some(ch) = c.chans.by_local(cid).copied() else { return };
+                if !c.encrypted { return; }
                 match ch.psm {
                     hidp::PSM_INTERRUPT => {
                         if let Some(input) = hidp::input(payload) { self.notes.push_back(Note::Input { handle, input }); }

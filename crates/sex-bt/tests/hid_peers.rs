@@ -141,7 +141,9 @@ impl Keyboard {
     }
 }
 
-struct Mouse { chans: Channels, link_key: Option<[u8; 16]>, handshake: u32, boot_protocol: bool, initiator: bool }
+struct Mouse { chans: Channels, link_key: Option<[u8; 16]>, handshake: u32, boot_protocol: bool, initiator: bool,
+    /// A peer using the mouse's address without its link key.
+    spoof: bool }
 
 struct Controller {
     out: VecDeque<Vec<u8>>,
@@ -158,7 +160,7 @@ struct Controller {
 impl Controller {
     fn new() -> Controller {
         Controller { out: VecDeque::new(), opcodes: vec![], kb: Keyboard::new(rpa(0x123456)), rx: Reassembly::default(), kb_addr: rpa(0x123456),
-            mouse: Mouse { chans: Channels::default(), link_key: None, handshake: 0, boot_protocol: false, initiator: false }, le_handle: HANDLE, classic_handle: 0x000b }
+            mouse: Mouse { chans: Channels::default(), link_key: None, handshake: 0, boot_protocol: false, initiator: false, spoof: false }, le_handle: HANDLE, classic_handle: 0x000b }
     }
     fn cc(&mut self, opcode: u16, ret: &[u8]) { self.out.push_back(hci::command_complete(opcode, ret)); }
     fn status(&mut self, opcode: u16) { self.out.push_back(hci::command_status(opcode, 0)); }
@@ -286,8 +288,20 @@ impl Controller {
                 r.extend_from_slice(&MOUSE.0);
                 r.extend_from_slice(&[0x01, 0x00]);
                 self.ev(hci::ev::CONNECTION_COMPLETE, &r);
-                // The mouse authenticates with the key it kept.
-                self.ev(hci::ev::LINK_KEY_REQUEST, &MOUSE.0);
+                if self.mouse.spoof {
+                    // No key: open the HID channels straight away and hope.
+                    self.mouse.chans = Channels::default();
+                    self.mouse.initiator = true;
+                    let p = self.mouse.chans.connect(hidp::PSM_CONTROL);
+                    self.classic_send(l2cap::CID_SIGNALING, &p);
+                }
+                // The host authenticates the link with the stored key.
+            }
+            hop::AUTHENTICATION_REQUESTED if self.mouse.spoof => {
+                // The challenge fails: the spoofer does not hold the link key.
+                self.status(opcode);
+                let h = self.classic_handle;
+                self.ev(code::EV_AUTHENTICATION_COMPLETE, &[0x05, h as u8, (h >> 8) as u8]);
             }
             hop::AUTHENTICATION_REQUESTED => { self.status(opcode); self.ev(hci::ev::LINK_KEY_REQUEST, &MOUSE.0); }
             hop::LINK_KEY_REQUEST_NEGATIVE_REPLY => {
@@ -489,4 +503,31 @@ fn stranger_paging_us_is_refused() {
     pump(&mut h, &mut c);
     assert!(c.opcodes.contains(&code::REJECT_CONNECTION_REQUEST));
     assert!(!c.opcodes.contains(&code::ACCEPT_CONNECTION_REQUEST));
+}
+
+#[test]
+fn spoofed_bonded_address_injects_nothing() {
+    let (mut h, mut c) = ready();
+    let found = Found { addr: MOUSE, transport: Transport::Classic, addr_type: 0, rssi: Some(-40), class: Some(0x002580),
+        name: Some("Cuff Classic Mouse".into()), appearance: None, flags: None, connectable: true };
+    h.connect_hid(&found);
+    pump(&mut h, &mut c);
+    assert!(h.bonds.classic_for(&MOUSE).is_some());
+    c.ev(hci::ev::DISCONNECTION_COMPLETE, &[0, 0x0b, 0x00, 0x08]);
+    pump(&mut h, &mut c);
+    // Someone else pages us with the mouse's address, opens HID channels and sends input.
+    c.classic_handle = 0x000d;
+    c.mouse.spoof = true;
+    let mut req = MOUSE.0.to_vec();
+    req.extend_from_slice(&[0x80, 0x25, 0x00, 0x01]);
+    c.ev(code::EV_CONNECTION_REQUEST, &req);
+    let mut notes = pump(&mut h, &mut c);
+    if c.mouse.chans.by_psm(hidp::PSM_INTERRUPT).is_some_and(|ch| ch.open) {
+        c.mouse_moves(&[0x01, 0x10, 0x10]);
+        notes.extend(pump(&mut h, &mut c));
+    }
+    assert!(inputs(&notes).is_empty(), "{notes:?}");
+    assert!(!notes.iter().any(|n| matches!(n, Note::Encrypted { handle: 0x000d })), "{notes:?}");
+    assert!(notes.iter().any(|n| matches!(n, Note::PairingFailed { addr, .. } if *addr == MOUSE)), "{notes:?}");
+    assert!(c.opcodes.contains(&code::DISCONNECT), "the impostor is dropped");
 }

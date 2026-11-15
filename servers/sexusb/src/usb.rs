@@ -149,6 +149,8 @@ pub struct Usb {
     /// Bluetooth keyboards' held keys (device, modifiers, keys), from Cufflinks; merged
     /// with USB keyboards' in `send_keys`.
     bt_keys: [(u8, u8, u64); 8],
+    /// Buttons held on each Bluetooth pointing device (device, mask).
+    bt_buttons: [(u8, u8); 8],
 }
 
 const BOUNCE: u64 = sex_pdx::usb_disk::BUFFER_BYTES + 8192;
@@ -168,7 +170,7 @@ impl Usb {
         Usb { x, dev: [Device::empty(); MAX_DEVICES], slot_dev: [0; 256], root_pending: 0, sent_keys: 0,
             sent_modifiers: 0, stats: Stats::default(), bounce: (0, 0), disks: [0; sex_pdx::usb_disk::MAX_DISKS as usize],
             generation: 0, changed: false, freed: 0, ether: None, net_region: 0, ether_buffers: ((0, 0), (0, 0)),
-            bt: None, bt_region: 0, bt_buffers: ((0, 0), (0, 0), (0, 0)), bt_keys: [(0, 0, 0); 8] }
+            bt: None, bt_region: 0, bt_buffers: ((0, 0), (0, 0), (0, 0)), bt_keys: [(0, 0, 0); 8], bt_buttons: [(0, 0); 8] }
     }
 
     fn ctx(&self, base: u64, index: u64) -> *mut u32 { (base + index * self.x.csz) as *mut u32 }
