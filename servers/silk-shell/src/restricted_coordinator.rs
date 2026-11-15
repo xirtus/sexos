@@ -472,9 +472,14 @@ impl Coordinator {
                     self.fail(p);
                     return;
                 };
-                if child.pd != r.previous.pd
-                    || child.task == 0
-                    || !p.bound(r, child)
+                if child.pd != r.previous.pd || child.task == 0 {
+                    self.fail(p);
+                    return;
+                }
+                // Record only the validated owned-row identity before subsequent
+                // checks, so any failure attempts exact dormant cleanup.
+                t.child = Some(child);
+                if !p.bound(r, child)
                     || !p.live(t.parent)
                     || p.self_epoch() != Some(t.shell)
                     || epochs(p) != Some(t.epochs)
@@ -482,7 +487,6 @@ impl Coordinator {
                     self.fail(p);
                     return;
                 }
-                t.child = Some(child);
                 t.set(Stage::Copied);
             }
             Stage::Activate => {
@@ -541,6 +545,27 @@ impl Coordinator {
             }
         }
     }
+    pub fn pending(&self) -> bool {
+        self.busy() || self.live.iter().any(Option::is_some)
+    }
+    pub fn retire(&mut self, actor: Subject, p: &mut impl Platform) {
+        if self
+            .transaction
+            .as_ref()
+            .is_some_and(|t| t.parent == actor || t.child == Some(actor))
+        {
+            self.fail(p);
+        }
+        for l in self.live.iter_mut().flatten() {
+            if l.child == actor {
+                l.ready_pending = false;
+            }
+            if l.parent == actor {
+                l.cancelled = true;
+                p.kill(l.child);
+            }
+        }
+    }
     /// Done must not overtake a retained Started event under parent backpressure.
     pub fn holds_done(&self, child: Subject) -> bool {
         self.live
@@ -580,6 +605,16 @@ impl Coordinator {
             })
             || !t.sent
         {
+            return false;
+        }
+        let belongs = match t.stage {
+            Stage::Claim => value >> 56 == 0xd1 && ((value >> 32) & 0xff_ffff) == t.ticket as u64,
+            Stage::Load => value >> 56 == 0xd2 && ((value >> 32) & 0xff_ffff) == t.ticket as u64,
+            Stage::Copied => value >> 56 == 0xd3 && ((value >> 32) & 0xff_ffff) == t.ticket as u64,
+            Stage::Describe(..) | Stage::Policy { .. } | Stage::Serial(..) => w::is_chunk(value),
+            _ => false,
+        };
+        if !belongs {
             return false;
         }
         if p.now() >= t.until

@@ -17,6 +17,8 @@ mod autofill;
 use autofill as autofill_broker;
 mod autofill_routes;
 mod restricted_pool;
+mod restricted_coordinator;
+mod restricted_routes;
 #[cfg(sexos_input_payload_proof)]
 mod wait_observer;
 mod app_input;
@@ -380,6 +382,7 @@ unsafe fn shell_lifecycle_poll() {
             APP_CUSTODY[i] = Some(entry);
         }
         if !entry.retired {
+            restricted_routes::retire(sex_pdx::restricted_helper::Subject{pd:entry.target,task:entry.task});
             let subject=sex_pdx::clipboard::Subject{pd:entry.target,task:entry.task};
             CLIPBOARD.retire(subject);
             autofill_routes::retire(sex_pdx::autofill::Subject{pd:subject.pd,task:subject.task});
@@ -17384,7 +17387,7 @@ static mut PROGRAM_REBIRTH: Option<usize> = None;
 /// What each program row can do right now, from the rows' own held grants.
 fn program_rows()->impl Iterator<Item=(&'static app_catalog::Incarnation,usize,u64)>{
     app_catalog::INCARNATIONS.iter().filter(|row|row.app==app_catalog::App::Program&&row.ordinal!=0)
-        .filter(|row|restricted_pool::normal()&&!restricted_pool::reserved(row.target))
+        .filter(|row|restricted_pool::normal()&&!restricted_routes::busy()&&!restricted_pool::reserved(row.target))
         .filter(|row|!sex_pdx::desktop_recording::ENABLED||row.target!=sex_pdx::desktop_recording::TARGET)
         .filter_map(|row|{let slot=row.activation_slot?;let info=sex_pdx::app_lifecycle::activation(slot,false).ok()?;Some((row,slot,info.state))})
 }
@@ -17551,6 +17554,13 @@ unsafe fn launch_report(now:u64){
         let Some(run)=*slot else{continue};
         let Some(at)=run.ended else{continue};
         if run.status.is_none()&&now.saturating_sub(at)<LAUNCH_STATUS_GRACE{continue}
+        if restricted_pool::reserved(run.child){
+            let child=sex_pdx::restricted_helper::Subject{pd:run.child,task:run.child_task};
+            if !restricted_routes::retired(child)||restricted_routes::holds_done(child){continue}
+            let parent=sex_pdx::restricted_helper::Subject{pd:run.parent,task:run.parent_task};
+            if program_run(run.parent).is_some_and(|(_,task)|task==run.parent_task)&&!restricted_routes::send_event(parent,sex_pdx::launch::Event::Done{cookie:run.cookie,row:run.child,task:run.child_task,status:run.status}){continue}
+            *slot=None;continue;
+        }
         *slot=None;
         if program_run(run.parent).is_some_and(|(_,t)|t==run.parent_task){
             launch_send(run.parent,sex_pdx::launch::Event::Done{cookie:run.cookie,row:run.child,task:run.child_task,status:run.status});
@@ -17612,7 +17622,7 @@ unsafe fn shell_launch_message(msg:&sex_pdx::PdxMessage)->bool{
             if flags&!(store::RUN_NETWORK|store::RUN_HIDDEN)!=0||msg.arg2>u32::MAX as u64{refuse(store::NOT_A_PROGRAM,"flags");return true}
             if network&&!NETWORK_RUNS.contains(&Some((caller,task))){refuse(store::NOT_ALLOWED,"network");return true}
             if LAUNCH_RUNS.iter().flatten().count()>=launch::MAX_RUNS{refuse(store::NO_FREE_ROW,"runs");return true}
-            if PROGRAM_READING||PROGRAM_REBIRTH.is_some()||RECORD_SPAWN_LEFT!=0{refuse(store::IMAGE_BUSY,"busy");return true}
+            if PROGRAM_READING||restricted_routes::busy()||PROGRAM_REBIRTH.is_some()||RECORD_SPAWN_LEFT!=0{refuse(store::IMAGE_BUSY,"busy");return true}
             if program_free_row().is_none(){refuse(store::NO_FREE_ROW,"no_free_row");return true}
             let(status,_)=pdx_call(store::SHELL_ROUTE_SLOT,store::OP,store::TICKET,ticket,caller as u64);
             if status!=0{refuse(store::IMAGE_BUSY,"files_busy");return true}
@@ -17633,7 +17643,7 @@ unsafe fn shell_program_message(msg:&sex_pdx::PdxMessage)->bool{
     }
     if msg.type_id==store::OP_SPAWN {
         if !app_catalog::is_spindle(msg.caller_pd){return true}
-        if PROGRAM_READING||RECORD_SPAWN_LEFT!=0{sex_pdx::serial_record!("[shell.records.denied] reason=busy");return true}
+        if PROGRAM_READING||restricted_routes::busy()||RECORD_SPAWN_LEFT!=0{sex_pdx::serial_record!("[shell.records.denied] reason=busy");return true}
         let(status,_)=pdx_call(store::SHELL_ROUTE_SLOT,store::OP,msg.arg0,msg.arg1,0);
         PROGRAM_READING=status==0;
         RECORD_SPAWN_WANTED=if status==0{msg.arg2}else{0};
@@ -17644,7 +17654,7 @@ unsafe fn shell_program_message(msg:&sex_pdx::PdxMessage)->bool{
         let by_program=msg.arg0==store::TICKET&&matches!(app_catalog::app_of(msg.caller_pd),Some(app_catalog::App::Program));
         if !app_catalog::is_spindle(msg.caller_pd)&&!by_program{return true}
         if by_program&&!program_run(msg.caller_pd).is_some_and(|(_,task)|launch_caller_task(task,msg.caller_task)){return true}
-        if PROGRAM_READING||PROGRAM_REBIRTH.is_some()||program_free_row().is_none(){
+        if PROGRAM_READING||restricted_routes::busy()||PROGRAM_REBIRTH.is_some()||program_free_row().is_none(){
             sex_pdx::serial_record!("[shell.program.denied] reason=no_free_row");program_refused(store::NO_FREE_ROW);return true;
         }
         let(status,_)=pdx_call(store::SHELL_ROUTE_SLOT,store::OP,msg.arg0,msg.arg1,if by_program{msg.caller_pd as u64}else{0});
@@ -25923,6 +25933,7 @@ pub extern "C" fn _start() -> ! {
             }
         }
         restricted_pool::recover();
+        restricted_routes::poll();
         unsafe { program_rebirth_poll(); launch_poll(); }
         unsafe { session::save(); }
         unsafe { record_spawn_poll(); }
@@ -26612,7 +26623,7 @@ pub extern "C" fn _start() -> ! {
                 unsafe { flush_pending_cursor_send(); }
                 // A full input ring may recover while the shell has no work.
                 // Return to the publisher instead of blocking in listen.
-                if shell_ready_publisher.is_pending() || unsafe { RECORD_SPAWN_LEFT != 0 || DISPLAY_SCALE.request().is_some() || CURSOR_SEND_PENDING || APP_INPUT.pending() || LAUNCHER_FOCUS.is_some() || CLIPBOARD_INTAKE.pending() || CLIPBOARD.pending() || autofill_routes::pending() || WORKSPACE_REFRESH_PENDING.iter().any(|p|*p) || linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_POINTER.is_some() || LINEN_ASYNC.can_send() || NOTIFY_NOTICE_UNTIL != 0 || MEMORY_CRITICAL_SINCE != 0 || KEY_REPEAT.pending() || launch_waiting() } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
+                if shell_ready_publisher.is_pending() || unsafe { RECORD_SPAWN_LEFT != 0 || DISPLAY_SCALE.request().is_some() || CURSOR_SEND_PENDING || APP_INPUT.pending() || LAUNCHER_FOCUS.is_some() || CLIPBOARD_INTAKE.pending() || CLIPBOARD.pending() || autofill_routes::pending() || WORKSPACE_REFRESH_PENDING.iter().any(|p|*p) || linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_POINTER.is_some() || LINEN_ASYNC.can_send() || NOTIFY_NOTICE_UNTIL != 0 || MEMORY_CRITICAL_SINCE != 0 || KEY_REPEAT.pending() || launch_waiting() || restricted_routes::pending() } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
                     sys_yield();
                     continue;
                 }
@@ -26627,6 +26638,7 @@ pub extern "C" fn _start() -> ! {
         if msg.type_id == sex_pdx::program_memory::OP_PRESSURE && msg.caller_pd == 0 { unsafe { MEMORY_LAST_LOOK = 0; } continue; }
         unsafe {
             if shell_lifecycle_hint(&msg) { continue; }
+            if restricted_routes::receive(&msg){continue;}
             if restricted_pool::blocks(&msg){continue;}
             if shell_launch_message(&msg) { continue; }
             if shell_dnd_message(&msg) { continue; }

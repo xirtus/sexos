@@ -20,21 +20,21 @@ impl restricted_helper_provider::Platform for Context<'_>{
  fn catalog(&mut self,pd:u32)->Option<Subject>{(pd==43).then_some(self.child)}fn now(&mut self)->u64{self.now}
  fn reply(&mut self,value:u64)->bool{if self.full{return false}self.replies.push_back((s(self.service.pd(),self.service.pd()),value));true}
 }
-struct Fake{now:u64,own:u64,epochs:[u64;4],providers:[Provider;4],journals:[Journal;4],replies:VecDeque<(Subject,u64)>,sent:Vec<(Service,u64,[u64;3])>,header:[u8;176],child:Subject,parent:Subject,copy:usize,bound:bool,active:usize,refused:usize,kills:Vec<Subject>,retired:bool,started:usize,ready:usize,full:bool,reply_full:bool,ready_full:bool,start_full:bool,reserved:usize}
+struct Fake{now:u64,own:u64,epochs:[u64;4],providers:[Provider;4],journals:[Journal;4],replies:VecDeque<(Subject,u64)>,sent:Vec<(Service,u64,[u64;3])>,header:[u8;176],child:Subject,parent:Subject,copy:usize,bound:bool,deny_bound:bool,active:usize,refused:usize,kills:Vec<Subject>,retired:bool,started:usize,ready:usize,full:bool,reply_full:bool,ready_full:bool,start_full:bool,reserved:usize}
 impl Fake{
- fn new()->Self{let mut f=Self{now:0,own:1,epochs:[1;4],providers:core::array::from_fn(|_|Provider::new()),journals:core::array::from_fn(|_|Journal::new()),replies:VecDeque::new(),sent:Vec::new(),header:[0;176],child:s(43,43),parent:s(42,99),copy:0,bound:false,active:0,refused:0,kills:Vec::new(),retired:false,started:0,ready:0,full:false,reply_full:false,ready_full:false,start_full:false,reserved:0};
+ fn new()->Self{let mut f=Self{now:0,own:1,epochs:[1;4],providers:core::array::from_fn(|_|Provider::new()),journals:core::array::from_fn(|_|Journal::new()),replies:VecDeque::new(),sent:Vec::new(),header:[0;176],child:s(43,43),parent:s(42,99),copy:0,bound:false,deny_bound:false,active:0,refused:0,kills:Vec::new(),retired:false,started:0,ready:0,full:false,reply_full:false,ready_full:false,start_full:false,reserved:0};
   f.header[..8].copy_from_slice(b"MOANINF2");f.header[8..12].copy_from_slice(&7u32.to_le_bytes());f.header[12..16].copy_from_slice(&1u32.to_le_bytes());f.header[16..24].copy_from_slice(&1u64.to_le_bytes());f.header[24..40].fill(7);f.header[40..72].fill(1);f.header[72..104].fill(2);f.header[136..144].copy_from_slice(&f.parent.word().to_le_bytes());f.header[164..168].copy_from_slice(&9u32.to_le_bytes());
   for i in 0..4{let mut ctx=Context{epoch:1,now:0,child:f.child,replies:&mut f.replies,service:[Service::Files,Service::Display,Service::Net,Service::Bell][i],full:false};f.providers[i].initialize(&f.journals[i],&mut ctx);}f
  }
  fn flush(&mut self){for i in 0..4{let mut ctx=Context{epoch:self.epochs[i],now:self.now,child:self.child,replies:&mut self.replies,service:[Service::Files,Service::Display,Service::Net,Service::Bell][i],full:self.reply_full};self.providers[i].poll(&mut ctx,|_|true);}}
- fn step(&mut self,c:&mut Coordinator){self.now+=1;self.flush();c.poll(self);if let Some((who,value))=self.replies.pop_front(){assert!(c.reply(who,value,self));}}
+ fn step(&mut self,c:&mut Coordinator){self.now+=1;self.flush();c.poll(self);if let Some((who,value))=self.replies.pop_front(){assert!(!c.reply(who,0xf5<<56|1<<32,self));assert!(!c.reply(who,0x5343_0000_0000_0001,self));assert!(!c.reply(who,0,self));assert!(c.reply(who,value,self));}}
  fn run(&mut self,c:&mut Coordinator){for _ in 0..1500{self.step(c);if !c.busy(){return}}panic!("bounded coordinator did not finish")}
 }
 impl Platform for Fake{
  fn now(&mut self)->u64{self.now}fn self_epoch(&mut self)->Option<u64>{Some(self.own)}fn peer_epoch(&mut self,service:Service)->Option<u64>{Some(self.epochs[index(service)])}
  fn live(&mut self,who:Subject)->bool{who==self.parent||(self.active>0&&who==self.child&&!self.retired)}
  fn reserve(&mut self)->Option<Reservation>{self.reserved+=1;Some(Reservation{previous:self.child,slot:250,fresh:true,generation:1})}
- fn bound(&mut self,r:Reservation,child:Subject)->bool{assert_eq!(r.previous,s(43,43));self.bound=child==self.child;self.bound}
+ fn bound(&mut self,r:Reservation,child:Subject)->bool{assert_eq!(r.previous,s(43,43));self.bound=child==self.child&&!self.deny_bound;self.bound}
  fn send(&mut self,service:Service,opcode:u64,words:[u64;3])->bool{
   if self.full{return false}self.sent.push((service,opcode,words));let i=index(service);
   if matches!(opcode,restricted_helper::OP_POLICY_TAGGED|restricted_helper::OP_FETCH_TAGGED){let mut ctx=Context{epoch:self.epochs[i],now:self.now,child:self.child,replies:&mut self.replies,service,full:self.reply_full};assert!(self.providers[i].message(Message{opcode,caller:s(3,3),words},&self.journals[i],&mut ctx));self.providers[i].poll(&mut ctx,|_|true);return true}
@@ -60,6 +60,12 @@ impl Platform for Fake{
  assert!(!c.ready(f.child,[2,0x0707070707070707,0x0707070707070707],&mut f));assert!(!c.ready(f.child,[1,0,0],&mut f));
  assert!(c.ready(f.child,[1,0x0707070707070707,0x0707070707070707],&mut f));f.ready_full=true;c.poll(&mut f);assert_eq!(f.ready,0);f.ready_full=false;c.poll(&mut f);assert_eq!(f.ready,1);
  f.now=120_001;c.poll(&mut f);assert!(!f.kills.is_empty());assert!(f.kills.iter().all(|who|*who==f.child));
+}
+#[test]fn copied_child_is_exactly_cleaned_if_post_copy_binding_fails(){
+ let mut f=Fake::new();f.deny_bound=true;let mut c=Coordinator::new();let parent=f.parent;assert!(c.begin(parent,7,9,1,&mut f));f.run(&mut c);assert_eq!(f.copy,1);assert_eq!(f.active,0);assert_eq!(f.refused,1);assert_eq!(f.kills,vec![f.child]);
+}
+#[test]fn parent_start_codec_preserves_full_cookie_and_both_epochs(){
+ let words=restricted_job::start_words(0xffffff,u32::MAX,u64::MAX,u64::MAX).unwrap();assert_eq!(restricted_job::start_decode(words),Some((0xffffff,u32::MAX,u64::MAX,u64::MAX)));assert!(restricted_job::start_decode([words[0]|1<<63,1,1]).is_none());assert!(restricted_job::start_words(0,1,1,1).is_none());assert!(restricted_job::start_words(1,0,1,1).is_none());assert!(restricted_job::start_words(1,1,0,1).is_none());assert!(restricted_job::start_words(1,1,1,0).is_none());
 }
 #[test]fn wrong_owner_and_stale_epoch_never_reserve_or_activate(){
  let mut f=Fake::new();let mut c=Coordinator::new();let parent=f.parent;assert!(!c.begin(parent,7,9,2,&mut f));f.header[136..144].copy_from_slice(&s(42,100).word().to_le_bytes());assert!(c.begin(parent,7,9,1,&mut f));f.run(&mut c);assert_eq!(f.reserved,0);assert_eq!(f.active,0);assert_eq!(f.refused,1);

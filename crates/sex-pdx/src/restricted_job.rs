@@ -15,6 +15,8 @@ pub const OP_DESCRIBE: u64 = 0x4d50_5011;
 pub const OP_LOAD: u64 = 0x4d50_5012;
 pub const OP_COPIED: u64 = 0x4d50_5013;
 pub const OP_DESCRIBE_TAGGED: u64 = 0x4d50_5014;
+pub const OP_START: u64 = 0x4d50_5020;
+pub const OP_CANCEL: u64 = 0x4d50_5021;
 #[derive(Clone, Copy)]
 pub struct Prepare<'a> {
     pub format: u8,
@@ -172,4 +174,31 @@ impl Info {
             coordinator_epoch,
         })
     }
+}
+
+/// Full epoch binding on parent->Shell start/cancel, including queued messages
+/// surviving a Shell restart. Ticket24+cookie32 share one word without truncation.
+pub fn start_words(
+    ticket: u32,
+    cookie: u32,
+    files_epoch: u64,
+    shell_epoch: u64,
+) -> Option<[u64; 3]> {
+    if ticket == 0 || ticket > 0xff_ffff || cookie == 0 || files_epoch == 0 || shell_epoch == 0 {
+        return None;
+    }
+    Some([
+        ticket as u64 | (cookie as u64) << 24,
+        files_epoch,
+        shell_epoch,
+    ])
+}
+pub fn start_decode(words: [u64; 3]) -> Option<(u32, u32, u64, u64)> {
+    if words[0] >> 56 != 0 {
+        return None;
+    }
+    let ticket = (words[0] & 0xff_ffff) as u32;
+    let cookie = (words[0] >> 24) as u32;
+    start_words(ticket, cookie, words[1], words[2])?;
+    Some((ticket, cookie, words[1], words[2]))
 }
