@@ -45,6 +45,9 @@ def main():
   m=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,120)
   r=g['wait'](r'\[needle\.(?:failed\] [^\n]*|'+done+')',s,300)
   assert not r[0].startswith('[needle.failed]'),r[0]
+  # A run's window can register after its output (a reborn task does): the Shell
+  # focuses it then, and tabbing before that races the new window's own focus.
+  g['wait'](rf'\[shell.app.registered.reply\] target={m[1]} task={m[2]} surface={m[3]} committed=1',s,120)
   g['focus'](int(m[3]));time.sleep(.3);q.key('f11');g['wait'](rf'\[app.private.retired\] target={m[1]} task={m[2]} ',s,120)
   return t()[s:],r
  printer=f'ipp://10.0.2.2:{PRINTER.port}/ipp/print'

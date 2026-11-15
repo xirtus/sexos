@@ -108,11 +108,14 @@ pub struct ViewportSettings {
     pub backface_culling: bool,
     /// 0 = all cores.
     pub threads: usize,
+    /// A flat background colour (display-space RGB 0..1) instead of the
+    /// default vertical gradient, like Blender 4.x's "Single Color" theme.
+    pub background: Option<[f32; 3]>,
 }
 
 impl Default for ViewportSettings {
     fn default() -> Self {
-        ViewportSettings { width: 1280, height: 720, wireframe: false, grid: true, backface_culling: false, threads: 0 }
+        ViewportSettings { width: 1280, height: 720, wireframe: false, grid: true, backface_culling: false, threads: 0, background: None }
     }
 }
 
@@ -320,7 +323,7 @@ impl ViewportScene {
         parallel_for_each(out.chunks_mut(w * 4 * band_h).zip(sc.depth.chunks_mut(w * band_h)).zip(sc.ids.chunks_mut(w * band_h)).enumerate(), threads, |(b, ((rgba, depth), ids))| {
             let y0 = b * band_h;
             let rows = depth.len() / w;
-            let mut band = Band { w, h, y0, y1: y0 + rows, rgba, depth, ids };
+            let mut band = Band { w, h, y0, y1: y0 + rows, rgba, depth, ids, background: s.background };
             band.clear();
             for st in setups {
                 for &ti in &st.bins[b] {
@@ -677,13 +680,17 @@ struct Band<'a> {
     rgba: &'a mut [u8],
     depth: &'a mut [f32],
     ids: &'a mut [u32],
+    background: Option<[f32; 3]>,
 }
 
 impl Band<'_> {
     fn clear(&mut self) {
         for y in self.y0..self.y1 {
             let t = y as f32 / (self.h.max(2) - 1) as f32;
-            let c = [0, 1, 2].map(|i| to_byte(BG_TOP[i] + (BG_BOTTOM[i] - BG_TOP[i]) * t));
+            let c = match self.background {
+                Some(bg) => bg.map(to_byte),
+                None => [0, 1, 2].map(|i| to_byte(BG_TOP[i] + (BG_BOTTOM[i] - BG_TOP[i]) * t)),
+            };
             let row = &mut self.rgba[(y - self.y0) * self.w * 4..(y - self.y0 + 1) * self.w * 4];
             for px in row.chunks_exact_mut(4) {
                 px.copy_from_slice(&[c[0], c[1], c[2], 255]);
