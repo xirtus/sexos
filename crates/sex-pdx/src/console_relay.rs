@@ -218,3 +218,82 @@ impl<const N: usize> Ring<N> {
     }
 }
 impl<const N: usize> Default for Ring<N> { fn default() -> Self { Self::new() } }
+
+// ---- Pipes: a program's own child runs ------------------------------------------------
+//
+// The same relay serves any program that starts a run with its standard streams handed
+// to it (`std::process::Stdio::piped()`), an environment or a working folder: the
+// starter PREPAREs with [`pipe_prepare`] in `offset` (`fs::PREPARE_PIPED`, a slot of its
+// own and the [`stdio`] word) instead of `fs::PREPARE_LAUNCH`, and starts the ticket with
+// `launch::OP_LAUNCH` as usual. No grant is needed: the starter only ever reaches its
+// own child, and Files' usual PREPARE checks still decide what the child may hold.
+//
+// The starter then talks to that slot as a terminal does: PUT (the child's stdin),
+// TAKE (its stdout), [`TAKE_ERR`] (its stderr), HANG_UP (stdin closed), RELEASE. Before
+// the start it may hand over [`SET_ENV`] and [`SET_CWD`]. The child sees its streams
+// with ATTACHED, whose value is then [`PIPE_RUN`] | the stdio word; it writes stderr
+// with [`WRITE_ERR`] and reads the environment with [`ENV`]. A stream the starter set to
+// [`INHERIT`] stays the child's own (its window, or the serial record when hidden);
+// [`NULL`] reads nothing and drops what is written.
+
+/// Attached run: `length` bytes of its stderr from the data area (a pipe run only).
+pub const WRITE_ERR: u64 = 13;
+/// Starter: as TAKE, from the stderr ring.
+pub const TAKE_ERR: u64 = 14;
+/// Attached run: the environment block from byte `length` on, into the data area; the
+/// value counts the bytes. The block is the working folder (`@/path`, empty for the
+/// program's own folder), a NUL, then `KEY=VALUE` entries, each ended by a NUL.
+pub const ENV: u64 = 15;
+/// Starter, before Shell starts the run: `length` more bytes of `KEY=VALUE\0` entries.
+/// `INVALID` past [`ENV_BYTES`], `PENDING` once the run started.
+pub const SET_ENV: u64 = 16;
+/// Starter: it stops reading the run's stdout (`length` bit 0) or stderr (bit 1); the
+/// run's writes there answer [`HUNG_UP`], as a write to a closed pipe.
+pub const CLOSE_READ: u64 = 17;
+/// Starter, before Shell starts the run: its working folder, the path of `length` bytes
+/// in the data area, spelled as the starter spells it (in its own folder, or an `@/path`
+/// it holds). Files hands the run that folder as a grant (`@/absolute/path`), which its
+/// relative paths then start from. `NAME` for a path the starter does not hold.
+pub const SET_CWD: u64 = 18;
+
+/// The environment block's room per run, working folder included.
+pub const ENV_BYTES: usize = 4096;
+/// The stderr ring per pipe run.
+pub const ERROR_BYTES: usize = 16 * 1024;
+
+/// What a pipe run's stream is: its own (window or serial record), the starter's, or none.
+pub const INHERIT: u8 = 0;
+pub const PIPED: u8 = 1;
+pub const NULL: u8 = 2;
+/// The stdio word: two bits per stream, stdin, stdout, stderr.
+pub const fn stdio(stdin: u8, stdout: u8, stderr: u8) -> u8 { (stdin & 3) | (stdout & 3) << 2 | (stderr & 3) << 4 }
+/// Stream `n` (0 stdin, 1 stdout, 2 stderr) of a stdio word.
+pub const fn stream(word: u8, n: u32) -> u8 { word >> (2 * n) & 3 }
+/// ATTACHED's value for a pipe run, with the stdio word in the low byte; a terminal's
+/// run answers 0.
+pub const PIPE_RUN: u32 = 1 << 8;
+
+/// `fs::PREPARE_PIPED` with the starter's slot and the stdio word, for PREPARE's `offset`.
+pub const fn pipe_prepare(slot: usize, word: u8) -> u64 { crate::fs::PREPARE_PIPED | (slot as u64) << SLOT_SHIFT | (word as u64 & 0x3F) << 16 }
+/// The slot and stdio word of a PREPARE `offset` [`pipe_prepare`] made; None otherwise.
+pub const fn split_pipe_prepare(offset: u64) -> Option<(usize, u8)> {
+    if offset & 0xFF != crate::fs::PREPARE_PIPED || offset >> 22 != 0 { return None; }
+    let slot = (offset >> SLOT_SHIFT & 0xFF) as usize;
+    if slot >= SLOTS { return None; }
+    Some((slot, (offset >> 16 & 0x3F) as u8))
+}
+
+/// The bytes of the environment block from `at` on: `cwd`, a NUL, then `env`. Returns
+/// how many were put in `out`.
+pub fn env_block(cwd: &[u8], env: &[u8], at: usize, out: &mut [u8]) -> usize {
+    let block = cwd.iter().chain(core::iter::once(&0u8)).chain(env.iter()).skip(at);
+    let mut n = 0;
+    for (o, b) in out.iter_mut().zip(block) { *o = *b; n += 1; }
+    n
+}
+/// The working folder and the `KEY=VALUE` entries of a whole environment block.
+pub fn split_env_block(block: &[u8]) -> (&[u8], impl Iterator<Item = &[u8]>) {
+    let end = block.iter().position(|b| *b == 0).unwrap_or(block.len());
+    let rest = block.get(end + 1..).unwrap_or(&[]);
+    (&block[..end], rest.split(|b| *b == 0).filter(|e| !e.is_empty()))
+}

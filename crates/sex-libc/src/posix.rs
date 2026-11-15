@@ -32,6 +32,10 @@ struct HStat {
 }
 
 extern "C" {
+    /// The environment this run was started with, from byte `at` (crates/sex-std).
+    fn sys_sexos_env(at: usize, out: *mut u8, len: usize) -> isize;
+    fn sys_sexos_getcwd(out: *mut u8, len: usize) -> isize;
+    fn sys_sexos_chdir(path: *const u8, len: usize) -> i32;
     fn sys_open(name: *const c_char, flags: i32, mode: i32) -> i32;
     fn sys_close(fd: i32) -> i32;
     fn sys_read(fd: i32, buf: *mut u8, len: usize) -> isize;
@@ -77,6 +81,16 @@ pub(crate) fn log_line(bytes: &[u8]) {
 /// Runs a C program's `main` with `argv`, then ends the program as `exit` does.
 pub fn run(main: unsafe extern "C" fn(c_int, *mut *mut c_char) -> c_int, argv: &mut [*mut c_char]) -> ! {
     unsafe {
+        // `environ` starts as the environment the starter handed over (empty for a run
+        // the person started).
+        let mut entries = alloc::vec::Vec::new();
+        let mut piece = [0u8; 1024];
+        loop {
+            let n = sys_sexos_env(entries.len(), piece.as_mut_ptr(), piece.len());
+            if n <= 0 { break; }
+            entries.extend_from_slice(&piece[..n as usize]);
+        }
+        if !entries.is_empty() { crate::env_seed(&entries); }
         crate::cxx::run_constructors();
         let argc = argv.iter().position(|p| p.is_null()).unwrap_or(argv.len()) as c_int;
         let code = main(argc, argv.as_mut_ptr());
@@ -182,16 +196,19 @@ pub unsafe extern "C" fn access(path: *const c_char, _mode: c_int) -> c_int {
     let mut st: HStat = unsafe { core::mem::zeroed() };
     ret(unsafe { sys_stat(path, &mut st) } as i64) as c_int
 }
+/// The working folder: `/` (the program's own folder), a folder in it, or a granted
+/// folder `@/abs/path` the starter handed over.
 #[no_mangle]
 pub unsafe extern "C" fn getcwd(buf: *mut c_char, size: usize) -> *mut c_char {
     if buf.is_null() || size < 2 { set_errno(crate::ERANGE); return null_mut(); }
-    unsafe { *buf = b'/' as c_char; *buf.add(1) = 0; }
+    let r = unsafe { sys_sexos_getcwd(buf.cast(), size) };
+    if r < 0 { set_errno(-r as c_int); return null_mut(); }
     buf
 }
-/// The program's folder is its only folder.
 #[no_mangle]
 pub unsafe extern "C" fn chdir(path: *const c_char) -> c_int {
-    if unsafe { c_str(path) } == b"/" { 0 } else { set_errno(crate::ENOSYS); -1 }
+    let p = unsafe { c_str(path) };
+    ret(unsafe { sys_sexos_chdir(p.as_ptr(), p.len()) } as i64) as c_int
 }
 #[no_mangle]
 pub unsafe extern "C" fn sleep(seconds: u32) -> u32 { unsafe { sys_usleep(seconds as u64 * 1_000_000) }; 0 }

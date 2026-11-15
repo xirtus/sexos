@@ -366,6 +366,12 @@ pub mod launch {
     pub fn run_with(name: &[u8], args: &[u8], network: bool, hidden: bool, cookie: u32) -> Result<(), Error> {
         start(name, args, if network { store::RUN_NETWORK } else { 0 } | if hidden { store::RUN_HIDDEN } else { 0 }, cookie)
     }
+    /// Asks Shell to start a run Files already prepared (its `ticket`), as [`run_with`] does.
+    pub fn start_ticket(ticket: u32, network: bool, hidden: bool, cookie: u32) -> Result<(), Error> {
+        let flags = if network { store::RUN_NETWORK } else { 0 } | if hidden { store::RUN_HIDDEN } else { 0 };
+        sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL, l::OP_LAUNCH, ticket as u64, flags, cookie as u64).map_err(|_| Error::Shell)?;
+        Ok(())
+    }
     fn start(name: &[u8], args: &[u8], flags: u64, cookie: u32) -> Result<(), Error> {
         let mut path = [0u8; 64];
         let path: &[u8] = if name.first() == Some(&b'@') { name }
@@ -654,8 +660,55 @@ pub mod files {
             use super::{exchange, w, Error};
             use sex_pdx::console_relay as c;
             fn op(offset: u64, length: u64) -> Result<u32, Error> { exchange(None, c::KIND, b"", offset, length, |_| {}, |n, _| n) }
-            /// Whether this run's console belongs to a terminal.
+            /// Whether this run's console belongs to a terminal (or its streams to the
+            /// program that started it: see [`attached_word`]).
             pub fn attached() -> bool { op(c::ATTACHED, 0).is_ok() }
+            /// None when nothing holds this run's console; 0 for a terminal; for a pipe
+            /// run, `c::PIPE_RUN` | its stdio word (`c::stream`).
+            pub fn attached_word() -> Option<u32> { op(c::ATTACHED, 0).ok() }
+            /// A pipe run's stderr: how many bytes its starter's ring took.
+            pub fn write_err(bytes: &[u8]) -> Result<usize, Error> {
+                let n = bytes.len().min(c::ERROR_BYTES);
+                exchange(None, c::KIND, b"", c::WRITE_ERR, n as u64, |d| d[..n].copy_from_slice(&bytes[..n]), |n, _| n as usize)
+            }
+            /// A pipe run's environment block from byte `at` on (`c::ENV`); 0 at its end.
+            pub fn env(at: usize, out: &mut [u8]) -> Result<usize, Error> {
+                let want = out.len();
+                exchange(None, c::KIND, b"", c::ENV, at as u64, |_| {}, |n, d| { let n = (n as usize).min(want).min(d.len()); out[..n].copy_from_slice(&d[..n]); n })
+            }
+
+            /// Starter: prepares a pipe run of program file `path` (`/bin/NAME`, or `@/path`
+            /// this run holds) with `args`, attached to this run's `slot`, its streams as
+            /// the stdio word says (`c::stdio`). The ticket, for `launch::start_ticket`.
+            pub fn prepare_piped(path: &[u8], args: &[u8], slot: usize, word: u8) -> Result<u32, Error> {
+                if args.len() > w::ARGS_MAX || slot >= c::SLOTS { return Err(w::NAME); }
+                exchange(None, w::PREPARE, path, c::pipe_prepare(slot, word), args.len() as u64, |d| d[..args.len()].copy_from_slice(args), |ticket, _| ticket)
+            }
+            /// Starter, before the start: more `KEY=VALUE\0` entries for the run in `slot`.
+            pub fn set_env_at(slot: usize, entries: &[u8]) -> Result<(), Error> {
+                let n = entries.len();
+                if n > c::ENV_BYTES { return Err(w::INVALID); }
+                exchange(None, c::KIND, b"", c::at_slot(c::SET_ENV, slot), n as u64, |d| d[..n].copy_from_slice(entries), |_, _| ())
+            }
+            /// Starter, before the start: the run's working folder, as this run names it.
+            pub fn set_cwd_at(slot: usize, path: &[u8]) -> Result<(), Error> {
+                let n = path.len();
+                if n > w::PATH_BYTES { return Err(w::NAME); }
+                exchange(None, c::KIND, b"", c::at_slot(c::SET_CWD, slot), n as u64, |d| d[..n].copy_from_slice(path), |_, _| ())
+            }
+            /// Starter: the state of the run in `slot` and up to `out.len()` bytes of its
+            /// stdout (or stderr, `err`).
+            pub fn take_into(slot: usize, err: bool, out: &mut [u8]) -> Result<(c::Status, usize), Error> {
+                let cap = out.len().min(if err { c::ERROR_BYTES } else { c::OUTPUT_BYTES });
+                let op = if err { c::TAKE_ERR } else { c::TAKE };
+                exchange(None, c::KIND, b"", c::at_slot(op, slot), (c::STATUS_BYTES + cap) as u64, |_| {}, |n, d| {
+                    let n = (n as usize).min(cap);
+                    out[..n].copy_from_slice(&d[c::STATUS_BYTES..c::STATUS_BYTES + n]);
+                    (c::Status::decode(d), n)
+                })
+            }
+            /// Starter: it reads no more of the run's stdout (`mask` 1) or stderr (2).
+            pub fn close_read_at(slot: usize, mask: u8) -> Result<(), Error> { op(c::at_slot(c::CLOSE_READ, slot), (mask & 3) as u64).map(|_| ()) }
             /// Output: how many bytes the terminal took (fewer when it is behind).
             pub fn write(bytes: &[u8]) -> Result<usize, Error> {
                 let n = bytes.len().min(c::OUTPUT_BYTES);
