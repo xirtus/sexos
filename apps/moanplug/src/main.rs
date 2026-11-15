@@ -102,8 +102,15 @@ fn run() -> Result<(), ()> {
     if frames != admitted.frames {
         return Err(());
     }
+    let own = admitted.child.ok_or(())?;
+    sex_pdx::serial_record!(
+        "[moanplug.bootstrap] pd={} task={} scrubbed=1 hashes=1",
+        own.pd,
+        own.task
+    );
     bootstrap::ready(admitted)?;
     let mapped = Mapped::load(&binary).map_err(|_| ())?;
+    sex_pdx::serial_record!("[moanplug.native] pd={} task={} ready=1", own.pd, own.task);
     let start = sex_pdx::get_ticks();
     let rendered = match parts[4] {
         b"clap" => {

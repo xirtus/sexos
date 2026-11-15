@@ -273,6 +273,12 @@ impl Platform for Kernel {
                 if let Some((previous, slot, state, generation)) =
                     crate::restricted_pool::reserve(row.target)
                 {
+                    sex_pdx::serial_record!(
+                        "[moan.role.reserved] pd={} task={} generation={}",
+                        previous.pd,
+                        previous.task,
+                        generation
+                    );
                     return Some(Reservation {
                         previous,
                         slot,
@@ -285,7 +291,16 @@ impl Platform for Kernel {
         None
     }
     fn bound(&mut self, r: Reservation, child: Subject) -> bool {
-        crate::restricted_pool::bound(r.previous, child, r.generation)
+        let accepted = crate::restricted_pool::bound(r.previous, child, r.generation);
+        if accepted {
+            sex_pdx::serial_record!(
+                "[moan.role.copied] pd={} task={} generation={}",
+                child.pd,
+                child.task,
+                r.generation
+            );
+        }
+        accepted
     }
     fn send(&mut self, service: Service, opcode: u64, words: [u64; 3]) -> bool {
         sex_pdx::pdx_call(route(service), opcode, words[0], words[1], words[2]).0 == 0
@@ -330,6 +345,12 @@ impl Platform for Kernel {
                     && a.task == child.task
                     && catalog::by_target(child.pd).is_some_and(|row| row.surface == a.surface) =>
             {
+                sex_pdx::serial_record!(
+                    "[moan.role.active] pd={} task={} generation={}",
+                    child.pd,
+                    child.task,
+                    r.generation
+                );
                 Activation::Active
             }
             Ok(a) if a.state == life::ACTIVATION_REBIRTHING => Activation::Pending,
@@ -385,9 +406,23 @@ impl Platform for Kernel {
         refuse(parent, cookie)
     }
     fn ready(&mut self, child: Subject, value: u64) -> bool {
-        crate::restricted_pool::reserved(child.pd)
+        let delivered = crate::restricted_pool::reserved(child.pd)
             && live(child)
-            && sex_pdx::pdx_reply(child.pd, value) == 0
+            && sex_pdx::pdx_reply(child.pd, value) == 0;
+        if delivered {
+            sex_pdx::serial_record!("[moan.role.ready] pd={} task={}", child.pd, child.task);
+        }
+        delivered
+    }
+    fn policy_acked(&mut self, service: Service, phase: u8, child: Subject, generation: u64) {
+        sex_pdx::serial_record!(
+            "[moan.role.policy] service={} phase={} pd={} task={} generation={} complete=1",
+            service.pd(),
+            phase,
+            child.pd,
+            child.task,
+            generation
+        );
     }
     fn kill(&mut self, child: Subject) {
         if !crate::restricted_pool::reserved(child.pd) || !catalog_subject(child) {
