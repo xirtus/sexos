@@ -51,8 +51,12 @@ fn main() {
 
 /// Shell's key codes (PS/2 set 1) to Blender's key names.
 #[cfg(target_os = "hermit")]
-fn key_of(code: u8, ch: Option<char>) -> Option<Key> {
+fn key_of(code: u8, ctrl: bool, ch: Option<char>) -> Option<Key> {
     Some(match code {
+        // Programs get the grey Page Up/Down on the numpad's codes; with Ctrl
+        // they are Blender's workspace switch, alone the numpad views.
+        0x49 if ctrl => Key::PageUp,
+        0x51 if ctrl => Key::PageDown,
         0x01 => Key::Esc,
         0x0E => Key::Backspace,
         0x0F => Key::Tab,
@@ -141,7 +145,13 @@ fn main() {
             Some(Event::Key(k)) => {
                 mods = Mods { shift: k.shift, ctrl: k.control, alt: false };
                 let text = sex_std::sex_app::text(k);
-                key_of(k.code, text).map(|key| Input::Key { key, mods, text })
+                // The Shell keeps F1-F12, Tab and Insert for itself, so
+                // F12 (Render Image) has a stand-in until programs can ask for them.
+                if k.control && k.shift && k.code == 0x13 {
+                    Some(Input::Key { key: Key::F(12), mods: Mods::NONE, text: None })
+                } else {
+                    key_of(k.code, k.control, text).map(|key| Input::Key { key, mods, text })
+                }
             }
             Some(Event::Pointer(p)) => {
                 let (x, y) = (p.x as i32, p.y as i32);

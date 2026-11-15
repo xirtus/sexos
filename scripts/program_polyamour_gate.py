@@ -3,7 +3,7 @@
 
 * `run polyamour` opens the window on the Layout workspace with the startup scene.
 * Ctrl+Page Down switches to Modeling and Ctrl+Page Up back to Layout (workspace tabs).
-* F12 path-traces the startup scene with sex-3d and shows the Rendering workspace.
+* Ctrl+Shift+R (F12's stand-in: the Shell keeps F12) path-traces the startup scene with sex-3d and shows the Rendering workspace.
 * Ctrl+S saves the scene as untitled.poly (polyops text) in the program's folder.
 * F11 closes it.
 
@@ -35,7 +35,7 @@ def main():
   q.cmd('screendump',{'filename':str(a.out/'polyamour-layout.ppm')})
   s=len(t());chord('ctrl','pgdn');g['wait'](r'\[polyamour\.workspace\] Modeling\n',s,120)
   s=len(t());chord('ctrl','pgup');g['wait'](r'\[polyamour\.workspace\] Layout\n',s,120)
-  s=len(t());q.key('f12');g['wait'](r'\[polyamour\.op\] render\.render\n',s,120)
+  s=len(t());chord('ctrl','shift','r');g['wait'](r'\[polyamour\.op\] render\.render\n',s,120)
   g['wait'](r'\[polyamour\.report\] Rendered 960x540, \d+ samples\n',s,900)
   g['wait'](r'\[polyamour\.workspace\] Rendering\n',s,60)
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'polyamour-render.ppm')})
