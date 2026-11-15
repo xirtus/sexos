@@ -618,7 +618,16 @@ pub fn message(opcode: u64, actor: Subject, words: [u64; 3]) -> bool {
                 return Err(Error::Header);
             }
             let nonce: [u8; 16] = input[..16].try_into().unwrap();
+            if id == 0 || id > 0xff_ffff || nonce == [0; 16] {
+                return Err(Error::Bounds);
+            }
             if action == wire::CANCEL || action == wire::RELEASE {
+                // Idempotent narrowing: an absent current-epoch ticket has no
+                // remaining positive job authority. IDs never wrap/reuse within
+                // an epoch. An extant entry still requires exact owner+nonce.
+                if turn.jobs().get(id).is_none() {
+                    return Ok((0, [0; 176], 0, None));
+                }
                 if !turn
                     .jobs()
                     .release(id, actor, nonce, sex_pdx::get_ticks(), own_epoch)
