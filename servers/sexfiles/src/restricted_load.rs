@@ -14,6 +14,7 @@ pub struct Load {
     serial_part: u8,
     copied: bool,
     copied_ack: bool,
+    installed: bool,
     pending: Option<u8>,
 }
 impl Load {
@@ -47,6 +48,7 @@ impl Load {
             serial_part: 0,
             copied: false,
             copied_ack: false,
+            installed: false,
             pending: Some(0),
         })
     }
@@ -158,6 +160,16 @@ impl Load {
             Some(2) => self.copied_ack = true,
             _ => {}
         }
+    }
+    pub fn consumed(&self) -> bool {
+        self.installed && self.copied_ack && self.pending.is_none()
+    }
+    pub fn mark_installed(&mut self, b: Binding) -> bool {
+        if self.installed || !self.install(b) {
+            return false;
+        }
+        self.installed = true;
+        true
     }
     pub fn install(&self, b: Binding) -> bool {
         self.copied_ack

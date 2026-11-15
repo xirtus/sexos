@@ -202,6 +202,7 @@ fn control(opcode: u64, actor: Subject, words: [u64; 3]) -> bool {
         if epoch() != Some(own_epoch)
             || crate::restricted_runtime::staging() != Some(scope)
             || !live(e.job.parent())
+            || !e.live(sex_pdx::get_ticks(), own_epoch)
         {
             return true;
         }
@@ -248,6 +249,12 @@ fn control(opcode: u64, actor: Subject, words: [u64; 3]) -> bool {
         if !c.complete() {
             return true;
         }
+    }
+    if let Some(old) = loaded.as_ref() {
+        if !old.consumed() {
+            return true;
+        }
+        *loaded = None;
     }
     let Some(parent) = Subject::decode(words[1]) else {
         return true;
@@ -355,8 +362,8 @@ pub fn install(binding: Binding) -> bool {
         return false;
     };
     let now = sex_pdx::get_ticks();
-    let Some(l) = unsafe { &*core::ptr::addr_of!(LOAD) }
-        .as_ref()
+    let Some(l) = unsafe { &mut *core::ptr::addr_of_mut!(LOAD) }
+        .as_mut()
         .filter(|l| l.valid(own_epoch, now) && l.install(binding))
     else {
         return false;
@@ -368,7 +375,7 @@ pub fn install(binding: Binding) -> bool {
     let Some(e) = turn.jobs().get(l.ticket) else {
         return false;
     };
-    e.bind(binding, now, own_epoch).is_ok()
+    e.bind(binding, now, own_epoch).is_ok() && l.mark_installed(binding)
 }
 fn copy_grant(address: u64, at: usize, n: usize) -> Result<Zeroizing<Vec<u8>>, Error> {
     if n > crate::restricted_job::MAX_TRANSFER {
@@ -469,10 +476,12 @@ fn child_message(actor: Subject, r: f::Request, words: [u64; 3]) -> bool {
             crate::fs_service::restricted_storage(|fs| {
                 e.storage
                     .publish(fs, e.job.publication_bytes()?, mtime, || {
-                        epoch() == Some(own_epoch)
-                            && live(actor)
-                            && live(binding.parent)
-                            && crate::restricted_runtime::job_live(binding, sex_pdx::get_ticks())
+                        if epoch() != Some(own_epoch) || !live(actor) || !live(binding.parent) {
+                            return false;
+                        }
+                        let current = sex_pdx::get_ticks();
+                        e.live(current, own_epoch)
+                            && crate::restricted_runtime::job_live(binding, current)
                     })
             })?;
             e.job.published();
