@@ -791,6 +791,9 @@ impl core::fmt::Write for Cursor<'_> {
     }
 }
 
+/// A command typed while the session was being saved; it runs when the save ends.
+static mut HELD: [u8; CMD_MAX] = [0; CMD_MAX];
+static mut HELD_LEN: usize = 0;
 fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut EventRing) -> bool {
     // A package's first run waits for the person's yes or no.
     if unsafe { pkg_command::PKG.answer(line, sb) } { return true; }
@@ -821,7 +824,13 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
     }
     if cmd.is_empty() { return true; }
     if unsafe{capture_command::CAPTURE.busy()}&&cmd!=b"capture-cancel"&&cmd!=b"record-stop"{sb.push(b"Capture owns the file buffer. Escape cancels; Close stays available.");return true}
-    if unsafe{session_command::SESSION.io_busy()}{sb.push(b"The disk is saving the session for a moment. Try again.");return true}
+    // The session is being written to disk: the command runs as soon as that ends.
+    if unsafe{session_command::SESSION.io_busy()}{
+        if line.len()>CMD_MAX||unsafe{HELD_LEN}!=0{sb.push(b"The disk is saving the session for a moment. Try again.");return true}
+        unsafe{HELD[..line.len()].copy_from_slice(line);HELD_LEN=line.len();}
+        serial_println!("[spindle.cmd.held] len={}",line.len());
+        return true
+    }
     let recognized = match cmd {
         b"record"=>{unsafe{record_command::RECORD.start(args,sb);}true},
         b"record-stop"=>{unsafe{record_command::RECORD.stop(args,sb);}true},
@@ -2803,11 +2812,17 @@ pub extern "C" fn _start() -> ! {
             let idle=unsafe{!fs_commands::FS.busy()&&!capture_command::CAPTURE.busy()&&!fetch_command::FETCH.busy()&&!update_command::UPDATE.busy()&&!pkg_command::PKG.busy()&&!record_command::RECORD.sending()};
             if unsafe{session_command::SESSION.step(idle,sb)}{unsafe{content_render(&line,sb);}}
         }
+        if unsafe{HELD_LEN!=0&&!session_command::SESSION.io_busy()}{
+            let held=unsafe{let n=HELD_LEN;HELD_LEN=0;let mut b=[0u8;CMD_MAX];b[..n].copy_from_slice(&HELD[..n]);(b,n)};
+            let ok=dispatch(&held.0[..held.1],sb,hist,&mut ev);
+            serial_println!("[spindle.cmd.held.run] len={} ok={}",held.1,ok as u8);
+            unsafe{content_render(&line,sb);}
+        }
         if unsafe{fs_commands::FS.expired(sex_pdx::get_ticks(),sb)}{unsafe{content_render(&line,sb);}}
         if unsafe{fetch_command::FETCH.step(sb)}{unsafe{content_render(&line,sb);}}
         if unsafe{update_command::UPDATE.step(sb)}{unsafe{content_render(&line,sb);}}
         if unsafe{pkg_command::PKG.step(sb)}{unsafe{content_render(&line,sb);}}
-        let msg=if registration_pending || presentation_pending || storage_owner!=0 || unsafe{DISPLAY_IO.pending() || HISTORY_STATUS.pending() || NETWORK_PROBE.busy()} || unsafe{fs_commands::FS.busy()||fetch_command::FETCH.busy()||update_command::UPDATE.busy()||pkg_command::PKG.busy()} || unsafe{capture_command::CAPTURE.busy()||record_command::RECORD.sending()||session_command::SESSION.wants_turn()}{
+        let msg=if registration_pending || presentation_pending || storage_owner!=0 || unsafe{DISPLAY_IO.pending() || HISTORY_STATUS.pending() || NETWORK_PROBE.busy()} || unsafe{fs_commands::FS.busy()||fetch_command::FETCH.busy()||update_command::UPDATE.busy()||pkg_command::PKG.busy()} || unsafe{capture_command::CAPTURE.busy()||record_command::RECORD.sending()||session_command::SESSION.wants_turn()||HELD_LEN!=0}{
             match sex_pdx::pdx_try_listen_raw(0){Some(msg)=>msg,None=>{sex_pdx::sys_yield();continue}}
         }else{sex_pdx::pdx_listen_raw(0)};
         let capture_lines=sb.total_lines;
