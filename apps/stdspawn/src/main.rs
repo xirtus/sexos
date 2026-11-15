@@ -207,10 +207,21 @@ fn main() {
     let want = "@/data/stdspawn/work|from the parent\n";
     check("current_dir", cwd.as_ref().is_ok_and(|o| o.stdout == want.as_bytes()), format!("made={made:?} {:?}", cwd.as_ref().map(|o| String::from_utf8_lossy(&o.stdout).into_owned())));
     let outside = Command::new("stdspawn").arg("cwd").current_dir("@/data/someone-else").status();
-    check("current_dir not held", outside.as_ref().is_err_and(|e| e.kind() == ErrorKind::NotFound), format!("{outside:?}"));
+    let missing = Command::new("stdspawn").arg("cwd").current_dir("no-such-folder").status();
+    let file = Command::new("stdspawn").arg("cwd").current_dir("work/note.txt").status();
+    // Grants are space-separated words: a folder with ` @/ ` in it must not become one.
+    let sneaky = std::fs::create_dir_all("x @/ y").and_then(|_| Command::new("stdspawn").arg("cwd").current_dir("x @/ y").status());
+    let refused = |r: &std::io::Result<std::process::ExitStatus>| r.as_ref().is_err_and(|e| e.kind() == ErrorKind::NotFound);
+    check("current_dir not held, missing, a file, or with a space", refused(&outside) && refused(&missing) && refused(&file) && refused(&sneaky),
+          format!("{outside:?} {missing:?} {file:?} {sneaky:?}"));
     let here = std::env::current_dir();
     let moved = std::env::set_current_dir("work").and_then(|_| std::fs::read_to_string("note.txt"));
+    // A child's relative folder starts from this run's working folder.
+    let _ = std::fs::create_dir_all("sub").and_then(|_| std::fs::write("sub/note.txt", "in sub"));
+    let nested = Command::new("stdspawn").arg("cwd").current_dir("sub").output();
     let back = std::env::set_current_dir("/");
+    check("current_dir from the working folder", nested.as_ref().is_ok_and(|o| o.stdout == b"@/data/stdspawn/work/sub|in sub\n"),
+          format!("{:?}", nested.as_ref().map(|o| String::from_utf8_lossy(&o.stdout).into_owned())));
     check("set_current_dir", here.as_ref().is_ok_and(|p| p.as_os_str() == "/") && moved.as_deref().is_ok_and(|n| n == "from the parent") && back.is_ok(),
           format!("here={here:?} moved={moved:?} back={back:?}"));
 

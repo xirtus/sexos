@@ -253,7 +253,8 @@ pub const CLOSE_READ: u64 = 17;
 /// Starter, before Shell starts the run: its working folder, the path of `length` bytes
 /// in the data area, spelled as the starter spells it (in its own folder, or an `@/path`
 /// it holds). Files hands the run that folder as a grant (`@/absolute/path`), which its
-/// relative paths then start from. `NAME` for a path the starter does not hold.
+/// relative paths then start from. `NAME` for a path the starter does not hold, one that
+/// is not an existing folder, or one with a space (grants are space-separated words).
 pub const SET_CWD: u64 = 18;
 
 /// The environment block's room per run, working folder included.

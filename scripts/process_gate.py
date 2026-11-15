@@ -17,7 +17,9 @@ Each run is typed into Spindle as a person would:
   whose reader went away still ends; stdin of an ended child is BrokenPipe; null stdin;
   a child's pipe handed to another child is Unsupported; `env`, an inherited variable
   and `env_clear`; `current_dir` in the program's own folder (handed to the child as a
-  grant), one it does not hold (NotFound), and `set_current_dir`.
+  grant), one relative to the working folder, ones refused as NotFound (not held,
+  missing, a file, a name with a space that would read as a grant), and
+  `set_current_dir`.
 * `run +net stdspawn net`: a run that has the network may hand it on.
 * `run chello spawn`: C `system()` (wait status 7, quoted words, 127 for a missing
   program), `posix_spawnp` + `waitpid(WNOHANG)` + `kill(SIGKILL)` + `waitpid`
@@ -65,7 +67,7 @@ def main():
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120)
   runs=[]
-  s,r=scored('run stdspawn',r'\[stdspawn\.(ok|fail)\] passed=(\d+)/(\d+)\n',23)
+  s,r=scored('run stdspawn',r'\[stdspawn\.(ok|fail)\] passed=(\d+)/(\d+)\n',24)
   log=t()[s:]
   # Files held the pipe runs' streams and handed the working folder on as a grant.
   assert re.search(r'\[files\.pipe\.attached\] starter_row=\d+ slot=\d+ target=\d+ task=\d+ stdio=0x',log),'Files attached no pipe run'

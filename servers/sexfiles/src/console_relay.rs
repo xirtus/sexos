@@ -142,7 +142,8 @@ fn terminal_of(k: usize) -> Option<usize> {
 }
 
 /// One request from program row `k` (`launcher`: it holds `+launch`). `slot` is its region.
-/// `confine` spells a path the row names as the absolute path it holds (SET_CWD).
+/// `confine` spells a path the row names as the absolute path of a folder it holds that
+/// exists, with no space in it (SET_CWD).
 pub fn handle(k: usize, launcher: bool, r: w::Request, slot: u64, confine: impl FnOnce(&[u8], &mut [u8; w::PATH_BYTES]) -> Option<usize>) -> u64 {
     let Ok(view) = sex_pdx::memory_region_view(slot, 0, w::REGION_BYTES as u64, QUERY_VIEW | READ | WRITE) else { return w::reply(r.seq, w::IO, 0) };
     let region = unsafe { core::slice::from_raw_parts_mut(view.virtual_address as *mut u8, w::REGION_BYTES) };
@@ -254,6 +255,7 @@ pub fn handle(k: usize, launcher: bool, r: w::Request, slot: u64, confine: impl 
                     asked[..n].copy_from_slice(&data[..n]);
                     let mut abs = [0u8; w::PATH_BYTES];
                     let Some(len) = confine(&asked[..n], &mut abs) else { return w::reply(r.seq, w::NAME, 0) };
+                    if abs[..len].iter().any(|b| *b == b' ' || *b == 0) { return w::reply(r.seq, w::NAME, 0); }
                     ring.cwd[0] = b'@';
                     ring.cwd[1..1 + len].copy_from_slice(&abs[..len]);
                     ring.cwd_len = 1 + len;

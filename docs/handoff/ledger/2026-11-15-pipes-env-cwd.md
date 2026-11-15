@@ -15,7 +15,7 @@ Follow-up to `2026-11-14-std-process.md`. Asked by the Polyamour thread: `Stdio:
   - The starter reuses `PUT`, `TAKE`, `HANG_UP` and `RELEASE` on its slot.
   - `ATTACHED` answers `PIPE_RUN | stdio` for a pipe run. A terminal's run still gets 0.
 - **Rings per pair** (Files): 4 KiB stdin, 32 KiB stdout (as before), plus 16 KiB stderr, a 4 KiB environment block and the working folder. There are still only as many pairs as program rows (9). A pipe run's unread output is never reclaimed for another run.
-- **Working folder**: `SET_CWD` takes a path as the *starter* names it: in its own folder, or an `@/path` it holds. Files confines it with the starter's binding. At bind time Files adds it to the child's picked grants (`@/data/starter/work`), so the grant does not appear in the child's arguments. A folder the starter does not hold is refused (`NAME`, which becomes `NotFound`).
+- **Working folder**: `SET_CWD` takes a path as the *starter* names it: in its own folder, or an `@/path` it holds. Files confines it with the starter's binding. At bind time Files adds it to the child's picked grants (`@/data/starter/work`), so the grant does not appear in the child's arguments. A folder the starter does not hold, one that does not exist, a file, or a path with a space is refused (`NAME`, which becomes `NotFound`). Spaces are refused because grants are stored as space-separated words: `x @/ y` would otherwise give the child the whole filesystem (found by review). The starter resolves a relative folder from its own working folder first.
 - **Ticket ownership** (security tightening): Files now records which program row prepared a ticket, and loads it only for that row. Shell's `OP_LAUNCH` now passes the launching program to Files instead of 0, as `OP_RUN` already did for terminals. Before this, a program could start another program's ticket by guessing its number. With pipes, that would have attached the child to someone else's slot.
 
 **Library side:**
@@ -40,7 +40,7 @@ Follow-up to `2026-11-14-std-process.md`. Asked by the Polyamour thread: `Stdio:
   - `getcwd`/`chdir` use sex-std's working folder.
 
 **Gate** (`scripts/process_gate.py`, CI "Programs run programs"):
-- `run stdspawn` needs 23 checks. They replace "no pipes"/"output() unsupported" with:
+- `run stdspawn` needs 24 checks. They replace "no pipes"/"output() unsupported" with:
   - `output()` (stdout, stderr, status)
   - 20 000 bytes through stdin and back
   - 300 000 + 70 000 bytes through both output streams at once

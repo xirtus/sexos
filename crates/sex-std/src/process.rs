@@ -48,8 +48,9 @@
 //!   (`env`, `env_remove`, `env_clear`), up to 4 KiB in all (else `ArgumentListTooLong`).
 //! * **Working folder**: `current_dir(dir)` names a folder as this program names it (in
 //!   its own folder, or an `@/path` it holds). Files hands the child that folder as a
-//!   grant (`@/absolute/path`), and the child's relative paths start there. A folder
-//!   this run does not hold is `NotFound`.
+//!   grant (`@/absolute/path`), and the child's relative paths start there. A relative
+//!   `dir` starts from this run's working folder. A folder this run does not hold, one
+//!   that does not exist, a file, or a path with a space is `NotFound`.
 //!
 //! sex-libc's `posix_spawn`, `waitpid`, `kill` and `system` use the same functions.
 use std::sync::Mutex;
@@ -224,7 +225,10 @@ fn start_piped(cookie: u32, name: &[u8], line: &[u8], network: bool, windowed: b
     use sex_app::files::direct::relay;
     let ticket = relay::prepare_piped(&program_path(name)?, line, slot as usize, handed.stdio).map_err(files_errno)?;
     if let Some(cwd) = handed.cwd {
-        relay::set_cwd_at(slot as usize, cwd).map_err(|e| if e == w::NAME { errno::ENOENT } else { files_errno(e) })?;
+        // As this program names it: from its own working folder.
+        let resolved = crate::path::resolve(cwd).map_err(|e| match e { crate::path::Refused::AboveFolder => errno::EACCES, _ => errno::EINVAL })?;
+        let folder = if resolved.first() == Some(&b'@') { resolved } else { [b"/".as_slice(), &resolved].concat() };
+        relay::set_cwd_at(slot as usize, &folder).map_err(|e| if e == w::NAME { errno::ENOENT } else { files_errno(e) })?;
     }
     if !handed.env.is_empty() { relay::set_env_at(slot as usize, handed.env).map_err(|_| errno::E2BIG)?; }
     launch::start_ticket(ticket, network, !windowed, cookie).map_err(|_| errno::EAGAIN)

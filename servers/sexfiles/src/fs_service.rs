@@ -427,6 +427,18 @@ fn confine(binding: &Binding, path: &[u8], out: &mut [u8; w::PATH_BYTES]) -> Opt
     }
     Some(n)
 }
+/// A pipe run's working folder (`console_relay::SET_CWD`): a folder `binding` holds, as
+/// its absolute path. Refused when it is not a folder that exists, or when it holds a
+/// space or a NUL: grants are kept as space-separated words, so `x @/ y` would otherwise
+/// hand the child the whole filesystem.
+fn held_folder(binding: &Binding, path: &[u8], out: &mut [u8; w::PATH_BYTES]) -> Option<usize> {
+    let n = confine(binding, path, out)?;
+    if out[..n].iter().any(|b| *b == b' ' || *b == 0) { return None; }
+    let state = unsafe { &mut *core::ptr::addr_of_mut!(STATE) };
+    if matches!(state, State::Untried) { *state = bring_up(); }
+    let State::Ready(fs) = state else { return None };
+    match fs.open(&out[..n]) { Ok(st) if st.kind == Kind::Dir => Some(n), _ => None }
+}
 /// The picker portal: questions from programs, answers from the run showing the picker.
 fn picker(program: Option<usize>, r: w::Request, path: &[u8], data: &mut [u8]) -> (u8, u32) {
     let picks = unsafe { &mut *core::ptr::addr_of_mut!(PICKS) };
@@ -619,7 +631,7 @@ pub fn handle(caller: u32, a: u64, offset: u64, length: u64) -> u64 {
             // (`sex_pdx::launch`); `program_prepare` lets it pass on only what it holds.
             if r.kind == sex_pdx::console_relay::KIND {
                 let Some(b) = bound else { return w::reply(r.seq, w::DENIED, 0) };
-                return crate::console_relay::handle(k, holds_launch(&b), r, PROGRAM_INDEX_BASE_PLUS(k), |path, out| confine(&b, path, out));
+                return crate::console_relay::handle(k, holds_launch(&b), r, PROGRAM_INDEX_BASE_PLUS(k), |path, out| held_folder(&b, path, out));
             }
             // Packages only for a run the person started with `run +pkg` (see `program_package`).
             if r.kind == sex_pdx::package::KIND && !bound.is_some_and(|b| holds_packages(&b)) {

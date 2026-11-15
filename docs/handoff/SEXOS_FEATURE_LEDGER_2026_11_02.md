@@ -4501,4 +4501,4 @@ energy. Details: `LAPTOP_POWER_2026_11_13.md` (Sleep section).
 ## H-PIPES: Pipes, environment and working folder for child programs (2026-11-15)
 - `std::process`: `Stdio::piped()` for stdin, stdout and stderr, captured `output()`, the environment (`env`, inherited, `env_clear`) and `current_dir`; `std::env::current_dir`/`set_current_dir`. C: `posix_spawn` `envp`, `system()` hands on `environ`, `getcwd`/`chdir`.
 - Bytes go through Files' relay slots (`console_relay` pipe runs, `fs::PREPARE_PIPED`); the working folder becomes a grant of the child's. No kernel change. Files loads a ticket only for the program row that prepared it (Shell's `OP_LAUNCH` names the launcher).
-- Details and what is left out: `docs/handoff/ledger/2026-11-15-pipes-env-cwd.md`. Gate: `scripts/process_gate.py` (stdspawn 23 checks, chello 16).
+- Details and what is left out: `docs/handoff/ledger/2026-11-15-pipes-env-cwd.md`. Gate: `scripts/process_gate.py` (stdspawn 24 checks, chello 16).
