@@ -356,9 +356,9 @@ The supervisor receives Started before Done even under reply backpressure. A
 never-activated uncertain dormant copy may remain quarantined and unavailable
 until reboot; there is no invented kernel reclaim or unrestricted fallback.
 
-The read-only STATUS request carries `[cookie32, knownStartedSubject64 | 0,
+The read-only STATUS request carries `[cookie32 | ticket24<<32, knownStartedSubject64 | 0,
 currentShellEpoch64]`. Its authenticated reply reports the exact current catalog
-subject and epoch, plus Unknown, Live, Retired or Unavailable. Retired requires
+subject, ticket and epoch, plus Unknown, Live, Retired or Unavailable. Retired requires
 same-task REUSABLE or a different task produced by the existing rebirth guard
 (which requires the predecessor to have retired). The client must supply its own
 authenticated Started subject. An unknown/no-Started job never becomes retired
