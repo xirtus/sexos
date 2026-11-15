@@ -45,16 +45,27 @@ def main():
   for enabled in (False,True):
    start=len(t());command(f'run +net kaleidoscope {base}/jit.html'+('' if enabled else ' --no-jit'))
    value=g['wait'](r'\[web.console\] level=0 jit-result ([^\r\n]+)',start,300);assert value[1]==expected,(value[1],expected)
+   captured=g['wait'](r'\[web.console\] level=0 jit-captured ([^\r\n]+)',start,60)
+   assert captured[1]==f'true|boolean|false|17|number|true|true|true|96|{sum((i+7)^3 for i in range(128))}',captured[1]
+   strings=g['wait'](r'\[web.console\] level=0 jit-strings ([^\r\n]+)',start,60)
+   assert strings[1]=='128|3606624|28,36,28,36,8,56,8,56|ab|left,right',strings[1]
+   cache_value=g['wait'](r'\[web.console\] level=0 jit-object-cache ([^\r\n]+)',start,60)
+   assert cache_value[1]=='124750|retained|replacement|prototype|getter|getter|2|own|right|right|right|2',cache_value[1]
+   cache_stats=g['wait'](r'\[web.object-cache\] hits=(\d+) misses=(\d+) concat=(\d+) compare=(\d+)',start,60)
+   cache_hits=int(cache_stats[1])
+   if enabled:
+    assert cache_hits>results[0]['object_cache_hits']+100,cache_hits
+    assert int(cache_stats[3])>results[0]['string_concats']+50 and int(cache_stats[4])>results[0]['string_compares']+100,cache_stats.groups()
    stats=g['wait'](r'\[web.jit\] enabled=(\d+) compiled=(\d+) executed=(\d+) bailouts=(\d+) refused=(\d+) ticks=(\d+) script_ticks=(\d+)',start,60)
    numbers=list(map(int,stats.groups()));assert numbers[0]==int(enabled),numbers
    ready=g['wait'](r'\[web.ready\] target=(\d+) task=(\d+)',start,120);target,task=ready[1],ready[2]
    launch=g['wait'](rf'\[shell.program.launch\] target={target} task={task} surface=(\d+)',start,60)
    assert_private_ordinary_launch(ROOT,t(),int(target),int(task),int(launch[1]))
    if enabled:
-    assert numbers[1]>=7 and numbers[2]>=12500 and numbers[3]>=3 and numbers[4]==0,numbers
+    assert numbers[1]>=11 and numbers[2]>=12800 and numbers[3]>=3 and numbers[4]==0,numbers
     assert re.search(rf'\[app.program.code\] target={target} task={task} op=seal ',t()[start:]),'no kernel seal for this domain/run'
    else:assert numbers[1:5]==[0,0,0,0],numbers
-   results.append(dict(enabled=enabled,compiled=numbers[1],executed=numbers[2],bailouts=numbers[3],refused=numbers[4],ticks=numbers[5],script_ticks=numbers[6],result=value[1],target=int(target),task=int(task)))
+   results.append(dict(string_result=strings[1],string_concats=int(cache_stats[3]),string_compares=int(cache_stats[4]),object_cache_hits=cache_hits,object_cache_result=cache_value[1],enabled=enabled,compiled=numbers[1],executed=numbers[2],bailouts=numbers[3],refused=numbers[4],ticks=numbers[5],script_ticks=numbers[6],result=value[1],target=int(target),task=int(task)))
    g['focus'](int(launch[1]));q.key('f11');g['wait'](rf'\[web.closed\] target={target} task={task}',start,60)
    g['wait'](rf'\[app.private.retired\] target={target} task={task} ',start,120)
   assert '[web.fatal]' not in t() and 'KERNEL PANIC' not in t()

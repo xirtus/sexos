@@ -1390,3 +1390,341 @@ fn svg_elements_have_their_namespace_and_class() {
     "#, "t.js").unwrap();
     assert_eq!(logs(&mut s), ["0:true true false true true path true false true linearGradient true http://www.w3.org/1999/xhtml true true", "0:true svg true 1 4"]);
 }
+
+#[test]
+fn pointer_events_overlay_inheritance_override_and_restyle() {
+    use sex_html::layout::{self, FontKey, Host};
+    struct Fixed;
+    impl Host for Fixed {
+        fn text_width(&self, text: &str, f: FontKey) -> i32 { text.len() as i32 * f.size / 2 }
+        fn metrics(&self, f: FontKey) -> (i32, i32) { (f.size * 4 / 5, f.size / 5) }
+    }
+    let mut s = page("<body style='margin:0'><button id=under style='width:200px;height:100px'>Under</button><div id=overlay style='position:absolute;left:0;top:0;width:200px;height:100px;pointer-events:none'><span id=inherited>Decoration</span><button id=child style='position:absolute;left:100px;top:0;width:100px;height:40px;pointer-events:auto'>Child</button></div></body>");
+    let id = |d: &Document, name: &str| d.dom.descendants(0).into_iter().find(|&n| d.dom.attr(n,"id") == Some(name)).unwrap();
+    let under=id(s.page_mut(),"under"); let overlay=id(s.page_mut(),"overlay");
+    let child=id(s.page_mut(),"child"); let inherited=id(s.page_mut(),"inherited");
+    fn layout_doc(d: &mut Document, css: &str) {
+        let styles=sex_html::styles(&d.dom,&[css],410,330);
+        let p=layout::layout_in(&d.dom,&styles,410,330,&Fixed);
+        d.set_boxes(&p.boxes); d.set_layers(&p.layers); d.set_pointer_styles(&styles);
+    }
+    layout_doc(s.page_mut(), "");
+    assert!(!s.page_mut().accepts_pointer(overlay));
+    assert!(!s.page_mut().accepts_pointer(inherited));
+    assert_eq!(s.page_mut().node_at(10,60),Some(under));
+    assert_eq!(s.page_mut().node_at(150,20),Some(child));
+    // Exclusion from hit testing does not remove geometry or event bubbling.
+    assert!(s.page_mut().rects[overlay].is_some());
+    s.eval("document.getElementById('overlay').addEventListener('click',()=>console.log('bubble')); document.getElementById('child').addEventListener('click',()=>console.log('child'));", "events.js").unwrap();
+    s.dispatch(&format!("mouse\tdown\t{child}\t150\t20\t0\t1\t0")).unwrap();
+    s.dispatch(&format!("mouse\tup\t{child}\t150\t20\t0\t0\t0")).unwrap();
+    assert_eq!(logs(&mut s), ["0:child", "0:bubble"]);
+    layout_doc(s.page_mut(), "#overlay { pointer-events: auto !important }");
+    assert_eq!(s.page_mut().node_at(10,60),Some(overlay));
+    layout_doc(s.page_mut(), "#child { pointer-events: inherit !important }");
+    assert_eq!(s.page_mut().node_at(150,20),Some(under));
+    layout_doc(s.page_mut(), "#child { pointer-events: unset !important }");
+    assert_eq!(s.page_mut().node_at(150,20),Some(under));
+    layout_doc(s.page_mut(), "#child { pointer-events: initial !important }");
+    assert_eq!(s.page_mut().node_at(150,20),Some(child));
+}
+
+#[test]
+fn pointer_default_link_follows_hit_target_and_ancestor() {
+    let mut d = Document::new(sex_html::parse::parse("<body><a id=under href='/under'>Under</a><a id=over href='/over' style='pointer-events:none'><span id=child style='pointer-events:auto'>Child</span></a></body>"), "https://example.test/", (410,330), clock);
+    let id=|name: &str| d.dom.descendants(0).into_iter().find(|&n|d.dom.attr(n,"id")==Some(name)).unwrap();
+    let (under,over,child)=(id("under"),id("over"),id("child"));
+    d.rects=vec![None;d.dom.nodes.len()];
+    d.rects[under]=Some((0,0,100,100));d.rects[over]=Some((0,0,100,100));d.rects[child]=Some((50,0,50,50));
+    let styles=sex_html::styles(&d.dom,&[],410,330);d.set_pointer_styles(&styles);
+    let links=[under,over].map(|node|sex_html::layout::Link{x:0,y:0,w:100,h:100,href:String::new(),node});
+    assert_eq!(d.pointer_link_at(10,80,&links),Some(under));
+    assert_eq!(d.pointer_link_at(75,25,&links),Some(over));
+    let styles=sex_html::styles(&d.dom,&["#over {pointer-events:auto !important}"],410,330);d.set_pointer_styles(&styles);
+    assert_eq!(d.pointer_link_at(10,80,&links),Some(over));
+}
+
+#[test]
+fn constructed_styles_apply_update_remove_and_stay_out_of_dom() {
+    let mut s = page("<html><head><style>.target {font-size:11px}</style></head><body><p id=outside class=target>x</p><div id=host></div></body></html>");
+    s.eval(r#"
+      const sheet = new CSSStyleSheet();
+      sheet.replaceSync('.target {font-size:23px}');
+      document.adoptedStyleSheets = [sheet, ...document.adoptedStyleSheets];
+      const shadow = document.getElementById('host').attachShadow({mode:'open'});
+      shadow.innerHTML = '<p id="inside" class="target">y</p>';
+      shadow.adoptedStyleSheets.push(sheet);
+      console.log(document.adoptedStyleSheets.length, document.styleSheets.length, document.querySelectorAll('style').length);
+      try { document.adoptedStyleSheets.push(document.querySelector('style').sheet); } catch(e) { console.log(e.name); }
+    "#, "adopt.js").unwrap();
+    assert_eq!(logs(&mut s), ["0:1 1 1", "0:NotAllowedError"]);
+    fn sizes(s: &Script<Document>) -> Vec<i32> {
+        let d = &s.page().dom;
+        let styles = sex_html::styles(d, &[], 410, 330);
+        d.descendants(0).into_iter().filter(|&n| matches!(d.attr(n,"id"),Some("outside"|"inside"))).map(|n| styles[n].as_ref().unwrap().font_size).collect()
+    }
+    assert_eq!(sizes(&s), [23,23]);
+    s.eval("sheet.replaceSync('.target {font-size:31px}'); document.adoptedStyleSheets.pop();", "adopt.js").unwrap();
+    assert_eq!(sizes(&s), [11,31]);
+    s.eval("shadow.innerHTML = '<p id=inside class=target>new</p>'; sheet.insertRule('.target {font-size:37px}',1);", "adopt.js").unwrap();
+    assert_eq!(sizes(&s), [11,37]);
+    s.eval("sheet.disabled = true", "adopt.js").unwrap();
+    assert_eq!(sizes(&s), [11,11]);
+    s.eval("sheet.disabled = false; shadow.adoptedStyleSheets.length = 0", "adopt.js").unwrap();
+    assert_eq!(sizes(&s), [11,11]);
+    assert!(s.page().dom.adopted_styles.is_empty());
+}
+
+#[test]
+fn wikipedia_popup_complex_exclusions_and_selector_alternatives() {
+    let mut s = page("<div id=mw-content-text><a id=ok href=/wiki/A title=A>A</a><span class=mw-cite-backlink><a id=no href=/wiki/B title=B>B</a></span><a id=new class=new href=/wiki/C title=C>C</a></div>");
+    s.eval(r##"
+      const sel = '#mw-content-text a[href][title]:not(.extiw, .mw-selflink, .image, .new, .internal, .external, .mw-cite-backlink a, .oo-ui-buttonElement-button, .ve-ce-surface a, .ext-discussiontools-init-timestamplink, .cancelLink a, .mw-selflink-fragment, [href^="#"])';
+      console.log(document.querySelectorAll(sel).map(e=>e.id).join(','));
+      console.log(document.getElementById('ok').closest(sel).id, document.getElementById('no').closest(sel));
+      console.log(document.querySelectorAll('a:is(.missing, .mw-cite-backlink a)').map(e=>e.id).join(','));
+      console.log(document.querySelectorAll('a:where(.missing, .new)').map(e=>e.id).join(','));
+    "##,"popups.js").unwrap();
+    assert_eq!(logs(&mut s), ["0:ok", "0:ok null", "0:no", "0:new"]);
+    assert_eq!(sex_html::css::parse_selector("a:where(#x)").unwrap().specificity, 1);
+    assert_eq!(sex_html::css::parse_selector("a:is(.x,#y)").unwrap().specificity, 65537);
+    let nested = format!("{}a{}", ":not(".repeat(40), ")".repeat(40));
+    assert!(sex_html::css::parse_selector(&nested).is_none());
+}
+
+#[test]
+fn github_fragment_clone_and_document_domain() {
+    let mut s = page("<template id=copy><div><button value=copy>Copy</button></div></template>");
+    s.eval(r#"
+      const content = document.getElementById('copy').content;
+      const cloned = content.cloneNode(true);
+      console.log(cloned instanceof DocumentFragment, cloned.children.length, cloned.children[0].children[0].value);
+      cloned.children[0].children[0].value = 'changed';
+      console.log(content.children[0].children[0].value, content.cloneNode(false).childNodes.length);
+      document.body.appendChild(cloned);
+      console.log(cloned.childNodes.length, document.body.lastElementChild.children[0].value);
+      console.log(document.domain);
+      document.domain = 'example.test';
+      try { document.domain = 'test'; } catch(e) { console.log(e.name); }
+    "#, "github.js").unwrap();
+    assert_eq!(logs(&mut s), ["0:true 1 copy", "0:copy 0", "0:0 changed", "0:example.test", "0:SecurityError"]);
+}
+
+#[cfg(feature = "baseline-jit")]
+#[test]
+fn baseline_captured_scalars_refresh_and_keep_types() {
+    let source = r#"
+      function counter() {
+        let state = 1;
+        return {read() {return state;}, set(v) {state=v;}, equal(v) {return state===v;}};
+      }
+      const c=counter();
+      for (let i=0;i<96;i++) {c.read(); c.equal(i);}
+      c.set(true);
+      for (let i=0;i<96;i++) {c.read(); c.equal(true);}
+      console.log(c.read(),typeof c.read(),c.equal(true),c.equal(1));
+      c.set(17); console.log(c.read(),typeof c.read(),c.equal(17));
+      const obj={x:42}; c.set(obj); console.log(c.read()===obj,c.equal(obj));
+      c.set(-0); console.log(Object.is(c.read(),-0));
+      c.set(undefined); console.log(c.read(),c.equal(undefined));
+      c.set(9n); console.log(c.read()===9n);
+      // Writes still use the interpreter and execute exactly once.
+      let x=0; function effect() {return ++x;}
+      for(let i=0;i<96;i++) effect(); console.log(x);
+      function extra(a) {let unused; return a+1;}
+      for(let i=0;i<96;i++) extra(i,'ignored');
+      console.log(extra(4,5),extra());
+    "#;
+    let mut off=page(""); off.set_jit_enabled(false); off.eval(source,"captured.js").unwrap();
+    let expected=logs(&mut off);
+    let mut on=page(""); on.eval(source,"captured.js").unwrap();
+    assert_eq!(logs(&mut on),expected);
+    #[cfg(all(target_arch="x86_64",target_os="linux"))]
+    { assert!(on.jit_stats().compiled>=4,"{:?}",on.jit_stats()); assert!(on.jit_stats().executed>128); }
+}
+
+#[cfg(feature = "baseline-jit")]
+#[test]
+fn baseline_cold_functions_do_not_exclude_later_hot_code() {
+    let mut source=String::new();
+    for i in 0..96 { source.push_str(&format!("(function(){{return {};}})();",i+100)); }
+    source.push_str("function hot(a){return (a+7)^3;} let sum=0; for(let i=0;i<128;i++)sum+=hot(i);console.log(sum);");
+    let mut off=page(""); off.set_jit_enabled(false); off.eval(&source,"cold.js").unwrap();
+    let expected=logs(&mut off);
+    let mut on=page(""); on.eval(&source,"cold.js").unwrap();
+    assert_eq!(logs(&mut on),expected);
+    #[cfg(all(target_arch="x86_64",target_os="linux"))]
+    { assert!(on.jit_stats().compiled>=1,"{:?}",on.jit_stats()); assert!(on.jit_stats().executed>90); }
+}
+
+#[cfg(feature = "baseline-jit")]
+#[test]
+fn baseline_own_property_cache_guards_mutation_and_effects() {
+    let source = r#"
+        function read(o) { return o.value; }
+        let o={value:1, other:2}, sum=0;
+        for(let i=0;i<500;i++) { o.value=i; sum+=read(o); }
+        console.log(sum);
+        o.value={nested:'retained'};
+        let held=read(o); o.value='replacement';
+        console.log(held.nested,read(o));
+        delete o.value;
+        Object.setPrototypeOf(o,{value:'inherited'});
+        console.log(read(o));
+        let calls=0;
+        Object.defineProperty(o,'value',{configurable:true,get(){calls++;return 'getter';}});
+        console.log(read(o),read(o),calls);
+        Object.defineProperty(o,'value',{configurable:true,writable:true,value:'data'});
+        console.log(read(o));
+        delete o.value; o.reused='wrong'; o.value='right';
+        console.log(read(o));
+        let traps=0, proxy=new Proxy(o,{get(t,k){traps++;return Reflect.get(t,k);}});
+        console.log(read(proxy),read(proxy),traps);
+        let revoked=Proxy.revocable(o,{}); revoked.revoke();
+        try { read(revoked.proxy); } catch(e) { console.log(e.name); }
+        const a=Symbol('same'), b=Symbol('same');
+        let symbols={[a]:'first',[b]:'second'};
+        for(let i=0;i<100;i++) { if(symbols[a]!=='first'||symbols[b]!=='second') throw Error('symbol'); }
+        console.log(symbols[a],symbols[b]);
+        for(let i=0;i<2000;i++) {
+            let fresh=i&1?{value:i,pad:0}:{pad:0,value:i};
+            if(read(fresh)!==i) throw Error('shape');
+            delete fresh.value; fresh.other=i; fresh.value='changed';
+            if(read(fresh)!=='changed') throw Error('reused slot');
+        }
+        console.log('cache guards complete');
+    "#;
+    let mut interpreter = page("");
+    interpreter.set_jit_enabled(false);
+    let before = interpreter.own_property_cache_stats().unwrap();
+    interpreter.eval(source, "own-cache.js").unwrap();
+    assert_eq!(interpreter.own_property_cache_stats().unwrap(), before);
+    let expected = logs(&mut interpreter);
+    let mut candidate = page("");
+    let before = candidate.own_property_cache_stats().unwrap();
+    candidate.eval(source, "own-cache.js").unwrap();
+    assert_eq!(logs(&mut candidate), expected);
+    let after = candidate.own_property_cache_stats().unwrap();
+    assert!(after[0] > before[0] + 100, "cache must actually execute: {before:?} -> {after:?}");
+    candidate.set_jit_enabled(false);
+    candidate.eval("for(let i=0;i<100;i++) read(o);", "disabled-cache.js").unwrap();
+    assert_eq!(candidate.own_property_cache_stats().unwrap(), after);
+}
+
+#[cfg(feature = "baseline-jit")]
+#[test]
+fn baseline_string_fast_paths_preserve_utf16_and_coercion() {
+    let source = r#"
+        const words=['','a','b','aa','a\0b','a\0a','é','Ā','\ud800','\udfff','😀','\uffff'];
+        let result=[];
+        for(const a of words) for(const b of words) {
+            result.push(JSON.stringify(a+b),a<b,a<=b,a>b,a>=b,a==b,a!=b,a===b,a!==b);
+        }
+        console.log(JSON.stringify(result));
+        let order=[];
+        const left={valueOf(){order.push('left');return 'a';}};
+        const right={valueOf(){order.push('right');return 'b';}};
+        console.log(left+right,JSON.stringify(order));
+        console.log('2'+2,'2'==2,'2'===2,'2'<10,'2'<'10');
+        console.log(new String('x')+'y',new String('x')=='x');
+        try { 'x'+Symbol('x'); } catch(e) { console.log(e.name); }
+        try { 'x'+{valueOf(){throw Error('conversion');}}; } catch(e) { console.log(e.message); }
+        let retained='a'.repeat(200), alias=retained;
+        for(let i=0;i<100;i++) retained=retained+'b';
+        console.log(alias.length,retained.length,alias===retained);
+    "#;
+    let mut off=page("");off.set_jit_enabled(false);
+    let before=off.guest_fast_path_stats().unwrap();
+    off.eval(source,"strings.js").unwrap();
+    assert_eq!(off.guest_fast_path_stats().unwrap(),before);
+    let expected=logs(&mut off);
+    let mut on=page("");let before=on.guest_fast_path_stats().unwrap();
+    on.eval(source,"strings.js").unwrap();
+    assert_eq!(logs(&mut on),expected);
+    let after=on.guest_fast_path_stats().unwrap();
+    assert!(after[2]>before[2]+100 && after[3]>before[3]+100,"{before:?} -> {after:?}");
+}
+
+#[cfg(feature = "baseline-jit")]
+#[test]
+fn baseline_string_concat_oom_retains_inputs() {
+    let source=r#"
+        let kept='x'.repeat(4*1024*1024), other=kept, caught=false;
+        try { let impossible=kept+other; } catch(e) { caught=true; }
+        console.log(caught,kept.length,other.length,kept.charCodeAt(0));
+        kept=null;other=null;
+        console.log('still'+' alive');
+    "#;
+    for enabled in [false,true] {
+        let limits=Limits {memory_bytes:64<<20,heap_bytes:8<<20,..Limits::default()};
+        let mut script=Script::new(Document::new(sex_html::parse::parse(""),"http://example.test/",(410,330),clock),limits).unwrap();
+        script.set_jit_enabled(enabled);
+        let before=script.guest_fast_path_stats().unwrap();
+        script.eval(source,"concat-oom.js").unwrap();
+        assert_eq!(logs(&mut script),["0:true 4194304 4194304 120","0:still alive"]);
+        let after=script.guest_fast_path_stats().unwrap();
+        if enabled { assert!(after[2]>before[2]); } else { assert_eq!(after,before); }
+    }
+}
+
+#[cfg(feature = "jit-profile")]
+#[test]
+fn elapsed_profile_attributes_text_and_byte_host_calls() {
+    struct TimedPage(u64);
+    impl sex_js::Page for TimedPage {
+        fn call(&mut self, _: u32, _: &[&str]) -> Option<String> {
+            self.0 += 7000;
+            Some("ok".into())
+        }
+        fn call_bytes(&mut self, _: u32, _: &[&[u8]]) -> Option<Vec<u8>> {
+            self.0 += 11000;
+            Some(b"ok".to_vec())
+        }
+        fn now_ns(&mut self) -> u64 { self.0 }
+    }
+    let mut s = Script::new(TimedPage(0), Limits::default()).unwrap();
+    let before = s.execution_profile();
+    let elapsed = s.execution_ns();
+    s.eval("document.getElementById('a'); fetch('/b');", "profile.js").unwrap();
+    let after = s.execution_profile();
+    for (op, ns) in [(2,7000), (66,11000)] {
+        assert_eq!(after.calls[op] - before.calls[op], 1);
+        assert_eq!(after.host_ns[op] - before.host_ns[op], ns);
+    }
+    assert_eq!(s.execution_ns() - elapsed, after.host_ns.iter().sum::<u64>() - before.host_ns.iter().sum::<u64>());
+}
+
+#[test]
+fn selector_cache_tracks_attributes_reorder_and_inner_html() {
+    let mut s=page("<div id=root><span id=a class=x>A</span><span id=b class=x>B</span></div>");
+    s.eval(r#"
+      const root=document.getElementById('root');
+      const a=document.getElementById('a'), b=document.getElementById('b');
+      const before=root.querySelectorAll('.x');
+      for(let i=0;i<70;i++) root.querySelectorAll('span[data-n="'+i+'"]');
+      root.insertBefore(b,a);
+      console.log(root.querySelector('.x').id, before[0].id);
+      b.className='y'; console.log(root.querySelector('.x').id);
+      root.innerHTML='<i class="x">new</i>';
+      console.log(root.querySelectorAll('.x').length,root.querySelector('.x').tagName);
+      let invalid=false; try { root.querySelector('['); } catch(e) {invalid=true;}
+      console.log(invalid);
+    "#, "query-cache.js").unwrap();
+    assert_eq!(logs(&mut s),["0:b a","0:a","0:1 I","0:true"]);
+}
+
+#[test]
+fn element_matches_and_closest_test_only_the_element() {
+    let mut s=page("<section class=outer><i class=x></i><b class=x></b></section>");
+    s.eval(r#"
+      const el=document.querySelector('i');
+      console.log(el.matches('section > .x'),el.matches('b'),el.closest('.outer').tagName);
+      const detached=document.createElement('i'); detached.className='x';
+      console.log(detached.matches('i.x'),detached.closest('.x')===detached);
+      let coercions=0; el.closest({toString(){coercions++;return '.absent';}});
+      console.log(coercions);
+      let errors=0; try {el.matches('[');} catch(e){errors++;} try{el.closest('[');}catch(e){errors++;}
+      console.log(errors);
+    "#, "matches.js").unwrap();
+    assert_eq!(logs(&mut s),["0:true false SECTION","0:true true","0:1","0:2"]);
+}

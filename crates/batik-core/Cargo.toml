@@ -12,5 +12,7 @@ std = ["sex-archive/std"]
 [dependencies]
 sex-image = { path = "../sex-image" }
 sex-archive = { path = "../sex-archive", default-features = false }
+sex-font = { path = "../sex-font" }
 miniz_oxide = { version = "=0.9.1", default-features = false, features = ["with-alloc"] }
 libm = "0.2"
+
