@@ -13,11 +13,13 @@ extern crate alloc;
 pub mod control;
 pub mod descriptors;
 pub mod fixture;
+pub mod photobooth;
 pub mod pixel;
 pub mod stream;
 
 pub use control::VideoProbeCommitControl;
 pub use descriptors::{parse_descriptors, FormatDescriptor, FormatKind, FrameDescriptor, UvcDeviceDescriptors};
 pub use fixture::{SyntheticUvcDevice, WireMessage};
+pub use photobooth::{apply_filter, compose_burst_contact_sheet, render_effects_grid, Filter};
 pub use pixel::{decode_frame, nv12_to_argb, yuy2_to_argb};
 pub use stream::{CompleteFrame, UvcPayloadHeader, UvcStreamAssembler};

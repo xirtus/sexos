@@ -1,0 +1,18 @@
+[
+  {
+    "id": 1,
+    "action": { "type": "redirect" },
+    "condition": {
+      "urlFilter": "tracker.js",
+      "excludedRequestDomains": ["internal.com"],
+      "isUrlFilterCaseSensitive": true
+    }
+  },
+  {
+    "id": 2,
+    "action": { "type": "allowAllRequests" },
+    "condition": {
+      "initiatorDomains": ["partner.com"]
+    }
+  }
+]
