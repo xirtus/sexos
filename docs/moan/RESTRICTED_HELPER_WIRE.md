@@ -13,12 +13,17 @@ The existing image pin and staging guard are separate prerequisites.
 | Net (13) | web::SHELL_SLOT | main intake before jobs/bind/source handling | retained flows/responses and whole row Net-region scrub |
 | Shell (3) | own coordinator state | ordinary launch/window/clipboard/autofill/open/kill dispatch | generic program activation and rebirth poll |
 
-Route slots are capabilities already held by the provider/coordinator. A numeric
-PD or packet field cannot create one. Provider wrappers must query their held
-Shell route using crash_log::peer_state, require Life::Live and exact caller
-PD3/task3, and bind the observed epoch. Shell similarly snapshots each held
-provider route before and after each phase. App catalog/lifecycle grants attest
-reserved row, exact task and retirement; metadata in a message does not.
+Shell holds provider Domain routes and brackets each exchange with fresh live
+peer epochs. Display and Bell also hold Shell Domain routes. **Files and Net do
+not hold a reverse Shell Domain route on this cohort.** They cannot query Shell's
+epoch or send a full3word OP_ACK; do not invent slot6 there. All providers use
+existing SYS29 authenticated one-word replies, including a fresh provider-private
+128-bit challenge after Quarantine. Provider-own epoch comes from checked
+OP_RESTARTS(0), never a packet field. Freshness is the current provider epoch,
+fresh challenge and persistent Shell generation, not a claim of remote Shell
+crash observation. Kernel sender metadata must still be exact Shell PD3/task3.
+App catalog/lifecycle grants attest the reserved inactive row (never activated or
+fully retired), exact task and retirement; payload metadata does not.
 
 No provider executes a policy operation received from a parent or plugin. Files
 alone accepts a parent job proposal through an existing explicit file grant;
@@ -38,8 +43,14 @@ and reply, with bounded deadline and retry, rather than advancing on enqueue.
 - Quarantine: word1 reserved target32|previous task32; word2 expected provider
   epoch. Validate exact held catalog and terminal custody, durably fence the
   entire row, stop old work, clear provider-owned regions, then ACK.
+- EchoChallenge: both words echo the fresh128-bit provider-private challenge.
+  CPU RDSEED/RDRAND availability and bounded retries fail closed; never log it.
+- Coordinator: word1 trusted Shell's declared self epoch, word2 provider epoch.
+  The declaration is correlation, not a provider-observed peer snapshot.
 - Owner: word1 parent32|parent task32; word2 cookie32 with upper bits zero.
 - Nonce: word1/word2 are the complete 128-bit request nonce.
+- PluginHashLo/Hi and InputHashLo/Hi bind all256 bits of each exact immutable
+  admission buffer's SHA256. Each word carries64 bits, with no lossy substitute.
 - Bind: word1 newly loaded target32|task32; word2 immutable Files job ticket.
   This task comes from synchronous load_program(kind3), while still dormant.
 - Seal: word1 new target/task; word2 expected provider epoch. Requires the exact
@@ -48,13 +59,30 @@ and reply, with bounded deadline and retry, rather than advancing on enqueue.
 - Revoke: word1 exact target/task; word2 expected epoch. Narrowing only; it cannot
   remove the row tombstone or restore normal access.
 
-Every positive ACK echoes all three accepted words under the distinct reply
-opcode. Shell requires exact provider subject, live epoch, command and transcript
-position. This binds every Owner/Nonce/Bind field without treating a lossy hash as
-a capability. Duplicate identical retransmission repeats the original ACK; a
-same-phase different payload or wrong order quarantines the transaction. A new
-provider epoch invalidates every old ACK. Queued old commands cannot match the
-new expected epoch, even where service restart preserves the same PD/task.
+After accepting/persisting a command, the provider retains all three words and
+returns word0 via SYS29. Only then may Shell request word1/word2 using OP_FETCH:
+`[exact phase/generation word0, selector1..2, expected provider epoch]`. For
+Quarantine only, selectors3/4 then return the fresh challenge halves. Every fetch
+must be in order; exact last-selector retry is idempotent. Advance a credit only
+once the kernel admits the actual reply. The provider must not start the next
+phase until required credits complete. Shell verifies each echoed word and the
+kernel-authenticated provider subject, with one outstanding reply request.
+
+Unique accepted generation/phase ACK0 is emitted only after the corresponding
+operation really completed; payload credits alone cannot certify acceptance.
+A stale selector/phase/epoch, changed same-phase payload, missing credit, queue
+full or timeout keeps the row quarantined. Provider restart discards all positive
+transcripts/challenges before replay while retaining deny tombstones. Old initial
+commands name the wrong own epoch; later commands have no accepted transcript.
+Never log challenge, job nonce, hashes or input payload, including Debug/fatal
+paths. Packet Debug prints only generation/phase.
+
+A live immutable job may continue through an unobserved Shell crash until its
+hard120-second provider deadline. Pending policy exchanges expire after5seconds.
+No immediate remote Shell-crash revocation is claimed. On Shell recovery, revoke
+and terminate retained jobs before admitting normal launch work. Restrictions
+remain enforced throughout: retained rights are only to immutable job buffers,
+and every provider restart removes those positive rights before replay.
 
 Shell records its local deny fence as the fifth participant. It explicitly holds
 both initial activation and program_rebirth_poll while the policy transcript is
