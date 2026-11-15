@@ -113,6 +113,9 @@ pub struct Machine<D: Disk> {
     tpr: u64,
     cmos_index: u8,
     notes: u32,
+    /// An event went to the kernel and the guest has not entered since: the kernel
+    /// holds one event per entry, so an interrupt waits for the next exit.
+    queued: bool,
 }
 
 enum Flow { Go { load: bool, skipped: bool }, Stop(Stop) }
@@ -125,7 +128,7 @@ fn mask(size: u8) -> u64 { if size >= 8 { u64::MAX } else { (1u64 << (size as u3
 impl<D: Disk> Machine<D> {
     pub fn new(ram: Ram, blk: Option<Blk<D>>) -> Machine<D> {
         Machine { ram, uart: Uart::new(), pic: Pic::new(), pit: Pit::new(), blk, counters: Counters::default(),
-            line: LineBuffer::default(), debug_line: LineBuffer::default(), msrs: MsrStore::default(), tpr: 0, cmos_index: 0, notes: 0 }
+            line: LineBuffer::default(), debug_line: LineBuffer::default(), msrs: MsrStore::default(), tpr: 0, cmos_index: 0, notes: 0, queued: false }
     }
 
     /// Loads a bzImage the Linux way, with the virtio-blk device (if any) appended to
@@ -159,7 +162,7 @@ impl<D: Disk> Machine<D> {
         loop {
             if self.counters.exits >= budget { return Stop::Host; }
             self.tick(host.now_ns());
-            if !fresh && exit.regs.rflags & RFLAGS_IF != 0 && self.pic.pending().is_some() {
+            if !fresh && !self.queued && exit.regs.rflags & RFLAGS_IF != 0 && self.pic.pending().is_some() {
                 match self.deliver(cpu, host, &mut exit, load, skipped) {
                     Ok(true) => load = false,
                     Ok(false) => {}
@@ -168,6 +171,7 @@ impl<D: Disk> Machine<D> {
             }
             if let Err(status) = cpu.run(&mut exit, load) { return Stop::Hypervisor { status }; }
             fresh = false;
+            self.queued = false;
             self.counters.exits += 1;
             match self.dispatch(cpu, host, &mut exit) {
                 Go { load: l, skipped: s } => { load = l; skipped = s; }
@@ -185,10 +189,13 @@ impl<D: Disk> Machine<D> {
         // Stepping over the instruction that exited ends an STI or MOV SS shadow.
         if skipped { st.interruptibility &= !3; }
         if st.interruptibility & 3 != 0 { return Ok(false); }
-        let Some(vector) = self.pic.acknowledge() else { return Ok(false) };
+        let Some(vector) = self.pic.pending() else { return Ok(false) };
         st.activity = 0;
         cpu.set_state(&st)?;
         cpu.inject(vector, vm::EVENT_EXTERNAL, None)?;
+        // INTA only once the kernel holds the event, so a refusal loses no interrupt.
+        self.pic.acknowledge();
+        self.queued = true;
         exit.regs = st.regs;
         self.counters.injected += 1;
         if self.counters.injected <= 2 { self.note(host, Note::Injected { vector }); }
@@ -204,8 +211,11 @@ impl<D: Disk> Machine<D> {
 
     fn skip(exit: &mut Exit) { exit.regs.rip = exit.regs.rip.wrapping_add(exit.instruction_len as u64); }
 
-    fn exception(cpu: &mut impl Vcpu, vector: u8, error: Option<u32>) -> Flow {
-        match cpu.inject(vector, vm::EVENT_EXCEPTION, error) { Ok(()) => SAME, Err(status) => Flow::Stop(Stop::Hypervisor { status }) }
+    fn exception(&mut self, cpu: &mut impl Vcpu, vector: u8, error: Option<u32>) -> Flow {
+        match cpu.inject(vector, vm::EVENT_EXCEPTION, error) {
+            Ok(()) => { self.queued = true; SAME }
+            Err(status) => Flow::Stop(Stop::Hypervisor { status }),
+        }
     }
 
     fn dispatch(&mut self, cpu: &mut impl Vcpu, host: &mut impl Host, exit: &mut Exit) -> Flow {
@@ -248,8 +258,8 @@ impl<D: Disk> Machine<D> {
                 SKIP
             }
             13 | 54 => { Self::skip(exit); SKIP } // INVD, WBINVD
-            exit::VMCALL | 19..=27 | 36 | 39 | 50 | 53 | exit::XSETBV | 58 => Self::exception(cpu, VECTOR_UD, None),
-            15 => Self::exception(cpu, VECTOR_GP, Some(0)), // RDPMC
+            exit::VMCALL | 19..=27 | 36 | 39 | 50 | 53 | exit::XSETBV | 58 => self.exception(cpu, VECTOR_UD, None),
+            15 => self.exception(cpu, VECTOR_GP, Some(0)), // RDPMC
             exit::TRIPLE_FAULT => Flow::Stop(Stop::TripleFault { rip }),
             reason => { self.counters.other += 1; Flow::Stop(Stop::Unsupported { reason, qualification: exit.qualification, rip }) }
         }
@@ -383,7 +393,7 @@ impl<D: Disk> Machine<D> {
         let read = match policy::msr_kind(index) {
             MsrKind::Absent => {
                 self.note(host, Note::Msr { index, write });
-                return Self::exception(cpu, VECTOR_GP, Some(0));
+                return self.exception(cpu, VECTOR_GP, Some(0));
             }
             MsrKind::Tsc => host.tsc(),
             MsrKind::Stored(read_only) => {
@@ -399,7 +409,7 @@ impl<D: Disk> Machine<D> {
                         Some(i) => st.segments[i].base = value,
                         None => match policy::efer_write(st.efer, value) {
                             Ok(v) => st.efer = v,
-                            Err(()) => return Self::exception(cpu, VECTOR_GP, Some(0)),
+                            Err(()) => return self.exception(cpu, VECTOR_GP, Some(0)),
                         },
                     }
                     Self::skip(exit);
@@ -479,10 +489,13 @@ pub(crate) mod tests {
         /// RIP when each event was injected.
         pub injected_at: Vec<u64>,
         pub sets: u32,
+        /// An event is waiting for the next entry (the kernel answers BUSY to a second).
+        pub event: bool,
     }
     impl Vcpu for Script {
         fn run(&mut self, exit: &mut Exit, load: bool) -> Result<(), u64> {
             self.loads.push((load, exit.regs));
+            self.event = false;
             if load { self.state.regs = exit.regs; }
             if self.exits.is_empty() { return Err(99); }
             let mut next = self.exits.remove(0);
@@ -494,7 +507,11 @@ pub(crate) mod tests {
         }
         fn get_state(&mut self, st: &mut State) -> Result<(), u64> { *st = self.state; Ok(()) }
         fn set_state(&mut self, st: &State) -> Result<(), u64> { self.state = *st; self.sets += 1; Ok(()) }
-        fn inject(&mut self, vector: u8, kind: u32, error: Option<u32>) -> Result<(), u64> { self.injected.push((vector, kind, error)); self.injected_at.push(self.state.regs.rip); Ok(()) }
+        fn inject(&mut self, vector: u8, kind: u32, error: Option<u32>) -> Result<(), u64> {
+            if self.event { return Err(5); }
+            self.event = true;
+            self.injected.push((vector, kind, error)); self.injected_at.push(self.state.regs.rip); Ok(())
+        }
     }
 
     #[derive(Default)]
@@ -624,6 +641,33 @@ pub(crate) mod tests {
         assert!(log.idles >= 1, "the halted guest waited for the PIT");
         assert_eq!(cpu.injected_at[0], 0x5001, "injected after HLT, which was stepped over");
         assert_eq!(m.counters.injected, 1, "IRQ 0 stays in service until EOI");
+    }
+
+    #[test]
+    fn interrupt_waits_for_a_queued_exception() {
+        let mut m = machine();
+        let mut cpu = Script::default();
+        cpu.state.regs.rflags = 2 | RFLAGS_IF;
+        for (port, v) in [(0x20, 0x11), (0x21, 0x30), (0x21, 0x04), (0x21, 0x01), (0x21, 0xFE)] {
+            let mut e = io(port, 1, false, v);
+            e.regs.rflags = 2 | RFLAGS_IF;
+            cpu.exits.push(e);
+        }
+        // An unsupported RDMSR (#GP) while IRQ 0 is raised.
+        let mut rd = plain(exit::RDMSR, 2);
+        rd.regs.rflags = 2 | RFLAGS_IF; rd.regs.rip = 0x2000; rd.regs.rcx = 0x48;
+        cpu.exits.push(rd);
+        let mut next = plain(exit::CPUID, 2);
+        next.regs.rflags = 2 | RFLAGS_IF; next.regs.rip = 0x3000;
+        cpu.exits.push(next);
+        let mut log = Log::default();
+        assert_eq!(m.run(&mut cpu, &mut log, 5), Stop::Host, "PIC programmed");
+        m.pic.set_irq(0, true); m.pic.set_irq(0, false);
+        let stop = m.run(&mut cpu, &mut log, 100);
+        assert!(!matches!(stop, Stop::Hypervisor { status: 5 }), "no BUSY stop: {stop:?}");
+        assert_eq!(cpu.injected.iter().map(|e| (e.0, e.1)).collect::<Vec<_>>(),
+            [(VECTOR_GP, vm::EVENT_EXCEPTION), (0x30, vm::EVENT_EXTERNAL)], "#GP first, the interrupt on the next entry");
+        assert_eq!(m.counters.injected, 1);
     }
 
     #[test]
