@@ -4404,7 +4404,7 @@ dependencies = [
 name = "polyamour"
 version = "0.1.0"
 dependencies = [
- "png",
+ "png 0.18.1",
  "sex-3d",
  "sex-office",
  "sex-std",
@@ -5894,6 +5894,7 @@ dependencies = [
  "miniz_oxide 0.8.9",
  "regex-automata",
  "sex-font",
+ "sex-shape",
  "vte",
 ]
 

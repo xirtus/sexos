@@ -50,6 +50,12 @@ pub const UNDERLINE: u8 = 8;
 pub const INVERSE: u8 = 16;
 pub const HIDDEN: u8 = 32;
 pub const STRIKE: u8 = 64;
+/// The first of the two cells a wide character (an ideograph, an emoji) takes; the cell
+/// after it holds [`SPACER`].
+pub const WIDE: u8 = 128;
+/// The second cell of a wide character (drawn by the cell before it), or the column left
+/// blank when a wide character wrapped early. Left out of text.
+pub const SPACER: char = '\0';
 
 /// One character cell: 16 bytes, so a long scrollback stays affordable.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -83,7 +89,7 @@ struct Line { cells: Vec<Cell>, wrapped: bool }
 impl Line {
     fn new(cols: usize) -> Self { Line { cells: vec![Cell::BLANK; cols], wrapped: false } }
     fn text(&self) -> String {
-        let mut s: String = self.cells.iter().map(|c| c.ch).collect();
+        let mut s: String = self.cells.iter().map(|c| c.ch).filter(|&c| c != SPACER).collect();
         let keep = s.trim_end_matches(' ').len();
         s.truncate(keep);
         s
@@ -311,7 +317,7 @@ impl Screen {
                 for row in a.row..=b.row {
                     let Some(line) = self.abs_line(row) else { break };
                     let to = (r + 1).min(line.cells.len());
-                    let piece: String = line.cells[l.min(to)..to].iter().map(|c| c.ch).collect();
+                    let piece: String = line.cells[l.min(to)..to].iter().map(|c| c.ch).filter(|&c| c != SPACER).collect();
                     out.push_str(piece.trim_end_matches(' '));
                     if row != b.row { out.push('\n'); }
                 }
@@ -322,7 +328,7 @@ impl Screen {
             let Some(line) = self.abs_line(row) else { break };
             let from = if row == a.row { a.col } else { 0 };
             let to = if row == b.row { (b.col + 1).min(line.cells.len()) } else { line.cells.len() };
-            let piece: String = line.cells[from.min(to)..to].iter().map(|c| c.ch).collect();
+            let piece: String = line.cells[from.min(to)..to].iter().map(|c| c.ch).filter(|&c| c != SPACER).collect();
             if line.wrapped && row != b.row { out.push_str(&piece); } else {
                 out.push_str(piece.trim_end_matches(' '));
                 if row != b.row { out.push('\n'); }
@@ -444,6 +450,10 @@ impl Screen {
     }
     fn print(&mut self, c: char) {
         let c = if c.is_control() { ' ' } else { c };
+        // A combining mark, joiner or variation selector belongs to the character before it.
+        let width = sex_shape::cells::width(c as u32);
+        if width == 0 { return; }
+        let wide = width == 2 && self.cols >= 2;
         if self.pending_wrap {
             if self.autowrap {
                 self.lines[self.y].wrapped = true;
@@ -452,13 +462,47 @@ impl Screen {
             }
             self.pending_wrap = false;
         }
-        let cell = Cell { ch: c, fg: self.pen.fg, bg: self.pen.bg, flags: self.pen.flags, link: self.ext.link };
+        // A wide character with one column left goes whole onto the next line, as xterm does.
+        if wide && self.x + 1 >= self.cols {
+            if self.autowrap {
+                let (x, y) = (self.x, self.y);
+                self.split_wide(y, x);
+                // The column left over is padding: blank, and left out of copied text.
+                self.lines[y].cells[x] = Cell { ch: SPACER, ..Cell::erased(&self.pen) };
+                self.touch(y);
+                self.lines[y].wrapped = true;
+                self.x = 0;
+                self.linefeed();
+            } else { self.x = self.cols - 2; }
+        }
+        let flags = self.pen.flags | if wide { WIDE } else { 0 };
+        let cell = Cell { ch: c, fg: self.pen.fg, bg: self.pen.bg, flags, link: self.ext.link };
         let (x, y, cols) = (self.x, self.y, self.cols);
+        self.split_wide(y, x);
+        if wide { self.split_wide(y, x + 1); }
+        let spacer = Cell { ch: SPACER, flags: self.pen.flags, ..cell };
         let row = &mut self.lines[y].cells;
-        if self.insert { row.insert(x, cell); row.truncate(cols); } else { row[x] = cell; }
+        if self.insert {
+            if wide { row.insert(x, spacer); }
+            row.insert(x, cell);
+            row.truncate(cols);
+            // Pushed off the right edge, half a pair is no pair.
+            if row[cols - 1].flags & WIDE != 0 { row[cols - 1].flags &= !WIDE; row[cols - 1].ch = ' '; }
+        } else {
+            row[x] = cell;
+            if wide { row[x + 1] = spacer; }
+        }
         self.touch(y);
         self.last_char = c;
-        if x + 1 >= cols { self.pending_wrap = true; } else { self.x += 1; }
+        let width = if wide { 2 } else { 1 };
+        if x + width >= cols { self.x = cols - 1; self.pending_wrap = true; } else { self.x += width; }
+    }
+    /// Writing over half of a wide character blanks the other half.
+    fn split_wide(&mut self, y: usize, x: usize) {
+        let row = &mut self.lines[y].cells;
+        let Some(here) = row.get(x).copied() else { return };
+        if here.ch == SPACER && x > 0 && row[x - 1].flags & WIDE != 0 { row[x - 1].ch = ' '; row[x - 1].flags &= !WIDE; }
+        if here.flags & WIDE != 0 && row.get(x + 1).is_some_and(|c| c.ch == SPACER) { row[x + 1].ch = ' '; }
     }
     fn goto(&mut self, x: usize, y: usize) {
         let (lo, hi) = if self.origin { (self.top, self.bottom) } else { (0, self.rows - 1) };
@@ -788,6 +832,8 @@ pub fn colors_in(theme: &theme::Theme, cell: &Cell) -> (u32, u32) {
 mod tests;
 #[cfg(test)]
 mod tests_text;
+#[cfg(all(test, feature = "render"))]
+mod render_tests;
 
 /// A fixed screen in the spirit of vttest's first pages: a frame drawn with absolute
 /// moves, colours from all three palettes, and character insert, delete and erase. Term's
