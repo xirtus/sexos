@@ -129,7 +129,16 @@ impl Console {
     }
 }
 
-/// Writes `bytes` to standard output (`stream` 0) or standard error (1).
+/// This run is a hidden helper (`crate::process::HIDDEN_WORD`): nobody can see or close
+/// a window of its, so output goes to the serial record only, input is at its end at
+/// once, and the program never waits for its window to be closed.
+static HIDDEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+pub(crate) fn hide() {
+    HIDDEN.store(true, std::sync::atomic::Ordering::Release);
+    if let Ok(mut c) = CONSOLE.lock() { c.closed = true; }
+}
+fn hidden() -> bool { HIDDEN.load(std::sync::atomic::Ordering::Acquire) }
+
 /// Whether a terminal holds this run's console: asked of Files once.
 fn attached() -> bool {
     use std::sync::atomic::{AtomicU8, Ordering};
@@ -219,6 +228,7 @@ pub(crate) fn write(stream: usize, bytes: &[u8]) {
     for &b in bytes {
         if b == b'\n' { c.record(stream); } else if c.lines[stream].len() < 400 { c.lines[stream].push(b); } else { c.record(stream); c.lines[stream].push(b); }
     }
+    if hidden() { return; }
     if !taken() && attached() { drop(c); relay_write(bytes); return; }
     if c.vt.is_none() && !taken() && bytes.contains(&0x1b) {
         // The first escape sequence: from here on the window is a terminal, starting

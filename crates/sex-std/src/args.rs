@@ -25,9 +25,40 @@ pub fn split(line: &[u8]) -> Vec<Vec<u8>> {
     words
 }
 
+/// The line [`split`] turns back into `words`: a word that is empty or holds a space,
+/// a tab, a line end or a quote is put in quotes, with `\"` and `\\` inside them.
+/// What a program uses to start another (`std::process::Command`).
+pub fn join(words: &[&[u8]]) -> Vec<u8> {
+    let mut line = Vec::new();
+    for (i, word) in words.iter().enumerate() {
+        if i > 0 { line.push(b' '); }
+        if !word.is_empty() && !word.iter().any(|b| matches!(b, b' ' | b'\t' | b'\n' | b'\r' | b'"')) {
+            line.extend_from_slice(word);
+            continue;
+        }
+        line.push(b'"');
+        for &b in word.iter() {
+            if b == b'"' || b == b'\\' { line.push(b'\\'); }
+            line.push(b);
+        }
+        line.push(b'"');
+    }
+    line
+}
+
 #[cfg(test)]
 mod tests {
-    use super::split;
+    use super::{join, split};
+    #[test]
+    fn join_splits_back() {
+        let cases: &[&[&[u8]]] = &[&[b"a", b"b c", b"", br#"q"x"#, br"back\slash", br#"\""#, b"tab\there"], &[], &[b"@/docs/a.txt", b"+packages"]];
+        for words in cases {
+            let line = join(words);
+            let back = split(&line);
+            assert_eq!(back.iter().map(|w| w.as_slice()).collect::<Vec<_>>(), words.to_vec(), "{}", String::from_utf8_lossy(&line));
+        }
+        assert_eq!(join(&[b"rg", b"x"]), b"rg x");
+    }
     #[test]
     fn words_and_quotes() {
         assert_eq!(split(b"  a  bc d "), vec![b"a".to_vec(), b"bc".to_vec(), b"d".to_vec()]);

@@ -56,7 +56,7 @@ runs:
         target/ffmpeg/include
         target/ffmpeg/include-c
         target/ffmpeg/sexos-recording-v1
-      key: ffmpeg-${{ inputs.recording }}-${{ hashFiles('scripts/build_ffmpeg.sh') }}
+      key: ffmpeg-${{ inputs.recording }}-${{ hashFiles('scripts/build_ffmpeg.sh', 'scripts/build_libvpx.sh', 'scripts/build_libaom.sh', 'scripts/build_x264.sh') }}
   - name: Build FFmpeg for programs
     if: inputs.media == 'true'
     shell: bash

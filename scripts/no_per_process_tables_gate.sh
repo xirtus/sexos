@@ -16,7 +16,11 @@ ALLOWED={
  'page_table_root':[('kernel/src/memory/manager.rs','init','let level_4_table = unsafe { active_level_4_table(VirtAddr::new(hhdm_offset)) };\n    let mut mapper = unsafe { OffsetPageTable::new(level_4_table')],
  # rustls's hash::Context trait names its copy-the-running-hash method `fork`; it
  # copies a SHA-2 state, not a process.
- 'process_model':[('crates/sex-tls/src/open/provider.rs','fork','impl hash::Context for $ctx {\n        fn fork_finish(&self) -> hash::Output')],
+ 'process_model':[('crates/sex-tls/src/open/provider.rs','fork','impl hash::Context for $ctx {\n        fn fork_finish(&self) -> hash::Output'),
+                  # sex-libc's POSIX names for runs a program started (DESIGN_GUARDRAILS 2:
+                  # POSIX is a library): a launch over sex_app::launch, no process table.
+                  ('crates/sex-libc/src/posix_process.rs','waitpid','let r = unsafe { sys_process_wait(id, (options & WNOHANG == 0) as i32'),
+                  ('crates/sex-libc/src/posix_process.rs','getpid','pub unsafe extern "C" fn getpid() -> c_int { unsafe { sys_process_self() as c_int } }')],
  'ttbr_write':[('kernel/src/arch/aarch64/mmu.rs','init','TTBR0_ADDR = t0_l0 as u64;'),
                ('kernel/src/arch/aarch64/smp.rs','sex_arm_ap_main','let b0 = super::mmu::ttbr0_pa();\n        let b1 = super::mmu::ttbr1_pa();')],
 }

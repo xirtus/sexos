@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! EPUB 2 and 3: container, OPF package and table of contents.
 use crate::zip::Zip;
-use crate::{folder, resolve, Book, Chapter, Error, Format, TocEntry, MEMBER_MAX};
+use crate::{folder, resolve, Book, Chapter, Error, Format, TocEntry, BOOK_MAX, MEMBER_MAX, SPINE_MAX};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -35,16 +35,24 @@ pub fn read(z: &Zip) -> Result<Book, Error> {
         }
     }
     let spine_node = package.child("spine");
-    let spine: Vec<&Item> = spine_node.map(|s| s.children_named("itemref").filter_map(|r| {
-        let id = r.attr("idref")?;
-        items.iter().find(|i| i.id == id)
-    }).collect()).unwrap_or_default();
+    // Each manifest item enters the spine once: a repeated itemref would unpack the same
+    // chapter again and again (issue #302), and readers show it once anyway.
+    let mut spine: Vec<&Item> = Vec::new();
+    if let Some(s) = spine_node {
+        for r in s.children_named("itemref") {
+            if spine.len() >= SPINE_MAX { break; }
+            let Some(id) = r.attr("idref") else { continue };
+            let Some(item) = items.iter().find(|i| i.id == id) else { continue };
+            if !spine.iter().any(|seen| core::ptr::eq(*seen, item)) { spine.push(item); }
+        }
+    }
     if spine.is_empty() { return Err(Error::NotBook("the EPUB's spine is empty")); }
 
     let mut chapters = Vec::with_capacity(spine.len());
+    let mut budget = BOOK_MAX;
     for item in &spine {
-        let blocks = match z.read(&item.href, MEMBER_MAX) {
-            Ok(bytes) => html::blocks(&text_of(&bytes)),
+        let blocks = match z.read(&item.href, MEMBER_MAX.min(budget)) {
+            Ok(bytes) => { budget = budget.saturating_sub(bytes.len()); html::blocks(&text_of(&bytes)) }
             Err(_) => Vec::new(),
         };
         chapters.push(Chapter { title: String::new(), blocks });

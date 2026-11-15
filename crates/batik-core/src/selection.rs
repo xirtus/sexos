@@ -219,6 +219,33 @@ impl SelectionMask {
         self.combine_candidate(&candidate, combine);
     }
 
+    /// Selects an arbitrary polygonal / freehand lasso region.
+    pub fn select_lasso(&mut self, points: &[(i32, i32)], combine: SelectionCombine) {
+        self.select_polygon(points, combine);
+    }
+
+    /// Selects contiguous or global pixels matching seed within tolerance.
+    pub fn select_magic_wand(
+        &mut self,
+        pixels: &[u32],
+        seed_x: usize,
+        seed_y: usize,
+        tolerance: u8,
+        contiguous: bool,
+        combine: SelectionCombine,
+    ) {
+        self.magic_wand(
+            pixels,
+            self.width,
+            self.height,
+            seed_x,
+            seed_y,
+            tolerance,
+            contiguous,
+            combine,
+        );
+    }
+
     pub fn magic_wand(
         &mut self,
         pixels: &[u32],

@@ -72,7 +72,7 @@ impl<'a> Cursor<'a> {
 
 struct ChannelInfo {
     id: i16,
-    _length: u32,
+    length: u32,
 }
 
 struct LayerRecord {
@@ -89,6 +89,9 @@ struct LayerRecord {
 
 /// Parses an Adobe Photoshop (.psd) file and constructs a multi-layer Batik `Document`.
 pub fn parse_psd(data: &[u8], limits: &Limits) -> Result<Document, BatikError> {
+    if data.len() > limits.max_input_bytes {
+        return Err(BatikError::TooLarge);
+    }
     if data.len() < 26 {
         return Err(BatikError::CorruptPsd("header too short"));
     }
@@ -122,6 +125,9 @@ pub fn parse_psd(data: &[u8], limits: &Limits) -> Result<Document, BatikError> {
     }
     if color_mode != 1 && color_mode != 3 {
         return Err(BatikError::Unsupported("only RGB and Grayscale color modes supported"));
+    }
+    if color_mode == 3 && channels_count < 3 {
+        return Err(BatikError::Unsupported("RGB PSD requires at least 3 channels"));
     }
 
     admit_limits(limits, width, height)?;
@@ -166,7 +172,7 @@ pub fn parse_psd(data: &[u8], limits: &Limits) -> Result<Document, BatikError> {
                 for _ in 0..num_channels {
                     let id = cursor.read_i16()?;
                     let length = cursor.read_u32()?;
-                    channel_infos.push(ChannelInfo { id, _length: length });
+                    channel_infos.push(ChannelInfo { id, length });
                 }
 
                 let blend_sig = cursor.read_bytes(4)?;
@@ -236,10 +242,25 @@ pub fn parse_psd(data: &[u8], limits: &Limits) -> Result<Document, BatikError> {
                     _ => 0,
                 };
 
+                if layer_w == 0 || layer_h == 0 {
+                    for ch in &rec.channels {
+                        cursor.skip(ch.length as usize)?;
+                    }
+                    continue;
+                }
+
+                // Admit per-layer dimensions & cumulative pixel budget BEFORE allocating or decompressing channels
+                let total = admit_limits(limits, layer_w, layer_h)?;
+                accumulated_pixels = accumulated_pixels.checked_add(total).ok_or(BatikError::TooLarge)?;
+                if accumulated_pixels > limits.max_pixels {
+                    return Err(BatikError::TooLarge);
+                }
+
                 let mut red_channel = Vec::new();
                 let mut green_channel = Vec::new();
                 let mut blue_channel = Vec::new();
                 let mut alpha_channel = Vec::new();
+                let mut mask_channel = Vec::new();
 
                 for ch in &rec.channels {
                     let ch_data = decompress_channel(&mut cursor, layer_w, layer_h)?;
@@ -248,58 +269,57 @@ pub fn parse_psd(data: &[u8], limits: &Limits) -> Result<Document, BatikError> {
                         1 => green_channel = ch_data,
                         2 => blue_channel = ch_data,
                         -1 => alpha_channel = ch_data,
-                        _ => {} // Ignore user masks (-2) or other channels
+                        -2 => mask_channel = ch_data,
+                        _ => {} // Ignore unknown extra channels
                     }
                 }
 
-                if layer_w > 0 && layer_h > 0 {
-                    admit_limits(limits, layer_w, layer_h)?;
-                    let total = layer_w.checked_mul(layer_h).ok_or(BatikError::TooLarge)?;
-                    accumulated_pixels = accumulated_pixels.checked_add(total).ok_or(BatikError::TooLarge)?;
-                    if accumulated_pixels > limits.max_pixels {
-                        return Err(BatikError::TooLarge);
-                    }
+                let mut pixels = Vec::new();
+                pixels.try_reserve_exact(total).map_err(|_| BatikError::OutOfMemory)?;
 
-                    let mut pixels = Vec::new();
-                    pixels.try_reserve_exact(total).map_err(|_| BatikError::OutOfMemory)?;
-
-                    for i in 0..total {
-                        let a = if !alpha_channel.is_empty() { alpha_channel[i] } else { 255 };
-                        let (r, g, b) = if color_mode == 1 {
-                            // Grayscale
-                            let gray = if !red_channel.is_empty() { red_channel[i] } else { 0 };
-                            (gray, gray, gray)
-                        } else {
-                            // RGB
-                            let r = if !red_channel.is_empty() { red_channel[i] } else { 0 };
-                            let g = if !green_channel.is_empty() { green_channel[i] } else { 0 };
-                            let b = if !blue_channel.is_empty() { blue_channel[i] } else { 0 };
-                            (r, g, b)
-                        };
-                        pixels.push(pack_argb(a, r, g, b));
-                    }
-
-                    let raster = RasterLayer {
-                        width: layer_w,
-                        height: layer_h,
-                        offset_x: rec.left,
-                        offset_y: rec.top,
-                        pixels,
-                        mask: None,
-                        alpha_lock: false,
-                        pixel_lock: false,
+                for i in 0..total {
+                    let a = if !alpha_channel.is_empty() { alpha_channel[i] } else { 255 };
+                    let (r, g, b) = if color_mode == 1 {
+                        // Grayscale
+                        let gray = if !red_channel.is_empty() { red_channel[i] } else { 0 };
+                        (gray, gray, gray)
+                    } else {
+                        // RGB
+                        let r = if !red_channel.is_empty() { red_channel[i] } else { 0 };
+                        let g = if !green_channel.is_empty() { green_channel[i] } else { 0 };
+                        let b = if !blue_channel.is_empty() { blue_channel[i] } else { 0 };
+                        (r, g, b)
                     };
-
-                    let layer = Layer {
-                        id: (idx + 1) as u64,
-                        name: rec.name.clone(),
-                        visible: rec.visible,
-                        opacity: rec.opacity,
-                        blend_mode: rec.blend_mode,
-                        kind: crate::layer::LayerKind::Raster(raster),
-                    };
-                    layers.push(layer);
+                    pixels.push(pack_argb(a, r, g, b));
                 }
+
+                let mask = if !mask_channel.is_empty() && mask_channel.len() == total {
+                    Some(mask_channel)
+                } else {
+                    None
+                };
+
+                let raster = RasterLayer {
+                    width: layer_w,
+                    height: layer_h,
+                    offset_x: rec.left,
+                    offset_y: rec.top,
+                    pixels,
+                    mask,
+                    alpha_lock: false,
+                    pixel_lock: false,
+                };
+
+                let layer = Layer {
+                    id: (idx + 1) as u64,
+                    name: rec.name.clone(),
+                    visible: rec.visible,
+                    opacity: rec.opacity,
+                    blend_mode: rec.blend_mode,
+                    kind: crate::layer::LayerKind::Raster(raster),
+                    filter_stack: Vec::new(),
+                };
+                layers.push(layer);
             }
         }
     }
@@ -315,25 +335,34 @@ pub fn parse_psd(data: &[u8], limits: &Limits) -> Result<Document, BatikError> {
     // 5. If no layers were decoded, fall back to Image Data Section (merged composite)
     if layers.is_empty() && cursor.remaining() >= 2 {
         let compression = cursor.read_u16()?;
+        if compression != 0 && compression != 1 {
+            return Err(BatikError::Unsupported("unknown composite compression"));
+        }
         let total_pixels = admit_limits(limits, width, height)?;
 
         let mut planar_channels = Vec::new();
-        for _ in 0..channels_count {
-            let mut ch = Vec::new();
-            ch.try_reserve_exact(total_pixels).map_err(|_| BatikError::OutOfMemory)?;
-            planar_channels.push(ch);
-        }
 
         if compression == 0 {
-            // Raw
-            for ch in &mut planar_channels {
-                let bytes = cursor.read_bytes(total_pixels)?;
-                ch.extend_from_slice(bytes);
+            // Raw: verify sufficient input bytes before reserving channel buffers
+            let needed = channels_count.checked_mul(total_pixels).ok_or(BatikError::TooLarge)?;
+            if needed > cursor.remaining() {
+                return Err(BatikError::CorruptPsd("unexpected end of file"));
             }
-        } else if compression == 1 {
+            for _ in 0..channels_count {
+                let bytes = cursor.read_bytes(total_pixels)?;
+                let mut ch = Vec::new();
+                ch.try_reserve_exact(total_pixels).map_err(|_| BatikError::OutOfMemory)?;
+                ch.extend_from_slice(bytes);
+                planar_channels.push(ch);
+            }
+        } else {
             // RLE (PackBits)
             // Table of scanline byte counts: channels * height * 2 bytes
             let num_lines = channels_count.checked_mul(height).ok_or(BatikError::TooLarge)?;
+            let table_bytes = num_lines.checked_mul(2).ok_or(BatikError::TooLarge)?;
+            if table_bytes > cursor.remaining() {
+                return Err(BatikError::CorruptPsd("unexpected end of file"));
+            }
             let mut line_lengths = Vec::new();
             line_lengths.try_reserve_exact(num_lines).map_err(|_| BatikError::OutOfMemory)?;
             let mut table_sum: usize = 0;
@@ -347,13 +376,16 @@ pub fn parse_psd(data: &[u8], limits: &Limits) -> Result<Document, BatikError> {
             }
 
             let mut line_idx = 0;
-            for ch in &mut planar_channels {
+            for _ in 0..channels_count {
+                let mut ch = Vec::new();
+                ch.try_reserve_exact(total_pixels).map_err(|_| BatikError::OutOfMemory)?;
                 for _ in 0..height {
                     let line_len = line_lengths[line_idx];
                     line_idx += 1;
                     let line_bytes = cursor.read_bytes(line_len)?;
-                    decompress_packbits_line(line_bytes, width, ch)?;
+                    decompress_packbits_line(line_bytes, width, &mut ch)?;
                 }
+                planar_channels.push(ch);
             }
         }
 
@@ -392,6 +424,7 @@ pub fn parse_psd(data: &[u8], limits: &Limits) -> Result<Document, BatikError> {
             opacity: 255,
             blend_mode: BlendMode::Normal,
             kind: crate::layer::LayerKind::Raster(raster),
+            filter_stack: Vec::new(),
         });
     }
 
@@ -414,15 +447,20 @@ fn decompress_channel(
 
     let compression = cursor.read_u16()?;
     let total = width.checked_mul(height).ok_or(BatikError::TooLarge)?;
-    let mut out = Vec::new();
-    out.try_reserve_exact(total).map_err(|_| BatikError::OutOfMemory)?;
 
     if compression == 0 {
-        // Raw
+        // Raw: validate remaining input BEFORE reserving `total` bytes
         let bytes = cursor.read_bytes(total)?;
+        let mut out = Vec::new();
+        out.try_reserve_exact(total).map_err(|_| BatikError::OutOfMemory)?;
         out.extend_from_slice(bytes);
+        Ok(out)
     } else if compression == 1 {
         // RLE (PackBits)
+        let table_bytes = height.checked_mul(2).ok_or(BatikError::TooLarge)?;
+        if table_bytes > cursor.remaining() {
+            return Err(BatikError::CorruptPsd("unexpected end of file"));
+        }
         let mut line_lengths = Vec::new();
         line_lengths.try_reserve_exact(height).map_err(|_| BatikError::OutOfMemory)?;
         let mut table_sum: usize = 0;
@@ -435,15 +473,16 @@ fn decompress_channel(
             return Err(BatikError::CorruptPsd("PackBits channel table exceeds remaining input"));
         }
 
+        let mut out = Vec::new();
+        out.try_reserve_exact(total).map_err(|_| BatikError::OutOfMemory)?;
         for &len in &line_lengths {
             let line_bytes = cursor.read_bytes(len)?;
             decompress_packbits_line(line_bytes, width, &mut out)?;
         }
+        Ok(out)
     } else {
-        return Err(BatikError::Unsupported("unknown channel compression"));
+        Err(BatikError::Unsupported("unknown channel compression"))
     }
-
-    Ok(out)
 }
 
 fn decompress_packbits_line(
@@ -487,3 +526,152 @@ fn decompress_packbits_line(
 
     Ok(())
 }
+
+/// Encodes a Batik `Document` into a valid multi-layer Adobe Photoshop (.psd) file.
+pub fn encode_psd(doc: &Document) -> Result<Vec<u8>, BatikError> {
+    let width = doc.width;
+    let height = doc.height;
+    if width == 0 || height == 0 {
+        return Err(BatikError::InvalidDimensions);
+    }
+    admit_limits(&doc.limits, width, height)?;
+
+    let mut out = Vec::new();
+    let est_size = 26 + 8 + 8 + (width * height * 4);
+    out.try_reserve(est_size).map_err(|_| BatikError::OutOfMemory)?;
+
+    // 1. Header (26 bytes)
+    out.extend_from_slice(b"8BPS");
+    out.extend_from_slice(&1u16.to_be_bytes()); // version 1
+    out.extend_from_slice(&[0u8; 6]); // reserved
+    out.extend_from_slice(&4u16.to_be_bytes()); // 4 channels (RGBA)
+    out.extend_from_slice(&(height as u32).to_be_bytes());
+    out.extend_from_slice(&(width as u32).to_be_bytes());
+    out.extend_from_slice(&8u16.to_be_bytes()); // depth 8
+    out.extend_from_slice(&3u16.to_be_bytes()); // color mode 3 (RGB)
+
+    // 2. Color Mode Data (length 0)
+    out.extend_from_slice(&0u32.to_be_bytes());
+
+    // 3. Image Resources (length 0)
+    out.extend_from_slice(&0u32.to_be_bytes());
+
+    // 4. Layer and Mask Information section
+    let exported_layers = doc.exportable_raster_layers();
+    let layer_count = exported_layers.len();
+    let mut layer_info = Vec::new();
+    layer_info.extend_from_slice(&(layer_count as i16).to_be_bytes());
+
+    let mut all_channel_data = Vec::new();
+
+    for (l, r) in &exported_layers {
+        let top = r.offset_y;
+        let left = r.offset_x;
+        let bottom = r.offset_y + r.height as i32;
+        let right = r.offset_x + r.width as i32;
+        layer_info.extend_from_slice(&top.to_be_bytes());
+        layer_info.extend_from_slice(&left.to_be_bytes());
+        layer_info.extend_from_slice(&bottom.to_be_bytes());
+        layer_info.extend_from_slice(&right.to_be_bytes());
+
+        let has_mask = r.mask.as_ref().map_or(false, |m| m.len() == r.width * r.height);
+        let num_channels: u16 = if has_mask { 5 } else { 4 };
+        layer_info.extend_from_slice(&num_channels.to_be_bytes());
+
+        let total_pixels = r.width * r.height;
+        let ch_len = 2 + total_pixels as u32;
+
+        // Channel headers: 0=R, 1=G, 2=B, -1=A, -2=Mask
+        layer_info.extend_from_slice(&0i16.to_be_bytes());
+        layer_info.extend_from_slice(&ch_len.to_be_bytes());
+        layer_info.extend_from_slice(&1i16.to_be_bytes());
+        layer_info.extend_from_slice(&ch_len.to_be_bytes());
+        layer_info.extend_from_slice(&2i16.to_be_bytes());
+        layer_info.extend_from_slice(&ch_len.to_be_bytes());
+        layer_info.extend_from_slice(&(-1i16).to_be_bytes());
+        layer_info.extend_from_slice(&ch_len.to_be_bytes());
+        if has_mask {
+            layer_info.extend_from_slice(&(-2i16).to_be_bytes());
+            layer_info.extend_from_slice(&ch_len.to_be_bytes());
+        }
+
+        // Blend signature and key
+        layer_info.extend_from_slice(b"8BIM");
+        layer_info.extend_from_slice(&l.blend_mode.to_psd_key());
+        layer_info.push(l.opacity);
+        layer_info.push(0); // clipping
+        layer_info.push(if l.visible { 0 } else { 2 }); // flags
+        layer_info.push(0); // filler
+
+        // Extra data: mask_len + blend_ranges_len + Pascal string name
+        let name_bytes = l.name.as_bytes();
+        let name_len = name_bytes.len().min(255);
+        let total_name_bytes = 1 + name_len;
+        let pad = (4 - (total_name_bytes % 4)) % 4;
+        let extra_len = 4 + 4 + total_name_bytes + pad;
+
+        layer_info.extend_from_slice(&(extra_len as u32).to_be_bytes());
+        layer_info.extend_from_slice(&0u32.to_be_bytes()); // mask_len
+        layer_info.extend_from_slice(&0u32.to_be_bytes()); // blend_ranges_len
+        layer_info.push(name_len as u8);
+        layer_info.extend_from_slice(&name_bytes[..name_len]);
+        for _ in 0..pad {
+            layer_info.push(0);
+        }
+
+        // Channel image data (comp 0: Raw)
+        // Red
+        all_channel_data.extend_from_slice(&0u16.to_be_bytes());
+        for p in &r.pixels {
+            all_channel_data.push(((p >> 16) & 0xFF) as u8);
+        }
+        // Green
+        all_channel_data.extend_from_slice(&0u16.to_be_bytes());
+        for p in &r.pixels {
+            all_channel_data.push(((p >> 8) & 0xFF) as u8);
+        }
+        // Blue
+        all_channel_data.extend_from_slice(&0u16.to_be_bytes());
+        for p in &r.pixels {
+            all_channel_data.push((p & 0xFF) as u8);
+        }
+        // Alpha
+        all_channel_data.extend_from_slice(&0u16.to_be_bytes());
+        for p in &r.pixels {
+            all_channel_data.push(((p >> 24) & 0xFF) as u8);
+        }
+        // Mask
+        if has_mask {
+            all_channel_data.extend_from_slice(&0u16.to_be_bytes());
+            all_channel_data.extend_from_slice(r.mask.as_ref().unwrap());
+        }
+    }
+
+    layer_info.extend_from_slice(&all_channel_data);
+
+    let mut layer_section = Vec::new();
+    layer_section.extend_from_slice(&(layer_info.len() as u32).to_be_bytes());
+    layer_section.extend_from_slice(&layer_info);
+
+    out.extend_from_slice(&(layer_section.len() as u32).to_be_bytes());
+    out.extend_from_slice(&layer_section);
+
+    // 5. Composite Image Data Section (flattened preview)
+    let flat = doc.flatten()?;
+    out.extend_from_slice(&0u16.to_be_bytes()); // comp 0 (Raw)
+    for p in &flat.pixels {
+        out.push(((p >> 16) & 0xFF) as u8);
+    }
+    for p in &flat.pixels {
+        out.push(((p >> 8) & 0xFF) as u8);
+    }
+    for p in &flat.pixels {
+        out.push((p & 0xFF) as u8);
+    }
+    for p in &flat.pixels {
+        out.push(((p >> 24) & 0xFF) as u8);
+    }
+
+    Ok(out)
+}
+

@@ -684,10 +684,12 @@ impl Pane {
             self.say("\x1b[31mrun: too many panes are running programs in this window\x1b[0m (open a new window)\n");
             return;
         }
-        let _ = files::direct::relay::release_at(self.slot as usize);
         let words = args.join(&b' ');
         let n = String::from_utf8_lossy(cmd).into_owned();
-        match files::direct::relay::start_at(self.slot as usize, cmd, &words) {
+        // A general launch ticket is not permission to attach a terminal console: the
+        // relay's own answer (no grant, or a run still going) comes first.
+        let slot = self.slot as usize;
+        match files::direct::relay::release_at(slot).and_then(|_| files::direct::relay::start_at(slot, cmd, &words)) {
             Ok(()) => {
                 sex_pdx::serial_record!("[term.native.start] name={}", n);
                 self.job = Some(Job { name: n, runner: Runner::Native(Native { since: sex_pdx::get_ticks(), mode: 0, target: 0, interrupted_at: None, stopping: false }), line: Vec::new(), pending: Vec::new(), eof: false });

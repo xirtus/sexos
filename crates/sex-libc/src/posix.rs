@@ -12,8 +12,9 @@
 //! which is `/` here, its window for the terminal, its workers for threads. So a C
 //! program holds exactly what its BOOT row holds, like a Rust one.
 //!
-//! There is no process model (no fork, exec or process ids): a program is a run of
-//! its row, not a Unix process. `mmap` of a file is a library emulation (see below).
+//! There is no process model (no fork or exec): a program is a run of its row, not a
+//! Unix process. It can start other programs (posix_process.rs: `posix_spawn`,
+//! `waitpid`, `kill`, `system`), each a run of its own. `mmap` of a file is a library emulation (see below).
 //!
 //! The C types are musl's (x86-64), the headers the program compiles against.
 use crate::format::{self, Sink};
@@ -468,14 +469,7 @@ pub unsafe extern "C" fn tmpfile() -> *mut FILE {
     f
 }
 
-/// There is no shell and no other process to run: `system(NULL)` says so (0), and a
-/// command fails with ENOSYS.
-#[no_mangle]
-pub unsafe extern "C" fn system(command: *const c_char) -> c_int {
-    if command.is_null() { return 0; }
-    set_errno(crate::ENOSYS);
-    -1
-}
+// `system`, `posix_spawn`, `waitpid` and `kill`: posix_process.rs.
 
 /// Signals do not exist for a program (no other process can send one, and faults end
 /// the program). A handler is accepted and never called; the previous one is

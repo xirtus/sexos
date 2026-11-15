@@ -45,3 +45,7 @@ pub const IF_FALSE8: u8 = 236;
 pub const IF_TRUE8: u8 = 237;
 pub const GOTO8: u8 = 238;
 pub const GOTO16: u8 = 239;
+pub const GET_VAR_REF: u8 = 95;
+pub const GET_VAR_REF_CHECK: u8 = 102;
+pub const GET_VAR_REF0: u8 = 223;
+pub const GET_VAR_REF3: u8 = 226;

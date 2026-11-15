@@ -151,6 +151,7 @@ def main():
   target,task=start('run term')
   s=len(t());term_line('stdhello');g['wait'](r'\[term\.native\.refused\] name=stdhello status=11\n',s,60)
   assert '[files.console.attached]' not in t()[s:]
+  assert '[term.native.start]' not in t()[s:]
   s=len(t());q.key('f11');g['wait'](rf'\[app\.private\.retired\] target={target} task={task} ',s,120)
   assert 'KERNEL PANIC' not in t() and 'panicked' not in t() and '[term.fatal]' not in t()
  finally:g['stop']()
