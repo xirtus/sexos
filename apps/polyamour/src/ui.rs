@@ -233,6 +233,9 @@ pub struct UiState {
     pub drag_moved: bool,
     /// Text being typed into a field: (widget, text).
     pub editing: Option<(Id, String)>,
+    /// The editing text is "selected": the first typed character replaces
+    /// it, as Blender selects a number field's text when typing starts.
+    pub edit_select_all: bool,
     /// A menu a widget asked to open this frame; the app shows it.
     pub open_popup: Option<Popup>,
     /// Status-bar hint for what is under the pointer.
@@ -355,10 +358,41 @@ impl<'a> Ui<'a> {
     /// without dragging to type a value, Enter to accept, Esc to cancel.
     /// Returns true when the value changed this frame.
     pub fn number(&mut self, wid: Id, r: Rect, label: &str, value: &mut f32, step: f32, unit: &str) -> bool {
+        self.number_ex(wid, r, label, value, NumOpts { step, unit, ..NumOpts::default() })
+    }
+
+    /// [`Ui::number`] with limits, integer rounding and Blender's slider look
+    /// (a blue bar filled to the value, for 0..1 factors like Roughness).
+    pub fn number_ex(&mut self, wid: Id, r: Rect, label: &str, value: &mut f32, o: NumOpts<'_>) -> bool {
+        let before = *value;
+        let changed = self.number_raw(wid, r, label, value, &o);
+        if changed {
+            let mut v = value.clamp(o.min, o.max);
+            if o.int {
+                v = v.round();
+            }
+            *value = if v.is_finite() { v } else { before };
+        }
+        changed && *value != before
+    }
+
+    fn number_raw(&mut self, wid: Id, r: Rect, label: &str, value: &mut f32, o: &NumOpts<'_>) -> bool {
+        let (step, unit) = (o.step, o.unit);
         let hover = self.hovered(r);
         let editing = matches!(&self.st.editing, Some((e, _)) if *e == wid);
         let dragging = self.st.active == Some(wid);
-        self.p.round_rect(r, 4, if editing { t::BUTTON_DARK } else if dragging { t::SELECTED } else if hover { t::BUTTON_HOVER } else { t::BUTTON });
+        if o.slider && !editing {
+            self.p.round_rect(r, 4, if hover || dragging { t::BUTTON_DARK_HOVER } else { t::BUTTON_DARK });
+            let f = ((*value - o.min) / (o.max - o.min)).clamp(0.0, 1.0);
+            let fw = (r.w as f32 * f).round() as i32;
+            if fw > 0 {
+                self.p.push_clip(Rect::new(r.x, r.y, fw, r.h));
+                self.p.round_rect(r, 4, if hover || dragging { t::SELECTED_HOVER } else { t::SELECTED });
+                self.p.pop_clip();
+            }
+        } else {
+            self.p.round_rect(r, 4, if editing { t::BUTTON_DARK } else if dragging { t::SELECTED } else if hover { t::BUTTON_HOVER } else { t::BUTTON });
+        }
         let mut changed = false;
         if editing {
             let text = self.st.editing.as_ref().map(|e| e.1.clone()).unwrap_or_default();
@@ -376,17 +410,25 @@ impl<'a> Ui<'a> {
                     Key::Esc => self.st.editing = None,
                     Key::Backspace => {
                         if let Some(e) = &mut self.st.editing {
-                            e.1.pop();
+                            if self.st.edit_select_all {
+                                e.1.clear();
+                            } else {
+                                e.1.pop();
+                            }
                         }
                     }
                     _ => {
                         if let (Some(c), Some(e)) = (ch, &mut self.st.editing) {
                             if c.is_ascii_graphic() {
+                                if self.st.edit_select_all {
+                                    e.1.clear();
+                                }
                                 e.1.push(c);
                             }
                         }
                     }
                 }
+                self.st.edit_select_all = false;
             } else if let Some(Input::Down { x, y, .. }) = self.input {
                 if !r.contains(x, y) {
                     if let Some(v) = eval_number(&text) {
@@ -398,7 +440,7 @@ impl<'a> Ui<'a> {
             }
             return changed;
         }
-        let shown = format_number(*value, unit);
+        let shown = if o.int { format!("{}{}", value.round() as i64, if unit.is_empty() { String::new() } else { format!(" {unit}") }) } else { format_number(*value, unit) };
         if label.is_empty() {
             self.p.label(r.shrink(4), &shown, t::TEXT, Align::Center);
         } else {
@@ -420,7 +462,12 @@ impl<'a> Ui<'a> {
                     self.st.drag_moved = true;
                 }
                 if self.st.drag_moved {
-                    *value = self.st.drag_start_value + (dx as f32 / 10.0) * step;
+                    *value = if o.slider && o.max.is_finite() && o.min.is_finite() {
+                        // Sliders follow the pointer across their width.
+                        self.st.drag_start_value + dx as f32 / r.w.max(1) as f32 * (o.max - o.min)
+                    } else {
+                        self.st.drag_start_value + (dx as f32 / 10.0) * step
+                    };
                     changed = true;
                 }
             }
@@ -429,11 +476,22 @@ impl<'a> Ui<'a> {
                 self.st.active = None;
                 if !self.st.drag_moved {
                     self.st.editing = Some((wid, trim_number(*value)));
+                    self.st.edit_select_all = true;
                 }
             }
             _ => {}
         }
         changed
+    }
+
+    /// A colour swatch (linear RGB shown in sRGB, like Blender's colour
+    /// buttons). Returns true when clicked; the caller opens its picker.
+    pub fn swatch(&mut self, r: Rect, rgb: [f32; 3]) -> bool {
+        let enc = |c: f32| (sex_3d::render::srgb_encode(c.clamp(0.0, 1.0)) * 255.0).round() as u32;
+        let c = enc(rgb[0]) << 16 | enc(rgb[1]) << 8 | enc(rgb[2]);
+        self.p.round_rect(r, 4, c);
+        self.p.round_frame(r, 4, if self.hovered(r) { t::BUTTON_HOVER } else { 0x1d1d1d });
+        self.clicked(r)
     }
 
     /// Single-line text field. Returns true when Enter committed a change.
@@ -444,7 +502,9 @@ impl<'a> Ui<'a> {
         if !editing {
             self.p.label(Rect::new(r.x + 6, r.y, r.w - 12, r.h), value, t::TEXT, Align::Left);
             if self.clicked(r) {
+                // Blender enters text editing with everything selected.
                 self.st.editing = Some((wid, value.clone()));
+                self.st.edit_select_all = true;
             }
             return false;
         }
@@ -463,17 +523,25 @@ impl<'a> Ui<'a> {
                     Key::Esc => self.st.editing = None,
                     Key::Backspace => {
                         if let Some(e) = &mut self.st.editing {
-                            e.1.pop();
+                            if self.st.edit_select_all {
+                                e.1.clear();
+                            } else {
+                                e.1.pop();
+                            }
                         }
                     }
                     _ => {
                         if let (Some(c), Some(e)) = (ch, &mut self.st.editing) {
                             if !c.is_control() {
+                                if self.st.edit_select_all {
+                                    e.1.clear();
+                                }
                                 e.1.push(c);
                             }
                         }
                     }
                 }
+                self.st.edit_select_all = false;
             }
             Some(Input::Down { x, y, .. }) if !r.contains(x, y) => {
                 let changed = *value != text;
@@ -495,6 +563,26 @@ impl<'a> Ui<'a> {
             *open = !*open;
         }
         *open
+    }
+}
+
+/// Options for [`Ui::number_ex`].
+#[derive(Clone, Copy, Debug)]
+pub struct NumOpts<'u> {
+    /// Change per 10 px of dragging.
+    pub step: f32,
+    pub unit: &'u str,
+    pub min: f32,
+    pub max: f32,
+    /// Draw as a slider filled from `min` to the value.
+    pub slider: bool,
+    /// Whole numbers only.
+    pub int: bool,
+}
+
+impl Default for NumOpts<'static> {
+    fn default() -> Self {
+        NumOpts { step: 0.1, unit: "", min: f32::NEG_INFINITY, max: f32::INFINITY, slider: false, int: false }
     }
 }
 

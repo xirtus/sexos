@@ -79,6 +79,9 @@ pub struct Doc {
     pub anim: crate::anim::Anim,
     /// Report history, clipboard and editor mailbox (anim.rs).
     pub info: crate::anim::Info,
+    /// Render, output, unit and colour-management settings and per-object
+    /// flags the scene itself has no field for (Properties and Outliner).
+    pub settings: crate::settings::Settings,
 }
 
 impl Default for Doc {
@@ -111,6 +114,7 @@ impl Doc {
             texts: Vec::new(),
             anim: Default::default(),
             info: Default::default(),
+            settings: Default::default(),
         }
     }
 
