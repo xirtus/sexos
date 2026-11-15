@@ -56,7 +56,7 @@ SexOS is fundamentally different from Linux, macOS, or Windows:
 - **[sexshop (App Store)](apps/sexshop.md)**: Discovering, verifying, installing, upgrading, and rolling back signed software packages.
 - **[Mesh (System Overview)](apps/mesh.md)**: Real-time task manager, CPU/memory monitor, and interactive capability graph.
 - **[Vellum (PDF Reader)](apps/vellum.md)**: Document viewer with smooth zoom, text search, outline navigation, and form display.
-- **[Gaze (Image Viewer)](apps/gaze.md)**: High-speed viewer for PNG, JPEG, WebP, and animated GIF images.
+- **[Gaze (Image Viewer & Photo Library)](apps/gaze.md)**: High-speed viewer for PNG, JPEG, WebP, and animated GIF images with a persistent Photo Library, user Albums, faces-free Smart Search by date and offline-geocoded place, and non-destructive crop, exposure, and **Batik**-shared filter edits.
 - **[Abacus (Calculator)](apps/abacus.md)**: Exact rational math, scientific expressions, bitwise programmer tools, and base conversion.
 - **[Voyeur (Search & Launcher)](apps/voyeur.md)**: Universal spotlight search across programs, files, settings, math, and emoji.
 - **[Date (Calendar & Clock)](apps/date.md)**: Calendar management, iCalendar (`.ics`) scheduling, alarms, timers, and world clocks.

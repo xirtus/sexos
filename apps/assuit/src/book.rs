@@ -63,6 +63,19 @@ impl Book {
         Some(id)
     }
 
+    /// Selects the next place the text holds `what`, after the caret and wrapping round.
+    /// Returns (which match, counted from 1; how many there are).
+    pub fn find_next(&mut self, what: &str) -> Result<(usize, usize), String> {
+        let missing = || format!("\"{what}\" is not in the document");
+        let next = self.run("edit.findNext", json!({ "text": what })).map_err(|_| missing())?;
+        let count = next.get("count").and_then(Value::as_u64).unwrap_or(0) as usize;
+        if count == 0 { return Err(missing()); }
+        Ok((next.get("index").and_then(Value::as_u64).unwrap_or(0) as usize + 1, count))
+    }
+
+    /// Words in the body, as a word processor's status bar counts them.
+    pub fn words(&self) -> usize { self.text().split_whitespace().count() }
+
     pub fn dirty(&self) -> bool { self.session.dirty }
     pub fn text(&self) -> String { self.session.doc.plain_text(StoryRef::Body) }
     pub fn layout(&mut self) -> Arc<DocLayout> { self.session.layout() }
@@ -79,13 +92,23 @@ impl Book {
         Some(Caret { page: c.page, x: c.x, top: c.top, height: c.height })
     }
 
-    /// Puts the caret at (`x`, `y`) points on `page`, as a click does.
-    pub fn click(&mut self, page: usize, x: f32, y: f32) -> bool {
+    /// Puts the caret at (`x`, `y`) points on `page`, as a click does; with `extend`
+    /// (Shift+click) the selection runs from where it began to there.
+    pub fn click(&mut self, page: usize, x: f32, y: f32, extend: bool) -> bool {
         let Some(pos) = self.layout().hit(page, x, y, StoryRef::Body) else { return false };
-        self.session.sel = wordcraft_engine::Selection::caret(pos);
+        if extend { self.session.sel.focus = pos; } else { self.session.sel = wordcraft_engine::Selection::caret(pos); }
         self.session.goal_x = None;
         self.session.page_hint = page;
         true
+    }
+
+    /// The selection's highlight: (page, x, y, width, height) in page points, none for a caret.
+    pub fn selection_rects(&mut self) -> Vec<(usize, f32, f32, f32, f32)> {
+        let sel = self.session.sel.clone();
+        if sel.is_collapsed() { return Vec::new(); }
+        let hint = self.session.page_hint;
+        let layout = self.layout();
+        layout.selection_rects(&self.session.doc, &sel.anchor, &sel.focus, hint).into_iter().map(|(p, r)| (p, r.x, r.y, r.w, r.h)).collect()
     }
 
     /// Draws `page` at `scale` pixels per point.
@@ -180,9 +203,38 @@ mod tests {
     fn click_places_the_caret() {
         let mut book = welcome("click.docx");
         let before = book.caret().unwrap();
-        assert!(book.click(0, 300.0, 200.0));
+        assert!(book.click(0, 300.0, 200.0, false));
         let after = book.caret().unwrap();
         assert_ne!(before, after);
+    }
+
+    #[test]
+    fn selection_has_a_highlight() {
+        let mut book = welcome("select.docx");
+        assert!(book.selection_rects().is_empty());
+        book.key(&Chord { name: "End", ctrl: false, shift: true });
+        let rects = book.selection_rects();
+        assert_eq!(rects.len(), 1, "{rects:?}");
+        let (page, _, _, w, h) = rects[0];
+        assert_eq!(page, 0);
+        assert!(w > 50.0 && h > 10.0, "{rects:?}");
+        // Shift+click stretches it to a later line.
+        let caret = book.caret().unwrap();
+        assert!(book.click(0, 200.0, caret.top + 120.0, true));
+        assert!(book.selection_rects().len() > 1);
+        book.click(0, 200.0, caret.top, false);
+        assert!(book.selection_rects().is_empty());
+    }
+
+    #[test]
+    fn long_documents_flow_onto_more_pages() {
+        let mut book = welcome("long.docx");
+        book.key(&Chord { name: "End", ctrl: true, shift: false });
+        for i in 0..60 { book.type_text(&format!("Line {i} of a longer document")).unwrap(); book.key(&Chord { name: "Enter", ctrl: false, shift: false }); }
+        assert!(book.pages() >= 2, "{} pages", book.pages());
+        assert_eq!(book.caret().unwrap().page, book.pages() - 1);
+        let p = book.draw(1, 0.5).unwrap();
+        assert!(p.pixels.iter().filter(|px| **px != 0x00ffffff).count() > 500);
     }
 
     #[test]
@@ -210,4 +262,26 @@ mod tests {
         book.save().unwrap();
         assert!(Book::open(&path).unwrap().text().starts_with("Hello"));
     }
+
+    #[test]
+    fn find_selects_matches_and_copy_pastes() {
+        let mut book = welcome("find.docx");
+        let words = book.words();
+        assert!(words > 20, "{words}");
+        let (first, count) = book.find_next("Assuit").unwrap();
+        assert_eq!((first, count), (1, count));
+        assert!(count >= 2);
+        assert_eq!(book.selection_rects().len(), 1, "the match is selected");
+        let (second, _) = book.find_next("Assuit").unwrap();
+        assert_eq!(second, 2);
+        assert!(book.find_next("no such words here").is_err());
+        // The selected match copies and pastes at the end.
+        book.key(&Chord { name: "C", ctrl: true, shift: false });
+        book.key(&Chord { name: "End", ctrl: true, shift: false });
+        book.type_text(" ").unwrap();
+        book.key(&Chord { name: "V", ctrl: true, shift: false });
+        assert!(book.text().trim_end().ends_with("Assuit"), "{:?}", book.text().chars().rev().take(40).collect::<String>());
+        assert_eq!(book.words(), words + 1);
+    }
+
 }

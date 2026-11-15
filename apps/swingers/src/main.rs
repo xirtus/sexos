@@ -2,7 +2,7 @@
 //! Swingers, the SexOS BitTorrent client. This program does the I/O; the protocols are
 //! in `sex_torrent`, which never touches a socket or a file itself.
 //!
-//! `run +net swingers get MAGNET|FILE.torrent [--dir DIR] [--peer HOST:PORT]... [--seed-secs N] [--port P] [--anonymous]`
+//! `run +net swingers get MAGNET|FILE.torrent [--dir DIR] [--peer HOST:PORT]... [--seed-secs N] [--port P] [--anonymous] [--no-dht] [--dht-node HOST:PORT]...`
 //! downloads a torrent, checks every piece, writes the files and seeds for N seconds.
 //! `swingers create PATH --out FILE.torrent [--v1|--v2|--hybrid] [--tracker URL]` makes one.
 //!
@@ -43,8 +43,8 @@ pub fn random(out: &mut [u8]) {
 }
 
 fn usage() -> ! {
-    say("usage: swingers get MAGNET|FILE.torrent [--dir DIR] [--peer HOST:PORT]... [--seed-secs N] [--port P] [--anonymous]");
-    say("       swingers daemon [--dir DIR] [--port P] [--rpc PORT] [--user U --password P]");
+    say("usage: swingers get MAGNET|FILE.torrent [--dir DIR] [--peer HOST:PORT]... [--seed-secs N] [--port P] [--anonymous] [--no-dht] [--dht-node HOST:PORT]...");
+    say("       swingers daemon [--dir DIR] [--port P] [--rpc PORT] [--user U --password P] [--no-dht] [--dht-node HOST:PORT]...");
     say("       swingers create PATH --out FILE.torrent [--v1|--v2|--hybrid] [--tracker URL]");
     std::process::exit(2)
 }
@@ -59,6 +59,13 @@ fn main() {
     }
 }
 
+/// `HOST:PORT` from the command line, resolved; usage if it is not one.
+fn host_port(arg: Option<&String>) -> Vec<PeerAddr> {
+    let p = arg.unwrap_or_else(|| usage());
+    let (h, n) = p.rsplit_once(':').unwrap_or_else(|| usage());
+    resolve(h.trim_matches(|c| c == '[' || c == ']'), n.parse().unwrap_or_else(|_| usage()))
+}
+
 /// Resolves `HOST:PORT` (or `[v6]:PORT`) to peer addresses.
 pub fn resolve(host: &str, port: u16) -> Vec<PeerAddr> {
     use std::net::ToSocketAddrs;
@@ -67,18 +74,17 @@ pub fn resolve(host: &str, port: u16) -> Vec<PeerAddr> {
 
 fn get(args: &[String]) {
     let (mut source, mut dir, mut peers, mut seed_secs, mut port, mut anonymous) = (None, PathBuf::from("."), Vec::new(), 0u64, 6881u16, false);
+    let (mut dht, mut dht_nodes, mut routers) = (true, Vec::new(), true);
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--dir" => dir = PathBuf::from(it.next().unwrap_or_else(|| usage())),
-            "--peer" => {
-                let p = it.next().unwrap_or_else(|| usage());
-                let (h, n) = p.rsplit_once(':').unwrap_or_else(|| usage());
-                peers.extend(resolve(h.trim_matches(|c| c == '[' || c == ']'), n.parse().unwrap_or_else(|_| usage())));
-            }
+            "--peer" => peers.extend(host_port(it.next())),
             "--seed-secs" => seed_secs = it.next().and_then(|s| s.parse().ok()).unwrap_or_else(|| usage()),
             "--port" => port = it.next().and_then(|s| s.parse().ok()).unwrap_or_else(|| usage()),
             "--anonymous" => anonymous = true,
+            "--no-dht" => dht = false,
+            "--dht-node" => { dht_nodes.extend(host_port(it.next())); routers = false; }
             _ if source.is_none() => source = Some(a.clone()),
             _ => usage(),
         }
@@ -86,6 +92,7 @@ fn get(args: &[String]) {
     let source = source.unwrap_or_else(|| usage());
     let peer_id = PeerId::generate(anonymous, &mut |b: &mut [u8]| random(b));
     let mut client = net::Client::new(port, dir, peer_id, anonymous);
+    if dht { client.enable_dht(dht_nodes, routers); }
     if let Err(e) = client.add_source(&source, None, peers, None) { say(&format!("[swingers.failed] {e}")); std::process::exit(1) }
     client.run(Some(seed_secs));
 }
@@ -134,6 +141,7 @@ pub fn prepare(source: &str, bytes: Option<Vec<u8>>, peer_id: PeerId, port: u16,
 /// and the web UI at /swingers/.
 fn daemon(args: &[String]) {
     let (mut dir, mut port, mut rpc, mut user, mut password) = (PathBuf::from("."), 6881u16, 9091u16, String::new(), String::new());
+    let (mut dht, mut dht_nodes, mut routers) = (true, Vec::new(), true);
     let mut it = args.iter();
     while let Some(a) = it.next() {
         let mut val = || it.next().cloned().unwrap_or_else(|| usage());
@@ -143,11 +151,14 @@ fn daemon(args: &[String]) {
             "--rpc" => rpc = val().parse().unwrap_or_else(|_| usage()),
             "--user" => user = val(),
             "--password" => password = val(),
+            "--no-dht" => dht = false,
+            "--dht-node" => { let v = val(); dht_nodes.extend(host_port(Some(&v))); routers = false; }
             _ => usage(),
         }
     }
     let peer_id = PeerId::generate(false, &mut |b: &mut [u8]| random(b));
     let mut client = net::Client::new(port, dir, peer_id, false);
+    if dht { client.enable_dht(dht_nodes, routers); }
     if let Err(e) = client.listen_rpc(rpc, &user, &password) { say(&format!("[swingers.failed] rpc: {e}")); std::process::exit(1) }
     say(&format!("[swingers.rpc] listening on port {rpc}"));
     client.run(None);

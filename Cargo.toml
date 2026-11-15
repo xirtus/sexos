@@ -115,6 +115,7 @@ members = [
     "apps/spindle",
     "crates/sex-std",
     "apps/stdhello",
+    "apps/stdspawn",
     "apps/chello",
     "apps/stdnet",
     "apps/ssh",
@@ -146,6 +147,7 @@ members = [
     "crates/sex-rfb",
     "apps/lurk",
     "crates/gaze-codecs",
+    "crates/gaze-core",
     "crates/sex-codecs",
     "crates/vellum-edit",
     "crates/loom-core",
@@ -168,6 +170,7 @@ members = [
     "crates/sex-uvc",
     "servers/sexuvc",
     "apps/flash",
+    "apps/splicy",
 ]
 [workspace.package]
 license = "GPL-3.0-only"

@@ -1,0 +1,7 @@
+POST /transmission/rpc HTTP/1.1
+Host: 127.0.0.1:9091
+X-Transmission-Session-Id: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+Content-Type: application/json
+Content-Length: 24
+
+{"method":"session-get"}

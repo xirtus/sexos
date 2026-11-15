@@ -31,6 +31,10 @@ Uses `libfuzzer-sys` with AddressSanitizer (`-Zsanitizer=address`) and LLVM cove
 | `fuzz_kaleidoscope_ext_dnr` | `crates/sex-extensions`<br>`crates/sex-shields` | declarativeNetRequest ruleset conversion to Shields filters, filter option injection & cosmetic smuggling verification, Shields engine check/hidden/css/exceptions |
 | `fuzz_burlesque_pptx` | `crates/burlesque-core` | Burlesque OOXML PPTX deck import, structured slide/theme/notes XML, slide software rendering and dual-pane presenter view |
 | `fuzz_batik_psd` | `crates/batik-core` | Photoshop PSD multi-layer parser, raw/PackBits channel decoding, limits admission, canvas layer composition and flattening |
+| `fuzz_bt_gatt` | `crates/sex-bt`<br>`servers/cufflinks` | HCI command/event/ACL framing, EIR/AD reports, L2CAP fragmentation/reassembly & signaling, ATT (`CID_ATT`) PDU handling, SMP LE Secure Connections, SSP, Intel `.sfi`/`.ddc` & firmware pack parsers |
+| `fuzz_bt_hid_touch` | `crates/sex-hid-touch` | HID report descriptor parser, HID-over-I2C descriptors and framed input/feature reports, multi-touch contact decoding, gesture recognizer, and touchpad session state machine |
+| `fuzz_bt_hid_pointer` | `servers/sexusb/src/hid.rs` | HID boot/report-mode mouse, gaming pointer, and absolute tablet report descriptor parser, arbitrary-width bitfield extraction, and screen scaling |
+| `fuzz_swingers_rpc` | `crates/sex-torrent`<br>`apps/swingers` | Swingers Transmission HTTP/1.1 & chunked framing, Basic Auth, `Host` DNS-rebinding & CSRF checks, JSON/Base64 codecs, legacy RPC & JSON-RPC 2.0 `torrent-add`/`torrent-get`/`torrent-set`/`session-*` handlers |
 
 ## Usage
 

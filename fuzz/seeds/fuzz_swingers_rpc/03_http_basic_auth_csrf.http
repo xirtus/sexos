@@ -1,0 +1,7 @@
+€POST /transmission/rpc HTTP/1.1
+Host: [::1]:9091
+Authorization: Basic YWRtaW46c2VjcmV0
+X-Transmission-Session-Id: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+Content-Length: 26
+
+{"method":"session-stats"}

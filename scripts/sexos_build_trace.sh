@@ -86,6 +86,13 @@ run_stage() {
       # Ordinary programs (x86_64-sex-std.json) build the whole standard library.
       stage_std="$(rg -n '^build_std\s*=\s*"[^"]+"' "$stage" | sed -E 's/.*"([^"]+)".*/\1/' || true)"
       is_allowed_crate "$manifest" || { echo "[FAIL] manifest not in whitelist: $manifest"; exit 1; }
+      # Their std is the toolchain's with SexOS's std::process added (scripts/sex_std_source.py).
+      if [[ ${stage_target:-$TARGET} == x86_64-sex-std.json ]]; then
+        export __CARGO_TESTS_ONLY_SRC_ROOT
+        __CARGO_TESTS_ONLY_SRC_ROOT="$(python3 scripts/sex_std_source.py)"
+      else
+        unset __CARGO_TESTS_ONLY_SRC_ROOT
+      fi
       RUSTFLAGS="-C relocation-model=pic -C link-arg=-pie ${extra_rustflags:-}" cargo build --locked \
         -Z build-std="${stage_std:-core,compiler_builtins,alloc}" \
         -Z build-std-features=compiler-builtins-mem \

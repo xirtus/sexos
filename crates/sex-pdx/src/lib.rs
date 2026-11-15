@@ -1285,6 +1285,7 @@ pub mod device;
 pub mod usb_disk;
 pub mod usb_net;
 pub mod bt_hci;
+pub mod bt_bonds;
 pub mod network_config;
 
 pub mod desktop_style;
