@@ -849,6 +849,49 @@ impl Stroke {
         changed
     }
 
+    /// Put back everything the stroke changed so far, keeping the stroke
+    /// open (anchored and line strokes redo their dabs on every move).
+    /// Returns the vertices that moved back.
+    pub fn restore(&mut self, m: &mut Mesh, ss: &mut SculptSession) -> Vec<u32> {
+        if self.topology_changed {
+            if let Some(o) = &self.orig_mesh {
+                *m = o.clone();
+                ss.rebuild(m);
+                self.topology_changed = false;
+                self.touched = vec![false; m.positions.len()];
+                self.layer.clear();
+                self.rebuilt = true;
+                return (0..m.positions.len() as u32).collect();
+            }
+        }
+        let mut moved = Vec::new();
+        for (v, t) in self.touched.iter_mut().enumerate() {
+            if !*t {
+                continue;
+            }
+            *t = false;
+            if let Some(&o) = self.orig.get(v) {
+                if m.positions[v] != o {
+                    m.positions[v] = o;
+                    moved.push(v as u32);
+                }
+            }
+        }
+        if self.orig_mask.len() == m.mask.len() && !self.orig_mask.is_empty() {
+            m.mask.clone_from(&self.orig_mask);
+        }
+        if self.orig_sets.len() == m.face_sets.len() && !self.orig_sets.is_empty() {
+            m.face_sets.clone_from(&self.orig_sets);
+        }
+        self.layer.clear();
+        if !moved.is_empty() {
+            ss.pbvh.mark_verts(&moved);
+            ss.pbvh.refit(&m.positions);
+            ss.update_normals(m, &moved);
+        }
+        moved
+    }
+
     /// End the stroke: the undo record for scene mesh `mesh`.
     pub fn finish(self, m: &Mesh, mesh: usize) -> Vec<Change> {
         let mut out = Vec::new();
