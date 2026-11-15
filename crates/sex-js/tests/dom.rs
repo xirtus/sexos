@@ -1728,3 +1728,30 @@ fn element_matches_and_closest_test_only_the_element() {
     "#, "matches.js").unwrap();
     assert_eq!(logs(&mut s),["0:true false SECTION","0:true true","0:1","0:2"]);
 }
+
+#[test]
+fn svg_context_preserves_foreign_object_and_depth_bound() {
+    use sex_html::dom::{Dom, Kind};
+    use sex_js::{Page, op};
+    let mut dom = Dom::new();
+    let mut add = |parent, name: &str| dom.add(parent, Kind::Element { tag: name.into(), attrs: vec![] });
+    let svg = add(0, "svg");
+    let foreign = add(svg, "foreignObject");
+    let html_link = add(foreign, "a");
+    let nested = add(foreign, "svg");
+    let svg_link = add(nested, "a");
+    let mut parent = svg;
+    for _ in 0..63 { parent = add(parent, "g"); }
+    let at_bound = add(parent, "a");
+    let beyond_bound = add(at_bound, "a");
+    let mut doc = Document::new(dom, "http://example.test", (410, 330), clock);
+    let mut context = |id: usize| doc.call(op::SVG_CONTEXT, &[&id.to_string()]);
+    assert_eq!(context(html_link).as_deref(), Some("0"));
+    assert_eq!(context(svg_link).as_deref(), Some("1"));
+    assert_eq!(context(at_bound).as_deref(), Some("1"));
+    assert_eq!(context(beyond_bound).as_deref(), Some("0"));
+    doc.dom.detach(svg_link);
+    assert_eq!(doc.call(op::SVG_CONTEXT, &[&svg_link.to_string()]).as_deref(), Some("0"));
+    doc.dom.insert(svg, html_link, None);
+    assert_eq!(doc.call(op::SVG_CONTEXT, &[&html_link.to_string()]).as_deref(), Some("1"));
+}
