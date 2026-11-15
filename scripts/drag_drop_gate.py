@@ -48,7 +48,7 @@ def main():
   expect('mkdir 0gate',r'\[spindle.fs.result\] kind=3 status=0')
   for name,dest in [('files','/bin/loom'),('jot','/bin/jot'),('note.txt','0gate/note.txt')]:
    m=expect(f'fetch http://10.0.2.2:{PORT}/{name} {dest}',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',300);assert m[1].startswith('Saved'),m[1]
-  s=len(t());expect('loom /0gate',r'\[files.app.ready\] target=\d+ task=\d+ root=/0gate portal=0',120)
+  s=len(t());expect('files /0gate',r'\[files.app.ready\] target=\d+ task=\d+ root=/0gate portal=0',120)
   fa=g['wait'](launch,s,30);g['wait'](r'\[files.app.list\] dir=/0gate count=1\b',s,60)
   s=len(t());expect('run jot',r'\[jot.ready\] target=(\d+) task=(\d+)',120);jot=g['wait'](launch,s,30)
   time.sleep(3)
