@@ -390,3 +390,17 @@ mod shell {
  assert_eq!(queue.retire(browser.subject),CAPACITY/2);expected.retain(|entry|entry.destination!=browser);
  assert_eq!(drain(&mut queue),expected);
 }
+#[test] fn lost_mixer_answers_expire_but_prompt_ones_keep_their_order() {
+    use media_keys::{Ask, Asks, LOST_TICKS};
+    let mut a = Asks::new();
+    assert!(a.push(Ask::Tray) && a.push(Ask::Volume));
+    assert_eq!(a.expire(100), 0);
+    assert_eq!(a.expire(100 + LOST_TICKS - 1), 0);
+    assert_eq!(a.pop(), Some(Ask::Tray));
+    // An answer came: the wait for the next one starts again.
+    assert_eq!(a.expire(100 + LOST_TICKS + 5), 0);
+    assert_eq!(a.expire(100 + 2 * LOST_TICKS + 4), 0);
+    assert_eq!(a.expire(100 + 2 * LOST_TICKS + 5), 1);
+    assert!(!a.pending() && a.pop().is_none());
+    assert_eq!(a.expire(1_000_000), 0);
+}

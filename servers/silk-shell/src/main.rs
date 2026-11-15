@@ -10974,6 +10974,24 @@ static mut TRAY_REFRESHED: Option<u64> = None;
 /// one undelivered reply per PD, so Bell and sexnet are asked one after the other.
 static mut TRAY_WIFI_ASKED: Option<u64> = None;
 static mut TRAY_WIFI_DUE: bool = false;
+/// A volume or mute click made while another answer was owed to Shell: sent once that
+/// answer is in. The kernel keeps one unread reply per domain, so a second answer
+/// arriving before Shell reads the first is lost (and the tray would show the old state).
+static mut TRAY_OWED_VOLUME: Option<u8> = None;
+static mut TRAY_OWED_MUTE: bool = false;
+/// Whether an answer from Bell or sexnet may still be on its way to Shell.
+unsafe fn tray_answer_owed() -> bool {
+    MEDIA_ASKS.pending() || TRAY_WIFI_ASKED.is_some_and(|t| sex_pdx::get_ticks().saturating_sub(t) < 5_000)
+}
+/// Sends a waiting volume or mute click once nothing else is owed.
+unsafe fn tray_send_owed() {
+    if tray_answer_owed() { return; }
+    let (action, a) = if let Some(v) = TRAY_OWED_VOLUME.take() { (sex_pdx::sound_mixer::SET_MASTER, v as u64) }
+        else if core::mem::take(&mut TRAY_OWED_MUTE) { (sex_pdx::sound_mixer::MUTE_MASTER, 2) }
+        else { return };
+    if pdx_call(SLOT_BELL, sex_pdx::sound_mixer::OP_MIXER, action, a, 0).0 == 0 { MEDIA_ASKS.push(media_keys::Ask::Tray); }
+    sex_pdx::serial_record!("[shell.tray.owed.sent] action={} arg={}", action, a);
+}
 /// sexnet's PD, which answers Wi-Fi state.
 const TRAY_SEXNET_PD: u32 = 13;
 unsafe fn tray_publish() {
@@ -11002,15 +11020,22 @@ unsafe fn tray_ask_wifi() {
 }
 /// Every 30 s, and every 2 s while a tray menu shows.
 unsafe fn tray_tick() {
+    let lost = MEDIA_ASKS.expire(sex_pdx::get_ticks());
+    if lost != 0 { sex_pdx::serial_record!("[shell.media.lost] asks={}", lost); }
     // The first look waits for boot to settle (Bell, sexnet and the bar up).
     if TRAY_REFRESHED.is_none() && sex_pdx::get_ticks() < 8_000 { return; }
+    tray_send_owed();
     let every = if TRAY_VIEW.menu == sex_pdx::tray::Menu::None { 30_000 } else { 2_000 };
     if TRAY_REFRESHED.map_or(true, |t| sex_pdx::get_ticks().saturating_sub(t) >= every) { tray_refresh(); }
 }
 unsafe fn tray_volume(word: u64) {
     use sex_pdx::sound_mixer as mixer;
-    TRAY.volume = mixer::state_volume(word).min(100); TRAY.muted = mixer::state_muted(word); TRAY.sound = true;
+    // A click still waiting to go to Bell keeps what it shows.
+    if TRAY_OWED_VOLUME.is_none() { TRAY.volume = mixer::state_volume(word).min(100); }
+    if !TRAY_OWED_MUTE { TRAY.muted = mixer::state_muted(word); }
+    TRAY.sound = true;
     tray_publish();
+    tray_send_owed();
     tray_ask_wifi();
 }
 unsafe fn tray_receive(msg: &sex_pdx::PdxMessage) -> bool {
@@ -11018,6 +11043,7 @@ unsafe fn tray_receive(msg: &sex_pdx::PdxMessage) -> bool {
     TRAY_WIFI_ASKED = None;
     TRAY.wifi = sex_pdx::wifi_status::State::of(msg.arg0).phase;
     tray_publish();
+    tray_send_owed();
     true
 }
 /// Opens (or closes) a tray menu on its OS panel surface, closing the other one.
@@ -11068,7 +11094,9 @@ unsafe fn tray_click(px: i32, py: i32) {
             if let Some((action, a)) = ask {
                 // Show the choice at once; Bell's answer confirms it.
                 if action == mixer::SET_MASTER { TRAY.volume = a as u8; } else { TRAY.muted = !TRAY.muted; }
-                if pdx_call(SLOT_BELL, mixer::OP_MIXER, action, a, 0).0 == 0 { MEDIA_ASKS.push(media_keys::Ask::Tray); }
+                // The latest volume wins; two mute clicks while waiting undo each other.
+                if action == mixer::SET_MASTER { TRAY_OWED_VOLUME = Some(a as u8); } else { TRAY_OWED_MUTE = !TRAY_OWED_MUTE; }
+                tray_send_owed();
                 tray_publish();
             }
         }
@@ -11122,6 +11150,7 @@ unsafe fn media_keys_receive(msg:&sex_pdx::PdxMessage)->bool{
         Some(media_keys::Ask::Restore) if !media_keys::refused(word)=>{}
         ask=>sex_pdx::serial_record!("[shell.media.refused] ask={:?}",ask),
     }
+    tray_send_owed();
     true
 }
 
