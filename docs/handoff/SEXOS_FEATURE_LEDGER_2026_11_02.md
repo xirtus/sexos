@@ -4963,3 +4963,35 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   CANONICAL_HELPER_FOUNDATION_RUNTIME_V9_2026_11_15.json. This normal boot qualifies
   the foundation pipeline; it does not transfer earlier plugin runtime proofs to
   this new image or claim final GUI/hostile-role/live-insert acceptance.
+
+## ChatGPT round 196: actual offline Instruments controls (2026-11-15)
+
+- App `8d46f7564` with runner `5bb5f0d4a` passes the actual Instruments UI gate on
+  the frozen v9 normal image. Real Files pickers select audio, module and output
+  folder. CLAP swaps asymmetric stereo, a real invalid-opcode child crash leaves
+  Moan usable, cancellation preserves the project, recovery adds another region,
+  and VST3 default unity verifies format/UI plumbing. Parameterized non-bypass
+  VST3 processing remains separately qualified by the native helper gate.
+- Six exact visible-label/model/RGB screenshots pass. Undo/Redo restores editable
+  imports. Saved four-track project is 768,328 B; an independent archive parser
+  compares every PCM sample, including the untouched original and channel swaps.
+  Children reuse one domain with distinct exact tasks. All raw result/artifact,
+  source, ELF, disk, project and screenshot digests are recorded separately in
+  MOAN_OFFLINE_UI_RUNTIME_2026_11_15.json. No hostile authority/live insert claim.
+- Preserved preflight failure found missing staged helper; reused the exact v9
+  binary only after independently matching 184 helper/SDK/vendor sources. A real
+  failed run waited for aggregate import telemetry not emitted by Import; the
+  runner now explicitly requests that state and keeps the original assertion.
+  The next run exercised all processing paths but failed on three cursor pixels
+  overlapping the status strip. All 64 failed captures remain; moving the actual
+  pointer outside app pixels fixes it without cropping/relaxing the RGB oracle.
+- Review also reproduced post-saturation master attenuation: two 24,000-sample
+  tracks at 50% yielded 16,383. The fix applies gain to the wide bus before its
+  final clamp, preserving unity and per-track taps. Both polarities and the
+  independent counterexample pass. All 101 integrated Rust tests pass. Playback
+  now permits level/pan/M/S/master changes for future blocks with one bounded undo
+  checkpoint; source edits remain locked. The existing queue/card delay remains.
+- Shared restricted transcript/journal/provider ACK machinery is independently
+  reviewed and host tested; actual server hooks and immutable file jobs remain in
+  progress. No kernel edits beyond the approved logging exception; author fixes
+  remain separate. JIT object/string inline caches follow the Moan milestone.
