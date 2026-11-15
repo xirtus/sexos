@@ -148,3 +148,43 @@ MIDI notes, using one BPM-derived rational frame mapping, velocity and gate.
 It is not Live Loops/scene launch. It needs independent captured onset timing,
 save/reboot proof and new source-bound screenshots. Existing v3 screenshots must
 not be relabelled to later Step Sequencer, mixer, Stop or plugin sources.
+
+
+## Second actual slice: Step Sequencer and prompt Stop
+
+The Step Sequencer edits the same source notes as Piano Roll; project selection,
+transport and compact undo remain shared. Sixteen eighth-note steps cover two 4/4
+bars. One direct rational helper computes each position as
+`floor(48000 × 30 × step / BPM)`; no accumulated per-step truncation. The host 137 BPM
+case explicitly catches accumulated rounding. The displayed BPM is the persisted
+pattern tempo, with no unimplemented tempo knob. Cells beyond a shorter region
+are disabled; the existing 128-note/32-voice limits remain enforced before baking.
+Velocity controls only newly inserted notes; Set gate is an explicit operation on
+existing notes. Ctrl+Shift+V still intentionally halves all existing note velocities.
+
+`target/step-proof-v2/result.json` passes the real 1280×800 editor, captured onsets
+at 0.25/0.75/1.75/3.25 seconds, actual 0.188/0.188/0.188/0.125-second gates and
+C4 pitch/half-velocity energy. A 768,186-byte project independently preserves exact
+start/length/key/velocity values, then reopens cold. With 64,512 frames prefilled,
+Stop is acknowledged at recorded frame 26,613; the last energetic sample is 44,994
+(0.383s later), with 47,104 total captured frames. The checker rejects an expired
+probe or playback of the whole queued prebuffer, and allows only the existing
+bounded hardware tail. This is QEMU evidence, not a physical latency claim.
+
+The identical app ELF also passes actual 640×480 /624×410-client pointer editing,
+controls and recorded onset/gate/velocity checks in `step-proof-narrow-v1`. That is
+one narrow boot, not a second cold-reopen or Stop qualification. Its separately
+named development ISO grafts only the Limine resolution; all 83 extracted production
+ELFs are byte-identical to the source c84 ISO. Replayed boot metadata changes only
+LBA references, individually checked against their actual BIOS/UEFI payloads.
+The embedded installer boot image is unchanged and explicitly not qualified.
+`MOAN_STEP_RUNTIME_2026_11_15.json` records all exact digests and both runner revisions.
+
+71 Moan/core tests and five independent onset/Stop-oracle regressions pass. The
+original Step v1 failure is preserved: the gate wrongly invoked the all-notes
+velocity command instead of the next-note slider, and the unchanged energy oracle
+correctly rejected it. The corrected action has a real native Weft regression.
+
+Instrument recipe algorithms are fixed by project version 2. A future DSP change
+must preserve the v2 renderer or add an explicit versioned recipe migration; it
+must not reclassify valid older projects as corruption because a new bake differs.

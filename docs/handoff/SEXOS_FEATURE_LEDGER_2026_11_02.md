@@ -4810,3 +4810,20 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   limitations are in `MOAN_WORKSTATION_PARITY_2026_11_14.md`. References are not
   claims of full Audacity/Logic/Ableton/ArtCraft SoundCraft parity. Offline external
   plugins remain a separately owned boundary, not live insert hosting.
+
+
+### Round 192 follow-up: real Step Sequencer and bounded Stop
+
+- Shared-project 16-step eighth-note editor with real pitch rows, next-note
+  velocity/gate, explicit Set gate, consumed-frame playhead and persisted notes.
+  One rational BPM clock; no scene launch or decorative tempo controls.
+- 71 host and five onset/Stop checker tests pass. Actual 1280×800 two-boot gate
+  verifies nonuniform onset timing, note gates, C4 pitch/velocity energy and exact
+  four-note 768,186 B project persistence. Verified 64,512-frame prefill is cancelled:
+  last energetic output 0.383s after Stop ACK, within the existing card-tail bound.
+- Identical ELF passes actual 640×480 editor/hit areas and audible timing using a
+  distinct config-derived development ISO. All 83 extracted production ELFs match;
+  boot replay LBA metadata is verified. No canonical/installer qualification claim.
+- Exact source, runner, private-disk/program-store, WAV, project, screenshot and
+  ISO/config digests are in `MOAN_STEP_RUNTIME_2026_11_15.json`. The first Step gate's
+  incorrect all-notes velocity action remains preserved as an identified failure.
