@@ -23,9 +23,9 @@ sexfs={path="''' + str(ROOT / 'crates/sexfs') + '''"}
 [workspace]
 ''')
             code = 'extern crate self as sex_pdx;\n'
-            for module, path in [('restricted_helper','crates/sex-pdx/src/restricted_helper.rs'), ('restricted_job','servers/sexfiles/src/restricted_job.rs'), ('storage','servers/sexfiles/src/restricted_storage.rs'), ('restricted_jobs','servers/sexfiles/src/restricted_jobs.rs'), ('wire','crates/sex-pdx/src/restricted_job.rs'), ('native_io','servers/sexfiles/src/restricted_io.rs'), ('restricted_control','servers/sexfiles/src/restricted_control.rs'), ('restricted_load','servers/sexfiles/src/restricted_load.rs'), ('restricted_data','servers/sexfiles/src/restricted_data.rs')]:
-                if module in ('native_io', 'restricted_load', 'restricted_data'):
-                    io = (ROOT / path).read_text().replace('restricted_job as wire', 'restricted_job_wire as wire').replace('program_store as store', 'program_store_wire as store').replace('sex_pdx::restricted_job::','sex_pdx::restricted_job_wire::')
+            for module, path in [('restricted_helper','crates/sex-pdx/src/restricted_helper.rs'), ('restricted_job','servers/sexfiles/src/restricted_job.rs'), ('storage','servers/sexfiles/src/restricted_storage.rs'), ('restricted_jobs','servers/sexfiles/src/restricted_jobs.rs'), ('wire','crates/sex-pdx/src/restricted_job.rs'), ('native_io','servers/sexfiles/src/restricted_io.rs'), ('restricted_control','servers/sexfiles/src/restricted_control.rs'), ('restricted_load','servers/sexfiles/src/restricted_load.rs'), ('restricted_data','servers/sexfiles/src/restricted_data.rs'), ('bootstrap','apps/moanplug/src/bootstrap.rs')]:
+                if module in ('native_io', 'restricted_load', 'restricted_data', 'bootstrap'):
+                    io = (ROOT / path).read_text().replace('restricted_job as wire', 'restricted_job_wire as wire').replace('program_store as store', 'program_store_wire as store').replace('sex_pdx::restricted_job::','sex_pdx::restricted_job_wire::').replace('restricted_job::Info','restricted_job_wire::Info')
                     code += 'mod ' + module + ' {\n' + io.replace('//!', '//') + '\n}\n'
                 else:
                     code += '#[path="' + str(ROOT / path) + '"] mod ' + module + ';\n'
@@ -37,11 +37,8 @@ mod app_catalog{
  pub const SPINDLE_TARGETS:[u32;0]=[];pub const INCARNATIONS:[Row;2]=[Row{app:App::Program,target:42},Row{app:App::Program,target:43}];
 }
 #[path="SDK_FS_PATH"]mod fs;
-mod memory_region{
- pub const QUERY_VIEW:u64=1;pub const READ:u64=2;pub const WRITE:u64=4;
- pub struct Info{pub peer_pd:Option<u32>,pub region_id:u32,pub length:u64,pub rights:u64}
- pub struct View{pub region_id:u32,pub length:u64,pub virtual_address:u64}
-}
+#[path="MEMORY_REGION_PATH"]mod memory_region_actual;
+mod memory_region{pub use super::memory_region_actual::*;pub type Info=MemoryRegionInfo;pub type View=RegionView;}
 use core::sync::atomic::{AtomicBool,AtomicU32,AtomicU64,Ordering};
 static TASK:AtomicU32=AtomicU32::new(99);static EPOCH:AtomicU64=AtomicU64::new(1);static NOW:AtomicU64=AtomicU64::new(100);static FULL:AtomicBool=AtomicBool::new(true);static LAST:AtomicU64=AtomicU64::new(0);static SENDS:AtomicU32=AtomicU32::new(0);
 #[repr(align(4096))]struct Region([u8;256*1024]);static mut REGION:Region=Region([0;256*1024]);static mut REGION_CHILD:Region=Region([0;256*1024]);static CHILD_TASK:AtomicU32=AtomicU32::new(0);static JOB_LIVE:AtomicBool=AtomicBool::new(false);static SCRUBS:AtomicU32=AtomicU32::new(0);
@@ -50,7 +47,7 @@ fn civil_time_ms()->Option<u64>{Some(1000)}
 fn get_ticks()->u64{NOW.load(Ordering::SeqCst)}
 fn pdx_reply(_:u32,word:u64)->u64{if FULL.load(Ordering::SeqCst){return 1}LAST.store(word,Ordering::SeqCst);SENDS.fetch_add(1,Ordering::SeqCst);0}
 fn memory_region_info(slot:u64)->Result<memory_region::Info,()>{let image=slot==100;let child=slot==fs::PROVIDER_SLOT_BASE+1;Ok(memory_region::Info{peer_pd:if image{None}else{Some(if child{43}else{42})},region_id:if image{0x4000}else{fs::REGION_ID_BASE+child as u32},length:if image{32*1024*1024}else{fs::REGION_BYTES as u64},rights:7})}
-fn memory_region_view(slot:u64,_:u64,_:u64,_:u64)->Result<memory_region::View,()>{let info=memory_region_info(slot)?;Ok(memory_region::View{region_id:info.region_id,length:info.length,virtual_address:if info.peer_pd==Some(43){core::ptr::addr_of_mut!(REGION_CHILD) as u64}else{core::ptr::addr_of_mut!(REGION) as u64}})}
+fn memory_region_view(slot:u64,_:u64,_:u64,_:u8)->Result<memory_region::View,()>{let info=memory_region_info(slot)?;Ok(memory_region::View{region_id:info.region_id,length:info.length,virtual_address:if info.peer_pd==Some(43){core::ptr::addr_of_mut!(REGION_CHILD) as u64}else{core::ptr::addr_of_mut!(REGION) as u64},dma_address:None})}
 #[path="PROGRAM_STORE_PATH"]mod program_store_wire;
 mod program_store{pub fn load_unbound(_:[u64;2])->u64{super::program_store_wire::loaded(4)}}
 mod restricted_image{
@@ -82,6 +79,16 @@ pub fn request()->Vec<u8>{let mut b=Vec::new();b.extend_from_slice(b"MOANREQ1");
 pub fn setup()->Fs<'static,Disk>{let mut fs=fs();fs.mkdir(b"/renders",0).unwrap();let p=fs.create(b"/plugin",0).unwrap();fs.write(p,0,b"original-plugin",0).unwrap();let i=fs.create(b"/input",0).unwrap();fs.write(i,0,&request(),0).unwrap();fs.commit().unwrap();fs}
 fn capture(fs:&mut Fs<'static,Disk>)->(storage::Storage,Job){storage::Storage::capture(fs,[b"@/plugin",b"@/input",b"@/renders/output"],[b"/plugin",b"/input",b"/renders/output"],7,Subject{pd:42,task:99},9,[1;16]).unwrap()}
 fn ready(job:&mut Job)->Vec<u8>{let words=|h:[u8;32]|core::array::from_fn(|i|u64::from_le_bytes(h[i*8..i*8+8].try_into().unwrap()));let child=Subject{pd:43,task:100};let b=Binding{generation:1,coordinator_epoch:1,provider_epoch:1,previous:child,child,parent:Subject{pd:42,task:99},cookie:9,nonce:[0x0101010101010101;2],plugin_hash:words(job.plugin_hash()),input_hash:words(job.input_hash()),ticket:7};job.bind(b).unwrap();assert_eq!(job.read(child,b,true,Blob::Plugin,0,99).unwrap(),b"original-plugin");job.create(child,b,true,Blob::Output).unwrap();let mut output=request();output[..8].copy_from_slice(b"MOANPCM1");job.write(child,b,true,Blob::Output,0,output.len(),|i|output[i]).unwrap();job.seal(child,b,true).unwrap();output}
+#[test]fn trusted_bootstrap_clears_whole_owned_pages_and_rejects_epoch_or_shape_substitution(){
+ #[repr(align(4096))]struct Pages([u64;2048]);let mut pages=Box::new(Pages([0xfeed;2048]));let base=pages.0.as_mut_ptr()as u64+4096;
+ let meta=memory_region::MemoryRegionInfo{region_id:0x3001,length:8192,rights:7,peer_pd:Some(1)};let view=memory_region::RegionView{region_id:0x3001,length:8192,virtual_address:base,dma_address:None};
+ assert!(bootstrap::shape(meta,view,0x3001,true));assert!(!bootstrap::shape(memory_region::MemoryRegionInfo{peer_pd:Some(42),..meta},view,0x3001,true));assert!(!bootstrap::shape(meta,memory_region::RegionView{length:4096,..view},0x3001,true));assert!(!bootstrap::shape(meta,memory_region::RegionView{virtual_address:base+1,..view},0x3001,true));
+ unsafe{bootstrap::erase(view)};assert!(pages.0[..512].iter().all(|v|*v==0xfeed));assert!(pages.0[512..1536].iter().all(|v|*v==0));assert!(pages.0[1536..].iter().all(|v|*v==0xfeed));
+ let pixel=memory_region::MemoryRegionInfo{region_id:0x4201,length:8*1024*1024,..meta};let pv=memory_region::RegionView{region_id:0x4201,length:pixel.length,..view};assert!(bootstrap::shape(pixel,pv,0x4201,false));assert!(!bootstrap::shape(pixel,memory_region::RegionView{length:4*1024*1024,..pv},0x4201,false));
+ let mut fs=setup();let mut jobs=restricted_jobs::Jobs::new();let owner=Subject{pd:42,task:99};let id=jobs.prepare(1,0,0,|id|storage::Storage::capture(&mut fs,[b"@/plugin",b"@/input",b"@/renders/output"],[b"/plugin",b"/input",b"/renders/output"],id,owner,9,[1;16])).unwrap();let e=jobs.get(id).unwrap();assert!(wire::Info::decode(&e.info(false).unwrap()).unwrap().child.is_none());
+ let scope=restricted_runtime::staging().unwrap();let child=Subject{pd:43,task:100};e.claim(owner,9,0,1).unwrap();e.bind(Binding{ticket:id as u64,child,..scope},0,1).unwrap();let data=e.info(false).unwrap();let info=wire::Info::decode(&data).unwrap();assert!(bootstrap::scope(info,child,1,2));assert!(!bootstrap::scope(info,Subject{task:101,..child},1,2));assert!(!bootstrap::scope(info,child,2,2));assert!(!bootstrap::scope(info,child,1,3));
+ let mut wrong=data;wrong[168..176].fill(0);assert!(wire::Info::decode(&wrong).is_none());let ack=0xd4<<56|(id as u64)<<32|7;assert!(bootstrap::receipt(1,3,3,ack,info));assert!(!bootstrap::receipt(1,3,4,ack,info));assert!(!bootstrap::receipt(1,42,3,ack,info));assert!(!bootstrap::receipt(1,3,3,ack+1,info));
+}
 #[test]fn copy_fence_requires_exact_scope_and_successful_receipt_admission(){
  let scope=Binding{generation:7,coordinator_epoch:2,provider_epoch:1,previous:Subject{pd:43,task:43},child:Subject{pd:0,task:0},parent:Subject{pd:42,task:99},cookie:9,nonce:[0x0101010101010101;2],plugin_hash:[1;4],input_hash:[2;4],ticket:0};
  let lease=restricted_image::Lease{serial:11,shell_epoch:2,files_epoch:1,parent:42,parent_task:99,cookie:9,nonce:[1;16]};let mut l=restricted_load::Load::new(7,scope,lease,100,0).unwrap();
@@ -167,6 +174,7 @@ fn ready(job:&mut Job)->Vec<u8>{let words=|h:[u8;32]|core::array::from_fn(|i|u64
 }
 }
 '''
+            code = code.replace('MEMORY_REGION_PATH', str(ROOT / 'crates/sex-pdx/src/memory_region.rs'))
             code = code.replace('PROGRAM_STORE_PATH', str(ROOT / 'crates/sex-pdx/src/program_store.rs'))
             code = code.replace('SDK_FS_PATH', str(ROOT / 'crates/sex-pdx/src/fs.rs'))
             code = code.replace('->Result<(),()>', '->core::result::Result<(),()>')

@@ -67,6 +67,7 @@ impl Entry {
         if let Some(b) = self.association {
             out[144..152].copy_from_slice(&b.child.word().to_le_bytes());
             out[152..160].copy_from_slice(&b.generation.to_le_bytes());
+            out[168..176].copy_from_slice(&b.coordinator_epoch.to_le_bytes());
         }
         out[160..164].copy_from_slice(&(self.format as u32).to_le_bytes());
         out[164..168].copy_from_slice(&self.job.cookie().to_le_bytes());

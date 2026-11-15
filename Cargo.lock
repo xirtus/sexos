@@ -3092,6 +3092,7 @@ dependencies = [
  "moan-plugin",
  "sex-app",
  "sex-pdx",
+ "sha2 0.10.9",
 ]
 
 [[package]]
