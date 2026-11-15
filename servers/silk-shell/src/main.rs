@@ -11073,6 +11073,7 @@ pub unsafe fn media_streaming_ask()->bool{
 }
 /// The volume from settings to Bell; false if Bell did not take the request.
 pub unsafe fn volume_restore(volume:u8)->bool{
+    if net_time_owed()||TRAY_WIFI_ASKED.is_some_and(|t| sex_pdx::get_ticks().saturating_sub(t) < 5_000){return false}
     let (status,_)=pdx_call(SLOT_BELL,sex_pdx::sound_mixer::OP_MIXER,sex_pdx::sound_mixer::SET_MASTER,volume.min(100) as u64,0);
     status==0&&MEDIA_ASKS.push(media_keys::Ask::Restore)
 }
@@ -11104,7 +11105,20 @@ static mut TRAY_OWED_VOLUME: Option<u8> = None;
 static mut TRAY_OWED_MUTE: bool = false;
 /// Whether an answer from Bell or sexnet may still be on its way to Shell.
 unsafe fn tray_answer_owed() -> bool {
-    MEDIA_ASKS.pending() || TRAY_WIFI_ASKED.is_some_and(|t| sex_pdx::get_ticks().saturating_sub(t) < 5_000)
+    MEDIA_ASKS.pending() || TRAY_WIFI_ASKED.is_some_and(|t| sex_pdx::get_ticks().saturating_sub(t) < 5_000) || net_time_owed()
+}
+/// sexnet still owes the answer to network time on/off (`config_watch`).
+pub static mut NET_TIME_ASKED: Option<u64> = None;
+pub unsafe fn net_time_owed() -> bool { NET_TIME_ASKED.is_some_and(|t| sex_pdx::get_ticks().saturating_sub(t) < 5_000) }
+/// The kernel keeps one unread answer for Shell: Bell's and sexnet's must not overlap.
+pub unsafe fn answer_owed() -> bool { tray_answer_owed() }
+/// sexnet's answer to network time on/off.
+unsafe fn net_time_receive(msg: &sex_pdx::PdxMessage) -> bool {
+    if msg.type_id != 1 || NET_TIME_ASKED.is_none() || msg.caller_pd != TRAY_SEXNET_PD || msg.arg0 >> 56 == sex_pdx::wifi_status::TAG >> 56 { return false; }
+    NET_TIME_ASKED = None;
+    sex_pdx::serial_record!("[shell.network_time.answer] ok={}", (msg.arg0 == sex_pdx::network_time::OK) as u8);
+    tray_send_owed();
+    true
 }
 /// Sends a waiting volume or mute click once nothing else is owed.
 unsafe fn tray_send_owed() {
@@ -11136,7 +11150,7 @@ unsafe fn tray_refresh() {
 }
 unsafe fn tray_ask_wifi() {
     let now = sex_pdx::get_ticks();
-    if !TRAY_WIFI_DUE || MEDIA_ASKS.pending() || TRAY_WIFI_ASKED.is_some_and(|t| now.saturating_sub(t) < 5_000) { return; }
+    if !TRAY_WIFI_DUE || MEDIA_ASKS.pending() || net_time_owed() || TRAY_WIFI_ASKED.is_some_and(|t| now.saturating_sub(t) < 5_000) { return; }
     TRAY_WIFI_DUE = false;
     let status = pdx_call(sex_pdx::SLOT_NET, sex_pdx::wifi_status::OP, sex_pdx::wifi_status::STATE, 0, 0).0;
     TRAY_WIFI_ASKED = (status == 0).then_some(now);
@@ -11145,6 +11159,13 @@ unsafe fn tray_ask_wifi() {
 unsafe fn tray_tick() {
     let lost = MEDIA_ASKS.expire(sex_pdx::get_ticks());
     if lost != 0 { sex_pdx::serial_record!("[shell.media.lost] asks={}", lost); }
+    // Another answer filled Shell's one reply slot and sexnet's was dropped: ask again
+    // now rather than at the next 30 s look.
+    if TRAY_WIFI_ASKED.is_some_and(|t| sex_pdx::get_ticks().saturating_sub(t) >= 5_000) {
+        TRAY_WIFI_ASKED = None; TRAY_WIFI_DUE = true;
+        sex_pdx::serial_record!("[shell.tray.wifi.lost]");
+        tray_ask_wifi();
+    }
     // The first look waits for boot to settle (Bell, sexnet and the bar up).
     if TRAY_REFRESHED.is_none() && sex_pdx::get_ticks() < 8_000 { return; }
     tray_send_owed();
@@ -26925,6 +26946,7 @@ pub extern "C" fn _start() -> ! {
             if notification_receive(&msg) { continue; }
             if media_keys_receive(&msg) { continue; }
             if tray_receive(&msg) { continue; }
+            if net_time_receive(&msg) { continue; }
             if spindle_history_status_receive(&msg) {continue;}
             if workspace_refresh_receive(&msg) { continue; }
             if shell_close_declined_receive(&msg) { continue; }
