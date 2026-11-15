@@ -472,6 +472,20 @@ impl Page for Document {
                 }
                 if all { Some(Self::ids(found.into_iter())) } else { found.first().map(|n| format!("{n}")) }
             }
+            op::SVG_CONTEXT => {
+                let node = self.node(a.first())?;
+                let mut parent = self.dom.nodes[node].parent;
+                // Match the prelude's existing namespace classification, but
+                // cross the guest/host boundary only once per shared tag.
+                for _ in 0..64 {
+                    let Some(n) = parent else { break };
+                    let Some(tag) = self.dom.tag(n) else { break };
+                    if tag.eq_ignore_ascii_case("svg") { return Some(String::from("1")); }
+                    if tag.eq_ignore_ascii_case("foreignobject") { break; }
+                    parent = self.dom.nodes[n].parent;
+                }
+                Some(String::from("0"))
+            }
             op::INFO => {
                 let n = self.node(a.first())?;
                 Some(match &self.dom.nodes[n].kind {
