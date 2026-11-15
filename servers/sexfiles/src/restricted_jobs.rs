@@ -196,3 +196,26 @@ impl Jobs {
         self.entries.iter().any(Option::is_some)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn exhausted_ticket_space_never_wraps_or_reuses_failed_id() {
+        let mut jobs = Jobs::new();
+        jobs.next = 0xff_ffff;
+        assert_eq!(
+            jobs.prepare(1, 0, 0, |id| {
+                assert_eq!(id, 0xff_ffff);
+                Err(Error::Io)
+            }),
+            Err(Error::Io)
+        );
+        assert_eq!(jobs.next, 0x100_0000);
+        assert_eq!(
+            jobs.prepare(1, 0, 0, |_| panic!("exhausted capture must not run")),
+            Err(Error::State)
+        );
+        assert_eq!(jobs.next, 0x100_0000);
+    }
+}

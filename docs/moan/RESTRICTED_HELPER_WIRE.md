@@ -384,3 +384,15 @@ PCM, path or credential is logged. Native plugin code can write its own public
 serial output; serial text after native entry is not an authentication mechanism.
 Actual QEMU proof must retain its source/build binding and classify processing,
 crash containment and restricted-role lifecycle evidence separately.
+
+
+### Idempotent metadata cleanup
+
+Authenticated parent CANCEL/RELEASE acknowledges an absent current-epoch ticket
+with OK0: that ticket has no Files entry or remaining positive job authority.
+Ticket allocation never wraps or reuses an ID within the provider epoch, including
+failed captures. Any extant entry still requires its exact live owner and nonce;
+a mismatch remains denied and does not remove the entry. Zero/out-of-range tickets
+and zero nonces are malformed. This permits cleanup after the original immutable
+120s entry deadline without treating a denied request or a client timeout as an
+acknowledgment. It conveys no child retirement, launch or other authority.

@@ -148,6 +148,17 @@ fn ready(job:&mut Job)->Vec<u8>{let words=|h:[u8;32]|core::array::from_fn(|i|u64
  assert!(native_io::message(fs::OP,actor,req(4)));native_io::poll();assert_eq!(SENDS.load(Ordering::SeqCst),before);
  // New run can receive its own reply, never the former task's pending value.
  let fresh=Subject{pd:42,task:100};assert!(native_io::message(fs::OP,fresh,req(5)));native_io::poll();assert_eq!(fs::decode_reply(LAST.load(Ordering::SeqCst)),Some((5,fs::OK,3)));
+ // End is idempotent only for absent tickets, never a wrong extant nonce.
+ let end=|seq,id:u64,action,nonce:u8|{for i in 0..16{unsafe{core::ptr::write_volatile((core::ptr::addr_of_mut!(REGION)as *mut u8).add(fs::PATH_BYTES+i),nonce)}}fs::Request{seq,kind:wire::KIND,path_len:0,offset:id<<8|action,length:16}.args()};
+ assert!(native_io::message(fs::OP,fresh,end(6,3,wire::CANCEL,2)));native_io::poll();assert_eq!(fs::decode_reply(LAST.load(Ordering::SeqCst)),Some((6,fs::DENIED,0)));
+ assert!(native_io::message(fs::OP,fresh,end(7,3,wire::CANCEL,1)));native_io::poll();assert_eq!(fs::decode_reply(LAST.load(Ordering::SeqCst)),Some((7,fs::OK,0)));
+ assert!(native_io::message(fs::OP,fresh,end(8,3,wire::RELEASE,1)));native_io::poll();assert_eq!(fs::decode_reply(LAST.load(Ordering::SeqCst)),Some((8,fs::OK,0)));
+ for i in 0..n{unsafe{core::ptr::write_volatile((core::ptr::addr_of_mut!(REGION)as *mut u8).add(fs::PATH_BYTES+i),input[i])}}
+ assert!(native_io::message(fs::OP,fresh,req(9)));native_io::poll();assert_eq!(fs::decode_reply(LAST.load(Ordering::SeqCst)),Some((9,fs::OK,4)));
+ NOW.store(120100,Ordering::SeqCst);native_io::poll();assert!(!native_io::pending());
+ assert!(native_io::message(fs::OP,fresh,end(10,4,wire::RELEASE,1)));native_io::poll();assert_eq!(fs::decode_reply(LAST.load(Ordering::SeqCst)),Some((10,fs::OK,0)));
+ assert!(native_io::message(fs::OP,fresh,end(11,7,wire::CANCEL,1)));native_io::poll();assert_eq!(fs::decode_reply(LAST.load(Ordering::SeqCst)),Some((11,fs::OK,0)));assert!(!native_io::pending());
+ for (seq,id,nonce)in[(12,0,1),(13,0x1000000,1),(14,7,0)]{assert!(native_io::message(fs::OP,fresh,end(seq,id,wire::CANCEL,nonce)));native_io::poll();assert_eq!(fs::decode_reply(LAST.load(Ordering::SeqCst)),Some((seq,fs::INVALID,0)));}
  EPOCH.store(2,Ordering::SeqCst);native_io::poll();assert!(!native_io::pending());
 }
 #[test]fn jobs_are_exact_owner_one_use_bounded_and_expire(){
