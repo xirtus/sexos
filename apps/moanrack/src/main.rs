@@ -94,6 +94,15 @@ mod guest {
         let count = files::args(&mut args);
         if args[..count]
             .split(|b| b.is_ascii_whitespace())
+            .any(|word| word == b"--seed-live-mixer")
+        {
+            let ok = sex_app::files::size(&mut app.window, b"@/live.wav").is_err()
+                && write(b"@/live.wav", &super::seed::live_wav()).is_ok();
+            sex_pdx::serial_record!("[moanrack.live.seed] ok={} frames=576000 left_hz=400 right_hz=600 developer_only=1",ok as u8);
+            sex_app::launch::exit(if ok { 0 } else { 2 })
+        }
+        if args[..count]
+            .split(|b| b.is_ascii_whitespace())
             .any(|word| word == b"--seed-moan-ui")
         {
             // Developer qualification only, with an explicit user @/ folder grant.
