@@ -1648,7 +1648,7 @@ impl Browser {
         if y >= 0 && self.in_frame.is_none() {
             if let Some(i) = self.frames.iter().position(|f| self.doc.get().accepts_pointer(f.node) && px >= f.rect[0] && px < f.rect[0] + f.rect[2] && py >= f.rect[1] && py < f.rect[1] + f.rect[3]) {
                 let [fx, fy, _, _] = self.frames[i].rect;
-                let q = sex_pdx::app_pointer::Pointer { x: (px - fx) as i16, y: (py - fy + BAR) as i16, buttons: p.buttons, kind: p.kind };
+                let q = sex_pdx::app_pointer::Pointer { x: (px - fx) as i16, y: (py - fy + BAR) as i16, buttons: p.buttons, kind: p.kind, mods: p.mods };
                 self.enter(i);
                 self.pointer(q);
                 self.leave(i);

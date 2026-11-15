@@ -203,6 +203,7 @@ unsafe fn app_input_poll(){
             let(status,_)=pdx_call(item.destination.route,OP_HID_EVENT,key.wire(),1,EV_KEY);
             if status==sex_pdx::ERR_SERVICE_NOT_READY{return}
             APP_INPUT.pop();
+            if status==0{clip_touched(item.destination.subject);}
             if browser_input_participant(item.destination)&&status==0{
                 sex_pdx::serial_record!("[shell.browser.input] code={} down=1 slot={} accepted=1",key.code,item.destination.route);
             }
@@ -218,6 +219,7 @@ unsafe fn app_input_poll(){
             if status==sex_pdx::ERR_SERVICE_NOT_READY{return}
             APP_INPUT.pop();
             if !is_pointer_move(word){
+                if status==0{clip_touched(item.destination.subject);}
                 sex_pdx::serial_record!("[shell.program.pointer] pd={} task={} word={:#x} status={}",item.destination.subject.pd,item.destination.subject.task,word,status);
             }
         },
@@ -10365,7 +10367,7 @@ unsafe fn program_pointer_target()->Option<(u64,sex_pdx::clipboard::Participant,
     Some((sid,p,lx.clamp(i16::MIN as i32,i16::MAX as i32) as i16,ly.clamp(i16::MIN as i32,i16::MAX as i32) as i16,inside))
 }
 unsafe fn program_pointer_send(p:sex_pdx::clipboard::Participant,x:i16,y:i16,kind:sex_pdx::app_pointer::Kind)->bool{
-    let word=sex_pdx::app_pointer::Pointer{x,y,buttons:POINTER_BUTTONS&7,kind}.wire();
+    let word=sex_pdx::app_pointer::Pointer{x,y,buttons:POINTER_BUTTONS&7,kind,mods:APP_MODIFIERS.pointer()}.wire();
     let accepted=APP_INPUT.push_move(app_input::Item{destination:p,input:app_input::Input::Pointer(word)},is_pointer_move);
     app_input_poll();
     accepted
@@ -10396,6 +10398,58 @@ fn dnd_send(route:u64,op:u64,m:sex_pdx::dnd::Message)->bool{
         match pdx_call_checked(route,op,a,b,c){Ok(_)=>return true,Err(sex_pdx::ERR_SERVICE_NOT_READY)=>sys_yield(),Err(_)=>return false}
     }
     false
+}
+// ── The clipboard for ordinary programs (sex_pdx::program_clipboard) ─────
+/// The program the person last pressed a key or clicked in, and when.
+static mut CLIP_TOUCH:Option<(sex_pdx::clipboard::Subject,u64)>=None;
+/// A copy being put together, and whose.
+static mut CLIP_FROM:Option<sex_pdx::clipboard::Subject>=None;
+static mut CLIP_TEXT:sex_pdx::program_clipboard::Text=sex_pdx::program_clipboard::Text::new();
+unsafe fn clip_touched(subject:sex_pdx::clipboard::Subject){CLIP_TOUCH=Some((subject,sex_pdx::get_ticks()));}
+fn clip_send(route:u64,m:sex_pdx::program_clipboard::Message)->bool{
+    let [a,b,c]=m.wire();
+    for _ in 0..1024{
+        match pdx_call_checked(route,sex_pdx::program_clipboard::OP_CLIPPED,a,b,c){Ok(_)=>return true,Err(sex_pdx::ERR_SERVICE_NOT_READY)=>sys_yield(),Err(_)=>return false}
+    }
+    false
+}
+/// A program's `OP_CLIP`: only the focused program, just used, copies or pastes.
+unsafe fn shell_clip_message(msg:&sex_pdx::PdxMessage)->bool{
+    use sex_pdx::program_clipboard::{self as pc,Message};
+    if msg.type_id!=pc::OP_CLIP{return false}
+    let Some(p)=focused_program_participant().filter(|p|p.subject.pd==msg.caller_pd&&p.subject.task==msg.caller_task)else{
+        sex_pdx::serial_record!("[shell.clip.denied] caller={} task={} reason=not_focused",msg.caller_pd,msg.caller_task);return true
+    };
+    let touched=CLIP_TOUCH.is_some_and(|(s,t)|s==p.subject&&sex_pdx::get_ticks().saturating_sub(t)<=pc::TOUCH_TICKS);
+    let done=|status:u8|{let _=clip_send(p.route,Message::Done{status});};
+    match Message::decode([msg.arg0,msg.arg1,msg.arg2]){
+        Some(Message::Copy{len})=>{
+            if !touched{sex_pdx::serial_record!("[shell.clip.denied] caller={} reason=not_used",p.subject.pd);done(pc::DENIED);return true}
+            CLIP_FROM=Some(p.subject);CLIP_TEXT.begin(len);
+        }
+        Some(Message::Data{offset,count,bytes})=>{
+            if CLIP_FROM==Some(p.subject)&&!CLIP_TEXT.take(offset,count,&bytes){CLIP_FROM=None;CLIP_TEXT.erase();done(pc::INVALID);}
+        }
+        Some(Message::End{hash})=>{
+            if CLIP_FROM.take()!=Some(p.subject){done(pc::INVALID);return true}
+            let result=match CLIP_TEXT.finish(hash){Some(text)=>CLIPBOARD.publish_program(p.subject,text),None=>Err(sex_pdx::clipboard::Status::Invalid)};
+            CLIP_TEXT.erase();
+            sex_pdx::serial_record!("[shell.clip.copied] pd={} task={} len={} ok={}",p.subject.pd,p.subject.task,result.map_or(0,|r|r.len),result.is_ok() as u8);
+            done(match result{Ok(_)=>pc::OK,Err(sex_pdx::clipboard::Status::Busy)=>pc::BUSY,Err(_)=>pc::INVALID});
+        }
+        Some(Message::Paste)=>{
+            if !touched{sex_pdx::serial_record!("[shell.clip.denied] caller={} reason=not_used",p.subject.pd);done(pc::DENIED);return true}
+            // The owner of what is on the clipboard must still be running.
+            if !clipboard_source_ready(){done(pc::BUSY);return true}
+            let Some(text)=CLIPBOARD.current_text()else{done(pc::EMPTY);return true};
+            let mut ok=clip_send(p.route,Message::Begin{len:text.len()});
+            for piece in pc::pieces(text){ok=ok&&clip_send(p.route,piece);}
+            ok=ok&&clip_send(p.route,Message::End{hash:pc::hash(text)});
+            sex_pdx::serial_record!("[shell.clip.pasted] pd={} task={} len={} ok={}",p.subject.pd,p.subject.task,text.len(),ok as u8);
+        }
+        _=>{}
+    }
+    true
 }
 /// A program's `OP_DRAG`.
 unsafe fn shell_dnd_message(msg:&sex_pdx::PdxMessage)->bool{
@@ -26791,6 +26845,7 @@ pub extern "C" fn _start() -> ! {
             if shell_lifecycle_hint(&msg) { continue; }
             if shell_launch_message(&msg) { continue; }
             if shell_dnd_message(&msg) { continue; }
+            if shell_clip_message(&msg) { continue; }
             if config_watch::receive(&msg) { continue; }
             if lock::receive(&msg) { continue; }
             if shell_program_message(&msg) { continue; }
