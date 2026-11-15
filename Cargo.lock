@@ -5309,6 +5309,7 @@ dependencies = [
  "sex-gl",
  "sex-html",
  "sex-image",
+ "sha2 0.10.9",
  "wasmi",
 ]
 
@@ -5427,6 +5428,10 @@ dependencies = [
 
 [[package]]
 name = "sex-net-config"
+version = "0.1.0"
+
+[[package]]
+name = "sex-ntp"
 version = "0.1.0"
 
 [[package]]
@@ -5739,6 +5744,7 @@ dependencies = [
  "linked_list_allocator",
  "serde",
  "sex-net",
+ "sex-ntp",
  "sex-pdx",
  "sex-rt",
  "sex-tls",

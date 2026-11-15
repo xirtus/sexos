@@ -54,7 +54,25 @@ impl Scan {
     /// of the first refused instruction's 0x0F; it may be negative when it starts in
     /// the priming bytes.
     pub fn feed(&mut self, bytes: &[u8], primed: bool) -> Option<i64> {
-        for &b in bytes {
+        let mut i = 0;
+        while i < bytes.len() {
+            // Every refused instruction starts with 0x0F: words holding none, after
+            // history holding none, are skipped whole (a launch scans megabytes).
+            if self.history[0] != 0x0F && self.history[1] != 0x0F {
+                let from = i;
+                while let Some(word) = bytes.get(i..i + 8) {
+                    let w = u64::from_le_bytes([word[0], word[1], word[2], word[3], word[4], word[5], word[6], word[7]]) ^ 0x0F0F_0F0F_0F0F_0F0F;
+                    if w.wrapping_sub(0x0101_0101_0101_0101) & !w & 0x8080_8080_8080_8080 != 0 { break }
+                    i += 8;
+                }
+                if i > from {
+                    self.history = [bytes[i - 2], bytes[i - 1]];
+                    self.seen += (i - from) as u64;
+                    if i == bytes.len() { break }
+                }
+            }
+            let b = bytes[i];
+            i += 1;
             let [h0, h1] = self.history;
             if self.seen >= 2 && h0 == 0x0F && refused(h1, b) {
                 let start = self.seen as i64 - 2;

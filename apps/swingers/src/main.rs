@@ -109,7 +109,9 @@ pub fn prepare(source: &str, bytes: Option<Vec<u8>>, peer_id: PeerId, port: u16,
     if anonymous { config.pex = false; config.client = String::new(); }
     let mut seed = [0u8; 8];
     random(&mut seed);
-    let mut out = if bytes.is_none() && source.starts_with("magnet:") {
+    let is_magnet = source.get(..7).is_some_and(|p| p.eq_ignore_ascii_case("magnet:"));
+    if is_magnet { source = format!("magnet:{}", &source[7..]); }
+    let mut out = if bytes.is_none() && is_magnet {
         let m = Magnet::parse(&source).map_err(|e| format!("bad magnet: {e:?}"))?;
         let mut peers = Vec::new();
         for p in &m.peers {

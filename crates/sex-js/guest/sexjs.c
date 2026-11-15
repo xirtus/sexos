@@ -115,6 +115,67 @@ static char *host_text(int op, const char *a, size_t al, const char *b, size_t b
     return out;
 }
 
+// ---- Code cache ----
+// The host keeps the bytecode of large scripts and modules between pages (and between
+// the passes over one module graph), keyed by name, exact source and provenance.
+#define OP_CODE_GET 75
+#define OP_CODE_PUT 76
+#define CODE_SMALLEST 2048
+
+// 1: the host's bytecode for this source is in *code (malloc'd, *n bytes); 0: none,
+// write it once compiled; -1: none, and not wanted.
+static int code_get(const char *name, const char *src, size_t len, char kind, uint8_t **code, size_t *n) {
+    char flags[2] = { kind, (char)('0' + (sexos_compile_origin == 1)) };
+    size_t nl = strlen(name), total = 4 + nl + 4 + len + 4 + 2;
+    char *buf = malloc(total);
+    if (!buf) return -1;
+    char *p = buf;
+    uint32_t l = (uint32_t)nl; memcpy(p, &l, 4); memcpy(p + 4, name, nl); p += 4 + nl;
+    l = (uint32_t)len; memcpy(p, &l, 4); memcpy(p + 4, src, len); p += 4 + len;
+    l = 2; memcpy(p, &l, 4); memcpy(p + 4, flags, 2);
+    int r = host_call(OP_CODE_GET, buf, (int)total);
+    free(buf);
+    if (r <= 0) return r < 0 ? -1 : 0;
+    *code = malloc((size_t)r);
+    if (!*code) return -1;
+    host_result((char *)*code);
+    *n = (size_t)r;
+    return 1;
+}
+
+// JS_Eval(..., flags | JS_EVAL_FLAG_COMPILE_ONLY) for `src` (zero terminated), or the
+// same function or module read back from the host's code cache. Bytecode read here
+// takes its provenance from sexos_compile_origin, as compiled code does
+// (quickjs-code-cache.patch), so callers set that first in both cases.
+static JSValue compile(JSContext *c, const char *src, size_t len, const char *name, int flags) {
+    char kind = (flags & JS_EVAL_TYPE_MASK) == JS_EVAL_TYPE_MODULE ? 'm' : 'c';
+    uint8_t *code = NULL;
+    size_t n = 0;
+    int cached = len >= CODE_SMALLEST ? code_get(name, src, len, kind, &code, &n) : -1;
+    if (cached == 1) {
+        JSValue v = JS_ReadObject(c, code, n, JS_READ_OBJ_BYTECODE);
+        free(code);
+        if (!JS_IsException(v) && JS_VALUE_GET_TAG(v) == (kind == 'm' ? JS_TAG_MODULE : JS_TAG_FUNCTION_BYTECODE)) return v;
+        JS_FreeValue(c, JS_IsException(v) ? JS_GetException(c) : v);
+        cached = -1;
+    }
+    JSValue v = JS_Eval(c, src, len, name, flags | JS_EVAL_FLAG_COMPILE_ONLY);
+    if (cached == 0 && !JS_IsException(v)) {
+        size_t bn = 0;
+        uint8_t *b = JS_WriteObject(c, &bn, v, JS_WRITE_OBJ_BYTECODE);
+        if (b && bn < 0x7ffffff0) {
+            char *buf = malloc(bn + 4);
+            if (buf) {
+                uint32_t l = (uint32_t)bn; memcpy(buf, &l, 4); memcpy(buf + 4, b, bn);
+                host_call(OP_CODE_PUT, buf, (int)(bn + 4));
+                free(buf);
+            }
+        }
+        if (b) js_free(c, b);
+    }
+    return v;
+}
+
 #define OP_SOURCE_MUTED 72
 static int source_muted(const char *name, size_t len) {
     size_t n = 0;
@@ -171,7 +232,7 @@ static JSModuleDef *module_load(JSContext *c, const char *name, void *opaque) {
     }
     int previous_origin = sexos_compile_origin;
     sexos_compile_origin = source_muted(name, strlen(name));
-    JSValue f = JS_Eval(c, src, n, name, JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
+    JSValue f = compile(c, src, n, name, JS_EVAL_TYPE_MODULE);
     sexos_compile_origin = previous_origin;
     free(src);
     if (JS_IsException(f)) return NULL;
@@ -353,7 +414,9 @@ EXPORT("sx_eval") int sx_eval(const char *src, int len, const char *name, int na
     int previous_origin = sexos_compile_origin;
     sexos_compile_origin = error_mode ? error_mode == 2 : source_muted(name, (size_t)name_len);
     if (sexos_compile_origin) sexos_opaque_source_seen = 1;
-    JSValue v = JS_Eval(ctx, code, (size_t)len, file, JS_EVAL_TYPE_GLOBAL);
+    // The same two steps JS_Eval takes for a global script.
+    JSValue v = compile(ctx, code, (size_t)len, file, JS_EVAL_TYPE_GLOBAL);
+    if (!JS_IsException(v)) v = JS_EvalFunction(ctx, v);
     sexos_compile_origin = previous_origin;
     free(code);
     int ok = 0;
@@ -384,7 +447,7 @@ EXPORT("sx_module") int sx_module(const char *src, int len, const char *name, in
         if (!t) ok = -1;
         else {
             discovering = 1;
-            JSValue f = JS_Eval(t, code, (size_t)len, file, JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
+            JSValue f = compile(t, code, (size_t)len, file, JS_EVAL_TYPE_MODULE);
             if (JS_IsException(f) || JS_ResolveModule(t, f) < 0) {
                 ok = -1;
                 JS_FreeValue(t, JS_GetException(t));
@@ -395,7 +458,7 @@ EXPORT("sx_module") int sx_module(const char *src, int len, const char *name, in
         }
     } else {
         // Compiled first, so the entry module's import.meta.url is set before it runs.
-        JSValue v = JS_Eval(ctx, code, (size_t)len, file, JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
+        JSValue v = compile(ctx, code, (size_t)len, file, JS_EVAL_TYPE_MODULE);
         if (!JS_IsException(v)) {
             JSValue meta = JS_GetImportMeta(ctx, JS_VALUE_GET_PTR(v));
             if (!JS_IsException(meta)) JS_DefinePropertyValueStr(ctx, meta, "url", JS_NewString(ctx, file), JS_PROP_C_W_E);

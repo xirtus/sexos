@@ -14,6 +14,9 @@
 //! through the region's HID mailbox to SexUSB, which hands it to Input with USB's own.
 //! Bonds are kept by Files (`store.rs`); who may pair is decided in `pairing.rs`.
 //!
+//! W3: headphones (A2DP Source, SBC): Bell's mix comes through the `bt_audio` region
+//! shared with Bell and goes to the headset (`audio.rs`).
+//!
 //! BOOT starts it as domain `bt_hci::CUFFLINKS_PD` (Senses organ) with the HCI region
 //! shared with SexUSB, the firmware pack and a route to Files. With no controller it
 //! logs `[cufflinks.idle] controller=none` and sleeps in `sys_wait_self` until SexUSB
@@ -22,6 +25,7 @@
 #![no_main]
 extern crate alloc;
 
+mod audio;
 mod pairing;
 mod store;
 
@@ -88,6 +92,9 @@ fn firmware_pack() -> Option<&'static [u8]> {
 fn send(ring: &Shared, packet: &[u8], bulk: bool) {
     let mut p = alloc::vec::Vec::from(packet);
     if bulk && p.first() == Some(&hci::COMMAND) { p[0] = bt_hci::COMMAND_BULK; }
+    // A packet the ring can never take would wait forever: drop it (the host caps ACL
+    // data at sex_bt::host::MAX_ACL_DATA, so this is only a guard).
+    if p.len() < 2 || p.len() > bt_hci::MAX_PACKET { return; }
     while !ring.tx_push(&p) { let _ = sex_pdx::sys_wait_self_ticks(1); }
 }
 
@@ -103,6 +110,7 @@ pub extern "C" fn _start() -> ! {
     };
     let ring = unsafe { Shared::at(view.virtual_address as *mut u8) };
     log!("[cufflinks.transport] ok=1 slot={}", bt_hci::SLOT);
+    audio::Audio::probe();
     let mut packet = [0u8; bt_hci::MAX_PACKET];
     loop {
         // Wait for SexUSB to report a controller: it sends OP_LINK when one comes.
@@ -197,6 +205,11 @@ fn run_host(ring: &Shared, generation: u32, packet: &mut [u8]) {
     let mut tried: alloc::vec::Vec<sex_bt::hci::Addr> = alloc::vec::Vec::new();
     let mut hid = HidDevices { slots: [None; 8] };
     ring.set_hid_links(0);
+    let mut sound = audio::Audio::new();
+    // Classic links from bonded devices that may be headsets: if one opens AVDTP but
+    // sets no stream up within two seconds, we do (handle, since).
+    // (handle, since, signaling open): the 2 s setup window starts when AVDTP signaling opens.
+    let mut quiet: alloc::vec::Vec<(u16, u64, bool)> = alloc::vec::Vec::new();
     while still(ring, generation) {
         let mut moved = false;
         while let Some(p) = h.poll() { send(ring, &p, false); moved = true; }
@@ -219,6 +232,15 @@ fn run_host(ring: &Shared, generation: u32, packet: &mut [u8]) {
                         f.rssi.unwrap_or(127), f.class.unwrap_or(0), f.appearance.unwrap_or(0));
                     // A new keyboard or mouse: only inside the pairing window (see pairing.rs).
                     let new = h.bonds.le_for(&f.addr).is_none() && h.bonds.classic_for(&f.addr).is_none();
+                    if new && Host::is_audio(&f) && f.transport == Transport::Classic && !tried.contains(&f.addr) {
+                        tried.push(f.addr);
+                        if policy.connect_new(now) {
+                            log!("[cufflinks.audio.connect] addr={} name=\"{}\" window=1", f.addr, f.name.as_deref().unwrap_or(""));
+                            h.connect_audio(&f);
+                        } else {
+                            log!("[cufflinks.audio.skip] addr={} reason=no_prompt", f.addr);
+                        }
+                    }
                     if new && Host::is_hid(&f) && f.connectable && !tried.contains(&f.addr) {
                         if policy.connect_new(now) {
                             tried.push(f.addr);
@@ -230,9 +252,14 @@ fn run_host(ring: &Shared, generation: u32, packet: &mut [u8]) {
                         }
                     }
                 }
-                Note::Connected { handle, addr, le } => log!("[cufflinks.connected] handle={:#06x} addr={} le={}", handle, addr, le as u8),
+                Note::Connected { handle, addr, le } => {
+                    log!("[cufflinks.connected] handle={:#06x} addr={} le={}", handle, addr, le as u8);
+                    if !le { quiet.push((handle, now, false)); }
+                }
                 Note::Disconnected { handle, reason } => {
                     log!("[cufflinks.disconnected] handle={:#06x} reason={:#04x}", handle, reason);
+                    sound.gone(handle);
+                    quiet.retain(|q| q.0 != handle);
                     if let Some(device) = hid.remove(handle) {
                         push_input(ring, HidInput::Gone { device });
                         ring.set_hid_links(hid.count());
@@ -260,6 +287,17 @@ fn run_host(ring: &Shared, generation: u32, packet: &mut [u8]) {
                         addr, handle, device, le as u8, keyboard as u8, pointer as u8, boot as u8);
                 }
                 Note::HidFailed { handle, code } => log!("[cufflinks.hid.failed] handle={:#06x} code={:#04x}", handle, code),
+                Note::AudioSink { handle, sink } => log!("[cufflinks.audio.sink] handle={:#06x} psm={:#06x} avdtp={:#06x} a2dp={:#06x} features={:#06x}",
+                    handle, sink.psm, sink.avdtp_version, sink.a2dp_version, sink.features),
+                Note::AudioReady { handle, addr, config, frames_per_packet } => {
+                    log!("[cufflinks.audio] addr={} handle={:#06x} rate={} mode={:?} blocks={} subbands={} bitpool={} frame_bytes={} frames_per_packet={}",
+                        addr, handle, config.rate, config.mode, config.blocks, config.subbands, config.bitpool, config.frame_bytes(), frames_per_packet);
+                    sound.ready(handle);
+                }
+                Note::AudioStreaming { handle } => { log!("[cufflinks.audio.streaming] handle={:#06x}", handle); sound.streaming(handle); }
+                Note::AudioSuspended { handle } => log!("[cufflinks.audio.suspended] handle={:#06x}", handle),
+                Note::AudioClosed { handle } => { log!("[cufflinks.audio.closed] handle={:#06x}", handle); sound.gone(handle); }
+                Note::AudioFailed { handle, code } => log!("[cufflinks.audio.failed] handle={:#06x} code={:#06x}", handle, code),
                 Note::Input { handle, input } => {
                     let Some(device) = hid.id(handle) else { continue };
                     push_input(ring, match input {
@@ -269,8 +307,26 @@ fn run_host(ring: &Shared, generation: u32, packet: &mut [u8]) {
                 }
             }
         }
+        // A bonded headset that paged us and opened AVDTP without setting a stream up.
+        quiet.retain_mut(|q| {
+            let (handle, since, open) = *q;
+            if !open {
+                // Wait for the headset's signaling channel (for at most 30 s), then give
+                // it 2 s to set a stream up itself.
+                if h.audio_state(handle).is_some() { *q = (handle, now, true); return true; }
+                return now.saturating_sub(since) < 30_000;
+            }
+            if now.saturating_sub(since) < 2_000 { return true; }
+            if h.audio_state(handle) == Some(sex_bt::avdtp::State::Idle) {
+                log!("[cufflinks.audio.start] handle={:#06x} initiator=1", handle);
+                h.start_audio(handle);
+            }
+            false
+        });
+        if sound.pump(&mut h, now) { moved = true; }
         if !moved { serve(); let _ = sex_pdx::sys_wait_self_ticks(1); }
     }
+    if let Some(handle) = sound.handle() { sound.gone(handle); }
     for device in 1..=8 { if hid.slots[device as usize - 1].is_some() { push_input(ring, HidInput::Gone { device }); } }
     ring.set_hid_links(0);
     log!("[cufflinks.gone] generation={}", generation);
