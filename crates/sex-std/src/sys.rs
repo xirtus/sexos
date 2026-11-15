@@ -29,6 +29,8 @@ pub unsafe extern "C" fn _start() -> ! {
     let n = files::args(&mut line);
     let mut words = vec![b"program".to_vec()];
     words.extend(args::split(&line[..n]));
+    // Started as a hidden helper (`crate::process`): no window, nobody to close one.
+    if words.get(1).is_some_and(|w| w == crate::process::HIDDEN_WORD) { words.remove(1); console::hide(); }
     let owned: Vec<std::ffi::CString> = words.into_iter().map(|w| std::ffi::CString::new(w).unwrap_or_default()).collect();
     let mut argv: Vec<*const c_char> = owned.iter().map(|s| s.as_ptr()).collect();
     argv.push(core::ptr::null());
