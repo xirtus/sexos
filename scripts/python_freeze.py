@@ -7,8 +7,13 @@ own interpreter and written as marshalled code to apps/python/frozen/NAME.bin, t
 same bytes CPython's Programs/_freeze_module.py would put in Python/frozen_modules/.
 apps/python/build.rs turns the folder into CPython's frozen-module tables.
 
+It also freezes POLYAMOUR, Polyamour's scripting API (apps/polyamour/python: the
+`polyamour` package and its `bpy` and `mathutils` aliases), so every SexOS Python
+script can `import bpy` without anything installed in its folder.
+
 Bytecode belongs to one CPython release series, so this must run under the same
-3.13 series as vendor/cpython-3.13.18:
+3.13 series as vendor/cpython-3.13.18 (an installed CPython 3.13's own Lib folder
+works as well as a checkout: `mkdir /tmp/cp && ln -s /usr/lib/python3.13 /tmp/cp/Lib`):
 
     git clone --depth 1 --branch v3.13.18 https://github.com/python/cpython.git /tmp/cpython
     python3.13 scripts/python_freeze.py /tmp/cpython
@@ -22,6 +27,7 @@ VERSION=(3,13)
 # importlib's bootstrap (required by the interpreter itself), what startup imports
 # (encodings, site, os, io...), the traceback printer, and a working everyday set:
 # json, re, collections, functools, random, datetime, decimal, typing, argparse...
+# hashlib, socket, selectors, gzip and urllib.parse for network programs (Qupid's Kodi addons).
 MODULES='''
 importlib._bootstrap importlib._bootstrap_external zipimport
 abc codecs io _collections_abc _sitebuiltins genericpath ntpath posixpath os site stat
@@ -34,15 +40,25 @@ heapq inspect json json.decoder json.encoder json.scanner keyword linecache loca
 opcode operator pprint random re re._casefix re._compiler re._constants re._parser
 reprlib shlex statistics string struct textwrap token tokenize traceback types typing
 warnings weakref this
+hashlib hmac secrets socket selectors _compression gzip urllib urllib.parse ipaddress encodings.idna encodings.punycode stringprep
+sqlite3 sqlite3.dbapi2 sqlite3.dump
+ssl
 '''.split()
+# SexOS's own versions, from apps/python/lib (ssl: TLS through the network service).
+OWN={'ssl'}
+
+# Polyamour's scripting API, compiled from apps/polyamour/python rather than Lib/.
+POLYAMOUR_DIR=ROOT/'apps/polyamour/python'
+POLYAMOUR='polyamour polyamour.polyops polyamour.types bpy mathutils'.split()
 
 def main():
     if sys.version_info[:2]!=VERSION:raise SystemExit(f'run this with Python {VERSION[0]}.{VERSION[1]}')
     lib=Path(sys.argv[1])/'Lib'
     for old in OUT.glob('*.bin'):old.unlink()
     manifest=[]
-    for name in MODULES:
-        path=lib.joinpath(*name.split('.'))
+    for name in MODULES+POLYAMOUR:
+        if name in POLYAMOUR:path=POLYAMOUR_DIR.joinpath(*name.split('.'))
+        else:path=(OUT.parent/'lib' if name in OWN else lib).joinpath(*name.split('.'))
         package=(path/'__init__.py').exists()
         source=path/'__init__.py' if package else path.with_suffix('.py')
         code=compile(source.read_bytes(),f'<frozen {name}>','exec',optimize=0,dont_inherit=True)

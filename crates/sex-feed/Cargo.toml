@@ -1,0 +1,9 @@
+[package]
+name = "sex-feed"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Feed model for Gossip: RSS 2.0 and Atom parsing, podcast enclosures, OPML import and export, subscriptions and read state (no_std + alloc)"
+
+[dependencies]
+sex-xml = { path = "../sex-xml" }

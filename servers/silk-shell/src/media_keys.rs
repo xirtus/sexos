@@ -31,12 +31,19 @@ pub enum Ask {
     Volume,
     /// A player key with this code: deliver it to the program Bell names.
     Player(u8),
+    /// The panel tray's state or slider: show the new state in the tray.
+    Tray,
+    /// The volume from settings: nothing to show.
+    Restore,
 }
 
 const ASKS: usize = 8;
-pub struct Asks { q: [Option<Ask>; ASKS], head: usize, len: usize }
+pub struct Asks { q: [Option<Ask>; ASKS], head: usize, len: usize, since: Option<u64> }
+/// Bell answers at once; an answer not in after this long (ms) was lost: the kernel keeps
+/// one unread reply per domain, so a reply from another server can take its place.
+pub const LOST_TICKS: u64 = 2_000;
 impl Asks {
-    pub const fn new() -> Self { Self { q: [None; ASKS], head: 0, len: 0 } }
+    pub const fn new() -> Self { Self { q: [None; ASKS], head: 0, len: 0, since: None } }
     /// False when full: the key is dropped rather than an answer misread.
     pub fn push(&mut self, ask: Ask) -> bool {
         if self.len == ASKS { return false; }
@@ -49,9 +56,20 @@ impl Asks {
         let a = self.q[self.head].take();
         self.head = (self.head + 1) % ASKS;
         self.len -= 1;
+        self.since = None;
         a
     }
     pub fn pending(&self) -> bool { self.len != 0 }
+    /// Called often: forgets every ask once the oldest has waited `LOST_TICKS` with no
+    /// answer, so a lost answer cannot hold the tray and keys forever. Returns how many.
+    pub fn expire(&mut self, now: u64) -> usize {
+        if self.len == 0 { self.since = None; return 0; }
+        let since = *self.since.get_or_insert(now);
+        if now.saturating_sub(since) < LOST_TICKS { return 0; }
+        let n = self.len;
+        *self = Self::new();
+        n
+    }
 }
 
 /// Mixer answer tag and fields (`sex_pdx::sound_mixer`), kept literal for host tests.

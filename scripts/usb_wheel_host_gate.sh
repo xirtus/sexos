@@ -35,7 +35,11 @@ assert re.search(r'Task::new\(\s*pd_id, entry',creation)
 usb=(root/'servers/sexusb/src/main.rs').read_text()
 devices=(root/'servers/sexusb/src/usb.rs').read_text()
 # Every pointer report, absolute or relative, records its wheel before it is sent.
-assert devices.count('record_device_wheel(slot, r.len() as u32,')==2
+assert devices.count('record_device_wheel(slot, r.len() as u32,')==1
+# Relative reports go through send_relative (shared with Bluetooth mice), which records
+# the wheel of the first report with the received length.
+assert 'self.send_relative(slot, r.len() as u32, buttons, x, y, wheel);' in devices
+assert devices.count('record_device_wheel(slot, bytes, false, w, packed)')==1
 assert 'let wheel = wheel.clamp(-127, 127) as i8;' in devices
 input_source=(root/'servers/sexinput/src/main.rs').read_text()
 assert 'let mut normalized_events: [(u64, u64, u64); 5]' in input_source

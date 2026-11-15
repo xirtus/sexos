@@ -19,19 +19,26 @@
 #   MUSL_INCLUDE   musl's include directory (default: found below)
 #   FFMPEG_SRC     an FFmpeg checkout (default: cloned at FFMPEG_TAG)
 #   FFMPEG_RECORDING=1 additionally builds FFV1 encode/decode and Matroska muxing
+#   FFMPEG_RECORDING=2 also builds Splicy's export: VP9 (libvpx, scripts/build_libvpx.sh),
+#                      AV1 (libaom, scripts/build_libaom.sh), H.264 (x264, GPL-2.0-or-later,
+#                      scripts/build_x264.sh; this profile's FFmpeg is therefore GPL),
+#                      Opus and AAC encoders, WebM and MP4 muxers
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT=$PWD
 FFMPEG_TAG=${FFMPEG_TAG:-n7.1.2}
 FFMPEG_RECORDING=${FFMPEG_RECORDING:-0}
-case "$FFMPEG_RECORDING" in 0|1) ;; *) echo 'FFMPEG_RECORDING must be 0 or 1' >&2; exit 1;; esac
+case "$FFMPEG_RECORDING" in 0|1|2) ;; *) echo 'FFMPEG_RECORDING must be 0, 1 or 2' >&2; exit 1;; esac
 OUT=$ROOT/target/ffmpeg
 WORK=$OUT/work
 mkdir -p "$WORK"
 rm -f "$OUT/sexos-recording-v1"
 RECORDING_FLAGS=()
-if [[ $FFMPEG_RECORDING == 1 ]]; then
+if [[ $FFMPEG_RECORDING != 0 ]]; then
   RECORDING_FLAGS=(--enable-encoder=ffv1 --enable-decoder=ffv1 --enable-muxer=matroska)
+fi
+if [[ $FFMPEG_RECORDING == 2 ]]; then
+  RECORDING_FLAGS+=(--enable-gpl --enable-libvpx --enable-libaom --enable-libx264 --enable-encoder=libvpx_vp9,libaom_av1,libx264,opus,aac --enable-muxer=webm,mp4)
 fi
 
 if [[ -z "${MUSL_INCLUDE:-}" ]]; then
@@ -54,6 +61,13 @@ fi
 MUSL_INCLUDE=$MUSL_INCLUDE bash "$ROOT/scripts/build_dav1d.sh"
 DAV1D=$ROOT/target/dav1d
 sed -i 's/ -pthread -ldl$//' "$DAV1D/lib/pkgconfig/dav1d.pc"
+PKG_LIBDIR=$DAV1D/lib/pkgconfig
+if [[ $FFMPEG_RECORDING == 2 ]]; then
+  MUSL_INCLUDE=$MUSL_INCLUDE bash "$ROOT/scripts/build_libvpx.sh"
+  MUSL_INCLUDE=$MUSL_INCLUDE bash "$ROOT/scripts/build_libaom.sh"
+  MUSL_INCLUDE=$MUSL_INCLUDE bash "$ROOT/scripts/build_x264.sh"
+  PKG_LIBDIR=$PKG_LIBDIR:$ROOT/target/libvpx/lib/pkgconfig:$ROOT/target/libaom/lib/pkgconfig:$ROOT/target/x264/lib/pkgconfig
+fi
 
 # musl's headers, copied so the build never depends on where they came from.
 INC=$OUT/include-c
@@ -67,7 +81,7 @@ CFLAGS="--target=x86_64-unknown-none-elf -nostdinc -isystem $RES -isystem $INC \
 
 BUILD=$WORK/build
 rm -rf "$BUILD" && mkdir -p "$BUILD" && cd "$BUILD"
-PKG_CONFIG_LIBDIR=$DAV1D/lib/pkgconfig PKG_CONFIG_PATH= "$FFMPEG_SRC/configure" --prefix="$OUT" \
+PKG_CONFIG_LIBDIR=$PKG_LIBDIR PKG_CONFIG_PATH= "$FFMPEG_SRC/configure" --prefix="$OUT" \
   --enable-cross-compile --target-os=none --arch=x86_64 \
   --cc=clang --ar=llvm-ar --ranlib=llvm-ranlib --nm=llvm-nm --pkg-config=pkg-config --pkg-config-flags=--static \
   --extra-cflags="$CFLAGS" \
@@ -123,5 +137,7 @@ make -j"$(nproc)" >>make.log
 make install >install.log
 # Programs link dav1d from the same directory as FFmpeg.
 cp "$DAV1D/lib/libdav1d.a" "$OUT/lib/"
+rm -f "$OUT/lib/libvpx.a" "$OUT/lib/libaom.a" "$OUT/lib/libx264.a"
+[[ $FFMPEG_RECORDING == 2 ]] && cp "$ROOT/target/libvpx/lib/libvpx.a" "$ROOT/target/libaom/lib/libaom.a" "$ROOT/target/x264/lib/libx264.a" "$OUT/lib/"
 printf '%s\n' "$FFMPEG_RECORDING" > "$OUT/sexos-recording-v1"
 echo "[ffmpeg] $(ls "$OUT"/lib/*.a | xargs -n1 basename | tr '\n' ' ')-> $OUT"

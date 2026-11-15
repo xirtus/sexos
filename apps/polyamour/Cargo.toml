@@ -1,0 +1,20 @@
+[package]
+name = "polyamour"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "Polyamour: SexOS's native 3D suite, laid out and keyed like Blender so its users feel at home"
+
+[[bin]]
+name = "polyamour"
+path = "src/main.rs"
+
+[dependencies]
+sex-3d = { path = "../../crates/sex-3d" }
+sex-office = { path = "../../crates/sex-office" }
+
+[target.'cfg(target_os = "hermit")'.dependencies]
+sex-std = { path = "../../crates/sex-std" }
+
+[target.'cfg(not(target_os = "hermit"))'.dependencies]
+png = "0.18"

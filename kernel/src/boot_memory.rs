@@ -767,7 +767,8 @@ pub fn class_command(pd:&ProtectionDomain,dev:&crate::hal::pci::PciDevice,slot:u
         && view.length >= kind.registers_end() && view.length <= 65536
         && view.rights == QUERY_VIEW|READ|WRITE && view.dma_base.is_none() && view.peer_pd.is_none(), "BOOT_CLASS_COMMAND_VIEW");
     let g=sex_pdx::pci_command::Grant {subject:pd.id,bus:dev.bus,device:dev.dev,function:dev.func,
-        vendor_id:dev.vendor_id,device_id:dev.device_id,allowed:sex_pdx::pci_command::NIC_BITS};
+        vendor_id:dev.vendor_id,device_id:dev.device_id,
+        allowed:if kind==crate::device_lease::Kind::SerialIo{sex_pdx::pci_command::MEMORY}else{sex_pdx::pci_command::NIC_BITS}};
     assert!(sex_pdx::pci_command::authorize(Some(&g),pd.id,0,0).is_ok(),"BOOT_CLASS_COMMAND_GRANT");
     let (region,bytes)=kind.dma();
     crate::serial_println!("[boot.class.command] pd={} slot={} kind={:?} bus={} device={} function={} vendor={:#x} product={:#x} allowed={} dma_region={:#x} dma_bytes={} runtime_mint=0",
@@ -779,15 +780,16 @@ pub fn class_command(pd:&ProtectionDomain,dev:&crate::hal::pci::PciDevice,slot:u
 /// service already holds its pool from `init`.
 pub fn class_dma(pd_id:u32,kind:crate::device_lease::Kind){
     require_boot();
-    if kind==crate::device_lease::Kind::Ahci { return; }
+    if matches!(kind,crate::device_lease::Kind::Ahci|crate::device_lease::Kind::SerialIo) { return; }
     let (region,bytes)=kind.dma();
     dma_at(pd_id,kind.dma_slot(),region,bytes);
-    if kind==crate::device_lease::Kind::Wifi { wifi_firmware(pd_id); }
+    if kind==crate::device_lease::Kind::Wifi { firmware_pack(pd_id, sex_pdx::pci_command::SLOT_WIFI_FIRMWARE, sex_pdx::pci_command::WIFI_FIRMWARE_REGION_ID); }
 }
 
-/// The Wi-Fi firmware pack (a boot module) as a read-only region of the service
-/// that holds the chip. The kernel never looks inside; the driver checks each file.
-fn wifi_firmware(pd_id:u32){
+/// The firmware pack (a boot module) as a read-only region of a driver: the Wi-Fi
+/// service that holds the chip, and Cufflinks for the Bluetooth half. The kernel never
+/// looks inside; the driver checks each file.
+fn firmware_pack(pd_id:u32, slot:u64, region_id:u32){
     use sex_pdx::pci_command as w;
     require_boot();
     let Some(module) = crate::MODULE_REQUEST.response().and_then(|m| m.modules().iter().find(|m| m.path().ends_with(w::WIFI_FIRMWARE_MODULE))) else {
@@ -800,9 +802,30 @@ fn wifi_firmware(pd_id:u32){
     if virt % 4096 != 0 || length == 0 { return; }
     let pd = DOMAIN_REGISTRY.get(pd_id).expect("BOOT_WIFI_FIRMWARE_PD");
     let virtual_base = alias(pd, virt - hhdm, length, false, false);
-    grant(pd, w::SLOT_WIFI_FIRMWARE, RegionGrant { region_id: w::WIFI_FIRMWARE_REGION_ID, virtual_base, length,
+    grant(pd, slot, RegionGrant { region_id, virtual_base, length,
         rights: QUERY_VIEW | READ, dma_base: None, peer_pd: None });
     crate::serial_println!("[boot.wifi.firmware.region] pd={} bytes={}", pd_id, data.len());
+}
+
+/// Bluetooth: Cufflinks (the host stack) and SexUSB (the controller's USB transport)
+/// share the HCI rings; SexUSB may wake Cufflinks when a controller comes or goes;
+/// Cufflinks reads the firmware pack and keeps its bonds with Files. Bell hands
+/// Cufflinks its mix for a Bluetooth headset through `bt_audio`.
+pub fn init_bluetooth(usb: u32, cufflinks: u32, files: u32, bell: u32, shell: u32) {
+    use sex_pdx::bt_hci as b;
+    require_boot();
+    let Some(pd) = (cufflinks != 0).then(|| DOMAIN_REGISTRY.get(cufflinks)).flatten() else { return };
+    paired(usb, cufflinks, b::SLOT, b::REGION_ID, b::BYTES, true);
+    if let Some(u) = (usb != 0).then(|| DOMAIN_REGISTRY.get(usb)).flatten() { u.grant_capability(b::NOTIFY_SLOT, CapabilityData::Domain(cufflinks)); }
+    if files != 0 { pd.grant_capability(sex_pdx::SLOT_STORAGE, CapabilityData::Domain(files)); }
+    firmware_pack(cufflinks, b::FIRMWARE_SLOT, b::FIRMWARE_REGION_ID);
+    crate::serial_println!("[boot.bt.hci] usb={} cufflinks={} files={} slot={} bytes={} runtime_mint=0", usb, cufflinks, files, b::SLOT, b::BYTES);
+    paired(bell, cufflinks, sex_pdx::bt_audio::SLOT, sex_pdx::bt_audio::REGION_ID, sex_pdx::bt_audio::BYTES, true);
+    crate::serial_println!("[boot.bt.audio] bell={} cufflinks={} slot={} bytes={} runtime_mint=0", bell, cufflinks, sex_pdx::bt_audio::SLOT, sex_pdx::bt_audio::BYTES);
+    // The desktop's Bluetooth panel: a shared region and Cufflinks's wake route to the Shell.
+    paired(shell, cufflinks, sex_pdx::bt_ui::SLOT, sex_pdx::bt_ui::REGION_ID, sex_pdx::bt_ui::BYTES, true);
+    if shell != 0 { pd.grant_capability(sex_pdx::bt_ui::NOTIFY_SLOT, CapabilityData::Domain(shell)); }
+    crate::serial_println!("[boot.bt.ui] shell={} cufflinks={} slot={} notify={} runtime_mint=0", shell, cufflinks, sex_pdx::bt_ui::SLOT, sex_pdx::bt_ui::NOTIFY_SLOT);
 }
 
 fn pci_view(pd:&ProtectionDomain,slot:u64,physical:u64,actual_length:u64,length:u64)->RegionGrant{

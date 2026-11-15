@@ -638,6 +638,15 @@ pub fn civil_time_ms()->Result<u64,u64>{
     if status==0{Ok(ms)}else{Err(status)}
 }
 
+/// The time keeper only (sexnet): civil time becomes `ms` since the Unix epoch.
+pub fn set_civil_time_ms(ms:u64)->Result<(),u64>{
+    let status:u64;
+    unsafe{core::arch::asm!("syscall",inlateout("rax")clock_source::civil::SYS=>status,
+        inlateout("rdi")clock_source::civil::SET=>_,inlateout("rsi")ms=>_,
+        out("rcx")_,out("r11")_,options(nostack));}
+    if status==0{Ok(())}else{Err(status)}
+}
+
 /// Inspect only this exact subject's held immutable BOOT trust-policy source.
 pub fn trust_info(slot:u64)->Result<trust_source::Info,u64>{
     let(status,a,b,c,d):(u64,u64,u64,u64,u64);
@@ -1275,6 +1284,10 @@ pub mod virtio;
 pub mod device;
 pub mod usb_disk;
 pub mod usb_net;
+pub mod bt_hci;
+pub mod bt_bonds;
+pub mod bt_audio;
+pub mod bt_ui;
 pub mod network_config;
 
 pub mod desktop_style;
@@ -1282,11 +1295,18 @@ pub mod pixel_region;
 pub mod sound_ring;
 pub mod sound_mixer;
 pub mod wifi_status;
+pub mod network_time;
 pub mod notify;
 pub mod desktop_look;
 pub mod access_view;
 pub mod window_switcher;
 pub mod screenshot;
+pub mod tray;
+pub mod window_motion;
+pub mod launch;
+pub mod dnd;
+pub mod program_clipboard;
+pub mod session_restore;
 pub mod document_view;
 
 pub mod display_boot;
@@ -1301,10 +1321,13 @@ pub mod system_stats;
 pub mod program_memory;
 pub mod program_code;
 pub mod power;
+pub mod denim;
+pub mod touchpad;
 pub mod program_threads;
 pub mod fs;
 pub mod home_lock;
 pub mod web;
+pub mod accounts;
 pub mod organs;
 pub mod text_selection;
 pub mod text_encoding;
@@ -1312,6 +1335,12 @@ pub mod clipboard;
 pub mod clipboard_client;
 pub mod app_key;
 pub mod app_pointer;
+pub mod config;
+pub mod clock_zone;
+pub mod screen_state;
 pub mod app_scroll;
 pub mod bitmap_batch;
 pub mod speech_voice;
+pub mod vm;
+pub mod stream;
+pub mod console_relay;

@@ -10,6 +10,7 @@ mod app_catalog;
 #[path="../crates/silkbar-model/src/lib.rs"]mod silkbar_model;
 #[path="../crates/sex-pdx/src/clock_source.rs"]pub mod clock_source;
 #[path="../crates/sex-pdx/src/desktop_style.rs"]pub mod desktop_style;
+#[path="../crates/sex-pdx/src/clock_zone.rs"]pub mod clock_zone;
 use silkbar_model::{SilkBar,ModuleSlot,DEFAULT_THEME,DEFAULT_SILK_BAR,UpdateKind,SilkBarUpdate};
 use silkbar_model::civil_clock::{Applied,CivilClock,Reject,State,Update,HEALTH_TICKS,STAGNANT_TURNS};
 #[path="../servers/sexdisplay/src/glyphs.rs"]mod glyphs;

@@ -313,6 +313,9 @@ pub extern "C" fn trampoline_main() {
         }
         if msg.type_id==sex_pdx::usb_disk::OP_CHANGED{crate::volumes::usb_changed(msg.caller_pd);continue;}
         if crate::recording_runtime::message(&msg){continue;}
+        if msg.type_id==sex_config::secret::OP{if let Some(word)=crate::password_store::handle(caller,msg.arg0,msg.arg1){crate::fs_service::reply_later(caller,word);}continue;}
+        if msg.type_id==sex_pdx::config::OP{let word=crate::config_store::handle(caller,msg.arg0,msg.arg1);crate::fs_service::reply_later(caller,word);continue;}
+        if msg.type_id==sex_pdx::bt_bonds::OP{if let Some(word)=crate::bt_bonds::handle(caller,msg.arg0,msg.arg1){crate::fs_service::reply_later(caller,word);}continue;}
         if msg.type_id==sex_pdx::fs::OP{
             let word=crate::fs_service::handle(caller,msg.arg0,msg.arg1,msg.arg2);
             // Nothing else owed and nothing to commit: answer and wait in one entry, so
@@ -321,12 +324,16 @@ pub extern "C" fn trampoline_main() {
             if !(idle&&sex_pdx::pdx_reply_wait(caller,word)==0){crate::fs_service::reply_later(caller,word);}
             continue;
         }
+        if msg.type_id==sex_pdx::dnd::OP_GIVE{
+            if caller==3{crate::fs_service::give(msg.arg0,msg.arg1,msg.arg2);}
+            continue;
+        }
         if msg.type_id==sex_pdx::program_store::OP_BIND{
             if caller==3{crate::fs_service::bind(msg.arg0 as u32,msg.arg1 as u32);}
             continue;
         }
         if msg.type_id==sex_pdx::program_store::OP{
-            if caller==3{let word=if crate::recording_runtime::image_busy(){sex_pdx::program_store::failed(sex_pdx::program_store::IMAGE_BUSY)}else{crate::program_store::load([msg.arg0,msg.arg1])};crate::fs_service::reply_later(caller,word);}
+            if caller==3{let word=if crate::recording_runtime::image_busy(){sex_pdx::program_store::failed(sex_pdx::program_store::IMAGE_BUSY)}else{crate::program_store::load([msg.arg0,msg.arg1],msg.arg2 as u32)};crate::fs_service::reply_later(caller,word);}
             continue;
         }
         if msg.type_id==sex_pdx::document::OP{

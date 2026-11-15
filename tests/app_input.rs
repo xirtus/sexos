@@ -76,9 +76,11 @@ fn drain(queue: &mut Queue) -> Vec<Item> {
     for code in [0x2a,0x36,0x1d,0x61] {assert!(!m.observe(code,2));}assert!(!m.observe(0x20,1));assert_eq!(m.key(0x20),Key::new(0x20,false,false));
 }
 #[test] fn key_wire_is_canonical_for_all_codes_modifiers_and_reserved_bits() {
-    for code in 1..=255 {for shift in [false,true] {for control in [false,true] {
-        let key=Key::new(code,shift,control);assert_eq!(Key::decode(key.wire(),1,1),Some(key));
-        for bit in (10..16).chain(18..64) {assert!(Key::decode(key.wire()|1u64<<bit,1,1).is_none());}
+    for code in 1..=255 {for shift in [false,true] {for control in [false,true] {for alt in [false,true] {
+        let key=Key::new(code,shift,control).with_alt(alt);assert_eq!(Key::decode(key.wire(),1,1),Some(key));
+        // Alt rides in bit 10; a key pressed with it types nothing.
+        assert_eq!(key.wire()>>10&1,alt as u64);if alt {assert_eq!(key.char(),None);}
+        for bit in (11..16).chain(18..64) {assert!(Key::decode(key.wire()|1u64<<bit,1,1).is_none());}
         // What the layout typed rides in bit 17 and bits 32..53; a scalar needs the flag.
         for text in [app_key::Text::Nothing,app_key::Text::Char('ü'),app_key::Text::Char('€'),app_key::Text::Char('😀')] {
             let typed=Key{text,..key};assert_eq!(Key::decode(typed.wire(),1,1),Some(typed));
@@ -86,7 +88,7 @@ fn drain(queue: &mut Queue) -> Vec<Item> {
         assert!(Key::decode(key.wire()|(0xfc_u64<<32),1,1).is_none());
         assert!(Key::decode(key.wire()|1<<17|(0xd800_u64<<32),1,1).is_none());
         for (down,class) in [(0,1),(2,1),(1,0),(1,2),(u64::MAX,1),(1,u64::MAX)] {assert!(Key::decode(key.wire(),down,class).is_none());}
-    }}}
+    }}}}
     for word in [0,1,255,1<<16,(1<<16)|256,u64::MAX] {assert!(Key::decode(word,1,1).is_none());}
 }
 
@@ -178,6 +180,10 @@ mod shell {
     // The overview is closed in these cases; production returns false then.
     unsafe fn overview_key(_:u8,_:u64)->bool{false}
     unsafe fn screenshot_key(_:u8,_:u64)->bool{false}
+    unsafe fn tray_key(_:u8,_:u64)->bool{false}
+    // The Bluetooth panel is closed in these cases; production returns false then.
+    mod bt_panel{pub fn key(_:u8,_:u64)->bool{false}}
+    unsafe fn clip_touched(_:Subject){}
     include!(env!("APP_INPUT_PRODUCTION"));
     unsafe fn reset(){keyboard_layout::reset();KEY_REPEAT=key_repeat::Repeat::new();KEY_REPEATING=false;CAPS_AS_CTRL=false;crate::TICKS=1;POINTER_BUTTONS=0;INTERACTION=InteractionState::Idle;DISPLAY_SCALE=desktop_style::chrome::ScaleClient::new();APP_INPUT=Queue::new();CLIPBOARD_INTAKE=Intake::new();CLIPBOARD=broker::Broker::new();APP_MODIFIERS=Modifiers::new();DESKTOP_KEYS=desktop_keys::Keys::new();WM_CHORDS=wm::Chords::new();WM_ACTIONS.clear();FOCUSED_SURFACE_ID=156;COMMAND_PALETTE_OPEN=false;FOCUS_CHANGES=0;PALETTE_TOGGLES=0;for pd in [9,15,16,18]{CLIPBOARD.register(app_lifecycle::CatalogInfo{target_pd:pd,task_id:pd,surface_id:participant(pd,pd).surface,coordinator_pd:3}).unwrap();}LIVE=Some(true);SOURCE_LIVE=None;LIVE_ONCE=None;STATUS=0;SENT.clear();LIVE_QUERIES.clear();VOLUME_STEPS.clear();PLAYER_KEYS.clear();}
     #[test]fn actual_scale_shortcut_retains_admission_and_never_repeats_an_applied_step(){
@@ -390,4 +396,18 @@ mod shell {
  assert_eq!(queue.retire(Subject{pd:15,task:99}),0);
  assert_eq!(queue.retire(browser.subject),CAPACITY/2);expected.retain(|entry|entry.destination!=browser);
  assert_eq!(drain(&mut queue),expected);
+}
+#[test] fn lost_mixer_answers_expire_but_prompt_ones_keep_their_order() {
+    use media_keys::{Ask, Asks, LOST_TICKS};
+    let mut a = Asks::new();
+    assert!(a.push(Ask::Tray) && a.push(Ask::Volume));
+    assert_eq!(a.expire(100), 0);
+    assert_eq!(a.expire(100 + LOST_TICKS - 1), 0);
+    assert_eq!(a.pop(), Some(Ask::Tray));
+    // An answer came: the wait for the next one starts again.
+    assert_eq!(a.expire(100 + LOST_TICKS + 5), 0);
+    assert_eq!(a.expire(100 + 2 * LOST_TICKS + 4), 0);
+    assert_eq!(a.expire(100 + 2 * LOST_TICKS + 5), 1);
+    assert!(!a.pending() && a.pop().is_none());
+    assert_eq!(a.expire(1_000_000), 0);
 }

@@ -20,6 +20,8 @@ mod media;
 mod mse;
 mod keys;
 mod profile;
+mod shields;
+mod extensions;
 mod tabs;
 mod viewport;
 mod websocket;
@@ -118,6 +120,8 @@ struct Pending {
     secure_only: bool,
     id: u32, asked: String, since: u64, begun: u64, hops: usize,
     method: String, url: String, headers: Vec<(String, String)>, body: Vec<u8>, max: usize, script: Option<String>,
+    /// What the request is for, for Shields; worked out at its first hop when `None`.
+    kind: Option<sex_shields::Kind>,
 }
 impl Pending {
     fn new(id: u32, method: &str, url: &str, headers: &[(&str, &str)], body: &[u8], max: usize, script: Option<&str>) -> Pending {
@@ -125,6 +129,7 @@ impl Pending {
             id, asked: String::from(url), since: sex_pdx::get_ticks(), begun: 0, hops: 0, secure_only: false,
             method: String::from(if method.is_empty() { "GET" } else { method }), url: String::from(sex_html::url::fragment(url).0),
             headers: headers.iter().map(|(k, v)| (String::from(*k), String::from(*v))).collect(), body: Vec::from(body), max, script: script.map(String::from),
+            kind: None,
         }
     }
 }
@@ -142,11 +147,18 @@ impl Doc {
 
 /// One script of a page, ready to run.
 /// A script to run; `node` is its element, for `document.currentScript` (classic scripts only).
+/// Most bytecode the browser keeps for pages it may open again (GitHub's modules
+/// take about 10 MiB).
+const CODE_CACHE_BYTES: usize = 48 << 20;
+
 struct PageScript { source: String, name: String, module: bool, node: Option<usize>, external: bool }
 
 struct Browser {
     #[cfg(feature = "baseline-jit")]
     jit_enabled: bool,
+    /// Compiled scripts and modules, shared by every page and frame this session
+    /// (sex_js::CodeCache): a site's libraries are parsed once, not on each page.
+    code_cache: alloc::rc::Rc<core::cell::RefCell<sex_js::CodeCache>>,
     window: Window,
     /// Physical pixels within this window's held grant; never swapped into an iframe.
     surface: viewport::Surface,
@@ -234,6 +246,14 @@ struct Browser {
     /// Web font files loaded, by address, with their font number (None: unreadable).
     web_fonts: Vec<(String, Option<u8>)>,
     download_status: Option<String>,
+    /// Ad and tracker blocking.
+    shields: shields::Shields,
+    /// Installed extensions.
+    extensions: extensions::Extensions,
+    /// Requests Shields blocked for the shown page (and its frames).
+    blocked: u32,
+    /// What the next request is for, when the code making it knows (see `send`).
+    next_kind: Option<sex_shields::Kind>,
 }
 
 /// Most iframes a page loads; more show as empty boxes.
@@ -533,6 +553,8 @@ impl Browser {
             suggestions: &self.suggestions, chosen: self.chosen,
             find: self.find.as_deref().map(|q| (q, self.find_at, self.matches())), marks: &self.marks,
             zoom: sex_html::style::zoom(),
+            // The badge shows once Shields have blocked something on the page, or are down.
+            shields: Some((self.shields.up(&self.url), self.blocked)).filter(|(up, n)| self.url.starts_with("http") && (*n > 0 || !up)),
         };
         sex_web::frame_with(&self.page, &mut self.fonts, pixels, self.surface.w, self.surface.h, self.scroll, self.focus, &chrome);
         self.paint_frames();
@@ -582,6 +604,22 @@ impl Browser {
     fn send(&mut self, p: &mut Pending, patient: bool) -> Result<net::Exchange, &'static [u8]> {
         if p.hops >= MAX_REDIRECTS { return Err(b"Too many redirects."); }
         let target = sex_fetch::Url::parse(&p.url).map_err(|_| net::message(net::Error::Address))?;
+        if p.hops == 0 && p.kind.is_none() {
+            let hint = self.next_kind.take();
+            p.kind = Some(match hint {
+                Some(k) => k,
+                // A page itself loading: a tab's page, or a frame's.
+                None if self.nav_from.is_some() => if self.in_frame.is_some() { sex_shields::Kind::Subdocument } else { sex_shields::Kind::Document },
+                None if p.script.is_some() => sex_shields::Kind::Xhr,
+                None => sex_shields::Kind::guess(&p.url),
+            });
+        }
+        // Every hop is judged: a first-party address may redirect to a tracker.
+        let kind = p.kind.unwrap_or(sex_shields::Kind::Other);
+        if kind != sex_shields::Kind::Document {
+            let page = if kind == sex_shields::Kind::Subdocument && self.nav_from.is_some() { self.parent.clone().unwrap_or_default() } else { self.url.clone() };
+            if self.shields.blocks(&p.url, &page, kind) || self.extensions.blocks(&p.url, &page, kind).is_some() { self.blocked += 1; return Err(shields::BLOCKED); }
+        }
         if p.secure_only && !target.secure { return Err(b"An HTTPS page cannot load an insecure script."); }
         let cross = p.script.as_deref().filter(|o| *o != target.origin());
         let cookie = if cross.is_some() { None } else { self.jar.borrow().header(&target, wall()) };
@@ -642,6 +680,26 @@ impl Browser {
             self.scroll_to(frag);
             return;
         }
+        #[cfg(feature = "baseline-jit")]
+        if let Doc::Scripted(script) = &mut self.doc {
+            if let Ok([hits, misses, concat, compare]) = script.guest_fast_path_stats() {
+                sex_pdx::serial_record!("[web.object-cache.departure] hits={} misses={} concat={} compare={} url={}", hits, misses, concat, compare, self.url);
+            }
+            #[cfg(feature = "jit-profile")]
+            {
+                for (selector, calls, ns) in &script.page().query_profile {
+                    sex_pdx::serial_record!("[web.profile.query] calls={} elapsed_ns={} selector={:?}", calls, ns, selector);
+                }
+                let p = script.execution_profile();
+                let host_ns: u64 = p.host_ns.iter().copied().sum();
+                sex_pdx::serial_record!("[web.profile] vm_ns={} host_ns={} jit_ns={} jit_calls={} url={}", script.execution_ns(), host_ns, p.jit_ns, p.jit_calls, self.url);
+                for i in 0..128 {
+                    if p.calls[i] != 0 { sex_pdx::serial_record!("[web.profile.host] op={} calls={} elapsed_ns={}", i, p.calls[i], p.host_ns[i]); }
+                }
+            }
+            let s = script.jit_stats();
+            sex_pdx::serial_record!("[web.jit.departure] enabled={} compiled={} executed={} considered={} non_scalar={} cache_full={} unsupported={} hottest={} captured={} execution_ns={} url={}", self.jit_enabled as u8, s.compiled, s.executed, s.considered, s.non_scalar, s.cache_full, s.unsupported, s.hottest, s.compiled_captured, script.execution_ns(), self.url);
+        }
         if self.in_frame.is_none() { self.status = Some("Loading…"); }
         self.url = String::from(url);
         // Leaving the page stops its sound and pictures, and their downloads, and its
@@ -655,8 +713,13 @@ impl Browser {
         let begun = sex_pdx::get_ticks();
         let referrer = from.as_deref().zip(sex_fetch::Url::parse(url).ok()).and_then(|(f, t)| sex_fetch::referrer(f, &t)).unwrap_or_default();
         self.nav_from = Some(from);
+        if self.in_frame.is_none() { self.blocked = 0; }
         let (html, base) = if url == "about:downloads" {
             (self.downloads_page(), String::from(url))
+        } else if url == "about:shields" || url == "about:shields?update" {
+            (self.shields_page(url), String::from("about:shields"))
+        } else if url == "about:extensions" || url.starts_with("about:extensions?") {
+            (self.extensions_page(url), String::from("about:extensions"))
         } else if let Some(page) = built_in(if url.is_empty() { "about:welcome" } else { url }) {
             (String::from(page), String::from(if url.is_empty() { "about:welcome" } else { url }))
         } else if let Some(file) = url.strip_prefix('@') {
@@ -676,6 +739,8 @@ impl Browser {
             match got {
                 Ok((done, _)) if done == "about:downloads" => { self.url = done.clone(); (self.downloads_page(), done) }
                 Ok((final_url, body)) => { let t = text_of(&self.buf[body]); (t, final_url) }
+                // A frame Shields stopped stays an empty box.
+                Err(why) if why == shields::BLOCKED => (String::from("<title></title>"), String::from(url)),
                 Err(why) => (message_page("Can't open this page", core::str::from_utf8(why).unwrap_or(""), url), String::from(url)),
             }
         } else {
@@ -699,6 +764,7 @@ impl Browser {
             for (i, link) in links.iter().enumerate() {
                 self.status = Some("Loading style…");
                 if i == 0 { self.draw(); }
+                self.next_kind = Some(sex_shields::Kind::Stylesheet);
                 if let Ok((_, body)) = self.fetch(link) {
                     let text = text_of(&self.buf[body]);
                     faces.extend(sex_html::font_faces(&text, self.view.0).into_iter().map(|f| (link.clone(), f)));
@@ -714,6 +780,7 @@ impl Browser {
                 seen.push(src);
                 let Some(abs) = sex_html::url::resolve(&base, src) else { continue };
                 self.status = Some("Loading pictures…");
+                self.next_kind = Some(sex_shields::Kind::Image);
                 if let Ok((_, body)) = self.fetch(&abs) {
                     let bytes = core::mem::take(&mut self.buf);
                     self.fonts.add_picture(src, &bytes[body], self.view.0.saturating_sub(16).max(1) as usize, 2000);
@@ -722,7 +789,15 @@ impl Browser {
             }
             self.buf = Vec::new();
         }
-        let scripts = self.scripts(&dom, &base);
+        // Shields' hiding rules for what is on this page.
+        if let Some(css) = self.shields.css(&base, &dom) { sheets.push(css); }
+        // Extensions' content scripts: their style sheets, and scripts before (at
+        // `document_start`) or after the page's own.
+        let (ext_css, early, late) = self.extensions.content(&mut self.window, &base, self.in_frame.is_some());
+        sheets.extend(ext_css);
+        let mut scripts = early;
+        scripts.extend(self.scripts(&dom, &base));
+        scripts.extend(late);
         // Inline handlers (`onclick="..."`), `javascript:` links and forms need the engine too.
         let handlers = dom.descendants(sex_html::dom::Dom::ROOT).into_iter().any(|n| match &dom.nodes[n].kind {
             sex_html::dom::Kind::Element { tag, attrs, .. } => matches!(tag.as_str(), "input" | "textarea" | "select" | "form")
@@ -795,6 +870,7 @@ impl Browser {
                     let Some(abs) = sex_html::url::resolve(base, src) else { continue };
                     if !abs.starts_with("http") { continue; }
                     self.status = Some("Loading scripts…");
+                    self.next_kind = Some(sex_shields::Kind::Script);
                     let r = self.fetch_up_to(&abs, SCRIPT_MAX).ok().map(|(url, body)| (text_of(&self.buf[body]), url));
                     self.buf = Vec::new();
                     r
@@ -813,6 +889,7 @@ impl Browser {
     fn run_scripts(&mut self, scripts: Vec<PageScript>) {
         let Doc::Plain(mut doc) = core::mem::replace(&mut self.doc, Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", self.view, clock))) else { return };
         doc.import_map = core::mem::take(&mut self.import_map);
+        doc.code_cache = Some(self.code_cache.clone());
         let started = sex_pdx::get_ticks();
         let mut script = match Script::new(doc, sex_js::Limits::default()) {
             Ok(s) => s,
@@ -846,8 +923,14 @@ impl Browser {
         let _ = script.dispatch("ready");
         #[cfg(feature = "baseline-jit")]
         {
+            if let Ok([hits, misses, concat, compare]) = script.guest_fast_path_stats() {
+                sex_pdx::serial_record!("[web.object-cache] hits={} misses={} concat={} compare={}", hits, misses, concat, compare);
+            }
             let stats = script.jit_stats();
-            sex_pdx::serial_record!("[web.jit] enabled={} compiled={} executed={} bailouts={} refused={} ticks={} script_ticks={}", self.jit_enabled as u8, stats.compiled, stats.executed, stats.bailouts, stats.refused, sex_pdx::get_ticks() - started, sex_pdx::get_ticks() - scripts_started);
+            if self.jit_enabled {
+                sex_pdx::serial_record!("[web.jit.admission] considered={} non_scalar={} cache_full={} unsupported={} hottest={} rejected_len={} prefix={:?}", stats.considered, stats.non_scalar, stats.cache_full, stats.unsupported, stats.hottest, stats.rejected_len, stats.rejected_prefix);
+            }
+            sex_pdx::serial_record!("[web.jit] enabled={} compiled={} executed={} bailouts={} refused={} ticks={} script_ticks={} native={} url={}", self.jit_enabled as u8, stats.compiled, stats.executed, stats.bailouts, stats.refused, sex_pdx::get_ticks() - started, sex_pdx::get_ticks() - scripts_started, Script::<Document>::NATIVE as u8, self.url);
         }
         self.script_scroll = 0;
         self.doc = Doc::Scripted(alloc::boxed::Box::new(script));
@@ -865,6 +948,7 @@ impl Browser {
             for url in need {
                 if script.page().modules.len() >= MAX_MODULES { return; }
                 self.status = Some("Loading scripts…");
+                self.next_kind = Some(sex_shields::Kind::Script);
                 let body = if url.starts_with("http") {
                     self.fetch_up_to(&url, SCRIPT_MAX).ok().map(|(final_url, b)| {
                         script.page_mut().keep_source_policy(&url, &final_url);
@@ -933,6 +1017,7 @@ impl Browser {
         sex_web::svg::draw_inline(&self.page, &doc.dom, &styles, &mut self.fonts);
         doc.set_boxes(&self.page.boxes);
         doc.set_layers(&self.page.layers);
+        doc.set_pointer_styles(&styles);
         if self.in_frame.is_none() { self.frames_check = true; }
         self.scroll = self.scroll.min(self.max_scroll());
         if self.focus.map_or(false, |f| f >= self.page.links.len()) { self.focus = None; }
@@ -1000,6 +1085,7 @@ impl Browser {
             let m = media::Media::new(&self.doc.get().dom, node);
             let poster = if m.audio { None } else { self.doc.get().dom.attr(node, "poster").map(String::from) };
             if let Some(poster) = poster.filter(|p| !p.trim().is_empty()) {
+                self.next_kind = Some(sex_shields::Kind::Image);
                 let (status, body) = self.load_get(poster.trim());
                 if (200..300).contains(&status) {
                     if let Some(img) = sex_web::decode_image(&body, media::MAX_W, media::MAX_H) { media::Media::poster(&mut self.fonts, &m.picture_name(), img); }
@@ -1058,6 +1144,7 @@ impl Browser {
                     p.max = MEDIA_MAX;
                     // An element's load, not a script's: no CORS, and the site's cookies go.
                     p.script = None;
+                    p.kind = Some(sex_shields::Kind::Media);
                     match self.send(&mut p, false) {
                         Ok(ex) => {
                             self.media[i].state = media::State::Loading;
@@ -1146,6 +1233,7 @@ impl Browser {
             if wanted.is_empty() { return; }
             for url in wanted {
                 let full = matches!(&self.doc, Doc::Scripted(s) if s.page().modules.len() >= MAX_MODULES);
+                self.next_kind = Some(sex_shields::Kind::Script);
                 let body = if url.starts_with("http") && !full { self.fetch_up_to(&url, SCRIPT_MAX).ok().map(|(_, b)| text_of(&self.buf[b])) } else { None };
                 self.buf = Vec::new();
                 sex_pdx::serial_record!("[web.module] import=1 ok={} bytes={} url={}", body.is_some() as u8, body.as_ref().map_or(0, |b| b.len()), url);
@@ -1174,6 +1262,7 @@ impl Browser {
                 let origin = ask.cors.then(|| sex_fetch::Url::parse(&base).map(|u| u.origin()).unwrap_or_else(|_| String::from("null")));
                 let mut p = Pending::new(0, "GET", &abs, &[], &[], SCRIPT_MAX, origin.as_deref());
                 p.secure_only = sex_fetch::Url::parse(&base).is_ok_and(|u| u.secure);
+                p.kind = Some(sex_shields::Kind::Script);
                 self.http_pending(p).ok().filter(|r| {
                     (200..300).contains(&r.status) && sex_fetch::script::allowed(&base, &r.url, &r.headers, ask.cors)
                 })
@@ -1565,9 +1654,9 @@ impl Browser {
         let (px, py) = (x, y + self.scroll);
         // Over a frame: the frame's page has the pointer, in its own coordinates.
         if y >= 0 && self.in_frame.is_none() {
-            if let Some(i) = self.frames.iter().position(|f| px >= f.rect[0] && px < f.rect[0] + f.rect[2] && py >= f.rect[1] && py < f.rect[1] + f.rect[3]) {
+            if let Some(i) = self.frames.iter().position(|f| self.doc.get().accepts_pointer(f.node) && px >= f.rect[0] && px < f.rect[0] + f.rect[2] && py >= f.rect[1] && py < f.rect[1] + f.rect[3]) {
                 let [fx, fy, _, _] = self.frames[i].rect;
-                let q = sex_pdx::app_pointer::Pointer { x: (px - fx) as i16, y: (py - fy + BAR) as i16, buttons: p.buttons, kind: p.kind };
+                let q = sex_pdx::app_pointer::Pointer { x: (px - fx) as i16, y: (py - fy + BAR) as i16, buttons: p.buttons, kind: p.kind, mods: p.mods };
                 self.enter(i);
                 self.pointer(q);
                 self.leave(i);
@@ -1575,7 +1664,7 @@ impl Browser {
             }
         }
         // Links are named by node: a script's relayout rebuilds the list.
-        let link = if y >= 0 { self.page.links.iter().find(|l| px >= l.x && px < l.x + l.w && py >= l.y && py < l.y + l.h).map(|l| l.node) } else { None };
+        let link = if y >= 0 { self.doc.get().pointer_link_at(px, py, &self.page.links) } else { None };
         if let (Kind::Down { button: 1 }, Some(n), None) = (p.kind, link, self.in_frame) {
             let href = self.page.links.iter().find(|l| l.node == n).map(|l| l.href.clone()).unwrap_or_default();
             if let Some(t) = (!href.starts_with("javascript:") && !href.is_empty()).then(|| sex_html::url::resolve(&self.url, &href)).flatten() {
@@ -1730,10 +1819,13 @@ pub extern "C" fn _start() -> ! {
     let view = surface.document(BAR);
     let page = sex_html::render("", view.0, view.1, &fonts as &dyn Host);
     let doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", view, clock));
-    let mut b = Browser { #[cfg(feature = "baseline-jit")] jit_enabled: !given.split_ascii_whitespace().any(|a| a == "--no-jit"), window, surface, reported_size: (width, height), fonts, page, doc, sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), media_asked: false, media_loads: Vec::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None, import_map: Vec::new(), view, parent: None, frames: Vec::new(), in_frame: None, frame_dirty: false, referrer_next: None, nav_from: None, frames_check: false,
+    let mut b = Browser { #[cfg(feature = "baseline-jit")] jit_enabled: !given.split_ascii_whitespace().any(|a| a == "--no-jit"), code_cache: alloc::rc::Rc::new(core::cell::RefCell::new(sex_js::CodeCache::new(CODE_CACHE_BYTES))), window, surface, reported_size: (width, height), fonts, page, doc, sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), media_asked: false, media_loads: Vec::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None, import_map: Vec::new(), view, parent: None, frames: Vec::new(), in_frame: None, frame_dirty: false, referrer_next: None, nav_from: None, frames_check: false,
         tabs: Vec::new(), active: 0, forward: Vec::new(), profile: Default::default(), suggestions: Vec::new(), chosen: None,
-        find: None, find_at: 0, marks: Vec::new(), finding: false, laid_zoom: 100, sockets: Vec::new(), downloads: Vec::new(), download_status: None, web_fonts: Vec::new() };
+        find: None, find_at: 0, marks: Vec::new(), finding: false, laid_zoom: 100, sockets: Vec::new(), downloads: Vec::new(), download_status: None, web_fonts: Vec::new(),
+        shields: shields::Shields::empty(), extensions: Default::default(), blocked: 0, next_kind: None };
     b.profile = profile::Profile::load(&mut b.window, &mut b.jar.borrow_mut(), wall());
+    b.shields = shields::Shields::load(&mut b.window);
+    b.extensions = extensions::Extensions::load(&mut b.window);
     let first_tab = tabs::Tab::blank(&b);
     b.tabs.push(first_tab);
     // Big WebGL draws spread over the cores, a band of rows each.
@@ -1779,6 +1871,7 @@ pub extern "C" fn _start() -> ! {
                 }
                 b.pointer(p);
             }
+            Event::Drop { .. } | Event::DragEnded { .. } => {}
         }
     }
 }

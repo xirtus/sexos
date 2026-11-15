@@ -10,7 +10,8 @@ answers LOCKED. On the host the disk image holds no byte of that file's text, an
 Boot 2: Files starts and asks for the password. A wrong one is refused and the file
 stays unreadable; the right one unlocks home and the file reads back. Ctrl+Shift+K
 changes the password (old one, new one twice), home is locked, the old password is
-refused and the new one opens it."""
+refused and the new one opens it. Then home and the session are locked, and typing the
+password on the lock screen opens both."""
 import argparse,os,random,shutil,subprocess,time
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
@@ -28,7 +29,7 @@ def main():
  import http.server,threading
  class Handler(http.server.BaseHTTPRequestHandler):
   def do_GET(self):
-   body={'/secret':SECRET,'/files':(ROOT/'iso_root/programs/files').read_bytes()}.get(self.path)
+   body={'/secret':SECRET,'/files':(ROOT/'iso_root/programs/loom').read_bytes()}.get(self.path)
    if body is None:self.send_response(404);self.end_headers();return
    self.send_response(200);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
   def log_message(self,*x):pass
@@ -61,7 +62,7 @@ def main():
    assert 'KERNEL PANIC' not in t() and 'panicked' not in t() and '[files.app.fatal]' not in t()
   finally:g['stop']()
  def first(g,t,q,expect,ctrl,files,typed):
-  m=expect(f'fetch http://10.0.2.2:{PORT}/files /bin/files',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240);assert m[1].startswith('Saved'),m[1]
+  m=expect(f'fetch http://10.0.2.2:{PORT}/files /bin/loom',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240);assert m[1].startswith('Saved'),m[1]
   surface,_=files()
   s=len(t());g['focus'](surface);time.sleep(.5);ctrl('k')
   g['wait'](r'\[display.text.committed\] ',s,30);time.sleep(.5)
@@ -97,6 +98,15 @@ def main():
   s=len(t());g['focus'](surface);time.sleep(.5);ctrl('k');g['wait'](r'\[display.text.committed\] ',s,30);time.sleep(.5)
   typed(surface,PASSWORD);g['wait'](r'\[files.home.unlock.refused\] why=WrongPassword',s,300)
   s=len(t());typed(surface,NEWPASS);g['wait'](r'\[files.home.unlocked\] ',s,300)
+  expect('cat /home/secret.txt',r'\[spindle.fs.cat\] '+MARKER.decode())
+  # The lock screen signs in to home too: lock home and the session, type the password there.
+  s=len(t());g['focus'](surface);time.sleep(.5);ctrl('k');g['wait'](r'\[files.home.locked\]',s,60)
+  expect('cat /home/secret.txt',r'\[spindle.fs.result\] kind=7 status=17 ')
+  s=len(t());q.cmd('send-key',{'keys':[{'type':'qcode','data':'meta_l'},{'type':'qcode','data':'esc'}],'hold-time':80});g['wait'](r'\[shell.lock\] locked=1',s,30);time.sleep(1)
+  for k in NEWPASS:q.key(KEYS.get(k,k));time.sleep(.08)
+  s=len(t());q.key('ret')
+  g['wait'](r'\[files.home.unlocked\] ',s,300);g['wait'](r'\[files.password.home\] status=0',s,60)
+  g['wait'](r'\[shell.lock\] locked=0',s,60)
   expect('cat /home/secret.txt',r'\[spindle.fs.cat\] '+MARKER.decode())
  session('home2',second)
  result['ok']=True;print(result)

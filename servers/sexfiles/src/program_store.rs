@@ -11,16 +11,17 @@ fn read(lba: u64, bytes: u64, out: &mut [u8], buf_va: u64) -> Result<(), u32> {
     Ok(())
 }
 static mut DIRECTORY: [u8; store::SECTOR * store::MAX_DIRECTORY_SECTORS] = [0; store::SECTOR * store::MAX_DIRECTORY_SECTORS];
-pub fn load(name: [u64; 2]) -> u64 {
+/// `requester`: the program Shell starts a ticket for, 0 for Spindle.
+pub fn load(name: [u64; 2], requester: u32) -> u64 {
     // A run with arguments arrives as a ticket for `/bin/NAME`; without that file it is
     // the store's program NAME, still with its arguments.
-    match try_load(name,true) { Ok(len) => store::loaded(len), Err(error) => store::failed(error) }
+    match try_load(name,true,requester) { Ok(len) => store::loaded(len), Err(error) => { crate::fs_service::load_failed(); store::failed(error) } }
 }
 /// Image bytes only: never consume an unrelated prepared ticket or loaded latch.
 pub fn load_unbound(name:[u64;2])->u64 {
-    match try_load(name,false) { Ok(len)=>store::loaded(len),Err(error)=>store::failed(error) }
+    match try_load(name,false,0) { Ok(len)=>store::loaded(len),Err(error)=>store::failed(error) }
 }
-fn try_load(mut name: [u64; 2], remember:bool) -> Result<u32, u32> {
+fn try_load(mut name: [u64; 2], remember:bool, requester: u32) -> Result<u32, u32> {
     if !remember && name[0]==store::TICKET { return Err(store::NOT_FOUND); }
     let buf_va = crate::vfs::diskfs_bridge_get_buf_va();
     if buf_va == 0 || buf_va == u64::MAX { return Err(store::IO); }
@@ -28,7 +29,7 @@ fn try_load(mut name: [u64; 2], remember:bool) -> Result<u32, u32> {
     let image = unsafe { core::slice::from_raw_parts_mut(view.virtual_address as *mut u8, store::IMAGE_BYTES) };
     // A ticket names a path Spindle prepared. A bare name tries the program directory.
     let mut store_name = None;
-    let found = if name[0] == store::TICKET { let (found, fallback) = crate::fs_service::read_ticket(name[1], image); store_name = fallback; found } else {
+    let found = if name[0] == store::TICKET { let (found, fallback) = crate::fs_service::read_ticket(name[1], requester, image); store_name = fallback; found } else {
         let (a, b) = (name[0].to_le_bytes(), name[1].to_le_bytes());
         let mut bytes = [0u8; store::NAME_BYTES];
         bytes[..8].copy_from_slice(&a); bytes[8..].copy_from_slice(&b);
@@ -61,14 +62,16 @@ fn try_load(mut name: [u64; 2], remember:bool) -> Result<u32, u32> {
     let entry = store::find(&directory[..sectors * store::SECTOR], name).ok_or(store::NOT_FOUND)?;
     if entry.len == 0 || entry.len as usize > store::IMAGE_BYTES { return Err(store::TOO_LARGE); }
     if entry.lba < store::DIRECTORY_LBA + sectors as u64 { return Err(store::CORRUPT); }
+    // One command per shared-buffer run (up to 128 KiB), copied straight into the image:
+    // a page at a time, a 26 MiB program cost 6,600 drive round trips.
+    let run = (crate::vfs::diskfs_bridge_buf_len() as usize & !(store::SECTOR - 1)).max(BLOCK_BYTES);
     let (mut lba, mut done, len) = (entry.lba, 0usize, entry.len as usize);
     while done < len {
         // The drive transfers whole sectors; the last one may be only partly the file's.
-        let bytes = (len - done).min(BLOCK_BYTES).next_multiple_of(store::SECTOR).min(BLOCK_BYTES);
-        let mut block = [0u8; BLOCK_BYTES];
-        read(lba, bytes as u64, &mut block, buf_va)?;
+        let bytes = (len - done).next_multiple_of(store::SECTOR).min(run);
+        if DiskFs::diskfs_block_read(lba * store::SECTOR as u64, bytes as u64, sex_pdx::SLOT_BUF_LEND) != 0 { return Err(store::IO); }
         let used = (len - done).min(bytes);
-        image[done..done + used].copy_from_slice(&block[..used]);
+        image[done..done + used].copy_from_slice(unsafe { core::slice::from_raw_parts(buf_va as *const u8, used) });
         done += used;
         lba += (bytes / store::SECTOR) as u64;
     }

@@ -209,7 +209,7 @@ Now: per-domain CPU share and memory from syscall 87 (J1 part 1, #175).
 | Per-program disk and network I/O, end/restart program | R4 (needs J1's remaining counters; coordinate with J) |
 | **Capability graph**: which domain holds which grant, live (the name "Mesh" is this) | R5 |
 | Hardware: devices, drivers, temperatures, fan, battery wear, NVMe SMART | R5 (readings from H9) |
-| Boot timeline (Foreplay) and start time per program | R5 |
+| Boot timeline (Tantalize) and start time per program | R5 |
 
 ### sexshop (store) vs Flathub / GNOME Software / Steam
 
@@ -550,7 +550,7 @@ Andreas (2026-11-14): the Craft apps are the starting point, improved as we go. 
 their UI, list what is not perfect, and fill the blanks from the leaders: **Logic Pro, REAPER, Audacity,
 Ardour and LMMS** for Moan; **Kdenlive and Shotcut** (FilmCraft's layout is good) and
 **[Scarlet](https://github.com/Forward-Future/scarlet)** (MIT, AI transcript-based editing)
-for Splicy; Blender gets its own workstream (Z). V16 is that audit.
+for Splicy; Blender gets its own workstream (Z). V16 is that audit: [CRAFT_UI_AUDIT_2026_11_15.md](CRAFT_UI_AUDIT_2026_11_15.md).
 
 V ports the Craft creative apps on M11 (see T): PhotoCraft becomes Batik, VectorCraft Gestalt,
 FilmCraft Splicy, SoundCraft Moan. LightCraft's non-destructive development feeds Gaze's

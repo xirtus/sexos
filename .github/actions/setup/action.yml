@@ -56,13 +56,14 @@ runs:
         target/ffmpeg/include
         target/ffmpeg/include-c
         target/ffmpeg/sexos-recording-v1
-      key: ffmpeg-${{ inputs.recording }}-${{ hashFiles('scripts/build_ffmpeg.sh') }}
+      key: ffmpeg-${{ inputs.recording }}-${{ hashFiles('scripts/build_ffmpeg.sh', 'scripts/build_libvpx.sh', 'scripts/build_libaom.sh', 'scripts/build_x264.sh') }}
   - name: Build FFmpeg for programs
     if: inputs.media == 'true'
     shell: bash
     run: |
       profile=0
-      if [[ "${{ inputs.recording }}" == true ]]; then profile=1; fi
+      # The recording profile is also Splicy's export profile (VP9, Opus, AAC; WebM, MP4).
+      if [[ "${{ inputs.recording }}" == true ]]; then profile=2; fi
       if [[ ! -f target/ffmpeg/lib/libavcodec.a ]] || [[ "$(cat target/ffmpeg/sexos-recording-v1 2>/dev/null)" != "$profile" ]]; then
         FFMPEG_RECORDING=$profile bash scripts/build_ffmpeg.sh
       fi

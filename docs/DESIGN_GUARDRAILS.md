@@ -36,6 +36,10 @@ do from ring 3. When a feature needs a little ring-0 help, add the smallest mech
 | 2026-11-10 | 21,500 | Unchanged. #78 (stop screen, which must stay in the kernel) and #86 (IOMMU page tables, mechanism) took the kernel to 22,121 and turned master red. The fix removed the historical in-kernel e1000 bring-up probe from `hal/pci.rs` (3,266 lines: NIC rings, ARP/ICMP/UDP/TCP/DNS/HTTP frames, off unless built with `SEXOS_BOOT_NIC_DIAGNOSTICS=1`). That is a protocol stack in ring 0, and SexNet owns NICs. Kernel now about 18,600 lines. |
 | 2026-11-10 | 21,500 | Unchanged. A 22,500 raise for #89 (scheduler latency classes, ~115 lines, landed with #96) was dropped: after the NIC probe removal the kernel is ~18,700 lines with them included. |
 | 2026-11-10 | 21,500 | Unchanged. Display and Shell restarting in place adds about 30 lines of mechanism (keep their BOOT pages, end a domain at its next syscall); the desktop logic for coming back lives in Shell. |
+| 2026-11-14 | 22,700 | Drag VM mechanism (SYS_VM, VMX root, EPT, vCPU run), approved by Andreas 2026-11-14. Raise of 1,200 over 21,500; D1 (`kernel/src/vmx.rs` plus hooks) added about 560 lines, so SVM (D5) and later phases share the rest. |
+| 2026-11-14 | 22,700 | Unchanged. Cufflinks boot start (W1b) adds 27 kernel lines, all BOOT wiring: spawn domain 52 (like Denim), pair the `bt_hci` region with SexUSB, grant SexUSB's wake route and Cufflinks's Files route, and hand it the firmware pack (the Wi-Fi pack grant made generic). No Bluetooth protocol code in ring 0; kernel 20,199 lines. |
+| 2026-11-15 | 22,700 | Unchanged. Cufflinks headphones (W3) add 3 kernel lines, BOOT wiring only: pair the `bt_audio` region between Bell and Cufflinks. SBC, SDP, AVDTP and the routing of Bell's mix all live in `crates/sex-bt`, Cufflinks and Bell. |
+| 2026-11-15 | 22,700 | Unchanged. The Bluetooth pairing prompt (W2b) adds 4 kernel lines, BOOT wiring only: pair the `bt_ui` region between the Shell and Cufflinks and grant Cufflinks its wake route to the Shell. The panel, the commands and the pairing policy live in `sex_pdx::bt_ui`, the Shell, Display and Cufflinks; kernel 20,619 lines. |
 
 ## 2. No Linux-shaped kernel API
 
@@ -114,7 +118,8 @@ The themes:
   Linux driver bridge, is dressed for visiting.
 - **Romance and love.** Qupid, the media player.
 - **Psychedelic.** Kaleidoscope, the browser.
-- **Sex puns.** sexdrive (storage drivers), sexfiles, sexshop (the app store).
+- **Sex puns.** sexdrive (storage drivers), BDSM (the Block Device Storage Manager), sexfiles,
+  sexnet, sexshop (the app store).
 
 When a newer program and an older themed one do the same job, the better implementation
 keeps the themed name and absorbs the other's features and plans. The loser is removed,
@@ -139,7 +144,9 @@ while, so scripts and habits keep working; aliases are dropped once nothing uses
 | Qupid | The media player | `apps/play` (to become `apps/qupid`) |
 | sexshop | The app store | `apps/store` (to become the `sexshop` program) |
 | sexfiles | The filesystem service | `servers/sexfiles` |
+| sexnet | The network service (TCP/IP, DNS, Wi-Fi, Ethernet) | `servers/sexnet` |
 | sexdrive | Storage drivers (NVMe, AHCI, VMD) | `apps/sexdrive`, `servers/sexdrive` |
+| BDSM | Block Device Storage Manager: the block layer between sexdrive and sexfiles (partitions, the disk lens and write policy, RAID volumes, encryption at rest) | today spread over `crates/sex-disk`, `crates/sex-crypt`, `crates/sex-vmd`, sexdrive's disk lens and sexfiles' volumes; to be gathered under the name |
 | Tuxedo | The temporary Linux driver bridge (see section 3) | `servers/tuxedo` |
 
 The name table for apps without a canon name, and the state of each rename, is kept in

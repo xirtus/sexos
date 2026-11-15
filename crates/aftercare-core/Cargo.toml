@@ -1,0 +1,25 @@
+[package]
+name = "aftercare-core"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Aftercare's backup engine: encrypted, deduplicated snapshots over any blob store"
+
+[features]
+default = []
+# Host filesystem backend, source and sink (std::fs), for host tests and std targets.
+std = []
+
+[dependencies]
+# RustCrypto, MIT/Apache-2.0, no_std.
+chacha20poly1305 = { version = "=0.10.1", default-features = false, features = ["alloc"] }
+argon2 = { version = "=0.5.3", default-features = false, features = ["alloc"] }
+hmac = { version = "=0.12.1", default-features = false }
+sha2 = { version = "=0.10.9", default-features = false }
+# rust-random, MIT/Apache-2.0, no_std: the caller supplies the random numbers.
+rand_core = { version = "=0.6.4", default-features = false }
+# Pure-Rust zstd (MIT), no_std: encoder level Fastest (about zstd -1), decoder.
+ruzstd = { version = "=0.9.1", default-features = false }
+
+[dev-dependencies]
+rand_chacha = { version = "=0.3.1", default-features = false }

@@ -30,6 +30,7 @@ pub mod code {
     pub const K: u8 = 0x25;
     pub const L: u8 = 0x26;
     pub const V: u8 = 0x2F;
+    pub const A: u8 = 0x1E;
     pub const B: u8 = 0x30;
     pub const N: u8 = 0x31;
     pub const M: u8 = 0x32;
@@ -127,10 +128,14 @@ pub enum WmAction {
     Notifications,
     /// Super+B: the next wallpaper.
     Wallpaper,
+    /// Window animations on or off.
+    Animations,
     /// Super+Shift+N: night light off, low, medium, high.
     NightLight,
     /// Super+Ctrl+Space: the next keyboard layout.
     KeyboardLayout,
+    /// Super+Shift+B: the Bluetooth panel.
+    Bluetooth,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -182,7 +187,9 @@ pub fn binding(key: u8, m: Mods) -> Option<WmAction> {
         (code::W, _) => WmAction::Overview,
         (code::N, false) => WmAction::Notifications,
         (code::N, true) => WmAction::NightLight,
-        (code::B, _) => WmAction::Wallpaper,
+        (code::B, false) => WmAction::Wallpaper,
+        (code::B, true) => WmAction::Bluetooth,
+        (code::A, true) => WmAction::Animations,
         (code::ESC, _) => WmAction::Lock,
         _ => return None,
     })

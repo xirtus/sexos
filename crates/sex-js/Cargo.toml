@@ -14,8 +14,10 @@ sex-html = { path = "../sex-html" }
 sex-gl = { path = "../sex-gl" }
 sex-image = { path = "../sex-image" }
 sex-fetch = { path = "../sex-fetch" }
+sha2 = { version = "=0.10.9", default-features = false, features = ["force-soft"] }
 
 [features]
+jit-profile = ["baseline-jit"]
 # Experimental forward-control-flow int32/boolean QuickJS bytecode compiler; disabled by default.
 baseline-jit = []
 

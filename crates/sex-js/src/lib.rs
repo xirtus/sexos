@@ -14,12 +14,14 @@ extern crate alloc;
 
 #[cfg(feature = "baseline-jit")]
 pub mod baseline;
+pub mod code_cache;
 pub mod document;
 pub mod storage;
 pub mod webgl;
 #[cfg(sexjs_native)]
 mod native;
 pub use document::{ClassicScript, Document, FetchAsk, WsAsk};
+pub use code_cache::CodeCache;
 
 use alloc::{format, string::String, vec::Vec};
 use wasmi::{Caller, Config, Engine, Extern, Linker, Memory, Module, Store, StoreLimits, StoreLimitsBuilder, TypedFunc};
@@ -76,6 +78,12 @@ pub mod op {
     /// (control, caret in characters): focuses a text control and places its caret;
     /// (): no text control has focus.
     pub const CARET: u32 = 28;
+    /// (document/shadow root, CSS text): replace its adopted constructed sheets.
+    pub const ADOPTED_STYLES: u32 = 35;
+    /// (element, selector): match only this element; no subtree enumeration.
+    pub const MATCHES: u32 = 36;
+    /// (node): whether the bounded ancestor walk reaches SVG before foreignObject.
+    pub const SVG_CONTEXT: u32 = 37;
     /// (video or audio element, verb, argument): play, pause, seek SECONDS, load,
     /// volume 0..1, muted 0/1, loop 0/1; queued for the browser. The browser answers
     /// with `media` dispatches carrying the element's state and its events.
@@ -132,6 +140,12 @@ pub mod op {
     pub const IDB: u32 = 34;
     /// (id): the oldest message not yet taken (text, or with bit 16 an ArrayBuffer).
     pub const WS_TAKE: u32 = 74;
+    /// (name, source, kind+provenance): compiled bytecode for it, if the browser's code
+    /// cache has it; empty asks the engine to send it (CODE_PUT) once compiled. Engine
+    /// glue only, never page script; see [`crate::CodeCache`].
+    pub const CODE_GET: u32 = 75;
+    /// (bytecode): the answer to the last CODE_GET that came back empty.
+    pub const CODE_PUT: u32 = 76;
 }
 
 /// What scripts act on. A `None` result is JavaScript `null`.
@@ -170,7 +184,33 @@ impl Default for Limits {
 /// The first op whose arguments are bytes rather than text.
 pub const BYTE_OPS: u32 = 64;
 
+/// Opt-in elapsed-time attribution. Slot 127 collects unknown operations.
+/// This is wall time, including preemption, not a CPU sampling profile.
+#[cfg(feature = "jit-profile")]
+#[derive(Clone, Copy)]
+pub struct ExecutionProfile {
+    pub calls: [u64; 128],
+    pub host_ns: [u64; 128],
+    pub jit_calls: u64,
+    pub jit_ns: u64,
+}
+#[cfg(feature = "jit-profile")]
+impl Default for ExecutionProfile {
+    fn default() -> Self { Self { calls: [0; 128], host_ns: [0; 128], jit_calls: 0, jit_ns: 0 } }
+}
+#[cfg(feature = "jit-profile")]
+impl ExecutionProfile {
+    fn host(&mut self, op: u32, ns: u64) {
+        let i = (op as usize).min(127);
+        self.calls[i] = self.calls[i].saturating_add(1);
+        self.host_ns[i] = self.host_ns[i].saturating_add(ns);
+    }
+    fn jit(&mut self, ns: u64) { self.jit_calls = self.jit_calls.saturating_add(1); self.jit_ns = self.jit_ns.saturating_add(ns); }
+}
+
 struct State<P> {
+    #[cfg(feature = "jit-profile")]
+    profile: ExecutionProfile,
     page: P,
     result: Vec<u8>,
     limits: StoreLimits,
@@ -183,6 +223,8 @@ pub struct Script<P: Page + 'static> {
     vm: Vm<P>,
     budget_ms: i32,
     load_budget_ms: i32,
+    #[cfg(feature = "baseline-jit")]
+    execution_ns: u64,
 }
 
 /// The engine's two tiers: machine code (`cfg(sexjs_native)`, see build.rs) or the
@@ -202,6 +244,8 @@ struct Wasmi<P: Page + 'static> {
     module: TypedFunc<(i32, i32, i32, i32, i32, i32), i32>,
     ready: TypedFunc<i32, i32>,
     dispatch: TypedFunc<(i32, i32, i32), i32>,
+    #[cfg(feature = "baseline-jit")]
+    own_cache_stats: Option<TypedFunc<(), i32>>,
 }
 
 fn trapped(x: wasmi::Error) -> Error { Error::Trapped(format!("{x}")) }
@@ -266,7 +310,7 @@ impl<P: Page + 'static> Script<P> {
     pub const NATIVE: bool = cfg!(sexjs_native);
 
     fn start(vm: Vm<P>, limits: Limits) -> Result<Self, Error> {
-        let mut script = Self { vm, budget_ms: 0, load_budget_ms: 0 };
+        let mut script = Self { vm, budget_ms: 0, load_budget_ms: 0, #[cfg(feature = "baseline-jit")] execution_ns: 0 };
         // The prelude is ours: no time budget, which a slow machine could exceed.
         #[cfg(feature = "baseline-jit")]
         script.set_jit_enabled(false);
@@ -288,7 +332,7 @@ impl<P: Page + 'static> Script<P> {
         let engine = Engine::new(&config);
         let module = Module::new(&engine, wasm).map_err(|x| Error::Engine(format!("{x}")))?;
         let store_limits = StoreLimitsBuilder::new().memory_size(limits.memory_bytes).memories(1).tables(4).table_elements(100_000).instances(1).build();
-        let mut store = Store::new(&engine, State { page, result: Vec::new(), limits: store_limits, #[cfg(feature = "baseline-jit")] jit: baseline::Jit::default() });
+        let mut store = Store::new(&engine, State { #[cfg(feature = "jit-profile")] profile: ExecutionProfile::default(), page, result: Vec::new(), limits: store_limits, #[cfg(feature = "baseline-jit")] jit: baseline::Jit::default() });
         store.limiter(|s| &mut s.limits);
         let mut linker = Linker::<State<P>>::new(&engine);
         link(&mut linker).map_err(|_| e("link"))?;
@@ -303,6 +347,8 @@ impl<P: Page + 'static> Script<P> {
             module: instance.get_typed_func(&store, "sx_module").map_err(|_| e("sx_module"))?,
             ready: instance.get_typed_func(&store, "sx_modules_ready").map_err(|_| e("sx_modules_ready"))?,
             dispatch: instance.get_typed_func(&store, "sx_dispatch").map_err(|_| e("sx_dispatch"))?,
+            #[cfg(feature = "baseline-jit")]
+            own_cache_stats: instance.get_typed_func(&store, "sx_own_cache_stats").ok(),
             store, memory,
         };
         if start.call(&mut w.store, limits.heap_bytes as i32).map_err(|x| Error::Engine(format!("{x}")))? != 0 { return Err(e("init")); }
@@ -311,6 +357,20 @@ impl<P: Page + 'static> Script<P> {
 
     pub fn page(&self) -> &P { self.vm.page() }
     pub fn page_mut(&mut self) -> &mut P { self.vm.page_mut() }
+
+    /// Elapsed guest execution time (including host calls), excluding network
+    /// waits outside the VM. This is not host CPU time or total page-load time.
+    #[cfg(feature = "baseline-jit")]
+    pub fn execution_ns(&self) -> u64 { self.execution_ns }
+
+    fn timed<T>(&mut self, f: impl FnOnce(&mut Vm<P>) -> Result<T, Error>) -> Result<T, Error> {
+        #[cfg(feature = "baseline-jit")]
+        let before = self.vm.page_mut().now_ns();
+        let result = f(&mut self.vm);
+        #[cfg(feature = "baseline-jit")]
+        { self.execution_ns = self.execution_ns.saturating_add(self.vm.page_mut().now_ns().saturating_sub(before)); }
+        result
+    }
 
     fn put(&mut self, bytes: &[u8]) -> Result<i32, Error> {
         let p = self.vm.alloc(bytes.len().max(1) as i32)?;
@@ -334,7 +394,8 @@ impl<P: Page + 'static> Script<P> {
     fn eval_reporting(&mut self, source: &str, name: &str, mode: i32) -> Result<(), Error> {
         let src = self.put(source.as_bytes())?;
         let nm = self.put(name.as_bytes())?;
-        let r = self.vm.eval((src, source.len() as i32, nm, name.len() as i32, self.load_budget_ms, mode));
+        let budget = self.load_budget_ms;
+        let r = self.timed(|vm| vm.eval((src, source.len() as i32, nm, name.len() as i32, budget, mode)));
         self.vm.free(src);
         self.vm.free(nm);
         let r = match r { Ok(0) => Ok(()), Ok(_) => Err(Error::Thrown), Err(x) => Err(x) };
@@ -369,7 +430,8 @@ impl<P: Page + 'static> Script<P> {
     /// Runs the waiting `import()` calls whose module graphs are now all given (asking
     /// for more where they import further modules). Returns how many still wait.
     pub fn modules_ready(&mut self) -> Result<usize, Error> {
-        let r = self.vm.ready(self.budget_ms)?;
+        let budget = self.budget_ms;
+        let r = self.timed(|vm| vm.ready(budget))?;
         self.dispatch("flush")?;
         Ok(r.max(0) as usize)
     }
@@ -377,7 +439,8 @@ impl<P: Page + 'static> Script<P> {
     fn module_call(&mut self, source: &str, name: &str, discover: bool) -> Result<(), Error> {
         let src = self.put(source.as_bytes())?;
         let nm = self.put(name.as_bytes())?;
-        let r = self.vm.module((src, source.len() as i32, nm, name.len() as i32, self.load_budget_ms, discover as i32));
+        let budget = self.load_budget_ms;
+        let r = self.timed(|vm| vm.module((src, source.len() as i32, nm, name.len() as i32, budget, discover as i32)));
         self.vm.free(src);
         self.vm.free(nm);
         match r { Ok(0) => Ok(()), Ok(_) => Err(Error::Thrown), Err(x) => Err(x) }
@@ -390,7 +453,7 @@ impl<P: Page + 'static> Script<P> {
         // A fetch's arrival may run a script the page inserted (a player's multi-megabyte
         // bundle): that gets the load budget, as the page's own scripts do.
         let budget = if message.starts_with("fetched\t") { self.load_budget_ms.max(self.budget_ms) } else { self.budget_ms };
-        let r = self.vm.dispatch((m, message.len() as i32, budget));
+        let r = self.timed(|vm| vm.dispatch((m, message.len() as i32, budget)));
         self.vm.free(m);
         r
     }
@@ -411,6 +474,35 @@ impl<P: Page + 'static> Script<P> {
         }
     }
 
+    #[cfg(feature = "jit-profile")]
+    pub fn execution_profile(&self) -> ExecutionProfile {
+        match &self.vm {
+            Vm::Wasmi(w) => w.store.data().profile,
+            #[cfg(sexjs_native)] Vm::Native(v) => v.execution_profile(),
+        }
+    }
+
+    /// Guest own-property cache hits and misses; separate from native JIT code.
+    #[cfg(feature = "baseline-jit")]
+    pub fn own_property_cache_stats(&mut self) -> Result<[u64; 2], Error> {
+        self.guest_fast_path_stats().map(|s| [s[0], s[1]])
+    }
+    /// Own-property hits/misses, string concatenations and string comparisons.
+    /// All four counters describe guest fast paths, not native-compiled functions.
+    #[cfg(feature = "baseline-jit")]
+    pub fn guest_fast_path_stats(&mut self) -> Result<[u64; 4], Error> {
+        match &mut self.vm {
+            Vm::Wasmi(w) => {
+                let Some(f) = w.own_cache_stats else { return Ok([0; 4]); };
+                let at = f.call(&mut w.store, ()).map_err(trapped)? as usize;
+                let mut bytes = [0; 32];
+                w.memory.read(&w.store, at, &mut bytes).map_err(|_| Error::Trapped(String::from("cache stats")))?;
+                Ok(core::array::from_fn(|i| u64::from_le_bytes(bytes[i*8..i*8+8].try_into().unwrap())))
+            },
+            #[cfg(sexjs_native)] Vm::Native(v) => v.guest_fast_path_stats(),
+        }
+    }
+
     /// Bytes of linear memory the engine holds.
     pub fn memory_bytes(&self) -> usize { self.vm.memory_bytes() }
 }
@@ -422,10 +514,14 @@ fn link<P: Page + 'static>(linker: &mut Linker<State<P>>) -> Result<(), wasmi::e
         let Some(m) = mem(&c) else { return -1 };
         let (data, state) = m.data_and_store_mut(&mut c);
         let Some(args) = args_of(data, ptr, len) else { return -1 };
+        #[cfg(feature = "jit-profile")]
+        let before = state.page.now_ns();
         let r = if op as u32 >= BYTE_OPS { state.page.call_bytes(op as u32, &args) } else {
             let Some(text) = args.iter().map(|a| core::str::from_utf8(a).ok()).collect::<Option<Vec<&str>>>() else { return -1 };
             state.page.call(op as u32, &text).map(String::into_bytes)
         };
+        #[cfg(feature = "jit-profile")]
+        state.profile.host(op as u32, state.page.now_ns().saturating_sub(before));
         match r {
             Some(r) => { let n = r.len() as i32; state.result = r; n }
             None => -1,
@@ -438,16 +534,25 @@ fn link<P: Page + 'static>(linker: &mut Linker<State<P>>) -> Result<(), wasmi::e
         let at = out as u32 as usize;
         if let Some(dst) = data.get_mut(at..at + r.len()) { dst.copy_from_slice(&r); }
     })?;
-    // Protocol 2 carries an int32/boolean result kind. Legacy guests must fall
-    // back rather than reinterpret a boolean result as an integer.
-    linker.func_wrap("dom", "jit_available", |_: C<'_, P>| -> i32 { if cfg!(feature = "baseline-jit") {2} else {0} })?;
+    // Protocol 3 supplies scalar argument/closure snapshots. Older guests
+    // keep interpreter fallback rather than passing a different input shape.
+    linker.func_wrap("dom", "jit_available", |c: C<'_, P>| -> i32 {
+        #[cfg(feature = "baseline-jit")] { if c.data().jit.enabled {3} else {0} }
+        #[cfg(not(feature = "baseline-jit"))] { let _ = c; 0 }
+    })?;
     linker.func_wrap("dom", "jit", |_: C<'_, P>, _: i32, _: i32, _: i32, _: i32, _: i32| -> i32 { 0 })?;
-    linker.func_wrap("dom", "jit_v2", |mut c: C<'_, P>, pc: i32, len: i32, argv: i32, argc: i32, out: i32| -> i32 {
+    linker.func_wrap("dom", "jit_v2", |_: C<'_, P>, _: i32, _: i32, _: i32, _: i32, _: i32| -> i32 { 0 })?;
+    linker.func_wrap("dom", "jit_v3", |mut c: C<'_, P>, pc: i32, len: i32, argv: i32, argc: i32, out: i32| -> i32 {
         #[cfg(feature = "baseline-jit")]
         {
             let Some(m) = mem(&c) else { return 0 };
             let (data, state) = m.data_and_store_mut(&mut c);
-            return state.jit.run(data, pc as u32, len as u32, argv as u32, argc as u32, out as u32) as i32;
+            #[cfg(feature = "jit-profile")]
+            let before = state.page.now_ns();
+            let result = state.jit.run_v3(data, pc as u32, len as u32, argv as u32, argc as u32, out as u32) as i32;
+            #[cfg(feature = "jit-profile")]
+            state.profile.jit(state.page.now_ns().saturating_sub(before));
+            return result;
         }
         #[cfg(not(feature = "baseline-jit"))]
         { let _ = (&mut c, pc, len, argv, argc, out); 0 }

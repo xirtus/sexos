@@ -29,6 +29,8 @@ pub unsafe extern "C" fn _start() -> ! {
     let n = files::args(&mut line);
     let mut words = vec![b"program".to_vec()];
     words.extend(args::split(&line[..n]));
+    // Started as a hidden helper (`crate::process`): no window, nobody to close one.
+    if words.get(1).is_some_and(|w| w == crate::process::HIDDEN_WORD) { words.remove(1); console::hide(); }
     let owned: Vec<std::ffi::CString> = words.into_iter().map(|w| std::ffi::CString::new(w).unwrap_or_default()).collect();
     let mut argv: Vec<*const c_char> = owned.iter().map(|s| s.as_ptr()).collect();
     argv.push(core::ptr::null());
@@ -44,13 +46,17 @@ pub unsafe extern "C" fn _start() -> ! {
 pub extern "C" fn sys_exit(status: i32) -> ! {
     let me = sex_pdx::app_lifecycle::catalog(sex_pdx::app_lifecycle::SELF_CATALOG_SLOT).map_or((0, 0), |i| (i.target_pd, i.task_id));
     sex_pdx::serial_record!("[std.exit] target={} task={} status={}", me.0, me.1, status);
+    console::ended(status);
     console::finish(&if status == 0 { "Finished".to_string() } else { format!("Finished with status {status}") });
+    // Whoever started this run hears how it ended (`sex_pdx::launch`).
+    sex_app::launch::report(status as u32);
     sex_pdx::task_finish(status as u32 as u64)
 }
 
 #[no_mangle]
 pub extern "C" fn sys_abort() -> ! {
     sex_pdx::serial_record!("[std.abort]");
+    console::ended(134);
     console::finish("Stopped: the program failed");
     sex_pdx::task_finish(134)
 }
@@ -594,6 +600,13 @@ pub extern "C" fn sys_socket(domain: i32, kind: i32, protocol: i32) -> i32 {
 pub unsafe extern "C" fn sys_bind(s: i32, addr: *const abi::sockaddr, len: abi::socklen_t) -> i32 { on_sock!(s, k => unsafe { net::bind(&k, addr, len) }) }
 #[no_mangle]
 pub extern "C" fn sys_listen(s: i32, _backlog: i32) -> i32 { on_sock!(s, k => net::listen(&k)) }
+/// SexOS's own: TLS on a connected socket, to `host` (see net::tls_start).
+#[no_mangle]
+pub unsafe extern "C" fn sys_tls_start(s: i32, host: *const u8, len: usize) -> i32 {
+    if host.is_null() { return -errno::EFAULT; }
+    let host = unsafe { core::slice::from_raw_parts(host, len) };
+    on_sock!(s, k => net::tls_start(&k, host))
+}
 #[no_mangle]
 pub unsafe extern "C" fn sys_connect(s: i32, addr: *const abi::sockaddr, len: abi::socklen_t) -> i32 { on_sock!(s, k => unsafe { net::connect(&k, addr, len) }) }
 #[no_mangle]

@@ -12,6 +12,8 @@ use crate::xhci::{self, page, trb, Event, Failure, Ring, Xhci, CC_SHORT_PACKET, 
 use crate::hid::{PointerLayout, Pointer};
 #[path = "ether.rs"]
 mod ether;
+#[path = "bt.rs"]
+mod bt;
 
 use crate::{send_report_to_sexinput, record_device_wheel, OP_USB_KEYBOARD_REPORT, OP_USB_MOUSE_REPORT};
 
@@ -139,6 +141,16 @@ pub struct Usb {
     pub net_region: u64,
     /// Receive and send buffers (2 KiB per ring position), made with the first adapter.
     ether_buffers: ((u64, u64), (u64, u64)),
+    /// The Bluetooth controller in use, the region its packets move through (0: none,
+    /// sex_pdx::bt_hci), and its event, receive and send buffers.
+    bt: Option<bt::Bt>,
+    pub bt_region: u64,
+    bt_buffers: ((u64, u64), (u64, u64), (u64, u64)),
+    /// Bluetooth keyboards' held keys (device, modifiers, keys), from Cufflinks; merged
+    /// with USB keyboards' in `send_keys`.
+    bt_keys: [(u8, u8, u64); 8],
+    /// Buttons held on each Bluetooth pointing device (device, mask).
+    bt_buttons: [(u8, u8); 8],
 }
 
 const BOUNCE: u64 = sex_pdx::usb_disk::BUFFER_BYTES + 8192;
@@ -157,7 +169,8 @@ impl Usb {
     pub fn new(x: Xhci) -> Usb {
         Usb { x, dev: [Device::empty(); MAX_DEVICES], slot_dev: [0; 256], root_pending: 0, sent_keys: 0,
             sent_modifiers: 0, stats: Stats::default(), bounce: (0, 0), disks: [0; sex_pdx::usb_disk::MAX_DISKS as usize],
-            generation: 0, changed: false, freed: 0, ether: None, net_region: 0, ether_buffers: ((0, 0), (0, 0)) }
+            generation: 0, changed: false, freed: 0, ether: None, net_region: 0, ether_buffers: ((0, 0), (0, 0)),
+            bt: None, bt_region: 0, bt_buffers: ((0, 0), (0, 0), (0, 0)), bt_keys: [(0, 0, 0); 8], bt_buttons: [(0, 0); 8] }
     }
 
     fn ctx(&self, base: u64, index: u64) -> *mut u32 { (base + index * self.x.csz) as *mut u32 }
@@ -315,6 +328,7 @@ impl Usb {
         if msc.is_some() { picks = [None, None, None]; }
         // Nothing else to drive: perhaps a network adapter (its ECM function may be in
         // another configuration, as on Realtek RTL8152/8153).
+        if msc.is_none() && picks.iter().all(|p| p.is_none()) && self.try_bt(i, cfg, config_value, speed)? { return Ok(i); }
         if msc.is_none() && picks.iter().all(|p| p.is_none()) && self.try_ether(i, configs)? { return Ok(i); }
 
         // Configure Endpoint for each picked interrupt endpoint.
@@ -581,6 +595,7 @@ impl Usb {
         }
         if keys_changed { self.send_keys(); }
         self.ether_gone(i);
+        self.bt_gone(i);
         if self.dev[i].storage.active {
             let disk = self.dev[i].storage.disk as usize;
             if self.disks[disk] == i as u8 + 1 { self.disks[disk] = 0; self.freed |= 1 << disk; }
@@ -636,6 +651,7 @@ impl Usb {
         let Some(i) = (self.slot_dev[e.slot() as usize] as usize).checked_sub(1) else { return };
         let dci = e.endpoint();
         if self.ether_event(i, e) { return; }
+        if self.bt_event(i, e) { return; }
         let Some(k) = self.dev[i].intr.iter().position(|x| x.active && x.dci == dci) else { return };
         let Some(pos) = self.dev[i].intr[k].ring.index_of(e.pointer()) else { return };
         let code = e.code();
@@ -691,15 +707,17 @@ impl Usb {
         let mut keys = 0u64;
         let mut n = 0;
         let mut modifiers = 0u8;
-        for d in self.dev.iter().filter(|d| d.used) {
-            for e in d.intr.iter().filter(|e| e.active && e.role == Role::Keyboard) {
-                modifiers |= e.modifiers;
-                for b in 0..6 {
-                    let key = (e.keys >> (8 * b)) as u8;
-                    if key == 0 || n == 6 || (0..n).any(|j| (keys >> (8 * j)) as u8 == key) { continue; }
-                    keys |= (key as u64) << (8 * n);
-                    n += 1;
-                }
+        let usb = self.dev.iter().filter(|d| d.used)
+            .flat_map(|d| d.intr.iter().filter(|e| e.active && e.role == Role::Keyboard).map(|e| (e.modifiers, e.keys)));
+        // Bluetooth keyboards (from Cufflinks) count as more keyboards.
+        let bt = self.bt_keys.iter().filter(|k| k.0 != 0).map(|k| (k.1, k.2));
+        for (m, held) in usb.chain(bt) {
+            modifiers |= m;
+            for b in 0..6 {
+                let key = (held >> (8 * b)) as u8;
+                if key == 0 || n == 6 || (0..n).any(|j| (keys >> (8 * j)) as u8 == key) { continue; }
+                keys |= (key as u64) << (8 * n);
+                n += 1;
             }
         }
         if keys == self.sent_keys && modifiers == self.sent_modifiers { return; }
@@ -730,7 +748,11 @@ impl Usb {
             let _ = send_report_to_sexinput(OP_USB_MOUSE_REPORT, 0, buttons as u64, packed);
             return;
         }
-        // Relative motion wider than 8 bits is split into several reports.
+        self.send_relative(slot, r.len() as u32, buttons, x, y, wheel);
+    }
+
+    /// Relative motion to Input; motion wider than 8 bits is split into several reports.
+    fn send_relative(&mut self, slot: u32, bytes: u32, buttons: u8, x: i32, y: i32, wheel: i8) {
         let (mut dx, mut dy) = (x, y);
         let mut first = true;
         loop {
@@ -739,7 +761,7 @@ impl Usb {
             dx -= sx; dy -= sy;
             let w = if first { wheel } else { 0 };
             let packed = (sx as i8 as u8 as u64) | ((sy as i8 as u8 as u64) << 8) | ((w as u8 as u64) << 16);
-            if first { record_device_wheel(slot, r.len() as u32, false, w, packed); }
+            if first { record_device_wheel(slot, bytes, false, w, packed); }
             let _ = send_report_to_sexinput(OP_USB_MOUSE_REPORT, 0, buttons as u64, packed);
             first = false;
             if dx == 0 && dy == 0 { break; }

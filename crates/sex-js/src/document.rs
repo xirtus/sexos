@@ -8,6 +8,9 @@ use alloc::{format, string::String, vec::Vec};
 use sex_html::dom::{Dom, Kind, NodeId};
 
 pub struct Document {
+    #[cfg(feature = "jit-profile")]
+    pub query_profile: Vec<(String, u64, u64)>,
+    selectors: Vec<(String, alloc::rc::Rc<Vec<sex_html::css::Selector>>)>,
     resource_owner: u64,
     source_policies: alloc::collections::BTreeMap<String, bool>,
     source_policy_overflow: bool,
@@ -37,6 +40,8 @@ pub struct Document {
     pub rects: Vec<Option<(i32, i32, i32, i32)>>,
     /// Each node's paint layer (higher paints on top), from `Page::layers`.
     pub layers: Vec<u32>,
+    /// Pointer eligibility from the same computed styles as the current layout.
+    pointer_events: Vec<bool>,
     /// Supplies the monotonic clock.
     pub clock: fn() -> u64,
     /// Canvas 2D command batches not yet drawn, by canvas element.
@@ -78,6 +83,8 @@ pub struct Document {
     pub modules_wanted: Vec<String>,
     /// The page's import map: (bare specifier, or a prefix ending in `/`, address).
     pub import_map: Vec<(String, String)>,
+    /// The browser's compiled-script cache, shared by its pages (see [`crate::CodeCache`]).
+    pub code_cache: Option<alloc::rc::Rc<core::cell::RefCell<crate::CodeCache>>>,
 }
 
 /// What a page asked of its WebSockets.
@@ -187,7 +194,7 @@ fn rough_measure(font: &str, text: &str) -> i32 {
 
 impl Document {
     pub fn new(dom: Dom, url: &str, viewport: (i32, i32), clock: fn() -> u64) -> Self {
-        Self { resource_owner: NEXT_RESOURCE_OWNER.fetch_add(1, Ordering::Relaxed), source_policies: Default::default(), source_policy_overflow: false, dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, navigate_post: None, navigate_type: String::new(), referrer: String::new(), parent_origin: None, outbox: Vec::new(), rects: Vec::new(), layers: Vec::new(), clock, canvas_queue: Vec::new(), measure: rough_measure, gl: Default::default(), pictures: Vec::new(), fetches: Vec::new(), classic_scripts: Vec::new(), bodies: Vec::new(), media: Vec::new(), media_bytes: Vec::new(), heads: Vec::new(), next_fetch: 0, cookies: None, wall: || 0, storage: None, ws_asks: Vec::new(), ws_in: Vec::new(), next_ws: 0, modules: Default::default(), modules_wanted: Vec::new(), import_map: Vec::new() }
+        Self { #[cfg(feature = "jit-profile")] query_profile: Vec::new(), selectors: Vec::new(), resource_owner: NEXT_RESOURCE_OWNER.fetch_add(1, Ordering::Relaxed), source_policies: Default::default(), source_policy_overflow: false, dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, navigate_post: None, navigate_type: String::new(), referrer: String::new(), parent_origin: None, outbox: Vec::new(), rects: Vec::new(), layers: Vec::new(), pointer_events: Vec::new(), clock, canvas_queue: Vec::new(), measure: rough_measure, gl: Default::default(), pictures: Vec::new(), fetches: Vec::new(), classic_scripts: Vec::new(), bodies: Vec::new(), media: Vec::new(), media_bytes: Vec::new(), heads: Vec::new(), next_fetch: 0, cookies: None, wall: || 0, storage: None, ws_asks: Vec::new(), ws_in: Vec::new(), next_ws: 0, modules: Default::default(), modules_wanted: Vec::new(), import_map: Vec::new(), code_cache: None }
     }
 
     /// Takes each element's laid-out box from the browser's layout, for
@@ -195,6 +202,13 @@ impl Document {
     pub fn set_boxes(&mut self, boxes: &[Option<[i32; 4]>]) {
         self.rects.clear();
         self.rects.extend(boxes.iter().map(|b| b.map(|r| (r[0], r[1], r[2], r[3]))));
+    }
+    pub fn set_pointer_styles(&mut self, styles: &[Option<sex_html::style::Style>]) {
+        self.pointer_events.clear();
+        self.pointer_events.extend(styles.iter().map(|s| s.as_ref().is_some_and(|s| s.pointer_events)));
+    }
+    pub fn accepts_pointer(&self, node: NodeId) -> bool {
+        self.pointer_events.get(node).copied().unwrap_or(true)
     }
     pub fn set_layers(&mut self, layers: &[u32]) {
         self.layers.clear();
@@ -207,7 +221,7 @@ impl Document {
         for (n, rect) in self.rects.iter().enumerate() {
             let Some((rx, ry, rw, rh)) = *rect else { continue };
             if x < rx || y < ry || x >= rx + rw || y >= ry + rh { continue; }
-            if self.dom.tag(n).is_none() { continue; }
+            if self.dom.tag(n).is_none() || !self.accepts_pointer(n) { continue; }
             let mut depth = 0;
             let mut p = self.dom.nodes[n].parent;
             while let Some(q) = p { depth += 1; p = self.dom.nodes[q].parent; }
@@ -215,6 +229,16 @@ impl Document {
             if best.map_or(true, |(d, _)| key >= d) { best = Some((key, n)); }
         }
         best.map(|(_, n)| n)
+    }
+    /// Native default activation follows the same hit target as DOM events. A
+    /// clickable descendant can activate an ancestor link excluded from hit testing.
+    pub fn pointer_link_at(&self, x: i32, y: i32, links: &[sex_html::layout::Link]) -> Option<NodeId> {
+        let mut node = self.node_at(x, y);
+        while let Some(n) = node {
+            if links.iter().any(|link| link.node == n) { return Some(n); }
+            node = self.dom.nodes[n].parent;
+        }
+        None
     }
     fn node(&self, s: Option<&&str>) -> Option<NodeId> {
         let id: NodeId = s?.parse().ok()?;
@@ -260,6 +284,8 @@ impl Page for Document {
         let text = |i: usize| a.get(i).and_then(|b| core::str::from_utf8(b).ok()).unwrap_or("");
         match operation {
             op::SOURCE_MUTED => return Some(if self.source_muted(text(0)) { b"1".to_vec() } else { b"0".to_vec() }),
+            op::CODE_GET => return self.code_cache.as_ref()?.borrow_mut().lookup(a.first()?, a.get(1)?, a.get(2)?),
+            op::CODE_PUT => { self.code_cache.as_ref()?.borrow_mut().store(a.first()?.to_vec()); return None; }
             op::CLASSIC_SCRIPT => {
                 if self.classic_scripts.len() >= 64 { return None; }
                 let node = self.element(Some(&text(0)))?;
@@ -397,19 +423,72 @@ impl Page for Document {
                     _ => None,
                 };
             }
+            op::ADOPTED_STYLES => {
+                let root = self.node(a.first())?;
+                if root != Dom::ROOT && self.dom.tag(root) != Some("sx-shadow") { return Some(String::from("!")); }
+                let text = *a.get(1)?;
+                // One bounded page-wide budget, including detached shadow roots.
+                let other: usize = self.dom.adopted_styles.iter().filter(|(r, _)| **r != root).map(|(_, s)| s.len()).sum();
+                if text.len() > 2 * 1024 * 1024 || other.saturating_add(text.len()) > 2 * 1024 * 1024 { return Some(String::from("!")); }
+                if text.is_empty() { self.dom.adopted_styles.remove(&root); }
+                else { self.dom.adopted_styles.insert(root, String::from(text)); }
+                self.dirty = true;
+                Some(none())
+            }
             op::BY_ID => {
                 let want = *a.first()?;
                 self.dom.descendants(Dom::ROOT).into_iter().find(|&n| self.dom.attr(n, "id") == Some(want)).map(|n| format!("{n}"))
             }
-            op::QUERY => {
+            op::QUERY | op::MATCHES => {
                 let root = self.node(a.first())?;
-                let list = sex_html::css::parse_selector_list(a.get(1)?);
+                let text = *a.get(1)?;
+                #[cfg(feature = "jit-profile")]
+                let before = (self.clock)();
+                let list = if let Some((_, parsed)) = self.selectors.iter().find(|(s, _)| s == text) {
+                    parsed.clone()
+                } else {
+                    let parsed = alloc::rc::Rc::new(sex_html::css::parse_selector_list(text));
+                    // Bound retained parser input; larger queries still work uncached.
+                    if text.len() <= 4096 {
+                        if self.selectors.len() == 64 { self.selectors.remove(0); }
+                        self.selectors.push((String::from(text), parsed.clone()));
+                    }
+                    parsed
+                };
                 if list.is_empty() { return Some(String::from("!")); }
+                if operation == op::MATCHES {
+                    return Some(String::from(if list.iter().any(|s| sex_html::css::matches(&self.dom, root, s)) { "1" } else { "0" }));
+                }
                 let all = a.get(2) == Some(&"1");
-                let mut found = self.dom.descendants(root).into_iter().skip(1)
-                    .filter(|&n| matches!(self.dom.nodes[n].kind, Kind::Element { .. }))
-                    .filter(|&n| list.iter().any(|s| sex_html::css::matches(&self.dom, n, s)));
-                if all { Some(Self::ids(found)) } else { found.next().map(|n| format!("{n}")) }
+                let found = self.dom.query(root, &list, all);
+                #[cfg(feature = "jit-profile")]
+                {
+                    let elapsed = (self.clock)().saturating_sub(before);
+                    if let Some((_, calls, ns)) = self.query_profile.iter_mut().find(|(s, _, _)| s == text) {
+                        *calls = calls.saturating_add(1); *ns = ns.saturating_add(elapsed);
+                    } else if text.len() <= 16384 {
+                        let entry = (String::from(text), 1, elapsed);
+                        if self.query_profile.len() < 32 { self.query_profile.push(entry); }
+                        else if let Some((i, _)) = self.query_profile.iter().enumerate().min_by_key(|(_, (_, _, ns))| ns) {
+                            if elapsed > self.query_profile[i].2 { self.query_profile[i] = entry; }
+                        }
+                    }
+                }
+                if all { Some(Self::ids(found.into_iter())) } else { found.first().map(|n| format!("{n}")) }
+            }
+            op::SVG_CONTEXT => {
+                let node = self.node(a.first())?;
+                let mut parent = self.dom.nodes[node].parent;
+                // Match the prelude's existing namespace classification, but
+                // cross the guest/host boundary only once per shared tag.
+                for _ in 0..64 {
+                    let Some(n) = parent else { break };
+                    let Some(tag) = self.dom.tag(n) else { break };
+                    if tag.eq_ignore_ascii_case("svg") { return Some(String::from("1")); }
+                    if tag.eq_ignore_ascii_case("foreignobject") { break; }
+                    parent = self.dom.nodes[n].parent;
+                }
+                Some(String::from("0"))
             }
             op::INFO => {
                 let n = self.node(a.first())?;
