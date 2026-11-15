@@ -20,9 +20,9 @@ impl restricted_helper_provider::Platform for Context<'_>{
  fn catalog(&mut self,pd:u32)->Option<Subject>{(pd==43).then_some(self.child)}fn now(&mut self)->u64{self.now}
  fn reply(&mut self,value:u64)->bool{if self.full{return false}self.replies.push_back((s(self.service.pd(),self.service.pd()),value));true}
 }
-struct Fake{now:u64,own:u64,epochs:[u64;4],providers:[Provider;4],journals:[Journal;4],replies:VecDeque<(Subject,u64)>,sent:Vec<(Service,u64,[u64;3])>,header:[u8;176],child:Subject,parent:Subject,copy:usize,bound:bool,deny_bound:bool,active:usize,refused:usize,kills:Vec<Subject>,retired:bool,started:usize,ready:usize,full:bool,reply_full:bool,ready_full:bool,start_full:bool,reserved:usize}
+struct Fake{now:u64,own:u64,epochs:[u64;4],providers:[Provider;4],journals:[Journal;4],replies:VecDeque<(Subject,u64)>,sent:Vec<(Service,u64,[u64;3])>,header:[u8;176],child:Subject,parent:Subject,copy:usize,bound:bool,deny_bound:bool,change_epoch_on_activate:bool,active:usize,refused:usize,kills:Vec<Subject>,retired:bool,started:usize,ready:usize,full:bool,reply_full:bool,ready_full:bool,start_full:bool,reserved:usize}
 impl Fake{
- fn new()->Self{let mut f=Self{now:0,own:1,epochs:[1;4],providers:core::array::from_fn(|_|Provider::new()),journals:core::array::from_fn(|_|Journal::new()),replies:VecDeque::new(),sent:Vec::new(),header:[0;176],child:s(43,43),parent:s(42,99),copy:0,bound:false,deny_bound:false,active:0,refused:0,kills:Vec::new(),retired:false,started:0,ready:0,full:false,reply_full:false,ready_full:false,start_full:false,reserved:0};
+ fn new()->Self{let mut f=Self{now:0,own:1,epochs:[1;4],providers:core::array::from_fn(|_|Provider::new()),journals:core::array::from_fn(|_|Journal::new()),replies:VecDeque::new(),sent:Vec::new(),header:[0;176],child:s(43,43),parent:s(42,99),copy:0,bound:false,deny_bound:false,change_epoch_on_activate:false,active:0,refused:0,kills:Vec::new(),retired:false,started:0,ready:0,full:false,reply_full:false,ready_full:false,start_full:false,reserved:0};
   f.header[..8].copy_from_slice(b"MOANINF2");f.header[8..12].copy_from_slice(&7u32.to_le_bytes());f.header[12..16].copy_from_slice(&1u32.to_le_bytes());f.header[16..24].copy_from_slice(&1u64.to_le_bytes());f.header[24..40].fill(7);f.header[40..72].fill(1);f.header[72..104].fill(2);f.header[136..144].copy_from_slice(&f.parent.word().to_le_bytes());f.header[164..168].copy_from_slice(&9u32.to_le_bytes());
   for i in 0..4{let mut ctx=Context{epoch:1,now:0,child:f.child,replies:&mut f.replies,service:[Service::Files,Service::Display,Service::Net,Service::Bell][i],full:false};f.providers[i].initialize(&f.journals[i],&mut ctx);}f
  }
@@ -47,7 +47,7 @@ impl Platform for Fake{
   };self.replies.push_back((s(11,11),value));true
  }
  fn copy(&mut self,_:Reservation,length:u32)->Option<Subject>{assert_eq!(length,100);assert!(self.providers.iter().all(|p|p.staging(self.now).is_some()));self.copy+=1;self.child=s(43,0x40000001);Some(self.child)}
- fn activate(&mut self,_:Reservation,child:Subject)->Activation{assert_eq!(child,self.child);assert!(self.bound);assert_eq!(self.copy,1);for p in &self.providers{let b=p.binding().expect("all providers must be sealed before activation");assert_eq!(b.child,child);assert!(p.job_live(b,self.now));}self.active+=1;Activation::Active}
+ fn activate(&mut self,_:Reservation,child:Subject)->Activation{assert_eq!(child,self.child);assert!(self.bound);assert_eq!(self.copy,1);for p in &self.providers{let b=p.binding().expect("all providers must be sealed before activation");assert_eq!(b.child,child);assert!(p.job_live(b,self.now));}self.active+=1;if self.change_epoch_on_activate{self.epochs[1]+=1;}Activation::Active}
  fn started(&mut self,parent:Subject,cookie:u32,child:Subject)->bool{assert_eq!((parent,cookie,child),(self.parent,9,self.child));if self.start_full{return false}self.started+=1;true}
  fn refused(&mut self,_:Subject,_:u32){self.refused+=1;}
  fn ready(&mut self,child:Subject,value:u64)->bool{assert_eq!(child,self.child);assert_eq!(value,0xd4<<56|7<<32|1);if self.ready_full{return false}self.ready+=1;true}
@@ -62,10 +62,13 @@ impl Platform for Fake{
  f.now=120_001;c.poll(&mut f);assert!(!f.kills.is_empty());assert!(f.kills.iter().all(|who|*who==f.child));
 }
 #[test]fn copied_child_is_exactly_cleaned_if_post_copy_binding_fails(){
- let mut f=Fake::new();f.deny_bound=true;let mut c=Coordinator::new();let parent=f.parent;assert!(c.begin(parent,7,9,1,&mut f));f.run(&mut c);assert_eq!(f.copy,1);assert_eq!(f.active,0);assert_eq!(f.refused,1);assert_eq!(f.kills,vec![f.child]);
+ let mut f=Fake::new();f.deny_bound=true;let mut c=Coordinator::new();let parent=f.parent;assert!(c.begin(parent,7,9,1,&mut f));f.run(&mut c);assert_eq!(f.copy,1);assert_eq!(f.active,0);assert_eq!(f.refused,0);assert_eq!(f.kills,vec![f.child]);assert!(c.pending());assert!(c.holds_done(f.child));f.retired=true;f.start_full=true;c.poll(&mut f);assert!(c.holds_done(f.child));assert_eq!(f.started,0);f.start_full=false;c.poll(&mut f);assert!(!c.pending());assert_eq!(f.started,1);
 }
 #[test]fn parent_start_codec_preserves_full_cookie_and_both_epochs(){
  let words=restricted_job::start_words(0xffffff,u32::MAX,u64::MAX,u64::MAX).unwrap();assert_eq!(restricted_job::start_decode(words),Some((0xffffff,u32::MAX,u64::MAX,u64::MAX)));assert!(restricted_job::start_decode([words[0]|1<<63,1,1]).is_none());assert!(restricted_job::start_words(0,1,1,1).is_none());assert!(restricted_job::start_words(1,0,1,1).is_none());assert!(restricted_job::start_words(1,1,0,1).is_none());assert!(restricted_job::start_words(1,1,1,0).is_none());
+}
+#[test]fn epoch_failure_after_actual_activation_retains_cleanup_until_retired_and_notice_admitted(){
+ let mut f=Fake::new();f.change_epoch_on_activate=true;let mut c=Coordinator::new();let parent=f.parent;assert!(c.begin(parent,7,9,1,&mut f));f.run(&mut c);assert_eq!(f.active,1);assert_eq!(f.refused,0);assert!(c.pending());assert_eq!(f.started,0);assert!(!f.kills.is_empty());for _ in 0..3{c.poll(&mut f);}assert_eq!(f.started,0);f.retired=true;f.start_full=true;c.poll(&mut f);assert!(c.holds_done(f.child));assert_eq!(f.started,0);f.start_full=false;c.poll(&mut f);assert!(!c.pending());assert_eq!(f.started,1);
 }
 #[test]fn wrong_owner_and_stale_epoch_never_reserve_or_activate(){
  let mut f=Fake::new();let mut c=Coordinator::new();let parent=f.parent;assert!(!c.begin(parent,7,9,2,&mut f));f.header[136..144].copy_from_slice(&s(42,100).word().to_le_bytes());assert!(c.begin(parent,7,9,1,&mut f));f.run(&mut c);assert_eq!(f.reserved,0);assert_eq!(f.active,0);assert_eq!(f.refused,1);
