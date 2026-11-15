@@ -438,3 +438,40 @@ fn eight_real_strips_and_master_are_reachable_in_both_mixer_sizes() {
         assert_ne!(ui.focused(), Some(level));
     }
 }
+#[test]
+fn playback_allows_live_mix_but_blocks_source_edits_and_groups_one_pass_undo() {
+    let (mut ui, mut s) = studio();
+    s.session.add(vec![[12000, -24000]; 100]).unwrap();
+    s.session.mark_saved();
+    s.refresh(&mut ui);
+    let original = s.session.encode_project().unwrap();
+    s.set_activity(&mut ui, true, true);
+    let master_label = ui.find_text("MASTER").unwrap();
+    let master_strip = ui.parent(master_label).unwrap();
+    let master = ui
+        .find_kind("slider")
+        .into_iter()
+        .find(|id| ui.parent(*id) == Some(master_strip))
+        .unwrap();
+    assert!(ui.is_enabled(master));
+    ui.set_value(master, 50.0);
+    s.on(&mut ui, &Response::Changed(master)).unwrap();
+    assert_eq!(s.session.master_volume(), 50);
+    ui.set_value(master, 60.0);
+    s.on(&mut ui, &Response::Changed(master)).unwrap();
+    assert_eq!(s.session.master_volume(), 60);
+    for cmd in ["moan.library.keys", "moan.new-project", "moan.undo"] {
+        assert_eq!(s.on(&mut ui, &Response::Command(cmd.into())).unwrap(), None);
+    }
+    assert_eq!(s.session.tracks.len(), 1);
+    assert!(s.session.is_dirty());
+    s.set_activity(&mut ui, false, false);
+    assert!(s.session.undo());
+    assert_eq!(
+        s.session.encode_project().unwrap(),
+        original,
+        "entire live pass is one bounded mix checkpoint"
+    );
+    s.set_activity(&mut ui, true, false);
+    assert!(!ui.is_enabled(master));
+}

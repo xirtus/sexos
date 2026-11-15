@@ -332,6 +332,17 @@ pub fn render_processed_observed(
     tracks: &mut [Track<'_>],
     start: usize,
     out: &mut [Frame],
+    sample: impl FnMut(usize, Frame),
+) {
+    render_processed_observed_master(tracks, start, out, 100, sample);
+}
+/// Scale the wide accumulated bus before its single final i16 saturation.
+/// Unity preserves the existing renderer and track tap semantics exactly.
+pub fn render_processed_observed_master(
+    tracks: &mut [Track<'_>],
+    start: usize,
+    out: &mut [Frame],
+    master_percent: u16,
     mut sample: impl FnMut(usize, Frame),
 ) {
     if out.is_empty() {
@@ -376,7 +387,10 @@ pub fn render_processed_observed(
                 post.map(|v| v.clamp(i16::MIN as i64, i16::MAX as i64) as i16),
             );
         }
-        *dest = mix.map(|v| v.clamp(i16::MIN as i64, i16::MAX as i64) as i16);
+        *dest = mix.map(|v| {
+            (v.saturating_mul(master_percent as i64) / 100).clamp(i16::MIN as i64, i16::MAX as i64)
+                as i16
+        });
     }
     for t in tracks {
         t.processed_until = start.checked_add(out.len());
