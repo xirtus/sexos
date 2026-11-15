@@ -51,7 +51,7 @@ impl Controller {
                 }
                 Action::Ltk(k) => self.peer.ltk = Some(k),
                 Action::Failed(r) => self.peer.failed = Some(r),
-                Action::Encrypt(_) => unreachable!("peer is the responder"),
+                Action::Encrypt(_) | Action::Identity { .. } => unreachable!("peer is the responder"),
             }
         }
     }

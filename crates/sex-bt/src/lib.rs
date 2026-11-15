@@ -13,13 +13,22 @@
 //! - `smp` + `crypto`: LE Secure Connections pairing (P-256, AES-CMAC f4/f5/f6/g2).
 //! - `ssp`: classic Secure Simple Pairing event flow.
 //! - `pack`: firmware pack lookup.
+//! - `att` + `gatt`: ATT client codec and HID over GATT (HOGP) discovery and reports.
+//! - `hid`: boot reports and report-map parsing into keys and pointer motion.
+//! - `hidp`: classic HID (L2CAP PSM 0x11/0x13, boot protocol).
+//! - `bonds`: LE (LTK, IRK, identity) and classic (link key) bonds and their stored form.
 //! - `host`: all of the above composed into one packet-in/packet-out host stack.
 #![no_std]
 extern crate alloc;
 
+pub mod att;
+pub mod bonds;
 pub mod controller;
 pub mod crypto;
 pub mod hci;
+pub mod gatt;
+pub mod hid;
+pub mod hidp;
 pub mod host;
 pub mod intel;
 pub mod l2cap;
