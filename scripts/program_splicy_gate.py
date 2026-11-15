@@ -111,5 +111,10 @@ def main():
   shot('splicy-exported')
   text=t();assert 'KERNEL PANIC' not in text and '[splicy.fatal]' not in text and 'KERNEL PAGE FAULT' not in text
   print({'ok':True,'thumbs':int(sc[1]),'peaks':int(sc[2]),'scan_ms':int(sc[3]),'label_px':labels,'wave_px':waves,'exported':exported})
+ except BaseException:
+  # The usual tail is mostly clock noise: show what the shell, loader and program said.
+  keep=re.compile(r'splicy|shell\.program|spindle|program\.|loader|app\.|fatal|panic|fault|denied|refused|oom|limit',re.I)
+  print('--- splicy: program lines ---',*[l for l in t().splitlines() if keep.search(l) and 'civil' not in l][-120:],sep='\n',file=__import__('sys').stderr)
+  raise
  finally:g['stop']()
 if __name__=='__main__':main()
