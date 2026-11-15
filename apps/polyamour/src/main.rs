@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Polyamour as a SexOS program: `run polyamour [scene.blend|.glb|.obj|.poly]`.
 //! On the host, `polyamour --screenshot out.png [scene] [workspace]` draws the
-//! window once into a PNG (used for docs and visual checks).
+//! window once into a PNG (used for docs and visual checks); `--node-demo`
+//! gives the startup material a few texture nodes and opens Shading.
 use polyamour::input::Input;
 #[cfg(target_os = "hermit")]
 use polyamour::input::{Button, Key, Mods};
@@ -34,13 +35,17 @@ fn main() {
                     app.doc.want_workspace = Some(w.clone());
                 }
             }
+            "--node-demo" => {
+                polyamour::nodetree::demo_textures(&mut app.doc);
+                app.doc.want_workspace = Some("Shading".into());
+            }
             p => open_arg(&mut app, p),
         }
     }
     app.frame(Input::Tick);
     app.frame(Input::Tick);
     let Some(out) = out else {
-        eprintln!("usage: polyamour --screenshot out.png [--workspace Name] [scene file]");
+        eprintln!("usage: polyamour --screenshot out.png [--workspace Name] [--node-demo] [scene file]");
         return;
     };
     let f = std::fs::File::create(&out).expect("create png");

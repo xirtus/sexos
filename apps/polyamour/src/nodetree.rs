@@ -398,6 +398,50 @@ pub fn set_prop_text(t: &mut NodeTree, n: usize, prop: &str, value: &str) -> boo
 /// * `node.use_nodes` "TREE"
 /// * `node.replace_surface` "TREE\tNODE\tIDNAME": swap the shader node that
 ///   feeds an output for a new one of another type (Properties' Surface menu).
+/// A small textured material for screenshots and demos: a generated checker
+/// Image Texture on the active object's first material, mixed with a colour
+/// into the Principled BSDF's Base Color, and a Math node on Roughness.
+pub fn demo_textures(d: &mut Doc) -> Option<usize> {
+    let s = &mut d.scene;
+    let obj = s.active_object.or(s.selected.first().copied())?;
+    let mi = *s.objects.get(obj)?.materials.first()?;
+    let (w, h) = (64u32, 64u32);
+    let pixels = (0..w * h)
+        .map(|i| if ((i % w) / 8 + (i / w) / 8) % 2 == 0 { [0.8, 0.8, 0.8, 1.0] } else { [0.05, 0.05, 0.05, 1.0] })
+        .collect();
+    s.images.push(sex_3d::scene::Image { name: "Checker".into(), width: w, height: h, pixels });
+    let img = s.images.len() - 1;
+    let m = s.materials.get_mut(mi)?;
+    if m.node_tree.is_none() {
+        m.node_tree = Some(seed_material_tree(m));
+    }
+    let t = m.node_tree.as_mut()?;
+    let p = t.find_type("ShaderNodeBsdfPrincipled")?;
+    let [x, y] = t.nodes[p].location;
+    let coord = t.add("ShaderNodeTexCoord", [x - 760.0, y - 20.0])?;
+    let tex = t.add("ShaderNodeTexImage", [x - 540.0, y])?;
+    t.nodes[tex].set_prop("image", Prop::Id(Some(img)));
+    let rgb = t.add("ShaderNodeRGB", [x - 540.0, y - 300.0])?;
+    t.nodes[rgb].outputs[0].value = Value::Color([0.8, 0.25, 0.05, 1.0]);
+    let mix = t.add("ShaderNodeMix", [x - 260.0, y])?;
+    t.nodes[mix].set_prop("blend_type", Prop::Enum("MULTIPLY".into()));
+    nodes::update::update(&mut t.nodes[mix]);
+    let math = t.add("ShaderNodeMath", [x - 260.0, y - 260.0])?;
+    t.nodes[math].set_prop("operation", Prop::Enum("MULTIPLY".into()));
+    nodes::update::update(&mut t.nodes[math]);
+    set(t, math, "Value_001", Value::Float(0.6));
+    t.link(coord, "UV", tex, "Vector").ok()?;
+    t.link(tex, "Color", mix, "A").ok()?;
+    t.link(rgb, "Color", mix, "B").ok()?;
+    t.link(mix, "Result", p, "Base Color").ok()?;
+    t.link(tex, "Alpha", math, "Value").ok()?;
+    t.link(math, "Value", p, "Roughness").ok()?;
+    t.active = Some(mix);
+    sync_legacy(s, TreeRef::Material(mi));
+    d.touch();
+    Some(mi)
+}
+
 pub fn run(d: &mut Doc, op: &Op) -> bool {
     match op.id.as_str() {
         "node.set_prop" => {
@@ -507,6 +551,15 @@ pub fn replace_node(t: &mut NodeTree, n: usize, idname: &str) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn demo_textures_builds_a_linked_tree() {
+        let mut d = Doc::default();
+        let mi = demo_textures(&mut d).expect("startup scene has a material");
+        let t = d.scene.materials[mi].node_tree.as_ref().unwrap();
+        assert!(t.find_type("ShaderNodeTexImage").is_some() && t.find_type("ShaderNodeMix").is_some());
+        assert!(t.links.len() >= 7, "{:?}", t.links);
+    }
 
     #[test]
     fn seeded_tree_syncs_back_to_the_material() {
