@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-only
-"""Burlesque on Weft: slide navigation, adding/deleting slides, layout changes,
-presenter view toggle, PDF export, and clean Shell close."""
+"""Burlesque on Weft: Keynote-class themes, transitions, live animated playback,
+editable speaker notes, dual-card presenter view, PPTX/ODP roundtrip, PDF export,
+and clean Shell close."""
 import argparse
 import json
 import re
 import shutil
+import struct
 import time
+import zlib
 from pathlib import Path
 from install_program import install
 from quil_autosave_gate import boot
@@ -15,14 +18,60 @@ from program_gate_geometry import colours, maximize
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def ppm_to_png(ppm_bytes, tile=None):
+    """Convert PPM P6 image bytes to standard PNG format without external PIL dependency."""
+    header_end = ppm_bytes.find(b'\n255\n')
+    assert header_end != -1, 'valid PPM header'
+    header = ppm_bytes[:header_end]
+    raw_pixels = ppm_bytes[header_end + 5:]
+    tokens = header.split()
+    assert tokens[0] == b'P6', 'PPM P6 signature'
+    w = int(tokens[1])
+    h = int(tokens[2])
+
+    if tile:
+        tx, ty, tw, th = tile
+        tx = max(0, min(tx, w))
+        ty = max(0, min(ty, h))
+        tw = max(1, min(tw, w - tx))
+        th = max(1, min(th, h - ty))
+        rows = []
+        for y in range(ty, ty + th):
+            start = (y * w + tx) * 3
+            end = start + tw * 3
+            rows.append(b'\x00' + raw_pixels[start:end])
+        raw_data = b''.join(rows)
+        out_w, out_h = tw, th
+    else:
+        rows = []
+        row_len = w * 3
+        for y in range(h):
+            start = y * row_len
+            rows.append(b'\x00' + raw_pixels[start:start + row_len])
+        raw_data = b''.join(rows)
+        out_w, out_h = w, h
+
+    def chunk(tag, data):
+        return struct.pack('>I', len(data)) + tag + data + struct.pack('>I', zlib.crc32(tag + data))
+
+    ihdr = struct.pack('>IIBBBBB', out_w, out_h, 8, 2, 0, 0, 0)
+    idat = zlib.compress(raw_data, 6)
+    return b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', ihdr) + chunk(b'IDAT', idat) + chunk(b'IEND', b'')
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     for name in ('iso', 'source-disk', 'out'):
         p.add_argument('--' + name, required=True, type=Path)
     p.add_argument('--resolution', default='1280x800')
+    p.add_argument('--screenshots-dir', type=Path, default=None)
     a = p.parse_args()
     a.out = a.out.resolve()
     a.out.mkdir(parents=True, exist_ok=True)
+    if a.screenshots_dir:
+        a.screenshots_dir = a.screenshots_dir.resolve()
+        a.screenshots_dir.mkdir(parents=True, exist_ok=True)
+
     disk = a.out / 'nvme.img'
     shutil.copyfile(a.source_disk, disk)
 
@@ -76,15 +125,23 @@ def main():
 
         def screenshot(name):
             time.sleep(0.5)
-            path = a.out / f'{name}.ppm'
-            q.cmd('screendump', {'filename': str(path)})
+            ppm_path = a.out / f'{name}.ppm'
+            q.cmd('screendump', {'filename': str(ppm_path)})
             time.sleep(0.2)
-            n = len(colours(path.read_bytes(), tile))
+            ppm_bytes = ppm_path.read_bytes()
+            n = len(colours(ppm_bytes, tile))
             assert n > 8, (name, 'blank window', n)
+
+            png_bytes = ppm_to_png(ppm_bytes, tile)
+            png_path = a.out / f'{name}.png'
+            png_path.write_bytes(png_bytes)
+            if a.screenshots_dir:
+                (a.screenshots_dir / f'{name}.png').write_bytes(png_bytes)
+
             return n
 
         # 1. Assert initial state
-        m = g['wait'](r'\[burlesque.state\] slides=1 current=0 presenter=0', 0, 60)
+        g['wait'](r'\[burlesque.state\] slides=1 current=0 presenter=0 theme=burlesque_velvet transition=none', 0, 60)
 
         # 2. Add slide
         start = len(text())
@@ -101,28 +158,66 @@ def main():
         control('next')
         g['wait'](r'\[burlesque.state\] slides=2 current=1 presenter=0', start, 60)
 
-        # 5. Toggle Presenter View
+        # 5. Theme Picker & Screenshot (burlesque-themes.png)
+        start = len(text())
+        control('theme')
+        g['wait'](r'\[burlesque.theme\] name=Editorial Light', start, 60)
+        g['wait'](r'\[burlesque.state\] slides=2 current=1 presenter=0 theme=editorial_light', start, 60)
+        theme_colours = screenshot('burlesque-themes')
+
+        # 6. Transitions & Animated Playback (burlesque-transition.png)
+        start = len(text())
+        control('transition')
+        g['wait'](r'\[burlesque.state\] slides=2 current=1 presenter=0 theme=editorial_light transition=dissolve', start, 60)
+
+        start = len(text())
+        control('play_transition')
+        g['wait'](r'\[burlesque.transition\] kind=dissolve frames=8', start, 60)
+        transition_colours = screenshot('burlesque-transition')
+
+        # 7. Presenter View & Speaker Notes (burlesque-presenter-notes.png)
         start = len(text())
         control('presenter')
+        g['wait'](r'\[burlesque.presenter\] active=1 slide=1', start, 60)
         g['wait'](r'\[burlesque.state\] slides=2 current=1 presenter=1', start, 60)
-        presenter_colours = screenshot('burlesque-presenter')
+        presenter_colours = screenshot('burlesque-presenter-notes')
 
         # Toggle back to editor
         start = len(text())
         control('presenter')
+        g['wait'](r'\[burlesque.presenter\] active=0 slide=1', start, 60)
         g['wait'](r'\[burlesque.state\] slides=2 current=1 presenter=0', start, 60)
 
-        editor_colours = screenshot('burlesque-editor')
+        # 8. PPTX / ODP Roundtrip & PDF Export (burlesque-pptx-odp-pdf.png)
+        start = len(text())
+        control('save_pptx')
+        m_pptx = g['wait'](r'\[burlesque.exported\] fmt=pptx file=(\S+) bytes=([1-9]\d*) pages=2', start, 60)
+        pptx_bytes = int(m_pptx[2])
+        assert pptx_bytes > 500, f'PPTX too small: {pptx_bytes}'
 
-        # 6. Export PDF
+        start = len(text())
+        control('import_pptx')
+        g['wait'](r'\[burlesque.imported\] fmt=pptx slides=2 notes=[12]', start, 60)
+
+        start = len(text())
+        control('save_odp')
+        m_odp = g['wait'](r'\[burlesque.exported\] fmt=odp file=(\S+) bytes=([1-9]\d*) pages=2', start, 60)
+        odp_bytes = int(m_odp[2])
+        assert odp_bytes > 500, f'ODP too small: {odp_bytes}'
+
+        start = len(text())
+        control('import_odp')
+        g['wait'](r'\[burlesque.imported\] fmt=odp slides=2 notes=[12]', start, 60)
+
         start = len(text())
         control('export_pdf')
-        m_exp = g['wait'](r'\[burlesque.exported\] file=(\S+) bytes=([1-9]\d*) pages=2', start, 60)
+        m_exp = g['wait'](r'\[burlesque.exported\] fmt=pdf file=(\S+) bytes=([1-9]\d*) pages=2', start, 60)
         exported_file = m_exp[1]
         exported_bytes = int(m_exp[2])
-        assert exported_bytes > 100, f'PDF too small: {exported_bytes}'
+        assert exported_bytes > 500, f'PDF too small: {exported_bytes}'
+        pdf_colours = screenshot('burlesque-pptx-odp-pdf')
 
-        # 7. Close window via F11
+        # 9. Close window via F11
         start = len(text())
         g['focus'](surface)
         q.key('f11')
@@ -137,7 +232,12 @@ def main():
             slides=2,
             exported_file=exported_file,
             exported_bytes=exported_bytes,
-            colours=dict(editor=editor_colours, presenter=presenter_colours),
+            colours=dict(
+                theme=theme_colours,
+                transition=transition_colours,
+                presenter=presenter_colours,
+                pdf=pdf_colours,
+            ),
         )
         (a.out / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
         print(result)

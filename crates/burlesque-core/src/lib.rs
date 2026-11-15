@@ -35,11 +35,11 @@ pub use elements::{
 };
 pub use layout::{resolve_placeholders, PlaceholderBox, PlaceholderKind, SlideLayout};
 pub use markdown::{export_markdown, import_markdown};
-pub use odp::import_odp;
-pub use pdf_export::export_pdf;
-pub use pptx::import_pptx;
+pub use odp::{export_odp, import_odp};
+pub use pdf_export::{export_pdf, export_pdf_with_notes};
+pub use pptx::{export_pptx, import_pptx};
 pub use presenter::{BlankMode, PresenterSession, render_presenter_view};
-pub use render::render_slide;
+pub use render::{render_deck_transition, render_slide, render_transition_canvas, render_transition_frame};
 pub use theme::{Palette, Theme, Typography};
 
 /// Burlesque presentation errors.

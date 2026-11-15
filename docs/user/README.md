@@ -73,6 +73,7 @@ SexOS is fundamentally different from Linux, macOS, or Windows:
 - **[Rendezvous (Maps & Navigation)](apps/rendezvous.md)**: Private vector OpenStreetMap mapping, Nominatim location search, turn-by-turn routing, and offline region tile caching.
 - **[Splicy (Video Editor & Media Export)](apps/splicy.md)**: Frame-accurate timeline editing, ripple/roll trims, transcript-based cuts, and WebM (VP9/Opus) and MP4 video export.
 - **[Batik (Raster Painting & Image Studio)](apps/batik.md)**: Multi-layer Porter-Duff blend modes, 8-bit paintable layer masks, pressure-sensitive brushes, lasso & magic wand selections, spatial/color filters, and PNG, JPEG, WebP & PSD import/export.
+- **[Burlesque (Keynote-Class Presentations)](apps/burlesque.md)**: Designer themes, live animated slide transitions, dual-pane Presenter View with speaker notes and timer, OOXML `.pptx` & OpenDocument `.odp` import/export, and vector PDF export.
 
 ### Application Suites & Additional Tools
 - **[Creative & Professional Suite](creative-and-pro-suite.md)**: Deep dive into upcoming and parity tools: **Assuit**, **Spreadeagle**, **Burlesque** (presentations), **Batik** (raster painting), **Polyamour** (3D modeling), **Splicy** (video editing), **Flash** (UVC webcam capture), **Moan** (DAW audio editor), **Bodice** (e-books), **Corset** (disks & partitions), and **Climax** (hardware stress & benchmarking).
