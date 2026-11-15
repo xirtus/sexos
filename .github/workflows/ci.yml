@@ -105,6 +105,8 @@ jobs:
       run: cargo test --locked -p denim
     - name: Splicy editing core (timeline, edit by transcript, suggestions, render plan, OTIO)
       run: cargo test --locked -p sex-splice
+    - name: Splicy window (delete a sentence on screen, its frames and sound are gone)
+      run: bash scripts/splicy_host_gate.sh
     - name: Splicy export (WebM VP9+Opus, MP4 H.264+AAC, MP4 AV1+Opus) through system FFmpeg
       run: |
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg pkg-config libavcodec-dev libavformat-dev libavutil-dev libswscale-dev
