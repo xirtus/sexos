@@ -23,6 +23,7 @@ mod restricted_storage;
 mod restricted_jobs;
 mod restricted_io;
 mod restricted_control;
+mod restricted_load;
 mod fs_service;
 mod recording_role;
 mod recording_image;

@@ -8,6 +8,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use sex_pdx::restricted_helper::Subject;
 use sex_pdx::{app_catalog as catalog, fs as f, restricted_job as wire};
 static mut JOBS: Jobs = Jobs::new();
+static mut LOAD: Option<crate::restricted_load::Load> = None;
 static mut CONTROL: Option<crate::restricted_control::Control> = None;
 static ENTERED: AtomicBool = AtomicBool::new(false);
 struct Turn;
@@ -99,7 +100,10 @@ fn status(error: Error) -> u8 {
     }
 }
 fn control(opcode: u64, actor: Subject, words: [u64; 3]) -> bool {
-    if opcode != wire::OP_CLAIM && opcode != wire::OP_DESCRIBE {
+    if !matches!(
+        opcode,
+        wire::OP_CLAIM | wire::OP_DESCRIBE | wire::OP_LOAD | wire::OP_COPIED
+    ) {
         return false;
     }
     if actor != (Subject { pd: 3, task: 3 }) {
@@ -120,6 +124,72 @@ fn control(opcode: u64, actor: Subject, words: [u64; 3]) -> bool {
         {
             *current = None;
         }
+    }
+    let loaded = unsafe { &mut *core::ptr::addr_of_mut!(LOAD) };
+    if let Some(l) = loaded.as_ref() {
+        if !l.valid(own_epoch, now)
+            || turn
+                .jobs()
+                .get(l.ticket)
+                .is_none_or(|e| !e.live(now, own_epoch) || !live(e.job.parent()))
+        {
+            *loaded = None;
+        }
+    }
+    if opcode == wire::OP_LOAD {
+        if let Some(l) = loaded.as_mut() {
+            l.repeat(words);
+            return true;
+        }
+        let Some(c) = current
+            .as_ref()
+            .filter(|c| c.complete() && c.ticket as u64 == words[0])
+        else {
+            return true;
+        };
+        let Some(scope) = crate::restricted_runtime::staging()
+            .filter(|b| b.generation == words[1] && b.previous.word() == words[2])
+        else {
+            return true;
+        };
+        let Some(e) = turn
+            .jobs()
+            .get(c.ticket)
+            .filter(|e| e.job.matches_scope(scope))
+        else {
+            return true;
+        };
+        if !e.live(now, own_epoch) || !live(e.job.parent()) {
+            return true;
+        }
+        let Some((lease, length)) = crate::restricted_load::image(scope) else {
+            return true;
+        };
+        if epoch() != Some(own_epoch)
+            || crate::restricted_runtime::staging() != Some(scope)
+            || !live(e.job.parent())
+        {
+            return true;
+        }
+        *loaded =
+            crate::restricted_load::Load::new(c.ticket, scope, lease, length, sex_pdx::get_ticks());
+        return true;
+    }
+    if opcode == wire::OP_COPIED {
+        if let Some(l) = loaded.as_mut() {
+            if crate::restricted_runtime::staging() == Some(l.scope) {
+                l.copied(words, |lease| {
+                    crate::restricted_image::copied(lease, lease.shell_epoch, own_epoch)
+                });
+            }
+        }
+        return true;
+    }
+    if opcode == wire::OP_DESCRIBE && words[1] == 22 {
+        if let Some(l) = loaded.as_mut() {
+            l.serial(words);
+        }
+        return true;
     }
     if opcode == wire::OP_DESCRIBE {
         if let Some(c) = current.as_mut() {
@@ -172,6 +242,24 @@ fn poll_control() {
     {
         *current = None;
         return;
+    }
+    if let Some(l) = unsafe { &mut *core::ptr::addr_of_mut!(LOAD) } {
+        if !l.valid(own_epoch, now)
+            || turn
+                .jobs()
+                .get(l.ticket)
+                .is_none_or(|e| !e.live(now, own_epoch) || !live(e.job.parent()))
+        {
+            unsafe {
+                *core::ptr::addr_of_mut!(LOAD) = None;
+            }
+            return;
+        }
+        if let Some(word) = l.reply() {
+            if sex_pdx::pdx_reply(3, word) == 0 {
+                l.delivered();
+            }
+        }
     }
     if let Some(word) = c.reply() {
         if sex_pdx::pdx_reply(3, word) == 0 {
