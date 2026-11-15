@@ -65,7 +65,7 @@ impl Keys {
     }
 
     fn attr(&mut self, n: NodeId, name: &str, value: &str, add: bool) {
-        let mut each = |map: &mut BTreeMap<String, Vec<NodeId>>, key: &str, tokens: &mut usize, bytes: &mut usize| {
+        let each = |map: &mut BTreeMap<String, Vec<NodeId>>, key: &str, tokens: &mut usize, bytes: &mut usize| {
             if add { *tokens += 1; *bytes = bytes.saturating_add(key.len()); put(map, key, n) } else { take(map, key, n) }
         };
         match name {

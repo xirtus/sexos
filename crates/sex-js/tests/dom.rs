@@ -1775,3 +1775,35 @@ fn svg_context_preserves_foreign_object_and_depth_bound() {
     doc.dom.insert(svg, html_link, None);
     assert_eq!(doc.call(op::SVG_CONTEXT, &[&html_link.to_string()]).as_deref(), Some("1"));
 }
+
+/// Big enough for the code cache (CODE_SMALLEST in guest/sexjs.c).
+fn padded(code: &str) -> String { format!("{code}\n/*{}*/", "x".repeat(4096)) }
+
+#[test]
+fn code_cache_runs_the_same_scripts_and_modules() {
+    use std::{cell::RefCell, rc::Rc};
+    let cache = Rc::new(RefCell::new(sex_js::CodeCache::new(16 << 20)));
+    let classic = padded("var seen = (globalThis.seen || 0) + 1; function f(a) { return a * 2 + seen; }\nconsole.log('classic', f(20), typeof f, f.toString().slice(0, 10));\nfunction thrower() { throw new Error('boom'); }");
+    let module = padded("import { a } from './a.js'; export const b = a + 1; console.log('module', b, import.meta.url);");
+    let lib = padded("export const a = 41;");
+    let files = [("http://example.test/dir/a.js", lib.as_str())];
+    let mut outputs = Vec::new();
+    for visit in 0..3 {
+        let mut s = page("");
+        s.page_mut().code_cache = Some(cache.clone());
+        s.eval(&classic, "http://example.test/dir/c.js").unwrap();
+        // Line numbers in stacks come back with the bytecode.
+        let _ = s.eval("try { thrower() } catch (e) { console.log(e.stack.includes('c.js:3')) }", "t.js");
+        run_module(&mut s, &module, "http://example.test/dir/m.js", &files).unwrap();
+        // A syntax error is reported the same way, cached or not.
+        assert_eq!(s.eval(&padded("var = ;"), "http://example.test/dir/bad.js"), Err(sex_js::Error::Thrown));
+        outputs.push(logs(&mut s).into_iter().map(|l| l.lines().next().unwrap_or("").to_string()).collect::<Vec<_>>());
+        if visit == 0 { assert!(cache.borrow().len() >= 2, "modules are kept at once"); }
+    }
+    assert_eq!(outputs[0], ["0:classic 41 function function f", "0:true", "0:module 42 http://example.test/dir/m.js", "2:SyntaxError: variable name expected"]);
+    assert_eq!(outputs[1], outputs[0]);
+    assert_eq!(outputs[2], outputs[0]);
+    let c = cache.borrow();
+    // The classic script is written on its second sighting and read on its third.
+    assert!(c.hits >= 5, "hits {} misses {}", c.hits, c.misses);
+}

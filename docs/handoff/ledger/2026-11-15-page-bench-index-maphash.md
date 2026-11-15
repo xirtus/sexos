@@ -59,3 +59,29 @@ change Wikipedia is also led by parsing. The next lever is a bytecode cache
 
 These are host CPU numbers, not QEMU VM time; QEMU TCG is roughly 10x slower
 but the ratios should carry over. Visible YouTube playback stays an x17 check.
+
+## Follow-up in the same PR: compiled-code cache
+
+Profiling GitHub showed module scripts compiled about twice per load: finding a
+module graph (`module_needs`, apps/web) compiles every module in a throwaway
+context, and shared chunks again for each entry module, before the real run
+compiles them once more. Discovery was about 1.8 s of 2.5 s.
+
+`sex_js::CodeCache` (crates/sex-js/src/code_cache.rs) keeps QuickJS bytecode keyed
+by SHA-256 of kind, provenance (muted or not), address and exact source. The guest
+(`compile()` in guest/sexjs.c) asks with op CODE_GET (75) before compiling and
+sends bytecode with CODE_PUT (76) after a miss it should write. Modules are written
+at once (the graph search guarantees reuse); classic scripts on their second
+sighting, since writing costs about a third of compiling. Read-back functions take
+provenance from the current compile origin (guest/quickjs-code-cache.patch), as
+compiled ones do. The browser keeps one 48 MiB cache for the session and gives it
+to every page and frame. Page script cannot reach the two ops (the prelude keeps
+`__host` private). Guest SHA256 3f6420d1446b5f9bb6604cf79b6f7574d2f3a8c327a2239461fa59b3fb160de9.
+
+| Page (5 runs, median ms) | master | 1st visit | 2nd | 3rd |
+|---|---|---|---|---|
+| Wikipedia Microkernel | 544 | 243 | 241 | 122 |
+| GitHub xirtus/sexos | 2232 | 1225 | 864 | 835 |
+
+Wikipedia's second visit writes its classic scripts (no saving yet); the third reads
+them. The cache lives for the browser session only; keeping it on disk is next.

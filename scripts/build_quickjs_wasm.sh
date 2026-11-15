@@ -2,7 +2,7 @@
 # Builds crates/sex-js/quickjs.wasm: QuickJS-NG (MIT) with the sex-js glue, for wasm32-wasip1.
 # Needs wasi-sdk 25 (WASI_SDK=path), patch(1) and a QuickJS-NG v0.10.1 checkout (QJS=path, commit
 # 3c9afc9943323ee9c7dbd123c0cd991448f4b6c2). The output is reproducible:
-# sha256 15e5dee11f5c212d94b3d98b15b47c2c3b1aa45cc46277041f04e766a93816e4.
+# sha256 3f6420d1446b5f9bb6604cf79b6f7574d2f3a8c327a2239461fa59b3fb160de9.
 # -O2, not -Oz: page scripts run about 1.25x faster for 0.4 MB more.
 # CC=clang (18 or newer, with the wasm32 target) builds with that compiler and wasi-sdk's
 # sysroot and builtins instead of wasi-sdk's own clang; the output then differs in bytes.
@@ -23,6 +23,7 @@ patch -s -d "$PATCHED" -p1 < "$ROOT/crates/sex-js/guest/quickjs-baseline-jit.pat
 patch -s -d "$PATCHED" -p1 < "$ROOT/crates/sex-js/guest/quickjs-promise-events.patch"
 patch -s -d "$PATCHED" -p1 < "$ROOT/crates/sex-js/guest/quickjs-parser-continuations.patch"
 patch -s -d "$PATCHED" -p1 < "$ROOT/crates/sex-js/guest/quickjs-map-hash.patch"
+patch -s -d "$PATCHED" -p1 < "$ROOT/crates/sex-js/guest/quickjs-code-cache.patch"
 RESOURCE="$(ls -d "$WASI_SDK"/lib/clang/* | head -1)"
 "$CC" -resource-dir "$RESOURCE" --target=wasm32-wasip1 --sysroot="$WASI_SDK/share/wasi-sysroot" \
   -O2 -flto -mexec-model=reactor -D_GNU_SOURCE -DNDEBUG -I"$QJS" \

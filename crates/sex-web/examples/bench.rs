@@ -68,6 +68,19 @@ fn main() {
     let root = PathBuf::from(&args[0]);
     let url = args[1].clone();
     let page_seconds: u64 = args.get(2).and_then(|v| v.parse().ok()).unwrap_or(30);
+    // SEXWEB_BENCH_VISITS=N loads the page N times, as the browser would on revisits,
+    // sharing one compiled-script cache (SEXWEB_BENCH_NO_CACHE=1 leaves it out).
+    let visits: usize = std::env::var("SEXWEB_BENCH_VISITS").ok().and_then(|v| v.parse().ok()).unwrap_or(1);
+    let cache = std::rc::Rc::new(std::cell::RefCell::new(sex_js::CodeCache::new(64 << 20)));
+    for _ in 0..visits {
+        let cache = std::env::var("SEXWEB_BENCH_NO_CACHE").is_err().then(|| cache.clone());
+        visit(&root, &url, page_seconds, cache);
+    }
+}
+
+fn visit(root: &Path, url: &str, page_seconds: u64, cache: Option<std::rc::Rc<std::cell::RefCell<sex_js::CodeCache>>>) {
+    let url = String::from(url);
+    let root = root.to_path_buf();
     let verbose = std::env::var("SEXWEB_BENCH_VERBOSE").is_ok();
     let (w, h) = (1280, 800);
     let mut ph = Phases::default();
@@ -99,6 +112,7 @@ fn main() {
     let mut doc = sex_js::Document::new(dom, &url, (w, h), clock);
     doc.measure = sex_web::canvas::measure_css;
     doc.import_map = map;
+    doc.code_cache = cache.clone();
     let mut script = sex_js::Script::new(doc, sex_js::Limits::default()).unwrap();
     let serve_modules = |script: &mut sex_js::Script<sex_js::Document>, list: Vec<String>| {
         for u in list {
@@ -117,6 +131,7 @@ fn main() {
                 if need.is_empty() { break; }
                 serve_modules(&mut script, need);
             }
+            if verbose { eprintln!("module graph found in {:.1} ms", ms(ts.elapsed().as_nanos() as u64)); }
             script.eval_module(src, name)
         } else { script.eval(src, name) };
         if verbose { eprintln!("ran {:?} in {:.1} ms: {}", r.err(), ms(ts.elapsed().as_nanos() as u64), name.chars().take(120).collect::<String>()); }
@@ -189,7 +204,8 @@ fn main() {
     let d = &script.page().dom;
     let elements = d.descendants(0).into_iter().filter(|&n| d.tag(n).is_some()).count();
     println!(
-        "bench total={:.1} parse={:.1} scripts={:.1} inserted={:.1}({}) fetched={:.1}({}) ticks={:.1}({}) elements={} console_errors={}",
+        "bench{} total={:.1} parse={:.1} scripts={:.1} inserted={:.1}({}) fetched={:.1}({}) ticks={:.1}({}) elements={} console_errors={}",
+        cache.as_ref().map(|c| { let c = c.borrow(); format!(" code_cache={}/{}({}KiB)", c.hits, c.hits + c.misses, c.bytes() >> 10) }).unwrap_or_default(),
         ms(total), ms(ph.parse_ns), ms(ph.scripts_ns), ms(ph.inserted_ns), ph.inserted, ms(ph.fetched_ns), ph.fetches, ms(ph.ticks_ns), ph.ticks, elements, errors
     );
 }
