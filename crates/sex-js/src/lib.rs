@@ -14,12 +14,14 @@ extern crate alloc;
 
 #[cfg(feature = "baseline-jit")]
 pub mod baseline;
+pub mod code_cache;
 pub mod document;
 pub mod storage;
 pub mod webgl;
 #[cfg(sexjs_native)]
 mod native;
 pub use document::{ClassicScript, Document, FetchAsk, WsAsk};
+pub use code_cache::CodeCache;
 
 use alloc::{format, string::String, vec::Vec};
 use wasmi::{Caller, Config, Engine, Extern, Linker, Memory, Module, Store, StoreLimits, StoreLimitsBuilder, TypedFunc};
@@ -138,6 +140,12 @@ pub mod op {
     pub const IDB: u32 = 34;
     /// (id): the oldest message not yet taken (text, or with bit 16 an ArrayBuffer).
     pub const WS_TAKE: u32 = 74;
+    /// (name, source, kind+provenance): compiled bytecode for it, if the browser's code
+    /// cache has it; empty asks the engine to send it (CODE_PUT) once compiled. Engine
+    /// glue only, never page script; see [`crate::CodeCache`].
+    pub const CODE_GET: u32 = 75;
+    /// (bytecode): the answer to the last CODE_GET that came back empty.
+    pub const CODE_PUT: u32 = 76;
 }
 
 /// What scripts act on. A `None` result is JavaScript `null`.

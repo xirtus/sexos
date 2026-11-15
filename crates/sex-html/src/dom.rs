@@ -37,7 +37,8 @@ impl Dom {
     pub const ROOT: NodeId = 0;
 
     /// Direct edits through the public node arena must call this too. Ordinary
-    /// DOM mutation methods invalidate automatically. Matches are never cached.
+    /// DOM mutation methods keep the query indexes current themselves (see
+    /// `query::Cache`). Matches are never cached.
     pub fn invalidate_queries(&mut self) { *self.query_cache.get_mut() = Default::default(); }
 
     pub fn query(&self, root: NodeId, selectors: &[crate::css::Selector], all: bool) -> Vec<NodeId> {
@@ -65,8 +66,8 @@ impl Dom {
     }
 
     pub fn add(&mut self, parent: NodeId, kind: Kind) -> NodeId {
-        self.invalidate_queries();
         let id = self.nodes.len();
+        self.query_cache.get_mut().element_created(id, &kind, true);
         self.nodes.push(Node { kind, parent: Some(parent), children: Vec::new() });
         self.nodes[parent].children.push(id);
         id
@@ -145,7 +146,7 @@ impl Dom {
 
     /// A node in no tree yet, for scripts to place with [`Dom::insert`].
     pub fn create(&mut self, kind: Kind) -> NodeId {
-        self.invalidate_queries();
+        self.query_cache.get_mut().element_created(self.nodes.len(), &kind, false);
         self.nodes.push(Node { kind, parent: None, children: Vec::new() });
         self.nodes.len() - 1
     }
@@ -160,7 +161,7 @@ impl Dom {
 
     /// Takes a node out of its parent; it and its subtree stay in the arena, detached.
     pub fn detach(&mut self, node: NodeId) {
-        self.invalidate_queries();
+        self.query_cache.get_mut().tree_changed();
         if let Some(p) = self.nodes[node].parent.take() { self.nodes[p].children.retain(|&c| c != node); }
     }
 
@@ -177,23 +178,33 @@ impl Dom {
 
     /// Detaches every child of `node`.
     pub fn clear(&mut self, node: NodeId) {
-        self.invalidate_queries();
+        self.query_cache.get_mut().tree_changed();
         for c in core::mem::take(&mut self.nodes[node].children) { self.nodes[c].parent = None; }
     }
 
     pub fn set_attr(&mut self, id: NodeId, name: &str, value: &str) {
-        self.invalidate_queries();
         if let Kind::Element { attrs, .. } = &mut self.nodes[id].kind {
+            let cache = self.query_cache.get_mut();
             match attrs.iter_mut().find(|(n, _)| n == name) {
-                Some(a) => a.1 = String::from(value),
-                None => attrs.push((String::from(name), String::from(value))),
+                Some(a) => {
+                    if a.1 == value { return; }
+                    cache.attr_changed(id, name, Some(&a.1), Some(value));
+                    a.1 = String::from(value);
+                }
+                None => {
+                    cache.attr_changed(id, name, None, Some(value));
+                    attrs.push((String::from(name), String::from(value)));
+                }
             }
         }
     }
 
     pub fn remove_attr(&mut self, id: NodeId, name: &str) {
-        self.invalidate_queries();
-        if let Kind::Element { attrs, .. } = &mut self.nodes[id].kind { attrs.retain(|(n, _)| n != name); }
+        if let Kind::Element { attrs, .. } = &mut self.nodes[id].kind {
+            let Some(i) = attrs.iter().position(|(n, _)| n == name) else { return };
+            self.query_cache.get_mut().attr_changed(id, name, Some(&attrs[i].1), None);
+            attrs.retain(|(n, _)| n != name);
+        }
     }
 
     /// Replaces a text node's text, or an element's children with one text node.
