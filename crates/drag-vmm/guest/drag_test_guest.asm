@@ -76,7 +76,7 @@ rm_start:                               ; real mode, CS = setup + 0x20, DS = set
 	mov di, 0x7000
 	xor eax, eax
 	mov cx, 0x400
-	rep stosd
+	db 0xF3, 0x66, 0xAB              ; rep stosd, spelled out: NASM 2 and 3 order these prefixes differently
 	mov si, 0x1F1                   ; with the setup header the loader filled in
 	mov di, 0x71F1
 	mov cx, 0x290 - 0x1F1
@@ -103,7 +103,7 @@ rm_start:                               ; real mode, CS = setup + 0x20, DS = set
 	mov di, 0x9000                  ; identity tables: PML4 0x9000, PDPT 0xA000, PD 0xB000..0xEFFF
 	xor eax, eax
 	mov cx, 0x1800
-	rep stosd
+	db 0xF3, 0x66, 0xAB              ; rep stosd, spelled out: NASM 2 and 3 order these prefixes differently
 	mov dword [es:0x9000], 0xA003
 	mov dword [es:0xA000], 0xB003
 	mov dword [es:0xA008], 0xC003
