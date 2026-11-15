@@ -144,6 +144,14 @@ impl Service {
     pub fn bind(&mut self, target: u32, task: u32) {
         if let Some(k) = program_index(target) { self.bound[k] = task; sex_pdx::serial_record!("[net.program.bound] target={} task={}", target, task); }
     }
+    /// Narrow every retained flow for an authenticated reserved row, including
+    /// stale task owners, before its complete shared region is cleared.
+    pub fn quarantine(&mut self,target:u32,mut engine:Option<&mut Engine<'static>>){
+        if let Some(index)=program_index(target){self.bound[index]=0;}
+        for (i,slot)in self.slots.iter_mut().enumerate(){if slot.owner.is_some_and(|(owner,_)|owner.pd==target){slot.free(i,engine.as_deref_mut());}}
+        for (i,socket)in self.sockets.iter_mut().enumerate(){if socket.is_some_and(|(owner,_)|owner.pd==target){*socket=None;if let Some(e)=engine.as_deref_mut(){e.open_udp_close(i);}}}
+        if self.resolving.is_some_and(|(owner,_)|owner.pd==target){self.resolving=None;}
+    }
     /// A program that ended holds nothing here.
     pub fn retire(&mut self, who: Identity, mut engine: Option<&mut Engine<'static>>) {
         for (i, slot) in self.slots.iter_mut().enumerate() {
