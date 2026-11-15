@@ -575,7 +575,16 @@ fn define(c: &Cfg) -> Dna {
         &[("ID", "id"), ("AnimData", "*adt"), ("char", "type"), ("char", "dtx"), ("short", "flag"), ("float", "passepartalpha"), ("float", cs), ("float", ce), ("float", "lens"), ("float", "ortho_scale"), ("float", "drawsize"), ("float", "sensor_x"), ("float", "sensor_y"), ("float", "shiftx"), ("float", "shifty"), ("char", "sensor_fit"), ("char", "_pad[7]")],
     );
     d.def("RenderData", &[("int", "cfra"), ("int", "sfra"), ("int", "efra"), ("short", "frs_sec"), ("char", "_pad[2]"), ("int", "xsch"), ("int", "ysch"), ("float", "xasp"), ("float", "yasp"), ("float", "frs_sec_base")]);
-    d.def("Scene", &[("ID", "id"), ("AnimData", "*adt"), ("Object", "*camera"), ("World", "*world"), ("Scene", "*set"), ("ListBase", "base"), ("RenderData", "r"), ("Collection", "*master_collection")]);
+    d.def("Scene", &[("ID", "id"), ("AnimData", "*adt"), ("Object", "*camera"), ("World", "*world"), ("Scene", "*set"), ("ListBase", "base"), ("RenderData", "r"), ("Collection", "*master_collection"), ("bNodeTree", "*nodetree"), ("char", "use_nodes"), ("char", "_pad9[7]")]);
+    // Compositor node storage (`DNA_node_types.h`).
+    d.def("NodeGlare", &[("char", "quality"), ("char", "type"), ("char", "iter"), ("char", "angle"), ("char", "_pad0"), ("char", "size"), ("char", "star_45"), ("char", "streaks"), ("float", "colmod"), ("float", "mix"), ("float", "threshold"), ("float", "fade"), ("float", "angle_ofs"), ("char", "_pad1[4]")]);
+    d.def(
+        "NodeBlurData",
+        &[("short", "sizex"), ("short", "sizey"), ("short", "samples"), ("short", "maxspeed"), ("short", "minspeed"), ("short", "relative"), ("short", "aspect"), ("short", "curved"), ("float", "fac"), ("float", "percentx"), ("float", "percenty"), ("short", "filtertype"), ("char", "bokeh"), ("char", "gamma"), ("int", "image_in_width"), ("int", "image_in_height")],
+    );
+    d.def("NodeChroma", &[("float", "t1"), ("float", "t2"), ("float", "t3"), ("float", "fsize"), ("float", "fstrength"), ("float", "falpha"), ("float", "key[4]"), ("short", "algorithm"), ("short", "channel")]);
+    d.def("NodeColorBalance", &[("float", "slope[3]"), ("float", "offset[3]"), ("float", "power[3]"), ("float", "offset_basis"), ("char", "_pad[4]"), ("float", "lift[3]"), ("float", "gamma[3]"), ("float", "gain[3]")]);
+    d.def("NodeTwoXYs", &[("short", "x1"), ("short", "x2"), ("short", "y1"), ("short", "y2"), ("float", "fac_x1"), ("float", "fac_x2"), ("float", "fac_y1"), ("float", "fac_y2")]);
     d.def("FileGlobal", &[("char", "subvstr[4]"), ("short", "subversion"), ("short", "minversion"), ("short", "minsubversion"), ("char", "_pad[6]"), ("bScreen", "*curscreen"), ("Scene", "*curscene")]);
     d
 }
@@ -1282,6 +1291,9 @@ pub fn write_tree(w: &mut Writer, c: &Cfg, ptr: u64, code: &str, name: &str, nod
     if nodes.iter().any(|nd| nd.idname.starts_with("GeometryNode")) {
         f.push(("type".into(), n(3.))); // NTREE_GEOMETRY
     }
+    if nodes.iter().any(|nd| nd.idname.starts_with("CompositorNode")) {
+        f.push(("type".into(), n(1.))); // NTREE_COMPOSIT
+    }
     let d = w.inst("bNodeTree", &f);
     w.put(ptr, code, "bNodeTree", 1, d);
 }
@@ -1465,6 +1477,53 @@ pub fn nodes_file(c: Cfg) -> Vec<u8> {
     write_tree(&mut w, &c, wtree, "DATA", "Shader Nodetree", &[bg, wout], &[(0, "Background", 1, "Surface", 0)], &[]);
     let d = w.inst("World", &[("id.name", s("WOWorld")), ("horr", n(0.05)), ("horg", n(0.05)), ("horb", n(0.05)), ("nodetree", p(wtree)), ("use_nodes", n(1.))]);
     w.put(wo, "WO", "World", 1, d);
+    w.finish()
+}
+
+/// A scene whose compositing tree (`Scene.nodetree`, `use_nodes` 1) runs
+/// Render Layers -> Blur (fast gauss, 3x5) -> Glare (bloom) -> Mix (add,
+/// clamp) -> Composite, with a Channel Key, a Color Balance (offset/power/
+/// slope), a muted Crop and a Math node (power, clamp) on the side.
+pub fn compositor_file(c: Cfg) -> Vec<u8> {
+    let mut w = Writer::new(define(&c), c.big, c.layout == Layout::Attr50, version_of(&c));
+    let [sc, tree, glob] = [(); 3].map(|_| w.alloc());
+    let g = w.inst("FileGlobal", &[("curscene", p(sc))]);
+    w.put(glob, "GLOB", "FileGlobal", 1, g);
+    let d = w.inst("Scene", &[("id.name", s("SCComp")), ("r.xsch", n(64.)), ("r.ysch", n(48.)), ("r.xasp", n(1.)), ("r.yasp", n(1.)), ("nodetree", p(tree)), ("use_nodes", n(1.))]);
+    w.put(sc, "SC", "Scene", 1, d);
+
+    let glare = w.add("DATA", "NodeGlare", &[("quality", n(2.)), ("type", n(4.)), ("iter", n(5.)), ("size", n(7.)), ("star_45", n(0.)), ("streaks", n(6.)), ("colmod", n(0.5)), ("mix", n(-0.25)), ("threshold", n(0.75)), ("fade", n(0.8)), ("angle_ofs", n(0.3))]);
+    let blur = w.add("DATA", "NodeBlurData", &[("sizex", n(3.)), ("sizey", n(5.)), ("filtertype", n(7.)), ("relative", n(1.)), ("aspect", n(2.)), ("percentx", n(10.)), ("gamma", n(1.))]);
+    let chroma = w.add("DATA", "NodeChroma", &[("t1", n(0.9)), ("t2", n(0.1)), ("algorithm", n(0.)), ("channel", n(3.))]);
+    let balance = w.add("DATA", "NodeColorBalance", &[("slope", nv(&[1.5, 1.0, 1.0])), ("offset", nv(&[0.0, 0.1, 0.0])), ("power", nv(&[1.0, 1.0, 2.0])), ("offset_basis", n(0.2)), ("lift", nv(&[1.; 3])), ("gamma", nv(&[1.; 3])), ("gain", nv(&[1.; 3]))]);
+    let crop = w.add("DATA", "NodeTwoXYs", &[("x1", n(2.)), ("x2", n(30.)), ("y1", n(4.)), ("y2", n(40.))]);
+
+    let img = |id: &str| sk(id, "Image", 2, Dv::C([0.8, 0.8, 0.8, 1.0]));
+    let rl = Nd::new("Render Layers", "CompositorNodeRLayers", vec![], vec![sk("Image", "Image", 2, Dv::No), sk("Alpha", "Alpha", 0, Dv::No)]);
+    let mut bl = Nd::new("Blur", "CompositorNodeBlur", vec![img("Image"), sk("Size", "Size", 0, Dv::F(0.5))], vec![sk("Image", "Image", 2, Dv::No)]);
+    bl.storage = blur;
+    bl.custom = [2, 0]; // extended bounds
+    let mut gl = Nd::new("Glare", "CompositorNodeGlare", vec![img("Image")], vec![sk("Image", "Image", 2, Dv::No)]);
+    gl.storage = glare;
+    let mut mix = Nd::new("Mix", "CompositorNodeMixRGB", vec![sk("Fac", "Fac", 0, Dv::F(0.6)), img("Image"), img("Image_001")], vec![sk("Image", "Image", 2, Dv::No)]);
+    mix.custom = [1, 2]; // add, clamp
+    let mut co = Nd::new("Composite", "CompositorNodeComposite", vec![img("Image"), sk("Alpha", "Alpha", 0, Dv::F(1.0))], vec![]);
+    co.custom = [0, 1]; // ignore alpha
+    let mut key = Nd::new("Channel Key", "CompositorNodeChannelMatte", vec![img("Image")], vec![sk("Image", "Image", 2, Dv::No), sk("Matte", "Matte", 0, Dv::No)]);
+    key.storage = chroma;
+    key.custom = [2, 1]; // HSV, R
+    let mut cb = Nd::new("Color Balance", "CompositorNodeColorBalance", vec![sk("Fac", "Fac", 0, Dv::F(1.0)), img("Image")], vec![sk("Image", "Image", 2, Dv::No)]);
+    cb.storage = balance;
+    cb.custom = [1, 0];
+    let mut cr = Nd::new("Crop", "CompositorNodeCrop", vec![img("Image")], vec![sk("Image", "Image", 2, Dv::No)]);
+    cr.storage = crop;
+    cr.custom = [1, 0];
+    cr.flag = 1 << 9;
+    let mut ma = Nd::new("Math", "CompositorNodeMath", vec![sk("Value", "Value", 0, Dv::F(2.0)), sk("Value_001", "Value", 0, Dv::F(3.0))], vec![sk("Value", "Value", 0, Dv::No)]);
+    ma.custom = [10, 1]; // NODE_MATH_POWER, clamp
+    let nodes = [rl, bl, gl, mix, co, key, cb, cr, ma];
+    let links: [NodeLink; 6] = [(0, "Image", 1, "Image", 0), (1, "Image", 2, "Image", 0), (2, "Image", 3, "Image", 0), (0, "Image", 3, "Image_001", 0), (3, "Image", 4, "Image", 0), (0, "Image", 5, "Image", 0)];
+    write_tree(&mut w, &c, tree, "DATA", "Compositing Nodetree", &nodes, &links, &[]);
     w.finish()
 }
 

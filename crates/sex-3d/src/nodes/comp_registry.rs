@@ -492,7 +492,7 @@ fn color_spill() -> Node {
         vec![img("Image"), fac("Fac", 1.0)],
         &[
             ("channel", e("G")),
-            ("limit_method", e("SINGLE")),
+            ("limit_method", e("SIMPLE")),
             ("limit_channel", e("R")),
             ("ratio", f(1.0)),
             ("use_unspill", b(false)),
@@ -909,6 +909,7 @@ const AXIS_XY: Items = &[("X", "X"), ("Y", "Y")];
 const RGB_CHANNELS: Items = &[("R", "R"), ("G", "G"), ("B", "B")];
 const MATTE_SPACES: Items = &[("RGB", "RGB"), ("HSV", "HSV"), ("YUV", "YUV"), ("YCC", "YCbCr")];
 const LIMIT: Items = &[("SINGLE", "Single"), ("MAX", "Max")];
+const SPILL_LIMIT: Items = &[("SIMPLE", "Simple"), ("AVERAGE", "Average")];
 const DIST_SPACES: Items = &[("RGB", "RGB"), ("YCC", "YCC")];
 const MASK_TYPES: Items = &[("ADD", "Add"), ("SUBTRACT", "Subtract"), ("MULTIPLY", "Multiply"), ("NOT", "Not")];
 const INNER: Items = &[("ALL", "All"), ("ADJACENT_ONLY", "Adjacent Only")];
@@ -954,7 +955,8 @@ pub fn comp_items(idname: &str, prop: &str) -> Items {
         ("CompositorNodeSplit", "axis") => AXIS_XY,
         ("CompositorNodeChannelMatte", "color_space") => MATTE_SPACES,
         ("CompositorNodeChannelMatte" | "CompositorNodeColorSpill", "matte_channel" | "limit_channel" | "channel") => RGB_CHANNELS,
-        ("CompositorNodeChannelMatte" | "CompositorNodeColorSpill", "limit_method") => LIMIT,
+        ("CompositorNodeChannelMatte", "limit_method") => LIMIT,
+        ("CompositorNodeColorSpill", "limit_method") => SPILL_LIMIT,
         ("CompositorNodeDistanceMatte", "channel") => DIST_SPACES,
         ("CompositorNodeBoxMask" | "CompositorNodeEllipseMask", "mask_type") => MASK_TYPES,
         ("CompositorNodeDoubleEdgeMask", "inner_mode") => INNER,

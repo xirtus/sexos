@@ -92,8 +92,10 @@
 //!   (along the fitted axis), `clip_start`/`clipsta`, `clip_end`/`clipend`.
 //! - `Scene`: `id`, `camera`, `world`, `master_collection` (2.8+), `r`
 //!   (`RenderData`: `xsch`, `ysch`, `xasp`, `yasp`, `sfra`, `efra`, `frs_sec`,
-//!   `frs_sec_base`). The current scene is `FileGlobal.curscene` in the `GLOB`
-//!   block, else the first `SC` block.
+//!   `frs_sec_base`), and when `use_nodes` is set the embedded compositing
+//!   tree `nodetree` (node settings in `blend/compnodes.rs`). The current
+//!   scene is `FileGlobal.curscene` in the `GLOB` block, else the first `SC`
+//!   block.
 //! - `World`: `horr horg horb` (viewport colour) and, when `use_nodes` is set,
 //!   the `ShaderNodeBackground` node's `Color` and `Strength` inputs.
 //! - `Collection` (2.8+): `id`, `gobject` (ListBase of `CollectionObject {ob}`),
@@ -182,6 +184,7 @@ use crate::scene::{AreaShape, Camera, Light, LightKind, Material, Object, Object
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
+mod compnodes;
 mod geonodes;
 mod nodes;
 
@@ -976,6 +979,7 @@ impl<'f, 'a> Importer<'f, 'a> {
         if let Some(sc) = sc {
             self.collections(&sc, &by_ptr);
             self.world(&sc);
+            self.compositor(&sc);
         }
         self.resolve_object_refs(&by_ptr);
         Ok((self.scene, self.actions))
@@ -1046,6 +1050,22 @@ impl<'f, 'a> Importer<'f, 'a> {
                     }
                 }
                 _ => {}
+            }
+        }
+    }
+
+    /// The compositing tree (`Scene.nodetree`, used when `Scene.use_nodes`).
+    fn compositor(&mut self, sc: &View<'f, 'a>) {
+        if sc.num("use_nodes").unwrap_or(0.0) == 0.0 {
+            return;
+        }
+        if let Some(tree) = self.f.view_ptr(sc.ptr("nodetree"), &["bNodeTree"]) {
+            if let Some(mut t) = self.node_tree(&tree) {
+                t.kind = crate::nodes::TreeKind::Compositor;
+                if t.name.is_empty() || t.name == "Shader Nodetree" {
+                    t.name = "Compositing Nodetree".into();
+                }
+                self.scene.compositor = Some(t);
             }
         }
     }

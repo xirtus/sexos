@@ -238,7 +238,7 @@ fn dims_name(d: f64) -> Prop {
 const NOISE_TYPES: [&str; 5] = ["MULTIFRACTAL", "FBM", "HYBRID_MULTIFRACTAL", "RIDGED_MULTIFRACTAL", "HETERO_TERRAIN"];
 const DISTRIBUTIONS: [&str; 5] = ["SHARP", "BECKMANN", "GGX", "ASHIKHMIN_SHIRLEY", "MULTI_GGX"];
 
-fn color_ramp(f: &BlendFile<'_>, ptr: u64) -> Option<ColorRamp> {
+pub(super) fn color_ramp(f: &BlendFile<'_>, ptr: u64) -> Option<ColorRamp> {
     let cb = f.view_ptr(ptr, &["ColorBand"])?;
     let tot = count(cb.num("tot")?).min(32);
     let m = cb.member("data")?;
@@ -256,7 +256,7 @@ fn color_ramp(f: &BlendFile<'_>, ptr: u64) -> Option<ColorRamp> {
 }
 
 /// `n` curves of a `CurveMapping` in file order.
-fn curve_maps(f: &BlendFile<'_>, ptr: u64) -> Option<Vec<Vec<[f32; 2]>>> {
+pub(super) fn curve_maps(f: &BlendFile<'_>, ptr: u64) -> Option<Vec<Vec<[f32; 2]>>> {
     let cm = f.view_ptr(ptr, &["CurveMapping"])?;
     let m = cm.member("cm")?;
     let s = cm.sub("cm")?.s;
@@ -277,7 +277,7 @@ fn curve_maps(f: &BlendFile<'_>, ptr: u64) -> Option<Vec<Vec<[f32; 2]>>> {
 
 impl<'f, 'a> Importer<'f, 'a> {
     /// The scene image for an `IM` block, imported once.
-    fn image(&mut self, ptr: u64) -> Option<usize> {
+    pub(super) fn image(&mut self, ptr: u64) -> Option<usize> {
         if let Some(&i) = self.images.get(&ptr) {
             return Some(i);
         }
@@ -680,6 +680,9 @@ impl<'f, 'a> Importer<'f, 'a> {
                 n.set_prop("object", Prop::Id(None));
                 n.set_prop("__object_ptr", Prop::String(format!("{id}")));
             }
+            _ if idname.starts_with("CompositorNode") => {
+                self.comp_props(bn, n);
+            }
             _ => super::geonodes::geo_props(f, bn, n),
         }
     }
@@ -704,6 +707,9 @@ impl<'f, 'a> Importer<'f, 'a> {
             fix(g);
         }
         if let Some(t) = &mut self.scene.world.node_tree {
+            fix(t);
+        }
+        if let Some(t) = &mut self.scene.compositor {
             fix(t);
         }
     }

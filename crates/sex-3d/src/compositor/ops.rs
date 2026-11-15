@@ -389,7 +389,7 @@ pub(super) fn eval_node(ctx: &Context, n: &Node, ins: &[Val]) -> Vec<Val> {
         "CompositorNodeColorSpill" => {
             let ch = channel_index(pe(n, "channel"));
             let lch = channel_index(pe(n, "limit_channel"));
-            let single = pe(n, "limit_method") == "SINGLE";
+            let single = pe(n, "limit_method") == "SIMPLE";
             let ratio = pf(n, "ratio", 1.0);
             let mut sc = [0.0; 3];
             if pb(n, "use_unspill") {

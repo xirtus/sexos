@@ -1313,3 +1313,75 @@ fn geometry_nodes_modifier() {
         assert_eq!(back.objects[blendgen::names(&back)["GN"]].modifiers, s.objects[o].modifiers, "{what}");
     }
 }
+
+#[test]
+fn compositor_tree_imports() {
+    use sex_3d::nodes::{Prop, TreeKind, Value};
+    for c in ALL {
+        let what = format!("{c:?}");
+        let s = import_blend(&blendgen::compositor_file(c)).unwrap_or_else(|e| panic!("{what}: {e}"));
+        let t = s.compositor.as_ref().unwrap_or_else(|| panic!("{what}: no compositor"));
+        assert_eq!(t.kind, TreeKind::Compositor, "{what}");
+        assert_eq!(t.nodes.len(), 9, "{what}");
+        let e = |n: &sex_3d::nodes::Node, k: &str| n.enum_prop(k).to_string();
+        let f = |n: &sex_3d::nodes::Node, k: &str| match n.prop(k) {
+            Some(Prop::Float(v)) => *v,
+            other => panic!("{what}: {k} {other:?}"),
+        };
+        let i = |n: &sex_3d::nodes::Node, k: &str| match n.prop(k) {
+            Some(Prop::Int(v)) => *v,
+            other => panic!("{what}: {k} {other:?}"),
+        };
+        let bo = |n: &sex_3d::nodes::Node, k: &str| matches!(n.prop(k), Some(Prop::Bool(true)));
+        let gl = node(t, "Glare");
+        assert_eq!((e(gl, "glare_type"), e(gl, "quality")), ("BLOOM".into(), "LOW".into()), "{what}");
+        assert_eq!((i(gl, "iterations"), i(gl, "size"), i(gl, "streaks")), (5, 7, 6), "{what}");
+        assert!(approx(f(gl, "threshold"), 0.75) && approx(f(gl, "mix"), -0.25) && approx(f(gl, "fade"), 0.8) && !bo(gl, "use_rotate_45"), "{what}");
+        let bl = node(t, "Blur");
+        assert_eq!((e(bl, "filter_type"), e(bl, "aspect_correction")), ("FAST_GAUSS".into(), "X".into()), "{what}");
+        assert_eq!((i(bl, "size_x"), i(bl, "size_y")), (3, 5), "{what}");
+        assert!(bo(bl, "use_relative") && bo(bl, "use_extended_bounds") && !bo(bl, "use_variable_size") && bo(bl, "use_gamma_correction"), "{what}");
+        assert!(approx(f(bl, "factor_x"), 10.0), "{what}");
+        let mix = node(t, "Mix");
+        assert_eq!(e(mix, "blend_type"), "ADD", "{what}");
+        assert!(bo(mix, "use_clamp") && !bo(mix, "use_alpha"), "{what}");
+        assert!(approx(input_float(mix, "Fac"), 0.6), "{what}");
+        assert!(!bo(node(t, "Composite"), "use_alpha"), "{what}");
+        let key = node(t, "Channel Key");
+        assert_eq!((e(key, "color_space"), e(key, "matte_channel"), e(key, "limit_method"), e(key, "limit_channel")), ("HSV".into(), "R".into(), "SINGLE".into(), "B".into()), "{what}");
+        assert!(approx(f(key, "limit_max"), 0.9) && approx(f(key, "limit_min"), 0.1), "{what}");
+        let cb = node(t, "Color Balance");
+        assert_eq!(e(cb, "correction_method"), "OFFSET_POWER_SLOPE", "{what}");
+        assert_eq!(cb.prop("slope"), Some(&Prop::Color([1.5, 1.0, 1.0, 1.0])), "{what}");
+        assert_eq!(cb.prop("power"), Some(&Prop::Color([1.0, 1.0, 2.0, 1.0])), "{what}");
+        let cr = node(t, "Crop");
+        assert!(cr.mute && bo(cr, "use_crop_size"), "{what}");
+        assert_eq!((i(cr, "min_x"), i(cr, "max_x"), i(cr, "min_y"), i(cr, "max_y")), (2, 30, 4, 40), "{what}");
+        let ma = node(t, "Math");
+        assert_eq!(e(ma, "operation"), "POWER", "{what}");
+        assert!(bo(ma, "use_clamp"), "{what}");
+        assert_eq!(ma.inputs[1].value, Value::Float(3.0), "{what}");
+        for (from, to, sock) in [("Render Layers", "Blur", "Image"), ("Blur", "Glare", "Image"), ("Glare", "Mix", "Image"), ("Mix", "Composite", "Image")] {
+            assert_eq!(linked(t, from, to, sock), Some(false), "{what}: {from} -> {to}");
+        }
+        assert!(t.links.iter().any(|l| t.nodes[l.to_node].name == "Mix" && t.nodes[l.to_node].inputs[l.to_socket].identifier == "Image_001"), "{what}");
+    }
+}
+
+#[test]
+fn imported_compositor_runs() {
+    use sex_3d::render::{render, RenderSettings};
+    let mut s = import_blend(&blendgen::compositor_file(ALL[7])).unwrap();
+    s.compositor.as_mut().unwrap().nodes.iter_mut().for_each(|n| {
+        if n.idname == "CompositorNodeGlare" {
+            n.set_prop("quality", sex_3d::nodes::Prop::Enum("HIGH".into()));
+        }
+    });
+    let settings = RenderSettings { width: 16, height: 12, samples: 1, denoise: false, threads: 1, ..Default::default() };
+    let r = render(&s, &settings);
+    let ctx = sex_3d::compositor::Context::new(&s, Some(&r), (16, 12));
+    let out = sex_3d::compositor::composite(s.compositor.as_ref().unwrap(), &ctx);
+    let c = out.composite.expect("composite");
+    assert_eq!((c.width, c.height), (16, 12));
+    assert!(c.pixels.iter().all(|p| p.iter().all(|v| v.is_finite())));
+}
