@@ -1,5 +1,5 @@
-//! Restricted row deny fence, initialized before replay. Positive immutable job
-//! admission is deliberately unavailable until the job snapshot layer is wired.
+//! Restricted row deny fence, initialized before replay. Files positive rights
+//! exist only through the exact immutable-job snapshot and attested-copy hooks.
 use sex_pdx::restricted_helper::{Subject, OP_FETCH, OP_FETCH_TAGGED, OP_POLICY, OP_POLICY_TAGGED};
 use sex_pdx::restricted_helper_journal::Journal;
 use sex_pdx::restricted_helper_provider::{Effect, Message, Platform, Provider};

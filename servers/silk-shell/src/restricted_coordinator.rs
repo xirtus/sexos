@@ -50,6 +50,8 @@ pub trait Platform {
     fn ready(&mut self, child: Subject, value: u64) -> bool;
     fn kill(&mut self, child: Subject);
     fn retired(&mut self, child: Subject) -> bool;
+    /// Metadata-only witness after every complete accepted reply credit.
+    fn policy_acked(&mut self, _service: Service, _phase: u8, _child: Subject, _generation: u64) {}
 }
 #[derive(Clone, Copy)]
 enum Stage {
@@ -737,6 +739,15 @@ impl Coordinator {
                                 t.challenge[peer as usize][selector as usize - 3] = word;
                             }
                             let limit = if phase == 1 { 4 } else { 2 };
+                            if selector == limit {
+                                let r = t.reservation.unwrap();
+                                p.policy_acked(
+                                    Service::at(peer as usize),
+                                    phase,
+                                    t.child.unwrap_or(r.previous),
+                                    r.generation,
+                                );
+                            }
                             if selector < limit {
                                 t.set(Stage::Policy {
                                     peer,
