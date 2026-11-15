@@ -13,10 +13,9 @@
 //! File and Orphan Data work), the search field, the filter popover and the
 //! New Collection button.
 //!
-//! SexOS's Shell delivers no Alt yet: Alt+A also works as A pressed while
-//! everything is selected (deselect), and Alt+H as Shift+H. Shell also turns
-//! Ctrl+left-click into a middle click (orbit emulation); a middle press with
-//! Ctrl held counts as Ctrl+click here.
+//! Alt+A deselects (A pressed while everything is selected does too) and
+//! Alt+H unhides (Shift+H also works). A middle press with Ctrl held counts as
+//! Ctrl+click here.
 use super::properties::icons::{self, Icon};
 use crate::doc::Doc;
 use crate::draw::{Align, Rect};

@@ -143,7 +143,7 @@ fn main() {
             }
             Some(Event::Resize { width, height }) => Some(Input::Resize { width, height }),
             Some(Event::Key(k)) => {
-                mods = Mods { shift: k.shift, ctrl: k.control, alt: false };
+                mods = Mods { shift: k.shift, ctrl: k.control, alt: k.alt };
                 let text = sex_std::sex_app::text(k);
                 // The Shell keeps F1-F12, Tab and Insert for itself, so
                 // F12 (Render Image) has a stand-in until programs can ask for them.
@@ -155,19 +155,24 @@ fn main() {
             }
             Some(Event::Pointer(p)) => {
                 let (x, y) = (p.x as i32, p.y as i32);
+                // Keys held during the click ride in the pointer word.
+                {
+                    use sex_std::sex_pdx::app_pointer::{ALT, CONTROL, SHIFT};
+                    mods = Mods { shift: p.mods & SHIFT != 0, ctrl: p.mods & CONTROL != 0, alt: p.mods & ALT != 0 };
+                }
                 let button = |b: u8| match b {
                     1 => Button::Middle,
                     2 => Button::Right,
                     _ => Button::Left,
                 };
-                // Laptops without a middle button: Alt is not delivered yet, so
-                // Ctrl+left drag stands in for middle-drag orbit.
+                // Blender's "Emulate 3 Button Mouse": Alt+left drag is middle drag
+                // (orbit; Shift pans, Ctrl zooms), for laptops without a middle button.
                 Some(match p.kind {
                     Kind::Move => Input::Move { x, y },
                     Kind::Down { button: b } => {
-                        emulated_middle = b == 0 && mods.ctrl;
+                        emulated_middle = b == 0 && mods.alt;
                         let b = if emulated_middle { Button::Middle } else { button(b) };
-                        Input::Down { x, y, button: b, mods }
+                        Input::Down { x, y, button: b, mods: if emulated_middle { Mods { alt: false, ..mods } } else { mods } }
                     }
                     Kind::Up { button: b } => {
                         let b = if b == 0 && emulated_middle { Button::Middle } else { button(b) };
