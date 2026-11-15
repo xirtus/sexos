@@ -8,6 +8,9 @@
 use crate::math::{Aabb, Mat4, Vec2, Vec3};
 use std::collections::{BTreeSet, HashMap};
 
+mod attrs;
+pub use attrs::{AttrDomain, ColorAttribute};
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Face {
     /// Vertex indices, counter-clockwise seen from the front (right-handed).
@@ -60,6 +63,20 @@ pub struct Mesh {
     /// Shape keys (Blender's `Key.key_blocks`); index 0 is the Basis.
     pub shape_keys: Vec<ShapeKey>,
     pub shape_key_settings: ShapeKeySettings,
+    /// Color attributes (Blender's `color_attributes`), per vertex or per
+    /// face corner. See [`ColorAttribute`].
+    pub color_attributes: Vec<ColorAttribute>,
+    /// The active color attribute (the one Vertex Paint paints).
+    pub active_color: usize,
+    /// The default color attribute (the one the renderer reads).
+    pub render_color: usize,
+    /// Sculpt mask per vertex, 0 (free) to 1 (masked). Empty: no mask.
+    pub mask: Vec<f32>,
+    /// Sculpt face set per face (Blender's `.sculpt_face_set`). Empty: every
+    /// face is in set 1.
+    pub face_sets: Vec<i32>,
+    /// Faces hidden in Sculpt Mode (Blender's `.hide_poly`). Empty: none.
+    pub hidden_faces: Vec<bool>,
 }
 
 /// Interpolation between absolute shape keys and between lattice points
@@ -393,6 +410,7 @@ impl Mesh {
         self.seams.extend(o.seams.iter().map(|e| (e.0 + off, e.1 + off)));
         self.sharp_edges.extend(o.sharp_edges.iter().map(|e| (e.0 + off, e.1 + off)));
         self.uv_pins.extend(o.uv_pins.iter().map(|p| (p.0 + foff, p.1)));
+        self.append_sculpt_data(o, off as usize, foff as usize);
         off
     }
 
@@ -473,6 +491,7 @@ impl Mesh {
         self.remap_vertex_data(remap);
         let faces = std::mem::take(&mut self.faces);
         let pins = std::mem::take(&mut self.uv_pins);
+        let mut face_data = attrs::FaceDataRemap::take(self, &faces);
         for (fi, mut f) in faces.into_iter().enumerate() {
             if f.verts.iter().any(|&v| remap[v as usize] == NONE) {
                 continue;
@@ -480,10 +499,12 @@ impl Mesh {
             let n_before = f.verts.len();
             let mut verts = Vec::with_capacity(f.verts.len());
             let mut uvs = Vec::new();
+            let mut corners = Vec::with_capacity(f.verts.len());
             for (i, &v) in f.verts.iter().enumerate() {
                 let nv = remap[v as usize];
                 if verts.last() != Some(&nv) {
                     verts.push(nv);
+                    corners.push(i);
                     if !f.uvs.is_empty() {
                         uvs.push(f.uvs[i]);
                     }
@@ -491,9 +512,11 @@ impl Mesh {
             }
             while verts.len() > 1 && verts.first() == verts.last() {
                 verts.pop();
+                corners.pop();
                 uvs.pop();
             }
             if verts.len() >= 3 {
+                face_data.keep(fi, &corners);
                 // Pins survive when the face keeps all its corners.
                 if verts.len() == n_before {
                     let nf = self.faces.len() as u32;
@@ -504,6 +527,7 @@ impl Mesh {
                 self.faces.push(f);
             }
         }
+        face_data.finish(self);
         for e in &mut self.loose_edges {
             *e = [remap[e[0] as usize], remap[e[1] as usize]];
         }
@@ -691,6 +715,7 @@ impl Mesh {
     /// vertices so new ones line up.
     pub fn pad_vertex_data(&mut self) {
         let n = self.positions.len();
+        self.pad_point_attrs();
         if !self.weights.is_empty() {
             self.weights.resize(n, Vec::new());
         }
@@ -705,7 +730,7 @@ impl Mesh {
     }
 
     fn has_vertex_data(&self) -> bool {
-        !self.weights.is_empty() || !self.shape_keys.is_empty()
+        !self.weights.is_empty() || !self.shape_keys.is_empty() || self.has_point_attrs()
     }
 
     /// Add a vertex at `p` whose weights and shape key positions blend the
@@ -737,6 +762,7 @@ impl Mesh {
             w.retain(|e| e.1 > 0.0);
             self.weights.push(w);
         }
+        self.push_point_attrs_interp(&src);
         self.positions.push(p);
         (self.positions.len() - 1) as u32
     }
@@ -775,6 +801,7 @@ impl Mesh {
             src
         };
         let src = pick(remap);
+        self.remap_point_attrs(&src);
         if !self.weights.is_empty() {
             let old = std::mem::take(&mut self.weights);
             self.weights = src.iter().map(|s| s.and_then(|i| old.get(i).cloned()).unwrap_or_default()).collect();

@@ -18,6 +18,8 @@
 //! - [`armature`]: armatures, bones, poses and armature deformation (LBS/DQS, auto weights).
 //! - [`constraints`]: object and bone constraints, IK and pose evaluation.
 //! - [`lattice`]: lattices and lattice deformation.
+//! - [`sculpt`]: Sculpt Mode: brushes, strokes, masks, face sets, dynamic topology, filters.
+//! - [`paint`]: Vertex Paint and Texture Paint: color blending, brushes, image painting.
 pub mod math;
 pub mod mesh;
 pub mod primitives;
@@ -34,6 +36,8 @@ pub mod uv;
 pub mod armature;
 pub mod constraints;
 pub mod lattice;
+pub mod sculpt;
+pub mod paint;
 
 pub use math::{Aabb, Mat4, Quat, Vec2, Vec3};
 pub use mesh::{Face, HalfEdgeMesh, Mesh};

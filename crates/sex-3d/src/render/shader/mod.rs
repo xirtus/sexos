@@ -196,6 +196,8 @@ pub(crate) struct ShadeCtx<'a> {
     pub world: bool,
     /// Random bits for AO and Bevel sampling.
     pub seed: u32,
+    /// Interpolated color of the mesh's render color attribute (white without one).
+    pub vcol: [f32; 4],
 }
 
 impl Default for ShadeCtx<'_> {
@@ -223,6 +225,7 @@ impl Default for ShadeCtx<'_> {
             tri: [Vec3::ZERO; 3],
             world: false,
             seed: 0,
+            vcol: [1.0; 4],
         }
     }
 }

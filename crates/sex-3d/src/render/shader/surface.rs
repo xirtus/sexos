@@ -222,6 +222,7 @@ pub(crate) fn surface_ctx<'a>(scene: &'a PreparedScene, prog: &Program, g: &TriG
         tri: [g.v0, g.v0 + g.e1, g.v0 + g.e2],
         world: false,
         seed,
+        vcol: std::array::from_fn(|k| sh.col[0][k] * b0 + sh.col[1][k] * u + sh.col[2][k] * v),
     }
 }
 
@@ -333,6 +334,7 @@ pub(crate) fn emission_estimate(data: &ShadeData, prog: &Program, g: &TriGeom, s
             material_index,
             ray_length: 1.0,
             tri: [g.v0, g.v0 + g.e1, g.v0 + g.e2],
+            vcol: std::array::from_fn(|k| sh.col[0][k] * b0 + sh.col[1][k] * u + sh.col[2][k] * v),
             ..Default::default()
         };
         let e = run(prog, &mut ctx).emission;

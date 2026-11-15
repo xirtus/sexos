@@ -654,7 +654,7 @@ impl<'a> Compiler<'a> {
                 Self::data(self.emit(Op::Ao { samples: prop_i(n, "samples", 16).max(1) as u32, inside: n.bool_prop("inside") }, ins, 2, v), &[C, F])
             }
             "ShaderNodeBevel" => vec![Src::Data(self.normal(fr, ni, "Normal", v), V)],
-            "ShaderNodeVertexColor" => vec![Src::Data(self.konst([1.0; 4]), C), Src::Data(self.konst([1.0; 4]), F)],
+            "ShaderNodeVertexColor" => Self::data(self.emit(Op::VertexColor, vec![], 2, v), &[C, F]),
             "ShaderNodeHairInfo" | "ShaderNodeParticleInfo" | "ShaderNodePointInfo" | "ShaderNodeVolumeInfo" | "ShaderNodeShaderToRGB" => {
                 let z = self.konst([0.0; 4]);
                 n.outputs.iter().map(|s| Src::Data(z, kind_of(s.ty).unwrap_or(F))).collect()
