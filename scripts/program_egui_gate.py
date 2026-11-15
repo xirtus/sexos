@@ -67,7 +67,7 @@ def main():
   g['wait'](r'\[tassel.text\] value=sex\n',s,60)
   s=len(t());q.key('backspace');g['wait'](r'\[tassel.text\] value=se\n',s,60)
   s=len(t());click(ox+20,oy+102);g['wait'](r'\[tassel.checked\] value=true\n',s,60)
-  s=len(t());move(ox+100,oy+190)
+  s=len(t());move(ox+330,oy+70)
   for _ in range(4):button('wheel-down',True);button('wheel-down',False)
   try:m=g['wait'](r'\[tassel.scrolled\] first=(\d+)\n',s,60)
   except TimeoutError:
