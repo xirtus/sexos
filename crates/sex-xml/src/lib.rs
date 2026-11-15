@@ -103,6 +103,11 @@ pub fn collapse(s: &str) -> String {
 /// `<link>` holding text.
 const VOID: &[&str] = &["br", "img", "hr", "input", "area", "base", "col", "embed", "wbr"];
 
+/// The deepest the tree goes. Deeper elements are still read, but their contents land in
+/// the element at this depth, so walking or dropping a tree never recurses further than
+/// this however the input nests (issue #301: unclosed tags overflowed the stack).
+pub const MAX_DEPTH: usize = 256;
+
 /// Reads `text` into a tree. The returned node is a nameless root holding the
 /// document's top-level elements (normally one).
 pub fn parse(text: &str) -> Node {
@@ -213,6 +218,9 @@ pub fn parse(text: &str) -> Node {
                 if end > i { node.children.push(Child::Text(String::from(&text[i..end]))); }
                 stack.last_mut().unwrap().children.push(Child::Element(node));
                 i = memchr(b'>', &b[end.min(b.len())..]).map_or(b.len(), |n| end + n + 1);
+            } else if stack.len() > MAX_DEPTH {
+                // Too deep: keep the element, empty, and let its contents join its parent.
+                stack.last_mut().unwrap().children.push(Child::Element(node));
             } else {
                 stack.push(node);
             }
@@ -381,6 +389,22 @@ mod tests {
         let messy = "<a =\"\"\"é ='x'ü \"ä\" b=ö/>текст<p 日本=\"語\" \"\"\"€>x</p>";
         for (n, _) in messy.char_indices() { let _ = parse(&messy[..n]); }
         let _ = parse(messy);
+    }
+
+    #[test]
+    fn deep_nesting_is_capped() {
+        // Issue #301: a million unclosed tags must neither overflow the stack while
+        // parsing, walking or dropping the tree.
+        let deep = "<a>".repeat(1_000_000) + "end";
+        let root = parse(&deep);
+        let mut depth = 0;
+        let mut n = &root;
+        while let Some(c) = n.elements().next() { n = c; depth += 1; }
+        assert!(depth <= MAX_DEPTH + 1, "depth {depth}");
+        assert!(root.text().ends_with("end"));
+        assert!(root.find("missing").is_none());
+        let repro = include_bytes!("../../../fuzz/repros/round3/gossip-xml-unbounded-depth-stack-overflow.bin");
+        let _ = parse(&alloc::string::String::from_utf8_lossy(repro)).text();
     }
 
 }
