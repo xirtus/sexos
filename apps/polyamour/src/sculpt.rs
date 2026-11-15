@@ -1263,3 +1263,6 @@ pub fn sanitize(doc: &mut Doc) {
     }
     doc.sculpt.dirty_images.retain(|&i| i < doc.scene.images.len());
 }
+
+#[cfg(test)]
+mod tests;
