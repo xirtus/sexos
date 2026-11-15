@@ -219,6 +219,18 @@ pub fn init() {
         }
     }
 
+    // Cufflinks, the Bluetooth host stack, in the Senses organ. Optional: without a
+    // controller it sleeps until SexUSB reports one.
+    let mut cufflinks_id=0;
+    if let Some(module)=modules.modules().iter().find(|m|m.path().ends_with("/cufflinks")) {
+        let id=sex_pdx::bt_hci::CUFFLINKS_PD;
+        match crate::pd::create::create_boot_domain(module.path(),Some(id),id as u8,sex_pdx::bt_hci::CUFFLINKS_KEY) {
+            Ok(created)=>{assert_eq!(created,id,"BOOT_CUFFLINKS_IDENTITY");cufflinks_id=created;
+                serial_println!("[kernel.spawn.cufflinks] id={} key={} organ=senses",created,sex_pdx::bt_hci::CUFFLINKS_KEY);}
+            Err(e)=>{serial_println!("[kernel.spawn.cufflinks] failed={}",e);}
+        }
+    }
+
     // Grant Phase 25 well-known capabilities
     serial_println!("[bootgraph.phase25.begin]");
     // Static BOOT_DAG return edges for authenticated display-ready messages.
@@ -876,6 +888,7 @@ pub fn init() {
 
     // Final BOOT_DAG memory edges precede sealing and every task admission.
     crate::boot_memory::init(sexdrive_id, sexdisp_id, sexusb_id, sexnet_id, sexfiles_id);
+    crate::boot_memory::init_bluetooth(sexusb_id, cufflinks_id, sexfiles_id);
     // UEFI firmware leaves network controllers bus-mastering (OVMF does, with or without
     // a network option ROM). The network service proves custody of a NIC only from idle,
     // so it gets its controllers as a restarted run does: bus mastering off first.
@@ -1154,6 +1167,7 @@ pub fn init() {
                     15 => "kaleidoscope",
                     50 => "sexacpi",
                     51 => "denim",
+                    52 => "cufflinks",
                     _ => "unknown",
                 };
                 let entry = unsafe { (*task_ptr).context.rip };
