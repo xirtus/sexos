@@ -1600,6 +1600,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "drag"
+version = "0.1.0"
+dependencies = [
+ "drag-vmm",
+ "sex-app",
+ "sex-pdx",
+]
+
+[[package]]
+name = "drag-vmm"
+version = "0.1.0"
+dependencies = [
+ "sex-pdx",
+]
+
+[[package]]
 name = "dragtest"
 version = "0.1.0"
 dependencies = [
