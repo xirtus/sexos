@@ -754,6 +754,10 @@ jobs:
         bash scripts/build_splicy.sh
         truncate -s 1G "$RUNNER_TEMP/splicy-source.img"
         python3 scripts/program_splicy_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/splicy-source.img" --require-export --out "$RUNNER_TEMP/recording/splicy"
+    - name: FilmCraft's editing engine runs on SexOS (edit, undo, WAV and H.264 export)
+      run: |
+        bash scripts/build_splicy_probe.sh
+        python3 scripts/program_splicy_probe_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/splicy-source.img" --out "$RUNNER_TEMP/recording/splicy-probe"
     - name: Preserve encoder evidence
       if: always()
       uses: actions/upload-artifact@v4
