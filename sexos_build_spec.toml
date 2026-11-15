@@ -49,6 +49,7 @@ crates = [
   "apps/hum/Cargo.toml",
   "apps/moan-probe/Cargo.toml",
   "apps/moan/Cargo.toml",
+  "apps/moanplug/Cargo.toml",
   "apps/jot/Cargo.toml",
   "apps/term/Cargo.toml",
   "apps/quil/Cargo.toml",
@@ -211,9 +212,20 @@ source_artifact = "target/x86_64-sex/release/sexacpi"
 dest_artifact = "iso_root/servers/sexacpi"
 rustflags = ""
 
+# Build and scanner-qualify the offline helper BEFORE Files binds its image SHA.
+# moanrack remains a qualification harness and is not installed in this image.
+[[stage]]
+id = "build_moanplug"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/moanplug/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/moanplug"
+dest_artifact = "iso_root/programs/moanplug"
+
 [[stage]]
 id = "build_sexfiles"
 action = "cargo_manifest"
+consumed_inputs = ["iso_root/programs/moanplug"]
 manifest = "servers/sexfiles/Cargo.toml"
 source_artifact = "target/x86_64-sex/release/sexfiles"
 dest_artifact = "iso_root/servers/sexfiles"
