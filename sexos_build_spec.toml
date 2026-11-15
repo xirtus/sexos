@@ -94,6 +94,7 @@ crates = [
   "apps/driftspark/Cargo.toml",
   "servers/cufflinks/Cargo.toml",
   "apps/dragtest/Cargo.toml",
+  "apps/drag/Cargo.toml",
   "apps/lurk/Cargo.toml",
   "apps/bodice/Cargo.toml",
   "apps/gossip/Cargo.toml",
@@ -585,6 +586,15 @@ target = "x86_64-sex-app.json"
 manifest = "apps/dragtest/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/dragtest"
 dest_artifact = "iso_root/programs/dragtest"
+
+# Drag (D2): the VM program, Linux boot protocol, 16550 console, virtio-blk (drag-vmm).
+[[stage]]
+id = "build_drag"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/drag/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/drag"
+dest_artifact = "iso_root/programs/drag"
 
 # Bodice: e-books (EPUB, FictionBook, comics), on sex-app with sex-ebook.
 [[stage]]
