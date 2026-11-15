@@ -448,6 +448,13 @@ fn ble_keyboard_pairs_types_and_comes_back() {
     assert_eq!(inputs(&pump(&mut h2, &mut c2)), [Input::Keys { modifiers: 0, keys: [0x28, 0, 0, 0, 0, 0] }]);
     // Encryption used the stored key, not a new pairing.
     assert_eq!(c2.opcodes.iter().filter(|o| **o == hop::LE_START_ENCRYPTION).count(), 1);
+    // Forgetting the bond (listed under its first address) drops the live link that
+    // came in from the new private address.
+    assert!(!c2.opcodes.contains(&code::DISCONNECT));
+    h2.forget(first);
+    pump(&mut h2, &mut c2);
+    assert!(c2.opcodes.contains(&code::DISCONNECT));
+    assert!(h2.bonds.le_for(&back).is_none());
 }
 
 #[test]

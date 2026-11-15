@@ -193,9 +193,13 @@ impl Host {
 
     /// Forget a device's keys (and drop its link).
     pub fn forget(&mut self, addr: Addr) {
+        // Live links of this device, including an LE device connected from a newer
+        // private address that resolves to the bond (looked up before the keys go).
+        let handles: Vec<u16> = self.conns.iter()
+            .filter(|c| c.addr == addr || self.bonds.le_for(&c.addr).is_some_and(|b| b.addr == addr))
+            .map(|c| c.handle).collect();
         self.ssp.bonds.retain(|b| b.addr != addr);
         if self.bonds.forget(&addr) { self.notes.push_back(Note::BondsChanged); }
-        let handles: Vec<u16> = self.conns.iter().filter(|c| c.addr == addr).map(|c| c.handle).collect();
         for h in handles { self.disconnect(h); }
     }
 

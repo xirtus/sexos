@@ -43,6 +43,12 @@ fn region() -> Option<Shared> {
     s.region
 }
 
+/// Display restarted: it shows no panel now, so send the open one again in full.
+pub fn display_restarted() {
+    st().shown = (Lines::EMPTY, None);
+    publish();
+}
+
 fn publish() {
     let s = st();
     let want = if s.ui.open { s.ui.lines(s.snap.as_ref()) } else { (Lines::EMPTY, None) };

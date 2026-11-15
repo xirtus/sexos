@@ -606,15 +606,19 @@ impl Ui {
         }
         n
     }
-    /// The devices shown (at most what fits under the fixed rows).
+    /// The devices shown at once (what fits under the fixed rows); the list scrolls
+    /// to keep the selected device in view.
     pub const MAX_SHOWN: usize = LINES - 5;
+
+    /// The first device shown (the list scrolls with the selection).
+    fn top(&self) -> usize { if self.dialog.is_some() { 0 } else { self.selected.saturating_sub(Self::MAX_SHOWN) } }
 
     fn items(&self, s: Option<&Snapshot>, out: &mut [Item; MAX_DEVICES + 1]) -> usize {
         if self.dialog.is_some() { out[0] = Item::Yes; out[1] = Item::No; return 2; }
         let Some(s) = s.filter(|s| s.phase == READY) else { return 0 };
         out[0] = Item::Scan;
         let mut order = [0usize; MAX_DEVICES];
-        let n = Self::order(s, &mut order).min(Self::MAX_SHOWN);
+        let n = Self::order(s, &mut order);
         for k in 0..n { out[1 + k] = Item::Device(s.devices[order[k]].addr); }
         1 + n
     }
@@ -713,9 +717,12 @@ impl Ui {
         let mut items = [Item::Scan; MAX_DEVICES + 1];
         let n = self.items(s, &mut items);
         let picked = (0..=line).filter(|&i| lines.style[i] == BUTTON).count();
-        if line >= lines.count as usize || lines.style[line] != BUTTON || picked == 0 || picked > n { return Action::None; }
-        self.selected = picked - 1;
-        self.activate(items[picked - 1], s)
+        if line >= lines.count as usize || lines.style[line] != BUTTON || picked == 0 { return Action::None; }
+        // Buttons on screen: Scan (or Yes/No), then the devices from `top` on.
+        let index = if self.dialog.is_some() || picked == 1 { picked - 1 } else { picked - 1 + self.top() };
+        if index >= n { return Action::None; }
+        self.selected = index;
+        self.activate(items[index], s)
     }
 
     /// The panel's lines and which line is selected.
@@ -767,9 +774,12 @@ impl Ui {
             if self.selected == 0 { selected_line = Some(l.count as usize); }
             l.push(BUTTON, &[if s.scanning { b"Stop scanning".as_slice() } else { b"Scan for devices" }]);
             let mut order = [0usize; MAX_DEVICES];
-            let n = Self::order(s, &mut order).min(Self::MAX_SHOWN);
-            if n == 0 { l.push(DIM, &[b"No devices found yet"]); }
-            for (k, &i) in order[..n].iter().enumerate() {
+            let all = Self::order(s, &mut order);
+            let top = self.top().min(all.saturating_sub(Self::MAX_SHOWN));
+            let n = (all - top).min(Self::MAX_SHOWN);
+            if all == 0 { l.push(DIM, &[b"No devices found yet"]); }
+            for (k, &i) in order[top..top + n].iter().enumerate() {
+                let k = top + k;
                 let d = &s.devices[i];
                 let mut addr = [0u8; 17];
                 addr_text(&d.addr, &mut addr);
@@ -1029,5 +1039,25 @@ mod tests {
         let (l, _) = a.push(w2, 0, 0).unwrap();
         assert_eq!(l.line(0), b"ab?d\tefg");
         assert_eq!(l.columns(0), (&b"ab?d"[..], &b"efg"[..]));
+    }
+
+    #[test]
+    fn every_listed_device_can_be_reached() {
+        let mut s = Snapshot { phase: READY, ..Snapshot::EMPTY };
+        for k in 0..MAX_DEVICES as u8 { assert!(s.put([k + 1, 0, 0, 0, 0, 0x50], OTHER, None, None, true)); }
+        let mut ui = Ui::new();
+        ui.toggle();
+        for _ in 0..MAX_DEVICES + 3 { ui.key(key::DOWN, Some(&s)); }
+        assert_eq!(ui.selected, MAX_DEVICES);
+        let (l, sel) = ui.lines(Some(&s));
+        assert!(l.count as usize <= LINES && sel.is_some_and(|x| l.style[x] == BUTTON));
+        let last = [MAX_DEVICES as u8, 0, 0, 0, 0, 0x50];
+        assert_eq!(ui.key(key::ENTER, Some(&s)), Action::Send(Command::Pair(last)));
+        // A click on the selected (last shown) line picks the same device.
+        let line = sel.unwrap();
+        assert_eq!(ui.click(Some(line), Some(&s)), Action::Send(Command::Pair(last)));
+        // Back to the top: the list scrolls back.
+        for _ in 0..MAX_DEVICES { ui.key(key::UP, Some(&s)); }
+        assert_eq!(ui.key(key::ENTER, Some(&s)), Action::Send(Command::Scan(true)));
     }
 }
