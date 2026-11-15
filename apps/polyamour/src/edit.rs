@@ -91,7 +91,8 @@ pub fn flush(d: &mut Doc) {
 
 /// Drop selected/hidden indices that no longer exist (after undo).
 pub fn sanitize(d: &mut Doc) {
-    if d.mode != Mode::Edit {
+    crate::rig::sanitize(d);
+    if d.mode != Mode::Edit || crate::rig::edit_armature(d).is_some() || crate::rig::edit_lattice(d).is_some() {
         return;
     }
     let Some((_, mi)) = active_mesh(d) else {

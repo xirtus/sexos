@@ -1166,7 +1166,8 @@ fn key_down(s: &mut State, d: &mut Doc, ui: &mut Ui, key: Key, mods: Mods, r: Re
         (K::Char('s'), Mods::SHIFT) => popup_at(d, ui, "Snap", menus::snap_items(), r),
         (K::Char('a'), Mods::SHIFT) => popup_at(d, ui, "Add", menus::add_menu(d), r),
         (K::Tab, Mods::NONE) => q(d, "object.mode_set", "TOGGLE_EDIT"),
-        (K::Tab, Mods::CTRL) => popup_at(d, ui, "Mode", menus::mode_items(), r),
+        (K::Tab, Mods::CTRL) if d.active().is_some_and(|a| crate::rig::is_armature(d, a)) => q(d, "object.mode_set", "TOGGLE_POSE"),
+        (K::Tab, Mods::CTRL) => popup_at(d, ui, "Mode", menus::mode_items(d), r),
         // ---- transforms (both modes)
         (K::Char('g'), Mods::NONE) => start_transform(s, d, TMode::Translate, m, r),
         (K::Char('r'), Mods::NONE) => start_transform(s, d, TMode::Rotate, m, r),

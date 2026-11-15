@@ -19,6 +19,8 @@ pub enum Mode {
     VertexPaint,
     WeightPaint,
     TexturePaint,
+    /// Armatures: posing bones.
+    Pose,
 }
 
 impl Mode {
@@ -30,9 +32,22 @@ impl Mode {
             Mode::VertexPaint => "Vertex Paint",
             Mode::WeightPaint => "Weight Paint",
             Mode::TexturePaint => "Texture Paint",
+            Mode::Pose => "Pose Mode",
         }
     }
-    pub const ALL: [Mode; 6] = [Mode::Object, Mode::Edit, Mode::Sculpt, Mode::VertexPaint, Mode::WeightPaint, Mode::TexturePaint];
+    pub const ALL: [Mode; 7] = [Mode::Object, Mode::Edit, Mode::Sculpt, Mode::VertexPaint, Mode::WeightPaint, Mode::TexturePaint, Mode::Pose];
+    /// The `object.mode_set` argument.
+    pub fn id(self) -> &'static str {
+        match self {
+            Mode::Object => "OBJECT",
+            Mode::Edit => "EDIT",
+            Mode::Sculpt => "SCULPT",
+            Mode::VertexPaint => "VERTEX_PAINT",
+            Mode::WeightPaint => "WEIGHT_PAINT",
+            Mode::TexturePaint => "TEXTURE_PAINT",
+            Mode::Pose => "POSE",
+        }
+    }
 }
 
 /// Edit-mode select mode (1, 2, 3 keys).
@@ -188,6 +203,9 @@ pub struct Doc {
     pub anim: crate::anim::Anim,
     /// Report history, clipboard and editor mailbox (anim.rs).
     pub info: crate::anim::Info,
+    /// Rigging UI state: bone and lattice point selection, active vertex
+    /// group and shape key, weight paint brush (rig.rs).
+    pub rig: crate::rig::RigState,
     /// Render, output, unit and colour-management settings and per-object
     /// flags the scene itself has no field for (Properties and Outliner).
     pub settings: crate::settings::Settings,
@@ -261,6 +279,7 @@ impl Doc {
             texts: Vec::new(),
             anim: Default::default(),
             info: Default::default(),
+            rig: Default::default(),
             settings: Default::default(),
             cursor: Vec3::ZERO,
             cursor_rotation: Vec3::ZERO,
@@ -290,12 +309,14 @@ impl Doc {
         self.dirty = true;
     }
     fn side(&self) -> Side {
-        Side { anim: self.anim.objects.clone(), settings: self.settings.clone(), texts: self.texts.clone() }
+        Side { actions: self.anim.actions.clone(), anim: self.anim.objects.clone(), rig: self.rig.clone(), settings: self.settings.clone(), texts: self.texts.clone() }
     }
     fn restore_side(&mut self, s: Side) -> Side {
         let now = self.side();
+        self.anim.actions = s.actions;
         self.anim.objects = s.anim;
         self.anim.dirty = true;
+        self.rig = s.rig;
         self.settings = s.settings;
         self.texts = s.texts;
         now
@@ -346,7 +367,7 @@ impl Doc {
     /// Run an operator by its Blender-style name. Unknown names are reported,
     /// not ignored, so missing features show up in the status bar.
     pub fn run(&mut self, op: &Op) {
-        if self.run_view3d(op) || crate::edit::run(self, op) || crate::uvedit::run(self, op) || crate::nodetree::run(self, op) {
+        if self.run_view3d(op) || crate::rig::run(self, op) || crate::edit::run(self, op) || crate::uvedit::run(self, op) || crate::nodetree::run(self, op) {
             return;
         }
         let arg = op.arg.as_str();
@@ -423,6 +444,27 @@ impl Doc {
             }
             "object.empty_add" => {
                 self.add_object("Empty", ObjectData::Empty, "Add Empty");
+            }
+            "object.armature_add" => {
+                self.push_undo("Add Armature");
+                if self.mode != Mode::Object {
+                    crate::rig::mode_set(self, "OBJECT");
+                }
+                // Blender's default bone: one unit up the Z axis.
+                let mut arm = sex_3d::armature::Armature::default();
+                arm.add_bone(sex_3d::armature::Bone::new("Bone", Vec3::ZERO, Vec3::Z));
+                let i = self.scene.add_armature_object("Armature", arm);
+                self.scene.objects[i].transform.location = self.cursor;
+                self.select_only(Some(i));
+            }
+            "object.add" if arg == "LATTICE" || arg.is_empty() => {
+                self.push_undo("Add Lattice");
+                if self.mode != Mode::Object {
+                    crate::rig::mode_set(self, "OBJECT");
+                }
+                let i = self.scene.add_lattice_object("Lattice", sex_3d::lattice::Lattice::new(2, 2, 2));
+                self.scene.objects[i].transform.location = self.cursor;
+                self.select_only(Some(i));
             }
             "object.select_all" => {
                 let all: Vec<usize> = (0..self.scene.objects.len()).collect();
@@ -504,36 +546,7 @@ impl Doc {
                 self.scene.objects[a].modifiers.push(m);
                 self.touch();
             }
-            "object.mode_set" => {
-                let want = match arg {
-                    "EDIT" => Mode::Edit,
-                    "SCULPT" => Mode::Sculpt,
-                    "VERTEX_PAINT" => Mode::VertexPaint,
-                    "WEIGHT_PAINT" => Mode::WeightPaint,
-                    "TEXTURE_PAINT" => Mode::TexturePaint,
-                    "TOGGLE_EDIT" => {
-                        if self.mode == Mode::Edit {
-                            Mode::Object
-                        } else {
-                            Mode::Edit
-                        }
-                    }
-                    _ => Mode::Object,
-                };
-                if want != Mode::Object && !self.active().is_some_and(|a| matches!(self.scene.objects[a].data, ObjectData::Mesh(_))) {
-                    self.report = "Active object is not a mesh".into();
-                    return;
-                }
-                if want == Mode::Edit && self.mode != Mode::Edit {
-                    // A fresh mesh in Blender enters Edit Mode all selected.
-                    self.edit = EditSelection::default();
-                    self.edit_hidden.clear();
-                    self.mode = want;
-                    crate::edit::select_all(self, "SELECT");
-                }
-                self.mode = want;
-                self.touch();
-            }
+            "object.mode_set" => crate::rig::mode_set(self, arg),
             "object.location_clear" | "object.rotation_clear" | "object.scale_clear" => {
                 self.push_undo("Clear Transform");
                 for i in self.scene.selected.clone() {
@@ -975,7 +988,9 @@ fn circle(n: u32, r: f32) -> sex_3d::Mesh {
 /// The document state outside the scene that undo restores with it.
 #[derive(Clone)]
 struct Side {
+    actions: Vec<crate::anim::Action>,
     anim: Vec<crate::anim::ObjectAnim>,
+    rig: crate::rig::RigState,
     settings: crate::settings::Settings,
     texts: Vec<(String, String)>,
 }

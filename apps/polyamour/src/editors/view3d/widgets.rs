@@ -82,7 +82,7 @@ pub fn header(s: &mut State, d: &mut Doc, ui: &mut Ui, hr: Rect) {
     // Mode dropdown with its icon.
     let mr = Rect::new(hr.x, y, 124, h);
     if icon_dropdown(ui, mr, if d.mode == Mode::Edit { Icon::EditMode } else { Icon::ObjectMode }, d.mode.label()) {
-        ui.open_menu(mr, "", menus::mode_items());
+        ui.open_menu(mr, "", menus::mode_items(d));
     }
     let mut x = mr.right() + 6;
     if d.mode == Mode::Edit {
