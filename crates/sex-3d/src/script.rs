@@ -34,7 +34,7 @@
 use crate::math::{Quat, Vec2, Vec3};
 use crate::mesh::{Face, Mesh};
 use crate::modifiers::Modifier;
-use crate::scene::{unique_name, Camera, Light, LightKind, Material, Object, ObjectData, Scene, Transform};
+use crate::scene::{unique_name, AreaShape, Camera, Light, LightKind, Material, Object, ObjectData, PanoramaType, Scene, SensorFit, Transform, VolumeSettings};
 use base64::Engine;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::{self, Write as _};
@@ -602,6 +602,7 @@ impl Session {
                 if let Some(s) = cmd.f("strength")? {
                     scene.world.strength = s;
                 }
+                set_volume_opts(cmd, &mut scene.world.volume)?;
                 Ok(None)
             }
             "render" => {
@@ -675,6 +676,11 @@ impl Session {
                 if let Some(v) = cmd.f("far")? {
                     cam.far = v;
                 }
+                for key in CAMERA_OPTS {
+                    if let Some(t) = cmd.opt(key) {
+                        set_camera_prop(&mut cam, key, std::slice::from_ref(&t))?;
+                    }
+                }
                 let i = scene.add_object(Object::new(&name, ObjectData::Camera(cam)));
                 let make_active = cmd.b("active")?;
                 let r = self.created(scene, cmd, i)?;
@@ -707,6 +713,7 @@ impl Session {
                 let name = unique_name(&base, |n| scene.materials.iter().any(|m| m.name == n));
                 let mut m = Material { name, ..Material::default() };
                 set_material_opts(cmd, &mut m)?;
+                set_material_render_opts(cmd, &mut m)?;
                 let i = scene.add_material(m);
                 self.bind(cmd, Handle::Material(i))?;
                 Ok(Some(quote(&scene.materials[i].name)))
@@ -719,6 +726,7 @@ impl Session {
                     scene.materials[i].name = unique_name(&n.text, taken);
                 }
                 set_material_opts(cmd, &mut scene.materials[i])?;
+                set_material_render_opts(cmd, &mut scene.materials[i])?;
                 Ok(None)
             }
             "material_assign" => {
@@ -1111,6 +1119,26 @@ impl Session {
                 let p = one()?.clone();
                 self.set_parent(scene, i, &p, false)?;
             }
+            "visible_camera" => o.visibility.camera = boolean(&one()?.text)?,
+            "visible_diffuse" => o.visibility.diffuse = boolean(&one()?.text)?,
+            "visible_glossy" => o.visibility.glossy = boolean(&one()?.text)?,
+            "visible_transmission" => o.visibility.transmission = boolean(&one()?.text)?,
+            "visible_volume_scatter" => o.visibility.volume_scatter = boolean(&one()?.text)?,
+            "visible_shadow" => o.visibility.shadow = boolean(&one()?.text)?,
+            "holdout" => o.holdout = boolean(&one()?.text)?,
+            "pass_index" => o.pass_index = uint(&one()?.text)?,
+            "motion" if matches!(args.as_slice(), [t] if t.is_word("none")) => o.motion = None,
+            "motion_location" => o.motion.get_or_insert(o.transform).location = vec3_of(&v()?, "motion_location")?,
+            "motion_rotation_quaternion" => o.motion.get_or_insert(o.transform).rotation = quat_of(&v()?)?,
+            "motion_scale" => o.motion.get_or_insert(o.transform).scale = scale_of(&v()?)?,
+            "focus_object" => {
+                let t = one()?.clone();
+                let f = if t.is_word("none") { None } else { Some(self.object(scene, &t)?) };
+                match &mut scene.objects[i].data {
+                    ObjectData::Camera(c) => c.dof.focus_object = f,
+                    _ => return Err("focus_object is only for cameras".into()),
+                }
+            }
             _ => match &mut o.data {
                 ObjectData::Light(l) => set_light_prop(l, &prop, &args)?,
                 ObjectData::Camera(c) => set_camera_prop(c, &prop, &args)?,
@@ -1135,6 +1163,14 @@ impl Session {
             "name" => quote(&o.name),
             "collection" => quote(&scene.collections[o.collection].name),
             "parent" => o.parent.map(|p| quote(&scene.objects[p].name)).unwrap_or_else(|| "none".into()),
+            "visible_camera" => (o.visibility.camera as u8).to_string(),
+            "visible_diffuse" => (o.visibility.diffuse as u8).to_string(),
+            "visible_glossy" => (o.visibility.glossy as u8).to_string(),
+            "visible_transmission" => (o.visibility.transmission as u8).to_string(),
+            "visible_volume_scatter" => (o.visibility.volume_scatter as u8).to_string(),
+            "visible_shadow" => (o.visibility.shadow as u8).to_string(),
+            "holdout" => (o.holdout as u8).to_string(),
+            "pass_index" => o.pass_index.to_string(),
             "type" => match o.data {
                 ObjectData::Empty => "EMPTY",
                 ObjectData::Mesh(_) => "MESH",
@@ -1160,6 +1196,12 @@ impl Session {
                     "power" => fmt_f(l.power),
                     "color" => fmt_vals(&l.color.to_array()),
                     "radius" => fmt_f(l.radius),
+                    "shape" => shape_name(l.shape).into(),
+                    "size_y" => fmt_f(l.size_y),
+                    "spread" => fmt_f(l.spread),
+                    "max_bounces" => l.max_bounces.to_string(),
+                    "cast_shadow" => (l.cast_shadow as u8).to_string(),
+                    "use_mis" => (l.use_mis as u8).to_string(),
                     _ => return Err(format!("unknown property '{prop}' for light '{}'", o.name)),
                 },
                 ObjectData::Camera(c) => match prop.as_str() {
@@ -1168,7 +1210,8 @@ impl Session {
                     "near" => fmt_f(c.near),
                     "far" => fmt_f(c.far),
                     "ortho_scale" => c.ortho_scale.map(fmt_f).unwrap_or_else(|| "none".into()),
-                    _ => return Err(format!("unknown property '{prop}' for camera '{}'", o.name)),
+                    "focus_object" => c.dof.focus_object.and_then(|f| scene.objects.get(f)).map(|f| quote(&f.name)).unwrap_or_else(|| "none".into()),
+                    p => camera_opt_value(c, p).ok_or_else(|| format!("unknown property '{prop}' for camera '{}'", o.name))?,
                 },
                 _ => return Err(format!("unknown property '{prop}' for '{}'", o.name)),
             },
@@ -1211,7 +1254,7 @@ fn scale_of(v: &[f32]) -> Res<Vec3> {
 }
 
 fn set_light_opts(cmd: &mut Cmd, l: &mut Light) -> Res<()> {
-    for key in ["power", "color", "radius", "angle", "blend", "size"] {
+    for key in ["power", "color", "radius", "angle", "blend", "size", "shape", "size_y", "spread", "max_bounces", "cast_shadow", "use_mis"] {
         if let Some(t) = cmd.opt(key) {
             set_light_prop(l, key, std::slice::from_ref(&t))?;
         }
@@ -1219,7 +1262,40 @@ fn set_light_opts(cmd: &mut Cmd, l: &mut Light) -> Res<()> {
     Ok(())
 }
 
+fn shape_name(s: AreaShape) -> &'static str {
+    match s {
+        AreaShape::Square => "square",
+        AreaShape::Rectangle => "rectangle",
+        AreaShape::Disk => "disk",
+        AreaShape::Ellipse => "ellipse",
+    }
+}
+
 fn set_light_prop(l: &mut Light, prop: &str, args: &[Token]) -> Res<()> {
+    let word = || match args {
+        [t] => Ok(t.text.to_ascii_lowercase()),
+        _ => Err(format!("{prop} takes one value")),
+    };
+    match prop {
+        "shape" => {
+            let w = word()?;
+            l.shape = [AreaShape::Square, AreaShape::Rectangle, AreaShape::Disk, AreaShape::Ellipse].into_iter().find(|s| shape_name(*s) == w).ok_or_else(|| format!("unknown area shape '{w}' (square, rectangle, disk, ellipse)"))?;
+            return Ok(());
+        }
+        "cast_shadow" => {
+            l.cast_shadow = boolean(&word()?)?;
+            return Ok(());
+        }
+        "use_mis" => {
+            l.use_mis = boolean(&word()?)?;
+            return Ok(());
+        }
+        "max_bounces" => {
+            l.max_bounces = uint(&word()?)?;
+            return Ok(());
+        }
+        _ => {}
+    }
     let v = values(args)?;
     let one = || match v.as_slice() {
         [x] => Ok(*x),
@@ -1232,6 +1308,8 @@ fn set_light_prop(l: &mut Light, prop: &str, args: &[Token]) -> Res<()> {
         ("angle", LightKind::Spot { angle, .. }) => *angle = one()?,
         ("blend", LightKind::Spot { blend, .. }) => *blend = one()?,
         ("size", LightKind::Area { size }) => *size = one()?,
+        ("size_y", _) => l.size_y = one()?,
+        ("spread", _) => l.spread = one()?,
         ("angle" | "blend", _) => return Err(format!("{prop} is only for spot lights")),
         ("size", _) => return Err("size is only for area lights".into()),
         _ => return Err(format!("unknown light property '{prop}'")),
@@ -1239,10 +1317,115 @@ fn set_light_prop(l: &mut Light, prop: &str, args: &[Token]) -> Res<()> {
     Ok(())
 }
 
+/// Camera options beyond fov/lens/near/far/ortho_scale.
+const CAMERA_OPTS: [&str; 19] = [
+    "sensor_width",
+    "sensor_height",
+    "sensor_fit",
+    "shift_x",
+    "shift_y",
+    "panorama",
+    "fisheye_fov",
+    "fisheye_lens",
+    "latitude_min",
+    "latitude_max",
+    "longitude_min",
+    "longitude_max",
+    "dof",
+    "focus_distance",
+    "fstop",
+    "blades",
+    "aperture_rotation",
+    "aperture_ratio",
+    "lens_type",
+];
+
+fn panorama_name(p: Option<PanoramaType>) -> &'static str {
+    match p {
+        None => "none",
+        Some(PanoramaType::Equirectangular) => "equirectangular",
+        Some(PanoramaType::FisheyeEquidistant) => "fisheye_equidistant",
+        Some(PanoramaType::FisheyeEquisolid) => "fisheye_equisolid",
+    }
+}
+
+fn fit_name(f: SensorFit) -> &'static str {
+    match f {
+        SensorFit::Auto => "auto",
+        SensorFit::Horizontal => "horizontal",
+        SensorFit::Vertical => "vertical",
+    }
+}
+
+/// A camera option's value as text, for `get` and saving.
+fn camera_opt_value(c: &Camera, key: &str) -> Option<String> {
+    Some(match key {
+        "sensor_width" => fmt_f(c.sensor_width),
+        "sensor_height" => fmt_f(c.sensor_height),
+        "sensor_fit" => fit_name(c.sensor_fit).into(),
+        "shift_x" => fmt_f(c.shift_x),
+        "shift_y" => fmt_f(c.shift_y),
+        "panorama" => panorama_name(c.panorama).into(),
+        "fisheye_fov" => fmt_f(c.fisheye_fov),
+        "fisheye_lens" => fmt_f(c.fisheye_lens),
+        "latitude_min" => fmt_f(c.latitude_min),
+        "latitude_max" => fmt_f(c.latitude_max),
+        "longitude_min" => fmt_f(c.longitude_min),
+        "longitude_max" => fmt_f(c.longitude_max),
+        "dof" => (c.dof.enabled as u8).to_string(),
+        "focus_distance" => fmt_f(c.dof.focus_distance),
+        "fstop" => fmt_f(c.dof.fstop),
+        "blades" => c.dof.blades.to_string(),
+        "aperture_rotation" => fmt_f(c.dof.rotation),
+        "aperture_ratio" => fmt_f(c.dof.ratio),
+        _ => return None,
+    })
+}
+
 fn set_camera_prop(c: &mut Camera, prop: &str, args: &[Token]) -> Res<()> {
     if prop == "ortho_scale" && matches!(args, [t] if t.is_word("none")) {
         c.ortho_scale = None;
         return Ok(());
+    }
+    let word = || match args {
+        [t] => Ok(t.text.to_ascii_lowercase()),
+        _ => Err(format!("{prop} takes one value")),
+    };
+    match prop {
+        "panorama" => {
+            let w = word()?;
+            c.panorama = [None, Some(PanoramaType::Equirectangular), Some(PanoramaType::FisheyeEquidistant), Some(PanoramaType::FisheyeEquisolid)].into_iter().find(|p| panorama_name(*p) == w).ok_or_else(|| format!("unknown panorama type '{w}'"))?;
+            return Ok(());
+        }
+        "sensor_fit" => {
+            let w = word()?;
+            c.sensor_fit = [SensorFit::Auto, SensorFit::Horizontal, SensorFit::Vertical].into_iter().find(|f| fit_name(*f) == w).ok_or_else(|| format!("unknown sensor fit '{w}' (auto, horizontal, vertical)"))?;
+            return Ok(());
+        }
+        "dof" => {
+            c.dof.enabled = boolean(&word()?)?;
+            return Ok(());
+        }
+        "blades" => {
+            c.dof.blades = uint(&word()?)?;
+            return Ok(());
+        }
+        "lens_type" => {
+            match word()?.as_str() {
+                "perspective" => {
+                    c.ortho_scale = None;
+                    c.panorama = None;
+                }
+                "orthographic" => {
+                    c.panorama = None;
+                    c.ortho_scale = Some(c.ortho_scale.unwrap_or(6.0 * 9.0 / 16.0));
+                }
+                "panoramic" => c.panorama = Some(c.panorama.unwrap_or_default()),
+                w => return Err(format!("unknown lens type '{w}' (perspective, orthographic, panoramic)")),
+            }
+            return Ok(());
+        }
+        _ => {}
     }
     let v = match values(args)?.as_slice() {
         [x] => *x,
@@ -1254,6 +1437,20 @@ fn set_camera_prop(c: &mut Camera, prop: &str, args: &[Token]) -> Res<()> {
         "near" => c.near = v,
         "far" => c.far = v,
         "ortho_scale" => c.ortho_scale = Some(v),
+        "sensor_width" => c.sensor_width = v,
+        "sensor_height" => c.sensor_height = v,
+        "shift_x" => c.shift_x = v,
+        "shift_y" => c.shift_y = v,
+        "fisheye_fov" => c.fisheye_fov = v,
+        "fisheye_lens" => c.fisheye_lens = v,
+        "latitude_min" => c.latitude_min = v,
+        "latitude_max" => c.latitude_max = v,
+        "longitude_min" => c.longitude_min = v,
+        "longitude_max" => c.longitude_max = v,
+        "focus_distance" => c.dof.focus_distance = v,
+        "fstop" => c.dof.fstop = v,
+        "aperture_rotation" => c.dof.rotation = v,
+        "aperture_ratio" => c.dof.ratio = v,
         _ => return Err(format!("unknown camera property '{prop}'")),
     }
     Ok(())
@@ -1289,6 +1486,60 @@ fn set_material_opts(cmd: &mut Cmd, m: &mut Material) -> Res<()> {
         m.double_sided = v;
     }
     Ok(())
+}
+
+/// Render-only material options: pass index and the volume.
+fn set_material_render_opts(cmd: &mut Cmd, m: &mut Material) -> Res<()> {
+    if let Some(v) = cmd.u("pass_index")? {
+        m.pass_index = v;
+    }
+    set_volume_opts(cmd, &mut m.volume)
+}
+
+/// `volume=none` or `volume_density=` etc. (any of them creates the volume).
+fn set_volume_opts(cmd: &mut Cmd, vol: &mut Option<VolumeSettings>) -> Res<()> {
+    if let Some(t) = cmd.opt("volume") {
+        if t.is_word("none") {
+            *vol = None;
+        } else {
+            return Err("volume takes none; set volume_density= etc. instead".into());
+        }
+    }
+    let set = |vol: &mut Option<VolumeSettings>, f: &dyn Fn(&mut VolumeSettings)| f(vol.get_or_insert_with(VolumeSettings::default));
+    if let Some(c) = cmd.v3("volume_color")? {
+        set(vol, &|v| v.color = c);
+    }
+    if let Some(d) = cmd.f("volume_density")? {
+        set(vol, &|v| v.density = d);
+    }
+    if let Some(g) = cmd.f("volume_anisotropy")? {
+        set(vol, &|v| v.anisotropy = g);
+    }
+    if let Some(c) = cmd.v3("volume_absorption_color")? {
+        set(vol, &|v| v.absorption_color = c);
+    }
+    if let Some(c) = cmd.v3("volume_emission_color")? {
+        set(vol, &|v| v.emission_color = c);
+    }
+    if let Some(e) = cmd.f("volume_emission_strength")? {
+        set(vol, &|v| v.emission_strength = e);
+    }
+    Ok(())
+}
+
+fn volume_opts(v: &Option<VolumeSettings>) -> String {
+    match v {
+        None => String::new(),
+        Some(v) => format!(
+            " volume_color={} volume_density={} volume_anisotropy={} volume_absorption_color={} volume_emission_color={} volume_emission_strength={}",
+            fmt_list(&v.color.to_array()),
+            fmt_f(v.density),
+            fmt_f(v.anisotropy),
+            fmt_list(&v.absorption_color.to_array()),
+            fmt_list(&v.emission_color.to_array()),
+            fmt_f(v.emission_strength)
+        ),
+    }
 }
 
 /// A modifier with Blender's defaults, by polyops or Blender type name.
@@ -1483,7 +1734,7 @@ pub fn scene_to_polyops(scene: &Scene) -> String {
     let _ = writeln!(o, "# Polyamour scene: {} objects, {} meshes, {} materials", scene.objects.len(), scene.meshes.len(), scene.materials.len());
     let _ = writeln!(o, "scene name={} frame_start={} frame_end={} fps={}", quote(&scene.name), scene.frame_start, scene.frame_end, fmt_f(scene.fps));
     let w = &scene.world;
-    let _ = writeln!(o, "world color={} strength={}", fmt_list(&w.color.to_array()), fmt_f(w.strength));
+    let _ = writeln!(o, "world color={} strength={}{}", fmt_list(&w.color.to_array()), fmt_f(w.strength), volume_opts(&w.volume));
     // Collection 0 exists in every scene; create the others, then fix parents
     // (a parent may come later in the list).
     for (i, c) in scene.collections.iter().enumerate() {
@@ -1515,6 +1766,10 @@ pub fn scene_to_polyops(scene: &Scene) -> String {
             fmt_f(m.transmission),
             m.double_sided as u8
         );
+        if m.pass_index != 0 || m.volume.is_some() {
+            let pi = if m.pass_index != 0 { format!(" pass_index={}", m.pass_index) } else { String::new() };
+            let _ = writeln!(o, "material_set {}{pi}{}", quote(&m.name), volume_opts(&m.volume));
+        }
     }
     for (m, n) in scene.meshes.iter().zip(&scene.mesh_names) {
         let _ = writeln!(o, "mesh_new {}{}", quote(n), mesh_to_options(m));
@@ -1540,10 +1795,37 @@ pub fn scene_to_polyops(scene: &Scene) -> String {
                     LightKind::Spot { angle, blend } => ("spot", format!(" angle={} blend={}", fmt_f(angle), fmt_f(blend))),
                     LightKind::Area { size } => ("area", format!(" size={}", fmt_f(size))),
                 };
+                let d = Light::default();
+                let mut extra = extra;
+                if l.shape != d.shape {
+                    extra += &format!(" shape={}", shape_name(l.shape));
+                }
+                if l.size_y != d.size_y {
+                    extra += &format!(" size_y={}", fmt_f(l.size_y));
+                }
+                if l.spread != d.spread {
+                    extra += &format!(" spread={}", fmt_f(l.spread));
+                }
+                if l.max_bounces != d.max_bounces {
+                    extra += &format!(" max_bounces={}", l.max_bounces);
+                }
+                if !l.cast_shadow {
+                    extra += " cast_shadow=0";
+                }
+                if !l.use_mis {
+                    extra += " use_mis=0";
+                }
                 writeln!(o, "light_add {kind} name={name} power={} color={} radius={}{extra}{place}", fmt_f(l.power), fmt_list(&l.color.to_array()), fmt_f(l.radius))
             }
             ObjectData::Camera(c) => {
-                let ortho = c.ortho_scale.map(|s| format!(" ortho_scale={}", fmt_f(s))).unwrap_or_default();
+                let mut ortho = c.ortho_scale.map(|s| format!(" ortho_scale={}", fmt_f(s))).unwrap_or_default();
+                let d = Camera::default();
+                for key in CAMERA_OPTS {
+                    let (a, b) = (camera_opt_value(c, key), camera_opt_value(&d, key));
+                    if let (Some(a), true) = (&a, a != b) {
+                        ortho += &format!(" {key}={a}");
+                    }
+                }
                 writeln!(o, "camera_add name={name} fov={} near={} far={}{ortho} active=0{place}", fmt_f(c.fov_y), fmt_f(c.near), fmt_f(c.far))
             }
         };
@@ -1558,6 +1840,30 @@ pub fn scene_to_polyops(scene: &Scene) -> String {
         }
         for m in &ob.modifiers {
             let _ = writeln!(o, "modifier_add {name} {}{}", m.name(), modifier_to_options(m));
+        }
+        let target = |prop: &str| quote(&format!("{}.{prop}", ob.name));
+        let vis = &ob.visibility;
+        for (prop, on) in [("visible_camera", vis.camera), ("visible_diffuse", vis.diffuse), ("visible_glossy", vis.glossy), ("visible_transmission", vis.transmission), ("visible_volume_scatter", vis.volume_scatter), ("visible_shadow", vis.shadow)] {
+            if !on {
+                let _ = writeln!(o, "set {} 0", target(prop));
+            }
+        }
+        if ob.holdout {
+            let _ = writeln!(o, "set {} 1", target("holdout"));
+        }
+        if ob.pass_index != 0 {
+            let _ = writeln!(o, "set {} {}", target("pass_index"), ob.pass_index);
+        }
+        if let Some(m) = &ob.motion {
+            let r = m.rotation;
+            let _ = writeln!(o, "set {} {}", target("motion_location"), fmt_vals(&m.location.to_array()));
+            let _ = writeln!(o, "set {} {}", target("motion_rotation_quaternion"), fmt_vals(&[r.w, r.x, r.y, r.z]));
+            let _ = writeln!(o, "set {} {}", target("motion_scale"), fmt_vals(&m.scale.to_array()));
+        }
+        if let ObjectData::Camera(c) = &ob.data {
+            if let Some(f) = c.dof.focus_object.and_then(|f| scene.objects.get(f)) {
+                let _ = writeln!(o, "set {} {}", target("focus_object"), quote(&f.name));
+            }
         }
     }
     let names = |v: &[usize]| v.iter().map(|&i| format!(" {}", quote(&scene.objects[i].name))).collect::<String>();
