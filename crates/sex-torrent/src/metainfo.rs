@@ -483,7 +483,12 @@ fn walk_tree(node: &Value, path: &mut Vec<String>, depth: usize, out: &mut Vec<F
                 if child.dict().map_or(0, |d| d.len()) != 1 || props.dict().is_none() { return Err(Error::BadFileTree); }
                 let attr = FileAttr::parse(props.get(b"attr").and_then(|v| v.bytes()).unwrap_or(b""));
                 if attr.pad { return Err(Error::BadFileTree); }
-                let length = if attr.symlink && props.get(b"length").is_none() { 0 } else { length_of(props)? };
+                // A v2 symlink carries no data (BEP 52); a length would make pieces with
+                // no hashes behind them (fuzz round 5, #337).
+                let length = if attr.symlink {
+                    if props.get(b"length").is_some() && length_of(props)? != 0 { return Err(Error::BadField("length")); }
+                    0
+                } else { length_of(props)? };
                 if path.is_empty() { return Err(Error::BadPath); }
                 let mut e = entry(path.clone(), length, props, attr)?;
                 if length > 0 && !attr.symlink {

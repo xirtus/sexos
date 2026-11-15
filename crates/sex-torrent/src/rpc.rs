@@ -308,6 +308,8 @@ pub struct Request {
     pub body: Vec<u8>,
     /// HTTP/1.0, or `Connection: close`.
     pub close: bool,
+    /// The request line said HTTP/1.0 (which may leave out `Host`).
+    pub http10: bool,
 }
 
 impl Request {
@@ -336,7 +338,7 @@ pub fn parse_request(buf: &[u8]) -> Result<(Request, usize), HttpError> {
     if method.is_empty() || !method.bytes().all(|c| c.is_ascii_uppercase()) || !target.starts_with('/') || !version.starts_with("HTTP/1.") || rl.next().is_some() {
         return Err(HttpError::BadRequest);
     }
-    let mut req = Request { method: String::from(method), close: version == "HTTP/1.0", ..Request::default() };
+    let mut req = Request { method: String::from(method), close: version == "HTTP/1.0", http10: version == "HTTP/1.0", ..Request::default() };
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
     req.path = String::from(path);
     req.query = String::from(query);
@@ -361,10 +363,12 @@ pub fn parse_request(buf: &[u8]) -> Result<(Request, usize), HttpError> {
             if size > MAX_BODY || req.body.len() + size > MAX_BODY { return Err(HttpError::TooLarge); }
             at += le + 2;
             if size == 0 {
-                // Trailers until an empty line.
+                // Trailers until an empty line, at most MAX_HEAD bytes of them in all.
+                let start = at;
                 loop {
+                    let room = MAX_HEAD.saturating_sub(at - start);
                     let rest = &buf[at..];
-                    let le = find(rest, b"\r\n").ok_or(if rest.len() > MAX_HEAD { HttpError::TooLarge } else { HttpError::Incomplete })?;
+                    let le = find(&rest[..rest.len().min(room)], b"\r\n").ok_or(if rest.len() >= room { HttpError::TooLarge } else { HttpError::Incomplete })?;
                     at += le + 2;
                     if le == 0 { break; }
                 }
@@ -995,14 +999,27 @@ pub struct RpcServer {
 
 const SID_CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 
-fn host_ok(cfg: &RpcConfig, host: Option<&str>) -> bool {
+/// The DNS-rebinding guard: a browser tricked into calling us carries the attacker's
+/// name in `Host`. We take exactly one `Host` (HTTP/1.0 may omit it), a strict optional
+/// port, and accept localhost, IP literals (which cannot be rebound) or the whitelist.
+fn host_ok(cfg: &RpcConfig, req: &Request) -> bool {
     if !cfg.host_whitelist_enabled { return true; }
-    let Some(h) = host else { return true }; // HTTP/1.0 without Host
-    let h = h.trim();
-    let name = if let Some(rest) = h.strip_prefix('[') { return rest.contains(']'); } else { h.rsplit_once(':').map(|(n, _)| n).unwrap_or(h) };
+    let mut hosts = req.headers.iter().filter(|(k, _)| k.eq_ignore_ascii_case("Host")).map(|(_, v)| v.trim());
+    let h = match (hosts.next(), hosts.next()) { (None, _) => return req.http10, (Some(h), None) => h, _ => return false };
+    let port_ok = |p: Option<&str>| match p {
+        None => true,
+        Some(p) => (1..=5).contains(&p.len()) && p.bytes().all(|b| b.is_ascii_digit()) && p.parse::<u32>().is_ok_and(|n| (1..=65535).contains(&n)),
+    };
+    if let Some(rest) = h.strip_prefix('[') {
+        let Some((inner, after)) = rest.split_once(']') else { return false };
+        let port = match after { "" => None, a => match a.strip_prefix(':') { Some(p) => Some(p), None => return false } };
+        return port_ok(port) && matches!(crate::tracker::parse_ip(inner), Some(crate::Ip::V6(_)));
+    }
+    let (name, port) = match h.rsplit_once(':') { Some((n, p)) => (n, Some(p)), None => (h, None) };
+    if !port_ok(port) || name.is_empty() || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-' || b == b'_') { return false; }
     let name = name.to_ascii_lowercase();
     if name == "localhost" || name.ends_with(".localhost") { return true; }
-    if !name.is_empty() && name.split('.').count() == 4 && name.split('.').all(|p| p.parse::<u8>().is_ok()) { return true; }
+    if matches!(crate::tracker::parse_ip(&name), Some(crate::Ip::V4(_))) { return true; }
     let n: Vec<char> = name.chars().collect();
     cfg.host_whitelist.iter().any(|w| crate::rules::glob_chars(&w.to_ascii_lowercase().chars().collect::<Vec<char>>(), &n))
 }
@@ -1060,7 +1077,7 @@ impl RpcServer {
 
     /// Handles one parsed request.
     pub fn handle(&mut self, req: &Request, backend: &mut dyn RpcBackend) -> Response {
-        if !host_ok(&self.config, req.header("Host")) {
+        if !host_ok(&self.config, req) {
             return Response::message(421, "Transmission received your request, but the hostname was unrecognized. Add it to the RPC host whitelist.");
         }
         if self.config.auth_required && !self.authorized(req) {
@@ -1212,7 +1229,7 @@ impl RpcServer {
                     AddSource::Metainfo(base64_decode(m.as_bytes()).filter(|v| !v.is_empty()).ok_or_else(|| String::from("invalid or corrupt torrent file"))?)
                 } else if let Some(f) = arg(args, "filename").and_then(|f| f.as_str()).map(str::trim).filter(|f| !f.is_empty()) {
                     let lower = f.to_ascii_lowercase();
-                    if lower.starts_with("magnet:") { AddSource::Magnet(String::from(f)) }
+                    if lower.starts_with("magnet:") { AddSource::Magnet(format!("magnet:{}", &f[7..])) }
                     else if lower.starts_with("http://") || lower.starts_with("https://") { AddSource::Url(String::from(f)) }
                     else if (f.len() == 40 || f.len() == 32) && crate::rss::parse_hash(f).is_some() { AddSource::Magnet(format!("magnet:?xt=urn:btih:{}", f)) }
                     else { AddSource::Path(String::from(f)) }
@@ -1423,6 +1440,13 @@ mod tests {
         assert_eq!((r2.method.as_str(), r2.close, n + n2), ("GET", true, req.len()));
         assert_eq!(parse_request(b"POST / HTTP/1.1\r\nContent-Length: 5\r\n\r\nab"), Err(HttpError::Incomplete));
         assert_eq!(parse_request(b"POST / HTTP/1.1\r\nHost"), Err(HttpError::Incomplete));
+        // Fuzz round 5 (#336): chunk trailers count against MAX_HEAD, complete or not.
+        let mut big = b"POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n2\r\n{}\r\n0\r\n".to_vec();
+        for i in 0..800 { big.extend_from_slice(format!("X-T{i}: aaaaaaaaaaaaaaaaaaaa\r\n").as_bytes()); }
+        assert_eq!(parse_request(&big), Err(HttpError::TooLarge));
+        big.extend_from_slice(b"\r\n");
+        assert_eq!(parse_request(&big), Err(HttpError::TooLarge));
+        assert!(parse_request(b"POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n2\r\n{}\r\n0\r\nX-T: 1\r\n\r\n").is_ok());
         assert_eq!(parse_request(b"POST / HTTP/1.1\r\nContent-Length: 99999999999\r\n\r\n"), Err(HttpError::TooLarge));
         assert_eq!(parse_request(b"GARBAGE\r\n\r\n"), Err(HttpError::BadRequest));
         assert_eq!(parse_request(b"GET / HTTP/1.1\r\nNoColon\r\n\r\n"), Err(HttpError::BadRequest));
@@ -1463,7 +1487,7 @@ mod tests {
         assert!(bytes.starts_with(b"HTTP/1.1 409"));
         let full = post(&s, body, true);
         assert_eq!(s.handle_http(&full[..full.len() - 3], &mut m), HttpOutcome::NeedMore);
-        let get = format!("GET /transmission/rpc HTTP/1.1\r\nX-Transmission-Session-Id: {}\r\n\r\n", s.session_id());
+        let get = format!("GET /transmission/rpc HTTP/1.1\r\nHost: localhost\r\nX-Transmission-Session-Id: {}\r\n\r\n", s.session_id());
         let HttpOutcome::Reply { bytes, .. } = s.handle_http(get.as_bytes(), &mut m) else { panic!() };
         assert!(bytes.starts_with(b"HTTP/1.1 405"));
     }
@@ -1489,6 +1513,15 @@ mod tests {
         assert_eq!(status(&mut s, &mut m, mk(Some("admin:s3cret"), "192.168.1.5:9091")), "200");
         assert_eq!(status(&mut s, &mut m, mk(Some("admin:s3cret"), "[::1]:9091")), "200");
         assert_eq!(status(&mut s, &mut m, mk(Some("admin:s3cret"), "evil.example:9091")), "421");
+        // Fuzz round 5 (#336): every way around the rebinding guard is refused.
+        for bad in ["[attacker.example]:9091", "[]attacker.example", "127.0.0.1:attacker.example", "localhost:9g0091", "localhost:0", "localhost:99999", "localhost\u{0}:9091", "::1", "[::1]x"] {
+            assert_eq!(status(&mut s, &mut m, mk(Some("admin:s3cret"), bad)), "421", "{bad}");
+        }
+        let two = mk(Some("admin:s3cret"), "localhost").replace("\r\n\r\n", "\r\nHost: attacker.example\r\n\r\n");
+        assert_eq!(status(&mut s, &mut m, two), "421");
+        let none = mk(Some("admin:s3cret"), "localhost").replace("Host: localhost\r\n", "");
+        assert_eq!(status(&mut s, &mut m, none.clone()), "421");
+        assert_eq!(status(&mut s, &mut m, none.replace("HTTP/1.1", "HTTP/1.0")), "200");
         s.config.host_whitelist = vec![String::from("*.home.arpa")];
         assert_eq!(status(&mut s, &mut m, mk(Some("admin:s3cret"), "nas.home.arpa")), "200");
         s.config.host_whitelist_enabled = false;
