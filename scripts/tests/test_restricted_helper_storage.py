@@ -23,10 +23,10 @@ sexfs={path="''' + str(ROOT / 'crates/sexfs') + '''"}
 [workspace]
 ''')
             code = 'extern crate self as sex_pdx;\n'
-            for module, path in [('restricted_helper','crates/sex-pdx/src/restricted_helper.rs'), ('restricted_job','servers/sexfiles/src/restricted_job.rs'), ('storage','servers/sexfiles/src/restricted_storage.rs'), ('restricted_jobs','servers/sexfiles/src/restricted_jobs.rs'), ('wire','crates/sex-pdx/src/restricted_job.rs'), ('native_io','servers/sexfiles/src/restricted_io.rs'), ('restricted_control','servers/sexfiles/src/restricted_control.rs')]:
-                if module == 'native_io':
-                    io = (ROOT / path).read_text().replace('restricted_job as wire', 'restricted_job_wire as wire')
-                    code += 'mod native_io {\n' + io.replace('//!', '//') + '\n}\n'
+            for module, path in [('restricted_helper','crates/sex-pdx/src/restricted_helper.rs'), ('restricted_job','servers/sexfiles/src/restricted_job.rs'), ('storage','servers/sexfiles/src/restricted_storage.rs'), ('restricted_jobs','servers/sexfiles/src/restricted_jobs.rs'), ('wire','crates/sex-pdx/src/restricted_job.rs'), ('native_io','servers/sexfiles/src/restricted_io.rs'), ('restricted_control','servers/sexfiles/src/restricted_control.rs'), ('restricted_load','servers/sexfiles/src/restricted_load.rs')]:
+                if module in ('native_io', 'restricted_load'):
+                    io = (ROOT / path).read_text().replace('restricted_job as wire', 'restricted_job_wire as wire').replace('program_store as store', 'program_store_wire as store')
+                    code += 'mod ' + module + ' {\n' + io.replace('//!', '//') + '\n}\n'
                 else:
                     code += '#[path="' + str(ROOT / path) + '"] mod ' + module + ';\n'
             code += 'use storage as restricted_storage; use wire as restricted_job_wire;\n'
@@ -50,7 +50,14 @@ fn get_ticks()->u64{NOW.load(Ordering::SeqCst)}
 fn pdx_reply(_:u32,word:u64)->u64{if FULL.load(Ordering::SeqCst){return 1}LAST.store(word,Ordering::SeqCst);SENDS.fetch_add(1,Ordering::SeqCst);0}
 fn memory_region_info(_:u64)->Result<memory_region::Info,()>{Ok(memory_region::Info{peer_pd:Some(42),region_id:fs::REGION_ID_BASE,length:fs::REGION_BYTES as u64,rights:7})}
 fn memory_region_view(_:u64,_:u64,_:u64,_:u64)->Result<memory_region::View,()>{Ok(memory_region::View{region_id:fs::REGION_ID_BASE,length:fs::REGION_BYTES as u64,virtual_address:core::ptr::addr_of_mut!(REGION) as u64})}
+#[path="PROGRAM_STORE_PATH"]mod program_store_wire;
+mod program_store{pub fn load_unbound(_:[u64;2])->u64{0}}
+mod restricted_image{
+ #[derive(Clone,Copy,Debug,PartialEq,Eq)]pub struct Lease{pub serial:u64,pub shell_epoch:u64,pub files_epoch:u64,pub parent:u32,pub parent_task:u32,pub cookie:u32,pub nonce:[u8;16]}
+ pub fn attest_and_lease(_:Lease,_:&[u8])->Option<Lease>{None}pub fn copied(_:Lease,_:u64,_:u64)->bool{true}
+}
 mod restricted_runtime{
+ pub fn staging()->Option<super::restricted_helper::Binding>{None}
  pub fn denied(_:u32)->bool{false}pub fn job_live(_:super::restricted_helper::Binding,_:u64)->bool{false}
 }
 mod fs_service{
@@ -70,6 +77,14 @@ fn request()->Vec<u8>{let mut b=Vec::new();b.extend_from_slice(b"MOANREQ1");b.ex
 pub fn setup()->Fs<'static,Disk>{let mut fs=fs();fs.mkdir(b"/renders",0).unwrap();let p=fs.create(b"/plugin",0).unwrap();fs.write(p,0,b"original-plugin",0).unwrap();let i=fs.create(b"/input",0).unwrap();fs.write(i,0,&request(),0).unwrap();fs.commit().unwrap();fs}
 fn capture(fs:&mut Fs<'static,Disk>)->(storage::Storage,Job){storage::Storage::capture(fs,[b"@/plugin",b"@/input",b"@/renders/output"],[b"/plugin",b"/input",b"/renders/output"],7,Subject{pd:42,task:99},9,[1;16]).unwrap()}
 fn ready(job:&mut Job)->Vec<u8>{let words=|h:[u8;32]|core::array::from_fn(|i|u64::from_le_bytes(h[i*8..i*8+8].try_into().unwrap()));let child=Subject{pd:43,task:100};let b=Binding{generation:1,coordinator_epoch:1,provider_epoch:1,previous:child,child,parent:Subject{pd:42,task:99},cookie:9,nonce:[0x0101010101010101;2],plugin_hash:words(job.plugin_hash()),input_hash:words(job.input_hash()),ticket:7};job.bind(b).unwrap();assert_eq!(job.read(child,b,true,Blob::Plugin,0,99).unwrap(),b"original-plugin");job.create(child,b,true,Blob::Output).unwrap();let mut output=request();output[..8].copy_from_slice(b"MOANPCM1");job.write(child,b,true,Blob::Output,0,output.len(),|i|output[i]).unwrap();job.seal(child,b,true).unwrap();output}
+#[test]fn copy_fence_requires_exact_scope_and_successful_receipt_admission(){
+ let scope=Binding{generation:7,coordinator_epoch:2,provider_epoch:1,previous:Subject{pd:43,task:43},child:Subject{pd:0,task:0},parent:Subject{pd:42,task:99},cookie:9,nonce:[0x0101010101010101;2],plugin_hash:[1;4],input_hash:[2;4],ticket:0};
+ let lease=restricted_image::Lease{serial:11,shell_epoch:2,files_epoch:1,parent:42,parent_task:99,cookie:9,nonce:[1;16]};let mut l=restricted_load::Load::new(7,scope,lease,100,0).unwrap();
+ assert!(!l.serial([7,22,1]));assert!(!l.copied([7,7,11],|_|panic!("early copy")));let first=l.reply();assert_eq!(first,Some(0xd2<<56|7<<32|100));assert_eq!(l.reply(),first);l.delivered();
+ assert!(!l.serial([7,22,2]));assert!(l.serial([7,22,1]));assert_eq!(l.reply(),Some(11));assert!(!l.copied([7,7,11],|_|panic!("serial not admitted")));l.delivered();
+ assert!(!l.copied([7,8,11],|_|panic!("wrong generation")));assert!(!l.copied([7,7,12],|_|panic!("wrong lease")));assert!(!l.copied([7,7,11],|_|false));let mut releases=0;assert!(l.copied([7,7,11],|_|{releases+=1;true}));assert!(l.copied([7,7,11],|_|panic!("duplicate release")));assert_eq!(releases,1);
+ let b=Binding{ticket:7,child:Subject{pd:43,task:100},..scope};assert!(!l.install(b));l.delivered();assert!(l.install(b));assert!(!l.install(Binding{generation:8,..b}));assert!(!l.install(Binding{input_hash:[3;4],..b}));assert!(!l.valid(2,1));assert!(!l.valid(1,5000));
+}
 #[test]fn control_credits_are_complete_and_epoch_scoped(){
  let request=[7,Subject{pd:42,task:99}.word(),9];let data=core::array::from_fn(|i|i as u8);let mut c=restricted_control::Control::new(request,1,data,100).unwrap();
  assert!(!c.fetch([7,0,1],100));assert!(!c.complete());let ack=c.reply();assert_eq!(ack,Some(0xd1<<56|7<<32));assert_eq!(c.reply(),ack);c.delivered();
@@ -130,6 +145,7 @@ fn ready(job:&mut Job)->Vec<u8>{let words=|h:[u8;32]|core::array::from_fn(|i|u64
 }
 }
 '''
+            code = code.replace('PROGRAM_STORE_PATH', str(ROOT / 'crates/sex-pdx/src/program_store.rs'))
             code = code.replace('SDK_FS_PATH', str(ROOT / 'crates/sex-pdx/src/fs.rs'))
             code = code.replace('->Result<(),()>', '->core::result::Result<(),()>')
             (root / 'src/lib.rs').write_text(code)

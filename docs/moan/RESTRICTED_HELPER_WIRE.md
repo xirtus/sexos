@@ -194,3 +194,23 @@ publication), parent subject u64, child subject u64, generation u64, format u32,
 cookie u32, reserved8 zero. Subject words encode PD in high32 and main task low32.
 The descriptor is an immutable descriptive snapshot; only subsequent policy
 transcript admission conveys rights. Startup and epoch changes never restore it.
+
+### Exact helper copy receipt
+
+LOAD `[ticket, generation, previousSubject]` requires the completed descriptor
+exchange and the fully echoed InputHashHi scope. Files matches the claimed job's
+full owner/cookie/nonce/hashes before loading the fixed name `moanplug`; a name
+selects bytes only. The actual candidate must match the compiled SHA256/length
+pin and the exclusive image lease. BOOT's image grant100 has peer=None, region
+0x4000, exactly32MiB, Files RW; it is not a Shell shared-memory grant. Shell asks
+the kernel to synchronously copy those retained BOOT frames via kind3.
+
+The LOAD reply is `0xd2 << 56 | ticket << 32 | length`. After its admitted reply,
+DESCRIBE selector22 (same exact ticket/Files epoch) yields the full lease serial.
+Only then can COPIED `[ticket, generation, serial]` release the staging fence;
+the provider uses its saved full scope/coordinator epoch, not a request-supplied
+epoch. Exact retries do not release twice, and no phase advances on SYS29 Full.
+The final receipt is `0xd3 << 56 | ticket << 32`. The coordinator is trusted to
+send COPIED only after its synchronous kind3 returns. A missed/unknown copy does
+not time out the staging fence open: this may quarantine image loading until
+reboot. COPY success alone grants no file rights and does not activate a helper.
