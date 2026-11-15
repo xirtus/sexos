@@ -20,6 +20,8 @@ pub struct EditBones {
     orig: Vec<Bone>,
     /// (bone, head moves, tail moves)
     moves: Vec<(usize, bool, bool)>,
+    /// Bones whose body is selected (Ctrl+R rolls them).
+    rolls: Vec<usize>,
 }
 
 #[derive(Clone, Debug)]
@@ -58,11 +60,15 @@ pub fn start(d: &Doc) -> Option<(Targets, Vec<Vec3>)> {
         let a = &d.scene.armatures[ai];
         let w = d.scene.world_matrix(oi);
         let mut moves = Vec::new();
+        let mut rolls = Vec::new();
         let mut pts = Vec::new();
         for (i, b) in a.bones.iter().enumerate() {
             let s: BoneSel = ui.get(&b.name);
             let parent_tail = a.parent(i).filter(|_| b.use_connect).is_some_and(|p| ui.get(&a.bones[p].name).tail);
             let (h, t) = (s.head || parent_tail, s.tail);
+            if s.body {
+                rolls.push(i);
+            }
             if h || t {
                 moves.push((i, h, t));
                 if h {
@@ -76,7 +82,7 @@ pub fn start(d: &Doc) -> Option<(Targets, Vec<Vec3>)> {
         if moves.is_empty() {
             return None;
         }
-        return Some((Targets::Bones(EditBones { oi, ai, w, inv: w.inverse(), orig: a.bones.clone(), moves }), pts));
+        return Some((Targets::Bones(EditBones { oi, ai, w, inv: w.inverse(), orig: a.bones.clone(), moves, rolls }), pts));
     }
     if let Some((oi, li)) = super::edit_lattice(d) {
         let name = &d.scene.objects[oi].name;
@@ -187,10 +193,8 @@ impl Targets {
     /// Ctrl+R in armature Edit Mode: add `angle` to the selected bones' roll.
     pub fn roll(&self, d: &mut Doc, angle: f32) {
         if let Targets::Bones(t) = self {
-            for &(i, h, tl) in &t.moves {
-                if h && tl {
-                    d.scene.armatures[t.ai].bones[i].roll = t.orig[i].roll + angle;
-                }
+            for &i in &t.rolls {
+                d.scene.armatures[t.ai].bones[i].roll = t.orig[i].roll + angle;
             }
             d.touch();
         }

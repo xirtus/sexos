@@ -61,7 +61,7 @@ pub fn save(doc: &Doc, out: &mut String) {
             for s in &t.strips {
                 let _ = writeln!(
                     out,
-                    "#@strip {}\t{}\t{} {} {} {} {} {} {} {} {} {} {} {} {} {} {}",
+                    "#@strip {}\t{}\t{} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {}",
                     esc(&o.object),
                     esc(&s.name),
                     s.action,
@@ -78,7 +78,8 @@ pub fn save(doc: &Doc, out: &mut String) {
                     s.influence,
                     b(s.use_influence),
                     b(s.mute),
-                    b(s.reversed)
+                    b(s.reversed),
+                    b(s.select)
                 );
             }
         }
@@ -295,7 +296,7 @@ pub fn load_line(doc: &mut Doc, st: &mut Loader, tag: &str, body: &str) -> bool 
             s.use_influence = w[12] == "1";
             s.mute = w[13] == "1";
             s.reversed = w[14] == "1";
-            let _ = w[15];
+            s.select = w[15] == "1";
             if let Some(t) = doc.anim.objects[o].tracks.last_mut() {
                 t.strips.push(s);
             }
