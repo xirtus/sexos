@@ -985,6 +985,26 @@ fn apply_move(s: &State, d: &mut Doc, x: i32, y: i32, orig: &[KeyRef], mx: i32, 
 }
 
 fn finish_move(d: &mut Doc, orig: &[KeyRef], cancel: bool) {
+    if !cancel {
+        // Record the step with the keys where they started, then put them back.
+        let key = |d: &mut Doc, kr: &KeyRef| d.anim.objects.get_mut(kr.o).and_then(|o| o.curves.get_mut(kr.c)).and_then(|c| c.keys.get_mut(kr.k)).map(|k| (k.frame, k.value));
+        let moved: Vec<Option<(f32, f32)>> = orig.iter().map(|kr| key(d, kr)).collect();
+        let set = |d: &mut Doc, kr: &KeyRef, f: f32, v: f32| {
+            if let Some(k) = d.anim.objects.get_mut(kr.o).and_then(|o| o.curves.get_mut(kr.c)).and_then(|c| c.keys.get_mut(kr.k)) {
+                k.frame = f;
+                k.value = v;
+            }
+        };
+        for kr in orig {
+            set(d, kr, kr.frame, kr.value);
+        }
+        d.push_undo("Move Keyframes");
+        for (kr, m) in orig.iter().zip(moved) {
+            if let Some((f, v)) = m {
+                set(d, kr, f, v);
+            }
+        }
+    }
     for kr in orig {
         if cancel {
             if let Some(k) = d.anim.objects.get_mut(kr.o).and_then(|o| o.curves.get_mut(kr.c)).and_then(|c| c.keys.get_mut(kr.k)) {

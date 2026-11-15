@@ -515,6 +515,7 @@ pub fn run(doc: &mut Doc, op: &Op) -> bool {
     }
     match op.id.as_str() {
         "anim.keyframe_insert" | "anim.keyframe_insert_menu" | "action.keyframe_insert" | "graph.keyframe_insert" => {
+            doc.push_undo("Insert Keyframes");
             let only = match arg {
                 "Location" | "LOCATION" => Some(Prop::Location),
                 "Rotation" | "ROTATION" => Some(Prop::Rotation),
@@ -525,6 +526,7 @@ pub fn run(doc: &mut Doc, op: &Op) -> bool {
             doc.report = if n == 0 { "Nothing selected to insert keyframes on".into() } else { format!("Inserted keyframes on {n} object(s) at frame {}", doc.frame) };
         }
         "anim.keyframe_delete" | "anim.keyframe_delete_v3d" => {
+            doc.push_undo("Delete Keyframes");
             let names = selected_names(doc);
             let f = doc.frame as f32;
             let mut n = 0;
@@ -541,6 +543,7 @@ pub fn run(doc: &mut Doc, op: &Op) -> bool {
             doc.report = if n == 0 { "No keyframes to delete on this frame".into() } else { format!("Deleted {n} keyframe(s)") };
         }
         "anim.keyframes_clear" | "anim.keyframe_clear_v3d" => {
+            doc.push_undo("Clear Keyframes");
             let names = selected_names(doc);
             let before = doc.anim.objects.len();
             doc.anim.objects.retain(|o| !names.contains(&o.object));
@@ -566,13 +569,20 @@ pub fn run(doc: &mut Doc, op: &Op) -> bool {
             }
         }
         "anim.auto_keying_toggle" => doc.anim.auto_key = !doc.anim.auto_key,
-        "anim.start_frame_set" => doc.scene.frame_start = doc.frame.min(doc.scene.frame_end),
-        "anim.end_frame_set" => doc.scene.frame_end = doc.frame.max(doc.scene.frame_start),
+        "anim.start_frame_set" => {
+            doc.push_undo("Set Start Frame");
+            doc.scene.frame_start = doc.frame.min(doc.scene.frame_end)
+        }
+        "anim.end_frame_set" => {
+            doc.push_undo("Set End Frame");
+            doc.scene.frame_end = doc.frame.max(doc.scene.frame_start)
+        }
         "screen.animation_play_reverse" => {
             doc.anim.reverse = true;
             doc.playing = !doc.playing;
         }
         "action.delete" | "graph.delete" => {
+            doc.push_undo("Delete Keyframes");
             let n = delete_selected_keys(doc);
             doc.report = format!("Deleted {n} keyframe(s)");
         }
@@ -589,6 +599,7 @@ pub fn run(doc: &mut Doc, op: &Op) -> bool {
         }
         "action.interpolation_type" | "graph.interpolation_type" => {
             let Some(i) = Interp::from_arg(arg) else { return true };
+            doc.push_undo("Interpolation Mode");
             for k in doc.anim.keys_mut().filter(|k| k.select) {
                 k.interp = i;
             }
@@ -611,6 +622,22 @@ pub fn run(doc: &mut Doc, op: &Op) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keyframe_edits_undo_and_redo() {
+        let mut d = Doc::default();
+        d.frame = 4;
+        d.run(&Op::new("anim.keyframe_insert"));
+        assert!(!d.anim.objects.is_empty());
+        d.run(&Op::new("ed.undo"));
+        assert!(d.anim.objects.is_empty(), "undo removes the inserted keys");
+        d.run(&Op::new("ed.redo"));
+        assert!(!d.anim.objects.is_empty(), "redo brings them back");
+        d.run(&Op::new("anim.keyframes_clear"));
+        assert!(d.anim.objects.is_empty());
+        d.run(&Op::new("ed.undo"));
+        assert!(!d.anim.objects.is_empty());
+    }
 
     #[test]
     fn bezier_curve_is_smooth_and_clamped() {

@@ -158,6 +158,9 @@ pub enum BoxMode {
 pub struct Doc {
     pub scene: Scene,
     pub undo: UndoStack,
+    /// Animation and settings for each undo/redo step, in step with `undo`.
+    side_undo: Vec<Side>,
+    side_redo: Vec<Side>,
     pub mode: Mode,
     pub select_mode: SelectMode,
     pub edit: EditSelection,
@@ -228,6 +231,8 @@ impl Doc {
         Doc {
             scene,
             undo: UndoStack::new(),
+            side_undo: Vec::new(),
+            side_redo: Vec::new(),
             mode: Mode::Object,
             select_mode: SelectMode::Vertex,
             edit: EditSelection::default(),
@@ -264,7 +269,23 @@ impl Doc {
     /// Record an undo step named `label` before changing the scene.
     pub fn push_undo(&mut self, label: &str) {
         self.undo.push(label, &self.scene);
+        self.side_undo.push(self.side());
+        if self.side_undo.len() > self.undo.max_steps {
+            self.side_undo.remove(0);
+        }
+        self.side_redo.clear();
         self.dirty = true;
+    }
+    fn side(&self) -> Side {
+        Side { anim: self.anim.objects.clone(), settings: self.settings.clone(), texts: self.texts.clone() }
+    }
+    fn restore_side(&mut self, s: Side) -> Side {
+        let now = self.side();
+        self.anim.objects = s.anim;
+        self.anim.dirty = true;
+        self.settings = s.settings;
+        self.texts = s.texts;
+        now
     }
     /// The scene changed: caches must rebuild.
     pub fn touch(&mut self) {
@@ -319,7 +340,13 @@ impl Doc {
         match op.id.as_str() {
             "ed.undo" => {
                 match self.undo.undo(&mut self.scene) {
-                    Some(l) => self.report = format!("Undo {l}"),
+                    Some(l) => {
+                        if let Some(side) = self.side_undo.pop() {
+                            let now = self.restore_side(side);
+                            self.side_redo.push(now);
+                        }
+                        self.report = format!("Undo {l}")
+                    }
                     None => self.report = "Nothing to undo".into(),
                 }
                 crate::edit::sanitize(self);
@@ -327,7 +354,13 @@ impl Doc {
             }
             "ed.redo" => {
                 match self.undo.redo(&mut self.scene) {
-                    Some(l) => self.report = format!("Redo {l}"),
+                    Some(l) => {
+                        if let Some(side) = self.side_redo.pop() {
+                            let now = self.restore_side(side);
+                            self.side_undo.push(now);
+                        }
+                        self.report = format!("Redo {l}")
+                    }
                     None => self.report = "Nothing to redo".into(),
                 }
                 crate::edit::sanitize(self);
@@ -926,6 +959,14 @@ fn circle(n: u32, r: f32) -> sex_3d::Mesh {
     }
     m.add_face(&(0..n).collect::<Vec<_>>());
     m
+}
+
+/// The document state outside the scene that undo restores with it.
+#[derive(Clone)]
+struct Side {
+    anim: Vec<crate::anim::ObjectAnim>,
+    settings: crate::settings::Settings,
+    texts: Vec<(String, String)>,
 }
 
 #[cfg(test)]
