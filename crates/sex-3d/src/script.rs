@@ -80,6 +80,43 @@
 //!   `invert_vertex_group=`; `Armature`, `Hook`, `Lattice`, `Warp`,
 //!   `VertexWeightEdit`, `VertexWeightMix` and `VertexWeightProximity` take
 //!   their fields by name (`falloff_type=smooth`, `mix_mode=avg`, ...).
+//!
+//! # Shader node trees
+//!
+//! A tree belongs to an OWNER, written `material NAME`, `world` or
+//! `group NAME` (a node group in `Scene::node_groups`). Nodes are named by
+//! their unique name in the tree, sockets by identifier (`Base Color`,
+//! `Value_001`, `Socket_0`) or, failing that, by name.
+//!
+//! * `node_tree OWNER [name=TREE] [clear=1] [active=NODE|none] [remove=1]`
+//!   creates the owner's tree (and a group of that name) if missing; replies
+//!   with the tree name.
+//! * `node_interface group NAME input|output SOCKET TYPE [default=V] [min=]
+//!   [max=]` adds a group socket; Group nodes using the group follow.
+//!   TYPE is `float int bool vector color string shader geometry object
+//!   collection image material texture rotation matrix menu virtual`.
+//! * `node_add OWNER IDNAME [name=] [label=] [location=x,y] [width=] [mute=1]
+//!   [hide=1] [select=1] [color=r,g,b] [unknown=1]` adds a node of a
+//!   registered type (`ShaderNodeMath`); `unknown=1` allows an unregistered
+//!   idname with no sockets, which `node_socket OWNER NODE in|out ID TYPE
+//!   [name=]` then adds. Replies with the node's unique name.
+//! * `node_set OWNER NODE TARGET VALUE [type=T]`: TARGET is `prop:NAME`
+//!   (`prop:operation MULTIPLY`, `prop:use_clamp 1`, `prop:image NAME`,
+//!   `prop:node_tree GROUP`, `prop:color_ramp
+//!   LINEAR;RGB;0,0,0,0,1;1,1,1,1,1`, `prop:mapping x,y,x,y;x,y,...` one
+//!   curve per `;` part; `type=` (enum bool int float vector color string
+//!   ramp curve image object group collection material) adds a property the
+//!   node type does not have), `in:SOCKET` / `out:SOCKET` (a number, a list,
+//!   a quoted string, or an object/image name), `hide:in:SOCKET` /
+//!   `hide:out:SOCKET`, `parent FRAME|none`, `name`, or one of the `node_add`
+//!   options. Image names that do not resolve leave the slot empty.
+//! * `node_link OWNER FROM FROM_SOCKET TO TO_SOCKET [muted=1]` replaces any
+//!   link into TO_SOCKET; `node_unlink OWNER NODE INPUT`; `node_remove OWNER
+//!   NODE`.
+//!
+//! [`scene_to_polyops`] writes groups (interfaces first), then material and
+//! world trees, after the objects, writing only properties and socket values
+//! that differ from a new node's.
 use crate::math::{Quat, Vec2, Vec3};
 use crate::mesh::{Face, Mesh};
 use crate::modifiers::{BooleanOp, CastType, DecimateMode, Modifier, RemeshMode, ShrinkwrapMethod, SimpleDeformMode};
@@ -89,6 +126,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt::{self, Write as _};
 
 mod rig;
+mod nodes;
 
 /// The language version this module reads and writes (`polyops 1`).
 pub const VERSION: u32 = 1;
@@ -944,6 +982,7 @@ impl Session {
                 Ok(Some(if self.object(scene, t).is_ok() { "1" } else { "0" }.into()))
             }
             name if rig::COMMANDS.contains(&name) => self.rig_command(scene, cmd),
+            "node_tree" | "node_interface" | "node_add" | "node_socket" | "node_set" | "node_link" | "node_unlink" | "node_remove" => self.node_command(scene, cmd),
             other => Err(format!("unknown command '{other}'")),
         }
     }
@@ -2199,6 +2238,7 @@ pub fn scene_to_polyops(scene: &Scene) -> String {
         }
         rig::write_object_rig(&mut o, ob);
     }
+    nodes::write_node_trees(&mut o, scene);
     let names = |v: &[usize]| v.iter().map(|&i| format!(" {}", quote(&scene.objects[i].name))).collect::<String>();
     let _ = writeln!(o, "select{}", names(&scene.selected));
     let one = |i: Option<usize>| i.map(|i| quote(&scene.objects[i].name)).unwrap_or_else(|| "none".into());

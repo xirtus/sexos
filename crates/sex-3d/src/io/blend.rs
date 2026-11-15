@@ -179,6 +179,7 @@ use crate::scene::{AreaShape, Camera, Light, LightKind, Material, Object, Object
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
+mod nodes;
 
 mod rig;
 
@@ -855,6 +856,9 @@ struct Importer<'f, 'a> {
     meshes: HashMap<u64, usize>,
     armatures: HashMap<u64, usize>,
     lattices: HashMap<u64, usize>,
+    /// Imported `IM` and `NT` blocks by old address.
+    images: HashMap<u64, usize>,
+    groups: HashMap<u64, usize>,
     render: Render,
     actions: Vec<BlendAction>,
 }
@@ -867,6 +871,8 @@ impl<'f, 'a> Importer<'f, 'a> {
             materials: HashMap::new(),
             meshes: HashMap::new(),
             armatures: HashMap::new(),
+            images: HashMap::new(),
+            groups: HashMap::new(),
             lattices: HashMap::new(),
             render: Render { width: 1920.0, height: 1080.0 },
             actions: Vec::new(),
@@ -967,6 +973,7 @@ impl<'f, 'a> Importer<'f, 'a> {
             self.collections(&sc, &by_ptr);
             self.world(&sc);
         }
+        self.resolve_object_refs(&by_ptr);
         Ok((self.scene, self.actions))
     }
 
@@ -1018,6 +1025,9 @@ impl<'f, 'a> Importer<'f, 'a> {
         }
         if wo.num("use_nodes").unwrap_or(0.0) == 0.0 {
             return;
+        }
+        if let Some(tree) = f.view_ptr(wo.ptr("nodetree"), &["bNodeTree"]) {
+            self.scene.world.node_tree = self.node_tree(&tree);
         }
         for (name, s) in self.node_inputs(&wo, "ShaderNodeBackground") {
             match name.as_str() {
@@ -1217,7 +1227,7 @@ impl<'f, 'a> Importer<'f, 'a> {
         c
     }
 
-    fn material(&self, ma: &View<'f, 'a>) -> Material {
+    fn material(&mut self, ma: &View<'f, 'a>) -> Material {
         let mut m = Material { name: ma.id_name(), ..Material::default() };
         if let Some(i) = ma.num("index") {
             m.pass_index = i.max(0.0) as u32;
@@ -1233,6 +1243,17 @@ impl<'f, 'a> Importer<'f, 'a> {
         }
         if ma.num("use_nodes") != Some(0.0) {
             self.principled(ma, &mut m);
+            if let Some(tree) = self.f.view_ptr(ma.ptr("nodetree"), &["bNodeTree"]) {
+                m.node_tree = self.node_tree(&tree);
+                // An image on the Principled base colour shows in the viewport.
+                if let Some(t) = &m.node_tree {
+                    let mut probe = Material { node_tree: Some(t.clone()), ..m.clone() };
+                    if probe.sync_from_tree() && probe.base_color_texture.is_some() {
+                        m.base_color_texture = probe.base_color_texture;
+                        m.base_color = probe.base_color;
+                    }
+                }
+            }
         }
         m
     }

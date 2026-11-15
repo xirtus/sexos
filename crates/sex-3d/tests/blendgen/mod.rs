@@ -497,8 +497,58 @@ fn define(c: &Cfg) -> Dna {
     d.def("bNodeSocketValueRGBA", &[("float", "value[4]")]);
     d.def("bNodeSocketValueFloat", &[("int", "subtype"), ("float", "value"), ("float", "min"), ("float", "max")]);
     d.def("bNodeSocket", &[("bNodeSocket", "*next"), ("bNodeSocket", "*prev"), ("IDProperty", "*prop"), ("char", "identifier[64]"), ("char", "name[64]"), ("void", "*storage"), ("short", "type"), ("short", "flag"), ("char", "_pad[4]"), ("void", "*default_value")]);
-    d.def("bNode", &[("bNode", "*next"), ("bNode", "*prev"), ("ListBase", "inputs"), ("ListBase", "outputs"), ("char", "name[64]"), ("int", "flag"), ("short", "type"), ("char", "_pad[2]"), ("char", "idname[64]")]);
-    d.def("bNodeTree", &[("ID", "id"), ("AnimData", "*adt"), ("ListBase", "nodes"), ("ListBase", "links"), ("int", "type"), ("char", "_pad[4]")]);
+    d.def("bNodeSocketValueVector", &[("int", "subtype"), ("float", "value[3]"), ("float", "min"), ("float", "max")]);
+    d.def("bNodeSocketValueInt", &[("int", "subtype"), ("int", "value"), ("int", "min"), ("int", "max")]);
+    d.def("bNodeSocketValueBoolean", &[("char", "value"), ("char", "_pad[3]")]);
+    let mut node: Vec<(&str, &str)> = vec![("bNode", "*next"), ("bNode", "*prev"), ("ListBase", "inputs"), ("ListBase", "outputs"), ("char", "name[64]"), ("int", "flag"), ("short", "type"), ("char", "_pad[2]"), ("char", "idname[64]"), ("char", "label[64]")];
+    // Blender 4.4 replaced `locx`/`locy` by `location[2]`.
+    if c.layout == Layout::Attr50 {
+        node.push(("float", "location[2]"));
+    } else {
+        node.extend([("float", "locx"), ("float", "locy")]);
+    }
+    node.extend([("float", "width"), ("short", "custom1"), ("short", "custom2"), ("float", "custom3"), ("float", "custom4"), ("void", "*storage"), ("ID", "*id"), ("bNode", "*parent"), ("float", "color[3]"), ("char", "_pad1[4]")]);
+    d.def("bNode", &node);
+    d.def("bNodeLink", &[("bNodeLink", "*next"), ("bNodeLink", "*prev"), ("bNode", "*fromnode"), ("bNode", "*tonode"), ("bNodeSocket", "*fromsock"), ("bNodeSocket", "*tosock"), ("int", "flag"), ("int", "multi_input_sort_id")]);
+    d.def("NodeShaderMix", &[("char", "data_type"), ("char", "factor_mode"), ("char", "clamp_factor"), ("char", "clamp_result"), ("char", "blend_type"), ("char", "_pad[3]")]);
+    d.def("NodeTexImage", &[("int", "color_space"), ("int", "projection"), ("float", "projection_blend"), ("int", "interpolation"), ("int", "extension"), ("char", "_pad[4]")]);
+    d.def("NodeTexNoise", &[("int", "dimensions"), ("uchar", "type"), ("uchar", "normalize"), ("char", "_pad[2]")]);
+    d.def("CBData", &[("float", "r"), ("float", "g"), ("float", "b"), ("float", "a"), ("float", "pos"), ("int", "cur")]);
+    d.def("ColorBand", &[("short", "tot"), ("short", "cur"), ("char", "ipotype"), ("char", "ipotype_hue"), ("char", "color_mode"), ("char", "_pad[1]"), ("CBData", "data[32]")]);
+    d.def("CurveMapPoint", &[("float", "x"), ("float", "y"), ("short", "flag"), ("short", "shorty")]);
+    d.def("CurveMap", &[("short", "totpoint"), ("short", "flag"), ("float", "range"), ("CurveMapPoint", "*curve")]);
+    d.def("CurveMapping", &[("int", "flag"), ("int", "cur"), ("CurveMap", "cm[4]")]);
+    d.def("PackedFile", &[("int", "size"), ("int", "seek"), ("void", "*data")]);
+    d.def("ImagePackedFile", &[("ImagePackedFile", "*next"), ("ImagePackedFile", "*prev"), ("PackedFile", "*packedfile"), ("char", "filepath[1024]"), ("int", "view"), ("int", "tile_number")]);
+    d.def("ColorManagedColorspaceSettings", &[("char", "name[64]")]);
+    let mut im: Vec<(&str, &str)> = vec![("ID", "id"), ("char", "filepath[1024]")];
+    if c.new_names() {
+        im.push(("ListBase", "packedfiles"));
+    } else {
+        im.push(("PackedFile", "*packedfile"));
+    }
+    if c.layout != Layout::Legacy27 {
+        im.push(("ColorManagedColorspaceSettings", "colorspace_settings"));
+    }
+    d.def("Image", &im);
+    let mut tree: Vec<(&str, &str)> = vec![("ID", "id"), ("AnimData", "*adt"), ("ListBase", "nodes"), ("ListBase", "links"), ("int", "type"), ("char", "_pad[4]")];
+    if c.new_names() {
+        // 4.0+: the group interface as a panel of items.
+        d.def("bNodeTreeInterfaceItem", &[("char", "item_type"), ("char", "_pad[7]")]);
+        d.def(
+            "bNodeTreeInterfacePanel",
+            &[("bNodeTreeInterfaceItem", "item"), ("char", "*name"), ("char", "*description"), ("int", "flag"), ("char", "_pad[4]"), ("bNodeTreeInterfaceItem", "**items_array"), ("int", "items_num"), ("int", "identifier")],
+        );
+        d.def(
+            "bNodeTreeInterfaceSocket",
+            &[("bNodeTreeInterfaceItem", "item"), ("char", "*name"), ("char", "*description"), ("char", "*socket_type"), ("int", "flag"), ("char", "_pad[4]"), ("char", "*identifier"), ("void", "*socket_data")],
+        );
+        d.def("bNodeTreeInterface", &[("bNodeTreeInterfacePanel", "root_panel"), ("int", "active_index"), ("int", "next_uid")]);
+        tree.push(("bNodeTreeInterface", "tree_interface"));
+    } else {
+        tree.extend([("ListBase", "inputs"), ("ListBase", "outputs")]);
+    }
+    d.def("bNodeTree", &tree);
     d.def(
         "Material",
         &[("ID", "id"), ("AnimData", "*adt"), ("short", "flag"), ("char", "_pad1[2]"), ("float", "r"), ("float", "g"), ("float", "b"), ("float", "a"), ("float", "specr"), ("float", "specg"), ("float", "specb"), ("float", "alpha"), ("float", "ray_mirror"), ("float", "spec"), ("float", "gloss_mir"), ("float", "roughness"), ("float", "metallic"), ("char", "use_nodes"), ("char", "pr_type"), ("short", "pr_texture"), ("bNodeTree", "*nodetree")],
@@ -1056,4 +1106,341 @@ pub fn zstd_raw_frames(data: &[u8]) -> Vec<u8> {
 /// Build a lookup of object names to indices.
 pub fn names(scene: &sex_3d::Scene) -> HashMap<String, usize> {
     scene.objects.iter().enumerate().map(|(i, o)| (o.name.clone(), i)).collect()
+}
+
+// ---------------------------------------------------------------------------
+// Shader node trees
+
+/// A socket default value.
+pub enum Dv {
+    No,
+    F(f64),
+    C([f64; 4]),
+}
+
+/// A socket: identifier, name, `eNodeSocketDatatype`, default, flag.
+pub struct Sk(String, String, i64, Dv, i64);
+
+pub fn sk(id: &str, name: &str, ty: i64, dv: Dv) -> Sk {
+    Sk(id.into(), name.into(), ty, dv, 0)
+}
+
+/// A node as the writer lays it out.
+pub struct Nd {
+    pub name: &'static str,
+    pub idname: &'static str,
+    pub label: &'static str,
+    pub loc: [f64; 2],
+    pub width: f64,
+    pub flag: i64,
+    pub custom: [i64; 2],
+    pub storage: u64,
+    pub id: u64,
+    pub parent: Option<usize>,
+    pub color: [f64; 3],
+    pub inputs: Vec<Sk>,
+    pub outputs: Vec<Sk>,
+}
+
+impl Nd {
+    pub fn new(name: &'static str, idname: &'static str, inputs: Vec<Sk>, outputs: Vec<Sk>) -> Nd {
+        Nd { name, idname, label: "", loc: [0.0, 0.0], width: 140.0, flag: 0, custom: [0, 0], storage: 0, id: 0, parent: None, color: [0.0; 3], inputs, outputs }
+    }
+}
+
+fn cstr(w: &mut Writer, t: &str) -> u64 {
+    w.raw(format!("{t}\0").into_bytes(), 1)
+}
+
+fn default_value(w: &mut Writer, dv: &Dv) -> u64 {
+    match dv {
+        Dv::No => 0,
+        Dv::F(x) => w.add("DATA", "bNodeSocketValueFloat", &[("value", n(*x)), ("min", n(-1e4)), ("max", n(1e4))]),
+        Dv::C(c) => w.add("DATA", "bNodeSocketValueRGBA", &[("value", nv(c))]),
+    }
+}
+
+/// A ListBase of sockets; returns (first, last, addresses).
+fn socket_list(w: &mut Writer, socks: &[Sk]) -> (u64, u64, Vec<u64>) {
+    let addrs: Vec<u64> = socks.iter().map(|_| w.alloc()).collect();
+    for (i, Sk(id, name, ty, dv, flag)) in socks.iter().enumerate() {
+        let dvp = default_value(w, dv);
+        let prev = if i > 0 { addrs[i - 1] } else { 0 };
+        let next = addrs.get(i + 1).copied().unwrap_or(0);
+        let d = w.inst("bNodeSocket", &[("next", p(next)), ("prev", p(prev)), ("identifier", s(id)), ("name", s(name)), ("type", n(*ty as f64)), ("flag", n(*flag as f64)), ("default_value", p(dvp))]);
+        w.put(addrs[i], "DATA", "bNodeSocket", 1, d);
+    }
+    (addrs.first().copied().unwrap_or(0), addrs.last().copied().unwrap_or(0), addrs)
+}
+
+/// A group interface socket: name, identifier, flag (1 input, 2 output), default.
+pub type Iface<'a> = (&'a str, &'a str, i64, f64);
+
+/// A link: from node, from identifier, to node, to identifier, flag.
+pub type NodeLink<'a> = (usize, &'a str, usize, &'a str, i64);
+
+/// Write a node tree at `ptr` (`code` "DATA" for embedded trees, "NT" for groups).
+#[allow(clippy::too_many_arguments)]
+pub fn write_tree(w: &mut Writer, c: &Cfg, ptr: u64, code: &str, name: &str, nodes: &[Nd], links: &[NodeLink], iface: &[Iface]) {
+    let addrs: Vec<u64> = nodes.iter().map(|_| w.alloc()).collect();
+    let mut sock: HashMap<(usize, bool, String), u64> = HashMap::new();
+    for (i, nd) in nodes.iter().enumerate() {
+        let (if_, il, ia) = socket_list(w, &nd.inputs);
+        let (of, ol, oa) = socket_list(w, &nd.outputs);
+        for (k, a) in ia.iter().enumerate() {
+            sock.insert((i, false, nd.inputs[k].0.clone()), *a);
+        }
+        for (k, a) in oa.iter().enumerate() {
+            sock.insert((i, true, nd.outputs[k].0.clone()), *a);
+        }
+        let prev = if i > 0 { addrs[i - 1] } else { 0 };
+        let next = addrs.get(i + 1).copied().unwrap_or(0);
+        let mut f: Vec<(&str, V)> = vec![
+            ("next", p(next)),
+            ("prev", p(prev)),
+            ("inputs.first", p(if_)),
+            ("inputs.last", p(il)),
+            ("outputs.first", p(of)),
+            ("outputs.last", p(ol)),
+            ("name", s(nd.name)),
+            ("idname", s(nd.idname)),
+            ("label", s(nd.label)),
+            ("width", n(nd.width)),
+            ("flag", n(nd.flag as f64)),
+            ("custom1", n(nd.custom[0] as f64)),
+            ("custom2", n(nd.custom[1] as f64)),
+            ("storage", p(nd.storage)),
+            ("id", p(nd.id)),
+            ("parent", p(nd.parent.map_or(0, |k| addrs[k]))),
+            ("color", nv(&nd.color)),
+        ];
+        if c.layout == Layout::Attr50 {
+            f.push(("location", nv(&nd.loc)));
+        } else {
+            f.push(("locx", n(nd.loc[0])));
+            f.push(("locy", n(nd.loc[1])));
+        }
+        let d = w.inst("bNode", &f);
+        w.put(addrs[i], "DATA", "bNode", 1, d);
+    }
+    let link_addrs: Vec<u64> = links.iter().map(|_| w.alloc()).collect();
+    for (i, &(fnode, fs, tnode, ts, flag)) in links.iter().enumerate() {
+        let prev = if i > 0 { link_addrs[i - 1] } else { 0 };
+        let next = link_addrs.get(i + 1).copied().unwrap_or(0);
+        let fsock = sock[&(fnode, true, fs.to_string())];
+        let tsock = sock[&(tnode, false, ts.to_string())];
+        let d = w.inst("bNodeLink", &[("next", p(next)), ("prev", p(prev)), ("fromnode", p(addrs[fnode])), ("tonode", p(addrs[tnode])), ("fromsock", p(fsock)), ("tosock", p(tsock)), ("flag", n(flag as f64))]);
+        w.put(link_addrs[i], "DATA", "bNodeLink", 1, d);
+    }
+    let mut f: Vec<(String, V)> = vec![
+        ("id.name".into(), s(&format!("NT{name}"))),
+        ("nodes.first".into(), p(addrs.first().copied().unwrap_or(0))),
+        ("nodes.last".into(), p(addrs.last().copied().unwrap_or(0))),
+        ("links.first".into(), p(link_addrs.first().copied().unwrap_or(0))),
+        ("links.last".into(), p(link_addrs.last().copied().unwrap_or(0))),
+    ];
+    if !iface.is_empty() {
+        if c.new_names() {
+            let mut items = Vec::new();
+            for &(name, ident, flag, dv) in iface {
+                let (nm, ty, id) = (cstr(w, name), cstr(w, "NodeSocketFloat"), cstr(w, ident));
+                let data = default_value(w, &Dv::F(dv));
+                items.push(w.add("DATA", "bNodeTreeInterfaceSocket", &[("name", p(nm)), ("socket_type", p(ty)), ("flag", n(flag as f64)), ("identifier", p(id)), ("socket_data", p(data))]));
+            }
+            let arr = w.raw(w.ptrs(&items), items.len());
+            f.push(("tree_interface.root_panel.items_array".into(), p(arr)));
+            f.push(("tree_interface.root_panel.items_num".into(), n(items.len() as f64)));
+        } else {
+            for (lb, want) in [("inputs", 1), ("outputs", 2)] {
+                let socks: Vec<Sk> = iface.iter().filter(|x| x.2 == want).map(|&(name, ident, _, dv)| sk(ident, name, 0, Dv::F(dv))).collect();
+                let (first, last, _) = socket_list(w, &socks);
+                f.push((format!("{lb}.first"), p(first)));
+                f.push((format!("{lb}.last"), p(last)));
+            }
+        }
+    }
+    let d = w.inst("bNodeTree", &f);
+    w.put(ptr, code, "bNodeTree", 1, d);
+}
+
+/// The 2x2 RGBA test image: red, green / blue, white.
+pub const NODE_IMAGE: [[u8; 4]; 4] = [[255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255], [255, 255, 255, 255]];
+
+fn png_2x2() -> Vec<u8> {
+    let mut out = Vec::new();
+    {
+        let mut e = png::Encoder::new(&mut out, 2, 2);
+        e.set_color(png::ColorType::Rgba);
+        e.set_depth(png::BitDepth::Eight);
+        let mut wr = e.write_header().unwrap();
+        wr.write_image_data(NODE_IMAGE.as_flattened()).unwrap();
+    }
+    out
+}
+
+/// A struct-array member: write `items` (each a full struct) from element 0.
+fn put_array(w: &Writer, buf: &mut [u8], sname: &str, member: &str, elem: &str, items: &[Vec<u8>]) {
+    let off = w.dna.slot(sname, member).offset;
+    let size = w.dna.size(elem);
+    for (i, it) in items.iter().enumerate() {
+        buf[off + i * size..off + (i + 1) * size].copy_from_slice(it);
+    }
+}
+
+/// Group interface identifiers: 4.x `Socket_N`, older `Input_N`/`Output_N`.
+pub fn group_idents(c: &Cfg) -> (&'static str, &'static str) {
+    if c.new_names() {
+        ("Socket_0", "Socket_1")
+    } else {
+        ("Input_0", "Output_1")
+    }
+}
+
+/// A material "Nodes" with most node features the importer reads, a node
+/// group "Half", a packed image, an object for Texture Coordinate and a
+/// world tree.
+pub fn nodes_file(c: Cfg) -> Vec<u8> {
+    let mut w = Writer::new(define(&c), c.big, c.layout == Layout::Attr50, version_of(&c));
+    let [sc, wo, ma, ob, im, grp, mtree, wtree] = [(); 8].map(|_| w.alloc());
+    let glob = w.alloc();
+    let g = w.inst("FileGlobal", &[("curscene", p(sc))]);
+    w.put(glob, "GLOB", "FileGlobal", 1, g);
+    let d = w.inst("Scene", &[("id.name", s("SCNodes")), ("world", p(wo)), ("r.xsch", n(64.)), ("r.ysch", n(64.)), ("r.xasp", n(1.)), ("r.yasp", n(1.))]);
+    w.put(sc, "SC", "Scene", 1, d);
+
+    // The packed image.
+    let png = png_2x2();
+    let len = png.len();
+    let data = w.raw(png, len);
+    let pf = w.add("DATA", "PackedFile", &[("size", n(len as f64)), ("data", p(data))]);
+    let mut f: Vec<(&str, V)> = vec![("id.name", s("IMtex.png")), ("filepath", s("//tex.png"))];
+    if c.new_names() {
+        let ipf = w.add("DATA", "ImagePackedFile", &[("packedfile", p(pf)), ("filepath", s("//tex.png"))]);
+        f.push(("packedfiles.first", p(ipf)));
+        f.push(("packedfiles.last", p(ipf)));
+    } else {
+        f.push(("packedfile", p(pf)));
+    }
+    if c.layout != Layout::Legacy27 {
+        f.push(("colorspace_settings.name", s("sRGB")));
+    }
+    let d = w.inst("Image", &f);
+    w.put(im, "IM", "Image", 1, d);
+
+    // An empty for the Texture Coordinate node.
+    let ident = [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.];
+    let scale_name = if c.layout == Layout::Legacy27 { "size" } else { "scale" };
+    let mut f: Vec<(&str, V)> = vec![("id.name", s("OBEmpty")), ("type", n(0.)), (scale_name, nv(&[1., 1., 1.])), ("parentinv", nv(&ident)), ("rotmode", n(1.))];
+    if scale_name == "scale" {
+        f.push(("dscale", nv(&[1., 1., 1.])));
+    }
+    if !c.new_names() {
+        f.push(("obmat", nv(&ident)));
+    }
+    let d = w.inst("Object", &f);
+    w.put(ob, "OB", "Object", 1, d);
+
+    // Storage structs.
+    let mix = w.add("DATA", "NodeShaderMix", &[("data_type", n(2.)), ("factor_mode", n(0.)), ("clamp_factor", n(1.)), ("clamp_result", n(0.)), ("blend_type", n(2.))]);
+    let tex = w.add("DATA", "NodeTexImage", &[("projection", n(1.)), ("projection_blend", n(0.25)), ("interpolation", n(1.)), ("extension", n(3.))]);
+    let noise = w.add("DATA", "NodeTexNoise", &[("dimensions", n(2.)), ("type", n(1.)), ("normalize", n(1.))]);
+    let mut band = w.inst("ColorBand", &[("tot", n(2.)), ("ipotype", n(4.))]);
+    let e0 = w.inst("CBData", &[("r", n(1.)), ("a", n(1.)), ("pos", n(0.8))]);
+    let e1 = w.inst("CBData", &[("b", n(1.)), ("a", n(1.)), ("pos", n(0.2))]);
+    put_array(&w, &mut band, "ColorBand", "data", "CBData", &[e0, e1]);
+    let band_ptr = w.alloc();
+    w.put(band_ptr, "DATA", "ColorBand", 1, band);
+    let mut curves = w.inst("CurveMapping", &[("flag", n(0.))]);
+    let mut maps = Vec::new();
+    for k in 0..4 {
+        let top = if k == 3 { 0.5 } else { 1.0 };
+        let pts = [w.inst("CurveMapPoint", &[("x", n(0.)), ("y", n(0.))]), w.inst("CurveMapPoint", &[("x", n(1.)), ("y", n(top))])].concat();
+        let pp = w.alloc();
+        w.put(pp, "DATA", "CurveMapPoint", 2, pts);
+        maps.push(w.inst("CurveMap", &[("totpoint", n(2.)), ("curve", p(pp))]));
+    }
+    put_array(&w, &mut curves, "CurveMapping", "cm", "CurveMap", &maps);
+    let curves_ptr = w.alloc();
+    w.put(curves_ptr, "DATA", "CurveMapping", 1, curves);
+
+    // The group "Half": Out = In * 0.5.
+    let (gin, gout) = group_idents(&c);
+    let mut math = Nd::new("Math", "ShaderNodeMath", vec![sk("Value", "Value", 0, Dv::F(0.)), sk("Value_001", "Value", 0, Dv::F(0.5))], vec![sk("Value", "Value", 0, Dv::No)]);
+    math.custom = [2, 0];
+    let mut go = Nd::new("Group Output", "NodeGroupOutput", vec![sk(gout, "Out", 0, Dv::F(0.))], vec![]);
+    go.flag = 64;
+    let gnodes = [Nd::new("Group Input", "NodeGroupInput", vec![], vec![sk(gin, "In", 0, Dv::F(0.))]), math, go];
+    write_tree(&mut w, &c, grp, "NT", "Half", &gnodes, &[(0, gin, 1, "Value", 0), (1, "Value", 2, gout, 0)], &[("In", gin, 1, 1.0), ("Out", gout, 2, 0.0)]);
+
+    // The material tree.
+    let mut out = Nd::new("Material Output", "ShaderNodeOutputMaterial", vec![sk("Surface", "Surface", 3, Dv::No)], vec![]);
+    out.flag = 64;
+    let mut bsdf = Nd::new(
+        "Principled BSDF",
+        "ShaderNodeBsdfPrincipled",
+        vec![
+            sk("Base Color", "Base Color", 2, Dv::C([0.8, 0.8, 0.8, 1.0])),
+            sk("Metallic", "Metallic", 0, Dv::F(0.6)),
+            sk("Roughness", "Roughness", 0, Dv::F(0.5)),
+            // Pre-4.0 names that versioning renames.
+            sk("Specular", "Specular", 0, Dv::F(0.25)),
+            sk("Clearcoat", "Clearcoat", 0, Dv::F(0.0)),
+        ],
+        vec![sk("BSDF", "BSDF", 3, Dv::No)],
+    );
+    bsdf.label = "Shiny";
+    bsdf.loc = [-300.0, 120.0];
+    bsdf.width = 260.0;
+    let mut image = Nd::new("Image Texture", "ShaderNodeTexImage", vec![sk("Vector", "Vector", 1, Dv::No)], vec![sk("Color", "Color", 2, Dv::No), sk("Alpha", "Alpha", 0, Dv::No)]);
+    image.storage = tex;
+    image.id = im;
+    let mut mixn = Nd::new(
+        "Mix",
+        "ShaderNodeMix",
+        vec![sk("Factor_Float", "Factor", 0, Dv::F(0.75)), sk("A_Color", "A", 2, Dv::C([0.5, 0.5, 0.5, 1.0])), sk("B_Color", "B", 2, Dv::C([1.0, 0.5, 0.25, 1.0]))],
+        vec![sk("Result_Color", "Result", 2, Dv::No)],
+    );
+    mixn.storage = mix;
+    let mut mathn = Nd::new("Math", "ShaderNodeMath", vec![sk("Value", "Value", 0, Dv::F(0.5)), sk("Value_001", "Value", 0, Dv::F(3.0))], vec![sk("Value", "Value", 0, Dv::No)]);
+    mathn.custom = [2, 1];
+    let mut ramp = Nd::new("Color Ramp", "ShaderNodeValToRGB", vec![sk("Fac", "Fac", 0, Dv::F(0.5))], vec![sk("Color", "Color", 2, Dv::No), sk("Alpha", "Alpha", 0, Dv::No)]);
+    ramp.storage = band_ptr;
+    let mut noisen = Nd::new("Noise Texture", "ShaderNodeTexNoise", vec![sk("Scale", "Scale", 0, Dv::F(7.0))], vec![sk("Fac", "Fac", 0, Dv::No)]);
+    noisen.storage = noise;
+    noisen.parent = Some(10);
+    let mut invert = Nd::new("Invert", "ShaderNodeInvert", vec![Sk("Fac".into(), "Fac".into(), 0, Dv::F(1.0), 2), sk("Color", "Color", 2, Dv::C([0.0, 0.0, 0.0, 1.0]))], vec![sk("Color", "Color", 2, Dv::No)]);
+    invert.flag = (1 << 9) | (1 << 3) | (1 << 17);
+    invert.color = [0.1, 0.2, 0.3];
+    let mut curve = Nd::new("RGB Curves", "ShaderNodeRGBCurve", vec![sk("Fac", "Fac", 0, Dv::F(1.0))], vec![sk("Color", "Color", 2, Dv::No)]);
+    curve.storage = curves_ptr;
+    let mut group = Nd::new("Group", "ShaderNodeGroup", vec![sk(gin, "In", 0, Dv::F(0.25))], vec![sk(gout, "Out", 0, Dv::No)]);
+    group.id = grp;
+    let mut frame = Nd::new("Frame", "NodeFrame", vec![], vec![]);
+    frame.label = "Textures";
+    let mut coord = Nd::new("Texture Coordinate", "ShaderNodeTexCoord", vec![], vec![sk("Object", "Object", 1, Dv::No)]);
+    coord.id = ob;
+    let future = Nd::new("Future", "ShaderNodeFromTheFuture", vec![sk("Thing", "Thing", 0, Dv::F(2.0))], vec![sk("Out", "Out", 0, Dv::No)]);
+    let nodes = [out, bsdf, image, mixn, mathn, ramp, noisen, invert, curve, group, frame, coord, future];
+    let links: [NodeLink; 7] = [
+        (2, "Color", 3, "A_Color", 0),
+        (3, "Result_Color", 1, "Base Color", 0),
+        (4, "Value", 1, "Roughness", 0),
+        (9, gout, 1, "Clearcoat", 1 << 4),
+        (1, "BSDF", 0, "Surface", 0),
+        (12, "Out", 5, "Fac", 0),
+        (11, "Object", 2, "Vector", 0),
+    ];
+    write_tree(&mut w, &c, mtree, "DATA", "Shader Nodetree", &nodes, &links, &[]);
+    let d = w.inst("Material", &[("id.name", s("MANodes")), ("r", n(0.8)), ("g", n(0.8)), ("b", n(0.8)), ("a", n(1.)), ("use_nodes", n(1.)), ("nodetree", p(mtree))]);
+    w.put(ma, "MA", "Material", 1, d);
+
+    // The world tree.
+    let mut bg = Nd::new("Background", "ShaderNodeBackground", vec![sk("Color", "Color", 2, Dv::C([0.2, 0.3, 0.4, 1.0])), sk("Strength", "Strength", 0, Dv::F(2.0))], vec![sk("Background", "Background", 3, Dv::No)]);
+    bg.loc = [-200.0, 0.0];
+    let mut wout = Nd::new("World Output", "ShaderNodeOutputWorld", vec![sk("Surface", "Surface", 3, Dv::No)], vec![]);
+    wout.flag = 64;
+    write_tree(&mut w, &c, wtree, "DATA", "Shader Nodetree", &[bg, wout], &[(0, "Background", 1, "Surface", 0)], &[]);
+    let d = w.inst("World", &[("id.name", s("WOWorld")), ("horr", n(0.05)), ("horg", n(0.05)), ("horb", n(0.05)), ("nodetree", p(wtree)), ("use_nodes", n(1.))]);
+    w.put(wo, "WO", "World", 1, d);
+    w.finish()
 }

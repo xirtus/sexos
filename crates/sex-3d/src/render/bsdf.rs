@@ -18,6 +18,9 @@ use super::sampling::{cosine_hemisphere, onb};
 use crate::math::Vec3;
 use core::f32::consts::{FRAC_1_PI, PI, TAU};
 
+mod closure;
+pub(crate) use closure::*;
+
 pub(crate) struct Bsdf {
     t: Vec3,
     b: Vec3,
@@ -45,7 +48,18 @@ pub(crate) struct BsdfSample {
     pub weight: Vec3,
     pub pdf: f32,
     pub delta: bool,
+    /// `L_*` flags: what kind of bounce this was (for the Light Path node).
+    pub label: u8,
 }
+
+/// Sample labels.
+pub(crate) const L_REFLECT: u8 = 1;
+pub(crate) const L_TRANSMIT: u8 = 2;
+pub(crate) const L_DIFFUSE: u8 = 4;
+pub(crate) const L_GLOSSY: u8 = 8;
+pub(crate) const L_SINGULAR: u8 = 16;
+/// Straight through a transparent surface: not a bounce at all.
+pub(crate) const L_TRANSPARENT: u8 = 32;
 
 /// Unpolarised Fresnel reflectance for a dielectric; `eta` = n_t / n_i.
 pub(crate) fn fresnel_dielectric(cos_i: f32, eta: f32) -> f32 {
@@ -188,7 +202,8 @@ impl Bsdf {
         if pdf <= 0.0 || f == Vec3::ZERO {
             return None;
         }
-        Some(BsdfSample { wi, weight: f * (i.z / pdf), pdf, delta: false })
+        let label = if lobe < self.p_diffuse { L_DIFFUSE | L_REFLECT } else { L_GLOSSY | L_REFLECT };
+        Some(BsdfSample { wi, weight: f * (i.z / pdf), pdf, delta: false, label })
     }
 
     fn sample_glass(&self, o: Vec3, uf: f32, u1: f32, u2: f32) -> Option<BsdfSample> {
@@ -218,7 +233,8 @@ impl Bsdf {
         if (wi.dot(self.ng) > 0.0) != reflected {
             return None;
         }
-        Some(BsdfSample { wi, weight: tint * (scale * g), pdf: 0.0, delta: true })
+        let label = L_SINGULAR | if reflected { L_REFLECT } else { L_TRANSMIT };
+        Some(BsdfSample { wi, weight: tint * (scale * g), pdf: 0.0, delta: true, label })
     }
 }
 

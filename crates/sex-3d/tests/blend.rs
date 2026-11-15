@@ -1100,3 +1100,183 @@ fn rigging_imports() {
         assert_eq!(back.meshes, scene.meshes);
     }
 }
+
+fn node<'t>(t: &'t sex_3d::nodes::NodeTree, name: &str) -> &'t sex_3d::nodes::Node {
+    t.nodes.iter().find(|n| n.name == name).unwrap_or_else(|| panic!("no node {name}"))
+}
+
+fn input_float(n: &sex_3d::nodes::Node, id: &str) -> f32 {
+    n.inputs[n.input(id).unwrap_or_else(|| panic!("{}: no input {id}", n.name))].value.as_float()
+}
+
+fn linked(t: &sex_3d::nodes::NodeTree, from: &str, to: &str, to_socket: &str) -> Option<bool> {
+    let (f, k) = (t.find(from)?, t.find(to)?);
+    let ts = t.nodes[k].input(to_socket)?;
+    t.links.iter().find(|l| l.from_node == f && l.to_node == k && l.to_socket == ts).map(|l| l.muted)
+}
+
+#[test]
+fn shader_node_trees_import() {
+    use sex_3d::nodes::{Prop, Value};
+    for c in ALL {
+        let what = format!("{c:?}");
+        let s = import_blend(&blendgen::nodes_file(c)).unwrap_or_else(|e| panic!("{what}: {e}"));
+        let m = s.materials.iter().find(|m| m.name == "Nodes").unwrap_or_else(|| panic!("{what}"));
+        let t = m.node_tree.as_ref().unwrap_or_else(|| panic!("{what}: no tree"));
+        assert_eq!(t.nodes.len(), 13, "{what}");
+
+        let out = node(t, "Material Output");
+        assert_eq!(out.prop("is_active_output"), Some(&Prop::Bool(true)), "{what}");
+        assert_eq!(linked(t, "Principled BSDF", "Material Output", "Surface"), Some(false), "{what}");
+
+        let p = node(t, "Principled BSDF");
+        assert_eq!(p.label, "Shiny", "{what}");
+        assert_eq!(p.location, [-300.0, 120.0], "{what}");
+        assert_eq!(p.width, 260.0, "{what}");
+        assert!(approx(input_float(p, "Metallic"), 0.6), "{what}");
+        // Pre-4.0 "Specular" lands on "Specular IOR Level".
+        assert!(approx(input_float(p, "Specular IOR Level"), 0.25), "{what}");
+        assert_eq!(linked(t, "Math", "Principled BSDF", "Roughness"), Some(false), "{what}");
+        assert_eq!(linked(t, "Mix", "Principled BSDF", "Base Color"), Some(false), "{what}");
+        assert_eq!(linked(t, "Group", "Principled BSDF", "Coat Weight"), Some(true), "{what}: muted link");
+
+        let im = node(t, "Image Texture");
+        assert_eq!(im.enum_prop("projection"), "BOX", "{what}");
+        assert_eq!(im.enum_prop("interpolation"), "Closest", "{what}");
+        assert_eq!(im.enum_prop("extension"), "MIRROR", "{what}");
+        assert_eq!(im.prop("projection_blend"), Some(&Prop::Float(0.25)), "{what}");
+        let Some(Prop::Id(Some(ii))) = im.prop("image") else { panic!("{what}: no image") };
+        let img = &s.images[*ii];
+        assert_eq!((img.name.as_str(), img.width, img.height), ("tex.png", 2, 2), "{what}");
+        for (px, e) in img.pixels.iter().zip(blendgen::NODE_IMAGE) {
+            for k in 0..4 {
+                assert!(approx(px[k], e[k] as f32 / 255.0), "{what}: {:?}", img.pixels);
+            }
+        }
+        assert_eq!(linked(t, "Image Texture", "Mix", "A_Color"), Some(false), "{what}");
+        assert_eq!(linked(t, "Texture Coordinate", "Image Texture", "Vector"), Some(false), "{what}");
+
+        let mix = node(t, "Mix");
+        assert_eq!((mix.enum_prop("data_type"), mix.enum_prop("blend_type")), ("RGBA", "MULTIPLY"), "{what}");
+        assert!(approx(input_float(mix, "Factor_Float"), 0.75), "{what}");
+        assert_eq!(mix.inputs[mix.input("B_Color").unwrap()].value, Value::Color([1.0, 0.5, 0.25, 1.0]), "{what}");
+
+        let math = node(t, "Math");
+        assert_eq!(math.enum_prop("operation"), "MULTIPLY", "{what}");
+        assert!(math.bool_prop("use_clamp"), "{what}");
+        assert!(approx(input_float(math, "Value_001"), 3.0), "{what}");
+
+        let ramp = node(t, "Color Ramp");
+        let Some(Prop::Ramp(r)) = ramp.prop("color_ramp") else { panic!("{what}: no ramp") };
+        assert_eq!(r.interpolation, "CONSTANT", "{what}");
+        assert_eq!(r.elements, vec![(0.2, [0.0, 0.0, 1.0, 1.0]), (0.8, [1.0, 0.0, 0.0, 1.0])], "{what}");
+        // A node type we do not know keeps its sockets and links.
+        let fut = node(t, "Future");
+        assert_eq!((fut.inputs.len(), fut.outputs.len()), (1, 1), "{what}");
+        assert!(approx(input_float(fut, "Thing"), 2.0), "{what}");
+        assert_eq!(linked(t, "Future", "Color Ramp", "Fac"), Some(false), "{what}");
+
+        let noise = node(t, "Noise Texture");
+        assert_eq!((noise.enum_prop("noise_dimensions"), noise.enum_prop("noise_type")), ("2D", "FBM"), "{what}");
+        assert!(noise.bool_prop("normalize"), "{what}");
+        assert!(approx(input_float(noise, "Scale"), 7.0), "{what}");
+        assert_eq!(noise.parent, t.find("Frame"), "{what}");
+        assert_eq!(node(t, "Frame").label, "Textures", "{what}");
+
+        let inv = node(t, "Invert");
+        assert!(inv.mute && inv.hide, "{what}");
+        assert_eq!(inv.color, Some([0.1, 0.2, 0.3]), "{what}");
+        assert!(inv.inputs[inv.input("Fac").unwrap()].hide, "{what}");
+
+        let Some(Prop::Curve(cm)) = node(t, "RGB Curves").prop("mapping") else { panic!("{what}: no curves") };
+        assert_eq!(cm.curves.len(), 4, "{what}");
+        // The combined curve is file cm[3], our curves[0].
+        assert_eq!(cm.curves[0], vec![[0.0, 0.0], [1.0, 0.5]], "{what}");
+        assert_eq!(cm.curves[1], vec![[0.0, 0.0], [1.0, 1.0]], "{what}");
+
+        let gn = node(t, "Group");
+        let Some(Prop::Id(Some(gi))) = gn.prop("node_tree") else { panic!("{what}: no group") };
+        let g = &s.node_groups[*gi];
+        assert_eq!(g.name, "Half", "{what}");
+        assert_eq!((g.inputs.len(), g.outputs.len()), (1, 1), "{what}");
+        assert_eq!((g.inputs[0].name.as_str(), g.outputs[0].name.as_str()), ("In", "Out"), "{what}");
+        assert_eq!(g.inputs[0].default, Value::Float(1.0), "{what}");
+        assert_eq!((gn.inputs[0].name.as_str(), gn.outputs[0].name.as_str()), ("In", "Out"), "{what}");
+        assert!(approx(gn.inputs[0].value.as_float(), 0.25), "{what}");
+        assert_eq!(g.nodes.len(), 3, "{what}");
+        assert_eq!(g.links.len(), 2, "{what}: {:?}", g.links);
+        assert_eq!(linked(g, "Math", "Group Output", "Out"), Some(false), "{what}");
+
+        let names = blendgen::names(&s);
+        assert_eq!(node(t, "Texture Coordinate").prop("object"), Some(&Prop::Id(names.get("Empty").copied())), "{what}");
+        assert!(names.contains_key("Empty"), "{what}");
+        assert!(node(t, "Texture Coordinate").prop("__object_ptr").is_none(), "{what}");
+
+        let wt = s.world.node_tree.as_ref().unwrap_or_else(|| panic!("{what}: no world tree"));
+        let bg = node(wt, "Background");
+        assert_eq!(bg.inputs[bg.input("Color").unwrap()].value, Value::Color([0.2, 0.3, 0.4, 1.0]), "{what}");
+        assert!(approx(input_float(bg, "Strength"), 2.0), "{what}");
+        assert_eq!(linked(wt, "Background", "World Output", "Surface"), Some(false), "{what}");
+    }
+}
+
+#[test]
+fn imported_node_trees_render() {
+    use sex_3d::render::{self, RenderSettings};
+    let mut s = import_blend(&blendgen::nodes_file(ALL[7])).unwrap();
+    let mi = s.materials.iter().position(|m| m.name == "Nodes").unwrap();
+    let o = s.add_mesh_object("Plane", sex_3d::primitives::plane(4.0));
+    s.objects[o].materials.push(mi);
+    let mut cam = sex_3d::scene::Object::new("Cam", sex_3d::scene::ObjectData::Camera(sex_3d::scene::Camera::default()));
+    cam.transform.location = Vec3::new(0.0, 0.0, 3.0);
+    let c = s.add_object(cam);
+    s.active_camera = Some(c);
+    let st = RenderSettings { width: 12, height: 12, samples: 4, threads: 1, denoise: false, ..RenderSettings::default() };
+    let img = render::render(&s, &st).color;
+    assert!(img.pixels.iter().all(|p| p.iter().all(|v| v.is_finite())));
+    // The world tree lights the plane: its pixels are not black.
+    let mean: f32 = img.pixels.iter().map(|p| p[0] + p[1] + p[2]).sum::<f32>() / img.pixels.len() as f32;
+    assert!(mean > 0.01, "{mean}");
+}
+
+#[test]
+fn corrupted_node_files_never_panic() {
+    let mut rng = Rng(0x5151_A3C1_0F0F_7777);
+    for c in [ALL[1], ALL[4], ALL[8], ALL[11]] {
+        let full = blendgen::nodes_file(c);
+        for _ in 0..250 {
+            let mut b = full.clone();
+            for _ in 0..1 + rng.next() % 3 {
+                let at = (rng.next() % b.len() as u64) as usize;
+                b[at] ^= 1 << (rng.next() % 8);
+            }
+            let at = (rng.next() % (b.len() as u64 - 8)) as usize;
+            b[at..at + 8].copy_from_slice(&rng.next().to_le_bytes());
+            let _ = import_blend(&b);
+        }
+    }
+}
+
+/// Imported trees survive the polyops text round trip (images are not
+/// written, so the Image Texture's image comes back empty).
+#[test]
+fn imported_node_trees_round_trip_through_polyops() {
+    use sex_3d::nodes::Prop;
+    for c in [ALL[0], ALL[5], ALL[10]] {
+        let mut s = import_blend(&blendgen::nodes_file(c)).unwrap();
+        let text = sex_3d::script::scene_to_polyops(&s);
+        let mut back = Scene::new();
+        sex_3d::script::run(&mut back, &text).unwrap_or_else(|e| panic!("{c:?}: {e}\n{text}"));
+        for m in &mut s.materials {
+            for n in m.node_tree.iter_mut().flat_map(|t| t.nodes.iter_mut()) {
+                if n.idname == "ShaderNodeTexImage" {
+                    n.set_prop("image", Prop::Id(None));
+                }
+            }
+        }
+        let nodes = |s: &Scene| s.materials.iter().find(|m| m.name == "Nodes").and_then(|m| m.node_tree.clone());
+        assert_eq!(nodes(&back), nodes(&s), "{c:?}");
+        assert_eq!(back.node_groups, s.node_groups, "{c:?}");
+        assert_eq!(back.world.node_tree, s.world.node_tree, "{c:?}");
+    }
+}

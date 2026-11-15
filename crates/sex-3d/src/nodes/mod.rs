@@ -14,7 +14,7 @@ pub mod enums;
 pub mod registry;
 pub mod update;
 
-pub use registry::{categories, new_node, node_types, Category, NodeType};
+pub use registry::{categories, legacy_node_types, new_node, node_types, sync_group_sockets, update_sockets, Category, NodeType};
 
 /// Which editor a tree belongs to (Blender's `bl_idname` of the tree).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -241,40 +241,79 @@ impl Default for ColorRamp {
 }
 
 impl ColorRamp {
-    /// The colour at `t` (linear and constant interpolation exact; the
-    /// spline modes ease with smoothstep).
+    /// The colour at `t`, as Blender's `BKE_colorband_evaluate`: linear,
+    /// ease (smoothstep), constant (the element at or below `t`), and the
+    /// B-spline and cardinal splines through the neighbouring elements.
+    /// Colours are interpolated in RGB whatever `color_mode` says.
     pub fn eval(&self, t: f32) -> [f32; 4] {
         let e = &self.elements;
         if e.is_empty() {
             return [0.0, 0.0, 0.0, 1.0];
         }
-        if t <= e[0].0 {
+        if e.len() == 1 {
             return e[0].1;
         }
-        let last = e[e.len() - 1];
-        if t >= last.0 {
-            return last.1;
+        let spline = matches!(self.interpolation.as_str(), "B_SPLINE" | "CARDINAL");
+        if t <= e[0].0 && !spline {
+            return e[0].1;
         }
-        let i = e.iter().position(|x| x.0 > t).unwrap_or(e.len() - 1);
-        let (a, b) = (e[i - 1], e[i]);
+        // `a`: the first element strictly after t; `c1` = e[a], `c2` = e[a - 1].
+        let a = e.iter().position(|x| x.0 > t).unwrap_or(e.len());
+        let (c1, c2) = if a == e.len() {
+            let last = e[e.len() - 1];
+            ((1.0, last.1), last)
+        } else if a == 0 {
+            (e[0], (0.0, e[0].1))
+        } else {
+            (e[a], e[a - 1])
+        };
         if self.interpolation == "CONSTANT" {
-            return a.1;
+            return c2.1;
         }
-        let span = (b.0 - a.0).max(1e-9);
-        let mut f = (t - a.0) / span;
-        if self.interpolation != "LINEAR" {
-            f = f * f * (3.0 - 2.0 * f);
+        let mut f = if c2.0 != c1.0 {
+            (t - c1.0) / (c2.0 - c1.0)
+        } else if a != e.len() {
+            0.0
+        } else {
+            1.0
+        };
+        let mut out = [0.0; 4];
+        if spline {
+            // Indices "from right to left: 3 2 1 0".
+            let c0 = if a + 1 >= e.len() { c1 } else { e[a + 1] };
+            let c3 = if a < 2 { c2 } else { e[a - 2] };
+            let w = key_curve_weights(f.clamp(0.0, 1.0), self.interpolation == "CARDINAL");
+            for (k, o) in out.iter_mut().enumerate() {
+                *o = (w[3] * c3.1[k] + w[2] * c2.1[k] + w[1] * c1.1[k] + w[0] * c0.1[k]).clamp(0.0, 1.0);
+            }
+            return out;
         }
-        let mut c = [0.0; 4];
-        for k in 0..4 {
-            c[k] = a.1[k] + (b.1[k] - a.1[k]) * f;
+        if self.interpolation == "EASE" {
+            let m = f * f;
+            f = 3.0 * m - 2.0 * m * f;
         }
-        c
+        for (k, o) in out.iter_mut().enumerate() {
+            *o = (1.0 - f) * c1.1[k] + f * c2.1[k];
+        }
+        out
     }
 }
 
-/// RGB/vector/float curves (`ShaderNodeRGBCurve`, `ShaderNodeFloatCurve`):
-/// up to four piecewise-linear curves of (x, y) points (C, R, G, B).
+/// Blender's `key_curve_position_weights` for cardinal and B-spline keys.
+fn key_curve_weights(t: f32, cardinal: bool) -> [f32; 4] {
+    let (t2, t3) = (t * t, t * t * t);
+    if cardinal {
+        let fc = 0.71;
+        [-fc * t3 + 2.0 * fc * t2 - fc * t, (2.0 - fc) * t3 + (fc - 3.0) * t2 + 1.0, (fc - 2.0) * t3 + (3.0 - 2.0 * fc) * t2 + fc * t, fc * t3 - fc * t2]
+    } else {
+        [-t3 / 6.0 + 0.5 * t2 - 0.5 * t + 1.0 / 6.0, 0.5 * t3 - t2 + 2.0 / 3.0, -0.5 * t3 + 0.5 * t2 + 0.5 * t + 1.0 / 6.0, t3 / 6.0]
+    }
+}
+
+/// RGB/vector/float curves (`ShaderNodeRGBCurve`, `ShaderNodeVectorCurve`,
+/// `ShaderNodeFloatCurve`): up to four curves of (x, y) control points with
+/// Blender's automatic Bezier handles. RGB curves store (C, R, G, B), vector
+/// curves (X, Y, Z), float curves one curve.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CurveMapping {
     pub curves: Vec<Vec<[f32; 2]>>,
@@ -287,23 +326,119 @@ impl Default for CurveMapping {
 }
 
 impl CurveMapping {
-    /// Evaluate curve `i` at `x` (identity outside the stored curves).
+    /// Evaluate curve `i` at `x` (identity when the curve is missing; flat
+    /// beyond the end points, like Blender without extrapolation).
     pub fn eval(&self, i: usize, x: f32) -> f32 {
-        let Some(c) = self.curves.get(i) else { return x };
-        if c.is_empty() {
-            return x;
+        match self.curves.get(i) {
+            Some(c) => polyline_eval(&curve_polyline(c), x),
+            None => x,
         }
-        if x <= c[0][0] {
-            return c[0][1];
-        }
-        for w in c.windows(2) {
-            if x <= w[1][0] {
-                let f = (x - w[0][0]) / (w[1][0] - w[0][0]).max(1e-9);
-                return w[0][1] + (w[1][1] - w[0][1]) * f;
-            }
-        }
-        c[c.len() - 1][1]
     }
+
+    /// Curve `i` flattened to a polyline (Blender bakes its `table` alike).
+    pub fn polyline(&self, i: usize) -> Option<Vec<[f32; 2]>> {
+        self.curves.get(i).map(|c| curve_polyline(c))
+    }
+}
+
+/// Evaluate a polyline sorted by x; flat outside its ends, identity when empty.
+pub fn polyline_eval(poly: &[[f32; 2]], x: f32) -> f32 {
+    match poly {
+        [] => x,
+        [p] => p[1],
+        _ => {
+            if x <= poly[0][0] {
+                return poly[0][1];
+            }
+            let last = poly[poly.len() - 1];
+            if x >= last[0] {
+                return last[1];
+            }
+            let i = poly.partition_point(|p| p[0] <= x).clamp(1, poly.len() - 1);
+            let (a, b) = (poly[i - 1], poly[i]);
+            let f = if b[0] > a[0] { (x - a[0]) / (b[0] - a[0]) } else { 0.0 };
+            a[1] + (b[1] - a[1]) * f
+        }
+    }
+}
+
+type V2 = [f32; 2];
+
+fn sub2(a: V2, b: V2) -> V2 {
+    [a[0] - b[0], a[1] - b[1]]
+}
+
+fn len2(a: V2) -> f32 {
+    (a[0] * a[0] + a[1] * a[1]).sqrt()
+}
+
+/// The handle pair of an end point re-aimed at its neighbour's handle
+/// (`calchandles_curvemap`), keeping the handle length.
+fn aim_end(p: V2, target: V2, handle_len: f32, rightward: bool) -> Option<(V2, V2)> {
+    let mut v = target;
+    if (rightward && v[0] < p[0]) || (!rightward && v[0] > p[0]) {
+        v[0] = p[0];
+    }
+    let d = sub2(v, p);
+    let nl = len2(d);
+    (nl > f32::EPSILON).then(|| {
+        let d = [d[0] * handle_len / nl, d[1] * handle_len / nl];
+        let (back, fwd) = ([p[0] - d[0], p[1] - d[1]], [p[0] + d[0], p[1] + d[1]]);
+        if rightward {
+            (back, fwd)
+        } else {
+            (fwd, back)
+        }
+    })
+}
+
+/// Points of a curve with Blender's automatic handles (`calchandle_curvemap`),
+/// flattened into a polyline of 16 steps per Bezier segment.
+fn curve_polyline(c: &[[f32; 2]]) -> Vec<[f32; 2]> {
+    let mut pts: Vec<V2> = c.to_vec();
+    pts.sort_by(|a, b| a[0].total_cmp(&b[0]));
+    let n = pts.len();
+    if n < 2 {
+        return pts;
+    }
+    // (left handle, right handle) per point.
+    let mut h: Vec<(V2, V2)> = Vec::with_capacity(n);
+    for i in 0..n {
+        let p2 = pts[i];
+        let p1 = if i > 0 { pts[i - 1] } else { [2.0 * p2[0] - pts[1][0], 2.0 * p2[1] - pts[1][1]] };
+        let p3 = if i + 1 < n { pts[i + 1] } else { [2.0 * p2[0] - pts[n - 2][0], 2.0 * p2[1] - pts[n - 2][1]] };
+        let (da, db) = (sub2(p2, p1), sub2(p3, p2));
+        let (la, lb) = (len2(da).max(1e-12), len2(db).max(1e-12));
+        let t = [db[0] / lb + da[0] / la, db[1] / lb + da[1] / la];
+        let l = len2(t) * 2.5614;
+        if l > 0.0 {
+            let (sa, sb) = (la / l, lb / l);
+            h.push(([p2[0] - t[0] * sa, p2[1] - t[1] * sa], [p2[0] + t[0] * sb, p2[1] + t[1] * sb]));
+        } else {
+            h.push((p2, p2));
+        }
+    }
+    if let Some(x) = aim_end(pts[0], h[1].0, len2(sub2(h[0].1, pts[0])), true) {
+        h[0] = x;
+    }
+    if let Some(x) = aim_end(pts[n - 1], h[n - 2].1, len2(sub2(h[n - 1].0, pts[n - 1])), false) {
+        h[n - 1] = x;
+    }
+    let mut out = Vec::with_capacity((n - 1) * 16 + 1);
+    out.push(pts[0]);
+    for i in 0..n - 1 {
+        let (a, d) = (pts[i], pts[i + 1]);
+        // Keep x monotonic inside the segment (Blender's `correct_bezpart`).
+        let clampx = |v: V2| [v[0].clamp(a[0], d[0]), v[1]];
+        let (b, c) = (clampx(h[i].1), clampx(h[i + 1].0));
+        for s in 1..=16 {
+            let t = s as f32 / 16.0;
+            let u = 1.0 - t;
+            let w = [u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t];
+            out.push([w[0] * a[0] + w[1] * b[0] + w[2] * c[0] + w[3] * d[0], w[0] * a[1] + w[1] * b[1] + w[2] * c[1] + w[3] * d[1]]);
+        }
+    }
+    out
 }
 
 /// A node property that is not a socket (dropdowns, checkboxes, ramps).
