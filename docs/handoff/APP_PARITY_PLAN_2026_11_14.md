@@ -209,7 +209,7 @@ Now: per-domain CPU share and memory from syscall 87 (J1 part 1, #175).
 | Per-program disk and network I/O, end/restart program | R4 (needs J1's remaining counters; coordinate with J) |
 | **Capability graph**: which domain holds which grant, live (the name "Mesh" is this) | R5 |
 | Hardware: devices, drivers, temperatures, fan, battery wear, NVMe SMART | R5 (readings from H9) |
-| Boot timeline (Foreplay) and start time per program | R5 |
+| Boot timeline (Tantalize) and start time per program | R5 |
 
 ### sexshop (store) vs Flathub / GNOME Software / Steam
 
