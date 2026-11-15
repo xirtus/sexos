@@ -216,3 +216,11 @@ master is lowered, unity stays byte-identical, and project-loaded export uses th
 same path. Nonunity master metadata uses bounded project v3, while unity audio-only
 v1 and MIDI v2 stay compatible. A nonunity-v3 cold-reopen audio gate is not claimed
 by the current unity-project GUI or live-control proof.
+
+The later colored-build checkpoint now additionally qualifies nonunity-v3 cold
+reopen and heard/exported headroom: three real 200% tracks/master 50% preserve exact
+original sources, actual unclipped output and every independently expected WAV
+sample. `MOAN_FINAL_REGRESSION_2026_11_15.json` distinguishes that new source-bound
+case from the earlier unity-only GUI checkpoint and records the final legacy
+project/export/capture/Close results. This adds no automation/routing/live-insert
+or restricted-plugin-role claim.

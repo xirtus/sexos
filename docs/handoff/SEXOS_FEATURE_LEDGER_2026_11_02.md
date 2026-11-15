@@ -4853,3 +4853,16 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
 - 101 host tests/default-seed guest scan pass. Exact digests and original checker
   failures are in `MOAN_TRACK_COLORS_RUNTIME_2026_11_15.json`. Existing 8d46 audio
   artifacts remain historical; final legacy regression is recorded separately.
+
+### Round 196 final colored-build regression follow-up
+
+- The same colored ELF passes actual app/audio/split/undo, project cold reopen,
+  real WAV/FLAC/MP3 decode and partial Close cancellation, plus QEMU microphone
+  consent/Stop. No physical microphone or latency claim.
+- Supplemental v3/master 50/three 200% tracks reopens cold; captured 400/600 Hz peaks
+  retain headroom. Every exported sample equals independently expected 3× original
+  PCM plus the exact silence tail. Internal/whole-file hashes are both verified.
+- Exact cases, source revisions, archives, screenshots and failures are bound in
+  `MOAN_FINAL_REGRESSION_2026_11_15.json`. Stronger absolute metadata fence is
+  separately qualified from the earlier complete semantic pass. 14 focus/9 input
+  regressions pass; no app/kernel/toolkit change from checker repairs.
