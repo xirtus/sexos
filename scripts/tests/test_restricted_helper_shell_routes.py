@@ -19,7 +19,7 @@ class NativeShellRole(unittest.TestCase):
     text+='#[path="'+str(ROOT/path)+'"]mod '+name+';\n'
    pool=(ROOT/'servers/silk-shell/src/restricted_pool.rs').read_text().replace('#[cfg(target_os = "none")]','').replace('//!','//')
    text+='mod restricted_pool{'+pool+'}\n'
-   text+='#[macro_export]macro_rules! serial_record { ($($arg:tt)*) => {{let _=format_args!($($arg)*);}}; }\n'
+   text+='static START_RECORDS:core::sync::atomic::AtomicU32=core::sync::atomic::AtomicU32::new(0);#[macro_export]macro_rules! serial_record { ($fmt:literal $(,$arg:expr)* $(,)?) => {{let _=format_args!($fmt $(,$arg)*);if $fmt.starts_with("[moan.role.started]"){crate::START_RECORDS.fetch_add(1,core::sync::atomic::Ordering::SeqCst);}}}; }\n'
    text+=r'''
 use core::sync::atomic::{AtomicBool,AtomicU32,Ordering};use restricted_helper::Subject;use restricted_coordinator::Platform;
 const SLOT_DISPLAY:u64=5;const SLOT_BELL:u64=12;mod web{pub const SHELL_SLOT:u64=262;}mod package{pub const GRANT_TOKEN:&[u8]=b"+pkg";}
@@ -69,6 +69,7 @@ use super::*;use core::sync::atomic::Ordering;
  crate::PARENT.store(99,Ordering::SeqCst);let start=job::start_words(7,9,1,1).unwrap();assert!(receive(&crate::PdxMessage{type_id:job::OP_START,caller_pd:42,caller_task:99,arg0:start[0],arg1:start[1],arg2:start[2]}));assert!(busy());poll();assert_eq!(crate::SENT.load(Ordering::SeqCst),1);
  for (pd,value)in [(11,0xf5u64<<56|1<<32),(1,0x5343_0000_0000_0001),(10,0),(10,0x4du64<<56)]{assert!(!receive(&crate::PdxMessage{type_id:1,caller_pd:pd,caller_task:pd,arg0:value,arg1:0,arg2:0}));assert!(busy());}
  retire(Subject{pd:42,task:99});assert!(!pending());
+ crate::FULL.store(true,Ordering::SeqCst);assert!(!kernel.started(Subject{pd:42,task:99},9,known));assert_eq!(crate::START_RECORDS.load(Ordering::SeqCst),0);crate::FULL.store(false,Ordering::SeqCst);assert!(kernel.started(Subject{pd:42,task:99},9,known));assert_eq!(crate::START_RECORDS.load(Ordering::SeqCst),1);
 }
 }
 }
