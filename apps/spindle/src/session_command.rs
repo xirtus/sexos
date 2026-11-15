@@ -56,6 +56,10 @@ pub struct Session {
     retries: u8,
     queued: [([u8; QUEUED_MAX], usize); QUEUE],
     queued_len: usize,
+    /// Programs the person ran before the session came back: restore does not open them again.
+    typed: [Option<Line>; QUEUE],
+    /// The run being submitted is a restored one.
+    restoring: bool,
 }
 pub static mut SESSION: Session = Session::new();
 
@@ -68,7 +72,7 @@ fn region() -> Option<&'static mut [u8]> {
 impl Session {
     pub const fn new() -> Self {
         Self { on: false, submitted: None, asked: [None; 4], runs: [None; r::MAX_RUNS], dirty: false, changed_at: 0, io: Io::Idle, seq: 0x7A0000, sent_at: 0, len: 0,
-            restore: Restore::NotYet, text: [0; FILE_MAX], text_len: 0, next: 0, waiting: None, retries: 0, queued: [([0; QUEUED_MAX], 0); QUEUE], queued_len: 0 }
+            restore: Restore::NotYet, text: [0; FILE_MAX], text_len: 0, next: 0, waiting: None, retries: 0, queued: [([0; QUEUED_MAX], 0); QUEUE], queued_len: 0, typed: [None; QUEUE], restoring: false }
     }
     /// The boot terminal keeps the session; a later one, or one started again late, does not restore.
     pub fn init(&mut self, me: u32) {
@@ -102,6 +106,10 @@ impl Session {
     pub fn submitted(&mut self, path: &[u8], args: &[u8], flags: u64) {
         if !self.on { return; }
         self.submitted = Line::new(path, args, flags & sex_pdx::program_store::RUN_NETWORK != 0, r::scene_of(flags).unwrap_or(0));
+        // The person's own run while the session is still to come: that program is open now.
+        if !self.restoring && self.restore != Restore::Done {
+            if let Some(at) = self.typed.iter().position(|t| t.is_none()) { self.typed[at] = self.submitted; }
+        }
     }
     /// Files gave that run this ticket and Shell was asked for it.
     pub fn asked(&mut self, ticket: u32) {
@@ -197,7 +205,8 @@ impl Session {
             if now.saturating_sub(at) < 20_000 { return false; }
             self.waiting = None;
         }
-        if !idle || self.submitted.is_some() { return false; }
+        // What the person typed while the session file was read goes first.
+        if !idle || self.submitted.is_some() || self.queued_len > 0 { return false; }
         // A refused run waits a little before it tries again.
         if self.retries > 0 && now.saturating_sub(self.sent_at) < 2_000 { return false; }
         while self.next < self.text_len {
@@ -205,11 +214,17 @@ impl Session {
             let line = &self.text[self.next..end];
             self.next = end + 1;
             let Some(e) = r::Entry::decode(line) else { continue };
+            if self.typed.iter().flatten().any(|t| &t.path[..t.path_len] == e.path) {
+                sex_pdx::serial_record!("[spindle.session.restore.skipped] path={} why=opened", core::str::from_utf8(e.path).unwrap_or("?"));
+                continue;
+            }
             // The grant Spindle itself gave the run (`+pkg`, or a terminal's right to start programs).
             let grant: &[u8] = [sex_pdx::package::GRANT_TOKEN, sex_pdx::console_relay::GRANT_TOKEN].into_iter().find(|g| e.args.split(|b| *b == b' ').any(|t| t == *g)).unwrap_or(b"");
             let flags = r::scene_flags(e.scene) | if e.network { sex_pdx::program_store::RUN_NETWORK } else { 0 };
             sex_pdx::serial_record!("[spindle.session.restore] scene={} path={}", e.scene, core::str::from_utf8(e.path).unwrap_or("?"));
+            self.restoring = true;
             unsafe { crate::fs_commands::FS.submit_program_granted(e.path, e.args, flags, 0, grant, sb); }
+            self.restoring = false;
             self.waiting = Some(now);
             self.sent_at = now;
             return true;
