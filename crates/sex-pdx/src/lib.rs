@@ -1286,6 +1286,7 @@ pub mod usb_disk;
 pub mod usb_net;
 pub mod bt_hci;
 pub mod bt_bonds;
+pub mod bt_audio;
 pub mod network_config;
 
 pub mod desktop_style;
@@ -1302,6 +1303,7 @@ pub mod tray;
 pub mod window_motion;
 pub mod launch;
 pub mod dnd;
+pub mod program_clipboard;
 pub mod session_restore;
 pub mod document_view;
 

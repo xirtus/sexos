@@ -147,11 +147,18 @@ impl Doc {
 
 /// One script of a page, ready to run.
 /// A script to run; `node` is its element, for `document.currentScript` (classic scripts only).
+/// Most bytecode the browser keeps for pages it may open again (GitHub's modules
+/// take about 10 MiB).
+const CODE_CACHE_BYTES: usize = 48 << 20;
+
 struct PageScript { source: String, name: String, module: bool, node: Option<usize>, external: bool }
 
 struct Browser {
     #[cfg(feature = "baseline-jit")]
     jit_enabled: bool,
+    /// Compiled scripts and modules, shared by every page and frame this session
+    /// (sex_js::CodeCache): a site's libraries are parsed once, not on each page.
+    code_cache: alloc::rc::Rc<core::cell::RefCell<sex_js::CodeCache>>,
     window: Window,
     /// Physical pixels within this window's held grant; never swapped into an iframe.
     surface: viewport::Surface,
@@ -882,6 +889,7 @@ impl Browser {
     fn run_scripts(&mut self, scripts: Vec<PageScript>) {
         let Doc::Plain(mut doc) = core::mem::replace(&mut self.doc, Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", self.view, clock))) else { return };
         doc.import_map = core::mem::take(&mut self.import_map);
+        doc.code_cache = Some(self.code_cache.clone());
         let started = sex_pdx::get_ticks();
         let mut script = match Script::new(doc, sex_js::Limits::default()) {
             Ok(s) => s,
@@ -1648,7 +1656,7 @@ impl Browser {
         if y >= 0 && self.in_frame.is_none() {
             if let Some(i) = self.frames.iter().position(|f| self.doc.get().accepts_pointer(f.node) && px >= f.rect[0] && px < f.rect[0] + f.rect[2] && py >= f.rect[1] && py < f.rect[1] + f.rect[3]) {
                 let [fx, fy, _, _] = self.frames[i].rect;
-                let q = sex_pdx::app_pointer::Pointer { x: (px - fx) as i16, y: (py - fy + BAR) as i16, buttons: p.buttons, kind: p.kind };
+                let q = sex_pdx::app_pointer::Pointer { x: (px - fx) as i16, y: (py - fy + BAR) as i16, buttons: p.buttons, kind: p.kind, mods: p.mods };
                 self.enter(i);
                 self.pointer(q);
                 self.leave(i);
@@ -1811,7 +1819,7 @@ pub extern "C" fn _start() -> ! {
     let view = surface.document(BAR);
     let page = sex_html::render("", view.0, view.1, &fonts as &dyn Host);
     let doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", view, clock));
-    let mut b = Browser { #[cfg(feature = "baseline-jit")] jit_enabled: !given.split_ascii_whitespace().any(|a| a == "--no-jit"), window, surface, reported_size: (width, height), fonts, page, doc, sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), media_asked: false, media_loads: Vec::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None, import_map: Vec::new(), view, parent: None, frames: Vec::new(), in_frame: None, frame_dirty: false, referrer_next: None, nav_from: None, frames_check: false,
+    let mut b = Browser { #[cfg(feature = "baseline-jit")] jit_enabled: !given.split_ascii_whitespace().any(|a| a == "--no-jit"), code_cache: alloc::rc::Rc::new(core::cell::RefCell::new(sex_js::CodeCache::new(CODE_CACHE_BYTES))), window, surface, reported_size: (width, height), fonts, page, doc, sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), media_asked: false, media_loads: Vec::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None, import_map: Vec::new(), view, parent: None, frames: Vec::new(), in_frame: None, frame_dirty: false, referrer_next: None, nav_from: None, frames_check: false,
         tabs: Vec::new(), active: 0, forward: Vec::new(), profile: Default::default(), suggestions: Vec::new(), chosen: None,
         find: None, find_at: 0, marks: Vec::new(), finding: false, laid_zoom: 100, sockets: Vec::new(), downloads: Vec::new(), download_status: None, web_fonts: Vec::new(),
         shields: shields::Shields::empty(), extensions: Default::default(), blocked: 0, next_kind: None };

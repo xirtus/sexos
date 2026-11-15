@@ -5648,6 +5648,7 @@ dependencies = [
  "sex-gl",
  "sex-html",
  "sex-image",
+ "sha2 0.10.9",
  "wasmi",
 ]
 

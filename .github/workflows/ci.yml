@@ -223,7 +223,7 @@ jobs:
   boot:
     name: Build, boot and runtime gates
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 75
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
@@ -307,42 +307,6 @@ jobs:
       run: |
         truncate -s 1G "$RUNNER_TEMP/capture-source.img"
         python3 scripts/desktop_capture_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/capture-source.img" --out "$RUNNER_TEMP/sexos-runtime/capture"
-    - name: Settings last across a restart
-      run: |
-        truncate -s 1G "$RUNNER_TEMP/settings-source.img"
-        python3 scripts/settings_persist_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/settings-source.img" --out "$RUNNER_TEMP/sexos-runtime/settings"
-    - name: Alt+Tab window switcher with live thumbnails
-      run: |
-        truncate -s 256M "$RUNNER_TEMP/switcher-source.img"
-        python3 scripts/window_switcher_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/switcher-source.img" --out "$RUNNER_TEMP/sexos-runtime/switcher"
-    - name: Clipboard history on Super+V
-      run: |
-        truncate -s 256M "$RUNNER_TEMP/cliphist-source.img"
-        python3 scripts/clipboard_history_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/cliphist-source.img" --out "$RUNNER_TEMP/sexos-runtime/clipboard-history"
-    - name: Screenshot UI on Print
-      run: |
-        truncate -s 256M "$RUNNER_TEMP/screenshot-source.img"
-        python3 scripts/screenshot_ui_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/screenshot-source.img" --out "$RUNNER_TEMP/sexos-runtime/screenshot-ui"
-    - name: Panel tray and calendar
-      run: |
-        truncate -s 256M "$RUNNER_TEMP/tray-source.img"
-        python3 scripts/tray_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/tray-source.img" --out "$RUNNER_TEMP/sexos-runtime/tray"
-    - name: Window animations
-      run: |
-        truncate -s 256M "$RUNNER_TEMP/motion-source.img"
-        python3 scripts/window_motion_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/motion-source.img" --out "$RUNNER_TEMP/sexos-runtime/motion"
-    - name: Programs starting programs
-      run: |
-        truncate -s 256M "$RUNNER_TEMP/launch-source.img"
-        python3 scripts/shuttle_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/launch-source.img" --out "$RUNNER_TEMP/sexos-runtime/launch"
-    - name: Session restore across a restart
-      run: |
-        truncate -s 256M "$RUNNER_TEMP/session-source.img"
-        python3 scripts/session_restore_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/session-source.img" --out "$RUNNER_TEMP/sexos-runtime/session"
-    - name: Drag and drop between programs
-      run: |
-        truncate -s 256M "$RUNNER_TEMP/dnd-source.img"
-        python3 scripts/drag_drop_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/dnd-source.img" --out "$RUNNER_TEMP/sexos-runtime/dnd"
     - name: USB input paths
       run: GATE_DIR="$RUNNER_TEMP/sexos-usb" SKIP_BUILD=1 bash scripts/usb_path_gate.sh
     - name: Preserve runtime evidence
@@ -637,9 +601,70 @@ jobs:
           ${{ runner.temp }}/places-build.log
         if-no-files-found: ignore
 
+  desktop:
+    name: Desktop shell
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+    - uses: actions/checkout@v4
+    - uses: ./.github/actions/setup
+    - name: Install image tools for gates
+      run: |
+        sudo apt-get update -qq
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends python3-pil
+    - name: Build the image
+      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/desktop-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/desktop-build.log"; exit 1)
+    - name: Settings last across a restart
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/settings-source.img"
+        python3 scripts/settings_persist_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/settings-source.img" --out "$RUNNER_TEMP/sexos-desktop/settings"
+    - name: Alt+Tab window switcher with live thumbnails
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/switcher-source.img"
+        python3 scripts/window_switcher_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/switcher-source.img" --out "$RUNNER_TEMP/sexos-desktop/switcher"
+    - name: Clipboard history on Super+V
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/cliphist-source.img"
+        python3 scripts/clipboard_history_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/cliphist-source.img" --out "$RUNNER_TEMP/sexos-desktop/clipboard-history"
+    - name: Screenshot UI on Print
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/screenshot-source.img"
+        python3 scripts/screenshot_ui_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/screenshot-source.img" --out "$RUNNER_TEMP/sexos-desktop/screenshot-ui"
+    - name: Panel tray and calendar
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/tray-source.img"
+        python3 scripts/tray_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/tray-source.img" --out "$RUNNER_TEMP/sexos-desktop/tray"
+    - name: Window animations
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/motion-source.img"
+        python3 scripts/window_motion_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/motion-source.img" --out "$RUNNER_TEMP/sexos-desktop/motion"
+    - name: Programs starting programs
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/launch-source.img"
+        python3 scripts/shuttle_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/launch-source.img" --out "$RUNNER_TEMP/sexos-desktop/launch"
+    - name: Session restore across a restart
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/session-source.img"
+        python3 scripts/session_restore_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/session-source.img" --out "$RUNNER_TEMP/sexos-desktop/session"
+    - name: Drag and drop between programs
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/dnd-source.img"
+        python3 scripts/drag_drop_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/dnd-source.img" --out "$RUNNER_TEMP/sexos-desktop/dnd"
+    - name: Copy and paste between programs, Shift- and Alt-click
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/clip-source.img"
+        python3 scripts/program_clipboard_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/clip-source.img" --out "$RUNNER_TEMP/sexos-desktop/clip"
+    - name: Preserve desktop evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sexos-desktop-proof
+        path: ${{ runner.temp }}/sexos-desktop
+        if-no-files-found: ignore
+
   build:
     if: always()
-    needs: [host, truth, boot, devices, programs, media, editor, profiles, js-jit, recording, productivity, terminal-editor, documents-pictures, reading, places]
+    needs: [host, truth, boot, desktop, devices, programs, media, editor, profiles, js-jit, recording, productivity, terminal-editor, documents-pictures, reading, places]
     runs-on: ubuntu-latest
     steps:
     - run: |
