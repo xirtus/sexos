@@ -589,6 +589,7 @@ scanner transports only, with the USB owner).
 | W1 | **Cufflinks** Bluetooth: native USB HCI transport in sexusb, Intel firmware load (AX201 on the x17, firmware table row), host stack in a ring-3 server (no BlueZ); scanning and pairing | host: HCI event goldens; x17 receipt |
 | W2 | Cufflinks: HID (keyboards, mice) and BLE | x17 receipt |
 | W3 | Cufflinks: A2DP audio (SBC, AAC via FFmpeg) into Bell; tray and Tatami page | x17 receipt; host: SBC goldens |
+| W3b | Cufflinks: AVRCP: headset play/pause/next/previous as the desktop's media keys (we are target), absolute volume mirrored with Bell's master volume (we are controller); `CUFFLINKS_BLUETOOTH_2026_11_14.md` section 19 | host: `avrcp_peers.rs` (buttons, volume both ways, unencrypted ignored, hostile and random frames); x17 receipt |
 | W4 | **Needle** driverless printing: IPP Everywhere and AirPrint discovery (mDNS), PWG raster/PDF jobs, queue UI; no CUPS | gate: ipp-everywhere test printer receives the job |
 | W5 | Needle scanning: eSCL/AirScan driverless scanners | gate: eSCL fixture returns a page |
 | W6 | **Lurk** remote desktop: VNC client and server (RFB), RDP client later; screen and input grants | gate: VNC client views the QEMU host test server |

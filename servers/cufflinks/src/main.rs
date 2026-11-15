@@ -20,6 +20,10 @@
 //! W3: headphones (A2DP Source, SBC): Bell's mix comes through the `bt_audio` region
 //! shared with Bell and goes to the headset (`audio.rs`).
 //!
+//! W3b: the headset's buttons and volume (AVRCP): its buttons go through the HID
+//! mailbox as media keys, its absolute volume follows Bell's master volume both ways
+//! (`remote.rs`).
+//!
 //! BOOT starts it as domain `bt_hci::CUFFLINKS_PD` (Senses organ) with the HCI region
 //! shared with SexUSB, the firmware pack and a route to Files. With no controller it
 //! logs `[cufflinks.idle] controller=none` and sleeps in `sys_wait_self` until SexUSB
@@ -30,11 +34,13 @@ extern crate alloc;
 
 mod audio;
 mod pairing;
+mod remote;
 mod store;
 mod ui;
 
 use alloc::boxed::Box;
 use sex_bt::hci::{self, Addr, Event};
+use sex_bt::avrcp::Key;
 use sex_bt::hid::Input;
 use sex_bt::host::{Host, Note};
 use sex_bt::intel::{self, Loader, Outcome};
@@ -208,6 +214,41 @@ impl HidDevices {
     fn count(&self) -> u32 { self.slots.iter().filter(|s| s.is_some()).count() as u32 }
 }
 
+/// A headset's AVRCP buttons count as one more keyboard, numbered apart from a HID
+/// device on the same link (handles are 12 bits).
+const REMOTE_DEVICE: u16 = 0x8000;
+
+fn usage(key: Key) -> u8 {
+    match key {
+        Key::PlayPause => remote::PLAY_PAUSE, Key::Stop => remote::STOP, Key::Next => remote::NEXT, Key::Previous => remote::PREVIOUS,
+        Key::VolumeUp => remote::VOLUME_UP, Key::VolumeDown => remote::VOLUME_DOWN, Key::Mute => remote::MUTE,
+    }
+}
+
+/// Carry out what `remote.rs` decided for the headset on `handle`.
+fn remote_do(ring: &Shared, h: &mut Host, hid: &HidDevices, handle: u16, d: Option<remote::Do>) {
+    let Some(d) = d else { return };
+    let device = hid.id(handle | REMOTE_DEVICE);
+    match d {
+        remote::Do::Keys(keys) => if let Some(device) = device { push_input(ring, HidInput::Keys { device, modifiers: 0, keys }); },
+        remote::Do::Tap(u) => if let Some(device) = device {
+            log!("[cufflinks.remote.volume] handle={:#06x} key={:#04x}", handle, u);
+            push_input(ring, HidInput::Keys { device, modifiers: 0, keys: u as u64 });
+            push_input(ring, HidInput::Keys { device, modifiers: 0, keys: 0 });
+        },
+        remote::Do::SetVolume(v) => { log!("[cufflinks.remote.volume] handle={:#06x} set={}", handle, v); h.set_remote_volume(handle, v); }
+    }
+}
+
+/// The headset's AVRCP went (or its link): let go of its keys and its device number.
+fn remote_gone(ring: &Shared, hid: &mut HidDevices, buttons: &mut remote::Remote, handle: u16) {
+    buttons.gone(handle);
+    if let Some(device) = hid.remove(handle | REMOTE_DEVICE) {
+        push_input(ring, HidInput::Gone { device });
+        ring.set_hid_links(hid.count());
+    }
+}
+
 fn push_input(ring: &Shared, input: HidInput) {
     // SexUSB drains the mailbox every pass while HID links are up; wait briefly if full.
     for _ in 0..100 { if ring.hid_push(input) { return; } let _ = sex_pdx::sys_wait_self_ticks(1); }
@@ -244,6 +285,9 @@ fn run_host(ring: &Shared, generation: u32, packet: &mut [u8], desk: &mut ui::De
     let mut requests = Requests::new();
     ring.set_hid_links(0);
     let mut sound = audio::Audio::new();
+    let mut buttons = remote::Remote::new();
+    // Whether the headset applies the master volume itself, as last told to Bell.
+    let mut headset_volume = false;
     // Classic links from bonded devices that may be headsets: if one opens AVDTP but
     // sets no stream up within two seconds, we do (handle, since).
     // (handle, since, signaling open): the 2 s setup window starts when AVDTP signaling opens.
@@ -368,6 +412,7 @@ fn run_host(ring: &Shared, generation: u32, packet: &mut [u8], desk: &mut ui::De
                 Note::Disconnected { handle, reason } => {
                     log!("[cufflinks.disconnected] handle={:#06x} reason={:#04x}", handle, reason);
                     sound.gone(handle);
+                    remote_gone(ring, &mut hid, &mut buttons, handle);
                     quiet.retain(|q| q.0 != handle);
                     if let Some(at) = links.iter().position(|l| l.0 == handle) {
                         let a = links.remove(at).1;
@@ -470,6 +515,24 @@ fn run_host(ring: &Shared, generation: u32, packet: &mut [u8], desk: &mut ui::De
                         if requests.done(&a.0) { desk.outcome(a.0, false, code as u8); }
                     }
                 }
+                Note::RemoteReady { handle, addr } => {
+                    let followed = buttons.ready(handle);
+                    let device = if followed { hid.add(handle | REMOTE_DEVICE) } else { None };
+                    ring.set_hid_links(hid.count());
+                    log!("[cufflinks.remote] addr={} handle={:#06x} device={} followed={}", addr, handle, device.unwrap_or(0), followed as u8);
+                }
+                Note::RemoteKey { handle, key, pressed } => {
+                    log!("[cufflinks.remote.key] handle={:#06x} key={:?} pressed={}", handle, key, pressed as u8);
+                    let d = buttons.key(handle, usage(key), pressed, now);
+                    remote_do(ring, &mut h, &hid, handle, d);
+                }
+                Note::RemoteVolume { handle, volume, changed } => {
+                    log!("[cufflinks.remote.volume] handle={:#06x} headset={} changed={}", handle, volume, changed as u8);
+                    let d = buttons.volume(handle, volume, changed, sound.master());
+                    remote_do(ring, &mut h, &hid, handle, d);
+                }
+                Note::RemoteNoVolume { handle } => { log!("[cufflinks.remote.volume] handle={:#06x} absolute=0", handle); buttons.no_volume(handle); }
+                Note::RemoteClosed { handle } => { log!("[cufflinks.remote.closed] handle={:#06x}", handle); remote_gone(ring, &mut hid, &mut buttons, handle); }
                 Note::Input { handle, input } => {
                     let Some(device) = hid.id(handle) else { continue };
                     push_input(ring, match input {
@@ -510,10 +573,20 @@ fn run_host(ring: &Shared, generation: u32, packet: &mut [u8], desk: &mut ui::De
             }
             false
         });
+        if let Some(handle) = buttons.handle {
+            let d = buttons.tick(now, sound.master());
+            if d.is_some() { moved = true; }
+            remote_do(ring, &mut h, &hid, handle, d);
+        }
+        // Bell leaves the master volume out only while the headset streaming is the
+        // one applying it.
+        let applies = buttons.absolute && buttons.handle.is_some() && buttons.handle == sound.handle();
+        if applies != headset_volume { headset_volume = applies; sound.headset_volume(applies); }
         if sound.pump(&mut h, now) { moved = true; }
         if !moved { serve(); let _ = sex_pdx::sys_wait_self_ticks(1); }
     }
     if let Some(handle) = sound.handle() { sound.gone(handle); }
+    sound.headset_volume(false);
     for device in 1..=8 { if hid.slots[device as usize - 1].is_some() { push_input(ring, HidInput::Gone { device }); } }
     ring.set_hid_links(0);
     log!("[cufflinks.gone] generation={}", generation);
