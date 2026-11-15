@@ -34,7 +34,7 @@ fn waveform_contains_actual_audio_selection_and_playhead_pixels() {
     let (ui, s) = studio();
     let (height, pixels) = waveform::render(&s.session, View::default());
     assert_eq!(height, waveform::HEADER + waveform::ROW);
-    assert!(pixels.contains(&(((0x63D4CD & 0xFEFEFE) >> 1) + 0x263A3C)));
+    assert!(pixels.contains(&moan::track_colors::selection(0x97b7ff)));
     assert!(pixels.contains(&0xFFCC66));
     assert!(pixels.iter().any(|c| *c != pixels[0]));
     drop(ui);
@@ -291,7 +291,7 @@ fn stereo_opposite_polarity_waveform_is_not_mistaken_for_silence() {
     s.from = 0;
     s.to = 0;
     let (_, pixels) = waveform::render(&s, View::default());
-    assert!(pixels.contains(&0x63D4CD));
+    assert!(pixels.contains(&0x97b7ff));
 }
 
 #[test]

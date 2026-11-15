@@ -10,6 +10,7 @@ pub mod project;
 #[cfg(feature = "sexos")]
 pub mod project_io;
 pub mod step;
+pub mod track_colors;
 pub mod waveform;
 use alloc::{format, sync::Arc, vec, vec::Vec};
 use moan_core::{Clip, Frame, Track, RATE};
@@ -602,6 +603,7 @@ pub struct Studio {
     step_velocity: Id,
     note_gate: u8,
     track_buttons: Vec<Id>,
+    track_rows: Vec<Id>,
     mixer_strips: Vec<Id>,
     workspace: Workspace,
     library_open: bool,
@@ -822,17 +824,33 @@ impl Studio {
         let ruler = ui.text(track_headers, "TRACK / REGION", TextStyle::Caption);
         ui.set_layout(ruler, Layout::default().height(waveform::HEADER as f32));
         let mut track_buttons = Vec::new();
-        for _ in 0..MAX_TRACKS {
-            let id = ui.button(track_headers, "");
+        let mut track_rows = Vec::new();
+        for index in 0..MAX_TRACKS {
+            let row = ui.group(
+                track_headers,
+                Layout::row().gap(0.0).fill_width()
+                    .height(waveform::ROW as f32).shrink(0.0),
+            );
+            let swatch = ui.image(
+                row, 5, waveform::ROW,
+                vec![track_colors::accent(index); 5 * waveform::ROW],
+            );
+            ui.set_layout(
+                swatch,
+                Layout::default().width(5.0).height(waveform::ROW as f32).shrink(0.0),
+            );
+            ui.set_label(swatch, &format!("Track {} color", index + 1));
+            let id = ui.button(row, "");
             ui.set_layout(
                 id,
                 Layout::default()
-                    .fill_width()
+                    .width(137.0)
                     .height(waveform::ROW as f32)
                     .shrink(0.0),
             );
-            ui.set_visible(id, false);
+            ui.set_visible(row, false);
             track_buttons.push(id);
+            track_rows.push(row);
         }
         let (height, pixels) = waveform::render(&Session::default(), waveform::View::default());
         let waveform = ui.image(lanes, waveform::WIDTH, height, pixels);
@@ -1066,6 +1084,7 @@ impl Studio {
             step_velocity,
             note_gate: 75,
             track_buttons,
+            track_rows,
             mixer_strips,
             workspace: Workspace::Arrange,
             library_open: true,
@@ -1652,7 +1671,7 @@ impl Studio {
         for i in 0..MAX_TRACKS {
             Self::visible_layout(
                 ui,
-                self.track_buttons[i],
+                self.track_rows[i],
                 i < self.session.tracks.len(),
                 Layout::default()
                     .fill_width()
@@ -1677,9 +1696,7 @@ impl Studio {
                 ui.set_text(self.meter_names[i], &format!("{} {}", i + 1, name));
                 ui.set_color(
                     self.meter_names[i],
-                    Some(weft::Color::hex(
-                        [0x72d6b5, 0xb29ae3, 0xe4b579, 0x82c5eb][i % 4],
-                    )),
+                    Some(track_colors::label(i, ui.theme().palette.control)),
                 );
                 ui.set_value(self.mixer_volume[i], track.volume() as f32);
                 ui.set_value(self.mixer_pan[i], track.pan() as f32);
