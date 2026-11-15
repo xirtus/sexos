@@ -434,7 +434,7 @@ fn decode_jpeg(bytes: &[u8]) -> Result<(u32, u32, usize, Vec<u8>), String> {
 }
 
 /// Encode a linear-light image as an 8-bit sRGB RGBA PNG.
-pub(crate) fn encode_png(img: &Image) -> Vec<u8> {
+pub fn encode_png(img: &Image) -> Vec<u8> {
     let mut data = Vec::with_capacity(img.pixels.len() * 4);
     for p in &img.pixels {
         let e = |c: f32| (linear_to_srgb(c) * 255.0 + 0.5) as u8;
