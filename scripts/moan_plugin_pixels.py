@@ -7,8 +7,8 @@ def expected_status(mode):
     if mode in (0,6):return 'CLAP stereo swap verified'
     if mode in (1,2,5):return 'Child failed or cancelled; parent remains alive'
     raise ValueError('unknown qualification mode')
-def model_view(trace,parent,task,surface,viewport,expected,after=0):
-    candidates=[m for m in PAINT.finditer(trace,after)if tuple(map(int,m.groups()[:3]))==(parent,task,surface)]
+def model_view(trace,parent,task,surface,viewport,expected,after=0,pattern=PAINT):
+    candidates=[m for m in pattern.finditer(trace,after)if tuple(map(int,m.groups()[:3]))==(parent,task,surface)]
     if not candidates:raise ValueError('missing actual visible-node paint receipt')
     m=candidates[-1];frame,width,height,x,y,w,h=map(int,m.groups()[3:10]);text=bytes.fromhex(m[12]).decode('utf8')
     if text!=expected:raise ValueError('actual visible label differs from expected status')
