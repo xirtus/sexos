@@ -101,6 +101,26 @@ impl Provider {
             || self.effect.is_some()
             || self.committed.iter().any(|job| job.is_some())
     }
+    /// Fully echoed pre-Bind scope for Files' trusted-image copy. This is not
+    /// positive job authority: all hashes must match a privately claimed job,
+    /// and later Bind/Seal/committed lease are still mandatory for data access.
+    pub fn staging(&self, now: u64) -> Option<Binding> {
+        if self.ledger.all_denied()
+            || self.deadline == 0
+            || now >= self.deadline
+            || self.effect.is_some()
+            || self.reply.is_some()
+            || !self.credits.as_ref().is_some_and(|c| c.complete())
+            || !self.last.is_some_and(|p| p.phase == w::Phase::InputHashHi)
+        {
+            return None;
+        }
+        let transcript = self.transcript.as_ref()?;
+        if transcript.poisoned() {
+            return None;
+        }
+        transcript.binding()
+    }
     pub fn binding(&self) -> Option<Binding> {
         if !self.sealed() {
             return None;

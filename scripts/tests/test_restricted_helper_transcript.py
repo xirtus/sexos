@@ -88,6 +88,12 @@ impl provider::Platform for Fake {
 }
 fn fake()->Fake{Fake{epoch:1,now:0,full:false,keep:true,replies:Vec::new()}}
 fn message(packet:Packet)->provider::Message{provider::Message{caller:subject(3,3),opcode:OP_POLICY,words:packet.wire().unwrap()}}
+#[test]fn staging_requires_all_hash_credits_and_rejects_expiry_or_bind(){
+ let page=journal::Journal::new();let mut p=fake();let mut state=provider::Provider::new();state.initialize(&page,&mut p);
+ for packet in packets().into_iter().take(9){state.message(message(packet),&page,&mut p);assert!(state.staging(p.now).is_none());credits(&mut state,&page,&mut p,packet);if packet.phase!=Phase::InputHashHi{assert!(state.staging(p.now).is_none());}}
+ let b=state.staging(p.now).unwrap();assert_eq!(b.plugin_hash,[12,13,14,15]);assert_eq!(b.input_hash,[16,17,18,19]);assert_eq!(b.child,subject(0,0));assert_eq!(b.ticket,0);assert!(state.staging(provider::TRANSCRIPT_TICKS).is_none());
+ p.now=1;state.message(message(packets()[9]),&page,&mut p);assert!(state.staging(p.now).is_none());
+}
 fn credits(state:&mut provider::Provider,page:&journal::Journal,p:&mut Fake,packet:Packet){
  let phase=packet.wire().unwrap()[0];state.poll(p,|_|true);assert_eq!(p.replies.pop(),Some(phase));
  for selector in 1..=if packet.phase==Phase::Quarantine{4}else{2}{

@@ -55,7 +55,15 @@ impl Platform for Kernel {
 pub fn initialize() {
     Turn::enter().state().initialize(&JOURNAL, &mut Kernel)
 }
-pub fn job_live(binding:sex_pdx::restricted_helper::Binding,now:u64)->bool { Turn::enter().state().job_live(binding,now) }
+pub fn staging() -> Option<sex_pdx::restricted_helper::Binding> {
+    let now = sex_pdx::get_ticks();
+    let epoch = sex_pdx::crash_log::self_epoch().ok()?;
+    let b = Turn::enter().state().staging(now)?;
+    (b.provider_epoch == epoch).then_some(b)
+}
+pub fn job_live(binding: sex_pdx::restricted_helper::Binding, now: u64) -> bool {
+    Turn::enter().state().job_live(binding, now)
+}
 pub fn pending() -> bool {
     Turn::enter().state().pending()
 }
