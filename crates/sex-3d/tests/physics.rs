@@ -624,3 +624,98 @@ fn simulations_run_in_reasonable_time() {
     assert!(smoke_t.as_secs_f32() < 20.0);
 }
 
+
+// --- Rendering ---------------------------------------------------------------
+
+use sex_3d::math::Mat4;
+use sex_3d::render::{self, LightPaths, RenderSettings};
+use sex_3d::scene::{Camera, Image, Transform};
+
+fn look(s: &mut Scene, eye: Vec3, target: Vec3) {
+    let mut o = Object::new("Camera", ObjectData::Camera(Camera { fov_y: 0.7, ..Camera::default() }));
+    o.transform = Transform::from_matrix(&Mat4::look_at(eye, target, Vec3::Z).inverse());
+    let c = s.add_object(o);
+    s.active_camera = Some(c);
+}
+
+fn rs(w: u32, spp: u32) -> RenderSettings {
+    RenderSettings { width: w, height: w, samples: spp, max_bounces: 2, clamp: 0.0, light_paths: LightPaths::unlimited(), ..RenderSettings::default() }
+}
+
+fn centre(img: &Image) -> [f32; 4] {
+    let (w, h) = (img.width, img.height);
+    let mut acc = [0.0f32; 4];
+    let mut n = 0.0;
+    for y in h / 2 - 2..h / 2 + 2 {
+        for x in w / 2 - 2..w / 2 + 2 {
+            let p = img.pixels[(y * w + x) as usize];
+            for c in 0..4 {
+                acc[c] += p[c];
+            }
+            n += 1.0;
+        }
+    }
+    acc.map(|v| v / n)
+}
+
+#[test]
+fn smoke_renders_as_a_heterogeneous_volume() {
+    let (mut s, _) = smoke_scene(1.0);
+    s.world.color = Vec3::splat(1.0);
+    look(&mut s, Vec3::new(0.0, -7.0, 0.0), Vec3::ZERO);
+    let fl = s.objects.iter().position(|o| o.name == "Flow").unwrap();
+    s.objects[fl].visible = false;
+    // Before any smoke the domain box is invisible.
+    s.frame_current = 0;
+    let empty = render::render(&s, &rs(24, 8)).color;
+    assert!((centre(&empty)[0] - 1.0).abs() < 0.02, "empty domain: {:?}", centre(&empty));
+    play(&mut s, 20);
+    let smoky = render::render(&s, &rs(24, 32)).color;
+    let c = centre(&smoky)[0];
+    assert!(c < 0.97, "smoke should dim the background: {c}");
+    // The top corner of the domain, where no smoke is, stays clear.
+    let corner = smoky.pixels[(3 * 24 + 3) as usize][0];
+    assert!(corner > c, "corner {corner} vs centre {c}");
+}
+
+#[test]
+fn particles_render_as_object_instances_and_hair() {
+    let mut s = Scene::new();
+    s.world.color = Vec3::splat(1.0);
+    let e = s.add_mesh_object("Emitter", primitives::plane(2.0));
+    let ico = s.add_mesh_object("Ico", primitives::ico_sphere(1, 1.0));
+    s.objects[ico].transform.location = Vec3::new(30.0, 0.0, 0.0);
+    let mut sys = ParticleSystem::default();
+    sys.settings.count = 30;
+    sys.settings.frame_start = 1.0;
+    sys.settings.frame_end = 2.0;
+    sys.settings.lifetime = 100.0;
+    sys.settings.physics_type = ParticlePhysics::None;
+    sys.settings.render_type = RenderType::Object;
+    sys.settings.instance_object = "Ico".into();
+    sys.settings.particle_size = 0.2;
+    sys.settings.use_render_emitter = false;
+    s.objects[e].modifiers.push(Modifier::Physics(PhysicsModifier::ParticleSystem(Box::new(sys))));
+    look(&mut s, Vec3::new(0.0, 0.0, 8.0), Vec3::ZERO);
+    let s_cam = s.active_camera.unwrap();
+    s.objects[s_cam].transform = Transform::from_matrix(&Mat4::look_at(Vec3::new(0.0, 0.0, 8.0), Vec3::ZERO, Vec3::Y).inverse());
+    play(&mut s, 3);
+    let img = render::render(&s, &rs(32, 4)).color;
+    let dark = img.pixels.iter().filter(|p| p[0] < 0.9).count();
+    assert!(dark > 10, "instances should show: {dark} dark pixels");
+    // Without instances and with the emitter hidden the view is clear.
+    if let Modifier::Physics(PhysicsModifier::ParticleSystem(p)) = &mut s.objects[e].modifiers[0] {
+        p.settings.render_type = RenderType::None;
+    }
+    let clear = render::render(&s, &rs(32, 4)).color;
+    assert!(clear.pixels.iter().all(|p| p[0] > 0.95), "emitter should be hidden");
+    // Hair renders as tubes.
+    let mut h = ParticleSystem::default();
+    h.settings = ParticleSettings::hair();
+    h.settings.count = 400;
+    h.settings.radius_scale = 0.05;
+    s.objects[e].modifiers.push(Modifier::Physics(PhysicsModifier::ParticleSystem(Box::new(h))));
+    let hair = render::render(&s, &rs(32, 4)).color;
+    let dark = hair.pixels.iter().filter(|p| p[0] < 0.9).count();
+    assert!(dark > 20, "hair should show: {dark}");
+}

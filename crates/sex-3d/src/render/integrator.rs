@@ -269,7 +269,12 @@ pub(crate) fn trace(scene: &PreparedScene, ray: &CameraRay, time: f32, rng: &mut
 
         // The medium between here and the hit.
         if let Some(m) = if scene.any_volume { scene.medium(&stack) } else { None } {
-            let le = m.emission_integral(seg);
+            // Smoke grids are heterogeneous; everything else is tracked
+            // as one homogeneous medium.
+            let (le, tracked, m) = match scene.grid_track(&stack, &m, o, d, seg, terminate, rng) {
+                Some(r) => r,
+                None => (m.emission_integral(seg), if terminate { Track::Pass(m.transmittance(seg)) } else { delta_track(&m, seg, rng) }, m),
+            };
             if le != Vec3::ZERO {
                 if depth == 0 {
                     film.camera(beta.mul_elem(le), false);
@@ -277,7 +282,6 @@ pub(crate) fn trace(scene: &PreparedScene, ray: &CameraRay, time: f32, rng: &mut
                     film.add(beta.mul_elem(le), depth, None);
                 }
             }
-            let tracked = if terminate { Track::Pass(m.transmittance(seg)) } else { delta_track(&m, seg, rng) };
             match tracked {
                 Track::Pass(w) => {
                     beta = beta.mul_elem(w);
