@@ -28,6 +28,25 @@ pub struct App {
     pub op_log: Vec<String>,
 }
 
+/// Enter the mode a workspace stands for. Returns true when the mode changed.
+pub fn workspace_mode(doc: &mut Doc, name: &str) -> bool {
+    use crate::doc::Mode;
+    let before = doc.mode;
+    let want = match name {
+        "Sculpting" => Some("SCULPT"),
+        "Texture Paint" => Some("TEXTURE_PAINT"),
+        _ if matches!(doc.mode, Mode::Sculpt | Mode::TexturePaint | Mode::VertexPaint) => Some("OBJECT"),
+        _ => None,
+    };
+    if let Some(m) = want {
+        let mesh = doc.active().is_some_and(|a| matches!(doc.scene.objects[a].data, sex_3d::scene::ObjectData::Mesh(_)));
+        if mesh || m == "OBJECT" {
+            crate::rig::mode_set(doc, m);
+        }
+    }
+    doc.mode != before
+}
+
 impl App {
     pub fn new(width: usize, height: usize) -> App {
         App {
@@ -86,6 +105,7 @@ impl App {
         crate::anim::tick(&mut self.doc);
         let mut input = Some(input);
         let had_popup = self.popup.is_some();
+        let ws_before = self.active_ws;
 
         // 1. An open menu sees everything first.
         if let (Some(pop), Some(inp)) = (&mut self.popup, &input) {
@@ -158,8 +178,10 @@ impl App {
                 self.active_ws = i;
             }
         }
+        // Workspaces carry a mode, like Blender's (Sculpting: Sculpt Mode).
+        let switched = self.active_ws != ws_before && workspace_mode(&mut self.doc, &self.workspaces[self.active_ws].name);
         // Something changed after the widgets drew: draw again so the screen is current.
-        if ran || had_popup != self.popup.is_some() {
+        if ran || switched || had_popup != self.popup.is_some() {
             self.draw(None);
             // A menu an editor asked for while handling ops in that redraw.
             if let Some(p) = self.ui.open_popup.take().or_else(|| self.doc.menu.take()) {

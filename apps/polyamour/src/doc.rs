@@ -206,6 +206,8 @@ pub struct Doc {
     /// Rigging UI state: bone and lattice point selection, active vertex
     /// group and shape key, weight paint brush (rig.rs).
     pub rig: crate::rig::RigState,
+    /// Sculpt, Vertex Paint and Texture Paint settings and sessions (sculpt.rs).
+    pub sculpt: crate::sculpt::SculptState,
     /// Render, output, unit and colour-management settings and per-object
     /// flags the scene itself has no field for (Properties and Outliner).
     pub settings: crate::settings::Settings,
@@ -280,6 +282,7 @@ impl Doc {
             anim: Default::default(),
             info: Default::default(),
             rig: Default::default(),
+            sculpt: Default::default(),
             settings: Default::default(),
             cursor: Vec3::ZERO,
             cursor_rotation: Vec3::ZERO,
@@ -301,6 +304,20 @@ impl Doc {
     /// Record an undo step named `label` before changing the scene.
     pub fn push_undo(&mut self, label: &str) {
         self.undo.push(label, &self.scene);
+        self.side_undo.push(self.side());
+        if self.side_undo.len() > self.undo.max_steps {
+            self.side_undo.remove(0);
+        }
+        self.side_redo.clear();
+        self.dirty = true;
+    }
+    /// Record a step made of `changes` (already applied; each holds the
+    /// values from before), e.g. a sculpt stroke: only what it touched.
+    pub fn push_undo_patch(&mut self, label: &str, changes: Vec<sex_3d::undo::Change>) {
+        if changes.is_empty() {
+            return;
+        }
+        self.undo.push_changes(label, changes);
         self.side_undo.push(self.side());
         if self.side_undo.len() > self.undo.max_steps {
             self.side_undo.remove(0);
@@ -367,7 +384,7 @@ impl Doc {
     /// Run an operator by its Blender-style name. Unknown names are reported,
     /// not ignored, so missing features show up in the status bar.
     pub fn run(&mut self, op: &Op) {
-        if crate::rig::run(self, op) || self.run_view3d(op) || crate::edit::run(self, op) || crate::uvedit::run(self, op) || crate::nodetree::run(self, op) {
+        if crate::sculpt::run(self, op) || crate::rig::run(self, op) || self.run_view3d(op) || crate::edit::run(self, op) || crate::uvedit::run(self, op) || crate::nodetree::run(self, op) {
             return;
         }
         let arg = op.arg.as_str();
