@@ -88,6 +88,9 @@ fn firmware_pack() -> Option<&'static [u8]> {
 fn send(ring: &Shared, packet: &[u8], bulk: bool) {
     let mut p = alloc::vec::Vec::from(packet);
     if bulk && p.first() == Some(&hci::COMMAND) { p[0] = bt_hci::COMMAND_BULK; }
+    // A packet the ring can never take would wait forever: drop it (the host caps ACL
+    // data at sex_bt::host::MAX_ACL_DATA, so this is only a guard).
+    if p.len() < 2 || p.len() > bt_hci::MAX_PACKET { return; }
     while !ring.tx_push(&p) { let _ = sex_pdx::sys_wait_self_ticks(1); }
 }
 
