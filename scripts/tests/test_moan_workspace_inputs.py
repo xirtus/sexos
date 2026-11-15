@@ -1,7 +1,10 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """Exercise actual gate Driver methods without starting a VM."""
-import ast,re,tempfile,unittest
+import ast,re,tempfile,unittest,sys
+from unittest.mock import patch
 from pathlib import Path
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
+import moan_gate_geometry as geometry
 SCRIPT=Path(__file__).resolve().parents[1]/'moan_workspace_gate.py'
 class Probe:pass
 class Queue:
@@ -42,4 +45,23 @@ class Inputs(unittest.TestCase):
   self.d.text=lambda:'[moan.control] name=Master x=1264 y=60\n'
   with self.assertRaises(AssertionError):self.d.click(3,'Master')
   self.assertEqual(self.moves,[])
+class LegacyFrameFence(unittest.TestCase):
+ def test_held_native_chord_pairs_same_device_queue(self):
+  q=Queue()
+  with patch.object(geometry.time,'sleep')as sleep:
+   geometry.chord({'q':q},'ctrl','shift','l')
+  self.assertEqual([call.args[0]for call in sleep.call_args_list],[.04,.12])
+  self.assertEqual([e['data']['key']['data']for e in q.events[1][1]['events']],['l','shift','ctrl'])
+ def test_refresh_ignores_a_viewport_from_an_already_started_burst(self):
+  prefix='partial old controls';trace=prefix+'\n[moan.viewport] w=624 h=410 frame=12\n[moan.timeline] x=2 y=3 w=600 h=200 start=0 span=192000\n[moan.viewport] w=624 h=410 frame=13\n'
+  reads=[prefix,trace];calls=[]
+  def text():return reads.pop(0)if len(reads)>1 else reads[0]
+  def wait(pattern,since,timeout):
+   calls.append((pattern,since));return re.compile(pattern).search(trace,since)
+  start=trace.index('[moan.timeline]')
+  def viewport(g,surface,since):
+   self.assertEqual(since,start);return(0,28,640,452),(624,410)
+  with patch.object(geometry,'chord'),patch.object(geometry,'viewport',side_effect=viewport):
+   result=geometry.refresh({'focus':lambda surface:None,'text':text,'wait':wait},360)
+  self.assertEqual(result[0],start);self.assertIn('moan.timeline',calls[0][0]);self.assertEqual(calls[0][1],len(prefix))
 if __name__=='__main__':unittest.main()

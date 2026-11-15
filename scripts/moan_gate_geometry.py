@@ -7,9 +7,12 @@ from lua_gate import qcodes
 
 
 def chord(g, *keys):
-    g['q'].cmd('input-send-event', {'events': [
-        {'type': 'key', 'data': {'down': down, 'key': {'type': 'qcode', 'data': key}}}
-        for down, group in ((True, keys), (False, tuple(reversed(keys)))) for key in group]})
+    # Serialize make/release on the same QMP queue; delivery timing is not proof.
+    for down, group in ((True, keys), (False, tuple(reversed(keys)))):
+        g['q'].cmd('input-send-event', {'events': [
+            {'type': 'key', 'data': {'down': down, 'key': {'type': 'qcode', 'data': key}}}
+            for key in group]})
+        time.sleep(.04 if down else .12)
 
 
 def viewport(g, surface, since):
@@ -30,6 +33,10 @@ def refresh(g, surface):
     g['focus'](surface)
     since = len(g['text']())
     chord(g, 'ctrl', 'shift', 'l')
+    # A viewport alone can finish a burst that started before this command.
+    # Require a fresh burst's first timeline record, then its closing viewport.
+    opened = g['wait'](r'\[moan.timeline\] x=-?\d+ y=-?\d+ w=\d+ h=\d+ start=\d+ span=\d+', since, 120)
+    since = opened.start()
     tile, size = viewport(g, surface, since)
     return since, tile, size
 
