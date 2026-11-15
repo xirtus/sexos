@@ -17,11 +17,17 @@
 //! - `hid`: boot reports and report-map parsing into keys and pointer motion.
 //! - `hidp`: classic HID (L2CAP PSM 0x11/0x13, boot protocol).
 //! - `bonds`: LE (LTK, IRK, identity) and classic (link key) bonds and their stored form.
+//! - `sdp`: service discovery (client for the A2DP Sink record, server for our Source).
+//! - `avdtp`: A2DP stream setup as source (initiator and acceptor).
+//! - `sbc`: the SBC encoder (A2DP's mandatory codec), frame header and CRC.
+//! - `a2dp`: SBC frames in RTP media packets.
 //! - `host`: all of the above composed into one packet-in/packet-out host stack.
 #![no_std]
 extern crate alloc;
 
+pub mod a2dp;
 pub mod att;
+pub mod avdtp;
 pub mod bonds;
 pub mod controller;
 pub mod crypto;
@@ -34,5 +40,7 @@ pub mod intel;
 pub mod l2cap;
 pub mod pack;
 pub mod report;
+pub mod sbc;
+pub mod sdp;
 pub mod smp;
 pub mod ssp;

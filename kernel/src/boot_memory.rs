@@ -809,8 +809,9 @@ fn firmware_pack(pd_id:u32, slot:u64, region_id:u32){
 
 /// Bluetooth: Cufflinks (the host stack) and SexUSB (the controller's USB transport)
 /// share the HCI rings; SexUSB may wake Cufflinks when a controller comes or goes;
-/// Cufflinks reads the firmware pack and keeps its bonds with Files.
-pub fn init_bluetooth(usb: u32, cufflinks: u32, files: u32) {
+/// Cufflinks reads the firmware pack and keeps its bonds with Files. Bell hands
+/// Cufflinks its mix for a Bluetooth headset through `bt_audio`.
+pub fn init_bluetooth(usb: u32, cufflinks: u32, files: u32, bell: u32) {
     use sex_pdx::bt_hci as b;
     require_boot();
     let Some(pd) = (cufflinks != 0).then(|| DOMAIN_REGISTRY.get(cufflinks)).flatten() else { return };
@@ -819,6 +820,8 @@ pub fn init_bluetooth(usb: u32, cufflinks: u32, files: u32) {
     if files != 0 { pd.grant_capability(sex_pdx::SLOT_STORAGE, CapabilityData::Domain(files)); }
     firmware_pack(cufflinks, b::FIRMWARE_SLOT, b::FIRMWARE_REGION_ID);
     crate::serial_println!("[boot.bt.hci] usb={} cufflinks={} files={} slot={} bytes={} runtime_mint=0", usb, cufflinks, files, b::SLOT, b::BYTES);
+    paired(bell, cufflinks, sex_pdx::bt_audio::SLOT, sex_pdx::bt_audio::REGION_ID, sex_pdx::bt_audio::BYTES, true);
+    crate::serial_println!("[boot.bt.audio] bell={} cufflinks={} slot={} bytes={} runtime_mint=0", bell, cufflinks, sex_pdx::bt_audio::SLOT, sex_pdx::bt_audio::BYTES);
 }
 
 fn pci_view(pd:&ProtectionDomain,slot:u64,physical:u64,actual_length:u64,length:u64)->RegionGrant{

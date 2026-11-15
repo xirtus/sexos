@@ -890,7 +890,7 @@ pub fn init() {
 
     // Final BOOT_DAG memory edges precede sealing and every task admission.
     crate::boot_memory::init(sexdrive_id, sexdisp_id, sexusb_id, sexnet_id, sexfiles_id);
-    crate::boot_memory::init_bluetooth(sexusb_id, cufflinks_id, sexfiles_id);
+    crate::boot_memory::init_bluetooth(sexusb_id, cufflinks_id, sexfiles_id, sexbell_id);
     // UEFI firmware leaves network controllers bus-mastering (OVMF does, with or without
     // a network option ROM). The network service proves custody of a NIC only from idle,
     // so it gets its controllers as a restarted run does: bus mastering off first.
