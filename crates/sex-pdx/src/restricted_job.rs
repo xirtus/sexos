@@ -214,6 +214,7 @@ pub const STATUS_UNAVAILABLE: u8 = 3;
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Observation {
     pub cookie: u32,
+    pub ticket: u32,
     pub state: u8,
     pub recovery_complete: bool,
     pub current: Option<crate::restricted_helper::Subject>,
@@ -222,6 +223,8 @@ pub struct Observation {
 impl Observation {
     pub fn words(self) -> Option<[u64; 3]> {
         if self.cookie == 0
+            || self.ticket == 0
+            || self.ticket > 0xff_ffff
             || self.state > STATUS_UNAVAILABLE
             || self.shell_epoch == 0
             || (self.state != STATUS_UNKNOWN && self.current.is_none())
@@ -229,19 +232,23 @@ impl Observation {
             return None;
         }
         Some([
-            self.cookie as u64 | (self.state as u64) << 32 | (self.recovery_complete as u64) << 40,
+            self.cookie as u64
+                | (self.ticket as u64) << 32
+                | (self.state as u64) << 56
+                | (self.recovery_complete as u64) << 60,
             self.current.map_or(0, |s| s.word()),
             self.shell_epoch,
         ])
     }
     pub fn decode(words: [u64; 3]) -> Option<Self> {
-        if words[0] >> 41 != 0 {
+        if words[0] >> 61 != 0 {
             return None;
         }
         let value = Self {
             cookie: words[0] as u32,
-            state: (words[0] >> 32) as u8,
-            recovery_complete: (words[0] >> 40) & 1 != 0,
+            ticket: ((words[0] >> 32) & 0xff_ffff) as u32,
+            state: ((words[0] >> 56) & 15) as u8,
+            recovery_complete: (words[0] >> 60) & 1 != 0,
             current: if words[1] == 0 {
                 None
             } else {
@@ -254,21 +261,26 @@ impl Observation {
 }
 pub fn status_words(
     cookie: u32,
+    ticket: u32,
     known: Option<crate::restricted_helper::Subject>,
     shell_epoch: u64,
 ) -> Option<[u64; 3]> {
-    if cookie == 0 || shell_epoch == 0 {
+    if cookie == 0 || ticket == 0 || ticket > 0xff_ffff || shell_epoch == 0 {
         return None;
     }
     if let Some(s) = known {
         crate::restricted_helper::Subject::decode(s.word())?;
     }
-    Some([cookie as u64, known.map_or(0, |s| s.word()), shell_epoch])
+    Some([
+        cookie as u64 | (ticket as u64) << 32,
+        known.map_or(0, |s| s.word()),
+        shell_epoch,
+    ])
 }
 pub fn status_decode(
     words: [u64; 3],
-) -> Option<(u32, Option<crate::restricted_helper::Subject>, u64)> {
-    if words[0] > u32::MAX as u64 {
+) -> Option<(u32, u32, Option<crate::restricted_helper::Subject>, u64)> {
+    if words[0] >> 56 != 0 {
         return None;
     }
     let known = if words[1] == 0 {
@@ -277,5 +289,7 @@ pub fn status_decode(
         Some(crate::restricted_helper::Subject::decode(words[1])?)
     };
     let cookie = words[0] as u32;
-    (status_words(cookie, known, words[2])? == words).then_some((cookie, known, words[2]))
+    let ticket = ((words[0] >> 32) & 0xff_ffff) as u32;
+    (status_words(cookie, ticket, known, words[2])? == words)
+        .then_some((cookie, ticket, known, words[2]))
 }
