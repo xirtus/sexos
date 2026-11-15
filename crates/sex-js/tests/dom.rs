@@ -157,6 +157,26 @@ fn the_language_works() {
     assert_eq!(logs(&mut s), ["0:2 a 20 1,2,3 true 1.41421 1234.57 325 1024 18446744073709551616 2 1970-01-01T00:00:00.000Z"]);
 }
 
+#[test]
+fn map_keys_keep_their_identity() {
+    // The guest's Map hash mixes every key (quickjs-map-hash.patch); equal keys must
+    // still meet, across resizes and deletes.
+    let mut s = page("");
+    s.eval(r#"
+        const m = new Map(), objs = [], ws = new WeakMap();
+        for (let i = 0; i < 5000; i++) { m.set(i, i); m.set('k' + i, -i); const o = {}; objs.push(o); m.set(o, i); ws.set(o, i * 2); }
+        for (let i = 0; i < 5000; i += 2) { m.delete(i); m.delete(objs[i]); }
+        let ok = true;
+        for (let i = 0; i < 5000; i++) {
+            if (m.get(i) !== (i % 2 ? i : undefined) || m.get(i + 0.0) !== m.get(i) || m.get('k' + i) !== -i) ok = false;
+            if (m.get(objs[i]) !== (i % 2 ? i : undefined) || ws.get(objs[i]) !== i * 2 || m.get({}) !== undefined) ok = false;
+        }
+        m.set(-0, 'z'); m.set(NaN, 'n'); m.set(1.5, 'f'); m.set(2n ** 70n, 'b');
+        console.log(ok, m.size, m.get(0), m.get(+0), m.get(0 / 0), m.get(3 / 2), m.get(2n ** 70n), new Set([1, 1.0, '1', NaN, NaN]).size);
+    "#, "t.js").unwrap();
+    assert_eq!(logs(&mut s), ["0:true 10004 z z n f b 3"]);
+}
+
 #[derive(Default)]
 struct Raw(Vec<String>);
 impl sex_js::Page for Raw {
