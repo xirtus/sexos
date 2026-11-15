@@ -5,6 +5,7 @@ use crate::restricted_helper::{
 };
 use crate::restricted_helper_journal::{Journal, Ledger};
 pub const TRANSCRIPT_TICKS: u64 = 5_000;
+pub const JOB_TICKS: u64 = 120_000;
 #[derive(Clone, Copy)]
 pub struct Message {
     pub caller: Subject,
@@ -15,6 +16,7 @@ pub struct Message {
 pub enum Effect {
     Scrub(Subject),
     Install(Binding),
+    Expire(Binding),
 }
 pub trait Platform {
     fn epoch(&mut self) -> Option<u64>;
@@ -29,6 +31,11 @@ enum PendingReply {
     First,
     Fetch([u64; 3]),
 }
+#[derive(Clone, Copy)]
+struct Committed {
+    binding: Binding,
+    until: u64,
+}
 pub struct Provider {
     ledger: Ledger,
     epoch: Option<u64>,
@@ -39,6 +46,8 @@ pub struct Provider {
     effect: Option<Effect>,
     reply: Option<PendingReply>,
     deadline: u64,
+    committed: [Option<Committed>; 16],
+    committed_generation: u64,
 }
 impl Provider {
     pub const fn new() -> Self {
@@ -52,6 +61,8 @@ impl Provider {
             effect: None,
             reply: None,
             deadline: 0,
+            committed: [None; 16],
+            committed_generation: 0,
         }
     }
     /// Call before deferred replay, requests, retained replies or periodic rings.
@@ -61,10 +72,28 @@ impl Provider {
         let kept = p.keep(journal.address());
         self.ledger = journal.load(epoch, kept);
         self.epoch = epoch;
+        self.committed_generation = self.ledger.maximum_generation();
         // Recovered tombstones confer no live job, transcript or reply authority.
     }
     pub fn denied(&self, pd: u32) -> bool {
         self.ledger.denied(pd)
+    }
+    /// External job maps are provisional until a complete Seal ACK. Every data
+    /// path must check this predicate; reset/unknown epoch/global denial override
+    /// a stale external map. Previously sealed jobs keep only their exact120s lease.
+    pub fn job_live(&self, binding: Binding, now: u64) -> bool {
+        !self.ledger.all_denied()
+            && self
+                .committed
+                .iter()
+                .flatten()
+                .any(|job| job.binding == binding && now < job.until)
+    }
+    pub fn pending(&self) -> bool {
+        self.deadline != 0
+            || self.reply.is_some()
+            || self.effect.is_some()
+            || self.committed.iter().any(|job| job.is_some())
     }
     pub fn binding(&self) -> Option<Binding> {
         if !self.sealed() {
@@ -172,6 +201,11 @@ impl Provider {
                 return true;
             }
             journal.persist(&self.ledger);
+            for job in &mut self.committed {
+                if job.is_some_and(|job| job.binding.child.pd == previous.pd) {
+                    *job = None;
+                }
+            }
             self.challenge = challenge;
             self.effect = Some(Effect::Scrub(previous));
             self.deadline = p.now().saturating_add(TRANSCRIPT_TICKS);
@@ -225,6 +259,15 @@ impl Provider {
             self.abandon();
             return;
         }
+        let now = p.now();
+        for job in &mut self.committed {
+            if let Some(current) = job.filter(|job| now >= job.until) {
+                // Expired data rights are already false even if cleanup retries.
+                if effect(Effect::Expire(current.binding)) {
+                    *job = None;
+                }
+            }
+        }
         if self.deadline != 0 && p.now() >= self.deadline {
             self.abandon();
             return;
@@ -263,6 +306,24 @@ impl Provider {
         }
         self.reply = None;
         if self.sealed() {
+            let binding = self.transcript.as_ref().and_then(|t| t.binding()).unwrap();
+            if binding.generation > self.committed_generation
+                && !self
+                    .committed
+                    .iter()
+                    .flatten()
+                    .any(|job| job.binding == binding)
+            {
+                let Some(slot) = self.committed.iter_mut().find(|job| job.is_none()) else {
+                    self.abandon();
+                    return;
+                };
+                *slot = Some(Committed {
+                    binding,
+                    until: now.saturating_add(JOB_TICKS),
+                });
+                self.committed_generation = binding.generation;
+            }
             self.deadline = 0;
         }
     }
