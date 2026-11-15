@@ -218,6 +218,9 @@ impl Job {
     }
     /// Provisional association only. Data methods additionally require the
     /// provider's exact committed unexpired lease, supplied by the runtime hook.
+    pub fn matches_scope(&self,binding:Binding)->bool{
+        binding.parent==self.parent&&binding.cookie==self.cookie&&binding.nonce==nonce_words(self.nonce)&&binding.plugin_hash==words(self.plugin.hash)&&binding.input_hash==words(self.request.hash)
+    }
     pub fn bind(&mut self, binding: Binding) -> Result<(), Error> {
         if self.bound_once
             || binding.parent != self.parent
