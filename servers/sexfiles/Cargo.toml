@@ -19,5 +19,7 @@ sex-object-model = { path = "../../crates/sex-object-model" }
 # Same software SHA-256 for build-time helper attestation and runtime snapshot checks.
 sha2 = { version = "=0.10.9", default-features = false, features = ["force-soft"] }
 
+zeroize = { version = "=1.9.1", default-features = false, features = ["alloc"] }
+
 [build-dependencies]
 sha2 = { version = "=0.10.9", default-features = false, features = ["force-soft"] }
