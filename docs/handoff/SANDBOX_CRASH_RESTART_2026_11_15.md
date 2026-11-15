@@ -45,6 +45,16 @@ reboot. Files now answers a waiting helper with a bare DENIED (no data) before
 forgetting the slot (`release_child` in `servers/sexfiles/src/restricted_io.rs`,
 receipt `files.restricted.child.released`). No kernel change.
 
+## Moan offline UI gate
+
+`scripts/moan_offline_ui_gate.py` passes on the restricted path: CLAP render,
+crash, hang cancel, swap and VST3 render all import or fail as expected
+(`assets/sandbox-crash-2026-11-15/moan-offline-ui-gate.json`). It found that the
+Shell coordinator's 5 s admission-to-activation budget was too tight with
+Moan's window open (~4.9 s in the policy walk), so it is now 15 s
+(`BOOTSTRAP_TICKS`). QEMU here is timing sensitive: running heavy host builds
+alongside it starved the guest past even 15 s, so run these gates alone.
+
 ## Not covered
 
 A Files or Shell provider restart during a live restricted job needs an image
