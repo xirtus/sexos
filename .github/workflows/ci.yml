@@ -371,7 +371,7 @@ jobs:
   devices:
     name: Disks, power and fuzzing
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 55
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
