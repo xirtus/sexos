@@ -4435,3 +4435,10 @@ energy. Details: `LAPTOP_POWER_2026_11_13.md` (Sleep section).
   - Pure-Rust `#![no_std]` import & export for **PNG**, **JPEG** (baseline DCT 4:4:4 encoder), **WebP** (bit-exact lossless VP8L encoder), and multi-layer **PSD** (`8BPS` v1 reader + writer preserving layers, blend modes, and layer masks), plus OpenRaster (`.ora`).
 - Verified by `scripts/batik_host_gate.sh` (36 `batik-core` tests + 7 `batik` window tests + `key_bytes.py` 0 forbidden opcodes) and live QEMU `scripts/batik_gate.py` (`PASS`) with 6 genuine screenshots in `docs/user/assets/batik-*.png` and `docs/user/apps/batik.md`.
 
+## G-24: Burlesque to Keynote level (2026-11-15)
+- Upgraded `crates/burlesque-core` (`#![no_std]`, `#![forbid(unsafe_code)]`) and `apps/burlesque` to full Keynote-class presentation authoring & delivery:
+  - 6 designer themes (`Burlesque Velvet`, `Editorial Light`, `Midnight Slate`, `Champagne Ivory`, `Cyber Prism`, `Swiss Modern`) with live switching across slide elements.
+  - Real-time software transition interpolation (`Dissolve`, `PushLeft`, `PushRight`, `WipeRight`, `SlideUp`, `ZoomIn`, `Fade`, `SlideLeft`) via `render_transition_frame`.
+  - Dual-pane Keynote Presenter View (`PresenterSession` + `render_presenter_view`) displaying Current Slide, Next Slide preview, word-wrapped **Speaker Notes**, elapsed `MM:SS` timer, progress bar, and screen blanking, plus interactive per-slide Speaker Notes editing in the authoring window.
+  - Memory-bounded **PPTX** (`import_pptx` + `export_pptx`) and **ODP** (`import_odp` + `export_odp`) import/export preserving themes, shapes, tables, transitions, and speaker notes (`ppt/notesSlides/notesSlideN.xml`, `<presentation:notes>`), alongside multi-page vector **PDF-1.4 export** (`export_pdf`, `export_pdf_with_notes`).
+- Verified by `scripts/burlesque_host_gate.sh` (15 `burlesque-core` tests + `burlesque` window tests + `key_bytes.py` 0 forbidden opcodes) and live QEMU `scripts/burlesque_gate.py` (`PASS`) with 4 genuine screenshots in `docs/user/assets/burlesque-*.png` and `docs/user/apps/burlesque.md`.

@@ -442,14 +442,85 @@ impl SlideElement {
     }
 }
 
-/// Slide transitions.
+/// Slide transitions supported by the burlesque presentations engine.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Transition {
     None,
+    Dissolve,
+    PushLeft,
+    PushRight,
+    WipeRight,
+    SlideUp,
+    ZoomIn,
     Fade,
     SlideLeft,
-    SlideRight,
-    Dissolve,
+}
+
+impl Transition {
+    /// Default transition playback duration in milliseconds.
+    pub const DEFAULT_DURATION_MS: u32 = 400;
+
+    /// Return nominal animation duration in milliseconds.
+    pub fn duration_ms(&self) -> u32 {
+        match self {
+            Self::None => 0,
+            _ => Self::DEFAULT_DURATION_MS,
+        }
+    }
+
+    /// User-visible name of the transition.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::None => "None",
+            Self::Dissolve => "Dissolve",
+            Self::PushLeft => "PushLeft",
+            Self::PushRight => "PushRight",
+            Self::WipeRight => "WipeRight",
+            Self::SlideUp => "SlideUp",
+            Self::ZoomIn => "ZoomIn",
+            Self::Fade => "Fade",
+            Self::SlideLeft => "SlideLeft",
+        }
+    }
+
+    /// Short serialized kind identifier.
+    pub fn kind_str(&self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Dissolve => "dissolve",
+            Self::PushLeft => "push_left",
+            Self::PushRight => "push_right",
+            Self::WipeRight => "wipe_right",
+            Self::SlideUp => "slide_up",
+            Self::ZoomIn => "zoom_in",
+            Self::Fade => "fade",
+            Self::SlideLeft => "slide_left",
+        }
+    }
+
+    /// Parse transition name or loose string keyword.
+    pub fn from_str_loose(s: &str) -> Self {
+        let clean = s.trim();
+        if clean.eq_ignore_ascii_case("dissolve") {
+            Self::Dissolve
+        } else if clean.eq_ignore_ascii_case("push_left") || clean.eq_ignore_ascii_case("pushleft") || clean.eq_ignore_ascii_case("push") {
+            Self::PushLeft
+        } else if clean.eq_ignore_ascii_case("push_right") || clean.eq_ignore_ascii_case("pushright") {
+            Self::PushRight
+        } else if clean.eq_ignore_ascii_case("wipe_right") || clean.eq_ignore_ascii_case("wiperight") || clean.eq_ignore_ascii_case("wipe") {
+            Self::WipeRight
+        } else if clean.eq_ignore_ascii_case("slide_up") || clean.eq_ignore_ascii_case("slideup") {
+            Self::SlideUp
+        } else if clean.eq_ignore_ascii_case("zoom_in") || clean.eq_ignore_ascii_case("zoomin") || clean.eq_ignore_ascii_case("zoom") {
+            Self::ZoomIn
+        } else if clean.eq_ignore_ascii_case("fade") {
+            Self::Fade
+        } else if clean.eq_ignore_ascii_case("slide_left") || clean.eq_ignore_ascii_case("slideleft") {
+            Self::SlideLeft
+        } else {
+            Self::None
+        }
+    }
 }
 
 impl Default for Transition {

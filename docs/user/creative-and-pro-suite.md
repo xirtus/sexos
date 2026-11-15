@@ -10,7 +10,7 @@ To achieve parity with class-leading professional creative software on Linux, ma
 |---|---|---|---|---|
 | **Assuit** | Word Processor | Fabric (Egyptian metal-thread embroidery; Andreas's pick) | Full-featured rich-text word processor with document styles, typography layout, headers/footers, and PDF/DOCX import and export. | **[Assuit Manual](apps/assuit.md)** |
 | **Spreadeagle** | Spreadsheet Suite | Romance / Pun (Andreas's pick, PR #219) | Grid calculation engine with mathematical and financial formulas, cell formatting, charts, and multi-sheet workbooks. | **[Spreadeagle Manual](apps/spreadeagle.md)** |
-| **Burlesque** | Presentations | Romance / Performance (stage show) | Slide deck editor and presentation tool with vector layouts, smooth transitions, presenter display support, and PPTX/ODP import. | *Suite Tool* |
+| **Burlesque** | Presentations | Romance / Performance (stage show) | Keynote-class slide deck editor and presentation suite with 6 designer themes, live animated transitions, dual-pane Presenter View with speaker notes, PPTX/ODP import & export, and vector PDF export. | **[Burlesque Manual](apps/burlesque.md)** |
 
 ---
 

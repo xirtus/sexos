@@ -1,13 +1,28 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! OOXML `.pptx` presentation importer.
+//! OOXML `.pptx` presentation importer and generator.
+//!
+//! Provides memory-bounded, panic-free parsing of OOXML `.pptx` presentations:
+//! - [Content_Types].xml and presentation relationships
+//! - Slide size <p:sldSz> and aspect ratio
+//! - Palette color extraction from ppt/theme/theme1.xml
+//! - Slide shapes <p:sp>, text hierarchy, bullets, typography <a:rPr>
+//! - Vector shapes <a:prstGeom> (rect, roundRect, ellipse, line, arrow)
+//! - Tables <p:graphicFrame> / <a:tbl>
+//! - Embedded media pictures <p:pic> via slide rels
+//! - Speaker notes <p:notes> from ppt/notesSlides/notesSlideN.xml
+//! - Slide transitions <p:transition> (dissolve, push, wipe, zoom, fade)
+//!
+//! Also provides `export_pptx(&Deck) -> Result<Vec<u8>>` to serialize multi-slide
+//! presentations with themes, transitions, shapes, tables, and speaker notes.
 
+use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use sex_canvas::{Color, Rect};
 use crate::deck::{AspectRatio, Deck, Slide};
 use crate::elements::{
-    FitMode, ImageElement, Paragraph, Shape, ShapeKind, SlideElement, StrokeStyle,
-    TextAlign, TextBox, TextRun,
+    FitMode, ImageElement, Paragraph, Shape, ShapeKind, SlideElement, StrokeStyle, TableCell,
+    TableElement, TextAlign, TextBox, TextRun, Transition,
 };
 use crate::layout::SlideLayout;
 use crate::xml_utils::XmlNode;
@@ -17,6 +32,10 @@ use crate::{Error, Result};
 pub const MAX_ARCHIVE_MEMBER_BYTES: usize = 32 * 1024 * 1024;
 /// Maximum cumulative extracted bytes per archive import (128 MiB).
 pub const MAX_ARCHIVE_TOTAL_BYTES: usize = 128 * 1024 * 1024;
+/// Maximum number of archive entries allowed to prevent zip DOS.
+pub const MAX_ARCHIVE_ENTRIES: usize = 2048;
+/// Maximum number of slides parsed per deck.
+pub const MAX_SLIDES: usize = 500;
 
 struct BoundedSink<'a> {
     out: &'a mut Vec<u8>,
@@ -113,7 +132,7 @@ fn emu_to_pixels(emu: f32, emu_total: f32, logical_total: f32) -> f32 {
     let res = if emu_total.is_finite() && emu_total > 0.0 && logical_total.is_finite() && logical_total > 0.0 {
         (emu / emu_total) * logical_total
     } else {
-        emu / 9525.0 // fallback 1 pt ~ 12700 emu, 1 px ~ 9525 emu at 96 dpi
+        emu / 9525.0
     };
     if res.is_finite() {
         res.clamp(-100_000.0, 100_000.0)
@@ -125,10 +144,14 @@ fn emu_to_pixels(emu: f32, emu_total: f32, logical_total: f32) -> f32 {
 /// Import PPTX presentation from raw container bytes.
 pub fn import_pptx(bytes: &[u8]) -> Result<Deck> {
     let archive = sex_archive::Archive::open(bytes).map_err(|_| Error::InvalidFormat)?;
+    if archive.entries().len() > MAX_ARCHIVE_ENTRIES {
+        return Err(Error::MalformedDocument);
+    }
     let mut total_extracted = 0usize;
 
     // 1. Read ppt/presentation.xml
-    let pres_bytes = extract_archive_file(&archive, "ppt/presentation.xml", &mut total_extracted).ok_or(Error::MalformedDocument)?;
+    let pres_bytes = extract_archive_file(&archive, "ppt/presentation.xml", &mut total_extracted)
+        .ok_or(Error::MalformedDocument)?;
     let pres_str = core::str::from_utf8(&pres_bytes).map_err(|_| Error::MalformedDocument)?;
     let pres_xml = XmlNode::parse(pres_str).map_err(|_| Error::MalformedDocument)?;
 
@@ -157,6 +180,39 @@ pub fn import_pptx(bytes: &[u8]) -> Result<Deck> {
 
     let mut deck = Deck::new(aspect_ratio);
 
+    // Parse theme colors if present: ppt/theme/theme1.xml
+    if let Some(theme_bytes) = extract_archive_file(&archive, "ppt/theme/theme1.xml", &mut total_extracted) {
+        if let Ok(theme_str) = core::str::from_utf8(&theme_bytes) {
+            if let Ok(theme_xml) = XmlNode::parse(theme_str) {
+                let mut schemes = Vec::new();
+                theme_xml.find_all("clrScheme", &mut schemes);
+                if let Some(scheme) = schemes.first() {
+                    let parse_node_clr = |node_name: &str| -> Option<Color> {
+                        let node = scheme.child(node_name)?;
+                        if let Some(srgb) = node.child("srgbClr") {
+                            if let Some(val) = srgb.attr("val") {
+                                return parse_hex_color(val);
+                            }
+                        }
+                        None
+                    };
+                    if let Some(c) = parse_node_clr("dk1") {
+                        deck.theme.palette.foreground = c;
+                    }
+                    if let Some(c) = parse_node_clr("lt1") {
+                        deck.theme.palette.background = c;
+                    }
+                    if let Some(c) = parse_node_clr("accent1") {
+                        deck.theme.palette.primary_accent = c;
+                    }
+                    if let Some(c) = parse_node_clr("accent2") {
+                        deck.theme.palette.secondary_accent = c;
+                    }
+                }
+            }
+        }
+    }
+
     // 2. Read presentation relationships to map rId -> slide path
     let mut slide_rels = Vec::new();
     if let Some(rels_bytes) = extract_archive_file(&archive, "ppt/_rels/presentation.xml.rels", &mut total_extracted) {
@@ -172,7 +228,7 @@ pub fn import_pptx(bytes: &[u8]) -> Result<Deck> {
                         } else if target.starts_with("ppt/") {
                             String::from(target)
                         } else {
-                            alloc::format!("ppt/{}", target.trim_start_matches('/'))
+                            format!("ppt/{}", target.trim_start_matches('/'))
                         };
                         slide_rels.push((String::from(id), full_target));
                     }
@@ -194,7 +250,6 @@ pub fn import_pptx(bytes: &[u8]) -> Result<Deck> {
     }
 
     if ordered_slide_paths.is_empty() {
-        // Fallback: use all slide relationships sorted or scan slides/
         for (_, target) in &slide_rels {
             ordered_slide_paths.push(target.clone());
         }
@@ -207,6 +262,8 @@ pub fn import_pptx(bytes: &[u8]) -> Result<Deck> {
             ordered_slide_paths.sort();
         }
     }
+
+    ordered_slide_paths.truncate(MAX_SLIDES);
 
     // 3. Parse each slide
     for (slide_idx, slide_path) in ordered_slide_paths.iter().enumerate() {
@@ -227,7 +284,7 @@ pub fn import_pptx(bytes: &[u8]) -> Result<Deck> {
             let mut parts: Vec<&str> = slide_path.split('/').collect();
             if let Some(file) = parts.pop() {
                 parts.push("_rels");
-                let rels_name = alloc::format!("{}.rels", file);
+                let rels_name = format!("{}.rels", file);
                 parts.push(&rels_name);
                 parts.join("/")
             } else {
@@ -271,7 +328,6 @@ pub fn import_pptx(bytes: &[u8]) -> Result<Deck> {
                                 p_text.push_str(&t.text);
                             }
                             let trimmed = p_text.trim();
-                            // Skip slide number placeholders
                             if !trimmed.is_empty() && trimmed != "<#>" {
                                 if !notes_text.is_empty() {
                                     notes_text.push('\n');
@@ -279,19 +335,48 @@ pub fn import_pptx(bytes: &[u8]) -> Result<Deck> {
                                 notes_text.push_str(trimmed);
                             }
                         }
-                        slide.speaker_notes = notes_text;
+                        slide.set_speaker_notes(notes_text);
                     }
                 }
             }
         }
 
-        // Parse shapes and pictures from slide XML
+        // Parse slide transition <p:transition>
+        let mut trans_nodes = Vec::new();
+        slide_xml.find_all("transition", &mut trans_nodes);
+        if let Some(trans) = trans_nodes.first() {
+            if trans.child("dissolve").is_some() {
+                slide.transition = Transition::Dissolve;
+            } else if let Some(push) = trans.child("push") {
+                if push.attr("dir") == Some("r") {
+                    slide.transition = Transition::PushRight;
+                } else {
+                    slide.transition = Transition::PushLeft;
+                }
+            } else if trans.child("wipe").is_some() {
+                slide.transition = Transition::WipeRight;
+            } else if trans.child("zoom").is_some() {
+                slide.transition = Transition::ZoomIn;
+            } else if trans.child("fade").is_some() {
+                slide.transition = Transition::Fade;
+            }
+        }
+
+        // Parse shapes and text boxes <p:sp>
         let mut shape_nodes = Vec::new();
         slide_xml.find_all("sp", &mut shape_nodes);
         for sp in shape_nodes {
             parse_pptx_shape(sp, slide_emu_w, slide_emu_h, deck.width(), deck.height(), &mut slide);
         }
 
+        // Parse tables <p:graphicFrame> / <a:tbl>
+        let mut gf_nodes = Vec::new();
+        slide_xml.find_all("graphicFrame", &mut gf_nodes);
+        for gf in gf_nodes {
+            parse_pptx_graphic_frame(gf, slide_emu_w, slide_emu_h, deck.width(), deck.height(), &mut slide);
+        }
+
+        // Parse pictures <p:pic>
         let mut pic_nodes = Vec::new();
         slide_xml.find_all("pic", &mut pic_nodes);
         for pic in pic_nodes {
@@ -377,6 +462,16 @@ fn parse_pptx_shape(
         }
     }
 
+    let is_title_ph = sp
+        .child("nvSpPr")
+        .and_then(|n| n.child("nvPr"))
+        .and_then(|n| n.child("ph"))
+        .map(|ph| {
+            let t = ph.attr("type").unwrap_or("title");
+            t == "title" || t == "ctrTitle"
+        })
+        .unwrap_or(false);
+
     // 2. Shape geometry, fill and stroke
     let mut shape_kind = None;
     let mut fill_color = None;
@@ -435,7 +530,7 @@ fn parse_pptx_shape(
             // Paragraph properties
             if let Some(p_pr) = p.child("pPr") {
                 if let Some(lvl) = p_pr.attr("lvl").and_then(|v| v.parse::<u8>().ok()) {
-                    paragraph.bullet_level = lvl + 1; // 1-based bullet
+                    paragraph.bullet_level = lvl + 1;
                 }
                 if let Some(algn) = p_pr.attr("algn") {
                     paragraph.alignment = match algn {
@@ -462,7 +557,6 @@ fn parse_pptx_shape(
 
                     if let Some(r_pr) = r.child("rPr") {
                         if let Some(sz) = r_pr.attr("sz").and_then(|v| v.parse::<f32>().ok()) {
-                            // sz is in 1/100 pt
                             font_sz = (sz / 100.0) * (deck_h / 720.0);
                         }
                         bold = r_pr.attr("b") == Some("1");
@@ -498,7 +592,7 @@ fn parse_pptx_shape(
         if !paragraphs.is_empty() {
             let mut tb = TextBox::new(bounds);
             tb.paragraphs = paragraphs;
-            if slide.title.is_empty() {
+            if slide.title.is_empty() || is_title_ph {
                 slide.title = tb.plain_text();
             }
             text_box = Some(tb);
@@ -521,6 +615,65 @@ fn parse_pptx_shape(
     if let Some(tb) = text_box {
         slide.add_element(SlideElement::TextBox(tb));
     }
+}
+
+fn parse_pptx_graphic_frame(
+    gf: &XmlNode,
+    emu_w: f32,
+    emu_h: f32,
+    deck_w: f32,
+    deck_h: f32,
+    slide: &mut Slide,
+) {
+    let mut bounds = Rect::new(100.0, 100.0, 600.0, 300.0);
+    if let Some(xfrm) = gf.child("xfrm") {
+        let x = xfrm.child("off").and_then(|o| o.attr("x")).and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0);
+        let y = xfrm.child("off").and_then(|o| o.attr("y")).and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0);
+        let cx = xfrm.child("ext").and_then(|e| e.attr("cx")).and_then(|v| v.parse::<f32>().ok()).unwrap_or(1000.0);
+        let cy = xfrm.child("ext").and_then(|e| e.attr("cy")).and_then(|v| v.parse::<f32>().ok()).unwrap_or(1000.0);
+        bounds = Rect::new(
+            emu_to_pixels(x, emu_w, deck_w),
+            emu_to_pixels(y, emu_h, deck_h),
+            emu_to_pixels(cx, emu_w, deck_w).max(20.0),
+            emu_to_pixels(cy, emu_h, deck_h).max(20.0),
+        );
+    }
+
+    let mut tbl_nodes = Vec::new();
+    gf.find_all("tbl", &mut tbl_nodes);
+    let Some(tbl) = tbl_nodes.first() else {
+        return;
+    };
+
+    let mut tr_nodes = Vec::new();
+    tbl.find_all("tr", &mut tr_nodes);
+    if tr_nodes.is_empty() {
+        return;
+    }
+
+    let rows_count = tr_nodes.len().min(50);
+    let cols_count = tr_nodes[0].children_named("tc").count().min(50).max(1);
+
+    let mut table = TableElement::new(bounds, rows_count, cols_count);
+
+    for (r, tr) in tr_nodes.iter().enumerate().take(rows_count) {
+        let mut tc_nodes = Vec::new();
+        tr.find_all("tc", &mut tc_nodes);
+        for (c, tc) in tc_nodes.iter().enumerate().take(cols_count) {
+            let mut text_nodes = Vec::new();
+            tc.find_all("t", &mut text_nodes);
+            let mut cell_text = String::new();
+            for t in text_nodes {
+                cell_text.push_str(&t.text);
+            }
+            let is_header = r == 0;
+            let mut cell = TableCell::new(cell_text.trim());
+            cell.bold = is_header;
+            table.set_cell(r, c, cell);
+        }
+    }
+
+    slide.add_element(SlideElement::Table(table));
 }
 
 fn parse_pptx_picture(
@@ -569,4 +722,281 @@ fn parse_pptx_picture(
         let img_elem = ImageElement::new(bounds, data, FitMode::Contain);
         slide.add_element(SlideElement::Image(img_elem));
     }
+}
+
+/// Export deck to an OOXML `.pptx` container archive.
+pub fn export_pptx(deck: &Deck) -> Result<Vec<u8>> {
+    let mut builder = sex_archive::ArchiveBuilder::new(sex_archive::OutputFormat::Zip);
+
+    // 1. [Content_Types].xml
+    let mut ct = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">\n<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>\n<Default Extension=\"xml\" ContentType=\"application/xml\"/>\n<Override PartName=\"/ppt/presentation.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml\"/>\n<Override PartName=\"/ppt/theme/theme1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.theme+xml\"/>\n");
+    for i in 1..=deck.slide_count() {
+        ct.push_str(&format!(
+            "<Override PartName=\"/ppt/slides/slide{}.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.slide+xml\"/>\n",
+            i
+        ));
+        ct.push_str(&format!(
+            "<Override PartName=\"/ppt/notesSlides/notesSlide{}.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.notesSlide+xml\"/>\n",
+            i
+        ));
+    }
+    ct.push_str("</Types>");
+    let ct_bytes = ct.into_bytes();
+    let ct_len = ct_bytes.len() as u64;
+    builder.add_file("[Content_Types].xml", ct_len, 0, sex_archive::VecReader::new(ct_bytes)).map_err(|_| Error::Io)?;
+
+    // 2. _rels/.rels
+    let root_rels = b"<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\n<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"ppt/presentation.xml\"/>\n</Relationships>";
+    builder.add_file("_rels/.rels", root_rels.len() as u64, 0, &root_rels[..]).map_err(|_| Error::Io)?;
+
+    // 3. ppt/presentation.xml
+    let (emu_w, emu_h) = match deck.aspect_ratio {
+        AspectRatio::Ratio16x9 => (12192000, 6858000),
+        AspectRatio::Ratio16x10 => (12192000, 7620000),
+        AspectRatio::Ratio4x3 => (9144000, 6858000),
+        AspectRatio::Custom { width, height } => ((width * 9525.0) as u64, (height * 9525.0) as u64),
+    };
+
+    let mut pres = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<p:presentation xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\">\n<p:sldSz cx=\"{}\" cy=\"{}\"/>\n<p:sldIdLst>\n",
+        emu_w, emu_h
+    );
+    for i in 1..=deck.slide_count() {
+        pres.push_str(&format!("<p:sldId id=\"{}\" r:id=\"rId{}\"/>\n", 255 + i, i));
+    }
+    pres.push_str("</p:sldIdLst>\n</p:presentation>");
+    let pres_bytes = pres.into_bytes();
+    let pres_len = pres_bytes.len() as u64;
+    builder.add_file("ppt/presentation.xml", pres_len, 0, sex_archive::VecReader::new(pres_bytes)).map_err(|_| Error::Io)?;
+
+    // 4. ppt/_rels/presentation.xml.rels
+    let mut pres_rels = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\n");
+    for i in 1..=deck.slide_count() {
+        pres_rels.push_str(&format!(
+            "<Relationship Id=\"rId{}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide\" Target=\"slides/slide{}.xml\"/>\n",
+            i, i
+        ));
+    }
+    pres_rels.push_str(&format!(
+        "<Relationship Id=\"rId{}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme\" Target=\"theme/theme1.xml\"/>\n</Relationships>",
+        deck.slide_count() + 1
+    ));
+    let pres_rels_bytes = pres_rels.into_bytes();
+    let pres_rels_len = pres_rels_bytes.len() as u64;
+    builder.add_file("ppt/_rels/presentation.xml.rels", pres_rels_len, 0, sex_archive::VecReader::new(pres_rels_bytes)).map_err(|_| Error::Io)?;
+
+    // 5. ppt/theme/theme1.xml with deck theme colors
+    let pal = &deck.theme.palette;
+    let theme_xml = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<a:theme xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" name=\"{}\">\n<a:themeElements><a:clrScheme name=\"Burlesque\">\n<a:dk1><a:srgbClr val=\"{:02X}{:02X}{:02X}\"/></a:dk1>\n<a:lt1><a:srgbClr val=\"{:02X}{:02X}{:02X}\"/></a:lt1>\n<a:accent1><a:srgbClr val=\"{:02X}{:02X}{:02X}\"/></a:accent1>\n<a:accent2><a:srgbClr val=\"{:02X}{:02X}{:02X}\"/></a:accent2>\n</a:clrScheme></a:themeElements></a:theme>",
+        deck.theme.name,
+        pal.foreground.r(), pal.foreground.g(), pal.foreground.b(),
+        pal.background.r(), pal.background.g(), pal.background.b(),
+        pal.primary_accent.r(), pal.primary_accent.g(), pal.primary_accent.b(),
+        pal.secondary_accent.r(), pal.secondary_accent.g(), pal.secondary_accent.b()
+    );
+    let theme_bytes = theme_xml.into_bytes();
+    let theme_len = theme_bytes.len() as u64;
+    builder.add_file("ppt/theme/theme1.xml", theme_len, 0, sex_archive::VecReader::new(theme_bytes)).map_err(|_| Error::Io)?;
+
+    // 6. Slides & notes
+    for (i, slide) in deck.slides.iter().enumerate() {
+        let slide_num = i + 1;
+
+        // Transition tag
+        let trans_tag = match slide.transition {
+            Transition::Dissolve => "<p:transition><p:dissolve/></p:transition>\n",
+            Transition::PushLeft => "<p:transition><p:push dir=\"l\"/></p:transition>\n",
+            Transition::PushRight => "<p:transition><p:push dir=\"r\"/></p:transition>\n",
+            Transition::WipeRight => "<p:transition><p:wipe dir=\"r\"/></p:transition>\n",
+            Transition::ZoomIn => "<p:transition><p:zoom/></p:transition>\n",
+            Transition::Fade => "<p:transition><p:fade/></p:transition>\n",
+            _ => "",
+        };
+
+        let mut slide_xml = format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<p:sld xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\">\n<p:cSld><p:spTree>\n<p:nvGrpSpPr><p:cNvPr id=\"1\" name=\"\"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>\n<p:grpSpPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"0\" cy=\"0\"/></a:xfrm></p:grpSpPr>\n"
+        );
+
+        let mut sp_id = 2;
+
+        let title_in_elements = slide.elements.iter().any(|el| {
+            if let SlideElement::TextBox(tb) = el {
+                tb.plain_text().contains(&slide.title)
+            } else {
+                false
+            }
+        });
+        if !slide.title.is_empty() && !title_in_elements {
+            let off_x = (80.0 * 9525.0) as i64;
+            let off_y = (60.0 * 9525.0) as i64;
+            let ext_x = (1760.0 * 9525.0) as i64;
+            let ext_y = (120.0 * 9525.0) as i64;
+            let pal = &deck.theme.palette;
+            slide_xml.push_str(&format!(
+                "<p:sp><p:nvSpPr><p:cNvPr id=\"{}\" name=\"Title {}\"/><p:cNvSpPr><a:spLocks noGrp=\"1\"/></p:cNvSpPr><p:nvPr><p:ph type=\"title\"/></p:nvPr></p:nvSpPr>\n<p:spPr><a:xfrm><a:off x=\"{}\" y=\"{}\"/><a:ext cx=\"{}\" cy=\"{}\"/></a:xfrm></p:spPr>\n<p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:pPr algn=\"ctr\"/><a:r><a:rPr sz=\"4400\" b=\"1\"><a:solidFill><a:srgbClr val=\"{:02X}{:02X}{:02X}\"/></a:solidFill></a:rPr><a:t>{}</a:t></a:r></a:p></p:txBody></p:sp>\n",
+                sp_id, sp_id, off_x, off_y, ext_x, ext_y,
+                pal.foreground.r(), pal.foreground.g(), pal.foreground.b(),
+                escape_xml(&slide.title)
+            ));
+            sp_id += 1;
+        }
+
+        for elem in &slide.elements {
+            match elem {
+                SlideElement::TextBox(tb) => {
+                    let off_x = (tb.bounds.x * 9525.0) as i64;
+                    let off_y = (tb.bounds.y * 9525.0) as i64;
+                    let ext_x = (tb.bounds.w * 9525.0) as i64;
+                    let ext_y = (tb.bounds.h * 9525.0) as i64;
+
+                    slide_xml.push_str(&format!(
+                        "<p:sp><p:nvSpPr><p:cNvPr id=\"{}\" name=\"TextBox {}\"/><p:cNvSpPr txBox=\"1\"/><p:nvPr/></p:nvSpPr>\n<p:spPr><a:xfrm><a:off x=\"{}\" y=\"{}\"/><a:ext cx=\"{}\" cy=\"{}\"/></a:xfrm></p:spPr>\n<p:txBody><a:bodyPr/><a:lstStyle/>\n",
+                        sp_id, sp_id, off_x, off_y, ext_x, ext_y
+                    ));
+                    sp_id += 1;
+
+                    for p in &tb.paragraphs {
+                        let lvl_attr = if p.bullet_level > 0 { format!(" lvl=\"{}\"", p.bullet_level.saturating_sub(1)) } else { String::new() };
+                        slide_xml.push_str(&format!("<a:p><a:pPr{}/>", lvl_attr));
+                        for r in &p.runs {
+                            let bold_attr = if r.bold { " b=\"1\"" } else { "" };
+                            let italic_attr = if r.italic { " i=\"1\"" } else { "" };
+                            let sz_attr = format!(" sz=\"{}\"", (r.font_size * 100.0) as u32);
+                            let clr_tag = if let Some(c) = r.color {
+                                format!("<a:solidFill><a:srgbClr val=\"{:02X}{:02X}{:02X}\"/></a:solidFill>", c.r(), c.g(), c.b())
+                            } else {
+                                String::new()
+                            };
+                            let escaped = escape_xml(&r.text);
+                            slide_xml.push_str(&format!(
+                                "<a:r><a:rPr{}{}{}>{}</a:rPr><a:t>{}</a:t></a:r>",
+                                sz_attr, bold_attr, italic_attr, clr_tag, escaped
+                            ));
+                        }
+                        slide_xml.push_str("</a:p>\n");
+                    }
+                    slide_xml.push_str("</p:txBody></p:sp>\n");
+                }
+                SlideElement::Shape(s) => {
+                    let off_x = (s.bounds.x * 9525.0) as i64;
+                    let off_y = (s.bounds.y * 9525.0) as i64;
+                    let ext_x = (s.bounds.w * 9525.0) as i64;
+                    let ext_y = (s.bounds.h * 9525.0) as i64;
+
+                    let prst = match s.kind {
+                        ShapeKind::RoundedRect { .. } => "roundRect",
+                        ShapeKind::Ellipse => "ellipse",
+                        ShapeKind::Line => "line",
+                        ShapeKind::Arrow => "rightArrow",
+                        _ => "rect",
+                    };
+
+                    let fill_tag = if let Some(fill) = s.fill {
+                        format!("<a:solidFill><a:srgbClr val=\"{:02X}{:02X}{:02X}\"/></a:solidFill>", fill.r(), fill.g(), fill.b())
+                    } else {
+                        String::new()
+                    };
+
+                    let stroke_tag = if let Some(st) = s.stroke {
+                        format!(
+                            "<a:ln w=\"{}\"><a:solidFill><a:srgbClr val=\"{:02X}{:02X}{:02X}\"/></a:solidFill></a:ln>",
+                            (st.width * 12700.0) as u64,
+                            st.color.r(), st.color.g(), st.color.b()
+                        )
+                    } else {
+                        String::new()
+                    };
+
+                    slide_xml.push_str(&format!(
+                        "<p:sp><p:nvSpPr><p:cNvPr id=\"{}\" name=\"Shape {}\"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>\n<p:spPr><a:xfrm><a:off x=\"{}\" y=\"{}\"/><a:ext cx=\"{}\" cy=\"{}\"/></a:xfrm><a:prstGeom prst=\"{}\"><a:avLst/></a:prstGeom>{}{}</p:spPr>\n</p:sp>\n",
+                        sp_id, sp_id, off_x, off_y, ext_x, ext_y, prst, fill_tag, stroke_tag
+                    ));
+                    sp_id += 1;
+                }
+                SlideElement::Table(t) => {
+                    let off_x = (t.bounds.x * 9525.0) as i64;
+                    let off_y = (t.bounds.y * 9525.0) as i64;
+                    let ext_x = (t.bounds.w * 9525.0) as i64;
+                    let ext_y = (t.bounds.h * 9525.0) as i64;
+
+                    slide_xml.push_str(&format!(
+                        "<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id=\"{}\" name=\"Table {}\"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr>\n<p:xfrm><a:off x=\"{}\" y=\"{}\"/><a:ext cx=\"{}\" cy=\"{}\"/></p:xfrm>\n<a:graphic><a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/table\">\n<a:tbl><a:tblPr/><a:tblGrid>",
+                        sp_id, sp_id, off_x, off_y, ext_x, ext_y
+                    ));
+                    sp_id += 1;
+
+                    let col_w = (ext_x / t.cols.max(1) as i64).max(1000);
+                    for _ in 0..t.cols {
+                        slide_xml.push_str(&format!("<a:gridCol w=\"{}\"/>", col_w));
+                    }
+                    slide_xml.push_str("</a:tblGrid>\n");
+
+                    for row in &t.cells {
+                        slide_xml.push_str("<a:tr h=\"370840\">");
+                        for cell in row {
+                            let esc = escape_xml(&cell.text);
+                            let bold_attr = if cell.bold { " b=\"1\"" } else { "" };
+                            slide_xml.push_str(&format!(
+                                "<a:tc><a:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr{}><a:solidFill><a:srgbClr val=\"FFFFFF\"/></a:solidFill></a:rPr><a:t>{}</a:t></a:r></a:p></a:txBody></a:tc>",
+                                bold_attr, esc
+                            ));
+                        }
+                        slide_xml.push_str("</a:tr>\n");
+                    }
+                    slide_xml.push_str("</a:tbl></a:graphicData></a:graphic></p:graphicFrame>\n");
+                }
+                _ => {}
+            }
+        }
+
+        slide_xml.push_str("</p:spTree></p:cSld>\n");
+        slide_xml.push_str(trans_tag);
+        slide_xml.push_str("</p:sld>");
+
+        let slide_bytes = slide_xml.into_bytes();
+        let slide_len = slide_bytes.len() as u64;
+        let slide_path = format!("ppt/slides/slide{}.xml", slide_num);
+        builder.add_file(&slide_path, slide_len, 0, sex_archive::VecReader::new(slide_bytes)).map_err(|_| Error::Io)?;
+
+        // Slide rels -> notesSlide
+        let notes_rel = format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\n<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesSlide\" Target=\"../notesSlides/notesSlide{}.xml\"/>\n</Relationships>",
+            slide_num
+        );
+        let notes_rel_bytes = notes_rel.into_bytes();
+        let notes_rel_len = notes_rel_bytes.len() as u64;
+        let notes_rel_path = format!("ppt/slides/_rels/slide{}.xml.rels", slide_num);
+        builder.add_file(&notes_rel_path, notes_rel_len, 0, sex_archive::VecReader::new(notes_rel_bytes)).map_err(|_| Error::Io)?;
+
+        // notesSlide{i}.xml
+        let note_text = escape_xml(slide.notes());
+        let notes_slide_xml = format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<p:notes xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\">\n<p:cSld><p:spTree>\n<p:sp><p:txBody><a:bodyPr/><a:p><a:r><a:t>{}</a:t></a:r></a:p></p:txBody></p:sp>\n</p:spTree></p:cSld>\n</p:notes>",
+            note_text
+        );
+        let notes_slide_bytes = notes_slide_xml.into_bytes();
+        let notes_slide_len = notes_slide_bytes.len() as u64;
+        let notes_slide_path = format!("ppt/notesSlides/notesSlide{}.xml", slide_num);
+        builder.add_file(&notes_slide_path, notes_slide_len, 0, sex_archive::VecReader::new(notes_slide_bytes)).map_err(|_| Error::Io)?;
+    }
+
+    let mut out = Vec::new();
+    builder.write(&mut out, &mut sex_archive::no_progress).map_err(|_| Error::Io)?;
+    Ok(out)
+}
+
+fn escape_xml(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            _ => out.push(c),
+        }
+    }
+    out
 }
