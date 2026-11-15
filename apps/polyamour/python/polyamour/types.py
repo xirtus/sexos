@@ -1,996 +1,1165 @@
 # SPDX-License-Identifier: GPL-3.0-only
-"""Blender-flavoured data types (bpy.types) over the polyops stream.
-
-Every object here mirrors part of Polyamour's scene. Reading an attribute reads
-the mirror; assigning one updates the mirror and emits the polyops command that
-makes the same change in Polyamour. The mirror starts from the scene snapshot
-Polyamour passes in POLYAMOUR_SCENE (see polyamour.__init__), or empty.
-
-Objects this script creates are addressed by handles ($1, $2 ...) so they stay
-right even when Polyamour gives them a different unique name than predicted.
-"""
+"""bpy.types.Object and what hangs off it (modifiers, material slots), lights
+and cameras; the other ID types are in mesh.py, shading.py, rig.py, anim.py
+and scene.py and re-exported here."""
 import math
 
-from .polyops import Raw, mesh_options, quote, stream
+from mathutils import Euler, Matrix, Quaternion, Vector
+
+from . import polyops as P
+from ._arrays import BoolArray, FloatArray
+from ._base import ID, Collection_, bpy_struct, first, parse_opts, parse_value, req
+from .anim import Action, ActionFCurves, ActionGroup, AnimData, FCurve, Keyframe, KeyframePoints
+from .mesh import (Attribute, Attributes, Key, Mesh, MeshEdge, MeshLoop, MeshLoopTriangle, MeshPolygon, MeshUVLoop,
+                   MeshUVLoopLayer, MeshVertex, ShapeKey, VertexGroupElement)
+from .rig import (Armature, Bone, BoneCollection, Constraint, Constraints, EditBone, Lattice, LatticePoint, Pose, PoseBone,
+                  VertexGroup, VertexGroups, _m4, _cols)
+from .shading import (ColorRamp, ColorRampElement, Image, Material, Node, NodeLink, NodeLinks, Nodes, NodeSocket, NodeTree,
+                      NodeTreeInterface, World)
 
 
-# --- math ------------------------------------------------------------------------
+# --- modifiers --------------------------------------------------------------------------
 
-class Vector:
-    """A small mathutils.Vector: x/y/z/w, indexing, arithmetic. Vectors handed
-    out by a datablock (obj.location) write changes straight back to it."""
+# polyops modifier type -> Blender type
+_TYPES = {
+    'Mirror': 'MIRROR', 'Subdivision': 'SUBSURF', 'Array': 'ARRAY', 'Solidify': 'SOLIDIFY', 'Bevel': 'BEVEL',
+    'Triangulate': 'TRIANGULATE', 'Weld': 'WELD', 'Displace': 'DISPLACE', 'Smooth': 'SMOOTH', 'Decimate': 'DECIMATE',
+    'Remesh': 'REMESH', 'Screw': 'SCREW', 'Wireframe': 'WIREFRAME', 'EdgeSplit': 'EDGE_SPLIT', 'Build': 'BUILD',
+    'Boolean': 'BOOLEAN', 'SimpleDeform': 'SIMPLE_DEFORM', 'Cast': 'CAST', 'Wave': 'WAVE', 'Shrinkwrap': 'SHRINKWRAP',
+    'LaplacianSmooth': 'LAPLACIANSMOOTH', 'CorrectiveSmooth': 'CORRECTIVE_SMOOTH', 'WeightedNormal': 'WEIGHTED_NORMAL',
+    'Armature': 'ARMATURE', 'Hook': 'HOOK', 'Lattice': 'LATTICE', 'Warp': 'WARP', 'VertexWeightEdit': 'VERTEX_WEIGHT_EDIT',
+    'VertexWeightMix': 'VERTEX_WEIGHT_MIX', 'VertexWeightProximity': 'VERTEX_WEIGHT_PROXIMITY', 'Nodes': 'NODES',
+}
+_FROM_BLENDER = {v: k for k, v in _TYPES.items()}
 
-    __slots__ = ('_v', '_owner')
 
-    def __init__(self, seq=(0.0, 0.0, 0.0), _owner=None):
-        object.__setattr__(self, '_v', [float(c) for c in seq])
-        object.__setattr__(self, '_owner', _owner)
+def _f(x):
+    return float(x)
 
-    def _changed(self):
-        if self._owner is not None:
-            self._owner(self)
 
-    def _assign(self, seq):
-        """Replace the components without telling the owner."""
-        vals = [float(c) for c in seq]
-        if len(vals) != len(self._v):
-            raise ValueError('expected %d values, got %d' % (len(self._v), len(vals)))
-        self._v[:] = vals
+def _b(x):
+    return bool(x)
 
-    def __len__(self):
-        return len(self._v)
 
-    def __iter__(self):
-        return iter(list(self._v))
+def _i(x):
+    return int(x)
 
-    def __getitem__(self, i):
-        if isinstance(i, slice):
-            return tuple(self._v[i])
-        return self._v[i]
 
-    def __setitem__(self, i, value):
-        if isinstance(i, slice):
-            new = list(self._v)
-            new[i] = [float(c) for c in value]
-            self._assign(new)
-        else:
-            self._v[i] = float(value)
-        self._changed()
+def _enum(pairs):
+    """Blender enum <-> polyops word."""
+    to_p = dict(pairs)
+    to_b = {v: k for k, v in pairs}
+    return (lambda v: P.Raw(to_p.get(str(v), str(v).lower())), lambda t: to_b.get(t, t.upper()))
 
-    def _axis(i):
-        def get(self):
-            return self._v[i]
 
-        def put(self, value):
-            self[i] = value
-        return property(get, put)
+def _obj():
+    return (lambda v: v.name if v is not None else '', lambda t: Object(t) if t and t != 'none' else None)
 
-    x = _axis(0)
-    y = _axis(1)
-    z = _axis(2)
-    w = _axis(3)
-    r, g, b, a = x, y, z, w
-    del _axis
+
+_AX = _enum([('X', 'x'), ('Y', 'y'), ('Z', 'z')])
+
+# Blender type -> {Blender attribute: (polyops key, to polyops, from polyops text)}; attributes
+# that span several polyops keys are handled in Modifier itself.
+_ATTRS = {
+    'SUBSURF': {'levels': ('levels', _i, int), 'subdivision_type': ('simple', lambda v: v == 'SIMPLE', lambda t: 'SIMPLE' if t == '1' else 'CATMULL_CLARK')},
+    'MIRROR': {'use_mirror_merge': ('merge', _b, lambda t: t == '1'), 'merge_threshold': ('merge_distance', _f, float)},
+    'ARRAY': {'count': ('count', _i, int), 'use_merge_vertices': ('merge', _b, lambda t: t == '1')},
+    'SOLIDIFY': {'thickness': ('thickness', _f, float), 'offset': ('offset', _f, float)},
+    'BEVEL': {'width': ('width', _f, float), 'segments': ('segments', _i, int), 'angle_limit': ('angle', _f, float)},
+    'WELD': {'merge_threshold': ('distance', _f, float)},
+    'DISPLACE': {'strength': ('strength', _f, float)},
+    'SMOOTH': {'factor': ('factor', _f, float), 'iterations': ('iterations', _i, int)},
+    'DECIMATE': {'decimate_type': ('mode',) + _enum([('COLLAPSE', 'collapse'), ('UNSUBDIV', 'unsubdivide'), ('DISSOLVE', 'planar')]),
+                 'ratio': ('ratio', _f, float), 'iterations': ('iterations', _i, int), 'angle_limit': ('angle', _f, float),
+                 'use_collapse_triangulate': ('triangulate', _b, lambda t: t == '1')},
+    'REMESH': {'mode': ('mode',) + _enum([('BLOCKS', 'blocks'), ('SMOOTH', 'smooth'), ('SHARP', 'smooth'), ('VOXEL', 'voxel')]),
+               'voxel_size': ('voxel_size', _f, float), 'octree_depth': ('octree_depth', _i, int), 'scale': ('scale', _f, float),
+               'use_smooth_shade': ('smooth_shade', _b, lambda t: t == '1')},
+    'SCREW': {'axis': ('axis',) + _AX, 'angle': ('angle', _f, float), 'steps': ('steps', _i, int), 'render_steps': ('steps', _i, int),
+              'screw_offset': ('screw_offset', _f, float), 'iterations': ('iterations', _i, int),
+              'use_merge_vertices': ('merge', _b, lambda t: t == '1'), 'merge_threshold': ('merge_distance', _f, float),
+              'use_normal_flip': ('flip', _b, lambda t: t == '1'), 'use_smooth_shade': ('smooth_shade', _b, lambda t: t == '1')},
+    'WIREFRAME': {'thickness': ('thickness', _f, float), 'offset': ('offset', _f, float), 'use_even_offset': ('even', _b, lambda t: t == '1'),
+                  'use_relative_offset': ('relative', _b, lambda t: t == '1'), 'use_boundary': ('boundary', _b, lambda t: t == '1'),
+                  'use_replace': ('replace', _b, lambda t: t == '1')},
+    'EDGE_SPLIT': {'split_angle': ('angle', _f, float), 'use_edge_angle': ('use_angle', _b, lambda t: t == '1'), 'use_edge_sharp': None},
+    'BUILD': {'frame_start': ('start', _f, float), 'frame_duration': ('length', _f, float), 'use_reverse': ('reverse', _b, lambda t: t == '1'),
+              'use_random_order': ('random', _b, lambda t: t == '1'), 'seed': ('seed', _i, int)},
+    'BOOLEAN': {'object': ('object',) + _obj(), 'operation': ('operation',) + _enum([('INTERSECT', 'intersect'), ('UNION', 'union'), ('DIFFERENCE', 'difference')]),
+                'solver': None, 'operand_type': None},
+    'SIMPLE_DEFORM': {'deform_method': ('mode',) + _enum([('TWIST', 'twist'), ('BEND', 'bend'), ('TAPER', 'taper'), ('STRETCH', 'stretch')]),
+                      'deform_axis': ('axis',) + _AX, 'factor': ('factor', _f, float), 'angle': ('factor', _f, float),
+                      'lock_x': ('lock_x', _b, lambda t: t == '1'), 'lock_y': ('lock_y', _b, lambda t: t == '1'), 'lock_z': ('lock_z', _b, lambda t: t == '1')},
+    'CAST': {'cast_type': ('type',) + _enum([('SPHERE', 'sphere'), ('CYLINDER', 'cylinder'), ('CUBOID', 'cuboid')]), 'factor': ('factor', _f, float),
+             'radius': ('radius', _f, float), 'size': ('size', _f, float), 'use_x': ('x', _b, lambda t: t == '1'), 'use_y': ('y', _b, lambda t: t == '1'),
+             'use_z': ('z', _b, lambda t: t == '1'), 'use_radius_as_size': ('size_from_radius', _b, lambda t: t == '1')},
+    'WAVE': {'use_x': ('x', _b, lambda t: t == '1'), 'use_y': ('y', _b, lambda t: t == '1'), 'use_cyclic': ('cyclic', _b, lambda t: t == '1'),
+             'use_normal': ('normals', _b, lambda t: t == '1'), 'falloff_radius': ('falloff', _f, float), 'height': ('height', _f, float),
+             'width': ('width', _f, float), 'narrowness': ('narrowness', _f, float), 'speed': ('speed', _f, float),
+             'time_offset': ('time_offset', _f, float), 'lifetime': ('lifetime', _f, float), 'damping_time': ('damping', _f, float)},
+    'SHRINKWRAP': {'target': ('target',) + _obj(), 'wrap_method': ('method',) + _enum([('NEAREST_SURFACEPOINT', 'nearest_surface'), ('PROJECT', 'project'),
+                   ('NEAREST_VERTEX', 'nearest_vertex')]), 'offset': ('offset', _f, float), 'use_project_x': ('x', _b, lambda t: t == '1'),
+                   'use_project_y': ('y', _b, lambda t: t == '1'), 'use_project_z': ('z', _b, lambda t: t == '1'),
+                   'use_positive_direction': ('positive', _b, lambda t: t == '1'), 'use_negative_direction': ('negative', _b, lambda t: t == '1')},
+    'LAPLACIANSMOOTH': {'iterations': ('iterations', _i, int), 'lambda_factor': ('factor', _f, float), 'lambda_border': ('border', _f, float),
+                        'use_x': ('x', _b, lambda t: t == '1'), 'use_y': ('y', _b, lambda t: t == '1'), 'use_z': ('z', _b, lambda t: t == '1'),
+                        'use_volume_preserve': ('preserve_volume', _b, lambda t: t == '1'), 'use_normalized': ('normalized', _b, lambda t: t == '1')},
+    'CORRECTIVE_SMOOTH': {'factor': ('factor', _f, float), 'iterations': ('iterations', _i, int), 'scale': ('scale', _f, float),
+                          'smooth_type': ('length_weighted', lambda v: v == 'LENGTH_WEIGHTED', lambda t: 'LENGTH_WEIGHTED' if t == '1' else 'SIMPLE'),
+                          'use_only_smooth': ('only_smooth', _b, lambda t: t == '1')},
+    'WEIGHTED_NORMAL': {'keep_sharp': ('keep_sharp', _b, lambda t: t == '1')},
+}
+
+# Attributes Blender has that Polyamour keeps only in Python (with Blender's defaults).
+_LOCAL = {'show_viewport': True, 'show_render': True, 'show_in_editmode': False, 'show_on_cage': False, 'show_expanded': True,
+          'is_active': False, 'use_pin_to_last': False, 'render_levels': 2, 'quality': 3, 'use_creases': True, 'uv_smooth': 'PRESERVE_BOUNDARIES',
+          'boundary_smooth': 'ALL', 'use_limit_surface': True, 'use_bisect_axis': (False, False, False), 'use_bisect_flip_axis': (False, False, False),
+          'mirror_object': None, 'use_clip': False, 'use_mirror_vertex_groups': True, 'use_mirror_u': False, 'use_mirror_v': False,
+          'fit_type': 'FIXED_COUNT', 'fit_length': 0.0, 'curve': None, 'start_cap': None, 'end_cap': None, 'use_object_offset': False,
+          'offset_object': None, 'use_even_offset': False, 'use_rim': True, 'use_rim_only': False, 'use_flip_normals': False,
+          'limit_method': 'ANGLE', 'affect': 'EDGES', 'offset_type': 'OFFSET', 'profile': 0.5, 'harden_normals': False,
+          'quad_method': 'BEAUTY', 'ngon_method': 'BEAUTY', 'min_vertices': 4, 'mode_weld': 'ALL', 'texture': None,
+          'texture_coords': 'LOCAL', 'direction': 'NORMAL', 'mid_level': 0.5, 'solver': 'EXACT', 'operand_type': 'OBJECT',
+          'use_self': False, 'use_hole_tolerant': False, 'use_edge_sharp': True, 'deform_axis': 'Z', 'use_remove_disconnected': True,
+          'adaptivity': 0.0, 'threshold': 1.0, 'use_merge_vertices': False, 'merge_threshold': 0.01}
+
+
+class Modifier(bpy_struct):
+    """A modifier on an object; `type` is Blender's. Attributes Polyamour
+    implements are sent to it; others are kept in this Python."""
+
+    def __init__(self, obj, index):
+        self.__dict__['_o'] = obj
+        self.__dict__['_i'] = index
+
+    def _key(self):
+        return ('modifier', self._o, self._i)
+
+    def _j(self):
+        return req('dump_object', self._o)['modifiers'][self._i]
+
+    def _opts(self):
+        return parse_opts(self._j()['opts'])
 
     def __repr__(self):
-        return '%s((%s))' % (type(self).__name__, ', '.join('%.4f' % c for c in self._v))
-
-    def __eq__(self, other):
-        try:
-            return list(self._v) == [float(c) for c in other]
-        except TypeError:
-            return NotImplemented
-
-    __hash__ = None
-
-    def copy(self):
-        return type(self)(self._v)
-
-    def to_tuple(self, precision=-1):
-        return tuple(self._v if precision < 0 else (round(c, precision) for c in self._v))
-
-    def _zip(self, other):
-        o = list(other)
-        if len(o) != len(self._v):
-            raise ValueError('vector sizes differ')
-        return zip(self._v, o)
-
-    def __add__(self, other):
-        return Vector(a + b for a, b in self._zip(other))
-
-    __radd__ = __add__
-
-    def __sub__(self, other):
-        return Vector(a - b for a, b in self._zip(other))
-
-    def __rsub__(self, other):
-        return Vector(b - a for a, b in self._zip(other))
-
-    def __mul__(self, s):
-        if isinstance(s, (int, float)):
-            return Vector(c * s for c in self._v)
-        return Vector(a * b for a, b in self._zip(s))
-
-    __rmul__ = __mul__
-
-    def __truediv__(self, s):
-        return Vector(c / s for c in self._v)
-
-    def __neg__(self):
-        return Vector(-c for c in self._v)
-
-    def dot(self, other):
-        return sum(a * b for a, b in self._zip(other))
-
-    def cross(self, other):
-        a, b = self._v, list(other)
-        return Vector((a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]))
+        return "bpy.data.objects['%s'].modifiers['%s']" % (self._o, self.name)
 
     @property
-    def length(self):
-        return math.sqrt(sum(c * c for c in self._v))
+    def type(self):
+        t = self._j()['type']
+        return _TYPES.get(t, t.upper())
 
-    def normalized(self):
-        n = self.length
-        return Vector(c / n for c in self._v) if n else Vector(self._v)
-
-    def normalize(self):
-        n = self.length
-        if n:
-            self._assign([c / n for c in self._v])
-            self._changed()
-
-
-class Euler(Vector):
-    """XYZ Euler angles in radians (Blender's default rotation mode)."""
-    __slots__ = ()
-    order = 'XYZ'
-
-
-class Color(Vector):
-    __slots__ = ()
-
-
-def _vec3(v, what):
-    vals = [float(c) for c in v]
-    if len(vals) != 3:
-        raise ValueError('%s needs 3 values, got %d' % (what, len(vals)))
-    return vals
-
-
-def quat_to_euler(w, x, y, z):
-    """XYZ Euler angles of a (w, x, y, z) quaternion, as script.rs computes them."""
-    n = math.sqrt(w * w + x * x + y * y + z * z) or 1.0
-    w, x, y, z = w / n, x / n, y / n, z / n
-    r00 = 1 - 2 * (y * y + z * z)
-    r10 = 2 * (x * y + w * z)
-    r20 = 2 * (x * z - w * y)
-    r21 = 2 * (y * z + w * x)
-    r22 = 1 - 2 * (x * x + y * y)
-    sy = max(-1.0, min(1.0, -r20))
-    if abs(sy) > 0.99999:
-        r01 = 2 * (x * y - w * z)
-        r11 = 1 - 2 * (x * x + z * z)
-        return [math.atan2(math.copysign(1, sy) * r01, r11), math.asin(sy), 0.0]
-    return [math.atan2(r21, r22), math.asin(sy), math.atan2(r10, r00)]
-
-
-def unique_name(base, taken):
-    """Blender-style unique name, the same rule as sex-3d's scene::unique_name."""
-    if base not in taken:
-        return base
-    stem, _, num = base.rpartition('.')
-    if not (stem and len(num) == 3 and num.isdigit()):
-        stem = base
-    i = 1
-    while '%s.%03d' % (stem, i) in taken:
-        i += 1
-    return '%s.%03d' % (stem, i)
-
-
-# --- the mirror ---------------------------------------------------------------------
-
-class _State:
-    """Everything the script can see of Polyamour's scene."""
-
-    def __init__(self):
-        self.objects = []        # Object, in Polyamour's order
-        self.meshes = []         # Mesh datablocks
-        self.materials = []
-        self.collections = []    # Collection; [0] is the scene's root collection
-        self.selected = []
-        self.active = None
-        self.camera = None
-        self.scene_name = 'Scene'
-        self.frame_start, self.frame_end, self.fps = 1, 250, 24.0
-        self.world_color = [0.05, 0.05, 0.05]
-        self.world_strength = 1.0
-        self.render = {}
-
-    def object_names(self):
-        return {o.name for o in self.objects}
-
-
-state = _State()
-
-
-class ID:
-    """A named datablock. `_handle` is set for what this script created."""
-
-    _kind = 'ID'
-
-    def __init__(self, name):
-        self._name = name
-        self._handle = None
-
-    def _ref(self):
-        return str(self._handle) if self._handle is not None else quote(self._name)
+    @property
+    def bl_rna(self):
+        from ._base import _RNA
+        return _RNA(self.type.title().replace('_', '') + 'Modifier')
 
     @property
     def name(self):
-        return self._name
+        names = _modifier_names(self._o)
+        return names[self._i] if self._i < len(names) else self._j()['name']
 
-    def __repr__(self):
-        return '<%s %r>' % (type(self).__name__, self._name)
+    @name.setter
+    def name(self, new):
+        names = _modifier_names(self._o)
+        names[self._i] = str(new)
+        _custom_names[self._o] = names
+
+    def _set(self, **opts):
+        req('modifier_set', self._o, self._i, **opts)
+
+    def __getattr__(self, key):
+        if key.startswith('_'):
+            raise AttributeError(key)
+        t = self.type
+        o = self._opts()
+        spec = _ATTRS.get(t, {}).get(key)
+        if spec:
+            pk, _, from_p = spec
+            if pk in o:
+                return from_p(o[pk])
+        if t == 'MIRROR' and key == 'use_axis':
+            return BoolArray([o.get(k) == '1' for k in 'xyz'], lambda v: self._set(x=v[0], y=v[1], z=v[2]))
+        if t == 'ARRAY':
+            if key in ('use_relative_offset', 'use_constant_offset'):
+                v = parse_value(o['relative' if key == 'use_relative_offset' else 'constant'])
+                stored = self.get('_' + key)
+                return stored if stored is not None else any(abs(x) > 0 for x in v)
+            if key in ('relative_offset_displace', 'constant_offset_displace'):
+                pk = 'relative' if key.startswith('relative') else 'constant'
+                return FloatArray(parse_value(o[pk]), lambda v: self._set(**{pk: v}))
+        if t == 'SIMPLE_DEFORM' and key == 'limits':
+            return FloatArray(parse_value(o['limits']), lambda v: self._set(limits=v))
+        if t == 'WAVE' and key in ('start_position_x', 'start_position_y'):
+            return parse_value(o['start'])[0 if key.endswith('x') else 1]
+        if key in o:
+            # Rigging modifiers use Blender's names directly.
+            v = o[key]
+            if key in ('object', 'object_from', 'object_to', 'target'):
+                return Object(v) if v and v != 'none' else None
+            if key in ('vertex_group', 'subtarget', 'vertex_group_a', 'vertex_group_b', 'mask_vertex_group'):
+                return v
+            p = parse_value(v)
+            if key == 'matrix_inverse' and isinstance(p, list):
+                return _m4(p)
+            if isinstance(p, str):
+                return p.upper()
+            if key.startswith('use_') or key.startswith('invert') or key == 'normalize':
+                return bool(p)
+            return p
+        idp = self._idp()
+        if key in idp:
+            return idp[key]
+        if key in _LOCAL:
+            return _LOCAL[key]
+        if key in ('vertex_group',):
+            return ''
+        if key in ('invert_vertex_group',):
+            return False
+        raise AttributeError("'%s' modifier has no attribute '%s'" % (t, key))
+
+    def __setattr__(self, key, value):
+        if key == 'name':
+            Modifier.name.fset(self, value)
+            return
+        t = self.type
+        spec = _ATTRS.get(t, {}).get(key)
+        if spec:
+            pk, to_p, _ = spec
+            self._set(**{pk: to_p(value)})
+            return
+        if t == 'MIRROR' and key == 'use_axis':
+            v = [bool(x) for x in value]
+            self._set(x=v[0], y=v[1], z=v[2])
+            return
+        if t == 'ARRAY' and key in ('use_relative_offset', 'use_constant_offset', 'relative_offset_displace', 'constant_offset_displace'):
+            o = self._opts()
+            if key.startswith('use_'):
+                self['_' + key] = bool(value)
+                pk = 'relative' if 'relative' in key else 'constant'
+                saved = self.get('_saved_' + pk) or ([1.0, 0.0, 0.0] if pk == 'relative' else [0.0, 0.0, 0.0])
+                cur = parse_value(o[pk])
+                if value:
+                    self._set(**{pk: saved})
+                else:
+                    if any(abs(x) > 0 for x in cur):
+                        self['_saved_' + pk] = cur
+                    self._set(**{pk: [0.0, 0.0, 0.0]})
+            else:
+                pk = 'relative' if key.startswith('relative') else 'constant'
+                use = self.get('_use_' + pk + ('_offset'), pk == 'relative')
+                if use:
+                    self._set(**{pk: [float(x) for x in value]})
+                else:
+                    self['_saved_' + pk] = [float(x) for x in value]
+            return
+        if t == 'SIMPLE_DEFORM' and key == 'limits':
+            self._set(limits=[float(x) for x in value])
+            return
+        if t == 'WAVE' and key in ('start_position_x', 'start_position_y'):
+            s = parse_value(self._opts()['start'])
+            s[0 if key.endswith('x') else 1] = float(value)
+            self._set(start=s)
+            return
+        o = self._opts()
+        if key in o or key in ('vertex_group', 'invert_vertex_group', 'object', 'object_from', 'object_to', 'subtarget'):
+            if isinstance(value, ID):
+                value = value.name
+            elif value is None:
+                value = P.Raw('none')
+            elif isinstance(value, str) and key not in ('vertex_group', 'subtarget', 'vertex_group_a', 'vertex_group_b', 'mask_vertex_group'):
+                value = P.Raw(value.lower())
+            elif hasattr(value, 'col') and hasattr(value, 'row'):
+                value = _cols(value)
+            self._set(**{key: value})
+            return
+        if key == 'node_group':
+            self._set(node_group=value.name if value is not None else P.Raw('none'))
+            return
+        self._idp()[key] = value
+
+
+_custom_names = {}
+
+
+def _modifier_names(obj):
+    mods = req('dump_object', obj)['modifiers']
+    names = list(_custom_names.get(obj, []))
+    names = names[:len(mods)]
+    used = set(n for n in names if n)
+    while len(names) < len(mods):
+        base = mods[len(names)]['name']
+        n, k = base, 0
+        while n in used:
+            k += 1
+            n = '%s.%03d' % (base, k)
+        used.add(n)
+        names.append(n)
+    return names
+
+
+class ObjectModifiers(Collection_):
+    def __init__(self, obj):
+        self._o = obj
+
+    def _items(self):
+        return [Modifier(self._o, i) for i in range(len(req('dump_object', self._o)['modifiers']))]
+
+    def new(self, name, type):
+        ptype = _FROM_BLENDER.get(type)
+        if ptype is None:
+            raise TypeError("modifiers.new(): type '%s' is not supported by Polyamour" % type)
+        names = _modifier_names(self._o)
+        i = int(first(req('modifier_add', self._o, P.Raw(ptype))))
+        used = set(names)
+        n, k = name, 0
+        while n in used:
+            k += 1
+            n = '%s.%03d' % (name, k)
+        _custom_names[self._o] = names + [n]
+        return Modifier(self._o, i)
+
+    def remove(self, modifier):
+        names = _modifier_names(self._o)
+        req('modifier_remove', self._o, modifier._i)
+        names.pop(modifier._i)
+        _custom_names[self._o] = names
+
+    def clear(self):
+        req('modifier_clear', self._o)
+        _custom_names[self._o] = []
+
+    def move(self, from_index, to_index):
+        names = _modifier_names(self._o)
+        req('modifier_move', self._o, int(from_index), int(to_index))
+        names.insert(int(to_index), names.pop(int(from_index)))
+        _custom_names[self._o] = names
+
+    @property
+    def active(self):
+        items = self._items()
+        return items[-1] if items else None
+
+
+# --- material slots -------------------------------------------------------------------------
+
+class MaterialSlot(bpy_struct):
+    def __init__(self, obj, i):
+        self._o = obj
+        self._i = i
+
+    def _key(self):
+        return ('slot', self._o, self._i)
+
+    @property
+    def material(self):
+        n = req('dump_object', self._o)['materials'][self._i]
+        return Material(n) if n else None
+
+    @material.setter
+    def material(self, mat):
+        req('material_slot', self._o, self._i, mat.name if mat is not None else P.Raw('none'))
+
+    @property
+    def name(self):
+        m = self.material
+        return m.name if m else ''
+
+    @property
+    def slot_index(self):
+        return self._i
+
+    link = 'OBJECT'
+
+
+class MaterialSlots(Collection_):
+    def __init__(self, obj):
+        self._o = obj
+
+    def _items(self):
+        return [MaterialSlot(self._o, i) for i in range(len(req('dump_object', self._o)['materials']))]
+
+
+# --- lights and cameras ---------------------------------------------------------------------
+
+_LIGHT_KEYS = {'energy': 'power', 'color': 'color', 'shadow_soft_size': 'radius', 'spot_size': 'angle', 'spot_blend': 'blend',
+               'size': 'size', 'size_y': 'size_y', 'shape': 'shape', 'use_shadow': 'cast_shadow', 'spread': 'spread',
+               'angle': 'angle', 'max_bounces': 'max_bounces'}
+_LIGHT_TYPES = ('POINT', 'SUN', 'SPOT', 'AREA')
+
+
+class Light(ID):
+    """Light data. Polyamour keeps a light inside its object: a light made by
+    bpy.data.lights.new() waits here until bpy.data.objects.new() uses it."""
+
+    _kind = 'light'
+    _collection_name = 'lights'
+
+    def __init__(self, name, obj=None, pending=None):
+        ID.__init__(self, name)
+        self.__dict__['_obj'] = obj
+        self.__dict__['_pending'] = pending
+
+    def _j(self):
+        return req('dump_object', self._obj)['light']
+
+    def _rename(self, new):
+        if self._obj is None:
+            return new
+        return Object(self._obj)._rename(new)
+
+    @property
+    def type(self):
+        if self._obj is None:
+            return self._pending['type']
+        return self._j()['type']
+
+    @type.setter
+    def type(self, t):
+        if self._obj is None:
+            self._pending['type'] = t
+        else:
+            raise NotImplementedError('changing an existing light type is not supported yet')
+
+    def __getattr__(self, key):
+        if key.startswith('_'):
+            raise AttributeError(key)
+        if self._obj is None:
+            p = self._pending
+            if key in p:
+                return p[key]
+            return {'energy': 10.0 if p['type'] != 'SUN' else 1.0, 'color': (1.0, 1.0, 1.0), 'shadow_soft_size': 0.25,
+                    'spot_size': math.radians(45), 'spot_blend': 0.15, 'size': 0.25, 'use_shadow': True}.get(key, 0.0)
+        j = self._j()
+        if key == 'use_shadow':
+            return j['cast_shadow']
+        if key == 'color':
+            return FloatArray(j['color'], lambda v: setattr(self, 'color', v))
+        if key == 'angle' and j['type'] == 'SUN':
+            return j['angle']
+        if key in j:
+            return j[key]
+        if key in ('use_nodes', 'cycles'):
+            return False
+        raise AttributeError("'Light' object has no attribute '%s'" % key)
+
+    def __setattr__(self, key, value):
+        if key in ('name', 'type'):
+            object.__setattr__(self, key, value)
+            return
+        if self._obj is None:
+            self._pending[key] = value
+            return
+        pk = _LIGHT_KEYS.get(key)
+        if pk is None:
+            self._idp()[key] = value
+            return
+        if key == 'angle' and self.type == 'SUN':
+            pk = 'radius'
+        if key == 'shape':
+            value = P.Raw(str(value).lower())
+        req('set', P.Raw(P.quote(self._obj) + '.' + pk), *(value if isinstance(value, (list, tuple, FloatArray, Vector)) else [value]))
+
+    def _create(self, obj_name):
+        p = self._pending
+        opts = {}
+        for k, v in p.items():
+            if k == 'type':
+                continue
+            pk = _LIGHT_KEYS.get(k)
+            if pk and pk in ('power', 'color', 'radius', 'angle', 'blend', 'size'):
+                opts[pk] = list(v) if isinstance(v, (list, tuple, FloatArray, Vector)) else v
+        return first(req('light_add', P.Raw(p['type'].lower()), name=obj_name, **opts))
+
+
+_CAM_KEYS = {'lens': 'lens', 'angle': 'fov', 'clip_start': 'near', 'clip_end': 'far', 'ortho_scale': 'ortho_scale',
+             'sensor_width': 'sensor_width', 'sensor_height': 'sensor_height', 'sensor_fit': 'sensor_fit',
+             'shift_x': 'shift_x', 'shift_y': 'shift_y'}
+
+
+class _CameraDof(bpy_struct):
+    def __init__(self, cam):
+        self._c = cam
+
+    def __getattr__(self, key):
+        if key.startswith('_'):
+            raise AttributeError(key)
+        j = self._c._j() if self._c._obj else {}
+        k = {'use_dof': 'dof', 'focus_distance': 'focus_distance', 'aperture_fstop': 'fstop', 'aperture_blades': 'blades',
+             'aperture_rotation': 'aperture_rotation', 'aperture_ratio': 'aperture_ratio'}.get(key, key)
+        if k in j:
+            return parse_value(j[k]) if isinstance(j[k], str) else j[k]
+        return {'use_dof': False, 'focus_distance': 10.0, 'aperture_fstop': 2.8, 'focus_object': None}.get(key, 0.0)
+
+    def __setattr__(self, key, value):
+        if key.startswith('_'):
+            object.__setattr__(self, key, value)
+            return
+        k = {'use_dof': 'dof', 'focus_distance': 'focus_distance', 'aperture_fstop': 'fstop', 'aperture_blades': 'blades',
+             'aperture_rotation': 'aperture_rotation', 'aperture_ratio': 'aperture_ratio'}.get(key)
+        if key == 'focus_object':
+            req('set', P.Raw(P.quote(self._c._obj) + '.focus_object'), value.name if value is not None else P.Raw('none'))
+        elif k:
+            req('set', P.Raw(P.quote(self._c._obj) + '.' + k), value)
+
+
+class Camera(ID):
+    _kind = 'camera'
+    _collection_name = 'cameras'
+
+    def __init__(self, name, obj=None, pending=None):
+        ID.__init__(self, name)
+        self.__dict__['_obj'] = obj
+        self.__dict__['_pending'] = pending
+
+    def _j(self):
+        return req('dump_object', self._obj)['camera']
+
+    def _rename(self, new):
+        if self._obj is None:
+            return new
+        return Object(self._obj)._rename(new)
+
+    @property
+    def dof(self):
+        return _CameraDof(self)
+
+    def __getattr__(self, key):
+        if key.startswith('_'):
+            raise AttributeError(key)
+        if self._obj is None:
+            p = self._pending
+            if key in p:
+                return p[key]
+            return {'lens': 50.0, 'clip_start': 0.1, 'clip_end': 1000.0, 'type': 'PERSP', 'ortho_scale': 6.0, 'sensor_width': 36.0,
+                    'sensor_fit': 'AUTO', 'shift_x': 0.0, 'shift_y': 0.0}.get(key, 0.0)
+        j = self._j()
+        if key == 'angle_y':
+            return j['angle']
+        if key == 'angle_x':
+            return 2 * math.atan(j['sensor_width'] / (2 * j['lens']))
+        if key in j:
+            return j[key]
+        if key in ('display_size',):
+            return 1.0
+        if key in ('passepartout_alpha',):
+            return 0.5
+        if key in ('show_passepartout', 'show_limits', 'show_name'):
+            return False
+        raise AttributeError("'Camera' object has no attribute '%s'" % key)
+
+    def __setattr__(self, key, value):
+        if key == 'name':
+            object.__setattr__(self, key, value)
+            return
+        if self._obj is None:
+            self._pending[key] = value
+            return
+        if key == 'type':
+            if value == 'ORTHO':
+                req('set', P.Raw(P.quote(self._obj) + '.ortho_scale'), self._j()['ortho_scale'] or 6.0)
+            elif value == 'PERSP':
+                req('set', P.Raw(P.quote(self._obj) + '.ortho_scale'), P.Raw('none'))
+            elif value == 'PANO':
+                req('set', P.Raw(P.quote(self._obj) + '.panorama'), P.Raw('equirectangular'))
+            return
+        pk = _CAM_KEYS.get(key)
+        if pk is None:
+            self._idp()[key] = value
+            return
+        if pk == 'sensor_fit':
+            value = P.Raw(str(value).lower())
+        req('set', P.Raw(P.quote(self._obj) + '.' + pk), value)
+
+    def _create(self, obj_name):
+        p = self._pending
+        opts = {}
+        if 'lens' in p:
+            opts['lens'] = float(p['lens'])
+        if 'angle' in p:
+            opts['fov'] = float(p['angle'])
+        if 'clip_start' in p:
+            opts['near'] = float(p['clip_start'])
+        if 'clip_end' in p:
+            opts['far'] = float(p['clip_end'])
+        if p.get('type') == 'ORTHO':
+            opts['ortho_scale'] = float(p.get('ortho_scale', 6.0))
+        return first(req('camera_add', name=obj_name, **opts))
+
+    def view_frame(self, scene=None):
+        j = self._j()
+        aspect = 16.0 / 9.0
+        if scene is not None:
+            r = scene.render
+            aspect = r.resolution_x / max(1, r.resolution_y)
+        if j['type'] == 'ORTHO':
+            hw = j['ortho_scale'] / 2
+            hh = hw / aspect
+            d = -1.0
+        else:
+            hw = j['sensor_width'] / 2 / j['lens']
+            hh = hw / aspect
+            d = -1.0
+        return (Vector((hw, hh, d)), Vector((hw, -hh, d)), Vector((-hw, -hh, d)), Vector((-hw, hh, d)))
+
+
+# --- objects -----------------------------------------------------------------------------------
+
+class Object(ID):
+    _kind = 'object'
+    _collection_name = 'objects'
+
+    def _j(self):
+        return req('dump_object', self._name)
+
+    def _rename(self, new):
+        req('set', P.Raw(P.quote(self._name) + '.name'), new)
+        names = req('ids')['objects']
+        if new in names:
+            return new
+        cands = [n for n in names if n.startswith(new + '.')]
+        return cands[-1] if cands else new
+
+    def _set(self, **opts):
+        req('obj_set', self._name, **opts)
+
+    @property
+    def type(self):
+        return self._j()['type']
+
+    @property
+    def data(self):
+        j = self._j()
+        t = j['type']
+        if t == 'MESH':
+            return Mesh(j['data'])
+        if t == 'LIGHT':
+            return Light(self._name, obj=self._name)
+        if t == 'CAMERA':
+            return Camera(self._name, obj=self._name)
+        if t == 'ARMATURE':
+            return Armature(j['data'])
+        if t == 'LATTICE':
+            return Lattice(j['data'])
+        return None
+
+    @data.setter
+    def data(self, d):
+        if isinstance(d, Mesh) and self.type == 'MESH':
+            req('set', P.Raw(P.quote(self._name) + '.data'), d.name)
+        else:
+            raise NotImplementedError('only a mesh object can switch to another mesh')
+
+    # transforms
+    @property
+    def location(self):
+        return Vector(self._j()['location'], _owner=lambda v: self._set(location=list(v)))
+
+    @location.setter
+    def location(self, v):
+        self._set(location=[float(c) for c in v])
+
+    @property
+    def rotation_euler(self):
+        j = self._j()
+        mode = j['rotation_mode']
+        return Euler(j['rotation_euler'], mode if len(mode) == 3 else 'XYZ', _owner=lambda e: self._set(rotation_euler=list(e)))
+
+    @rotation_euler.setter
+    def rotation_euler(self, e):
+        self._set(rotation_euler=[float(c) for c in e])
+
+    @property
+    def rotation_quaternion(self):
+        return Quaternion(self._j()['rotation_quaternion'], _owner=lambda q: self._set(rotation_quaternion=list(q)))
+
+    @rotation_quaternion.setter
+    def rotation_quaternion(self, q):
+        self._set(rotation_quaternion=[float(c) for c in q])
+
+    @property
+    def rotation_axis_angle(self):
+        axis, angle = Quaternion(self._j()['rotation_quaternion']).to_axis_angle()
+
+        def write(v):
+            self._set(rotation_quaternion=list(Quaternion(Vector(v[1:4]), v[0])))
+        return FloatArray([angle, axis[0], axis[1], axis[2]], write)
+
+    @rotation_axis_angle.setter
+    def rotation_axis_angle(self, v):
+        self._set(rotation_quaternion=list(Quaternion(Vector(v[1:4]), v[0])))
+
+    @property
+    def rotation_mode(self):
+        return self._j()['rotation_mode']
+
+    @rotation_mode.setter
+    def rotation_mode(self, m):
+        self._set(rotation_mode=P.Raw(str(m)))
+
+    @property
+    def scale(self):
+        return Vector(self._j()['scale'], _owner=lambda v: self._set(scale=list(v)))
+
+    @scale.setter
+    def scale(self, v):
+        self._set(scale=[float(c) for c in v])
+
+    def _delta(key, default):
+        return property(lambda self: Vector(self.get('_' + key, default)), lambda self, v: self.__setitem__('_' + key, tuple(v)))
+
+    delta_location = _delta('delta_location', (0.0, 0.0, 0.0))
+    delta_rotation_euler = _delta('delta_rotation_euler', (0.0, 0.0, 0.0))
+    delta_scale = _delta('delta_scale', (1.0, 1.0, 1.0))
+    del _delta
+
+    @property
+    def matrix_world(self):
+        return Matrix(_m4(self._j()['matrix_world']), _owner=lambda m: self._set(matrix_world=_cols(m)))
+
+    @matrix_world.setter
+    def matrix_world(self, m):
+        self._set(matrix_world=_cols(Matrix(m)))
+
+    @property
+    def matrix_local(self):
+        j = self._j()
+        m = _m4(j['matrix_parent_world']).inverted() @ _m4(j['matrix_world'])
+        return Matrix(m, _owner=lambda m: self._set(matrix_local=_cols(m)))
+
+    @matrix_local.setter
+    def matrix_local(self, m):
+        self._set(matrix_local=_cols(Matrix(m)))
+
+    matrix_basis = matrix_local
+
+    @property
+    def matrix_parent_inverse(self):
+        return Matrix.Identity(4)
+
+    @matrix_parent_inverse.setter
+    def matrix_parent_inverse(self, m):
+        pass
+
+    @property
+    def dimensions(self):
+        b = self._j()['bounds']
+        if not b:
+            return Vector((0.0, 0.0, 0.0))
+        s = self._j()['scale']
+        return Vector([(b[1][k] - b[0][k]) * abs(s[k]) for k in range(3)])
+
+    @dimensions.setter
+    def dimensions(self, d):
+        b = self._j()['bounds']
+        if not b:
+            return
+        s = list(self._j()['scale'])
+        for k in range(3):
+            ext = b[1][k] - b[0][k]
+            if ext > 0:
+                s[k] = float(d[k]) / ext
+        self._set(scale=s)
+
+    @property
+    def bound_box(self):
+        b = self._j()['bounds'] or [[0, 0, 0], [0, 0, 0]]
+        lo, hi = b
+        return [(x, y, z) for x in (lo[0], hi[0]) for y in (lo[1], hi[1]) for z in (lo[2], hi[2])]
+
+    # relations
+    @property
+    def parent(self):
+        p = self._j()['parent']
+        return Object(p) if p else None
+
+    @parent.setter
+    def parent(self, p):
+        req('parent', self._name, p.name if p is not None else P.Raw('none'))
+
+    @property
+    def parent_type(self):
+        return self._j()['parent_type']
+
+    @parent_type.setter
+    def parent_type(self, t):
+        p = self.parent
+        if p is not None:
+            req('parent', self._name, p.name, type=P.Raw(str(t).lower()), bone=self.parent_bone or None)
+
+    @property
+    def parent_bone(self):
+        return self._j()['parent_bone'] or ''
+
+    @parent_bone.setter
+    def parent_bone(self, b):
+        p = self.parent
+        if p is not None and b:
+            req('parent', self._name, p.name, type=P.Raw('bone'), bone=b)
+
+    @property
+    def children(self):
+        return tuple(Object(c) for c in self._j()['children'])
+
+    @property
+    def children_recursive(self):
+        out = []
+        for c in self.children:
+            out.append(c)
+            out.extend(c.children_recursive)
+        return out
+
+    @property
+    def users_collection(self):
+        from .scene import Collection
+        c = self._j()['collection']
+        return (Collection(c),) if c else ()
+
+    @property
+    def users_scene(self):
+        from . import context
+        return (context.scene,)
 
     @property
     def users(self):
         return 1
 
-
-# --- materials -------------------------------------------------------------------------
-
-class _Socket:
-    def __init__(self, mat, attr, size):
-        self._mat, self._attr, self._size = mat, attr, size
+    # stacks
+    @property
+    def modifiers(self):
+        return ObjectModifiers(self._name)
 
     @property
-    def default_value(self):
-        return getattr(self._mat, self._attr)
-
-    @default_value.setter
-    def default_value(self, v):
-        if self._size == 3 and not isinstance(v, (int, float)):
-            v = list(v)[:3]
-        setattr(self._mat, self._attr, v)
-
-
-class _Principled:
-    """Just enough of a node tree for `nodes["Principled BSDF"].inputs[...]`."""
-
-    _INPUTS = {
-        'Base Color': ('base_color', 4), 'Metallic': ('metallic', 1), 'Roughness': ('roughness', 1),
-        'IOR': ('ior', 1), 'Transmission': ('transmission', 1), 'Transmission Weight': ('transmission', 1),
-        'Emission': ('emission_color', 3), 'Emission Color': ('emission_color', 3),
-        'Emission Strength': ('emission_strength', 1), 'Alpha': ('alpha', 1),
-    }
-    name = type = 'Principled BSDF'
-
-    def __init__(self, mat):
-        self._mat = mat
+    def constraints(self):
+        return Constraints(self._name)
 
     @property
-    def inputs(self):
-        mat = self._mat
-
-        class Inputs:
-            def __getitem__(_, key):
-                try:
-                    attr, size = _Principled._INPUTS[key]
-                except KeyError:
-                    raise KeyError('Polyamour materials have no %r input' % key) from None
-                return _Socket(mat, attr, size)
-
-            def get(self_, key, default=None):
-                try:
-                    return self_[key]
-                except KeyError:
-                    return default
-        return Inputs()
-
-
-class _NodeTree:
-    def __init__(self, mat):
-        self.nodes = {'Principled BSDF': _Principled(mat)}
-        self.links = []
-
-
-class Material(ID):
-    """Principled material. `diffuse_color` and `base_color` are the same RGBA."""
-
-    _kind = 'Material'
-
-    def __init__(self, name):
-        super().__init__(name)
-        self._v = {'base_color': [0.8, 0.8, 0.8, 1.0], 'metallic': 0.0, 'roughness': 0.5,
-                   'emission': [0.0, 0.0, 0.0], 'emission_strength': 0.0, 'ior': 1.5,
-                   'transmission': 0.0, 'double_sided': False}
-        self.use_nodes = True
-        self.node_tree = _NodeTree(self)
-        self.blend_method = 'OPAQUE'
-
-    def _set(self, key, value):
-        self._v[key] = value
-        stream.emit('material_set', Raw(self._ref()), **{key: value})
-
-    def _color(self):
-        return Vector(self._v['base_color'], _owner=lambda v: self._set('base_color', list(v)))
-
-    @property
-    def base_color(self):
-        return self._color()
-
-    @base_color.setter
-    def base_color(self, c):
-        c = [float(x) for x in c]
-        if len(c) == 3:
-            c.append(self._v['base_color'][3])
-        if len(c) != 4:
-            raise ValueError('a colour needs 3 or 4 values')
-        self._set('base_color', c)
-
-    diffuse_color = base_color
-
-    @property
-    def alpha(self):
-        return self._v['base_color'][3]
-
-    @alpha.setter
-    def alpha(self, a):
-        self.base_color = self._v['base_color'][:3] + [float(a)]
-
-    @property
-    def emission_color(self):
-        return Vector(self._v['emission'], _owner=lambda v: self._set('emission', list(v)))
-
-    @emission_color.setter
-    def emission_color(self, c):
-        self._set('emission', _vec3(list(c)[:3], 'emission_color'))
-
-    def _scalar(key, kind=float):
-        def get(self):
-            return self._v[key]
-
-        def put(self, v):
-            self._set(key, kind(v))
-        return property(get, put)
-
-    metallic = _scalar('metallic')
-    roughness = _scalar('roughness')
-    emission_strength = _scalar('emission_strength')
-    ior = _scalar('ior')
-    transmission = _scalar('transmission')
-    double_sided = _scalar('double_sided', bool)
-    use_backface_culling = property(lambda self: not self._v['double_sided'],
-                                    lambda self, v: self._set('double_sided', not v))
-    del _scalar
-
-    @ID.name.setter
-    def name(self, new):
-        taken = {m.name for m in state.materials if m is not self}
-        new = unique_name(str(new), taken)
-        stream.emit('material_set', Raw(self._ref()), name=new)
-        self._name = new
-
-
-# --- meshes ----------------------------------------------------------------------------
-
-class MeshVertex:
-    def __init__(self, mesh, index):
-        self._mesh, self.index = mesh, index
-
-    @property
-    def co(self):
-        mesh, i = self._mesh, self.index
-
-        def write(v):
-            mesh._verts[i] = tuple(v)
-            stream.emit('mesh_edit', Raw(mesh._ref()), Raw('set_verts'), indices=i, verts=list(v))
-        return Vector(mesh._verts[i], _owner=write)
-
-    @co.setter
-    def co(self, v):
-        v = _vec3(v, 'co')
-        self._mesh._verts[self.index] = tuple(v)
-        stream.emit('mesh_edit', Raw(self._mesh._ref()), Raw('set_verts'), indices=self.index, verts=v)
-
-
-class MeshPolygon:
-    def __init__(self, mesh, index):
-        self._mesh, self.index = mesh, index
-
-    @property
-    def vertices(self):
-        return tuple(self._mesh._faces[self.index])
-
-
-class _MeshMaterials:
-    """mesh.materials: Polyamour keeps slots on the objects that use the mesh,
-    so changes here go to every user."""
-
-    def __init__(self, mesh):
-        self._mesh = mesh
-        self._slots = []
-
-    def append(self, mat):
-        self._slots.append(mat)
-        for o in self._mesh._users:
-            o._slots.append(mat)
-            stream.emit('material_assign', Raw(o._ref()), Raw(mat._ref()))
-
-    def clear(self):
-        self._slots.clear()
-        for o in self._mesh._users:
-            o._slots.clear()
-            stream.emit('material_clear', Raw(o._ref()))
-
-    def __getitem__(self, i):
-        return self._slots[i]
-
-    def __setitem__(self, i, mat):
-        self._slots[i] = mat
-        i = range(len(self._slots))[i]
-        for o in self._mesh._users:
-            while len(o._slots) <= i:
-                o._slots.append(mat)
-            o._slots[i] = mat
-            stream.emit('material_assign', Raw(o._ref()), Raw(mat._ref()), slot=i)
-
-    def __len__(self):
-        return len(self._slots)
-
-    def __iter__(self):
-        return iter(list(self._slots))
-
-
-class Mesh(ID):
-    """Mesh datablock. Geometry is known for meshes made with from_pydata and
-    for those in the scene snapshot; primitives added by operators report none."""
-
-    _kind = 'Mesh'
-
-    def __init__(self, name):
-        super().__init__(name)
-        self._verts, self._edges, self._faces = [], [], []
-        self._users = []
-        self._owner = None   # the object a primitive's mesh is addressed through
-        self.materials = _MeshMaterials(self)
-
-    def _ref(self):
-        if self._handle is None and self._owner is not None:
-            return self._owner._ref()
-        return super()._ref()
-
-    def from_pydata(self, vertices, edges, faces, shade_flat=True):
-        opts = mesh_options(vertices, edges, faces)
-        self._verts = [tuple(float(c) for c in v) for v in vertices]
-        self._edges = [tuple(int(i) for i in e) for e in edges]
-        self._faces = [tuple(int(i) for i in f) for f in faces]
-        stream.emit('mesh_set', Raw(self._ref()), **opts)
-
-    def update(self, *args, **kwargs):
-        pass
-
-    def validate(self, *args, **kwargs):
-        return False
-
-    @property
-    def vertices(self):
-        return [MeshVertex(self, i) for i in range(len(self._verts))]
-
-    @property
-    def polygons(self):
-        return [MeshPolygon(self, i) for i in range(len(self._faces))]
-
-    @property
-    def edges(self):
-        return list(self._edges)
-
-    def _edit(self, op, *args, **opts):
-        stream.emit('mesh_edit', Raw(self._ref()), Raw(op), *args, **opts)
-
-    def shade_smooth(self):
-        self._edit('shade_smooth')
-
-    def shade_flat(self):
-        self._edit('shade_flat')
-
-    def flip_normals(self):
-        self._edit('flip_normals')
-        self._faces = [tuple(reversed(f)) for f in self._faces]
-
-    def translate(self, offset):
-        d = _vec3(offset, 'offset')
-        self._edit('translate_verts', *d)
-        self._verts = [tuple(a + b for a, b in zip(v, d)) for v in self._verts]
-
-    @property
-    def users(self):
-        return len(self._users)
-
-
-# --- lights and cameras ----------------------------------------------------------------------
-
-class Light(ID):
-    """Light data; in Polyamour it lives inside one object (the first user)."""
-
-    _kind = 'Light'
-    _TYPES = {'POINT': 'point', 'SUN': 'sun', 'SPOT': 'spot', 'AREA': 'area'}
-
-    def __init__(self, name, type='POINT'):
-        super().__init__(name)
-        if type not in self._TYPES:
-            raise ValueError('light type must be one of %s' % ', '.join(self._TYPES))
-        object.__setattr__(self, 'type', type)
-        self._object = None
-        self._v = {'power': 1.0 if type == 'SUN' else 1000.0, 'color': [1.0, 1.0, 1.0], 'radius': 0.1,
-                   'angle': math.radians(45), 'blend': 0.15, 'size': 1.0}
-
-    def _set(self, key, value):
-        self._v[key] = value
-        if self._object is not None:
-            stream.emit('set', Raw(self._object._ref() + '.' + key), value)
-
-    def __setattr__(self, key, value):
-        if key == 'type' and getattr(self, '_object', None) is not None:
-            raise AttributeError('Polyamour cannot change the type of a light in use')
-        object.__setattr__(self, key, value)
-
-    def _opts(self):
-        o = {'power': self._v['power'], 'color': self._v['color'], 'radius': self._v['radius']}
-        if self.type == 'SPOT':
-            o.update(angle=self._v['angle'], blend=self._v['blend'])
-        if self.type == 'AREA':
-            o['size'] = self._v['size']
-        return o
-
-    def _prop(key, kind=float):
-        def get(self):
-            return self._v[key]
-
-        def put(self, v):
-            self._set(key, kind(v))
-        return property(get, put)
-
-    energy = _prop('power')
-    shadow_soft_size = _prop('radius')
-    spot_size = _prop('angle')
-    spot_blend = _prop('blend')
-    size = _prop('size')
-    del _prop
-
-    @property
-    def color(self):
-        return Color(self._v['color'], _owner=lambda v: self._set('color', list(v)))
-
-    @color.setter
-    def color(self, c):
-        self._set('color', _vec3(c, 'color'))
-
-
-class Camera(ID):
-    _kind = 'Camera'
-
-    def __init__(self, name):
-        super().__init__(name)
-        self._object = None
-        self._v = {'fov': 2 * math.atan(18.0 / 50.0 * 9.0 / 16.0), 'near': 0.1, 'far': 1000.0, 'ortho_scale': None}
-
-    def _set(self, key, value):
-        self._v[key] = value
-        if self._object is not None:
-            stream.emit('set', Raw(self._object._ref() + '.' + key), Raw('none') if value is None else value)
-
-    @property
-    def angle(self):
-        return self._v['fov']
-
-    @angle.setter
-    def angle(self, a):
-        self._set('fov', float(a))
-
-    @property
-    def lens(self):
-        return 18.0 * 9.0 / 16.0 / math.tan(self._v['fov'] / 2)
-
-    @lens.setter
-    def lens(self, mm):
-        self._set('fov', 2 * math.atan(18.0 / float(mm) * 9.0 / 16.0))
-
-    clip_start = property(lambda self: self._v['near'], lambda self, v: self._set('near', float(v)))
-    clip_end = property(lambda self: self._v['far'], lambda self, v: self._set('far', float(v)))
-
-    @property
-    def type(self):
-        return 'PERSP' if self._v['ortho_scale'] is None else 'ORTHO'
-
-    @type.setter
-    def type(self, t):
-        if t == 'ORTHO':
-            self._set('ortho_scale', self._v['ortho_scale'] or 6.0)
-        elif t == 'PERSP':
-            self._set('ortho_scale', None)
-        else:
-            raise ValueError("camera type must be 'PERSP' or 'ORTHO'")
-
-    @property
-    def ortho_scale(self):
-        return self._v['ortho_scale'] or 6.0
-
-    @ortho_scale.setter
-    def ortho_scale(self, s):
-        self._set('ortho_scale', float(s))
-
-    def _opts(self):
-        return {'fov': self._v['fov'], 'near': self._v['near'], 'far': self._v['far'], 'ortho_scale': self._v['ortho_scale']}
-
-
-# --- modifiers -------------------------------------------------------------------------------
-
-# Blender modifier type -> (polyops type, {Blender attribute: default}).
-_MODIFIERS = {
-    'SUBSURF': ('Subdivision', {'levels': 1, 'render_levels': 2, 'subdivision_type': 'CATMULL_CLARK'}),
-    'MIRROR': ('Mirror', {'use_axis': [True, False, False], 'use_mirror_merge': True, 'merge_threshold': 0.001}),
-    'ARRAY': ('Array', {'count': 2, 'use_relative_offset': True, 'relative_offset_displace': [1.0, 0.0, 0.0],
-                        'use_constant_offset': False, 'constant_offset_displace': [0.0, 0.0, 0.0],
-                        'use_merge_vertices': False}),
-    'SOLIDIFY': ('Solidify', {'thickness': 0.01, 'offset': -1.0}),
-    'BEVEL': ('Bevel', {'width': 0.1, 'segments': 1, 'angle_limit': math.radians(30)}),
-    'TRIANGULATE': ('Triangulate', {}),
-    'WELD': ('Weld', {'merge_threshold': 0.001}),
-    'DISPLACE': ('Displace', {'strength': 1.0}),
-    'SMOOTH': ('Smooth', {'factor': 0.5, 'iterations': 1}),
-}
-_POLYOPS_TO_BLENDER = {v[0].lower(): k for k, v in _MODIFIERS.items()}
-
-
-def _modifier_options(kind, p):
-    """polyops options for every Blender attribute of a modifier."""
-    if kind == 'SUBSURF':
-        return {'levels': int(p['levels']), 'simple': p['subdivision_type'] == 'SIMPLE'}
-    if kind == 'MIRROR':
-        x, y, z = (bool(a) for a in p['use_axis'])
-        return {'x': x, 'y': y, 'z': z, 'merge': bool(p['use_mirror_merge']), 'merge_distance': float(p['merge_threshold'])}
-    if kind == 'ARRAY':
-        rel = list(p['relative_offset_displace']) if p['use_relative_offset'] else [0.0, 0.0, 0.0]
-        const = list(p['constant_offset_displace']) if p['use_constant_offset'] else [0.0, 0.0, 0.0]
-        return {'count': int(p['count']), 'relative': rel, 'constant': const, 'merge': bool(p['use_merge_vertices'])}
-    if kind == 'SOLIDIFY':
-        return {'thickness': float(p['thickness']), 'offset': float(p['offset'])}
-    if kind == 'BEVEL':
-        return {'width': float(p['width']), 'segments': int(p['segments']), 'angle': float(p['angle_limit'])}
-    if kind == 'WELD':
-        return {'distance': float(p['merge_threshold'])}
-    if kind == 'DISPLACE':
-        return {'strength': float(p['strength'])}
-    if kind == 'SMOOTH':
-        return {'factor': float(p['factor']), 'iterations': int(p['iterations'])}
-    return {}
-
-
-class _AxisFlags(list):
-    """Mirror's use_axis: setting an item updates the modifier."""
-
-    def __init__(self, values, mod):
-        super().__init__(bool(v) for v in values)
-        self._mod = mod
-
-    def __setitem__(self, i, v):
-        super().__setitem__(i, bool(v))
-        self._mod._push()
-
-
-class Modifier:
-    """A modifier on an object. Known Blender attributes are sent to Polyamour;
-    others (show_viewport, quality, ...) are kept here and otherwise ignored."""
-
-    def __init__(self, obj, name, kind, params):
-        d = self.__dict__
-        d['_object'], d['name'], d['type'] = obj, name, kind
-        d['_p'] = dict(params)
-        if kind == 'MIRROR':
-            d['_p']['use_axis'] = _AxisFlags(params['use_axis'], self)
-
-    @property
-    def _index(self):
-        return self._object.modifiers._list.index(self)
-
-    def _push(self):
-        stream.emit('modifier_set', Raw(self._object._ref()), self._index, **_modifier_options(self.type, self._p))
-
-    def __getattr__(self, key):
-        p = self.__dict__['_p']
-        if key in p:
-            return p[key]
-        raise AttributeError(key)
-
-    def __setattr__(self, key, value):
-        if key in ('name', 'show_viewport', 'show_render', 'show_in_editmode', 'show_on_cage', 'quality') or key not in self._p:
-            self.__dict__[key] = value
-            return
-        if key == 'use_axis':
-            value = _AxisFlags(value, self)
-        elif isinstance(value, (list, tuple, Vector)):
-            value = [float(c) for c in value]
-        self._p[key] = value
-        self._push()
-
-    def __repr__(self):
-        return '<Modifier %r %s>' % (self.name, self.type)
-
-
-class ObjectModifiers:
-    def __init__(self, obj):
-        self._object = obj
-        self._list = []
-
-    def new(self, name, type):
-        kind = str(type).upper()
-        if kind not in _MODIFIERS:
-            kind = _POLYOPS_TO_BLENDER.get(str(type).lower(), kind)
-        if kind not in _MODIFIERS:
-            raise TypeError('Polyamour has no %r modifier (it has %s)' % (type, ', '.join(_MODIFIERS)))
-        polyops_type, defaults = _MODIFIERS[kind]
-        stream.emit('modifier_add', Raw(self._object._ref()), Raw(polyops_type))
-        m = Modifier(self._object, name, kind, {k: list(v) if isinstance(v, list) else v for k, v in defaults.items()})
-        self._list.append(m)
-        return m
-
-    def remove(self, mod):
-        i = self._list.index(mod)
-        stream.emit('modifier_remove', Raw(self._object._ref()), i)
-        del self._list[i]
-
-    def clear(self):
-        stream.emit('modifier_clear', Raw(self._object._ref()))
-        self._list.clear()
-
-    def get(self, name, default=None):
-        return next((m for m in self._list if m.name == name), default)
-
-    def __getitem__(self, key):
-        if isinstance(key, str):
-            m = self.get(key)
-            if m is None:
-                raise KeyError(key)
-            return m
-        return self._list[key]
-
-    def __len__(self):
-        return len(self._list)
-
-    def __iter__(self):
-        return iter(list(self._list))
-
-
-# --- objects -------------------------------------------------------------------------------
-
-class MaterialSlot:
-    def __init__(self, obj, i):
-        self._obj, self._i = obj, i
-
-    @property
-    def material(self):
-        return self._obj._slots[self._i]
-
-    @material.setter
-    def material(self, mat):
-        self._obj._slots[self._i] = mat
-        stream.emit('material_assign', Raw(self._obj._ref()), Raw(mat._ref()), slot=self._i)
-
-
-class Object(ID):
-    _kind = 'Object'
-
-    def __init__(self, name, data=None):
-        super().__init__(name)
-        self.data = data
-        self._loc = Vector((0, 0, 0), _owner=lambda v: self._emit_set('location', v))
-        self._rot = Euler((0, 0, 0), _owner=lambda v: self._emit_set('rotation_euler', v))
-        self._scale = Vector((1, 1, 1), _owner=lambda v: self._emit_set('scale', v))
-        self._parent = None
-        self._collection = None
-        self._visible = True
-        self._slots = []
-        self.modifiers = ObjectModifiers(self)
-        self.rotation_mode = 'XYZ'
-
-    def _emit_set(self, prop, value):
-        stream.emit('set', Raw(self._ref() + '.' + prop), *[float(c) for c in value])
-
-    @property
-    def type(self):
-        if isinstance(self.data, Mesh):
-            return 'MESH'
-        if isinstance(self.data, Light):
-            return 'LIGHT'
-        if isinstance(self.data, Camera):
-            return 'CAMERA'
-        return 'EMPTY'
-
-    @ID.name.setter
-    def name(self, new):
-        new = str(new)
-        if not new:
-            raise ValueError('an object name cannot be empty')
-        new = unique_name(new, {o.name for o in state.objects if o is not self})
-        stream.emit('set', Raw(self._ref() + '.name'), new)
-        self._name = new
-
-    def _vector(attr, prop):
-        def get(self):
-            return getattr(self, attr)
-
-        def put(self, value):
-            vals = [float(c) for c in value]
-            if prop == 'scale' and len(vals) == 1:
-                vals = vals * 3
-            getattr(self, attr)._assign(vals)
-            self._emit_set(prop, vals)
-        return property(get, put)
-
-    location = _vector('_loc', 'location')
-    rotation_euler = _vector('_rot', 'rotation_euler')
-    scale = _vector('_scale', 'scale')
-    del _vector
-
-    @property
-    def parent(self):
-        return self._parent
-
-    @parent.setter
-    def parent(self, p):
-        q = p
-        while q is not None:
-            if q is self:
-                raise ValueError('parenting %s to %s would make a cycle' % (self.name, p.name))
-            q = q._parent
-        stream.emit('parent', Raw(self._ref()), Raw('none') if p is None else Raw(p._ref()))
-        self._parent = p
-
-    @property
-    def children(self):
-        return tuple(o for o in state.objects if o._parent is self)
-
-    # visibility and selection
-
-    def hide_set(self, state_):
-        self._set_visible(not state_)
-
-    def hide_get(self):
-        return not self._visible
-
-    def visible_get(self):
-        return self._visible
-
-    def _set_visible(self, v):
-        self._visible = bool(v)
-        stream.emit('set', Raw(self._ref() + '.visible'), self._visible)
-
-    hide_viewport = property(lambda self: not self._visible, lambda self, v: self._set_visible(not v))
-    hide_render = hide_viewport
-
-    def select_set(self, flag):
-        if flag and self not in state.selected:
-            state.selected.append(self)
-            stream.emit('select_add', Raw(self._ref()))
-        elif not flag and self in state.selected:
-            state.selected.remove(self)
-            stream.emit('deselect', Raw(self._ref()))
-
-    def select_get(self):
-        return self in state.selected
-
-    # materials
+    def vertex_groups(self):
+        return VertexGroups(self._name)
 
     @property
     def material_slots(self):
-        return [MaterialSlot(self, i) for i in range(len(self._slots))]
+        return MaterialSlots(self._name)
 
     @property
     def active_material(self):
-        return self._slots[0] if self._slots else None
+        mats = self._j()['materials']
+        i = min(self.active_material_index, len(mats) - 1)
+        return Material(mats[i]) if mats and mats[i] else None
 
     @active_material.setter
     def active_material(self, mat):
-        if self._slots:
-            self._slots[0] = mat
-        else:
-            self._slots.append(mat)
-        stream.emit('material_assign', Raw(self._ref()), Raw(mat._ref()), slot=0)
+        n = len(self._j()['materials'])
+        i = min(self.active_material_index, max(n - 1, 0))
+        req('material_slot', self._name, i, mat.name if mat is not None else P.Raw('none'))
 
     @property
-    def users_collection(self):
-        return (self._collection,) if self._collection is not None else ()
+    def active_material_index(self):
+        return self.get('_active_material_index', 0)
 
-
-# --- collections ------------------------------------------------------------------------------
-
-class _CollectionObjects:
-    def __init__(self, coll):
-        self._coll = coll
-
-    def link(self, obj):
-        """Put `obj` in this collection (a Polyamour object is in one collection)."""
-        obj._collection = self._coll
-        stream.emit('link', Raw(obj._ref()), Raw(self._coll._target()._ref()))
-
-    def unlink(self, obj):
-        if obj._collection is self._coll:
-            root = state.collections[0]
-            obj._collection = root
-            stream.emit('link', Raw(obj._ref()), Raw(root._ref()))
-
-    def __iter__(self):
-        target = self._coll._target()
-        return iter([o for o in state.objects if o._collection is not None and o._collection._target() is target])
-
-    def __len__(self):
-        return len(list(iter(self)))
-
-    def __getitem__(self, key):
-        for o in self:
-            if o.name == key:
-                return o
-        raise KeyError(key)
-
-    def __contains__(self, key):
-        return any(o.name == key or o is key for o in self)
-
-
-class _CollectionChildren:
-    def __init__(self, coll):
-        self._coll = coll
-
-    def link(self, child):
-        child._parent = self._coll if not self._coll._is_master else None
-        stream.emit('collection_set', Raw(child._ref()), parent=Raw('none') if child._parent is None else Raw(child._parent._ref()))
-
-    def unlink(self, child):
-        child._parent = None
-        stream.emit('collection_set', Raw(child._ref()), parent=Raw('none'))
-
-    def __iter__(self):
-        me = None if self._coll._is_master else self._coll
-        return iter([c for c in state.collections[1:] if c._parent is me])
-
-    def __len__(self):
-        return len(list(iter(self)))
-
-
-class Collection(ID):
-    _kind = 'Collection'
-
-    def __init__(self, name, _is_master=False):
-        super().__init__(name)
-        self._parent = None
-        self._visible = True
-        self._is_master = _is_master
-        self.objects = _CollectionObjects(self)
-        self.children = _CollectionChildren(self)
-
-    def _target(self):
-        """The Polyamour collection objects go to: the master collection is the
-        scene's root collection."""
-        return state.collections[0] if self._is_master else self
+    @active_material_index.setter
+    def active_material_index(self, i):
+        self['_active_material_index'] = int(i)
 
     @property
-    def all_objects(self):
-        return list(self.objects)
+    def pose(self):
+        return Pose(self._name) if self.type == 'ARMATURE' else None
 
+    @property
+    def animation_data(self):
+        if self._j().get('action') or self.get('_animdata'):
+            return AnimData(self._name)
+        return None
+
+    def animation_data_create(self):
+        self['_animdata'] = True
+        return AnimData(self._name)
+
+    def animation_data_clear(self):
+        req('action_assign', self._name, P.Raw('none'))
+        self.pop('_animdata', None)
+
+    def keyframe_insert(self, data_path, index=-1, frame=None, group='', options=set(), keytype='KEYFRAME'):
+        from .anim import keyframe_insert
+        return keyframe_insert(self, data_path, index, frame, group)
+
+    def keyframe_delete(self, data_path, index=-1, frame=None, group=''):
+        from .anim import keyframe_delete
+        return keyframe_delete(self, data_path, index, frame)
+
+    def shape_key_add(self, name='Key', from_mix=True):
+        if self.type != 'MESH':
+            raise TypeError('only mesh objects have shape keys here')
+        m = self.data
+        m._flush_now()
+        have = [k['name'] for k in m._d().keys]
+        n, k = name, 0
+        while n in have:
+            k += 1
+            n = '%s.%03d' % (name, k)
+        req('shape_key', m.name, n)
+        from .mesh import ShapeKey
+        return ShapeKey(Mesh(m.name), n)
+
+    def shape_key_remove(self, key):
+        req('shape_key_remove', self.data.name, key.name)
+
+    def shape_key_clear(self):
+        for k in list((self.data.shape_keys and self.data.shape_keys.key_blocks) or [])[::-1]:
+            self.shape_key_remove(k)
+
+    @property
+    def active_shape_key(self):
+        sk = self.data.shape_keys if self.type == 'MESH' else None
+        if not sk:
+            return None
+        blocks = sk.key_blocks._items()
+        i = min(self.get('_active_shape_key_index', len(blocks) - 1), len(blocks) - 1)
+        return blocks[i]
+
+    @property
+    def active_shape_key_index(self):
+        return self.get('_active_shape_key_index', 0)
+
+    @active_shape_key_index.setter
+    def active_shape_key_index(self, i):
+        self['_active_shape_key_index'] = int(i)
+
+    show_only_shape_key = False
+
+    # visibility and selection
     @property
     def hide_viewport(self):
-        return not self._visible
+        return self._j()['hide_viewport']
 
     @hide_viewport.setter
-    def hide_viewport(self, v):
-        self._visible = not v
-        stream.emit('collection_set', Raw(self._target()._ref()), visible=self._visible)
+    def hide_viewport(self, h):
+        req('set', P.Raw(P.quote(self._name) + '.visible'), not h)
 
-    @ID.name.setter
-    def name(self, new):
-        if self._is_master:
-            raise AttributeError('the scene collection cannot be renamed')
-        new = unique_name(str(new), {c.name for c in state.collections if c is not self})
-        stream.emit('collection_set', Raw(self._ref()), name=new)
-        self._name = new
+    @property
+    def hide_render(self):
+        return self._j()['hide_render']
+
+    @hide_render.setter
+    def hide_render(self, h):
+        self._set(hide_render=bool(h))
+
+    def hide_get(self, view_layer=None):
+        return self.hide_viewport
+
+    def hide_set(self, state, view_layer=None):
+        self.hide_viewport = state
+
+    hide_select = False
+
+    def visible_get(self, view_layer=None, viewport=None):
+        return not self.hide_viewport
+
+    def select_get(self, view_layer=None):
+        return self._j()['select']
+
+    def select_set(self, state, view_layer=None):
+        self._set(select=bool(state))
+
+    def holdout_get(self, view_layer=None):
+        return self._j()['holdout']
+
+    def indirect_only_get(self, view_layer=None):
+        return False
+
+    def local_view_get(self, viewport):
+        return False
+
+    def visible_in_viewport_get(self, viewport):
+        return not self.hide_viewport
+
+    @property
+    def pass_index(self):
+        return self._j()['pass_index']
+
+    @pass_index.setter
+    def pass_index(self, v):
+        req('set', P.Raw(P.quote(self._name) + '.pass_index'), int(v))
+
+    def _vis(key):
+        return property(lambda self: self._j()[key], lambda self, v: req('set', P.Raw(P.quote(self._name) + '.' + key), bool(v)))
+
+    visible_camera = _vis('visible_camera')
+    visible_diffuse = _vis('visible_diffuse')
+    visible_glossy = _vis('visible_glossy')
+    visible_transmission = _vis('visible_transmission')
+    visible_volume_scatter = _vis('visible_volume_scatter')
+    visible_shadow = _vis('visible_shadow')
+    is_holdout = _vis('holdout')
+    del _vis
+
+    def _local(key, default):
+        return property(lambda self: self.get('_' + key, default), lambda self, v: self.__setitem__('_' + key, v))
+
+    display_type = _local('display_type', 'TEXTURED')
+    show_name = _local('show_name', False)
+    show_axis = _local('show_axis', False)
+    show_wire = _local('show_wire', False)
+    show_in_front = _local('show_in_front', False)
+    color = _local('color', (1.0, 1.0, 1.0, 1.0))
+    empty_display_type = _local('empty_display_type', 'PLAIN_AXES')
+    empty_display_size = _local('empty_display_size', 1.0)
+    instance_type = _local('instance_type', 'NONE')
+    instance_collection = _local('instance_collection', None)
+    track_axis = _local('track_axis', 'POS_Y')
+    up_axis = _local('up_axis', 'Z')
+    lock_location = _local('lock_location', (False, False, False))
+    lock_rotation = _local('lock_rotation', (False, False, False))
+    lock_scale = _local('lock_scale', (False, False, False))
+    del _local
+
+    @property
+    def mode(self):
+        from . import context
+        a = context.active_object
+        if a is not None and a.name == self._name:
+            return context.object_mode
+        return 'OBJECT'
+
+    # evaluation
+    def evaluated_get(self, depsgraph):
+        return EvaluatedObject(self._name)
+
+    def to_mesh(self, preserve_all_data_layers=False, depsgraph=None):
+        if self.type != 'MESH':
+            raise RuntimeError('Object does not have geometry data')
+        return EvaluatedObject(self._name).to_mesh()
+
+    def to_mesh_clear(self):
+        pass
+
+    def ray_cast(self, origin, direction, distance=1.70141e38, depsgraph=None):
+        from mathutils.bvhtree import BVHTree
+        me = self.evaluated_get(depsgraph).to_mesh()
+        bvh = BVHTree.FromPolygons([v.co for v in me.vertices], [p.vertices for p in me.polygons])
+        loc, nrm, idx, dist = bvh.ray_cast(origin, direction, distance)
+        if loc is None:
+            return False, Vector((0, 0, 0)), Vector((0, 0, 0)), -1
+        return True, loc, nrm, idx
+
+    def closest_point_on_mesh(self, origin, distance=1.84467e19, depsgraph=None):
+        from mathutils.bvhtree import BVHTree
+        me = self.evaluated_get(depsgraph).to_mesh()
+        bvh = BVHTree.FromPolygons([v.co for v in me.vertices], [p.vertices for p in me.polygons])
+        loc, nrm, idx, dist = bvh.find_nearest(origin, distance)
+        if loc is None:
+            return False, Vector((0, 0, 0)), Vector((0, 0, 0)), -1
+        return True, loc, nrm, idx
+
+    def copy(self):
+        return Object(first(req('object_copy', self._name, linked=True)))
+
+    def update_from_editmode(self):
+        return False
+
+    def convert_space(self, pose_bone=None, matrix=None, from_space='WORLD', to_space='WORLD'):
+        m = Matrix(matrix) if matrix is not None else Matrix.Identity(4)
+        mw = self.matrix_world
+        if from_space == to_space:
+            return m
+        if from_space == 'WORLD':
+            m = mw.inverted() @ m
+        if to_space == 'WORLD':
+            m = mw @ m
+        return m
+
+    def calc_matrix_camera(self, depsgraph, x=1, y=1, scale_x=1.0, scale_y=1.0):
+        cam = self.data
+        near, far = cam.clip_start, cam.clip_end
+        fov = cam.angle
+        aspect = (x * scale_x) / (y * scale_y)
+        f = 1.0 / math.tan(fov / 2)
+        return Matrix(((f / aspect if aspect >= 1 else f, 0, 0, 0), (0, f if aspect >= 1 else f * aspect, 0, 0),
+                       (0, 0, (far + near) / (near - far), 2 * far * near / (near - far)), (0, 0, -1, 0)))
+
+
+class _EvaluatedMesh(Mesh):
+    """The object's mesh with its modifiers applied (read-only copy)."""
+
+    _kind = 'evaluated_mesh'
+
+    def __init__(self, obj):
+        Mesh.__init__(self, obj)
+        from .mesh import _Data
+        self.__dict__['_data'] = _Data(req('eval_mesh', obj))
+
+    def _d(self):
+        return self._data
+
+    def _touch(self, flag):
+        self._data.touch(flag)
+
+    def _flush(self):
+        pass
+
+    def _flush_now(self):
+        pass
+
+    @property
+    def name(self):
+        return self._name
+
+    @property
+    def materials(self):
+        return [Material(n) if n else None for n in req('dump_object', self._name)['materials']]
+
+
+class EvaluatedObject(Object):
+    """Object.evaluated_get(depsgraph): the same object, reading evaluated data."""
+
+    @property
+    def is_evaluated(self):
+        return True
+
+    @property
+    def original(self):
+        return Object(self._name)
+
+    def to_mesh(self, preserve_all_data_layers=False, depsgraph=None):
+        return _EvaluatedMesh(self._name)
+
+    def to_mesh_clear(self):
+        pass
+
+    @property
+    def data(self):
+        if self.type == 'MESH':
+            return _EvaluatedMesh(self._name)
+        return Object.data.fget(self)
+
+
+# The rest of bpy.types, for `isinstance` checks and registration targets.
+from .scene import (Collection, Depsgraph, DepsgraphObjectInstance, DepsgraphUpdate, LayerCollection, RenderSettings, Scene,  # noqa: E402
+                    ViewLayer, BlendData, Context)
+from .rna import (AddonPreferences, Gizmo, GizmoGroup, Header, KeyingSetInfo, Macro, Menu, Operator, OperatorFileListElement,  # noqa: E402
+                  Panel, PropertyGroup, UIList, UILayout, WindowManager, Event, Timer, Area, Region, Space, SpaceView3D,
+                  SpaceProperties, Window, Screen, Preferences, Addon, Addons, Text, RenderEngine)
+
+bpy_prop_collection = Collection_
+bpy_prop_array = FloatArray
+Property = object
+MeshVertices = __import__('polyamour.mesh', fromlist=['MeshVertices']).MeshVertices
+MeshPolygons = __import__('polyamour.mesh', fromlist=['MeshPolygons']).MeshPolygons
+MeshEdges = __import__('polyamour.mesh', fromlist=['MeshEdges']).MeshEdges
+MeshLoops = __import__('polyamour.mesh', fromlist=['MeshLoops']).MeshLoops
+BlendDataObjects = BlendDataMeshes = Collection_
+Curve = TextCurve = GreasePencil = MetaBall = Volume = PointCloud = Speaker = LightProbe = ID
+SubsurfModifier = MirrorModifier = ArrayModifier = SolidifyModifier = BevelModifier = Modifier
+ArmatureModifier = BooleanModifier = DisplaceModifier = NodesModifier = Modifier
+ShaderNode = ShaderNodeTree = GeometryNodeTree = CompositorNodeTree = NodeGroup = NodeSocketInterface = None
+ShaderNodeTree = GeometryNodeTree = CompositorNodeTree = NodeTree
+ShaderNode = NodeInternal = Node
+ShaderNodeTexImage = ShaderNodeBsdfPrincipled = ShaderNodeGroup = GeometryNodeGroup = Node
+ShaderNodeTexNoise = ShaderNodeMath = ShaderNodeMixRGB = ShaderNodeMix = ShaderNodeValToRGB = ShaderNodeOutputMaterial = Node
+PointLight = SunLight = SpotLight = AreaLight = Light
+Keyframe = Keyframe
+bpy_struct = bpy_struct
+ID = ID
+Constraint = Constraint
+CopyLocationConstraint = CopyRotationConstraint = TrackToConstraint = DampedTrackConstraint = KinematicConstraint = Constraint
+ChildOfConstraint = ArmatureConstraint = Constraint
