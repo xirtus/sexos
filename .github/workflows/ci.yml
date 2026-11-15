@@ -105,6 +105,8 @@ jobs:
       run: cargo test --locked -p denim
     - name: Splicy editing core (timeline, edit by transcript, suggestions, render plan, OTIO)
       run: cargo test --locked -p sex-splice
+    - name: Splicy window (delete a sentence on screen, its frames and sound are gone)
+      run: bash scripts/splicy_host_gate.sh
     - name: Splicy export (WebM VP9+Opus, MP4 H.264+AAC, MP4 AV1+Opus) through system FFmpeg
       run: |
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg pkg-config libavcodec-dev libavformat-dev libavutil-dev libswscale-dev
@@ -241,6 +243,8 @@ jobs:
       run: MEMORY_AUTHORITY_LOG="$RUNNER_TEMP/sexos-runtime/serial.log" bash scripts/memory_authority_runtime_gate.sh
     - name: Guest sext paging and fault recovery
       run: PAGING_LOG="$RUNNER_TEMP/sexos-runtime/serial.log" bash scripts/paging_recovery_runtime_gate.sh
+    - name: Cufflinks (Bluetooth) starts and sleeps without a controller
+      run: python3 scripts/cufflinks_idle_gate.py --log "$RUNNER_TEMP/sexos-runtime/serial.log"
     - name: Ordinary Rust and C programs
       run: |
         truncate -s 1G "$RUNNER_TEMP/blank-programs.img"
@@ -527,7 +531,7 @@ jobs:
   programs:
     name: Programs, packages and ports
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
@@ -567,6 +571,8 @@ jobs:
       run: python3 scripts/moan_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/moan"
     - name: Climax benchmark and thermal torture app
       run: python3 scripts/climax_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/climax"
+    - name: Programs run programs (std::process, posix_spawn, waitpid, kill, system)
+      run: python3 scripts/process_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/process"
     - name: Preserve program evidence
       if: always()
       uses: actions/upload-artifact@v4

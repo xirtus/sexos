@@ -80,6 +80,8 @@ pub mod op {
     pub const ADOPTED_STYLES: u32 = 35;
     /// (element, selector): match only this element; no subtree enumeration.
     pub const MATCHES: u32 = 36;
+    /// (node): whether the bounded ancestor walk reaches SVG before foreignObject.
+    pub const SVG_CONTEXT: u32 = 37;
     /// (video or audio element, verb, argument): play, pause, seek SECONDS, load,
     /// volume 0..1, muted 0/1, loop 0/1; queued for the browser. The browser answers
     /// with `media` dispatches carrying the element's state and its events.

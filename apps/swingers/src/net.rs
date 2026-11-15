@@ -5,6 +5,7 @@
 use crate::disk::{Disk, ReadDone};
 use crate::say;
 use sha2::{Digest, Sha256};
+use sex_torrent::dht::{Config as DhtConfig, Dht, Event as DhtEvent, LookupId, Out as DhtOut};
 use sex_torrent::metainfo::Metainfo;
 use sex_torrent::mse::{req2_hash, Cipher, Handshake, Policy, Progress};
 use sex_torrent::session::{Action, Session, SessionAction, SessionConfig, Torrent, TorrentKey, TorrentParams, TorrentState};
@@ -34,13 +35,18 @@ enum Done {
     Announced { torrent: TorrentKey, url: String, peers: Vec<PeerAddr>, interval: u64, error: Option<String> },
 }
 
-pub(crate) struct Job { pub trackers: Vec<String>, pub disk: Option<Disk>, pub next_announce: Millis, pub announced_done: bool, pub finished_at: Option<Millis>, pub name: String, pub id: u64, pub added: i64, pub dir: PathBuf, pub paused: bool, pub magnet: String }
+pub(crate) struct Job { pub next_dht: Millis, pub private: bool, pub trackers: Vec<String>, pub disk: Option<Disk>, pub next_announce: Millis, pub announced_done: bool, pub finished_at: Option<Millis>, pub name: String, pub id: u64, pub added: i64, pub dir: PathBuf, pub paused: bool, pub magnet: String }
 
 pub struct Client {
     pub(crate) session: Session,
     pub(crate) jobs: HashMap<TorrentKey, Job>,
     pub(crate) rpc: Option<crate::remote::Rpc>,
     pub(crate) next_id: u64,
+    dht: Option<Dht>,
+    dht_sock: Option<UdpSocket>,
+    dht_boot: Option<Receiver<Vec<PeerAddr>>>,
+    lookups: HashMap<LookupId, TorrentKey>,
+    last_dht_tick: Millis,
     conns: HashMap<u32, Conn>,
     listener: Option<TcpListener>,
     port: u16,
@@ -66,7 +72,7 @@ impl Client {
         let (done_tx, done_rx) = channel();
         let mut k = [0u8; 4];
         crate::random(&mut k);
-        Client { session: Session::new(SessionConfig::default()), jobs: HashMap::new(), rpc: None, next_id: 1, conns: HashMap::new(), listener, port, dir, peer_id, anonymous,
+        Client { session: Session::new(SessionConfig::default()), jobs: HashMap::new(), rpc: None, next_id: 1, dht: None, dht_sock: None, dht_boot: None, lookups: HashMap::new(), last_dht_tick: 0, conns: HashMap::new(), listener, port, dir, peer_id, anonymous,
             next_peer: 1, started: Instant::now(), done_tx, done_rx, queue: VecDeque::new(), key: u32::from_le_bytes(k) }
     }
 
@@ -76,12 +82,106 @@ impl Client {
         Ok(())
     }
 
+    /// Joins the Mainline DHT (BEP 5) on the UDP side of the listen port, through these
+    /// nodes and the well-known routers. Not in anonymous mode: the DHT tells strangers
+    /// which torrents we have.
+    pub fn enable_dht(&mut self, nodes: Vec<PeerAddr>, routers: bool) {
+        if self.anonymous { return; }
+        let Ok(sock) = UdpSocket::bind(("0.0.0.0", self.port)) else { say(&format!("[swingers.note] DHT: cannot use UDP port {}", self.port)); return };
+        let _ = sock.set_nonblocking(true);
+        let mut seed = [0u8; 32];
+        crate::random(&mut seed);
+        let now = self.now();
+        let mut dht = Dht::new(DhtConfig { v6: false, ..DhtConfig::default() }, seed, now);
+        dht.bootstrap(&nodes, now);
+        say(&format!("[swingers.dht] port={} nodes={} routers={routers}", self.port, nodes.len()));
+        if routers {
+            // Names are resolved on a thread so a slow or missing resolver never stalls the loop.
+            let (tx, rx) = channel();
+            std::thread::spawn(move || {
+                let mut boot = Vec::new();
+                for (h, p) in [("router.bittorrent.com", 6881), ("dht.transmissionbt.com", 6881), ("router.utorrent.com", 6881), ("dht.libtorrent.org", 25401)] {
+                    boot.extend(crate::resolve(h, p).into_iter().filter(|a| matches!(a.ip, Ip::V4(_))));
+                }
+                let _ = tx.send(boot);
+            });
+            self.dht_boot = Some(rx);
+        }
+        self.dht = Some(dht);
+        self.dht_sock = Some(sock);
+        self.dht_out(now);
+    }
+
+    /// Carries out what the DHT asked for.
+    fn dht_handle(&mut self, outs: Vec<DhtOut>, now: Millis) {
+        for o in outs {
+            match o {
+                DhtOut::Send { to, bytes } => { if let Some(s) = &self.dht_sock { let _ = s.send_to(&bytes, to_socket(to)); } }
+                DhtOut::Event(DhtEvent::Peers { lookup, peers }) => {
+                    let Some(key) = self.lookups.get(&lookup).copied() else { continue };
+                    if std::env::var_os("SWINGERS_DEBUG").is_some() { say(&format!("[swingers.debug] dht peers {:?}", peers)); }
+                    let a = self.session.with(&key, now, |t, now| t.add_peers(&peers, now));
+                    self.queue.extend(a);
+                }
+                DhtOut::Event(DhtEvent::LookupDone { lookup, peers_found, announced, .. }) => {
+                    let Some(key) = self.lookups.remove(&lookup) else { continue };
+                    let nodes = self.dht.as_ref().map(|d| d.table(false).len()).unwrap_or(0);
+                    say(&format!("[swingers.dht] {} peers={peers_found} announced={announced} nodes={nodes}", sex_torrent::to_hex(&key)));
+                    // Again soon while we know few nodes or found nobody, else every 15 minutes.
+                    let again = if peers_found == 0 || nodes < 8 { 20_000 } else { 900_000 };
+                    if let Some(j) = self.jobs.get_mut(&key) { j.next_dht = now + again; }
+                }
+                DhtOut::Event(DhtEvent::ExternalAddress { .. }) => {}
+            }
+        }
+    }
+
+    fn dht_out(&mut self, now: Millis) {
+        let outs = self.dht.as_mut().map(|d| d.poll()).unwrap_or_default();
+        self.dht_handle(outs, now);
+    }
+
+    /// Reads DHT datagrams, runs its timers and starts lookups that are due.
+    fn dht_pump(&mut self, now: Millis) -> bool {
+        if self.dht.is_none() { return false; }
+        let mut any = false;
+        let mut buf = [0u8; 2048];
+        loop {
+            let got = match &self.dht_sock { Some(s) => s.recv_from(&mut buf), None => break };
+            let Ok((n, from)) = got else { break };
+            any = true;
+            let outs = self.dht.as_mut().expect("dht").on_packet(to_peer(from), &buf[..n], now);
+            self.dht_handle(outs, now);
+        }
+        if now >= self.last_dht_tick + 1000 {
+            self.last_dht_tick = now;
+            if let Some(Ok(boot)) = self.dht_boot.as_ref().map(|r| r.try_recv()) {
+                self.dht_boot = None;
+                if !boot.is_empty() { self.dht.as_mut().expect("dht").bootstrap(&boot, now); say(&format!("[swingers.dht] routers={}", boot.len())); }
+            }
+            let outs = self.dht.as_mut().expect("dht").on_tick(now);
+            self.dht_handle(outs, now);
+            let announce = if self.listener.is_some() { Some(self.port) } else { None };
+            let due: Vec<TorrentKey> = self.jobs.iter().filter(|(k, j)| !j.paused && !j.private && now >= j.next_dht && !self.lookups.values().any(|l| l == *k)).map(|(k, _)| *k).collect();
+            for k in due {
+                if let Some(j) = self.jobs.get_mut(&k) { j.next_dht = now + 60_000; }
+                let lid = self.dht.as_mut().expect("dht").get_peers(k, announce, now);
+                self.lookups.insert(lid, k);
+            }
+        }
+        self.dht_out(now);
+        any
+    }
+
     pub(crate) fn now(&self) -> Millis { self.started.elapsed().as_millis() as Millis }
 
     /// Adds a torrent from a magnet link, info-hash or .torrent. Returns its RPC id, key
     /// and whether it was already here.
     pub fn add_source(&mut self, source: &str, bytes: Option<Vec<u8>>, extra_peers: Vec<PeerAddr>, dir: Option<PathBuf>) -> Result<(u64, TorrentKey, bool), String> {
-        let prep = crate::prepare(source, bytes, self.peer_id, self.port, self.anonymous)?;
+        let mut prep = crate::prepare(source, bytes, self.peer_id, self.port, self.anonymous)?;
+        let private = prep.meta.as_ref().is_some_and(|m| m.private);
+        // A private torrent (BEP 27) stays off the DHT; others tell peers our DHT port.
+        if self.dht.is_some() && !private { prep.params.config.dht_port = Some(self.port); }
         let key = prep.params.info_hashes.wire();
         if let Some(j) = self.jobs.get(&key) { return Ok((j.id, key, true)); }
         let magnet = prep.meta.as_ref().map(|m| sex_torrent::magnet::Magnet::from_metainfo(m).to_uri()).unwrap_or_else(|| format!("magnet:?xt=urn:btih:{}", sex_torrent::to_hex(&key)));
@@ -89,6 +189,7 @@ impl Client {
         let mut peers = prep.peers;
         peers.extend(extra_peers);
         self.add(prep.params, prep.name, prep.trackers, peers, dir.unwrap_or_else(|| self.dir.clone()), magnet);
+        if let Some(j) = self.jobs.get_mut(&key) { j.private = private; }
         Ok((self.jobs[&key].id, key, false))
     }
 
@@ -99,7 +200,7 @@ impl Client {
         let t = Torrent::new(params, now);
         let id = self.next_id; self.next_id += 1;
         let added = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
-        self.jobs.insert(key, Job { trackers, disk, next_announce: 0, announced_done: false, finished_at: None, name, id, added, dir, paused: false, magnet });
+        self.jobs.insert(key, Job { next_dht: now + 1500, private: false, trackers, disk, next_announce: 0, announced_done: false, finished_at: None, name, id, added, dir, paused: false, magnet });
         if let Some(a) = self.session.add(t, now) { self.queue.extend(a); }
         let more = self.session.with(&key, now, |t, now| t.add_peers(&peers, now));
         self.queue.extend(more);
@@ -117,6 +218,7 @@ impl Client {
             busy |= self.pump(now);
             while let Ok(d) = self.done_rx.try_recv() { self.done(d); busy = true; }
             busy |= crate::remote::pump(self);
+            busy |= self.dht_pump(now);
             if now >= last_tick + 50 { last_tick = now; let a = self.session.on_tick(now); self.queue.extend(a); self.announce(now); }
             if now >= last_report + 2000 { last_report = now; self.report(now); }
             self.drain();
@@ -197,7 +299,8 @@ impl Client {
                 }
                 Action::Hash { piece, data } => { let _ = (piece, data); }
                 Action::MetadataReceived(info) => self.metadata(torrent, &info, now),
-                Action::Finished | Action::PieceDone(_) | Action::PieceFailed(_) | Action::DhtNode(_) => {}
+                Action::DhtNode(addr) => { if let Some(d) = self.dht.as_mut() { d.add_node(addr, now); } }
+                Action::Finished | Action::PieceDone(_) | Action::PieceFailed(_) => {}
                 Action::StateChanged(s) => say(&format!("[swingers.state] {} {:?}", sex_torrent::to_hex(&torrent), s)),
             }
         }
@@ -209,6 +312,7 @@ impl Client {
                 Ok(l) => {
                     if let Some(job) = self.jobs.get_mut(&torrent) {
                         job.name = m.name.clone();
+                        job.private = m.private;
                         job.disk = Some(Disk::new(&job.dir.clone(), l.clone(), &sex_torrent::to_hex(&torrent)));
                     }
                     say(&format!("[swingers.metadata] {} {} files={}", sex_torrent::to_hex(&torrent), m.name, m.files.iter().filter(|f| !f.attr.pad).count()));

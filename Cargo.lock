@@ -2083,6 +2083,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "gaze-core"
+version = "0.1.0"
+dependencies = [
+ "batik-core",
+ "gaze-codecs",
+ "libm",
+ "sex-image",
+]
+
+[[package]]
 name = "generic-array"
 version = "0.14.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6075,13 +6085,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "splicy"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-media",
+ "sex-office",
+ "sex-pdx",
+ "sex-splice",
+]
+
+[[package]]
 name = "spreadeagle"
 version = "0.1.0"
 dependencies = [
+ "gridcraft-chart",
  "gridcraft-engine",
+ "quick-xml 0.41.0",
  "serde_json",
  "sex-office",
  "sex-std",
+ "zip 3.0.0",
 ]
 
 [[package]]
@@ -6120,6 +6144,13 @@ dependencies = [
 
 [[package]]
 name = "stdnet"
+version = "0.1.0"
+dependencies = [
+ "sex-std",
+]
+
+[[package]]
+name = "stdspawn"
 version = "0.1.0"
 dependencies = [
  "sex-std",
@@ -6964,7 +6995,11 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 name = "view"
 version = "0.1.0"
 dependencies = [
+ "batik-core",
+ "gaze-codecs",
+ "gaze-core",
  "sex-app",
+ "sex-font",
  "sex-image",
  "sex-pdx",
 ]

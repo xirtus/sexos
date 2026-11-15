@@ -21,7 +21,7 @@
   delete globalThis.__host;
   const OP = { LOG: 1, BY_ID: 2, QUERY: 3, INFO: 4, GET_ATTR: 5, SET_ATTR: 6, REMOVE_ATTR: 7, GET_TEXT: 8, SET_TEXT: 9,
     GET_HTML: 10, SET_HTML: 11, CREATE_ELEMENT: 12, CREATE_TEXT: 13, INSERT: 14, DETACH: 15, PARENT: 16, CHILDREN: 17,
-    ATTR_NAMES: 18, VIEWPORT: 19, NAVIGATE: 20, CLICKABLE: 21, RECT: 22, LOCATION: 23, CANVAS: 24, MEASURE: 25, HIT: 26, VALUE: 27, CARET: 28, MEDIA: 48, GL: 64, GL_QUERY: 65, FETCH: 66, FETCH_BODY: 67, FETCH_HEAD: 68, COOKIE: 69, MEDIA_APPEND: 70, CLASSIC_SCRIPT: 71, FRAME: 31, POST_MESSAGE: 32, STORAGE: 33, IDB: 34, ADOPTED_STYLES: 35, MATCHES: 36, WS: 73, WS_TAKE: 74 };
+    ATTR_NAMES: 18, VIEWPORT: 19, NAVIGATE: 20, CLICKABLE: 21, RECT: 22, LOCATION: 23, CANVAS: 24, MEASURE: 25, HIT: 26, VALUE: 27, CARET: 28, MEDIA: 48, GL: 64, GL_QUERY: 65, FETCH: 66, FETCH_BODY: 67, FETCH_HEAD: 68, COOKIE: 69, MEDIA_APPEND: 70, CLASSIC_SCRIPT: 71, FRAME: 31, POST_MESSAGE: 32, STORAGE: 33, IDB: 34, ADOPTED_STYLES: 35, MATCHES: 36, SVG_CONTEXT: 37, WS: 73, WS_TAKE: 74 };
   const nodes = new Map();
   const defaultChecked = new WeakMap();
 
@@ -1605,14 +1605,7 @@
     const l = name.toLowerCase();
     if (svgMarked.has(id) || SVG_TAGS.has(l)) return true;
     if (!SVG_SHARED.has(l)) return false;
-    for (let p = H(OP.PARENT, id), i = 0; p !== null && p !== undefined && p !== '' && i < 64; p = H(OP.PARENT, p), i++) {
-      const info = H(OP.INFO, p);
-      if (!info || info.slice(0, info.indexOf(',')) !== '1') return false;
-      const t = info.slice(info.indexOf(',') + 1).toLowerCase();
-      if (t === 'svg') return true;
-      if (t === 'foreignobject') return false;
-    }
-    return false;
+    return H(OP.SVG_CONTEXT, id) === '1';
   }
   class SVGElement extends Element {
     get namespaceURI() { return SVG_NS; }
