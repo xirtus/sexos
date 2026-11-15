@@ -3,10 +3,13 @@
 
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
+use crate::adjust::AdjustmentKind;
 use crate::blend::BlendMode;
 use crate::document::Document;
+use crate::filters::FilterNode;
 use crate::geom::Rect;
 use crate::layer::{Layer, LayerKind, RasterLayer};
+use crate::text::TextLayer;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum HistoryAction {
@@ -39,6 +42,26 @@ pub enum HistoryAction {
         new_height: usize,
         layer_shifts: Vec<(u64, i32, i32)>, // (layer_id, dx, dy)
     },
+    LayerMaskDelta {
+        layer_id: u64,
+        old_mask: Option<Vec<u8>>,
+        new_mask: Option<Vec<u8>>,
+    },
+    AdjustmentLayerChanged {
+        layer_id: u64,
+        old_kind: AdjustmentKind,
+        new_kind: AdjustmentKind,
+    },
+    TextLayerChanged {
+        layer_id: u64,
+        old_text: TextLayer,
+        new_text: TextLayer,
+    },
+    FilterStackChanged {
+        layer_id: u64,
+        old_stack: Vec<FilterNode>,
+        new_stack: Vec<FilterNode>,
+    },
 }
 
 impl HistoryAction {
@@ -54,13 +77,29 @@ impl HistoryAction {
                         r.pixels.len() * core::mem::size_of::<u32>()
                             + r.mask.as_ref().map_or(0, |m| m.len())
                     }
+                    LayerKind::Text(t) => {
+                        t.text.len() + t.mask.as_ref().map_or(0, |m| m.len())
+                    }
+                    LayerKind::Adjustment(a) => {
+                        a.mask.as_ref().map_or(0, |m| m.len())
+                    }
                     _ => 256,
                 };
-                base + layer.name.len() + layer_bytes
+                base + layer.name.len() + layer_bytes + layer.filter_stack.len() * core::mem::size_of::<FilterNode>()
             }
             HistoryAction::LayerPropertyChange { .. } => base,
             HistoryAction::DocumentCrop { layer_shifts, .. } => {
                 base + layer_shifts.len() * core::mem::size_of::<(u64, i32, i32)>()
+            }
+            HistoryAction::LayerMaskDelta { old_mask, new_mask, .. } => {
+                base + old_mask.as_ref().map_or(0, |m| m.len()) + new_mask.as_ref().map_or(0, |m| m.len())
+            }
+            HistoryAction::AdjustmentLayerChanged { .. } => base + 128,
+            HistoryAction::TextLayerChanged { old_text, new_text, .. } => {
+                base + old_text.text.len() + new_text.text.len()
+            }
+            HistoryAction::FilterStackChanged { old_stack, new_stack, .. } => {
+                base + (old_stack.len() + new_stack.len()) * core::mem::size_of::<FilterNode>()
             }
         }
     }
@@ -170,6 +209,35 @@ impl History {
                     }
                 }
             }
+            HistoryAction::LayerMaskDelta { layer_id, old_mask, .. } => {
+                if let Some(layer) = doc.get_layer_mut(*layer_id) {
+                    match &mut layer.kind {
+                        LayerKind::Raster(ref mut raster) => raster.mask = old_mask.clone(),
+                        LayerKind::Adjustment(ref mut adj) => adj.mask = old_mask.clone(),
+                        LayerKind::Text(ref mut text) => text.mask = old_mask.clone(),
+                        LayerKind::Group(_) => {}
+                    }
+                }
+            }
+            HistoryAction::AdjustmentLayerChanged { layer_id, old_kind, .. } => {
+                if let Some(layer) = doc.get_layer_mut(*layer_id) {
+                    if let LayerKind::Adjustment(ref mut adj) = layer.kind {
+                        adj.kind = old_kind.clone();
+                    }
+                }
+            }
+            HistoryAction::TextLayerChanged { layer_id, old_text, .. } => {
+                if let Some(layer) = doc.get_layer_mut(*layer_id) {
+                    if let LayerKind::Text(ref mut text) = layer.kind {
+                        *text = old_text.clone();
+                    }
+                }
+            }
+            HistoryAction::FilterStackChanged { layer_id, old_stack, .. } => {
+                if let Some(layer) = doc.get_layer_mut(*layer_id) {
+                    layer.filter_stack = old_stack.clone();
+                }
+            }
         }
 
         self.redo_stack.push_back(action);
@@ -224,6 +292,35 @@ impl History {
                             raster.offset_y -= dy;
                         }
                     }
+                }
+            }
+            HistoryAction::LayerMaskDelta { layer_id, new_mask, .. } => {
+                if let Some(layer) = doc.get_layer_mut(*layer_id) {
+                    match &mut layer.kind {
+                        LayerKind::Raster(ref mut raster) => raster.mask = new_mask.clone(),
+                        LayerKind::Adjustment(ref mut adj) => adj.mask = new_mask.clone(),
+                        LayerKind::Text(ref mut text) => text.mask = new_mask.clone(),
+                        LayerKind::Group(_) => {}
+                    }
+                }
+            }
+            HistoryAction::AdjustmentLayerChanged { layer_id, new_kind, .. } => {
+                if let Some(layer) = doc.get_layer_mut(*layer_id) {
+                    if let LayerKind::Adjustment(ref mut adj) = layer.kind {
+                        adj.kind = new_kind.clone();
+                    }
+                }
+            }
+            HistoryAction::TextLayerChanged { layer_id, new_text, .. } => {
+                if let Some(layer) = doc.get_layer_mut(*layer_id) {
+                    if let LayerKind::Text(ref mut text) = layer.kind {
+                        *text = new_text.clone();
+                    }
+                }
+            }
+            HistoryAction::FilterStackChanged { layer_id, new_stack, .. } => {
+                if let Some(layer) = doc.get_layer_mut(*layer_id) {
+                    layer.filter_stack = new_stack.clone();
                 }
             }
         }

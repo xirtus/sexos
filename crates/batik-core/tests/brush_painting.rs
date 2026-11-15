@@ -22,6 +22,8 @@ fn test_brush_pressure_dynamics() {
         eraser: false,
         size_dynamics: true,
         opacity_dynamics: false,
+        chisel_angle: 0.0,
+        chisel_ratio: 1.0,
     };
 
     let mut engine = StrokeEngine::new(brush);
@@ -59,6 +61,8 @@ fn test_brush_selection_clipping() {
         eraser: false,
         size_dynamics: false,
         opacity_dynamics: false,
+        chisel_angle: 0.0,
+        chisel_ratio: 1.0,
     };
     let mut engine = StrokeEngine::new(brush);
 
@@ -89,6 +93,8 @@ fn test_eraser_mode() {
         eraser: true,
         size_dynamics: false,
         opacity_dynamics: false,
+        chisel_angle: 0.0,
+        chisel_ratio: 1.0,
     };
     let mut engine = StrokeEngine::new(brush);
     engine.paint_to(&mut raster, &selection, PointerSample::new(5.0, 5.0, 1.0)).unwrap();

@@ -41,6 +41,33 @@ impl<'a> Canvas<'a> {
         self.fill(x, y, 1, h, color);
         self.fill(x + w - 1, y, 1, h, color);
     }
+    /// Mixes `color` over the part of (`x`, `y`, `w`, `h`) inside the canvas by `alpha`
+    /// (0–255): a selection's tint.
+    pub fn tint(&mut self, x: i32, y: i32, w: i32, h: i32, color: u32, alpha: u32) {
+        let (x0, y0) = (x.max(0) as usize, y.max(0) as usize);
+        let x1 = (x.saturating_add(w).max(0) as usize).min(self.width);
+        let y1 = (y.saturating_add(h).max(0) as usize).min(self.height);
+        for row in y0..y1 {
+            for p in &mut self.px[row * self.stride + x0.min(x1)..row * self.stride + x1] { *p = mix(*p, color, alpha); }
+        }
+    }
+    /// Copies a `w`-wide picture to (`x`, `y`), only where it falls inside `clip`
+    /// (x, y, w, h) and the canvas.
+    pub fn blit(&mut self, x: i32, y: i32, picture: &[u32], w: usize, clip: (i32, i32, i32, i32)) {
+        if w == 0 { return; }
+        let h = picture.len() / w;
+        let left = x.max(clip.0).max(0);
+        let right = (x + w as i32).min(clip.0 + clip.2).min(self.width as i32);
+        if left >= right { return; }
+        for py in 0..h as i32 {
+            let sy = y + py;
+            if sy < clip.1.max(0) || sy >= (clip.1 + clip.3).min(self.height as i32) { continue; }
+            let src = py as usize * w + (left - x) as usize;
+            let dst = sy as usize * self.stride + left as usize;
+            let n = (right - left) as usize;
+            self.px[dst..dst + n].copy_from_slice(&picture[src..src + n]);
+        }
+    }
     /// Mixes `color` over the pixel at (`x`, `y`) by `alpha` (0–255).
     fn blend(&mut self, x: i32, y: i32, color: u32, alpha: u32) {
         if x < 0 || y < 0 || x as usize >= self.width || y as usize >= self.height { return; }
@@ -158,6 +185,18 @@ mod tests {
         let mut canvas = Canvas::new(&mut px, 10, 10);
         canvas.fill(-5, 8, 100, 100, 7);
         assert_eq!(px.iter().filter(|p| **p == 7).count(), 20);
+    }
+
+    #[test]
+    fn tint_and_blit_stay_inside() {
+        let mut px = vec![0u32; 10 * 10];
+        let mut canvas = Canvas::new(&mut px, 10, 10);
+        canvas.tint(-5, 8, 30, 30, 0x00ffffff, 255);
+        canvas.blit(6, -2, &[0x0000ff00; 16], 4, (0, 0, 8, 8));
+        assert_eq!(px.iter().filter(|p| **p == 0x00ffffff).count(), 20);
+        assert_eq!(px.iter().filter(|p| **p == 0x0000ff00).count(), 4);
+        assert_eq!(px[6], 0x0000ff00);
+        assert_eq!(px[8], 0);
     }
 
     #[test]

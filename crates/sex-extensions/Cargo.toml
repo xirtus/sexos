@@ -1,0 +1,11 @@
+[package]
+name = "sex-extensions"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Browser extensions for Kaleidoscope: manifests (MV2/MV3), match patterns, declarativeNetRequest rules, CRX/ZIP packages (no_std + alloc, no I/O)"
+
+[dependencies]
+serde_json = { version = "1.0.154", default-features = false, features = ["alloc"] }
+zune-inflate = { version = "0.2.54", default-features = false }
+sex-shields = { path = "../sex-shields" }
