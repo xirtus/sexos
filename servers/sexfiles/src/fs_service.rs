@@ -1157,3 +1157,24 @@ fn wipe_restricted_bytes(bytes:&mut [u8]) {
     for byte in bytes{unsafe{core::ptr::write_volatile(byte,0)}}
     core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
 }
+
+/// Restricted snapshots receive only paths the exact active parent main task
+/// holds. Keep this separate from legacy PREPARE and relay/ticket ownership.
+pub fn restricted_path(parent:sex_pdx::restricted_helper::Subject,token:&[u8],out:&mut [u8;w::PATH_BYTES])->Option<usize>{
+    let index=program_index(parent.pd)?;
+    let bindings=unsafe{&*core::ptr::addr_of!(BINDINGS)};
+    let binding=bindings[index].as_ref()?;
+    if binding.task!=parent.task||!program_live(parent.pd,parent.task){return None}
+    if !token.starts_with(b"@/")||!crate::restricted_storage::canonical(&token[1..]){return None}
+    let n=confine(binding,token,out)?;
+    if crate::volumes::owns(&out[..n])||crate::home::owns(&out[..n]){return None}
+    Some(n)
+}
+pub fn restricted_storage<T>(action:impl FnOnce(&mut Fs<'static,Disk>)->Result<T,crate::restricted_job::Error>)->Result<T,crate::restricted_job::Error>{
+    let state=unsafe{&mut *core::ptr::addr_of_mut!(STATE)};
+    let State::Ready(fs)=state else{return Err(crate::restricted_job::Error::Io)};
+    // Commit prior clients before creating a private publication transaction.
+    fs.commit().map_err(|_|crate::restricted_job::Error::Io)?;
+    unsafe{UNCOMMITTED=0;}
+    action(fs)
+}

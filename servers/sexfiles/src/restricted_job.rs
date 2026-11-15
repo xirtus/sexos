@@ -22,6 +22,8 @@ pub enum Error {
     State,
     ReadOnly,
     Budget,
+    Io,
+    Unsupported,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Object {
