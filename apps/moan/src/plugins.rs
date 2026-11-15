@@ -245,6 +245,19 @@ pub mod guest {
                 return false;
             };
             job.poll(now);
+            if job.result_consumed() {
+                if job.retired() {
+                    self.active = None;
+                    self.status = if self.result.is_some() {
+                        Status::Ready
+                    } else if before == Status::Failed {
+                        Status::Failed
+                    } else {
+                        Status::Idle
+                    };
+                }
+                return before != self.status;
+            }
             if matches!(
                 job.status(),
                 job::Status::Cancelling(_) | job::Status::CancelWaiting
@@ -265,12 +278,11 @@ pub mod guest {
                         job.accept_result();
                         self.result = Some(audio);
                         self.status = Status::Ready;
-                        self.active = None;
                     }
                     Err(Error::Memory) => self.status = Status::WaitingForMemory,
                     Err(_) => {
+                        job.cancel();
                         self.status = Status::Failed;
-                        self.active = None;
                     }
                 }
             }
@@ -282,10 +294,7 @@ pub mod guest {
             }
         }
         pub fn cancel(&mut self) {
-            if self.active.as_ref().is_some_and(|job| job.retired()) {
-                self.active = None;
-                self.status = Status::Idle;
-            } else if let Some(job) = self.active.as_mut() {
+            if let Some(job) = self.active.as_mut() {
                 job.cancel();
                 self.status = Status::Cancelling;
             }

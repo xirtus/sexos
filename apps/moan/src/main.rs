@@ -585,9 +585,9 @@ mod guest {
                             }
                         }
                         Some(Action::Import) | Some(Action::Export) => {
-                            if playing || paused || recording.is_some() {
+                            if playing || paused || recording.is_some() || plugin.busy() {
                                 studio
-                                    .message(&mut app.ui, "Stop transport before file operations");
+                                    .message(&mut app.ui, "Stop transport and finish offline rendering before file operations");
                                 continue;
                             }
                             let result = if action == Some(Action::Import) {
@@ -604,10 +604,10 @@ mod guest {
                             );
                         }
                         Some(Action::OpenProject) | Some(Action::SaveProject) => {
-                            if playing || paused || recording.is_some() {
+                            if playing || paused || recording.is_some() || plugin.busy() {
                                 studio.message(
                                     &mut app.ui,
-                                    "Stop transport before project operations",
+                                    "Stop transport and finish offline rendering before project operations",
                                 );
                                 continue;
                             }
@@ -625,6 +625,13 @@ mod guest {
                             );
                         }
                         Some(Action::NewProject) => {
+                            if plugin.busy() {
+                                studio.message(
+                                    &mut app.ui,
+                                    "Finish or cancel offline rendering first",
+                                );
+                                continue;
+                            }
                             studio.new_project(&mut app.ui);
                             studio.message(&mut app.ui, "New editable project");
                             sex_pdx::serial_record!("[moan.project.new] tracks=0 clean=1");

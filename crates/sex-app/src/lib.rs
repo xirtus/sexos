@@ -351,6 +351,7 @@ pub mod files {
     pub use w::{message, NOT_FOUND};
 
     fn region() -> Result<&'static mut [u8], Error> {
+        direct::restricted::region_ready()?;
         let view = sex_pdx::memory_region_view(w::CLIENT_SLOT, 0, w::REGION_BYTES as u64, QUERY_VIEW | READ | WRITE).map_err(|_| w::UNAVAILABLE)?;
         Ok(unsafe { core::slice::from_raw_parts_mut(view.virtual_address as *mut u8, w::REGION_BYTES) })
     }
@@ -358,6 +359,7 @@ pub mod files {
     static REGION_AT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
     /// What Files last said about `path`, if nothing has changed since: no call at all.
     fn cached(path: &[u8]) -> Option<direct::Stat> {
+        direct::restricted::region_ready().ok()?;
         let mut at = REGION_AT.load(Ordering::Relaxed);
         if at == 0 { at = region().ok()?.as_ptr() as u64; REGION_AT.store(at, Ordering::Relaxed); }
         let cache = unsafe { core::slice::from_raw_parts((at as usize + w::CACHE_AT) as *const u8, w::CACHE_BYTES) };
@@ -514,6 +516,9 @@ pub mod files {
     /// the mailbox, where `Window::next` finds them.
     pub mod direct {
         use super::{exchange, w, Error, Hold};
+
+        /// Epoch-bound immutable offline jobs; never uses ordinary launch tickets.
+        pub mod restricted { include!("restricted_files.rs"); }
 
         /// What Files knows of a file or folder.
         #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

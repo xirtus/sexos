@@ -3075,6 +3075,7 @@ dependencies = [
  "sex-app",
  "sex-libc",
  "sex-pdx",
+ "sha2 0.10.9",
  "vst3",
 ]
 
