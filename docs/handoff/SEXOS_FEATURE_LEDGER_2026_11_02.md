@@ -4950,3 +4950,16 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   queued at the last verified snapshot. No merge without exact-head leaves and
   aggregator green plus final compatibility review. Finish Moan before JIT object
   and string inline caches.
+
+### Round 195 canonical foundation follow-up
+
+- Fresh source `2cbdadf53` passes the complete sealed build and 60-second QEMU
+  GREEN_MASTER gate. The frozen normal ISO is
+  `93d3bef41ec9608d067a20357c2e0740e9c5785798449ab16f46734ba2f631ad`.
+  All 1,949 production source copies and both generated helper/Files artifacts
+  independently match their sealed digests; before/after source manifests agree.
+- The real build trace produces the expected completed helper-to-Files receipt,
+  and the freezer archives both under generated-inputs. Full metadata is in
+  CANONICAL_HELPER_FOUNDATION_RUNTIME_V9_2026_11_15.json. This normal boot qualifies
+  the foundation pipeline; it does not transfer earlier plugin runtime proofs to
+  this new image or claim final GUI/hostile-role/live-insert acceptance.
