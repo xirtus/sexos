@@ -45,7 +45,8 @@ mod guest {
         Ok(&b[..n] == SECRET)
     }
     fn denied_private() {
-        assert_eq!(read_private(), Err(sex_pdx::fs::DENIED));
+        // Files rejects an ungranted @ path during confine with NAME, before I/O.
+        assert_eq!(read_private(), Err(sex_pdx::fs::NAME));
     }
     fn record() -> Record {
         let mut b = [0; 64];
