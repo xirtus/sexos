@@ -34,7 +34,8 @@ def make_clip():
  d=Path(tempfile.mkdtemp());out=d/'talk.webm'
  subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i','testsrc2=size=320x180:rate=30:duration=6',
   '-f','lavfi','-i','sine=frequency=440:sample_rate=48000:duration=6',
-  '-af',"volume='0.1+0.9*mod(t,1)':eval=frame",'-c:v','libvpx-vp9','-b:v','300k','-c:a','libopus','-ac','2',str(out)],check=True)
+  # ffmpeg's sine peaks at 1/8 full scale: lift it so the swelling tone fills the track.
+  '-af',"volume='7*(0.1+0.9*mod(t,1))':eval=frame",'-c:v','libvpx-vp9','-b:v','300k','-c:a','libopus','-ac','2',str(out)],check=True)
  return out.read_bytes()
 FILES={'/splicy':Path(SPLICY).read_bytes(),'/talk.webm':make_clip(),'/talk.words':WORDS.encode()}
 class Handler(http.server.BaseHTTPRequestHandler):
