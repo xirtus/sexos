@@ -77,7 +77,7 @@ def main():
   assert len(probe)>8,'the probe panel looks blank'
   close(target,task,surface)
   target,task,surface,tile,frame=start('')
-  assert int(frame[4])>1000,f'the demo drew too little: {frame[0]}'
+  assert int(frame[5])>1000,f'the demo drew too little: {frame[0]}'
   demo=shot('tassel-demo',tile)
   ncol=len(demo);assert ncol>40,f'the demo looks blank ({ncol} colours)'
   # A click on the demo's background still takes input without trouble.
