@@ -25,7 +25,7 @@ def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
  with disk.open('r+b') as f:f.truncate(1024**3)
- install(disk,[('date',(ROOT/'iso_root/programs/calendar').read_bytes())])
+ install(disk,[('date',(ROOT/'iso_root/programs/date').read_bytes())])
  today=datetime.datetime.now(datetime.timezone.utc).date()
  invite_day=today+datetime.timedelta(days=2)
  dav.files['/account.dav']=f'url=http://10.0.2.2:{PORT}/dav/calendars/alice/\nuser=alice\npassword=wonderland\nemail=alice@example.org\n'.encode()

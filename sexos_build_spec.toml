@@ -613,7 +613,7 @@ target = "x86_64-sex-std.json"
 build_std = "std,panic_abort"
 manifest = "apps/pdf/Cargo.toml"
 source_artifact = "target/x86_64-sex-std/release/pdf"
-dest_artifact = "iso_root/programs/pdf"
+dest_artifact = "iso_root/programs/vellum"
 
 # Aftercare: encrypted, deduplicated backups (crates/aftercare-core) of a granted folder.
 [[stage]]
@@ -815,7 +815,7 @@ action = "cargo_manifest"
 target = "x86_64-sex-app.json"
 manifest = "apps/sex-calc/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/sex-calc"
-dest_artifact = "iso_root/programs/sex-calc"
+dest_artifact = "iso_root/programs/abacus"
 
 [[stage]]
 id = "build_calendar"
@@ -823,7 +823,8 @@ action = "cargo_manifest"
 target = "x86_64-sex-app.json"
 manifest = "apps/calendar/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/calendar"
-dest_artifact = "iso_root/programs/calendar"
+dest_artifact = "iso_root/programs/date"
+
 # Climax: benchmark and thermal torture suite window.
 [[stage]]
 id = "build_climax"

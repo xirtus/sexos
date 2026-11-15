@@ -15,7 +15,7 @@ def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
  with disk.open('r+b') as f:f.truncate(1024**3)
- install(disk,[('sex-calc',(ROOT/'iso_root/programs/sex-calc').read_bytes())])
+ install(disk,[('abacus',(ROOT/'iso_root/programs/abacus').read_bytes())])
  rw,rh=map(int,a.resolution.split('x'))
  g=boot(a.iso,disk,a.out,'calc',a.resolution);t=g['text'];q=g['q']
  def keys(text):
@@ -34,7 +34,7 @@ def main():
   for down in (True,False):q.cmd('input-send-event',{'events':[{'type':'btn','data':{'down':down,'button':'left'}}]});time.sleep(.2)
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
-  g['focus'](153);time.sleep(.5);s=len(t());keys('run sex-calc');q.key('ret')
+  g['focus'](153);time.sleep(.5);s=len(t());keys('run abacus');q.key('ret')
   ready=g['wait'](r'\[calc.ready\] target=(\d+) task=(\d+)',s,120);target,task=ready[1],ready[2]
   launch=g['wait'](rf'\[shell.program.launch\] target={target} task={task} surface=(\d+)',s,60);sid=int(launch[1])
   g['wait'](rf'\[display.app.pixels\] target={target} ',s,60);time.sleep(3)

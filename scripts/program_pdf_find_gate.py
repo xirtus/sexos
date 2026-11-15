@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PDF finds text: `run pdf @find10.pdf` opens a ten-page document the person gave it;
+"""PDF finds text: `run vellum @find10.pdf` opens a ten-page document the person gave it;
 Ctrl+F, typing ZANZIBAR and Enter turns to page 7, the only page holding the word, and
 lights it up; Ctrl+G comes back round to the same single hit. The outline panel lists the
 document's four bookmarks and Enter on one turns to its page; the thumbnail strip
@@ -30,10 +30,10 @@ KEYS={' ':'spc','/':'slash','.':'dot','-':'minus'}
 SURFACE={int(a):int(b)for a,b in re.findall(r'app: App::Program, ordinal: \d+, target: (\d+), surface: (\d+)',(ROOT/'crates/sex-pdx/src/app_catalog.rs').read_text())}
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
- pdf=(ROOT/'iso_root/programs/pdf').read_bytes();assert pdf[:4]==b'\x7fELF'
+ pdf=(ROOT/'iso_root/programs/vellum').read_bytes();assert pdf[:4]==b'\x7fELF'
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
  with disk.open('r+b') as f:f.truncate(1024**3)
- install(disk,[('pdf',pdf)])
+ install(disk,[('vellum',pdf)])
  g=boot(a.iso,disk,a.out,'pdf-find',a.resolution);t=g['text'];q=g['q']
  def shifted(k):q.cmd('send-key',{'keys':[{'type':'qcode','data':'shift'},{'type':'qcode','data':k}],'hold-time':80})
  def keys(text):
@@ -51,7 +51,7 @@ def main():
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
   s=len(t());line(f'fetch http://10.0.2.2:{PORT}/find10.pdf find10.pdf')
   m=g['wait'](r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',s,300);assert m[1].startswith('Saved'),m[1]
-  s=len(t());line('run pdf @find10.pdf')
+  s=len(t());line('run vellum @find10.pdf')
   o=g['wait'](rf'\[pdf\.open\] target=(\d+) task=(\d+) name=find10\.pdf pages={PAGES}\n',s,600)
   g['wait'](rf'\[pdf\.page\] page=1 pages={PAGES} width=(\d+) height=(\d+) ink=(\d+) ms=(\d+)\n',s,900)
   launch=re.findall(rf'\[shell.program.launch\] target={o[1]} task={o[2]} surface=(\d+)',t()[s:])
