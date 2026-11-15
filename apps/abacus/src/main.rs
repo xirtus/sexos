@@ -30,7 +30,9 @@ mod program {
         sex_pdx::serial_record!("[abacus.ready] target={} task={} keys={}", target, task, calc.keys.len());
         let mut laid = app.window.size();
         keys(&app, &calc, laid);
-        let mut reported = false;
+        // The first frame is painted before any input; say so now, not after the next event.
+        let mut reported = app.frames > 0;
+        if reported { sex_pdx::serial_record!("[abacus.frame] n={}", app.frames); }
         loop {
             let out = app.next();
             // A resize lays the keypad out again: say where the keys went.
