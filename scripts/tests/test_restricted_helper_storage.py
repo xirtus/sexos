@@ -23,9 +23,9 @@ sexfs={path="''' + str(ROOT / 'crates/sexfs') + '''"}
 [workspace]
 ''')
             code = 'extern crate self as sex_pdx;\n'
-            for module, path in [('restricted_helper','crates/sex-pdx/src/restricted_helper.rs'), ('restricted_job','servers/sexfiles/src/restricted_job.rs'), ('storage','servers/sexfiles/src/restricted_storage.rs'), ('restricted_jobs','servers/sexfiles/src/restricted_jobs.rs'), ('wire','crates/sex-pdx/src/restricted_job.rs'), ('native_io','servers/sexfiles/src/restricted_io.rs'), ('restricted_control','servers/sexfiles/src/restricted_control.rs'), ('restricted_load','servers/sexfiles/src/restricted_load.rs')]:
-                if module in ('native_io', 'restricted_load'):
-                    io = (ROOT / path).read_text().replace('restricted_job as wire', 'restricted_job_wire as wire').replace('program_store as store', 'program_store_wire as store')
+            for module, path in [('restricted_helper','crates/sex-pdx/src/restricted_helper.rs'), ('restricted_job','servers/sexfiles/src/restricted_job.rs'), ('storage','servers/sexfiles/src/restricted_storage.rs'), ('restricted_jobs','servers/sexfiles/src/restricted_jobs.rs'), ('wire','crates/sex-pdx/src/restricted_job.rs'), ('native_io','servers/sexfiles/src/restricted_io.rs'), ('restricted_control','servers/sexfiles/src/restricted_control.rs'), ('restricted_load','servers/sexfiles/src/restricted_load.rs'), ('restricted_data','servers/sexfiles/src/restricted_data.rs')]:
+                if module in ('native_io', 'restricted_load', 'restricted_data'):
+                    io = (ROOT / path).read_text().replace('restricted_job as wire', 'restricted_job_wire as wire').replace('program_store as store', 'program_store_wire as store').replace('sex_pdx::restricted_job::','sex_pdx::restricted_job_wire::')
                     code += 'mod ' + module + ' {\n' + io.replace('//!', '//') + '\n}\n'
                 else:
                     code += '#[path="' + str(ROOT / path) + '"] mod ' + module + ';\n'
@@ -44,26 +44,31 @@ mod memory_region{
 }
 use core::sync::atomic::{AtomicBool,AtomicU32,AtomicU64,Ordering};
 static TASK:AtomicU32=AtomicU32::new(99);static EPOCH:AtomicU64=AtomicU64::new(1);static NOW:AtomicU64=AtomicU64::new(100);static FULL:AtomicBool=AtomicBool::new(true);static LAST:AtomicU64=AtomicU64::new(0);static SENDS:AtomicU32=AtomicU32::new(0);
-#[repr(align(4096))]struct Region([u8;256*1024]);static mut REGION:Region=Region([0;256*1024]);
+#[repr(align(4096))]struct Region([u8;256*1024]);static mut REGION:Region=Region([0;256*1024]);static mut REGION_CHILD:Region=Region([0;256*1024]);static CHILD_TASK:AtomicU32=AtomicU32::new(0);static JOB_LIVE:AtomicBool=AtomicBool::new(false);static SCRUBS:AtomicU32=AtomicU32::new(0);
 mod crash_log{pub fn self_epoch()->Result<u64,()>{Ok(super::EPOCH.load(super::Ordering::SeqCst))}}
+fn civil_time_ms()->Option<u64>{Some(1000)}
 fn get_ticks()->u64{NOW.load(Ordering::SeqCst)}
 fn pdx_reply(_:u32,word:u64)->u64{if FULL.load(Ordering::SeqCst){return 1}LAST.store(word,Ordering::SeqCst);SENDS.fetch_add(1,Ordering::SeqCst);0}
-fn memory_region_info(_:u64)->Result<memory_region::Info,()>{Ok(memory_region::Info{peer_pd:Some(42),region_id:fs::REGION_ID_BASE,length:fs::REGION_BYTES as u64,rights:7})}
-fn memory_region_view(_:u64,_:u64,_:u64,_:u64)->Result<memory_region::View,()>{Ok(memory_region::View{region_id:fs::REGION_ID_BASE,length:fs::REGION_BYTES as u64,virtual_address:core::ptr::addr_of_mut!(REGION) as u64})}
+fn memory_region_info(slot:u64)->Result<memory_region::Info,()>{let image=slot==100;let child=slot==fs::PROVIDER_SLOT_BASE+1;Ok(memory_region::Info{peer_pd:if image{None}else{Some(if child{43}else{42})},region_id:if image{0x4000}else{fs::REGION_ID_BASE+child as u32},length:if image{32*1024*1024}else{fs::REGION_BYTES as u64},rights:7})}
+fn memory_region_view(slot:u64,_:u64,_:u64,_:u64)->Result<memory_region::View,()>{let info=memory_region_info(slot)?;Ok(memory_region::View{region_id:info.region_id,length:info.length,virtual_address:if info.peer_pd==Some(43){core::ptr::addr_of_mut!(REGION_CHILD) as u64}else{core::ptr::addr_of_mut!(REGION) as u64}})}
 #[path="PROGRAM_STORE_PATH"]mod program_store_wire;
-mod program_store{pub fn load_unbound(_:[u64;2])->u64{0}}
+mod program_store{pub fn load_unbound(_:[u64;2])->u64{super::program_store_wire::loaded(4)}}
 mod restricted_image{
  #[derive(Clone,Copy,Debug,PartialEq,Eq)]pub struct Lease{pub serial:u64,pub shell_epoch:u64,pub files_epoch:u64,pub parent:u32,pub parent_task:u32,pub cookie:u32,pub nonce:[u8;16]}
- pub fn attest_and_lease(_:Lease,_:&[u8])->Option<Lease>{None}pub fn copied(_:Lease,_:u64,_:u64)->bool{true}
+ pub fn attest_and_lease(mut lease:Lease,_:&[u8])->Option<Lease>{lease.serial=11;Some(lease)}pub fn copied(_:Lease,_:u64,_:u64)->bool{true}
 }
 mod restricted_runtime{
- pub fn staging()->Option<super::restricted_helper::Binding>{None}
- pub fn denied(_:u32)->bool{false}pub fn job_live(_:super::restricted_helper::Binding,_:u64)->bool{false}
+ pub fn staging()->Option<super::restricted_helper::Binding>{
+ use sha2::Digest;let words=|h:[u8;32]|core::array::from_fn(|i|u64::from_le_bytes(h[i*8..i*8+8].try_into().unwrap()));
+ Some(super::restricted_helper::Binding{generation:7,coordinator_epoch:2,provider_epoch:1,previous:super::restricted_helper::Subject{pd:43,task:43},child:super::restricted_helper::Subject{pd:0,task:0},parent:super::restricted_helper::Subject{pd:42,task:99},cookie:9,nonce:[0x0101010101010101;2],plugin_hash:words(sha2::Sha256::digest(b"original-plugin").into()),input_hash:words(sha2::Sha256::digest(super::tests::request()).into()),ticket:0})
+ }
+ pub fn denied(pd:u32)->bool{pd==43}pub fn job_live(_:super::restricted_helper::Binding,_:u64)->bool{super::JOB_LIVE.load(super::Ordering::SeqCst)}
+ pub fn scrub_retired(_:super::restricted_helper::Subject)->bool{super::SCRUBS.fetch_add(1,super::Ordering::SeqCst);true}
 }
 mod fs_service{
  use super::*;static mut FS:Option<sexfs::Fs<'static,tests::Disk>>=None;
  pub fn setup(){unsafe{FS=Some(tests::setup())}}
- pub fn live_run(pd:u32,task:u32)->bool{pd==42&&task==TASK.load(Ordering::SeqCst)}
+ pub fn live_run(pd:u32,task:u32)->bool{pd==42&&task==TASK.load(Ordering::SeqCst)||pd==43&&task!=0&&task==CHILD_TASK.load(Ordering::SeqCst)}
  pub fn restricted_path(_:restricted_helper::Subject,token:&[u8],out:&mut[u8;fs::PATH_BYTES])->Option<usize>{if !wire::path(token){return None}out[..token.len()-1].copy_from_slice(&token[1..]);Some(token.len()-1)}
  pub fn restricted_storage<T>(action:impl FnOnce(&mut sexfs::Fs<'static,tests::Disk>)->Result<T,restricted_job::Error>)->Result<T,restricted_job::Error>{unsafe{action((&mut *core::ptr::addr_of_mut!(FS)).as_mut().unwrap())}}
 }
@@ -73,7 +78,7 @@ pub struct Disk(Vec<[u8;BLOCK]>);impl Device for Disk{
 fn blocks(&self)->u64{self.0.len() as u64}fn read(&mut self,b:u64,out:&mut[u8;BLOCK])->Result<(),()>{*out=self.0[b as usize];Ok(())}
 fn write(&mut self,b:u64,data:&[u8;BLOCK])->Result<(),()>{self.0[b as usize]=*data;Ok(())}fn flush(&mut self)->Result<(),()>{Ok(())}}
 fn fs()->Fs<'static,Disk>{let n=2048;Fs::format(Disk(vec![[0;BLOCK];n]),Memory{cache:Box::leak(vec![[0;BLOCK];64].into_boxed_slice()),slots:Box::leak(vec![Slot::EMPTY;64].into_boxed_slice()),used:Box::leak(vec![0;n/64].into_boxed_slice()),pending:Box::leak(vec![0;n/64].into_boxed_slice()),scratch:Box::leak(Box::new([0;BLOCK]))}).unwrap()}
-fn request()->Vec<u8>{let mut b=Vec::new();b.extend_from_slice(b"MOANREQ1");b.extend_from_slice(&[1;16]);for n in [48000u32,1,2,0]{b.extend_from_slice(&n.to_le_bytes());}for n in [0.25f32,-0.5]{b.extend_from_slice(&n.to_le_bytes());}b}
+pub fn request()->Vec<u8>{let mut b=Vec::new();b.extend_from_slice(b"MOANREQ1");b.extend_from_slice(&[1;16]);for n in [48000u32,1,2,0]{b.extend_from_slice(&n.to_le_bytes());}for n in [0.25f32,-0.5]{b.extend_from_slice(&n.to_le_bytes());}b}
 pub fn setup()->Fs<'static,Disk>{let mut fs=fs();fs.mkdir(b"/renders",0).unwrap();let p=fs.create(b"/plugin",0).unwrap();fs.write(p,0,b"original-plugin",0).unwrap();let i=fs.create(b"/input",0).unwrap();fs.write(i,0,&request(),0).unwrap();fs.commit().unwrap();fs}
 fn capture(fs:&mut Fs<'static,Disk>)->(storage::Storage,Job){storage::Storage::capture(fs,[b"@/plugin",b"@/input",b"@/renders/output"],[b"/plugin",b"/input",b"/renders/output"],7,Subject{pd:42,task:99},9,[1;16]).unwrap()}
 fn ready(job:&mut Job)->Vec<u8>{let words=|h:[u8;32]|core::array::from_fn(|i|u64::from_le_bytes(h[i*8..i*8+8].try_into().unwrap()));let child=Subject{pd:43,task:100};let b=Binding{generation:1,coordinator_epoch:1,provider_epoch:1,previous:child,child,parent:Subject{pd:42,task:99},cookie:9,nonce:[0x0101010101010101;2],plugin_hash:words(job.plugin_hash()),input_hash:words(job.input_hash()),ticket:7};job.bind(b).unwrap();assert_eq!(job.read(child,b,true,Blob::Plugin,0,99).unwrap(),b"original-plugin");job.create(child,b,true,Blob::Output).unwrap();let mut output=request();output[..8].copy_from_slice(b"MOANPCM1");job.write(child,b,true,Blob::Output,0,output.len(),|i|output[i]).unwrap();job.seal(child,b,true).unwrap();output}
@@ -102,6 +107,23 @@ fn ready(job:&mut Job)->Vec<u8>{let words=|h:[u8;32]|core::array::from_fn(|i|u64
  assert!(native_io::message(wire::OP_CLAIM,shell,claim));FULL.store(true,Ordering::SeqCst);native_io::poll();assert_eq!(SENDS.load(Ordering::SeqCst),count);FULL.store(false,Ordering::SeqCst);native_io::poll();assert_eq!(LAST.load(Ordering::SeqCst),0xd1<<56|1<<32);
  for i in 0..22{assert!(native_io::message(wire::OP_DESCRIBE,shell,[1,i,1]));native_io::poll();}
  assert_eq!(LAST.load(Ordering::SeqCst),0);
+ assert!(native_io::message(wire::OP_LOAD,shell,[1,7,Subject{pd:43,task:43}.word()]));native_io::poll();assert_eq!(LAST.load(Ordering::SeqCst),0xd2<<56|1<<32|4);
+ assert!(native_io::message(wire::OP_DESCRIBE,shell,[1,22,1]));native_io::poll();assert_eq!(LAST.load(Ordering::SeqCst),11);
+ assert!(native_io::message(wire::OP_COPIED,shell,[1,7,11]));native_io::poll();assert_eq!(LAST.load(Ordering::SeqCst),0xd3<<56|1<<32);
+ let child=Subject{pd:43,task:100};CHILD_TASK.store(100,Ordering::SeqCst);let binding=Binding{child,ticket:1,..restricted_runtime::staging().unwrap()};assert!(native_io::install(binding));JOB_LIVE.store(true,Ordering::SeqCst);
+ let child_request=|seq,kind,path:&[u8],length|{for (i,b) in path.iter().enumerate(){unsafe{core::ptr::write_volatile((core::ptr::addr_of_mut!(REGION_CHILD)as *mut u8).add(i),*b)}}fs::Request{seq,kind,path_len:path.len()as u16,offset:0,length}.args()};
+ assert!(native_io::message(fs::OP,child,child_request(1,fs::STAT,b"@/other",0)));native_io::poll();assert_eq!(fs::decode_reply(LAST.load(Ordering::SeqCst)),Some((1,fs::DENIED,0)));
+ assert!(native_io::message(fs::OP,child,child_request(2,fs::READ,b"@/plugin",15)));native_io::poll();assert_eq!(fs::decode_reply(LAST.load(Ordering::SeqCst)),Some((2,fs::OK,15)));let read=unsafe{core::slice::from_raw_parts((core::ptr::addr_of!(REGION_CHILD)as *const u8).add(fs::PATH_BYTES),15)};assert_eq!(read,b"original-plugin");
+ assert!(native_io::message(fs::OP,child,child_request(3,fs::CREATE,b"@/result",0)));native_io::poll();assert_eq!(fs::decode_reply(LAST.load(Ordering::SeqCst)),Some((3,fs::OK,0)));
+ assert!(native_io::message(fs::OP,child,child_request(4,fs::TRUNCATE,b"@/result",0)));native_io::poll();assert_eq!(fs::decode_reply(LAST.load(Ordering::SeqCst)),Some((4,fs::OK,0)));
+ let mut output=request();output[..8].copy_from_slice(b"MOANPCM1");for (i,b) in output.iter().enumerate(){unsafe{core::ptr::write_volatile((core::ptr::addr_of_mut!(REGION_CHILD) as *mut u8).add(fs::PATH_BYTES+i),*b)}}
+ assert!(native_io::message(fs::OP,child,child_request(5,fs::WRITE,b"@/result",output.len() as u64)));native_io::poll();assert_eq!(fs::decode_reply(LAST.load(Ordering::SeqCst)),Some((5,fs::OK,output.len() as u32)));
+ assert!(native_io::message(fs::OP,child,child_request(6,fs::SYNC,b"",0)));native_io::poll();assert_eq!(fs::decode_reply(LAST.load(Ordering::SeqCst)),Some((6,fs::OK,0)));
+ fs_service::restricted_storage(|fs|{let st=fs.open(b"/renders/output").unwrap();let mut actual=vec![0;st.size as usize];fs.read(st.id,0,&mut actual).unwrap();assert_eq!(actual,output);Ok(())}).unwrap();
+ for i in 0..16{unsafe{core::ptr::write_volatile((core::ptr::addr_of_mut!(REGION)as *mut u8).add(fs::PATH_BYTES+i),1)}}
+ let result=fs::Request{seq:6,kind:wire::KIND,path_len:0,offset:1<<8|wire::RESULT,length:16}.args();assert!(native_io::message(fs::OP,actor,result));native_io::poll();assert_eq!(fs::decode_reply(LAST.load(Ordering::SeqCst)),Some((6,fs::OK,176)));let info=unsafe{core::slice::from_raw_parts((core::ptr::addr_of!(REGION)as *const u8).add(fs::PATH_BYTES),176)};assert_eq!(&info[..8],b"MOANINF2");{use sha2::Digest;assert_eq!(&info[104..136],sha2::Sha256::digest(&output).as_slice());}
+ let p2=wire::Prepare{paths:[b"@/plugin",b"@/input",b"@/renders/second"],..p};assert_eq!(p2.encode(&mut input),Some(n));for i in 0..n{unsafe{core::ptr::write_volatile((core::ptr::addr_of_mut!(REGION)as *mut u8).add(fs::PATH_BYTES+i),input[i])}}
+ FULL.store(true,Ordering::SeqCst);assert!(native_io::message(fs::OP,child,child_request(9,fs::READ,b"@/plugin",15)));native_io::poll();let sent=SENDS.load(Ordering::SeqCst);JOB_LIVE.store(false,Ordering::SeqCst);FULL.store(false,Ordering::SeqCst);native_io::poll();assert_eq!(SENDS.load(Ordering::SeqCst),sent);assert!(native_io::retire(child));assert_eq!(SCRUBS.load(Ordering::SeqCst),1);
  assert!(native_io::message(fs::OP,actor,req(2)));native_io::poll();assert_eq!(fs::decode_reply(LAST.load(Ordering::SeqCst)),Some((2,fs::OK,2)));
  // Capacity must fail without overwriting either accepted immutable job.
  assert!(native_io::message(fs::OP,actor,req(3)));FULL.store(true,Ordering::SeqCst);native_io::poll();let before=SENDS.load(Ordering::SeqCst);

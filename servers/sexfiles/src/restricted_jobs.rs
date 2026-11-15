@@ -172,6 +172,25 @@ impl Jobs {
             }
         }
     }
+    pub fn retire(&mut self, actor: Subject) {
+        for slot in &mut self.entries {
+            let Some(e) = slot else { continue };
+            if e.job.parent() == actor {
+                *slot = None;
+                continue;
+            }
+            if e.job.binding().is_some_and(|b| b.child == actor) {
+                e.job.retire_child();
+            }
+        }
+    }
+    pub fn expire(&mut self, binding: Binding) {
+        if let Some(e) = self.get(binding.ticket as u32) {
+            if e.job.binding() == Some(binding) {
+                e.job.retire_child();
+            }
+        }
+    }
     pub fn pending(&self) -> bool {
         self.entries.iter().any(Option::is_some)
     }
