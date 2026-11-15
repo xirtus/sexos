@@ -48,7 +48,7 @@ fn socket_type(t: &str) -> Res<SocketType> {
     SOCKET_TYPES.iter().find(|x| x.0 == t).map(|x| x.1).ok_or_else(|| format!("unknown socket type '{t}' ({})", SOCKET_TYPES.map(|x| x.0).join(", ")))
 }
 
-fn socket_type_name(t: SocketType) -> &'static str {
+pub(super) fn socket_type_name(t: SocketType) -> &'static str {
     SOCKET_TYPES.iter().find(|x| x.1 == t).map_or("float", |x| x.0)
 }
 
@@ -150,7 +150,7 @@ fn parse_value(scene: &Scene, like: &Value, ty: SocketType, t: &Token) -> Res<Va
     })
 }
 
-fn value_text(scene: &Scene, v: &Value, ty: SocketType) -> Option<String> {
+pub(super) fn value_text(scene: &Scene, v: &Value, ty: SocketType) -> Option<String> {
     Some(match v {
         Value::None => return None,
         Value::Float(x) => fmt_f(*x),
@@ -248,7 +248,7 @@ fn parse_prop(scene: &Scene, ty: &str, t: &Token) -> Res<Prop> {
     })
 }
 
-fn prop_text(scene: &Scene, p: &Prop, name: &str) -> String {
+pub(super) fn prop_text(scene: &Scene, p: &Prop, name: &str) -> String {
     match p {
         Prop::Enum(s) | Prop::String(s) => quote(s),
         Prop::Bool(b) => (*b as u8).to_string(),

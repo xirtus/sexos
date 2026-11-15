@@ -127,6 +127,8 @@ use std::fmt::{self, Write as _};
 
 mod rig;
 mod nodes;
+pub mod bpy;
+pub mod live;
 
 /// The language version this module reads and writes (`polyops 1`).
 pub const VERSION: u32 = 1;
@@ -488,6 +490,8 @@ pub struct Session {
     report: RunReport,
     header: bool,
     ended: bool,
+    /// What Blender keeps outside the scene (mode, selection, actions...), for the live `bpy` API.
+    pub bpy: bpy::State,
 }
 
 impl Session {
@@ -982,6 +986,7 @@ impl Session {
                 Ok(Some(if self.object(scene, t).is_ok() { "1" } else { "0" }.into()))
             }
             name if rig::COMMANDS.contains(&name) => self.rig_command(scene, cmd),
+            name if bpy::COMMANDS.contains(&name) => self.bpy_command(scene, cmd),
             "node_tree" | "node_interface" | "node_add" | "node_socket" | "node_set" | "node_link" | "node_unlink" | "node_remove" => self.node_command(scene, cmd),
             other => Err(format!("unknown command '{other}'")),
         }
