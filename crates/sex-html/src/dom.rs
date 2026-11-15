@@ -18,6 +18,8 @@ pub struct Node {
 }
 
 pub struct Dom {
+    /// Constructed sheets adopted by a document or shadow root; not DOM children.
+    pub adopted_styles: alloc::collections::BTreeMap<NodeId, String>,
     pub nodes: Vec<Node>,
     /// Elements a script listens to for clicks, so the person can reach them.
     pub clickable: alloc::collections::BTreeSet<NodeId>,
@@ -42,7 +44,14 @@ impl Dom {
     }
 
     pub fn new() -> Self {
-        Self { nodes: alloc::vec![Node { kind: Kind::Document, parent: None, children: Vec::new() }], clickable: Default::default(), values: Default::default(), caret: None, hover: None }
+        Self { adopted_styles: Default::default(), nodes: alloc::vec![Node { kind: Kind::Document, parent: None, children: Vec::new() }], clickable: Default::default(), values: Default::default(), caret: None, hover: None }
+    }
+
+    pub fn style_scope(&self, mut node: NodeId) -> NodeId {
+        loop {
+            if self.tag(node) == Some("sx-shadow") { return node; }
+            match self.nodes[node].parent { Some(p) => node = p, None => return Self::ROOT }
+        }
     }
 
     pub fn add(&mut self, parent: NodeId, kind: Kind) -> NodeId {

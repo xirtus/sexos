@@ -37,6 +37,8 @@ pub struct Document {
     pub rects: Vec<Option<(i32, i32, i32, i32)>>,
     /// Each node's paint layer (higher paints on top), from `Page::layers`.
     pub layers: Vec<u32>,
+    /// Pointer eligibility from the same computed styles as the current layout.
+    pointer_events: Vec<bool>,
     /// Supplies the monotonic clock.
     pub clock: fn() -> u64,
     /// Canvas 2D command batches not yet drawn, by canvas element.
@@ -187,7 +189,7 @@ fn rough_measure(font: &str, text: &str) -> i32 {
 
 impl Document {
     pub fn new(dom: Dom, url: &str, viewport: (i32, i32), clock: fn() -> u64) -> Self {
-        Self { resource_owner: NEXT_RESOURCE_OWNER.fetch_add(1, Ordering::Relaxed), source_policies: Default::default(), source_policy_overflow: false, dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, navigate_post: None, navigate_type: String::new(), referrer: String::new(), parent_origin: None, outbox: Vec::new(), rects: Vec::new(), layers: Vec::new(), clock, canvas_queue: Vec::new(), measure: rough_measure, gl: Default::default(), pictures: Vec::new(), fetches: Vec::new(), classic_scripts: Vec::new(), bodies: Vec::new(), media: Vec::new(), media_bytes: Vec::new(), heads: Vec::new(), next_fetch: 0, cookies: None, wall: || 0, storage: None, ws_asks: Vec::new(), ws_in: Vec::new(), next_ws: 0, modules: Default::default(), modules_wanted: Vec::new(), import_map: Vec::new() }
+        Self { resource_owner: NEXT_RESOURCE_OWNER.fetch_add(1, Ordering::Relaxed), source_policies: Default::default(), source_policy_overflow: false, dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, navigate_post: None, navigate_type: String::new(), referrer: String::new(), parent_origin: None, outbox: Vec::new(), rects: Vec::new(), layers: Vec::new(), pointer_events: Vec::new(), clock, canvas_queue: Vec::new(), measure: rough_measure, gl: Default::default(), pictures: Vec::new(), fetches: Vec::new(), classic_scripts: Vec::new(), bodies: Vec::new(), media: Vec::new(), media_bytes: Vec::new(), heads: Vec::new(), next_fetch: 0, cookies: None, wall: || 0, storage: None, ws_asks: Vec::new(), ws_in: Vec::new(), next_ws: 0, modules: Default::default(), modules_wanted: Vec::new(), import_map: Vec::new() }
     }
 
     /// Takes each element's laid-out box from the browser's layout, for
@@ -195,6 +197,13 @@ impl Document {
     pub fn set_boxes(&mut self, boxes: &[Option<[i32; 4]>]) {
         self.rects.clear();
         self.rects.extend(boxes.iter().map(|b| b.map(|r| (r[0], r[1], r[2], r[3]))));
+    }
+    pub fn set_pointer_styles(&mut self, styles: &[Option<sex_html::style::Style>]) {
+        self.pointer_events.clear();
+        self.pointer_events.extend(styles.iter().map(|s| s.as_ref().is_some_and(|s| s.pointer_events)));
+    }
+    pub fn accepts_pointer(&self, node: NodeId) -> bool {
+        self.pointer_events.get(node).copied().unwrap_or(true)
     }
     pub fn set_layers(&mut self, layers: &[u32]) {
         self.layers.clear();
@@ -207,7 +216,7 @@ impl Document {
         for (n, rect) in self.rects.iter().enumerate() {
             let Some((rx, ry, rw, rh)) = *rect else { continue };
             if x < rx || y < ry || x >= rx + rw || y >= ry + rh { continue; }
-            if self.dom.tag(n).is_none() { continue; }
+            if self.dom.tag(n).is_none() || !self.accepts_pointer(n) { continue; }
             let mut depth = 0;
             let mut p = self.dom.nodes[n].parent;
             while let Some(q) = p { depth += 1; p = self.dom.nodes[q].parent; }
@@ -215,6 +224,16 @@ impl Document {
             if best.map_or(true, |(d, _)| key >= d) { best = Some((key, n)); }
         }
         best.map(|(_, n)| n)
+    }
+    /// Native default activation follows the same hit target as DOM events. A
+    /// clickable descendant can activate an ancestor link excluded from hit testing.
+    pub fn pointer_link_at(&self, x: i32, y: i32, links: &[sex_html::layout::Link]) -> Option<NodeId> {
+        let mut node = self.node_at(x, y);
+        while let Some(n) = node {
+            if links.iter().any(|link| link.node == n) { return Some(n); }
+            node = self.dom.nodes[n].parent;
+        }
+        None
     }
     fn node(&self, s: Option<&&str>) -> Option<NodeId> {
         let id: NodeId = s?.parse().ok()?;
@@ -396,6 +415,18 @@ impl Page for Document {
                     "list" => Some(store.borrow().area(&area).map(|x| x.items.keys().cloned().collect::<Vec<_>>().join("\n")).unwrap_or_default()),
                     _ => None,
                 };
+            }
+            op::ADOPTED_STYLES => {
+                let root = self.node(a.first())?;
+                if root != Dom::ROOT && self.dom.tag(root) != Some("sx-shadow") { return Some(String::from("!")); }
+                let text = *a.get(1)?;
+                // One bounded page-wide budget, including detached shadow roots.
+                let other: usize = self.dom.adopted_styles.iter().filter(|(r, _)| **r != root).map(|(_, s)| s.len()).sum();
+                if text.len() > 2 * 1024 * 1024 || other.saturating_add(text.len()) > 2 * 1024 * 1024 { return Some(String::from("!")); }
+                if text.is_empty() { self.dom.adopted_styles.remove(&root); }
+                else { self.dom.adopted_styles.insert(root, String::from(text)); }
+                self.dirty = true;
+                Some(none())
             }
             op::BY_ID => {
                 let want = *a.first()?;

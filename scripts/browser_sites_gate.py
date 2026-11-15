@@ -8,12 +8,13 @@ finds its text in what was laid out. The outcomes go to OUT/sites.json.
 
 --live loads the real sites instead (needs the guest to reach the internet); the
 webmail step stays local."""
-import argparse,gzip,http.server,json,os,re,shutil,threading,time
+import argparse,hashlib,gzip,http.server,json,os,re,shutil,threading,time
 from pathlib import Path
 from browser_gate_viewport import live_viewport
 from web_surface_geometry import canvas_box
 ROOT=Path(__file__).resolve().parents[1]
 SITES=ROOT/'scripts/web_site/sites'
+PROGRAM=ROOT/'iso_root/programs/kaleidoscope'
 BAR=30
 SESSION='s3ss10n'
 logins=[]
@@ -25,7 +26,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
   self.end_headers();self.wfile.write(body)
  def do_GET(self):
   path=self.path.split('?')[0]
-  if path=='/web':return self.send(200,(ROOT/'iso_root/programs/kaleidoscope').read_bytes(),'application/octet-stream')
+  if path=='/web':return self.send(200,PROGRAM.read_bytes(),'application/octet-stream')
   if path=='/sites/github.html':
    # Sent compressed, as GitHub does.
    return self.send(200,(SITES/'github.html.gz').read_bytes(),extra=[('Content-Encoding','gzip'),('Vary','Accept-Encoding')])
@@ -67,14 +68,18 @@ SUITE=[
 ]
 LIVE_TEXT={'news':'npr','links':'comments','encyclopedia':'microkernel','github':'sexos'}
 def main():
- p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');p.add_argument('--live',action='store_true');a=p.parse_args()
- a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
+ global PROGRAM
+ p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');p.add_argument('--live',action='store_true');p.add_argument('--program',type=Path,default=PROGRAM);p.add_argument('--no-jit',action='store_true');p.add_argument('--site',action='append',choices=[r[0] for r in SUITE]);a=p.parse_args();PROGRAM=a.program.resolve()
+ a.out.mkdir(parents=True,exist_ok=True)
+ (a.out/'inputs.json').write_text(json.dumps({'runner_sha256':hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),'loadavg_before':os.getloadavg(),'iso_sha256':hashlib.sha256(a.iso.read_bytes()).hexdigest(),'program_sha256':hashlib.sha256(PROGRAM.read_bytes()).hexdigest(),'live':a.live,'forced_interpreter':a.no_jit,'resolution':a.resolution,'timing_scope':'initial fetch/layout/scripts plus departure cumulative VM time including host calls; not CPU time or playback','speedup_claim':False},indent=2)+'\n')
+ disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
  with disk.open('r+b') as f:f.truncate(1024**3)
  rw,rh=map(int,a.resolution.split('x'))
  g=boot(a.iso,disk,a.out,'websites',a.resolution);t=g['text'];q=g['q']
  def keys(text):
   for k in text:
    shifted={':':'semicolon','+':'equal','?':'slash','_':'minus'}.get(k)
+   if k.isascii() and k.isupper():shifted=k.lower()
    if shifted:q.cmd('send-key',{'keys':[{'type':'qcode','data':'shift'},{'type':'qcode','data':shifted}],'hold-time':80})
    else:q.key(KEYS.get(k,k))
    time.sleep(.06)
@@ -96,12 +101,12 @@ def main():
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
   g['focus'](153);time.sleep(.5);s=len(t());keys(f'fetch {BASE}/web /bin/kaleidoscope');q.key('ret')
   m=g['wait'](r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',s,240);assert m[1].startswith('Saved'),m[1]
-  for i,(name,local,live,text,least) in enumerate(SUITE):
+  for i,(name,local,live,text,least) in enumerate([row for row in SUITE if not a.site or row[0] in a.site]):
    url=live if a.live else local
    if a.live:text,least=LIVE_TEXT[name],1
    began=time.time()
    if i==0:
-    g['focus'](153);time.sleep(.5);s=len(t());keys(f'run +net kaleidoscope {url}');q.key('ret')
+    g['focus'](153);time.sleep(.5);s=len(t());keys(f'run +net kaleidoscope {url}'+(' --no-jit' if a.no_jit else ''));q.key('ret')
     r=g['wait'](r'\[web.ready\] target=(\d+) task=(\d+)',s,300);target,task=r[1],r[2]
     stats=loaded(s,300)
     launch=g['wait'](rf'\[shell.program.launch\] target={target} task={task} surface=(\d+)',s,60);surface=int(launch[1])
@@ -112,8 +117,17 @@ def main():
     # The masthead's web font (WOFF; the WOFF2 source is skipped).
     g['wait'](r'\[web.font\] family=Ledger Display loaded=1 ',s,60)
    found=find(text,least)
+   stats['jit_startup_receipts']=re.findall(r'\[web.jit\] ([^\r\n]+)',t()[s:])
    outcomes.append({'site':name,'url':url,'text':text,'matches':found,'seconds':round(time.time()-began,1),**stats})
    print(outcomes[-1],flush=True)
+   q.cmd('screendump',{'filename':str((a.out/(name+'.ppm')).resolve())})
+   if a.live and name=='encyclopedia':
+    # Physical keyboard scrolling must reach the article, not just index its text.
+    s_scroll=len(t());q.key('pgdn')
+    m_scroll=g['wait'](r'\[web.shown\] w=\d+ h=\d+ scroll=([1-9]\d*) ',s_scroll,30)
+    outcomes[-1]['physical_scroll_y']=int(m_scroll[1])
+    for _ in range(30):q.key('pgdn');time.sleep(.15)
+    q.cmd('screendump',{'filename':str((a.out/(name+'-scrolled.ppm')).resolve())})
   # Webmail: sign in, follow the redirect with the new cookie, read the inbox.
   began=time.time();s=go(f'{BASE}/mail/');loaded(s);time.sleep(1.5)
   tile,pw,ph=live_viewport(g,ROOT,surface);bx,by,_,_=canvas_box(ROOT,tile,pw,ph);ox,oy=bx,by+BAR
@@ -127,6 +141,9 @@ def main():
   print(outcomes[-1],flush=True)
   s=len(t());q.key('f11');g['wait'](rf'\[web.closed\] target={target} task={task}',s,60)
   text=t();assert 'KERNEL PANIC' not in text and '[web.fatal]' not in text and 'panicked' not in text
+  for outcome in outcomes:
+   outcome['jit_departure_receipts']=[r for r in re.findall(r'\[web.jit.departure\] ([^\r\n]+)',text) if r.endswith('url='+outcome['url'])]
+   outcome['object_cache_departure_receipts']=[r for r in re.findall(r'\[web.object-cache.departure\] ([^\r\n]+)',text) if r.endswith('url='+outcome['url'])]
   (a.out/'sites.json').write_text(json.dumps(outcomes,indent=1))
   print({'ok':True,'sites':len(outcomes)})
  finally:g['stop']()
