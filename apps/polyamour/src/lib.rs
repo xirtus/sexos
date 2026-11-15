@@ -20,6 +20,7 @@ pub mod editors;
 pub mod input;
 pub mod nodetree;
 pub mod persist;
+pub mod physics;
 pub mod rig;
 pub mod screen;
 pub mod settings;

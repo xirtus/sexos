@@ -14,6 +14,7 @@ pub mod icons;
 pub mod layout;
 pub mod nodepanel;
 mod object;
+mod physics;
 pub mod picker;
 pub mod rigpanels;
 mod tabs;

@@ -63,6 +63,10 @@ impl App {
         self.doc = doc;
         self.doc.path = Some(name.to_string());
         self.doc.report = format!("Opened {name}");
+        if name.ends_with(".poly") {
+            // Disk Cache bakes from the `cache` folder next to the file.
+            crate::physics::load_disk_caches(&self.doc);
+        }
         Ok(())
     }
 
@@ -174,7 +178,7 @@ impl App {
     /// Whether an editor in the active workspace wants `Input::Tick` events
     /// (a viewport refining a progressive render).
     pub fn wants_tick(&self) -> bool {
-        self.workspaces[self.active_ws].areas().iter().any(|a| a.editor.wants_tick())
+        self.workspaces[self.active_ws].areas().iter().any(|a| a.editor.wants_tick()) || crate::physics::pending(&self.doc)
     }
 
     /// Draw the whole window, returning the event if no widget took it.
@@ -307,6 +311,10 @@ impl App {
                 if ext.is_none() {
                     self.doc.path = wrote.first().cloned();
                     self.doc.dirty = false;
+                    if let Err(e) = crate::physics::write_disk_caches(&self.doc) {
+                        self.doc.report = e;
+                        return;
+                    }
                 }
                 self.doc.report = format!("Saved \"{}\"", wrote.join(", "));
             }
@@ -321,6 +329,7 @@ impl App {
         let settings = sex_3d::render::RenderSettings { frame: self.doc.frame, ..self.doc.settings.render_settings() };
         let base = self.doc.settings.render_scene(&self.doc.scene);
         let scene = crate::anim::scene_at(&self.doc.anim, &base, self.doc.frame as f32, self.doc.settings.motion_blur);
+        sex_3d::physics::update(&scene);
         let r = sex_3d::render::render(&scene, &settings);
         let n = r.passes.len();
         let passes = match n {
@@ -348,7 +357,11 @@ impl App {
         sex_3d::render::render_frames(
             frames.iter().copied(),
             &settings,
-            |f| crate::anim::scene_at(anim, &base, f as f32, motion),
+            |f| {
+                let s = crate::anim::scene_at(anim, &base, f as f32, motion);
+                sex_3d::physics::update(&s);
+                s
+            },
             |f, r| {
                 let name = format!("{stem}{f:04}.png");
                 let png = crate::editors::image::encode_png(r.color.width, r.color.height, &sex_3d::render::to_display8(&r.color, &cm));

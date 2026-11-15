@@ -20,6 +20,7 @@
 pub mod icons;
 pub mod menus;
 mod overlay;
+mod physview;
 pub mod proj;
 pub mod raster;
 pub mod render;
@@ -927,6 +928,7 @@ fn signature(s: &State, d: &Doc) -> (u64, [u32; 8], u32, [u32; 3], u8) {
 fn draw_all(s: &mut State, d: &mut Doc, ui: &mut Ui, r: Rect, lay: &Layout) {
     let proj = Proj::new(&s.cam, r);
     overlay::scene_image(s, d, ui, r);
+    physview::draw(d, ui, &proj);
     rigview::draw_weights(d, ui, &proj);
     if s.camera_view {
         overlay::camera_frame(s, d, ui, r);

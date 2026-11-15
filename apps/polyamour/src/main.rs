@@ -4,7 +4,8 @@
 //! window once into a PNG (used for docs and visual checks); `--node-demo`
 //! gives the startup material a few texture nodes and opens Shading;
 //! `--rig-demo` poses a skinned, keyed armature in the Animation workspace
-//! with the Graph Editor below.
+//! with the Graph Editor below; `--physics-demo` steps falling boxes, a
+//! draped cloth, particles and smoke to frame 40 with the Physics tab open.
 use polyamour::input::Input;
 #[cfg(target_os = "hermit")]
 use polyamour::input::{Button, Key, Mods};
@@ -29,6 +30,7 @@ fn main() {
     let mut app = App::new(1600, 900);
     let mut out = None;
     let mut rig_demo = false;
+    let mut physics_demo = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -41,6 +43,10 @@ fn main() {
             "--node-demo" => {
                 polyamour::nodetree::demo_textures(&mut app.doc);
                 app.doc.want_workspace = Some("Shading".into());
+            }
+            "--physics-demo" => {
+                polyamour::physics::demo(&mut app.doc);
+                physics_demo = true;
             }
             "--rig-demo" => {
                 polyamour::rig::demo(&mut app.doc);
@@ -62,8 +68,17 @@ fn main() {
         }
         app.frame(Input::Tick);
     }
+    if physics_demo {
+        let ws = app.active_ws;
+        for area in app.workspaces[ws].areas_mut() {
+            if let polyamour::editors::Editor::Properties(s) = &mut area.editor {
+                s.tab = polyamour::editors::properties::Tab::Physics;
+            }
+        }
+        app.frame(Input::Tick);
+    }
     let Some(out) = out else {
-        eprintln!("usage: polyamour --screenshot out.png [--workspace Name] [--node-demo] [--rig-demo] [scene file]");
+        eprintln!("usage: polyamour --screenshot out.png [--workspace Name] [--node-demo] [--rig-demo] [--physics-demo] [scene file]");
         return;
     };
     let f = std::fs::File::create(&out).expect("create png");

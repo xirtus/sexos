@@ -70,6 +70,10 @@ pub fn load(text: &str) -> Result<Doc, String> {
     }
     rigio::finish(&mut doc);
     doc.settings.migrate_sensors(&mut doc.scene);
+    // Gravity lived in the editor settings before the scene had physics.
+    if !text.lines().any(|l| l.starts_with("physics_scene")) {
+        doc.scene.physics.gravity = sex_3d::physics::SceneGravity { use_gravity: doc.settings.gravity_on, gravity: doc.settings.gravity };
+    }
     trees::load(&mut doc.scene, text);
     doc.anim.dirty = true;
     Ok(doc)
@@ -210,8 +214,6 @@ fn settings_pairs(s: &Settings) -> Vec<(&'static str, String)> {
         ("unit_system", match s.unit_system { UnitSystem::None => "NONE", UnitSystem::Metric => "METRIC", UnitSystem::Imperial => "IMPERIAL" }.into()),
         ("unit_scale", s.unit_scale.to_string()),
         ("degrees", b(s.degrees)),
-        ("gravity_on", b(s.gravity_on)),
-        ("gravity", join(s.gravity)),
         ("view_transform", view_key(s.view_transform).into()),
         ("look", s.look.clone()),
         ("exposure", s.exposure.to_string()),

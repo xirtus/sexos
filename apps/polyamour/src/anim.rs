@@ -768,6 +768,8 @@ pub fn tick(doc: &mut Doc) -> bool {
             }
         }
     }
+    // Simulations step towards the new frame (a few frames per tick).
+    changed |= crate::physics::step(doc);
     if doc.report != doc.info.last {
         doc.info.last = doc.report.clone();
         if !doc.report.is_empty() {

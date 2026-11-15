@@ -12,6 +12,7 @@ use crate::theme as t;
 use crate::ui::{MenuItem, NumOpts, Op};
 use sex_3d::modifiers::{BooleanOp, CastType, DecimateMode, Modifier, RemeshMode, ShrinkwrapMethod, SimpleDeformMode};
 use sex_3d::nodes::{SocketType, Value};
+use sex_3d::physics::PhysicsModifier;
 use sex_3d::scene::{ObjectData, RayVisibility, Transform};
 use sex_3d::script::quat_to_euler_xyz;
 use sex_3d::{Quat, Vec3};
@@ -1062,6 +1063,8 @@ fn modifier_body(l: &mut L, d: &mut Doc, o: usize, si: usize, m: &Modifier, live
             l.enumeration("Node Group", &format!("modgroup/{si}"), if group.is_empty() { NO_OBJECT } else { group.as_str() }, &items);
             ch |= node_inputs(l, d, &k(""), group, inputs);
         }
+        Modifier::Physics(PhysicsModifier::ParticleSystem(_)) => l.note("Settings are inside the Particles tab"),
+        Modifier::Physics(_) => l.note("Settings are inside the Physics tab"),
         // Rigging modifiers have no panel yet.
         _ => {}
     }
