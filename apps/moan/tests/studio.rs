@@ -113,7 +113,7 @@ fn real_weft_pointer_edits_and_commands_build_a_project() {
     click(&mut ui, &mut s, "Tone");
     click(&mut ui, &mut s, "Tone");
     assert_eq!(s.session.tracks.len(), 2);
-    click(&mut ui, &mut s, "Instruments");
+    click(&mut ui, &mut s, "Region controls");
     ui.set_text(s.position, "1");
     click(&mut ui, &mut s, "Split");
     assert_eq!(s.session.tracks[1].clips.len(), 2);

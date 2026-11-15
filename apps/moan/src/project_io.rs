@@ -175,7 +175,11 @@ pub fn log(app: &mut App, studio: &Studio) {
         studio.view.span
     );
     for (id, name) in &studio.buttons {
-        let p = app.ui.rect(*id).center();
+        let rect = app.ui.rect(*id);
+        if rect.w <= 0.0 || rect.h <= 0.0 {
+            continue;
+        }
+        let p = rect.center();
         sex_pdx::serial_record!(
             "[moan.control] name={} x={} y={}",
             name.replace(' ', "_"),
@@ -188,7 +192,11 @@ pub fn log(app: &mut App, studio: &Studio) {
         ("range_start", studio.from),
         ("range_end", studio.to),
     ] {
-        let p = app.ui.rect(id).center();
+        let rect = app.ui.rect(id);
+        if rect.w <= 0.0 || rect.h <= 0.0 {
+            continue;
+        }
+        let p = rect.center();
         sex_pdx::serial_record!(
             "[moan.control] name={} x={} y={}",
             name,
@@ -270,6 +278,32 @@ pub fn log(app: &mut App, studio: &Studio) {
             (rect.w * scale) as i32,
             (rect.h * scale) as i32,
             (app.ui.value(*id) * 10000.0) as u32
+        );
+    }
+    let status = app.ui.rect(studio.plugin_status);
+    sex_pdx::serial_record!(
+        "[moan.plugin.status] state={:?} x={} y={} w={} h={} format={} text={}",
+        studio.plugin_state,
+        (status.x * scale) as i32,
+        (status.y * scale) as i32,
+        (status.w * scale) as i32,
+        (status.h * scale) as i32,
+        studio.plugin_format,
+        app.ui.text_of(studio.plugin_status)
+    );
+    for (name, id) in [
+        ("master_level", studio.master_level),
+        ("master_meter", studio.master_meter),
+    ] {
+        let rect = app.ui.rect(id);
+        sex_pdx::serial_record!(
+            "[moan.mixer.control] name={} x={} y={} w={} h={} value={}",
+            name,
+            (rect.x * scale) as i32,
+            (rect.y * scale) as i32,
+            (rect.w * scale) as i32,
+            (rect.h * scale) as i32,
+            (app.ui.value(id) * 100.0) as i32
         );
     }
     let (w, h) = app.ui.size();

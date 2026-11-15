@@ -64,6 +64,7 @@ fn twelve_undo_entries_store_notes_not_long_pcm_buffers() {
     );
     assert!(s.undo());
     assert!(s.redo());
+    s.set_master_volume(50).unwrap();
     let mut block = [[0; 2]; 256];
     let mut meter = serenade_core::LevelMeter::new(2, 48000, 800, 18.0);
     let mut history = moan::meter_history::History::new(4096);
@@ -74,7 +75,7 @@ fn twelve_undo_entries_store_notes_not_long_pcm_buffers() {
         meter.process_frame(&[f[0] as f32 / 32768.0, f[1] as f32 / 32768.0])
     });
     let mut offsets = [0usize; moan::MAX_TRACKS];
-    moan_core::render_processed_observed(&mut s.tracks, 0, &mut block, |track, frame| {
+    s.render_processed_observed(0, &mut block, |track, frame| {
         history.write(track, offsets[track], frame);
         offsets[track] += 1;
     });

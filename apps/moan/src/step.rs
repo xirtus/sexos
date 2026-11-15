@@ -17,9 +17,19 @@ pub fn cell(x: usize, y: usize) -> Option<(usize, u8)> {
     Some(((x - LABEL) * STEPS / GRID, KEYS[(y - HEADER) / ROW]))
 }
 pub fn render(pattern: Option<&Pattern>, play_frame: Option<usize>) -> Vec<u32> {
-    let mut pixels = vec![0x121b28; WIDTH * HEIGHT];
+    render_width(pattern, play_frame, WIDTH)
+}
+pub fn render_width(
+    pattern: Option<&Pattern>,
+    play_frame: Option<usize>,
+    width: usize,
+) -> Vec<u32> {
+    let width = width.clamp(160, 4096);
+    let label = width * LABEL / WIDTH;
+    let grid = width - label;
+    let mut pixels = vec![0x121b28; width * HEIGHT];
     let mut fonts = weft::text::Fonts::new();
-    let mut painter = weft::paint::Painter::new(&mut pixels, WIDTH, HEIGHT, 1.0);
+    let mut painter = weft::paint::Painter::new(&mut pixels, width, HEIGHT, 1.0);
     for row in 0..KEYS.len() {
         let top = HEADER + row * ROW;
         painter.text(
@@ -32,8 +42,8 @@ pub fn render(pattern: Option<&Pattern>, play_frame: Option<usize>) -> Vec<u32> 
             weft::Color::hex(0xd2dce8),
         );
         for step in 0..STEPS {
-            let left = LABEL + step * GRID / STEPS;
-            let right = LABEL + (step + 1) * GRID / STEPS;
+            let left = label + step * grid / STEPS;
+            let right = label + (step + 1) * grid / STEPS;
             let range = pattern.and_then(|p| {
                 Some((
                     step_frame(p.bpm, step as u32).ok()?,
@@ -81,13 +91,13 @@ pub fn render(pattern: Option<&Pattern>, play_frame: Option<usize>) -> Vec<u32> 
         }
     }
     for step in 0..STEPS {
-        let left = LABEL + step * GRID / STEPS;
-        let name = alloc::format!("{}.{}", step / 8 + 1, step % 8 + 1);
+        let left = label + step * grid / STEPS;
+        let name = alloc::format!("{}.{}.{}", step / 8 + 1, (step % 8) / 2 + 1, step % 2 + 1);
         painter.text(
             &mut fonts,
             weft::text::Face::Mono,
-            11.0,
-            (left + 5) as f32,
+            10.0,
+            (left + 2) as f32,
             16.0,
             &name,
             weft::Color::hex(0xa8b9cd),
@@ -96,7 +106,7 @@ pub fn render(pattern: Option<&Pattern>, play_frame: Option<usize>) -> Vec<u32> 
     if let Some((pattern, position)) = pattern.zip(play_frame) {
         if let Ok(end) = step_frame(pattern.bpm, STEPS as u32) {
             if position < end as usize {
-                let x = LABEL + position * GRID / end as usize;
+                let x = label + position * grid / end as usize;
                 painter.fill_rect(
                     weft::Rect::new(x as f32, 0.0, 2.0, HEIGHT as f32),
                     weft::Color::hex(0xffcc66),

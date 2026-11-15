@@ -8,7 +8,8 @@ use moan_core::{
     Clip, Track, RATE,
 };
 pub const MAGIC: &[u8; 8] = b"MOANPRJ\0";
-pub const VERSION: u16 = 2;
+pub const VERSION: u16 = 3;
+pub const MIDI_VERSION: u16 = 2;
 pub const HEADER: usize = 64;
 pub const MAX_BYTES: usize = 96 * 1024 * 1024;
 pub const MAX_CLIPS: usize = 1024;
@@ -125,8 +126,10 @@ pub fn encode(session: &Session) -> Result<Vec<u8>, Error> {
     }
     let mut w = Writer(Vec::new());
     w.bytes(MAGIC)?;
-    let version = if sources.iter().any(|s| s.midi_pattern().is_some()) {
+    let version = if session.master_volume != 100 {
         VERSION
+    } else if sources.iter().any(|source| source.midi_pattern().is_some()) {
+        MIDI_VERSION
     } else {
         1
     };
@@ -138,7 +141,12 @@ pub fn encode(session: &Session) -> Result<Vec<u8>, Error> {
     w.u16(sources.len() as u16)?;
     w.u16(session.tracks.len() as u16)?;
     w.u16(session.selected as u16)?;
-    w.u16(0)?;
+    // v1/v2 reserved this word and retain their exact unity encoding.
+    w.u16(if version >= 3 {
+        session.master_volume
+    } else {
+        0
+    })?;
     for value in [session.cursor, session.from, session.to] {
         w.u64(value)?;
     }
@@ -150,7 +158,7 @@ pub fn encode(session: &Session) -> Result<Vec<u8>, Error> {
                 w.bytes(&sample.to_le_bytes())?;
             }
         }
-        if version == 2 {
+        if version >= 2 {
             if let Some(pattern) = clip.midi_pattern() {
                 w.u16(1)?;
                 w.u16(pattern.instrument as u16)?;
@@ -249,7 +257,7 @@ pub fn decode(bytes: &[u8]) -> Result<Session, Error> {
         return Err(Error::Header);
     }
     let version = r.u16()?;
-    if ![1, VERSION].contains(&version) {
+    if ![1, MIDI_VERSION, VERSION].contains(&version) {
         return Err(Error::Version);
     }
     r.zero()?;
@@ -263,7 +271,18 @@ pub fn decode(bytes: &[u8]) -> Result<Session, Error> {
     let sources = r.u16()? as usize;
     let tracks = r.u16()? as usize;
     let selected = r.u16()? as usize;
-    r.zero()?;
+    let master = r.u16()?;
+    let master_volume = if version >= 3 {
+        if master > 200 {
+            return Err(Error::Metadata);
+        }
+        master
+    } else {
+        if master != 0 {
+            return Err(Error::Metadata);
+        }
+        100
+    };
     let cursor = r.u64()?;
     let from = r.u64()?;
     let to = r.u64()?;
@@ -293,7 +312,7 @@ pub fn decode(bytes: &[u8]) -> Result<Session, Error> {
             return Err(Error::Limit);
         }
         source_bytes.push(r.bytes(n.checked_mul(4).ok_or(Error::Limit)?)?);
-        let pattern = if version == 2 {
+        let pattern = if version >= 2 {
             let tag = r.u16()?;
             let instrument = r.u16()?;
             match tag {
@@ -453,10 +472,11 @@ pub fn decode(bytes: &[u8]) -> Result<Session, Error> {
                 i16::from_le_bytes([b[2], b[3]]),
             ]);
         }
-        audio.push(Clip::owned(Arc::from(pcm), 0).map_err(|_| Error::Source)?);
+        audio.push(Clip::buffer(Arc::new(pcm), 0).map_err(|_| Error::Source)?);
     }
     let mut session = Session::default();
     session.selected = selected;
+    session.master_volume = master_volume;
     session.cursor = cursor;
     session.from = from;
     session.to = to;
