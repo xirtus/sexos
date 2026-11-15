@@ -12,6 +12,7 @@ use alloc::{sync::Arc, vec::Vec};
 enum Source<'a> {
     Borrowed(&'a [Frame]),
     Owned(Arc<[Frame]>),
+    Buffer(Arc<Vec<Frame>>),
     Midi {
         pattern: Arc<midi::Pattern>,
         pcm: Arc<Vec<Frame>>,
@@ -22,6 +23,7 @@ impl Source<'_> {
         match self {
             Self::Borrowed(v) => v,
             Self::Owned(v) => v,
+            Self::Buffer(v) => v,
             Self::Midi { pcm, .. } => pcm,
         }
     }
@@ -64,6 +66,20 @@ impl<'a> Clip<'a> {
         Ok(Clip {
             len: source.len(),
             source: Source::Owned(source),
+            offset: 0,
+            start,
+            gain: 100,
+            fade_in: 0,
+            fade_out: 0,
+        })
+    }
+    /// Keep a completed recording/render buffer without copying its PCM into a
+    /// second large allocation. Undo snapshots share this immutable allocation.
+    pub fn buffer(source: Arc<Vec<Frame>>, start: usize) -> Result<Clip<'static>, Error> {
+        start.checked_add(source.len()).ok_or(Error::Range)?;
+        Ok(Clip {
+            len: source.len(),
+            source: Source::Buffer(source),
             offset: 0,
             start,
             gain: 100,
