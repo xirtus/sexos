@@ -60,6 +60,9 @@ pub struct Mesh {
     /// Shape keys (Blender's `Key.key_blocks`); index 0 is the Basis.
     pub shape_keys: Vec<ShapeKey>,
     pub shape_key_settings: ShapeKeySettings,
+    /// Generic attributes on the point, edge, face and face-corner domains
+    /// (geometry nodes' Store Named Attribute, imported color attributes).
+    pub attributes: crate::geometry::Attributes,
 }
 
 /// Interpolation between absolute shape keys and between lattice points

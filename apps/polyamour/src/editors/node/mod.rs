@@ -452,18 +452,13 @@ pub fn run_op(s: &mut State, d: &mut Doc, op: &str, arg: &str) {
         "node.geo_new" => {
             d.push_undo("New Node Group");
             let name = sex_3d::scene::unique_name("Geometry Nodes", |n| d.scene.node_groups.iter().any(|g| g.name == n));
-            let mut g = NodeTree::new(&name, TreeKind::Geometry);
-            let geo = sex_3d::nodes::InterfaceSocket { name: "Geometry".into(), ty: SocketType::Geometry, default: Value::None, min: 0.0, max: 0.0 };
-            g.inputs.push(geo.clone());
-            g.outputs.push(geo);
-            let mut gi = edit::group_input_node(&g);
-            gi.location = [-200.0, 0.0];
-            let mut go = edit::group_output_node(&g);
-            go.location = [100.0, 0.0];
-            g.nodes = vec![gi, go];
-            g.links.push(Link { from_node: 0, from_socket: 0, to_node: 1, to_socket: 0, muted: false });
-            d.scene.node_groups.push(g);
+            d.scene.node_groups.push(sex_3d::geometry::new_group(&name));
             s.geo_group = Some(d.scene.node_groups.len() - 1);
+            // The new group runs on the active mesh object, as a Nodes
+            // modifier at the end of its stack.
+            if let Some(a) = d.active().filter(|&a| matches!(d.scene.objects[a].data, sex_3d::scene::ObjectData::Mesh(_))) {
+                d.scene.objects[a].modifiers.push(sex_3d::modifiers::Modifier::Nodes { group: name, inputs: Vec::new() });
+            }
             s.path.clear();
             s.want_frame = Some(false);
             d.touch();

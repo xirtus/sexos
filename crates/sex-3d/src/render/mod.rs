@@ -41,7 +41,7 @@ mod integrator;
 mod prepare;
 mod rng;
 mod sampling;
-mod shader;
+pub(crate) mod shader;
 
 /// Blender's stored enum numbers for node settings, for file importers.
 pub(crate) mod shader_names {

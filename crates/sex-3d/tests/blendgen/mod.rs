@@ -549,6 +549,16 @@ fn define(c: &Cfg) -> Dna {
         tree.extend([("ListBase", "inputs"), ("ListBase", "outputs")]);
     }
     d.def("bNodeTree", &tree);
+    // Geometry nodes: storage structs and the Nodes modifier's ID properties.
+    d.def("NodeGeometryExtrudeMesh", &[("uchar", "mode")]);
+    d.def("NodeGeometryMeshCylinder", &[("uchar", "fill_type")]);
+    d.def("IDPropertyData", &[("void", "*pointer"), ("ListBase", "group"), ("int", "val"), ("int", "val2")]);
+    d.def(
+        "IDProperty",
+        &[("IDProperty", "*next"), ("IDProperty", "*prev"), ("char", "type"), ("char", "subtype"), ("short", "flag"), ("char", "name[64]"), ("char", "_pad0[4]"), ("IDPropertyData", "data"), ("int", "len"), ("int", "totallen"), ("void", "*ui_data")],
+    );
+    d.def("NodesModifierSettings", &[("IDProperty", "*properties")]);
+    d.def("NodesModifierData", &[("ModifierData", "modifier"), ("bNodeTree", "*node_group"), ("NodesModifierSettings", "settings"), ("char", "*bake_directory"), ("char", "flag"), ("char", "_pad[7]")]);
     d.def(
         "Material",
         &[("ID", "id"), ("AnimData", "*adt"), ("short", "flag"), ("char", "_pad1[2]"), ("float", "r"), ("float", "g"), ("float", "b"), ("float", "a"), ("float", "specr"), ("float", "specg"), ("float", "specb"), ("float", "alpha"), ("float", "ray_mirror"), ("float", "spec"), ("float", "gloss_mir"), ("float", "roughness"), ("float", "metallic"), ("char", "use_nodes"), ("char", "pr_type"), ("short", "pr_texture"), ("bNodeTree", "*nodetree")],
@@ -1173,8 +1183,18 @@ fn socket_list(w: &mut Writer, socks: &[Sk]) -> (u64, u64, Vec<u64>) {
     (addrs.first().copied().unwrap_or(0), addrs.last().copied().unwrap_or(0), addrs)
 }
 
-/// A group interface socket: name, identifier, flag (1 input, 2 output), default.
+/// A group interface socket: name, identifier, flag (1 input, 2 output),
+/// default, and its type: a float unless the name is "Geometry".
 pub type Iface<'a> = (&'a str, &'a str, i64, f64);
+
+/// (4.x `socket_type` idname, `eNodeSocketDatatype`) of an interface socket.
+fn iface_type(name: &str) -> (&'static str, i64) {
+    if name == "Geometry" {
+        ("NodeSocketGeometry", 10)
+    } else {
+        ("NodeSocketFloat", 0)
+    }
+}
 
 /// A link: from node, from identifier, to node, to identifier, flag.
 pub type NodeLink<'a> = (usize, &'a str, usize, &'a str, i64);
@@ -1243,8 +1263,8 @@ pub fn write_tree(w: &mut Writer, c: &Cfg, ptr: u64, code: &str, name: &str, nod
         if c.new_names() {
             let mut items = Vec::new();
             for &(name, ident, flag, dv) in iface {
-                let (nm, ty, id) = (cstr(w, name), cstr(w, "NodeSocketFloat"), cstr(w, ident));
-                let data = default_value(w, &Dv::F(dv));
+                let (nm, ty, id) = (cstr(w, name), cstr(w, iface_type(name).0), cstr(w, ident));
+                let data = if iface_type(name).1 == 0 { default_value(w, &Dv::F(dv)) } else { 0 };
                 items.push(w.add("DATA", "bNodeTreeInterfaceSocket", &[("name", p(nm)), ("socket_type", p(ty)), ("flag", n(flag as f64)), ("identifier", p(id)), ("socket_data", p(data))]));
             }
             let arr = w.raw(w.ptrs(&items), items.len());
@@ -1252,12 +1272,15 @@ pub fn write_tree(w: &mut Writer, c: &Cfg, ptr: u64, code: &str, name: &str, nod
             f.push(("tree_interface.root_panel.items_num".into(), n(items.len() as f64)));
         } else {
             for (lb, want) in [("inputs", 1), ("outputs", 2)] {
-                let socks: Vec<Sk> = iface.iter().filter(|x| x.2 == want).map(|&(name, ident, _, dv)| sk(ident, name, 0, Dv::F(dv))).collect();
+                let socks: Vec<Sk> = iface.iter().filter(|x| x.2 == want).map(|&(name, ident, _, dv)| sk(ident, name, iface_type(name).1, if iface_type(name).1 == 0 { Dv::F(dv) } else { Dv::No })).collect();
                 let (first, last, _) = socket_list(w, &socks);
                 f.push((format!("{lb}.first"), p(first)));
                 f.push((format!("{lb}.last"), p(last)));
             }
         }
+    }
+    if nodes.iter().any(|nd| nd.idname.starts_with("GeometryNode")) {
+        f.push(("type".into(), n(3.))); // NTREE_GEOMETRY
     }
     let d = w.inst("bNodeTree", &f);
     w.put(ptr, code, "bNodeTree", 1, d);
@@ -1442,5 +1465,64 @@ pub fn nodes_file(c: Cfg) -> Vec<u8> {
     write_tree(&mut w, &c, wtree, "DATA", "Shader Nodetree", &[bg, wout], &[(0, "Background", 1, "Surface", 0)], &[]);
     let d = w.inst("World", &[("id.name", s("WOWorld")), ("horr", n(0.05)), ("horg", n(0.05)), ("horb", n(0.05)), ("nodetree", p(wtree)), ("use_nodes", n(1.))]);
     w.put(wo, "WO", "World", 1, d);
+    w.finish()
+}
+
+/// The value the geometry nodes fixture's modifier gives "Height".
+pub const GN_HEIGHT: f32 = 0.75;
+
+/// A cube object "GN" with a Nodes modifier running the geometry node group
+/// "Geometry Nodes": its input extruded (faces, individually) by "Height",
+/// joined with a triangle-fan Cylinder. The modifier sets Height to
+/// [`GN_HEIGHT`] by ID property, with a `_use_attribute` entry to skip.
+pub fn geonodes_file(c: Cfg) -> Vec<u8> {
+    assert!(c.attr());
+    let mut w = Writer::new(define(&c), c.big, c.layout == Layout::Attr50, version_of(&c));
+    let [sc, me, ob, grp, md, root, height, use_attr] = [(); 8].map(|_| w.alloc());
+    let glob = w.alloc();
+    let g = w.inst("FileGlobal", &[("curscene", p(sc))]);
+    w.put(glob, "GLOB", "FileGlobal", 1, g);
+    let d = w.inst("Scene", &[("id.name", s("SCGeo")), ("r.sfra", n(1.)), ("r.efra", n(10.)), ("r.xsch", n(64.)), ("r.ysch", n(64.)), ("r.xasp", n(1.)), ("r.yasp", n(1.))]);
+    w.put(sc, "SC", "Scene", 1, d);
+    write_mesh(&mut w, &c, me, 0, 0);
+
+    // The group: interface identifiers as 4.x or 3.x name them.
+    let (gin, gout, gh) = if c.new_names() { ("Socket_0", "Socket_1", "Socket_2") } else { ("Input_0", "Output_1", "Input_2") };
+    let input = Nd::new("Group Input", "NodeGroupInput", vec![], vec![sk(gin, "Geometry", 10, Dv::No), sk(gh, "Height", 0, Dv::F(1.0))]);
+    let mut extrude = Nd::new(
+        "Extrude Mesh",
+        "GeometryNodeExtrudeMesh",
+        vec![sk("Mesh", "Mesh", 10, Dv::No), sk("Selection", "Selection", 4, Dv::No), sk("Offset", "Offset", 1, Dv::No), sk("Offset Scale", "Offset Scale", 0, Dv::F(1.0)), sk("Individual", "Individual", 4, Dv::No)],
+        vec![sk("Mesh", "Mesh", 10, Dv::No), sk("Top", "Top", 4, Dv::No), sk("Side", "Side", 4, Dv::No)],
+    );
+    extrude.storage = w.add("DATA", "NodeGeometryExtrudeMesh", &[("mode", n(2.))]);
+    let mut cyl = Nd::new("Cylinder", "GeometryNodeMeshCylinder", vec![], vec![sk("Mesh", "Mesh", 10, Dv::No)]);
+    cyl.storage = w.add("DATA", "NodeGeometryMeshCylinder", &[("fill_type", n(2.))]);
+    let join = Nd::new("Join Geometry", "GeometryNodeJoinGeometry", vec![sk("Geometry", "Geometry", 10, Dv::No)], vec![sk("Geometry", "Geometry", 10, Dv::No)]);
+    let mut out = Nd::new("Group Output", "NodeGroupOutput", vec![sk(gout, "Geometry", 10, Dv::No)], vec![]);
+    out.flag = 64;
+    let links: [NodeLink; 5] = [(0, gin, 1, "Mesh", 0), (0, gh, 1, "Offset Scale", 0), (1, "Mesh", 3, "Geometry", 0), (2, "Mesh", 3, "Geometry", 0), (3, "Geometry", 4, gout, 0)];
+    let iface: [Iface; 3] = [("Geometry", gin, 1, 0.0), ("Geometry", gout, 2, 0.0), ("Height", gh, 1, 1.0)];
+    write_tree(&mut w, &c, grp, "NT", "Geometry Nodes", &[input, extrude, cyl, join, out], &links, &iface);
+
+    // The modifier and its ID properties.
+    let prop = |w: &mut Writer, ptr: u64, prev: u64, next: u64, name: &str, ty: f64, val: f64| {
+        let d = w.inst("IDProperty", &[("next", p(next)), ("prev", p(prev)), ("type", n(ty)), ("name", s(name)), ("data.val", n(val))]);
+        w.put(ptr, "DATA", "IDProperty", 1, d);
+    };
+    prop(&mut w, height, 0, use_attr, gh, 2., GN_HEIGHT.to_bits() as f64);
+    prop(&mut w, use_attr, height, 0, &format!("{gh}_use_attribute"), 1., 1.);
+    let d = w.inst("IDProperty", &[("type", n(6.)), ("name", s("Nodes Modifier Settings")), ("data.group.first", p(height)), ("data.group.last", p(use_attr))]);
+    w.put(root, "DATA", "IDProperty", 1, d);
+    let d = w.inst("NodesModifierData", &[("modifier.mode", n(3.)), ("modifier.type", n(57.)), ("modifier.name", s("GeometryNodes")), ("node_group", p(grp)), ("settings.properties", p(root))]);
+    w.put(md, "DATA", "NodesModifierData", 1, d);
+
+    let ident = [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.];
+    let mut f = vec![("id.name", s("OBGN")), ("type", n(1.)), ("data", p(me)), ("scale", nv(&[1., 1., 1.])), ("dscale", nv(&[1., 1., 1.])), ("parentinv", nv(&ident)), ("rotmode", n(1.)), ("modifiers.first", p(md)), ("modifiers.last", p(md))];
+    if !c.new_names() {
+        f.push(("obmat", nv(&ident)));
+    }
+    let d = w.inst("Object", &f);
+    w.put(ob, "OB", "Object", 1, d);
     w.finish()
 }

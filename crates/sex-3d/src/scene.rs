@@ -858,7 +858,7 @@ impl Scene {
     /// are cut off at this depth instead of recursing forever.
     const MAX_MODIFIER_DEPTH: u32 = 4;
 
-    fn evaluated_mesh_depth(&self, idx: usize, depth: u32) -> Option<Mesh> {
+    pub(crate) fn evaluated_mesh_depth(&self, idx: usize, depth: u32) -> Option<Mesh> {
         match self.objects[idx].data {
             ObjectData::Mesh(mi) => Some(self.apply_modifiers_depth(idx, &self.meshes[mi], &self.objects[idx].modifiers, depth)),
             _ => None,

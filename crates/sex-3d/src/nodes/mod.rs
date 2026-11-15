@@ -11,6 +11,7 @@ use std::fmt;
 
 pub mod edit;
 pub mod enums;
+pub mod geo_registry;
 pub mod registry;
 pub mod update;
 
@@ -648,7 +649,14 @@ impl NodeTree {
         if self.depends_on(from_node, to_node) {
             return Err(LinkError::Cycle);
         }
-        self.links.retain(|l| !(l.to_node == to_node && l.to_socket == to_socket));
+        // Multi-input sockets (Join Geometry) keep every link, once each.
+        if registry::is_multi_input(&self.nodes[to_node].idname, &self.nodes[to_node].inputs[to_socket].identifier) {
+            if let Some(i) = self.links.iter().position(|l| l.from_node == from_node && l.from_socket == from_socket && l.to_node == to_node && l.to_socket == to_socket) {
+                return Ok(i);
+            }
+        } else {
+            self.links.retain(|l| !(l.to_node == to_node && l.to_socket == to_socket));
+        }
         self.links.push(Link { from_node, from_socket, to_node, to_socket, muted: false });
         Ok(self.links.len() - 1)
     }

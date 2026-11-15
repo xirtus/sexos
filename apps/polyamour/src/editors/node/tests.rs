@@ -359,6 +359,18 @@ fn compositor_and_geometry_editors_use_the_same_canvas() {
     let t = tree(&app);
     assert_eq!(t.kind, TreeKind::Geometry);
     assert_eq!(t.links.len(), 1);
+    // "New" puts the group on the active mesh object as a Nodes modifier,
+    // which passes the mesh through unchanged.
+    let a = app.doc.active().expect("active object");
+    let group = t.name.clone();
+    assert_eq!(app.doc.scene.objects[a].modifiers.last(), Some(&sex_3d::modifiers::Modifier::Nodes { group, inputs: Vec::new() }));
+    let before = app.doc.scene.meshes[match app.doc.scene.objects[a].data {
+        sex_3d::scene::ObjectData::Mesh(m) => m,
+        _ => panic!("active object is not a mesh"),
+    }]
+    .positions
+    .len();
+    assert_eq!(app.doc.scene.evaluated_mesh(a).unwrap().positions.len(), before);
     // Frames and reroutes work in any tree.
     let c = canvas(&app);
     add(&mut app, "NodeReroute", c.x + 200, c.y + 200);

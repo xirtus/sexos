@@ -1280,3 +1280,36 @@ fn imported_node_trees_round_trip_through_polyops() {
         assert_eq!(back.world.node_tree, s.world.node_tree, "{c:?}");
     }
 }
+
+/// A Nodes modifier and its geometry node group: the tree kind, node
+/// settings from storage structs, the multi-input Join, interface inputs
+/// set by ID property, and the evaluated result.
+#[test]
+fn geometry_nodes_modifier() {
+    use sex_3d::nodes::{Prop, TreeKind, Value};
+    for c in ALL.into_iter().filter(|c| matches!(c.layout, Layout::Attr36 | Layout::Attr42 | Layout::Attr50)) {
+        let what = format!("{c:?}");
+        let s = import_blend(&blendgen::geonodes_file(c)).unwrap_or_else(|e| panic!("{what}: {e}"));
+        let o = blendgen::names(&s)["GN"];
+        assert_eq!(s.objects[o].modifiers, vec![Modifier::Nodes { group: "Geometry Nodes".into(), inputs: vec![("Height".into(), Value::Float(blendgen::GN_HEIGHT))] }], "{what}");
+        let g = s.node_groups.iter().find(|g| g.name == "Geometry Nodes").unwrap_or_else(|| panic!("{what}: no group"));
+        assert_eq!(g.kind, TreeKind::Geometry, "{what}");
+        assert_eq!(g.inputs.iter().map(|i| i.name.as_str()).collect::<Vec<_>>(), ["Geometry", "Height"], "{what}");
+        let node = |name: &str| &g.nodes[g.find(name).unwrap_or_else(|| panic!("{what}: no {name}"))];
+        assert_eq!(node("Extrude Mesh").prop("mode"), Some(&Prop::Enum("FACES".into())), "{what}");
+        assert_eq!(node("Cylinder").prop("fill_type"), Some(&Prop::Enum("TRIANGLE_FAN".into())), "{what}");
+        assert_eq!(g.links.len(), 5, "{what}: {:?}", g.links);
+        // The cube's 6 faces extruded one by one (9 + 24 vertices, 6 + 24
+        // faces) and a 32-vertex fan-capped cylinder (66 vertices, 96 faces).
+        let m = s.evaluated_mesh(o).unwrap();
+        assert_eq!((m.positions.len(), m.faces.len()), (33 + 66, 30 + 96), "{what}");
+        let top = m.positions.iter().filter(|p| approx(p.z, 1.0 + blendgen::GN_HEIGHT)).count();
+        assert_eq!(top, 4, "{what}");
+        // And it round-trips through polyops.
+        let text = sex_3d::script::scene_to_polyops(&s);
+        let mut back = Scene::new();
+        sex_3d::script::run(&mut back, &text).unwrap_or_else(|e| panic!("{what}: {e}\n{text}"));
+        assert_eq!(back.node_groups, s.node_groups, "{what}");
+        assert_eq!(back.objects[blendgen::names(&back)["GN"]].modifiers, s.objects[o].modifiers, "{what}");
+    }
+}

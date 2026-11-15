@@ -224,6 +224,11 @@ pub enum Modifier {
         normalize: bool,
         mask_constant: f32,
     },
+    /// Geometry Nodes: evaluate node group `group` (by name, in
+    /// `Scene::node_groups`) with the mesh as its first geometry input and
+    /// `inputs` (interface socket name, value) for the rest; the result is
+    /// realized into a mesh. Without a scene the mesh passes through.
+    Nodes { group: String, inputs: Vec<(String, crate::nodes::Value)> },
 }
 
 /// What a modifier may need from outside its own mesh.
@@ -263,7 +268,7 @@ impl Modifier {
     /// Every polyops/Blender type [`Modifier::with_defaults`] knows.
     pub const TYPE_NAMES: &'static str = "Mirror, Subdivision, Array, Solidify, Bevel, Triangulate, Weld, Displace, Smooth, Decimate, Remesh, Screw, \
 Wireframe, EdgeSplit, Build, Boolean, SimpleDeform, Cast, Wave, Shrinkwrap, LaplacianSmooth, CorrectiveSmooth, WeightedNormal, \
-Armature, Hook, Lattice, Warp, VertexWeightEdit, VertexWeightMix, VertexWeightProximity";
+Armature, Hook, Lattice, Warp, VertexWeightEdit, VertexWeightMix, VertexWeightProximity, Nodes";
 
     /// The name Blender shows on the modifier's panel.
     pub fn name(&self) -> &'static str {
@@ -298,11 +303,15 @@ Armature, Hook, Lattice, Warp, VertexWeightEdit, VertexWeightMix, VertexWeightPr
             Modifier::VertexWeightEdit { .. } => "Vertex Weight Edit",
             Modifier::VertexWeightMix { .. } => "Vertex Weight Mix",
             Modifier::VertexWeightProximity { .. } => "Vertex Weight Proximity",
+            Modifier::Nodes { .. } => "Geometry Nodes",
         }
     }
 
     /// The polyops type word: [`Modifier::name`] without spaces.
     pub fn type_name(&self) -> String {
+        if let Modifier::Nodes { .. } = self {
+            return "Nodes".into();
+        }
         self.name().replace(' ', "")
     }
 
@@ -351,6 +360,7 @@ Armature, Hook, Lattice, Warp, VertexWeightEdit, VertexWeightMix, VertexWeightPr
             "laplaciansmooth" | "smoothlaplacian" => Modifier::LaplacianSmooth { iterations: 1, factor: 0.01, border: 0.01, axes: [true; 3], preserve_volume: true, normalized: true, vertex_group: None, invert_vertex_group: false },
             "correctivesmooth" | "smoothcorrective" => Modifier::CorrectiveSmooth { factor: 0.5, iterations: 5, scale: 1.0, length_weighted: false, only_smooth: false, vertex_group: None, invert_vertex_group: false },
             "weightednormal" => Modifier::WeightedNormal { keep_sharp: false },
+            "nodes" | "geometrynodes" => Modifier::Nodes { group: String::new(), inputs: Vec::new() },
             "armature" => Modifier::Armature {
                 object: String::new(),
                 use_vertex_groups: true,
@@ -426,7 +436,7 @@ Armature, Hook, Lattice, Warp, VertexWeightEdit, VertexWeightMix, VertexWeightPr
 
     /// True when the result changes with the frame.
     pub fn is_animated(&self) -> bool {
-        matches!(self, Modifier::Wave { .. } | Modifier::Build { .. })
+        matches!(self, Modifier::Wave { .. } | Modifier::Build { .. } | Modifier::Nodes { .. })
     }
 
     /// The other object this modifier reads, if any (Warp: the "from" object).
@@ -590,6 +600,10 @@ Armature, Hook, Lattice, Warp, VertexWeightEdit, VertexWeightMix, VertexWeightPr
             Modifier::Lattice { .. } => rig::lattice(self, m, cx),
             Modifier::Warp { .. } => rig::warp(self, m, cx),
             Modifier::VertexWeightEdit { .. } | Modifier::VertexWeightMix { .. } | Modifier::VertexWeightProximity { .. } => rig::weights(self, m, cx),
+            Modifier::Nodes { group, inputs } => match cx.scene {
+                Some(s) if !group.is_empty() => crate::geometry::run_modifier(m, s, group, inputs, cx.owner, cx.frame, cx.depth),
+                _ => m.clone(),
+            },
         }
     }
 }

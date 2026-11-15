@@ -11,6 +11,7 @@ use crate::settings::RotationMode;
 use crate::theme as t;
 use crate::ui::{MenuItem, NumOpts, Op};
 use sex_3d::modifiers::{BooleanOp, CastType, DecimateMode, Modifier, RemeshMode, ShrinkwrapMethod, SimpleDeformMode};
+use sex_3d::nodes::{SocketType, Value};
 use sex_3d::scene::{ObjectData, RayVisibility, Transform};
 use sex_3d::script::quat_to_euler_xyz;
 use sex_3d::{Quat, Vec3};
@@ -323,7 +324,7 @@ pub fn add_modifier_menu() -> Vec<MenuItem> {
                 ("Build", "BUILD"),
                 ("Decimate", "DECIMATE"),
                 ("Edge Split", "EDGE_SPLIT"),
-                ("Geometry Nodes", ""),
+                ("Geometry Nodes", "NODES"),
                 ("Mask", ""),
                 ("Mirror", "MIRROR"),
                 ("Multiresolution", ""),
@@ -449,6 +450,7 @@ pub fn set_modifier_object(d: &mut Doc, o: usize, si: usize, name: &str) {
     let mut nm = m.clone();
     match &mut nm {
         Modifier::Boolean { object: s, .. } | Modifier::Shrinkwrap { target: s, .. } => *s = name.to_string(),
+        Modifier::Nodes { group, .. } => *group = name.to_string(),
         _ => return,
     }
     if nm != m {
@@ -456,6 +458,67 @@ pub fn set_modifier_object(d: &mut Doc, o: usize, si: usize, name: &str) {
         d.scene.objects[o].modifiers[li] = nm;
         d.touch();
     }
+}
+
+/// A Nodes modifier's inputs: the group interface's non-geometry inputs,
+/// each showing the modifier's value or the interface default.
+fn node_inputs(l: &mut L, d: &Doc, key: &str, group: &str, inputs: &mut Vec<(String, Value)>) -> bool {
+    let Some(g) = d.scene.node_groups.iter().find(|g| g.name == group) else { return false };
+    let mut ch = false;
+    for (name, ty, default) in sex_3d::geometry::eval::modifier_interface(g) {
+        let cur = inputs.iter().find(|(n, _)| *n == name).map_or(default, |x| x.1.clone());
+        let k = format!("{key}in/{name}");
+        let new = match ty {
+            SocketType::Float => {
+                let mut v = cur.as_float();
+                l.number(&name, &k, &mut v, PLAIN).then_some(Value::Float(v))
+            }
+            SocketType::Int => {
+                let mut v = match cur {
+                    Value::Int(i) => i as i64,
+                    ref other => other.as_float() as i64,
+                };
+                l.int(&name, &k, &mut v, i32::MIN as i64, i32::MAX as i64).then_some(Value::Int(v as i32))
+            }
+            SocketType::Bool => {
+                let mut v = matches!(cur, Value::Bool(true));
+                l.check("", &name, &mut v).then_some(Value::Bool(v))
+            }
+            SocketType::Vector | SocketType::Rotation => {
+                let mut v = cur.as_vector();
+                let mut changed = false;
+                for (i, axis) in ["X", "Y", "Z"].iter().enumerate() {
+                    let label = if i == 0 { format!("{name} {axis}") } else { axis.to_string() };
+                    changed |= l.number(&label, &format!("{k}/{i}"), &mut v[i], PLAIN);
+                }
+                changed.then_some(Value::Vector(v))
+            }
+            SocketType::String => {
+                let mut v = match cur {
+                    Value::String(ref s) => s.clone(),
+                    _ => String::new(),
+                };
+                l.text(&name, &k, &mut v).then_some(Value::String(v))
+            }
+            SocketType::Color => {
+                let c = cur.as_color();
+                l.info(&name, &format!("{:.3}, {:.3}, {:.3}, {:.3}", c[0], c[1], c[2], c[3]));
+                None
+            }
+            _ => {
+                l.info(&name, "Not editable here");
+                None
+            }
+        };
+        if let Some(v) = new {
+            match inputs.iter_mut().find(|(n, _)| *n == name) {
+                Some(slot) => slot.1 = v,
+                None => inputs.push((name, v)),
+            }
+            ch = true;
+        }
+    }
+    ch
 }
 
 /// A row of joined X / Y / Z toggles, like Mirror's axes.
@@ -992,6 +1055,12 @@ fn modifier_body(l: &mut L, d: &mut Doc, o: usize, si: usize, m: &Modifier, live
                 l.check("", "Face Influence", &mut f);
             });
             l.note("Smooth shading, area-weighted normals");
+        }
+        Modifier::Nodes { group, inputs } => {
+            let mut items: Vec<&str> = vec![NO_OBJECT];
+            items.extend(d.scene.node_groups.iter().filter(|g| g.kind == sex_3d::nodes::TreeKind::Geometry).map(|g| g.name.as_str()));
+            l.enumeration("Node Group", &format!("modgroup/{si}"), if group.is_empty() { NO_OBJECT } else { group.as_str() }, &items);
+            ch |= node_inputs(l, d, &k(""), group, inputs);
         }
         // Rigging modifiers have no panel yet.
         _ => {}

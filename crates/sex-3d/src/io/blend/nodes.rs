@@ -69,6 +69,13 @@ fn sock_type(t: i64) -> SocketType {
         7 => SocketType::String,
         8 => SocketType::Object,
         9 => SocketType::Image,
+        10 => SocketType::Geometry,
+        11 => SocketType::Collection,
+        12 => SocketType::Texture,
+        13 => SocketType::Material,
+        14 => SocketType::Rotation,
+        15 => SocketType::Menu,
+        16 => SocketType::Matrix,
         _ => SocketType::Float,
     }
 }
@@ -90,6 +97,24 @@ fn sock_type_name(s: &str) -> SocketType {
         SocketType::Shader
     } else if s.starts_with("String") {
         SocketType::String
+    } else if s.starts_with("Geometry") {
+        SocketType::Geometry
+    } else if s.starts_with("Object") {
+        SocketType::Object
+    } else if s.starts_with("Collection") {
+        SocketType::Collection
+    } else if s.starts_with("Material") {
+        SocketType::Material
+    } else if s.starts_with("Image") {
+        SocketType::Image
+    } else if s.starts_with("Texture") {
+        SocketType::Texture
+    } else if s.starts_with("Rotation") {
+        SocketType::Rotation
+    } else if s.starts_with("Matrix") {
+        SocketType::Matrix
+    } else if s.starts_with("Menu") {
+        SocketType::Menu
     } else {
         SocketType::Float
     }
@@ -181,6 +206,20 @@ fn list_with_ptrs<'f, 'a>(f: &'f BlendFile<'a>, lb: Option<View<'f, 'a>>, names:
 
 fn e(s: &str) -> Prop {
     Prop::Enum(s.to_string())
+}
+
+/// A tree's kind: its `idname` ("GeometryNodeTree"), else `type`
+/// (`NTREE_SHADER` 0, `NTREE_COMPOSIT` 1, `NTREE_GEOMETRY` 3).
+fn tree_kind(tree: &View<'_, '_>) -> TreeKind {
+    match (tree.string("idname").as_deref(), tree.num("type").map(|t| t as i64)) {
+        (Some("GeometryNodeTree"), _) | (_, Some(3)) => TreeKind::Geometry,
+        (Some("CompositorNodeTree"), _) | (_, Some(1)) => TreeKind::Compositor,
+        _ => TreeKind::Shader,
+    }
+}
+
+fn is_group_idname(idname: &str) -> bool {
+    matches!(idname, "ShaderNodeGroup" | "GeometryNodeGroup" | "CompositorNodeGroup")
 }
 
 fn pick(names: &[&'static str], i: f64) -> Prop {
@@ -276,14 +315,14 @@ impl<'f, 'a> Importer<'f, 'a> {
     }
 
     /// A node group (`NT` block), imported once into `Scene::node_groups`.
-    fn group(&mut self, ptr: u64) -> Option<usize> {
+    pub(super) fn group(&mut self, ptr: u64) -> Option<usize> {
         if let Some(&i) = self.groups.get(&ptr) {
             return Some(i);
         }
         let tree = self.f.view_ptr(ptr, &["bNodeTree"])?;
         let idx = self.scene.node_groups.len();
         // A placeholder first, so groups that contain themselves terminate.
-        self.scene.node_groups.push(NodeTree::new(&tree.id_name(), TreeKind::Shader));
+        self.scene.node_groups.push(NodeTree::new(&tree.id_name(), tree_kind(&tree)));
         self.groups.insert(ptr, idx);
         let mut t = self.node_tree(&tree)?;
         t.name = tree.id_name();
@@ -314,7 +353,7 @@ impl<'f, 'a> Importer<'f, 'a> {
     /// Read a whole node tree.
     pub(super) fn node_tree(&mut self, tree: &View<'f, 'a>) -> Option<NodeTree> {
         let f = self.f;
-        let mut t = NodeTree::new(&tree.id_name(), TreeKind::Shader);
+        let mut t = NodeTree::new(&tree.id_name(), tree_kind(tree));
         if t.name.is_empty() {
             t.name = "Shader Nodetree".into();
         }
@@ -335,6 +374,17 @@ impl<'f, 'a> Importer<'f, 'a> {
         }
         for (i, p) in parents.into_iter().enumerate() {
             t.nodes[i].parent = node_idx.get(&p).copied().filter(|&p| p != i);
+        }
+        // Zone inputs name their output node by `bNode.identifier`.
+        let idents: Vec<Option<i64>> = file_nodes.iter().map(|(_, bn)| bn.num("identifier").map(|x| x as i64)).collect();
+        for i in 0..t.nodes.len() {
+            if let Some(Prop::Int(id)) = t.nodes[i].prop("__output_node_id").cloned() {
+                t.nodes[i].props.retain(|(k, _)| k != "__output_node_id");
+                if let Some(o) = idents.iter().position(|x| *x == Some(id as i64)) {
+                    let name = t.nodes[o].name.clone();
+                    t.nodes[i].set_prop("paired_output", Prop::String(name));
+                }
+            }
         }
         for l in f.list(tree.sub("links"), &["bNodeLink"]) {
             let (Some(&(fnode, true, fs)), Some(&(tnode, false, ts))) = (socks.get(&l.ptr("fromsock")), socks.get(&l.ptr("tosock"))) else { continue };
@@ -372,7 +422,7 @@ impl<'f, 'a> Importer<'f, 'a> {
         }
         self.node_props(bn, &mut n, flag);
         // Group nodes take their sockets from the group's interface.
-        if idname == "ShaderNodeGroup" {
+        if is_group_idname(&idname) {
             if let Some(Prop::Id(Some(g))) = n.prop("node_tree").cloned() {
                 if let Some(gt) = self.scene.node_groups.get(g).cloned() {
                     sync_group_sockets(&mut n, &gt);
@@ -396,6 +446,18 @@ impl<'f, 'a> Importer<'f, 'a> {
                     // Unknown node type: keep the file's sockets so links survive.
                     list.push(Socket::new(&sname, ty, Value::None).ident(&ident));
                     idx = Some(list.len() - 1);
+                } else if idx.is_none() && ty != SocketType::Virtual && ident != "__extend__" {
+                    // Item sockets of zone, capture and switch nodes (before
+                    // the empty "extend" socket of nodes that have one).
+                    if let Some(at) = list.iter().position(|x| x.ty == SocketType::Virtual) {
+                        list.insert(at, Socket::new(&sname, ty, crate::nodes::geo_registry::socket_default(ty)).ident(&ident));
+                        for v in socks.values_mut() {
+                            if v.0 == ni && v.1 == is_out && v.2 >= at {
+                                v.2 += 1;
+                            }
+                        }
+                        idx = Some(at);
+                    }
                 }
                 let Some(idx) = idx.or_else(|| (known.is_none() && k < list.len()).then_some(k)) else { continue };
                 let sock = &mut list[idx];
@@ -609,7 +671,7 @@ impl<'f, 'a> Importer<'f, 'a> {
                     n.set_prop("mapping", Prop::Curve(CurveMapping { curves: c }));
                 }
             }
-            "ShaderNodeGroup" => {
+            "ShaderNodeGroup" | "GeometryNodeGroup" | "CompositorNodeGroup" => {
                 let g = self.group(id);
                 n.set_prop("node_tree", Prop::Id(g));
             }
@@ -618,7 +680,7 @@ impl<'f, 'a> Importer<'f, 'a> {
                 n.set_prop("object", Prop::Id(None));
                 n.set_prop("__object_ptr", Prop::String(format!("{id}")));
             }
-            _ => {}
+            _ => super::geonodes::geo_props(f, bn, n),
         }
     }
 
