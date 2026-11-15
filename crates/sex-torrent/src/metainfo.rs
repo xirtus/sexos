@@ -612,6 +612,15 @@ mod tests {
     use crate::{from_hex, to_hex};
     use alloc::vec;
 
+    #[test]
+    fn v2_symlink_with_a_length_is_refused() {
+        // Fuzz round 5 (#337): 2^38 bytes behind a symlink would be 16M pieces with no hashes.
+        let info = |len: &str| alloc::format!("d9:file treed4:linkd0:d4:attr1:l6:length{len}12:symlink pathl1:aeeee12:meta versioni2e4:name1:t12:piece lengthi16384ee");
+        assert_eq!(Metainfo::from_info_bytes(info("i274877906944e").as_bytes()).err(), Some(Error::BadField("length")));
+        // Zero is allowed; this one torrent is then refused only for holding no data.
+        assert_eq!(Metainfo::from_info_bytes(info("i0e").as_bytes()).err(), Some(Error::Empty));
+    }
+
     const BASE: &[u8] = include_bytes!("../tests/fixtures/base.torrent");
     const PAD_FILE: &[u8] = include_bytes!("../tests/fixtures/pad_file.torrent");
     const SAMPLE: &[u8] = include_bytes!("../tests/fixtures/sample.torrent");
