@@ -375,6 +375,14 @@ pub fn tick(doc: &mut Doc) -> bool {
             doc.frame = if last <= s { e } else { last - 1 };
         }
     }
+    if doc.scene.frame_current != doc.frame {
+        // Modifiers that animate (Wave, Build) evaluate at the scene's frame.
+        doc.scene.frame_current = doc.frame;
+        if doc.scene.objects.iter().any(|o| o.modifiers.iter().any(|m| m.is_animated())) {
+            doc.touch();
+            changed = true;
+        }
+    }
     if doc.anim.last_frame != Some(doc.frame) || doc.anim.dirty {
         changed |= doc.anim.last_frame.is_some_and(|l| l != doc.frame);
         changed |= evaluate(doc);

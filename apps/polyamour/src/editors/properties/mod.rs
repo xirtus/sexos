@@ -508,6 +508,12 @@ fn set_enum(s: &mut State, d: &mut Doc, obj: Option<usize>, key: &str, v: &str) 
             }
         }
         "lens_unit" => s.fov_unit = v == "Field of View",
+        k if k.starts_with("modobj/") => {
+            // A modifier's object field (Boolean operand, Shrinkwrap target).
+            if let (Some(o), Ok(si)) = (obj, k["modobj/".len()..].parse::<usize>()) {
+                object::set_modifier_object(d, o, si, if v == object::NO_OBJECT { "" } else { v });
+            }
+        }
         _ => d.report = format!("{key} cannot be set yet"),
     }
     d.dirty = true;

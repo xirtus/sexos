@@ -10,7 +10,7 @@ use crate::draw::{Align, Rect};
 use crate::settings::RotationMode;
 use crate::theme as t;
 use crate::ui::{MenuItem, NumOpts, Op};
-use sex_3d::modifiers::Modifier;
+use sex_3d::modifiers::{BooleanOp, CastType, DecimateMode, Modifier, RemeshMode, ShrinkwrapMethod, SimpleDeformMode};
 use sex_3d::scene::{ObjectData, Transform};
 use sex_3d::script::quat_to_euler_xyz;
 use sex_3d::{Quat, Vec3};
@@ -37,6 +37,14 @@ pub fn rename_object(d: &mut Doc, o: usize, want: &str) {
     let old = core::mem::replace(&mut d.scene.objects[o].name, n.clone());
     d.settings.rename_object(&old, &n);
     d.anim.rename_object(&old, &n);
+    // Boolean operands and Shrinkwrap targets refer to objects by name.
+    for ob in &mut d.scene.objects {
+        ob.modifiers.iter_mut().for_each(|m| m.rename_object_ref(&old, &n));
+    }
+    for p in &mut d.settings.parked {
+        p.modifier.rename_object_ref(&old, &n);
+        p.stack.iter_mut().for_each(|m| m.rename_object_ref(&old, &n));
+    }
     d.touch();
 }
 
@@ -267,47 +275,47 @@ pub fn add_modifier_menu() -> Vec<MenuItem> {
             cat(&[
                 ("Array", "ARRAY"),
                 ("Bevel", "BEVEL"),
-                ("Boolean", ""),
-                ("Build", ""),
-                ("Decimate", ""),
-                ("Edge Split", ""),
+                ("Boolean", "BOOLEAN"),
+                ("Build", "BUILD"),
+                ("Decimate", "DECIMATE"),
+                ("Edge Split", "EDGE_SPLIT"),
                 ("Geometry Nodes", ""),
                 ("Mask", ""),
                 ("Mirror", "MIRROR"),
                 ("Multiresolution", ""),
-                ("Remesh", ""),
-                ("Screw", ""),
+                ("Remesh", "REMESH"),
+                ("Screw", "SCREW"),
                 ("Skin", ""),
                 ("Solidify", "SOLIDIFY"),
                 ("Subdivision Surface", "SUBSURF"),
                 ("Triangulate", "TRIANGULATE"),
                 ("Volume to Mesh", ""),
                 ("Weld", "WELD"),
-                ("Wireframe", ""),
+                ("Wireframe", "WIREFRAME"),
             ]),
         ),
         MenuItem::Sub(
             "Deform".into(),
             cat(&[
                 ("Armature", ""),
-                ("Cast", ""),
+                ("Cast", "CAST"),
                 ("Curve", ""),
                 ("Displace", "DISPLACE"),
                 ("Hook", ""),
                 ("Laplacian Deform", ""),
                 ("Lattice", ""),
                 ("Mesh Deform", ""),
-                ("Shrinkwrap", ""),
-                ("Simple Deform", ""),
+                ("Shrinkwrap", "SHRINKWRAP"),
+                ("Simple Deform", "SIMPLE_DEFORM"),
                 ("Smooth", "SMOOTH"),
-                ("Smooth Corrective", ""),
-                ("Smooth Laplacian", ""),
+                ("Smooth Corrective", "CORRECTIVE_SMOOTH"),
+                ("Smooth Laplacian", "LAPLACIANSMOOTH"),
                 ("Surface Deform", ""),
                 ("Warp", ""),
-                ("Wave", ""),
+                ("Wave", "WAVE"),
             ]),
         ),
-        MenuItem::Sub("Normals".into(), cat(&[("Normal Edit", ""), ("Weighted Normal", ""), ("Smooth by Angle", "")])),
+        MenuItem::Sub("Normals".into(), cat(&[("Normal Edit", ""), ("Weighted Normal", "WEIGHTED_NORMAL"), ("Smooth by Angle", "")])),
         MenuItem::Sub(
             "Physics".into(),
             cat(&[("Cloth", ""), ("Collision", ""), ("Dynamic Paint", ""), ("Explode", ""), ("Fluid", ""), ("Ocean", ""), ("Particle Instance", ""), ("Particle System", ""), ("Soft Body", "")]),
@@ -378,12 +386,72 @@ pub fn modifier_op(d: &mut Doc, o: usize, op: &str, i: usize) {
             d.push_undo("Apply Modifier");
             let first = full[..i].iter().all(|e| !e.1);
             let (m, _) = full.remove(i);
-            d.scene.meshes[mi] = m.apply(&d.scene.meshes[mi]);
+            d.scene.meshes[mi] = d.scene.apply_modifiers(o, &d.scene.meshes[mi], std::slice::from_ref(&m));
             d.report = if first { format!("Applied modifier: {}", label_of(&m)) } else { "Applied modifier was not first, result may not be as expected".into() };
         }
         _ => return,
     }
     write_stack(d, o, full);
+}
+
+/// The entry shown for "no object" in object fields.
+pub const NO_OBJECT: &str = "(None)";
+
+/// Set the object field of entry `si` of the shown stack (Boolean's operand,
+/// Shrinkwrap's target).
+pub fn set_modifier_object(d: &mut Doc, o: usize, si: usize, name: &str) {
+    let shown = d.settings.shown_stack(&d.scene, o);
+    let Some((m, true, li)) = shown.get(si).cloned() else { return };
+    let mut nm = m.clone();
+    match &mut nm {
+        Modifier::Boolean { object: s, .. } | Modifier::Shrinkwrap { target: s, .. } => *s = name.to_string(),
+        _ => return,
+    }
+    if nm != m {
+        d.push_undo("Modifier Property");
+        d.scene.objects[o].modifiers[li] = nm;
+        d.touch();
+    }
+}
+
+/// A row of joined X / Y / Z toggles, like Mirror's axes.
+fn toggles(l: &mut L, label: &str, v: &mut [bool; 3]) -> bool {
+    let mut ch = false;
+    if l.band(ROW) {
+        let (lr, fr) = {
+            let (ix, iw) = l.inner();
+            let lw = (iw as f32 * 0.4) as i32;
+            (Rect::new(ix, l.y, lw - 8, ROW), Rect::new(ix + lw, l.y, iw - lw, ROW))
+        };
+        l.ui.p.label(lr, label, t::TEXT, Align::Right);
+        let w = fr.w / 3;
+        for (i, lab) in ["X", "Y", "Z"].into_iter().enumerate() {
+            let br = Rect::new(fr.x + i as i32 * w, fr.y, if i == 2 { fr.w - 2 * w } else { w - 1 }, ROW);
+            if l.ui.flat_button(br, lab, v[i]) && !l.inactive {
+                v[i] = !v[i];
+                ch = true;
+            }
+        }
+        l.y += ROW + GAP;
+    }
+    ch
+}
+
+/// An angle property shown in degrees, stored in radians.
+fn degrees(l: &mut L, label: &str, key: &str, v: &mut f32, min: f32, max: f32) -> bool {
+    let mut deg = v.to_degrees();
+    if l.number(label, key, &mut deg, NumOpts { step: 1.0, unit: "°", min, max, ..PLAIN }) {
+        *v = deg.to_radians();
+        return true;
+    }
+    false
+}
+
+/// A dropdown of the scene's other mesh objects for a modifier's object field.
+fn object_field(l: &mut L, d: &Doc, o: usize, si: usize, label: &str, cur: &str) {
+    let mut items: Vec<&str> = vec![NO_OBJECT];
+    items.extend(d.scene.objects.iter().enumerate().filter(|(i, x)| *i != o && matches!(x.data, ObjectData::Mesh(_))).map(|(_, x)| x.name.as_str()));
+    l.enumeration(label, &format!("modobj/{si}"), cur, &items);
 }
 
 fn modifier_icon_at(l: &mut L, x: i32, y: i32) {
@@ -623,6 +691,263 @@ fn modifier_body(l: &mut L, d: &mut Doc, o: usize, si: usize, m: &Modifier, live
             });
             ch |= l.number("Factor", &k("factor"), factor, NumOpts { step: 0.05, ..PLAIN });
             ch |= l.uint("Repeat", &k("repeat"), iterations, 0, 10000);
+        }
+        Modifier::Decimate { mode, ratio, iterations, angle, triangulate } => {
+            let cur = match mode {
+                DecimateMode::Collapse => 0,
+                DecimateMode::Unsubdivide => 1,
+                DecimateMode::Planar => 2,
+            };
+            if let Some(i) = l.expand("", &["Collapse", "Un-Subdivide", "Planar"], cur) {
+                *mode = [DecimateMode::Collapse, DecimateMode::Unsubdivide, DecimateMode::Planar][i];
+                ch = true;
+            }
+            match mode {
+                DecimateMode::Collapse => {
+                    ch |= l.slider("Ratio", &k("ratio"), ratio, 0.0, 1.0);
+                    inactive(l, |l| {
+                        let mut f = false;
+                        l.check("", "Symmetry", &mut f);
+                    });
+                    ch |= l.check("", "Triangulate", triangulate);
+                }
+                DecimateMode::Unsubdivide => ch |= l.uint("Iterations", &k("iter"), iterations, 0, 16),
+                DecimateMode::Planar => {
+                    ch |= degrees(l, "Angle Limit", &k("angle"), angle, 0.0, 180.0);
+                    inactive(l, |l| {
+                        l.info("Delimit", "Normal");
+                        let mut f = false;
+                        l.check("", "All Boundaries", &mut f);
+                    });
+                }
+            }
+        }
+        Modifier::Remesh { mode, voxel_size, octree_depth, scale, smooth_shade } => {
+            let cur = match mode {
+                RemeshMode::Blocks => 0,
+                RemeshMode::Smooth => 1,
+                RemeshMode::Voxel => 2,
+            };
+            if let Some(i) = l.expand("", &["Blocks", "Smooth", "Voxel"], cur) {
+                *mode = [RemeshMode::Blocks, RemeshMode::Smooth, RemeshMode::Voxel][i];
+                ch = true;
+            }
+            if *mode == RemeshMode::Voxel {
+                ch |= l.number("Voxel Size", &k("voxel"), voxel_size, NumOpts { step: 0.01, min: 0.0001, ..M });
+                inactive(l, |l| {
+                    let mut a = 0.0;
+                    l.number("Adaptivity", "adapt", &mut a, M);
+                });
+            } else {
+                ch |= l.uint("Octree Depth", &k("depth"), octree_depth, 1, 12);
+                ch |= l.slider("Scale", &k("scale"), scale, 0.0, 0.99);
+                inactive(l, |l| {
+                    let mut f = false;
+                    l.check("", "Remove Disconnected", &mut f);
+                });
+            }
+            ch |= l.check("", "Smooth Shading", smooth_shade);
+        }
+        Modifier::Screw { axis, angle, steps, screw_offset, iterations, merge, merge_distance, flip, smooth_shade } => {
+            ch |= degrees(l, "Angle", &k("angle"), angle, -36000.0, 36000.0);
+            ch |= l.number("Screw", &k("screw"), screw_offset, M);
+            ch |= l.uint("Iterations", &k("iter"), iterations, 1, 10000);
+            if let Some(i) = l.expand("Axis", &["X", "Y", "Z"], *axis as usize) {
+                *axis = i as u8;
+                ch = true;
+            }
+            inactive(l, |l| l.enumeration("Axis Object", "axis_ob", "", &[]));
+            ch |= l.uint("Steps Viewport", &k("steps"), steps, 1, 10000);
+            inactive(l, |l| {
+                let mut r = *steps;
+                l.uint("Render", "steps_render", &mut r, 1, 10000);
+            });
+            ch |= l.check("Merge", "", merge);
+            ch |= l.number("Distance", &k("merge_d"), merge_distance, NumOpts { step: 0.001, min: 0.0, ..M });
+            l.panel(d, &format!("{}/normals", k("sub")), "Normals", true, &mut |l, _| {
+                ch |= l.check("", "Smooth Shading", smooth_shade);
+                inactive(l, |l| {
+                    let mut f = false;
+                    l.check("", "Calculate Order", &mut f);
+                });
+                ch |= l.check("", "Flip", flip);
+            });
+        }
+        Modifier::Wireframe { thickness, offset, even, relative, boundary, replace } => {
+            ch |= l.number("Thickness", &k("thick"), thickness, NumOpts { step: 0.01, ..M });
+            ch |= l.number("Offset", &k("offset"), offset, NumOpts { step: 0.05, min: -1.0, max: 1.0, ..PLAIN });
+            ch |= l.check("", "Boundary", boundary);
+            ch |= l.check("", "Replace Original", replace);
+            ch |= l.check("Thickness", "Even", even);
+            ch |= l.check("", "Relative", relative);
+            inactive(l, |l| {
+                let mut f = false;
+                l.check("Crease Edges", "", &mut f);
+                let mut m = 0;
+                l.int("Material Offset", "mat_ofs", &mut m, -32768, 32767);
+            });
+        }
+        Modifier::EdgeSplit { angle, use_angle } => {
+            ch |= l.check("Edge Angle", "", use_angle);
+            ch |= degrees(l, "Split Angle", &k("angle"), angle, 0.0, 180.0);
+            inactive(l, |l| {
+                // Meshes carry no sharp-edge flags yet.
+                let mut t = false;
+                l.check("", "Sharp Edges", &mut t);
+            });
+        }
+        Modifier::Build { start, length, reverse, random, seed } => {
+            ch |= l.number("Start", &k("start"), start, NumOpts { step: 1.0, ..PLAIN });
+            ch |= l.number("Length", &k("length"), length, NumOpts { step: 1.0, min: 1.0, ..PLAIN });
+            ch |= l.check("", "Reversed", reverse);
+            l.panel(d, &format!("{}/random", k("sub")), "Randomize", false, &mut |l, _| {
+                ch |= l.check("", "Randomize", random);
+                ch |= l.uint("Seed", &k("seed"), seed, 0, 1 << 30);
+            });
+        }
+        Modifier::Boolean { object, operation } => {
+            let cur = match operation {
+                BooleanOp::Intersect => 0,
+                BooleanOp::Union => 1,
+                BooleanOp::Difference => 2,
+            };
+            if let Some(i) = l.expand("", &["Intersect", "Union", "Difference"], cur) {
+                *operation = [BooleanOp::Intersect, BooleanOp::Union, BooleanOp::Difference][i];
+                ch = true;
+            }
+            inactive(l, |l| {
+                l.expand("Operand Type", &["Object", "Collection"], 0);
+            });
+            let shown = if object.is_empty() { "" } else { object.as_str() };
+            object_field(l, d, o, si, "Object", shown);
+            if !object.is_empty() && d.scene.find_object(object).is_none() {
+                l.note(&format!("No object named '{object}'"));
+            }
+            l.info("Solver", "BSP (exact in general position)");
+        }
+        Modifier::SimpleDeform { mode, axis, factor, limits, lock } => {
+            let modes = [SimpleDeformMode::Twist, SimpleDeformMode::Bend, SimpleDeformMode::Taper, SimpleDeformMode::Stretch];
+            let cur = modes.iter().position(|x| x == mode).unwrap_or(0);
+            if let Some(i) = l.expand("", &["Twist", "Bend", "Taper", "Stretch"], cur) {
+                *mode = modes[i];
+                ch = true;
+            }
+            inactive(l, |l| l.enumeration("Origin", "origin", "", &[]));
+            if matches!(mode, SimpleDeformMode::Twist | SimpleDeformMode::Bend) {
+                ch |= degrees(l, "Angle", &k("angle"), factor, -36000.0, 36000.0);
+            } else {
+                ch |= l.number("Factor", &k("factor"), factor, NumOpts { step: 0.05, ..PLAIN });
+            }
+            if let Some(i) = l.expand("Axis", &["X", "Y", "Z"], *axis as usize) {
+                *axis = i as u8;
+                ch = true;
+            }
+            let ax = *axis as usize;
+            l.panel(d, &format!("{}/restrict", k("sub")), "Restrictions", false, &mut |l, _| {
+                ch |= l.slider("Limits", &k("lim0"), &mut limits[0], 0.0, 1.0);
+                ch |= l.slider("", &k("lim1"), &mut limits[1], 0.0, 1.0);
+                for (a, lab) in ["Lock X", "Lock Y", "Lock Z"].iter().enumerate() {
+                    if a != ax {
+                        ch |= l.check("", lab, &mut lock[a]);
+                    }
+                }
+            });
+        }
+        Modifier::Cast { kind, factor, radius, size, axes, size_from_radius } => {
+            let kinds = [CastType::Sphere, CastType::Cylinder, CastType::Cuboid];
+            let cur = kinds.iter().position(|x| x == kind).unwrap_or(0);
+            if let Some(i) = l.expand("Shape", &["Sphere", "Cylinder", "Cuboid"], cur) {
+                *kind = kinds[i];
+                ch = true;
+            }
+            ch |= toggles(l, "Axis", axes);
+            ch |= l.number("Factor", &k("factor"), factor, NumOpts { step: 0.05, ..PLAIN });
+            ch |= l.number("Radius", &k("radius"), radius, NumOpts { step: 0.05, min: 0.0, ..M });
+            ch |= l.number("Size", &k("size"), size, NumOpts { step: 0.05, min: 0.0, ..M });
+            ch |= l.check("", "Size from Radius", size_from_radius);
+            inactive(l, |l| {
+                let mut f = false;
+                l.check("", "Use Transform", &mut f);
+                l.enumeration("Control Object", "cast_ob", "", &[]);
+            });
+        }
+        Modifier::Wave { x, y, cyclic, normals, falloff, height, width, narrowness, speed, time_offset, lifetime, damping, start } => {
+            ch |= l.check("Motion", "X", x);
+            ch |= l.check("", "Y", y);
+            ch |= l.check("", "Cyclic", cyclic);
+            ch |= l.check("", "Along Normals", normals);
+            ch |= l.number("Falloff", &k("falloff"), falloff, NumOpts { step: 0.1, min: 0.0, ..PLAIN });
+            ch |= l.number("Height", &k("height"), height, NumOpts { step: 0.05, ..PLAIN });
+            ch |= l.number("Width", &k("width"), width, NumOpts { step: 0.05, min: 0.0, ..PLAIN });
+            ch |= l.number("Narrowness", &k("narrow"), narrowness, NumOpts { step: 0.05, min: 0.0, ..PLAIN });
+            l.panel(d, &format!("{}/start", k("sub")), "Start Position", false, &mut |l, _| {
+                ch |= l.number("Position X", &k("sx"), &mut start[0], M);
+                ch |= l.number("Y", &k("sy"), &mut start[1], M);
+            });
+            l.panel(d, &format!("{}/time", k("sub")), "Time", false, &mut |l, _| {
+                ch |= l.number("Offset", &k("toffs"), time_offset, NumOpts { step: 1.0, ..PLAIN });
+                ch |= l.number("Life", &k("life"), lifetime, NumOpts { step: 1.0, ..PLAIN });
+                ch |= l.number("Damping", &k("damp"), damping, NumOpts { step: 1.0, ..PLAIN });
+                ch |= l.number("Speed", &k("speed"), speed, NumOpts { step: 0.01, ..PLAIN });
+            });
+        }
+        Modifier::Shrinkwrap { target, method, offset, axes, positive, negative } => {
+            let methods = [ShrinkwrapMethod::NearestSurfacePoint, ShrinkwrapMethod::Project, ShrinkwrapMethod::NearestVertex];
+            let cur = methods.iter().position(|x| x == method).unwrap_or(0);
+            if let Some(i) = l.expand("Wrap Method", &["Nearest Surface", "Project", "Nearest Vertex"], cur) {
+                *method = methods[i];
+                ch = true;
+            }
+            inactive(l, |l| l.info("Snap Mode", "On Surface"));
+            let shown = if target.is_empty() { "" } else { target.as_str() };
+            object_field(l, d, o, si, "Target", shown);
+            if !target.is_empty() && d.scene.find_object(target).is_none() {
+                l.note(&format!("No object named '{target}'"));
+            }
+            ch |= l.number("Offset", &k("offset"), offset, NumOpts { step: 0.01, ..M });
+            if *method == ShrinkwrapMethod::Project {
+                ch |= toggles(l, "Axis", axes);
+                ch |= l.check("", "Negative", negative);
+                ch |= l.check("", "Positive", positive);
+            }
+        }
+        Modifier::LaplacianSmooth { iterations, factor, border, axes, preserve_volume, normalized } => {
+            ch |= l.uint("Repeat", &k("repeat"), iterations, 0, 200);
+            ch |= l.number("Factor", &k("factor"), factor, NumOpts { step: 0.05, ..PLAIN });
+            ch |= l.number("Border", &k("border"), border, NumOpts { step: 0.05, ..PLAIN });
+            ch |= toggles(l, "Axis", axes);
+            ch |= l.check("", "Preserve Volume", preserve_volume);
+            ch |= l.check("", "Normalized", normalized);
+        }
+        Modifier::CorrectiveSmooth { factor, iterations, scale, length_weighted, only_smooth } => {
+            ch |= l.number("Factor", &k("factor"), factor, NumOpts { step: 0.05, ..PLAIN });
+            ch |= l.uint("Repeat", &k("repeat"), iterations, 0, 200);
+            ch |= l.number("Scale", &k("scale"), scale, NumOpts { step: 0.05, ..PLAIN });
+            if let Some(i) = l.expand("Smooth Type", &["Simple", "Length Weight"], *length_weighted as usize) {
+                *length_weighted = i == 1;
+                ch = true;
+            }
+            ch |= l.check("", "Only Smooth", only_smooth);
+            inactive(l, |l| {
+                let mut f = false;
+                l.check("", "Pin Boundaries", &mut f);
+            });
+            l.info("Rest Source", "Original Coordinates");
+        }
+        Modifier::WeightedNormal { keep_sharp } => {
+            l.info("Weighting Mode", "Face Area");
+            inactive(l, |l| {
+                let mut w = 50;
+                l.uint("Weight", "wn_weight", &mut w, 1, 100);
+                let mut th = 0.01;
+                l.number("Threshold", "wn_thresh", &mut th, PLAIN);
+            });
+            ch |= l.check("", "Keep Sharp", keep_sharp);
+            inactive(l, |l| {
+                let mut f = false;
+                l.check("", "Face Influence", &mut f);
+            });
+            l.note("Smooth shading, area-weighted normals");
         }
     }
     if ch && live && nm != *m {

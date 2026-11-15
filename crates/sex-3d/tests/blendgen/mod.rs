@@ -453,7 +453,7 @@ fn define(c: &Cfg) -> Dna {
         &[md, ("Tex", "*texture"), ("Object", "*map_object"), ("char", "map_bone[64]"), ("char", "defgrp_name[64]"), ("float", "midlevel"), ("int", "direction"), ("char", "uvlayer_name[64]"), ("int", "uvlayer_tmp"), ("int", "texmapping"), ("float", "strength"), ("int", "flag"), ("short", "space"), ("char", "_pad[6]")],
     );
     d.def("SmoothModifierData", &[md, ("float", "fac"), ("char", "defgrp_name[64]"), ("short", "flag"), ("short", "repeat")]);
-    d.def("WaveModifierData", &[md, ("float", "height"), ("float", "width"), ("float", "narrow"), ("float", "speed")]);
+    d.def("OceanModifierData", &[md, ("float", "height"), ("float", "width"), ("float", "narrow"), ("float", "speed")]);
 
     // Collections (2.8+).
     d.def("CollectionObject", &[("CollectionObject", "*next"), ("CollectionObject", "*prev"), ("Object", "*ob"), ("void", "*_pad")]);
@@ -924,7 +924,7 @@ pub fn extras_file(c: Cfg) -> Vec<u8> {
 
     write_mesh(&mut w, &c, me, 0, 0);
 
-    // Modifier stack; the Wave, render-only, vertex-bevel and textured
+    // Modifier stack; the Ocean (unsupported), render-only, vertex-bevel and textured
     // displace entries must be skipped.
     let edge_bevel: Vec<(&str, V)> = if c.layout == Layout::Legacy30 { vec![("flags", n(0.))] } else { vec![("affect_type", n(1.))] };
     let vert_bevel: Vec<(&str, V)> = if c.layout == Layout::Legacy30 { vec![("flags", n(2.))] } else { vec![("affect_type", n(0.))] };
@@ -933,7 +933,7 @@ pub fn extras_file(c: Cfg) -> Vec<u8> {
     let mods: Vec<(&str, Vec<(&str, V)>)> = vec![
         ("MirrorModifierData", vec![("flag", n((1 << 3 | 1 << 5 | 1 << 6) as f64)), ("tolerance", n(0.01))]),
         ("SubsurfModifierData", vec![("levels", n(2.)), ("renderLevels", n(3.))]),
-        ("WaveModifierData", vec![("height", n(0.5))]),
+        ("OceanModifierData", vec![("height", n(0.5))]),
         ("SubsurfModifierData", vec![("modifier.mode", n(2.)), ("levels", n(4.))]),
         ("ArrayModifierData", vec![("count", n(3.)), ("offset_type", n(3.)), ("scale", nv(&[1.5, 0., 0.])), ("offset", nv(&[0., 0., 2.])), ("flags", n(1.))]),
         ("SolidifyModifierData", vec![("offset", n(0.2)), ("offset_fac", n(0.5))]),
