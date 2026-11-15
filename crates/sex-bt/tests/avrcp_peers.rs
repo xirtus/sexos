@@ -268,6 +268,29 @@ fn absolute_volume_both_ways() {
 }
 
 #[test]
+fn volume_registration_resumes_after_encryption_returns() {
+    let mut c = Controller::new();
+    let (mut h, _) = paged(&mut c);
+    let first = c.register.unwrap();
+    // Encryption drops: the headset's CHANGED (one-shot) is lost.
+    c.encryption(false);
+    pump(&mut h, &mut c);
+    c.changed(90);
+    pump(&mut h, &mut c);
+    // Back on: we register again (new label), the headset answers INTERIM, and
+    // its later changes reach us. No second RemoteReady (no new input device).
+    c.encryption(true);
+    let notes = pump(&mut h, &mut c);
+    assert!(!notes.iter().any(|n| matches!(n, Note::RemoteReady { .. })), "{notes:?}");
+    assert_ne!(c.register, Some(first));
+    assert!(notes.contains(&Note::RemoteVolume { handle: HANDLE, volume: 90, changed: false }), "{notes:?}");
+    c.changed(30);
+    let notes = pump(&mut h, &mut c);
+    assert!(notes.contains(&Note::RemoteVolume { handle: HANDLE, volume: 30, changed: true }), "{notes:?}");
+    assert_eq!(h.remote_volume(HANDLE), Some(30));
+}
+
+#[test]
 fn headset_without_absolute_volume_sends_volume_keys() {
     for refusal in [Volume::Refuses, Volume::NoProfile] {
         let mut c = Controller::new();

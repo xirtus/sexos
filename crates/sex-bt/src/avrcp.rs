@@ -155,12 +155,14 @@ pub struct Remote {
     pub absolute: Absolute,
     pub volume: Option<u8>,
     pub started: bool,
+    /// Started before and suspended while the link was not secure.
+    pub resumed: bool,
 }
 
 impl Default for Remote { fn default() -> Self { Remote::new() } }
 
 impl Remote {
-    pub fn new() -> Remote { Remote { label: 0, notify: None, absolute: Absolute::Unknown, volume: None, started: false } }
+    pub fn new() -> Remote { Remote { label: 0, notify: None, absolute: Absolute::Unknown, volume: None, started: false, resumed: false } }
 
     fn command(&mut self, ctype: u8, pdu: u8, params: &[u8]) -> Out {
         self.label = (self.label + 1) & 0x0F;
@@ -176,8 +178,19 @@ impl Remote {
     pub fn start(&mut self) -> Vec<Out> {
         if self.started { return Vec::new(); }
         self.started = true;
+        // A headset that refused absolute volume is not asked again.
+        if self.absolute == Absolute::No { return Vec::new(); }
         self.absolute = Absolute::Asked;
         alloc::vec![self.register()]
+    }
+
+    /// The link stopped being secure: what was queued or in flight (our registration,
+    /// a one-shot CHANGED) may be lost, so the next start registers again.
+    pub fn suspend(&mut self) {
+        if !self.started { return; }
+        self.started = false;
+        self.resumed = true;
+        self.notify = None;
     }
 
     /// The absolute volume we know, when the headset does absolute volume.

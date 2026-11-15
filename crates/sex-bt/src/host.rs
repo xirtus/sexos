@@ -393,8 +393,10 @@ impl Host {
         let Some(c) = self.conn(handle) else { return };
         let addr = c.addr;
         let Some((_, r)) = c.remote.as_mut().filter(|r| !r.1.started) else { return };
+        let resumed = r.resumed;
         let out = r.start();
-        self.notes.push_back(Note::RemoteReady { handle, addr });
+        // Announced once per channel: a resume after encryption came back only registers again.
+        if !resumed { self.notes.push_back(Note::RemoteReady { handle, addr }); }
         self.remote_out(handle, out);
     }
 
@@ -681,7 +683,10 @@ impl Host {
                 } else if status == 0 {
                     // Encryption turned off: nothing more is trusted on this link
                     // (HID input and AVDTP are ignored, audio stops) until it is back on.
-                    if let Some(c) = self.conn(handle) { c.encrypted = false; }
+                    if let Some(c) = self.conn(handle) {
+                        c.encrypted = false;
+                        if let Some(r) = c.remote.as_mut() { r.1.suspend(); }
+                    }
                     // Nothing already queued for the link goes out in the clear either
                     // (media waiting for controller buffers): re-securing the link takes
                     // HCI commands, not ACL data.
