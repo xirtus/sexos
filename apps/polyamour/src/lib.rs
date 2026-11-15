@@ -15,6 +15,7 @@ pub mod app;
 pub mod doc;
 pub mod draw;
 pub mod edit;
+pub mod edit_ops;
 pub mod editors;
 pub mod input;
 pub mod persist;

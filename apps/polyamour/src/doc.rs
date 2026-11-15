@@ -52,6 +52,9 @@ pub struct EditSelection {
     pub faces: BTreeSet<u32>,
     /// The active element (drawn white), the last one clicked.
     pub active: Option<Elem>,
+    /// Elements in the order they were clicked (Blender's select history),
+    /// for Merge at First/Last, Connect Vertex Path and Shortest Path.
+    pub history: Vec<Elem>,
 }
 
 /// One edit-mode element.
@@ -366,6 +369,7 @@ impl Doc {
                 crate::edit::sanitize(self);
                 self.touch();
             }
+            "mesh.primitive_monkey_add" => self.run(&Op::with("mesh.primitive_add", "monkey")),
             "mesh.primitive_add" => {
                 let (label, mesh) = match arg {
                     "plane" => ("Plane", primitives::plane(2.0)),
@@ -377,6 +381,7 @@ impl Doc {
                     "cone" => ("Cone", primitives::cone(32, 1.0, 0.0, 2.0)),
                     "torus" => ("Torus", primitives::torus(48, 12, 1.0, 0.25)),
                     "grid" => ("Grid", primitives::grid(10, 10, 2.0)),
+                    "monkey" => ("Monkey", primitives::monkey()),
                     _ => return self.unknown(op),
                 };
                 self.push_undo(&format!("Add {label}"));
@@ -588,6 +593,11 @@ pub fn is_view_op(id: &str) -> bool {
             | "mesh.bevel"
             | "mesh.loopcut_slide"
             | "mesh.knife_tool"
+            | "mesh.rip_move"
+            | "mesh.rip_move_fill"
+            | "mesh.rip_edge_move"
+            | "mesh.extrude_manifold"
+            | "mesh.extrude_region_shrink_fatten"
             | "object.move_to_collection_menu"
     )
 }

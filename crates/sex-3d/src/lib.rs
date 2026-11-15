@@ -10,6 +10,7 @@
 //! - [`undo`]: snapshot undo/redo of a scene.
 //! - [`modifiers`]: the non-destructive modifier stack.
 //! - [`ops`]: destructive modelling operations (extrude, inset, bevel, ...).
+//! - [`ops2`]: more edit-mode operators (dissolve, subdivide, rip, fills, spin, hull, ...).
 //! - [`render`]: the CPU path tracer.
 //! - [`io`]: glTF 2.0, OBJ, STL, PLY and .blend files.
 //! - [`script`]: the text command language the Python `polyamour` module speaks.
@@ -21,6 +22,7 @@ pub mod scene;
 pub mod undo;
 pub mod modifiers;
 pub mod ops;
+pub mod ops2;
 pub mod render;
 pub mod io;
 pub mod script;
