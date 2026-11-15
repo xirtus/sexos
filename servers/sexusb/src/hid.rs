@@ -114,9 +114,9 @@ pub fn parse_pointer(desc: &[u8]) -> Option<PointerLayout> {
                 let variable = raw & 2 != 0;
                 let relative = raw & 4 != 0;
                 let base = offsets[id as usize];
-                // The descriptor comes from the device: bound the field width (32 bits)
-                // and the fields walked (a report holds at most 64 Ki bits).
-                let size = size.min(32);
+                // The descriptor comes from the device: bound the fields walked (a report
+                // holds at most 64 Ki bits) and saturate offsets. Offsets keep the declared
+                // width; a field wider than 32 bits is never read (`Field::read`).
                 let walk = count.min(u16::MAX as u32 / size.max(1));
                 if !constant && variable && (found.is_none() || cur.report_id == id) {
                     for n in 0..walk {
@@ -124,13 +124,13 @@ pub fn parse_pointer(desc: &[u8]) -> Option<PointerLayout> {
                             let u = umin.saturating_add(n);
                             if u > umax { break; } u
                         } else if nusages == 0 { 0 } else { usages[(n as usize).min(nusages - 1)] };
-                        let field = Field { bit: base.saturating_add((n * size) as u16), size: size as u8,
+                        let field = Field { bit: base.saturating_add((n * size) as u16), size: size.min(255) as u8,
                             signed: lmin < 0, min: lmin, max: lmax };
                         match usage {
                             0x0009_0001 => {
                                 if !cur.buttons.present() || cur.report_id != id {
                                     let buttons = if range { umax.saturating_sub(umin).saturating_add(1).min(count).min(8) } else { 1 };
-                                    cur.buttons = Field { bit: field.bit, size: (buttons * size).min(32) as u8, signed: false, min: 0, max: 1 };
+                                    cur.buttons = Field { bit: field.bit, size: buttons.saturating_mul(size).min(32) as u8, signed: false, min: 0, max: 1 };
                                 }
                             }
                             0x0001_0030 => { cur.x = field; cur.report_id = id; cur.absolute = !relative; }
@@ -207,5 +207,15 @@ mod tests {
         let d = [0x05, 0x09, 0x1b, 0x00, 0x00, 0x00, 0x00, 0x2b, 0xff, 0xff, 0xff, 0xff, 0x75, 0xff, 0x95, 0x08, 0x81, 0x02,
             0x05, 0x01, 0x09, 0x30, 0x09, 0x31, 0x75, 0x08, 0x95, 0x02, 0x81, 0x06];
         if let Some(l) = parse_pointer(&d) { assert!(l.buttons.size <= 8); let _ = l.decode(&[0xff; 64]); }
+    }
+
+    #[test]
+    fn wide_padding_keeps_later_fields_in_place() {
+        // 64-bit constant padding, then relative 8-bit X and Y.
+        let d = [0x05, 0x01, 0x09, 0x02, 0xa1, 0x01, 0x75, 0x40, 0x95, 0x01, 0x81, 0x01,
+            0x09, 0x30, 0x09, 0x31, 0x15, 0x81, 0x25, 0x7f, 0x75, 0x08, 0x95, 0x02, 0x81, 0x06, 0xc0];
+        let l = parse_pointer(&d).unwrap();
+        let p = l.decode(&[0, 0, 0, 0, 0, 0, 0, 0, 5, 6]).unwrap();
+        assert_eq!((p.x, p.y), (5, 6));
     }
 }
