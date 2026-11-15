@@ -13,6 +13,7 @@ pub struct Entry {
     expires: u64,
     claimed: bool,
     admitted: bool,
+    association: Option<Binding>,
 }
 impl Entry {
     pub fn live(&self, now: u64, epoch: u64) -> bool {
@@ -39,7 +40,37 @@ impl Entry {
         if !self.claimed || !self.live(now, epoch) || binding.provider_epoch != epoch {
             return Err(Error::Identity);
         }
-        self.job.bind(binding)
+        self.job.bind(binding)?;
+        self.association = Some(binding);
+        Ok(())
+    }
+    /// Descriptive transcript, never a capability. Parent output hashes are
+    /// available only after validated private output has actually been persisted.
+    pub fn info(&self, result: bool) -> Result<[u8; 176], Error> {
+        let mut out = [0; 176];
+        out[..8].copy_from_slice(b"MOANINF2");
+        out[8..12].copy_from_slice(&self.job.id().to_le_bytes());
+        out[12..16].copy_from_slice(&(self.job.frames() as u32).to_le_bytes());
+        out[16..24].copy_from_slice(&self.epoch.to_le_bytes());
+        out[24..40].copy_from_slice(&self.job.nonce());
+        out[40..72].copy_from_slice(&self.job.plugin_hash());
+        out[72..104].copy_from_slice(&self.job.input_hash());
+        if result {
+            out[104..136].copy_from_slice(
+                &self
+                    .job
+                    .result(self.job.parent(), self.job.id(), self.job.nonce())?
+                    .1,
+            );
+        }
+        out[136..144].copy_from_slice(&self.job.parent().word().to_le_bytes());
+        if let Some(b) = self.association {
+            out[144..152].copy_from_slice(&b.child.word().to_le_bytes());
+            out[152..160].copy_from_slice(&b.generation.to_le_bytes());
+        }
+        out[160..164].copy_from_slice(&(self.format as u32).to_le_bytes());
+        out[164..168].copy_from_slice(&self.job.cookie().to_le_bytes());
+        Ok(out)
     }
     pub fn parent(&self, parent: Subject, nonce: [u8; 16], now: u64, epoch: u64) -> bool {
         self.live(now, epoch) && self.job.parent() == parent && self.job.nonce() == nonce
@@ -88,6 +119,7 @@ impl Jobs {
             expires,
             claimed: false,
             admitted: false,
+            association: None,
         });
         Ok(id)
     }

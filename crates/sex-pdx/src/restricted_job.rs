@@ -5,6 +5,7 @@ pub const PREPARE: u64 = 1;
 pub const RESULT: u64 = 2;
 pub const CANCEL: u64 = 3;
 pub const RELEASE: u64 = 4;
+pub const INFO_BYTES: usize = 176;
 pub const HEADER: usize = 48;
 pub const PATH_MAX: usize = 192;
 pub const MAX: usize = HEADER + 3 * PATH_MAX;
