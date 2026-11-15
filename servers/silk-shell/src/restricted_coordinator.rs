@@ -572,6 +572,17 @@ impl Coordinator {
             }
         }
     }
+    /// A Refused receipt can only mean no private child was ever copied.
+    pub fn copied_cookie(&self, parent: Subject, cookie: u32) -> bool {
+        self.transaction
+            .as_ref()
+            .is_some_and(|t| t.parent == parent && t.cookie == cookie && t.child.is_some())
+            || self
+                .live
+                .iter()
+                .flatten()
+                .any(|l| l.parent == parent && l.cookie == cookie)
+    }
     pub fn pending(&self) -> bool {
         self.busy() || self.live.iter().any(Option::is_some)
     }

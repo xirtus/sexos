@@ -65,7 +65,7 @@ use super::*;use core::sync::atomic::Ordering;
  for bad in [[query[0]|1<<56,query[1],1],[query[0],query[1],2],[query[0],Subject{pd:42,task:99}.word(),1],[0,query[1],1]] {status(Subject{pd:42,task:99},bad);assert!(box_.iter().all(Option::is_none));}
  status(Subject{pd:42,task:98},query);assert!(box_.iter().all(Option::is_none));crate::TASK.store(44,Ordering::SeqCst);
  // A retained refusal belongs to the old exact parent, never its reused row.
- crate::FULL.store(true,Ordering::SeqCst);refuse(Subject{pd:42,task:99},9);poll();assert!(pending());crate::PARENT.store(100,Ordering::SeqCst);crate::FULL.store(false,Ordering::SeqCst);poll();assert!(!pending());assert_eq!(crate::SENT.load(Ordering::SeqCst),0);
+ crate::FULL.store(true,Ordering::SeqCst);refuse(Subject{pd:42,task:99},9);poll();assert!(pending());let retry=job::start_words(7,9,1,1).unwrap();assert!(receive(&crate::PdxMessage{type_id:job::OP_START,caller_pd:42,caller_task:99,arg0:retry[0],arg1:retry[1],arg2:retry[2]}));assert!(!busy());crate::PARENT.store(100,Ordering::SeqCst);crate::FULL.store(false,Ordering::SeqCst);poll();assert!(!pending());assert_eq!(crate::SENT.load(Ordering::SeqCst),0);
  crate::PARENT.store(99,Ordering::SeqCst);let start=job::start_words(7,9,1,1).unwrap();assert!(receive(&crate::PdxMessage{type_id:job::OP_START,caller_pd:42,caller_task:99,arg0:start[0],arg1:start[1],arg2:start[2]}));assert!(busy());poll();assert_eq!(crate::SENT.load(Ordering::SeqCst),1);
  for (pd,value)in [(11,0xf5u64<<56|1<<32),(1,0x5343_0000_0000_0001),(10,0),(10,0x4du64<<56)]{assert!(!receive(&crate::PdxMessage{type_id:1,caller_pd:pd,caller_task:pd,arg0:value,arg1:0,arg2:0}));assert!(busy());}
  retire(Subject{pd:42,task:99});assert!(!pending());
