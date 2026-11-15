@@ -23,7 +23,7 @@ use sex_pdx::vm::{Regs, Segment, State};
 pub const GDT: u64 = 0x500;
 pub const ZERO_PAGE: u64 = 0x7000;
 pub const STACK_TOP: u64 = 0x8FF0;
-pub const PML4: u64 = 0x9000;
+pub const GUEST_PML4: u64 = 0x9000;
 pub const PDPT: u64 = 0xA000;
 /// Four page directories, 0xB000..0xF000: 4 GiB of 2 MiB pages.
 pub const PD: u64 = 0xB000;
@@ -221,8 +221,8 @@ pub fn load(ram: &mut Ram, image: &[u8], initrd: Option<&[u8]>, cmdline: &[u8]) 
 
 /// Identity map of the first 4 GiB with 2 MiB pages.
 fn tables(ram: &mut Ram) -> Result<(), Fault> {
-    ram.fill(PML4, 6 * 4096, 0)?;
-    ram.write_u64(PML4, PDPT | 3)?;
+    ram.fill(GUEST_PML4, 6 * 4096, 0)?;
+    ram.write_u64(GUEST_PML4, PDPT | 3)?;
     for i in 0..4u64 {
         ram.write_u64(PDPT + i * 8, (PD + i * 4096) | 3)?;
     }
@@ -253,7 +253,7 @@ pub fn long_mode(rip: u64) -> State {
     State {
         regs: Regs { rip, rsi: ZERO_PAGE, rsp: STACK_TOP, rflags: 2, ..Regs::default() },
         cr0: 0x8000_0031, // PG | NE | ET | PE
-        guest_cr3: PML4,
+        guest_cr3: GUEST_PML4,
         cr4: 0x20, // PAE
         efer: 0x500, // LME | LMA
         segments: segments(0xA09B),
@@ -353,11 +353,11 @@ pub(crate) mod tests {
         assert_eq!(e(3), (0x10_0000, (32 << 20) - 0x10_0000, 1));
         // 64-bit entry: long mode, identity tables, boot GDT, RSI = zero page.
         let s = b.entry;
-        assert_eq!((s.regs.rip, s.regs.rsi, s.guest_cr3, s.efer), (HIGH + 0x200, ZERO_PAGE, PML4, 0x500));
+        assert_eq!((s.regs.rip, s.regs.rsi, s.guest_cr3, s.efer), (HIGH + 0x200, ZERO_PAGE, GUEST_PML4, 0x500));
         assert_eq!((s.segments[1].selector, s.segments[1].access & 0x2000), (0x10, 0x2000), "CS = __BOOT_CS, L=1");
         assert_eq!(s.segments[2].selector, 0x18);
         assert_eq!(ram.read_u64(GDT + 16), Ok(0x00AF_9B00_0000_FFFF));
-        assert_eq!(ram.read_u64(PML4), Ok(PDPT | 3));
+        assert_eq!(ram.read_u64(GUEST_PML4), Ok(PDPT | 3));
         assert_eq!(ram.read_u64(PDPT + 24), Ok((PD + 3 * 4096) | 3));
         assert_eq!(ram.read_u64(PD + 2047 * 8), Ok((2047 << 21) | 0x83), "4 GiB mapped");
     }

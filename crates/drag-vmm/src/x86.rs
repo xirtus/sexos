@@ -328,7 +328,7 @@ mod tests {
         // Fetch stops at an unmapped page.
         ram.write(0x3FF8, &[0x90; 8]).unwrap();
         let mut st = crate::boot::long_mode(0x40_0FF8);
-        st.guest_cr3 = crate::boot::PML4;
+        st.guest_cr3 = crate::boot::GUEST_PML4;
         ram.write_u64(0x2008, 0).unwrap();
         let mut buf = [0; 15];
         assert_eq!(fetch(&ram, &st, &mut buf), 8);
