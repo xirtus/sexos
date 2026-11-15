@@ -577,7 +577,7 @@ fn read_light(l: &Value) -> Light {
         _ => (LightKind::Point, point_watts),
     };
     // Punctual lights have no size.
-    Light { kind, color, power, radius: 0.0 }
+    Light { kind, color, power, radius: 0.0, ..Light::default() }
 }
 
 /// Build one mesh from a glTF mesh's primitives. Returns the mesh and each

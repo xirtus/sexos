@@ -27,6 +27,11 @@ impl Transform {
         let (location, rotation, scale) = m.to_trs();
         Transform { location, rotation, scale }
     }
+    /// Linear location/scale and spherical rotation interpolation; `t`
+    /// outside 0..1 extrapolates.
+    pub fn lerp(&self, o: &Transform, t: f32) -> Transform {
+        Transform { location: self.location.lerp(o.location, t), rotation: self.rotation.slerp(o.rotation, t), scale: self.scale.lerp(o.scale, t) }
+    }
 }
 
 /// Linear-light RGBA image (textures, HDRIs, render results).
@@ -82,6 +87,32 @@ pub struct Material {
     /// 0 = opaque, 1 = fully transmissive (glass).
     pub transmission: f32,
     pub double_sided: bool,
+    /// Blender's material "Pass Index" (the Material Index render pass).
+    pub pass_index: u32,
+    /// Homogeneous volume inside closed meshes using this material (a
+    /// Principled Volume's inputs). A material with a volume renders with no
+    /// surface: its faces only bound the medium.
+    pub volume: Option<VolumeSettings>,
+}
+
+/// Principled Volume inputs, for homogeneous media in the path tracer.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct VolumeSettings {
+    /// Scattering colour (linear RGB).
+    pub color: Vec3,
+    pub density: f32,
+    /// Henyey-Greenstein anisotropy, -1 (back) to 1 (forward).
+    pub anisotropy: f32,
+    /// Extra absorption tint: black absorbs only what `color` does not scatter.
+    pub absorption_color: Vec3,
+    pub emission_color: Vec3,
+    pub emission_strength: f32,
+}
+
+impl Default for VolumeSettings {
+    fn default() -> Self {
+        VolumeSettings { color: Vec3::splat(0.5), density: 1.0, anisotropy: 0.0, absorption_color: Vec3::ZERO, emission_color: Vec3::ONE, emission_strength: 0.0 }
+    }
 }
 
 impl Default for Material {
@@ -97,7 +128,61 @@ impl Default for Material {
             ior: 1.5,
             transmission: 0.0,
             double_sided: false,
+            pass_index: 0,
+            volume: None,
         }
+    }
+}
+
+/// Panoramic lens projections (Blender's "Panorama Type").
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PanoramaType {
+    #[default]
+    Equirectangular,
+    FisheyeEquidistant,
+    FisheyeEquisolid,
+}
+
+/// Which sensor dimension the focal length refers to.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SensorFit {
+    /// The sensor width spans the larger image dimension.
+    #[default]
+    Auto,
+    Horizontal,
+    Vertical,
+}
+
+/// The lens type, as Blender's camera "Type".
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CameraType {
+    Perspective,
+    Orthographic,
+    Panoramic,
+}
+
+/// Thin-lens depth of field.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DepthOfField {
+    pub enabled: bool,
+    /// Focus on this object's origin (index into [`Scene::objects`]) instead
+    /// of `focus_distance`.
+    pub focus_object: Option<usize>,
+    /// Metres along the view axis.
+    pub focus_distance: f32,
+    /// F-stop: the aperture diameter is the focal length over this.
+    pub fstop: f32,
+    /// Polygonal bokeh with this many blades (fewer than 3: round).
+    pub blades: u32,
+    /// Blade rotation in radians.
+    pub rotation: f32,
+    /// Anamorphic squeeze (1 = round bokeh).
+    pub ratio: f32,
+}
+
+impl Default for DepthOfField {
+    fn default() -> Self {
+        DepthOfField { enabled: false, focus_object: None, focus_distance: 10.0, fstop: 2.8, blades: 0, rotation: 0.0, ratio: 1.0 }
     }
 }
 
@@ -107,14 +192,87 @@ pub struct Camera {
     pub fov_y: f32,
     /// `Some(height)` for orthographic cameras.
     pub ortho_scale: Option<f32>,
+    /// Clip start and end (metres).
     pub near: f32,
     pub far: f32,
+    /// `Some` makes the camera panoramic (overrides perspective/orthographic).
+    pub panorama: Option<PanoramaType>,
+    /// Sensor size in millimetres (Blender: 36 x 24).
+    pub sensor_width: f32,
+    pub sensor_height: f32,
+    pub sensor_fit: SensorFit,
+    /// Lens shift, in units of the larger frame dimension.
+    pub shift_x: f32,
+    pub shift_y: f32,
+    /// Fisheye field of view (radians) and equisolid focal length (mm).
+    pub fisheye_fov: f32,
+    pub fisheye_lens: f32,
+    /// Equirectangular ranges (radians).
+    pub latitude_min: f32,
+    pub latitude_max: f32,
+    pub longitude_min: f32,
+    pub longitude_max: f32,
+    pub dof: DepthOfField,
 }
 
 impl Default for Camera {
     fn default() -> Self {
         // Blender's default 50 mm lens on a 36 mm sensor, as a vertical FOV at 16:9.
-        Camera { fov_y: 2.0 * (18.0f32 / 50.0 * 9.0 / 16.0).atan(), ortho_scale: None, near: 0.1, far: 1000.0 }
+        Camera {
+            fov_y: 2.0 * (18.0f32 / 50.0 * 9.0 / 16.0).atan(),
+            ortho_scale: None,
+            near: 0.1,
+            far: 1000.0,
+            panorama: None,
+            sensor_width: 36.0,
+            sensor_height: 24.0,
+            sensor_fit: SensorFit::Auto,
+            shift_x: 0.0,
+            shift_y: 0.0,
+            fisheye_fov: core::f32::consts::PI,
+            fisheye_lens: 10.5,
+            latitude_min: -core::f32::consts::FRAC_PI_2,
+            latitude_max: core::f32::consts::FRAC_PI_2,
+            longitude_min: -core::f32::consts::PI,
+            longitude_max: core::f32::consts::PI,
+            dof: DepthOfField::default(),
+        }
+    }
+}
+
+impl Camera {
+    pub fn camera_type(&self) -> CameraType {
+        if self.panorama.is_some() {
+            CameraType::Panoramic
+        } else if self.ortho_scale.is_some() {
+            CameraType::Orthographic
+        } else {
+            CameraType::Perspective
+        }
+    }
+
+    /// Tangent of half the vertical field of view for focal length `mm` at
+    /// frame `aspect` (width / height), following the sensor fit.
+    fn tan_half_y_for(&self, mm: f32, aspect: f32) -> f32 {
+        let mm = mm.max(1e-3);
+        let aspect = if aspect > 0.0 && aspect.is_finite() { aspect } else { 1.0 };
+        match self.sensor_fit {
+            SensorFit::Auto if aspect >= 1.0 => self.sensor_width * 0.5 / mm / aspect,
+            SensorFit::Auto => self.sensor_width * 0.5 / mm,
+            SensorFit::Horizontal => self.sensor_width * 0.5 / mm / aspect,
+            SensorFit::Vertical => self.sensor_height * 0.5 / mm,
+        }
+    }
+
+    /// Focal length in millimetres matching `fov_y` at frame `aspect`.
+    pub fn focal_length(&self, aspect: f32) -> f32 {
+        let t = (self.fov_y * 0.5).tan().max(1e-6);
+        self.tan_half_y_for(1.0, aspect) / t
+    }
+
+    /// Set `fov_y` from a focal length in millimetres at frame `aspect`.
+    pub fn set_focal_length(&mut self, mm: f32, aspect: f32) {
+        self.fov_y = 2.0 * self.tan_half_y_for(mm, aspect).atan();
     }
 }
 
@@ -129,6 +287,16 @@ pub enum LightKind {
     Area { size: f32 },
 }
 
+/// Area light outline (Blender's "Shape").
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AreaShape {
+    #[default]
+    Square,
+    Rectangle,
+    Disk,
+    Ellipse,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Light {
     pub kind: LightKind,
@@ -138,11 +306,54 @@ pub struct Light {
     pub power: f32,
     /// Soft shadow radius for point/spot, angular diameter (radians) for sun.
     pub radius: f32,
+    /// Area light outline; `Square`/`Disk` use the kind's `size` both ways,
+    /// `Rectangle`/`Ellipse` take `size_y` as the second dimension.
+    pub shape: AreaShape,
+    pub size_y: f32,
+    /// Area light emission spread (radians, pi = Lambertian).
+    pub spread: f32,
+    /// Paths with more bounces than this do not see the light.
+    pub max_bounces: u32,
+    pub cast_shadow: bool,
+    /// Multiple importance sampling: when off, only light sampling sees the
+    /// light (rays never hit it).
+    pub use_mis: bool,
 }
 
 impl Default for Light {
     fn default() -> Self {
-        Light { kind: LightKind::Point, color: Vec3::ONE, power: 1000.0, radius: 0.1 }
+        Light { kind: LightKind::Point, color: Vec3::ONE, power: 1000.0, radius: 0.1, shape: AreaShape::Square, size_y: 1.0, spread: core::f32::consts::PI, max_bounces: 1024, cast_shadow: true, use_mis: true }
+    }
+}
+
+impl Light {
+    /// Area light extent (x, y) in metres, after the shape.
+    pub fn area_size(&self) -> (f32, f32) {
+        let s = match self.kind {
+            LightKind::Area { size } => size,
+            _ => 0.0,
+        };
+        match self.shape {
+            AreaShape::Square | AreaShape::Disk => (s, s),
+            AreaShape::Rectangle | AreaShape::Ellipse => (s, self.size_y),
+        }
+    }
+}
+
+/// Which kinds of rays see an object (Blender's Object > Visibility > Ray Visibility).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RayVisibility {
+    pub camera: bool,
+    pub diffuse: bool,
+    pub glossy: bool,
+    pub transmission: bool,
+    pub volume_scatter: bool,
+    pub shadow: bool,
+}
+
+impl Default for RayVisibility {
+    fn default() -> Self {
+        RayVisibility { camera: true, diffuse: true, glossy: true, transmission: true, volume_scatter: true, shadow: true }
     }
 }
 
@@ -168,11 +379,33 @@ pub struct Object {
     pub materials: Vec<usize>,
     pub collection: usize,
     pub visible: bool,
+    /// Ray visibility for the path tracer.
+    pub visibility: RayVisibility,
+    /// Render as a hole in the image (alpha 0).
+    pub holdout: bool,
+    /// Blender's object "Pass Index" (the Object Index render pass).
+    pub pass_index: u32,
+    /// The local transform one frame later, for motion blur (linear motion
+    /// from `transform`); `None` means static.
+    pub motion: Option<Transform>,
 }
 
 impl Object {
     pub fn new(name: &str, data: ObjectData) -> Object {
-        Object { name: name.into(), transform: Transform::default(), parent: None, data, modifiers: Vec::new(), materials: Vec::new(), collection: 0, visible: true }
+        Object {
+            name: name.into(),
+            transform: Transform::default(),
+            parent: None,
+            data,
+            modifiers: Vec::new(),
+            materials: Vec::new(),
+            collection: 0,
+            visible: true,
+            visibility: RayVisibility::default(),
+            holdout: false,
+            pass_index: 0,
+            motion: None,
+        }
     }
 }
 
@@ -190,11 +423,13 @@ pub struct World {
     pub strength: f32,
     /// Equirectangular environment image in [`Scene::images`].
     pub hdri: Option<usize>,
+    /// A homogeneous medium filling the whole world.
+    pub volume: Option<VolumeSettings>,
 }
 
 impl Default for World {
     fn default() -> Self {
-        World { color: Vec3::splat(0.05), strength: 1.0, hdri: None }
+        World { color: Vec3::splat(0.05), strength: 1.0, hdri: None, volume: None }
     }
 }
 
@@ -313,11 +548,59 @@ impl Scene {
         }
         self.active_camera = self.active_camera.and_then(|c| (c != idx).then(|| fix(c)));
         self.active_object = self.active_object.and_then(|c| (c != idx).then(|| fix(c)));
+        for ob in &mut self.objects {
+            if let ObjectData::Camera(c) = &mut ob.data {
+                c.dof.focus_object = c.dof.focus_object.and_then(|f| (f != idx).then(|| fix(f)));
+            }
+        }
         self.selected.retain(|&s| s != idx);
         for s in &mut self.selected {
             *s = fix(*s);
         }
         o
+    }
+
+    /// Object-to-world matrix at `time` frames after the current one, with
+    /// each object in the parent chain moving linearly towards its
+    /// [`Object::motion`] transform (extrapolating outside 0..1).
+    pub fn world_matrix_at(&self, idx: usize, time: f32) -> Mat4 {
+        let local = |i: usize| {
+            let o = &self.objects[i];
+            match o.motion {
+                Some(m) if time != 0.0 => o.transform.lerp(&m, time).matrix(),
+                _ => o.transform.matrix(),
+            }
+        };
+        let mut m = local(idx);
+        let mut p = self.objects[idx].parent;
+        let mut guard = 0;
+        while let Some(pi) = p {
+            m = local(pi) * m;
+            p = self.objects[pi].parent;
+            guard += 1;
+            if guard > self.objects.len() {
+                break;
+            }
+        }
+        m
+    }
+
+    /// True when the object or one of its parents moves (has a
+    /// [`Object::motion`] different from its transform).
+    pub fn has_motion(&self, idx: usize) -> bool {
+        let mut i = Some(idx);
+        let mut guard = 0;
+        while let Some(c) = i {
+            if self.objects[c].motion.is_some_and(|m| m != self.objects[c].transform) {
+                return true;
+            }
+            i = self.objects[c].parent;
+            guard += 1;
+            if guard > self.objects.len() {
+                break;
+            }
+        }
+        false
     }
 
     /// Object-to-world matrix through the parent chain.

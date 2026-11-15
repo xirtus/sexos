@@ -41,7 +41,7 @@ fn rmse(a: &Image, b: &Image) -> f64 {
 }
 
 fn settings(w: u32, h: u32, spp: u32) -> RenderSettings {
-    RenderSettings { width: w, height: h, samples: spp, max_bounces: 6, threads: 0, denoise: false, clamp: 0.0, seed: 0 }
+    RenderSettings { width: w, height: h, samples: spp, max_bounces: 6, threads: 0, denoise: false, clamp: 0.0, seed: 0, light_paths: sex_3d::render::LightPaths::unlimited(), ..RenderSettings::default() }
 }
 
 /// Lambertian sphere (ior 1: no specular) filling the view under a uniform world.
