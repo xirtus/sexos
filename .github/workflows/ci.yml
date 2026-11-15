@@ -96,7 +96,7 @@ jobs:
     - name: Loom archives (zip, tar, 7z, gz, zst, xz) with Python interop on the host
       run: cargo test --locked -p sex-archive --features std
     - name: Polyamour 3D core (meshes, modifiers, booleans, path tracer, glTF/OBJ/STL/PLY/.blend, polyops + Python API)
-      run: cargo test --locked --release -p sex-3d
+      run: cargo test --locked --release -p sex-3d -p polyamour
     - name: Burlesque presentations engine (PPTX, ODP, presenter view, PDF export) on the host
       run: bash scripts/burlesque_host_gate.sh
     - name: Pinyin input method
@@ -537,6 +537,8 @@ jobs:
       run: truncate -s 1G "$RUNNER_TEMP/blank-programs.img"
     - name: Spreadeagle spreadsheet opens, edits, saves and reopens xlsx
       run: python3 scripts/program_spreadeagle_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/spreadeagle"
+    - name: Polyamour 3D suite opens, switches workspaces, renders (F12) and saves
+      run: python3 scripts/program_polyamour_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/polyamour"
     - name: Assuit word processor opens, edits, saves and reopens docx
       run: python3 scripts/program_assuit_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/assuit"
     - name: Lua 5.4 interpreter

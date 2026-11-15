@@ -24,6 +24,8 @@ pub struct App {
     captured: Option<u32>,
     /// Asks the program loop to end.
     pub quit: bool,
+    /// Operators run since the program loop last drained this (serial record, gates).
+    pub op_log: Vec<String>,
 }
 
 impl App {
@@ -39,6 +41,7 @@ impl App {
             dragging_border: None,
             captured: None,
             quit: false,
+            op_log: Vec::new(),
         }
     }
 
@@ -204,6 +207,7 @@ impl App {
         let ops: Vec<Op> = core::mem::take(&mut self.doc.queue);
         let ran = !ops.is_empty();
         for op in ops {
+            self.op_log.push(if op.arg.is_empty() { op.id.clone() } else { format!("{} {}", op.id, op.arg) });
             match op.id.as_str() {
                 "screen.area_type" => {
                     if let Some((id, label)) = op.arg.split_once(':') {

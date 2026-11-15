@@ -104,7 +104,9 @@ fn main() {
         open_arg(&mut app, &p);
     }
     let mut mods = Mods::NONE;
-    let mut buttons = 0u8;
+    let mut last_ws = String::from("Layout");
+    // A Ctrl+left press stands in for the middle button until it is released.
+    let mut emulated_middle = false;
     let show = |app: &App, window: &mut sex_std::sex_app::Window| {
         let px = window.pixels();
         let n = app.painter.pixels.len().min(px.len());
@@ -113,7 +115,8 @@ fn main() {
     };
     app.frame(Input::Tick);
     show(&app, window);
-    sex_std::sex_pdx::serial_record!("[polyamour.ready] {}x{}", app.painter.width, app.painter.height);
+    let (target, task) = sex_std::identity();
+    sex_std::sex_pdx::serial_record!("[polyamour.ready] target={} task={} size={}x{}", target, task, app.painter.width, app.painter.height);
     while !app.quit {
         let ev = if app.doc.playing { window.next_within(1000 / 24) } else { Some(window.next()) };
         let input = match ev {
@@ -121,7 +124,10 @@ fn main() {
                 app.doc.frame = if app.doc.frame >= app.doc.scene.frame_end { app.doc.scene.frame_start } else { app.doc.frame + 1 };
                 Some(Input::Tick)
             }
-            Some(Event::Close) => break,
+            Some(Event::Close) => {
+                sex_std::sex_pdx::serial_record!("[polyamour.closed]");
+                break;
+            }
             Some(Event::Resize { width, height }) => Some(Input::Resize { width, height }),
             Some(Event::Key(k)) => {
                 mods = Mods { shift: k.shift, ctrl: k.control, alt: false };
@@ -140,14 +146,14 @@ fn main() {
                 Some(match p.kind {
                     Kind::Move => Input::Move { x, y },
                     Kind::Down { button: b } => {
-                        buttons |= 1 << b;
-                        let b = if b == 0 && mods.ctrl { Button::Middle } else { button(b) };
+                        emulated_middle = b == 0 && mods.ctrl;
+                        let b = if emulated_middle { Button::Middle } else { button(b) };
                         Input::Down { x, y, button: b, mods }
                     }
                     Kind::Up { button: b } => {
-                        let was_emulated = b == 0 && mods.ctrl;
-                        buttons &= !(1 << b);
-                        Input::Up { x, y, button: if was_emulated { Button::Middle } else { button(b) } }
+                        let b = if b == 0 && emulated_middle { Button::Middle } else { button(b) };
+                        emulated_middle = false;
+                        Input::Up { x, y, button: b }
                     }
                     Kind::Wheel { steps } => Input::Wheel { x, y, steps: steps as i32, mods },
                     Kind::Leave => continue,
@@ -156,8 +162,20 @@ fn main() {
             Some(_) => None,
         };
         if let Some(input) = input {
+            let report = app.doc.report.clone();
             app.frame(input);
             show(&app, window);
+            for op in app.op_log.drain(..) {
+                sex_std::sex_pdx::serial_record!("[polyamour.op] {}", op);
+            }
+            if app.doc.report != report {
+                sex_std::sex_pdx::serial_record!("[polyamour.report] {}", app.doc.report);
+            }
+            let ws = &app.workspaces[app.active_ws].name;
+            if *ws != last_ws {
+                last_ws = ws.clone();
+                sex_std::sex_pdx::serial_record!("[polyamour.workspace] {}", last_ws);
+            }
         }
     }
     std::process::exit(0);
