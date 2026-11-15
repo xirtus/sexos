@@ -4840,3 +4840,16 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   all raw inputs remain preserved. Full digests and scope are in
   `MOAN_WORKSPACE_LIVE_RUNTIME_2026_11_15.json`; later palette/restricted/narrow and
   final legacy regression are separate cohorts. No kernel or toolkit edits.
+
+### Round 196 palette/responsive follow-up
+
+- One eight-track identity colors real audio/MIDI fills and ink, header swatches
+  and mixer names; selection retains hue. No audio/project format change.
+- Actual palette ELF passes two wide screenshots (four exact audio regions,
+  headers/ink and eight full-AA expected mixer labels) and four 640×480 screenshots
+  (real Step/Piano note, actual mixer controls and exact Instruments status).
+- Narrow development image preserves all 84 production ELFs from v9, with only
+  config and replayed boot metadata changed; no canonical/installer claim.
+- 101 host tests/default-seed guest scan pass. Exact digests and original checker
+  failures are in `MOAN_TRACK_COLORS_RUNTIME_2026_11_15.json`. Existing 8d46 audio
+  artifacts remain historical; final legacy regression is recorded separately.
