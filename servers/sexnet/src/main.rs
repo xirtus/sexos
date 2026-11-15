@@ -30,6 +30,7 @@ mod web;
 mod wifi;
 extern crate sex_rt;
 mod source_binding;
+mod restricted;
 // One BOOT Net main task owns this fixed error-only backing. No large stack
 // temporary or provider state is created while denying unsupported requests.
 static mut SOURCE_DENIALS:source_denial::Outbox=source_denial::Outbox::new();
@@ -46,6 +47,7 @@ fn new_engine(config:sex_pdx::network_config::Config,mac:[u8;6],seed:u64)->sex_n
         &mut *core::ptr::addr_of_mut!(DNS_RX_META),&mut *core::ptr::addr_of_mut!(DNS_RX),&mut *core::ptr::addr_of_mut!(DNS_TX_META),&mut *core::ptr::addr_of_mut!(DNS_TX))}.expect("FIXED_TRANSPORT_CONFIG")
 }
 fn network_owner(caller:u32)->Option<jobs::Identity>{
+    if restricted::denied(caller){return None;}
     use sex_pdx::app_lifecycle as a;
     for slot in a::SLOTS{
         let Ok(c)=a::catalog(slot)else{continue;};
@@ -948,6 +950,9 @@ fn command_probe() {
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     sex_rt::heap_init();
+    let mut restriction=sex_pdx::restricted_helper_provider::Provider::new();
+    restriction.initialize(&restricted::JOURNAL,&mut restricted::Kernel);
+    restricted::publish(&restriction);
     command_probe();
     for slot in [0,(1u64<<32)|sex_pdx::SLOT_NIC,sex_pdx::SLOT_DMA_REGION,sex_pdx::SLOT_DISPLAY] {
         assert_eq!(sex_pdx::device_identity(slot),Err(sex_pdx::pci_command::DENIED),"NIC_BOOT_IDENTITY_PROBE");
@@ -5378,6 +5383,19 @@ pub extern "C" fn _start() -> ! {
     let mut timed_waits=0u64;
     let mut web=web::Service::new();let mut web_reply:Option<(u32,u64)>=None;
     loop {
+        restriction.poll(&mut restricted::Kernel,|effect|match effect {
+            sex_pdx::restricted_helper_provider::Effect::Scrub(subject)=>{
+                if let Some(owner)=outbound.owner().filter(|owner|owner.pd==subject.pd){outbound.retire(owner,&mut ClientWire(transport.as_mut(),false));}
+                if let Some(owner)=dns.owner().filter(|owner|owner.pd==subject.pd){dns.retire(owner,&mut DnsWire(transport.as_mut()));}
+                web.quarantine(subject.pd,transport.as_mut());
+                if web_reply.is_some_and(|(pd,_)|pd==subject.pd){web_reply=None;}
+                source_denials.retire(source_denial::Identity{pd:subject.pd,task:subject.task});
+                if pending_packet.as_ref().is_some_and(|f|!packet_owned_live(f,&outbound,&dns,network_config.as_ref())){pending_packet=None;}
+                restricted::scrub(subject)
+            },
+            sex_pdx::restricted_helper_provider::Effect::Install(_)|sex_pdx::restricted_helper_provider::Effect::Expire(_)=>true,
+        });
+        restricted::publish(&restriction);
         let preparing = if let Some(dev) = device.as_mut() {
             let before = dev.phase();
             if dev.pending() { dev.advance(sex_pdx::get_ticks()); }
@@ -5559,9 +5577,9 @@ pub extern "C" fn _start() -> ! {
         }
         poll_source_receipts(&mut seed,&mut clock,&mut trust);
         poll_source_denials(source_denials);
-        if let Some((pd,word))=web_reply{if pdx_reply(pd,word)==0{web_reply=None;}}
+        if let Some((pd,word))=web_reply{if restricted::denied(pd)||pdx_reply(pd,word)==0{web_reply=None;}}
         let reply_pending=web_reply.is_some()||outbound.pending_reply().is_some()||dns.pending_reply().is_some()||seed.pending_reply().is_some()||clock.pending_reply().is_some()||trust.pending_reply().is_some()||source_denials.pending_reply().is_some();
-        let pending=preparing||polling||reply_pending||seed.busy();
+        let pending=restriction.pending()||preparing||polling||reply_pending||seed.busy();
         let req = if pending {
             // One message per device turn; no startup polling loop can starve
             // cleanup or ordinary service calls. try_listen yields when empty.
@@ -5585,6 +5603,11 @@ pub extern "C" fn _start() -> ! {
                 None => { let _ = sex_pdx::sys_wait_self_ticks(100); continue; }
             }
         } else { unsafe { pdx_listen_raw(0) } };
+        if restriction.message(sex_pdx::restricted_helper_provider::Message{caller:sex_pdx::restricted_helper::Subject{pd:req.caller_pd,task:req.caller_task},opcode:req.type_id,words:[req.arg0,req.arg1,req.arg2]},&restricted::JOURNAL,&mut restricted::Kernel){restricted::publish(&restriction);continue;}
+        if restricted::denied(req.caller_pd){
+            if req.type_id==sex_pdx::web::OP{let _=pdx_reply(req.caller_pd,sex_pdx::web::reply((req.arg0&0xff_ffff) as u32,sex_pdx::web::DENIED,0));}
+            continue;
+        }
         if let Some((n,acked))=app_custody.reborn(&mut sex_pdx::app_lifecycle::KernelAuthority,req.type_id,req.caller_pd as u64,[req.arg0,req.arg1,req.arg2]){
             sex_pdx::serial_record!("[net.app.reborn.ack] target={} task={} ok={}",n.target_pd,n.task_id,acked as u8);continue;
         }
@@ -5610,7 +5633,7 @@ pub extern "C" fn _start() -> ! {
             }
             continue;
         }
-        if req.type_id==sex_pdx::program_store::OP_BIND&&req.caller_pd==3{web.bind(req.arg0 as u32,req.arg1 as u32);continue}
+        if req.type_id==sex_pdx::program_store::OP_BIND&&req.caller_pd==3&&req.caller_task==3&&!restricted::denied(req.arg0 as u32){web.bind(req.arg0 as u32,req.arg1 as u32);continue}
         if app_custody.is_retired(req.caller_pd) {continue}
         if req.type_id==sex_pdx::wifi_status::OP{
             // The desktop's view of Wi-Fi (Spindle's `wifi`): one word, answered at once.
