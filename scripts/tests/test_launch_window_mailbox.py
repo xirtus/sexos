@@ -12,12 +12,14 @@ class WindowLaunch(unittest.TestCase):
   prefix=source[begin:end]
   self.assertIn('mailbox::take(|m|is_shell(m)&&!sex_pdx::autofill::response(m.type_id))',source)
   self.assertEqual(prefix.count('if launch::is_event(m)'),1)
+  status_source=(ROOT/'crates/sex-app/src/restricted_status.rs').read_text()
+  status_classifier=re.search(r'pub fn is_event\(m:\s*&PdxMessage\)\s*->\s*bool\s*\{[^}]+\}',status_source)[0]
   rust='''
 const SHELL:u32=3;
 mod sex_pdx{#[derive(Clone,Copy)]pub struct PdxMessage{pub caller_pd:u32,pub caller_task:u32,pub type_id:u64,pub arg0:u64,pub arg1:u64,pub arg2:u64}pub mod autofill{pub fn response(op:u64)->bool{op==0xfeed}}}
 mod mailbox{use super::sex_pdx::PdxMessage;pub static QUEUE:std::sync::Mutex<Vec<PdxMessage>>=std::sync::Mutex::new(Vec::new());pub fn put(m:PdxMessage){QUEUE.lock().unwrap().push(m);}}
 mod launch{use super::*;mod l{pub const OP_EVENT:u64=0x59;}
-'''+classifier+'\n}\n'+is_shell+'''
+'''+classifier+'\n}\nmod restricted_status{use super::{SHELL,sex_pdx::PdxMessage};mod w{pub const OP_STATUS_EVENT:u64=0x4d505023;}'+status_classifier+'}\n'+is_shell+'''
 #[derive(Debug,PartialEq)]enum Event{UiStub}struct Window;
 impl Window{
 '''+prefix+'''Some(Event::UiStub)}}

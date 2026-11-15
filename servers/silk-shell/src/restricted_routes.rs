@@ -34,6 +34,109 @@ struct Notice {
     event: sex_pdx::launch::Event,
 }
 static mut OUTBOX: [Option<Notice>; NOTICES] = [None; NOTICES];
+#[derive(Clone, Copy)]
+struct StatusNotice {
+    parent: Subject,
+    value: job::Observation,
+}
+static mut STATUSBOX: [Option<StatusNotice>; NOTICES] = [None; NOTICES];
+fn statuses() {
+    for slot in unsafe { &mut *core::ptr::addr_of_mut!(STATUSBOX) } {
+        if let Some(n) = *slot {
+            if !live(n.parent) || sex_pdx::crash_log::self_epoch().ok() != Some(n.value.shell_epoch)
+            {
+                *slot = None;
+                continue;
+            }
+            let Some(row) = catalog::by_target(n.parent.pd) else {
+                *slot = None;
+                continue;
+            };
+            let Some(w) = n.value.words() else {
+                *slot = None;
+                continue;
+            };
+            if sex_pdx::pdx_call(row.route_slot, job::OP_STATUS_EVENT, w[0], w[1], w[2]).0 == 0 {
+                *slot = None;
+            }
+        }
+    }
+}
+fn status(actor: Subject, words: [u64; 3]) {
+    if !live(actor) || crate::restricted_pool::reserved(actor.pd) {
+        return;
+    }
+    let Some((cookie, known, epoch)) = job::status_decode(words) else {
+        return;
+    };
+    if sex_pdx::crash_log::self_epoch().ok() != Some(epoch) {
+        return;
+    }
+    let mut value = job::Observation {
+        cookie,
+        state: job::STATUS_UNKNOWN,
+        recovery_complete: crate::restricted_pool::normal(),
+        current: None,
+        shell_epoch: epoch,
+    };
+    if let Some(known) = known {
+        if known.pd == actor.pd || !crate::restricted_pool::reserved(known.pd) {
+            return;
+        }
+        let Some(row) = catalog::by_target(known.pd).filter(|r| r.app == catalog::App::Program)
+        else {
+            return;
+        };
+        let Some(slot) = row.activation_slot else {
+            return;
+        };
+        let Ok(own) = life::catalog(row.lifecycle_slot) else {
+            return;
+        };
+        let Ok(a) = life::activation(slot, false) else {
+            return;
+        };
+        if !own.is_subject(row.target, row.surface, 3)
+            || own.task_id == 0
+            || a.task != own.task_id
+            || a.successor != row.target
+            || a.surface != row.surface
+        {
+            return;
+        }
+        value.current = Some(Subject {
+            pd: row.target,
+            task: own.task_id,
+        });
+        value.state = if own.task_id != known.task || a.state == life::ACTIVATION_REUSABLE {
+            job::STATUS_RETIRED
+        } else if a.state == life::ACTIVATION_ACTIVE {
+            job::STATUS_LIVE
+        } else {
+            job::STATUS_UNAVAILABLE
+        };
+    }
+    let Some(i) = catalog::INCARNATIONS
+        .iter()
+        .filter(|r| r.app == catalog::App::Program)
+        .position(|r| r.target == actor.pd)
+    else {
+        return;
+    };
+    // A full reply queue never grants anything and never overwrites another cookie.
+    let slots = unsafe { &mut *core::ptr::addr_of_mut!(STATUSBOX) };
+    if let Some(slot) = slots[i * 2..i * 2 + 2].iter_mut().find(|s| {
+        s.is_none()
+            || s.as_ref()
+                .is_some_and(|s| s.parent == actor && s.value.cookie == cookie)
+    }) {
+        *slot = Some(StatusNotice {
+            parent: actor,
+            value,
+        });
+    }
+}
+
 fn route(service: Service) -> u64 {
     match service {
         Service::Files => sex_pdx::program_store::SHELL_ROUTE_SLOT,
@@ -311,7 +414,12 @@ pub fn busy() -> bool {
 }
 pub fn pending() -> bool {
     Turn::enter().core().pending()
-        || unsafe { (*core::ptr::addr_of!(OUTBOX)).iter().any(Option::is_some) }
+        || unsafe {
+            (*core::ptr::addr_of!(OUTBOX)).iter().any(Option::is_some)
+                || (*core::ptr::addr_of!(STATUSBOX))
+                    .iter()
+                    .any(Option::is_some)
+        }
 }
 pub fn holds_done(child: Subject) -> bool {
     Turn::enter().core().holds_done(child)
@@ -319,9 +427,15 @@ pub fn holds_done(child: Subject) -> bool {
 pub fn poll() {
     Turn::enter().core().poll(&mut Kernel);
     notices();
+    statuses();
 }
 pub fn retire(actor: Subject) {
     Turn::enter().core().retire(actor, &mut Kernel);
+    for slot in unsafe { &mut *core::ptr::addr_of_mut!(STATUSBOX) } {
+        if slot.as_ref().is_some_and(|n| n.parent == actor) {
+            *slot = None;
+        }
+    }
     for slot in unsafe { &mut *core::ptr::addr_of_mut!(OUTBOX) } {
         if slot.as_ref().is_some_and(|n| n.parent == actor) {
             *slot = None;
@@ -348,6 +462,10 @@ pub fn receive(msg: &PdxMessage) -> bool {
         task: msg.caller_task,
     };
     let words = [msg.arg0, msg.arg1, msg.arg2];
+    if msg.type_id == job::OP_STATUS {
+        status(actor, words);
+        return true;
+    }
     if msg.type_id == 1 {
         let tagged = wire::is_chunk(msg.arg0);
         let fixed = actor == (Subject { pd: 11, task: 11 }) && fixed_reply(msg.arg0);

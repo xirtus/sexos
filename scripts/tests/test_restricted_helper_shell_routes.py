@@ -54,6 +54,15 @@ use super::*;use core::sync::atomic::Ordering;
  let old=job::start_words(7,9,1,2).unwrap();assert!(receive(&crate::PdxMessage{type_id:job::OP_START,caller_pd:42,caller_task:99,arg0:old[0],arg1:old[1],arg2:old[2]}));assert!(!busy());assert_eq!(crate::SENT.load(Ordering::SeqCst),0);
  let stale=crate::PdxMessage{caller_pd:42,caller_task:98,..denied};assert!(receive(&stale));assert_eq!(crate::SENT.load(Ordering::SeqCst),0);
  let chunk=wire::chunk(7,5,1,0,0xa8ffffff).unwrap();assert!(receive(&crate::PdxMessage{type_id:1,caller_pd:11,caller_task:11,arg0:chunk,arg1:0,arg2:0}));assert!(!busy());
+
+ // Unknown/recovery completion never claims retirement; exact lifecycle only.
+ let query=job::status_words(9,None,1).unwrap();status(Subject{pd:42,task:99},query);let box_=unsafe{&mut *core::ptr::addr_of_mut!(STATUSBOX)};let index=box_.iter().position(Option::is_some).unwrap();let value=box_[index].unwrap().value;assert_eq!(value.state,job::STATUS_UNKNOWN);assert!(value.current.is_none());box_[index]=None;
+ let known=Subject{pd:43,task:44};let query=job::status_words(9,Some(known),1).unwrap();status(Subject{pd:42,task:99},query);let value=box_[index].unwrap().value;assert_eq!(value.state,job::STATUS_LIVE);box_[index]=None;
+ crate::STATE.store(1,Ordering::SeqCst);status(Subject{pd:42,task:99},query);assert_eq!(box_[index].unwrap().value.state,job::STATUS_UNAVAILABLE);box_[index]=None;
+ crate::STATE.store(4,Ordering::SeqCst);status(Subject{pd:42,task:99},query);assert_eq!(box_[index].unwrap().value.state,job::STATUS_RETIRED);box_[index]=None;
+ crate::TASK.store(45,Ordering::SeqCst);crate::STATE.store(2,Ordering::SeqCst);status(Subject{pd:42,task:99},query);assert_eq!(box_[index].unwrap().value.state,job::STATUS_RETIRED);box_[index]=None;
+ for bad in [[query[0]|1<<32,query[1],1],[query[0],query[1],2],[query[0],Subject{pd:42,task:99}.word(),1],[0,query[1],1]] {status(Subject{pd:42,task:99},bad);assert!(box_.iter().all(Option::is_none));}
+ status(Subject{pd:42,task:98},query);assert!(box_.iter().all(Option::is_none));crate::TASK.store(44,Ordering::SeqCst);
  // A retained refusal belongs to the old exact parent, never its reused row.
  crate::FULL.store(true,Ordering::SeqCst);refuse(Subject{pd:42,task:99},9);poll();assert!(pending());crate::PARENT.store(100,Ordering::SeqCst);crate::FULL.store(false,Ordering::SeqCst);poll();assert!(!pending());assert_eq!(crate::SENT.load(Ordering::SeqCst),0);
  crate::PARENT.store(99,Ordering::SeqCst);let start=job::start_words(7,9,1,1).unwrap();assert!(receive(&crate::PdxMessage{type_id:job::OP_START,caller_pd:42,caller_task:99,arg0:start[0],arg1:start[1],arg2:start[2]}));assert!(busy());poll();assert_eq!(crate::SENT.load(Ordering::SeqCst),1);
