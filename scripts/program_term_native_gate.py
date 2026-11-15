@@ -24,17 +24,66 @@ SURFACE={int(a):int(b)for a,b in re.findall(r'app: App::Program, ordinal: \d+, t
 KEYS={' ':'spc','.':'dot','/':'slash','-':'minus','=':'equal',',':'comma',';':'semicolon'}
 SHIFTED={'(':'9',')':'0','*':'8','+':'equal'}
 def denial_sources(root):
- """Record the checked legacy relay route, separately from native behavior."""
- files=(root/'servers/sexfiles/src/fs_service.rs').read_text()
- sdk=(root/'crates/sex-app/src/lib.rs').read_text()
- shell=(root/'servers/silk-shell/src/main.rs').read_text()
- facts=[('live Files binding','program_live(caller, b.task)' in files),
-        ('grant-specific relay prepare','if let (Some(k), w::PREPARE, true)' in files and 'PREPARING_FOR = Some(k)' in files),
-        ('requester ticket check','if by != asker' in files and '[files.ticket.denied] requester={}' in files),
-        ('legacy relay request','sex_pdx::program_store::OP_RUN, sex_pdx::program_store::TICKET, ticket as u64' in sdk),
-        ('Shell forwards requester','if by_program{msg.caller_pd as u64}else{0}' in shell)]
+ """Bind this legacy relay denial to the reviewed exact-run ticket route.
+
+ These are bounded source-shape checks, not a general Rust authorization proof.
+ Native denial receipts and their causal window remain checked separately.
+ """
+ paths=('servers/sexfiles/src/fs_service.rs','crates/sex-app/src/lib.rs',
+        'servers/silk-shell/src/main.rs','servers/sexfiles/src/trampoline.rs')
+ source={name:(root/name).read_text()for name in paths}
+ def compact(text):
+  # Preserve normal string literals; comment-only copies cannot satisfy a guard.
+  text=re.sub(r'"(?:\\.|[^"\\])*"|//[^\n]*|/\*[\s\S]*?\*/',
+              lambda m:'' if m[0].startswith(('//','/*')) else m[0],text)
+  return re.sub(r'\s+','',text)
+ def section(text,start,end):
+  if text.count(start)!=1:raise ValueError('legacy relay source contract changed: ambiguous '+start)
+  at=text.index(start);stop=text.find(end,at+len(start))
+  if stop<0:raise ValueError('legacy relay source contract changed: missing '+end)
+  return compact(text[at:stop])
+ files,sdk,shell,trampoline=(source[name]for name in paths)
+ body=compact(files);front=section(files,'pub fn handle(','fn bound_sender(')
+ live=section(files,'fn program_live(','pub fn handle(')
+ legacy=section(shell,'    if msg.type_id==store::OP_RUN {','        PROGRAM_READING=status==0;')
+ stamped='ifby_program&&!program_run(msg.caller_pd).is_some_and(|(_,task)|launch_caller_task(task,msg.caller_task)){returntrue}'
+ forwarded='pdx_call(store::SHELL_ROUTE_SLOT,store::OP,msg.arg0,msg.arg1,ifby_program{msg.caller_pdasu64}else{0})'
+ sender=section(files,'fn bound_sender(','fn current_ticket_owner(')
+ owner=section(files,'fn current_ticket_owner(','pub enum Program')
+ ticket=section(files,'pub fn read_ticket(','fn run(')
+ run=section(files,'fn run(','pub fn run_on')
+ prepare=section(files,'fn prepare(','pub fn program_is(')
+ facts=[
+  ('exact ticket owner', 'structTicketOwner{target:u32,task:u32}' in body and
+   'staticmutPREPARED_OWNER:Option<TicketOwner>=None;' in body),
+  ('stamped live prepare', 'bound_task!=0&&program_live(target,bound_task)&&(!preparing||(sender_task!=0&&sender_task==bound_task))' in sender and
+   'bound_sender(caller,caller_task,b.task,r.kind==w::PREPARE)' in front and
+   'crate::fs_service::handle(caller,msg.caller_task,msg.arg0,msg.arg1,msg.arg2)' in compact(trampoline)),
+  ('live exact catalog task', 'c.is_subject(target,row.surface,3)&&c.task_id==task' in live and
+   'sex_pdx::app_lifecycle::info(row.lifecycle_slot)==Err(sex_pdx::app_lifecycle::LIVE)' in live),
+  ('current live task owner', '(binding.task!=0&&program_live(target,binding.task)).then_some(TicketOwner{target,task:binding.task})' in owner),
+  ('grant-specific relay prepare',
+   'letrelay_terminal=program.is_some_and(|k|unsafe{(*core::ptr::addr_of!(BINDINGS))[k]}.is_some_and(|b|holds_launch(&b)));' in front and
+   'iflet(Some(k),w::PREPARE,true)=(program,r.kind,relay_terminal)' in front and
+   'if!crate::console_relay::may_prepare(k){returnw::reply(r.seq,w::PENDING,0);}' in front and
+   'sex_pdx::console_relay::plain_args(' in front and 'PREPARING_FOR' not in body),
+  ('explicit owner and relay forwarding',
+   'letowner=ifr.kind==w::PREPARE&&program.is_some(){letSome(owner)=current_ticket_owner(caller)else{returnw::reply(r.seq,w::DENIED,0);};Some(owner)}else{None};letrelay=ifrelay_terminal{program}else{None};letresult=run(fs,r,path,data,owner,relay);' in front and
+   'returnprepare(fs,r,path,data,owner,relay);' in run),
+  ('captured exact owner and separate relay',
+   'letby=relay;unsafe{PREPARED_OWNER=owner;PREPARED_LAUNCHER=by;}ifletSome(k)=by{crate::console_relay::prepared(k);}' in prepare),
+  ('requester exact owner and relay check',
+   'letSome(owner)=current_ticket_owner(requester)else{return(Program::Absent,None);};Some(owner)' in ticket and
+   'ifunsafe{PREPARED_OWNER}!=owner||(by.is_some()&&by!=asker){sex_pdx::serial_record!("[files.ticket.denied]requester={}",requester);return(Program::Absent,None);}' in ticket),
+  ('owner check before single-use consumption',
+   ticket.find('ifunsafe{PREPARED_OWNER}!=owner')>=0 and
+   ticket.find('ifunsafe{PREPARED_OWNER}!=owner')<ticket.find('core::mem::take(&mutprepared.1)')<ticket.find('PREPARED_OWNER=None;')),
+  ('legacy relay request', 'sex_pdx::program_store::OP_RUN,sex_pdx::program_store::TICKET,ticketasu64' in compact(sdk)),
+  ('Shell forwards stamped requester',
+   'fnlaunch_caller_task(current_task:u32,caller_task:u32)->bool{current_task!=0&&current_task==caller_task}' in compact(shell) and
+   stamped in legacy and forwarded in legacy and legacy.index(stamped)<legacy.index(forwarded)),
+ ]
  if not all(ok for _,ok in facts):raise ValueError('legacy relay source contract changed: '+str(facts))
- paths=('servers/sexfiles/src/fs_service.rs','crates/sex-app/src/lib.rs','servers/silk-shell/src/main.rs')
  return {name:hashlib.sha256((root/name).read_bytes()).hexdigest()for name in paths}
 
 def downstream_denial(trace,launch_start,action_start,end,target,task,source_hashes):
