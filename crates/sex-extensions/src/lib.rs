@@ -81,11 +81,17 @@ fn strings(v: Option<&Value>) -> Vec<String> {
     }
 }
 
-/// A safe relative path inside the extension (no `..`, no leading `/`).
+/// A safe relative path to a file inside the extension: no `..`, `.` or empty part
+/// (so no leading or trailing `/`, no `a//b`), no backslash or control character.
 pub fn clean_path(p: &str) -> Option<String> {
     let p = p.trim().trim_start_matches("./").trim_start_matches('/');
-    if p.is_empty() || p.contains('\\') || p.contains('\0') || p.split('/').any(|s| s == ".." || s == ".") { return None; }
+    if p.is_empty() || p.contains('\\') || p.chars().any(char::is_control) || p.split('/').any(|s| s.is_empty() || s == ".." || s == ".") { return None; }
     Some(String::from(p))
+}
+
+/// A locale name as `_locales/<name>/` uses it (`en`, `pt_BR`, `zh-TW`), else `None`.
+pub fn clean_locale(l: &str) -> Option<String> {
+    (!l.is_empty() && l.len() <= 16 && l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')).then(|| String::from(l))
 }
 
 impl Manifest {
@@ -135,7 +141,8 @@ impl Manifest {
             version, name,
             extension_version: String::from(o.get("version").and_then(Value::as_str).unwrap_or("")),
             description: String::from(o.get("description").and_then(Value::as_str).unwrap_or("")),
-            default_locale: o.get("default_locale").and_then(Value::as_str).map(String::from),
+            // Only a plain locale name: it becomes part of a path (`_locales/<it>/`).
+            default_locale: o.get("default_locale").and_then(Value::as_str).and_then(clean_locale),
             content_scripts, rulesets, background, background_module, permissions, host_permissions, popup, options_page,
         })
     }

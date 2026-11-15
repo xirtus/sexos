@@ -93,3 +93,63 @@ fn dnr_rules_block_through_shields() {
     assert!(b("https://cdn.io/beacon", "https://x.y/", Kind::Ping));
     assert!(!b("https://cdn2.io/beacon", "https://x.y/", Kind::Ping));
 }
+
+// Fuzz round 4 (issues #319, #320, #321): the reproducers in fuzz/repros/round4.
+const REPRO_LOCALE: &[u8] = include_bytes!("../../../fuzz/repros/round4/kaleidoscope-ext-locale-path-traversal.bin");
+const REPRO_DNR: &[u8] = include_bytes!("../../../fuzz/repros/round4/kaleidoscope-ext-dnr-filter-smuggling.bin");
+const REPRO_BOMB: &[u8] = include_bytes!("../../../fuzz/repros/round4/kaleidoscope-ext-package-prealloc-bomb.bin");
+const REPRO_EMPTY: &[u8] = include_bytes!("../../../fuzz/repros/round4/kaleidoscope-ext-package-empty-path-and-prealloc.bin");
+
+#[test]
+fn a_locale_name_never_leaves_the_extension() {
+    let m = Manifest::parse(core::str::from_utf8(REPRO_LOCALE).unwrap()).unwrap();
+    assert_eq!(m.default_locale, None);
+    assert_eq!(m.locale_file().as_deref(), Some("_locales/en/messages.json"));
+    for (given, kept) in [("en", Some("en")), ("pt_BR", Some("pt_BR")), ("zh-TW", Some("zh-TW")), ("..", None), ("en/../..", None), ("a\\b", None), ("", None)] {
+        let m = Manifest::parse(&alloc::format!(r#"{{"manifest_version":3,"name":"x","default_locale":"{}"}}"#, given.replace('\\', "\\\\"))).unwrap();
+        assert_eq!(m.default_locale.as_deref(), kept, "{given}");
+    }
+}
+
+#[test]
+fn rules_cannot_smuggle_filter_syntax() {
+    let c = dnr::convert(core::str::from_utf8(REPRO_DNR).unwrap()).unwrap();
+    assert!(c.filters.is_empty(), "{:?}", c.filters);
+    for cond in [
+        r#"{"urlFilter":"a.com#?#div"}"#, r#"{"urlFilter":"a.com#$#x"}"#, r#"{"urlFilter":"a b"}"#,
+        r#"{"urlFilter":"ads","initiatorDomains":["evil.com,badfilter"]}"#,
+        r#"{"urlFilter":"ads","requestDomains":["site.com,important"]}"#,
+        r#"{"excludedDomains":["a.com|b"]}"#, r#"{"domains":["x$y"]}"#, r#"{"excludedRequestDomains":["a\nb"]}"#,
+    ] {
+        let rule: serde_json::Value = serde_json::from_str(&alloc::format!(r#"{{"id":1,"action":{{"type":"block"}},"condition":{}}}"#, cond)).unwrap();
+        assert_eq!(dnr::rule(&rule), None, "{cond}");
+    }
+    // Ordinary rules still convert.
+    let ok: serde_json::Value = serde_json::from_str(r#"{"id":1,"action":{"type":"block"},"condition":{"urlFilter":"||ads.example^","initiatorDomains":["news.example","*.shop.example"]}}"#).unwrap();
+    assert_eq!(dnr::rule(&ok), Some(vec![String::from("||ads.example^$domain=news.example|*.shop.example")]));
+}
+
+#[test]
+fn packages_have_no_blank_paths_and_bounded_room() {
+    for bytes in [REPRO_BOMB, REPRO_EMPTY] {
+        if let Ok(files) = package::unpack(bytes) {
+            for (p, _) in files { assert!(clean_path(&p).as_deref() == Some(p.as_str()), "{p:?}"); }
+        }
+    }
+    for bad in ["", "/", "a/", "a//b", "a/./b", "a/../b", "wrap/ ", "a\u{7}b"] { assert_eq!(clean_path(bad), None, "{bad:?}"); }
+    assert_eq!(clean_path("./js/a.js").as_deref(), Some("js/a.js"));
+}
+
+/// With `SEXOS_DNR_RULESETS` naming ruleset files (uBlock Origin Lite's, say), counts
+/// what converts.
+#[test]
+fn real_rulesets() {
+    let Ok(paths) = std::env::var("SEXOS_DNR_RULESETS") else { return };
+    let (mut filters, mut skipped) = (0, 0);
+    for p in paths.split(':') {
+        let c = dnr::convert(&std::fs::read_to_string(p).unwrap()).unwrap();
+        filters += c.filters.len();
+        skipped += c.skipped;
+    }
+    std::println!("filters={filters} skipped={skipped}");
+}

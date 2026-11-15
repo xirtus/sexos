@@ -59,7 +59,10 @@ pub fn unpack(bytes: &[u8]) -> Result<Vec<(String, Vec<u8>)>, Error> {
         let data = match method {
             0 => Vec::from(raw),
             8 => {
-                let opts = zune_inflate::DeflateOptions::default().set_limit(size.max(1)).set_size_hint(size);
+                // The size is the archive's word: it bounds the output, but room is made as
+                // bytes actually come (deflate expands at most ~1032 times).
+                let hint = size.min(raw.len().saturating_mul(4)).min(1 << 20);
+                let opts = zune_inflate::DeflateOptions::default().set_limit(size.max(1)).set_size_hint(hint);
                 zune_inflate::DeflateDecoder::new_with_options(raw, opts).decode_deflate().map_err(|_| Error::Package("a file could not be unpacked"))?
             }
             _ => return Err(Error::Package("a file is packed in an unknown way")),
@@ -72,6 +75,7 @@ pub fn unpack(bytes: &[u8]) -> Result<Vec<(String, Vec<u8>)>, Error> {
         if let Some(top) = out.iter().find(|(p, _)| p.ends_with("/manifest.json") && p.matches('/').count() == 1).map(|(p, _)| String::from(&p[..p.len() - "manifest.json".len()])) {
             out.retain(|(p, _)| p.starts_with(&top));
             for (p, _) in out.iter_mut() { *p = String::from(&p[top.len()..]); }
+            out.retain(|(p, _)| !p.is_empty());
         }
     }
     if !out.iter().any(|(p, _)| p == "manifest.json") { return Err(Error::Package("no manifest.json")); }
