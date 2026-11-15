@@ -680,6 +680,9 @@ impl Browser {
             }
             #[cfg(feature = "jit-profile")]
             {
+                for (selector, calls, ns) in &script.page().query_profile {
+                    sex_pdx::serial_record!("[web.profile.query] calls={} elapsed_ns={} selector={:?}", calls, ns, selector);
+                }
                 let p = script.execution_profile();
                 let host_ns: u64 = p.host_ns.iter().copied().sum();
                 sex_pdx::serial_record!("[web.profile] vm_ns={} host_ns={} jit_ns={} jit_calls={} url={}", script.execution_ns(), host_ns, p.jit_ns, p.jit_calls, self.url);

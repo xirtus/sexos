@@ -21,7 +21,7 @@
   delete globalThis.__host;
   const OP = { LOG: 1, BY_ID: 2, QUERY: 3, INFO: 4, GET_ATTR: 5, SET_ATTR: 6, REMOVE_ATTR: 7, GET_TEXT: 8, SET_TEXT: 9,
     GET_HTML: 10, SET_HTML: 11, CREATE_ELEMENT: 12, CREATE_TEXT: 13, INSERT: 14, DETACH: 15, PARENT: 16, CHILDREN: 17,
-    ATTR_NAMES: 18, VIEWPORT: 19, NAVIGATE: 20, CLICKABLE: 21, RECT: 22, LOCATION: 23, CANVAS: 24, MEASURE: 25, HIT: 26, VALUE: 27, CARET: 28, MEDIA: 48, GL: 64, GL_QUERY: 65, FETCH: 66, FETCH_BODY: 67, FETCH_HEAD: 68, COOKIE: 69, MEDIA_APPEND: 70, CLASSIC_SCRIPT: 71, FRAME: 31, POST_MESSAGE: 32, STORAGE: 33, IDB: 34, ADOPTED_STYLES: 35, WS: 73, WS_TAKE: 74 };
+    ATTR_NAMES: 18, VIEWPORT: 19, NAVIGATE: 20, CLICKABLE: 21, RECT: 22, LOCATION: 23, CANVAS: 24, MEASURE: 25, HIT: 26, VALUE: 27, CARET: 28, MEDIA: 48, GL: 64, GL_QUERY: 65, FETCH: 66, FETCH_BODY: 67, FETCH_HEAD: 68, COOKIE: 69, MEDIA_APPEND: 70, CLASSIC_SCRIPT: 71, FRAME: 31, POST_MESSAGE: 32, STORAGE: 33, IDB: 34, ADOPTED_STYLES: 35, MATCHES: 36, WS: 73, WS_TAKE: 74 };
   const nodes = new Map();
   const defaultChecked = new WeakMap();
 
@@ -636,8 +636,8 @@
     before(...xs) { const p = this.parentNode; if (p) for (const x of xs) p.insertBefore(toNode(x), this); }
     after(...xs) { const p = this.parentNode; if (!p) return; const next = this.nextSibling; for (const x of xs) p.insertBefore(toNode(x), next); }
     replaceWith(...xs) { this.before(...xs); this.remove(); }
-    matches(sel) { const p = this.parentNode || document; return p.querySelectorAll(sel).includes(this) || document.querySelectorAll(sel).includes(this); }
-    closest(sel) { for (let n = this; n && n.nodeType === 1; n = n.parentNode) if (n.matches(sel)) return n; return null; }
+    matches(sel) { return check(H(OP.MATCHES, this._id, String(sel))) === '1'; }
+    closest(sel) { sel = String(sel); for (let n = this; n && n.nodeType === 1; n = n.parentNode) if (n.matches(sel)) return n; return null; }
     getBoundingClientRect() {
       const [x, y, w, h] = H(OP.RECT, this._id).split(',').map(Number);
       return new DOMRect(x, y - window.scrollY, w, h);

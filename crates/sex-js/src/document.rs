@@ -8,6 +8,9 @@ use alloc::{format, string::String, vec::Vec};
 use sex_html::dom::{Dom, Kind, NodeId};
 
 pub struct Document {
+    #[cfg(feature = "jit-profile")]
+    pub query_profile: Vec<(String, u64, u64)>,
+    selectors: Vec<(String, alloc::rc::Rc<Vec<sex_html::css::Selector>>)>,
     resource_owner: u64,
     source_policies: alloc::collections::BTreeMap<String, bool>,
     source_policy_overflow: bool,
@@ -189,7 +192,7 @@ fn rough_measure(font: &str, text: &str) -> i32 {
 
 impl Document {
     pub fn new(dom: Dom, url: &str, viewport: (i32, i32), clock: fn() -> u64) -> Self {
-        Self { resource_owner: NEXT_RESOURCE_OWNER.fetch_add(1, Ordering::Relaxed), source_policies: Default::default(), source_policy_overflow: false, dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, navigate_post: None, navigate_type: String::new(), referrer: String::new(), parent_origin: None, outbox: Vec::new(), rects: Vec::new(), layers: Vec::new(), pointer_events: Vec::new(), clock, canvas_queue: Vec::new(), measure: rough_measure, gl: Default::default(), pictures: Vec::new(), fetches: Vec::new(), classic_scripts: Vec::new(), bodies: Vec::new(), media: Vec::new(), media_bytes: Vec::new(), heads: Vec::new(), next_fetch: 0, cookies: None, wall: || 0, storage: None, ws_asks: Vec::new(), ws_in: Vec::new(), next_ws: 0, modules: Default::default(), modules_wanted: Vec::new(), import_map: Vec::new() }
+        Self { #[cfg(feature = "jit-profile")] query_profile: Vec::new(), selectors: Vec::new(), resource_owner: NEXT_RESOURCE_OWNER.fetch_add(1, Ordering::Relaxed), source_policies: Default::default(), source_policy_overflow: false, dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, navigate_post: None, navigate_type: String::new(), referrer: String::new(), parent_origin: None, outbox: Vec::new(), rects: Vec::new(), layers: Vec::new(), pointer_events: Vec::new(), clock, canvas_queue: Vec::new(), measure: rough_measure, gl: Default::default(), pictures: Vec::new(), fetches: Vec::new(), classic_scripts: Vec::new(), bodies: Vec::new(), media: Vec::new(), media_bytes: Vec::new(), heads: Vec::new(), next_fetch: 0, cookies: None, wall: || 0, storage: None, ws_asks: Vec::new(), ws_in: Vec::new(), next_ws: 0, modules: Default::default(), modules_wanted: Vec::new(), import_map: Vec::new() }
     }
 
     /// Takes each element's laid-out box from the browser's layout, for
@@ -432,15 +435,42 @@ impl Page for Document {
                 let want = *a.first()?;
                 self.dom.descendants(Dom::ROOT).into_iter().find(|&n| self.dom.attr(n, "id") == Some(want)).map(|n| format!("{n}"))
             }
-            op::QUERY => {
+            op::QUERY | op::MATCHES => {
                 let root = self.node(a.first())?;
-                let list = sex_html::css::parse_selector_list(a.get(1)?);
+                let text = *a.get(1)?;
+                #[cfg(feature = "jit-profile")]
+                let before = (self.clock)();
+                let list = if let Some((_, parsed)) = self.selectors.iter().find(|(s, _)| s == text) {
+                    parsed.clone()
+                } else {
+                    let parsed = alloc::rc::Rc::new(sex_html::css::parse_selector_list(text));
+                    // Bound retained parser input; larger queries still work uncached.
+                    if text.len() <= 4096 {
+                        if self.selectors.len() == 64 { self.selectors.remove(0); }
+                        self.selectors.push((String::from(text), parsed.clone()));
+                    }
+                    parsed
+                };
                 if list.is_empty() { return Some(String::from("!")); }
+                if operation == op::MATCHES {
+                    return Some(String::from(if list.iter().any(|s| sex_html::css::matches(&self.dom, root, s)) { "1" } else { "0" }));
+                }
                 let all = a.get(2) == Some(&"1");
-                let mut found = self.dom.descendants(root).into_iter().skip(1)
-                    .filter(|&n| matches!(self.dom.nodes[n].kind, Kind::Element { .. }))
-                    .filter(|&n| list.iter().any(|s| sex_html::css::matches(&self.dom, n, s)));
-                if all { Some(Self::ids(found)) } else { found.next().map(|n| format!("{n}")) }
+                let found = self.dom.query(root, &list, all);
+                #[cfg(feature = "jit-profile")]
+                {
+                    let elapsed = (self.clock)().saturating_sub(before);
+                    if let Some((_, calls, ns)) = self.query_profile.iter_mut().find(|(s, _, _)| s == text) {
+                        *calls = calls.saturating_add(1); *ns = ns.saturating_add(elapsed);
+                    } else if text.len() <= 16384 {
+                        let entry = (String::from(text), 1, elapsed);
+                        if self.query_profile.len() < 32 { self.query_profile.push(entry); }
+                        else if let Some((i, _)) = self.query_profile.iter().enumerate().min_by_key(|(_, (_, _, ns))| ns) {
+                            if elapsed > self.query_profile[i].2 { self.query_profile[i] = entry; }
+                        }
+                    }
+                }
+                if all { Some(Self::ids(found.into_iter())) } else { found.first().map(|n| format!("{n}")) }
             }
             op::INFO => {
                 let n = self.node(a.first())?;
