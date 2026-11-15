@@ -286,7 +286,7 @@ impl Thumbs {
             fill(px, width, x0, y0, box_w, CELL_H - 6, if i == cursor { PICKED } else { TILE });
             let inner = (x0 + (box_w - SIDE) / 2, y0 + 4);
             match (kind(&e.name, e.dir), self.made.get(&join(cwd, &e.name))) {
-                (None, Some(Thumb::Picture { w, h, px: t })) => {
+                (_, Some(Thumb::Picture { w, h, px: t })) => {
                     let (ox, oy) = (inner.0 + (SIDE - w) / 2, inner.1 + (SIDE - h) / 2);
                     for y in 0..*h { px[(oy + y) * width + ox..(oy + y) * width + ox + w].copy_from_slice(&t[y * w..y * w + w]); }
                 }

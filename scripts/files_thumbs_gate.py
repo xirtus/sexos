@@ -36,6 +36,8 @@ def seen(path,colours):
   c=(px[i],px[i+1],px[i+2])
   if c in colours:count[c]=count.get(c,0)+1
  return {c:n for c,n in count.items() if n>=300}
+def paper(path):
+ w,h,px=ppm(path);return sum(1 for i in range(0,len(px)-2,3) if px[i]>=245 and px[i+1]>=245 and px[i+2]>=245)
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
  budget=int(os.environ.get('THUMBS_BUDGET_MS','60000'))
@@ -104,6 +106,11 @@ def main():
    found=seen(shot,colours);result[run]['colours_on_screen']=sorted(colours[c] for c in found)
    # The first row of tiles is IMG00, IMG01, ... (folders first, then by name).
    assert {0,1,2}<=set(colours[c] for c in found),result[run]
+   # End moves to the last tile, PAPER.PDF: Vellum's drawing of its first page is
+   # mostly white paper, which no picture, kind tile or label here has.
+   q.key('end');time.sleep(2);shot=a.out/f'thumbs-{run}-pdf.ppm';q.cmd('screendump',{'filename':str(shot)})
+   white=paper(shot);result[run]['pdf_white_px']=white
+   assert (white>=3000) if drawn_pdf else (white<500),(result[run],drawn_pdf)
    s=len(t());q.key('f11');g['wait'](r'\[files.app.closed\]',s,30);time.sleep(1)
   assert 'KERNEL PANIC' not in t() and 'panicked' not in t() and '[files.app.fatal]' not in t()
  finally:g['stop']()
