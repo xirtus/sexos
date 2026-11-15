@@ -84,7 +84,7 @@ def main():
   fetched('/splicy','/bin/splicy');fetched('/talk.webm','talk.webm');fetched('/talk.words','talk.words')
   s=len(t());expect('run splicy @talk.webm @talk.words',r'\[splicy.opened\] file=@/?talk\.webm format=\S+ video=vp9 audio=opus w=320 h=180 fps=30/1 ms=\d+ words=11',300)
   m=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60)
-  sc=g['wait'](r'\[splicy.scan\] thumbs=(\d+) peaks=(\d+) ms=(\d+)',s,600)
+  sc=g['wait'](r'\[splicy.scan\] thumbs=(\d+) peaks=(\d+) loudest=(\d+) ms=(\d+)',s,600)
   assert int(sc[1])>=6 and int(sc[2])>=550,sc[0]
   g['wait'](r'\[splicy.state\] words=11 playing=11 duration_ms=\d+ clips=2 joins=0',s,60)
   # A new window opens in a small tile beside Spindle: zoom it so the tracks are on screen.
@@ -95,6 +95,13 @@ def main():
   labels=count(img,box,lambda c:near(c,LABEL));waves=count(img,box,lambda c:near(c,WAVE))
   top_right=(x+w*2//5+8,y+44,x+w-16,y+h//2)
   lit=count(img,top_right,lambda c:sum((c>>s)&255 for s in(0,8,16))>200)
+  if waves<=50 or labels<=50:
+   # Which colours the lower half holds, to tell a missing track from a changed colour.
+   from collections import Counter
+   lower=Counter();bx0,by0,bx1,by1=box
+   for yy in range((by0+by1)//2,by1,3):
+    for xx in range(bx0,bx1,3):lower[img.getpixel((xx,yy))]+=1
+   print('--- splicy: lower half colours ---',[(f'{r:02x}{g2:02x}{b:02x}',n) for (r,g2,b),n in lower.most_common(16)],'tile',(x,y,w,h),file=__import__('sys').stderr)
   assert labels>50,f'picture clip label: {labels} pixels';assert waves>50,f'waveform: {waves} pixels';assert lit>200,f'viewer picture: {lit} pixels'
   for _ in range(3):q.key('right');time.sleep(.3)
   q.key('s');time.sleep(.5)
@@ -112,7 +119,7 @@ def main():
    assert not a.require_export,e[0]
   shot('splicy-exported')
   text=t();assert 'KERNEL PANIC' not in text and '[splicy.fatal]' not in text and 'KERNEL PAGE FAULT' not in text
-  print({'ok':True,'thumbs':int(sc[1]),'peaks':int(sc[2]),'scan_ms':int(sc[3]),'label_px':labels,'wave_px':waves,'exported':exported})
+  print({'ok':True,'thumbs':int(sc[1]),'peaks':int(sc[2]),'loudest':int(sc[3]),'scan_ms':int(sc[4]),'label_px':labels,'wave_px':waves,'exported':exported})
  except BaseException:
   # The usual tail is mostly clock noise: show what the shell, loader and program said.
   keep=re.compile(r'splicy|shell\.program|spindle|program\.|loader|app\.|fatal|panic|fault|denied|refused|oom|limit',re.I)

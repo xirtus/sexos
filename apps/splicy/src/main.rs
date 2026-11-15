@@ -535,9 +535,10 @@ mod program {
             }
         }
         sex_pdx::serial_record!(
-            "[splicy.scan] thumbs={} peaks={} ms={}",
+            "[splicy.scan] thumbs={} peaks={} loudest={} ms={}",
             lib.thumbs.get(&media).map_or(0, |t| t.len()),
             peaks.v.len(),
+            peaks.v.iter().max().copied().unwrap_or(0),
             sex_pdx::get_ticks() - started
         );
         lib.peaks.insert(media, peaks);
