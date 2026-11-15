@@ -69,6 +69,30 @@ impl Ledger {
         });
         true
     }
+    pub fn maximum_generation(&self) -> u64 {
+        self.entries
+            .iter()
+            .flatten()
+            .map(|entry| entry.generation)
+            .max()
+            .unwrap_or(0)
+    }
+    /// Narrowing-only update after runtime attests the newly loaded catalog task.
+    pub fn bind_task(&mut self, previous: Subject, child: Subject, generation: u64) -> bool {
+        if child.pd != previous.pd || child.task == 0 {
+            return false;
+        }
+        let Some(entry) = self.entries.iter_mut().find(|entry| {
+            entry.is_some_and(|e| e.subject == previous && e.generation == generation)
+        }) else {
+            return false;
+        };
+        *entry = Some(Tombstone {
+            subject: child,
+            generation,
+        });
+        true
+    }
     pub fn words(&self) -> [u64; WORDS] {
         let mut words = [0; WORDS];
         words[0] = MAGIC;

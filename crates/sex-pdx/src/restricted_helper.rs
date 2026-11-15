@@ -380,3 +380,50 @@ impl ReplyCredits {
         true
     }
 }
+
+/// Fresh provider challenge from CPU CSPRNG, never ticks/counters or a fallback.
+/// Availability checks precede instructions; bounded retries fail closed.
+#[cfg(target_arch = "x86_64")]
+pub fn fresh_challenge() -> Option<[u64; 2]> {
+    let seed = core::arch::x86_64::__cpuid_count(7, 0).ebx & (1 << 18) != 0;
+    let random = core::arch::x86_64::__cpuid(1).ecx & (1 << 30) != 0;
+    if !seed && !random {
+        return None;
+    }
+    let mut result = [0; 2];
+    for chunk in &mut result {
+        let mut success = false;
+        for _ in 0..128 {
+            let mut word: u64;
+            let ok: u8;
+            unsafe {
+                if seed {
+                    core::arch::asm!("rdseed {word}","setc {ok}",word=out(reg)word,ok=out(reg_byte)ok,options(nomem,nostack));
+                } else {
+                    core::arch::asm!("rdrand {word}","setc {ok}",word=out(reg)word,ok=out(reg_byte)ok,options(nomem,nostack));
+                }
+            }
+            if ok != 0 {
+                *chunk = word;
+                success = true;
+                break;
+            }
+            // Do not retain a failed instruction's output as challenge material.
+            unsafe {
+                core::ptr::write_volatile(&mut word, 0);
+            }
+            core::hint::spin_loop();
+        }
+        if !success {
+            for word in &mut result {
+                unsafe { core::ptr::write_volatile(word, 0) }
+            }
+            return None;
+        }
+    }
+    (result != [0; 2]).then_some(result)
+}
+#[cfg(not(target_arch = "x86_64"))]
+pub fn fresh_challenge() -> Option<[u64; 2]> {
+    None
+}

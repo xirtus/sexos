@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[2]
 class PolicyTranscript(unittest.TestCase):
     def test_actual_transcript(self):
         source = ROOT / 'crates/sex-pdx/src/restricted_helper.rs'
-        rust = '#[path="' + str(source) + '"] mod restricted_helper;\nuse restricted_helper::*;\n' + '#[path="' + str(ROOT / 'crates/sex-pdx/src/restricted_helper_journal.rs') + '"] mod journal;\n' + r'''
+        rust = '#[path="' + str(source) + '"] mod restricted_helper;\nuse restricted_helper::*;\n' + '#[path="' + str(ROOT / 'crates/sex-pdx/src/restricted_helper_journal.rs') + '"] mod journal;\nuse journal as restricted_helper_journal;\n' + '#[path="' + str(ROOT / 'crates/sex-pdx/src/restricted_helper_provider.rs') + '"] mod provider;\n' + r'''
 fn subject(pd:u32,task:u32)->Subject{Subject{pd,task}}
 fn auth()->Authority{Authority{caller:subject(3,3),provider_epoch:1,challenge:[100,101],reserved:subject(43,43),inactive:true}}
 fn packets()->[Packet;11]{
@@ -77,6 +77,41 @@ fn packets()->[Packet;11]{
 #[test]fn exhausted_tombstones_fail_closed_without_overwrite(){
  let mut ledger=journal::Ledger::empty();for n in 0..journal::CAPACITY{assert!(ledger.quarantine(subject(100+n as u32,100+n as u32),n as u64+1));}
  assert!(!ledger.quarantine(subject(200,200),20));for n in 0..journal::CAPACITY{assert!(ledger.denied(100+n as u32));}
+}
+
+struct Fake {epoch:u64,now:u64,full:bool,keep:bool,replies:Vec<u64>}
+impl provider::Platform for Fake {
+ fn epoch(&mut self)->Option<u64>{Some(self.epoch)}fn keep(&mut self,_:u64)->bool{self.keep}
+ fn challenge(&mut self)->Option<[u64;2]>{Some([100,101])}
+ fn catalog(&mut self,target:u32)->Option<Subject>{if target==43{Some(subject(43,if self.now==0{43}else{1073741824}))}else{None}}
+ fn now(&mut self)->u64{self.now}fn reply(&mut self,w:u64)->bool{if self.full{false}else{self.replies.push(w);true}}
+}
+fn fake()->Fake{Fake{epoch:1,now:0,full:false,keep:true,replies:Vec::new()}}
+fn message(packet:Packet)->provider::Message{provider::Message{caller:subject(3,3),opcode:OP_POLICY,words:packet.wire().unwrap()}}
+fn credits(state:&mut provider::Provider,page:&journal::Journal,p:&mut Fake,packet:Packet){
+ let phase=packet.wire().unwrap()[0];state.poll(p,|_|true);assert_eq!(p.replies.pop(),Some(phase));
+ for selector in 1..=if packet.phase==Phase::Quarantine{4}else{2}{
+  state.message(provider::Message{caller:subject(3,3),opcode:OP_FETCH,words:[phase,selector,1]},page,p);
+  state.poll(p,|_|true);let expected=match selector{1=>packet.a,2=>packet.b,3=>100,4=>101,_=>unreachable!()};assert_eq!(p.replies.pop(),Some(expected));
+ }
+}
+#[test]fn provider_persist_scrub_and_actual_reply_full_precede_ack(){
+ let page=journal::Journal::new();let mut p=fake();let mut state=provider::Provider::new();state.initialize(&page,&mut p);let q=packets()[0];
+ assert!(!state.denied(43));state.message(message(q),&page,&mut p);assert!(state.denied(43));assert!(page.load(Some(2),true).denied(43));
+ state.poll(&mut p,|_|false);assert!(p.replies.is_empty());assert!(!state.sealed());
+ // A next command before quarantine ACK/challenge credits cannot advance.
+ state.message(message(packets()[1]),&page,&mut p);p.full=true;state.poll(&mut p,|_|true);assert!(p.replies.is_empty());
+ p.full=false;credits(&mut state,&page,&mut p,q);
+ for packet in packets().into_iter().skip(1){if packet.phase==Phase::Bind{p.now=1;}state.message(message(packet),&page,&mut p);credits(&mut state,&page,&mut p,packet);}
+ assert!(state.sealed());assert!(state.denied(43));assert!(page.load(Some(2),true).denied(43));
+}
+#[test]fn provider_restart_deadline_foreign_fetch_and_epoch_never_resume_positive_state(){
+ let page=journal::Journal::new();let mut p=fake();let mut state=provider::Provider::new();state.initialize(&page,&mut p);let q=packets()[0];
+ let mut foreign=message(q);foreign.caller=subject(3,4);state.message(foreign,&page,&mut p);assert!(!state.denied(43));
+ state.message(message(q),&page,&mut p);state.poll(&mut p,|_|false);p.now=provider::TRANSCRIPT_TICKS;state.poll(&mut p,|_|true);assert!(p.replies.is_empty());assert!(!state.sealed());assert!(state.denied(43));
+ p.epoch=2;state.initialize(&page,&mut p);assert!(state.denied(43));assert!(!state.sealed());state.message(message(q),&page,&mut p);state.poll(&mut p,|_|true);assert!(p.replies.is_empty());
+ state.message(provider::Message{caller:subject(3,3),opcode:OP_FETCH,words:[q.wire().unwrap()[0],1,1]},&page,&mut p);state.poll(&mut p,|_|true);assert!(p.replies.is_empty());
+ p.keep=false;state.initialize(&page,&mut p);assert!(state.denied(42));assert!(state.denied(43));
 }
 
 '''
