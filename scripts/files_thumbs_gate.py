@@ -45,7 +45,7 @@ def main():
  with disk.open('r+b') as f:f.truncate(1024**3)
  scratch=a.out/'host';scratch.mkdir();stick=a.out/'thumbs.img';make_stick(stick,scratch)
  import http.server,threading
- FILES={'/files':(ROOT/'iso_root/programs/loom').read_bytes(),'/pdf':(ROOT/'iso_root/programs/pdf').read_bytes()}
+ FILES={'/files':(ROOT/'iso_root/programs/loom').read_bytes(),'/pdf':(ROOT/'iso_root/programs/vellum').read_bytes()}
  # Vellum on master may predate --thumb; the PDF tile is required once it has it.
  drawn_pdf=b'--thumb' in FILES['/pdf']
  class Handler(http.server.BaseHTTPRequestHandler):
