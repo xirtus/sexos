@@ -277,6 +277,11 @@ pub mod launch {
     }
     /// Like [`run`], for a helper the person never sees: no window on any workspace.
     pub fn run_hidden(name: &[u8], args: &[u8], cookie: u32) -> Result<(), Error> { start(name, args, store::RUN_HIDDEN, cookie) }
+    /// [`run`] or [`run_hidden`], chosen at run time: `network` asks for the network
+    /// (refused unless this run has it), `hidden` gives the run no window on screen.
+    pub fn run_with(name: &[u8], args: &[u8], network: bool, hidden: bool, cookie: u32) -> Result<(), Error> {
+        start(name, args, if network { store::RUN_NETWORK } else { 0 } | if hidden { store::RUN_HIDDEN } else { 0 }, cookie)
+    }
     fn start(name: &[u8], args: &[u8], flags: u64, cookie: u32) -> Result<(), Error> {
         let mut path = [0u8; 64];
         let path: &[u8] = if name.first() == Some(&b'@') { name }
@@ -296,8 +301,11 @@ pub mod launch {
     /// Ends the run started with `cookie`.
     pub fn kill(cookie: u32) { let _ = sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL, l::OP_KILL, cookie as u64, 0, 0); }
     /// The next event for `cookie` if one has come, without waiting.
-    pub fn poll(cookie: u32) -> Option<Event> {
-        let mine = |m: &sex_pdx::PdxMessage| is_event(m) && Event::decode(m.type_id, [m.arg0, m.arg1, m.arg2]).is_some_and(|e| e.cookie() == cookie);
+    pub fn poll(cookie: u32) -> Option<Event> { poll_where(|c| c == cookie) }
+    /// The next event for a cookie `wanted` accepts, without waiting (for a starter
+    /// following several runs, as `sex_std`'s `std::process` does).
+    pub fn poll_where(wanted: impl Fn(u32) -> bool) -> Option<Event> {
+        let mine = |m: &sex_pdx::PdxMessage| is_event(m) && Event::decode(m.type_id, [m.arg0, m.arg1, m.arg2]).is_some_and(|e| wanted(e.cookie()));
         if let Some(m) = mailbox::take(mine) { return Event::decode(m.type_id, [m.arg0, m.arg1, m.arg2]); }
         while let Some(m) = sex_pdx::pdx_try_listen_raw(0) {
             if mine(&m) { return Event::decode(m.type_id, [m.arg0, m.arg1, m.arg2]); }

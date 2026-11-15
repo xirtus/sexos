@@ -20,9 +20,11 @@ use crate::Response;
 /// Milliseconds since boot.
 pub fn now() -> u64 { sex_pdx::get_ticks() }
 
-/// Shell's event as Weft's.
-pub fn event(e: AppEvent) -> Event {
-    match e {
+/// Shell's event as Weft's; `None` for what Weft has no event for yet (drops and the
+/// end of a drag this window started, read with `sex_app::dnd`).
+pub fn event(e: AppEvent) -> Option<Event> {
+    Some(match e {
+        AppEvent::Drop { .. } | AppEvent::DragEnded { .. } => return None,
         AppEvent::Key(k) => Event::Key(Key { code: k.code, shift: k.shift, control: k.control, text: k.char() }),
         AppEvent::Close => Event::Close,
         AppEvent::Resize { width, height } => Event::Resize { width: width as u32, height: height as u32 },
@@ -37,7 +39,7 @@ pub fn event(e: AppEvent) -> Event {
             };
             Event::Pointer(Pointer { x: p.x as f32, y: p.y as f32, kind })
         }
-    }
+    })
 }
 
 /// A window with a Weft interface.
@@ -78,11 +80,11 @@ impl App {
         self.ui.tick(now());
         let mut out = Vec::new();
         if let Some(e) = e {
-            out.extend(self.ui.handle(event(e)));
+            if let Some(e) = event(e) { out.extend(self.ui.handle(e)); }
             // Take whatever else is already waiting before painting again.
             for _ in 0..64 {
                 let Some(e) = self.window.poll() else { break };
-                out.extend(self.ui.handle(event(e)));
+                if let Some(e) = event(e) { out.extend(self.ui.handle(e)); }
             }
         }
         self.present();
