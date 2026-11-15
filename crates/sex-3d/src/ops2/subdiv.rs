@@ -84,8 +84,9 @@ fn subdivide_core(m: &mut Mesh, edges: &[[u32; 2]], cuts: u32, ring_only: bool, 
     for &(lo, hi) in &sel {
         let list: Vec<u32> = (1..=cuts)
             .map(|i| {
-                let p = pos(m, lo, hi, i as f32 / (cuts + 1) as f32);
-                m.add_vertex(p)
+                let t = i as f32 / (cuts + 1) as f32;
+                let p = pos(m, lo, hi, t);
+                m.add_vertex_interp(p, &[(lo, 1.0 - t), (hi, t)])
             })
             .collect();
         points.insert((lo, hi), list);

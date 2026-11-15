@@ -99,8 +99,7 @@ pub fn rip(m: &mut Mesh, verts: &[u32], edges: &[[u32; 2]], fill: bool) -> RipRe
             move_comp = (1..ncomp).collect();
         }
         for &ci in &move_comp {
-            let p = m.positions[v as usize];
-            let nv = m.add_vertex(p);
+            let nv = m.copy_vertex(v);
             moved.push(nv);
             for i in 0..k {
                 if comp[i] == ci {
@@ -171,11 +170,10 @@ pub fn rip_edge(m: &mut Mesh, verts: &[u32]) -> Selection {
         if v as usize >= m.positions.len() {
             continue;
         }
-        let p = m.positions[v as usize];
         let nbrs = &adj[v as usize];
         let face_nbrs: Vec<u32> = nbrs.iter().copied().filter(|&u| ef.contains_key(&ekey(v, u))).collect();
         let pick = face_nbrs.iter().copied().find(|&u| ef[&ekey(v, u)].len() == 1).or_else(|| face_nbrs.first().copied());
-        let nv = m.add_vertex(p);
+        let nv = m.copy_vertex(v);
         match pick {
             Some(u) => insert_edge_vertex(m, v, u, nv, 0.0),
             None => m.loose_edges.push([v, nv]),

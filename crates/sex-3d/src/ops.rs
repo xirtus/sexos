@@ -168,8 +168,7 @@ fn split_region(m: &mut Mesh, faces: &[u32]) -> RegionSplit {
     for &(a, b) in &border {
         for v in [a, b] {
             if !dup.contains_key(&v) {
-                let p = m.positions[v as usize];
-                let nv = m.add_vertex(p);
+                let nv = m.copy_vertex(v);
                 dup.insert(v, nv);
             }
         }
@@ -354,7 +353,7 @@ pub fn delete_verts(m: &mut Mesh, verts: &[u32]) {
     }
     m.faces.retain(|f| !f.verts.iter().any(|&v| dead[v as usize]));
     m.loose_edges.retain(|e| !dead[e[0] as usize] && !dead[e[1] as usize]);
-    let mut remap = vec![0u32; m.positions.len()];
+    let mut remap = vec![crate::mesh::NONE; m.positions.len()];
     let mut kept = Vec::with_capacity(m.positions.len());
     for (i, &p) in m.positions.iter().enumerate() {
         if !dead[i] {
@@ -391,7 +390,7 @@ pub fn merge_at_center(m: &mut Mesh, verts: &[u32]) -> Option<u32> {
         used[e[0] as usize] = true;
         used[e[1] as usize] = true;
     }
-    let mut remap = vec![0u32; m.positions.len()];
+    let mut remap = vec![crate::mesh::NONE; m.positions.len()];
     let mut kept = Vec::new();
     for (i, &u) in used.iter().enumerate() {
         if u {
@@ -695,7 +694,12 @@ pub fn loop_cut(m: &mut Mesh, edge: [u32; 2], cuts: u32) -> Vec<u32> {
     for k in keys {
         let (s, e) = orient[&k];
         let (ps, pe) = (m.positions[s as usize], m.positions[e as usize]);
-        let list: Vec<u32> = (1..=cuts).map(|i| m.add_vertex(ps.lerp(pe, i as f32 / (cuts + 1) as f32))).collect();
+        let list: Vec<u32> = (1..=cuts)
+            .map(|i| {
+                let t = i as f32 / (cuts + 1) as f32;
+                m.add_vertex_interp(ps.lerp(pe, t), &[(s, 1.0 - t), (e, t)])
+            })
+            .collect();
         new_verts.extend_from_slice(&list);
         points.insert(k, list);
     }

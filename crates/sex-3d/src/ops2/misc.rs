@@ -156,7 +156,7 @@ pub fn edge_split(m: &mut Mesh, edges: &[[u32; 2]]) -> Selection {
         let mut roots: Vec<u32> = groups.keys().copied().collect();
         roots.sort_unstable();
         for r in roots.into_iter().skip(1) {
-            let nv = m.add_vertex(m.positions[v as usize]);
+            let nv = m.copy_vertex(v);
             for &f in &groups[&r] {
                 for x in &mut m.faces[f as usize].verts {
                     if *x == v {
@@ -188,10 +188,7 @@ pub fn split(m: &mut Mesh, faces: &[u32]) -> Selection {
         for c in 0..m.faces[f as usize].verts.len() {
             let v = m.faces[f as usize].verts[c];
             if outside.contains(&v) {
-                let nv = *copy.entry(v).or_insert_with(|| {
-                    m.positions.push(m.positions[v as usize]);
-                    m.positions.len() as u32 - 1
-                });
+                let nv = *copy.entry(v).or_insert_with(|| m.copy_vertex(v));
                 m.faces[f as usize].verts[c] = nv;
             }
         }
@@ -232,10 +229,7 @@ pub fn extrude_geometry(m: &mut Mesh, faces: &[u32], edges: &[[u32; 2]], verts: 
         in_edge.insert(a);
         in_edge.insert(b);
         let mut dup = |v: u32| -> u32 {
-            *copy.entry(v).or_insert_with(|| {
-                m.positions.push(m.positions[v as usize]);
-                m.positions.len() as u32 - 1
-            })
+            *copy.entry(v).or_insert_with(|| m.copy_vertex(v))
         };
         let (na, nb) = (dup(a), dup(b));
         if dir.contains_key(&(a, b)) {
@@ -250,7 +244,7 @@ pub fn extrude_geometry(m: &mut Mesh, faces: &[u32], edges: &[[u32; 2]], verts: 
         if region_verts.contains(&v) || in_edge.contains(&v) || v as usize >= m.positions.len() {
             continue;
         }
-        let nv = m.add_vertex(m.positions[v as usize]);
+        let nv = m.copy_vertex(v);
         m.loose_edges.push([v, nv]);
         copy.insert(v, nv);
     }
