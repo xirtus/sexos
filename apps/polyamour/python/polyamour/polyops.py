@@ -1,18 +1,24 @@
 # SPDX-License-Identifier: GPL-3.0-only
-"""The polyops stream: how API calls leave this Python process.
+"""polyops: how the Python API talks to Polyamour.
 
-Polyamour executes the lines with crates/sex-3d/src/script.rs; the language is
-described there and in docs/handoff/POLYAMOUR_PYTHON_2026_11_14.md. This module
-knows the lexical rules (quoting, numbers, lists, base64 arrays), writes the
-stream and reads polyops text back (for the scene snapshot Polyamour hands a
-script through POLYAMOUR_SCENE).
+Every read and write of `bpy` is a polyops command (the language of
+crates/sex-3d/src/script.rs, described in
+docs/handoff/POLYAMOUR_PYTHON_2026_11_14.md). Two channels carry them:
 
-Where the lines go: the file named by the POLYAMOUR_OPS environment variable, or
-else standard output. In the standard-output case the script's own print()
-output is moved to standard error so it cannot mix with commands. The stream
-starts with `polyops 1` and is closed at exit with `end`, or with `abort ...`
-when the script died of an exception, so Polyamour applies all or nothing.
+* LiveChannel: Polyamour started this Python as its kernel
+  (polyamour/kernel.py). Each command is a request `@N command ...` on the
+  kernel's protocol stream and waits for `@N ok ...` / `@N err MESSAGE`, so a
+  script reads back what it just did. Reads (`dump_object`, ...) answer JSON
+  and are cached until the next write.
+* BatchChannel: a plain `python script.py` (or a system with no pipes between
+  programs): commands are written to POLYAMOUR_OPS or standard output and
+  applied by Polyamour when the script ends. Reads are answered from a
+  snapshot of the scene taken before the run (run_batch), or refused.
+
+The module also knows the lexical rules (quoting, numbers, lists, base64
+arrays) and reads polyops text.
 """
+import json
 import atexit
 import base64
 import os
@@ -30,7 +36,10 @@ class Raw(str):
 
 
 def quote(s):
-    """`s` as one polyops token: bare when safe, else double-quoted."""
+    """`s` as one polyops token: bare when safe, else double-quoted. A Raw
+    text (a batch handle like `$3`) stays as it is."""
+    if isinstance(s, Raw):
+        return str(s)
     s = str(s)
     if s and s != 'none' and s[0] not in '$#@' and all(c.isalnum() or c in _SAFE for c in s):
         return s
@@ -202,24 +211,155 @@ def read_commands(text):
         yield name, pos, opts
 
 
-# --- writing -------------------------------------------------------------------
 
-class Stream:
-    """The command stream of this process (one per script run)."""
+# --- the channel ----------------------------------------------------------------
 
-    def __init__(self):
-        self._out = None
-        self._next_handle = 0
+# Commands that only read (script/bpy.rs QUERIES plus the core queries): their
+# replies are cached until the next write.
+QUERIES = frozenset((
+    'ids', 'dump_object', 'dump_mesh', 'dump_material', 'dump_tree', 'dump_scene', 'dump_armature',
+    'dump_lattice', 'dump_image', 'dump_action', 'eval_mesh', 'op_poll', 'op_list', 'noise',
+    'get', 'list', 'exists', 'ping',
+))
+
+
+class PolyopsError(RuntimeError):
+    """Polyamour refused a request (the message says why)."""
+
+
+def _line(command, args, opts):
+    parts = [command]
+    parts += [token(a) for a in args]
+    parts += ['%s=%s' % (k.rstrip('_'), token(v)) for k, v in opts.items() if v is not None]
+    line = ' '.join(parts)
+    if '\n' in line or '\r' in line:
+        raise ValueError('a polyops line cannot contain a raw newline')
+    return line
+
+
+def _parse_reply(rest):
+    """`ok` reply text -> JSON value (`=json ...`) or a list of token texts."""
+    if rest.startswith('=json '):
+        return json.loads(rest[6:])
+    return [t[1] for t in tokenize(rest)]
+
+
+class LiveChannel:
+    """Request/reply with a running Polyamour over a pair of line streams."""
+
+    live = True
+
+    def __init__(self, rfile, wfile):
+        self._r = rfile
+        self._w = wfile
+        self._n = 0
+        self._cache = {}
+        self.generation = 0
+        # Objects with local changes to send before the next request
+        # (`_flush()` on each), e.g. meshes whose vertices a script moved.
+        self.pending = {}
+        self._flushing = False
+        self.requests = 0
+
+    # -- low level
+    def send_line(self, line):
+        self._w.write(line + '\n')
+        self._w.flush()
+
+    def read_line(self):
+        line = self._r.readline()
+        if not line:
+            raise SystemExit('Polyamour closed the channel')
+        return line.rstrip('\r\n')
+
+    def flush(self):
+        """Send every pending local change."""
+        if self._flushing or not self.pending:
+            return
+        self._flushing = True
+        try:
+            while self.pending:
+                key = next(iter(self.pending))
+                obj = self.pending.pop(key)
+                obj._flush()
+        finally:
+            self._flushing = False
+
+    def invalidate(self):
+        self._cache.clear()
+        self.generation += 1
+
+    def request(self, command, *args, **opts):
+        """Send one polyops command and wait for its reply: a JSON value or a
+        list of token texts. Raises PolyopsError when Polyamour refuses it."""
+        line = _line(command, args, opts)
+        query = command in QUERIES
+        if query and line in self._cache:
+            return self._cache[line]
+        self.flush()
+        self._n += 1
+        rid = self._n
+        self.requests += 1
+        self.send_line('@%d %s' % (rid, line))
+        while True:
+            reply = self.read_line()
+            head, _, rest = reply.partition(' ')
+            if head == '@%d' % rid:
+                break
+            # Anything else here is a protocol error on the host side; skip it.
+        status, _, rest = rest.partition(' ')
+        if not query:
+            self.invalidate()
+        if status == 'err':
+            toks = tokenize(rest)
+            raise PolyopsError(toks[0][1] if toks else rest)
+        value = _parse_reply(rest)
+        if query:
+            self._cache[line] = value
+        return value
+
+    def query(self, command, *args, **opts):
+        return self.request(command, *args, **opts)
+
+    def noise(self, kind, points, **opts):
+        flat = [float(c) for p in points for c in p]
+        return self.request('noise', kind, b64_floats(flat), **opts)
+
+
+# Commands that make something and answer its name; on the batch channel
+# they get `as=$N` and the handle stands in for the name.
+CREATING = frozenset((
+    'add_primitive', 'add_mesh', 'add_object', 'add_empty', 'light_add', 'camera_add', 'add_armature',
+    'add_lattice', 'mesh_new', 'material_new', 'collection_new', 'object_copy', 'mesh_copy',
+    'material_copy', 'armature_new', 'lattice_new',
+))
+
+
+class BatchChannel:
+    """One-way: commands are written to a stream that Polyamour applies after
+    the script ends (for systems without pipes between programs). Nothing can
+    be read back, so reading scene data raises a clear error."""
+
+    live = False
+
+    def __init__(self, out=None, path=None, snapshot=None):
+        self._out = out
+        self._path = path
+        # Replies to reads, as Polyamour gave them before the run started:
+        # {(command, arg, ...): reply} (see run_batch).
+        self._snapshot = snapshot or {}
+        self.generation = 0
+        self.pending = {}
         self._failure = None
         self._closed = False
-        self.lines = 0
+        self._next_handle = 0
+        self.requests = 0
 
     def _open(self):
-        path = os.environ.get('POLYAMOUR_OPS')
+        path = self._path or os.environ.get('POLYAMOUR_OPS')
         if path:
             self._out = open(path, 'w', encoding='utf-8', newline='\n')
         else:
-            # Commands own standard output; the script's prints go to stderr.
             self._out = sys.stdout
             sys.stdout = sys.stderr
         self._out.write('polyops %d\n' % VERSION)
@@ -231,45 +371,151 @@ class Stream:
             previous(kind, value, tb)
         sys.excepthook = hook
 
-    def handle(self):
-        """A fresh handle token ($1, $2, ...) to bind with as=."""
-        self._next_handle += 1
-        return Raw('$%d' % self._next_handle)
-
-    def emit(self, command, *args, **opts):
-        """Write one command. Positional args and option values are formatted
-        with token(); options whose value is None are left out."""
-        if self._closed:
-            raise RuntimeError('the polyops stream is closed')
-        if self._out is None:
-            self._open()
-        parts = [command]
-        parts += [token(a) for a in args]
-        parts += ['%s=%s' % (k.rstrip('_'), token(v)) for k, v in opts.items() if v is not None]
-        line = ' '.join(parts)
-        if '\n' in line or '\r' in line:
-            raise ValueError('a polyops line cannot contain a raw newline')
-        self._out.write(line + '\n')
-        self.lines += 1
-
-    def flush(self):
-        if self._out is not None:
-            self._out.flush()
-
-    def close(self):
-        """End the stream: `end`, or `abort` when the script raised."""
+    def comment(self, tag, text):
+        """A comment line in the stream (printed text in a batch run)."""
         if self._closed:
             return
         if self._out is None:
             self._open()
-        if self._failure is not None:
-            self._out.write('abort %s\n' % quote(self._failure))
-        else:
-            self._out.write('end\n')
+        self._out.write('%s %s\n' % (tag, quote(text) if text else '""'))
+
+    def handle(self):
+        self._next_handle += 1
+        return Raw('$%d' % self._next_handle)
+
+    def flush(self):
+        while self.pending:
+            key = next(iter(self.pending))
+            self.pending.pop(key)._flush()
+
+    def invalidate(self):
+        self.generation += 1
+
+    def request(self, command, *args, **opts):
+        if command in QUERIES:
+            key = tuple(t[1] for t in tokenize(_line(command, args, opts)))
+            if key in self._snapshot:
+                return self._snapshot[key]
+            raise PolyopsError(
+                "reading '%s' needs a live Polyamour; this Python was started without one "
+                "(scripts that only create and change things still work, and read the "
+                "scene as it was when they started)" % command)
+        if self._closed:
+            raise RuntimeError('the polyops stream is closed')
+        self.flush()
+        if self._out is None:
+            self._open()
+        made = None
+        if command in CREATING and 'as_' not in opts and 'as' not in opts:
+            made = self.handle()
+            opts = dict(opts, as_=made)
+        self._out.write(_line(command, args, opts) + '\n')
+        self.requests += 1
+        self.generation += 1
+        if made is not None:
+            return [made]
+        if command == 'op':
+            return ['FINISHED']
+        return []
+
+    query = request
+
+    def noise(self, kind, points, **opts):
+        return None
+
+    def close(self):
+        if self._closed:
+            return
+        self.flush()
+        if self._out is None:
+            self._open()
+        self._out.write('abort %s\n' % quote(self._failure) if self._failure else 'end\n')
         self._closed = True
         self._out.flush()
-        if self._out is not sys.__stdout__ and self._out is not sys.stdout and self._out is not sys.stderr:
+        if self._out not in (sys.__stdout__, sys.stdout, sys.stderr):
             self._out.close()
 
 
-stream = Stream()
+# The process's channel: kernel.py installs a LiveChannel; a plain `python
+# script.py` gets the batch stream on first use.
+channel = None
+
+
+def run_batch(ops, snapshot, script, args=()):
+    """Run `script` on the batch channel: commands to the file `ops`, reads
+    from the JSON `snapshot` ([[request tokens], reply] pairs written by
+    Polyamour before the run). Everything comes as arguments, since a SexOS
+    program has no environment. An uncaught exception ends the stream with
+    `abort "line N: Kind: message"`, N being the script's line."""
+    global channel
+    import runpy
+    import traceback
+    snap = {}
+    if snapshot:
+        try:
+            with open(snapshot, encoding='utf-8') as f:
+                for key, value in json.load(f):
+                    snap[tuple(key)] = value
+        except (OSError, ValueError):
+            pass
+    channel = BatchChannel(path=ops, snapshot=snap)
+    # What the script prints rides in the command file as comment lines, so
+    # it reaches Polyamour where programs have no pipes (SexOS).
+    out, err = sys.stdout, sys.stderr
+    sys.stdout = _BatchPrinter(channel, '#>')
+    sys.stderr = _BatchPrinter(channel, '#!')
+    sys.argv = [script] + list(args)
+    folder = os.path.dirname(os.path.abspath(script))
+    if folder not in sys.path:
+        sys.path.insert(0, folder)
+    try:
+        runpy.run_path(script, run_name='__main__')
+    except SystemExit as e:
+        if e.code not in (None, 0):
+            channel._failure = 'SystemExit: %s' % (e.code,)
+    except BaseException as e:  # noqa: B902 - reported, then the stream aborts
+        line = 0
+        for fr in traceback.extract_tb(e.__traceback__):
+            if fr.filename == script:
+                line = fr.lineno
+        traceback.print_exc()
+        channel._failure = ('line %d: ' % line if line else '') + '%s: %s' % (type(e).__name__, e)
+    sys.stdout.flush()
+    sys.stderr.flush()
+    sys.stdout, sys.stderr = out, err
+    channel.close()
+
+
+class _BatchPrinter:
+    """A text stream writing whole lines as `#> "text"` comments."""
+
+    def __init__(self, channel, tag):
+        self._c = channel
+        self._tag = tag
+        self._buf = ''
+
+    def write(self, s):
+        self._buf += str(s)
+        while '\n' in self._buf:
+            line, self._buf = self._buf.split('\n', 1)
+            self._c.comment(self._tag, line)
+        return len(s)
+
+    def flush(self):
+        if self._buf:
+            self._c.comment(self._tag, self._buf)
+            self._buf = ''
+
+    def isatty(self):
+        return False
+
+
+def get():
+    global channel
+    if channel is None:
+        channel = BatchChannel()
+    return channel
+
+
+def request(command, *args, **opts):
+    return get().request(command, *args, **opts)

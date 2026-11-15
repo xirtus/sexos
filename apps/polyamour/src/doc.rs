@@ -235,6 +235,8 @@ pub struct Doc {
     /// Operators that act on a 3D view (navigation, modal tools), queued for
     /// the viewport that asked for them.
     pub view_ops: Vec<Op>,
+    /// The Python kernel, script panels, operators and add-ons (python.rs).
+    pub python: crate::python::Python,
 }
 
 impl Default for Doc {
@@ -295,6 +297,7 @@ impl Doc {
             edit_hidden: BTreeSet::new(),
             menu: None,
             view_ops: Vec::new(),
+            python: Default::default(),
         }
     }
 
@@ -367,7 +370,7 @@ impl Doc {
     /// Run an operator by its Blender-style name. Unknown names are reported,
     /// not ignored, so missing features show up in the status bar.
     pub fn run(&mut self, op: &Op) {
-        if crate::rig::run(self, op) || self.run_view3d(op) || crate::edit::run(self, op) || crate::uvedit::run(self, op) || crate::nodetree::run(self, op) {
+        if crate::rig::run(self, op) || self.run_view3d(op) || crate::edit::run(self, op) || crate::uvedit::run(self, op) || crate::nodetree::run(self, op) || crate::python::run(self, op) {
             return;
         }
         let arg = op.arg.as_str();

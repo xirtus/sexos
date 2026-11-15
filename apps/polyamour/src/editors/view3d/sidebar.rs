@@ -121,23 +121,42 @@ pub fn draw(s: &mut State, d: &mut Doc, ui: &mut Ui, sr: Rect) {
     for (tab, name) in [(SideTab::Item, "Item"), (SideTab::Tool, "Tool"), (SideTab::View, "View")] {
         let h = ui.p.text_width(name) + 18;
         let tr = Rect::new(tabs.x + 1, ty, TAB_W - 2, h);
-        let on = s.side_tab == tab;
+        let on = s.side_tab == tab && d.python.side_tab.is_none();
         let bg = if on { t::TAB_ACTIVE } else if ui.hovered(tr) { 0x2a2a2a } else { 0x1f1f1f };
         ui.p.round_rect(tr, 4, bg);
         let lh = ui.p.line_height();
         vertical_text(ui.p, tr.x + (tr.w - lh) / 2, tr.bottom() - 9, name, if on { t::TEXT_HI } else { t::TEXT_DIM }, bg);
         if ui.clicked(tr) {
             s.side_tab = tab;
+            d.python.side_tab = None;
+        }
+        ty += h + 2;
+    }
+    // Tabs of panels scripts and add-ons registered (bl_category).
+    for name in d.python.sidebar_categories() {
+        let h = ui.p.text_width(&name) + 18;
+        let tr = Rect::new(tabs.x + 1, ty, TAB_W - 2, h);
+        let on = d.python.side_tab.as_deref() == Some(name.as_str());
+        let bg = if on { t::TAB_ACTIVE } else if ui.hovered(tr) { 0x2a2a2a } else { 0x1f1f1f };
+        ui.p.round_rect(tr, 4, bg);
+        let lh = ui.p.line_height();
+        vertical_text(ui.p, tr.x + (tr.w - lh) / 2, tr.bottom() - 9, &name, if on { t::TEXT_HI } else { t::TEXT_DIM }, bg);
+        if ui.clicked(tr) {
+            d.python.side_tab = Some(name.clone());
         }
         ty += h + 2;
     }
     let body = Rect::new(sr.x + 4, sr.y, sr.w - TAB_W - 8, sr.h);
     ui.p.push_clip(body);
     let mut l = Layout { x: body.x + 10, w: body.w - 20, y: body.y + 6 };
-    match s.side_tab {
-        SideTab::Item => item_tab(s, d, ui, &mut l),
-        SideTab::Tool => tool_tab(s, d, ui, &mut l),
-        SideTab::View => view_tab(s, d, ui, &mut l),
+    match (d.python.side_tab.clone(), s.side_tab) {
+        (Some(cat), _) => {
+            let mut y = l.y;
+            crate::python::draw_sidebar(ui, d, &cat, l.x, l.w, &mut y);
+        }
+        (None, SideTab::Item) => item_tab(s, d, ui, &mut l),
+        (None, SideTab::Tool) => tool_tab(s, d, ui, &mut l),
+        (None, SideTab::View) => view_tab(s, d, ui, &mut l),
     }
     ui.p.pop_clip();
     // Clicks on the sidebar's empty space stay in the sidebar.

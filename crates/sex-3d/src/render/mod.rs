@@ -42,6 +42,8 @@ mod prepare;
 mod rng;
 mod sampling;
 pub(crate) mod shader;
+/// The shader nodes' noise functions, for `mathutils.noise` (script/bpy.rs).
+pub(crate) use shader::tex as tex_noise;
 
 /// Blender's stored enum numbers for node settings, for file importers.
 pub(crate) mod shader_names {

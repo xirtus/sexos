@@ -648,7 +648,7 @@ fn constraint_to_options(c: &Constraint) -> String {
 // ---------------------------------------------------------------------------
 // Commands
 
-fn pose_bone_mut<'a>(pose: &'a mut Vec<PoseBone>, name: &str) -> &'a mut PoseBone {
+pub(super) fn pose_bone_mut<'a>(pose: &'a mut Vec<PoseBone>, name: &str) -> &'a mut PoseBone {
     match pose.iter().position(|p| p.name == name) {
         Some(i) => &mut pose[i],
         None => {
