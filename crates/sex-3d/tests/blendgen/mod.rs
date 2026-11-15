@@ -379,6 +379,77 @@ impl Cfg {
 }
 
 fn define(c: &Cfg) -> Dna {
+    define_ext(c, false)
+}
+
+/// The physics structs (rigid bodies, fields, cloth, particles, fluid),
+/// with Blender's member names; only what the importer reads, plus pads.
+fn define_physics(d: &mut Dna) {
+    d.def("PointCache", &[("PointCache", "*next"), ("PointCache", "*prev"), ("int", "flag"), ("int", "step"), ("int", "simframe"), ("int", "startframe"), ("int", "endframe"), ("int", "editframe"), ("int", "last_exact"), ("int", "last_valid"), ("char", "_pad[4]")]);
+    d.def("EffectorWeights", &[("Collection", "*group"), ("float", "weight[14]"), ("float", "global_gravity"), ("short", "flag"), ("char", "_pad[2]")]);
+    d.def("RigidBodyWorld_Shared", &[("PointCache", "*pointcache"), ("ListBase", "ptcaches"), ("void", "*physics_world")]);
+    d.def(
+        "RigidBodyWorld",
+        &[("EffectorWeights", "*effector_weights"), ("Collection", "*group"), ("Object", "**objects"), ("Collection", "*constraints"), ("int", "_pad"), ("float", "ltime"), ("RigidBodyWorld_Shared", "*shared"), ("PointCache", "*pointcache"), ("int", "numbodies"), ("short", "substeps_per_frame"), ("short", "num_solver_iterations"), ("int", "flag"), ("float", "time_scale")],
+    );
+    d.def(
+        "RigidBodyOb",
+        &[("void", "*shared"), ("short", "type"), ("short", "shape"), ("int", "flag"), ("int", "col_groups"), ("short", "mesh_source"), ("char", "_pad[2]"), ("float", "mass"), ("float", "friction"), ("float", "restitution"), ("float", "margin"), ("float", "lin_damping"), ("float", "ang_damping"), ("float", "lin_sleep_thresh"), ("float", "ang_sleep_thresh"), ("float", "orn[4]"), ("float", "pos[3]"), ("char", "_pad1[4]")],
+    );
+    let mut con: Vec<(&str, &str)> = vec![("Object", "*ob1"), ("Object", "*ob2"), ("short", "type"), ("short", "num_solver_iterations"), ("int", "flag"), ("float", "breaking_threshold"), ("char", "spring_type"), ("char", "_pad[3]")];
+    for n in [
+        "limit_lin_x_lower", "limit_lin_x_upper", "limit_lin_y_lower", "limit_lin_y_upper", "limit_lin_z_lower", "limit_lin_z_upper",
+        "limit_ang_x_lower", "limit_ang_x_upper", "limit_ang_y_lower", "limit_ang_y_upper", "limit_ang_z_lower", "limit_ang_z_upper",
+        "spring_stiffness_x", "spring_stiffness_y", "spring_stiffness_z", "spring_stiffness_ang_x", "spring_stiffness_ang_y", "spring_stiffness_ang_z",
+        "spring_damping_x", "spring_damping_y", "spring_damping_z", "spring_damping_ang_x", "spring_damping_ang_y", "spring_damping_ang_z",
+        "motor_lin_target_velocity", "motor_ang_target_velocity", "motor_lin_max_impulse", "motor_ang_max_impulse",
+    ] {
+        con.push(("float", n));
+    }
+    con.push(("void", "*physics_constraint"));
+    d.def("RigidBodyCon", &con);
+    let mut pd: Vec<(&str, &str)> = vec![("int", "flag"), ("short", "deflect"), ("short", "forcefield"), ("short", "falloff"), ("short", "shape"), ("short", "tex_mode"), ("short", "kink"), ("short", "kink_axis"), ("short", "zdir")];
+    for n in ["f_strength", "f_damp", "f_flow", "f_wind_factor"] {
+        pd.push(("float", n));
+    }
+    pd.push(("char", "_pad0[4]"));
+    for n in ["f_size", "f_power", "maxdist", "mindist", "f_power_r", "maxrad", "minrad", "pdef_damp", "pdef_rdamp", "pdef_perm", "pdef_frict", "pdef_rfrict", "pdef_stickness", "absorption", "pdef_sbdamp", "pdef_sbift", "pdef_sboft", "pdef_cfrict", "f_noise"] {
+        pd.push(("float", n));
+    }
+    pd.push(("int", "seed"));
+    d.def("PartDeflect", &pd);
+    d.def(
+        "ClothSimSettings",
+        &[
+            ("float", "mingoal"), ("float", "Cvi"), ("float", "mass"), ("float", "structural"), ("float", "shear"), ("float", "bending"), ("float", "max_sewing"),
+            ("float", "time_scale"), ("float", "goalspring"), ("float", "shrink_min"), ("float", "uniform_pressure_force"), ("float", "bending_damping"),
+            ("int", "stepsPerFrame"), ("int", "flags"), ("short", "vgroup_mass"), ("short", "vgroup_shrink"), ("short", "bending_model"), ("char", "_pad[2]"),
+            ("EffectorWeights", "*effector_weights"), ("float", "tension"), ("float", "compression"), ("float", "tension_damp"), ("float", "compression_damp"), ("float", "shear_damp"),
+        ],
+    );
+    d.def("ClothCollSettings", &[("void", "*collision_list"), ("float", "epsilon"), ("float", "self_friction"), ("float", "friction"), ("float", "damping"), ("float", "selfepsilon"), ("int", "flags"), ("short", "self_loop_count"), ("short", "loop_count"), ("Collection", "*group"), ("float", "clamp"), ("float", "self_clamp")]);
+    let md = ("ModifierData", "modifier");
+    d.def("ClothModifierData", &[md, ("Cloth", "*clothObject"), ("ClothSimSettings", "*sim_parms"), ("ClothCollSettings", "*coll_parms"), ("PointCache", "*point_cache"), ("ListBase", "ptcaches")]);
+    d.def("CollisionModifierData", &[md, ("void", "*x"), ("int", "mvert_num"), ("int", "tri_num")]);
+    d.def(
+        "ParticleSettings",
+        &[
+            ("ID", "id"), ("short", "type"), ("short", "from"), ("short", "distr"), ("short", "phystype"), ("short", "ren_as"), ("short", "draw_as"), ("short", "childtype"), ("short", "integrator"),
+            ("int", "totpart"), ("int", "child_nbr"), ("int", "ren_child_nbr"), ("short", "hair_step"), ("short", "omat"),
+            ("float", "sta"), ("float", "end"), ("float", "lifetime"), ("float", "randlife"), ("float", "normfac"), ("float", "tanfac"), ("float", "obfac"), ("float", "randfac"),
+            ("float", "mass"), ("float", "size"), ("float", "randsize"), ("float", "ob_vel[3]"), ("float", "childrad"), ("float", "clumpfac"), ("float", "rad_root"), ("float", "rad_tip"), ("float", "rad_scale"),
+            ("Object", "*instance_object"), ("Collection", "*instance_collection"), ("EffectorWeights", "*effector_weights"),
+        ],
+    );
+    d.def("ParticleSystem", &[("ParticleSystem", "*next"), ("ParticleSystem", "*prev"), ("ParticleSettings", "*part"), ("char", "name[64]"), ("int", "seed"), ("int", "child_seed"), ("PointCache", "*pointcache")]);
+    d.def("ParticleSystemModifierData", &[md, ("ParticleSystem", "*psys")]);
+    d.def("FluidDomainSettings", &[("int", "maxres"), ("int", "type"), ("float", "alpha"), ("float", "beta"), ("float", "vorticity"), ("int", "cache_frame_start"), ("int", "cache_frame_end"), ("char", "_pad[4]")]);
+    d.def("FluidFlowSettings", &[("short", "type"), ("short", "behavior"), ("float", "density"), ("float", "color[3]"), ("float", "fuel_amount"), ("float", "temperature")]);
+    d.def("FluidModifierData", &[md, ("FluidDomainSettings", "*domain"), ("FluidFlowSettings", "*flow"), ("FluidEffectorSettings", "*effector"), ("float", "time"), ("int", "type")]);
+    d.def("PhysicsSettings", &[("float", "gravity[3]"), ("int", "flag")]);
+}
+
+fn define_ext(c: &Cfg, physics: bool) -> Dna {
     let mut d = Dna::new(c.ptr);
     let id_name = if c.layout == Layout::Attr50 { "name[258]" } else { "name[66]" };
     d.def("Link", &[("Link", "*next"), ("Link", "*prev")]);
@@ -406,6 +477,10 @@ fn define(c: &Cfg) -> Dna {
     mesh.extend([("CustomData", vd), ("CustomData", ed), ("CustomData", if c.new_names() { "fdata_legacy" } else { "fdata" }), ("CustomData", pd), ("CustomData", ld)]);
     mesh.extend([("int", tv), ("int", te), ("int", if c.new_names() { "totface_legacy" } else { "totface" }), ("int", "totselect"), ("int", tp), ("int", tl), ("short", "totcol"), ("char", "_pad2[6]")]);
     d.def("Mesh", &mesh);
+    if physics {
+        d.def("ModifierData", &[("ModifierData", "*next"), ("ModifierData", "*prev"), ("int", "type"), ("int", "mode"), ("float", "execution_time"), ("short", "flag"), ("short", "ui_expand_flag"), ("char", "name[64]"), ("char", "*error"), ("char", "_pad[8]")]);
+        define_physics(&mut d);
+    }
 
     let mut ob: Vec<(&str, &str)> = vec![("ID", "id"), ("AnimData", "*adt"), ("SculptSession", "*sculpt"), ("short", "type"), ("short", "partype"), ("int", "par1"), ("int", "par2"), ("int", "par3"), ("char", "parsubstr[64]"), ("Object", "*parent"), ("Object", "*track"), ("void", "*data"), ("Material", "**mat"), ("char", "*matbits"), ("int", "totcol"), ("int", "actcol")];
     ob.extend([("float", "loc[3]"), ("float", "dloc[3]")]);
@@ -426,10 +501,15 @@ fn define(c: &Cfg) -> Dna {
         Layout::Legacy27 | Layout::Legacy30 => ob.extend([("short", "restrictflag"), ("char", "_pad4[6]")]),
         _ => ob.extend([("char", "visibility_flag"), ("char", "_pad4[7]")]),
     }
+    if physics {
+        ob.extend([("RigidBodyOb", "*rigidbody_object"), ("RigidBodyCon", "*rigidbody_constraint"), ("PartDeflect", "*pd"), ("SoftBody", "*soft"), ("short", "softflag"), ("char", "_pad5[6]")]);
+    }
     d.def("Object", &ob);
 
     // Modifiers: every concrete struct starts with `ModifierData modifier`.
-    d.def("ModifierData", &[("ModifierData", "*next"), ("ModifierData", "*prev"), ("int", "type"), ("int", "mode"), ("float", "execution_time"), ("short", "flag"), ("short", "ui_expand_flag"), ("char", "name[64]"), ("char", "*error"), ("char", "_pad[8]")]);
+    if !physics {
+        d.def("ModifierData", &[("ModifierData", "*next"), ("ModifierData", "*prev"), ("int", "type"), ("int", "mode"), ("float", "execution_time"), ("short", "flag"), ("short", "ui_expand_flag"), ("char", "name[64]"), ("char", "*error"), ("char", "_pad[8]")]);
+    }
     let md = ("ModifierData", "modifier");
     d.def("MirrorModifierData", &[md, ("short", "axis"), ("short", "flag"), ("float", "tolerance"), ("float", "bisect_threshold"), ("char", "use_correct_order_on_merge"), ("char", "_pad[3]"), ("float", "uv_offset[2]"), ("float", "uv_offset_copy[2]"), ("Object", "*mirror_ob")]);
     d.def("SubsurfModifierData", &[md, ("short", "subdivType"), ("short", "levels"), ("short", "renderLevels"), ("short", "flags"), ("short", "uv_smooth"), ("short", "quality"), ("short", "boundary_smooth"), ("char", "_pad[2]"), ("void", "*emCache"), ("void", "*mCache")]);
@@ -575,7 +655,11 @@ fn define(c: &Cfg) -> Dna {
         &[("ID", "id"), ("AnimData", "*adt"), ("char", "type"), ("char", "dtx"), ("short", "flag"), ("float", "passepartalpha"), ("float", cs), ("float", ce), ("float", "lens"), ("float", "ortho_scale"), ("float", "drawsize"), ("float", "sensor_x"), ("float", "sensor_y"), ("float", "shiftx"), ("float", "shifty"), ("char", "sensor_fit"), ("char", "_pad[7]")],
     );
     d.def("RenderData", &[("int", "cfra"), ("int", "sfra"), ("int", "efra"), ("short", "frs_sec"), ("char", "_pad[2]"), ("int", "xsch"), ("int", "ysch"), ("float", "xasp"), ("float", "yasp"), ("float", "frs_sec_base")]);
-    d.def("Scene", &[("ID", "id"), ("AnimData", "*adt"), ("Object", "*camera"), ("World", "*world"), ("Scene", "*set"), ("ListBase", "base"), ("RenderData", "r"), ("Collection", "*master_collection")]);
+    let mut scene: Vec<(&str, &str)> = vec![("ID", "id"), ("AnimData", "*adt"), ("Object", "*camera"), ("World", "*world"), ("Scene", "*set"), ("ListBase", "base"), ("RenderData", "r"), ("Collection", "*master_collection")];
+    if physics {
+        scene.extend([("RigidBodyWorld", "*rigidbody_world"), ("PhysicsSettings", "physics_settings")]);
+    }
+    d.def("Scene", &scene);
     d.def("FileGlobal", &[("char", "subvstr[4]"), ("short", "subversion"), ("short", "minversion"), ("short", "minsubversion"), ("char", "_pad[6]"), ("bScreen", "*curscreen"), ("Scene", "*curscene")]);
     d
 }
@@ -1524,5 +1608,156 @@ pub fn geonodes_file(c: Cfg) -> Vec<u8> {
     }
     let d = w.inst("Object", &f);
     w.put(ob, "OB", "Object", 1, d);
+    w.finish()
+}
+
+/// Rigid body world, rigid bodies, a constraint, a force field, and the
+/// Collision, Cloth, Particle System and Fluid modifiers.
+pub fn physics_file(c: Cfg) -> Vec<u8> {
+    let mut w = Writer::new(define_ext(&c, true), c.big, c.layout == Layout::Attr50, version_of(&c));
+    let [sc, me, ground, cube, empty, domain] = [(); 6].map(|_| w.alloc());
+    let glob = w.alloc();
+    let g = w.inst("FileGlobal", &[("curscene", p(sc))]);
+    w.put(glob, "GLOB", "FileGlobal", 1, g);
+
+    // Scene: gravity and the rigid body world (its cache directly before
+    // 2.8, through the shared struct after).
+    let pc = w.add("DATA", "PointCache", &[("startframe", n(3.)), ("endframe", n(90.)), ("flag", n(64.))]);
+    let ew = w.add("DATA", "EffectorWeights", &[("weight", nv(&[1., 1., 1., 1., 0.25, 1., 1., 1., 1., 1., 1., 1., 1., 1.])), ("global_gravity", n(0.5))]);
+    let mut f = if c.layout == Layout::Legacy27 {
+        vec![("pointcache", p(pc))]
+    } else {
+        let shared = w.add("DATA", "RigidBodyWorld_Shared", &[("pointcache", p(pc))]);
+        vec![("shared", p(shared))]
+    };
+    f.extend([("effector_weights", p(ew)), ("substeps_per_frame", n(25.)), ("num_solver_iterations", n(30.)), ("flag", n(4.)), ("time_scale", n(0.75))]);
+    let rbw = w.add("DATA", "RigidBodyWorld", &f);
+    let d = w.inst(
+        "Scene",
+        &[("id.name", s("SCPhys")), ("r.sfra", n(1.)), ("r.efra", n(100.)), ("r.xsch", n(64.)), ("r.ysch", n(64.)), ("r.xasp", n(1.)), ("r.yasp", n(1.)), ("rigidbody_world", p(rbw)), ("physics_settings.gravity", nv(&[0., 0., -4.])), ("physics_settings.flag", n(1.))],
+    );
+    w.put(sc, "SC", "Scene", 1, d);
+    write_mesh(&mut w, &c, me, 0, 0);
+
+    let ident = [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.];
+    let object = |w: &mut Writer, ptr: u64, name: &str, ty: f64, data: u64, mods: (u64, u64), extra: Vec<(&str, V)>| {
+        let (sz, dsz) = if c.layout == Layout::Legacy27 { ("size", "dsize") } else { ("scale", "dscale") };
+        let id = format!("OB{name}");
+        let mut f = vec![("id.name", s(&id)), ("type", n(ty)), ("data", p(data)), (sz, nv(&[1., 1., 1.])), (dsz, nv(&[1., 1., 1.])), ("parentinv", nv(&ident)), ("rotmode", n(1.)), ("modifiers.first", p(mods.0)), ("modifiers.last", p(mods.1))];
+        if !c.new_names() {
+            f.push(("obmat", nv(&ident)));
+        }
+        f.extend(extra);
+        let d = w.inst("Object", &f);
+        w.put(ptr, "OB", "Object", 1, d);
+    };
+
+    // Ground: passive box with a Collision modifier (settings on `pd`).
+    let rb = w.add("DATA", "RigidBodyOb", &[("type", n(1.)), ("shape", n(0.)), ("flag", n(0.)), ("mesh_source", n(2.)), ("mass", n(1.)), ("friction", n(0.8)), ("restitution", n(0.1)), ("margin", n(0.04))]);
+    let pd = w.add("DATA", "PartDeflect", &[("deflect", n(1.)), ("pdef_sboft", n(0.05)), ("pdef_damp", n(0.3)), ("pdef_cfrict", n(2.)), ("flag", n(16.))]);
+    let col = w.add("DATA", "CollisionModifierData", &[("modifier.mode", n(3.)), ("modifier.name", s("Collision"))]);
+    object(&mut w, ground, "Ground", 1., me, (col, col), vec![("rigidbody_object", p(rb)), ("pd", p(pd))]);
+
+    // Cube: active sphere, Cloth then a Particle System.
+    let rb = w.add(
+        "DATA",
+        "RigidBodyOb",
+        &[("type", n(0.)), ("shape", n(1.)), ("flag", n((8 | 64) as f64)), ("mesh_source", n(2.)), ("mass", n(3.)), ("friction", n(0.3)), ("restitution", n(0.6)), ("margin", n(0.02)), ("lin_damping", n(0.2)), ("ang_damping", n(0.3)), ("lin_sleep_thresh", n(0.5)), ("ang_sleep_thresh", n(0.6))],
+    );
+    let sim = w.add(
+        "DATA",
+        "ClothSimSettings",
+        &[
+            ("Cvi", n(2.)),
+            ("mass", n(0.5)),
+            ("tension", n(20.)),
+            ("compression", n(21.)),
+            ("shear", n(6.)),
+            ("bending", n(0.7)),
+            ("time_scale", n(1.)),
+            ("goalspring", n(2.)),
+            ("shrink_min", n(0.1)),
+            ("uniform_pressure_force", n(3.)),
+            ("bending_damping", n(0.4)),
+            ("stepsPerFrame", n(9.)),
+            ("flags", n((1 << 17) as f64)),
+            ("tension_damp", n(5.)),
+            ("compression_damp", n(5.)),
+            ("shear_damp", n(5.)),
+        ],
+    );
+    let coll = w.add("DATA", "ClothCollSettings", &[("epsilon", n(0.02)), ("selfepsilon", n(0.03)), ("self_friction", n(4.)), ("flags", n(6.)), ("loop_count", n(3.))]);
+    let cpc = w.add("DATA", "PointCache", &[("startframe", n(1.)), ("endframe", n(60.))]);
+    let [cloth, psmd] = [(); 2].map(|_| w.alloc());
+    let d = w.inst("ClothModifierData", &[("modifier.mode", n(3.)), ("modifier.name", s("Cloth")), ("modifier.next", p(psmd)), ("sim_parms", p(sim)), ("coll_parms", p(coll)), ("point_cache", p(cpc))]);
+    w.put(cloth, "DATA", "ClothModifierData", 1, d);
+    let part = w.alloc();
+    let d = w.inst(
+        "ParticleSettings",
+        &[
+            ("id.name", s("PASparks")),
+            ("type", n(0.)),
+            ("from", n(1.)),
+            ("distr", n(1.)),
+            ("phystype", n(1.)),
+            ("ren_as", n(7.)),
+            ("draw_as", n(2.)),
+            ("childtype", n(1.)),
+            ("integrator", n(2.)),
+            ("totpart", n(123.)),
+            ("child_nbr", n(5.)),
+            ("ren_child_nbr", n(50.)),
+            ("hair_step", n(5.)),
+            ("omat", n(1.)),
+            ("sta", n(5.)),
+            ("end", n(50.)),
+            ("lifetime", n(30.)),
+            ("randlife", n(0.25)),
+            ("normfac", n(2.)),
+            ("randfac", n(0.1)),
+            ("mass", n(2.)),
+            ("size", n(0.2)),
+            ("randsize", n(0.5)),
+            ("ob_vel", nv(&[0., 0., 1.])),
+            ("childrad", n(0.3)),
+            ("rad_root", n(1.)),
+            ("rad_scale", n(0.01)),
+            ("instance_object", p(ground)),
+        ],
+    );
+    w.put(part, "PA", "ParticleSettings", 1, d);
+    let psys = w.add("DATA", "ParticleSystem", &[("part", p(part)), ("name", s("Sparks")), ("seed", n(7.))]);
+    let d = w.inst("ParticleSystemModifierData", &[("modifier.mode", n(3.)), ("modifier.name", s("ParticleSystem")), ("modifier.prev", p(cloth)), ("psys", p(psys))]);
+    w.put(psmd, "DATA", "ParticleSystemModifierData", 1, d);
+    object(&mut w, cube, "Cube", 1., me, (cloth, psmd), vec![("rigidbody_object", p(rb)), ("loc", nv(&[0., 0., 3.]))]);
+
+    // Empty: a wind field and a hinge between the two.
+    let pd = w.add(
+        "DATA",
+        "PartDeflect",
+        &[("forcefield", n(4.)), ("shape", n(1.)), ("falloff", n(1.)), ("zdir", n(1.)), ("flag", n((1 | 256 | (1 << 14)) as f64)), ("f_strength", n(2.5)), ("f_flow", n(0.5)), ("f_power", n(2.)), ("maxdist", n(4.)), ("mindist", n(1.)), ("f_noise", n(0.2)), ("seed", n(9.))],
+    );
+    let con = w.add(
+        "DATA",
+        "RigidBodyCon",
+        &[
+            ("ob1", p(ground)),
+            ("ob2", p(cube)),
+            ("type", n(2.)),
+            ("flag", n((1 | 8 | (1 << 8) | (1 << 13) | (1 << 16)) as f64)),
+            ("breaking_threshold", n(7.)),
+            ("spring_type", n(1.)),
+            ("limit_ang_x_lower", n(-0.5)),
+            ("limit_ang_x_upper", n(0.5)),
+            ("spring_stiffness_z", n(40.)),
+            ("spring_damping_z", n(0.25)),
+        ],
+    );
+    object(&mut w, empty, "Hinge", 0., 0, (0, 0), vec![("pd", p(pd)), ("rigidbody_constraint", p(con))]);
+
+    // Smoke domain.
+    let dom = w.add("DATA", "FluidDomainSettings", &[("maxres", n(48.)), ("type", n(0.)), ("alpha", n(0.5)), ("beta", n(1.5)), ("vorticity", n(0.1)), ("cache_frame_start", n(2.)), ("cache_frame_end", n(80.))]);
+    let fm = w.add("DATA", "FluidModifierData", &[("modifier.mode", n(3.)), ("modifier.name", s("Fluid")), ("domain", p(dom)), ("type", n(1.))]);
+    object(&mut w, domain, "Domain", 1., me, (fm, fm), vec![]);
     w.finish()
 }

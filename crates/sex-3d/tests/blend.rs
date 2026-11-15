@@ -1313,3 +1313,63 @@ fn geometry_nodes_modifier() {
         assert_eq!(back.objects[blendgen::names(&back)["GN"]].modifiers, s.objects[o].modifiers, "{what}");
     }
 }
+
+/// Rigid bodies, constraints, fields and the physics modifiers.
+#[test]
+fn physics_import() {
+    use sex_3d::physics::*;
+    for c in ALL {
+        let what = format!("{c:?}");
+        let s = import_blend(&blendgen::physics_file(c)).unwrap_or_else(|e| panic!("{what}: {e}"));
+        let names = blendgen::names(&s);
+        assert_eq!(s.physics.gravity.gravity, [0.0, 0.0, -4.0], "{what}");
+        let w = s.physics.rigidbody_world.as_ref().unwrap_or_else(|| panic!("{what}: no world"));
+        assert_eq!((w.substeps_per_frame, w.solver_iterations, w.use_split_impulse, w.time_scale), (25, 30, true, 0.75), "{what}");
+        assert_eq!((w.point_cache.frame_start, w.point_cache.frame_end, w.point_cache.use_disk_cache), (3, 90, true), "{what}");
+        assert_eq!((w.effector_weights.wind, w.effector_weights.gravity), (0.25, 0.5), "{what}");
+
+        let g = &s.objects[names["Ground"]];
+        let rb = g.physics.rigid_body.as_ref().unwrap();
+        assert_eq!((rb.kind, rb.collision_shape, rb.friction), (RigidBodyType::Passive, CollisionShape::Box, 0.8), "{what}");
+        let Modifier::Physics(PhysicsModifier::Collision(col)) = &g.modifiers[0] else { panic!("{what}: {:?}", g.modifiers) };
+        assert!(col.use_collision && col.use_particle_kill, "{what}");
+        assert_eq!((col.thickness_outer, col.damping_factor, col.cloth_friction), (0.05, 0.3, 2.0), "{what}");
+
+        let cube = &s.objects[names["Cube"]];
+        let rb = cube.physics.rigid_body.as_ref().unwrap();
+        assert_eq!((rb.kind, rb.collision_shape, rb.mass, rb.restitution), (RigidBodyType::Active, CollisionShape::Sphere, 3.0, 0.6), "{what}");
+        assert!(rb.use_deactivation && rb.use_margin && !rb.kinematic && rb.enabled, "{what}");
+        assert_eq!((rb.deactivate_linear_velocity, rb.deactivate_angular_velocity), (0.5, 0.6), "{what}");
+        assert_eq!(cube.modifiers.len(), 2, "{what}");
+        let Modifier::Physics(PhysicsModifier::Cloth(cl)) = &cube.modifiers[0] else { panic!("{what}") };
+        assert_eq!((cl.quality, cl.mass, cl.air_damping, cl.tension_stiffness, cl.compression_stiffness), (9, 0.5, 2.0, 20.0, 21.0), "{what}");
+        assert!(cl.use_pressure && cl.use_collision && cl.use_self_collision, "{what}");
+        assert_eq!((cl.distance_min, cl.self_distance_min, cl.collision_quality, cl.uniform_pressure_force), (0.02, 0.03, 3, 3.0), "{what}");
+        assert_eq!(cl.point_cache.frame_end, 60, "{what}");
+        let Modifier::Physics(PhysicsModifier::ParticleSystem(ps)) = &cube.modifiers[1] else { panic!("{what}") };
+        assert_eq!((ps.name.as_str(), ps.seed, ps.settings.name.as_str()), ("Sparks", 7, "Sparks"), "{what}");
+        let st = &ps.settings;
+        assert_eq!((st.kind, st.count, st.frame_start, st.frame_end, st.lifetime, st.lifetime_random), (ParticleType::Emitter, 123, 5.0, 50.0, 30.0, 0.25), "{what}");
+        assert_eq!((st.emit_from, st.distribution, st.integrator, st.render_type, st.display_method), (EmitFrom::Face, Distribution::Random, Integrator::Rk4, RenderType::Object, DisplayMethod::Circle), "{what}");
+        assert_eq!((st.instance_object.as_str(), st.child_type, st.child_nbr, st.rendered_child_count, st.particle_size), ("Ground", ChildType::Simple, 5, 50, 0.2), "{what}");
+        assert_eq!(st.object_align_factor, [0.0, 0.0, 1.0], "{what}");
+
+        let h = &s.objects[names["Hinge"]];
+        let fs = h.physics.field.as_ref().unwrap();
+        assert_eq!((fs.kind, fs.shape, fs.falloff_type, fs.z_direction), (FieldType::Wind, FieldShape::Plane, FalloffType::Tube, ZDirection::Positive), "{what}");
+        assert!(fs.use_max_distance && fs.use_min_distance && fs.apply_to_location && !fs.apply_to_rotation, "{what}");
+        assert_eq!((fs.strength, fs.flow, fs.falloff_power, fs.distance_max, fs.distance_min, fs.noise, fs.seed), (2.5, 0.5, 2.0, 4.0, 1.0, 0.2, 9), "{what}");
+        let rc = h.physics.rigid_body_constraint.as_ref().unwrap();
+        assert_eq!((rc.kind, rc.object1.as_str(), rc.object2.as_str()), (ConstraintType::Hinge, "Ground", "Cube"), "{what}");
+        assert!(rc.enabled && rc.use_breaking && !rc.disable_collisions, "{what}");
+        assert_eq!(rc.breaking_threshold, 7.0, "{what}");
+        assert!(rc.axes[3].use_limit && !rc.axes[0].use_limit && rc.axes[2].use_spring && rc.axes[5].use_spring, "{what}");
+        assert_eq!((rc.axes[3].lower, rc.axes[3].upper, rc.axes[2].stiffness, rc.axes[2].damping), (-0.5, 0.5, 40.0, 0.25), "{what}");
+        assert_eq!(rc.spring_type, SpringType::Spring2, "{what}");
+
+        let d = &s.objects[names["Domain"]];
+        let Modifier::Physics(PhysicsModifier::Fluid(fl)) = &d.modifiers[0] else { panic!("{what}") };
+        assert_eq!((fl.fluid_type, fl.domain_type, fl.resolution_max, fl.alpha, fl.beta), (FluidType::Domain, DomainType::Gas, 48, 0.5, 1.5), "{what}");
+        assert_eq!((fl.cache_frame_start, fl.cache_frame_end), (2, 80), "{what}");
+    }
+}
