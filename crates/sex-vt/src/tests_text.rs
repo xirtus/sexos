@@ -473,3 +473,15 @@ fn search_and_hints_skip_spacers() {
     assert_eq!(hints[0].col, 5);
     let _ = &mut s;
 }
+
+#[test]
+fn inserting_shifts_wide_characters_whole() {
+    let mut s = run(6, 1, "日a".as_bytes());
+    feed(&mut s, b"\x1b[1;1H\x1b[4hX");
+    assert_eq!(s.row_text(0), "X日a");
+    assert_ne!(s.visible(1, 0).flags & WIDE, 0);
+    assert_eq!(s.visible(2, 0).ch, SPACER);
+    // Inserting inside a pair cuts it: both halves become blanks.
+    feed(&mut s, b"\x1b[1;3HY");
+    assert_eq!(s.row_text(0), "X Y a");
+}

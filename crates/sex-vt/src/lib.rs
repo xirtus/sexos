@@ -478,8 +478,10 @@ impl Screen {
         let flags = self.pen.flags | if wide { WIDE } else { 0 };
         let cell = Cell { ch: c, fg: self.pen.fg, bg: self.pen.bg, flags, link: self.ext.link };
         let (x, y, cols) = (self.x, self.y, self.cols);
-        self.split_wide(y, x);
-        if wide { self.split_wide(y, x + 1); }
+        // Overwriting may cut a pair at either edge; inserting shifts whole pairs right and
+        // only cuts one it lands inside.
+        if self.insert { if self.lines[y].cells[x].ch == SPACER { self.split_wide(y, x); } }
+        else { self.split_wide(y, x); if wide { self.split_wide(y, x + 1); } }
         let spacer = Cell { ch: SPACER, flags: self.pen.flags, ..cell };
         let row = &mut self.lines[y].cells;
         if self.insert {
@@ -501,7 +503,7 @@ impl Screen {
     fn split_wide(&mut self, y: usize, x: usize) {
         let row = &mut self.lines[y].cells;
         let Some(here) = row.get(x).copied() else { return };
-        if here.ch == SPACER && x > 0 && row[x - 1].flags & WIDE != 0 { row[x - 1].ch = ' '; row[x - 1].flags &= !WIDE; }
+        if here.ch == SPACER && x > 0 && row[x - 1].flags & WIDE != 0 { row[x - 1].ch = ' '; row[x - 1].flags &= !WIDE; row[x].ch = ' '; }
         if here.flags & WIDE != 0 && row.get(x + 1).is_some_and(|c| c.ch == SPACER) { row[x + 1].ch = ' '; }
     }
     fn goto(&mut self, x: usize, y: usize) {

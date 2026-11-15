@@ -111,7 +111,8 @@ impl Painter {
                 let w = cells * cw;
                 let (mut fg, mut bg) = screen.colors(&cell);
                 let selected = screen.selected(col, row);
-                let cursor_here = show_cursor && row == cy && col == cx;
+                // The cursor can sit on either half of a wide character.
+                let cursor_here = show_cursor && row == cy && (col == cx || cells == 2 && col + 1 == cx);
                 if selected { bg = screen.theme().selection; }
                 match screen.highlight(col, row) {
                     Highlight::None => {}
@@ -130,7 +131,7 @@ impl Painter {
                 else if cell.link != 0 { rule(ch - 1, blend(bg, fg, 110)); }
                 if cell.flags & STRIKE != 0 { rule(ch / 2, fg); }
                 if cursor_here && !focused { hollow(pixels, stride, x0, y0, w, ch, screen.theme().cursor); }
-                if copy == Some((col, row)) { hollow(pixels, stride, x0, y0, w, ch, COPY_CURSOR); }
+                if copy == Some((col, row)) || cells == 2 && copy == Some((col + 1, row)) { hollow(pixels, stride, x0, y0, w, ch, COPY_CURSOR); }
             }
             // The sliver right of the last column.
             let used = screen.cols() * cw;

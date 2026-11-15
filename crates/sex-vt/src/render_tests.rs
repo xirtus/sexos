@@ -96,3 +96,19 @@ fn a_full_frame_draws_in_under_eight_milliseconds() {
     // Unoptimised test builds are several times slower; the budget holds for release.
     if !cfg!(debug_assertions) { assert!(per.as_micros() < 8_000, "{per:?} a frame"); }
 }
+
+#[test]
+fn a_cursor_on_the_second_half_of_a_wide_character_is_drawn() {
+    // "ab日" on four columns leaves the cursor on 日's second cell (pending wrap).
+    let (cw, ch) = cell_for_height(18);
+    let mut s = screen(4, 1, "ab日".as_bytes());
+    assert_eq!(s.cursor(), (3, 0));
+    let (stride, mut plain) = (4 * cw, alloc::vec![0u32; 4 * cw * ch]);
+    let mut with_cursor = plain.clone();
+    let mut p = Painter::new(cw, ch).with_faces(faces());
+    p.draw(&s, &[], &mut cache(), &mut plain, stride, true);
+    s.cursor_visible = true;
+    p.draw(&s, &[], &mut cache(), &mut with_cursor, stride, true);
+    let pair = |px: &[u32]| -> alloc::vec::Vec<u32> { (0..ch).flat_map(|y| px[y * stride + 2 * cw..][..2 * cw].iter().copied()).collect() };
+    assert_ne!(pair(&plain), pair(&with_cursor));
+}
