@@ -150,7 +150,11 @@ def main():
         def shot(name, expected):
             since, tile, size = refresh(g, surface)
             client = client_rect(tile, *size)
-            c.move(client[0] + size[0] - 8, client[1] + size[1] - 8)
+            # The fourth region lowers the status strip to the client bottom.
+            # Park on the global bar so the hardware cursor cannot cover any
+            # checked app pixels; keep the complete status-strip RGB oracle.
+            assert client[1] > 32, 'cursor parking must be outside app pixels'
+            c.move(1, 1)
             g['wait'](rf'\[moan.plugin.paint\] target={target} task={task} surface={surface} .* text_hex={expected.encode().hex()}\r?\n', since, 120)
             g['wait'](rf'\[display.app.pixels\] target={target} surface={surface} w={size[0]} h={size[1]}\r?\n', since, 120)
             deadline = time.monotonic() + 15
