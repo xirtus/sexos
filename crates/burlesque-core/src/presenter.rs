@@ -30,6 +30,7 @@ pub enum BlankMode {
 pub struct PresenterSession {
     pub deck: Deck,
     pub current_slide: usize,
+    pub current_build: usize,
     pub blank_mode: BlankMode,
     pub elapsed_ms: u64,
     pub timer_running: bool,
@@ -40,6 +41,7 @@ impl PresenterSession {
         Self {
             deck,
             current_slide: 0,
+            current_build: 0,
             blank_mode: BlankMode::None,
             elapsed_ms: 0,
             timer_running: true,
@@ -50,6 +52,10 @@ impl PresenterSession {
         self.deck.get_slide(self.current_slide)
     }
 
+    pub fn current_build(&self) -> usize {
+        self.current_build
+    }
+
     pub fn next_slide_preview(&self) -> Option<&Slide> {
         self.deck.get_slide(self.current_slide + 1)
     }
@@ -57,6 +63,7 @@ impl PresenterSession {
     pub fn next_slide(&mut self) -> bool {
         if self.current_slide + 1 < self.deck.slide_count() {
             self.current_slide += 1;
+            self.current_build = 0;
             true
         } else {
             false
@@ -66,6 +73,7 @@ impl PresenterSession {
     pub fn prev_slide(&mut self) -> bool {
         if self.current_slide > 0 {
             self.current_slide -= 1;
+            self.current_build = 0;
             true
         } else {
             false
@@ -74,17 +82,45 @@ impl PresenterSession {
 
     pub fn first_slide(&mut self) {
         self.current_slide = 0;
+        self.current_build = 0;
     }
 
     pub fn last_slide(&mut self) {
         if self.deck.slide_count() > 0 {
             self.current_slide = self.deck.slide_count() - 1;
+            self.current_build = 0;
         }
     }
 
     pub fn goto_slide(&mut self, index: usize) -> bool {
         if index < self.deck.slide_count() {
             self.current_slide = index;
+            self.current_build = 0;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn next_step(&mut self) -> bool {
+        let num_builds = self.current_slide().map(|s| s.builds.len()).unwrap_or(0);
+        if self.current_build < num_builds {
+            self.current_build += 1;
+            true
+        } else if self.next_slide() {
+            self.current_build = 0;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn prev_step(&mut self) -> bool {
+        if self.current_build > 0 {
+            self.current_build -= 1;
+            true
+        } else if self.prev_slide() {
+            self.current_build = self.current_slide().map(|s| s.builds.len()).unwrap_or(0);
             true
         } else {
             false
@@ -92,7 +128,7 @@ impl PresenterSession {
     }
 
     pub fn step(&mut self) -> bool {
-        self.next_slide()
+        self.next_step()
     }
 
     pub fn toggle_timer(&mut self) {

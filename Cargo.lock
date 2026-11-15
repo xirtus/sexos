@@ -664,7 +664,9 @@ dependencies = [
  "sex-app",
  "sex-canvas",
  "sex-font",
+ "sex-media",
  "sex-pdx",
+ "sex-splice",
 ]
 
 [[package]]
