@@ -134,6 +134,8 @@ pub enum WmAction {
     NightLight,
     /// Super+Ctrl+Space: the next keyboard layout.
     KeyboardLayout,
+    /// Super+Shift+B: the Bluetooth panel.
+    Bluetooth,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -185,7 +187,8 @@ pub fn binding(key: u8, m: Mods) -> Option<WmAction> {
         (code::W, _) => WmAction::Overview,
         (code::N, false) => WmAction::Notifications,
         (code::N, true) => WmAction::NightLight,
-        (code::B, _) => WmAction::Wallpaper,
+        (code::B, false) => WmAction::Wallpaper,
+        (code::B, true) => WmAction::Bluetooth,
         (code::A, true) => WmAction::Animations,
         (code::ESC, _) => WmAction::Lock,
         _ => return None,

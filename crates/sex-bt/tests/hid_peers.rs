@@ -498,6 +498,31 @@ fn classic_mouse_pairs_moves_and_reconnects() {
 }
 
 #[test]
+fn a_page_that_fails_is_noted_and_can_be_retried() {
+    let (mut h, mut c) = ready();
+    let found = Found { addr: MOUSE, transport: Transport::Classic, addr_type: 0, rssi: Some(-40), class: Some(0x002580),
+        name: Some("Cuff Classic Mouse".into()), appearance: None, flags: None, connectable: true };
+    h.connect_hid(&found);
+    let page = h.poll().expect("the page");
+    assert_eq!(u16::from_le_bytes([page[1], page[2]]), hop::CREATE_CONNECTION);
+    // The mouse is out of range: the controller accepts the page, then times out.
+    h.on_packet(&hci::command_status(hop::CREATE_CONNECTION, 0));
+    let mut e = vec![0x04, 0, 0];
+    e.extend_from_slice(&MOUSE.0);
+    e.extend_from_slice(&[0x01, 0x00]);
+    h.on_packet(&hci::event(hci::ev::CONNECTION_COMPLETE, &e));
+    let notes = pump(&mut h, &mut c);
+    assert!(notes.contains(&Note::ConnectFailed { addr: MOUSE, status: 0x04 }), "{notes:?}");
+    // A failed page of a device we never asked for says nothing.
+    h.on_packet(&hci::event(hci::ev::CONNECTION_COMPLETE, &e));
+    assert!(!pump(&mut h, &mut c).iter().any(|n| matches!(n, Note::ConnectFailed { .. })));
+    // Asked again (the user picks Pair once more), it pages again and pairs.
+    h.connect_hid(&found);
+    let notes = pump(&mut h, &mut c);
+    assert!(notes.contains(&Note::Paired { addr: MOUSE, le: false }), "{notes:?}");
+}
+
+#[test]
 fn stranger_paging_us_is_refused() {
     let (mut h, mut c) = ready();
     let mut req = MOUSE.0.to_vec();
