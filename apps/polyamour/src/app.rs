@@ -51,7 +51,14 @@ impl App {
             crate::persist::load(&String::from_utf8_lossy(bytes))?
         } else {
             let fmt = sex_3d::io::Format::from_path(name).or_else(|| sex_3d::io::Format::sniff(bytes)).ok_or_else(|| format!("{name}: unknown file type"))?;
-            Doc::new(sex_3d::io::import(bytes, fmt, resolver).map_err(|e| e.to_string())?)
+            if fmt == sex_3d::io::Format::Blend {
+                let (scene, actions) = sex_3d::io::blend::import_blend_full(bytes)?;
+                let mut doc = Doc::new(scene);
+                crate::anim::adopt_blend_actions(&mut doc, &actions);
+                doc
+            } else {
+                Doc::new(sex_3d::io::import(bytes, fmt, resolver).map_err(|e| e.to_string())?)
+            }
         };
         self.doc = doc;
         self.doc.path = Some(name.to_string());

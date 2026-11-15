@@ -619,6 +619,34 @@ pub fn run(doc: &mut Doc, op: &Op) -> bool {
     true
 }
 
+/// Take over the object animation of an imported .blend (location, Euler
+/// rotation and scale curves), keeping Blender's key positions.
+pub fn adopt_blend_actions(doc: &mut Doc, actions: &[sex_3d::io::blend::BlendAction]) {
+    use sex_3d::io::blend::{INTERP_CONSTANT, INTERP_LINEAR};
+    for a in actions {
+        if !doc.scene.objects.iter().any(|o| o.name == a.object) {
+            continue;
+        }
+        let obj = doc.anim.entry(&a.object);
+        for c in &a.curves {
+            let Some(prop) = Prop::ALL.into_iter().find(|p| p.path() == c.path) else { continue };
+            if c.index > 2 {
+                continue;
+            }
+            let curve = obj.curve_mut(prop, c.index);
+            for k in &c.keys {
+                let interp = match k.interpolation {
+                    INTERP_CONSTANT => Interp::Constant,
+                    INTERP_LINEAR => Interp::Linear,
+                    _ => Interp::Bezier,
+                };
+                curve.insert(k.frame, k.value, interp);
+            }
+        }
+    }
+    doc.anim.dirty = true;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
