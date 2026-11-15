@@ -281,6 +281,7 @@ pub mod launch {
     }
     /// Starts `/bin/NAME` (or `@/path` of a program file this run holds) with `args`.
     /// `network` only works for a run that has the network. Events for it carry `cookie`.
+    /// Call from the program's main task; launch/control requests are run-scoped.
     pub fn run(name: &[u8], args: &[u8], network: bool, cookie: u32) -> Result<(), Error> {
         start(name, args, if network { store::RUN_NETWORK } else { 0 }, cookie)
     }

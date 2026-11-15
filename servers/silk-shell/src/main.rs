@@ -17568,6 +17568,10 @@ unsafe fn launch_poll(){
 }
 /// Shell must not sleep while an ended child's status may still come.
 fn launch_waiting()->bool{unsafe{LAUNCH_RUNS.iter().flatten().any(|r|r.ended.is_some())}}
+/// Launch/control requests belong to the exact active main task, not an old run.
+fn launch_caller_task(current_task:u32,caller_task:u32)->bool{
+    current_task!=0 && current_task==caller_task
+}
 /// Match the kernel-stamped exact child run, including delayed exit messages.
 fn launch_exit_subject(child:u32,child_task:u32,status:Option<u32>,caller:u32,caller_task:u32)->bool{
     child==caller && child_task==caller_task && status.is_none()
@@ -17586,6 +17590,7 @@ unsafe fn shell_launch_message(msg:&sex_pdx::PdxMessage)->bool{
         return true;
     }
     let Some((_,task))=program_run(msg.caller_pd)else{sex_pdx::serial_record!("[shell.launch.stale] caller={} op={:#x}",msg.caller_pd,msg.type_id);return true};
+    if !launch_caller_task(task,msg.caller_task){return true}
     let caller=msg.caller_pd;
     match msg.type_id{
         launch::OP_KILL=>{
@@ -17607,7 +17612,7 @@ unsafe fn shell_launch_message(msg:&sex_pdx::PdxMessage)->bool{
             if LAUNCH_RUNS.iter().flatten().count()>=launch::MAX_RUNS{refuse(store::NO_FREE_ROW,"runs");return true}
             if PROGRAM_READING||PROGRAM_REBIRTH.is_some()||RECORD_SPAWN_LEFT!=0{refuse(store::IMAGE_BUSY,"busy");return true}
             if program_free_row().is_none(){refuse(store::NO_FREE_ROW,"no_free_row");return true}
-            let(status,_)=pdx_call(store::SHELL_ROUTE_SLOT,store::OP,store::TICKET,ticket,0);
+            let(status,_)=pdx_call(store::SHELL_ROUTE_SLOT,store::OP,store::TICKET,ticket,caller as u64);
             if status!=0{refuse(store::IMAGE_BUSY,"files_busy");return true}
             PROGRAM_READING=true;PROGRAM_NETWORK=network;LAUNCH_ASKER=Some((caller,task,cookie));LAUNCH_HIDDEN=flags&store::RUN_HIDDEN!=0;
             sex_pdx::serial_record!("[shell.launch.asked] parent={} task={} cookie={} network={}",caller,task,cookie,network as u8);
@@ -17636,6 +17641,7 @@ unsafe fn shell_program_message(msg:&sex_pdx::PdxMessage)->bool{
         // A terminal's ticket (sex_pdx::console_relay): Files starts it only for the program that prepared it.
         let by_program=msg.arg0==store::TICKET&&matches!(app_catalog::app_of(msg.caller_pd),Some(app_catalog::App::Program));
         if !app_catalog::is_spindle(msg.caller_pd)&&!by_program{return true}
+        if by_program&&!program_run(msg.caller_pd).is_some_and(|(_,task)|launch_caller_task(task,msg.caller_task)){return true}
         if PROGRAM_READING||PROGRAM_REBIRTH.is_some()||program_free_row().is_none(){
             sex_pdx::serial_record!("[shell.program.denied] reason=no_free_row");program_refused(store::NO_FREE_ROW);return true;
         }

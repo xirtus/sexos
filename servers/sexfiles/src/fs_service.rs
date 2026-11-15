@@ -592,7 +592,7 @@ fn program_live(target: u32, task: u32) -> bool {
         && sex_pdx::app_lifecycle::info(row.lifecycle_slot) == Err(sex_pdx::app_lifecycle::LIVE)
 }
 /// The answer for one request. Never touches another client's region.
-pub fn handle(caller: u32, a: u64, offset: u64, length: u64) -> u64 {
+pub fn handle(caller: u32, caller_task: u32, a: u64, offset: u64, length: u64) -> u64 {
     let Some(r) = w::Request::decode(a, offset, length) else { return w::reply((a & 0xFF_FFFF) as u32, w::INVALID, 0) };
     let program = program_index(caller);
     let index = match (sex_pdx::app_catalog::SPINDLE_TARGETS.iter().position(|t| *t == caller), program) {
@@ -606,7 +606,7 @@ pub fn handle(caller: u32, a: u64, offset: u64, length: u64) -> u64 {
             let bound = unsafe { (*core::ptr::addr_of!(BINDINGS))[k] };
             // A program may eject (UNMOUNT) a volume its grant covers whole, checked with
             // its other paths below; mounting stays Spindle's.
-            if !bound.is_some_and(|b| program_live(caller, b.task)) || matches!(r.kind, w::INSTALL | w::UPDATE | w::MOUNT) { return w::reply(r.seq, w::DENIED, 0); }
+            if !bound.is_some_and(|b| bound_sender(caller, caller_task, b.task, r.kind == w::PREPARE)) || matches!(r.kind, w::INSTALL | w::UPDATE | w::MOUNT) { return w::reply(r.seq, w::DENIED, 0); }
             // A terminal the person started with Spindle's `spindle` command may start programs
             // attached to it (`console_relay`). Any program may PREPARE a run of its own
             // (`sex_pdx::launch`); `program_prepare` lets it pass on only what it holds.
@@ -624,7 +624,7 @@ pub fn handle(caller: u32, a: u64, offset: u64, length: u64) -> u64 {
     };
     if r.kind == w::PING { return w::reply(r.seq, w::OK, 0); }
     let before = unsafe { (DEVICE_READ_CALLS, DEVICE_READ_BYTES) };
-    let answer = handle_request(index, program, r);
+    let answer = handle_request(index, program, caller, r);
     if r.kind == w::READ {
         unsafe {
             let own = &mut *core::ptr::addr_of_mut!(READ_IO).cast::<w::ReadIoStats>().add(index);
@@ -635,7 +635,7 @@ pub fn handle(caller: u32, a: u64, offset: u64, length: u64) -> u64 {
     }
     answer
 }
-fn handle_request(index: usize, program: Option<usize>, r: w::Request) -> u64 {
+fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Request) -> u64 {
     let mut r = r;
     let Ok(view) = sex_pdx::memory_region_view(w::PROVIDER_SLOT_BASE + index as u64, 0, w::REGION_BYTES as u64, QUERY_VIEW | READ | WRITE) else { return w::reply(r.seq, w::IO, 0) };
     let region = unsafe { core::slice::from_raw_parts_mut(view.virtual_address as *mut u8, w::REGION_BYTES) };
@@ -743,7 +743,6 @@ fn handle_request(index: usize, program: Option<usize>, r: w::Request) -> u64 {
         words[..given].copy_from_slice(&region[w::PATH_BYTES..w::PATH_BYTES + given]);
         let n = sex_pdx::console_relay::plain_args(&words[..given], &mut region[w::PATH_BYTES..w::PATH_BYTES + w::ARGS_MAX]);
         r.length = n as u64;
-        unsafe { PREPARING_FOR = Some(k); }
     } else if let Some(k) = program {
         // Every path, both halves of a rename too, lands inside the program's folder.
         let binding = unsafe { (*core::ptr::addr_of!(BINDINGS))[k] }.unwrap();
@@ -834,7 +833,12 @@ fn handle_request(index: usize, program: Option<usize>, r: w::Request) -> u64 {
         return w::reply(r.seq, w::DENIED, 0);
     }
     if r.kind == w::SYNC { crate::volumes::sync_all(fs); crate::home::sync(fs); }
-    let result = run(fs, r, path, data);
+    let owner = if r.kind == w::PREPARE && program.is_some() {
+        let Some(owner) = current_ticket_owner(caller) else { return w::reply(r.seq, w::DENIED, 0); };
+        Some(owner)
+    } else { None };
+    let relay = if relay_terminal { program } else { None };
+    let result = run(fs, r, path, data, owner, relay);
     if r.kind == w::STAT && result.is_ok() {
         let word = |i: usize| u64::from_le_bytes(data[i * 8..i * 8 + 8].try_into().unwrap());
         w::stat_cache::fill(cache, &spelled[..spelled_len], word(3), word(0) != 0, word(1), word(2), word(3));
@@ -858,13 +862,25 @@ fn handle_request(index: usize, program: Option<usize>, r: w::Request) -> u64 {
 /// One path waiting for Shell to ask for it, and the ticket that names it.
 static mut PREPARED: ([u8; w::PATH_BYTES], usize, u32) = ([0; w::PATH_BYTES], 0, 0);
 static mut PREPARED_ARGS: ([u8; w::ARGS_MAX], usize) = ([0; w::ARGS_MAX], 0);
-/// The terminal (program row) a PREPARE in progress is for; None for Spindle.
-static mut PREPARING_FOR: Option<usize> = None;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TicketOwner { target: u32, task: u32 }
+/// All program tickets have an exact owner. None is reserved for trusted Spindle.
+/// Console relay attachment is separate: generic app launches do not attach one.
+static mut PREPARED_OWNER: Option<TicketOwner> = None;
 /// Who prepared the waiting ticket: a terminal's row, or None for Spindle.
 static mut PREPARED_LAUNCHER: Option<usize> = None;
 /// The terminal the program just read was prepared by, until Shell binds it.
 static mut LOADED_LAUNCHER: Option<usize> = None;
 static mut NEXT_TICKET: u32 = 0;
+fn bound_sender(target: u32, sender_task: u32, bound_task: u32, preparing: bool) -> bool {
+    // Worker file I/O remains valid; launch delegation belongs to the main run.
+    bound_task != 0 && program_live(target, bound_task) && (!preparing || (sender_task != 0 && sender_task == bound_task))
+}
+fn current_ticket_owner(target: u32) -> Option<TicketOwner> {
+    let index = program_index(target)?;
+    let binding = unsafe { (*core::ptr::addr_of!(BINDINGS))[index] }?;
+    (binding.task != 0 && program_live(target, binding.task)).then_some(TicketOwner { target, task: binding.task })
+}
 pub enum Program { Absent, Failed(u32), Loaded(u32) }
 /// Copies a file into `image`. A disk with no filesystem has no such file.
 fn read_program(path: &[u8], image: &mut [u8], remember: bool) -> Program {
@@ -927,11 +943,16 @@ pub fn read_ticket(ticket: u64, requester: u32, image: &mut [u8]) -> (Program, O
     unsafe { (*core::ptr::addr_of_mut!(LOADED)).1 = 0; *core::ptr::addr_of_mut!(LOADED_LAUNCHER) = None; }
     let prepared = unsafe { &mut *core::ptr::addr_of_mut!(PREPARED) };
     if prepared.1 == 0 || prepared.2 as u64 != ticket { return (Program::Absent, None); }
+    let owner = if requester == 0 { None } else {
+        let Some(owner) = current_ticket_owner(requester) else { return (Program::Absent, None); };
+        Some(owner)
+    };
     let by = unsafe { PREPARED_LAUNCHER };
     let asker = if requester == 0 { None } else { match program_index(requester) { Some(k) => Some(k), None => return (Program::Absent, None) } };
-    if by != asker { sex_pdx::serial_record!("[files.ticket.denied] requester={}", requester); return (Program::Absent, None); }
+    if unsafe { PREPARED_OWNER } != owner || (by.is_some() && by != asker) { sex_pdx::serial_record!("[files.ticket.denied] requester={}", requester); return (Program::Absent, None); }
     unsafe { LOADED_LAUNCHER = by; }
     let len = core::mem::take(&mut prepared.1);
+    unsafe { PREPARED_OWNER = None; }
     unsafe { *core::ptr::addr_of_mut!(LOADED_ARGS) = *core::ptr::addr_of!(PREPARED_ARGS); }
     let path = &prepared.0[..len];
     let found = read_program(path, image, true);
@@ -940,13 +961,13 @@ pub fn read_ticket(ticket: u64, requester: u32, image: &mut [u8]) -> (Program, O
         .and_then(sex_pdx::program_store::pack_name);
     match found { Program::Absent => (Program::Absent, store_name), other => (other, None) }
 }
-fn run(fs: &mut Fs<'static, Disk>, r: w::Request, path: &[u8], data: &mut [u8]) -> Result<u32, Error> {
+fn run(fs: &mut Fs<'static, Disk>, r: w::Request, path: &[u8], data: &mut [u8], owner: Option<TicketOwner>, relay: Option<usize>) -> Result<u32, Error> {
     // Test builds only: a path that makes Files fall over, to show it comes back.
     if option_env!("SEXOS_FILES_CRASH_PROBE").is_some() && path == b"/crash.probe" {
         sex_pdx::serial_record!("[files.crash.probe]");
         unsafe { core::ptr::write_volatile(8 as *mut u8, 1) };
     }
-    if r.kind == w::PREPARE { return prepare(fs, r, path, data); }
+    if r.kind == w::PREPARE { return prepare(fs, r, path, data, owner, relay); }
     run_on(fs, r, path, data)
 }
 /// The requests every SexOS filesystem answers alike: the system disk's, and home's.
@@ -1020,7 +1041,7 @@ pub fn run_on<D: sexfs::Device>(fs: &mut Fs<'static, D>, r: w::Request, path: &[
         _ => Err(Error::Name),
     }
 }
-fn prepare(fs: &mut Fs<'static, Disk>, r: w::Request, path: &[u8], data: &mut [u8]) -> Result<u32, Error> {
+fn prepare(fs: &mut Fs<'static, Disk>, r: w::Request, path: &[u8], data: &mut [u8], owner: Option<TicketOwner>, relay: Option<usize>) -> Result<u32, Error> {
     {
         {
             // `/bin/NAME` with no such file may still be the disk program store's NAME:
@@ -1044,8 +1065,8 @@ fn prepare(fs: &mut Fs<'static, Disk>, r: w::Request, path: &[u8], data: &mut [u
             // Never zero, and within the reply's 24 bits.
             let ticket = unsafe { NEXT_TICKET = NEXT_TICKET % 0xFF_FFFE + 1; NEXT_TICKET };
             prepared.2 = ticket;
-            let by = unsafe { core::mem::take(&mut *core::ptr::addr_of_mut!(PREPARING_FOR)) };
-            unsafe { PREPARED_LAUNCHER = by; }
+            let by = relay;
+            unsafe { PREPARED_OWNER = owner; PREPARED_LAUNCHER = by; }
             if let Some(k) = by { crate::console_relay::prepared(k); }
             // A program a package installed: what it asks for and what the person said.
             let note = path.strip_prefix(sex_pdx::program_store::BIN).and_then(|name| crate::packages::note(fs, name));
@@ -1120,11 +1141,11 @@ pub fn quarantine_program(target:u32)->bool {
         if let Some((_,data,n))=offers[index].as_mut(){wipe_restricted_bytes(data);*n=0;}
         offers[index]=None;
         for entry in (&mut *core::ptr::addr_of_mut!(REPLIES)).iter_mut(){if entry.0==target{*entry=(0,0);}}
-        if PREPARED_LAUNCHER==Some(index){
+        if PREPARED_OWNER.is_some_and(|owner|owner.target==target)||PREPARED_LAUNCHER==Some(index){
             let prepared=&mut *core::ptr::addr_of_mut!(PREPARED);
             wipe_restricted_bytes(&mut prepared.0);prepared.1=0;
             let args=&mut *core::ptr::addr_of_mut!(PREPARED_ARGS);
-            wipe_restricted_bytes(&mut args.0);args.1=0;PREPARED_LAUNCHER=None;
+            wipe_restricted_bytes(&mut args.0);args.1=0;PREPARED_LAUNCHER=None;PREPARED_OWNER=None;
         }
         READ_IO[w::PROGRAM_INDEX_BASE+index]=w::ReadIoStats::ZERO;
     }
