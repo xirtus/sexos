@@ -2810,7 +2810,8 @@ pub extern "C" fn _start() -> ! {
         if unsafe{fs_commands::FS.send()}{}
         {
             let idle=unsafe{!fs_commands::FS.busy()&&!capture_command::CAPTURE.busy()&&!fetch_command::FETCH.busy()&&!update_command::UPDATE.busy()&&!pkg_command::PKG.busy()&&!record_command::RECORD.sending()};
-            if unsafe{session_command::SESSION.step(idle,sb)}{unsafe{content_render(&line,sb);}}
+            // A line held while the session file was busy runs before the session opens more.
+            if unsafe{session_command::SESSION.step(idle&&HELD_LEN==0,sb)}{unsafe{content_render(&line,sb);}}
         }
         if unsafe{HELD_LEN!=0&&!session_command::SESSION.io_busy()}{
             let held=unsafe{let n=HELD_LEN;HELD_LEN=0;let mut b=[0u8;CMD_MAX];b[..n].copy_from_slice(&HELD[..n]);(b,n)};

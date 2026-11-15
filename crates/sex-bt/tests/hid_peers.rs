@@ -448,6 +448,13 @@ fn ble_keyboard_pairs_types_and_comes_back() {
     assert_eq!(inputs(&pump(&mut h2, &mut c2)), [Input::Keys { modifiers: 0, keys: [0x28, 0, 0, 0, 0, 0] }]);
     // Encryption used the stored key, not a new pairing.
     assert_eq!(c2.opcodes.iter().filter(|o| **o == hop::LE_START_ENCRYPTION).count(), 1);
+    // Forgetting the bond (listed under its first address) drops the live link that
+    // came in from the new private address.
+    assert!(!c2.opcodes.contains(&code::DISCONNECT));
+    h2.forget(first);
+    pump(&mut h2, &mut c2);
+    assert!(c2.opcodes.contains(&code::DISCONNECT));
+    assert!(h2.bonds.le_for(&back).is_none());
 }
 
 #[test]
@@ -495,6 +502,31 @@ fn classic_mouse_pairs_moves_and_reconnects() {
     assert_eq!(c.mouse.handshake, 2);
     c.mouse_moves(&[0x04, 0x01, 0x01]);
     assert_eq!(inputs(&pump(&mut h, &mut c)), [Input::Pointer { buttons: 4, dx: 1, dy: 1, wheel: 0 }]);
+}
+
+#[test]
+fn a_page_that_fails_is_noted_and_can_be_retried() {
+    let (mut h, mut c) = ready();
+    let found = Found { addr: MOUSE, transport: Transport::Classic, addr_type: 0, rssi: Some(-40), class: Some(0x002580),
+        name: Some("Cuff Classic Mouse".into()), appearance: None, flags: None, connectable: true };
+    h.connect_hid(&found);
+    let page = h.poll().expect("the page");
+    assert_eq!(u16::from_le_bytes([page[1], page[2]]), hop::CREATE_CONNECTION);
+    // The mouse is out of range: the controller accepts the page, then times out.
+    h.on_packet(&hci::command_status(hop::CREATE_CONNECTION, 0));
+    let mut e = vec![0x04, 0, 0];
+    e.extend_from_slice(&MOUSE.0);
+    e.extend_from_slice(&[0x01, 0x00]);
+    h.on_packet(&hci::event(hci::ev::CONNECTION_COMPLETE, &e));
+    let notes = pump(&mut h, &mut c);
+    assert!(notes.contains(&Note::ConnectFailed { addr: MOUSE, status: 0x04 }), "{notes:?}");
+    // A failed page of a device we never asked for says nothing.
+    h.on_packet(&hci::event(hci::ev::CONNECTION_COMPLETE, &e));
+    assert!(!pump(&mut h, &mut c).iter().any(|n| matches!(n, Note::ConnectFailed { .. })));
+    // Asked again (the user picks Pair once more), it pages again and pairs.
+    h.connect_hid(&found);
+    let notes = pump(&mut h, &mut c);
+    assert!(notes.contains(&Note::Paired { addr: MOUSE, le: false }), "{notes:?}");
 }
 
 #[test]

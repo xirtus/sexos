@@ -1702,6 +1702,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "drag"
+version = "0.1.0"
+dependencies = [
+ "drag-vmm",
+ "sex-app",
+ "sex-pdx",
+]
+
+[[package]]
+name = "drag-vmm"
+version = "0.1.0"
+dependencies = [
+ "sex-pdx",
+]
+
+[[package]]
 name = "dragtest"
 version = "0.1.0"
 dependencies = [
@@ -4549,6 +4565,16 @@ dependencies = [
  "cpufeatures 0.2.17",
  "opaque-debug",
  "universal-hash",
+]
+
+[[package]]
+name = "polyamour"
+version = "0.1.0"
+dependencies = [
+ "png",
+ "sex-3d",
+ "sex-office",
+ "sex-std",
 ]
 
 [[package]]

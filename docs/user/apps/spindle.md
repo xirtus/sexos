@@ -99,7 +99,7 @@ blockers                  # Inspect known system limitations
 keys                      # Keyboard proven path summary
 pd                        # List active hardware protection domains (PKU)
 servers                   # List running system server organs
-crashes                   # Inspect crash records from Foreplay boot logs
+crashes                   # Inspect crash records from Tantalize boot logs
 history                   # Show command history
 history clear             # Clear and persist command history
 ```
