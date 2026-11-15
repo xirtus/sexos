@@ -590,7 +590,10 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
             regs.rsi=reply[1];regs.rdx=reply[2];regs.r10=reply[3];regs.r8=reply[4];reply[0]
         },
         76 => { // civil time: ms since the Unix epoch, for any task (sex_pdx::clock_source::civil)
-            match crate::clock_source::civil_ms(){Ok(ms)=>{regs.rsi=ms;0},Err(e)=>{regs.rsi=0;e}}
+            if rdi==sex_pdx::clock_source::civil::SET{
+                let pd=crate::core_local::CoreLocal::get().current_pd_ref().id;
+                let status=crate::clock_source::set_civil(pd,rsi);regs.rsi=0;status
+            }else{match crate::clock_source::civil_ms(){Ok(ms)=>{regs.rsi=ms;0},Err(e)=>{regs.rsi=0;e}}}
         },
         73 => {
             let pd=crate::core_local::CoreLocal::get().current_pd_ref();

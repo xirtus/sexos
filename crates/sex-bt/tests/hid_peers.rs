@@ -217,6 +217,7 @@ impl Controller {
                 match cid {
                     l2cap::CID_SMP => { let a = self.kb.smp.on_pdu(payload); self.kb_actions(a); }
                     l2cap::CID_ATT => { if let Some(r) = self.kb.att(payload) { self.le_send(l2cap::CID_ATT, &r); } }
+                    l2cap::CID_LE_SIGNALING => assert_eq!(payload[0], l2cap::sig::CONNECTION_PARAMETER_UPDATE_RESPONSE),
                     _ => panic!("LE cid {cid:#x}"),
                 }
             } else {
@@ -530,4 +531,19 @@ fn spoofed_bonded_address_injects_nothing() {
     assert!(!notes.iter().any(|n| matches!(n, Note::Encrypted { handle: 0x000d })), "{notes:?}");
     assert!(notes.iter().any(|n| matches!(n, Note::PairingFailed { addr, .. } if *addr == MOUSE)), "{notes:?}");
     assert!(c.opcodes.contains(&code::DISCONNECT), "the impostor is dropped");
+}
+
+#[test]
+fn le_parameter_update_reaches_the_controller() {
+    let (mut h, mut c) = ready();
+    let found = Found { addr: c.kb_addr, transport: Transport::Le, addr_type: 1, rssi: Some(-50), class: None,
+        name: Some("Silk BLE Keyboard".into()), appearance: Some(0x03c1), flags: Some(0x05), connectable: true };
+    h.connect_hid(&found);
+    pump(&mut h, &mut c);
+    // The keyboard (peripheral) asks for 30-45 ms, latency 4, timeout 4 s.
+    let mut d = vec![];
+    for v in [24u16, 36, 4, 400] { d.extend_from_slice(&v.to_le_bytes()); }
+    c.le_send(l2cap::CID_LE_SIGNALING, &l2cap::command(l2cap::sig::CONNECTION_PARAMETER_UPDATE_REQUEST, 7, &d));
+    pump(&mut h, &mut c);
+    assert!(c.opcodes.contains(&code::LE_CONNECTION_UPDATE));
 }

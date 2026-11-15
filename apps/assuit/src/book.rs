@@ -63,6 +63,44 @@ impl Book {
         Some(id)
     }
 
+    /// Selects the next place the text holds `what`, after the caret and wrapping round.
+    /// Returns (which match, counted from 1; how many there are).
+    pub fn find_next(&mut self, what: &str) -> Result<(usize, usize), String> {
+        let missing = || format!("\"{what}\" is not in the document");
+        let next = self.run("edit.findNext", json!({ "text": what })).map_err(|_| missing())?;
+        let count = next.get("count").and_then(Value::as_u64).unwrap_or(0) as usize;
+        if count == 0 { return Err(missing()); }
+        Ok((next.get("index").and_then(Value::as_u64).unwrap_or(0) as usize + 1, count))
+    }
+
+    /// Replaces every `what` with `with` (Word's Replace All). Returns how many were replaced.
+    pub fn replace_all(&mut self, what: &str, with: &str) -> Result<usize, String> {
+        let r = self.run("edit.replaceAll", json!({ "text": what, "with": with }))?;
+        Ok(r.get("replaced").and_then(Value::as_u64).unwrap_or(0) as usize)
+    }
+
+    /// The paragraph styles of the Styles gallery, in its order: (id, name).
+    pub fn styles(&mut self) -> Vec<(String, String)> {
+        let Ok(list) = self.run("styles.manage", json!({})) else { return Vec::new() };
+        list.as_array().into_iter().flatten()
+            .filter(|s| s["inGallery"] == true && s["hidden"] != true && matches!(s["type"].as_str(), Some("paragraph" | "linked")))
+            .filter_map(|s| Some((s["id"].as_str()?.to_string(), s["name"].as_str()?.to_string())))
+            .collect()
+    }
+
+    /// The style name of the caret's paragraph.
+    pub fn paragraph_style(&mut self) -> String {
+        self.run("styles.inspect", json!({})).ok()
+            .and_then(|r| r["paragraph"]["styleName"].as_str().map(str::to_string))
+            .unwrap_or_default()
+    }
+
+    /// Gives the caret's (or the selection's) paragraphs the style `id`.
+    pub fn set_style(&mut self, id: &str) -> Result<(), String> { self.run("para.style", json!({ "style": id })).map(|_| ()) }
+
+    /// Words in the body, as a word processor's status bar counts them.
+    pub fn words(&self) -> usize { self.text().split_whitespace().count() }
+
     pub fn dirty(&self) -> bool { self.session.dirty }
     pub fn text(&self) -> String { self.session.doc.plain_text(StoryRef::Body) }
     pub fn layout(&mut self) -> Arc<DocLayout> { self.session.layout() }
@@ -249,4 +287,42 @@ mod tests {
         book.save().unwrap();
         assert!(Book::open(&path).unwrap().text().starts_with("Hello"));
     }
+
+    #[test]
+    fn find_selects_matches_and_copy_pastes() {
+        let mut book = welcome("find.docx");
+        let words = book.words();
+        assert!(words > 20, "{words}");
+        let (first, count) = book.find_next("Assuit").unwrap();
+        assert_eq!((first, count), (1, count));
+        assert!(count >= 2);
+        assert_eq!(book.selection_rects().len(), 1, "the match is selected");
+        let (second, _) = book.find_next("Assuit").unwrap();
+        assert_eq!(second, 2);
+        assert!(book.find_next("no such words here").is_err());
+        // The selected match copies and pastes at the end.
+        book.key(&Chord { name: "C", ctrl: true, shift: false });
+        book.key(&Chord { name: "End", ctrl: true, shift: false });
+        book.type_text(" ").unwrap();
+        book.key(&Chord { name: "V", ctrl: true, shift: false });
+        assert!(book.text().trim_end().ends_with("Assuit"), "{:?}", book.text().chars().rev().take(40).collect::<String>());
+        assert_eq!(book.words(), words + 1);
+    }
+
+
+    #[test]
+    fn replace_and_paragraph_styles() {
+        let mut book = welcome("styles.docx");
+        assert_eq!(book.replace_all("Assuit", "Assuit Writer").unwrap(), book.text().matches("Assuit").count());
+        assert!(book.text().starts_with("Welcome to Assuit Writer"));
+        let styles = book.styles();
+        let names: Vec<&str> = styles.iter().map(|s| s.1.as_str()).collect();
+        assert!(names.contains(&"Normal") && names.contains(&"Heading 1"), "{names:?}");
+        assert!(!names.contains(&"Strong"), "character styles stay out: {names:?}");
+        assert_eq!(book.paragraph_style(), "Title");
+        book.set_style("Heading1").unwrap();
+        assert_eq!(book.paragraph_style(), "Heading 1");
+        assert!(book.dirty());
+    }
+
 }

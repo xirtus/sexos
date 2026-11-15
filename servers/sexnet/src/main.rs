@@ -22,6 +22,7 @@ mod realtek;
 mod arp;
 mod jobs;
 mod dns_jobs;
+mod clock_sync;
 mod entropy;
 mod certificate_time;
 mod trust_policy;
@@ -5615,6 +5616,18 @@ pub extern "C" fn _start() -> ! {
         if req.type_id==sex_pdx::wifi_status::OP{
             // The desktop's view of Wi-Fi (Spindle's `wifi`): one word, answered at once.
             pdx_reply(req.caller_pd,wifi::request(wifi.as_mut(),req.caller_pd as u32,req.arg0,req.arg1,req.arg2,sex_pdx::get_ticks()));
+            continue;
+        }
+        if req.type_id==sex_pdx::network_time::OP{
+            // Shell turns network time on or off, or asks again; anyone may ask how it went.
+            use sex_pdx::network_time as nt;
+            let reply=match req.arg0{
+                nt::SET_ENABLED if req.caller_pd==3=>{web.time.set_enabled(req.arg1!=0);nt::OK},
+                nt::SYNC_NOW if req.caller_pd==3=>{web.time.sync_now();nt::OK},
+                nt::STATUS=>web.time.status(sex_pdx::get_ticks()),
+                _=>nt::DENIED,
+            };
+            pdx_reply(req.caller_pd,reply);
             continue;
         }
         if req.type_id==sex_pdx::web::OP{
