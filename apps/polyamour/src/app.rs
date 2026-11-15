@@ -78,6 +78,7 @@ impl App {
         if let Some(pos) = input.pos() {
             self.ui.mouse = pos;
         }
+        crate::anim::tick(&mut self.doc);
         let mut input = Some(input);
         let had_popup = self.popup.is_some();
 
@@ -143,6 +144,7 @@ impl App {
             self.popup = Some(p);
         }
         let ran = self.run_queue();
+        let ran = crate::anim::tick(&mut self.doc) || ran;
         if let Some(name) = self.doc.want_workspace.take() {
             if let Some(i) = self.workspaces.iter().position(|w| w.name == name) {
                 self.active_ws = i;
@@ -197,6 +199,9 @@ impl App {
             (Key::Right, Mods::SHIFT) => Op::with("screen.frame_jump", "END"),
             (Key::Left, Mods::NONE) => Op::with("screen.frame_offset", "-1"),
             (Key::Right, Mods::NONE) => Op::with("screen.frame_offset", "1"),
+            (Key::Up, Mods::NONE) => Op::with("screen.keyframe_jump", "NEXT"),
+            (Key::Down, Mods::NONE) => Op::with("screen.keyframe_jump", "PREV"),
+            (Key::Space, Mods::CTRL_SHIFT) => Op::new("screen.animation_play_reverse"),
             _ => return,
         };
         self.doc.queue.push(op);
