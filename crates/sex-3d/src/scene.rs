@@ -82,6 +82,10 @@ pub struct Material {
     /// 0 = opaque, 1 = fully transmissive (glass).
     pub transmission: f32,
     pub double_sided: bool,
+    /// Shader node tree (Use Nodes). When set, the renderer shades from the
+    /// tree and the fields above mirror its Principled BSDF for the viewport
+    /// and exporters.
+    pub node_tree: Option<crate::nodes::NodeTree>,
 }
 
 impl Default for Material {
@@ -97,6 +101,7 @@ impl Default for Material {
             ior: 1.5,
             transmission: 0.0,
             double_sided: false,
+            node_tree: None,
         }
     }
 }
@@ -190,11 +195,13 @@ pub struct World {
     pub strength: f32,
     /// Equirectangular environment image in [`Scene::images`].
     pub hdri: Option<usize>,
+    /// World shader node tree; when set it replaces colour/strength/HDRI.
+    pub node_tree: Option<crate::nodes::NodeTree>,
 }
 
 impl Default for World {
     fn default() -> Self {
-        World { color: Vec3::splat(0.05), strength: 1.0, hdri: None }
+        World { color: Vec3::splat(0.05), strength: 1.0, hdri: None, node_tree: None }
     }
 }
 
@@ -216,6 +223,8 @@ pub struct Scene {
     pub fps: f32,
     /// The current frame, for modifiers that animate (Wave, Build).
     pub frame_current: i32,
+    /// Node groups (Blender's node group data-blocks), shared by trees.
+    pub node_groups: Vec<crate::nodes::NodeTree>,
 }
 
 impl Default for Scene {
@@ -236,6 +245,7 @@ impl Default for Scene {
             frame_end: 250,
             fps: 24.0,
             frame_current: 1,
+            node_groups: Vec::new(),
         }
     }
 }

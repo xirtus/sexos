@@ -21,6 +21,7 @@ pub mod primitives;
 pub mod scene;
 pub mod undo;
 pub mod modifiers;
+pub mod nodes;
 pub mod ops;
 pub mod ops2;
 pub mod render;

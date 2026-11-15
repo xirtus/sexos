@@ -497,6 +497,7 @@ fn ensure_cache(s: &mut State, d: &mut Doc) {
         frame_end: d.scene.frame_end,
         fps: d.scene.fps,
         frame_current: d.scene.frame_current,
+        node_groups: Vec::new(),
     };
     let empty = ViewportScene::new(&shell);
     d.scene.selected = saved;
