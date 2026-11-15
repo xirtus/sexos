@@ -220,6 +220,14 @@ impl Editor {
             _ => false,
         }
     }
+
+    /// Whether this editor wants `Input::Tick` events to keep refining.
+    pub fn wants_tick(&self) -> bool {
+        match self {
+            Editor::View3D(s) => view3d::wants_tick(s),
+            _ => false,
+        }
+    }
 }
 
 fn body_color(k: EditorKind) -> u32 {

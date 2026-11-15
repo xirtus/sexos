@@ -13,10 +13,12 @@
 pub mod app;
 pub mod doc;
 pub mod draw;
+pub mod edit;
 pub mod editors;
 pub mod input;
 pub mod screen;
 pub mod theme;
+pub mod transform;
 pub mod ui;
 
 pub use app::App;

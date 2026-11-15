@@ -139,6 +139,9 @@ impl App {
         if let Some(p) = self.ui.open_popup.take() {
             self.popup = Some(p);
         }
+        if let Some(p) = self.doc.menu.take() {
+            self.popup = Some(p);
+        }
         let ran = self.run_queue();
         if let Some(name) = self.doc.want_workspace.take() {
             if let Some(i) = self.workspaces.iter().position(|w| w.name == name) {
@@ -148,10 +151,20 @@ impl App {
         // Something changed after the widgets drew: draw again so the screen is current.
         if ran || had_popup != self.popup.is_some() {
             self.draw(None);
+            // A menu an editor asked for while handling ops in that redraw.
+            if let Some(p) = self.ui.open_popup.take().or_else(|| self.doc.menu.take()) {
+                self.popup = Some(p);
+            }
         }
         if let Some(p) = &self.popup {
             p.draw(&mut self.painter, self.ui.mouse);
         }
+    }
+
+    /// Whether an editor in the active workspace wants `Input::Tick` events
+    /// (a viewport refining a progressive render).
+    pub fn wants_tick(&self) -> bool {
+        self.workspaces[self.active_ws].areas().iter().any(|a| a.editor.wants_tick())
     }
 
     /// Draw the whole window, returning the event if no widget took it.

@@ -115,10 +115,19 @@ fn main() {
     show(&app, window);
     sex_std::sex_pdx::serial_record!("[polyamour.ready] {}x{}", app.painter.width, app.painter.height);
     while !app.quit {
-        let ev = if app.doc.playing { window.next_within(1000 / 24) } else { Some(window.next()) };
+        let ev = if app.doc.playing {
+            window.next_within(1000 / 24)
+        } else if app.wants_tick() {
+            // A viewport is refining its render: wake up soon if nothing happens.
+            window.next_within(10)
+        } else {
+            Some(window.next())
+        };
         let input = match ev {
             None => {
-                app.doc.frame = if app.doc.frame >= app.doc.scene.frame_end { app.doc.scene.frame_start } else { app.doc.frame + 1 };
+                if app.doc.playing {
+                    app.doc.frame = if app.doc.frame >= app.doc.scene.frame_end { app.doc.scene.frame_start } else { app.doc.frame + 1 };
+                }
                 Some(Input::Tick)
             }
             Some(Event::Close) => break,
