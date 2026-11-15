@@ -10,6 +10,8 @@ pub struct Load {
     until: u64,
     first: bool,
     serial: bool,
+    serial_mode: u8,
+    serial_part: u8,
     copied: bool,
     copied_ack: bool,
     pending: Option<u8>,
@@ -41,6 +43,8 @@ impl Load {
             until: now.checked_add(5000)?,
             first: false,
             serial: false,
+            serial_mode: 0,
+            serial_part: 0,
             copied: false,
             copied_ack: false,
             pending: Some(0),
@@ -57,6 +61,7 @@ impl Load {
                 self.scope.previous.word(),
             ]
             || self.serial
+            || self.serial_mode != 0
             || self.copied
             || self.pending.is_some_and(|p| p != 0)
         {
@@ -66,7 +71,8 @@ impl Load {
         true
     }
     pub fn serial(&mut self, request: [u64; 3]) -> bool {
-        if !self.first
+        if self.serial_mode == 2
+            || !self.first
             || request != [self.ticket as u64, 22, self.lease.files_epoch]
             || self.copied
             || self.pending.is_some_and(|p| p != 1)
@@ -74,6 +80,28 @@ impl Load {
             return false;
         }
         self.pending = Some(1);
+        true
+    }
+    pub fn serial_tagged(&mut self, request: [u64; 3]) -> bool {
+        if self.serial_mode == 1
+            || !self.first
+            || self.copied
+            || request[0] != self.ticket as u64
+            || request[2] != self.lease.files_epoch
+            || request[1] & !0x1ff != 0
+            || request[1] & 255 != 22
+        {
+            return false;
+        }
+        let part = ((request[1] >> 8) & 1) as u8;
+        let pending = 3 + part;
+        if self.pending.is_some_and(|p| p != pending) {
+            return false;
+        }
+        if (part == 0 && self.serial_part > 1) || (part == 1 && self.serial_part == 0) {
+            return false;
+        }
+        self.pending = Some(pending);
         true
     }
     /// Only trusted Shell may attest that its synchronous kind3 returned after
@@ -99,13 +127,34 @@ impl Load {
             0 => 0xd2 << 56 | (self.ticket as u64) << 32 | self.length as u64,
             1 => self.lease.serial,
             2 => 0xd3 << 56 | (self.ticket as u64) << 32,
+            part @ (3 | 4) => {
+                return sex_pdx::restricted_helper::chunk(
+                    self.ticket as u64,
+                    0,
+                    22,
+                    part - 3,
+                    (self.lease.serial >> ((part - 3) as u32 * 32)) as u32,
+                )
+            }
             _ => return None,
         })
     }
     pub fn delivered(&mut self) {
         match self.pending.take() {
             Some(0) => self.first = true,
-            Some(1) => self.serial = true,
+            Some(1) => {
+                self.serial = true;
+                self.serial_mode = 1;
+            }
+            Some(3) => {
+                self.serial_mode = 2;
+                self.serial_part = 1;
+            }
+            Some(4) => {
+                self.serial_mode = 2;
+                self.serial_part = 2;
+                self.serial = true;
+            }
             Some(2) => self.copied_ack = true,
             _ => {}
         }

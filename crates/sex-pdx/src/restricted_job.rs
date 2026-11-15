@@ -14,6 +14,7 @@ pub const OP_CLAIM: u64 = 0x4d50_5010;
 pub const OP_DESCRIBE: u64 = 0x4d50_5011;
 pub const OP_LOAD: u64 = 0x4d50_5012;
 pub const OP_COPIED: u64 = 0x4d50_5013;
+pub const OP_DESCRIBE_TAGGED: u64 = 0x4d50_5014;
 #[derive(Clone, Copy)]
 pub struct Prepare<'a> {
     pub format: u8,

@@ -12,6 +12,10 @@ pub struct Control {
     ack: bool,
     pending: Option<Option<usize>>,
     last: Option<usize>,
+    mode: u8,
+    part: u8,
+    last_tagged: Option<(usize, u8)>,
+    tagged_pending: Option<(usize, u8)>,
     until: u64,
 }
 impl Control {
@@ -31,6 +35,10 @@ impl Control {
             ack: false,
             pending: Some(None),
             last: None,
+            mode: 0,
+            part: 0,
+            last_tagged: None,
+            tagged_pending: None,
             until: now.checked_add(5_000)?,
         })
     }
@@ -41,6 +49,8 @@ impl Control {
         if !self.valid(epoch, now)
             || claim != self.claim
             || self.next != 0
+            || self.mode != 0
+            || self.tagged_pending.is_some()
             || self.pending.is_some_and(|v| v.is_some())
         {
             return false;
@@ -49,6 +59,9 @@ impl Control {
         true
     }
     pub fn fetch(&mut self, words: [u64; 3], now: u64) -> bool {
+        if self.mode == 2 || self.tagged_pending.is_some() {
+            return false;
+        }
         let Ok(selector) = usize::try_from(words[1]) else {
             return false;
         };
@@ -68,16 +81,65 @@ impl Control {
         self.pending = Some(Some(selector));
         true
     }
+    pub fn fetch_tagged(&mut self, words: [u64; 3], now: u64) -> bool {
+        if self.mode == 1
+            || self.pending.is_some()
+            || !self.ack
+            || !self.valid(words[2], now)
+            || words[0] != self.ticket as u64
+            || words[1] & !0x1ff != 0
+        {
+            return false;
+        }
+        let selector = (words[1] & 255) as usize;
+        let part = ((words[1] >> 8) & 1) as u8;
+        if selector >= WORDS {
+            return false;
+        }
+        if let Some(previous) = self.tagged_pending {
+            return previous == (selector, part);
+        }
+        if self.last_tagged != Some((selector, part))
+            && (selector != self.next || part != self.part)
+        {
+            return false;
+        }
+        self.tagged_pending = Some((selector, part));
+        true
+    }
     pub fn reply(&self) -> Option<u64> {
+        if let Some((i, part)) = self.tagged_pending {
+            return sex_pdx::restricted_helper::chunk(
+                self.ticket as u64,
+                0,
+                i as u8,
+                part,
+                (self.info[i] >> (part as u32 * 32)) as u32,
+            );
+        }
         Some(match self.pending? {
             None => CLAIM_TAG << 56 | (self.ticket as u64) << 32,
             Some(i) => self.info[i],
         })
     }
     pub fn delivered(&mut self) {
+        if let Some((i, part)) = self.tagged_pending.take() {
+            self.mode = 2;
+            if self.last_tagged != Some((i, part)) {
+                if part == 0 {
+                    self.part = 1;
+                } else {
+                    self.next += 1;
+                    self.part = 0;
+                }
+                self.last_tagged = Some((i, part));
+            }
+            return;
+        }
         match self.pending.take() {
             Some(None) => self.ack = true,
             Some(Some(i)) => {
+                self.mode = 1;
                 if i == self.next {
                     self.next += 1;
                 }
@@ -87,7 +149,7 @@ impl Control {
         }
     }
     pub fn complete(&self) -> bool {
-        self.ack && self.next == WORDS && self.pending.is_none()
+        self.ack && self.next == WORDS && self.pending.is_none() && self.tagged_pending.is_none()
     }
 }
 impl Drop for Control {

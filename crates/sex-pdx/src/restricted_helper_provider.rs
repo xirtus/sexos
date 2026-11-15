@@ -30,6 +30,7 @@ pub trait Platform {
 enum PendingReply {
     First,
     Fetch([u64; 3]),
+    Tagged([u64; 3]),
 }
 #[derive(Clone, Copy)]
 struct Committed {
@@ -38,6 +39,7 @@ struct Committed {
 }
 pub struct Provider {
     ledger: Ledger,
+    tagged: bool,
     epoch: Option<u64>,
     transcript: Option<Transcript>,
     credits: Option<ReplyCredits>,
@@ -53,6 +55,7 @@ impl Provider {
     pub const fn new() -> Self {
         Self {
             ledger: Ledger::quarantine_all(),
+            tagged: false,
             epoch: None,
             transcript: None,
             credits: None,
@@ -133,7 +136,10 @@ impl Provider {
             && self.credits.as_ref().is_some_and(|c| c.complete())
     }
     pub fn message(&mut self, msg: Message, journal: &Journal, p: &mut impl Platform) -> bool {
-        if msg.opcode != w::OP_POLICY && msg.opcode != w::OP_FETCH {
+        if !matches!(
+            msg.opcode,
+            w::OP_POLICY | w::OP_FETCH | w::OP_POLICY_TAGGED | w::OP_FETCH_TAGGED
+        ) {
             return false;
         }
         if msg.caller != (Subject { pd: 3, task: 3 }) {
@@ -145,18 +151,30 @@ impl Provider {
             self.ledger = Ledger::quarantine_all();
             return true;
         }
-        if msg.opcode == w::OP_FETCH {
+        if matches!(msg.opcode, w::OP_FETCH | w::OP_FETCH_TAGGED) {
             if self.effect.is_some() {
                 return true;
             }
             let Some(credits) = self.credits.as_ref() else {
                 return true;
             };
-            if credits.fetch(msg.words, epoch).is_none() {
+            let tagged = msg.opcode == w::OP_FETCH_TAGGED;
+            if (if tagged {
+                credits.fetch_tagged(msg.words, epoch)
+            } else {
+                credits.fetch(msg.words, epoch)
+            })
+            .is_none()
+            {
                 return true;
             }
-            if self.reply.is_none() || self.reply == Some(PendingReply::Fetch(msg.words)) {
-                self.reply = Some(PendingReply::Fetch(msg.words));
+            let pending = if tagged {
+                PendingReply::Tagged(msg.words)
+            } else {
+                PendingReply::Fetch(msg.words)
+            };
+            if self.reply.is_none() || self.reply == Some(pending) {
+                self.reply = Some(pending);
             }
             return true;
         }
@@ -164,6 +182,10 @@ impl Provider {
             return true;
         };
         let duplicate = self.last == Some(packet);
+        let tagged = msg.opcode == w::OP_POLICY_TAGGED;
+        if (duplicate || packet.phase != Phase::Quarantine) && self.tagged != tagged {
+            return true;
+        }
         if !duplicate
             && (self.effect.is_some() || self.credits.as_ref().is_some_and(|c| !c.complete()))
         {
@@ -222,6 +244,7 @@ impl Provider {
             return true;
         };
         if accepted == Accepted::Quarantined {
+            self.tagged = tagged;
             if !self.ledger.quarantine(previous, packet.generation) {
                 self.abandon();
                 return true;
@@ -254,7 +277,11 @@ impl Provider {
         true
     }
     fn arm_reply(&mut self, packet: Packet, epoch: u64) {
-        self.credits = ReplyCredits::new(
+        self.credits = (if self.tagged {
+            ReplyCredits::new_tagged
+        } else {
+            ReplyCredits::new
+        })(
             packet,
             epoch,
             if packet.phase == Phase::Quarantine {
@@ -314,6 +341,7 @@ impl Provider {
         let word = match reply {
             PendingReply::First => credits.first(epoch),
             PendingReply::Fetch(request) => credits.fetch(request, epoch),
+            PendingReply::Tagged(request) => credits.fetch_tagged(request, epoch),
         };
         let Some(word) = word else {
             self.reply = None;
@@ -328,6 +356,9 @@ impl Provider {
             }
             PendingReply::Fetch(request) => {
                 credits.fetch_delivered(request, epoch);
+            }
+            PendingReply::Tagged(request) => {
+                credits.fetch_tagged_delivered(request, epoch);
             }
         }
         self.reply = None;

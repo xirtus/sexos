@@ -43,6 +43,7 @@ fn identity() -> image::Lease { image::Lease { serial:0,shell_epoch:1,files_epoc
  elf[18]=3; std::fs::write(&path,&elf).unwrap(); assert!(pin::pin(&path).is_err());
  std::fs::remove_file(path).unwrap();
 }
+#[test] fn lease_debug_omits_nonce_and_cookie() { let text=format!("{:?}",identity()); assert!(!text.contains("nonce")); assert!(!text.contains("cookie")); assert!(text.contains("parent_task")); }
 #[test] fn wrong_helper_race_epoch_replay_fail_closed() {
  let mut state=image::Staging::new(); let data=b"trusted ELF snapshot";
  let hash=Sha256::digest(data).into();

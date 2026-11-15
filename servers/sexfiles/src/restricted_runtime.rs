@@ -1,6 +1,6 @@
 //! Restricted row deny fence, initialized before replay. Positive immutable job
 //! admission is deliberately unavailable until the job snapshot layer is wired.
-use sex_pdx::restricted_helper::{Subject, OP_FETCH, OP_POLICY};
+use sex_pdx::restricted_helper::{Subject, OP_FETCH, OP_FETCH_TAGGED, OP_POLICY, OP_POLICY_TAGGED};
 use sex_pdx::restricted_helper_journal::Journal;
 use sex_pdx::restricted_helper_provider::{Effect, Message, Platform, Provider};
 use sex_pdx::{app_catalog as catalog, app_lifecycle as life, fs as f};
@@ -74,7 +74,10 @@ pub fn denied(pd: u32) -> bool {
     Turn::enter().state().denied(pd)
 }
 pub fn message(opcode: u64, caller: u32, task: u32, words: [u64; 3]) -> bool {
-    if opcode != OP_POLICY && opcode != OP_FETCH {
+    if !matches!(
+        opcode,
+        OP_POLICY | OP_FETCH | OP_POLICY_TAGGED | OP_FETCH_TAGGED
+    ) {
         return false;
     }
     Turn::enter().state().message(

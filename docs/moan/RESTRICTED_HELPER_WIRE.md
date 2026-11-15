@@ -295,3 +295,43 @@ recovery until reboot. Restricted rows are never adopted as ordinary windows.
 All their Shell requests are rejected before generic handlers, except exact-run
 legacy OP_EXIT; the coordinator's authenticated Ready handler must run before
 that deny gate. No public reserve/launch request is dispatched by this pool alone.
+
+### Mandatory disjoint tagged control transport
+
+The logical words above describe the transcript, not permission to put arbitrary
+caller-controlled values on another protocol's reply channel. New coordinator
+code must use OP_POLICY_TAGGED=0x4d505006, OP_FETCH_TAGGED=0x4d505005 and
+OP_DESCRIBE_TAGGED=0x4d505014. Legacy raw-word methods remain compatibility/model
+APIs; the new coordinator must never request them. In particular, arbitrary raw
+nonce words can resemble Files' existing autofill identity receipts.
+
+Every full64 word is reconstructed from two32 chunks. Each chunk has fixedD5 in
+bits56..63 AND24..31, low24 payload in bits0..23, high8 payload in bits32..39,
+selector in40..44, part in45, phase in46..49, and context low6 in50..55. This is
+provably disjoint from autofill identity's A8..AD tag in24..31 for every payload;
+a high-byte label alone would not be sufficient. Context bits correlate, never
+convey authority. All64 payload bits remain intact. Full phase/generation and
+provider-own epoch are checked in every FETCH request; the full known ACK0 word
+is reconstructed and checked before reading fields. No truncated digest is a
+capability.
+
+Tagged policy's initial reply is selector0/part0 of the full phase+generation
+word. FETCH selector0/part1 completes ACK0; selectors1..4 then carry the logical
+packet/challenge words, each part0 then part1. FETCH's selector argument is
+`selector | part << 8`, other bits zero. Advancement requires actual SYS29
+admission of BOTH parts, not a peek or failed Full send. Exact last-part retry is
+idempotent; skipped/conflicting/stale parts, changed epochs and raw/tagged mode
+mixing are refused. The initial policy opcode locks the transcript's mode.
+
+Files tagged DESCRIBE uses phase0 and ticket as the context, selectors0..21 for
+the descriptor and22 for lease serial. CLAIM/LOAD/COPIED receipts have fixed
+non-arbitrary fields; no raw descriptor/nonce/serial word is emitted on this
+path. The coordinator must consume the reserved tagged namespace before legacy
+reply decoders, including late replies after timeout. Source-bound tests include
+an actual forged identity-shaped nonce, its exact lossless reconstruction, and
+rejection of every individual chunk by the actual identity decoder.
+
+Kernel sender stamps identify the exact run's main-task subject. Existing live
+workers are normalized to that same subject; these checks are NOT per-thread
+isolation. Same-role workers may use the run's immutable job rights, and never
+obtain ambient or another run's rights by doing so.
