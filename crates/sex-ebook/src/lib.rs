@@ -31,6 +31,13 @@ pub use sex_xml::html::{Block, Kind};
 /// The most any one member of an archive may unpack to.
 pub const MEMBER_MAX: usize = 16 << 20;
 
+/// The most a whole book may unpack to, all members together. A spine that names the
+/// same large chapter thousands of times stops here (issue #302).
+pub const BOOK_MAX: usize = 128 << 20;
+
+/// The most spine entries a book may have.
+pub const SPINE_MAX: usize = 10_000;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Format { Epub, Fb2, Cbz }
 

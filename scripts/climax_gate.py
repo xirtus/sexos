@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-only
-"""Climax on Weft: microbenchmarks suite, thermal torture runner, JSON reporting,
+"""Climax on Weft: microbenchmarks suite, real-time telemetry charts, thermal torture runner,
+"Compare with Linux" view loading docs/CLIMAX_VS_LINUX_2026_11_14.md, JSON reporting,
 frames, controls, and clean window retirement."""
 import argparse
 import json
 import re
 import shutil
+import struct
 import time
+import zlib
 from pathlib import Path
 from install_program import install
 from quil_autosave_gate import boot
+from program_gate_geometry import maximize
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -41,14 +45,60 @@ def colours(data, tile):
     return seen
 
 
+def ppm_to_png(ppm_bytes, tile=None):
+    """Convert PPM P6 image bytes to standard PNG format without external PIL dependency."""
+    header_end = ppm_bytes.find(b'\n255\n')
+    assert header_end != -1, 'valid PPM header'
+    header = ppm_bytes[:header_end]
+    raw_pixels = ppm_bytes[header_end + 5:]
+    tokens = header.split()
+    assert tokens[0] == b'P6', 'PPM P6 signature'
+    w = int(tokens[1])
+    h = int(tokens[2])
+
+    if tile:
+        tx, ty, tw, th = tile
+        tx = max(0, min(tx, w))
+        ty = max(0, min(ty, h))
+        tw = max(1, min(tw, w - tx))
+        th = max(1, min(th, h - ty))
+        rows = []
+        for y in range(ty, ty + th):
+            start = (y * w + tx) * 3
+            end = start + tw * 3
+            rows.append(b'\x00' + raw_pixels[start:end])
+        raw_data = b''.join(rows)
+        out_w, out_h = tw, th
+    else:
+        rows = []
+        row_len = w * 3
+        for y in range(h):
+            start = y * row_len
+            rows.append(b'\x00' + raw_pixels[start:start + row_len])
+        raw_data = b''.join(rows)
+        out_w, out_h = w, h
+
+    def chunk(tag, data):
+        return struct.pack('>I', len(data)) + tag + data + struct.pack('>I', zlib.crc32(tag + data) & 0xffffffff)
+
+    ihdr = struct.pack('>IIBBBBB', out_w, out_h, 8, 2, 0, 0, 0)
+    idat = zlib.compress(raw_data, 6)
+    return b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', ihdr) + chunk(b'IDAT', idat) + chunk(b'IEND', b'')
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     for name in ('iso', 'source-disk', 'out'):
         p.add_argument('--' + name, required=True, type=Path)
     p.add_argument('--resolution', default='1280x800')
+    p.add_argument('--save-assets', action='store_true', help='Export screenshot PNGs to docs/user/assets/')
+    p.add_argument('--screenshots-dir', type=Path, default=None)
     a = p.parse_args()
     a.out = a.out.resolve()
     a.out.mkdir(parents=True, exist_ok=True)
+    if a.screenshots_dir:
+        a.screenshots_dir = a.screenshots_dir.resolve()
+        a.screenshots_dir.mkdir(parents=True, exist_ok=True)
 
     if not a.source_disk.exists():
         a.source_disk.parent.mkdir(parents=True, exist_ok=True)
@@ -88,9 +138,12 @@ def main():
         launch = g['wait'](rf'\[shell.program.launch\] target={target} task={task} surface=(\d+)', start, 60)
         surface = int(launch[1])
         g['wait'](r'\[climax.frame\] n=1\n', start, 300)
-        time.sleep(2)
+        time.sleep(1)
 
-        tile = list(map(int, re.findall(rf'\[shell.tile.apply\] sid={surface} x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)', text())[-1]))
+        tile, before = maximize(g, surface)
+        g['wait'](r'\[climax.frame\] n=\d+\n', before, 60)
+        time.sleep(1)
+
         ox, oy = tile[0] + 8, tile[1] + 36
 
         def click_at(x, y):
@@ -117,6 +170,9 @@ def main():
             assert n > 8, (name, 'blank window', n)
             return n
 
+        # Verify comparison document loaded
+        g['wait'](r'\[climax.compare\] source=.* rows=9', start, 60)
+
         # Initial view: benchmarks mode, ready state
         g['wait'](r'\[climax.state\] mode=Benchmarks suite_ran=false', start, 60)
         bench_colours = screenshot('benchmarks-ready')
@@ -127,6 +183,7 @@ def main():
         g['wait'](r'\[climax.bench_json\] (\{.*\})', s_suite, 120)
         g['wait'](r'\[climax.state\] mode=Benchmarks suite_ran=true', s_suite, 60)
         bench_ran_colours = screenshot('benchmarks-completed')
+        assert bench_ran_colours > 25, f'insufficient distinct colours in benchmarks-completed: {bench_ran_colours}'
 
         # Switch to Thermal Torture mode
         s_torture = len(text())
@@ -143,12 +200,32 @@ def main():
         s_burst = len(text())
         control('run_burst')
         g['wait'](r'\[climax.state\] mode=Thermal .* step=6/20', s_burst, 120)
-        torture_burst_colours = screenshot('torture-burst')
+        torture_burst_colours = screenshot('realtime-charts')
+        assert torture_burst_colours > 25, f'insufficient distinct colours in realtime-charts: {torture_burst_colours}'
 
         # Reset (back to step 0/20)
         s_reset = len(text())
         control('reset')
         g['wait'](r'\[climax.state\] mode=Thermal .* step=0/20', s_reset, 60)
+
+        # Switch to Compare with Linux mode & reload benchmark doc
+        s_compare = len(text())
+        control('compare_linux')
+        g['wait'](r'\[climax.state\] mode=CompareLinux', s_compare, 60)
+        s_reload = len(text())
+        control('reload_doc')
+        g['wait'](r'\[climax.compare\] source=\S+ rows=9 geomean_pct=134\.8', s_reload, 60)
+        compare_linux_colours = screenshot('compare-linux')
+        assert compare_linux_colours > 25, f'insufficient distinct colours in compare-linux: {compare_linux_colours}'
+
+        # Save full 1280x800 QEMU desktop asset PNGs if requested
+        if a.save_assets or a.screenshots_dir:
+            target_dir = a.screenshots_dir if a.screenshots_dir else (ROOT / 'docs/user/assets')
+            target_dir.mkdir(parents=True, exist_ok=True)
+            rt_ppm = (a.out / 'realtime-charts.ppm').read_bytes()
+            (target_dir / 'climax-realtime-charts.png').write_bytes(ppm_to_png(rt_ppm))
+            cmp_ppm = (a.out / 'compare-linux.ppm').read_bytes()
+            (target_dir / 'climax-compare-linux.png').write_bytes(ppm_to_png(cmp_ppm))
 
         # Close window cleanly via Shell F11
         s_close = len(text())
@@ -164,6 +241,7 @@ def main():
             'bench_ran_colours': bench_ran_colours,
             'torture_ready_colours': torture_ready_colours,
             'torture_burst_colours': torture_burst_colours,
+            'compare_linux_colours': compare_linux_colours,
         }
         (a.out / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
         print(f'[climax_gate] PASS: {result}')

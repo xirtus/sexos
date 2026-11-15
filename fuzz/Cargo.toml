@@ -39,6 +39,11 @@ gridcraft-engine = { git = "https://github.com/storytold/gridcraft", rev = "c0ee
 wordcraft-engine = { git = "https://github.com/storytold/wordcraft", rev = "a4b898f820eb28626865292fd037a155e4a07aef" }
 serde_json = "1"
 crc32fast = "1.4"
+miniz_oxide = "0.9"
+sex-extensions = { path = "../crates/sex-extensions" }
+sex-shields = { path = "../crates/sex-shields" }
+burlesque-core = { path = "../crates/burlesque-core" }
+batik-core = { path = "../crates/batik-core" }
 
 [[bin]]
 name = "fuzz_archive"
@@ -147,3 +152,34 @@ name = "fuzz_swingers_bencode"
 path = "fuzz_targets/fuzz_swingers_bencode.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "fuzz_kaleidoscope_ext_package"
+path = "fuzz_targets/fuzz_kaleidoscope_ext_package.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_kaleidoscope_ext_manifest"
+path = "fuzz_targets/fuzz_kaleidoscope_ext_manifest.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_kaleidoscope_ext_dnr"
+path = "fuzz_targets/fuzz_kaleidoscope_ext_dnr.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_burlesque_pptx"
+path = "fuzz_targets/fuzz_burlesque_pptx.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_batik_psd"
+path = "fuzz_targets/fuzz_batik_psd.rs"
+test = false
+doc = false
+
