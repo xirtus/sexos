@@ -32,7 +32,7 @@ class Driver(Probe):
    self.q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':down,'key':{'type':'qcode','data':key}}}for key in group]})
    time.sleep(.04 if down else .12)
  def refresh(self,surface):
-  start=len(self.text());self.chord('ctrl','shift','l');m=self.g['wait'](r'\[moan.timeline\] x=-?\d+ y=-?\d+ w=\d+ h=\d+ start=\d+ span=\d+',start,60);start=m.start();tile,size=viewport(self.g,surface,start);return start,origin(tile,size),size
+  start=len(self.text());self.chord('ctrl','shift','l');m=self.g['wait'](r'\[moan.timeline\] x=-?\d+ y=-?\d+ w=\d+ h=\d+ start=\d+ span=\d+',start,60);start+=m.start();tile,size=viewport(self.g,surface,start);return start,origin(tile,size),size
  def click(self,surface,name):
   start,(ox,oy),size=self.refresh(surface)
   matches=list(re.finditer(rf'\[moan.control\] name={re.escape(name)} x=(-?\d+) y=(-?\d+)',self.text()[start:]));assert matches,name
