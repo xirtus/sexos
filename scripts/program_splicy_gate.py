@@ -47,6 +47,8 @@ class Quiet(http.server.ThreadingHTTPServer):daemon_threads=True
 server=Quiet(('127.0.0.1',0),Handler);PORT=server.server_address[1]
 threading.Thread(target=server.serve_forever,daemon=True).start()
 os.environ['SEXOS_GATE_NIC']='-netdev user,id=n0 -device e1000e,netdev=n0'
+# Fetching the 23 MB program, decoding the clip for the timeline and exporting take longer than the usual 300 s.
+os.environ.setdefault('SEXOS_GATE_BOUND','1500')
 from quil_autosave_gate import boot
 KEYS={' ':'spc','/':'slash','.':'dot','-':'minus'}
 def near(a,b,tol=8):return all(abs(((a>>s)&255)-((b>>s)&255))<=tol for s in(0,8,16))
