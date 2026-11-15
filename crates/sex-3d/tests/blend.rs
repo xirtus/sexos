@@ -295,8 +295,8 @@ fn modifier_stack() {
         Modifier::Bevel { width: 0.05, segments: 3, angle: 0.6 },
         Modifier::Triangulate,
         Modifier::Weld { distance: 0.02 },
-        Modifier::Displace { strength: 1.5 },
-        Modifier::Smooth { factor: 0.7, iterations: 4 },
+        Modifier::Displace { strength: 1.5, vertex_group: None, invert_vertex_group: false },
+        Modifier::Smooth { factor: 0.7, iterations: 4, vertex_group: None, invert_vertex_group: false },
     ];
     for c in EXTRAS {
         let s = import_blend(&blendgen::extras_file(c)).unwrap_or_else(|e| panic!("{c:?}: {e}"));
@@ -477,9 +477,626 @@ fn modifier_stacks_import() {
                 Modifier::Subdivision { levels: 2, simple: true },
                 Modifier::Decimate { mode: DecimateMode::Collapse, ratio: 0.25, iterations: 0, angle: 0.1, triangulate: true },
                 Modifier::Boolean { object: "Cutter".into(), operation: BooleanOp::Union },
-                Modifier::SimpleDeform { mode: SimpleDeformMode::Bend, axis: 0, factor: 0.5, limits: [0.25, 0.75], lock: [false, false, true] },
+                Modifier::SimpleDeform { mode: SimpleDeformMode::Bend, axis: 0, factor: 0.5, limits: [0.25, 0.75], lock: [false, false, true], vertex_group: None, invert_vertex_group: false },
             ],
             "ptr {ptr} big {big}"
         );
+    }
+}
+
+/// Vertex groups, shape keys, armatures, poses, constraints, bone parents,
+/// lattices and the rigging modifiers, in both byte orders and pointer sizes.
+#[test]
+fn rigging_imports() {
+    use blendgen::{n, nv, p, s, Dna, Writer, V};
+    use sex_3d::armature::RotationMode;
+    use sex_3d::constraints::{ConstraintKind, Space, TrackAxis};
+    use sex_3d::mesh::KeyInterpolation;
+    use sex_3d::modifiers::{Falloff, Modifier, WeightMixMode, WeightMixSet};
+    use sex_3d::scene::ParentType;
+    for (ptr, big, large) in [(8, false, false), (4, true, false), (8, false, true)] {
+        let mut d = Dna::new(ptr);
+        d.def("ListBase", &[("void", "*first"), ("void", "*last")]);
+        d.def("ID", &[("void", "*next"), ("void", "*prev"), ("char", "name[66]"), ("short", "flag"), ("int", "us")]);
+        d.def("MVert", &[("float", "co[3]")]);
+        d.def("MDeformWeight", &[("int", "def_nr"), ("float", "weight")]);
+        d.def("MDeformVert", &[("MDeformWeight", "*dw"), ("int", "totweight"), ("int", "flag")]);
+        d.def("bDeformGroup", &[("bDeformGroup", "*next"), ("bDeformGroup", "*prev"), ("char", "name[64]"), ("char", "flag"), ("char", "_pad0[7]")]);
+        d.def(
+            "KeyBlock",
+            &[
+                ("KeyBlock", "*next"),
+                ("KeyBlock", "*prev"),
+                ("float", "pos"),
+                ("float", "curval"),
+                ("short", "type"),
+                ("short", "_pad1"),
+                ("short", "relative"),
+                ("short", "flag"),
+                ("int", "totelem"),
+                ("int", "uid"),
+                ("void", "*data"),
+                ("char", "name[64]"),
+                ("char", "vgroup[64]"),
+                ("float", "slidermin"),
+                ("float", "slidermax"),
+            ],
+        );
+        d.def("Key", &[("ID", "id"), ("KeyBlock", "*refkey"), ("ListBase", "block"), ("char", "type"), ("char", "_pad[3]"), ("float", "ctime")]);
+        d.def(
+            "Mesh",
+            &[("ID", "id"), ("MVert", "*mvert"), ("MDeformVert", "*dvert"), ("Key", "*key"), ("ListBase", "vertex_group_names"), ("int", "totvert"), ("int", "totpoly"), ("int", "totloop"), ("char", "_pad[4]")],
+        );
+        d.def(
+            "Bone",
+            &[
+                ("Bone", "*next"),
+                ("Bone", "*prev"),
+                ("Bone", "*parent"),
+                ("ListBase", "childbase"),
+                ("char", "name[64]"),
+                ("float", "roll"),
+                ("int", "flag"),
+                ("char", "inherit_scale_mode"),
+                ("char", "_pad[3]"),
+                ("float", "arm_head[3]"),
+                ("float", "arm_tail[3]"),
+                ("float", "arm_mat[4][4]"),
+                ("float", "arm_roll"),
+                ("float", "dist"),
+                ("float", "weight"),
+                ("float", "rad_head"),
+                ("float", "rad_tail"),
+                ("float", "length"),
+                ("short", "segments"),
+                ("char", "_pad2[2]"),
+            ],
+        );
+        d.def("BoneCollectionMember", &[("BoneCollectionMember", "*next"), ("BoneCollectionMember", "*prev"), ("Bone", "*bone")]);
+        d.def("BoneCollection", &[("BoneCollection", "*next"), ("BoneCollection", "*prev"), ("char", "name[64]"), ("ListBase", "bones")]);
+        d.def("bArmature", &[("ID", "id"), ("ListBase", "bonebase"), ("BoneCollection", "**collection_array"), ("int", "collection_array_num"), ("char", "_pad[4]")]);
+        d.def(
+            "bConstraint",
+            &[
+                ("bConstraint", "*next"),
+                ("bConstraint", "*prev"),
+                ("void", "*data"),
+                ("short", "type"),
+                ("short", "flag"),
+                ("char", "ownspace"),
+                ("char", "tarspace"),
+                ("char", "_pad[2]"),
+                ("char", "name[64]"),
+                ("float", "enforce"),
+                ("float", "headtail"),
+                ("Object", "*space_object"),
+                ("char", "space_subtarget[64]"),
+            ],
+        );
+        d.def(
+            "bKinematicConstraint",
+            &[
+                ("Object", "*tar"),
+                ("short", "iterations"),
+                ("short", "flag"),
+                ("short", "rootbone"),
+                ("short", "max_rootbone"),
+                ("char", "subtarget[64]"),
+                ("Object", "*poletar"),
+                ("char", "polesubtarget[64]"),
+                ("float", "poleangle"),
+                ("float", "weight"),
+            ],
+        );
+        d.def("bTrackToConstraint", &[("Object", "*tar"), ("int", "reserved1"), ("int", "reserved2"), ("int", "flags"), ("char", "subtarget[64]"), ("char", "_pad[4]")]);
+        d.def("bChildOfConstraint", &[("Object", "*tar"), ("int", "flag"), ("int", "_pad"), ("float", "invmat[4][4]"), ("char", "subtarget[64]")]);
+        d.def(
+            "bLocLimitConstraint",
+            &[("float", "xmin"), ("float", "xmax"), ("float", "ymin"), ("float", "ymax"), ("float", "zmin"), ("float", "zmax"), ("short", "flag"), ("short", "flag2")],
+        );
+        d.def(
+            "bPoseChannel",
+            &[
+                ("bPoseChannel", "*next"),
+                ("bPoseChannel", "*prev"),
+                ("char", "name[64]"),
+                ("short", "ikflag"),
+                ("short", "rotmode"),
+                ("ListBase", "constraints"),
+                ("float", "loc[3]"),
+                ("float", "size[3]"),
+                ("float", "eul[3]"),
+                ("float", "quat[4]"),
+                ("float", "rotAxis[3]"),
+                ("float", "rotAngle"),
+                ("float", "limitmin[3]"),
+                ("float", "limitmax[3]"),
+                ("float", "stiffness[3]"),
+                ("float", "ikstretch"),
+            ],
+        );
+        d.def("bPose", &[("ListBase", "chanbase")]);
+        d.def("BPoint", &[("float", "vec[4]"), ("float", "weight"), ("short", "f1"), ("short", "hide"), ("float", "radius"), ("char", "_pad[4]")]);
+        d.def(
+            "Lattice",
+            &[("ID", "id"), ("short", "pntsu"), ("short", "pntsv"), ("short", "pntsw"), ("short", "flag"), ("char", "typeu"), ("char", "typev"), ("char", "typew"), ("char", "_pad"), ("BPoint", "*def")],
+        );
+        d.def(
+            "Object",
+            &[
+                ("ID", "id"),
+                ("short", "type"),
+                ("short", "partype"),
+                ("char", "_pad0[4]"),
+                ("void", "*data"),
+                ("Object", "*parent"),
+                ("char", "parsubstr[64]"),
+                ("float", "loc[3]"),
+                ("float", "scale[3]"),
+                ("short", "rotmode"),
+                ("char", "_pad1[2]"),
+                ("ListBase", "modifiers"),
+                ("ListBase", "constraints"),
+                ("ListBase", "defbase"),
+                ("bPose", "*pose"),
+            ],
+        );
+        d.def("ModifierData", &[("ModifierData", "*next"), ("ModifierData", "*prev"), ("int", "type"), ("int", "mode"), ("short", "flag"), ("char", "_pad[6]"), ("char", "name[64]")]);
+        d.def("ArmatureModifierData", &[("ModifierData", "modifier"), ("short", "deformflag"), ("short", "multi"), ("char", "_pad[4]"), ("Object", "*object"), ("char", "defgrp_name[64]")]);
+        d.def(
+            "HookModifierData",
+            &[
+                ("ModifierData", "modifier"),
+                ("char", "subtarget[64]"),
+                ("char", "flag"),
+                ("char", "falloff_type"),
+                ("char", "_pad[6]"),
+                ("Object", "*object"),
+                ("float", "parentinv[4][4]"),
+                ("float", "cent[3]"),
+                ("float", "falloff"),
+                ("int", "*indexar"),
+                ("int", "indexar_num"),
+                ("float", "force"),
+                ("char", "name[64]"),
+            ],
+        );
+        d.def("SmoothModifierData", &[("ModifierData", "modifier"), ("float", "fac"), ("char", "defgrp_name[64]"), ("short", "flag"), ("short", "repeat")]);
+        d.def(
+            "WeightVGMixModifierData",
+            &[
+                ("ModifierData", "modifier"),
+                ("char", "defgrp_name_a[64]"),
+                ("char", "defgrp_name_b[64]"),
+                ("float", "default_weight_a"),
+                ("float", "default_weight_b"),
+                ("char", "mix_mode"),
+                ("char", "mix_set"),
+                ("char", "_pad[6]"),
+                ("float", "mask_constant"),
+                ("int", "flag"),
+            ],
+        );
+        d.def("LatticeModifierData", &[("ModifierData", "modifier"), ("Object", "*object"), ("char", "name[64]"), ("float", "strength"), ("short", "flag"), ("char", "_pad[2]")]);
+
+        let mut w = Writer::new(d, big, large, if large { 500 } else { 402 });
+        let ident: Vec<f64> = vec![1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.];
+
+        // --- Mesh: 3 vertices, groups "Lower"/"Upper", two shape keys.
+        let me = w.alloc();
+        let verts: Vec<u8> = [[0., 0., 0.], [0., 0., 1.], [0., 0., 2.]].iter().flat_map(|c| w.inst("MVert", &[("co", nv(c))])).collect();
+        let mvert = w.alloc();
+        w.put(mvert, "DATA", "MVert", 3, verts);
+        let dw0 = w.alloc();
+        let d0 = w.inst("MDeformWeight", &[("def_nr", n(0.)), ("weight", n(1.))]);
+        w.put(dw0, "DATA", "MDeformWeight", 1, d0);
+        let dw1 = w.alloc();
+        let d1: Vec<u8> = [w.inst("MDeformWeight", &[("def_nr", n(0.)), ("weight", n(0.5))]), w.inst("MDeformWeight", &[("def_nr", n(1.)), ("weight", n(0.5))])].concat();
+        w.put(dw1, "DATA", "MDeformWeight", 2, d1);
+        let dv: Vec<u8> = [
+            w.inst("MDeformVert", &[("dw", p(dw0)), ("totweight", n(1.))]),
+            w.inst("MDeformVert", &[("dw", p(dw1)), ("totweight", n(2.))]),
+            w.inst("MDeformVert", &[("totweight", n(0.))]),
+        ]
+        .concat();
+        let dvert = w.alloc();
+        w.put(dvert, "DATA", "MDeformVert", 3, dv);
+        let (g0, g1) = (w.alloc(), w.alloc());
+        let b = w.inst("bDeformGroup", &[("next", p(g1)), ("name", s("Lower"))]);
+        w.put(g0, "DATA", "bDeformGroup", 1, b);
+        let b = w.inst("bDeformGroup", &[("prev", p(g0)), ("name", s("Upper"))]);
+        w.put(g1, "DATA", "bDeformGroup", 1, b);
+        let (kb0, kb1, key) = (w.alloc(), w.alloc(), w.alloc());
+        let basis = w.raw(w.f32s(&[0., 0., 0., 0., 0., 1., 0., 0., 2.]), 1);
+        let smile = w.raw(w.f32s(&[1., 0., 0., 1., 0., 1., 1., 0., 2.]), 1);
+        let b = w.inst("KeyBlock", &[("next", p(kb1)), ("name", s("Basis")), ("data", p(basis)), ("totelem", n(3.)), ("slidermax", n(1.))]);
+        w.put(kb0, "DATA", "KeyBlock", 1, b);
+        let b = w.inst(
+            "KeyBlock",
+            &[
+                ("prev", p(kb0)),
+                ("name", s("Smile")),
+                ("data", p(smile)),
+                ("totelem", n(3.)),
+                ("curval", n(0.25)),
+                ("slidermin", n(-1.)),
+                ("slidermax", n(2.)),
+                ("vgroup", s("Upper")),
+                ("type", n(3.)),
+                ("pos", n(0.1)),
+                ("flag", n(1.)),
+            ],
+        );
+        w.put(kb1, "DATA", "KeyBlock", 1, b);
+        let k = w.inst("Key", &[("id.name", s("KEKey")), ("refkey", p(kb0)), ("block.first", p(kb0)), ("block.last", p(kb1)), ("type", n(1.)), ("ctime", n(5.))]);
+        w.put(key, "KE", "Key", 1, k);
+        let m = w.inst(
+            "Mesh",
+            &[
+                ("id.name", s("MEBody")),
+                ("mvert", p(mvert)),
+                ("dvert", p(dvert)),
+                ("key", p(key)),
+                ("vertex_group_names.first", p(g0)),
+                ("vertex_group_names.last", p(g1)),
+                ("totvert", n(3.)),
+            ],
+        );
+        w.put(me, "ME", "Mesh", 1, m);
+        // A second mesh whose group names live on its object (pre-3.0).
+        let me2 = w.alloc();
+        let m = w.inst("Mesh", &[("id.name", s("MEOld")), ("mvert", p(mvert)), ("dvert", p(dvert)), ("totvert", n(3.))]);
+        w.put(me2, "ME", "Mesh", 1, m);
+
+        // --- Armature: Root -> Child (connected, rolled), collection "Deform".
+        let (ar, root, child) = (w.alloc(), w.alloc(), w.alloc());
+        let rest_z = [1., 0., 0., 0., 0., 0., 1., 0., 0., -1., 0., 0., 0., 0., 0., 1.];
+        let b = w.inst(
+            "Bone",
+            &[
+                ("name", s("Root")),
+                ("childbase.first", p(child)),
+                ("childbase.last", p(child)),
+                ("arm_head", nv(&[0., 0., 0.])),
+                ("arm_tail", nv(&[0., 0., 1.])),
+                ("arm_mat", nv(&rest_z)),
+                ("dist", n(0.5)),
+                ("weight", n(1.)),
+                ("rad_head", n(0.2)),
+                ("rad_tail", n(0.1)),
+                ("segments", n(3.)),
+                ("flag", n((1 << 12) as f64)),
+            ],
+        );
+        w.put(root, "DATA", "Bone", 1, b);
+        let b = w.inst(
+            "Bone",
+            &[
+                ("name", s("Child")),
+                ("parent", p(root)),
+                ("arm_head", nv(&[0., 0., 1.])),
+                ("arm_tail", nv(&[0., 0., 2.])),
+                ("arm_mat", nv(&rest_z)),
+                ("arm_roll", n(0.5)),
+                ("flag", n((1 << 4 | 1 << 9) as f64)),
+                ("inherit_scale_mode", n(3.)),
+                ("weight", n(1.)),
+                ("segments", n(1.)),
+            ],
+        );
+        w.put(child, "DATA", "Bone", 1, b);
+        let (coll, member) = (w.alloc(), w.alloc());
+        let b = w.inst("BoneCollectionMember", &[("bone", p(child))]);
+        w.put(member, "DATA", "BoneCollectionMember", 1, b);
+        let b = w.inst("BoneCollection", &[("name", s("Deform")), ("bones.first", p(member)), ("bones.last", p(member))]);
+        w.put(coll, "DATA", "BoneCollection", 1, b);
+        let carr = w.raw(w.ptrs(&[coll]), 1);
+        let a = w.inst("bArmature", &[("id.name", s("ARSkel")), ("bonebase.first", p(root)), ("bonebase.last", p(root)), ("collection_array", p(carr)), ("collection_array_num", n(1.))]);
+        w.put(ar, "AR", "bArmature", 1, a);
+
+        // --- Lattice 2x2x2 with one point moved.
+        let lt = w.alloc();
+        let mut pts = Vec::new();
+        for z in [-0.5, 0.5] {
+            for y in [-0.5, 0.5] {
+                for x in [-0.5, 0.5] {
+                    let zz = if x > 0.0 && y > 0.0 && z > 0.0 { 0.9 } else { z };
+                    pts.push(w.inst("BPoint", &[("vec", nv(&[x, y, zz, 1.]))]));
+                }
+            }
+        }
+        let def = w.alloc();
+        w.put(def, "DATA", "BPoint", 8, pts.concat());
+        let l = w.inst("Lattice", &[("id.name", s("LTCage")), ("pntsu", n(2.)), ("pntsv", n(2.)), ("pntsw", n(2.)), ("typeu", n(0.)), ("typev", n(1.)), ("typew", n(2.)), ("flag", n(2.)), ("def", p(def))]);
+        w.put(lt, "LT", "Lattice", 1, l);
+
+        // --- Objects.
+        let (ob_rig, ob_body, ob_old, ob_goal, ob_prop, ob_lat) = (w.alloc(), w.alloc(), w.alloc(), w.alloc(), w.alloc(), w.alloc());
+        // Pose: Child rotated (quaternion) with an IK constraint.
+        let (pc_root, pc_child, ik_con, ik_data, pose) = (w.alloc(), w.alloc(), w.alloc(), w.alloc(), w.alloc());
+        let b = w.inst("bKinematicConstraint", &[("tar", p(ob_goal)), ("iterations", n(200.)), ("flag", n(1.)), ("rootbone", n(2.)), ("poletar", p(ob_prop)), ("poleangle", n(0.5)), ("weight", n(1.))]);
+        w.put(ik_data, "DATA", "bKinematicConstraint", 1, b);
+        let b = w.inst("bConstraint", &[("data", p(ik_data)), ("name", s("IK")), ("enforce", n(0.75)), ("ownspace", n(2.)), ("tarspace", n(0.))]);
+        w.put(ik_con, "DATA", "bConstraint", 1, b);
+        let b = w.inst("bPoseChannel", &[("next", p(pc_child)), ("name", s("Root")), ("rotmode", n(0.)), ("quat", nv(&[1., 0., 0., 0.])), ("size", nv(&[1., 1., 1.]))]);
+        w.put(pc_root, "DATA", "bPoseChannel", 1, b);
+        let b = w.inst(
+            "bPoseChannel",
+            &[
+                ("prev", p(pc_root)),
+                ("name", s("Child")),
+                ("rotmode", n(4.)),
+                ("eul", nv(&[0.1, 0.2, 0.3])),
+                ("quat", nv(&[1., 0., 0., 0.])),
+                ("size", nv(&[1., 2., 1.])),
+                ("loc", nv(&[0., 0.5, 0.])),
+                ("ikflag", n((1 | 16) as f64)),
+                ("limitmin", nv(&[0., -1., 0.])),
+                ("limitmax", nv(&[0., 1., 0.])),
+                ("stiffness", nv(&[0.25, 0., 0.])),
+                ("ikstretch", n(0.1)),
+                ("constraints.first", p(ik_con)),
+                ("constraints.last", p(ik_con)),
+            ],
+        );
+        w.put(pc_child, "DATA", "bPoseChannel", 1, b);
+        let b = w.inst("bPose", &[("chanbase.first", p(pc_root)), ("chanbase.last", p(pc_child))]);
+        w.put(pose, "DATA", "bPose", 1, b);
+        let o = w.inst("Object", &[("id.name", s("OBRig")), ("type", n(25.)), ("data", p(ar)), ("scale", nv(&[1., 1., 1.])), ("rotmode", n(1.)), ("pose", p(pose))]);
+        w.put(ob_rig, "OB", "Object", 1, o);
+
+        // Body: armature parented, with Armature, Hook, Smooth, Mix and Lattice modifiers.
+        let mods: Vec<u64> = (0..5).map(|_| w.alloc()).collect();
+        let hdr = |i: usize| -> Vec<(String, V)> {
+            let mut f = vec![("modifier.next".to_string(), p(mods.get(i + 1).copied().unwrap_or(0))), ("modifier.mode".to_string(), n(3.))];
+            if i > 0 {
+                f.push(("modifier.prev".to_string(), p(mods[i - 1])));
+            }
+            f
+        };
+        let with = |i: usize, extra: Vec<(&str, V)>| -> Vec<(String, V)> {
+            let mut f = hdr(i);
+            f.extend(extra.into_iter().map(|(k, v)| (k.to_string(), v)));
+            f
+        };
+        let b = w.inst("ArmatureModifierData", &with(0, vec![("object", p(ob_rig)), ("deformflag", n((1 | 4 | 16) as f64)), ("multi", n(1.)), ("defgrp_name", s("Lower"))]));
+        w.put(mods[0], "DATA", "ArmatureModifierData", 1, b);
+        let idx = w.raw(w.i32s(&[0, 2]), 1);
+        let mut inv = ident.clone();
+        inv[14] = -1.0;
+        let b = w.inst(
+            "HookModifierData",
+            &with(
+                1,
+                vec![
+                    ("object", p(ob_rig)),
+                    ("subtarget", s("Child")),
+                    ("flag", n(1.)),
+                    ("falloff_type", n(3.)),
+                    ("falloff", n(2.)),
+                    ("cent", nv(&[0., 0., 1.])),
+                    ("parentinv", nv(&inv)),
+                    ("indexar", p(idx)),
+                    ("indexar_num", n(2.)),
+                    ("force", n(0.5)),
+                ],
+            ),
+        );
+        w.put(mods[1], "DATA", "HookModifierData", 1, b);
+        let b = w.inst("SmoothModifierData", &with(2, vec![("fac", n(0.5)), ("repeat", n(2.)), ("defgrp_name", s("Upper")), ("flag", n((1 << 4) as f64))]));
+        w.put(mods[2], "DATA", "SmoothModifierData", 1, b);
+        let b = w.inst(
+            "WeightVGMixModifierData",
+            &with(3, vec![("defgrp_name_a", s("Upper")), ("defgrp_name_b", s("Lower")), ("default_weight_b", n(0.25)), ("mix_mode", n(7.)), ("mix_set", n(4.)), ("mask_constant", n(1.)), ("flag", n(8.))]),
+        );
+        w.put(mods[3], "DATA", "WeightVGMixModifierData", 1, b);
+        let b = w.inst("LatticeModifierData", &with(4, vec![("object", p(ob_lat)), ("strength", n(0.8)), ("name", s("Upper")), ("flag", n(1.))]));
+        w.put(mods[4], "DATA", "LatticeModifierData", 1, b);
+        let o = w.inst(
+            "Object",
+            &[
+                ("id.name", s("OBBody")),
+                ("type", n(1.)),
+                ("data", p(me)),
+                ("parent", p(ob_rig)),
+                ("partype", n(4.)),
+                ("scale", nv(&[1., 1., 1.])),
+                ("rotmode", n(1.)),
+                ("modifiers.first", p(mods[0])),
+                ("modifiers.last", p(mods[4])),
+            ],
+        );
+        w.put(ob_body, "OB", "Object", 1, o);
+
+        // Old: groups from Object.defbase.
+        let (og0, og1) = (w.alloc(), w.alloc());
+        let b = w.inst("bDeformGroup", &[("next", p(og1)), ("name", s("A"))]);
+        w.put(og0, "DATA", "bDeformGroup", 1, b);
+        let b = w.inst("bDeformGroup", &[("prev", p(og0)), ("name", s("B"))]);
+        w.put(og1, "DATA", "bDeformGroup", 1, b);
+        let o = w.inst("Object", &[("id.name", s("OBOld")), ("type", n(1.)), ("data", p(me2)), ("scale", nv(&[1., 1., 1.])), ("rotmode", n(1.)), ("defbase.first", p(og0)), ("defbase.last", p(og1))]);
+        w.put(ob_old, "OB", "Object", 1, o);
+
+        // Goal: Track To, Child Of (inverse) and a muted Limit Location.
+        let cons: Vec<u64> = (0..3).map(|_| w.alloc()).collect();
+        let datas: Vec<u64> = (0..3).map(|_| w.alloc()).collect();
+        let b = w.inst("bTrackToConstraint", &[("tar", p(ob_prop)), ("reserved1", n(5.)), ("reserved2", n(1.)), ("flags", n(1.))]);
+        w.put(datas[0], "DATA", "bTrackToConstraint", 1, b);
+        let mut invm = ident.clone();
+        invm[12] = 2.0;
+        let b = w.inst("bChildOfConstraint", &[("tar", p(ob_rig)), ("subtarget", s("Root")), ("flag", n((1 | 2 | 4 | 32 | 512) as f64)), ("invmat", nv(&invm))]);
+        w.put(datas[1], "DATA", "bChildOfConstraint", 1, b);
+        let b = w.inst("bLocLimitConstraint", &[("xmin", n(-1.)), ("zmax", n(3.)), ("flag", n((1 | 32) as f64))]);
+        w.put(datas[2], "DATA", "bLocLimitConstraint", 1, b);
+        let names = ["Track", "Child", "Limit"];
+        for i in 0..3 {
+            let mut f = vec![("data", p(datas[i])), ("name", s(names[i])), ("enforce", n(1.))];
+            if i < 2 {
+                f.push(("next", p(cons[i + 1])));
+            }
+            if i > 0 {
+                f.push(("prev", p(cons[i - 1])));
+            }
+            if i == 1 {
+                f.push(("headtail", n(0.5)));
+                f.push(("tarspace", n(3.)));
+            }
+            if i == 2 {
+                f.push(("flag", n((1 << 9) as f64)));
+            }
+            let b = w.inst("bConstraint", &f);
+            w.put(cons[i], "DATA", "bConstraint", 1, b);
+        }
+        let o = w.inst(
+            "Object",
+            &[("id.name", s("OBGoal")), ("type", n(0.)), ("scale", nv(&[1., 1., 1.])), ("rotmode", n(1.)), ("loc", nv(&[0., 1., 2.])), ("constraints.first", p(cons[0])), ("constraints.last", p(cons[2]))],
+        );
+        w.put(ob_goal, "OB", "Object", 1, o);
+        // Prop: parented to the Child bone.
+        let o = w.inst("Object", &[("id.name", s("OBProp")), ("type", n(0.)), ("scale", nv(&[1., 1., 1.])), ("rotmode", n(1.)), ("parent", p(ob_rig)), ("partype", n(7.)), ("parsubstr", s("Child"))]);
+        w.put(ob_prop, "OB", "Object", 1, o);
+        let o = w.inst("Object", &[("id.name", s("OBCage")), ("type", n(22.)), ("data", p(lt)), ("scale", nv(&[2., 2., 2.])), ("rotmode", n(1.))]);
+        w.put(ob_lat, "OB", "Object", 1, o);
+
+        let scene = import_blend(&w.finish()).unwrap_or_else(|e| panic!("ptr {ptr} big {big}: {e}"));
+        let ctx = format!("ptr {ptr} big {big} large {large}");
+        let ob = |name: &str| &scene.objects[scene.find_object(name).unwrap_or_else(|| panic!("{ctx}: no {name}"))];
+
+        // Mesh data.
+        let body = ob("Body");
+        let ObjectData::Mesh(mi) = body.data else { panic!("{ctx}") };
+        let m = &scene.meshes[mi];
+        assert_eq!(m.vertex_groups, vec!["Lower".to_string(), "Upper".to_string()], "{ctx}");
+        assert_eq!(m.weight_opt(0, 0), Some(1.0));
+        assert_eq!(m.weight_opt(1, 1), Some(0.5));
+        assert_eq!(m.weight_opt(2, 0), None);
+        assert_eq!(m.shape_keys.len(), 2);
+        let sk = &m.shape_keys[1];
+        assert_eq!((sk.name.as_str(), sk.value, sk.slider_min, sk.slider_max), ("Smile", 0.25, -1.0, 2.0));
+        assert_eq!(sk.vertex_group.as_deref(), Some("Upper"));
+        assert!(sk.mute);
+        assert_eq!(sk.interpolation, KeyInterpolation::CatmullRom);
+        assert!((sk.frame - 10.0).abs() < 1e-4);
+        assert_eq!(sk.positions[1], Vec3::new(1.0, 0.0, 1.0));
+        assert!(m.shape_key_settings.use_relative);
+        assert_eq!(m.shape_key_settings.eval_time, 5.0);
+        let ObjectData::Mesh(mi2) = ob("Old").data else { panic!("{ctx}") };
+        assert_eq!(scene.meshes[mi2].vertex_groups, vec!["A".to_string(), "B".to_string()]);
+
+        // Armature.
+        let rig = ob("Rig");
+        let ObjectData::Armature(ai) = rig.data else { panic!("{ctx}: rig is {:?}", rig.data) };
+        let arm = &scene.armatures[ai];
+        assert_eq!(scene.armature_names[ai], "Skel");
+        assert_eq!(arm.bones.len(), 2);
+        let (r, c) = (&arm.bones[0], &arm.bones[1]);
+        assert_eq!((r.name.as_str(), c.name.as_str()), ("Root", "Child"));
+        assert_eq!(c.parent, Some(0));
+        assert!(c.use_connect && !c.use_inherit_rotation && c.use_deform);
+        assert!(!r.use_deform);
+        assert_eq!(c.inherit_scale, sex_3d::armature::InheritScale::None);
+        assert_eq!(c.roll, 0.5);
+        assert_eq!((r.envelope_distance, r.head_radius, r.bbone_segments), (0.5, 0.2, 3));
+        assert_eq!(c.tail, Vec3::new(0.0, 0.0, 2.0));
+        assert_eq!(arm.collections, vec!["Deform".to_string()]);
+        assert_eq!(c.collections, vec!["Deform".to_string()]);
+        // Pose.
+        let pc = rig.pose.iter().find(|p| p.name == "Child").unwrap();
+        assert_eq!(pc.rotation_mode, RotationMode::Euler(sex_3d::math::EulerOrder::YZX));
+        assert_eq!(pc.rotation_euler, Vec3::new(0.1, 0.2, 0.3));
+        assert_eq!(pc.scale, Vec3::new(1.0, 2.0, 1.0));
+        assert_eq!(pc.ik.lock, [true, false, false]);
+        assert_eq!(pc.ik.use_limit, [false, true, false]);
+        assert_eq!(pc.ik.max, [0.0, 1.0, 0.0]);
+        assert_eq!(pc.ik.stiffness[0], 0.25);
+        assert_eq!(pc.constraints.len(), 1);
+        let ik = &pc.constraints[0];
+        assert_eq!((ik.name.as_str(), ik.influence, ik.owner_space), ("IK", 0.75, Space::Pose));
+        match &ik.kind {
+            ConstraintKind::Ik { target, pole_target, pole_angle, chain_count, iterations, use_tail, use_stretch, .. } => {
+                assert_eq!(target.object, "Goal");
+                assert_eq!(pole_target.as_ref().unwrap().object, "Prop");
+                assert_eq!((*pole_angle, *chain_count, *iterations, *use_tail, *use_stretch), (0.5, 2, 200, true, false));
+            }
+            k => panic!("{ctx}: {k:?}"),
+        }
+
+        // Object constraints.
+        let goal = ob("Goal");
+        assert_eq!(goal.constraints.len(), 3);
+        assert!(matches!(&goal.constraints[0].kind, ConstraintKind::TrackTo { target, track_axis: TrackAxis::NegZ, up_axis: 1, use_target_z: true } if target.object == "Prop"));
+        match &goal.constraints[1].kind {
+            ConstraintKind::ChildOf { target, use_location, use_rotation, use_scale, inverse } => {
+                assert_eq!((target.object.as_str(), target.subtarget.as_str(), target.head_tail), ("Rig", "Root", 0.5));
+                assert_eq!((*use_location, *use_rotation, *use_scale), ([true; 3], [false, false, true], [false; 3]));
+                assert_eq!(inverse.translation_part(), Vec3::new(2.0, 0.0, 0.0));
+            }
+            k => panic!("{ctx}: {k:?}"),
+        }
+        assert_eq!(goal.constraints[1].target_space, Space::LocalWithParent);
+        assert!(goal.constraints[2].mute);
+        assert!(matches!(&goal.constraints[2].kind, ConstraintKind::LimitLocation { use_min: [true, false, false], use_max: [false, false, true], min, max } if min[0] == -1.0 && max[2] == 3.0));
+
+        // Parenting.
+        let prop = ob("Prop");
+        assert_eq!((prop.parent_type, prop.parent_bone.as_str()), (ParentType::Bone, "Child"));
+        assert_eq!(ob("Body").parent_type, ParentType::Armature);
+
+        // Lattice.
+        let cage = ob("Cage");
+        let ObjectData::Lattice(li) = cage.data else { panic!("{ctx}") };
+        let l = &scene.lattices[li];
+        assert_eq!((l.points_u, l.points_v, l.points_w), (2, 2, 2));
+        assert_eq!((l.interpolation_u, l.interpolation_v, l.interpolation_w), (KeyInterpolation::Linear, KeyInterpolation::Cardinal, KeyInterpolation::BSpline));
+        assert!(l.use_outside);
+        assert_eq!(l.points[7], Vec3::new(0.5, 0.5, 0.9));
+
+        // Modifiers.
+        let mods = &body.modifiers;
+        assert_eq!(mods.len(), 5, "{ctx}: {mods:?}");
+        assert_eq!(
+            mods[0],
+            Modifier::Armature {
+                object: "Rig".into(),
+                use_vertex_groups: true,
+                use_bone_envelopes: false,
+                use_deform_preserve_volume: true,
+                use_multi_modifier: true,
+                vertex_group: Some("Lower".into()),
+                invert_vertex_group: true
+            }
+        );
+        match &mods[1] {
+            Modifier::Hook { object, subtarget, falloff_type, falloff_radius, center, matrix_inverse, strength, use_falloff_uniform, vertex_indices, vertex_group, .. } => {
+                assert_eq!((object.as_str(), subtarget.as_str(), *falloff_type, *falloff_radius), ("Rig", "Child", Falloff::Smooth, 2.0));
+                assert_eq!((*center, *strength, *use_falloff_uniform), ([0.0, 0.0, 1.0], 0.5, true));
+                assert_eq!(matrix_inverse.translation_part(), Vec3::new(0.0, 0.0, -1.0));
+                assert_eq!(vertex_indices, &vec![0, 2]);
+                assert!(vertex_group.is_none());
+            }
+            m => panic!("{ctx}: {m:?}"),
+        }
+        assert_eq!(mods[2], Modifier::Smooth { factor: 0.5, iterations: 2, vertex_group: Some("Upper".into()), invert_vertex_group: true });
+        match &mods[3] {
+            Modifier::VertexWeightMix { vertex_group_a, vertex_group_b, default_weight_b, mix_mode, mix_set, invert_vertex_group_b, .. } => {
+                assert_eq!((vertex_group_a.as_str(), vertex_group_b.as_str(), *default_weight_b), ("Upper", "Lower", 0.25));
+                assert_eq!((*mix_mode, *mix_set, *invert_vertex_group_b), (WeightMixMode::Average, WeightMixSet::Or, true));
+            }
+            m => panic!("{ctx}: {m:?}"),
+        }
+        assert_eq!(mods[4], Modifier::Lattice { object: "Cage".into(), strength: 0.8, vertex_group: Some("Upper".into()), invert_vertex_group: true });
+
+        // The imported scene evaluates and survives the polyops round trip.
+        for i in 0..scene.objects.len() {
+            let _ = scene.world_matrix(i);
+            let _ = scene.evaluated_mesh(i);
+        }
+        let text = sex_3d::script::scene_to_polyops(&scene);
+        let mut back = Scene::new();
+        sex_3d::script::run(&mut back, &text).unwrap_or_else(|e| panic!("{ctx}: {e}\n{text}"));
+        assert_eq!(back.objects, scene.objects, "{ctx}");
+        assert_eq!(back.armatures, scene.armatures);
+        assert_eq!(back.lattices, scene.lattices);
+        assert_eq!(back.meshes, scene.meshes);
     }
 }

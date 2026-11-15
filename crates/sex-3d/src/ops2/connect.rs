@@ -158,7 +158,7 @@ pub fn connect_vert_pair(m: &mut Mesh, a: u32, b: u32) -> Option<Vec<[u32; 2]>> 
                 forced = None;
             }
             Err((p, q, t)) => {
-                let x = w.add_vertex(w.positions[p as usize].lerp(w.positions[q as usize], t));
+                let x = w.add_vertex_interp(w.positions[p as usize].lerp(w.positions[q as usize], t), &[(p, 1.0 - t), (q, t)]);
                 // The face on the other side of p-q, before inserting.
                 let other = (0..w.faces.len() as u32).find(|&g| g != f && w.faces[g as usize].edges().any(|e| ekey(e.0, e.1) == ekey(p, q)));
                 insert_edge_vertex(&mut w, p, q, x, t);

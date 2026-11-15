@@ -15,6 +15,12 @@
 //!   `KHR_materials_ior`, `KHR_materials_transmission`, `doubleSided`.
 //! - Cameras and `KHR_lights_punctual` lights. Light units are converted like
 //!   Blender's importer: point and spot `W = cd * 4π / 683`, sun `W/m² = lux`.
+//! - Skins become armatures (joints become bones, the joints' current
+//!   transforms their pose), `JOINTS_n`/`WEIGHTS_n` vertex groups named after
+//!   the bones, and an Armature modifier on the skinned mesh, which is put
+//!   under the armature with an identity transform (glTF ignores a skinned
+//!   node's transform). Non-joint children of joints are bone-parented. See
+//!   `gltf/skin.rs` for the bone conventions.
 //!
 //! Axes: glTF is Y-up. Like Blender's importer, positions, node transforms
 //! and mesh data are rotated +90° about X so no visible rotation is left on
@@ -25,11 +31,19 @@
 //! Export writes the inverse: one node per object, one mesh per (mesh, slot
 //! materials) pair with one primitive per used slot (vertices split by
 //! normal and UV seams), materials, PNG textures, cameras and lights. `.gltf`
-//! embeds the binary buffer as a data URI.
+//! embeds the binary buffer as a data URI. Armatures export as joint nodes at
+//! the current pose. A mesh with an Armature modifier (vertex groups on) is
+//! written without it, in armature space, with the four strongest bone
+//! weights as `JOINTS_0`/`WEIGHTS_0` and a skin; vertices with no bone weight
+//! get all-zero weights (as Blender writes them). Envelopes, preserve volume
+//! (DQS), B-bones and the other deform modifiers are not represented.
 use super::{decode_image, encode_png, weld_exact, y_up_to_z_up, z_up_to_y_up, Format, IoError, Resolver};
 use crate::math::{Mat4, Quat, Vec2, Vec3};
 use crate::mesh::{Face, Mesh};
-use crate::scene::{Camera, Light, LightKind, Material, Object, ObjectData, Scene, Transform};
+use crate::modifiers::Modifier;
+use crate::scene::{Camera, Light, LightKind, Material, Object, ObjectData, ParentType, Scene, Transform};
+
+mod skin;
 use base64::Engine as _;
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
@@ -454,6 +468,53 @@ pub fn import_into(scene: &mut Scene, bytes: &[u8], resolver: Resolver) -> Resul
     // light without a mesh.
     let turned_node = |n: &Value| idx(n, "mesh").is_none() && (idx(n, "camera").is_some() || ext(n, "KHR_lights_punctual").is_some_and(|l| idx(l, "light").is_some()));
 
+    // Skins become armatures; their joint nodes become bones.
+    let mut skin_defs = Vec::new();
+    for (si, s) in arr(&doc, "skins").iter().enumerate() {
+        let joints: Vec<usize> = arr(s, "joints").iter().filter_map(Value::as_u64).map(|j| j as usize).collect();
+        let ibm = match idx(s, "inverseBindMatrices") {
+            Some(a) => {
+                let f = r.read_f32(a, 16, "inverseBindMatrices")?;
+                if f.len() / 16 < joints.len() {
+                    return Err(r.err(format!("skin {si}: fewer inverse bind matrices than joints")));
+                }
+                Some(f.chunks_exact(16).map(|c| Mat4::from_cols_array(c.try_into().expect("16 floats"))).collect::<Vec<_>>())
+            }
+            None => None,
+        };
+        skin_defs.push((s.get("name").and_then(Value::as_str).map(str::to_string), joints, ibm));
+    }
+    let mut skins = if skin_defs.is_empty() {
+        None
+    } else {
+        let local: Vec<Mat4> = nodes.iter().map(|n| { let (t, q, s) = node_trs(n); Mat4::from_trs(t, q, s) }).collect();
+        let world = (0..nodes.len())
+            .map(|ni| {
+                let mut m = local[ni];
+                let mut c = parent_node[ni];
+                while let Some(p) = c {
+                    m = local[p] * m;
+                    c = parent_node[p];
+                }
+                m
+            })
+            .collect();
+        let info = skin::NodeInfo {
+            names: nodes.iter().map(|n| n.get("name").and_then(Value::as_str)).collect(),
+            included: &included,
+            parent: &parent_node,
+            world,
+            has_data: nodes.iter().map(|n| idx(n, "mesh").is_some() || idx(n, "camera").is_some() || ext(n, "KHR_lights_punctual").is_some()).collect(),
+        };
+        Some(skin::build(&info, &skin_defs))
+    };
+    let node_bone = skins.as_ref().map_or_else(|| vec![None; nodes.len()], |s| s.node_bone.clone());
+    let joint_of = |ni: usize| node_bone[ni];
+    // (name, length) of each bone, kept after the armatures move into the scene.
+    let bone_info: Vec<Vec<(String, f32)>> = skins.as_ref().map_or_else(Vec::new, |s| s.groups.iter().map(|g| g.armature.bones.iter().map(|b| (b.name.clone(), b.length())).collect()).collect());
+    let mut arm_obj: Vec<Option<usize>> = vec![None; bone_info.len()];
+    let mut skinned: Vec<(usize, usize, usize)> = Vec::new(); // (object, group, skin)
+
     // Objects are created in node order so exports round-trip their order.
     let mut node_object: Vec<Option<usize>> = vec![None; nodes.len()];
     let mut added = Vec::new();
@@ -461,16 +522,27 @@ pub fn import_into(scene: &mut Scene, bytes: &[u8], resolver: Resolver) -> Resul
         if !included[ni] {
             continue;
         }
-        let parent_turned = parent_node[ni].is_some_and(|p| turned_node(&nodes[p]));
-        let (t, q, s) = match floats::<16>(node.get("matrix")) {
-            Some(m) => Mat4::from_cols_array(m).to_trs(),
-            None => {
-                let t = floats::<3>(node.get("translation")).unwrap_or([0.0; 3]);
-                let q = floats::<4>(node.get("rotation")).unwrap_or([0.0, 0.0, 0.0, 1.0]);
-                let s = floats::<3>(node.get("scale")).unwrap_or([1.0; 3]);
-                (Vec3::from_array(t), Quat { x: q[0], y: q[1], z: q[2], w: q[3] }.normalize(), Vec3::from_array(s))
+        // A skin without a host node gets its armature object here.
+        if let Some(sk) = skins.as_mut() {
+            for (g, grp) in sk.groups.iter_mut().enumerate() {
+                if grp.host.is_none() && grp.first_joint == ni {
+                    let ai = scene.add_armature(&grp.name, std::mem::take(&mut grp.armature));
+                    let mut o = Object::new(&grp.name, ObjectData::Armature(ai));
+                    o.pose = std::mem::take(&mut grp.pose);
+                    let oi = scene.add_object(o);
+                    added.push(oi);
+                    arm_obj[g] = Some(oi);
+                }
             }
-        };
+        }
+        let is_joint = joint_of(ni).is_some();
+        if is_joint && idx(node, "mesh").is_none() && idx(node, "camera").is_none() && ext(node, "KHR_lights_punctual").is_none() {
+            continue;
+        }
+        // A joint's frame is its bone's frame (`C J`, see `skin`): to its
+        // children and its own data it reads like a turned parent.
+        let parent_turned = is_joint || parent_node[ni].is_some_and(|p| turned_node(&nodes[p]) || joint_of(p).is_some());
+        let (t, q, s) = if is_joint { (Vec3::ZERO, Quat::IDENTITY, Vec3::ONE) } else { node_trs(node) };
         let camera = match idx(node, "camera") {
             Some(c) => Some(read_camera(doc.get("cameras").and_then(|a| a.get(c)).ok_or_else(|| r.err(format!("node {ni}: camera {c} does not exist")))?)),
             None => None,
@@ -518,19 +590,44 @@ pub fn import_into(scene: &mut Scene, bytes: &[u8], resolver: Resolver) -> Resul
             (None, None, Some(l)) => ObjectData::Light(l),
             (None, None, None) => ObjectData::Empty,
         };
+        let host = skins.as_ref().and_then(|sk| sk.groups.iter().position(|g| g.host == Some(ni)));
+        let mut pose = Vec::new();
+        let data = match (host, skins.as_mut()) {
+            (Some(g), Some(sk)) => {
+                let grp = &mut sk.groups[g];
+                pose = std::mem::take(&mut grp.pose);
+                ObjectData::Armature(scene.add_armature(node.get("name").and_then(Value::as_str).unwrap_or(&grp.name), std::mem::take(&mut grp.armature)))
+            }
+            _ => data,
+        };
         let turned = matches!(data, ObjectData::Camera(_) | ObjectData::Light(_));
         let default_name = match data {
             ObjectData::Mesh(m) => scene.mesh_names[m].clone(),
             ObjectData::Camera(_) => "Camera".into(),
             ObjectData::Light(_) => "Light".into(),
             ObjectData::Empty => "Empty".into(),
+            ObjectData::Armature(_) => "Armature".into(),
+            ObjectData::Lattice(_) => "Lattice".into(),
         };
         let name = node.get("name").and_then(Value::as_str).map_or(default_name, str::to_string);
         let mut o = Object::new(&name, data);
         o.transform = to_scene_transform(t, q, s, parent_turned, turned);
         o.materials = mesh.map(|(_, s)| s).unwrap_or_default();
+        o.pose = pose;
+        if let Some((g, b)) = joint_of(ni) {
+            // Sits on its bone: the bone parent frame is at the tail.
+            o.transform.location -= Vec3::Y * bone_info[g][b].1;
+        }
         let oi = scene.add_object(o);
         added.push(oi);
+        if let Some(g) = host {
+            arm_obj[g] = Some(oi);
+        }
+        if let (Some(si), Some(sk), true) = (idx(node, "skin"), skins.as_ref(), matches!(scene.objects[oi].data, ObjectData::Mesh(_))) {
+            if let Some(&g) = sk.skin_group.get(si) {
+                skinned.push((oi, g, si));
+            }
+        }
         // A camera or light sharing a node with a mesh hangs under it.
         for d in extra {
             let mut c = Object::new(if matches!(d, ObjectData::Camera(_)) { "Camera" } else { "Light" }, d);
@@ -541,11 +638,70 @@ pub fn import_into(scene: &mut Scene, bytes: &[u8], resolver: Resolver) -> Resul
         node_object[ni] = Some(oi);
     }
     for (ni, p) in parent_node.iter().enumerate() {
-        if let (Some(o), Some(p)) = (node_object[ni], p.and_then(|p| node_object[p])) {
+        let Some(o) = node_object[ni] else { continue };
+        // Joints with data hang on their own bone, children of joints on
+        // their parent's.
+        let bone = joint_of(ni).map(|b| (b, false)).or_else(|| p.and_then(|p| joint_of(p)).map(|b| (b, true)));
+        if let Some(((g, b), child)) = bone {
+            let ob = &mut scene.objects[o];
+            ob.parent = arm_obj[g];
+            ob.parent_type = ParentType::Bone;
+            ob.parent_bone = bone_info[g][b].0.clone();
+            if child {
+                ob.transform.location -= Vec3::Y * bone_info[g][b].1;
+            }
+        } else if let Some(p) = p.and_then(|p| node_object[p]) {
             scene.objects[o].parent = Some(p);
         }
     }
+    // Skinned meshes: under the armature (glTF ignores their node
+    // transform), deformed by an Armature modifier, groups named by joint.
+    let mut renamed = std::collections::HashSet::new();
+    for (oi, g, si) in skinned {
+        let Some(ao) = arm_obj[g] else { continue };
+        let arm_name = scene.objects[ao].name.clone();
+        let o = &mut scene.objects[oi];
+        o.parent = Some(ao);
+        o.parent_type = ParentType::Armature;
+        o.transform = Transform::default();
+        let mut md = Modifier::with_defaults("Armature").expect("armature modifier");
+        if let Modifier::Armature { object, .. } = &mut md {
+            *object = arm_name;
+        }
+        o.modifiers.insert(0, md);
+        let ObjectData::Mesh(mi) = o.data else { continue };
+        if renamed.insert(mi) {
+            let mesh = &mut scene.meshes[mi];
+            for (k, &j) in skin_defs[si].1.iter().enumerate() {
+                let Some((_, b)) = joint_of(j) else { continue };
+                let name = bone_info[g][b].0.clone();
+                match mesh.vertex_groups.get_mut(k) {
+                    Some(n) => *n = name,
+                    None => {
+                        while mesh.vertex_groups.len() < k {
+                            let n = format!("Joint{}", mesh.vertex_groups.len());
+                            mesh.vertex_groups.push(n);
+                        }
+                        mesh.vertex_groups.push(name);
+                    }
+                }
+            }
+        }
+    }
     Ok(added)
+}
+
+/// A node's local TRS (from `matrix` or `translation`/`rotation`/`scale`).
+fn node_trs(node: &Value) -> (Vec3, Quat, Vec3) {
+    match floats::<16>(node.get("matrix")) {
+        Some(m) => Mat4::from_cols_array(m).to_trs(),
+        None => {
+            let t = floats::<3>(node.get("translation")).unwrap_or([0.0; 3]);
+            let q = floats::<4>(node.get("rotation")).unwrap_or([0.0, 0.0, 0.0, 1.0]);
+            let s = floats::<3>(node.get("scale")).unwrap_or([1.0; 3]);
+            (Vec3::from_array(t), Quat { x: q[0], y: q[1], z: q[2], w: q[3] }.normalize(), Vec3::from_array(s))
+        }
+    }
 }
 
 fn read_camera(c: &Value) -> Camera {
@@ -611,6 +767,36 @@ fn read_mesh(r: &Reader, mi: usize, gm: &Value) -> Result<(Mesh, Vec<Option<usiz
             }
         } as u16;
         let base = mesh.positions.len() as u32;
+        // Skin weights: JOINTS_n / WEIGHTS_n become vertex groups named
+        // `Joint<k>` until a skin names them.
+        let mut skin: Vec<Vec<(u32, f32)>> = vec![Vec::new(); count];
+        let mut sets = 0;
+        while let (Some(ja), Some(wa)) = (idx(attrs, &format!("JOINTS_{sets}")), idx(attrs, &format!("WEIGHTS_{sets}"))) {
+            let (nc, js) = r.read(ja, |x| x as u32)?;
+            let ws = r.read_f32(wa, 4, "WEIGHTS")?;
+            if nc != 4 || js.len() != count * 4 || ws.len() != count * 4 {
+                return Err(r.err(format!("mesh {mi} primitive {pi}: JOINTS_{sets}/WEIGHTS_{sets} must be VEC4 with one entry per vertex")));
+            }
+            for (v, vw) in skin.iter_mut().enumerate() {
+                for k in v * 4..v * 4 + 4 {
+                    if ws[k] > 0.0 {
+                        match vw.iter_mut().find(|e| e.0 == js[k]) {
+                            Some(e) => e.1 += ws[k],
+                            None => vw.push((js[k], ws[k])),
+                        }
+                    }
+                }
+            }
+            sets += 1;
+        }
+        if sets > 0 {
+            let groups = skin.iter().flatten().map(|e| e.0 as usize + 1).max().unwrap_or(0);
+            while mesh.vertex_groups.len() < groups {
+                mesh.vertex_groups.push(format!("Joint{}", mesh.vertex_groups.len()));
+            }
+            mesh.weights.resize(base as usize, Vec::new());
+            mesh.weights.extend(skin);
+        }
         let p = |i: u32| Vec3::new(pos[i as usize * 3], pos[i as usize * 3 + 1], pos[i as usize * 3 + 2]);
         mesh.positions.extend((0..count as u32).map(|i| y_up_to_z_up(p(i))));
 
@@ -710,6 +896,22 @@ impl Bin {
         self.accessors.len() - 1
     }
 
+    /// Unsigned short VEC4 accessor (JOINTS_0).
+    fn joints(&mut self, values: &[u16]) -> usize {
+        let bytes: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let view = self.view(&bytes, Some(34962));
+        self.accessors.push(json!({ "bufferView": view, "componentType": 5123, "count": values.len() / 4, "type": "VEC4" }));
+        self.accessors.len() - 1
+    }
+
+    /// MAT4 accessor (inverse bind matrices).
+    fn mat4s(&mut self, values: &[Mat4]) -> usize {
+        let bytes: Vec<u8> = values.iter().flat_map(|m| m.to_cols_array()).flat_map(f32::to_le_bytes).collect();
+        let view = self.view(&bytes, None);
+        self.accessors.push(json!({ "bufferView": view, "componentType": 5126, "count": values.len(), "type": "MAT4" }));
+        self.accessors.len() - 1
+    }
+
     fn indices(&mut self, idx: &[u32]) -> usize {
         let bytes: Vec<u8> = idx.iter().flat_map(|v| v.to_le_bytes()).collect();
         let view = self.view(&bytes, Some(34963));
@@ -725,12 +927,17 @@ struct PrimBuild {
     positions: Vec<f32>,
     normals: Vec<f32>,
     uvs: Vec<f32>,
+    joints: Vec<u16>,
+    weights: Vec<f32>,
     indices: Vec<u32>,
 }
 
+/// Per-vertex JOINTS_0 / WEIGHTS_0 of a skinned mesh.
+type SkinWeights = [([u16; 4], [f32; 4])];
+
 /// glTF primitives for `m` with one primitive per used slot (`slots` maps
 /// slot to glTF material index), plus a LINES primitive for loose edges.
-fn mesh_primitives(bin: &mut Bin, m: &Mesh, slots: &[usize]) -> Vec<Value> {
+fn mesh_primitives(bin: &mut Bin, m: &Mesh, slots: &[usize], skin: Option<&SkinWeights>) -> Vec<Value> {
     let with_uv = m.faces.iter().any(|f| !f.uvs.is_empty());
     let vnormals = m.vertex_normals();
     let fnormals: Vec<Vec3> = (0..m.faces.len()).map(|f| m.face_normal(f)).collect();
@@ -752,6 +959,10 @@ fn mesh_primitives(bin: &mut Bin, m: &Mesh, slots: &[usize]) -> Vec<Value> {
                 pb.positions.extend_from_slice(&[p.x, p.y, p.z]);
                 pb.normals.extend_from_slice(&[n.x, n.y, n.z]);
                 pb.uvs.extend_from_slice(&[uv.x, uv.y]);
+                if let Some(sw) = skin {
+                    pb.joints.extend_from_slice(&sw[v as usize].0);
+                    pb.weights.extend_from_slice(&sw[v as usize].1);
+                }
             }
             pb.indices.push(i);
         }
@@ -767,6 +978,10 @@ fn mesh_primitives(bin: &mut Bin, m: &Mesh, slots: &[usize]) -> Vec<Value> {
         if with_uv {
             attrs.insert("TEXCOORD_0".into(), json!(bin.floats(&pb.uvs, 2, false)));
         }
+        if skin.is_some() {
+            attrs.insert("JOINTS_0".into(), json!(bin.joints(&pb.joints)));
+            attrs.insert("WEIGHTS_0".into(), json!(bin.floats(&pb.weights, 4, false)));
+        }
         let mut p = json!({ "attributes": attrs, "indices": bin.indices(&pb.indices), "mode": 4 });
         if let Some(&mat) = slots.get(slot) {
             p["material"] = json!(mat);
@@ -776,8 +991,15 @@ fn mesh_primitives(bin: &mut Bin, m: &Mesh, slots: &[usize]) -> Vec<Value> {
     if !m.loose_edges.is_empty() {
         let pos: Vec<f32> = m.positions.iter().flat_map(|&p| z_up_to_y_up(p).to_array()).collect();
         let idx: Vec<u32> = m.loose_edges.iter().flatten().copied().collect();
-        let pa = bin.floats(&pos, 3, true);
-        out.push(json!({ "attributes": { "POSITION": pa }, "indices": bin.indices(&idx), "mode": 1 }));
+        let mut attrs = Map::new();
+        attrs.insert("POSITION".into(), json!(bin.floats(&pos, 3, true)));
+        if let Some(sw) = skin {
+            let j: Vec<u16> = sw.iter().flat_map(|e| e.0).collect();
+            let w: Vec<f32> = sw.iter().flat_map(|e| e.1).collect();
+            attrs.insert("JOINTS_0".into(), json!(bin.joints(&j)));
+            attrs.insert("WEIGHTS_0".into(), json!(bin.floats(&w, 4, false)));
+        }
+        out.push(json!({ "attributes": attrs, "indices": bin.indices(&idx), "mode": 1 }));
     }
     out
 }
@@ -875,12 +1097,44 @@ pub fn export(scene: &Scene, binary: bool) -> Result<Vec<u8>, IoError> {
     }
 
     let parents = effective_parents(scene);
-    let mut children: Vec<Vec<usize>> = vec![Vec::new(); scene.objects.len()];
-    for (i, p) in parents.iter().enumerate() {
-        if let Some(p) = p {
-            children[*p].push(i);
+    // Bones are nodes after the objects' nodes, per armature object.
+    let mut bone_base: Vec<Option<usize>> = vec![None; scene.objects.len()];
+    let mut next = scene.objects.len();
+    for (i, base) in bone_base.iter_mut().enumerate() {
+        if let Some(a) = scene.armature_of(i) {
+            *base = Some(next);
+            next += a.bones.len();
         }
     }
+    // The bone node an object is bone-parented to.
+    let bone_parent = |i: usize| -> Option<(usize, usize)> {
+        let o = &scene.objects[i];
+        let p = parents[i]?;
+        if o.parent_type != ParentType::Bone {
+            return None;
+        }
+        let b = scene.armature_of(p)?.find(&o.parent_bone)?;
+        Some((p, b))
+    };
+    let mut children: Vec<Vec<usize>> = vec![Vec::new(); next];
+    for (i, p) in parents.iter().enumerate() {
+        match (bone_parent(i), p) {
+            (Some((a, b)), _) => children[bone_base[a].expect("armature") + b].push(i),
+            (None, Some(p)) => children[*p].push(i),
+            _ => {}
+        }
+    }
+    for (i, base) in bone_base.iter().enumerate() {
+        if let (Some(base), Some(a)) = (base, scene.armature_of(i)) {
+            for b in 0..a.bones.len() {
+                match a.parent(b) {
+                    Some(p) => children[base + p].push(base + b),
+                    None => children[i].push(base + b),
+                }
+            }
+        }
+    }
+    let mut skins: Vec<Value> = Vec::new();
     let mut meshes: Vec<Value> = Vec::new();
     let mut mesh_cache: HashMap<(usize, Vec<usize>), Option<usize>> = HashMap::new();
     let mut cameras = Vec::new();
@@ -889,7 +1143,15 @@ pub fn export(scene: &Scene, binary: bool) -> Result<Vec<u8>, IoError> {
     for (i, o) in scene.objects.iter().enumerate() {
         let turned = is_turned(o);
         let parent_turned = parents[i].is_some_and(|p| is_turned(&scene.objects[p]));
-        let (t, q, s) = to_gltf_transform(&o.transform, parent_turned, turned);
+        let (t, q, s) = match bone_parent(i) {
+            // Relative to the bone node (its head), not the bone's tail.
+            Some((a, b)) => {
+                let bone = &scene.armature_of(a).expect("armature").bones[b];
+                let to_bone = if bone.use_relative_parent { bone.rest_matrix().inverse() } else { Mat4::translation(Vec3::Y * bone.length()) };
+                to_gltf_transform(&Transform::from_matrix(&(to_bone * o.transform.matrix())), true, turned)
+            }
+            None => to_gltf_transform(&o.transform, parent_turned, turned),
+        };
         let mut node = json!({ "name": o.name });
         if t != Vec3::ZERO {
             node["translation"] = json!(t.to_array());
@@ -906,8 +1168,34 @@ pub fn export(scene: &Scene, binary: bool) -> Result<Vec<u8>, IoError> {
         match &o.data {
             ObjectData::Mesh(mi) if *mi < scene.meshes.len() => {
                 let slots: Vec<usize> = o.materials.iter().copied().filter(|&m| m < scene.materials.len()).collect();
+                // Skinned by an Armature modifier: written in armature space
+                // without that modifier, with JOINTS_0/WEIGHTS_0 and a skin.
+                let skin_arm = o.modifiers.iter().find_map(|m| match m {
+                    Modifier::Armature { object, use_vertex_groups: true, .. } => scene.find_object(object).filter(|&a| bone_base[a].is_some()),
+                    _ => None,
+                });
+                if let Some(a) = skin_arm {
+                    let arm = scene.armature_of(a).expect("armature");
+                    let arm_name = &scene.objects[a].name;
+                    let stack: Vec<Modifier> = o.modifiers.iter().filter(|m| !matches!(m, Modifier::Armature { object, .. } if object == arm_name)).cloned().collect();
+                    let mut mesh = scene.apply_modifiers(i, &scene.meshes[*mi], &stack);
+                    mesh.transform(&(scene.world_matrix(a).inverse() * scene.world_matrix(i)));
+                    let names: Vec<String> = arm.bones.iter().map(|b| b.name.clone()).collect();
+                    let sw = skin::vertex_joints(&mesh, &names);
+                    let prims = mesh_primitives(&mut bin, &mesh, &slots, Some(&sw));
+                    if !prims.is_empty() {
+                        meshes.push(json!({ "name": scene.mesh_names.get(*mi).cloned().unwrap_or_default(), "primitives": prims }));
+                        node["mesh"] = json!(meshes.len() - 1);
+                        let ibm: Vec<Mat4> = arm.bones.iter().map(|b| b.rest_matrix().inverse() * skin::c_mat()).collect();
+                        let base = bone_base[a].expect("armature");
+                        skins.push(json!({ "name": arm_name, "skeleton": a, "joints": (base..base + names.len()).collect::<Vec<_>>(), "inverseBindMatrices": bin.mat4s(&ibm) }));
+                        node["skin"] = json!(skins.len() - 1);
+                    }
+                    nodes.push(node);
+                    continue;
+                }
                 let build = |bin: &mut Bin, meshes: &mut Vec<Value>, mesh: &Mesh| {
-                    let prims = mesh_primitives(bin, mesh, &slots);
+                    let prims = mesh_primitives(bin, mesh, &slots, None);
                     (!prims.is_empty()).then(|| {
                         meshes.push(json!({ "name": scene.mesh_names.get(*mi).cloned().unwrap_or_default(), "primitives": prims }));
                         meshes.len() - 1
@@ -959,6 +1247,27 @@ pub fn export(scene: &Scene, binary: bool) -> Result<Vec<u8>, IoError> {
         }
         nodes.push(node);
     }
+    // Bone nodes, at the current pose.
+    for (i, base) in bone_base.iter().enumerate() {
+        let (Some(base), Some(arm)) = (*base, scene.armature_of(i)) else { continue };
+        let poses = scene.pose_matrices(i);
+        for (b, bone) in arm.bones.iter().enumerate() {
+            let pose = poses.get(b).copied().unwrap_or_else(|| bone.rest_matrix());
+            let local = match arm.parent(b) {
+                Some(p) => poses.get(p).copied().unwrap_or_else(|| arm.bones[p].rest_matrix()).inverse() * pose,
+                None => skin::c_mat().inverse() * pose,
+            };
+            let (t, q, s) = local.to_trs();
+            let mut node = json!({ "name": bone.name, "translation": t.to_array(), "rotation": q.to_array() });
+            if !s.approx_eq(Vec3::ONE, 1e-6) {
+                node["scale"] = json!(s.to_array());
+            }
+            if !children[base + b].is_empty() {
+                node["children"] = json!(children[base + b]);
+            }
+            nodes.push(node);
+        }
+    }
     let roots: Vec<usize> = (0..scene.objects.len()).filter(|&i| parents[i].is_none()).collect();
 
     let mut doc = json!({
@@ -971,7 +1280,7 @@ pub fn export(scene: &Scene, binary: bool) -> Result<Vec<u8>, IoError> {
         used_ext.push("KHR_lights_punctual");
         doc["extensions"] = json!({ "KHR_lights_punctual": { "lights": lights } });
     }
-    let sets: [(&str, Vec<Value>); 4] = [("meshes", meshes), ("materials", materials), ("cameras", cameras), ("images", image_json.clone())];
+    let sets: [(&str, Vec<Value>); 5] = [("meshes", meshes), ("materials", materials), ("cameras", cameras), ("skins", skins), ("images", image_json.clone())];
     for (key, v) in sets {
         if !v.is_empty() {
             doc[key] = Value::Array(v);

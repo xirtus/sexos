@@ -25,7 +25,7 @@ pub fn data(l: &mut L, d: &mut Doc, c: &mut Ctx) {
         ObjectData::Mesh(mi) => mesh(l, d, mi),
         ObjectData::Light(li) => light(l, d, c, o, li),
         ObjectData::Camera(cam) => camera(l, d, c, o, cam),
-        ObjectData::Empty => {
+        ObjectData::Empty | ObjectData::Armature(_) | ObjectData::Lattice(_) => {
             l.panel(d, "data.empty", "Empty", true, &mut |l, _| {
                 l.info("Display As", "Plain Axes");
                 inactive(l, |l| {

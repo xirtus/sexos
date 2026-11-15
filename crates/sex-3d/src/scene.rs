@@ -369,6 +369,34 @@ pub enum ObjectData {
     Mesh(usize),
     Camera(Camera),
     Light(Light),
+    /// Index into [`Scene::armatures`].
+    Armature(usize),
+    /// Index into [`Scene::lattices`].
+    Lattice(usize),
+}
+
+/// Which vertex groups [`Scene::parent_with_armature`] creates.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ArmatureWeights {
+    /// Plain armature parenting with the modifier, no groups.
+    None,
+    Empty,
+    Envelope,
+    Automatic,
+}
+
+/// How an object hangs off its parent (Blender's `partype`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ParentType {
+    /// Plain object parenting.
+    #[default]
+    Object,
+    /// Armature parenting (`PARSKEL`): object parenting, deformation comes
+    /// from an Armature modifier.
+    Armature,
+    /// Parented to the bone `Object::parent_bone` of an armature parent:
+    /// follows the posed bone, at its tail (or root with Relative Parenting).
+    Bone,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -376,6 +404,13 @@ pub struct Object {
     pub name: String,
     pub transform: Transform,
     pub parent: Option<usize>,
+    pub parent_type: ParentType,
+    /// Bone name for [`ParentType::Bone`].
+    pub parent_bone: String,
+    /// Object constraints, evaluated after parenting.
+    pub constraints: Vec<crate::constraints::Constraint>,
+    /// Armature objects: the pose (bones without an entry are at rest).
+    pub pose: Vec<crate::armature::PoseBone>,
     pub data: ObjectData,
     /// Non-destructive modifier stack, applied top to bottom.
     pub modifiers: Vec<Modifier>,
@@ -401,6 +436,10 @@ impl Object {
             name: name.into(),
             transform: Transform::default(),
             parent: None,
+            parent_type: ParentType::Object,
+            parent_bone: String::new(),
+            constraints: Vec::new(),
+            pose: Vec::new(),
             data,
             modifiers: Vec::new(),
             materials: Vec::new(),
@@ -462,6 +501,11 @@ pub struct Scene {
     pub node_groups: Vec<crate::nodes::NodeTree>,
     /// The compositing node tree (Compositor's Use Nodes).
     pub compositor: Option<crate::nodes::NodeTree>,
+    /// Armature data, shared by armature objects like meshes.
+    pub armatures: Vec<crate::armature::Armature>,
+    pub armature_names: Vec<String>,
+    pub lattices: Vec<crate::lattice::Lattice>,
+    pub lattice_names: Vec<String>,
 }
 
 impl Default for Scene {
@@ -484,6 +528,10 @@ impl Default for Scene {
             frame_current: 1,
             node_groups: Vec::new(),
             compositor: None,
+            armatures: Vec::new(),
+            armature_names: Vec::new(),
+            lattices: Vec::new(),
+            lattice_names: Vec::new(),
         }
     }
 }
@@ -620,19 +668,99 @@ impl Scene {
     }
 
     /// Object-to-world matrix through the parent chain.
+    ///
+    /// Bone parents follow the posed bone and object constraints are applied
+    /// after parenting (see [`crate::constraints`]).
     pub fn world_matrix(&self, idx: usize) -> Mat4 {
-        let mut m = self.objects[idx].transform.matrix();
-        let mut p = self.objects[idx].parent;
-        let mut guard = 0;
-        while let Some(pi) = p {
-            m = self.objects[pi].transform.matrix() * m;
-            p = self.objects[pi].parent;
-            guard += 1;
-            if guard > self.objects.len() {
-                break; // parent cycle
+        self.world_matrix_depth(idx, 0)
+    }
+
+    pub fn add_armature(&mut self, name: &str, a: crate::armature::Armature) -> usize {
+        let n = unique_name(name, |n| self.armature_names.iter().any(|x| x == n));
+        self.armatures.push(a);
+        self.armature_names.push(n);
+        self.armatures.len() - 1
+    }
+
+    pub fn add_armature_object(&mut self, name: &str, a: crate::armature::Armature) -> usize {
+        let ai = self.add_armature(name, a);
+        self.add_object(Object::new(name, ObjectData::Armature(ai)))
+    }
+
+    pub fn add_lattice(&mut self, name: &str, l: crate::lattice::Lattice) -> usize {
+        let n = unique_name(name, |n| self.lattice_names.iter().any(|x| x == n));
+        self.lattices.push(l);
+        self.lattice_names.push(n);
+        self.lattices.len() - 1
+    }
+
+    pub fn add_lattice_object(&mut self, name: &str, l: crate::lattice::Lattice) -> usize {
+        let li = self.add_lattice(name, l);
+        self.add_object(Object::new(name, ObjectData::Lattice(li)))
+    }
+
+    /// The armature data of object `idx`, if it is an armature.
+    pub fn armature_of(&self, idx: usize) -> Option<&crate::armature::Armature> {
+        match self.objects.get(idx)?.data {
+            ObjectData::Armature(a) => self.armatures.get(a),
+            _ => None,
+        }
+    }
+
+    /// Parent `child` to bone `bone` of armature object `armature` (Ctrl+P
+    /// > Bone). With `keep_transform` the child stays where it is.
+    pub fn parent_to_bone(&mut self, child: usize, armature: usize, bone: &str, keep_transform: bool) -> bool {
+        if child == armature || self.armature_of(armature).and_then(|a| a.find(bone)).is_none() {
+            return false;
+        }
+        let world = self.world_matrix(child);
+        let o = &mut self.objects[child];
+        o.parent = Some(armature);
+        o.parent_type = ParentType::Bone;
+        o.parent_bone = bone.to_string();
+        if keep_transform {
+            let p = self.parent_matrix_depth(child, 0).unwrap_or(Mat4::IDENTITY);
+            self.objects[child].transform = Transform::from_matrix(&(p.inverse() * world));
+        }
+        true
+    }
+
+    /// Ctrl+P > "With Empty Groups" / "With Envelope Weights" / "With
+    /// Automatic Weights": parent mesh object `child` to armature object
+    /// `armature` (keeping its transform), add an Armature modifier and
+    /// create the vertex groups.
+    pub fn parent_with_armature(&mut self, child: usize, armature: usize, weights: ArmatureWeights) -> bool {
+        let ObjectData::Mesh(mi) = self.objects[child].data else { return false };
+        let Some(arm) = self.armature_of(armature).cloned() else { return false };
+        if child == armature {
+            return false;
+        }
+        let world = self.world_matrix(child);
+        let arm_world = self.world_matrix(armature);
+        let arm_to_mesh = world.inverse() * arm_world;
+        {
+            let mesh = &mut self.meshes[mi];
+            match weights {
+                ArmatureWeights::Empty => crate::armature::empty_groups(mesh, &arm),
+                ArmatureWeights::Envelope => crate::armature::envelope_weights(mesh, &arm, &arm_to_mesh),
+                ArmatureWeights::Automatic => crate::armature::auto_weights(mesh, &arm, &arm_to_mesh),
+                ArmatureWeights::None => {}
             }
         }
-        m
+        let name = self.objects[armature].name.clone();
+        let o = &mut self.objects[child];
+        o.parent = Some(armature);
+        o.parent_type = ParentType::Armature;
+        o.parent_bone.clear();
+        o.transform = Transform::from_matrix(&(arm_world.inverse() * world));
+        if !o.modifiers.iter().any(|m| matches!(m, Modifier::Armature { object, .. } if *object == name)) {
+            let mut md = Modifier::with_defaults("Armature").expect("armature modifier");
+            if let Modifier::Armature { object, .. } = &mut md {
+                *object = name;
+            }
+            o.modifiers.insert(0, md);
+        }
+        true
     }
 
     /// The object's mesh after its modifier stack, in object space.
@@ -668,8 +796,20 @@ impl Scene {
             m.transform(&(self.world_matrix(idx).inverse() * self.world_matrix(j)));
             Some(m)
         };
-        let cx = crate::modifiers::EvalContext { frame: self.frame_current as f32, object: Some(&lookup), rest: None };
-        crate::modifiers::apply_stack_with(mesh, stack, &cx)
+        // Shape keys come first (Blender evaluates the key block before the
+        // modifier stack); Corrective Smooth's rest shape stays the Basis.
+        let keyed;
+        let (input, rest) = if mesh.shape_keys.len() > 1 {
+            let mut m = mesh.clone();
+            m.positions = mesh.evaluated_shape();
+            m.shape_keys.clear();
+            keyed = m;
+            (&keyed, Some(mesh.positions.as_slice()))
+        } else {
+            (mesh, None)
+        };
+        let cx = crate::modifiers::EvalContext { frame: self.frame_current as f32, object: Some(&lookup), rest, scene: Some(self), owner: idx, depth };
+        crate::modifiers::apply_stack_with(input, stack, &cx)
     }
 
     /// Evaluated mesh in world space with face materials resolved to scene

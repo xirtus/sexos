@@ -299,29 +299,29 @@ fn column() -> Mesh {
 fn simple_deform_modes() {
     let c = column();
     // Twist 90 degrees per unit of Z: the top corner turns by 4 * 90 degrees.
-    let tw = Modifier::SimpleDeform { mode: SimpleDeformMode::Twist, axis: 2, factor: FRAC_PI_2 / 4.0, limits: [0.0, 1.0], lock: [false; 3] }.apply(&c);
+    let tw = Modifier::SimpleDeform { mode: SimpleDeformMode::Twist, axis: 2, factor: FRAC_PI_2 / 4.0, limits: [0.0, 1.0], lock: [false; 3], vertex_group: None, invert_vertex_group: false }.apply(&c);
     check(&tw);
     let top = c.positions.iter().position(|p| (*p - Vec3::new(1.0, 0.0, 4.0)).length() < 1e-4).unwrap();
     assert!((tw.positions[top] - Vec3::new(0.0, 1.0, 4.0)).length() < 1e-4, "{:?}", tw.positions[top]);
     assert!((tw.volume() - c.volume()).abs() < 0.3);
     // Limits: the lower half does not twist.
-    let lim = Modifier::SimpleDeform { mode: SimpleDeformMode::Twist, axis: 2, factor: 1.0, limits: [0.5, 1.0], lock: [false; 3] }.apply(&c);
+    let lim = Modifier::SimpleDeform { mode: SimpleDeformMode::Twist, axis: 2, factor: 1.0, limits: [0.5, 1.0], lock: [false; 3], vertex_group: None, invert_vertex_group: false }.apply(&c);
     let low = c.positions.iter().position(|p| (*p - Vec3::new(1.0, 1.0, 0.0)).length() < 1e-4).unwrap();
     let mid = 2.0f32;
     let want = Vec3::new(mid.cos() - mid.sin(), mid.sin() + mid.cos(), 0.0);
     assert!((lim.positions[low] - want).length() < 1e-4, "clamped to the lower limit: {:?}", lim.positions[low]);
     // Taper widens the top.
-    let tp = Modifier::SimpleDeform { mode: SimpleDeformMode::Taper, axis: 2, factor: 0.25, limits: [0.0, 1.0], lock: [false; 3] }.apply(&c);
+    let tp = Modifier::SimpleDeform { mode: SimpleDeformMode::Taper, axis: 2, factor: 0.25, limits: [0.0, 1.0], lock: [false; 3], vertex_group: None, invert_vertex_group: false }.apply(&c);
     check(&tp);
     assert!((tp.positions[top].x - 2.0).abs() < 1e-4);
     // Stretch lengthens along the axis.
-    let st = Modifier::SimpleDeform { mode: SimpleDeformMode::Stretch, axis: 2, factor: 0.5, limits: [0.0, 1.0], lock: [true, true, false] }.apply(&c);
+    let st = Modifier::SimpleDeform { mode: SimpleDeformMode::Stretch, axis: 2, factor: 0.5, limits: [0.0, 1.0], lock: [true, true, false], vertex_group: None, invert_vertex_group: false }.apply(&c);
     check(&st);
     assert!((st.bounds().max.z - 6.0).abs() < 1e-4);
     assert!((st.bounds().size().x - 2.0).abs() < 1e-4, "locked X");
     // Bend a strip along X into a half circle around Z.
     let strip = primitives::grid(32, 1, PI);
-    let bend = Modifier::SimpleDeform { mode: SimpleDeformMode::Bend, axis: 2, factor: 1.0, limits: [0.0, 1.0], lock: [false; 3] }.apply(&strip);
+    let bend = Modifier::SimpleDeform { mode: SimpleDeformMode::Bend, axis: 2, factor: 1.0, limits: [0.0, 1.0], lock: [false; 3], vertex_group: None, invert_vertex_group: false }.apply(&strip);
     check(&bend);
     for (p, q) in strip.positions.iter().zip(&bend.positions) {
         let r = p.y - 1.0;
@@ -334,22 +334,22 @@ fn simple_deform_modes() {
 #[test]
 fn cast_to_sphere_cylinder_and_box() {
     let c = subdivide_simple(&primitives::cube(2.0), 3);
-    let s = Modifier::Cast { kind: CastType::Sphere, factor: 1.0, radius: 0.0, size: 0.0, axes: [true; 3], size_from_radius: false }.apply(&c);
+    let s = Modifier::Cast { kind: CastType::Sphere, factor: 1.0, radius: 0.0, size: 0.0, axes: [true; 3], size_from_radius: false, vertex_group: None, invert_vertex_group: false }.apply(&c);
     check(&s);
     let r0 = s.positions[0].length();
     assert!(s.positions.iter().all(|p| (p.length() - r0).abs() < 1e-4));
     let half = defaults("CAST").apply(&c);
     check(&half);
     assert!(half.positions.iter().zip(&c.positions).zip(&s.positions).all(|((h, a), b)| (*h - (*a + *b) * 0.5).length() < 1e-4));
-    let cyl = Modifier::Cast { kind: CastType::Cylinder, factor: 1.0, radius: 0.0, size: 1.5, axes: [true; 3], size_from_radius: false }.apply(&c);
+    let cyl = Modifier::Cast { kind: CastType::Cylinder, factor: 1.0, radius: 0.0, size: 1.5, axes: [true; 3], size_from_radius: false, vertex_group: None, invert_vertex_group: false }.apply(&c);
     check(&cyl);
     assert!(cyl.positions.iter().zip(&c.positions).all(|(p, o)| (o.x == 0.0 && o.y == 0.0) || (Vec3::new(p.x, p.y, 0.0).length() - 1.5).abs() < 1e-4 && p.z == o.z));
     let sphere = primitives::uv_sphere(16, 8, 1.0);
-    let bx = Modifier::Cast { kind: CastType::Cuboid, factor: 1.0, radius: 0.0, size: 0.0, axes: [true; 3], size_from_radius: false }.apply(&sphere);
+    let bx = Modifier::Cast { kind: CastType::Cuboid, factor: 1.0, radius: 0.0, size: 0.0, axes: [true; 3], size_from_radius: false, vertex_group: None, invert_vertex_group: false }.apply(&sphere);
     check(&bx);
     assert!(bx.positions.iter().all(|p| (p.abs().max_elem() - 1.0).abs() < 1e-4));
     // Radius limits the effect.
-    let lim = Modifier::Cast { kind: CastType::Sphere, factor: 1.0, radius: 1.2, size: 1.0, axes: [true; 3], size_from_radius: false }.apply(&c);
+    let lim = Modifier::Cast { kind: CastType::Sphere, factor: 1.0, radius: 1.2, size: 1.0, axes: [true; 3], size_from_radius: false, vertex_group: None, invert_vertex_group: false }.apply(&c);
     let corner = c.positions.iter().position(|p| (*p - Vec3::ONE).length() < 1e-5).unwrap();
     assert_eq!(lim.positions[corner], c.positions[corner]);
 }
@@ -369,12 +369,12 @@ fn wave_moves_with_the_frame() {
     assert_ne!(a.positions, b.positions, "time moves the wave");
     assert!(md.is_animated());
     // Lifetime + damping: the wave dies out.
-    let dead = Modifier::Wave { x: true, y: true, cyclic: true, normals: false, falloff: 0.0, height: 0.5, width: 1.5, narrowness: 1.5, speed: 0.25, time_offset: 0.0, lifetime: 5.0, damping: 2.0, start: [0.0; 2] }
+    let dead = Modifier::Wave { x: true, y: true, cyclic: true, normals: false, falloff: 0.0, height: 0.5, width: 1.5, narrowness: 1.5, speed: 0.25, time_offset: 0.0, lifetime: 5.0, damping: 2.0, start: [0.0; 2], vertex_group: None, invert_vertex_group: false }
         .apply_with(&g, &EvalContext { frame: 20.0, ..Default::default() });
     assert_eq!(dead, g);
     // Along normals on a sphere.
     let s = primitives::uv_sphere(16, 8, 1.0);
-    let n = Modifier::Wave { x: true, y: false, cyclic: false, normals: true, falloff: 0.0, height: 0.2, width: 1.5, narrowness: 1.5, speed: 0.0, time_offset: 0.0, lifetime: 0.0, damping: 10.0, start: [0.0; 2] }.apply(&s);
+    let n = Modifier::Wave { x: true, y: false, cyclic: false, normals: true, falloff: 0.0, height: 0.2, width: 1.5, narrowness: 1.5, speed: 0.0, time_offset: 0.0, lifetime: 0.0, damping: 10.0, start: [0.0; 2], vertex_group: None, invert_vertex_group: false }.apply(&s);
     check(&n);
     assert!(n.positions.iter().all(|p| p.length() >= 1.0 - 1e-4 && p.length() <= 1.2 + 1e-4));
 }
@@ -386,21 +386,21 @@ fn shrinkwrap_onto_a_sphere() {
     let lookup = |n: &str| (n == "Ball").then(|| target.clone());
     let cx = EvalContext { object: Some(&lookup), ..Default::default() };
     for method in [ShrinkwrapMethod::NearestSurfacePoint, ShrinkwrapMethod::NearestVertex] {
-        let m = Modifier::Shrinkwrap { target: "Ball".into(), method, offset: 0.0, axes: [false; 3], positive: true, negative: false }.apply_with(&big, &cx);
+        let m = Modifier::Shrinkwrap { target: "Ball".into(), method, offset: 0.0, axes: [false; 3], positive: true, negative: false, vertex_group: None, invert_vertex_group: false }.apply_with(&big, &cx);
         check(&m);
         assert!(m.positions.iter().all(|p| (p.length() - 1.0).abs() < 0.01), "{method:?}");
     }
     // Project along the (outward) normals needs the negative direction.
-    let none = Modifier::Shrinkwrap { target: "Ball".into(), method: ShrinkwrapMethod::Project, offset: 0.0, axes: [false; 3], positive: true, negative: false }.apply_with(&big, &cx);
+    let none = Modifier::Shrinkwrap { target: "Ball".into(), method: ShrinkwrapMethod::Project, offset: 0.0, axes: [false; 3], positive: true, negative: false, vertex_group: None, invert_vertex_group: false }.apply_with(&big, &cx);
     assert_eq!(none, big);
-    let p = Modifier::Shrinkwrap { target: "Ball".into(), method: ShrinkwrapMethod::Project, offset: 0.1, axes: [false; 3], positive: true, negative: true }.apply_with(&big, &cx);
+    let p = Modifier::Shrinkwrap { target: "Ball".into(), method: ShrinkwrapMethod::Project, offset: 0.1, axes: [false; 3], positive: true, negative: true, vertex_group: None, invert_vertex_group: false }.apply_with(&big, &cx);
     check(&p);
     let worst = p.positions.iter().map(|q| (q.length() - 1.1).abs()).fold(0.0, f32::max);
     assert!(worst < 0.015, "{worst}");
     // Project along -Z flattens a plane above the sphere onto its top.
     let mut plane = primitives::grid(4, 4, 0.5);
     plane.translate(Vec3::new(0.0, 0.0, 3.0));
-    let down = Modifier::Shrinkwrap { target: "Ball".into(), method: ShrinkwrapMethod::Project, offset: 0.0, axes: [false, false, true], positive: false, negative: true }.apply_with(&plane, &cx);
+    let down = Modifier::Shrinkwrap { target: "Ball".into(), method: ShrinkwrapMethod::Project, offset: 0.0, axes: [false, false, true], positive: false, negative: true, vertex_group: None, invert_vertex_group: false }.apply_with(&plane, &cx);
     assert!(down.positions.iter().all(|q| (q.length() - 1.0).abs() < 0.01 && q.z > 0.9));
     assert_eq!(defaults("SHRINKWRAP").apply(&big), big, "no target");
 }
@@ -429,12 +429,12 @@ fn roughness(m: &Mesh) -> f32 {
 #[test]
 fn laplacian_smooth_smooths_and_keeps_volume() {
     let s = noisy_sphere();
-    let m = Modifier::LaplacianSmooth { iterations: 5, factor: 1.0, border: 0.01, axes: [true; 3], preserve_volume: true, normalized: true }.apply(&s);
+    let m = Modifier::LaplacianSmooth { iterations: 5, factor: 1.0, border: 0.01, axes: [true; 3], preserve_volume: true, normalized: true, vertex_group: None, invert_vertex_group: false }.apply(&s);
     check(&m);
     assert!(roughness(&m) < roughness(&s) * 0.8, "{} vs {}", roughness(&m), roughness(&s));
     assert!((m.volume() - s.volume()).abs() < 1e-3 * s.volume().abs().max(1.0) * 10.0, "{} vs {}", m.volume(), s.volume());
     // Only Z enabled: X and Y stay.
-    let z = Modifier::LaplacianSmooth { iterations: 3, factor: 1.0, border: 0.01, axes: [false, false, true], preserve_volume: false, normalized: false }.apply(&s);
+    let z = Modifier::LaplacianSmooth { iterations: 3, factor: 1.0, border: 0.01, axes: [false, false, true], preserve_volume: false, normalized: false, vertex_group: None, invert_vertex_group: false }.apply(&s);
     check(&z);
     assert!(z.positions.iter().zip(&s.positions).all(|(a, b)| a.x == b.x && a.y == b.y));
     // Defaults are gentle and keep an open grid's outline.
@@ -456,11 +456,11 @@ fn corrective_smooth_keeps_rest_detail() {
     let err = out.positions.iter().zip(&moved.positions).map(|(a, b)| (*a - *b).length()).fold(0.0, f32::max);
     assert!(err < 1e-3, "{err}");
     // Only Smooth just smooths.
-    let only = Modifier::CorrectiveSmooth { factor: 0.5, iterations: 5, scale: 1.0, length_weighted: true, only_smooth: true }.apply(&rest);
+    let only = Modifier::CorrectiveSmooth { factor: 0.5, iterations: 5, scale: 1.0, length_weighted: true, only_smooth: true, vertex_group: None, invert_vertex_group: false }.apply(&rest);
     check(&only);
     assert!(only.bounds().size().x < 2.0);
     // Through a stack, the rest shape is the stack's input.
-    let st = apply_stack(&rest, &[Modifier::Displace { strength: 0.2 }, md]);
+    let st = apply_stack(&rest, &[Modifier::Displace { strength: 0.2, vertex_group: None, invert_vertex_group: false }, md]);
     check(&st);
 }
 
@@ -502,12 +502,12 @@ fn every_type_has_defaults_and_round_trips() {
         Modifier::EdgeSplit { angle: 0.3, use_angle: false },
         Modifier::Build { start: 5.0, length: 20.0, reverse: true, random: true, seed: 42 },
         Modifier::Boolean { object: "Other Thing".into(), operation: BooleanOp::Intersect },
-        Modifier::SimpleDeform { mode: SimpleDeformMode::Bend, axis: 1, factor: 0.5, limits: [0.1, 0.9], lock: [true, false, true] },
-        Modifier::Cast { kind: CastType::Cuboid, factor: -0.5, radius: 2.0, size: 1.0, axes: [true, false, true], size_from_radius: true },
-        Modifier::Wave { x: false, y: true, cyclic: false, normals: true, falloff: 2.0, height: 0.3, width: 1.0, narrowness: 2.0, speed: 0.5, time_offset: 3.0, lifetime: 10.0, damping: 5.0, start: [1.0, -2.0] },
-        Modifier::Shrinkwrap { target: "Other Thing".into(), method: ShrinkwrapMethod::Project, offset: 0.1, axes: [false, true, false], positive: false, negative: true },
-        Modifier::LaplacianSmooth { iterations: 4, factor: 0.5, border: 0.2, axes: [true, true, false], preserve_volume: false, normalized: false },
-        Modifier::CorrectiveSmooth { factor: 0.3, iterations: 7, scale: 0.5, length_weighted: true, only_smooth: true },
+        Modifier::SimpleDeform { mode: SimpleDeformMode::Bend, axis: 1, factor: 0.5, limits: [0.1, 0.9], lock: [true, false, true], vertex_group: None, invert_vertex_group: false },
+        Modifier::Cast { kind: CastType::Cuboid, factor: -0.5, radius: 2.0, size: 1.0, axes: [true, false, true], size_from_radius: true, vertex_group: None, invert_vertex_group: false },
+        Modifier::Wave { x: false, y: true, cyclic: false, normals: true, falloff: 2.0, height: 0.3, width: 1.0, narrowness: 2.0, speed: 0.5, time_offset: 3.0, lifetime: 10.0, damping: 5.0, start: [1.0, -2.0], vertex_group: None, invert_vertex_group: false },
+        Modifier::Shrinkwrap { target: "Other Thing".into(), method: ShrinkwrapMethod::Project, offset: 0.1, axes: [false, true, false], positive: false, negative: true, vertex_group: None, invert_vertex_group: false },
+        Modifier::LaplacianSmooth { iterations: 4, factor: 0.5, border: 0.2, axes: [true, true, false], preserve_volume: false, normalized: false, vertex_group: None, invert_vertex_group: false },
+        Modifier::CorrectiveSmooth { factor: 0.3, iterations: 7, scale: 0.5, length_weighted: true, only_smooth: true, vertex_group: None, invert_vertex_group: false },
         Modifier::WeightedNormal { keep_sharp: true },
     ];
     let text = crate::script::scene_to_polyops(&s);

@@ -15,6 +15,9 @@
 //! - [`io`]: glTF 2.0, OBJ, STL, PLY and .blend files.
 //! - [`script`]: the text command language the Python `polyamour` module speaks.
 //! - [`uv`]: UV unwrapping (seams, ABF++/LSCM, projections, packing) and UV editing.
+//! - [`armature`]: armatures, bones, poses and armature deformation (LBS/DQS, auto weights).
+//! - [`constraints`]: object and bone constraints, IK and pose evaluation.
+//! - [`lattice`]: lattices and lattice deformation.
 pub mod math;
 pub mod mesh;
 pub mod primitives;
@@ -28,6 +31,9 @@ pub mod render;
 pub mod io;
 pub mod script;
 pub mod uv;
+pub mod armature;
+pub mod constraints;
+pub mod lattice;
 
 pub use math::{Aabb, Mat4, Quat, Vec2, Vec3};
 pub use mesh::{Face, HalfEdgeMesh, Mesh};

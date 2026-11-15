@@ -128,16 +128,59 @@
 //!   Polyamour has no equivalent for are skipped, as are entries switched off
 //!   in the viewport (`mode` bit 0 clear).
 //!
-//! Not imported yet: shape keys, textures/images, view-layer visibility (the
-//! eye icon), drivers, NLA, library links, custom split normals, modifier
-//! vertex groups and textures.
+//! - Vertex groups: names from `Mesh.vertex_group_names` (3.0+) or
+//!   `Object.defbase` (ListBase of `bDeformGroup {name}`); weights from
+//!   `Mesh.dvert` or the `CD_MDEFORMVERT` (2) vertex layer: `MDeformVert {dw,
+//!   totweight}` with `MDeformWeight {def_nr, weight}`.
+//! - Shape keys: `Mesh.key` -> `Key {block, type (1 relative), ctime}` with a
+//!   ListBase of `KeyBlock {name, data (float[3] x totelem), curval, pos,
+//!   slidermin, slidermax, relative, flag (bit 0 mute), vgroup, type (0
+//!   linear, 1 cardinal, 2 B-spline, 3 Catmull-Rom)}`.
+//! - Armatures (object type 25): `bArmature {bonebase, collection_array,
+//!   collection_array_num}`, nested `Bone {name, childbase, arm_head,
+//!   arm_tail, arm_roll, arm_mat, flag, inherit_scale_mode, dist, weight,
+//!   rad_head, rad_tail, segments}` (flag bits: 4 connected, 9 no inherit
+//!   rotation, 11 envelope multiply, 12 no deform, 15 legacy no scale, 22 no
+//!   local location, 23 relative parenting); `BoneCollection {name, bones}`
+//!   of `BoneCollectionMember {bone}`. `Object.pose` -> `bPose {chanbase}` of
+//!   `bPoseChannel {name, loc, size, eul, quat, rotAxis, rotAngle, rotmode,
+//!   ikflag (bits 0-2 lock, 3-5 limit), limitmin, limitmax, stiffness,
+//!   ikstretch, constraints}`. Bone parenting: `Object.partype` 7 with
+//!   `parsubstr`; 4 is armature (deform) parenting.
+//! - Constraints: `Object.constraints` / `bPoseChannel.constraints`, ListBase
+//!   of `bConstraint {data, name, flag (bit 9 muted), ownspace, tarspace,
+//!   enforce, headtail, space_object, space_subtarget}`; `data`'s struct says
+//!   the type: `bLocateLikeConstraint`, `bRotateLikeConstraint`,
+//!   `bSizeLikeConstraint`, `bTransLikeConstraint`, `bDistLimitConstraint`,
+//!   `bLocLimitConstraint`, `bRotLimitConstraint`, `bSizeLimitConstraint`,
+//!   `bSameVolumeConstraint`, `bTransformConstraint`, `bChildOfConstraint`,
+//!   `bTrackToConstraint`, `bDampTrackConstraint`, `bLockTrackConstraint`,
+//!   `bStretchToConstraint`, `bMinMaxConstraint` (Floor),
+//!   `bArmatureConstraint` and `bKinematicConstraint` (IK), each with `tar` and
+//!   `subtarget` plus its own members (see `blend/rig.rs`).
+//! - Lattices (object type 22): `Lattice {pntsu, pntsv, pntsw, typeu, typev,
+//!   typew, flag (bit 1 outside), def}` with `BPoint {vec[4]}`.
+//! - Rigging modifiers: `ArmatureModifierData {object, deformflag (1 groups, 2
+//!   envelopes, 4 preserve volume, 16 invert), multi, defgrp_name}`,
+//!   `HookModifierData {object, subtarget, flag, falloff_type, falloff,
+//!   parentinv, cent, indexar, indexar_num/totindex, force, name}`,
+//!   `LatticeModifierData {object, name, strength, flag}`, `WarpModifierData
+//!   {object_from, object_to, strength, falloff_radius, falloff_type, flag,
+//!   defgrp_name}` and `WeightVGEdit/Mix/ProximityModifierData`; the deform
+//!   modifiers' `defgrp_name`/`vgroup_name` and invert flags.
+//!
+//! Not imported yet: textures/images, view-layer visibility (the eye icon),
+//! drivers, NLA, library links, custom split normals, modifier textures,
+//! custom falloff curves, B-Bone shape settings and lattice vertex groups.
 use crate::math::{Mat4, Quat, Vec2, Vec3};
 use crate::mesh::{Face, Mesh};
 use crate::modifiers::{BooleanOp, CastType, DecimateMode, Modifier, RemeshMode, ShrinkwrapMethod, SimpleDeformMode};
-use crate::scene::{AreaShape, Camera, Light, LightKind, Material, Object, ObjectData, PanoramaType, RayVisibility, Scene, SensorFit, Transform};
+use crate::scene::{AreaShape, Camera, Light, LightKind, Material, Object, ObjectData, PanoramaType, ParentType, RayVisibility, Scene, SensorFit, Transform};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
+
+mod rig;
 
 /// Largest decompressed file accepted (guards against decompression bombs).
 const MAX_DECOMPRESSED: u64 = 4 << 30;
@@ -810,13 +853,24 @@ struct Importer<'f, 'a> {
     scene: Scene,
     materials: HashMap<u64, usize>,
     meshes: HashMap<u64, usize>,
+    armatures: HashMap<u64, usize>,
+    lattices: HashMap<u64, usize>,
     render: Render,
     actions: Vec<BlendAction>,
 }
 
 impl<'f, 'a> Importer<'f, 'a> {
     fn new(f: &'f BlendFile<'a>) -> Self {
-        Importer { f, scene: Scene::new(), materials: HashMap::new(), meshes: HashMap::new(), render: Render { width: 1920.0, height: 1080.0 }, actions: Vec::new() }
+        Importer {
+            f,
+            scene: Scene::new(),
+            materials: HashMap::new(),
+            meshes: HashMap::new(),
+            armatures: HashMap::new(),
+            lattices: HashMap::new(),
+            render: Render { width: 1920.0, height: 1080.0 },
+            actions: Vec::new(),
+        }
     }
 
     /// Every ID block with a two-letter `code`, with its old address.
@@ -880,6 +934,19 @@ impl<'f, 'a> Importer<'f, 'a> {
                 continue;
             }
             self.scene.objects[idx].parent = Some(p);
+            // partype (low 4 bits): 4 armature (deform), 7 bone (parsubstr).
+            match ob.num("partype").unwrap_or(0.0) as i64 & 15 {
+                4 => self.scene.objects[idx].parent_type = ParentType::Armature,
+                7 => {
+                    let bone = ob.string("parsubstr").unwrap_or_default();
+                    if !bone.is_empty() {
+                        let o = &mut self.scene.objects[idx];
+                        o.parent_type = ParentType::Bone;
+                        o.parent_bone = bone;
+                    }
+                }
+                _ => {}
+            }
             if let Some(inv) = ob.vec::<16>("parentinv") {
                 let inv = Mat4::from_cols_array(inv);
                 if inv != Mat4::IDENTITY && inv.to_cols_array().iter().all(|v| v.is_finite()) {
@@ -1020,8 +1087,25 @@ impl<'f, 'a> Importer<'f, 'a> {
             },
             10 => f.view_ptr(data, &["Light", "Lamp"]).map_or(ObjectData::Empty, |la| ObjectData::Light(light(&la))),
             11 => f.view_ptr(data, &["Camera"]).map_or(ObjectData::Empty, |ca| ObjectData::Camera(self.camera(&ca))),
+            22 => f.view_ptr(data, &["Lattice"]).map_or(ObjectData::Empty, |lt| {
+                let name = lt.id_name();
+                let i = *self.lattices.entry(data).or_insert_with(|| self.scene.add_lattice(&name, rig::lattice(f, &lt)));
+                ObjectData::Lattice(i)
+            }),
+            25 => f.view_ptr(data, &["bArmature"]).map_or(ObjectData::Empty, |ar| {
+                let name = ar.id_name();
+                let i = *self.armatures.entry(data).or_insert_with(|| self.scene.add_armature(&name, rig::armature(f, &ar)));
+                ObjectData::Armature(i)
+            }),
             _ => ObjectData::Empty,
         };
+        // Vertex group names lived on the object before 3.0.
+        if let ObjectData::Mesh(mi) = od {
+            let m = &mut self.scene.meshes[mi];
+            if m.vertex_groups.is_empty() {
+                m.vertex_groups = rig::group_names(f, ob.sub("defbase"));
+            }
+        }
         let mut o = Object::new(&ob.id_name(), od);
         o.transform = basis(ob);
         // visibility_flag: OB_HIDE_CAMERA 1<<3 .. OB_HIDE_SHADOW 1<<8, OB_HOLDOUT 1<<9.
@@ -1037,6 +1121,10 @@ impl<'f, 'a> Importer<'f, 'a> {
         o.materials = self.slots(ob, mesh_view.as_ref());
         if mesh_view.is_some() {
             o.modifiers = modifiers(f, ob);
+        }
+        o.constraints = rig::constraints(f, ob.sub("constraints"));
+        if matches!(o.data, ObjectData::Armature(_)) {
+            o.pose = rig::pose(f, ob);
         }
         let hide = ob.num_any(&["visibility_flag", "restrictflag"]).unwrap_or(0.0) as i64;
         o.visible = hide & 1 == 0;
@@ -1301,16 +1389,26 @@ fn modifier_classic(md: &View<'_, '_>) -> Option<Modifier> {
             if md.ptr("texture") != 0 || !(dir == 3 || dir == 5) {
                 return None;
             }
-            Modifier::Displace { strength: (1.0 - setting_f32(md, "midlevel", 0.5)) * setting_f32(md, "strength", 1.0) }
+            Modifier::Displace { strength: (1.0 - setting_f32(md, "midlevel", 0.5)) * setting_f32(md, "strength", 1.0), vertex_group: None, invert_vertex_group: false }
         }
-        "SmoothModifierData" => Modifier::Smooth { factor: setting_f32(md, "fac", 0.5), iterations: setting_u32(md, "repeat", 1, 10_000) },
+        "SmoothModifierData" => Modifier::Smooth { factor: setting_f32(md, "fac", 0.5), iterations: setting_u32(md, "repeat", 1, 10_000), vertex_group: None, invert_vertex_group: false },
         _ => return None,
     })
 }
 
+/// One `*ModifierData` struct as a [`Modifier`], with its vertex group.
+fn modifier(f: &BlendFile<'_>, v: &View<'_, '_>) -> Option<Modifier> {
+    let mut m = rig::modifier(f, v).or_else(|| modifier_base(f, v))?;
+    if let (Some((g, inv)), Some((mg, minv))) = (rig::modifier_vertex_group(v), m.vertex_group_mut()) {
+        *mg = (!g.is_empty()).then_some(g);
+        *minv = inv;
+    }
+    Some(m)
+}
+
 /// One `*ModifierData` struct as a [`Modifier`], by its DNA struct name.
 /// Member names and flag bits follow Blender's `DNA_modifier_types.h`.
-fn modifier(f: &BlendFile<'_>, v: &View<'_, '_>) -> Option<Modifier> {
+fn modifier_base(f: &BlendFile<'_>, v: &View<'_, '_>) -> Option<Modifier> {
     let flag = |name: &str| v.num(name).unwrap_or(0.0) as i64;
     let fl = |name: &str, d: f32| v.f32(name).filter(|x| x.is_finite()).unwrap_or(d);
     let int = |name: &str, d: u32| v.num(name).filter(|x| x.is_finite() && *x >= 0.0).map_or(d, |x| x.min(u32::MAX as f64) as u32);
@@ -1344,8 +1442,8 @@ fn modifier(f: &BlendFile<'_>, v: &View<'_, '_>) -> Option<Modifier> {
         "BevelModifierData" => Modifier::Bevel { width: fl("value", 0.1), segments: int("res", 1).max(1), angle: if bit("lim_flags", 1 << 3) { fl("bevel_angle", 0.5236) } else { 0.0 } },
         "TriangulateModifierData" => Modifier::Triangulate,
         "WeldModifierData" => Modifier::Weld { distance: fl("merge_dist", 0.001) },
-        "DisplaceModifierData" => Modifier::Displace { strength: fl("strength", 1.0) },
-        "SmoothModifierData" => Modifier::Smooth { factor: fl("fac", 0.5), iterations: int("repeat", 1) },
+        "DisplaceModifierData" => Modifier::Displace { strength: fl("strength", 1.0), vertex_group: None, invert_vertex_group: false },
+        "SmoothModifierData" => Modifier::Smooth { factor: fl("fac", 0.5), iterations: int("repeat", 1), vertex_group: None, invert_vertex_group: false },
         "DecimateModifierData" => Modifier::Decimate {
             mode: match flag("mode") {
                 1 => DecimateMode::Unsubdivide,
@@ -1408,6 +1506,8 @@ fn modifier(f: &BlendFile<'_>, v: &View<'_, '_>) -> Option<Modifier> {
             factor: fl("factor", 0.7854),
             limits: v.vec::<2>("limit").unwrap_or([0.0, 1.0]),
             lock: [bit("axis", 1), bit("axis", 2), bit("axis", 4)],
+            vertex_group: None,
+            invert_vertex_group: false,
         },
         "CastModifierData" => Modifier::Cast {
             kind: match flag("type") {
@@ -1420,6 +1520,8 @@ fn modifier(f: &BlendFile<'_>, v: &View<'_, '_>) -> Option<Modifier> {
             size: fl("size", 0.0),
             axes: [bit("flag", 1 << 1), bit("flag", 1 << 2), bit("flag", 1 << 3)],
             size_from_radius: bit("flag", 1 << 5),
+            vertex_group: None,
+            invert_vertex_group: false,
         },
         "WaveModifierData" => Modifier::Wave {
             x: bit("flag", 1 << 1),
@@ -1435,6 +1537,8 @@ fn modifier(f: &BlendFile<'_>, v: &View<'_, '_>) -> Option<Modifier> {
             lifetime: fl("lifetime", 0.0),
             damping: fl("damp", 10.0),
             start: [fl("startx", 0.0), fl("starty", 0.0)],
+            vertex_group: None,
+            invert_vertex_group: false,
         },
         "ShrinkwrapModifierData" => Modifier::Shrinkwrap {
             target: object_name("target"),
@@ -1447,6 +1551,8 @@ fn modifier(f: &BlendFile<'_>, v: &View<'_, '_>) -> Option<Modifier> {
             axes: [bit("projAxis", 1), bit("projAxis", 2), bit("projAxis", 4)],
             positive: bit("shrinkOpts", 1),
             negative: bit("shrinkOpts", 2),
+            vertex_group: None,
+            invert_vertex_group: false,
         },
         "LaplacianSmoothModifierData" => Modifier::LaplacianSmooth {
             iterations: int("repeat", 1),
@@ -1455,6 +1561,8 @@ fn modifier(f: &BlendFile<'_>, v: &View<'_, '_>) -> Option<Modifier> {
             axes: [bit("flag", 1 << 1), bit("flag", 1 << 2), bit("flag", 1 << 3)],
             preserve_volume: bit("flag", 1 << 4),
             normalized: bit("flag", 1 << 5),
+            vertex_group: None,
+            invert_vertex_group: false,
         },
         "CorrectiveSmoothModifierData" => Modifier::CorrectiveSmooth {
             factor: fl("lambda", 0.5),
@@ -1462,6 +1570,8 @@ fn modifier(f: &BlendFile<'_>, v: &View<'_, '_>) -> Option<Modifier> {
             scale: fl("scale", 1.0),
             length_weighted: flag("smooth_type") == 1,
             only_smooth: bit("flag", 1 << 1),
+            vertex_group: None,
+            invert_vertex_group: false,
         },
         "WeightedNormalModifierData" => Modifier::WeightedNormal { keep_sharp: bit("flag", 1) },
         _ => return None,
@@ -1733,6 +1843,7 @@ fn read_mesh(f: &BlendFile<'_>, me: &View<'_, '_>) -> Result<Mesh, String> {
         f.view_array(p, &["MEdge"], ne).and_then(|es| es.iter().map(|x| Some([x.num("v1")? as i64, x.num("v2")? as i64])).collect())
     };
     let mut mesh = Mesh { positions, faces, ..Default::default() };
+    rig::mesh_extras(f, me, &vd, &mut mesh);
     if let Some(edges) = edges {
         let used: HashSet<(u32, u32)> = mesh.faces.iter().flat_map(|fc| fc.edges().map(|(a, b)| (a.min(b), a.max(b)))).collect();
         for [a, b] in edges {

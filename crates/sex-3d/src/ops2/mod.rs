@@ -282,8 +282,7 @@ pub(crate) fn compact(m: &mut Mesh) -> Vec<u32> {
         }
     }
     m.positions = kept;
-    let full: Vec<u32> = remap.iter().map(|&r| if r == NONE { 0 } else { r }).collect();
-    m.remap_vertices(&full);
+    m.remap_vertices(&remap);
     remap
 }
 

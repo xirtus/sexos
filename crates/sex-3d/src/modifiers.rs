@@ -10,15 +10,17 @@ use crate::mesh::{Face, Mesh};
 use crate::ops;
 use std::collections::HashMap;
 
-mod bvh;
+pub(crate) mod bvh;
 mod decimate;
 mod deform;
 mod generate;
 mod remesh;
+mod rig;
 #[cfg(test)]
 mod tests;
 
 pub use crate::ops::BooleanOp;
+pub use rig::{Falloff, ProximityMode, WeightMixMode, WeightMixSet};
 
 /// Subdivision levels above this are clamped: each level quadruples the face
 /// count, so level 6 already turns a cube into 24k quads.
@@ -87,9 +89,9 @@ pub enum Modifier {
     /// Merge by distance.
     Weld { distance: f32 },
     /// Move vertices along normals by `strength` (uniform).
-    Displace { strength: f32 },
+    Displace { strength: f32, vertex_group: Option<String>, invert_vertex_group: bool },
     /// Laplacian smoothing.
-    Smooth { factor: f32, iterations: u32 },
+    Smooth { factor: f32, iterations: u32, vertex_group: Option<String>, invert_vertex_group: bool },
     /// Reduce the face count. `ratio` drives Collapse, `iterations`
     /// Un-Subdivide and `angle` (radians) Planar; `triangulate` keeps
     /// Collapse's output all triangles instead of restoring untouched faces.
@@ -113,10 +115,10 @@ pub enum Modifier {
     Boolean { object: String, operation: BooleanOp },
     /// Twist/Bend (`factor` is an angle in radians) or Taper/Stretch along
     /// local `axis`, between `limits` (fractions of the bounds along it).
-    SimpleDeform { mode: SimpleDeformMode, axis: u8, factor: f32, limits: [f32; 2], lock: [bool; 3] },
+    SimpleDeform { mode: SimpleDeformMode, axis: u8, factor: f32, limits: [f32; 2], lock: [bool; 3], vertex_group: Option<String>, invert_vertex_group: bool },
     /// Pull vertices towards a sphere, cylinder or box around the origin.
     /// `radius` > 0 limits the effect; `size` 0 means the average distance.
-    Cast { kind: CastType, factor: f32, radius: f32, size: f32, axes: [bool; 3], size_from_radius: bool },
+    Cast { kind: CastType, factor: f32, radius: f32, size: f32, axes: [bool; 3], size_from_radius: bool, vertex_group: Option<String>, invert_vertex_group: bool },
     /// A travelling Gaussian ripple; time is the scene frame.
     Wave {
         x: bool,
@@ -132,19 +134,96 @@ pub enum Modifier {
         lifetime: f32,
         damping: f32,
         start: [f32; 2],
+        vertex_group: Option<String>,
+        invert_vertex_group: bool,
     },
     /// Move vertices onto another object's surface (found by name).
-    Shrinkwrap { target: String, method: ShrinkwrapMethod, offset: f32, axes: [bool; 3], positive: bool, negative: bool },
+    Shrinkwrap { target: String, method: ShrinkwrapMethod, offset: f32, axes: [bool; 3], positive: bool, negative: bool, vertex_group: Option<String>, invert_vertex_group: bool },
     /// Implicit Laplacian smoothing with cotangent weights.
-    LaplacianSmooth { iterations: u32, factor: f32, border: f32, axes: [bool; 3], preserve_volume: bool, normalized: bool },
+    LaplacianSmooth { iterations: u32, factor: f32, border: f32, axes: [bool; 3], preserve_volume: bool, normalized: bool, vertex_group: Option<String>, invert_vertex_group: bool },
     /// Smooth away deformation artefacts while keeping the detail of the
     /// rest shape (the stack's input).
-    CorrectiveSmooth { factor: f32, iterations: u32, scale: f32, length_weighted: bool, only_smooth: bool },
+    CorrectiveSmooth { factor: f32, iterations: u32, scale: f32, length_weighted: bool, only_smooth: bool, vertex_group: Option<String>, invert_vertex_group: bool },
     /// Smooth shading with face-area-weighted vertex normals. Meshes carry no
     /// custom split normals, so this marks every face smooth (the renderers
     /// already weight vertex normals by face area); `keep_sharp` splits edges
     /// sharper than 30 degrees so they stay crisp.
     WeightedNormal { keep_sharp: bool },
+    /// Deform by an armature object's pose (linear blend skinning, or dual
+    /// quaternions with `use_deform_preserve_volume`). Weights come from
+    /// vertex groups named after bones and/or bone envelopes;
+    /// `vertex_group` scales the whole effect. With `use_multi_modifier`
+    /// the armature deforms the previous modifier's input and the result is
+    /// mixed with that modifier's output by `vertex_group`.
+    Armature {
+        object: String,
+        use_vertex_groups: bool,
+        use_bone_envelopes: bool,
+        use_deform_preserve_volume: bool,
+        use_multi_modifier: bool,
+        vertex_group: Option<String>,
+        invert_vertex_group: bool,
+    },
+    /// Move vertices with an object (or one of its bones): `matrix_inverse`
+    /// is the hook's parent inverse ("Reset"/"Recenter"), `center` the
+    /// falloff centre. Vertices come from `vertex_indices` or `vertex_group`.
+    Hook {
+        object: String,
+        subtarget: String,
+        falloff_type: Falloff,
+        falloff_radius: f32,
+        center: [f32; 3],
+        matrix_inverse: crate::math::Mat4,
+        strength: f32,
+        use_falloff_uniform: bool,
+        vertex_indices: Vec<u32>,
+        vertex_group: Option<String>,
+        invert_vertex_group: bool,
+    },
+    /// Deform by a lattice object.
+    Lattice { object: String, strength: f32, vertex_group: Option<String>, invert_vertex_group: bool },
+    /// Warp space from `object_from` to `object_to` within `falloff_radius`.
+    Warp { object_from: String, object_to: String, strength: f32, falloff_type: Falloff, falloff_radius: f32, use_volume_preserve: bool, vertex_group: Option<String>, invert_vertex_group: bool },
+    /// Edit the weights of `vertex_group` (map, add, remove).
+    VertexWeightEdit {
+        vertex_group: String,
+        default_weight: f32,
+        use_add: bool,
+        add_threshold: f32,
+        use_remove: bool,
+        remove_threshold: f32,
+        falloff_type: Falloff,
+        invert_falloff: bool,
+        normalize: bool,
+        mask_constant: f32,
+    },
+    /// Mix group B into group A.
+    VertexWeightMix {
+        vertex_group_a: String,
+        vertex_group_b: String,
+        default_weight_a: f32,
+        default_weight_b: f32,
+        mix_mode: WeightMixMode,
+        mix_set: WeightMixSet,
+        invert_vertex_group_a: bool,
+        invert_vertex_group_b: bool,
+        normalize: bool,
+        mask_constant: f32,
+    },
+    /// Set `vertex_group` weights from the distance to `target` (its origin,
+    /// or its nearest vertex/edge/face).
+    VertexWeightProximity {
+        vertex_group: String,
+        target: String,
+        proximity_mode: ProximityMode,
+        use_proximity_geometry: [bool; 3],
+        min_dist: f32,
+        max_dist: f32,
+        falloff_type: Falloff,
+        invert_falloff: bool,
+        normalize: bool,
+        mask_constant: f32,
+    },
 }
 
 /// What a modifier may need from outside its own mesh.
@@ -157,11 +236,17 @@ pub struct EvalContext<'a> {
     pub object: Option<&'a dyn Fn(&str) -> Option<Mesh>>,
     /// Rest positions: the stack's input (Corrective Smooth).
     pub rest: Option<&'a [Vec3]>,
+    /// The scene and the modified object (Armature, Hook, Lattice, Warp and
+    /// Vertex Weight Proximity read other objects' transforms and data).
+    pub scene: Option<&'a crate::scene::Scene>,
+    pub owner: usize,
+    /// Modifier recursion depth (objects referring to each other).
+    pub depth: u32,
 }
 
 impl Default for EvalContext<'_> {
     fn default() -> Self {
-        EvalContext { frame: 1.0, object: None, rest: None }
+        EvalContext { frame: 1.0, object: None, rest: None, scene: None, owner: 0, depth: 0 }
     }
 }
 
@@ -177,7 +262,8 @@ impl EvalContext<'_> {
 impl Modifier {
     /// Every polyops/Blender type [`Modifier::with_defaults`] knows.
     pub const TYPE_NAMES: &'static str = "Mirror, Subdivision, Array, Solidify, Bevel, Triangulate, Weld, Displace, Smooth, Decimate, Remesh, Screw, \
-Wireframe, EdgeSplit, Build, Boolean, SimpleDeform, Cast, Wave, Shrinkwrap, LaplacianSmooth, CorrectiveSmooth, WeightedNormal";
+Wireframe, EdgeSplit, Build, Boolean, SimpleDeform, Cast, Wave, Shrinkwrap, LaplacianSmooth, CorrectiveSmooth, WeightedNormal, \
+Armature, Hook, Lattice, Warp, VertexWeightEdit, VertexWeightMix, VertexWeightProximity";
 
     /// The name Blender shows on the modifier's panel.
     pub fn name(&self) -> &'static str {
@@ -205,6 +291,13 @@ Wireframe, EdgeSplit, Build, Boolean, SimpleDeform, Cast, Wave, Shrinkwrap, Lapl
             Modifier::LaplacianSmooth { .. } => "Laplacian Smooth",
             Modifier::CorrectiveSmooth { .. } => "Corrective Smooth",
             Modifier::WeightedNormal { .. } => "Weighted Normal",
+            Modifier::Armature { .. } => "Armature",
+            Modifier::Hook { .. } => "Hook",
+            Modifier::Lattice { .. } => "Lattice",
+            Modifier::Warp { .. } => "Warp",
+            Modifier::VertexWeightEdit { .. } => "Vertex Weight Edit",
+            Modifier::VertexWeightMix { .. } => "Vertex Weight Mix",
+            Modifier::VertexWeightProximity { .. } => "Vertex Weight Proximity",
         }
     }
 
@@ -226,8 +319,8 @@ Wireframe, EdgeSplit, Build, Boolean, SimpleDeform, Cast, Wave, Shrinkwrap, Lapl
             "bevel" => Modifier::Bevel { width: 0.1, segments: 1, angle: 30f32.to_radians() },
             "triangulate" => Modifier::Triangulate,
             "weld" => Modifier::Weld { distance: 0.001 },
-            "displace" => Modifier::Displace { strength: 1.0 },
-            "smooth" => Modifier::Smooth { factor: 0.5, iterations: 1 },
+            "displace" => Modifier::Displace { strength: 1.0, vertex_group: None, invert_vertex_group: false },
+            "smooth" => Modifier::Smooth { factor: 0.5, iterations: 1, vertex_group: None, invert_vertex_group: false },
             "decimate" => Modifier::Decimate { mode: DecimateMode::Collapse, ratio: 1.0, iterations: 0, angle: 5f32.to_radians(), triangulate: false },
             "remesh" => Modifier::Remesh { mode: RemeshMode::Voxel, voxel_size: 0.1, octree_depth: 4, scale: 0.9, smooth_shade: false },
             "screw" => Modifier::Screw { axis: 2, angle: std::f32::consts::TAU, steps: 16, screw_offset: 0.0, iterations: 1, merge: false, merge_distance: 0.01, flip: false, smooth_shade: true },
@@ -235,8 +328,8 @@ Wireframe, EdgeSplit, Build, Boolean, SimpleDeform, Cast, Wave, Shrinkwrap, Lapl
             "edgesplit" => Modifier::EdgeSplit { angle: 30f32.to_radians(), use_angle: true },
             "build" => Modifier::Build { start: 1.0, length: 100.0, reverse: false, random: false, seed: 0 },
             "boolean" => Modifier::Boolean { object: String::new(), operation: BooleanOp::Difference },
-            "simpledeform" => Modifier::SimpleDeform { mode: SimpleDeformMode::Twist, axis: 2, factor: 45f32.to_radians(), limits: [0.0, 1.0], lock: [false; 3] },
-            "cast" => Modifier::Cast { kind: CastType::Sphere, factor: 0.5, radius: 0.0, size: 0.0, axes: [true; 3], size_from_radius: false },
+            "simpledeform" => Modifier::SimpleDeform { mode: SimpleDeformMode::Twist, axis: 2, factor: 45f32.to_radians(), limits: [0.0, 1.0], lock: [false; 3], vertex_group: None, invert_vertex_group: false },
+            "cast" => Modifier::Cast { kind: CastType::Sphere, factor: 0.5, radius: 0.0, size: 0.0, axes: [true; 3], size_from_radius: false, vertex_group: None, invert_vertex_group: false },
             "wave" => Modifier::Wave {
                 x: true,
                 y: true,
@@ -251,11 +344,82 @@ Wireframe, EdgeSplit, Build, Boolean, SimpleDeform, Cast, Wave, Shrinkwrap, Lapl
                 lifetime: 0.0,
                 damping: 10.0,
                 start: [0.0; 2],
+                vertex_group: None,
+                invert_vertex_group: false,
             },
-            "shrinkwrap" => Modifier::Shrinkwrap { target: String::new(), method: ShrinkwrapMethod::NearestSurfacePoint, offset: 0.0, axes: [false; 3], positive: true, negative: false },
-            "laplaciansmooth" | "smoothlaplacian" => Modifier::LaplacianSmooth { iterations: 1, factor: 0.01, border: 0.01, axes: [true; 3], preserve_volume: true, normalized: true },
-            "correctivesmooth" | "smoothcorrective" => Modifier::CorrectiveSmooth { factor: 0.5, iterations: 5, scale: 1.0, length_weighted: false, only_smooth: false },
+            "shrinkwrap" => Modifier::Shrinkwrap { target: String::new(), method: ShrinkwrapMethod::NearestSurfacePoint, offset: 0.0, axes: [false; 3], positive: true, negative: false, vertex_group: None, invert_vertex_group: false },
+            "laplaciansmooth" | "smoothlaplacian" => Modifier::LaplacianSmooth { iterations: 1, factor: 0.01, border: 0.01, axes: [true; 3], preserve_volume: true, normalized: true, vertex_group: None, invert_vertex_group: false },
+            "correctivesmooth" | "smoothcorrective" => Modifier::CorrectiveSmooth { factor: 0.5, iterations: 5, scale: 1.0, length_weighted: false, only_smooth: false, vertex_group: None, invert_vertex_group: false },
             "weightednormal" => Modifier::WeightedNormal { keep_sharp: false },
+            "armature" => Modifier::Armature {
+                object: String::new(),
+                use_vertex_groups: true,
+                use_bone_envelopes: false,
+                use_deform_preserve_volume: false,
+                use_multi_modifier: false,
+                vertex_group: None,
+                invert_vertex_group: false,
+            },
+            "hook" => Modifier::Hook {
+                object: String::new(),
+                subtarget: String::new(),
+                falloff_type: Falloff::None,
+                falloff_radius: 0.0,
+                center: [0.0; 3],
+                matrix_inverse: crate::math::Mat4::IDENTITY,
+                strength: 1.0,
+                use_falloff_uniform: false,
+                vertex_indices: Vec::new(),
+                vertex_group: None,
+                invert_vertex_group: false,
+            },
+            "lattice" => Modifier::Lattice { object: String::new(), strength: 1.0, vertex_group: None, invert_vertex_group: false },
+            "warp" => Modifier::Warp {
+                object_from: String::new(),
+                object_to: String::new(),
+                strength: 1.0,
+                falloff_type: Falloff::Smooth,
+                falloff_radius: 1.0,
+                use_volume_preserve: false,
+                vertex_group: None,
+                invert_vertex_group: false,
+            },
+            "vertexweightedit" | "weightvgedit" => Modifier::VertexWeightEdit {
+                vertex_group: String::new(),
+                default_weight: 0.0,
+                use_add: false,
+                add_threshold: 0.01,
+                use_remove: false,
+                remove_threshold: 0.01,
+                falloff_type: Falloff::None,
+                invert_falloff: false,
+                normalize: false,
+                mask_constant: 1.0,
+            },
+            "vertexweightmix" | "weightvgmix" => Modifier::VertexWeightMix {
+                vertex_group_a: String::new(),
+                vertex_group_b: String::new(),
+                default_weight_a: 0.0,
+                default_weight_b: 0.0,
+                mix_mode: WeightMixMode::Set,
+                mix_set: WeightMixSet::And,
+                invert_vertex_group_a: false,
+                invert_vertex_group_b: false,
+                normalize: false,
+                mask_constant: 1.0,
+            },
+            "vertexweightproximity" | "weightvgproximity" => Modifier::VertexWeightProximity {
+                vertex_group: String::new(),
+                target: String::new(),
+                proximity_mode: ProximityMode::Geometry,
+                use_proximity_geometry: [false, false, true],
+                min_dist: 0.0,
+                max_dist: 1.0,
+                falloff_type: Falloff::None,
+                invert_falloff: false,
+                normalize: false,
+                mask_constant: 1.0,
+            },
             _ => return None,
         })
     }
@@ -265,11 +429,12 @@ Wireframe, EdgeSplit, Build, Boolean, SimpleDeform, Cast, Wave, Shrinkwrap, Lapl
         matches!(self, Modifier::Wave { .. } | Modifier::Build { .. })
     }
 
-    /// The other object this modifier reads, if any.
+    /// The other object this modifier reads, if any (Warp: the "from" object).
     pub fn object_ref(&self) -> Option<&str> {
         match self {
-            Modifier::Boolean { object, .. } => Some(object),
-            Modifier::Shrinkwrap { target, .. } => Some(target),
+            Modifier::Boolean { object, .. } | Modifier::Armature { object, .. } | Modifier::Hook { object, .. } | Modifier::Lattice { object, .. } => Some(object),
+            Modifier::Shrinkwrap { target, .. } | Modifier::VertexWeightProximity { target, .. } => Some(target),
+            Modifier::Warp { object_from, .. } => Some(object_from),
             _ => None,
         }
     }
@@ -277,8 +442,65 @@ Wireframe, EdgeSplit, Build, Boolean, SimpleDeform, Cast, Wave, Shrinkwrap, Lapl
     /// Point a reference to object `old` at `new` (after a rename).
     pub fn rename_object_ref(&mut self, old: &str, new: &str) {
         match self {
-            Modifier::Boolean { object: s, .. } | Modifier::Shrinkwrap { target: s, .. } if s == old => *s = new.to_string(),
+            Modifier::Boolean { object: s, .. }
+            | Modifier::Shrinkwrap { target: s, .. }
+            | Modifier::Armature { object: s, .. }
+            | Modifier::Hook { object: s, .. }
+            | Modifier::Lattice { object: s, .. }
+            | Modifier::VertexWeightProximity { target: s, .. }
+                if s == old =>
+            {
+                *s = new.to_string()
+            }
+            Modifier::Warp { object_from, object_to, .. } => {
+                for s in [object_from, object_to] {
+                    if s == old {
+                        *s = new.to_string();
+                    }
+                }
+            }
             _ => {}
+        }
+    }
+
+    /// The common `vertex_group` / `invert_vertex_group` pair, for the
+    /// modifiers that have one (every deform modifier, Armature, Hook,
+    /// Lattice and Warp).
+    pub fn vertex_group_mut(&mut self) -> Option<(&mut Option<String>, &mut bool)> {
+        match self {
+            Modifier::Displace { vertex_group, invert_vertex_group, .. }
+            | Modifier::Smooth { vertex_group, invert_vertex_group, .. }
+            | Modifier::SimpleDeform { vertex_group, invert_vertex_group, .. }
+            | Modifier::Cast { vertex_group, invert_vertex_group, .. }
+            | Modifier::Wave { vertex_group, invert_vertex_group, .. }
+            | Modifier::Shrinkwrap { vertex_group, invert_vertex_group, .. }
+            | Modifier::LaplacianSmooth { vertex_group, invert_vertex_group, .. }
+            | Modifier::CorrectiveSmooth { vertex_group, invert_vertex_group, .. }
+            | Modifier::Armature { vertex_group, invert_vertex_group, .. }
+            | Modifier::Hook { vertex_group, invert_vertex_group, .. }
+            | Modifier::Lattice { vertex_group, invert_vertex_group, .. }
+            | Modifier::Warp { vertex_group, invert_vertex_group, .. } => Some((vertex_group, invert_vertex_group)),
+            _ => None,
+        }
+    }
+
+    /// The vertex group masking a deform modifier that has no group logic of
+    /// its own: the result is blended with the input by the group weight.
+    fn mask_group(&self) -> Option<(&str, bool)> {
+        match self {
+            Modifier::Displace { vertex_group: Some(g), invert_vertex_group: i, .. }
+            | Modifier::Smooth { vertex_group: Some(g), invert_vertex_group: i, .. }
+            | Modifier::SimpleDeform { vertex_group: Some(g), invert_vertex_group: i, .. }
+            | Modifier::Cast { vertex_group: Some(g), invert_vertex_group: i, .. }
+            | Modifier::Wave { vertex_group: Some(g), invert_vertex_group: i, .. }
+            | Modifier::Shrinkwrap { vertex_group: Some(g), invert_vertex_group: i, .. }
+            | Modifier::LaplacianSmooth { vertex_group: Some(g), invert_vertex_group: i, .. }
+            | Modifier::CorrectiveSmooth { vertex_group: Some(g), invert_vertex_group: i, .. }
+                if !g.is_empty() =>
+            {
+                Some((g.as_str(), *i))
+            }
+            _ => None,
         }
     }
 
@@ -290,6 +512,20 @@ Wireframe, EdgeSplit, Build, Boolean, SimpleDeform, Cast, Wave, Shrinkwrap, Lapl
 
     /// Apply this one modifier to `m`.
     pub fn apply_with(&self, m: &Mesh, cx: &EvalContext<'_>) -> Mesh {
+        self.apply_prev(m, cx, None)
+    }
+
+    /// Apply with the previous modifier's input at hand (Armature's Multi
+    /// Modifier).
+    fn apply_prev(&self, m: &Mesh, cx: &EvalContext<'_>, prev: Option<&[Vec3]>) -> Mesh {
+        let mut out = self.apply_inner(m, cx, prev);
+        if let Some((g, invert)) = self.mask_group() {
+            rig::mask_by_group(m, &mut out, g, invert);
+        }
+        out
+    }
+
+    fn apply_inner(&self, m: &Mesh, cx: &EvalContext<'_>, prev: Option<&[Vec3]>) -> Mesh {
         match self {
             &Modifier::Mirror { x, y, z, merge, merge_distance } => mirror(m, [x, y, z], merge.then_some(merge_distance.max(0.0))),
             &Modifier::Subdivision { levels, simple } => {
@@ -308,8 +544,8 @@ Wireframe, EdgeSplit, Build, Boolean, SimpleDeform, Cast, Wave, Shrinkwrap, Lapl
                 out.weld(distance);
                 out
             }
-            &Modifier::Displace { strength } => displace(m, strength),
-            &Modifier::Smooth { factor, iterations } => smooth(m, factor, iterations),
+            &Modifier::Displace { strength, .. } => displace(m, strength),
+            &Modifier::Smooth { factor, iterations, .. } => smooth(m, factor, iterations),
             &Modifier::Decimate { mode, ratio, iterations, angle, triangulate } => match mode {
                 DecimateMode::Collapse => decimate::collapse(m, ratio, triangulate),
                 DecimateMode::Unsubdivide => decimate::unsubdivide(m, iterations),
@@ -330,17 +566,17 @@ Wireframe, EdgeSplit, Build, Boolean, SimpleDeform, Cast, Wave, Shrinkwrap, Lapl
                 Some(other) if !other.faces.is_empty() => ops::boolean(m, &other, *operation),
                 _ => m.clone(),
             },
-            &Modifier::SimpleDeform { mode, axis, factor, limits, lock } => deform::simple_deform(m, mode, axis, factor, limits, lock),
-            &Modifier::Cast { kind, factor, radius, size, axes, size_from_radius } => deform::cast(m, kind, factor, radius, size, axes, size_from_radius),
-            &Modifier::Wave { x, y, cyclic, normals, falloff, height, width, narrowness, speed, time_offset, lifetime, damping, start } => {
+            &Modifier::SimpleDeform { mode, axis, factor, limits, lock, .. } => deform::simple_deform(m, mode, axis, factor, limits, lock),
+            &Modifier::Cast { kind, factor, radius, size, axes, size_from_radius, .. } => deform::cast(m, kind, factor, radius, size, axes, size_from_radius),
+            &Modifier::Wave { x, y, cyclic, normals, falloff, height, width, narrowness, speed, time_offset, lifetime, damping, start, .. } => {
                 deform::wave(m, cx.frame, &deform::WaveParams { x, y, cyclic, normals, falloff, height, width, narrowness, speed, time_offset, lifetime, damping, start })
             }
-            Modifier::Shrinkwrap { target, method, offset, axes, positive, negative } => match cx.lookup(target) {
+            Modifier::Shrinkwrap { target, method, offset, axes, positive, negative, .. } => match cx.lookup(target) {
                 Some(t) if !t.positions.is_empty() => deform::shrinkwrap(m, &t, *method, *offset, *axes, *positive, *negative),
                 _ => m.clone(),
             },
-            &Modifier::LaplacianSmooth { iterations, factor, border, axes, preserve_volume, normalized } => deform::laplacian_smooth(m, iterations, factor, border, axes, preserve_volume, normalized),
-            &Modifier::CorrectiveSmooth { factor, iterations, scale, length_weighted, only_smooth } => {
+            &Modifier::LaplacianSmooth { iterations, factor, border, axes, preserve_volume, normalized, .. } => deform::laplacian_smooth(m, iterations, factor, border, axes, preserve_volume, normalized),
+            &Modifier::CorrectiveSmooth { factor, iterations, scale, length_weighted, only_smooth, .. } => {
                 let rest = cx.rest.filter(|r| r.len() == m.positions.len()).unwrap_or(&m.positions);
                 deform::corrective_smooth(m, rest, factor, iterations, scale, length_weighted, only_smooth)
             }
@@ -349,6 +585,11 @@ Wireframe, EdgeSplit, Build, Boolean, SimpleDeform, Cast, Wave, Shrinkwrap, Lapl
                 out.faces.iter_mut().for_each(|f| f.smooth = true);
                 out
             }
+            Modifier::Armature { .. } => rig::armature(self, m, cx, prev),
+            Modifier::Hook { .. } => rig::hook(self, m, cx),
+            Modifier::Lattice { .. } => rig::lattice(self, m, cx),
+            Modifier::Warp { .. } => rig::warp(self, m, cx),
+            Modifier::VertexWeightEdit { .. } | Modifier::VertexWeightMix { .. } | Modifier::VertexWeightProximity { .. } => rig::weights(self, m, cx),
         }
     }
 }
@@ -363,8 +604,15 @@ pub fn apply_stack(m: &Mesh, stack: &[Modifier]) -> Mesh {
 pub fn apply_stack_with(m: &Mesh, stack: &[Modifier], cx: &EvalContext<'_>) -> Mesh {
     let cx = EvalContext { rest: Some(cx.rest.unwrap_or(&m.positions)), ..*cx };
     let mut out = m.clone();
+    let mut prev_input: Option<Vec<Vec3>> = None;
     for md in stack {
-        out = md.apply_with(&out, &cx);
+        let multi = matches!(md, Modifier::Armature { use_multi_modifier: true, .. });
+        let input = out.positions.clone();
+        out = md.apply_prev(&out, &cx, if multi { prev_input.as_deref() } else { None });
+        // A Multi Modifier armature shares its input with the next one too.
+        if !multi {
+            prev_input = Some(input);
+        }
     }
     out
 }
@@ -576,6 +824,12 @@ fn mirror_axis(m: &Mesh, axis: usize, merge: Option<f32>) -> Mesh {
     let mut out = m.clone();
     let mut map = vec![0u32; n];
     let mut on_plane = vec![false; n];
+    let flip: Vec<u32> = m
+        .vertex_groups
+        .iter()
+        .enumerate()
+        .map(|(g, name)| m.vertex_group_index(&crate::mesh::flip_side_name(name)).unwrap_or(g) as u32)
+        .collect();
     for i in 0..n {
         let c = axis_value(m.positions[i], axis);
         if let Some(d) = merge {
@@ -588,7 +842,21 @@ fn mirror_axis(m: &Mesh, axis: usize, merge: Option<f32>) -> Mesh {
         }
         let mut p = m.positions[i];
         set_axis(&mut p, axis, -c);
-        map[i] = out.add_vertex(p);
+        map[i] = out.copy_vertex(i as u32);
+        out.positions[map[i] as usize] = p;
+        // Shape keys are mirrored too; weights move to the flipped group
+        // ("Arm.L" -> "Arm.R") when the mesh has it (Mirror Vertex Groups).
+        for k in &mut out.shape_keys {
+            if let Some(kp) = k.positions.get_mut(map[i] as usize) {
+                let c = axis_value(*kp, axis);
+                set_axis(kp, axis, -c);
+            }
+        }
+        if let Some(w) = out.weights.get_mut(map[i] as usize) {
+            for e in w.iter_mut() {
+                e.0 = flip.get(e.0 as usize).copied().unwrap_or(e.0);
+            }
+        }
     }
     for f in &m.faces {
         if merge.is_some() && f.verts.iter().all(|&v| on_plane[v as usize]) {
