@@ -417,7 +417,9 @@ mod program {
 
         fn export(&mut self) {
             let stem = self.name.rsplit_once('.').map_or(self.name.as_str(), |(s, _)| s);
-            let out_name = format!("{}-edit.webm", stem.trim_start_matches('@'));
+            // Into Splicy's own folder: a run may hold only the clip itself, not the folder it is in.
+            let stem = stem.rsplit('/').next().unwrap_or(stem).trim_start_matches('@');
+            let out_name = format!("{stem}-edit.webm");
             self.message = format!("Exporting {out_name}...");
             self.draw();
             let result = self.export_to(out_name.as_bytes());
@@ -553,9 +555,13 @@ mod program {
         window.title(b"Splicy");
         let mut args = [0u8; sex_pdx::fs::ARGS_MAX];
         let given = files::args(&mut window, &mut args).to_vec();
-        let path: Vec<u8> = given.split(|b| *b == b' ').find(|w| !w.is_empty()).unwrap_or(b"").to_vec();
+        let mut tokens = given.split(|b| *b == b' ').filter(|w| !w.is_empty());
+        let path: Vec<u8> = tokens.next().unwrap_or(b"").to_vec();
+        // A run holds only the files it was given, so the transcript may come as its own
+        // argument (`run splicy @talk.webm @talk.words`); otherwise it is looked for beside the clip.
+        let words_arg: Option<String> = tokens.next().map(|w| String::from_utf8_lossy(w).into_owned());
         if path.is_empty() {
-            say(&mut window, "Splicy edits a clip by editing its transcript.\n\nUsage: run splicy @talk.webm (with talk.words beside it)");
+            say(&mut window, "Splicy edits a clip by editing its transcript.\n\nUsage: run splicy @talk.webm @talk.words");
             loop {
                 if let Event::Close = window.next() {
                     window.close()
@@ -575,7 +581,7 @@ mod program {
             }
         };
         // The transcript beside the clip.
-        let words_path = words::beside(&name);
+        let words_path = words_arg.unwrap_or_else(|| words::beside(&name));
         let mut text = vec![0u8; 1 << 20];
         let transcript = match files::read(&mut window, words_path.as_bytes(), &mut text) {
             Ok(n) => match words::parse(&String::from_utf8_lossy(&text[..n])) {

@@ -81,7 +81,7 @@ def main():
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
   fetched('/splicy','/bin/splicy');fetched('/talk.webm','talk.webm');fetched('/talk.words','talk.words')
-  s=len(t());expect('run splicy @talk.webm',r'\[splicy.opened\] file=@talk\.webm format=\S+ video=vp9 audio=opus w=320 h=180 fps=30/1 ms=\d+ words=11',300)
+  s=len(t());expect('run splicy @talk.webm @talk.words',r'\[splicy.opened\] file=@/?talk\.webm format=\S+ video=vp9 audio=opus w=320 h=180 fps=30/1 ms=\d+ words=11',300)
   m=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60)
   sc=g['wait'](r'\[splicy.scan\] thumbs=(\d+) peaks=(\d+) ms=(\d+)',s,600)
   assert int(sc[1])>=6 and int(sc[2])>=550,sc[0]
