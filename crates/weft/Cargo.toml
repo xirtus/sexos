@@ -1,0 +1,29 @@
+[package]
+name = "weft"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "Weft: the SexOS UI toolkit. Retained widgets on taffy layout, tiny-skia painting, sex-font text, menus, command palette, dialogs, themes, icons, Fluent strings and an AccessKit tree."
+
+[features]
+default = []
+# Glue to a SexOS program window (sex-app): events in, pixels out, Files' picker.
+sexos = ["dep:sex-app", "dep:sex-pdx"]
+# Noto fallback fonts (CJK, Arabic, Hebrew, Devanagari, Thai, symbols): about 5.5 MB.
+fallback-fonts = []
+
+[dependencies]
+# MIT. Flexbox, grid and block layout; no_std with alloc.
+taffy = { version = "0.15.1", default-features = false, features = ["alloc", "taffy_tree", "flexbox", "grid", "block_layout", "content_size"] }
+# MIT OR Apache-2.0. The platform-neutral accessibility tree a screen reader reads.
+accesskit = { version = "0.25.2", default-features = false }
+# BSD-3-Clause. Anti-aliased shapes; the same version sex-canvas uses.
+tiny-skia = { version = "0.11.4", default-features = false, features = ["no-std-float"] }
+libm = "0.2"
+sex-font = { path = "../sex-font" }
+sex-app = { path = "../sex-app", optional = true }
+sex-pdx = { path = "../sex-pdx", optional = true }
+
+[dev-dependencies]
+accesskit = { version = "0.25.2", default-features = false }
+png = "0.18"
