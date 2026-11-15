@@ -31,6 +31,55 @@
 //! line-at-a-time engine underneath, for a live channel. [`scene_to_polyops`]
 //! writes a scene back out as commands; running that text on [`Scene::new`]
 //! rebuilds an equal scene (images and textures excepted).
+//!
+//! ## Rigging commands
+//!
+//! Vertex groups, shape keys, armatures, poses, constraints and lattices
+//! (see `script/rig.rs`). Lists of three booleans are written `1,0,1`;
+//! enum values are Blender's identifiers in lower case.
+//!
+//! * `vgroup MESH NAME indices=0,1,2 weights=1,0.5,0.25 remove=7,8` creates
+//!   the group when missing and sets weights (one weight for all, or one
+//!   per index; `weights=` alone covers every vertex). `vgroup_remove MESH NAME`.
+//! * `shape_key MESH NAME verts=... value= slider_min= slider_max=
+//!   relative_key=KEY vertex_group=G|none mute= interpolation=linear|cardinal|catmull_rom|bspline
+//!   frame= from_mix=` creates the key when missing (the first key is the
+//!   Basis) and sets its options. `shape_key_remove MESH NAME`,
+//!   `shape_key_settings MESH use_relative= eval_time=`.
+//! * `armature_new NAME as=$h`; `add_armature NAME data=ARM` (placement
+//!   options as for `add_object`; without `data=` a new armature is made).
+//! * `bone ARM NAME head=x,y,z tail=x,y,z roll= parent=BONE|none use_connect=
+//!   use_deform= use_inherit_rotation= inherit_scale=full|fix_shear|average|none|none_legacy|aligned
+//!   use_local_location= use_relative_parent= envelope_distance= envelope_weight=
+//!   head_radius= tail_radius= use_envelope_multiply= bbone_segments=` creates or edits a bone
+//!   (armature space, like edit bones). `bone_collection ARM NAME BONE...`.
+//! * `lattice_new NAME points=u,v,w interpolation=t[,t,t] use_outside= verts=...`,
+//!   `lattice_set LATTICE ...` and `add_lattice NAME data=LATTICE`.
+//! * `parent CHILD PARENT bone=BONE type=object|armature|bone keep_transform=`;
+//!   `parent_with_armature MESH ARMATURE weights=none|empty|envelope|automatic`
+//!   (Ctrl+P > With ... Weights).
+//! * `pose_bone OBJ BONE location= rotation_mode=quaternion|axis_angle|xyz|...
+//!   quaternion=w,x,y,z euler=x,y,z axis_angle=a,x,y,z scale= ik_lock=
+//!   ik_stiffness= ik_stretch= ik_limit= ik_min= ik_max=`.
+//! * `constraint_add OBJ TYPE [bone=BONE] ...` (types `copy_location`,
+//!   `copy_rotation`, `copy_scale`, `copy_transforms`, `limit_distance`,
+//!   `limit_location`, `limit_rotation`, `limit_scale`, `maintain_volume`,
+//!   `transform`, `child_of`, `track_to`, `damped_track`, `locked_track`,
+//!   `stretch_to`, `floor`, `armature`, `ik`) replies with the index;
+//!   `constraint_set OBJ INDEX [bone=] ...`, `constraint_remove OBJ INDEX [bone=]`,
+//!   `constraint_target OBJ INDEX TARGET subtarget= weight= [bone=]` (Armature
+//!   constraint targets) and `constraint_set_inverse OBJ INDEX [bone=] clear=`
+//!   (Child Of). Common options: `name= influence= mute= owner_space= target_space=`
+//!   (`world`, `pose`, `local_with_parent`, `local`, `custom`) `space_object=
+//!   space_subtarget= target= subtarget= head_tail=`; the type's own options
+//!   use Blender's Python names (`use_xyz=`, `invert=`, `mix_mode=`, `euler_order=`,
+//!   `track_axis=track_negative_z`, `up_axis=y`, `rest_length=`, `pole_target=`,
+//!   `pole_subtarget=`, `pole_angle=`, `chain_count=`, `inverse_matrix=` 16 numbers
+//!   column-major, ...).
+//! * Modifiers: every deform modifier takes `vertex_group=NAME|none` and
+//!   `invert_vertex_group=`; `Armature`, `Hook`, `Lattice`, `Warp`,
+//!   `VertexWeightEdit`, `VertexWeightMix` and `VertexWeightProximity` take
+//!   their fields by name (`falloff_type=smooth`, `mix_mode=avg`, ...).
 use crate::math::{Quat, Vec2, Vec3};
 use crate::mesh::{Face, Mesh};
 use crate::modifiers::{BooleanOp, CastType, DecimateMode, Modifier, RemeshMode, ShrinkwrapMethod, SimpleDeformMode};
@@ -38,6 +87,8 @@ use crate::scene::{unique_name, Camera, Light, LightKind, Material, Object, Obje
 use base64::Engine;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::{self, Write as _};
+
+mod rig;
 
 /// The language version this module reads and writes (`polyops 1`).
 pub const VERSION: u32 = 1;
@@ -386,6 +437,8 @@ enum Handle {
     Mesh(usize),
     Material(usize),
     Collection(usize),
+    Armature(usize),
+    Lattice(usize),
 }
 
 /// The line-at-a-time interpreter behind [`run`]. Feed it lines with
@@ -694,11 +747,7 @@ impl Session {
             "set" => self.set(scene, cmd),
             "get" => self.get(scene, cmd).map(Some),
             "parent" => {
-                cmd.max_args(2)?;
-                let child = self.object(scene, cmd.arg(0, "a child object")?)?;
-                let p = cmd.arg(1, "a parent object or none")?.clone();
-                let keep = cmd.b("keep_transform")?.unwrap_or(false);
-                self.set_parent(scene, child, &p, keep)?;
+                self.parent_command(scene, cmd)?;
                 Ok(None)
             }
             "material_new" => {
@@ -886,6 +935,7 @@ impl Session {
                 let t = cmd.arg(0, "an object")?;
                 Ok(Some(if self.object(scene, t).is_ok() { "1" } else { "0" }.into()))
             }
+            name if rig::COMMANDS.contains(&name) => self.rig_command(scene, cmd),
             other => Err(format!("unknown command '{other}'")),
         }
     }
@@ -1103,6 +1153,10 @@ impl Session {
                 scene.objects[i].name = new.clone();
                 for ob in &mut scene.objects {
                     ob.modifiers.iter_mut().for_each(|m| m.rename_object_ref(&old, &new));
+                    ob.constraints.iter_mut().for_each(|c| c.rename_object_ref(&old, &new));
+                    for pb in &mut ob.pose {
+                        pb.constraints.iter_mut().for_each(|c| c.rename_object_ref(&old, &new));
+                    }
                 }
                 self.rename_handles(&old, &new);
             }
@@ -1143,10 +1197,14 @@ impl Session {
                 ObjectData::Mesh(_) => "MESH",
                 ObjectData::Camera(_) => "CAMERA",
                 ObjectData::Light(_) => "LIGHT",
+                ObjectData::Armature(_) => "ARMATURE",
+                ObjectData::Lattice(_) => "LATTICE",
             }
             .into(),
             "data" => match o.data {
                 ObjectData::Mesh(m) => quote(&scene.mesh_names[m]),
+                ObjectData::Armature(a) => quote(&scene.armature_names[a]),
+                ObjectData::Lattice(l) => quote(&scene.lattice_names[l]),
                 _ => "none".into(),
             },
             "vertex_count" | "face_count" => match o.data {
@@ -1324,6 +1382,9 @@ fn name_of<T: PartialEq + Copy>(names: &[(&'static str, T)], v: T) -> &'static s
 }
 
 fn modifier_opts(cmd: &mut Cmd, mut m: Modifier) -> Res<Modifier> {
+    if rig::modifier_opts(cmd, &mut m)? {
+        return Ok(m);
+    }
     fn arr3(cmd: &mut Cmd, key: &str, into: &mut [f32; 3]) -> Res<()> {
         if let Some(v) = cmd.v3(key)? {
             *into = v.to_array();
@@ -1388,8 +1449,8 @@ fn modifier_opts(cmd: &mut Cmd, mut m: Modifier) -> Res<Modifier> {
         }
         Modifier::Triangulate => {}
         Modifier::Weld { distance } => *distance = cmd.f("distance")?.unwrap_or(*distance),
-        Modifier::Displace { strength } => *strength = cmd.f("strength")?.unwrap_or(*strength),
-        Modifier::Smooth { factor, iterations } => {
+        Modifier::Displace { strength, .. } => *strength = cmd.f("strength")?.unwrap_or(*strength),
+        Modifier::Smooth { factor, iterations, .. } => {
             *factor = cmd.f("factor")?.unwrap_or(*factor);
             *iterations = cmd.u("iterations")?.unwrap_or(*iterations);
         }
@@ -1447,7 +1508,7 @@ fn modifier_opts(cmd: &mut Cmd, mut m: Modifier) -> Res<Modifier> {
             s(cmd, "object", object);
             choice(cmd, "operation", &BOOLEAN_OPS, operation)?;
         }
-        Modifier::SimpleDeform { mode, axis, factor, limits, lock } => {
+        Modifier::SimpleDeform { mode, axis, factor, limits, lock, .. } => {
             choice(cmd, "mode", &DEFORM_MODES, mode)?;
             choice(cmd, "axis", &AXES, axis)?;
             f(cmd, "factor", factor)?;
@@ -1459,7 +1520,7 @@ fn modifier_opts(cmd: &mut Cmd, mut m: Modifier) -> Res<Modifier> {
             }
             bools3(cmd, ["lock_x", "lock_y", "lock_z"], lock)?;
         }
-        Modifier::Cast { kind, factor, radius, size, axes, size_from_radius } => {
+        Modifier::Cast { kind, factor, radius, size, axes, size_from_radius, .. } => {
             choice(cmd, "type", &CAST_TYPES, kind)?;
             f(cmd, "factor", factor)?;
             f(cmd, "radius", radius)?;
@@ -1467,7 +1528,7 @@ fn modifier_opts(cmd: &mut Cmd, mut m: Modifier) -> Res<Modifier> {
             bools3(cmd, ["x", "y", "z"], axes)?;
             b(cmd, "size_from_radius", size_from_radius)?;
         }
-        Modifier::Wave { x, y, cyclic, normals, falloff, height, width, narrowness, speed, time_offset, lifetime, damping, start } => {
+        Modifier::Wave { x, y, cyclic, normals, falloff, height, width, narrowness, speed, time_offset, lifetime, damping, start, .. } => {
             b(cmd, "x", x)?;
             b(cmd, "y", y)?;
             b(cmd, "cyclic", cyclic)?;
@@ -1487,7 +1548,7 @@ fn modifier_opts(cmd: &mut Cmd, mut m: Modifier) -> Res<Modifier> {
                 *start = [l[0], l[1]];
             }
         }
-        Modifier::Shrinkwrap { target, method, offset, axes, positive, negative } => {
+        Modifier::Shrinkwrap { target, method, offset, axes, positive, negative, .. } => {
             s(cmd, "target", target);
             choice(cmd, "method", &WRAP_METHODS, method)?;
             f(cmd, "offset", offset)?;
@@ -1495,7 +1556,7 @@ fn modifier_opts(cmd: &mut Cmd, mut m: Modifier) -> Res<Modifier> {
             b(cmd, "positive", positive)?;
             b(cmd, "negative", negative)?;
         }
-        Modifier::LaplacianSmooth { iterations, factor, border, axes, preserve_volume, normalized } => {
+        Modifier::LaplacianSmooth { iterations, factor, border, axes, preserve_volume, normalized, .. } => {
             u(cmd, "iterations", iterations)?;
             f(cmd, "factor", factor)?;
             f(cmd, "border", border)?;
@@ -1503,7 +1564,7 @@ fn modifier_opts(cmd: &mut Cmd, mut m: Modifier) -> Res<Modifier> {
             b(cmd, "preserve_volume", preserve_volume)?;
             b(cmd, "normalized", normalized)?;
         }
-        Modifier::CorrectiveSmooth { factor, iterations, scale, length_weighted, only_smooth } => {
+        Modifier::CorrectiveSmooth { factor, iterations, scale, length_weighted, only_smooth, .. } => {
             f(cmd, "factor", factor)?;
             u(cmd, "iterations", iterations)?;
             f(cmd, "scale", scale)?;
@@ -1511,6 +1572,7 @@ fn modifier_opts(cmd: &mut Cmd, mut m: Modifier) -> Res<Modifier> {
             b(cmd, "only_smooth", only_smooth)?;
         }
         Modifier::WeightedNormal { keep_sharp } => b(cmd, "keep_sharp", keep_sharp)?,
+        _ => {}
     }
     Ok(m)
 }
@@ -1633,6 +1695,10 @@ pub fn mesh_to_options(m: &Mesh) -> String {
 }
 
 fn modifier_to_options(m: &Modifier) -> String {
+    modifier_base_options(m) + &rig::modifier_to_options(m)
+}
+
+fn modifier_base_options(m: &Modifier) -> String {
     let b = |v: bool| v as u8;
     let f = |v: f32| fmt_f(v);
     match m {
@@ -1643,8 +1709,8 @@ fn modifier_to_options(m: &Modifier) -> String {
         Modifier::Bevel { width, segments, angle } => format!(" width={} segments={segments} angle={}", fmt_f(*width), fmt_f(*angle)),
         Modifier::Triangulate => String::new(),
         Modifier::Weld { distance } => format!(" distance={}", fmt_f(*distance)),
-        Modifier::Displace { strength } => format!(" strength={}", fmt_f(*strength)),
-        Modifier::Smooth { factor, iterations } => format!(" factor={} iterations={iterations}", fmt_f(*factor)),
+        Modifier::Displace { strength, .. } => format!(" strength={}", fmt_f(*strength)),
+        Modifier::Smooth { factor, iterations, .. } => format!(" factor={} iterations={iterations}", fmt_f(*factor)),
         Modifier::Decimate { mode, ratio, iterations, angle, triangulate } => {
             format!(" mode={} ratio={} iterations={iterations} angle={} triangulate={}", name_of(&DECIMATE_MODES, *mode), f(*ratio), f(*angle), b(*triangulate))
         }
@@ -1667,7 +1733,7 @@ fn modifier_to_options(m: &Modifier) -> String {
         Modifier::EdgeSplit { angle, use_angle } => format!(" angle={} use_angle={}", f(*angle), b(*use_angle)),
         Modifier::Build { start, length, reverse, random, seed } => format!(" start={} length={} reverse={} random={} seed={seed}", f(*start), f(*length), b(*reverse), b(*random)),
         Modifier::Boolean { object, operation } => format!(" object={} operation={}", quote(object), name_of(&BOOLEAN_OPS, *operation)),
-        Modifier::SimpleDeform { mode, axis, factor, limits, lock } => format!(
+        Modifier::SimpleDeform { mode, axis, factor, limits, lock, .. } => format!(
             " mode={} axis={} factor={} limits={} lock_x={} lock_y={} lock_z={}",
             name_of(&DEFORM_MODES, *mode),
             name_of(&AXES, *axis),
@@ -1677,7 +1743,7 @@ fn modifier_to_options(m: &Modifier) -> String {
             b(lock[1]),
             b(lock[2])
         ),
-        Modifier::Cast { kind, factor, radius, size, axes, size_from_radius } => format!(
+        Modifier::Cast { kind, factor, radius, size, axes, size_from_radius, .. } => format!(
             " type={} factor={} radius={} size={} x={} y={} z={} size_from_radius={}",
             name_of(&CAST_TYPES, *kind),
             f(*factor),
@@ -1688,7 +1754,7 @@ fn modifier_to_options(m: &Modifier) -> String {
             b(axes[2]),
             b(*size_from_radius)
         ),
-        Modifier::Wave { x, y, cyclic, normals, falloff, height, width, narrowness, speed, time_offset, lifetime, damping, start } => format!(
+        Modifier::Wave { x, y, cyclic, normals, falloff, height, width, narrowness, speed, time_offset, lifetime, damping, start, .. } => format!(
             " x={} y={} cyclic={} normals={} falloff={} height={} width={} narrowness={} speed={} time_offset={} lifetime={} damping={} start={}",
             b(*x),
             b(*y),
@@ -1704,7 +1770,7 @@ fn modifier_to_options(m: &Modifier) -> String {
             f(*damping),
             fmt_list(start)
         ),
-        Modifier::Shrinkwrap { target, method, offset, axes, positive, negative } => format!(
+        Modifier::Shrinkwrap { target, method, offset, axes, positive, negative, .. } => format!(
             " target={} method={} offset={} x={} y={} z={} positive={} negative={}",
             quote(target),
             name_of(&WRAP_METHODS, *method),
@@ -1715,7 +1781,7 @@ fn modifier_to_options(m: &Modifier) -> String {
             b(*positive),
             b(*negative)
         ),
-        Modifier::LaplacianSmooth { iterations, factor, border, axes, preserve_volume, normalized } => format!(
+        Modifier::LaplacianSmooth { iterations, factor, border, axes, preserve_volume, normalized, .. } => format!(
             " iterations={iterations} factor={} border={} x={} y={} z={} preserve_volume={} normalized={}",
             f(*factor),
             f(*border),
@@ -1725,10 +1791,11 @@ fn modifier_to_options(m: &Modifier) -> String {
             b(*preserve_volume),
             b(*normalized)
         ),
-        Modifier::CorrectiveSmooth { factor, iterations, scale, length_weighted, only_smooth } => {
+        Modifier::CorrectiveSmooth { factor, iterations, scale, length_weighted, only_smooth, .. } => {
             format!(" factor={} iterations={iterations} scale={} length_weighted={} only_smooth={}", f(*factor), f(*scale), b(*length_weighted), b(*only_smooth))
         }
         Modifier::WeightedNormal { keep_sharp } => format!(" keep_sharp={}", b(*keep_sharp)),
+        _ => String::new(),
     }
 }
 
@@ -1776,7 +1843,9 @@ pub fn scene_to_polyops(scene: &Scene) -> String {
     }
     for (m, n) in scene.meshes.iter().zip(&scene.mesh_names) {
         let _ = writeln!(o, "mesh_new {}{}", quote(n), mesh_to_options(m));
+        rig::write_mesh_extras(&mut o, n, m);
     }
+    rig::write_data(&mut o, scene);
     for ob in &scene.objects {
         let t = &ob.transform;
         let place = format!(
@@ -1788,7 +1857,12 @@ pub fn scene_to_polyops(scene: &Scene) -> String {
             if ob.visible { "" } else { " visible=0" }
         );
         let name = quote(&ob.name);
+        if let Some(l) = rig::object_line(scene, ob, &place) {
+            let _ = writeln!(o, "{l}");
+            continue;
+        }
         let _ = match &ob.data {
+            ObjectData::Armature(_) | ObjectData::Lattice(_) => Ok(()),
             ObjectData::Empty => writeln!(o, "add_empty {name}{place}"),
             ObjectData::Mesh(m) => writeln!(o, "add_object {name} data={}{place}", quote(&scene.mesh_names[*m])),
             ObjectData::Light(l) => {
@@ -1809,7 +1883,7 @@ pub fn scene_to_polyops(scene: &Scene) -> String {
     for ob in &scene.objects {
         let name = quote(&ob.name);
         if let Some(p) = ob.parent {
-            let _ = writeln!(o, "parent {name} {}", quote(&scene.objects[p].name));
+            let _ = writeln!(o, "parent {name} {}{}", quote(&scene.objects[p].name), rig::parent_options(ob));
         }
         for (slot, &m) in ob.materials.iter().enumerate() {
             let _ = writeln!(o, "material_assign {name} {} slot={slot}", quote(&scene.materials[m].name));
@@ -1817,6 +1891,7 @@ pub fn scene_to_polyops(scene: &Scene) -> String {
         for m in &ob.modifiers {
             let _ = writeln!(o, "modifier_add {name} {}{}", m.type_name(), modifier_to_options(m));
         }
+        rig::write_object_rig(&mut o, ob);
     }
     let names = |v: &[usize]| v.iter().map(|&i| format!(" {}", quote(&scene.objects[i].name))).collect::<String>();
     let _ = writeln!(o, "select{}", names(&scene.selected));

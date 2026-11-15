@@ -202,8 +202,8 @@ fn materials_modifiers_parents_collections() {
             Modifier::Bevel { width: 0.05, segments: 3, angle: 30f32.to_radians() },
             Modifier::Solidify { thickness: 0.2, offset: -1.0 },
             Modifier::Weld { distance: 0.01 },
-            Modifier::Displace { strength: 0.3 },
-            Modifier::Smooth { factor: 1.0, iterations: 4 },
+            Modifier::Displace { strength: 0.3, vertex_group: None, invert_vertex_group: false },
+            Modifier::Smooth { factor: 1.0, iterations: 4, vertex_group: None, invert_vertex_group: false },
         ]
     );
     let ci = s.find_object("Cube").unwrap();
