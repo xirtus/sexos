@@ -35,3 +35,30 @@ fn oversized_index_falls_back_and_can_rebuild_after_mutation() {
     dom.set_attr(n,"id","dup");
     check(&dom,&[0]);
 }
+#[test]
+fn indexes_follow_many_small_mutations() {
+    // Script start-up interleaves attribute changes, new nodes and moves with queries;
+    // the indexes are updated in place and must keep agreeing with a plain scan.
+    let mut dom = parse::parse("<div id=root><p class='a b'>x</p><p id=dup></p><section><span class=b></span></section></div>");
+    let mut seed = 0x9e3779b9u32;
+    let mut next = |m: usize| { seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5; seed as usize % m };
+    let names = ["id", "class", "title"];
+    let values = ["a", "b", "a b", "dup", "", "c a"];
+    for step in 0..400 {
+        let len = dom.nodes.len();
+        let n = next(len);
+        match next(7) {
+            0 => dom.set_attr(n, names[next(3)], values[next(values.len())]),
+            1 => dom.remove_attr(n, names[next(3)]),
+            2 => { let tag = ["span", "p", "div"][next(3)]; let c = dom.create(Kind::Element { tag: tag.into(), attrs: vec![("class".into(), values[next(values.len())].into())] }); if step % 2 == 0 { dom.insert(n, c, None); } }
+            3 => { let m = next(len); let before = dom.nodes[n].children.first().copied(); dom.insert(n, m, before); }
+            4 => dom.detach(n),
+            5 => { dom.add(n, Kind::Element { tag: "p".into(), attrs: vec![("id".into(), "dup".into())] }); }
+            _ => {}
+        }
+        if step % 5 == 0 {
+            let roots = [0, n, next(dom.nodes.len())];
+            check(&dom, &roots);
+        }
+    }
+}
