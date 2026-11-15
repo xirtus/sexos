@@ -353,7 +353,9 @@ pub fn bind(target: u32, task: u32) {
     }
     let args = unsafe { &mut *core::ptr::addr_of_mut!(LOADED_ARGS) };
     if let Some(cache) = client_cache(w::PROGRAM_INDEX_BASE + index) { w::stat_cache::forget(cache, None); }
+    unsafe { (*core::ptr::addr_of_mut!(OFFERS))[index] = None; }
     bindings[index] = Some(Binding { task, root, len, args: args.0, args_len: core::mem::take(&mut args.1), picked: [0; PICKED_MAX], picked_len: 0 });
+    crate::console_relay::bound(unsafe { core::mem::take(&mut *core::ptr::addr_of_mut!(LOADED_LAUNCHER)) }, index, target, task);
     unsafe { (*core::ptr::addr_of_mut!(PICKS))[index] = None; }
     sex_pdx::serial_record!("[files.program.bound] target={} task={} root={}", target, task, core::str::from_utf8(&root[..len]).unwrap_or("?"));
 }
@@ -485,13 +487,7 @@ fn picker(program: Option<usize>, r: w::Request, path: &[u8], data: &mut [u8]) -
                 if confine(&b, &token[..1 + abs.len()], &mut out).is_none() { return (w::DENIED, 0); }
             }
             let Some(target) = bindings[row].as_mut() else { return (w::NOT_FOUND, 0) };
-            let sep = (target.picked_len > 0) as usize;
-            if target.picked_len + sep + 1 + abs.len() > PICKED_MAX { return (w::NO_SPACE, 0); }
-            if sep == 1 { target.picked[target.picked_len] = b' '; }
-            let at = target.picked_len + sep;
-            target.picked[at] = b'@';
-            target.picked[at + 1..at + 1 + abs.len()].copy_from_slice(abs);
-            target.picked_len = at + 1 + abs.len();
+            if !grant_picked(target, abs) { return (w::NO_SPACE, 0); }
             pick.answer = Answer::Chosen;
             sex_pdx::serial_record!("[files.pick.granted] row={} path={}", row, core::str::from_utf8(abs).unwrap_or("?"));
             (w::OK, 0)
@@ -499,11 +495,68 @@ fn picker(program: Option<usize>, r: w::Request, path: &[u8], data: &mut [u8]) -
         _ => (w::INVALID, 0),
     }
 }
+/// Adds `@abs` to the paths the person gave this run after it started.
+fn grant_picked(target: &mut Binding, abs: &[u8]) -> bool {
+    let sep = (target.picked_len > 0) as usize;
+    if target.picked_len + sep + 1 + abs.len() > PICKED_MAX { return false; }
+    if sep == 1 { target.picked[target.picked_len] = b' '; }
+    let at = target.picked_len + sep;
+    target.picked[at] = b'@';
+    target.picked[at + 1..at + 1 + abs.len()].copy_from_slice(abs);
+    target.picked_len = at + 1 + abs.len();
+    true
+}
+/// What each program row offered for a drag (`fs::OFFER`): ticket and absolute path.
+static mut OFFERS: [Option<(u32, [u8; sex_pdx::dnd::MAX_BYTES], usize)>; PROGRAM_ROWS] = [None; PROGRAM_ROWS];
+fn offer(k: usize, binding: &Binding, path: &[u8], data: &mut [u8]) -> (u8, u32) {
+    let mut out = [0u8; w::PATH_BYTES];
+    let Some(n) = confine(binding, path, &mut out) else { return (w::DENIED, 0) };
+    let abs = &out[..n];
+    if n > sex_pdx::dnd::MAX_BYTES || abs.first() != Some(&b'/') || abs.iter().any(|c| *c == b' ' || *c < 0x20) { return (w::NAME, 0); }
+    let ticket = unsafe { PICK_TICKET = PICK_TICKET % 0xFF_FFFE + 1; PICK_TICKET };
+    let mut kept = [0u8; sex_pdx::dnd::MAX_BYTES];
+    kept[..n].copy_from_slice(abs);
+    unsafe { (*core::ptr::addr_of_mut!(OFFERS))[k] = Some((ticket, kept, n)); }
+    data[..2].copy_from_slice(&(n as u16).to_le_bytes());
+    data[2..2 + n].copy_from_slice(abs);
+    sex_pdx::serial_record!("[files.dnd.offered] row={} ticket={} path={}", k, ticket, core::str::from_utf8(abs).unwrap_or("?"));
+    (w::OK, ticket)
+}
+/// Shell's `dnd::OP_GIVE`: the person dropped `source`'s offered path on `target`'s
+/// window, so `target` may use it from now on, as if picked for it.
+pub fn give(ticket: u64, rows: u64, hash: u64) {
+    let (source, target) = ((rows >> 32) as u32, rows as u32);
+    let refuse = |why: &str| sex_pdx::serial_record!("[files.dnd.refused] from={} to={} why={}", source, target, why);
+    let (Some(s), Some(t)) = (program_index(source), program_index(target)) else { return refuse("rows") };
+    let offers = unsafe { &mut *core::ptr::addr_of_mut!(OFFERS) };
+    let Some((_, path, n)) = offers[s].filter(|o| o.0 as u64 == ticket) else { return refuse("ticket") };
+    if sex_pdx::dnd::hash(&path[..n]) != hash { return refuse("path"); }
+    offers[s] = None;
+    let bindings = unsafe { &mut *core::ptr::addr_of_mut!(BINDINGS) };
+    if bindings[s].is_none() { return refuse("source"); }
+    let Some(b) = bindings[t].as_mut() else { return refuse("target") };
+    if !grant_picked(b, &path[..n]) { return refuse("full"); }
+    sex_pdx::serial_record!("[files.dnd.given] from={} to={} path={}", source, target, core::str::from_utf8(&path[..n]).unwrap_or("?"));
+}
 /// The row is running, and running the very run Shell bound: the kernel names its task.
 /// The run holds `+packages`: Spindle put it in the run's arguments for `run +pkg`, and
 /// only Spindle prepares runs, so a program cannot give it to itself.
+fn holds_launch(binding: &Binding) -> bool {
+    binding.args[..binding.args_len].split(|b| *b == b' ').any(|t| t == sex_pdx::console_relay::GRANT_TOKEN)
+}
+#[allow(non_snake_case)]
+fn PROGRAM_INDEX_BASE_PLUS(k: usize) -> u64 { w::PROVIDER_SLOT_BASE + (w::PROGRAM_INDEX_BASE + k) as u64 }
 fn holds_packages(binding: &Binding) -> bool {
     binding.args[..binding.args_len].split(|b| *b == b' ').any(|t| t == sex_pdx::package::GRANT_TOKEN)
+}
+/// The program file a program may PREPARE for a run of its own: `/bin/NAME`, or a path
+/// its grant covers given as `@/path`; None if the arguments carry a grant it lacks.
+fn program_prepare(binding: &Binding, path: &[u8], args: &[u8], out: &mut [u8; w::PATH_BYTES]) -> Option<usize> {
+    let mut scratch = [0u8; w::PATH_BYTES];
+    if !sex_pdx::launch::args_allowed(args, holds_packages(binding), |t| confine(binding, t, &mut scratch).is_some()) { return None; }
+    if path.first() == Some(&b'@') { return confine(binding, path, out); }
+    let name = path.strip_prefix(sex_pdx::program_store::BIN)?;
+    sex_pdx::launch::bin_path(name, out)
 }
 /// A package request from a program holding `+packages`: the argument Files acts on, or
 /// None (refused, logged). Trusting a publisher and the person's answers to grants stay
@@ -524,6 +577,8 @@ fn program_package(binding: &Binding, r: w::Request, arg: &[u8], out: &mut [u8; 
         _ => refuse("unknown"),
     }
 }
+/// Whether `target` still runs `task` (for `console_relay`).
+pub fn live_run(target: u32, task: u32) -> bool { program_live(target, task) }
 fn program_live(target: u32, task: u32) -> bool {
     let Some(row) = sex_pdx::app_catalog::by_target(target) else { return false };
     matches!(sex_pdx::app_lifecycle::catalog(row.lifecycle_slot), Ok(c) if c.is_subject(target, row.surface, 3) && c.task_id == task)
@@ -544,7 +599,13 @@ pub fn handle(caller: u32, a: u64, offset: u64, length: u64) -> u64 {
             let bound = unsafe { (*core::ptr::addr_of!(BINDINGS))[k] };
             // A program may eject (UNMOUNT) a volume its grant covers whole, checked with
             // its other paths below; mounting stays Spindle's.
-            if !bound.is_some_and(|b| program_live(caller, b.task)) || matches!(r.kind, w::PREPARE | w::INSTALL | w::UPDATE | w::MOUNT) { return w::reply(r.seq, w::DENIED, 0); }
+            if !bound.is_some_and(|b| program_live(caller, b.task)) || matches!(r.kind, w::INSTALL | w::UPDATE | w::MOUNT) { return w::reply(r.seq, w::DENIED, 0); }
+            // A terminal the person started with Spindle's `spindle` command may start programs
+            // attached to it (`console_relay`). Any program may PREPARE a run of its own
+            // (`sex_pdx::launch`); `program_prepare` lets it pass on only what it holds.
+            if r.kind == sex_pdx::console_relay::KIND {
+                return crate::console_relay::handle(k, bound.map_or(false, |b| holds_launch(&b)), r, PROGRAM_INDEX_BASE_PLUS(k));
+            }
             // Packages only for a run the person started with `run +pkg` (see `program_package`).
             if r.kind == sex_pdx::package::KIND && !bound.is_some_and(|b| holds_packages(&b)) {
                 sex_pdx::serial_record!("[files.pkg.denied] target={} op={} why=no_grant", caller, r.offset);
@@ -568,6 +629,7 @@ pub fn handle(caller: u32, a: u64, offset: u64, length: u64) -> u64 {
     answer
 }
 fn handle_request(index: usize, program: Option<usize>, r: w::Request) -> u64 {
+    let mut r = r;
     let Ok(view) = sex_pdx::memory_region_view(w::PROVIDER_SLOT_BASE + index as u64, 0, w::REGION_BYTES as u64, QUERY_VIEW | READ | WRITE) else { return w::reply(r.seq, w::IO, 0) };
     let region = unsafe { core::slice::from_raw_parts_mut(view.virtual_address as *mut u8, w::REGION_BYTES) };
     if r.kind == w::READ_IO_STATS {
@@ -630,6 +692,12 @@ fn handle_request(index: usize, program: Option<usize>, r: w::Request) -> u64 {
     let mut path = [0u8; w::PATH_BYTES];
     let mut path_len = r.path_len as usize;
     path[..path_len].copy_from_slice(&region[..path_len]);
+    if r.kind == w::OFFER {
+        let Some(k) = program else { return w::reply(r.seq, w::DENIED, 0) };
+        let binding = unsafe { (*core::ptr::addr_of!(BINDINGS))[k] }.unwrap();
+        let (status, value) = offer(k, &binding, &path[..path_len], &mut region[w::PATH_BYTES..]);
+        return w::reply(r.seq, status, value);
+    }
     if matches!(r.kind, w::PICK | w::PICKED | w::PICKS | w::ANSWER) {
         let (status, value) = picker(program, r, &path[..path_len], &mut region[w::PATH_BYTES..]);
         return w::reply(r.seq, status, value);
@@ -657,12 +725,35 @@ fn handle_request(index: usize, program: Option<usize>, r: w::Request) -> u64 {
         region[w::PATH_BYTES..w::PATH_BYTES + binding.args_len].copy_from_slice(&binding.args[..binding.args_len]);
         return w::reply(r.seq, w::OK, binding.args_len as u32);
     }
-    if let Some(k) = program {
+    // A program's PREPARE is a terminal's (console_relay) unless it says it is a launch.
+    let relay = r.offset != w::PREPARE_LAUNCH;
+    if let (Some(k), w::PREPARE, true) = (program, r.kind, relay) {
+        if !unsafe { (*core::ptr::addr_of!(BINDINGS))[k] }.is_some_and(|b| holds_launch(&b)) { return w::reply(r.seq, w::DENIED, 0); }
+        // A terminal's run: only `/bin/NAME`, with its own words and nothing granted.
+        let name = path[..path_len].strip_prefix(sex_pdx::program_store::BIN);
+        if !name.is_some_and(|n| !n.is_empty() && !n.contains(&b'/')) { return w::reply(r.seq, w::DENIED, 0); }
+        if !crate::console_relay::may_prepare(k) { return w::reply(r.seq, w::PENDING, 0); }
+        let given = (r.length as usize).min(w::ARGS_MAX);
+        let mut words = [0u8; w::ARGS_MAX];
+        words[..given].copy_from_slice(&region[w::PATH_BYTES..w::PATH_BYTES + given]);
+        let n = sex_pdx::console_relay::plain_args(&words[..given], &mut region[w::PATH_BYTES..w::PATH_BYTES + w::ARGS_MAX]);
+        r.length = n as u64;
+        unsafe { PREPARING_FOR = Some(k); }
+    } else if let Some(k) = program {
         // Every path, both halves of a rename too, lands inside the program's folder.
         let binding = unsafe { (*core::ptr::addr_of!(BINDINGS))[k] }.unwrap();
         let mut own = [0u8; w::PATH_BYTES];
         let raw = path;
-        let n = if r.kind == w::RENAME {
+        let n = if r.kind == w::PREPARE {
+            // A program starting a program (`sex_pdx::launch`): a /bin name or a program
+            // file it holds, with only grants it holds itself in the argument line.
+            let args = &region[w::PATH_BYTES..w::PATH_BYTES + (r.length as usize).min(w::ARGS_MAX)];
+            let Some(n) = program_prepare(&binding, &raw[..path_len], args, &mut own) else {
+                sex_pdx::serial_record!("[files.launch.denied] row={}", k);
+                return w::reply(r.seq, w::DENIED, 0);
+            };
+            n
+        } else if r.kind == w::RENAME {
             let Some(split) = raw[..path_len].iter().position(|b| *b == 0) else { return w::reply(r.seq, w::NAME, 0) };
             let mut second = [0u8; w::PATH_BYTES];
             let (Some(a), Some(b)) = (confine(&binding, &raw[..split], &mut own), confine(&binding, &raw[split + 1..path_len], &mut second)) else { return w::reply(r.seq, w::NAME, 0) };
@@ -762,6 +853,12 @@ fn handle_request(index: usize, program: Option<usize>, r: w::Request) -> u64 {
 /// One path waiting for Shell to ask for it, and the ticket that names it.
 static mut PREPARED: ([u8; w::PATH_BYTES], usize, u32) = ([0; w::PATH_BYTES], 0, 0);
 static mut PREPARED_ARGS: ([u8; w::ARGS_MAX], usize) = ([0; w::ARGS_MAX], 0);
+/// The terminal (program row) a PREPARE in progress is for; None for Spindle.
+static mut PREPARING_FOR: Option<usize> = None;
+/// Who prepared the waiting ticket: a terminal's row, or None for Spindle.
+static mut PREPARED_LAUNCHER: Option<usize> = None;
+/// The terminal the program just read was prepared by, until Shell binds it.
+static mut LOADED_LAUNCHER: Option<usize> = None;
 static mut NEXT_TICKET: u32 = 0;
 pub enum Program { Absent, Failed(u32), Loaded(u32) }
 /// Copies a file into `image`. A disk with no filesystem has no such file.
@@ -793,7 +890,7 @@ fn read_program(path: &[u8], image: &mut [u8], remember: bool) -> Program {
 }
 /// A bare name looks in the program directory.
 pub fn read_named(name: &[u8], image: &mut [u8]) -> Program {
-    unsafe { (*core::ptr::addr_of_mut!(LOADED)).1 = 0; (*core::ptr::addr_of_mut!(LOADED_ARGS)).1 = 0; }
+    unsafe { (*core::ptr::addr_of_mut!(LOADED)).1 = 0; (*core::ptr::addr_of_mut!(LOADED_ARGS)).1 = 0; *core::ptr::addr_of_mut!(LOADED_LAUNCHER) = None; }
     use sex_pdx::program_store as store;
     let mut path = [0u8; 32];
     let at = store::BIN.len();
@@ -815,10 +912,20 @@ pub fn read_named_unbound(name:&[u8], image:&mut [u8])->Program {
 /// The prepared path, once. A stale ticket finds nothing. When the path is
 /// `/bin/NAME` and no such file exists, the packed NAME comes back too, so the disk
 /// program store can serve it with the same arguments.
-pub fn read_ticket(ticket: u64, image: &mut [u8]) -> (Program, Option<[u64; 2]>) {
-    unsafe { (*core::ptr::addr_of_mut!(LOADED)).1 = 0; }
+/// The program just asked for could not be loaded: a terminal waiting for it hears so.
+pub fn load_failed() {
+    if let Some(k) = unsafe { core::mem::take(&mut *core::ptr::addr_of_mut!(LOADED_LAUNCHER)) } { crate::console_relay::not_started(k); }
+}
+/// `requester` is the program Shell starts it for (0 for Spindle): a ticket runs only
+/// for whoever prepared it.
+pub fn read_ticket(ticket: u64, requester: u32, image: &mut [u8]) -> (Program, Option<[u64; 2]>) {
+    unsafe { (*core::ptr::addr_of_mut!(LOADED)).1 = 0; *core::ptr::addr_of_mut!(LOADED_LAUNCHER) = None; }
     let prepared = unsafe { &mut *core::ptr::addr_of_mut!(PREPARED) };
     if prepared.1 == 0 || prepared.2 as u64 != ticket { return (Program::Absent, None); }
+    let by = unsafe { PREPARED_LAUNCHER };
+    let asker = if requester == 0 { None } else { match program_index(requester) { Some(k) => Some(k), None => return (Program::Absent, None) } };
+    if by != asker { sex_pdx::serial_record!("[files.ticket.denied] requester={}", requester); return (Program::Absent, None); }
+    unsafe { LOADED_LAUNCHER = by; }
     let len = core::mem::take(&mut prepared.1);
     unsafe { *core::ptr::addr_of_mut!(LOADED_ARGS) = *core::ptr::addr_of!(PREPARED_ARGS); }
     let path = &prepared.0[..len];
@@ -932,6 +1039,9 @@ fn prepare(fs: &mut Fs<'static, Disk>, r: w::Request, path: &[u8], data: &mut [u
             // Never zero, and within the reply's 24 bits.
             let ticket = unsafe { NEXT_TICKET = NEXT_TICKET % 0xFF_FFFE + 1; NEXT_TICKET };
             prepared.2 = ticket;
+            let by = unsafe { core::mem::take(&mut *core::ptr::addr_of_mut!(PREPARING_FOR)) };
+            unsafe { PREPARED_LAUNCHER = by; }
+            if let Some(k) = by { crate::console_relay::prepared(k); }
             // A program a package installed: what it asks for and what the person said.
             let note = path.strip_prefix(sex_pdx::program_store::BIN).and_then(|name| crate::packages::note(fs, name));
             match note { Some(n) => n.encode(data), None => data[..sex_pdx::package::NOTE_BYTES].fill(0) }

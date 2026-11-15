@@ -16,6 +16,7 @@ sex-image = { path = "../sex-image" }
 sex-fetch = { path = "../sex-fetch" }
 
 [features]
+jit-profile = ["baseline-jit"]
 # Experimental forward-control-flow int32/boolean QuickJS bytecode compiler; disabled by default.
 baseline-jit = []
 

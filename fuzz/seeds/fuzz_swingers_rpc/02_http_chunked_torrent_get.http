@@ -1,0 +1,11 @@
+POST /transmission/rpc HTTP/1.1
+Host: localhost:9091
+X-Transmission-Session-Id: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+Transfer-Encoding: chunked
+
+3c
+{"method":"torrent-get","arguments":{"fields":["id","name"]}
+1
+}
+0
+

@@ -66,6 +66,21 @@ pub unsafe extern "C" fn time(out: *mut i64) -> i64 {
     t
 }
 
+/// `gettimeofday` for programs without the POSIX layer (libvpx times its encoder
+/// passes with it); hermit programs get `posix_net`'s.
+#[cfg(target_os = "none")]
+#[repr(C)]
+pub struct timeval { pub tv_sec: i64, pub tv_usec: i64 }
+#[cfg(target_os = "none")]
+#[no_mangle]
+pub unsafe extern "C" fn gettimeofday(tv: *mut timeval, _tz: *mut core::ffi::c_void) -> c_int {
+    if !tv.is_null() {
+        let ns = now().0;
+        unsafe { *tv = timeval { tv_sec: ns.div_euclid(1_000_000_000), tv_usec: ns.rem_euclid(1_000_000_000) / 1000 } };
+    }
+    0
+}
+
 /// Every clock counts from the system tick: one millisecond.
 #[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn clock_getres(_id: c_int, ts: *mut timespec) -> c_int {
