@@ -3,7 +3,7 @@
 plus a PDF and a text file. Files, given that stick, shows it as a grid (Ctrl+G): every
 picture gets a thumbnail within the budget (THUMBS_BUDGET_MS, default 60 s on QEMU's
 software CPU), the text file gets a kind tile, and the screen shows the first pictures'
-colours. The PDF is drawn by Vellum (`pdf --thumb`, run with no window) when the staged
+colours. The PDF is drawn by Vellum (`vellum --thumb`, run with no window) when the staged
 Vellum has --thumb, and otherwise keeps its kind tile. A second Files run opens the same
 folder from the thumbnail cache: nothing is decoded or drawn again, and it is faster."""
 import argparse,os,re,shutil,struct,subprocess,time,zlib
@@ -45,9 +45,9 @@ def main():
  with disk.open('r+b') as f:f.truncate(1024**3)
  scratch=a.out/'host';scratch.mkdir();stick=a.out/'thumbs.img';make_stick(stick,scratch)
  import http.server,threading
- FILES={'/files':(ROOT/'iso_root/programs/loom').read_bytes(),'/pdf':(ROOT/'iso_root/programs/pdf').read_bytes()}
+ FILES={'/files':(ROOT/'iso_root/programs/loom').read_bytes(),'/vellum':(ROOT/'iso_root/programs/vellum').read_bytes()}
  # Vellum on master may predate --thumb; the PDF tile is required once it has it.
- drawn_pdf=b'--thumb' in FILES['/pdf']
+ drawn_pdf=b'--thumb' in FILES['/vellum']
  class Handler(http.server.BaseHTTPRequestHandler):
   def do_GET(self):
    body=FILES.get(self.path)
@@ -78,7 +78,7 @@ def main():
  result={}
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
-  for n,dest in (('files','/bin/loom'),('pdf','/bin/pdf')):
+  for n,dest in (('files','/bin/loom'),('vellum','/bin/vellum')):
    m=expect(f'fetch http://10.0.2.2:{PORT}/{n} {dest}',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240);assert m[1].startswith('Saved'),m[1]
   q.cmd('blockdev-add',{'driver':'raw','node-name':'thumbsdrive','file':{'driver':'file','filename':str(stick)}})
   s=len(t())
@@ -97,7 +97,7 @@ def main():
    if run=='first':
     assert made==N and ms<=budget,m[0]
     assert drawn==(1 if drawn_pdf else 0),(m[0],drawn_pdf)
-    if drawn_pdf:result['pdf_ms']=int(g['wait'](r'\[files.app.thumbs.helper\] program=pdf path=/media/THUMBS/PAPER.PDF ms=(\d+)',s,5)[1])
+    if drawn_pdf:result['pdf_ms']=int(g['wait'](r'\[files.app.thumbs.helper\] program=vellum path=/media/THUMBS/PAPER.PDF ms=(\d+)',s,5)[1])
    else:
     assert cached==N and made==0 and ms<result['first']['ms'],m[0]
     assert drawn==0 and from_cache==(1 if drawn_pdf else 0),(m[0],drawn_pdf)
