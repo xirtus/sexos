@@ -211,6 +211,8 @@ impl Controller {
 
     fn take(&mut self, p: &[u8]) {
         if let Some((h, pb, data)) = hci::parse_acl(p) {
+            // The controller hands the buffer back (Number Of Completed Packets).
+            self.out.push_back(hci::event(hci::ev::NUMBER_OF_COMPLETED_PACKETS, &[1, h as u8, (h >> 8) as u8, 1, 0]));
             let Some(f) = self.rx.push(pb, data) else { return };
             let (cid, payload) = l2cap::parse_frame(&f).unwrap();
             if h == self.le_handle {

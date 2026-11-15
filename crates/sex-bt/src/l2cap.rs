@@ -164,7 +164,14 @@ pub fn commands(payload: &[u8]) -> Vec<(u8, u8, &[u8])> {
 
 /// A connection-oriented channel in basic mode (classic): PSM, our and the peer's channel ids.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Chan { pub psm: u16, pub local: u16, pub remote: u16, ours_done: bool, theirs_done: bool, pub open: bool }
+pub struct Chan { pub psm: u16, pub local: u16, pub remote: u16, ours_done: bool, theirs_done: bool, pub open: bool,
+    /// The largest payload the peer takes on this channel (its MTU option; 672 by default).
+    pub mtu: u16 }
+
+/// The MTU a channel has when its configuration names none.
+pub const DEFAULT_MTU: u16 = 672;
+/// The smallest MTU a classic channel may have.
+pub const MIN_MTU: u16 = 48;
 
 /// What happened to the channels.
 #[derive(Debug, PartialEq, Eq)]
@@ -207,11 +214,20 @@ impl Channels {
     /// Open a channel to `psm`; the signaling payload to send.
     pub fn connect(&mut self, psm: u16) -> Vec<u8> {
         let local = self.cid();
-        self.chans.push(Chan { psm, local, remote: 0, ours_done: false, theirs_done: false, open: false });
+        self.chans.push(Chan { psm, local, remote: 0, ours_done: false, theirs_done: false, open: false, mtu: DEFAULT_MTU });
         let id = self.id();
         let mut d = psm.to_le_bytes().to_vec();
         d.extend_from_slice(&local.to_le_bytes());
         command(sig::CONNECTION_REQUEST, id, &d)
+    }
+
+    /// Close a channel: the signaling payload to send (the channel goes when the peer answers).
+    pub fn disconnect(&mut self, local: u16) -> Option<Vec<u8>> {
+        let c = *self.by_local(local)?;
+        let id = self.id();
+        let mut d = c.remote.to_le_bytes().to_vec();
+        d.extend_from_slice(&c.local.to_le_bytes());
+        Some(command(sig2::DISCONNECTION_REQUEST, id, &d))
     }
 
     fn opened(&mut self, at: usize, out: &mut Vec<ChanEvent>) {
@@ -233,7 +249,7 @@ impl Channels {
                     Ok(()) => {
                         let local = self.cid();
                         self.chans.retain(|c| c.psm != psm || c.open);
-                        self.chans.push(Chan { psm, local, remote: scid, ours_done: false, theirs_done: false, open: false });
+                        self.chans.push(Chan { psm, local, remote: scid, ours_done: false, theirs_done: false, open: false, mtu: DEFAULT_MTU });
                         r.extend_from_slice(&local.to_le_bytes());
                         r.extend_from_slice(&scid.to_le_bytes());
                         r.extend_from_slice(&[0, 0, 0, 0]);
@@ -273,7 +289,14 @@ impl Channels {
                     out.push(ChanEvent::Send(command(sig::COMMAND_REJECT, id, &r)));
                     return Some(out);
                 };
-                // Accept whatever the peer proposes (MTU, flush timeout, QoS): success, no options.
+                // Accept whatever the peer proposes (MTU, flush timeout, QoS): success, no
+                // options. Its MTU option bounds what we send (at least the minimum).
+                let mut o = 4;
+                while let (Some(&kind), Some(&len)) = (data.get(o), data.get(o + 1)) {
+                    let Some(v) = data.get(o + 2..o + 2 + len as usize) else { break };
+                    if kind & 0x7F == 0x01 && len == 2 { self.chans[at].mtu = u16::from_le_bytes([v[0], v[1]]).max(MIN_MTU); }
+                    o += 2 + len as usize;
+                }
                 let mut r = self.chans[at].remote.to_le_bytes().to_vec();
                 r.extend_from_slice(&[0, 0, 0, 0]);
                 out.push(ChanEvent::Send(command(sig2::CONFIGURATION_RESPONSE, id, &r)));
