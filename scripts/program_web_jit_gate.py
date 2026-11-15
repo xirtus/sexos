@@ -56,6 +56,14 @@ def main():
    if enabled:
     assert cache_hits>results[0]['object_cache_hits']+100,cache_hits
     assert int(cache_stats[3])>results[0]['string_concats']+50 and int(cache_stats[4])>results[0]['string_compares']+100,cache_stats.groups()
+   identity=g['wait'](r'\[web.console\] level=0 jit-identity ([^\r\n]+)',start,60)
+   assert identity[1]=='128 1',identity[1]
+   heap_value=g['wait'](r'\[web.console\] level=0 jit-heap-values ([^\r\n]+)',start,60)
+   assert heap_value[1]=='14426496|112|32',heap_value[1]
+   heap=g['wait'](r'\[web.jit.heap\] templates=(\d+) own=(\d+) compare=(\d+) concat=(\d+)',start,60)
+   heap_numbers=list(map(int,heap.groups()))
+   if enabled: assert heap_numbers[0]==3 and min(heap_numbers[1:])>100,heap_numbers
+   else: assert heap_numbers==[0,0,0,0],heap_numbers
    stats=g['wait'](r'\[web.jit\] enabled=(\d+) compiled=(\d+) executed=(\d+) bailouts=(\d+) refused=(\d+) ticks=(\d+) script_ticks=(\d+)',start,60)
    numbers=list(map(int,stats.groups()));assert numbers[0]==int(enabled),numbers
    ready=g['wait'](r'\[web.ready\] target=(\d+) task=(\d+)',start,120);target,task=ready[1],ready[2]
@@ -65,7 +73,7 @@ def main():
     assert numbers[1]>=11 and numbers[2]>=12800 and numbers[3]>=3 and numbers[4]==0,numbers
     assert re.search(rf'\[app.program.code\] target={target} task={task} op=seal ',t()[start:]),'no kernel seal for this domain/run'
    else:assert numbers[1:5]==[0,0,0,0],numbers
-   results.append(dict(string_result=strings[1],string_concats=int(cache_stats[3]),string_compares=int(cache_stats[4]),object_cache_hits=cache_hits,object_cache_result=cache_value[1],enabled=enabled,compiled=numbers[1],executed=numbers[2],bailouts=numbers[3],refused=numbers[4],ticks=numbers[5],script_ticks=numbers[6],result=value[1],target=int(target),task=int(task)))
+   results.append(dict(native_heap=heap_numbers,native_heap_result=heap_value[1],string_result=strings[1],string_concats=int(cache_stats[3]),string_compares=int(cache_stats[4]),object_cache_hits=cache_hits,object_cache_result=cache_value[1],enabled=enabled,compiled=numbers[1],executed=numbers[2],bailouts=numbers[3],refused=numbers[4],ticks=numbers[5],script_ticks=numbers[6],result=value[1],target=int(target),task=int(task)))
    g['focus'](int(launch[1]));q.key('f11');g['wait'](rf'\[web.closed\] target={target} task={task}',start,60)
    g['wait'](rf'\[app.private.retired\] target={target} task={task} ',start,120)
   assert '[web.fatal]' not in t() and 'KERNEL PANIC' not in t()

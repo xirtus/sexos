@@ -691,6 +691,11 @@ impl Browser {
                 }
             }
             let s = script.jit_stats();
+            #[cfg(feature = "jit-profile")]
+            for (calls,len,prefix) in s.non_scalar_hot {
+                if calls != 0 { sex_pdx::serial_record!("[web.jit.non-scalar] calls={} len={} prefix={:?}",calls,len,prefix); }
+            }
+            sex_pdx::serial_record!("[web.jit.heap.departure] templates={} own={} compare={} concat={} url={}", s.heap_templates, s.heap_executed[0], s.heap_executed[1], s.heap_executed[2], self.url);
             sex_pdx::serial_record!("[web.jit.departure] enabled={} compiled={} executed={} considered={} non_scalar={} cache_full={} unsupported={} hottest={} captured={} execution_ns={} url={}", self.jit_enabled as u8, s.compiled, s.executed, s.considered, s.non_scalar, s.cache_full, s.unsupported, s.hottest, s.compiled_captured, script.execution_ns(), self.url);
         }
         if self.in_frame.is_none() { self.status = Some("Loading…"); }
@@ -922,6 +927,7 @@ impl Browser {
             if self.jit_enabled {
                 sex_pdx::serial_record!("[web.jit.admission] considered={} non_scalar={} cache_full={} unsupported={} hottest={} rejected_len={} prefix={:?}", stats.considered, stats.non_scalar, stats.cache_full, stats.unsupported, stats.hottest, stats.rejected_len, stats.rejected_prefix);
             }
+            sex_pdx::serial_record!("[web.jit.heap] templates={} own={} compare={} concat={}", stats.heap_templates, stats.heap_executed[0], stats.heap_executed[1], stats.heap_executed[2]);
             sex_pdx::serial_record!("[web.jit] enabled={} compiled={} executed={} bailouts={} refused={} ticks={} script_ticks={} native={} url={}", self.jit_enabled as u8, stats.compiled, stats.executed, stats.bailouts, stats.refused, sex_pdx::get_ticks() - started, sex_pdx::get_ticks() - scripts_started, Script::<Document>::NATIVE as u8, self.url);
         }
         self.script_scroll = 0;

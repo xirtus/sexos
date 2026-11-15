@@ -68,4 +68,25 @@ const stringLeft={valueOf(){stringOrder.push('left');return 'a';}};
 const stringRight={valueOf(){stringOrder.push('right');return 'b';}};
 const stringCoerced=stringLeft+stringRight;
 console.log('jit-strings',[stringLength,stringCodes,stringComparisons.join(','),stringCoerced,stringOrder.join(',')].join('|'));
+
+function nativeJoin(a,b){return a+b;}
+function nativeLess(a,b){return a<b;}
+function nativeEqual(a,b){return a===b;}
+let heapCodes=0,heapLess=0,heapEqual=0;
+for(let round=0;round<4;round++)for(const a of stringWords)for(const b of stringWords){
+ const joined=nativeJoin(a,b);
+ if(joined!==a+b || nativeLess(a,b)!==(a<b) || nativeEqual(a,b)!==(a===b))throw Error('native heap mismatch');
+ for(let i=0;i<joined.length;i++)heapCodes+=joined.charCodeAt(i);
+ heapLess+=nativeLess(a,b)?1:0;heapEqual+=nativeEqual(a,b)?1:0;
+}
+if(nativeJoin('x'.repeat(256),'y').length!==257)throw Error('bounded fallback');
+console.log('jit-heap-values',[heapCodes,heapLess,heapEqual].join('|'));
+
+function nativeIdentity(o){return o!=null && o===o.self;}
+let identityObject={self:null},identityYes=0;
+for(let i=0;i<256;i++){identityObject.self=(i&1)?identityObject:null;identityYes+=nativeIdentity(identityObject)?1:0;}
+if(identityYes!==128 || nativeIdentity(null) || nativeIdentity(undefined))throw Error('identity');
+let identityGets=0;Object.defineProperty(identityObject,'self',{get(){identityGets++;return identityObject;}});
+if(!nativeIdentity(identityObject)||identityGets!==1)throw Error('identity getter');
+console.log('jit-identity',identityYes,identityGets);
 </script>

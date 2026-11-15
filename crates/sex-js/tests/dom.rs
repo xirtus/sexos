@@ -1728,3 +1728,37 @@ fn element_matches_and_closest_test_only_the_element() {
     "#, "matches.js").unwrap();
     assert_eq!(logs(&mut s),["0:true false SECTION","0:true true","0:1","0:2"]);
 }
+
+#[cfg(feature = "baseline-jit")]
+#[test]
+fn native_heap_helpers_match_interpreter() {
+    let source = r#"const stringWords=['','a','é','Ā','\ud800','\udfff','😀','\0'];
+function nativeIdentity(o){return o!=null && o===o.self;}
+let identityObject={self:null},identityYes=0;
+for(let i=0;i<256;i++){identityObject.self=(i&1)?identityObject:null;identityYes+=nativeIdentity(identityObject)?1:0;}
+if(identityYes!==128 || nativeIdentity(null) || nativeIdentity(undefined))throw Error('identity');
+let identityGets=0;Object.defineProperty(identityObject,'self',{get(){identityGets++;return identityObject;}});
+if(!nativeIdentity(identityObject)||identityGets!==1)throw Error('identity getter');
+console.log('jit-identity',identityYes,identityGets);
+
+
+function nativeJoin(a,b){return a+b;}
+function nativeLess(a,b){return a<b;}
+function nativeEqual(a,b){return a===b;}
+let heapCodes=0,heapLess=0,heapEqual=0;
+for(let round=0;round<4;round++)for(const a of stringWords)for(const b of stringWords){
+ const joined=nativeJoin(a,b);
+ if(joined!==a+b || nativeLess(a,b)!==(a<b) || nativeEqual(a,b)!==(a===b))throw Error('native heap mismatch');
+ for(let i=0;i<joined.length;i++)heapCodes+=joined.charCodeAt(i);
+ heapLess+=nativeLess(a,b)?1:0;heapEqual+=nativeEqual(a,b)?1:0;
+}
+if(nativeJoin('x'.repeat(256),'y').length!==257)throw Error('bounded fallback');
+console.log('jit-heap-values',[heapCodes,heapLess,heapEqual].join('|'));
+"#;
+    let mut off=page(""); off.set_jit_enabled(false);
+    off.eval(source,"native-heap.js").unwrap();
+    let mut on=page(""); on.eval(source,"native-heap.js").unwrap();
+    assert_eq!(logs(&mut on),logs(&mut off));
+    #[cfg(all(target_arch="x86_64",target_os="linux"))]
+    { let s=on.jit_stats(); assert!(s.heap_executed[0]>100 && s.heap_executed[1]>100 && s.heap_executed[2]>100,"{s:?}"); }
+}

@@ -2,13 +2,16 @@
 //! Experimental QuickJS bytecode baseline JIT. Only pure, bounded
 //! int32/boolean functions with forward-only control flow are compiled. The caller retains QuickJS's interrupt polling;
 //! unknown operations, non-int arguments, overflow and multiplication by zero
-//! bail out before any observable effect. Guest pointers never enter generated code.
+//! bail out before any observable effect. The separate heap tier admits complete
+//! getters/string helpers and borrows only host-validated linear-memory ranges.
 use alloc::vec::Vec;
 #[path = "jit_opcodes.rs"]
 #[allow(dead_code)]
 mod op;
 #[path = "jit_flow.rs"]
 mod flow;
+#[path = "jit_heap.rs"]
+mod heap;
 use flow::{Kind, Op};
 
 const HOT: u16 = 32;
@@ -18,6 +21,10 @@ const STACK: usize = 16;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Stats {
+    pub heap_templates: u64,
+    #[cfg(feature = "jit-profile")]
+    pub non_scalar_hot: [(u32, u32, [u8; 32]); 8],
+    pub heap_executed: [u64; 3],
     pub compiled: u64,
     pub compiled_captured: u64,
     pub executed: u64,
@@ -36,6 +43,9 @@ pub(crate) struct Jit {
     pub enabled: bool,
     pub stats: Stats,
     entries: Vec<Entry>,
+    heap: heap::Heap,
+    #[cfg(feature = "jit-profile")]
+    non_scalar_sites: Vec<(Vec<u8>, u32)>,
 }
 struct Entry {
     bytecode: Vec<u8>,
@@ -51,11 +61,36 @@ impl Default for Jit {
             enabled: true,
             stats: Stats::default(),
             entries: Vec::new(),
+            heap: heap::Heap::default(),
+            #[cfg(feature = "jit-profile")]
+            non_scalar_sites: Vec::new(),
         }
     }
 }
 
 impl Jit {
+    pub fn snapshot(&self) -> Stats {
+        #[allow(unused_mut)]
+        let mut stats=self.stats;
+        #[cfg(feature="jit-profile")]
+        {
+            let mut top: Vec<_> = self.non_scalar_sites.iter().collect();
+            top.sort_unstable_by_key(|e| core::cmp::Reverse(e.1));
+            for (out,e) in stats.non_scalar_hot.iter_mut().zip(top) {
+                *out=(e.1,e.0.len() as u32,[0;32]);
+                let n=e.0.len().min(32);out.2[..n].copy_from_slice(&e.0[..n]);
+            }
+        }
+        stats
+    }
+    pub fn run_heap(&mut self, data: &mut [u8], kind: u32, descriptor: u32, out: u32) -> u32 {
+        if !self.enabled { return 0; }
+        let (result, compiled) = self.heap.run(data, kind, descriptor, out);
+        self.stats.heap_templates += u64::from(compiled);
+        if result == 1 { self.stats.heap_executed[kind as usize] += 1; }
+        result
+    }
+
     /// All offsets and JSValue tags are validated before compiling or calling code.
     /// The copied arguments are the only memory generated code may read.
     #[cfg(test)]
@@ -99,6 +134,18 @@ impl Jit {
             if typed && tag == 1 && matches!(payload, 0 | 1) { bool_mask |= 1 << i; }
             else if tag != 0 {
                 self.stats.non_scalar += 1;
+                #[cfg(feature = "jit-profile")]
+                {
+                    // Bounded resident counts, not estimates of CPU time. Record
+                    // bytecode (not object data) to choose the next useful lowering.
+                    let slot = if let Some(i) = self.non_scalar_sites.iter().position(|e| e.0 == bc) { Some(i) }
+                    else if self.non_scalar_sites.len() < 64 {
+                        self.non_scalar_sites.push((bc.to_vec(),0)); Some(self.non_scalar_sites.len()-1)
+                    } else { None };
+                    if let Some(i) = slot {
+                        self.non_scalar_sites[i].1 = self.non_scalar_sites[i].1.saturating_add(1);
+                    }
+                }
                 return 0;
             }
             copied[i] = i32::from_le_bytes(a[..4].try_into().unwrap());
@@ -309,6 +356,9 @@ impl Executable {
         code.load(bytes).ok()?;
         Some(Self(code))
     }
+    unsafe fn call_heap(&self, args: &[usize; 8], result: *mut u8) -> u32 {
+        unsafe { self.0.entry::<unsafe extern "C" fn(*const usize, *mut u8) -> u32>(0)(args.as_ptr(), result) }
+    }
     fn call(&self, args: &[i32; 8], result: &mut i32) -> u32 {
         // SAFETY: the complete emitter is restricted to bounded arithmetic/boolean forward control flow and
         // checked argument slots; the only store targets this live result.
@@ -358,6 +408,10 @@ impl Executable {
             Some(Self(p))
         }
     }
+    unsafe fn call_heap(&self, args: &[usize; 8], result: *mut u8) -> u32 {
+        let f: unsafe extern "C" fn(*const usize, *mut u8) -> u32 = unsafe { core::mem::transmute(self.0) };
+        unsafe { f(args.as_ptr(), result) }
+    }
     fn call(&self, args: &[i32; 8], result: &mut i32) -> u32 {
         unsafe {
             let f: unsafe extern "C" fn(*const i32, *mut i32) -> i32 = core::mem::transmute(self.0);
@@ -383,6 +437,7 @@ impl Executable {
     fn new(_: &[u8]) -> Option<Self> {
         None
     }
+    unsafe fn call_heap(&self, _: &[usize; 8], _: *mut u8) -> u32 { 0 }
     fn call(&self, _: &[i32; 8], _: &mut i32) -> u32 {
         0
     }

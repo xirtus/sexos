@@ -128,7 +128,7 @@ extern "C" fn w2c_wasi__snapshot__preview1_fd_seek(_: *mut Ctx, _fd: u32, _o: u6
 
 #[no_mangle]
 unsafe extern "C" fn w2c_dom_jit_available(ctx: *mut Ctx) -> u32 {
-    #[cfg(feature = "baseline-jit")] { if unsafe { (*ctx).jit.enabled } {3} else {0} }
+    #[cfg(feature = "baseline-jit")] { if unsafe { (*ctx).jit.enabled } {4} else {0} }
     #[cfg(not(feature = "baseline-jit"))] { let _ = ctx; 0 }
 }
 
@@ -155,6 +155,23 @@ unsafe extern "C" fn w2c_dom_jit_v3(ctx: *mut Ctx, pc: u32, len: u32, argv: u32,
     }
     #[cfg(not(feature = "baseline-jit"))]
     { let _ = (ctx, pc, len, argv, argc, out); 0 }
+}
+
+#[no_mangle]
+unsafe extern "C" fn w2c_dom_jit_heap_v1(ctx: *mut Ctx, kind: u32, descriptor: u32, out: u32) -> u32 {
+    #[cfg(feature = "baseline-jit")]
+    {
+        let ctx = unsafe { &mut *ctx };
+        let data = unsafe { memory(ctx) };
+        #[cfg(feature = "jit-profile")]
+        let before = unsafe { (*ctx.page).now_ns() };
+        let result = ctx.jit.run_heap(data, kind, descriptor, out);
+        #[cfg(feature = "jit-profile")]
+        ctx.profile.jit(unsafe { (*ctx.page).now_ns() }.saturating_sub(before));
+        result
+    }
+    #[cfg(not(feature = "baseline-jit"))]
+    { let _ = (ctx, kind, descriptor, out); 0 }
 }
 
 /// One instance of the native engine, with the page it serves.
@@ -185,7 +202,7 @@ impl<P: Page + 'static> Native<P> {
     #[cfg(feature = "baseline-jit")]
     pub fn set_jit_enabled(&mut self, enabled: bool) { unsafe { (*self.ctx).jit.enabled = enabled; } }
     #[cfg(feature = "baseline-jit")]
-    pub fn jit_stats(&self) -> super::baseline::Stats { unsafe { (*self.ctx).jit.stats } }
+    pub fn jit_stats(&self) -> super::baseline::Stats { unsafe { (*self.ctx).jit.snapshot() } }
     #[cfg(feature = "baseline-jit")]
     pub fn guest_fast_path_stats(&mut self) -> Result<[u64; 4], Error> {
         let at = self.run(|i, o| unsafe { sxn_own_cache_stats(i, o) })? as usize;

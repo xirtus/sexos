@@ -17,7 +17,7 @@ sex-fetch = { path = "../sex-fetch" }
 
 [features]
 jit-profile = ["baseline-jit"]
-# Experimental forward-control-flow int32/boolean QuickJS bytecode compiler; disabled by default.
+# Experimental scalar CFG compiler and bounded native object/string helpers; disabled by default.
 baseline-jit = []
 
 [target.'cfg(target_os = "none")'.dependencies]

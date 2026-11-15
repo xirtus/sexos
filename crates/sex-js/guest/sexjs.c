@@ -236,7 +236,7 @@ static int hold_import(JSContext *c, const char *base, const char *spec, JSValue
 
 // Loads the held imports whose graphs are complete. Returns how many are still held.
 EXPORT("sx_modules_ready") int sx_modules_ready(int budget_ms) {
-    sexos_baseline_jit_enabled = host_jit_available() == 3;
+    sexos_baseline_jit_enabled = host_jit_available() == 4;
     deadline_ns = budget_ms > 0 ? now_ns() + (int64_t)budget_ms * 1000000 : 0;
     Held *list = held, *keep = NULL;
     held = NULL;
@@ -268,7 +268,7 @@ EXPORT("sx_modules_ready") int sx_modules_ready(int budget_ms) {
 }
 
 EXPORT("sx_init") int sx_init(int memory_limit) {
-    sexos_baseline_jit_enabled = host_jit_available() == 3;
+    sexos_baseline_jit_enabled = host_jit_available() == 4;
     rt = JS_NewRuntime();
     if (!rt) return -1;
     if (memory_limit > 0) JS_SetMemoryLimit(rt, (size_t)memory_limit);
@@ -341,7 +341,7 @@ static void report_script(int mode) {
 
 // Evaluates source as a classic script. 0 on success, -1 after reporting an exception.
 EXPORT("sx_eval") int sx_eval(const char *src, int len, const char *name, int name_len, int budget_ms, int error_mode) {
-    sexos_baseline_jit_enabled = host_jit_available() == 3;
+    sexos_baseline_jit_enabled = host_jit_available() == 4;
     char file[128];
     int fl = name_len < 127 ? name_len : 127;
     memcpy(file, name, (size_t)fl); file[fl] = 0;
@@ -369,7 +369,7 @@ EXPORT("sx_eval") int sx_eval(const char *src, int len, const char *name, int na
 // 0 runs it. `name` is its address, the base for its imports. 0 on success, -1 after
 // reporting an exception (or, discovering, on any failure).
 EXPORT("sx_module") int sx_module(const char *src, int len, const char *name, int name_len, int budget_ms, int discover) {
-    sexos_baseline_jit_enabled = host_jit_available() == 3;
+    sexos_baseline_jit_enabled = host_jit_available() == 4;
     char *file = malloc((size_t)name_len + 1);
     char *code = malloc((size_t)len + 1);
     if (!file || !code) { free(file); free(code); return -1; }
@@ -424,7 +424,7 @@ EXPORT("sx_module") int sx_module(const char *src, int len, const char *name, in
 
 // Calls the prelude's dispatcher with one string argument; returns its integer result.
 EXPORT("sx_dispatch") int sx_dispatch(const char *arg, int len, int budget_ms) {
-    sexos_baseline_jit_enabled = host_jit_available() == 3;
+    sexos_baseline_jit_enabled = host_jit_available() == 4;
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue fn = JS_GetPropertyStr(ctx, global, "__sx_dispatch");
     int out = 0;

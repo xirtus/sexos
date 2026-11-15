@@ -459,7 +459,7 @@ impl<P: Page + 'static> Script<P> {
     #[cfg(feature = "baseline-jit")]
     pub fn jit_stats(&self) -> baseline::Stats {
         match &self.vm {
-            Vm::Wasmi(w) => w.store.data().jit.stats,
+            Vm::Wasmi(w) => w.store.data().jit.snapshot(),
             #[cfg(sexjs_native)] Vm::Native(v) => v.jit_stats(),
         }
     }
@@ -524,10 +524,10 @@ fn link<P: Page + 'static>(linker: &mut Linker<State<P>>) -> Result<(), wasmi::e
         let at = out as u32 as usize;
         if let Some(dst) = data.get_mut(at..at + r.len()) { dst.copy_from_slice(&r); }
     })?;
-    // Protocol 3 supplies scalar argument/closure snapshots. Older guests
+    // Protocol 4 adds bounded heap helpers to the scalar snapshot protocol. Older guests
     // keep interpreter fallback rather than passing a different input shape.
     linker.func_wrap("dom", "jit_available", |c: C<'_, P>| -> i32 {
-        #[cfg(feature = "baseline-jit")] { if c.data().jit.enabled {3} else {0} }
+        #[cfg(feature = "baseline-jit")] { if c.data().jit.enabled {4} else {0} }
         #[cfg(not(feature = "baseline-jit"))] { let _ = c; 0 }
     })?;
     linker.func_wrap("dom", "jit", |_: C<'_, P>, _: i32, _: i32, _: i32, _: i32, _: i32| -> i32 { 0 })?;
@@ -546,6 +546,21 @@ fn link<P: Page + 'static>(linker: &mut Linker<State<P>>) -> Result<(), wasmi::e
         }
         #[cfg(not(feature = "baseline-jit"))]
         { let _ = (&mut c, pc, len, argv, argc, out); 0 }
+    })?;
+    linker.func_wrap("dom", "jit_heap_v1", |mut c: C<'_, P>, kind: i32, descriptor: i32, out: i32| -> i32 {
+        #[cfg(feature = "baseline-jit")]
+        {
+            let Some(m) = mem(&c) else { return 0 };
+            let (data, state) = m.data_and_store_mut(&mut c);
+            #[cfg(feature = "jit-profile")]
+            let before = state.page.now_ns();
+            let result = state.jit.run_heap(data, kind as u32, descriptor as u32, out as u32) as i32;
+            #[cfg(feature = "jit-profile")]
+            state.profile.jit(state.page.now_ns().saturating_sub(before));
+            result
+        }
+        #[cfg(not(feature = "baseline-jit"))]
+        { let _ = (&mut c, kind, descriptor, out); 0 }
     })?;
     const W: &str = "wasi_snapshot_preview1";
     linker.func_wrap(W, "clock_time_get", |mut c: C<'_, P>, _id: i32, _p: i64, at: i32| -> i32 {

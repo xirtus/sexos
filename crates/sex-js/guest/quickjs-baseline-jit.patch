@@ -78,10 +78,106 @@
                  return js_dup(pr->u.value);
              }
          }
-@@ -16487,6 +16543,26 @@
+@@ -16406,6 +16462,94 @@
+ }
+ 
+ /* argv[] is modified if (flags & JS_CALL_FLAG_COPY_ARGV) = 0. */
++/* Only complete, effect-free helpers are admitted. The native path borrows
++   live guest storage synchronously; QuickJS keeps ownership and duplicates the
++   loaded value after a successful guard. No prototype/accessor/coercion calls. */
++__attribute__((import_module("dom"), import_name("jit_heap_v1")))
++extern int sexos_jit_heap(int kind, const uint32_t *descriptor, void *out);
++static bool sexos_heap_helper(JSContext *ctx, JSFunctionBytecode *b,
++                              JSValueConst this_obj, JSValueConst *argv,
++                              JSValue *out)
++{
++    const uint8_t *bc = b->byte_code_buf;
++    uint32_t d[6];
++    if (b->closure_var_count != 0) return false;
++    /* Observed real-page predicate: o != null && o === o.<own field>.
++       Only the object arm is admitted; null/primitive inputs keep fallback.
++       The exact short-circuit target must be the final return. */
++    bool identity = b->byte_code_len == 16 && b->arg_count >= 1 &&
++        bc[0] == OP_get_arg0 && bc[1] == OP_null && bc[2] == OP_neq &&
++        bc[3] == OP_dup && bc[4] == OP_if_false8 && bc[5] == 10 &&
++        bc[6] == OP_drop && bc[7] == OP_get_arg0 && bc[8] == OP_get_arg0 &&
++        bc[9] == OP_get_field && bc[14] == OP_strict_eq && bc[15] == OP_return;
++    if (identity || (b->byte_code_len == 7 && bc[1] == OP_get_field && bc[6] == OP_return)) {
++        JSValueConst obj;
++        if (bc[0] == OP_push_this) obj = this_obj;
++        else if (bc[0] >= OP_get_arg0 && bc[0] <= OP_get_arg3 &&
++                 bc[0] - OP_get_arg0 < b->arg_count) obj = argv[bc[0] - OP_get_arg0];
++        else return false;
++        if (JS_VALUE_GET_TAG(obj) != JS_TAG_OBJECT) return false;
++        JSObject *p = JS_VALUE_GET_OBJ(obj);
++        if (p->is_exotic || p->class_id != JS_CLASS_OBJECT) return false;
++        JSAtom atom = get_u32(bc + (identity ? 10 : 2));
++        uint32_t index = sexos_own_cache_index(p, atom);
++        uint32_t slot = sexos_own_cache[index].slot;
++        if (slot >= p->shape->prop_count || sexos_own_cache[index].atom != atom)
++            return false;
++        JSShapeProperty *prs = &p->shape->prop[slot];
++        d[0] = (uintptr_t)&p->shape;
++        d[1] = (uintptr_t)&prs->atom;
++        d[2] = (uintptr_t)&p->prop[slot].u.value;
++        d[3] = sexos_own_cache[index].shape;
++        d[4] = atom;
++        d[5] = prs->flags;
++        JSValue value;
++        if (!sexos_jit_heap(0, d, &value)) return false;
++        *out = identity ? JS_NewBool(ctx, JS_VALUE_GET_TAG(value) == JS_TAG_OBJECT &&
++                                      JS_VALUE_GET_OBJ(value) == p) : js_dup(value);
++        return true;
++    }
++    if (b->byte_code_len != 4 || bc[3] != OP_return ||
++        bc[0] < OP_get_arg0 || bc[0] > OP_get_arg3 ||
++        bc[1] < OP_get_arg0 || bc[1] > OP_get_arg3 ||
++        bc[0] - OP_get_arg0 >= b->arg_count || bc[1] - OP_get_arg0 >= b->arg_count)
++        return false;
++    int op = bc[2];
++    if (op != OP_add && op != OP_lt && op != OP_lte && op != OP_gt && op != OP_gte &&
++        op != OP_eq && op != OP_neq && op != OP_strict_eq && op != OP_strict_neq)
++        return false;
++    JSValueConst a = argv[bc[0] - OP_get_arg0], c = argv[bc[1] - OP_get_arg0];
++    if (JS_VALUE_GET_TAG(a) != JS_TAG_STRING || JS_VALUE_GET_TAG(c) != JS_TAG_STRING)
++        return false;
++    JSString *s1 = JS_VALUE_GET_STRING(a), *s2 = JS_VALUE_GET_STRING(c);
++    if (s1->len > 256 || s2->len > 256) return false;
++    d[0] = (uintptr_t)(s1->is_wide_char ? (void *)str16(s1) : (void *)str8(s1));
++    d[1] = s1->len; d[2] = s1->is_wide_char;
++    d[3] = (uintptr_t)(s2->is_wide_char ? (void *)str16(s2) : (void *)str8(s2));
++    d[4] = s2->len; d[5] = s2->is_wide_char;
++    if (op == OP_add) {
++        /* Scratch belongs to this Wasm instance. Native copy cannot re-enter.
++           js_new_string16_len only allocates/copies and does not run JS. */
++        uint16_t scratch[256];
++        if (s1->len + s2->len > 256 || !sexos_jit_heap(2, d, scratch)) return false;
++        *out = js_new_string16_len(ctx, scratch, s1->len + s2->len);
++    } else {
++        int cmp;
++        if (!sexos_jit_heap(1, d, &cmp)) return false;
++        bool result;
++        switch (op) {
++        case OP_lt: result = cmp < 0; break;
++        case OP_lte: result = cmp <= 0; break;
++        case OP_gt: result = cmp > 0; break;
++        case OP_gte: result = cmp >= 0; break;
++        case OP_eq: case OP_strict_eq: result = cmp == 0; break;
++        default: result = cmp != 0; break;
++        }
++        *out = JS_NewBool(ctx, result);
++    }
++    return true;
++}
++
+ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
+                                JSValueConst this_obj, JSValueConst new_target,
+                                int argc, JSValueConst *argv, int flags)
+@@ -16486,6 +16630,28 @@
+                          argv, flags);
      }
      b = p->u.func.function_bytecode;
- 
++
 +    /* The host admits only side-effect-free bytecode. Capture scalar inputs
 +       afresh on every call; no QuickJS pointer is given to generated code. */
 +    extern int sexos_baseline_jit_enabled;
@@ -91,6 +187,8 @@
 +        b->byte_code_len <= 128) {
 +        __attribute__((import_module("dom"), import_name("jit_v3")))
 +        extern int sexos_jit(const uint8_t *, int, JSValueConst *, int, int32_t *);
++        JSValue heap_result;
++        if (sexos_heap_helper(b->realm, b, this_obj, argv, &heap_result)) return heap_result;
 +        JSValue snapshot[8];
 +        for (int j = 0; j < b->arg_count; j++) snapshot[j] = argv[j];
 +        for (int j = 0; j < b->closure_var_count; j++)
@@ -101,11 +199,10 @@
 +        if (kind == 1) return JS_NewInt32(caller_ctx, result);
 +        if (kind == 2) return JS_NewBool(caller_ctx, result);
 +    }
-+
+ 
      if (unlikely(argc < b->arg_count || (flags & JS_CALL_FLAG_COPY_ARGV))) {
          arg_allocated_size = b->arg_count;
-     } else {
-@@ -18194,6 +18270,21 @@
+@@ -18194,6 +18360,21 @@
                      sp[-2] = js_float64(JS_VALUE_GET_FLOAT64(op1) +
                                          JS_VALUE_GET_FLOAT64(op2));
                      sp--;
@@ -127,7 +224,7 @@
                  } else {
                  add_slow:
                      sf->cur_pc = pc;
-@@ -18617,6 +18708,19 @@
+@@ -18617,6 +18798,19 @@
                  if (likely(JS_VALUE_IS_BOTH_INT(op1, op2))) {           \
                      sp[-2] = js_bool(JS_VALUE_GET_INT(op1) binary_op JS_VALUE_GET_INT(op2)); \
                      sp--;                                               \
