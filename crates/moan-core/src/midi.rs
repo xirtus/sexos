@@ -55,6 +55,14 @@ pub enum Error {
     Memory,
     Instrument,
 }
+/// Direct rational eighth-note positions. Never accumulate rounded step lengths.
+/// Sixteen steps cover two 4/4 bars; UI tempo is displayed, not a decorative knob.
+pub fn step_frame(bpm: u16, step: u32) -> Result<u32, Error> {
+    if !(30..=240).contains(&bpm) || step > 16 {
+        return Err(Error::Range);
+    }
+    Ok((RATE as u64 * 30 * step as u64 / bpm as u64) as u32)
+}
 impl Pattern {
     /// Stable metadata fingerprint for save/reopen receipts; not authentication.
     pub fn fingerprint(&self) -> u64 {

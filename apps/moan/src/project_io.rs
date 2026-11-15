@@ -215,6 +215,31 @@ pub fn log(app: &mut App, studio: &Studio) {
         (piano.w * scale) as i32,
         (piano.h * scale) as i32
     );
+    for (name, id) in [
+        ("step_gate", studio.gate),
+        ("step_velocity", studio.step_velocity),
+    ] {
+        let rect = app.ui.rect(id);
+        sex_pdx::serial_record!(
+            "[moan.slider] name={} x={} y={} w={} h={} value={}",
+            name,
+            (rect.x * scale) as i32,
+            (rect.y * scale) as i32,
+            (rect.w * scale) as i32,
+            (rect.h * scale) as i32,
+            app.ui.value(id) as u32
+        );
+    }
+    let steps = app.ui.rect(studio.steps);
+    sex_pdx::serial_record!(
+        "[moan.steps] x={} y={} w={} h={} gate={} velocity={}",
+        (steps.x * scale) as i32,
+        (steps.y * scale) as i32,
+        (steps.w * scale) as i32,
+        (steps.h * scale) as i32,
+        studio.note_gate,
+        studio.note_velocity
+    );
     if let Some(pattern) = studio
         .session
         .midi_clip()
