@@ -143,6 +143,7 @@ members = [
     "apps/moan",
     "apps/moanplug",
     "apps/moanrack",
+    "apps/ribbon-seal",
     "crates/sex-xml",
     "crates/sex-ebook",
     "apps/bodice",
