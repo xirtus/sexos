@@ -4,6 +4,7 @@
 extern crate alloc;
 pub mod meter_history;
 pub mod piano;
+pub mod plugin_pixels;
 pub mod plugins;
 pub mod project;
 #[cfg(feature = "sexos")]
@@ -138,13 +139,13 @@ impl Session {
         out: &mut [Frame],
         tap: impl FnMut(usize, Frame),
     ) {
-        moan_core::render_processed_observed(&mut self.tracks, start, out, tap);
-        for frame in out {
-            for sample in frame {
-                *sample =
-                    (*sample as i32 * self.master_volume as i32 / 100).clamp(-32768, 32767) as i16;
-            }
-        }
+        moan_core::render_processed_observed_master(
+            &mut self.tracks,
+            start,
+            out,
+            self.master_volume,
+            tap,
+        );
     }
     pub fn is_dirty(&self) -> bool {
         self.revision != self.saved_revision
@@ -627,6 +628,8 @@ pub struct Studio {
     drag: Option<Drag>,
     pending: Option<(weft::DialogId, Action)>,
     busy: bool,
+    mix_live: bool,
+    live_mix_checkpoint: bool,
     pub session: Session,
     pub timeline: Id,
     pub status: Id,
@@ -1089,6 +1092,8 @@ impl Studio {
             drag: None,
             pending: None,
             busy: false,
+            mix_live: false,
+            live_mix_checkpoint: false,
             session: Session::default(),
             timeline,
             status,
@@ -1182,9 +1187,18 @@ impl Studio {
         }
     }
     pub fn set_busy(&mut self, ui: &mut Ui, busy: bool) {
-        if self.busy == busy {
+        self.set_activity(ui, busy, false);
+    }
+    /// Live mix changes affect only future rendered blocks. Source edits, file
+    /// operations and recording/plugin jobs retain the destructive-edit lock.
+    pub fn set_activity(&mut self, ui: &mut Ui, busy: bool, live_mix: bool) {
+        if self.busy == busy && self.mix_live == live_mix {
             return;
         }
+        if self.mix_live != live_mix {
+            self.live_mix_checkpoint = false;
+        }
+        self.mix_live = live_mix;
         self.busy = busy;
         if busy {
             self.drag = None;
@@ -1219,11 +1233,20 @@ impl Studio {
             .chain(self.mixer_pan.iter())
             .enumerate()
         {
-            ui.set_enabled(*id, !busy && index % MAX_TRACKS < self.session.tracks.len());
+            ui.set_enabled(
+                *id,
+                (!busy || live_mix) && index % MAX_TRACKS < self.session.tracks.len(),
+            );
         }
         for i in 0..MAX_TRACKS {
-            ui.set_enabled(self.mixer_mute[i], !busy && i < self.session.tracks.len());
-            ui.set_enabled(self.mixer_solo[i], !busy && i < self.session.tracks.len());
+            ui.set_enabled(
+                self.mixer_mute[i],
+                (!busy || live_mix) && i < self.session.tracks.len(),
+            );
+            ui.set_enabled(
+                self.mixer_solo[i],
+                (!busy || live_mix) && i < self.session.tracks.len(),
+            );
             ui.set_enabled(
                 self.track_buttons[i],
                 !busy && i < self.session.tracks.len(),
@@ -1264,7 +1287,39 @@ impl Studio {
         ] {
             ui.commands.set_enabled(command, !busy);
         }
+        for id in [
+            self.volume,
+            self.pan,
+            self.master_level,
+            self.mute,
+            self.solo,
+        ] {
+            ui.set_enabled(id, !busy || live_mix);
+        }
         self.plugin_status(ui, self.plugin_state);
+    }
+    fn remember_mix(&mut self) {
+        // One undo checkpoint per playback pass, not large DSP snapshots for
+        // every pointer motion. Stopped mix edits retain normal per-edit undo.
+        if !self.mix_live || !self.live_mix_checkpoint {
+            self.session.remember();
+            self.live_mix_checkpoint = self.mix_live;
+        }
+    }
+    fn refresh_mix(&self, ui: &mut Ui) {
+        ui.set_value(self.master_level, self.session.master_volume as f32);
+        for (index, track) in self.session.tracks.iter().enumerate() {
+            ui.set_value(self.mixer_volume[index], track.volume() as f32);
+            ui.set_value(self.mixer_pan[index], track.pan() as f32);
+            ui.set_checked(self.mixer_mute[index], track.muted);
+            ui.set_checked(self.mixer_solo[index], track.solo);
+        }
+        if let Some(track) = self.session.tracks.get(self.session.selected) {
+            ui.set_value(self.volume, track.volume() as f32);
+            ui.set_value(self.pan, track.pan() as f32);
+            ui.set_checked(self.mute, track.muted);
+            ui.set_checked(self.solo, track.solo);
+        }
     }
     pub fn publish_meters(
         &self,
@@ -2098,6 +2153,16 @@ impl Studio {
                 return Ok(None);
             }
             let allowed = match r {
+                Response::Changed(id) if self.mix_live => {
+                    [self.volume, self.pan, self.master_level].contains(id)
+                        || self.mixer_volume.contains(id)
+                        || self.mixer_pan.contains(id)
+                }
+                Response::Toggled(id, _) if self.mix_live => {
+                    [self.mute, self.solo].contains(id)
+                        || self.mixer_mute.contains(id)
+                        || self.mixer_solo.contains(id)
+                }
                 Response::Clicked(id) => self.buttons.iter().any(|(b, name)| {
                     b == id
                         && ((*name == "Offline render"
@@ -2151,8 +2216,13 @@ impl Studio {
         }
         if let Response::Changed(id) = r {
             if *id == self.master_level {
-                self.session.set_master_volume(ui.value(*id) as u16)?;
-                self.refresh(ui);
+                let value = ui.value(*id) as u16;
+                if value > 200 {
+                    return Err("Master level");
+                }
+                self.remember_mix();
+                self.session.master_volume = value;
+                self.refresh_mix(ui);
                 return Ok(None);
             }
             if *id == self.gate {
@@ -2168,32 +2238,32 @@ impl Studio {
             }
             if let Some(index) = self.mixer_volume.iter().position(|v| v == id) {
                 if index < self.session.tracks.len() {
-                    self.session.remember();
+                    self.remember_mix();
                     self.session.tracks[index]
                         .set_volume(ui.value(*id) as u16)
                         .map_err(|_| "Volume")?;
-                    self.refresh(ui);
+                    self.refresh_mix(ui);
                 }
                 return Ok(None);
             }
             if let Some(index) = self.mixer_pan.iter().position(|v| v == id) {
                 if index < self.session.tracks.len() {
-                    self.session.remember();
+                    self.remember_mix();
                     self.session.tracks[index]
                         .set_pan(ui.value(*id) as i16)
                         .map_err(|_| "Pan")?;
-                    self.refresh(ui);
+                    self.refresh_mix(ui);
                 }
                 return Ok(None);
             }
             if *id == self.gain {
                 self.session.gain(ui.value(*id) as u16)?;
-                self.refresh(ui);
+                self.refresh_mix(ui);
             } else if *id == self.volume || *id == self.pan {
                 let volume = ui.value(self.volume) as u16;
                 let pan = ui.value(self.pan) as i16;
                 if self.session.selected < self.session.tracks.len() {
-                    self.session.remember();
+                    self.remember_mix();
                     let t = &mut self.session.tracks[self.session.selected];
                     t.set_volume(volume).map_err(|_| "Volume")?;
                     t.set_pan(pan).map_err(|_| "Pan")?;
@@ -2208,19 +2278,30 @@ impl Studio {
                 if index >= self.session.tracks.len() {
                     return Err("Select a real track");
                 }
-                self.session.remember();
+                self.remember_mix();
                 if mute.is_some() {
                     self.session.tracks[index].muted = *on;
                 } else {
                     self.session.tracks[index].solo = *on;
                 }
-                self.refresh(ui);
+                self.refresh_mix(ui);
                 return Ok(None);
             }
             if self.session.selected >= self.session.tracks.len() {
                 return Err("Select a track");
             }
-            self.session.remember();
+            if [self.mute, self.solo].contains(id) {
+                self.remember_mix();
+                let track = &mut self.session.tracks[self.session.selected];
+                if *id == self.mute {
+                    track.muted = *on;
+                } else {
+                    track.solo = *on;
+                }
+                self.refresh_mix(ui);
+                return Ok(None);
+            }
+            self.remember_mix();
             let t = &mut self.session.tracks[self.session.selected];
             if *id == self.mute {
                 t.muted = *on;

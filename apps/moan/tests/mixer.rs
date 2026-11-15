@@ -98,3 +98,33 @@ fn buffer_clip_trims_and_serializes_like_legacy_owned_audio() {
     b.to = 20;
     assert_eq!(a.encode_project().unwrap(), b.encode_project().unwrap());
 }
+#[test]
+fn lowering_master_recovers_positive_and_negative_wide_bus_headroom() {
+    let mut session = Session::default();
+    session.add(vec![[24000, -24000]; 16]).unwrap();
+    session.add(vec![[24000, -24000]; 16]).unwrap();
+    let mut unity = [[0; 2]; 16];
+    session.render_processed(0, &mut unity);
+    assert_eq!(unity, [[32767, -32768]; 16]);
+    let mut legacy = [[0; 2]; 16];
+    moan_core::render_processed(&mut session.tracks, 0, &mut legacy);
+    assert_eq!(unity, legacy);
+    session.set_master_volume(50).unwrap();
+    let mut lowered = [[0; 2]; 16];
+    let mut taps = Vec::new();
+    session.render_processed_observed(0, &mut lowered, |track, frame| taps.push((track, frame)));
+    assert_eq!(lowered, [[24000, -24000]; 16]);
+    assert_ne!(lowered[0], [16383, -16384]);
+    assert_eq!(taps.len(), 32);
+    assert!(
+        taps.iter().all(|(_, frame)| *frame == [24000, -24000]),
+        "track tap must stay pre-master and unchanged"
+    );
+    let mut loaded = Session::decode_project(&session.encode_project().unwrap()).unwrap();
+    let mut exported = [[0; 2]; 16];
+    loaded.render_processed(0, &mut exported);
+    assert_eq!(
+        exported, lowered,
+        "same path feeds playback and FFmpeg export"
+    );
+}

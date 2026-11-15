@@ -284,9 +284,10 @@ mod guest {
                 }
                 moan::project_io::decline_close(&app);
             }
-            studio.set_busy(
+            studio.set_activity(
                 &mut app.ui,
                 playing || paused || recording.is_some() || plugin.busy(),
+                (playing || paused) && recording.is_none() && !plugin.busy(),
             );
             // Poll the existing window with a short bound while sound is active;
             // toolkit App::next can wait indefinitely when there are no UI timers.
@@ -314,9 +315,10 @@ mod guest {
             };
             let had_responses = !responses.is_empty();
             for r in responses {
-                studio.set_busy(
+                studio.set_activity(
                     &mut app.ui,
                     playing || paused || recording.is_some() || plugin.busy(),
+                    (playing || paused) && recording.is_none() && !plugin.busy(),
                 );
                 let outcome = if r == Response::Close {
                     if plugin.busy() && !plugin.retired() {
@@ -789,9 +791,10 @@ mod guest {
                 studio.publish_master(&mut app.ui, &mut master_meter);
                 meter_due = now.saturating_add(100);
             }
-            studio.set_busy(
+            studio.set_activity(
                 &mut app.ui,
                 playing || paused || recording.is_some() || plugin.busy(),
+                (playing || paused) && recording.is_none() && !plugin.busy(),
             );
         }
     }
