@@ -55,16 +55,21 @@ class Driver(Probe):
   else:
    lo,hi=(-100,100)if name=='pan'else(0,200)
    self.move(ox+x+8+(w-16)*(value-lo)/(hi-lo),oy+y+h/2);self.button(True);self.button(False)
+   # A pointer can already achieve the target. End/Home would then be a no-op
+   # and correctly emit no ValueChanged; do not demand a nonexistent receipt.
+   fresh,_,_=self.refresh(surface);current=list(re.finditer(pattern,self.text()[fresh:]));assert current
+   actual=int(current[-1][5]);actual=actual//100 if track is None else actual
+   if actual==value:return max(0,(wav.stat().st_size-44)//4)
    # Pointer resolution can produce odd49, while keyboard step2 preserves
    # parity. Establish a known minimum, then exact bounded key increments.
    step=1 if track is None else 2
    units=(value-lo)//step;assert lo+units*step==value
-   commands=[('home',lo)]
+   commands=[]if actual==lo else[('home',lo)]
    current=lo
    for key,count,delta in (('pgup',units//10,step*10),('right',units%10,step)):
     for _ in range(count):current+=delta;commands.append((key,current))
    if value==hi:commands=[('end',hi)]
-   assert commands[-1][1]==value
+   assert commands and commands[-1][1]==value
    for key,expected in commands:
     since=len(self.text());self.chord(key)
     expected=expected*100 if track is None else expected
