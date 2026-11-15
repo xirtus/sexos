@@ -132,3 +132,18 @@ fn observed_meter_samples_are_post_pan_fader_and_match_the_only_dsp_pass() {
     assert_eq!(out, [[0; 2]; 8]);
     assert_eq!(taps, vec![(0, [0; 2]); 8]);
 }
+#[test]
+fn musical_steps_use_one_rational_clock_without_accumulated_rounding() {
+    use moan_core::midi::step_frame;
+    for bpm in [30, 120, 137, 240] {
+        for step in 0..=16 {
+            assert_eq!(
+                step_frame(bpm, step).unwrap() as u64,
+                48_000u64 * 30 * step as u64 / bpm as u64
+            );
+        }
+    }
+    assert!(step_frame(137, 16).unwrap() > step_frame(137, 1).unwrap() * 16);
+    assert!(step_frame(0, 0).is_err());
+    assert!(step_frame(120, 17).is_err());
+}

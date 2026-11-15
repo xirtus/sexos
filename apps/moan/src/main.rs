@@ -313,6 +313,7 @@ mod guest {
                             if let Some(s) = &mut sound {
                                 s.pause(false);
                                 s.skip();
+                                s.close();
                                 // listen(false) advances the read cursor. Drain the
                                 // bounded capture ring first so Stop keeps its tail.
                                 if let Some(pcm) = &mut recording {
@@ -561,6 +562,11 @@ mod guest {
                         budget -= written;
                     }
                     if prefill {
+                        sex_pdx::serial_record!(
+                            "[moan.prefilled] frames={} from={}",
+                            s.pending(),
+                            playback_start
+                        );
                         s.pause(false);
                         prefill = false;
                     }

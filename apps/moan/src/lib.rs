@@ -7,6 +7,7 @@ pub mod piano;
 pub mod project;
 #[cfg(feature = "sexos")]
 pub mod project_io;
+pub mod step;
 pub mod waveform;
 use alloc::{format, sync::Arc, vec, vec::Vec};
 use moan_core::{Clip, Frame, Track, RATE};
@@ -501,6 +502,7 @@ pub enum Workspace {
     Mix,
     PianoRoll,
     Instruments,
+    StepSequencer,
 }
 pub struct Studio {
     pub export_format: u8,
@@ -512,6 +514,11 @@ pub struct Studio {
     smart: Id,
     console: Id,
     piano_panel: Id,
+    step_panel: Id,
+    pub steps: Id,
+    gate: Id,
+    step_velocity: Id,
+    note_gate: u8,
     track_buttons: Vec<Id>,
     mixer_strips: Vec<Id>,
     workspace: Workspace,
@@ -521,6 +528,7 @@ pub struct Studio {
     note_velocity: u8,
     app_end: Id,
     meter_names: Vec<Id>,
+    meter_details: Vec<Id>,
     meter_values: Vec<Id>,
     mixer_volume: Vec<Id>,
     mixer_pan: Vec<Id>,
@@ -556,6 +564,7 @@ impl Studio {
             ("moan.library.bass", "Satin Bass MIDI", "Ctrl+Shift+B"),
             ("moan.library.kit", "Velvet Kit MIDI", "Ctrl+Shift+D"),
             ("moan.piano", "Show Piano Roll", "Ctrl+P"),
+            ("moan.steps", "Show Step Sequencer", "Ctrl+J"),
             ("moan.tracks", "Focus Track List", "Ctrl+Shift+R"),
             ("moan.mixer", "Show Mixer", "Ctrl+M"),
             ("moan.octave", "Raise MIDI Octave", "Ctrl+Shift+Up"),
@@ -647,7 +656,14 @@ impl Studio {
                 .wrap()
                 .shrink(0.0),
         );
-        for name in ["Arrange", "Mix", "Piano Roll", "Instruments", "Library"] {
+        for name in [
+            "Arrange",
+            "Mix",
+            "Piano Roll",
+            "Step Sequencer",
+            "Instruments",
+            "Library",
+        ] {
             buttons.push((ui.button(navigation, name), name));
         }
         for name in [
@@ -779,13 +795,10 @@ impl Studio {
             weft::Fill::Surface,
             Layout::column().gap(4.0).padding(4.0).fill_width(),
         );
-        ui.text(
-            console,
-            "Mixer · consumed post-fader Peak / RMS",
-            TextStyle::Caption,
-        );
+        ui.text(console, "Mixer · Peak / RMS", TextStyle::Caption);
         let strips = ui.group(console, Layout::row().gap(4.0).wrap().fill_width());
         let mut meter_names = Vec::new();
+        let mut meter_details = Vec::new();
         let mut meter_values = Vec::new();
         let mut mixer_volume = Vec::new();
         let mut mixer_pan = Vec::new();
@@ -802,6 +815,7 @@ impl Studio {
             );
             mixer_strips.push(strip);
             meter_names.push(ui.text(strip, "", TextStyle::Caption));
+            meter_details.push(ui.text(strip, "P-120 / R-120", TextStyle::Caption));
             meter_values.push(ui.progress(strip, Some(0.0)));
             ui.text(strip, "Level / Pan", TextStyle::Caption);
             mixer_volume.push(ui.slider(strip, 0.0, 200.0, 100.0));
@@ -839,11 +853,36 @@ impl Studio {
         ui.text(midi_edits, "Velocity", TextStyle::Caption);
         let velocity = ui.slider(midi_edits, 1.0, 127.0, 96.0);
         ui.set_layout(velocity, Layout::default().width(110.0));
-        let app_end = ui.text(
-            body,
-            "48 kHz stereo · Stop to edit · bounded immutable instrument cache",
+        let step_panel = ui.panel(
+            root,
+            weft::Fill::Surface,
+            Layout::column().gap(4.0).padding(4.0).fill_width(),
+        );
+        ui.text(
+            step_panel,
+            "Step Sequencer · two 4/4 bars · 16 eighth-note steps · same MIDI region",
             TextStyle::Caption,
         );
+        let steps = ui.image(
+            step_panel,
+            step::WIDTH,
+            step::HEIGHT,
+            step::render(None, None),
+        );
+        ui.set_label(steps, "Step Sequencer: click one of 16 musical steps for a pitch row; velocity and gate use real notes");
+        let step_controls = ui.group(step_panel, Layout::row().gap(4.0).wrap().fill_width());
+        ui.text(step_controls, "New note gate %", TextStyle::Caption);
+        let gate = ui.slider(step_controls, 1.0, 100.0, 75.0);
+        ui.text(step_controls, "Velocity", TextStyle::Caption);
+        let step_velocity = ui.slider(step_controls, 1.0, 127.0, 96.0);
+        ui.set_layout(step_velocity, Layout::default().width(110.0));
+        ui.set_step(gate, 1.0);
+        ui.set_step(step_velocity, 1.0);
+        ui.set_layout(gate, Layout::default().width(110.0));
+        for name in ["Set gate", "Clear notes"] {
+            buttons.push((ui.button(step_controls, name), name));
+        }
+        let app_end = ui.text(body, "48 kHz stereo · Stop to edit", TextStyle::Caption);
         ui.set_visible(smart, false);
         ui.set_visible(piano_panel, false);
         let studio = Self {
@@ -856,6 +895,11 @@ impl Studio {
             smart,
             console,
             piano_panel,
+            step_panel,
+            steps,
+            gate,
+            step_velocity,
+            note_gate: 75,
             track_buttons,
             mixer_strips,
             workspace: Workspace::Arrange,
@@ -865,6 +909,7 @@ impl Studio {
             note_velocity: 96,
             app_end,
             meter_names,
+            meter_details,
             meter_values,
             mixer_volume,
             mixer_pan,
@@ -907,6 +952,9 @@ impl Studio {
         for id in [
             self.waveform,
             self.piano,
+            self.steps,
+            self.gate,
+            self.step_velocity,
             self.velocity,
             self.move_mode,
             self.position,
@@ -940,6 +988,7 @@ impl Studio {
                 "Arrange",
                 "Mix",
                 "Piano Roll",
+                "Step Sequencer",
                 "Instruments",
                 "Library",
             ]
@@ -983,12 +1032,11 @@ impl Studio {
                     .iter()
                     .find_map(Clip::midi_pattern)
                     .map_or("Audio", |p| p.instrument.name());
+                ui.set_text(self.meter_names[i], &format!("{} {}", i + 1, name));
                 ui.set_text(
-                    self.meter_names[i],
+                    self.meter_details[i],
                     &format!(
-                        "{} {} · P{} R{} dB",
-                        i + 1,
-                        name,
+                        "P{} R{} dB",
                         serenade_core::linear_to_dbfs_approx(peak),
                         serenade_core::linear_to_dbfs_approx(rms)
                     ),
@@ -1061,6 +1109,19 @@ impl Studio {
             self.workspace == Workspace::PianoRoll,
             Layout::column().gap(4.0).padding(4.0).fill_width(),
         );
+        Self::visible_layout(
+            ui,
+            self.step_panel,
+            self.workspace == Workspace::StepSequencer,
+            Layout::column().gap(4.0).padding(4.0).fill_width(),
+        );
+        ui.set_layout(
+            self.steps,
+            Layout::default()
+                .width((available - 24.0).max(100.0))
+                .height(step::HEIGHT as f32)
+                .shrink(0.0),
+        );
         let sidebar = if show_library { 156.0 } else { 0.0 }
             + if self.workspace == Workspace::Instruments {
                 202.0
@@ -1124,6 +1185,7 @@ impl Studio {
     pub fn transport_cursor(&mut self, ui: &mut Ui, cursor: Option<usize>) {
         if self.transport_cursor != cursor {
             self.transport_cursor = cursor;
+            self.refresh_steps(ui);
             let (height, pixels) = waveform::render_at(
                 &self.session,
                 self.view,
@@ -1132,7 +1194,26 @@ impl Studio {
             ui.set_image(self.waveform, waveform::WIDTH, height, pixels);
         }
     }
+    fn refresh_steps(&self, ui: &mut Ui) {
+        if self.workspace != Workspace::StepSequencer {
+            return;
+        }
+        let clip = self.session.midi_clip();
+        let position = self.transport_cursor.and_then(|heard| {
+            clip.and_then(|clip| {
+                (heard >= clip.start() && heard < clip.end())
+                    .then_some(heard.saturating_sub(clip.start()) + clip.source_offset())
+            })
+        });
+        ui.set_image(
+            self.steps,
+            step::WIDTH,
+            step::HEIGHT,
+            step::render(clip.and_then(Clip::midi_pattern), position),
+        );
+    }
     pub fn refresh(&self, ui: &mut Ui) {
+        self.refresh_steps(ui);
         let (height, pixels) = waveform::render_at(
             &self.session,
             self.view,
@@ -1412,6 +1493,56 @@ impl Studio {
             return false;
         }
         ui.layout();
+        let step_rect = ui.rect(self.steps);
+        if self.workspace == Workspace::StepSequencer
+            && pointer.kind == PointerKind::Down(Button::Left)
+        {
+            let point = Point::new(pointer.x / ui.theme().scale, pointer.y / ui.theme().scale);
+            if step_rect.contains(point) {
+                let x = ((point.x - step_rect.x) / step_rect.w * step::WIDTH as f32) as usize;
+                let y = ((point.y - step_rect.y) / step_rect.h * step::HEIGHT as f32) as usize;
+                if let Some((index, key)) = step::cell(x, y) {
+                    let velocity = self.note_velocity;
+                    let gate = self.note_gate;
+                    let Some(pattern) = self.session.midi_clip().and_then(Clip::midi_pattern)
+                    else {
+                        self.message(ui, "Choose a MIDI region");
+                        return true;
+                    };
+                    let start = moan_core::midi::step_frame(pattern.bpm, index as u32).unwrap();
+                    let end = moan_core::midi::step_frame(pattern.bpm, index as u32 + 1).unwrap();
+                    if start >= pattern.frames {
+                        self.message(ui, "Step lies beyond this region");
+                        return true;
+                    }
+                    ui.focus(None);
+                    let result = self.session.edit_midi(|pattern| {
+                        if let Some(i) = pattern
+                            .notes
+                            .iter()
+                            .position(|n| n.key == key && n.start >= start && n.start < end)
+                        {
+                            pattern.notes.remove(i);
+                        } else {
+                            pattern.notes.push(moan_core::midi::Note {
+                                start,
+                                frames: ((end - start) * gate as u32 / 100)
+                                    .max(1)
+                                    .min(pattern.frames - start),
+                                key,
+                                velocity,
+                            });
+                        }
+                    });
+                    if let Err(error) = result {
+                        self.message(ui, error);
+                    } else {
+                        self.refresh(ui);
+                    }
+                    return true;
+                }
+            }
+        }
         let piano_rect = ui.rect(self.piano);
         if pointer.kind == PointerKind::Down(Button::Left) {
             let p = Point::new(pointer.x / ui.theme().scale, pointer.y / ui.theme().scale);
@@ -1629,6 +1760,7 @@ impl Studio {
                             "Arrange",
                             "Mix",
                             "Piano Roll",
+                            "Step Sequencer",
                             "Instruments",
                             "Library",
                         ]
@@ -1639,6 +1771,7 @@ impl Studio {
                     "moan.stop",
                     "moan.mixer",
                     "moan.piano",
+                    "moan.steps",
                     "moan.timeline",
                 ]
                 .contains(&c.as_str()),
@@ -1665,8 +1798,14 @@ impl Studio {
             }
         }
         if let Response::Changed(id) = r {
-            if *id == self.velocity {
+            if *id == self.gate {
+                self.note_gate = (ui.value(*id) + 0.5).clamp(1.0, 100.0) as u8;
+                return Ok(None);
+            }
+            if *id == self.velocity || *id == self.step_velocity {
                 self.note_velocity = ui.value(*id) as u8;
+                ui.set_value(self.velocity, self.note_velocity as f32);
+                ui.set_value(self.step_velocity, self.note_velocity as f32);
                 self.refresh(ui);
                 return Ok(None);
             }
@@ -1748,6 +1887,7 @@ impl Studio {
                 "moan.library.kit" => "Velvet Kit",
                 "moan.clear-notes" => "Clear notes",
                 "moan.piano" => "Show piano",
+                "moan.steps" => "Step Sequencer",
                 "moan.tracks" => "Show tracks",
                 "moan.mixer" => "Show mixer",
                 "moan.octave" => "Octave up",
@@ -1796,6 +1936,12 @@ impl Studio {
             "Show piano",
             "Show mixer",
             "Show tracks",
+            "Arrange",
+            "Mix",
+            "Piano Roll",
+            "Step Sequencer",
+            "Instruments",
+            "Library",
         ]
         .contains(&command)
         {
@@ -1844,6 +1990,31 @@ impl Studio {
                 ui.invalidate();
                 None
             }
+            "Step Sequencer" => {
+                self.show_workspace(ui, Workspace::StepSequencer);
+                ui.focus(Some(self.steps));
+                None
+            }
+            "Set gate" => {
+                let gate = self.note_gate;
+                self.session.edit_midi(|pattern| {
+                    for note in &mut pattern.notes {
+                        // Find the direct BPM grid interval containing this note.
+                        let index = (0..16)
+                            .find(|step| {
+                                moan_core::midi::step_frame(pattern.bpm, *step + 1).unwrap()
+                                    > note.start
+                            })
+                            .unwrap_or(15);
+                        let a = moan_core::midi::step_frame(pattern.bpm, index).unwrap();
+                        let b = moan_core::midi::step_frame(pattern.bpm, index + 1).unwrap();
+                        note.frames = ((b - a) * gate as u32 / 100)
+                            .max(1)
+                            .min(pattern.frames - note.start);
+                    }
+                })?;
+                None
+            }
             "Clear notes" => {
                 self.session.edit_midi(|p| p.notes.clear())?;
                 None
@@ -1860,6 +2031,7 @@ impl Studio {
                 self.note_velocity = (self.note_velocity / 2).max(1);
                 let velocity = self.note_velocity;
                 ui.set_value(self.velocity, velocity as f32);
+                ui.set_value(self.step_velocity, velocity as f32);
                 self.session.edit_midi(|p| {
                     for n in &mut p.notes {
                         n.velocity = velocity;

@@ -195,3 +195,144 @@ fn pitch_names_are_visible_musical_octaves() {
     assert_eq!(piano::note_name(0), "C-1");
     assert_eq!(piano::note_name(127), "G9");
 }
+#[test]
+fn sequencer_pointer_edits_same_notes_velocity_gate_cache_and_persistence() {
+    let (mut ui, mut s) = studio();
+    s.on(&mut ui, &Response::Command("moan.library.keys".into()))
+        .unwrap();
+    s.on(&mut ui, &Response::Command("moan.clear-notes".into()))
+        .unwrap();
+    s.on(&mut ui, &Response::Command("moan.steps".into()))
+        .unwrap();
+    ui.layout();
+    let rect = ui.rect(s.steps);
+    assert!(
+        rect.x >= 0.0 && rect.right() <= 1264.0 && rect.bottom() <= 730.0,
+        "{rect:?}"
+    );
+    for index in [1, 3, 7, 13] {
+        let x = moan::step::LABEL + (index * 2 + 1) * moan::step::GRID / 32;
+        let y = moan::step::HEADER + 3 * moan::step::ROW + moan::step::ROW / 2;
+        for kind in [
+            PointerKind::Down(Button::Left),
+            PointerKind::Up(Button::Left),
+        ] {
+            s.handle_event(
+                &mut ui,
+                Event::Pointer(Pointer {
+                    x: rect.x + x as f32 * rect.w / moan::step::WIDTH as f32,
+                    y: rect.y + y as f32,
+                    kind,
+                }),
+            );
+        }
+    }
+    let pattern = s.session.midi_clip().unwrap().midi_pattern().unwrap();
+    assert_eq!(pattern.notes.len(), 4);
+    for (note, index) in pattern.notes.iter().zip([1, 3, 7, 13]) {
+        assert_eq!(
+            (note.start, note.frames, note.key, note.velocity),
+            (index * 12000, 9000, 60, 96)
+        );
+    }
+    let bytes = s.session.encode_project().unwrap();
+    let loaded = moan::Session::decode_project(&bytes).unwrap();
+    assert_eq!(loaded.encode_project().unwrap(), bytes);
+    let original = bytes.clone();
+    for command in ["moan.piano", "moan.steps", "moan.mixer", "moan.steps"] {
+        s.on(&mut ui, &Response::Command(command.into())).unwrap();
+    }
+    assert_eq!(s.session.encode_project().unwrap(), original);
+    assert!(s.session.undo());
+    assert_eq!(
+        s.session
+            .midi_clip()
+            .unwrap()
+            .midi_pattern()
+            .unwrap()
+            .notes
+            .len(),
+        3
+    );
+    assert!(s.session.redo());
+    assert_eq!(s.session.encode_project().unwrap(), original);
+    s.set_busy(&mut ui, true);
+    let before = s.session.encode_project().unwrap();
+    s.handle_event(
+        &mut ui,
+        Event::Pointer(Pointer {
+            x: rect.x + 100.0,
+            y: rect.y + 100.0,
+            kind: PointerKind::Down(Button::Left),
+        }),
+    );
+    assert_eq!(s.session.encode_project().unwrap(), before);
+}
+
+#[test]
+fn new_note_velocity_slider_preserves_earlier_note_velocities() {
+    let (mut ui, mut s) = studio();
+    s.on(&mut ui, &Response::Command("moan.library.keys".into()))
+        .unwrap();
+    s.on(&mut ui, &Response::Command("moan.clear-notes".into()))
+        .unwrap();
+    s.on(&mut ui, &Response::Command("moan.steps".into()))
+        .unwrap();
+    ui.layout();
+    let rect = ui.rect(s.steps);
+    let tap = |ui: &mut Ui, s: &mut Studio, index: usize| {
+        let x = moan::step::LABEL + (index * 2 + 1) * moan::step::GRID / 32;
+        let y = moan::step::HEADER + 3 * moan::step::ROW + moan::step::ROW / 2;
+        for kind in [
+            PointerKind::Down(Button::Left),
+            PointerKind::Up(Button::Left),
+        ] {
+            s.handle_event(
+                ui,
+                Event::Pointer(Pointer {
+                    x: rect.x + x as f32 * rect.w / moan::step::WIDTH as f32,
+                    y: rect.y + y as f32,
+                    kind,
+                }),
+            );
+        }
+    };
+    tap(&mut ui, &mut s, 1);
+    // The slider beside the Step editor's Velocity label; use real pointer input
+    // and native Home/PageUp/Right keyboard dispatch, not a private model setter.
+    let panel = ui.parent(s.steps).unwrap();
+    let slider = ui
+        .find_kind("slider")
+        .into_iter()
+        .filter(|id| ui.parent(*id).and_then(|p| ui.parent(p)) == Some(panel))
+        .last()
+        .unwrap();
+    let point = ui.rect(slider).center();
+    for kind in [
+        PointerKind::Down(Button::Left),
+        PointerKind::Up(Button::Left),
+    ] {
+        for response in ui.handle(Event::Pointer(Pointer {
+            x: point.x,
+            y: point.y,
+            kind,
+        })) {
+            s.on(&mut ui, &response).unwrap();
+        }
+    }
+    let mut keys = vec![weft::input::code::HOME];
+    keys.extend([weft::input::code::PAGE_UP; 4]);
+    keys.extend([weft::input::code::RIGHT; 7]);
+    for code in keys {
+        for response in ui.handle(Event::Key(weft::Key::new(code))) {
+            s.on(&mut ui, &response).unwrap();
+        }
+    }
+    assert_eq!(ui.value(slider), 48.0);
+    tap(&mut ui, &mut s, 3);
+    let notes = &s.session.midi_clip().unwrap().midi_pattern().unwrap().notes;
+    assert_eq!(
+        notes.iter().map(|n| n.velocity).collect::<Vec<_>>(),
+        vec![96, 48]
+    );
+}
