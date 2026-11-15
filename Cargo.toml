@@ -167,6 +167,7 @@ members = [
     "crates/sex-uvc",
     "servers/sexuvc",
     "apps/flash",
+    "apps/splicy",
 ]
 [workspace.package]
 license = "GPL-3.0-only"

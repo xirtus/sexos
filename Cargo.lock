@@ -6075,6 +6075,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "splicy"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-media",
+ "sex-office",
+ "sex-pdx",
+ "sex-splice",
+]
+
+[[package]]
 name = "spreadeagle"
 version = "0.1.0"
 dependencies = [
