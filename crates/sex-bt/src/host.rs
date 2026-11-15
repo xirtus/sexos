@@ -199,6 +199,7 @@ impl Host {
     pub fn connect_hid(&mut self, f: &Found) {
         if self.conns.iter().any(|c| c.addr == f.addr) || self.wanted.contains(&f.addr) { return; }
         self.wanted.push(f.addr);
+        if !self.seen.iter().any(|s| s.addr == f.addr) { self.seen.push(f.clone()); }
         match f.transport {
             Transport::Le => { if self.le_connecting.is_none() { self.connect_le(f.addr, f.addr_type); } }
             Transport::Classic => self.connect_classic(f.addr),

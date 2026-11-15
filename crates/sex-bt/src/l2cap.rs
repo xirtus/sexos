@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! L2CAP basic mode (Core 5.4, Vol 3 Part A): frames on fixed channels carried in ACL
-//! packets, fragmentation and reassembly, and the signaling the W1 host needs (LE
-//! connection parameter updates, classic information/echo requests, and refusing
-//! connection-oriented channels until W2 brings HID and GATT services).
+//! packets, fragmentation and reassembly, and signaling: LE connection parameter
+//! updates, classic information/echo requests, and classic connection-oriented channels
+//! in basic mode (`Channels`: HID's PSM 0x11/0x13, opened by us or by a bonded device).
+//! LE credit-based channels are refused (HID over GATT needs only ATT).
 
 use crate::hci;
 use alloc::vec::Vec;
