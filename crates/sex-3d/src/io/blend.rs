@@ -195,6 +195,11 @@ pub struct BlendAction {
     /// Name of the Blender action.
     pub action: String,
     pub curves: Vec<BlendFCurve>,
+    /// The object's parent inverse matrix (column-major) when it has a parent
+    /// and the matrix is not identity. The imported transform already has it
+    /// folded in; animated channel values do not, so a user of the curves
+    /// applies it to each evaluated pose.
+    pub parent_inverse: Option<[f32; 16]>,
 }
 
 // ---------------------------------------------------------------------------
@@ -870,6 +875,10 @@ impl<'f, 'a> Importer<'f, 'a> {
                 if inv != Mat4::IDENTITY && inv.to_cols_array().iter().all(|v| v.is_finite()) {
                     let local = inv * self.scene.objects[idx].transform.matrix();
                     self.scene.objects[idx].transform = Transform::from_matrix(&local);
+                    let name = &self.scene.objects[idx].name;
+                    for a in self.actions.iter_mut().filter(|a| &a.object == name) {
+                        a.parent_inverse = Some(inv.to_cols_array());
+                    }
                 }
             }
         }
@@ -1001,7 +1010,7 @@ impl<'f, 'a> Importer<'f, 'a> {
             fcurves = f.list(act.sub("curves"), &["FCurve"]);
         }
         let curves: Vec<BlendFCurve> = fcurves.iter().filter_map(|fc| fcurve(f, fc)).collect();
-        (!curves.is_empty()).then(|| BlendAction { object: object.to_string(), action: act.id_name(), curves })
+        (!curves.is_empty()).then(|| BlendAction { object: object.to_string(), action: act.id_name(), curves, parent_inverse: None })
     }
 
     fn object(&mut self, ob: &View<'f, 'a>) -> Result<usize, String> {

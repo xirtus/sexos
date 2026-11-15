@@ -620,20 +620,22 @@ pub fn run(doc: &mut Doc, op: &Op) -> bool {
 }
 
 /// Take over the object animation of an imported .blend (location, Euler
-/// rotation and scale curves), keeping Blender's key positions.
+/// rotation and scale curves), keeping Blender's key positions. Objects with a
+/// parent inverse matrix get their curves baked through it at every key frame,
+/// so the evaluated pose matches Blender's.
 pub fn adopt_blend_actions(doc: &mut Doc, actions: &[sex_3d::io::blend::BlendAction]) {
     use sex_3d::io::blend::{INTERP_CONSTANT, INTERP_LINEAR};
+    use sex_3d::math::Mat4;
+    use sex_3d::scene::Transform;
     for a in actions {
-        if !doc.scene.objects.iter().any(|o| o.name == a.object) {
-            continue;
-        }
-        let obj = doc.anim.entry(&a.object);
+        let Some(oi) = doc.scene.find_object(&a.object) else { continue };
+        let mut raw = ObjectAnim { object: a.object.clone(), curves: Vec::new(), expanded: true, group_expanded: true };
         for c in &a.curves {
             let Some(prop) = Prop::ALL.into_iter().find(|p| p.path() == c.path) else { continue };
             if c.index > 2 {
                 continue;
             }
-            let curve = obj.curve_mut(prop, c.index);
+            let curve = raw.curve_mut(prop, c.index);
             for k in &c.keys {
                 let interp = match k.interpolation {
                     INTERP_CONSTANT => Interp::Constant,
@@ -643,6 +645,38 @@ pub fn adopt_blend_actions(doc: &mut Doc, actions: &[sex_3d::io::blend::BlendAct
                 curve.insert(k.frame, k.value, interp);
             }
         }
+        let Some(inv) = a.parent_inverse.map(|m| Mat4::from_cols_array(m)) else {
+            let obj = doc.anim.entry(&a.object);
+            obj.curves = raw.curves;
+            continue;
+        };
+        // The scene transform is inv × raw; recover raw's unanimated channels.
+        let base = Transform::from_matrix(&(inv.inverse() * doc.scene.objects[oi].transform.matrix()));
+        let frames = raw.key_frames();
+        let interp_at = |f: f32| raw.curves.iter().flat_map(|c| c.keys.iter()).find(|k| (k.frame - f).abs() < 0.01).map_or(Interp::Bezier, |k| k.interp);
+        let mut baked = ObjectAnim { object: a.object.clone(), curves: Vec::new(), expanded: true, group_expanded: true };
+        for &f in &frames {
+            let mut v = channel_values(&base);
+            let mut rot = false;
+            for c in raw.curves.iter().filter(|c| !c.keys.is_empty()) {
+                v[c.slot()] = c.evaluate(f);
+                rot |= c.prop == Prop::Rotation;
+            }
+            let mut t = base;
+            t.location = Vec3::new(v[0], v[1], v[2]);
+            if rot {
+                t.rotation = Quat::from_euler_xyz(v[3], v[4], v[5]);
+            }
+            t.scale = Vec3::new(v[6], v[7], v[8]);
+            let out = channel_values(&Transform::from_matrix(&(inv * t.matrix())));
+            for prop in Prop::ALL {
+                for i in 0..3 {
+                    baked.curve_mut(prop, i).insert(f, out[prop as usize * 3 + i], interp_at(f));
+                }
+            }
+        }
+        let obj = doc.anim.entry(&a.object);
+        obj.curves = baked.curves;
     }
     doc.anim.dirty = true;
 }
@@ -650,6 +684,30 @@ pub fn adopt_blend_actions(doc: &mut Doc, actions: &[sex_3d::io::blend::BlendAct
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn blend_animation_goes_through_the_parent_inverse() {
+        use sex_3d::io::blend::{BlendAction, BlendFCurve, BlendKey, INTERP_LINEAR};
+        let mut d = Doc::default();
+        let name = d.scene.objects[0].name.clone();
+        // Parent inverse = translate +2 in X; imported transform has it folded in.
+        let mut inv = sex_3d::math::Mat4::IDENTITY.to_cols_array();
+        inv[12] = 2.0;
+        d.scene.objects[0].transform = Transform::default();
+        d.scene.objects[0].transform.location = Vec3::new(2.0, 0.0, 0.0);
+        let key = |frame, value| BlendKey { frame, value, interpolation: INTERP_LINEAR };
+        let action = BlendAction {
+            object: name.clone(),
+            action: "Act".into(),
+            curves: vec![BlendFCurve { path: "location".into(), index: 0, keys: vec![key(1.0, 1.0), key(11.0, 5.0)] }],
+            parent_inverse: Some(inv),
+        };
+        adopt_blend_actions(&mut d, &[action]);
+        d.frame = 11;
+        evaluate(&mut d);
+        let x = d.scene.objects[0].transform.location.x;
+        assert!((x - 7.0).abs() < 1e-4, "x = {x}");
+    }
 
     #[test]
     fn keyframe_edits_undo_and_redo() {

@@ -986,22 +986,29 @@ fn apply_move(s: &State, d: &mut Doc, x: i32, y: i32, orig: &[KeyRef], mx: i32, 
 
 fn finish_move(d: &mut Doc, orig: &[KeyRef], cancel: bool) {
     if !cancel {
-        // Record the step with the keys where they started, then put them back.
-        let key = |d: &mut Doc, kr: &KeyRef| d.anim.objects.get_mut(kr.o).and_then(|o| o.curves.get_mut(kr.c)).and_then(|c| c.keys.get_mut(kr.k)).map(|k| (k.frame, k.value));
-        let moved: Vec<Option<(f32, f32)>> = orig.iter().map(|kr| key(d, kr)).collect();
-        let set = |d: &mut Doc, kr: &KeyRef, f: f32, v: f32| {
+        // Record the step with the keys where they started (handles shifted
+        // back with them), then put the moved keys back.
+        let get = |d: &mut Doc, kr: &KeyRef| d.anim.objects.get_mut(kr.o).and_then(|o| o.curves.get_mut(kr.c)).and_then(|c| c.keys.get_mut(kr.k)).map(|k| *k);
+        let moved: Vec<Option<crate::anim::Keyframe>> = orig.iter().map(|kr| get(d, kr)).collect();
+        let put = |d: &mut Doc, kr: &KeyRef, key: crate::anim::Keyframe| {
             if let Some(k) = d.anim.objects.get_mut(kr.o).and_then(|o| o.curves.get_mut(kr.c)).and_then(|c| c.keys.get_mut(kr.k)) {
-                k.frame = f;
-                k.value = v;
+                *k = key;
             }
         };
-        for kr in orig {
-            set(d, kr, kr.frame, kr.value);
+        for (kr, m) in orig.iter().zip(&moved) {
+            if let Some(mut k) = *m {
+                let (df, dv) = (k.frame - kr.frame, k.value - kr.value);
+                k.frame = kr.frame;
+                k.value = kr.value;
+                k.left = [k.left[0] - df, k.left[1] - dv];
+                k.right = [k.right[0] - df, k.right[1] - dv];
+                put(d, kr, k);
+            }
         }
         d.push_undo("Move Keyframes");
         for (kr, m) in orig.iter().zip(moved) {
-            if let Some((f, v)) = m {
-                set(d, kr, f, v);
+            if let Some(k) = m {
+                put(d, kr, k);
             }
         }
     }
