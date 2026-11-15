@@ -34,11 +34,15 @@ pub unsafe fn forward_page_fault(fault_addr: u64, error_code: u64, pd_id: u64) -
     let task = target_task(pd.id)?;
     if SCHEDULERS[core.core_id as usize].current_task.load(Ordering::Acquire) != task
         || !is_live_fault(task) { return Err(DENIED); }
-    let cap = pd.find_capability(sex_pdx::SLOT_SEXT as u32).ok_or(DENIED)?;
-    let pager = match cap.data {
-        crate::capability::CapabilityData::Domain(target)
-            if target != 0 && target != pd.id && crate::ipc::DOMAIN_REGISTRY.get(target).is_some() => target,
-        _ => return Err(DENIED),
+    // A page Denim holds comes back through Denim; any other through the row's pager.
+    let denim = crate::denim::holds(pd.id, fault_addr);
+    let pager = if denim { sex_pdx::denim::DENIM_PD } else {
+        let cap = pd.find_capability(sex_pdx::SLOT_SEXT as u32).ok_or(DENIED)?;
+        match cap.data {
+            crate::capability::CapabilityData::Domain(target)
+                if target != 0 && target != pd.id && crate::ipc::DOMAIN_REGISTRY.get(target).is_some() => target,
+            _ => return Err(DENIED),
+        }
     };
     let token = TOKENS.issue()?;
     let notice = FaultNotice::decode(OP_FAULT_NOTICE, pd.id as u64, [fault_addr, error_code, token])
@@ -55,7 +59,9 @@ pub unsafe fn forward_page_fault(fault_addr: u64, error_code: u64, pd_id: u64) -
         }
     }
     let [arg0, arg1, arg2] = notice.args();
-    if let Err(error) = safe_pdx_call(sex_pdx::SLOT_SEXT as u32, OP_FAULT_NOTICE, arg0, arg1, arg2) {
+    let sent = if denim { crate::denim::notify(pd.id, record.page_addr, token) }
+        else { safe_pdx_call(sex_pdx::SLOT_SEXT as u32, OP_FAULT_NOTICE, arg0, arg1, arg2).map(|_| ()) };
+    if let Err(error) = sent {
         loop {
             match (*task).fault.cancel_prepared(token) {
                 Err(RETRY) => core::hint::spin_loop(),

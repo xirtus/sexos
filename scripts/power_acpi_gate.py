@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Power off and restart through ACPI.
 
-Boot 1: the power button (QMP system_powerdown raises the SCI) starts a shut down; Files
-flushes and answers; the kernel enters S5 and QEMU ends by itself (no -no-shutdown).
+Boot 1: the power button (QMP system_powerdown raises the SCI) opens the Shell's power
+dialog; Enter on it starts a shut down; Files flushes and answers; the kernel enters S5 and
+QEMU ends by itself (no -no-shutdown).
 Boot 2: Restart from the desktop launcher; Files flushes, the kernel resets through the
 FADT reset register and the machine boots again; then Shut Down from the launcher ends it.
 """
@@ -62,8 +63,11 @@ def main():
   desktop(g);result['sexacpi']=g['wait'](r'\[sexacpi\.ready\] aml=1 ([^\n]*)\n')[1];g['wait'](r'\[acpi\.firmware\.inventory\] aml=1 ');
   if re.search(r'\[acpi\.aml',g['text']()):raise RuntimeError('AML ran in the kernel');info=g['wait'](r'\[acpi\.power\] ([^\n]*)\n')[1];result['acpi']=info
   s=len(g['text']());t0=time.monotonic();g['q'].cmd('system_powerdown')
-  g['wait'](r'\[acpi\.power_button\] pressed=1',s,30)
-  g['wait'](r'\[acpi\.power\.begin\] kind=off by=power_button files=\d+ told=1 firmware_told=1',s,30)
+  g['wait'](r'\[acpi\.power_button\] pressed=1 to_desktop=1',s,30)
+  # The Shell holds the button: the power dialog opens on Shut Down; Enter confirms.
+  g['wait'](r'\[shell\.power\.dialog\] open=1 selected=Shut Down',s,30)
+  g['q'].key('ret')
+  g['wait'](r'\[acpi\.power\.begin\] kind=off by=shell files=\d+ told=1 firmware_told=1',s,30)
   g['wait'](r'\[files\.power\.flush\] op=2 flushed=\d document_saves_done=1',s,30)
   g['wait'](r'\[acpi\.power\.flush\] files=(flushed|failed) late=0',s,30,exited_ok=True)
   g['wait'](r'\[acpi\.power\.off\] s5=0x[0-9a-f]+ entering=1',s,30,exited_ok=True)

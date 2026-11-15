@@ -1,0 +1,10 @@
+[package]
+name = "sex-bt"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later OR MIT"
+description = "Native Bluetooth host stack core for SexOS (Cufflinks): HCI, Intel firmware loading, scanning, L2CAP, SMP and SSP pairing"
+
+[dependencies]
+aes = { version = "=0.8.4", default-features = false }
+p256 = { version = "=0.13.2", default-features = false, features = ["arithmetic"] }

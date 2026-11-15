@@ -1,0 +1,17 @@
+[package]
+name = "flash"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+
+[[bin]]
+name = "flash"
+path = "src/main.rs"
+
+[dependencies]
+sex-pdx = { path = "../../crates/sex-pdx" }
+sex-app = { path = "../../crates/sex-app" }
+sex-media = { path = "../../crates/sex-media" }
+sex-uvc = { path = "../../crates/sex-uvc" }
+sex-graphics = { path = "../../crates/sex-graphics" }
+sex-image = { path = "../../crates/sex-image" }
