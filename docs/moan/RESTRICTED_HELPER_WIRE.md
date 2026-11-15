@@ -173,7 +173,7 @@ actual delivery checks Files epoch and the current parent task again. Provider
 restart discards all positive jobs; the separate deny journal remains deny-only.
 
 This admission creates no child or positive file rights by itself. Shell CLAIM/DESCRIBE controls (0x4d505010..11) are dispatched only for stamped
-PD3/task3. LOAD/COPIED (0x4d505012..13) remain unavailable.
+PD3/task3. LOAD/COPIED (0x4d505012..13) use the exact image-copy exchange below.
 Only a subsequent fully authenticated five-provider transaction can associate a
 job with an attested dormant helper. No generic PREPARE ticket is reused.
 
@@ -191,7 +191,7 @@ Files epoch, so the short ACK does not substitute for a full epoch check.
 The 176-byte `MOANINF2` descriptor is: magic8, ticket u32, frames u32, Files
 epoch u64, nonce16, plugin SHA256, input SHA256, output SHA256 (zero until actual
 publication), parent subject u64, child subject u64, generation u64, format u32,
-cookie u32, reserved8 zero. Subject words encode PD in high32 and main task low32.
+cookie u32, coordinator epoch u64 (zero before Bind). Subject words encode PD in high32 and main task low32.
 The descriptor is an immutable descriptive snapshot; only subsequent policy
 transcript admission conveys rights. Startup and epoch changes never restore it.
 
@@ -253,3 +253,27 @@ Files grant, and only then permits the existing Files custody ACK. SYS29 itself
 is target-directed, not task-addressed; the existing all-provider retirement
 barrier prevents row reuse until this cleanup. This is part of the argument,
 not a new syscall guarantee. Previously delivered data cannot be recalled.
+
+
+### Mandatory attested bootstrap
+
+The new pinned moanplug refuses every legacy/ambient launch: it requires
+successful private BOOT_INFO, exact self catalog task, bound nonzero generation,
+and current held Files and Shell epochs. Text99's exact8KiB and Pixel97's entire
+BOOT mapped extent (including padding) are validated by ID/peer1/RW rights and
+cleared before any native plugin instruction. Neighboring grants are untouched.
+
+Bootstrap accepts only the fixed aliases and metadata-selected format/nonce,
+SHA256-checks its actual module and request copies against Files' full private
+hashes, and checks frame count before loading executable plugin code. It then
+sends OP_READY `[generation,nonceLo,nonceHi]`. The only accepted reply is stamped
+Shell3/task3, type1, `0xd4 << 56 | ticket << 32 | generation_low32`; full authority
+comes from the exact request binding plus held coordinator epoch, not these low
+bits. Both held epochs are bracketed around readiness. Unknown, changed or
+unavailable epochs, failed scrub, wrong metadata/hash and timeout all exit before
+native entry. No error selects an unrestricted fallback.
+
+This bootstrap intentionally cannot run through the intermediate ordinary launch
+adapter. The prior crash-contained helper/GUI proofs retain their original source
+and binary bindings. The new coordinator and adapter must be wired and qualified
+as a new cohort before this restricted helper replaces that intermediate path.

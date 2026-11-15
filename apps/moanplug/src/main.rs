@@ -2,9 +2,11 @@
 #![no_std]
 #![no_main]
 extern crate alloc;
+mod bootstrap;
 use alloc::vec::Vec;
 use moan_plugin::{clap::Processor, elf, job, mapped::Mapped};
 use sex_app::files::direct as files;
+use sha2::{Digest, Sha256};
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
     sex_pdx::serial_record!("[moanplug.fatal] payload=redacted");
@@ -35,6 +37,7 @@ fn read(path: &[u8], limit: usize) -> Result<Vec<u8>, ()> {
     Ok(bytes)
 }
 fn run() -> Result<(), ()> {
+    let admitted = bootstrap::admit()?;
     let mut buffer = [0; 256];
     let len = files::args(&mut buffer);
     let args = &buffer[..len];
@@ -66,17 +69,40 @@ fn run() -> Result<(), ()> {
     {
         return Err(());
     }
+    if nonce != admitted.nonce
+        || parts[1] != b"@/plugin"
+        || parts[2] != b"@/request"
+        || parts[3] != b"@/result"
+        || parts[4]
+            != (if admitted.format == 0 {
+                b"clap"
+            } else {
+                b"vst3"
+            })
+    {
+        return Err(());
+    }
     let binary = read(parts[1], elf::MAX_FILE)?;
+    if <[u8; 32]>::from(Sha256::digest(&binary)) != admitted.plugin_hash {
+        return Err(());
+    }
     let input = read(
         parts[2],
         job::HEADER + job::MAX_FRAMES as usize * 8 + job::MAX_PARAMS * 16,
     )?;
+    if <[u8; 32]>::from(Sha256::digest(&input)) != admitted.input_hash {
+        return Err(());
+    }
     if input.len() < job::HEADER {
         return Err(());
     }
     let frames = u32::from_le_bytes(input[28..32].try_into().map_err(|_| ())?);
     let request = job::decode_request(&input, nonce).map_err(|_| ())?;
     drop(input);
+    if frames != admitted.frames {
+        return Err(());
+    }
+    bootstrap::ready(admitted)?;
     let mapped = Mapped::load(&binary).map_err(|_| ())?;
     let start = sex_pdx::get_ticks();
     let rendered = match parts[4] {

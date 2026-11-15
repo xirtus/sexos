@@ -97,3 +97,78 @@ impl<'a> Prepare<'a> {
         Some(n)
     }
 }
+
+/// Descriptive full-width job transcript. Hashes/nonce are intentionally omitted
+/// from Debug; this record conveys no authority without the authenticated route.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct Info {
+    pub ticket: u32,
+    pub frames: u32,
+    pub files_epoch: u64,
+    pub nonce: [u8; 16],
+    pub plugin_hash: [u8; 32],
+    pub input_hash: [u8; 32],
+    pub output_hash: [u8; 32],
+    pub parent: crate::restricted_helper::Subject,
+    pub child: Option<crate::restricted_helper::Subject>,
+    pub generation: u64,
+    pub format: u32,
+    pub cookie: u32,
+    pub coordinator_epoch: u64,
+}
+impl Info {
+    pub fn decode(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() != INFO_BYTES || &bytes[..8] != b"MOANINF2" {
+            return None;
+        }
+        let u32at = |i| u32::from_le_bytes(bytes[i..i + 4].try_into().unwrap());
+        let u64at = |i| u64::from_le_bytes(bytes[i..i + 8].try_into().unwrap());
+        let ticket = u32at(8);
+        let frames = u32at(12);
+        let files_epoch = u64at(16);
+        let nonce = bytes[24..40].try_into().ok()?;
+        let parent = crate::restricted_helper::Subject::decode(u64at(136))?;
+        let childword = u64at(144);
+        let child = if childword == 0 {
+            None
+        } else {
+            Some(crate::restricted_helper::Subject::decode(childword)?)
+        };
+        let generation = u64at(152);
+        let format = u32at(160);
+        let cookie = u32at(164);
+        let coordinator_epoch = u64at(168);
+        if ticket == 0
+            || ticket > 0xff_ffff
+            || frames == 0
+            || frames > 48_000 * 60
+            || files_epoch == 0
+            || nonce == [0; 16]
+            || format > 1
+            || cookie == 0
+            || generation > crate::restricted_helper::MAX_GENERATION
+        {
+            return None;
+        }
+        if child.is_some() && (generation == 0 || coordinator_epoch == 0)
+            || child.is_none() && (generation != 0 || coordinator_epoch != 0)
+        {
+            return None;
+        }
+        Some(Self {
+            ticket,
+            frames,
+            files_epoch,
+            nonce,
+            plugin_hash: bytes[40..72].try_into().ok()?,
+            input_hash: bytes[72..104].try_into().ok()?,
+            output_hash: bytes[104..136].try_into().ok()?,
+            parent,
+            child,
+            generation,
+            format,
+            cookie,
+            coordinator_epoch,
+        })
+    }
+}

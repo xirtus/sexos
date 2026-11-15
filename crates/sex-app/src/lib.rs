@@ -616,6 +616,14 @@ pub mod files {
             pub fn release() -> Result<(), Error> { op(c::RELEASE, 0).map(|_| ()) }
         }
 
+        /// Exact private job metadata for the attested restricted bootstrap.
+        /// Failure never implies permission to run through an ambient fallback.
+        pub fn restricted_boot()->Result<sex_pdx::restricted_job::Info,Error>{
+            exchange(None,sex_pdx::restricted_job::KIND,b"",sex_pdx::restricted_job::BOOT_INFO,0,|_|{},|n,d|{
+                if n as usize!=sex_pdx::restricted_job::INFO_BYTES{return None}
+                sex_pdx::restricted_job::Info::decode(&d[..n as usize])
+            })?.ok_or(w::INVALID)
+        }
         /// The words typed after the program's name, if it was started with any.
         pub fn args(out: &mut [u8; w::ARGS_MAX]) -> usize { args_into(None, out) }
         /// Reads up to `out.len()` bytes from byte `offset`; fewer at the file's end.
