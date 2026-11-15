@@ -516,8 +516,13 @@ fn live(app:&App,pd:&ProtectionDomain)->Result<u32,u64>{
 }
 /// Frames of the caller's live run's own heap pages `[va, va+pages*4096)`, for a VM loan
 /// (`vmx`). Only pages `grow` gave this run, still mapped as given; writable ones when
-/// the guest may write. Never the image, the stack, BOOT pages or anything shared.
-pub fn heap_frames(pd:&ProtectionDomain,va:u64,pages:usize,writable:bool,out:&mut alloc::vec::Vec<u64>)->Result<(),u64>{
+/// the guest may write. Never the image, the stack, BOOT pages or anything shared, and
+/// never a page Denim holds: `RECALL`, and the caller asks Denim for the run's pages.
+///
+/// `then` runs with the program table still held, so no page can go out to Denim or
+/// end with its run before the loan is recorded: `denim_out` and `retire` take the table
+/// first too, and then the VM lock (`vmx::lent`, `vmx::revoke`). Lock order: table, VMs.
+pub fn heap_frames<R>(pd:&ProtectionDomain,va:u64,pages:usize,writable:bool,out:&mut alloc::vec::Vec<u64>,then:impl FnOnce(&[u64])->Result<R,u64>)->Result<R,u64>{
     use sex_pdx::vm as v;
     let apps=apps_lock!().ok_or(v::BUSY)?;
     let app=apps.iter().find(|a|a.ready&&a.target==pd.id).ok_or(v::DENIED)?;
@@ -528,10 +533,10 @@ pub fn heap_frames(pd:&ProtectionDomain,va:u64,pages:usize,writable:bool,out:&mu
     let at=app.count-app.grown+first;
     for (i,p) in app.pages[at..at+pages].iter().enumerate(){
         let pte=unsafe{core::ptr::read_volatile(p.leaf as *const u64)};
-        if p.va!=va+(i*4096) as u64||pte!=p.expected||(writable&&pte&2==0){return Err(v::DENIED)}
-        out.push(p.expected&PHYSICAL_MASK);
+        if p.va!=va+(i*4096) as u64{return Err(v::DENIED)}
+        match loan(p,pte,writable){Loan::Frame(f)=>out.push(f),Loan::Out=>return Err(RECALL),Loan::Refused=>return Err(v::DENIED)}
     }
-    Ok(())
+    then(out)
 }
 pub fn live_run(pd:&ProtectionDomain)->Result<u32,u64>{
     let apps=apps_lock!().ok_or(RETRY)?;
@@ -834,6 +839,9 @@ pub fn denim_out(target:u32,va:u64,window:u64)->[u64;2]{
         // A worker could fault on the marker, and only the main task's faults reach Denim.
         if !crate::program_workers::all_dead(target){return Err(DENIED)}
         let at=heap_index(app,va)?;
+        // A VM maps this frame (Drag): the guest's touches never mark the page used,
+        // and its frame must outlive the loan. Lent pages stay.
+        if crate::vmx::lent(target,app.pages[at].expected&PHYSICAL_MASK){return Err(DENIED)}
         let leaf=leaf_of(&app.pages[at]);
         let frame=take_out(&mut app.pages[at],target,app.pkey,leaf.load(Ordering::Acquire),
             |old,new|leaf.compare_exchange(old,new,Ordering::AcqRel,Ordering::Acquire).is_ok())?;

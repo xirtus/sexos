@@ -116,9 +116,9 @@ f655f8f5d654e156b32f5f680f344d06f34055becbccc48b0b07c1eea3536887  crates/sex-pdx
 
 a947e57a405316312fe334d17fdfdb2d3e6b59e708b4d61f416a4db6275ee4cb  kernel/src/app_catalog_state.rs
 
-f98b699261ecf21391da37334f24f050d7863d5e5d3c3b5e9626cd1d2aea21c9  kernel/src/app_resource_state.rs
+99e2089130ccb63dec906a478946d6c18939b21c2554895e49fb6789033c1ada  kernel/src/app_resource_state.rs
 
-e1cd3ae3b0ff61504303d09901d2334928d63f00a29b4481baf3e6766de1ac3c  kernel/src/app_resources.rs
+1c4de7fca3f3fc4cc6ade73eecec83c269f800a0d520069b2201466d15c761a0  kernel/src/app_resources.rs
 
 f6246b2ba9d3c3aa8354736e5a1f51f9b55972b078efa2008a9e3d0e259125b3  kernel/src/boot_display_state.rs
 
@@ -168,5 +168,5 @@ d5b9e12bf9f40d9170ee7557343187559a2fe73909d90a251c3982c04a3f078f  kernel/src/sys
 
 d96aa774f2c9ddf72f5fca8c9aa31e6127d182038f9bff826faa5e55ef8083eb  kernel/src/trust_source.rs
 
-2b3efb48e4f24acee339a9be6450ad240cc14dc41cab9ea073f56b24ebd755bf  kernel/src/vmx.rs
+a43b551780b77e722f38ff1bedeab0586a24c976264ac974f910dd476324f6a5  kernel/src/vmx.rs
 

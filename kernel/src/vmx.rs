@@ -206,18 +206,24 @@ fn lend(pd: &crate::capability::ProtectionDomain, vm: u64, va: u64, gpa: u64, d:
     let (pages, access) = (d & 0xFFFF_FFFF, d >> 32);
     if pages == 0 || pages > 1 << 18 || access & abi::READ == 0 || access & !7 != 0 || gpa & 0xFFF != 0
         || gpa.checked_add(pages * 4096).map_or(true, |end| end > GPA_LIMIT) { return Err(abi::INVALID); }
-    let mut m = VMS.lock();
-    let vm = find(&mut m, pd.id, vm)?;
     let mut frames = Vec::new();
     frames.try_reserve(pages as usize).map_err(|_| abi::EXHAUSTED)?;
-    crate::app_resources::heap_frames(pd, va, pages as usize, access & abi::WRITE != 0, &mut frames)?;
-    for (n, &frame) in frames.iter().enumerate() {
-        if let Err(e) = map(vm, gpa + n as u64 * 4096, frame, access) {
-            for undo in 0..n as u64 { unmap(vm, gpa + undo * 4096); }
-            return Err(e);
+    // The program table first, then the VMs (the order `denim_out`, `code` and `retire`
+    // take them in), and both held until the loans are recorded.
+    crate::app_resources::heap_frames(pd, va, pages as usize, access & abi::WRITE != 0, &mut frames, |frames| {
+        let mut m = VMS.lock();
+        let vm = find(&mut m, pd.id, vm)?;
+        for (n, &frame) in frames.iter().enumerate() {
+            if let Err(e) = map(vm, gpa + n as u64 * 4096, frame, access) {
+                for undo in 0..n as u64 { unmap(vm, gpa + undo * 4096); }
+                return Err(e);
+            }
         }
-    }
-    Ok(pages)
+        Ok(pages)
+    }).map_err(|e| if e == crate::app_resource_state::RECALL {
+        // Some of these pages are with Denim: it brings the run's pages back; try again.
+        crate::denim::recall(pd.id); abi::BUSY
+    } else { e })
 }
 
 fn map(vm: &mut Vm, gpa: u64, frame: u64, access: u64) -> Result<(), u64> {
